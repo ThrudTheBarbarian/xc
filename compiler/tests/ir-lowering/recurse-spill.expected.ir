@@ -1,0 +1,36 @@
+module "recurse-spill" {
+  layout 0: size=100 align=1 fields=[(0:U8), (1:U8), (2:U8), (3:U8), (4:U8), (5:U8), (6:U8), (7:U8), (8:U8), (9:U8), (10:U8), (11:U8), (12:U8), (13:U8), (14:U8), (15:U8), (16:U8), (17:U8), (18:U8), (19:U8), (20:U8), (21:U8), (22:U8), (23:U8), (24:U8), (25:U8), (26:U8), (27:U8), (28:U8), (29:U8), (30:U8), (31:U8), (32:U8), (33:U8), (34:U8), (35:U8), (36:U8), (37:U8), (38:U8), (39:U8), (40:U8), (41:U8), (42:U8), (43:U8), (44:U8), (45:U8), (46:U8), (47:U8), (48:U8), (49:U8), (50:U8), (51:U8), (52:U8), (53:U8), (54:U8), (55:U8), (56:U8), (57:U8), (58:U8), (59:U8), (60:U8), (61:U8), (62:U8), (63:U8), (64:U8), (65:U8), (66:U8), (67:U8), (68:U8), (69:U8), (70:U8), (71:U8), (72:U8), (73:U8), (74:U8), (75:U8), (76:U8), (77:U8), (78:U8), (79:U8), (80:U8), (81:U8), (82:U8), (83:U8), (84:U8), (85:U8), (86:U8), (87:U8), (88:U8), (89:U8), (90:U8), (91:U8), (92:U8), (93:U8), (94:U8), (95:U8), (96:U8), (97:U8), (98:U8), (99:U8)]
+  symbol sumDown: function (U8) -> U16
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  function sumDown(%0: U8, %1: Mem) -> (U16, Mem) {
+    frame: { pinned: [(%2:Agg(0) @0 esc)], size: 100 }
+    bb_entry:
+      preds: -
+      %3:Ptr(U8, unbanked) = AddrOf %2
+      %4:U8 = Const #0:U8
+      %5:U16 = ZExt %4
+      %6:Ptr(U8, unbanked) = ElementAddr %3, %5
+      %7 = Store %6, %0, %1
+      %8:U8 = Const #0:U8
+      %9:Bool = ICmp EQ, %0, %8
+      CondBranch %9, bb_1_then, bb_1_join
+    bb_1_then:
+      preds: bb_entry
+      %10:U8 = Const #0:U8
+      %11:U16 = ZExt %10
+      Return %11, %7
+    bb_1_join:
+      preds: bb_entry
+      %12:U8 = Const #1:U8
+      %13:U8 = Sub %0, %12
+      %14:U16, %15 = Call @sumDown, [%13], CallConv::Standard, %7
+      %16:Ptr(U8, unbanked) = AddrOf %2
+      %17:U8 = Const #0:U8
+      %18:U16 = ZExt %17
+      %19:Ptr(U8, unbanked) = ElementAddr %16, %18
+      %20:U8, %21 = Load %19, %15
+      %22:U16 = ZExt %20
+      %23:U16 = Add %22, %14
+      Return %23, %21
+  }
+}

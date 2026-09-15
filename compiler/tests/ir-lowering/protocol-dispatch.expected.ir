@@ -1,0 +1,68 @@
+module "protocol-dispatch" {
+  layout 0: size=2 align=1 fields=[(0:Ptr(Void, unbanked))]
+  layout 1: size=2 align=1 fields=[(0:Ptr(Void, unbanked))]
+  layout 2: size=0 align=1
+  layout 3: size=6 align=1 fields=[(0:Ptr(Void, unbanked)), (2:Ptr(Void, unbanked)), (4:Ptr(Void, unbanked))]
+  layout 4: size=2 align=1 fields=[(0:Ptr(Void, unbanked))]
+  layout 5: size=6 align=1 fields=[(0:Ptr(Void, unbanked)), (2:Ptr(Void, unbanked)), (4:Ptr(Void, unbanked))]
+  symbol Square$vtbl: vtable [_, _, Square$area]
+    attributes: { banked: false, cloaked: false }
+  symbol Square$area: function (Ptr(Agg(1), unbanked)) -> U16
+    attributes: { banked: false, cloaked: false, static: false, variadic: false }
+  symbol Circle$vtbl: vtable [_, _, Circle$area]
+    attributes: { banked: false, cloaked: false }
+  symbol Circle$area: function (Ptr(Agg(4), unbanked)) -> U16
+    attributes: { banked: false, cloaked: false, static: false, variadic: false }
+  symbol total: function (Ptr(Void, unbanked)) -> U16
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  symbol run: function () -> U16
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  symbol _xtc_alloc: runtime () -> Void
+    attributes: { banked: false, cloaked: false, variadic: false }
+  function Square$area(%0: Ptr(Agg(1), unbanked), %1: Mem) -> (U16, Mem) {
+    bb_entry:
+      preds: -
+      %2:U8 = Const #4:U8
+      %3:U16 = ZExt %2
+      Return %3, %1
+  }
+  function Circle$area(%0: Ptr(Agg(4), unbanked), %1: Mem) -> (U16, Mem) {
+    bb_entry:
+      preds: -
+      %2:U8 = Const #3:U8
+      %3:U16 = ZExt %2
+      Return %3, %1
+  }
+  function total(%0: Ptr(Void, unbanked), %1: Mem) -> (U16, Mem) {
+    bb_entry:
+      preds: -
+      %2:U16, %3 = VTblDispatch %0, #2:U16, %1
+      Return %2, %3
+  }
+  function run(%0: Mem) -> (U16, Mem) {
+    bb_entry:
+      preds: -
+      %1:U16 = Const #1:U16
+      %2:U16 = Const #2:U16
+      %3:U16 = Const #0:U16
+      %4:Ptr(Void, unbanked) = IntToPtr %3
+      %5:Ptr(Agg(1), unbanked), %6 = Call @_xtc_alloc, [%1, %2, %4], CallConv::Standard, %0
+      %7:Ptr(Ptr(Void, unbanked), xt_data) = FieldAddr %5, #0:U8
+      %8:Ptr(Void, unbanked) = AddrOf @Square$vtbl
+      %9 = Store %7, %8, %6
+      %10:U16 = Const #1:U16
+      %11:U16 = Const #2:U16
+      %12:U16 = Const #0:U16
+      %13:Ptr(Void, unbanked) = IntToPtr %12
+      %14:Ptr(Agg(4), unbanked), %15 = Call @_xtc_alloc, [%10, %11, %13], CallConv::Standard, %9
+      %16:Ptr(Ptr(Void, unbanked), xt_data) = FieldAddr %14, #0:U8
+      %17:Ptr(Void, unbanked) = AddrOf @Circle$vtbl
+      %18 = Store %16, %17, %15
+      %19:U16, %20 = Call @total, [%5], CallConv::Standard, %18
+      %21:U16, %22 = Call @total, [%14], CallConv::Standard, %20
+      %23:U16 = Add %19, %21
+      %24 = Release %14, %22
+      %25 = Release %5, %24
+      Return %23, %25
+  }
+}

@@ -1,0 +1,3 @@
+close   over 16 cycles: native=0 heap=0
+dealloc over 16 cycles: native=0 heap=0
+PASS: Win32 backend passes its §10 gate

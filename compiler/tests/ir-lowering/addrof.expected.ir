@@ -1,0 +1,18 @@
+module "addrof" {
+  symbol aliased: function () -> U8
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  function aliased(%0: Mem) -> (U8, Mem) {
+    frame: { pinned: [(%1:U8 @0 esc)], size: 1 }
+    bb_entry:
+      preds: -
+      %2:Ptr(U8, unbanked) = AddrOf %1
+      %3:U8 = Const #10:U8
+      %4 = Store %2, %3, %0
+      %5:Ptr(U8, unbanked) = AddrOf %1
+      %6:U8 = Const #99:U8
+      %7 = Store %5, %6, %4
+      %8:Ptr(U8, unbanked) = AddrOf %1
+      %9:U8, %10 = Load %8, %7
+      Return %9, %10
+  }
+}

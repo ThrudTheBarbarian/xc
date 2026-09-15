@@ -1,0 +1,26 @@
+module "float-cg" {
+  symbol run: function () -> Void
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  symbol gA: dataglobal F32 init [#$00, #$00, #$00, #$00, #$00, #$00, #$F8, #$3F]
+    attributes: { banked: false, cloaked: false }
+    flags: { escapes: true }
+  symbol gB: dataglobal F32 init [#$00, #$00, #$00, #$00, #$00, #$00, #$0A, #$40]
+    attributes: { banked: false, cloaked: false }
+    flags: { escapes: true }
+  symbol gR: dataglobal I16
+    attributes: { banked: false, cloaked: false }
+    flags: { escapes: true }
+  function run(%0: Mem) -> Mem {
+    bb_entry:
+      preds: -
+      %1:Ptr(F32, unbanked) = AddrOf @gA
+      %2:F32, %3 = Load %1, %0
+      %4:Ptr(F32, unbanked) = AddrOf @gB
+      %5:F32, %6 = Load %4, %3
+      %7:F32 = FAdd %2, %5
+      %8:I16 = FpToSI %7
+      %9:Ptr(I16, unbanked) = AddrOf @gR
+      %10 = Store %9, %8, %6
+      Return %10
+  }
+}

@@ -1,0 +1,21 @@
+; Invariant 7 (IR-SPEC §12.7, §6.6): AddrOf may only target a
+; pinnable value — a symbol-table entry, or a function-local
+; declared `pinned` in the frame info.
+; VIOLATION: AddrOf %sum, where %sum is a pure SSA value (the
+; result of an Add). A pure SSA value has no address — it lives in
+; whatever register class the backend chose. Taking its address is
+; meaningless; the frontend should have pinned the underlying
+; local at function entry instead.
+
+module "inv-07-negative" {
+  symbol addr_of_ssa: function (U8, U8) -> Ptr(U8, unbanked)
+    attributes: { cloaked: false, banked: false, variadic: false }
+
+  function addr_of_ssa(%a: U8, %b: U8, %m0: Mem) -> (Ptr(U8, unbanked), Mem) {
+    bb_entry:
+      preds: -
+      %sum:U8                = Add %a, %b
+      %p:Ptr(U8, unbanked)   = AddrOf %sum     ; ERROR: %sum is a pure SSA value
+      Return %p, %m0
+  }
+}

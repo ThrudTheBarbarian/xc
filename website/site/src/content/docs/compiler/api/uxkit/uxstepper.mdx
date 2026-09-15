@@ -1,0 +1,160 @@
+---
+title: UXStepper
+description: "An increment/decrement stepper: top half up, bottom half down, clamped or wrapping. Often paired with a text field."
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+`UXStepper` is the small two-part control beside a numeric field. The top half
+steps the value up and the bottom half steps it down, clamped to a range or, if
+requested, wrapping. The value logic is pure and unit-testable. Drawing and the
+up/down hit-test go through the
+[`UXControl`](/compiler/api/uxkit/uxcontrol/) seam. Where the platform has a
+native stepper (macOS `NSStepper`, Win32 up-down, iOS `UIStepper`, GTK
+`GtkSpinButton`) the driver realizes one; elsewhere the control draws the
+theme's `stepper.up` / `stepper.down` bezels.
+
+```c
+#use <UXKit>
+```
+
+## Overview
+
+```c
+UXStepper* qty = new UXStepper();
+qty.setRange(1, 99);
+qty.setValue(1);
+qty.setAction(&controller.onQty);
+content.addSubview(qty, UXGeom.make(96, 8, 20, 24));
+```
+
+The action fires after each step; the handler reads the value from the sender:
+
+```c
+void onQty(UXControl* sender) {
+    field.setText(itoa(((UXStepper* ?)sender).intValue()));
+}
+```
+
+## Conforms to
+
+- Inherits [`UXControl`](/compiler/api/uxkit/uxcontrol/): the `weak:`
+  callback action, enablement, the fire path.
+
+## Topics
+
+**Value** · [setRange](#setrange) · [setStep](#setstep) · [setWraps](#setwraps) · [setValue](#setvalue) · [intValue](#intvalue)
+**Stepping** · [increment](#increment) · [decrement](#decrement)
+
+### setRange
+
+```c
+void setRange(i32 lo, i32 hi)
+```
+
+Sets the bounds and clamps the current value into them.
+
+### setStep
+
+```c
+void setStep(i32 s)
+```
+
+The per-click delta (a non-positive step is repaired to 1).
+
+### setWraps
+
+```c
+void setWraps(bool w)
+```
+
+Whether stepping past an end wraps to the other end. A clock's minutes wrap;
+a quantity doesn't.
+
+### setValue
+
+```c
+void setValue(i32 v)
+```
+
+Sets the value programmatically, clamped. Does **not** fire the action.
+
+### intValue
+
+```c
+i32 intValue(void)
+```
+
+The current value. The neutral object holds it, whatever realized the control.
+
+### increment
+
+```c
+void increment(void)
+```
+
+One step up: clamps at the top, or wraps to the minimum when
+[`setWraps`](#setwraps) is set.
+
+### decrement
+
+```c
+void decrement(void)
+```
+
+One step down, the mirror of `increment`.
+
+## Platform appearance
+
+<div class="ux-platforms">
+<Tabs>
+  <TabItem label="Web">
+    <img src="/uxkit/stepper-web.png" alt="UXStepper on the web backend" width="220" />
+
+    The theme's `stepper.up` / `stepper.down` bezels at their natural 25×25, never stretched. The same Aristo art GEM draws, on canvas.
+  </TabItem>
+  <TabItem label="iOS">
+    <img src="/uxkit/stepper-ios.png" alt="UXStepper on iOS" width="220" />
+
+    A real `UIStepper`, the platform's ± pair; value changes land through `applyNativeValue`.
+  </TabItem>
+  <TabItem label="Android">
+    <img src="/uxkit/stepper-android.png" alt="UXStepper on Android" width="220" />
+
+    A composed pair of real `Button`s. Android has no platform stepper, and the −/+ pair is the Material inline idiom; each half reports its direction through the bridge.
+  </TabItem>
+  <TabItem label="macOS">
+    <img src="/uxkit/stepper-macos.png" alt="Stepper on macOS" width="220" />
+
+    A real <code>NSStepper</code>.
+  </TabItem>
+  <TabItem label="Windows">
+    <img src="/uxkit/stepper-windows.png" alt="Stepper on Windows" width="220" />
+
+    A real <code>msctls_updown32</code>.
+  </TabItem>
+  <TabItem label="Linux">
+    <img src="/uxkit/stepper-linux.png" alt="UXStepper on Linux (GTK)" width="220" />
+
+    A real `GtkSpinButton`. The platform folds the field and the stepper into one control, so the value shows inline.
+  </TabItem>
+  <TabItem label="GEM">
+    <img src="/uxkit/stepper-gem.png" alt="Stepper on GEM" width="220" />
+
+    The same themed bezels at their natural size, drawn by the same drawRect.
+  </TabItem>
+</Tabs>
+</div>
+
+## Example
+
+A stepper driving a field:
+
+```c
+UXTextField* qtyField = new UXTextField();
+UXStepper*   qtySteps = new UXStepper();
+qtySteps.setRange(1, 99);
+qtySteps.setAction(&controller.onQty);
+content.addSubview(qtyField, UXGeom.make(8,  8, 84, 24));
+content.addSubview(qtySteps, UXGeom.make(96, 8, 20, 24));
+```

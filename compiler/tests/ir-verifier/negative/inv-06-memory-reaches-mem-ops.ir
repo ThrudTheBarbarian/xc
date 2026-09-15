@@ -1,0 +1,18 @@
+; Invariant 6 (IR-SPEC §12.6): Every memory-touching op takes a
+; Memory input and produces a Memory output. Load/Store/Call*/Asm
+; must be threaded through the memory chain.
+; VIOLATION: the Load is missing its memory operand. Without a
+; reaching memory token, the verifier cannot order this Load
+; relative to other memory effects in the function.
+
+module "inv-06-negative" {
+  symbol no_mem_load: function (Ptr(U16, unbanked)) -> U16
+    attributes: { cloaked: false, banked: false, variadic: false }
+
+  function no_mem_load(%p: Ptr(U16, unbanked), %m0: Mem) -> (U16, Mem) {
+    bb_entry:
+      preds: -
+      %v:U16 = Load %p              ; ERROR: no Mem input, no Mem output
+      Return %v, %m0
+  }
+}

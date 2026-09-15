@@ -1,0 +1,7 @@
+# Byte target for xcc-sign bundle mode (docs/ios/bundle-signing.md). base64.
+# Verified with openssl against the raw bundle files, 2026-09-04.
+Info.plist                sha1   YQI7Lr8JWPQMCTL/1Es22/VCvP4=
+Info.plist                sha256 qIk83RIyPnC2SG3/8YcKKYVqLvp1CP41tJdGq5lpegY=   # CD special slot 1
+embedded.mobileprovision  sha1   /rALxQcgk9lm+AagtmQXLE9dCQ0=
+embedded.mobileprovision  sha256 P2dJz2kyYlkIeKezRqCvhQ4i0sS9VW6CV2vDB4s1iDg=  # files2 hash2
+# CodeResources file sha256 -> CD special slot 3 (f7d680be570252e540403eb1deaff5825182161aa7ef2dee23a087906c73073f)

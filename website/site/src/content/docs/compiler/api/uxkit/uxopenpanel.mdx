@@ -1,0 +1,38 @@
+---
+title: UXOpenPanel
+description: "Run a file-open dialog and get the path back: the platform's own dialog where it has one, the toolkit-drawn panel where it doesn't. The call is the same either way."
+---
+
+`UXOpenPanel` is the call an app makes to ask for a file:
+
+```c
+u8* path = UXOpenPanel.run((u8*)"Open Image", (u8*)"/home/user");
+if (path != (u8*)0) { openDocument(path); }
+```
+
+Where the backend has a native dialog (`NSOpenPanel`,
+`GetOpenFileName`), the driver runs it. Where it doesn't (GEM), the call
+falls back to [`runToolkit`](#runtoolkit), which runs the toolkit-drawn
+[`UXFilePanel`](/compiler/api/uxkit/uxfilepanel/). Application code sees
+no difference: a prompt and a start directory go in, and a chosen path
+comes out.
+
+## Topics
+
+### run
+
+```c
+static u8* run(u8* prompt, u8* startDir)
+```
+
+Runs the dialog modally. Returns a malloc'd path string **the caller
+owns**, or null on Cancel.
+
+### runToolkit
+
+```c
+static u8* runToolkit(u8* prompt, u8* startDir)
+```
+
+The fallback half. You can call it directly (a test drives it on any
+backend). It constructs a fresh `UXFilePanel` and runs it.

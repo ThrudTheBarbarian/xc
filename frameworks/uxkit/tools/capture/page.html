@@ -1,0 +1,20 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>capturing</title>
+<style>html,body{margin:0}canvas{display:block}</style>
+<canvas id="ux-canvas" width="440" height="630"></canvas>
+<script>
+  // The capture page's own env pieces, set BEFORE the shim merges its surface.
+  globalThis.xccImports = { env: {
+    ux_capture_done: () => { document.title = 'DONE'; },
+  } };
+</script>
+<script src="ux_web_browser.js"></script>
+<script>
+  // The theme loads before the app draws: uxThemeReady resolves either way.
+  uxThemeReady.then(() => {
+    const s = document.createElement('script');
+    s.src = 'showcase_web.js';
+    document.body.appendChild(s);
+  });
+</script>

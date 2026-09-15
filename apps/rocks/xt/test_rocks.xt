@@ -1,0 +1,124 @@
+// test_rocks.xt — drive Rocks headlessly.
+//
+// Rocks.app blocks in evnt_multi waiting for a human, which is correct for an app and
+// useless for a test.  So this builds the SAME classes and drives them with synthetic
+// events — the same path a real click or menu pick takes.
+#import <Stdio.xt>
+#import <GEM>
+#import "RocksApp.xt"
+#import "../XG/XGBoot.xt"
+#import "../XG/XGAbi.xt"     // the ABI stamp libXG.so must match (generated)
+
+// A fake input source, so the modal alert in File>Quit can be answered.
+i32 gAnswer;             // which key the alert will "see"
+i32 fake_events(pointer evp, i32 timeout_ms)
+{
+    aes_event@ ev = (aes_event@)evp;
+    ev.type = (i32)AES_KEY;
+    ev.key  = gAnswer;
+    ev.shift = (i32)0; ev.mx = (i32)0; ev.my = (i32)0; ev.button = (i32)0; ev.wheel = (i32)0;
+    return (i32)AES_KEY;
+}
+
+class Harness : Object <XGApplicationDelegate>
+{
+    weak:XGApplication@ app;
+    Rocks@ rocks;
+    void init(void) { }
+
+    i32 applicationDidStart(XGApplication@ a) {
+        app = a;
+        rocks = new Rocks();
+        i32 rc = rocks.applicationDidStart(a);     // build the real app
+        if (rc != (i32)0) { Stdio.printf("FAIL: Rocks would not start\n"); a.stop(); return rc; }
+
+        XGViewTree@ doc = rocks.doc;
+        Stdio.printf("1. resource loaded: %d objects\n", (i16)doc.length());
+
+        // ---- 2. click a real widget in the canvas ---------------------------
+        // Find a G_BUTTON the RESOURCE defines, and click it.  The canvas IS the
+        // resource, so this is a click on a real widget — objc_find hit-tests it.
+        i32 btn = (i32)-1;
+        for (u16 i = (u16)0; i < doc.length(); i++) {
+            if ((doc.objects()[i].ob_type & (u16)$00FF) == (u16)G_BUTTON) { btn = (i32)i; break; }
+        }
+        Stdio.printf("2. the resource defines a G_BUTTON at object %d\n", btn);
+
+        XGRect r = doc.absoluteFrame((u16)btn);
+        XGEvent@ e = new XGEvent();
+        e.kind = (u8)XGEventMouseDown;
+        e.x = (i16)(r.x + r.w / (i16)2);
+        e.y = (i16)(r.y + r.h / (i16)2);
+        rocks.win.dispatchMouse(e);
+        Stdio.printf("3. clicked it at %d,%d -> Rocks selected object %d\n", e.x, e.y, rocks.sel);
+
+        bool selected = (rocks.sel == btn);
+        bool marked   = (doc.objects()[(u16)btn].ob_state & (u16)OS_SELECTED) != (u16)0;
+        Stdio.printf("4. OS_SELECTED set on the OBJECT itself? %d\n", (i16)(marked ? 1 : 0));
+
+        // ---- 5. the menu: File > Quit, and CANCEL the alert ------------------
+        gAnswer = (i32)13;                          // Return -> the DEFAULT button, which
+                                                    // in Rocks' quit alert is Cancel
+        aes_set_events((pointer)&fake_events);
+        bool running_before = true;
+        rocks.onQuit((XGMenuItem@)0);               // the same call MN_SELECTED makes
+        Stdio.printf("5. File>Quit, alert CANCELLED -> app still running\n");
+
+        // ---- 6. the STRUCTURE outline IS the resource's OBJECT tree -----------
+        // Nothing was converted: the outline walks the same ob_head/ob_next links the AES
+        // draws from, so an object cannot be in one view and not the other.
+        i32 rows0 = rocks.outline.rowCount();
+        Stdio.printf("6. structure, collapsed: %d row (object 0)\n", (i16)rows0);
+
+        rocks.outline.toggleRow((i32)0);
+        i32 kids = rocks.structure.childCount((i32)0);
+        i32 rows1 = rocks.outline.rowCount();
+        Stdio.printf("7. object 0 has %d children -> expanded to %d rows\n",
+                     (i16)kids, (i16)rows1);
+        bool expanded = (rows0 == (i32)1) && (rows1 == (i32)1 + kids) && (kids > (i32)0);
+
+        // ---- 8. SELECTION IS TWO-WAY -----------------------------------------
+        XGOutlineNode@ on = rocks.outline.nodeAt((i32)1);   // the root's first child
+        RNode@ rn = (RNode@ ?)on.item;
+        rocks.outline.selectRow((i32)1);
+        Stdio.printf("8. picked outline row 1 (object %d) -> canvas selection %d\n",
+                     (i16)rn.obj, (i16)rocks.sel);
+        bool o2c = (rocks.sel == rn.obj);
+
+        rocks.select((i32)0);                              // now go the other way
+        i32 hi = rocks.outline.selection();
+        Stdio.printf("9. selected object 0 on the canvas -> outline row %d\n", (i16)hi);
+        bool c2o = (hi == (i32)0) && (rocks.sel == (i32)0);   // and it did not bounce
+
+        bool ok = selected && marked && btn >= (i32)0 && expanded && o2c && c2o;
+        if (ok) {
+            Stdio.printf("PASS: Rocks is an EDITOR. The .rsc is a live canvas AND a live\n");
+            Stdio.printf("      outline of its own OBJECT tree — same ob_head/ob_next links,\n");
+            Stdio.printf("      no model, no conversion — and selection runs BOTH WAYS\n");
+            Stdio.printf("      between them.  All of it against libXG.so.\n");
+        } else {
+            Stdio.printf("FAIL: btn=%d sel=%d marked=%d expanded=%d o2c=%d c2o=%d\n",
+                         btn, rocks.sel, (i16)(marked?1:0),
+                         (i16)(expanded?1:0), (i16)(o2c?1:0), (i16)(c2o?1:0));
+        }
+        a.stop();
+        return (i32)0;
+    }
+}
+
+void main(void)
+{
+    // THE VERSION GATE. This app died as PC=0, PREFETCH-ABORT when libXG.so moved under it.
+    // Calling xtg_require references XG_abi_<major>_<minor>, so an ABI break is caught BY THE
+    // LOADER, by name, before main() runs. The argument is the minimum PATCH we need — a newer
+    // patch still satisfies it, which is the whole point of separating patch from minor.
+    if (!xtg_require((i32)0)) { Stdio.printf("Rocks: libXG.so is too old\n"); return; }
+
+    // qemu has no SD card, so no boot script started gemd (see Rocks.xt). Test-only.
+    if (!XGBoot.ensureWindowServer()) { Stdio.printf("no gemd\n"); return; }
+
+    XGApplication@ app = new XGApplication();
+    Harness@ h = new Harness();
+    app.setDelegate(h);
+    app.run();
+}

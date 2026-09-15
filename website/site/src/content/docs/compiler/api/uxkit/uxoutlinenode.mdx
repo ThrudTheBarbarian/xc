@@ -1,0 +1,15 @@
+---
+title: UXOutlineNode
+description: "One visible line of a UXOutlineView: the item, its depth, and whether it is open, as the flattening pass emits it."
+---
+
+`UXOutlineNode` is one visible line of a
+[`UXOutlineView`](/compiler/api/uxkit/uxoutlineview/). The flattening
+pass emits one for every item whose ancestors are all open. It holds the
+`item` itself, its `level` (depth, for the indent), `expandable`
+(whether it gets a disclosure triangle), and `expanded` (whether it is
+currently open).
+
+Read nodes through `nodeAt(row)`. The view rebuilds the whole list on
+every reload, so expansion state is stored against the *item* on the
+view, not in the node.

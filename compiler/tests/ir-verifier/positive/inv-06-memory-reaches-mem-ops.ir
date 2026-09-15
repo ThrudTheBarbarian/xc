@@ -1,0 +1,21 @@
+; Invariant 6 (IR-SPEC §12.6): Every memory-touching op (Load,
+; Store, Call*, Asm, MemCopy, ARC ops) takes a Memory input and
+; produces a Memory output (Load takes one and produces one; Store
+; takes one and produces one).
+; This fixture: Load consumes %m0 and produces %m1; Store consumes
+; %m1 and produces %m2. The chain is intact end-to-end.
+
+module "inv-06-positive" {
+  symbol bump: function (Ptr(U16, unbanked)) -> U16
+    attributes: { cloaked: false, banked: false, variadic: false }
+
+  function bump(%p: Ptr(U16, unbanked), %m0: Mem) -> (U16, Mem) {
+    bb_entry:
+      preds: -
+      %v:U16, %m1 = Load %p, %m0
+      %one:U16    = Const #1:U16
+      %v2:U16     = Add %v, %one
+      %m2         = Store %p, %v2, %m1
+      Return %v2, %m2
+  }
+}

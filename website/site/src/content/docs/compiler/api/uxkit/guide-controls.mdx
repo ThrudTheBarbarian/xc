@@ -1,0 +1,264 @@
+---
+title: "Guide: controls and callbacks"
+description: "One wiring pattern serves every control: a callback carrying receiver and code. Buttons, toggles, radio groups, sliders, popups, and the models some of them show."
+---
+
+Every control in UXKit reports the same way, so the wiring below works for all
+of them:
+
+```c
+control.setAction(&controller.onSomething);
+```
+
+This is a **callback**: one value carrying both the receiver and the code.
+There is no selector to misspell, no separate target field and no downcast in
+the handler.
+
+## The handler receives the sender
+
+```c
+void onAny(UXControl* sender) { … }
+```
+
+Because the handler receives the sender, one method can serve several controls
+and tell them apart by identity:
+
+```c
+if ((UXControl*)agree == sender) {
+    readout.setText(agree.isChecked() ? (u8*)"agreed" : (u8*)"not agreed");
+} else {
+    readout.setText((u8*)"changed");
+}
+```
+
+This helps when several controls share a response. A form that revalidates
+whenever anything changes wires every control to the same method, and the
+method asks the model what to do.
+
+Use separate methods when the responses differ. `sender` identity is for
+dispatch. Do not use it to build a switch statement.
+
+## What a callback costs you, and what it buys
+
+A callback **never owns its receiver**. This has two effects:
+
+1. **No retain cycle.** `window → tree → button → action → controller → window`
+   would cycle if the action were strong. The weak bound pointer breaks the
+   cycle. AppKit needs a separate weak `target` for the same result.
+2. **A dead controller is a silent no-op.** The toolkit tests `if (action)`,
+   which is false both when no action is set and when the receiver has been
+   deallocated. A fired button whose controller is gone does nothing and does
+   not jump into freed memory.
+
+You cannot write `weak:` on a callback. It is implied, and the compiler reports
+an error:
+
+```
+error: `weak:` is implied on a callback and cannot be written — a stored
+callback always auto-zeroes when its receiver dies. Remove the qualifier.
+```
+
+## The controls
+
+### Button
+
+```c
+UXButton* go = new UXButton();
+go.setTitle((u8*)"Go");
+go.setAction(&self.onGo);
+```
+
+A button fires on release. See [`UXButton`](/compiler/api/uxkit/uxbutton/) for
+what a press does on each backend. Some backends deliver it as a native
+notification and some as an ordinary event through the hit-test. Both end at
+your method.
+
+### Checkbox
+
+```c
+agree = new UXCheckbox();
+agree.setTitle((u8*)"Agree");
+agree.setAction(&self.onAny);
+// later:  agree.isChecked()
+```
+
+The control owns its state. Your handler reads it and does not track it.
+
+### Radio buttons belong to a group
+
+```c
+UXRadioGroup* size = new UXRadioGroup();
+UXRadioButton* small = new UXRadioButton(); small.setTitle((u8*)"Small");
+UXRadioButton* large = new UXRadioButton(); large.setTitle((u8*)"Large");
+content.addSubview(small, …);
+content.addSubview(large, …);
+size.add(small);
+size.add(large);
+size.select(small);
+```
+
+The **group** owns the exclusivity. Adding a button to a group makes it
+exclusive with the others. The buttons are toggles that know which group they
+are in. Exclusivity is a property of the set, so the group is a separate object
+and not a flag on the button.
+
+### Slider
+
+```c
+level = new UXSlider();
+level.setRange(0, 100);
+level.setValue(40);
+level.setAction(&self.onLevel);
+// in the handler:  level.value
+```
+
+`value` is a **field**, not a method. Ranges are integers, like everything else
+in UXKit.
+
+### Progress shows a model
+
+A progress bar does not hold its own value:
+
+```c
+UXProgress* work = new UXProgress();
+work.setTotal(100);
+work.setCompleted(40);
+
+UXProgressBar* bar = new UXProgressBar();
+bar.setProgress(work);          // the BAR shows the MODEL
+```
+
+A [`UXProgressBar`](/compiler/api/uxkit/uxprogressbar/) is a view of a
+[`UXProgress`](/compiler/api/uxkit/uxprogress/). You advance the **model** and
+the bar follows:
+
+```c
+work.setCompleted(level.value);
+bar.setNeedsDisplay();
+```
+
+This lets progress compose. A `UXProgress` can have children
+(`addChild(childTotal, unitsInParent)`), so three sub-tasks that report their
+own completion roll up into one bar without any hand-computed percentages.
+
+### Pop-up button
+
+```c
+UXPopUpButton* pop = new UXPopUpButton();
+pop.addItem((u8*)"One", 1);      // title, tag
+pop.addItem((u8*)"Two", 2);
+pop.setAction(&self.onAny);
+```
+
+Items carry a **tag**, so the handler reads a meaning and not an index. You can
+reorder the list without changing what the tags mean.
+
+### Segmented control
+
+[`UXSegmentedControl`](/compiler/api/uxkit/uxsegmentedcontrol/) lays the same
+choice out flat, for a small fixed set where a pop-up would hide the options.
+
+## Enabled, and what it consumes
+
+```c
+go.setEnabled(false);
+```
+
+A disabled control consumes nothing and fires nothing. The press passes it by
+and is not swallowed. Enabling and disabling is the usual way to express "not
+yet valid", and it needs no bookkeeping in your handler.
+
+## The whole program
+
+```c
+class Panel : Object <UXApplicationDelegate>
+{
+    UXLabel*       readout;
+    UXCheckbox*    agree;
+    UXRadioGroup*  size;
+    UXSlider*      level;
+    UXProgressBar* bar;
+    UXProgress*    work;
+
+    void init(void) { }
+
+    void onAny(UXControl* sender) {
+        if ((UXControl*)agree == sender) {
+            readout.setText(agree.isChecked() ? (u8*)"agreed" : (u8*)"not agreed");
+        } else {
+            readout.setText((u8*)"changed");
+        }
+    }
+
+    void onLevel(UXControl* sender) {
+        work.setCompleted(level.value);     // move the model
+        bar.setNeedsDisplay();              // the view follows
+    }
+
+    i32 applicationDidStart(UXApplication* app) {
+        UXView*   content = new UXView();
+        UXWindow* win     = new UXWindow();
+        app.addWindow(win);
+        win.open((u8*)"Controls", UXGeom.make(60, 60, 300, 260), content);
+
+        readout = new UXLabel();
+        readout.setText((u8*)"nothing yet");
+        content.addSubview(readout, UXGeom.make(12, 10, 270, 18));
+
+        UXButton* go = new UXButton();
+        go.setTitle((u8*)"Go");
+        go.setAction(&self.onAny);
+        content.addSubview(go, UXGeom.make(12, 36, 70, 24));
+
+        agree = new UXCheckbox();
+        agree.setTitle((u8*)"Agree");
+        agree.setAction(&self.onAny);
+        content.addSubview(agree, UXGeom.make(12, 68, 120, 20));
+
+        size = new UXRadioGroup();
+        UXRadioButton* small = new UXRadioButton(); small.setTitle((u8*)"Small");
+        UXRadioButton* large = new UXRadioButton(); large.setTitle((u8*)"Large");
+        content.addSubview(small, UXGeom.make(12, 92, 100, 20));
+        content.addSubview(large, UXGeom.make(12, 114, 100, 20));
+        size.add(small); size.add(large);
+        size.select(small);
+
+        level = new UXSlider();
+        level.setRange(0, 100);
+        level.setValue(40);
+        level.setAction(&self.onLevel);
+        content.addSubview(level, UXGeom.make(12, 142, 180, 22));
+
+        work = new UXProgress();
+        work.setTotal(100);
+        work.setCompleted(40);
+        bar = new UXProgressBar();
+        bar.setProgress(work);
+        content.addSubview(bar, UXGeom.make(12, 172, 180, 16));
+
+        UXPopUpButton* pop = new UXPopUpButton();
+        pop.addItem((u8*)"One", 1);
+        pop.addItem((u8*)"Two", 2);
+        pop.setAction(&self.onAny);
+        content.addSubview(pop, UXGeom.make(12, 198, 120, 22));
+
+        win.tree.finalise();
+        win.displayAll();
+        return 0;
+    }
+}
+```
+
+The file is `website/site/examples/uxkit/controls.xc` and the `doc-examples`
+gate compiles it.
+
+## What to read next
+
+- [`UXControl`](/compiler/api/uxkit/uxcontrol/): the shared surface (title,
+  action, enabled)
+- [`UXResponder`](/compiler/api/uxkit/uxresponder/): what happens to a press a
+  control does not consume
+- [Bound methods and callbacks](/compiler/language/bound-methods/): the
+  language feature underneath
+- [The view tree and layout](/compiler/api/uxkit/guide-view-tree/): placing
+  what you have wired

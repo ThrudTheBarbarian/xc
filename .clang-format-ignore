@@ -1,0 +1,26 @@
+# Files clang-format must not touch: each defines a macro whose body
+# contains braces, and formatting rewrites the macro rather than its layout.
+# See .clang-format.
+apps/rocks/src/rsc.c
+compiler/src/xtc/asm/arm64/XAArm64Assembler.m
+compiler/src/xtc/asm/x86_64/XAX86_64Assembler.m
+compiler/src/xtc/driver/XTMemoryModel.m
+compiler/src/xtc/lexer/XTLexer.m
+compiler/src/xtc/sign/XTCodeSign.m
+compiler/src/xtc/sign/XTIdentity.m
+compiler/src/xtc/sign/XTIdentityExport.m
+compiler/src/xtc/sign/XTPkcs8.m
+compiler/src/xtc/support-src/rt-checked.c
+compiler/tests/asm-arm64/XTElfArm64WriterTests.m
+compiler/tests/asm-arm64/XTMachOWriterTests.m
+compiler/tests/asm-x86_64/XTElfWriterTests.m
+compiler/tests/driver/XTBankDescriptorTests.m
+compiler/tests/driver/XTXtLayoutTests.m
+compiler/tests/dwarf/XTDwarfReaderTests.m
+compiler/tests/lexer/XTLexerTests.m
+compiler/tests/parser/XTParserTests.m
+compiler/tests/preprocessor/XTPreprocessorTests.m
+compiler/tests/sema/XTSemanticTests.m
+compiler/tests/xta/XARegionCBankTests.m
+compiler/tests/xta/XAXtOpcodeTests.m
+frameworks/uxkit/libUXAndroid.c

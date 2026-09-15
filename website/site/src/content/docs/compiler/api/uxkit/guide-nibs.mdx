@@ -1,0 +1,244 @@
+---
+title: "Guide: nibs, or designing a window instead of writing one"
+description: "A .rsc is the nib, and it is live. How outlets and actions wire themselves, why there is no inflation step, and what v2's variants provide."
+---
+
+The other guides build windows in code. This guide loads them from a designed
+resource.
+
+```c
+UXViewTree* t = UXNib.loadWired((u8*)"app.rsc", 0, (UXDesignable*)self);
+```
+
+After this one call, a designed dialog is on screen with its outlets assigned
+and its buttons wired to your methods. There is no layout code, no `setAction`
+call and no per-control setup.
+
+## A .rsc *is* the nib, and it is live
+
+There is no inflation step. A GEM resource already contains an `OBJECT` tree,
+and a [`UXView`](/compiler/api/uxkit/uxview/) is backed by an `OBJECT`, so
+loading a nib means loading the tree and **binding** a view onto each entry.
+
+```
+Rocks (macOS) --writes--> app.rsc --rscload--> OBJECT[] --UXNib--> UXViewTree
+```
+
+Nothing is copied or rebuilt. The AES walks the resource's own array.
+
+**Rocks**, the resource editor, is therefore the Interface Builder for this
+toolkit. A dialog designed there is a live view hierarchy here, with no
+conversion in between. What you dragged is what runs.
+
+:::tip[The resource supplies the *what*; you supply the *behaviour*]
+Views are chosen by `ob_type`. The resource says what each object **is** (its
+type, frame, flags and initial state), and the toolkit gives it identity,
+hit-testing and a place in the responder chain.
+
+Designing a window is therefore a separate activity from programming one, and
+not a different syntax for the same work.
+:::
+
+## Outlets and actions wire themselves
+
+You do not write wiring code. You **decorate** the fields and methods you want
+wired, and the compiler generates the rest.
+
+```c
+class PrefsController : Object
+{
+    outlet UXTextField* nameField;
+    outlet UXCheckbox*  showGrid;
+
+    void onApply(UXControl* c) :action { … }
+    void onCancel(UXControl* c) :action { … }
+}
+```
+
+A class that declares any `outlet` field or `:action` method **auto-conforms**
+to [`UXDesignable`](/compiler/api/uxkit/uxdesignable/), and the compiler
+generates both of its methods from the decorations:
+
+| generated | from |
+| --- | --- |
+| `setOutlet(name, value)` | a checked assignment per `outlet` |
+| `wireAction(name, control)` | `control.setAction(&self.<method>)` per `:action` |
+
+`UXNib` reaches a loaded object through that protocol and wires the nib's
+connections **by name**. There is no per-application code, and no reflection
+beyond what the decorations declare and the compiler has checked.
+
+A misspelled outlet name in a nib is a `false` return at load. A connection of
+the **wrong kind** is refused and not mis-assigned, because the generated
+assignment is a checked cast against your field's declared type.
+
+You can call both generated methods directly to confirm the decorations took
+effect:
+
+```
+assign nameField: 1
+  landed in the field: 1
+unknown name: 0
+wrong type into nameField: 0
+wire onApply: 1
+  applied count: 1
+unknown action: 0
+```
+
+`applied count: 1` shows the button firing the wired method, beyond
+`wireAction` returning true. The program is
+`website/site/examples/uxkit/nibwiring.xc`, compiled by the `doc-examples` gate.
+
+:::caution[A refused outlet is cleared, not left alone]
+A type mismatch returns `false` **and** sets the field to null. It does not
+preserve the previous value.
+
+On a nib load this changes nothing: each outlet is connected once, from null,
+and a failed connection leaves it null either way. But a `false` return does not
+mean "nothing happened", so do not use it as a safe probe on an outlet that
+already holds something.
+:::
+
+## Loading, in three shapes
+
+```c
+UXNib.load(path, treeIndex);                        // just the views
+UXNib.loadWired(path, treeIndex, owner);            // + connections
+UXNib.loadWiredMem(bytes, len, treeIndex, owner);   // from memory
+```
+
+[`load`](/compiler/api/uxkit/uxnib/) gives you the view tree and nothing else.
+Use it for a purely visual resource with no behaviour.
+
+`loadWired` is the usual choice. The `owner` is **File's Owner**: the object
+whose outlets get filled and whose actions get bound. It is your window
+controller, and it is the only thing you hand the loader.
+
+`loadWiredMem` takes bytes instead of a path. Use it for a resource embedded in
+the executable, downloaded, or built in a test.
+
+All three return **null**, never a partial tree, when the file is missing, the
+tree index is out of range, or the resource does not parse. One check covers
+all three cases.
+
+## Classes come from a compiler-generated factory
+
+A nib names classes as **strings**: a custom view subclass for a `G_USERDEF`
+slot, or a non-view top-level object such as a controller or a formatter.
+Something has to turn `"PrefsController"` into an object.
+
+Each **module** that owns designable classes contributes a generated
+`xgNibNew(name) -> Object*`, a switch over that module's classes, registered
+automatically through an `.init_array` entry.
+
+```c
+UXNib.registerObjectFactory(fn);      // the explicit fallback
+```
+
+This has two consequences:
+
+- **Cross-module works.** A nib in one library can instantiate a class from
+  another, because the loader tries each registered factory in turn.
+- **A class the factories do not know is a null**, not a crash. A nib that
+  refers to a deleted class loads with that object missing, and the connections
+  to it fail quietly.
+
+## v1 and v2: why there are two
+
+The two versions differ in capability. v2 does not replace v1.
+
+| | |
+| --- | --- |
+| **v1** (`XGNB`) | read by `libGEM`'s C `rscload` — **GEM-only** |
+| **v2** (`UXNB`) | parsed by [`UXNibV2`](/compiler/api/uxkit/uxnibv2/) in portable code — **every backend** |
+
+The other six backends cannot use a format that only one platform's C library
+reads. v2 is therefore parsed in xtc, from the raw bytes, with no host
+dependency. Variant selection, logical-id resolution and validation can then
+run, and be **gated**, on wasm32 as well as on the board.
+
+The two coexist because their magic numbers differ. The C reader does not see a
+v2 file. The new parser reports a v1 file as version 1 and presents it under
+the compatibility rule: every tree is its own single-variant form of class
+`any`.
+
+Existing resources keep working without any conversion.
+
+## Variants: one nib, several form factors
+
+Variants are the main reason v2 exists.
+
+```c
+i32 chosen;
+i32 tree = nib.selectTree(formId, gDriver.formFactorClass(), &chosen);
+```
+
+A form can carry several **variants** (a phone layout, a tablet layout, a
+desktop layout), and `selectTree` picks the best available one by walking a
+fallback chain. A nib that ships only a desktop variant still loads on a phone,
+by falling back.
+
+`chosen` reports which variant was used. This distinguishes "a phone layout
+exists" from "the desktop layout is in use on a phone".
+
+### Logical ids are how the code stays the same
+
+A control is referred to by a **logical id** instead of its index in a tree, so
+the same code binds to it in every variant even though the layouts differ.
+
+```c
+i32 obj = nib.objForLogical(tree, LOGICAL_APPLY);
+if (obj < 0) { /* this variant does not have it — skip */ }
+```
+
+:::note[A missing control is a design decision, not a failure]
+`-1` is a normal answer. A phone variant may drop a control the desktop variant
+has, such as a secondary toolbar or an advanced option, and the caller skips it
+silently.
+
+This is what makes variants useful. If every variant had to carry every
+control, variants would differ only in geometry, and a layout system already
+handles geometry.
+:::
+
+## The mistake that costs an afternoon
+
+:::danger[The v2 parser borrows your buffer]
+Every `u8*` it returns (class names, member names, form names) points **into
+the bytes you passed to `open`**. They are valid only while you keep that
+buffer alive and unmodified.
+
+```c
+u8* name = nib.formName(id);        // borrowed!
+free(rscBytes);                     // name is now garbage
+```
+
+Copy anything you intend to keep with
+[`UXStr.dup`](/compiler/api/uxkit/uxstr/#dup). The symptom is a name that reads
+as nonsense later, in code far from the `free`, which makes the bug hard to
+trace.
+:::
+
+The parser borrows so that a resource with hundreds of names costs **no
+allocations** to parse. In exchange, the parser is a view onto your bytes, and
+you own their lifetime.
+
+## Testing a nib without a designer
+
+`loadWiredMem` takes bytes, and a `.rsc` can be built in-process. The nib
+pipeline is gated this way: construct a resource with a `UXNB` chunk, load it
+against a controller, and assert that the whole graph landed (outlets assigned,
+actions bound, a designable view working as an action target).
+
+A nib change is therefore testable like any other change, without someone
+clicking through a window.
+
+## Where to go next
+
+- [`UXNib`](/compiler/api/uxkit/uxnib/): loading, and the v1 surface
+- [`UXNibV2`](/compiler/api/uxkit/uxnibv2/): variants, logical ids, refs
+- [`UXDesignable`](/compiler/api/uxkit/uxdesignable/): the two generated
+  methods, and what the decorations mean
+- [`UXViewTree`](/compiler/api/uxkit/uxviewtree/): what a loaded nib becomes
+- [Guide: the driver model](/compiler/api/uxkit/guide-drivers/): where
+  `formFactorClass` comes from

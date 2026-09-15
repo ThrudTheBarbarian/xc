@@ -1,0 +1,164 @@
+---
+title: UXCheckbox
+description: "A toggle with a title: custom-drawn from the theme where the platform has no native art, a native check box where it does."
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+`UXCheckbox` is a toggle that remembers. Click it and it flips
+[`isChecked`](#ischecked), repaints, and fires its action, like a button that
+remembers its state. Where the platform has a native check box (Win32, macOS,
+iOS once the overlay lands) the driver realizes one. Where it does not (GEM,
+web), the control paints **itself** from the theme's `check` /
+`check.selected` sprites, through the same
+[`drawRect`](/compiler/api/uxkit/uxview/#drawrect) seam as any custom view.
+State lives in the neutral object in both cases, so a test can toggle and read
+it identically on every backend.
+
+```c
+#use <UXKit>
+```
+
+## Overview
+
+```c
+UXCheckbox* c = new UXCheckbox();
+c.setTitle((u8*)"Subscribe");
+c.setChecked(true);
+c.setAction(&controller.onSubscribe);      // fires AFTER the toggle
+content.addSubview(c, UXGeom.make(8, 8, 120, 20));
+```
+
+The action fires *after* the state flips, so the handler reads the new state
+from the sender:
+
+```c
+void onSubscribe(UXControl* sender) {
+    bool on = ((UXCheckbox* ?)sender).isChecked();
+    ...
+}
+```
+
+The themed sprite draws at its native 21×21 (stretching blurs pixel art). A
+disabled checkbox greys its label and consumes nothing.
+
+For the one-of-a-set variant, see
+[`UXRadioButton`](/compiler/api/uxkit/uxradiobutton/). It draws the same way,
+and the mutual exclusion lives in
+[`UXRadioGroup`](/compiler/api/uxkit/uxradiogroup/) as plain neutral logic:
+`select()` clears the others, and that is all of radio behaviour.
+
+## Conforms to
+
+- Inherits [`UXControl`](/compiler/api/uxkit/uxcontrol/): title, the
+  `callback` action (auto-zeroing), the fire path.
+
+## Topics
+
+**State** · [isChecked](#ischecked) · [setChecked](#setchecked)
+**Realization** · [kind](#kind) · [attachTo](#attachto)
+**Events** · [mouseDown](#mousedown)
+
+### isChecked
+
+```c
+bool isChecked(void)
+```
+
+The current state. The neutral object holds it, whatever realized the control.
+
+### setChecked
+
+```c
+void setChecked(bool c)
+```
+
+Sets the state programmatically and marks the control dirty. Does **not**
+fire the action: actions are for the user's toggles, and code that sets the
+state already knows it.
+
+### kind
+
+```c
+UXKind kind(void)
+```
+
+`UXKindCheckbox`: native where the backend has the art, app-drawn everywhere
+else. The driver decides; the control does not know which.
+
+### attachTo
+
+```c
+void attachTo(UXViewTree* t, UXRect frame)
+```
+
+Realizes into the tree and stores the title (as the node's spec) and `self`
+(as its peer). A native backend needs both to build a real check box; the
+app-drawn path ignores both.
+
+### mouseDown
+
+```c
+void mouseDown(UXEvent* e)
+```
+
+Toggle, repaint, fire, in that order, so the action always sees the new
+state. When disabled, does nothing.
+
+## Platform appearance
+
+<div class="ux-platforms">
+<Tabs>
+  <TabItem label="Web">
+    <img src="/uxkit/checkbox-web.png" alt="UXCheckbox on the web backend" width="220" />
+
+    The theme's `check.selected` sprite at its native 21×21: the same Aristo art GEM draws, 9-sliced from the same atlas.
+  </TabItem>
+  <TabItem label="iOS">
+    <img src="/uxkit/checkbox-ios.png" alt="UXCheckbox on iOS" width="220" />
+
+    A real `UISwitch` with its label, the platform's toggle idiom, captured from the simulator's render.
+  </TabItem>
+  <TabItem label="Android">
+    <img src="/uxkit/checkbox-android.png" alt="UXCheckbox on Android" width="220" />
+
+    A real `android.widget.CheckBox`. Its click reports the new state through the bridge, and the peer adopts it before the action fires.
+  </TabItem>
+  <TabItem label="macOS">
+    <img src="/uxkit/checkbox-macos.png" alt="Checkbox on macOS" width="220" />
+
+    A real check-style <code>NSButton</code>.
+  </TabItem>
+  <TabItem label="Windows">
+    <img src="/uxkit/checkbox-windows.png" alt="Checkbox on Windows" width="220" />
+
+    A real <code>BUTTON</code> with <code>BS_CHECKBOX</code>.
+  </TabItem>
+  <TabItem label="Linux">
+    <img src="/uxkit/checkbox-linux.png" alt="UXCheckbox on Linux (GTK)" width="220" />
+
+    A real `GtkCheckButton`, toggled through its own signal. GTK draws its own widgets, so this capture is the Linux look wherever GTK4 runs.
+  </TabItem>
+  <TabItem label="GEM">
+    <img src="/uxkit/checkbox-gem.png" alt="Checkbox on GEM" width="220" />
+
+    The identical themed sprite, drawn by the same drawRect.
+  </TabItem>
+</Tabs>
+</div>
+
+## Example
+
+A settings row whose apply button reads the toggles:
+
+```c
+UXCheckbox* bold   = new UXCheckbox();
+UXCheckbox* italic = new UXCheckbox();
+bold.setTitle((u8*)"Bold");     bold.setChecked(true);
+italic.setTitle((u8*)"Italic");
+content.addSubview(bold,   UXGeom.make(8,  8, 100, 20));
+content.addSubview(italic, UXGeom.make(8, 32, 100, 20));
+
+// later, in an action:
+face.setStyle(bold.isChecked(), italic.isChecked());
+```

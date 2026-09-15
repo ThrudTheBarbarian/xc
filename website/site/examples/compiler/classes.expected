@@ -1,0 +1,7 @@
+a        = (3, 4)
+moved    = (2, 6)  x=2 y=6
+b        = (10, 20)
+made     = 2
+end of main
+  dealloc (10, 20)
+  dealloc (2, 6)

@@ -1,0 +1,12 @@
+u8   200+100=44  200*3=88
+wide 200+100=300
+-17/5=-3  -17%5=-2
+$81 << 1 = $0002   $81 >> 1 = $0040
+$81 <: 1 = $0003   $81 :> 1 = $00C0
+and=$00A0 or=$00FA xor=$005A not=$000F
+short-circuit ok: 0
+max=11  eq=0  ne=1
+compound=31
+pre=6 post=6 i=7
+sizeof u8=1 u16=2 u32=4 u64=8 float=4 double=8
+through pointer: 43

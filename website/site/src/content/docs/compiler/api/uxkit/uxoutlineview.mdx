@@ -1,0 +1,170 @@
+---
+title: UXOutlineView
+description: "A table whose rows have a hierarchy: the expanded tree flattens into the visible row list, so every table feature works unchanged."
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+`UXOutlineView` is a table whose rows have a hierarchy. It makes
+**three additions** to
+[`UXTableView`](/compiler/api/uxkit/uxtableview/): a data source that
+speaks in *items and children* rather than rows and columns; a
+**flattening** pass that derives the visible row list from the expanded
+tree; and an indent with a disclosure triangle that toggles a row open or
+shut.
+
+An outline view is a table whose row list is derived from a tree and
+re-derived whenever a node opens or closes. There is no second drawing
+path, no second hit test and no second scrolling model. An outline row
+**is** a table row, so everything downstream works as it does for a
+table.
+
+```c
+#use <UXKit>
+```
+
+## The data source
+
+```c
+protocol UXOutlineDataSource {
+    i32     numberOfChildren(UXOutlineView* o, Object* item);
+    Object* childOfItem(UXOutlineView* o, Object* item, i32 i);
+    bool    isExpandable(UXOutlineView* o, Object* item);
+    u8*     valueForItem(UXOutlineView* o, Object* item, i32 col);
+}
+```
+
+`item` is nil for the root, so one method answers both "what are the
+top-level rows?" and "what are this node's children?".
+
+**Lifetime rule (inherited from the table):** `valueForItem`'s string
+goes straight into the realized cell and is *not copied*. It must
+outlive the row.
+
+## Overview
+
+```c
+class FileTree : Object <UXOutlineDataSource> {
+    i32 numberOfChildren(UXOutlineView* o, Object* item) {
+        return item == (Object*)0 ? root.count() : ((Node* ?)item).count();
+    }
+    Object* childOfItem(UXOutlineView* o, Object* item, i32 i) { ... }
+    bool isExpandable(UXOutlineView* o, Object* item) { return ((Node* ?)item).isDir(); }
+    u8* valueForItem(UXOutlineView* o, Object* item, i32 col) { return ((Node* ?)item).name(); }
+}
+
+UXOutlineView* tree = new UXOutlineView();
+tree.setOutlineSource(src);
+tree.addColumn((u8*)"Name", 200);
+```
+
+## Topics
+
+**Source** · [setOutlineSource](#setoutlinesource)
+**The visible list** · [visibleCount](#visiblecount) · [nodeAt](#nodeat) · [rowForItem](#rowforitem)
+**Expansion** · [isExpanded](#isexpanded) · [setExpanded](#setexpanded)
+
+### setOutlineSource
+
+```c
+void setOutlineSource(UXOutlineDataSource* d)
+```
+
+Attaches the item-tree source. The table's row/column source is unused,
+because the outline derives rows itself.
+
+### visibleCount
+
+```c
+i32 visibleCount(void)
+```
+
+How many rows the current expansion state produces.
+
+### nodeAt
+
+```c
+UXOutlineNode* nodeAt(i32 r)
+```
+
+The visible line at a row: the item, its depth, and whether it is open.
+See [`UXOutlineNode`](/compiler/api/uxkit/uxoutlinenode/).
+
+### rowForItem
+
+```c
+i32 rowForItem(pointer item)
+```
+
+The row currently showing an item, or `-1` when it is folded away.
+
+### isExpanded
+
+```c
+bool isExpanded(Object* item)
+```
+
+Whether the item is open. Expansion is stored **against the item, not
+a row index**, because a row index changes as soon as anything above it
+opens or shuts.
+
+### setExpanded
+
+```c
+void setExpanded(Object* item, bool open)
+```
+
+Opens or closes an item programmatically; the next reload re-derives the
+row list. The disclosure triangle calls this method.
+
+## How it composes
+
+The outline overrides three table hooks. `countRows` flattens
+(depth-first, emitting a line for every item whose ancestors are all
+open). `newRow` makes an
+[`UXOutlineRow`](/compiler/api/uxkit/uxoutlinerow/) that draws the
+triangle and indents. `configureRow` pushes the first column right by
+the row's depth. Drawing, hit-testing, selection, scrolling and the
+native realizations all belong to the table and are unchanged.
+
+## Platform appearance
+
+<div class="ux-platforms">
+<Tabs>
+  <TabItem label="Web">
+    <img src="/uxkit/outline-web.png" alt="UXOutlineView on Web" width="220" />
+
+    The flattened tree as toolkit-drawn rows, with the disclosure triangle in the indent gutter.
+  </TabItem>
+  <TabItem label="iOS">
+    <img src="/uxkit/outline-ios.png" alt="UXOutlineView on iOS" width="220" />
+
+    The flattened tree as toolkit-drawn rows, with the disclosure triangle in the indent gutter.
+  </TabItem>
+  <TabItem label="Android">
+    <img src="/uxkit/outline-android.png" alt="UXOutlineView on Android" width="220" />
+
+    The flattened tree as toolkit-drawn rows, with the disclosure triangle in the indent gutter.
+  </TabItem>
+  <TabItem label="macOS">
+    <img src="/uxkit/outline-macos.png" alt="UXOutlineView on macOS" width="220" />
+
+    The native table realization, with the platform's disclosure arrows and rows.
+  </TabItem>
+  <TabItem label="Windows">
+    <img src="/uxkit/outline-windows.png" alt="UXOutlineView on Windows" width="220" />
+
+    The native list realization with the toolkit's indent.
+  </TabItem>
+  <TabItem label="Linux">
+    <img src="/uxkit/outline-linux.png" alt="UXOutlineView on Linux" width="220" />
+
+    The flattened tree as toolkit-drawn rows, with the disclosure triangle in the indent gutter.
+  </TabItem>
+  <TabItem label="GEM">
+    <img src="/uxkit/outline-gem.png" alt="UXOutlineView on GEM" width="220" />
+
+    The flattened tree as toolkit-drawn rows, with the disclosure triangle in the indent gutter.
+  </TabItem>
+</Tabs>
+</div>

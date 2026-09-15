@@ -1,0 +1,17 @@
+; Invariant 2 (IR-SPEC §12.2): Operand types match def types.
+; No silent widening or narrowing — every conversion must be an
+; explicit cast opcode.
+; This fixture: Add U8 of two U8 operands. Both operand defs have
+; type U8, matching the integer-arith rule "both operands same T".
+
+module "inv-02-positive" {
+  symbol same_width: function (U8, U8) -> U8
+    attributes: { cloaked: false, banked: false, variadic: false }
+
+  function same_width(%a: U8, %b: U8, %m0: Mem) -> (U8, Mem) {
+    bb_entry:
+      preds: -
+      %r:U8 = Add %a, %b
+      Return %r, %m0
+  }
+}

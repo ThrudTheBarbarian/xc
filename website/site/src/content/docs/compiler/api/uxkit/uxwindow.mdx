@@ -1,0 +1,317 @@
+---
+title: UXWindow
+description: "One native window handle, one view tree: open, damage-driven repaint, focus, and the dispatch entries every backend routes through."
+---
+
+`UXWindow` binds one native window to one
+[`UXViewTree`](/compiler/api/uxkit/uxviewtree/). The platform draws the frame
+(title, closer, mover, all themed), and the toolkit does not handle it. The
+window supplies the content: the tree, whose stock widgets draw themselves and
+whose custom views call back through
+[`drawRect`](/compiler/api/uxkit/uxview/#drawrect).
+
+```c
+#use <UXKit>
+```
+
+## Overview
+
+**Opening is one call.** [`open`](#open) attaches your content view to the
+tree at the window's size, creates the native window, registers the paint
+callback, shows the window, and does the first full paint:
+
+```c
+UXWindow* win = new UXWindow();
+app.addWindow(win);                                  // register BEFORE open
+win.open((u8*)"Editor", UXGeom.make(20, 20, 320, 200), content);
+```
+
+(The `.rsc`/nib path is [`openWithTree`](#openwithtree): the resource already
+defines its tree and sizes, and the window adopts it.)
+
+**Repaints are damage-driven at two levels.** Views mark rects
+([`setNeedsDisplayInRect`](/compiler/api/uxkit/uxview/#setneedsdisplayinrect)),
+and [`display`](#display) repaints the union under a clip. During the walk, a
+view whose absolute frame misses the damage is skipped *before its `drawRect`
+runs*. Because of this second check, one typed character repaints one line and
+does not run every `drawRect` in the window.
+
+**Events enter here.** The run loop routes a decoded event to the window, and
+the window routes it inward. [`dispatchMouse`](#dispatchmouse) goes through the
+tree's shared hit-test to the deepest willing view.
+[`dispatchKey`](#dispatchkey) goes to the first responder; Tab/Shift-Tab move
+focus between editable and selectable controls, and Return fires the
+[default button](#setdefaultbutton). A headless test uses the same entry with a
+synthesized event, so a test click and a native click are indistinguishable
+above the driver.
+
+**Closing is explicit and idempotent.** [`close`](#close) destroys the native
+window and zeroes the handle ([`isOpen`](#isopen) becomes false); `dealloc`
+closes as a backstop. From a control's action, prefer
+[`UXApplication.closeWindowLater`](/compiler/api/uxkit/uxapplication/#closewindowlater).
+
+## Conforms to
+
+- Inherits [`UXResponder`](/compiler/api/uxkit/uxresponder/): the content
+  view's `nextResponder` is the window, so unclaimed events arrive here.
+
+## Topics
+
+**Opening** · [open](#open) · [openWithTree](#openwithtree) · [close](#close) · [isOpen](#isopen)
+**Chrome** · [setTitle](#settitle--setsubtitle--setmodified--setinfo--seticon) · [setSubtitle](#settitle--setsubtitle--setmodified--setinfo--seticon) · [setModified](#settitle--setsubtitle--setmodified--setinfo--seticon) · [setInfo](#settitle--setsubtitle--setmodified--setinfo--seticon) · [setIcon](#settitle--setsubtitle--setmodified--setinfo--seticon) · [orderFront](#orderfront)
+**Scrolling** · [setContentSize](#setcontentsize) · [scrollTo](#scrollto--scrollx--scrolly) · [scrollX](#scrollto--scrollx--scrolly) · [scrollY](#scrollto--scrollx--scrolly)
+**Painting** · [display](#display) · [displayAll](#displayall)
+**Views** · [viewAt](#viewat) · [layoutFor](#layoutfor)
+**Focus & dispatch** · [makeFirstResponder](#makefirstresponder) · [setDefaultButton](#setdefaultbutton) · [moveFocus](#movefocus) · [dispatchMouse](#dispatchmouse) · [dispatchKey](#dispatchkey) · [dispatchWheel](#dispatchwheel) · [keyDown](#keydown)
+
+### open
+
+```c
+void open(u8* title, UXRect f, UXView* content)
+```
+
+Attaches `content` (it becomes the tree's root, sized to the window), creates
+and shows the native window, and does the first paint. The content view's
+responder chain ends at the window.
+
+### openWithTree
+
+```c
+void openWithTree(u8* title, UXRect f, UXViewTree* vt)
+```
+
+The nib path: adopts a tree that already exists.
+[`UXNib`](/compiler/api/uxkit/uxnib/) built it from the resource, with behaviour
+already bound.
+
+### close
+
+```c
+void close(void)
+```
+
+Destroys the native window and zeroes the handle. Safe to call twice; `dealloc`
+calls it as a backstop.
+
+### isOpen
+
+```c
+bool isOpen(void)
+```
+
+True while a native window exists. The window object may outlive its native
+window; the handle shows which state it is in.
+
+### setTitle / setSubtitle / setModified / setInfo / setIcon
+
+```c
+void setTitle(u8* s)
+void setSubtitle(u8* s)      // a path, a second line
+void setModified(bool m)     // the edited dot
+void setInfo(u8* s)          // the footer line
+void setIcon(u8* slice)      // a theme slice NAME, not an image
+```
+
+Window chrome, where the platform has it. macOS renders the subtitle and the
+modified dot; other platforms ignore what they lack. The toolkit never draws
+chrome.
+
+`setInfo` sets GEM's footer line, which has no macOS or Windows equivalent and
+is a no-op there. `setIcon` takes a **theme slice name**, not an image, so the
+icon is whatever the current theme draws for that name. This is the same
+indirection as [`drawTheme`](/compiler/api/uxkit/uxgraphics/#drawtheme).
+
+:::note[These are all one-line forwards to the driver]
+Each is `gDriver.windowSetX(handle, …)`. Application code calls
+`setTitle("Rocks")` and never sees a handle, and a platform without the feature
+absorbs the call, so no `if` is needed around each use.
+:::
+
+### orderFront
+
+```c
+void orderFront(void)
+```
+
+Raises and focuses the window, for example on a Windows-menu pick or when
+re-selecting an open document.
+
+### setContentSize
+
+```c
+void setContentSize(i16 w, i16 h)
+```
+
+Reports the CONTENT's full extent. The platform frame owns the scrollbars and
+shows them when this exceeds the work area. On GEM the result is asynchronous:
+call [`pump`](/compiler/api/uxkit/uxapplication/#pump) before reading geometry
+back.
+
+### scrollTo / scrollX / scrollY
+
+```c
+void scrollTo(i16 x, i16 y)
+i16  scrollX(void)
+i16  scrollY(void)
+```
+
+Sets the scroll offset from code (to reveal a row or restore a position) and
+reads back the resulting offset.
+
+:::caution[`scrollTo` is a request, not a command]
+The window server clamps it to `[0, content − work]`, and **the actual offset
+is whatever `scrollX`/`scrollY` return afterwards**. Scrolling past the end
+leaves you at the end, with no error.
+
+To save a scroll position, read it back; do not store the value you requested.
+The contract matches a rectangle clamped to the screen: you propose a value, the
+platform applies its limits, and the getter is authoritative.
+:::
+
+### viewAt
+
+```c
+UXView* viewAt(u16 i)
+```
+
+A view by its object index. An application uses this to reach a control that a
+[nib](/compiler/api/uxkit/guide-nibs/) made.
+
+Write `views[MAIN_OK]`, not `views[3]`. A resource editor exports symbolic names
+for its objects, so the index is a named constant and does not shift when
+someone inserts a control.
+
+### moveFocus
+
+```c
+void moveFocus(bool forward)
+```
+
+Tab and Shift-Tab. Walks the tree for the next view whose
+[`acceptsFirstResponder`](/compiler/api/uxkit/uxview/) is true.
+
+:::tip[Tree order *is* tab order]
+There is no separate tab index. The application builds the tree in the order it
+wants traversed, and a view opts in or out through `acceptsFirstResponder`: a
+label is not a stop, a field is.
+
+To fix a wrong tab order, reorder the views. There is no second list to keep in
+step.
+:::
+
+### display
+
+```c
+void display(void)
+```
+
+Repaints the accumulated damage (or everything, if nothing was marked) under
+one clip, then clears the marks.
+
+### displayAll
+
+```c
+void displayAll(void)
+```
+
+Full repaint. On the native-overlay backends this is also where `realizeTree`
+reconciles native controls with the tree, so the examples call it after building
+the view hierarchy.
+
+### makeFirstResponder
+
+```c
+bool makeFirstResponder(UXResponder* r)
+```
+
+Moves keyboard focus, honouring `acceptsFirstResponder`. Returns false if the
+target declined.
+
+### setDefaultButton
+
+```c
+void setDefaultButton(UXControl* b)
+```
+
+The control that Return fires when no more specific view has focus.
+
+### dispatchMouse
+
+```c
+void dispatchMouse(UXEvent* e)
+```
+
+Takes window-local coordinates. The tree's hit-test finds the deepest visible,
+willing view, and the click walks the responder chain from there. Synthetic
+tests and the platform share this entry.
+
+### dispatchKey
+
+```c
+void dispatchKey(UXEvent* e)
+```
+
+Sends the key to the first responder; Tab/Shift-Tab move focus; Return fires
+the default button.
+
+### dispatchWheel
+
+```c
+void dispatchWheel(UXEvent* e)
+```
+
+A scroll-wheel or trackpad event, routed like a click: to the deepest view
+under the pointer, then up the responder chain until something handles it.
+
+A wheel over a scrolling list therefore scrolls the list and not the window,
+because the list is deeper and gets the event first.
+
+### keyDown
+
+```c
+void keyDown(UXEvent* e)
+```
+
+Receives a key that climbed the whole responder chain **unconsumed**. The window
+is the last stop before the application.
+
+It handles two keys: Tab traverses focus (see [`moveFocus`](#movefocus)), and
+Return fires the default button. Other keys continue up the chain.
+
+A control consumes the keys it understands, and the window implements only the
+keys that belong to *being a window* and not to any control in it.
+
+### layoutFor
+
+```c
+void layoutFor(i32 wx, i32 wy, i32 ww, i32 wh)
+```
+
+Re-places the root for a new work area. A resize or a scroll calls it.
+
+The driver reports the work area on every draw and the root tracks it, so **the
+whole tree moves with the window**: children are parent-relative, and moving the
+root moves everything under it without walking the tree.
+
+The scroll offset is also applied here, so a non-scrolling window pays nothing
+for scrolling: a window that never reported a content size reads a scroll of
+zero and behaves as if scrolling did not exist.
+
+You rarely call this; the window calls it on the events that change its
+geometry.
+
+## Example
+
+Two windows sharing one controller, with key status and dispatch handled by the
+app:
+
+```c
+UXWindow* doc = new UXWindow();
+UXWindow* pal = new UXWindow();
+app.addWindow(doc);
+app.addWindow(pal);
+doc.open((u8*)"Document", UXGeom.make(20, 20, 360, 240), docView);
+pal.open((u8*)"Palette",  UXGeom.make(400, 20, 120, 240), palView);
+pal.setSubtitle((u8*)"tools");
+doc.setModified(true);                       // the close-button dot, where the platform has one
+```

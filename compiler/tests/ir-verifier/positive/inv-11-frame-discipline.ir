@@ -1,0 +1,20 @@
+; Invariant 11 (IR-SPEC §12.11): Frame discipline — the function's
+; declared frame_size matches the sum of its pinned-local sizes.
+; This fixture: one pinned local %loc of type U16 at offset 0. Sum
+; of pinned sizes = 2 bytes; declared size = 2 bytes. Match.
+
+module "inv-11-positive" {
+  symbol roundtrip: function (U16) -> U16
+    attributes: { cloaked: false, banked: false, variadic: false }
+
+  function roundtrip(%a: U16, %m0: Mem) -> (U16, Mem) {
+    frame: { pinned: [(%loc:U16 @0)], size: 2 }
+
+    bb_entry:
+      preds: -
+      %p:Ptr(U16, unbanked) = AddrOf %loc
+      %m1                   = Store %p, %a, %m0
+      %v:U16, %m2           = Load %p, %m1
+      Return %v, %m2
+  }
+}

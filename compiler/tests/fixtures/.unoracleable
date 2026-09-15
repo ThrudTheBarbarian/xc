@@ -1,0 +1,29 @@
+bztest: xts failed or timed out
+class_inherit_init_chain: xts failed or timed out
+heap_basic: [1mtests/fixtures/heap_basic.xt:61:5:[0m [1;31merror:[0m `delete` requires -falloc=heap (not supported on bump-only targets)
+heap_chain_method: [1mtests/fixtures/heap_chain_method.xt:38:5:[0m [1;31merror:[0m `delete` requires -falloc=heap (not supported on bump-only targets)
+heap_cross_bank: [1mtests/fixtures/heap_cross_bank.xt:41:5:[0m [1;31merror:[0m `delete` requires -falloc=heap (not supported on bump-only targets)
+heap_delete_self_ivar: [1mtests/fixtures/heap_delete_self_ivar.xt:27:26:[0m [1;31merror:[0m `delete` requires -falloc=heap (not supported on bump-only targets)
+heap_multibank: [1mtests/fixtures/heap_multibank.xt:118:5:[0m [1;31merror:[0m `delete` requires -falloc=heap (not supported on bump-only targets)
+heap_regC_walk: [1mtests/fixtures/heap_regC_walk.xt:93:5:[0m [1;31merror:[0m `delete` requires -falloc=heap (not supported on bump-only targets)
+heap_retain_wide: [1mtests/fixtures/heap_retain_wide.xt:46:9:[0m [1;31merror:[0m `retain` requires -falloc=heap (not supported on bump-only targets)
+heap_retain: [1mtests/fixtures/heap_retain.xt:38:5:[0m [1;31merror:[0m `release` requires -falloc=heap (not supported on bump-only targets)
+heap_self_member_bank: [1mtests/fixtures/heap_self_member_bank.xt:64:5:[0m [1;31merror:[0m `delete` requires -falloc=heap (not supported on bump-only targets)
+include: [1mtests/fixtures/include.xt:1:1:[0m [1;31merror:[0m Cannot find include file 'included.xt' (searched: './support/6502/lib', './support/generic/lib')
+length_prop: [1mtests/fixtures/length_prop.xt:26:5:[0m [1;31merror:[0m `delete` requires -falloc=heap (not supported on bump-only targets)
+loops: xts failed or timed out
+overload_ambiguous: [1mtests/fixtures/overload_ambiguous.xt:13:5:[0m [1;31merror:[0m Call to 'g(u8, u8)' is ambiguous among 2 overloads
+printf_cloaked_u16: [1mtests/fixtures/printf_cloaked_u16.xt:52:5:[0m [1;31merror:[0m Call to undeclared function '_printfU16'
+printf_cloaked_u32: [1mtests/fixtures/printf_cloaked_u32.xt:75:5:[0m [1;31merror:[0m Call to undeclared function '_printfU32'
+printf: xts failed or timed out
+raw_bank_ptr: [1mtests/fixtures/raw_bank_ptr.xt:26:18:[0m [1;31merror:[0m 'bank()' requires a target with a [banking] section in its layout (xt / xe family); the current target has no bank window
+refop_keyword_as_name: [1mtests/fixtures/refop_keyword_as_name.xt:17:26:[0m [1;31merror:[0m `delete` requires -falloc=heap (not supported on bump-only targets)
+shadow_ram: xts failed or timed out
+subscript_float: [1mtests/fixtures/subscript_float.xt:46:5:[0m [1;31merror:[0m `delete` requires -falloc=heap (not supported on bump-only targets)
+subscript_large: [1mtests/fixtures/subscript_large.xt:58:5:[0m [1;31merror:[0m `delete` requires -falloc=heap (not supported on bump-only targets)
+subscript_member: [1mtests/fixtures/subscript_member.xt:45:5:[0m [1;31merror:[0m `delete` requires -falloc=heap (not supported on bump-only targets)
+subscript_store: [1mtests/fixtures/subscript_store.xt:41:5:[0m [1;31merror:[0m `delete` requires -falloc=heap (not supported on bump-only targets)
+subscript_struct: [1mtests/fixtures/subscript_struct.xt:56:5:[0m [1;31merror:[0m `delete` requires -falloc=heap (not supported on bump-only targets)
+weak_banked_ivar: [1mtests/fixtures/weak_banked_ivar.xt:28:5:[0m [1;31merror:[0m `weak:` on banked:T@ is not yet supported in this position (class ivars on banked-heap targets); use a flat target or drop the `weak:` qualifier
+weak_multibank_ivar: [1mtests/fixtures/weak_multibank_ivar.xt:29:16:[0m [1;31merror:[0m `weak:` on banked:T@ is not yet supported in this position (class ivars on banked-heap targets); use a flat target or drop the `weak:` qualifier
+xe_banked_method_delete: [1mtests/fixtures/xe_banked_method_delete.xt:17:35:[0m [1;31merror:[0m `delete` requires -falloc=heap (not supported on bump-only targets)

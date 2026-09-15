@@ -1,0 +1,229 @@
+---
+title: UXApplication
+description: "Boot, the run loop, and the top of the responder chain. A program's main() is four lines on every platform."
+---
+
+`UXApplication` is the program. It boots the backend, owns the window list
+and the menu bar, runs the event loop, and sits at the top of the responder
+chain. An application's `main()` is the same four lines on all six targets,
+and the only platform-aware line is the driver choice:
+
+```c
+void main(void) {
+    UXApplication* app = new UXApplication();
+    app.setDriver(new UXWebDriver());        // the ONE platform-aware line
+    Controller* c = new Controller();
+    app.setDelegate(c);
+    app.run();
+}
+```
+
+```c
+#use <UXKit>
+```
+
+## Overview
+
+**Life starts in the delegate.** [`run`](#run) boots the driver, then calls
+your delegate's `applicationDidStart`, where you make windows, add views and
+install menus. Return `0` to enter the loop. Any other value aborts the run
+with that code. A delegate may call [`stop`](#stop) during start-up (a test, a
+one-shot tool), and the stop is honoured.
+
+```c
+protocol UXApplicationDelegate {
+    i32 applicationDidStart(UXApplication* app);
+    optional void windowDidResize(UXApplication* app, UXWindow* win, i32 width, i32 height);
+}
+```
+
+**The loop has two shapes, and your code sees one.** On five of the six
+backends, `run()` is the classic blocking loop: one event from the driver, one
+dispatch, one coalesced repaint, repeat. On iOS, the platform owns the main
+thread's loop, so `run()` detects `driverOwnsRunLoop()` and hands the thread to
+the native loop. Your delegate still starts in `applicationDidStart` (fired
+from the platform's own start moment) and your actions still fire, so the
+app's source is the same. This is the toolkit's one sanctioned loop inversion,
+and the driver handles it.
+
+**Repaints are coalesced.** However many views called `setNeedsDisplay` in
+one pass of the loop, [`displayIfNeeded`](#displayifneeded) repaints once, and
+each window repaints only the union of the rects its views marked.
+
+**Closing windows is deferred.** An action that closes its own window would
+tear down the view whose event is still on the stack. Control actions
+therefore use [`closeWindowLater`](#closewindowlater), and the loop drains the
+list once no window code is running. Closing the last window ends the run.
+
+**Resizes reach you after the toolkit is done.** When the optional
+`windowDidResize` fires, the native frame has finished its drag, the tree has
+reflowed (springs and struts, see
+[`UXView.setAutoresizeMask`](/compiler/api/uxkit/uxview/#setautoresizemask)),
+and the repaint has happened. Implement it only if you lay out views by hand.
+
+## Conforms to
+
+- Inherits [`UXResponder`](/compiler/api/uxkit/uxresponder/), as the chain's
+  last stop.
+
+## Topics
+
+**Configuring** · [setDriver](#setdriver) · [setDelegate](#setdelegate) · [setMenuBar](#setmenubar)
+**The loop** · [run](#run) · [stop](#stop) · [isRunning](#isrunning) · [pump](#pump)
+**Windows** · [addWindow](#addwindow) · [closeWindow](#closewindow) · [closeWindowLater](#closewindowlater)
+**Screen** · [screenWidth](#screenwidth--screenheight) · [screenHeight](#screenwidth--screenheight)
+**Painting** · [displayIfNeeded](#displayifneeded)
+
+### setDriver
+
+```c
+void setDriver(UXViewDriver* d)
+```
+
+Selects the backend. The parameter is the neutral protocol type, so a
+library client (`#use <UXKit>`) can pass a driver without naming any backend
+global.
+
+### setDelegate
+
+```c
+void setDelegate(UXApplicationDelegate* d)
+```
+
+Sets the app's owner. `run()` refuses to start without one.
+
+### setMenuBar
+
+```c
+void setMenuBar(UXMenuBar* mb)
+```
+
+Installs the bar. From then on the platform owns the drawing, tracking and
+pull-down, and a pick arrives as a neutral menu-select event routed to the
+bar's callbacks.
+
+### run
+
+```c
+i32 run(void)
+```
+
+Boots, starts the delegate, then runs the loop (or the platform's loop on iOS,
+see the overview). Returns `0` after [`stop`](#stop) on the blocking backends,
+`1` if boot failed, `2` with no delegate, or the delegate's own nonzero start
+code.
+
+### stop
+
+```c
+void stop(void)
+```
+
+Ends the loop after the current iteration. On iOS a stopped test app exits. A
+real iOS app does not stop, because the platform owns the process lifetime.
+
+### isRunning
+
+```c
+bool isRunning(void)
+```
+
+True between a successful start and `stop()`.
+
+### pump
+
+```c
+void pump(i32 ms)
+```
+
+Drains pending **window messages** (not input) and dispatches them. This is
+the primitive for waiting on the platform's answer. Backends answer geometry
+asynchronously (report a content size, and the scrollbar that appears changes
+your work area), so a program that sets and then reads without a pump reads its
+own request back.
+
+### addWindow
+
+```c
+void addWindow(UXWindow* w)
+```
+
+Registers a window with the app. The first one becomes the key window. Call
+this before `open` so events can route to the window.
+
+### closeWindow
+
+```c
+void closeWindow(UXWindow* w)
+```
+
+Closes the window immediately. This is safe only when no code belonging to `w`
+is on the stack. Key status moves to the first remaining window, and closing
+the last one stops the run.
+
+### closeWindowLater
+
+```c
+void closeWindowLater(UXWindow* w)
+```
+
+The safe form for control actions. It queues the close, and the loop performs
+it once the window's code has unwound.
+
+### screenWidth / screenHeight
+
+```c
+i32 screenWidth(void)
+i32 screenHeight(void)
+```
+
+The screen (or canvas, or scene) size the driver reported at boot.
+
+### displayIfNeeded
+
+```c
+void displayIfNeeded(void)
+```
+
+One repaint pass over every window that marked damage. The loop calls it each
+iteration, and modal driver paths call it so effects show during tracking.
+
+## Example
+
+The smallest complete application, with the same shape on every backend:
+
+```c
+#use <UXKit>
+
+class App : Object <UXApplicationDelegate>
+{
+    weak:UXApplication* app;
+
+    i32 applicationDidStart(UXApplication* a) {
+        app = a;
+        UXView* content = new UXView();
+        UXWindow* win = new UXWindow();
+        a.addWindow(win);
+        win.open((u8*)"Hello", UXGeom.make(20, 20, 240, 120), content);
+
+        UXButton* quit = new UXButton();
+        quit.setTitle((u8*)"Quit");
+        quit.setAction(&self.onQuit);
+        content.addSubview(quit, UXGeom.make(80, 46, 80, 28));
+
+        win.tree.finalise();
+        win.displayAll();
+        return 0;
+    }
+
+    void onQuit(UXControl* sender) { app.stop(); }
+}
+
+void main(void) {
+    UXApplication* app = new UXApplication();
+    app.setDriver(new UXGemDriver());
+    App* a = new App();
+    app.setDelegate(a);
+    app.run();
+}
+```

@@ -1,0 +1,16 @@
+module "strlit" {
+  symbol firstchar: function () -> U8
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  symbol str_0: stringlit [#$48, #$69, #$00]
+    attributes: { banked: false, cloaked: false }
+  function firstchar(%0: Mem) -> (U8, Mem) {
+    bb_entry:
+      preds: -
+      %1:Ptr(U8, unbanked) = AddrOf @str_0
+      %2:U8 = Const #0:U8
+      %3:U16 = ZExt %2
+      %4:Ptr(U8, unbanked) = ElementAddr %1, %3
+      %5:U8, %6 = Load %4, %0
+      Return %5, %6
+  }
+}

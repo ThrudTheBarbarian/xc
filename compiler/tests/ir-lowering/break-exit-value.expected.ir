@@ -1,0 +1,41 @@
+module "break-exit-value" {
+  symbol bsum: function (U16) -> U16
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  function bsum(%0: U16, %1: Mem) -> (U16, Mem) {
+    bb_entry:
+      preds: -
+      %2:U8 = Const #0:U8
+      %3:U16 = ZExt %2
+      %4:U8 = Const #0:U8
+      %5:U16 = ZExt %4
+      Branch bb_1_header
+    bb_1_header:
+      preds: bb_entry, bb_4_join
+      %6:U16 = Phi [(bb_entry, %5), (bb_4_join, %18)]
+      %7:U16 = Phi [(bb_entry, %3), (bb_4_join, %11)]
+      %8:Bool = ICmp ULT, %6, %0
+      CondBranch %8, bb_1_body, bb_1_exit
+    bb_1_body:
+      preds: bb_1_header
+      %9:U8 = Const #10:U8
+      %10:U16 = ZExt %9
+      %11:U16 = Add %7, %10
+      %12:U8 = Const #2:U8
+      %13:U16 = ZExt %12
+      %14:Bool = ICmp EQ, %6, %13
+      CondBranch %14, bb_4_then, bb_4_join
+    bb_1_exit:
+      preds: bb_1_header, bb_4_then
+      %15:U16 = Phi [(bb_1_header, %7), (bb_4_then, %11)]
+      Return %15, %1
+    bb_4_then:
+      preds: bb_1_body
+      Branch bb_1_exit
+    bb_4_join:
+      preds: bb_1_body
+      %16:U8 = Const #1:U8
+      %17:U16 = ZExt %16
+      %18:U16 = Add %6, %17
+      Branch bb_1_header
+  }
+}

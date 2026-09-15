@@ -1,0 +1,5 @@
+  (defer: sumDigits scope exited)
+sum of 12345 = 15
+  (defer: sumDigits scope exited)
+caught: not a digit
+caught a ParseError: not a digit

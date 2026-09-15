@@ -1,0 +1,10 @@
+bound to an object:
+  total 42
+a free function widens into the same type:
+  free function saw 7
+stored as a field, fired later:
+  counter got 99
+  mute has no action
+passed as a parameter:
+  sum 10, product 24
+  c=43 d=100 same? 0

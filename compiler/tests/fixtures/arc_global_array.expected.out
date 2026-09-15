@@ -1,0 +1,9 @@
+dealloc 900
+dealloc 901
+dealloc 902
+dealloc 903
+dealloc 904
+dealloc 905
+a=11 b=12
+dealloc 11
+c=22

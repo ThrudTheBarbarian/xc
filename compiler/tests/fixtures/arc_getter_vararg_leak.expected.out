@@ -1,0 +1,11 @@
+bare:
+  dealloc A1
+  dealloc A2
+call arg:
+  dealloc B1
+  dealloc B2
+vararg:
+  saw C2
+  dealloc C1
+  dealloc C2
+done

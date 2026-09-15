@@ -1,0 +1,7 @@
+  inner-defer
+ok a=8
+  inner-defer
+caught: deep
+io-arm: io
+fallback
+end

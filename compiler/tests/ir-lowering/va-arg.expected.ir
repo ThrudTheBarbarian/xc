@@ -1,0 +1,22 @@
+module "va-arg" {
+  symbol sum: function (U8) -> U16
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: true }
+  function sum(%0: U8, %1: Mem) -> (U16, Mem) {
+    frame: { pinned: [(%2:U8 @0 esc)], size: 1 }
+    bb_entry:
+      preds: -
+      %3:Ptr(U8, unbanked) = AddrOf %2
+      %4:U8 = Const #0:U8
+      %5 = Store %3, %4, %1
+      %6:Ptr(U8, unbanked) = AddrOf %2
+      %7 = VaStart %6, %5
+      %8:Ptr(U8, unbanked) = AddrOf %2
+      %9:U16, %10 = VaArg %8, %7
+      %11:Ptr(U8, unbanked) = AddrOf %2
+      %12:U16, %13 = VaArg %11, %10
+      %14:U16 = ZExt %0
+      %15:U16 = Add %14, %9
+      %16:U16 = Add %15, %12
+      Return %16, %13
+  }
+}

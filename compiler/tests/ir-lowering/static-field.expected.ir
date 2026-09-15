@@ -1,0 +1,45 @@
+module "static-field" {
+  layout 0: size=2 align=1 fields=[(0:Ptr(Void, unbanked))]
+  layout 1: size=4 align=1 fields=[(0:Ptr(Void, unbanked)), (2:U16)]
+  layout 2: size=0 align=1
+  layout 3: size=0 align=1
+  symbol Counter$bump: function () -> Void
+    attributes: { banked: false, cloaked: false, static: true, variadic: false }
+  symbol Counter$get: function () -> U16
+    attributes: { banked: false, cloaked: false, static: true, variadic: false }
+  symbol run: function () -> U16
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  symbol __sdata_Counter: dataglobal Agg(1)
+    attributes: { banked: false, cloaked: false }
+    flags: { escapes: true }
+  function Counter$bump(%0: Mem) -> Mem {
+    bb_entry:
+      preds: -
+      %1:Ptr(Agg(1), unbanked) = AddrOf @__sdata_Counter
+      %2:Ptr(U16, unbanked) = FieldAddr %1, #1:U8
+      %3:U16, %4 = Load %2, %0
+      %5:U8 = Const #1:U8
+      %6:U16 = ZExt %5
+      %7:U16 = Add %3, %6
+      %8:Ptr(U16, unbanked) = FieldAddr %1, #1:U8
+      %9 = Store %8, %7, %4
+      Return %9
+  }
+  function Counter$get(%0: Mem) -> (U16, Mem) {
+    bb_entry:
+      preds: -
+      %1:Ptr(Agg(1), unbanked) = AddrOf @__sdata_Counter
+      %2:Ptr(U16, unbanked) = FieldAddr %1, #1:U8
+      %3:U16, %4 = Load %2, %0
+      Return %3, %4
+  }
+  function run(%0: Mem) -> (U16, Mem) {
+    bb_entry:
+      preds: -
+      %1 = Call @Counter$bump, [], CallConv::Standard, %0
+      %2 = Call @Counter$bump, [], CallConv::Standard, %1
+      %3 = Call @Counter$bump, [], CallConv::Standard, %2
+      %4:U16, %5 = Call @Counter$get, [], CallConv::Standard, %3
+      Return %4, %5
+  }
+}

@@ -1,0 +1,38 @@
+module "new-init" {
+  layout 0: size=2 align=1 fields=[(0:Ptr(Void, unbanked))]
+  layout 1: size=4 align=1 fields=[(0:Ptr(Void, unbanked)), (2:U16)]
+  layout 2: size=0 align=1
+  layout 3: size=2 align=1 fields=[(0:Ptr(Void, unbanked))]
+  symbol Box$init: function (Ptr(Agg(1), unbanked)) -> Void
+    attributes: { banked: false, cloaked: false, static: false, variadic: false }
+  symbol run: function () -> U16
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  symbol _xtc_alloc: runtime () -> Void
+    attributes: { banked: false, cloaked: false, variadic: false }
+  function Box$init(%0: Ptr(Agg(1), unbanked), %1: Mem) -> Mem {
+    bb_entry:
+      preds: -
+      %2:U8 = Const #42:U8
+      %3:U16 = ZExt %2
+      %4:Ptr(U16, unbanked) = FieldAddr %0, #1:U8
+      %5 = Store %4, %3, %1
+      Return %5
+  }
+  function run(%0: Mem) -> (U16, Mem) {
+    bb_entry:
+      preds: -
+      %1:U16 = Const #1:U16
+      %2:U16 = Const #4:U16
+      %3:U16 = Const #0:U16
+      %4:Ptr(Void, unbanked) = IntToPtr %3
+      %5:Ptr(Agg(1), unbanked), %6 = Call @_xtc_alloc, [%1, %2, %4], CallConv::Standard, %0
+      %7:Ptr(U16, unbanked) = Bitcast %5
+      %8:U16 = Const #1:U16
+      %9 = Store %7, %8, %6
+      %10 = Call @Box$init, [%5], CallConv::Standard, %9
+      %11:Ptr(Agg(1), unbanked) = Bitcast %5
+      %12:Ptr(U16, unbanked) = FieldAddr %11, #1:U8
+      %13:U16, %14 = Load %12, %10
+      Return %13, %14
+  }
+}

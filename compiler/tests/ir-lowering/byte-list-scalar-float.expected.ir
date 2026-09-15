@@ -1,0 +1,34 @@
+module "byte-list-scalar-float" {
+  symbol mkf3: function () -> I16
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  function mkf3(%0: Mem) -> (I16, Mem) {
+    frame: { pinned: [(%1:F32 @0)], size: 4 }
+    bb_entry:
+      preds: -
+      %2:U8 = Const #128:U8
+      %3:Ptr(U8, unbanked) = AddrOf %1
+      %4:U16 = Const #0:U16
+      %5:Ptr(U8, unbanked) = ElementAddr %3, %4
+      %6:U8 = Const #0:U8
+      %7 = Store %5, %6, %0
+      %8:U16 = Const #1:U16
+      %9:Ptr(U8, unbanked) = ElementAddr %3, %8
+      %10:U8 = Const #1:U8
+      %11 = Store %9, %10, %7
+      %12:U16 = Const #2:U16
+      %13:Ptr(U8, unbanked) = ElementAddr %3, %12
+      %14 = Store %13, %2, %11
+      %15:U16 = Const #3:U16
+      %16:Ptr(U8, unbanked) = ElementAddr %3, %15
+      %17:U8 = Const #0:U8
+      %18 = Store %16, %17, %14
+      %19:U16 = Const #4:U16
+      %20:Ptr(U8, unbanked) = ElementAddr %3, %19
+      %21:U8 = Const #0:U8
+      %22 = Store %20, %21, %18
+      %23:Ptr(F32, unbanked) = AddrOf %1
+      %24:F32, %25 = Load %23, %22
+      %26:I16 = FpToSI %24
+      Return %26, %25
+  }
+}

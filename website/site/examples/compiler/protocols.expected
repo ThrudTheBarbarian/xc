@@ -1,0 +1,8 @@
+through Animal*:
+  Rex -> Woof
+  Tom -> Meow
+through Speaker*:
+  Rex says Woof
+    ...and whispers woof?
+  Tom says Meow
+    (does not whisper)

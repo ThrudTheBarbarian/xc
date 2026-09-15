@@ -1,0 +1,5 @@
+callable 5
+f  eq 0 ne 1 if 1 not 0
+z  eq 1 ne 0 if 0 not 1
+guarded call ok 8
+null guarded ok

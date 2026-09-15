@@ -1,0 +1,38 @@
+---
+title: UXMenu
+description: "One titled menu of a UXMenuBar: items and separators, built in order, fired by callbacks."
+---
+
+`UXMenu` is one titled menu of a
+[`UXMenuBar`](/compiler/api/uxkit/uxmenubar/): a list of
+[`UXMenuItem`](/compiler/api/uxkit/uxmenuitem/)s and separators, built in
+display order before the bar's `install`. Like every menu class it draws
+nothing and tracks nothing; the platform does both.
+
+```c
+UXMenu* edit = bar.addMenu((u8*)" Edit ");
+edit.addItem((u8*)"  Cut  ",  &controller.onCut);
+edit.addItem((u8*)"  Copy  ", &controller.onCopy);
+edit.addSeparator();
+edit.addItem((u8*)"  Select All  ", &controller.onSelectAll);
+```
+
+## Topics
+
+### addItem
+
+```c
+UXMenuItem* addItem(u8* t, callback a void(UXMenuItem* sender))
+```
+
+Appends an item with its callback action and returns it, so initial state
+(`checked`, `enabled`) can be set before install. The callback ensures a menu
+never owns its controller.
+
+### addSeparator
+
+```c
+void addSeparator(void)
+```
+
+Appends a separator rule. Separators never fire.

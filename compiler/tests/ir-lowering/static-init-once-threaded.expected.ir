@@ -1,0 +1,61 @@
+module "static-init-once-threaded" {
+  layout 0: size=2 align=1 fields=[(0:Ptr(Void, unbanked))]
+  layout 1: size=2 align=1 fields=[(0:Ptr(Void, unbanked))]
+  layout 2: size=0 align=1
+  layout 3: size=0 align=1
+  symbol __sivar_Once_value: dataglobal U8
+    attributes: { banked: false, cloaked: false }
+    flags: { escapes: true }
+  symbol Once$init: function () -> Void
+    attributes: { banked: false, cloaked: false, static: true, variadic: false }
+  symbol Once$get: function () -> U8
+    attributes: { banked: false, cloaked: false, static: true, variadic: false }
+  symbol _xt_thread_create: function (Ptr(Void, unbanked), Ptr(Void, unbanked)) -> Ptr(Void, unbanked)
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  symbol useOnce: function () -> U8
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  symbol __sdata_Once: dataglobal Agg(1)
+    attributes: { banked: false, cloaked: false }
+    flags: { escapes: true }
+  symbol __sinit_Once: dataglobal U8
+    attributes: { banked: false, cloaked: false }
+    flags: { escapes: true }
+  symbol _xtc_sinit_run: runtime () -> Void
+    attributes: { banked: false, cloaked: false, variadic: false }
+  function Once$init(%0: Mem) -> Mem {
+    bb_entry:
+      preds: -
+      %1:Ptr(Agg(1), unbanked) = AddrOf @__sdata_Once
+      %2:U8 = Const #7:U8
+      %3:Ptr(U8, unbanked) = AddrOf @__sivar_Once_value
+      %4 = Store %3, %2, %0
+      Return %4
+  }
+  function Once$get(%0: Mem) -> (U8, Mem) {
+    bb_entry:
+      preds: -
+      %1:Ptr(Agg(1), unbanked) = AddrOf @__sdata_Once
+      %2:Ptr(U8, unbanked) = AddrOf @__sivar_Once_value
+      %3:U8, %4 = Load %2, %0
+      Return %3, %4
+  }
+  function useOnce(%0: Mem) -> (U8, Mem) {
+    bb_entry:
+      preds: -
+      %1:Ptr(U8, unbanked) = AddrOf @__sinit_Once
+      %2:U8, %3 = Load %1, %0
+      %4:U8 = Const #2:U8
+      %5:Bool = ICmp NE, %2, %4
+      CondBranch %5, bb_1_sinit_Once_run, bb_1_sinit_Once_cont
+    bb_1_sinit_Once_run:
+      preds: bb_entry
+      %6:Ptr(U8, unbanked) = AddrOf @Once$init
+      %7:Ptr(Agg(1), unbanked) = AddrOf @__sdata_Once
+      %8 = Call @_xtc_sinit_run, [%1, %6, %7], CallConv::Standard, %3
+      Branch bb_1_sinit_Once_cont
+    bb_1_sinit_Once_cont:
+      preds: bb_entry, bb_1_sinit_Once_run
+      %9:U8, %10 = Call @Once$get, [], CallConv::Standard, %8
+      Return %9, %10
+  }
+}

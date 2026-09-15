@@ -1,0 +1,4 @@
+u32: DEADBEEF
+str: hello
+pair: 3,4
+example: <Example>(4, 5, 6)

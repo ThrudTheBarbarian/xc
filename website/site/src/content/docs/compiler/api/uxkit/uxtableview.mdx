@@ -1,0 +1,308 @@
+---
+title: UXTableView
+description: "A table that asks for its data: two data-source methods in, and the platform draws, hit-tests, and scrolls. The AppKit split, on every backend."
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+`UXTableView` follows the AppKit split: the table does not hold your data,
+it **asks** for it. You implement two methods and the table does the
+rest:
+
+```c
+protocol UXTableDataSource {
+    i32 numberOfRows(UXTableView* t);
+    u8* valueForCell(UXTableView* t, i32 row, i32 col);
+}
+```
+
+The table also leaves several jobs to other parts of the toolkit:
+
+- **Scrollbar.** The scroll machinery owns it, fed by
+  [`contentHeight`](#contentheight).
+- **Hit-testing.** The ordinary tree hit test lands a click on a scrolled row,
+  because scrolling moves the rows in the tree.
+- **Text drawing.** A cell is realized content that the platform draws.
+- **Click routing.** A cell does not override `mouseDown`, so the responder
+  chain carries the click up to its **row**. That makes the row the selectable
+  object even though the cell was hit.
+
+On Win32 and AppKit a native table (`UXList32`, `NSTableView`) overlays the
+whole subtree. On GEM the rows are AES objects.
+
+**Lifetime rule:** the string `valueForCell` returns goes straight into the
+realized cell and is read on every draw. Nothing is copied. Return a literal
+or a buffer the data source owns; it must outlive the table.
+
+```c
+#use <UXKit>
+```
+
+## Overview
+
+```c
+class Contacts : Object <UXTableDataSource> {
+    i32 numberOfRows(UXTableView* t) { return (i32)people.count(); }
+    u8* valueForCell(UXTableView* t, i32 row, i32 col) {
+        return col == (i32)0 ? nameAt(row) : phoneAt(row);
+    }
+}
+
+UXTableView* table = new UXTableView();
+table.addColumn((u8*)"Name", 140);
+table.addColumn((u8*)"Phone", 100);
+table.setDataSource(src);        // GLOBAL or owned: the table holds it weakly
+table.setDelegate(controller);
+table.reloadData();
+```
+
+The data source is held **weakly**. Keep it alive yourself (a global, or a
+controller field). A temporary is released as soon as `setDataSource` returns.
+
+## Topics
+
+**Data** · [setDataSource](#setdatasource) · [reloadData](#reloaddata) · [rowCount](#rowcount)
+**Columns** · [addColumn](#addcolumn) · [numberOfColumns](#numberofcolumns)
+**Selection** · [selection](#selection) · [selectRow](#selectrow) · [deselectAllRows](#deselectallrows) · [isRowSelected](#isrowselected) · [selectedCount](#selectedcount) · [selectedRows](#selectedrows--selectedrowlist) · [selectedRowList](#selectedrows--selectedrowlist) · [setRowSelected](#setrowselected) · [setAllowsMultipleSelection](#setallowsmultipleselection--allowsmultipleselection) · [allowsMultipleSelection](#setallowsmultipleselection--allowsmultipleselection)
+**Delegate** · [setDelegate](#setdelegate)
+**Geometry** · [setRowHeight](#setrowheight) · [contentHeight](#contentheight) · [countRows](#countrows--columntitle--columnwidth--rowheightvalue) · [columnTitle](#countrows--columntitle--columnwidth--rowheightvalue) · [columnWidth](#countrows--columntitle--columnwidth--rowheightvalue) · [rowHeightValue](#countrows--columntitle--columnwidth--rowheightvalue)
+
+### setDataSource
+
+```c
+void setDataSource(UXTableDataSource* d)
+```
+
+Attaches the source, weakly (see above).
+
+### reloadData
+
+```c
+void reloadData(void)
+```
+
+Asks the source for everything again and rebuilds the rows. Call it after your
+data changes.
+
+### rowCount
+
+```c
+i32 rowCount(void)
+```
+
+How many rows the last reload found.
+
+### addColumn
+
+```c
+void addColumn(u8* title, i16 width)
+```
+
+Appends a titled column of the given width. Call it before the first reload.
+
+### numberOfColumns
+
+```c
+i32 numberOfColumns(void)
+```
+
+How many columns the table has.
+
+### selection
+
+```c
+i32 selection(void)
+```
+
+The anchor row: the last row clicked, or `-1` for none. With multi-selection
+this is the shift-extend anchor; use [`isRowSelected`](#isrowselected) for the
+full selection.
+
+### selectRow
+
+```c
+void selectRow(i32 r)
+```
+
+Selects a row from code and announces it through the delegate, on the same path
+a click takes.
+
+### deselectAllRows
+
+```c
+void deselectAllRows(void)
+```
+
+Clears the selection and announces it.
+
+### isRowSelected
+
+```c
+bool isRowSelected(i32 r)
+```
+
+Whether the row is in the selection.
+
+### selectedCount
+
+```c
+i32 selectedCount(void)
+```
+
+How many rows are selected.
+
+### selectedRows / selectedRowList
+
+```c
+i32 selectedRows(i32* out, i32 max)      // returns the TOTAL selected
+i32 selectedRowList(i32* out, i32 max)   // returns how many it WROTE
+```
+
+Both fill `out` with selected row indices, up to `max`. They differ in what
+they return.
+
+:::caution[`selectedRows` can return more than it wrote]
+`selectedRows` keeps counting past `max`. It reports how many rows are
+selected, not how many fitted. With 50 selected and a buffer of 10, it writes
+10 and returns **50**.
+
+`selectedRowList` stops at `max` and returns **10**.
+
+Using the return value of `selectedRows` as a loop bound over `out` reads past
+the end of your array. Use `selectedRowList` when you will iterate over the
+result. Use `selectedRows` when you want the total and are sampling, or check
+the result against `max` yourself.
+
+[`selectedCount`](#selectedcount) returns the total without a buffer, which is
+usually what a "how many" question needs.
+:::
+
+### setRowSelected
+
+```c
+void setRowSelected(i32 r, bool on)
+```
+
+Sets one row's selection without going through the click path. The anchor does
+not move and no delegate notification fires.
+
+Out-of-range indices are ignored, so restoring a saved selection against a table
+that has since shrunk needs no bounds check.
+
+### setAllowsMultipleSelection / allowsMultipleSelection
+
+```c
+void setAllowsMultipleSelection(bool on)
+bool allowsMultipleSelection(void)
+```
+
+Off (default): one row at a time. On: ctrl toggles a row and shift extends a
+range from the anchor, following the platform conventions on every backend.
+
+### countRows / columnTitle / columnWidth / rowHeightValue
+
+```c
+i32  countRows(void)
+u8*  columnTitle(i32 c)
+i16  columnWidth(i32 c)
+i16  rowHeightValue(void)
+```
+
+The readers behind the setters. A driver uses them to build a native table from
+the neutral model. An application uses them to lay something out beside the
+table (a header, a summary line, a print layout) without keeping a second copy
+of the geometry.
+
+:::note[`countRows` asks the data source; `rowCount` does not]
+`countRows()` calls `dataSource.numberOfRows(self)` on every call, and returns
+`0` when there is no data source. `rowCount()` returns the count the table
+**cached at the last** [`reloadData`](#reloaddata).
+
+After your model grows, `countRows` sees the new number and `rowCount` still
+sees the old one until you reload. The table uses this gap to know whether its
+rows and its widgets are in step. Ask `rowCount` for what is on screen and
+`countRows` for what the model says.
+:::
+
+### setDelegate
+
+```c
+void setDelegate(UXTableDelegate* d)
+```
+
+Sets the object that receives announcements. The protocol has one optional
+method:
+
+```c
+protocol UXTableDelegate {
+    optional void tableSelectionDidChange(UXTableView* t, i32 row);
+}
+```
+
+### setRowHeight
+
+```c
+void setRowHeight(i16 h)
+```
+
+The uniform row height. It is also the scroll view's natural line step.
+
+### contentHeight
+
+```c
+i16 contentHeight(void)
+```
+
+`rows × rowHeight`, the value passed to the scroll machinery.
+
+## Satellites
+
+[`UXTableColumn`](/compiler/api/uxkit/uxtablecolumn/) (title and width),
+[`UXTableHeader`](/compiler/api/uxkit/uxtableheader/) (the pinned title
+strip), [`UXTableRow`](/compiler/api/uxkit/uxtablerow/) (the selectable
+line), and [`UXTableCell`](/compiler/api/uxkit/uxtablecell/) (one
+realized string). For hierarchy, see
+[`UXOutlineView`](/compiler/api/uxkit/uxoutlineview/), a table whose row
+list is derived from a tree.
+
+## Platform appearance
+
+<div class="ux-platforms">
+<Tabs>
+  <TabItem label="Web">
+    <img src="/uxkit/table-web.png" alt="UXTableView on Web" width="220" />
+
+    The toolkit-drawn table: header strip, rows, and the selection band.
+  </TabItem>
+  <TabItem label="iOS">
+    <img src="/uxkit/table-ios.png" alt="UXTableView on iOS" width="220" />
+
+    The toolkit-drawn table. This driver does not yet realize a native `UITableView`.
+  </TabItem>
+  <TabItem label="Android">
+    <img src="/uxkit/table-android.png" alt="UXTableView on Android" width="220" />
+
+    The toolkit-drawn table. This driver does not yet realize a native `RecyclerView`.
+  </TabItem>
+  <TabItem label="macOS">
+    <img src="/uxkit/table-macos.png" alt="UXTableView on macOS" width="220" />
+
+    An `NSTableView` overlays the whole subtree, with native header, rows, and selection.
+  </TabItem>
+  <TabItem label="Windows">
+    <img src="/uxkit/table-windows.png" alt="UXTableView on Windows" width="220" />
+
+    A list-view child window with the system look.
+  </TabItem>
+  <TabItem label="Linux">
+    <img src="/uxkit/table-linux.png" alt="UXTableView on Linux" width="220" />
+
+    The toolkit-drawn table. This driver does not yet realize a native `GtkColumnView`.
+  </TabItem>
+  <TabItem label="GEM">
+    <img src="/uxkit/table-gem.png" alt="UXTableView on GEM" width="220" />
+
+    The toolkit-drawn table: header strip, rows, and the selection band.
+  </TabItem>
+</Tabs>
+</div>

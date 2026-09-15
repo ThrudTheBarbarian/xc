@@ -1,0 +1,29 @@
+; Invariant 4 (IR-SPEC §12.4): Phi operands match predecessor count
+; and order. Each phi has exactly |preds(block)| pairs; pair `i`
+; names predecessor `i` in the block's pred list.
+; This fixture: a diamond CFG joining at bb_join, whose two preds
+; are bb_yes and bb_no. The phi has two pairs, named in pred order.
+
+module "inv-04-positive" {
+  symbol pick: function (Bool, U16, U16) -> U16
+    attributes: { cloaked: false, banked: false, variadic: false }
+
+  function pick(%c: Bool, %a: U16, %b: U16, %m0: Mem) -> (U16, Mem) {
+    bb_entry:
+      preds: -
+      CondBranch %c, bb_yes, bb_no
+
+    bb_yes:
+      preds: bb_entry
+      Branch bb_join
+
+    bb_no:
+      preds: bb_entry
+      Branch bb_join
+
+    bb_join:
+      preds: bb_yes, bb_no
+      %r:U16 = Phi [(bb_yes, %a), (bb_no, %b)]
+      Return %r, %m0
+  }
+}

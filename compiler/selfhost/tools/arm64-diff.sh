@@ -1,0 +1,101 @@
+#!/bin/bash
+# arm64-diff.sh — the ported AArch64 back end against xcc-cg-arm64.
+# =================================================================
+#
+# self-hosting M14. The A9's back end is ported (M9); this is the HOST's. It
+# matters for a different reason: arm64 is where the compiler is built and
+# bootstrapped, so a self-hosted arm64 code generator is what lets the whole
+# chain — front end, optimiser, back end — be xtc on the machine that builds it.
+#
+# The oracle is `xcc-cg-arm64 -O0` over the same IR: the assembly text must come
+# out byte for byte the same. -O0 because the optimiser is its own port and at
+# -O0 the pipeline is a pass-through — so what is compared is the CODE
+# GENERATOR alone, exactly as a9-diff does for the A9.
+#
+#   bash selfhost/tools/arm64-diff.sh [pattern]
+
+set -u
+cd "$(dirname "$0")/../.." || exit 1
+BIN=bin/osx
+[ -x "$BIN/xcc-fe" ] || BIN=bin/linux
+# The IR OPT LEVEL both back ends are fed at. It defaulted to 0 and was never
+# anything else, so the ported back end had only ever been compared on
+# UNOPTIMISED IR — while every real program is built at -O3. The xtc driver
+# found the gap by being the first thing to hand it optimised IR.
+LEVEL=${1:-0}
+PATTERN=${2:-}
+# The first argument is now the LEVEL, not the pattern. Someone who types the
+# old `<harness>-diff.sh somefixture` would otherwise get `-Osomefixture` handed
+# to the back end, which fails in a way that looks like a compiler bug. Refuse
+# instead of guessing.
+case "$LEVEL" in
+    0|1|2|3) ;;
+    *) echo "$(basename "$0"): first argument is the opt LEVEL (0-3), not a pattern." >&2
+       echo "  did you mean: $(basename "$0") 0 '$LEVEL'" >&2
+       exit 2 ;;
+esac
+
+WORK=${TMPDIR:-/tmp}/a64diff.$$
+mkdir -p "$WORK"
+trap 'rm -rf "$WORK"' EXIT
+
+echo "building xtcga64 (xtc → native arm64)…"
+"$BIN/xcc" -O2 -A arm64 -H . -o "$WORK/xtcga64" selfhost/tools/xtcga64.xc \
+    -I selfhost/ir -I selfhost/opt -I selfhost/codegen 2>&1 | grep -E "^[^ ].*error" && exit 1
+
+RUN_INCS=(-I selfhost/lexer -I selfhost/preproc -I selfhost/parser
+          -I selfhost/sema -I selfhost/ir -I selfhost/codegen)
+
+pass=0; fail=0; unsup=0; oracle=0
+declare -a FAILED
+
+# SHARD_I/SHARD_N: run only every Nth file, so one harness can be split
+# across several parallel slots. all-diff uses it on the long ones; the
+# default 0/1 is every file, which is what a direct run gets.
+FILES=$(find tests support selfhost -name '*.xc' -not -path 'tests/fuzz/findings/*' | sort | awk -v i="${SHARD_I:-0}" -v n="${SHARD_N:-1}" 'NR % n == i')
+for f in $FILES; do
+    [ -n "$PATTERN" ] && [[ "$f" != *"$PATTERN"* ]] && continue
+    if ! "$BIN/xcc-fe" -m arm64 -H . "${RUN_INCS[@]}" "$f" -o "$WORK/a.ir" \
+         >/dev/null 2>&1 || [ ! -s "$WORK/a.ir" ]; then
+        oracle=$((oracle+1)); continue
+    fi
+    if ! "$BIN/xcc-cg-arm64" "-O$LEVEL" -q -o "$WORK/a.s" "$WORK/a.ir" >/dev/null 2>&1; then
+        oracle=$((oracle+1)); continue
+    fi
+    # xtcga64 runs no opt pipeline of its own, so at a non-zero level it is
+    # handed the IR the reference optimiser produced. The reference side must
+    # then be the DIRECT `-O$LEVEL` build above — NOT the same optimised IR fed
+    # back in at -O0, which is not the neutral back-end-only run it looks like:
+    # -O0 re-runs the static-init-guard pass over already-hoisted IR and
+    # DESTROYS the hoist blocks (45 in the IR, 15 emitted at -O3, 0 at -O0), so
+    # that comparison reports a divergence neither back end actually has.
+    # The port is fed the reference's POST-opt IR at EVERY level, -O0 included
+    # (bug 065). It used to get pre-opt IR at -O0, so the two back ends were
+    # compared on DIFFERENT IR and agreed only by coincidence: the reference's
+    # dead ids happened to cost the same number of slots as the port's
+    # still-live ones. That coincidence is what made -O0 look verified while
+    # -O3 diverged on every file.
+    "$BIN/xcc-cg-arm64" "-O$LEVEL" --dump-opt-ir -q "$WORK/a.ir" > "$WORK/opt.ir" 2>/dev/null \
+        || { oracle=$((oracle+1)); continue; }
+    "$WORK/xtcga64" "$WORK/opt.ir" -o "$WORK/b.s" >/dev/null 2>&1
+    rc=$?
+    if [ $rc -eq 3 ]; then unsup=$((unsup+1)); continue; fi
+    if [ $rc -ne 0 ]; then fail=$((fail+1)); FAILED+=("$f (exit $rc)"); continue; fi
+    if diff -q "$WORK/a.s" "$WORK/b.s" >/dev/null; then
+        pass=$((pass+1))
+    else
+        fail=$((fail+1))
+        FAILED+=("$f ($(diff "$WORK/a.s" "$WORK/b.s" | grep -c '^[<>]') lines)")
+    fi
+done
+
+if [ "${#FAILED[@]}" -gt 0 ]; then
+    echo "--- differing (first 15):"
+    printf '  %s\n' "${FAILED[@]}" | head -15
+fi
+echo "--- arm64-diff[-O$LEVEL]: pass=$pass fail=$fail unsupported=$unsup oracle-failed=$oracle ---"
+# A harness that REPORTS failures must also SIGNAL them. These printed the
+# summary and fell off the end with status 0, which is fine for a human
+# reading the table and useless to CI, to `&&` chains, and to anything else
+# that checks status instead of stdout.  FAILS -> non-zero.
+[ "$fail" -eq 0 ] || exit 1

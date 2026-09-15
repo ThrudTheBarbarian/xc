@@ -1,0 +1,7 @@
+*.so
+test_host
+
+# Screenshots.  These get overwritten constantly while working on the drawing code, so tracking
+# them means every render sweeps into the next commit — and they are evidence for a conversation,
+# not part of the toolkit.
+*.png

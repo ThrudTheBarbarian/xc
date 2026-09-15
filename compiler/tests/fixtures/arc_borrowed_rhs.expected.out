@@ -1,0 +1,5 @@
+T1 ternary-ivar   v=7
+T2 ternary-local  v=7
+T3 subscript-ok   v=7
+T4 ternary-return v=7
+T5 new-rhs        v=7

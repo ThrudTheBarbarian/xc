@@ -1,0 +1,29 @@
+; STACK-ABI §3 reference fixture — just inside the budget.
+; pinnedLocalSize = 117 bytes, one u8 param (K = 1). Total N + K =
+; 118 ≤ 119, so this is the largest single-PSH/PLL frame still
+; encodable. Highest param byte at +N+8+K = 117+8+1 = +126, the
+; last representable signed-8-bit offset before saturation.
+;
+; Locals: 29 u32 (116 bytes) + 1 u8 = 117 bytes total.
+
+module "large-frame-edge" {
+  symbol edge: function (U8) -> U8
+    attributes: { banked: false, cloaked: false, variadic: false }
+
+  function edge(%a: U8, %m0: Mem) -> (U8, Mem) {
+    frame: { pinned: [
+      (%u00:U32 @0),   (%u01:U32 @4),   (%u02:U32 @8),   (%u03:U32 @12),
+      (%u04:U32 @16),  (%u05:U32 @20),  (%u06:U32 @24),  (%u07:U32 @28),
+      (%u08:U32 @32),  (%u09:U32 @36),  (%u10:U32 @40),  (%u11:U32 @44),
+      (%u12:U32 @48),  (%u13:U32 @52),  (%u14:U32 @56),  (%u15:U32 @60),
+      (%u16:U32 @64),  (%u17:U32 @68),  (%u18:U32 @72),  (%u19:U32 @76),
+      (%u20:U32 @80),  (%u21:U32 @84),  (%u22:U32 @88),  (%u23:U32 @92),
+      (%u24:U32 @96),  (%u25:U32 @100), (%u26:U32 @104), (%u27:U32 @108),
+      (%u28:U32 @112),
+      (%pad:U8 @116)
+    ], size: 117 }
+    bb_entry:
+      preds: -
+      Return %a, %m0
+  }
+}

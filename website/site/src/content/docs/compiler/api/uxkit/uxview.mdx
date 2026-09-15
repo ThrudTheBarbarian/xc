@@ -1,0 +1,269 @@
+---
+title: UXView
+description: "The base of everything visible: an index into a view tree, geometry, hierarchy, springs & struts, and the drawRect seam."
+---
+
+`UXView` is the base class of everything visible. Its central design decision
+comes from GEM and holds on every backend: **a view does not own a rectangle and
+a list of children. It owns an index into a
+[`UXViewTree`](/compiler/api/uxkit/uxviewtree/), and the tree's node at that
+index is the source of truth.** Geometry, hierarchy, visibility and state live in
+the tree, because the platform layer walks the tree; the view object adds
+behaviour.
+
+```c
+#use <UXKit>
+```
+
+## Overview
+
+A new view is detached: it has no tree, and therefore **no frame**, until it is
+attached. Attachment happens when it enters the hierarchy, not when you
+construct it, so [`addSubview`](#addsubview) takes the frame as a parameter:
+
+```c
+UXView* panel = new UXView();
+content.addSubview(panel, UXGeom.make(8, 8, 200, 120));   // attach + place
+```
+
+**Ownership runs one way.** A view holds its subviews strongly; `superview`
+and `owner` (the tree) are `weak:`. With this rule, whole windows collapse
+cleanly when released, and the "no tree yet" and "tree already released" cases
+share one nil-guard: [`frame`](#frame) on a detached view returns a zero rect
+instead of dispatching into nothing.
+
+**Drawing is a callback.** You do not paint imperatively. You override
+[`drawRect`](#drawrect), and the *backend* calls it during its own paint
+traversal, inside its own clip, with a
+[`UXGraphics`](/compiler/api/uxkit/uxgraphics/) bound to this view. To repaint
+something, mark it dirty with [`setNeedsDisplay`](#setneedsdisplay) and the run
+loop repaints once per iteration. Mark the smallest *rect* that changed: one
+typed character in a text view damages one line, not the window.
+
+**Layout is springs & struts.** Each view has an
+[autoresize mask](#setautoresizemask) that says which edges it stays attached to
+and which dimensions may stretch. On a backend with native autoresizing (AppKit)
+the platform tracks the frame live during a drag; on other backends
+[`resizeSubviews`](#resizesubviews) runs the same solve in neutral code. The same
+mask gives the same result with either engine.
+
+**Hit-testing is not in this class.** The tree owns it
+([`UXViewTree.hitTest`](/compiler/api/uxkit/uxviewtree/)): depth-first,
+skipping hidden subtrees. Every backend routes through that one implementation,
+so a synthetic test click and a native tap land in the same place.
+
+## Conforms to
+
+- Inherits [`UXResponder`](/compiler/api/uxkit/uxresponder/): `mouseDown`,
+  `keyDown`, the responder chain (`addSubview` sets `nextResponder` to the
+  parent automatically).
+
+## Topics
+
+**Identity** · [kind](#kind)
+**Attachment** · [attachTo](#attachto) · [adoptObject](#adoptobject)
+**Geometry** · [frame](#frame) · [setFrame](#setframe) · [bounds](#bounds) · [absoluteFrame](#absoluteframe)
+**Hierarchy** · [addSubview](#addsubview) · [removeFromSuperview](#removefromsuperview) · [removeAllSubviews](#removeallsubviews)
+**State** · [isHidden](#ishidden--sethidden) · [setHidden](#ishidden--sethidden) · [isEnabled](#isenabled--setenabled) · [setEnabled](#isenabled--setenabled)
+**Layout** · [setAutoresizeMask](#setautoresizemask) · [resizeSubviews](#resizesubviews)
+**Drawing** · [drawRect](#drawrect) · [setNeedsDisplay](#setneedsdisplay) · [setNeedsDisplayInRect](#setneedsdisplayinrect)
+
+### kind
+
+```c
+UXKind kind(void)
+```
+
+The neutral kind this view realizes as, which the driver maps to a platform
+realization. The base returns `UXKindView`: a custom-drawn view painted by its
+`drawRect`. Subclasses return their own (`UXButton` → `UXKindButton`). This is
+the whole mechanism by which one class gets a native button on five platforms.
+
+### attachTo
+
+```c
+void attachTo(UXViewTree* t, UXRect frame)
+```
+
+Creates the view's backing node in `t` at `frame` and stores the index. The
+tree and window code call it; app code reaches it through
+[`addSubview`](#addsubview).
+
+### adoptObject
+
+```c
+void adoptObject(UXViewTree* t, u16 i)
+```
+
+The nib path: binds this view to a node that **already exists**. The resource
+supplied the type, frame, flags and state; the view supplies behaviour. See
+[`UXNib`](/compiler/api/uxkit/uxnib/).
+
+### frame
+
+```c
+UXRect frame(void)
+```
+
+The view's rectangle in its parent's coordinates, read from the tree. A detached
+view, or one whose tree has been released (`owner` is weak, so the two cases
+look the same), returns a zero rect and does not fault.
+
+### setFrame
+
+```c
+void setFrame(UXRect f)
+```
+
+Writes the tree node and marks the view dirty.
+
+### bounds
+
+```c
+UXRect bounds(void)
+```
+
+The frame moved to the origin. `drawRect` works in bounds coordinates, so a view
+never needs to know where it sits.
+
+### absoluteFrame
+
+```c
+UXRect absoluteFrame(void)
+```
+
+The frame in window coordinates, accumulated up the ancestry. Event routing and
+the test rigs use it.
+
+### addSubview
+
+```c
+void addSubview(UXView* v, UXRect f)
+```
+
+Attaches `v` to this view's tree at `f`, links the hierarchy, points `v`'s
+responder chain at `self`, and takes a strong reference. The frame is a
+parameter because an unattached view has no frame to set.
+
+### removeFromSuperview
+
+```c
+void removeFromSuperview(void)
+```
+
+Unlinks from the tree and clears `superview`. The parent still holds the
+strong reference in its `subviews` until it is released or replaced.
+
+### removeAllSubviews
+
+```c
+void removeAllSubviews(void)
+```
+
+Empties a container in one call, as an inspector pane does before rebuilding
+itself for a new selection.
+
+It removes each child through
+[`removeFromSuperview`](#removefromsuperview), so every child is unlinked and
+the array is not merely cleared. It also handles a child that does *not* unlink
+itself: if the count has not dropped after the call, the loop removes the child
+directly, so an override that forgets to call super cannot loop forever.
+
+Marks the container for redisplay afterwards.
+
+### isHidden / setHidden
+
+```c
+bool isHidden(void)
+void setHidden(bool h)
+```
+
+Visibility, stored on the tree node. Drawing *and* hit-testing skip a hidden
+view and its whole subtree.
+
+### isEnabled / setEnabled
+
+```c
+bool isEnabled(void)
+void setEnabled(bool e)
+```
+
+Enablement, stored on the tree node. A disabled control draws greyed and
+consumes no clicks.
+
+### setAutoresizeMask
+
+```c
+void setAutoresizeMask(i32 mask)
+```
+
+Springs & struts: combine the edges to stay attached to (`UX_ANCHOR_LEFT/RIGHT/
+TOP/BOTTOM`) with the dimensions allowed to stretch (`UX_FLEX_WIDTH/HEIGHT`).
+`0` means pinned top-left at a fixed size. The mask is stored for the neutral
+solve *and* passed to the driver for native tracking. Set it after the view is
+attached.
+
+### resizeSubviews
+
+```c
+void resizeSubviews(i32 oldW, i32 oldH, i32 newW, i32 newH)
+```
+
+The neutral springs-&-struts solve: repositions children for a change in this
+view's content size according to each child's mask, and recurses. It runs on
+backends without native autoresizing. On AppKit the platform does the work,
+except for custom-drawn views: they have no native peer to track and are always
+laid out here (a wrapped-text view needs its new width from somewhere).
+
+### drawRect
+
+```c
+void drawRect(UXGraphics* g, UXRect dirty)
+```
+
+**The override.** The backend calls it during its paint traversal, inside its
+clip. Draw through `g` in [`bounds`](#bounds) coordinates. Do not call it
+yourself.
+
+### setNeedsDisplay
+
+```c
+void setNeedsDisplay(void)
+```
+
+Marks this view's rect dirty on the tree. It draws nothing: the run loop
+repaints once per iteration, merging every mark into one pass per window.
+
+### setNeedsDisplayInRect
+
+```c
+void setNeedsDisplayInRect(UXRect abs)
+```
+
+The precise form: damages only `abs` (absolute coordinates). A text editor uses
+this to repaint one line instead of the whole window.
+
+## Example
+
+A custom view that draws a gauge and repaints only itself when the value
+changes:
+
+```c
+class Gauge : UXView {
+    i32 value;                                   // 0..100
+
+    void init(void) { super.init(); value = 30; }
+
+    void setValue(i32 v) {
+        value = v;
+        self.setNeedsDisplay();                  // my rect, not the window
+    }
+
+    void drawRect(UXGraphics* g, UXRect dirty) {
+        UXRect b = self.bounds();
+        g.fillRect(b, 0);                                        // white track
+        g.fillRectRGB(UXGeom.make(0, 0, (i16)((i32)b.w * value / 100), b.h),
+                      56, 117, 214);                             // filled portion
+    }
+}
+```

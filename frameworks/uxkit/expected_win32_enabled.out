@@ -1,0 +1,4 @@
+enabled  click -> fired=1
+disabled click -> fired=1
+enabled  click -> fired=2
+PASS: a disabled control drops a real hit

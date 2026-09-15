@@ -1,0 +1,11 @@
+count 3, first ada
+names: ada grace edsger
+last (3|4)
+total 165
+corner (9|9), map holds 2
+missing is null: 1
+set holds 2, contains y: 1
+hello! / hello, world (12 chars) / HELLO, WORLD
+equal by value: 1, same object: 0
+index of world: 7, prefix hello: 1, slice world
+i32 -42, u64 1099511627776

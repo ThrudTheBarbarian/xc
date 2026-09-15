@@ -1,0 +1,4 @@
+method len=5
+free   hello
+proto  hello
+for-in hello

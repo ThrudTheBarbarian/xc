@@ -1,0 +1,4 @@
+workers 1001000 1501500
+balance 2000
+atomic 12, cas ok 1, after 100
+sum of squares 1..10 = 385

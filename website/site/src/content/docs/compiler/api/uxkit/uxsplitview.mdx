@@ -1,0 +1,128 @@
+---
+title: UXSplitView
+description: "Two resizable panes with a draggable divider: pane0 fixed, pane1 flexing, and the drag using the same modal primitive the table uses."
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+`UXSplitView` is two resizable panes with a draggable divider between them,
+the sidebar-and-detail layout. The panes are plain container views that a
+client fills, and the divider is a thin seam with a wide grab band. Dragging
+the divider re-lays the two panes live through the driver's modal
+`trackDragStep`. The table's drag-select and the slider use the same blocking
+primitive, so the split view works on every backend that implements it.
+
+The layout rule: **pane0 is the fixed side** (its extent *is* the divider
+position), and **pane1 flexes** to fill the rest. When the window grows, the
+detail pane grows and the sidebar stays put.
+
+```c
+#use <UXKit>
+```
+
+## Overview
+
+```c
+UXSplitView* split = new UXSplitView();
+split.setDividerPos(160);
+content.addSubview(split, UXGeom.make(0, 0, 480, 300));
+split.firstPane().addSubview(sidebar, UXGeom.make(0, 0, 160, 300));
+split.secondPane().addSubview(detail, UXGeom.make(0, 0, 310, 300));
+```
+
+Content in a pane, native controls included, reflows on the next paint,
+because a resize re-runs `realizeTree` with the new frames.
+
+## Topics
+
+**Orientation** · [setVertical](#setvertical) · [isVertical](#isvertical)
+**The divider** · [setDividerPos](#setdividerpos) · [dividerPosition](#dividerposition)
+**The panes** · [firstPane](#firstpane--secondpane) · [secondPane](#firstpane--secondpane)
+
+### setVertical
+
+```c
+void setVertical(bool v)
+```
+
+`false` (the default): panes side by side, a vertical seam. `true`:
+stacked, a horizontal seam. Set it **before** the split view joins a tree,
+because it decides the initial layout.
+
+### isVertical
+
+```c
+bool isVertical(void)
+```
+
+The orientation.
+
+### setDividerPos
+
+```c
+void setDividerPos(i16 p)
+```
+
+Moves the seam programmatically (pane0's extent becomes `p`) and re-lays
+both panes. Dragging clamps to a minimum pane size at both ends; keep the
+values you set within the same limits.
+
+### dividerPosition
+
+```c
+i16 dividerPosition(void)
+```
+
+Where the seam sits. An app saves this to restore a layout.
+
+### firstPane / secondPane
+
+```c
+UXView* firstPane(void)
+UXView* secondPane(void)
+```
+
+The containers your content goes in: fixed side first, flexing side
+second. They exist once the split view is attached to a tree.
+
+## Platform appearance
+
+<div class="ux-platforms">
+<Tabs>
+  <TabItem label="Web">
+    <img src="/uxkit/split-web.png" alt="UXSplitView on Web" width="220" />
+
+    The hairline seam and panes, app-drawn; the wide grab band paints nothing.
+  </TabItem>
+  <TabItem label="iOS">
+    <img src="/uxkit/split-ios.png" alt="UXSplitView on iOS" width="220" />
+
+    The hairline seam and panes, app-drawn; the wide grab band paints nothing.
+  </TabItem>
+  <TabItem label="Android">
+    <img src="/uxkit/split-android.png" alt="UXSplitView on Android" width="220" />
+
+    The hairline seam and panes, app-drawn; the wide grab band paints nothing.
+  </TabItem>
+  <TabItem label="macOS">
+    <img src="/uxkit/split-macos.png" alt="UXSplitView on macOS" width="220" />
+
+    The hairline seam and panes, app-drawn; the wide grab band paints nothing.
+  </TabItem>
+  <TabItem label="Windows">
+    <img src="/uxkit/split-windows.png" alt="UXSplitView on Windows" width="220" />
+
+    The hairline seam and panes, app-drawn; the wide grab band paints nothing.
+  </TabItem>
+  <TabItem label="Linux">
+    <img src="/uxkit/split-linux.png" alt="UXSplitView on Linux" width="220" />
+
+    The hairline seam and panes, app-drawn; the wide grab band paints nothing.
+  </TabItem>
+  <TabItem label="GEM">
+    <img src="/uxkit/split-gem.png" alt="UXSplitView on GEM" width="220" />
+
+    The hairline seam and panes, app-drawn; the wide grab band paints nothing.
+  </TabItem>
+</Tabs>
+</div>

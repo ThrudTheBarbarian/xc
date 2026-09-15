@@ -1,0 +1,143 @@
+---
+title: UXControl
+description: "Target/action in one callback field: the base of every control, and the ownership rule that makes it safe."
+---
+
+`UXControl` is the base of everything clickable. It adds a **title** and an
+**action** to [`UXView`](/compiler/api/uxkit/uxview/), and its design centres
+on one field:
+
+```c
+callback action void(UXControl* sender);      // (receiver, code) — and the receiver auto-zeroes
+```
+
+```c
+#use <UXKit>
+```
+
+## Overview
+
+Without callbacks, target/action is a hand-rolled pair: a target pointer, a
+function pointer, and a downcast in every handler. A callback combines them.
+`&controller.onOK` carries both the receiver and the code, the handler's
+parameter is the typed sender, and there is no selector.
+
+Two properties of that field make ownership safe. Both are guarantees of the
+**language**, not rules this class enforces: a callback never owns its
+receiver, and a stored callback auto-zeroes when that receiver dies.
+
+1. **It breaks the cycle.** `window → tree → control → action → controller
+   → window` would leak as a retain loop if the action were strong. AppKit
+   solves this with a separate weak `target` field; here, the callback's
+   non-ownership breaks the cycle.
+2. **It makes a dead controller a silent no-op.** `if (action)` tests both
+   "no action set" *and* "the receiver has been deallocated" with the same
+   syntax. A fired control whose controller died does nothing instead of
+   calling into a stale object.
+
+Neither needs a keyword, and you cannot opt out. Writing `weak:` on a callback
+is rejected, because there is nothing to opt into.
+
+A **block** cannot be stored in the action field. A block owns its captures and
+a callback never owns its receiver, so the compiler refuses the conversion in
+both directions with a diagnostic that names the reason. Pass a callback.
+
+**How a click reaches your method** depends on the backend, and your code does
+not see the difference. On GEM and the web the click routes through the tree
+hit-test into [`mouseDown`](#mousedown). On Win32/macOS/iOS the native control
+notifies the driver, which fires the neutral widget directly by handle and node,
+with no synthetic click and no hit-test. Both paths end in [`fire`](#fire).
+
+Subclasses: [`UXButton`](/compiler/api/uxkit/uxbutton/) (native
+everywhere), [`UXCheckbox`](/compiler/api/uxkit/uxcheckbox/) and
+[`UXRadioButton`](/compiler/api/uxkit/uxradiobutton/) (toggle-then-fire),
+[`UXLabel`](/compiler/api/uxkit/uxlabel/) (a title with no action),
+[`UXTextField`](/compiler/api/uxkit/uxtextfield/) (which contains *no
+editing code*; the platform's edit engine does the editing), and the value
+controls (slider, stepper, popup, segmented, progress).
+
+## Conforms to
+
+- Inherits [`UXView`](/compiler/api/uxkit/uxview/).
+
+## Topics
+
+[setAction](#setaction) · [setTitle](#settitle) · [setAlignment](#setalignment--alignment) · [alignment](#setalignment--alignment) · [fire](#fire) · [mouseDown](#mousedown)
+
+### setAction
+
+```c
+void setAction(callback a void(UXControl* sender))
+```
+
+`b.setAction(&controller.onOK)`, where the method has the `UXAction`
+shape: `void onOK(UXControl* sender)`. Held weak; see the overview.
+
+### setTitle
+
+```c
+void setTitle(u8* s)
+```
+
+The label. Borrowed, not copied; literals are the common case.
+
+### setAlignment / alignment
+
+```c
+void setAlignment(i32 a)
+i32  alignment(void)
+```
+
+How the control's text sits in its frame: `UX_ALIGN_LEFT`, `UX_ALIGN_RIGHT`,
+`UX_ALIGN_CENTER`, `UX_ALIGN_JUSTIFY`.
+
+Use it to line things up. A column of labels reading `Name :`, `Size :`,
+`Kind :` only has its colons aligned if the labels are **right**-aligned in
+equal frames. Left-aligned, the colons follow the words and the column looks
+broken.
+
+:::note[The constants are GEM's `te_just` values]
+`UX_ALIGN_*` uses the same numbers, so there is **no translation anywhere**.
+The value an application sets is the value the GEM backend puts in the
+`TEDINFO`, and the other backends map it to their own. With no conversion, there
+is no place for left and right to swap.
+:::
+
+Setting it marks the control for redisplay; the next realize pushes it to the
+native control.
+
+### fire
+
+```c
+void fire(void)
+```
+
+Calls `action(self)` if the action is set *and* its receiver is alive. One truth
+test covers both.
+
+### mouseDown
+
+```c
+void mouseDown(UXEvent* e)
+```
+
+A control consumes its click (it does not pass it up the chain) and fires if
+enabled. Subclasses that carry state (checkbox, radio) flip it first, so the
+action reads the new state.
+
+## Example
+
+One controller, three controls, no downcasts:
+
+```c
+class Form : Object {
+    UXCheckbox* agree;
+
+    void onOK(UXControl* sender)     { if (agree.isChecked()) { self.submit(); } }
+    void onCancel(UXControl* sender) { self.dismiss(); }
+}
+
+ok.setAction(&form.onOK);
+cancel.setAction(&form.onCancel);
+agree.setAction(&form.onAgree);
+```

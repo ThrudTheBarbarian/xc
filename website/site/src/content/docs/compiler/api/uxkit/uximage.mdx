@@ -1,0 +1,130 @@
+---
+title: UXImage
+description: "An in-memory bitmap: packed ARGB pixels with get/set, fill and blit, the testable model behind image wells, canvas layers and thumbnails."
+---
+
+`UXImage` is a width × height grid of packed `0xAARRGGBB` pixels. It is the
+model behind the image well, canvas layers and thumbnails. A backend uploads
+and draws these images. The pixel arithmetic (compositing a sub-image in,
+clearing a region, cropping one out) lives here and can be tested without a
+backend. Colours pack and unpack through
+[`UXColor`](/compiler/api/uxkit/uxcolor/).
+
+```c
+#use <UXKit>
+```
+
+## Overview
+
+```c
+UXImage* im = UXImage.make(64, 64);
+im.fill(UXColor.rgba(255, 255, 255, 255));
+im.fillRect(8, 8, 48, 48, UXColor.rgba(30, 90, 200, 255));
+UXImage* thumb = im.subImage(0, 0, 32, 32);
+```
+
+Every mutation is clipped to the bounds. Writing off the edge writes
+nothing, and reading off the edge reads zero, so a blit near a corner needs
+no arithmetic from the caller.
+
+## Topics
+
+**Making** · [make](#make) · [width / height](#width--height)
+**Pixels** · [setPixel](#setpixel) · [pixelAt](#pixelat) · [setPixelRaw / pixelRaw](#setpixelraw--pixelraw) · [inBounds](#inbounds)
+**Regions** · [fill](#fill) · [fillRect](#fillrect) · [blit](#blit) · [subImage](#subimage)
+**Packing** · [pack / unpack](#pack--unpack)
+
+### make
+
+```c
+static UXImage* make(i32 width, i32 height)
+```
+
+A new image, zero-filled (transparent black). Degenerate sizes become 1×1.
+
+### width / height
+
+```c
+i32 width(void)
+i32 height(void)
+```
+
+The dimensions.
+
+### setPixel
+
+```c
+void setPixel(i32 x, i32 y, UXColor* c)
+```
+
+Writes one pixel; out of bounds writes nothing.
+
+### pixelAt
+
+```c
+UXColor* pixelAt(i32 x, i32 y)
+```
+
+Reads one pixel as a colour; out of bounds reads transparent black.
+
+### setPixelRaw / pixelRaw
+
+```c
+void setPixelRaw(i32 x, i32 y, u32 v)
+u32  pixelRaw(i32 x, i32 y)
+```
+
+The packed-word forms, for tight loops.
+
+### inBounds
+
+```c
+bool inBounds(i32 x, i32 y)
+```
+
+The clip test every mutation uses.
+
+### fill
+
+```c
+void fill(UXColor* c)
+```
+
+Sets every pixel to one colour.
+
+### fillRect
+
+```c
+void fillRect(i32 rx, i32 ry, i32 rw, i32 rh, UXColor* c)
+```
+
+A rectangle, clipped to bounds.
+
+### blit
+
+```c
+void blit(UXImage* src, i32 dx, i32 dy)
+```
+
+Copies `src` in with its top-left at `(dx, dy)`, clipped. It overwrites
+pixels with no alpha blending; compositing belongs to the graphics seam.
+
+### subImage
+
+```c
+UXImage* subImage(i32 rx, i32 ry, i32 rw, i32 rh)
+```
+
+A new image cropped out of this one. Out-of-bounds source pixels come back
+as transparent black.
+
+### pack / unpack
+
+```c
+static u32      pack(UXColor* c)
+static UXColor* unpack(u32 v)
+```
+
+Conversion between the `0xAARRGGBB` word and
+[`UXColor`](/compiler/api/uxkit/uxcolor/). It is public so pixel loops and
+tests can use both forms.

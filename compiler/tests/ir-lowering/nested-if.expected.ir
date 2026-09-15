@@ -1,0 +1,38 @@
+module "nested-if" {
+  symbol nested: function (U8) -> U16
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  function nested(%0: U8, %1: Mem) -> (U16, Mem) {
+    bb_entry:
+      preds: -
+      %2:U8 = Const #0:U8
+      %3:U16 = ZExt %2
+      %4:U8 = Const #0:U8
+      %5:Bool = ICmp UGT, %0, %4
+      CondBranch %5, bb_1_then, bb_1_join
+    bb_1_then:
+      preds: bb_entry
+      %6:U8 = Const #1:U8
+      %7:Bool = ICmp UGT, %0, %6
+      CondBranch %7, bb_3_then, bb_3_else
+    bb_1_join:
+      preds: bb_entry, bb_3_join
+      %8:U16 = Phi [(bb_entry, %3), (bb_3_join, %15)]
+      Return %8, %1
+    bb_3_then:
+      preds: bb_1_then
+      %9:U8 = Const #2:U8
+      %10:U16 = ZExt %9
+      %11:U16 = Add %3, %10
+      Branch bb_3_join
+    bb_3_else:
+      preds: bb_1_then
+      %12:U8 = Const #1:U8
+      %13:U16 = ZExt %12
+      %14:U16 = Add %3, %13
+      Branch bb_3_join
+    bb_3_join:
+      preds: bb_3_then, bb_3_else
+      %15:U16 = Phi [(bb_3_then, %11), (bb_3_else, %14)]
+      Branch bb_1_join
+  }
+}

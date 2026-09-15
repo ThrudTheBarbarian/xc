@@ -1,0 +1,20 @@
+---
+title: UXCollectionItem
+description: "One tile of a UXCollectionView: your object, its label, and the laid-out frame the grid's layout wrote."
+---
+
+`UXCollectionItem` is one tile of a
+[`UXCollectionView`](/compiler/api/uxkit/uxcollectionview/): the `obj`
+you passed to `addItem` (returned untouched at selection time), the
+`label` drawn beneath the tile, and the laid-out frame (`x`, `y`, `w`,
+`h`) that the grid's `layout` writes and its hit test reads.
+
+You rarely construct one yourself; `addItem(obj, label)` does. The laid-out
+frame is public so that tests can check the grid's arithmetic by reading these
+fields.
+
+## Fields
+
+- `obj`: your object, whatever the grid is showing.
+- `label`: the text under the tile.
+- `x`, `y`, `w`, `h`: the tile's laid-out frame, written by `layout`.

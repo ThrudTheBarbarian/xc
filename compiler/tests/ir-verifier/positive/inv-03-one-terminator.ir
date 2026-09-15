@@ -1,0 +1,17 @@
+; Invariant 3 (IR-SPEC §12.3): One terminator per block, at the end.
+; No instruction may follow a terminator; no fall-through except via
+; an explicit Branch.
+; This fixture: bb_entry has one regular instruction (Add) and one
+; terminator (Return) as its last instruction. Well-formed.
+
+module "inv-03-positive" {
+  symbol one_term: function (U8) -> U8
+    attributes: { cloaked: false, banked: false, variadic: false }
+
+  function one_term(%a: U8, %m0: Mem) -> (U8, Mem) {
+    bb_entry:
+      preds: -
+      %r:U8 = Add %a, %a
+      Return %r, %m0
+  }
+}

@@ -1,0 +1,34 @@
+module "array-subscript" {
+  layout 0: size=4 align=1 fields=[(0:U8), (1:U8), (2:U8), (3:U8)]
+  symbol sa: function () -> U8
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  function sa(%0: Mem) -> (U8, Mem) {
+    frame: { pinned: [(%1:Agg(0) @0 esc)], size: 4 }
+    bb_entry:
+      preds: -
+      %2:Ptr(U8, unbanked) = AddrOf %1
+      %3:U8 = Const #0:U8
+      %4:U16 = ZExt %3
+      %5:Ptr(U8, unbanked) = ElementAddr %2, %4
+      %6:U8 = Const #10:U8
+      %7 = Store %5, %6, %0
+      %8:Ptr(U8, unbanked) = AddrOf %1
+      %9:U8 = Const #1:U8
+      %10:U16 = ZExt %9
+      %11:Ptr(U8, unbanked) = ElementAddr %8, %10
+      %12:U8 = Const #32:U8
+      %13 = Store %11, %12, %7
+      %14:U8 = Const #1:U8
+      %15:Ptr(U8, unbanked) = AddrOf %1
+      %16:U8 = Const #0:U8
+      %17:U16 = ZExt %16
+      %18:Ptr(U8, unbanked) = ElementAddr %15, %17
+      %19:U8, %20 = Load %18, %13
+      %21:Ptr(U8, unbanked) = AddrOf %1
+      %22:U16 = ZExt %14
+      %23:Ptr(U8, unbanked) = ElementAddr %21, %22
+      %24:U8, %25 = Load %23, %20
+      %26:U8 = Add %19, %24
+      Return %26, %25
+  }
+}

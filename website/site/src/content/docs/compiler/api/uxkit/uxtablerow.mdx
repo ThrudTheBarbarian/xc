@@ -1,0 +1,21 @@
+---
+title: UXTableRow
+description: "The selectable line of a table: its one drawing job is the selection highlight; its click logic is the platform's list conventions."
+---
+
+`UXTableRow` is the selectable line of a
+[`UXTableView`](/compiler/api/uxkit/uxtableview/). Its only drawing job
+is the selection highlight: a filled band that the cells draw their text
+over (a parent paints before its children). No realized object draws the
+highlight, so the row does.
+
+Its `mouseDown` implements the list conventions on every backend. A plain
+press selects the row (the anchor) and begins the modal drag-select sweep.
+With multi-selection on, ctrl toggles the row and shift extends from the
+anchor. The native tables (AppKit, Win32) implement the same conventions
+themselves and never route through here.
+
+The table's `newRow` hook constructs rows.
+[`UXOutlineView`](/compiler/api/uxkit/uxoutlineview/) overrides it to
+make [`UXOutlineRow`](/compiler/api/uxkit/uxoutlinerow/)s, which draw
+disclosure triangles.

@@ -1,0 +1,11 @@
+---
+title: UXFileListView
+description: "The rows of the toolkit file panel: drawn and hit-tested against the panel's scroll and sort state."
+---
+
+`UXFileListView` is the listing area of the
+[`UXFilePanel`](/compiler/api/uxkit/uxfilepanel/). It draws the visible
+rows (folders first, the selection band, right-aligned sizes) from the
+panel's filtered, sorted row list and scroll position. It routes clicks
+back to the panel: a click selects, a double-click opens a file or enters a
+folder. All state lives on the panel; this view only paints it.

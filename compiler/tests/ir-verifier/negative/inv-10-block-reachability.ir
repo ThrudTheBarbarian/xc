@@ -1,0 +1,22 @@
+; Invariant 10 (IR-SPEC §12.10): Every non-entry block must be
+; reachable from the entry block via the CFG.
+; VIOLATION: bb_dead has `preds: -` but is not the entry block.
+; No terminator anywhere in the function branches to it, so it is
+; unreachable. (Outside of `--paranoid` mode, only `Unreachable`-
+; terminated debug blocks may legitimately have no incoming edge;
+; this one ends in Return.)
+
+module "inv-10-negative" {
+  symbol orphan: function (U8) -> U8
+    attributes: { cloaked: false, banked: false, variadic: false }
+
+  function orphan(%a: U8, %m0: Mem) -> (U8, Mem) {
+    bb_entry:
+      preds: -
+      Return %a, %m0
+
+    bb_dead:                  ; ERROR: no predecessor edge, not entry
+      preds: -
+      Return %a, %m0
+  }
+}

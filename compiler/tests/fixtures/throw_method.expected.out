@@ -1,0 +1,5 @@
+direct ok=9
+direct threw: method
+via ok=2
+via threw: mayfail
+end

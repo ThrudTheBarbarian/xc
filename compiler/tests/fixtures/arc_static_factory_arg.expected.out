@@ -1,0 +1,6 @@
+T1 static-as-arg   made=3 gone=3
+T2 new-as-arg      made=3 gone=3
+T3 freefn-as-arg   made=3 gone=3
+T4 method-as-arg   made=3 gone=3
+T5 static-to-local made=3 gone=3
+T6 ternary-arm    count=3

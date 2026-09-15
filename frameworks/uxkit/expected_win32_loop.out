@@ -1,0 +1,4 @@
+start
+fill=10,10,50,30
+loop-mouseDown=30,40
+stopped rc=0

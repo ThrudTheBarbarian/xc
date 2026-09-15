@@ -1,0 +1,16 @@
+; Invariant 1 (IR-SPEC §12.1): Single-def SSA.
+; Every ValueId is defined exactly once.
+; This fixture: parameters %a and %b, and one Add-defined %c.
+; All three ids are distinct; the verifier accepts.
+
+module "inv-01-positive" {
+  symbol add: function (U8, U8) -> U8
+    attributes: { cloaked: false, banked: false, variadic: false }
+
+  function add(%a: U8, %b: U8, %m0: Mem) -> (U8, Mem) {
+    bb_entry:
+      preds: -
+      %c:U8 = Add %a, %b
+      Return %c, %m0
+  }
+}

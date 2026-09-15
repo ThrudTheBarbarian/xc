@@ -1,0 +1,5 @@
+register=1
+window=1
+fill=10,10,50,30
+mouseDown=30,40
+done

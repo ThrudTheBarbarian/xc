@@ -1,0 +1,6 @@
+override=105
+no-hook=999
+hook=42
+after-death=999
+area=42
+unit=1,2,3,4

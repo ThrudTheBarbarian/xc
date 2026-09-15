@@ -1,0 +1,27 @@
+<!doctype html>
+<!-- Spike 0: click → SAB ring → Worker → OffscreenCanvas draw.
+     Serve with COOP/COEP (python3 serve.py) — SharedArrayBuffer needs it. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>xcc worker-spike</title>
+<style>
+  body { background: #1e1e1e; color: #d4d4d4; font: 14px/1.5 ui-monospace, monospace;
+         margin: 2rem; }
+  canvas { border: 1px solid #3c3c3c; cursor: crosshair; }
+</style>
+</head>
+<body>
+<h1>worker-spike</h1>
+<p>Click the canvas — the wasm module (blocked in a Worker on the event
+ring) wakes and draws a box. Press <b>C</b> to clear. stdout below.</p>
+<canvas id="xcc-canvas" width="480" height="320"></canvas>
+<pre id="out"></pre>
+<script>
+  globalThis.xccConfig = { runLoop: "worker", workerScript: "driver.js" };
+  const out = document.getElementById("out");
+  globalThis.xccOut = (line) => { out.textContent += line + "\n"; };
+</script>
+<script src="spike.js"></script>
+</body>
+</html>

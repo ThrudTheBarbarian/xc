@@ -1,0 +1,12 @@
+---
+title: UXTableHeader
+description: "The pinned column-title strip: drawn as chrome where the toolkit paints the table, replaced by the native header where the platform does."
+---
+
+`UXTableHeader` is the column-title strip pinned above a
+[`UXTableView`](/compiler/api/uxkit/uxtableview/)'s rows. It draws each
+title at its column's x over a darker band that reads as chrome, with a
+rule beneath. It draws where the toolkit paints the table itself (GEM,
+headless). The native realizations use their own header and hide this
+subtree. It reads the same column data as the rows, so the header and
+rows always agree on where a column starts.

@@ -1,0 +1,44 @@
+module "float-param" {
+  symbol addf: function (F32, F32) -> F32
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  symbol scalef: function (I16, F32, I16) -> F32
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  symbol run: function () -> Void
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  symbol gResult: dataglobal I16
+    attributes: { banked: false, cloaked: false }
+    flags: { escapes: true }
+  function addf(%0: F32, %1: F32, %2: Mem) -> (F32, Mem) {
+    bb_entry:
+      preds: -
+      %3:F32 = FAdd %0, %1
+      Return %3, %2
+  }
+  function scalef(%0: I16, %1: F32, %2: I16, %3: Mem) -> (F32, Mem) {
+    bb_entry:
+      preds: -
+      Return %1, %3
+  }
+  function run(%0: Mem) -> Mem {
+    bb_entry:
+      preds: -
+      %1:F32 = Const #fp3ff8000000000000:F32
+      %2:F32 = Const #fp400a000000000000:F32
+      %3:F32, %4 = Call @addf, [%1, %2], CallConv::Standard, %0
+      %5:I16 = FpToSI %3
+      %6:U8 = Const #2:U8
+      %7:I16 = ZExt %6
+      %8:F32 = Const #fp3ff8000000000000:F32
+      %9:U8 = Const #3:U8
+      %10:I16 = ZExt %9
+      %11:F32, %12 = Call @scalef, [%7, %8, %10], CallConv::Standard, %4
+      %13:I16 = FpToSI %11
+      %14:I16 = Add %5, %13
+      %15:U8 = Const #100:U8
+      %16:I16 = ZExt %15
+      %17:I16 = Add %14, %16
+      %18:Ptr(I16, unbanked) = AddrOf @gResult
+      %19 = Store %18, %17, %12
+      Return %19
+  }
+}

@@ -1,0 +1,147 @@
+---
+title: UXProgressBar
+description: "A bar that displays a UXProgress: filled to its fraction when determinate, a moving pip when not. Native where the platform has one."
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+`UXProgressBar` displays a [`UXProgress`](/compiler/api/uxkit/uxprogress/)
+model. It fills the track to the model's fraction, or shows the indeterminate
+treatment when the total is unknown. A long
+[`UXOperationQueue`](/compiler/api/uxkit/uxoperationqueue/) job reports
+through it. The fill-width arithmetic is pure and unit-testable, and drawing
+goes through the [`UXControl`](/compiler/api/uxkit/uxcontrol/) seam. On
+backends with a native indicator (macOS `NSProgressIndicator`, Win32
+`progress32`, iOS `UIProgressView`, Android `ProgressBar`, GTK
+`GtkProgressBar`) the driver realizes one. On GEM and the web the control
+draws the theme's own bezel, bar, and striped indeterminate fill.
+
+```c
+#use <UXKit>
+```
+
+## Overview
+
+```c
+UXProgress* p = new UXProgress();
+p.setTotal(fileCount);
+
+UXProgressBar* bar = new UXProgressBar();
+bar.setProgress(p);
+content.addSubview(bar, UXGeom.make(8, 8, 200, 16));
+
+// as work completes:
+p.incrementBy(1);
+bar.setNeedsDisplay();
+```
+
+A bar with **no** progress model, or one whose total is zero, is
+indeterminate: the platform's barber pole where there is one, the theme's
+striped fill where the control draws itself.
+
+## Conforms to
+
+- Inherits [`UXControl`](/compiler/api/uxkit/uxcontrol/): geometry,
+  enablement, the realization seam. There is no action, because a progress bar
+  only reports.
+
+## Topics
+
+**Model** · [setProgress](#setprogress) · [isIndeterminate](#isindeterminate)
+**Geometry** · [filledWidth](#filledwidth)
+**Realization** · [kind](#kind)
+
+### setProgress
+
+```c
+void setProgress(UXProgress* p)
+```
+
+Attaches the model. The bar reads it at draw time, so there is no copy to
+fall out of date.
+
+### isIndeterminate
+
+```c
+bool isIndeterminate(void)
+```
+
+True with no model, or when the model itself says so (zero total).
+
+### filledWidth
+
+```c
+i32 filledWidth(i16 trackW)
+```
+
+Width of the filled portion for a track `trackW` wide, from the model's
+per-mille fraction. This is pure arithmetic, and the tests call it without a
+window.
+
+### kind
+
+```c
+UXKind kind(void)
+```
+
+`UXKindProgress`: native where the backend has an indicator, the theme's
+art everywhere else. The driver decides; the control does not know which.
+
+## Platform appearance
+
+<div class="ux-platforms">
+<Tabs>
+  <TabItem label="Web">
+    <img src="/uxkit/progress-web.png" alt="UXProgressBar on the web backend" width="220" />
+
+    The theme's bezel trough and blue bar fill, drawn on canvas with the same Aristo art GEM draws.
+  </TabItem>
+  <TabItem label="iOS">
+    <img src="/uxkit/progress-ios.png" alt="UXProgressBar on iOS" width="220" />
+
+    A real `UIProgressView`, its fraction synced from the model per mille.
+  </TabItem>
+  <TabItem label="Android">
+    <img src="/uxkit/progress-android.png" alt="UXProgressBar on Android" width="220" />
+
+    A real horizontal `ProgressBar` (max 1000, so the per-mille fraction maps exactly).
+  </TabItem>
+  <TabItem label="macOS">
+    <img src="/uxkit/progress-macos.png" alt="Progressbar on macOS" width="220" />
+
+    A real <code>NSProgressIndicator</code>.
+  </TabItem>
+  <TabItem label="Windows">
+    <img src="/uxkit/progress-windows.png" alt="Progressbar on Windows" width="220" />
+
+    A real <code>msctls_progress32</code>.
+  </TabItem>
+  <TabItem label="Linux">
+    <img src="/uxkit/progress-linux.png" alt="UXProgressBar on Linux (GTK)" width="220" />
+
+    A real `GtkProgressBar`. GTK draws its own widgets, so this capture is the Linux look wherever GTK4 runs.
+  </TabItem>
+  <TabItem label="GEM">
+    <img src="/uxkit/progress-gem.png" alt="Progressbar on GEM" width="220" />
+
+    The same themed trough and fill, drawn by the same drawRect.
+  </TabItem>
+</Tabs>
+</div>
+
+## Example
+
+An operation queue reporting into the bar from the run loop:
+
+```c
+UXProgress* p = new UXProgress();
+p.setTotal(steps);
+bar.setProgress(p);
+
+for (i32 i = (i32)0; i < steps; i = i + (i32)1) {
+    doStep(i);
+    p.incrementBy(1);
+    bar.setNeedsDisplay();
+    gApp.displayIfNeeded();
+}
+```

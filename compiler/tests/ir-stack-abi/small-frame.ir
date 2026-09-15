@@ -1,0 +1,16 @@
+; STACK-ABI §3 reference fixture — easy case.
+; pinnedLocalSize = 8 bytes, one u16 param (K = 2). Total N + K = 10,
+; well within the 119-byte budget. Highest param byte offset = +N+8+K
+; = 8+8+2 = 18, deep inside the signed-8-bit range.
+
+module "small-frame" {
+  symbol noop: function (U16) -> U16
+    attributes: { banked: false, cloaked: false, variadic: false }
+
+  function noop(%a: U16, %m0: Mem) -> (U16, Mem) {
+    frame: { pinned: [(%loc0:U16 @0), (%loc1:U16 @2), (%loc2:U16 @4), (%loc3:U16 @6)], size: 8 }
+    bb_entry:
+      preds: -
+      Return %a, %m0
+  }
+}

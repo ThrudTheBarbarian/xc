@@ -1,0 +1,220 @@
+---
+title: UXColorPanel
+description: "The picking state behind a colour picker: hue, saturation, brightness and alpha, kept in sync with a UXColor in both directions."
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+`UXColorPanel` is the **model** behind a colour picker, equivalent to
+`NSColorPanel` in HSB mode.
+
+```c
+#use <UXKit>            // or #import "UXColorPanel.xc"
+```
+
+## Overview
+
+```c
+UXColorPanel* p = new UXColorPanel();
+
+p.setHue(210);               // a slider drag
+p.setSaturation(200);
+p.color();                   // the UXColor that composes to
+
+p.setColor(UXColor.red());   // an eyedropper or a swatch click
+p.hueValue();                // 0 — decomposed back to HSB
+```
+
+The **view** (the sliders and the two-dimensional field) draws this. The
+picking state and the conversions live here, and are testable with no window.
+
+## Why HSB rather than RGB
+
+A colour picker uses HSB because people choose colours that way: *this hue, a
+bit less saturated, a bit darker*. Nobody picks a colour by nudging three
+primaries.
+
+Everything the toolkit draws with is [`UXColor`](/compiler/api/uxkit/uxcolor/),
+which is RGB. The panel is the **bridge** between the two, and holds the HSB
+state that RGB cannot represent.
+
+## HSB is the state, RGB is derived
+
+This direction is why the class holds fields instead of only converting.
+
+```c
+p.setSaturation(0);      // grey — hue is now invisible
+p.setSaturation(200);    // the ORIGINAL hue comes back
+```
+
+At zero saturation every hue is the same grey, and at zero brightness every
+colour is black. If the panel stored RGB and re-derived the hue, dragging
+saturation to zero would **lose** the hue, and dragging back would give whatever
+hue the conversion picked, usually red.
+
+Holding hue, saturation and brightness separately makes the sliders behave as a
+user expects: moving one does not silently destroy another.
+
+:::caution[`setColor` is the one lossy direction]
+Decomposing an RGB colour to HSB is exact for most colours, but grey has no
+hue, and black has neither hue nor saturation. `setColor(UXColor.black())`
+followed by raising brightness gives *a* colour, not the one you had before.
+
+This is inherent to the conversion. It is why a picker keeps its own state
+instead of round-tripping through RGB on every drag.
+:::
+
+## Integer conversions
+
+Hue is `0`–`359`; saturation, brightness and alpha are `0`–`255`. The
+conversions reuse [`UXColor`](/compiler/api/uxkit/uxcolor/)'s integer HSB↔RGB,
+so a panel picks the same colour on every backend and the tests need no
+tolerance.
+
+`hex()` gives the packed value, useful for a text field showing the colour and
+for the form a theme file stores.
+
+## The panel and the platform picker
+
+A backend uses the toolkit's own panel when it has no native picker. Where a
+platform has a real colour picker
+([`UXAppKitDriver`](/compiler/api/uxkit/uxappkitdriver/) has `NSColorPanel`,
+Win32 has the common dialog), the driver answers `hasNativeColorPanel` and the
+native one is presented instead.
+
+This class is both the fallback picker's model *and* the neutral representation
+of what a native picker returned. Application code reads it the same way in
+both cases.
+
+## Platform appearance
+
+A colour panel is a model and has no widget of its own. The portrait shows the
+model's two ends: a swatch showing what [`color()`](#color) composes to, beside
+three real [`UXSlider`](/compiler/api/uxkit/uxslider/)s at its H, S and B
+values.
+
+All seven show the same colour, `rgb(64, 150, 220)`, which decomposes to
+**H 207/359, S 180/255, B 220/255**. The knob positions are set from those
+numbers.
+
+<div class="ux-platforms">
+<Tabs>
+  <TabItem label="Web">
+    <img src="/uxkit/colorpanel-web.png" alt="UXColorPanel on the web backend" width="220" />
+
+    Themed sliders on canvas; the swatch is a plain `fillRectRGB` of `color()`.
+  </TabItem>
+  <TabItem label="iOS">
+    <img src="/uxkit/colorpanel-ios.png" alt="UXColorPanel on iOS" width="220" />
+
+    Real `UISlider`s. The filled track left of the knob is the platform's own, not drawn by the toolkit.
+  </TabItem>
+  <TabItem label="Android">
+    <img src="/uxkit/colorpanel-android.png" alt="UXColorPanel on Android" width="220" />
+
+    Real `SeekBar`s, with Material's square thumb.
+  </TabItem>
+  <TabItem label="macOS">
+    <img src="/uxkit/colorpanel-macos.png" alt="UXColorPanel on macOS" width="220" />
+
+    Real `NSSlider` overlays. On macOS the driver answers `hasNativeColorPanel`, so a *picker* would be `NSColorPanel`; this is the model behind the neutral one.
+  </TabItem>
+  <TabItem label="Windows">
+    <img src="/uxkit/colorpanel-windows.png" alt="UXColorPanel on Windows" width="220" />
+
+    Real trackbars (`msctls_trackbar32`).
+  </TabItem>
+  <TabItem label="Linux">
+    <img src="/uxkit/colorpanel-linux.png" alt="UXColorPanel on Linux (GTK)" width="220" />
+
+    Real `GtkScale`s. GTK draws its own Adwaita widgets, so this capture is the Linux look wherever GTK4 runs.
+  </TabItem>
+  <TabItem label="GEM">
+    <img src="/uxkit/colorpanel-gem.png" alt="UXColorPanel on GEM" width="220" />
+
+    The themed groove and knob, drawn by the same `drawRect` as the web capture, so the two look identical.
+  </TabItem>
+</Tabs>
+</div>
+
+## Topics
+
+[setColor](#setcolor) · [color](#color) · [setHue](#sethue) · [setSaturation](#setsaturation) · [setBrightness](#setbrightness) · [setAlpha](#setalpha) · [hueValue](#component-readers) · [saturationValue](#component-readers) · [brightnessValue](#component-readers) · [alphaValue](#component-readers) · [hex](#hex)
+
+### setColor
+
+```c
+void setColor(UXColor* c)
+```
+
+Decompose an RGB colour into the panel's HSB state. See the
+[caution](#hsb-is-the-state-rgb-is-derived).
+
+### color
+
+```c
+UXColor* color(void)
+```
+
+Compose the current state into a `UXColor`. Returns a **fresh** colour on each
+call, so it is safe to pass to a control that will keep it.
+
+### setHue
+
+```c
+void setHue(i32 h)         // 0..359
+```
+
+### setSaturation
+
+```c
+void setSaturation(i32 s)  // 0..255
+```
+
+### setBrightness
+
+```c
+void setBrightness(i32 b)  // 0..255
+```
+
+### setAlpha
+
+```c
+void setAlpha(i32 a)       // 0..255
+```
+
+The conversions carry alpha through unchanged. It is not part of HSB and is held
+alongside.
+
+### Component readers
+
+```c
+i32 hueValue(void)
+i32 saturationValue(void)
+i32 brightnessValue(void)
+i32 alphaValue(void)
+```
+
+What the sliders read. These return the **stored** state, which is why hue
+survives a trip through zero saturation.
+
+### hex
+
+```c
+u32 hex(void)
+```
+
+The composed colour packed into a `u32`.
+
+## Conforms to
+
+- A plain class (not an [`Object`](/compiler/api/object/) subclass)
+
+## See also
+
+- [`UXColor`](/compiler/api/uxkit/uxcolor/): the RGB value, and the HSB
+  conversions
+- [`UXColorList`](/compiler/api/uxkit/uxcolorlist/): named colours, once one is
+  chosen
+- [`UXViewDriver`](/compiler/api/uxkit/uxviewdriver/): `hasNativeColorPanel`,
+  which decides whether this panel is shown at all

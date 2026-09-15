@@ -1,0 +1,67 @@
+---
+title: UXFilePanel
+description: "The toolkit-drawn modal file panel, modelled on the ST's Universal Item Selector: browse, filter, sort and manage files on backends with no OS dialog."
+---
+
+`UXFilePanel` is the toolkit-drawn modal file panel for backends with no
+OS dialog (GEM, Win32 under Wine). It is modelled on the Atari ST's
+Universal Item Selector and provides:
+
+- a scrolling, sorted, mask-filtered directory list
+- clickable column headers (name and size, ascending or descending)
+- editable **Mask** and **Selection** lines
+- a recent-files view
+- a button column that opens files and manages them: Find, Rename, Copy,
+  Move and Delete (Delete confirms through
+  [`UXAlert`](/compiler/api/uxkit/uxalert/))
+
+Apps do not construct it.
+[`UXOpenPanel`](/compiler/api/uxkit/uxopenpanel/) chooses per backend: it
+uses the native `NSOpenPanel` or `GetOpenFileName` where the platform has
+one, and calls `runToolkit()` to drive this panel where it does not.
+Application code asks for a file the same way on every backend.
+
+All panels the app opens share session memory: the last directory browsed
+(re-opening returns there) and the recently chosen files. Both outlive any
+individual panel.
+
+## The moving parts
+
+- [`UXFilePanelBack`](/compiler/api/uxkit/uxfilepanelback/): the
+  dialog-face backdrop.
+- [`UXFileListView`](/compiler/api/uxkit/uxfilelistview/): the rows,
+  drawn and hit-tested against the panel's scroll state.
+- [`UXFileHeader`](/compiler/api/uxkit/uxfileheader/): the clickable
+  sort header.
+- [`UXFileRow`](/compiler/api/uxkit/uxfilerow/): one listing line
+  (name, directory flag, size).
+- [`UXGroupBox`](/compiler/api/uxkit/uxgroupbox/): frames the button
+  column, and is usable on its own.
+
+## Entry point
+
+```c
+u8* run(u8* prompt, u8* startDir)
+```
+
+Runs the modal panel and returns the chosen full path, or null on
+Cancel. `UXOpenPanel.runToolkit` calls it; the driver's modal loop does
+the blocking.
+
+:::note[`run` is the whole public surface]
+The class has around forty other methods, such as `sortColumn`,
+`scrollTop`, `rowAt` and `inRecents`. **None of them is for a caller.**
+They implement the panel itself: its scroll state, its sort, its button
+handlers and its directory reads.
+
+The only external use of `UXFilePanel` in the toolkit is these two lines:
+
+```c
+UXFilePanel* p = new UXFilePanel();
+return p.run(prompt, startDir);
+```
+
+The other methods are listed here as undocumented so that the question of
+which to call has a clear answer: none. You can modify them, but do not
+build against them. Nothing else uses them, and they will change.
+:::

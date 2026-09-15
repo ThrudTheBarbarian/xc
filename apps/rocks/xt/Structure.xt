@@ -1,0 +1,134 @@
+// Structure.xt — the resource's OBJECT tree, as an outline view.
+//
+// This is the editor feature that makes Rocks an editor rather than a viewer: a .rsc is a
+// HIERARCHY, and until you can see it you are guessing which box contains which button.
+//
+// The datasource is the resource itself. There is no model to build and nothing to keep in
+// step, because the OBJECT tree already IS the hierarchy — `ob_head` and `ob_next` are the
+// child and sibling links, and the outline just walks them. Expanding a row does not
+// transform anything; it re-reads the same array the AES draws from.
+//
+// The one thing we must supply is IDENTITY. XGOutlineView remembers what is expanded against
+// the ITEM, not the row index (a row index is meaningless the moment anything above it opens),
+// so an object must be the same Object@ every time it is asked for. RNode is that identity:
+// one per object index, made once, cached.
+#import <GEM>
+#import <XG>
+
+// A stable identity for object index `obj`. Handed to the outline as the item.
+class RNode : Object
+{
+    i32 obj;
+    void init(void) { obj = (i32)0; }
+}
+
+class Structure : Object <XGOutlineDataSource>
+{
+    weak: XGViewTree@ doc;
+    Array@ nodes;              // nodes[i] is the RNode for object i — identity, cached
+    void init(void) { doc = (XGViewTree@)0; nodes = new Array(); }
+
+    // Build one RNode per object, once. After this, node(i) is always the same object.
+    void setDocument(XGViewTree@ d) {
+        doc = d;
+        nodes = new Array();
+        for (u16 i = (u16)0; i < d.length(); i++) {
+            RNode@ n = new RNode();
+            n.obj = (i32)i;
+            nodes.add(n);
+        }
+    }
+
+    RNode@ node(i32 i) { return (RNode@ ?)nodes.get((u16)i); }
+
+    // ---- the OBJECT tree's own links are the hierarchy ------------------------
+    // ob_head is the first child; ob_next is the next sibling — except that the LAST child
+    // points back at its PARENT, which is how a GEM tree marks the end of a sibling list.
+    // So "is this still a sibling?" is "is it not the parent I started from?".
+    i32 childCount(i32 parent) {
+        OBJECT@ t = doc.objects();
+        i32 c = (i32)t[(u16)parent].ob_head;
+        if (c < (i32)0) { return (i32)0; }
+        i32 n = (i32)0;
+        while (c >= (i32)0 && c != parent) {
+            n = n + (i32)1;
+            if (c == (i32)t[(u16)parent].ob_tail) { return n; }   // the tail ends it
+            c = (i32)t[(u16)c].ob_next;
+        }
+        return n;
+    }
+
+    i32 childAt(i32 parent, i32 idx) {
+        OBJECT@ t = doc.objects();
+        i32 c = (i32)t[(u16)parent].ob_head;
+        i32 n = (i32)0;
+        while (c >= (i32)0 && c != parent) {
+            if (n == idx) { return c; }
+            if (c == (i32)t[(u16)parent].ob_tail) { return (i32)-1; }
+            c = (i32)t[(u16)c].ob_next;
+            n = n + (i32)1;
+        }
+        return (i32)-1;
+    }
+
+    // ---- XGOutlineDataSource --------------------------------------------------
+    // item == nil is the root of the OUTLINE, and the resource's object 0 is its one child.
+    // So the tree's root object shows up as a row, which is what you want in an editor: it is
+    // an object like any other, and it is selectable.
+    i32 numberOfChildren(XGOutlineView@ o, Object@ item) {
+        if (doc == (XGViewTree@)0) { return (i32)0; }
+        if (item == (Object@)0)    { return (i32)1; }
+        RNode@ n = (RNode@ ?)item;
+        return self.childCount(n.obj);
+    }
+
+    Object@ childOfItem(XGOutlineView@ o, Object@ item, i32 i) {
+        if (item == (Object@)0) { return self.node((i32)0); }
+        RNode@ n = (RNode@ ?)item;
+        return self.node(self.childAt(n.obj, i));
+    }
+
+    bool isExpandable(XGOutlineView@ o, Object@ item) {
+        RNode@ n = (RNode@ ?)item;
+        return self.childCount(n.obj) > (i32)0;
+    }
+
+    // Column 0: what the object IS. Column 1: its index, which is what you cite when you talk
+    // to the AES about it — objc_draw(tree, 7, ...) — so it belongs on screen.
+    u8@ valueForItem(XGOutlineView@ o, Object@ item, i32 col) {
+        RNode@ n = (RNode@ ?)item;
+        if (col == (i32)1) { return XGStr.fromInt(n.obj); }
+        return self.typeName(n.obj);
+    }
+
+    u8@ typeName(i32 obj) {
+        u16 t = doc.objects()[(u16)obj].ob_type & (u16)$FF;
+        if (t == (u16)G_BOX)      { return "Box"; }
+        if (t == (u16)G_TEXT)     { return "Text"; }
+        if (t == (u16)G_BOXTEXT)  { return "BoxText"; }
+        if (t == (u16)G_IMAGE)    { return "Image"; }
+        if (t == (u16)G_USERDEF)  { return "UserDef"; }
+        if (t == (u16)G_IBOX)     { return "IBox"; }
+        if (t == (u16)G_BUTTON)   { return "Button"; }
+        if (t == (u16)G_BOXCHAR)  { return "BoxChar"; }
+        if (t == (u16)G_STRING)   { return "String"; }
+        if (t == (u16)G_FTEXT)    { return "FText"; }
+        if (t == (u16)G_FBOXTEXT) { return "FBoxText"; }
+        if (t == (u16)G_ICON)     { return "Icon"; }
+        if (t == (u16)G_TITLE)    { return "Title"; }
+        return "?";
+    }
+
+    // Which outline ROW is showing object `obj` right now? -1 if it is collapsed out of view.
+    // This is how a click on the CANVAS moves the highlight in the outline: the two views are
+    // showing the same objects, so selection has to be expressible in both directions.
+    i32 rowForObject(XGOutlineView@ o, i32 obj) {
+        for (i32 r = (i32)0; r < o.rowCount(); r++) {
+            XGOutlineNode@ on = o.nodeAt(r);
+            if (on == (XGOutlineNode@)0) { continue; }
+            RNode@ rn = (RNode@ ?)on.item;
+            if (rn.obj == obj) { return r; }
+        }
+        return (i32)-1;
+    }
+}

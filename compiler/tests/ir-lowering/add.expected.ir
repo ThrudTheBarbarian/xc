@@ -1,0 +1,10 @@
+module "add" {
+  symbol add: function (U8, U8) -> U8
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  function add(%0: U8, %1: U8, %2: Mem) -> (U8, Mem) {
+    bb_entry:
+      preds: -
+      %3:U8 = Add %0, %1
+      Return %3, %2
+  }
+}

@@ -1,0 +1,29 @@
+// Rocks.xt — the application entry point.
+//
+// The proof-of-concept for Xtg, and the point of the whole exercise: an application
+// that #imports <Xtg>, LINKS libXG.so, and runs natively on the XT's ARM core under
+// XTOS.  The toolkit is a shared library; this is a client of it.
+#import "RocksApp.xt"
+#import "../XG/XGBoot.xt"
+#import "../XG/XGAbi.xt"     // the ABI stamp libXG.so must match (generated)
+
+void main(void)
+{
+    // THE VERSION GATE. This app died as PC=0, PREFETCH-ABORT when libXG.so moved under it.
+    // Calling xtg_require references XG_abi_<major>_<minor>, so an ABI break is caught BY THE
+    // LOADER, by name, before main() runs. The argument is the minimum PATCH we need — a newer
+    // patch still satisfies it, which is the whole point of separating patch from minor.
+    if (!xtg_require((i32)0)) { Stdio.printf("Rocks: libXG.so is too old\n"); return; }
+
+    // SCAFFOLDING, AND ONLY UNDER QEMU. gemd is normally started by a boot script off the
+    // SD card, which qemu does not have — so with no SD card there is no gemd, and an app
+    // that needs a window server finds none. On the board this call connects to the gemd
+    // that is already running and returns immediately; it is a no-op there. An application
+    // does NOT get to start the window server, and this goes the moment qemu boots properly.
+    if (!XGBoot.ensureWindowServer()) { Stdio.printf("Rocks: no window server\n"); return; }
+
+    XGApplication@ app = new XGApplication();
+    Rocks@ r = new Rocks();
+    app.setDelegate(r);
+    app.run();
+}

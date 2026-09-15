@@ -1,0 +1,47 @@
+module "ternary" {
+  symbol mix: function () -> U16
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  function mix(%0: Mem) -> (U16, Mem) {
+    bb_entry:
+      preds: -
+      %1:U8 = Const #0:U8
+      %2:U16 = ZExt %1
+      %3:U8 = Const #7:U8
+      %4:U16 = ZExt %3
+      %5:U8 = Const #0:U8
+      %6:U16 = ZExt %5
+      %7:Bool = ICmp EQ, %2, %6
+      CondBranch %7, bb_1_tern_then, bb_1_tern_else
+    bb_1_tern_then:
+      preds: bb_entry
+      %8:U8 = Const #100:U8
+      %9:U16 = ZExt %8
+      Branch bb_1_tern_join
+    bb_1_tern_else:
+      preds: bb_entry
+      %10:U8 = Const #1:U8
+      %11:U16 = ZExt %10
+      Branch bb_1_tern_join
+    bb_1_tern_join:
+      preds: bb_1_tern_then, bb_1_tern_else
+      %12:U16 = Phi [(bb_1_tern_then, %9), (bb_1_tern_else, %11)]
+      %13:U8 = Const #0:U8
+      %14:U16 = ZExt %13
+      %15:Bool = ICmp EQ, %4, %14
+      CondBranch %15, bb_4_tern_then, bb_4_tern_else
+    bb_4_tern_then:
+      preds: bb_1_tern_join
+      %16:U8 = Const #1:U8
+      %17:U16 = ZExt %16
+      Branch bb_4_tern_join
+    bb_4_tern_else:
+      preds: bb_1_tern_join
+      %18:U16 = Add %4, %4
+      Branch bb_4_tern_join
+    bb_4_tern_join:
+      preds: bb_4_tern_then, bb_4_tern_else
+      %19:U16 = Phi [(bb_4_tern_then, %17), (bb_4_tern_else, %18)]
+      %20:U16 = Add %12, %19
+      Return %20, %0
+  }
+}

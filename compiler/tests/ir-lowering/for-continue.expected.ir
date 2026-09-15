@@ -1,0 +1,39 @@
+module "for-continue" {
+  symbol fsum: function (U16) -> U16
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  function fsum(%0: U16, %1: Mem) -> (U16, Mem) {
+    bb_entry:
+      preds: -
+      %2:U8 = Const #0:U8
+      %3:U16 = ZExt %2
+      %4:U8 = Const #0:U8
+      %5:U16 = ZExt %4
+      Branch bb_1_for_header
+    bb_1_for_header:
+      preds: bb_entry, bb_4_then, bb_4_join
+      %6:U16 = Phi [(bb_entry, %3), (bb_4_then, %6), (bb_4_join, %14)]
+      %7:U16 = Phi [(bb_entry, %5), (bb_4_then, %13), (bb_4_join, %16)]
+      %8:Bool = ICmp ULT, %7, %0
+      CondBranch %8, bb_1_for_body, bb_1_for_exit
+    bb_1_for_body:
+      preds: bb_1_for_header
+      %9:U8 = Const #3:U8
+      %10:U16 = ZExt %9
+      %11:Bool = ICmp EQ, %7, %10
+      CondBranch %11, bb_4_then, bb_4_join
+    bb_1_for_exit:
+      preds: bb_1_for_header
+      Return %6, %1
+    bb_4_then:
+      preds: bb_1_for_body
+      %12:U16 = Const #1:U16
+      %13:U16 = Add %7, %12
+      Branch bb_1_for_header
+    bb_4_join:
+      preds: bb_1_for_body
+      %14:U16 = Add %6, %7
+      %15:U16 = Const #1:U16
+      %16:U16 = Add %7, %15
+      Branch bb_1_for_header
+  }
+}

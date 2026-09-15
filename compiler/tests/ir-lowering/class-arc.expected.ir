@@ -1,0 +1,26 @@
+module "class-arc" {
+  layout 0: size=2 align=1 fields=[(0:Ptr(Void, unbanked))]
+  layout 1: size=3 align=1 fields=[(0:Ptr(Void, unbanked)), (2:U8)]
+  layout 2: size=0 align=1
+  layout 3: size=0 align=1
+  symbol run: function () -> Void
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  symbol _xtc_alloc: runtime () -> Void
+    attributes: { banked: false, cloaked: false, variadic: false }
+  function run(%0: Mem) -> Mem {
+    bb_entry:
+      preds: -
+      %1:U16 = Const #1:U16
+      %2:U16 = Const #3:U16
+      %3:U16 = Const #0:U16
+      %4:Ptr(Void, unbanked) = IntToPtr %3
+      %5:Ptr(Agg(1), unbanked), %6 = Call @_xtc_alloc, [%1, %2, %4], CallConv::Standard, %0
+      %7:Ptr(U16, unbanked) = Bitcast %5
+      %8:U16 = Const #1:U16
+      %9 = Store %7, %8, %6
+      %10 = Retain %5, %9
+      %11 = Release %5, %10
+      %12 = Release %5, %11
+      Return %12
+  }
+}

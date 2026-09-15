@@ -1,0 +1,43 @@
+# House style: a brace sits on its own line, indented one level from the line
+# that introduces the block, and the body sits at the same indent as its braces.
+#
+#     void f(void)
+#         {
+#         if (x)
+#             {
+#             g();
+#             }
+#         }
+#
+# xc is not a language clang-format knows. Format an xc file by telling it to
+# read the file as C:
+#
+#     clang-format --assume-filename=x.c -i path/to/file.xc
+#
+# Two settings are deliberate and should not be relaxed:
+#
+#   ColumnLimit: 0    Never re-wrap. A column limit reflows lines that carry
+#                     string literals, which changes content rather than layout.
+#   InsertBraces      Left off. It rewrites the bodies of #define macros that
+#                     contain braces. The files where that bites are listed in
+#                     .clang-format-ignore.
+---
+BasedOnStyle: LLVM
+BreakBeforeBraces: Whitesmiths
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ColumnLimit: 0
+PointerAlignment: Left
+DerivePointerAlignment: false
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: None
+AllowShortBlocksOnASingleLine: Never
+AllowShortCaseLabelsOnASingleLine: false
+SortIncludes: false
+ReflowComments: false
+AlignTrailingComments: true
+KeepEmptyLinesAtTheStartOfBlocks: true
+InsertBraces: false
+SpacesBeforeTrailingComments: 1

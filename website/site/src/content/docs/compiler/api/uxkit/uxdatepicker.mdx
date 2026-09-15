@@ -1,0 +1,163 @@
+---
+title: UXDatePicker
+description: "A date entry control whose stepping uses UXDate's exact civil-calendar maths, so rollovers, clamping and leap years are correct by construction."
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+`UXDatePicker` holds a [`UXDate`](/compiler/api/uxkit/uxdate/) and steps
+its year, month, and day fields. The stepping uses `UXDate`'s exact
+civil-calendar arithmetic instead of re-deriving it, so the calendar comes
+out right:
+
+- Jan 31 + 1 day is Feb 1. Day stepping goes through the day number, so it
+  rolls across months and years exactly.
+- Jan 31 + 1 month is Feb 28, or Feb 29 in a leap year.
+- Feb 29 stepped into a non-leap year clamps to Feb 28.
+
+The stepping model is pure and testable. Drawing the fields and wiring
+steppers go through the [`UXControl`](/compiler/api/uxkit/uxcontrol/) seam.
+
+```c
+#use <UXKit>
+```
+
+## Overview
+
+```c
+UXDatePicker* due = new UXDatePicker();
+due.setDate(UXDate.make(2026, 1, 31));
+due.stepMonth(1);        // Feb 28 2026 — clamped, not invented
+due.stepDay(1);          // Mar 1 2026 — rolled, not clamped
+```
+
+## Conforms to
+
+- Inherits [`UXControl`](/compiler/api/uxkit/uxcontrol/): enablement and
+  the realization seam.
+
+## Topics
+
+**The date** · [date](#date) · [setDate](#setdate) · [year](#year--month--day) · [month](#year--month--day) · [day](#year--month--day)
+**Stepping** · [stepDay](#stepday) · [stepMonth](#stepmonth) · [stepYear](#stepyear)
+**Calendar** · [daysInMonth](#daysinmonth)
+
+### date
+
+```c
+UXDate* date(void)
+```
+
+The held date, which the fields display.
+
+### setDate
+
+```c
+void setDate(UXDate* d)
+```
+
+Replaces the held date.
+
+### year / month / day
+
+```c
+i32 year(void)
+i32 month(void)
+i32 day(void)
+```
+
+The civil fields, read from the held date.
+
+### stepDay
+
+```c
+void stepDay(i32 delta)
+```
+
+Steps by whole days **through the day number**, so month and year
+rollovers are exact. Jan 31 + 1 is Feb 1, Dec 31 + 1 is next year's
+Jan 1, and negative deltas step backward correctly.
+
+### stepMonth
+
+```c
+void stepMonth(i32 delta)
+```
+
+Steps the month with year carry, **clamping** the day when the target
+month is shorter: Jan 31 + 1 month is Feb 28/29. Field steppers clamp
+instead of rolling because the user asked for "next month", not
+"31 days later".
+
+### stepYear
+
+```c
+void stepYear(i32 delta)
+```
+
+Steps the year, clamping Feb 29 to Feb 28 in a non-leap target.
+
+### daysInMonth
+
+```c
+static i32 daysInMonth(i32 y, i32 m)
+```
+
+The month's length in the given year, leap Februaries included. It is
+public so the tests can check the clamping against it.
+
+## Platform appearance
+
+<div class="ux-platforms">
+<Tabs>
+  <TabItem label="Web">
+    <img src="/uxkit/datepicker-web.png" alt="UXDatePicker on Web" width="220" />
+
+    App-drawn through the shared `drawRect` seam: the same rendering on every backend, captured here from this platform's own paint path.
+  </TabItem>
+  <TabItem label="iOS">
+    <img src="/uxkit/datepicker-ios.png" alt="UXDatePicker on iOS" width="220" />
+
+    App-drawn through the shared `drawRect` seam: the same rendering on every backend, captured here from this platform's own paint path.
+  </TabItem>
+  <TabItem label="Android">
+    <img src="/uxkit/datepicker-android.png" alt="UXDatePicker on Android" width="220" />
+
+    App-drawn through the shared `drawRect` seam: the same rendering on every backend, captured here from this platform's own paint path.
+  </TabItem>
+  <TabItem label="macOS">
+    <img src="/uxkit/datepicker-macos.png" alt="UXDatePicker on macOS" width="220" />
+
+    App-drawn through the shared `drawRect` seam: the same rendering on every backend, captured here from this platform's own paint path.
+  </TabItem>
+  <TabItem label="Windows">
+    <img src="/uxkit/datepicker-windows.png" alt="UXDatePicker on Windows" width="220" />
+
+    App-drawn through the shared `drawRect` seam: the same rendering on every backend, captured here from this platform's own paint path.
+  </TabItem>
+  <TabItem label="Linux">
+    <img src="/uxkit/datepicker-linux.png" alt="UXDatePicker on Linux" width="220" />
+
+    App-drawn through the shared `drawRect` seam: the same rendering on every backend, captured here from this platform's own paint path.
+  </TabItem>
+  <TabItem label="GEM">
+    <img src="/uxkit/datepicker-gem.png" alt="UXDatePicker on GEM" width="220" />
+
+    App-drawn through the shared `drawRect` seam: the same rendering on every backend, captured here from this platform's own paint path.
+  </TabItem>
+</Tabs>
+</div>
+
+## Example
+
+A deadline row, with field text from the formatter and steppers driving the
+picker:
+
+```c
+void refresh(void) {
+    UXDateFormatter* f = UXDateFormatter.withPattern((u8*)"yyyy-MM-dd");
+    label.setText(f.format(picker.date()));
+}
+void onDayUp(UXControl* c)   { picker.stepDay(1);   refresh(); }
+void onMonthUp(UXControl* c) { picker.stepMonth(1); refresh(); }
+```

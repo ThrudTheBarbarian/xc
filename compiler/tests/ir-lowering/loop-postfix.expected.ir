@@ -1,0 +1,30 @@
+module "loop-postfix" {
+  symbol sum_postfix: function () -> U16
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  function sum_postfix(%0: Mem) -> (U16, Mem) {
+    bb_entry:
+      preds: -
+      %1:U8 = Const #0:U8
+      %2:U16 = ZExt %1
+      %3:U8 = Const #0:U8
+      %4:U16 = ZExt %3
+      Branch bb_1_for_header
+    bb_1_for_header:
+      preds: bb_entry, bb_1_for_body
+      %5:U16 = Phi [(bb_entry, %4), (bb_1_for_body, %12)]
+      %6:U16 = Phi [(bb_entry, %2), (bb_1_for_body, %10)]
+      %7:U8 = Const #10:U8
+      %8:U16 = ZExt %7
+      %9:Bool = ICmp ULT, %5, %8
+      CondBranch %9, bb_1_for_body, bb_1_for_exit
+    bb_1_for_body:
+      preds: bb_1_for_header
+      %10:U16 = Add %6, %5
+      %11:U16 = Const #1:U16
+      %12:U16 = Add %5, %11
+      Branch bb_1_for_header
+    bb_1_for_exit:
+      preds: bb_1_for_header
+      Return %6, %0
+  }
+}

@@ -1,0 +1,11 @@
+---
+title: UXFileEntry
+description: "One listing entry of a UXFileChooser: a name and whether it's a directory."
+---
+
+`UXFileEntry` is one entry of a
+[`UXFileChooser`](/compiler/api/uxkit/uxfilechooser/)'s listing: a `name`
+and `isDir`. The backend builds them when it reads a directory
+(`UXFileEntry.make(name, isDir)`), and the chooser's filter and the panel's
+rows consume them. The chooser also uses the class to hold its allowed
+extensions, storing each extension as a name.

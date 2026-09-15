@@ -1,0 +1,200 @@
+---
+title: UXSegmentedControl
+description: "A row of selectable segments drawn as one connected control. Single-select by default, toggling in multi mode, and the tab picker for a tab view."
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+`UXSegmentedControl` lays equal-width segments across the control. A click
+selects one (single mode, the default) or toggles it (multi mode). It
+also serves as the tab picker for a
+[`UXTabView`](/compiler/api/uxkit/uxtabview/). Layout and hit-test are
+pure geometry, unit-tested without a window. Drawing and the click
+conversion go through the [`UXControl`](/compiler/api/uxkit/uxcontrol/) seam.
+Where the platform has native segment art (macOS `NSSegmentedControl`,
+iOS `UISegmentedControl`, GTK's linked toggle group) the driver realizes
+it. Elsewhere the control draws **one** connected bezel with hairline
+dividers, because a segmented control is a single control rather than a row of
+separate buttons.
+
+```c
+#use <UXKit>
+```
+
+## Overview
+
+```c
+UXSegmentedControl* span = new UXSegmentedControl();
+span.addSegment((u8*)"Day", 0);
+span.addSegment((u8*)"Week", 1);
+span.addSegment((u8*)"Month", 2);
+span.selectSegment(1);
+span.setAction(&controller.onSpan);
+content.addSubview(span, UXGeom.make(8, 8, 210, 24));
+```
+
+The action fires after a pick lands, and the handler reads the current state from
+the sender:
+
+```c
+void onSpan(UXControl* sender) {
+    i32 seg = ((UXSegmentedControl* ?)sender).selectedSegment();
+    ...
+}
+```
+
+## Conforms to
+
+- Inherits [`UXControl`](/compiler/api/uxkit/uxcontrol/): the `weak:`
+  callback action, enablement, the fire path.
+
+## Topics
+
+**Segments** · [addSegment](#addsegment) · [count](#count) · [labelAt](#labelat) · [tagAt](#tagat)
+**Selection** · [selectSegment](#selectsegment) · [selectedSegment](#selectedsegment) · [isSelected](#isselected) · [setMultiSelect](#setmultiselect)
+**Geometry** · [layout](#layout) · [segmentAtLocalX](#segmentatlocalx)
+
+### addSegment
+
+```c
+void addSegment(u8* label, i32 tag)
+```
+
+Appends a segment. The tag is yours: a stable id that survives reordering.
+
+### count
+
+```c
+i32 count(void)
+```
+
+How many segments the row holds.
+
+### labelAt
+
+```c
+u8* labelAt(i32 i)
+```
+
+The segment's label.
+
+### tagAt
+
+```c
+i32 tagAt(i32 i)
+```
+
+The segment's tag.
+
+### selectSegment
+
+```c
+void selectSegment(i32 i)
+```
+
+Takes an **index**, not a tag. Single mode selects it and clears the
+others; multi mode toggles it. Programmatic selection does not fire the
+action.
+
+### selectedSegment
+
+```c
+i32 selectedSegment(void)
+```
+
+The first selected index, or `-1` when none is selected. In multi mode, ask each
+segment with [`isSelected`](#isselected) instead.
+
+### isSelected
+
+```c
+bool isSelected(i32 i)
+```
+
+Whether the segment is on. This is the reader to use in multi mode.
+
+### setMultiSelect
+
+```c
+void setMultiSelect(bool on)
+```
+
+Switches to toggling. Set it before attach where it changes the native
+realization (Win32 chooses check-group vs check).
+
+### layout
+
+```c
+void layout(i16 width)
+```
+
+Distributes equal widths across the row (the last segment takes the
+remainder). This is pure geometry, and the tests call it without a window.
+
+### segmentAtLocalX
+
+```c
+i32 segmentAtLocalX(i16 lx)
+```
+
+The segment under a local x, or `-1` outside. This is the hit-test half of the
+same pure geometry.
+
+## Platform appearance
+
+<div class="ux-platforms">
+<Tabs>
+  <TabItem label="Web">
+    <img src="/uxkit/segmented-web.png" alt="UXSegmentedControl on the web backend" width="220" />
+
+    One connected bezel with hairline dividers, the pick filled with the selection colour. The app-drawn treatment, on canvas.
+  </TabItem>
+  <TabItem label="iOS">
+    <img src="/uxkit/segmented-ios.png" alt="UXSegmentedControl on iOS" width="220" />
+
+    A real `UISegmentedControl` with the platform's own segment art. Picks land through `applyNativeSelection`.
+  </TabItem>
+  <TabItem label="Android">
+    <img src="/uxkit/segmented-android.png" alt="UXSegmentedControl on Android" width="220" />
+
+    App-drawn. Android's material segment idiom is a library widget, not a platform one, so the connected-bezel treatment draws through the same seam as GEM's.
+  </TabItem>
+  <TabItem label="macOS">
+    <img src="/uxkit/segmented-macos.png" alt="Segmentedcontrol on macOS" width="220" />
+
+    A real <code>NSSegmentedControl</code>.
+  </TabItem>
+  <TabItem label="Windows">
+    <img src="/uxkit/segmented-windows.png" alt="Segmentedcontrol on Windows" width="220" />
+
+    A check-group of <code>BUTTON</code>s, the platform's segment idiom.
+  </TabItem>
+  <TabItem label="Linux">
+    <img src="/uxkit/segmented-linux.png" alt="UXSegmentedControl on Linux (GTK)" width="220" />
+
+    Linked `GtkToggleButton`s sharing one group, the GTK idiom. The theme fuses them into a single control.
+  </TabItem>
+  <TabItem label="GEM">
+    <img src="/uxkit/segmented-gem.png" alt="Segmentedcontrol on GEM" width="220" />
+
+    The same connected bezel and dividers, drawn by the same drawRect.
+  </TabItem>
+</Tabs>
+</div>
+
+## Example
+
+A view-mode picker driving a tab view:
+
+```c
+UXSegmentedControl* mode = new UXSegmentedControl();
+mode.addSegment((u8*)"List", 0);
+mode.addSegment((u8*)"Icons", 1);
+mode.selectSegment(0);
+mode.setAction(&controller.onMode);
+content.addSubview(mode, UXGeom.make(8, 8, 160, 24));
+
+void onMode(UXControl* sender) {
+    tabs.selectTab(((UXSegmentedControl* ?)sender).selectedSegment());
+}
+```

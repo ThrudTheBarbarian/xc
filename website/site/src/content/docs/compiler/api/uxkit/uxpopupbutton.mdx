@@ -1,0 +1,181 @@
+---
+title: UXPopUpButton
+description: "A drop-down selection button: one visible choice from a list, with the backend running the popup. The space-efficient single choice for a form."
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+`UXPopUpButton` shows one selected item from a list. Clicking pops a menu of the
+items, and choosing one selects it. The item list and the selection (by index,
+tag, or title) are the pure, testable model. Drawing the closed button and
+*running the menu* are the backend's job. Where the popup is native (macOS
+`NSPopUpButton`, Win32 `COMBOBOX`, iOS `UIButton`+`UIMenu`, Android `Spinner`,
+GTK `GtkDropDown`), the OS drops the list and reports the pick back. On GEM the
+driver runs a menu at the button's bottom-left.
+
+```c
+#use <UXKit>
+```
+
+## Overview
+
+```c
+UXPopUpButton* align = new UXPopUpButton();
+align.addItem((u8*)"Left", 0);
+align.addItem((u8*)"Centre", 1);
+align.addItem((u8*)"Right", 2);
+align.setAction(&controller.onAlign);
+content.addSubview(align, UXGeom.make(8, 8, 120, 24));
+```
+
+The first item added becomes the default selection. The action fires after a
+pick lands, so the handler reads the current value from the sender:
+
+```c
+void onAlign(UXControl* sender) {
+    i32 tag = ((UXPopUpButton* ?)sender).selectedTag();
+    ...
+}
+```
+
+## Conforms to
+
+- Inherits [`UXControl`](/compiler/api/uxkit/uxcontrol/): the `weak:`
+  callback action, enablement, the fire path.
+
+## Topics
+
+**Items** · [addItem](#additem) · [removeAllItems](#removeallitems) · [count](#count)
+**Selection** · [selectItem](#selectitem) · [selectByTag](#selectbytag) · [selectByTitle](#selectbytitle) · [selectedIndex](#selectedindex) · [selectedTitle](#selectedtitle) · [selectedTag](#selectedtag)
+
+### addItem
+
+```c
+void addItem(u8* title, i32 tag)
+```
+
+Appends an item. The tag is yours: a stable id that survives reordering, so
+handlers use [`selectedTag`](#selectedtag) instead of the index. The first item
+added becomes the selection.
+
+### removeAllItems
+
+```c
+void removeAllItems(void)
+```
+
+Empties the list and clears the selection.
+
+### count
+
+```c
+i32 count(void)
+```
+
+How many items the list holds.
+
+### selectItem
+
+```c
+void selectItem(i32 i)
+```
+
+Selects by index (out-of-range picks are ignored). Programmatic selection
+does **not** fire the action.
+
+### selectByTag
+
+```c
+void selectByTag(i32 tag)
+```
+
+Selects the first item carrying the tag.
+
+### selectByTitle
+
+```c
+void selectByTitle(u8* title)
+```
+
+Selects the first item whose title matches.
+
+### selectedIndex
+
+```c
+i32 selectedIndex(void)
+```
+
+The current pick, `-1` when the list is empty.
+
+### selectedTitle
+
+```c
+u8* selectedTitle(void)
+```
+
+The current pick's title, `""` when there is none.
+
+### selectedTag
+
+```c
+i32 selectedTag(void)
+```
+
+The current pick's tag, `-1` when there is none. This is the id a handler
+usually wants.
+
+## Platform appearance
+
+<div class="ux-platforms">
+<Tabs>
+  <TabItem label="Web">
+    <img src="/uxkit/popup-web.png" alt="UXPopUpButton on the web backend" width="220" />
+
+    The theme's popup bezel with its disclosure chevron: the same Aristo art GEM draws, on canvas.
+  </TabItem>
+  <TabItem label="iOS">
+    <img src="/uxkit/popup-ios.png" alt="UXPopUpButton on iOS" width="220" />
+
+    A real `UIButton` carrying a `UIMenu`, the platform's pull-down idiom. The pick lands through `applyNativeSelection`.
+  </TabItem>
+  <TabItem label="Android">
+    <img src="/uxkit/popup-android.png" alt="UXPopUpButton on Android" width="220" />
+
+    A real `Spinner` over an `ArrayAdapter`. Its selection listener attaches after the initial pick, so only user choices report.
+  </TabItem>
+  <TabItem label="macOS">
+    <img src="/uxkit/popup-macos.png" alt="Popupbutton on macOS" width="220" />
+
+    A real <code>NSPopUpButton</code>.
+  </TabItem>
+  <TabItem label="Windows">
+    <img src="/uxkit/popup-windows.png" alt="Popupbutton on Windows" width="220" />
+
+    A real <code>COMBOBOX</code> (drop-list style).
+  </TabItem>
+  <TabItem label="Linux">
+    <img src="/uxkit/popup-linux.png" alt="UXPopUpButton on Linux (GTK)" width="220" />
+
+    A real `GtkDropDown` over a string list, its `selected` property feeding the peer.
+  </TabItem>
+  <TabItem label="GEM">
+    <img src="/uxkit/popup-gem.png" alt="Popupbutton on GEM" width="220" />
+
+    The themed bezel; the driver runs the menu at the button's bottom-left.
+  </TabItem>
+</Tabs>
+</div>
+
+## Example
+
+A units picker whose tag is the conversion factor id:
+
+```c
+UXPopUpButton* units = new UXPopUpButton();
+units.addItem((u8*)"Pixels", 0);
+units.addItem((u8*)"Millimetres", 1);
+units.addItem((u8*)"Inches", 2);
+units.selectByTag(savedUnit);
+units.setAction(&controller.onUnits);
+content.addSubview(units, UXGeom.make(8, 8, 140, 24));
+```

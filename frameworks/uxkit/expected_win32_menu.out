@@ -1,0 +1,5 @@
+menu installed: yes
+action: Open
+action: Cut
+last-fired=4
+PASS: WM_COMMAND -> neutral MenuSelect -> bound method

@@ -1,0 +1,5 @@
+local v=7
+temp  v=8
+end
+dealloc 8
+dealloc 7

@@ -1,0 +1,21 @@
+; Invariant 8 (IR-SPEC §12.8, §5): Every Sym(SymbolId) referenced
+; by an instruction must point to a live symbol-table entry of the
+; right kind. No string-only references, no dangling ids.
+; This fixture: a Call references @callee, which is declared in
+; the same module's symbol table as a function. The verifier
+; resolves the reference and accepts.
+
+module "inv-08-positive" {
+  symbol callee: function (U8) -> U8
+    attributes: { cloaked: false, banked: false, variadic: false }
+
+  symbol caller: function (U8) -> U8
+    attributes: { cloaked: false, banked: false, variadic: false }
+
+  function caller(%x: U8, %m0: Mem) -> (U8, Mem) {
+    bb_entry:
+      preds: -
+      %r:U8, %m1 = Call @callee, [%x], CallConv::Standard, %m0
+      Return %r, %m1
+  }
+}

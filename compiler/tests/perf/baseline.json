@@ -1,0 +1,116 @@
+{
+  "accum": {
+    "arm64": {
+      "static": 79
+    },
+    "arm9": {
+      "static": 171
+    },
+    "checksum": "732000",
+    "m68k": {
+      "dynamic": 281584,
+      "static": 124
+    },
+    "x86_64": {
+      "static": 124
+    },
+    "xt6502": {
+      "dynamic": 1607488
+    }
+  },
+  "dot": {
+    "arm64": {
+      "static": 271
+    },
+    "arm9": {
+      "static": 634
+    },
+    "checksum": "29948800",
+    "m68k": {
+      "dynamic": 4482,
+      "static": 195
+    },
+    "x86_64": {
+      "static": 477
+    },
+    "xt6502": {
+      "dynamic": 48756
+    }
+  },
+  "fib": {
+    "arm64": {
+      "static": 334
+    },
+    "arm9": {
+      "static": 168
+    },
+    "checksum": "330",
+    "m68k": {
+      "dynamic": 1869155,
+      "static": 129
+    },
+    "x86_64": {
+      "static": 122
+    },
+    "xt6502": {
+      "dynamic": 7770146
+    }
+  },
+  "fill": {
+    "arm64": {
+      "static": 154
+    },
+    "arm9": {
+      "static": 397
+    },
+    "checksum": "2800",
+    "m68k": {
+      "dynamic": 835861,
+      "static": 152
+    },
+    "x86_64": {
+      "static": 283
+    },
+    "xt6502": {
+      "dynamic": 5185944
+    }
+  },
+  "map": {
+    "arm64": {
+      "static": 263
+    },
+    "arm9": {
+      "static": 585
+    },
+    "checksum": "12275200",
+    "m68k": {
+      "dynamic": 6301,
+      "static": 219
+    },
+    "x86_64": {
+      "static": 509
+    },
+    "xt6502": {
+      "dynamic": 57090
+    }
+  },
+  "reduce": {
+    "arm64": {
+      "static": 217
+    },
+    "arm9": {
+      "static": 529
+    },
+    "checksum": "5721600",
+    "m68k": {
+      "dynamic": 4230,
+      "static": 166
+    },
+    "x86_64": {
+      "static": 364
+    },
+    "xt6502": {
+      "dynamic": 40243
+    }
+  }
+}

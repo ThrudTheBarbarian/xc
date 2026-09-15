@@ -1,0 +1,30 @@
+; Invariant 4 (IR-SPEC §12.4, §6.10): Phi operand count and order
+; match the block's predecessor list. Each phi has exactly
+; |preds(block)| pairs.
+; VIOLATION: bb_join has two predecessors (bb_yes, bb_no) but the
+; phi only declares one (bb_yes, %a). The operand from the bb_no
+; edge is missing.
+
+module "inv-04-negative" {
+  symbol short_phi: function (Bool, U16, U16) -> U16
+    attributes: { cloaked: false, banked: false, variadic: false }
+
+  function short_phi(%c: Bool, %a: U16, %b: U16, %m0: Mem) -> (U16, Mem) {
+    bb_entry:
+      preds: -
+      CondBranch %c, bb_yes, bb_no
+
+    bb_yes:
+      preds: bb_entry
+      Branch bb_join
+
+    bb_no:
+      preds: bb_entry
+      Branch bb_join
+
+    bb_join:
+      preds: bb_yes, bb_no
+      %r:U16 = Phi [(bb_yes, %a)]      ; ERROR: 1 phi pair vs 2 preds
+      Return %r, %m0
+  }
+}

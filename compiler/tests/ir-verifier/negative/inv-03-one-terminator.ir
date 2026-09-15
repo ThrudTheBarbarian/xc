@@ -1,0 +1,22 @@
+; Invariant 3 (IR-SPEC §12.3): One terminator per block, at the
+; end. No instruction follows a terminator.
+; VIOLATION: bb_entry contains Branch (a terminator) followed by an
+; Add. The Add is dead code that the verifier must reject — even
+; if syntactically representable, it confuses successor analysis
+; (which terminator does the block actually end with?).
+
+module "inv-03-negative" {
+  symbol stray_after_term: function (U8, U8) -> U8
+    attributes: { cloaked: false, banked: false, variadic: false }
+
+  function stray_after_term(%a: U8, %b: U8, %m0: Mem) -> (U8, Mem) {
+    bb_entry:
+      preds: -
+      Branch bb_next            ; terminator
+      %x:U8 = Add %a, %b        ; ERROR: instruction after the terminator
+
+    bb_next:
+      preds: bb_entry
+      Return %a, %m0
+  }
+}

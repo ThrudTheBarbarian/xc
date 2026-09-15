@@ -1,0 +1,28 @@
+module "loop" {
+  symbol sum_to: function (U8) -> U16
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  function sum_to(%0: U8, %1: Mem) -> (U16, Mem) {
+    bb_entry:
+      preds: -
+      %2:U8 = Const #0:U8
+      %3:U16 = ZExt %2
+      %4:U8 = Const #0:U8
+      Branch bb_1_header
+    bb_1_header:
+      preds: bb_entry, bb_1_body
+      %5:U16 = Phi [(bb_entry, %3), (bb_1_body, %9)]
+      %6:U8 = Phi [(bb_entry, %4), (bb_1_body, %11)]
+      %7:Bool = ICmp ULT, %6, %0
+      CondBranch %7, bb_1_body, bb_1_exit
+    bb_1_body:
+      preds: bb_1_header
+      %8:U16 = ZExt %6
+      %9:U16 = Add %5, %8
+      %10:U8 = Const #1:U8
+      %11:U8 = Add %6, %10
+      Branch bb_1_header
+    bb_1_exit:
+      preds: bb_1_header
+      Return %5, %1
+  }
+}

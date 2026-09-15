@@ -1,0 +1,20 @@
+  body
+  B
+  A
+  defer-in-early
+  got 10
+  defer-in-early
+  got 20
+  d0
+  d1
+  body0
+  c0
+  c1
+  body2
+  c2
+  in-block
+  inner
+  defer sees id=7
+dealloc 7
+end
+  outer-at-exit

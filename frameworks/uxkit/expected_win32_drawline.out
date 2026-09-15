@@ -1,0 +1,5 @@
+top y10: L=1 M=1 R=1
+top y11: L=1 M=1 R=1
+interior: TL=0 TR=0
+verticals: left=1 right=1
+done

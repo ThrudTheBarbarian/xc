@@ -1,0 +1,29 @@
+module "for-c" {
+  symbol sum10: function () -> U16
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  function sum10(%0: Mem) -> (U16, Mem) {
+    bb_entry:
+      preds: -
+      %1:U8 = Const #0:U8
+      %2:U16 = ZExt %1
+      %3:U8 = Const #0:U8
+      Branch bb_1_for_header
+    bb_1_for_header:
+      preds: bb_entry, bb_1_for_body
+      %4:U8 = Phi [(bb_entry, %3), (bb_1_for_body, %11)]
+      %5:U16 = Phi [(bb_entry, %2), (bb_1_for_body, %9)]
+      %6:U8 = Const #10:U8
+      %7:Bool = ICmp ULT, %4, %6
+      CondBranch %7, bb_1_for_body, bb_1_for_exit
+    bb_1_for_body:
+      preds: bb_1_for_header
+      %8:U16 = ZExt %4
+      %9:U16 = Add %5, %8
+      %10:U8 = Const #1:U8
+      %11:U8 = Add %4, %10
+      Branch bb_1_for_header
+    bb_1_for_exit:
+      preds: bb_1_for_header
+      Return %5, %0
+  }
+}

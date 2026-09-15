@@ -1,0 +1,28 @@
+; Invariant 10 (IR-SPEC §12.10): Every non-entry block is reachable
+; from the entry block via the CFG defined by terminators.
+; This fixture: bb_entry conditionally branches to bb_true or
+; bb_false; both reconverge at bb_join. All three non-entry blocks
+; have a predecessor edge from bb_entry or its successors.
+
+module "inv-10-positive" {
+  symbol clamp: function (Bool, U8) -> U8
+    attributes: { cloaked: false, banked: false, variadic: false }
+
+  function clamp(%c: Bool, %x: U8, %m0: Mem) -> (U8, Mem) {
+    bb_entry:
+      preds: -
+      CondBranch %c, bb_true, bb_false
+
+    bb_true:
+      preds: bb_entry
+      Branch bb_join
+
+    bb_false:
+      preds: bb_entry
+      Branch bb_join
+
+    bb_join:
+      preds: bb_true, bb_false
+      Return %x, %m0
+  }
+}

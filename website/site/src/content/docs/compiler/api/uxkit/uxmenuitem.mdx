@@ -1,0 +1,42 @@
+---
+title: UXMenuItem
+description: "One entry of a UXMenu: title, enabled/checked state, and the weak bound-method action a selection fires."
+---
+
+`UXMenuItem` is one entry of a [`UXMenu`](/compiler/api/uxkit/uxmenu/):
+the `title`, the `enabled` and `checked` state, `isSeparator`, and the
+`callback` action a selection fires (auto-zeroing). `addItem` makes them.
+Change live state through the bar's `setChecked` / `setEnabled` so the
+platform menu stays in step; the fields only describe the state at install
+time.
+
+## Topics
+
+### setAction
+
+```c
+void setAction(callback a void(UXMenuItem* sender))
+```
+
+The callback a selection fires. A callback never owns its
+controller. The handler receives the item, so one method can serve
+several entries.
+
+### fire
+
+```c
+void fire(void)
+```
+
+Calls the action if one is set. The bar's selection decoder calls this;
+app code rarely does.
+
+### encoded
+
+```c
+u8* encoded(void)
+```
+
+The GEM wire form: `"-"` for a separator, a marker byte for pre-ticked or
+greyed items, the plain title otherwise. Driver plumbing, public for the
+GEM realization.

@@ -1,0 +1,7 @@
+for       0 1 2 3 4 
+while     5 4 3 2 1 
+for-in    0 1 4 9 16 
+inferred  0 1 4 9 16 
+evens<=6  0 2 4 6 
+nested    00 01 10 11 20 21 
+unrolled  0 1 2 3 

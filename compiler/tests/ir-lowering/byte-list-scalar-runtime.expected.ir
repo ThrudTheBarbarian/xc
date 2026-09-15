@@ -1,0 +1,84 @@
+module "byte-list-scalar-runtime" {
+  symbol mk16: function (U8, U8) -> U16
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  symbol mkf: function (U8, U8, U8) -> F32
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  symbol mkd: function (U8, U8, U8, U8, U8, U8) -> F64
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  function mk16(%0: U8, %1: U8, %2: Mem) -> (U16, Mem) {
+    frame: { pinned: [(%3:U16 @0)], size: 2 }
+    bb_entry:
+      preds: -
+      %4:Ptr(U8, unbanked) = AddrOf %3
+      %5:U16 = Const #0:U16
+      %6:Ptr(U8, unbanked) = ElementAddr %4, %5
+      %7 = Store %6, %0, %2
+      %8:U16 = Const #1:U16
+      %9:Ptr(U8, unbanked) = ElementAddr %4, %8
+      %10 = Store %9, %1, %7
+      %11:Ptr(U16, unbanked) = AddrOf %3
+      %12:U16, %13 = Load %11, %10
+      Return %12, %13
+  }
+  function mkf(%0: U8, %1: U8, %2: U8, %3: Mem) -> (F32, Mem) {
+    frame: { pinned: [(%4:F32 @0)], size: 4 }
+    bb_entry:
+      preds: -
+      %5:Ptr(U8, unbanked) = AddrOf %4
+      %6:U16 = Const #0:U16
+      %7:Ptr(U8, unbanked) = ElementAddr %5, %6
+      %8:U8 = Const #0:U8
+      %9 = Store %7, %8, %3
+      %10:U16 = Const #1:U16
+      %11:Ptr(U8, unbanked) = ElementAddr %5, %10
+      %12:U8 = Const #1:U8
+      %13 = Store %11, %12, %9
+      %14:U16 = Const #2:U16
+      %15:Ptr(U8, unbanked) = ElementAddr %5, %14
+      %16 = Store %15, %0, %13
+      %17:U16 = Const #3:U16
+      %18:Ptr(U8, unbanked) = ElementAddr %5, %17
+      %19 = Store %18, %1, %16
+      %20:U16 = Const #4:U16
+      %21:Ptr(U8, unbanked) = ElementAddr %5, %20
+      %22 = Store %21, %2, %19
+      %23:Ptr(F32, unbanked) = AddrOf %4
+      %24:F32, %25 = Load %23, %22
+      Return %24, %25
+  }
+  function mkd(%0: U8, %1: U8, %2: U8, %3: U8, %4: U8, %5: U8, %6: Mem) -> (F64, Mem) {
+    frame: { pinned: [(%7:F64 @0)], size: 8 }
+    bb_entry:
+      preds: -
+      %8:Ptr(U8, unbanked) = AddrOf %7
+      %9:U16 = Const #0:U16
+      %10:Ptr(U8, unbanked) = ElementAddr %8, %9
+      %11:U8 = Const #0:U8
+      %12 = Store %10, %11, %6
+      %13:U16 = Const #1:U16
+      %14:Ptr(U8, unbanked) = ElementAddr %8, %13
+      %15:U8 = Const #255:U8
+      %16 = Store %14, %15, %12
+      %17:U16 = Const #2:U16
+      %18:Ptr(U8, unbanked) = ElementAddr %8, %17
+      %19 = Store %18, %0, %16
+      %20:U16 = Const #3:U16
+      %21:Ptr(U8, unbanked) = ElementAddr %8, %20
+      %22 = Store %21, %1, %19
+      %23:U16 = Const #4:U16
+      %24:Ptr(U8, unbanked) = ElementAddr %8, %23
+      %25 = Store %24, %2, %22
+      %26:U16 = Const #5:U16
+      %27:Ptr(U8, unbanked) = ElementAddr %8, %26
+      %28 = Store %27, %3, %25
+      %29:U16 = Const #6:U16
+      %30:Ptr(U8, unbanked) = ElementAddr %8, %29
+      %31 = Store %30, %4, %28
+      %32:U16 = Const #7:U16
+      %33:Ptr(U8, unbanked) = ElementAddr %8, %32
+      %34 = Store %33, %5, %31
+      %35:Ptr(F64, unbanked) = AddrOf %7
+      %36:F64, %37 = Load %35, %34
+      Return %36, %37
+  }
+}

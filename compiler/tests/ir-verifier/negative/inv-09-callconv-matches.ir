@@ -1,0 +1,26 @@
+; Invariant 9 (IR-SPEC §12.9, §6.9): The CallConv-tagged opcode at
+; a call site must match the callee's symbol-table attributes. A
+; CallCloaked of a function whose attributes declare cloaked: false
+; is structurally inconsistent.
+; VIOLATION: the callee @plain has attributes cloaked: false but
+; the call site uses CallCloaked (with CallConv::Cloaked). The
+; verifier rejects the opcode/symbol mismatch — pattern-matching
+; passes must be able to trust the opcode shape.
+
+module "inv-09-negative" {
+  symbol plain: function (U8, U16, U8) -> U16
+    attributes: { cloaked: false, banked: false, variadic: false }
+
+  symbol caller: function (U8) -> U16
+    attributes: { cloaked: false, banked: false, variadic: false }
+
+  function caller(%x: U8, %m0: Mem) -> (U16, Mem) {
+    bb_entry:
+      preds: -
+      %hundred:U16 = Const #100:U16
+      %five:U8     = Const #5:U8
+      %r:U16, %m1  = CallCloaked @plain, [%x, %hundred, %five],   ; ERROR: @plain is not cloaked
+                       CallConv::Cloaked, %m0
+      Return %r, %m1
+  }
+}

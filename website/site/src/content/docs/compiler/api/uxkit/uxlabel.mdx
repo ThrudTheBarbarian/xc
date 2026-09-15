@@ -1,0 +1,93 @@
+---
+title: UXLabel
+description: "A static text label with no behaviour, realized natively wherever the platform has a text widget."
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+`UXLabel` is a static text label with no behaviour. Its `kind` is Label,
+which every driver with a native text widget realizes as one (GEM's
+`G_STRING`, a `UILabel`, a `TextView`, a `GtkLabel`, the Win32 Label
+branch), so the toolkit does no drawing. `setText` works before *or* after
+attach; the realized node's spec follows the title.
+
+```c
+#use <UXKit>
+```
+
+## Overview
+
+```c
+UXLabel* caption = new UXLabel();
+caption.setText((u8*)"Destination:");
+content.addSubview(caption, UXGeom.make(8, 12, 100, 16));
+```
+
+## Conforms to
+
+- Inherits [`UXControl`](/compiler/api/uxkit/uxcontrol/): geometry and the
+  realization seam. A label has no action.
+
+## Topics
+
+**Text** · [text](#text) · [setText](#settext)
+
+### text
+
+```c
+u8* text(void)
+```
+
+The label's text.
+
+### setText
+
+```c
+void setText(u8* s)
+```
+
+Replaces the text. If the label is already realized, the node's spec is
+updated and the label is marked dirty. Before attach, the title is carried
+into realization.
+
+## Platform appearance
+
+<div class="ux-platforms">
+<Tabs>
+  <TabItem label="Web">
+    <img src="/uxkit/label-web.png" alt="UXLabel on the web backend" width="220" />
+
+    Text through the shared measurement seam, on canvas.
+  </TabItem>
+  <TabItem label="iOS">
+    <img src="/uxkit/label-ios.png" alt="UXLabel on iOS" width="220" />
+
+    A real `UILabel`.
+  </TabItem>
+  <TabItem label="Android">
+    <img src="/uxkit/label-android.png" alt="UXLabel on Android" width="220" />
+
+    A real `TextView`.
+  </TabItem>
+  <TabItem label="macOS">
+    <img src="/uxkit/label-macos.png" alt="Label on macOS" width="220" />
+
+    A real non-editable <code>NSTextField</code>.
+  </TabItem>
+  <TabItem label="Windows">
+    <img src="/uxkit/label-windows.png" alt="Label on Windows" width="220" />
+
+    Painted by the driver's Label branch over GDI.
+  </TabItem>
+  <TabItem label="Linux">
+    <img src="/uxkit/label-linux.png" alt="UXLabel on Linux (GTK)" width="220" />
+
+    A real `GtkLabel`, left-aligned.
+  </TabItem>
+  <TabItem label="GEM">
+    <img src="/uxkit/label-gem.png" alt="Label on GEM" width="220" />
+
+    A native <code>G_STRING</code>, drawn by the AES.
+  </TabItem>
+</Tabs>
+</div>

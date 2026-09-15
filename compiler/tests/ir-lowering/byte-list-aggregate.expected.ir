@@ -1,0 +1,52 @@
+module "byte-list-aggregate" {
+  layout 0: size=3 align=1 fields=[(0:U8), (1:U8), (2:U8)]
+  layout 1: size=4 align=1 fields=[(0:U16), (2:U16)]
+  symbol run: function () -> U16
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  function run(%0: Mem) -> (U16, Mem) {
+    frame: { pinned: [(%1:Agg(0) @0 esc), (%2:Agg(1) @3)], size: 7 }
+    bb_entry:
+      preds: -
+      %3:U8 = Const #7:U8
+      %4:Ptr(Agg(0), unbanked) = AddrOf %1
+      %5:Ptr(U8, unbanked) = Bitcast %4
+      %6:U16 = Const #0:U16
+      %7:Ptr(U8, unbanked) = ElementAddr %5, %6
+      %8 = Store %7, %3, %0
+      %9:U16 = Const #1:U16
+      %10:Ptr(U8, unbanked) = ElementAddr %5, %9
+      %11:U8 = Const #20:U8
+      %12 = Store %10, %11, %8
+      %13:U16 = Const #2:U16
+      %14:Ptr(U8, unbanked) = ElementAddr %5, %13
+      %15:U8 = Const #30:U8
+      %16 = Store %14, %15, %12
+      %17:Ptr(Agg(1), unbanked) = AddrOf %2
+      %18:Ptr(U16, unbanked) = FieldAddr %17, #0:U8
+      %19:U8 = Const #100:U8
+      %20:U16 = ZExt %19
+      %21 = Store %18, %20, %16
+      %22:Ptr(U16, unbanked) = FieldAddr %17, #1:U8
+      %23:U8 = Const #200:U8
+      %24:U16 = ZExt %23
+      %25 = Store %22, %24, %21
+      %26:Ptr(U8, unbanked) = AddrOf %1
+      %27:U8 = Const #0:U8
+      %28:U16 = ZExt %27
+      %29:Ptr(U8, unbanked) = ElementAddr %26, %28
+      %30:U8, %31 = Load %29, %25
+      %32:U16 = ZExt %30
+      %33:Ptr(U8, unbanked) = AddrOf %1
+      %34:U8 = Const #2:U8
+      %35:U16 = ZExt %34
+      %36:Ptr(U8, unbanked) = ElementAddr %33, %35
+      %37:U8, %38 = Load %36, %31
+      %39:U16 = ZExt %37
+      %40:U16 = Add %32, %39
+      %41:Ptr(Agg(1), unbanked) = AddrOf %2
+      %42:Ptr(U16, unbanked) = FieldAddr %41, #1:U8
+      %43:U16, %44 = Load %42, %38
+      %45:U16 = Add %40, %43
+      Return %45, %44
+  }
+}

@@ -1,0 +1,234 @@
+---
+title: UXButton
+description: "A push button: a title, a callback action, native art on every platform."
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+`UXButton` is the toolkit's push button. You give it a **title** and an
+**action** (a `callback` bound to your controller), and the platform provides
+the rest: GEM's AES themes it, Win32 realizes a `BUTTON` child window, macOS
+overlays a real `NSButton`, iOS a real `UIButton`, and the web backend draws the
+toolkit's neutral art on canvas. You write no drawing code and no platform code.
+
+```c
+#use <UXKit>
+```
+
+## Overview
+
+A button is the smallest complete example of the toolkit's control model:
+
+```c
+UXButton* b = new UXButton();
+b.setTitle((u8*)"Apply");
+b.setAction(&controller.onApply);        // a method, bound to its receiver
+content.addSubview(b, UXGeom.make(8, 50, 56, 18));
+```
+
+(Number literals bind to the parameter's type, so `UXGeom.make(8, 50, 56, 18)`
+needs no casts. Explicit `(i16)` casts that appear in some toolkit sources are
+not required.)
+
+The action is a **callback** (`callback void(UXControl* sender)`).
+`&controller.onApply` carries both the receiver and the code, so there is no
+selector, no downcast, and no separate target field. A callback never owns its
+receiver, which has two consequences:
+
+1. **No retain cycle.** `window → tree → button → action → controller → window`
+   would cycle if the action were strong. The callback's weakness breaks the
+   cycle (AppKit needs a separate weak `target` for the same job).
+2. **A dead controller is a silent no-op.** The truth test `if (action)` is
+   false both when no action is set and when the receiver has been deallocated.
+   A fired button whose controller died does nothing, instead of dispatching
+   into a stale object.
+
+**How a press becomes your method.** On backends where the button is a real
+native control (Win32, macOS, iOS), the OS notifies the driver (`BN_CLICKED`,
+an `NSButton` action, a `UIButton` target-action), and the driver fires the
+neutral widget directly by handle and node (*fire-by-peer*). Your `onApply` runs
+without a synthetic click or hit-test. On GEM and the web, the press arrives as
+an ordinary event, routes through the shared tree hit-test to
+[`mouseDown`](#mousedown), and fires the same way. Both paths end at
+`action(self)`.
+
+A disabled button ([`setEnabled`](/compiler/api/uxkit/uxview/) on the view
+surface) consumes nothing and fires nothing.
+
+## Conforms to
+
+- Inherits [`UXControl`](/compiler/api/uxkit/uxcontrol/): the title/action
+  surface and the fire path.
+- Through it, [`UXView`](/compiler/api/uxkit/uxview/): frame, hierarchy,
+  hide/enable, the responder chain.
+
+## Topics
+
+**Configuring** · [setTitle](#settitle) · [setAction](#setaction)
+**Realization** · [kind](#kind) · [attachTo](#attachto)
+**Events** · [mouseDown](#mousedown) · [fire](#fire)
+
+### setTitle
+
+```c
+void setTitle(u8* s)
+```
+
+The label the platform renders. The string is borrowed, not copied. Keep it
+alive for the button's lifetime (a literal, the common case, is always fine).
+
+### setAction
+
+```c
+void setAction(callback a void(UXControl* sender))
+```
+
+The callback to fire: `b.setAction(&controller.onApply)`, where the method has
+the matching shape `void onApply(UXControl* sender)`. The receiver is never
+owned and auto-zeroes when it dies. The overview explains why no other
+ownership handling is needed.
+
+:::note[Blocks are a different kind]
+A [block](/compiler/language/blocks/) is **not** a callback, and cannot be
+stored in `action`:
+
+```c
+b.setAction(block void(UXControl* sender) { count = count + 1; });  // refused
+```
+
+This is a settled design decision. The two kinds have opposite ownership: a
+block **owns** its captures, and a callback **never** owns its receiver. Both
+exist because of that difference. Storing a block where the receiver must not be
+owned would reintroduce the retain cycle the action field is shaped to avoid.
+The compiler refuses the conversion in both directions and names the reason.
+Pass a callback: `&controller.onApply`.
+:::
+
+### kind
+
+```c
+UXKind kind(void)
+```
+
+Answers `UXKindButton`, the neutral kind [`realizeTree`](/compiler/api/uxkit/uxviewdriver/)
+maps to the platform's native button.
+
+### attachTo
+
+```c
+void attachTo(UXViewTree* t, UXRect frame)
+```
+
+Realizes the button into the tree at `frame` and stores the widget as the
+node's **peer**. The peer lets a native backend fire it by handle+node with no
+hit-test.
+
+### mouseDown
+
+```c
+void mouseDown(UXEvent* e)
+```
+
+The neutral press path (GEM, web, and every headless test). It consumes the
+click (a control never passes its click up the chain) and calls
+[`fire`](#fire) if enabled.
+
+### fire
+
+```c
+void fire(void)
+```
+
+Runs the action with the button as sender. The call is `false`-guarded, so an
+unset action and a deallocated receiver are both quiet no-ops.
+
+## Platform appearance
+
+<div class="ux-platforms">
+<Tabs>
+  <TabItem label="Web">
+    <img src="/uxkit/button-web.png" alt="UXButton on the web backend" width="220" />
+
+    The Aristo theme's 9-sliced button face from the GEM atlas, title centred by real measurement. This is the artwork GEM draws, on canvas.
+  </TabItem>
+  <TabItem label="iOS">
+    <img src="/uxkit/button-ios.png" alt="UXButton on iOS" width="220" />
+
+    A real `UIButton` (filled configuration), captured from the simulator's own render.
+  </TabItem>
+  <TabItem label="Android">
+    <img src="/uxkit/button-android.png" alt="UXButton on Android" width="220" />
+
+    A real `android.widget.Button`, realized over JNI and fired through the platform's own `OnClickListener` (the committed bridge dex). Captured from the emulator's own render.
+  </TabItem>
+  <TabItem label="macOS">
+    <img src="/uxkit/button-macos.png" alt="Button on macOS" width="220" />
+
+    A real <code>NSButton</code> overlay.
+  </TabItem>
+  <TabItem label="Windows">
+    <img src="/uxkit/button-windows.png" alt="Button on Windows" width="220" />
+
+    A real <code>BUTTON</code> child window with the system look.
+  </TabItem>
+  <TabItem label="Linux">
+    <img src="/uxkit/button-linux.png" alt="UXButton on Linux (GTK)" width="220" />
+
+    A real `GtkButton`, fired through its own `clicked` signal. GTK draws its own widgets, so this capture is the Linux look wherever GTK4 runs.
+  </TabItem>
+  <TabItem label="GEM">
+    <img src="/uxkit/button-gem.png" alt="Button on GEM" width="220" />
+
+    The AES's themed <code>G_BUTTON</code>. The toolkit writes no pixels.
+  </TabItem>
+</Tabs>
+</div>
+
+All captures are produced by `frameworks/uxkit/tools/capture/capture.sh`: the
+same posed scene per platform, regenerated, never hand-shot.
+
+## Example
+
+A controller whose callback counts presses. This is the complete wiring, on any
+backend:
+
+```c
+#use <UXKit>
+#import <Stdio.xc>
+
+class Controller : Object <UXApplicationDelegate>
+{
+    weak:UXApplication* app;
+    i32 presses;
+
+    i32 applicationDidStart(UXApplication* a) {
+        app = a;
+        UXView* content = new UXView();
+        UXWindow* win = new UXWindow();
+        a.addWindow(win);
+        win.open((u8*)"Buttons", UXGeom.make(10, 10, 200, 100), content);
+
+        UXButton* b = new UXButton();
+        b.setTitle((u8*)"Press me");
+        b.setAction(&self.onPress);
+        content.addSubview(b, UXGeom.make(8, 8, 90, 24));
+
+        win.tree.finalise();
+        win.displayAll();
+        return 0;
+    }
+
+    void onPress(UXControl* sender) {
+        presses = presses + 1;
+        Stdio.printf("pressed %d time(s)\n", presses);
+    }
+}
+
+void main(void) {
+    UXApplication* app = new UXApplication();
+    app.setDriver(new UXWebDriver());        // the ONE platform-aware line
+    Controller* c = new Controller();
+    app.setDelegate(c);
+    app.run();
+}
+```

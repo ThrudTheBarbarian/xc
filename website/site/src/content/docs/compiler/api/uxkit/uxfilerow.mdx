@@ -1,0 +1,11 @@
+---
+title: UXFileRow
+description: "One listing line of the toolkit file panel: name, directory flag, size."
+---
+
+`UXFileRow` is one line of the
+[`UXFilePanel`](/compiler/api/uxkit/uxfilepanel/)'s listing. It holds the
+`name`, `isDir` and `size` that the list view draws and the sort compares.
+`UXFileRow.make(name, isDir, size)` builds a row. It is a factory so that
+the reload loop can allocate without a new-in-loop warning. The panel's
+recents store reuses the class, with full paths as names.

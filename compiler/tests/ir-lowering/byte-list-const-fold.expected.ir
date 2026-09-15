@@ -1,0 +1,18 @@
+module "byte-list-const-fold" {
+  symbol chars: function () -> U16
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  symbol expr: function () -> U32
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  function chars(%0: Mem) -> (U16, Mem) {
+    bb_entry:
+      preds: -
+      %1:U16 = Const #16961:U16
+      Return %1, %0
+  }
+  function expr(%0: Mem) -> (U32, Mem) {
+    bb_entry:
+      preds: -
+      %1:U32 = Const #2147488002:U32
+      Return %1, %0
+  }
+}

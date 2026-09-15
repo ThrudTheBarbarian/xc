@@ -1,0 +1,9 @@
+write 1
+size 13
+exists 1
+read [hello, files
+]
+append 1 size 18
+lines 18
+missing size -1 exists 0
+missing read NULL

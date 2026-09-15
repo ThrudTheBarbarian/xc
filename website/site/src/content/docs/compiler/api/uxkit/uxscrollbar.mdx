@@ -1,0 +1,24 @@
+---
+title: UXScrollbar
+description: "The app-drawn vertical bar of a UXScrollView: arrows, track, and a proportional thumb, all geometry derived from the scroll view it drives."
+---
+
+`UXScrollbar` is the app-drawn vertical bar a
+[`UXScrollView`](/compiler/api/uxkit/uxscrollview/) builds for itself:
+square arrow boxes at each end, the track between them, and a
+proportional thumb (never shorter than a grabbable minimum). The thumb's size
+and position are pure functions of the scroll view's content, viewport,
+and offset. A click on an arrow steps a line, a click on the track pages, and a
+click on the thumb starts a modal drag through the driver's `trackDragStep`,
+repainting as it goes.
+
+It draws only where the toolkit owns scrolling (GEM, headless, web). The
+native backends overlay a real scroll container and this subtree never
+paints. You do not construct one: the scroll view's `attachTo` does, and
+wires `scroll` back to itself.
+
+## The geometry, for tests
+
+`arrowH`, `trackTop`, `trackH`, `thumbH`, and `thumbY` are public pure
+functions of the scroll view's numbers. Tests use them to check the thumb's
+proportionality and its clamped minimum without a window.

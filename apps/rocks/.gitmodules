@@ -1,0 +1,3 @@
+[submodule "XG"]
+	path = XG
+	url = git@github.com:ThrudTheBarbarian/XG.git

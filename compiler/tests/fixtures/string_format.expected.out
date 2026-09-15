@@ -1,0 +1,4 @@
+d=-5 ld=-100000 u=7 lu=70000
+s=abc c=A pct=% x=00FF lx=0000BEEF
+pad=[0042] [  7]
+obj=99

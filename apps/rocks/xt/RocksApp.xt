@@ -1,0 +1,267 @@
+// RocksApp.xt — the resource editor, running natively on the XT.
+//
+// The app logic, with no main(): Rocks.xt is the application, test_rocks.xt drives the
+// same classes headlessly.  An app you cannot test without a human is an app you cannot
+// test.
+//
+// The proof-of-concept for Xtg, and the point of the whole exercise: an application
+// that #imports <Xtg>, links libXG.so, and runs on the XT's ARM core under XTOS.
+//
+// It is a resource editor, and its canvas IS THE RESOURCE.  There is no "render the
+// document" step, because a .rsc already contains an AES OBJECT tree and an XGView is
+// backed by an OBJECT — so the loaded resource IS the live view hierarchy.  Click a
+// widget in the canvas and you are clicking the real widget: objc_find hit-tests it,
+// the AES themes it, and Rocks never draws a single one of them.
+//
+//     Rocks (macOS)  --writes-->  app.rsc  --XGNib-->  a live XGViewTree  --> the canvas
+//
+// Which closes the loop: Rocks on macOS is the Interface Builder for Xtg, and Rocks on
+// the XT edits what it produced.
+#import <Stdio.xt>
+#import <GEM>
+#import <XG>
+#import "Structure.xt"
+
+// THE RESOURCE LIVES IN TWO PLACES, because we boot from two.
+//   the SD card:  /OS/Apps/Desktop/desktop.rsc          <- the real board
+//   the romfs:    /System/OS/Apps/Desktop/desktop.rsc   <- qemu, which has no card
+// Try the card first, then fall back — exactly as desktop.c does (desktop.c:2434). gemd
+// itself shipped without this fallback and came up on qemu with no font at all, which made
+// EVERY window title on the system blank. One missing fallback, one system-wide symptom.
+#define RSC_PATH_SD   "/OS/Apps/Desktop/desktop.rsc"
+#define RSC_PATH_ROM  "/System/OS/Apps/Desktop/desktop.rsc"
+
+// ---------------------------------------------------------------------------------
+// The inspector: what is selected, and what it is.  A plain XGView — Rocks draws this
+// one itself, because it is the only thing in the window GEM has no widget for.
+class Inspector : XGView
+{
+    weak:XGViewTree@ doc;      // the RESOURCE's tree (not our own)
+    i32              sel;      // selected object index, -1 = none
+
+    void init(void) { super.init(); doc = (XGViewTree@)0; sel = (i32)-1; }
+
+    void setSelection(XGViewTree@ d, i32 i) {
+        doc = d; sel = i;
+        self.setNeedsDisplay();
+    }
+
+    void drawRect(XGGraphics@ g, XGRect dirty) {
+        XGRect b = self.bounds();
+        g.drawTheme("window", b);
+
+        if (doc == (XGViewTree@)0 || sel < (i32)0) {
+            g.drawText("no selection", (i16)8, (i16)14, (i32)1, (i32)13);
+            return;
+        }
+        OBJECT@ o = &doc.objects()[(u16)sel];
+
+        u8@ l = XGStr.append("obj ",  XGStr.fromInt(sel));
+        l = XGStr.append(l, "   type ");
+        l = XGStr.append(l, XGStr.fromInt((i32)(o.ob_type & (u16)$00FF)));
+        l = XGStr.append(l, "   ");
+        l = XGStr.append(l, XGStr.fromInt((i32)o.ob_x));
+        l = XGStr.append(l, ",");
+        l = XGStr.append(l, XGStr.fromInt((i32)o.ob_y));
+        l = XGStr.append(l, "  ");
+        l = XGStr.append(l, XGStr.fromInt((i32)o.ob_w));
+        l = XGStr.append(l, "x");
+        l = XGStr.append(l, XGStr.fromInt((i32)o.ob_h));
+        g.drawText(l, (i16)8, (i16)14, (i32)1, (i32)13);
+
+        u8@ f = XGStr.append("flags ", XGStr.fromHex((u32)o.ob_flags));
+        f = XGStr.append(f, "   state ");
+        f = XGStr.append(f, XGStr.fromHex((u32)o.ob_state));
+        g.drawText(f, (i16)8, (i16)30, (i32)1, (i32)13);
+    }
+}
+
+// The canvas is the resource, so a click on the canvas IS a click on a real widget.
+// objc_find already found it (XGWindow.dispatchMouse), and the responder chain already
+// carried it here — so "selection" is just: whatever object the AES said was hit.
+class Canvas : XGWindow
+{
+    weak:Rocks@ owner;
+    void init(void) { super.init(); owner = (Rocks@)0; }
+
+    void dispatchMouse(XGEvent@ e) {
+        i32 hit = tree.hitTest(e.x, e.y);
+        if (hit >= (i32)0 && owner != (Rocks@)0) { owner.select(hit); }
+        super.dispatchMouse(e);
+    }
+}
+
+// ---------------------------------------------------------------------------------
+class Rocks : Object <XGApplicationDelegate, XGTableDelegate>
+{
+    weak:XGApplication@ app;
+    Canvas@      win;
+    XGViewTree@  doc;          // the loaded resource
+    Inspector@   info;
+    XGMenuBar@   bar;
+    i32          treeIndex;
+    i32          sel;
+
+    // The structure window: the resource's OBJECT tree, as an outline.
+    XGWindow@      structWin;
+    XGOutlineView@ outline;
+    Structure@     structure;
+    bool           syncing;    // selection is TWO-WAY; this stops it echoing
+    u8@            rscPath;   // whichever of the two paths actually had the resource
+
+    void init(void) { treeIndex = (i32)0; sel = (i32)-1; syncing = false; rscPath = ""; }
+
+    // ---- menu actions -------------------------------------------------------
+    void onOpen(XGMenuItem@ m)  { Stdio.printf("[Rocks] File > Open\n"); }
+
+    void onQuit(XGMenuItem@ m) {
+        XGAlert@ a = new XGAlert();
+        a.icon = (i32)2;                       // wait
+        a.addLine("Quit Rocks?");
+        a.addButton("Quit");
+        a.addButton("Cancel");
+        a.defaultButton = (i32)2;
+        if (a.runModal() == (i32)1) { app.stop(); }
+    }
+
+    void onAbout(XGMenuItem@ m) {
+        XGAlert@ a = new XGAlert();
+        a.icon = (i32)1;                       // note
+        a.addLine("Rocks for the XT");
+        a.addLine("A .rsc IS a live view hierarchy.");
+        a.addButton("OK");
+        a.runModal();
+    }
+
+    // ---- selection ----------------------------------------------------------
+    void select(i32 obj) {
+        if (doc == (XGViewTree@)0) { return; }
+        // deselect the old, select the new — the OBJECT is the truth, so this is
+        // just ob_state, and the AES redraws it themed.
+        if (sel >= (i32)0) {
+            OBJECT@ p = &doc.objects()[(u16)sel];
+            p.ob_state = p.ob_state & (u16)$FFFE;         // clear OS_SELECTED
+        }
+        sel = obj;
+        if (sel >= (i32)0) {
+            OBJECT@ n = &doc.objects()[(u16)sel];
+            n.ob_state = n.ob_state | (u16)OS_SELECTED;
+        }
+        info.setSelection(doc, sel);
+        XGView@ v = (XGView@ ?)doc.viewAt((u16)obj);
+        if (v != (XGView@)0) { v.setNeedsDisplay(); }
+
+        // ...and move the outline's highlight to match. The canvas and the outline show the
+        // SAME objects, so a selection made in one has to appear in the other — otherwise the
+        // two views disagree about what the user has chosen, which is the whole failure mode
+        // an inspector exists to prevent.
+        if (!syncing && outline != (XGOutlineView@)0) {
+            i32 row = structure.rowForObject(outline, obj);
+            if (row >= (i32)0) {
+                syncing = true;              // selectRow calls us back; do not bounce
+                outline.selectRow(row);
+                syncing = false;
+                structWin.display();
+            }
+        }
+    }
+
+    // The outline's selection changed -> select the same object on the canvas.
+    void tableSelectionDidChange(XGTableView@ t, i32 row) {
+        if (syncing || row < (i32)0) { return; }
+        XGOutlineNode@ n = outline.nodeAt(row);
+        if (n == (XGOutlineNode@)0) { return; }
+        RNode@ rn = (RNode@ ?)n.item;
+        syncing = true;
+        self.select(rn.obj);
+        syncing = false;
+        win.display();
+    }
+
+    // The structure window's content height changes every time a row opens or shuts, and the
+    // AES turns that into a scrollbar. Report it after every reload, and only then.
+    void refreshOutline(void) {
+        outline.reloadData();
+        structWin.setContentSize((i16)160, outline.contentHeight());
+        structWin.tree.finalise();
+        structWin.displayAll();
+    }
+
+    i32 applicationDidStart(XGApplication@ a) {
+        app = a;
+        i32 sw = a.screenWidth();
+        i32 sh = a.screenHeight();
+
+        // ---- the menu bar ---------------------------------------------------
+        bar = new XGMenuBar();
+        XGMenu@ file = bar.addMenu("File");
+        file.addItem("Open...", &self.onOpen);
+        file.addSeparator();
+        file.addItem("Quit",    &self.onQuit);
+        XGMenu@ help = bar.addMenu("Help");
+        help.addItem("About Rocks", &self.onAbout);
+        a.setMenuBar(bar);
+
+        // ---- the document: the .rsc IS the view tree ------------------------
+        u8@ path = RSC_PATH_SD;
+        doc = XGNib.load(path, treeIndex);
+        if (doc == (XGViewTree@)0) {
+            path = RSC_PATH_ROM;                      // no card: qemu
+            doc  = XGNib.load(path, treeIndex);
+        }
+        if (doc == (XGViewTree@)0) {
+            Stdio.printf("[Rocks] could not load a resource from %s or %s\n",
+                         RSC_PATH_SD, RSC_PATH_ROM);
+            return (i32)1;
+        }
+        rscPath = path;
+        Stdio.printf("[Rocks] loaded %s tree %d: %d objects\n",
+                     path, (i16)treeIndex, (i16)doc.length());
+
+        // ---- the CANVAS window: the resource, live --------------------------
+        // It gets the left two-thirds; the structure takes the rest.
+        i32 cw = (sw * (i32)2) / (i32)3;
+        win = new Canvas();
+        win.owner = self;
+        a.addWindow(win);
+        win.openWithTree("Rocks", XGGeom.make((i16)2, (i16)2,
+                                              (i16)(cw - (i32)4), (i16)(sh - (i32)4)), doc);
+
+        // Chrome is DECLARATIVE (RESPONSIBILITIES §11): we hand gemd a MODEL — a name, a path,
+        // a footer — and gemd draws and maintains it. We never draw a title bar, and gemd can
+        // still repaint ours if we wedge.
+        win.setSubtitle(rscPath);
+        win.setInfo(XGStr.append(XGStr.fromInt((i32)doc.length()), " objects"));
+
+        // ---- the inspector, as a subview of the resource's ROOT --------------
+        XGView@ root = (XGView@ ?)doc.viewAt((u16)0);
+        info = new Inspector();
+        root.addSubview(info, XGGeom.make((i16)4, (i16)(sh - (i32)56),
+                                          (i16)(cw - (i32)16), (i16)44));
+        doc.finalise();
+        win.displayAll();
+
+        // ---- the STRUCTURE window: the OBJECT tree, as an outline -------------
+        // The resource is its own datasource — ob_head and ob_next ARE the hierarchy, so
+        // there is no model to build and nothing to keep in step with the canvas.
+        structure = new Structure();
+        structure.setDocument(doc);
+
+        outline   = new XGOutlineView();
+        structWin = new XGWindow();
+        a.addWindow(structWin);
+        structWin.open("Structure", XGGeom.make((i16)cw, (i16)2,
+                                                (i16)(sw - cw - (i32)2), (i16)(sh - (i32)4)),
+                       outline);
+        structWin.setInfo("click a row to select it on the canvas");
+
+        outline.setRowHeight((i16)14);
+        outline.addColumn("Object", (i16)110);
+        outline.addColumn("#",      (i16)30);
+        outline.setOutlineSource(structure);
+        outline.setDelegate(self);              // selection comes back to us
+        self.refreshOutline();
+
+        return (i32)0;
+    }
+}

@@ -1,0 +1,4 @@
+toggle: checked=1
+toggle: checked=0
+final=0
+PASS: click toggles a custom-drawn control

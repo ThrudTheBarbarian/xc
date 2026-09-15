@@ -1,0 +1,3 @@
+before=300,300 after=100,100 scroll=200,200
+hitTest(110,110): before=0 after=1 marker=1
+PASS: the tree and hit-testing scroll on both axes

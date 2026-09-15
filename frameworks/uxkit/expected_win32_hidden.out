@@ -1,0 +1,4 @@
+visible click -> fired=1
+hidden  click -> fired=1
+shown   click -> fired=2
+PASS: a hidden control is not hit

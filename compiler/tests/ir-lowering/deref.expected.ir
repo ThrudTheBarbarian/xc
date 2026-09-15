@@ -1,0 +1,18 @@
+module "deref" {
+  symbol read: function (Ptr(U8, unbanked)) -> U8
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  symbol write: function (Ptr(U8, unbanked), U8) -> Void
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  function read(%0: Ptr(U8, unbanked), %1: Mem) -> (U8, Mem) {
+    bb_entry:
+      preds: -
+      %2:U8, %3 = Load %0, %1
+      Return %2, %3
+  }
+  function write(%0: Ptr(U8, unbanked), %1: U8, %2: Mem) -> Mem {
+    bb_entry:
+      preds: -
+      %3 = Store %0, %1, %2
+      Return %3
+  }
+}

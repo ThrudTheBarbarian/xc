@@ -1,0 +1,4 @@
+2-button dismiss-Cancel -> 2 (expect 2)
+2-button dismiss-OK     -> 1 (expect 1)
+3-button dismiss-No     -> 2 (expect 2)
+PASS: MessageBox result maps to the neutral button index

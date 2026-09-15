@@ -1,0 +1,143 @@
+// test_gem_settings.xc — UXKit's settings, in the XTOS SYSTEM REGISTRY.
+//
+// The same script as test_win32_settings, against the backend that matters most: on XTOS a
+// preference goes into /OS/var/registry.db — the SQLite database the desktop already keeps its own
+// preferences in — through registry.c's thin API, in a `settings` table created on first write.
+// Two runs of this binary: the first writes, the second (a fresh process, nothing in memory) must
+// find it all again.  The registry file itself is proof; this asserts the toolkit can read it back.
+//
+// No gemd and no window: the settings seam is the AES's only piece that does not need a screen, so
+// the test links libGEM and calls the driver directly.
+#import <Stdio.xc>
+#import "UXGemDriver.xc"
+#import "UXKeyValueStore.xc"
+
+u8* getenv(u8* name); // which pass this is (the settings are the ONLY other thing carried over)
+
+i32 gFails;
+void check(u8* what, i32 got, i32 want)
+    {
+    if (got == want)
+        {
+        Stdio.printf("  ok   %s = %d\n", what, (i16)got);
+        }
+    else
+        {
+        Stdio.printf("  FAIL %s = %d (want %d)\n", what, (i16)got, (i16)want);
+        gFails = gFails + (i32)1;
+        }
+    }
+void checkTrue(u8* what, bool cond)
+    {
+    if (cond)
+        {
+        Stdio.printf("  ok   %s\n", what);
+        }
+    else
+        {
+        Stdio.printf("  FAIL %s\n", what);
+        gFails = gFails + (i32)1;
+        }
+    }
+void checkStr(u8* what, u8* got, u8* want)
+    {
+    if (got != (u8*)0 && UXKeyValueStore.streq(got, want))
+        {
+        Stdio.printf("  ok   %s = \"%s\"\n", what, got);
+        }
+    else
+        {
+        Stdio.printf("  FAIL %s = \"%s\" (want \"%s\")\n", what, got == (u8*)0 ? (u8*)"(null)" : got, want);
+        gFails = gFails + (i32)1;
+        }
+    }
+
+void writePass(void)
+    {
+    UXKeyValueStore* shared = UXKeyValueStore.standard();
+    UXKeyValueStore* ks = UXKeyValueStore.forDomain((u8*)"xg.test.ks");
+    UXKeyValueStore* paint = UXKeyValueStore.forDomain((u8*)"xg.test.paint");
+
+    shared.setInt((u8*)"fontSize", (i32)10); // machine-wide default
+    shared.setString((u8*)"theme", (u8*)"light");
+    ks.setInt((u8*)"fontSize", (i32)14); // this app overrides it
+    ks.setString((u8*)"lastFile", (u8*)"notes.txt");
+    ks.setBool((u8*)"wrap", true);
+    ks.setBool((u8*)"ruler", false);
+    paint.setInt((u8*)"fontSize", (i32)18);
+    ks.setString((u8*)"doomed", (u8*)"x");
+    ks.removeKey((u8*)"doomed");
+    Stdio.printf("  wrote settings to the registry\n");
+    }
+
+void readPass(void)
+    {
+    UXKeyValueStore* shared = UXKeyValueStore.standard();
+    UXKeyValueStore* ks = UXKeyValueStore.forDomain((u8*)"xg.test.ks");
+    UXKeyValueStore* paint = UXKeyValueStore.forDomain((u8*)"xg.test.paint");
+    UXKeyValueStore* other = UXKeyValueStore.forDomain((u8*)"xg.test.other");
+
+    check("shared fontSize survived", shared.intFor((u8*)"fontSize"), (i32)10);
+    checkStr("shared theme survived", shared.stringFor((u8*)"theme"), (u8*)"light");
+    check("ks fontSize survived", ks.intFor((u8*)"fontSize"), (i32)14);
+    check("paint fontSize survived", paint.intFor((u8*)"fontSize"), (i32)18);
+    checkStr("ks string survived", ks.stringFor((u8*)"lastFile"), (u8*)"notes.txt");
+    checkTrue("ks bool true survived", ks.boolFor((u8*)"wrap"));
+    checkTrue("ks bool false survived", !ks.boolFor((u8*)"ruler"));
+
+    check("unset domain inherits the shared value", other.intFor((u8*)"fontSize"), (i32)10);
+    // ...but inheriting is not OWNING: the value was cached in the shared store, not this domain's,
+    // so a later write to the shared domain still reaches it.
+    checkTrue("an inherited value is not the domain's own", !other.hasKey((u8*)"fontSize"));
+    checkTrue("...and the shared store does own it", UXKeyValueStore.standard().hasKey((u8*)"fontSize"));
+    checkTrue("ks does not see the shared value", ks.intFor((u8*)"fontSize") != (i32)10);
+    checkTrue("absent key has no value", !ks.hasKey((u8*)"nosuch"));
+    check("absent key reads 0", ks.intFor((u8*)"nosuch"), (i32)0);
+    ks.registerInt((u8*)"nosuch", (i32)7);
+    check("registered fallback answers", ks.intFor((u8*)"nosuch"), (i32)7);
+    checkTrue("...but is still not an explicit value", !ks.hasKey((u8*)"nosuch"));
+    checkTrue("removed key is gone", !ks.hasKey((u8*)"doomed"));
+    checkTrue("persisted key is explicit", ks.hasKey((u8*)"lastFile"));
+
+    ks.setInt((u8*)"fontSize", (i32)22);
+    ks.invalidate();
+    check("rewrite reaches the registry", ks.intFor((u8*)"fontSize"), (i32)22);
+    ks.setInt((u8*)"fontSize", (i32)14);
+    }
+
+void main(void)
+    {
+    gFails = (i32)0;
+    UXGemDriver* drv = new UXGemDriver();
+    gDriver = drv; // no boot(): settings need no screen
+
+    u8 probe[64];
+    checkTrue("the registry accepted a write", gDriver.settingSet((u8*)"xg.test", (u8*)"probe", (u8*)"ok"));
+    checkTrue("...and gave it back",
+              gDriver.settingGet((u8*)"xg.test", (u8*)"probe", &probe[(i32)0], (i32)64));
+    checkStr("...unchanged", &probe[(i32)0], (u8*)"ok");
+    checkTrue("an empty value is not the same as no value",
+              gDriver.settingSet((u8*)"xg.test", (u8*)"empty", (u8*)"") &&
+                  gDriver.settingGet((u8*)"xg.test", (u8*)"empty", &probe[(i32)0], (i32)64));
+    checkTrue("no such key reports false",
+              !gDriver.settingGet((u8*)"xg.test", (u8*)"neverset", &probe[(i32)0], (i32)64));
+
+    u8* mode = getenv((u8*)"UX_SETTINGS_PASS");
+    if (mode != (u8*)0 && mode[(i32)0] == (u8)'w')
+        {
+        writePass();
+        }
+    else
+        {
+        readPass();
+        }
+
+    if (gFails == (i32)0)
+        {
+        Stdio.printf("PASS: settings persist in the system registry\n");
+        }
+    else
+        {
+        Stdio.printf("FAIL: %d checks failed\n", gFails);
+        }
+    }

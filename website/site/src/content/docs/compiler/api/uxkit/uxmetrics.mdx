@@ -1,0 +1,123 @@
+---
+title: UXMetrics
+description: "The standard control sizes, adapted by form factor: desktop rows on the 28 basis, device rows on the 44pt touch target. One table, checked on both realms."
+---
+
+`UXMetrics` gives the standard control sizes. Without shared sizes, each
+platform renders a button at its own size, and a UI laid out on one
+realm's rows overflows another's. A single global table does not work
+either, because a desktop row and a touch target are different sizes. The
+standards therefore adapt on one axis: the form factor. Desktop rows sit on
+the classic 28px basis. The device realm sits on the 44pt touch target
+(Apple's floor; Android's 48dp guidance rounds to the same value in neutral
+units).
+
+The table is one side of a two-sided contract. The **drivers** keep the
+other side: a control *fills* the frame it is given and never exceeds it.
+Theme minimums are clamped where the platform allows (Android's
+`setMinHeight(0)`, GTK's CSS floors dropped at boot). The few controls with
+a fixed intrinsic size (`UIStepper`, `UISwitch`) are centred in their
+frame, and their standard size here is large enough to hold them.
+
+Out-of-bounds areas (the notch, the status bar, the gesture bar) are **not**
+in this table. The platform handles them through window positioning: a
+toolkit window at `y=0` already sits in the safe area on every backend, and
+`boot()` reports the usable screen.
+
+```c
+#use <UXKit>
+```
+
+## Overview
+
+```c
+// a form row, sized to the current realm's standards:
+UXButton* ok = new UXButton();
+ok.setTitle((u8*)"OK");
+content.addSubview(ok, UXMetrics.stdFrame((i32)UXKindButton, 8, y, 0));
+y = y + UXMetrics.stdHeight((i32)UXKindButton) + UXMetrics.rowSpacing();
+```
+
+The pure `...For(kind, ff)` forms are the unit-testable source of the values
+(`make metrics` checks both realms without opening a window). The short
+forms read the live driver's `formFactorClass()`.
+
+## The standards
+
+| kind | desktop | device | note |
+|---|---|---|---|
+| Button | 28 | 44 | the touch-target floor |
+| Field | 24 | 36 | |
+| Label | 16 | 20 | |
+| Checkbox / Radio | 20 | 32 | device row holds a `UISwitch` |
+| Slider | 20 | 32 | |
+| Popup | 26 | 36 | |
+| Stepper | 26 | 32 | device min-width 96 holds a `UIStepper` |
+| Progress | 12 | 8 | the idioms invert: bar vs line |
+| Segmented | 26 | 32 | |
+
+## Topics
+
+**Sizes** · [stdHeight](#stdheight) · [minWidth](#minwidth) · [stdFrame](#stdframe)
+**Spacing** · [rowSpacing](#rowspacing) · [gutter](#gutter)
+**The pure forms** · [stdHeightFor](#stdheightfor) · [minWidthFor](#minwidthfor)
+
+### stdHeight
+
+```c
+static i32 stdHeight(i32 kind)
+```
+
+The standard height for a control kind on the booted driver's realm.
+
+### minWidth
+
+```c
+static i32 minWidth(i32 kind)
+```
+
+The minimum comfortable width, which [`stdFrame`](#stdframe) uses when no
+width is given.
+
+### stdFrame
+
+```c
+static UXRect stdFrame(i32 kind, i32 x, i32 y, i32 w)
+```
+
+The standard frame for a kind at a position, in one call. `w <= 0` means
+"the minimum comfortable width".
+
+### rowSpacing
+
+```c
+static i32 rowSpacing(void)
+```
+
+The vertical gap that makes a column of standard controls read as a form:
+8 on desktop, 12 on device.
+
+### gutter
+
+```c
+static i32 gutter(void)
+```
+
+The margin from the window edge: 12 on desktop, 16 on device.
+
+### stdHeightFor
+
+```c
+static i32 stdHeightFor(i32 kind, i32 ff)
+```
+
+The pure form: the same answer with the form factor passed in, testable
+without a driver. `ff` is a `UX_FORM_*` value.
+
+### minWidthFor
+
+```c
+static i32 minWidthFor(i32 kind, i32 ff)
+```
+
+The pure width form.

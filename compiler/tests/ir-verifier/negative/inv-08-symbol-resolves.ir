@@ -1,0 +1,19 @@
+; Invariant 8 (IR-SPEC §12.8, §5): Every Sym(SymbolId) used by an
+; instruction must resolve to a live entry in the module's symbol
+; table.
+; VIOLATION: the Call targets @ghost, which is not declared in the
+; module's symbol table (only @caller is). The parser produces a
+; deferred reference; the verifier rejects when it cannot resolve
+; it at finalisation time.
+
+module "inv-08-negative" {
+  symbol caller: function (U8) -> U8
+    attributes: { cloaked: false, banked: false, variadic: false }
+
+  function caller(%x: U8, %m0: Mem) -> (U8, Mem) {
+    bb_entry:
+      preds: -
+      %r:U8, %m1 = Call @ghost, [%x], CallConv::Standard, %m0   ; ERROR: @ghost not declared
+      Return %r, %m1
+  }
+}

@@ -1,0 +1,30 @@
+module "banked-xcall" {
+  symbol leaf: function () -> I16
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  symbol mid: function () -> I16
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  symbol main: function () -> I16
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  function leaf(%0: Mem) -> (I16, Mem) {
+    bb_entry:
+      preds: -
+      %1:U8 = Const #42:U8
+      %2:I16 = ZExt %1
+      Return %2, %0
+  }
+  function mid(%0: Mem) -> (I16, Mem) {
+    bb_entry:
+      preds: -
+      %1:I16, %2 = Call @leaf, [], CallConv::Standard, %0
+      %3:U8 = Const #100:U8
+      %4:I16 = ZExt %3
+      %5:I16 = Add %1, %4
+      Return %5, %2
+  }
+  function main(%0: Mem) -> (I16, Mem) {
+    bb_entry:
+      preds: -
+      %1:I16, %2 = Call @mid, [], CallConv::Standard, %0
+      Return %1, %2
+  }
+}

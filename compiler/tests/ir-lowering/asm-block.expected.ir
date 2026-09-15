@@ -1,0 +1,11 @@
+module "asm-block" {
+  constant 0: string bytes=[#$4C, #$44, #$41, #$20, #$7B, #$7B, #$58, #$54, #$4C, #$4F, #$43, #$41, #$4C, #$3A, #$30, #$7D, #$7D, #$0A, #$53, #$54, #$41, #$20, #$24, #$44, #$34, #$30, #$41]
+  symbol poke: function (U8) -> Void
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  function poke(%0: U8, %1: Mem) -> Mem {
+    bb_entry:
+      preds: -
+      %2 = Asm #cpool:0, #-1:I16, %1
+      Return %2
+  }
+}

@@ -1,0 +1,5 @@
+loop-temp:   src==a 0 (expect 0)
+outer-temp:  src==a 0 (expect 0)
+plain:       src==a 0 (expect 0)
+if-temp:     src==a 0 (expect 0)
+u32-temp:    p==x 0 (expect 0)

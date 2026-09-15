@@ -1,0 +1,58 @@
+module "float-arith" {
+  symbol compute: function () -> Void
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  symbol gA: dataglobal F32 init [#$00, #$00, #$00, #$00, #$00, #$00, #$F8, #$3F]
+    attributes: { banked: false, cloaked: false }
+    flags: { escapes: true }
+  symbol gB: dataglobal F32 init [#$00, #$00, #$00, #$00, #$00, #$00, #$0A, #$40]
+    attributes: { banked: false, cloaked: false }
+    flags: { escapes: true }
+  symbol gSum: dataglobal F32
+    attributes: { banked: false, cloaked: false }
+    flags: { escapes: true }
+  symbol gProd: dataglobal F32
+    attributes: { banked: false, cloaked: false }
+    flags: { escapes: true }
+  symbol gLess: dataglobal Bool
+    attributes: { banked: false, cloaked: false }
+    flags: { escapes: true }
+  symbol gI: dataglobal I16
+    attributes: { banked: false, cloaked: false }
+    flags: { escapes: true }
+  function compute(%0: Mem) -> Mem {
+    bb_entry:
+      preds: -
+      %1:Ptr(F32, unbanked) = AddrOf @gA
+      %2:F32, %3 = Load %1, %0
+      %4:Ptr(F32, unbanked) = AddrOf @gB
+      %5:F32, %6 = Load %4, %3
+      %7:F32 = FAdd %2, %5
+      %8:Ptr(F32, unbanked) = AddrOf @gSum
+      %9 = Store %8, %7, %6
+      %10:Ptr(F32, unbanked) = AddrOf @gA
+      %11:F32, %12 = Load %10, %9
+      %13:Ptr(F32, unbanked) = AddrOf @gB
+      %14:F32, %15 = Load %13, %12
+      %16:F32 = FMul %11, %14
+      %17:Ptr(F32, unbanked) = AddrOf @gProd
+      %18 = Store %17, %16, %15
+      %19:Ptr(F32, unbanked) = AddrOf @gA
+      %20:F32, %21 = Load %19, %18
+      %22:Ptr(F32, unbanked) = AddrOf @gB
+      %23:F32, %24 = Load %22, %21
+      %25:Bool = FCmp OLT, %20, %23
+      %26:Ptr(Bool, unbanked) = AddrOf @gLess
+      %27 = Store %26, %25, %24
+      %28:Ptr(F32, unbanked) = AddrOf @gB
+      %29:F32, %30 = Load %28, %27
+      %31:I16 = FpToSI %29
+      %32:Ptr(I16, unbanked) = AddrOf @gI
+      %33 = Store %32, %31, %30
+      %34:Ptr(I16, unbanked) = AddrOf @gI
+      %35:I16, %36 = Load %34, %33
+      %37:F32 = SIToFp %35
+      %38:Ptr(F32, unbanked) = AddrOf @gA
+      %39 = Store %38, %37, %36
+      Return %39
+  }
+}

@@ -1,0 +1,6 @@
+bound=99
+free=42
+static=7
+free-identity=1
+bound-identity=1
+distinct=1

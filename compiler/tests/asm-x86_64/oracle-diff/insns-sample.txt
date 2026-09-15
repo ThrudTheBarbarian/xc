@@ -1,0 +1,27 @@
+mov rbp, rsp
+mov rax, rbx
+mov r12, r13
+push rbp
+pop rbp
+ret
+add rsp, 96
+sub rsp, 96
+cmp rax, 7
+add rax, rbx
+sub r8, r9
+xor eax, eax
+and rax, 15
+or rcx, rdx
+test rax, rax
+lea rax, [rbp-16]
+mov [rbp-80], rbx
+mov rdi, [rbp-8]
+mov eax, 1
+mov r12b, al
+movzx eax, r12b
+neg rax
+not rbx
+imul rcx
+idiv rsi
+cdq
+syscall

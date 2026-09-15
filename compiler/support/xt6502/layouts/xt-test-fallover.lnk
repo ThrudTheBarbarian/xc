@@ -1,0 +1,67 @@
+# xt-test-fallover.lnk — INTERNAL test layout for region-C fallover.
+#
+# **INTERNAL — do not use for user code.** Lives in
+# support/6502/internal/ rather than support/6502/layouts/ so
+# `--list-layouts` doesn't surface it. Only the heap-fallover
+# regression fixtures (heap_regC, heap_regC_walk, heap_regc_method)
+# should reference this layout.
+#
+# Identical to the production `xt` layout but shrinks the heap
+# reservation to 1 × 4 KB data + 5 × 4 KB region-C = 24 KB total.
+# The data pool is deliberately one bank so that a single ~4 KB
+# allocation fills it and forces the allocator to transition into
+# region C — that's the code path the fallover fixtures cover.
+# Production `xt` reserves 128 KB data + 508 KB region C, which
+# would require dozens of large allocations to provoke the same
+# transition.
+
+[zp]
+sp      = $89-$8A
+tmp     = $8B-$8C
+hp      = $8D-$8E
+bankReg = $82-$83
+vars    = $8F-$9F, $C0-$FF
+runtime = $B0-$BF
+
+[memory]
+system  = $2400-$3FFF
+main    = $A000-$CFFF, $D800-$FFF9
+screen  = $8000-$9FFF
+
+[banking]
+codeWindow  = $4000-$5FFF
+codeReg     = $82
+codeRegion  = $200000
+dataWindow  = $6000-$6FFF
+dataReg     = $83
+dataRegion  = $100000
+pageSize    = $1000
+
+regCWindow   = $7000-$7FFF
+regCPageSize = $1000
+regCReg      = $84-$85
+regCRegion   = $500000
+
+[stack]
+base    = after-system
+grows   = up
+
+[heap]
+bank          = 1
+regCBank      = 1-5
+pointer-width = 3
+
+[entry]
+address = $2400
+
+[shadow]
+register   = $D301:$01
+ranges     = $C000-$CFFF, $D800-$FFF9
+
+[startup]
+file    = xt-shadow-heap.asm
+
+[buffers]
+printf     = $0480-$04BF
+stdio_fmt  = $04C0-$04FF
+stack      = $0500-$05FF

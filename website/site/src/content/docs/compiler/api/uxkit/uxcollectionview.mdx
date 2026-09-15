@@ -1,0 +1,265 @@
+---
+title: UXCollectionView
+description: "A grid of fixed-size items that flows and wraps to fill the width: the desktop icon view, with the grid arithmetic as pure, testable geometry."
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+`UXCollectionView` is the icon grid: items of a fixed size flow left to
+right and wrap into rows to fill the width, the layout the Finder
+desktop and icon browsers use. The grid arithmetic (how many
+columns fit, each item's rectangle, the total content height a scroll
+view asks for) and the hit test are pure geometry, unit-tested without a
+window. Multi-selection rides
+[`UXIndexSet`](/compiler/api/uxkit/uxindexset/), the same machinery the
+table uses.
+
+```c
+#use <UXKit>
+```
+
+## Overview
+
+```c
+UXCollectionView* grid = new UXCollectionView();
+for (i32 i = (i32)0; i < docs.count(); i = i + (i32)1) {
+    grid.addItem(docs.get(i), docs.nameAt(i));
+}
+grid.setAction(&controller.onPick);
+scroll.document().addSubview(grid, UXGeom.make(0, 0, 400, 0));
+scroll.setDocumentHeight(grid.contentHeightFor(400));
+```
+
+A plain click selects one item; a shift-click toggles it into the
+selection; a click in the gaps deselects everything. The action fires on
+selection; the handler reads it back:
+
+```c
+void onPick(UXControl* sender) {
+    UXCollectionView* g = (UXCollectionView* ?)sender;
+    open(g.itemAt(g.firstSelected()).obj);
+}
+```
+
+## Conforms to
+
+- Inherits [`UXControl`](/compiler/api/uxkit/uxcontrol/): the `weak:`
+  callback action, enablement, the fire path.
+
+## Topics
+
+**Items** · [addItem](#additem) · [clear](#clear) · [count](#count) · [itemAt](#itemat)
+**Grid** · [setItemSize](#setitemsize) · [setSpacing](#setspacing) · [setInset](#setinset) · [columnsFor](#columnsfor) · [layout](#layout) · [contentHeightFor](#contentheightfor) · [itemAtPoint](#itematpoint)
+**Selection** · [selectItem](#selectitem) · [addToSelection](#addtoselection) · [toggleSelection](#toggleselection) · [deselectAll](#deselectall) · [isSelected](#isselected) · [selectionCount](#selectioncount) · [firstSelected](#firstselected)
+
+### addItem
+
+```c
+void addItem(Object* obj, u8* label)
+```
+
+Appends an item: your object (returned untouched at selection time) and
+the label drawn under its tile.
+
+### clear
+
+```c
+void clear(void)
+```
+
+Empties the grid and the selection.
+
+### count
+
+```c
+i32 count(void)
+```
+
+How many items the grid holds.
+
+### itemAt
+
+```c
+UXCollectionItem* itemAt(i32 i)
+```
+
+The item: your `obj`, the label, and the laid-out frame (see
+[`UXCollectionItem`](/compiler/api/uxkit/uxcollectionitem/)).
+
+### setItemSize
+
+```c
+void setItemSize(i16 w, i16 h)
+```
+
+The fixed tile size (64×64 by default).
+
+### setSpacing
+
+```c
+void setSpacing(i16 h, i16 v)
+```
+
+The gaps between tiles, horizontally and vertically.
+
+### setInset
+
+```c
+void setInset(i16 v)
+```
+
+The margin around the whole grid.
+
+### columnsFor
+
+```c
+i32 columnsFor(i16 width)
+```
+
+How many columns fit in `width`, never fewer than one.
+
+### layout
+
+```c
+void layout(i16 width)
+```
+
+Places every item into its row and column and computes the content
+height. Pure geometry; the tests call it with no window.
+
+### contentHeightFor
+
+```c
+i32 contentHeightFor(i16 width)
+```
+
+The total height the laid-out grid needs at `width`, the value you
+pass to a [`UXScrollView`](/compiler/api/uxkit/uxscrollview/)'s
+`setDocumentHeight`.
+
+### itemAtPoint
+
+```c
+i32 itemAtPoint(i16 px, i16 py)
+```
+
+The item under a local point, `-1` in the gaps. A click between tiles
+deselects, as in an icon view.
+
+### selectItem
+
+```c
+void selectItem(i32 i)
+```
+
+Selects this item and no other (the plain-click behaviour).
+
+### addToSelection
+
+```c
+void addToSelection(i32 i)
+```
+
+Adds without clearing: the programmatic half of multi-selection.
+
+### toggleSelection
+
+```c
+void toggleSelection(i32 i)
+```
+
+Flips the item in or out (the shift-click behaviour).
+
+### deselectAll
+
+```c
+void deselectAll(void)
+```
+
+Clears the selection.
+
+### isSelected
+
+```c
+bool isSelected(i32 i)
+```
+
+Whether the item is in the selection.
+
+### selectionCount
+
+```c
+i32 selectionCount(void)
+```
+
+How many items are selected.
+
+### firstSelected
+
+```c
+i32 firstSelected(void)
+```
+
+The lowest selected index, `-1` when nothing is.
+
+## Platform appearance
+
+<div class="ux-platforms">
+<Tabs>
+  <TabItem label="Web">
+    <img src="/uxkit/collection-web.png" alt="UXCollectionView on Web" width="220" />
+
+    App-drawn through the shared `drawRect` seam: the same rendering on every backend, captured here from this platform's own paint path.
+  </TabItem>
+  <TabItem label="iOS">
+    <img src="/uxkit/collection-ios.png" alt="UXCollectionView on iOS" width="220" />
+
+    App-drawn through the shared `drawRect` seam: the same rendering on every backend, captured here from this platform's own paint path.
+  </TabItem>
+  <TabItem label="Android">
+    <img src="/uxkit/collection-android.png" alt="UXCollectionView on Android" width="220" />
+
+    App-drawn through the shared `drawRect` seam: the same rendering on every backend, captured here from this platform's own paint path.
+  </TabItem>
+  <TabItem label="macOS">
+    <img src="/uxkit/collection-macos.png" alt="UXCollectionView on macOS" width="220" />
+
+    App-drawn through the shared `drawRect` seam: the same rendering on every backend, captured here from this platform's own paint path.
+  </TabItem>
+  <TabItem label="Windows">
+    <img src="/uxkit/collection-windows.png" alt="UXCollectionView on Windows" width="220" />
+
+    App-drawn through the shared `drawRect` seam: the same rendering on every backend, captured here from this platform's own paint path.
+  </TabItem>
+  <TabItem label="Linux">
+    <img src="/uxkit/collection-linux.png" alt="UXCollectionView on Linux" width="220" />
+
+    App-drawn through the shared `drawRect` seam: the same rendering on every backend, captured here from this platform's own paint path.
+  </TabItem>
+  <TabItem label="GEM">
+    <img src="/uxkit/collection-gem.png" alt="UXCollectionView on GEM" width="220" />
+
+    App-drawn through the shared `drawRect` seam: the same rendering on every backend, captured here from this platform's own paint path.
+  </TabItem>
+</Tabs>
+</div>
+
+## Example
+
+An icon browser over a scroll view:
+
+```c
+UXScrollView* sv = new UXScrollView();
+content.addSubview(sv, UXGeom.make(8, 8, 400, 260));
+
+UXCollectionView* grid = new UXCollectionView();
+grid.setItemSize(72, 72);
+grid.setSpacing(20, 20);
+for (i32 i = (i32)0; i < images.count(); i = i + (i32)1) {
+    grid.addItem(images.get(i), images.nameAt(i));
+}
+grid.setAction(&controller.onPick);
+i32 h = grid.contentHeightFor(400);
+sv.document().addSubview(grid, UXGeom.make(0, 0, 400, (i16)h));
+sv.setDocumentHeight(h);
+```

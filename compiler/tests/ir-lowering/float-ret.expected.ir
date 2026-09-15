@@ -1,0 +1,24 @@
+module "float-ret" {
+  symbol pi: function () -> F32
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  symbol run: function () -> Void
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  symbol gN: dataglobal I16
+    attributes: { banked: false, cloaked: false }
+    flags: { escapes: true }
+  function pi(%0: Mem) -> (F32, Mem) {
+    bb_entry:
+      preds: -
+      %1:F32 = Const #fp400a000000000000:F32
+      Return %1, %0
+  }
+  function run(%0: Mem) -> Mem {
+    bb_entry:
+      preds: -
+      %1:F32, %2 = Call @pi, [], CallConv::Standard, %0
+      %3:I16 = FpToSI %1
+      %4:Ptr(I16, unbanked) = AddrOf @gN
+      %5 = Store %4, %3, %2
+      Return %5
+  }
+}

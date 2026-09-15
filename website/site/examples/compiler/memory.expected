@@ -1,0 +1,12 @@
+scope A:
+  made A
+  dealloc A
+  (a is gone)
+scope B:
+  B1 -> B2, and back: B1
+  dealloc B1
+  dealloc B2
+  (chain gone)
+raw buffer:
+  buf[3] = 33, length = 4
+  (deleted)

@@ -1,0 +1,15 @@
+---
+title: UXToolbarItem
+description: "One entry of a UXToolbar (item, space, flexible space, or separator) with its laid-out box and overflow state."
+---
+
+`UXToolbarItem` is one entry of a
+[`UXToolbar`](/compiler/api/uxkit/uxtoolbar/). It holds its `type` (a
+clickable item, a fixed space, a flexible space, or a separator), the
+`ident` a native backend maps to platform icon art, the `label`, your
+`tag`, and its natural width. The toolbar's layout writes the laid-out
+`x`, `w` and `visible` fields; `visible` is false when the item moved into
+the overflow.
+
+The `add*` methods create items. The laid-out fields are public because
+the layout results are public, and the overflow tests read these fields.

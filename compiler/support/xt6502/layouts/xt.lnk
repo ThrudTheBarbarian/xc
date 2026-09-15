@@ -1,0 +1,129 @@
+# xt.lnk — the xt hardware (new IR / 6502 backend).
+#
+# A 6502-compatible core with a 4 KB hidden hardware stack, SP-relative
+# addressing, and two independent bank windows (16 KB code, 12 KB data).
+# This is the only xt model. Canonical hardware reference: the SALLY
+# repo's docs/6502/6502-embellishments.md.
+#
+# ── Memory map ───────────────────────────────────────────────
+# │ $2400-$3FFF  System region — entry point, startup, runtime stubs│
+# │ $4000-$5FFF  Screen RAM                                         │
+# │ $6000-$9FFF  CODE bank window — 16 KB page via $D5C0 (4 MB)     │
+# │ $A000-$CFFF  DATA bank window — 12 KB page via $D5C1 (3 MB)     │
+# │ $D800-$FFF9  Unbanked code/data                                 │
+# │ $FFFA-$FFFF  NMI/IRQ vectors                                    │
+#
+# CODE lives in exactly two places: the $6000-$9FFF code-bank pages and
+# the $D800-$FFF9 unbanked region. The entry function (main) plus the
+# few must-stay-unbanked helpers run unbanked; everything else is packed
+# into 16 KB code-bank pages (selected by $D5C0, 256 pages → 4 MB) and
+# reached through the unbanked `_xcall` trampoline. If main() does not
+# fit the unbanked region it must be split into functions so they can be
+# banked — xta fails the build on a `.code_regions` overflow rather than
+# spilling code anywhere else. Code is NEVER placed in the data window.
+#
+# DATA lives in the $A000-$CFFF window, selected by $D5C1 (256 pages of
+# 12 KB → 3 MB). xtc's uniform 3-byte pointers carry the page selector
+# in byte 2 ([addr-lo, addr-hi, data-bank]); the backend writes $D5C1
+# from that byte on every pointer deref. This window holds data only.
+#
+# ── Bank-select registers ($D5C0/$D5C1) ──────────────────────
+# Memory-mapped hardware registers in cartridge-control space (they do
+# NOT drive CCTL): $D5C0 selects the code window, $D5C1 the data window.
+# They are deliberately not in zero page — the boot ROM's RAM-clear loop
+# would zero ZP selectors mid-init. Generated code and the runtime asm
+# see them as the symbols __bank_code_reg / __bank_data_reg.
+#
+# ── Stacks ───────────────────────────────────────────────────
+# The 4 KB hidden page-1 hardware stack (12-bit SP) is the primary
+# stack: it carries function frames, parameters, and register spills via
+# the SP-relative modes (LDA/STA/LDX/LDY/STX/STY d,SP; ADC/SBC/CMP d,SP;
+# (d,SP),Y; d,SP,X) and the PSH/PLL frame ABI. Its top 256 bytes alias
+# $0100-$01FF, so legacy TSX + $0100,X still works.
+#
+# There is ONE software stack pointer — SSP ($8A/$8B), with frame base
+# FP ($8C/$8D) — used only for the rare non-leaf spill frame whose
+# pinned locals don't fit ZP (STACK-ABI §11.3); those frames live in the
+# [stack] region. The runtime libraries push their own recursion frames
+# on the hardware stack too, so xt defines no XTC_SP at all (flat
+# targets keep that second software stack; xt's deep hw stack replaces
+# it).
+#
+# ── ZP layout ──────────────────────────────────────────────────────
+# │ $0082-$0089  backend ephemeral per-instruction staging scratch   │
+# │ $008A-$008B  SSP — software stack pointer (spill frames)         │
+# │ $008C-$008D  FP  — spill-frame base pointer                      │
+# │ $008E-$008F  HP  — heap pointer                                  │
+# │ $0090-$0099  arc-scratch (runtime scratch — see below)           │
+# │ $009A-$00AF  vars                                                │
+# │ $00B0-$00BF  runtime params (reserved)                           │
+# │ $00C0-$00FF  vars                                                │
+# SSP/FP and the staging scratch are hardcoded in XT6502Backend.m; HP,
+# arc-scratch, and the var pool are declared in [zp] below.
+#
+# The arc-scratch window holds the reference-counting / heap runtime's
+# pointers, which must SURVIVE a user dealloc dispatch: the dispatched
+# destructor is ordinary generated code that clobbers the $82-$89
+# staging AND the var pool, then control returns to walk/free the
+# original block. So this scratch can live in neither the staging zone
+# nor the var pool — it gets its own window, and the vars start above
+# it. Breakdown of $90-$99:
+#   $90-$95  ARC retain/release object pointer + work bytes
+#   $96-$97  heap allocator walk pointer        ({{zp.hp}})
+#   $98-$99  heap/retain secondary pointer       ({{zp.tmp}})
+
+[zp]
+hp          = $8E-$8F
+arc-scratch = $90-$99
+vars        = $9A-$AF, $C0-$FF
+runtime     = $B0-$BF
+
+[memory]
+system  = $2400-$3FFF
+screen  = $4000-$5FFF
+# Unbanked code/data only. Code auto-spills here from the system region
+# across the $4000-$D7FF gap; it never enters the $A000-$CFFF data
+# window. Overflow past $FFF9 fails the build (split main into banked
+# functions instead).
+main    = $D800-$FFF9
+
+[banking]
+
+# Banking regions follow a generic `<name>-window` / `<name>-reg`
+# convention; `code` and `data` are the well-known windows, and a target
+# with more apertures can add e.g. `extra-window` / `extra-reg`. Page size
+# is the window length (one page per window), derived not declared; the
+# addressable region is page-size × 256 (8-bit selector), also derived.
+
+# Code-bank window: $6000-$9FFF (one 16 KB page), selected by $D5C0.
+# → 256 pages × 16 KB = 4 MB of code.
+code-window = $6000-$9FFF
+code-reg    = $D5C0
+
+# Data-bank window: $A000-$CFFF (one 12 KB page), selected by $D5C1.
+# → 256 pages × 12 KB = 3 MB of data. Data only — code is never placed
+# here (see the banking notes above).
+data-window = $A000-$CFFF
+data-reg    = $D5C1
+
+# Spill-frame region (STACK-ABI §11.3) for SSP/FP, in low RAM above the
+# $03FD-$047F cassette buffer.
+[stack]
+range   = $0500-$07FF
+grows   = up
+
+# Banked free-list heap — makes -falloc=heap the xt default (ARC,
+# new/delete/release). The heap lives in the data window declared above:
+# `range` is the 12 KB aperture ($A000-$CFFF; heap_end is exclusive at
+# $D000). `bank = true` makes it ON-DEMAND: it claims one data bank at a
+# time from the shared bank bitmap as new()/alloc needs it, growing up to
+# the window's last page (3 MB), and gives empty banks back. No fixed
+# reservation — an app uses as much heap as it needs without editing the
+# layout, and the same bitmap keeps bank() (when it lands) from colliding.
+[heap]
+range   = $A000-$D000
+bank    = true
+grows   = up
+
+[entry]
+address = $2400

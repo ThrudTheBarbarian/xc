@@ -1,0 +1,13 @@
+---
+title: UXOutlineRow
+description: "A table row that knows its outline: it draws the disclosure triangle in the indent gutter and toggles its node on a click there."
+---
+
+`UXOutlineRow` is the [`UXTableRow`](/compiler/api/uxkit/uxtablerow/)
+subclass an [`UXOutlineView`](/compiler/api/uxkit/uxoutlineview/) makes
+for its lines. It draws the disclosure triangle in the indent gutter
+(pointing right when closed, down when open). A click inside the
+triangle's box flips the node's expansion and reloads. Any other click
+is an ordinary row click, handled by the table.
+
+The view's `newRow` hook constructs these; nothing else does.

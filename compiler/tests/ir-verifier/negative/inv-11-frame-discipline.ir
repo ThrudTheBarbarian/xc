@@ -1,0 +1,21 @@
+; Invariant 11 (IR-SPEC §12.11): The function's declared frame
+; size matches the sum of its pinned-local sizes. The backend's
+; PSH immediate is computed from frame_size; a mismatch corrupts
+; stack-relative offsets.
+; VIOLATION: pinned: [(%loc:U16 @0)] has total size 2 bytes, but
+; the function declares size: 12. The backend would reserve 12
+; bytes of frame for 2 bytes of actual locals — the discrepancy
+; is the verifier's job to catch before codegen sees it.
+
+module "inv-11-negative" {
+  symbol bad_frame: function (U16) -> U16
+    attributes: { cloaked: false, banked: false, variadic: false }
+
+  function bad_frame(%a: U16, %m0: Mem) -> (U16, Mem) {
+    frame: { pinned: [(%loc:U16 @0)], size: 12 }    ; ERROR: sum=2, declared=12
+
+    bb_entry:
+      preds: -
+      Return %a, %m0
+  }
+}

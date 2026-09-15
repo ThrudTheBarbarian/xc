@@ -1,0 +1,4 @@
+# Compiled reference binaries (built from the .c sources here) — artifacts only.
+*
+!*.c
+!.gitignore

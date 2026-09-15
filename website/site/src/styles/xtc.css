@@ -1,0 +1,94 @@
+/* Accent palette — the golden jigsaw piece (≈#fbcb44) from the hero image.
+   Starlight derives every UI accent from --sl-color-accent-*; overriding the
+   ladder here re-skins buttons, links, focus rings, and the active-nav marker
+   in both light and dark themes. The dark theme leans into the bright gold;
+   the light theme uses a deeper gold so link text keeps AA contrast on white. */
+
+:root {
+	--sl-color-accent-low: #43310a;
+	--sl-color-accent: #f5c63c;
+	--sl-color-accent-high: #ffe7a6;
+}
+
+:root[data-theme='light'] {
+	--sl-color-accent-low: #fff0cc;
+	--sl-color-accent: #876300;
+	--sl-color-accent-high: #4a3500;
+}
+
+/* Starlight's splash hero defaults to a 7fr/4fr grid at ≥50rem to leave
+   room for an optional side image. When the hero has no image, that
+   reserved column squeezes the action buttons and forces wrapping even
+   on wide viewports. Full-width is the right layout in that case. */
+@media (min-width: 50rem) {
+	.hero:not(:has(> img, > .hero-html)) {
+		grid-template-columns: 100%;
+	}
+}
+
+/* Primary call-to-action button — force the vivid jigsaw gold in BOTH themes.
+   Starlight ties the primary button's background to --sl-color-text-accent, the
+   same token it uses for body-link text. That token has to stay readable (a deep
+   gold on white in the light theme, pale gold on black in the dark theme), which
+   left the button brown / washed-out. So the button is themed directly here. The
+   leading `a` tag lifts specificity above Starlight's :where()-based rule, so this
+   wins regardless of stylesheet order. */
+a.sl-link-button.primary {
+	background: #fbcb44;
+	border-color: #fbcb44;
+	color: #000;
+}
+a.sl-link-button.primary:hover {
+	background: #ffd75e;
+	border-color: #ffd75e;
+	color: #000;
+}
+
+/* Brand wordmark (top-left). Vivid jigsaw gold (#fbcb44) on the dark nav. On the
+   light (white) nav, a compromise gold #daa928 — halfway between the readable
+   darkgoldenrod #b8860b (~3.25:1) and the vivid #fbcb44 (~1.7:1), landing at
+   ~2.2:1. `a` lifts specificity above Starlight's :where()-wrapped .site-title. */
+a.site-title {
+	color: #fbcb44;
+}
+[data-theme='light'] a.site-title {
+	color: #daa928;
+}
+
+/* Active "current page" item in the left sidebar — the filled pill. Match the
+   primary button: vivid gold fill, black text, in both themes. The :hover/:focus
+   selectors are needed to outrank Starlight's (0,2,0) hover rule. */
+a[aria-current='page'],
+a[aria-current='page']:hover,
+a[aria-current='page']:focus {
+	background-color: #fbcb44;
+	color: #000;
+}
+
+/* Nested sidebar sub-group labels (Language / Standard library / Compiler usage
+   under Compiler). Starlight tags every group label with `.large` (bold, enlarged,
+   strong colour) regardless of depth. Strip that for nested groups only so they
+   read like the plain "Overview" / "Future work" items; top-level section headers
+   (Hardware, Compiler, …) keep it. `.top-level ul .large` only matches labels that
+   sit inside an inner <ul> (i.e. nested), and outranks Starlight's .large:where()
+   rule (0,2,1 vs 0,1,0). */
+.top-level ul .large {
+	font-size: var(--sl-text-sm);
+	font-weight: 400;
+	color: var(--sl-color-gray-2);
+}
+.top-level ul summary:hover .large,
+.top-level ul summary:focus .large {
+	color: var(--sl-color-white);
+}
+
+/* UXKit "Platform appearance" tabs — three realms with slight separators:
+   Web | iOS Android | macOS Windows Linux GEM.  Every uxkit page keeps the
+   full seven-tab set in this fixed order, so the realm breaks sit before
+   tab 2 (device) and tab 4 (desktop). */
+.ux-platforms starlight-tabs [role='tablist'] > li:nth-child(2),
+.ux-platforms starlight-tabs [role='tablist'] > li:nth-child(4) {
+	margin-left: 1rem;
+	border-left: 1px solid var(--sl-color-hairline, #8884);
+	padding-left: 1rem;
+}

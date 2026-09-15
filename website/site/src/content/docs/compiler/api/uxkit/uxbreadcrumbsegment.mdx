@@ -1,0 +1,23 @@
+---
+title: UXBreadcrumbSegment
+description: "One clickable step of a UXBreadcrumb: its title, the app's tag, and the laid-out box the hit test answers with."
+---
+
+`UXBreadcrumbSegment` is one step of a
+[`UXBreadcrumb`](/compiler/api/uxkit/uxbreadcrumb/): the `title` drawn in the
+row, the `tag` the app gets back on a click, and the laid-out position (`x`,
+`w`, `visible`) that the breadcrumb's layout writes and its hit test reads.
+`visible` is false when the segment has been elided into the ellipsis. Elision
+affects only the display, not the model.
+
+You rarely use this class directly: `addSegment(title, tag)` creates segments,
+and `titleAt` / `tagAt` read them back. It is public because the layout results
+are public: a test asserts elision by reading these fields.
+
+## Fields
+
+- `title`: the drawn text.
+- `tag`: the app's payload (a node id, a directory handle), reported back
+  through the breadcrumb's `tagAt`.
+- `x`, `w`: the laid-out box within the widget, written by `layout`.
+- `visible`: false when elided. The hit test skips invisible segments.

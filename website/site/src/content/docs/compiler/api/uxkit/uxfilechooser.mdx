@@ -1,0 +1,172 @@
+---
+title: UXFileChooser
+description: "The testable model behind an open/save panel: navigation as UXPath edits, an extension filter, and the result path. The backend supplies the view."
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+`UXFileChooser` is the **model** behind an open/save file panel: the
+current directory as a [`UXPath`](/compiler/api/uxkit/uxpath/), a
+backend-supplied listing of its entries, an extension filter, and the
+prompt string. The backend provides the panel view and reads the
+directory; this class holds the testable state it drives.
+
+The filter rule: **directories always show**; files show only when they
+match an allowed extension (an empty filter accepts all). Navigation is
+pure `UXPath` editing: entering a folder appends a component, and going up
+deletes one. The whole model can be tested with no filesystem.
+
+```c
+#use <UXKit>
+```
+
+## Where you see it
+
+The chooser has no view of its own. It is the state behind whichever panel
+runs. Call [`UXOpenPanel`](/compiler/api/uxkit/uxopenpanel/)`.run()` and
+you get the platform's own dialog where one exists, or the toolkit-drawn
+[`UXFilePanel`](/compiler/api/uxkit/uxfilepanel/) driving this model where
+none does. Two captures of that panel follow:
+
+<div class="ux-platforms">
+<Tabs>
+  <TabItem label="GEM">
+    <img src="/uxkit/filechooser-gem.png" alt="The toolkit file panel on GEM" width="300" />
+
+    The toolkit-drawn `UXFilePanel` (GEM has no OS file selector): mask +
+    Find, the sortable Name/Size listing with folders first, Recent, and
+    the Manage group. Every control is a neutral widget over this model.
+  </TabItem>
+  <TabItem label="Windows">
+    <img src="/uxkit/filechooser-windows.png" alt="The toolkit file panel on Windows" width="300" />
+
+    The same panel through GDI (Wine's comdlg32 dialog hangs on macOS, so
+    the driver prefers the toolkit panel there; real Windows can switch to
+    the native `GetOpenFileName`).
+  </TabItem>
+  <TabItem label="macOS">
+    A native `NSOpenPanel`. It is an out-of-process system service, so it
+    has no headless capture.
+  </TabItem>
+</Tabs>
+</div>
+
+## Overview
+
+```c
+UXFileChooser* fc = new UXFileChooser();
+fc.setDirectory(UXPath.parse((u8*)"/home/user"));
+fc.allowExtension((u8*)"png");
+fc.allowExtension((u8*)"jpg");
+fc.setEntries(listingFromBackend);
+Array* show = fc.visibleEntries();     // dirs + matching files only
+```
+
+## Topics
+
+**Navigation** · [directory](#directory--setdirectory) · [setDirectory](#directory--setdirectory) · [enter](#enter) · [goUp](#goup)
+**Listing** · [setEntries](#setentries) · [visibleEntries](#visibleentries) · [visibleCount](#visiblecount) · [acceptsFile](#acceptsfile) · [allowExtension](#allowextension)
+**Open vs save** · [setSaveMode](#setsavemode) · [setSaveName](#setsavename) · [setPrompt](#setprompt) · [resultPath](#resultpath)
+
+### directory / setDirectory
+
+```c
+UXPath* directory(void)
+void    setDirectory(UXPath* p)
+```
+
+Where the chooser is browsing.
+
+### enter
+
+```c
+void enter(u8* dirname)
+```
+
+Appends the folder to the path and clears the entries. The backend then
+re-lists the new directory.
+
+### goUp
+
+```c
+void goUp(void)
+```
+
+Deletes the last component and clears the entries.
+
+### setEntries
+
+```c
+void setEntries(Array* e)
+```
+
+The backend hands over the raw directory listing
+([`UXFileEntry`](/compiler/api/uxkit/uxfileentry/) items).
+
+### visibleEntries
+
+```c
+Array<UXFileEntry>* visibleEntries(void)
+```
+
+The filtered listing: every directory, plus the files that pass the
+extension filter.
+
+### visibleCount
+
+```c
+i32 visibleCount(void)
+```
+
+How many entries pass the filter.
+
+### acceptsFile
+
+```c
+bool acceptsFile(u8* name)
+```
+
+The filter itself: case-insensitive extension match, or every file when the
+filter is empty.
+
+### allowExtension
+
+```c
+void allowExtension(u8* ext)
+```
+
+Adds an accepted extension (without the dot).
+
+### setSaveMode
+
+```c
+void setSaveMode(bool on)
+```
+
+Switches to save semantics. The default "Open" prompt becomes "Save"
+(a custom prompt is kept).
+
+### setSaveName
+
+```c
+void setSaveName(u8* n)
+```
+
+The proposed file name a save panel returns.
+
+### setPrompt
+
+```c
+void setPrompt(u8* p)
+```
+
+The customisable button/title string.
+
+### resultPath
+
+```c
+u8* resultPath(u8* chosenName)
+```
+
+The full path the panel returns: the directory plus the chosen name, or
+plus the save name in save mode.

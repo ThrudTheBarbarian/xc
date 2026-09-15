@@ -1,0 +1,19 @@
+; Invariant 5 (IR-SPEC §12.5, §7.1): Each memory token is consumed
+; at most once. Memory effects serialise into a linear chain unless
+; the optimiser splits it with MemSplit/MemMerge.
+; This fixture: two loads chained via %m0 → %m1 → %m2, each token
+; consumed by exactly one op.
+
+module "inv-05-positive" {
+  symbol read_two: function (Ptr(U8, unbanked), Ptr(U8, unbanked)) -> U8
+    attributes: { cloaked: false, banked: false, variadic: false }
+
+  function read_two(%p1: Ptr(U8, unbanked), %p2: Ptr(U8, unbanked), %m0: Mem) -> (U8, Mem) {
+    bb_entry:
+      preds: -
+      %v1:U8, %m1 = Load %p1, %m0
+      %v2:U8, %m2 = Load %p2, %m1
+      %r:U8       = Add %v1, %v2
+      Return %r, %m2
+  }
+}

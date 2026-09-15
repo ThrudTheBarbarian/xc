@@ -1,0 +1,29 @@
+module "ptr-arith" {
+  symbol strlen: function (Ptr(U8, unbanked)) -> U8
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  function strlen(%0: Ptr(U8, unbanked), %1: Mem) -> (U8, Mem) {
+    bb_entry:
+      preds: -
+      %2:U8 = Const #0:U8
+      Branch bb_1_header
+    bb_1_header:
+      preds: bb_entry, bb_1_body
+      %3:U8 = Phi [(bb_entry, %2), (bb_1_body, %13)]
+      %4:Ptr(U8, unbanked) = Phi [(bb_entry, %0), (bb_1_body, %11)]
+      %5:U8, %6 = Load %4, %1
+      %7:U8 = Const #0:U8
+      %8:Bool = ICmp NE, %5, %7
+      CondBranch %8, bb_1_body, bb_1_exit
+    bb_1_body:
+      preds: bb_1_header
+      %9:U8 = Const #1:U8
+      %10:U16 = ZExt %9
+      %11:Ptr(U8, unbanked) = ElementAddr %4, %10
+      %12:U8 = Const #1:U8
+      %13:U8 = Add %3, %12
+      Branch bb_1_header
+    bb_1_exit:
+      preds: bb_1_header
+      Return %3, %6
+  }
+}

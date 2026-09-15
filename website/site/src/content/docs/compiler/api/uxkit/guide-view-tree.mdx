@@ -1,0 +1,191 @@
+---
+title: "Guide: the view tree and layout"
+description: "Parents own their children and place them; springs and struts decide what happens when the window resizes. Frames, coordinate spaces, and who owns what."
+---
+
+Every view in UXKit lives in a **tree**. A view does not place itself and does
+not own itself: you hand it to a parent with a frame, and the parent takes over.
+This rule explains most of the API on [`UXView`](/compiler/api/uxkit/uxview/).
+
+## A parent places its children
+
+```c
+content.addSubview(readout, UXGeom.make(16, 16, 200, 18));
+```
+
+`addSubview` attaches the view to the tree and sets its frame in one call.
+There is no separate "add" and "position" step, because a view with no frame
+has no meaning.
+
+The frame is `x, y, width, height` **in the parent's coordinates**, so
+`16, 16` is sixteen points in from the content view's top-left corner, not the
+window's or the screen's.
+
+### Two coordinate spaces, and when you need each
+
+```c
+UXRect f = ok.frame();           // where I am inside MY PARENT
+UXRect a = ok.absoluteFrame();   // where I am inside the WINDOW
+UXRect b = ok.bounds();          // my own size, origin always 0,0
+```
+
+`frame` is what you set and what layout uses. Use `absoluteFrame` to compare
+views under **different** parents, for hit testing or for drawing an overlay
+across the window. If you need `absoluteFrame` in ordinary layout code, the
+view should usually be a child of something else.
+
+`bounds` is the view's own rectangle, always at origin `0,0`. `drawRect` draws
+into it.
+
+## Resizing: springs and struts
+
+A resizable window has to decide what moves and what stretches. UXKit uses the
+classic springs-and-struts mask. It is cheap and predictable, and backends that
+resize their own controls support it natively.
+
+| constant | meaning |
+| --- | --- |
+| `UX_ANCHOR_LEFT` | keep the gap to my parent's left edge fixed |
+| `UX_ANCHOR_RIGHT` | keep the gap to my parent's right edge fixed |
+| `UX_ANCHOR_TOP` | keep the gap above me fixed |
+| `UX_ANCHOR_BOTTOM` | keep the gap below me fixed |
+| `UX_FLEX_WIDTH` | let my width absorb slack |
+| `UX_FLEX_HEIGHT` | let my height absorb slack |
+
+Combine them with `|`. The default mask `0` pins a view top-left at a fixed
+size, so a view you never configure stays put.
+
+### The three common cases
+
+```c
+// Across the top: grows sideways, never taller.
+header.setAutoresizeMask(UX_ANCHOR_TOP | UX_ANCHOR_LEFT | UX_FLEX_WIDTH);
+
+// The middle: takes all the slack in both directions.
+body.setAutoresizeMask(UX_ANCHOR_LEFT | UX_ANCHOR_TOP | UX_FLEX_WIDTH | UX_FLEX_HEIGHT);
+
+// Glued to the bottom-left: the gap below it stays constant.
+ok.setAutoresizeMask(UX_ANCHOR_LEFT | UX_ANCHOR_BOTTOM);
+```
+
+These three cover most dialogs: a header, a body that absorbs the change, and
+buttons that stay with an edge. The complete program is
+[`layout.xc`](#the-whole-program) below.
+
+As a rule, **anchor the edges you want to keep and flex the dimension you want
+to give away.** A view with `UX_ANCHOR_LEFT | UX_ANCHOR_RIGHT` and no
+`UX_FLEX_WIDTH` is over-constrained, because it cannot keep both gaps without
+changing width. The toolkit resolves this by favouring the anchors.
+
+## Ownership, and what that means for lifetime
+
+A parent holds its children **strongly**, in the order they were added. As a
+result:
+
+- A view you add and never mention again stays alive as long as its parent does.
+- [`removeFromSuperview`](/compiler/api/uxkit/uxview/) detaches the view from
+  the tree and removes it from the parent's subview list. If nothing else holds
+  it, it is freed.
+- `removeAllSubviews` empties a container in one call. Use it when swapping one
+  form for another. Removing children by index while the indices shift tends to
+  leave half of them behind.
+
+Hold a view in a field of your controller when you need to talk to it later
+(`readout` in [the first-window guide](/compiler/api/uxkit/guide-first-window/)).
+This extra strong reference is fine, because the controller outlives the window
+in almost every program.
+
+## Hidden is inherited
+
+```c
+box.setHidden(true);     // the box AND everything inside it disappears
+```
+
+Hiding a container hides its children, including children realized as
+**native** controls. A native control is its own platform view, positioned
+absolutely, so it does not disappear when an ancestor does. The toolkit pushes
+the hidden state down explicitly on every backend. It leaves the child's own
+hidden flag unchanged, so un-hiding the parent restores the previous state.
+
+This makes "show one form at a time" a two-line operation, and
+[`UXTabView`](/compiler/api/uxkit/uxtabview/) uses it internally.
+
+## finalise, and adding views later
+
+```c
+win.tree.finalise();
+win.displayAll();
+```
+
+`finalise` says the tree's shape is complete, so the backend can realize native
+controls for it. `displayAll` paints and creates them.
+
+You **can** add views after finalising (an editor building panels on demand
+does it constantly), and they are realized on the next display pass. Build
+first and finalise once because the first paint needs a whole tree, not a dozen
+partial ones.
+
+## The whole program
+
+```c
+#import <Stdio.xc>
+#import "UXAppKitDriver.xc"
+#import "UXApplication.xc"
+#import "UXWindow.xc"
+#import "UXView.xc"
+#import "UXControl.xc"
+#import "UXGeometry.xc"
+
+#define W 320
+#define H 200
+
+class Layout : Object <UXApplicationDelegate>
+{
+    void init(void) { }
+
+    i32 applicationDidStart(UXApplication* app) {
+        UXView*   content = new UXView();
+        UXWindow* win     = new UXWindow();
+        app.addWindow(win);
+        win.open((u8*)"Layout", UXGeom.make(60, 60, W, H), content);
+
+        UXLabel* header = new UXLabel();
+        header.setText((u8*)"header — pinned top, flexible width");
+        content.addSubview(header, UXGeom.make(8, 8, W - 16, 18));
+        header.setAutoresizeMask(UX_ANCHOR_TOP | UX_ANCHOR_LEFT | UX_FLEX_WIDTH);
+
+        UXView* body = new UXView();
+        content.addSubview(body, UXGeom.make(8, 34, W - 16, H - 74));
+        body.setAutoresizeMask(UX_ANCHOR_LEFT | UX_ANCHOR_TOP | UX_FLEX_WIDTH | UX_FLEX_HEIGHT);
+
+        UXButton* ok = new UXButton();
+        ok.setTitle((u8*)"OK");
+        content.addSubview(ok, UXGeom.make(8, H - 32, 72, 24));
+        ok.setAutoresizeMask(UX_ANCHOR_LEFT | UX_ANCHOR_BOTTOM);
+
+        win.tree.finalise();
+        win.displayAll();
+
+        UXRect f = ok.frame();
+        UXRect a = ok.absoluteFrame();
+        Stdio.printf("ok frame=%d,%d abs=%d,%d\n", f.x, f.y, a.x, a.y);
+        return 0;
+    }
+}
+
+void main(void) {
+    gDriver = new UXAppKitDriver();
+    UXApplication* app = new UXApplication();
+    app.setDelegate(new Layout());
+    app.run();
+}
+```
+
+## What to read next
+
+- [Controls and callbacks](/compiler/api/uxkit/guide-controls/): wiring
+  behaviour to what you have laid out
+- [`UXView`](/compiler/api/uxkit/uxview/): the full view surface
+- [`UXSplitView`](/compiler/api/uxkit/uxsplitview/) and
+  [`UXScrollView`](/compiler/api/uxkit/uxscrollview/): containers that do their
+  own layout

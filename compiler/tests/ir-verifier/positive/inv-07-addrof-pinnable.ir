@@ -1,0 +1,22 @@
+; Invariant 7 (IR-SPEC §12.7, §6.6): AddrOf only on pinnable values
+; — either a symbol-table entry or a function-local marked `pinned`
+; in the function's frame info.
+; This fixture: AddrOf of a DataGlobal symbol `counter`. The
+; symbol table lists it as a dataglobal, so it is pinnable; the
+; verifier accepts.
+
+module "inv-07-positive" {
+  symbol counter: dataglobal U16 init #0:U16
+    attributes: { volatile: false, escapes: false, taskLocal: false }
+
+  symbol read_counter: function () -> U16
+    attributes: { cloaked: false, banked: false, variadic: false }
+
+  function read_counter(%m0: Mem) -> (U16, Mem) {
+    bb_entry:
+      preds: -
+      %p:Ptr(U16, unbanked) = AddrOf @counter
+      %v:U16, %m1           = Load %p, %m0
+      Return %v, %m1
+  }
+}

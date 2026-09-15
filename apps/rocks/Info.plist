@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>            <string>Rocks</string>
+    <key>CFBundleDisplayName</key>     <string>Rocks</string>
+    <key>CFBundleIdentifier</key>      <string>org.compile-xc.rocks</string>
+    <key>CFBundleVersion</key>         <string>0.1</string>
+    <key>CFBundleShortVersionString</key><string>0.1</string>
+    <key>CFBundlePackageType</key>     <string>APPL</string>
+    <key>CFBundleExecutable</key>      <string>Rocks</string>
+    <key>LSMinimumSystemVersion</key>  <string>13.0</string>
+    <key>NSHighResolutionCapable</key> <true/>
+    <key>NSPrincipalClass</key>        <string>NSApplication</string>
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>       <string>GEM Resource</string>
+            <key>CFBundleTypeExtensions</key> <array><string>rsc</string><string>rsrc</string></array>
+            <key>CFBundleTypeRole</key>       <string>Editor</string>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key>       <string>Rocks Project</string>
+            <key>CFBundleTypeExtensions</key> <array><string>gemproj</string></array>
+            <key>CFBundleTypeRole</key>       <string>Editor</string>
+        </dict>
+    </array>
+</dict>
+</plist>

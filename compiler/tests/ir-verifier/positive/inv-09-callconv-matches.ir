@@ -1,0 +1,21 @@
+; Invariant 9 (IR-SPEC §12.9, §6.9): The CallConv-tagged opcode used
+; at a call site must match the callee's symbol-table attributes. A
+; Call (the standard opcode) targets a function whose symbol entry
+; declares cloaked: false and banked: false.
+; This fixture: a Call (opcode = standard, CallConv::Standard) of
+; @plain whose symbol attributes are cloaked: false, banked: false.
+
+module "inv-09-positive" {
+  symbol plain: function (U8, U8) -> U8
+    attributes: { cloaked: false, banked: false, variadic: false }
+
+  symbol caller: function (U8, U8) -> U8
+    attributes: { cloaked: false, banked: false, variadic: false }
+
+  function caller(%a: U8, %b: U8, %m0: Mem) -> (U8, Mem) {
+    bb_entry:
+      preds: -
+      %r:U8, %m1 = Call @plain, [%a, %b], CallConv::Standard, %m0
+      Return %r, %m1
+  }
+}

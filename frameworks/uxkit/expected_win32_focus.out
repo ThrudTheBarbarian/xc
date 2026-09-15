@@ -1,0 +1,3 @@
+default-button fired
+f1=A f2=B fired=1
+PASS: Tab moved focus, Return fired the default button

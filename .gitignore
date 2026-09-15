@@ -1,0 +1,33 @@
+# Build artifacts (each subtree builds in place; never tracked)
+compiler/build/
+compiler/bin/
+**/*.o
+**/*.d
+
+# Website: node + Astro build outputs; downloads are large binaries
+website/site/node_modules/
+website/site/dist/
+website/site/.astro/
+website/downloads/*.tar.bz2
+website/downloads/*.zip
+
+# Signing secrets — never commit
+*.p8
+keys/
+
+.DS_Store
+
+website/site/private/
+
+# Signing keystores are generated on demand by the android scripts, never
+# committed. A private key does not belong in version control even when it
+# is a disposable self-signed one for local APK signing.
+*.keystore
+
+# Local-only material. Nothing below is ever part of the repository.
+/private/
+/build.env
+
+# Python bytecode
+__pycache__/
+*.pyc

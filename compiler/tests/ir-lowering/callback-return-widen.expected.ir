@@ -1,0 +1,31 @@
+module "callback-return-widen" {
+  layout 0: size=4 align=1 fields=[(0:Ptr(U8, unbanked)), (2:Ptr(Void, unbanked))]
+  symbol triple: function (I32) -> I32
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  symbol pick: function () -> Agg(0)
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  symbol __bm_tramp_i32_i32_: function (Ptr(Void, unbanked), I32) -> I32
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  function triple(%0: I32, %1: Mem) -> (I32, Mem) {
+    bb_entry:
+      preds: -
+      %2:U8 = Const #3:U8
+      %3:I32 = ZExt %2
+      %4:I32 = Mul %0, %3
+      Return %4, %1
+  }
+  function pick(%0: Mem) -> (Agg(0), Mem) {
+    bb_entry:
+      preds: -
+      %1:Ptr(Void, unbanked) = AddrOf @triple
+      %2:Ptr(Void, unbanked) = AddrOf @__bm_tramp_i32_i32_
+      %3:Agg(0) = AggBuild %1, %2
+      Return %3, %0
+  }
+  function __bm_tramp_i32_i32_(%0: Ptr(Void, unbanked), %1: I32, %2: Mem) -> (I32, Mem) {
+    bb_entry:
+      preds: -
+      %3:I32, %4 = CallIndirect %0, [%1], CallConv::Standard, %2
+      Return %3, %4
+  }
+}

@@ -1,0 +1,7 @@
+boot
+https api.example /v1/items
+port 8080 q limit=5
+warning: Url.fetch(https://api.example:8080/v1/items?limit=5): no transport for this URL - completing with status 0
+no-transport ok
+warning: w
+error: e

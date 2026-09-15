@@ -1,0 +1,4 @@
+noswap=1
+alive=1 deallocs=0
+swap=9
+alive=1 deallocs=1

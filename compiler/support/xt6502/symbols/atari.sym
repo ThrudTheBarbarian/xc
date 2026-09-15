@@ -1,0 +1,215 @@
+; atari.sym — Atari 8-bit hardware and OS symbol table
+;
+; Loaded by xta when targeting Atari platforms (xl, xt, xe).
+; Format: NAME = $XXXX   ; comments after semicolon
+
+; Page 0: OS and hardware
+LINZBS  = $00
+CASINI  = $02
+RAMLO   = $04
+TRAMSZ  = $06
+TSTDAT  = $07
+WARMST  = $08
+BOOTQ   = $09
+DOSVEC  = $0A
+DOSINI  = $0C
+APPMHI  = $0E
+POKMSK  = $10
+BRKKEY  = $11
+RTCLOK  = $12
+BUFADR  = $15
+ICCOMT  = $17
+DTEFIL  = $1A
+ICCMD   = $1B
+DTEFLI  = $1C
+LBUFF   = $1D
+ATRACT  = $4D
+SSKCTL  = $4E
+
+; Display
+LMARGN  = $52
+RMARGN  = $53
+ROWCRS  = $54
+COLCRS  = $55
+DINDEX  = $57
+SAVMSC  = $58
+OLDROW  = $5A
+OLDCOL  = $5B
+OLDCHR  = $5D
+OLDADR  = $5E
+LOGCOL  = $63
+
+; OS vectors
+VDSLST  = $200
+VPRCED  = $202
+VINTER  = $204
+VBREAK  = $206
+VKEYBD  = $208
+VSERIN  = $20A
+VSEROC  = $20C
+VTIMR1  = $210
+VTIMR2  = $212
+VTIMR4  = $214
+VIMIRQ  = $216
+CDTMV1  = $218
+CDTMV2  = $21A
+CDTMV3  = $21C
+CDTMV4  = $21E
+CDTMV5  = $220
+SDMCTL  = $22F
+SDLSTL  = $230
+SDLSTH  = $231
+LPENH   = $234
+LPENV   = $235
+TXTROW  = $290
+TXTCOL  = $291
+
+; Colors (shadow)
+PCOLR0  = $2C0
+PCOLR1  = $2C1
+PCOLR2  = $2C2
+PCOLR3  = $2C3
+COLOR0  = $2C4
+COLOR1  = $2C5
+COLOR2  = $2C6
+COLOR3  = $2C7
+COLOR4  = $2C8
+
+; Misc
+ATACHR  = $2FB
+CH      = $2FC
+FILDAT  = $2FD
+DSPFLG  = $2FE
+SSFLAG  = $2FF
+CHBAS   = $2F4
+RUNAD   = $2E0
+INITAD  = $2E2
+
+; Floating point
+FR0     = $D4
+FR1     = $E0
+CIX     = $F2
+INBUFF  = $F3
+FLPTR   = $FC
+
+; GTIA ($D000-$D01F)
+HPOSP0  = $D000
+HPOSP1  = $D001
+HPOSP2  = $D002
+HPOSP3  = $D003
+HPOSM0  = $D004
+HPOSM1  = $D005
+HPOSM2  = $D006
+HPOSM3  = $D007
+SIZEP0  = $D008
+SIZEP1  = $D009
+SIZEP2  = $D00A
+SIZEP3  = $D00B
+SIZEM   = $D00C
+GRAFP0  = $D00D
+GRAFP1  = $D00E
+GRAFP2  = $D00F
+GRAFP3  = $D010
+GRAFM   = $D011
+COLPM0  = $D012
+COLPM1  = $D013
+COLPM2  = $D014
+COLPM3  = $D015
+COLPF0  = $D016
+COLPF1  = $D017
+COLPF2  = $D018
+COLPF3  = $D019
+COLBK   = $D01A
+PRIOR   = $D01B
+GRACTL  = $D01D
+HITCLR  = $D01E
+CONSOL  = $D01F
+
+; POKEY ($D200-$D20F)
+AUDF1   = $D200
+AUDC1   = $D201
+AUDF2   = $D202
+AUDC2   = $D203
+AUDF3   = $D204
+AUDC3   = $D205
+AUDF4   = $D206
+AUDC4   = $D207
+AUDCTL  = $D208
+STIMER  = $D209
+SKREST  = $D20A
+POTGO   = $D20B
+SEROUT  = $D20D
+IRQEN   = $D20E
+SKCTL   = $D20F
+SERIN   = $D20D
+IRQST   = $D20E
+SKSTAT  = $D20F
+KBCODE  = $D209
+RANDOM  = $D20A
+
+; ANTIC ($D400-$D40F)
+DMACTL  = $D400
+CHACTL  = $D401
+DLISTL  = $D402
+DLISTH  = $D403
+HSCROL  = $D404
+VSCROL  = $D405
+PMBASE  = $D407
+CHBASE  = $D409
+WSYNC   = $D40A
+VCOUNT  = $D40B
+PENH    = $D40C
+PENV    = $D40D
+NMIEN   = $D40E
+NMIST   = $D40F
+NMIRES  = $D40F
+
+; PIA ($D300-$D303)
+PORTA   = $D300
+PORTB   = $D301
+PACTL   = $D302
+PBCTL   = $D303
+
+; OS ROM entry vectors ($E400-$E47F)
+; The OS publishes a stable JMP table at the top of its ROM that
+; user code calls into for editor / serial / cassette / disk /
+; printer / CIO / SIO / interrupt-handler services. Addresses are
+; the same on the 800, 800XL, 130XE, and the XEGS — programs that
+; want to run across the whole 8-bit line should call through these
+; symbolic names rather than the underlying ROM body addresses.
+DSKINV  = $E453    ; disk handler vector
+CIOV    = $E456    ; CIO vector (OPEN/CLOSE/GET/PUT/STATUS/SPECIAL)
+SIOV    = $E459    ; serial I/O vector (calls SIO)
+SETVBV  = $E45C    ; set VBI / DLI vector
+SYSVBV  = $E45F    ; system VBI dispatcher entry
+XITVBV  = $E462    ; VBI exit (chain to OS exit)
+SIOINV  = $E465    ; init SIO
+SENDEV  = $E468    ; send-enable (SIO)
+INTINV  = $E46B    ; init interrupt handler
+CIOINV  = $E46E    ; init CIO
+BLKBDV  = $E471    ; blackboard (debugger entry, mostly historical)
+WARMSV  = $E474    ; warm start
+COLDSV  = $E477    ; cold start
+RBLOKV  = $E47A    ; read-block (cassette)
+CSOPIV  = $E47D    ; cassette open-input
+
+; IOCB area ($0340-$03BF). Eight 16-byte IOCBs; the byte offsets
+; below are within a single IOCB. To address IOCB N, load X with
+; N*16 (e.g. LDX #$60 for IOCB 6), then use the offset symbol as
+; the absolute base in `LDA ICCOM,X` etc.
+ICHID   = $0340    ; handler ID (rebound on OPEN)
+ICDNO   = $0341    ; device number
+ICCOM   = $0342    ; command byte (3=OPEN, 5=GET, 7=PUT, 11=CLOSE, 12=STATUS, …)
+ICSTA   = $0343    ; status from last operation
+ICBAL   = $0344    ; buffer address (low)
+ICBAH   = $0345    ; buffer address (high)
+ICPTL   = $0346    ; put-byte routine address (low)
+ICPTH   = $0347    ; put-byte routine address (high)
+ICBLL   = $0348    ; buffer length (low) -- used by GET/PUT
+ICBLH   = $0349    ; buffer length (high)
+ICAX1   = $034A    ; aux byte 1 -- open mode flags (R/W/append/clear)
+ICAX2   = $034B    ; aux byte 2 -- secondary (e.g. GR.N mode on S: open)
+ICAX3   = $034C    ; aux byte 3
+ICAX4   = $034D    ; aux byte 4
+ICAX5   = $034E    ; aux byte 5
+ICAX6   = $034F    ; aux byte 6

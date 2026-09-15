@@ -1,0 +1,39 @@
+module "class-basic" {
+  layout 0: size=2 align=1 fields=[(0:Ptr(Void, unbanked))]
+  layout 1: size=3 align=1 fields=[(0:Ptr(Void, unbanked)), (2:U8)]
+  layout 2: size=0 align=1
+  layout 3: size=2 align=1 fields=[(0:Ptr(Void, unbanked))]
+  symbol Foo$get: function (Ptr(Agg(1), unbanked)) -> U8
+    attributes: { banked: false, cloaked: false, static: false, variadic: false }
+  symbol run: function () -> U8
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  symbol _xtc_alloc: runtime () -> Void
+    attributes: { banked: false, cloaked: false, variadic: false }
+  function Foo$get(%0: Ptr(Agg(1), unbanked), %1: Mem) -> (U8, Mem) {
+    bb_entry:
+      preds: -
+      %2 = Retain %0, %1
+      %3:Ptr(U8, unbanked) = FieldAddr %0, #1:U8
+      %4:U8, %5 = Load %3, %2
+      %6 = Release %0, %5
+      Return %4, %6
+  }
+  function run(%0: Mem) -> (U8, Mem) {
+    bb_entry:
+      preds: -
+      %1:U16 = Const #1:U16
+      %2:U16 = Const #3:U16
+      %3:U16 = Const #0:U16
+      %4:Ptr(Void, unbanked) = IntToPtr %3
+      %5:Ptr(Agg(1), unbanked), %6 = Call @_xtc_alloc, [%1, %2, %4], CallConv::Standard, %0
+      %7:Ptr(U16, unbanked) = Bitcast %5
+      %8:U16 = Const #1:U16
+      %9 = Store %7, %8, %6
+      %10:U8 = Const #42:U8
+      %11:Ptr(U8, unbanked) = FieldAddr %5, #1:U8
+      %12 = Store %11, %10, %9
+      %13:U8, %14 = Call @Foo$get, [%5], CallConv::Standard, %12
+      %15 = Release %5, %14
+      Return %13, %15
+  }
+}

@@ -1,0 +1,184 @@
+---
+title: UXTextField
+description: "An editable text field that contains no text-editing code: the platform's edit engine operates on the field's buffer, and one change path reports the result."
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+`UXTextField` is an editable field that **contains no text-editing code.**
+The field gives the backend a buffer, and the platform's edit engine does
+insert, delete, arrows, the caret, and per-position validation. The engine
+is GEM's `objc_edit`, an `NSTextField`, a Win32 `EDIT`, a `UITextField`, an
+`EditText`, or a `GtkEntry`. [`UXButton`](/compiler/api/uxkit/uxbutton/)
+follows the same rule and contains no drawing code: the toolkit does not
+re-implement what the platform already does.
+
+Whatever edits it, the **buffer holds the current text**. Native backends
+sync it *before* announcing a change, so a change handler always reads what
+the user typed.
+
+```c
+#use <UXKit>
+```
+
+## Overview
+
+```c
+UXTextField* name = new UXTextField();
+name.setPlaceholder((u8*)"Full name");
+name.setOnChange(&controller.onNameEdited);
+content.addSubview(name, UXGeom.make(8, 8, 180, 24));
+```
+
+The change hook fires on every keystroke, after the buffer is synced:
+
+```c
+void onNameEdited(UXTextField* sender) {
+    validate(sender.text());
+}
+```
+
+For a password, choose the secure treatment before attach, because the native
+control type is selected at realization:
+
+```c
+UXTextField* pw = new UXTextField();
+pw.setSecure(true);
+```
+
+## Conforms to
+
+- Inherits [`UXControl`](/compiler/api/uxkit/uxcontrol/): geometry,
+  enablement, first-responder focus (focus is the caret).
+
+## Topics
+
+**Text** · [text](#text) · [setText](#settext)
+**Change reporting** · [setOnChange](#setonchange) · [fieldDidChange](#fielddidchange)
+**Treatment** · [setPlaceholder](#setplaceholder) · [setSecure](#setsecure) · [setValidation](#setvalidation)
+
+### text
+
+```c
+u8* text(void)
+```
+
+The buffer itself, which every editor operates on.
+
+### setText
+
+```c
+void setText(u8* s)
+```
+
+Replaces the content (clamped to capacity), places the caret at the end, and
+marks the field dirty. It does **not** fire the change hook, since the code
+that sets the text already knows about the change.
+
+### setOnChange
+
+```c
+void setOnChange(callback c void(UXTextField* sender))
+```
+
+A per-keystroke change hook. Like every action it is a callback, so the field
+never owns its controller, and the hook stops firing if that controller is
+released. When it fires, the buffer is already synced; read `sender.text()`.
+
+### fieldDidChange
+
+```c
+void fieldDidChange(void)
+```
+
+The single announcement path. Every backend calls it after its native field
+changes (with the buffer synced first), and GEM's neutral edit path calls it
+directly. It also feeds the event tap (`UXEventTextChanged`) with a **copy** of
+the text, because a recording must hold what was typed at that moment, not what
+the buffer contains later.
+
+### setPlaceholder
+
+```c
+void setPlaceholder(u8* s)
+```
+
+A grey prompt shown while the field is empty, where the platform supports one.
+Set it before or after attach.
+
+### setSecure
+
+```c
+void setSecure(bool on)
+```
+
+Masks input as a password. Set it **before** attach, because the native control
+type is chosen at realization.
+
+### setValidation
+
+```c
+void setValidation(u8* v)
+```
+
+A validation string with one character per input position: `9` digits, `A`
+upper case and space, `a` letters, `X` anything. The edit engine enforces it on
+every keystroke with no extra code.
+
+## Platform appearance
+
+<div class="ux-platforms">
+<Tabs>
+  <TabItem label="Web">
+    <img src="/uxkit/field-web.png" alt="UXTextField on the web backend" width="220" />
+
+    The theme's field bezel with the shared edit engine's caret, drawn on canvas with the same Aristo art as GEM.
+  </TabItem>
+  <TabItem label="iOS">
+    <img src="/uxkit/field-ios.png" alt="UXTextField on iOS" width="220" />
+
+    A `UITextField`. Its editing delegate syncs the buffer first, then `fieldDidChange` fires.
+  </TabItem>
+  <TabItem label="Android">
+    <img src="/uxkit/field-android.png" alt="UXTextField on Android" width="220" />
+
+    An `EditText`. A `TextWatcher` (in the bridge dex) syncs the buffer first, then announces. Secure fields use the platform's password input type.
+  </TabItem>
+  <TabItem label="macOS">
+    <img src="/uxkit/field-macos.png" alt="Textfield on macOS" width="220" />
+
+    An <code>NSTextField</code> (secure: <code>NSSecureTextField</code>).
+  </TabItem>
+  <TabItem label="Windows">
+    <img src="/uxkit/field-windows.png" alt="Textfield on Windows" width="220" />
+
+    An <code>EDIT</code> child window (<code>EN_CHANGE</code> announces).
+  </TabItem>
+  <TabItem label="Linux">
+    <img src="/uxkit/field-linux.png" alt="UXTextField on Linux (GTK)" width="220" />
+
+    A `GtkEntry` (secure: `GtkPasswordEntry`). Its editable signal syncs the buffer first.
+  </TabItem>
+  <TabItem label="GEM">
+    <img src="/uxkit/field-gem.png" alt="Textfield on GEM" width="220" />
+
+    A <code>G_FTEXT</code> with <code>OF_EDITABLE</code>; objc_edit is the editor.
+  </TabItem>
+</Tabs>
+</div>
+
+## Example
+
+A validated numeric field with live feedback:
+
+```c
+UXTextField* port = new UXTextField();
+port.setPlaceholder((u8*)"Port");
+port.setValidation((u8*)"99999");          // five digit positions
+port.setOnChange(&controller.onPortEdited);
+content.addSubview(port, UXGeom.make(8, 8, 80, 24));
+
+void onPortEdited(UXTextField* sender) {
+    apply.setEnabled(sender.text()[(i32)0] != (u8)0);
+}
+```

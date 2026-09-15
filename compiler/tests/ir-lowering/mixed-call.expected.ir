@@ -1,0 +1,25 @@
+module "mixed-call" {
+  symbol compute: function (U8, U16, U32) -> U16
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  symbol run: function () -> U16
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  function compute(%0: U8, %1: U16, %2: U32, %3: Mem) -> (U16, Mem) {
+    bb_entry:
+      preds: -
+      %4:U16 = ZExt %0
+      %5:U16 = Trunc %2
+      %6:U16 = Add %4, %1
+      %7:U16 = Add %6, %5
+      Return %7, %3
+  }
+  function run(%0: Mem) -> (U16, Mem) {
+    bb_entry:
+      preds: -
+      %1:U8 = Const #1:U8
+      %2:U8 = Const #100:U8
+      %3:U16 = ZExt %2
+      %4:U32 = Const #1000000:U32
+      %5:U16, %6 = Call @compute, [%1, %3, %4], CallConv::Standard, %0
+      Return %5, %6
+  }
+}

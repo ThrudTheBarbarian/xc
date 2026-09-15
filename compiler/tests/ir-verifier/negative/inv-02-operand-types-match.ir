@@ -1,0 +1,18 @@
+; Invariant 2 (IR-SPEC §12.2, §6.2): Operand types match def types.
+; Add (and the other binary integer ops) require both operands to
+; share the same integer type. No implicit widening.
+; VIOLATION: Add %a (U8), %b (U16) — the operand types disagree.
+; The frontend must insert an explicit ZExt or Trunc to align them
+; before Add. The verifier must reject.
+
+module "inv-02-negative" {
+  symbol type_mismatch: function (U8, U16) -> U8
+    attributes: { cloaked: false, banked: false, variadic: false }
+
+  function type_mismatch(%a: U8, %b: U16, %m0: Mem) -> (U8, Mem) {
+    bb_entry:
+      preds: -
+      %r:U8 = Add %a, %b      ; ERROR: %a is U8 but %b is U16
+      Return %r, %m0
+  }
+}

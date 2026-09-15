@@ -1,0 +1,125 @@
+---
+title: UXRadioButton
+description: "One of a set: like a checkbox, but only one in its group is selected. The mutual exclusion is neutral logic in UXRadioGroup."
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+`UXRadioButton` is a checkbox's sibling with one difference: only one button in
+its **group** is selected at a time. The mutual exclusion is neutral logic in
+[`UXRadioGroup`](#uxradiogroup). Clicking a button asks the group to select it,
+and the group clears the others. That is all of radio behaviour, so it lives in
+the toolkit rather than in seven drivers. The button draws itself from the
+theme's `radio` / `radio.selected` sprites on backends without a native radio
+idiom, including iOS, because UIKit has none.
+
+```c
+#use <UXKit>
+```
+
+## Overview
+
+```c
+UXRadioGroup* dest = new UXRadioGroup();
+UXRadioButton* email = new UXRadioButton();
+UXRadioButton* sms   = new UXRadioButton();
+email.setTitle((u8*)"Email");
+sms.setTitle((u8*)"SMS");
+dest.add(email); dest.add(sms);
+email.setSelected(true);
+content.addSubview(email, UXGeom.make(8,  8, 100, 20));
+content.addSubview(sms,   UXGeom.make(8, 32, 100, 20));
+```
+
+The action fires after the group has re-selected, so the handler reads the
+new state:
+
+```c
+void onDest(UXControl* sender) {
+    UXRadioButton* pick = dest.selected();
+    ...
+}
+```
+
+## Conforms to
+
+- Inherits [`UXControl`](/compiler/api/uxkit/uxcontrol/): title, the
+  `callback` action (auto-zeroing), the fire path.
+
+## Topics
+
+**State** · [isSelected](#isselected) · [setSelected](#setselected)
+**The group** · [UXRadioGroup](#uxradiogroup)
+
+### isSelected
+
+```c
+bool isSelected(void)
+```
+
+Whether this button is the group's pick.
+
+### setSelected
+
+```c
+void setSelected(bool s)
+```
+
+Sets the state directly and marks the button dirty. This is the raw state. Code
+that wants the group semantics calls the **group's** `select()` instead.
+
+### UXRadioGroup
+
+```c
+class UXRadioGroup : Object
+```
+
+The exclusion set. It holds strong references to its buttons. The view tree does
+too, so ownership is shared, and there is no cycle because the button's
+back-reference is weak.
+
+- `add(UXRadioButton* b)`: adopts the button into the group.
+- `select(UXRadioButton* chosen)`: selects one, clears every other.
+- `selected()`: the current pick, or null.
+
+## Platform appearance
+
+<div class="ux-platforms">
+<Tabs>
+  <TabItem label="Web">
+    <img src="/uxkit/radio-web.png" alt="UXRadioButton on the web backend" width="220" />
+
+    The theme's `radio.selected` sprite at its native 21×21, the same Aristo art GEM draws.
+  </TabItem>
+  <TabItem label="iOS">
+    <img src="/uxkit/radio-ios.png" alt="UXRadioButton on iOS" width="220" />
+
+    App-drawn, because UIKit has no native radio. The themed sprite draws through the same seam as GEM's.
+  </TabItem>
+  <TabItem label="Android">
+    <img src="/uxkit/radio-android.png" alt="UXRadioButton on Android" width="220" />
+
+    A real `android.widget.RadioButton`. The exclusivity stays neutral (no `RadioGroup` container): the group clears the others and the model pushes selection back into every native button.
+  </TabItem>
+  <TabItem label="macOS">
+    <img src="/uxkit/radio-macos.png" alt="Radiobutton on macOS" width="220" />
+
+    A real radio-style <code>NSButton</code>.
+  </TabItem>
+  <TabItem label="Windows">
+    <img src="/uxkit/radio-windows.png" alt="Radiobutton on Windows" width="220" />
+
+    A real <code>BUTTON</code> with <code>BS_RADIOBUTTON</code>.
+  </TabItem>
+  <TabItem label="Linux">
+    <img src="/uxkit/radio-linux.png" alt="UXRadioButton on Linux (GTK)" width="220" />
+
+    App-drawn. Grouped `GtkCheckButton`s are the native idiom and are not used yet.
+  </TabItem>
+  <TabItem label="GEM">
+    <img src="/uxkit/radio-gem.png" alt="Radiobutton on GEM" width="220" />
+
+    The same themed ring and dot, drawn by the same drawRect.
+  </TabItem>
+</Tabs>
+</div>

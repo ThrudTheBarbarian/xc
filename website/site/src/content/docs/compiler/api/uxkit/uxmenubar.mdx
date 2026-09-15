@@ -1,0 +1,110 @@
+---
+title: UXMenuBar
+description: "The app's menu bar as a model: describe the menus, install once, and selections come back as callback calls. The platform does all the tracking."
+---
+
+`UXMenuBar` is the app-level menu model. A menu is **not a widget**: the
+platform assembles it, draws it, tracks the pull-down, highlights the
+hover, and hit-tests the pick. GEM does this inside `evnt_multi`, AppKit
+as a real `NSMenu`, Win32 as a per-window `HMENU`. The model contains no
+drawing, no tracking and no hit-testing. It describes the menu, hands
+that description to the driver in [`install`](#install), and turns the
+resulting selection back into a callback call. This follows the same
+approach as [`UXButton`](/compiler/api/uxkit/uxbutton/) (no drawing) and
+[`UXTextField`](/compiler/api/uxkit/uxtextfield/) (no editing).
+
+```c
+#use <UXKit>
+```
+
+## Overview
+
+```c
+UXMenuBar* bar = new UXMenuBar();
+UXMenu* file = bar.addMenu((u8*)" File ");
+file.addItem((u8*)"  Open...  ", &controller.onOpen);
+file.addSeparator();
+file.addItem((u8*)"  Quit  ", &controller.onQuit);
+bar.install(screenW);              // from here on the bar is the platform's
+```
+
+A handler receives the item, so one method can serve several:
+
+```c
+void onOpen(UXMenuItem* sender) { ... }
+```
+
+## Topics
+
+**Building** · [addMenu](#addmenu) · [install](#install)
+**Selections** · [handleSelection](#handleselection)
+**Live state** · [setChecked](#setchecked) · [setEnabled](#setenabled)
+
+### addMenu
+
+```c
+UXMenu* addMenu(u8* title)
+```
+
+Appends a titled menu (see [`UXMenu`](/compiler/api/uxkit/uxmenu/)) and
+returns it for item building.
+
+### install
+
+```c
+void install(i32 screenW)
+```
+
+Hands the whole model to the driver and shows the bar. Build the model
+completely first, because the platform realizes it once.
+
+### handleSelection
+
+```c
+void handleSelection(i32 titleObj, i32 itemObj)
+```
+
+The selection decoder the run loop calls with the platform's message
+(GEM's `MN_SELECTED` shape). It resolves the ordinals and fires the
+item's action. Separators never fire, and stale indices fire nothing.
+App code never calls this directly.
+
+### setChecked
+
+```c
+void setChecked(u16 mi, u16 ii, bool on)
+```
+
+Sets the item's tick in the model and the live menu together. The
+platform redraws.
+
+### setEnabled
+
+```c
+void setEnabled(u16 mi, u16 ii, bool on)
+```
+
+Enables or greys the item in the model and the live menu together.
+
+## Platform notes
+
+One neutral model has three realizations. GEM builds a bar of `G_TITLE`s
+with dropdown boxes and delivers `MN_SELECTED`. AppKit builds a real
+`NSMenu` on the system bar. Win32 has no screen bar, so it attaches the
+same model as an `HMENU` to **every** window, and a window opened after
+`install` still gets it. The iOS and Android realizations are milestones
+in their drivers' menu work.
+
+## Example
+
+A checkable view option:
+
+```c
+UXMenu* view = bar.addMenu((u8*)" View ");
+view.addItem((u8*)"  Show Ruler  ", &controller.onRuler);
+
+void onRuler(UXMenuItem* sender) {
+    showRuler = !showRuler;
+    bar.setChecked((u16)1, (u16)0, showRuler);
+}
+```

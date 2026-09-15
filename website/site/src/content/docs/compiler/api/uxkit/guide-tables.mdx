@@ -1,0 +1,211 @@
+---
+title: "Guide: tables, outlines and data sources"
+description: "The view never holds your data; it asks for it. Two methods make a table, four make an outline, and the model stays yours."
+---
+
+A [`UXTableView`](/compiler/api/uxkit/uxtableview/) does not hold your data. It
+**asks** for it: how many rows there are, and what goes in a given cell. Your
+model stays yours, in whatever shape suits it, and the table is a view of the
+model and not a second copy that can drift.
+
+## Two methods make a table
+
+```c
+protocol UXTableDataSource {
+    i32 numberOfRows(UXTableView* t);
+    u8* valueForCell(UXTableView* t, i32 row, i32 col);
+}
+```
+
+That is the whole contract:
+
+```c
+i32 numberOfRows(UXTableView* t) { return (i32)tracks.count(); }
+
+u8* valueForCell(UXTableView* t, i32 row, i32 col) {
+    Track* tr = (Track* ?)tracks.get((u16)row);
+    if (col == 0) { return tr.name; }
+    if (col == 1) { return tr.artist; }
+    return self.formatMinutes(tr.mins);
+}
+```
+
+This has two consequences:
+
+**A cell returns text.** If your model holds a number, a date or an enum, the
+data source converts it to a string. Formatting (locale, padding, units) stays
+in your code, so a column of minutes looks the way you chose.
+
+**Watch the buffer you return.** You can return a pointer into a scratch
+buffer, but the table may ask for several cells before drawing any of them. If
+a formatted value must survive, store it. The example below uses one buffer
+because it formats and returns immediately.
+
+## Columns are layout, not data
+
+```c
+table.addColumn((u8*)"Title",  160);
+table.addColumn((u8*)"Artist", 110);
+table.addColumn((u8*)"Min",     40);
+```
+
+A column is a title and a width. It does not know what it holds. `col` in
+`valueForCell` is an index, so reordering columns is a layout change and
+nothing in your model moves.
+
+## The delegate is optional
+
+```c
+protocol UXTableDelegate {
+    optional void tableSelectionDidChange(UXTableView* t, i32 row);
+}
+```
+
+Because the method is `optional`, a table with no delegate is fully
+functional. Add a delegate when you need to respond to selection.
+
+```c
+void tableSelectionDidChange(UXTableView* t, i32 row) {
+    if (row < 0) { status.setText((u8*)"nothing selected"); return; }
+    status.setText(((Track* ?)tracks.get((u16)row)).name);
+}
+```
+
+`row < 0` means **nothing is selected**. This happens when the user clicks away
+or the data reloads, so your handler must deal with it.
+
+### Multiple selection is a set, not a row
+
+```c
+table.setAllowsMultipleSelection(true);
+```
+
+The delegate still reports an anchor row, but the full selection arrives as a
+[`UXIndexSet`](/compiler/api/uxkit/uxindexset/) on the
+[`UXEventSelected`](/compiler/api/uxkit/uxevent/) event, because an anchor
+alone would replay as one row however many were chosen. On backends whose
+table is a native list, the click never reaches the toolkit, and this event is
+the only trace a recorder can keep.
+
+## Changing the model
+
+```c
+tracks.add(Track.make((u8*)"Ochre", (u8*)"Mirrer", 5));
+table.reloadData();
+```
+
+Change your data, then tell the view. `reloadData` makes the table ask again.
+The table holds no snapshot, so there is nothing to keep in step.
+
+## Outlines: four methods, addressed by item
+
+A [`UXOutlineView`](/compiler/api/uxkit/uxoutlineview/) is a tree, so it cannot
+address anything by row index: a row's meaning changes when something above it
+expands. It addresses by **item** instead:
+
+```c
+protocol UXOutlineDataSource {
+    i32     numberOfChildren(UXOutlineView* o, Object* item);
+    Object* childOfItem(UXOutlineView* o, Object* item, i32 i);
+    bool    isExpandable(UXOutlineView* o, Object* item);
+    u8*     valueForItem(UXOutlineView* o, Object* item, i32 col);
+}
+```
+
+An **item is any `Object*` you like**. The outline never inspects it and only
+hands it back to you. Your existing model nodes work unchanged, and there is no
+wrapper type to build and keep in sync.
+
+`item == 0` means **the root**. With this idiom every method is two lines:
+
+```c
+i32 numberOfChildren(UXOutlineView* o, Object* item) {
+    Node* n = item == (Object*)0 ? root : (Node* ?)item;
+    return (i32)n.kids.count();
+}
+```
+
+`isExpandable` is asked separately from `numberOfChildren` so that a node can
+be expandable before its children are known. A lazily loaded tree can then
+show a disclosure triangle without fetching anything first.
+
+## The whole program
+
+```c
+class Controller : Object <UXApplicationDelegate, UXTableDataSource,
+                           UXTableDelegate, UXOutlineDataSource>
+{
+    Array<Track>* tracks;
+    Node*         root;
+    UXLabel*      status;
+
+    i32 numberOfRows(UXTableView* t) { return (i32)tracks.count(); }
+
+    u8* valueForCell(UXTableView* t, i32 row, i32 col) {
+        Track* tr = (Track* ?)tracks.get((u16)row);
+        if (col == 0) { return tr.name; }
+        if (col == 1) { return tr.artist; }
+        return self.minutes(tr.mins);       // a cell returns TEXT
+    }
+
+    void tableSelectionDidChange(UXTableView* t, i32 row) {
+        if (row < 0) { status.setText((u8*)"nothing selected"); return; }
+        status.setText(((Track* ?)tracks.get((u16)row)).name);
+    }
+
+    i32 numberOfChildren(UXOutlineView* o, Object* item) {
+        Node* n = item == (Object*)0 ? root : (Node* ?)item;
+        return (i32)n.kids.count();
+    }
+    Object* childOfItem(UXOutlineView* o, Object* item, i32 i) {
+        Node* n = item == (Object*)0 ? root : (Node* ?)item;
+        return (Object*)((Node* ?)n.kids.get((u16)i));
+    }
+    bool isExpandable(UXOutlineView* o, Object* item) {
+        Node* n = item == (Object*)0 ? root : (Node* ?)item;
+        return n.kids.count() > 0;
+    }
+    u8* valueForItem(UXOutlineView* o, Object* item, i32 col) {
+        return item == (Object*)0 ? (u8*)"" : ((Node* ?)item).label;
+    }
+
+    i32 applicationDidStart(UXApplication* app) {
+        // … build the window …
+
+        UXTableView* table = new UXTableView();
+        table.addColumn((u8*)"Title",  160);
+        table.addColumn((u8*)"Artist", 110);
+        table.addColumn((u8*)"Min",     40);
+        table.setDataSource((UXTableDataSource*)self);
+        table.setDelegate((UXTableDelegate*)self);
+        table.setAllowsMultipleSelection(true);
+        content.addSubview(table, UXGeom.make(10, 10, 320, 120));
+
+        UXOutlineView* tree = new UXOutlineView();
+        tree.setOutlineSource((UXOutlineDataSource*)self);
+        content.addSubview(tree, UXGeom.make(10, 140, 200, 110));
+
+        win.tree.finalise();
+        win.displayAll();
+        return 0;
+    }
+}
+```
+
+One controller conforms to four protocols (application delegate, table source,
+table delegate, outline source). This is normal, and it keeps a small window's
+wiring in one place. Split them when the model splits.
+
+The complete file is `website/site/examples/uxkit/tables.xc` and the
+`doc-examples` gate compiles it.
+
+## What to read next
+
+- [`UXTableView`](/compiler/api/uxkit/uxtableview/): sorting, headers, and what
+  a native list backend does differently
+- [`UXOutlineView`](/compiler/api/uxkit/uxoutlineview/): expansion state and
+  indentation
+- [`UXIndexSet`](/compiler/api/uxkit/uxindexset/): what a multi-selection is
+- [`UXPredicate`](/compiler/api/uxkit/uxpredicate/) and
+  [`UXSortDescriptor`](/compiler/api/uxkit/uxsortdescriptor/): filtering and
+  ordering the model behind a table

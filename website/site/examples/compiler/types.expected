@@ -1,0 +1,8 @@
+u8=200 u16=-5536 (as i32 60000) i32=-100000
+2^40 = 256:0 (hi:lo)
+u8 200+100 -> 44   widened -> 300
+hex=48879 bin=165 big=1000000
+*p = 1234
+value now 4321
+both pointers: 4321 4321
+bool=1 float=1.500000 double=3.1000000000

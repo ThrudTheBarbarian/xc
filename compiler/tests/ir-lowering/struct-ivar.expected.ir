@@ -1,0 +1,52 @@
+module "struct-ivar" {
+  layout 0: size=2 align=1 fields=[(0:Ptr(Void, unbanked))]
+  layout 1: size=4 align=1 fields=[(0:U16), (2:U16)]
+  layout 2: size=6 align=1 fields=[(0:Ptr(Void, unbanked)), (2:Agg(1))]
+  layout 3: size=0 align=1
+  layout 4: size=2 align=1 fields=[(0:Ptr(Void, unbanked))]
+  symbol Box$sum: function (Ptr(Agg(2), unbanked)) -> U16
+    attributes: { banked: false, cloaked: false, static: false, variadic: false }
+  symbol si: function () -> U16
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  symbol _xtc_alloc: runtime () -> Void
+    attributes: { banked: false, cloaked: false, variadic: false }
+  function Box$sum(%0: Ptr(Agg(2), unbanked), %1: Mem) -> (U16, Mem) {
+    bb_entry:
+      preds: -
+      %2 = Retain %0, %1
+      %3:Ptr(Agg(1), unbanked) = FieldAddr %0, #1:U8
+      %4:U8 = Const #40:U8
+      %5:U16 = ZExt %4
+      %6:Ptr(U16, unbanked) = FieldAddr %3, #0:U8
+      %7 = Store %6, %5, %2
+      %8:Ptr(Agg(1), unbanked) = FieldAddr %0, #1:U8
+      %9:U8 = Const #2:U8
+      %10:U16 = ZExt %9
+      %11:Ptr(U16, unbanked) = FieldAddr %8, #1:U8
+      %12 = Store %11, %10, %7
+      %13:Ptr(Agg(1), unbanked) = FieldAddr %0, #1:U8
+      %14:Ptr(U16, unbanked) = FieldAddr %13, #0:U8
+      %15:U16, %16 = Load %14, %12
+      %17:Ptr(Agg(1), unbanked) = FieldAddr %0, #1:U8
+      %18:Ptr(U16, unbanked) = FieldAddr %17, #1:U8
+      %19:U16, %20 = Load %18, %16
+      %21:U16 = Add %15, %19
+      %22 = Release %0, %20
+      Return %21, %22
+  }
+  function si(%0: Mem) -> (U16, Mem) {
+    bb_entry:
+      preds: -
+      %1:U16 = Const #1:U16
+      %2:U16 = Const #6:U16
+      %3:U16 = Const #0:U16
+      %4:Ptr(Void, unbanked) = IntToPtr %3
+      %5:Ptr(Agg(2), unbanked), %6 = Call @_xtc_alloc, [%1, %2, %4], CallConv::Standard, %0
+      %7:Ptr(U16, unbanked) = Bitcast %5
+      %8:U16 = Const #1:U16
+      %9 = Store %7, %8, %6
+      %10:U16, %11 = Call @Box$sum, [%5], CallConv::Standard, %9
+      %12 = Release %5, %11
+      Return %10, %12
+  }
+}

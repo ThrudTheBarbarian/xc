@@ -1,0 +1,7 @@
+bytes 9, chars 6
+byteAt(1) 000000C3, charAt(1) U+000000E9
+slice chars 'él'
+U+00000068 U+000000E9 U+0000006C U+0000006C U+0000006F U+000026A1 
+valid 0, chars 3, repaired chars 3
+latin-1 in: 'cé!' (4 bytes)
+ascii out: 633f21

@@ -1,0 +1,166 @@
+---
+title: "Guide: the driver model and multiplatform"
+description: "One platform-aware file, and nothing else in your program names a backend. What a driver does, how to write the seam, and a mistake that breaks the link."
+---
+
+Every example in these guides ends the same way:
+
+```c
+gDriver = new UXAppKitDriver();     // the ONE platform-aware line
+```
+
+A UXKit program differs per platform in **one place**. This guide covers how to
+build that place and what happens on the other side of it.
+
+## What a driver is
+
+A driver is the backend. It owns four things your code never touches:
+
+| | |
+| --- | --- |
+| **windows** | create, open, invalidate, close |
+| **the shadow tree** | the flat object array the platform walks, mirroring your view tree |
+| **events** | decode the native event into a neutral [`UXEvent`](/compiler/api/uxkit/uxevent/) |
+| **realization** | make native controls for the nodes that have them, and push their state |
+
+Everything above the driver (views, controls, layout, the responder chain) is
+one body of code on every platform. Below it, `UXAppKitDriver` talks to
+`NSWindow` and `NSButton`, `UXWin32Driver` to `HWND` and `BUTTON`,
+`UXGemDriver` to the AES, `UXGtkDriver` to GTK4, and
+[`UXWebDriver`](/compiler/api/uxkit/uxwebdriver/) to a canvas.
+
+## Writing the seam
+
+In a real program the one line becomes one **file**. This is the pattern from
+the Rocks editor:
+
+```c
+#ifdef ARCH_arm64
+#import "UXAppKitDriver.xc"
+#endif
+#ifdef ARCH_arm9
+#import "UXGemDriver.xc"
+#endif
+#ifdef ARCH_win64
+#import "UXWin32Driver.xc"
+#else
+#ifdef ARCH_x86_64
+#import "UXGtkDriver.xc"
+#endif
+#endif
+
+class AppDriver : Object {
+    static bool start(UXApplication* app) {
+#ifdef ARCH_arm64
+        UXAppKitDriver* d = new UXAppKitDriver();
+        gDriver = d;
+        d.setInteractive(true);      // GUI: [NSApp run] owns the loop
+        d.attachApp(app);
+        return true;
+#endif
+#ifdef ARCH_win64
+        UXWin32Driver* wd = new UXWin32Driver();
+        gDriver = wd;
+        i32 w = 0; i32 h = 0;
+        return wd.boot(&w, &h);
+#else
+#ifdef ARCH_x86_64
+        UXGtkDriver* xd = new UXGtkDriver();
+        gDriver = xd;
+        i32 w = 0; i32 h = 0;
+        return xd.boot(&w, &h);
+#endif
+#endif
+    }
+}
+```
+
+Every UXKit gate uses this target-to-platform mapping:
+
+| target | platform | backend |
+| --- | --- | --- |
+| `arm64` | macOS | AppKit |
+| `x86_64` | Linux | GTK4 |
+| `win64` | Windows | Win32 |
+| `arm9` | Atari | GEM/AES |
+| `ios-sim` | iOS | UIKit |
+| `wasm32` | the web | canvas |
+
+### The imports must be conditional too
+
+A driver's header pulls in **its platform's system interfaces**. The Win32
+driver names `comdlg32`, `ole32` and `comctl32`, and the GEM driver names the
+AES. These do not exist on other platforms, so the `#ifdef` has to wrap the
+`#import` as well as the `new`.
+
+:::caution[Check win64 first, and nest the branches]
+A win64 build defines **both** `ARCH_win64` and `ARCH_x86_64`. Windows is
+x86_64, so its include search path contains the x86_64 lib directory.
+
+If you write the two as parallel `#ifdef`s, the GTK driver is compiled into the
+Windows binary. The build succeeds and the **link** fails on `ux_gtk_fill`, far
+from the cause and with nothing pointing back at it.
+
+Nesting makes the platforms mutually exclusive.
+:::
+
+## Booting, and what "no display" means
+
+```c
+return wd.boot(&w, &h);      // false when there is no display
+```
+
+`boot` returns false on a headless CI box or when `DISPLAY` is unset. Treat
+that as a **skip, not a failure**. "This environment has no screen" and "this
+program is broken" are different results, and counting both as failures makes
+a green CI run meaningless.
+
+AppKit has a different shape: it has `setInteractive(true)` and `attachApp`,
+because `[NSApp run]` owns the loop and native events have to be routed into
+your application instead of pulled from it.
+
+## What the driver does that you can see
+
+Three driver behaviours explain things that otherwise look like bugs.
+
+**Native controls are realized, not drawn.** On backends with real widgets, a
+[`UXButton`](/compiler/api/uxkit/uxbutton/) becomes an `NSButton` or a
+`BUTTON` window. Your `drawRect` is not called for it, and the platform themes
+it. A plain view placed "on top" of one in the toolkit's tree does **not**
+intercept its clicks, because the platform hit-tests its own hierarchy first.
+See [`UXShieldView`](/compiler/api/uxkit/uxshieldview/) for the fix.
+
+**A press may never reach the toolkit.** Where the control is native, the OS
+reports `BN_CLICKED` or an `NSButton` action, and the driver fires your
+callback **by handle and node**, with no synthetic click and no hit-test. Where
+the control is toolkit-drawn, the press arrives as an ordinary event and routes
+through the [responder chain](/compiler/api/uxkit/uxresponder/). Both paths end
+at the same method, so you write one handler.
+
+**A drag is modal.** Pressing a scrollbar or a split divider enters the
+driver's `trackDragStep`, which follows the pointer itself and returns when the
+button comes up. No `mouseDragged` events are emitted, so a widget that waits
+for them waits forever, and a recorder sees the press and nothing else. For
+this reason [`UXEvent`](/compiler/api/uxkit/uxevent/) has outcome kinds such as
+`UXEventScrolled`.
+
+## Testing without a screen
+
+The driver is an interface, so most of the toolkit is testable headlessly.
+Geometry, ranges, predicates, text layout, timers and index sets need no driver
+at all. The examples in these guides that print output run this way.
+
+For the parts that need a driver, AppKit has a capture mode that realizes
+native controls without a visible window. The portrait sheets on the widget
+pages are produced with it.
+
+## What to read next
+
+- [`UXApplication`](/compiler/api/uxkit/uxapplication/): the run loop the
+  driver feeds
+- [`UXViewTree`](/compiler/api/uxkit/uxviewtree/): the shadow tree a driver
+  walks, and why it is the AES object tree on GEM
+- [`UXShieldView`](/compiler/api/uxkit/uxshieldview/): intercepting input above
+  native controls
+- [`UXEvent`](/compiler/api/uxkit/uxevent/): what a decoded native event looks
+  like

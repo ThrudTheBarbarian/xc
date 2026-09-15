@@ -1,0 +1,10 @@
+module "widen" {
+  symbol widen: function (I8) -> I16
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  function widen(%0: I8, %1: Mem) -> (I16, Mem) {
+    bb_entry:
+      preds: -
+      %2:I16 = SExt %0
+      Return %2, %1
+  }
+}

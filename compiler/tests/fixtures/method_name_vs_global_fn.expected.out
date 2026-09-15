@@ -1,0 +1,7 @@
+capture 10 (want 10)
+arity 17 (want 17)
+inherited 12 (want 12)
+global still reachable 302 (want 302)
+self-wrapper 8.0000000000 16.0000000000 (want 8 and 16)
+free call 908 (want 908)
+  bag n=10

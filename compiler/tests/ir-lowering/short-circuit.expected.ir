@@ -1,0 +1,111 @@
+module "short-circuit" {
+  symbol sc: function () -> U16
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  function sc(%0: Mem) -> (U16, Mem) {
+    bb_entry:
+      preds: -
+      %1:U8 = Const #7:U8
+      %2:U16 = ZExt %1
+      %3:U8 = Const #0:U8
+      %4:U16 = ZExt %3
+      %5:U8 = Const #0:U8
+      %6:U16 = ZExt %5
+      %7:U8 = Const #0:U8
+      %8:U16 = ZExt %7
+      %9:Bool = ICmp UGT, %2, %8
+      %10:Bool = Const #0:Bool
+      CondBranch %9, bb_1_and_rhs, bb_1_and_join
+    bb_1_and_rhs:
+      preds: bb_entry
+      %11:U8 = Const #10:U8
+      %12:U16 = ZExt %11
+      %13:Bool = ICmp ULT, %2, %12
+      Branch bb_1_and_join
+    bb_1_and_join:
+      preds: bb_entry, bb_1_and_rhs
+      %14:Bool = Phi [(bb_entry, %10), (bb_1_and_rhs, %13)]
+      CondBranch %14, bb_3_then, bb_3_join
+    bb_3_then:
+      preds: bb_1_and_join
+      %15:U8 = Const #1:U8
+      %16:U16 = ZExt %15
+      %17:U16 = Add %6, %16
+      Branch bb_3_join
+    bb_3_join:
+      preds: bb_1_and_join, bb_3_then
+      %18:U16 = Phi [(bb_1_and_join, %6), (bb_3_then, %17)]
+      %19:U8 = Const #0:U8
+      %20:U16 = ZExt %19
+      %21:Bool = ICmp UGT, %4, %20
+      %22:Bool = Const #0:Bool
+      CondBranch %21, bb_5_and_rhs, bb_5_and_join
+    bb_5_and_rhs:
+      preds: bb_3_join
+      %23:U8 = Const #10:U8
+      %24:U16 = ZExt %23
+      %25:Bool = ICmp ULT, %4, %24
+      Branch bb_5_and_join
+    bb_5_and_join:
+      preds: bb_3_join, bb_5_and_rhs
+      %26:Bool = Phi [(bb_3_join, %22), (bb_5_and_rhs, %25)]
+      CondBranch %26, bb_7_then, bb_7_join
+    bb_7_then:
+      preds: bb_5_and_join
+      %27:U8 = Const #2:U8
+      %28:U16 = ZExt %27
+      %29:U16 = Add %18, %28
+      Branch bb_7_join
+    bb_7_join:
+      preds: bb_5_and_join, bb_7_then
+      %30:U16 = Phi [(bb_5_and_join, %18), (bb_7_then, %29)]
+      %31:U8 = Const #0:U8
+      %32:U16 = ZExt %31
+      %33:Bool = ICmp EQ, %4, %32
+      %34:Bool = Const #1:Bool
+      CondBranch %33, bb_9_or_join, bb_9_or_rhs
+    bb_9_or_rhs:
+      preds: bb_7_join
+      %35:U8 = Const #5:U8
+      %36:U16 = ZExt %35
+      %37:Bool = ICmp UGT, %4, %36
+      Branch bb_9_or_join
+    bb_9_or_join:
+      preds: bb_7_join, bb_9_or_rhs
+      %38:Bool = Phi [(bb_7_join, %34), (bb_9_or_rhs, %37)]
+      CondBranch %38, bb_11_then, bb_11_join
+    bb_11_then:
+      preds: bb_9_or_join
+      %39:U8 = Const #4:U8
+      %40:U16 = ZExt %39
+      %41:U16 = Add %30, %40
+      Branch bb_11_join
+    bb_11_join:
+      preds: bb_9_or_join, bb_11_then
+      %42:U16 = Phi [(bb_9_or_join, %30), (bb_11_then, %41)]
+      %43:U8 = Const #0:U8
+      %44:U16 = ZExt %43
+      %45:Bool = ICmp EQ, %2, %44
+      %46:Bool = Const #1:Bool
+      CondBranch %45, bb_13_or_join, bb_13_or_rhs
+    bb_13_or_rhs:
+      preds: bb_11_join
+      %47:U8 = Const #5:U8
+      %48:U16 = ZExt %47
+      %49:Bool = ICmp UGT, %2, %48
+      Branch bb_13_or_join
+    bb_13_or_join:
+      preds: bb_11_join, bb_13_or_rhs
+      %50:Bool = Phi [(bb_11_join, %46), (bb_13_or_rhs, %49)]
+      CondBranch %50, bb_15_then, bb_15_join
+    bb_15_then:
+      preds: bb_13_or_join
+      %51:U8 = Const #8:U8
+      %52:U16 = ZExt %51
+      %53:U16 = Add %42, %52
+      Branch bb_15_join
+    bb_15_join:
+      preds: bb_13_or_join, bb_15_then
+      %54:U16 = Phi [(bb_13_or_join, %42), (bb_15_then, %53)]
+      Return %54, %0
+  }
+}

@@ -1,0 +1,101 @@
+---
+title: UXShieldView
+description: "A transparent view that takes every press in its area and hands it to the toolkit, so a design surface can intercept clicks that would otherwise operate the real controls underneath."
+---
+
+`UXShieldView` is a transparent view that takes every press in its area and
+gives it to the toolkit, instead of letting the native controls underneath have
+it. Use it to build a **design surface**: a canvas showing real, live widgets
+where a click *selects* one instead of pressing it.
+
+```c
+#use <UXKit>
+```
+
+## Overview
+
+```c
+UXShieldView* shield = new UXShieldView();
+canvas.addSubview(shield, canvas.bounds());   // cover the whole design area
+```
+
+There is no other API. The press arrives at the shield's own
+[`mouseDown`](/compiler/api/uxkit/uxview/) in window coordinates and follows the
+ordinary responder path from there. Subclass the shield and handle the press as
+you would on any view.
+
+## Why this cannot be an ordinary view
+
+A plain [`UXView`](/compiler/api/uxkit/uxview/) added on top, relying on the
+toolkit's own hit-test to find it, does not work. The failure does not look like
+a bug: clicks on empty background select correctly, and only clicks on
+*controls* do nothing.
+
+On most backends a plain view is **drawn, not realized**. There is one native
+view per *window*, and every control is a flat child of it. A view placed "on
+top" in the toolkit's tree is on top only in the *shadow* tree, and that
+ordering decides who wins **after** a press has reached the toolkit. The
+platform hit-tests its own hierarchy first and routes the click to the
+`NSButton` (or `HWND`, or `GtkWidget`) under the pointer, so the toolkit never
+receives it.
+
+A shield is realized as a real native surface above the controls, so the
+platform's own hit-test finds it first. The widget that shows through is still
+the genuine one, drawn by the real backend. Only the **input** is intercepted,
+which is the trade a design surface wants.
+
+## It never takes the keyboard
+
+```c
+bool acceptsFirstResponder(void)   // always false
+```
+
+A shield takes presses and refuses focus. In an editor the keyboard belongs to
+whatever field the inspector is typing into, and a surface that took focus on
+every click would make the panel beside it unusable.
+
+## Per-backend behaviour
+
+The shield is a neutral widget kind (`UXKindShield`), and each backend handles
+it in its own terms:
+
+| backend | how it is realized |
+| --- | --- |
+| macOS (AppKit) | a real `NSView` above the controls, re-raised after each realize pass; accepts first mouse, so clicking into a window that is not frontmost still selects rather than costing a click |
+| Windows | a child window of a transparent class, kept top of the sibling z-order, forwarding `WM_LBUTTONDOWN` to its parent |
+| GTK | a bare widget placed last in the `GtkFixed`, re-raised each pass; the window's controller delivers the press |
+| GEM | nothing to do — no native widget can swallow a press there, so the toolkit's own hit-test already reaches whatever is on top |
+| iOS / Android / web | not realized; nothing in-tree needs a design surface on those yet |
+
+The shield handles two details for you. Controls realized *after* the shield
+land above it, so the shield is re-raised at the end of every realize pass;
+without this it would stop working as soon as another widget appeared. A shield
+is also still a **view**: its `drawRect` runs, so you can paint over the surface
+(alignment guides, a selection frame) and keep the interception.
+
+## Example: a canvas whose clicks select
+
+```c
+class EditSurface : UXShieldView {
+    callback picked void(i16 x, i16 y);
+    void init(void) { super.init(); picked = (callback void(i16 x, i16 y))0; }
+
+    void mouseDown(UXEvent* e) {
+        UXRect a = self.absoluteFrame();
+        if (picked) { picked((i16)(e.x - a.x), (i16)(e.y - a.y)); }   // surface-local
+    }
+}
+```
+
+Add one of these over a canvas holding real controls, and every click arrives
+here as a coordinate instead of pressing the button it landed on.
+
+## Conforms to
+
+- Inherits [`UXView`](/compiler/api/uxkit/uxview/): frame, subviews, drawing,
+  the responder path.
+
+## See also
+
+- [`UXView`](/compiler/api/uxkit/uxview/): the view surface it specialises
+- [`UXWindow`](/compiler/api/uxkit/uxwindow/): where a press is routed from

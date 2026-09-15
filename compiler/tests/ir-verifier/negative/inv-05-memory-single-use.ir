@@ -1,0 +1,21 @@
+; Invariant 5 (IR-SPEC §12.5, §7.1): Each memory token is consumed
+; at most once. The memory chain is linear unless the optimiser
+; explicitly forks it with MemSplit.
+; VIOLATION: both Loads consume %m0. The second Load is the
+; violator — it should have taken %m1 (the token produced by the
+; first Load). Two consumers of the same token leaves alias
+; analysis ambiguous (which load happens first?).
+
+module "inv-05-negative" {
+  symbol mem_fork: function (Ptr(U8, unbanked), Ptr(U8, unbanked)) -> U8
+    attributes: { cloaked: false, banked: false, variadic: false }
+
+  function mem_fork(%p1: Ptr(U8, unbanked), %p2: Ptr(U8, unbanked), %m0: Mem) -> (U8, Mem) {
+    bb_entry:
+      preds: -
+      %v1:U8, %m1 = Load %p1, %m0
+      %v2:U8, %m2 = Load %p2, %m0      ; ERROR: %m0 already consumed by the first Load
+      %r:U8       = Add %v1, %v2
+      Return %r, %m2
+  }
+}

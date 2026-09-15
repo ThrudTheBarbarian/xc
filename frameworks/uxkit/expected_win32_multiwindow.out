@@ -1,0 +1,4 @@
+secondary-close quit=0
+secondary-open=0 main-open=1
+last-close quit=1
+done

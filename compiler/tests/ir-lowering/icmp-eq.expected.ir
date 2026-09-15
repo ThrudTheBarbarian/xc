@@ -1,0 +1,63 @@
+module "icmp-eq" {
+  symbol cmp: function (U16) -> U16
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  function cmp(%0: U16, %1: Mem) -> (U16, Mem) {
+    bb_entry:
+      preds: -
+      %2:U8 = Const #0:U8
+      %3:U16 = ZExt %2
+      %4:U8 = Const #5:U8
+      %5:U16 = ZExt %4
+      %6:Bool = ICmp EQ, %0, %5
+      CondBranch %6, bb_1_then, bb_1_join
+    bb_1_then:
+      preds: bb_entry
+      %7:U8 = Const #1:U8
+      %8:U16 = ZExt %7
+      %9:U16 = Add %3, %8
+      Branch bb_1_join
+    bb_1_join:
+      preds: bb_entry, bb_1_then
+      %10:U16 = Phi [(bb_entry, %3), (bb_1_then, %9)]
+      %11:U8 = Const #5:U8
+      %12:U16 = ZExt %11
+      %13:Bool = ICmp NE, %0, %12
+      CondBranch %13, bb_3_then, bb_3_join
+    bb_3_then:
+      preds: bb_1_join
+      %14:U8 = Const #2:U8
+      %15:U16 = ZExt %14
+      %16:U16 = Add %10, %15
+      Branch bb_3_join
+    bb_3_join:
+      preds: bb_1_join, bb_3_then
+      %17:U16 = Phi [(bb_1_join, %10), (bb_3_then, %16)]
+      %18:U8 = Const #5:U8
+      %19:U16 = ZExt %18
+      %20:Bool = ICmp UGT, %0, %19
+      CondBranch %20, bb_5_then, bb_5_join
+    bb_5_then:
+      preds: bb_3_join
+      %21:U8 = Const #4:U8
+      %22:U16 = ZExt %21
+      %23:U16 = Add %17, %22
+      Branch bb_5_join
+    bb_5_join:
+      preds: bb_3_join, bb_5_then
+      %24:U16 = Phi [(bb_3_join, %17), (bb_5_then, %23)]
+      %25:U8 = Const #5:U8
+      %26:U16 = ZExt %25
+      %27:Bool = ICmp ULE, %0, %26
+      CondBranch %27, bb_7_then, bb_7_join
+    bb_7_then:
+      preds: bb_5_join
+      %28:U8 = Const #8:U8
+      %29:U16 = ZExt %28
+      %30:U16 = Add %24, %29
+      Branch bb_7_join
+    bb_7_join:
+      preds: bb_5_join, bb_7_then
+      %31:U16 = Phi [(bb_5_join, %24), (bb_7_then, %30)]
+      Return %31, %1
+  }
+}

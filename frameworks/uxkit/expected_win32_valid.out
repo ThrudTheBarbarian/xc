@@ -1,0 +1,2 @@
+field=123
+PASS: only digits accepted (letters rejected per-keystroke)

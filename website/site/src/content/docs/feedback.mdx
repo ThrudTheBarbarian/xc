@@ -1,0 +1,137 @@
+---
+title: Report a bug
+description: File a bug report against xcc with a summary, description, optional code snippet, optional email and optional file attachments.
+---
+
+To report a problem in the compiler, the assembler, the simulator or the docs, use the form below. Each report is sent to the project as a single email.
+
+The **summary** and **description** are required. Everything else is optional. If you leave the email blank you get no follow-up. An email address you enter is used only to reply about this report.
+
+<form id="bug-form" method="post" action="/feedback/submit.php" enctype="multipart/form-data" class="bug-form">
+  <input type="text" name="company" tabIndex={-1} autoComplete="off" style={{ position: 'absolute', left: '-10000px', width: '1px', height: '1px', opacity: 0 }} aria-hidden="true" />
+
+  <label htmlFor="bug-summary">Summary <span class="req">*</span></label>
+  <input type="text" id="bug-summary" name="summary" required maxLength={200} placeholder="One-line description of the problem" />
+
+  <label htmlFor="bug-description">Description <span class="req">*</span></label>
+  <textarea id="bug-description" name="description" required rows={8} placeholder="What did you do, what happened, and what did you expect?" />
+
+  <label htmlFor="bug-snippet">Source snippet <span class="opt">(optional)</span></label>
+  <textarea id="bug-snippet" name="snippet" rows={10} spellCheck="false" placeholder="// minimal .xc or .asm reproduction (paste here)" class="mono" />
+
+  <label htmlFor="bug-email">Your email <span class="opt">(optional)</span></label>
+  <input type="email" id="bug-email" name="email" maxLength={200} placeholder="you@example.com" />
+  <p class="hint">Only used to reply about this report. Not stored, not subscribed, not shared.</p>
+
+  <label htmlFor="bug-files">Attachments <span class="opt">(optional, max 2 MB per file, 5 MB total)</span></label>
+  <input type="file" id="bug-files" name="attachments[]" multiple />
+  <p class="hint" id="bug-files-hint">Source files, .xex output, screenshots — anything that helps reproduce the issue.</p>
+
+  <button type="submit" id="bug-submit">Send report</button>
+  <p id="bug-status" class="status" role="status" aria-live="polite" />
+</form>
+
+<script is:inline>{`
+  const MAX_TOTAL = 5 * 1024 * 1024;
+  const form = document.getElementById('bug-form');
+  const fileInput = document.getElementById('bug-files');
+  const fileHint = document.getElementById('bug-files-hint');
+  const submit = document.getElementById('bug-submit');
+  const status = document.getElementById('bug-status');
+
+  function fmtSize(n) {
+    if (n < 1024) return n + ' B';
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+    return (n / (1024 * 1024)).toFixed(2) + ' MB';
+  }
+
+  function totalSize() {
+    let total = 0;
+    for (const f of fileInput.files) total += f.size;
+    return total;
+  }
+
+  fileInput.addEventListener('change', () => {
+    const total = totalSize();
+    if (fileInput.files.length === 0) {
+      fileHint.textContent = 'Source files, .xex output, screenshots — anything that helps reproduce the issue.';
+      fileHint.classList.remove('error');
+      return;
+    }
+    fileHint.textContent = fileInput.files.length + ' file(s) selected, ' + fmtSize(total) + ' total.';
+    fileHint.classList.toggle('error', total > MAX_TOTAL);
+    if (total > MAX_TOTAL) {
+      fileHint.textContent += ' Exceeds 5 MB limit — please reduce.';
+    }
+  });
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (totalSize() > MAX_TOTAL) {
+      status.textContent = 'Attachments exceed 5 MB — please reduce before sending.';
+      status.className = 'status error';
+      return;
+    }
+    submit.disabled = true;
+    status.textContent = 'Sending…';
+    status.className = 'status pending';
+    try {
+      const res = await fetch(form.action, { method: 'POST', body: new FormData(form) });
+      const text = await res.text();
+      if (res.ok) {
+        status.textContent = 'Thanks — your report was sent. ' + text;
+        status.className = 'status ok';
+        form.reset();
+        fileHint.textContent = 'Source files, .xex output, screenshots — anything that helps reproduce the issue.';
+        fileHint.classList.remove('error');
+      } else {
+        status.textContent = 'Something went wrong (' + res.status + '): ' + text;
+        status.className = 'status error';
+      }
+    } catch (err) {
+      status.textContent = 'Network error: ' + err.message;
+      status.className = 'status error';
+    } finally {
+      submit.disabled = false;
+    }
+  });
+`}</script>
+
+<style>{`
+  .bug-form { display: flex; flex-direction: column; gap: 0.4rem; max-width: 720px; }
+  .bug-form label { font-weight: 600; margin-top: 0.8rem; }
+  .bug-form .req { color: #d33; font-weight: 700; }
+  .bug-form .opt { color: var(--sl-color-gray-3); font-weight: 400; font-size: 0.9em; }
+  .bug-form input[type=text],
+  .bug-form input[type=email],
+  .bug-form input[type=file],
+  .bug-form textarea {
+    background: var(--sl-color-bg-sidebar);
+    color: var(--sl-color-text);
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 4px;
+    padding: 0.5rem 0.75rem;
+    font: inherit;
+  }
+  .bug-form textarea { resize: vertical; }
+  .bug-form textarea.mono { font-family: var(--__sl-font-mono, ui-monospace, monospace); font-size: 0.9em; }
+  .bug-form .hint { margin: 0.25rem 0 0; color: var(--sl-color-gray-3); font-size: 0.9em; }
+  .bug-form .hint.error { color: #d33; }
+  .bug-form button {
+    margin-top: 1rem;
+    align-self: flex-start;
+    background: var(--sl-color-accent);
+    color: var(--sl-color-accent-low);
+    border: 0;
+    border-radius: 4px;
+    padding: 0.6rem 1.2rem;
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .bug-form button:disabled { opacity: 0.5; cursor: progress; }
+  .bug-form .status { margin-top: 0.75rem; min-height: 1.2em; }
+  .bug-form .status.error { color: #d33; }
+  .bug-form .status.ok { color: #2a8; }
+  .bug-form .status.pending { color: var(--sl-color-gray-3); }
+`}</style>

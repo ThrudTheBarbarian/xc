@@ -1,0 +1,8 @@
+register=1
+fill=10,10,50,30
+fill=10,10,50,30
+window=1
+view-mouseDown=30,40
+button-fired
+native-after-close=0
+done

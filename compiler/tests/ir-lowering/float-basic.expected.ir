@@ -1,0 +1,15 @@
+module "float-basic" {
+  symbol use_floats: function () -> Void
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  symbol gF: dataglobal F32 init [#$00, #$00, #$00, #$00, #$00, #$00, #$0A, #$40]
+    attributes: { banked: false, cloaked: false }
+    flags: { escapes: true }
+  function use_floats(%0: Mem) -> Mem {
+    bb_entry:
+      preds: -
+      %1:Ptr(F32, unbanked) = AddrOf @gF
+      %2:F32, %3 = Load %1, %0
+      %4:F32 = Const #fp3ff8000000000000:F32
+      Return %3
+  }
+}

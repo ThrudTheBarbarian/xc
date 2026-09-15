@@ -1,0 +1,23 @@
+module "early-return" {
+  symbol early: function (I16) -> I16
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  function early(%0: I16, %1: Mem) -> (I16, Mem) {
+    bb_entry:
+      preds: -
+      %2:U8 = Const #0:U8
+      %3:I16 = ZExt %2
+      %4:Bool = ICmp SLE, %0, %3
+      CondBranch %4, bb_1_then, bb_1_join
+    bb_1_then:
+      preds: bb_entry
+      %5:U8 = Const #0:U8
+      %6:I16 = ZExt %5
+      Return %6, %1
+    bb_1_join:
+      preds: bb_entry
+      %7:U8 = Const #1:U8
+      %8:I16 = ZExt %7
+      %9:I16 = Add %0, %8
+      Return %9, %1
+  }
+}

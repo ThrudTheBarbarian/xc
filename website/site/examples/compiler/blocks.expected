@@ -1,0 +1,9 @@
+add(2,3)      = 5
+plus(7)       = 107
+op=add        = 30
+op={x*y}      = 42
+each(2n)      = 20
+add5(10)      = 15
+fact(5)       = 120
+total,r       = 10 10
+null block    = ok

@@ -1,0 +1,63 @@
+# xt-heap.lnk — xt with the heap relocated into the data-pool bank window
+#
+# **INTERNAL — do not use for user code.** Retired in favour of
+# xt (~22 KB main + banked free-list heap, shadow on). Lives in
+# support/6502/internal/ rather than support/6502/layouts/ so
+# `--list-layouts` doesn't surface it; spill_overflow references
+# this file by path, nothing else should.
+#
+# Reason this layout still exists: spill_overflow is a regression
+# test for the codegen's main-overflow demote-to-:banked spill,
+# which fires only when main code overflows xt-heap's tight 8 KB
+# main region. The production xt's larger main can't reproduce
+# the trigger.
+#
+# Reserves bank ids 1-4 of the data pool (the $83-selected
+# $6000-$6FFF window) as a four-bank free-list heap so user code
+# can use the full `new` / `release` / `delete` machinery.
+
+[zp]
+sp      = $89-$8A
+tmp     = $8B-$8C
+hp      = $8D-$8E
+bankReg = $82-$83
+vars    = $8F-$9F, $C0-$FF
+runtime = $B0-$BF
+
+[memory]
+system  = $2000-$3FFF
+main    = $A000-$BFFF
+screen  = $8000-$9FFF
+
+[banking]
+codeWindow  = $4000-$5FFF
+codeReg     = $82
+codeRegion  = $200000
+dataWindow  = $6000-$6FFF
+dataReg     = $83
+dataRegion  = $100000
+pageSize    = $1000
+
+regCWindow   = $7000-$7FFF
+regCPageSize = $1000
+regCReg      = $84-$85
+regCRegion   = $500000
+
+[stack]
+base    = after-system
+grows   = up
+
+[heap]
+bank          = 1-4
+pointer-width = 3       # banked-heap layouts carry per-instance bank at slot+2
+
+[entry]
+address = $2000
+
+[startup]
+file    = xt-heap.asm
+
+[buffers]
+printf     = $0480-$04BF
+stdio_fmt  = $04C0-$04FF
+stack      = $0500-$05FF

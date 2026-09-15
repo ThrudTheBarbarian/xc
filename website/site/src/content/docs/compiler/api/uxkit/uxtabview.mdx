@@ -1,0 +1,153 @@
+---
+title: UXTabView
+description: "A tabbed panel: a pure tab model (labels, contents, one selected) applied to the tree by showing one content view at a time."
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+`UXTabView` is a tabbed panel: a set of tabs, each a label and a content
+view. Selecting a tab shows its content and hides the others. The tab
+**model** (which tab is selected, its label, its content) is pure and
+unit-testable. Applying the visibility needs a live tree, so it runs in
+[`layoutTabs`](#layouttabs) once the content views are in a window. The
+tab strip is usually a
+[`UXSegmentedControl`](/compiler/api/uxkit/uxsegmentedcontrol/) placed
+above the content area. The picker and the panel are separate views that
+you compose.
+
+```c
+#use <UXKit>
+```
+
+## Overview
+
+```c
+UXTabView* tabs = new UXTabView();
+tabs.addTab((u8*)"General",  generalPane);
+tabs.addTab((u8*)"Advanced", advancedPane);
+
+UXSegmentedControl* picker = new UXSegmentedControl();
+picker.addSegment((u8*)"General", 0);
+picker.addSegment((u8*)"Advanced", 1);
+picker.selectSegment(0);
+picker.setAction(&controller.onTab);
+
+void onTab(UXControl* sender) {
+    tabs.selectTab(((UXSegmentedControl* ?)sender).selectedSegment());
+    tabs.layoutTabs();
+}
+```
+
+## Topics
+
+**Tabs** · [addTab](#addtab) · [count](#count) · [labelAt](#labelat--contentat) · [contentAt](#labelat--contentat)
+**Selection** · [selectTab](#selecttab) · [selectedIndex](#selectedindex--selectedlabel--selectedcontent) · [selectedLabel](#selectedindex--selectedlabel--selectedcontent) · [selectedContent](#selectedindex--selectedlabel--selectedcontent) · [isTabVisible](#istabvisible)
+**Applying** · [layoutTabs](#layouttabs)
+
+### addTab
+
+```c
+void addTab(u8* label, UXView* content)
+```
+
+Appends a tab. You own the content view: build it and add it to the window.
+The tab view manages only its visibility.
+
+### count
+
+```c
+i32 count(void)
+```
+
+How many tabs there are.
+
+### labelAt / contentAt
+
+```c
+u8*     labelAt(i32 i)
+UXView* contentAt(i32 i)
+```
+
+A tab's label and content view.
+
+### selectTab
+
+```c
+void selectTab(i32 i)
+```
+
+Changes the model's selection. An out-of-range index is ignored. Call
+[`layoutTabs`](#layouttabs) afterwards to apply it.
+
+### selectedIndex / selectedLabel / selectedContent
+
+```c
+i32     selectedIndex(void)
+u8*     selectedLabel(void)
+UXView* selectedContent(void)
+```
+
+The current tab's index, label and content view.
+
+### isTabVisible
+
+```c
+bool isTabVisible(i32 i)
+```
+
+The model's answer: true only for the selected tab.
+
+### layoutTabs
+
+```c
+void layoutTabs(void)
+```
+
+Applies the model to the tree by calling `setHidden` on every content view
+except the selected one. Call it only once the content views have owners; a
+detached view cannot be hidden.
+
+## Platform appearance
+
+Each screenshot shows a `UXSegmentedControl` picker (General | Advanced) over
+the tab view's content area, with the General pane showing.
+
+<div class="ux-platforms">
+<Tabs>
+  <TabItem label="Web">
+    <img src="/uxkit/tabview-web.png" alt="UXTabView on Web" width="220" />
+
+    The Aristo segmented picker over the app-drawn pane.
+  </TabItem>
+  <TabItem label="iOS">
+    <img src="/uxkit/tabview-ios.png" alt="UXTabView on iOS" width="220" />
+
+    A native `UISegmentedControl` picker over the pane.
+  </TabItem>
+  <TabItem label="Android">
+    <img src="/uxkit/tabview-android.png" alt="UXTabView on Android" width="220" />
+
+    Native toggle buttons as the picker, over the pane.
+  </TabItem>
+  <TabItem label="macOS">
+    <img src="/uxkit/tabview-macos.png" alt="UXTabView on macOS" width="220" />
+
+    A native `NSSegmentedControl` picker over the pane.
+  </TabItem>
+  <TabItem label="Windows">
+    <img src="/uxkit/tabview-windows.png" alt="UXTabView on Windows" width="220" />
+
+    Native button segments as the picker, over the pane.
+  </TabItem>
+  <TabItem label="Linux">
+    <img src="/uxkit/tabview-linux.png" alt="UXTabView on Linux" width="220" />
+
+    Linked `GtkToggleButton`s as the picker, over the pane.
+  </TabItem>
+  <TabItem label="GEM">
+    <img src="/uxkit/tabview-gem.png" alt="UXTabView on GEM" width="220" />
+
+    AES button segments as the picker, over the pane.
+  </TabItem>
+</Tabs>
+</div>

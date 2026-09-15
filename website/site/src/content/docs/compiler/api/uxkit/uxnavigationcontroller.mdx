@@ -1,0 +1,225 @@
+---
+title: UXNavigationController
+description: "The navigation stack: forms pushed forward and popped back, one visible, with the §5 lifecycle notifications. The compact-space realization of master-detail."
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+`UXNavigationController` is the navigation stack, the first class of the
+mobile-aware layer and `UINavigationController` in shape. Forms are
+**pushed** forward and **popped** back, and one is visible at a time. The
+bar shows the current title and a back affordance naming the previous
+form. It is the *compact-space* realization of the nib format's
+MASTER-DETAIL composition (UXNB v2 §5): on a phone, the master presents,
+selecting pushes the detail, and back pops.
+
+It follows the same structure as [`UXTabView`](/compiler/api/uxkit/uxtabview/).
+The **stack is a pure model** (push, pop, depth, top), unit-testable with
+no window, and [`applyNav`](#applynav) maps it onto a live tree by hiding
+everything except the top form's content. The drawn bar is the neutral
+fallback realization. A mobile driver can replace it with the native
+machinery (a real `UINavigationController` push with the real edge-swipe).
+A back-swipe never surfaces as an app event; it is a pop, reported through
+the same delegate.
+
+A flow is a **horizontal strip of layouts**: forward-swipe targets to the
+right, back to the left. This is the order a user swipes through them, and
+the order Rocks lays them out for editing.
+
+```c
+#use <UXKit>
+```
+
+## Overview
+
+```c
+UXNavigationController* nav = new UXNavigationController();
+nav.setDelegate(controller);
+content.addSubview(nav, UXGeom.make(0, 0, 320, 480));
+
+nav.push((u8*)"Contacts", listView);      // the root — no back affordance
+nav.push((u8*)"Alice", detailView);       // bar: ‹ Contacts        Alice
+nav.pop();                                 // back to the list
+```
+
+A pushed content view with no owner yet is attached into the content area
+automatically. A popped view stays attached and hidden, so pushing it again
+is cheap.
+
+## Lifecycle
+
+The delegate receives the §5 notifications, timed the way every driver maps
+them from its native lifecycle:
+
+```c
+protocol UXNavigationDelegate {
+    optional void formWillShow(UXNavigationController* n, UXView* content, i32 depth);
+    optional void formDidHide(UXNavigationController* n, UXView* content, i32 depth);
+}
+```
+
+`formWillShow` fires for a form about to become the visible top: on its
+push, and *again* when a pop re-reveals it. `formDidHide` fires for a form
+leaving the top, either covered by a push or popped off. The delegate is
+held weakly, like other delegates.
+
+## Topics
+
+**Forward and back** · [push](#push) · [pop](#pop) · [popToRoot](#poptoroot)
+**The stack** · [depth](#depth) · [topTitle](#toptitle--topcontent) · [topContent](#toptitle--topcontent) · [backTitle](#backtitle) · [canGoBack](#cangoback) · [isFormVisible](#isformvisible)
+**The tree** · [applyNav](#applynav) · [contentFrame](#contentframe)
+**Delegate** · [setDelegate](#setdelegate)
+
+### push
+
+```c
+void push(u8* title, UXView* content)
+```
+
+Covers the current top (announcing `formDidHide`), pushes the new form,
+announces its `formWillShow`, and applies the visibility. The first push
+is the root. It never shows a back affordance and never pops.
+
+### pop
+
+```c
+void pop(void)
+```
+
+Announces the top's `formDidHide`, removes it, announces the re-revealed
+form's `formWillShow`, and applies. A pop at the root does nothing.
+
+### popToRoot
+
+```c
+void popToRoot(void)
+```
+
+Pops until only the root remains, announcing each step.
+
+### depth
+
+```c
+i32 depth(void)
+```
+
+How many forms are stacked. `0` before the first push.
+
+### topTitle / topContent
+
+```c
+u8*     topTitle(void)
+UXView* topContent(void)
+```
+
+The visible form's title and content view.
+
+### backTitle
+
+```c
+u8* backTitle(void)
+```
+
+The title of the form under the top. The back affordance shows it, because
+back returns to that form. Empty at the root.
+
+### canGoBack
+
+```c
+bool canGoBack(void)
+```
+
+Whether a pop would do anything (`depth > 1`).
+
+### isFormVisible
+
+```c
+bool isFormVisible(i32 i)
+```
+
+Model state: true only for the top form.
+
+### applyNav
+
+```c
+void applyNav(void)
+```
+
+Applies the model to the tree: `setHidden` on every content view except
+the top's, and redraws the bar. Runs automatically after push and pop.
+Call it directly only after wiring contents by hand.
+
+### contentFrame
+
+```c
+UXRect contentFrame(void)
+```
+
+The area below the bar, where pushed content lives. The bar's height
+comes from [`UXMetrics`](/compiler/api/uxkit/uxmetrics/) (44 on the
+device realm, 28 on desktop).
+
+### setDelegate
+
+```c
+void setDelegate(UXNavigationDelegate* d)
+```
+
+The lifecycle listener. It is held weakly, so keep it alive yourself.
+
+## Platform appearance
+
+The portrait is two forms deep: the bar shows back-to-Contacts over the
+visible Alice form.
+
+<div class="ux-platforms">
+<Tabs>
+  <TabItem label="Web">
+    <img src="/uxkit/nav-web.png" alt="UXNavigationController on Web" width="220" />
+
+    The drawn fallback bar: chevron, back title, current title.
+  </TabItem>
+  <TabItem label="iOS">
+    <img src="/uxkit/nav-ios.png" alt="UXNavigationController on iOS" width="220" />
+
+    The drawn fallback bar. The native `UINavigationController`
+    realization (with the real edge-swipe) is this driver's navigation
+    milestone.
+  </TabItem>
+  <TabItem label="Android">
+    <img src="/uxkit/nav-android.png" alt="UXNavigationController on Android" width="220" />
+
+    The drawn fallback bar. The native toolbar/back-stack realization is
+    this driver's navigation milestone.
+  </TabItem>
+  <TabItem label="macOS">
+    <img src="/uxkit/nav-macos.png" alt="UXNavigationController on macOS" width="220" />
+
+    The drawn fallback bar. Desktop apps usually realize master-detail as
+    a split instead (see UXNB v2 §5).
+  </TabItem>
+  <TabItem label="Windows">
+    <img src="/uxkit/nav-windows.png" alt="UXNavigationController on Windows" width="220" />
+
+    The drawn fallback bar.
+  </TabItem>
+  <TabItem label="Linux">
+    <img src="/uxkit/nav-linux.png" alt="UXNavigationController on Linux" width="220" />
+
+    The drawn fallback bar.
+  </TabItem>
+  <TabItem label="GEM">
+    <img src="/uxkit/nav-gem.png" alt="UXNavigationController on GEM" width="220" />
+
+    The drawn fallback bar.
+  </TabItem>
+</Tabs>
+</div>
+
+## See also
+
+- [`UXTabView`](/compiler/api/uxkit/uxtabview/): the TABS composition's
+  neutral realization
+- [`UXSplitView`](/compiler/api/uxkit/uxsplitview/): master-detail in a
+  *regular* space
+- UXNB v2 §5: the composition records that declare these flows in a nib

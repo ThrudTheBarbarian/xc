@@ -1,0 +1,503 @@
+add sp, sp, #1008
+add sp, sp, #1904
+add sp, sp, #3424
+add w10, w10, #0
+add w10, w16, #16
+add w11, w11, #4
+add w12, w11, w12
+add w13, w13, #2
+add w14, w14, #6
+add w16, w24, #200
+add w20, w14, w12
+add w21, w21, w12
+add w23, w23, #1
+add w26, w24, #1
+add x10, x10, _addrTaken@PAGEOFF
+add x10, x10, _g9@PAGEOFF
+add x10, x10, _str_3@PAGEOFF
+add x10, x19, #36
+add x10, x27, #14
+add x11, x11, _Dog$vtbl@PAGEOFF
+add x11, x11, #8
+add x11, x21, #8
+add x12, x12, ___sdata_Assert@PAGEOFF
+add x12, x19, #10
+add x13, x11, w13, uxtw
+add x13, x22, #9
+add x14, x16, #9
+add x16, sp, #1400
+add x16, sp, #40
+add x16, x10, #15
+add x16, x16, _itemDealloc@PAGEOFF
+add x16, x16, _str_44@PAGEOFF
+add x16, x20, #8
+add x16, x27, #14
+add x19, x19, _product@PAGEOFF
+add x19, x24, #16
+add x20, x20, ___sinit_Math@PAGEOFF
+add x20, x20, _str_18@PAGEOFF
+add x21, x10, #16
+add x21, x21, _gA@PAGEOFF
+add x21, x23, #1
+add x22, x20, #4
+add x22, x22, _str_0@PAGEOFF
+add x23, x11, #16
+add x23, x23, _leafDealloc@PAGEOFF
+add x23, x23, _str_5@PAGEOFF
+add x23, x25, #8
+add x24, x24, _b_flags@PAGEOFF
+add x25, sp, #24
+add x25, x25, _midDealloc@PAGEOFF
+add x26, x22, #22
+add x26, x26, _str_8@PAGEOFF
+add x27, x27, _str_1@PAGEOFF
+adrp x10, ___sdata_Array@PAGE
+adrp x10, _dst@PAGE
+adrp x10, _middleDealloc@PAGE
+adrp x11, _Base$vtbl@PAGE
+adrp x11, _Widget$vtbl@PAGE
+adrp x13, _Array$vtbl@PAGE
+adrp x16, _Cat$dealloc@PAGE
+adrp x16, _stat@PAGE
+adrp x19, _acc@PAGE
+adrp x19, _str_9@PAGE
+adrp x20, _Out$dealloc@PAGE
+adrp x21, ___sinit_String@PAGE
+adrp x21, _str_3@PAGE
+adrp x22, _Set$dealloc@PAGE
+adrp x23, _gAction@PAGE
+adrp x23, _str_40@PAGE
+adrp x23, _String$dealloc@PAGE
+adrp x24, _str_5@PAGE
+adrp x25, _Tracker$dealloc@PAGE
+adrp x27, ___sinit_Stdio@PAGE
+and w10, w10, w11
+and w13, w14, w13
+asr w10, w10, w17
+bl __isqrt
+bl __xm_atan
+bl _Array$reverse
+bl _churn
+bl _Gfx$fillRect
+bl _Math$abs__f
+bl _Rect$init
+bl _Stdio$_emitI32
+bl _sumP3
+bl _t_s1
+bl _testMixedRange
+blr x16
+brk #0
+cmp w10, #0
+cmp w10, #13
+cmp w10, #40
+cmp w11, #128
+cmp w12, #32
+cmp w13, #96
+cmp w16, #45
+cmp w19, #96
+cmp w21, #10
+cmp w21, w19
+cmp w23, #2
+cmp w24, #55
+cmp w27, w10
+csel w10, w10, w12, ne
+csel w12, w13, w23, ne
+csel w26, w12, w11, ne
+cset w10, eq
+cset w12, eq
+eor w10, w10, w11
+eor w10, w24, w25
+fadd d0, d0, d1
+fcmp d0, d1
+fcvt d1, s0
+fcvtzs x16, d0
+fcvtzu x16, s0
+fdiv d0, d0, d1
+fmadd d0, d0, d1, d2
+fmov d0, d1
+fmov s14, w16
+fmul d0, d0, d1
+fneg d0, d0
+fnmsub s0, s0, s1, s2
+fsqrt d0, d0
+fsub d0, d0, d1
+ldp x19, x20, [sp, #104]
+ldp x19, x20, [sp, #376]
+ldp x21, x22, [sp, #504]
+ldr d0, [sp, #104]
+ldr d0, [sp, #120]
+ldr d0, [sp, #88]
+ldr d1, [sp, #992]
+ldr s0, [sp, #104]
+ldr s0, [sp, #2464]
+ldr s0, [sp, #4928]
+ldr s0, [sp, #848]
+ldr s1, [sp, #2040]
+ldr s1, [sp, #680]
+ldr w1, [sp, #1000]
+ldr w1, [sp, #24]
+ldr w1, [sp, #720]
+ldr w12, [x23, #16]
+ldr w15, [sp, #32]
+ldr w16, [sp, #1128]
+ldr w16, [sp, #1584]
+ldr w16, [sp, #2232]
+ldr w16, [sp, #288]
+ldr w16, [sp, #40]
+ldr w16, [sp, #6176]
+ldr w16, [sp, #888]
+ldr w17, [sp, #1160]
+ldr w17, [sp, #168]
+ldr w17, [sp, #24]
+ldr w17, [sp, #3232]
+ldr w17, [sp, #440]
+ldr w17, [sp, #576]
+ldr w17, [sp, #7592]
+ldr w17, [sp, #9472]
+ldr w2, [sp, #1864]
+ldr w2, [sp, #720]
+ldr w3, [sp, #1744]
+ldr w4, [sp, #1480]
+ldr x0, [sp, #1176]
+ldr x0, [sp, #2008]
+ldr x0, [sp, #3328]
+ldr x0, [sp, #4744]
+ldr x0, [sp, #720]
+ldr x1, [sp, #1448]
+ldr x1, [sp, #4280]
+ldr x10, [x10, #16]
+ldr x12, [x16, #8]
+ldr x15, [sp, #96]
+ldr x16, [sp, #1192]
+ldr x16, [sp, #1480]
+ldr x16, [sp, #1976]
+ldr x16, [sp, #248]
+ldr x16, [sp, #3048]
+ldr x16, [sp, #3672]
+ldr x16, [sp, #4456]
+ldr x16, [sp, #5248]
+ldr x16, [sp, #6056]
+ldr x16, [sp, #712]
+ldr x16, [sp, #8368]
+ldr x16, [sp, #968]
+ldr x17, [sp, #1440]
+ldr x17, [sp, #2376]
+ldr x17, [sp, #3704]
+ldr x17, [sp, #712]
+ldr x19, [sp, #10640]
+ldr x19, [sp, #1512]
+ldr x19, [sp, #2288]
+ldr x19, [sp, #352]
+ldr x19, [sp, #5552]
+ldr x19, [sp, #7960]
+ldr x2, [sp, #10488]
+ldr x2, [sp, #2928]
+ldr x2, [sp, #6496]
+ldr x20, [sp, #10352]
+ldr x20, [sp, #1464]
+ldr x20, [sp, #2264]
+ldr x20, [sp, #3688]
+ldr x20, [sp, #600]
+ldr x20, [sp, #848]
+ldr x21, [sp, #1080]
+ldr x21, [sp, #1520]
+ldr x21, [sp, #2272]
+ldr x21, [sp, #3488]
+ldr x21, [sp, #5008]
+ldr x21, [sp, #7376]
+ldr x21, [x19, #16]
+ldr x22, [sp, #13088]
+ldr x22, [sp, #1976]
+ldr x22, [sp, #3408]
+ldr x22, [sp, #5576]
+ldr x22, [sp, #8256]
+ldr x23, [sp, #1128]
+ldr x23, [sp, #1648]
+ldr x23, [sp, #2800]
+ldr x23, [sp, #4328]
+ldr x23, [sp, #664]
+ldr x23, [sp, #976]
+ldr x24, [sp, #1368]
+ldr x24, [sp, #2416]
+ldr x24, [sp, #4304]
+ldr x24, [sp, #6824]
+ldr x24, [x16, #8]
+ldr x25, [sp, #1552]
+ldr x25, [sp, #3032]
+ldr x25, [sp, #5128]
+ldr x25, [sp, #8296]
+ldr x26, [sp, #1256]
+ldr x26, [sp, #2168]
+ldr x26, [sp, #4424]
+ldr x26, [sp, #7416]
+ldr x27, [sp, #12568]
+ldr x27, [sp, #2424]
+ldr x27, [sp, #5112]
+ldr x27, [sp, #9848]
+ldrb w0,[ sp, #24 ]
+ldrb w10, [x19, #3]
+ldrb w10, [x26, w10, uxtw #0]
+ldrb w12, [x10, #2]
+ldrb w13, [x10, #9]
+ldrb w17, [sp, #1938]
+ldrb w19, [x12, w10, uxtw #0]
+ldrb w22, [x10, #13]
+ldrh w1,[ sp, #24 ]
+ldrh w10, [x16]
+ldrh w12, [x21, #8]
+ldrh w17, [x16, #2]
+ldrsb w10, [x10, #2]
+ldrsh w10, [x10, #6]
+ldrsh w13, [x10, #4]
+ldurh w17, [x0, #-2]
+lsl w10, w10, w12
+lsl w23, w16, w17
+lsr w10, w10, w17
+mov w0, #0
+mov w0, #20
+mov w1, w27
+mov w10, #200
+mov w10, #4
+mov w10, w13
+mov w11, #20
+mov w11, #72
+mov w12, #191
+mov w12, #90
+mov w13, #270
+mov w14, #15
+mov w14, w4
+mov w16, #200
+mov w16, w24
+mov w17, #173
+mov w17, #27
+mov w17, #60000
+mov w19, w1
+mov w20, #30
+mov w21, #18
+mov w21, w22
+mov w22, #99
+mov w23, w19
+mov w25, #122
+mov w26, #4
+mov w27, w11
+mov x1, x21
+mov x12, x21
+mov x17, x13
+mov x21, x1
+mov x24, x12
+movk w10, #1, lsl #16
+movk w16, #16329, lsl #16
+movk w17, #11915, lsl #16
+movk x16, #16358, lsl #48
+movz w10, #0
+movz w11, #55296
+movz w16, #65535
+movz w21, #65535
+movz x9, #5040
+msub w10, w15, w10, w11
+msub w16, w15, w17, w16
+mul w10, w10, w10
+mvn w10, w10
+neg w10, w10
+neg w10, w22
+orr w10, w10, w11
+orr w14, w14, w24
+ret
+scvtf d0, w0, #31
+sdiv w10, w10, w11
+smull x15, w10, w17
+stp x19, x20, [sp, #104]
+stp x19, x20, [sp, #200]
+stp x21, x22, [sp, #288]
+stp x29, x30, [sp, #-288]!
+str d0, [sp, #1024]
+str d0, [sp, #2216]
+str d0, [sp, #4096]
+str d2, [sp, #208]
+str s0, [sp, #1280]
+str s0, [sp, #2864]
+str s0, [sp, #64]
+str w0, [sp, #2464]
+str w10, [sp, #1952]
+str w10, [x26, #16]
+str w11, [x19, #28]
+str w12, [sp, #4336]
+str w13, [sp, #3328]
+str w14, [sp, #7328]
+str w16, [sp, #1120]
+str w16, [sp, #14032]
+str w16, [sp, #184]
+str w16, [sp, #2264]
+str w16, [sp, #272]
+str w16, [sp, #3216]
+str w16, [sp, #3840]
+str w16, [sp, #4792]
+str w16, [sp, #5984]
+str w16, [sp, #7400]
+str w16, [sp, #8816]
+str w17, [sp, #1072]
+str w17, [sp, #1456]
+str w17, [sp, #192]
+str w17, [sp, #2360]
+str w17, [sp, #2880]
+str w17, [sp, #360]
+str w17, [sp, #4440]
+str w17, [sp, #592]
+str w17, [sp, #8296]
+str w19, [x21, #20]
+str w22, [sp, #592]
+str w24, [x19, #28]
+str w27, [x16]
+str x0, [sp, #1800]
+str x0, [sp, #4376]
+str x0, [sp, #7168]
+str x11, [x22, #0]
+str x15, [x10, #0]
+str x16, [sp, #1104]
+str x16, [sp, #1360]
+str x16, [sp, #1776]
+str x16, [sp, #2224]
+str x16, [sp, #2680]
+str x16, [sp, #3128]
+str x16, [sp, #3648]
+str x16, [sp, #4264]
+str x16, [sp, #4936]
+str x16, [sp, #5792]
+str x16, [sp, #656]
+str x16, [sp, #7776]
+str x16, [sp, #8896]
+str x17, [sp, #1264]
+str x17, [sp, #328]
+str x17, [sp, #816]
+str x19, [sp, #1232]
+str x19, [sp, #1688]
+str x19, [sp, #2760]
+str x19, [sp, #4248]
+str x19, [sp, #6376]
+str x19, [sp, #880]
+str x20, [sp, #1120]
+str x20, [sp, #1608]
+str x20, [sp, #2544]
+str x20, [sp, #4232]
+str x20, [sp, #6464]
+str x20, [sp, #920]
+str x21, [sp, #1216]
+str x21, [sp, #1664]
+str x21, [sp, #2560]
+str x21, [sp, #3904]
+str x21, [sp, #568]
+str x21, [sp, #816]
+str x22, [sp, #10664]
+str x22, [sp, #1544]
+str x22, [sp, #2520]
+str x22, [sp, #4208]
+str x22, [sp, #6472]
+str x22, [sp, #928]
+str x23, [sp, #1248]
+str x23, [sp, #1848]
+str x23, [sp, #3128]
+str x23, [sp, #4664]
+str x23, [sp, #712]
+str x24, [sp, #1040]
+str x24, [sp, #1544]
+str x24, [sp, #2864]
+str x24, [sp, #4920]
+str x24, [sp, #7800]
+str x25, [sp, #1136]
+str x25, [sp, #1832]
+str x25, [sp, #3576]
+str x25, [sp, #592]
+str x25, [sp, #944]
+str x26, [sp, #1440]
+str x26, [sp, #2824]
+str x26, [sp, #536]
+str x26, [sp, #912]
+str x27, [sp, #14208]
+str x27, [sp, #2888]
+str x27, [sp, #6072]
+str xzr, [x10, #8]
+strb w0,[ sp, #32 ]
+strb w11, [x10, #5]
+strb w13, [x12, #3]
+strb w17, [sp, #2506]
+strb w21, [x11, #9]
+strb w26, [x10, #4]
+strb wzr, [x22, #16]
+strh w0,[ sp, #24 ]
+strh w12, [x10, #0]
+strh w14, [x13, #8]
+strh w17, [sp, #3704]
+strh w22, [x12, #8]
+strh w25, [x24, #8]
+sturh w17, [x0, #-2]
+sub sp, sp, #1008
+sub sp, sp, #1568
+sub sp, sp, #2864
+sub sp, sp, #736
+sub w11, w11, #2
+sub w19, w19, #2
+subs w17, w17, #1
+sxtb w0, w0
+sxth w0, w0
+sxth w12, w12
+sxth w23, w10
+sxtw x17, w16
+ucvtf d0, w10
+ucvtf d0, w11
+udiv w15, w10, w11
+umull x15, w10, w17
+uxtb w0, w0
+uxtb w19, w13
+uxth w0, w0
+uxth w10, w19
+uxth w14, w25
+uxth w23, w10
+add v0.4s, v1.4s, v2.4s
+sub v0.8h, v1.8h, v2.8h
+mul v3.2s, v4.2s, v5.2s
+mla v0.4s, v1.4s, v2.4s
+mls v0.4s, v1.4s, v2.4s
+smax v0.4s, v1.4s, v2.4s
+umin v0.16b, v1.16b, v2.16b
+cmeq v0.4s, v1.4s, v2.4s
+cmgt v0.4s, v1.4s, v2.4s
+and v0.16b, v1.16b, v2.16b
+orr v0.16b, v1.16b, v2.16b
+eor v0.8b, v1.8b, v2.8b
+bic v0.16b, v1.16b, v2.16b
+neg v0.4s, v1.4s
+abs v0.4s, v1.4s
+not v0.16b, v1.16b
+addv s0, v1.4s
+uaddlv d0, v1.4s
+zip1 v0.4s, v1.4s, v2.4s
+uzp1 v0.4s, v1.4s, v2.4s
+trn1 v0.4s, v1.4s, v2.4s
+ext v0.16b, v1.16b, v2.16b, #4
+fadd v0.4s, v1.4s, v2.4s
+fsub v0.2d, v1.2d, v2.2d
+fmul v0.4s, v1.4s, v2.4s
+fdiv v0.4s, v1.4s, v2.4s
+fmla v0.4s, v1.4s, v2.4s
+fmls v0.4s, v1.4s, v2.4s
+fmax v0.4s, v1.4s, v2.4s
+fmin v0.4s, v1.4s, v2.4s
+fneg v0.4s, v1.4s
+fabs v0.4s, v1.4s
+scvtf v0.4s, v1.4s
+ucvtf v0.4s, v1.4s
+fcvtzs v0.4s, v1.4s
+fcvtzu v0.4s, v1.4s
+ld1 { v0.4s }, [x1]
+ld1 { v0.16b }, [x1]
+st1 { v0.4s }, [x1]
+st1 { v0.2d }, [x1]
+fmla v0.4s, v1.4s, v2.s[1]
+fmls v0.4s, v1.4s, v2.s[0]
+fmul v0.4s, v1.4s, v2.s[2]
+mul v0.4s, v1.4s, v2.s[3]
+mla v0.4s, v1.4s, v2.s[1]
+dup v0.4s, v1.s[3]
+dup v0.2d, v1.d[1]
+svc #0x80
+brk #0

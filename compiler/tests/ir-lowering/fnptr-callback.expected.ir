@@ -1,0 +1,29 @@
+module "fnptr-callback" {
+  symbol addOne: function (U8) -> U8
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  symbol applyU8: function (Ptr(Void, unbanked), U8) -> U8
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  symbol callcb: function () -> U8
+    attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
+  function addOne(%0: U8, %1: Mem) -> (U8, Mem) {
+    bb_entry:
+      preds: -
+      %2:U8 = Const #1:U8
+      %3:U8 = Add %0, %2
+      Return %3, %1
+  }
+  function applyU8(%0: Ptr(Void, unbanked), %1: U8, %2: Mem) -> (U8, Mem) {
+    bb_entry:
+      preds: -
+      %3:U8, %4 = CallIndirect %0, [%1], CallConv::Standard, %2
+      Return %3, %4
+  }
+  function callcb(%0: Mem) -> (U8, Mem) {
+    bb_entry:
+      preds: -
+      %1:Ptr(Void, unbanked) = AddrOf @addOne
+      %2:U8 = Const #100:U8
+      %3:U8, %4 = Call @applyU8, [%1, %2], CallConv::Standard, %0
+      Return %3, %4
+  }
+}

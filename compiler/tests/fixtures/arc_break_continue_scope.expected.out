@@ -1,0 +1,16 @@
+-- for/break
+dealloc 0
+dealloc 1
+-- for/continue
+dealloc 10
+dealloc 11
+dealloc 12
+-- while/break
+dealloc 20
+dealloc 21
+-- nested
+dealloc 40
+dealloc 30
+dealloc 40
+dealloc 31
+done

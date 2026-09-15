@@ -1,0 +1,165 @@
+---
+title: UXSlider
+description: "A value slider: a knob on a track, with the value mapping linearly to position. Native where the platform has one, themed art where it doesn't."
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+`UXSlider` is a knob on a track. The value maps linearly to the knob position
+and back, so a click or drag sets the value and the value places the knob. The
+value↔position arithmetic is pure and unit-testable without a window. Drawing
+and click conversion go through the
+[`UXControl`](/compiler/api/uxkit/uxcontrol/) seam. On backends with a native
+slider (macOS `NSSlider`, Win32 trackbar, iOS `UISlider`, Android `SeekBar`,
+GTK `GtkScale`) the driver realizes one and this object holds its state. On GEM
+and the web the control draws itself from the theme's `slider.htrack` and
+`slider.knob` sprites.
+
+```c
+#use <UXKit>
+```
+
+## Overview
+
+```c
+UXSlider* s = new UXSlider();
+s.setRange(0, 255);
+s.setValue(128);
+s.setAction(&controller.onLevel);          // fires on every value change
+content.addSubview(s, UXGeom.make(8, 8, 180, 20));
+```
+
+The action fires as the value moves: once per click or drag step on the
+self-drawn path, and whenever the native control reports a user change
+elsewhere. The handler reads the value from the sender:
+
+```c
+void onLevel(UXControl* sender) {
+    i32 level = ((UXSlider* ?)sender).intValue();
+    ...
+}
+```
+
+## Conforms to
+
+- Inherits [`UXControl`](/compiler/api/uxkit/uxcontrol/): the `weak:`
+  bound-method action, enable/disable, the fire path.
+
+## Topics
+
+**Value** · [setRange](#setrange) · [setValue](#setvalue) · [intValue](#intvalue)
+**Geometry** · [knobX](#knobx) · [valueForX](#valueforx)
+**Realization** · [kind](#kind)
+
+### setRange
+
+```c
+void setRange(i32 lo, i32 hi)
+```
+
+Sets the bounds and clamps the current value into them. A degenerate range
+is repaired (`hi` becomes `lo + 1`), so the position arithmetic never
+divides by zero.
+
+### setValue
+
+```c
+void setValue(i32 v)
+```
+
+Sets the value programmatically, clamped to the range. Does **not** fire
+the action. Actions report the user's changes; code that sets the value
+already knows it.
+
+### intValue
+
+```c
+i32 intValue(void)
+```
+
+The current value. The neutral object holds it, whatever realized the control.
+
+### knobX
+
+```c
+i32 knobX(i16 trackW)
+```
+
+The knob's left edge for the current value within a track `trackW` wide.
+Pure arithmetic; the tests call it without a window.
+
+### valueForX
+
+```c
+i32 valueForX(i16 lx, i16 trackW)
+```
+
+The value for a local x (the click or drag point), centring the knob under the
+pointer, clamped to the track.
+
+### kind
+
+```c
+UXKind kind(void)
+```
+
+`UXKindSlider`: native where the backend has one, themed sprites elsewhere.
+The driver decides; the control does not know which.
+
+## Platform appearance
+
+<div class="ux-platforms">
+<Tabs>
+  <TabItem label="Web">
+    <img src="/uxkit/slider-web.png" alt="UXSlider on the web backend" width="220" />
+
+    The theme's `slider.htrack` groove and round `slider.knob`, the same Aristo art GEM draws, on canvas.
+  </TabItem>
+  <TabItem label="iOS">
+    <img src="/uxkit/slider-ios.png" alt="UXSlider on iOS" width="220" />
+
+    A real `UISlider`. Value changes arrive through its own target-action and land in the peer before the action fires.
+  </TabItem>
+  <TabItem label="Android">
+    <img src="/uxkit/slider-android.png" alt="UXSlider on Android" width="220" />
+
+    A real `SeekBar`. User progress reports through `OnSeekBarChangeListener` (the bridge dex); programmatic sets stay silent.
+  </TabItem>
+  <TabItem label="macOS">
+    <img src="/uxkit/slider-macos.png" alt="Slider on macOS" width="220" />
+
+    A real <code>NSSlider</code> overlay.
+  </TabItem>
+  <TabItem label="Windows">
+    <img src="/uxkit/slider-windows.png" alt="Slider on Windows" width="220" />
+
+    A real trackbar (<code>msctls_trackbar32</code>).
+  </TabItem>
+  <TabItem label="Linux">
+    <img src="/uxkit/slider-linux.png" alt="UXSlider on Linux (GTK)" width="220" />
+
+    A real `GtkScale`, its `value-changed` signal feeding the peer. GTK draws its own widgets, so this capture is the Linux look wherever GTK4 runs.
+  </TabItem>
+  <TabItem label="GEM">
+    <img src="/uxkit/slider-gem.png" alt="Slider on GEM" width="220" />
+
+    The same themed groove and knob, drawn by the same drawRect.
+  </TabItem>
+</Tabs>
+</div>
+
+## Example
+
+A brightness control that applies live while dragging:
+
+```c
+UXSlider* bright = new UXSlider();
+bright.setRange(0, 100);
+bright.setValue(80);
+bright.setAction(&controller.onBrightness);
+content.addSubview(bright, UXGeom.make(8, 8, 200, 20));
+
+void onBrightness(UXControl* sender) {
+    display.setBrightness(((UXSlider* ?)sender).intValue());
+}
+```

@@ -1,0 +1,197 @@
+---
+title: UXScrollView
+description: "A clipped viewport over a taller document view: the document is MOVED, not re-laid-out, so content keeps fixed coordinates and hit-testing still works."
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+`UXScrollView` is the generic vertical scroller: a clipped viewport over
+a taller **document** view, with an optional pinned header strip and a
+scrollbar (track, arrow boxes, a draggable thumb).
+[`UXTableView`](/compiler/api/uxkit/uxtableview/) and
+[`UXOutlineView`](/compiler/api/uxkit/uxoutlineview/) are built on it. Put a tall
+view in the document and set its height, and the wheel, arrows, paging and
+thumb-drag all work.
+
+The document is **moved, not re-laid-out**. Scrolling sets the document view's y
+to `-scrollOffset` and the clip cuts it to the viewport. Your content keeps fixed
+coordinates, and the ordinary hit test finds it where it is drawn.
+
+On backends that scroll natively (Win32, AppKit) a native container
+overlays this whole subtree and the custom bar never draws. On GEM (and
+headless) this bar is the scrollbar.
+
+```c
+#use <UXKit>
+```
+
+## Overview
+
+```c
+UXScrollView* sv = new UXScrollView();
+content.addSubview(sv, UXGeom.make(8, 8, 300, 200));
+
+BigCanvas* big = new BigCanvas();
+sv.document().addSubview(big, UXGeom.make(0, 0, 300, 900));
+sv.setDocumentHeight(900);
+sv.setLineHeight(18);              // the arrow/wheel step
+```
+
+## Topics
+
+**The document** · [document](#document) · [setDocumentHeight](#setdocumentheight) · [setHeaderView](#setheaderview) · [setLineHeight](#setlineheight)
+**Motion** · [scrollTo](#scrollto) · [scrollByLines](#scrollbylines)
+**Geometry** · [contentPx](#contentpx) · [viewportPx](#viewportpx) · [scrollPx](#scrollpx) · [maxScroll](#maxscroll) · [needsBar](#needsbar)
+
+### document
+
+```c
+UXView* document(void)
+```
+
+The view your content goes in. Add subviews at their natural, fixed
+coordinates. Scrolling moves the document, not them.
+
+### setDocumentHeight
+
+```c
+void setDocumentHeight(i32 h)
+```
+
+The height of the content. All the scroll geometry derives from this number.
+Update it whenever the content grows.
+
+### setHeaderView
+
+```c
+void setHeaderView(UXView* hv, i16 h)
+```
+
+A strip pinned above the viewport, such as a table's column header. It does not
+scroll with the document.
+
+### setLineHeight
+
+```c
+void setLineHeight(i16 h)
+```
+
+The arrow-click and wheel-notch step. A table sets its row height here so an
+arrow click moves one row.
+
+### scrollTo
+
+```c
+void scrollTo(i16 off)
+```
+
+Scrolls to an absolute offset, clamped to `[0, maxScroll]`. This is the only
+place a scroll is announced; every other motion goes through it.
+
+### scrollByLines
+
+```c
+void scrollByLines(i32 lines)
+```
+
+Relative motion in line-height steps, used by arrows, wheel notches and the
+keyboard.
+
+### contentPx
+
+```c
+i32 contentPx(void)
+```
+
+The document height, as set.
+
+### viewportPx
+
+```c
+i32 viewportPx(void)
+```
+
+The visible height (the clip's, minus any header).
+
+### scrollPx
+
+```c
+i32 scrollPx(void)
+```
+
+The current scroll offset. On a native backend the **container holds the real
+value**, because the user can drag its scroller without the toolkit being told.
+This method asks the driver rather than reporting the last value the toolkit set.
+
+### maxScroll
+
+```c
+i32 maxScroll(void)
+```
+
+The largest valid offset (zero when the document fits).
+
+### needsBar
+
+```c
+bool needsBar(void)
+```
+
+Whether the content overflows the viewport. The bar hides when it does not.
+
+## Platform appearance
+
+<div class="ux-platforms">
+<Tabs>
+  <TabItem label="Web">
+    <img src="/uxkit/scroll-web.png" alt="UXScrollView on Web" width="220" />
+
+    The toolkit's scrollbar: track, arrows, and the proportional thumb over the clipped document.
+  </TabItem>
+  <TabItem label="iOS">
+    <img src="/uxkit/scroll-ios.png" alt="UXScrollView on iOS" width="220" />
+
+    The toolkit's scrollbar. This driver does not yet use the native scroll container with the platform's scrolling physics and indicators.
+  </TabItem>
+  <TabItem label="Android">
+    <img src="/uxkit/scroll-android.png" alt="UXScrollView on Android" width="220" />
+
+    The toolkit's scrollbar. This driver does not yet use the native scroll container with the platform's scrolling physics and indicators.
+  </TabItem>
+  <TabItem label="macOS">
+    <img src="/uxkit/scroll-macos.png" alt="UXScrollView on macOS" width="220" />
+
+    A native scroll container owns the clipping; the platform's overlay scrollers appear on interaction.
+  </TabItem>
+  <TabItem label="Windows">
+    <img src="/uxkit/scroll-windows.png" alt="UXScrollView on Windows" width="220" />
+
+    A native scroll child window with system scrollbars.
+  </TabItem>
+  <TabItem label="Linux">
+    <img src="/uxkit/scroll-linux.png" alt="UXScrollView on Linux" width="220" />
+
+    The toolkit's scrollbar. This driver does not yet use the native scroll container with the platform's scrolling physics and indicators.
+  </TabItem>
+  <TabItem label="GEM">
+    <img src="/uxkit/scroll-gem.png" alt="UXScrollView on GEM" width="220" />
+
+    The toolkit's scrollbar: track, arrows, and the proportional thumb over the clipped document.
+  </TabItem>
+</Tabs>
+</div>
+
+## Example
+
+Reveal a row from code. This works because `scrollTo` is the single path for
+every scroll:
+
+```c
+void revealRow(i32 row) {
+    i32 y = row * rowH;
+    if (y < sv.scrollPx()) { sv.scrollTo((i16)y); }
+    else if (y + rowH > sv.scrollPx() + sv.viewportPx()) {
+        sv.scrollTo((i16)(y + rowH - sv.viewportPx()));
+    }
+}
+```

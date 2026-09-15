@@ -1,0 +1,87 @@
+---
+title: UXGroupBox
+description: "A titled frame around related controls: pure decoration, the ST-dialog way of marking controls that belong together."
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+`UXGroupBox` is a titled frame, the ST-dialog way of showing that controls
+belong together. It is **pure decoration**. It draws a rule around its
+bounds with the title breaking the top edge, and the grouped controls sit
+on top of it as siblings on the canvas. The box does not contain or lay out
+anything, so grouping adds no hierarchy.
+
+```c
+#use <UXKit>
+```
+
+## Overview
+
+```c
+UXGroupBox* box = new UXGroupBox();
+box.setTitle((u8*)"Format");
+content.addSubview(box,    UXGeom.make(8,  8, 160, 90));
+content.addSubview(bold,   UXGeom.make(20, 30, 120, 20));   // siblings ON the box
+content.addSubview(italic, UXGeom.make(20, 56, 120, 20));
+```
+
+Add the box **before** the controls it frames. Later siblings draw on top,
+which is the stacking a decoration needs.
+
+## Conforms to
+
+- Inherits [`UXView`](/compiler/api/uxkit/uxview/): geometry and the
+  drawing seam; no action, no state.
+
+## Topics
+
+### setTitle
+
+```c
+void setTitle(u8* t)
+```
+
+The text that breaks the top rule. This is the whole API. A group box that
+needed more would be a container, and this class is not one.
+
+## Platform appearance
+
+<div class="ux-platforms">
+<Tabs>
+  <TabItem label="Web">
+    <img src="/uxkit/groupbox-web.png" alt="UXGroupBox on Web" width="220" />
+
+    The frame is app-drawn everywhere; the grouped controls inside are this platform's own (a real toggle idiom per backend).
+  </TabItem>
+  <TabItem label="iOS">
+    <img src="/uxkit/groupbox-ios.png" alt="UXGroupBox on iOS" width="220" />
+
+    The frame is app-drawn everywhere; the grouped controls inside are this platform's own (a real toggle idiom per backend).
+  </TabItem>
+  <TabItem label="Android">
+    <img src="/uxkit/groupbox-android.png" alt="UXGroupBox on Android" width="220" />
+
+    The frame is app-drawn everywhere; the grouped controls inside are this platform's own (a real toggle idiom per backend).
+  </TabItem>
+  <TabItem label="macOS">
+    <img src="/uxkit/groupbox-macos.png" alt="UXGroupBox on macOS" width="220" />
+
+    The frame is app-drawn everywhere; the grouped controls inside are this platform's own (a real toggle idiom per backend).
+  </TabItem>
+  <TabItem label="Windows">
+    <img src="/uxkit/groupbox-windows.png" alt="UXGroupBox on Windows" width="220" />
+
+    The frame is app-drawn everywhere; the grouped controls inside are this platform's own (a real toggle idiom per backend).
+  </TabItem>
+  <TabItem label="Linux">
+    <img src="/uxkit/groupbox-linux.png" alt="UXGroupBox on Linux" width="220" />
+
+    The frame is app-drawn everywhere; the grouped controls inside are this platform's own (a real toggle idiom per backend).
+  </TabItem>
+  <TabItem label="GEM">
+    <img src="/uxkit/groupbox-gem.png" alt="UXGroupBox on GEM" width="220" />
+
+    The frame is app-drawn everywhere; the grouped controls inside are this platform's own (a real toggle idiom per backend).
+  </TabItem>
+</Tabs>
+</div>

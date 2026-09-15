@@ -1,0 +1,183 @@
+---
+title: UXComboBox
+description: "An editable field with a drop-down suggestion list: typing narrows by prefix, completion fills the first match, and the matching logic is pure and testable."
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+`UXComboBox` is the editable form of a popup button. You type the text, a
+suggestion list narrows by **case-insensitive prefix** as you type, and a
+completion fills in the first match. The text, the suggestions and the prefix
+matching form a pure, testable model; the backend draws the field and runs the
+drop-down.
+
+```c
+#use <UXKit>
+```
+
+## Overview
+
+```c
+UXComboBox* font = new UXComboBox();
+font.addItem((u8*)"Helvetica");
+font.addItem((u8*)"Hobo");
+font.addItem((u8*)"Times");
+font.setText((u8*)"H");
+// completionIndex() == 0, matchCount() == 2
+font.acceptCompletion();          // text is now "Helvetica"
+```
+
+## Conforms to
+
+- Inherits [`UXControl`](/compiler/api/uxkit/uxcontrol/): the `weak:`
+  callback action, enablement, the fire path.
+
+## Topics
+
+**Suggestions** · [addItem](#additem) · [removeAllItems](#removeallitems) · [count](#count) · [itemAt](#itemat)
+**Text** · [text](#text) · [setText](#settext)
+**Completion** · [completionIndex](#completionindex) · [completion](#completion) · [matchCount](#matchcount) · [selectItem](#selectitem) · [acceptCompletion](#acceptcompletion)
+
+### addItem
+
+```c
+void addItem(u8* s)
+```
+
+Appends a suggestion.
+
+### removeAllItems
+
+```c
+void removeAllItems(void)
+```
+
+Empties the suggestion list. The text, which belongs to the user, stays.
+
+### count
+
+```c
+i32 count(void)
+```
+
+How many suggestions the list holds.
+
+### itemAt
+
+```c
+u8* itemAt(i32 i)
+```
+
+The suggestion's text.
+
+### text
+
+```c
+u8* text(void)
+```
+
+The current text, whether typed, completed or picked.
+
+### setText
+
+```c
+void setText(u8* s)
+```
+
+Replaces the text; the completion queries answer against it.
+
+### completionIndex
+
+```c
+i32 completionIndex(void)
+```
+
+The first suggestion with the current text as a case-insensitive prefix,
+`-1` when nothing matches or the text is empty.
+
+### completion
+
+```c
+u8* completion(void)
+```
+
+The matching suggestion's full text, or the current text unchanged when
+nothing matches (a completion never destroys what was typed).
+
+### matchCount
+
+```c
+i32 matchCount(void)
+```
+
+How many suggestions still match the prefix. A drop-down shows these, and an
+autocompleting UI uses the count to decide whether completing helps.
+
+### selectItem
+
+```c
+void selectItem(i32 i)
+```
+
+Commits a suggestion into the text (the drop-down pick).
+
+### acceptCompletion
+
+```c
+void acceptCompletion(void)
+```
+
+Commits the first match into the text (Tab completion).
+
+## Platform appearance
+
+<div class="ux-platforms">
+<Tabs>
+  <TabItem label="Web">
+    <img src="/uxkit/combobox-web.png" alt="UXComboBox on Web" width="220" />
+
+    App-drawn through the shared `drawRect` seam: the same rendering on every backend, captured here from this platform's own paint path.
+  </TabItem>
+  <TabItem label="iOS">
+    <img src="/uxkit/combobox-ios.png" alt="UXComboBox on iOS" width="220" />
+
+    App-drawn through the shared `drawRect` seam: the same rendering on every backend, captured here from this platform's own paint path.
+  </TabItem>
+  <TabItem label="Android">
+    <img src="/uxkit/combobox-android.png" alt="UXComboBox on Android" width="220" />
+
+    App-drawn through the shared `drawRect` seam: the same rendering on every backend, captured here from this platform's own paint path.
+  </TabItem>
+  <TabItem label="macOS">
+    <img src="/uxkit/combobox-macos.png" alt="UXComboBox on macOS" width="220" />
+
+    App-drawn through the shared `drawRect` seam: the same rendering on every backend, captured here from this platform's own paint path.
+  </TabItem>
+  <TabItem label="Windows">
+    <img src="/uxkit/combobox-windows.png" alt="UXComboBox on Windows" width="220" />
+
+    App-drawn through the shared `drawRect` seam: the same rendering on every backend, captured here from this platform's own paint path.
+  </TabItem>
+  <TabItem label="Linux">
+    <img src="/uxkit/combobox-linux.png" alt="UXComboBox on Linux" width="220" />
+
+    App-drawn through the shared `drawRect` seam: the same rendering on every backend, captured here from this platform's own paint path.
+  </TabItem>
+  <TabItem label="GEM">
+    <img src="/uxkit/combobox-gem.png" alt="UXComboBox on GEM" width="220" />
+
+    App-drawn through the shared `drawRect` seam: the same rendering on every backend, captured here from this platform's own paint path.
+  </TabItem>
+</Tabs>
+</div>
+
+## Example
+
+A tag entry that completes against the known set:
+
+```c
+void onTagKey(UXTextField* sender) {
+    combo.setText(sender.text());
+    hint.setText(combo.matchCount() > (i32)0 ? combo.completion() : (u8*)"");
+}
+```

@@ -1,0 +1,18 @@
+; Invariant 1 (IR-SPEC §12.1): Single-def SSA — every ValueId is
+; defined exactly once.
+; VIOLATION: %r:U8 is defined by two instructions (Add and Sub).
+; The verifier must reject this — SSA is structural, not a name-
+; reuse convention.
+
+module "inv-01-negative" {
+  symbol dup_def: function (U8, U8) -> U8
+    attributes: { cloaked: false, banked: false, variadic: false }
+
+  function dup_def(%a: U8, %b: U8, %m0: Mem) -> (U8, Mem) {
+    bb_entry:
+      preds: -
+      %r:U8 = Add %a, %b
+      %r:U8 = Sub %a, %b      ; ERROR: %r already defined on the line above
+      Return %r, %m0
+  }
+}
