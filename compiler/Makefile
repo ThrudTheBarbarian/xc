@@ -1244,8 +1244,11 @@ win64: $(WIN64_BINS) $(WIN64_SIM_BINS)
 # pools), rooted at xcc-<plat>-<version>/ so extraction yields one
 # self-contained directory. The binaries find lib/xc relative to
 # themselves, so no environment or flags are needed after unpacking.
-# The arm9 sysroot is deliberately omitted (large, target-specific);
-# the downloads page says so.
+# The arm9 sysroot is not in the host archives: it ships as its own
+# xcc-arm9-sysroot-<version>.tar.bz2 (libc.so alone, ~830 KB), because it is
+# the one target whose C library is not built from this tree. The downloads
+# page documents both routes — that archive, or `make install` vendoring a
+# sysroot from XTC_ARM9_SYSROOT into lib/xc/arm9-sysroot/.
 #
 # Archives land in the monorepo's website/downloads/, which is what
 # tools/release/deploy-website.sh rsyncs to compile-xc.org. They are

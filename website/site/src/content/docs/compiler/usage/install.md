@@ -118,10 +118,14 @@ xcc -A 6502   -o prog.xex prog.xc
 The native targets assemble and link in-house, so no system assembler, linker or
 SDK is involved.
 
-`-A arm9` is the exception. It links against the XTOS loader's `libc.so`, which
-lives in a separate repository. `make install` copies it into
-`lib/xc/arm9-sysroot/` when it can find it, and reports when it cannot. In that
-case `-A arm9` needs `-L <path-to-sysroot>` until you install the sysroot.
+`-A arm9` is the exception. It links against the XTOS loader's `libc.so` and reads
+the C library out of that file's DWARF, so one extra file has to be reachable.
+
+Either download the [arm9 sysroot archive](/compiler/downloads/) (830 KB), unpack it
+and pass `-L path/to/xcc-arm9-sysroot-0.6`; or set `XTC_ARM9_SYSROOT` in `build.env`
+to a loader build directory, in which case `make install` copies it into
+`lib/xc/arm9-sysroot/` and `-A arm9` needs no `-L` at all. `make install` reports
+which of the two happened.
 
 ## Uninstalling
 
