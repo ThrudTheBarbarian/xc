@@ -327,6 +327,38 @@ static NSString* trimmed(NSString* s)
     return [s stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
     }
 
+// Strip an end-of-line comment, in either spelling the oracle accepts: `@`,
+// traditional ARM, and `//`, which is what the licence header on every
+// generated runtime .s uses.
+//
+// NOT `;`. The arm64 assembler cuts on it because clang's arm64 output comments
+// that way, but on ARM32 `arm-none-eabi-as` reads `;` as a STATEMENT SEPARATOR —
+// `mov r0, #1 ; mov r0, #2` assembles to two instructions — so cutting there
+// would delete real code.
+//
+// Quoted strings are respected: the oracle keeps the `//` in a .asciz of
+// "http://example/x", and so must we.
+static NSString* stripComment(NSString* l)
+    {
+    BOOL inStr = NO;
+    for (NSUInteger i = 0; i < l.length; i++)
+        {
+        unichar c = [l characterAtIndex:i];
+        if (c == '"')
+            {
+            inStr = !inStr;
+            continue;
+            }
+        if (inStr)
+            continue;
+        if (c == '@')
+            return [l substringToIndex:i];
+        if (c == '/' && i + 1 < l.length && [l characterAtIndex:i + 1] == '/')
+            return [l substringToIndex:i];
+        }
+    return l;
+    }
+
 // ── Emission ──────────────────────────────────────────────────────────────
 - (void)word:(uint32_t)w
     {
@@ -531,17 +563,20 @@ static NSString* trimmed(NSString* s)
     {
     if (!text.length)
         return;
-    // A trailing `@` comment. The back end never emits one, but the runtime
-    // written BY HAND does, and an operand with a comment glued to it parses as
-    // a bad register — which the assembler then reports as an unknown mnemonic,
+    // A trailing comment. The back end never emits one, but the runtime written
+    // BY HAND does, and an operand with a comment glued to it parses as a bad
+    // register — which the assembler then reports as an unknown mnemonic,
     // pointing at the wrong thing entirely.
-    NSRange at = [text rangeOfString:@"@"];
-    if (at.location != NSNotFound)
-        {
-        text = trimmed([text substringToIndex:at.location]);
-        if (!text.length)
-            return;
-        }
+    //
+    // Both spellings, because the oracle takes both: `@` is traditional ARM and
+    // `//` is what the licence header on every generated runtime .s uses. While
+    // only `@` was cut, every arm9 self-host link died on the first line of
+    // rtgen-arm9.s with `unsupported ARM assembly: //`.
+    //
+    // Quoted strings are respected, so a `//` inside a .asciz survives.
+    text = trimmed(stripComment(text));
+    if (!text.length)
+        return;
     // `label: instruction` on one line — likewise a hand-written form. The
     // label is defined and the rest of the line assembles as usual.
     NSRange colon = [text rangeOfString:@":"];
@@ -565,6 +600,8 @@ static NSString* trimmed(NSString* s)
     unichar c0 = [text characterAtIndex:0];
     if (c0 == '@')
         return; // a whole-line comment
+    if (c0 == '/' && text.length > 1 && [text characterAtIndex:1] == '/')
+        return; // likewise, in the `//` spelling
     if (c0 == '.')
         {
         [self directive:text];

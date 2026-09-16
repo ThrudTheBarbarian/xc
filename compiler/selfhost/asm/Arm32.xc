@@ -508,17 +508,20 @@ class AsmSymbol
         {
         if (text.byteLength() == (u32)0)
             return;
-        // A trailing `@` comment. The back end never emits one, but the runtime
+        // A trailing comment. The back end never emits one, but the runtime
         // written BY HAND does, and an operand with a comment glued to it parses
         // as a bad register — which is then reported as an unknown MNEMONIC,
         // pointing at the one thing that was fine.
-        u32 at = text.indexOfByte((u8)'@');
-        if (at != String.notFound())
-            {
-            text = text.substringBytes((u32)0, at).trimmed();
-            if (text.byteLength() == (u32)0)
-                return;
-            }
+        //
+        // Both spellings, because the oracle takes both: `@` is traditional ARM
+        // and `//` is what the licence header on every generated runtime .s
+        // uses. While only `@` was cut, every arm9 self-host link died on the
+        // first line of rtgen-arm9.s with `unsupported ARM assembly: //`.
+        //
+        // Quoted strings are respected, so a `//` inside a .asciz survives.
+        text = stripComment(text).trimmed();
+        if (text.byteLength() == (u32)0)
+            return;
         // `label: instruction` on one line — likewise a hand-written form.
         u32 colon = text.indexOfByte((u8)':');
         if (colon != String.notFound() && colon + (u32)1 < text.byteLength())
@@ -539,6 +542,9 @@ class AsmSymbol
             return;
             }
         if (text.byteAt((u32)0) == (u8)'@')
+            return;
+        if (text.byteAt((u32)0) == (u8)'/' && text.byteLength() > (u32)1
+            && text.byteAt((u32)1) == (u8)'/')
             return;
         if (text.byteAt((u32)0) == (u8)'.')
             {
@@ -915,6 +921,39 @@ class AsmSymbol
         String* s = String.withCString("#");
         s.append(t);
         return s;
+        }
+
+    // Strip an end-of-line comment, in either spelling the oracle accepts: `@`,
+    // traditional ARM, and `//`, which is what the licence header on every
+    // generated runtime .s uses.
+    //
+    // NOT `;`. The arm64 assembler cuts on it because clang's arm64 output
+    // comments that way, but on ARM32 `arm-none-eabi-as` reads `;` as a
+    // STATEMENT SEPARATOR — `mov r0, #1 ; mov r0, #2` assembles to two
+    // instructions — so cutting there would delete real code.
+    //
+    // Quoted strings are respected: the oracle keeps the `//` in a .asciz of
+    // "http://example/x", and so must we.
+    static String* stripComment(String* l)
+        {
+        bool inStr = false;
+        for (u32 i = (u32)0; i < l.byteLength(); i = i + (u32)1)
+            {
+            u8 c = l.byteAt(i);
+            if (c == (u8)'"')
+                {
+                inStr = !inStr;
+                continue;
+                }
+            if (inStr)
+                continue;
+            if (c == (u8)'@')
+                return l.substringBytes((u32)0, i);
+            if (c == (u8)'/' && i + (u32)1 < l.byteLength()
+                && l.byteAt(i + (u32)1) == (u8)'/')
+                return l.substringBytes((u32)0, i);
+            }
+        return l;
         }
 
     // `.word 0` is a literal; `.word symbol` is a relocation against it.
