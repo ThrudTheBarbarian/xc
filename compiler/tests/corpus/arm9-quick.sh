@@ -25,15 +25,25 @@ for name in "$@"; do
   # directive-driven flags: target restriction / -farc=off
   hdr=$(grep -m1 'xtc-flags:' "$src" || true)
   echo "$hdr" | grep -qE 'target=' && ! echo "$hdr" | grep -qE 'arm9|arm64|both' && { echo "N/A   $name"; skip=$((skip+1)); continue; }
+  # `//xtc-na:` is the preferred spelling and the ONLY one the sweep scores on
+  # (corpusNASetForSource reads it alone; `target=` is legacy display). Do not
+  # tighten the legacy line above into "arm9 and both only": 57 fixtures carry
+  # `target=arm64` without excluding arm9, and they run here — heap_length_runtime
+  # says so itself, its restriction aims at xt6502's countless array allocator.
+  grep -qE '^//[[:space:]]?xtc-na:.*arm9' "$src" && { echo "N/A   $name"; skip=$((skip+1)); continue; }
   arc=""; echo "$hdr" | grep -q 'farc=off' && arc="-farc=off"
   so="$TMP/$name.so"
   if ! $XTC -A arm9 -q $SELF -L "$SYS" $arc "$src" -o "$so" 2>"$TMP/$name.err"; then
     echo "CFAIL $name ($(tail -1 "$TMP/$name.err" | cut -c1-60))"; fail=$((fail+1)); continue
   fi
-  exp=""
+  exp=""; have_exp=0
   for e in "tests/fixtures/$name.expected.arm9.out" "tests/fixtures/$name.expected.out"; do
-    [ -f "$e" ] && { exp=$(sed 's/\r$//' "$e"); break; }
+    [ -f "$e" ] && { exp=$(sed 's/\r$//' "$e"); have_exp=1; break; }
   done
+  # 34 fixtures carry per-backend oracles only — ahl has arm64, atarist and
+  # xt6502 oracles but no generic one. Diffing those against an empty string
+  # called every one of them a failure; un-oracled is not a result.
+  [ "$have_exp" = 1 ] || { echo "NOEXP $name"; skip=$((skip+1)); continue; }
   # Extract between the harness markers, strip the `xtos$ ` prompt echoed on each
   # line, and drop the async `[net] tftpd listening` daemon message (which lands
   # at random times — the main source of arm9-corpus flakiness). Retry once on a

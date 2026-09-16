@@ -314,3 +314,27 @@ depending on which backend you compiled for.
   retry with clang. A silent fallback would produce a working binary while
   hiding a gap in the in-house toolchain. Set `XTC_ALLOW_CLANG_FALLBACK=1` to
   allow the clang retry if you need to work around a gap.
+
+---
+
+## Test gates
+
+Each is a make target in `compiler/`, run on its own rather than from one
+aggregate target:
+
+| Target | What it covers |
+|---|---|
+| `make test` | The unit suite, plus the install and wasm-loader checks. |
+| `make corpus` | Every fixture through arm64, xt6502, m68k, arm9 and x86-64. |
+| `make xc-gates` | The suites that drive the **xc** compiler rather than the reference one. |
+| `make objlink` | Separate compilation: `-c` objects, archives, categories across objects. |
+| `make ios-run` | The shipped compiler's ios-sim binaries on a booted simulator. |
+
+`make xc-gates` builds `bin/<host>/xcc-xc` first, through `production`. Without
+it those suites find no `xcc-xc` and skip, which is how a wasm32 loader that no
+longer parsed as JavaScript reached the tree: the suites that would have caught
+it were never built.
+
+A gate whose machine or device is not configured says so and fails rather than
+passing quietly. The ones that need another machine, a device or an emulator
+read their settings from `build.env`; see `build.env.template`.

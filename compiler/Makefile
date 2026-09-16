@@ -856,6 +856,17 @@ ios-run: production
 objlink: all
 	bash tests/objlink/run.sh
 
+# The suites that exercise the XC DRIVER rather than the reference one. Both
+# need bin/<host>/xcc-xc, which only `production` builds, so both skipped
+# silently for as long as nobody had run it — and one of them is what would
+# have caught the wasm32 loader emitting `#` comments into a .js file.
+.PHONY: xc-gates
+xc-gates: production
+	@printf "\n=== xc driver: shared-library wasm32 suite ===\n"
+	bash tests/wasm-shared/run.sh
+	@printf "\n=== xc driver: wasm32 fixtures under node ===\n"
+	bash selfhost/tools/xc-wasm32-run.sh
+
 corpus: $(CORPUS_BIN) $(XTC_BIN) $(XTA_BIN) $(SIM_BIN)
 	@if [ "$(XTC_X86_HOST)" = localhost ]; then \
 	  echo "x86-64 fixtures run LOCALLY on this host — no ssh needed."; \
@@ -883,6 +894,7 @@ corpus: $(CORPUS_BIN) $(XTC_BIN) $(XTA_BIN) $(SIM_BIN)
 	i=0; while [ $$i -lt $(CORPUS_SHARDS) ]; do \
 	  ( XTC_CORPUS_SHARD_I=$$i XTC_CORPUS_SHARD_N=$(CORPUS_SHARDS) \
 	    CORPUS_TAG="$${CORPUS_TAG:-phase-015}" XTC_X86_HOST="$(XTC_X86_HOST)" \
+	    XTC_ARM9_SYSROOT="$(ARM9_SYSROOT)" \
 	    ./$(CORPUS_BIN) > $(CORPUS_LEG_LOG).$$i 2>&1; \
 	    echo $$? > $(CORPUS_LEG_LOG).$$i.rc ) & \
 	  i=$$((i+1)); \
