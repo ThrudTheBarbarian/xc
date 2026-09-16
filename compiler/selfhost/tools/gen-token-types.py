@@ -28,7 +28,7 @@ text = HEADER.read_text()
 
 # The enum body: from `typedef NS_ENUM(NSInteger, XTTokenType) {` to the
 # matching `};`.
-m = re.search(r"typedef NS_ENUM\(NSInteger, XTTokenType\) \{(.*?)\n\};", text, re.S)
+m = re.search(r"typedef NS_ENUM\(NSInteger, XTTokenType\)\s*\{(.*?)\n\};", text, re.S)
 if not m:
     sys.exit("gen-token-types: could not find the XTTokenType enum body")
 
@@ -72,10 +72,13 @@ lines.append("")
 # The NAMES too — XTTokenTypeName's switch, so a diagnostic can say
 # `unexpected ';'` instead of `unexpected token 11 (wanted 85)` (task #78).
 # Generated for the same reason the numbers are: a hand copy drifts.
-nm = re.search(r"XTTokenTypeName\(XTTokenType type\) \{\s*switch \(type\) \{(.*?)\n    \}", text, re.S)
+# Anchored on the signature, not on where the braces sit: the cases are spelled
+# this way only inside XTTokenTypeName, so reading to the end of the header is
+# safe and does not depend on the layout of the switch.
+nm = re.search(r"XTTokenTypeName\s*\(\s*XTTokenType\s+type\s*\)", text)
 if not nm:
     sys.exit("gen-token-types: could not find the XTTokenTypeName switch")
-pairs = re.findall(r'case XTToken([A-Za-z0-9_]+):\s*return @"((?:[^"\\\\]|\\\\.)*)";', nm.group(1))
+pairs = re.findall(r'case XTToken([A-Za-z0-9_]+):\s*return @"((?:[^"\\\\]|\\\\.)*)";', text[nm.end():])
 if not pairs:
     sys.exit("gen-token-types: no names found in XTTokenTypeName")
 known = set(names)

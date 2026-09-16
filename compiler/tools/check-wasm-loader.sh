@@ -21,9 +21,18 @@ python3 - "$REF" "$TMPL" <<'PY'
 import re, sys
 ref, tmpl = sys.argv[1], sys.argv[2]
 src = open(ref, encoding='utf-8').read()
-start = src.index('static NSString *loaderJS(')
-end   = src.index('    t = [t stringByReplacingOccurrencesOfString:@"__BASE__"', start)
-lines = re.findall(r'^"((?:[^"\\]|\\.)*)"\s*;?\s*$', src[start:end], re.M)
+# Match the anchors without depending on layout: the star may sit against the
+# type or the name, and the literals may carry any leading indent.
+mstart = re.search(r'static\s+NSString\s*\*\s*loaderJS\s*\(', src)
+if not mstart:
+    sys.exit("check-wasm-loader: no loaderJS() in %s" % ref)
+mend = re.search(r'stringByReplacingOccurrencesOfString:@"__BASE__"', src[mstart.end():])
+if not mend:
+    sys.exit("check-wasm-loader: no __BASE__ substitution after loaderJS() in %s" % ref)
+start, end = mstart.start(), mstart.end() + mend.start()
+lines = re.findall(r'^[ \t]*"((?:[^"\\]|\\.)*)"[ \t]*;?[ \t]*$', src[start:end], re.M)
+if not lines:
+    sys.exit("check-wasm-loader: no string literals found in loaderJS()")
 ESC = {'n':'\n','t':'\t','r':'\r','"':'"','\\':'\\','0':'\0'}
 want = re.sub(r'\\(.)', lambda m: ESC.get(m.group(1), '\\' + m.group(1)), ''.join(lines))
 have = open(tmpl, encoding='utf-8').read()
