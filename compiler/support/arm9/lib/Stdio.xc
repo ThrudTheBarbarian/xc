@@ -498,12 +498,24 @@ class Stdio
                     // %ld
                     else if (spec == $64)
                         {
-                        Stdio.print(va_arg_i32(ap));
+                        i32 lv = va_arg_i32(ap);
+                        u16 ll = Stdio._lenI64((i64)lv);
+                        if (left == 0 && width > ll)
+                            Stdio._padN(width - ll, padc);
+                        Stdio.print(lv);
+                        if (left != 0 && width > ll)
+                            Stdio._padN(width - ll, $20);
                         }
                     // %lu
                     else if (spec == $75)
                         {
-                        Stdio.print(va_arg_u32(ap));
+                        u32 luv = va_arg_u32(ap);
+                        u16 lul = Stdio._lenU64((u64)luv);
+                        if (left == 0 && width > lul)
+                            Stdio._padN(width - lul, padc);
+                        Stdio.print(luv);
+                        if (left != 0 && width > lul)
+                            Stdio._padN(width - lul, $20);
                         }
                     // %lx
                     else if (spec == $78)
@@ -519,7 +531,12 @@ class Stdio
                 // %c
                 else if (spec == $63)
                     {
-                    _putc(va_arg_u8(ap));
+                    u8 cv = va_arg_u8(ap);
+                    if (left == 0 && width > (u16)1)
+                        Stdio._padN(width - (u16)1, padc);
+                    _putc(cv);
+                    if (left != 0 && width > (u16)1)
+                        Stdio._padN(width - (u16)1, $20);
                     }
                 // %s
                 else if (spec == $73) // %s
