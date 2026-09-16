@@ -245,9 +245,33 @@ void _xt_thread_sleep_ms(uint32_t ms)
     xt_tsc(XT_SYS_NANOSLEEP, (long)(ms * 1000u), 0, 0);
     }
 
+// An opaque per-thread identity, never 0. Two rules the raw syscall does not
+// keep on its own:
+//
+//   * XTOS answers 0 for the MAIN thread (xtsys.h: "0 = the main thread"), and
+//     0 is this runtime's "no thread" value everywhere else — `isValid()` reads
+//     a 0 handle as "never started", and the create path above notes that tids
+//     start at 1 so its encoding "never produces 0". A caller cannot tell a
+//     valid main-thread id from an absent one, so map it to a fixed non-zero.
+//
+//   * A syscall FAILS by returning a negative errno, and casting that straight
+//     to uint32_t turns -ENOSYS into 4294967258 — a plausible-looking id that
+//     is really "this kernel has no thread syscalls". A kernel built before the
+//     0x10E-0x115 block does exactly that. Report the main-thread id instead:
+//     a program with no threads is the only program such a kernel can run.
+// EDITING THIS FILE IS NOT ENOUGH. Nothing compiles it at link time: it is
+// #included by libxt-pic.c, which was compiled ONCE into
+// support/arm9/runtime/libxtgen-arm9.s, and that .s is what an arm9 link
+// reads. Regenerate it (the command is in its header) or the change here has
+// no effect whatever, while still looking applied.
+#define XT_MAIN_THREAD_ID 1u
+
 uint32_t _xt_thread_self_id(void)
     {
-    return (uint32_t)xt_tsc(XT_SYS_THREAD_SELF, 0, 0, 0);
+    long tid = xt_tsc(XT_SYS_THREAD_SELF, 0, 0, 0);
+    if (tid <= 0)
+        return XT_MAIN_THREAD_ID;
+    return (uint32_t)tid;
     }
 
 // One A9 core is available to a process today: XTOS's FreeRTOS runs CPU0, and

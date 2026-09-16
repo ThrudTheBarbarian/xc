@@ -71,7 +71,7 @@ xt_lock:
 	b	.L4
 .L2:
 	.syntax divided
-@ 83 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 118 "support/arm9/runtime/xt-threads-xtos.c" 1
 	strex r2, r1, [r3]
 @ 0 "" 2
 	.arm
@@ -80,7 +80,7 @@ xt_lock:
 	beq	.L15
 .L4:
 	.syntax divided
-@ 81 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 112 "support/arm9/runtime/xt-threads-xtos.c" 1
 	ldrex r2, [r3]
 @ 0 "" 2
 	.arm
@@ -89,7 +89,7 @@ xt_lock:
 	beq	.L2
 	str	r7, [sp, #-4]!
 	.syntax divided
-@ 82 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 115 "support/arm9/runtime/xt-threads-xtos.c" 1
 	clrex
 @ 0 "" 2
 	.arm
@@ -97,10 +97,10 @@ xt_lock:
 	mov	ip, #2
 .L6:
 	.syntax divided
-@ 93 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 131 "support/arm9/runtime/xt-threads-xtos.c" 1
 	ldrex r1, [r3]
 @ 0 "" 2
-@ 94 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 132 "support/arm9/runtime/xt-threads-xtos.c" 1
 	strex r2, ip, [r3]
 @ 0 "" 2
 	.arm
@@ -108,7 +108,7 @@ xt_lock:
 	cmp	r2, #0
 	bne	.L6
 	.syntax divided
-@ 76 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 104 "support/arm9/runtime/xt-threads-xtos.c" 1
 	dmb ish
 @ 0 "" 2
 	.arm
@@ -120,7 +120,7 @@ xt_lock:
 	beq	.L16
 	mvn	r2, #0
 	.syntax divided
-@ 64 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 87 "support/arm9/runtime/xt-threads-xtos.c" 1
 	svc #1
 @ 0 "" 2
 	.arm
@@ -128,7 +128,7 @@ xt_lock:
 	b	.L6
 .L15:
 	.syntax divided
-@ 76 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 104 "support/arm9/runtime/xt-threads-xtos.c" 1
 	dmb ish
 @ 0 "" 2
 	.arm
@@ -168,7 +168,7 @@ _exit:
 	str	r7, [sp, #-4]!
 	movw	r7, #257
 	.syntax divided
-@ 21 "support/arm9/runtime/libxt-pic.c" 1
+@ 45 "support/arm9/runtime/libxt-pic.c" 1
 	svc #1
 @ 0 "" 2
 	.arm
@@ -257,7 +257,7 @@ _xt_file_open:
 	mov	r7, #768
 	mov	r2, #0
 	.syntax divided
-@ 68 "support/arm9/runtime/libxt-pic.c" 1
+@ 107 "support/arm9/runtime/libxt-pic.c" 1
 	svc #1
 @ 0 "" 2
 	.arm
@@ -277,7 +277,7 @@ _xt_file_read:
 	str	r7, [sp, #-4]!
 	movw	r7, #770
 	.syntax divided
-@ 68 "support/arm9/runtime/libxt-pic.c" 1
+@ 107 "support/arm9/runtime/libxt-pic.c" 1
 	svc #1
 @ 0 "" 2
 	.arm
@@ -297,7 +297,7 @@ _xt_file_write:
 	str	r7, [sp, #-4]!
 	movw	r7, #771
 	.syntax divided
-@ 68 "support/arm9/runtime/libxt-pic.c" 1
+@ 107 "support/arm9/runtime/libxt-pic.c" 1
 	svc #1
 @ 0 "" 2
 	.arm
@@ -319,7 +319,7 @@ _xt_file_close:
 	mov	r2, r1
 	movw	r7, #769
 	.syntax divided
-@ 68 "support/arm9/runtime/libxt-pic.c" 1
+@ 107 "support/arm9/runtime/libxt-pic.c" 1
 	svc #1
 @ 0 "" 2
 	.arm
@@ -342,7 +342,7 @@ _xt_file_size:
 	add	r1, sp, #4
 	mov	r2, #0
 	.syntax divided
-@ 68 "support/arm9/runtime/libxt-pic.c" 1
+@ 107 "support/arm9/runtime/libxt-pic.c" 1
 	svc #1
 @ 0 "" 2
 	.arm
@@ -370,7 +370,7 @@ _xt_file_exists:
 	add	r1, sp, #4
 	mov	r2, #0
 	.syntax divided
-@ 68 "support/arm9/runtime/libxt-pic.c" 1
+@ 107 "support/arm9/runtime/libxt-pic.c" 1
 	svc #1
 @ 0 "" 2
 	.arm
@@ -397,7 +397,7 @@ _xt_file_exists_exact:
 	add	r1, sp, #4
 	mov	r2, #0
 	.syntax divided
-@ 68 "support/arm9/runtime/libxt-pic.c" 1
+@ 107 "support/arm9/runtime/libxt-pic.c" 1
 	svc #1
 @ 0 "" 2
 	.arm
@@ -492,7 +492,7 @@ _xt_exit:
 	mov	r2, r1
 	movw	r7, #257
 	.syntax divided
-@ 68 "support/arm9/runtime/libxt-pic.c" 1
+@ 107 "support/arm9/runtime/libxt-pic.c" 1
 	svc #1
 @ 0 "" 2
 	.arm
@@ -541,7 +541,7 @@ _xt_thread_create:
 	strd	r4, [r1]
 	mov	r2, #0
 	.syntax divided
-@ 64 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 87 "support/arm9/runtime/xt-threads-xtos.c" 1
 	svc #1
 @ 0 "" 2
 	.arm
@@ -575,7 +575,7 @@ _xt_thread_join:
 	mov	r2, r1
 	mov	r7, #272
 	.syntax divided
-@ 64 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 87 "support/arm9/runtime/xt-threads-xtos.c" 1
 	svc #1
 @ 0 "" 2
 	.arm
@@ -605,7 +605,7 @@ _xt_thread_detach:
 	mov	r2, r1
 	movw	r7, #273
 	.syntax divided
-@ 64 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 87 "support/arm9/runtime/xt-threads-xtos.c" 1
 	svc #1
 @ 0 "" 2
 	.arm
@@ -628,7 +628,7 @@ _xt_thread_yield:
 	movw	r7, #1026
 	mov	r2, r0
 	.syntax divided
-@ 64 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 87 "support/arm9/runtime/xt-threads-xtos.c" 1
 	svc #1
 @ 0 "" 2
 	.arm
@@ -652,7 +652,7 @@ _xt_thread_sleep_ms:
 	movw	r7, #1026
 	mov	r2, r1
 	.syntax divided
-@ 64 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 87 "support/arm9/runtime/xt-threads-xtos.c" 1
 	svc #1
 @ 0 "" 2
 	.arm
@@ -675,12 +675,14 @@ _xt_thread_self_id:
 	movw	r7, #274
 	mov	r2, r0
 	.syntax divided
-@ 64 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 87 "support/arm9/runtime/xt-threads-xtos.c" 1
 	svc #1
 @ 0 "" 2
 	.arm
 	.syntax unified
+	cmp	r0, #1
 	ldr	r7, [sp], #4
+	movlt	r0, #1
 	bx	lr
 	.size	_xt_thread_self_id, .-_xt_thread_self_id
 	.align	2
@@ -729,7 +731,7 @@ _xt_rt_unlock:
 	cmp	r2, #0
 	bxeq	lr
 	.syntax divided
-@ 76 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 104 "support/arm9/runtime/xt-threads-xtos.c" 1
 	dmb ish
 @ 0 "" 2
 	.arm
@@ -738,10 +740,10 @@ _xt_rt_unlock:
 	add	r3, r3, #16
 .L113:
 	.syntax divided
-@ 93 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 131 "support/arm9/runtime/xt-threads-xtos.c" 1
 	ldrex r1, [r3]
 @ 0 "" 2
-@ 94 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 132 "support/arm9/runtime/xt-threads-xtos.c" 1
 	strex r2, r0, [r3]
 @ 0 "" 2
 	.arm
@@ -749,7 +751,7 @@ _xt_rt_unlock:
 	cmp	r2, #0
 	bne	.L113
 	.syntax divided
-@ 76 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 104 "support/arm9/runtime/xt-threads-xtos.c" 1
 	dmb ish
 @ 0 "" 2
 	.arm
@@ -761,7 +763,7 @@ _xt_rt_unlock:
 	ldr	r0, .L120+4
 	movw	r7, #277
 	.syntax divided
-@ 64 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 87 "support/arm9/runtime/xt-threads-xtos.c" 1
 	svc #1
 @ 0 "" 2
 	.arm
@@ -826,7 +828,7 @@ _xt_mutex_unlock:
 	cmp	r0, #0
 	bxeq	lr
 	.syntax divided
-@ 76 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 104 "support/arm9/runtime/xt-threads-xtos.c" 1
 	dmb ish
 @ 0 "" 2
 	.arm
@@ -834,10 +836,10 @@ _xt_mutex_unlock:
 	mov	r1, #0
 .L134:
 	.syntax divided
-@ 93 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 131 "support/arm9/runtime/xt-threads-xtos.c" 1
 	ldrex r3, [r0]
 @ 0 "" 2
-@ 94 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 132 "support/arm9/runtime/xt-threads-xtos.c" 1
 	strex r2, r1, [r0]
 @ 0 "" 2
 	.arm
@@ -845,7 +847,7 @@ _xt_mutex_unlock:
 	cmp	r2, #0
 	bne	.L134
 	.syntax divided
-@ 76 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 104 "support/arm9/runtime/xt-threads-xtos.c" 1
 	dmb ish
 @ 0 "" 2
 	.arm
@@ -856,7 +858,7 @@ _xt_mutex_unlock:
 	mov	r1, #1
 	movw	r7, #277
 	.syntax divided
-@ 64 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 87 "support/arm9/runtime/xt-threads-xtos.c" 1
 	svc #1
 @ 0 "" 2
 	.arm
@@ -879,7 +881,7 @@ _xt_mutex_trylock:
 	b	.L145
 .L143:
 	.syntax divided
-@ 83 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 118 "support/arm9/runtime/xt-threads-xtos.c" 1
 	strex r3, r2, [r0]
 @ 0 "" 2
 	.arm
@@ -888,7 +890,7 @@ _xt_mutex_trylock:
 	beq	.L148
 .L145:
 	.syntax divided
-@ 81 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 112 "support/arm9/runtime/xt-threads-xtos.c" 1
 	ldrex r3, [r0]
 @ 0 "" 2
 	.arm
@@ -896,7 +898,7 @@ _xt_mutex_trylock:
 	cmp	r3, #0
 	beq	.L143
 	.syntax divided
-@ 82 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 115 "support/arm9/runtime/xt-threads-xtos.c" 1
 	clrex
 @ 0 "" 2
 	.arm
@@ -905,7 +907,7 @@ _xt_mutex_trylock:
 	bx	lr
 .L148:
 	.syntax divided
-@ 76 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 104 "support/arm9/runtime/xt-threads-xtos.c" 1
 	dmb ish
 @ 0 "" 2
 	.arm
@@ -958,17 +960,17 @@ _xt_cond_wait:
 	mov	r3, r1
 	ldr	r4, [r0]
 	.syntax divided
-@ 76 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 104 "support/arm9/runtime/xt-threads-xtos.c" 1
 	dmb ish
 @ 0 "" 2
 	.arm
 	.syntax unified
 .L158:
 	.syntax divided
-@ 93 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 131 "support/arm9/runtime/xt-threads-xtos.c" 1
 	ldrex r1, [r3]
 @ 0 "" 2
-@ 94 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 132 "support/arm9/runtime/xt-threads-xtos.c" 1
 	strex r2, lr, [r3]
 @ 0 "" 2
 	.arm
@@ -976,7 +978,7 @@ _xt_cond_wait:
 	cmp	r2, #0
 	bne	.L158
 	.syntax divided
-@ 76 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 104 "support/arm9/runtime/xt-threads-xtos.c" 1
 	dmb ish
 @ 0 "" 2
 	.arm
@@ -987,7 +989,7 @@ _xt_cond_wait:
 	mov	r0, r3
 	mov	r1, #1
 	.syntax divided
-@ 64 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 87 "support/arm9/runtime/xt-threads-xtos.c" 1
 	svc #1
 @ 0 "" 2
 	.arm
@@ -998,7 +1000,7 @@ _xt_cond_wait:
 	mov	r1, r4
 	mvn	r2, #0
 	.syntax divided
-@ 64 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 87 "support/arm9/runtime/xt-threads-xtos.c" 1
 	svc #1
 @ 0 "" 2
 	.arm
@@ -1021,14 +1023,14 @@ _xt_cond_signal:
 	str	r7, [sp, #-4]!
 .L164:
 	.syntax divided
-@ 103 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 144 "support/arm9/runtime/xt-threads-xtos.c" 1
 	ldrex r3, [r0]
 @ 0 "" 2
 	.arm
 	.syntax unified
 	add	r3, r3, #1
 	.syntax divided
-@ 105 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 146 "support/arm9/runtime/xt-threads-xtos.c" 1
 	strex r2, r3, [r0]
 @ 0 "" 2
 	.arm
@@ -1036,7 +1038,7 @@ _xt_cond_signal:
 	cmp	r2, #0
 	bne	.L164
 	.syntax divided
-@ 76 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 104 "support/arm9/runtime/xt-threads-xtos.c" 1
 	dmb ish
 @ 0 "" 2
 	.arm
@@ -1044,7 +1046,7 @@ _xt_cond_signal:
 	movw	r7, #277
 	mov	r1, #1
 	.syntax divided
-@ 64 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 87 "support/arm9/runtime/xt-threads-xtos.c" 1
 	svc #1
 @ 0 "" 2
 	.arm
@@ -1066,14 +1068,14 @@ _xt_cond_broadcast:
 	str	r7, [sp, #-4]!
 .L174:
 	.syntax divided
-@ 103 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 144 "support/arm9/runtime/xt-threads-xtos.c" 1
 	ldrex r3, [r0]
 @ 0 "" 2
 	.arm
 	.syntax unified
 	add	r3, r3, #1
 	.syntax divided
-@ 105 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 146 "support/arm9/runtime/xt-threads-xtos.c" 1
 	strex r2, r3, [r0]
 @ 0 "" 2
 	.arm
@@ -1081,7 +1083,7 @@ _xt_cond_broadcast:
 	cmp	r2, #0
 	bne	.L174
 	.syntax divided
-@ 76 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 104 "support/arm9/runtime/xt-threads-xtos.c" 1
 	dmb ish
 @ 0 "" 2
 	.arm
@@ -1089,7 +1091,7 @@ _xt_cond_broadcast:
 	movw	r7, #277
 	mvn	r1, #0
 	.syntax divided
-@ 64 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 87 "support/arm9/runtime/xt-threads-xtos.c" 1
 	svc #1
 @ 0 "" 2
 	.arm
@@ -1144,7 +1146,7 @@ _xt_sem_wait:
 	b	.L204
 .L206:
 	.syntax divided
-@ 83 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 118 "support/arm9/runtime/xt-threads-xtos.c" 1
 	strex r2, r0, [r3]
 @ 0 "" 2
 	.arm
@@ -1153,7 +1155,7 @@ _xt_sem_wait:
 	beq	.L209
 .L204:
 	.syntax divided
-@ 81 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 112 "support/arm9/runtime/xt-threads-xtos.c" 1
 	ldrex r2, [r3]
 @ 0 "" 2
 	.arm
@@ -1161,7 +1163,7 @@ _xt_sem_wait:
 	cmp	r1, r2
 	beq	.L206
 	.syntax divided
-@ 82 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 115 "support/arm9/runtime/xt-threads-xtos.c" 1
 	clrex
 @ 0 "" 2
 	.arm
@@ -1177,7 +1179,7 @@ _xt_sem_wait:
 	mov	r1, #0
 	mvn	r2, #0
 	.syntax divided
-@ 64 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 87 "support/arm9/runtime/xt-threads-xtos.c" 1
 	svc #1
 @ 0 "" 2
 	.arm
@@ -1190,7 +1192,7 @@ _xt_sem_wait:
 	b	.L195
 .L193:
 	.syntax divided
-@ 83 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 118 "support/arm9/runtime/xt-threads-xtos.c" 1
 	strex r2, r0, [r3]
 @ 0 "" 2
 	.arm
@@ -1199,7 +1201,7 @@ _xt_sem_wait:
 	beq	.L211
 .L195:
 	.syntax divided
-@ 81 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 112 "support/arm9/runtime/xt-threads-xtos.c" 1
 	ldrex r2, [r3]
 @ 0 "" 2
 	.arm
@@ -1207,7 +1209,7 @@ _xt_sem_wait:
 	cmp	r1, r2
 	beq	.L193
 	.syntax divided
-@ 82 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 115 "support/arm9/runtime/xt-threads-xtos.c" 1
 	clrex
 @ 0 "" 2
 	.arm
@@ -1215,7 +1217,7 @@ _xt_sem_wait:
 	b	.L191
 .L209:
 	.syntax divided
-@ 76 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 104 "support/arm9/runtime/xt-threads-xtos.c" 1
 	dmb ish
 @ 0 "" 2
 	.arm
@@ -1223,7 +1225,7 @@ _xt_sem_wait:
 	bx	lr
 .L211:
 	.syntax divided
-@ 76 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 104 "support/arm9/runtime/xt-threads-xtos.c" 1
 	dmb ish
 @ 0 "" 2
 	.arm
@@ -1250,7 +1252,7 @@ _xt_sem_trywait:
 	b	.L218
 .L216:
 	.syntax divided
-@ 83 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 118 "support/arm9/runtime/xt-threads-xtos.c" 1
 	strex r2, r0, [r3]
 @ 0 "" 2
 	.arm
@@ -1259,7 +1261,7 @@ _xt_sem_trywait:
 	beq	.L221
 .L218:
 	.syntax divided
-@ 81 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 112 "support/arm9/runtime/xt-threads-xtos.c" 1
 	ldrex r2, [r3]
 @ 0 "" 2
 	.arm
@@ -1267,7 +1269,7 @@ _xt_sem_trywait:
 	cmp	r1, r2
 	beq	.L216
 	.syntax divided
-@ 82 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 115 "support/arm9/runtime/xt-threads-xtos.c" 1
 	clrex
 @ 0 "" 2
 	.arm
@@ -1280,7 +1282,7 @@ _xt_sem_trywait:
 	bx	lr
 .L221:
 	.syntax divided
-@ 76 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 104 "support/arm9/runtime/xt-threads-xtos.c" 1
 	dmb ish
 @ 0 "" 2
 	.arm
@@ -1302,14 +1304,14 @@ _xt_sem_post:
 	str	r7, [sp, #-4]!
 .L224:
 	.syntax divided
-@ 103 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 144 "support/arm9/runtime/xt-threads-xtos.c" 1
 	ldrex r3, [r0]
 @ 0 "" 2
 	.arm
 	.syntax unified
 	add	r3, r3, #1
 	.syntax divided
-@ 105 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 146 "support/arm9/runtime/xt-threads-xtos.c" 1
 	strex r2, r3, [r0]
 @ 0 "" 2
 	.arm
@@ -1317,7 +1319,7 @@ _xt_sem_post:
 	cmp	r2, #0
 	bne	.L224
 	.syntax divided
-@ 76 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 104 "support/arm9/runtime/xt-threads-xtos.c" 1
 	dmb ish
 @ 0 "" 2
 	.arm
@@ -1325,7 +1327,7 @@ _xt_sem_post:
 	movw	r7, #277
 	mov	r1, #1
 	.syntax divided
-@ 64 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 87 "support/arm9/runtime/xt-threads-xtos.c" 1
 	svc #1
 @ 0 "" 2
 	.arm
@@ -1345,14 +1347,14 @@ _xt_tls_new:
 	ldr	r3, .L237
 .L233:
 	.syntax divided
-@ 103 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 144 "support/arm9/runtime/xt-threads-xtos.c" 1
 	ldrex r0, [r3]
 @ 0 "" 2
 	.arm
 	.syntax unified
 	add	r1, r0, #1
 	.syntax divided
-@ 105 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 146 "support/arm9/runtime/xt-threads-xtos.c" 1
 	strex r2, r1, [r3]
 @ 0 "" 2
 	.arm
@@ -1360,7 +1362,7 @@ _xt_tls_new:
 	cmp	r2, #0
 	bne	.L233
 	.syntax divided
-@ 76 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 104 "support/arm9/runtime/xt-threads-xtos.c" 1
 	dmb ish
 @ 0 "" 2
 	.arm
@@ -1387,7 +1389,7 @@ _xt_tls_set:
 	mov	r4, r0
 	mov	r5, r1
 	.syntax divided
-@ 288 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 450 "support/arm9/runtime/xt-threads-xtos.c" 1
 	mrc p15,0,r3,c13,c0,2
 @ 0 "" 2
 	.arm
@@ -1407,7 +1409,7 @@ _xt_tls_set:
 	mov	r1, r6
 	mov	r2, r6
 	.syntax divided
-@ 64 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 87 "support/arm9/runtime/xt-threads-xtos.c" 1
 	svc #1
 @ 0 "" 2
 	.arm
@@ -1428,7 +1430,7 @@ _xt_tls_get:
 	push	{r4, r5, r7, lr}
 	mov	r4, r0
 	.syntax divided
-@ 288 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 450 "support/arm9/runtime/xt-threads-xtos.c" 1
 	mrc p15,0,r3,c13,c0,2
 @ 0 "" 2
 	.arm
@@ -1448,7 +1450,7 @@ _xt_tls_get:
 	mov	r1, r5
 	mov	r2, r5
 	.syntax divided
-@ 64 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 87 "support/arm9/runtime/xt-threads-xtos.c" 1
 	svc #1
 @ 0 "" 2
 	.arm
@@ -1475,7 +1477,7 @@ _xt_atomic_load_i32:
 	bxeq	lr
 	ldr	r0, [r0]
 	.syntax divided
-@ 76 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 104 "support/arm9/runtime/xt-threads-xtos.c" 1
 	dmb ish
 @ 0 "" 2
 	.arm
@@ -1494,14 +1496,14 @@ _xt_atomic_store_i32:
 	cmp	r0, #0
 	bxeq	lr
 	.syntax divided
-@ 76 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 104 "support/arm9/runtime/xt-threads-xtos.c" 1
 	dmb ish
 @ 0 "" 2
 	.arm
 	.syntax unified
 	str	r1, [r0]
 	.syntax divided
-@ 76 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 104 "support/arm9/runtime/xt-threads-xtos.c" 1
 	dmb ish
 @ 0 "" 2
 	.arm
@@ -1521,14 +1523,14 @@ _xt_atomic_add_i32:
 	beq	.L274
 .L273:
 	.syntax divided
-@ 103 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 144 "support/arm9/runtime/xt-threads-xtos.c" 1
 	ldrex r0, [r3]
 @ 0 "" 2
 	.arm
 	.syntax unified
 	add	r0, r1, r0
 	.syntax divided
-@ 105 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 146 "support/arm9/runtime/xt-threads-xtos.c" 1
 	strex r2, r0, [r3]
 @ 0 "" 2
 	.arm
@@ -1536,7 +1538,7 @@ _xt_atomic_add_i32:
 	cmp	r2, #0
 	bne	.L273
 	.syntax divided
-@ 76 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 104 "support/arm9/runtime/xt-threads-xtos.c" 1
 	dmb ish
 @ 0 "" 2
 	.arm
@@ -1559,10 +1561,10 @@ _xt_atomic_xchg_i32:
 	bxeq	lr
 .L278:
 	.syntax divided
-@ 93 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 131 "support/arm9/runtime/xt-threads-xtos.c" 1
 	ldrex r2, [r0]
 @ 0 "" 2
-@ 94 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 132 "support/arm9/runtime/xt-threads-xtos.c" 1
 	strex r3, r1, [r0]
 @ 0 "" 2
 	.arm
@@ -1570,7 +1572,7 @@ _xt_atomic_xchg_i32:
 	cmp	r3, #0
 	bne	.L278
 	.syntax divided
-@ 76 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 104 "support/arm9/runtime/xt-threads-xtos.c" 1
 	dmb ish
 @ 0 "" 2
 	.arm
@@ -1592,7 +1594,7 @@ _xt_atomic_cas_i32:
 	bx	lr
 .L283:
 	.syntax divided
-@ 83 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 118 "support/arm9/runtime/xt-threads-xtos.c" 1
 	strex ip, r2, [r0]
 @ 0 "" 2
 	.arm
@@ -1601,7 +1603,7 @@ _xt_atomic_cas_i32:
 	beq	.L288
 .L285:
 	.syntax divided
-@ 81 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 112 "support/arm9/runtime/xt-threads-xtos.c" 1
 	ldrex r3, [r0]
 @ 0 "" 2
 	.arm
@@ -1609,7 +1611,7 @@ _xt_atomic_cas_i32:
 	cmp	r1, r3
 	beq	.L283
 	.syntax divided
-@ 82 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 115 "support/arm9/runtime/xt-threads-xtos.c" 1
 	clrex
 @ 0 "" 2
 	.arm
@@ -1621,7 +1623,7 @@ _xt_atomic_cas_i32:
 	bx	lr
 .L288:
 	.syntax divided
-@ 76 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 104 "support/arm9/runtime/xt-threads-xtos.c" 1
 	dmb ish
 @ 0 "" 2
 	.arm
@@ -1641,7 +1643,7 @@ _xt_atomic_load_ptr:
 	bxeq	lr
 	ldr	r0, [r0]
 	.syntax divided
-@ 76 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 104 "support/arm9/runtime/xt-threads-xtos.c" 1
 	dmb ish
 @ 0 "" 2
 	.arm
@@ -1660,14 +1662,14 @@ _xt_atomic_store_ptr:
 	cmp	r0, #0
 	bxeq	lr
 	.syntax divided
-@ 76 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 104 "support/arm9/runtime/xt-threads-xtos.c" 1
 	dmb ish
 @ 0 "" 2
 	.arm
 	.syntax unified
 	str	r1, [r0]
 	.syntax divided
-@ 76 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 104 "support/arm9/runtime/xt-threads-xtos.c" 1
 	dmb ish
 @ 0 "" 2
 	.arm
@@ -1688,7 +1690,7 @@ _xt_atomic_cas_ptr:
 	bx	lr
 .L299:
 	.syntax divided
-@ 83 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 118 "support/arm9/runtime/xt-threads-xtos.c" 1
 	strex ip, r2, [r0]
 @ 0 "" 2
 	.arm
@@ -1697,7 +1699,7 @@ _xt_atomic_cas_ptr:
 	beq	.L304
 .L301:
 	.syntax divided
-@ 81 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 112 "support/arm9/runtime/xt-threads-xtos.c" 1
 	ldrex r3, [r0]
 @ 0 "" 2
 	.arm
@@ -1705,7 +1707,7 @@ _xt_atomic_cas_ptr:
 	cmp	r1, r3
 	beq	.L299
 	.syntax divided
-@ 82 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 115 "support/arm9/runtime/xt-threads-xtos.c" 1
 	clrex
 @ 0 "" 2
 	.arm
@@ -1717,7 +1719,7 @@ _xt_atomic_cas_ptr:
 	bx	lr
 .L304:
 	.syntax divided
-@ 76 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 104 "support/arm9/runtime/xt-threads-xtos.c" 1
 	dmb ish
 @ 0 "" 2
 	.arm
@@ -1755,12 +1757,14 @@ _xtc_sinit_run:
 	mov	r1, r0
 	mov	r2, r0
 	.syntax divided
-@ 64 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 87 "support/arm9/runtime/xt-threads-xtos.c" 1
 	svc #1
 @ 0 "" 2
 	.arm
 	.syntax unified
 	ldr	ip, [r10, #24]
+	cmp	r0, #1
+	movlt	r0, #1
 	cmp	ip, r1
 	ble	.L314
 	ldr	r3, .L343+4
@@ -1782,7 +1786,7 @@ _xtc_sinit_run:
 	mov	ip, #1
 .L325:
 	.syntax divided
-@ 76 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 104 "support/arm9/runtime/xt-threads-xtos.c" 1
 	dmb ish
 @ 0 "" 2
 	.arm
@@ -1790,10 +1794,10 @@ _xtc_sinit_run:
 	mov	r1, #0
 .L318:
 	.syntax divided
-@ 93 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 131 "support/arm9/runtime/xt-threads-xtos.c" 1
 	ldrex r3, [r5]
 @ 0 "" 2
-@ 94 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 132 "support/arm9/runtime/xt-threads-xtos.c" 1
 	strex r2, r1, [r5]
 @ 0 "" 2
 	.arm
@@ -1801,7 +1805,7 @@ _xtc_sinit_run:
 	cmp	r2, #0
 	bne	.L318
 	.syntax divided
-@ 76 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 104 "support/arm9/runtime/xt-threads-xtos.c" 1
 	dmb ish
 @ 0 "" 2
 	.arm
@@ -1812,7 +1816,7 @@ _xtc_sinit_run:
 	mov	r0, r5
 	mov	r1, #1
 	.syntax divided
-@ 64 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 87 "support/arm9/runtime/xt-threads-xtos.c" 1
 	svc #1
 @ 0 "" 2
 	.arm
@@ -1826,7 +1830,7 @@ _xtc_sinit_run:
 	mov	r1, r0
 	mov	r2, r0
 	.syntax divided
-@ 64 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 87 "support/arm9/runtime/xt-threads-xtos.c" 1
 	svc #1
 @ 0 "" 2
 	.arm
@@ -1861,11 +1865,13 @@ _xtc_sinit_run:
 	str	r4, [r3, #28]
 	mov	r2, r0
 	.syntax divided
-@ 64 "support/arm9/runtime/xt-threads-xtos.c" 1
+@ 87 "support/arm9/runtime/xt-threads-xtos.c" 1
 	svc #1
 @ 0 "" 2
 	.arm
 	.syntax unified
+	cmp	r0, #1
+	movlt	r0, #1
 	str	r0, [r3, #156]
 	ldr	r3, [r10, #24]
 	add	r3, r3, #1

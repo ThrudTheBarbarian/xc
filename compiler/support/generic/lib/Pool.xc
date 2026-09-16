@@ -152,8 +152,27 @@ class XTRangeWorker
             handles.add((Object*)Thread.spawn(&w.run));
             }
 
+        // A thread that never started leaves its chunk undone, and nothing
+        // above says so: `Thread.spawn` returns a Thread either way, and a
+        // failed one just carries a null handle. Without the fallback below the
+        // indices in that chunk are silently skipped and forRange returns as if
+        // it had run them — breaking the first guarantee above, quietly, which
+        // is the worst way to break it. Not hypothetical: on a kernel with no
+        // thread syscalls every spawn fails, and `forRangeWithThreads(0, 3,
+        // body, 16)` visited nothing at all.
+        //
+        // `join()` is the signal, not `isValid()`: a successful join CONSUMES
+        // the handle, so isValid() reads false afterwards for started and
+        // never-started threads alike, and testing it would re-run every chunk
+        // — every index twice.
         for (u16 i = (u16)0; i < handles.count(); i++)
-            ((Thread*)handles.get(i)).join();
+            {
+            if (((Thread*)handles.get(i)).join())
+                continue;
+            // Never started (or already joined): run its chunk here, the same
+            // path `threads == 1` takes.
+            ((XTRangeWorker*)workers.get((u32)i)).run();
+            }
         }
 
     // The common form: as many threads as the host has cores.
