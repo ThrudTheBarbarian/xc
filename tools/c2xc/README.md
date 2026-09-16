@@ -34,14 +34,14 @@ lacks or does differently:
 | comma expressions | hoisted statements |
 | `enum` | `#define` constants; the type is `i32` |
 | `switch` | structured ifs with a run flag (fallthrough), each case in a one-pass loop (`break`), a continue flag; no xc `switch` is emitted |
-| `goto` | a state machine over the block holding the labels: segments guarded by `_st <= k`, a jump flag unwinding loops and switches |
+| `goto` | where one block holds every label its gotos aim at, a state machine over that block: segments guarded by `_st <= k`, a jump flag unwinding loops and switches. Otherwise xc's own `goto` and labels, emitted as they stand |
 | `static` functions/globals, `const`, prototypes | dropped; a name defined static in two files is suffixed |
 | `"\xff"`, `"\377"` | a global `u8` array (xc's literals are UTF-8) |
 | aggregate initialisers with strings or addresses | assignments in `c2xc_init_globals()`, called first in `main` |
 | `int *a, b` | `i32* a; i32 b;` (xc binds `*` to the type) |
 | `va_list` forwarded to `vsnprintf` | `c2xc_snprintf(.., ...)` in c2xc_rt.xc, an xc formatter |
 | names that are xc keywords (`string`, `in`, `new` ..) | suffixed with `_` |
-| unreachable code after a return | dropped (xcc's IR verifier rejects it) |
+| unreachable code after a return | dropped (xcc's IR verifier rejects it); the drop stops at a label, which a `goto` still reaches |
 
 libc is a table (`libc.py`): only the names a program uses are declared,
 as natives, with the host's symbol for variables like `stderr`.

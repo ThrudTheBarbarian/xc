@@ -23,9 +23,9 @@ files is suffixed with its file's stem). The pipeline:
      code after a terminating statement, and identifiers that are xc
      reserved words.
 
-goto is reported and left as a marker: the function is emitted with the
-label as a comment and the jump as an #error line, so the build points at
-every one. See README.md for what each lowering does.
+goto becomes a state machine where every label sits at the top of one
+block, and xc's own goto and labels elsewhere. See README.md for what each
+lowering does.
 """
 import sys, os, re, subprocess, argparse
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -1243,13 +1243,14 @@ class Conv:
             self.emit("continue;", ind); return
         if isinstance(s, c_ast.EmptyStatement): return
         if isinstance(s, c_ast.Label):
-            self.warn(s, "label '%s' (goto is not supported)" % s.name)
-            self.emit("// label %s:" % s.name, ind); self.stmt(s.stmt, ind); return
+            # xc has goto and labels, so a label the state machine did not take
+            # over is emitted as itself. A label must carry a statement, and a
+            # bare `;` is not one: `L: ;` becomes `L: {}`.
+            if s.stmt is None or isinstance(s.stmt, c_ast.EmptyStatement):
+                self.emit("%s: {}" % s.name, ind); return
+            self.emit("%s:" % s.name, ind); self.stmt(s.stmt, ind); return
         if isinstance(s, c_ast.Goto):
-            self.warn(s, "goto %s" % s.name)
-            # not lowerable: say so at build time, trap at run time, and let the rest build
-            self.emit("#warning c2xc: goto %s needs a hand-written lowering (this path aborts)" % s.name, 0)
-            self.natives_used.add("abort"); self.emit("abort();", ind); return
+            self.emit("goto %s;" % s.name, ind); return
         if isinstance(s, c_ast.Case) or isinstance(s, c_ast.Default):
             self.warn(s, "case outside switch"); return
         # expression statement
@@ -1315,15 +1316,23 @@ class Conv:
                 self.state_machine(c_ast.Compound(list(items)), top, ind); return
             self.warn(items[0], "gotos leave the block holding their labels: %s" % sorted(targets - set(top)))
         self.locals.append({})
-        for i, s in enumerate(items):
+        seq = list(items); i = 0
+        while i < len(seq):
+            s = seq[i]
             if getattr(self, "goto_state", None): self.stmt_g(s, ind)
             else: self.stmt(s, ind)
-            if self.terminates(s) and i + 1 < len(items):
-                # xc's IR verifier rejects unreachable code: drop it, keeping labels' statements out too
-                rest = items[i+1:]
-                if any(not isinstance(r, (c_ast.EmptyStatement,)) for r in rest):
-                    self.warn(rest[0], "unreachable code dropped")
-                break
+            if self.terminates(s) and i + 1 < len(seq):
+                # xc's IR verifier rejects unreachable code: drop it. A label
+                # further down is reachable by its goto, though, so the drop
+                # stops at the first one rather than running to the end.
+                rest = seq[i+1:]
+                lbl = next((k for k, r in enumerate(rest) if isinstance(r, c_ast.Label)), None)
+                dead = rest if lbl is None else rest[:lbl]
+                if any(not isinstance(r, c_ast.EmptyStatement) for r in dead):
+                    self.warn(dead[0], "unreachable code dropped")
+                if lbl is None: break
+                del seq[i+1:i+1+lbl]
+            i += 1
         self.locals.pop()
     def terminates(self, s):
         if isinstance(s, (c_ast.Return, c_ast.Break, c_ast.Continue, c_ast.Goto)): return True
