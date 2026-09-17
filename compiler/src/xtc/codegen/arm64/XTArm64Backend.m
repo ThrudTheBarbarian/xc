@@ -3177,6 +3177,7 @@ static uint64_t satMul64(uint64_t a, uint64_t b) {
             switch (insn.opcode) {
                 case XTIROpAdd: case XTIROpMul: case XTIROpShl:
                 case XTIROpAnd: case XTIROpZExt:
+                case XTIROpConst:           // a literal already in range needs no mask
                     break;
                 default: continue;          // only ops whose ubRaw we model
             }
@@ -3345,7 +3346,11 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
             NSString *sc = [self regName:16 forType:insn.result.type];
             NSString *d = [self resultReg:insn.result.valueId scratch:sc ctx:ctx];
             [self materialiseOperand:imm intoReg:d ctx:ctx];
-            [self canonicaliseReg:d toType:insn.result.type ctx:ctx];
+            // A literal already inside its type's range needs no mask — the
+            // arithmetic paths consult noCanon, this one used to mask
+            // unconditionally, so `u16 n = 16` emitted `mov w0,#16; uxth w0,w0`.
+            if (![ctx.noCanon containsObject:@(insn.result.valueId)])
+                [self canonicaliseReg:d toType:insn.result.type ctx:ctx];
             [self storeReg:d intoValue:insn.result.valueId ctx:ctx];
             break;
         }
