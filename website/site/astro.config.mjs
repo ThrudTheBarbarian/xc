@@ -51,6 +51,7 @@ export default defineConfig({
 								{ label: 'Threading', slug: 'compiler/language/threading' },
 								{ label: 'Modules & shared libraries', slug: 'compiler/language/modules' },
 								{ label: 'Inline assembly', slug: 'compiler/language/inline-asm' },
+								{ label: 'Grammar', slug: 'compiler/language/grammar' },
 							],
 						},
 						{
