@@ -2,6 +2,7 @@
 // See arc_alloc.xc. Same object shape, same count, same accumulation.
 #import <Foundation/Foundation.h>
 #include <stdio.h>
+#include "include/bench_time.h"
 #include <stdint.h>
 
 @interface Node : NSObject
@@ -19,12 +20,14 @@ int main(int argc, char **argv)
     @autoreleasepool {
         uint32_t seed = (uint32_t)argc;
         uint32_t acc  = 0;
+        int64_t t0 = bench_now_us();
         for (uint32_t r = 0; r < 2000000; r++)
             {
             Node *n = [[Node alloc] initWithV:r + seed];
             acc = acc + [n get];
             }
-        printf("%u\n", acc);
+        int64_t t1 = bench_now_us();
+        printf("%u %lld\n", acc, t1 - t0);
     }
     return 0;
     }

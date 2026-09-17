@@ -5,6 +5,7 @@
 // exact whatever order the additions happen in. A vectorising compiler reorders
 // them, and without exactness the two languages would disagree on rounding.
 #import "Stdio.xc"
+#import "include/bench_time.xc"
 #define N 4096
 i32 main(i32 argc, u8** argv)
     {
@@ -13,9 +14,11 @@ i32 main(i32 argc, u8** argv)
     for (u32 i = (u32)0; i < (u32)N; i++)
         { a[i] = (float)((i + seed) % (u32)16); b[i] = (float)((i % (u32)7) + (u32)1); }
     double acc = 0.0;
+    i64 t0 = bench_now_us();
     for (u32 r = (u32)0; r < (u32)4000; r++)
         for (u32 i = (u32)0; i < (u32)N; i++)
             acc = acc + (double)(a[i] * b[i]);
-    Stdio.printf("%lu\n", (u32)acc);
+    i64 t1 = bench_now_us();
+    Stdio.printf("%lu %lld\n", (u32)acc, t1 - t0);
     return 0;
     }

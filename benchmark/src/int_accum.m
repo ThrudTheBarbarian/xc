@@ -2,6 +2,7 @@
 // Same array size, same seed, same loop bounds, same u32 wraparound.
 #import <Foundation/Foundation.h>
 #include <stdio.h>
+#include "include/bench_time.h"
 #include <stdint.h>
 
 #define N 4096
@@ -16,11 +17,14 @@ int main(int argc, char **argv)
             a[i] = (i * 2654435761u) + seed;
 
         uint32_t acc = 0;
+        int64_t t0 = bench_now_us();
         for (uint32_t r = 0; r < 20000; r++)
             for (uint32_t i = 0; i < N; i++)
                 acc = acc + (a[i] ^ acc);
 
-        printf("%u\n", acc);
+        int64_t t1 = bench_now_us();
+
+        printf("%u %lld\n", acc, t1 - t0);
         }
     return 0;
     }

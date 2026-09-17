@@ -5,12 +5,12 @@ Every benchmark is a pair in src/: <name>.xc and <name>.m. The two compute the
 same thing and print the same checksum, so a mismatch is a miscompile in one of
 them rather than a timing result.
 
-Timing is measured from outside the process, identically for both languages, so
-neither language's clock API takes part. Each program runs REPEATS times and the
-fastest run is kept, which is the usual choice for a machine that is also doing
-other things. The startup cost of a process is measured separately with the
-baseline pair and subtracted, because a Foundation process starts more slowly
-than an xc one and that difference is not a property of the generated code.
+Each program times its own measured region with clock_gettime(CLOCK_MONOTONIC)
+and prints "<checksum> <elapsed_us>". Both languages call the same primitive
+through the same libc, so the measurement is identical on both sides, and
+process startup and data setup fall outside the figure with nothing to subtract.
+Each program runs REPEATS times and the fastest is kept, which is the usual
+choice on a machine that is also doing other things.
 
   run.py                     measure everything, write results to <version>/
   run.py --version v0.6      which directory to write to (default: v0.6)
@@ -28,7 +28,6 @@ import os
 import shutil
 import subprocess
 import sys
-import time
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(ROOT)
@@ -69,30 +68,42 @@ def benchmarks():
 
 def compile_xc(name, opt, out):
     xcc = os.path.join(REPO, "compiler", "bin", "osx", "xcc")
-    cmd = [xcc, "-H", os.path.join(REPO, "compiler"), "-" + opt,
+    cmd = [xcc, "-H", os.path.join(REPO, "compiler"), "-I", SRC, "-" + opt,
            "-o", out, os.path.join(SRC, name + ".xc")]
     r = subprocess.run(cmd, capture_output=True, text=True)
     return r.returncode == 0, (r.stderr or r.stdout)
 
 
 def compile_objc(name, opt, out):
-    cmd = ["clang", "-fobjc-arc", "-" + opt, "-framework", "Foundation",
+    cmd = ["clang", "-fobjc-arc", "-" + opt, "-I", SRC, "-framework", "Foundation",
            "-o", out, os.path.join(SRC, name + ".m")]
     r = subprocess.run(cmd, capture_output=True, text=True)
     return r.returncode == 0, (r.stderr or r.stdout)
 
 
 def measure(binary, repeats):
-    """Fastest wall-clock of `repeats` runs, plus the checksum the program prints."""
+    """Fastest self-reported elapsed time of `repeats` runs, and the checksum.
+
+    Each program prints "<checksum> <elapsed_us>". It times its own measured
+    region with clock_gettime(CLOCK_MONOTONIC), the same call the other language
+    makes, so process startup and data setup are outside the figure and nothing
+    has to be subtracted afterwards.
+    """
     best, checksum = None, None
     for _ in range(repeats):
-        t0 = time.perf_counter()
         r = subprocess.run([binary, "x"], capture_output=True, text=True)
-        dt = time.perf_counter() - t0
         if r.returncode != 0:
             return None, "exit %d" % r.returncode
-        checksum = r.stdout.strip()
-        best = dt if best is None else min(best, dt)
+        parts = r.stdout.split()
+        if len(parts) != 2:
+            return None, "bad output %r" % r.stdout.strip()[:40]
+        checksum = parts[0]
+        try:
+            us = int(parts[1])
+        except ValueError:
+            return None, "bad elapsed %r" % parts[1]
+        secs = us / 1e6
+        best = secs if best is None else min(best, secs)
     return best, checksum
 
 
@@ -112,8 +123,6 @@ def main():
         if not names:
             sys.exit("no such benchmark: " + args.bench)
     opts = [args.opt] if args.opt else OPTS
-    if BASELINE not in names:
-        sys.exit("src/%s.{xc,m} is required: it measures process startup" % BASELINE)
 
     env = build_env()
     if not env.get("XTC_LINUX_HOST"):
@@ -147,16 +156,10 @@ def main():
                 mismatches.append((name, opt, checks))
                 print("  %-14s %-4s %-2s  CHECKSUM MISMATCH %s" % (name, "", opt, checks))
 
-    # Subtract process startup, measured by the baseline pair at the same level.
-    adjusted = {}
-    for name, per_opt in results.items():
-        if name == BASELINE:
-            continue
-        for opt, per_lang in per_opt.items():
-            base = results.get(BASELINE, {}).get(opt, {})
-            for lang, secs in per_lang.items():
-                net = secs - base.get(lang, 0.0)
-                adjusted.setdefault(name, {}).setdefault(opt, {})[lang] = max(net, 0.0)
+    # Timing is taken inside the program, so there is nothing to subtract.
+    # The baseline pair is kept only to show that startup is excluded: it
+    # reports zero.
+    adjusted = {n: v for n, v in results.items() if n != BASELINE}
 
     outdir = os.path.join(ROOT, args.version)
     os.makedirs(outdir, exist_ok=True)

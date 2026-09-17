@@ -49,10 +49,23 @@ Three rules keep the measurements honest, each learned by getting it wrong:
   and a double accumulator so the sum is exact either way, otherwise the two
   languages disagree on rounding and the checksum fails.
 
-Timing is measured from outside the process, identically for both languages, so
-neither language's clock takes part. Process startup is measured by the
-`baseline` pair and subtracted, because a Foundation process starts more slowly
-than an xc one and that is not a property of the generated code.
+Each program times itself. Both halves call
+`clock_gettime(CLOCK_MONOTONIC)`, the same primitive through the same libc, and
+print `<checksum> <elapsed_us>`. Sampling inside the program keeps process
+startup and data setup out of the figure, so nothing has to be subtracted, and
+it removes the jitter of a process launch per sample.
+
+xc reaches libc with a bare prototype, the way the standard library declares
+`write`:
+
+```
+i32 clock_gettime(i32 clk, u8* ts);
+```
+
+The helpers live in `src/include/`, which the pair discovery skips. An earlier
+version timed from outside the process and subtracted a startup baseline; both
+methods agree to within a few percent, so the change buys precision rather than
+a correction.
 
 ## Reading the report
 

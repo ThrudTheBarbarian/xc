@@ -1,6 +1,7 @@
 // call_depth — a small non-inlinable call chain in a hot loop. See call_depth.xc.
 #import <Foundation/Foundation.h>
 #include <stdio.h>
+#include "include/bench_time.h"
 #include <stdint.h>
 
 static uint32_t leaf(uint32_t x)  { return (x * 3u) ^ (x >> 2); }
@@ -12,8 +13,10 @@ int main(int argc, char **argv)
     @autoreleasepool {
         uint32_t seed = (uint32_t)argc;
         uint32_t acc  = 0;
+        int64_t t0 = bench_now_us();
         for (uint32_t r = 0; r < 4000000; r++) acc = acc + outer_(r + seed);
-        printf("%u\n", acc);
+        int64_t t1 = bench_now_us();
+        printf("%u %lld\n", acc, t1 - t0);
     }
     return 0;
     }

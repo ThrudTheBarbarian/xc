@@ -1,6 +1,7 @@
 // poly_dispatch — dispatch through a mixed array of subclasses. See poly_dispatch.xc.
 #import <Foundation/Foundation.h>
 #include <stdio.h>
+#include "include/bench_time.h"
 #include <stdint.h>
 #define N 256
 @interface Op : NSObject { @public uint32_t k; }
@@ -24,9 +25,11 @@ int main(int argc, char **argv)
             else                    ops[i] = [[OpXor alloc] initWithK:i + seed];
             }
         uint32_t acc = 1;
+        int64_t t0 = bench_now_us();
         for (uint32_t r = 0; r < 20000; r++)
             for (uint32_t i = 0; i < N; i++) acc = [ops[i] apply:acc] + r;
-        printf("%u\n", acc);
+        int64_t t1 = bench_now_us();
+        printf("%u %lld\n", acc, t1 - t0);
     }
     return 0;
     }

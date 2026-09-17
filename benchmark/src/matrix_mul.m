@@ -1,6 +1,7 @@
 // matrix_mul — multiply two small square matrices, repeatedly. See matrix_mul.xc.
 #import <Foundation/Foundation.h>
 #include <stdio.h>
+#include "include/bench_time.h"
 #include <stdint.h>
 #define M 32
 int main(int argc, char **argv)
@@ -10,6 +11,7 @@ int main(int argc, char **argv)
         uint32_t seed = (uint32_t)argc;
         for (uint32_t i = 0; i < M * M; i++)
             { a[i] = (i + seed) & 15u; b[i] = (i ^ seed) & 15u; }
+        int64_t t0 = bench_now_us();
         for (uint32_t r = 0; r < 200; r++)
             for (uint32_t i = 0; i < M; i++)
                 for (uint32_t j = 0; j < M; j++)
@@ -20,7 +22,8 @@ int main(int argc, char **argv)
                     }
         uint32_t acc = 0;
         for (uint32_t i = 0; i < M * M; i++) acc = acc + c[i];
-        printf("%u\n", acc);
+        int64_t t1 = bench_now_us();
+        printf("%u %lld\n", acc, t1 - t0);
     }
     return 0;
     }
