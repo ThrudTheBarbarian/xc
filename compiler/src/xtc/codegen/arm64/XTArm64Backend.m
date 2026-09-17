@@ -1543,6 +1543,35 @@ static const NSUInteger kArm64VaForwardWords = 16;
     return [NSString stringWithFormat:@"%lld, lsl #12", (long long)hi];
 }
 
+// Is `v` encodable as an AArch64 logical immediate (the and/orr/eor bitmask
+// form)? The field encodes a value that repeats with some period e in
+// {2,4,8,16,32,64}, where one period is a rotation of a contiguous run of ones.
+// 0x0F0F0F0F is such a value — e = 8, four ones — and clang emits it as
+// `eor w0, w1, #0xf0f0f0f`, where this backend materialised the constant with
+// movz/movk into a register first. All-zeros and all-ones are not encodable.
+static BOOL arm64LogicalImm(uint64_t v, int width) {
+    if (width != 32 && width != 64) return NO;
+    uint64_t wmask = (width == 64) ? ~0ULL : 0xFFFFFFFFULL;
+    v &= wmask;
+    if (v == 0 || v == wmask) return NO;
+    for (int e = 2; e <= width; e <<= 1) {
+        uint64_t emask = (e == 64) ? ~0ULL : ((1ULL << e) - 1);
+        uint64_t lo = v & emask;
+        // v must be `lo` repeated at period e.
+        BOOL repeats = YES;
+        for (int off = e; off < width; off += e)
+            if (((v >> off) & emask) != lo) { repeats = NO; break; }
+        if (!repeats) continue;
+        if (lo == 0 || lo == emask) continue;           // not encodable at this e
+        // Rotate lo so its ones start at bit 0, then require a contiguous run.
+        int tz = 0;
+        while (((lo >> tz) & 1ULL) == 0) tz++;
+        uint64_t rot = ((lo >> tz) | (lo << (e - tz))) & emask;
+        if (((rot + 1) & rot) == 0) return YES;         // rot is 0b0..01..1
+    }
+    return NO;
+}
+
 + (NSNumber *)imm12ForOperand:(XTIROperand *)op ctx:(XTArm64FnCtx *)ctx {
     int64_t v;
     if (op.kind == XTIROperandKindImmI) {
@@ -3463,6 +3492,39 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
                     NSString *dr = [self resultReg:insn.result.valueId scratch:sc ctx:ctx];
                     [ctx.out appendFormat:@"    %@ %@, %@, #%@\n",
                         insn.opcode == XTIROpAdd ? @"add" : @"sub", dr, ar, imm];
+                    if (![ctx.noCanon containsObject:@(insn.result.valueId)])
+                        [self canonicaliseReg:dr toType:insn.result.type ctx:ctx];
+                    [self storeReg:dr intoValue:insn.result.valueId ctx:ctx];
+                    break;
+                }
+            }
+            // Fold a bitmask constant into the logical-immediate form
+            // (`and/orr/eor d, a, #imm`) instead of building it in a register.
+            // A mask like 0x0F0F0F0F cost movz + movk + the op; it is one
+            // instruction here.
+            if (insn.opcode == XTIROpAnd || insn.opcode == XTIROpOr ||
+                insn.opcode == XTIROpXor) {
+                int64_t kv = 0;
+                BOOL haveK = NO;
+                XTIROperand *ro = insn.operands[1];
+                if (ro.kind == XTIROperandKindImmI) { kv = ro.intValue; haveK = YES; }
+                else if (ro.kind == XTIROperandKindUse) {
+                    XTIRInsn *d = ctx.defOf[@(ro.valueId)];
+                    if (d && d.opcode == XTIROpConst && d.operands.count >= 1 &&
+                        d.operands[0].kind == XTIROperandKindImmI) {
+                        kv = d.operands[0].intValue; haveK = YES;
+                    }
+                }
+                int dw = (insn.result.type && insn.result.type.byteWidth == 8) ? 64 : 32;
+                if (haveK && arm64LogicalImm((uint64_t)kv, dw)) {
+                    NSString *sc = [self regName:16 forType:insn.result.type];
+                    NSString *ar = [self operandReg:insn.operands[0] intoScratch:sc ctx:ctx];
+                    NSString *dr = [self resultReg:insn.result.valueId scratch:sc ctx:ctx];
+                    NSString *mn = insn.opcode == XTIROpAnd ? @"and"
+                                 : insn.opcode == XTIROpOr  ? @"orr" : @"eor";
+                    uint64_t mask = (dw == 64) ? ~0ULL : 0xFFFFFFFFULL;
+                    [ctx.out appendFormat:@"    %@ %@, %@, #0x%llx\n", mn, dr, ar,
+                     (unsigned long long)((uint64_t)kv & mask)];
                     if (![ctx.noCanon containsObject:@(insn.result.valueId)])
                         [self canonicaliseReg:dr toType:insn.result.type ctx:ctx];
                     [self storeReg:dr intoValue:insn.result.valueId ctx:ctx];
