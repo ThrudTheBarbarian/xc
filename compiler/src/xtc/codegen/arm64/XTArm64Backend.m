@@ -5640,6 +5640,29 @@ static BOOL isScratchDst(NSString *reg) {
             NSMutableArray *no = [co mutableCopy];
             for (NSUInteger k = 1; k < no.count; k++)
                 if ([no[k] isEqualToString:dst]) { no[k] = src; used = YES; }
+            // A memory operand names its base inside brackets, so an exact
+            // match never fires for `mov x16, x12; ldr w17, [x16]` — the copy
+            // survived in front of essentially every load in a hot loop. Rewrite
+            // the base of the simple forms `[dst]` and `[dst, #imm]` too, and
+            // only when the operand is last and the line has no writeback (`!`),
+            // so a pre/post-indexed form — which WRITES the base — is left alone.
+            if (!used && !srcFP && [src hasPrefix:@"x"]
+                && [lines[i + 1] rangeOfString:@"!"].location == NSNotFound) {
+                NSUInteger last = no.count - 1;
+                if (no.count >= 2) {
+                    NSString *opnd = no[last];
+                    NSString *plain = [NSString stringWithFormat:@"[%@]", dst];
+                    NSString *pre = [NSString stringWithFormat:@"[%@, #", dst];
+                    if ([opnd isEqualToString:plain]) {
+                        no[last] = [NSString stringWithFormat:@"[%@]", src];
+                        used = YES;
+                    } else if ([opnd hasPrefix:pre] && [opnd hasSuffix:@"]"]) {
+                        no[last] = [NSString stringWithFormat:@"[%@, #%@",
+                                    src, [opnd substringFromIndex:pre.length]];
+                        used = YES;
+                    }
+                }
+            }
             if (!used) continue;
             NSString *outMnem = srcFP ? @"fmov" : cm;  // GP←FP reg move is fmov, never mov
             // dst must be dead after the consumer.
