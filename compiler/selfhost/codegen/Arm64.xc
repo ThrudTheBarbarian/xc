@@ -5695,11 +5695,14 @@ class Arm64
         _savedRegs = new Array();
         if (_hasAsm) return;      // an Asm body reads slots directly: home nothing
 
-        // The callee-save area sits just past the value slots; its str/ldr
-        // use a scaled unsigned imm (max 32760 for a 64-bit access). A huge
-        // value-slot region would push the save area out of range, so skip
-        // homing rather than emit an invalid offset.
-        if (_valueSlotEnd + (u32)8 * (u32)17 > (u32)32000) return;
+        // The callee-save area sits just past the value slots, and a 64-bit
+        // scaled immediate reaches 32760, so a big slot region pushes it out of
+        // range. This used to give up on homing entirely at that point — which
+        // meant a function holding a few large arrays on the stack got NO
+        // register allocation at all, and reloaded even a loop-invariant base
+        // pointer from its slot every iteration. emitCalleeSaves already stages
+        // an out-of-range save or restore through x9, so there is nothing left
+        // to protect against; the frame ceiling in buildSlotTable is the bound.
 
         Array* gp = new Array();
         Array* fp = new Array();
