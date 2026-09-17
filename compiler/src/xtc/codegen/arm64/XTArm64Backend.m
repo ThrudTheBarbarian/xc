@@ -48,6 +48,12 @@
 @property (nonatomic) NSMutableDictionary<NSNumber *, NSString *> *homeReg;
 @property (nonatomic) NSArray<NSString *> *savedRegs;
 @property (nonatomic) NSUInteger saveAreaOffset;
+// Base offset held in x28 for a frame too large for sp-relative slot access,
+// or 0 when unused. x28 is in no home pool (homes are x19-x27 and x10-x14; x9
+// stages, x15-x17 scratch, x8 the indirect result), so it is reserved as a
+// second frame base covering the TOP of the frame, where the scalar value slots
+// sit once large aggregates have been laid out first.
+@property (nonatomic) NSUInteger frameBase;
 @property (nonatomic) NSUInteger valueSlotEnd;
 // Bug 065: value id -> its position in the IR TEXT's dense per-function
 // numbering. The ported back end assigns from that text, so every place this
@@ -1849,9 +1855,12 @@ static const NSUInteger kArm64VaForwardWords = 16;
 + (NSString *)spMemForOff:(NSUInteger)off reg:(NSString *)reg ctx:(XTArm64FnCtx *)ctx {
     NSUInteger max = ([reg hasPrefix:@"w"] || [reg hasPrefix:@"s"]) ? 16380 : 32760;
     if (off <= max) return [NSString stringWithFormat:@"[sp, #%lu]", (unsigned long)off];
-    NSString *addr = ([reg hasPrefix:@"x9"] || [reg hasPrefix:@"w9"]) ? @"x16" : @"x9";
-    [self emitSpAddr:off into:addr ctx:ctx];
-    return [NSString stringWithFormat:@"[%@]", addr];
+    // Out of range stays sp-relative HERE on purpose: the peepholes parse
+    // `[sp, #off]` and nothing else, so emitting another base register now
+    // would hide the slot from store-to-load forwarding and dead-store removal
+    // (measured: doing that made int_accum and bit_ops worse, not better).
+    // expandStagedSlots picks the real form once the peepholes have run.
+    return [NSString stringWithFormat:@"[sp, #%lu]", (unsigned long)off];
 }
 
 // Emit `add <reg>, sp, #<off>` safely. The add immediate is 12-bit (0-4095,
@@ -5305,16 +5314,53 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
 // Re-expand any `[sp, #off]` the hardware cannot encode, using the same staging
 // spMemForOff uses. Runs after the peepholes, so anything they forwarded or
 // dropped never pays the staging cost.
-+ (NSString *)expandStagedSlots:(NSString *)text {
++ (NSString *)expandStagedSlots:(NSString *)text
+                     frameBase:(NSUInteger)frameBase
+                  saveAreaFrom:(NSUInteger)saveAreaStart
+                            to:(NSUInteger)saveAreaEnd {
     NSArray<NSString *> *lines = [text componentsSeparatedByString:@"\n"];
     NSMutableArray<NSString *> *out = [NSMutableArray arrayWithCapacity:lines.count];
     NSString *m = nil, *r = nil, *o = nil;
+    // Two exclusions, and they cannot be a running on/off flag: block bodies are
+    // laid out in declaration order, so a loop body often sits AFTER the block
+    // holding the epilogue, and a flag cleared at the epilogue would switch the
+    // base off for the hottest code in the function.
+    //
+    //   - Anything emitted BEFORE the setup line (the sret spill) has no x28
+    //     yet, so the bound is positional.
+    //   - The callee-save area itself is off limits wherever it appears: those
+    //     stores run before the setup, and the epilogue's reloads overwrite x28
+    //     partway through. Excluding the offset RANGE covers both ends.
+    //
+    // Getting this wrong is what made array_map, mem_copy, float_math and
+    // arc_array compute wrong answers on the first attempt.
+    NSInteger setupIdx = -1;
+    for (NSUInteger i = 0; i < lines.count; i++) {
+        NSString *t = [lines[i] stringByTrimmingCharactersInSet:
+                       [NSCharacterSet whitespaceCharacterSet]];
+        if ([t hasPrefix:@"add x28, sp, #"]) { setupIdx = (NSInteger)i; break; }
+    }
+    NSInteger lineIdx = -1;
     for (NSString *ln in lines) {
+        lineIdx++;
+        BOOL baseLive = (setupIdx >= 0 && lineIdx > setupIdx);
         if (([self parseSpLine:ln mnem:&m reg:&r off:&o])
             && ([m isEqualToString:@"ldr"] || [m isEqualToString:@"str"])) {
             long long off = [o longLongValue];
             NSUInteger max = ([r hasPrefix:@"w"] || [r hasPrefix:@"s"]) ? 16380 : 32760;
             if (off > (long long)max) {
+                // One instruction through the frame base when it reaches.
+                BOOL inSaveArea = (saveAreaEnd > saveAreaStart
+                                   && off >= (long long)saveAreaStart
+                                   && off < (long long)saveAreaEnd);
+                if (baseLive && frameBase && !inSaveArea
+                    && off >= (long long)frameBase
+                    && (off - (long long)frameBase) <= (long long)max
+                    && ![r isEqualToString:@"x28"]) {
+                    [out addObject:[NSString stringWithFormat:@"    %@ %@, [x28, #%lld]",
+                                    m, r, off - (long long)frameBase]];
+                    continue;
+                }
                 NSString *stage = ([r isEqualToString:@"x9"] || [r isEqualToString:@"w9"])
                                   ? @"x16" : @"x9";
                 NSString *w = [@"w" stringByAppendingString:[stage substringFromIndex:1]];
@@ -5805,6 +5851,21 @@ static BOOL isScratchDst(NSString *reg) {
     // out just past the value slots so value-slot offsets (and AddrOf
     // addresses) are unchanged. Functions that home nothing keep the
     // original byte-identical frame.
+    // Reserve x28 as a high frame base when the frame outgrows sp-relative slot
+    // addressing. base = ceil((frameSize - 16380) / 4096) * 4096 so that
+    // [base, base+16380] covers the top of the frame and the setup stays a
+    // single `add x28, sp, #N, lsl #12`. Added to savedRegs so the save area
+    // sizes itself and every epilogue restores it like any other home.
+    ctx.frameBase = 0;
+    if (ctx.frameSize > 16380) {
+        NSUInteger base = ((ctx.frameSize - 16380 + 4095) / 4096) * 4096;
+        if ((base >> 12) <= 4095) {
+            ctx.frameBase = base;
+            NSMutableArray *sr = [ctx.savedRegs mutableCopy] ?: [NSMutableArray array];
+            [sr addObject:@"x28"];
+            ctx.savedRegs = sr;
+        }
+    }
     ctx.saveAreaOffset = ctx.valueSlotEnd;
     if (ctx.savedRegs.count) {
         NSUInteger end = ctx.saveAreaOffset + 8 * ctx.savedRegs.count;
@@ -5851,6 +5912,12 @@ static BOOL isScratchDst(NSString *reg) {
     // it before the save would lose the caller's value). They are reloaded
     // in every epilogue.
     [self emitCalleeSaves:ctx.savedRegs base:ctx.saveAreaOffset toBuf:out restore:NO];
+    // x28 is saved above; point it at the high frame base now sp is final.
+    // Everything emitted from here to the epilogue's restore may address slots
+    // through it — expandStagedSlots keys off exactly this line.
+    if (ctx.frameBase)
+        [out appendFormat:@"    add x28, sp, #%lu, lsl #12\n",
+         (unsigned long)(ctx.frameBase >> 12)];
 
     // Spill parameters into their stack slots. The last param is the
     // Mem phantom — it has a slot but no register, so skip it. AAPCS64:
@@ -5954,9 +6021,13 @@ static BOOL isScratchDst(NSString *reg) {
         }
     }
     [out appendString:@"\n"];
-    [moduleOut appendString:[self expandStagedSlots:
-        [self peepholeFallthrough:[self peepholeCopyProp:
-         [self peepholeSpills:[self canonicaliseStagedSlots:body]]]]]];
+    [moduleOut appendString:
+        [self expandStagedSlots:
+            [self peepholeFallthrough:[self peepholeCopyProp:
+             [self peepholeSpills:[self canonicaliseStagedSlots:body]]]]
+                       frameBase:ctx.frameBase
+                    saveAreaFrom:ctx.saveAreaOffset
+                              to:ctx.saveAreaOffset + 8 * ctx.savedRegs.count]];
 }
 
 #pragma mark - Public
