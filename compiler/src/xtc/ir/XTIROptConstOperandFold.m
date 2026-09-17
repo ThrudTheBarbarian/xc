@@ -6,6 +6,7 @@
 #import "XTIROperand.h"
 #import "XTIROpcode.h"
 #import "XTIRValue.h"
+#import "XTIRType.h"
 
 @implementation XTIROptConstOperandFold
 
@@ -42,8 +43,17 @@
 
     // Resolve a value to a compile-time int, walking through ZExt / SExt of
     // a Const (iterative — no self-capturing block). nil if not constant.
+    // A TRUNC on the way to the Const is walked too, but it narrows the value,
+    // so each one is re-applied to the constant afterwards (innermost first) in
+    // its own width and signedness. Without this a narrowed literal — which is
+    // what a shift count becomes, since lowering gives the count a u8 type —
+    // never folds, and the backend materialises the constant, homes it to a
+    // frame slot and zero-extends it before a shift the hardware takes as an
+    // immediate.
+    NSMutableArray<NSNumber*>* truncBits = [NSMutableArray array];   // outermost first; <0 = signed
     NSNumber* (^resolveConst)(XTIRValueId) = ^NSNumber*(XTIRValueId vid) {
       XTIRValueId cur = vid;
+      [truncBits removeAllObjects];
       for (int depth = 0; depth < 16; depth++)
           {
           XTIRInsn* d = defOf[@(cur)];
@@ -51,12 +61,36 @@
               return nil;
           if (d.opcode == XTIROpConst)
               {
-              if (d.operands.count >= 1 && d.operands[0].kind == XTIROperandKindImmI)
-                  return @(d.operands[0].intValue);
-              return nil;
+              if (!(d.operands.count >= 1 && d.operands[0].kind == XTIROperandKindImmI))
+                  return nil;
+              int64_t v = d.operands[0].intValue;
+              for (NSInteger i = (NSInteger)truncBits.count - 1; i >= 0; i--)
+                  {
+                  int64_t spec = truncBits[(NSUInteger)i].longLongValue;
+                  int bits = (int)llabs(spec);
+                  if (bits <= 0 || bits >= 64)
+                      continue;
+                  uint64_t mask = (1ULL << bits) - 1ULL;
+                  uint64_t uv = (uint64_t)v & mask;
+                  if (spec < 0 && (uv & (1ULL << (bits - 1))))
+                      v = (int64_t)(uv | ~mask);          // sign-extend back
+                  else
+                      v = (int64_t)uv;
+                  }
+              return @(v);
               }
           if ((d.opcode == XTIROpZExt || d.opcode == XTIROpSExt) && d.operands.count >= 1 && d.operands[0].kind == XTIROperandKindUse)
               {
+              cur = d.operands[0].valueId;
+              continue;
+              }
+          if (d.opcode == XTIROpTrunc && d.operands.count >= 1 && d.operands[0].kind == XTIROperandKindUse)
+              {
+              XTIRType* rt = d.result.type;
+              if (!rt || rt.byteWidth == 0 || rt.byteWidth > 8)
+                  return nil;
+              int64_t bits = (int64_t)rt.byteWidth * 8;
+              [truncBits addObject:@(XTIRTypeKindIsSigned(rt.kind) ? -bits : bits)];
               cur = d.operands[0].valueId;
               continue;
               }

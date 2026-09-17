@@ -3414,6 +3414,56 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
                     break;
                 }
             }
+            // Fold a constant shift count into the immediate form
+            // (`lsl d, a, #k`). The count's own type is narrow, so the
+            // register path below materialised it, homed it to a frame slot
+            // and zero-extended it — four instructions for what the hardware
+            // takes as one operand. The immediate range is the DESTINATION
+            // width: 0..31 for a w view, 0..63 for an x view; anything else
+            // falls through to the register path unchanged.
+            if (insn.opcode == XTIROpShl || insn.opcode == XTIROpLShr ||
+                insn.opcode == XTIROpAShr) {
+                // The count is narrowed by lowering, so it usually arrives as a
+                // ZExt/SExt/Trunc of the literal rather than a bare Const —
+                // follow that chain before giving up.
+                NSNumber *cntN = [self imm12ForOperand:insn.operands[1] ctx:ctx];
+                if (!cntN) {
+                    XTIROperand *co = insn.operands[1];
+                    for (int hops = 0; hops < 4 && co && co.kind == XTIROperandKindUse; hops++) {
+                        XTIRInsn *cd = ctx.defOf[@(co.valueId)];
+                        if (!cd || cd.operands.count < 1) break;
+                        if (cd.opcode != XTIROpZExt && cd.opcode != XTIROpSExt &&
+                            cd.opcode != XTIROpTrunc) break;
+                        co = cd.operands[0];
+                        cntN = [self imm12ForOperand:co ctx:ctx];
+                        if (cntN) break;
+                    }
+                }
+                NSUInteger dw = (insn.result.type && insn.result.type.byteWidth == 8) ? 64 : 32;
+                int64_t k = cntN ? cntN.longLongValue : -1;
+                if (cntN && k >= 0 && k < (int64_t)dw) {
+                    NSString *sc = [self regName:16 forType:insn.result.type];
+                    NSString *ar = [self operandReg:insn.operands[0] intoScratch:sc ctx:ctx];
+                    NSString *dr = [self resultReg:insn.result.valueId scratch:sc ctx:ctx];
+                    // Same narrow-signed guard the register path carries: a
+                    // LOGICAL right shift of a narrow SIGNED value must shift
+                    // the value, not the sign-extended register.
+                    if (insn.opcode == XTIROpLShr && insn.result.type
+                        && XTIRTypeKindIsSigned(insn.result.type.kind)
+                        && insn.result.type.byteWidth < 4 && [ar hasPrefix:@"w"]) {
+                        NSString *ext = insn.result.type.byteWidth == 1 ? @"uxtb" : @"uxth";
+                        [ctx.out appendFormat:@"    %@ w16, %@\n", ext, ar];
+                        ar = @"w16";
+                    }
+                    NSString *mn = insn.opcode == XTIROpShl  ? @"lsl"
+                                 : insn.opcode == XTIROpLShr ? @"lsr" : @"asr";
+                    [ctx.out appendFormat:@"    %@ %@, %@, #%lld\n", mn, dr, ar, (long long)k];
+                    if (![ctx.noCanon containsObject:@(insn.result.valueId)])
+                        [self canonicaliseReg:dr toType:insn.result.type ctx:ctx];
+                    [self storeReg:dr intoValue:insn.result.valueId ctx:ctx];
+                    break;
+                }
+            }
             // Read operands directly from their home registers when homed
             // (no load); the result targets its home register when homed
             // (no store). w15 is the rem quotient scratch — never a home.
