@@ -5525,6 +5525,105 @@ static BOOL isScratchDst(NSString *reg) {
 // match, so there are no edge phi-copy `mov`s between them (those would break an
 // inversion); the taken-edge copies the walker emits *before* the conditional run
 // on both paths already, which inversion preserves.
+// ── Redundant-reload peephole ────────────────────────────────────────────
+//
+// The spill peephole forwards a STORE to the load that follows it. It does not
+// notice a slot being LOADED twice into the same register with nothing changing
+// in between, which is what an index or a loop-invariant base looks like when
+// it is slot-homed and read once per use:
+//
+//     ldr w17, [sp, #16624]     ; index
+//     add x16, x16, w17, uxtw #2
+//     ldr x16, [sp, #16640]
+//     ldr w17, [sp, #16624]     ; same slot, same register, still live
+//
+// Within one basic block, a reload is redundant when the slot has not been
+// stored to, the destination register has not been written, and no call has
+// intervened. Conservative on every count: any label, branch, call or write to
+// the register drops the fact.
+// Same physical register, whatever view names it: writing `w16` zeroes the top
+// half of `x16`, so a fact recorded about one view must die with the other.
+static BOOL sameArm64Reg(NSString *a, NSString *b) {
+    if (!a || !b) return NO;
+    if ([a isEqualToString:b]) return YES;
+    unichar ca = [a characterAtIndex:0], cb = [b characterAtIndex:0];
+    BOOL gpA = (ca == 'w' || ca == 'x'), gpB = (cb == 'w' || cb == 'x');
+    if (!gpA || !gpB) return NO;
+    return [[a substringFromIndex:1] isEqualToString:[b substringFromIndex:1]];
+}
+
++ (NSString *)peepholeRedundantReloads:(NSString *)text {
+    NSArray<NSString *> *lines = [text componentsSeparatedByString:@"\n"];
+    NSMutableArray<NSString *> *out = [NSMutableArray arrayWithCapacity:lines.count];
+    NSMutableDictionary<NSString *, NSString *> *held = [NSMutableDictionary dictionary];  // off -> reg
+    NSString *m = nil, *r = nil, *o = nil;
+    for (NSString *ln in lines) {
+        NSString *t = [ln stringByTrimmingCharactersInSet:
+                       [NSCharacterSet whitespaceCharacterSet]];
+        if (t.length == 0 || [t hasSuffix:@":"] || [t hasPrefix:@"."] || [t hasPrefix:@"//"]) {
+            [held removeAllObjects];                      // block boundary / directive
+            [out addObject:ln];
+            continue;
+        }
+        NSString *jm = nil;
+        NSArray *jo = [self parseAsmLine:ln mnem:&jm];
+        if (!jm) { [held removeAllObjects]; [out addObject:ln]; continue; }
+        if ([@[@"b", @"bl", @"br", @"blr", @"ret", @"cbz", @"cbnz",
+               @"tbz", @"tbnz"] containsObject:jm]
+            || [jm hasPrefix:@"b."]) {
+            [held removeAllObjects];                      // call/branch: registers gone
+            [out addObject:ln];
+            continue;
+        }
+        // A pair op touches TWO registers and `mnemWritesReg0` only names the
+        // first, so never try to track through one.
+        if ([jm isEqualToString:@"ldp"] || [jm isEqualToString:@"stp"]) {
+            [held removeAllObjects];
+            [out addObject:ln];
+            continue;
+        }
+        if ([self parseSpLine:ln mnem:&m reg:&r off:&o]) {
+            if ([m isEqualToString:@"ldr"]) {
+                NSString *cur = held[o];
+                if (cur && [cur isEqualToString:r]) continue;   // already there — drop
+                // This load redefines r; anything else believed to be in r is stale.
+                for (NSString *k in held.allKeys)
+                    if (sameArm64Reg(held[k], r)) [held removeObjectForKey:k];
+                held[o] = r;
+                [out addObject:ln];
+                continue;
+            }
+            if ([m isEqualToString:@"str"]) {
+                // An sp-relative store writes exactly this slot, so only this
+                // slot's fact changes. (strb/strh write PART of it — the record
+                // would be a lie for a later full-width load, so drop it.)
+                held[o] = r;
+                [out addObject:ln];
+                continue;
+            }
+            [held removeAllObjects];
+            [out addObject:ln];
+            continue;
+        }
+        // A store through any other base could land anywhere in the frame —
+        // c[i] = … writes through a pointer into a stack array — so nothing
+        // believed about any slot survives it.
+        if ([jm hasPrefix:@"st"]) {
+            [held removeAllObjects];
+            [out addObject:ln];
+            continue;
+        }
+        // A plain instruction: whatever it writes invalidates that register.
+        if (jo.count >= 1 && mnemWritesReg0(jm)) {
+            NSString *w = jo[0];
+            for (NSString *k in held.allKeys)
+                if (sameArm64Reg(held[k], w)) [held removeObjectForKey:k];
+        }
+        [out addObject:ln];
+    }
+    return [out componentsJoinedByString:@"\n"];
+}
+
 + (NSString *)peepholeFallthrough:(NSString *)text {
     static NSDictionary *inv;
     if (!inv) inv = @{@"eq":@"ne",@"ne":@"eq",@"lo":@"hs",@"hs":@"lo",
@@ -6047,7 +6146,8 @@ static BOOL isScratchDst(NSString *reg) {
     [moduleOut appendString:
         [self expandStagedSlots:
             [self peepholeFallthrough:[self peepholeCopyProp:
-             [self peepholeSpills:[self canonicaliseStagedSlots:body]]]]
+             [self peepholeRedundantReloads:
+              [self peepholeSpills:[self canonicaliseStagedSlots:body]]]]]
                        frameBase:ctx.frameBase
                     saveAreaFrom:ctx.saveAreaOffset
                               to:ctx.saveAreaOffset + 8 * ctx.savedRegs.count]];
