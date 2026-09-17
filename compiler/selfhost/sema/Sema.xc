@@ -1342,9 +1342,10 @@ class Sema
                 // instantiates anything).
                 for (Node* c = cls; c != 0; c = parentOf(c))
                     c.setUsedByNew();
-                // `new T(a, b)` picks the init that TAKES two arguments —
-                // `new Rect()` against a class whose only init takes four
-                // resolves to nothing, and the original stamps nothing.
+                // `new T(a, b)` picks the init that TAKES two arguments,
+                // searching this class and then its ancestors. A call that
+                // matches no init anywhere stamps nothing; the original
+                // reports that case, which this has no channel to do.
                 Node* ini = initOverload(cls, n);
                 if (ini != 0)
                     n.setSym(ini.sym());
@@ -3412,10 +3413,42 @@ class Sema
 
     Node* initOverload(Node* cls, Node* newExpr)
         {
-        Array* group = new Array();
-        for (u32 i = (u32)0; i < cls.kidCount(); i = i + (u32)1)
+        // A class that declares any init owns its construction interface; one
+        // that declares none inherits its parent's, the way it inherits every
+        // other method. So take the candidates from the nearest class in the
+        // chain that declares an init.
+        //
+        // Scanning this class alone left `new Sub(7)` with nothing stamped,
+        // and the lowering runs an init ONLY when a symbol was stamped
+        // (Lower.xc, `if (n.sym() != 0) runInit(...)`). So no initialiser ran
+        // and every field read back zero. runInit walks the parents itself to
+        // turn the stamped mangled name into the declaring class's symbol, so
+        // the lowering needs nothing.
+        //
+        // synthesiseInits() covers only the case where an ancestor has a
+        // NO-ARG init; a parent init that takes arguments has no synthesised
+        // forwarder and reaches construction through here.
+        Node* owner = (Node*)0;
+        for (Node* c = cls; c != 0 && owner == 0; c = parentOf(c))
             {
-            Node* m = cls.kid(i);
+            for (u32 i = (u32)0; i < c.kidCount(); i = i + (u32)1)
+                {
+                Node* m = c.kid(i);
+                if (m.kind() != (u16)nkMethodDecl)
+                    continue;
+                if (m.name() != 0 && _isOp(m.name(), "init"))
+                    {
+                    owner = c;
+                    break;
+                    }
+                }
+            }
+        if (owner == 0)
+            return (Node*)0;
+        Array* group = new Array();
+        for (u32 i = (u32)0; i < owner.kidCount(); i = i + (u32)1)
+            {
+            Node* m = owner.kid(i);
             if (m.kind() != (u16)nkMethodDecl)
                 continue;
             if (m.name() != 0 && _isOp(m.name(), "init"))

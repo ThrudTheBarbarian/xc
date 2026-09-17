@@ -3959,9 +3959,39 @@ static BOOL XTIsErasedKeyType(XTType* t)
         // name on the node for emitNewExpr to use.
         if (cls && node.countExpr == nil)
             {
+            // A class that declares any init owns its own construction
+            // interface; one that declares none inherits its parent's, the
+            // way it inherits every other method. So find the nearest class
+            // in the chain that declares an init and take the candidates
+            // from there. Without this walk `new Sub(7)` on a subclass with
+            // no init of its own found no candidate, stamped nothing, and
+            // the allocator ran without any initialiser: the ivars read
+            // back zero and nothing was reported.
+            //
+            // Lowering resolves the SYMBOL by walking parents itself, so
+            // stamping the inherited init's mangled name is enough here.
+            XTClassDeclNode* initOwner = nil;
+            BOOL chainHasAnyInit = NO;
+            for (XTClassDeclNode* c = cls; c != nil; c = c.parentClass)
+                {
+                BOOL declares = NO;
+                for (XTMethodDeclNode* m in c.methods)
+                    if ([m.methodName isEqualToString:@"init"])
+                        {
+                        declares = YES;
+                        break;
+                        }
+                if (declares)
+                    {
+                    chainHasAnyInit = YES;
+                    if (!initOwner)
+                        initOwner = c;
+                    break;
+                    }
+                }
             NSMutableArray<XTMethodDeclNode*>* candidates =
                 [NSMutableArray array];
-            for (XTMethodDeclNode* m in cls.methods)
+            for (XTMethodDeclNode* m in (initOwner ?: cls).methods)
                 {
                 if (![m.methodName isEqualToString:@"init"])
                     continue;
@@ -4011,6 +4041,46 @@ static BOOL XTIsErasedKeyType(XTType* t)
                                                         @"_cls_%@_%@", node.className, chosen.mangledName];
                     [self recordCallEdgeToLabel:initLabel];
                     }
+                }
+            else if (chainHasAnyInit)
+                {
+                // An init exists but none takes this argument list. The
+                // arguments used to be lowered and handed to the allocator
+                // regardless, so the initialiser never ran and the ivars
+                // read back zero with nothing reported.
+                NSMutableArray<NSString*>* arities = [NSMutableArray array];
+                for (XTClassDeclNode* c = initOwner; c != nil; c = c.parentClass)
+                    {
+                    for (XTMethodDeclNode* m in c.methods)
+                        if ([m.methodName isEqualToString:@"init"])
+                            [arities addObject:[NSString stringWithFormat:@"%lu",
+                                                (unsigned long)m.parameters.count]];
+                    if (arities.count)
+                        break;
+                    }
+                [self.diagnostics emitError:[NSString stringWithFormat:
+                                                          @"`new %@(...)` supplies %lu argument%s, but "
+                                                          @"'%@.init' takes %@. An allocation that matches "
+                                                          @"no init would leave every field uninitialised.",
+                                                          node.className,
+                                                          (unsigned long)node.arguments.count,
+                                                          node.arguments.count == 1 ? "" : "s",
+                                                          (initOwner ?: cls).className,
+                                                          [arities componentsJoinedByString:@" or "]]
+                                         at:node.location];
+                }
+            else if (node.arguments.count > 0)
+                {
+                // No init anywhere in the chain, so `new C()` is the only
+                // legal form: allocate and zero. Arguments have nowhere to go.
+                [self.diagnostics emitError:[NSString stringWithFormat:
+                                                          @"`new %@(...)` supplies %lu argument%s, but '%@' "
+                                                          @"declares no init. Add one, or write `new %@()`.",
+                                                          node.className,
+                                                          (unsigned long)node.arguments.count,
+                                                          node.arguments.count == 1 ? "" : "s",
+                                                          node.className, node.className]
+                                         at:node.location];
                 }
             }
         }
