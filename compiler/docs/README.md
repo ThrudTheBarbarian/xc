@@ -3,7 +3,7 @@
 Documentation for the xtc language and the `xcc` toolchain. The compiler
 targets a banked 6502, arm64, x86-64, win64, arm9, 68000 and WebAssembly.
 
-- `xtc.md`: the language manual (preprocessor, command-line options, memory models, language, support files).
+- `xtc.md`: what the language is, and where the reference for each topic lives.
 - `xtc.bnf`: the grammar of the xtc source language. It mirrors the
   website's grammar page; the two are kept in step.
 - `xt-usage.md`: a summary of the xt memory model.
