@@ -1056,11 +1056,15 @@ static const NSUInteger kArm64VaForwardWords = 16;
     }
     if (hasAsm) return;                       // home nothing (slot-ref safety)
 
-    // The callee-save area sits just past the value slots; its `str`/`ldr`
-    // use a scaled unsigned imm (max 32760 for a 64-bit access). A huge
-    // value-slot region would push the save area out of range, so skip
-    // homing rather than emit an invalid offset.
-    if (ctx.valueSlotEnd + 8 * 17 > 32000) return;
+    // The callee-save area sits just past the value slots, and a 64-bit scaled
+    // immediate reaches 32760, so a big value-slot region pushes it out of
+    // range. This used to give up on homing entirely at that point — which
+    // meant a function holding a few large arrays on the stack got NO register
+    // allocation at all, and reloaded even a loop-invariant base pointer from
+    // its slot on every iteration. emitCalleeSaves already stages an
+    // out-of-range save/restore through x9, so there is nothing left to
+    // protect against; the 4 MB frame ceiling in buildSlotTableForCtx is the
+    // real bound.
 
     for (XTIRPinnedLocal *pl in fn.frameInfo.pinnedLocals) {
         [addrTaken addObject:@(pl.valueId)];
