@@ -31,3 +31,6 @@ website/site/private/
 # Python bytecode
 __pycache__/
 *.pyc
+
+# Benchmark: compiled binaries from run.py; results and reports are tracked
+benchmark/build/
