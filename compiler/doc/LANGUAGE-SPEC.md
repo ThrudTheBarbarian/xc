@@ -2109,9 +2109,10 @@ working: `i32 callback = 7;` compiles.
 
 ### 11.2 Formal grammar
 
-A BNF grammar is in `docs/xtc.bnf`. It predates the website's prose
-and may differ from it; where they disagree, the website is correct.
-Use the BNF as implementation guidance, not as the contract.
+The full grammar is on the website at `/compiler/language/grammar`,
+and the same grammar ships in the source tree as `docs/xtc.bnf`, so a
+checkout carries its own copy. The two are kept in step: change one and
+change the other. Both are written from the parser.
 
 ### 11.3 What's out of scope here
 

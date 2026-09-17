@@ -1,181 +1,220 @@
-// xtc Language Grammar (BNF)
-// ============================
+// xtc language grammar (BNF)
+// ==========================
 //
-// Describes the source language accepted by the xtc compiler as of this
-// writing. The grammar reflects the *current* shipped language — the
-// planned class-storage rework in doc/heap.md (stack-allocated class
-// instances, explicit `Myclass@` pointer syntax) is NOT yet incorporated;
-// this document will need to be updated when that lands.
+// This file and the website page /compiler/language/grammar hold the SAME
+// grammar. They are kept in step: change one and change the other.
 //
-// Conventions:
-//   - Uppercase names are terminal token classes produced by the lexer
-//     (IDENT, INT_LIT, FLOAT_LIT, CHAR_LIT, STRING_LIT).
-//   - Tokens in 'single quotes' are literal keyword / punctuation tokens.
-//   - `x*` means zero or more of x; `x+` one or more; `x?` optional.
-//   - `(a | b)` means alternation; `a ... b` is a sequence.
-//   - Whitespace and C-style comments (`// ...` and `/* ... */`) are
-//     stripped by the lexer / preprocessor and are not part of the
-//     grammar.
-//   - Preprocessor directives (#import, #define, etc.) are handled
-//     BEFORE the grammar; by the time the parser sees the token stream
-//     they have already been expanded. The preprocessor grammar is
-//     included below for reference.
+// It was written from the parser, so where prose elsewhere is ambiguous,
+// this is what the parser accepts. Rules a grammar cannot express (type
+// checking, overload resolution, reference counting) are applied after
+// parsing and are listed at the end.
+
+// ─── Notation ────────────────────────────────────────────────────────────
+
+//   Form          Meaning
+//   -----------   ------------
+//   `UPPERCASE`   a terminal produced by the lexer
+//   `'text'`      a literal keyword or punctuation token
+//   `x?`          optional
+//   `x*`          zero or more
+//   `x+`          one or more
+//   `(a | b)`     alternation
+//
+// Whitespace and comments separate tokens and are otherwise discarded. The
+// preprocessor runs to completion before the parser starts, so the parser
+// never sees a `#` directive.
+
+// ─── Reserved words ──────────────────────────────────────────────────────
+
+// These 54 words are recognised by the lexer and cannot be used as
+// identifiers:
+
+//     asm      auto     bool     break    case     catch    class    continue
+//     default  defer    delete   double   else     enum     extern   false
+//     final    float    for      global   goto     i8       i16      i32
+//     i64      if       in       inline   new      optional pointer  protocol
+//     register release  retain   return   sizeof   static   string   struct
+//     switch   throw    throws   true     try      typedef  u8       u16
+//     u32      u64      use      void     volatile while
+
+// Several words that behave like keywords are contextual and stay usable as
+// ordinary identifiers: `block`, `callback`, `weak`, `main`, `shadow`,
+// `banked`, `cloaked`, `packed`, `since`, `step`, `clobbers`, `unroll`, and
+// the annotation names below. `i32 callback = 7;` compiles.
+
+// ─── Lexical structure ───────────────────────────────────────────────────
 
 
-// ─── Preprocessor (runs before the parser) ───────────────────────────────────
+comment         ::= '//' <to end of line>
+                  | '/*' <any text, no nesting> '*/'
 
-// Preprocessor directives must begin at the start of a logical line
-// (any leading whitespace is OK) and extend to the end of that line
-// unless explicitly continued. The preprocessor strips C-style comments
-// first, then handles directives.
+IDENT           ::= [A-Za-z_] [A-Za-z0-9_]*
 
-pp-directive    ::= '#' ('import'  | 'include') pp-include-target
-                  | '#' 'define'  IDENT pp-macro-body?
-                  | '#' 'define'  IDENT '(' pp-param-list? ')' pp-macro-body?
-                  | '#' 'undef'   IDENT
-                  | '#' 'warning' pp-text-line
-                  | '#' 'error'   pp-text-line
-                  | '#' 'ifdef'   IDENT
-                  | '#' 'ifndef'  IDENT
-                  | '#' 'if'      pp-const-expr
-                  | '#' 'elif'    pp-const-expr
-                  | '#' 'else'
-                  | '#' 'endif'
-                  | '#' 'line'    INT_LIT STRING_LIT?
+INT_LIT         ::= [0-9] [0-9_]*                  // decimal
+                  | '$' [0-9A-Fa-f] [0-9A-Fa-f_]*  // hex
+                  | '0x' [0-9A-Fa-f] [0-9A-Fa-f_]* // hex
+                  | '%' [01] [01_]*                // binary
 
-pp-include-target ::= '"' FILENAME '"'          // relative to current file
-                    | '<' FILENAME '>'          // relative to include path
-                    | IDENT                      // macro that expands to either
+FLOAT_LIT       ::= [0-9] [0-9_]* '.' [0-9] [0-9_]* ( [eE] [-+]? [0-9]+ )?
 
-pp-param-list   ::= IDENT (',' IDENT)* (',' '...')?
-                  | '...'
+CHAR_LIT        ::= "'" ( char | escape ) "'"
 
-pp-macro-body   ::= (any tokens up to end of line, with line continuations
-                     via '\' at end of line)
+STRING_LIT      ::= '"' ( char | escape )* '"'
 
-// Macro expansion uses "blue-painting" for cycle detection and supports
-// function-like macros with argument substitution, `#x` stringification
-// (limited), `##` token pasting (limited), and `__VA_ARGS__` inside
-// varargs macros.
+escape          ::= '\\' ( 'n' | 'r' | 't' | '0' | '\\' | '"' | "'" )
+                  | '\\x' hex hex                  // 00 to 7F only
+                  | '\\u' hex hex hex hex          // code point, encoded UTF-8
+                  | '\\U' hex hex hex hex hex hex hex hex
 
+// Underscores in numeric literals are digit separators and are ignored.
+// Floating literals are encoded at lex time, binary32 for `float` and
+// binary64 for `double`.
+//
+// Adjacent string literals are joined, so `"ab" "cd"` is `"abcd"`. A newline
+// between the pieces makes no difference. The join happens in the parser, so
+// the token stream still holds both literals.
 
-// ─── Top level ───────────────────────────────────────────────────────────────
+// ─── Compilation unit ────────────────────────────────────────────────────
+
 
 program         ::= top-decl* EOF
 
-top-decl        ::= func-decl                        // function definition
-                  | class-decl                        // class definition
-                  | struct-decl ';'                   // top-level struct
-                  | typedef-decl ';'                  // type alias
-                  | enum-decl ';'                     // enumeration
-                  | var-decl ';'                      // global variable
+top-decl        ::= func-decl
+                  | class-decl
+                  | protocol-decl
+                  | use-decl
+                  | struct-decl ';'
+                  | enum-decl ';'
+                  | typedef-decl ';'
+                  | var-decl ';'
+
+use-decl        ::= 'use' IDENT ';'
+
+// ─── Types ───────────────────────────────────────────────────────────────
 
 
-// ─── Type declarations ───────────────────────────────────────────────────────
+type            ::= type-qualifier* base-type ptr-sigil* array-suffix?
+                  | callback-type
+                  | block-type
 
-class-decl      ::= 'class' IDENT block-open class-member* block-close
+type-qualifier  ::= ( 'main' | 'shadow' | 'banked' | 'weak' ) ':'
 
-class-member    ::= 'static'? field-decl ';'         // static = one per CLASS
-                  | 'static'? method-decl
+base-type       ::= 'i8'  | 'u8'  | 'i16' | 'u16' | 'i32' | 'u32'
+                  | 'i64' | 'u64' | 'float' | 'double'
+                  | 'bool' | 'void' | 'string' | 'pointer'
+                  | 'auto'
+                  | IDENT                  // class, struct, enum, protocol, typedef
 
-field-decl      ::= type IDENT (',' IDENT)*          // u8 r, g, b;
+ptr-sigil       ::= '*' | '@'
 
-method-decl     ::= type-list IDENT '(' param-list ')' func-annotations? block
-                  | type-list IDENT '(' param-list ')' func-annotations? ';'
+array-suffix    ::= '[' expr? ']'
 
-struct-decl     ::= 'struct' IDENT? block-open struct-field* block-close
+type-list       ::= type (',' type)*
 
-struct-field    ::= type IDENT (',' IDENT)* ';'
+// `*` is the current pointer sigil and `@` is accepted for source written
+// before it changed. The sigil binds to the type, so `u8* a, b;` declares
+// two pointers.
+//
+// Qualifiers may be stacked, as in `weak:banked:T*`. `weak:` cannot be
+// written on a `callback` or `block`, where it is already implied.
+//
+// A protocol name in a type position accepts any conforming instance.
 
-typedef-decl    ::= 'typedef' struct-decl IDENT      // typedef struct { ... } Name
-                  | 'typedef' type IDENT             // typedef T Alias
-
-enum-decl       ::= 'enum' IDENT '=' '[' enum-member-list? ']'
-
-enum-member-list ::= enum-member (',' enum-member)*
-
-enum-member     ::= IDENT ('=' expr)?                // value optional;
-                                                     // defaults to prev+1 or 0
-
-
-// ─── Functions ───────────────────────────────────────────────────────────────
-
-// A function may declare *multiple* return types, returned as a tuple.
-// The first return value uses the standard register-result convention
-// (A / A+X / A+X+u32HiReg / $B0-$B4); additional returns land in a
-// shared multi-return buffer.
-func-decl       ::= type-list IDENT '(' param-list ')' func-annotations? 'throws'? block
-                  | type-list IDENT '(' param-list ')' func-annotations? ';'
-
-func-annotations ::= ':' annotation (',' annotation)*
-
-annotation      ::= 'XtcStack'                       // use xtc software stack
-                  | 'HwStack'                         // use 6502 hardware stack
-                  | 'Naked'                           // no frame save/restore
-
-param-list      ::= 'void'                           // explicitly no parameters
-                  | '...'                             // pure varargs
-                  | param (',' param)* (',' '...')?
-
-param           ::= type IDENT
+// --- Callback and block types ---
 
 
-// ─── Variable declarations ───────────────────────────────────────────────────
+callback-type   ::= 'callback' IDENT? array-suffix? type '(' param-list ')'
+block-type      ::= 'block'    IDENT? array-suffix? type '(' param-list ')'
+
+// The declared name comes before the signature, and an array suffix binds to
+// that name: `callback tbl[2] i32(i32 n)`. A callback type also has the
+// older spelling `T^`, where `T` is a function typedef. The two spellings
+// are one type and mix freely.
+
+// ─── Declarations ────────────────────────────────────────────────────────
+
 
 var-decl        ::= var-qualifier* type declarator (',' declarator)*
 
-var-qualifier   ::= 'volatile' | 'register' | 'static' | 'global'
+var-qualifier   ::= 'static' | 'global' | 'volatile' | 'register' | 'extern'
 
 declarator      ::= IDENT array-suffix? ('=' initialiser)?
 
-initialiser     ::= expr                              // scalar or struct copy
-                  | '[' expr-list? ']'                // array literal
-                  | block-open expr-list? block-close // aggregate literal
-                                                      // (struct field init)
+initialiser     ::= expr
+                  | '{' expr-list? '}'
+                  | expr ('..' | '...') expr        // range fill, integer arrays
+
+func-decl       ::= type-list IDENT '(' param-list ')' annotations? 'throws'?
+                    ( block | ';' )
+
+param-list      ::= 'void'
+                  | '...'
+                  | param (',' param)* (',' '...')?
+
+param           ::= type IDENT?
+
+annotations     ::= ':' annotation (',' annotation)*
+
+annotation      ::= 'banked' | 'main' | 'shadow'
+                  | 'cloaked' ('(' IDENT ')')?
+                  | 'naked' | 'irq' | 'vbi' | 'action'
+                  | 'hwstack' | 'xtcstack' | 'needsos'
+
+// `{ }` is the only bracket for a body, an initialiser, an `enum` body and a
+// `struct` body. `[ ]` means subscripting and array declaration.
+//
+// A function may return several values. The return type is a type list and
+// `return` carries a matching value list.
+
+// --- Structs, enums, type aliases ---
 
 
-// ─── Types ───────────────────────────────────────────────────────────────────
+struct-decl     ::= 'struct' IDENT? (':' 'packed')? '{' struct-field* '}'
+                  | 'struct' IDENT                  // forward declaration
 
-type-list       ::= type (',' type)*                 // function return types
+struct-field    ::= type IDENT (',' IDENT)* ';'
 
-type            ::= base-type ptr-suffix* array-suffix?
+enum-decl       ::= 'enum' IDENT '=' '{' enum-member (',' enum-member)* ','? '}'
 
-base-type       ::= 'i8' | 'u8' | 'i16' | 'u16' | 'i32' | 'u32'
-                  | 'bool' | 'float' | 'void' | 'pointer' | 'string'
-                  | 'auto'                            // type inference
-                  | IDENT                             // user-defined (class, struct,
-                                                      //               enum, typedef)
+enum-member     ::= IDENT ('=' expr)?
 
-ptr-suffix      ::= '*'                               // one level of indirection ('@' accepted, transitional)
+typedef-decl    ::= 'typedef' type IDENT
+                  | 'typedef' struct-decl IDENT
 
-array-suffix    ::= '[' expr? ']'                    // size may be omitted for
-                                                      // extern/uninitialised arrays
+// Enum values start at 0 and increment by 1 unless given. Members are in
+// scope as bare identifiers, so a member is written `blue`, not
+// `colours.blue`.
+//
+// `:packed` drops the tail rounding, so the size is the sum of the field
+// widths.
+
+// --- Classes and protocols ---
 
 
-// ─── Statements ──────────────────────────────────────────────────────────────
+class-decl      ::= 'class' IDENT class-category? class-parent? class-protocols?
+                    '{' class-member* '}'
 
-block           ::= block-open statement* block-close
+class-category  ::= '(' IDENT? ')'                  // '()' is an extension
+class-parent    ::= ':' IDENT
+class-protocols ::= '<' IDENT (',' IDENT)* '>'
 
-block-open      ::= '{'
-block-close     ::= '}'
+class-member    ::= member-modifier* ( field-decl ';' | method-decl )
 
-// `defer { ... }` runs its body when the enclosing scope exits, by any path
-// (fall-through, return, break, continue), last-registered-first. The body must
-// be a block — it is emitted at several exit points, so braces keep what is
-// deferred unambiguous. It may not `return`, nor `break`/`continue` out of
-// itself. See private:docs/Design/exceptions-and-defer.md.
-defer-stmt      ::= 'defer' block
+member-modifier ::= 'static' | 'final' | 'since' '(' STRING_LIT ')'
 
-// Checked errors. A function that can raise says so with `throws`; a caller must
-// either handle the error with try/catch or itself be `throws`, or sema rejects
-// the call. `catch` arms are tested in SOURCE ORDER — a typed arm runs only when
-// the error is an instance of that class (the same RTTI check `(T* ?)obj` uses);
-// an untyped arm catches everything, and an arm shadowed by an earlier broader
-// one warns. If no arm matches, the error keeps propagating.
-// See private:docs/Design/exceptions-and-defer.md.
-throw-stmt      ::= 'throw' expr ';'
-try-stmt        ::= 'try' block catch-clause { catch-clause }
-catch-clause    ::= 'catch' '(' [ IDENT ] IDENT ')' block
+field-decl      ::= type IDENT (',' IDENT)*
+
+method-decl     ::= type-list IDENT '(' param-list ')' annotations? 'throws'?
+                    ( block | ';' )
+
+protocol-decl   ::= 'protocol' IDENT '{' protocol-member* '}'
+
+protocol-member ::= 'optional'? method-decl        // signature only, no body
+
+// ─── Statements ──────────────────────────────────────────────────────────
+
+
+block           ::= '{' statement* '}'
 
 statement       ::= if-stmt
                   | while-stmt
@@ -184,10 +223,15 @@ statement       ::= if-stmt
                   | return-stmt ';'
                   | 'break' ';'
                   | 'continue' ';'
+                  | 'goto' IDENT ';'
                   | defer-stmt
                   | throw-stmt
                   | try-stmt
+                  | ref-op-stmt
                   | asm-block
+                  | typedef-decl ';'
+                  | struct-decl ';'
+                  | enum-decl ';'
                   | var-decl ';'
                   | tuple-assign ';'
                   | expr ';'
@@ -197,246 +241,161 @@ if-stmt         ::= 'if' '(' expr ')' block ('else' (if-stmt | block))?
 
 while-stmt      ::= 'while' '(' expr ')' block
 
-switch-stmt     ::= 'switch' '(' expr ')' block-open switch-arm* block-close
-
-switch-arm      ::= ('case' case-label ':' | 'default' ':')+ statement*
-                                                      // Consecutive case/default
-                                                      // labels with no statements
-                                                      // between them share a body.
-                                                      // C-style fall-through into
-                                                      // the next arm unless the
-                                                      // body ends with 'break'.
-
-case-label      ::= const-expr                        // single value
-                  | const-expr '..' const-expr        // bounded range lo..hi
-                  | '..' const-expr                   // unbounded low: v <= hi
-                  | const-expr '..'                   // unbounded high: v >= lo
-                                                      // Ranges require the
-                                                      // switch subject to be
-                                                      // 1 byte (u8/bool/enum).
-
-for-stmt        ::= for-c-style | for-in
-
-for-c-style     ::= 'for' '(' for-init? ';' expr? ';' expr? ')' for-annotations? block
-
-for-init        ::= var-decl                          // type IDENT ('=' expr)?
-                  | expr
-
-for-annotations ::= ':' 'unroll'                      // force full loop unroll
-
-for-in          ::= 'for' '(' type? IDENT 'in' expr ')' block
-
 return-stmt     ::= 'return' expr-list?
+
+defer-stmt      ::= 'defer' block
+
+throw-stmt      ::= 'throw' expr ';'
+
+try-stmt        ::= 'try' block catch-clause+
+
+catch-clause    ::= 'catch' '(' IDENT? IDENT ')' block
+
+ref-op-stmt     ::= ('delete' | 'retain' | 'release') expr ';'
 
 tuple-assign    ::= '(' tuple-target (',' tuple-target)+ ')' '=' expr
 
-tuple-target    ::= type? IDENT                       // type optional for
-                                                      //   existing vars
+tuple-target    ::= type? IDENT
+
+// A `defer` body runs when the enclosing scope exits by any path, most
+// recently registered first. `catch` arms are tested in source order; a
+// typed arm runs only when the error is an instance of that class.
+
+// --- Switch ---
 
 
-// ─── Inline assembly ─────────────────────────────────────────────────────────
+switch-stmt     ::= 'switch' '(' expr ')' '{' switch-arm* '}'
 
-// An asm block is a sequence of 6502 assembly lines written inline. The
-// xtc parser tokenises the body like normal xtc source so that it can
-// recognise and substitute xtc identifiers (variables, labels) by their
-// allocated addresses; the reconstructed text is then passed to the xta
-// assembler. Multiple asm statements per line are separated by ':'.
-//
-// Inside an asm block the following xtc-level operators are recognised
-// as byte-extraction prefixes on variables or symbols:
-//     <v     low byte     (bits  7.. 0)
-//     >v     high byte    (bits 15.. 8)
-//     >>v    byte 2       (bits 23..16)
-//     >>>v   byte 3       (bits 31..24)
-//
-// The optional `: clobbers(...)` annotation declares which 6502
-// registers the block writes to. The compiler scans the block content
-// and warns if the declared set is a strict subset of the actual set.
+switch-arm      ::= ('case' case-label ':' | 'default' ':')+ statement*
 
-asm-block       ::= 'asm' block-open asm-line* block-close asm-clobbers?
+case-label      ::= const-expr
+                  | const-expr '..' const-expr
+                  | '..' const-expr
+                  | const-expr '..'
 
-asm-clobbers    ::= ':' 'clobbers' '(' reg-list ')'
+// Labels with no statements between them share a body. Control falls through
+// into the next arm unless the body ends with `break`. Range labels require
+// a one-byte subject.
 
-reg-list        ::= reg (',' reg)*
-
-reg             ::= 'A' | 'X' | 'Y'
-
-asm-line        ::= (tokens up to end of physical line)
-                    // each line reconstructs from the tokens the lexer
-                    // produced for it. ':' separates multiple statements
-                    // on one physical line. Raw 6502 mnemonics and
-                    // operands are passed through unchanged.
+// --- For ---
 
 
-// ─── Expressions ─────────────────────────────────────────────────────────────
+for-stmt        ::= for-c-style | for-in
 
-// Precedence ladder, high to low, matching the precedence-climbing
-// parser in xtc/parser/XTParser.m. Within the same precedence level,
-// all operators are left-associative except assignment (right).
+for-c-style     ::= 'for' '(' for-init? ';' expr? ';' expr? ')'
+                    loop-annotation? block
+
+for-init        ::= var-decl | expr
+
+for-in          ::= 'for' '(' type? IDENT 'in' iterable ')'
+                    loop-annotation? block
+
+iterable        ::= expr
+                  | range
+                  | slice
+
+range           ::= expr ('..' | '...') expr ('step' signed-int-lit)?
+
+slice           ::= postfix '[' range-bounds ']'
+
+range-bounds    ::= expr ('..' | '...') expr
+                  | '..' expr
+                  | expr '..'
+
+loop-annotation ::= ':' 'unroll'
+
+// `..` is exclusive and `...` is inclusive. A `step` must be an integer
+// literal or its negation, not an expression. Slices are valid only as the
+// iterable of a for-in loop; there are no first-class slice values.
+
+// ─── Expressions ─────────────────────────────────────────────────────────
+
+// Listed highest precedence first. All levels are left-associative except
+// assignment and the conditional, which are right-associative.
 
 expr            ::= assignment
 
-assignment      ::= ternary                           // right-associative
-                  | ternary assign-op assignment
+assignment      ::= conditional
+                  | unary assign-op assignment
 
 assign-op       ::= '=' | '+=' | '-=' | '*=' | '/=' | '%='
-                  | '&=' | '|=' | '^='
-                  | '<<='| '>>='
-                  | '<:=' | ':>='                     // rotate-left, rotate-right
-                                                      //   compound assigns
+                  | '&=' | '|=' | '^=' | '<<=' | '>>='
+                  | '<:=' | ':>='
 
-ternary         ::= logical-or ('?' expr ':' ternary)?
+conditional     ::= logical-or ('?' expr ':' conditional)?
 
 logical-or      ::= logical-and ('||' logical-and)*
-
 logical-and     ::= bitwise-or  ('&&' bitwise-or)*
-
-bitwise-or      ::= bitwise-xor ('|'  bitwise-xor)*
-
-bitwise-xor     ::= bitwise-and ('^'  bitwise-and)*
-
-bitwise-and     ::= equality    ('&'  equality)*
-
+bitwise-or      ::= bitwise-xor ('|' bitwise-xor)*
+bitwise-xor     ::= bitwise-and ('^' bitwise-and)*
+bitwise-and     ::= equality    ('&' equality)*
 equality        ::= relational  (('==' | '!=') relational)*
-
 relational      ::= shift       (('<' | '>' | '<=' | '>=') shift)*
-
 shift           ::= rotate      (('<<' | '>>') rotate)*
-
 rotate          ::= additive    (('<:' | ':>') additive)*
-
 additive        ::= multiplicative (('+' | '-') multiplicative)*
-
 multiplicative  ::= unary (('*' | '/' | '%') unary)*
 
-unary           ::= unary-op unary
-                  | '++' unary                        // prefix increment
-                  | '--' unary                        // prefix decrement
+unary           ::= ('~' | '!' | '-' | '*' | '@' | '&' | '++' | '--') unary
                   | postfix
-
-unary-op        ::= '~'                               // bitwise NOT
-                  | '!'                               // logical NOT
-                  | '-'                               // arithmetic negation
-                  | '*'                               // pointer dereference ('@' accepted, transitional)
-                  | '&'                               // address-of
 
 postfix         ::= primary postfix-op*
 
-postfix-op      ::= '++'                              // postfix increment
-                  | '--'                              // postfix decrement
-                  | '[' expr ']'                      // subscript
-                  | '.' IDENT                         // member access
-                  | '->' IDENT                        // pointer member
-                                                      //   (sugar for (@p).x)
-                  | '(' arg-list ')'                  // function call
+postfix-op      ::= '++' | '--'
+                  | '[' expr ']'
+                  | '.' IDENT
+                  | '->' IDENT
+                  | '(' arg-list ')'
 
-primary         ::= INT_LIT
-                  | FLOAT_LIT
-                  | CHAR_LIT
-                  | STRING_LIT
+primary         ::= INT_LIT | FLOAT_LIT | CHAR_LIT | STRING_LIT+
                   | 'true' | 'false'
                   | IDENT
-                  | IDENT '(' arg-list ')'            // free function call
-                  | 'new' IDENT '(' arg-list ')'      // heap allocation
-                  | 'sizeof' '(' (type | expr) ')'    // compile-time size
-                  | '(' type ')' unary                // type cast
-                  | '(' expr ')'                      // parenthesised
-                  | 'inline' ':' postfix              // force-inline a call
-                                                      //   at this site
+                  | 'new' type-name array-suffix? ('(' arg-list ')')?
+                  | 'sizeof' '(' (type | expr) ')'
+                  | '(' type ')' unary
+                  | '(' type '?' ')' unary
+                  | '(' expr ')'
+                  | 'inline' ':' postfix
 
 arg-list        ::= (expr (',' expr)*)?
+expr-list       ::= expr (',' expr)*
 
-expr-list       ::= expr (',' expr)+
+// `&` takes an address, and `&obj.method` also binds a method to its
+// receiver to fill a `callback`. `->` is shorthand for `(*p).field`.
+//
+// `(T)x` is a cast. `(T*?)x` is a checked downcast that yields null when `x`
+// is not an instance of `T`.
+//
+// `new T` allocates, `new T[n]` allocates an array, and `new T(args)` calls
+// an initialiser. `delete` frees.
 
-
-// ─── Lexical structure (informal) ────────────────────────────────────────────
-
-// Comments
-//    //     line comment through end of line
-//    /* */  block comment, not nested
-//
-// Identifiers
-//    [A-Za-z_][A-Za-z0-9_]*       subject to reserved-word exclusion
-//    Reserved words may not be used as variable names; the parser
-//    emits a diagnostic for any attempt to do so.
-//
-// Integer literals
-//    decimal:  [0-9][0-9_]*                e.g. 42, 1_000_000
-//    hex:      '$' [0-9A-Fa-f][0-9A-Fa-f_]* e.g. $FF, $DEAD_BEEF
-//    binary:   '%' [01][01_]*               e.g. %10110011
-//    Underscores are ignored (digit separators only).
-//    Char literals: '\'' char '\''  or  '\'' '\\' escape-char '\''
-//      escape-char  ::=  'n' | 't' | 'r' | '0' | '\\' | '\'' | '"' | ...
-//    Values ≤ 255 are u8 by default; larger literals widen automatically
-//    to u16 or u32 based on magnitude. Negative context defaults to i8/
-//    i16/i32 similarly.
-//
-// Float literals
-//    [0-9][0-9_]* '.' [0-9][0-9_]* ( [eE] [-+]? [0-9]+ )?
-//    Literal is encoded into the 5-byte xtc float format at lex time
-//    via XTFloatEncoding — parser sees a FLOAT_LIT token carrying the
-//    pre-encoded bytes, not a parsed double.
-//
-// String literals
-//    '"' string-char* '"'
-//    Implicitly null-terminated in memory, but sizeof("abc") == 3 (the
-//    null is not counted). Escapes: \n \t \r \0 \\ \" \'.
-//
-// Whitespace
-//    Any combination of spaces, tabs, and newlines separates tokens.
-//    Newlines are significant only to the preprocessor (for line-based
-//    directive termination) and to inline-asm reconstruction (to
-//    decide where one asm line ends and the next begins).
+// ─── Inline assembly ─────────────────────────────────────────────────────
 
 
-// ─── Notes on semantic features not captured in the grammar ──────────────────
+asm-block       ::= 'asm' '{' asm-line* '}' asm-clobbers?
 
-// Type inference (`auto`)
-//    A variable declared with type `auto` infers its type from the
-//    initialiser. The initialiser is required in this case; an `auto`
-//    declaration without `=` is an error.
-//      auto x = 5;              // inferred as u8
-//      auto f = 3.14;           // inferred as float
+asm-clobbers    ::= ':' 'clobbers' '(' reg-list ')'
+
+reg-list        ::= IDENT (',' IDENT)*
+
+asm-line        ::= <tokens to the end of the physical line>
+
+// Identifiers inside the block resolve against the program's symbols. On
+// 6502 targets the prefixes `<`, `>`, `>>` and `>>>` select byte 0 to byte 3
+// of the resolved value. On other targets the body is passed through
+// unchanged.
+
+// ─── What the grammar does not say ───────────────────────────────────────
+
+// The parser accepts more than the language allows. These rules are applied
+// after parsing:
 //
-// Method overloading
-//    Multiple functions or methods may share a name if their parameter
-//    types differ. The semantic analyser picks the best candidate based
-//    on per-argument conversion rank (exact match < widening < int-to-
-//    float < varargs). Ambiguous calls are a diagnostic error.
+//   - Type checking, integer widening and overload resolution.
+//   - `auto` requires an initialiser.
+//   - A protocol body holds signatures only.
+//   - `throws` on a callee requires the caller to handle the error or be
+//     `throws`
+// itself.
 //
-// Multi-return tuples
-//    A function declared with a comma-separated type list returns a
-//    tuple. The first value uses the register-result convention; any
-//    further values land in a shared static multi-return buffer.
-//    Callers destructure via tuple-assign syntax:
-//      (u8 lo, u8 hi) = split_u16(value);
-//
-// Classes
-//    As of this grammar, `class Name { ... }` produces an implicit
-//    pointer type: a declaration `Name c = new Name();` declares `c`
-//    as a 2-byte pointer to a heap-allocated instance. The heap is
-//    bump-allocated by `_heap_alloc` with no free list. The grammar
-//    change planned in doc/heap.md will distinguish stack-allocated
-//    instances (`Name c;`) from heap pointers (`Name@ c = new Name();`)
-//    when implemented.
-//
-// Static methods
-//    A method declared with the `static` qualifier has no `this`
-//    pointer and is called via the class name (`ClassName.method()`)
-//    rather than an instance. Singleton-style classes in lib/ (Stdio,
-//    Math, Time) are composed entirely of static methods.
-//
-// Preprocessor
-//    The preprocessor runs to completion before the parser sees any
-//    tokens. Macros are expanded with blue-painting cycle detection,
-//    conditional blocks (#ifdef / #if / #else / #endif) are resolved,
-//    and the resulting plain source is handed to the lexer. The parser
-//    never sees a `#` token.
-//
-// Inline asm variable resolution
-//    Bare identifiers inside an asm block are resolved against the xtc
-//    symbol table: a reference to a ZP-allocated variable becomes its
-//    zero-page address, a reference to a spilled variable becomes its
-//    data-section label, and a reference to a known constant is
-//    substituted by its value. The `<` / `>` / `>>` / `>>>` prefix
-//    operators extract specific bytes from the resolved value.
+//   - Whether a conversion, a cast or a dereference is legal.
+//   - Reference counting, and which targets support a given feature.

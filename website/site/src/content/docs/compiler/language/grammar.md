@@ -7,7 +7,9 @@ This is the grammar the compiler accepts. It was written from the parser, so
 where prose elsewhere on this site is ambiguous, this page says what the parser
 does. Semantic rules that a grammar cannot express, such as type checking,
 overload resolution and reference counting, are covered by the other pages in
-this section.
+this section. The same grammar ships in the source tree as
+`compiler/docs/xtc.bnf`, so a checkout carries it without the site. The two are
+kept in step.
 
 ## Notation
 
