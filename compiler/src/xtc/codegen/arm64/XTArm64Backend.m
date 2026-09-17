@@ -5103,6 +5103,148 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
     return YES;
 }
 
+// ── Staged frame-slot canonicalisation ───────────────────────────────────
+//
+// A frame slot past the encodable range (16380 for a w/s view, 32760 for x/d)
+// cannot be reached by `ldr/str <reg>, [sp, #off]`, so spMemForOff stages the
+// address and the access goes register-indirect:
+//
+//     mov w9, #16840            (+ movk w9, #hi, lsl #16 past 64 KB)
+//     add x9, sp, x9
+//     str w17, [x9]
+//
+// The spill peephole cannot see through that. It parses `[sp, #off]` only, so
+// it never forwards a store to the load that follows it, and `add x9, sp, x9`
+// trips its aliasing check and turns dead-store removal off for the whole
+// function. A frame over 16 KB therefore loses BOTH optimisations, and every
+// slot access costs three instructions instead of one — which is what any loop
+// over a stack array hits. Measured on int_accum's inner loop: 21 instructions
+// over the cliff against 10 under it, for the same source.
+//
+// Canonicalising the idiom back to `[sp, #off]` before the peepholes run lets
+// their existing logic apply unchanged; expandStagedSlots re-expands whatever
+// is still out of range afterwards.
++ (NSString *)canonicaliseStagedSlots:(NSString *)text {
+    NSArray<NSString *> *lines = [text componentsSeparatedByString:@"\n"];
+    NSMutableArray<NSString *> *out = [NSMutableArray arrayWithCapacity:lines.count];
+    NSUInteger i = 0;
+    while (i < lines.count) {
+        NSString *t0 = [lines[i] stringByTrimmingCharactersInSet:
+                        [NSCharacterSet whitespaceCharacterSet]];
+        NSString *stageReg = nil;           // "x9" / "x16"
+        int64_t off = -1;
+        NSUInteger consumed = 0;
+
+        // Form A: mov wN, #lo [; movk wN, #hi, lsl #16] ; add xN, sp, xN
+        if ([t0 hasPrefix:@"mov w9, #"] || [t0 hasPrefix:@"mov w16, #"]) {
+            NSString *wreg = [t0 hasPrefix:@"mov w9, #"] ? @"w9" : @"w16";
+            NSString *xreg = [wreg isEqualToString:@"w9"] ? @"x9" : @"x16";
+            int64_t lo = [[t0 substringFromIndex:[t0 rangeOfString:@"#"].location + 1] longLongValue];
+            NSUInteger j = i + 1;
+            int64_t hi = 0;
+            NSString *movk = [NSString stringWithFormat:@"movk %@, #", wreg];
+            if (j < lines.count) {
+                NSString *tj = [lines[j] stringByTrimmingCharactersInSet:
+                                [NSCharacterSet whitespaceCharacterSet]];
+                if ([tj hasPrefix:movk] && [tj hasSuffix:@", lsl #16"]) {
+                    NSString *mid = [tj substringFromIndex:movk.length];
+                    hi = [[mid componentsSeparatedByString:@","][0] longLongValue];
+                    j++;
+                }
+            }
+            NSString *addForm = [NSString stringWithFormat:@"add %@, sp, %@", xreg, xreg];
+            if (j < lines.count) {
+                NSString *tj = [lines[j] stringByTrimmingCharactersInSet:
+                                [NSCharacterSet whitespaceCharacterSet]];
+                if ([tj isEqualToString:addForm]) {
+                    off = lo + (hi << 16);
+                    stageReg = xreg;
+                    consumed = j + 1 - i;
+                }
+            }
+        }
+        // Form B: add xN, sp, #M, lsl #12
+        if (!stageReg) {
+            for (NSString *xreg in @[@"x9", @"x16"]) {
+                NSString *pre = [NSString stringWithFormat:@"add %@, sp, #", xreg];
+                if ([t0 hasPrefix:pre] && [t0 hasSuffix:@", lsl #12"]) {
+                    NSString *mid = [t0 substringFromIndex:pre.length];
+                    off = [[mid componentsSeparatedByString:@","][0] longLongValue] << 12;
+                    stageReg = xreg;
+                    consumed = 1;
+                    break;
+                }
+            }
+        }
+
+        // The access must be the very next line and use exactly [xN].
+        if (stageReg && off >= 0 && i + consumed < lines.count) {
+            NSString *acc = [lines[i + consumed] stringByTrimmingCharactersInSet:
+                             [NSCharacterSet whitespaceCharacterSet]];
+            NSString *needle = [NSString stringWithFormat:@", [%@]", stageReg];
+            NSRange nr = [acc rangeOfString:needle];
+            if (nr.location != NSNotFound && [acc hasSuffix:needle]) {
+                NSString *head = [acc substringToIndex:nr.location];   // "<mnem> <reg>"
+                NSRange spc = [head rangeOfString:@" "];
+                if (spc.location != NSNotFound) {
+                    NSString *mnem = [head substringToIndex:spc.location];
+                    NSString *reg = [[head substringFromIndex:spc.location + 1]
+                        stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+                    // Only the plain word/dword loads and stores spMemForOff emits,
+                    // and never when the data register IS the staging register.
+                    BOOL simple = [mnem isEqualToString:@"ldr"] || [mnem isEqualToString:@"str"];
+                    if (simple && ![reg isEqualToString:stageReg]
+                        && ![reg isEqualToString:[@"w" stringByAppendingString:
+                                                  [stageReg substringFromIndex:1]]]) {
+                        [out addObject:[NSString stringWithFormat:@"    %@ %@, [sp, #%lld]",
+                                        mnem, reg, off]];
+                        i += consumed + 1;
+                        continue;
+                    }
+                }
+            }
+        }
+        [out addObject:lines[i]];
+        i++;
+    }
+    return [out componentsJoinedByString:@"\n"];
+}
+
+// Re-expand any `[sp, #off]` the hardware cannot encode, using the same staging
+// spMemForOff uses. Runs after the peepholes, so anything they forwarded or
+// dropped never pays the staging cost.
++ (NSString *)expandStagedSlots:(NSString *)text {
+    NSArray<NSString *> *lines = [text componentsSeparatedByString:@"\n"];
+    NSMutableArray<NSString *> *out = [NSMutableArray arrayWithCapacity:lines.count];
+    NSString *m = nil, *r = nil, *o = nil;
+    for (NSString *ln in lines) {
+        if (([self parseSpLine:ln mnem:&m reg:&r off:&o])
+            && ([m isEqualToString:@"ldr"] || [m isEqualToString:@"str"])) {
+            long long off = [o longLongValue];
+            NSUInteger max = ([r hasPrefix:@"w"] || [r hasPrefix:@"s"]) ? 16380 : 32760;
+            if (off > (long long)max) {
+                NSString *stage = ([r isEqualToString:@"x9"] || [r isEqualToString:@"w9"])
+                                  ? @"x16" : @"x9";
+                NSString *w = [@"w" stringByAppendingString:[stage substringFromIndex:1]];
+                if ((off & 0xFFF) == 0 && (off >> 12) <= 4095) {
+                    [out addObject:[NSString stringWithFormat:@"    add %@, sp, #%lld, lsl #12",
+                                    stage, off >> 12]];
+                } else {
+                    [out addObject:[NSString stringWithFormat:@"    mov %@, #%lld", w, off & 0xFFFF]];
+                    if (off > 0xFFFF)
+                        [out addObject:[NSString stringWithFormat:@"    movk %@, #%lld, lsl #16",
+                                        w, off >> 16]];
+                    [out addObject:[NSString stringWithFormat:@"    add %@, sp, %@", stage, stage]];
+                }
+                [out addObject:[NSString stringWithFormat:@"    %@ %@, [%@]", m, r, stage]];
+                continue;
+            }
+        }
+        [out addObject:ln];
+    }
+    return [out componentsJoinedByString:@"\n"];
+}
+
 + (NSString *)peepholeSpills:(NSString *)text {
     NSArray<NSString *> *lines = [text componentsSeparatedByString:@"\n"];
     NSString *m = nil, *r = nil, *o = nil;
@@ -5720,7 +5862,9 @@ static BOOL isScratchDst(NSString *reg) {
         }
     }
     [out appendString:@"\n"];
-    [moduleOut appendString:[self peepholeFallthrough:[self peepholeCopyProp:[self peepholeSpills:body]]]];
+    [moduleOut appendString:[self expandStagedSlots:
+        [self peepholeFallthrough:[self peepholeCopyProp:
+         [self peepholeSpills:[self canonicaliseStagedSlots:body]]]]]];
 }
 
 #pragma mark - Public
