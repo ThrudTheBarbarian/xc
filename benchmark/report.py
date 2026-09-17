@@ -22,6 +22,10 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(ROOT)
 PROFILE = os.path.join(REPO, "compiler", "src", "xtc", "ir", "XTIROptTargetProfile.m")
 OPTS = ["O0", "O1", "O2", "O3"]
+SERIES = (("xc", "#2563eb"), ("objc", "#f59e0b"),
+          ("xc_x86_64", "#7c3aed"), ("objc_x86_64", "#059669"))
+SERIES_LABEL = {"xc": "xc arm64", "objc": "ObjC arm64",
+                "xc_x86_64": "xc x86-64", "objc_x86_64": "ObjC x86-64"}
 
 CSS = """
 :root{--ink:#16181d;--dim:#6b7280;--line:#e4e7ec;--bg:#fff;--panel:#f7f8fa;
@@ -105,13 +109,13 @@ def svg_chart(name, per_opt):
         out.append('<text x="%.1f" y="%d" font-size="11" fill="#6b7280" '
                    'text-anchor="middle">%s</text>'
                    % (gx + gw / 2, H - 10, opt))
-        for bi, (lang, colour) in enumerate((("xc", "#2563eb"), ("objc", "#f59e0b"))):
+        for bi, (lang, colour) in enumerate(SERIES):
             v = langs.get(lang)
             if v is None:
                 continue
             bh = (v / vmax) * plot_h
-            bw = gw * 0.30
-            bx = gx + gw / 2 - bw - 3 + bi * (bw + 6)
+            bw = gw * 0.17
+            bx = gx + gw / 2 - 2 * bw - 3 + bi * (bw + 2)
             out.append('<rect x="%.1f" y="%.1f" width="%.1f" height="%.1f" rx="2" '
                        'fill="%s"><title>%s %s %.4fs</title></rect>'
                        % (bx, PAD_T + plot_h - bh, bw, bh, colour, lang, opt, v))
@@ -141,9 +145,15 @@ def main():
              "<div><b>runs per point</b>%s</div><div><b>benchmarks</b>%d</div></div>"
              % (html.escape(data.get("version", "")), html.escape(data.get("platform", "")),
                 html.escape(str(data.get("repeats", ""))), len(net)))
-    p.append("<p class='note'>Each figure is the fastest of the runs, with process "
-             "startup measured separately and subtracted. Both programs print a "
-             "checksum and a run is rejected if they disagree.</p>")
+    p.append("<p class='note'>Each figure is the fastest of the runs. Every program "
+             "times its own measured region with clock_gettime(CLOCK_MONOTONIC), so "
+             "process startup and data setup are outside the number. Both programs "
+             "print a checksum and a run is rejected if they disagree.</p>")
+    p.append("<p class='note'>The arm64 Objective-C column is Apple's runtime and "
+             "Foundation; the x86-64 column is libobjc2 and gnustep-base. Comparing "
+             "a ratio across the two platforms therefore also compares two different "
+             "Objective-C implementations, which matters most for the benchmarks "
+             "dominated by allocation and dispatch.</p>")
 
     mism = data.get("mismatches", [])
     if mism:
@@ -153,25 +163,25 @@ def main():
 
     # ---- summary table -------------------------------------------------
     p.append("<h2>Time by benchmark and optimisation level</h2>")
-    p.append("<div class='legend'><span><i class='sw' style='background:#2563eb'></i>xc</span>"
-             "<span><i class='sw' style='background:#f59e0b'></i>Objective-C</span>"
-             "<span>ratio below 1 means xc is faster</span></div>")
+    p.append("<div class='legend'>" + "".join(
+        "<span><i class='sw' style='background:%s'></i>%s</span>" % (c, SERIES_LABEL[k])
+        for k, c in SERIES) + "<span>ratio below 1 means xc is faster</span></div>")
     p.append("<table><tr><th>benchmark</th>" +
-             "".join("<th colspan='3'>%s</th>" % o for o in OPTS) + "</tr>")
-    p.append("<tr><th></th>" + "".join("<th>xc</th><th>objc</th><th>ratio</th>"
+             "".join("<th colspan='2'>%s</th>" % o for o in OPTS) + "</tr>")
+    p.append("<tr><th></th>" + "".join("<th>arm64</th><th>x86-64</th>"
                                        for _ in OPTS) + "</tr>")
     for name in sorted(net):
         row = ["<tr><td>%s</td>" % html.escape(name)]
         for o in OPTS:
             l = net[name].get(o, {})
-            x, oc = l.get("xc"), l.get("objc")
-            if x is None or oc is None:
-                row.append("<td class='n'>-</td><td class='n'>-</td><td class='n'>-</td>")
-                continue
-            ratio = (x / oc) if oc else 0.0
-            klass = "win" if ratio < 1.0 else ("lose" if ratio > 1.5 else "")
-            row.append("<td class='n'>%.4f</td><td class='n'>%.4f</td>"
-                       "<td class='n %s'>%.2f&times;</td>" % (x, oc, klass, ratio))
+            for a, b in (("xc", "objc"), ("xc_x86_64", "objc_x86_64")):
+                x, oc = l.get(a), l.get(b)
+                if x is None or oc is None:
+                    row.append("<td class='n'>-</td>")
+                    continue
+                ratio = (x / oc) if oc else 0.0
+                klass = "win" if ratio < 1.0 else ("lose" if ratio > 1.5 else "")
+                row.append("<td class='n %s'>%.2f&times;</td>" % (klass, ratio))
         row.append("</tr>")
         p.append("".join(row))
     p.append("</table>")

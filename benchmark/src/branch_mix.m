@@ -15,7 +15,7 @@ int main(int argc, char **argv)
             for (uint32_t i = 0; i < N; i++)
                 { if ((a[i] & 1u) == 0u) acc = acc + a[i]; else acc = acc ^ a[i]; }
         int64_t t1 = bench_now_us();
-        printf("%u %lld\n", acc, t1 - t0);
+        printf("%u %lld\n", acc, (long long)(t1 - t0));
     }
     return 0;
     }

@@ -74,6 +74,88 @@ def compile_xc(name, opt, out):
     return r.returncode == 0, (r.stderr or r.stdout)
 
 
+def compile_xc_x86(name, opt, out):
+    """Cross-build for x86-64 Linux. The result is a static ELF, so the remote
+    host needs no toolchain and no loader of its own."""
+    xcc = os.path.join(REPO, "compiler", "bin", "osx", "xcc")
+    cmd = [xcc, "-H", os.path.join(REPO, "compiler"), "-I", SRC, "-A", "x86_64",
+           "-" + opt, "-o", out, os.path.join(SRC, name + ".xc")]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    return r.returncode == 0, (r.stderr or r.stdout)
+
+
+def build_objc_remote(name, opt, tag, host):
+    """Compile the Objective-C half ON the remote host.
+
+    GNUstep Objective-C cannot be cross-built from macOS, so the source goes
+    over and clang runs there against libobjc2 and gnustep-base. The flags
+    mirror the ones that host's own environment script sets.
+    """
+    src = os.path.join(SRC, name + ".m")
+    inc = os.path.join(SRC, "include", "bench_time.h")
+    rdir = "/tmp/xcbench"
+    pre = ("mkdir -p %s/include" % rdir)
+    if subprocess.run(["ssh", "-o", "ConnectTimeout=10", host, pre]).returncode != 0:
+        return None, "remote mkdir failed"
+    for f, dest in ((src, rdir + "/"), (inc, rdir + "/include/")):
+        if subprocess.run(["scp", "-q", f, "%s:%s" % (host, dest)]).returncode != 0:
+            return None, "scp failed"
+    out = "%s/%s.%s" % (rdir, name, tag)
+    cmd = ("set -a; [ -f ~/ci/ci-env.sh ] && . ~/ci/ci-env.sh; set +a; cd %s && "
+           "clang -fobjc-arc -fobjc-runtime=gnustep-2.2 -I/opt/gnustep/include -I%s "
+           "-%s -L/opt/gnustep/lib -lobjc -lgnustep-base -o %s %s.m"
+           % (rdir, rdir, opt, out, name))
+    r = subprocess.run(["ssh", "-o", "ConnectTimeout=20", host, cmd],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        return None, (r.stderr or r.stdout).strip().splitlines()[:2]
+    return out, None
+
+
+def run_remote(remote_path, repeats, host, env_prefix=""):
+    """Run an already-present remote binary and take the fastest report."""
+    best, checksum = None, None
+    for _ in range(repeats):
+        r = subprocess.run(["ssh", "-o", "ConnectTimeout=10", host,
+                            "%schmod +x %s && %s x" % (env_prefix, remote_path, remote_path)],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            return None, "remote exit %d" % r.returncode
+        parts = r.stdout.split()
+        if len(parts) != 2:
+            return None, "bad remote output %r" % r.stdout.strip()[:40]
+        checksum = parts[0]
+        try:
+            us = int(parts[1]) / 1e6
+        except ValueError:
+            return None, "bad elapsed %r" % parts[1]
+        best = us if best is None else min(best, us)
+    return best, checksum
+
+
+def measure_remote(binary, repeats, host):
+    """Copy once, then run there. Same self-reported timing as the local path."""
+    if subprocess.run(["scp", "-q", binary, "%s:/tmp/" % host]).returncode != 0:
+        return None, "scp failed"
+    remote = "/tmp/" + os.path.basename(binary)
+    best, checksum = None, None
+    for _ in range(repeats):
+        r = subprocess.run(["ssh", "-o", "ConnectTimeout=10", host,
+                            "chmod +x %s && %s x" % (remote, remote)],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            return None, "remote exit %d" % r.returncode
+        parts = r.stdout.split()
+        if len(parts) != 2:
+            return None, "bad remote output %r" % r.stdout.strip()[:40]
+        checksum = parts[0]
+        try:
+            best = min(best, int(parts[1]) / 1e6) if best is not None else int(parts[1]) / 1e6
+        except ValueError:
+            return None, "bad elapsed %r" % parts[1]
+    return best, checksum
+
+
 def compile_objc(name, opt, out):
     cmd = ["clang", "-fobjc-arc", "-" + opt, "-I", SRC, "-framework", "Foundation",
            "-o", out, os.path.join(SRC, name + ".m")]
@@ -133,28 +215,54 @@ def main():
     os.makedirs(work, exist_ok=True)
 
     results, failures, mismatches = {}, [], []
-    langs = (("xc", compile_xc), ("objc", compile_objc))
+    langs = [("xc", compile_xc), ("objc", compile_objc)]
+    host = env.get("XTC_LINUX_HOST")
+    if host:
+        langs.append(("xc_x86_64", compile_xc_x86))
+        langs.append(("objc_x86_64", None))   # compiled on the remote host
+        print("x86-64 legs enabled on the configured host: xc is cross-built here "
+              "and shipped as a static ELF; Objective-C is compiled there against "
+              "libobjc2 and gnustep-base, which cannot be cross-built from macOS.")
 
     for opt in opts:
         for name in names:
             checks = {}
             for lang, compiler in langs:
+                if lang == "objc_x86_64":
+                    rpath, err = build_objc_remote(name, opt, opt, host)
+                    if rpath is None:
+                        failures.append((name, lang, opt, err if isinstance(err, list) else [str(err)]))
+                        continue
+                    secs, checksum = run_remote(
+                        rpath, args.repeats, host,
+                        env_prefix="export LD_LIBRARY_PATH=/opt/gnustep/lib; ")
+                    if secs is None:
+                        failures.append((name, lang, opt, [checksum]))
+                        continue
+                    checks[lang] = checksum
+                    results.setdefault(name, {}).setdefault(opt, {})[lang] = secs
+                    print("  %-14s %-11s %-2s  %8.4fs  checksum %s"
+                          % (name, lang, opt, secs, checksum))
+                    continue
                 out = os.path.join(work, "%s.%s.%s" % (name, lang, opt))
                 ok, log = compiler(name, opt, out)
                 if not ok:
                     failures.append((name, lang, opt, log.strip().splitlines()[:2]))
                     continue
-                secs, checksum = measure(out, args.repeats)
+                if lang == "xc_x86_64":
+                    secs, checksum = measure_remote(out, args.repeats, host)
+                else:
+                    secs, checksum = measure(out, args.repeats)
                 if secs is None:
                     failures.append((name, lang, opt, [checksum]))
                     continue
                 checks[lang] = checksum
                 results.setdefault(name, {}).setdefault(opt, {})[lang] = secs
-                print("  %-14s %-4s %-2s  %8.4fs  checksum %s"
+                print("  %-14s %-9s %-2s  %8.4fs  checksum %s"
                       % (name, lang, opt, secs, checksum))
-            if len(checks) == 2 and checks["xc"] != checks["objc"]:
+            if len(set(checks.values())) > 1:
                 mismatches.append((name, opt, checks))
-                print("  %-14s %-4s %-2s  CHECKSUM MISMATCH %s" % (name, "", opt, checks))
+                print("  %-14s %-9s %-2s  CHECKSUM MISMATCH %s" % (name, "", opt, checks))
 
     # Timing is taken inside the program, so there is nothing to subtract.
     # The baseline pair is kept only to show that startup is excluded: it

@@ -16,7 +16,7 @@ int main(int argc, char **argv)
             h = h + r;
             }
         int64_t t1 = bench_now_us();
-        printf("%u %lld\n", h, t1 - t0);
+        printf("%u %lld\n", h, (long long)(t1 - t0));
     }
     return 0;
     }

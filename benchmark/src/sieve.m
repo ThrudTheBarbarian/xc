@@ -22,7 +22,7 @@ int main(int argc, char **argv)
             acc = acc + count + (r & seed);
             }
         int64_t t1 = bench_now_us();
-        printf("%u %lld\n", acc, t1 - t0);
+        printf("%u %lld\n", acc, (long long)(t1 - t0));
     }
     return 0;
     }

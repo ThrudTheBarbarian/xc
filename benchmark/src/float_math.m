@@ -16,7 +16,7 @@ int main(int argc, char **argv)
         for (uint32_t r = 0; r < 4000; r++)
             for (uint32_t i = 0; i < N; i++) acc = acc + (double)(a[i] * b[i]);
         int64_t t1 = bench_now_us();
-        printf("%u %lld\n", (uint32_t)acc, t1 - t0);
+        printf("%u %lld\n", (uint32_t)acc, (long long)(t1 - t0));
     }
     return 0;
     }
