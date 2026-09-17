@@ -1509,6 +1509,30 @@ static const NSUInteger kArm64VaForwardWords = 16;
 // (saves the per-iteration `mov #imm` — and on a loop-control compare, shortens
 // the dependency feeding the branch). The constant is rematerialised per use by
 // the backend anyway, so eliding it here has no liveness effect.
+// The `#N, lsl #12` form of the same imm12 field: add/sub/cmp can take a
+// 12-bit immediate shifted left by 12, so a constant that is a multiple of 4096
+// and no wider than 24 bits is still a single instruction. Without this a loop
+// bound of exactly 4096 — the common case, an array length — fell off the imm12
+// cliff at 4095 and materialised through `mov` into a register on the
+// loop-control path. Returns the operand text ("1, lsl #12") or nil.
++ (NSString *)imm12ShiftedForOperand:(XTIROperand *)op ctx:(XTArm64FnCtx *)ctx {
+    int64_t v;
+    if (op.kind == XTIROperandKindImmI) {
+        v = op.intValue;
+    } else if (op.kind == XTIROperandKindUse) {
+        XTIRInsn *d = ctx.defOf[@(op.valueId)];
+        if (!d || d.opcode != XTIROpConst || d.operands.count < 1 ||
+            d.operands[0].kind != XTIROperandKindImmI) return nil;
+        v = d.operands[0].intValue;
+    } else {
+        return nil;
+    }
+    if (v <= 4095 || (v & 0xFFF) != 0) return nil;
+    int64_t hi = v >> 12;
+    if (hi > 4095) return nil;
+    return [NSString stringWithFormat:@"%lld, lsl #12", (long long)hi];
+}
+
 + (NSNumber *)imm12ForOperand:(XTIROperand *)op ctx:(XTArm64FnCtx *)ctx {
     int64_t v;
     if (op.kind == XTIROperandKindImmI) {
@@ -2388,6 +2412,12 @@ static XTIROperand *icmpZeroTestValue(XTIRInsn *icmp, XTArm64FnCtx *ctx) {
         if (imm) {
             r0 = [self operandReg:insn.operands[0] intoScratch:@"w16" ctx:ctx];
             [ctx.out appendFormat:@"    cmp %@, #%@\n", r0, imm];
+            return [self condStringForICmpPredicate:insn.predicate];
+        }
+        NSString *immS = [self imm12ShiftedForOperand:insn.operands[1] ctx:ctx];
+        if (immS) {
+            r0 = [self operandReg:insn.operands[0] intoScratch:@"w16" ctx:ctx];
+            [ctx.out appendFormat:@"    cmp %@, #%@\n", r0, immS];
             return [self condStringForICmpPredicate:insn.predicate];
         }
         r0 = [self operandReg:insn.operands[0] intoScratch:@"w16" ctx:ctx];
@@ -3393,6 +3423,18 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
             // Fold a small constant addend/subtrahend into the imm12 form
             // (`add d, a, #imm` / `sub d, a, #imm`) instead of materialising it.
             if (insn.opcode == XTIROpAdd || insn.opcode == XTIROpSub) {
+                NSString *immSh = [self imm12ShiftedForOperand:insn.operands[1] ctx:ctx];
+                if (immSh) {
+                    NSString *sc = [self regName:16 forType:insn.result.type];
+                    NSString *ar = [self operandReg:insn.operands[0] intoScratch:sc ctx:ctx];
+                    NSString *dr = [self resultReg:insn.result.valueId scratch:sc ctx:ctx];
+                    [ctx.out appendFormat:@"    %@ %@, %@, #%@\n",
+                        insn.opcode == XTIROpAdd ? @"add" : @"sub", dr, ar, immSh];
+                    if (![ctx.noCanon containsObject:@(insn.result.valueId)])
+                        [self canonicaliseReg:dr toType:insn.result.type ctx:ctx];
+                    [self storeReg:dr intoValue:insn.result.valueId ctx:ctx];
+                    break;
+                }
                 NSNumber *imm = [self imm12ForOperand:insn.operands[1] ctx:ctx];
                 if (imm) {
                     // The scratch is SIZED BY THE RESULT TYPE, like the
