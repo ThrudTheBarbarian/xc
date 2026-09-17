@@ -5454,12 +5454,59 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
     return [out componentsJoinedByString:@"\n"];
 }
 
-+ (NSString *)peepholeSpills:(NSString *)text {
+// The frame byte RANGE a taken address could reach: for every value whose
+// address is taken (AddrOf), and every aggregate — which is only ever touched
+// through one — the span from its slot offset to slot + size.
+//
+// An aggregate occupies ONE slot but spans thousands of bytes, so marking bare
+// slot offsets is not enough: a pointer walking it reaches addresses the offset
+// set never mentions. Ranges are what the aliasing question is about.
++ (void)aliasableRangeForCtx:(XTArm64FnCtx *)ctx
+                          lo:(NSUInteger *)outLo
+                          hi:(NSUInteger *)outHi {
+    NSUInteger lo = NSUIntegerMax, hi = 0;
+    if (!ctx.fn || !ctx.slotOffsets) { *outLo = 0; *outHi = NSUIntegerMax; return; }
+    NSMutableSet<NSNumber *> *taken = [NSMutableSet set];
+    for (XTIRBlock *bb in ctx.fn.blocks) {
+        NSMutableArray<XTIRInsn *> *all = [NSMutableArray array];
+        [all addObjectsFromArray:bb.phiNodes];
+        [all addObjectsFromArray:bb.instructions];
+        if (bb.terminator) [all addObject:bb.terminator];
+        for (XTIRInsn *in in all)
+            if (in.opcode == XTIROpAddrOf)
+                for (XTIROperand *o in in.operands)
+                    if (o.kind == XTIROperandKindUse) [taken addObject:@(o.valueId)];
+    }
+    for (XTIRPinnedLocal *pl in ctx.fn.frameInfo.pinnedLocals)
+        [taken addObject:@(pl.valueId)];
+    for (NSUInteger vid = 0; vid < ctx.slotOffsets.count; vid++) {
+        XTIRValue *v = [ctx.fn valueForId:vid];
+        BOOL agg = (v && v.type && v.type.kind == XTIRTypeKindAgg);
+        if (!agg && ![taken containsObject:@(vid)]) continue;
+        NSUInteger off = ctx.slotOffsets[vid].unsignedIntegerValue;
+        NSUInteger sz = 8;
+        if (agg) {
+            sz = [self arm64AggSize:v.type.layout];
+            sz = (sz + 7) & ~(NSUInteger)7;
+            if (sz < 8) sz = 8;
+        }
+        if (off < lo) lo = off;
+        if (off + sz > hi) hi = off + sz;
+    }
+    if (lo == NSUIntegerMax) { lo = 0; hi = 0; }
+    *outLo = lo; *outHi = hi;
+}
+
++ (NSString *)peepholeSpills:(NSString *)text
+                 aliasLo:(NSUInteger)aliasLo
+                 aliasHi:(NSUInteger)aliasHi
+                 argArea:(NSUInteger)argArea {
     NSArray<NSString *> *lines = [text componentsSeparatedByString:@"\n"];
     NSString *m = nil, *r = nil, *o = nil;
 
     // Cleanliness scan + (if clean) per-offset load count.
-    BOOL clean = YES;
+    BOOL clean = YES;            // no non-frame stp/ldp
+    BOOL spAddrTaken = NO;       // some frame address escaped
     NSCountedSet<NSString *> *loads = [NSCountedSet set];
     for (NSString *ln in lines) {
         NSString *t = [ln stringByTrimmingCharactersInSet:
@@ -5471,7 +5518,7 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
         if (([t hasPrefix:@"add "] || [t hasPrefix:@"sub "])
             && ![t hasPrefix:@"add sp,"] && ![t hasPrefix:@"sub sp,"]
             && [t rangeOfString:@", sp,"].location != NSNotFound) {
-            clean = NO;
+            spAddrTaken = YES;      // only the aliasable RANGE is at risk
         }
         if (([t hasPrefix:@"stp "] || [t hasPrefix:@"ldp "])
             && [t rangeOfString:@"x29, x30"].location == NSNotFound) {
@@ -5491,14 +5538,22 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
         if ([self parseSpLine:ln mnem:&sm reg:&sr off:&so]
             && [sm isEqualToString:@"str"]) {
             // (clean) dead store — slot never loaded → drop.
-            if (clean && [loads countForObject:so] == 0) { i++; continue; }
+            // Outgoing arguments live at [sp, #0 .. maxOutStack) and are read by
+            // the CALLEE, so no `ldr` in THIS function ever names them. Treating
+            // them as dead deletes the arguments to every stack-passing call —
+            // which is what broke 14 of 19 benchmarks on two earlier attempts.
+            long long soff = [so longLongValue];
+            BOOL isArg = soff < (long long)argArea;
+            BOOL reachable = spAddrTaken
+                && soff >= (long long)aliasLo && soff < (long long)aliasHi;
+            if (clean && !isArg && !reachable && [loads countForObject:so] == 0) { i++; continue; }
             // store→load forward (load on the very next line, same class).
             NSString *lm = nil, *lr = nil, *lo = nil;
             if (i + 1 < lines.count
                 && [self parseSpLine:lines[i + 1] mnem:&lm reg:&lr off:&lo]
                 && [lm isEqualToString:@"ldr"] && [lo isEqualToString:so]
                 && [self regClass:lr] == [self regClass:sr]) {
-                BOOL dropStore = clean && [loads countForObject:so] == 1;
+                BOOL dropStore = clean && !isArg && !reachable && [loads countForObject:so] == 1;
                 if (!dropStore) [outLines addObject:ln];  // keep the store
                 if (![lr isEqualToString:sr]) {            // skip a no-op move
                     BOOL fp = ([self regClass:lr] == 'd' || [self regClass:lr] == 's');
@@ -6214,11 +6269,15 @@ static BOOL sameArm64Reg(NSString *a, NSString *b) {
         }
     }
     [out appendString:@"\n"];
+    NSUInteger aliasLo = 0, aliasHi = NSUIntegerMax;
+    [self aliasableRangeForCtx:ctx lo:&aliasLo hi:&aliasHi];
     [moduleOut appendString:
         [self expandStagedSlots:
             [self peepholeFallthrough:[self peepholeCopyProp:
              [self peepholeRedundantReloads:
-              [self peepholeSpills:[self canonicaliseStagedSlots:body]]]]]
+              [self peepholeSpills:[self canonicaliseStagedSlots:body]
+                                  aliasLo:aliasLo aliasHi:aliasHi
+                                  argArea:ctx.maxOutStack]]]]
                        frameBase:ctx.frameBase
                     saveAreaFrom:ctx.saveAreaOffset
                               to:ctx.saveAreaOffset + 8 * ctx.savedRegs.count]];
