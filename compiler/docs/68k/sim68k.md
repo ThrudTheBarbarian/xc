@@ -1,7 +1,7 @@
 # sim68k — instrumented Atari ST (68000/68030) emulator
 
-`xst` (`src/xst/sim68k.c`, binary `bin/<plat>/xst`) is the Atari ST/TT
-counterpart to `xts`. It is a single self-contained simulator in pure C
+`xcc-sim-68k` (`src/xst/sim68k.c`, binary `bin/<plat>/xcc-sim-68k`) is the
+Atari ST/TT counterpart to `xcc-sim-6502`. It is a single self-contained simulator in pure C
 that loads a GEMDOS executable and runs it, so xtc's 68k backend can be
 tested and oracle-diffed in the same way as the 6502 backend.
 
@@ -67,7 +67,7 @@ then advance bytes, with `1` = +254), builds the 256-byte basepage
 (`p_lowtpa`…`p_env`, with `p_cmdlin` as a Pascal string), sets up the
 stack so that `4(sp)` is the basepage, and sets `PC = p_tbase`.
 
-## Instrumentation (mirrors xts `XTS_*` under `XST_*`)
+## Instrumentation (mirrors `xcc-sim-6502`'s `XTS_*` under `XST_*`)
 
 | env var | effect |
 |---------|--------|
@@ -78,9 +78,9 @@ stack so that `4(sp)` is the basepage, and sets `PC = p_tbase`.
 | `XST_WATCH=hex` | log every write to an address |
 | `XST_TRAPTRACE=1` | log every GEMDOS/BIOS/XBIOS call (args + return) |
 
-CLI: `xst [opts] <file.prg> [mapfile]` with `-d`/`--dump-output`,
+CLI: `xcc-sim-68k [opts] <file.prg> [mapfile]` with `-d`/`--dump-output`,
 `--cycles`, `--cpu 68000|68030`, `--mem <MB>`, `--args "<cmdline>"`.
-The optional mapfile uses the same `ADDR: b0 b1 …` prefill format as xts.
+The optional mapfile uses the same `ADDR: b0 b1 …` prefill format as `xcc-sim-6502`.
 
 ## Validation
 
@@ -93,11 +93,11 @@ conditionals, and the GEMDOS console and file paths. Rebuild them with
 
 The 68k code generator runs end to end:
 
-    xtc -A m68k|68000|68030  foo.xc  -o foo.prg
+    xcc -A m68k|68000|68030  foo.xc  -o foo.prg
 
-This runs `xtc-fe` → `xtcg-68k` (`XTM68kBackend`, a naive
+This runs `xcc-fe` → `xcc-cg-68k` (`XTM68kBackend`, a naive
 slot-per-SSA-value LINK-frame lowering) → `XAM68kAssembler` (two-pass,
-in-process) and produces a GEMDOS `$601A` executable that `xst` runs. The
+in-process) and produces a GEMDOS `$601A` executable that `xcc-sim-68k` runs. The
 return value of `main()` becomes the process exit code through the crt0
 Pterm wrapper. The assembler is cross-validated by running its output in
 this emulator (encode against decode). See `tests/68k/compile_run.sh`

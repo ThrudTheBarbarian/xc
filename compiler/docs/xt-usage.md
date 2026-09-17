@@ -96,9 +96,9 @@ All inter-bank calls go through the shared `_xcall` trampoline in the main regio
 ## Usage
 
 ```
-./bin/osx/xtc input.xc -o output.xex -m xt
-./bin/osx/xta input.asm -o output.xex -b    # -b = banked
-./bin/osx/xts -m xt output.xex              # simulator
+./bin/osx/xcc input.xc -o output.xex -m xt
+./bin/osx/xcc-as input.asm -o output.xex -b    # -b = banked
+./bin/osx/xcc-sim-6502 -m xt output.xex              # simulator
 ```
 
 ## Patterns

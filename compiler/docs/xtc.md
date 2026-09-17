@@ -1,6 +1,8 @@
-# Xtc - a modern language for a classic CPU
+# Xtc - a modern language for classic and current hardware
 
-Xtc is a programming language for the 6502, aimed primarily at the Atari 8-bit computers. It expects paged RAM to provide expanded memory for code or data, and its optimiser targets the 6502 processor.
+Xtc is a statically typed language with classes, protocols and automatic reference counting. It compiles through one architecture-neutral intermediate representation to a banked 6502, arm64, x86-64, win64, arm9, 68000 and WebAssembly.
+
+This manual was written when the 6502 was the only target. Chapter 3 describes the Atari memory models, and parts of chapters 2 and 4 name the 6502 stack or Atari addresses. Those parts describe that target, not the language as a whole. The website holds the current per-topic reference.
 
 ## Chapter 1. The pre-processor
 
@@ -84,7 +86,7 @@ The preprocessor accepts macros of the form `#define myMacro(x, ...)`. Where the
 The `-h` or `--help` option lists the compiler's command-line options:
 
 > ```
-> prompt% xtc -h
+> prompt% xcc -h
 > Usage: xtc [options] <input.xc ...>
 >
 > Options:
@@ -171,10 +173,10 @@ The `-h` or `--help` option lists the compiler's command-line options:
 A typical invocation of xtc looks like:
 
 > ```
-> % xtc -Q loop -O3 ahl.xc -o test.xex 
-> xtc: optimised -O3 (9877 → 9698 instructions)
-> xtc: compiled 'ahl.xc' -> 'test.xex' (0 warnings, 0 errors)
-> xta: assembled -> 'test.xex' (19975 bytes, 1 segments)
+> % xcc -Q loop -O3 ahl.xc -o test.xex 
+> xcc: optimised -O3 (9877 → 9698 instructions)
+> xcc: compiled 'ahl.xc' -> 'test.xex' (0 warnings, 0 errors)
+> xcc-as: assembled -> 'test.xex' (19975 bytes, 1 segments)
 > ```
 
 
@@ -186,7 +188,7 @@ A typical invocation of xtc looks like:
 The compiler uses banked memory where it is available, and supports a range of memory layouts:
 
 > ```
-> % xtc -ll
+> % xcc -ll
 > Available layouts (use with -m <platform>/<layout>):
 > 
 >   atari:
@@ -235,7 +237,7 @@ Rule of thumb: put hot or always-resident code (runtime, math, main, interrupt h
 The `--dump-layout` option prints the compiler's view of any memory model. For example, the xe model with shadowing:
 
 >```
-> prompt% xtc --dump-layout -m xe-shadow
+> prompt% xcc --dump-layout -m xe-shadow
 > # xe-shadow.lnk — xe-shadow
 > #
 > # ┌──────────────────────────────────────────────────┐
@@ -593,7 +595,7 @@ Arrays can be initialised at declaration with `= [list]` or `= {list}`. An initi
 
 #### <u>Structures</u>
 
-Structs group related data. They are always tightly packed, because the 6502 is a byte-oriented CPU. Neither a struct nor any of its elements can be named with a reserved word.
+Structs group related data. Field offsets follow the target's C ABI: a field sits at the next offset that is a multiple of its natural alignment, capped at 1 byte on xt6502, 2 on m68k and 8 on arm64, x86-64, win64, arm9 and wasm32. Structs are tightly packed on the 6502 and naturally aligned on the wider targets. Neither a struct nor any of its elements can be named with a reserved word.
 
 Struct members are accessed with dot notation, and can be primitive types or other structures.
 
