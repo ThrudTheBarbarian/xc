@@ -112,7 +112,7 @@
         for (NSUInteger i = 0; i < bb.instructions.count; i++)
             {
             XTIRInsn* insn = bb.instructions[i];
-            BOOL foldable = insn.opcode == XTIROpAdd || insn.opcode == XTIROpSub || insn.opcode == XTIROpAnd || insn.opcode == XTIROpOr || insn.opcode == XTIROpXor || insn.opcode == XTIROpICmp || insn.opcode == XTIROpMul || insn.opcode == XTIROpShl || insn.opcode == XTIROpLShr || insn.opcode == XTIROpAShr;
+            BOOL foldable = insn.opcode == XTIROpAdd || insn.opcode == XTIROpSub || insn.opcode == XTIROpAnd || insn.opcode == XTIROpOr || insn.opcode == XTIROpXor || insn.opcode == XTIROpICmp || insn.opcode == XTIROpMul || insn.opcode == XTIROpShl || insn.opcode == XTIROpLShr || insn.opcode == XTIROpAShr || insn.opcode == XTIROpUDiv || insn.opcode == XTIROpSDiv || insn.opcode == XTIROpURem || insn.opcode == XTIROpSRem;
             if (!foldable || insn.operands.count < 2)
                 continue;
             XTIROperand* rhs = insn.operands[1];
