@@ -641,7 +641,10 @@ class Arm64
                     u64 msk = dw == (u32)64 ? ~(u64)0 : (u64)$FFFF_FFFF;
                     String* ar = operandReg((IROperand*)n.ops().get((u32)0), scratchName((u32)16, n.res().ty()));
                     String* dr = resultReg(n.res(), scratchName((u32)16, n.res().ty()));
-                    _out.appendFormat("    %s %s, %s, #0x%llx\n", mnem.cString(), dr.cString(),
+                    // Decimal, not hex: the two compilers must emit the same
+                    // TEXT, and their printf implementations pad %llx
+                    // differently — `#0x7` against `#0x0000000000000007`.
+                    _out.appendFormat("    %s %s, %s, #%llu\n", mnem.cString(), dr.cString(),
                                       ar.cString(), (u64)lv & msk);
                     canonicaliseUnlessProven(dr, n.res());
                     storeReg(dr, n.res());

@@ -3528,7 +3528,11 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
                     NSString *mn = insn.opcode == XTIROpAnd ? @"and"
                                  : insn.opcode == XTIROpOr  ? @"orr" : @"eor";
                     uint64_t mask = (dw == 64) ? ~0ULL : 0xFFFFFFFFULL;
-                    [ctx.out appendFormat:@"    %@ %@, %@, #0x%llx\n", mn, dr, ar,
+                    // Decimal, not hex: the two compilers must emit the same
+                    // TEXT, and their printf implementations disagree on how
+                    // %llx pads. all-diff caught it as 793/793 arm64 files
+                    // differing by `#0x7` against `#0x0000000000000007`.
+                    [ctx.out appendFormat:@"    %@ %@, %@, #%llu\n", mn, dr, ar,
                      (unsigned long long)((uint64_t)kv & mask)];
                     if (![ctx.noCanon containsObject:@(insn.result.valueId)])
                         [self canonicaliseReg:dr toType:insn.result.type ctx:ctx];
