@@ -191,6 +191,19 @@ class Arm64
         // The callee-save area sits just past the value slots, so value-slot
         // offsets (and therefore AddrOf addresses) are unchanged by homing. A
         // function that homes nothing keeps a byte-identical frame.
+        // Reserve x28 as a high frame base when the frame outgrows sp-relative
+        // slot addressing. base = ceil((frame - 16380) / 4096) * 4096 so that
+        // [base, base+16380] covers the top of the frame and the setup stays a
+        // single `add x28, sp, #N, lsl #12`. It joins _savedRegs, so the save
+        // area sizes itself and every epilogue restores it.
+        _frameBase = (u32)0;
+        if (_frame > (u32)16380) {
+            u32 base = ((_frame - (u32)16380 + (u32)4095) / (u32)4096) * (u32)4096;
+            if ((base >> (u32)12) <= (u32)4095) {
+                _frameBase = base;
+                _savedRegs.add((Object*)String.withCString("x28"));
+            }
+        }
         _saveAreaOffset = _valueSlotEnd;
         if (_savedRegs.count() > (u32)0) {
             u32 end = _saveAreaOffset + (u32)8 * _savedRegs.count();
@@ -213,6 +226,13 @@ class Arm64
     Array* _msFns;          // of MsFn@, or 0 when this is not a checked build
 
     u32 _saveAreaOffset;
+
+    // Base offset held in x28 for a frame too large for sp-relative slot
+    // access, or 0 when unused. x28 is in no home pool (homes are x19-x27 and
+    // x10-x14; x9 stages, x15-x17 scratch, x8 the indirect result), so it is
+    // reserved as a second frame base covering the TOP of the frame, where the
+    // scalar value slots sit once large aggregates are laid out first.
+    u32 _frameBase;
 
     // The Mach-O underscore convention: a C stub linking against `add` finds
     // `_add`.
@@ -248,6 +268,11 @@ class Arm64
             _out.appendFormat("    str x8, %s\n",
                               spMemForOff(_sretSaveOffset, String.withCString("x8")).cString());
         emitCalleeSaves(false);
+        // x28 is saved above; point it at the high frame base now sp is final.
+        // Everything from here to the epilogue's restore may address slots
+        // through it — expandStagedSlots keys off exactly this line.
+        if (_frameBase != (u32)0)
+            _out.appendFormat("    add x28, sp, #%lu, lsl #12\n", _frameBase >> (u32)12);
         spillParams(fn);
     }
 
@@ -3398,6 +3423,24 @@ class Arm64
     {
         Array* lines = linesOf(text);
         Array* out = new Array();
+        // Two exclusions, and neither can be a running on/off flag: block
+        // bodies are laid out in declaration order, so a loop body often sits
+        // AFTER the block holding the epilogue, and a flag cleared there would
+        // switch the base off for the hottest code in the function.
+        //   - anything emitted BEFORE the setup line has no x28 yet, so that
+        //     bound is positional;
+        //   - the callee-save area is off limits wherever it appears, since
+        //     those stores run before the setup and the epilogue's reloads
+        //     overwrite x28 partway through.
+        u32 setupIdx = (u32)$FFFF_FFFF;
+        for (u32 q = (u32)0; q < lines.count(); q = q + (u32)1) {
+            if (((String*)lines.get(q)).trimmed().hasPrefix(String.withCString("add x28, sp, #"))) {
+                setupIdx = q;
+                q = lines.count();
+            }
+        }
+        u32 saveLo = _saveAreaOffset;
+        u32 saveHi = _saveAreaOffset + (u32)8 * _savedRegs.count();
         for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1) {
             String* ln = (String*)lines.get(i);
             String* m = (String*)0; String* r = (String*)0; String* o = (String*)0;
@@ -3407,6 +3450,20 @@ class Arm64
                 u32 max = (r.hasPrefix(String.withCString("w"))
                         || r.hasPrefix(String.withCString("s"))) ? (u32)16380 : (u32)32760;
                 if (off > max) {
+                    // One instruction through the frame base when it reaches.
+                    bool baseLive = (setupIdx != (u32)$FFFF_FFFF && i > setupIdx);
+                    bool inSave = (saveHi > saveLo && off >= saveLo && off < saveHi);
+                    if (baseLive && _frameBase != (u32)0 && !inSave
+                     && off >= _frameBase && (off - _frameBase) <= max
+                     && !r.equals(String.withCString("x28"))) {
+                        String* fb = String.withCString("    ");
+                        fb.append(m);
+                        fb.appendCString(" ");
+                        fb.append(r);
+                        fb.appendFormat(", [x28, #%lu]", off - _frameBase);
+                        out.add((Object*)fb);
+                        continue;
+                    }
                     String* stage = (r.equals(String.withCString("x9"))
                                   || r.equals(String.withCString("w9")))
                                   ? String.withCString("x16") : String.withCString("x9");
