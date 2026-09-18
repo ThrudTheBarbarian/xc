@@ -1006,6 +1006,10 @@ class OptProfile
         if (stopHere(String.withCString("if-convert")))
             return;
         if (_level >= (u32)2)
+            jumpThread(m);
+        if (stopHere(String.withCString("jump-thread")))
+            return;
+        if (_level >= (u32)2)
             staticInitGuard(m);
         if (stopHere(String.withCString("static-init-guard-elim")))
             return;
@@ -3267,6 +3271,261 @@ class OptProfile
     //
     // One diamond at a time, re-recognised from the live CFG after each
     // transform, because applying one removes a block and rewrites phis.
+    // ── jump-thread ──────────────────────────────────────────────────────
+    //
+    // When a block does nothing but merge a boolean and branch on it, a
+    // predecessor supplying a CONSTANT already knows where control goes.
+    // Rewiring it to jump straight there removes its edge, and once the phi is
+    // down to one incoming the boolean stops existing at all.
+    //
+    // This is what a short-circuit `&&` leaves behind: the left test's false
+    // arm feeds the merge a literal 0, so it is a branch to the exit wearing a
+    // phi. sort_small's `j > 0 && a[j-1] > v` was materialising that 0, storing
+    // it to a frame slot and loading it back on every iteration of an O(n^2)
+    // loop. It cannot be if-converted — the right arm loads a[j-1] and j may
+    // be 0.
+    void jumpThread(IRModule* m)
+        {
+        for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
+            {
+            IRFunc* fn = (IRFunc*)m.funcs().get(f);
+            u32 pass = (u32)0;
+            while (pass < (u32)8 && jumpThreadOnce(fn))
+                pass = pass + (u32)1;
+            }
+        }
+
+    // The constant an operand resolves to, through the widening casts the front
+    // end puts on a boolean.
+    bool jtConst(IROperand* op, Map* defOf, i32* out)
+        {
+        if (op == (IROperand*)0)
+            return false;
+        if (op.kind() == (u8)OPK_IMMI)
+            {
+            *out = (i32)op.imm();
+            return true;
+            }
+        if (op.kind() != (u8)OPK_USE)
+            return false;
+        IRValue* cur = op.val();
+        for (u32 hop = (u32)0; hop < (u32)8; hop = hop + (u32)1)
+            {
+            Object* dd = defOf.get((Hashable*)cur);
+            if (dd == (Object*)0)
+                return false;
+            IRInsn* d = (IRInsn*)dd;
+            if (d.ops().count() < (u32)1)
+                return false;
+            IROperand* a0 = (IROperand*)d.ops().get((u32)0);
+            if (d.op().equals(String.withCString("Const")) && a0.kind() == (u8)OPK_IMMI)
+                {
+                *out = (i32)a0.imm();
+                return true;
+                }
+            if (!d.op().equals(String.withCString("ZExt")) && !d.op().equals(String.withCString("SExt"))
+                && !d.op().equals(String.withCString("Trunc")))
+                return false;
+            if (a0.kind() != (u8)OPK_USE)
+                return false;
+            cur = a0.val();
+            }
+        return false;
+        }
+
+    u32 jtUseCount(IRFunc* fn, IRValue* v)
+        {
+        u32 n = (u32)0;
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            n = n + jtCountIn(bb.phis(), v);
+            n = n + jtCountIn(bb.insns(), v);
+            if (bb.term() != (IRInsn*)0)
+                n = n + jtCountOne(bb.term(), v);
+            }
+        return n;
+        }
+
+    u32 jtCountIn(Array* insns, IRValue* v)
+        {
+        u32 n = (u32)0;
+        for (u32 i = (u32)0; i < insns.count(); i = i + (u32)1)
+            n = n + jtCountOne((IRInsn*)insns.get(i), v);
+        return n;
+        }
+
+    u32 jtCountOne(IRInsn* i, IRValue* v)
+        {
+        u32 n = (u32)0;
+        for (u32 q = (u32)0; q < i.ops().count(); q = q + (u32)1)
+            {
+            IROperand* o = (IROperand*)i.ops().get(q);
+            if (o.kind() == (u8)OPK_USE && o.val() == v)
+                n = n + (u32)1;
+            }
+        return n;
+        }
+
+    bool jumpThreadOnce(IRFunc* fn)
+        {
+        Map* defOf = new Map();
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.phis().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)bb.phis().get(i);
+                if (n.res() != (IRValue*)0) defOf.set((Hashable*)n.res(), (Object*)n);
+                }
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)bb.insns().get(i);
+                if (n.res() != (IRValue*)0) defOf.set((Hashable*)n.res(), (Object*)n);
+                }
+            }
+
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* J = (IRBlock*)fn.blocks().get(b);
+            // J must do NOTHING but merge and branch: a predecessor rewired
+            // past it would skip anything it held.
+            if (J.insns().count() != (u32)0 || J.phis().count() != (u32)1)
+                continue;
+            IRInsn* term = J.term();
+            if (term == (IRInsn*)0 || !term.op().equals(String.withCString("CondBranch"))
+                || term.ops().count() < (u32)3)
+                continue;
+            IROperand* c0 = (IROperand*)term.ops().get((u32)0);
+            if (c0.kind() != (u8)OPK_USE)
+                continue;
+            IRInsn* phi = (IRInsn*)J.phis().get((u32)0);
+            if (phi.res() == (IRValue*)0 || phi.res() != c0.val())
+                continue;
+            if (phi.ops().count() < (u32)4)
+                continue;
+            // The phi must be read by NOTHING but J's own branch. If anything
+            // else reads it — a block J dominates, say — a predecessor rewired
+            // past J reaches that read with the phi never having executed and
+            // sees whatever was in the register. That shape segfaulted the
+            // self-hosted compiler while all 19 benchmarks stayed correct.
+            if (jtUseCount(fn, phi.res()) != (u32)1)
+                continue;
+            IRBlock* onTrue = ((IROperand*)term.ops().get((u32)1)).blk();
+            IRBlock* onFalse = ((IROperand*)term.ops().get((u32)2)).blk();
+            if (onTrue == (IRBlock*)0 || onFalse == (IRBlock*)0)
+                continue;
+            // Redirecting into a block with phis would need a new incoming on
+            // each; keep to the case where there is nothing to add.
+            if (onTrue.phis().count() != (u32)0 || onFalse.phis().count() != (u32)0)
+                continue;
+            if (onTrue == J || onFalse == J)
+                continue;  // a self-edge would drop an incoming still needed
+            // The phi's incoming list is NOT the authority on who reaches J:
+            // an earlier pass can redirect an edge without touching the phi.
+            u32 realPreds = (u32)0;
+            for (u32 pb = (u32)0; pb < fn.blocks().count(); pb = pb + (u32)1)
+                {
+                IRBlock* pbb = (IRBlock*)fn.blocks().get(pb);
+                if (pbb.term() == (IRInsn*)0) continue;
+                for (u32 q = (u32)0; q < pbb.term().ops().count(); q = q + (u32)1)
+                    {
+                    IROperand* o = (IROperand*)pbb.term().ops().get(q);
+                    if (o.kind() == (u8)OPK_BLOCK && o.blk() == J)
+                        realPreds = realPreds + (u32)1;
+                    }
+                }
+            if (realPreds != phi.ops().count() / (u32)2)
+                continue;
+            if (jtThreadEdge(fn, J, phi, onTrue, onFalse, defOf))
+                return true;
+            }
+        return false;
+        }
+
+    // Split out for the arm64 frame budget.
+    bool jtThreadEdge(IRFunc* fn, IRBlock* J, IRInsn* phi,
+                      IRBlock* onTrue, IRBlock* onFalse, Map* defOf)
+        {
+        for (u32 k = (u32)0; k + (u32)1 < phi.ops().count(); k = k + (u32)2)
+            {
+            IRBlock* P = ((IROperand*)phi.ops().get(k)).blk();
+            i32 kv = (i32)0;
+            if (P == (IRBlock*)0 || P == J)
+                continue;
+            if (!jtConst((IROperand*)phi.ops().get(k + (u32)1), defOf, &kv))
+                continue;
+            IRBlock* dest = (kv != (i32)0) ? onTrue : onFalse;
+            IRInsn* pt = P.term();
+            if (pt == (IRInsn*)0)
+                continue;
+            u32 hits = (u32)0;
+            for (u32 q = (u32)0; q < pt.ops().count(); q = q + (u32)1)
+                {
+                IROperand* o = (IROperand*)pt.ops().get(q);
+                if (o.kind() == (u8)OPK_BLOCK && o.blk() == J)
+                    hits = hits + (u32)1;
+                }
+            if (hits != (u32)1)
+                continue;
+            for (u32 q = (u32)0; q < pt.ops().count(); q = q + (u32)1)
+                {
+                IROperand* o = (IROperand*)pt.ops().get(q);
+                if (o.kind() == (u8)OPK_BLOCK && o.blk() == J)
+                    pt.ops().set(q, (Object*)IROperand.block(dest));
+                }
+            Array* keep = new Array();
+            for (u32 q = (u32)0; q + (u32)1 < phi.ops().count(); q = q + (u32)2)
+                if (q != k)
+                    {
+                    keep.add(phi.ops().get(q));
+                    keep.add(phi.ops().get(q + (u32)1));
+                    }
+            while (phi.ops().count() > (u32)0)
+                phi.ops().removeAt(phi.ops().count() - (u32)1);
+            for (u32 q = (u32)0; q < keep.count(); q = q + (u32)1)
+                phi.ops().add(keep.get(q));
+
+            // A phi with ONE incoming IS that incoming. Collapsing it is what
+            // actually removes the boolean: left standing it is a value the
+            // allocator must place, and a miss costs a store and a reload every
+            // iteration — the whole cost this pass exists to remove.
+            if (keep.count() == (u32)2
+                && ((IROperand*)keep.get((u32)1)).kind() == (u8)OPK_USE)
+                {
+                IRValue* from = phi.res();
+                IRValue* to = ((IROperand*)keep.get((u32)1)).val();
+                for (u32 bb2 = (u32)0; bb2 < fn.blocks().count(); bb2 = bb2 + (u32)1)
+                    {
+                    IRBlock* bb = (IRBlock*)fn.blocks().get(bb2);
+                    jtReplace(bb.phis(), from, to);
+                    jtReplace(bb.insns(), from, to);
+                    if (bb.term() != (IRInsn*)0)
+                        jtReplaceOne(bb.term(), from, to);
+                    }
+                J.phis().removeAt((u32)0);
+                }
+            return true;
+            }
+        return false;
+        }
+
+    void jtReplace(Array* insns, IRValue* from, IRValue* to)
+        {
+        for (u32 i = (u32)0; i < insns.count(); i = i + (u32)1)
+            jtReplaceOne((IRInsn*)insns.get(i), from, to);
+        }
+
+    void jtReplaceOne(IRInsn* n, IRValue* from, IRValue* to)
+        {
+        for (u32 q = (u32)0; q < n.ops().count(); q = q + (u32)1)
+            {
+            IROperand* o = (IROperand*)n.ops().get(q);
+            if (o.kind() == (u8)OPK_USE && o.val() == from)
+                n.ops().set(q, (Object*)IROperand.useVal(to));
+            }
+        }
+
     void ifConvert(IRModule* m)
         {
         if (!_profile.ifConvert())
