@@ -2,6 +2,11 @@
 
 @implementation XTIROptTargetProfile
 
+- (BOOL)inlinesAggregateParams
+    {
+    return NO;   // 6502-conservative base
+    }
+
 // Conservative defaults — these are exactly the constants the loop-unroll
 // pass shipped with (sized so unrolling can't tip a 6502 code bank), so a
 // target that doesn't override anything behaves identically to before.
@@ -106,6 +111,11 @@
 @end
 
 @implementation XTIRArm64TargetProfile
+
+- (BOOL)inlinesAggregateParams
+    {
+    return YES;   // aggregates are ordinary addressable memory
+    }
 
 - (NSUInteger)unrollMaxTrip
     {
@@ -579,6 +589,11 @@
 @end
 
 @implementation XTIRX86_64TargetProfile
+
+- (BOOL)inlinesAggregateParams
+    {
+    return YES;   // aggregates are ordinary addressable memory
+    }
 
 // x86-64 is a flat native target with a 32-bit-displacement stack frame and a
 // register-homing allocator, so it relaxes almost every knob the 6502 keeps

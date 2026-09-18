@@ -1,4 +1,5 @@
 #import "XTIROptInline.h"
+#import "XTIROptTargetProfile.h"
 #import "XTIRModule.h"
 #import "XTIRFunction.h"
 #import "XTIRBlock.h"
@@ -181,8 +182,21 @@ static void rewriteUses(XTIRFunction* fn, XTIRValueId oldVid, XTIROperand* newOp
         return nil;
     if (totalInsns > kMaxInlineInsns)
         return nil;
-    if (callee.frameInfo.pinnedLocals.count > 0)
-        return nil; // frame-local addrs
+    // A pinned local is a frame SLOT the callee takes the address of. It can
+    // come across, because every back end lays these out ITSELF, in list order,
+    // from the local's TYPE — none reads the byteOffset recorded here — so the
+    // callee's own frame offset does not have to travel with it. inlineCall
+    // gives each one a fresh caller value and appends it to the caller's list.
+    //
+    // Only for a SINGLE-BLOCK callee: the multi-block path splits the caller
+    // and wires the CFG through a different splice that does not do this.
+    // …and only where the target can address a frame temp reliably. On the
+    // 6502 it cannot — struct_byval_rvalue came back wrong when this was
+    // allowed there — which is the same constraint the aggregate-parameter
+    // knob describes, so it shares it.
+    if ((multi || !self.profile.inlinesAggregateParams)
+        && callee.frameInfo.pinnedLocals.count > 0)
+        return nil;
     // Operand shape must match the callee's parameter list exactly
     // (callee params = [user0..userN-1, Mem]; call operands = [sym, args..,
     // memIn]). A mismatch (e.g. a variadic/cloaked call) is not inlinable.
@@ -198,9 +212,10 @@ static void rewriteUses(XTIRFunction* fn, XTIRValueId oldVid, XTIROperand* newOp
     // reliably addressable on the 6502 — the second consecutive such inline
     // harvested zeros (struct_return_field). Passing the aggregate through a
     // real call keeps it on the stack where AddrOf is well-defined.
-    for (NSUInteger k = 0; k < nUser; k++)
-        if (callee.paramTypes[k].kind == XTIRTypeKindAgg)
-            return nil;
+    if (!self.profile.inlinesAggregateParams)
+        for (NSUInteger k = 0; k < nUser; k++)
+            if (callee.paramTypes[k].kind == XTIRTypeKindAgg)
+                return nil;
     return callee;
     }
 
@@ -229,6 +244,30 @@ static void rewriteUses(XTIRFunction* fn, XTIRValueId oldVid, XTIROperand* newOp
     remap[@(nParams - 1)] = callInsn.operands.lastObject; // mem input
 
     XTIRDefSite* site = [[XTIRDefSite alloc] initWithBlock:bb insnIndex:0];
+
+    // The callee's pinned locals become the caller's. A pinned local is a frame
+    // slot rather than an instruction result, so it never appears in the body
+    // walk below: give each a fresh caller value, map it, and append it. The
+    // back ends re-lay them out from the type, so byteOffset travels as 0.
+    if (callee.frameInfo.pinnedLocals.count)
+        {
+        NSMutableArray<XTIRPinnedLocal*>* pins =
+            [caller.frameInfo.pinnedLocals mutableCopy] ?: [NSMutableArray array];
+        for (XTIRPinnedLocal* pl in callee.frameInfo.pinnedLocals)
+            {
+            XTIRValueId nv = [caller allocateValueId];
+            XTIRValue* v = [[XTIRValue alloc] initWithValueId:nv
+                                                         type:pl.type
+                                                      defSite:site];
+            [caller registerValue:v];
+            remap[@(pl.valueId)] = [XTIROperand useWithValueId:nv];
+            [pins addObject:[[XTIRPinnedLocal alloc] initWithName:pl.name
+                                                             type:pl.type
+                                                       byteOffset:0
+                                                          valueId:nv]];
+            }
+        caller.frameInfo.pinnedLocals = pins;
+        }
 
     // Allocate fresh caller values for every value the callee body defines.
     for (XTIRInsn* bi in cb.instructions)

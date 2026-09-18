@@ -152,6 +152,13 @@ NS_ASSUME_NONNULL_BEGIN
 // on the speculated arm being pure and trap-free (no load/store/call/div).
 - (BOOL)ifConvertsPredicates;
 
+// May a callee taking an aggregate BY VALUE be inlined? Such a parameter is
+// only read through AddrOf(param), which after inlining becomes AddrOf of the
+// caller's LOADED Agg temp. That is not reliably addressable on the 6502 — it
+// once harvested zeros (struct_return_field) — so the base answer is NO, and a
+// target whose aggregates are ordinary addressable memory overrides it.
+- (BOOL)inlinesAggregateParams;
+
 // YES to hoist loop-invariant instructions to the loop preheader (pure address /
 // arithmetic always; a field Load only when the loop writes no memory, so the
 // hoisted load is bounds-safe and reads unchanged memory). arm64 only — the

@@ -32,6 +32,10 @@ class OptProfile
     bool _sqrtIntrinsic;     // a target whose backend has a sqrt instruction
     bool _powSquare;         // …and one where x*x beats a call to pow
     bool _ifConvert;         // a predicate diamond becomes a branchless Select
+    // May a callee taking an aggregate BY VALUE be inlined? Such a parameter is
+    // only read through AddrOf(param), which after inlining becomes AddrOf of
+    // the caller's LOADED Agg temp — not reliably addressable on the 6502.
+    bool _inlineAggParams;
     bool _vectorize;         // map/reduce kernels go to SIMD
     bool _reductionCollapse; // an invariant reduction nest collapses
     bool _memsetIdiom;       // a byte-fill loop becomes one MemSet
@@ -62,6 +66,7 @@ class OptProfile
         _sqrtIntrinsic = false;
         _powSquare = false;
         _ifConvert = false;
+        _inlineAggParams = false;
         _tailRecursion = false;
         _accumRecursion = false;
         _vectorize = false;
@@ -91,6 +96,10 @@ class OptProfile
         // not hidden.
         p._tailRecursion = true;
         p._ifConvert = true; // every live target if-converts
+        // Aggregates are ordinary addressable memory on the register machines.
+        p._inlineAggParams = t.equals(String.withCString("arm64"))
+                          || t.equals(String.withCString("x86_64"))
+                          || t.equals(String.withCString("win64"));
         p._initGuardElim = true;
         // The 6502 and the 68000 backends do not lower MemSet, so the idiom
         // stays a loop there.
@@ -199,6 +208,10 @@ class OptProfile
     bool ifConvert(void)
         {
         return _ifConvert;
+        }
+    bool inlineAggParams(void)
+        {
+        return _inlineAggParams;
         }
     bool vectorize(void)
         {
@@ -2261,10 +2274,19 @@ class OptProfile
             return (IRFunc*)0;
         if (callee.blocks().count() == (u32)0)
             return (IRFunc*)0;
-        if (callee.pinned().count() > (u32)0)
-            return (IRFunc*)0; // frame-local addrs
-
         bool multi = callee.blocks().count() > (u32)1;
+        // A pinned local is a frame SLOT the callee takes the address of. It can
+        // come across: every back end lays these out ITSELF, in list order, from
+        // the local's TYPE — none reads the recorded offset — so the callee's
+        // own frame offset need not travel. spliceCall gives each a fresh caller
+        // value and adds it to the caller. Single-block only; the multi-block
+        // path wires the CFG through a different splice that does not do this.
+        // …and only where the target can address a frame temp reliably. The
+        // 6502 cannot — struct_byval_rvalue came back wrong when this was
+        // allowed there — the same constraint the aggregate-parameter knob
+        // describes, so it shares it.
+        if ((multi || !_profile.inlineAggParams()) && callee.pinned().count() > (u32)0)
+            return (IRFunc*)0;
         u32 returns = (u32)0;
         u32 total = (u32)0;
         for (u32 b = (u32)0; b < callee.blocks().count(); b = b + (u32)1)
@@ -2306,9 +2328,10 @@ class OptProfile
         // An aggregate BY VALUE is only ever read through AddrOf(param); after
         // inlining that is AddrOf of the caller's loaded temp, which is not
         // reliably addressable. Pass it through a real call.
-        for (u32 k = (u32)0; k < nUser; k = k + (u32)1)
-            if (((IRValue*)callee.params().get(k)).ty().hasPrefix(String.withCString("Agg(")))
-                return (IRFunc*)0;
+        if (!_profile.inlineAggParams())
+            for (u32 k = (u32)0; k < nUser; k = k + (u32)1)
+                if (((IRValue*)callee.params().get(k)).ty().hasPrefix(String.withCString("Agg(")))
+                    return (IRFunc*)0;
         return callee;
         }
 
@@ -2325,6 +2348,19 @@ class OptProfile
                       (Object*)(IROperand*)call.ops().get(k + (u32)1));
         remap.set((Hashable*)(IRValue*)callee.params().get(nUser),
                   (Object*)(IROperand*)call.ops().get(call.ops().count() - (u32)1));
+
+        // The callee's pinned locals become the caller's. A pinned local is a
+        // frame slot rather than an instruction result, so it never appears in
+        // the body walk below: give each a fresh caller value, map it, and add
+        // it. The back ends re-lay them out from the type, so the offset
+        // travels as 0.
+        for (u32 i = (u32)0; i < callee.pinned().count(); i = i + (u32)1)
+            {
+            IRPinned* pl = (IRPinned*)callee.pinned().get(i);
+            IRValue* nv = new IRValue(pl.ty());
+            remap.set((Hashable*)pl.val(), (Object*)IROperand.useVal(nv));
+            caller.addPinned(IRPinned.with(nv, pl.ty(), (u32)0, pl.esc()));
+            }
 
         // A fresh caller value for everything the body defines.
         for (u32 i = (u32)0; i < cb.insns().count(); i = i + (u32)1)

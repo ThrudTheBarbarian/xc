@@ -9,9 +9,12 @@
 #import <Foundation/Foundation.h>
 #import "XTIROptPass.h"
 
+@class XTIROptTargetProfile;
+
 NS_ASSUME_NONNULL_BEGIN
 
 @interface XTIROptInline : NSObject <XTIROptPass>
+@property(nonatomic, strong, nullable) XTIROptTargetProfile* profile;
 @end
 
 NS_ASSUME_NONNULL_END

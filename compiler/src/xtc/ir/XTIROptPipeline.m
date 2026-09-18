@@ -75,7 +75,9 @@
         // callees that inlining left with no remaining callers; the
         // arithmetic/memory passes then clean up the spliced bodies (e.g.
         // CSE'ing the repeated AddrOf @__sdata_* a wrapper carried in).
-        [p addPass:[[XTIROptInline alloc] init]];
+        XTIROptInline* inl = [[XTIROptInline alloc] init];
+        inl.profile = profile;
+        [p addPass:inl];
         [p addPass:[[XTIROptDeadFunctionElim alloc] init]];
         // Demanded-width narrowing: recompute a wide arithmetic result at the
         // narrower width it is immediately truncated to (`u16 y = a*b` → 16-bit
