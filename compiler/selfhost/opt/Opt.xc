@@ -14232,7 +14232,134 @@ class OptProfile
     void constHoist(IRModule* m)
         {
         for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
+            {
             chInFunc(m, (IRFunc*)m.funcs().get(f));
+            chHoistMulImms((IRFunc*)m.funcs().get(f));
+            }
+        }
+
+    // arm64 has no immediate form of `mul`, so every `x * K` in a loop body
+    // pays a `mov wS, #K` to put the constant where the multiply can read it —
+    // every iteration, once per multiply. call_depth's inlined body does four
+    // of them for the same literal 3. Turning the immediate into a Const in the
+    // PREHEADER gives it a value the allocator can home.
+    void chHoistMulImms(IRFunc* fn)
+        {
+        for (u32 hi = (u32)0; hi < fn.blocks().count(); hi = hi + (u32)1)
+            {
+            IRBlock* H = (IRBlock*)fn.blocks().get(hi);
+            IRInsn* term = H.term();
+            if (term == (IRInsn*)0 || !term.op().equals(String.withCString("CondBranch"))
+                || term.ops().count() < (u32)3)
+                continue;
+            IRBlock* t0 = ((IROperand*)term.ops().get((u32)1)).blk();
+            IRBlock* t1 = ((IROperand*)term.ops().get((u32)2)).blk();
+            Array* body = chLoopBody(fn, H, t0, t1);
+            if (body == (Array*)0)
+                body = chLoopBody(fn, H, t1, t0);
+            if (body == (Array*)0)
+                continue;
+
+            // The preheader is the header's predecessor that is NOT in the
+            // body. Taking "not the entry block" instead picks the LATCH, which
+            // is inside the loop, and plants the constant after its own uses.
+            IRBlock* PH = (IRBlock*)0;
+            u32 preds = (u32)0;
+            for (u32 pi = (u32)0; pi < fn.blocks().count(); pi = pi + (u32)1)
+                {
+                IRBlock* p = (IRBlock*)fn.blocks().get(pi);
+                if (p.term() == (IRInsn*)0) continue;
+                for (u32 q = (u32)0; q < p.term().ops().count(); q = q + (u32)1)
+                    {
+                    IROperand* o = (IROperand*)p.term().ops().get(q);
+                    if (o.kind() == (u8)OPK_BLOCK && o.blk() == H)
+                        {
+                        preds = preds + (u32)1;
+                        if (!chHas(body, p))
+                            PH = p;
+                        }
+                    }
+                }
+            if (PH == (IRBlock*)0 || preds != (u32)2 || PH == H)
+                continue;
+            chRewriteMuls(fn, body, PH);
+            }
+        }
+
+    // Every block reachable from `entry` without going through `other`, when
+    // that region closes back on H. nil when it escapes or is too large.
+    Array* chLoopBody(IRFunc* fn, IRBlock* H, IRBlock* entry, IRBlock* other)
+        {
+        if (entry == (IRBlock*)0)
+            return (Array*)0;
+        Array* seen = new Array();
+        Array* work = new Array();
+        work.add((Object*)entry);
+        bool closes = false;
+        while (work.count() > (u32)0)
+            {
+            IRBlock* b = (IRBlock*)work.get(work.count() - (u32)1);
+            work.removeAt(work.count() - (u32)1);
+            if (b == H) { closes = true; continue; }
+            if (b == other || chHas(seen, b)) continue;
+            if (b.term() == (IRInsn*)0) return (Array*)0;
+            seen.add((Object*)b);
+            if (seen.count() > (u32)8) return (Array*)0;
+            for (u32 q = (u32)0; q < b.term().ops().count(); q = q + (u32)1)
+                {
+                IROperand* o = (IROperand*)b.term().ops().get(q);
+                if (o.kind() == (u8)OPK_BLOCK && o.blk() != (IRBlock*)0)
+                    work.add((Object*)o.blk());
+                }
+            }
+        if (!closes || seen.count() == (u32)0)
+            return (Array*)0;
+        return seen;
+        }
+
+    bool chHas(Array* a, IRBlock* b)
+        {
+        for (u32 i = (u32)0; i < a.count(); i = i + (u32)1)
+            if ((IRBlock*)a.get(i) == b)
+                return true;
+        return false;
+        }
+
+    void chRewriteMuls(IRFunc* fn, Array* body, IRBlock* PH)
+        {
+        Map* made = new Map();
+        for (u32 bi = (u32)0; bi < body.count(); bi = bi + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)body.get(bi);
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)bb.insns().get(i);
+                if (!n.op().equals(String.withCString("Mul")) || n.res() == (IRValue*)0
+                    || n.ops().count() < (u32)2)
+                    continue;
+                u32 side = (u32)2;
+                if (((IROperand*)n.ops().get((u32)1)).kind() == (u8)OPK_IMMI) side = (u32)1;
+                else if (((IROperand*)n.ops().get((u32)0)).kind() == (u8)OPK_IMMI) side = (u32)0;
+                if (side == (u32)2)
+                    continue;
+                IROperand* imm = (IROperand*)n.ops().get(side);
+                String* ity = imm.ty() == (String*)0 ? n.res().ty() : imm.ty();
+                String* key = new String();
+                key.appendFormat("%ld|%s", (i32)imm.imm(), ity.cString());
+                Object* have = made.get((Hashable*)key);
+                if (have == (Object*)0)
+                    {
+                    IRValue* cv = new IRValue(ity);
+                    IRInsn* cn = IRInsn.with(String.withCString("Const"));
+                    cn.setRes(cv);
+                    cn.add(imm);
+                    PH.insns().add((Object*)cn);
+                    made.set((Hashable*)key, (Object*)cv);
+                    have = (Object*)cv;
+                    }
+                n.ops().set(side, (Object*)IROperand.useVal((IRValue*)have));
+                }
+            }
         }
 
     void chInFunc(IRModule* m, IRFunc* fn)
