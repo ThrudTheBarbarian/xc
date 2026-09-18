@@ -34,6 +34,11 @@ static const NSUInteger kMaxBodyInsns = 48;
 // are not emitted at all — three instructions per copy that only exist because
 // this unroller assumes a variable trip.
 @property(nonatomic) BOOL exactTrip;
+// YES when the body computes vector values. Both the guard removal and the
+// pointer re-basing below are gated on it: each trades a longer live range for
+// fewer instructions, which a vector body (its values in the separate v18-v31
+// pool) absorbs and a GP-bound scalar body pays for in spills.
+@property(nonatomic) BOOL vectorBody;
 // Extra carried values (reductions/accumulators) threaded through the loop
 // alongside the induction variable, parallel arrays indexed together:
 @property(nonatomic) NSArray<XTIRInsn*>* redPhis;    // the accumulator phis in H
@@ -504,6 +509,10 @@ static XTIRInsn* buildLike(XTIRInsn* insn, XTIRValue* _Nullable result,
         // Only a STRICT `<` with the iv on the left gives trip = (N - S) / step;
         // with `<=` the trip is one more and the arithmetic below would be off
         // by one in the unsafe direction.
+        c.vectorBody = NO;
+        for (XTIRInsn* bi in B.instructions)
+            if (bi.result && bi.result.type && bi.result.type.kind == XTIRTypeKindVec)
+                { c.vectorBody = YES; break; }
         c.exactTrip = NO;
         if (stepConst && stepK > 0 &&
             (guard.predicate == XTIRICmpULT || guard.predicate == XTIRICmpSLT) &&
@@ -527,11 +536,7 @@ static XTIRInsn* buildLike(XTIRInsn* insn, XTIRValue* _Nullable result,
                 // the separate v18-v31 pool and its GP traffic is a few pointers
                 // — but a scalar body competing for the GP pool spills instead:
                 // array_map is 44% faster without the guards, bit_ops 5% slower.
-                BOOL vectorBody = NO;
-                for (XTIRInsn* bi in B.instructions)
-                    if (bi.result && bi.result.type && bi.result.type.kind == XTIRTypeKindVec)
-                        { vectorBody = YES; break; }
-                if (span > 0 && group > 0 && span % group == 0 && vectorBody)
+                if (span > 0 && group > 0 && span % group == 0 && c.vectorBody)
                     c.exactTrip = YES;
                 }
             }
@@ -582,13 +587,57 @@ static XTIRInsn* buildLike(XTIRInsn* insn, XTIRValue* _Nullable result,
         {
         XTIRBlock* C = [[XTIRBlock alloc] init];
         C.name = [NSString stringWithFormat:@"%@_vu%lu", B.name ?: @"body", (unsigned long)j];
+        NSUInteger idx = 0;
         NSMutableDictionary<NSNumber*, NSNumber*>* map = [NSMutableDictionary dictionary];
         map[@(ivId)] = @(prevIv); // remap iv → this copy's incoming value
         for (NSUInteger i = 0; i < nred; i++)
             map[c.redIds[i]] = prevRed[i];
 
+        // A POINTER carried by a constant stride is re-based on copy 0 rather
+        // than chained. The chain `p -> p+16 -> p+32 -> p+48` costs one `add`
+        // per copy per array; `p+0, p+16, p+32, p+48` costs none, because the
+        // back end already folds ElementAddr(base, CONSTANT) into the
+        // `ldr/str q, [base, #imm]` addressing mode. mem_copy carries two
+        // pointers over four copies — eight adds on a twenty-instruction body.
+        //
+        // Only copies after the first, and only when the carried update is
+        // exactly ElementAddr(phi, K) with K a literal: anything else keeps the
+        // chain. The LAST copy's update still produces the back-edge value, so
+        // the loop still advances by U*K once per iteration.
+        if (j > 0 && c.vectorBody)
+            {
+            for (NSUInteger i = 0; i < nred; i++)
+                {
+                XTIRInsn* rn = (XTIRInsn*)c.redNexts[i];
+                XTIRInsn* rp = (XTIRInsn*)c.redPhis[i];
+                if (!rn || !rp || rn.opcode != XTIROpElementAddr || rn.operands.count < 2)
+                    continue;
+                if (rn.operands[0].kind != XTIROperandKindUse ||
+                    rn.operands[0].valueId != rp.result.valueId)
+                    continue;
+                if (rn.operands[1].kind != XTIROperandKindImmI)
+                    continue;
+                if (!rp.result.type || rp.result.type.kind != XTIRTypeKindPtr)
+                    continue;
+                int64_t stride = rn.operands[1].intValue;
+                XTIRValueId rid = [fn allocateValueId];
+                XTIRValue* rv = [[XTIRValue alloc] initWithValueId:rid
+                                                              type:rp.result.type
+                                                           defSite:[[XTIRDefSite alloc] initWithBlock:C
+                                                                                           insnIndex:idx]];
+                [fn registerValue:rv];
+                [C appendInstruction:[[XTIRInsn alloc] initWithOpcode:XTIROpElementAddr
+                                                               result:rv
+                                                             operands:@[ [XTIROperand useWithValueId:c.redIds[i].unsignedLongLongValue],
+                                                                         [XTIROperand immIWithType:rn.operands[1].type
+                                                                                             value:stride * (int64_t)j] ]
+                                                               dbgLoc:rn.dbgLoc]];
+                idx++;
+                map[c.redIds[i]] = @(rid);
+                }
+            }
+
         XTIRValueId cloneIvNext = prevIv;
-        NSUInteger idx = 0;
         for (XTIRInsn* insn in B.instructions)
             {
             // Invariant iff every Use operand is either defined outside the

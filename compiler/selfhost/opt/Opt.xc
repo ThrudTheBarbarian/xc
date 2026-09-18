@@ -766,6 +766,11 @@ class OptProfile
     // unroll factor AND the body is vector, so the intermediate copies'
     // guards are provably true and are not emitted.
     bool _exactTrip;
+    // YES when the body computes vector values. Both the guard removal and
+    // the pointer re-basing are gated on it: each trades a longer live range
+    // for fewer instructions, which a vector body (values in the separate
+    // v18-v31 pool) absorbs and a GP-bound scalar body pays for in spills.
+    bool _vectorBody;
     // Carried accumulators threaded alongside the induction variable.
     Array* _redPhis;  // the accumulator phis in the header
     Array* _redNexts; // their back-edge updates, in the body
@@ -855,6 +860,14 @@ class OptProfile
     bool exactTrip(void)
         {
         return _exactTrip;
+        }
+    bool vectorBody(void)
+        {
+        return _vectorBody;
+        }
+    void setVectorBody(bool v)
+        {
+        _vectorBody = v;
         }
     void setExactTrip(bool v)
         {
@@ -7932,6 +7945,14 @@ class OptProfile
         // it. A vector body barely notices — its values live in their own pool —
         // but a scalar body spills instead. Measured: array_map 11431 -> 6730us
         // with the gate, bit_ops unchanged; without the gate bit_ops loses 5%.
+        bool vecBody = false;
+        for (u32 k = (u32)0; k < B.insns().count(); k = k + (u32)1)
+            {
+            IRInsn* bi = (IRInsn*)B.insns().get(k);
+            if (bi.res() != (IRValue*)0 && bi.res().ty().hasPrefix(String.withCString("Vec(")))
+                vecBody = true;
+            }
+        c.setVectorBody(vecBody);
         bool exact = false;
         if (stepConst && stepK > (i32)0 && guard.ops().count() >= (u32)2
             && (guard.pred().equals(String.withCString("ULT"))
@@ -7951,14 +7972,8 @@ class OptProfile
                 {
                 i32 span = boundK - startK;
                 i32 group = stepK * (i32)4;
-                bool vectorBody = false;
-                for (u32 k = (u32)0; k < B.insns().count(); k = k + (u32)1)
-                    {
-                    IRInsn* bi = (IRInsn*)B.insns().get(k);
-                    if (bi.res() != (IRValue*)0 && bi.res().ty().hasPrefix(String.withCString("Vec(")))
-                        vectorBody = true;
-                    }
-                if (span > (i32)0 && group > (i32)0 && span % group == (i32)0 && vectorBody)
+                if (span > (i32)0 && group > (i32)0 && span % group == (i32)0
+                    && c.vectorBody())
                     exact = true;
                 }
             }
@@ -8132,6 +8147,38 @@ class OptProfile
         map.set((Hashable*)c.iv(), (Object*)prevIv);
         for (u32 i = (u32)0; i < c.redVals().count(); i = i + (u32)1)
             map.set((Hashable*)(IRValue*)c.redVals().get(i), prevRed.get(i));
+
+        // A POINTER carried by a constant stride is RE-BASED on copy 0 rather
+        // than chained. The chain `p -> p+16 -> p+32 -> p+48` costs one add per
+        // copy per array; `p+0, p+16, p+32, p+48` costs none, because the back
+        // end folds ElementAddr(base, CONSTANT) into `ldr/str q, [base, #imm]`.
+        // mem_copy carries two pointers over four copies — eight adds on a
+        // twenty-instruction body.
+        if (j > (u32)0 && c.vectorBody())
+            {
+            for (u32 i = (u32)0; i < c.redVals().count(); i = i + (u32)1)
+                {
+                IRInsn* rn = (IRInsn*)c.redNexts().get(i);
+                IRValue* rp = (IRValue*)c.redVals().get(i);
+                if (rn == (IRInsn*)0 || !rn.op().equals(String.withCString("ElementAddr")))
+                    continue;
+                if (rn.ops().count() < (u32)2)
+                    continue;
+                IROperand* b0 = (IROperand*)rn.ops().get((u32)0);
+                IROperand* b1 = (IROperand*)rn.ops().get((u32)1);
+                if (b0.kind() != (u8)OPK_USE || b0.val() != rp || b1.kind() != (u8)OPK_IMMI)
+                    continue;
+                if (!rp.ty().hasPrefix(String.withCString("Ptr(")))
+                    continue;
+                IRValue* rv = new IRValue(rp.ty());
+                IRInsn* ea = IRInsn.with(String.withCString("ElementAddr"));
+                ea.setRes(rv);
+                ea.add(IROperand.useVal(rp));
+                ea.add(IROperand.immI((i32)(b1.imm() * (i64)j), b1.ty()));
+                C.add(ea);
+                map.set((Hashable*)rp, (Object*)rv);
+                }
+            }
 
         IRValue* cloneIvNext = prevIv;
         for (u32 i = (u32)0; i < B.insns().count(); i = i + (u32)1)
