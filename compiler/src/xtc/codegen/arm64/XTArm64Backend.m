@@ -5673,8 +5673,15 @@ static BOOL sameArm64Reg(NSString *a, NSString *b) {
     if (!a || !b) return NO;
     if ([a isEqualToString:b]) return YES;
     unichar ca = [a characterAtIndex:0], cb = [b characterAtIndex:0];
+    // Two views alias when they name the same physical register: w/x in the
+    // general file, and b/h/s/d/q/v in the VECTOR file — writing `s8` zeroes
+    // the rest of `d8` exactly as `w16` zeroes the top of `x16`. Knowing only
+    // about w/x let a `d8` fact survive an `s8` write, and the next reload was
+    // wrongly dropped (auto_cloak's Math.pow tests, caught by the corpus).
     BOOL gpA = (ca == 'w' || ca == 'x'), gpB = (cb == 'w' || cb == 'x');
-    if (!gpA || !gpB) return NO;
+    BOOL fpA = (ca=='b'||ca=='h'||ca=='s'||ca=='d'||ca=='q'||ca=='v');
+    BOOL fpB = (cb=='b'||cb=='h'||cb=='s'||cb=='d'||cb=='q'||cb=='v');
+    if (!((gpA && gpB) || (fpA && fpB))) return NO;
     return [[a substringFromIndex:1] isEqualToString:[b substringFromIndex:1]];
 }
 

@@ -161,7 +161,8 @@ class Arm64
             emitFunction((IRFunc*)m.funcs().get(f));
             _out.appendCString("\n");   // the blank line before the next function
             module.append(expandStagedSlots(
-                peepholeFallthrough(peepholeCopyProp(peepholeSpills(_out)))));
+                peepholeFallthrough(peepholeCopyProp(
+                    peepholeRedundantReloads(peepholeSpills(_out))))));
             _out = module;
         }
         emitModuleData(m);
@@ -3505,6 +3506,128 @@ class Arm64
                     acc.appendCString("]");
                     out.add((Object*)acc);
                     continue;
+                }
+            }
+            out.add((Object*)ln);
+        }
+        return joinLines(out);
+    }
+
+    // Same physical register, whatever view names it: writing `w16` zeroes the
+    // top half of `x16`, so a fact recorded about one view must die with the
+    // other. Comparing NAMES rather than numbers let a stale x16 survive a w16
+    // write, and the next full-width reload was then wrongly dropped.
+    static bool sameArm64Reg(String* a, String* b)
+    {
+        if (a.equals(b)) return true;
+        if (a.byteLength() < (u32)2 || b.byteLength() < (u32)2) return false;
+        u8 ca = a.cString()[(u32)0];
+        u8 cb = b.cString()[(u32)0];
+        // Two views alias when they name the same physical register: w/x in the
+        // general file, and b/h/s/d/q/v in the VECTOR file — writing `s8`
+        // zeroes the rest of `d8` exactly as `w16` zeroes the top of `x16`.
+        // Knowing only about w/x let a `d8` fact survive an `s8` write, and the
+        // next reload was wrongly dropped: auto_cloak's Math.pow tests failed.
+        bool gpA = (ca == (u8)'w' || ca == (u8)'x');
+        bool gpB = (cb == (u8)'w' || cb == (u8)'x');
+        bool fpA = (ca == (u8)'b' || ca == (u8)'h' || ca == (u8)'s'
+                 || ca == (u8)'d' || ca == (u8)'q' || ca == (u8)'v');
+        bool fpB = (cb == (u8)'b' || cb == (u8)'h' || cb == (u8)'s'
+                 || cb == (u8)'d' || cb == (u8)'q' || cb == (u8)'v');
+        if (!((gpA && gpB) || (fpA && fpB))) return false;
+        return a.substringFromByte((u32)1).equals(b.substringFromByte((u32)1));
+    }
+
+    static bool isBranchy(String* m)
+    {
+        if (m.hasPrefix(String.withCString("b."))) return true;
+        return m.equals(String.withCString("b"))    || m.equals(String.withCString("bl"))
+            || m.equals(String.withCString("br"))   || m.equals(String.withCString("blr"))
+            || m.equals(String.withCString("ret"))  || m.equals(String.withCString("cbz"))
+            || m.equals(String.withCString("cbnz")) || m.equals(String.withCString("tbz"))
+            || m.equals(String.withCString("tbnz"));
+    }
+
+    // The spill peephole forwards a STORE to the load that follows it. It does
+    // not notice a slot being LOADED twice into the same register with nothing
+    // changing in between, which is what an index or a loop-invariant base
+    // looks like when it is slot-homed and read once per use.
+    //
+    // Within one basic block a reload is redundant when the slot has not been
+    // stored to, the destination register has not been written, and no call has
+    // intervened. Conservative on every count: a label, branch, call, pair op
+    // (ldp/stp writes TWO registers and only the first is named), or a store
+    // through any base other than sp — which could land anywhere in the frame,
+    // as `c[i] = …` does — drops everything known.
+    String* peepholeRedundantReloads(String* text)
+    {
+        Array* lines = linesOf(text);
+        Array* out = new Array();
+        Array* hOff = new Array();      // slot offset, as text
+        Array* hReg = new Array();      // the register believed to hold it
+        for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1) {
+            String* ln = (String*)lines.get(i);
+            String* t = ln.trimmed();
+            bool barrier = t.isEmpty() || t.hasSuffix(String.withCString(":"))
+                        || t.hasPrefix(String.withCString(".")) || t.hasPrefix(String.withCString("//"));
+            String* jm = (String*)0;
+            Array* jo = (Array*)0;
+            if (!barrier) {
+                jo = parseAsmLine(ln, &jm);
+                if (jo == (Array*)0 || jm == (String*)0) barrier = true;
+                else if (isBranchy(jm)) barrier = true;
+                else if (jm.equals(String.withCString("ldp")) || jm.equals(String.withCString("stp")))
+                    barrier = true;
+            }
+            if (barrier) {
+                hOff.removeAll();
+                hReg.removeAll();
+                out.add((Object*)ln);
+                continue;
+            }
+            String* m = (String*)0; String* r = (String*)0; String* o = (String*)0;
+            if (parseSpLine(ln, &m, &r, &o)) {
+                if (m.equals(String.withCString("ldr"))) {
+                    bool have = false;
+                    for (u32 k = (u32)0; k < hOff.count(); k = k + (u32)1)
+                        if (((String*)hOff.get(k)).equals(o)
+                         && ((String*)hReg.get(k)).equals(r)) have = true;
+                    if (have) continue;                    // already there — drop
+                    u32 k = (u32)0;                        // this load redefines r
+                    while (k < hReg.count()) {
+                        if (sameArm64Reg((String*)hReg.get(k), r)) {
+                            hOff.removeAt(k); hReg.removeAt(k);
+                        } else k = k + (u32)1;
+                    }
+                    hOff.add((Object*)o); hReg.add((Object*)r);
+                    out.add((Object*)ln);
+                    continue;
+                }
+                if (m.equals(String.withCString("str"))) {
+                    u32 k = (u32)0;
+                    while (k < hOff.count()) {
+                        if (((String*)hOff.get(k)).equals(o)) { hOff.removeAt(k); hReg.removeAt(k); }
+                        else k = k + (u32)1;
+                    }
+                    hOff.add((Object*)o); hReg.add((Object*)r);
+                    out.add((Object*)ln);
+                    continue;
+                }
+                hOff.removeAll(); hReg.removeAll();
+                out.add((Object*)ln);
+                continue;
+            }
+            if (jm.hasPrefix(String.withCString("st"))) {
+                hOff.removeAll(); hReg.removeAll();        // could land anywhere
+                out.add((Object*)ln);
+                continue;
+            }
+            if (jo.count() >= (u32)1 && mnemWritesReg0(jm)) {
+                String* w = (String*)jo.get((u32)0);
+                u32 k = (u32)0;
+                while (k < hReg.count()) {
+                    if (sameArm64Reg((String*)hReg.get(k), w)) { hOff.removeAt(k); hReg.removeAt(k); }
+                    else k = k + (u32)1;
                 }
             }
             out.add((Object*)ln);
