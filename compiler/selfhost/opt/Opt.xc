@@ -8397,6 +8397,14 @@ class OptProfile
                     iter = iter + (u32)1;
                     continue;
                     }
+                // Last, because it is the only one that changes the loop
+                // STRUCTURE rather than its body: splitting a loop nothing can
+                // recognise gives the recognisers above two loops they can.
+                if (vecDistribute(fn))
+                    {
+                    iter = iter + (u32)1;
+                    continue;
+                    }
                 break;
                 }
             // …then break the serial accumulator dependency.
@@ -8407,6 +8415,344 @@ class OptProfile
     // `for (i=0; i<N; i++) b[i] = f(a[i], …)` — a single induction variable, no
     // carried value, loads and stores all indexed by the iv, and arithmetic
     // that is elementwise over them.
+    // LOOP DISTRIBUTION for multiple accumulators. Every recogniser gates on a
+    // header carrying exactly two phis — the induction variable and one
+    // accumulator — so a loop summing two things at once is refused outright.
+    // Rather than teach six recognisers about N accumulators, split the loop:
+    // copy it, let the copy keep one accumulator and the original keep the
+    // rest, and the existing recognisers then take each half on the next pass.
+    //
+    // Duplicating the loop duplicates its LOADS, so the body must be free of
+    // stores and calls — nothing here may be observed twice. The chains are
+    // otherwise independent by construction: each accumulator's cycle is closed
+    // (phi -> ... -> accNext -> phi), so removing one pair takes its whole chain
+    // with it once the leftovers are swept.
+    bool vecDistribute(IRFunc* fn)
+        {
+        for (u32 hi = (u32)0; hi < fn.blocks().count(); hi = hi + (u32)1)
+            if (vecDistributeAt(fn, (IRBlock*)fn.blocks().get(hi)))
+                return true;
+        return false;
+        }
+
+    // Split out for the arm64 frame budget, as vecWideningAt was.
+    bool vecDistributeAt(IRFunc* fn, IRBlock* H)
+        {
+        if (H.phis().count() < (u32)3)
+            return false;
+        IRInsn* term = H.term();
+        if (term == (IRInsn*)0 || !term.op().equals(String.withCString("CondBranch")) || term.ops().count() < (u32)3)
+            return false;
+        IROperand* co = (IROperand*)term.ops().get((u32)0);
+        if (co.kind() != (u8)OPK_USE)
+            return false;
+        IRInsn* guard = (IRInsn*)0;
+        for (u32 i = (u32)0; i < H.insns().count(); i = i + (u32)1)
+            {
+            IRInsn* n = (IRInsn*)H.insns().get(i);
+            if (n.res() == co.val())
+                guard = n;
+            }
+        if (guard == (IRInsn*)0 || !guard.op().equals(String.withCString("ICmp")) || guard.ops().count() < (u32)2)
+            return false;
+        IROperand* g0 = (IROperand*)guard.ops().get((u32)0);
+        if (g0.kind() != (u8)OPK_USE)
+            return false;
+        IRValue* iv = g0.val();
+
+        // One body, one latch, one exit — the shape every recogniser assumes.
+        IRBlock* t0 = ((IROperand*)term.ops().get((u32)1)).blk();
+        IRBlock* t1 = ((IROperand*)term.ops().get((u32)2)).blk();
+        IRBlock* B = (IRBlock*)0;
+        IRBlock* E = (IRBlock*)0;
+        for (u32 i = (u32)0; i < H.phis().count(); i = i + (u32)1)
+            {
+            IRInsn* phi = (IRInsn*)H.phis().get(i);
+            if (phi.res() != iv || phi.ops().count() != (u32)4)
+                continue;
+            bool zeroIsLatch = ((IROperand*)phi.ops().get((u32)0)).blk() == t0
+                            || ((IROperand*)phi.ops().get((u32)2)).blk() == t0;
+            B = zeroIsLatch ? t0 : t1;
+            E = zeroIsLatch ? t1 : t0;
+            }
+        if (B == (IRBlock*)0 || E == (IRBlock*)0 || B == H || E == H)
+            return false;
+        if (B.phis().count() != (u32)0 || E.phis().count() != (u32)0)
+            return false;
+        if (B.term() == (IRInsn*)0 || !B.term().op().equals(String.withCString("Branch"))
+            || B.term().ops().count() < (u32)1 || ((IROperand*)B.term().ops().get((u32)0)).blk() != H)
+            return false;
+        if (!vecDistributePure(B))
+            return false;
+
+        // The accumulators, paired with the body instruction that closes each
+        // cycle. The peel target is the LAST of them.
+        Array* accPhis = new Array();
+        Array* accNexts = new Array();
+        bool shaped = true;
+        for (u32 i = (u32)0; i < H.phis().count(); i = i + (u32)1)
+            {
+            IRInsn* phi = (IRInsn*)H.phis().get(i);
+            if (phi.res() == (IRValue*)0 || phi.res() == iv || phi.ops().count() != (u32)4)
+                continue;
+            IROperand* back = vecBackOp(phi, B);
+            if (back == (IROperand*)0 || back.kind() != (u8)OPK_USE)
+                {
+                shaped = false;
+                break;
+                }
+            IRInsn* accNext = (IRInsn*)0;
+            for (u32 k = (u32)0; k < B.insns().count(); k = k + (u32)1)
+                if (((IRInsn*)B.insns().get(k)).res() == back.val())
+                    accNext = (IRInsn*)B.insns().get(k);
+            if (accNext == (IRInsn*)0)
+                {
+                shaped = false;
+                break;
+                }
+            accPhis.add((Object*)phi);
+            accNexts.add((Object*)accNext);
+            }
+        if (!shaped || accPhis.count() < (u32)2)
+            return false;
+
+        // The chains must be INDEPENDENT. `a2 = a2 + a1` in the body would have
+        // a1's chain swept out from under it and a2 would then read a deleted
+        // value — which is not a theoretical worry: before this test, building
+        // the self-hosted compiler with distribution on produced a compiler
+        // that read float literals wrong, and the corpus lost twenty fixtures.
+        //
+        // The test is on the backward CONE of each cycle-closing instruction:
+        // no accumulator's cone may contain another accumulator's phi or its
+        // closing instruction. Sharing pure work is fine and expected — both of
+        // string_scan's chains read the same load, and the copy simply loads it
+        // again — so counting uses is the wrong test. It rejects the count
+        // chain, whose phi an if-converted body reads twice.
+        Array* cones = new Array();
+        for (u32 a = (u32)0; a < accNexts.count(); a = a + (u32)1)
+            cones.add((Object*)vecDistributeCone((IRInsn*)accNexts.get(a), B));
+        for (u32 a = (u32)0; a < cones.count(); a = a + (u32)1)
+            {
+            Map* cone = (Map*)cones.get(a);
+            for (u32 b2 = (u32)0; b2 < accPhis.count(); b2 = b2 + (u32)1)
+                {
+                if (a == b2)
+                    continue;
+                if (cone.get((Hashable*)((IRInsn*)accPhis.get(b2)).res()) != (Object*)0)
+                    return false;
+                if (cone.get((Hashable*)((IRInsn*)accNexts.get(b2)).res()) != (Object*)0)
+                    return false;
+                }
+            }
+        IRInsn* victim = (IRInsn*)accPhis.get(accPhis.count() - (u32)1);
+
+        Map* cmap = new Map();
+        Array* cl = vecCloneLoop(H, B, cmap);
+        IRBlock* H2 = (IRBlock*)cl.get((u32)0);
+        IRBlock* B2 = (IRBlock*)cl.get((u32)1);
+        IRValue* victimClone = (IRValue*)cmap.get((Hashable*)victim.res());
+        if (victimClone == (IRValue*)0)
+            return false;
+
+        // The original exits into a fresh PREHEADER for the copy, which falls
+        // into it. Branching H straight at H2 would work, but every recogniser
+        // refuses a loop whose exit block carries phis — and H2's phis are
+        // exactly that — so the original would stop being vectorisable the
+        // moment it was split. The empty block costs one branch and keeps both
+        // halves in the shape the recognisers expect.
+        IRBlock* PH2 = new IRBlock(hoistName2(H2.name(), "_pre"));
+        IRInsn* into = IRInsn.with(String.withCString("Branch"));
+        into.add(IROperand.block(H2));
+        PH2.setTerm(into);
+        for (u32 k = (u32)0; k < term.ops().count(); k = k + (u32)1)
+            {
+            IROperand* o = (IROperand*)term.ops().get(k);
+            if (o.kind() == (u8)OPK_BLOCK && o.blk() == E)
+                term.ops().set(k, (Object*)IROperand.block(PH2));
+            }
+
+        // The copy is entered from that preheader now, not the original's. Its
+        // seeds are unchanged: it runs the same range from the same values.
+        IRBlock* PH = ((IROperand*)((IRInsn*)H.phis().get((u32)0)).ops().get((u32)0)).blk() == B
+                          ? ((IROperand*)((IRInsn*)H.phis().get((u32)0)).ops().get((u32)2)).blk()
+                          : ((IROperand*)((IRInsn*)H.phis().get((u32)0)).ops().get((u32)0)).blk();
+        for (u32 i = (u32)0; i < H2.phis().count(); i = i + (u32)1)
+            {
+            IRInsn* phi = (IRInsn*)H2.phis().get(i);
+            for (u32 q = (u32)0; q + (u32)1 < phi.ops().count(); q = q + (u32)2)
+                {
+                IROperand* bo = (IROperand*)phi.ops().get(q);
+                if (bo.kind() == (u8)OPK_BLOCK && bo.blk() == PH)
+                    phi.ops().set(q, (Object*)IROperand.block(PH2));
+                }
+            }
+
+        // After the loops, the peeled accumulator is the COPY's.
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            if (bb == H || bb == B)
+                continue;
+            vecDistributeRewrite(bb.phis(), victim.res(), victimClone);
+            vecDistributeRewrite(bb.insns(), victim.res(), victimClone);
+            if (bb.term() != (IRInsn*)0)
+                vecDistributeRewriteOne(bb.term(), victim.res(), victimClone);
+            }
+
+        // The copy must be IN the function before anything is dropped: the
+        // sweep in vecDropAcc decides what is dead by walking fn.blocks(), so a
+        // copy that is not yet listed contributes no uses and its whole body
+        // scores dead.
+        u32 at = (u32)0;
+        for (u32 k = (u32)0; k < fn.blocks().count(); k = k + (u32)1)
+            if ((IRBlock*)fn.blocks().get(k) == B)
+                at = k + (u32)1;
+        Array* three = new Array();
+        three.add((Object*)PH2);
+        three.add((Object*)H2);
+        three.add((Object*)B2);
+        fn.blocks().insertAll(at, three);
+
+        // Drop the peeled accumulator from the original and the others from the
+        // copy. Each is a closed cycle, so the phi and its back-edge definition
+        // go together and the rest of the chain falls out in the sweep.
+        vecDropAcc(fn, victim.res(), H, B);
+        IRValue* ivClone = (IRValue*)cmap.get((Hashable*)iv);
+        Array* drop = new Array();
+        for (u32 i = (u32)0; i < H2.phis().count(); i = i + (u32)1)
+            {
+            IRInsn* phi = (IRInsn*)H2.phis().get(i);
+            if (phi.res() == (IRValue*)0 || phi.res() == victimClone || phi.res() == ivClone)
+                continue;
+            drop.add((Object*)phi.res());
+            }
+        for (u32 i = (u32)0; i < drop.count(); i = i + (u32)1)
+            vecDropAcc(fn, (IRValue*)drop.get(i), H2, B2);
+        return true;
+        }
+
+    // Every value the cycle-closing instruction depends on, walked backwards
+    // through the body. Values defined outside the body (the header's phis, the
+    // preheader's invariants) are recorded but not walked through.
+    Map* vecDistributeCone(IRInsn* accNext, IRBlock* B)
+        {
+        Map* cone = new Map();
+        Array* work = new Array();
+        cone.set((Hashable*)accNext.res(), (Object*)accNext);
+        work.add((Object*)accNext);
+        while (work.count() > (u32)0)
+            {
+            IRInsn* cur = (IRInsn*)work.get(work.count() - (u32)1);
+            work.removeAt(work.count() - (u32)1);
+            for (u32 k = (u32)0; k < cur.ops().count(); k = k + (u32)1)
+                {
+                IROperand* o = (IROperand*)cur.ops().get(k);
+                if (o.kind() != (u8)OPK_USE || o.val() == 0)
+                    continue;
+                if (cone.get((Hashable*)o.val()) != (Object*)0)
+                    continue;
+                cone.set((Hashable*)o.val(), (Object*)cur);
+                for (u32 i = (u32)0; i < B.insns().count(); i = i + (u32)1)
+                    if (((IRInsn*)B.insns().get(i)).res() == o.val())
+                        work.add((Object*)B.insns().get(i));
+                }
+            }
+        return cone;
+        }
+
+    // Nothing in the body may be observable twice, so the copy may hold only
+    // pure arithmetic and loads.
+    bool vecDistributePure(IRBlock* B)
+        {
+        for (u32 i = (u32)0; i < B.insns().count(); i = i + (u32)1)
+            {
+            String* op = ((IRInsn*)B.insns().get(i)).op();
+            if (op.equals(String.withCString("Load")) || op.equals(String.withCString("Const"))
+                || op.equals(String.withCString("Add")) || op.equals(String.withCString("Sub"))
+                || op.equals(String.withCString("Mul")) || op.equals(String.withCString("And"))
+                || op.equals(String.withCString("Or")) || op.equals(String.withCString("Xor"))
+                || op.equals(String.withCString("Shl")) || op.equals(String.withCString("LShr"))
+                || op.equals(String.withCString("AShr")) || op.equals(String.withCString("ICmp"))
+                || op.equals(String.withCString("Select")) || op.equals(String.withCString("ZExt"))
+                || op.equals(String.withCString("SExt")) || op.equals(String.withCString("Trunc"))
+                || op.equals(String.withCString("AddrOf")) || op.equals(String.withCString("FieldAddr"))
+                || op.equals(String.withCString("ElementAddr")))
+                continue;
+            return false;
+            }
+        return true;
+        }
+
+    void vecDistributeRewrite(Array* insns, IRValue* from, IRValue* to)
+        {
+        for (u32 i = (u32)0; i < insns.count(); i = i + (u32)1)
+            vecDistributeRewriteOne((IRInsn*)insns.get(i), from, to);
+        }
+
+    void vecDistributeRewriteOne(IRInsn* n, IRValue* from, IRValue* to)
+        {
+        for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
+            {
+            IROperand* o = (IROperand*)n.ops().get(k);
+            if (o.kind() == (u8)OPK_USE && o.val() == from)
+                n.ops().set(k, (Object*)IROperand.useVal(to));
+            }
+        }
+
+    // Remove one accumulator's phi and back-edge definition from a loop, then
+    // sweep whatever that orphans out of the body. The cycle is closed, so
+    // nothing else can refer to either once the uses outside have been
+    // rewritten.
+    void vecDropAcc(IRFunc* fn, IRValue* acc, IRBlock* H, IRBlock* B)
+        {
+        IRValue* back = (IRValue*)0;
+        Array* keptPhis = new Array();
+        for (u32 i = (u32)0; i < H.phis().count(); i = i + (u32)1)
+            {
+            IRInsn* phi = (IRInsn*)H.phis().get(i);
+            if (phi.res() == acc && phi.ops().count() == (u32)4)
+                {
+                IROperand* bo = vecBackOp(phi, B);
+                if (bo != (IROperand*)0 && bo.kind() == (u8)OPK_USE)
+                    back = bo.val();
+                continue;
+                }
+            keptPhis.add((Object*)phi);
+            }
+        H.setPhis(keptPhis);
+
+        Array* kept = new Array();
+        for (u32 i = (u32)0; i < B.insns().count(); i = i + (u32)1)
+            {
+            IRInsn* n = (IRInsn*)B.insns().get(i);
+            if (n.res() != (IRValue*)0 && n.res() == back)
+                continue;
+            kept.add((Object*)n);
+            }
+        B.setInsns(kept);
+
+        // Sweep the orphans to a fixpoint: removing one can orphan the one
+        // behind it.
+        bool removed = true;
+        while (removed)
+            {
+            removed = false;
+            Map* uses = useCounts(fn);
+            Array* keep = new Array();
+            for (u32 i = (u32)0; i < B.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)B.insns().get(i);
+                if (n.res() != (IRValue*)0 && n.memRes() == 0 && countOf(uses, n.res()) == (u32)0)
+                    {
+                    removed = true;
+                    continue;
+                    }
+                keep.add((Object*)n);
+                }
+            B.setInsns(keep);
+            }
+        }
+
     VecCand* vecRecogniseMap(IRFunc* fn)
         {
         Map* defOf = new Map();

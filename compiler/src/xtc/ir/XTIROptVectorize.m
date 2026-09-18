@@ -208,6 +208,314 @@ static BOOL resolveConstInt(XTIROperand* op, NSDictionary<NSNumber*, XTIRInsn*>*
     return YES;
     }
 
+// Split a loop that carries SEVERAL independent accumulators into one loop per
+// accumulator, so the single-accumulator recognisers can take each in turn.
+//
+// Every recogniser here gates on the header carrying exactly two phis — the
+// induction variable and one accumulator — so a loop like string_scan's
+//
+//     for (i) { if (buf[i] == 44) n++;  acc += (u32)buf[i]; }
+//
+// was refused outright, whatever its chains looked like. Rather than teach each
+// recogniser to carry N accumulators, peel ONE accumulator into its own copy of
+// the loop: runOnFunction iterates, so the copies come back round and are
+// vectorised by the existing machinery. A loop with K accumulators peels K-1
+// times and ends as K ordinary loops.
+//
+// Duplicating the loop duplicates its LOADS, which is why the body must be free
+// of stores and calls — nothing here may be observed twice. The chains are
+// otherwise independent by construction: each accumulator's cycle is closed
+// (phi -> … -> accNext -> phi), so removing one pair takes its whole chain with
+// it once the leftovers are swept.
+- (BOOL)distributeAccumulators:(XTIRFunction*)fn
+    {
+    static int off = -1;
+    if (off < 0) off = getenv("XTVEC_NO_DISTRIBUTE") ? 1 : 0;
+    if (off) return NO;
+    for (XTIRBlock* H in fn.blocks)
+        {
+        if (H.phiNodes.count < 3)
+            continue;
+
+        // The guard names the induction variable; everything else in the header
+        // is an accumulator.
+        XTIRInsn* term = H.terminator;
+        if (!term || term.opcode != XTIROpCondBranch || term.operands.count < 3)
+            continue;
+        if (term.operands[0].kind != XTIROperandKindUse)
+            continue;
+        XTIRInsn* guard = nil;
+        for (XTIRInsn* i in H.instructions)
+            if (i.result && i.result.valueId == term.operands[0].valueId)
+                guard = i;
+        if (!guard || guard.opcode != XTIROpICmp || guard.operands.count < 2 ||
+            guard.operands[0].kind != XTIROperandKindUse)
+            continue;
+        XTIRValueId ivId = guard.operands[0].valueId;
+
+        // One body, one latch, one exit — the shape every recogniser assumes.
+        XTIRBlock *B = nil, *E = nil;
+        XTIRBlock *t0 = term.operands[1].blockRef, *t1 = term.operands[2].blockRef;
+        for (XTIRInsn* phi in H.phiNodes)
+            if (phi.result && phi.result.valueId == ivId && phi.operands.count == 4)
+                {
+                XTIRBlock* latch = (phi.operands[0].blockRef == t0 || phi.operands[2].blockRef == t0) ? t0 : t1;
+                B = latch;
+                E = (latch == t0) ? t1 : t0;
+                }
+        if (!B || !E || B == H || E == H || B.phiNodes.count || E.phiNodes.count)
+            continue;
+        if (!B.terminator || B.terminator.opcode != XTIROpBranch ||
+            B.terminator.operands.count < 1 || B.terminator.operands[0].blockRef != H)
+            continue;
+
+        // Nothing in the body may be observable twice.
+        BOOL pure = YES;
+        for (XTIRInsn* i in B.instructions)
+            switch (i.opcode)
+                {
+            case XTIROpLoad: case XTIROpConst: case XTIROpAdd: case XTIROpSub:
+            case XTIROpMul: case XTIROpAnd: case XTIROpOr: case XTIROpXor:
+            case XTIROpShl: case XTIROpLShr: case XTIROpAShr: case XTIROpICmp:
+            case XTIROpSelect: case XTIROpZExt: case XTIROpSExt: case XTIROpTrunc:
+            case XTIROpAddrOf: case XTIROpFieldAddr: case XTIROpElementAddr:
+                break;
+            default:
+                pure = NO;
+                break;
+                }
+        if (!pure)
+            continue;
+
+        // The accumulators, paired with the body instruction that closes each
+        // cycle. The peel target is the LAST of them.
+        NSMutableArray<XTIRInsn*>* accPhis = [NSMutableArray array];
+        NSMutableArray<XTIRInsn*>* accNexts = [NSMutableArray array];
+        BOOL shaped = YES;
+        for (XTIRInsn* phi in H.phiNodes)
+            {
+            if (!phi.result || phi.result.valueId == ivId || phi.operands.count != 4)
+                continue;
+            XTIROperand* back = (phi.operands[0].blockRef == B) ? phi.operands[1] : phi.operands[3];
+            if (back.kind != XTIROperandKindUse)
+                { shaped = NO; break; }
+            XTIRInsn* accNext = nil;
+            for (XTIRInsn* i in B.instructions)
+                if (i.result && i.result.valueId == back.valueId)
+                    accNext = i;
+            if (!accNext)
+                { shaped = NO; break; }
+            [accPhis addObject:phi];
+            [accNexts addObject:accNext];
+            }
+        if (!shaped || accPhis.count < 2)
+            continue;
+
+        // The chains must be INDEPENDENT. `a2 = a2 + a1` in the body would have
+        // a1's chain swept out from under it and a2 would then read a deleted
+        // value — which is not a theoretical worry: before this test, building
+        // the self-hosted compiler with distribution on produced a compiler
+        // that read float literals wrong, and the corpus lost twenty fixtures.
+        //
+        // The test is on the backward CONE of each cycle-closing instruction:
+        // no accumulator's cone may contain another accumulator's phi or its
+        // closing instruction. Sharing pure work is fine and expected — both of
+        // string_scan's chains read the same load, and the copy simply loads it
+        // again — so counting uses is the wrong test. It rejects the count
+        // chain, whose phi an if-converted body reads twice.
+        NSMutableArray<NSMutableSet<NSNumber*>*>* cones = [NSMutableArray array];
+        for (XTIRInsn* accNext in accNexts)
+            {
+            NSMutableSet<NSNumber*>* cone = [NSMutableSet set];
+            NSMutableArray<XTIRInsn*>* work = [NSMutableArray arrayWithObject:accNext];
+            [cone addObject:@(accNext.result.valueId)];
+            while (work.count)
+                {
+                XTIRInsn* cur = work.lastObject;
+                [work removeLastObject];
+                for (XTIROperand* o in cur.operands)
+                    {
+                    if (o.kind != XTIROperandKindUse || [cone containsObject:@(o.valueId)])
+                        continue;
+                    [cone addObject:@(o.valueId)];
+                    for (XTIRInsn* i in B.instructions)
+                        if (i.result && i.result.valueId == o.valueId)
+                            [work addObject:i];
+                    }
+                }
+            [cones addObject:cone];
+            }
+        BOOL independent = YES;
+        for (NSUInteger a = 0; a < cones.count && independent; a++)
+            for (NSUInteger b2 = 0; b2 < accPhis.count; b2++)
+                {
+                if (a == b2)
+                    continue;
+                if ([cones[a] containsObject:@(accPhis[b2].result.valueId)] ||
+                    [cones[a] containsObject:@(accNexts[b2].result.valueId)])
+                    { independent = NO; break; }
+                }
+        if (!independent)
+            continue;
+        XTIRInsn* victim = accPhis.lastObject;
+
+        // Copy the whole loop; the copy keeps the peeled accumulator and the
+        // original keeps the rest.
+        XTIRBlock *H2 = nil, *B2 = nil;
+        NSMutableDictionary<NSNumber*, NSNumber*>* cmap = [NSMutableDictionary dictionary];
+        xtvCloneLoop(fn, H, B, &H2, &B2, cmap);
+        XTIRValueId victimCloneId = (XTIRValueId)cmap[@(victim.result.valueId)].unsignedLongLongValue;
+
+        // The original exits into a fresh PREHEADER for the copy, which then
+        // falls into it. Branching H straight at H2 would work, but every
+        // recogniser refuses a loop whose exit block carries phis — and H2's
+        // phis are exactly that — so the original would stop being vectorisable
+        // the moment it was split. The empty block costs one branch and keeps
+        // both halves in the shape the recognisers expect.
+        XTIRBlock* PH2 = [[XTIRBlock alloc] init];
+        PH2.name = [NSString stringWithFormat:@"%@_pre", H2.name ?: @"hdr"];
+        [PH2 setTerminator:[[XTIRInsn alloc] initWithOpcode:XTIROpBranch
+                                                     result:nil
+                                                   operands:@[ [XTIROperand blockWithRef:H2] ]
+                                                     dbgLoc:term.dbgLoc]];
+
+        NSMutableArray<XTIROperand*>* tops = [term.operands mutableCopy];
+        for (NSUInteger k = 0; k < tops.count; k++)
+            if (tops[k].kind == XTIROperandKindBlock && tops[k].blockRef == E)
+                tops[k] = [XTIROperand blockWithRef:PH2];
+        [term replaceOperands:tops];
+
+        // The copy is entered from that preheader now, not the original's. Its
+        // seeds are unchanged: it runs the same range from the same starting
+        // values.
+        XTIRBlock* PH = (H.phiNodes.count && H.phiNodes[0].operands[0].blockRef == B)
+                            ? H.phiNodes[0].operands[2].blockRef
+                            : (H.phiNodes.count ? H.phiNodes[0].operands[0].blockRef : nil);
+        for (XTIRInsn* phi in H2.phiNodes)
+            {
+            NSMutableArray<XTIROperand*>* pops = [phi.operands mutableCopy];
+            for (NSUInteger k = 0; k + 1 < pops.count; k += 2)
+                if (pops[k].kind == XTIROperandKindBlock && pops[k].blockRef == PH)
+                    pops[k] = [XTIROperand blockWithRef:PH2];
+            [phi replaceOperands:pops];
+            }
+
+        // After the loops, the peeled accumulator is the COPY's.
+        for (XTIRBlock* bb in fn.blocks)
+            {
+            if (bb == H || bb == B)
+                continue;
+            NSMutableArray<XTIRInsn*>* all = [NSMutableArray array];
+            [all addObjectsFromArray:bb.phiNodes];
+            [all addObjectsFromArray:bb.instructions];
+            if (bb.terminator) [all addObject:bb.terminator];
+            for (XTIRInsn* i in all)
+                {
+                if (bb == H2 || bb == B2)
+                    continue;
+                NSMutableArray<XTIROperand*>* ops = [i.operands mutableCopy];
+                BOOL hit = NO;
+                for (NSUInteger k = 0; k < ops.count; k++)
+                    if (ops[k].kind == XTIROperandKindUse && ops[k].valueId == victim.result.valueId)
+                        { ops[k] = [XTIROperand useWithValueId:victimCloneId]; hit = YES; }
+                if (hit) [i replaceOperands:ops];
+                }
+            }
+
+        // The copy must be IN the function before anything is dropped: the sweep
+        // in dropAccumulator decides what is dead by walking fn.blocks, so a
+        // copy that is not yet listed contributes no uses and its whole body
+        // scores dead.
+        NSUInteger at = [fn.blocks indexOfObjectIdenticalTo:B];
+        [fn.blocks insertObjects:@[ PH2, H2, B2 ]
+                       atIndexes:[NSIndexSet indexSetWithIndexesInRange:NSMakeRange(at + 1, 3)]];
+
+        // Drop the peeled accumulator from the original, and the others from the
+        // copy. Each is a closed cycle, so the phi and its back-edge definition
+        // go together and the rest of the chain falls out in the sweep below.
+        [self dropAccumulator:victim.result.valueId header:H body:B fn:fn];
+        for (XTIRInsn* phi in [H2.phiNodes copy])
+            {
+            if (!phi.result || phi.result.valueId == victimCloneId)
+                continue;
+            XTIRValueId ivCloneId = (XTIRValueId)cmap[@(ivId)].unsignedLongLongValue;
+            if (phi.result.valueId == ivCloneId)
+                continue;
+            [self dropAccumulator:phi.result.valueId header:H2 body:B2 fn:fn];
+            }
+
+        return YES;
+        }
+    return NO;
+    }
+
+// Remove one accumulator's phi and back-edge definition from a loop, then sweep
+// whatever that orphans out of the body. The cycle is closed, so nothing else
+// can be referring to either once the uses outside the loop have been rewritten.
+- (void)dropAccumulator:(XTIRValueId)accId
+                 header:(XTIRBlock*)H
+                   body:(XTIRBlock*)B
+                     fn:(XTIRFunction*)fn
+    {
+    XTIRValueId backId = 0;
+    NSMutableArray<XTIRInsn*>* keptPhis = [NSMutableArray array];
+    for (XTIRInsn* phi in H.phiNodes)
+        {
+        if (phi.result && phi.result.valueId == accId && phi.operands.count == 4)
+            {
+            XTIROperand* back = (phi.operands[0].blockRef == B) ? phi.operands[1] : phi.operands[3];
+            if (back.kind == XTIROperandKindUse)
+                backId = back.valueId;
+            continue;
+            }
+        [keptPhis addObject:phi];
+        }
+    [H.phiNodes setArray:keptPhis];
+
+    NSMutableArray<XTIRInsn*>* kept = [NSMutableArray array];
+    for (XTIRInsn* i in B.instructions)
+        if (!(i.result && i.result.valueId == backId))
+            [kept addObject:i];
+    [B.instructions setArray:kept];
+
+    // Sweep the orphans: a pure body instruction nothing reads any more. To a
+    // fixpoint, because removing one can orphan the one behind it.
+    BOOL removed = YES;
+    while (removed)
+        {
+        removed = NO;
+        NSCountedSet<NSNumber*>* used = [NSCountedSet set];
+        for (XTIRBlock* bb in fn.blocks)
+            {
+            NSMutableArray<XTIRInsn*>* all = [NSMutableArray array];
+            [all addObjectsFromArray:bb.phiNodes];
+            [all addObjectsFromArray:bb.instructions];
+            if (bb.terminator) [all addObject:bb.terminator];
+            for (XTIRInsn* i in all)
+                for (XTIROperand* o in i.operands)
+                    if (o.kind == XTIROperandKindUse)
+                        [used addObject:@(o.valueId)];
+            }
+        NSMutableArray<XTIRInsn*>* keep = [NSMutableArray array];
+        for (XTIRInsn* i in B.instructions)
+            {
+            BOOL dead = i.result && !i.memoryResult &&
+                        [used countForObject:@(i.result.valueId)] == 0 &&
+                        (i.opcode == XTIROpICmp || i.opcode == XTIROpSelect ||
+                         i.opcode == XTIROpAdd || i.opcode == XTIROpSub ||
+                         i.opcode == XTIROpMul || i.opcode == XTIROpAnd ||
+                         i.opcode == XTIROpOr || i.opcode == XTIROpXor ||
+                         i.opcode == XTIROpZExt || i.opcode == XTIROpSExt ||
+                         i.opcode == XTIROpTrunc || i.opcode == XTIROpConst ||
+                         i.opcode == XTIROpShl || i.opcode == XTIROpLShr ||
+                         i.opcode == XTIROpAShr);
+            if (dead) { removed = YES; continue; }
+            [keep addObject:i];
+            }
+        [B.instructions setArray:keep];
+        }
+    }
+
 - (void)runOnFunction:(XTIRFunction*)fn
     {
     BOOL reduxOff = getenv("XTVEC_REDUX_OFF") != NULL;
@@ -250,6 +558,11 @@ static BOOL resolveConstInt(XTIROperand* op, NSDictionary<NSNumber*, XTIRInsn*>*
             [self applyWideningSum:dp inFunction:fn];
             continue;
             }
+        // Nothing matched. If the loop carries several accumulators, peel one
+        // into its own copy and come round again — the copies are ordinary
+        // single-accumulator loops that the recognisers above already handle.
+        if (!reduxOff && [self distributeAccumulators:fn])
+            continue;
         break;
         }
     // Break the serial accumulator dependency: unroll vectorised reduction loops
