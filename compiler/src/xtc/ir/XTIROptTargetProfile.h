@@ -130,6 +130,13 @@ NS_ASSUME_NONNULL_BEGIN
 // aliasing-immune) and integer 2's-complement lane ops match the scalar result.
 - (BOOL)vectorizesLoops;
 
+/// Can the back end lower VMulHi (the HIGH half of a lane product) and
+/// VLShr? Constant division vectorises through a magic multiply, which
+/// needs both. arm64 has umull/umull2/uzp2 and ushr; the other vectorising
+/// back ends have no lowering yet, so the pass leaves those loops scalar
+/// rather than emitting an opcode they would drop.
+- (BOOL)vectorizesHighMultiply;
+
 // YES to rotate a top-tested loop into a bottom-tested one: the loop's exit test
 // is peeled into the preheader (run once) and duplicated at the bottom of the
 // body, so the back-edge becomes a single conditional branch (cbnz) instead of a

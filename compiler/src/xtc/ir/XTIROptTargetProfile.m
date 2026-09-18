@@ -90,6 +90,11 @@
     {
     return NO;
     }
+
+- (BOOL)vectorizesHighMultiply
+    {
+    return NO;
+    }
 - (BOOL)formsPointerInductionVars
     {
     return NO;
@@ -194,6 +199,13 @@
     return YES;
     }
 - (BOOL)vectorizesLoops
+    {
+    return YES;
+    }
+
+// umull/umull2 + uzp2 build the high half of a 32x32 lane product and
+// ushr does the post-shift, so constant division vectorises here.
+- (BOOL)vectorizesHighMultiply
     {
     return YES;
     }

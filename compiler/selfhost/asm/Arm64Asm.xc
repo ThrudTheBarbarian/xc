@@ -925,6 +925,50 @@ class Arm64Asm
                     return b | (d.q() << (u32)30) | (d.size() << (u32)22)
                          | (m.num() << (u32)16) | (n.num() << (u32)5) | d.num();
                 }
+                b = neonWiden3(mn);
+                if (b != (u32)0) {
+                    if (n.size() != m.size() || n.q() != m.q()) {
+                        fail(String.withCString("widening multiply sources disagree"));
+                        return (u32)0;
+                    }
+                    // The suffix IS the half-selector; a mismatch would quietly
+                    // encode the other half of the register.
+                    bool hi = mn.hasSuffix(String.withCString("2"));
+                    if ((n.q() == (u32)1) != hi) {
+                        fail(String.withCString("widening multiply suffix does not match its sources"));
+                        return (u32)0;
+                    }
+                    if (d.size() != n.size() + (u32)1) {
+                        fail(String.withCString("widening multiply destination must be twice the source width"));
+                        return (u32)0;
+                    }
+                    _hit = true;
+                    return b | (n.q() << (u32)30) | (n.size() << (u32)22)
+                         | (m.num() << (u32)16) | (n.num() << (u32)5) | d.num();
+                }
+            }
+        }
+        // ushr/sshr Vd.T, Vn.T, #shift
+        if (d.ok() && ops.count() == (u32)3
+            && opAt(ops, (u32)2).hasPrefix(String.withCString("#"))) {
+            u32 bs = neonShrImm(mn);
+            if (bs != (u32)0) {
+                VRegRef* n = parseVReg(opAt(ops, (u32)1));
+                if (!n.ok() || n.size() != d.size() || n.q() != d.q()) {
+                    fail(String.withCString("shift-right arrangements disagree"));
+                    return (u32)0;
+                }
+                U64* sh = parseImm(opAt(ops, (u32)2));
+                if (!_immOk) { fail(String.withCString("bad shift amount")); return (u32)0; }
+                u32 esize = (u32)8 << d.size();
+                u32 amt = sh.lo();
+                if (amt < (u32)1 || amt > esize) {
+                    fail(String.withCString("shift-right amount out of range"));
+                    return (u32)0;
+                }
+                _hit = true;
+                return bs | (d.q() << (u32)30) | (((u32)2 * esize - amt) << (u32)16)
+                     | (n.num() << (u32)5) | d.num();
             }
         }
         if (d.ok() && ops.count() == (u32)2) {
@@ -1130,6 +1174,31 @@ class Arm64Asm
     {
         if (m.equals(String.withCString("saddlp"))) return (u32)$0E202800;
         if (m.equals(String.withCString("uaddlp"))) return (u32)$2E202800;
+        return (u32)0;
+    }
+
+    // Widening 3-different: multiplies the lanes of Vn and Vm into a
+    // destination of HALF the lane count at twice the width
+    // (`umull v0.2d, v1.2s, v2.2s`). The `2` suffix is the same instruction
+    // reading the HIGH half of its sources, which is what Q selects — so Q and
+    // size both come from the SOURCE, as they do for neonPairLong.
+    // The vectoriser's VMulHi emits the pair to build a 32x32 high half.
+    static u32 neonWiden3(String* m)
+    {
+        if (m.equals(String.withCString("smull")))  return (u32)$0E20C000;
+        if (m.equals(String.withCString("umull")))  return (u32)$2E20C000;
+        if (m.equals(String.withCString("smull2"))) return (u32)$0E20C000;
+        if (m.equals(String.withCString("umull2"))) return (u32)$2E20C000;
+        return (u32)0;
+    }
+
+    // Shift right by immediate. immh:immb holds (2*esize - shift), so the
+    // encoded field GROWS as the shift shrinks and a shift of 0 is not
+    // encodable at all — callers emit a move instead.
+    static u32 neonShrImm(String* m)
+    {
+        if (m.equals(String.withCString("ushr"))) return (u32)$2F000400;
+        if (m.equals(String.withCString("sshr"))) return (u32)$0F000400;
         return (u32)0;
     }
 

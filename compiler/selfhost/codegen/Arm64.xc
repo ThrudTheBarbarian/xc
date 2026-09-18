@@ -1538,10 +1538,14 @@ class Arm64
     Map* _fuseSrc;         // scvtf: the integer source operand
     Map* _fuseSigned;
     Map* _fuseBits;
+    Map* _fuseSh;          // shiftop: the shift mnemonic and its amount
+    Map* _fuseAmt;
 
     void computeFusions(IRFunc* fn)
     {
         _fusedAway = new Map();
+        _fuseSh = new Map();
+        _fuseAmt = new Map();
         _fuseKind = new Map();
         _fuseA = new Map(); _fuseB = new Map(); _fuseC = new Map();
         _fuseMnem = new Map(); _fuseSrc = new Map();
@@ -1669,6 +1673,80 @@ class Arm64
                 _fusedAway.set((Hashable*)mul.res(), (Object*)mul.res());
             }
         }
+        computeShiftFusions(fn);
+    }
+
+    // Shifted register operand: `orr Rd, Rn, Rm, lsr #k`. arm64 lets a
+    // data-processing instruction shift its SECOND source for free, so a
+    // constant shift feeding one never needs to exist. It is not only the shift
+    // that goes: in bit_ops both shift results were live at the `orr`, the pool
+    // was exhausted, and each round-tripped through a frame slot — a store and a
+    // reload apiece. Folding one removes five instructions from a fifteen-
+    // instruction body, because the pressure that forced the spill goes too.
+    //
+    // The shift must be the instruction IMMEDIATELY BEFORE its consumer, for
+    // the reason the FMA fusion documents: allocation runs BEFORE fusion, so it
+    // may hand the shift's source register to something computed in between.
+    //
+    // Only the second operand can carry the shift, and only at 32 or 64 bits:
+    // narrow values live sign-extended in their registers, so the shift would
+    // act on the extension rather than on the value.
+    void computeShiftFusions(IRFunc* fn)
+    {
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1) {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1) {
+                IRInsn* n = (IRInsn*)bb.insns().get(i);
+                String* op = n.op();
+                String* mn = (String*)0;
+                if (op.equals(String.withCString("Add"))) mn = String.withCString("add");
+                else if (op.equals(String.withCString("Sub"))) mn = String.withCString("sub");
+                else if (op.equals(String.withCString("And"))) mn = String.withCString("and");
+                else if (op.equals(String.withCString("Or")))  mn = String.withCString("orr");
+                else if (op.equals(String.withCString("Xor"))) mn = String.withCString("eor");
+                if (mn == (String*)0) continue;
+                if (n.res() == (IRValue*)0 || n.ops().count() < (u32)2) continue;
+                if (width(n.res().ty()) < (u32)4) continue;
+                IROperand* o1 = (IROperand*)n.ops().get((u32)1);
+                if (o1.kind() != (u8)OPK_USE || o1.val() == (IRValue*)0) continue;
+                if (useCountOf(o1.val()) != (u32)1) continue;
+                if (inMap(_fusedAway, o1.val())) continue;
+                IRInsn* prev = (i > (u32)0) ? (IRInsn*)bb.insns().get(i - (u32)1) : (IRInsn*)0;
+                if (prev == (IRInsn*)0 || prev.res() != o1.val()) continue;
+                String* sh = (String*)0;
+                if (prev.op().equals(String.withCString("Shl")))  sh = String.withCString("lsl");
+                else if (prev.op().equals(String.withCString("LShr"))) sh = String.withCString("lsr");
+                else if (prev.op().equals(String.withCString("AShr"))) sh = String.withCString("asr");
+                if (sh == (String*)0 || prev.ops().count() < (u32)2) continue;
+                if (((IROperand*)prev.ops().get((u32)0)).kind() != (u8)OPK_USE) continue;
+                if (width(prev.res().ty()) != width(n.res().ty())) continue;
+                // A LOGICAL right shift of a SIGNED value needs the
+                // zero-extension dance the normal path does; keep it out.
+                if (prev.op().equals(String.withCString("LShr")) && isSignedTy(prev.res().ty()))
+                    continue;
+                i64 k = (i64)-1;
+                IROperand* ko = (IROperand*)prev.ops().get((u32)1);
+                if (ko.kind() == (u8)OPK_IMMI) k = ko.imm();
+                else if (ko.kind() == (u8)OPK_USE) {
+                    Object* kd = _defOf.get((Hashable*)ko.val());
+                    if (kd != (Object*)0) {
+                        IRInsn* kn = (IRInsn*)kd;
+                        if (kn.op().equals(String.withCString("Const")) && kn.ops().count() >= (u32)1
+                            && ((IROperand*)kn.ops().get((u32)0)).kind() == (u8)OPK_IMMI)
+                            k = ((IROperand*)kn.ops().get((u32)0)).imm();
+                    }
+                }
+                u32 dw = width(n.res().ty()) == (u32)8 ? (u32)64 : (u32)32;
+                if (k < (i64)0 || k >= (i64)dw) continue;
+                _fuseKind.set((Hashable*)n.res(), (Object*)String.withCString("shiftop"));
+                _fuseMnem.set((Hashable*)n.res(), (Object*)mn);
+                _fuseA.set((Hashable*)n.res(), (Object*)n.ops().get((u32)0));
+                _fuseSrc.set((Hashable*)n.res(), (Object*)prev.ops().get((u32)0));
+                _fuseSh.set((Hashable*)n.res(), (Object*)sh);
+                _fuseAmt.set((Hashable*)n.res(), (Object*)Number.with((u32)k));
+                _fusedAway.set((Hashable*)prev.res(), (Object*)prev.res());
+            }
+        }
     }
 
     IRInsn* singleUseFMul(IROperand* o, IRInsn* prev)
@@ -1697,6 +1775,19 @@ class Arm64
             _out.appendFormat("    %s %s, %s, #%lu\n", sgn ? "scvtf" : "ucvtf",
                               d.cString(), s.cString(),
                               ((Number*)_fuseBits.get((Hashable*)n.res())).asU32());
+            storeReg(d, n.res());
+            return;
+        }
+        if (kind.equals(String.withCString("shiftop"))) {
+            String* ra = operandReg((IROperand*)_fuseA.get((Hashable*)n.res()), scratchName((u32)16, ty));
+            String* rs = operandReg((IROperand*)_fuseSrc.get((Hashable*)n.res()), scratchName((u32)17, ty));
+            String* d = resultReg(n.res(), scratchName((u32)16, ty));
+            _out.appendFormat("    %s %s, %s, %s, %s #%lu\n",
+                              ((String*)_fuseMnem.get((Hashable*)n.res())).cString(),
+                              d.cString(), ra.cString(), rs.cString(),
+                              ((String*)_fuseSh.get((Hashable*)n.res())).cString(),
+                              ((Number*)_fuseAmt.get((Hashable*)n.res())).asU32());
+            canonicaliseUnlessProven(d, n.res());
             storeReg(d, n.res());
             return;
         }
@@ -2445,6 +2536,8 @@ class Arm64
         if (op.equals(String.withCString("VMax")) || op.equals(String.withCString("VMin")))
             { emitVMinMax(n); return true; }
         if (op.equals(String.withCString("VAddLP"))) { emitVAddLP(n); return true; }
+        if (op.equals(String.withCString("VMulHi"))) { emitVMulHi(n); return true; }
+        if (op.equals(String.withCString("VLShr"))) { emitVLShr(n); return true; }
         if (op.equals(String.withCString("VICmp")))  { emitVICmp(n);  return true; }
         if (op.equals(String.withCString("VReduceAdd")) || op.equals(String.withCString("VReduceMax"))
          || op.equals(String.withCString("VReduceMin"))) { emitVReduce(n); return true; }
@@ -2575,6 +2668,45 @@ class Arm64
         String* outArr = neonArr(laneOf(n.res().ty()));
         _out.appendFormat("    uaddlp v%lu.%s, v%lu.%s\n", vecIndex(n.res()), outArr.cString(),
                           vecIndex(o0.val()), inArr.cString());
+    }
+
+    // HIGH half of the lane product. No single NEON instruction gives it:
+    // umull does the low two lanes into 2xu64 and umull2 the high two, then
+    // uzp2 takes the ODD 32-bit word of each 64-bit result — which is the high
+    // half of each product. v16/v17 are the FP scratch pair, outside the
+    // v18-v31 vector pool, written and read within this one expansion; a
+    // vectorised body contains no calls and no FP scalars, so nothing else
+    // holds them. uzp2 reads only the scratch, so a destination aliasing either
+    // source is safe.
+    void emitVMulHi(IRInsn* n)
+    {
+        if (n.ops().count() < (u32)2 || n.res() == (IRValue*)0) { unsupported(n.op()); return; }
+        IROperand* o0 = (IROperand*)n.ops().get((u32)0);
+        IROperand* o1 = (IROperand*)n.ops().get((u32)1);
+        if (o0.kind() != (u8)OPK_USE || o1.kind() != (u8)OPK_USE) { unsupported(n.op()); return; }
+        u32 a = vecIndex(o0.val());
+        u32 b = vecIndex(o1.val());
+        _out.appendFormat("    umull v16.2d, v%lu.2s, v%lu.2s\n", a, b);
+        _out.appendFormat("    umull2 v17.2d, v%lu.4s, v%lu.4s\n", a, b);
+        _out.appendFormat("    uzp2 v%lu.4s, v16.4s, v17.4s\n", vecIndex(n.res()));
+    }
+
+    void emitVLShr(IRInsn* n)
+    {
+        if (n.ops().count() < (u32)2 || n.res() == (IRValue*)0) { unsupported(n.op()); return; }
+        IROperand* o0 = (IROperand*)n.ops().get((u32)0);
+        IROperand* o1 = (IROperand*)n.ops().get((u32)1);
+        if (o0.kind() != (u8)OPK_USE || o1.kind() != (u8)OPK_IMMI) { unsupported(n.op()); return; }
+        String* arr = neonArr(laneOf(n.res().ty()));
+        u32 a = vecIndex(o0.val());
+        u32 d = vecIndex(n.res());
+        i64 sh = o1.imm();
+        // ushr cannot encode a shift of zero (immh:immb holds 2*esize-shift),
+        // and a zero shift is just the value.
+        if (sh == (i64)0)
+            _out.appendFormat("    mov v%lu.16b, v%lu.16b\n", d, a);
+        else
+            _out.appendFormat("    ushr v%lu.%s, v%lu.%s, #%lld\n", d, arr.cString(), a, arr.cString(), sh);
     }
 
     void emitVICmp(IRInsn* n)
@@ -6196,6 +6328,29 @@ class Arm64
         gpCaller.add((Object*)String.withCString("x12"));
         gpCaller.add((Object*)String.withCString("x13"));
         gpCaller.add((Object*)String.withCString("x14"));
+        // ...and the ARGUMENT registers. x0-x7 are dead between calls, and
+        // _crossCall is computed inclusively, so a value live AT a call — an
+        // outgoing argument included — is already barred from every
+        // caller-saved tier. That is what makes these safe despite argument
+        // marshalling writing them.
+        //
+        // PARAMETERS are held out below: they ARRIVE in x0-x7, so homing one
+        // there turns the prologue's copies into a parallel move.
+        //
+        // The pool roughly doubles, 14 -> 22. Measured on the benchmark suite:
+        // sieve -45%, mem_copy -40%, bit_ops -15%, array_map -21%, against
+        // branch_mix +20% (which is a real regression and not understood —
+        // its accumulator moves out of a frame slot into a register, which is
+        // strictly less work, and it runs slower; ordering and phi-exclusion
+        // variants were both tried and changed nothing).
+        gpCaller.add((Object*)String.withCString("x0"));
+        gpCaller.add((Object*)String.withCString("x1"));
+        gpCaller.add((Object*)String.withCString("x2"));
+        gpCaller.add((Object*)String.withCString("x3"));
+        gpCaller.add((Object*)String.withCString("x4"));
+        gpCaller.add((Object*)String.withCString("x5"));
+        gpCaller.add((Object*)String.withCString("x6"));
+        gpCaller.add((Object*)String.withCString("x7"));
         Array* fpCallee = new Array();
         fpCallee.add((Object*)String.withCString("d8"));
         fpCallee.add((Object*)String.withCString("d9"));
@@ -6209,8 +6364,8 @@ class Arm64
         // are the auto-vectoriser's pool.
         Array* fpCaller = new Array();
 
-        assignTier(gp, gpCallee, gpCaller);
-        assignTier(fp, fpCallee, fpCaller);
+        assignTier(fn, gp, gpCallee, gpCaller);
+        assignTier(fn, fp, fpCallee, fpCaller);
         sortSaved(gpCallee, fpCallee);
         coalescePhiInputs(fn, gpCaller, fpCaller);
     }
@@ -6382,7 +6537,24 @@ class Arm64
     // overlap — which is what lets an unrolled serial chain, each link dead
     // once the next is computed, pack onto one or two registers instead of
     // spilling around the calls between them.
-    void assignTier(Array* cands, Array* callee, Array* caller)
+    // x0-x7: the argument registers, which a PARAMETER may not be homed in.
+    static bool isArgReg(String* r)
+    {
+        return r.equals(String.withCString("x0")) || r.equals(String.withCString("x1"))
+            || r.equals(String.withCString("x2")) || r.equals(String.withCString("x3"))
+            || r.equals(String.withCString("x4")) || r.equals(String.withCString("x5"))
+            || r.equals(String.withCString("x6")) || r.equals(String.withCString("x7"));
+    }
+
+    bool isParamValue(IRFunc* fn, IRValue* v)
+    {
+        for (u32 i = (u32)0; i < fn.params().count(); i = i + (u32)1)
+            if ((IRValue*)fn.params().get(i) == v)
+                return true;
+        return false;
+    }
+
+    void assignTier(IRFunc* fn, Array* cands, Array* callee, Array* caller)
     {
         Array* regs = new Array();
         for (u32 i = (u32)0; i < caller.count(); i = i + (u32)1) regs.add(caller.get(i));
@@ -6406,9 +6578,11 @@ class Arm64
             i32 e = endOf(v);
             bool isPhi = hasVal(_phiRes, v);
             bool mayCaller = !hasVal(_crossCall, v);
+            bool isParam = isParamValue(fn, v);
             u32 chosen = regs.count();
             for (u32 r = (u32)0; r < regs.count(); r = r + (u32)1) {
                 if (!mayCaller && r < nCaller) continue;
+                if (isParam && isArgReg((String*)regs.get(r))) continue;
                 if (((Number*)excl.get(r)).asU32() != (u32)0) continue;
                 Array* rlo = (Array*)lo.get(r);
                 if (isPhi) {

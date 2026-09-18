@@ -421,6 +421,10 @@
         return @"VICmp";
     case XTIROpVAddLP:
         return @"VAddLP";
+    case XTIROpVMulHi:
+        return @"VMulHi";
+    case XTIROpVLShr:
+        return @"VLShr";
     case XTIROpVReduceAdd:
         return @"VReduceAdd";
     case XTIROpVReduceMax:

@@ -184,6 +184,8 @@ typedef NS_ENUM(uint16_t, XTIROpcode) {
     XTIROpVMin,       // %v:Vec <- a, b   (lane-wise min; u/s from lane type)
     XTIROpVICmp,      // %v:Vec <- a, b   (lane-wise compare → 0/-1 mask; predicate)
     XTIROpVAddLP,     // %v:Vec(2W) <- a:Vec(W)  (unsigned add-long-pairwise/uaddlp)
+    XTIROpVMulHi,     // %v:Vec(W) <- a:Vec(W), b:Vec(W)  (HIGH half of the lane product)
+    XTIROpVLShr,      // %v:Vec(W) <- a:Vec(W), #imm  (logical shift right by a constant)
     XTIROpVReduceAdd, // scalar <- %v:Vec  (horizontal add of all lanes)
     XTIROpVReduceMax, // scalar <- %v:Vec  (horizontal max; u/s from result type)
     XTIROpVReduceMin, // scalar <- %v:Vec  (horizontal min; u/s from result type)

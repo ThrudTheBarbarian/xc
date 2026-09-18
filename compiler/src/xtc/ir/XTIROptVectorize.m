@@ -92,6 +92,12 @@
 // Widening sum (isWideningSum = YES): `acc:u32 += (u32)a[i]` over u8/u16 a[].
 // The narrow load is vector-loaded (16×u8 / 8×u16) and folded into a 4×u32
 // accumulator via uaddlp widening, then horizontally reduced.
+// Constant divides in the body, keyed by the UDiv result id, each carrying
+// the magic multiplier and post-shift the recogniser DERIVED. Recorded here
+// rather than recomputed in the applier so the two cannot disagree: when
+// they did, the applier fell through to emitting a vector UDiv, which no
+// back end lowers and which silently returned a wrong sum.
+@property(nonatomic) NSMutableDictionary<NSNumber*, NSArray<NSNumber*>*>* divMagic;
 @property(nonatomic) BOOL isWideningSum;
 @property(nonatomic) XTIRType* loadLaneType; // u8 or u16
 @property(nonatomic) XTIRValueId loadId;     // the narrow Load result
@@ -115,6 +121,43 @@
 - (NSInteger)minOptLevel
     {
     return 2;
+    }
+
+// Unsigned magic-number division, the SIMPLE form only (Hacker's Delight
+// §10-9). Returns NO unless x/d == mulhu(x, M) >>u s holds for every x, which
+// is the `a == 0` case; the other form needs an extra add and a shift that
+// cannot overflow, and there is no vector idiom for it here. d = 7 and d = 14
+// are the small divisors that fall out — they stay scalar and correct.
+//
+// The same computation lives in the arm64 back end as xtMagicU, which is where
+// the scalar lowering gets its constants. Both sides must agree, or a loop
+// would compute one answer vectorised and another scalar.
+static BOOL xtvMagicU32(uint64_t d, uint64_t* Mout, int* sout)
+    {
+    if (d < 2)
+        return NO;
+    const int W = 32;
+    uint64_t twoWm1 = (uint64_t)1 << (W - 1);
+    uint64_t maxu = ((uint64_t)1 << W) - 1;
+    uint64_t twoW = (uint64_t)1 << W;
+    int a = 0, p = W - 1;
+    uint64_t nc = maxu - (twoW % d);
+    uint64_t q1 = twoWm1 / nc, r1 = twoWm1 - q1 * nc;
+    uint64_t q2 = (twoWm1 - 1) / d, r2 = (twoWm1 - 1) - q2 * d;
+    uint64_t delta;
+    do {
+        p++;
+        if (r1 >= nc - r1) { q1 = 2*q1 + 1; r1 = 2*r1 - nc; }
+        else               { q1 = 2*q1;     r1 = 2*r1; }
+        if (r2 + 1 >= d - r2) { if (q2 >= twoWm1 - 1) a = 1; q2 = 2*q2 + 1; r2 = 2*r2 + 1 - d; }
+        else                  { if (q2 >= twoWm1)     a = 1; q2 = 2*q2;     r2 = 2*r2 + 1; }
+        delta = d - 1 - r2;
+    } while (p < 2*W && (q1 < delta || (q1 == delta && r1 == 0)));
+    if (a)
+        return NO;
+    *Mout = (q2 + 1) & maxu;
+    *sout = p - W;
+    return YES;
     }
 
 static BOOL elementwiseArith(XTIROpcode op)
@@ -227,6 +270,124 @@ static BOOL resolveConstInt(XTIROperand* op, NSDictionary<NSNumber*, XTIRInsn*>*
 // otherwise independent by construction: each accumulator's cycle is closed
 // (phi -> … -> accNext -> phi), so removing one pair takes its whole chain with
 // it once the leftovers are swept.
+// `acc = acc + X + Y` is left-associated by the parser, so the back-edge value
+// is Add(Add(acc, X), Y) and the accumulator is one Add DEEPER than every
+// recogniser looks — each wants Add(acc, elem). Integer addition is associative
+// modulo 2^32, so rotating the chain is exact, not an approximation:
+//
+//     (acc + X) + Y   ->   acc + (X + Y)
+//
+// Applied repeatedly, that lifts the accumulator out of a chain of any depth.
+// This is worth more than it looks: int_muldiv reads
+// `acc = acc + ((a[i] * 7) / 3) + (a[i] / 11)`, and BOTH halves of it — the
+// magic-division work and the reduction itself — were blocked by nothing but
+// the shape of those two plus signs. Writing the same expression with the
+// right-hand side bracketed vectorised all along.
+//
+// The inner Add must have exactly one user, the outer one. Otherwise something
+// else reads the partial sum and rotating changes what it sees.
+- (BOOL)reassociateReductions:(XTIRFunction*)fn
+    {
+    BOOL changed = NO;
+    for (XTIRBlock* H in fn.blocks)
+        {
+        if (H.phiNodes.count < 2)
+            continue;
+        // Candidate accumulators: every phi in this header. Which one is the
+        // induction variable does not matter — rotating is sound for any of
+        // them, and a phi that is not an accumulator simply never matches.
+        NSMutableSet<NSNumber*>* accs = [NSMutableSet set];
+        for (XTIRInsn* phi in H.phiNodes)
+            if (phi.result)
+                [accs addObject:@(phi.result.valueId)];
+
+        for (XTIRBlock* B in fn.blocks)
+            {
+            if (B == H)
+                continue;
+            // Only the loop's own latch: a block whose terminator branches back.
+            if (!B.terminator || B.terminator.opcode != XTIROpBranch ||
+                B.terminator.operands.count < 1 ||
+                B.terminator.operands[0].blockRef != H)
+                continue;
+
+            NSCountedSet<NSNumber*>* uses = [NSCountedSet set];
+            for (XTIRBlock* bb in fn.blocks)
+                {
+                NSMutableArray<XTIRInsn*>* all = [NSMutableArray array];
+                [all addObjectsFromArray:bb.phiNodes];
+                [all addObjectsFromArray:bb.instructions];
+                if (bb.terminator) [all addObject:bb.terminator];
+                for (XTIRInsn* i in all)
+                    for (XTIROperand* o in i.operands)
+                        if (o.kind == XTIROperandKindUse)
+                            [uses addObject:@(o.valueId)];
+                }
+
+            for (NSUInteger oi = 0; oi < B.instructions.count; oi++)
+                {
+                XTIRInsn* outer = B.instructions[oi];
+                if (outer.opcode != XTIROpAdd || !outer.result || outer.operands.count < 2)
+                    continue;
+                // The accumulator must not already be a direct operand.
+                BOOL direct = NO;
+                for (XTIROperand* o in outer.operands)
+                    if (o.kind == XTIROperandKindUse && [accs containsObject:@(o.valueId)])
+                        direct = YES;
+                if (direct)
+                    continue;
+
+                for (NSUInteger side = 0; side < 2; side++)
+                    {
+                    XTIROperand* spine = outer.operands[side];
+                    XTIROperand* other = outer.operands[1 - side];
+                    if (spine.kind != XTIROperandKindUse ||
+                        [uses countForObject:@(spine.valueId)] != 1)
+                        continue;
+                    NSUInteger ii = NSNotFound;
+                    for (NSUInteger k = 0; k < oi; k++)
+                        if (B.instructions[k].result &&
+                            B.instructions[k].result.valueId == spine.valueId)
+                            ii = k;
+                    if (ii == NSNotFound)
+                        continue;
+                    XTIRInsn* inner = B.instructions[ii];
+                    if (inner.opcode != XTIROpAdd || inner.operands.count < 2)
+                        continue;
+                    NSUInteger accSide = NSNotFound;
+                    for (NSUInteger k = 0; k < 2; k++)
+                        if (inner.operands[k].kind == XTIROperandKindUse &&
+                            [accs containsObject:@(inner.operands[k].valueId)])
+                            accSide = k;
+                    if (accSide == NSNotFound)
+                        continue;
+                    XTIROperand* accOp = inner.operands[accSide];
+                    XTIROperand* x = inner.operands[1 - accSide];
+
+                    // inner becomes X + Y, keeping its result id — its only
+                    // user is outer — and outer becomes acc + that.
+                    //
+                    // It must also MOVE to just before outer. Y is normally
+                    // computed AFTER the inner Add (it is the next term of the
+                    // expression), so rewriting inner where it stands would
+                    // read Y before it is defined. That is not a crash: the
+                    // register holds whatever was there, and int_muldiv came
+                    // back 837576896 instead of 2079322496 — fast and wrong.
+                    // Moving it down is safe because X precedes inner and Y
+                    // precedes outer, so both dominate the new position.
+                    [inner replaceOperands:@[ x, other ]];
+                    [outer replaceOperands:@[ accOp, [XTIROperand useWithValueId:spine.valueId] ]];
+                    [B.instructions removeObjectAtIndex:ii];
+                    [B.instructions insertObject:inner atIndex:oi - 1];
+                    changed = YES;
+                    break;
+                    }
+                }
+            }
+        }
+    return changed;
+    }
+
 - (BOOL)distributeAccumulators:(XTIRFunction*)fn
     {
     static int off = -1;
@@ -558,9 +719,13 @@ static BOOL resolveConstInt(XTIROperand* op, NSDictionary<NSNumber*, XTIRInsn*>*
             [self applyWideningSum:dp inFunction:fn];
             continue;
             }
-        // Nothing matched. If the loop carries several accumulators, peel one
-        // into its own copy and come round again — the copies are ordinary
-        // single-accumulator loops that the recognisers above already handle.
+        // Nothing matched. `acc = acc + X + Y` parses left-associated, which
+        // hides the accumulator one Add deep; rotate it back out and try again.
+        if (!reduxOff && [self reassociateReductions:fn])
+            continue;
+        // If the loop carries several accumulators, peel one into its own copy
+        // and come round again — the copies are ordinary single-accumulator
+        // loops that the recognisers above already handle.
         if (!reduxOff && [self distributeAccumulators:fn])
             continue;
         break;
@@ -1705,6 +1870,7 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
         XTIRType* laneType = nil;
         BOOL ok = YES, sawLoad = NO;
         NSMutableSet<NSNumber*>* elemIds = [NSMutableSet set];
+        NSMutableDictionary<NSNumber*, NSArray<NSNumber*>*>* divMagic = nil;
         BOOL (^isElemAddrAtIv)(XTIROperand*) = ^BOOL(XTIROperand* p) {
           if (p.kind != XTIROperandKindUse)
               return NO;
@@ -1780,6 +1946,29 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
                 }
             if (op == XTIROpConst || op == XTIROpZExt || op == XTIROpSExt || op == XTIROpTrunc)
                 continue;
+            // Unsigned division by a compile-time constant. There is no lane
+            // divide; it becomes a magic multiply, which needs the HIGH half of
+            // the lane product. Only the simple magic form is taken (see
+            // xtvMagicU32) and only where the back end can lower VMulHi.
+            if (op == XTIROpUDiv &&
+                (self.profile ?: [XTIROptTargetProfile conservativeProfile]).vectorizesHighMultiply)
+                {
+                int64_t dv = 0;
+                uint64_t M; int sh;
+                if (insn.result && insn.result.type.kind == XTIRTypeKindU32 &&
+                    insn.operands.count >= 2 && elemOperandOK(insn.operands[0]) &&
+                    resolveConstInt(insn.operands[1], defOf, &dv) && dv > 1 &&
+                    xtvMagicU32((uint64_t)dv, &M, &sh))
+                    {
+                    if (!divMagic)
+                        divMagic = [NSMutableDictionary dictionary];
+                    divMagic[@(insn.result.valueId)] = @[ @(M), @(sh) ];
+                    [elemIds addObject:@(insn.result.valueId)];
+                    continue;
+                    }
+                ok = NO;
+                break;
+                }
             if (elementwiseArith(op))
                 {
                 if (!insn.result || !(insn.result.type.kind == XTIRTypeKindI32 ||
@@ -1884,6 +2073,7 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
         c.laneType = laneType;
         c.vw = vw;
         c.isReduction = YES;
+        c.divMagic = divMagic;
         c.accPhi = accPhi;
         c.accNext = accNext;
         c.accId = accId;
@@ -2022,6 +2212,44 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
                                                      dbgLoc:insn.dbgLoc];
             vl.memoryResult = insn.memoryResult;
             [newBody addObject:vl];
+            vmap[@(insn.result.valueId)] = vr;
+            break;
+            }
+        // `x / d` with d a compile-time constant: mulhu(x, M) >>u s. The
+        // recogniser has already proved the simple magic form applies, so a
+        // failure here would mean the two disagreed — bail rather than emit
+        // something that computes a different answer from the scalar loop.
+        case XTIROpUDiv:
+            {
+            // The magic comes from the candidate, derived when the loop was
+            // recognised. There is no fallback: a UDiv reaching here that the
+            // recogniser did not clear would mean the loop should never have
+            // been accepted, and the only "generic" lowering available is a
+            // vector UDiv that no back end implements.
+            NSArray<NSNumber*>* mg = c.divMagic[@(insn.result.valueId)];
+            NSAssert(mg != nil, @"UDiv in a vectorised reduction with no magic");
+            if (!mg)
+                {
+                [newBody addObject:insn];
+                break;
+                }
+            uint64_t M = mg[0].unsignedLongLongValue;
+            int sh = mg[1].intValue;
+            XTIROperand* vm = vecOperand([XTIROperand immIWithType:c.laneType
+                                                              value:(int64_t)M]);
+            XTIROperand* vx = vecOperand(insn.operands[0]);
+            XTIRValue* hi = newVal(vecTy);
+            [newBody addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpVMulHi
+                                                         result:hi
+                                                       operands:@[ vx, vm ]
+                                                         dbgLoc:insn.dbgLoc]];
+            XTIRValue* vr = newVal(vecTy);
+            [newBody addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpVLShr
+                                                         result:vr
+                                                       operands:@[ [XTIROperand useWithValueId:hi.valueId],
+                                                                   [XTIROperand immIWithType:c.laneType
+                                                                                       value:sh] ]
+                                                         dbgLoc:insn.dbgLoc]];
             vmap[@(insn.result.valueId)] = vr;
             break;
             }

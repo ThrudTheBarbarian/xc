@@ -1131,8 +1131,35 @@ static const NSUInteger kArm64VaForwardWords = 16;
     // temp; x15-x17 are the load/op/store scratch; x8 is the indirect-result
     // reg). There is no FP caller-saved tier — v0-v15 are FP scratch and v16-v31
     // are the auto-vectoriser's register pool.
+    // ...and the ARGUMENT registers on top of that. x0-x7 are dead between
+    // calls, and `crossesCall` is computed inclusively (`s <= c && c <= e`), so
+    // a value live AT a call — an outgoing argument included — is already
+    // excluded from every caller-saved tier. That is what makes these safe
+    // despite argument marshalling writing them.
+    //
+    // PARAMETERS are held out: they arrive in x0-x7, so homing one there makes
+    // the prologue's copies a parallel move (param0 in x1 homed to x0 while
+    // param1 in x0 homes to x1 clobbers), and the memory-safety trap reporter
+    // recovers a parameter's home from the callee-save area, where a
+    // caller-saved register never appears.
+    //
+    // This roughly doubles the GP pool, 14 -> 22. It matters because the top of
+    // the remaining benchmark gap is not missing instructions but values that
+    // should be in registers and are not: bit_ops spilled both shift results,
+    // sort_small round-trips its `&&` result, its index AND its array base
+    // through slots on every iteration of the hot loop.
     NSArray<NSString *> *gpCallerRegs = @[@"x10", @"x11", @"x12", @"x13", @"x14"];
     NSArray<NSString *> *fpCallerRegs = @[];
+    // Tried LAST, after both existing tiers. Ordering is not cosmetic: the
+    // preference list is caller-then-callee, so folding these in beside
+    // x10-x14 put them ahead of x19-x27 and re-shuffled every allocation the
+    // compiler already made. That is a change of a different kind from adding
+    // registers, and it cost branch_mix 20% while the extra registers were
+    // winning 45% on sieve. Appended at the end, an existing allocation is
+    // unchanged and only values that would otherwise get NO register see these.
+    NSArray<NSString *> *gpArgTier = @[@"x0", @"x1", @"x2", @"x3",
+                                       @"x4", @"x5", @"x6", @"x7"];
+    NSUInteger nParams = ctx.fn.paramTypes.count;
 
     // ── Live-range reuse assignment ──────────────────────────────────
     // Compute live intervals, then assign registers greedily in priority
@@ -1187,11 +1214,17 @@ static const NSUInteger kArm64VaForwardWords = 16;
     // Two tiers: caller-saved first (no prologue save), then callee-saved. A
     // value that crosses a call may only use callee-saved. Only callee-saved
     // homes are recorded in `saved` for prologue/epilogue.
-    void (^assign)(NSArray<NSNumber *> *, NSArray<NSString *> *, NSArray<NSString *> *) =
-        ^(NSArray<NSNumber *> *cands, NSArray<NSString *> *callee, NSArray<NSString *> *caller) {
+    void (^assign)(NSArray<NSNumber *> *, NSArray<NSString *> *, NSArray<NSString *> *,
+                   NSArray<NSString *> *) =
+        ^(NSArray<NSNumber *> *cands, NSArray<NSString *> *callee, NSArray<NSString *> *caller,
+          NSArray<NSString *> *argTier) {
         NSMutableArray<NSString *> *regs = [NSMutableArray arrayWithArray:caller];
+        [regs addObjectsFromArray:argTier];
         [regs addObjectsFromArray:callee];
-        NSSet<NSString *> *callerSet = [NSSet setWithArray:caller];
+        NSMutableArray<NSString *> *callerAll = [NSMutableArray arrayWithArray:caller];
+        [callerAll addObjectsFromArray:argTier];
+        NSSet<NSString *> *callerSet = [NSSet setWithArray:callerAll];
+        NSSet<NSString *> *gpArgRegs = [NSSet setWithArray:argTier];
         NSUInteger nr = regs.count;
         NSMutableArray<NSMutableArray<NSValue *> *> *regIvls = [NSMutableArray array];
         NSMutableArray<NSNumber *> *exclusive = [NSMutableArray array];
@@ -1201,9 +1234,11 @@ static const NSUInteger kArm64VaForwardWords = 16;
             NSInteger e = endOf[v]   ? endOf[v].integerValue   : s;
             BOOL isPhi = [phiResults containsObject:v];
             BOOL mayUseCaller = ![crossesCall containsObject:v];
+            BOOL isParam = v.integerValue >= 0 && (NSUInteger)v.integerValue < nParams;
             NSInteger chosen = -1;
             for (NSUInteger r = 0; r < nr; r++) {
                 if (!mayUseCaller && [callerSet containsObject:regs[r]]) continue;
+                if (isParam && [gpArgRegs containsObject:regs[r]]) continue;
                 if (exclusive[r].boolValue) continue;
                 if (isPhi) { if (regIvls[r].count == 0) { chosen = (NSInteger)r; break; } continue; }
                 BOOL ok = YES;
@@ -1223,8 +1258,8 @@ static const NSUInteger kArm64VaForwardWords = 16;
             }
         }
     };
-    assign(gp, gpRegs, gpCallerRegs);
-    assign(fp, fpRegs, fpCallerRegs);
+    assign(gp, gpRegs, gpCallerRegs, gpArgTier);
+    assign(fp, fpRegs, fpCallerRegs, @[]);
     // Stable callee-save order (prologue/epilogue iterate this array together).
     [saved sortUsingComparator:^NSComparisonResult(NSString *a, NSString *b) {
         NSUInteger ia = [gpRegs indexOfObject:a]; if (ia == NSNotFound) ia = 100 + [fpRegs indexOfObject:a];
@@ -2590,6 +2625,76 @@ static XTIROperand *icmpZeroTestValue(XTIRInsn *icmp, XTArm64FnCtx *ctx) {
             prevInsn = insn;
         }
     }
+
+    // ── Shifted register operand: `orr Rd, Rn, Rm, lsr #k` ──
+    // arm64 lets a data-processing instruction shift its SECOND source for
+    // free, so a constant shift feeding one of these never needs to exist. It
+    // is not only the shift that goes: in bit_ops the two shift results were
+    // both live at the `orr`, the pool was exhausted, and each one round-tripped
+    // through a frame slot — a store and a reload apiece. Folding one of them
+    // removes five instructions from a nine-instruction body, because the
+    // pressure that forced the spill goes with it.
+    //
+    // The shift must be the instruction IMMEDIATELY BEFORE its consumer, for
+    // the reason the FMA fusion above documents: allocation runs BEFORE fusion,
+    // so it may hand the shift's source register to anything computed in
+    // between, and the fused form reaches back for that source.
+    //
+    // Only the second operand can carry the shift, and only at 32 or 64 bits:
+    // narrow values live sign-extended in their registers, and the shift would
+    // then act on the extension rather than the value (the trap the LShr paths
+    // below spell out).
+    for (XTIRBlock *bb in fn.blocks) {
+        XTIRInsn *prev = nil;
+        for (XTIRInsn *insn in bb.instructions) {
+            NSString *mn = nil;
+            switch (insn.opcode) {
+                case XTIROpAdd: mn = @"add"; break;
+                case XTIROpSub: mn = @"sub"; break;
+                case XTIROpAnd: mn = @"and"; break;
+                case XTIROpOr:  mn = @"orr"; break;
+                case XTIROpXor: mn = @"eor"; break;
+                default: break;
+            }
+            if (!mn || !insn.result || insn.operands.count < 2 ||
+                !insn.result.type || insn.result.type.byteWidth < 4) { prev = insn; continue; }
+            XTIROperand *o1 = insn.operands[1];
+            if (o1.kind != XTIROperandKindUse || !prev || !prev.result ||
+                prev.result.valueId != o1.valueId ||
+                [uses countForObject:@(o1.valueId)] != 1) { prev = insn; continue; }
+            NSString *sh = prev.opcode == XTIROpShl  ? @"lsl"
+                         : prev.opcode == XTIROpLShr ? @"lsr"
+                         : prev.opcode == XTIROpAShr ? @"asr" : nil;
+            if (!sh || prev.operands.count < 2 ||
+                prev.operands[0].kind != XTIROperandKindUse ||
+                !prev.result.type || prev.result.type.byteWidth != insn.result.type.byteWidth) {
+                prev = insn; continue;
+            }
+            // A LOGICAL right shift of a SIGNED value needs the zero-extension
+            // dance below; keep those out of the fold entirely.
+            if (prev.opcode == XTIROpLShr && XTIRTypeKindIsSigned(prev.result.type.kind)) {
+                prev = insn; continue;
+            }
+            int64_t k = -1;
+            if (prev.operands[1].kind == XTIROperandKindImmI)
+                k = prev.operands[1].intValue;
+            else if (prev.operands[1].kind == XTIROperandKindUse) {
+                XTIRInsn *kd = defOf[@(prev.operands[1].valueId)];
+                if (kd && kd.opcode == XTIROpConst && kd.operands.count >= 1 &&
+                    kd.operands[0].kind == XTIROperandKindImmI)
+                    k = kd.operands[0].intValue;
+            }
+            NSUInteger dw = insn.result.type.byteWidth == 8 ? 64 : 32;
+            if (k < 0 || k >= (int64_t)dw) { prev = insn; continue; }
+            ctx.fuseAt[@(insn.result.valueId)] = @{
+                @"kind": @"shiftop", @"mnem": mn,
+                @"a": insn.operands[0], @"src": prev.operands[0],
+                @"sh": sh, @"amt": @(k),
+            };
+            [ctx.fusedAway addObject:@(prev.result.valueId)];
+            prev = insn;
+        }
+    }
 }
 
 // The element stride for an ElementAddr (arm64-native: 8-byte host pointers,
@@ -3228,6 +3333,17 @@ static uint64_t satMul64(uint64_t a, uint64_t b) {
         [ctx.out appendFormat:@"    %@ %@, %@, #%@\n",
          [fz[@"signed"] boolValue] ? @"scvtf" : @"ucvtf", dst, src, fz[@"fbits"]];
         [self storeReg:dst intoValue:insn.result.valueId ctx:ctx];
+    } else if ([kind isEqualToString:@"shiftop"]) {
+        XTIRType *ty = insn.result.type;
+        NSString *ra = [self operandReg:fz[@"a"] intoScratch:[self regName:16 forType:ty] ctx:ctx];
+        NSString *rs = [self operandReg:fz[@"src"] intoScratch:[self regName:17 forType:ty] ctx:ctx];
+        NSString *d  = [self resultReg:insn.result.valueId
+                               scratch:[self regName:16 forType:ty] ctx:ctx];
+        [ctx.out appendFormat:@"    %@ %@, %@, %@, %@ #%@\n",
+         fz[@"mnem"], d, ra, rs, fz[@"sh"], fz[@"amt"]];
+        if (![ctx.noCanon containsObject:@(insn.result.valueId)])
+            [self canonicaliseReg:d toType:ty ctx:ctx];
+        [self storeReg:d intoValue:insn.result.valueId ctx:ctx];
     } else if ([kind isEqualToString:@"fma"]) {
         XTIRType *ty = insn.result.type;
         NSString *ra = [self operandReg:fz[@"a"] intoScratch:[self fregName:0 forType:ty] ctx:ctx];
@@ -5100,6 +5216,47 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
             NSUInteger d = [self vecIndexForValue:insn.result.valueId ctx:ctx];
             [ctx.out appendFormat:@"    uaddlp v%lu.%@, v%lu.%@\n",
              (unsigned long)d, outArr, (unsigned long)a, inArr];
+            break;
+        }
+        case XTIROpVMulHi: {      // HIGH half of the lane product
+            // No single NEON instruction gives the high half of a 32x32
+            // product. umull does the low two lanes into 2xu64 and umull2 the
+            // high two, then uzp2 takes the ODD 32-bit word of each 64-bit
+            // result — which is the high half of each product. v16/v17 are the
+            // FP scratch pair, outside the v18-v31 vector pool, and both are
+            // written and read within this one expansion; a vectorised body
+            // contains no calls and no FP scalars, so nothing else holds them.
+            // uzp2 reads only the scratch, so a destination that aliases either
+            // source is safe.
+            if (insn.operands.count < 2 || !insn.result ||
+                insn.operands[0].kind != XTIROperandKindUse ||
+                insn.operands[1].kind != XTIROperandKindUse) break;
+            NSUInteger a = [self vecIndexForValue:insn.operands[0].valueId ctx:ctx];
+            NSUInteger b = [self vecIndexForValue:insn.operands[1].valueId ctx:ctx];
+            NSUInteger d = [self vecIndexForValue:insn.result.valueId ctx:ctx];
+            [ctx.out appendFormat:@"    umull v16.2d, v%lu.2s, v%lu.2s\n",
+             (unsigned long)a, (unsigned long)b];
+            [ctx.out appendFormat:@"    umull2 v17.2d, v%lu.4s, v%lu.4s\n",
+             (unsigned long)a, (unsigned long)b];
+            [ctx.out appendFormat:@"    uzp2 v%lu.4s, v16.4s, v17.4s\n", (unsigned long)d];
+            break;
+        }
+        case XTIROpVLShr: {       // lane-wise logical shift right by a constant
+            if (insn.operands.count < 2 || !insn.result ||
+                insn.operands[0].kind != XTIROperandKindUse ||
+                insn.operands[1].kind != XTIROperandKindImmI) break;
+            NSString *arr = [self neonArrFor:insn.result.type.pointeeType];
+            NSUInteger a = [self vecIndexForValue:insn.operands[0].valueId ctx:ctx];
+            NSUInteger d = [self vecIndexForValue:insn.result.valueId ctx:ctx];
+            int64_t sh = insn.operands[1].intValue;
+            // ushr cannot encode a shift of zero (immh:immb holds 2*esize-shift),
+            // and a zero shift is just the value.
+            if (sh == 0)
+                [ctx.out appendFormat:@"    mov v%lu.16b, v%lu.16b\n",
+                 (unsigned long)d, (unsigned long)a];
+            else
+                [ctx.out appendFormat:@"    ushr v%lu.%@, v%lu.%@, #%lld\n",
+                 (unsigned long)d, arr, (unsigned long)a, arr, (long long)sh];
             break;
         }
         case XTIROpVICmp: {       // lane-wise compare → 0/-1 mask

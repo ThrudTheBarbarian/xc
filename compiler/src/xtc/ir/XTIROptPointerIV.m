@@ -254,9 +254,23 @@ static BOOL affineOffset(XTIRValueId vid, XTIRValueId ivId,
         // Register-pressure cap: each base becomes a loop-carried pointer phi,
         // and the unroller threads each through the unrolled copies (~2 live
         // values per pointer). Too many arrays overflow the GP home pool (9
-        // callee-saved regs) and spill — a net loss. Measured: 1-2 arrays win or
-        // are neutral, 4 regress badly. So only form pointer IVs when few bases.
-        if (groups.count > 2)
+        // callee-saved regs) and spill — a net loss.
+        //
+        // Re-measured 2026-09-18, best of five, reference compiler at -O3:
+        //
+        //   cap   array_map   mem_copy   struct_copy   matrix_mul   sieve
+        //    2      15392       8253        16379        10082      32689
+        //    3      12480       8138        16397         9996      32184
+        //    4      12658       8548        15427        10005      33221
+        //
+        // 3 is the sweet spot and 2 was leaving a fifth of array_map on the
+        // table: it reads a[i] and b[i] and writes c[i], so THREE bases, and at
+        // a cap of 2 the whole loop kept recomputing `base + i*4` three times
+        // per vector — and spilled the store address, because there is only one
+        // address scratch. The earlier note said 4 "regresses badly"; measured
+        // again it is only slightly worse than 3, so the cap is a tuning
+        // parameter rather than a cliff. Re-measure before moving it.
+        if (groups.count > 3)
             continue;
 
         XTIRType* ivTy = ivPhi.result.type;

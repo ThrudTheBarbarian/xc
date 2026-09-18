@@ -37,6 +37,7 @@ class OptProfile
     // the caller's LOADED Agg temp — not reliably addressable on the 6502.
     bool _inlineAggParams;
     bool _vectorize;         // map/reduce kernels go to SIMD
+    bool _highMul;           // back end lowers VMulHi/VLShr (constant divide)
     bool _reductionCollapse; // an invariant reduction nest collapses
     bool _memsetIdiom;       // a byte-fill loop becomes one MemSet
     bool _initGuardElim;     // a redundant static-init guard comes out
@@ -70,6 +71,7 @@ class OptProfile
         _tailRecursion = false;
         _accumRecursion = false;
         _vectorize = false;
+        _highMul = false;
         _reductionCollapse = false;
         _memsetIdiom = false;
         _initGuardElim = false;
@@ -111,6 +113,12 @@ class OptProfile
         // NEON on arm9/arm64, SSE on x86_64, v128 on wasm32 (W4); the 6502
         // and the 68000 have no vector unit and their profiles say so.
         p._vectorize = t.equals(String.withCString("arm9")) || t.equals(String.withCString("arm64")) || t.equals(String.withCString("x86_64")) || t.equals(String.withCString("win64")) || t.equals(String.withCString("wasm32"));
+        // umull/umull2 + uzp2 build the high half of a 32x32 lane product
+        // and ushr does the post-shift, so constant division vectorises on
+        // arm64. The other vectorising back ends have no lowering yet, and
+        // the pass leaves those loops scalar rather than emitting an opcode
+        // they would drop.
+        p._highMul = t.equals(String.withCString("arm64"));
         p._memsetIdiom = !(t.equals(String.withCString("xt")) || t.equals(String.withCString("xt6502")) || t.equals(String.withCString("atarist")));
         // The 6502 does NOT hoist: an eager init at entry costs it more than
         // the guard it saves.
@@ -216,6 +224,10 @@ class OptProfile
     bool vectorize(void)
         {
         return _vectorize;
+        }
+    bool highMul(void)
+        {
+        return _highMul;
         }
     bool reductionCollapse(void)
         {
@@ -460,6 +472,8 @@ class OptProfile
     // describe every shape; the reduction shapes add their accumulator on top.
     class VecCand
     {
+    // Per-UDiv magic recorded by the recogniser; see _vrDivMagic.
+    Map* _divMagic;
     IRBlock* _h;
     IRBlock* _b;
     IRBlock* _e;
@@ -612,6 +626,14 @@ class OptProfile
     IRValue* acc(void)
         {
         return _acc;
+        }
+    Map* divMagic(void)
+        {
+        return _divMagic;
+        }
+    void setDivMagic(Map* m)
+        {
+        _divMagic = m;
         }
     IRValue* elem(void)
         {
@@ -6988,9 +7010,22 @@ class OptProfile
             return false;
         // Register-pressure cap. Each base becomes a loop-carried pointer phi
         // that the unroller threads through every copy — roughly two live
-        // values apiece. Measured: one or two arrays win or are neutral, four
-        // regress badly by overflowing the callee-saved home pool.
-        if (bases.count() > (u32)2)
+        // values apiece, against a nine-register callee-saved home pool.
+        //
+        // Re-measured 2026-09-18, best of five at -O3:
+        //
+        //   cap   array_map   mem_copy   struct_copy   matrix_mul   sieve
+        //    2      15392       8253        16379        10082      32689
+        //    3      12480       8138        16397         9996      32184
+        //    4      12658       8548        15427        10005      33221
+        //
+        // 3 is the sweet spot, and 2 was leaving a fifth of array_map on the
+        // table: it reads a[i] and b[i] and writes c[i], so THREE bases, and at
+        // a cap of 2 the loop recomputed `base + i*4` three times per vector and
+        // spilled the store address, there being only one address scratch.
+        // 4 is only slightly worse than 3, so this is a tuning parameter and
+        // not a cliff. Re-measure before moving it.
+        if (bases.count() > (u32)3)
             return false;
 
         // Where the induction variable STARTS — the iv phi's preheader incoming.
@@ -8397,6 +8432,13 @@ class OptProfile
                     iter = iter + (u32)1;
                     continue;
                     }
+                // `acc = acc + X + Y` parses left-associated, which hides the
+                // accumulator one Add deep; rotate it back out and try again.
+                if (vecReassociate(fn))
+                    {
+                    iter = iter + (u32)1;
+                    continue;
+                    }
                 // Last, because it is the only one that changes the loop
                 // STRUCTURE rather than its body: splitting a loop nothing can
                 // recognise gives the recognisers above two loops they can.
@@ -8415,6 +8457,125 @@ class OptProfile
     // `for (i=0; i<N; i++) b[i] = f(a[i], …)` — a single induction variable, no
     // carried value, loads and stores all indexed by the iv, and arithmetic
     // that is elementwise over them.
+    // `acc = acc + X + Y` is left-associated by the parser, so the back-edge
+    // value is Add(Add(acc, X), Y) and the accumulator sits one Add DEEPER than
+    // every recogniser looks — each wants Add(acc, elem). Integer addition is
+    // associative modulo 2^32, so rotating the chain is exact:
+    //
+    //     (acc + X) + Y   ->   acc + (X + Y)
+    //
+    // Applied repeatedly, that lifts the accumulator out of a chain of any
+    // depth. It is worth more than it looks: int_muldiv reads
+    // `acc = acc + ((a[i] * 7) / 3) + (a[i] / 11)`, and BOTH halves of it — the
+    // magic-division work and the reduction itself — were blocked by nothing
+    // but the shape of those two plus signs.
+    bool vecReassociate(IRFunc* fn)
+        {
+        bool changed = false;
+        for (u32 hi = (u32)0; hi < fn.blocks().count(); hi = hi + (u32)1)
+            {
+            IRBlock* H = (IRBlock*)fn.blocks().get(hi);
+            if (H.phis().count() < (u32)2)
+                continue;
+            // Every phi in the header is a candidate accumulator. Which one is
+            // the induction variable does not matter: rotating is sound for any
+            // of them, and a phi that is not an accumulator never matches.
+            Map* accs = new Map();
+            for (u32 i = (u32)0; i < H.phis().count(); i = i + (u32)1)
+                {
+                IRInsn* phi = (IRInsn*)H.phis().get(i);
+                if (phi.res() != (IRValue*)0)
+                    accs.set((Hashable*)phi.res(), (Object*)phi);
+                }
+            for (u32 bi = (u32)0; bi < fn.blocks().count(); bi = bi + (u32)1)
+                {
+                IRBlock* B = (IRBlock*)fn.blocks().get(bi);
+                if (B == H)
+                    continue;
+                if (B.term() == (IRInsn*)0 || !B.term().op().equals(String.withCString("Branch"))
+                    || B.term().ops().count() < (u32)1
+                    || ((IROperand*)B.term().ops().get((u32)0)).blk() != H)
+                    continue;
+                if (vecReassociateIn(fn, B, accs))
+                    changed = true;
+                }
+            }
+        return changed;
+        }
+
+    // Split out for the arm64 frame budget, as vecWideningAt was.
+    bool vecReassociateIn(IRFunc* fn, IRBlock* B, Map* accs)
+        {
+        bool changed = false;
+        Map* uses = useCounts(fn);
+        for (u32 oi = (u32)0; oi < B.insns().count(); oi = oi + (u32)1)
+            {
+            IRInsn* outer = (IRInsn*)B.insns().get(oi);
+            if (!outer.op().equals(String.withCString("Add")) || outer.res() == (IRValue*)0
+                || outer.ops().count() < (u32)2)
+                continue;
+            // The accumulator must not already be a direct operand.
+            bool direct = false;
+            for (u32 k = (u32)0; k < (u32)2; k = k + (u32)1)
+                {
+                IROperand* o = (IROperand*)outer.ops().get(k);
+                if (o.kind() == (u8)OPK_USE && accs.get((Hashable*)o.val()) != (Object*)0)
+                    direct = true;
+                }
+            if (direct)
+                continue;
+            for (u32 side = (u32)0; side < (u32)2; side = side + (u32)1)
+                {
+                IROperand* spine = (IROperand*)outer.ops().get(side);
+                IROperand* other = (IROperand*)outer.ops().get((u32)1 - side);
+                if (spine.kind() != (u8)OPK_USE || countOf(uses, spine.val()) != (u32)1)
+                    continue;
+                u32 ii = oi;
+                bool found = false;
+                for (u32 k = (u32)0; k < oi; k = k + (u32)1)
+                    if (((IRInsn*)B.insns().get(k)).res() == spine.val())
+                        { ii = k; found = true; }
+                if (!found)
+                    continue;
+                IRInsn* inner = (IRInsn*)B.insns().get(ii);
+                if (!inner.op().equals(String.withCString("Add")) || inner.ops().count() < (u32)2)
+                    continue;
+                u32 accSide = (u32)2;
+                for (u32 k = (u32)0; k < (u32)2; k = k + (u32)1)
+                    {
+                    IROperand* o = (IROperand*)inner.ops().get(k);
+                    if (o.kind() == (u8)OPK_USE && accs.get((Hashable*)o.val()) != (Object*)0)
+                        accSide = k;
+                    }
+                if (accSide == (u32)2)
+                    continue;
+                IROperand* accOp = (IROperand*)inner.ops().get(accSide);
+                IROperand* x = (IROperand*)inner.ops().get((u32)1 - accSide);
+
+                // inner becomes X + Y, keeping its result — its only user is
+                // outer — and outer becomes acc + that.
+                //
+                // It must also MOVE to just before outer. Y is normally
+                // computed AFTER the inner Add (it is the next term of the
+                // expression), so rewriting inner where it stands would read Y
+                // before it is defined. That is not a crash: the register holds
+                // whatever was there, and int_muldiv came back 837576896
+                // instead of 2079322496 — fast and wrong. Moving it down is
+                // safe because X precedes inner and Y precedes outer, so both
+                // dominate the new position.
+                inner.ops().set((u32)0, (Object*)x);
+                inner.ops().set((u32)1, (Object*)other);
+                outer.ops().set((u32)0, (Object*)accOp);
+                outer.ops().set((u32)1, (Object*)IROperand.useVal(spine.val()));
+                B.insns().removeAt(ii);
+                B.insns().insert(oi - (u32)1, (Object*)inner);
+                changed = true;
+                break;
+                }
+            }
+        return changed;
+        }
+
     // LOOP DISTRIBUTION for multiple accumulators. Every recogniser gates on a
     // header carrying exactly two phis — the induction variable and one
     // accumulator — so a loop summing two things at once is refused outright.
@@ -9023,6 +9184,14 @@ class OptProfile
     i32 _vrIvStart;        // the induction phi's constant start, -1 if not one
     bool _vrRuntime;       // the bound is a RUNTIME value, not a literal
     bool _vrMapRT;         // ... the same, for the MAP recogniser's own bound check
+    u32 _magicM;           // magic multiplier from vecMagicU32
+    u32 _magicS;           // and its post-shift
+    // Constant divides in the body, keyed by the UDiv result, each holding
+    // the magic the RECOGNISER derived. Recorded rather than recomputed in
+    // the rewriter so the two cannot disagree: when they did, the rewriter
+    // fell through to emitting a vector UDiv, which no back end lowers and
+    // which silently returned a wrong sum.
+    Map* _vrDivMagic;
     bool _vrAllowRT;       // one-shot: the NEXT vecReduxShape may accept one
     IROperand* _vrBoundOp; // that bound, when it is
 
@@ -9294,6 +9463,7 @@ class OptProfile
         c.setIv(ivPhi, ivNext, guard, iv);
         c.setLane(laneTy, vw);
         c.setReduction(accPhi, accNext, acc, elemOp.val(), initOp, PH);
+        c.setDivMagic(_vrDivMagic);
         c.setEpi(_vrRuntime || epiM != n, epiM);
         c.setRuntime(_vrRuntime, _vrBoundOp);
         c.setIvStart(_vrIvStart);
@@ -9376,12 +9546,67 @@ class OptProfile
     // accNext handled separately. The lane is restricted to 32-bit integer —
     // a narrower one is the widening-sum shape, and float needs an associativity
     // the source language does not grant.
+    // Unsigned magic-number division, the SIMPLE form only (Hacker's Delight
+    // §10-9). Returns false unless x/d == mulhu(x, M) >>u s holds for every x,
+    // which is the `a == 0` case; the other form needs an extra add and a shift
+    // that cannot overflow, and there is no vector idiom for it here. d = 7 and
+    // d = 14 are the small divisors that fall out — they stay scalar and
+    // correct. Results land in _magicM / _magicS.
+    //
+    // The same computation lives in the arm64 back end, which is where the
+    // SCALAR lowering gets its constants. Both must agree, or a loop would
+    // compute one answer vectorised and another scalar.
+    bool vecMagicU32(u32 d)
+        {
+        if (d < (u32)2)
+            return false;
+        u64 twoWm1 = (u64)$80000000;
+        u64 maxu = (u64)$FFFFFFFF;
+        u64 twoW = (u64)$100000000;
+        u64 dd = (u64)d;
+        bool addForm = false;
+        u32 p = (u32)31;
+        u64 nc = maxu - (twoW % dd);
+        u64 q1 = twoWm1 / nc;
+        u64 r1 = twoWm1 - q1 * nc;
+        u64 q2 = (twoWm1 - (u64)1) / dd;
+        u64 r2 = (twoWm1 - (u64)1) - q2 * dd;
+        u64 delta = (u64)0;
+        bool more = true;
+        while (more)
+            {
+            p = p + (u32)1;
+            if (r1 >= nc - r1) { q1 = (u64)2 * q1 + (u64)1; r1 = (u64)2 * r1 - nc; }
+            else               { q1 = (u64)2 * q1;          r1 = (u64)2 * r1; }
+            if (r2 + (u64)1 >= dd - r2)
+                {
+                if (q2 >= twoWm1 - (u64)1) addForm = true;
+                q2 = (u64)2 * q2 + (u64)1;
+                r2 = (u64)2 * r2 + (u64)1 - dd;
+                }
+            else
+                {
+                if (q2 >= twoWm1) addForm = true;
+                q2 = (u64)2 * q2;
+                r2 = (u64)2 * r2 + (u64)1;
+                }
+            delta = dd - (u64)1 - r2;
+            more = p < (u32)64 && (q1 < delta || (q1 == delta && r1 == (u64)0));
+            }
+        if (addForm)
+            return false;
+        _magicM = (u32)((q2 + (u64)1) & maxu);
+        _magicS = p - (u32)32;
+        return true;
+        }
+
     String* vecClassifyReduxBody(IRBlock* B, IRValue* iv, IRInsn* ivNext,
                                  IRInsn* accNext, IROperand* elemOp,
                                  Map* defOf, Map* defBlk)
         {
         String* laneTy = (String*)0;
         bool sawLoad = false;
+        _vrDivMagic = new Map();
         Array* elems = new Array();
         for (u32 i = (u32)0; i < B.insns().count(); i = i + (u32)1)
             {
@@ -9429,6 +9654,30 @@ class OptProfile
                 }
             if (op.equals(String.withCString("Const")) || op.equals(String.withCString("ZExt")) || op.equals(String.withCString("SExt")) || op.equals(String.withCString("Trunc")))
                 continue;
+            // Unsigned division by a compile-time constant. There is no lane
+            // divide; it becomes a magic multiply, which needs the HIGH half of
+            // the lane product. Only the simple magic form is taken (see
+            // vecMagicU32) and only where the back end lowers VMulHi.
+            if (op.equals(String.withCString("UDiv")) && _profile.highMul())
+                {
+                if (n.res() == (IRValue*)0 || !n.res().ty().equals(String.withCString("U32")))
+                    return (String*)0;
+                if (n.ops().count() < (u32)2)
+                    return (String*)0;
+                if (!vecOperandOK((IROperand*)n.ops().get((u32)0), elems, B, defOf, defBlk))
+                    return (String*)0;
+                i32 dv = (i32)0;
+                if (!vecConst((IROperand*)n.ops().get((u32)1), defOf, &dv))
+                    return (String*)0;
+                if (dv <= (i32)1 || !vecMagicU32((u32)dv))
+                    return (String*)0;
+                Array* mg = new Array();
+                mg.add((Object*)Number.with(_magicM));
+                mg.add((Object*)Number.with(_magicS));
+                _vrDivMagic.set((Hashable*)n.res(), (Object*)mg);
+                elems.add((Object*)n.res());
+                continue;
+                }
             if (vecElementwise(op))
                 {
                 if (n.res() == (IRValue*)0 || !vecRedux32(n.res().ty()))
@@ -12403,6 +12652,42 @@ class OptProfile
                 vl.setMemRes(n.memRes());
                 _vecBody.add((Object*)vl);
                 _vecMap.set((Hashable*)n.res(), (Object*)vr);
+                continue;
+                }
+            // `x / d` with d a compile-time constant: mulhu(x, M) >>u s. The
+            // magic comes from the candidate, derived when the loop was
+            // recognised. There is no fallback — a UDiv reaching here that the
+            // recogniser did not clear would mean the loop should never have
+            // been accepted, and the only "generic" lowering available is a
+            // vector UDiv that no back end implements.
+            if (op.equals(String.withCString("UDiv")))
+                {
+                Object* mo = c.divMagic() == (Map*)0
+                                 ? (Object*)0
+                                 : c.divMagic().get((Hashable*)n.res());
+                if (mo == (Object*)0)
+                    {
+                    _vecBody.add((Object*)n);
+                    continue;
+                    }
+                Array* mg = (Array*)mo;
+                u32 mm = ((Number*)mg.get((u32)0)).asU32();
+                u32 ss = ((Number*)mg.get((u32)1)).asU32();
+                IROperand* vm = vecSplatOperand(IROperand.immI((i32)mm, n.res().ty()));
+                IROperand* vx = vecSplatOperand((IROperand*)n.ops().get((u32)0));
+                IRValue* hi = new IRValue(_vecTy);
+                IRInsn* mh = IRInsn.with(String.withCString("VMulHi"));
+                mh.setRes(hi);
+                mh.add(vx);
+                mh.add(vm);
+                _vecBody.add((Object*)mh);
+                IRValue* qv = new IRValue(_vecTy);
+                IRInsn* sr = IRInsn.with(String.withCString("VLShr"));
+                sr.setRes(qv);
+                sr.add(IROperand.useVal(hi));
+                sr.add(IROperand.immI((i32)ss, n.res().ty()));
+                _vecBody.add((Object*)sr);
+                _vecMap.set((Hashable*)n.res(), (Object*)qv);
                 continue;
                 }
             IROperand* va = vecSplatOperand((IROperand*)n.ops().get((u32)0));

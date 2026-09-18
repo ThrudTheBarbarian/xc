@@ -390,6 +390,7 @@ static uint32_t encMul(uint32_t base, int rd, int rn, int rm, int ra) {
     //    Rm<<16, Rn<<5, Rd.  ──
     {
         static NSDictionary *int3, *logic3, *float3, *misc2i, *misc2f, *red, *perm, *pairlp;
+        static NSDictionary *widen3, *shrimm;
         static dispatch_once_t nonce;
         dispatch_once(&nonce, ^{
             // 3-same, element size from the arrangement (size<<22):
@@ -426,6 +427,19 @@ static uint32_t encMul(uint32_t base, int rd, int rn, int rm, int ra) {
             // them — the one exception, and the reason this is its own case.
             // The vectoriser's widening-sum reduction emits it (bug 028).
             pairlp = @{@"saddlp":@0x0E202800u, @"uaddlp":@0x2E202800u};
+            // widening 3-different: multiplies the lanes of Vn and Vm and
+            // writes a destination of HALF the lane count at twice the width
+            // (`umull v0.2d, v1.2s, v2.2s`). The `2` suffix is the same
+            // instruction reading the HIGH half of its sources, which is
+            // exactly what Q selects — so Q and size both come from the SOURCE,
+            // as they do for pairlp, and the suffix must agree with Q.
+            // The vectoriser's VMulHi emits the pair to build a 32x32 high half.
+            widen3 = @{@"smull":@0x0E20C000u, @"umull":@0x2E20C000u,
+                       @"smull2":@0x0E20C000u,@"umull2":@0x2E20C000u};
+            // shift right by immediate. immh:immb holds (2*esize - shift), so
+            // the encoded field GROWS as the shift shrinks, and a shift of 0 is
+            // not encodable at all — callers emit a move instead.
+            shrimm = @{@"ushr":@0x2F000400u, @"sshr":@0x0F000400u};
         });
         int vd,vs,vq,vn2,vm2,t;
         BOOL op0vec = ops.count>=1 && parseVReg(ops[0],&vd,&vs,&vq);
@@ -443,6 +457,50 @@ static uint32_t encMul(uint32_t base, int rd, int rn, int rm, int ra) {
             return b.unsignedIntValue | ((uint32_t)vq<<30) | ((uint32_t)(vs==3?1:0)<<22) | ((uint32_t)vm2<<16) | ((uint32_t)vn2<<5) | (uint32_t)vd;
         if (op0vec && (b=perm[mn]) && ops.count==3 && parseVReg(ops[1],&vn2,&t,&t) && parseVReg(ops[2],&vm2,&t,&t))
             return b.unsignedIntValue | ((uint32_t)vq<<30) | ((uint32_t)vs<<22) | ((uint32_t)vm2<<16) | ((uint32_t)vn2<<5) | (uint32_t)vd;
+        if (op0vec && (b=widen3[mn]) && ops.count==3) {
+            int sq, ss, mq, ms, rm;
+            if (!parseVReg(ops[1],&vn2,&ss,&sq) || !parseVReg(ops[2],&rm,&ms,&mq)) {
+                if (error) *error = asmErr(@"bad %@ source arrangement", mn);
+                return 0;
+            }
+            if (ss != ms || sq != mq) {
+                if (error) *error = asmErr(@"%@ sources disagree", mn);
+                return 0;
+            }
+            // The suffix IS the half-selector; a mismatch would silently encode
+            // the other half of the register.
+            if ((sq == 1) != [mn hasSuffix:@"2"]) {
+                if (error) *error = asmErr(@"%@ needs %@ sources", mn,
+                                           [mn hasSuffix:@"2"] ? @"128-bit" : @"64-bit");
+                return 0;
+            }
+            if (vs != ss + 1) {
+                if (error) *error = asmErr(@"%@ destination must be twice the source width", mn);
+                return 0;
+            }
+            return b.unsignedIntValue | ((uint32_t)sq<<30) | ((uint32_t)ss<<22)
+                 | ((uint32_t)rm<<16) | ((uint32_t)vn2<<5) | (uint32_t)vd;
+        }
+        if (op0vec && (b=shrimm[mn]) && ops.count==3) {
+            int ss, sq;
+            int64_t sh;
+            if (!parseVReg(ops[1],&vn2,&ss,&sq) || !parseImm(ops[2],&sh)) {
+                if (error) *error = asmErr(@"bad %@ operands", mn);
+                return 0;
+            }
+            if (ss != vs || sq != vq) {
+                if (error) *error = asmErr(@"%@ arrangements disagree", mn);
+                return 0;
+            }
+            int esize = 8 << ss;
+            if (sh < 1 || sh > esize) {
+                if (error) *error = asmErr(@"%@ shift %lld out of range 1..%d", mn,
+                                           (long long)sh, esize);
+                return 0;
+            }
+            return b.unsignedIntValue | ((uint32_t)vq<<30)
+                 | ((uint32_t)(2*esize - (int)sh)<<16) | ((uint32_t)vn2<<5) | (uint32_t)vd;
+        }
         if (op0vec && (b=pairlp[mn]) && ops.count==2) {
             int srcVs, srcQ;
             if (!parseVReg(ops[1],&vn2,&srcVs,&srcQ)) {
