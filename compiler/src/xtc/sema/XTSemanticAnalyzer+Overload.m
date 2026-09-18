@@ -4042,12 +4042,19 @@ static BOOL XTIsErasedKeyType(XTType* t)
                     [self recordCallEdgeToLabel:initLabel];
                     }
                 }
-            else if (chainHasAnyInit)
+            else if (chainHasAnyInit && node.arguments.count > 0)
                 {
                 // An init exists but none takes this argument list. The
                 // arguments used to be lowered and handed to the allocator
                 // regardless, so the initialiser never ran and the ivars
                 // read back zero with nothing reported.
+                //
+                // ZERO arguments is NOT this case, whatever inits the class
+                // declares: `new C()` is the allocate-and-zero form, and code
+                // here uses it deliberately before initialising by hand —
+                //     Rect* r = new Rect();  r.init(10, 20, 30, 40);
+                // (tests/fixtures/ivar_coalesce.xc, arc_param_rebind.xc).
+                // Refusing it broke both fixtures.
                 NSMutableArray<NSString*>* arities = [NSMutableArray array];
                 for (XTClassDeclNode* c = initOwner; c != nil; c = c.parentClass)
                     {

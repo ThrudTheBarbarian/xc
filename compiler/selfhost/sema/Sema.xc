@@ -1344,11 +1344,15 @@ class Sema
                     c.setUsedByNew();
                 // `new T(a, b)` picks the init that TAKES two arguments,
                 // searching this class and then its ancestors. A call that
-                // matches no init anywhere stamps nothing; the original
-                // reports that case, which this has no channel to do.
+                // matches no init anywhere stamps nothing, so no initialiser
+                // runs and every field reads back zero — reported here, since
+                // leaving it to the original leaves the SHIPPED compiler
+                // accepting it.
                 Node* ini = initOverload(cls, n);
                 if (ini != 0)
                     n.setSym(ini.sym());
+                else
+                    reportUnmatchedInit(cls, n);
                 }
             return;
             }
@@ -3409,6 +3413,82 @@ class Sema
         if (group.count() == (u32)1)
             return (Node*)group.get((u32)0);
         return pickOverload(group, call, argBase);
+        }
+
+    // A `new` whose arguments match no init. The lowering runs an init ONLY
+    // when sema stamped a symbol, so an unmatched `new` allocates and runs
+    // nothing: every field reads back zero while the program compiles clean.
+    // That is bug 218, and leaving the diagnostic to the original left the
+    // SHIPPED compiler still accepting it (diag-diff: new_init_arity_refused
+    // ACCEPTED, exit 0).
+    void reportUnmatchedInit(Node* cls, Node* newExpr)
+        {
+        // `new T[N]` parks the COUNT in a kid and never calls setNum, where
+        // `new T(a, b)` sets it to the argument count. So the arguments are
+        // num(), not kidCount(), and an array allocation — which runs the init
+        // per element and passes it nothing — has kids with num() still zero.
+        // Reading kidCount here reported the array LENGTH as an argument and
+        // refused `new Tracker[6]`.
+        bool arrayForm = newExpr.kidCount() > (u32)0 && newExpr.num() == (i64)0;
+        if (arrayForm)
+            return;
+        u32 argc = (u32)newExpr.num();
+        // ZERO arguments is the allocate-and-zero form and is always legal,
+        // whatever inits the class declares — code here uses it deliberately
+        // before initialising by hand:
+        //     Rect* r = new Rect();  r.init(10, 20, 30, 40);
+        if (argc == (u32)0)
+            return;
+        Node* owner = (Node*)0;
+        for (Node* c = cls; c != 0 && owner == 0; c = parentOf(c))
+            {
+            for (u32 i = (u32)0; i < c.kidCount(); i = i + (u32)1)
+                {
+                Node* m = c.kid(i);
+                if (m.kind() != (u16)nkMethodDecl)
+                    continue;
+                if (m.name() != 0 && _isOp(m.name(), "init"))
+                    {
+                    owner = c;
+                    break;
+                    }
+                }
+            }
+        String* cn = cls.name() != 0 ? cls.name() : String.withCString("?");
+        String* msg = String.withCString("`new ");
+        msg.append(cn);
+        msg.appendCString("(...)` supplies ");
+        msg.appendFormat("%lu", argc);
+        msg.appendCString(argc == (u32)1 ? " argument" : " arguments");
+        if (owner != 0)
+            {
+            msg.appendCString(", but '");
+            msg.append(owner.name() != 0 ? owner.name() : cn);
+            msg.appendCString(".init' takes ");
+            bool first = true;
+            for (u32 i = (u32)0; i < owner.kidCount(); i = i + (u32)1)
+                {
+                Node* m = owner.kid(i);
+                if (m.kind() != (u16)nkMethodDecl)
+                    continue;
+                if (m.name() == 0 || !_isOp(m.name(), "init"))
+                    continue;
+                if (!first)
+                    msg.appendCString(" or ");
+                msg.appendFormat("%lu", paramCount(m));
+                first = false;
+                }
+            msg.appendCString(". An allocation that matches no init would leave "
+                              "every field uninitialised.");
+            _errorAt(msg, newExpr);
+            return;
+            }
+        msg.appendCString(", but '");
+        msg.append(cn);
+        msg.appendCString("' declares no init. Add one, or write `new ");
+        msg.append(cn);
+        msg.appendCString("()`.");
+        _errorAt(msg, newExpr);
         }
 
     Node* initOverload(Node* cls, Node* newExpr)
