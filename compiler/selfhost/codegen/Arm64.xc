@@ -591,6 +591,64 @@ class Arm64
         String* op = n.op();
         bool addsub = op.equals(String.withCString("Add")) || op.equals(String.withCString("Sub"));
         i32 k = (i32)0;
+        bool isShiftImm = op.equals(String.withCString("Shl")) || op.equals(String.withCString("LShr"))
+                       || op.equals(String.withCString("AShr"));
+        bool isLogic = op.equals(String.withCString("And")) || op.equals(String.withCString("Or"))
+                    || op.equals(String.withCString("Xor"));
+        u32 dw = width(n.res().ty()) == (u32)8 ? (u32)64 : (u32)32;
+        i32 ksh = (i32)0;
+        if (addsub && imm12Shifted((IROperand*)n.ops().get((u32)1), &ksh)) {
+            String* ar = operandReg((IROperand*)n.ops().get((u32)0), scratchName((u32)16, n.res().ty()));
+            String* dr = resultReg(n.res(), scratchName((u32)16, n.res().ty()));
+            _out.appendFormat("    %s %s, %s, #%ld, lsl #12\n", mnem.cString(), dr.cString(),
+                              ar.cString(), ksh);
+            canonicaliseUnlessProven(dr, n.res());
+            storeReg(dr, n.res());
+            return;
+        }
+        // A constant shift count belongs in the instruction, not a register:
+        // its own type is narrow, so the register path materialised it, homed
+        // it to a frame slot and zero-extended it — four instructions for one
+        // operand. Range is the DESTINATION width.
+        if (isShiftImm && shiftCountConst((IROperand*)n.ops().get((u32)1), &k)
+         && k >= (i32)0 && (u32)k < dw) {
+            String* ar = operandReg((IROperand*)n.ops().get((u32)0), scratchName((u32)16, n.res().ty()));
+            String* dr = resultReg(n.res(), scratchName((u32)16, n.res().ty()));
+            _out.appendFormat("    %s %s, %s, #%ld\n", mnem.cString(), dr.cString(), ar.cString(), k);
+            canonicaliseUnlessProven(dr, n.res());
+            storeReg(dr, n.res());
+            return;
+        }
+        // A bitmask constant encodes into and/orr/eor directly.
+        if (isLogic) {
+            i32 lk = (i32)0;
+            if (imm12Operand((IROperand*)n.ops().get((u32)1), &lk) || true) {
+                i64 lv = (i64)0;
+                bool have = false;
+                IROperand* ro = (IROperand*)n.ops().get((u32)1);
+                if (ro.kind() == (u8)OPK_IMMI) { lv = ro.imm(); have = true; }
+                else if (ro.kind() == (u8)OPK_USE) {
+                    Object* d = _defOf.get((Hashable*)ro.val());
+                    if (d != (Object*)0) {
+                        IRInsn* dn = (IRInsn*)d;
+                        if (dn.op().equals(String.withCString("Const")) && dn.ops().count() >= (u32)1) {
+                            IROperand* a0 = (IROperand*)dn.ops().get((u32)0);
+                            if (a0.kind() == (u8)OPK_IMMI) { lv = a0.imm(); have = true; }
+                        }
+                    }
+                }
+                if (have && logicalImm((u64)lv, dw)) {
+                    u64 msk = dw == (u32)64 ? ~(u64)0 : (u64)$FFFF_FFFF;
+                    String* ar = operandReg((IROperand*)n.ops().get((u32)0), scratchName((u32)16, n.res().ty()));
+                    String* dr = resultReg(n.res(), scratchName((u32)16, n.res().ty()));
+                    _out.appendFormat("    %s %s, %s, #0x%llx\n", mnem.cString(), dr.cString(),
+                                      ar.cString(), (u64)lv & msk);
+                    canonicaliseUnlessProven(dr, n.res());
+                    storeReg(dr, n.res());
+                    return;
+                }
+            }
+        }
         if (addsub && imm12Operand((IROperand*)n.ops().get((u32)1), &k)) {
             String* ar = operandReg((IROperand*)n.ops().get((u32)0), scratchName((u32)16, n.res().ty()));
             String* dr = resultReg(n.res(), scratchName((u32)16, n.res().ty()));
@@ -2129,7 +2187,8 @@ class Arm64
                 String* op = n.op();
                 if (!op.equals(String.withCString("Add")) && !op.equals(String.withCString("Mul"))
                  && !op.equals(String.withCString("Shl")) && !op.equals(String.withCString("And"))
-                 && !op.equals(String.withCString("ZExt"))) continue;
+                 && !op.equals(String.withCString("ZExt"))
+                 && !op.equals(String.withCString("Const"))) continue;   // a literal already in range
                 // ignoreGuard: this value's OWN guard must not let its
                 // definition drop the mask — the guard compare reads it
                 // pre-mask.
@@ -4562,6 +4621,12 @@ class Arm64
         // the `mov` that would otherwise feed the compare — this sits on the
         // loop-control path that gates every back edge.
         i32 k = (i32)0;
+        i32 ksh = (i32)0;
+        if (!imm12Operand(o1, &k) && imm12Shifted(o1, &ksh)) {
+            String* r0s = operandReg(o0, String.withCString("w16"));
+            _out.appendFormat("    cmp %s, #%ld, lsl #12\n", r0s.cString(), ksh);
+            return condString(n.pred());
+        }
         if (imm12Operand(o1, &k)) {
             String* r0 = operandReg(o0, String.withCString("w16"));
             _out.appendFormat("    cmp %s, #%ld\n", r0.cString(), k);
@@ -4582,6 +4647,87 @@ class Arm64
     // did not fail to fit; it VANISHED, silently, in code that had already
     // materialised it correctly with movz/movk. Compare in the full width and
     // narrow only after the range test has passed.
+    // The `#N, lsl #12` form of the same imm12 field: add/sub/cmp take a 12-bit
+    // immediate shifted left by 12, so a multiple of 4096 no wider than 24 bits
+    // is still one instruction. Without it a loop bound of exactly 4096 — an
+    // array length, the common case — fell off the cliff at 4095 and
+    // materialised through `mov` on the loop-control path.
+    bool imm12Shifted(IROperand* o, i32* out)
+    {
+        i64 v = (i64)0;
+        if (o.kind() == (u8)OPK_IMMI) v = o.imm();
+        else if (o.kind() == (u8)OPK_USE) {
+            Object* d = _defOf.get((Hashable*)o.val());
+            if (d == (Object*)0) return false;
+            IRInsn* n = (IRInsn*)d;
+            if (!n.op().equals(String.withCString("Const"))) return false;
+            if (n.ops().count() < (u32)1) return false;
+            IROperand* a0 = (IROperand*)n.ops().get((u32)0);
+            if (a0.kind() != (u8)OPK_IMMI) return false;
+            v = a0.imm();
+        } else return false;
+        if (v <= (i64)4095) return false;
+        if ((v & (i64)$FFF) != (i64)0) return false;
+        i64 hi = v >> (i64)12;
+        if (hi > (i64)4095) return false;
+        out[0] = (i32)hi;
+        return true;
+    }
+
+    // A shift count is narrowed by lowering, so it usually arrives as a
+    // ZExt/SExt/Trunc of the literal rather than a bare Const — follow that
+    // chain before giving up.
+    bool shiftCountConst(IROperand* o, i32* out)
+    {
+        if (imm12Operand(o, out)) return true;
+        IROperand* cur = o;
+        for (u32 hop = (u32)0; hop < (u32)4; hop = hop + (u32)1) {
+            if (cur.kind() != (u8)OPK_USE) return false;
+            Object* d = _defOf.get((Hashable*)cur.val());
+            if (d == (Object*)0) return false;
+            IRInsn* cd = (IRInsn*)d;
+            if (!cd.op().equals(String.withCString("ZExt"))
+             && !cd.op().equals(String.withCString("SExt"))
+             && !cd.op().equals(String.withCString("Trunc"))) return false;
+            if (cd.ops().count() < (u32)1) return false;
+            cur = (IROperand*)cd.ops().get((u32)0);
+            if (imm12Operand(cur, out)) return true;
+        }
+        return false;
+    }
+
+    // Is `v` encodable as an AArch64 logical immediate (the and/orr/eor bitmask
+    // form)? The field encodes a value repeating with some period in
+    // {2,4,8,16,32,64} where one period is a rotation of a contiguous run of
+    // ones. 0x0F0F0F0F is such a value, and clang emits it as
+    // `eor w0, w1, #0xf0f0f0f`; this back end built it with movz/movk first.
+    static bool logicalImm(u64 v, u32 width)
+    {
+        if (width != (u32)32 && width != (u32)64) return false;
+        u64 wmask = width == (u32)64 ? ~(u64)0 : (u64)$FFFF_FFFF;
+        v = v & wmask;
+        if (v == (u64)0 || v == wmask) return false;
+        u32 e = (u32)2;
+        while (e <= width) {
+            u64 emask = e == (u32)64 ? ~(u64)0 : (((u64)1 << (u64)e) - (u64)1);
+            u64 lo = v & emask;
+            bool repeats = true;
+            u32 off = e;
+            while (off < width) {
+                if (((v >> (u64)off) & emask) != lo) repeats = false;
+                off = off + e;
+            }
+            if (repeats && lo != (u64)0 && lo != emask) {
+                u32 tz = (u32)0;
+                while (((lo >> (u64)tz) & (u64)1) == (u64)0) tz = tz + (u32)1;
+                u64 rot = ((lo >> (u64)tz) | (lo << (u64)(e - tz))) & emask;
+                if (((rot + (u64)1) & rot) == (u64)0) return true;
+            }
+            e = e << (u32)1;
+        }
+        return false;
+    }
+
     bool imm12Operand(IROperand* o, i32* out)
     {
         i64 v = (i64)0;
@@ -5058,7 +5204,10 @@ class Arm64
         // half from frame garbage. Invisible at -O2+, where the constant folds.
         String* dst = resultReg(n.res(), scratchName((u32)16, ty));
         materialise(k, dst);
-        canonicalise(dst, ty);
+        // A literal already inside its type's range needs no mask: the
+        // arithmetic paths consult noCanon, this one used to mask
+        // unconditionally, so `u16 n = 16` emitted `mov w0,#16; uxth w0,w0`.
+        canonicaliseUnlessProven(dst, n.res());
         storeReg(dst, n.res());
     }
 
