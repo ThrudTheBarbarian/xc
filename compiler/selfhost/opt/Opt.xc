@@ -762,6 +762,10 @@ class OptProfile
     IROperand* _step; // the loop-invariant addend of ivNext
     bool _stepIsConst;
     i32 _stepK;
+    // The trip is a compile-time constant that divides EXACTLY by the
+    // unroll factor AND the body is vector, so the intermediate copies'
+    // guards are provably true and are not emitted.
+    bool _exactTrip;
     // Carried accumulators threaded alongside the induction variable.
     Array* _redPhis;  // the accumulator phis in the header
     Array* _redNexts; // their back-edge updates, in the body
@@ -847,6 +851,14 @@ class OptProfile
         _guard = g;
         _ivNext = nx;
         _iv = v;
+        }
+    bool exactTrip(void)
+        {
+        return _exactTrip;
+        }
+    void setExactTrip(bool v)
+        {
+        _exactTrip = v;
         }
     void setStep(IROperand* s, bool isK, i32 k)
         {
@@ -7908,6 +7920,49 @@ class OptProfile
         c.setLoop(H, B, E);
         c.setIv(ivPhi, guard, ivNext, iv);
         c.setStep(stepOp, stepConst, stepK);
+
+        // A CONSTANT trip that is a whole number of unrolled groups needs no
+        // per-copy guard: the vectoriser leaves exactly that behind, array_map
+        // counting 0..4096 by 4 being 256 groups of four.
+        //
+        // Only a STRICT `<` with the iv on the left gives trip = (N - S) / step;
+        // `<=` is one more and the arithmetic would be off in the unsafe
+        // direction. And only for a VECTOR body: dropping the guards merges the
+        // copies into one straight-line run, which lengthens every live range in
+        // it. A vector body barely notices — its values live in their own pool —
+        // but a scalar body spills instead. Measured: array_map 11431 -> 6730us
+        // with the gate, bit_ops unchanged; without the gate bit_ops loses 5%.
+        bool exact = false;
+        if (stepConst && stepK > (i32)0 && guard.ops().count() >= (u32)2
+            && (guard.pred().equals(String.withCString("ULT"))
+                || guard.pred().equals(String.withCString("SLT")))
+            && ((IROperand*)guard.ops().get((u32)0)).kind() == (u8)OPK_USE
+            && ((IROperand*)guard.ops().get((u32)0)).val() == iv)
+            {
+            IROperand* initOp = (IROperand*)0;
+            for (u32 k = (u32)0; k + (u32)1 < ivPhi.ops().count(); k = k + (u32)2)
+                if (((IROperand*)ivPhi.ops().get(k)).blk() != B)
+                    initOp = (IROperand*)ivPhi.ops().get(k + (u32)1);
+            i32 boundK = (i32)0;
+            i32 startK = (i32)0;
+            if (initOp != (IROperand*)0
+                && vecConst((IROperand*)guard.ops().get((u32)1), defOf, &boundK)
+                && vecConst(initOp, defOf, &startK))
+                {
+                i32 span = boundK - startK;
+                i32 group = stepK * (i32)4;
+                bool vectorBody = false;
+                for (u32 k = (u32)0; k < B.insns().count(); k = k + (u32)1)
+                    {
+                    IRInsn* bi = (IRInsn*)B.insns().get(k);
+                    if (bi.res() != (IRValue*)0 && bi.res().ty().hasPrefix(String.withCString("Vec(")))
+                        vectorBody = true;
+                    }
+                if (span > (i32)0 && group > (i32)0 && span % group == (i32)0 && vectorBody)
+                    exact = true;
+                }
+            }
+        c.setExactTrip(exact);
         if (!vtCarried(fn, H, B, c, defOf, defBlk, uses))
             return (VTCand*)0;
 
@@ -8121,7 +8176,12 @@ class OptProfile
                 _vtLastRed.set(i, cn);
             }
 
-        if (j + (u32)1 < U)
+        if (j + (u32)1 < U && c.exactTrip())
+            {
+            // Provably true — no guard; the copy falls into the next one.
+            _vtGuards.add((Object*)0);
+            }
+        else if (j + (u32)1 < U)
             {
             // An intermediate copy tests `iv_{j+1} <cmp> bound` and either falls
             // through to the next copy or leaves for the exit.
@@ -8294,7 +8354,13 @@ class OptProfile
         for (u32 j = (u32)0; j < _vtClones.count(); j = j + (u32)1)
             {
             IRBlock* C = (IRBlock*)_vtClones.get(j);
-            if (j + (u32)1 < _vtClones.count())
+            if (j + (u32)1 < _vtClones.count() && _vtGuards.get(j) == (Object*)0)
+                {
+                IRInsn* br = IRInsn.with(String.withCString("Branch"));
+                br.add(IROperand.block((IRBlock*)_vtClones.get(j + (u32)1)));
+                C.setTerm(br);
+                }
+            else if (j + (u32)1 < _vtClones.count())
                 {
                 IRInsn* cb = IRInsn.with(String.withCString("CondBranch"));
                 cb.add(IROperand.useVal((IRValue*)_vtGuards.get(j)));

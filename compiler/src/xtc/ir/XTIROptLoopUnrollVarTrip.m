@@ -29,6 +29,11 @@ static const NSUInteger kMaxBodyInsns = 48;
 @property(nonatomic) XTIROperand* step; // the loop-invariant addend of ivNext
 @property(nonatomic) BOOL stepIsConst;  // step resolves to a known constant
 @property(nonatomic) int64_t stepConstVal;
+// YES when the trip count is a compile-time constant that divides EXACTLY by
+// the unroll factor. The intermediate copies' guards are then provably true and
+// are not emitted at all — three instructions per copy that only exist because
+// this unroller assumes a variable trip.
+@property(nonatomic) BOOL exactTrip;
 // Extra carried values (reductions/accumulators) threaded through the loop
 // alongside the induction variable, parallel arrays indexed together:
 @property(nonatomic) NSArray<XTIRInsn*>* redPhis;    // the accumulator phis in H
@@ -490,6 +495,46 @@ static XTIRInsn* buildLike(XTIRInsn* insn, XTIRValue* _Nullable result,
         c.step = stepOp;
         c.stepIsConst = stepConst;
         c.stepConstVal = stepK;
+
+        // A CONSTANT trip that is a whole number of unrolled groups needs no
+        // per-copy guard. The vectoriser leaves exactly this behind: array_map
+        // counts 0..4096 stepping by 4, which is 1024 iterations and 256 groups
+        // of four, so copies 1..3 were testing a condition that cannot fail.
+        //
+        // Only a STRICT `<` with the iv on the left gives trip = (N - S) / step;
+        // with `<=` the trip is one more and the arithmetic below would be off
+        // by one in the unsafe direction.
+        c.exactTrip = NO;
+        if (stepConst && stepK > 0 &&
+            (guard.predicate == XTIRICmpULT || guard.predicate == XTIRICmpSLT) &&
+            guard.operands.count >= 2 &&
+            guard.operands[0].kind == XTIROperandKindUse &&
+            guard.operands[0].valueId == ivId)
+            {
+            int64_t boundK = 0, startK = 0;
+            XTIROperand* initOp = nil;
+            for (NSUInteger k = 0; k + 1 < ivPhi.operands.count; k += 2)
+                if (ivPhi.operands[k].blockRef != B)
+                    initOp = ivPhi.operands[k + 1];
+            if (initOp && resolveConstInt(guard.operands[1], defOf, &boundK) &&
+                resolveConstInt(initOp, defOf, &startK))
+                {
+                int64_t span = boundK - startK;
+                int64_t group = stepK * (int64_t)kUnrollFactor;
+                // ...and only for a VECTOR body. Dropping the guards merges the
+                // copies into one straight-line run, which lengthens every live
+                // range in it. A vector body barely notices — its values live in
+                // the separate v18-v31 pool and its GP traffic is a few pointers
+                // — but a scalar body competing for the GP pool spills instead:
+                // array_map is 44% faster without the guards, bit_ops 5% slower.
+                BOOL vectorBody = NO;
+                for (XTIRInsn* bi in B.instructions)
+                    if (bi.result && bi.result.type && bi.result.type.kind == XTIRTypeKindVec)
+                        { vectorBody = YES; break; }
+                if (span > 0 && group > 0 && span % group == 0 && vectorBody)
+                    c.exactTrip = YES;
+                }
+            }
         return c;
         }
     return nil;
@@ -612,7 +657,12 @@ static XTIRInsn* buildLike(XTIRInsn* insn, XTIRValue* _Nullable result,
 
         // Intermediate copies guard `iv_{j+1} <cmp> bound` and fall through to
         // the next copy or out to E. The last copy takes the back-edge.
-        if (j + 1 < kUnrollFactor)
+        if (j + 1 < kUnrollFactor && c.exactTrip)
+            {
+            // Provably true — no guard, the copy falls into the next one.
+            [guardResults addObject:(XTIRValue*)[NSNull null]];
+            }
+        else if (j + 1 < kUnrollFactor)
             {
             NSMutableDictionary<NSNumber*, NSNumber*>* gmap = @{@(ivId) : @(cloneIvNext)}.mutableCopy;
             NSMutableArray<XTIROperand*>* gops = [NSMutableArray array];
@@ -680,6 +730,14 @@ static XTIRInsn* buildLike(XTIRInsn* insn, XTIRValue* _Nullable result,
         if (j + 1 < clones.count)
             {
             XTIRValue* g = guardResults[j];
+            if ((id)g == [NSNull null])
+                {
+                [clones[j] setTerminator:[[XTIRInsn alloc] initWithOpcode:XTIROpBranch
+                                                                   result:nil
+                                                                 operands:@[ [XTIROperand blockWithRef:clones[j + 1]] ]
+                                                                   dbgLoc:nil]];
+                continue;
+                }
             XTIRInsn* cb = [[XTIRInsn alloc] initWithOpcode:XTIROpCondBranch
                                                      result:nil
                                                    operands:@[ [XTIROperand useWithValueId:g.valueId],
