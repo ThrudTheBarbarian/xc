@@ -160,7 +160,8 @@ class Arm64
             _out = new String();
             emitFunction((IRFunc*)m.funcs().get(f));
             _out.appendCString("\n");   // the blank line before the next function
-            module.append(peepholeFallthrough(peepholeCopyProp(peepholeSpills(_out))));
+            module.append(expandStagedSlots(
+                peepholeFallthrough(peepholeCopyProp(peepholeSpills(_out)))));
             _out = module;
         }
         emitModuleData(m);
@@ -3374,6 +3375,81 @@ class Arm64
     // half is only safe in a CLEAN function: one that never materialises a
     // frame address, because spill memory can then be re-read through a base
     // pointer as [xR, #K], which a literal [sp, #N] scan cannot see.
+    // Leading decimal digits of a string, as a number. The peepholes carry slot
+    // offsets around as TEXT (parseSpLine returns the digits), so the one place
+    // that has to compare them numerically converts here.
+    static u32 parseDecimal(String* s)
+    {
+        u8* p = s.cString();
+        u32 v = (u32)0;
+        u32 i = (u32)0;
+        while (p[i] >= (u8)'0' && p[i] <= (u8)'9') {
+            v = v * (u32)10 + (u32)(p[i] - (u8)'0');
+            i = i + (u32)1;
+        }
+        return v;
+    }
+
+    // `ldr/str <w>, [sp, #off]` encodes an offset up to 16380 (32760 for x/d).
+    // spMemForOff emits every slot access sp-relative so the peepholes can see
+    // it; anything still out of range is staged here, AFTER they have run, so a
+    // forwarded or dropped access never pays for the address materialisation.
+    String* expandStagedSlots(String* text)
+    {
+        Array* lines = linesOf(text);
+        Array* out = new Array();
+        for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1) {
+            String* ln = (String*)lines.get(i);
+            String* m = (String*)0; String* r = (String*)0; String* o = (String*)0;
+            if (parseSpLine(ln, &m, &r, &o)
+             && (m.equals(String.withCString("ldr")) || m.equals(String.withCString("str")))) {
+                u32 off = parseDecimal(o);
+                u32 max = (r.hasPrefix(String.withCString("w"))
+                        || r.hasPrefix(String.withCString("s"))) ? (u32)16380 : (u32)32760;
+                if (off > max) {
+                    String* stage = (r.equals(String.withCString("x9"))
+                                  || r.equals(String.withCString("w9")))
+                                  ? String.withCString("x16") : String.withCString("x9");
+                    String* w = String.withCString("w");
+                    w.append(stage.substringFromByte((u32)1));
+                    if ((off & (u32)$FFF) == (u32)0 && (off >> (u32)12) <= (u32)4095) {
+                        String* a = String.withCString("    add ");
+                        a.append(stage);
+                        a.appendFormat(", sp, #%lu, lsl #12", off >> (u32)12);
+                        out.add((Object*)a);
+                    } else {
+                        String* mv = String.withCString("    mov ");
+                        mv.append(w);
+                        mv.appendFormat(", #%lu", off & (u32)$FFFF);
+                        out.add((Object*)mv);
+                        if (off > (u32)$FFFF) {
+                            String* mk = String.withCString("    movk ");
+                            mk.append(w);
+                            mk.appendFormat(", #%lu, lsl #16", off >> (u32)16);
+                            out.add((Object*)mk);
+                        }
+                        String* ad = String.withCString("    add ");
+                        ad.append(stage);
+                        ad.appendCString(", sp, ");
+                        ad.append(stage);
+                        out.add((Object*)ad);
+                    }
+                    String* acc = String.withCString("    ");
+                    acc.append(m);
+                    acc.appendCString(" ");
+                    acc.append(r);
+                    acc.appendCString(", [");
+                    acc.append(stage);
+                    acc.appendCString("]");
+                    out.add((Object*)acc);
+                    continue;
+                }
+            }
+            out.add((Object*)ln);
+        }
+        return joinLines(out);
+    }
+
     String* peepholeSpills(String* text)
     {
         Array* lines = linesOf(text);
@@ -3958,19 +4034,15 @@ class Arm64
     {
         u32 max = (reg.hasPrefix(String.withCString("w"))
                 || reg.hasPrefix(String.withCString("s"))) ? (u32)16380 : (u32)32760;
-        if (off <= max) {
-            String* m = String.withCString("[sp, #");
-            m.appendFormat("%lu]", off);
-            return m;
-        }
-        String* addr = (reg.equals(String.withCString("x9"))
-                     || reg.equals(String.withCString("w9")))
-                     ? String.withCString("x16") : String.withCString("x9");
-        emitSpAddr(off, addr);
-        String* m2 = String.withCString("[");
-        m2.append(addr);
-        m2.appendCString("]");
-        return m2;
+        // Always sp-relative HERE, even out of range: the peepholes parse
+        // `[sp, #off]` and nothing else, so routing a slot through another base
+        // register hides it from store-to-load forwarding and dead-store
+        // removal. expandStagedSlots rewrites whatever is still out of range
+        // once they have run.
+        max = max;
+        String* m = String.withCString("[sp, #");
+        m.appendFormat("%lu]", off);
+        return m;
     }
 
     void emitSpAddr(u32 off, String* reg)
