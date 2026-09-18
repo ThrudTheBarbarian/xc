@@ -2139,9 +2139,25 @@ static BOOL arm64LogicalImm(uint64_t v, int width) {
 
 + (void)materialiseOperand:(XTIROperand *)op intoReg:(NSString *)reg ctx:(XTArm64FnCtx *)ctx {
     switch (op.kind) {
-        case XTIROperandKindUse:
+        case XTIROperandKindUse: {
+            // A constant is cheaper to REBUILD here than to fetch. Otherwise it
+            // goes wherever the allocator put it — a home register, or a frame
+            // slot — and arrives by a copy, so passing three constants to a
+            // call cost eight instructions in arc_alloc's hot loop: three to
+            // materialise, one to mask a constant zero back into its width, and
+            // four to copy them into x0-x2. Rebuilding makes that three movs.
+            //
+            // The defining Const is still emitted if anything else reads it;
+            // when nothing does, it is dead and goes the usual way.
+            XTIRInsn *d = ctx.defOf[@(op.valueId)];
+            if (d && d.opcode == XTIROpConst && d.operands.count >= 1 &&
+                d.operands[0].kind == XTIROperandKindImmI) {
+                [self materialiseOperand:d.operands[0] intoReg:reg ctx:ctx];
+                break;
+            }
             [self loadValue:op.valueId intoReg:reg ctx:ctx];
             break;
+        }
         case XTIROperandKindImmI: {
             int64_t v = op.intValue;
             // Use `mov w<n>, #imm` for small immediates, else `movz`/`movk`.

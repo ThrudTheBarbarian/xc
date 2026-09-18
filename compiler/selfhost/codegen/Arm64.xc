@@ -5599,7 +5599,28 @@ class Arm64
     // Get an operand's value into a specific register.
     void materialise(IROperand* op, String* reg)
     {
-        if (op.kind() == (u8)OPK_USE) { loadValue(op.val(), reg); return; }
+        if (op.kind() == (u8)OPK_USE) {
+            // A constant is cheaper to REBUILD here than to fetch. Otherwise it
+            // goes wherever the allocator put it — a home register, or a frame
+            // slot — and arrives by a copy, so passing three constants to a
+            // call cost eight instructions in arc_alloc's hot loop: three to
+            // materialise, one to mask a constant zero back into its width, and
+            // four to copy them into x0-x2.
+            //
+            // The defining Const is still emitted if anything else reads it;
+            // when nothing does, it is dead and goes the usual way.
+            Object* d = _defOf.get((Hashable*)op.val());
+            if (d != (Object*)0) {
+                IRInsn* dn = (IRInsn*)d;
+                if (dn.op().equals(String.withCString("Const")) && dn.ops().count() >= (u32)1
+                    && ((IROperand*)dn.ops().get((u32)0)).kind() == (u8)OPK_IMMI) {
+                    materialise((IROperand*)dn.ops().get((u32)0), reg);
+                    return;
+                }
+            }
+            loadValue(op.val(), reg);
+            return;
+        }
         if (op.kind() == (u8)OPK_IMMI) {
             i64 v = op.imm();
             // A small non-negative immediate is one `mov`; anything else is
