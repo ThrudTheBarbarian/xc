@@ -13396,7 +13396,58 @@ class OptProfile
             return;
         // Dead-strip the Const / ZExt / SExt / Trunc the fold detached, to a
         // fixpoint — removing a ZExt can orphan the Const behind it.
-        srSweepDead(fn);
+        //
+        // NOT srSweepDead: that uses the broad pure set (Add, Mul, And, shifts,
+        // AddrOf…) and so cascades into arithmetic the original's sweep leaves
+        // alone. Harmless while the fold only orphaned conversions, but once it
+        // follows Trunc the chains run deeper, and the two compilers then
+        // number IR values differently — invisible on arm64, where registers
+        // are allocated, and 793/793 differing on wasm32, whose locals are
+        // named straight from value ids.
+        cofSweepDead(fn);
+        }
+
+    // The fold's own dead-strip: exactly the four opcodes the original's sweep
+    // considers, so both compilers orphan and remove the same instructions.
+    void cofSweepDead(IRFunc* fn)
+        {
+        bool removed = true;
+        while (removed)
+            {
+            removed = false;
+            Map* used = new Map();
+            for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+                {
+                IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+                for (u32 k = (u32)0; k < bb.phis().count(); k = k + (u32)1)
+                    srNoteUses(used, (IRInsn*)bb.phis().get(k));
+                for (u32 k = (u32)0; k < bb.insns().count(); k = k + (u32)1)
+                    srNoteUses(used, (IRInsn*)bb.insns().get(k));
+                if (bb.term() != (IRInsn*)0)
+                    srNoteUses(used, bb.term());
+                }
+            for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+                {
+                IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+                for (u32 i = bb.insns().count(); i > (u32)0; i = i - (u32)1)
+                    {
+                    IRInsn* n = (IRInsn*)bb.insns().get(i - (u32)1);
+                    String* o = n.op();
+                    bool pure = o.equals(String.withCString("Const"))
+                             || o.equals(String.withCString("ZExt"))
+                             || o.equals(String.withCString("SExt"))
+                             || o.equals(String.withCString("Trunc"));
+                    if (!pure)
+                        continue;
+                    if (n.res() == (IRValue*)0 || n.memRes() != (IRValue*)0)
+                        continue;
+                    if (used.get((Hashable*)n.res()) != (Object*)0)
+                        continue;
+                    bb.insns().removeAt(i - (u32)1);
+                    removed = true;
+                    }
+                }
+            }
         }
 
     bool cofFoldable(String* op)
