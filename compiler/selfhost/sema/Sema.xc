@@ -3454,6 +3454,27 @@ class Sema
                     }
                 }
             }
+        // Only an argument list that matches no init BY ARITY is an error.
+        // When the arity matches and the port still stamps nothing, the cause
+        // is pickOverload declining to choose between candidates on type score
+        // — `new Gfx8(4)` against init(u8) and init(u8*) — where the original
+        // scores them and picks one. That is a pre-existing difference in
+        // overload resolution, not a bad `new`, and reporting it here said
+        // "supplies 1 argument, but 'Gfx8.init' takes 1".
+        if (owner != 0)
+            {
+            for (u32 i = (u32)0; i < owner.kidCount(); i = i + (u32)1)
+                {
+                Node* m = owner.kid(i);
+                if (m.kind() != (u16)nkMethodDecl)
+                    continue;
+                if (m.name() == 0 || !_isOp(m.name(), "init"))
+                    continue;
+                u32 pc = paramCount(m);
+                if (m.hasFlag((u32)NF_VARARGS) ? (argc >= pc) : (argc == pc))
+                    return;
+                }
+            }
         String* cn = cls.name() != 0 ? cls.name() : String.withCString("?");
         String* msg = String.withCString("`new ");
         msg.append(cn);
