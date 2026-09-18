@@ -13401,15 +13401,21 @@ class OptProfile
 
     bool cofFoldable(String* op)
         {
-        return op.equals(String.withCString("Add")) || op.equals(String.withCString("Sub")) || op.equals(String.withCString("And")) || op.equals(String.withCString("Or")) || op.equals(String.withCString("Xor")) || op.equals(String.withCString("ICmp")) || op.equals(String.withCString("Mul")) || op.equals(String.withCString("Shl")) || op.equals(String.withCString("LShr")) || op.equals(String.withCString("AShr"));
+        return op.equals(String.withCString("Add")) || op.equals(String.withCString("Sub")) || op.equals(String.withCString("And")) || op.equals(String.withCString("Or")) || op.equals(String.withCString("Xor")) || op.equals(String.withCString("ICmp")) || op.equals(String.withCString("Mul")) || op.equals(String.withCString("Shl")) || op.equals(String.withCString("LShr")) || op.equals(String.withCString("AShr")) || op.equals(String.withCString("UDiv")) || op.equals(String.withCString("SDiv")) || op.equals(String.withCString("URem")) || op.equals(String.withCString("SRem"));
         }
 
-    // A compile-time integer through ZExt / SExt of a Const. Note this does NOT
-    // follow Trunc — strength-reduce's resolver does, and the difference is the
-    // original's, kept.
+    // A compile-time integer through ZExt / SExt / Trunc of a Const.
+    //
+    // A TRUNC narrows the value, so each one is re-applied to the constant
+    // afterwards (innermost first) in its own width and signedness. Without
+    // this a narrowed literal never folds — which is what a shift count is,
+    // since lowering gives the count its own narrow type — and the back end
+    // then materialises the constant, homes it to a frame slot and extends it
+    // before a shift the hardware takes as an immediate.
     bool cofConst(Map* defOf, IRValue* v, i64* out, bool* isU)
         {
         IRValue* cur = v;
+        Array* truncBits = new Array();     // outermost first; negative = signed
         for (u32 d = (u32)0; d < (u32)16; d = d + (u32)1)
             {
             Object* o = defOf.get((Hashable*)cur);
@@ -13423,9 +13429,44 @@ class OptProfile
                 IROperand* k = (IROperand*)def.ops().get((u32)0);
                 if (k.kind() != (u8)OPK_IMMI)
                     return false;
-                out[0] = k.imm();
+                i64 val = k.imm();
+                u32 ti = truncBits.count();
+                while (ti > (u32)0)
+                    {
+                    ti = ti - (u32)1;
+                    i32 spec = ((Number*)truncBits.get(ti)).asI32();
+                    i32 bits = spec < (i32)0 ? -spec : spec;
+                    if (bits > (i32)0 && bits < (i32)64)
+                        {
+                        u64 mask = ((u64)1 << (u64)bits) - (u64)1;
+                        u64 uv = (u64)val & mask;
+                        if (spec < (i32)0
+                         && (uv & ((u64)1 << (u64)(bits - (i32)1))) != (u64)0)
+                            val = (i64)(uv | ~mask);
+                        else
+                            val = (i64)uv;
+                        }
+                    }
+                out[0] = val;
                 isU[0] = k.uimm();
                 return true;
+                }
+            if (def.op().equals(String.withCString("Trunc")))
+                {
+                if (def.res() == (IRValue*)0 || def.ops().count() < (u32)1)
+                    return false;
+                String* rt = def.res().ty();
+                u32 w = irWidth(rt);
+                if (w == (u32)0 || w > (u32)8)
+                    return false;
+                i32 bits = (i32)((i32)w * (i32)8);
+                bool sgn = rt.hasPrefix(String.withCString("I"));
+                truncBits.add((Object*)Number.with(sgn ? -bits : bits));
+                IROperand* tsrc = (IROperand*)def.ops().get((u32)0);
+                if (tsrc.kind() != (u8)OPK_USE)
+                    return false;
+                cur = tsrc.val();
+                continue;
                 }
             if (!def.op().equals(String.withCString("ZExt")) && !def.op().equals(String.withCString("SExt")))
                 return false;
