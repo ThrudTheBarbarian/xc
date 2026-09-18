@@ -108,6 +108,35 @@ static XTIRValueId resolveVid(NSDictionary<NSNumber*, NSNumber*>* replace,
     return cur;
     }
 
+// Can a store through `sp` change what a load through `lp` would see?
+//
+// Conservative by default — YES for anything not proved apart. The one case
+// proved apart is the one that matters: two FieldAddrs off the SAME base with
+// DIFFERENT constant field indices are distinct addresses, so storing p.y does
+// not disturb a cached p.x. Without this the forwarding below is useless on the
+// shape it exists for: `store p.x; store p.y; load p.x` would have the second
+// store wipe the entry the first one just made.
+static BOOL mayAliasPtr(XTIRValueId sp, XTIRValueId lp,
+                        NSDictionary<NSNumber*, XTIRInsn*>* defOf,
+                        NSDictionary<NSNumber*, NSNumber*>* replace)
+    {
+    if (sp == lp)
+        return YES;
+    XTIRInsn* sd = defOf[@(sp)];
+    XTIRInsn* ld = defOf[@(lp)];
+    if (!sd || !ld || sd.opcode != XTIROpFieldAddr || ld.opcode != XTIROpFieldAddr)
+        return YES;
+    if (sd.operands.count < 2 || ld.operands.count < 2)
+        return YES;
+    if (sd.operands[0].kind != XTIROperandKindUse || ld.operands[0].kind != XTIROperandKindUse)
+        return YES;
+    if (resolveVid(replace, sd.operands[0].valueId) != resolveVid(replace, ld.operands[0].valueId))
+        return YES;                       // different, or unknown, objects
+    if (sd.operands[1].kind != XTIROperandKindImmI || ld.operands[1].kind != XTIROperandKindImmI)
+        return YES;                       // a non-constant field index
+    return sd.operands[1].intValue == ld.operands[1].intValue;
+    }
+
 // Canonical key for an operand (Use ids resolved through `replace`).
 static NSString* operandKey(XTIROperand* o,
                             NSDictionary<NSNumber*, NSNumber*>* replace)
@@ -217,6 +246,13 @@ static XTIRInsn* rebuiltInsn(XTIRInsn* insn, NSArray<XTIROperand*>* newOps)
         [NSMutableDictionary dictionary];
     // Instructions to drop (their results are redirected via `replace`).
     NSMutableSet<XTIRInsn*>* toDelete = [NSMutableSet set];
+    // Defining instruction per value, so the alias test can look through a
+    // pointer to the FieldAddr that produced it.
+    NSMutableDictionary<NSNumber*, XTIRInsn*>* defOf = [NSMutableDictionary dictionary];
+    for (XTIRBlock* bb in fn.blocks)
+        for (XTIRInsn* insn in bb.instructions)
+            if (insn.result)
+                defOf[@(insn.result.valueId)] = insn;
 
     for (XTIRBlock* bb in fn.blocks)
         {
@@ -256,6 +292,15 @@ static XTIRInsn* rebuiltInsn(XTIRInsn* insn, NSArray<XTIROperand*>* newOps)
                 {
                 XTIRValueId ptr = resolveVid(replace, insn.operands[0].valueId);
                 NSNumber* have = loadedValue[@(ptr)];
+                // The cached value must be the WIDTH the load wants. A u32
+                // stored at an address and read back as a u8 is not the same
+                // value, and the table is keyed only by address.
+                if (have && insn.result.type)
+                    {
+                    XTIRValue* cv = [fn valueForId:(XTIRValueId)have.unsignedLongLongValue];
+                    if (!cv || !cv.type || cv.type.kind != insn.result.type.kind)
+                        have = nil;
+                    }
                 // To delete we must rewire the produced memory token to the
                 // load's mem-in; that requires mem-in to be a Use (it always
                 // is in well-formed IR, but guard anyway).
@@ -277,10 +322,33 @@ static XTIRInsn* rebuiltInsn(XTIRInsn* insn, NSArray<XTIROperand*>* newOps)
                 continue;
                 }
 
+            // ── Store-to-load forwarding ─────────────────────────────
+            // A plain Store makes its value available at that pointer, and
+            // disturbs only the cached loads that may alias it. Without this a
+            // struct field written and read back in the same block went to the
+            // frame and came straight back: struct_copy spent most of its loop
+            // doing exactly that.
+            //
+            // VOLATILE stores are excluded — the whole point of one is that the
+            // memory, not the value, is the observable thing.
+            if (op == XTIROpStore && insn.operands.count >= 2 &&
+                insn.operands[0].kind == XTIROperandKindUse)
+                {
+                XTIRValueId sp = resolveVid(replace, insn.operands[0].valueId);
+                for (NSNumber* lp in loadedValue.allKeys)
+                    if (mayAliasPtr(sp, (XTIRValueId)lp.unsignedLongLongValue, defOf, replace))
+                        [loadedValue removeObjectForKey:lp];
+                // Only a Use can be forwarded: the table maps value to value,
+                // and an immediate has no value id to hand a later load.
+                if (insn.operands[1].kind == XTIROperandKindUse)
+                    loadedValue[@(sp)] = @(resolveVid(replace, insn.operands[1].valueId));
+                continue;
+                }
+
             // ── Cache invalidation ───────────────────────────────────
             // Any op that may write memory or be opaque (every TouchesMemory
-            // op except a plain Load, handled above), plus bank-state ops
-            // that repoint pointers, invalidates the cached loads.
+            // op except a plain Load and the Store handled above), plus
+            // bank-state ops that repoint pointers, invalidates the cache.
             if ((XTIROpcodeTouchesMemory(op) && op != XTIROpLoad) || isBankStateOp(op))
                 {
                 [loadedValue removeAllObjects];

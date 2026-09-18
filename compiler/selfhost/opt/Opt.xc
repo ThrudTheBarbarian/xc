@@ -4795,9 +4795,24 @@ class OptProfile
             cseInFunc((IRFunc*)m.funcs().get(f));
         }
 
+    // Defining instruction per value, so the alias test can look through a
+    // pointer to the FieldAddr that produced it.
+    Map* _cseDefOf;
+
     void cseInFunc(IRFunc* fn)
         {
         _cseIds = new Map();
+        _cseDefOf = new Map();
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)bb.insns().get(i);
+                if (n.res() != (IRValue*)0)
+                    _cseDefOf.set((Hashable*)n.res(), (Object*)n);
+                }
+            }
         _cseNext = (u32)0;
         Map* replace = new Map();  // value -> the value that wins
         Array* dead = new Array(); // IRInsn@ to drop
@@ -4857,11 +4872,72 @@ class OptProfile
                     continue;
                 continue;
                 }
+            // A plain Store makes its value available at that pointer, and
+            // disturbs only the cached loads that may alias it. Without this a
+            // struct field written and read back in the same block went to the
+            // frame and came straight back.
+            //
+            // VOLATILE stores are excluded: the whole point of one is that the
+            // memory, not the value, is the observable thing.
+            if (n.op().equals(String.withCString("Store")) && n.ops().count() >= (u32)2
+                && ((IROperand*)n.ops().get((u32)0)).kind() == (u8)OPK_USE)
+                {
+                IRValue* sp = resolveReplace(replace, ((IROperand*)n.ops().get((u32)0)).val());
+                Array* keys = loaded.allKeys();
+                for (u32 k = (u32)0; k < keys.count(); k = k + (u32)1)
+                    {
+                    IRValue* lp = (IRValue*)keys.get(k);
+                    if (cseMayAlias(sp, lp, replace))
+                        loaded.remove((Hashable*)lp);
+                    }
+                // Only a Use can be forwarded: the table maps value to value,
+                // and an immediate has no value to hand a later load.
+                IROperand* sv = (IROperand*)n.ops().get((u32)1);
+                if (sv.kind() == (u8)OPK_USE)
+                    loaded.set((Hashable*)sp, (Object*)resolveReplace(replace, sv.val()));
+                continue;
+                }
             // Anything that may write memory, and the bank-state ops that
             // repoint pointers, invalidate what this block has loaded.
             if (touchesMemory(n.op()) || isBankStateOp(n.op()))
                 loaded = new Map();
             }
+        }
+
+    // Can a store through `sp` change what a load through `lp` would see?
+    //
+    // Conservative by default — true for anything not proved apart. The one
+    // case proved apart is the one that matters: two FieldAddrs off the SAME
+    // base with DIFFERENT constant field indices are distinct addresses, so
+    // storing p.y does not disturb a cached p.x. Without this the forwarding is
+    // useless on the shape it exists for, because `store p.x; store p.y;
+    // load p.x` would have the second store wipe what the first just recorded.
+    bool cseMayAlias(IRValue* sp, IRValue* lp, Map* replace)
+        {
+        if (sp == lp)
+            return true;
+        Object* so = _cseDefOf.get((Hashable*)sp);
+        Object* lo = _cseDefOf.get((Hashable*)lp);
+        if (so == (Object*)0 || lo == (Object*)0)
+            return true;
+        IRInsn* sd = (IRInsn*)so;
+        IRInsn* ld = (IRInsn*)lo;
+        if (!sd.op().equals(String.withCString("FieldAddr"))
+            || !ld.op().equals(String.withCString("FieldAddr")))
+            return true;
+        if (sd.ops().count() < (u32)2 || ld.ops().count() < (u32)2)
+            return true;
+        IROperand* sb = (IROperand*)sd.ops().get((u32)0);
+        IROperand* lb = (IROperand*)ld.ops().get((u32)0);
+        if (sb.kind() != (u8)OPK_USE || lb.kind() != (u8)OPK_USE)
+            return true;
+        if (resolveReplace(replace, sb.val()) != resolveReplace(replace, lb.val()))
+            return true;                  // different, or unknown, objects
+        IROperand* si = (IROperand*)sd.ops().get((u32)1);
+        IROperand* li = (IROperand*)ld.ops().get((u32)1);
+        if (si.kind() != (u8)OPK_IMMI || li.kind() != (u8)OPK_IMMI)
+            return true;                  // a non-constant field index
+        return si.imm() == li.imm();
         }
 
     // A Load whose pointer this block has already read hands back the value it
@@ -4871,6 +4947,15 @@ class OptProfile
         IROperand* p = (IROperand*)n.ops().get((u32)0);
         IRValue* ptr = resolveReplace(replace, p.val());
         Object* have = loaded.get((Hashable*)ptr);
+        // The cached value must be the WIDTH the load wants. A u32 stored at an
+        // address and read back as a u8 is not the same value, and the table is
+        // keyed only by address.
+        if (have != (Object*)0 && n.res() != (IRValue*)0)
+            {
+            IRValue* cv = (IRValue*)have;
+            if (cv.ty() == (String*)0 || !cv.ty().equals(n.res().ty()))
+                have = (Object*)0;
+            }
         bool canRewire = n.memRes() == 0 || (n.ops().count() >= (u32)2 && ((IROperand*)n.ops().get((u32)1)).kind() == (u8)OPK_USE);
         if (have != 0 && canRewire)
             {
