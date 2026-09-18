@@ -227,6 +227,11 @@ class Arm64
 
     u32 _saveAreaOffset;
 
+    // The frame byte range a taken address could reach; [lo, hi). Outside it, a
+    // slot nothing loads really is dead.
+    u32 _aliasLo;
+    u32 _aliasHi;
+
     // Base offset held in x28 for a frame too large for sp-relative slot
     // access, or 0 when unused. x28 is in no home pool (homes are x19-x27 and
     // x10-x14; x9 stages, x15-x17 scratch, x8 the indirect result), so it is
@@ -3510,7 +3515,8 @@ class Arm64
     String* peepholeSpills(String* text)
     {
         Array* lines = linesOf(text);
-        bool clean = true;
+        bool clean = true;               // no non-frame stp/ldp
+        bool spAddrTaken = false;        // some frame address escaped
         Map* loads = new Map();          // slot offset text -> load count
         for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1) {
             String* t = ((String*)lines.get(i)).trimmed();
@@ -3521,7 +3527,7 @@ class Arm64
             if ((t.hasPrefix(String.withCString("add ")) || t.hasPrefix(String.withCString("sub ")))
              && !t.hasPrefix(String.withCString("add sp,")) && !t.hasPrefix(String.withCString("sub sp,"))
              && t.byteIndexOf(String.withCString(", sp,")) != (u32)$FFFF_FFFF)
-                clean = false;
+                spAddrTaken = true;      // only the aliasable RANGE is at risk
             if ((t.hasPrefix(String.withCString("stp ")) || t.hasPrefix(String.withCString("ldp ")))
              && t.byteIndexOf(String.withCString("x29, x30")) == (u32)$FFFF_FFFF)
                 clean = false;
@@ -3540,13 +3546,20 @@ class Arm64
             String* sm = (String*)0; String* sr = (String*)0; String* so = (String*)0;
             if (parseSpLine(ln, &sm, &sr, &so) && sm.equals(String.withCString("str"))) {
                 u32 nloads = countIn(loads, so);
-                if (clean && nloads == (u32)0) { i = i + (u32)1; continue; }   // dead store
+                // Outgoing arguments live at [sp, #0 .. maxOutStack) and are
+                // read by the CALLEE, so no `ldr` HERE ever names them. Scoring
+                // them "stored, never loaded" deletes the arguments to every
+                // stack-passing call.
+                u32 soff = parseDecimal(so);
+                bool isArg = soff < _maxOutStack;
+                bool reachable = spAddrTaken && soff >= _aliasLo && soff < _aliasHi;
+                if (clean && !isArg && !reachable && nloads == (u32)0) { i = i + (u32)1; continue; }
                 String* lm = (String*)0; String* lr = (String*)0; String* lo = (String*)0;
                 if (i + (u32)1 < lines.count()
                  && parseSpLine((String*)lines.get(i + (u32)1), &lm, &lr, &lo)
                  && lm.equals(String.withCString("ldr")) && lo.equals(so)
                  && regClass(lr) == regClass(sr)) {
-                    bool dropStore = clean && nloads == (u32)1;
+                    bool dropStore = clean && !isArg && !reachable && nloads == (u32)1;
                     if (!dropStore) out.add((Object*)ln);
                     if (!lr.equals(sr)) {
                         u8 cls = regClass(lr);
@@ -6359,6 +6372,9 @@ class Arm64
         // and declared pinned locals keep private slots.
         bool hasAsm = false;
         Map* noShare = new Map();
+        // Address-taken ONLY — noShare also carries phi values, and a range
+        // built from those would cover most of the frame and prove nothing.
+        Map* taken = new Map();
         for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1) {
             IRBlock* bb = (IRBlock*)fn.blocks().get(b);
             for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1) {
@@ -6366,14 +6382,19 @@ class Arm64
                 if (n.op().equals(String.withCString("Asm"))) hasAsm = true;
                 if (n.op().equals(String.withCString("AddrOf")) && n.ops().count() >= (u32)1) {
                     IROperand* o = (IROperand*)n.ops().get((u32)0);
-                    if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0)
+                    if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0) {
                         noShare.set((Hashable*)o.val(), (Object*)o.val());
+                        taken.set((Hashable*)o.val(), (Object*)o.val());
+                    }
                 }
             }
         }
         for (u32 i = (u32)0; i < fn.pinned().count(); i = i + (u32)1) {
             IRPinned* p = (IRPinned*)fn.pinned().get(i);
-            if (p.val() != (IRValue*)0) noShare.set((Hashable*)p.val(), (Object*)p.val());
+            if (p.val() != (IRValue*)0) {
+                noShare.set((Hashable*)p.val(), (Object*)p.val());
+                taken.set((Hashable*)p.val(), (Object*)p.val());
+            }
         }
         // PHI results and their inputs never share.
         //
@@ -6454,6 +6475,24 @@ class Arm64
                 cur = cur + (u32)8;
             }
         }
+        // The frame byte RANGE a taken address could reach: for every
+        // address-taken value and every aggregate — which is only ever touched
+        // through one — the span from its slot to slot + size. An aggregate
+        // occupies ONE slot but spans thousands of bytes, so a rule built on
+        // bare slot offsets misses the addresses a pointer walking it reaches.
+        _aliasLo = (u32)$FFFF_FFFF;
+        _aliasHi = (u32)0;
+        for (u32 i = (u32)0; i < ordered.count(); i = i + (u32)1) {
+            IRValue* v = (IRValue*)ordered.get(i);
+            if (v == (IRValue*)0) continue;
+            if (!isAggTy(v.ty()) && taken.get((Hashable*)v) == (Object*)0) continue;
+            u32 off = slotOf(v);
+            u32 w = slotWidthOf(v);
+            if (off < _aliasLo) _aliasLo = off;
+            if (off + w > _aliasHi) _aliasHi = off + w;
+        }
+        if (_aliasLo == (u32)$FFFF_FFFF) { _aliasLo = (u32)0; _aliasHi = (u32)0; }
+
         _valueSlotEnd = cur;                   // the save area, if any, starts here
         _frame = (cur + (u32)15) & ~(u32)15;   // the stack stays 16-aligned
     }
