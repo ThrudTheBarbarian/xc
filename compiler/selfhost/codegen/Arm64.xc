@@ -3661,6 +3661,18 @@ class Arm64
                             hOff.removeAt(k); hReg.removeAt(k);
                         } else k = k + (u32)1;
                     }
+                    // One register per slot, replacing any earlier claim on it.
+                    // The original keeps this map in a dictionary keyed by
+                    // offset, so recording a slot REPLACES what it held; a list
+                    // that appends remembers several registers for one slot and
+                    // then eliminates a reload the original keeps. Both are
+                    // sound — each fact dies with its register — but the two
+                    // compilers have to emit the same text.
+                    k = (u32)0;
+                    while (k < hOff.count()) {
+                        if (((String*)hOff.get(k)).equals(o)) { hOff.removeAt(k); hReg.removeAt(k); }
+                        else k = k + (u32)1;
+                    }
                     hOff.add((Object*)o); hReg.add((Object*)r);
                     out.add((Object*)ln);
                     continue;
