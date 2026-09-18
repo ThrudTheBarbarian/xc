@@ -3572,6 +3572,44 @@ class Arm64
                     if (k > (u32)0 && o.equals(dst)) { no.add((Object*)src); used = true; }
                     else no.add((Object*)o);
                 }
+                // A memory operand names its base inside brackets, so an
+                // exact match never fires for `mov x16, x12; ldr w17, [x16]` —
+                // the copy survived in front of essentially every load in a hot
+                // loop. Rewrite the base of the simple forms `[dst]` and
+                // `[dst, #imm]` too, restricted to the LAST operand and to
+                // lines with no writeback (`!`), so a pre/post-indexed form —
+                // which WRITES its base — is left alone.
+                if (!used && !srcFP && src.hasPrefix(String.withCString("x"))
+                    && !((String*)lines.get(i + (u32)1)).contains(String.withCString("!"))
+                    && no.count() >= (u32)2)
+                    {
+                    u32 last = no.count() - (u32)1;
+                    String* opnd = (String*)no.get(last);
+                    String* plain = String.withCString("[");
+                    plain.append(dst);
+                    plain.appendCString("]");
+                    String* pre = String.withCString("[");
+                    pre.append(dst);
+                    pre.appendCString(", #");
+                    if (opnd.equals(plain))
+                        {
+                        String* rep = String.withCString("[");
+                        rep.append(src);
+                        rep.appendCString("]");
+                        no.set(last, (Object*)rep);
+                        used = true;
+                        }
+                    else if (opnd.hasPrefix(pre) && opnd.hasSuffix(String.withCString("]")))
+                        {
+                        String* rep = String.withCString("[");
+                        rep.append(src);
+                        rep.appendCString(", #");
+                        rep.append(opnd.substringBytes(pre.byteLength(),
+                                                       opnd.byteLength() - pre.byteLength()));
+                        no.set(last, (Object*)rep);
+                        used = true;
+                        }
+                    }
                 if (!used) continue;
                 if (!scratchDeadAfter(lines, i, dst, cm, co)) continue;
                 // Rebuild the consumer, keeping its indentation, and drop the
