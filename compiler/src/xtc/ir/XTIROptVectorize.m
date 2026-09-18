@@ -2094,6 +2094,13 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
 - (void)applyReduction:(XTVecCand*)c inFunction:(XTIRFunction*)fn
     {
     XTIRBlock *B = c.B, *H = c.H, *E = c.E, *PH = c.preheader;
+    // Defining instruction per value, so a constant reached through a ZExt or
+    // a Const can be recognised and splatted once in the preheader.
+    NSMutableDictionary<NSNumber*, XTIRInsn*>* defOf = [NSMutableDictionary dictionary];
+    for (XTIRBlock* bb in fn.blocks)
+        for (XTIRInsn* i in bb.instructions)
+            if (i.result)
+                defOf[@(i.result.valueId)] = i;
 
     // ── Epilogue, part 1: clone the scalar loop BEFORE anything below mutates
     // it. The vector transform overwrites B's instructions in place and rewrites
@@ -2136,12 +2143,43 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
     NSMutableDictionary<NSNumber*, XTIRValue*>* vmap = [NSMutableDictionary dictionary];
     NSMutableDictionary<NSNumber*, XTIRValue*>* splat = [NSMutableDictionary dictionary];
 
+    // A splat of a COMPILE-TIME CONSTANT belongs in the preheader, not the body:
+    // it is the same vector on every iteration. The count applier has done this
+    // since it was written; this one did not, so `a[i] * 7` rebuilt the splat of
+    // 7 every iteration — `mov w3,#7; mov w4,w3; dup v24.4s,w4` — three
+    // instructions per iteration of int_muldiv's hot loop for a constant.
+    //
+    // A non-constant operand still splats in the body, where it is correct
+    // whether or not it is invariant.
+    NSMutableDictionary<NSNumber*, XTIRValue*>* phSplatCache = [NSMutableDictionary dictionary];
+    XTIROperand* (^phSplat)(XTIROperand*, int64_t) = ^XTIROperand*(XTIROperand* op, int64_t kv) {
+      NSNumber* key = @(kv);
+      if (phSplatCache[key])
+          return [XTIROperand useWithValueId:phSplatCache[key].valueId];
+      XTIRValue* cst = newVal(c.laneType);
+      [PH.instructions addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpConst
+                                                           result:cst
+                                                         operands:@[ [XTIROperand immIWithType:c.laneType
+                                                                                         value:kv] ]
+                                                           dbgLoc:nil]];
+      XTIRValue* sp = newVal(vecTy);
+      [PH.instructions addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpVSplat
+                                                           result:sp
+                                                         operands:@[ [XTIROperand useWithValueId:cst.valueId] ]
+                                                           dbgLoc:nil]];
+      phSplatCache[key] = sp;
+      return [XTIROperand useWithValueId:sp.valueId];
+    };
+
     XTIROperand* (^vecOperand)(XTIROperand*) = ^XTIROperand*(XTIROperand* op) {
       if (op.kind == XTIROperandKindUse)
           {
           XTIRValue* vv = vmap[@(op.valueId)];
           if (vv)
               return [XTIROperand useWithValueId:vv.valueId];
+          int64_t kv;
+          if (PH && resolveConstInt(op, defOf, &kv))
+              return phSplat(op, kv);
           XTIRValue* sp = splat[@(op.valueId)];
           if (!sp)
               {
@@ -2154,6 +2192,8 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
               }
           return [XTIROperand useWithValueId:sp.valueId];
           }
+      if (PH && op.kind == XTIROperandKindImmI)
+          return phSplat(op, op.intValue);
       XTIRValue* sp = newVal(vecTy);
       [newBody addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpVSplat
                                                    result:sp

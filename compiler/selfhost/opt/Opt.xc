@@ -10003,6 +10003,10 @@ class OptProfile
     // vector width instead of one.
     Map* _vecMap;   // scalar value → its vector value
     Map* _vecSplat; // scalar value → the in-body broadcast of it
+    IRBlock* _vecSplatPH;  // preheader for loop-INVARIANT splats, or 0
+    Map* _vecSplatK;       // constant → its preheader broadcast
+    Map* _vecSplatDefs;    // value → defining insn, to spot a Const
+    String* _vecSplatTy;   // the lane type a hoisted Const takes
     // Epilogue state, set by vecApplyReduction and read by vecReduxExit: the
     // cloned remainder loop, the original->clone value map, and the preheader
     // whose phi edge the clone still names.
@@ -12190,6 +12194,7 @@ class OptProfile
 
         vecZeroSeedPhi(c, H, B, PH, accVecTy, u32t, vacc, vnext);
         vecReduxExit(fn, c, vacc);
+        _vecSplatPH = (IRBlock*)0;
         }
 
     // The zeroed vector accumulator in the preheader and the phi that replaces
@@ -12522,6 +12527,24 @@ class OptProfile
                 }
             }
 
+        // Arm the preheader splat for loop-INVARIANT constants (see
+        // vecSplatConst): the same vector on every iteration belongs on loop
+        // entry, not in the body.
+        _vecSplatPH = c.pre();
+        _vecSplatK = new Map();
+        _vecSplatTy = c.laneTy();
+        _vecSplatDefs = new Map();
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)bb.insns().get(i);
+                if (n.res() != (IRValue*)0)
+                    _vecSplatDefs.set((Hashable*)n.res(), (Object*)n);
+                }
+            }
+
         // The vector accumulator, needed by name before the body's VAdd is built.
         IRValue* vacc = new IRValue(_vecTy);
         vecReduxBody(c, B, vacc);
@@ -12805,13 +12828,45 @@ class OptProfile
     // value, else a broadcast made in the body. (The map path also hoists
     // invariant broadcasts to the entry block; the reduction path does not, and
     // the difference is the original's.)
+    // A splat of a COMPILE-TIME CONSTANT belongs in the preheader, not the body:
+    // it is the same vector on every iteration. `a[i] * 7` rebuilt the splat of
+    // 7 every iteration — three instructions in int_muldiv's hot loop for a
+    // constant. A non-constant operand still splats in the body, where it is
+    // correct whether or not it is invariant.
+    IROperand* vecSplatConst(i32 k)
+        {
+        Object* have = _vecSplatK.get((Hashable*)Number.withI32(k));
+        if (have != (Object*)0)
+            return IROperand.useVal((IRValue*)have);
+        IRValue* cst = new IRValue(_vecSplatTy);
+        IRInsn* cn = IRInsn.with(String.withCString("Const"));
+        cn.setRes(cst);
+        cn.add(IROperand.immI(k, _vecSplatTy));
+        _vecSplatPH.insns().add((Object*)cn);
+        IRValue* v = new IRValue(_vecTy);
+        IRInsn* sp = IRInsn.with(String.withCString("VSplat"));
+        sp.setRes(v);
+        sp.add(IROperand.useVal(cst));
+        _vecSplatPH.insns().add((Object*)sp);
+        _vecSplatK.set((Hashable*)Number.withI32(k), (Object*)v);
+        return IROperand.useVal(v);
+        }
+
     IROperand* vecSplatOperand(IROperand* op)
         {
+        if (_vecSplatPH != (IRBlock*)0 && op.kind() == (u8)OPK_IMMI)
+            return vecSplatConst((i32)op.imm());
         if (op.kind() == (u8)OPK_USE)
             {
             Object* vv = _vecMap.get((Hashable*)op.val());
             if (vv != (Object*)0)
                 return IROperand.useVal((IRValue*)vv);
+            if (_vecSplatPH != (IRBlock*)0)
+                {
+                i32 kv = (i32)0;
+                if (vecConst(op, _vecSplatDefs, &kv))
+                    return vecSplatConst(kv);
+                }
             Object* sp = _vecSplat.get((Hashable*)op.val());
             if (sp == (Object*)0)
                 {
