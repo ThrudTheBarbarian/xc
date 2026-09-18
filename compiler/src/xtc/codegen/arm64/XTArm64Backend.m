@@ -1149,7 +1149,34 @@ static const NSUInteger kArm64VaForwardWords = 16;
     // sort_small round-trips its `&&` result, its index AND its array base
     // through slots on every iteration of the hot loop.
     NSArray<NSString *> *gpCallerRegs = @[@"x10", @"x11", @"x12", @"x13", @"x14"];
-    NSArray<NSString *> *fpCallerRegs = @[];
+    // d16-d31 are caller-saved and belong to the AUTO-VECTORISER's pool — but
+    // only in a function that vectorises. One that does not leaves sixteen FP
+    // registers unused while its own FP values spill: float_math unrolls four
+    // copies of `acc += (double)(a[i] * b[i])`, wants more than the eight
+    // callee-saved d8-d15, and the overflow does not merely spill — an unhomed
+    // f32 load has no FP scratch at all, so it lands in w17 and bounces through
+    // the frame to reach an FP register. Three instructions for one load.
+    //
+    // Gated on the function having no Vec-typed value anywhere, so the
+    // vectoriser's pool is untouched wherever it is in use. crossesCall keeps
+    // these off anything live across a call, as it does for x0-x7.
+    //
+    // d16/d17 stay OUT: they are the FP scratch the load path above uses, and
+    // homing a value there produced `fcvt s8, x16` — the scratch was handed to
+    // a home and the operand fell back to a GP register. Same split the vector
+    // pool uses: v18-v31 home, v16/v17 scratch.
+    BOOL fnHasVector = NO;
+    for (XTIRBlock *vb in fn.blocks) {
+        for (XTIRInsn *vi in vb.instructions)
+            if (vi.result && vi.result.type && vi.result.type.kind == XTIRTypeKindVec) { fnHasVector = YES; break; }
+        if (fnHasVector) break;
+        for (XTIRInsn *vp in vb.phiNodes)
+            if (vp.result && vp.result.type && vp.result.type.kind == XTIRTypeKindVec) { fnHasVector = YES; break; }
+        if (fnHasVector) break;
+    }
+    NSArray<NSString *> *fpCallerRegs = fnHasVector ? @[]
+        : @[@"d18", @"d19", @"d20", @"d21", @"d22", @"d23",
+            @"d24", @"d25", @"d26", @"d27", @"d28", @"d29", @"d30", @"d31"];
     // Tried LAST, after both existing tiers. Ordering is not cosmetic: the
     // preference list is caller-then-callee, so folding these in beside
     // x10-x14 put them ahead of x19-x27 and re-shuffled every allocation the
@@ -4274,6 +4301,12 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
             BOOL pteSigned = pteType ? XTIRTypeKindIsSigned(pteType.kind) : NO;
             if (pteType && pteType.kind == XTIRTypeKindPtr) {
                 ldrMnem = @"ldr"; destReg = @"x17";
+            } else if (pteType && XTIRTypeKindIsFloating(pteType.kind)) {
+                // An FP load needs an FP scratch. Falling through to w17/x17
+                // put the value in a GP register, and the only way back out is
+                // through the frame — `ldr w17,[p]; str w17,[slot]; ldr s0,[slot]`
+                // where `ldr s0,[p]` was wanted.
+                ldrMnem = @"ldr"; destReg = [self fregName:16 forType:pteType];
             } else if (pteWidth >= 8) {
                 ldrMnem = @"ldr"; destReg = @"x17";   // F64 / 8-byte
             } else if (pteWidth >= 4) {

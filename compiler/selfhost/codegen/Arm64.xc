@@ -4344,7 +4344,14 @@ class Arm64
         String* mnem = String.withCString("ldr");
         String* dest = String.withCString("w17");
         u32 w = width(pte);
-        if (isPtrTy(pte) || w >= (u32)8) { dest = String.withCString("x17"); }
+        if (isFloatTy(pte)) {
+            // An FP load needs an FP scratch. Falling through to w17/x17 put
+            // the value in a GP register, and the only way back out is through
+            // the frame — `ldr w17,[p]; str w17,[slot]; ldr s0,[slot]` where
+            // `ldr s0,[p]` was wanted.
+            dest = fregName((u32)16, pte);
+        }
+        else if (isPtrTy(pte) || w >= (u32)8) { dest = String.withCString("x17"); }
         else if (w >= (u32)4) { dest = String.withCString("w17"); }
         else if (w == (u32)2) { mnem = String.withCString(isSignedTy(pte) ? "ldrsh" : "ldrh"); }
         else                  { mnem = String.withCString(isSignedTy(pte) ? "ldrsb" : "ldrb"); }
@@ -6383,7 +6390,48 @@ class Arm64
         fpCallee.add((Object*)String.withCString("d15"));
         // There is no FP caller-saved tier: v0-v15 are FP scratch and v16-v31
         // are the auto-vectoriser's pool.
+        // d16-d31 are caller-saved and belong to the AUTO-VECTORISER's pool —
+        // but only in a function that vectorises. One that does not leaves
+        // sixteen FP registers unused while its own FP values spill: float_math
+        // unrolls four copies of `acc += (double)(a[i] * b[i])` and wants more
+        // than the eight callee-saved d8-d15. Gated on the function having no
+        // Vec-typed value anywhere; _crossCall keeps these off anything live
+        // across a call, as it does for the GP argument tier.
+        bool fnHasVector = false;
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* vb = (IRBlock*)fn.blocks().get(b);
+            for (u32 i = (u32)0; i < vb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* vi = (IRInsn*)vb.insns().get(i);
+                if (vi.res() != (IRValue*)0 && isVecTy(vi.res().ty()))
+                    fnHasVector = true;
+                }
+            for (u32 i = (u32)0; i < vb.phis().count(); i = i + (u32)1)
+                {
+                IRInsn* vp = (IRInsn*)vb.phis().get(i);
+                if (vp.res() != (IRValue*)0 && isVecTy(vp.res().ty()))
+                    fnHasVector = true;
+                }
+            }
         Array* fpCaller = new Array();
+        if (!fnHasVector)
+            {
+            fpCaller.add((Object*)String.withCString("d18"));
+            fpCaller.add((Object*)String.withCString("d19"));
+            fpCaller.add((Object*)String.withCString("d20"));
+            fpCaller.add((Object*)String.withCString("d21"));
+            fpCaller.add((Object*)String.withCString("d22"));
+            fpCaller.add((Object*)String.withCString("d23"));
+            fpCaller.add((Object*)String.withCString("d24"));
+            fpCaller.add((Object*)String.withCString("d25"));
+            fpCaller.add((Object*)String.withCString("d26"));
+            fpCaller.add((Object*)String.withCString("d27"));
+            fpCaller.add((Object*)String.withCString("d28"));
+            fpCaller.add((Object*)String.withCString("d29"));
+            fpCaller.add((Object*)String.withCString("d30"));
+            fpCaller.add((Object*)String.withCString("d31"));
+            }
 
         assignTier(fn, gp, gpCallee, gpCaller);
         assignTier(fn, fp, fpCallee, fpCaller);

@@ -509,9 +509,16 @@ static XTIRInsn* buildLike(XTIRInsn* insn, XTIRValue* _Nullable result,
         // Only a STRICT `<` with the iv on the left gives trip = (N - S) / step;
         // with `<=` the trip is one more and the arithmetic below would be off
         // by one in the unsafe direction.
+        // ...or a FLOATING-POINT body, for the same reason. The gate is about
+        // what the body's values compete for: a vector body uses v18-v31 and an
+        // FP body d8-d15, so in both cases the GP traffic is a few pointers and
+        // lengthening a GP live range to save instructions is a good trade. A
+        // GP-bound integer body is the case that spills instead.
         c.vectorBody = NO;
         for (XTIRInsn* bi in B.instructions)
-            if (bi.result && bi.result.type && bi.result.type.kind == XTIRTypeKindVec)
+            if (bi.result && bi.result.type &&
+                (bi.result.type.kind == XTIRTypeKindVec ||
+                 XTIRTypeKindIsFloating(bi.result.type.kind)))
                 { c.vectorBody = YES; break; }
         c.exactTrip = NO;
         if (stepConst && stepK > 0 &&
