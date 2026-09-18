@@ -2620,7 +2620,14 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
                     break;
                     }
                 XTIRType* lt = insn.result.type;
-                if (!lt || !(lt.kind == XTIRTypeKindI32 || lt.kind == XTIRTypeKindU32))
+                // A NARROW element counts too: the compare and mask run at the
+                // load's width and climb to the accumulator's with VAddLP. A
+                // narrow lane only ever holds ONE iteration's mask before being
+                // widened — the accumulation happens at 32 bits — so there is no
+                // overflow to reason about beyond the delta fitting the lane.
+                if (!lt || !(lt.kind == XTIRTypeKindI32 || lt.kind == XTIRTypeKindU32 ||
+                             lt.kind == XTIRTypeKindI8  || lt.kind == XTIRTypeKindU8 ||
+                             lt.kind == XTIRTypeKindI16 || lt.kind == XTIRTypeKindU16))
                     {
                     ok = NO;
                     break;
@@ -2733,7 +2740,23 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
         c.ivNext = ivNext;
         c.guard = guard;
         c.ivId = ivId;
-        c.laneType = laneType;
+        // vw came from the LOAD's width above (16 lanes for a byte). When the
+        // element is narrower than the count, the accumulator keeps its own
+        // width and loadLaneType records the element's — exactly as the
+        // widening sum does — and the apply climbs between them.
+        XTIRType* accTy = accPhi.result.type;
+        if (laneType.byteWidth < 4)
+            {
+            if (!accTy || accTy.byteWidth != 4)
+                continue;                        // only a 32-bit count
+            uint64_t laneMax = (laneType.byteWidth == 1) ? 0xFFULL : 0xFFFFULL;
+            if (deltaK < 0 || (uint64_t)deltaK > laneMax)
+                continue;                        // the delta must fit the lane
+            c.loadLaneType = laneType;
+            c.laneType = accTy;
+            }
+        else
+            c.laneType = laneType;
         c.vw = vw;
         c.accPhi = accPhi;
         c.accId = accId;
@@ -2752,7 +2775,12 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
 - (void)applyCountReduction:(XTVecCand*)c inFunction:(XTIRFunction*)fn
     {
     XTIRBlock *B = c.B, *H = c.H, *E = c.E, *PH = c.preheader, *L = c.mmLatch;
-    XTIRType* vecTy = [XTIRType vecWithLane:c.laneType];
+    // The load, compare and mask run at the ELEMENT's width; the accumulator
+    // keeps its own. They are the same type unless the element is narrower,
+    // which is what loadLaneType records — so the 32-bit path is unchanged.
+    XTIRType* elemLane = c.loadLaneType ?: c.laneType;
+    XTIRType* vecTy = [XTIRType vecWithLane:elemLane];
+    XTIRType* accVecTy = [XTIRType vecWithLane:c.laneType];
     XTIRValue* (^newVal)(XTIRType*) = ^XTIRValue*(XTIRType* ty) {
       XTIRValueId rid = [fn allocateValueId];
       XTIRValue* v = [[XTIRValue alloc] initWithValueId:rid
@@ -2768,7 +2796,7 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
             if (i.result)
                 defOf[@(i.result.valueId)] = i;
 
-    XTIRValue* vacc = newVal(vecTy);
+    XTIRValue* vacc = newVal(accVecTy);
     NSMutableArray<XTIRInsn*>* nb = [NSMutableArray array];
     NSMutableDictionary<NSNumber*, XTIRValue*>* vmap = [NSMutableDictionary dictionary];
     NSMutableDictionary<NSNumber*, XTIRValue*>* splat = [NSMutableDictionary dictionary];
@@ -2895,10 +2923,26 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
                                             result:vinc
                                           operands:@[ [XTIROperand useWithValueId:vmask.valueId], phSplat(c.countDeltaOp) ]
                                             dbgLoc:nil]];
-    XTIRValue* vnext = newVal(vecTy);
+    // Climb the masked increments to the accumulator's width with uaddlp — the
+    // same ladder the widening sum uses. Pairwise summing preserves a total, so
+    // folding lanes together does not disturb a count.
+    XTIRValue* curInc = vinc;
+    XTIRType* curLane = elemLane;
+    while (curLane.byteWidth < c.laneType.byteWidth)
+        {
+        XTIRType* nextLane = (curLane.byteWidth == 1) ? [XTIRType u16Type] : [XTIRType u32Type];
+        XTIRValue* w = newVal([XTIRType vecWithLane:nextLane]);
+        [nb addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpVAddLP
+                                                result:w
+                                              operands:@[ [XTIROperand useWithValueId:curInc.valueId] ]
+                                                dbgLoc:nil]];
+        curInc = w;
+        curLane = nextLane;
+        }
+    XTIRValue* vnext = newVal(accVecTy);
     [nb addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpVAdd
                                             result:vnext
-                                          operands:@[ [XTIROperand useWithValueId:vacc.valueId], [XTIROperand useWithValueId:vinc.valueId] ]
+                                          operands:@[ [XTIROperand useWithValueId:vacc.valueId], [XTIROperand useWithValueId:curInc.valueId] ]
                                             dbgLoc:nil]];
     [B.instructions setArray:nb];
 
@@ -2911,7 +2955,7 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
 
     // Vector accumulator phi: splat(0) init, back-edge value vnext (defined in
     // B, dominates the latch L). Additive, so seed is added back at the exit.
-    XTIRValue* vacc0 = newVal(vecTy);
+    XTIRValue* vacc0 = newVal(accVecTy);
     XTIRValue* zero = newVal(c.laneType);
     [PH.instructions addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpConst
                                                          result:zero

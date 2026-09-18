@@ -583,6 +583,14 @@ class OptProfile
         _vw = w;
         }
 
+    // The ELEMENT's lane, when it is narrower than the accumulator's. Only the
+    // widening paths set it; everything else leaves it nil and the two widths
+    // are the same.
+    void setLoadLane(String* lt)
+        {
+        _loadLaneTy = lt;
+        }
+
     // Additive-reduction fields: the loop carries a second phi whose back-edge
     // value is `accNext = Add(acc, elem)` with `elem` an iv-indexed elementwise
     // value. The map fields above still describe the induction variable.
@@ -10298,7 +10306,14 @@ class OptProfile
                 String* lt = n.res().ty();
                 if (lt == (String*)0)
                     return false;
-                if (!lt.equals(String.withCString("I32")) && !lt.equals(String.withCString("U32")))
+                // A NARROW element counts too: the compare and mask run at the
+                // load's width and climb to the accumulator's with VAddLP. A
+                // narrow lane only ever holds ONE iteration's mask before being
+                // widened — the accumulation happens at 32 bits — so there is no
+                // overflow beyond the delta having to fit the lane.
+                if (!lt.equals(String.withCString("I32")) && !lt.equals(String.withCString("U32"))
+                 && !lt.equals(String.withCString("I8"))  && !lt.equals(String.withCString("U8"))
+                 && !lt.equals(String.withCString("I16")) && !lt.equals(String.withCString("U16")))
                     return false;
                 if (_vcLaneTy != (String*)0 && !_vcLaneTy.equals(lt))
                     return false;
@@ -10530,7 +10545,25 @@ class OptProfile
         VecCand* c = new VecCand();
         c.setLoop(H, B, E);
         c.setIv(ivPhi, ivNext, guard, iv);
-        c.setLane(_vcLaneTy, vw);
+        // vw came from the LOAD's width (16 lanes for a byte). When the element
+        // is narrower than the count, the accumulator keeps its own width and
+        // loadLaneTy records the element's, exactly as the widening sum does.
+        if (irWidth(_vcLaneTy) < (u32)4)
+            {
+            String* accTy = acc.ty();
+            if (accTy == (String*)0 || irWidth(accTy) != (u32)4)
+                return (VecCand*)0;             // only a 32-bit count
+            i64 dk2 = (i64)0;
+            if (!vecConst(_vcDelta, defOf, &dk2))
+                return (VecCand*)0;
+            i64 laneMax = irWidth(_vcLaneTy) == (u32)1 ? (i64)255 : (i64)65535;
+            if (dk2 < (i64)0 || dk2 > laneMax)
+                return (VecCand*)0;             // the delta must fit the lane
+            c.setLoadLane(_vcLaneTy);
+            c.setLane(accTy, vw);
+            }
+        else
+            c.setLane(_vcLaneTy, vw);
         c.setReduction(accPhi, _vcAccNext, acc, _vcElem, seedOp, PH);
         c.setCount(_vcCmp, _vcDelta, L);
         c.setEpi(false, n);
@@ -10650,8 +10683,14 @@ class OptProfile
         IRBlock* H = c.h();
         IRBlock* PH = c.pre();
         IRBlock* L = c.mmLatch();
+        // The load, compare and mask run at the ELEMENT's width; the accumulator
+        // keeps its own. They are the same unless the element is narrower,
+        // which is what loadLaneTy records — so the 32-bit path is unchanged.
+        String* elemLane = c.loadLaneTy() != (String*)0 ? c.loadLaneTy() : c.laneTy();
         String* vecTy = new String();
-        vecTy.appendFormat("Vec(%s)", c.laneTy().cString());
+        vecTy.appendFormat("Vec(%s)", elemLane.cString());
+        String* accVecTy = new String();
+        accVecTy.appendFormat("Vec(%s)", c.laneTy().cString());
 
         Map* defOf = new Map();
         Map* defBlk = new Map();
@@ -10662,7 +10701,7 @@ class OptProfile
             vecNoteDefs(defOf, defBlk, bb.insns(), bb);
             }
 
-        IRValue* vacc = new IRValue(vecTy);
+        IRValue* vacc = new IRValue(accVecTy);
         vecCountBodyRewrite(fn, c, B, PH, vecTy, vacc, defOf, defBlk);
 
         // mask = VICmp(elem, k); inc = mask AND splat(delta); vacc += inc.
@@ -10672,9 +10711,9 @@ class OptProfile
         IRInsn* vic = IRInsn.with(String.withCString("VICmp"));
         vic.setRes(vmask);
         vic.add(vecCountCmpOperand((IROperand*)c.cmpInsn().ops().get((u32)0), PH,
-                                   c.laneTy(), vecTy, defOf));
+                                   elemLane, vecTy, defOf));
         vic.add(vecCountCmpOperand((IROperand*)c.cmpInsn().ops().get((u32)1), PH,
-                                   c.laneTy(), vecTy, defOf));
+                                   elemLane, vecTy, defOf));
         // The compare's own predicate, as the original does. This used to be
         // deliberately NOT set: XTIRPrinter printed a predicate for ICmp/FCmp
         // only, so VICmp fell to the generic case and the operator never
@@ -10689,14 +10728,34 @@ class OptProfile
         IRInsn* va = IRInsn.with(String.withCString("VAnd"));
         va.setRes(vinc);
         va.add(IROperand.useVal(vmask));
-        va.add(vecCountSplatPH(PH, c.delta(), c.laneTy(), vecTy, defOf));
+        va.add(vecCountSplatPH(PH, c.delta(), elemLane, vecTy, defOf));
         _vecBody.add((Object*)va);
 
-        IRValue* vnext = new IRValue(vecTy);
+        // Climb the masked increments to the accumulator's width with uaddlp —
+        // the ladder the widening sum uses. Pairwise summing preserves a total,
+        // so folding lanes together does not disturb a count.
+        IRValue* curInc = vinc;
+        String* curLane = elemLane;
+        while (irWidth(curLane) < irWidth(c.laneTy()))
+            {
+            String* nextLane = irWidth(curLane) == (u32)1
+                                   ? String.withCString("U16")
+                                   : String.withCString("U32");
+            String* wTy = new String();
+            wTy.appendFormat("Vec(%s)", nextLane.cString());
+            IRValue* w = new IRValue(wTy);
+            IRInsn* wi = IRInsn.with(String.withCString("VAddLP"));
+            wi.setRes(w);
+            wi.add(IROperand.useVal(curInc));
+            _vecBody.add((Object*)wi);
+            curInc = w;
+            curLane = nextLane;
+            }
+        IRValue* vnext = new IRValue(accVecTy);
         IRInsn* vad = IRInsn.with(String.withCString("VAdd"));
         vad.setRes(vnext);
         vad.add(IROperand.useVal(vacc));
-        vad.add(IROperand.useVal(vinc));
+        vad.add(IROperand.useVal(curInc));
         _vecBody.add((Object*)vad);
         B.setInsns(_vecBody);
 
@@ -10712,7 +10771,7 @@ class OptProfile
         // Zero-seeded vector accumulator; the scalar seed is added back at the
         // exit, where the horizontal reduce lands. The back edge is the LATCH,
         // which is the body only when it was merged.
-        vecZeroSeedPhi(c, H, L, PH, vecTy, c.laneTy(), vacc, vnext);
+        vecZeroSeedPhi(c, H, L, PH, accVecTy, c.laneTy(), vacc, vnext);
         vecReduxExit(fn, c, vacc);
         }
 
