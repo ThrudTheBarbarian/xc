@@ -19,6 +19,8 @@ NS_ASSUME_NONNULL_BEGIN
 // Cap on trip x body for a FULL unroll — the size of the single block that
 // results, which is what decides whether the allocator can hold it. 0 = none.
 - (NSUInteger)unrollMaxTotalInsns;
+// Reorder blocks so a conditional branch's expected successor falls through.
+- (BOOL)laysOutHotPath;
 // Largest straight-line body (instruction count) eligible to unroll.
 - (NSUInteger)unrollMaxBodyInsns;
 // Per-function instruction ceiling above which unrolling is skipped.

@@ -21,6 +21,7 @@
 #import "XTIROptJumpThread.h"
 #import "XTIROptAggExpand.h"
 #import "XTIROptMem2Reg.h"
+#import "XTIROptBlockLayout.h"
 #import "XTIROptLoopRotate.h"
 #import "XTIROptVectorize.h"
 #import "XTIROptPointerIV.h"
@@ -189,7 +190,14 @@
         // Final sweep: drop pure instructions orphaned by inlining and the
         // value-rewriting passes above (e.g. an inlined nullary call's
         // unused receiver AddrOf).
-        [p addPass:[[XTIROptDeadCode alloc] init]];
+[p addPass:[[XTIROptDeadCode alloc] init]];
+        // LAST: order the blocks so a conditional branch's expected successor
+        // falls through. Nothing after this may reorder or add blocks, and
+        // nothing before it is affected — the pass rewrites no instruction,
+        // only the order fn.blocks holds them in.
+        XTIROptBlockLayout* layout = [[XTIROptBlockLayout alloc] init];
+        layout.profile = profile;
+        [p addPass:layout];
         }
     return p;
     }

@@ -8,6 +8,13 @@
     return NO;
     }
 
+// Off by default: measured on arm64, whose back end already has the
+// fallthrough peephole this depends on.
+- (BOOL)laysOutHotPath
+    {
+    return NO;
+    }
+
 // Unrolled size cap (trip x body). 0 is no cap, which is what every profile
 // that has not measured one gets.
 - (NSUInteger)unrollMaxTotalInsns
@@ -153,6 +160,10 @@
 // The trip count alone does not say this: trip 32 over a 2-instruction body
 // is fine. The product does, because it is what the allocator sees.
 - (BOOL)hoistsLocalAddr
+    {
+    return YES;
+    }
+- (BOOL)laysOutHotPath
     {
     return YES;
     }
