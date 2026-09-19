@@ -49,6 +49,7 @@ class OptProfile
     // targets relax them. `_unrollFrameIds` is arm64's slot-offset gate — 0
     // here stands for the original's NSUIntegerMax (no gate).
     u32 _unrollMaxTrip;
+    u32 _unrollMaxTotal;
     u32 _unrollMaxBody;
     u32 _unrollBudget;
     bool _unrollMultiCarried;
@@ -58,6 +59,7 @@ class OptProfile
     bool _unrollVarTrip;   // …and a variable-trip loop partially unrolls
     bool _licm;            // loop-invariant code moves to the preheader
     bool _hoistGlobalAddr; // …and a repeated AddrOf @sym dedupes to the entry
+    bool _hoistLocalAddr;  // …and a repeated AddrOf of a pinned LOCAL (arm64)
     bool _narrowIV;        // a counted IV is recomputed at its smallest width
     bool _loopRotate;      // top-tested loops become bottom-tested
 
@@ -77,6 +79,7 @@ class OptProfile
         _initGuardElim = false;
         _initGuardHoist = false;
         _unrollMaxTrip = (u32)4;
+        _unrollMaxTotal = (u32)0;
         _unrollMaxBody = (u32)8;
         _unrollBudget = (u32)512;
         _unrollMultiCarried = false;
@@ -86,6 +89,7 @@ class OptProfile
         _unrollVarTrip = false;
         _licm = false;
         _hoistGlobalAddr = false;
+        _hoistLocalAddr = false;
         _narrowIV = false;
         _loopRotate = false;
         }
@@ -165,6 +169,17 @@ class OptProfile
             }
         if (t.equals(String.withCString("arm64")))
             {
+            // A fully unrolled loop is ONE basic block, and every value it
+            // computes is live inside it. matrix_mul's k loop is trip 32 over
+            // a 9-instruction body: unrolled whole that is ~290 instructions
+            // and ~160 short-lived values in one block, far past the register
+            // pool, so every one of them round trips through the frame.
+            // Measured, that loop runs 9.8ms fully unrolled and 3.1ms not.
+            // Trip alone does not say this — trip 32 over a 2-instruction
+            // body is fine. The product does, because it is what the
+            // allocator sees.
+            p._hoistLocalAddr = true;
+            p._unrollMaxTotal = (u32)128;
             p._unrollCallsInBody = true;
             p._unrollFrameIds = (u32)1900;
             }
@@ -253,6 +268,14 @@ class OptProfile
         {
         return _accumRecursion;
         }
+    // Cap on trip x body for a FULL unroll — the size of the single block that
+    // results, which is what decides whether the allocator can hold it.
+    // 0 = none.
+    u32 unrollMaxTotal(void)
+        {
+        return _unrollMaxTotal;
+        }
+
     u32 unrollMaxTrip(void)
         {
         return _unrollMaxTrip;
@@ -289,6 +312,12 @@ class OptProfile
         {
         return _licm;
         }
+    // Separate from hoistGlobalAddr because it regresses xt6502.
+    bool hoistLocalAddr(void)
+        {
+        return _hoistLocalAddr;
+        }
+
     bool hoistGlobalAddr(void)
         {
         return _hoistGlobalAddr;
@@ -7852,6 +7881,14 @@ class OptProfile
         if (trip < (u32)2)
             return false; // trip 0/1 is not worth the machinery
 
+        // The unrolled body is one block and everything in it is live there.
+        // Past a point that costs more in spills than the removed branches
+        // save — see the note on unrollMaxTotal.
+        u32 totalCap = _profile.unrollMaxTotal();
+        if (!unrollForced(fn, H) && totalCap > (u32)0
+            && trip * B.insns().count() > totalCap)
+            return false;
+
         // Every other header phi is an accumulator carried across iterations,
         // and each must have the same (preheader init, body next) shape with
         // both values SSA uses — the per-copy threading is value-to-value.
@@ -15352,10 +15389,15 @@ class OptProfile
     // block, which dominates everything, and the duplicates' uses point at it.
     // Unrolling and inlining are what replicate these in the first place, and
     // one definition lets the allocator home the value across the loop.
+    // The function whose keys are being computed — `hoistKey` needs it to ask
+    // whether an AddrOf names a pinned local, and has no other way to reach it.
+    IRFunc* _hoistFn;
+
     void constHoist(IRModule* m)
         {
         for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
             {
+            _hoistFn = (IRFunc*)m.funcs().get(f);
             chInFunc(m, (IRFunc*)m.funcs().get(f));
             chHoistMulImms((IRFunc*)m.funcs().get(f));
             }
@@ -15588,6 +15630,22 @@ class OptProfile
             {
             String* k = String.withCString("a:");
             k.append(a.name());
+            k.appendCString(":");
+            k.append(n.res().ty()); // carries pointee AND window
+            return k;
+            }
+        // A pinned local IS a frame slot, so its address is one value for the
+        // whole function however many times it is taken. The unrollers clone
+        // the AddrOf with the rest of the body: matrix_mul's k loop ends up
+        // with 32 copies of `AddrOf a` and 32 of `AddrOf b`, 64 live values
+        // where two would do.
+        if (_profile.hoistLocalAddr() && n.op().equals(String.withCString("AddrOf"))
+            && a.kind() == (u8)OPK_USE && n.res().ty() != (String*)0
+            && n.res().ty().hasPrefix(String.withCString("Ptr("))
+            && _hoistFn != (IRFunc*)0 && aeIsPinned(_hoistFn, a.val()))
+            {
+            String* k = String.withCString("l:");
+            k.appendFormat("%ld", (i32)a.val().seq());
             k.appendCString(":");
             k.append(n.res().ty()); // carries pointee AND window
             return k;
@@ -15850,11 +15908,104 @@ class OptProfile
     // loader already accepts an ImmI here.
     void constOperandFold(IRModule* m)
         {
+        // To a fixed point: evaluating a constant pair turns an instruction
+        // into a Const, which the next round can then fold into its consumer
+        // as an immediate. One round leaves `mov w16,#160; add w16,w16,w11`
+        // where two give `add w16,w11,#160`.
         for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
-            cofInFunc((IRFunc*)m.funcs().get(f));
+            {
+            IRFunc* fn = (IRFunc*)m.funcs().get(f);
+            u32 round = (u32)0;
+            while (round < (u32)8 && cofInFunc(fn))
+                round = round + (u32)1;
+            }
         }
 
-    void cofInFunc(IRFunc* fn)
+    // Integer width and signedness of a scalar type spelling. Exactly the
+    // eight kinds the original's XTIRTypeKindIsInteger accepts, minus the two
+    // 64-bit ones — see the note on cofEvalPair.
+    bool cofIntBits(String* t, u32* bits, bool* sgn)
+        {
+        if (t == (String*)0)
+            return false;
+        if (t.equals(String.withCString("I8")))  { *bits = (u32)8;  *sgn = true;  return true; }
+        if (t.equals(String.withCString("U8")))  { *bits = (u32)8;  *sgn = false; return true; }
+        if (t.equals(String.withCString("I16"))) { *bits = (u32)16; *sgn = true;  return true; }
+        if (t.equals(String.withCString("U16"))) { *bits = (u32)16; *sgn = false; return true; }
+        if (t.equals(String.withCString("I32"))) { *bits = (u32)32; *sgn = true;  return true; }
+        if (t.equals(String.withCString("U32"))) { *bits = (u32)32; *sgn = false; return true; }
+        return false;
+        }
+
+    // Both operands known: evaluate the operation at compile time, in the
+    // RESULT's width and signedness. False for anything not decidable here —
+    // a division (the divisor may be zero), a shift past the width, a type
+    // wider than 32 bits (a wide unsigned immediate is spelled differently by
+    // the two compilers, and this fold never fires on one in a hot loop).
+    bool cofEvalPair(String* op, i64 a, i64 b, String* rty, i64* out)
+        {
+        u32 bits = (u32)0;
+        bool sgn = false;
+        if (!cofIntBits(rty, &bits, &sgn))
+            return false;
+        u64 mask = ((u64)1 << (u64)bits) - (u64)1;
+        u64 ua = (u64)a & mask;
+        u64 ub = (u64)b & mask;
+        u64 r = (u64)0;
+        if (op.equals(String.withCString("Add")))
+            r = ua + ub;
+        else if (op.equals(String.withCString("Sub")))
+            r = ua - ub;
+        else if (op.equals(String.withCString("And")))
+            r = ua & ub;
+        else if (op.equals(String.withCString("Or")))
+            r = ua | ub;
+        else if (op.equals(String.withCString("Xor")))
+            r = ua ^ ub;
+        else if (op.equals(String.withCString("Mul")))
+            r = ua * ub;
+        else if (op.equals(String.withCString("Shl")))
+            {
+            if (b < (i64)0 || (u64)b >= (u64)bits)
+                return false;
+            r = ua << (u64)b;
+            }
+        else if (op.equals(String.withCString("LShr")))
+            {
+            if (b < (i64)0 || (u64)b >= (u64)bits)
+                return false;
+            r = ua >> (u64)b;
+            }
+        else if (op.equals(String.withCString("AShr")))
+            {
+            if (b < (i64)0 || (u64)b >= (u64)bits)
+                return false;
+            i64 sa = (i64)ua;
+            if ((ua & ((u64)1 << (u64)(bits - (u32)1))) != (u64)0)
+                sa = (i64)(ua | ~mask);
+            r = (u64)(sa >> (i64)b);
+            }
+        else
+            return false;
+        r = r & mask;
+        if (sgn && (r & ((u64)1 << (u64)(bits - (u32)1))) != (u64)0)
+            *out = (i64)(r | ~mask);
+        else
+            *out = (i64)r;
+        return true;
+        }
+
+    // Add, Mul and the bitwise ops do not care which side a constant is on,
+    // but the immediate fold only looks at the RHS. Canonicalising puts the
+    // constant where it can be used.
+    bool cofCommutative(String* op)
+        {
+        return op.equals(String.withCString("Add")) || op.equals(String.withCString("Mul"))
+            || op.equals(String.withCString("And")) || op.equals(String.withCString("Or"))
+            || op.equals(String.withCString("Xor"));
+        }
+
+    bool cofInFunc(IRFunc* fn)
         {
         Map* defOf = defMap(fn);
         bool changed = false;
@@ -15866,12 +16017,61 @@ class OptProfile
                 IRInsn* n = (IRInsn*)bb.insns().get(i);
                 if (!cofFoldable(n.op()) || n.ops().count() < (u32)2)
                     continue;
+                IROperand* lhs = (IROperand*)n.ops().get((u32)0);
                 IROperand* rhs = (IROperand*)n.ops().get((u32)1);
+
+                // Both sides constant: evaluate it. The unrollers substitute
+                // the induction variable with a literal, so a fully unrolled
+                // body is full of `Const k` feeding an arithmetic op on
+                // another constant.
+                i64 lk = (i64)0;
+                bool lku = false;
+                bool haveL = false;
+                if (lhs.kind() == (u8)OPK_IMMI)
+                    { lk = lhs.imm(); haveL = true; }
+                else if (lhs.kind() == (u8)OPK_USE)
+                    haveL = cofConst(defOf, lhs.val(), &lk, &lku);
+                i64 rk = (i64)0;
+                bool rku = false;
+                bool haveR = false;
+                if (rhs.kind() == (u8)OPK_IMMI)
+                    { rk = rhs.imm(); haveR = true; }
+                else if (rhs.kind() == (u8)OPK_USE)
+                    haveR = cofConst(defOf, rhs.val(), &rk, &rku);
+
+                i64 folded = (i64)0;
+                if (haveL && haveR && n.res() != (IRValue*)0
+                    && cofEvalPair(n.op(), lk, rk, n.res().ty(), &folded))
+                    {
+                    IRInsn* c = IRInsn.with(String.withCString("Const"));
+                    c.setRes(n.res());
+                    c.setMemRes(n.memRes());
+                    c.add(IROperand.immI(folded, n.res().ty()));
+                    bb.insns().set(i, (Object*)c);
+                    changed = true;
+                    continue;
+                    }
+                // Constant on the left of a commutative op: swap it to the
+                // right, where the immediate fold can see it.
+                if (haveL && !haveR && cofCommutative(n.op())
+                    && lhs.kind() == (u8)OPK_USE && rhs.kind() == (u8)OPK_USE)
+                    {
+                    n.ops().set((u32)0, (Object*)rhs);
+                    n.ops().set((u32)1, (Object*)lhs);
+                    IROperand* t = lhs;
+                    lhs = rhs;
+                    rhs = t;
+                    rk = lk;
+                    rku = lku;
+                    haveR = true;
+                    changed = true;
+                    }
+
                 if (rhs.kind() != (u8)OPK_USE)
                     continue;
-                i64 k = (i64)0;
-                bool ku = false;
-                if (!cofConst(defOf, rhs.val(), &k, &ku))
+                i64 k = rk;
+                bool ku = rku;
+                if (!haveR)
                     continue;
                 String* immTy = rhs.val().ty();
                 if (immTy == (String*)0)
@@ -15881,7 +16081,7 @@ class OptProfile
                 }
             }
         if (!changed)
-            return;
+            return false;
         // Dead-strip the Const / ZExt / SExt / Trunc the fold detached, to a
         // fixpoint — removing a ZExt can orphan the Const behind it.
         //
@@ -15893,6 +16093,7 @@ class OptProfile
         // are allocated, and 793/793 differing on wasm32, whose locals are
         // named straight from value ids.
         cofSweepDead(fn);
+        return true;
         }
 
     // The fold's own dead-strip: exactly the four opcodes the original's sweep

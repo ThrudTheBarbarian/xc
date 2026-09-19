@@ -16,6 +16,9 @@ NS_ASSUME_NONNULL_BEGIN
 // ── Loop unrolling ──────────────────────────────────────────────────────
 // Largest trip count to fully unroll.
 - (NSUInteger)unrollMaxTrip;
+// Cap on trip x body for a FULL unroll — the size of the single block that
+// results, which is what decides whether the allocator can hold it. 0 = none.
+- (NSUInteger)unrollMaxTotalInsns;
 // Largest straight-line body (instruction count) eligible to unroll.
 - (NSUInteger)unrollMaxBodyInsns;
 // Per-function instruction ceiling above which unrolling is skipped.
@@ -76,6 +79,10 @@ NS_ASSUME_NONNULL_BEGIN
 // *value's* pointee type (so merges must preserve that type) — i.e. arm64. The
 // 6502 AbsSym fast path materialises globals differently and opts out.
 - (BOOL)hoistsGlobalAddr;
+// Dedupe a repeated `AddrOf <pinned local>` to one definition in the entry
+// block. Separate from hoistsGlobalAddr because it regresses xt6502 — see
+// private:docs/bugs.
+- (BOOL)hoistsLocalAddr;
 
 // YES to partially unroll a *variable*-trip loop (unknown iteration count) by
 // replicating its single-block body N times in sequence, each copy guarded by a

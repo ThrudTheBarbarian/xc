@@ -2,6 +2,19 @@
 
 @implementation XTIROptTargetProfile
 
+// Off by default: measured on arm64, and it produces wrong answers on xt6502.
+- (BOOL)hoistsLocalAddr
+    {
+    return NO;
+    }
+
+// Unrolled size cap (trip x body). 0 is no cap, which is what every profile
+// that has not measured one gets.
+- (NSUInteger)unrollMaxTotalInsns
+    {
+    return 0;
+    }
+
 - (BOOL)inlinesAggregateParams
     {
     return NO;   // 6502-conservative base
@@ -129,6 +142,23 @@
 - (NSUInteger)unrollMaxBodyInsns
     {
     return 64;
+    }
+// A fully unrolled loop is ONE basic block, and every value it computes is
+// live inside it. matrix_mul's k loop is trip 32 over a 9-instruction body:
+// unrolled whole that is ~290 instructions and ~160 short-lived values in a
+// single block, far past the register pool, so every one of them round trips
+// through the frame. Measured, that loop runs 9.8ms fully unrolled and 3.1ms
+// not — a 3x LOSS from unrolling more.
+//
+// The trip count alone does not say this: trip 32 over a 2-instruction body
+// is fine. The product does, because it is what the allocator sees.
+- (BOOL)hoistsLocalAddr
+    {
+    return YES;
+    }
+- (NSUInteger)unrollMaxTotalInsns
+    {
+    return 128;
     }
 - (NSUInteger)unrollFnInsnBudget
     {

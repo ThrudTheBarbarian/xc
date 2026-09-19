@@ -407,6 +407,13 @@ static BOOL splitPhi(XTIRInsn* phi, XTIRBlock* B,
         if (trip < 2)
             continue; // trip 0/1 not worth the machinery
 
+        // The unrolled body is one block and everything in it is live there.
+        // Past a point that costs more in spills than the removed branches
+        // save — see the note on unrollMaxTotalInsns.
+        NSUInteger totalCap = prof.unrollMaxTotalInsns;
+        if (!forced && totalCap > 0 && trip * B.instructions.count > totalCap)
+            continue;
+
         // Every other header phi is an accumulator carried across iterations.
         // Each must have the (preheader init, body next) shape with both
         // values being SSA Uses (so the per-copy threading is value-id only).

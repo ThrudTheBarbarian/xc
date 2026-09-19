@@ -207,6 +207,17 @@ static XTIRInsn* rebuilt(XTIRInsn* insn, NSArray<XTIROperand*>* ops)
         return;
     XTIRBlock* entry = fn.blocks[0];
     BOOL hoistAddr = self.profile.hoistsGlobalAddr;
+    BOOL hoistLocal = self.profile.hoistsLocalAddr;
+
+    // A pinned local IS a frame slot, so its address is one value for the
+    // whole function however many times it is taken. The unrollers clone the
+    // AddrOf with the rest of the body: matrix_mul's k loop unrolls 32 times
+    // and ends up with 32 copies of `AddrOf a` and 32 of `AddrOf b`, 64 live
+    // values where two would do, which exhausts the register pool and pushes
+    // every intermediate in the loop into memory.
+    NSMutableSet<NSNumber*>* pinned = [NSMutableSet set];
+    for (XTIRPinnedLocal* pl in fn.frameInfo.pinnedLocals)
+        [pinned addObject:@(pl.valueId)];
 
     // Group repeatable defs by a value-equivalence key, in program order:
     //   float Const  → "f:<typekind>:<rawbits>"
@@ -238,6 +249,17 @@ static XTIRInsn* rebuilt(XTIRInsn* insn, NSArray<XTIROperand*>* ops)
                 {
                 key = [NSString stringWithFormat:@"a:%llu:%d:%@",
                                                  (unsigned long long)insn.operands[0].symbolId,
+                                                 (int)insn.result.type.windowId,
+                                                 addrPointeeKey(insn.result.type, mod)];
+                }
+            else if (hoistLocal && insn.opcode == XTIROpAddrOf && insn.result &&
+                     insn.result.type.kind == XTIRTypeKindPtr &&
+                     insn.operands.count >= 1 &&
+                     insn.operands[0].kind == XTIROperandKindUse &&
+                     [pinned containsObject:@(insn.operands[0].valueId)])
+                {
+                key = [NSString stringWithFormat:@"l:%llu:%d:%@",
+                                                 (unsigned long long)insn.operands[0].valueId,
                                                  (int)insn.result.type.windowId,
                                                  addrPointeeKey(insn.result.type, mod)];
                 }
