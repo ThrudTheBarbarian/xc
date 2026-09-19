@@ -19,6 +19,7 @@
 #import "XTIROptTailRecursion.h"
 #import "XTIROptIfConvert.h"
 #import "XTIROptJumpThread.h"
+#import "XTIROptAggExpand.h"
 #import "XTIROptLoopRotate.h"
 #import "XTIROptVectorize.h"
 #import "XTIROptPointerIV.h"
@@ -101,6 +102,7 @@
         ifconv.profile = profile;
         [p addPass:ifconv];
         [p addPass:[[XTIROptJumpThread alloc] init]];
+        [p addPass:[[XTIROptAggExpand alloc] init]];
         // Drop redundant static-init guards (profile-gated) before unrolling,
         // so the guard's load/compare/branch is gone from hot bodies.
         XTIROptStaticInitGuard* guards = [[XTIROptStaticInitGuard alloc] init];
