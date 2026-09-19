@@ -15,6 +15,7 @@ extern int runXtLayoutTests(void);
 extern int runRegionCBankTests(void);
 extern int runXtOpcodeTests(void);
 extern int runIRBuildTests(void);
+extern int runIRDominatorTests(void);
 extern int runIRVerifierTests(void);
 extern int runIRLoweringTests(void);
 extern int runArm64CodegenTests(void);
@@ -78,6 +79,7 @@ int main(int argc, const char* argv[])
 
         fprintf(stderr, "\n--- IR Build Tests ---\n");
         failures += runIRBuildTests();
+        failures += runIRDominatorTests();
 
         fprintf(stderr, "\n--- IR Verifier Tests ---\n");
         failures += runIRVerifierTests();
