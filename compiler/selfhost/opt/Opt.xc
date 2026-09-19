@@ -9391,8 +9391,15 @@ class OptProfile
                 {
                 i32 span = boundK - startK;
                 i32 group = stepK * (i32)4;
-                if (span > (i32)0 && group > (i32)0 && span % group == (i32)0
-                    && c.vectorBody())
+                // This used to be restricted to a VECTOR body, because a
+                // scalar one spilled once the guards were gone and the copies
+                // merged into one straight-line run. That was the
+                // live-interval bug, not a property of scalar bodies — every
+                // interval in the function shared one start, so lengthening
+                // any of them cost a register nothing could get back. With
+                // that fixed, re-measured: bit_ops unchanged, matrix_mul 17%
+                // faster with the guards gone.
+                if (span > (i32)0 && group > (i32)0 && span % group == (i32)0)
                     exact = true;
                 }
             }

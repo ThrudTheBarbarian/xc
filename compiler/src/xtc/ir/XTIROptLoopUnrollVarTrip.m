@@ -537,13 +537,20 @@ static XTIRInsn* buildLike(XTIRInsn* insn, XTIRValue* _Nullable result,
                 {
                 int64_t span = boundK - startK;
                 int64_t group = stepK * (int64_t)kUnrollFactor;
-                // ...and only for a VECTOR body. Dropping the guards merges the
-                // copies into one straight-line run, which lengthens every live
-                // range in it. A vector body barely notices — its values live in
-                // the separate v18-v31 pool and its GP traffic is a few pointers
-                // — but a scalar body competing for the GP pool spills instead:
-                // array_map is 44% faster without the guards, bit_ops 5% slower.
-                if (span > 0 && group > 0 && span % group == 0 && c.vectorBody)
+                // This used to be restricted to a VECTOR body. Dropping the
+                // guards merges the copies into one straight-line run, which
+                // lengthens every live range in it, and a scalar body then
+                // spilled where a vector one (living in the separate v18-v31
+                // pool) did not: array_map was 44% faster without the guards
+                // and bit_ops 5% slower.
+                //
+                // That was the live-interval bug, not a property of scalar
+                // bodies — every interval in the function shared one start, so
+                // lengthening any of them cost a register nothing could get
+                // back. With that fixed the restriction costs and buys
+                // nothing: re-measured, bit_ops is unchanged and matrix_mul is
+                // 17% faster with the guards gone.
+                if (span > 0 && group > 0 && span % group == 0)
                     c.exactTrip = YES;
                 }
             }
