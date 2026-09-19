@@ -6839,6 +6839,18 @@ class Arm64
                         IRValue* v = (IRValue*)ks.get(q);
                         if (endOf(v) < latchEnd) continue;
                         if (startOf(v) <= loopLo) continue;
+                        // ...and it must be DEFINED IN THIS LOOP. Without this
+                        // a value defined entirely AFTER the loop still
+                        // matched — its end is past the latch and its start is
+                        // past the header — and had its start dragged back
+                        // across a loop it has nothing to do with. With
+                        // several loops in a function the earliest small one
+                        // won, so every value in matrix_mul's main started at
+                        // the same position: every interval overlapped every
+                        // other, no register could ever be reused, and the
+                        // allocator degenerated to "the first 22 by rank win,
+                        // the rest spill".
+                        if (startOf(v) > latchEnd) continue;
                         _start.set((Hashable*)v, (Object*)Number.withI32(loopLo));
                     }
                 }

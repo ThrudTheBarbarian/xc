@@ -1231,6 +1231,16 @@ static const NSUInteger kArm64VaForwardWords = 16;
             for (NSNumber *v in startOf.allKeys) {
                 if (endOf[v].integerValue < latchEnd) continue;   // not live out of latch
                 if (startOf[v].integerValue <= loopLo) continue;  // already spans header
+                // ...and it must be DEFINED IN THIS LOOP. Without this a value
+                // defined entirely AFTER the loop still matched — its end is
+                // past the latch and its start is past the header — and had its
+                // start dragged back across a loop it has nothing to do with.
+                // With several loops in a function the earliest small one won,
+                // so in matrix_mul EVERY value in main started at the same
+                // position: every interval overlapped every other, no register
+                // could ever be reused, and the allocator degenerated to
+                // "the first 22 by rank win, the rest spill".
+                if (startOf[v].integerValue > latchEnd) continue;
                 startOf[v] = @(loopLo);
             }
         }
@@ -1276,7 +1286,19 @@ static const NSUInteger kArm64VaForwardWords = 16;
                 }
                 if (ok) { chosen = (NSInteger)r; break; }
             }
-            if (chosen < 0) continue;              // unhomed → stays in its slot
+            if (chosen < 0) {
+                if (getenv("XTREGDBG") && hotDepth[v].unsignedIntegerValue >= (NSUInteger)atoi(getenv("XTREGDBG")))
+                    fprintf(stderr, "  UNHOMED %%%ld depth=%lu uses=%lu ivl=[%ld,%ld]\n",
+                            (long)v.integerValue,
+                            (unsigned long)hotDepth[v].unsignedIntegerValue,
+                            (unsigned long)[uses countForObject:v], (long)s, (long)e);
+                continue;              // unhomed → stays in its slot
+            }
+            if (getenv("XTREGDBG") && hotDepth[v].unsignedIntegerValue >= (NSUInteger)atoi(getenv("XTREGDBG")))
+                fprintf(stderr, "  homed   %%%ld -> %s depth=%lu uses=%lu ivl=[%ld,%ld]\n",
+                        (long)v.integerValue, regs[chosen].UTF8String,
+                        (unsigned long)hotDepth[v].unsignedIntegerValue,
+                        (unsigned long)[uses countForObject:v], (long)s, (long)e);
             ctx.homeReg[v] = regs[chosen];
             [regIvls[chosen] addObject:[NSValue valueWithRange:NSMakeRange((NSUInteger)s, (NSUInteger)(e - s))]];
             if (isPhi) exclusive[chosen] = @YES;
@@ -1285,6 +1307,7 @@ static const NSUInteger kArm64VaForwardWords = 16;
             }
         }
     };
+    if (getenv("XTREGDBG")) fprintf(stderr, "== %s\n", ctx.fn.name.UTF8String);
     assign(gp, gpRegs, gpCallerRegs, gpArgTier);
     assign(fp, fpRegs, fpCallerRegs, @[]);
     // Stable callee-save order (prologue/epilogue iterate this array together).
