@@ -208,6 +208,12 @@ static unsigned xtArm64GlobalP2Align(uint32_t size) {
             for (NSNumber *v in ivStart.allKeys) {
                 if (ivEnd[v].integerValue < latchEnd) continue;  // not live out of the latch
                 if (ivStart[v].integerValue <= loopLo) continue; // already spans the header
+                // ...and it must be DEFINED IN THIS LOOP — the same guard the
+                // register-homing copy below carries, and for the same reason.
+                // The port implements both from ONE shared loopExtendStarts, so
+                // a guard added to only one of these two makes the compilers
+                // disagree about every frame in the program.
+                if (ivStart[v].integerValue > latchEnd) continue;
                 ivStart[v] = @(loopLo);
             }
         }

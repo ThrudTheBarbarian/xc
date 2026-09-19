@@ -4689,7 +4689,18 @@ class Arm64
         // The source slot was written by a 32-bit store, so its upper four
         // bytes are stale: read it 32-bit first, and the "a write to w<n>
         // zero-extends x<n>" rule gives a clean pointer-width value.
-        materialise((IROperand*)n.ops().get((u32)0), String.withCString("w16"));
+        //
+        // A USE goes through loadValue, NOT materialise. materialise rebuilds
+        // a constant rather than fetching it — worth it for a call argument,
+        // where the alternative is a copy into the argument register — but
+        // here the value already has a home and reading it is one instruction
+        // against two. The original takes the same branch; taking the other
+        // one made every file in arm64-diff differ (bug 222).
+        IROperand* a0 = (IROperand*)n.ops().get((u32)0);
+        if (a0.kind() == (u8)OPK_USE)
+            loadValue(a0.val(), String.withCString("w16"));
+        else
+            materialise(a0, String.withCString("w16"));
         // An int→ptr is a 16-bit address value, masked so the Map/Set
         // `(pointer)0` / `(pointer)1` sentinels and the `(u16)(pointer)N == N`
         // round trip stay honest. Native pointers never come through here —
