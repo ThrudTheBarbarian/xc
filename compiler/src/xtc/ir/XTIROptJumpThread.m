@@ -37,7 +37,7 @@ static BOOL constOf(XTIROperand* op, NSDictionary<NSNumber*, XTIRInsn*>* defOf, 
 
 @implementation XTIROptJumpThread
 
-- (NSString*)name
+- (NSString*)passName
     {
     return @"jump-thread";
     }
