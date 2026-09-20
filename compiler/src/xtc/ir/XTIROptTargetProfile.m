@@ -643,6 +643,16 @@
 
 @implementation XTIRX86_64TargetProfile
 
+// Dedupe a repeated `AddrOf <pinned local>`. Held back from the base profile
+// because it produces WRONG ANSWERS on xt6502 (bug 221, cause undiagnosed) —
+// but that is an xt6502 fault, not a reason to keep it off a host back end.
+// matrix_mul was emitting 32 copies of `lea rax, [rbp-4112]`, one per unrolled
+// copy, each spilled to its own frame slot.
+- (BOOL)hoistsLocalAddr
+    {
+    return YES;
+    }
+
 - (BOOL)inlinesAggregateParams
     {
     return YES;   // aggregates are ordinary addressable memory
