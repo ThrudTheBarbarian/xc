@@ -2090,6 +2090,18 @@ class X86Fixup
             return (u32)$6676;
         if (m.equals(String.withCString("pcmpgtd")))
             return (u32)$6666;
+        // The BYTE and WORD lane widths of the same two compares. Only the
+        // dword forms existed, so the back end emitted a dword compare for
+        // byte lanes and string_scan counted zero matches instead of 64
+        // (bug 223).
+        if (m.equals(String.withCString("pcmpeqb")))
+            return (u32)$6674;
+        if (m.equals(String.withCString("pcmpgtb")))
+            return (u32)$6664;
+        if (m.equals(String.withCString("pcmpeqw")))
+            return (u32)$6675;
+        if (m.equals(String.withCString("pcmpgtw")))
+            return (u32)$6665;
         if (m.equals(String.withCString("pmaddwd")))
             return (u32)$66F5;
         if (m.equals(String.withCString("punpcklbw")))

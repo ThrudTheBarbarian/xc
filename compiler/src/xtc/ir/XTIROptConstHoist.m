@@ -10,6 +10,49 @@
 #import "XTIRType.h"
 #import "XTIRLayout.h"
 
+
+// Does `a` dominate `b`? By definition: every path from the entry to `b` goes
+// through `a`, i.e. `b` is unreachable from the entry once `a` is removed.
+//
+// Written out here rather than taken from XTIRDominators because the PORT has
+// a different dominator implementation, and the two disagreed on real
+// functions — which showed up as five new opt-diff divergences. One definition,
+// spelled the same way on both sides, is worth more here than a shared one
+// that is only nearly shared.
+static BOOL chDominates(XTIRFunction* fn, XTIRBlock* a, XTIRBlock* b)
+    {
+    if (a == b)
+        return YES;
+    if (fn.blocks.count == 0)
+        return NO;
+    XTIRBlock* entry = fn.blocks[0];
+    if (a == entry)
+        return YES;
+    NSMutableSet<NSValue*>* seen = [NSMutableSet set];
+    NSMutableArray<XTIRBlock*>* work = [NSMutableArray arrayWithObject:entry];
+    [seen addObject:[NSValue valueWithNonretainedObject:entry]];
+    while (work.count)
+        {
+        XTIRBlock* n = work.lastObject;
+        [work removeLastObject];
+        if (n == a)
+            continue;                    // removed: do not go through it
+        if (!n.terminator)
+            continue;
+        for (XTIROperand* o in n.terminator.operands)
+            {
+            if (o.kind != XTIROperandKindBlock || !o.blockRef)
+                continue;
+            NSValue* k = [NSValue valueWithNonretainedObject:o.blockRef];
+            if ([seen containsObject:k])
+                continue;
+            [seen addObject:k];
+            [work addObject:o.blockRef];
+            }
+        }
+    return ![seen containsObject:[NSValue valueWithNonretainedObject:b]];
+    }
+
 @implementation XTIROptConstHoist
 
 - (NSString*)passName
@@ -27,8 +70,8 @@
     (void)outErrors;
     for (XTIRFunction* fn in mod.functions)
         {
-        [self runOnFunction:fn module:mod];
-        [self hoistMulImmediates:fn];
+        if (!getenv("XTNODEDUPE")) [self runOnFunction:fn module:mod];
+        if (!getenv("XTNOMULHOIST")) [self hoistMulImmediates:fn];
         }
     return YES;
     }
@@ -95,7 +138,7 @@
 
         // The preheader: H's one predecessor that is not the latch.
         XTIRBlock* PH = nil;
-        NSUInteger preds = 0;
+        NSUInteger preds = 0, inBody = 0;
         (void)E;
         for (XTIRBlock* p in fn.blocks)
             {
@@ -110,10 +153,25 @@
                     // the preheader and planted the constant after its own
                     // uses — a definition that never runs, and two benchmarks
                     // silently computed the wrong answer.
-                    if (![bodyBlocks containsObject:p])
+                    // The preheader is the predecessor OUTSIDE the loop
+                    // body, and the latch is the one inside it. Counting both
+                    // is what matters: the body walk is capped, a nested loop
+                    // overruns the cap, and then NEITHER predecessor is in the
+                    // body — both look like preheaders and the last in block
+                    // order won, which is the latch. The Const landed inside
+                    // the loop with its uses outside it, and the value was
+                    // read where it was never defined: sieve on x86-64
+                    // computed `ts.sec * ts.sec` for `ts.sec * 1000000` and
+                    // printed 1.9e11 microseconds (bug 224).
+                    if ([bodyBlocks containsObject:p])
+                        inBody++;
+                    else if (chDominates(fn, p, H))
                         PH = p;
                     }
             }
+        // Exactly one predecessor inside the loop (the latch) and one outside
+        // (the preheader). Anything else means the body walk did not describe
+        // this loop, and the block it would pick is not a preheader.
         if (!PH || preds != 2 || PH == H)
             continue;
 

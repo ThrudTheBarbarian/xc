@@ -1389,20 +1389,38 @@ class X86_64
             return;
         String* lhs = swap ? b : a;
         String* rhs = swap ? a : b;
+        // The compare must be taken at the LANE width. Every mnemonic here used
+        // to be the `d` (32-bit) form whatever the lanes were, so a vector of
+        // BYTES was compared four at a time as one dword and a match needed all
+        // four to coincide: `if (buf[i] == 44) n++` counted 0 instead of 64,
+        // silently, in string_scan (bug 223).
+        u32 lw = fieldWidth(laneOf(n.res().ty()));
+        if (lw != (u32)1 && lw != (u32)2 && lw != (u32)4)
+            return;         // 64-bit lanes need SSE4.2 pcmpgtq; not emitted today
+        String* sfx = String.withCString(lw == (u32)1 ? "b" : (lw == (u32)2 ? "w" : "d"));
         if (uns && !useEq)
             {
             // There is no unsigned packed compare, so both sides are biased by
-            // 0x80000000 — flipping the sign bit turns unsigned order into
-            // signed order.
-            _out.appendCString("\tpcmpeqd\txmm1, xmm1\n\tpslld\txmm1, 31\n");
+            // the lane's sign bit — flipping it turns unsigned order into
+            // signed order. All-ones shifted into place gives the mask; for
+            // BYTES that needs 0x01 per byte first (pabsb of all-ones),
+            // because shifting all-ones left by 7 in 16-bit units leaves
+            // 0xFF80, not 0x8080.
+            if (lw == (u32)1)
+                _out.appendCString("\tpcmpeqd\txmm1, xmm1\n\tpabsb\txmm1, xmm1\n\tpsllw\txmm1, 7\n");
+            else if (lw == (u32)2)
+                _out.appendCString("\tpcmpeqd\txmm1, xmm1\n\tpsllw\txmm1, 15\n");
+            else
+                _out.appendCString("\tpcmpeqd\txmm1, xmm1\n\tpslld\txmm1, 31\n");
             _out.appendFormat("\tmovdqa\t%s, %s\n\tpxor\t%s, xmm1\n",
                               d.cString(), lhs.cString(), d.cString());
             _out.appendFormat("\tmovdqa\txmm0, %s\n\tpxor\txmm0, xmm1\n", rhs.cString());
-            _out.appendFormat("\tpcmpgtd\t%s, xmm0\n", d.cString());
+            _out.appendFormat("\tpcmpgt%s\t%s, xmm0\n", sfx.cString(), d.cString());
             }
         else
             {
-            String* cmp = String.withCString(useEq ? "pcmpeqd" : "pcmpgtd");
+            String* cmp = String.withCString(useEq ? "pcmpeq" : "pcmpgt");
+            cmp.append(sfx);
             if (d.equals(lhs))
                 {
                 _out.appendFormat("\t%s\t%s, %s\n", cmp.cString(), d.cString(), rhs.cString());

@@ -15652,6 +15652,50 @@ class OptProfile
     // every iteration, once per multiply. call_depth's inlined body does four
     // of them for the same literal 3. Turning the immediate into a Const in the
     // PREHEADER gives it a value the allocator can home.
+    // Does `a` dominate `b`? By definition: every path from the entry to `b`
+    // goes through `a`, i.e. `b` is unreachable from the entry once `a` is
+    // removed.
+    //
+    // Written out rather than taken from dominators() because the ORIGINAL has
+    // a different dominator implementation and the two disagreed on real
+    // functions — five new opt-diff divergences. One definition, spelled the
+    // same way on both sides, is worth more than a shared one that is only
+    // nearly shared.
+    bool chDominates(IRFunc* fn, IRBlock* a, IRBlock* b)
+        {
+        if (a == b)
+            return true;
+        if (fn.blocks().count() == (u32)0)
+            return false;
+        IRBlock* entry = (IRBlock*)fn.blocks().get((u32)0);
+        if (a == entry)
+            return true;
+        Array* seen = new Array();
+        Array* work = new Array();
+        seen.add((Object*)entry);
+        work.add((Object*)entry);
+        while (work.count() > (u32)0)
+            {
+            IRBlock* n = (IRBlock*)work.get(work.count() - (u32)1);
+            work.removeAt(work.count() - (u32)1);
+            if (n == a)
+                continue;               // removed: do not go through it
+            if (n.term() == (IRInsn*)0)
+                continue;
+            for (u32 q = (u32)0; q < n.term().ops().count(); q = q + (u32)1)
+                {
+                IROperand* o = (IROperand*)n.term().ops().get(q);
+                if (o.kind() != (u8)OPK_BLOCK || o.blk() == (IRBlock*)0)
+                    continue;
+                if (hasBlock(seen, o.blk()))
+                    continue;
+                seen.add((Object*)o.blk());
+                work.add((Object*)o.blk());
+                }
+            }
+        return !hasBlock(seen, b);
+        }
+
     void chHoistMulImms(IRFunc* fn)
         {
         for (u32 hi = (u32)0; hi < fn.blocks().count(); hi = hi + (u32)1)
@@ -15684,7 +15728,22 @@ class OptProfile
                     if (o.kind() == (u8)OPK_BLOCK && o.blk() == H)
                         {
                         preds = preds + (u32)1;
-                        if (!chHas(body, p))
+                        // The preheader is the predecessor that DOMINATES the
+                        // header — not merely one outside the body walk. That
+                        // walk is capped and a nested loop overruns it, and
+                        // then BOTH predecessors look like preheaders and the
+                        // last in block order won, which is the latch. The
+                        // Const landed inside the loop with its uses outside
+                        // it, and the value was read where it was never
+                        // defined: sieve on x86-64 computed `ts.sec * ts.sec`
+                        // for `ts.sec * 1000000` and printed 1.9e11
+                        // microseconds (bug 224).
+                        //
+                        // Dominance is the property actually wanted, and it
+                        // still holds for a nested loop's preheader, which IS
+                        // reachable from its header by going round the outer
+                        // loop.
+                        if (!chHas(body, p) && chDominates(fn, p, H))
                             PH = p;
                         }
                     }

@@ -765,6 +765,12 @@ static void emitModRM(NSMutableData *d, int reg, const XOperand *rm) {
                   // Emitted by the vectoriser's widening-sum / dot-product
                   // reductions; absent until bug 029.
                   @"pcmpeqd":@[@0x66,@0x76], @"pcmpgtd":@[@0x66,@0x66],
+                  // The BYTE and WORD lane widths of the same two compares.
+                  // Only the dword forms existed, so the back end emitted a
+                  // dword compare for byte lanes and string_scan counted zero
+                  // matches instead of 64 (bug 223).
+                  @"pcmpeqb":@[@0x66,@0x74], @"pcmpgtb":@[@0x66,@0x64],
+                  @"pcmpeqw":@[@0x66,@0x75], @"pcmpgtw":@[@0x66,@0x65],
                   @"pmaddwd":@[@0x66,@0xF5], @"punpcklbw":@[@0x66,@0x60],
                   // The i16 multiply the vectoriser emits for a widening
                   // product (vectorize_dot, vectorize_widen_tail).

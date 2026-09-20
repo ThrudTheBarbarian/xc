@@ -3752,17 +3752,38 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
             return;
             }
         NSString *lhs = swap ? b : a, *rhs = swap ? a : b;
+        // The compare must be taken at the LANE width. Every mnemonic here used
+        // to be the `d` (32-bit) form whatever the lanes were, so a vector of
+        // BYTES was compared four at a time as one dword and a match needed all
+        // four to coincide: `if (buf[i] == 44) n++` counted 0 instead of 64,
+        // silently, in string_scan. Every other vector op in this back end picks
+        // its width through vecMnemonic; this one did not.
+        XTIRType* lane = res.type ? res.type.pointeeType : nil;
+        NSUInteger lw = lane ? [self fieldWidth:lane] : 4;
+        if (lw != 1 && lw != 2 && lw != 4)
+            return;         // 64-bit lanes need SSE4.2 pcmpgtq; not emitted today
+        NSString* sfx = lw == 1 ? @"b" : lw == 2 ? @"w" : @"d";
         if (uns && !useEq)
             {
-            // bias both by 0x80000000 (flip sign bit) → unsigned order via signed cmp.
-            [out appendString:@"\tpcmpeqd\txmm1, xmm1\n\tpslld\txmm1, 31\n"]; // xmm1 = 0x80000000×4
+            // Bias both by the lane's sign bit, so an unsigned order becomes a
+            // signed one. All-ones shifted into place gives the mask: for BYTES
+            // that needs 0x01 per byte first (pabsb of all-ones), because
+            // shifting all-ones left by 7 in 16-bit units leaves 0xFF80, not
+            // 0x8080.
+            if (lw == 1)
+                [out appendString:@"\tpcmpeqd\txmm1, xmm1\n\tpabsb\txmm1, xmm1\n\tpsllw\txmm1, 7\n"];
+            else if (lw == 2)
+                [out appendString:@"\tpcmpeqd\txmm1, xmm1\n\tpsllw\txmm1, 15\n"];
+            else
+                [out appendString:@"\tpcmpeqd\txmm1, xmm1\n\tpslld\txmm1, 31\n"];
             [out appendFormat:@"\tmovdqa\t%@, %@\n\tpxor\t%@, xmm1\n", d, lhs, d];
             [out appendFormat:@"\tmovdqa\txmm0, %@\n\tpxor\txmm0, xmm1\n", rhs];
-            [out appendFormat:@"\tpcmpgtd\t%@, xmm0\n", d];
+            [out appendFormat:@"\tpcmpgt%@\t%@, xmm0\n", sfx, d];
             }
         else
             {
-            NSString* cmp = useEq ? @"pcmpeqd" : @"pcmpgtd";
+            NSString* cmp = [NSString stringWithFormat:@"%@%@",
+                                                       useEq ? @"pcmpeq" : @"pcmpgt", sfx];
             if ([d isEqualToString:lhs])
                 [out appendFormat:@"\t%@\t%@, %@\n", cmp, d, rhs];
             else if (useEq && [d isEqualToString:rhs])
