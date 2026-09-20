@@ -1,0 +1,13 @@
+	.type	_xt_main_tls_pad,@object
+	.bss
+# 240 bytes reserved BELOW the main tcb (hand-applied): the static-TLS block
+# lives at [%fs - R, %fs) and the crt copies __xt_tls_hdr's image here. The
+# linker caps R at 240; 240 is a multiple of 16, so the tcb that follows
+# contiguously inherits the 16-alignment the TLS block base needs.
+	.local	_xt_main_tls_pad
+	.p2align	4, 0x0
+_xt_main_tls_pad:
+	.zero	240
+	.size	_xt_main_tls_pad, 240
+	.type	_xt_main_tcb,@object            # @_xt_main_tcb
+	.globl	_xt_main_tcb

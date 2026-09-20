@@ -441,8 +441,29 @@ class X86_64
         else
             spillSysVParams(fn, hasSret);
         seedHomedParams(fn);
+        // A loop head is a block some LATER block branches back to. Computed
+        // once here, as the original does, so both compilers mark the same set.
+        Array* loopHead = new Array();
         for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
-            emitBlock(fn, (IRBlock*)fn.blocks().get(b));
+            loopHead.add((Object*)Number.with((u32)0));
+        for (u32 bi = (u32)0; bi < fn.blocks().count(); bi = bi + (u32)1)
+            {
+            IRBlock* pb = (IRBlock*)fn.blocks().get(bi);
+            if (pb.term() == (IRInsn*)0)
+                continue;
+            for (u32 q = (u32)0; q < pb.term().ops().count(); q = q + (u32)1)
+                {
+                IROperand* o = (IROperand*)pb.term().ops().get(q);
+                if (o.kind() != (u8)OPK_BLOCK || o.blk() == (IRBlock*)0)
+                    continue;
+                for (u32 hb = (u32)0; hb < fn.blocks().count(); hb = hb + (u32)1)
+                    if ((IRBlock*)fn.blocks().get(hb) == o.blk() && hb <= bi)
+                        loopHead.set(hb, (Object*)Number.with((u32)1));
+                }
+            }
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            emitBlock(fn, (IRBlock*)fn.blocks().get(b),
+                      ((Number*)loopHead.get(b)).asU32() != (u32)0);
         }
 
     // rbx and r12-r15 are the callee-saved pool; there is no caller-saved tier
@@ -4149,8 +4170,15 @@ class X86_64
         return s;
         }
 
-    void emitBlock(IRFunc* fn, IRBlock* bb)
+    void emitBlock(IRFunc* fn, IRBlock* bb, bool loopHead)
         {
+        // Align loop heads. x86 fetches in 16-byte windows, so a hot loop whose
+        // head straddles one costs throughput every iteration — and whether it
+        // straddles is decided by however much code happens to precede it.
+        // Regenerating the RUNTIME (which branch_mix never calls in its loop)
+        // moved that benchmark 57ms -> 79ms, a 37% swing from pure layout.
+        if (loopHead)
+            _out.appendCString("\t.p2align\t4, 0x90\n");
         _out.appendFormat("%s:\n", blockLabel(fn, bb).cString());
         for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
             emitInsn(fn, bb, (IRInsn*)bb.insns().get(i));

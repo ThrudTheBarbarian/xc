@@ -1,0 +1,195 @@
+// ── _xtc_sinit_run ─────────────────────────────────────────────────────────
+// The race-free static-init once (support/generic/runtime/xt-sinit.c), emitted
+// by lowering only for modules that thread. APPENDED rather than regenerated
+// with the rest of this file: a fresh `clang -S` of the whole runtime emits
+// instructions the in-house assemblers do not all implement.
+//
+// This tail carried the OLD two-call shape (_xtc_sinit_enter / _xtc_sinit_done)
+// long after lowering moved to the single `_xtc_sinit_run`, so the freestanding
+// runtime defined two symbols nothing called and lacked the one everything did.
+// Nothing noticed because the in-house path was opt-in and no threads fixture
+// ran through it; the moment it became the default, every threads_* fixture
+// failed to link. A checked-in generated file is only as current as the last
+// time somebody regenerated it.
+//
+// Every `.L` local label is renamed `.Lsi_`. Concatenating two separately
+// compiled clang outputs collides on them, and the in-house linker refuses
+// rather than silently picking one. Regenerate with
+//   clang --target=x86_64-unknown-linux-gnu -S -O1 -masm=intel \
+//         -fno-stack-protector -fomit-frame-pointer \
+//         support/generic/runtime/xt-sinit.c
+// then re-apply `.L` -> `.Lsi_`.
+	.text
+	.intel_syntax noprefix
+	.file	"xt-sinit.c"
+	.globl	_xtc_sinit_run                  # -- Begin function _xtc_sinit_run
+	.p2align	4, 0x90
+	.type	_xtc_sinit_run,@function
+_xtc_sinit_run:                         # @_xtc_sinit_run
+	.cfi_startproc
+# %bb.0:
+	push	r15
+	.cfi_def_cfa_offset 16
+	push	r14
+	.cfi_def_cfa_offset 24
+	push	r13
+	.cfi_def_cfa_offset 32
+	push	r12
+	.cfi_def_cfa_offset 40
+	push	rbx
+	.cfi_def_cfa_offset 48
+	.cfi_offset rbx, -48
+	.cfi_offset r12, -40
+	.cfi_offset r13, -32
+	.cfi_offset r14, -24
+	.cfi_offset r15, -16
+	test	rdi, rdi
+	je	.Lsi_BB0_24
+# %bb.1:
+	mov	r15, rdx
+	mov	r14, rsi
+	mov	rbx, rdi
+	lea	r12, [rip + xt_sinit_flag]
+	lea	r13, [rip + xt_sinit_owner]
+	jmp	.Lsi_BB0_2
+	.p2align	4, 0x90
+.Lsi_BB0_4:                                #   in Loop: Header=BB0_2 Depth=1
+	call	_xt_rt_unlock@PLT
+	mov	eax, 1
+.Lsi_BB0_14:                               #   in Loop: Header=BB0_2 Depth=1
+	test	eax, eax
+	jne	.Lsi_BB0_15
+.Lsi_BB0_2:                                # =>This Loop Header: Depth=1
+                                        #     Child Loop BB0_10 Depth 2
+	call	_xt_rt_lock@PLT
+	movzx	eax, byte ptr [rbx]
+	test	eax, eax
+	je	.Lsi_BB0_5
+# %bb.3:                                #   in Loop: Header=BB0_2 Depth=1
+	cmp	eax, 2
+	je	.Lsi_BB0_4
+# %bb.8:                                #   in Loop: Header=BB0_2 Depth=1
+	call	_xt_thread_self_id@PLT
+	movsxd	rcx, dword ptr [rip + xt_sinit_n]
+	test	rcx, rcx
+	jle	.Lsi_BB0_13
+# %bb.9:                                #   in Loop: Header=BB0_2 Depth=1
+	shl	rcx, 3
+	xor	edx, edx
+	mov	rsi, r13
+	jmp	.Lsi_BB0_10
+	.p2align	4, 0x90
+.Lsi_BB0_12:                               #   in Loop: Header=BB0_10 Depth=2
+	add	rsi, 4
+	add	rdx, 8
+	cmp	rcx, rdx
+	je	.Lsi_BB0_13
+.Lsi_BB0_10:                               #   Parent Loop BB0_2 Depth=1
+                                        # =>  This Inner Loop Header: Depth=2
+	cmp	qword ptr [rdx + r12], rbx
+	jne	.Lsi_BB0_12
+# %bb.11:                               #   in Loop: Header=BB0_10 Depth=2
+	cmp	dword ptr [rsi], eax
+	jne	.Lsi_BB0_12
+	jmp	.Lsi_BB0_4
+	.p2align	4, 0x90
+.Lsi_BB0_5:                                #   in Loop: Header=BB0_2 Depth=1
+	mov	byte ptr [rbx], 1
+	movsxd	rax, dword ptr [rip + xt_sinit_n]
+	cmp	rax, 31
+	jg	.Lsi_BB0_7
+# %bb.6:                                #   in Loop: Header=BB0_2 Depth=1
+	mov	qword ptr [r12 + 8*rax], rbx
+	call	_xt_thread_self_id@PLT
+	movsxd	rcx, dword ptr [rip + xt_sinit_n]
+	mov	dword ptr [r13 + 4*rcx], eax
+	lea	eax, [rcx + 1]
+	mov	dword ptr [rip + xt_sinit_n], eax
+.Lsi_BB0_7:                                #   in Loop: Header=BB0_2 Depth=1
+	call	_xt_rt_unlock@PLT
+	mov	eax, 2
+	jmp	.Lsi_BB0_14
+	.p2align	4, 0x90
+.Lsi_BB0_13:                               #   in Loop: Header=BB0_2 Depth=1
+	call	_xt_rt_unlock@PLT
+	call	_xt_thread_yield@PLT
+	xor	eax, eax
+	jmp	.Lsi_BB0_14
+.Lsi_BB0_15:
+	cmp	eax, 1
+	jne	.Lsi_BB0_16
+.Lsi_BB0_24:
+	pop	rbx
+	.cfi_def_cfa_offset 40
+	pop	r12
+	.cfi_def_cfa_offset 32
+	pop	r13
+	.cfi_def_cfa_offset 24
+	pop	r14
+	.cfi_def_cfa_offset 16
+	pop	r15
+	.cfi_def_cfa_offset 8
+	ret
+.Lsi_BB0_16:
+	.cfi_def_cfa_offset 48
+	test	r14, r14
+	je	.Lsi_BB0_18
+# %bb.17:
+	mov	rdi, r15
+	call	r14
+.Lsi_BB0_18:
+	call	_xt_rt_lock@PLT
+	mov	byte ptr [rbx], 2
+	movsxd	rax, dword ptr [rip + xt_sinit_n]
+	test	rax, rax
+	jle	.Lsi_BB0_23
+# %bb.19:
+	lea	rdx, [4*rax]
+	xor	ecx, ecx
+	.p2align	4, 0x90
+.Lsi_BB0_21:                               # =>This Inner Loop Header: Depth=1
+	cmp	qword ptr [r12], rbx
+	je	.Lsi_BB0_22
+# %bb.20:                               #   in Loop: Header=BB0_21 Depth=1
+	add	rcx, 4
+	add	r12, 8
+	cmp	rdx, rcx
+	jne	.Lsi_BB0_21
+	jmp	.Lsi_BB0_23
+.Lsi_BB0_22:
+	lea	edx, [rax - 1]
+	mov	dword ptr [rip + xt_sinit_n], edx
+	lea	rdx, [rip + xt_sinit_flag]
+	mov	rdx, qword ptr [rdx + 8*rax - 8]
+	mov	qword ptr [r12], rdx
+	lea	rdx, [rip + xt_sinit_owner]
+	mov	eax, dword ptr [rdx + 4*rax - 4]
+	mov	dword ptr [rcx + rdx], eax
+.Lsi_BB0_23:
+	pop	rbx
+	.cfi_def_cfa_offset 40
+	pop	r12
+	.cfi_def_cfa_offset 32
+	pop	r13
+	.cfi_def_cfa_offset 24
+	pop	r14
+	.cfi_def_cfa_offset 16
+	pop	r15
+	.cfi_def_cfa_offset 8
+	jmp	_xt_rt_unlock@PLT               # TAILCALL
+.Lsi_func_end0:
+	.size	_xtc_sinit_run, .Lsi_func_end0-_xtc_sinit_run
+	.cfi_endproc
+                                        # -- End function
+	.type	xt_sinit_n,@object              # @xt_sinit_n
+	.local	xt_sinit_n
+	.comm	xt_sinit_n,4,4
+	.type	xt_sinit_flag,@object           # @xt_sinit_flag
+	.local	xt_sinit_flag
+	.comm	xt_sinit_flag,256,16
+	.type	xt_sinit_owner,@object          # @xt_sinit_owner
+	.local	xt_sinit_owner
+	.comm	xt_sinit_owner,128,16
+	.ident	"Apple clang version 17.0.0 (clang-1700.3.19.1)"
+	.section	".note.GNU-stack","",@progbits
+	.addrsig

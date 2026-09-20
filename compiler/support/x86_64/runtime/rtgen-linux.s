@@ -195,8 +195,8 @@ _xtc_alloc:                             # @_xtc_alloc
 	mov	r15, rsi
 	mov	rax, r14
 	imul	rax, rsi
-	cmp	rax, 257
-	mov	esi, 256
+	cmp	rax, 17
+	mov	esi, 16
 	cmovae	rsi, rax
 	add	rsi, 40
 	mov	edi, 1
@@ -229,8 +229,8 @@ _xtc_new_u8:                            # @_xtc_new_u8
 # %bb.0:
 	push	rbx
 	mov	rbx, rdi
-	cmp	rdi, 257
-	mov	esi, 256
+	cmp	rdi, 17
+	mov	esi, 16
 	cmovae	rsi, rdi
 	add	rsi, 40
 	mov	edi, 1
@@ -263,8 +263,8 @@ _xtc_new_i8:                            # @_xtc_new_i8
 # %bb.0:
 	push	rbx
 	mov	rbx, rdi
-	cmp	rdi, 257
-	mov	esi, 256
+	cmp	rdi, 17
+	mov	esi, 16
 	cmovae	rsi, rdi
 	add	rsi, 40
 	mov	edi, 1
@@ -300,8 +300,8 @@ _xtc_new_u16:                           # @_xtc_new_u16
 	cmp	rdi, 1
 	adc	rbx, 0
 	lea	rax, [rbx + rbx]
-	cmp	rax, 257
-	mov	esi, 256
+	cmp	rax, 17
+	mov	esi, 16
 	cmovae	rsi, rax
 	add	rsi, 40
 	mov	edi, 1
@@ -335,8 +335,8 @@ _xtc_new_i16:                           # @_xtc_new_i16
 	cmp	rdi, 1
 	adc	rbx, 0
 	lea	rax, [rbx + rbx]
-	cmp	rax, 257
-	mov	esi, 256
+	cmp	rax, 17
+	mov	esi, 16
 	cmovae	rsi, rax
 	add	rsi, 40
 	mov	edi, 1
@@ -370,8 +370,8 @@ _xtc_new_u32:                           # @_xtc_new_u32
 	cmp	rdi, 1
 	adc	rbx, 0
 	lea	rax, [4*rbx]
-	cmp	rax, 257
-	mov	esi, 256
+	cmp	rax, 17
+	mov	esi, 16
 	cmovae	rsi, rax
 	add	rsi, 40
 	mov	edi, 1
@@ -405,8 +405,8 @@ _xtc_new_i32:                           # @_xtc_new_i32
 	cmp	rdi, 1
 	adc	rbx, 0
 	lea	rax, [4*rbx]
-	cmp	rax, 257
-	mov	esi, 256
+	cmp	rax, 17
+	mov	esi, 16
 	cmovae	rsi, rax
 	add	rsi, 40
 	mov	edi, 1
@@ -440,8 +440,8 @@ _xtc_new_pointer:                       # @_xtc_new_pointer
 	cmp	rdi, 1
 	adc	rbx, 0
 	lea	rax, [8*rbx]
-	cmp	rax, 257
-	mov	esi, 256
+	cmp	rax, 17
+	mov	esi, 16
 	cmovae	rsi, rax
 	add	rsi, 40
 	mov	edi, 1
@@ -472,8 +472,8 @@ _xtc_new_bool:                          # @_xtc_new_bool
 # %bb.0:
 	push	rbx
 	mov	rbx, rdi
-	cmp	rdi, 257
-	mov	esi, 256
+	cmp	rdi, 17
+	mov	esi, 16
 	cmovae	rsi, rdi
 	add	rsi, 40
 	mov	edi, 1
@@ -509,8 +509,8 @@ _xtc_new_float:                         # @_xtc_new_float
 	cmp	rdi, 1
 	adc	rbx, 0
 	lea	rax, [4*rbx]
-	cmp	rax, 257
-	mov	esi, 256
+	cmp	rax, 17
+	mov	esi, 16
 	cmovae	rsi, rax
 	add	rsi, 40
 	mov	edi, 1
@@ -544,8 +544,8 @@ _xtc_new_double:                        # @_xtc_new_double
 	cmp	rdi, 1
 	adc	rbx, 0
 	lea	rax, [8*rbx]
-	cmp	rax, 257
-	mov	esi, 256
+	cmp	rax, 17
+	mov	esi, 16
 	cmovae	rsi, rax
 	add	rsi, 40
 	mov	edi, 1
@@ -579,8 +579,8 @@ _xtc_new_string:                        # @_xtc_new_string
 	cmp	rdi, 1
 	adc	rbx, 0
 	lea	rax, [8*rbx]
-	cmp	rax, 257
-	mov	esi, 256
+	cmp	rax, 17
+	mov	esi, 16
 	cmovae	rsi, rax
 	add	rsi, 40
 	mov	edi, 1
@@ -765,24 +765,27 @@ _xtc_weak_unregister:                   # @_xtc_weak_unregister
 .LBB19_3:
 	mov	rax, qword ptr [rdi - 16]
 	test	rax, rax
-	je	.LBB19_7
+	je	.LBB19_8
 # %bb.4:
-	mov	rcx, qword ptr [rdi - 8]
-	add	rdi, -16
-	mov	qword ptr [rax], rcx
-	test	rcx, rcx
-	je	.LBB19_6
+	lea	rcx, [rdi - 16]
+	cmp	qword ptr [rax], rdi
+	jne	.LBB19_7
 # %bb.5:
-	mov	qword ptr [rcx - 16], rax
-.LBB19_6:
-	xorps	xmm0, xmm0
-	movups	xmmword ptr [rdi], xmm0
+	mov	rdx, qword ptr [rdi - 8]
+	mov	qword ptr [rax], rdx
+	test	rdx, rdx
+	je	.LBB19_7
+# %bb.6:
+	mov	qword ptr [rdx - 16], rax
 .LBB19_7:
+	xorps	xmm0, xmm0
+	movups	xmmword ptr [rcx], xmm0
+.LBB19_8:
 	cmp	dword ptr [rip + _xt_threads_active], 0
-	je	.LBB19_9
-# %bb.8:
+	je	.LBB19_10
+# %bb.9:
 	mov	dword ptr [rip + xt_rt_spin], 0
-.LBB19_9:
+.LBB19_10:
 	ret
 .Lfunc_end19:
 	.size	_xtc_weak_unregister, .Lfunc_end19-_xtc_weak_unregister
@@ -849,42 +852,45 @@ _xtc_weak_register:                     # @_xtc_weak_register
 .LBB22_3:
 	mov	rax, qword ptr [rdi - 16]
 	test	rax, rax
-	je	.LBB22_7
+	je	.LBB22_8
 # %bb.4:
 	lea	rcx, [rdi - 16]
+	cmp	qword ptr [rax], rdi
+	jne	.LBB22_7
+# %bb.5:
 	mov	rdx, qword ptr [rdi - 8]
 	mov	qword ptr [rax], rdx
 	test	rdx, rdx
-	je	.LBB22_6
-# %bb.5:
+	je	.LBB22_7
+# %bb.6:
 	mov	qword ptr [rdx - 16], rax
-.LBB22_6:
+.LBB22_7:
 	xorps	xmm0, xmm0
 	movups	xmmword ptr [rcx], xmm0
-.LBB22_7:
+.LBB22_8:
 	test	rsi, rsi
-	je	.LBB22_12
-# %bb.8:
-	cmp	dword ptr [rsi - 40], 1481920322
-	jne	.LBB22_12
+	je	.LBB22_13
 # %bb.9:
+	cmp	dword ptr [rsi - 40], 1481920322
+	jne	.LBB22_13
+# %bb.10:
 	mov	rax, qword ptr [rsi - 12]
 	add	rsi, -12
 	mov	qword ptr [rdi - 16], rsi
 	mov	qword ptr [rdi - 8], rax
 	test	rax, rax
-	je	.LBB22_11
-# %bb.10:
+	je	.LBB22_12
+# %bb.11:
 	lea	rcx, [rdi - 8]
 	mov	qword ptr [rax - 16], rcx
-.LBB22_11:
-	mov	qword ptr [rsi], rdi
 .LBB22_12:
+	mov	qword ptr [rsi], rdi
+.LBB22_13:
 	cmp	dword ptr [rip + _xt_threads_active], 0
-	je	.LBB22_14
-# %bb.13:
+	je	.LBB22_15
+# %bb.14:
 	mov	dword ptr [rip + xt_rt_spin], 0
-.LBB22_14:
+.LBB22_15:
 	ret
 .Lfunc_end22:
 	.size	_xtc_weak_register, .Lfunc_end22-_xtc_weak_register

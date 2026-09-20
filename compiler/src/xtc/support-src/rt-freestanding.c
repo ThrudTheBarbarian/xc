@@ -329,8 +329,25 @@ void* _xtc_alloc(uint64_t count, uint64_t stride, void (*dealloc)(void*))
     if (count < 1)
         count = 1;
     uint64_t b = count * stride;
+    /* A MINIMUM, not a rounding-up. It was 256, which meant a 16-byte object
+       asked calloc for 296 bytes and had all of them zeroed: arc_alloc's
+       2M-object loop spent a third of its time on bytes nothing would read.
+       The host allocators care too — musl's mallocng puts 296 bytes in a
+       slower size class than 56. Measured on x86-64: arc_alloc 330ms -> 224ms.
+       16 keeps the block comfortably aligned and non-degenerate without
+       inventing a quarter of a kilobyte per object. */
+#ifdef XT_WIN64
+    /* win64 keeps 256. Not because it wants it: support/win64/runtime/
+       rtgen-win64.s is STALE against this file in about seventy-five
+       functions (bug 226), so it is not regenerated here and lowering the
+       floor in the source would describe an artifact nobody rebuilt. Drop
+       this branch when that file is regenerated and swept. */
     if (b < 256)
         b = 256;
+#else
+    if (b < 16)
+        b = 16;
+#endif
     uint8_t* p = (uint8_t*)_xt_calloc(b + XT_HDR);
     if (!p)
         return 0;

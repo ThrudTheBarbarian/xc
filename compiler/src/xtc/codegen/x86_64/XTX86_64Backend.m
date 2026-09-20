@@ -1886,8 +1886,35 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
             [out appendFormat:@"\tmov\t%@, [rbp-%@]\n", home, s];
         }
 
+    // Align loop heads. x86 fetches in 16-byte windows, so a hot loop whose
+    // head straddles one costs throughput on every iteration — and, worse,
+    // whether it straddles is decided by however much code happens to sit in
+    // front of it. Regenerating the RUNTIME (which branch_mix does not even
+    // call in its loop) moved that benchmark 57ms -> 79ms, a 37% swing from
+    // pure layout. clang aligns these as a matter of course; we emitted no
+    // alignment directive anywhere.
+    //
+    // A loop head is a block some LATER block branches back to.
+    NSMutableSet<NSValue*>* loopHeads = [NSMutableSet set];
+    for (NSUInteger bi = 0; bi < fn.blocks.count; bi++)
+        {
+        XTIRInsn* t = fn.blocks[bi].terminator;
+        if (!t)
+            continue;
+        for (XTIROperand* o in t.operands)
+            {
+            if (o.kind != XTIROperandKindBlock || !o.blockRef)
+                continue;
+            NSUInteger hb = [fn.blocks indexOfObjectIdenticalTo:o.blockRef];
+            if (hb != NSNotFound && hb <= bi)
+                [loopHeads addObject:[NSValue valueWithNonretainedObject:o.blockRef]];
+            }
+        }
+
     for (XTIRBlock* bb in fn.blocks)
         {
+        if ([loopHeads containsObject:[NSValue valueWithNonretainedObject:bb]])
+            [out appendString:@"\t.p2align\t4, 0x90\n"];
         [out appendFormat:@"%@:\n", [self blockLabel:bb fn:fn]];
         for (XTIRInsn* in in bb.instructions)
             [self emitInsn:in fn:fn module:mod slot:slot out:out];
