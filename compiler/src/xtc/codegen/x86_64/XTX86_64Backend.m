@@ -794,6 +794,103 @@ static NSInteger sWin64SretOff = 0;
         [out appendFormat:@"\tmovzx\t%@, %@ [rbp-%@]\n", r32, [self sizeKw:w], s];
     }
 
+
+// ── Fallthrough peephole ─────────────────────────────────────────────────
+//
+// Drop `jmp L` when L is the very next label, and invert a conditional whose
+// TAKEN target is next so the fall-through is the other side. This back end
+// had no such pass: every block ended in a taken branch even when its target
+// immediately followed it, so mem_copy's vectorised body read
+//
+//     movdqu xmm14, [r15] ; movdqa xmm13, xmm14 ; paddd xmm13, xmm15
+//     movdqu [r14], xmm13 ; jmp .L_main_bb_7_for_body_vu1
+//
+// — one wasted instruction and one taken branch in five, in every unrolled
+// copy of every loop in the program. arm64 has had this since it was written.
++ (NSString*)peepholeFallthrough:(NSString*)text
+{
+    static NSDictionary* inv;
+    if (!inv) inv = @{@"e":@"ne",@"ne":@"e",@"z":@"nz",@"nz":@"z",
+                      @"b":@"ae",@"ae":@"b",@"be":@"a",@"a":@"be",
+                      @"l":@"ge",@"ge":@"l",@"le":@"g",@"g":@"le",
+                      @"s":@"ns",@"ns":@"s",@"c":@"nc",@"nc":@"c",
+                      @"o":@"no",@"no":@"o",@"p":@"np",@"np":@"p"};
+    NSMutableArray<NSString*>* lines = [[text componentsSeparatedByString:@"\n"] mutableCopy];
+    NSString* (^labelOf)(NSString*) = ^NSString*(NSString* ln) {
+      NSString* t = [ln stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+      return ([t hasSuffix:@":"] && t.length > 1 && ![t hasPrefix:@"."] ) || ([t hasSuffix:@":"] && [t hasPrefix:@".L"])
+                 ? [t substringToIndex:t.length - 1] : nil;
+    };
+    // The next line that is neither blank nor a pure directive (.p2align sits
+    // between a jump and the label it falls into once loop heads are aligned).
+    NSInteger (^nextReal)(NSUInteger) = ^NSInteger(NSUInteger i) {
+      for (NSUInteger j = i + 1; j < lines.count; j++)
+          {
+          NSString* t = [lines[j] stringByTrimmingCharactersInSet:
+                            [NSCharacterSet whitespaceCharacterSet]];
+          if (!t.length || [t hasPrefix:@".p2align"] || [t hasPrefix:@"#"])
+              continue;
+          return (NSInteger)j;
+          }
+      return -1;
+    };
+    BOOL again = YES;
+    while (again)
+        {
+        again = NO;
+        for (NSUInteger i = 0; i < lines.count; i++)
+            {
+            NSString* t = [lines[i] stringByTrimmingCharactersInSet:
+                              [NSCharacterSet whitespaceCharacterSet]];
+            if ([t hasPrefix:@"jmp\t"] || [t hasPrefix:@"jmp "])
+                {
+                NSString* tgt = [[t substringFromIndex:3]
+                    stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+                NSInteger j = nextReal(i);
+                if (j >= 0 && [labelOf(lines[j]) isEqualToString:tgt])
+                    { [lines removeObjectAtIndex:i]; again = YES; break; }
+                continue;
+                }
+            if (![t hasPrefix:@"j"])
+                continue;                       // not a branch
+            NSRange sp = [t rangeOfCharacterFromSet:[NSCharacterSet whitespaceCharacterSet]];
+            if (sp.location == NSNotFound)
+                continue;
+            NSString* cc = [t substringWithRange:NSMakeRange(1, sp.location - 1)];
+            NSString* ic = inv[cc];
+            if (!ic)
+                continue;                       // not a conditional we can invert
+            NSString* LT = [[t substringFromIndex:sp.location]
+                stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+            NSInteger j = nextReal(i);
+            if (j < 0)
+                continue;
+            NSString* jt = [lines[j] stringByTrimmingCharactersInSet:
+                               [NSCharacterSet whitespaceCharacterSet]];
+            if (!([jt hasPrefix:@"jmp\t"] || [jt hasPrefix:@"jmp "]))
+                continue;
+            NSString* LF = [[jt substringFromIndex:3]
+                stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+            NSInteger k = nextReal((NSUInteger)j);
+            if (k < 0)
+                continue;
+            NSString* nextLbl = labelOf(lines[(NSUInteger)k]);
+            if (!nextLbl)
+                continue;
+            if ([nextLbl isEqualToString:LF])
+                { [lines removeObjectAtIndex:(NSUInteger)j]; again = YES; break; }
+            if ([nextLbl isEqualToString:LT])
+                {
+                lines[i] = [NSString stringWithFormat:@"\tj%@\t%@", ic, LF];
+                [lines removeObjectAtIndex:(NSUInteger)j];
+                again = YES;
+                break;
+                }
+            }
+        }
+    return [lines componentsJoinedByString:@"\n"];
+}
+
 // ── Copy-propagation peephole ────────────────────────────────────────────
 //
 // The value model stages many values through the scratch registers (rax/rcx/
@@ -1122,7 +1219,7 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
             continue;                                     // external proto — linker resolves
         NSMutableString* fbuf = [NSMutableString string]; // per-function → peephole
         [self emitFunction:fn module:mod into:fbuf];
-        [out appendString:[self peepholeCopyProp:fbuf]];
+        [out appendString:[self peepholeFallthrough:[self peepholeCopyProp:fbuf]]];
         }
 
     // Read-only data: string literals (+ initialised globals).

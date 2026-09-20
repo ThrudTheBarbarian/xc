@@ -370,7 +370,7 @@ class X86_64
             String* module = _out;
             _out = new String();
             emitFunction(fn);
-            module.append(peepholeCopyProp(_out));
+            module.append(peepholeFallthrough(peepholeCopyProp(_out)));
             _out = module;
             }
         emitModuleData(m);
@@ -2700,6 +2700,158 @@ class X86_64
     static bool isShift(String* m)
         {
         return inWordList("shl shr sar sal rol ror rcl rcr", m);
+        }
+
+
+    // ── Fallthrough peephole ─────────────────────────────────────────────
+    //
+    // Drop `jmp L` when L is the very next label, and invert a conditional
+    // whose TAKEN target is next so the fall-through is the other side. This
+    // back end had no such pass: every block ended in a taken branch even when
+    // its target immediately followed, so mem_copy's vectorised body carried
+    // `jmp .L_main_bb_7_for_body_vu1` as one instruction in five. arm64 has
+    // had this since it was written.
+    String* ftInvert(String* cc)
+        {
+        if (cc.equals(String.withCString("e")))   return String.withCString("ne");
+        if (cc.equals(String.withCString("ne")))  return String.withCString("e");
+        if (cc.equals(String.withCString("z")))   return String.withCString("nz");
+        if (cc.equals(String.withCString("nz")))  return String.withCString("z");
+        if (cc.equals(String.withCString("b")))   return String.withCString("ae");
+        if (cc.equals(String.withCString("ae")))  return String.withCString("b");
+        if (cc.equals(String.withCString("be")))  return String.withCString("a");
+        if (cc.equals(String.withCString("a")))   return String.withCString("be");
+        if (cc.equals(String.withCString("l")))   return String.withCString("ge");
+        if (cc.equals(String.withCString("ge")))  return String.withCString("l");
+        if (cc.equals(String.withCString("le")))  return String.withCString("g");
+        if (cc.equals(String.withCString("g")))   return String.withCString("le");
+        if (cc.equals(String.withCString("s")))   return String.withCString("ns");
+        if (cc.equals(String.withCString("ns")))  return String.withCString("s");
+        if (cc.equals(String.withCString("c")))   return String.withCString("nc");
+        if (cc.equals(String.withCString("nc")))  return String.withCString("c");
+        if (cc.equals(String.withCString("o")))   return String.withCString("no");
+        if (cc.equals(String.withCString("no")))  return String.withCString("o");
+        if (cc.equals(String.withCString("p")))   return String.withCString("np");
+        if (cc.equals(String.withCString("np")))  return String.withCString("p");
+        return (String*)0;
+        }
+
+    // The label a line declares, or 0.
+    String* ftLabelOf(String* ln)
+        {
+        String* t = ln.trimmed();
+        if (t.byteLength() < (u32)2)
+            return (String*)0;
+        if (t.byteAt(t.byteLength() - (u32)1) != (u8)':')
+            return (String*)0;
+        return t.substringToByte(t.byteLength() - (u32)1);
+        }
+
+    // The next line that is neither blank nor a directive: .p2align sits
+    // between a jump and the label it falls into once loop heads are aligned.
+    i32 ftNextReal(Array* lines, u32 i)
+        {
+        for (u32 j = i + (u32)1; j < lines.count(); j = j + (u32)1)
+            {
+            String* t = ((String*)lines.get(j)).trimmed();
+            if (t.byteLength() == (u32)0)
+                continue;
+            if (t.hasPrefix(String.withCString(".p2align")))
+                continue;
+            if (t.hasPrefix(String.withCString("#")))
+                continue;
+            return (i32)j;
+            }
+        return (i32)-1;
+        }
+
+    // The target of `jmp X`, or 0 when the line is not an unconditional jump.
+    String* ftJmpTarget(String* t)
+        {
+        if (!t.hasPrefix(String.withCString("jmp")))
+            return (String*)0;
+        if (t.byteLength() < (u32)5)
+            return (String*)0;
+        u8 c = t.byteAt((u32)3);
+        if (c != (u8)'\t' && c != (u8)' ')
+            return (String*)0;
+        return t.substringFromByte((u32)4).trimmed();
+        }
+
+    String* peepholeFallthrough(String* text)
+        {
+        Array* lines = text.splitOnByte((u8)'\n');
+        bool again = true;
+        while (again)
+            {
+            again = false;
+            for (u32 i = (u32)0; i < lines.count() && !again; i = i + (u32)1)
+                {
+                String* t = ((String*)lines.get(i)).trimmed();
+                String* tgt = ftJmpTarget(t);
+                if (tgt != (String*)0)
+                    {
+                    i32 j = ftNextReal(lines, i);
+                    if (j < (i32)0)
+                        continue;
+                    String* lb = ftLabelOf((String*)lines.get((u32)j));
+                    if (lb != (String*)0 && lb.equals(tgt))
+                        {
+                        lines.removeAt(i);
+                        again = true;
+                        }
+                    continue;
+                    }
+                if (t.byteLength() < (u32)3 || t.byteAt((u32)0) != (u8)'j')
+                    continue;
+                u32 sp = (u32)0;
+                for (u32 q = (u32)1; q < t.byteLength() && sp == (u32)0; q = q + (u32)1)
+                    if (t.byteAt(q) == (u8)'\t' || t.byteAt(q) == (u8)' ')
+                        sp = q;
+                if (sp == (u32)0)
+                    continue;
+                String* ic = ftInvert(t.substringBytes((u32)1, sp - (u32)1));
+                if (ic == (String*)0)
+                    continue;
+                String* LT = t.substringFromByte(sp).trimmed();
+                i32 j = ftNextReal(lines, i);
+                if (j < (i32)0)
+                    continue;
+                String* LF = ftJmpTarget(((String*)lines.get((u32)j)).trimmed());
+                if (LF == (String*)0)
+                    continue;
+                i32 k = ftNextReal(lines, (u32)j);
+                if (k < (i32)0)
+                    continue;
+                String* nextLbl = ftLabelOf((String*)lines.get((u32)k));
+                if (nextLbl == (String*)0)
+                    continue;
+                if (nextLbl.equals(LF))
+                    {
+                    lines.removeAt((u32)j);
+                    again = true;
+                    continue;
+                    }
+                if (nextLbl.equals(LT))
+                    {
+                    String* nl = String.withCString("\tj");
+                    nl.append(ic);
+                    nl.appendCString("\t");
+                    nl.append(LF);
+                    lines.set(i, (Object*)nl);
+                    lines.removeAt((u32)j);
+                    again = true;
+                    }
+                }
+            }
+        String* out = String.withCString("");
+        for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1)
+            {
+            if (i > (u32)0)
+                out.appendCString("\n");
+            out.append((String*)lines.get(i));
+            }
+        return out;
         }
 
     String* peepholeCopyProp(String* text)
