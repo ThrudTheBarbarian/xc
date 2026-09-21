@@ -9641,11 +9641,27 @@ class OptProfile
         // it. A vector body barely notices — its values live in their own pool —
         // but a scalar body spills instead. Measured: array_map 11431 -> 6730us
         // with the gate, bit_ops unchanged; without the gate bit_ops loses 5%.
+        // ...or a FLOATING-POINT body, for the same reason. The gate is about
+        // what the body's values compete for: a vector body uses v18-v31 and an
+        // FP body d8-d15, so in both cases the GP traffic is a few pointers and
+        // lengthening a GP live range to save instructions is a good trade. A
+        // GP-bound integer body is the case that spills instead.
+        //
+        // The FP half was added to the reference and not mirrored here, which
+        // is the whole of bug 228's second half: float_math IS an FP body, so
+        // the reference re-based its pointer inductions on copy 0 and this side
+        // chained them, and the two compilers emitted different code for a
+        // benchmark in the suite.
         bool vecBody = false;
         for (u32 k = (u32)0; k < B.insns().count(); k = k + (u32)1)
             {
             IRInsn* bi = (IRInsn*)B.insns().get(k);
-            if (bi.res() != (IRValue*)0 && bi.res().ty().hasPrefix(String.withCString("Vec(")))
+            if (bi.res() == (IRValue*)0)
+                continue;
+            String* bt = bi.res().ty();
+            if (bt.hasPrefix(String.withCString("Vec("))
+                || bt.equals(String.withCString("F32"))
+                || bt.equals(String.withCString("F64")))
                 vecBody = true;
             }
         c.setVectorBody(vecBody);
@@ -10604,6 +10620,50 @@ class OptProfile
                 if (cone.get((Hashable*)((IRInsn*)accPhis.get(b2)).res()) != (Object*)0)
                     return false;
                 if (cone.get((Hashable*)((IRInsn*)accNexts.get(b2)).res()) != (Object*)0)
+                    return false;
+                }
+            }
+        // ...and the INDUCTION VARIABLE's own update must read no accumulator
+        // either. BOTH copies advance the iv, so an accumulator in its cone is
+        // needed by both — but the copy keeps only the peeled one and the
+        // original keeps the rest, so whichever copy drops it is left with a
+        // use that has no definition.
+        //
+        // _isqrt is the shape: `while (n >= k) { n -= k; k += 2; c++; }`. The
+        // two accumulators k and c pass the test above — neither cone contains
+        // the other — but the iv update is `n - k`, so the copy peeled for c
+        // dropped k and its guard compared n against a value nothing defines.
+        // The back end reads a missing value as ZERO, so it became `n >= 0` and
+        // the loop ran to the wrong answer: gfx8_oval printed three wrong
+        // results at -O2 and above, with make test green and no post-opt
+        // verifier to catch it.
+        IRInsn* ivPhi2 = (IRInsn*)0;
+        for (u32 i = (u32)0; i < H.phis().count(); i = i + (u32)1)
+            {
+            IRInsn* phi = (IRInsn*)H.phis().get(i);
+            if (phi.res() == iv)
+                ivPhi2 = phi;
+            }
+        IRInsn* ivNextI = (IRInsn*)0;
+        if (ivPhi2 != (IRInsn*)0 && ivPhi2.ops().count() == (u32)4)
+            {
+            IROperand* back = vecBackOp(ivPhi2, B);
+            if (back != (IROperand*)0 && back.kind() == (u8)OPK_USE)
+                for (u32 i = (u32)0; i < B.insns().count(); i = i + (u32)1)
+                    {
+                    IRInsn* n = (IRInsn*)B.insns().get(i);
+                    if (n.res() != (IRValue*)0 && n.res() == back.val())
+                        ivNextI = n;
+                    }
+            }
+        if (ivNextI != (IRInsn*)0)
+            {
+            Map* ivCone = vecDistributeCone(ivNextI, B);
+            for (u32 b2 = (u32)0; b2 < accPhis.count(); b2 = b2 + (u32)1)
+                {
+                if (ivCone.get((Hashable*)((IRInsn*)accPhis.get(b2)).res()) != (Object*)0)
+                    return false;
+                if (ivCone.get((Hashable*)((IRInsn*)accNexts.get(b2)).res()) != (Object*)0)
                     return false;
                 }
             }
@@ -14729,7 +14789,12 @@ class OptProfile
                 Array* mg = (Array*)mo;
                 u32 mm = ((Number*)mg.get((u32)0)).asU32();
                 u32 ss = ((Number*)mg.get((u32)1)).asU32();
-                IROperand* vm = vecSplatOperand(IROperand.immI((i32)mm, n.res().ty()));
+                // (i64)mm, not (i32)mm. A magic multiplier has its top bit set
+                // more often than not — 0xAAAAAAAB for /3 — and narrowing it to
+                // i32 made the stored immediate NEGATIVE, so the IR printed
+                // #-1431655765 where the reference prints #2863311531. Same
+                // bits, different text, and the IR text is the contract.
+                IROperand* vm = vecSplatOperand(IROperand.immI((i64)mm, n.res().ty()));
                 IROperand* vx = vecSplatOperand((IROperand*)n.ops().get((u32)0));
                 IRValue* hi = new IRValue(_vecTy);
                 IRInsn* mh = IRInsn.with(String.withCString("VMulHi"));
@@ -14803,9 +14868,9 @@ class OptProfile
     // 7 every iteration — three instructions in int_muldiv's hot loop for a
     // constant. A non-constant operand still splats in the body, where it is
     // correct whether or not it is invariant.
-    IROperand* vecSplatConst(i32 k)
+    IROperand* vecSplatConst(i64 k)
         {
-        Object* have = _vecSplatK.get((Hashable*)Number.withI32(k));
+        Object* have = _vecSplatK.get((Hashable*)Number.withI64(k));
         if (have != (Object*)0)
             return IROperand.useVal((IRValue*)have);
         IRValue* cst = new IRValue(_vecSplatTy);
@@ -14818,14 +14883,14 @@ class OptProfile
         sp.setRes(v);
         sp.add(IROperand.useVal(cst));
         _vecSplatPH.insns().add((Object*)sp);
-        _vecSplatK.set((Hashable*)Number.withI32(k), (Object*)v);
+        _vecSplatK.set((Hashable*)Number.withI64(k), (Object*)v);
         return IROperand.useVal(v);
         }
 
     IROperand* vecSplatOperand(IROperand* op)
         {
         if (_vecSplatPH != (IRBlock*)0 && op.kind() == (u8)OPK_IMMI)
-            return vecSplatConst((i32)op.imm());
+            return vecSplatConst(op.imm());
         if (op.kind() == (u8)OPK_USE)
             {
             Object* vv = _vecMap.get((Hashable*)op.val());

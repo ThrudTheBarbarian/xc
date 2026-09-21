@@ -560,6 +560,62 @@ static XTIRSymbolId xtvIotaSymbol(XTIRType* laneType, XTIRFunction* fn)
                     [cones[a] containsObject:@(accNexts[b2].result.valueId)])
                     { independent = NO; break; }
                 }
+
+        // ...and the INDUCTION VARIABLE's own update must read no accumulator
+        // either. BOTH copies advance the iv, so an accumulator in its cone is
+        // needed by both — but the copy keeps only the peeled one and the
+        // original keeps the rest, so whichever copy drops it is left with a
+        // use that has no definition.
+        //
+        // _isqrt is the shape: `while (n >= k) { n -= k; k += 2; c++; }`. The
+        // two accumulators k and c pass the test above — neither cone contains
+        // the other — but the iv update is `n - k`, so the copy peeled for c
+        // dropped k and its guard compared n against a value nothing defines.
+        // The printer showed it as `%?23`; the back end reads a missing value
+        // as ZERO, so it became `n >= 0` and the loop ran to the wrong answer.
+        // gfx8_oval printed three wrong results at -O2 and above; make test was
+        // green, and there is no post-opt verifier to have caught it.
+        if (independent)
+            {
+            XTIRInsn* ivPhi = nil;
+            for (XTIRInsn* phi in H.phiNodes)
+                if (phi.result && phi.result.valueId == ivId)
+                    ivPhi = phi;
+            XTIRInsn* ivNextI = nil;
+            if (ivPhi && ivPhi.operands.count == 4)
+                {
+                XTIROperand* back = (ivPhi.operands[0].blockRef == B) ? ivPhi.operands[1]
+                                                                     : ivPhi.operands[3];
+                if (back.kind == XTIROperandKindUse)
+                    for (XTIRInsn* i in B.instructions)
+                        if (i.result && i.result.valueId == back.valueId)
+                            ivNextI = i;
+                }
+            if (ivNextI)
+                {
+                NSMutableSet<NSNumber*>* ivCone = [NSMutableSet set];
+                NSMutableArray<XTIRInsn*>* ivWork = [NSMutableArray arrayWithObject:ivNextI];
+                [ivCone addObject:@(ivNextI.result.valueId)];
+                while (ivWork.count)
+                    {
+                    XTIRInsn* cur = ivWork.lastObject;
+                    [ivWork removeLastObject];
+                    for (XTIROperand* o in cur.operands)
+                        {
+                        if (o.kind != XTIROperandKindUse || [ivCone containsObject:@(o.valueId)])
+                            continue;
+                        [ivCone addObject:@(o.valueId)];
+                        for (XTIRInsn* i in B.instructions)
+                            if (i.result && i.result.valueId == o.valueId)
+                                [ivWork addObject:i];
+                        }
+                    }
+                for (NSUInteger b2 = 0; b2 < accPhis.count; b2++)
+                    if ([ivCone containsObject:@(accPhis[b2].result.valueId)] ||
+                        [ivCone containsObject:@(accNexts[b2].result.valueId)])
+                        { independent = NO; break; }
+                }
+            }
         if (!independent)
             continue;
         XTIRInsn* victim = accPhis.lastObject;
@@ -3544,10 +3600,18 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
       int64_t kv;
       if (resolveConstInt(op, defOf, &kv))
           {
-          XTIRValue* cst = newVal(c.laneType);
+          // elemLane, not c.laneType. This applier has TWO lane types — the
+          // ELEMENT's (u8 for a byte compare) and the ACCUMULATOR's (u32) — and
+          // this splat goes into the element vector. Typing its scalar from the
+          // accumulator produced `%v:Vec(U8) = VSplat %c:U32`, a splat whose
+          // scalar is wider than the lanes it fills. The back ends take the
+          // width from the RESULT so it worked, but the SHIPPED compiler types
+          // it from the element lane and the two disagreed on every file that
+          // counts bytes (bug 228 / bug 226).
+          XTIRValue* cst = newVal(elemLane);
           [PH.instructions addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpConst
                                                                result:cst
-                                                             operands:@[ [XTIROperand immIWithType:c.laneType value:kv] ]
+                                                             operands:@[ [XTIROperand immIWithType:elemLane value:kv] ]
                                                                dbgLoc:nil]];
           scalar = [XTIROperand useWithValueId:cst.valueId];
           }

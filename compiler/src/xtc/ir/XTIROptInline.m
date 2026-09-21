@@ -261,10 +261,19 @@ static void rewriteUses(XTIRFunction* fn, XTIRValueId oldVid, XTIROperand* newOp
                                                       defSite:site];
             [caller registerValue:v];
             remap[@(pl.valueId)] = [XTIROperand useWithValueId:nv];
-            [pins addObject:[[XTIRPinnedLocal alloc] initWithName:pl.name
-                                                             type:pl.type
-                                                       byteOffset:0
-                                                          valueId:nv]];
+            XTIRPinnedLocal* np = [[XTIRPinnedLocal alloc] initWithName:pl.name
+                                                                   type:pl.type
+                                                             byteOffset:0
+                                                                valueId:nv];
+            // escapesViaPointer TRAVELS. It says this local's address is
+            // dereferenced across a call, so it needs stable per-invocation
+            // storage rather than a shared scratch pool — and inlining does not
+            // remove that: the address still crosses whatever calls made it
+            // true. Dropping it (the default is NO) left the reference saying a
+            // local does not escape where the SHIPPED compiler says it does,
+            // which is the whole of bug 228's first half and bug 226.
+            np.escapesViaPointer = pl.escapesViaPointer;
+            [pins addObject:np];
             }
         caller.frameInfo.pinnedLocals = pins;
         }

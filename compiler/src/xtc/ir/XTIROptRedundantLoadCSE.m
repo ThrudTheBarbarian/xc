@@ -292,13 +292,21 @@ static XTIRInsn* rebuiltInsn(XTIRInsn* insn, NSArray<XTIROperand*>* newOps)
                 {
                 XTIRValueId ptr = resolveVid(replace, insn.operands[0].valueId);
                 NSNumber* have = loadedValue[@(ptr)];
-                // The cached value must be the WIDTH the load wants. A u32
+                // The cached value must be the TYPE the load wants. A u32
                 // stored at an address and read back as a u8 is not the same
                 // value, and the table is keyed only by address.
+                //
+                // Comparing only the KIND was too loose, and in a way that only
+                // a pointer shows: every Ptr has the same kind, so a stored
+                // `Ptr(Agg(115))` forwarded into a load typed `Ptr(Agg(101))`
+                // and the load's users were left holding a value of a different
+                // pointee type. Sound for the address, but the SHIPPED compiler
+                // compares the whole type and refused the same forward, so the
+                // two disagreed on indirect_callee_shapes (bug 228 / bug 226).
                 if (have && insn.result.type)
                     {
                     XTIRValue* cv = [fn valueForId:(XTIRValueId)have.unsignedLongLongValue];
-                    if (!cv || !cv.type || cv.type.kind != insn.result.type.kind)
+                    if (!cv || !cv.type || ![cv.type isEqual:insn.result.type])
                         have = nil;
                     }
                 // To delete we must rewire the produced memory token to the
