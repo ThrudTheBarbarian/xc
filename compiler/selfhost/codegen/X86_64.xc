@@ -326,12 +326,31 @@ class X86_64
         return String.withCString("rax");
         }
 
-    // A named 64-bit home register at a width. rbx has legacy 8/16/32 names;
-    // r12-r15 take a b/w/d suffix.
+    // A named 64-bit home register at a width. The r8-r15 names take a width
+    // SUFFIX (r8d/r8w/r8b); the eight legacy registers each spell their views
+    // differently, and rsi/rdi/rbp/rsp have no 8-bit view at all before REX
+    // (sil/dil/bpl/spl). A table beats three special cases: "rdid" is accepted
+    // by nothing, and the in-house assembler refused it loudly the moment rdi
+    // entered a register pool.
     static String* regView(String* r64, u32 w)
         {
+        u32 k = w == (u32)1 ? (u32)0 : (w == (u32)2 ? (u32)1 : (w == (u32)4 ? (u32)2 : (u32)3));
+        if (r64.equals(String.withCString("rax")))
+            return String.withCString(k == (u32)0 ? "al" : (k == (u32)1 ? "ax" : (k == (u32)2 ? "eax" : "rax")));
         if (r64.equals(String.withCString("rbx")))
-            return String.withCString(w == (u32)1 ? "bl" : (w == (u32)2 ? "bx" : (w == (u32)4 ? "ebx" : "rbx")));
+            return String.withCString(k == (u32)0 ? "bl" : (k == (u32)1 ? "bx" : (k == (u32)2 ? "ebx" : "rbx")));
+        if (r64.equals(String.withCString("rcx")))
+            return String.withCString(k == (u32)0 ? "cl" : (k == (u32)1 ? "cx" : (k == (u32)2 ? "ecx" : "rcx")));
+        if (r64.equals(String.withCString("rdx")))
+            return String.withCString(k == (u32)0 ? "dl" : (k == (u32)1 ? "dx" : (k == (u32)2 ? "edx" : "rdx")));
+        if (r64.equals(String.withCString("rsi")))
+            return String.withCString(k == (u32)0 ? "sil" : (k == (u32)1 ? "si" : (k == (u32)2 ? "esi" : "rsi")));
+        if (r64.equals(String.withCString("rdi")))
+            return String.withCString(k == (u32)0 ? "dil" : (k == (u32)1 ? "di" : (k == (u32)2 ? "edi" : "rdi")));
+        if (r64.equals(String.withCString("rbp")))
+            return String.withCString(k == (u32)0 ? "bpl" : (k == (u32)1 ? "bp" : (k == (u32)2 ? "ebp" : "rbp")));
+        if (r64.equals(String.withCString("rsp")))
+            return String.withCString(k == (u32)0 ? "spl" : (k == (u32)1 ? "sp" : (k == (u32)2 ? "esp" : "rsp")));
         String* o = String.withCString(r64.cString());
         if (w == (u32)1)
             o.appendCString("b");
@@ -538,7 +557,32 @@ class X86_64
             fpCaller.add((Object*)String.withCString("xmm14"));
             fpCaller.add((Object*)String.withCString("xmm15"));
             }
-        h.run(fn, callee, new Array(), new Array(), fpCaller);
+        // GP caller tier. SysV leaves only five callee-saved registers, so a
+        // function with more than five hot values put the rest in slots and the
+        // hot loop became store/reload traffic — call_depth spent 25 of its 60
+        // loop instructions moving temporaries in and out of the frame. These
+        // are caller-saved on their ABI and are NOT emission scratch (rax, rcx
+        // and rdx are), so a value that crosses no call may live in one for
+        // free. The allocator's crossesCall test is inclusive at both ends, so a
+        // value that is an operand OR the result of a call is already barred.
+        //
+        // A parameter homed in one of these is safe even though four of them are
+        // incoming-argument registers: the prologue SPILLS every parameter to
+        // its slot first and only then seeds the homes from those slots, so
+        // nothing reads an argument register after the seeding starts.
+        //
+        // Under Win64 rdi and rsi are callee-saved, so only r8-r11 qualify.
+        Array* gpCaller = new Array();
+        if (!_win64)
+            {
+            gpCaller.add((Object*)String.withCString("rdi"));
+            gpCaller.add((Object*)String.withCString("rsi"));
+            }
+        gpCaller.add((Object*)String.withCString("r8"));
+        gpCaller.add((Object*)String.withCString("r9"));
+        gpCaller.add((Object*)String.withCString("r10"));
+        gpCaller.add((Object*)String.withCString("r11"));
+        h.run(fn, callee, gpCaller, new Array(), fpCaller);
         _homing = h;
         _homeSaves = h.usedCalleeSaved();
         }

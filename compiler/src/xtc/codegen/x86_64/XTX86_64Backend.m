@@ -204,10 +204,24 @@ static NSInteger sWin64SretOff = 0;
 // r12-r15 use the b/w/d suffix.
 + (NSString*)regView:(NSString*)r64 width:(NSUInteger)w
     {
-    if ([r64 isEqualToString:@"rbx"])
-        return w == 1 ? @"bl" : w == 2 ? @"bx"
-                            : w == 4   ? @"ebx"
-                                       : @"rbx";
+    // The r8-r15 names take a width SUFFIX (r8d/r8w/r8b); the eight legacy
+    // registers each spell their views differently, and rsi/rdi/rbp/rsp have no
+    // 8-bit view at all before REX (sil/dil/bpl/spl). A table beats three
+    // special cases: `rdid` was accepted by nothing and the in-house assembler
+    // refused it loudly the moment rdi entered a register pool.
+    static NSDictionary<NSString*, NSArray<NSString*>*>* views = nil;
+    if (!views)
+        views = @{ @"rax" : @[ @"al",  @"ax",  @"eax",  @"rax" ],
+                   @"rbx" : @[ @"bl",  @"bx",  @"ebx",  @"rbx" ],
+                   @"rcx" : @[ @"cl",  @"cx",  @"ecx",  @"rcx" ],
+                   @"rdx" : @[ @"dl",  @"dx",  @"edx",  @"rdx" ],
+                   @"rsi" : @[ @"sil", @"si",  @"esi",  @"rsi" ],
+                   @"rdi" : @[ @"dil", @"di",  @"edi",  @"rdi" ],
+                   @"rbp" : @[ @"bpl", @"bp",  @"ebp",  @"rbp" ],
+                   @"rsp" : @[ @"spl", @"sp",  @"esp",  @"rsp" ] };
+    NSArray<NSString*>* v = views[r64];
+    if (v)
+        return v[w == 1 ? 0 : w == 2 ? 1 : w == 4 ? 2 : 3];
     return [r64 stringByAppendingString:(w == 1 ? @"b" : w == 2 ? @"w"
                                                      : w == 4   ? @"d"
                                                                 : @"")];
@@ -1839,13 +1853,32 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
         NSArray<NSString*>* fpPool = fnHasVector ? @[]
             : @[ @"xmm8", @"xmm9", @"xmm10", @"xmm11", @"xmm12", @"xmm13",
                  @"xmm14", @"xmm15" ];
+        // GP caller tier. SysV leaves only five callee-saved registers, so a
+        // function with more than five hot values put the rest in slots and the
+        // hot loop became store/reload traffic — call_depth spent 25 of its 60
+        // loop instructions moving temporaries in and out of the frame. These
+        // six are caller-saved on their ABI and are NOT emission scratch (rax,
+        // rcx and rdx are), so a value that crosses no call may live in one for
+        // free. The allocator's crossesCall test is inclusive at both ends, so a
+        // value that is an operand OR the result of a call is already barred —
+        // which is what makes the argument registers safe despite the marshalling
+        // sequence writing them in order.
+        //
+        // Under Win64 rdi and rsi are callee-saved, so only r8-r11 qualify.
+        NSArray<NSString*>* gpCallerPool = sWin64
+            ? @[ @"r8", @"r9", @"r10", @"r11" ]
+            : @[ @"rdi", @"rsi", @"r8", @"r9", @"r10", @"r11" ];
         XTHomingResult* hr = [XTHomingAllocator assignHomesForFunction:fn
                                                               gpCallee:@[ @"rbx", @"r12", @"r13", @"r14", @"r15" ]
-                                                              gpCaller:@[]
+                                                              gpCaller:gpCallerPool
                                                               fpCallee:@[]
                                                               fpCaller:fpPool
                                                               excluded:excluded
                                                               foldInfo:fold];
+        // A parameter homed in one of these is safe even though four of them
+        // are incoming-argument registers: the prologue SPILLS every parameter
+        // to its slot first and only then seeds the homes from those slots, so
+        // nothing reads an argument register after the seeding starts.
         sHome = hr.homeReg;
         usedSaves = hr.usedCalleeSaved;
         }
