@@ -145,6 +145,14 @@ NS_ASSUME_NONNULL_BEGIN
 /// back ends have no lowering yet, so the pass leaves those loops scalar
 /// rather than emitting an opcode they would drop.
 - (BOOL)vectorizesHighMultiply;
+/// The back end can build the lane-index vector <0,1,2,3>, so a reduction
+/// whose per-lane value is the INDUCTION VARIABLE rather than a loaded
+/// element can vectorise (`acc += f(i)` with no array in sight).
+- (BOOL)vectorizesIota;
+/// The back end lowers VLShr (lane-wise shift right by a constant). Separate
+/// from vectorizesHighMultiply because a back end can have the shift without
+/// the widening multiply the magic divide needs.
+- (BOOL)vectorizesLaneShift;
 
 // YES to rotate a top-tested loop into a bottom-tested one: the loop's exit test
 // is peeled into the preheader (run once) and duplicated at the bottom of the

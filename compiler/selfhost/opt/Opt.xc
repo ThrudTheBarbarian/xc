@@ -37,7 +37,9 @@ class OptProfile
     // the caller's LOADED Agg temp — not reliably addressable on the 6502.
     bool _inlineAggParams;
     bool _vectorize;         // map/reduce kernels go to SIMD
-    bool _highMul;           // back end lowers VMulHi/VLShr (constant divide)
+    bool _highMul;           // back end lowers VMulHi (constant divide)
+    bool _laneShift;         // back end lowers VLShr (lane shift by a constant)
+    bool _iota;              // back end can build the lane-index vector
     bool _reductionCollapse; // an invariant reduction nest collapses
     bool _memsetIdiom;       // a byte-fill loop becomes one MemSet
     bool _initGuardElim;     // a redundant static-init guard comes out
@@ -75,6 +77,8 @@ class OptProfile
         _accumRecursion = false;
         _vectorize = false;
         _highMul = false;
+        _laneShift = false;
+        _iota = false;
         _reductionCollapse = false;
         _memsetIdiom = false;
         _initGuardElim = false;
@@ -125,6 +129,14 @@ class OptProfile
         // the pass leaves those loops scalar rather than emitting an opcode
         // they would drop.
         p._highMul = t.equals(String.withCString("arm64"));
+        // ushr on arm64, psrlw/psrld/psrlq on x86. Separate from _highMul
+        // because a back end can have the lane shift without the widening
+        // multiply the magic divide needs.
+        p._laneShift = t.equals(String.withCString("arm64")) || t.equals(String.withCString("x86_64")) || t.equals(String.withCString("win64"));
+        // The lane-index vector is a 16-byte read-only global loaded with the
+        // VLoad the back end already has, so this needs no instruction
+        // selection of its own — only somewhere to put the constant.
+        p._iota = p._laneShift;
         p._memsetIdiom = !(t.equals(String.withCString("xt")) || t.equals(String.withCString("xt6502")) || t.equals(String.withCString("atarist")));
         // The 6502 does NOT hoist: an eager init at entry costs it more than
         // the guard it saves.
@@ -254,6 +266,14 @@ class OptProfile
     bool highMul(void)
         {
         return _highMul;
+        }
+    bool laneShift(void)
+        {
+        return _laneShift;
+        }
+    bool iota(void)
+        {
+        return _iota;
         }
     bool reductionCollapse(void)
         {
@@ -531,6 +551,10 @@ class OptProfile
     IRValue* _iv;
     String* _laneTy;
     u32 _vw; // lanes per vector — 4 for a 32-bit lane
+    // IOTA: the per-lane value is derived from the INDUCTION VARIABLE rather
+    // than from a load, so the applier maps the iv to <i, i+1, i+2, i+3>
+    // instead of splatting it. `acc += f(i)` with no array anywhere.
+    bool _isIota;
     // Epilogue: when the trip count is not a whole number of vectors, the vector
     // loop stops at _epiM and a CLONE of the scalar loop runs the tail.
     bool _needEpi;
@@ -585,6 +609,14 @@ class OptProfile
     bool needEpi(void)
         {
         return _needEpi;
+        }
+    void setIota(bool v)
+        {
+        _isIota = v;
+        }
+    bool isIota(void)
+        {
+        return _isIota;
         }
     i32 epiM(void)
         {
@@ -10253,6 +10285,7 @@ class OptProfile
         {
         if (!_profile.vectorize())
             return;
+        _vecModule = m;
         for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
             {
             IRFunc* fn = (IRFunc*)m.funcs().get(f);
@@ -11061,6 +11094,11 @@ class OptProfile
     // fell through to emitting a vector UDiv, which no back end lowers and
     // which silently returned a wrong sum.
     Map* _vrDivMagic;
+    // Set by vecClassifyReduxBody: the body read the induction variable as a
+    // per-lane VALUE, so the applier must map it to <i, i+1, i+2, i+3>.
+    bool _vrUsesIv;
+    IRModule* _vecModule; // for the lane-index global
+    IRFunc* _vecFn;       // the function being rewritten (names that global)
     bool _vrAllowRT;       // one-shot: the NEXT vecReduxShape may accept one
     IROperand* _vrBoundOp; // that bound, when it is
 
@@ -11333,6 +11371,7 @@ class OptProfile
         c.setLane(laneTy, vw);
         c.setReduction(accPhi, accNext, acc, elemOp.val(), initOp, PH);
         c.setDivMagic(_vrDivMagic);
+        c.setIota(_profile.iota() && _vrUsesIv);
         c.setEpi(_vrRuntime || epiM != n, epiM);
         c.setRuntime(_vrRuntime, _vrBoundOp);
         c.setIvStart(_vrIvStart);
@@ -11477,6 +11516,17 @@ class OptProfile
         bool sawLoad = false;
         _vrDivMagic = new Map();
         Array* elems = new Array();
+        // IOTA. The per-lane value does not have to come from memory: in
+        // `acc += f(r)` the element IS the induction variable and there is no
+        // array anywhere. Seeding the element set with the iv makes every
+        // instruction that reads it elementwise, exactly as a Load's result is.
+        // _vrUsesIv records whether the body actually read it, so a loop with
+        // neither loads nor iv uses is still refused.
+        bool wantIota = _profile.iota();
+        bool ivLaneOK = vecRedux32(iv.ty());
+        _vrUsesIv = false;
+        if (wantIota && ivLaneOK)
+            elems.add((Object*)iv);
         for (u32 i = (u32)0; i < B.insns().count(); i = i + (u32)1)
             {
             IRInsn* n = (IRInsn*)B.insns().get(i);
@@ -11547,6 +11597,30 @@ class OptProfile
                 elems.add((Object*)n.res());
                 continue;
                 }
+            // A logical shift right by a COMPILE-TIME amount. There is no
+            // lane-wise variable shift here, and none is needed: every shift in
+            // the shapes this recognises is by a literal. Gated on the flag that
+            // says the back end lowers VLShr — emitting it where it is not
+            // lowered is silence, not a build failure.
+            if (op.equals(String.withCString("LShr")) && _profile.laneShift())
+                {
+                if (n.res() == (IRValue*)0 || !vecRedux32(n.res().ty()))
+                    return (String*)0;
+                if (n.ops().count() < (u32)2)
+                    return (String*)0;
+                if (!vecOperandOK((IROperand*)n.ops().get((u32)0), elems, B, defOf, defBlk))
+                    return (String*)0;
+                i32 sh = (i32)0;
+                if (!vecConst((IROperand*)n.ops().get((u32)1), defOf, &sh))
+                    return (String*)0;
+                if (sh < (i32)0 || sh >= (i32)32)
+                    return (String*)0;
+                IROperand* s0 = (IROperand*)n.ops().get((u32)0);
+                if (s0.kind() == (u8)OPK_USE && s0.val() == iv)
+                    _vrUsesIv = true;
+                elems.add((Object*)n.res());
+                continue;
+                }
             if (vecElementwise(op))
                 {
                 if (n.res() == (IRValue*)0 || !vecRedux32(n.res().ty()))
@@ -11557,12 +11631,24 @@ class OptProfile
                     return (String*)0;
                 if (!vecOperandOK((IROperand*)n.ops().get((u32)1), elems, B, defOf, defBlk))
                     return (String*)0;
+                for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
+                    {
+                    IROperand* o = (IROperand*)n.ops().get(k);
+                    if (o.kind() == (u8)OPK_USE && o.val() == iv)
+                        _vrUsesIv = true;
+                    }
                 elems.add((Object*)n.res());
                 continue;
                 }
             return (String*)0; // a store, a call, a per-lane-varying scalar
             }
-        if (!sawLoad || laneTy == (String*)0)
+        // With loads, the lane type comes from them. With none, the elements
+        // ARE the induction variable and its type is the lane type.
+        if (laneTy == (String*)0 && wantIota && ivLaneOK && _vrUsesIv)
+            laneTy = iv.ty();
+        if (laneTy == (String*)0)
+            return (String*)0;
+        if (!sawLoad && !(wantIota && _vrUsesIv))
             return (String*)0;
         // The reduced element must itself be per-lane. A loop-invariant one
         // would be `acc += k` — a scaled count, not a lane-wise reduction.
@@ -14266,8 +14352,48 @@ class OptProfile
         return rv;
         }
 
+    // The lane-index vector <0,1,2,3>, as a read-only 16-byte global. Building
+    // it in REGISTERS would need a lane-insert sequence or a literal pool in
+    // each back end; loading it needs only the VLoad both already have, and it
+    // is loop-invariant so the load sits in the preheader.
+    //
+    // Named per FUNCTION. An initialised data global is emitted with .globl, so
+    // one fixed name would put the same label in every object that vectorises
+    // an iota loop and the link would refuse the second.
+    String* vecIotaSymbol(String* laneTy, IRFunc* fn)
+        {
+        u32 lw = vecLaneWidth(laneTy);
+        String* nm = new String();
+        nm.appendFormat("__xtv_iota_%s_%u", fn.name().cString(), lw);
+        if (symNamed(_vecModule, nm) != (IRSymbol*)0)
+            return nm;
+        u32 lanes = (u32)16 / lw;
+        Array* bytes = new Array();
+        for (u32 l = (u32)0; l < lanes; l = l + (u32)1)
+            for (u32 k = (u32)0; k < lw; k = k + (u32)1)
+                bytes.add((Object*)Number.with((l >> ((u32)8 * k)) & (u32)0xFF)); // LE
+        String* vt = new String();
+        vt.appendFormat("Vec(%s)", laneTy.cString());
+        IRSymbol* sym = IRSymbol.dataGlobal(nm, vt);
+        sym.setBytes(bytes);
+        _vecModule.addSym(sym);
+        return nm;
+        }
+
+    u32 vecLaneWidth(String* laneTy)
+        {
+        if (laneTy.equals(String.withCString("I32")) || laneTy.equals(String.withCString("U32")))
+            return (u32)4;
+        if (laneTy.equals(String.withCString("I16")) || laneTy.equals(String.withCString("U16")))
+            return (u32)2;
+        if (laneTy.equals(String.withCString("I8")) || laneTy.equals(String.withCString("U8")))
+            return (u32)1;
+        return (u32)8;
+        }
+
     void vecApplyReduction(IRFunc* fn, VecCand* c)
         {
+        _vecFn = fn;
         IRBlock* B = c.b();
         IRBlock* H = c.h();
         IRBlock* E = c.e();
@@ -14500,6 +14626,44 @@ class OptProfile
     // Rewrite the reduction loop's body into vector form.
     void vecReduxBody(VecCand* c, IRBlock* B, IRValue* vacc)
         {
+        // IOTA. The per-lane value is derived from the induction variable, so
+        // lane l of this iteration must hold i+l, not i. Splatting i would give
+        // every lane the same value and compute a different answer.
+        //
+        //   preheader:  viota = VLoad(&__xtv_iota_<fn>_4)   <0,1,2,3>, once
+        //   body:       viv   = VAdd(VSplat(i), viota)      <i,i+1,i+2,i+3>
+        //
+        // Mapping the iv to viv makes every rule below work unchanged: the
+        // arithmetic on i vectorises through vecSplatOperand exactly as
+        // arithmetic on a loaded element does.
+        if (c.isIota() && c.pre() != (IRBlock*)0)
+            {
+            String* nm = vecIotaSymbol(c.laneTy(), _vecFn);
+            String* pty = new String();
+            pty.appendFormat("Ptr(%s, unbanked)", c.laneTy().cString());
+            IRValue* iotaPtr = new IRValue(pty);
+            IRInsn* ao = IRInsn.with(String.withCString("AddrOf"));
+            ao.setRes(iotaPtr);
+            ao.add(IROperand.sym(nm));
+            c.pre().insns().add((Object*)ao);
+            IRValue* viota = new IRValue(_vecTy);
+            IRInsn* vl = IRInsn.with(String.withCString("VLoad"));
+            vl.setRes(viota);
+            vl.add(IROperand.useVal(iotaPtr));
+            c.pre().insns().add((Object*)vl);
+            IRValue* vsp = new IRValue(_vecTy);
+            IRInsn* sp = IRInsn.with(String.withCString("VSplat"));
+            sp.setRes(vsp);
+            sp.add(IROperand.useVal(c.iv()));
+            _vecBody.add((Object*)sp);
+            IRValue* viv = new IRValue(_vecTy);
+            IRInsn* va = IRInsn.with(String.withCString("VAdd"));
+            va.setRes(viv);
+            va.add(IROperand.useVal(vsp));
+            va.add(IROperand.useVal(viota));
+            _vecBody.add((Object*)va);
+            _vecMap.set((Hashable*)c.iv(), (Object*)viv);
+            }
         for (u32 i = (u32)0; i < B.insns().count(); i = i + (u32)1)
             {
             IRInsn* n = (IRInsn*)B.insns().get(i);
@@ -14578,6 +14742,28 @@ class OptProfile
                 sr.setRes(qv);
                 sr.add(IROperand.useVal(hi));
                 sr.add(IROperand.immI((i32)ss, n.res().ty()));
+                _vecBody.add((Object*)sr);
+                _vecMap.set((Hashable*)n.res(), (Object*)qv);
+                continue;
+                }
+            // Shift right by a constant: the lane-wise form takes the amount
+            // as an immediate, not a splatted vector, so the second operand is
+            // NOT run through vecSplatOperand. Splatting it would produce a
+            // lane-wise variable shift that no back end here implements.
+            if (op.equals(String.withCString("LShr")))
+                {
+                i32 sh = (i32)0;
+                if (!vecConst((IROperand*)n.ops().get((u32)1), _vecSplatDefs, &sh))
+                    {
+                    _vecBody.add((Object*)n); // recogniser and applier disagree
+                    continue;
+                    }
+                IROperand* vx = vecSplatOperand((IROperand*)n.ops().get((u32)0));
+                IRValue* qv = new IRValue(_vecTy);
+                IRInsn* sr = IRInsn.with(String.withCString("VLShr"));
+                sr.setRes(qv);
+                sr.add(vx);
+                sr.add(IROperand.immI(sh, c.laneTy()));
                 _vecBody.add((Object*)sr);
                 _vecMap.set((Hashable*)n.res(), (Object*)qv);
                 continue;

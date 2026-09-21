@@ -777,7 +777,13 @@ static void emitModRM(NSMutableData *d, int reg, const XOperand *rm) {
                   @"pmullw":@[@0x66,@0xD5]};
     });
     NSArray *sr = sseRR[mn];
-    if (sr && a && b) {
+    // b must NOT be an immediate. Four of these mnemonics (psrlw/psrld/psrlq
+    // and psllq) ALSO have a shift-by-immediate form, handled below out of its
+    // own table because the operands sit in the opposite ModRM fields. Without
+    // this test `psrld xmm2, 2` matched here, and emitModRM encoded the literal
+    // 2 as if it were a register operand: a silently WRONG encoding that
+    // disassembled as garbage and segfaulted, rather than a refusal.
+    if (sr && a && b && b->kind != OpImm) {
         uint8_t pfx = (uint8_t)[sr[0] intValue];
         if (pfx) emit8(out, pfx);
         emitRex(out, NO, a->reg, b->index, b->kind==OpReg?b->reg:b->base, NO);
@@ -797,7 +803,7 @@ static void emitModRM(NSMutableData *d, int reg, const XOperand *rm) {
                   @"pmaxsd":@[@0x66,@0x3D], @"pminsd":@[@0x66,@0x39]};
     });
     NSArray *s38 = sse38[mn];
-    if (s38 && a && b) {
+    if (s38 && a && b && b->kind != OpImm) {
         uint8_t pfx = (uint8_t)[s38[0] intValue];
         if (pfx) emit8(out, pfx);
         emitRex(out, NO, a->reg, b->index, b->kind==OpReg?b->reg:b->base, NO);

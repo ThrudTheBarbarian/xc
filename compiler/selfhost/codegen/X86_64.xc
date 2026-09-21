@@ -1444,6 +1444,32 @@ class X86_64
         return (String*)0;
         }
 
+    // Lane-wise logical shift right by a CONSTANT. SSE2 spells this
+    // psrlw/psrld/psrlq by lane width, all two-address and all taking the count
+    // as an 8-bit immediate — there is no lane-wise variable shift below AVX2,
+    // and the IR never asks for one.
+    void emitVLShr(IRInsn* n)
+        {
+        if (n.res() == (IRValue*)0 || n.ops().count() < (u32)2)
+            return;
+        IROperand* o0 = (IROperand*)n.ops().get((u32)0);
+        if (o0.kind() != (u8)OPK_USE)
+            return;
+        String* d = vecOf(n.res());
+        String* a = vecOf(o0.val());
+        if (d == (String*)0 || a == (String*)0)
+            return;
+        String* lane = laneOf(n.res().ty());
+        u32 lw = fieldWidth(lane);
+        if (lw != (u32)2 && lw != (u32)4 && lw != (u32)8)
+            return; // no byte-lane shift in SSE
+        String* mn = String.withCString(lw == (u32)2 ? "psrlw" : (lw == (u32)8 ? "psrlq" : "psrld"));
+        if (!d.equals(a))
+            _out.appendFormat("\tmovdqa\t%s, %s\n", d.cString(), a.cString());
+        _out.appendFormat("\t%s\t%s, %d\n", mn.cString(), d.cString(),
+                          ((IROperand*)n.ops().get((u32)1)).imm());
+        }
+
     void emitVReduceAdd(IRInsn* n)
         {
         if (n.res() == (IRValue*)0 || n.ops().count() < (u32)1)
@@ -4746,6 +4772,11 @@ class X86_64
         if (op.equals(String.withCString("VAdd")) || op.equals(String.withCString("VSub")) || op.equals(String.withCString("VMul")) || op.equals(String.withCString("VAnd")) || op.equals(String.withCString("VOr")) || op.equals(String.withCString("VXor")) || op.equals(String.withCString("VMax")) || op.equals(String.withCString("VMin")))
             {
             emitVBin(n);
+            return true;
+            }
+        if (op.equals(String.withCString("VLShr")))
+            {
+            emitVLShr(n);
             return true;
             }
         if (op.equals(String.withCString("VReduceAdd")))

@@ -3938,6 +3938,27 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
             }
         return;
         }
+    // Lane-wise logical shift right by a CONSTANT. SSE2 spells this
+    // psrlw/psrld/psrlq by lane width, all two-address and all taking the count
+    // as an 8-bit immediate — there is no lane-wise variable shift below AVX2,
+    // and the IR never asks for one.
+    case XTIROpVLShr:
+        {
+        if (!res || ops.count < 2 || ops[0].kind != XTIROperandKindUse)
+            return;
+        NSString *d = sVec[@(res.valueId)], *a = sVec[@(ops[0].valueId)];
+        if (!d || !a)
+            return;
+        XTIRType* lane = res.type.pointeeType;
+        NSUInteger lw = lane ? [self fieldWidth:lane] : 4;
+        NSString* mn = lw == 2 ? @"psrlw" : lw == 8 ? @"psrlq" : @"psrld";
+        if (lw != 2 && lw != 4 && lw != 8)
+            return; // no byte-lane shift in SSE
+        if (![d isEqualToString:a])
+            [out appendFormat:@"\tmovdqa\t%@, %@\n", d, a];
+        [out appendFormat:@"\t%@\t%@, %lld\n", mn, d, (long long)ops[1].intValue];
+        return;
+        }
     // scalar <- horizontal add of 4 i32 lanes
     case XTIROpVReduceAdd:
         {

@@ -115,6 +115,14 @@
     {
     return NO;
     }
+- (BOOL)vectorizesIota
+    {
+    return NO;
+    }
+- (BOOL)vectorizesLaneShift
+    {
+    return NO;
+    }
 - (BOOL)formsPointerInductionVars
     {
     return NO;
@@ -247,6 +255,19 @@
 // umull/umull2 + uzp2 build the high half of a 32x32 lane product and
 // ushr does the post-shift, so constant division vectorises here.
 - (BOOL)vectorizesHighMultiply
+    {
+    return YES;
+    }
+
+// The lane-index vector is a 16-byte read-only global the vectoriser emits
+// once, loaded with the VLoad the back end already has — no lane-insert, no
+// literal pool, no new opcode.
+- (BOOL)vectorizesIota
+    {
+    return YES;
+    }
+// ushr does the lane-wise shift.
+- (BOOL)vectorizesLaneShift
     {
     return YES;
     }
@@ -674,6 +695,18 @@
     return NO;
     }
 - (BOOL)vectorizesLoops
+    {
+    return YES;
+    }
+// The lane-index vector is a 16-byte read-only global loaded with the VLoad the
+// back end already has, so this needs no new instruction selection.
+- (BOOL)vectorizesIota
+    {
+    return YES;
+    }
+// psrlw/psrld/psrlq, SSE2. The widening multiply the magic divide wants is a
+// different matter (pmuludq plus shuffles), which is why these are two flags.
+- (BOOL)vectorizesLaneShift
     {
     return YES;
     }

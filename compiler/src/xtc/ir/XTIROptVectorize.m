@@ -35,6 +35,7 @@
 
 #import "XTIROptTargetProfile.h"
 #import "XTIRModule.h"
+#import "XTIRSymbol.h"
 #import "XTIRFunction.h"
 #import "XTIRBlock.h"
 #import "XTIRInsn.h"
@@ -58,6 +59,10 @@
 @property(nonatomic) XTIRValueId accId;   // accPhi result (the carry)
 @property(nonatomic) XTIRValueId elemId;  // the per-lane value added each iter
 @property(nonatomic) XTIROperand* seedOp; // accumulator's pre-loop value
+// IOTA: the per-lane value is derived from the INDUCTION VARIABLE rather than
+// from a load, so the applier must map the iv to <i, i+1, i+2, i+3> instead of
+// splatting it. `acc += f(i)` with no array anywhere.
+@property(nonatomic) BOOL isIota;
 // Epilogue: when the trip count is not an exact multiple of the vector width,
 // the vector loop runs to `epiM` and a CLONE of the scalar loop finishes the
 // tail. epiN is the original bound, kept for the clone's own guard.
@@ -246,9 +251,48 @@ static BOOL resolveConstInt(XTIROperand* op, NSDictionary<NSNumber*, XTIRInsn*>*
         return YES;
     if (getenv("XTVEC_OFF"))
         return YES; // A/B measurement escape hatch
+    sVecModule = mod;
     for (XTIRFunction* fn in mod.functions)
         [self runOnFunction:fn];
+    sVecModule = nil;
     return YES;
+    }
+
+// The lane-index vector <0,1,2,3>, as a read-only 16-byte global emitted once
+// per module. Building it in REGISTERS would need a lane-insert sequence or a
+// literal pool in each back end; loading it needs only the VLoad both already
+// have, and it is loop-invariant so the load is hoisted to the preheader.
+//
+// The name is fixed, and the symbol is reused across every loop in the module:
+// two definitions of one label is a hard error in the in-house assemblers.
+static XTIRModule* sVecModule = nil;
+
+static XTIRSymbolId xtvIotaSymbol(XTIRType* laneType, XTIRFunction* fn)
+    {
+    // Named per FUNCTION, not per module. An initialised data global is emitted
+    // with .globl, so one fixed name would put the same label in every object
+    // that vectorises an iota loop and the link would refuse the second. A
+    // function name is already unique across the link, so this is too.
+    NSString* nm = [NSString stringWithFormat:@"__xtv_iota_%@_%lu", fn.name,
+                             (unsigned long)laneType.byteWidth];
+    for (NSUInteger i = 0; i < sVecModule.symbols.count; i++)
+        if ([sVecModule.symbols[i].name isEqualToString:nm])
+            return (XTIRSymbolId)i;
+    NSUInteger lanes = 16 / laneType.byteWidth;
+    NSMutableData* bytes = [NSMutableData dataWithLength:16];
+    uint8_t* b = (uint8_t*)bytes.mutableBytes;
+    for (NSUInteger l = 0; l < lanes; l++)
+        for (NSUInteger k = 0; k < laneType.byteWidth; k++)
+            b[l * laneType.byteWidth + k] = (uint8_t)((l >> (8 * k)) & 0xFF); // LE
+    // A Vec type: exactly 16 bytes, not an Agg (which would go through the
+    // aggregate-initialiser relay) and not a float (which would be re-encoded).
+    XTIRSymbol* sym = [XTIRSymbol dataGlobalWithName:nm
+                                                type:[XTIRType vecWithLane:laneType]
+                                            volatile:NO
+                                             escapes:NO
+                                           taskLocal:NO];
+    sym.initialBytes = bytes;
+    return [sVecModule addSymbol:sym];
     }
 
 // Split a loop that carries SEVERAL independent accumulators into one loop per
@@ -1870,6 +1914,18 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
         XTIRType* laneType = nil;
         BOOL ok = YES, sawLoad = NO;
         NSMutableSet<NSNumber*>* elemIds = [NSMutableSet set];
+        // IOTA. The per-lane value does not have to come from memory: in
+        // `acc += f(r)` the element IS the induction variable, and there is no
+        // array anywhere. Seeding the element set with the iv makes every
+        // instruction that reads it elementwise, exactly as a Load's result is.
+        // `usesIv` records whether the body actually did read it, so a loop with
+        // neither loads nor iv uses is still refused.
+        BOOL wantIota = (self.profile ?: [XTIROptTargetProfile conservativeProfile]).vectorizesIota;
+        BOOL usesIv = NO;
+        XTIRType* ivTy = ivPhi.result.type;
+        BOOL ivLaneOK = ivTy && (ivTy.kind == XTIRTypeKindI32 || ivTy.kind == XTIRTypeKindU32);
+        if (wantIota && ivLaneOK)
+            [elemIds addObject:@(ivId)];
         NSMutableDictionary<NSNumber*, NSArray<NSNumber*>*>* divMagic = nil;
         BOOL (^isElemAddrAtIv)(XTIROperand*) = ^BOOL(XTIROperand* p) {
           if (p.kind != XTIROperandKindUse)
@@ -1969,6 +2025,30 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
                 ok = NO;
                 break;
                 }
+            // A logical shift right by a COMPILE-TIME amount. There is no
+            // lane-wise variable shift here, and none is needed: every shift in
+            // the shapes this recognises is by a literal. Gated on the flag that
+            // says the back end lowers VLShr — emitting it where it is not
+            // lowered is silence, not a build failure.
+            if (op == XTIROpLShr &&
+                (self.profile ?: [XTIROptTargetProfile conservativeProfile]).vectorizesLaneShift)
+                {
+                int64_t sh = 0;
+                if (insn.result &&
+                    (insn.result.type.kind == XTIRTypeKindI32 ||
+                     insn.result.type.kind == XTIRTypeKindU32) &&
+                    insn.operands.count >= 2 && elemOperandOK(insn.operands[0]) &&
+                    resolveConstInt(insn.operands[1], defOf, &sh) && sh >= 0 && sh < 32)
+                    {
+                    if (insn.operands[0].kind == XTIROperandKindUse &&
+                        insn.operands[0].valueId == ivId)
+                        usesIv = YES;
+                    [elemIds addObject:@(insn.result.valueId)];
+                    continue;
+                    }
+                ok = NO;
+                break;
+                }
             if (elementwiseArith(op))
                 {
                 if (!insn.result || !(insn.result.type.kind == XTIRTypeKindI32 ||
@@ -1983,13 +2063,20 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
                     ok = NO;
                     break;
                     }
+                for (XTIROperand* o in insn.operands)
+                    if (o.kind == XTIROperandKindUse && o.valueId == ivId)
+                        usesIv = YES;
                 [elemIds addObject:@(insn.result.valueId)];
                 continue;
                 }
             ok = NO;
             break; // Store, call, per-lane-varying scalar, etc.
             }
-        if (!ok || !sawLoad || !laneType)
+        // With loads, the lane type comes from them. With none, the elements ARE
+        // the induction variable and its type is the lane type.
+        if (!laneType && wantIota && ivLaneOK && usesIv)
+            laneType = ivTy;
+        if (!ok || !laneType || !(sawLoad || (wantIota && usesIv)))
             continue;
         // The reduced element must itself be an elementwise (per-lane) value —
         // not a loop-invariant (that would be `acc += k`, a scaled count, not a
@@ -2073,6 +2160,7 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
         c.laneType = laneType;
         c.vw = vw;
         c.isReduction = YES;
+        c.isIota = (wantIota && usesIv);
         c.divMagic = divMagic;
         c.accPhi = accPhi;
         c.accNext = accNext;
@@ -2206,6 +2294,44 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
     // the body's VAdd consumes it.
     XTIRValue* vacc = newVal(vecTy);
 
+    // IOTA. The per-lane value is derived from the induction variable, so lane l
+    // of this iteration must hold i+l, not i. Splatting i would give every lane
+    // the same value and compute a different answer.
+    //
+    //   preheader:  viota = VLoad(&__xtv_iota_<fn>_4)     <0,1,2,3>, once
+    //   body:       viv   = VAdd(VSplat(i), viota)        <i,i+1,i+2,i+3>
+    //
+    // Mapping the iv to viv makes every existing rule below work unchanged: the
+    // arithmetic on i vectorises through `vecOperand` exactly as arithmetic on a
+    // loaded element does. VSplat and VAdd are already lowered everywhere, and
+    // the lane-index vector needs no lane-insert sequence and no literal pool.
+    if (c.isIota && PH)
+        {
+        XTIRSymbolId iotaSym = xtvIotaSymbol(c.laneType, fn);
+        XTIRValue* iotaPtr = newVal([XTIRType ptrToType:c.laneType window:0]);
+        [PH.instructions addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpAddrOf
+                                                             result:iotaPtr
+                                                           operands:@[ [XTIROperand symWithSymbolId:iotaSym] ]
+                                                             dbgLoc:nil]];
+        XTIRValue* viota = newVal(vecTy);
+        [PH.instructions addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpVLoad
+                                                             result:viota
+                                                           operands:@[ [XTIROperand useWithValueId:iotaPtr.valueId] ]
+                                                             dbgLoc:nil]];
+        XTIRValue* vsp = newVal(vecTy);
+        [newBody addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpVSplat
+                                                     result:vsp
+                                                   operands:@[ [XTIROperand useWithValueId:c.ivId] ]
+                                                     dbgLoc:nil]];
+        XTIRValue* viv = newVal(vecTy);
+        [newBody addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpVAdd
+                                                     result:viv
+                                                   operands:@[ [XTIROperand useWithValueId:vsp.valueId],
+                                                               [XTIROperand useWithValueId:viota.valueId] ]
+                                                     dbgLoc:nil]];
+        vmap[@(c.ivId)] = viv;
+        }
+
     for (XTIRInsn* insn in B.instructions)
         {
         // step iv by the vector width
@@ -2287,6 +2413,29 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
             [newBody addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpVLShr
                                                          result:vr
                                                        operands:@[ [XTIROperand useWithValueId:hi.valueId],
+                                                                   [XTIROperand immIWithType:c.laneType
+                                                                                       value:sh] ]
+                                                         dbgLoc:insn.dbgLoc]];
+            vmap[@(insn.result.valueId)] = vr;
+            break;
+            }
+        // Shift right by a constant: the lane-wise form takes the amount as an
+        // immediate, not a splatted vector, so the operand is NOT run through
+        // vecOperand. Splatting it would produce a lane-wise variable shift that
+        // no back end here implements.
+        case XTIROpLShr:
+            {
+            int64_t sh = 0;
+            if (!resolveConstInt(insn.operands[1], defOf, &sh))
+                {
+                [newBody addObject:insn]; // recogniser and applier disagree
+                break;
+                }
+            XTIROperand* vx = vecOperand(insn.operands[0]);
+            XTIRValue* vr = newVal(vecTy);
+            [newBody addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpVLShr
+                                                         result:vr
+                                                       operands:@[ vx,
                                                                    [XTIROperand immIWithType:c.laneType
                                                                                        value:sh] ]
                                                          dbgLoc:insn.dbgLoc]];

@@ -1806,7 +1806,14 @@ class X86Fixup
     void encGroupD(String* mn, XOperand* a, XOperand* b)
         {
         u32 rr = sseRR(mn);
-        if (rr != (u32)$FFFF_FFFF && a != (XOperand*)0 && b != (XOperand*)0)
+        // b must NOT be an immediate. Four of these mnemonics (psrlw/psrld/
+        // psrlq and psllq) ALSO have a shift-by-immediate form, handled below
+        // out of its own table because the operands sit in the opposite ModRM
+        // fields. Without this test `psrld xmm2, 2` matched here and eModRM
+        // encoded the literal 2 as if it were a register operand: a silently
+        // WRONG encoding that disassembled as garbage and segfaulted, rather
+        // than a refusal.
+        if (rr != (u32)$FFFF_FFFF && a != (XOperand*)0 && b != (XOperand*)0 && b.kind() != (u32)OP_IMM)
             {
             u32 pfx = rr >> (u32)8;
             if (pfx != (u32)0)
@@ -1819,7 +1826,7 @@ class X86Fixup
             return;
             }
         u32 t3 = sse38(mn);
-        if (t3 != (u32)$FFFF_FFFF && a != (XOperand*)0 && b != (XOperand*)0)
+        if (t3 != (u32)$FFFF_FFFF && a != (XOperand*)0 && b != (XOperand*)0 && b.kind() != (u32)OP_IMM)
             {
             e8(t3 >> (u32)8);
             eRex(false, (i32)a.reg(), b.index(), b.rmReg(), false);
