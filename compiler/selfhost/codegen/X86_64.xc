@@ -500,7 +500,45 @@ class X86_64
             byId.set((Hashable*)Number.with(v.pid()), _fold.get((Hashable*)v));
             }
         h.setFoldInfo(byId);
-        h.run(fn, callee, new Array(), new Array(), new Array());
+        // Floats used to stay in slots entirely, and float_math showed it:
+        // sixteen instructions for four of arithmetic, every intermediate
+        // stored and immediately reloaded. Every xmm is caller-saved under
+        // SysV, so these are a CALLER tier and the allocator's crossesCall
+        // test keeps anything live across a call out of them by itself.
+        //
+        // xmm0/xmm1 are emission scratch and xmm2-xmm15 are the vectoriser's
+        // pool, so this is gated on the function having no Vec value at all,
+        // exactly as arm64 gates d18-d31.
+        bool fnHasVector = false;
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* vb = (IRBlock*)fn.blocks().get(b);
+            for (u32 i = (u32)0; i < vb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* vi = (IRInsn*)vb.insns().get(i);
+                if (vi.res() != (IRValue*)0 && isVecTy(vi.res().ty()))
+                    fnHasVector = true;
+                }
+            for (u32 i = (u32)0; i < vb.phis().count(); i = i + (u32)1)
+                {
+                IRInsn* vp = (IRInsn*)vb.phis().get(i);
+                if (vp.res() != (IRValue*)0 && isVecTy(vp.res().ty()))
+                    fnHasVector = true;
+                }
+            }
+        Array* fpCaller = new Array();
+        if (!fnHasVector)
+            {
+            fpCaller.add((Object*)String.withCString("xmm8"));
+            fpCaller.add((Object*)String.withCString("xmm9"));
+            fpCaller.add((Object*)String.withCString("xmm10"));
+            fpCaller.add((Object*)String.withCString("xmm11"));
+            fpCaller.add((Object*)String.withCString("xmm12"));
+            fpCaller.add((Object*)String.withCString("xmm13"));
+            fpCaller.add((Object*)String.withCString("xmm14"));
+            fpCaller.add((Object*)String.withCString("xmm15"));
+            }
+        h.run(fn, callee, new Array(), new Array(), fpCaller);
         _homing = h;
         _homeSaves = h.usedCalleeSaved();
         }
@@ -672,7 +710,16 @@ class X86_64
             String* home = homeOf(pv);
             if (home == (String*)0 || !hasSlot(pv))
                 continue;
-            _out.appendFormat("\tmov\t%s, [rbp-%lu]\n", home.cString(), slotOf(pv));
+            // A float parameter homed in an xmm needs the FP load. `mov xmm9,
+            // [rbp-16]` is not an instruction — and the in-house assembler
+            // ACCEPTED it rather than refusing, so logical_not_float simply
+            // read rubbish for its parameters instead of failing to build.
+            if (isXmmHome(home))
+                _out.appendFormat("\tmov%s\t%s, [rbp-%lu]\n",
+                                  pv.ty().equals(String.withCString("F64")) ? "sd" : "ss",
+                                  home.cString(), slotOf(pv));
+            else
+                _out.appendFormat("\tmov\t%s, [rbp-%lu]\n", home.cString(), slotOf(pv));
             }
         }
 
@@ -950,9 +997,51 @@ class X86_64
     //
     // Floats live in frame slots and move through xmm0/xmm1 — they are never
     // homed, since the allocator is handed an empty FP pool.
+    // Move a value between its HOME register and a GP register, choosing the
+    // cross-file instruction when the home is an xmm one. `mov ecx, xmm9` is
+    // not an instruction: between the integer and FP files it is movd (32) or
+    // movq (64). Floats are homed now, and a Load or Store of float BITS still
+    // goes through a GP register, so both directions occur.
+    bool isXmmHome(String* r)
+        {
+        return r != (String*)0 && r.hasPrefix(String.withCString("xmm"));
+        }
+
+    void movFromHome(String* home, u32 w, String* dst)
+        {
+        if (isXmmHome(home))
+            _out.appendFormat("\t%s\t%s, %s\n", w >= (u32)8 ? "movq" : "movd",
+                              dst.cString(), home.cString());
+        else
+            _out.appendFormat("\tmov\t%s, %s\n", dst.cString(), regView(home, w).cString());
+        }
+
+    void movIntoHome(String* home, u32 w, String* src)
+        {
+        if (isXmmHome(home))
+            _out.appendFormat("\t%s\t%s, %s\n", w >= (u32)8 ? "movq" : "movd",
+                              home.cString(), src.cString());
+        else
+            _out.appendFormat("\tmov\t%s, %s\n", regView(home, w).cString(), src.cString());
+        }
+
     void loadF(IROperand* op, String* xmm)
         {
-        if (op.kind() != (u8)OPK_USE || op.val() == (IRValue*)0 || !hasSlot(op.val()))
+        if (op.kind() != (u8)OPK_USE || op.val() == (IRValue*)0)
+            {
+            _out.appendFormat("\txorps\t%s, %s\n", xmm.cString(), xmm.cString());
+            return;
+            }
+        // A HOMED float never has its slot written, so reading the slot here
+        // would read whatever was in it before the value was homed.
+        String* fh = homeOf(op.val());
+        if (isXmmHome(fh))
+            {
+            if (!fh.equals(xmm))
+                _out.appendFormat("\tmovaps\t%s, %s\n", xmm.cString(), fh.cString());
+            return;
+            }
+        if (!hasSlot(op.val()))
             {
             _out.appendFormat("\txorps\t%s, %s\n", xmm.cString(), xmm.cString());
             return;
@@ -964,7 +1053,16 @@ class X86_64
 
     void storeF(String* xmm, IRValue* res)
         {
-        if (res == (IRValue*)0 || !hasSlot(res))
+        if (res == (IRValue*)0)
+            return;
+        String* fh = homeOf(res);
+        if (isXmmHome(fh))
+            {
+            if (!fh.equals(xmm))
+                _out.appendFormat("\tmovaps\t%s, %s\n", fh.cString(), xmm.cString());
+            return;
+            }
+        if (!hasSlot(res))
             return;
         _out.appendFormat("\tmov%s\t[rbp-%lu], %s\n",
                           res.ty().equals(String.withCString("F64")) ? "sd" : "ss",
@@ -3477,9 +3575,9 @@ class X86_64
         if (home != (String*)0)
             {
             if (w >= (u32)8)
-                _out.appendFormat("\tmov\t%s, %s\n", r64.cString(), regView(home, (u32)8).cString());
+                movFromHome(home, (u32)8, r64);
             else if (w == (u32)4)
-                _out.appendFormat("\tmov\t%s, %s\n", r32.cString(), regView(home, (u32)4).cString());
+                movFromHome(home, (u32)4, r32);
             else
                 _out.appendFormat("\tmovzx\t%s, %s\n", r32.cString(), regView(home, w).cString());
             return;
@@ -4081,7 +4179,7 @@ class X86_64
         String* home = homeOf(v);
         if (home != (String*)0)
             {
-            _out.appendFormat("\tmov\t%s, %s\n", reg(base, w).cString(), regView(home, w).cString());
+            movFromHome(home, w, reg(base, w));
             return;
             }
         if (!hasSlot(v))
@@ -4114,9 +4212,9 @@ class X86_64
         if (home != (String*)0)
             {
             if (w >= (u32)8)
-                _out.appendFormat("\tmov\t%s, %s\n", r64.cString(), regView(home, (u32)8).cString());
+                movFromHome(home, (u32)8, r64);
             else if (w == (u32)4)
-                _out.appendFormat("\tmov\t%s, %s\n", r32.cString(), regView(home, (u32)4).cString());
+                movFromHome(home, (u32)4, r32);
             else
                 _out.appendFormat("\tmovzx\t%s, %s\n", r32.cString(), regView(home, w).cString());
             return;
@@ -4205,7 +4303,7 @@ class X86_64
         if (home != (String*)0)
             {
             if (nat >= w)
-                _out.appendFormat("\tmov\t%s, %s\n", rw.cString(), regView(home, w).cString());
+                movFromHome(home, w, rw);
             else if (w32to64)
                 _out.appendFormat("\t%s\t%s, %s\n", sgn ? "movsxd" : "mov",
                                   sgn ? rw.cString() : reg(base, (u32)4).cString(),
@@ -4241,7 +4339,7 @@ class X86_64
         String* home = homeOf(res);
         if (home != (String*)0)
             {
-            _out.appendFormat("\tmov\t%s, %s\n", regView(home, w).cString(), reg(base, w).cString());
+            movIntoHome(home, w, reg(base, w));
             return;
             }
         if (!hasSlot(res))
@@ -4651,6 +4749,27 @@ class X86_64
         if (n.res() == (IRValue*)0 || n.ops().count() < (u32)1)
             return;
         IROperand* k = (IROperand*)n.ops().get((u32)0);
+        // A HOMED float constant has to reach its HOME. This used to write the
+        // raw bits into the slot and stop — "the slot is read back with
+        // movss/movsd", which stopped being true when floats got registers.
+        // float_math's `double acc = 0.0` then started at whatever the seeding
+        // loop had left in that xmm, and came out exactly 1 too high.
+        String* chome = homeOf(n.res());
+        if (isFloatTy(n.res().ty()) && k.kind() == (u8)OPK_IMMF && isXmmHome(chome))
+            {
+            String* h2 = k.fpHex();
+            if (n.res().ty().equals(String.withCString("F64")))
+                {
+                _out.appendFormat("\tmovabs\trax, %s\n", decOfHex64(h2).cString());
+                _out.appendFormat("\tmovq\t%s, rax\n", chome.cString());
+                }
+            else
+                {
+                _out.appendFormat("\tmov\teax, %lu\n", f32BitsOfHex(h2));
+                _out.appendFormat("\tmovd\t%s, eax\n", chome.cString());
+                }
+            return;
+            }
         if (isFloatTy(n.res().ty()) && k.kind() == (u8)OPK_IMMF && hasSlot(n.res()))
             {
             // The immediate carries the raw IEEE DOUBLE bits; the slot is read
@@ -4856,7 +4975,7 @@ class X86_64
             String* home = homeOf(op.val());
             if (home != (String*)0)
                 {
-                _out.appendFormat("\tmov\t%s, %s\n", dst.cString(), regView(home, w).cString());
+                movFromHome(home, w, dst);
                 return;
                 }
             if (hasSlot(op.val()))

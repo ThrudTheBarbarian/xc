@@ -374,9 +374,9 @@ static NSInteger sWin64SretOff = 0;
         if (home)
             {
             if (w >= 8)
-                [out appendFormat:@"\tmov\t%@, %@\n", r64, [self regView:home width:8]];
+                [self movFromHome:home width:8 into:r64 out:out];
             else if (w == 4)
-                [out appendFormat:@"\tmov\t%@, %@\n", r32, [self regView:home width:4]];
+                [self movFromHome:home width:4 into:r32 out:out];
             else
                 [out appendFormat:@"\tmovzx\t%@, %@\n", r32, [self regView:home width:w]];
             return;
@@ -431,7 +431,7 @@ static NSInteger sWin64SretOff = 0;
         if (home)
             {
             if (nat >= w)
-                [out appendFormat:@"\tmov\t%@, %@\n", rw, [self regView:home width:w]];
+                [self movFromHome:home width:w into:rw out:out];
             else if (w32to64)
                 [out appendFormat:@"\t%@\t%@, %@\n", sg ? @"movsxd" : @"mov",
                                   sg ? rw : [self reg:base width:4], [self regView:home width:4]];
@@ -529,6 +529,15 @@ static NSInteger sWin64SretOff = 0;
     XTIRValue* v = fn.values[@(op.valueId)];
     NSNumber* s = slot[@(op.valueId)];
     BOOL d = v && v.type.kind == XTIRTypeKindF64;
+    // A HOMED float never has its slot written, so reading the slot here would
+    // read whatever was in it before the value was homed.
+    NSString* fhome = sHome[@(op.valueId)];
+    if (fhome && [self isXmmHome:fhome])
+        {
+        if (![fhome isEqualToString:xmm])
+            [out appendFormat:@"\tmovaps\t%@, %@\n", xmm, fhome];
+        return;
+        }
     if (s)
         [out appendFormat:@"\tmov%@\t%@, [rbp-%@]\n", d ? @"sd" : @"ss", xmm, s];
     else
@@ -541,6 +550,13 @@ static NSInteger sWin64SretOff = 0;
     {
     if (!res)
         return;
+    NSString* fhome = sHome[@(res.valueId)];
+    if (fhome && [self isXmmHome:fhome])
+        {
+        if (![fhome isEqualToString:xmm])
+            [out appendFormat:@"\tmovaps\t%@, %@\n", fhome, xmm];
+        return;
+        }
     NSNumber* s = slot[@(res.valueId)];
     if (!s)
         return;
@@ -568,7 +584,7 @@ static NSInteger sWin64SretOff = 0;
         // homed → read the register
         if (home)
             {
-            [out appendFormat:@"\tmov\t%@, %@\n", [self reg:base width:w], [self regView:home width:w]];
+            [self movFromHome:home width:w into:[self reg:base width:w] out:out];
             }
         else if (s)
             {
@@ -601,7 +617,7 @@ static NSInteger sWin64SretOff = 0;
     NSString* home = sHome[@(res.valueId)];
     if (home)
         {
-        [out appendFormat:@"\tmov\t%@, %@\n", [self regView:home width:w], [self reg:base width:w]];
+        [self movIntoHome:home width:w from:[self reg:base width:w] out:out];
         return;
         }
     NSNumber* s = slot[@(res.valueId)];
@@ -694,7 +710,7 @@ static NSInteger sWin64SretOff = 0;
         NSString* home = sHome[@(op.valueId)];
         if (home)
             {
-            [out appendFormat:@"\tmov\t%@, %@\n", dst, [self regView:home width:w]];
+            [self movFromHome:home width:w into:dst out:out];
             return;
             }
         NSNumber* s = slot[@(op.valueId)];
@@ -776,9 +792,9 @@ static NSInteger sWin64SretOff = 0;
     if (home)
         {
         if (w >= 8)
-            [out appendFormat:@"\tmov\t%@, %@\n", r64, [self regView:home width:8]];
+            [self movFromHome:home width:8 into:r64 out:out];
         else if (w == 4)
-            [out appendFormat:@"\tmov\t%@, %@\n", r32, [self regView:home width:4]];
+            [self movFromHome:home width:4 into:r32 out:out];
         else
             [out appendFormat:@"\tmovzx\t%@, %@\n", r32, [self regView:home width:w]];
         return;
@@ -889,6 +905,37 @@ static NSInteger sWin64SretOff = 0;
             }
         }
     return [lines componentsJoinedByString:@"\n"];
+}
+
+
+// Move a value between its HOME register and a GP register, choosing the
+// cross-file instruction when the home is an xmm one. `mov ecx, xmm9` is not an
+// instruction: between the integer and FP files it is movd (32) / movq (64).
+// Floats are homed now, and a Load or Store of float BITS still goes through a
+// GP register, so both directions occur.
+//
+// Added AFTER the call sites were rewritten, deliberately: the other way round,
+// a mechanical rewrite matches this method's own else branch and it calls
+// itself. That is a stack overflow, and it surfaces as EXC_BAD_ACCESS inside
+// CoreFoundation string code, which looks nothing like recursion.
++ (BOOL)isXmmHome:(NSString*)r { return [r hasPrefix:@"xmm"]; }
+
++ (void)movFromHome:(NSString*)home width:(NSUInteger)w
+               into:(NSString*)dst out:(NSMutableString*)out
+{
+    if ([self isXmmHome:home])
+        [out appendFormat:@"\t%@\t%@, %@\n", w >= 8 ? @"movq" : @"movd", dst, home];
+    else
+        [out appendFormat:@"\tmov\t%@, %@\n", dst, [self regView:home width:w]];
+}
+
++ (void)movIntoHome:(NSString*)home width:(NSUInteger)w
+               from:(NSString*)src out:(NSMutableString*)out
+{
+    if ([self isXmmHome:home])
+        [out appendFormat:@"\t%@\t%@, %@\n", w >= 8 ? @"movq" : @"movd", home, src];
+    else
+        [out appendFormat:@"\tmov\t%@, %@\n", [self regView:home width:w], src];
 }
 
 // ── Copy-propagation peephole ────────────────────────────────────────────
@@ -1768,11 +1815,35 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
         {
         NSMutableSet<NSNumber*>* excluded = [NSMutableSet setWithArray:fold.allKeys];
         [excluded unionSet:fused]; // fused ICmp results are never materialised
+        // Floats used to stay in slots entirely, and float_math showed it:
+        // sixteen instructions for four of arithmetic, every intermediate
+        // stored and immediately reloaded. Every xmm is caller-saved under
+        // SysV, so these are a CALLER tier and the allocator's crossesCall test
+        // keeps anything live across a call out of them by itself.
+        //
+        // xmm0/xmm1 are emission scratch and xmm2-xmm15 are the vectoriser's
+        // pool, so this is gated on the function having no Vec value at all,
+        // exactly as arm64 gates d18-d31 on fnHasVector.
+        BOOL fnHasVector = NO;
+        for (XTIRBlock* vb in fn.blocks)
+            {
+            for (XTIRInsn* vi in vb.instructions)
+                if (vi.result && vi.result.type && vi.result.type.kind == XTIRTypeKindVec)
+                    { fnHasVector = YES; break; }
+            if (fnHasVector) break;
+            for (XTIRInsn* vp in vb.phiNodes)
+                if (vp.result && vp.result.type && vp.result.type.kind == XTIRTypeKindVec)
+                    { fnHasVector = YES; break; }
+            if (fnHasVector) break;
+            }
+        NSArray<NSString*>* fpPool = fnHasVector ? @[]
+            : @[ @"xmm8", @"xmm9", @"xmm10", @"xmm11", @"xmm12", @"xmm13",
+                 @"xmm14", @"xmm15" ];
         XTHomingResult* hr = [XTHomingAllocator assignHomesForFunction:fn
                                                               gpCallee:@[ @"rbx", @"r12", @"r13", @"r14", @"r15" ]
                                                               gpCaller:@[]
                                                               fpCallee:@[]
-                                                              fpCaller:@[]
+                                                              fpCaller:fpPool
                                                               excluded:excluded
                                                               foldInfo:fold];
         sHome = hr.homeReg;
@@ -1979,7 +2050,18 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
         {
         NSString* home = sHome[@(i)];
         NSNumber* s = slot[@(i)];
-        if (home && s)
+        if (!home || !s)
+            continue;
+        // A float parameter homed in an xmm needs the FP load. `mov xmm9,
+        // [rbp-16]` is not an instruction — and the in-house assembler ACCEPTED
+        // it rather than refusing, so logical_not_float simply read rubbish for
+        // its parameters instead of failing to build.
+        XTIRValue* pv = fn.values[@(i)];
+        if ([self isXmmHome:home])
+            [out appendFormat:@"\tmov%@\t%@, [rbp-%@]\n",
+                              (pv && pv.type.kind == XTIRTypeKindF64) ? @"sd" : @"ss",
+                              home, s];
+        else
             [out appendFormat:@"\tmov\t%@, [rbp-%@]\n", home, s];
         }
 
@@ -3233,6 +3315,30 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         if (res && ops.count >= 1)
             {
             NSNumber* s = slot[@(res.valueId)];
+            // A HOMED float constant has to reach its HOME. This used to write
+            // the raw bits into the slot and stop — "it's read back via
+            // movss/movsd", which stopped being true when floats got
+            // registers. float_math's `double acc = 0.0` then started at
+            // whatever the seeding loop had left in that xmm (b[4095] == 1.0),
+            // and the benchmark came out exactly 1 too high.
+            NSString* chome = sHome[@(res.valueId)];
+            if ([self isFloatVal:res] && ops[0].kind == XTIROperandKindImmF &&
+                chome && [self isXmmHome:chome])
+                {
+                union { uint64_t u; double d; } c;
+                c.u = ops[0].floatRawBytes;
+                if (res.type.kind == XTIRTypeKindF64)
+                    [out appendFormat:@"\tmovabs\trax, %llu\n\tmovq\t%@, rax\n",
+                                      (unsigned long long)c.u, chome];
+                else
+                    {
+                    union { uint32_t u; float f; } f;
+                    f.f = (float)c.d;
+                    [out appendFormat:@"\tmov\teax, %u\n\tmovd\t%@, eax\n",
+                                      (unsigned)f.u, chome];
+                    }
+                return;
+                }
             if ([self isFloatVal:res] && ops[0].kind == XTIROperandKindImmF && s)
                 {
                     // ImmF carries the raw IEEE *double* bits; store the slot's bits
