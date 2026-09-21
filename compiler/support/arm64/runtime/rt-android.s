@@ -47,7 +47,7 @@ _xtc_alloc:                             // @_xtc_alloc
 	str	x30, [sp, #-48]!                // 8-byte Folded Spill
 	cmp	x0, #1
 	stp	x20, x19, [sp, #32]             // 16-byte Folded Spill
-	mov	w9, #256                        // =0x100
+	mov	w9, #16                         // =0x10
 	csinc	x20, x0, xzr, hi
 	mov	x19, x1
 	mov	w0, #1                          // =0x1
@@ -55,7 +55,7 @@ _xtc_alloc:                             // @_xtc_alloc
 	stp	x22, x21, [sp, #16]             // 16-byte Folded Spill
 	mov	x21, x2
 	mov	w22, #1                         // =0x1
-	cmp	x8, #256
+	cmp	x8, #16
 	csel	x8, x8, x9, hi
 	add	x1, x8, #40
 	bl	calloc
@@ -96,9 +96,9 @@ _xtc_new_u8:                            // @_xtc_new_u8
 	str	x30, [sp, #-32]!                // 8-byte Folded Spill
 	cmp	x0, #1
 	stp	x20, x19, [sp, #16]             // 16-byte Folded Spill
-	mov	w8, #256                        // =0x100
+	mov	w8, #16                         // =0x10
 	csinc	x19, x0, xzr, hi
-	cmp	x0, #256
+	cmp	x0, #16
 	mov	w20, #1                         // =0x1
 	csel	x8, x0, x8, hi
 	mov	w0, #1                          // =0x1
@@ -140,9 +140,9 @@ _xtc_new_i8:                            // @_xtc_new_i8
 	str	x30, [sp, #-32]!                // 8-byte Folded Spill
 	cmp	x0, #1
 	stp	x20, x19, [sp, #16]             // 16-byte Folded Spill
-	mov	w8, #256                        // =0x100
+	mov	w8, #16                         // =0x10
 	csinc	x19, x0, xzr, hi
-	cmp	x0, #256
+	cmp	x0, #16
 	mov	w20, #1                         // =0x1
 	csel	x8, x0, x8, hi
 	mov	w0, #1                          // =0x1
@@ -184,12 +184,12 @@ _xtc_new_u16:                           // @_xtc_new_u16
 	str	x30, [sp, #-32]!                // 8-byte Folded Spill
 	cmp	x0, #1
 	stp	x20, x19, [sp, #16]             // 16-byte Folded Spill
-	mov	w8, #256                        // =0x100
+	mov	w8, #16                         // =0x10
 	csinc	x19, x0, xzr, hi
 	mov	w0, #1                          // =0x1
 	mov	w20, #1                         // =0x1
 	lsl	x9, x19, #1
-	cmp	x9, #256
+	cmp	x9, #16
 	csel	x8, x9, x8, hi
 	add	x1, x8, #40
 	bl	calloc
@@ -230,12 +230,12 @@ _xtc_new_i16:                           // @_xtc_new_i16
 	str	x30, [sp, #-32]!                // 8-byte Folded Spill
 	cmp	x0, #1
 	stp	x20, x19, [sp, #16]             // 16-byte Folded Spill
-	mov	w8, #256                        // =0x100
+	mov	w8, #16                         // =0x10
 	csinc	x19, x0, xzr, hi
 	mov	w0, #1                          // =0x1
 	mov	w20, #1                         // =0x1
 	lsl	x9, x19, #1
-	cmp	x9, #256
+	cmp	x9, #16
 	csel	x8, x9, x8, hi
 	add	x1, x8, #40
 	bl	calloc
@@ -276,12 +276,12 @@ _xtc_new_u32:                           // @_xtc_new_u32
 	str	x30, [sp, #-32]!                // 8-byte Folded Spill
 	cmp	x0, #1
 	stp	x20, x19, [sp, #16]             // 16-byte Folded Spill
-	mov	w8, #256                        // =0x100
+	mov	w8, #16                         // =0x10
 	csinc	x19, x0, xzr, hi
 	mov	w0, #1                          // =0x1
 	mov	w20, #1                         // =0x1
 	lsl	x9, x19, #2
-	cmp	x9, #256
+	cmp	x9, #16
 	csel	x8, x9, x8, hi
 	add	x1, x8, #40
 	bl	calloc
@@ -322,12 +322,12 @@ _xtc_new_i32:                           // @_xtc_new_i32
 	str	x30, [sp, #-32]!                // 8-byte Folded Spill
 	cmp	x0, #1
 	stp	x20, x19, [sp, #16]             // 16-byte Folded Spill
-	mov	w8, #256                        // =0x100
+	mov	w8, #16                         // =0x10
 	csinc	x19, x0, xzr, hi
 	mov	w0, #1                          // =0x1
 	mov	w20, #1                         // =0x1
 	lsl	x9, x19, #2
-	cmp	x9, #256
+	cmp	x9, #16
 	csel	x8, x9, x8, hi
 	add	x1, x8, #40
 	bl	calloc
@@ -368,12 +368,12 @@ _xtc_new_pointer:                       // @_xtc_new_pointer
 	str	x30, [sp, #-32]!                // 8-byte Folded Spill
 	cmp	x0, #1
 	stp	x20, x19, [sp, #16]             // 16-byte Folded Spill
-	mov	w8, #256                        // =0x100
+	mov	w8, #16                         // =0x10
 	csinc	x19, x0, xzr, hi
 	mov	w0, #1                          // =0x1
 	mov	w20, #1                         // =0x1
 	lsl	x9, x19, #3
-	cmp	x9, #256
+	cmp	x9, #16
 	csel	x8, x9, x8, hi
 	add	x1, x8, #40
 	bl	calloc
@@ -414,9 +414,9 @@ _xtc_new_bool:                          // @_xtc_new_bool
 	str	x30, [sp, #-32]!                // 8-byte Folded Spill
 	cmp	x0, #1
 	stp	x20, x19, [sp, #16]             // 16-byte Folded Spill
-	mov	w8, #256                        // =0x100
+	mov	w8, #16                         // =0x10
 	csinc	x19, x0, xzr, hi
-	cmp	x0, #256
+	cmp	x0, #16
 	mov	w20, #1                         // =0x1
 	csel	x8, x0, x8, hi
 	mov	w0, #1                          // =0x1
@@ -458,12 +458,12 @@ _xtc_new_float:                         // @_xtc_new_float
 	str	x30, [sp, #-32]!                // 8-byte Folded Spill
 	cmp	x0, #1
 	stp	x20, x19, [sp, #16]             // 16-byte Folded Spill
-	mov	w8, #256                        // =0x100
+	mov	w8, #16                         // =0x10
 	csinc	x19, x0, xzr, hi
 	mov	w0, #1                          // =0x1
 	mov	w20, #1                         // =0x1
 	lsl	x9, x19, #2
-	cmp	x9, #256
+	cmp	x9, #16
 	csel	x8, x9, x8, hi
 	add	x1, x8, #40
 	bl	calloc
@@ -504,12 +504,12 @@ _xtc_new_double:                        // @_xtc_new_double
 	str	x30, [sp, #-32]!                // 8-byte Folded Spill
 	cmp	x0, #1
 	stp	x20, x19, [sp, #16]             // 16-byte Folded Spill
-	mov	w8, #256                        // =0x100
+	mov	w8, #16                         // =0x10
 	csinc	x19, x0, xzr, hi
 	mov	w0, #1                          // =0x1
 	mov	w20, #1                         // =0x1
 	lsl	x9, x19, #3
-	cmp	x9, #256
+	cmp	x9, #16
 	csel	x8, x9, x8, hi
 	add	x1, x8, #40
 	bl	calloc
@@ -550,12 +550,12 @@ _xtc_new_string:                        // @_xtc_new_string
 	str	x30, [sp, #-32]!                // 8-byte Folded Spill
 	cmp	x0, #1
 	stp	x20, x19, [sp, #16]             // 16-byte Folded Spill
-	mov	w8, #256                        // =0x100
+	mov	w8, #16                         // =0x10
 	csinc	x19, x0, xzr, hi
 	mov	w0, #1                          // =0x1
 	mov	w20, #1                         // =0x1
 	lsl	x9, x19, #3
-	cmp	x9, #256
+	cmp	x9, #16
 	csel	x8, x9, x8, hi
 	add	x1, x8, #40
 	bl	calloc
@@ -718,25 +718,29 @@ _xtc_weak_unregister:                   // @_xtc_weak_unregister
 .Lrt_BB15_2:
 	mov	x8, x19
 	ldr	x9, [x8, #-16]!
-	cbz	x9, .Lrt_BB15_6
+	cbz	x9, .Lrt_BB15_7
 // %bb.3:
+	ldr	x10, [x9]
+	cmp	x10, x19
+	b.ne	.Lrt_BB15_6
+// %bb.4:
 	ldur	x10, [x19, #-8]
 	str	x10, [x9]
-	cbz	x10, .Lrt_BB15_5
-// %bb.4:
+	cbz	x10, .Lrt_BB15_6
+// %bb.5:
 	stur	x9, [x10, #-16]
-.Lrt_BB15_5:
-	stp	xzr, xzr, [x8]
 .Lrt_BB15_6:
+	stp	xzr, xzr, [x8]
+.Lrt_BB15_7:
 	ldr	w8, [x20, :lo12:_xt_threads_active]
-	cbz	w8, .Lrt_BB15_8
-// %bb.7:
+	cbz	w8, .Lrt_BB15_9
+// %bb.8:
 	ldp	x20, x19, [sp, #16]             // 16-byte Folded Reload
 	adrp	x0, xt_rt_mtx
 	add	x0, x0, :lo12:xt_rt_mtx
 	ldr	x30, [sp], #32                  // 8-byte Folded Reload
 	b	pthread_mutex_unlock
-.Lrt_BB15_8:
+.Lrt_BB15_9:
 	ldp	x20, x19, [sp, #16]             // 16-byte Folded Reload
 	ldr	x30, [sp], #32                  // 8-byte Folded Reload
 	ret
@@ -796,43 +800,47 @@ _xtc_weak_register:                     // @_xtc_weak_register
 .Lrt_BB18_2:
 	mov	x8, x20
 	ldr	x9, [x8, #-16]!
-	cbz	x9, .Lrt_BB18_6
+	cbz	x9, .Lrt_BB18_7
 // %bb.3:
+	ldr	x10, [x9]
+	cmp	x10, x20
+	b.ne	.Lrt_BB18_6
+// %bb.4:
 	ldur	x10, [x20, #-8]
 	str	x10, [x9]
-	cbz	x10, .Lrt_BB18_5
-// %bb.4:
+	cbz	x10, .Lrt_BB18_6
+// %bb.5:
 	stur	x9, [x10, #-16]
-.Lrt_BB18_5:
-	stp	xzr, xzr, [x8]
 .Lrt_BB18_6:
-	cbz	x19, .Lrt_BB18_12
-// %bb.7:
+	stp	xzr, xzr, [x8]
+.Lrt_BB18_7:
+	cbz	x19, .Lrt_BB18_13
+// %bb.8:
 	ldur	w8, [x19, #-40]
 	mov	w9, #20290                      // =0x4f42
 	movk	w9, #22612, lsl #16
 	cmp	w8, w9
-	b.ne	.Lrt_BB18_12
-// %bb.8:
+	b.ne	.Lrt_BB18_13
+// %bb.9:
 	ldr	x8, [x19, #-12]!
 	mov	x9, x20
 	str	x8, [x9, #-8]!
 	stur	x19, [x9, #-8]
-	cbz	x8, .Lrt_BB18_10
-// %bb.9:
+	cbz	x8, .Lrt_BB18_11
+// %bb.10:
 	stur	x9, [x8, #-16]
-.Lrt_BB18_10:
+.Lrt_BB18_11:
 	ldr	w8, [x21, :lo12:_xt_threads_active]
 	str	x20, [x19]
-	cbnz	w8, .Lrt_BB18_13
-.Lrt_BB18_11:
+	cbnz	w8, .Lrt_BB18_14
+.Lrt_BB18_12:
 	ldp	x20, x19, [sp, #16]             // 16-byte Folded Reload
 	ldp	x30, x21, [sp], #32             // 16-byte Folded Reload
 	ret
-.Lrt_BB18_12:
-	ldr	w8, [x21, :lo12:_xt_threads_active]
-	cbz	w8, .Lrt_BB18_11
 .Lrt_BB18_13:
+	ldr	w8, [x21, :lo12:_xt_threads_active]
+	cbz	w8, .Lrt_BB18_12
+.Lrt_BB18_14:
 	ldp	x20, x19, [sp, #16]             // 16-byte Folded Reload
 	adrp	x0, xt_rt_mtx
 	add	x0, x0, :lo12:xt_rt_mtx

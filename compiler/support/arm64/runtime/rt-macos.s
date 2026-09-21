@@ -55,8 +55,8 @@ __xtc_alloc:                            ; @_xtc_alloc
 	cmp	x0, #1
 	csinc	x21, x0, xzr, hi
 	mul	x8, x21, x1
-	mov	w9, #256                        ; =0x100
-	cmp	x8, #256
+	mov	w9, #16                         ; =0x10
+	cmp	x8, #16
 	csel	x8, x8, x9, hi
 	mov	w22, #1                         ; =0x1
 	add	x1, x8, #40
@@ -111,8 +111,8 @@ __xtc_new_u8:                           ; @_xtc_new_u8
 	.cfi_offset w20, -32
 	cmp	x0, #1
 	csinc	x19, x0, xzr, hi
-	mov	w8, #256                        ; =0x100
-	cmp	x0, #256
+	mov	w8, #16                         ; =0x10
+	cmp	x0, #16
 	csel	x8, x0, x8, hi
 	mov	w20, #1                         ; =0x1
 	add	x1, x8, #40
@@ -152,8 +152,8 @@ __xtc_new_i8:                           ; @_xtc_new_i8
 	.cfi_offset w20, -32
 	cmp	x0, #1
 	csinc	x19, x0, xzr, hi
-	mov	w8, #256                        ; =0x100
-	cmp	x0, #256
+	mov	w8, #16                         ; =0x10
+	cmp	x0, #16
 	csel	x8, x0, x8, hi
 	mov	w20, #1                         ; =0x1
 	add	x1, x8, #40
@@ -194,8 +194,8 @@ __xtc_new_u16:                          ; @_xtc_new_u16
 	cmp	x0, #1
 	csinc	x19, x0, xzr, hi
 	lsl	x8, x19, #1
-	mov	w9, #256                        ; =0x100
-	cmp	x8, #256
+	mov	w9, #16                         ; =0x10
+	cmp	x8, #16
 	csel	x8, x8, x9, hi
 	mov	w20, #1                         ; =0x1
 	add	x1, x8, #40
@@ -237,8 +237,8 @@ __xtc_new_i16:                          ; @_xtc_new_i16
 	cmp	x0, #1
 	csinc	x19, x0, xzr, hi
 	lsl	x8, x19, #1
-	mov	w9, #256                        ; =0x100
-	cmp	x8, #256
+	mov	w9, #16                         ; =0x10
+	cmp	x8, #16
 	csel	x8, x8, x9, hi
 	mov	w20, #1                         ; =0x1
 	add	x1, x8, #40
@@ -280,8 +280,8 @@ __xtc_new_u32:                          ; @_xtc_new_u32
 	cmp	x0, #1
 	csinc	x19, x0, xzr, hi
 	lsl	x8, x19, #2
-	mov	w9, #256                        ; =0x100
-	cmp	x8, #256
+	mov	w9, #16                         ; =0x10
+	cmp	x8, #16
 	csel	x8, x8, x9, hi
 	mov	w20, #1                         ; =0x1
 	add	x1, x8, #40
@@ -323,8 +323,8 @@ __xtc_new_i32:                          ; @_xtc_new_i32
 	cmp	x0, #1
 	csinc	x19, x0, xzr, hi
 	lsl	x8, x19, #2
-	mov	w9, #256                        ; =0x100
-	cmp	x8, #256
+	mov	w9, #16                         ; =0x10
+	cmp	x8, #16
 	csel	x8, x8, x9, hi
 	mov	w20, #1                         ; =0x1
 	add	x1, x8, #40
@@ -366,8 +366,8 @@ __xtc_new_pointer:                      ; @_xtc_new_pointer
 	cmp	x0, #1
 	csinc	x19, x0, xzr, hi
 	lsl	x8, x19, #3
-	mov	w9, #256                        ; =0x100
-	cmp	x8, #256
+	mov	w9, #16                         ; =0x10
+	cmp	x8, #16
 	csel	x8, x8, x9, hi
 	mov	w20, #1                         ; =0x1
 	add	x1, x8, #40
@@ -408,8 +408,8 @@ __xtc_new_bool:                         ; @_xtc_new_bool
 	.cfi_offset w20, -32
 	cmp	x0, #1
 	csinc	x19, x0, xzr, hi
-	mov	w8, #256                        ; =0x100
-	cmp	x0, #256
+	mov	w8, #16                         ; =0x10
+	cmp	x0, #16
 	csel	x8, x0, x8, hi
 	mov	w20, #1                         ; =0x1
 	add	x1, x8, #40
@@ -450,8 +450,8 @@ __xtc_new_float:                        ; @_xtc_new_float
 	cmp	x0, #1
 	csinc	x19, x0, xzr, hi
 	lsl	x8, x19, #2
-	mov	w9, #256                        ; =0x100
-	cmp	x8, #256
+	mov	w9, #16                         ; =0x10
+	cmp	x8, #16
 	csel	x8, x8, x9, hi
 	mov	w20, #1                         ; =0x1
 	add	x1, x8, #40
@@ -493,8 +493,8 @@ __xtc_new_double:                       ; @_xtc_new_double
 	cmp	x0, #1
 	csinc	x19, x0, xzr, hi
 	lsl	x8, x19, #3
-	mov	w9, #256                        ; =0x100
-	cmp	x8, #256
+	mov	w9, #16                         ; =0x10
+	cmp	x8, #16
 	csel	x8, x8, x9, hi
 	mov	w20, #1                         ; =0x1
 	add	x1, x8, #40
@@ -536,8 +536,8 @@ __xtc_new_string:                       ; @_xtc_new_string
 	cmp	x0, #1
 	csinc	x19, x0, xzr, hi
 	lsl	x8, x19, #3
-	mov	w9, #256                        ; =0x100
-	cmp	x8, #256
+	mov	w9, #16                         ; =0x10
+	cmp	x8, #16
 	csel	x8, x8, x9, hi
 	mov	w20, #1                         ; =0x1
 	add	x1, x8, #40

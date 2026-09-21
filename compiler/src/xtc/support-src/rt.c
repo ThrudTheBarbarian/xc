@@ -38,7 +38,7 @@
 #define XT_RC_DYING   0x80000000U   /* poison: a nested release cannot reach 0 */
 
 void *_xtc_alloc(unsigned long count,unsigned long stride,void(*dealloc)(void*)){
-    if(count<1)count=1;unsigned long b=count*stride;if(b<256)b=256;
+    if(count<1)count=1;unsigned long b=count*stride;if(b<16)b=16;
     uint8_t*p=(uint8_t*)calloc(1,b+XT_HDR);
     if(!p){fprintf(stderr,"xcc: out of memory allocating %lu x %lu bytes\n",count,stride);abort();}
     *(uint32_t*)(p+XT_MAGIC_OFF)=0x58544F42U;*(unsigned long*)(p+XT_STRIDE_OFF)=stride;
