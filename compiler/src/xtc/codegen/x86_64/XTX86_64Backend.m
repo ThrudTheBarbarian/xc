@@ -2388,13 +2388,51 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         NSUInteger stride = (base && base.type.pointeeType) ? [self fieldWidth:base.type.pointeeType] : 1;
         if (stride == 0)
             stride = 1;
-        [self loadZX:ops[0] into:'a' fn:fn slot:slot out:out];    // rax = base
-        [self loadIndex:ops[1] into:'c' fn:fn slot:slot out:out]; // rcx = index, sign-aware
-        if (stride == 1 || stride == 2 || stride == 4 || stride == 8)
-            [out appendFormat:@"\tlea\trax, [rax + rcx*%lu]\n", (unsigned long)stride];
+        // A CONSTANT index folds into the displacement, and a HOMED base is
+        // already in a register, so `p + 4` is one lea. It used to be four
+        // instructions —
+        //     mov rax, <base> ; mov rcx, 4 ; lea rax, [rax+rcx*4] ; mov <dst>, rax
+        // — and mem_copy's vectorised body was mostly that: eight instructions
+        // of addressing for four of work, twice per unrolled copy.
+        NSString* rh = res ? sHome[@(res.valueId)] : nil;
+        if (rh && [self isXmmHome:rh])
+            rh = nil; // an address never lives in an xmm
+        NSString* dst = rh ?: @"rax";
+        NSString* bh = (ops[0].kind == XTIROperandKindUse) ? sHome[@(ops[0].valueId)] : nil;
+        if (bh && [self isXmmHome:bh])
+            bh = nil;
+        NSString* bReg = bh;
+        if (!bReg)
+            {
+            [self loadZX:ops[0] into:'a' fn:fn slot:slot out:out]; // rax = base
+            bReg = @"rax";
+            }
+        if (ops[1].kind == XTIROperandKindImmI)
+            {
+            long long disp = (long long)ops[1].intValue * (long long)stride;
+            if (disp == 0)
+                {
+                if (![dst isEqualToString:bReg])
+                    [out appendFormat:@"\tmov\t%@, %@\n", dst, bReg];
+                }
+            else
+                [out appendFormat:@"\tlea\t%@, [%@%+lld]\n", dst, bReg, disp];
+            }
         else
-            [out appendFormat:@"\timul\trcx, rcx, %lu\n\tadd\trax, rcx\n", (unsigned long)stride];
-        [self store:'a' into:res slot:slot out:out];
+            {
+            // rcx is emission scratch and never a home, so loading the index
+            // into it cannot disturb a homed base.
+            [self loadIndex:ops[1] into:'c' fn:fn slot:slot out:out];
+            if (stride == 1 || stride == 2 || stride == 4 || stride == 8)
+                [out appendFormat:@"\tlea\t%@, [%@ + rcx*%lu]\n", dst, bReg, (unsigned long)stride];
+            else
+                {
+                [out appendFormat:@"\timul\trcx, rcx, %lu\n", (unsigned long)stride];
+                [out appendFormat:@"\tlea\t%@, [%@ + rcx]\n", dst, bReg];
+                }
+            }
+        if (!rh)
+            [self store:'a' into:res slot:slot out:out];
         return;
         }
     case XTIROpFieldAddr:
@@ -2413,10 +2451,27 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
             if (idx < pte.layout.fields.count)
                 off = [self fieldOffset:pte.layout index:idx]; // native 8-byte ptrs
             }
-        [self loadZX:ops[0] into:'a' fn:fn slot:slot out:out];
+        // Same as ElementAddr: a homed base needs no load, and the offset is a
+        // displacement rather than a separate add.
+        NSString* rh = res ? sHome[@(res.valueId)] : nil;
+        if (rh && [self isXmmHome:rh])
+            rh = nil;
+        NSString* dst = rh ?: @"rax";
+        NSString* bh = (ops[0].kind == XTIROperandKindUse) ? sHome[@(ops[0].valueId)] : nil;
+        if (bh && [self isXmmHome:bh])
+            bh = nil;
+        NSString* bReg = bh;
+        if (!bReg)
+            {
+            [self loadZX:ops[0] into:'a' fn:fn slot:slot out:out];
+            bReg = @"rax";
+            }
         if (off)
-            [out appendFormat:@"\tadd\trax, %lu\n", (unsigned long)off];
-        [self store:'a' into:res slot:slot out:out];
+            [out appendFormat:@"\tlea\t%@, [%@+%lu]\n", dst, bReg, (unsigned long)off];
+        else if (![dst isEqualToString:bReg])
+            [out appendFormat:@"\tmov\t%@, %@\n", dst, bReg];
+        if (!rh)
+            [self store:'a' into:res slot:slot out:out];
         return;
         }
     case XTIROpRetain:
@@ -3936,6 +3991,37 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
             [out appendFormat:@"\t%@\t%@, %@\n", mov, d, a];
             [out appendFormat:@"\t%@\t%@, %@\n", mn, d, b];
             }
+        return;
+        }
+    // The HIGH half of a 32x32 lane product. SSE2 gives only pmuludq, which
+    // multiplies the EVEN lanes (0 and 2) into two 64-bit results, so the four
+    // high halves take two products and a re-interleave:
+    //
+    //   xmm0 = hi(a0*b0), hi(a2*b2)   in lanes 0 and 2
+    //   xmm1 = hi(a1*b1), hi(a3*b3)   in lanes 0 and 2   (operands swapped
+    //                                  within each pair by pshufd 0xB1)
+    //   shufps 0x88 gathers <h0,h2,h1,h3>, pshufd 0xD8 puts it back in order.
+    //
+    // The operand order matters for aliasing: `a` is dead once both shuffles
+    // have read it, and `b` is read into the DESTINATION last, so d may alias
+    // either input without losing a value that is still needed.
+    case XTIROpVMulHi:
+        {
+        if (!res || ops.count < 2 || ops[0].kind != XTIROperandKindUse || ops[1].kind != XTIROperandKindUse)
+            return;
+        NSString *d = sVec[@(res.valueId)], *a = sVec[@(ops[0].valueId)], *b = sVec[@(ops[1].valueId)];
+        if (!d || !a || !b)
+            return;
+        [out appendFormat:@"\tmovdqa\txmm0, %@\n", a];
+        [out appendFormat:@"\tpmuludq\txmm0, %@\n", b];
+        [out appendString:@"\tpsrlq\txmm0, 32\n"];
+        [out appendFormat:@"\tpshufd\txmm1, %@, 0xB1\n", a];
+        [out appendFormat:@"\tpshufd\t%@, %@, 0xB1\n", d, b];
+        [out appendFormat:@"\tpmuludq\txmm1, %@\n", d];
+        [out appendString:@"\tpsrlq\txmm1, 32\n"];
+        [out appendFormat:@"\tmovdqa\t%@, xmm0\n", d];
+        [out appendFormat:@"\tshufps\t%@, xmm1, 0x88\n", d];
+        [out appendFormat:@"\tpshufd\t%@, %@, 0xD8\n", d, d];
         return;
         }
     // Lane-wise logical shift right by a CONSTANT. SSE2 spells this

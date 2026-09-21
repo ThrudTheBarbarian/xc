@@ -774,7 +774,11 @@ static void emitModRM(NSMutableData *d, int reg, const XOperand *rm) {
                   @"pmaddwd":@[@0x66,@0xF5], @"punpcklbw":@[@0x66,@0x60],
                   // The i16 multiply the vectoriser emits for a widening
                   // product (vectorize_dot, vectorize_widen_tail).
-                  @"pmullw":@[@0x66,@0xD5]};
+                  @"pmullw":@[@0x66,@0xD5],
+                  // The unsigned 32x32 -> 64 lane product over lanes 0
+                  // and 2. SSE2 has no other widening integer multiply,
+                  // and it is what the VMulHi sequence is built from.
+                  @"pmuludq":@[@0x66,@0xF4]};
     });
     NSArray *sr = sseRR[mn];
     // b must NOT be an immediate. Four of these mnemonics (psrlw/psrld/psrlq

@@ -2117,6 +2117,11 @@ class X86Fixup
         // vectorize_widen_tail).
         if (m.equals(String.withCString("pmullw")))
             return (u32)$66D5;
+        // The unsigned 32x32 -> 64 lane product over lanes 0 and 2. SSE2 has no
+        // other widening integer multiply, and it is what the VMulHi sequence
+        // is built from.
+        if (m.equals(String.withCString("pmuludq")))
+            return (u32)$66F4;
         return (u32)$FFFF_FFFF;
         }
 

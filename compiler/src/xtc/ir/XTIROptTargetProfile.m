@@ -704,9 +704,14 @@
     {
     return YES;
     }
-// psrlw/psrld/psrlq, SSE2. The widening multiply the magic divide wants is a
-// different matter (pmuludq plus shuffles), which is why these are two flags.
+// psrlw/psrld/psrlq, SSE2.
 - (BOOL)vectorizesLaneShift
+    {
+    return YES;
+    }
+// pmuludq over both lane pairs plus a re-interleave builds the high half of a
+// 32x32 lane product, so constant division vectorises here too.
+- (BOOL)vectorizesHighMultiply
     {
     return YES;
     }

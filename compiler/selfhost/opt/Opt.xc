@@ -128,7 +128,7 @@ class OptProfile
         // arm64. The other vectorising back ends have no lowering yet, and
         // the pass leaves those loops scalar rather than emitting an opcode
         // they would drop.
-        p._highMul = t.equals(String.withCString("arm64"));
+        p._highMul = t.equals(String.withCString("arm64")) || t.equals(String.withCString("x86_64")) || t.equals(String.withCString("win64"));
         // ushr on arm64, psrlw/psrld/psrlq on x86. Separate from _highMul
         // because a back end can have the lane shift without the widening
         // multiply the magic divide needs.

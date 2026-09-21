@@ -1444,6 +1444,43 @@ class X86_64
         return (String*)0;
         }
 
+    // The HIGH half of a 32x32 lane product. SSE2 gives only pmuludq, which
+    // multiplies the EVEN lanes (0 and 2) into two 64-bit results, so the four
+    // high halves take two products and a re-interleave:
+    //
+    //   xmm0 = hi(a0*b0), hi(a2*b2)   in lanes 0 and 2
+    //   xmm1 = hi(a1*b1), hi(a3*b3)   in lanes 0 and 2   (operands swapped
+    //                                  within each pair by pshufd 0xB1)
+    //   shufps 0x88 gathers <h0,h2,h1,h3>, pshufd 0xD8 puts it back in order.
+    //
+    // The operand order matters for aliasing: `a` is dead once both shuffles
+    // have read it, and `b` is read into the DESTINATION last, so d may alias
+    // either input without losing a value that is still needed.
+    void emitVMulHi(IRInsn* n)
+        {
+        if (n.res() == (IRValue*)0 || n.ops().count() < (u32)2)
+            return;
+        IROperand* o0 = (IROperand*)n.ops().get((u32)0);
+        IROperand* o1 = (IROperand*)n.ops().get((u32)1);
+        if (o0.kind() != (u8)OPK_USE || o1.kind() != (u8)OPK_USE)
+            return;
+        String* d = vecOf(n.res());
+        String* a = vecOf(o0.val());
+        String* b = vecOf(o1.val());
+        if (d == (String*)0 || a == (String*)0 || b == (String*)0)
+            return;
+        _out.appendFormat("\tmovdqa\txmm0, %s\n", a.cString());
+        _out.appendFormat("\tpmuludq\txmm0, %s\n", b.cString());
+        _out.appendCString("\tpsrlq\txmm0, 32\n");
+        _out.appendFormat("\tpshufd\txmm1, %s, 0xB1\n", a.cString());
+        _out.appendFormat("\tpshufd\t%s, %s, 0xB1\n", d.cString(), b.cString());
+        _out.appendFormat("\tpmuludq\txmm1, %s\n", d.cString());
+        _out.appendCString("\tpsrlq\txmm1, 32\n");
+        _out.appendFormat("\tmovdqa\t%s, xmm0\n", d.cString());
+        _out.appendFormat("\tshufps\t%s, xmm1, 0x88\n", d.cString());
+        _out.appendFormat("\tpshufd\t%s, %s, 0xD8\n", d.cString(), d.cString());
+        }
+
     // Lane-wise logical shift right by a CONSTANT. SSE2 spells this
     // psrlw/psrld/psrlq by lane width, all two-address and all taking the count
     // as an 8-bit immediate — there is no lane-wise variable shift below AVX2,
@@ -3745,13 +3782,66 @@ class X86_64
             }
         if (stride == (u32)0)
             stride = (u32)1;
-        loadZX(b, (u8)'a');
-        loadIndex((IROperand*)n.ops().get((u32)1), (u8)'c');
-        if (stride == (u32)1 || stride == (u32)2 || stride == (u32)4 || stride == (u32)8)
-            _out.appendFormat("\tlea\trax, [rax + rcx*%lu]\n", stride);
+        // A CONSTANT index folds into the displacement, and a HOMED base is
+        // already in a register, so `p + 4` is one lea. It used to be four
+        // instructions —
+        //   mov rax, <base> ; mov rcx, 4 ; lea rax, [rax+rcx*4] ; mov <dst>, rax
+        // — and mem_copy's vectorised body was mostly that: eight instructions
+        // of addressing for four of work, twice per unrolled copy.
+        String* rh = homeOf(n.res());
+        if (rh != (String*)0 && isXmmHome(rh))
+            rh = (String*)0; // an address never lives in an xmm
+        String* dst = rh != (String*)0 ? rh : String.withCString("rax");
+        String* bh = (String*)0;
+        if (b.kind() == (u8)OPK_USE && b.val() != (IRValue*)0)
+            bh = homeOf(b.val());
+        if (bh != (String*)0 && isXmmHome(bh))
+            bh = (String*)0;
+        String* bReg = bh;
+        if (bReg == (String*)0)
+            {
+            loadZX(b, (u8)'a');
+            bReg = String.withCString("rax");
+            }
+        IROperand* ix = (IROperand*)n.ops().get((u32)1);
+        if (ix.kind() == (u8)OPK_IMMI)
+            {
+            i64 disp = ix.imm() * (i64)stride;
+            if (disp == (i64)0)
+                {
+                if (!dst.equals(bReg))
+                    _out.appendFormat("\tmov\t%s, %s\n", dst.cString(), bReg.cString());
+                }
+            else
+                {
+                // appendFormat understands ONE `l`, so its widest integer is 32
+                // bits and it has no `%+` — `%+lld` came out literally. Build
+                // the signed displacement by hand, as the printer does.
+                _out.appendCString("\tlea\t");
+                _out.append(dst);
+                _out.appendCString(", [");
+                _out.append(bReg);
+                if (disp >= (i64)0)
+                    _out.appendCString("+");
+                _out.append(String.withI64(disp));
+                _out.appendCString("]\n");
+                }
+            }
         else
-            _out.appendFormat("\timul\trcx, rcx, %lu\n\tadd\trax, rcx\n", stride);
-        store((u8)'a', n.res());
+            {
+            // rcx is emission scratch and never a home, so loading the index
+            // into it cannot disturb a homed base.
+            loadIndex(ix, (u8)'c');
+            if (stride == (u32)1 || stride == (u32)2 || stride == (u32)4 || stride == (u32)8)
+                _out.appendFormat("\tlea\t%s, [%s + rcx*%lu]\n", dst.cString(), bReg.cString(), stride);
+            else
+                {
+                _out.appendFormat("\timul\trcx, rcx, %lu\n", stride);
+                _out.appendFormat("\tlea\t%s, [%s + rcx]\n", dst.cString(), bReg.cString());
+                }
+            }
+        if (rh == (String*)0)
+            store((u8)'a', n.res());
         }
 
     void emitFieldAddr(IRInsn* n)
@@ -3761,10 +3851,30 @@ class X86_64
         if (isFolded(n.res()))
             return;
         u32 off = fieldByteOffset(n);
-        loadZX((IROperand*)n.ops().get((u32)0), (u8)'a');
+        // Same as ElementAddr: a homed base needs no load, and the offset is a
+        // displacement rather than a separate add.
+        IROperand* b0 = (IROperand*)n.ops().get((u32)0);
+        String* rh = homeOf(n.res());
+        if (rh != (String*)0 && isXmmHome(rh))
+            rh = (String*)0;
+        String* dst = rh != (String*)0 ? rh : String.withCString("rax");
+        String* bh = (String*)0;
+        if (b0.kind() == (u8)OPK_USE && b0.val() != (IRValue*)0)
+            bh = homeOf(b0.val());
+        if (bh != (String*)0 && isXmmHome(bh))
+            bh = (String*)0;
+        String* bReg = bh;
+        if (bReg == (String*)0)
+            {
+            loadZX(b0, (u8)'a');
+            bReg = String.withCString("rax");
+            }
         if (off != (u32)0)
-            _out.appendFormat("\tadd\trax, %lu\n", off);
-        store((u8)'a', n.res());
+            _out.appendFormat("\tlea\t%s, [%s+%lu]\n", dst.cString(), bReg.cString(), off);
+        else if (!dst.equals(bReg))
+            _out.appendFormat("\tmov\t%s, %s\n", dst.cString(), bReg.cString());
+        if (rh == (String*)0)
+            store((u8)'a', n.res());
         }
 
     u32 fieldByteOffset(IRInsn* n)
@@ -4772,6 +4882,11 @@ class X86_64
         if (op.equals(String.withCString("VAdd")) || op.equals(String.withCString("VSub")) || op.equals(String.withCString("VMul")) || op.equals(String.withCString("VAnd")) || op.equals(String.withCString("VOr")) || op.equals(String.withCString("VXor")) || op.equals(String.withCString("VMax")) || op.equals(String.withCString("VMin")))
             {
             emitVBin(n);
+            return true;
+            }
+        if (op.equals(String.withCString("VMulHi")))
+            {
+            emitVMulHi(n);
             return true;
             }
         if (op.equals(String.withCString("VLShr")))
