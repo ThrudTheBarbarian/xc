@@ -130,6 +130,7 @@ export default defineConfig({
 								{ label: 'Linker scripts (.lnk)', slug: 'compiler/usage/linker-scripts' },
 							],
 						},
+						{ label: 'Performance', slug: 'compiler/performance' },
 						{ label: 'Future work', slug: 'compiler/future-work' },
 						{
 							label: 'Downloads',
