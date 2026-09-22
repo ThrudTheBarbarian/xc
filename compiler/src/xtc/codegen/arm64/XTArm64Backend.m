@@ -3998,8 +3998,18 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
             // could hit it. Found by the self-hosted float encoder (M5).
             if (XTIRTypeKindIsFloating(insn.result.type.kind)) {
                 BOOL dbl = (insn.result.type.kind == XTIRTypeKindF64);
+                // d16/d17 ONLY. d15 was used here as the second operand's
+                // scratch, and d15 is in the FP HOME pool (d8-d15) — so an
+                // F64 Select silently clobbered whatever value was homed
+                // there. The note above the pool says d16/d17 stay out
+                // because they are the FP scratch; d15 was overlooked, and
+                // this is the one site that used it.
+                //
+                // Three values fit in two registers because fcsel reads both
+                // operands before writing: load op2 into d16 and let the
+                // result land on top of it.
                 NSString *s1 = dbl ? @"d17" : @"s17";
-                NSString *s2 = dbl ? @"d15" : @"s15";
+                NSString *s2 = dbl ? @"d16" : @"s16";
                 NSString *s0 = dbl ? @"d16" : @"s16";
                 [self materialiseOperand:insn.operands[0] intoReg:@"w16" ctx:ctx];
                 [self loadFPOperand:insn.operands[1] intoReg:s1 double:dbl ctx:ctx];

@@ -4952,8 +4952,13 @@ class Arm64
         // through the xc compiler.
         if (isFloatTy(ty)) {
             bool dbl = ty.equals(String.withCString("F64"));
+            // d16/d17 ONLY. d15 was the second operand's scratch here, and
+            // d15 is in the FP HOME pool (d8-d15) — so an F64 Select quietly
+            // clobbered whatever value was homed there. Three values fit in
+            // two registers because fcsel reads both operands before writing:
+            // op2 loads into d16 and the result lands on top of it.
             String* f1 = fregName((u32)17, ty);
-            String* f2 = fregName((u32)15, ty);
+            String* f2 = fregName((u32)16, ty);
             String* f0 = fregName((u32)16, ty);
             materialise((IROperand*)n.ops().get((u32)0), String.withCString("w16"));
             loadFPOperand((IROperand*)n.ops().get((u32)1), f1, dbl);

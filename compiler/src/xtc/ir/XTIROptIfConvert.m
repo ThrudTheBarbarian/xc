@@ -242,6 +242,23 @@ static BOOL isPureMiddle(XTIRBlock* M, XTIRBlock* H, XTIRBlock* dest, XTIRFuncti
             continue;
         if (!([jp containsObject:H] && [jp containsObject:T]))
             continue;
+        // EVERY phi in the join must have exactly the two incomings, for the
+        // same reason the diamond path checks it: the applier SKIPS a phi it
+        // cannot orient, and then deletes the arm underneath it, leaving a phi
+        // naming a block that no longer exists. The diamond path has refused
+        // that since it was written; the triangle path never did, and it is
+        // the older of the two.
+        BOOL triPhisOK = YES;
+        for (XTIRInsn* phi in J.phiNodes)
+            {
+            if (!phi.result || phi.operands.count != 4) { triPhisOK = NO; break; }
+            XTIRBlock* p0 = phi.operands[0].blockRef;
+            XTIRBlock* p1 = phi.operands[2].blockRef;
+            if (!((p0 == H && p1 == T) || (p0 == T && p1 == H)))
+                { triPhisOK = NO; break; }
+            }
+        if (!triPhisOK)
+            continue;
 
         XTIfConvCand* c = [XTIfConvCand new];
         c.H = H;
