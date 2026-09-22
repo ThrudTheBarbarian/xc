@@ -1023,6 +1023,7 @@ class IRValue
     // A SYNTHESISED function carries neither the method attribute set nor the
     // free-function one — only placement, like a data symbol.
     bool _plain;
+    bool _noAttrs;         // compiler-synthesised: print no attributes line
     void setThrows(void)
         {
         _throws = true;
@@ -1125,6 +1126,26 @@ class IRValue
     void setEscapes(void)
         {
         _escapes = true;
+        }
+    // dataGlobal() defaults to escaping, which is the safe answer for a
+    // program's own global. A global the COMPILER synthesises and only ever
+    // reads — the vectoriser's lane-index constant — does not escape, and the
+    // reference says so at construction. Without this the port printed two
+    // extra lines for that symbol and opt-diff called it a divergence.
+    void clearEscapes(void)
+        {
+        _escapes = false;
+        }
+    // A symbol the COMPILER synthesised, which carries no attributes at all.
+    // The reference builds these through a factory that leaves the attribute
+    // dictionary empty, and its printer omits the line when the dictionary is
+    // empty; lowering's own globals populate it and do print. Without the same
+    // distinction the port printed `attributes: { banked: false, cloaked:
+    // false }` for the vectoriser's lane-index constant and opt-diff called it
+    // a divergence.
+    void setNoAttrs(void)
+        {
+        _noAttrs = true;
         }
 
     // Set one attribute by the NAME the text spells it with. The reader has
@@ -1485,6 +1506,12 @@ class IRValue
                 {
                 out.appendCString(" init");
                 out.append(byteList());
+                }
+            if (_noAttrs)
+                {
+                out.append(flagsLine());
+                out.appendCString("\n");
+                return out;
                 }
             out.appendFormat("\n    attributes: { banked: %s, cloaked: %s",
                              _banked ? "true" : "false", _cloaked ? "true" : "false");

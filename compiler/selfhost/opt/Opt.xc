@@ -11119,11 +11119,15 @@ class OptProfile
     // A literal, or a RUNTIME bound; sets _vrMapRT to say which. Kept to ONE
     // call at the use site, and the locals kept in here, because vecMapAt is at
     // the arm64 frame ceiling: the same test written inline cost it 176 bytes.
-    bool vecMapBound(IRInsn* guard, Map* defOf, i32* n)
+    bool vecMapBound(IRInsn* guard, Map* defOf, i64* n)
         {
         _vrMapRT = false;
-        if (vecConst((IROperand*)guard.ops().get((u32)1), defOf, n))
-            return *n > (i32)0;
+        // WIDE: a u32 bound above 2^31 truncated into an i32 came back
+        // negative here and this guard read it as "not a counted loop", so the
+        // shipped compiler left call_depth's 2,800,000,000-trip reduction
+        // scalar while the reference vectorised it.
+        if (vecConstWide((IROperand*)guard.ops().get((u32)1), defOf, n))
+            return *n > (i64)0;
         if (((IROperand*)guard.ops().get((u32)1)).kind() != (u8)OPK_USE)
             return false;
         _vrMapRT = true;
@@ -11178,7 +11182,7 @@ class OptProfile
         IROperand* gl = (IROperand*)guard.ops().get((u32)0);
         if (gl.kind() != (u8)OPK_USE || gl.val() != iv)
             return (VecCand*)0;
-        i32 n = (i32)0;
+        i64 n = (i64)0;
         if (!vecMapBound(guard, defOf, &n))
             return (VecCand*)0;
 
@@ -11327,8 +11331,8 @@ class OptProfile
     IRValue* _vrIv;
     IRBlock* _vrB;
     IRBlock* _vrE;
-    i32 _vrN;
-    i32 _vrIvStart;        // the induction phi's constant start, -1 if not one
+    i64 _vrN;
+    i64 _vrIvStart;        // the induction phi's constant start, -1 if not one
     bool _vrRuntime;       // the bound is a RUNTIME value, not a literal
     bool _vrMapRT;         // ... the same, for the MAP recogniser's own bound check
     u32 _magicM;           // magic multiplier from vecMagicU32
@@ -11355,8 +11359,8 @@ class OptProfile
         _vrIv = (IRValue*)0;
         _vrB = (IRBlock*)0;
         _vrE = (IRBlock*)0;
-        _vrN = (i32)0;
-        _vrIvStart = (i32)-1;
+        _vrN = (i64)0;
+        _vrIvStart = (i64)-1;
         _vrRuntime = false;
         _vrMapRT = false;
         _vrBoundOp = (IROperand*)0;
@@ -11408,10 +11412,10 @@ class OptProfile
         // and dot-product recognisers, and only the reduction opts in (via
         // _vrAllowRT). The predicate check and the invariance check are the
         // caller's, keeping this routine's frame cost at zero new locals.
-        i32 n = (i32)0;
+        i64 n = (i64)0;
         _vrRuntime = false;
         _vrBoundOp = (IROperand*)guard.ops().get((u32)1);
-        if (!vecConst(_vrBoundOp, defOf, &n))
+        if (!vecConstWide(_vrBoundOp, defOf, &n))
             {
             if (!_vrAllowRT)
                 {
@@ -11481,7 +11485,7 @@ class OptProfile
         IRValue* iv = _vrIv;
         IRBlock* B = _vrB;
         IRBlock* E = _vrE;
-        i32 n = _vrN;
+        i64 n = _vrN;
         IRValue* acc = accPhi.res();
         IROperand* nextOp = vecBackOp(ivPhi, B);
         if (nextOp == (IROperand*)0 || nextOp.kind() != (u8)OPK_USE)
@@ -11569,7 +11573,7 @@ class OptProfile
         // vecIvStartsAtZero); folded into this condition rather than written as
         // its own statement, because a separate branch costs frame slots and
         // vecWideningAt sits 80 bytes from the arm64 budget.
-        if (vw < (u32)2 || _vrIvStart < (i32)0)
+        if (vw < (u32)2 || _vrIvStart < (i64)0)
             return (VecCand*)0;
         if (!_vrRuntime && _vrIvStart >= n)
             return (VecCand*)0;
@@ -11593,9 +11597,9 @@ class OptProfile
             if (bdb != (Object*)0 && ((IRBlock*)bdb == H || (IRBlock*)bdb == B))
                 return (VecCand*)0;
             }
-        i32 redTrip = n - _vrIvStart;
-        i32 epiM = _vrIvStart + (redTrip - (redTrip % (i32)vw));
-        if (!_vrRuntime && epiM != n && (epiM - _vrIvStart) < (i32)vw)
+        i64 redTrip = n - _vrIvStart;
+        i64 epiM = _vrIvStart + (redTrip - (redTrip % (i64)vw));
+        if (!_vrRuntime && epiM != n && (epiM - _vrIvStart) < (i64)vw)
             return (VecCand*)0;
         // A NON-ZERO start is refused, and this is a BUG FIX (#1125), not
         // caution. The transform steps the EXISTING induction phi by the vector
@@ -12073,6 +12077,51 @@ class OptProfile
         }
 
     // A compile-time integer through Const and the width casts.
+    // The 64-bit form, for a loop BOUND. The narrow one below truncates, and a
+    // u32 bound above 2^31 then reads as negative — which the `n <= 0` guards
+    // took for "not a constant loop" and refused. Everything else it is asked
+    // for (a step, a shift, a delta) is genuinely small and keeps the narrow
+    // form. The reference uses int64_t on this path throughout.
+    bool vecConstWide(IROperand* op, Map* defOf, i64* out)
+        {
+        if (op.kind() == (u8)OPK_IMMI)
+            {
+            out[0] = op.imm();
+            return true;
+            }
+        if (op.kind() != (u8)OPK_USE)
+            return false;
+        IRValue* cur = op.val();
+        for (u32 d = (u32)0; d < (u32)16; d = d + (u32)1)
+            {
+            Object* o = defOf.get((Hashable*)cur);
+            if (o == (Object*)0)
+                return false;
+            IRInsn* def = (IRInsn*)o;
+            if (def.ops().count() < (u32)1)
+                return false;
+            IROperand* a = (IROperand*)def.ops().get((u32)0);
+            if (def.op().equals(String.withCString("Const")))
+                {
+                if (a.kind() != (u8)OPK_IMMI)
+                    return false;
+                out[0] = a.imm();
+                return true;
+                }
+            if (!def.op().equals(String.withCString("ZExt")) && !def.op().equals(String.withCString("SExt")) && !def.op().equals(String.withCString("Trunc")))
+                return false;
+            if (a.kind() == (u8)OPK_IMMI)
+                {
+                out[0] = a.imm();
+                return true;
+                }
+            if (a.kind() != (u8)OPK_USE)
+                return false;
+            cur = a.val();
+            }
+        return false;
+        }
+
     bool vecConst(IROperand* op, Map* defOf, i32* out)
         {
         if (op.kind() == (u8)OPK_IMMI)
@@ -12377,7 +12426,7 @@ class OptProfile
         IRBlock* B = _vrB;
         IRBlock* E = _vrE;
         IRValue* iv = _vrIv;
-        i32 n = _vrN;
+        i64 n = _vrN;
         IRValue* acc = accPhi.res();
         // The accumulator is unsigned 32-bit — that is what makes the widening
         // regrouping sound.
@@ -12456,7 +12505,7 @@ class OptProfile
         // no subtraction and no second modulo, which matters because this
         // function sits ~80 bytes from the arm64 frame ceiling. The bound is
         // carried on the candidate for vecSetEpi to use.
-        if (vw < (u32)2 || _vrIvStart < (i32)0)
+        if (vw < (u32)2 || _vrIvStart < (i64)0)
             return (VecCand*)0;
         if (!_vrRuntime && _vrIvStart >= n)
             return (VecCand*)0;
@@ -12520,7 +12569,7 @@ class OptProfile
         IRBlock* B = _vrB;
         IRBlock* E = _vrE;
         IRValue* iv = _vrIv;
-        i32 n = _vrN;
+        i64 n = _vrN;
         IRValue* acc = accPhi.res();
         if (!vecRedux32(acc.ty()))
             return (VecCand*)0;
@@ -12604,7 +12653,7 @@ class OptProfile
         // its own statement, because a separate branch costs frame slots and
         // vecWideningAt sits 80 bytes from the arm64 budget.
         // See vecWideningAt: `n < vw` is the fewer-than-one-vector refusal.
-        if (vw < (u32)2 || _vrIvStart < (i32)0)
+        if (vw < (u32)2 || _vrIvStart < (i64)0)
             return (VecCand*)0;
         if (!_vrRuntime && _vrIvStart >= n)
             return (VecCand*)0;
@@ -13898,12 +13947,19 @@ class OptProfile
         IROperand* gl = (IROperand*)guard.ops().get((u32)0);
         if (gl.kind() != (u8)OPK_USE || gl.val() != iv)
             return;
-        i32 n = (i32)0;
+        // WIDE, for the same reason the recogniser is: a u32 bound above 2^31
+        // truncated into an i32 reads as negative, and this guard then takes it
+        // for an empty loop and skips the unroll. That left the vector body
+        // un-unrolled where the reference unrolled it — 28 NEON instructions
+        // against 100 on call_depth, with the loop correctly vectorised either
+        // way, which is why it looked like a missing transform rather than a
+        // truncated constant.
+        i64 n = (i64)0;
         // The bound may be a literal, or the runtime limit M = n & ~(vw-1) the
         // vectoriser builds for a runtime trip count. Both are unrollable; which
         // one it is decides how U is chosen, below.
-        bool constN = vecConst((IROperand*)guard.ops().get((u32)1), defOf, &n);
-        if (constN && n <= (i32)0)
+        bool constN = vecConstWide((IROperand*)guard.ops().get((u32)1), defOf, &n);
+        if (constN && n <= (i64)0)
             return;
 
         IRBlock* t0 = ((IROperand*)term.ops().get((u32)1)).blk();
@@ -13972,8 +14028,8 @@ class OptProfile
         u32 U = (u32)1;
         if (constN)
             {
-            U = (n % ((i32)4 * vw)) == (i32)0 ? (u32)4
-                                              : ((n % ((i32)2 * vw)) == (i32)0 ? (u32)2 : (u32)1);
+            U = (n % ((i64)4 * (i64)vw)) == (i64)0 ? (u32)4
+                                              : ((n % ((i64)2 * (i64)vw)) == (i64)0 ? (u32)2 : (u32)1);
             }
         else
             {
@@ -14204,9 +14260,9 @@ class OptProfile
             }
         // M is the last whole-vector boundary of the trip LENGTH `n - ivStart`,
         // rebased onto the start — `n - n%vw` was right only for a zero start.
-        i32 n = _vrN;
-        i32 trip = n - _vrIvStart;
-        i32 m = _vrIvStart + (trip - (trip % (i32)c.vw()));
+        i64 n = _vrN;
+        i64 trip = n - _vrIvStart;
+        i64 m = _vrIvStart + (trip - (trip % (i64)c.vw()));
         c.setEpi(m != n, m);
         }
 
@@ -14620,6 +14676,9 @@ class OptProfile
         String* vt = new String();
         vt.appendFormat("Vec(%s)", laneTy.cString());
         IRSymbol* sym = IRSymbol.dataGlobal(nm, vt);
+        // Read-only, compiler-made, never address-taken beyond the VLoad here.
+        sym.clearEscapes();
+        sym.setNoAttrs();
         sym.setBytes(bytes);
         _vecModule.addSym(sym);
         return nm;

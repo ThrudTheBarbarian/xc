@@ -26,6 +26,17 @@ BIN=bin/osx
 TARGET=${1:-arm64}
 LEVEL=${2:-1}
 PATTERN=${3:-}
+# The LEVEL is a bare number. Passing `-O3` makes `-O$LEVEL` into `-O-O3`, the
+# oracle then produces nothing for every fixture, and the run reports
+# `pass=0 fail=0 oracle-failed=959` — which reads like a result and is not one.
+# Refuse it instead: a gate that cannot run must say so and stop, not return
+# zeros that a caller may read as agreement.
+case "$LEVEL" in
+    0|1|2|3) ;;
+    *) echo "opt-diff: LEVEL must be a bare 0-3, got '$LEVEL'" >&2
+       echo "          usage: bash selfhost/tools/opt-diff.sh [target] [0-3] [pattern]" >&2
+       exit 2 ;;
+esac
 WORK=${TMPDIR:-/tmp}/optdiff.$$
 mkdir -p "$WORK"
 trap 'rm -rf "$WORK"' EXIT
