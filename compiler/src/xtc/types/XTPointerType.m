@@ -4,9 +4,23 @@
 
 static NSUInteger sHeapPointerWidth = 2;
 
+static NSUInteger sHeapCountWidth = 2;
+
 + (NSUInteger)heapPointerWidth
     {
     return sHeapPointerWidth;
+    }
+
++ (NSUInteger)heapCountWidth
+    {
+    return sHeapCountWidth;
+    }
+
++ (void)setHeapCountWidth:(NSUInteger)width
+    {
+    NSAssert(width == 2 || width == 4 || width == 8,
+             @"heapCountWidth must be 2, 4 or 8, got %lu", (unsigned long)width);
+    sHeapCountWidth = width;
     }
 
 + (void)setHeapPointerWidth:(NSUInteger)width

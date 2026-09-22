@@ -946,6 +946,24 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     else if (_options.useM68kBackend || _options.m68kPlatform || _options.useArm9Backend || _options.useWasm32Backend)
         ptrWidth = 4;
     [XTPointerType setHeapPointerWidth:ptrWidth];
+    // …and the width of the allocation header's COUNT field, which is a
+    // different number: arm9 and m68k share a 4-byte pointer but hold 4- and
+    // 2-byte counts. `.length` is typed from this, so a wrong value here
+    // truncates every long array rather than mis-sizing anything (bug 234).
+    // Per RUNTIME HEADER, and they differ: arm64's is 38 bytes with a u64
+    // count at payload-26; x86-64/win64's is 30 bytes with a u32 at
+    // payload-22; arm9's 24 with a u32; m68k's 10 with a u16. Reading the
+    // pointer width instead would have claimed 8 for x86-64 and invented
+    // 32 bits the header does not have.
+    // Capped at 4 even where the header holds 8 (arm64): 4G elements is beyond
+    // any real use, and it keeps `.length` the SAME type on every 32/64-bit
+    // target, so portable source sees one width and the for-in / slice index
+    // arithmetic never has to carry a u64.
+    NSUInteger cntWidth = 2; // m68k [count:2][elemSize:2]; xt6502 stores none
+    if (arm64 || _options.useX86_64Backend || _options.useWin64Backend ||
+        _options.useArm9Backend || _options.useWasm32Backend)
+        cntWidth = 4;
+    [XTPointerType setHeapCountWidth:cntWidth];
     // Struct FIELD alignment cap (blewit #5): fields align to
     // min(natural alignment, cap), and the offsets land in the IR layout,
     // which every backend reads verbatim. 8 = full C natural alignment on

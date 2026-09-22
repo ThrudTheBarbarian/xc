@@ -101,6 +101,19 @@ typedef NS_ENUM(NSInteger, XTPointerPlacement) {
 |* Main / Shadow stay at 2.
 \****************************************************************************/
 + (NSUInteger)heapPointerWidth;
+
+/****************************************************************************\
+|* Bytes of element COUNT in the allocation header — what `.length` and
+|* `for (v in heapPtr)` can read back. NOT the pointer width: arm9 and m68k
+|* both have 4-byte pointers but 4- and 2-byte count fields. It was hard-wired
+|* to 2 everywhere, so every array over 65535 elements reported `count &
+|* 0xFFFF` on targets whose header holds far more (bug 234).
+|*   8  arm64 / x86-64 / win64      4  arm9, wasm32
+|*   2  m68k (its header field really is 2)  — xt6502 stores none and the
+|*      `.length` path there soft-fails at compile time.
+\****************************************************************************/
++ (NSUInteger)heapCountWidth;
++ (void)setHeapCountWidth:(NSUInteger)width;
 + (void)setHeapPointerWidth:(NSUInteger)width;
 
 @end

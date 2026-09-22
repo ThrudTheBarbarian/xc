@@ -464,6 +464,14 @@ void* _xtc_new_pointer(uint64_t n)
     {
     return _xtc_alloc(n, 8, 0);
     }
+void* _xtc_new_u64(uint64_t n)
+    {
+    return _xtc_alloc(n, 8, 0);
+    }
+void* _xtc_new_i64(uint64_t n)
+    {
+    return _xtc_alloc(n, 8, 0);
+    }
 void* _xtc_new_bool(uint64_t n)
     {
     return _xtc_alloc(n, 1, 0);
@@ -484,11 +492,16 @@ void* _xtc_new_string(uint64_t n)
 void _xtc_weak_zero_for(void*);
 /* The element count of a `new T[N]` allocation, read from the header the
    allocator wrote (count at base+12, payload at base+XT_HDR). The `.length` of a
-   runtime-sized heap array — private:docs/bugs/045 remedy 1. u16 by the language's
-   `.length` contract. */
-uint16_t _xtc_count(void* o)
+   runtime-sized heap array — private:docs/bugs/045 remedy 1.
+
+   NOT u16: that truncated every array over 65535 elements, and because
+   for-in takes this same call it silently shortened ITERATION, not just a
+   reported length (bug 234). u32 is what the front end types `.length` as on
+   this target — the header field here is 64-bit, but the generated stub in
+   main.m describes a narrower one, so 4 is the width both can honour. */
+uint32_t _xtc_count(void* o)
     {
-    return (uint16_t)*(uint64_t*)((uint8_t*)o - XT_HDR + 12);
+    return (uint32_t)*(uint64_t*)((uint8_t*)o - XT_HDR + 12);
     }
 
 void _xtc_dealloc(void* o)

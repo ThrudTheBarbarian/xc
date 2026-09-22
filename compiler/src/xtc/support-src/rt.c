@@ -53,6 +53,8 @@ void *_xtc_new_u16(unsigned long n){return _xtc_alloc(n,2,0);}
 void *_xtc_new_i16(unsigned long n){return _xtc_alloc(n,2,0);}
 void *_xtc_new_u32(unsigned long n){return _xtc_alloc(n,4,0);}
 void *_xtc_new_i32(unsigned long n){return _xtc_alloc(n,4,0);}
+void *_xtc_new_u64(unsigned long n){return _xtc_alloc(n,8,0);}
+void *_xtc_new_i64(unsigned long n){return _xtc_alloc(n,8,0);}
 void *_xtc_new_pointer(unsigned long n){return _xtc_alloc(n,8,0);}
 void *_xtc_new_bool(unsigned long n){return _xtc_alloc(n,1,0);}
 void *_xtc_new_float(unsigned long n){return _xtc_alloc(n,4,0);}
@@ -61,9 +63,13 @@ void *_xtc_new_string(unsigned long n){return _xtc_alloc(n,8,0);}
 void _xtc_weak_zero_for(void*);
 /* The element count of a `new T[N]` allocation, read from the header the
    allocator wrote (count at base+XT_COUNT_OFF, payload at base+XT_HDR). The `.length` of a
-   runtime-sized heap array — private:docs/bugs/045 remedy 1. u16 by the language's
-   `.length` contract. */
-uint16_t _xtc_count(void *o){return (uint16_t)*(unsigned long*)((uint8_t*)o-XT_HDR+XT_COUNT_OFF);}
+   runtime-sized heap array — private:docs/bugs/045 remedy 1.
+
+   NOT u16: that truncated every array over 65535 elements, and for-in takes
+   this same call, so it shortened ITERATION too and not merely a reported
+   length (bug 234). The header field is `unsigned long` and is returned
+   whole. */
+unsigned long _xtc_count(void *o){return *(unsigned long*)((uint8_t*)o-XT_HDR+XT_COUNT_OFF);}
 void _xtc_dealloc(void *o){_xtc_weak_zero_for(o);uint8_t*base=(uint8_t*)o-XT_HDR;
     unsigned long stride=*(unsigned long*)(base+XT_STRIDE_OFF);
     unsigned long count=*(unsigned long*)(base+XT_COUNT_OFF);

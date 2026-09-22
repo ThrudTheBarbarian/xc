@@ -247,7 +247,7 @@ static NSString *arm64StubSourceEx(NSString *asmText, BOOL forLibrary) {
     // the allocation header this stub's allocators write (u64 at payload-26).
     if ([asmText containsString:@"_xtc_count"]) {
         [s appendString:
-            @"uint16_t _xtc_count(void*o){return (uint16_t)*(unsigned long*)((uint8_t*)o-26);}\n"];
+            @"unsigned long _xtc_count(void*o){return *(unsigned long*)((uint8_t*)o-26);}\n"];
     }
     // Per-class / per-type heap allocators, one per `_xtc_new_<T>` the asm calls.
     // Object header [stride:8][count:8][dealloc-fnptr:8][refcount:1]; the returned
@@ -269,6 +269,7 @@ static NSString *arm64StubSourceEx(NSString *asmText, BOOL forLibrary) {
                 @"u8": @1, @"i8": @1, @"bool": @1,
                 @"u16": @2, @"i16": @2,
                 @"u32": @4, @"i32": @4, @"float": @4,
+                @"i64": @8, @"u64": @8,
                 @"double": @8, @"pointer": @8, @"string": @8,
             };
             NSUInteger st = primStride[suffix] ? primStride[suffix].unsignedIntegerValue : 8;
@@ -459,7 +460,7 @@ static NSString *arm9StubSource(NSString *asmText, BOOL forLibrary) {
     // 24-byte header (u32 at payload-16, matching Runtime.xc on the device).
     if ([asmText containsString:@"_xtc_count"]) {
         [s appendString:
-            @"uint16_t _xtc_count(void*o){return (uint16_t)*(uint32_t*)((uint8_t*)o-16);}\n"];
+            @"uint32_t _xtc_count(void*o){return *(uint32_t*)((uint8_t*)o-16);}\n"];
     }
     NSRegularExpression *re = [NSRegularExpression
         regularExpressionWithPattern:@"\\b_xtc_new_([A-Za-z_][A-Za-z0-9_]*)" options:0 error:NULL];
@@ -688,10 +689,11 @@ static NSString *x86_64StubSource(NSString *asmText, NSString *supportRoot) {
     // 30-byte header (u32 at payload-22). Serves the musl AND mingw links.
     if ([asmText containsString:@"_xtc_count"]) {
         [s appendString:
-            @"uint16_t _xtc_count(void*o){return (uint16_t)*(uint32_t*)((uint8_t*)o-22);}\n"];
+            @"uint32_t _xtc_count(void*o){return *(uint32_t*)((uint8_t*)o-22);}\n"];
     }
-    NSSet<NSString *> *prim = [NSSet setWithArray:@[@"pointer", @"bool", @"i8", @"u8",
-        @"i16", @"u16", @"i32", @"u32", @"float", @"double", @"string"]];
+    // The list lives in XTIRElemKind.h and nowhere else. Four private copies
+    // had grown beside it, all missing i64/u64, which is how bug 233 reached
+    // three different stub generators at once.
     NSRegularExpression *re = [NSRegularExpression
         regularExpressionWithPattern:@"\\b_xtc_new_([A-Za-z_][A-Za-z0-9_]*)" options:0 error:NULL];
     NSMutableSet<NSString *> *seen = [NSMutableSet set];
@@ -700,7 +702,7 @@ static NSString *x86_64StubSource(NSString *asmText, NSString *supportRoot) {
         NSString *suffix = [asmText substringWithRange:[m rangeAtIndex:1]];
         if ([seen containsObject:suffix]) continue;
         [seen addObject:suffix];
-        if ([prim containsObject:suffix]) {
+        if (XTIRIsPrimitiveElemName(suffix)) {
             [s appendFormat:
                 @"void *_xtc_new_%@(unsigned long n){unsigned long b=n*8; if(b<256)b=256;"
                 @"uint8_t*p=(uint8_t*)calloc(1,b+30);*(uint32_t*)(p+0)=0x58544F42U;*(uint32_t*)(p+4)=8;*(uint32_t*)(p+8)=(uint32_t)n;"
@@ -2171,14 +2173,12 @@ static int linkArm64Executable(const char *argv0, XTCommandLineOptions *opts,
 static NSString *arm64ClassAllocStubs(NSString *prog) {
     NSMutableString *out = [NSMutableString string];
     if (!prog) return out;
-    NSSet *prims = [NSSet setWithArray:@[@"u8",@"i8",@"u16",@"i16",@"u32",@"i32",
-        @"pointer",@"bool",@"float",@"double",@"string"]];
     NSRegularExpression *re = [NSRegularExpression
         regularExpressionWithPattern:@"__xtc_new_([A-Za-z_][A-Za-z0-9_]*)" options:0 error:NULL];
     NSMutableSet *seen = [NSMutableSet set];
     for (NSTextCheckingResult *m in [re matchesInString:prog options:0 range:NSMakeRange(0,prog.length)]) {
         NSString *cls = [prog substringWithRange:[m rangeAtIndex:1]];
-        if ([prims containsObject:cls] || [seen containsObject:cls]) continue;
+        if (XTIRIsPrimitiveElemName(cls) || [seen containsObject:cls]) continue;
         [seen addObject:cls];
         BOOL hasDe = [prog containsString:[NSString stringWithFormat:@"_%@$dealloc:", cls]];
         [out appendFormat:@".text\n.globl __xtc_new_%@\n.align 2\n__xtc_new_%@:\n", cls, cls];
@@ -2198,14 +2198,12 @@ static NSString *arm64ClassAllocStubs(NSString *prog) {
 static NSString *x86_64ClassAllocStubs(NSString *prog, BOOL win64) {
     NSMutableString *out = [NSMutableString string];
     if (!prog) return out;
-    NSSet *prims = [NSSet setWithArray:@[@"u8",@"i8",@"u16",@"i16",@"u32",@"i32",
-        @"pointer",@"bool",@"float",@"double",@"string"]];
     NSRegularExpression *re = [NSRegularExpression
         regularExpressionWithPattern:@"_xtc_new_([A-Za-z_][A-Za-z0-9_]*)" options:0 error:NULL];
     NSMutableSet *seen = [NSMutableSet set];
     for (NSTextCheckingResult *m in [re matchesInString:prog options:0 range:NSMakeRange(0,prog.length)]) {
         NSString *cls = [prog substringWithRange:[m rangeAtIndex:1]];
-        if ([prims containsObject:cls] || [seen containsObject:cls]) continue;
+        if (XTIRIsPrimitiveElemName(cls) || [seen containsObject:cls]) continue;
         [seen addObject:cls];
         BOOL hasDe = [prog containsString:[NSString stringWithFormat:@"%@$dealloc:", cls]];
         [out appendFormat:@"\t.intel_syntax noprefix\n\t.text\n\t.globl\t_xtc_new_%@\n"

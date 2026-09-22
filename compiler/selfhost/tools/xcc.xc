@@ -300,12 +300,19 @@ String* classAllocStubs(String* prog)
     return out;
 }
 
+// Which element types the RUNTIME already provides a `_xtc_new_<T>(count)`
+// for, so no per-program thunk is synthesised. Mirrors the reference's
+// XTIRIsPrimitiveElemName, and must: the two decide the allocator CALL SHAPE,
+// and the list existed in seven places before bug 233 — one gap in it reached
+// three stub generators at once, and a missing entry here instead emits a
+// thunk that collides with the runtime's own symbol.
 bool isPrimitiveName(String* s)
 {
     Array* p = new Array();
     p.add((Object*)String.withCString("u8"));   p.add((Object*)String.withCString("i8"));
     p.add((Object*)String.withCString("u16"));  p.add((Object*)String.withCString("i16"));
     p.add((Object*)String.withCString("u32"));  p.add((Object*)String.withCString("i32"));
+    p.add((Object*)String.withCString("u64"));  p.add((Object*)String.withCString("i64"));
     p.add((Object*)String.withCString("pointer")); p.add((Object*)String.withCString("bool"));
     p.add((Object*)String.withCString("float")); p.add((Object*)String.withCString("double"));
     p.add((Object*)String.withCString("string"));
@@ -1023,15 +1030,11 @@ void emitWasm(DriverOptions* d, IRModule* mod)
 // go in as a SEPARATE linker input rather than being concatenated: the linker
 // namespaces each input's local labels, and a plain concatenation of
 // separately compiled files collides on clang's `.LBB` numbering.
+// One list, not two in one file: this used to carry its own copy and they
+// drifted (bug 233).
 bool isPrimName(String* c)
 {
-    string prims[11];
-    prims[0] = "u8";   prims[1] = "i8";     prims[2] = "u16";  prims[3] = "i16";
-    prims[4] = "u32";  prims[5] = "i32";    prims[6] = "pointer";
-    prims[7] = "bool"; prims[8] = "float";  prims[9] = "double"; prims[10] = "string";
-    for (u32 i = (u32)0; i < (u32)11; i = i + (u32)1)
-        if (c.equals(String.withCString(prims[i]))) return true;
-    return false;
+    return isPrimitiveName(c);
 }
 
 String* x86ClassAllocStubs(String* prog, bool win64)

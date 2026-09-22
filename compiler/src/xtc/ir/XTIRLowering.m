@@ -7087,16 +7087,16 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
                                  resultType:fieldPtrType];
         return [self emitLoad:fa pointeeType:fieldIRType];
         }
-    // Fixed-size array `.length` — a compile-time u16 constant equal to
-    // the declared element count.
+    // Fixed-size array `.length` — a compile-time constant equal to the
+    // declared element count.
     if (pointeeAST && pointeeAST.kind == XTTypeKindArray && [pointeeAST isKindOfClass:[XTArrayType class]] && [node.memberName isEqualToString:@"length"])
         {
         NSUInteger n = ((XTArrayType*)pointeeAST).elementCount;
-        XTIRType* u16 = [XTIRType u16Type];
-        XTIRValue* c = [self allocateValueOfType:u16 atSite:self.currentBlock];
+        XTIRType* cty = [self countIRType];
+        XTIRValue* c = [self allocateValueOfType:cty atSite:self.currentBlock];
         [self.currentBlock appendInstruction:[[XTIRInsn alloc] initWithOpcode:XTIROpConst
                                                                        result:c
-                                                                     operands:@[ [XTIROperand immIWithType:u16 value:(int64_t)n] ]
+                                                                     operands:@[ [XTIROperand immIWithType:cty value:(int64_t)n] ]
                                                                        dbgLoc:nil]];
         return c;
         }
@@ -7110,11 +7110,11 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
         NSNumber* nN = self.heapArrayLengthByLocal[ln];
         if (nN)
             {
-            XTIRType* u16 = [XTIRType u16Type];
-            XTIRValue* c = [self allocateValueOfType:u16 atSite:self.currentBlock];
+            XTIRType* cty = [self countIRType];
+            XTIRValue* c = [self allocateValueOfType:cty atSite:self.currentBlock];
             [self.currentBlock appendInstruction:[[XTIRInsn alloc] initWithOpcode:XTIROpConst
                                                                            result:c
-                                                                         operands:@[ [XTIROperand immIWithType:u16
+                                                                         operands:@[ [XTIROperand immIWithType:cty
                                                                                                          value:nN.longLongValue] ]
                                                                            dbgLoc:nil]];
             return c;
@@ -7141,7 +7141,7 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
             return [self emitCall:sid
                          callConv:[XTIRCallConv standard]
                         argValues:@[ bv ]
-                       resultType:[XTIRType u16Type]];
+                       resultType:[self countIRType]];
             }
         [self softFailLoweringAt:node.location
                      withMessage:
@@ -7667,6 +7667,28 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
                                          argValues:callArgs
                                         resultType:resultIR]
                             forCall:node];
+    }
+
+// The IR type of an element COUNT — `.length` and the `for (v in heapPtr)`
+// trip count. It is the width of the allocation header's count field, which
+// is NOT the pointer width: arm9 and m68k both have 4-byte pointers but hold
+// 4- and 2-byte counts. Hard-wired to u16 once, which truncated every array
+// over 65535 elements to `count & 0xFFFF` — and because the same call feeds
+// for-in, it silently shortened ITERATION too, not just a printed number.
+// Bug 234.
+// The AST type matching countIRType. Both exist because a slice bound is
+// coerced at the AST level and emitted at the IR level, and the two must name
+// the same width.
+- (XTType*)countASTType
+    {
+    NSUInteger w = [XTPointerType heapCountWidth];
+    return w >= 8 ? [XTType u64Type] : w >= 4 ? [XTType u32Type] : [XTType u16Type];
+    }
+
+- (XTIRType*)countIRType
+    {
+    NSUInteger w = [XTPointerType heapCountWidth];
+    return w >= 8 ? [XTIRType u64Type] : w >= 4 ? [XTIRType u32Type] : [XTIRType u16Type];
     }
 
 - (nullable XTIRValue*)lowerNewExpr:(XTNewExprNode*)node
@@ -10113,7 +10135,11 @@ static const NSUInteger kVarargSlotBytes = 8;
     // choice: a 32-bit Foundation declares `u32 enumLength()`. Assuming u16
     // here would compare a u32 count against a u16 counter and stop
     // enumerating at 65536 without a word of complaint.
-    XTIRType* idxIR = [XTIRType u16Type];
+    // The for-in counter is an element COUNT, so it is the count width, not a
+    // bare u16 — with `.length` wider than 16 bits, a u16 counter met a wider
+    // bound and the slice's `idx + start` adjustment mismatched. The class
+    // path below still overrides it from enumLength's declared return type.
+    XTIRType* idxIR = [self countIRType];
 
     // Saved context for the body-block AddrOf / class-enumerable dispatch.
     BOOL isArrayBase = NO;
@@ -10133,8 +10159,8 @@ static const NSUInteger kVarargSlotBytes = 8;
         if ([collection isKindOfClass:[XTIdentifierNode class]])
             {
             countVal = [self emitInsnOpcode:XTIROpConst
-                                     result:[XTIRType u16Type]
-                                   operands:@[ [XTIROperand immIWithType:[XTIRType u16Type]
+                                     result:[self countIRType]
+                                   operands:@[ [XTIROperand immIWithType:[self countIRType]
                                                                    value:(int64_t)arrAST.elementCount] ]];
             isArrayBase = YES;
             baseForAddr = collection;
@@ -10167,19 +10193,20 @@ static const NSUInteger kVarargSlotBytes = 8;
             startVal = [self lowerExpression:slice.startExpr];
             if (!startVal)
                 return;
-            if (slice.startExpr.resolvedType && slice.startExpr.resolvedType.byteWidth < 2)
+            if (slice.startExpr.resolvedType &&
+                slice.startExpr.resolvedType.byteWidth != [self countASTType].byteWidth)
                 {
                 startVal = [self coerceValue:startVal
                                     fromType:slice.startExpr.resolvedType
-                                      toType:[XTType u16Type]
+                                      toType:[self countASTType]
                                     location:node.location];
                 }
             }
         else
             {
             startVal = [self emitInsnOpcode:XTIROpConst
-                                     result:[XTIRType u16Type]
-                                   operands:@[ [XTIROperand immIWithType:[XTIRType u16Type] value:0] ]];
+                                     result:[self countIRType]
+                                   operands:@[ [XTIROperand immIWithType:[self countIRType] value:0] ]];
             }
 
         // Compute end index (default array.length, or error if unknown).
@@ -10189,21 +10216,22 @@ static const NSUInteger kVarargSlotBytes = 8;
             endVal = [self lowerExpression:slice.endExpr];
             if (!endVal)
                 return;
-            if (slice.endExpr.resolvedType && slice.endExpr.resolvedType.byteWidth < 2)
+            if (slice.endExpr.resolvedType &&
+                slice.endExpr.resolvedType.byteWidth != [self countASTType].byteWidth)
                 {
                 endVal = [self coerceValue:endVal
                                   fromType:slice.endExpr.resolvedType
-                                    toType:[XTType u16Type]
+                                    toType:[self countASTType]
                                   location:node.location];
                 }
             if (slice.inclusive)
                 {
                 // Inclusive: add 1 to the end bound so the cmp stays `idx < end`.
                 XTIRValue* one = [self emitInsnOpcode:XTIROpConst
-                                               result:[XTIRType u16Type]
-                                             operands:@[ [XTIROperand immIWithType:[XTIRType u16Type] value:1] ]];
+                                               result:[self countIRType]
+                                             operands:@[ [XTIROperand immIWithType:[self countIRType] value:1] ]];
                 endVal = [self emitInsnOpcode:XTIROpAdd
-                                       result:[XTIRType u16Type]
+                                       result:[self countIRType]
                                      operands:@[ [XTIROperand useWithValueId:endVal.valueId],
                                                  [XTIROperand useWithValueId:one.valueId] ]];
                 }
@@ -10211,8 +10239,8 @@ static const NSUInteger kVarargSlotBytes = 8;
         else if (sliceBaseAST && sliceBaseAST.kind == XTTypeKindArray && [sliceBaseAST isKindOfClass:[XTArrayType class]])
             {
             endVal = [self emitInsnOpcode:XTIROpConst
-                                   result:[XTIRType u16Type]
-                                 operands:@[ [XTIROperand immIWithType:[XTIRType u16Type]
+                                   result:[self countIRType]
+                                 operands:@[ [XTIROperand immIWithType:[self countIRType]
                                                                  value:(int64_t)((XTArrayType*)sliceBaseAST).elementCount] ]];
             }
         else if (sliceBaseAST && sliceBaseAST.kind == XTTypeKindPointer && [slice.base isKindOfClass:[XTIdentifierNode class]] && self.heapArrayLengthByLocal[((XTIdentifierNode*)slice.base).identName])
@@ -10223,8 +10251,8 @@ static const NSUInteger kVarargSlotBytes = 8;
             // accessor exposes.
             NSNumber* nN = self.heapArrayLengthByLocal[((XTIdentifierNode*)slice.base).identName];
             endVal = [self emitInsnOpcode:XTIROpConst
-                                   result:[XTIRType u16Type]
-                                 operands:@[ [XTIROperand immIWithType:[XTIRType u16Type]
+                                   result:[self countIRType]
+                                 operands:@[ [XTIROperand immIWithType:[self countIRType]
                                                                  value:nN.longLongValue] ]];
             }
         else
@@ -10238,7 +10266,7 @@ static const NSUInteger kVarargSlotBytes = 8;
         // adjustment: adjustedIdx = idxB + startVal.
         // count = end - start
         countVal = [self emitInsnOpcode:XTIROpSub
-                                 result:[XTIRType u16Type]
+                                 result:[self countIRType]
                                operands:@[ [XTIROperand useWithValueId:endVal.valueId],
                                            [XTIROperand useWithValueId:startVal.valueId] ]];
         isSliceBase = YES;
@@ -10342,7 +10370,7 @@ static const NSUInteger kVarargSlotBytes = 8;
         countVal = [self emitCall:sid
                          callConv:[XTIRCallConv standard]
                         argValues:@[ hv ]
-                       resultType:[XTIRType u16Type]];
+                       resultType:[self countIRType]];
         isHeapPtrBase = YES;
         baseForAddr = collection;
         }
@@ -10511,9 +10539,10 @@ static const NSUInteger kVarargSlotBytes = 8;
             }
         if (!baseAddr)
             return;
-        // Adjust the element index by the slice start offset.
+        // Adjust the element index by the slice start offset. Count-typed like
+        // the counter and the start bound — all three are element indices.
         indexVal = [self emitInsnOpcode:XTIROpAdd
-                                 result:[XTIRType u16Type]
+                                 result:[self countIRType]
                                operands:@[ [XTIROperand useWithValueId:idxB.valueId],
                                            [XTIROperand useWithValueId:sliceByteOff.valueId] ]];
         }
@@ -11705,7 +11734,7 @@ static const NSUInteger kVarargSlotBytes = 8;
     NSString* forinIdxName = frame[@"forinIdxName"];
     if (forinIdxName && self.locals[forinIdxName])
         {
-        XTIRType* fidxIR = frame[@"forinIdxType"] ?: [XTIRType u16Type];
+        XTIRType* fidxIR = frame[@"forinIdxType"] ?: [self countIRType];
         XTIRValue* one = [self emitInsnOpcode:XTIROpConst
                                        result:fidxIR
                                      operands:@[ [XTIROperand immIWithType:fidxIR value:1] ]];

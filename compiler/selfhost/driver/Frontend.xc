@@ -494,6 +494,7 @@ class FeOptions
         // pointerWidthOf() the lowering is handed below, so the two halves
         // cannot disagree about the address space they are compiling for.
         sema.setPointerWidth(pointerWidthOf(o));
+        sema.setCountWidth(countWidthOf(o));
         // A LIBRARY build numbers every instance method a slot, because the
         // overrides live in a client that does not exist yet. The interface
         // this build emits publishes that numbering, so the decision has to be
@@ -625,6 +626,7 @@ class FeOptions
 
         Lower* lower = Lower.make();
         lower.setPointerWidth(pointerWidthOf(o));
+        lower.setCountWidth(countWidthOf(o));
         lower.setAlignCaps(fieldAlignCapOf(o), tailAlignCapOf(o));
         // A vtable's shape is the target's, not the language's: the backends that
         // link separate shared objects carry a parent link and a conformance
@@ -1038,6 +1040,26 @@ bool hasPlatformPrelude(FeOptions* o)
 // The target's NATIVE pointer width, which is what `sizeof` reports and what
 // every struct offset is summed from. It has to agree with the backend's own
 // or the opt passes fold an address the backend then disagrees with.
+// Bytes of element COUNT in the allocation header — what `.length` and
+// `for (v in heapPtr)` read back. NOT the pointer width: arm9 and atarist
+// share a 4-byte pointer but hold 4- and 2-byte counts. Hard-wired to 2 once,
+// which truncated every array over 65535 elements AND, because for-in takes
+// the same call, silently shortened iteration (bug 234).
+u32 countWidthOf(FeOptions* o)
+    {
+    String* p = platformOf(o);
+    // Capped at 4 even where the header holds 8 (arm64): it keeps `.length`
+    // the same type on every 32/64-bit target and keeps u64 out of the index
+    // arithmetic the for-in and slice paths share.
+    if (p.equals(String.withCString("arm64")) || p.equals(String.withCString("x86_64"))
+        || p.equals(String.withCString("win64")) || p.equals(String.withCString("arm9"))
+        || p.equals(String.withCString("wasm32")))
+        return (u32)4;
+    // atarist: the m68k header really is [count:2][elemSize:2]. xt6502 writes
+    // no count at all and its `.length` soft-fails at compile time.
+    return (u32)2;
+    }
+
 u32 pointerWidthOf(FeOptions* o)
     {
     String* p = platformOf(o);

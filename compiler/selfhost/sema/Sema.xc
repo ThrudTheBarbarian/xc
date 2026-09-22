@@ -93,6 +93,7 @@ class Sema
     // zero width must not be able to mean "16-bit"; the common host width is
     // the only safe thing an unset field can mean.
     u32 _ptrW; // the TARGET's pointer width, for ptrdiff only.
+    u32 _cntW; // the allocation header's COUNT width, for `.length` only.
                // Deliberately NOT routed through Types.byteWidth,
                // which hardcodes 8 for pointers and is the width
                // table behind every widen decision — changing it
@@ -143,6 +144,7 @@ class Sema
         // applied to lowering's value, came out as `Trunc I16 -> I32`, which
         // is incoherent. Whatever this value is, it has to equal Lower's.
         s.setPointerWidth((u32)3);
+        s.setCountWidth((u32)2);
         return s;
         }
 
@@ -157,6 +159,10 @@ class Sema
     void setChainCapable(bool c)
         {
         _chainCapable = c;
+        }
+    void setCountWidth(u32 w)
+        {
+        _cntW = w;
         }
     void setPointerWidth(u32 w)
         {
@@ -1928,7 +1934,13 @@ class Sema
         // has to be asked first (that reading cost 97 files).
         if (_isOp(n.name(), "length") && (isArrayLike(recv) || (Types.isPointer(recv) && _classes.get((Hashable*)classNameOf(recv)) == 0 && _protocols.get((Hashable*)classNameOf(recv)) == 0)))
             {
-            n.setTy(String.withCString("u16"));
+            // The AST width must equal the IR width Lower gives `.length`, or
+            // `buf[buf.length - (u16)1]` builds a Sub with mismatched operand
+            // types. The type-width invariant, on a count rather than a
+            // pointer. Bug 234.
+            n.setTy(_cntW >= (u32)8   ? String.withCString("u64")
+                    : (_cntW >= (u32)4 ? String.withCString("u32")
+                                       : String.withCString("u16")));
             return;
             }
         // A `^` is a PAIR, and its two halves are readable: `.code` is the

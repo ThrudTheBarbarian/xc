@@ -3616,7 +3616,15 @@ static BOOL XTIsErasedKeyType(XTType* t)
         ([rawBase isKindOfClass:[XTArrayType class]] ||
          [rawBase isKindOfClass:[XTPointerType class]]))
         {
-        node.resolvedType = [XTType u16Type];
+        // The AST width must equal the IR width, or the two disagree and an
+        // expression like `buf[buf.length - (u16)1]` builds a Sub whose
+        // operands are different types — the IR verifier catches it, but the
+        // rule is the type-width invariant: change a width on one side and you
+        // must change it on the other. Bug 234.
+        NSUInteger cw = [XTPointerType heapCountWidth];
+        node.resolvedType = cw >= 8   ? [XTType u64Type]
+                            : cw >= 4 ? [XTType u32Type]
+                                      : [XTType u16Type];
         return;
         }
 

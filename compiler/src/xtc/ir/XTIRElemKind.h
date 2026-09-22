@@ -40,8 +40,14 @@ static inline BOOL XTIRIsPrimitiveElemName(NSString* _Nullable name)
     static NSSet<NSString*>* prims;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
+      // i64 and u64 were missing, and were the only scalars that were. The
+      // lowering emitted the one-argument `_xtc_new_i64(count)` while the
+      // stub generator, asking this same predicate, synthesised the aggregate
+      // two-argument form — so the stride was whatever the second argument
+      // register held. Bug 233, a recurrence of 027 through a different hole.
       prims = [NSSet setWithArray:@[ @"pointer", @"bool", @"i8", @"u8",
-                                     @"i16", @"u16", @"i32", @"u32", @"float", @"double", @"string" ]];
+                                     @"i16", @"u16", @"i32", @"u32",
+                                     @"i64", @"u64", @"float", @"double", @"string" ]];
     });
     return name != nil && [prims containsObject:name];
     }

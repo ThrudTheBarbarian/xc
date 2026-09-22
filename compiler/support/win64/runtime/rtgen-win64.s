@@ -672,6 +672,80 @@ _xtc_new_i32:                           # @_xtc_new_i32
 	pop	rsi
 	ret
                                         # -- End function
+	.def	_xtc_new_u64;
+	.scl	2;
+	.type	32;
+	.endef
+	.globl	_xtc_new_u64                    # -- Begin function _xtc_new_u64
+	.p2align	4
+_xtc_new_u64:                           # @_xtc_new_u64
+# %bb.0:
+	push	rsi
+	sub	rsp, 32
+	mov	rsi, rcx
+	cmp	rcx, 1
+	adc	rsi, 0
+	lea	rax, [8*rsi]
+	cmp	rax, 257
+	mov	ecx, 256
+	cmovae	rcx, rax
+	add	rcx, 40
+	call	_xt_calloc
+	test	rax, rax
+	je	.LBBn64u16_1
+# %bb.2:
+	mov	dword ptr [rax], 1481920322
+	mov	qword ptr [rax + 4], 8
+	mov	qword ptr [rax + 12], rsi
+	xorps	xmm0, xmm0
+	movups	xmmword ptr [rax + 20], xmm0
+	mov	dword ptr [rax + 36], 1
+	add	rax, 40
+	jmp	.LBBn64u16_3
+.LBBn64u16_1:
+	xor	eax, eax
+.LBBn64u16_3:
+	add	rsp, 32
+	pop	rsi
+	ret
+                                        # -- End function
+	.def	_xtc_new_i64;
+	.scl	2;
+	.type	32;
+	.endef
+	.globl	_xtc_new_i64                    # -- Begin function _xtc_new_i64
+	.p2align	4
+_xtc_new_i64:                           # @_xtc_new_i64
+# %bb.0:
+	push	rsi
+	sub	rsp, 32
+	mov	rsi, rcx
+	cmp	rcx, 1
+	adc	rsi, 0
+	lea	rax, [8*rsi]
+	cmp	rax, 257
+	mov	ecx, 256
+	cmovae	rcx, rax
+	add	rcx, 40
+	call	_xt_calloc
+	test	rax, rax
+	je	.LBBn64i17_1
+# %bb.2:
+	mov	dword ptr [rax], 1481920322
+	mov	qword ptr [rax + 4], 8
+	mov	qword ptr [rax + 12], rsi
+	xorps	xmm0, xmm0
+	movups	xmmword ptr [rax + 20], xmm0
+	mov	dword ptr [rax + 36], 1
+	add	rax, 40
+	jmp	.LBBn64i17_3
+.LBBn64i17_1:
+	xor	eax, eax
+.LBBn64i17_3:
+	add	rsp, 32
+	pop	rsi
+	ret
+                                        # -- End function
 	.def	_xtc_new_pointer;
 	.scl	2;
 	.type	32;
@@ -864,7 +938,7 @@ _xtc_new_string:                        # @_xtc_new_string
 	.p2align	4, 0x90
 _xtc_count:                             # @_xtc_count
 # %bb.0:
-	movzx	eax, word ptr [rcx - 28]
+	mov	eax, dword ptr [rcx - 28]
 	ret
                                         # -- End function
 	.def	_xtc_dealloc;

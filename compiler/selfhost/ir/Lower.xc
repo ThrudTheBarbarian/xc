@@ -302,6 +302,7 @@ class ClassInfo
     // and a value that disagrees with the backend's own reads as a loop
     // miscompile rather than a layout error (private:docs/Design/type-width-invariant.md).
     u32 _ptrW;
+    u32 _cntW;
     u32 _fieldCap; // struct FIELD alignment cap (blewit #5): 8 register targets, 2 m68k, 1 xt6502
     u32 _tailCap;  // sizeof tail-rounding cap: 2 m68k, 8 everywhere else (xt6502 keeps pow2 tail)
     // Runtime-ancestry vtables: entry 0 is the PARENT class's vtable, and the
@@ -434,6 +435,7 @@ class ClassInfo
     void init(void)
         {
         _ptrW = (u32)3;
+        _cntW = (u32)2;
         _fieldCap = (u32)1;
         _tailCap = (u32)8;
         _vtAncestry = false;
@@ -511,6 +513,10 @@ class ClassInfo
     void setPointerWidth(u32 w)
         {
         _ptrW = w;
+        }
+    void setCountWidth(u32 w)
+        {
+        _cntW = w;
         }
     void setAlignCaps(u32 f, u32 t)
         {
@@ -3684,14 +3690,14 @@ class ClassInfo
             {
             String* bt = declaredTypeOf(n.kid((u32)0));
             if (isArrayLike(bt))
-                return u16Const(arrayCount(bt));
+                return countConst(arrayCount(bt));
             Object* hl = n.kid((u32)0).kind() == (u16)nkIdent
                              ? _heapArrayLen.get((Hashable*)n.kid((u32)0).name())
                              : (Object*)0;
             // `T@ p = new T[N]` recorded N where it was bound — the fast
             // path: a compile-time constant.
             if (hl != 0)
-                return u16Const(((Number*)hl).asU32());
+                return countConst(((Number*)hl).asU32());
             // Runtime-sized: a REAL header read via the per-runtime
             // `_xtc_count`, on every target whose allocator writes a count
             // (pointer width >= 4 — the 6502 family is 2/3 and keeps the
@@ -3707,7 +3713,7 @@ class ClassInfo
                 cargs.add((Object*)pv);
                 return emitMethodCall(runtimeHelper(String.withCString("_xtc_count")),
                                       (IRValue*)0, cargs,
-                                      String.withCString("u16"), true);
+                                      countTyLower(), true);
                 }
             }
         if (k == (u16)nkMember)
@@ -6633,8 +6639,8 @@ class ClassInfo
                 IRValue* saved = _sliceLow;
                 _sliceLow = (IRValue*)0;
                 emitForInLoop(loopVar, n.kid((u32)2),
-                              u16Const(((Number*)hl).asU32()), u16Const((u32)0),
-                              String.withCString("u16"),
+                              countConst(((Number*)hl).asU32()), countConst((u32)0),
+                              countTyLower(),
                               (IRValue*)0, (ClassInfo*)0, (u32)0, coll);
                 _sliceLow = saved;
                 return;
@@ -6651,11 +6657,11 @@ class ClassInfo
                 cargs.add((Object*)hv);
                 IRValue* cnt = emitMethodCall(runtimeHelper(String.withCString("_xtc_count")),
                                               (IRValue*)0, cargs,
-                                              String.withCString("u16"), true);
+                                              countTyLower(), true);
                 IRValue* saved = _sliceLow;
                 _sliceLow = (IRValue*)0;
-                emitForInLoop(loopVar, n.kid((u32)2), cnt, u16Const((u32)0),
-                              String.withCString("u16"),
+                emitForInLoop(loopVar, n.kid((u32)2), cnt, countConst((u32)0),
+                              countTyLower(),
                               (IRValue*)0, (ClassInfo*)0, (u32)0, coll);
                 _sliceLow = saved;
                 return;
@@ -6677,7 +6683,10 @@ class ClassInfo
     void emitSliceForIn(Node* loopVar, Node* slice, Node* body)
         {
         Node* coll = slice.kid((u32)0);
-        String* u16T = String.withCString("u16");
+        // The slice's bounds are element INDICES, so they carry the count width
+        // — the moment `.length` grew past u16 a `a[0..a.length]` slice built
+        // a Sub with mismatched operands. Bug 234.
+        String* u16T = countTyLower();
         // A missing bound is ABSENT, not null, so `a[..hi]` carries its one
         // bound in the same place `a[lo..]` carries its one — and only the
         // flag says which end it is.
@@ -6727,7 +6736,7 @@ class ClassInfo
                 if (hl != 0)
                     n = ((Number*)hl).asU32();
                 }
-            hi = u16Const(n);
+            hi = countConst(n);
             }
         // `..` stops before its upper bound; `...` includes it, so the bound
         // moves up one BEFORE the subtraction rather than the count moving up
@@ -6736,16 +6745,16 @@ class ClassInfo
             {
             Array* oo = new Array();
             oo.add((Object*)IROperand.useVal(hi));
-            oo.add((Object*)IROperand.useVal(u16Const((u32)1)));
-            hi = emit(String.withCString("Add"), String.withCString("U16"), oo);
+            oo.add((Object*)IROperand.useVal(countConst((u32)1)));
+            hi = emit(String.withCString("Add"), countTy(), oo);
             }
         Array* so = new Array();
         so.add((Object*)IROperand.useVal(hi));
         so.add((Object*)IROperand.useVal(lo));
-        IRValue* count = emit(String.withCString("Sub"), String.withCString("U16"), so);
+        IRValue* count = emit(String.withCString("Sub"), countTy(), so);
         IRValue* saved = _sliceLow;
         _sliceLow = lo;
-        emitForInLoop(loopVar, body, count, u16Const((u32)0), u16T,
+        emitForInLoop(loopVar, body, count, countConst((u32)0), u16T,
                       (IRValue*)0, (ClassInfo*)0, (u32)0, coll);
         _sliceLow = saved;
         }
@@ -6811,9 +6820,9 @@ class ClassInfo
         _sliceLow = (IRValue*)0;
         // The DECLARED type, not the mention's: `u8 a[] = { … }` is sized by
         // its initialiser, and only the declaration knows the number.
-        IRValue* count = u16Const(arrayCount(declaredTypeOf(coll)));
-        IRValue* zero = u16Const((u32)0);
-        emitForInLoop(loopVar, body, count, zero, String.withCString("u16"),
+        IRValue* count = countConst(arrayCount(declaredTypeOf(coll)));
+        IRValue* zero = countConst((u32)0);
+        emitForInLoop(loopVar, body, count, zero, countTyLower(),
                       (IRValue*)0, (ClassInfo*)0, (u32)0, coll);
         _sliceLow = saved;
         }
@@ -6973,7 +6982,7 @@ class ClassInfo
         Array* ao = new Array();
         ao.add((Object*)IROperand.useVal(idx));
         ao.add((Object*)IROperand.useVal(_sliceLow));
-        return emit(String.withCString("Add"), String.withCString("U16"), ao);
+        return emit(String.withCString("Add"), countTy(), ao);
         }
 
     void bindLoopElement(Node* loopVar, Node* coll, IRValue* rawIdx, String* elemIr)
@@ -10069,6 +10078,32 @@ class ClassInfo
         agg.appendCString(")");
         _m.addSym(IRSymbol.dataGlobal(name, agg));
         return name;
+        }
+
+    // An element COUNT's IR type — the allocation header's count width, not
+    // u16. See setCountWidth. Two spellings because the Const operand takes
+    // the upper-case form and a call result the lower.
+    String* countTy()
+        {
+        if (_cntW >= (u32)8)
+            return String.withCString("U64");
+        if (_cntW >= (u32)4)
+            return String.withCString("U32");
+        return String.withCString("U16");
+        }
+    String* countTyLower()
+        {
+        if (_cntW >= (u32)8)
+            return String.withCString("u64");
+        if (_cntW >= (u32)4)
+            return String.withCString("u32");
+        return String.withCString("u16");
+        }
+    IRValue* countConst(u32 v)
+        {
+        Array* ops = new Array();
+        ops.add((Object*)IROperand.immI((i32)v, countTy()));
+        return emit(String.withCString("Const"), countTy(), ops);
         }
 
     IRValue* u16Const(u32 v)
