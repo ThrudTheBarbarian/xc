@@ -228,9 +228,33 @@
                                                           type:v.declaredType];
                 sym.storageClass = XTStorageClassHeap;
                 sym.definedAt = v.location;
-                if (![self.globalScope lookupLocalSymbol:v.varName])
+                // ONE global name, ONE type, across the whole unit. A second
+                // declaration used to be dropped in silence and the FIRST type
+                // won, so `u32 gX;` in one file and `u32 gX[64];` in another —
+                // both reaching one translation unit — became one object seen
+                // two ways: the scalar's write landed in the array's element 0
+                // and every index after it read the wrong thing. It cost a
+                // application team a day chasing it as a mangling collision,
+                // because nothing in the compile said a word.
+                //
+                // Identical redeclarations still merge, the way repeated
+                // prototypes do — a header declaring a global and being
+                // imported down two paths is ordinary.
+                XTSymbol* prior = [self.globalScope lookupLocalSymbol:v.varName];
+                if (!prior)
                     {
                     [self.globalScope defineSymbol:sym];
+                    }
+                else if (prior.symbolType && v.declaredType &&
+                         ![prior.symbolType.displayName isEqualToString:v.declaredType.displayName])
+                    {
+                    [self.diagnostics emitError:[NSString stringWithFormat:
+                                                              @"global '%@' is declared twice in this unit with different "
+                                                              @"types: '%@' and '%@' — they would share one object, and a "
+                                                              @"write through one would be read through the other",
+                                                              v.varName, prior.symbolType.displayName,
+                                                              v.declaredType.displayName]
+                                             at:v.location];
                     }
                 }
             }

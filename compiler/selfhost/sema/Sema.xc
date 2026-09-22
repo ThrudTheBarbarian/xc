@@ -4631,6 +4631,26 @@ class Sema
                 // Globals are collected UP FRONT: a function declared before
                 // the global it reads still sees it, and the file order is not
                 // the visibility order.
+                // ONE global name, ONE type, across the whole unit. A second
+                // declaration used to overwrite the first in silence, so
+                // `u32 gX;` in one file and `u32 gX[64];` in another — both
+                // reaching one unit — became one object seen two ways: the
+                // scalar's write landed in the array's element 0. Identical
+                // redeclarations still merge (a header imported down two
+                // paths is ordinary); only a DIFFERENT type is refused.
+                String* priorTy = (String*)_globals.get((Hashable*)d.name());
+                if (priorTy != (String*)0 && d.op() != (String*)0
+                    && !priorTy.equals(d.op()))
+                    {
+                    String* m = String.withCString("global '");
+                    m.append(d.name());
+                    m.appendCString("' is declared twice in this unit with different types: '");
+                    m.append(priorTy);
+                    m.appendCString("' and '");
+                    m.append(d.op());
+                    m.appendCString("' — they would share one object, and a write through one would be read through the other");
+                    _errorAt(m, d);
+                    }
                 _globals.set((Hashable*)d.name(), (Object*)d.op());
                 }
             else if (k == (u16)nkEnumDecl)
