@@ -2162,8 +2162,22 @@ class X86Fixup
             return (u32)$7104;
         if (m.equals(String.withCString("psllw")))
             return (u32)$7106;
-        if (m.equals(String.withCString("psrldi")))
+        // These four were MISSING and the fifth was spelled `psrldi`, which is
+        // not an instruction. Nothing emitted a lane shift by an immediate on
+        // x86 until VLShr and VMulHi landed, so the table was never exercised:
+        // the reference assembler had all eight and this one had three and a
+        // typo. asx86-diff compares assembled BYTES for the fixtures that
+        // exist, so a mnemonic nobody emits is untested on BOTH sides.
+        if (m.equals(String.withCString("psrld")))
             return (u32)$7202;
+        if (m.equals(String.withCString("psrad")))
+            return (u32)$7204;
+        if (m.equals(String.withCString("pslld")))
+            return (u32)$7206;
+        if (m.equals(String.withCString("psrlq")))
+            return (u32)$7302;
+        if (m.equals(String.withCString("psllq")))
+            return (u32)$7306;
         return (u32)$FFFF_FFFF;
         }
 
