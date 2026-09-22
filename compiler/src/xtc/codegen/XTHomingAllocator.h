@@ -65,6 +65,28 @@ NS_ASSUME_NONNULL_BEGIN
                                  fpCaller:(NSArray<NSString*>*)fpCaller
                                  excluded:(nullable NSSet<NSNumber*>*)excluded
                                  foldInfo:(nullable NSDictionary<NSNumber*, id>*)foldInfo;
+
+/****************************************************************************\
+|* As above, plus compare-and-select fusion. `selInfo` maps a Select's
+|* CONDITION value-id → the ICmp the backend will elide and re-issue at the
+|* Select itself (so the cmov reads the flags directly instead of
+|* materialising a boolean and testing it again).
+|*
+|* Same hazard as a folded address, and it bites harder: the compare is read
+|* at the SELECT, several instructions after the ICmp the allocator sees, so
+|* without this the ICmp's source operands look dead and their registers are
+|* handed to the Select's own arms — which then compare the wrong value
+|* entirely. Caught by the x86-64 corpus sweep; both byte-identity gates
+|* passed it, because the two compilers were wrong in exactly the same way.
+\****************************************************************************/
++ (XTHomingResult*)assignHomesForFunction:(XTIRFunction*)fn
+                                 gpCallee:(NSArray<NSString*>*)gpCallee
+                                 gpCaller:(NSArray<NSString*>*)gpCaller
+                                 fpCallee:(NSArray<NSString*>*)fpCallee
+                                 fpCaller:(NSArray<NSString*>*)fpCaller
+                                 excluded:(nullable NSSet<NSNumber*>*)excluded
+                                 foldInfo:(nullable NSDictionary<NSNumber*, id>*)foldInfo
+                                  selInfo:(nullable NSDictionary<NSNumber*, id>*)selInfo;
 @end
 
 NS_ASSUME_NONNULL_END

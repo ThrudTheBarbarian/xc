@@ -195,6 +195,18 @@ class BitSet
         _foldInfo = m;
         }
 
+    // A back end that FUSES an ICmp into a Select must say so for the same
+    // reason, and the window is wider: the compare is re-issued AT the Select,
+    // several instructions after the ICmp the allocator sees, so its source
+    // operands look dead and their registers go to the Select's own arms —
+    // which then compare whichever arm landed there. Keyed by the Select's
+    // CONDITION value id -> the ICmp instruction.
+    Map* _selInfo;
+    void setSelInfo(Map* m)
+        {
+        _selInfo = m;
+        }
+
     // An opcode that emits a runtime call, so a value live across it cannot sit
     // in a caller-saved register. The hidden ones count too — bulk memory ops
     // and the ARC helpers are calls on some backends — and being generous here
@@ -336,6 +348,16 @@ class BitSet
                         Object* fea = _foldInfo.get((Hashable*)Number.with(p0.val().pid()));
                         if (fea != 0)
                             recordUses((IRInsn*)fea, pos, defs, ue);
+                        }
+                    }
+                if (_selInfo != 0 && insn.ops().count() >= (u32)1 && insn.op().equals(String.withCString("Select")))
+                    {
+                    IROperand* c0 = (IROperand*)insn.ops().get((u32)0);
+                    if (c0.kind() == (u8)OPK_USE && c0.val() != 0)
+                        {
+                        Object* sc = _selInfo.get((Hashable*)Number.with(c0.val().pid()));
+                        if (sc != 0)
+                            recordUses((IRInsn*)sc, pos, defs, ue);
                         }
                     }
                 if (Homing.isCallOp(insn.op()))

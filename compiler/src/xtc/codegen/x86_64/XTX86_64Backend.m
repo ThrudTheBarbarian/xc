@@ -31,6 +31,16 @@ static NSDictionary<NSNumber*, XTIRInsn*>* sFold = nil;
 // the CondBranch then branches on the predicate directly (`cmp; jl`) instead of
 // materialising a boolean and testing it. Excluded from homing (never stored).
 static NSSet<NSNumber*>* sFusedCmp = nil;
+// Compare-and-select fusion: an ICmp whose ONLY use is a Select condition in
+// the same block. Without it the condition is materialised (`setcc al; movzx`)
+// and then tested AGAIN (`test ecx, ecx`) before the cmov — four instructions
+// to re-derive flags the cmp already set. Fused, the ICmp emits nothing at its
+// own site and the compare is re-issued at the Select, so the cmov reads the
+// flags directly. Only when the ICmp's right-hand side is an immediate: the
+// re-issue then needs ONE scratch register, and rax/rdx already hold the two
+// selected values.
+static NSDictionary<NSNumber*, XTIRInsn*>* sSelSkip = nil; // cond id -> its ICmp
+static NSDictionary<NSNumber*, XTIRInsn*>* sSelCmp = nil; // Select id -> its ICmp
 // Auto-vectorised loops: a Vec-typed SSA value-id → its assigned SSE register
 // (xmm2..xmm15, all caller-saved on System V; vectorised loop bodies contain no
 // calls, so no prologue save is needed; xmm0/xmm1 stay emission scratch).
@@ -575,6 +585,74 @@ static NSInteger sWin64SretOff = 0;
     if (!s)
         return;
     [out appendFormat:@"\tmov%@\t[rbp-%@], %@\n", res.type.kind == XTIRTypeKindF64 ? @"sd" : @"ss", s, xmm];
+    }
+
+// ── float destination / source selection ────────────────────────────────────
+//
+// Every float op used to stage through the xmm0/xmm1 scratch pair even when
+// both operands were already homed, so float_math's inner loop ran
+//
+//     movaps xmm0, xmm9 ; movaps xmm1, xmm10 ; mulss xmm0, xmm1
+//     movaps xmm9, xmm0 ; movaps xmm0, xmm9  ; cvtss2sd xmm0, xmm0 ...
+//
+// — 35 register-to-register movaps around 8 arithmetic instructions, where
+// arm64 emits the same source with none. Emitting straight into the result's
+// home register collapses that; `loadF` into a register the value already
+// occupies emits nothing, and `storeF` back out of it likewise.
+//
+// The one hazard is a two-operand form whose destination is ALSO where the
+// second operand lives: writing the first operand there destroys the second
+// before it is read. That case falls back to the scratch register.
++ (NSString*)fdstFor:(XTIRValue*)res clobbering:(XTIROperand*)other
+                  as:(XTIROperand*)first
+    {
+    NSString* h = res ? sHome[@(res.valueId)] : nil;
+    if (!h || ![self isXmmHome:h])
+        return @"xmm0";
+    if (other && other.kind == XTIROperandKindUse)
+        {
+        // Same VALUE in both operands (x*x) is safe: the read happens from the
+        // destination, which still holds it.
+        BOOL sameValue = first && first.kind == XTIROperandKindUse &&
+                         first.valueId == other.valueId;
+        NSString* oh = sHome[@(other.valueId)];
+        if (!sameValue && oh && [self isXmmHome:oh] && [oh isEqualToString:h])
+            return @"xmm0";
+        }
+    return h;
+    }
+
+// A float value's own home register when it has one, else the xmm0 scratch.
+// Used by Store, where xmm0 is free (unlike a binary op, whose first operand
+// may already be sitting there).
++ (NSString*)fsrcForStore:(XTIROperand*)op fn:(XTIRFunction*)fn
+                     slot:(NSDictionary<NSNumber*, NSNumber*>*)slot
+                      out:(NSMutableString*)out
+    {
+    if (op && op.kind == XTIROperandKindUse)
+        {
+        NSString* h = sHome[@(op.valueId)];
+        if (h && [self isXmmHome:h])
+            return h;
+        }
+    [self loadF:op into:@"xmm0" fn:fn slot:slot out:out];
+    return @"xmm0";
+    }
+
+// The second operand's own home register when it has one — no copy needed —
+// otherwise load it into the xmm1 scratch and use that.
++ (NSString*)fsrcFor:(XTIROperand*)op fn:(XTIRFunction*)fn
+                slot:(NSDictionary<NSNumber*, NSNumber*>*)slot
+                 out:(NSMutableString*)out
+    {
+    if (op && op.kind == XTIROperandKindUse)
+        {
+        NSString* h = sHome[@(op.valueId)];
+        if (h && [self isXmmHome:h])
+            return h;
+        }
+    [self loadF:op into:@"xmm1" fn:fn slot:slot out:out];
+    return @"xmm1";
     }
 
 // ── operand → scratch base register ─────────────────────────────────────────
@@ -1772,6 +1850,8 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
     // base/index are recomputed at the store site.
     NSMutableDictionary<NSNumber*, XTIRInsn*>* fold = [NSMutableDictionary dictionary];
     NSMutableSet<NSNumber*>* fused = [NSMutableSet set];
+    NSMutableDictionary<NSNumber*, XTIRInsn*>* skip = [NSMutableDictionary dictionary];
+    NSMutableDictionary<NSNumber*, XTIRInsn*>* selCmp = [NSMutableDictionary dictionary];
     if (!hasAsm)
         {
         NSMutableDictionary<NSNumber*, NSNumber*>* uc = [NSMutableDictionary dictionary];
@@ -1861,9 +1941,40 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
             if (last && last.opcode == XTIROpICmp && last.result && last.result.valueId == cond.valueId)
                 [fused addObject:@(cond.valueId)];
             }
+        // Compare-and-select fusion (see sSelSkip).
+        for (XTIRBlock* b in fn.blocks)
+            {
+            NSMutableDictionary<NSNumber*, XTIRInsn*>* defs = [NSMutableDictionary dictionary];
+            for (XTIRInsn* in in b.instructions)
+                if (in.result)
+                    defs[@(in.result.valueId)] = in;
+            for (XTIRInsn* in in b.instructions)
+                {
+                if (in.opcode != XTIROpSelect || !in.result || in.operands.count < 3)
+                    continue;
+                XTIROperand* c = in.operands[0];
+                if (c.kind != XTIROperandKindUse || uc[@(c.valueId)].integerValue != 1)
+                    continue;
+                XTIRInsn* cmp = defs[@(c.valueId)];
+                if (!cmp || cmp.opcode != XTIROpICmp || cmp.operands.count < 2)
+                    continue;
+                if ([fused containsObject:@(c.valueId)])
+                    continue;
+                // Immediate RHS only, and one that a cmp can encode.
+                if (cmp.operands[1].kind != XTIROperandKindImmI)
+                    continue;
+                long long k = (long long)cmp.operands[1].intValue;
+                if (k < INT32_MIN || k > INT32_MAX)
+                    continue;
+                skip[@(c.valueId)] = cmp;
+                selCmp[@(in.result.valueId)] = cmp;
+                }
+            }
         }
     sFold = fold;
     sFusedCmp = fused;
+    sSelSkip = skip;
+    sSelCmp = selCmp;
     sVec = hasAsm ? nil : [self assignVectorRegsFor:fn]; // SSE regs for Vec values
 
     // Register homing (GP callee-saved rbx/r12-r15). Folded addresses excluded.
@@ -1877,6 +1988,7 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
         {
         NSMutableSet<NSNumber*>* excluded = [NSMutableSet setWithArray:fold.allKeys];
         [excluded unionSet:fused]; // fused ICmp results are never materialised
+        [excluded addObjectsFromArray:skip.allKeys]; // ...nor are Select-fused ones
         // Floats used to stay in slots entirely, and float_math showed it:
         // sixteen instructions for four of arithmetic, every intermediate
         // stored and immediately reloaded. Every xmm is caller-saved under
@@ -1922,7 +2034,8 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
                                                               fpCallee:@[]
                                                               fpCaller:fpPool
                                                               excluded:excluded
-                                                              foldInfo:fold];
+                                                              foldInfo:fold
+                                                               selInfo:skip];
         // A parameter homed in one of these is safe even though four of them
         // are incoming-argument registers: the prologue SPILLS every parameter
         // to its slot first and only then seeds the homes from those slots, so
@@ -2174,6 +2287,12 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
     for (XTIRBlock* bb in fn.blocks)
         {
         if ([loopHeads containsObject:[NSValue valueWithNonretainedObject:bb]])
+            // SIXTEEN, and not thirty-two: the assembler pads relative to the
+            // START of .text, and the ELF writer gives that section align 16,
+            // so `.p2align 5` puts every loop head at 16 mod 32 rather than 0.
+            // That phase is measurably WORSE — branch_mix +37%, array_sum +21%
+            // — so 32-byte alignment is worth having only once the text base
+            // is 32-aligned too, which is a linker change. Bug 232.
             [out appendString:@"\t.p2align\t4, 0x90\n"];
         [out appendFormat:@"%@:\n", [self blockLabel:bb fn:fn]];
         for (XTIRInsn* in in bb.instructions)
@@ -2657,6 +2776,17 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         if (fea && res.type.kind != XTIRTypeKindAgg)
             {
             NSString* memop = [self foldedMemOp:fea fn:fn slot:slot out:out]; // base→rax, idx→rcx
+            // A FLOAT loads straight into an xmm. It used to go through a
+            // general register and then `movd`/`movq` across — two instructions
+            // and a domain crossing for what movss/movsd does in one.
+            if ([self isFloatVal:res])
+                {
+                NSString* Df = [self fdstFor:res clobbering:nil as:nil];
+                [out appendFormat:@"\tmov%@\t%@, %@\n",
+                                  res.type.kind == XTIRTypeKindF64 ? @"sd" : @"ss", Df, memop];
+                [self storeF:Df into:res slot:slot out:out];
+                return;
+                }
             NSUInteger w = [self widthOf:res];
             [out appendFormat:@"\tmov\t%@, %@\n", [self reg:'d' width:w], memop];
             [self store:'d' into:res slot:slot out:out];
@@ -2673,6 +2803,14 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
                          slot:ds.integerValue
                        toSlot:YES
                           out:out];
+            return;
+            }
+        if ([self isFloatVal:res])
+            {
+            NSString* Df = [self fdstFor:res clobbering:nil as:nil];
+            [out appendFormat:@"\tmov%@\t%@, [rax]\n",
+                              res.type.kind == XTIRTypeKindF64 ? @"sd" : @"ss", Df];
+            [self storeF:Df into:res slot:slot out:out];
             return;
             }
         NSUInteger w = [self widthOf:res];
@@ -2693,6 +2831,18 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
             if (!(vv2 && vv2.type.kind == XTIRTypeKindAgg))
                 {
                 NSUInteger w = vv2 ? [self widthOf:vv2] : 4;
+                // A FLOAT goes straight out of an xmm. Its source register is
+                // chosen BEFORE the address is computed, for the same reason
+                // rdx is loaded first below — though an xmm could not be
+                // clobbered by foldedMemOp's rax/rcx in any case.
+                if (vv2 && [self isFloatVal:vv2])
+                    {
+                    NSString* Sf = [self fsrcForStore:ops[1] fn:fn slot:slot out:out];
+                    NSString* memop = [self foldedMemOp:sea fn:fn slot:slot out:out];
+                    [out appendFormat:@"\tmov%@\t%@, %@\n",
+                                      vv2.type.kind == XTIRTypeKindF64 ? @"sd" : @"ss", memop, Sf];
+                    return;
+                    }
                 // Value → rdx FIRST (rdx is never a home reg nor foldedMemOp's
                 // rax/rcx scratch, so the address computation can't clobber it).
                 [self load:ops[1] into:'d' fn:fn slot:slot out:out];
@@ -2713,6 +2863,13 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
                          slot:vs.integerValue
                        toSlot:NO
                           out:out];
+            return;
+            }
+        if (vv && [self isFloatVal:vv])
+            {
+            NSString* Sf = [self fsrcForStore:ops[1] fn:fn slot:slot out:out];
+            [out appendFormat:@"\tmov%@\t[rax], %@\n",
+                              vv.type.kind == XTIRTypeKindF64 ? @"sd" : @"ss", Sf];
             return;
             }
         NSUInteger w = vv ? [self widthOf:vv] : 4;
@@ -3513,13 +3670,14 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         if (!res || ops.count < 2)
             return;
         BOOL d = res.type.kind == XTIRTypeKindF64;
-        [self loadF:ops[0] into:@"xmm0" fn:fn slot:slot out:out];
-        [self loadF:ops[1] into:@"xmm1" fn:fn slot:slot out:out];
+        NSString* D = [self fdstFor:res clobbering:ops[1] as:ops[0]];
+        [self loadF:ops[0] into:D fn:fn slot:slot out:out];
+        NSString* S = [self fsrcFor:ops[1] fn:fn slot:slot out:out];
         NSString* mn = op == XTIROpFAdd ? @"add" : op == XTIROpFSub ? @"sub"
                                                : op == XTIROpFMul   ? @"mul"
                                                                     : @"div";
-        [out appendFormat:@"\t%@%@\txmm0, xmm1\n", mn, d ? @"sd" : @"ss"];
-        [self storeF:@"xmm0" into:res slot:slot out:out];
+        [out appendFormat:@"\t%@%@\t%@, %@\n", mn, d ? @"sd" : @"ss", D, S];
+        [self storeF:D into:res slot:slot out:out];
         return;
         }
     case XTIROpFNeg:
@@ -3527,9 +3685,15 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         if (!res || ops.count < 1)
             return;
         BOOL d = res.type.kind == XTIRTypeKindF64;
+        // The operand goes to the scratch FIRST, so zeroing the destination
+        // cannot destroy it even when result and operand share a home.
         [self loadF:ops[0] into:@"xmm0" fn:fn slot:slot out:out];
-        [out appendFormat:@"\txorps\txmm1, xmm1\n\tsub%@\txmm1, xmm0\n", d ? @"sd" : @"ss"]; // 0-x
-        [self storeF:@"xmm1" into:res slot:slot out:out];
+        NSString* Dn = res ? sHome[@(res.valueId)] : nil;
+        if (!Dn || ![self isXmmHome:Dn] || [Dn isEqualToString:@"xmm0"])
+            Dn = @"xmm1";
+        [out appendFormat:@"\txorps\t%@, %@\n\tsub%@\t%@, xmm0\n",
+                          Dn, Dn, d ? @"sd" : @"ss", Dn]; // 0-x
+        [self storeF:Dn into:res slot:slot out:out];
         return;
         }
     case XTIROpFSqrt:
@@ -3537,9 +3701,10 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         if (!res || ops.count < 1)
             return;
         BOOL d = res.type.kind == XTIRTypeKindF64;
-        [self loadF:ops[0] into:@"xmm0" fn:fn slot:slot out:out];
-        [out appendFormat:@"\tsqrt%@\txmm0, xmm0\n", d ? @"sd" : @"ss"];
-        [self storeF:@"xmm0" into:res slot:slot out:out];
+        NSString* Sq = [self fsrcFor:ops[0] fn:fn slot:slot out:out];
+        NSString* Dq = [self fdstFor:res clobbering:nil as:nil];
+        [out appendFormat:@"\tsqrt%@\t%@, %@\n", d ? @"sd" : @"ss", Dq, Sq];
+        [self storeF:Dq into:res slot:slot out:out];
         return;
         }
     case XTIROpSIToFp:
@@ -3585,9 +3750,10 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         {
         if (!res || ops.count < 1)
             return;
-        [self loadF:ops[0] into:@"xmm0" fn:fn slot:slot out:out];
-        [out appendString:@"\tcvtss2sd\txmm0, xmm0\n"];
-        [self storeF:@"xmm0" into:res slot:slot out:out];
+        NSString* Sc = [self fsrcFor:ops[0] fn:fn slot:slot out:out];
+        NSString* Dc = [self fdstFor:res clobbering:nil as:nil];
+        [out appendFormat:@"\tcvtss2sd\t%@, %@\n", Dc, Sc];
+        [self storeF:Dc into:res slot:slot out:out];
         return;
         }
     // f64 → f32
@@ -3595,9 +3761,10 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         {
         if (!res || ops.count < 1)
             return;
-        [self loadF:ops[0] into:@"xmm0" fn:fn slot:slot out:out];
-        [out appendString:@"\tcvtsd2ss\txmm0, xmm0\n"];
-        [self storeF:@"xmm0" into:res slot:slot out:out];
+        NSString* Sc = [self fsrcFor:ops[0] fn:fn slot:slot out:out];
+        NSString* Dc = [self fdstFor:res clobbering:nil as:nil];
+        [out appendFormat:@"\tcvtsd2ss\t%@, %@\n", Dc, Sc];
+        [self storeF:Dc into:res slot:slot out:out];
         return;
         }
     case XTIROpFCmp:
@@ -3903,6 +4070,10 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         {
         if (!res || ops.count < 2)
             return;
+        // Fused into a Select: the compare is re-issued at the cmov so the
+        // flags reach it directly. Nothing to emit here.
+        if (sSelSkip && sSelSkip[@(res.valueId)])
+            return;
         uint8_t p = in.predicate;
         BOOL sg = (p == XTIRICmpSLT || p == XTIRICmpSLE || p == XTIRICmpSGT || p == XTIRICmpSGE);
         XTIRValue* l = ops[0].kind == XTIROperandKindUse ? fn.values[@(ops[0].valueId)] : nil;
@@ -3980,6 +4151,35 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
             w = 4;
         [self load:ops[1] into:'a' fn:fn slot:slot out:out];   // true → rax
         [self load:ops[2] into:'d' fn:fn slot:slot out:out];   // false → rdx
+        // The condition is an ICmp used only here: re-issue its compare now
+        // (rax/rdx already hold the two values, rcx is free) and let the cmov
+        // read the flags. Take the FALSE value when the predicate does not hold.
+        XTIRInsn* scmp = sSelCmp ? sSelCmp[@(res.valueId)] : nil;
+        if (scmp && ops[0].kind == XTIROperandKindUse && sSelSkip &&
+            sSelSkip[@(ops[0].valueId)])
+            {
+            uint8_t sp = scmp.predicate;
+            BOOL ssg = (sp == XTIRICmpSLT || sp == XTIRICmpSLE ||
+                        sp == XTIRICmpSGT || sp == XTIRICmpSGE);
+            XTIRValue* sl = scmp.operands[0].kind == XTIROperandKindUse
+                                ? fn.values[@(scmp.operands[0].valueId)] : nil;
+            NSUInteger cw = sl ? [self widthOf:sl] : 4;
+            if (cw < 4)
+                cw = 4;
+            [self loadExt:scmp.operands[0] into:'c' signed:ssg width:cw fn:fn slot:slot out:out];
+            long long k = (long long)scmp.operands[1].intValue;
+            BOOL zeroOK = (k == 0) && (sp == XTIRICmpEQ || sp == XTIRICmpNE ||
+                                       sp == XTIRICmpULT || sp == XTIRICmpUGE);
+            if (zeroOK)
+                [out appendFormat:@"\ttest\t%@, %@\n", [self reg:'c' width:cw], [self reg:'c' width:cw]];
+            else
+                [out appendFormat:@"\tcmp\t%@, %lld\n", [self reg:'c' width:cw],
+                                  (cw == 4) ? (long long)(int32_t)k : k];
+            [out appendFormat:@"\t%@\t%@, %@\n", [self cmovForNegatedICmp:sp],
+                              [self reg:'a' width:w], [self reg:'d' width:w]];
+            [self store:'a' into:res slot:slot out:out];
+            return;
+            }
         [self loadZX:ops[0] into:'c' fn:fn slot:slot out:out]; // cond → rcx (zero-extended)
         [out appendString:@"\ttest\tecx, ecx\n"];
         [out appendFormat:@"\tcmove\t%@, %@\n", [self reg:'a' width:(w < 4 ? 4 : w)], [self reg:'d' width:(w < 4 ? 4 : w)]];
@@ -4406,6 +4606,36 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
 
 // Conditional jump taken when the ICmp predicate is FALSE (the fused CondBranch
 // jumps to its false target on the negated condition).
+// cmov taken when the ICmp predicate is FALSE — a fused Select moves its
+// FALSE value over the true one already in the destination.
++ (NSString*)cmovForNegatedICmp:(uint8_t)p
+    {
+    switch (p)
+        {
+    case XTIRICmpEQ:
+        return @"cmovne";
+    case XTIRICmpNE:
+        return @"cmove";
+    case XTIRICmpSLT:
+        return @"cmovge";
+    case XTIRICmpSGT:
+        return @"cmovle";
+    case XTIRICmpSLE:
+        return @"cmovg";
+    case XTIRICmpSGE:
+        return @"cmovl";
+    case XTIRICmpULT:
+        return @"cmovae";
+    case XTIRICmpUGT:
+        return @"cmovbe";
+    case XTIRICmpULE:
+        return @"cmova";
+    case XTIRICmpUGE:
+        return @"cmovb";
+        }
+    return @"cmovne";
+    }
+
 + (NSString*)jccForNegatedICmp:(uint8_t)p
     {
     switch (p)

@@ -52,6 +52,20 @@
                                  excluded:(NSSet<NSNumber*>*)excludedIn
                                  foldInfo:(NSDictionary<NSNumber*, id>*)foldInfo
     {
+    return [self assignHomesForFunction:fn gpCallee:gpCallee gpCaller:gpCaller
+                               fpCallee:fpCallee fpCaller:fpCaller
+                               excluded:excludedIn foldInfo:foldInfo selInfo:nil];
+    }
+
++ (XTHomingResult*)assignHomesForFunction:(XTIRFunction*)fn
+                                 gpCallee:(NSArray<NSString*>*)gpCallee
+                                 gpCaller:(NSArray<NSString*>*)gpCaller
+                                 fpCallee:(NSArray<NSString*>*)fpCallee
+                                 fpCaller:(NSArray<NSString*>*)fpCaller
+                                 excluded:(NSSet<NSNumber*>*)excludedIn
+                                 foldInfo:(NSDictionary<NSNumber*, id>*)foldInfo
+                                  selInfo:(NSDictionary<NSNumber*, id>*)selInfo
+    {
     XTHomingResult* result = [[XTHomingResult alloc] init];
     NSMutableDictionary<NSNumber*, NSString*>* homeReg = [NSMutableDictionary dictionary];
     result.homeReg = homeReg;
@@ -124,6 +138,17 @@
                 if (fea)
                     for (XTIROperand* fo in fea.operands)
                         recordUse(fo);
+                }
+            // A Select-fused ICmp is elided and its compare re-issued AT the
+            // Select, so the compare's operands are read here — extend them,
+            // or the Select's own arms take their registers and the compare
+            // reads whichever arm landed there.
+            if (selInfo.count && insn.opcode == XTIROpSelect && insn.operands.count >= 1 && insn.operands[0].kind == XTIROperandKindUse)
+                {
+                XTIRInsn* sc = selInfo[@(insn.operands[0].valueId)];
+                if (sc)
+                    for (XTIROperand* so in sc.operands)
+                        recordUse(so);
                 }
             if ([self isCallOpcode:insn.opcode])
                 [callPositions addObject:@(pos)];

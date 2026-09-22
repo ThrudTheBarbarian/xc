@@ -509,6 +509,9 @@ class X86_64
         Array* ec = _fusedCmp.allKeys();
         for (u32 i = (u32)0; i < ec.count(); i = i + (u32)1)
             h.exclude(((IRValue*)ec.get(i)).pid());
+        Array* es = _selSkip.allKeys();
+        for (u32 i = (u32)0; i < es.count(); i = i + (u32)1)
+            h.exclude(((IRValue*)es.get(i)).pid());
         // The folds also EXTEND live ranges: a folded address's base and index
         // are read at the Load, not at the elided address op.
         Map* byId = new Map();
@@ -519,6 +522,16 @@ class X86_64
             byId.set((Hashable*)Number.with(v.pid()), _fold.get((Hashable*)v));
             }
         h.setFoldInfo(byId);
+        // …and so does a Select-fused ICmp: its compare is re-issued at the
+        // Select, so its operands are read there.
+        Map* selById = new Map();
+        Array* sk = _selSkip.allKeys();
+        for (u32 i = (u32)0; i < sk.count(); i = i + (u32)1)
+            {
+            IRValue* v = (IRValue*)sk.get(i);
+            selById.set((Hashable*)Number.with(v.pid()), _selSkip.get((Hashable*)v));
+            }
+        h.setSelInfo(selById);
         // Floats used to stay in slots entirely, and float_math showed it:
         // sixteen instructions for four of arithmetic, every intermediate
         // stored and immediately reloaded. Every xmm is caller-saved under
@@ -1113,20 +1126,80 @@ class X86_64
                           slotOf(res), xmm.cString());
         }
 
+    // Every float op used to stage through the xmm0/xmm1 scratch pair even when
+    // both operands were already homed — 35 register-to-register movaps around
+    // 8 arithmetic instructions in float_math's loop, where arm64 emits none.
+    // Emitting straight into the result's home collapses that: loadF into a
+    // register the value already occupies emits nothing, and storeF back out
+    // of it likewise. The one hazard is a two-operand form whose destination
+    // is ALSO where the second operand lives; that falls back to the scratch.
+    String* fdstFor(IRValue* res, IROperand* other, IROperand* first)
+        {
+        String* h = homeOf(res);
+        if (!isXmmHome(h))
+            return String.withCString("xmm0");
+        if (other != (IROperand*)0 && other.kind() == (u8)OPK_USE && other.val() != (IRValue*)0)
+            {
+            // The same VALUE in both operands (x*x) is safe: the read happens
+            // from the destination, which still holds it.
+            bool sameValue = first != (IROperand*)0 && first.kind() == (u8)OPK_USE
+                             && first.val() == other.val();
+            String* oh = homeOf(other.val());
+            if (!sameValue && isXmmHome(oh) && oh.equals(h))
+                return String.withCString("xmm0");
+            }
+        return h;
+        }
+
+    // The second operand's own home when it has one — no copy needed —
+    // otherwise load it into the xmm1 scratch and use that.
+    String* fsrcFor(IROperand* op)
+        {
+        if (op != (IROperand*)0 && op.kind() == (u8)OPK_USE && op.val() != (IRValue*)0)
+            {
+            String* h = homeOf(op.val());
+            if (isXmmHome(h))
+                return h;
+            }
+        String* x1 = String.withCString("xmm1");
+        loadF(op, x1);
+        return x1;
+        }
+
+    // A float value's own home when it has one, else the xmm0 scratch. Used by
+    // Store, where xmm0 is free (unlike a binary op, whose first operand may
+    // already be sitting there).
+    String* fsrcForStore(IROperand* op)
+        {
+        if (op != (IROperand*)0 && op.kind() == (u8)OPK_USE && op.val() != (IRValue*)0)
+            {
+            String* h = homeOf(op.val());
+            if (isXmmHome(h))
+                return h;
+            }
+        String* x0 = String.withCString("xmm0");
+        loadF(op, x0);
+        return x0;
+        }
+
     void emitFBin(IRInsn* n)
         {
         if (n.res() == (IRValue*)0 || n.ops().count() < (u32)2)
             return;
         bool d = n.res().ty().equals(String.withCString("F64"));
-        loadF((IROperand*)n.ops().get((u32)0), String.withCString("xmm0"));
-        loadF((IROperand*)n.ops().get((u32)1), String.withCString("xmm1"));
+        IROperand* o0 = (IROperand*)n.ops().get((u32)0);
+        IROperand* o1 = (IROperand*)n.ops().get((u32)1);
+        String* D = fdstFor(n.res(), o1, o0);
+        loadF(o0, D);
+        String* S = fsrcFor(o1);
         String* op = n.op();
         String* mn = op.equals(String.withCString("FAdd")) ? String.withCString("add")
                                                            : (op.equals(String.withCString("FSub")) ? String.withCString("sub")
                                                                                                     : (op.equals(String.withCString("FMul")) ? String.withCString("mul")
                                                                                                                                              : String.withCString("div")));
-        _out.appendFormat("\t%s%s\txmm0, xmm1\n", mn.cString(), d ? "sd" : "ss");
-        storeF(String.withCString("xmm0"), n.res());
+        _out.appendFormat("\t%s%s\t%s, %s\n", mn.cString(), d ? "sd" : "ss",
+                          D.cString(), S.cString());
+        storeF(D, n.res());
         }
 
     // Negation is 0 − x, which keeps the sign of a zero right without needing a
@@ -1136,9 +1209,15 @@ class X86_64
         if (n.res() == (IRValue*)0 || n.ops().count() < (u32)1)
             return;
         bool d = n.res().ty().equals(String.withCString("F64"));
+        // The operand goes to the scratch FIRST, so zeroing the destination
+        // cannot destroy it even when result and operand share a home.
         loadF((IROperand*)n.ops().get((u32)0), String.withCString("xmm0"));
-        _out.appendFormat("\txorps\txmm1, xmm1\n\tsub%s\txmm1, xmm0\n", d ? "sd" : "ss");
-        storeF(String.withCString("xmm1"), n.res());
+        String* Dn = homeOf(n.res());
+        if (!isXmmHome(Dn) || Dn.equals(String.withCString("xmm0")))
+            Dn = String.withCString("xmm1");
+        _out.appendFormat("\txorps\t%s, %s\n", Dn.cString(), Dn.cString());
+        _out.appendFormat("\tsub%s\t%s, xmm0\n", d ? "sd" : "ss", Dn.cString());
+        storeF(Dn, n.res());
         }
 
     void emitFSqrt(IRInsn* n)
@@ -1146,9 +1225,10 @@ class X86_64
         if (n.res() == (IRValue*)0 || n.ops().count() < (u32)1)
             return;
         bool d = n.res().ty().equals(String.withCString("F64"));
-        loadF((IROperand*)n.ops().get((u32)0), String.withCString("xmm0"));
-        _out.appendFormat("\tsqrt%s\txmm0, xmm0\n", d ? "sd" : "ss");
-        storeF(String.withCString("xmm0"), n.res());
+        String* Sq = fsrcFor((IROperand*)n.ops().get((u32)0));
+        String* Dq = fdstFor(n.res(), (IROperand*)0, (IROperand*)0);
+        _out.appendFormat("\tsqrt%s\t%s, %s\n", d ? "sd" : "ss", Dq.cString(), Sq.cString());
+        storeF(Dq, n.res());
         }
 
     void emitIntToFp(IRInsn* n)
@@ -1192,9 +1272,11 @@ class X86_64
         {
         if (n.res() == (IRValue*)0 || n.ops().count() < (u32)1)
             return;
-        loadF((IROperand*)n.ops().get((u32)0), String.withCString("xmm0"));
-        _out.appendFormat("\t%s\txmm0, xmm0\n", widen ? "cvtss2sd" : "cvtsd2ss");
-        storeF(String.withCString("xmm0"), n.res());
+        String* Sc = fsrcFor((IROperand*)n.ops().get((u32)0));
+        String* Dc = fdstFor(n.res(), (IROperand*)0, (IROperand*)0);
+        _out.appendFormat("\t%s\t%s, %s\n", widen ? "cvtss2sd" : "cvtsd2ss",
+                          Dc.cString(), Sc.cString());
+        storeF(Dc, n.res());
         }
 
     // ucomis* sets CF and ZF like an UNSIGNED compare, so seta/setae are the
@@ -3301,6 +3383,8 @@ class X86_64
         {
         _fold = new Map();
         _fusedCmp = new Map();
+        _selSkip = new Map();
+        _selCmp = new Map();
         if (_hasAsm)
             return;
         Map* uc = new Map();
@@ -3405,6 +3489,52 @@ class X86_64
             if (last.res() != cond.val())
                 continue;
             _fusedCmp.set((Hashable*)cond.val(), (Object*)last);
+            }
+        // Compare-and-select fusion: an ICmp whose ONLY use is a Select
+        // condition in the same block. Without it the condition is materialised
+        // (setcc/movzx) and then tested AGAIN before the cmov — four
+        // instructions to re-derive flags the cmp already set. Fused, the ICmp
+        // emits nothing and the compare is re-issued at the Select, whose cmov
+        // reads the flags directly. Immediate right-hand side only: the
+        // re-issue then needs one scratch register, and rax/rdx are taken.
+        for (u32 b2 = (u32)0; b2 < fn.blocks().count(); b2 = b2 + (u32)1)
+            {
+            IRBlock* bb2 = (IRBlock*)fn.blocks().get(b2);
+            Map* defs = new Map();
+            for (u32 i2 = (u32)0; i2 < bb2.insns().count(); i2 = i2 + (u32)1)
+                {
+                IRInsn* in2 = (IRInsn*)bb2.insns().get(i2);
+                if (in2.res() != (IRValue*)0)
+                    defs.set((Hashable*)in2.res(), (Object*)in2);
+                }
+            for (u32 i2 = (u32)0; i2 < bb2.insns().count(); i2 = i2 + (u32)1)
+                {
+                IRInsn* in2 = (IRInsn*)bb2.insns().get(i2);
+                if (!in2.op().equals(String.withCString("Select")))
+                    continue;
+                if (in2.res() == (IRValue*)0 || in2.ops().count() < (u32)3)
+                    continue;
+                IROperand* c2 = (IROperand*)in2.ops().get((u32)0);
+                if (c2.kind() != (u8)OPK_USE || c2.val() == (IRValue*)0)
+                    continue;
+                if (useCount(uc, c2.val()) != (u32)1)
+                    continue;
+                IRInsn* cmp2 = (IRInsn*)defs.get((Hashable*)c2.val());
+                if (cmp2 == (IRInsn*)0 || !cmp2.op().equals(String.withCString("ICmp")))
+                    continue;
+                if (cmp2.ops().count() < (u32)2)
+                    continue;
+                if (_fusedCmp.get((Hashable*)c2.val()) != (Object*)0)
+                    continue;
+                IROperand* r2 = (IROperand*)cmp2.ops().get((u32)1);
+                if (r2.kind() != (u8)OPK_IMMI)
+                    continue;
+                i64 k2 = r2.imm();
+                if (k2 < (i64)-2147483648 || k2 > (i64)2147483647)
+                    continue;
+                _selSkip.set((Hashable*)c2.val(), (Object*)cmp2);
+                _selCmp.set((Hashable*)in2.res(), (Object*)cmp2);
+                }
             }
         }
 
@@ -4034,6 +4164,18 @@ class X86_64
         if (p.kind() == (u8)OPK_USE && isFolded(p.val()) && !isAggTy(rt))
             {
             String* memop = foldedMemOp((IRInsn*)_fold.get((Hashable*)p.val()));
+            // A FLOAT loads straight into an xmm. It used to go through a
+            // general register and then movd/movq across — two instructions and
+            // a domain crossing for what movss/movsd does in one.
+            if (isFloatTy(rt))
+                {
+                String* Df = fdstFor(n.res(), (IROperand*)0, (IROperand*)0);
+                _out.appendFormat("\tmov%s\t%s, %s\n",
+                                  rt.equals(String.withCString("F64")) ? "sd" : "ss",
+                                  Df.cString(), memop.cString());
+                storeF(Df, n.res());
+                return;
+                }
             u32 w = widthOfValue(n.res());
             _out.appendFormat("\tmov\t%s, %s\n", reg((u8)'d', w).cString(), memop.cString());
             store((u8)'d', n.res());
@@ -4044,6 +4186,14 @@ class X86_64
             {
             if (hasSlot(n.res()))
                 copyAgg(aggSize(layoutOf(rt)), String.withCString("rax"), slotOf(n.res()), true);
+            return;
+            }
+        if (isFloatTy(rt))
+            {
+            String* Df = fdstFor(n.res(), (IROperand*)0, (IROperand*)0);
+            _out.appendFormat("\tmov%s\t%s, [rax]\n",
+                              rt.equals(String.withCString("F64")) ? "sd" : "ss", Df.cString());
+            storeF(Df, n.res());
             return;
             }
         u32 w = widthOfValue(n.res());
@@ -4061,6 +4211,18 @@ class X86_64
         if (p.kind() == (u8)OPK_USE && isFolded(p.val()) && !isAggTy(vt))
             {
             u32 w = vt == (String*)0 ? (u32)4 : widthOfValue(v.val());
+            // A FLOAT goes straight out of an xmm. Its source is chosen before
+            // the address is formed, as rdx is below — though an xmm could not
+            // be clobbered by the rax/rcx address scratch in any case.
+            if (isFloatTy(vt))
+                {
+                String* Sf = fsrcForStore(v);
+                String* memopF = foldedMemOp((IRInsn*)_fold.get((Hashable*)p.val()));
+                _out.appendFormat("\tmov%s\t%s, %s\n",
+                                  vt.equals(String.withCString("F64")) ? "sd" : "ss",
+                                  memopF.cString(), Sf.cString());
+                return;
+                }
             // The value goes to rdx FIRST: rdx is never a home register nor one
             // of the address computation's rax/rcx scratch, so forming the
             // address afterwards cannot clobber it.
@@ -4074,6 +4236,13 @@ class X86_64
             {
             if (hasSlot(v.val()))
                 copyAgg(aggSize(layoutOf(vt)), String.withCString("rax"), slotOf(v.val()), false);
+            return;
+            }
+        if (isFloatTy(vt))
+            {
+            String* Sf = fsrcForStore(v);
+            _out.appendFormat("\tmov%s\t[rax], %s\n",
+                              vt.equals(String.withCString("F64")) ? "sd" : "ss", Sf.cString());
             return;
             }
         u32 w = vt == (String*)0 ? (u32)4 : widthOfValue(v.val());
@@ -4670,6 +4839,9 @@ class X86_64
         // straddles is decided by however much code happens to precede it.
         // Regenerating the RUNTIME (which branch_mix never calls in its loop)
         // moved that benchmark 57ms -> 79ms, a 37% swing from pure layout.
+        // SIXTEEN, not thirty-two: the assembler pads relative to the start of
+        // .text and that section is align 16, so `.p2align 5` lands every loop
+        // head at 16 mod 32 — measurably worse (branch_mix +37%). Bug 232.
         if (loopHead)
             _out.appendCString("\t.p2align\t4, 0x90\n");
         _out.appendFormat("%s:\n", blockLabel(fn, bb).cString());
@@ -5287,6 +5459,10 @@ class X86_64
         {
         if (n.res() == (IRValue*)0 || n.ops().count() < (u32)2)
             return;
+        // Fused into a Select: the compare is re-issued at the cmov so the
+        // flags reach it directly. Nothing to emit here.
+        if (inSelSkip(n.res()))
+            return;
         String* p = n.pred();
         bool sg = isSignedPred(p);
         IROperand* o0 = (IROperand*)n.ops().get((u32)0);
@@ -5357,7 +5533,43 @@ class X86_64
         return _fusedCmp != (Map*)0 && v != (IRValue*)0 && _fusedCmp.get((Hashable*)v) != (Object*)0;
         }
 
+    bool inSelSkip(IRValue* v)
+        {
+        return _selSkip != (Map*)0 && v != (IRValue*)0 && _selSkip.get((Hashable*)v) != (Object*)0;
+        }
+
+    // cmov taken when the ICmp predicate is FALSE — a fused Select moves its
+    // FALSE value over the true one already in the destination.
+    static String* cmovForNegated(String* p)
+        {
+        if (p == (String*)0)
+            return String.withCString("cmovne");
+        if (p.equals(String.withCString("EQ")))
+            return String.withCString("cmovne");
+        if (p.equals(String.withCString("NE")))
+            return String.withCString("cmove");
+        if (p.equals(String.withCString("SLT")))
+            return String.withCString("cmovge");
+        if (p.equals(String.withCString("SLE")))
+            return String.withCString("cmovg");
+        if (p.equals(String.withCString("SGT")))
+            return String.withCString("cmovle");
+        if (p.equals(String.withCString("SGE")))
+            return String.withCString("cmovl");
+        if (p.equals(String.withCString("ULT")))
+            return String.withCString("cmovae");
+        if (p.equals(String.withCString("ULE")))
+            return String.withCString("cmova");
+        if (p.equals(String.withCString("UGT")))
+            return String.withCString("cmovbe");
+        if (p.equals(String.withCString("UGE")))
+            return String.withCString("cmovb");
+        return String.withCString("cmovne");
+        }
+
     Map* _fusedCmp;
+    Map* _selSkip;
+    Map* _selCmp;
 
     static bool isSignedPred(String* p)
         {
@@ -5403,7 +5615,42 @@ class X86_64
             w = (u32)4;
         load((IROperand*)n.ops().get((u32)1), (u8)'a');   // the true value
         load((IROperand*)n.ops().get((u32)2), (u8)'d');   // the false value
-        loadZX((IROperand*)n.ops().get((u32)0), (u8)'c'); // the condition
+        // The condition is an ICmp read only here: re-issue its compare now
+        // (rax/rdx hold the two values, rcx is free) and let the cmov read the
+        // flags. Take the FALSE value when the predicate does not hold.
+        IRInsn* scmp = _selCmp == (Map*)0 ? (IRInsn*)0 : (IRInsn*)_selCmp.get((Hashable*)n.res());
+        IROperand* c0 = (IROperand*)n.ops().get((u32)0);
+        if (scmp != (IRInsn*)0 && c0.kind() == (u8)OPK_USE && inSelSkip(c0.val()))
+            {
+            String* sp = scmp.pred();
+            bool ssg = isSignedPred(sp);
+            IROperand* so0 = (IROperand*)scmp.ops().get((u32)0);
+            u32 cw = so0.kind() == (u8)OPK_USE ? widthOfValue(so0.val()) : (u32)4;
+            if (cw < (u32)4)
+                cw = (u32)4;
+            loadExt(so0, (u8)'c', ssg, cw);
+            i64 k = ((IROperand*)scmp.ops().get((u32)1)).imm();
+            bool zeroOK = k == (i64)0
+                          && (sp.equals(String.withCString("EQ")) || sp.equals(String.withCString("NE"))
+                              || sp.equals(String.withCString("ULT")) || sp.equals(String.withCString("UGE")));
+            if (zeroOK)
+                _out.appendFormat("\ttest\t%s, %s\n", reg((u8)'c', cw).cString(),
+                                  reg((u8)'c', cw).cString());
+            else
+                {
+                i64 pk = cw == (u32)4 ? (i64)(i32)k : k;
+                _out.appendCString("\tcmp\t");
+                _out.append(reg((u8)'c', cw));
+                _out.appendCString(", ");
+                _out.append(String.withI64(pk));
+                _out.appendCString("\n");
+                }
+            _out.appendFormat("\t%s\t%s, %s\n", cmovForNegated(sp).cString(),
+                              reg((u8)'a', w).cString(), reg((u8)'d', w).cString());
+            store((u8)'a', n.res());
+            return;
+            }
+        loadZX(c0, (u8)'c'); // the condition
         _out.appendCString("\ttest\tecx, ecx\n");
         _out.appendFormat("\tcmove\t%s, %s\n", reg((u8)'a', w).cString(), reg((u8)'d', w).cString());
         store((u8)'a', n.res());
