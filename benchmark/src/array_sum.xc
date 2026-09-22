@@ -10,7 +10,7 @@ i32 main(i32 argc, u8** argv)
     for (u32 i = (u32)0; i < (u32)N; i++) a[i] = (i * (u32)2654435761) + seed;
     u32 sum = (u32)0;
     i64 t0 = bench_now_us();
-    for (u32 r = (u32)0; r < (u32)20000; r++)
+    for (u32 r = (u32)0; r < (u32)7000000; r++)
         for (u32 i = (u32)0; i < (u32)N; i++) sum = sum + a[i];
     i64 t1 = bench_now_us();
     Stdio.printf("%lu %lld\n", sum, t1 - t0);

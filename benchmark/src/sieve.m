@@ -9,7 +9,7 @@ int main(int argc, char **argv)
     @autoreleasepool {
         uint8_t flags[N]; uint32_t seed = (uint32_t)argc, acc = 0;
         int64_t t0 = bench_now_us();
-        for (uint32_t r = 0; r < 2000; r++)
+        for (uint32_t r = 0; r < 150000; r++)
             {
             for (uint32_t i = 0; i < N; i++) flags[i] = 1;
             uint32_t count = 0;

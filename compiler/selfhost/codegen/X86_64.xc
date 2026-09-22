@@ -5297,8 +5297,53 @@ class X86_64
         if (w < (u32)4)
             w = (u32)4;
         loadExt(o0, (u8)'a', sg, w);
-        loadExt(o1, (u8)'c', sg, w);
-        _out.appendFormat("\tcmp\t%s, %s\n", reg((u8)'a', w).cString(), reg((u8)'c', w).cString());
+        // FOLD A CONSTANT RIGHT-HAND SIDE. x86 has `cmp r32, imm32` and
+        // `cmp r64, imm32` (sign-extended); nothing used either, so every
+        // comparison against a literal cost an extra `mov` into rcx first, in
+        // every loop guard in every program. arm64 folds the same operand from
+        // the same IR, which already carries it as an immediate.
+        //
+        // Against ZERO, `test r, r` sets the same flags with no immediate at
+        // all — but only for equality and the unsigned predicates, because
+        // `test` clears CF and OF and the signed tests read those.
+        bool folded = false;
+        if (o1.kind() == (u8)OPK_IMMI)
+            {
+            i64 k = o1.imm();
+            bool fits = w <= (u32)4 || (k >= (i64)-2147483648 && k <= (i64)2147483647);
+            if (fits)
+                {
+                bool zeroOK = k == (i64)0
+                              && (p.equals(String.withCString("EQ")) || p.equals(String.withCString("NE"))
+                                  || p.equals(String.withCString("ULT")) || p.equals(String.withCString("UGE")));
+                if (zeroOK)
+                    {
+                    _out.appendFormat("\ttest\t%s, %s\n", reg((u8)'a', w).cString(),
+                                      reg((u8)'a', w).cString());
+                    folded = true;
+                    }
+                else
+                    {
+                    // Print a 32-bit immediate in its SIGNED reading: the bit
+                    // pattern is what a 32-bit compare tests, and `cmp eax, -1`
+                    // takes the sign-extended imm8 encoding where
+                    // `cmp eax, 4294967295` takes imm32. The assembler chooses
+                    // by whether the printed value fits a signed byte.
+                    i64 pk = w == (u32)4 ? (i64)(i32)k : k;
+                    _out.appendCString("\tcmp\t");
+                    _out.append(reg((u8)'a', w));
+                    _out.appendCString(", ");
+                    _out.append(String.withI64(pk));
+                    _out.appendCString("\n");
+                    folded = true;
+                    }
+                }
+            }
+        if (!folded)
+            {
+            loadExt(o1, (u8)'c', sg, w);
+            _out.appendFormat("\tcmp\t%s, %s\n", reg((u8)'a', w).cString(), reg((u8)'c', w).cString());
+            }
         // Fused into the block's CondBranch: the flags reach the branch, so no
         // boolean is materialised.
         if (inFused(n.res()))

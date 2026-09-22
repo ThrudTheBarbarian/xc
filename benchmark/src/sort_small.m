@@ -9,7 +9,7 @@ int main(int argc, char **argv)
     @autoreleasepool {
         uint32_t a[N]; uint32_t seed = (uint32_t)argc, acc = 0;
         int64_t t0 = bench_now_us();
-        for (uint32_t r = 0; r < 40000; r++)
+        for (uint32_t r = 0; r < 3200000; r++)
             {
             for (uint32_t i = 0; i < N; i++)
                 a[i] = ((i * 2654435761u) ^ (r * 40503u)) + seed;

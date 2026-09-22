@@ -3912,8 +3912,56 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         if (w < 4)
             w = 4;
         [self loadExt:ops[0] into:'a' signed:sg width:w fn:fn slot:slot out:out];
-        [self loadExt:ops[1] into:'c' signed:sg width:w fn:fn slot:slot out:out];
-        [out appendFormat:@"\tcmp\t%@, %@\n", [self reg:'a' width:w], [self reg:'c' width:w]];
+        // FOLD A CONSTANT RIGHT-HAND SIDE. x86 has `cmp r32, imm32` and
+        // `cmp r64, imm32` (sign-extended) and nothing was using either: every
+        // comparison against a literal cost an extra `mov` into rcx first, in
+        // every loop guard in every program. arm64 folds the same operand into
+        // `cmp w10, #1, lsl #12` from the same IR, which already carries it as
+        // an immediate (`ICmp ULT, %71, #8192:U32`).
+        //
+        // A 64-bit compare takes only a sign-extendable imm32, so a wider
+        // literal still goes through the register.
+        BOOL folded = NO;
+        if (ops[1].kind == XTIROperandKindImmI)
+            {
+            long long k = (long long)ops[1].intValue;
+            BOOL fits = (w <= 4) || (k >= INT32_MIN && k <= INT32_MAX);
+            if (fits)
+                {
+                // ...and against ZERO, `test r, r` sets the same flags in one
+                // byte less and with no immediate at all. Only for equality and
+                // the unsigned predicates: `test` clears CF and OF, so the
+                // SIGNED less/greater tests would read the wrong flags.
+                BOOL zeroOK = (k == 0) &&
+                              (p == XTIRICmpEQ || p == XTIRICmpNE ||
+                               p == XTIRICmpULT || p == XTIRICmpUGE);
+                if (zeroOK)
+                    {
+                    [out appendFormat:@"\ttest\t%@, %@\n", [self reg:'a' width:w],
+                                      [self reg:'a' width:w]];
+                    folded = YES;
+                    }
+                else
+                    {
+                    // Print a 32-bit immediate in its SIGNED reading. The bit
+                    // pattern is what a 32-bit compare tests, and `cmp eax, -1`
+                    // takes the sign-extended imm8 encoding (83 /7 ib, three
+                    // bytes) where `cmp eax, 4294967295` takes imm32 (3d id,
+                    // five). The assembler already has both forms; it chooses
+                    // by whether the printed value fits a signed byte, so the
+                    // spelling decides the encoding. clang emits the short one
+                    // and vocab-diff flagged the difference.
+                    long long pk = (w == 4) ? (long long)(int32_t)k : k;
+                    [out appendFormat:@"\tcmp\t%@, %lld\n", [self reg:'a' width:w], pk];
+                    folded = YES;
+                    }
+                }
+            }
+        if (!folded)
+            {
+            [self loadExt:ops[1] into:'c' signed:sg width:w fn:fn slot:slot out:out];
+            [out appendFormat:@"\tcmp\t%@, %@\n", [self reg:'a' width:w], [self reg:'c' width:w]];
+            }
         // Fused into the block's CondBranch: leave the flags set and let the
         // terminator branch on the predicate — no boolean materialisation.
         if (sFusedCmp && [sFusedCmp containsObject:@(res.valueId)])

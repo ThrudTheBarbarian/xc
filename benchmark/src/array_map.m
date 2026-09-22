@@ -11,7 +11,7 @@ int main(int argc, char **argv)
         uint32_t seed = (uint32_t)argc;
         for (uint32_t i = 0; i < N; i++) { a[i] = i + seed; b[i] = (i * 3u) + seed; }
         int64_t t0 = bench_now_us();
-        for (uint32_t r = 0; r < 20000; r++)
+        for (uint32_t r = 0; r < 5000000; r++)
             for (uint32_t i = 0; i < N; i++) c[i] = a[i] + (b[i] * 7u) + r;
         uint32_t acc = 0;
         for (uint32_t i = 0; i < N; i++) acc = acc + c[i];

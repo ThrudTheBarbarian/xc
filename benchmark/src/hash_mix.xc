@@ -6,7 +6,7 @@ i32 main(i32 argc, u8** argv)
     {
     u32 h = (u32)argc; 
     i64 t0 = bench_now_us();
-    for (u32 r = (u32)0; r < (u32)8000000; r++)
+    for (u32 r = (u32)0; r < (u32)640000000; r++)
         {
         h = h ^ (h >> (u32)16);
         h = h * (u32)2246822519;

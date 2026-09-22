@@ -10,7 +10,7 @@ i32 main(i32 argc, u8** argv)
     for (u32 i = (u32)0; i < (u32)(M * M); i++)
         { a[i] = (i + seed) & (u32)15; b[i] = (i ^ seed) & (u32)15; }
     i64 t0 = bench_now_us();
-    for (u32 r = (u32)0; r < (u32)200; r++)
+    for (u32 r = (u32)0; r < (u32)180000; r++)
         for (u32 i = (u32)0; i < (u32)M; i++)
             for (u32 j = (u32)0; j < (u32)M; j++)
                 {

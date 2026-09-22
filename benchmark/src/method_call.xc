@@ -16,7 +16,7 @@ i32 main(i32 argc, u8** argv)
     Shape* s = new Boxy(seed);
     u32 acc = (u32)0;
     i64 t0 = bench_now_us();
-    for (u32 r = (u32)0; r < (u32)8000000; r++) acc = acc + s.score() + r;
+    for (u32 r = (u32)0; r < (u32)1600000000; r++) acc = acc + s.score() + r;
     i64 t1 = bench_now_us();
     Stdio.printf("%lu %lld\n", acc, t1 - t0);
     return 0;

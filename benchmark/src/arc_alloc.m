@@ -21,7 +21,7 @@ int main(int argc, char **argv)
         uint32_t seed = (uint32_t)argc;
         uint32_t acc  = 0;
         int64_t t0 = bench_now_us();
-        for (uint32_t r = 0; r < 2000000; r++)
+        for (uint32_t r = 0; r < 80000000; r++)
             {
             Node *n = [[Node alloc] initWithV:r + seed];
             acc = acc + [n get];

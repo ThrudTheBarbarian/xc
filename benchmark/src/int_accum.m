@@ -18,7 +18,7 @@ int main(int argc, char **argv)
 
         uint32_t acc = 0;
         int64_t t0 = bench_now_us();
-        for (uint32_t r = 0; r < 20000; r++)
+        for (uint32_t r = 0; r < 600000; r++)
             for (uint32_t i = 0; i < N; i++)
                 acc = acc + (a[i] ^ acc);
 

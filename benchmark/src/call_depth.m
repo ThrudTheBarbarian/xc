@@ -14,7 +14,7 @@ int main(int argc, char **argv)
         uint32_t seed = (uint32_t)argc;
         uint32_t acc  = 0;
         int64_t t0 = bench_now_us();
-        for (uint32_t r = 0; r < 4000000; r++) acc = acc + outer_(r + seed);
+        for (uint32_t r = 0; r < 2800000000; r++) acc = acc + outer_(r + seed);
         int64_t t1 = bench_now_us();
         printf("%u %lld\n", acc, (long long)(t1 - t0));
     }

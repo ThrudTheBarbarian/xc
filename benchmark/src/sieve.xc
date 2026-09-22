@@ -7,7 +7,7 @@ i32 main(i32 argc, u8** argv)
     {
     u8 flags[N]; u32 seed = (u32)argc; u32 acc = (u32)0;
     i64 t0 = bench_now_us();
-    for (u32 r = (u32)0; r < (u32)2000; r++)
+    for (u32 r = (u32)0; r < (u32)150000; r++)
         {
         for (u32 i = (u32)0; i < (u32)N; i++) flags[i] = (u8)1;
         u32 count = (u32)0;

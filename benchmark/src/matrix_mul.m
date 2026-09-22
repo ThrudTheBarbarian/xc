@@ -12,7 +12,7 @@ int main(int argc, char **argv)
         for (uint32_t i = 0; i < M * M; i++)
             { a[i] = (i + seed) & 15u; b[i] = (i ^ seed) & 15u; }
         int64_t t0 = bench_now_us();
-        for (uint32_t r = 0; r < 200; r++)
+        for (uint32_t r = 0; r < 180000; r++)
             for (uint32_t i = 0; i < M; i++)
                 for (uint32_t j = 0; j < M; j++)
                     {
