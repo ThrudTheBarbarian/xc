@@ -1661,6 +1661,20 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
     NSMutableArray<NSNumber*>* freePool = [NSMutableArray array];
     for (NSNumber* r in @[ @6, @7, @2, @3, @4, @5, @8, @9, @10, @11, @12, @13, @14, @15 ])
         [freePool addObject:r];
+    // Which instruction defines each class, and whether that class is a phi
+    // result — for the two-address coalescing below.
+    NSMutableDictionary<NSNumber*, XTIRInsn*>* defOfClass = [NSMutableDictionary dictionary];
+    NSMutableSet<NSNumber*>* phiClass = [NSMutableSet set];
+    for (XTIRBlock* bb in fn.blocks)
+        {
+        for (XTIRInsn* p in bb.phiNodes)
+            if (p.result && p.result.type.kind == XTIRTypeKindVec)
+                [phiClass addObject:@(classOf(p.result.valueId))];
+        for (XTIRInsn* in in bb.instructions)
+            if (in.result && in.result.type.kind == XTIRTypeKindVec)
+                defOfClass[@(classOf(in.result.valueId))] = in;
+        }
+
     NSMutableArray<NSNumber*>* active = [NSMutableArray array];
     NSMutableDictionary<NSNumber*, NSNumber*>* regOfClass = [NSMutableDictionary dictionary];
     for (NSNumber* cls in classes)
@@ -1683,8 +1697,42 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
                     fn.name.UTF8String);
             exit(1);
             }
-        NSNumber* reg = freePool.lastObject;
-        [freePool removeLastObject];
+        // TWO-ADDRESS COALESCING. x86 vector ops are destructive — `paddd d, b`
+        // writes d — so when the result gets a different register from a source
+        // that DIES at this instruction, the emitter has to copy:
+        //
+        //     movdqu xmm14, [r8]        arm64, three-address, needs no copy:
+        //     movdqa xmm13, xmm14   <--   ldr q30, [x11]
+        //     paddd  xmm13, xmm15         add v29.4s, v30.4s, v31.4s
+        //     movdqu [rsi], xmm13         str q29, [x10]
+        //
+        // Linear scan never reuses the source because it frees a register only
+        // when `hi < start`, and here the source dies exactly AT the position
+        // the result is born. For a two-address op that is precisely the case
+        // where reuse is correct: the instruction reads the source and writes
+        // the destination, which is what the machine instruction does anyway.
+        //
+        // Phi classes are excluded — a vector phi needs a register of its own,
+        // and the incoming values are already coalesced onto it above.
+        NSNumber* reg = nil;
+        XTIRInsn* def = defOfClass[cls];
+        if (def && ![phiClass containsObject:cls] && def.operands.count >= 1 &&
+            def.opcode != XTIROpVLoad && def.operands[0].kind == XTIROperandKindUse)
+            {
+            NSNumber* acls = @(classOf(def.operands[0].valueId));
+            if (![acls isEqual:cls] && ![phiClass containsObject:acls] &&
+                regOfClass[acls] && hi[acls] && hi[acls].integerValue == start &&
+                [active containsObject:acls])
+                {
+                reg = regOfClass[acls];
+                [active removeObject:acls]; // its interval ends here
+                }
+            }
+        if (!reg)
+            {
+            reg = freePool.lastObject;
+            [freePool removeLastObject];
+            }
         regOfClass[cls] = reg;
         [active addObject:cls];
         [active sortUsingComparator:^NSComparisonResult(NSNumber* a, NSNumber* b) {

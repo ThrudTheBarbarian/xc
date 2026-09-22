@@ -1787,6 +1787,27 @@ class X86_64
         for (u32 r = (u32)8; r <= (u32)15; r = r + (u32)1)
             freePool.add((Object*)Number.withU32(r));
         Array* active = new Array();
+        // Which instruction defines each class, and which classes are phi
+        // results — for the two-address coalescing below.
+        Map* defOfCls = new Map();
+        Array* phiCls = new Array();
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.phis().count(); i = i + (u32)1)
+                {
+                IRInsn* ph = (IRInsn*)bb.phis().get(i);
+                if (ph.res() != (IRValue*)0 && isVecTy(ph.res().ty()))
+                    phiCls.add((Object*)classOfVec(ph.res()));
+                }
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)bb.insns().get(i);
+                if (n.res() != (IRValue*)0 && isVecTy(n.res().ty()))
+                    defOfCls.set((Hashable*)classOfVec(n.res()), (Object*)n);
+                }
+            }
+
         Map* regOf = new Map();
         for (u32 c = (u32)0; c < classes.count(); c = c + (u32)1)
             {
@@ -1811,8 +1832,41 @@ class X86_64
                              fn.name().cString());
                 Process.exit((i32)1);
                 }
-            Object* r = (Object*)freePool.get(freePool.count() - (u32)1);
-            freePool.removeAt(freePool.count() - (u32)1);
+            // TWO-ADDRESS COALESCING. x86 vector ops are destructive, so when
+            // the result takes a different register from a source that DIES at
+            // this instruction the emitter must copy — the movdqa arm64 never
+            // needs, being three-address. Linear scan will not reuse the source
+            // because it frees a register only when `hi < start`, and here the
+            // source dies exactly AT the position the result is born, which for
+            // a two-address op is precisely when reuse is correct.
+            Object* r = (Object*)0;
+            Object* dobj = defOfCls.get((Hashable*)cls);
+            if (dobj != (Object*)0 && !vecHasCls(phiCls, cls))
+                {
+                IRInsn* def = (IRInsn*)dobj;
+                if (!def.op().equals(String.withCString("VLoad")) && def.ops().count() >= (u32)1)
+                    {
+                    IROperand* o0 = (IROperand*)def.ops().get((u32)0);
+                    if (o0.kind() == (u8)OPK_USE && o0.val() != (IRValue*)0)
+                        {
+                        IRValue* acls = classOfVec(o0.val());
+                        Object* ahi = hi.get((Hashable*)acls);
+                        if (acls != cls && !vecHasCls(phiCls, acls)
+                            && regOf.get((Hashable*)acls) != (Object*)0
+                            && ahi != (Object*)0 && ((Number*)ahi).asI32() == start
+                            && vecHasCls(active, acls))
+                            {
+                            r = regOf.get((Hashable*)acls);
+                            active.remove((Object*)acls); // its interval ends here
+                            }
+                        }
+                    }
+                }
+            if (r == (Object*)0)
+                {
+                r = (Object*)freePool.get(freePool.count() - (u32)1);
+                freePool.removeAt(freePool.count() - (u32)1);
+                }
             regOf.set((Hashable*)cls, r);
             active.add((Object*)cls);
             sortByEnd(active, hi);
@@ -1827,6 +1881,15 @@ class X86_64
             name.appendFormat("%lu", ((Number*)r).asU32());
             _vec.set((Hashable*)v, (Object*)name);
             }
+        }
+
+    // Membership by identity; `hasValue` lives in Opt.xc and is not in scope.
+    bool vecHasCls(Array* a, IRValue* v)
+        {
+        for (u32 i = (u32)0; i < a.count(); i = i + (u32)1)
+            if ((IRValue*)a.get(i) == v)
+                return true;
+        return false;
         }
 
     IRValue* classOfVec(IRValue* v)
