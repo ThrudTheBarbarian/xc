@@ -66,9 +66,22 @@ def benchmarks():
     return have, unpaired
 
 
+def xcc_path():
+    """The SHIPPED compiler, not the bootstrap one.
+
+    `xcc` is the Objective-C reference; `xcc-xc` is the self-hosted compiler
+    that is actually released, and it is the only one a published figure may
+    come from. The two are gated byte-identical, but "gated byte-identical" has
+    meant -O0 for most of this project's life and the benchmarks build at -O3 —
+    where they were NOT identical until the optimisers were made to agree
+    (private bug 228). Measuring the oracle and publishing it as the product is
+    exactly the mistake that invites.
+    """
+    return os.path.join(REPO, "compiler", "bin", "osx", "xcc-xc")
+
+
 def compile_xc(name, opt, out):
-    xcc = os.path.join(REPO, "compiler", "bin", "osx", "xcc")
-    cmd = [xcc, "-H", os.path.join(REPO, "compiler"), "-I", SRC, "-" + opt,
+    cmd = [xcc_path(), "-H", os.path.join(REPO, "compiler"), "-I", SRC, "-" + opt,
            "-o", out, os.path.join(SRC, name + ".xc")]
     r = subprocess.run(cmd, capture_output=True, text=True)
     return r.returncode == 0, (r.stderr or r.stdout)
@@ -77,8 +90,7 @@ def compile_xc(name, opt, out):
 def compile_xc_x86(name, opt, out):
     """Cross-build for x86-64 Linux. The result is a static ELF, so the remote
     host needs no toolchain and no loader of its own."""
-    xcc = os.path.join(REPO, "compiler", "bin", "osx", "xcc")
-    cmd = [xcc, "-H", os.path.join(REPO, "compiler"), "-I", SRC, "-A", "x86_64",
+    cmd = [xcc_path(), "-H", os.path.join(REPO, "compiler"), "-I", SRC, "-A", "x86_64",
            "-" + opt, "-o", out, os.path.join(SRC, name + ".xc")]
     r = subprocess.run(cmd, capture_output=True, text=True)
     return r.returncode == 0, (r.stderr or r.stdout)

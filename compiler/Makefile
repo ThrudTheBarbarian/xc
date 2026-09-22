@@ -260,7 +260,7 @@ XCC_XC_INCS = -I support/generic/lib -I support/arm64/lib \
 $(XCC_XC_BIN): $(XTC_BIN) $(XCC_XC_SRC) $(wildcard selfhost/*/*.xc) \
                $(wildcard support/generic/lib/*.xc) $(wildcard support/arm64/lib/*.xc)
 	@echo "  xc   building the production compiler with the bootstrap one"
-	@$(XTC_BIN) -O2 -A arm64 -H . -o $@ $(XCC_XC_SRC) $(XCC_XC_INCS)
+	@$(XTC_BIN) -O2 -A arm64 -H . -DXCC_VERSION='"$(VERSION)"' -o $@ $(XCC_XC_SRC) $(XCC_XC_INCS)
 
 # The SAME production compiler, cross-built for the other two hosts. THE GOLDEN
 # RULE is that we never ship the Objective-C build, so a platform
@@ -293,14 +293,14 @@ $(XCC_XC_LINUX_BIN): $(XTC_BIN) $(XCC_XC_SRC) $(wildcard selfhost/*/*.xc) \
                      $(wildcard support/generic/lib/*.xc) $(wildcard support/x86_64/lib/*.xc)
 	@echo "  xc   building the production compiler for x86_64 linux"
 	@mkdir -p $(dir $@)
-	@$(XTC_BIN) -O2 -A x86_64 -H . -o $@ $(XCC_XC_SRC) \
+	@$(XTC_BIN) -O2 -A x86_64 -H . -DXCC_VERSION='"$(VERSION)"' -o $@ $(XCC_XC_SRC) \
 	            $(call XCC_XC_TARGET_INCS,x86_64)
 
 $(XCC_XC_WIN64_BIN): $(XTC_BIN) $(XCC_XC_SRC) $(wildcard selfhost/*/*.xc) \
                      $(wildcard support/generic/lib/*.xc) $(wildcard support/win64/lib/*.xc)
 	@echo "  xc   building the production compiler for win64"
 	@mkdir -p $(dir $@)
-	@$(XTC_BIN) -O2 -A win64 -H . -o $@ $(XCC_XC_SRC) \
+	@$(XTC_BIN) -O2 -A win64 -H . -DXCC_VERSION='"$(VERSION)"' -o $@ $(XCC_XC_SRC) \
 	            $(call XCC_XC_TARGET_INCS,win64)
 
 .PHONY: production-linux production-win64 production-all

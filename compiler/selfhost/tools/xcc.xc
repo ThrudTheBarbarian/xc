@@ -3056,7 +3056,15 @@ DriverOptions* parseDriverArgs(void)
             return (DriverOptions*)0;
         }
         if (a.equals(String.withCString("-v")) || a.equals(String.withCString("--version"))) {
-            Stdio.printf("xcc 0.6 (xc, self-hosted)\n");
+            // XCC_VERSION comes from the Makefile, which reads the VERSION
+            // file — the same source the Objective-C driver uses. It was a
+            // literal "0.6" here, which is one fact in two places: bumping
+            // VERSION moved the bootstrap compiler to 0.61 and left the
+            // compiler that actually SHIPS reporting 0.6.
+#ifndef XCC_VERSION
+#define XCC_VERSION "unversioned"
+#endif
+            Stdio.printf("xcc %s (xc, self-hosted)\n", XCC_VERSION);
             Process.exit((i32)0);
             return (DriverOptions*)0;
         }
