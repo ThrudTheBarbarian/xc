@@ -96,6 +96,30 @@
         XTIROptTailRecursion* tailrec = [[XTIROptTailRecursion alloc] init];
         tailrec.profile = profile;
         [p addPass:tailrec];
+        // CSE BEFORE if-conversion, as well as after it.
+        //
+        // If-conversion refuses to speculate a memory op, so a diamond whose
+        // arms each reload the same element is refused — and then the load CSE
+        // that could have made it convertible runs twenty-five passes later,
+        // when the decision has already been taken. `if (a[i] & 1) acc += a[i];
+        // else acc ^= a[i];` loaded a[i] three times, in three different
+        // blocks, and stayed a diamond forever: branch_mix ran fifteen
+        // instructions with three branches where clang runs eight with one.
+        //
+        // The run AFTER if-conversion still earns its place — it cleans up the
+        // straight-line code if-conversion produces, which is what the comment
+        // below is about. This is an addition, not a move.
+        // Gated on hoistsLocalAddr, which is the exact property this needs: may
+        // an ADDRESS value be shared between blocks? On a banked target it may
+        // not — an address there carries an implicit bank context, so the same
+        // ElementAddr in two blocks is not the same value, and merging them
+        // changes what it points at. xt6502 lost foundation_sort and
+        // arc_weak_local_return to precisely that. The knob already existed for
+        // the same question (a repeated AddrOf of a pinned local), which is why
+        // it is the right gate rather than a target name.
+        XTIROptRedundantLoadCSE* preIfCSE = [[XTIROptRedundantLoadCSE alloc] init];
+        preIfCSE.crossBlock = profile.hoistsLocalAddr;
+        [p addPass:preIfCSE];
         // If-convert short-circuit / predicate diamonds to branchless Selects
         // (profile-gated). Runs before the unrollers so a body it linearises is
         // simpler for them, and before CSE / const-fold, which then clean up the

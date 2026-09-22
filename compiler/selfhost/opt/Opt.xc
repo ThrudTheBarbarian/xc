@@ -1081,6 +1081,28 @@ class OptProfile
             return;
         if (stopHere(String.withCString("tail-recursion")))
             return;
+        // CSE BEFORE if-conversion as well as after it. If-conversion refuses
+        // to speculate a memory op, so a diamond whose arms each reload the
+        // same element is refused — and the load CSE that would have made it
+        // convertible otherwise runs long after the decision was taken.
+        // Cross-block is ON for this instance only; see cseInFunc.
+        // Gated on hoistLocalAddr: may an ADDRESS value be shared between
+        // blocks? On a banked target it may not — an address there carries an
+        // implicit bank context, so the same ElementAddr in two blocks is not
+        // the same value. xt6502 lost foundation_sort and arc_weak_local_return
+        // to exactly that.
+        if (_level >= (u32)2)
+            {
+            _cseCrossBlock = _profile.hoistLocalAddr();
+            redundantLoadCSE(m);
+            _cseCrossBlock = false;
+            }
+        // XTIR_OPT_STOP_AFTER matches the FIRST pass of a repeated name, and
+        // there are now two `redundant-load-cse` runs. Without this the two
+        // sides stop at DIFFERENT points and the per-pass comparison reports a
+        // divergence neither compiler has.
+        if (stopHere(String.withCString("redundant-load-cse")))
+            return;
         if (_level >= (u32)2)
             ifConvert(m);
         if (stopHere(String.withCString("if-convert")))
@@ -4972,6 +4994,7 @@ class OptProfile
     // tuple return that would read better here.
     IRBlock* _icH;
     IRBlock* _icT;
+    IRBlock* _icF; // the SECOND arm, for a full if-then-else diamond; 0 for a triangle
     IRBlock* _icJ;
     IRValue* _icCond;
     bool _icTIsTrue;
@@ -5020,7 +5043,59 @@ class OptProfile
                 tIsTrue = false;
                 }
             else
-                continue;
+                {
+                // Not a triangle. Try the DIAMOND: both arms pure middles that
+                // meet at a common join. isPureMiddle demands that one arm
+                // branch to the OTHER arm, so a full if-then-else never matched
+                // and no amount of cleaning up its arms could make it match —
+                // branch_mix kept three branches per iteration where clang has
+                // one.
+                IRInsn* ta = tA.term();
+                IRInsn* fa = fA.term();
+                if (ta == (IRInsn*)0 || fa == (IRInsn*)0)
+                    continue;
+                if (!ta.op().equals(String.withCString("Branch")) || !fa.op().equals(String.withCString("Branch")))
+                    continue;
+                if (ta.ops().count() < (u32)1 || fa.ops().count() < (u32)1)
+                    continue;
+                IRBlock* meet = ((IROperand*)ta.ops().get((u32)0)).blk();
+                if (meet == (IRBlock*)0 || meet != ((IROperand*)fa.ops().get((u32)0)).blk())
+                    continue;
+                if (!isPureMiddle(fn, tA, H, meet) || !isPureMiddle(fn, fA, H, meet))
+                    continue;
+                if (meet == H || meet == tA || meet == fA || meet.phis().count() == (u32)0)
+                    continue;
+                Array* mp = predsOfBlock(fn, meet);
+                if (mp.count() != (u32)2 || !hasBlock(mp, tA) || !hasBlock(mp, fA))
+                    continue;
+                // EVERY phi must have exactly the two arm incomings: the
+                // applier skips one it cannot orient, and then both arms are
+                // deleted underneath it, leaving a phi naming blocks that no
+                // longer exist.
+                bool phisOK = true;
+                for (u32 q = (u32)0; q < meet.phis().count(); q = q + (u32)1)
+                    {
+                    IRInsn* ph = (IRInsn*)meet.phis().get(q);
+                    if (ph.res() == (IRValue*)0 || ph.ops().count() != (u32)4)
+                        phisOK = false;
+                    else
+                        {
+                        IRBlock* p0 = ((IROperand*)ph.ops().get((u32)0)).blk();
+                        IRBlock* p1 = ((IROperand*)ph.ops().get((u32)2)).blk();
+                        if (!((p0 == tA && p1 == fA) || (p0 == fA && p1 == tA)))
+                            phisOK = false;
+                        }
+                    }
+                if (!phisOK)
+                    continue;
+                _icH = H;
+                _icT = tA;
+                _icF = fA;
+                _icJ = meet;
+                _icCond = condOp.val();
+                _icTIsTrue = true;
+                return true;
+                }
             if (J == 0 || J == H || J == T)
                 continue;
             if (J.phis().count() == (u32)0)
@@ -5036,6 +5111,7 @@ class OptProfile
 
             _icH = H;
             _icT = T;
+            _icF = (IRBlock*)0;
             _icJ = J;
             _icCond = condOp.val();
             _icTIsTrue = tIsTrue;
@@ -5110,12 +5186,18 @@ class OptProfile
         {
         IRBlock* H = _icH;
         IRBlock* T = _icT;
+        IRBlock* F = _icF; // non-zero for a diamond
         IRBlock* J = _icJ;
         Map* defOf = defMapAll(fn);
 
-        // The arm's instructions move into the head, ahead of its terminator.
+        // The arms' instructions move into the head, ahead of its terminator.
+        // For a diamond BOTH arms move: the point is that each arm's value is
+        // computed either way and the Select picks one.
         for (u32 i = (u32)0; i < T.insns().count(); i = i + (u32)1)
             H.add((IRInsn*)T.insns().get(i));
+        if (F != (IRBlock*)0)
+            for (u32 i = (u32)0; i < F.insns().count(); i = i + (u32)1)
+                H.add((IRInsn*)F.insns().get(i));
 
         Array* phis = new Array();
         for (u32 i = (u32)0; i < J.phis().count(); i = i + (u32)1)
@@ -5124,7 +5206,7 @@ class OptProfile
         for (u32 i = (u32)0; i < phis.count(); i = i + (u32)1)
             {
             IRInsn* phi = (IRInsn*)phis.get(i);
-            if (!selectForPhi(fn, defOf, phi, H, T))
+            if (!selectForPhi(fn, defOf, phi, H, F != (IRBlock*)0 ? F : H, T))
                 keptPhis.add((Object*)phi);
             }
         J.setPhis(keptPhis);
@@ -5137,7 +5219,7 @@ class OptProfile
         for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
             {
             IRBlock* bb = (IRBlock*)fn.blocks().get(b);
-            if (bb != T)
+            if (bb != T && bb != F)
                 blocks.add((Object*)bb);
             }
         fn.setBlocks(blocks);
@@ -5145,7 +5227,9 @@ class OptProfile
 
     // One join phi becomes a Select (or a boolean And/Or) in the head. False
     // when the phi is not the two-way merge this transform expects.
-    bool selectForPhi(IRFunc* fn, Map* defOf, IRInsn* phi, IRBlock* H, IRBlock* T)
+    // `other` is H for a triangle and the second arm F for a diamond: the join
+    // phi's two incomings are (T, ...) and (other, ...).
+    bool selectForPhi(IRFunc* fn, Map* defOf, IRInsn* phi, IRBlock* H, IRBlock* other, IRBlock* T)
         {
         if (phi.res() == 0)
             return false;
@@ -5156,7 +5240,7 @@ class OptProfile
             IRBlock* pb = ((IROperand*)phi.ops().get(k)).blk();
             if (pb == T)
                 vT = (IROperand*)phi.ops().get(k + (u32)1);
-            else if (pb == H)
+            else if (pb == other)
                 vH = (IROperand*)phi.ops().get(k + (u32)1);
             }
         if (vT == 0 || vH == 0)
@@ -6530,8 +6614,71 @@ class OptProfile
         Map* replace = new Map();  // value -> the value that wins
         Array* dead = new Array(); // IRInsn@ to drop
 
-        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
-            cseInBlock((IRBlock*)fn.blocks().get(b), replace, dead);
+        // Cross-block availability, when the back end asked for it. See the
+        // reference's XTIROptRedundantLoadCSE for the reasoning; the two
+        // relations are:
+        //   a block with exactly ONE REACHABLE predecessor inherits that
+        //   predecessor's end-of-block state, because the path is a single edge
+        //   with nothing executing on it. A join gets nothing.
+        // Only ADDRESS computations cross for the pure table: merging a Const
+        // into a dominating block is sound in isolation and still made
+        // matrix_mul compute the wrong answer.
+        // Reachability is load-bearing: "one predecessor, therefore it
+        // dominates" is FALSE when that predecessor is itself unreachable.
+        // DECLARATION ORDER, and inherit only from a predecessor already
+        // processed. Writing a second DFS here gave a different postorder from
+        // the reference's dominator utility, and the two optimisers then
+        // disagreed on 136 of 796 files — invisible to both back-end byte
+        // gates, which run at -O0 where this is not enabled. Declaration order
+        // is identical in both compilers by construction.
+        Array* order = fn.blocks();
+        Map* outPure = new Map();
+        Map* outLoaded = new Map();
+        Map* preds = (Map*)0;
+        if (_cseCrossBlock)
+            preds = csePredsMap(fn, order);
+        for (u32 b = (u32)0; b < order.count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)order.get(b);
+            Map* availPure = new Map();
+            Map* loaded = new Map();
+            if (_cseCrossBlock)
+                {
+                Array* pl = (Array*)preds.get((Hashable*)bb);
+                if (pl != (Array*)0 && pl.count() == (u32)1)
+                    {
+                    IRBlock* P = (IRBlock*)pl.get((u32)0);
+                    // Only if P has already been processed this pass.
+                    Map* op = (Map*)outPure.get((Hashable*)P);
+                    Map* ol = (Map*)outLoaded.get((Hashable*)P);
+                    if (op != (Map*)0)
+                        {
+                        Array* ks = op.allKeys();
+                        for (u32 k = (u32)0; k < ks.count(); k = k + (u32)1)
+                            {
+                            String* key = (String*)ks.get(k);
+                            if (key.hasPrefix(String.withCString("AddrOf|"))
+                                || key.hasPrefix(String.withCString("ElementAddr|"))
+                                || key.hasPrefix(String.withCString("FieldAddr|")))
+                                availPure.set((Hashable*)key, op.get((Hashable*)key));
+                            }
+                        }
+                    if (ol != (Map*)0)
+                        {
+                        Array* ks = ol.allKeys();
+                        for (u32 k = (u32)0; k < ks.count(); k = k + (u32)1)
+                            loaded.set((Hashable*)(IRValue*)ks.get(k),
+                                       ol.get((Hashable*)(IRValue*)ks.get(k)));
+                        }
+                    }
+                }
+            cseInBlock(bb, replace, dead, availPure, loaded);
+            if (_cseCrossBlock)
+                {
+                outPure.set((Hashable*)bb, (Object*)availPure);
+                outLoaded.set((Hashable*)bb, (Object*)loaded);
+                }
+            }
         if (replace.count() == (u32)0 && dead.count() == (u32)0)
             return;
 
@@ -6557,10 +6704,48 @@ class OptProfile
             }
         }
 
-    void cseInBlock(IRBlock* bb, Map* replace, Array* dead)
+    bool _cseCrossBlock;
+
+    // Reachable blocks in REVERSE POSTORDER, so a block is always processed
+    // after its predecessors on every acyclic path — which is what lets a
+    // sole-predecessor inheritance read a state that has already been computed.
+    Array* cseSuccs(IRBlock* bb)
         {
-        Map* availPure = new Map(); // key -> the value that computed it
-        Map* loaded = new Map();    // pointer value -> the value loaded
+        Array* out = new Array();
+        IRInsn* t = bb.term();
+        if (t == (IRInsn*)0)
+            return out;
+        for (u32 i = (u32)0; i < t.ops().count(); i = i + (u32)1)
+            {
+            IROperand* o = (IROperand*)t.ops().get(i);
+            if (o.kind() == (u8)OPK_BLOCK && o.blk() != (IRBlock*)0 && !hasBlock(out, o.blk()))
+                out.add((Object*)o.blk());
+            }
+        return out;
+        }
+
+    // Predecessors, counting only blocks that are themselves REACHABLE.
+    Map* csePredsMap(IRFunc* fn, Array* reachable)
+        {
+        Map* m = new Map();
+        for (u32 b = (u32)0; b < reachable.count(); b = b + (u32)1)
+            m.set((Hashable*)(IRBlock*)reachable.get(b), (Object*)new Array());
+        for (u32 b = (u32)0; b < reachable.count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)reachable.get(b);
+            Array* su = cseSuccs(bb);
+            for (u32 i = (u32)0; i < su.count(); i = i + (u32)1)
+                {
+                Array* pl = (Array*)m.get((Hashable*)(IRBlock*)su.get(i));
+                if (pl != (Array*)0 && !hasBlock(pl, bb))
+                    pl.add((Object*)bb);
+                }
+            }
+        return m;
+        }
+
+    void cseInBlock(IRBlock* bb, Map* replace, Array* dead, Map* availPure, Map* loaded)
+        {
         for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
             {
             IRInsn* n = (IRInsn*)bb.insns().get(i);
@@ -6613,7 +6798,7 @@ class OptProfile
             // Anything that may write memory, and the bank-state ops that
             // repoint pointers, invalidate what this block has loaded.
             if (touchesMemory(n.op()) || isBankStateOp(n.op()))
-                loaded = new Map();
+                loaded.removeAll(); // in place: the CALLER publishes this map
             }
         }
 

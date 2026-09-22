@@ -24,7 +24,15 @@ NS_ASSUME_NONNULL_BEGIN
 //     the tokens are equivalent).
 //
 // Benefits BOTH backends (it runs on the shared IR before codegen). -O2+.
+/// Cross-block availability (see the .m). OFF by default: it creates uses whose
+/// definition lives in a DOMINATING block, and the loop cloner in the
+/// vectoriser assumes every value a body uses is defined in that body — a
+/// clone then references a definition that does not dominate it. matrix_mul
+/// computed 63968 instead of 2046976 with this on before the vectoriser.
+/// Enabled only on the instance that runs before if-conversion, which is where
+/// it pays: it is what makes a diamond's arms convertible.
 @interface XTIROptRedundantLoadCSE : NSObject <XTIROptPass>
+@property(nonatomic) BOOL crossBlock;
 @end
 
 NS_ASSUME_NONNULL_END

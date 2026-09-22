@@ -254,13 +254,113 @@ static XTIRInsn* rebuiltInsn(XTIRInsn* insn, NSArray<XTIROperand*>* newOps)
             if (insn.result)
                 defOf[@(insn.result.valueId)] = insn;
 
+    // ── Cross-block availability ─────────────────────────────────────────
+    // The tables used to be strictly block-local, and that is what made
+    //
+    //     if (a[i] & 1) acc += a[i]; else acc ^= a[i];
+    //
+    // load a[i] THREE times: once in the condition block and once in each arm,
+    // in three different blocks, so nothing ever merged them. Worse, the arms
+    // then each contained a Load, and if-conversion refuses to speculate a
+    // memory op — so the diamond survived as a diamond and branch_mix ran a
+    // 15-instruction body with three branches where clang runs 8 with one.
+    //
+    // Two different relations, because the two tables need different things:
+    //
+    //   PURE values inherit from the IMMEDIATE DOMINATOR. A value computed in a
+    //   block that dominates this one is defined on every path here, and SSA
+    //   values are immutable, so recomputing it is always redundant. No memory
+    //   reasoning is involved.
+    //
+    //   LOADED values inherit only from a SOLE PREDECESSOR that is also the
+    //   idom. Then the path is a single edge with nothing executing on it, so
+    //   the predecessor's end-of-block memory state IS this block's entry
+    //   state. A join gets nothing (that would be PRE, which is a different
+    //   pass), and a loop header gets nothing because the latch is a second
+    //   predecessor.
+    //
+    // NOTE on why this reasons about BLOCKS and not memory tokens: the IR's
+    // memory tokens are not in SSA form — a block routinely names a token
+    // defined in a block that is not one of its predecessors — so any analysis
+    // built on them is reasoning from something untrue. Two earlier attempts at
+    // cross-block CSE did exactly that and produced wrong code.
+    // DECLARATION ORDER, and inherit only from a predecessor already processed.
+    //
+    // The obvious traversal is reverse postorder, and the reference has a
+    // dominator utility that hands it over. The port does not, and writing a
+    // second DFS in a second language produced a DIFFERENT postorder — CSE
+    // results depend on visit order, so the two optimisers disagreed on 136 of
+    // 796 files while every back-end byte gate still passed, because those run
+    // at -O0 where this pass is not even enabled.
+    //
+    // Declaration order is identical in both compilers by construction: it is
+    // the order the IR text lists the blocks. A predecessor that has not been
+    // processed yet simply contributes nothing, which costs an opportunity and
+    // never correctness.
+    NSMutableDictionary<NSValue*, NSDictionary*>* outPure = [NSMutableDictionary dictionary];
+    NSMutableDictionary<NSValue*, NSDictionary*>* outLoaded = [NSMutableDictionary dictionary];
+    NSMutableDictionary<NSValue*, NSMutableArray<XTIRBlock*>*>* predsOf =
+        [NSMutableDictionary dictionary];
+    for (XTIRBlock* bb in fn.blocks)
+        predsOf[[NSValue valueWithNonretainedObject:bb]] = [NSMutableArray array];
     for (XTIRBlock* bb in fn.blocks)
         {
-        // Per-block tables (block-local — no cross-edge reasoning).
+        XTIRInsn* t = bb.terminator;
+        if (!t)
+            continue;
+        NSMutableSet<NSValue*>* seen = [NSMutableSet set];
+        for (XTIROperand* o in t.operands)
+            {
+            if (o.kind != XTIROperandKindBlock || !o.blockRef)
+                continue;
+            NSValue* sk = [NSValue valueWithNonretainedObject:o.blockRef];
+            if ([seen containsObject:sk])
+                continue;
+            [seen addObject:sk];
+            [predsOf[sk] addObject:bb];
+            }
+        }
+
+    for (XTIRBlock* bb in fn.blocks)
+        {
         NSMutableDictionary<NSString*, NSNumber*>* availPure =
             [NSMutableDictionary dictionary];
         NSMutableDictionary<NSNumber*, NSNumber*>* loadedValue =
             [NSMutableDictionary dictionary];
+
+        if (self.crossBlock)
+            {
+            NSArray<XTIRBlock*>* preds = predsOf[[NSValue valueWithNonretainedObject:bb]];
+            XTIRBlock* sole = (preds.count == 1) ? preds[0] : nil;
+            NSValue* ik = sole ? [NSValue valueWithNonretainedObject:sole] : nil;
+            BOOL soleFromIdom = (ik && (outPure[ik] || outLoaded[ik]));
+            // Only ADDRESS computations cross a block boundary. They are what
+            // makes a diamond's arms share a pointer, which is the whole point
+            // of doing this before if-conversion.
+            //
+            // Constants deliberately do NOT: merging a `Const 32` into a
+            // dominating block is sound in isolation and still made matrix_mul
+            // compute 63968 instead of 2046976. Something downstream depends on
+            // a constant being defined in the block that uses it — the const
+            // hoister and the two unrollers all rebuild per-copy constants, and
+            // the vectoriser classifies an operand by whether its DEFINING
+            // BLOCK is the loop body. Narrowing the relation is not a guess
+            // about which of them it is; it is declining to make a change whose
+            // only demonstrated effect is breakage. The open question is
+            // recorded in private:docs/bugs.
+            if (soleFromIdom && outPure[ik])
+                {
+                NSString* pa = [NSString stringWithFormat:@"o%u|", (unsigned)XTIROpAddrOf];
+                NSString* pe = [NSString stringWithFormat:@"o%u|", (unsigned)XTIROpElementAddr];
+                NSString* pf = [NSString stringWithFormat:@"o%u|", (unsigned)XTIROpFieldAddr];
+                [outPure[ik] enumerateKeysAndObjectsUsingBlock:^(NSString* k, id v, BOOL* st) {
+                  if ([k hasPrefix:pa] || [k hasPrefix:pe] || [k hasPrefix:pf])
+                      availPure[k] = v;
+                }];
+                }
+            if (soleFromIdom && outLoaded[ik])
+                [loadedValue addEntriesFromDictionary:outLoaded[ik]];
+            }
 
         for (XTIRInsn* insn in bb.instructions)
             {
@@ -362,6 +462,10 @@ static XTIRInsn* rebuiltInsn(XTIRInsn* insn, NSArray<XTIROperand*>* newOps)
                 [loadedValue removeAllObjects];
                 }
             }
+        // Publish this block's end state for the blocks it dominates.
+        NSValue* bk = [NSValue valueWithNonretainedObject:bb];
+        outPure[bk] = [availPure copy];
+        outLoaded[bk] = [loadedValue copy];
         }
 
     if (replace.count == 0 && toDelete.count == 0)

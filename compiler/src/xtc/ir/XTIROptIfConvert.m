@@ -16,6 +16,13 @@
 @property(nonatomic) XTIRBlock* J;       // join: phis merging (H, T)
 @property(nonatomic) XTIRValueId condId; // the CondBranch predicate value
 @property(nonatomic) BOOL tIsTrueTarget; // YES if cond==true takes T
+// The SECOND pure arm, for a full if-then-else DIAMOND (H->T->J, H->F->J).
+// nil for the if-then TRIANGLE (H->T->J, H->J), which is all this pass
+// recognised until now — `isPureMiddle(tA, H, fA)` demands that one arm branch
+// to the OTHER arm, so a diamond never matched and no amount of cleaning up its
+// arms could make it match. branch_mix is a diamond, which is why it kept three
+// branches per iteration where clang has one.
+@property(nonatomic) XTIRBlock* F;
 @end
 @implementation XTIfConvCand
 @end
@@ -180,7 +187,49 @@ static BOOL isPureMiddle(XTIRBlock* M, XTIRBlock* H, XTIRBlock* dest, XTIRFuncti
             tIsTrue = NO;
             }
         else
-            continue;
+            {
+            // Not a triangle. Try the DIAMOND: both arms pure middles that meet
+            // at a common join.
+            XTIRInsn *ta = tA.terminator, *fa = fA.terminator;
+            if (!ta || !fa || ta.opcode != XTIROpBranch || fa.opcode != XTIROpBranch)
+                continue;
+            if (ta.operands.count < 1 || fa.operands.count < 1)
+                continue;
+            XTIRBlock* meet = ta.operands[0].blockRef;
+            if (!meet || meet != fa.operands[0].blockRef)
+                continue;
+            if (!isPureMiddle(tA, H, meet, fn) || !isPureMiddle(fA, H, meet, fn))
+                continue;
+            if (meet == H || meet == tA || meet == fA || meet.phiNodes.count == 0)
+                continue;
+            NSArray<XTIRBlock*>* mp = predsOf(meet, fn);
+            if (mp.count != 2 || ![mp containsObject:tA] || ![mp containsObject:fA])
+                continue;
+            // EVERY phi in the join must have exactly the two arm incomings.
+            // The applier skips a phi it cannot orient, and then both arms are
+            // deleted underneath it — leaving a phi naming blocks that no
+            // longer exist. Refusing the whole candidate is the only safe
+            // answer, because the transform is all-or-nothing per diamond.
+            BOOL phisOK = YES;
+            for (XTIRInsn* phi in meet.phiNodes)
+                {
+                if (!phi.result || phi.operands.count != 4) { phisOK = NO; break; }
+                XTIRBlock* p0 = phi.operands[0].blockRef;
+                XTIRBlock* p1 = phi.operands[2].blockRef;
+                if (!((p0 == tA && p1 == fA) || (p0 == fA && p1 == tA)))
+                    { phisOK = NO; break; }
+                }
+            if (!phisOK)
+                continue;
+            XTIfConvCand* d = [XTIfConvCand new];
+            d.H = H;
+            d.T = tA;
+            d.F = fA;
+            d.J = meet;
+            d.condId = condOp.valueId;
+            d.tIsTrueTarget = YES; // T is literally the cond==true target
+            return d;
+            }
         if (!J || J == H || J == T)
             continue;
         if (J.phiNodes.count == 0)
@@ -254,9 +303,15 @@ static BOOL isBool01(XTIROperand* op, NSDictionary<NSNumber*, XTIRInsn*>* defOf)
                 defOf[@(insn.result.valueId)] = insn;
         }
 
-    // 1. Hoist T's (pure) instructions into H, before its terminator. They now
-    //    run unconditionally — sound because every one is side-effect-free.
+    XTIRBlock* F = c.F; // non-nil for a diamond
+
+    // 1. Hoist the arms' (pure) instructions into H. They now run
+    //    unconditionally — sound because every one is side-effect-free. For a
+    //    diamond BOTH arms are hoisted: the whole point is that each arm's
+    //    value is computed either way and the Select picks one.
     [H.instructions addObjectsFromArray:T.instructions];
+    if (F)
+        [H.instructions addObjectsFromArray:F.instructions];
 
     // 2. Replace each join phi with a Select in H, and remap its uses.
     NSMutableArray<XTIRInsn*>* phis = [J.phiNodes mutableCopy];
@@ -264,21 +319,24 @@ static BOOL isBool01(XTIROperand* op, NSDictionary<NSNumber*, XTIRInsn*>* defOf)
         {
         if (!phi.result)
             continue;
-        XTIROperand *vT = nil, *vH = nil;
+        // Triangle: the incomings are (T, …) and (H, …). Diamond: (T, …) and
+        // (F, …) — H is not a predecessor of the join at all.
+        XTIROperand *vT = nil, *vOther = nil;
+        XTIRBlock* otherPred = F ?: H;
         for (NSUInteger k = 0; k + 1 < phi.operands.count; k += 2)
             {
             XTIRBlock* pb = phi.operands[k].blockRef;
             if (pb == T)
                 vT = phi.operands[k + 1];
-            else if (pb == H)
-                vH = phi.operands[k + 1];
+            else if (pb == otherPred)
+                vOther = phi.operands[k + 1];
             }
-        if (!vT || !vH)
+        if (!vT || !vOther)
             continue; // defensive: not the expected 2-way merge
 
         // cond==true picks T's value; orient the Select accordingly.
-        XTIROperand* selTrue = c.tIsTrueTarget ? vT : vH;
-        XTIROperand* selFalse = c.tIsTrueTarget ? vH : vT;
+        XTIROperand* selTrue = c.tIsTrueTarget ? vT : vOther;
+        XTIROperand* selFalse = c.tIsTrueTarget ? vOther : vT;
 
         XTIRType* ty = phi.result.type;
         XTIRValueId rid = [fn allocateValueId];
@@ -356,6 +414,8 @@ static BOOL isBool01(XTIROperand* op, NSDictionary<NSNumber*, XTIRInsn*>* defOf)
                                              operands:@[ [XTIROperand blockWithRef:J] ]
                                                dbgLoc:nil]];
     [fn.blocks removeObjectIdenticalTo:T];
+    if (F)
+        [fn.blocks removeObjectIdenticalTo:F];
     }
 
 @end
