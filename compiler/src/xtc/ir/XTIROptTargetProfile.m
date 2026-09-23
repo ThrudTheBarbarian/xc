@@ -656,6 +656,13 @@
     {
     return 2048;
     }
+// vectorizesIota stays off for now. Turning it on is SAFE — the answers stay
+// correct — but it is also a no-op: no SIMD comes out for the iota shape, while
+// an ordinary map vectorises here perfectly well (array_map emits fifty i32x4
+// ops). Something ahead of instruction selection refuses it, most likely the
+// Vec-typed read-only global the lane indices live in. A knob that changes
+// nothing is worse than an absent one, so it stays off until that is found.
+// docs/bugs/238.
 - (BOOL)unrollAllowsMultipleCarriedValues
     {
     return YES;
