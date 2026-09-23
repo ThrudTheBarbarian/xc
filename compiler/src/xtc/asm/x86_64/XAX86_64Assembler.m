@@ -221,6 +221,22 @@ static NSString *gRipSymbol;
 static int64_t   gRipAddend;          // a constant added to the symbol: [rip+sym+80]
 
 // ModRM + SIB + displacement for a reg-and-rm pair.
+// An immediate is a BIT PATTERN of the operand's width, and the imm8 short
+// forms test it as a SIGNED value — so a full-width pattern with its top bit
+// set has to be read as negative before it is tested. `and edi, 0xffffffff`
+// is -1 in a 32-bit operand and encodes as the three-byte `83 /4 ff`, which is
+// what GNU as and clang both emit; read as +4294967295 it missed the short
+// form and came out six bytes long. The self-hosted assembler holds its
+// immediates in an i32, so it wrapped for free and got the right answer — and
+// the two disagreed byte for byte on five files. private:docs/bugs/240.
+static int64_t signedForOperandSize(int64_t v, int osz)
+    {
+    if (osz == 4 && v >= 0x80000000LL && v <= 0xFFFFFFFFLL) return v - 0x100000000LL;
+    if (osz == 2 && v >= 0x8000LL     && v <= 0xFFFFLL)     return v - 0x10000LL;
+    if (osz == 1 && v >= 0x80LL       && v <= 0xFFLL)       return v - 0x100LL;
+    return v;
+    }
+
 static void emitModRM(NSMutableData *d, int reg, const XOperand *rm) {
     if (rm->kind == OpReg) { emit8(d, (uint8_t)(0xC0 | ((reg&7)<<3) | (rm->reg&7))); return; }
     int base = rm->base, index = rm->index;
@@ -521,7 +537,25 @@ static void emitModRM(NSMutableData *d, int reg, const XOperand *rm) {
     if (aluOp && a && b) {
         int ext = aluOp.intValue;
         if (b->kind == OpImm && !b->symbol) {
-            BOOL imm8 = (b->imm >= -128 && b->imm <= 127);
+            // There is no `and r64, imm64` — nor or/xor/add/sub/cmp. The widest
+            // immediate any of them takes is an imm32, SIGN-EXTENDED to 64 bits,
+            // so anything outside int32 has no encoding. Emitting the low half
+            // is not a smaller version of the right answer: `x & 0xFF00FF00FF`
+            // becomes `x & 0x00FF00FF` and every 64-bit AND loses its high word.
+            // The PORT has refused this since bug 089; this assembler never did,
+            // and quietly truncated — a divergence no byte gate could see,
+            // because the port stopped before either of them wrote anything.
+            // `and rdi, 0xffffffff` is caught by the same rule: the two forms
+            // both sign-extend, so it would mean `and rdi, -1`, not a 32-bit
+            // mask. private:docs/bugs/240.
+            if (osz == 8 && (b->imm < INT32_MIN || b->imm > INT32_MAX)) {
+                if (error) *error = xerr(@"64-bit immediate does not fit an imm32 "
+                                          @"field — load it into a register first "
+                                          @"('%@')", mn);
+                CLEANUP(); return nil;
+            }
+            int64_t sv = signedForOperandSize(b->imm, osz);
+            BOOL imm8 = (sv >= -128 && sv <= 127);
             // The accumulator short form (`3d id` for `cmp eax, imm32`) saves the
             // ModRM byte. Only worth it for a full-width immediate — with an imm8
             // the `83 /ext ib` form is shorter still. clang always picks it, so
@@ -949,7 +983,8 @@ static void emitModRM(NSMutableData *d, int reg, const XOperand *rm) {
     // ── imul r, r/m, imm  (three-operand: 6B /r ib or 69 /r id) ──
     if ([mn isEqualToString:@"imul"] && opCount == 3 && a && b) {
         int64_t iv = opv[2].imm;
-        BOOL imm8 = (iv >= -128 && iv <= 127);
+        BOOL imm8 = (signedForOperandSize(iv, osz) >= -128
+                     && signedForOperandSize(iv, osz) <= 127);
         emitRex(out, w, a->reg, b->index, b->kind==OpReg?b->reg:b->base, NO);
         emit8(out, imm8 ? 0x6B : 0x69);
         emitModRM(out, a->reg, b);
