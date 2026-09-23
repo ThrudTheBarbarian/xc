@@ -189,7 +189,14 @@ class ElfSharedInfo
     // page size, which the kernel requires.
     static u32 textOffsetFor(u32 nphdr)
         {
-        return roundUpTo((u32)EHDR_SZ + nphdr * (u32)PHDR_SZ, (u32)16);
+        // 64, not 16. A .p2align inside .text pads relative to the START of the
+        // section, so a section-relative boundary is an absolute one only when the
+        // section itself is that aligned. At 16 the text base landed at 16 mod 32
+        // for every program header count we emit, which put every 32-byte-aligned
+        // loop head in the middle of a fetch window — measurably worse than no
+        // alignment at all. 64 covers both the 32- and 64-byte fetch units, and
+        // costs at most 48 bytes once per file. private:docs/bugs/232.
+        return roundUpTo((u32)EHDR_SZ + nphdr * (u32)PHDR_SZ, (u32)64);
         }
 
     static u32 dataOffsetFor(bool hasData, u32 textLen)
@@ -1812,7 +1819,7 @@ class ElfSharedInfo
 
         shdr((u32)0, (u32)0, (u32)0, (u32)0, (u32)0, (u32)0, (u32)0, (u32)0, (u32)0, (u32)0);
         shdr(nText, (u32)1, (u32)2 | (u32)4, textAddr, textOff, text.length(),
-             (u32)0, (u32)0, (u32)16, (u32)0);
+             (u32)0, (u32)0, (u32)64, (u32)0);
         shdr(nData, (u32)1, (u32)2 | (u32)1, dataAddr, dataOff, data.length(),
              (u32)0, (u32)0, (u32)16, (u32)0);
         // sh_info is the index of the first non-local symbol; every symbol here

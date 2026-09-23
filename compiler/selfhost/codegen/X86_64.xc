@@ -4839,11 +4839,20 @@ class X86_64
         // straddles is decided by however much code happens to precede it.
         // Regenerating the RUNTIME (which branch_mix never calls in its loop)
         // moved that benchmark 57ms -> 79ms, a 37% swing from pure layout.
-        // SIXTEEN, not thirty-two: the assembler pads relative to the start of
-        // .text and that section is align 16, so `.p2align 5` lands every loop
-        // head at 16 mod 32 — measurably worse (branch_mix +37%). Bug 232.
+        // THIRTY-TWO, and only because the ELF writer now puts .text on a
+        // 64-byte boundary. The assembler pads relative to the START of the
+        // section, so a section-relative 32-byte boundary is an absolute one
+        // only when the section itself is at least that aligned; at the old
+        // align-16 base every head landed at 16 mod 32, in the middle of a
+        // fetch window, which is worse than the arbitrary phase align-4 gives.
+        // Both halves together, measured on the x86-64 host over all nineteen
+        // benchmarks: mem_copy -27%, sort_small -18%, branch_mix +12%, the
+        // rest within 2%; 1.9% faster on the geometric mean. The point is as
+        // much that the phase is now DETERMINISTIC — it no longer re-rolls
+        // when unrelated code ahead of a hot function changes size, which had
+        // produced 37% swings between byte-identical loops. private:docs/bugs/232.
         if (loopHead)
-            _out.appendCString("\t.p2align\t4, 0x90\n");
+            _out.appendCString("\t.p2align\t5, 0x90\n");
         _out.appendFormat("%s:\n", blockLabel(fn, bb).cString());
         for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
             emitInsn(fn, bb, (IRInsn*)bb.insns().get(i));

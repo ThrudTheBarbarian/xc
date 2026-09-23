@@ -2287,13 +2287,19 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
     for (XTIRBlock* bb in fn.blocks)
         {
         if ([loopHeads containsObject:[NSValue valueWithNonretainedObject:bb]])
-            // SIXTEEN, and not thirty-two: the assembler pads relative to the
-            // START of .text, and the ELF writer gives that section align 16,
-            // so `.p2align 5` puts every loop head at 16 mod 32 rather than 0.
-            // That phase is measurably WORSE — branch_mix +37%, array_sum +21%
-            // — so 32-byte alignment is worth having only once the text base
-            // is 32-aligned too, which is a linker change. Bug 232.
-            [out appendString:@"\t.p2align\t4, 0x90\n"];
+            // THIRTY-TWO, and only because the ELF writer now puts .text on a
+            // 64-byte boundary. The assembler pads relative to the START of the
+            // section, so a section-relative 32-byte boundary is an absolute one
+            // only when the section itself is at least that aligned; at the old
+            // align-16 base every head landed at 16 mod 32, in the middle of a
+            // fetch window, which is worse than the arbitrary phase align-4 gives.
+            // Both halves together, measured on the x86-64 host over all nineteen
+            // benchmarks: mem_copy -27%, sort_small -18%, branch_mix +12%, the
+            // rest within 2%; 1.9% faster on the geometric mean. The point is as
+            // much that the phase is now DETERMINISTIC — it no longer re-rolls
+            // when unrelated code ahead of a hot function changes size, which had
+            // produced 37% swings between byte-identical loops. private:docs/bugs/232.
+            [out appendString:@"\t.p2align\t5, 0x90\n"];
         [out appendFormat:@"%@:\n", [self blockLabel:bb fn:fn]];
         for (XTIRInsn* in in bb.instructions)
             [self emitInsn:in fn:fn module:mod slot:slot out:out];

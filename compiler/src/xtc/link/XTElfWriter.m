@@ -81,7 +81,14 @@ static uint32_t phdrCountFor(BOOL hasData)
 // File offset of the code, which shares its first page with the headers.
 static uint64_t textOffsetFor(uint32_t nphdr)
     {
-    return roundUpTo(EHDR_SZ + (uint64_t)nphdr * PHDR_SZ, 16);
+    // 64, not 16. A .p2align inside .text pads relative to the START of the
+    // section, so a section-relative boundary is an absolute one only when the
+    // section itself is that aligned. At 16 the text base landed at 16 mod 32
+    // for every program header count we emit, which put every 32-byte-aligned
+    // loop head in the middle of a fetch window — measurably worse than no
+    // alignment at all. 64 covers both the 32- and 64-byte fetch units, and
+    // costs at most 48 bytes once per file. private:docs/bugs/232.
+    return roundUpTo(EHDR_SZ + (uint64_t)nphdr * PHDR_SZ, 64);
     }
 // The data segment starts on the page after the code, so it gets its own RW
 // mapping without sharing a page with the executable one.
@@ -1903,7 +1910,7 @@ static uint32_t elfHash(const char* name)
         };
     shdr(nil, 0, 0, 0, 0, 0, 0, 0, 0, 0); // 0: null
     shdr(@".text", SHT_PROGBITS, SHF_ALLOC | SHF_EXECINSTR, textAddr, textOff,
-         text.length, 0, 0, 16, 0); // 1
+         text.length, 0, 0, 64, 0); // 1
     shdr(@".data", SHT_PROGBITS, SHF_ALLOC | SHF_WRITE, dataAddr, dataOff,
          data.length, 0, 0, 16, 0); // 2
     // sh_info is the index of the first non-local symbol; every symbol we emit is
