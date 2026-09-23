@@ -419,6 +419,14 @@ static XTOpInfo operatorInfo(XTTokenType type)
             }
         else if (cur.type == XTTokenLBracket)
             {
+            // The BRACKET's position, captured before the index is parsed.
+            // `cur` has moved on by the time the node is built forty lines
+            // below, so the subscript used to record wherever the parser
+            // happened to be — the `=` of an assignment, typically. Nothing
+            // read it until -fbounds-check began naming the site of a failed
+            // check, and then it named the wrong column and disagreed with the
+            // self-hosted parser, which points at the bracket.
+            XTSourceLocation* lbLoc = cur.location;
             [self advance];
             // Slice form: `arr[m..n]` / `arr[..n]` / `arr[m..]` /
             // `arr[m...n]`. The parser produces an XTSliceExprNode
@@ -465,7 +473,7 @@ static XTOpInfo operatorInfo(XTTokenType type)
                 }
             else
                 {
-                base = [[XTSubscriptExprNode alloc] initWithBase:base index:startExpr location:cur.location];
+                base = [[XTSubscriptExprNode alloc] initWithBase:base index:startExpr location:lbLoc];
                 }
             }
         else if (cur.type == XTTokenDot)

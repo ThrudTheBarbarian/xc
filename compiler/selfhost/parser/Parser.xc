@@ -385,7 +385,7 @@ class Parser
                 String* pn = String.withCString("p");
                 pn.append(String.withU32(idx));
                 if (check((u16)tokIdentifier)) pn = advance().value();
-                Node* p = Node.withName((u16)nkParam, pn);
+                Node* p = mkNamed((u16)nkParam, pn);
                 p.setOp(pt);
                 params.add((Object*)p);
                 idx = idx + (u32)1;
@@ -427,7 +427,7 @@ class Parser
         for (u32 i = (u32)0; i < declared.count(); i = i + (u32)1) {
             String* pn = String.withCString("p");
             pn.append(String.withU32(i));
-            Node* p = Node.withName((u16)nkParam, pn);
+            Node* p = mkNamed((u16)nkParam, pn);
             p.setOp(((Node*)declared.get(i)).op());
             out.add((Object*)p);
         }
@@ -437,13 +437,13 @@ class Parser
     // `{ return (RET)0; }` — the base placeholder; void gets an empty block.
     Node* blkDefaultBody(String* ret)
     {
-        Node* b = Node.with((u16)nkBlock);
+        Node* b = mk((u16)nkBlock);
         if (Parser._same(ret, "void")) return b;
-        Node* zero = Node.with((u16)nkInt);
+        Node* zero = mk((u16)nkInt);
         zero.setNum((i64)0);
-        Node* cast = Node.withName((u16)nkCast, ret);
+        Node* cast = mkNamed((u16)nkCast, ret);
         cast.add(zero);
-        Node* r = Node.with((u16)nkReturn);
+        Node* r = mk((u16)nkReturn);
         r.add(cast);
         b.add(r);
         return b;
@@ -471,12 +471,12 @@ class Parser
             Map* sig = (Map*)_blkBases.get((Hashable*)name);
             String* ret = (String*)sig.get((Hashable*)String.withCString("ret"));
             Array* declared = (Array*)sig.get((Hashable*)String.withCString("params"));
-            Node* invoke = Node.withName((u16)nkMethodDecl, String.withCString("invoke"));
+            Node* invoke = mkNamed((u16)nkMethodDecl, String.withCString("invoke"));
             invoke.setOp(ret);
             Array* pp = blkPositionalParams(declared);
             for (u32 k = (u32)0; k < pp.count(); k = k + (u32)1) invoke.add((Node*)pp.get(k));
             invoke.add(blkDefaultBody(ret));
-            Node* cls = Node.withName((u16)nkClassDecl, name);
+            Node* cls = mkNamed((u16)nkClassDecl, name);
             cls.add(invoke);
             program.add(cls);
         }
@@ -525,11 +525,11 @@ class Parser
                 if (((String*)wbAll.get(j)).equals(cn)) { wbNames.add((Object*)cn); break; }
         }
 
-        Node* cls = Node.withName((u16)nkClassDecl, implName);
+        Node* cls = mkNamed((u16)nkClassDecl, implName);
         cls.setOp(baseName);
         for (u32 i = (u32)0; i < capNames.count(); i = i + (u32)1) {
             String* cn = (String*)capNames.get(i);
-            Node* iv = Node.withName((u16)nkVariableDecl, cn);
+            Node* iv = mkNamed((u16)nkVariableDecl, cn);
             iv.setOp((String*)capTypes.get((Hashable*)cn));
             cls.add(iv);
         }
@@ -537,28 +537,28 @@ class Parser
             String* wn = (String*)wbNames.get(i);
             String* ivn = String.withString(wn);
             ivn.appendCString("$wb");
-            Node* iv = Node.withName((u16)nkVariableDecl, ivn);
+            Node* iv = mkNamed((u16)nkVariableDecl, ivn);
             String* pty = String.withString((String*)capTypes.get((Hashable*)wn));
             pty.appendByte((u8)'*');
             iv.setOp(pty);
             cls.add(iv);
         }
         if (capNames.count() > (u32)0) {
-            Node* setM = Node.withName((u16)nkMethodDecl, String.withCString("_set"));
+            Node* setM = mkNamed((u16)nkMethodDecl, String.withCString("_set"));
             setM.setOp(String.withCString("void"));
-            Node* setBody = Node.with((u16)nkBlock);
+            Node* setBody = mk((u16)nkBlock);
             for (u32 i = (u32)0; i < capNames.count(); i = i + (u32)1) {
                 String* cn = (String*)capNames.get(i);
                 String* vn = String.withCString("v");
                 vn.append(String.withU32(i));
-                Node* p = Node.withName((u16)nkParam, vn);
+                Node* p = mkNamed((u16)nkParam, vn);
                 p.setOp((String*)capTypes.get((Hashable*)cn));
                 setM.add(p);
-                Node* a = Node.with((u16)nkAssign);
+                Node* a = mk((u16)nkAssign);
                 a.setOp(String.withCString("="));
-                a.add(Node.withName((u16)nkIdent, cn));
-                a.add(Node.withName((u16)nkIdent, String.withString(vn)));
-                Node* es = Node.with((u16)nkExprStatement);
+                a.add(mkNamed((u16)nkIdent, cn));
+                a.add(mkNamed((u16)nkIdent, String.withString(vn)));
+                Node* es = mk((u16)nkExprStatement);
                 es.add(a);
                 setBody.add(es);
             }
@@ -566,25 +566,25 @@ class Parser
                 String* wn = (String*)wbNames.get(i);
                 String* pn = String.withCString("w");
                 pn.append(String.withU32(i));
-                Node* p = Node.withName((u16)nkParam, String.withString(pn));
+                Node* p = mkNamed((u16)nkParam, String.withString(pn));
                 String* pty = String.withString((String*)capTypes.get((Hashable*)wn));
                 pty.appendByte((u8)'*');
                 p.setOp(pty);
                 setM.add(p);
                 String* ivn = String.withString(wn);
                 ivn.appendCString("$wb");
-                Node* a = Node.with((u16)nkAssign);
+                Node* a = mk((u16)nkAssign);
                 a.setOp(String.withCString("="));
-                a.add(Node.withName((u16)nkIdent, ivn));
-                a.add(Node.withName((u16)nkIdent, String.withString(pn)));
-                Node* es = Node.with((u16)nkExprStatement);
+                a.add(mkNamed((u16)nkIdent, ivn));
+                a.add(mkNamed((u16)nkIdent, String.withString(pn)));
+                Node* es = mk((u16)nkExprStatement);
                 es.add(a);
                 setBody.add(es);
             }
             setM.add(setBody);
             cls.add(setM);
         }
-        Node* invoke = Node.withName((u16)nkMethodDecl, String.withCString("invoke"));
+        Node* invoke = mkNamed((u16)nkMethodDecl, String.withCString("invoke"));
         invoke.setOp(ret);
         for (u32 i = (u32)0; i < params.count(); i = i + (u32)1)
             invoke.add((Node*)params.get(i));
@@ -592,25 +592,25 @@ class Parser
         if (wbNames.count() > (u32)0) {
             // ONE synthesised defer stores every working copy back through
             // its pointer — on every exit, the throw path included (§4).
-            Node* dBody = Node.with((u16)nkBlock);
+            Node* dBody = mk((u16)nkBlock);
             for (u32 i = (u32)0; i < wbNames.count(); i = i + (u32)1) {
                 String* wn = (String*)wbNames.get(i);
                 String* ivn = String.withString(wn);
                 ivn.appendCString("$wb");
-                Node* deref = Node.withName((u16)nkUnary, String.withCString("*"));
+                Node* deref = mkNamed((u16)nkUnary, String.withCString("*"));
                 deref.setOp(String.withCString("*"));
-                deref.add(Node.withName((u16)nkIdent, ivn));
-                Node* a = Node.with((u16)nkAssign);
+                deref.add(mkNamed((u16)nkIdent, ivn));
+                Node* a = mk((u16)nkAssign);
                 a.setOp(String.withCString("="));
                 a.add(deref);
-                a.add(Node.withName((u16)nkIdent, wn));
-                Node* es = Node.with((u16)nkExprStatement);
+                a.add(mkNamed((u16)nkIdent, wn));
+                Node* es = mk((u16)nkExprStatement);
                 es.add(a);
                 dBody.add(es);
             }
-            Node* d = Node.with((u16)nkDefer);
+            Node* d = mk((u16)nkDefer);
             d.add(dBody);
-            Node* wrapped = Node.with((u16)nkBlock);
+            Node* wrapped = mk((u16)nkBlock);
             wrapped.add(d);
             for (u32 i = (u32)0; i < body.kidCount(); i = i + (u32)1)
                 wrapped.add(body.kid(i));
@@ -619,7 +619,7 @@ class Parser
         invoke.add(invokeBody);
         cls.add(invoke);
         {
-            Node* mk = Node.withName((u16)nkMethodDecl, String.withCString("mk"));
+            Node* mk = mkNamed((u16)nkMethodDecl, String.withCString("mk"));
             String* basePtr = String.withString(baseName);
             basePtr.appendByte((u8)'*');
             mk.setOp(basePtr);
@@ -629,43 +629,43 @@ class Parser
                 String* cn = (String*)capNames.get(i);
                 String* an = String.withCString("c");
                 an.append(String.withU32(i));
-                Node* p = Node.withName((u16)nkParam, String.withString(an));
+                Node* p = mkNamed((u16)nkParam, String.withString(an));
                 p.setOp((String*)capTypes.get((Hashable*)cn));
                 mk.add(p);
-                mkArgs.add((Object*)Node.withName((u16)nkIdent, String.withString(an)));
+                mkArgs.add((Object*)mkNamed((u16)nkIdent, String.withString(an)));
             }
             for (u32 i = (u32)0; i < wbNames.count(); i = i + (u32)1) {
                 String* wn = (String*)wbNames.get(i);
                 String* an = String.withCString("p");
                 an.append(String.withU32(i));
-                Node* p = Node.withName((u16)nkParam, String.withString(an));
+                Node* p = mkNamed((u16)nkParam, String.withString(an));
                 String* pty = String.withString((String*)capTypes.get((Hashable*)wn));
                 pty.appendByte((u8)'*');
                 p.setOp(pty);
                 mk.add(p);
-                mkArgs.add((Object*)Node.withName((u16)nkIdent, String.withString(an)));
+                mkArgs.add((Object*)mkNamed((u16)nkIdent, String.withString(an)));
             }
-            Node* mkBody = Node.with((u16)nkBlock);
-            Node* t = Node.withName((u16)nkVariableDecl, String.withCString("t"));
+            Node* mkBody = mk((u16)nkBlock);
+            Node* t = mkNamed((u16)nkVariableDecl, String.withCString("t"));
             String* implPtr = String.withString(implName);
             implPtr.appendByte((u8)'*');
             t.setOp(implPtr);
-            Node* newE = Node.withName((u16)nkNew, implName);
+            Node* newE = mkNamed((u16)nkNew, implName);
             newE.setNum((i64)0);
             t.add(newE);
             mkBody.add(t);
             if (capNames.count() > (u32)0) {
-                Node* call = Node.withName((u16)nkMethodCall, String.withCString("_set"));
-                call.add(Node.withName((u16)nkIdent, String.withCString("t")));
+                Node* call = mkNamed((u16)nkMethodCall, String.withCString("_set"));
+                call.add(mkNamed((u16)nkIdent, String.withCString("t")));
                 for (u32 i = (u32)0; i < mkArgs.count(); i = i + (u32)1)
                     call.add((Node*)mkArgs.get(i));
                 call.setNum((i64)mkArgs.count());
-                Node* es = Node.with((u16)nkExprStatement);
+                Node* es = mk((u16)nkExprStatement);
                 es.add(call);
                 mkBody.add(es);
             }
-            Node* r = Node.with((u16)nkReturn);
-            r.add(Node.withName((u16)nkIdent, String.withCString("t")));
+            Node* r = mk((u16)nkReturn);
+            r.add(mkNamed((u16)nkIdent, String.withCString("t")));
             mkBody.add(r);
             mk.add(mkBody);
             cls.add(mk);
@@ -674,18 +674,18 @@ class Parser
 
         // Replacement: BlkImpl$N.mk(captures) — the capture-arg USES must
         // register with an enclosing literal frame too.
-        Node* mkCall = Node.withName((u16)nkMethodCall, String.withCString("mk"));
-        mkCall.add(Node.withName((u16)nkIdent, String.withString(implName)));
+        Node* mkCall = mkNamed((u16)nkMethodCall, String.withCString("mk"));
+        mkCall.add(mkNamed((u16)nkIdent, String.withString(implName)));
         for (u32 i = (u32)0; i < capNames.count(); i = i + (u32)1) {
             String* cn = (String*)capNames.get(i);
-            mkCall.add(Node.withName((u16)nkIdent, cn));
+            mkCall.add(mkNamed((u16)nkIdent, cn));
             blkNoteUse(cn);
         }
         for (u32 i = (u32)0; i < wbNames.count(); i = i + (u32)1) {
             String* wn = (String*)wbNames.get(i);
-            Node* addr = Node.withName((u16)nkUnary, String.withCString("&"));
+            Node* addr = mkNamed((u16)nkUnary, String.withCString("&"));
             addr.setOp(String.withCString("&"));
-            addr.add(Node.withName((u16)nkIdent, wn));
+            addr.add(mkNamed((u16)nkIdent, wn));
             mkCall.add(addr);
         }
         mkCall.setNum((i64)(capNames.count() + wbNames.count()));
@@ -945,6 +945,36 @@ class Parser
     }
 
     // ── Token access ─────────────────────────────────────────────
+    // A node with the CURRENT token's position. Only eleven of sixty-one node
+    // constructions set one by hand, so most of the tree carried no position
+    // at all: the driver's diagnostics printed a file and nothing else, and
+    // -fbounds-check could not name the site of a failed check. Taking it from
+    // the token the parser is looking at is right for every node that starts
+    // where it is being built.
+    Node* mk(u16 kind)
+        {
+        Node* n = Node.with(kind);
+        Token* t = cur();
+        if (t != 0)
+            n.setPos(t.fileId(), t.line(), t.col());
+        return n;
+        }
+
+    // The named form, same reason. Identifier nodes go through this one, and
+    // an identifier is what most diagnostics point at.
+    Node* mkNamed(u16 kind, String* name)
+        {
+        Node* n = Node.withName(kind, name);
+        // The token JUST CONSUMED, not the one the parser is looking at: a
+        // named node is built after taking its own token, so `cur()` is
+        // already the token after it and the position landed a word to the
+        // right — `undefinedThing` reported at the semicolon.
+        Token* t = _pos > (u32)0 ? (Token*)_tokens.get(_pos - (u32)1) : cur();
+        if (t != 0)
+            n.setPos(t.fileId(), t.line(), t.col());
+        return n;
+        }
+
     Token* cur(void)
     {
         if (_pos >= _tokens.count()) return (Token*)_tokens.last();
@@ -998,7 +1028,7 @@ class Parser
     // ── Program ──────────────────────────────────────────────────
     Node* parse(void)
     {
-        Node* program = Node.with((u16)nkProgram);
+        Node* program = mk((u16)nkProgram);
         while (!check((u16)tokEOF) && !_fatal) {
             u32 before = _pos;
             Node* decl = parseTopLevel();
@@ -1042,7 +1072,7 @@ class Parser
         Token* name = expect((u16)tokIdentifier);
         expect((u16)tokSemicolon);
         if (name == 0) return (Node*)0;
-        return Node.withName((u16)nkUseDecl, name.value());
+        return mkNamed((u16)nkUseDecl, name.value());
     }
 
     // ── Types ────────────────────────────────────────────────────
@@ -1287,7 +1317,7 @@ class Parser
             String* alias = (name == 0) ? String.withCString("?") : name.value();
             _typeNames.add((Hashable*)String.withString(alias));
             _structNames.add((Hashable*)String.withString(alias));
-            Node* n = Node.withName((u16)nkTypedefDecl, alias);
+            Node* n = mkNamed((u16)nkTypedefDecl, alias);
             // An anonymous struct takes the alias as its own name, so the
             // typedef's target type spells the same word.
             n.setOp(alias);
@@ -1318,7 +1348,7 @@ class Parser
             ty = sig;
         }
         expect((u16)tokSemicolon);
-        Node* n = Node.withName((u16)nkTypedefDecl,
+        Node* n = mkNamed((u16)nkTypedefDecl,
                                 (name == 0) ? String.withCString("?") : name.value());
         n.setOp(ty);
         if (declTok != 0) n.setPos(declTok.fileId(), declTok.line(), declTok.col());
@@ -1339,7 +1369,7 @@ class Parser
         advance();                                  // `struct`
         String* name = String.withCString("-");
         if (check((u16)tokIdentifier)) name = advance().value();
-        Node* n = Node.withName((u16)nkStructDecl, name);
+        Node* n = mkNamed((u16)nkStructDecl, name);
         if (declTok != 0) n.setPos(declTok.fileId(), declTok.line(), declTok.col());
 
         // `:packed` — contextual word in the annotation position, exactly the
@@ -1370,7 +1400,7 @@ class Parser
                         fieldName = (fname == 0) ? String.withCString("?") : fname.value();
                     }
                     firstDecl = false;
-                    Node* f = Node.withName((u16)nkVariableDecl, fieldName);
+                    Node* f = mkNamed((u16)nkVariableDecl, fieldName);
                     String* fieldTy = String.withString(ty);
                     if (match((u16)tokLBracket)) {
                         fieldTy.appendByte((u8)'[');
@@ -1407,7 +1437,7 @@ class Parser
         advance();                                  // `enum`
         String* name = String.withCString("-");
         if (check((u16)tokIdentifier)) name = advance().value();
-        Node* n = Node.withName((u16)nkEnumDecl, name);
+        Node* n = mkNamed((u16)nkEnumDecl, name);
         if (declTok != 0) n.setPos(declTok.fileId(), declTok.line(), declTok.col());
 
         match((u16)tokAssign);
@@ -1421,7 +1451,7 @@ class Parser
             if (brace && closeBlockAhead()) break;
             if (!check((u16)tokIdentifier)) break;
             Token* m = advance();
-            Node* member = Node.withName((u16)nkEnumMember, m.value());
+            Node* member = mkNamed((u16)nkEnumMember, m.value());
             if (match((u16)tokAssign)) {
                 if (check((u16)tokIntLiteral)) next = (i32)advance().intValue();
                 else                           parseExpression();
@@ -1447,7 +1477,7 @@ class Parser
         Token* declTok = cur();
         advance();                                  // `class`
         Token* nameTok = expect((u16)tokIdentifier);
-        Node* n = Node.withName((u16)nkClassDecl,
+        Node* n = mkNamed((u16)nkClassDecl,
                                 (nameTok == 0) ? String.withCString("?") : nameTok.value());
         String* parent = String.withCString("-");
         String* protos = String.withCString("-");
@@ -1520,7 +1550,7 @@ class Parser
         Token* declTok = cur();
         advance();                                  // `protocol`
         Token* nameTok = expect((u16)tokIdentifier);
-        Node* n = Node.withName((u16)nkProtocolDecl,
+        Node* n = mkNamed((u16)nkProtocolDecl,
                                 (nameTok == 0) ? String.withCString("?") : nameTok.value());
         if (openBlock()) {
             while (!closeBlockAhead() && !check((u16)tokEOF)) {
@@ -1584,7 +1614,7 @@ class Parser
 
         if (check((u16)tokLParen)) {
             ty = stripWeakFromReturnList(ty);   // bug 171 Leak B — methods too
-            Node* m = Node.withName((u16)nkMethodDecl, name);
+            Node* m = mkNamed((u16)nkMethodDecl, name);
             m.setOp(ty);
             m.setFlags(flags);
             if (sinceVersion != (String*)0) m.setSince(sinceVersion);
@@ -1615,7 +1645,7 @@ class Parser
         // faithfully ported.
         u32 ivarFlags = flags;
         if (_lastTypeIsOutlet) ivarFlags = ivarFlags | (u32)NF_OUTLET;
-        Node* v = Node.withName((u16)nkVariableDecl, name);
+        Node* v = mkNamed((u16)nkVariableDecl, name);
         v.setOp(memberTypeSuffix(ty));
         v.setFlags(ivarFlags);
         blkBind(name, v.op(), _lastBlkParams);       // class scope (task #26)
@@ -1624,7 +1654,7 @@ class Parser
         while (match((u16)tokComma)) {
             Token* more = expect((u16)tokIdentifier);
             if (more == 0) break;
-            Node* extra = Node.withName((u16)nkVariableDecl, more.value());
+            Node* extra = mkNamed((u16)nkVariableDecl, more.value());
             extra.setOp(memberTypeSuffix(ty));
             extra.setFlags(ivarFlags);
             if (match((u16)tokAssign)) extra.add(parseExpression());
@@ -1676,7 +1706,7 @@ class Parser
                 expect((u16)tokRBracket);
                 ty.appendByte((u8)']');
             }
-            Node* p = Node.withName((u16)nkParam, pname);
+            Node* p = mkNamed((u16)nkParam, pname);
             p.setOp(ty);
             owner.add(p);
             if (!match((u16)tokComma)) break;
@@ -1829,7 +1859,7 @@ class Parser
 
         if (check((u16)tokLParen)) {
             ty = stripWeakFromReturnList(ty);   // bug 171 Leak B
-            Node* f = Node.withName((u16)nkFunctionDecl, name);
+            Node* f = mkNamed((u16)nkFunctionDecl, name);
             f.setOp(ty);
             f.setFlags(flags);
             _blkFnRet.set((Hashable*)String.withString(name), (Object*)ty);
@@ -1859,7 +1889,7 @@ class Parser
             return f;
         }
 
-        Node* v = Node.withName((u16)nkVariableDecl, name);
+        Node* v = mkNamed((u16)nkVariableDecl, name);
         String* vty = String.withString(ty);
         if (match((u16)tokLBracket)) {
             vty.appendByte((u8)'[');
@@ -1915,7 +1945,7 @@ class Parser
 
     Node* parseBlock(void)
     {
-        Node* b = Node.with((u16)nkBlock);
+        Node* b = mk((u16)nkBlock);
         openBlock();
         blkPushScope();                              // blocks (task #26)
         // !_fatal mirrors the original's hasFatalError guard: after a parse
@@ -1948,21 +1978,21 @@ class Parser
         if (check((u16)tokFor))      return parseFor();
         if (check((u16)tokSwitch))   return parseSwitch();
         if (check((u16)tokReturn))   return parseReturn();
-        if (check((u16)tokDefer))    { advance(); Node* d = Node.with((u16)nkDefer); d.add(parseBlockOrStatement()); return d; }
-        if (check((u16)tokThrow))    { advance(); Node* t = Node.with((u16)nkThrow); t.add(parseExpression()); expect((u16)tokSemicolon); return t; }
+        if (check((u16)tokDefer))    { advance(); Node* d = mk((u16)nkDefer); d.add(parseBlockOrStatement()); return d; }
+        if (check((u16)tokThrow))    { advance(); Node* t = mk((u16)nkThrow); t.add(parseExpression()); expect((u16)tokSemicolon); return t; }
         if (check((u16)tokTry))      return parseTry();
         if (check((u16)tokAsm))      return parseAsmBlock();
         if (check((u16)tokTypedef))  return parseTypedef();
         if (check((u16)tokStruct))   return parseStruct(true);
         if (check((u16)tokEnum))     return parseEnum();
-        if (check((u16)tokBreak))    { advance(); expect((u16)tokSemicolon); return Node.with((u16)nkBreak); }
-        if (check((u16)tokContinue)) { advance(); expect((u16)tokSemicolon); return Node.with((u16)nkContinue); }
+        if (check((u16)tokBreak))    { advance(); expect((u16)tokSemicolon); return mk((u16)nkBreak); }
+        if (check((u16)tokContinue)) { advance(); expect((u16)tokSemicolon); return mk((u16)nkContinue); }
         if (check((u16)tokGoto)) {
             // `goto <label>;` — a C-porting aid (undocumented as a language feature).
             advance();
             Token* lbl = expect((u16)tokIdentifier);
             expect((u16)tokSemicolon);
-            return lbl != 0 ? Node.withName((u16)nkGoto, lbl.value()) : (Node*)0;
+            return lbl != 0 ? mkNamed((u16)nkGoto, lbl.value()) : (Node*)0;
         }
         if (check((u16)tokDelete) || check((u16)tokRetain) || check((u16)tokRelease)) {
             // `delete p;` is a statement; `delete(x, y)` is a call to a user
@@ -1975,7 +2005,7 @@ class Parser
                 // the dump prints.
                 u16 kwType = curType();
                 Token* kw = advance();
-                Node* d = Node.with((u16)nkDelete);
+                Node* d = mk((u16)nkDelete);
                 d.setOp(kw.value());
                 if      (kwType == (u16)tokRetain)  d.setNum((i64)1);
                 else if (kwType == (u16)tokRelease) d.setNum((i64)2);
@@ -2002,13 +2032,13 @@ class Parser
         if (check((u16)tokIdentifier) && checkAt((u32)1, (u16)tokColon)) {
             String* nm = cur().value();
             advance(); advance();
-            return Node.withName((u16)nkGotoLabel, nm);
+            return mkNamed((u16)nkGotoLabel, nm);
         }
 
         Node* e = parseExpression();
         expect((u16)tokSemicolon);
         if (e == 0) return (Node*)0;
-        Node* st = Node.with((u16)nkExprStatement);
+        Node* st = mk((u16)nkExprStatement);
         st.add(e);
         return st;
     }
@@ -2034,7 +2064,7 @@ class Parser
 
     Node* parseTupleAssign(void)
     {
-        Node* n = Node.with((u16)nkTupleAssign);
+        Node* n = mk((u16)nkTupleAssign);
         match((u16)tokLParen);
         while (!check((u16)tokRParen) && !check((u16)tokEOF)) {
             // A target is either an EXISTING identifier or a NEW declaration
@@ -2049,7 +2079,7 @@ class Parser
                 String* ty = parseTypeSpelling();
                 Token* nameTok = expect((u16)tokIdentifier);
                 if (nameTok == (Token*)0) break;
-                Node* v = Node.withName((u16)nkVariableDecl, nameTok.value());
+                Node* v = mkNamed((u16)nkVariableDecl, nameTok.value());
                 v.setOp(ty);
                 n.add(v);
             } else {
@@ -2134,7 +2164,7 @@ class Parser
                 Token* nameTok = expect((u16)tokIdentifier);
                 name = (nameTok == 0) ? String.withCString("?") : nameTok.value();
             }
-            Node* v = Node.withName((u16)nkVariableDecl, name);
+            Node* v = mkNamed((u16)nkVariableDecl, name);
             String* vty = String.withString(ty);
             if (match((u16)tokLBracket)) {
                 vty.appendByte((u8)'[');
@@ -2203,15 +2233,15 @@ class Parser
             // The wrapper is a DECL-LIST block, not a scope: `Gadget g(42);`
             // declares `g` in the ENCLOSING block and the synthesised
             // `g.init(42)` rides along beside it.
-            Node* b = Node.with((u16)nkBlock);
+            Node* b = mk((u16)nkBlock);
             b.addFlag((u32)NF_DECLLIST);
             for (u32 i = (u32)0; i < decls.count(); i = i + (u32)1) b.add((Node*)decls.get(i));
-            Node* call = Node.withName((u16)nkMethodCall, String.withCString("init"));
-            call.add(Node.withName((u16)nkIdent, ctorName));       // the receiver
+            Node* call = mkNamed((u16)nkMethodCall, String.withCString("init"));
+            call.add(mkNamed((u16)nkIdent, ctorName));       // the receiver
             for (u32 i = (u32)0; i < ctorArgs.count(); i = i + (u32)1)
                 call.add((Node*)ctorArgs.get(i));
             call.setNum((i64)ctorArgs.count());
-            Node* st = Node.with((u16)nkExprStatement);
+            Node* st = mk((u16)nkExprStatement);
             st.add(call);
             b.add(st);
             return b;
@@ -2220,7 +2250,7 @@ class Parser
         if (decls.count() == (u32)1) return first;
         // Several declarators share one type: the original wraps them in a
         // block marked isDeclList, and so does this.
-        Node* b = Node.with((u16)nkBlock);
+        Node* b = mk((u16)nkBlock);
         b.addFlag((u32)NF_DECLLIST);
         for (u32 i = (u32)0; i < decls.count(); i = i + (u32)1) b.add((Node*)decls.get(i));
         return b;
@@ -2240,7 +2270,7 @@ class Parser
             if (check((u16)tokDotDot) || check((u16)tokEllipsis)) {
                 bool inclusive = check((u16)tokEllipsis);
                 advance();
-                Node* r = Node.with((u16)nkRange);
+                Node* r = mk((u16)nkRange);
                 if (inclusive) r.addFlag((u32)NF_INCLUSIVE);
                 r.add(e);
                 r.add(parseExpression());
@@ -2251,7 +2281,7 @@ class Parser
         if (check((u16)tokLBrace)) {
             u16 closer = (u16)tokRBrace;
             advance();
-            Node* list = Node.with((u16)nkBlock);
+            Node* list = mk((u16)nkBlock);
             while (!check(closer) && !check((u16)tokEOF)) {
                 list.add(parseInitialiser());
                 if (!match((u16)tokComma)) break;
@@ -2265,7 +2295,7 @@ class Parser
     Node* parseIf(void)
     {
         advance();                                  // `if`
-        Node* n = Node.with((u16)nkIf);
+        Node* n = mk((u16)nkIf);
         expect((u16)tokLParen);
         n.add(parseExpression());
         expect((u16)tokRParen);
@@ -2277,7 +2307,7 @@ class Parser
     Node* parseWhile(void)
     {
         advance();
-        Node* n = Node.with((u16)nkWhile);
+        Node* n = mk((u16)nkWhile);
         expect((u16)tokLParen);
         n.add(parseExpression());
         expect((u16)tokRParen);
@@ -2347,28 +2377,28 @@ class Parser
                 expect((u16)tokRParen);
                 Node* body = parseBlockOrStatement();
 
-                Node* n = Node.with((u16)nkForCStyle);
-                Node* initMark = Node.with((u16)nkMarkerInit);
-                Node* decl = Node.withName((u16)nkVariableDecl, vname);
+                Node* n = mk((u16)nkForCStyle);
+                Node* initMark = mk((u16)nkMarkerInit);
+                Node* decl = mkNamed((u16)nkVariableDecl, vname);
                 decl.setOp(ty);
                 decl.add(collection);                    // the start bound
                 initMark.add(decl);
                 n.add(initMark);
 
-                Node* condMark = Node.with((u16)nkMarkerCond);
-                Node* cmp = Node.with((u16)nkBinary);
+                Node* condMark = mk((u16)nkMarkerCond);
+                Node* cmp = mk((u16)nkBinary);
                 if (descending) cmp.setOp(String.withCString(inclusive ? ">=" : ">"));
                 else            cmp.setOp(String.withCString(inclusive ? "<=" : "<"));
-                cmp.add(Node.withName((u16)nkIdent, vname));
+                cmp.add(mkNamed((u16)nkIdent, vname));
                 cmp.add(endExpr);
                 condMark.add(cmp);
                 n.add(condMark);
 
-                Node* stepMark = Node.with((u16)nkMarkerStep);
-                Node* step = Node.with((u16)nkAssign);
+                Node* stepMark = mk((u16)nkMarkerStep);
+                Node* step = mk((u16)nkAssign);
                 step.setOp(String.withCString(descending ? "-=" : "+="));
-                step.add(Node.withName((u16)nkIdent, vname));
-                Node* one = Node.with((u16)nkInt);
+                step.add(mkNamed((u16)nkIdent, vname));
+                Node* one = mk((u16)nkInt);
                 i32 mag = stepExplicit ? stepValue : (i32)1;
                 if (mag < (i32)0) mag = (i32)0 - mag;
                 one.setNum((i64)mag);
@@ -2380,8 +2410,8 @@ class Parser
                 return n;
             }
 
-            Node* n = Node.with((u16)nkForIn);
-            Node* loopVar = Node.withName((u16)nkVariableDecl, vname);
+            Node* n = mk((u16)nkForIn);
+            Node* loopVar = mkNamed((u16)nkVariableDecl, vname);
             loopVar.setOp(ty);
             n.add(loopVar);
             n.add(collection);
@@ -2390,8 +2420,8 @@ class Parser
             return n;
         }
 
-        Node* n = Node.with((u16)nkForCStyle);
-        Node* initMark = Node.with((u16)nkMarkerInit);
+        Node* n = mk((u16)nkForCStyle);
+        Node* initMark = mk((u16)nkMarkerInit);
         if (!check((u16)tokSemicolon)) {
             if (looksLikeType()) initMark.add(parseVarDeclStatement());
             else {
@@ -2406,12 +2436,12 @@ class Parser
         }
         n.add(initMark);
 
-        Node* condMark = Node.with((u16)nkMarkerCond);
+        Node* condMark = mk((u16)nkMarkerCond);
         if (!check((u16)tokSemicolon)) condMark.add(parseExpression());
         expect((u16)tokSemicolon);
         n.add(condMark);
 
-        Node* stepMark = Node.with((u16)nkMarkerStep);
+        Node* stepMark = mk((u16)nkMarkerStep);
         if (!check((u16)tokRParen)) stepMark.add(parseExpression());
         expect((u16)tokRParen);
         n.add(stepMark);
@@ -2461,7 +2491,7 @@ class Parser
         // hands the caller a write into this (dead) frame — checked below
         // after each value parses.
         advance();
-        Node* n = Node.with((u16)nkReturn);
+        Node* n = mk((u16)nkReturn);
         if (!check((u16)tokSemicolon)) {
             n.add(parseExpression());
             while (match((u16)tokComma)) n.add(parseExpression());
@@ -2477,11 +2507,11 @@ class Parser
     Node* parseTry(void)
     {
         advance();
-        Node* n = Node.with((u16)nkTry);
+        Node* n = mk((u16)nkTry);
         n.add(parseBlockOrStatement());
         while (check((u16)tokCatch)) {
             advance();
-            Node* c = Node.with((u16)nkCatch);
+            Node* c = mk((u16)nkCatch);
             String* ty = String.withCString("-");
             String* var = String.withCString("-");
             if (match((u16)tokLParen)) {
@@ -2500,7 +2530,7 @@ class Parser
     Node* parseSwitch(void)
     {
         advance();
-        Node* n = Node.with((u16)nkSwitch);
+        Node* n = mk((u16)nkSwitch);
         expect((u16)tokLParen);
         n.add(parseExpression());
         expect((u16)tokRParen);
@@ -2516,14 +2546,14 @@ class Parser
                     // consecutive labels with nothing between them share a
                     // body, which is what C fallthrough means here.
                     if (current == 0 || caseHasBody) {
-                        current = Node.with((u16)nkCase);
+                        current = mk((u16)nkCase);
                         n.add(current);
                         caseHasBody = false;
                     }
                     if (isDefault) current.addFlag((u32)NF_DEFAULT);
                     if (!isDefault) {
                         while (true) {
-                            Node* label = Node.with((u16)nkLabel);
+                            Node* label = mk((u16)nkLabel);
                             // Open-ended ranges: `case ..5:` and `case 5..:`
                             // carry only one bound, and `case a..b:` carries
                             // both. The missing side is simply absent.
@@ -2570,7 +2600,7 @@ class Parser
     Node* parseAsmBlock(void)
     {
         advance();                                  // `asm`
-        Node* n = Node.with((u16)nkAsmBlock);
+        Node* n = mk((u16)nkAsmBlock);
         if (!openBlock()) return n;
         u32 depth = (u32)1;
         String* line = String.withCString("");
@@ -2583,7 +2613,7 @@ class Parser
             }
             Token* t = advance();
             if (t.line() != lastLine && line.byteLength() > (u32)0) {
-                n.add(Node.withName((u16)nkAsmLine, line));
+                n.add(mkNamed((u16)nkAsmLine, line));
                 line = String.withCString("");
             }
             // Spacing rules, copied exactly: no space after `#` (the 6502
@@ -2605,7 +2635,7 @@ class Parser
             line.append(t.value());
             lastLine = t.line();
         }
-        if (line.byteLength() > (u32)0) n.add(Node.withName((u16)nkAsmLine, line));
+        if (line.byteLength() > (u32)0) n.add(mkNamed((u16)nkAsmLine, line));
         closeBlock();
         return n;
     }
@@ -2663,7 +2693,7 @@ class Parser
 
             if (opType == (u16)tokQuestion && prec >= minPrec) {
                 advance();
-                Node* t = Node.with((u16)nkTernary);
+                Node* t = mk((u16)nkTernary);
                 Node* thenE = parseExpression();
                 expect((u16)tokColon);
                 Node* elseE = parseExprMinPrec(prec);
@@ -2676,7 +2706,7 @@ class Parser
             Token* opTok = advance();
 
             if (isAssignTok(opType)) {
-                Node* a = Node.with((u16)nkAssign);
+                Node* a = mk((u16)nkAssign);
                 a.setOp(opTok.value());
                 Node* rhs = (Node*)0;
                 // Blocks (task #26): `b = { body };` re-binds a block variable;
@@ -2716,7 +2746,12 @@ class Parser
                 continue;
             }
 
-            Node* b = Node.with((u16)nkBinary);
+            Node* b = mk((u16)nkBinary);
+            // The OPERATOR's position. mk() takes the token the parser is
+            // looking at, which by here is the start of the right-hand side —
+            // `s + 1` reported the `1` where the reference reports the `+`.
+            if (opTok != 0)
+                b.setPos(opTok.fileId(), opTok.line(), opTok.col());
             b.setOp(opTok.value());
             b.add(lhs);
             b.add(parseExprMinPrec(prec + (i16)1));
@@ -2749,7 +2784,7 @@ class Parser
             || t == (u16)tokPlusPlus || t == (u16)tokMinusMinus
             || t == (u16)tokLess || t == (u16)tokByte3) {
             Token* op = advance();
-            Node* n = Node.with((u16)nkUnary);
+            Node* n = mk((u16)nkUnary);
             // A dereference is recorded under ONE spelling whichever sigil the
             // source used, because the ObjC parser stores the operator KIND and
             // prints it canonically. Carrying the source text instead made
@@ -2779,12 +2814,12 @@ class Parser
             u16 t = curType();
             if (t == (u16)tokPlusPlus || t == (u16)tokMinusMinus) {
                 Token* op = advance();
-                Node* n = Node.with((u16)nkPostfix);
+                Node* n = mk((u16)nkPostfix);
                 n.setOp(op.value());
                 n.add(node);
                 node = n;
             } else if (t == (u16)tokLBracket) {
-                advance();
+                Token* lbTok = advance();
                 Node* startE = (Node*)0;
                 Node* endE = (Node*)0;
                 bool isSlice = false;
@@ -2804,7 +2839,14 @@ class Parser
                     }
                 }
                 expect((u16)tokRBracket);
-                Node* n = Node.with(isSlice ? (u16)nkSlice : (u16)nkSubscript);
+                Node* n = mk(isSlice ? (u16)nkSlice : (u16)nkSubscript);
+                // A subscript node carried NO position. It did not matter until
+                // -fbounds-check began naming the site of a failed check: a
+                // subscript READ inherited one from the expression around it,
+                // while a subscript on the LEFT of an assignment had nothing to
+                // inherit and every out-of-bounds store reported `?:0:0`. The
+                // bracket is the right place to point at either way.
+                if (lbTok != 0) n.setPos(lbTok.fileId(), lbTok.line(), lbTok.col());
                 if (inclusive) n.addFlag((u32)NF_INCLUSIVE);
                 // `a[..hi]` and `a[lo..]` both carry ONE bound and a missing
                 // child is simply absent, so the open-LOW form says so itself.
@@ -2823,7 +2865,7 @@ class Parser
                 } else {
                     expect((u16)tokIdentifier);
                 }
-                Node* n = Node.withName((u16)nkMember, member);
+                Node* n = mkNamed((u16)nkMember, member);
                 if (arrow) n.addFlag((u32)NF_ARROW);
                 n.add(node);
                 node = n;
@@ -2833,7 +2875,7 @@ class Parser
                 expect((u16)tokRParen);
                 Node* n = (Node*)0;
                 if (node.kind() == (u16)nkMember) {
-                    n = Node.withName((u16)nkMethodCall, node.name());
+                    n = mkNamed((u16)nkMethodCall, node.name());
                     n.add(node.kid((u32)0));           // receiver
                 } else if (node.kind() == (u16)nkIdent) {
                     // Blocks (task #26): a call through a block binding is
@@ -2847,17 +2889,17 @@ class Parser
                     }
                     Map* bInfo = blkLookup(node.name(), (u32*)0);
                     if (isSelfName) {
-                        n = Node.withName((u16)nkMethodCall, String.withCString("invoke"));
-                        n.add(Node.withName((u16)nkIdent, String.withCString("self")));
+                        n = mkNamed((u16)nkMethodCall, String.withCString("invoke"));
+                        n.add(mkNamed((u16)nkIdent, String.withCString("self")));
                     } else if (bInfo != 0 && blkBaseOf(bInfo) != 0) {
                         blkNoteUse(node.name());
-                        n = Node.withName((u16)nkMethodCall, String.withCString("invoke"));
-                        n.add(Node.withName((u16)nkIdent, node.name()));
+                        n = mkNamed((u16)nkMethodCall, String.withCString("invoke"));
+                        n.add(mkNamed((u16)nkIdent, node.name()));
                     } else {
-                        n = Node.withName((u16)nkCall, node.name());
+                        n = mkNamed((u16)nkCall, node.name());
                     }
                 } else {
-                    n = Node.withName((u16)nkCall, String.withCString("<indirect>"));
+                    n = mkNamed((u16)nkCall, String.withCString("<indirect>"));
                 }
                 for (u32 i = (u32)0; i < args.count(); i = i + (u32)1)
                     n.add((Node*)args.get(i));
@@ -2908,19 +2950,19 @@ class Parser
 
         if (t == (u16)tokIntLiteral) {
             Token* tok = advance();
-            Node* n = Node.with((u16)nkInt);
+            Node* n = mk((u16)nkInt);
             n.setNum(tok.intValue());
             return n;
         }
         if (t == (u16)tokCharLiteral) {
             Token* tok = advance();
-            Node* n = Node.with((u16)nkChar);
+            Node* n = mk((u16)nkChar);
             n.setNum(tok.intValue());
             return n;
         }
         if (t == (u16)tokFloatLiteral) {
             Token* tok = advance();
-            Node* n = Node.withName((u16)nkFloat, tok.value());
+            Node* n = mkNamed((u16)nkFloat, tok.value());
             n.setNum(tok.intValue());       // 1 when the literal said `d`
             return n;
         }
@@ -2936,11 +2978,11 @@ class Parser
                 Token* more = advance();
                 joined.append(more.value());
             }
-            return Node.withName((u16)nkStr, joined);
+            return mkNamed((u16)nkStr, joined);
         }
         if (t == (u16)tokTrue || t == (u16)tokFalse) {
             advance();
-            Node* n = Node.with((u16)nkBool);
+            Node* n = mk((u16)nkBool);
             n.setNum((t == (u16)tokTrue) ? (i64)1 : (i64)0);
             return n;
         }
@@ -2949,7 +2991,7 @@ class Parser
             String* ty = String.withCString("?");
             if (check((u16)tokIdentifier) || isTypeKeywordToken(curType()))
                 ty = advance().value();
-            Node* n = Node.withName((u16)nkNew, ty);
+            Node* n = mkNamed((u16)nkNew, ty);
             if (match((u16)tokLBracket)) {
                 n.add(parseExpression());
                 expect((u16)tokRBracket);
@@ -2965,7 +3007,7 @@ class Parser
         }
         if (t == (u16)tokSizeof) {
             advance();
-            Node* n = Node.with((u16)nkSizeof);
+            Node* n = mk((u16)nkSizeof);
             bool paren = match((u16)tokLParen);
             // `sizeof(P)` where P names a type reads as a TYPE, not as an
             // expression: inside the parens, an identifier followed by `)` or
@@ -2995,7 +3037,7 @@ class Parser
                 && checkAt((u32)1, (u16)tokLParen)) {
                 advance();
                 match((u16)tokLParen);
-                Node* call = Node.withName((u16)nkCall, String.withCString("va_arg"));
+                Node* call = mkNamed((u16)nkCall, String.withCString("va_arg"));
                 Node* cursor = parseExpression();
                 call.add(cursor);
                 call.setNum((i64)1);
@@ -3013,20 +3055,20 @@ class Parser
             }
             Token* tok = advance();
             blkNoteUse(tok.value());                    // task #26
-            return Node.withName((u16)nkIdent, tok.value());
+            return mkNamed((u16)nkIdent, tok.value());
         }
         // `delete(40, 2)` in EXPRESSION position is a call to a user function
         // of that name — the statement forms are handled in parseStatement.
         if (t == (u16)tokDelete || t == (u16)tokRetain || t == (u16)tokRelease) {
             Token* tok = advance();
-            return Node.withName((u16)nkIdent, tok.value());
+            return mkNamed((u16)nkIdent, tok.value());
         }
         if (isTypeKeywordToken(t)) {
             // A bare type keyword in expression position is a static-call
             // receiver (`u16.max`) in the original's grammar; record it as an
             // identifier so the shape matches.
             Token* tok = advance();
-            return Node.withName((u16)nkIdent, tok.value());
+            return mkNamed((u16)nkIdent, tok.value());
         }
         if (t == (u16)tokLParen) {
             match((u16)tokLParen);              // splits a merged `((`
@@ -3035,7 +3077,7 @@ class Parser
                 String* ty = parseTypeSpelling();
                 bool failable = match((u16)tokQuestion);
                 expect((u16)tokRParen);
-                Node* n = Node.withName((u16)nkCast, ty);
+                Node* n = mkNamed((u16)nkCast, ty);
                 if (failable) n.addFlag((u32)NF_FAILABLE);
                 n.add(parseUnary());
                 return n;

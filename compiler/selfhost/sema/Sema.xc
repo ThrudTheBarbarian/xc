@@ -3693,10 +3693,18 @@ class Sema
 
     Node* descriptionBody(String* clsName, Array* ivars, u32 mask)
         {
+        // A SYNTHESISED method has no source file, and anything that reports a
+        // position for it — a diagnostic, or -fbounds-check naming a site —
+        // needs something to print. The reference calls it
+        // `<synth-description>`; saying `?` instead made every such site
+        // string differ between the two compilers.
+        u32 synthFile = FileTable.idFor(String.withCString("<synth-description>"));
         Node* m = Node.withName((u16)nkMethodDecl, String.withCString("description"));
+        m.setPos(synthFile, (u32)0, (u32)0);
         m.setOp(String.withCString("String*"));
         m.setSym(String.withCString("description"));
         Node* body = Node.with((u16)nkBlock);
+        body.setPos(synthFile, (u32)0, (u32)0);
 
         // `u16@ vals = new u16[(u16)N];`
         Node* decl = Node.withName((u16)nkVariableDecl, String.withCString("vals"));
@@ -3710,14 +3718,17 @@ class Sema
         for (u32 i = (u32)0; i < ivars.count(); i = i + (u32)1)
             {
             Node* sub = Node.with((u16)nkSubscript);
+            sub.setPos(synthFile, (u32)0, (u32)0);
             sub.add(identNode(String.withCString("vals")));
             sub.add(intLit((i64)i));
             Node* asn = Node.with((u16)nkAssign);
+            asn.setPos(synthFile, (u32)0, (u32)0);
             asn.setOp(String.withCString("="));
             asn.add(sub);
             asn.add(castTo(String.withCString("u16"),
                            identNode(((Node*)ivars.get(i)).name())));
             Node* st = Node.with((u16)nkExprStatement);
+            st.setPos(synthFile, (u32)0, (u32)0);
             st.add(asn);
             body.add(st);
             }
@@ -3732,6 +3743,7 @@ class Sema
         call.add(castTo(String.withCString("u8"), intLit((i64)ivars.count())));
         call.add(castTo(String.withCString("u8"), intLit((i64)mask)));
         Node* ret = Node.with((u16)nkReturn);
+        ret.setPos(synthFile, (u32)0, (u32)0);
         ret.add(call);
         body.add(ret);
 

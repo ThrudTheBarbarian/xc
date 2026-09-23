@@ -3509,6 +3509,36 @@ static uint32_t xtProtocolId(NSString* name)
 |* ones it can prove redundant, and so one implementation covers every native
 |* back end rather than each one growing its own.
 \****************************************************************************/
+// A FIXED-SIZE array — a local or a global — carries no allocation header, so
+// the header-reading check above finds no magic word and returns without
+// looking at anything. Every `u32 a[8]; a[9] = x;` therefore passed a checked
+// build in silence, which is the half of the feature that would have caught an
+// application's global-array overrun. The count is known here at compile time,
+// so pass it and let the runtime compare against that instead.
+- (void)emitBoundsCheckArray:(XTIRValue*)ptr
+                       index:(XTIRValue*)idx
+                       count:(NSUInteger)count
+                          at:(XTSourceLocation*)loc
+    {
+    if (!self.boundsCheck || !ptr || !idx || count == 0)
+        return;
+    NSString* site = [NSString stringWithFormat:@"%@:%lu:%lu",
+                                                loc.filename.lastPathComponent ?: @"?",
+                                                (unsigned long)loc.line, (unsigned long)loc.column];
+    XTIRValue* siteVal = [self internCString:site];
+    if (!siteVal)
+        return;
+    XTIRType* u64 = [XTIRType u64Type];
+    XTIRValue* cnt = [self emitInsnOpcode:XTIROpConst
+                                   result:u64
+                                 operands:@[ [XTIROperand immIWithType:u64 value:(int64_t)count] ]];
+    XTIRSymbolId sid = [self runtimeHelperSymbolNamed:@"_xt_check_bounds_n"];
+    [self emitCall:sid
+          callConv:[XTIRCallConv standard]
+         argValues:@[ ptr, idx, cnt, siteVal ]
+        resultType:nil];
+    }
+
 - (void)emitBoundsCheckPtr:(XTIRValue*)ptr
                      index:(XTIRValue*)idx
                         at:(XTSourceLocation*)loc
@@ -5157,9 +5187,12 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
     if (node.lhs.nodeKind == XTASTNodeKindSubscriptExpr)
         {
         XTSubscriptExprNode* sub = (XTSubscriptExprNode*)node.lhs;
+        // The SUBSCRIPT's position, not the assignment's. A failed bounds
+        // check on `a[k] = v` reported the column of the `=`, which is not
+        // where the bad index is.
         XTIRValue* addr = [self emitSubscriptAddress:sub.base
                                                index:sub.index
-                                            location:node.location];
+                                            location:sub.location ?: node.location];
         if (!addr)
             return nil;
         // Struct-array element whole-struct assign (`sharr[i] = makeHolder(...)`):
@@ -8112,7 +8145,16 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
     // checks into library code and NONE into the user's main, which is the kind
     // of gap that reads as "the check does not work" rather than "the check is
     // not there".
-    [self emitBoundsCheckPtr:basePtr index:idxVal at:loc];
+    // An array base knows its own length; a pointer base does not and has to
+    // ask the allocation header.
+    if (baseAST && baseAST.kind == XTTypeKindArray && [baseAST isKindOfClass:[XTArrayType class]]
+        && ((XTArrayType*)baseAST).elementCount > 0)
+        [self emitBoundsCheckArray:basePtr
+                             index:idxVal
+                             count:((XTArrayType*)baseAST).elementCount
+                                at:loc];
+    else
+        [self emitBoundsCheckPtr:basePtr index:idxVal at:loc];
     XTIRValue* elemAddr = [self emitInsnOpcode:XTIROpElementAddr
                                         result:resultPtrIR
                                       operands:@[ [XTIROperand useWithValueId:basePtr.valueId],

@@ -289,6 +289,20 @@ __attribute__((noinline)) static void __xt_ms_backtrace(void){
     }
 }
 
+/* The counted twin: the extent came from the compiler, so it can be stated
+ * plainly instead of hedged the way the header-less case has to be. */
+void _xt_trap_bounds_n(const char *site, void *ptr, unsigned long index,
+                       unsigned long count){
+    fprintf(stderr, "\n=== xcc: out-of-bounds access ===\n");
+    if (site) fprintf(stderr, "  at %s\n", site);
+    fprintf(stderr, "  array: index %lu, but it holds %lu element%s\n",
+            index, count, count == 1 ? "" : "s");
+    (void)ptr;
+    __xt_ms_backtrace();
+    fflush(stderr);
+    abort();
+}
+
 void _xt_trap_bounds(const char *site, void *ptr, unsigned long index){
     fprintf(stderr, "\n=== xcc: out-of-bounds access ===\n");
     if (site) fprintf(stderr, "  at %s\n", site);
@@ -354,6 +368,18 @@ void _xt_trap_bounds(const char *site, void *ptr, unsigned long index){
                      : : "r"(__xt_ms_reg) : "memory"); \
     for (int _r = 19; _r <= 28; _r++) __xt_ms_regKnown[_r] = 1; \
 } while (0)
+
+/* A FIXED-SIZE array: the count comes from the compiler, not from a header,
+ * because a local or a global has none. Without this the check above simply
+ * returned for every such subscript and a checked build checked nothing at all
+ * outside the heap. */
+void _xt_check_bounds_n(void *ptr, unsigned long index, unsigned long count,
+                        const char *site){
+    if (index >= count) {
+        XT_MS_CAPTURE();
+        _xt_trap_bounds_n(site, ptr, index, count);
+    }
+}
 
 void _xt_check_bounds(void *ptr, unsigned long index, const char *site){
     if (!ptr) { XT_MS_CAPTURE(); _xt_trap_bounds(site, ptr, index); return; }

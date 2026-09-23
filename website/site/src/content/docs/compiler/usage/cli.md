@@ -172,13 +172,44 @@ thread. These flags override that choice. See
 | Flag | Effect |
 |------|--------|
 | `-flto` | Link-time optimisation: recompile the whole program from its IR as one module. |
-| `-fbounds-check` | Insert array/heap bounds checks (native targets). |
+| `-fbounds-check` | Build with subscript bounds checking — see [Checked builds](#checked-builds). Native targets only. |
 | `--sign <identity.pem>` | Sign the output with a developer identity (iOS/macOS); pair with `--sign-entitlements <plist>`. See also the standalone `xcc-sign`. |
 | `--emit-apk` | On `-A android`, package a signed `.apk` (with `--with-dex`, `--with-lib`, `--lib-name`, `--needed`). |
 | `--emit-iface` | Emit the `.xtc.iface` module interface alongside the object. |
 | `-fmalloc=system\|mimalloc` | Choose the native heap backend. |
 
 `xcc --help` prints the complete flag list.
+
+## Checked builds
+
+`-fbounds-check` compiles a program that range-checks its subscripts. It is a
+debug-time build: the checks cost code and time, and they are not meant to be
+left on in what you ship.
+
+What each kind of subscript is checked against:
+
+| The base | Checked against |
+|----------|-----------------|
+| an array with a declared length (`u16 a[8]`), local or global | that length |
+| an array sized by its own initialiser (`u16 a[] = { 1, 2, 3 }`) | the inferred length |
+| a heap allocation (`new T[n]`) | the count in its own allocation header |
+| a bare pointer | the allocation header, so the check means something only if the pointer really points at one |
+
+A failing check prints the site, the real bound, and a symbolised stack, then
+aborts:
+
+```
+=== xcc: out-of-bounds access ===
+  at grid.xc:9:8
+  array: index 9, but it holds 5 elements
+  stack:
+    #0  _xt_check_bounds_n +176
+    #1  main +88
+    #2  xtc_start +16
+```
+
+The flag is implemented for arm64 so far. On a target that does not have it
+`xcc` stops with an error rather than quietly building an unchecked program.
 
 ## Warnings
 

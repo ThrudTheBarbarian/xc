@@ -256,7 +256,10 @@ void synthesizeDesignable(Node* program)
     //    mentions but does not declare — the outlet types, the protocol, the
     //    control, the designable classes — or its declaration heuristics read
     //    a cast to one of them as an expression.
-    Lexer* lex = Lexer.with(src, String.withCString("<nib-synth>"));
+    Lexer* lex = Lexer.with(src, String.withCString("<xg-nib-synth>"));  // must match the
+    // reference exactly: this name is the FILE of every node synthesised
+    // here, so it reaches a checked build's site strings, and the two
+    // compilers then emit different data. Invisible until -fbounds-check.
     Parser* parser = Parser.with(lex.tokenise());
     parser.addTypeName(protoName);
     parser.addTypeName(controlType);

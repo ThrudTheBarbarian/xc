@@ -2871,6 +2871,30 @@ void usage(void)
     Stdio.printf("  -H <path>          root holding the support tree\n");
     Stdio.printf("  -S                 stop after the back end, keeping the assembly\n");
     Stdio.printf("  -c                 compile only: an object plus its .xtc.* sidecars\n");
+    // Every option the parser accepts, because it accepts them and said so
+    // nowhere: someone looking for -fbounds-check after a memory bug could not
+    // find it from the tool and concluded it did not exist. Same lesson as the
+    // wasm32 and --emit-lib omissions above.
+    Stdio.printf("  -fbounds-check     checked build: subscripts are range-checked, and a\n");
+    Stdio.printf("                     failure names the site, the real bounds and a symbolised\n");
+    Stdio.printf("                     stack before aborting. An array with a declared length —\n");
+    Stdio.printf("                     local, global, or sized by its own initialiser — is\n");
+    Stdio.printf("                     checked against that length; a heap allocation against\n");
+    Stdio.printf("                     its own header. A bare pointer has neither, so it is\n");
+    Stdio.printf("                     checked as a heap allocation and means something only\n");
+    Stdio.printf("                     if that is what it points at. Debug builds only; arm64\n");
+    Stdio.printf("                     only so far, and a hard error elsewhere rather than a\n");
+    Stdio.printf("                     silent no-op\n");
+    Stdio.printf("  -flto              link-time optimisation across objects\n");
+    Stdio.printf("  -l<name>           link against a library\n");
+    Stdio.printf("  -framework <F>     link against a macOS framework\n");
+    Stdio.printf("  -Wanalyze          run the deeper analysis warnings\n");
+    Stdio.printf("  -Wno-<category>    silence one warning category (see --help output below)\n");
+    Stdio.printf("  -q, --quiet        suppress the informational stage lines\n");
+    Stdio.printf("  --link-libs        link the support libraries explicitly\n");
+    Stdio.printf("  --fn-loop-unroll <fn>  unroll loops only in the named function\n");
+    Stdio.printf("  --sign <identity>  code-sign the output (macOS/iOS)\n");
+    Stdio.printf("  --sign-entitlements <path>  entitlements plist for --sign\n");
     // Naming the targets: `--help` used to list arm64/arm9/x86_64/win64 and
     // leave wasm32 out, while the binary plainly says `wasm32 library -> …`
     // (blewit FINDINGS). A help text that under-reports what the tool does is

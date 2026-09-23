@@ -3475,6 +3475,51 @@ class ClassInfo
     // bound is the real one rather than a guess, and the site string is what
     // lets the report name the line — which is only expressible now that nodes
     // carry positions.
+    // A FIXED-SIZE array — a local or a global — carries no allocation header,
+    // so the header-reading check simply returned and a checked build checked
+    // nothing outside the heap. The count is known here, so pass it.
+    void emitBoundsCheckN(IRValue* ptr, IRValue* idx, u32 count, Node* at)
+        {
+        if (!_boundsCheck || ptr == 0 || idx == 0 || count == (u32)0)
+            return;
+        IRValue* sv = stringAddr(boundsSite(at));
+        if (sv == 0)
+            return;
+        Array* co = new Array();
+        co.add((Object*)IROperand.immI((i32)count, String.withCString("U64")));
+        IRValue* cnt = emit(String.withCString("Const"), String.withCString("U64"), co);
+        Array* cops = new Array();
+        cops.add((Object*)IROperand.sym(runtimeHelper(String.withCString("_xt_check_bounds_n"))));
+        cops.add((Object*)IROperand.useVal(ptr));
+        cops.add((Object*)IROperand.useVal(idx));
+        cops.add((Object*)IROperand.useVal(cnt));
+        cops.add((Object*)IROperand.useVal(sv));
+        cops.add((Object*)IROperand.useVal(_mem));
+        IRInsn* c = IRInsn.with(String.withCString("Call"));
+        for (u32 i = (u32)0; i < cops.count(); i = i + (u32)1)
+            c.add((IROperand*)cops.get(i));
+        IRValue* nm = new IRValue(String.withCString("Mem"));
+        c.setMemRes(nm);
+        c.setCc(String.withCString("CallConv::Standard"));
+        _blk.add(c);
+        _mem = nm;
+        }
+
+    // The site string, shared by both checks.
+    String* boundsSite(Node* at)
+        {
+        String* site = String.withCString("");
+        if (at != 0 && at.file() != 0)
+            site.append(baseName(at.file()));
+        else
+            site.appendCString("?");
+        site.appendByte((u8)':');
+        site.append(String.withU32(at == 0 ? (u32)0 : at.line()));
+        site.appendByte((u8)':');
+        site.append(String.withU32(at == 0 ? (u32)0 : at.col()));
+        return site;
+        }
+
     void emitBoundsCheck(IRValue* ptr, IRValue* idx, Node* at)
         {
         if (!_boundsCheck || ptr == 0 || idx == 0)
@@ -3565,7 +3610,19 @@ class ClassInfo
             }
         // Checked BEFORE the address is formed: the point is to catch the bad
         // index, not to compute an address from it first.
-        emitBoundsCheck(base, idx, n);
+        // An array base knows its own length; a pointer base must ask the
+        // allocation header, which a local or a global does not have.
+        // The DECLARED type, not the mention's — same rule as `.length` and
+        // counted for-in. `u16 a[] = { … }` is sized by its initialiser, so the
+        // mention's type is still `u16[]` and only the declaration knows the
+        // number. Reading the mention silently sent every sizeless global down
+        // the HEAP path, where the check reads an allocation header a global
+        // does not have.
+        String* bdecl = declaredTypeOf(baseNode);
+        if (isArrayLike(bdecl) && arrayCount(bdecl) > (u32)0)
+            emitBoundsCheckN(base, idx, arrayCount(bdecl), n);
+        else
+            emitBoundsCheck(base, idx, n);
         Array* ops = new Array();
         ops.add((Object*)IROperand.useVal(base));
         ops.add((Object*)IROperand.useVal(idx));
@@ -4116,7 +4173,7 @@ class ClassInfo
             return loadGlobal(n.name(), (String*)g);
         String* w = String.withCString("unbound identifier ");
         w.append(n.name());
-        giveUp(w);
+        giveUpAt(w, n);
         return (IRValue*)0;
         }
 
@@ -4247,6 +4304,11 @@ class ClassInfo
                     nty = String.withCString("I32");
                 idx = emit(String.withCString("Neg"), nty, nops);
                 }
+            // POINTER ARITHMETIC is checked too, as the reference checks it:
+            // `p + n` forms an address the same way a subscript does, and a
+            // checked build that covered only the subscript spelling checked
+            // ten fewer sites per file than the reference did.
+            emitBoundsCheck(base, idx, n);
             Array* ops = new Array();
             ops.add((Object*)IROperand.useVal(base));
             ops.add((Object*)IROperand.useVal(idx));
