@@ -130,3 +130,14 @@ fi
 echo "--- ldarm9-diff: pass=$pass fail=$fail oracle-failed=$oracle ---"
 [ "$pass" -gt 0 ] || { echo "!!! nothing was compared"; exit 1; }
 [ "$fail" -eq 0 ] || exit 1
+# NOTHING COMPARED is not a pass. Every one of these harnesses counts an oracle
+# failure — a file the REFERENCE could not build — and skips it, so a broken
+# oracle turns the whole sweep into skips and the summary reads pass=0 fail=0.
+# Only `fail` was ever checked, so that exited 0 and showed as a clean row in
+# all-diff's table. It has now happened twice on ldx86-diff alone, the second
+# time hiding 961 uncompared files. private:docs/bugs/239.
+if [ "$pass" -eq 0 ]; then
+    echo "--- $(basename "$0"): NOTHING WAS COMPARED — this is not a pass"
+    exit 1
+fi
+

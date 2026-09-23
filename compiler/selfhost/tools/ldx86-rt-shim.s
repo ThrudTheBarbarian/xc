@@ -9,6 +9,17 @@
 # Byte-identical input on both sides keeps the comparison exact; nothing
 # outside the harness ever links this file.
 	.text
+# malloc, and then calloc by falling through. The runtime calls BOTH — six
+# `call malloc@PLT` sites in rtgen-linux.s alone — and the shim supplied only
+# calloc, so every file in the sweep failed to link and the harness reported
+# pass=0 fail=0 oracle-failed=961: nothing compared, and a zero exit status
+# because only `fail` was checked. Exactly the shape the getenv note below
+# describes, a second time.
+	.globl	malloc
+	.type	malloc, @function
+malloc:					# malloc(n) is calloc(n, 1): mmap hands
+	mov	rsi, 1			#   back zeroed pages either way, so the
+					#   two really are one function here.
 	.globl	calloc
 	.type	calloc, @function
 calloc:					# calloc(n, size) -> zeroed memory

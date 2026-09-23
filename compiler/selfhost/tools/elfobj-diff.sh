@@ -87,4 +87,13 @@ for in in $inputs; do
     fi
 done
 echo "--- elfobj-diff: pass=$pass fail=$fail ---"
+# NOTHING COMPARED is not a pass. An oracle failure — a file the REFERENCE could
+# not build — is skipped, so a broken oracle turns the whole sweep into skips
+# and the summary reads pass=0 fail=0. Only `fail` was ever checked, so that
+# exited 0 and showed as a clean row in all-diff's table; it hid 961 uncompared
+# files on ldx86-diff. private:docs/bugs/239.
+if [ "$pass" -eq 0 ]; then
+    echo "--- $(basename "$0"): NOTHING WAS COMPARED — this is not a pass"
+    exit 1
+fi
 [ "$fail" = 0 ]

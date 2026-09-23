@@ -67,3 +67,11 @@ echo "--- ldx86-diff: pass=$pass fail=$fail oracle-failed=$oracle ---"
 # reading the table and useless to CI, to `&&` chains, and to anything else
 # that checks status instead of stdout.  FAILS -> non-zero.
 [ "$fail" -eq 0 ] || exit 1
+# NOTHING COMPARED is not a pass either. A missing stand-in in the rt shim sent
+# every file down the oracle path twice now, and both times the harness printed
+# pass=0 fail=0 and exited 0 — green to anything reading status. If the oracle
+# failed on everything, say so and fail.
+if [ "$pass" -eq 0 ]; then
+    echo "--- ldx86-diff: NOTHING WAS COMPARED ($oracle oracle failures) — this is not a pass"
+    exit 1
+fi
