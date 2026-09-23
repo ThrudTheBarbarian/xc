@@ -1310,14 +1310,40 @@ static XTIRInsn* xtvCloneInsn(XTIRInsn* insn, XTIRBlock* into, NSUInteger idx,
 // defines. Block references inside the clone are remapped H->H2, B->B2; any
 // OTHER block reference (the preheader edge of a phi, the exit target of the
 // terminator) is left pointing at the original, for the caller to re-point.
+// A block name not already used in `fn`. The first caller gets the name it
+// asked for, so single-clone output is unchanged; later ones get _2, _3, ...
+static NSString* xtvUniqueBlockName(XTIRFunction* fn, NSString* want)
+    {
+    NSMutableSet<NSString*>* used = [NSMutableSet set];
+    for (XTIRBlock* b in fn.blocks)
+        if (b.name)
+            [used addObject:b.name];
+    if (![used containsObject:want])
+        return want;
+    for (NSUInteger n = 2; n < 10000; n++)
+        {
+        NSString* c = [NSString stringWithFormat:@"%@_%lu", want, (unsigned long)n];
+        if (![used containsObject:c])
+            return c;
+        }
+    return want;
+    }
+
 static void xtvCloneLoop(XTIRFunction* fn, XTIRBlock* H, XTIRBlock* B,
                          XTIRBlock** outH2, XTIRBlock** outB2,
                          NSMutableDictionary<NSNumber*, NSNumber*>* vmap)
     {
     XTIRBlock* H2 = [[XTIRBlock alloc] init];
     XTIRBlock* B2 = [[XTIRBlock alloc] init];
-    H2.name = [NSString stringWithFormat:@"%@_rem", H.name ?: @"hdr"];
-    B2.name = [NSString stringWithFormat:@"%@_rem", B.name ?: @"body"];
+    // UNIQUE names. This used to be a bare `<name>_rem`, which is fine for one
+    // clone and wrong for the second: accumulator distribution clones the same
+    // loop once per accumulator, so a loop carrying four reductions produced
+    // four blocks all called `<hdr>_rem`, the back end emitted the label four
+    // times, and the assembler refused the unit — `duplicate label
+    // Lpl3Render_bb_36_for_header_rem_pre`. It took a whole 3000-line
+    // translation unit to show: a small file distributes nothing.
+    H2.name = xtvUniqueBlockName(fn, [NSString stringWithFormat:@"%@_rem", H.name ?: @"hdr"]);
+    B2.name = xtvUniqueBlockName(fn, [NSString stringWithFormat:@"%@_rem", B.name ?: @"body"]);
 
     NSDictionary<NSValue*, XTIRBlock*>* bmap = @{
         [NSValue valueWithNonretainedObject:H] : H2,

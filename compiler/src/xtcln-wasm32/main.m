@@ -259,6 +259,23 @@ static NSString* loaderJS(NSString* baseName, NSArray<NSString*>* deps)
                    "    _xm_ceil: Math.ceil,  _xm_ceilf: (x) => Math.fround(Math.ceil(x)),\n"
                    "    _xm_fabs: Math.abs,   _xm_fabsf: (x) => Math.fround(Math.abs(x)),\n"
                    "    _xm_fmod: (a, b) => a % b, _xm_fmodf: (a, b) => Math.fround(a % b),\n"
+                   // clock_gettime(clk, ts) writes { i64 sec; i64 nsec; } at ts.
+                   // Whatever clock id is asked for, this answers with a
+                   // MONOTONIC reading: performance.now() is monotonic, which is
+                   // what every caller of this actually wants, and wasm has no
+                   // wall clock to offer anyway. The DataView is re-derived per
+                   // call because memory.grow detaches the buffer.
+                   //
+                   // Without it any program that timed itself — every benchmark
+                   // in benchmark/src — died on `missing host import
+                   // env.clock_gettime` before printing a line.
+                   "    clock_gettime: (clk, ts) => {\n"
+                   "      const ns = BigInt(Math.round(performance.now() * 1e6));\n"
+                   "      const dv = new DataView(XCC.memory.buffer);\n"
+                   "      dv.setBigInt64(ts, ns / 1000000000n, true);\n"
+                   "      dv.setBigInt64(ts + 8, ns % 1000000000n, true);\n"
+                   "      return 0;\n"
+                   "    },\n"
                    "  };\n"
                    "  if (isWorker && ringI32) {\n"
                    "    const ri = ringI32;\n"

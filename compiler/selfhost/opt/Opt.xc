@@ -10226,10 +10226,46 @@ class OptProfile
         return cl;
         }
 
-    Array* vecCloneLoop(IRBlock* H, IRBlock* B, Map* vmap)
+    // A block name not already used in `fn`. The first caller gets the name it
+    // asked for, so single-clone output is unchanged; later ones get _2, _3...
+    //
+    // Accumulator distribution clones the SAME loop once per accumulator, and a
+    // bare `<name>_rem` then named every clone alike: a loop carrying four
+    // reductions produced four blocks called `<hdr>_rem`, the back end emitted
+    // the label four times and the assembler refused the unit. It needs a whole
+    // translation unit to show — a small file distributes nothing.
+    String* vecUniqueBlockName(IRFunc* fn, String* want)
         {
-        IRBlock* H2 = new IRBlock(hoistName2(H.name(), "_rem"));
-        IRBlock* B2 = new IRBlock(hoistName2(B.name(), "_rem"));
+        bool taken = false;
+        for (u32 i = (u32)0; i < fn.blocks().count(); i = i + (u32)1)
+            {
+            String* bn = ((IRBlock*)fn.blocks().get(i)).name();
+            if (bn != (String*)0 && bn.equals(want))
+                taken = true;
+            }
+        if (!taken)
+            return want;
+        for (u32 n = (u32)2; n < (u32)10000; n = n + (u32)1)
+            {
+            String* c = String.withString(want);
+            c.appendFormat("_%lu", n);
+            bool hit = false;
+            for (u32 i = (u32)0; i < fn.blocks().count(); i = i + (u32)1)
+                {
+                String* bn = ((IRBlock*)fn.blocks().get(i)).name();
+                if (bn != (String*)0 && bn.equals(c))
+                    hit = true;
+                }
+            if (!hit)
+                return c;
+            }
+        return want;
+        }
+
+    Array* vecCloneLoop(IRFunc* fn, IRBlock* H, IRBlock* B, Map* vmap)
+        {
+        IRBlock* H2 = new IRBlock(vecUniqueBlockName(fn, hoistName2(H.name(), "_rem")));
+        IRBlock* B2 = new IRBlock(vecUniqueBlockName(fn, hoistName2(B.name(), "_rem")));
         Map* bmap = new Map();
         bmap.set((Hashable*)H, (Object*)H2);
         bmap.set((Hashable*)B, (Object*)B2);
@@ -10855,7 +10891,7 @@ class OptProfile
         IRInsn* victim = (IRInsn*)accPhis.get(accPhis.count() - (u32)1);
 
         Map* cmap = new Map();
-        Array* cl = vecCloneLoop(H, B, cmap);
+        Array* cl = vecCloneLoop(fn, H, B, cmap);
         IRBlock* H2 = (IRBlock*)cl.get((u32)0);
         IRBlock* B2 = (IRBlock*)cl.get((u32)1);
         IRValue* victimClone = (IRValue*)cmap.get((Hashable*)victim.res());
@@ -12194,7 +12230,7 @@ class OptProfile
         Map* mcmap = new Map();
         if (c.needEpi())
             {
-            Array* cl = vecCloneLoop(c.h(), B, mcmap);
+            Array* cl = vecCloneLoop(fn, c.h(), B, mcmap);
             mH2 = (IRBlock*)cl.get((u32)0);
             mB2 = (IRBlock*)cl.get((u32)1);
             // The vector loop now stops at the last whole vector; the clone's
@@ -14215,7 +14251,7 @@ class OptProfile
     // 16384 ceiling. Part 2 needs no code here -- the applier ends in
     // vecReduxExit, which lands the horizontal add in a VE landing pad and
     // seeds the clone whenever needEpi() is set.
-    void vecWidenEpiSetup(VecCand* c, IRBlock* H, IRBlock* B, IRBlock* PH)
+    void vecWidenEpiSetup(IRFunc* fn, VecCand* c, IRBlock* H, IRBlock* B, IRBlock* PH)
         {
         _vecH2 = (IRBlock*)0;
         _vecB2 = (IRBlock*)0;
@@ -14225,7 +14261,7 @@ class OptProfile
         if (!c.needEpi())
             return;
         Map* cmap = new Map();
-        Array* cl = vecCloneLoop(H, B, cmap);
+        Array* cl = vecCloneLoop(fn, H, B, cmap);
         _vecH2 = (IRBlock*)cl.get((u32)0);
         _vecB2 = (IRBlock*)cl.get((u32)1);
         _vecCmap = cmap;
@@ -14276,7 +14312,7 @@ class OptProfile
         // header's phis are rewritten in place. Part 2 comes free — this
         // applier already ends in vecReduxExit, which lands the horizontal add
         // in a VE landing pad and seeds the clone whenever needEpi() is set.
-        vecWidenEpiSetup(c, H, B, PH);
+        vecWidenEpiSetup(fn, c, H, B, PH);
         String* u32t = String.withCString("U32");
         String* accVecTy = String.withCString("Vec(U32)");
         String* loadVecTy = new String();
@@ -14719,7 +14755,7 @@ class OptProfile
         Map* cmap = new Map();
         if (c.needEpi())
             {
-            Array* cl = vecCloneLoop(H, B, cmap);
+            Array* cl = vecCloneLoop(fn, H, B, cmap);
             H2 = (IRBlock*)cl.get((u32)0);
             B2 = (IRBlock*)cl.get((u32)1);
             _vecH2 = H2;

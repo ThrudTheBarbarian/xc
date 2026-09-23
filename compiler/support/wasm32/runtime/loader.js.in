@@ -202,6 +202,13 @@
     _xm_ceil: Math.ceil,  _xm_ceilf: (x) => Math.fround(Math.ceil(x)),
     _xm_fabs: Math.abs,   _xm_fabsf: (x) => Math.fround(Math.abs(x)),
     _xm_fmod: (a, b) => a % b, _xm_fmodf: (a, b) => Math.fround(a % b),
+    clock_gettime: (clk, ts) => {
+      const ns = BigInt(Math.round(performance.now() * 1e6));
+      const dv = new DataView(XCC.memory.buffer);
+      dv.setBigInt64(ts, ns / 1000000000n, true);
+      dv.setBigInt64(ts + 8, ns % 1000000000n, true);
+      return 0;
+    },
   };
   if (isWorker && ringI32) {
     const ri = ringI32;
