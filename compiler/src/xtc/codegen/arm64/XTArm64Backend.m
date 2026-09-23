@@ -981,10 +981,66 @@ static const NSUInteger kArm64VaForwardWords = 16;
         }
 }
 
+// Thread-safe ARC (private:docs/Design/threading.md §4.1). Class-level rather than
+// per-call because the backend's entry point is a class method and the choice
+// is a whole-module property: a program either can have two threads or cannot.
+// Per-function parameter descriptors for a CHECKED build: the trap reporter
+// walks frames and reads each function's arguments out of them, and only the
+// back end knows where they sit. Accumulated during codegen, emitted once at
+// the end of the module. Reset per module in assemblyFromModule — the back end
+// has two callers (the xtcg process and the in-process corpus sweep), and state
+// that survives between them is state one of them gets wrong.
+static NSMutableArray<NSDictionary *> *sArm64MSFns = nil;
+
 // Registers: GP values (integer / pointer) take x19..x27 (9 slots), FP
 // values (F32/F64) take d8..d15 (8 slots, callee-saved low 64). When more
 // values are eligible than registers, the most-used win — and now, when their
 // live ranges don't overlap, several share one register (live-range reuse).
++ (void)recordMSFnForCtx:(XTArm64FnCtx *)ctx {
+    if (sArm64MSFns) {
+        NSMutableArray *ps = [NSMutableArray array];
+        NSUInteger np = ctx.fn.paramTypes.count;
+        for (NSUInteger p = 0; p < np; p++) {
+            XTIRType *t = ctx.fn.paramTypes[p];
+            if (t && t.kind == XTIRTypeKindMemory) continue;      // the memory token
+            BOOL inReg = (ctx.homeReg[@(p)] != nil);
+            NSArray *so = ctx.slotOffsets;
+            NSUInteger off = (!inReg && p < so.count) ? [so[p] unsignedIntegerValue] : 0;
+            NSUInteger width = t ? [self arm64FieldWidth:t] : 0;
+            NSUInteger kind = 1;                               // 1 int, 2 ptr, 3 float
+            if (t && t.kind == XTIRTypeKindPtr) kind = 2;
+            else if (t && XTIRTypeKindIsFloating(t.kind)) kind = 3;
+            // The home REGISTER number when there is one: a parameter in x19 is
+            // recoverable from the frame chain (the callee-save area of any
+            // frame inside this one holds it), which is the only way arguments
+            // are ever visible here — the allocator homes essentially every
+            // parameter in a register and spills none.
+            NSUInteger regNo = NSUIntegerMax;
+            if (inReg) {
+                NSString *rn = ctx.homeReg[@(p)];
+                if ([rn hasPrefix:@"x"] || [rn hasPrefix:@"w"])
+                    regNo = (NSUInteger)[[rn substringFromIndex:1] integerValue];
+            }
+            [ps addObject:@{ @"off": @(inReg ? NSUIntegerMax : off),
+                             @"kw":  @((kind << 8) | (width & 0xFF)),
+                             @"reg": @(regNo) }];
+        }
+        // The callee-save layout, so the walk can recover the registers of the
+        // frames further out: emitCalleeSaves lays savedRegs down as pairs from
+        // saveAreaOffset, so register k sits at saveAreaOffset + k*8.
+        NSMutableArray *sr = [NSMutableArray array];
+        for (NSString *rn in ctx.savedRegs) {
+            if ([rn hasPrefix:@"x"] || [rn hasPrefix:@"d"])
+                [sr addObject:@([[rn substringFromIndex:1] integerValue]
+                                + ([rn hasPrefix:@"d"] ? 64 : 0))];
+            else [sr addObject:@(-1)];
+        }
+        [sArm64MSFns addObject:@{ @"name": ctx.fn.name ?: @"?", @"params": ps,
+                                  @"saveBase": @(ctx.valueSlotEnd),   // saveAreaOffset is assigned FROM this during prologue emission, i.e. after this point
+                                  @"saved": sr }];
+    }
+}
+
 + (void)allocateRegistersForCtx:(XTArm64FnCtx *)ctx {
     XTIRFunction *fn = ctx.fn;
     ctx.homeReg = [NSMutableDictionary dictionary];
@@ -1453,48 +1509,6 @@ static const NSUInteger kArm64VaForwardWords = 16;
     // homed in a register has no frame slot to read — recorded as unavailable
     // rather than as a stale slot value, because a confident wrong argument is
     // worse than an absent one (private:docs/Design/memory-safety.md §4).
-    if (sArm64MSFns) {
-        NSMutableArray *ps = [NSMutableArray array];
-        NSUInteger np = ctx.fn.paramTypes.count;
-        for (NSUInteger p = 0; p < np; p++) {
-            XTIRType *t = ctx.fn.paramTypes[p];
-            if (t && t.kind == XTIRTypeKindMemory) continue;      // the memory token
-            BOOL inReg = (ctx.homeReg[@(p)] != nil);
-            NSArray *so = ctx.slotOffsets;
-            NSUInteger off = (!inReg && p < so.count) ? [so[p] unsignedIntegerValue] : 0;
-            NSUInteger width = t ? [self arm64FieldWidth:t] : 0;
-            NSUInteger kind = 1;                               // 1 int, 2 ptr, 3 float
-            if (t && t.kind == XTIRTypeKindPtr) kind = 2;
-            else if (t && XTIRTypeKindIsFloating(t.kind)) kind = 3;
-            // The home REGISTER number when there is one: a parameter in x19 is
-            // recoverable from the frame chain (the callee-save area of any
-            // frame inside this one holds it), which is the only way arguments
-            // are ever visible here — the allocator homes essentially every
-            // parameter in a register and spills none.
-            NSUInteger regNo = NSUIntegerMax;
-            if (inReg) {
-                NSString *rn = ctx.homeReg[@(p)];
-                if ([rn hasPrefix:@"x"] || [rn hasPrefix:@"w"])
-                    regNo = (NSUInteger)[[rn substringFromIndex:1] integerValue];
-            }
-            [ps addObject:@{ @"off": @(inReg ? NSUIntegerMax : off),
-                             @"kw":  @((kind << 8) | (width & 0xFF)),
-                             @"reg": @(regNo) }];
-        }
-        // The callee-save layout, so the walk can recover the registers of the
-        // frames further out: emitCalleeSaves lays savedRegs down as pairs from
-        // saveAreaOffset, so register k sits at saveAreaOffset + k*8.
-        NSMutableArray *sr = [NSMutableArray array];
-        for (NSString *rn in ctx.savedRegs) {
-            if ([rn hasPrefix:@"x"] || [rn hasPrefix:@"d"])
-                [sr addObject:@([[rn substringFromIndex:1] integerValue]
-                                + ([rn hasPrefix:@"d"] ? 64 : 0))];
-            else [sr addObject:@(-1)];
-        }
-        [sArm64MSFns addObject:@{ @"name": ctx.fn.name ?: @"?", @"params": ps,
-                                  @"saveBase": @(ctx.valueSlotEnd),   // saveAreaOffset is assigned FROM this during prologue emission, i.e. after this point
-                                  @"saved": sr }];
-    }
 }
 
 // Emit the callee-saved register save (or restore) block, pairing adjacent
@@ -6371,6 +6385,15 @@ static BOOL sameArm64Reg(NSString *a, NSString *b) {
         }
     }
     ctx.saveAreaOffset = ctx.valueSlotEnd;
+    // Checked build: record the parameter map HERE, not at the end of
+    // allocation. Two things are only final at this point. x28 joins
+    // savedRegs just above when the frame outgrows sp-relative addressing, so
+    // a map taken earlier described a save area one register short and the
+    // trap reporter recovered the outer frames from the wrong offsets. And a
+    // function containing inline asm returns early from allocation, which used
+    // to skip the record entirely — a hole in the walk, not merely a frame
+    // with poorer arguments, because every outer frame is reached through it.
+    [self recordMSFnForCtx:ctx];
     if (ctx.savedRegs.count) {
         NSUInteger end = ctx.saveAreaOffset + 8 * ctx.savedRegs.count;
         ctx.frameSize = (end + 15) & ~(NSUInteger)15;
@@ -6541,16 +6564,6 @@ static BOOL sameArm64Reg(NSString *a, NSString *b) {
 
 #pragma mark - Public
 
-// Thread-safe ARC (private:docs/Design/threading.md §4.1). Class-level rather than
-// per-call because the backend's entry point is a class method and the choice
-// is a whole-module property: a program either can have two threads or cannot.
-// Per-function parameter descriptors for a CHECKED build: the trap reporter
-// walks frames and reads each function's arguments out of them, and only the
-// back end knows where they sit. Accumulated during codegen, emitted once at
-// the end of the module. Reset per module in assemblyFromModule — the back end
-// has two callers (the xtcg process and the in-process corpus sweep), and state
-// that survives between them is state one of them gets wrong.
-static NSMutableArray<NSDictionary *> *sArm64MSFns = nil;
 
 static BOOL sArm64ThreadSafeARC = NO;        // what this module resolved to
 static NSInteger sArm64ThreadSafeARCOverride = -1;   // -1 auto, 0 off, 1 on
@@ -6765,18 +6778,23 @@ static BOOL sArm64LseAtomics = YES;  // Apple Silicon is ARMv8.5; Android's floo
         for (NSUInteger i = 0; i < sArm64MSFns.count; i++) {
             NSDictionary *f = sArm64MSFns[i];
             [out appendFormat:@"___xt_ms_p_%lu:\n", (unsigned long)i];
+            // SIGNED, because these fields carry a -1 sentinel for "no home"
+            // and the runtime reads them signed. Printed unsigned the sentinel
+            // came out as 18446744073709551615 — the same quad, but a different
+            // string, and the port spells it -1. The end-of-list marker below
+            // was always -1 in both, so one map had two spellings of one value.
             for (NSDictionary *pd in f[@"params"]) {
-                [out appendFormat:@"    .quad %llu\n",
-                    (unsigned long long)[pd[@"off"] unsignedLongLongValue]];
-                [out appendFormat:@"    .quad %llu\n",
-                    (unsigned long long)[pd[@"kw"] unsignedLongLongValue]];
-                [out appendFormat:@"    .quad %llu\n",
-                    (unsigned long long)[pd[@"reg"] unsignedLongLongValue]];
+                [out appendFormat:@"    .quad %lld\n",
+                    (long long)[pd[@"off"] longLongValue]];
+                [out appendFormat:@"    .quad %lld\n",
+                    (long long)[pd[@"kw"] longLongValue]];
+                [out appendFormat:@"    .quad %lld\n",
+                    (long long)[pd[@"reg"] longLongValue]];
             }
             [out appendFormat:@"___xt_ms_s_%lu:\n", (unsigned long)i];
             for (NSNumber *rn in f[@"saved"])
-                [out appendFormat:@"    .quad %llu\n",
-                    (unsigned long long)rn.longLongValue];
+                [out appendFormat:@"    .quad %lld\n",
+                    (long long)rn.longLongValue];
             [out appendString:@"    .quad -1\n"];      // end of the saved list
         }
         [out appendString:@"    .globl ___xt_ms_fns\n___xt_ms_fns:\n"];
