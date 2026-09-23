@@ -18,6 +18,10 @@
 #import "Foundation.xc"
 #import "Ir.xc"
 
+// The one host call this file makes: the pipeline's stop-after hook, which has
+// to be readable from an installed compiler and not only from the harness.
+u8* _xt_getenv(u8* name);
+
 // A sentinel count from lrcCountLiveOut: a value OTHER than the accumulator
 // escapes the outer loop, so the collapse is unsafe. Distinct from 0, which
 // means the accumulator itself is dead afterwards (nothing to rescale).
@@ -971,6 +975,7 @@ class OptProfile
     // only be measured once every pass before it in the pipeline is ported,
     // which makes a twenty-pass level all-or-nothing.
     String* _stopAfter;
+    Array*  _seen;          // every pass name stopHere was offered, in order
 
     // Library build (--emit-lib): the whole module is the API surface, so
     // dead-function-elim seeds EVERY function (the twin of the oracle's
@@ -995,7 +1000,36 @@ class OptProfile
     // True when the pipeline should stop here — the caller returns.
     bool stopHere(String* passName)
         {
+        // Every name the pipeline offers is collected as it goes, so the guard
+        // below needs no second copy of the pass list to check a typo against —
+        // a list that would drift the moment a pass is added or renamed.
+        if (_seen == (Array*)0)
+            _seen = new Array();
+        _seen.add((Object*)passName);
         return _stopAfter != 0 && _stopAfter.equals(passName);
+        }
+
+    // A NAME THAT MATCHES NOTHING is refused, not ignored. run() returns the
+    // moment a name matches, so reaching the end with _stopAfter still set
+    // means it never did. A typo used to run the whole pipeline and look
+    // exactly like a clean stop, so a bisection over pass names compared the
+    // full build against itself at every point — which reads as "the fault is
+    // before the first pass". Mirrors the reference. private:docs/bugs/237.
+    void refuseUnknownStop(void)
+        {
+        if (_stopAfter == 0)
+            return;
+        String* msg = String.withCString("xcc: XTIR_OPT_STOP_AFTER names no pass: '");
+        msg.append(_stopAfter);
+        msg.appendCString("'\n  the pipeline has: ");
+        for (u32 i = (u32)0; _seen != (Array*)0 && i < _seen.count(); i = i + (u32)1)
+            {
+            msg.append((String*)_seen.get(i));
+            msg.appendCString(" ");
+            }
+        msg.appendCString("\n");
+        Stdio.error(msg);
+        Process.exit((i32)2);
         }
 
     // `-Flu <n>` overrides the per-target unroll cap. A driver flag has to be
@@ -1013,6 +1047,16 @@ class OptProfile
         Opt* o = new Opt();
         o._level = level;
         o._profile = profile;
+        // XTIR_OPT_STOP_AFTER, read HERE rather than at each of the eight
+        // construction sites, so every caller gets it and the next one cannot
+        // forget. Only the opt-diff harness used to set it, so a compiler run
+        // from an INSTALL honoured it nowhere: bisecting an optimiser bug
+        // against a release produced a table of stop points that were all the
+        // full pipeline, which reads like "the fault is before the first pass"
+        // and is worth nothing. docs/bugs/237.
+        u8* sa = _xt_getenv("XTIR_OPT_STOP_AFTER");
+        if (sa != (u8*)0 && sa[0] != (u8)0)
+            o._stopAfter = String.withCString(sa);
         return o;
         }
 
@@ -1219,6 +1263,7 @@ class OptProfile
         // private:docs/bugs/090.
         for (u32 i = (u32)0; i < m.funcs().count(); i = i + (u32)1)
             pruneDeadValues((IRFunc*)m.funcs().get(i));
+        refuseUnknownStop();
         }
 
     /************************************************************************\

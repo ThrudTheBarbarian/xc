@@ -257,6 +257,32 @@
     // compared once EVERY pass ahead of it in the pipeline is ported, which
     // makes a twenty-pass level all-or-nothing. Unset in every normal build.
     const char* stopAfter = getenv("XTIR_OPT_STOP_AFTER");
+    // SET BUT EMPTY is unset. getenv returns a pointer to "" for `VAR=` in the
+    // environment, which is truthy — and opt-diff.sh passes the variable on
+    // every invocation whether or not it has a pass to stop at, so the refusal
+    // below fired on every file of both opt-diffs and the harness compared
+    // nothing. The self-hosted pipeline already tested the first byte.
+    if (stopAfter && !*stopAfter) stopAfter = NULL;
+    // A NAME THAT MATCHES NOTHING is refused, not ignored. A typo used to run
+    // the whole pipeline and look exactly like a clean stop, so a bisection
+    // over pass names silently compared the full build against itself at every
+    // point — which reads as "the fault is before the first pass". docs/bugs/237.
+    if (stopAfter)
+        {
+        BOOL known = NO;
+        for (id<XTIROptPass> p2 in _passes)
+            if ([p2.passName isEqualToString:@(stopAfter)])
+                { known = YES; break; }
+        if (!known)
+            {
+            fprintf(stderr, "xcc: XTIR_OPT_STOP_AFTER names no pass: '%s'\n", stopAfter);
+            fprintf(stderr, "  the pipeline has: ");
+            for (id<XTIROptPass> p2 in _passes)
+                fprintf(stderr, "%s ", p2.passName.UTF8String);
+            fprintf(stderr, "\n");
+            exit(2);
+            }
+        }
     for (id<XTIROptPass> pass in _passes)
         {
         if (pass.minOptLevel > _level)
