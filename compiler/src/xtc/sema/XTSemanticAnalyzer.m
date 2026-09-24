@@ -242,6 +242,61 @@ static int xtVersionGT(NSString* a, NSString* b)
             [self recordIndirectCallTarget:target forFromFunction:calleeLabel];
             }
         }
+    [self checkPointerArgWidths:args paramTypes:paramTypes calleeLabel:calleeLabel];
+    }
+
+/****************************************************************************\
+|* A pointer argument whose POINTEE WIDTH differs from the parameter's is a
+|* refusal, not a conversion. `i32*` where `i64*` is declared lets the callee
+|* write eight bytes into four; `i64*` where `i32*` is declared leaves the
+|* caller's high half untouched, which is how a `delta < 0` guard in the
+|* vectoriser came to be unfirable — the sign never reached it.
+|*
+|* Nothing diagnosed either direction before. Measured across the whole tree —
+|* fixtures, support library and the self-hosted compiler — the check fires on
+|* EIGHT call sites, all of them one source line, and that line was the bug
+|* above. `u8*`-as-`string` never trips it: those are same-width or void*.
+|*
+|* Deliberately NOT refused: void* (the escape hatch), function pointers,
+|* structs and classes (a different question — layout, not width), and
+|* same-width differences, which are sign only. private:docs/bugs/244.
+\****************************************************************************/
+- (void)checkPointerArgWidths:(NSArray<XTASTNode*>*)args
+                   paramTypes:(nullable NSArray<XTType*>*)paramTypes
+                  calleeLabel:(NSString*)calleeLabel
+    {
+    if (!paramTypes)
+        return;
+    NSUInteger n = MIN(args.count, paramTypes.count);
+    for (NSUInteger i = 0; i < n; i++)
+        {
+        XTType* pt = paramTypes[i];
+        XTType* at = args[i].resolvedType;
+        if (![pt isKindOfClass:[XTPointerType class]] || ![at isKindOfClass:[XTPointerType class]])
+            continue;
+        XTType* pp = ((XTPointerType*)pt).pointeeType;
+        XTType* ap = ((XTPointerType*)at).pointeeType;
+        if (!pp || !ap || pp.kind == XTTypeKindVoid || ap.kind == XTTypeKindVoid)
+            continue;
+        if ([pp isKindOfClass:[XTFunctionType class]] || [ap isKindOfClass:[XTFunctionType class]])
+            continue;
+        if (pp.kind == XTTypeKindStruct || ap.kind == XTTypeKindStruct
+            || pp.kind == XTTypeKindClass || ap.kind == XTTypeKindClass)
+            continue;
+        if (pp.byteWidth == ap.byteWidth || pp.byteWidth == 0 || ap.byteWidth == 0)
+            continue;
+        [self.diagnostics emitError:[NSString stringWithFormat:
+            @"argument %lu of '%@' is a %@* where a %@* is declared — the pointee "
+            @"widths differ (%lu vs %lu), so the callee would read or write the "
+            @"wrong number of bytes. Cast if that is really meant",
+            (unsigned long)(i + 1),
+            // The CFA label, not the source name — `_fn_foo` reads as noise in
+            // a diagnostic the user has to act on.
+            [calleeLabel hasPrefix:@"_fn_"] ? [calleeLabel substringFromIndex:4] : calleeLabel,
+            ap.displayName, pp.displayName,
+            (unsigned long)ap.byteWidth, (unsigned long)pp.byteWidth]
+                                 at:args[i].location];
+        }
     }
 
 #pragma mark - Scope Management

@@ -2938,6 +2938,69 @@ class Sema
 
     // After a call has chosen its candidate, every argument that needs a
     // conversion gets one.
+    // A pointer argument whose POINTEE WIDTH differs from the parameter's is a
+    // refusal, not a conversion. `i32*` where `i64*` is declared lets the callee
+    // write eight bytes into four; `i64*` where `i32*` is declared leaves the
+    // caller's high half untouched, which is how a `delta < 0` guard in the
+    // vectoriser came to be unfirable — the sign never reached it.
+    //
+    // NOT refused: void* (the escape hatch), function pointers, structs and
+    // classes (layout, not width — a different question), and same-width
+    // differences, which are sign only. Measured across the whole tree, this
+    // fires on nothing once the one real victim is fixed.
+    // private:docs/bugs/244.
+    // `i64*` -> `i64`. The declared spelling ends in the sigil; anything else
+    // is not a pointer this check has an opinion about.
+    String* ptrPointee(String* t)
+        {
+        if (t == 0 || t.byteLength() == (u32)0)
+            return (String*)0;
+        if (t.byteAt(t.byteLength() - (u32)1) != (u8)'*')
+            return (String*)0;
+        return t.substringToByte(t.byteLength() - (u32)1);
+        }
+
+    void checkPtrArgWidth(Node* a, String* pty, String* callee, u32 argNo)
+        {
+        if (a == 0 || pty == 0 || a.ty() == 0)
+            return;
+        if (!Types.isPointer(pty) || !Types.isPointer(a.ty()))
+            return;
+        String* pp = ptrPointee(pty);
+        String* ap = ptrPointee(a.ty());
+        if (pp == 0 || ap == 0)
+            return;
+        // void* is the escape hatch; a pointer-to-pointer is a width the
+        // target decides, not a scalar one; an aggregate is layout, not width.
+        if (_isOp(pp, "void") || _isOp(ap, "void"))
+            return;
+        if (Types.isPointer(pp) || Types.isPointer(ap))
+            return;
+        if (!Types.isInteger(pp) && !Types.isFloating(pp))
+            return;
+        if (!Types.isInteger(ap) && !Types.isFloating(ap))
+            return;
+        u32 pw = Types.byteWidth(pp);
+        u32 aw = Types.byteWidth(ap);
+        if (pw == (u32)0 || aw == (u32)0 || pw == aw)
+            return;
+        String* m = String.withCString("argument ");
+        m.append(String.withU32(argNo));
+        m.appendCString(" of '");
+        m.append(callee);
+        m.appendCString("' is a ");
+        m.append(ap);
+        m.appendCString("* where a ");
+        m.append(pp);
+        m.appendCString("* is declared — the pointee widths differ (");
+        m.append(String.withU32(aw));
+        m.appendCString(" vs ");
+        m.append(String.withU32(pw));
+        m.appendCString("), so the callee would read or write the wrong number "
+                        "of bytes. Cast if that is really meant");
+        _errorAt(m, a);
+        }
+
     void applyBoxing(Node* call, Node* decl, u32 argBase)
         {
         u32 pi = (u32)0;
@@ -2951,6 +3014,7 @@ class Sema
             if (ai >= call.kidCount())
                 return;
             Node* a = call.kid(ai);
+            checkPtrArgWidth(a, p.op(), decl.name(), pi);
             String* box = autoboxClassFor(a.ty(), p.op());
             if (box != 0)
                 {

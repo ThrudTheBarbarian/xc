@@ -2784,7 +2784,12 @@ class Parser
             || t == (u16)tokPlusPlus || t == (u16)tokMinusMinus
             || t == (u16)tokLess || t == (u16)tokByte3) {
             Token* op = advance();
+            // The OPERATOR's position. mk() takes the token the parser is
+            // looking at, which by here is the operand — so `&x` reported the
+            // `x`, one column right of where the reference points. Same rule
+            // as the binary node and the subscript bracket.
             Node* n = mk((u16)nkUnary);
+            n.setPos(op.fileId(), op.line(), op.col());
             // A dereference is recorded under ONE spelling whichever sigil the
             // source used, because the ObjC parser stores the operator KIND and
             // prints it canonically. Carrying the source text instead made
