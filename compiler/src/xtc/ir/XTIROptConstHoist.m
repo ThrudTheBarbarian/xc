@@ -176,7 +176,17 @@ static BOOL chDominates(XTIRFunction* fn, XTIRBlock* a, XTIRBlock* b)
             continue;
 
         NSMutableDictionary<NSString*, NSNumber*>* made = [NSMutableDictionary dictionary];
-        for (XTIRBlock* body in bodyBlocks)
+        // FUNCTION BLOCK ORDER, not the order the body walk or a set happens to
+        // hold. The Consts are appended to the preheader as they are first met,
+        // so the walk order IS the emitted order — and bodyBlocks is a set, so
+        // it was NSSet hash order. The self-hosted pass walks its own body list
+        // in DFS order, and the two emitted the same constants with different
+        // value numbers: identical code, different IR text, and a differential
+        // that cannot tell that from a real divergence. private:docs/bugs/242.
+        for (XTIRBlock* body in fn.blocks)
+            {
+            if (![bodyBlocks containsObject:body])
+                continue;
         for (NSUInteger i = 0; i < body.instructions.count; i++)
             {
             XTIRInsn* insn = body.instructions[i];
@@ -212,6 +222,7 @@ static BOOL chDominates(XTIRFunction* fn, XTIRBlock* a, XTIRBlock* b)
             NSMutableArray<XTIROperand*>* ops = [insn.operands mutableCopy];
             ops[side] = [XTIROperand useWithValueId:(XTIRValueId)have.unsignedLongLongValue];
             [insn replaceOperands:ops];
+            }
             }
         }
     }

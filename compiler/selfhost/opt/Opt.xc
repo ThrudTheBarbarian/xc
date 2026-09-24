@@ -16380,9 +16380,16 @@ class OptProfile
     void chRewriteMuls(IRFunc* fn, Array* body, IRBlock* PH)
         {
         Map* made = new Map();
-        for (u32 bi = (u32)0; bi < body.count(); bi = bi + (u32)1)
+        // FUNCTION BLOCK ORDER, not the order chLoopBody's DFS returned. The
+        // Consts are appended to the preheader as they are first met, so the
+        // walk order IS the emitted order, and the reference walked a SET —
+        // hash order. Same constants, different value numbers, identical code.
+        // private:docs/bugs/242.
+        for (u32 bi = (u32)0; bi < fn.blocks().count(); bi = bi + (u32)1)
             {
-            IRBlock* bb = (IRBlock*)body.get(bi);
+            IRBlock* bb = (IRBlock*)fn.blocks().get(bi);
+            if (!chHas(body, bb))
+                continue;
             for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
                 {
                 IRInsn* n = (IRInsn*)bb.insns().get(i);
