@@ -814,6 +814,86 @@ static void emitModRM(NSMutableData *d, int reg, const XOperand *rm) {
                   // and it is what the VMulHi sequence is built from.
                   @"pmuludq":@[@0x66,@0xF4]};
     });
+    // ── VEX.128 three-operand forms of the SSE table ──
+    //
+    // `vaddps xmm0, xmm1, xmm2` is `addps` with a VEX prefix and a
+    // NON-DESTRUCTIVE first source, so the same opcode byte serves both and the
+    // table above is the only place a mnemonic has to be listed. That is the
+    // point of doing it this way: a VEX table that repeated the opcodes would
+    // be a second copy to drift, which is how bug 027's allocator contract went
+    // wrong.
+    //
+    // VEX.128 only, and no ymm yet — this is the three-operand half of
+    // private:docs/bugs/231, which is testable on its own against the vendor
+    // assembler. The 256-bit half needs a register pool and vzeroupper
+    // discipline, and is not encoding work.
+    //
+    //   2-byte form  C5 [R vvvv L pp]                  when X=B=W=0 and map=0F
+    //   3-byte form  C4 [RXB mmmmm] [W vvvv L pp]      otherwise
+    //
+    // pp encodes the mandatory prefix the SSE form carries (66/F3/F2), and
+    // mmmmm the opcode map (0F, 0F38). vvvv holds the first source INVERTED.
+    if ([mn hasPrefix:@"v"] && opCount == 3 && a && b) {
+        NSString *base = [mn substringFromIndex:1];
+        // The 0F map only, for now: the 0F38 table below is declared after this
+        // point, and the vectoriser's VEX-worthy forms all live in sseRR. The
+        // three-byte VEX form is written out regardless, because a high
+        // register in the r/m or index field needs it whatever the map is.
+        NSArray *vr = sseRR[base];
+        int map = 1;
+        XOperand *src1 = &opv[1];
+        XOperand *src2 = &opv[2];
+        // COMMUTE, when the operation allows it and it buys a byte. The
+        // two-byte VEX form cannot express a high register in the r/m field, so
+        // `vmulps xmm6, xmm7, xmm8` needs the three-byte form as written — but
+        // multiplication does not care which source is which, and with the
+        // sources swapped the high register moves into vvvv, which the short
+        // form can hold. clang does this, so matching it is required for
+        // byte-identity; ours came out five bytes against clang's four.
+        //
+        // Only for operations that really are commutative. NOT sub or div, and
+        // NOT min/max: `minps a, b` returns b when either operand is NaN, so
+        // swapping the sources changes the answer, and clang does not swap them
+        // either.
+        static NSSet *vexCommutes; static dispatch_once_t vconce;
+        dispatch_once(&vconce, ^{
+            vexCommutes = [NSSet setWithArray:@[@"addps", @"addpd", @"addss", @"addsd",
+                                                @"mulps", @"mulpd", @"mulss", @"mulsd",
+                                                @"andps", @"andpd", @"orps",  @"orpd",
+                                                @"xorps", @"xorpd", @"pand",  @"por",
+                                                @"pxor",  @"paddb", @"paddw", @"paddd",
+                                                @"paddq"]];
+        });
+        if (vr && [vexCommutes containsObject:base]
+            && src1->kind == OpReg && src2->kind == OpReg
+            && (src2->reg & 8) && !(src1->reg & 8)) {
+            XOperand *t = src1; src1 = src2; src2 = t;
+        }
+        if (vr && src1->kind == OpReg && src2->kind != OpImm) {
+            uint8_t pfx = (uint8_t)[vr[0] intValue];
+            int pp = pfx == 0x66 ? 1 : pfx == 0xF3 ? 2 : pfx == 0xF2 ? 3 : 0;
+            int rr = a->reg < 0 ? 0 : a->reg;
+            int bb = src2->kind == OpReg ? src2->reg : src2->base;
+            int xx = src2->kind == OpReg ? 0 : src2->index;
+            bb = bb < 0 ? 0 : bb;
+            xx = xx < 0 ? 0 : xx;
+            int vvvv = (~src1->reg) & 0x0F;
+            if (map == 1 && !(xx & 8) && !(bb & 8)) {
+                emit8(out, 0xC5);
+                emit8(out, (uint8_t)(((rr & 8) ? 0 : 0x80) | (vvvv << 3) | pp));
+            }
+            else {
+                emit8(out, 0xC4);
+                emit8(out, (uint8_t)(((rr & 8) ? 0 : 0x80) | ((xx & 8) ? 0 : 0x40)
+                                     | ((bb & 8) ? 0 : 0x20) | map));
+                emit8(out, (uint8_t)((vvvv << 3) | pp));
+            }
+            emit8(out, (uint8_t)[vr[1] intValue]);
+            emitModRM(out, a->reg, src2);
+            CLEANUP(); return out;
+        }
+    }
+
     NSArray *sr = sseRR[mn];
     // b must NOT be an immediate. Four of these mnemonics (psrlw/psrld/psrlq
     // and psllq) ALSO have a shift-by-immediate form, handled below out of its

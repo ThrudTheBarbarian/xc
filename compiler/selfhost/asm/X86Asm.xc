@@ -1803,8 +1803,91 @@ class X86Fixup
     // The encoding is [mandatory prefix F3/F2/66][REX][0F][opcode][ModRM], and
     // the prefix comes BEFORE the REX byte. The destination is the ModRM.reg
     // field, the source the r/m.
+    // ── VEX.128 three-operand forms of the SSE table ──
+    //
+    // `vaddps xmm0, xmm1, xmm2` is `addps` with a VEX prefix and a
+    // NON-DESTRUCTIVE first source, so the same opcode serves both and sseRR
+    // stays the only place a mnemonic is listed. A second table would be a
+    // copy to drift.
+    //
+    //   2-byte  C5 [R vvvv L pp]                 when X=B=0 and the map is 0F
+    //   3-byte  C4 [RXB mmmmm] [W vvvv L pp]     otherwise
+    //
+    // VEX.128 only — the 256-bit half needs a register pool and vzeroupper
+    // discipline, which is not encoding work. private:docs/bugs/231.
+    bool encVex128(String* mn, XOperand* a)
+        {
+        if (mn.byteLength() < (u32)2 || mn.byteAt((u32)0) != (u8)'v')
+            return false;
+        if (_ops.count() != (u32)3 || a == (XOperand*)0)
+            return false;
+        String* base = mn.substringFromByte((u32)1);
+        u32 rr = sseRR(base);
+        if (rr == (u32)$FFFF_FFFF)
+            return false;
+        XOperand* s1 = (XOperand*)_ops.get((u32)1);
+        XOperand* s2 = (XOperand*)_ops.get((u32)2);
+        if (s1 == (XOperand*)0 || s2 == (XOperand*)0)
+            return false;
+        if (s1.kind() != (u32)OP_REG || s2.kind() == (u32)OP_IMM)
+            return false;
+        // COMMUTE when the operation allows it and it buys a byte: the two-byte
+        // form cannot hold a high register in r/m, but with the sources swapped
+        // that register moves into vvvv, which it can. clang does this, so
+        // matching it is required for byte-identity. NOT for sub or div, and
+        // NOT for min/max — `minps a, b` returns b when either is NaN, so
+        // swapping changes the answer.
+        if (vexCommutes(base) && s2.kind() == (u32)OP_REG
+            && (s2.reg() & (u32)8) != (u32)0 && (s1.reg() & (u32)8) == (u32)0)
+            {
+            XOperand* t = s1; s1 = s2; s2 = t;
+            }
+        u32 pfx = rr >> (u32)8;
+        u32 pp = pfx == (u32)$66 ? (u32)1 : pfx == (u32)$F3 ? (u32)2
+               : pfx == (u32)$F2 ? (u32)3 : (u32)0;
+        i32 bb = s2.kind() == (u32)OP_REG ? (i32)s2.reg() : s2.rmReg();
+        i32 xx = s2.kind() == (u32)OP_REG ? (i32)0 : s2.index();
+        if (bb < (i32)0) bb = (i32)0;
+        if (xx < (i32)0) xx = (i32)0;
+        u32 vvvv = (~s1.reg()) & (u32)$0F;
+        u32 rhi = (a.reg() & (u32)8) != (u32)0 ? (u32)0 : (u32)$80;
+        if ((xx & (i32)8) == (i32)0 && (bb & (i32)8) == (i32)0)
+            {
+            e8((u32)$C5);
+            e8(rhi | (vvvv << (u32)3) | pp);
+            }
+        else
+            {
+            e8((u32)$C4);
+            e8(rhi | ((xx & (i32)8) != (i32)0 ? (u32)0 : (u32)$40)
+                   | ((bb & (i32)8) != (i32)0 ? (u32)0 : (u32)$20) | (u32)1);
+            e8((vvvv << (u32)3) | pp);
+            }
+        e8(rr & (u32)$FF);
+        eModRM(a.reg(), s2);
+        _hit = true;
+        return true;
+        }
+
+    static bool vexCommutes(String* m)
+        {
+        return m.equals(String.withCString("addps")) || m.equals(String.withCString("addpd"))
+            || m.equals(String.withCString("addss")) || m.equals(String.withCString("addsd"))
+            || m.equals(String.withCString("mulps")) || m.equals(String.withCString("mulpd"))
+            || m.equals(String.withCString("mulss")) || m.equals(String.withCString("mulsd"))
+            || m.equals(String.withCString("andps")) || m.equals(String.withCString("andpd"))
+            || m.equals(String.withCString("orps"))  || m.equals(String.withCString("orpd"))
+            || m.equals(String.withCString("xorps")) || m.equals(String.withCString("xorpd"))
+            || m.equals(String.withCString("pand"))  || m.equals(String.withCString("por"))
+            || m.equals(String.withCString("pxor"))  || m.equals(String.withCString("paddb"))
+            || m.equals(String.withCString("paddw")) || m.equals(String.withCString("paddd"))
+            || m.equals(String.withCString("paddq"));
+        }
+
     void encGroupD(String* mn, XOperand* a, XOperand* b)
         {
+        if (encVex128(mn, a))
+            return;
         u32 rr = sseRR(mn);
         // b must NOT be an immediate. Four of these mnemonics (psrlw/psrld/
         // psrlq and psllq) ALSO have a shift-by-immediate form, handled below
