@@ -13517,8 +13517,15 @@ class OptProfile
             String* accTy = acc.ty();
             if (accTy == (String*)0 || irWidth(accTy) != (u32)4)
                 return (VecCand*)0;             // only a 32-bit count
+            // vecConstWIDE, because dk2 is an i64 and the narrow resolver
+            // writes only its low four bytes. The high half then keeps its
+            // initialiser instead of the sign, so a NEGATIVE delta came back
+            // as a large positive and the `dk2 < 0` guard below could never
+            // fire. Nothing diagnosed the i64*/i32* mismatch — that is
+            // private:docs/bugs/244, and this is the one live victim of it in
+            // the tree, found by auditing for exactly this shape.
             i64 dk2 = (i64)0;
-            if (!vecConst(_vcDelta, defOf, &dk2))
+            if (!vecConstWide(_vcDelta, defOf, &dk2))
                 return (VecCand*)0;
             i64 laneMax = irWidth(_vcLaneTy) == (u32)1 ? (i64)255 : (i64)65535;
             if (dk2 < (i64)0 || dk2 > laneMax)

@@ -76,7 +76,7 @@ pass=0; fail=0
 declare -a FAILED
 
 check() {
-    local f="$1" label="$2"
+    local f="$1" label="$2" comp="${3:-}"
     [ -n "$PATTERN" ] && case "$label" in *"$PATTERN"*) ;; *) return;; esac
     # A fixture's OWN flags are part of what it tests. string_migrate_03 means
     # nothing without `--migrate=0.3:0.4`: run without it the file is rejected
@@ -92,7 +92,21 @@ check() {
     # `${extra[@]}` on an EMPTY array is an unbound-variable error under
     # `set -u` in bash 3.2, which is what macOS ships: the command then failed
     # before the compiler ran and every subject scored "rejected silently".
-    out=$("$WORK/xcc-xc" -H "$ROOT" -A arm64 ${extra[@]+"${extra[@]}"} -o "$WORK/out.bin" "$f" 2>&1)
+    # The companion, when the fixture declares one. `//xtc-link:` means ONE
+    # translation unit, and neither compiler takes two input files — the corpus
+    # sweeps concatenate, stripping the caller's function prototypes so its
+    # forward declarations do not collide with the companion's definitions.
+    # Same merge here, or the error under test never exists: compiled alone the
+    # fixture is a perfectly legal program.
+    local src="$f"
+    if [ -n "$comp" ]; then
+        src="$WORK/merged_$label.xc"
+        { grep -vE '^[A-Za-z_][A-Za-z0-9_@]*[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\([^){}]*\)[[:space:]]*;' "$f"
+          echo
+          cat "$comp"
+        } > "$src"
+    fi
+    out=$("$WORK/xcc-xc" -H "$ROOT" -A arm64 ${extra[@]+"${extra[@]}"} -o "$WORK/out.bin" "$src" 2>&1)
     rc=$?
     if [ "$rc" -eq 0 ]; then
         fail=$((fail+1)); FAILED+=("$label	ACCEPTED (exit 0)")
@@ -119,9 +133,20 @@ check() {
 }
 
 for f in "$WORK"/syn/*.xc; do check "$f" "$(basename "$f" .xc)"; done
+# A fixture whose error only appears when a COMPANION is merged in (`//xtc-link:`)
+# cannot be judged one file at a time: compiled alone it is a perfectly legal
+# program, so this harness read "accepted" and called it a failure. The corpus
+# sweeps already merge companions and cover these; here the pair is passed to
+# both compilers together, which is what the directive means.
+companion_for() { grep -hoE '//[ ]*xtc-link:[ ]*[A-Za-z0-9_]+' "$1" | head -1 | grep -oE '[A-Za-z0-9_]+$'; }
 for f in tests/fixtures/*.xc; do
     grep -q 'expect=sema-error' "$f" || continue
-    check "$f" "$(basename "$f" .xc)"
+    comp=$(companion_for "$f")
+    if [ -n "$comp" ] && [ -f "tests/fixtures/$comp.xc" ]; then
+        check "$f" "$(basename "$f" .xc)" "tests/fixtures/$comp.xc"
+    else
+        check "$f" "$(basename "$f" .xc)"
+    fi
 done
 
 if [ ${#FAILED[@]} -gt 0 ]; then

@@ -3214,6 +3214,16 @@ DriverOptions* parseDriverArgs(void)
             i = i + (u32)1;
             continue;
         }
+        // ONE source file. The reference refuses a second outright; this
+        // driver used to overwrite the first silently, compile only the last,
+        // and hand back a binary with no `_main` — which fails at LOAD time
+        // with a dyld error and never mentions the dropped file.
+        // private:docs/bugs/245.
+        if (o.input() != (String*)0 && o.input().byteLength() > (u32)0) {
+            Stdio.printf("xcc: error: multi-file inputs not supported on the new-IR path yet\n");
+            Process.exit((i32)1);
+            return (DriverOptions*)0;
+        }
         o.setInput(a);
         i = i + (u32)1;
     }
