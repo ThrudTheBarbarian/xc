@@ -626,20 +626,45 @@
     {
     return NO;
     }
-// a data address IS an i32 const
+// A data address IS an i32 const, so the hoist was off on the assumption that
+// it could not pay. Measured: it does not pay in TIME (0.1%, noise), but every
+// module came out ~450 bytes smaller — 2.2% — because the const stops being
+// re-materialised at each use. On a target where code size is download size
+// that is the whole argument.
 - (BOOL)hoistsGlobalAddr
     {
-    return NO;
+    return YES;
     }
-// download size
+// Off for "download size", which turns out to be the wrong side of the trade.
+// Measured over eight benchmarks: 21.2% faster on the geometric mean, for 3.6%
+// more module (+737 bytes). int_accum -45%, mem_copy -37%, hash_mix -35%,
+// array_map -29%. The engine does not unroll for us, and a variable-trip loop
+// it cannot see the count of pays the branch every iteration.
 - (BOOL)unrollsVariableTrip
     {
-    return NO;
+    return YES;
     }
-// "Measure, don't assume" (§9): pointer-IV, IV-narrowing (narrow ops need
-// masking), accumulator recursion — all OFF until measured under a real engine.
+// "Measure, don't assume" (§9) — now MEASURED, under Node, eight benchmarks:
+//
+//   formsPointerInductionVars   4.1% SLOWER (array_map +23.5%, mem_copy +10.2%)
+//   collapsesInvariantReductions  no-op: every time within 0.5% and every
+//                                 module byte-identical, so it never fires
+//   narrowsInductionVars          no-op, same evidence
+//
+// The first is the interesting one: the engine's JIT does its own address
+// arithmetic, and handing it a pre-formed pointer IV takes away a strength
+// reduction it would rather do itself. All three stay off, now for a reason
+// rather than a suspicion. private:docs/bugs/238.
 // The backend lowers every V* opcode to wasm SIMD (v128) — W4.
 - (BOOL)vectorizesLoops
+    {
+    return YES;
+    }
+// Measured: 13.9% faster on the geometric mean for 18 bytes (+0.1%), almost
+// all of it struct_copy, which goes 2.8x. Passing an aggregate through linear
+// memory costs a copy the callee then reads field by field; inlining the callee
+// lets the fields stay values.
+- (BOOL)inlinesAggregateParams
     {
     return YES;
     }

@@ -113,9 +113,15 @@ class OptProfile
         p._tailRecursion = true;
         p._ifConvert = true; // every live target if-converts
         // Aggregates are ordinary addressable memory on the register machines.
+        // wasm32 joins them: passing an aggregate through linear memory costs a
+        // copy the callee then reads field by field, and inlining lets the
+        // fields stay values. Measured under Node over eight benchmarks: 13.9%
+        // faster for eighteen bytes of module, almost all of it struct_copy,
+        // which goes 2.8x. private:docs/bugs/238.
         p._inlineAggParams = t.equals(String.withCString("arm64"))
                           || t.equals(String.withCString("x86_64"))
-                          || t.equals(String.withCString("win64"));
+                          || t.equals(String.withCString("win64"))
+                          || t.equals(String.withCString("wasm32"));
         p._initGuardElim = true;
         // The 6502 and the 68000 backends do not lower MemSet, so the idiom
         // stays a loop there.
@@ -228,12 +234,21 @@ class OptProfile
         // Variable-trip partial unrolling is kernel-dependent on the 68000 —
         // the extra live values an unrolled body carries spill — so it stays
         // off there as well as on the 6502.
-        p._unrollVarTrip = t.equals(String.withCString("arm64")) || t.equals(String.withCString("arm9")) || t.equals(String.withCString("x86_64")) || t.equals(String.withCString("win64"));
-        // LICM is on for every live target. The global-address hoist is on
-        // everywhere EXCEPT wasm32 — there a data address IS an i32 const,
-        // so hoisting it to a local buys nothing.
+        // wasm32 was off for "download size", which is the wrong side of the
+        // trade: measured, the module grows 3.6% and the runtime drops 21.2%
+        // (int_accum -45%, mem_copy -37%, hash_mix -35%). The engine does not
+        // unroll for us, and a loop whose trip count it cannot see pays the
+        // branch every iteration. private:docs/bugs/238.
+        p._unrollVarTrip = t.equals(String.withCString("arm64")) || t.equals(String.withCString("arm9")) || t.equals(String.withCString("x86_64")) || t.equals(String.withCString("win64")) || t.equals(String.withCString("wasm32"));
+        // LICM is on for every live target, and so now is the global-address
+        // hoist. It was off on wasm32 because a data address IS an i32 const —
+        // true, and it still pays, just not in the column that was watched:
+        // the const stops being re-materialised at each use, and every module
+        // came out about 450 bytes smaller, 2.2%. Time is unchanged (0.1%,
+        // noise). On a target where code size is download size that is the
+        // whole argument. private:docs/bugs/238.
         p._licm = true;
-        p._hoistGlobalAddr = !t.equals(String.withCString("wasm32"));
+        p._hoistGlobalAddr = true;
         // Narrowing the induction variable pays where the compare and the
         // increment get cheaper at a smaller width — the 8-bit and the 16-bit
         // targets. The 32-bit ones already compare at their natural width.
@@ -845,7 +860,7 @@ class OptProfile
     IRValue* _iv;
     IROperand* _step; // the loop-invariant addend of ivNext
     bool _stepIsConst;
-    i32 _stepK;
+    i64 _stepK;          // i64 like the reference: a bound over 2^31 wraps
     // The trip is a compile-time constant that divides EXACTLY by the
     // unroll factor AND the body is vector, so the intermediate copies'
     // guards are provably true and are not emitted.
@@ -868,7 +883,7 @@ class OptProfile
         _redVals = new Array();
         _redEsc = new Array();
         _stepIsConst = false;
-        _stepK = (i32)0;
+        _stepK = (i64)0;
         }
 
     IRBlock* h(void)
@@ -907,7 +922,7 @@ class OptProfile
         {
         return _stepIsConst;
         }
-    i32 stepK(void)
+    i64 stepK(void)
         {
         return _stepK;
         }
@@ -957,7 +972,7 @@ class OptProfile
         {
         _exactTrip = v;
         }
-    void setStep(IROperand* s, bool isK, i32 k)
+    void setStep(IROperand* s, bool isK, i64 k)
         {
         _step = s;
         _stepIsConst = isK;
@@ -6175,7 +6190,7 @@ class OptProfile
         bool ivIs1 = g1.kind() == (u8)OPK_USE && g1.val() == iv;
         if (ivIs0 == ivIs1)
             return false;
-        i32 bound = (i32)0;
+        i64 bound = (i64)0;
         if (!constValue(defOf, ivIs0 ? g1 : g0, &bound))
             return false;
         if (bound < (i32)0)
@@ -6289,7 +6304,7 @@ class OptProfile
             }
         if (nextOp == 0 || initOp == 0 || P == 0)
             return false;
-        i32 initV = (i32)0;
+        i64 initV = (i64)0;
         if (!constValue(defOf, initOp, &initV) || initV != (i32)0)
             return false;
         if (nextOp.kind() != (u8)OPK_USE || nextOp.val() == 0)
@@ -6313,7 +6328,7 @@ class OptProfile
             stepOp = nb;
         else if (nb.kind() == (u8)OPK_USE && nb.val() == iv)
             stepOp = na;
-        i32 step = (i32)0;
+        i64 step = (i64)0;
         if (stepOp == 0 || !constValue(defOf, stepOp, &step) || step != (i32)1)
             return false;
 
@@ -6350,7 +6365,7 @@ class OptProfile
         if (!clonable && !invariant)
             return false;
 
-        i32 fill = (i32)0;
+        i64 fill = (i64)0;
         if (!constValue(defOf, (IROperand*)store.ops().get((u32)1), &fill))
             return false;
         IROperand* mi = (IROperand*)store.ops().get((u32)2);
@@ -6435,7 +6450,11 @@ class OptProfile
         }
 
     // A compile-time integer, seen through the ZExt a `(u16)0` lowers to.
-    bool constValue(Map* defOf, IROperand* op, i32* out)
+  // i64: IROperand.imm() is already 64-bit, and the reference holds every
+  // one of these in an int64_t. Narrowing here made a u32 loop bound above
+  // 2^31 come back NEGATIVE, and every guard that tests it silently gave
+  // up. private:docs/bugs/243.
+    bool constValue(Map* defOf, IROperand* op, i64* out)
         {
         if (op.kind() == (u8)OPK_IMMI)
             {
@@ -6461,7 +6480,7 @@ class OptProfile
         // A zero-extend preserves a non-negative constant.
         if (!n.op().equals(String.withCString("ZExt")))
             return false;
-        i32 v = (i32)0;
+        i64 v = (i64)0;
         if (!constValue(defOf, (IROperand*)n.ops().get((u32)0), &v))
             return false;
         if (v < (i32)0)
@@ -7223,7 +7242,11 @@ class OptProfile
     // A const reached through ZExt / SExt / Trunc / Bitcast. A bound wider than
     // 16 bits arrives via Bitcast (U32→I32) rather than ZExt, so that step is
     // followed too — which is why this is not `resolveInt`.
-    bool lrcConst(Map* defOf, IROperand* op, i32* out)
+  // i64: IROperand.imm() is already 64-bit, and the reference holds every
+  // one of these in an int64_t. Narrowing here made a u32 loop bound above
+  // 2^31 come back NEGATIVE, and every guard that tests it silently gave
+  // up. private:docs/bugs/243.
+    bool lrcConst(Map* defOf, IROperand* op, i64* out)
         {
         if (op == (IROperand*)0)
             return false;
@@ -7272,7 +7295,7 @@ class OptProfile
     // simulation and no cap — the whole point is folding a BIG rep loop, and
     // T·Σδ mod 2^w is exact for any T. Zero when it is not a terminating
     // ascending counted loop.
-    u32 lrcTrip(i32 startv, i32 step, i32 bound, String* pred)
+    u32 lrcTrip(i64 startv, i64 step, i64 bound, String* pred)
         {
         if (step <= (i32)0)
             return (u32)0;
@@ -7798,7 +7821,7 @@ class OptProfile
         if (!nextDef.op().equals(String.withCString("Add")) || nextDef.ops().count() != (u32)2)
             return false;
 
-        i32 step = (i32)0;
+        i64 step = (i64)0;
         IROperand* a = (IROperand*)nextDef.ops().get((u32)0);
         IROperand* b = (IROperand*)nextDef.ops().get((u32)1);
         bool isIV = false;
@@ -7818,8 +7841,8 @@ class OptProfile
             IROperand* lhs = (IROperand*)n.ops().get((u32)0);
             if (lhs.kind() != (u8)OPK_USE || lhs.val() != phi.res())
                 continue;
-            i32 start = (i32)0;
-            i32 bound = (i32)0;
+            i64 start = (i64)0;
+            i64 bound = (i64)0;
             if (!lrcConst(defOf, lrcSeedOperand(phi, O.pre()), &start))
                 continue;
             if (!lrcConst(defOf, (IROperand*)n.ops().get((u32)1), &bound))
@@ -8356,7 +8379,7 @@ class OptProfile
         IROperand* nextOp = (IROperand*)sp.get((u32)2);
         if (P.term() == (IRInsn*)0)
             return false;
-        i32 initV = (i32)0;
+        i64 initV = (i64)0;
         if (!unrollConst(defOf, seedOp, &initV))
             return false;
         if (nextOp.kind() != (u8)OPK_USE)
@@ -8369,7 +8392,7 @@ class OptProfile
             return false;
         IROperand* na = (IROperand*)nextDef.ops().get((u32)0);
         IROperand* nb = (IROperand*)nextDef.ops().get((u32)1);
-        i32 stepV = (i32)0;
+        i64 stepV = (i64)0;
         if (na.kind() == (u8)OPK_USE && na.val() == iv && unrollConst(defOf, nb, &stepV))
             {
             }
@@ -8378,7 +8401,7 @@ class OptProfile
             }
         else
             return false;
-        i32 boundV = (i32)0;
+        i64 boundV = (i64)0;
         if (!unrollConst(defOf, (IROperand*)icmp.ops().get((u32)1), &boundV))
             return false;
         if (icmp.pred() == (String*)0)
@@ -8534,7 +8557,11 @@ class OptProfile
     // A compile-time int, seen through the widened-literal form. Unlike the
     // collapse's, this one does NOT follow Bitcast — the original's two
     // resolvers differ there and the difference is load-bearing.
-    bool unrollConst(Map* defOf, IROperand* op, i32* out)
+  // i64: IROperand.imm() is already 64-bit, and the reference holds every
+  // one of these in an int64_t. Narrowing here made a u32 loop bound above
+  // 2^31 come back NEGATIVE, and every guard that tests it silently gave
+  // up. private:docs/bugs/243.
+    bool unrollConst(Map* defOf, IROperand* op, i64* out)
         {
         if (op == (IROperand*)0)
             return false;
@@ -8577,7 +8604,7 @@ class OptProfile
     // Simulate to a trip count, capped. Zero unless it is a terminating
     // ascending counted loop within the cap — unlike the collapse's closed
     // form, the unroller only wants trips it can afford to replicate.
-    u32 unrollTrip(i32 startv, i32 step, i32 bound, String* pred, u32 maxTrip)
+    u32 unrollTrip(i64 startv, i64 step, i64 bound, String* pred, u32 maxTrip)
         {
         if (step <= (i32)0)
             return (u32)0; // ascending counters only
@@ -9294,8 +9321,8 @@ class OptProfile
         // bare base is right only when the loop counts from zero, so
         // `for (i = a; ...)` read from the start of the array instead of from
         // `a` — correct at -O0/-O1, wrong at -O2+ (#1125).
-        i32 pivInitV = (i32)0;
-        bool pivInitZero = constValue(defOf, ivInit, &pivInitV) && pivInitV == (i32)0;
+        i64 pivInitV = (i64)0;
+        bool pivInitZero = constValue(defOf, ivInit, &pivInitV) && pivInitV == (i64)0;
         Array* head = new Array();    // pointer steps + offset ElementAddrs
         Array* deadEAs = new Array(); // the originals they replace
         Map* replace = new Map();     // old ElementAddr result → new value
@@ -9831,8 +9858,16 @@ class OptProfile
         // a different value. Defined outside the body means loop-invariant; a
         // body-defined step is safe only when it folds to a constant, which each
         // copy simply re-materialises.
-        i32 stepK = (i32)0;
-        bool stepConst = vecConst(stepOp, defOf, &stepK);
+        // i64, NOT i32. A u32 bound above 2^31 — `for (u32 r = 0; r < 2800000000;
+        // r++)` — wraps NEGATIVE in an i32, the span comes out below zero, and
+        // the exact-trip test silently says no. The reference has held these in
+        // an int64_t throughout. Same truncation as bug 236, in the third site:
+        // the recogniser and the const-trip unroller were fixed there, and this
+        // one was not, because no target reached it with a bound that large
+        // until wasm32 turned variable-trip unrolling on — arm64 vectorises the
+        // shape first and never gets here. private:docs/bugs/243.
+        i64 stepK = (i64)0;
+        bool stepConst = vecConstWide(stepOp, defOf, &stepK);
         if (stepOp.kind() == (u8)OPK_USE && !stepConst)
             {
             Object* sb = defBlk.get((Hashable*)stepOp.val());
@@ -9896,7 +9931,7 @@ class OptProfile
             }
         c.setVectorBody(vecBody);
         bool exact = false;
-        if (stepConst && stepK > (i32)0 && guard.ops().count() >= (u32)2
+        if (stepConst && stepK > (i64)0 && guard.ops().count() >= (u32)2
             && (guard.pred().equals(String.withCString("ULT"))
                 || guard.pred().equals(String.withCString("SLT")))
             && ((IROperand*)guard.ops().get((u32)0)).kind() == (u8)OPK_USE
@@ -9906,14 +9941,14 @@ class OptProfile
             for (u32 k = (u32)0; k + (u32)1 < ivPhi.ops().count(); k = k + (u32)2)
                 if (((IROperand*)ivPhi.ops().get(k)).blk() != B)
                     initOp = (IROperand*)ivPhi.ops().get(k + (u32)1);
-            i32 boundK = (i32)0;
-            i32 startK = (i32)0;
+            i64 boundK = (i64)0;
+            i64 startK = (i64)0;
             if (initOp != (IROperand*)0
-                && vecConst((IROperand*)guard.ops().get((u32)1), defOf, &boundK)
-                && vecConst(initOp, defOf, &startK))
+                && vecConstWide((IROperand*)guard.ops().get((u32)1), defOf, &boundK)
+                && vecConstWide(initOp, defOf, &startK))
                 {
-                i32 span = boundK - startK;
-                i32 group = stepK * (i32)4;
+                i64 span = boundK - startK;
+                i64 group = stepK * (i64)4;
                 // This used to be restricted to a VECTOR body, because a
                 // scalar one spilled once the guards were gone and the copies
                 // merged into one straight-line run. That was the
@@ -9922,7 +9957,7 @@ class OptProfile
                 // any of them cost a register nothing could get back. With
                 // that fixed, re-measured: bit_ops unchanged, matrix_mul 17%
                 // faster with the guards gone.
-                if (span > (i32)0 && group > (i32)0 && span % group == (i32)0)
+                if (span > (i64)0 && group > (i64)0 && span % group == (i64)0)
                     exact = true;
                 }
             }
@@ -10204,7 +10239,7 @@ class OptProfile
             IROperand* nStep = (IROperand*)0;
             if (c.stepIsConst())
                 {
-                nStep = IROperand.immI(c.stepK() * (i32)U, ivTy);
+                nStep = IROperand.immI((i32)(c.stepK() * (i64)U), ivTy);
                 }
             else
                 {
@@ -15953,15 +15988,15 @@ class OptProfile
             return false;
         u32 curW = srWidth(iv.ty());
 
-        i32 bound = (i32)0;
-        if (!nivConst(defOf, (IROperand*)cmp.ops().get((u32)1), &bound) || bound < (i32)0)
+        i64 bound = (i64)0;
+        if (!nivConst(defOf, (IROperand*)cmp.ops().get((u32)1), &bound) || bound < (i64)0)
             return false;
 
         // One incoming is the loop-entry init (a const >= 0), the other the
         // latch value Add(iv, step) with step > 0.
         IRBlock* ph = (IRBlock*)0;
-        i32 c = (i32)0;
-        i32 step = (i32)0;
+        i64 c = (i64)0;
+        i64 step = (i64)0;
         IRInsn* incAdd = (IRInsn*)0;
         bool haveInit = false;
         bool haveNext = false;
@@ -15979,7 +16014,7 @@ class OptProfile
                     {
                     IROperand* a = (IROperand*)d.ops().get((u32)0);
                     IROperand* bb2 = (IROperand*)d.ops().get((u32)1);
-                    i32 s = (i32)0;
+                    i64 s = (i64)0;
                     bool formsInc = false;
                     if (a.kind() == (u8)OPK_USE && a.val() == iv && nivConst(defOf, bb2, &s))
                         formsInc = true;
@@ -15994,7 +16029,7 @@ class OptProfile
                         }
                     }
                 }
-            if (!nivConst(defOf, useOp, &c) || c < (i32)0)
+            if (!nivConst(defOf, useOp, &c) || c < (i64)0)
                 return false;
             ph = blkOp.blk();
             haveInit = true;
@@ -16174,7 +16209,11 @@ class OptProfile
     // A constant through Const and the width casts that preserve a
     // non-negative value — including Bitcast, which the unroller's resolver
     // does not follow.
-    bool nivConst(Map* defOf, IROperand* op, i32* out)
+  // i64: IROperand.imm() is already 64-bit, and the reference holds every
+  // one of these in an int64_t. Narrowing here made a u32 loop bound above
+  // 2^31 come back NEGATIVE, and every guard that tests it silently gave
+  // up. private:docs/bugs/243.
+    bool nivConst(Map* defOf, IROperand* op, i64* out)
         {
         if (op.kind() == (u8)OPK_IMMI)
             {
