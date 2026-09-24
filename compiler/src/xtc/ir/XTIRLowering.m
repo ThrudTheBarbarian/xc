@@ -15088,6 +15088,16 @@ static NSString* XTIRTypeKindName(XTIRTypeKind k)
             {
             [out addObject:((XTIdentifierNode*)a.lhs).identName];
             }
+        // BOTH SIDES, not just the name on the left. `gOut[cnt++] = y` binds
+        // nothing called gOut, so this case added nothing and stopped — and
+        // `cnt` got no loop-carried phi, so the header kept the entry value,
+        // the index was frozen at its initial 0, and the increment was dead
+        // code. Every element landed in gOut[0] and the count came back 0.
+        // The rhs holds the same shapes (`x = f(i++)`, `x = src[i++]`), and
+        // there the frozen counter means the loop never terminates at all.
+        // private:docs/bugs/241.
+        [self collectAssignedLocalsIn:a.lhs into:out];
+        [self collectAssignedLocalsIn:a.rhs into:out];
         break;
         }
     case XTASTNodeKindPostfixExpr:
@@ -15205,6 +15215,43 @@ static NSString* XTIRTypeKindName(XTIRTypeKind k)
     case XTASTNodeKindDefer:
         {
         [self collectAssignedLocalsIn:((XTDeferNode*)node).body into:out];
+        break;
+        }
+    // The remaining expression shapes a `++`/`--` can hide inside. This switch
+    // enumerates what to descend into, and anything it forgets is silently not
+    // descended into — which is the third time that has cost a real bug (157
+    // was the switch arm, 241 the subscript index). The ported lowering
+    // recurses over every child unconditionally and has been right each time;
+    // this list is the wrong shape and should become a generic walk.
+    case XTASTNodeKindSubscriptExpr:
+        {
+        XTSubscriptExprNode* sub = (XTSubscriptExprNode*)node;
+        [self collectAssignedLocalsIn:sub.base into:out];
+        [self collectAssignedLocalsIn:sub.index into:out];
+        break;
+        }
+    case XTASTNodeKindMemberAccess:
+        {
+        [self collectAssignedLocalsIn:((XTMemberAccessNode*)node).base into:out];
+        break;
+        }
+    case XTASTNodeKindCastExpr:
+        {
+        [self collectAssignedLocalsIn:((XTCastExprNode*)node).operand into:out];
+        break;
+        }
+    case XTASTNodeKindMethodCallExpr:
+        {
+        XTMethodCallExprNode* mc = (XTMethodCallExprNode*)node;
+        [self collectAssignedLocalsIn:mc.receiver into:out];
+        for (XTASTNode* a in mc.arguments)
+            [self collectAssignedLocalsIn:a into:out];
+        break;
+        }
+    case XTASTNodeKindReturn:
+        {
+        for (XTASTNode* v in ((XTReturnNode*)node).values)
+            [self collectAssignedLocalsIn:v into:out];
         break;
         }
     default:
