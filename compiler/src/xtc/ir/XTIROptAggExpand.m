@@ -71,6 +71,14 @@ static BOOL mayAlias(XTIRValueId sp, XTIRValueId lp,
     }
 
 // Every instruction of the function, phis and terminator included.
+// YES if `v` is typed as a pointer to exactly the aggregate `lay`, in any window.
+static BOOL pointsToLayout(XTIRValue* v, XTIRLayout* lay)
+    {
+    XTIRType* t = v.type;
+    return t && t.kind == XTIRTypeKindPtr && t.pointeeType &&
+           t.pointeeType.kind == XTIRTypeKindAgg && t.pointeeType.layout == lay;
+    }
+
 static NSArray<XTIRInsn*>* allInsns(XTIRFunction* fn)
     {
     NSMutableArray<XTIRInsn*>* all = [NSMutableArray array];
@@ -241,6 +249,12 @@ static void replaceUses(XTIRFunction* fn, XTIRValueId from, XTIROperand* to)
             continue;
         XTIRLayout* lay = ld.result.type.layout;
         if (!lay || lay.fields.count == 0 || lay.fields.count > kMaxFields)
+            continue;
+        // A field address needs a pointer to the aggregate itself. A copy into
+        // a byte buffer (the variadic pack) stores through a U8 pointer, where
+        // every FieldAddr would land on byte 0.
+        if (!pointsToLayout([fn valueForId:ld.operands[0].valueId], lay) ||
+            !pointsToLayout([fn valueForId:st.operands[0].valueId], lay))
             continue;
         BOOL scalarOnly = YES;
         for (XTIRLayoutField* f in lay.fields)

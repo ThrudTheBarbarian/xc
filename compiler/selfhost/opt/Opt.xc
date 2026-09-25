@@ -3846,6 +3846,11 @@ class OptProfile
             u32 si = aeIndexOf(bb.insns(), st);
             if (si >= bb.insns().count() || si <= i)
                 continue;
+            // A field address needs a pointer to the aggregate itself. A copy
+            // into a byte buffer (the variadic pack) stores through a U8
+            // pointer, where every FieldAddr would land on byte 0.
+            if (!aePointsTo(srcOp.val(), ld.res().ty()) || !aePointsTo(dstOp.val(), ld.res().ty()))
+                continue;
 
             u32 lid = aeLayoutId(m, ld.res().ty());
             if (lid >= m.layouts().count())
@@ -3939,6 +3944,17 @@ class OptProfile
             return true;
             }
         return false;
+        }
+
+    // YES if `p` is typed as a pointer to exactly `agg`, in any window.
+    bool aePointsTo(IRValue* p, String* agg)
+        {
+        if (p == (IRValue*)0 || p.ty() == (String*)0 || agg == (String*)0)
+            return false;
+        String* want = String.withCString("Ptr(");
+        want.append(agg);
+        want.appendCString(",");
+        return p.ty().hasPrefix(want);
         }
 
     String* aePtrTo(String* ty)
