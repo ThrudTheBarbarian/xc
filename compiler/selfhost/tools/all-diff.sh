@@ -175,13 +175,20 @@ printf '%s\n' "${DISPATCH_SHARDED[@]}" \
         SHARD_I=$si SHARD_N=$sn bash "$s" > "$LOG/$h.$si.txt" 2>&1
         echo $(( $(date +%s) - st )) > "$LOG/$h.$si.time"' "$PWD" "$LOG" {} &
 XARGS_PID=$!
+# Kill a process and everything below it, deepest first. Only THIS run's tree:
+# the cleanup used to finish with a system-wide `pkill -f '*-diff.sh'`, and it
+# is trapped on EXIT, so every all-diff that finished normally also killed any
+# other all-diff running on the machine, from another checkout or worktree.
+killtree() {
+    local c
+    for c in $(pgrep -P "$1" 2>/dev/null); do killtree "$c"; done
+    kill "$1" 2>/dev/null
+}
 cleanup() {
     trap - EXIT INT TERM
-    # The harnesses are grandchildren (xargs -> bash -c -> *-diff.sh), so reap
-    # the tree, not just the direct child.
-    pkill -P "$XARGS_PID" 2>/dev/null
-    kill "$XARGS_PID" 2>/dev/null
-    pkill -f 'selfhost/tools/[a-z0-9]*-diff\.sh' 2>/dev/null
+    # The harnesses are grandchildren (xargs -> bash -c -> *-diff.sh) and
+    # start compilers of their own, so reap the whole tree.
+    killtree "$XARGS_PID"
 }
 trap cleanup EXIT INT TERM
 wait "$XARGS_PID"
