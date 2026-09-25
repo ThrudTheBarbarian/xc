@@ -42,6 +42,9 @@ programs, and refuses several mistakes that used to compile without a word.
   modulo 65536 (120000 read as 54464). `for (v in arr)` used the same value, so
   long arrays were iterated short. The count is 32 bits on arm64, x86-64, win64,
   arm9 and wasm32.
+- A bodyless `extern` global, such as a framework constant or a global defined
+  in a library, read a zeroed copy of its own instead of the real object, so a
+  framework constant came back null. It is now a reference to the definition.
 - `new i64[N]` and `new u64[N]` called the allocator with a missing argument
   and could abort with a nonsense size.
 - arm64: a function containing a floating-point conditional, such as
