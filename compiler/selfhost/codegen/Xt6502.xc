@@ -2658,7 +2658,7 @@ class Xt6502
 
     // MECH CVT, integer source. MECH's integer types are SIGNED, so a u32 has
     // to widen to a non-negative i64; anything narrower sign- or zero-extends
-    // to i32.
+    // to i32, and an i64 is read as the i64 it is.
     void emitIntToFp(IRInsn* n)
     {
         if (n.ops().count() < (u32)1 || n.res() == (IRValue*)0) return;
@@ -2666,24 +2666,109 @@ class Xt6502
         u32 sw = byteWidth(a.val().ty());
         u32 dw = byteWidth(n.res().ty());
         bool sgn = n.op().equals(String.withCString("SIToFp"));
+        u32 dstType = dw == (u32)8 ? (u32)1 : (u32)0;
+        if (!sgn && sw == (u32)8) { emitU64ToFp(n, dstType, dw); return; }
         u32 srcType = (u32)2;
         u32 srcBytes = (u32)4;
         bool sx = sgn;
-        if (!sgn && sw == (u32)4) { srcType = (u32)3; srcBytes = (u32)8; sx = false; }
-        emitMechUnary(n, sw, srcType, srcBytes, sx, dw == (u32)8 ? (u32)1 : (u32)0,
-                      (u32)$20, dw);
+        if (sw == (u32)8) { srcType = (u32)3; srcBytes = (u32)8; sx = false; }
+        else if (!sgn && sw == (u32)4) { srcType = (u32)3; srcBytes = (u32)8; sx = false; }
+        emitMechUnary(n, sw, srcType, srcBytes, sx, dstType, (u32)$20, dw);
     }
 
-    // MECH CVT, float source. The low `iw` bytes are the truncated integer's
-    // bit pattern — right for u32/u16/u8 too, since the low 32 bits of the
-    // wrapped i32 equal the unsigned value.
+    // A u64 with its top bit set is negative to MECH's signed i64. Halve it
+    // first, keeping the bit shifted out as a sticky low bit so the rounding
+    // is unchanged, convert, and double the result, which is exact.
+    void emitU64ToFp(IRInsn* n, u32 dstType, u32 dw)
+    {
+        u32 l = _labelCounter; _labelCounter = _labelCounter + (u32)1;
+        mechMap();
+        mechStore((IROperand*)n.ops().get((u32)0), (u32)8, (u32)0, (u32)8, false);
+        _out.appendFormat("    LDA $4047\n    BPL .Lu64f%lu_p\n    LSR $4047\n", l);
+        for (u32 b = (u32)7; b > (u32)0; b = b - (u32)1)
+            _out.appendFormat("    ROR $%s\n", hex4((u32)$4040 + b - (u32)1).cString());
+        _out.appendFormat("    BCC .Lu64f%lu_s\n    LDA $4040\n    ORA #$01\n    STA $4040\n.Lu64f%lu_s:\n", l, l);
+        mechOpWord((u32)0, ((dstType & (u32)3) << (u32)6) | (u32)$20, (u32)0, (u32)3, (u32)2);
+        mechOpWord((u32)1, ((dstType & (u32)3) << (u32)6) | (u32)$01, (u32)2, (u32)2, (u32)2);
+        mechRun((u32)2);
+        _out.appendFormat("    JMP .Lu64f%lu_d\n.Lu64f%lu_p:\n", l, l);
+        mechOpWord((u32)0, ((dstType & (u32)3) << (u32)6) | (u32)$20, (u32)0, (u32)3, (u32)2);
+        mechRun((u32)1);
+        _out.appendFormat(".Lu64f%lu_d:\n", l);
+        mechResult(n, (u32)2, dw);
+        mechUnmap();
+    }
+
+    // MECH CVT, float source, always to i64 so every destination width sees
+    // the whole truncated value. A narrower destination then keeps it only
+    // if it fits, and is 0 otherwise, as on every other target.
     void emitFpToInt(IRInsn* n)
     {
         if (n.ops().count() < (u32)1 || n.res() == (IRValue*)0) return;
         IROperand* a = (IROperand*)n.ops().get((u32)0);
         u32 fw = byteWidth(a.val().ty());
         u32 iw = byteWidth(n.res().ty());
-        emitMechUnary(n, fw, fw == (u32)8 ? (u32)1 : (u32)0, fw, false, (u32)2, (u32)$20, iw);
+        u32 srcType = fw == (u32)8 ? (u32)1 : (u32)0;
+        bool sgn = n.op().equals(String.withCString("FpToSI"));
+        if (!sgn && iw == (u32)8) { emitFpToU64(n, fw, srcType); return; }
+        mechMap();
+        mechStore(a, fw, (u32)0, fw, false);
+        mechOpWord((u32)0, ((u32)3 << (u32)6) | (u32)$20, (u32)0, srcType, (u32)2);
+        mechRun((u32)1);
+        if (iw < (u32)8) {
+            u32 l = _labelCounter; _labelCounter = _labelCounter + (u32)1;
+            _out.appendCString("    LDX #$00\n");
+            if (sgn)
+                _out.appendFormat("    LDA $%s\n    BPL .Lfi%lu_f\n    LDX #$FF\n.Lfi%lu_f:\n",
+                                  hex4((u32)$4050 + iw - (u32)1).cString(), l, l);
+            for (u32 b = iw; b < (u32)8; b = b + (u32)1)
+                _out.appendFormat("    CPX $%s\n    BNE .Lfi%lu_z\n",
+                                  hex4((u32)$4050 + b).cString(), l);
+            _out.appendFormat("    JMP .Lfi%lu_k\n.Lfi%lu_z:\n    LDA #$00\n", l, l);
+            for (u32 b = (u32)0; b < iw; b = b + (u32)1)
+                _out.appendFormat("    STA $%s\n", hex4((u32)$4050 + b).cString());
+            _out.appendFormat(".Lfi%lu_k:\n", l);
+        }
+        mechResult(n, (u32)2, iw);
+        mechUnmap();
+    }
+
+    // A u64 destination reaches 2^64, past MECH's signed i64. Convert both the
+    // value and the value less 2^63, and compare it with 2^63 to pick one: the
+    // second with its top bit set back, or the first, which is 0 when negative.
+    void emitFpToU64(IRInsn* n, u32 fw, u32 srcType)
+    {
+        u32 l = _labelCounter; _labelCounter = _labelCounter + (u32)1;
+        mechMap();
+        mechStore((IROperand*)n.ops().get((u32)0), fw, (u32)0, fw, false);
+        // 2^63 in the source's own format, in slot 1.
+        for (u32 b = (u32)0; b < fw; b = b + (u32)1) {
+            u32 v = (u32)0;
+            if (fw == (u32)8 && b == (u32)6) v = (u32)$E0;
+            if (fw == (u32)8 && b == (u32)7) v = (u32)$43;
+            if (fw == (u32)4 && b == (u32)3) v = (u32)$5F;
+            _out.appendFormat("    LDA #$%s\n    STA $%s\n", hex2(v).cString(),
+                              hex4((u32)$4048 + b).cString());
+        }
+        u32 st = (srcType & (u32)3) << (u32)6;
+        mechOpWord((u32)0, ((u32)3 << (u32)6) | (u32)$20, (u32)0, srcType, (u32)2);
+        mechOpWord((u32)1, st | (u32)$02, (u32)0, (u32)1, (u32)3);
+        mechOpWord((u32)2, ((u32)3 << (u32)6) | (u32)$20, (u32)3, srcType, (u32)3);
+        mechOpWord((u32)3, st | (u32)$0A, (u32)0, (u32)1, (u32)4);
+        mechRun((u32)4);
+        _out.appendFormat("    LDA $4060\n    CMP #$FF\n    BNE .Lfu%lu_h\n", l);
+        _out.appendFormat("    LDA $4057\n    BPL .Lfu%lu_k\n    LDA #$00\n", l);
+        for (u32 b = (u32)0; b < (u32)8; b = b + (u32)1)
+            _out.appendFormat("    STA $%s\n", hex4((u32)$4050 + b).cString());
+        _out.appendFormat("    JMP .Lfu%lu_k\n.Lfu%lu_h:\n", l, l);
+        for (u32 b = (u32)0; b < (u32)8; b = b + (u32)1) {
+            _out.appendFormat("    LDA $%s\n", hex4((u32)$4058 + b).cString());
+            if (b == (u32)7) _out.appendCString("    EOR #$80\n");
+            _out.appendFormat("    STA $%s\n", hex4((u32)$4050 + b).cString());
+        }
+        _out.appendFormat(".Lfu%lu_k:\n", l);
+        mechResult(n, (u32)2, (u32)8);
+        mechUnmap();
     }
 
     void emitFpCast(IRInsn* n)
