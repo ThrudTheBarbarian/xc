@@ -239,6 +239,8 @@ static NSDictionary<NSString*, NSString*>* XAInverseBranch(void)
     // the check just because the previous main-region cursor was
     // already at the last region.
     BOOL _pcInsideMainRegion;
+    // -D definitions, laid over the platform symbols at every pass.
+    NSMutableDictionary<NSString*, NSNumber*>* _predefinedSymbols;
     }
 
 /****************************************************************************\
@@ -335,6 +337,7 @@ static NSDictionary<NSString*, NSString*>* XAInverseBranch(void)
         _ambiguousHexLabelsWarned = [NSMutableSet set];
         _parsedLines = [NSMutableArray array];
         _listingLines = [NSMutableArray array];
+        _predefinedSymbols = [NSMutableDictionary dictionary];
         _includePaths = @[];
         _pc = 0;
         _cpu = [XA6502 sharedInstance];
@@ -366,7 +369,9 @@ static NSDictionary<NSString*, NSString*>* XAInverseBranch(void)
 \****************************************************************************/
 - (void)defineSymbol:(NSString*)name value:(NSString*)value
     {
-    _symbols[name] = @([self evaluateExpression:value]);
+    // Kept apart from _symbols, which every pass rebuilds from the platform
+    // table: a -D stored there was gone before pass 1 looked at it.
+    _predefinedSymbols[name] = @([self evaluateExpression:value]);
     }
 
 #pragma mark - Main Entry Point
@@ -412,6 +417,7 @@ static NSDictionary<NSString*, NSString*>* XAInverseBranch(void)
             _symbols[@"__bank_code_reg"] = @(self.codeBankReg);
         if (self.dataBankReg)
             _symbols[@"__bank_data_reg"] = @(self.dataBankReg);
+        [_symbols addEntriesFromDictionary:_predefinedSymbols];
         [_mutableErrors removeAllObjects];
         _finalRegionOverflowReported = NO;
         [_mutableWarnings removeAllObjects];

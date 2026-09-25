@@ -58,7 +58,7 @@ void main(void)
     String* out = Process.argument((u32)1);
     String* cn = Process.argumentCount() > (u32)2 ? Process.argument((u32)2) : String.withCString("xtsign self-signed");
     Array* key = Rsa.generate((u32)2048);
-    if (key.count() != (u32)3)
+    if (key.count() < (u32)3)
         {
         Stdio.printf("mkident: key generation failed\n");
         Process.exit((i32)1);

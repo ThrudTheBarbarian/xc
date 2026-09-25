@@ -1,0 +1,5 @@
+[banking]
+window = $6000-$7FFF
+registers = $D5C0, $D5C1
+regCWindow = $7000-$7FFF
+regCReg = $84-$85

@@ -44,7 +44,7 @@ JOBS=${ALLDIFF_JOBS:-$(( CORES / 2 ))}
 # DISPLAY order and the order the table is printed in.
 HARNESSES=(lexer pp ast sema diag ir irwide irrt iface ifacewrite opt
            arm64 arm64o3 android a9 m68k x86 wasm
-           as64 as9 as68 asx86 xta
+           as64 as9 as68 asx86 xta xccas
            ld64 obj64 lddylib ldandroid ldarm9 ldx86 ldx86so objx86 ldwin lnwasm elfobj coffobj dwarf
            wrap65 xcc bin sign)
 
@@ -74,7 +74,7 @@ HARNESSES=(lexer pp ast sema diag ir irwide irrt iface ifacewrite opt
 # the shipped compiler dropped every parser and sema diagnostic, so `i32 x = ;`
 # compiled to a runnable binary, silently, exit 0. Cheap (seconds), and it is
 # the only thing watching the error path.
-DISPATCH=(xcc bin wrap65 sema sign ast as64 xta wasm lnwasm arm64 arm64o3 android x86 ld64 lddylib ldandroid as68 ldwin
+DISPATCH=(xcc bin wrap65 sema sign ast as64 xta xccas wasm lnwasm arm64 arm64o3 android x86 ld64 lddylib ldandroid as68 ldwin
           asx86 irwide a9 ldarm9 ldx86 ldx86so objx86 obj64 m68k dwarf opt irrt pp lexer iface ifacewrite ir as9 diag elfobj coffobj)
 
 # HARNESSES and DISPATCH are two lists of the same set — one is the table's row

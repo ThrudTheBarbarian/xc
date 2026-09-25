@@ -472,6 +472,44 @@ class Bytes
             }
         return out;
         }
+    // EDE encrypt, E(k1) D(k2) E(k3), chained. `pt` is already padded to 8.
+    static Array* cbcEncrypt3(Array* key24, Array* iv, Array* pt)
+        {
+        if (key24.count() != (u32)24 || iv.count() != (u32)8 || (pt.count() % (u32)8) != (u32)0)
+            return (Array*)0;
+        u32 h1[16];
+        u32 l1[16];
+        u32 h2[16];
+        u32 l2[16];
+        u32 h3[16];
+        u32 l3[16];
+        Des.keys(key24, (u32)0, h1, l1);
+        Des.keys(key24, (u32)8, h2, l2);
+        Des.keys(key24, (u32)16, h3, l3);
+        u32 phi = (Bytes.at(iv, (u32)0) << (u32)24) | (Bytes.at(iv, (u32)1) << (u32)16) | (Bytes.at(iv, (u32)2) << (u32)8) | Bytes.at(iv, (u32)3);
+        u32 plo = (Bytes.at(iv, (u32)4) << (u32)24) | (Bytes.at(iv, (u32)5) << (u32)16) | (Bytes.at(iv, (u32)6) << (u32)8) | Bytes.at(iv, (u32)7);
+        Array* out = new Array();
+        for (u32 off = (u32)0; off < pt.count(); off = off + (u32)8)
+            {
+            u32 bhi = (Bytes.at(pt, off) << (u32)24) | (Bytes.at(pt, off + (u32)1) << (u32)16) | (Bytes.at(pt, off + (u32)2) << (u32)8) | Bytes.at(pt, off + (u32)3);
+            u32 blo = (Bytes.at(pt, off + (u32)4) << (u32)24) | (Bytes.at(pt, off + (u32)5) << (u32)16) | (Bytes.at(pt, off + (u32)6) << (u32)8) | Bytes.at(pt, off + (u32)7);
+            u32 t[2];
+            Des.crypt(bhi ^ phi, blo ^ plo, h1, l1, false, t);
+            Des.crypt(t[0], t[1], h2, l2, true, t);
+            Des.crypt(t[0], t[1], h3, l3, false, t);
+            phi = t[0];
+            plo = t[1];
+            Bytes.add(out, phi >> (u32)24);
+            Bytes.add(out, phi >> (u32)16);
+            Bytes.add(out, phi >> (u32)8);
+            Bytes.add(out, phi);
+            Bytes.add(out, plo >> (u32)24);
+            Bytes.add(out, plo >> (u32)16);
+            Bytes.add(out, plo >> (u32)8);
+            Bytes.add(out, plo);
+            }
+        return out;
+        }
     }
 
     // ── DER: writer ─────────────────────────────────────────────────────────
@@ -888,6 +926,35 @@ class Bytes
             }
         return out;
         }
+    // base64 in 64-column lines joined by CR LF — NSData's
+    // NSDataBase64Encoding64CharacterLineLength with no line-ending option,
+    // which is what the identity bundles have always been written with.
+    static String* base64Lines(Array* bytes)
+        {
+        String* flat = Pem.base64Encode(bytes);
+        String* out = String.withCString("");
+        u32 n = flat.byteLength();
+        for (u32 i = (u32)0; i < n; i = i + (u32)64)
+            {
+            if (i > (u32)0)
+                out.appendCString("\r\n");
+            u32 len = n - i < (u32)64 ? n - i : (u32)64;
+            out.append(flat.substringBytes(i, len));
+            }
+        return out;
+        }
+    // One PEM block: -----BEGIN L-----\n<base64 lines>\n-----END L-----\n
+    static String* block(String* label, Array* der)
+        {
+        String* s = String.withCString("-----BEGIN ");
+        s.append(label);
+        s.appendCString("-----\n");
+        s.append(Pem.base64Lines(der));
+        s.appendCString("\n-----END ");
+        s.append(label);
+        s.appendCString("-----\n");
+        return s;
+        }
     static Array* blocks(String* text)
         {
         Array* out = new Array();
@@ -1111,6 +1178,29 @@ class Bytes
                 return fail("bad passphrase (padding)");
         return Bytes.slice(plain, (u32)0, plain.count() - pad);
         }
+    // The inverse: wrap `keyDer` as an EncryptedPrivateKeyInfo under PBES2
+    // (PBKDF2-HMAC-SHA1, 2048 rounds, des-ede3-cbc) — the form macOS exports,
+    // so `decrypt` reads both. The caller supplies 8 bytes each of salt and IV
+    // from the OS; this class has no entropy of its own.
+    static Array* encrypt(Array* keyDer, String* passphrase, Array* salt, Array* iv)
+        {
+        u32 iters = (u32)2048;
+        Array* dk = Kdf.pbkdf2(false, Bytes.fromString(passphrase), salt, iters, (u32)24);
+        Array* padded = Bytes.copy(keyDer);
+        u32 pad = (u32)8 - (keyDer.count() % (u32)8);
+        for (u32 i = (u32)0; i < pad; i = i + (u32)1)
+            Bytes.add(padded, pad);
+        Array* ct = Des.cbcEncrypt3(dk, iv, padded);
+        if (ct == (Array*)0)
+            return (Array*)0;
+        Array* kdf = Der.sequence(Der.two(Der.oid(String.withCString("1.2.840.113549.1.5.12")),
+                                          Der.sequence(Der.two(Der.octetString(salt), Der.integerU32(iters)))));
+        Array* enc = Der.sequence(Der.two(Der.oid(String.withCString("1.2.840.113549.3.7")),
+                                          Der.octetString(iv)));
+        Array* algid = Der.sequence(Der.two(Der.oid(String.withCString("1.2.840.113549.1.5.13")),
+                                            Der.sequence(Der.two(kdf, enc))));
+        return Der.sequence(Der.two(algid, Der.octetString(ct)));
+        }
     }
 
     // ── the identity bundle ─────────────────────────────────────────────────
@@ -1242,6 +1332,18 @@ class Bytes
         id._modulus = n;
         id._privExp = d;
         return id;
+        }
+    // The bundle `fromPEM` reads: the leaf, its chain, the key block under
+    // `keyLabel`, and the entitlements XML when there is one.
+    static String* pemBundle(Array* leaf, Array* chain, Array* keyBlock, String* keyLabel, Array* entitlementsXml)
+        {
+        String* s = Pem.block(String.withCString("CERTIFICATE"), leaf);
+        for (u32 i = (u32)0; i < chain.count(); i = i + (u32)1)
+            s.append(Pem.block(String.withCString("CERTIFICATE"), (Array*)chain.get(i)));
+        s.append(Pem.block(keyLabel, keyBlock));
+        if (entitlementsXml != (Array*)0)
+            s.append(Pem.block(String.withCString("XCC ENTITLEMENTS"), entitlementsXml));
+        return s;
         }
     }
 

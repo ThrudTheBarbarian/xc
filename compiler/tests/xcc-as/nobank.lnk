@@ -1,0 +1,2 @@
+[memory]
+main = $2000-$3FFF

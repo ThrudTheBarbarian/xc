@@ -1,0 +1,3 @@
+#include "missing.lnk"
+[banking]
+window = $6000-$7FFF

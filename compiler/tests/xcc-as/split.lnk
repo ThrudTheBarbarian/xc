@@ -1,0 +1,8 @@
+# A split-bank layout: independent code and data selectors.
+[memory]
+main = $D800-$DFFF
+[banking]
+codeWindow = $6000-$7FFF
+dataWindow = $8000-$9FFF
+codeReg = $D5C0
+dataReg = $D5C1

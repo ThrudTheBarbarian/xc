@@ -14,8 +14,8 @@
 static void printUsage(void)
     {
     fprintf(stderr,
-            "xta — 6502 assembler\n"
-            "Usage: xta [options] <input.asm ...>\n"
+            "xcc-as — 6502 assembler\n"
+            "Usage: xcc-as [options] <input.asm ...>\n"
             "Options:\n"
             "  -D name[=value]  Define a symbol\n"
             "  -f <which>       Output format: xex (default), prg\n"
@@ -78,7 +78,7 @@ int main(int argc, const char* argv[])
                 }
             if ([arg isEqualToString:@"-v"] || [arg isEqualToString:@"--version"])
                 {
-                printf("xta %s\n", XTC_VERSION);
+                printf("xcc-as %s\n", XTC_VERSION);
                 return 0;
                 }
             if ([arg isEqualToString:@"-V"])

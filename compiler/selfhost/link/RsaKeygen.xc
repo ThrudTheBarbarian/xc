@@ -227,8 +227,9 @@ class Rsa
         return Bignum.divSmall(num, e);
         }
 
-    // Returns [n, e, d] as big-endian byte arrays, or an empty array on
-    // failure (no entropy, or a phi that shares a factor with e).
+    // Returns [n, e, d, p, q, dp, dq, qinv] as big-endian byte arrays, or an
+    // empty array on failure (no entropy, or a phi that shares a factor with
+    // e). Signing needs only the first three.
     static Array* generate(u32 bits)
         {
         u32 half = bits / (u32)2;
@@ -264,6 +265,16 @@ class Rsa
             eb.add((Object*)Number.withU32((u32)1)); // 0x010001 = 65537
             out.add((Object*)eb);
             out.add((Object*)d.toBytes(bits / (u32)8));
+            // The CRT parameters, for a full PKCS#1 key: p, q, d mod (p-1),
+            // d mod (q-1) and q^-1 mod p (Fermat: p is prime, so q^(p-2)).
+            Bignum* two = Bignum.fromU32((u32)2);
+            Bignum* pm2 = Bignum.copyOf(p);
+            Bignum.subInto(pm2, two);
+            out.add((Object*)p.toBytes(half / (u32)8));
+            out.add((Object*)q.toBytes(half / (u32)8));
+            out.add((Object*)Bignum.mod(d, p1).toBytes(half / (u32)8));
+            out.add((Object*)Bignum.mod(d, q1).toBytes(half / (u32)8));
+            out.add((Object*)Bignum.modexp(q, pm2, p).toBytes(half / (u32)8));
             return out;
             }
         return new Array();

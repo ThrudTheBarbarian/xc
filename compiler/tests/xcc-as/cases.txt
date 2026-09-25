@@ -1,0 +1,86 @@
+# One xcc-as invocation per line, run by both assemblers in identical copies
+# of this directory. @SUPPORT@ is the support tree; a leading env:NAME=VALUE
+# sets one environment variable. Everything each run writes is compared.
+basic.asm
+basic.asm -o out.xex -l out.lst
+basic.asm -f prg
+basic.asm -f PRG -o out.bin
+basic.asm -o out.prg
+basic.asm -o OUT.PRG
+basic.asm -f xex -o out.prg
+basic.asm -I inc -I . -l basic.lst
+prg.asm -o prg.prg
+prg.asm -f prg -l prg.lst
+empty.asm -f prg
+empty.asm
+warn.asm
+warn.asm -V
+warn.asm -D0abch=$40 -D 1FFH=2
+dup.asm
+modes.asm
+regions.asm -l r.lst
+spill.asm -l s.lst
+overflow.asm
+toofull.asm
+badregion.asm
+badrange.asm
+longbr.asm -l l.lst
+longbr.asm -V
+bank.asm -L @SUPPORT@/xt6502/layouts/xt.lnk -l b.lst
+bank.asm -L @SUPPORT@/xt6502/layouts/xt-heap.lnk
+bank.asm -b
+bank.asm -b -o bank.prg
+regc.asm -L regc.lnk
+regc.asm -L regc8.lnk
+regc.asm -L @SUPPORT@/xt6502/layouts/xt-test-fallover.lnk
+split.asm -L split.lnk
+split.asm -L small.lnk
+split.asm -b --split-bank --data-window $8000:$9FFF
+split.asm -L split.lnk --split-bank --data-window 0x8000:0x8FFF
+bigbank.asm -L split.lnk
+bigbank.asm -L @SUPPORT@/xt6502/layouts/xt.lnk
+bigmain.asm -L small.lnk
+shadow.asm
+shadow.asm -l sh.lst
+shadow.asm -L @SUPPORT@/xt6502/layouts/xt.lnk
+badstage.asm
+cloaked.asm -L @SUPPORT@/xt6502/layouts/xt.lnk
+cloaked.asm
+sym.asm
+sym.asm -s my.sym
+sym.asm -s missing.sym
+env:XCC_HOME=symhome sym.asm
+env:XTC_HOME="symhome" sym.asm
+env:XCC_HOME=symhome sym.asm -s my.sym
+defs.asm -DFOO=5 -D BAR=$20 -DBAZ
+defs.asm -DFOO=BAR+1 -D
+defs.asm -D FOO -DBAR=CH -DBAZ=%101
+part1.asm part2.asm
+part1.asm part2.asm -o both.xex -l both.lst
+part1.asm missing.asm
+missing.asm
+badutf8.asm
+crlf.asm
+inc
+-h
+-v
+--version
+basic.asm -h
+
+-q basic.asm
+basic.asm -o
+basic.asm --data-window
+basic.asm --data-window 6000
+basic.asm --data-window $6000:zz
+basic.asm --data-window $60 00:$7000 --split-bank -b
+basic.asm -L nokey.lnk
+basic.asm -L nosect.lnk
+basic.asm -L cloak1.lnk
+basic.asm -L cloak2.lnk
+basic.asm -L cloak3.lnk
+basic.asm -L noinc.lnk
+basic.asm -L missing.lnk
+basic.asm -L nobank.lnk
+basic.asm -L split.lnk -b
+-
+basic.asm -o nodir/x.xex

@@ -288,6 +288,9 @@ XCC_XC_WIN64_BIN = bin/win64/xcc-xc.exe
 # to nothing and ship the Objective-C signer again.
 XCC_SIGN_XC_LINUX_BIN = bin/linux/xcc-sign-xc
 XCC_SIGN_XC_WIN64_BIN = bin/win64/xcc-sign-xc.exe
+# The self-hosted 6502 assembler for the cross hosts, here for the same reason.
+XCC_AS_XC_LINUX_BIN = bin/linux/xcc-as-xc
+XCC_AS_XC_WIN64_BIN = bin/win64/xcc-as-xc.exe
 
 $(XCC_XC_LINUX_BIN): $(XTC_BIN) $(XCC_XC_SRC) $(wildcard selfhost/*/*.xc) \
                      $(wildcard support/generic/lib/*.xc) $(wildcard support/x86_64/lib/*.xc)
@@ -304,37 +307,89 @@ $(XCC_XC_WIN64_BIN): $(XTC_BIN) $(XCC_XC_SRC) $(wildcard selfhost/*/*.xc) \
 	            $(call XCC_XC_TARGET_INCS,win64)
 
 .PHONY: production-linux production-win64 production-all
-production-linux: $(XCC_XC_LINUX_BIN) $(XCC_SIGN_XC_LINUX_BIN)
-production-win64: $(XCC_XC_WIN64_BIN) $(XCC_SIGN_XC_WIN64_BIN)
+production-linux: $(XCC_XC_LINUX_BIN) $(XCC_SIGN_XC_LINUX_BIN) $(XCC_AS_XC_LINUX_BIN)
+production-win64: $(XCC_XC_WIN64_BIN) $(XCC_SIGN_XC_WIN64_BIN) $(XCC_AS_XC_WIN64_BIN)
 production-all:   production production-linux production-win64
 
-# The self-hosted signer beside it (iOS.md stage 1 / signing.md, bug 144):
-# identity code signing in xtc, byte-identical to xcc-sign for the same
-# identity. The install ships THIS one as xcc-sign.
+# The signer's host inputs. The engine is host-neutral: an Apple Development
+# identity exported once on a Mac signs, on an x86-64 Linux machine with no
+# Apple software, a Mach-O that macOS codesign -v validates through the full
+# chain. Two of its jobs reach outside the tree:
+#   --export-identity reads the macOS keychain through the Security framework,
+#     so only the macOS build has it (-DXT_HAVE_KEYCHAIN).
+#   --fetch-identity, --list-certs and --revoke-cert talk to App Store Connect
+#     over HTTPS, through the 3p tls module (tlsshim + Mbed TLS, linked
+#     statically; -DXT_HAVE_TLS). A host whose Mbed TLS is missing still gets
+#     a signer, and it says which flag needs a TLS build.
+TLS_SRC        ?= ../frameworks/3p/tls
+MBEDTLS_PREFIX ?= /opt/homebrew/opt/mbedtls
+MBEDTLS_LIBS    = mbedtls mbedx509 mbedcrypto tfpsacrypto
+XCC_SIGN_XC_DEPS = $(XTC_BIN) selfhost/tools/xtsign.xc $(wildcard selfhost/link/*.xc) \
+                   $(wildcard support/generic/lib/*.xc)
+XCC_SIGN_XC_INCS = -I selfhost/asm -I selfhost/link
+ifeq ($(UNAME_S),Darwin)
+  XCC_SIGN_XC_HOST = -DXT_HAVE_KEYCHAIN=1 -framework Security -framework CoreFoundation
+endif
+ifneq ($(wildcard $(TLS_SRC)/tlsshim.c),)
+ifneq ($(wildcard $(MBEDTLS_PREFIX)/lib/libmbedtls.a),)
+  XCC_SIGN_XC_TLS_DEPS = build/tls/tlsshim.o
+  XCC_SIGN_XC_TLS = -DXT_HAVE_TLS=1 -Wl,build/tls/tlsshim.o \
+                    $(foreach l,$(MBEDTLS_LIBS),-Wl,$(MBEDTLS_PREFIX)/lib/lib$(l).a)
+endif
+# Linux: the shim cross-compiled for musl and the vendored musl Mbed TLS (the
+# rule for build/linux/tls/tlsshim.o is with the Linux cross-build below).
+ifeq ($(UNAME_S),Darwin)
+ifneq ($(wildcard $(TLS_SRC)/mbedtls-linux/libmbedtls.a),)
+  XCC_SIGN_XC_LINUX_TLS_DEPS = build/linux/tls/tlsshim.o
+  XCC_SIGN_XC_LINUX_TLS = -DXT_HAVE_TLS=1 -Wl,build/linux/tls/tlsshim.o \
+                          $(foreach l,$(MBEDTLS_LIBS),-Wl,$(TLS_SRC)/mbedtls-linux/lib$(l).a)
+endif
+endif
+endif
+
+# The self-hosted signer (iOS.md stage 1 / signing.md, bug 144): identity code
+# signing in xtc, byte-identical to the reference for the same identity.
 XCC_SIGN_XC_BIN = $(BIN_DIR)/xcc-sign-xc
-$(XCC_SIGN_XC_BIN): $(XTC_BIN) selfhost/tools/xtsign.xc selfhost/link/CodeSign.xc \
-                    $(wildcard selfhost/link/*.xc) $(wildcard support/generic/lib/*.xc)
+$(XCC_SIGN_XC_BIN): $(XCC_SIGN_XC_DEPS) $(XCC_SIGN_XC_TLS_DEPS)
 	@echo "  xc   building the production signer with the bootstrap compiler"
-	@$(XTC_BIN) -O2 -A arm64 -H . -o $@ selfhost/tools/xtsign.xc -I selfhost/asm -I selfhost/link
+	@$(XTC_BIN) -O2 -A arm64 -H . $(XCC_SIGN_XC_HOST) $(XCC_SIGN_XC_TLS) -o $@ selfhost/tools/xtsign.xc \
+	            $(XCC_SIGN_XC_INCS)
 
-# ...and for the cross hosts. The signing ENGINE is host-neutral: an Apple
-# Development identity exported once on a Mac signs, on an x86-64 Linux machine
-# with no Apple software, a Mach-O that macOS codesign -v validates through the
-# full chain. Only --export-identity
-# and --fetch-identity need host keychain/TLS, and those stay with the
-# Objective-C xcc-sign, which ships beside these as xcc-sign-bootstrap.
-$(XCC_SIGN_XC_LINUX_BIN): $(XTC_BIN) selfhost/tools/xtsign.xc selfhost/link/CodeSign.xc \
-                    $(wildcard selfhost/link/*.xc) $(wildcard support/generic/lib/*.xc)
+# ...and for the cross hosts.
+$(XCC_SIGN_XC_LINUX_BIN): $(XCC_SIGN_XC_DEPS) $(XCC_SIGN_XC_LINUX_TLS_DEPS)
 	@echo "  xc   building the production signer for linux"
-	@$(XTC_BIN) -O2 -A x86_64 -H . -o $@ selfhost/tools/xtsign.xc -I selfhost/asm -I selfhost/link
+	@mkdir -p $(dir $@)
+	@$(XTC_BIN) -O2 -A x86_64 -H . $(XCC_SIGN_XC_LINUX_TLS) -o $@ selfhost/tools/xtsign.xc \
+	            $(XCC_SIGN_XC_INCS)
 
-$(XCC_SIGN_XC_WIN64_BIN): $(XTC_BIN) selfhost/tools/xtsign.xc selfhost/link/CodeSign.xc \
-                    $(wildcard selfhost/link/*.xc) $(wildcard support/generic/lib/*.xc)
+$(XCC_SIGN_XC_WIN64_BIN): $(XCC_SIGN_XC_DEPS)
 	@echo "  xc   building the production signer for win64"
-	@$(XTC_BIN) -O2 -A win64 -H . -o $@ selfhost/tools/xtsign.xc -I selfhost/asm -I selfhost/link
+	@mkdir -p $(dir $@)
+	@$(XTC_BIN) -O2 -A win64 -H . -o $@ selfhost/tools/xtsign.xc $(XCC_SIGN_XC_INCS)
+
+# The self-hosted 6502 assembler, xcc-as: selfhost/tools/xta6502.xc over the
+# assembler in selfhost/asm, for each host. xccas-diff compares its command
+# line with the reference's, option by option.
+XCC_AS_XC_SRCS = selfhost/tools/xta6502.xc selfhost/asm/Xta.xc selfhost/asm/Xa6502.xc \
+                 selfhost/asm/XtaHost.xc $(wildcard support/generic/lib/*.xc)
+XCC_AS_XC_BIN = $(BIN_DIR)/xcc-as-xc
+$(XCC_AS_XC_BIN): $(XTC_BIN) $(XCC_AS_XC_SRCS) $(wildcard support/arm64/lib/*.xc)
+	@echo "  xc   building the production assembler with the bootstrap compiler"
+	@$(XTC_BIN) -O2 -A arm64 -H . -DXCC_VERSION='"$(VERSION)"' -o $@ selfhost/tools/xta6502.xc -I selfhost/asm
+
+$(XCC_AS_XC_LINUX_BIN): $(XTC_BIN) $(XCC_AS_XC_SRCS) $(wildcard support/x86_64/lib/*.xc) \
+                        support/x86_64/runtime/sys-linux.s
+	@echo "  xc   building the production assembler for linux"
+	@mkdir -p $(dir $@)
+	@$(XTC_BIN) -O2 -A x86_64 -H . -DXCC_VERSION='"$(VERSION)"' -o $@ selfhost/tools/xta6502.xc -I selfhost/asm
+
+$(XCC_AS_XC_WIN64_BIN): $(XTC_BIN) $(XCC_AS_XC_SRCS) $(wildcard support/win64/lib/*.xc)
+	@echo "  xc   building the production assembler for win64"
+	@mkdir -p $(dir $@)
+	@$(XTC_BIN) -O2 -A win64 -H . -DXCC_VERSION='"$(VERSION)"' -o $@ selfhost/tools/xta6502.xc -I selfhost/asm
 
 .PHONY: production
-production: $(XCC_XC_BIN) $(XCC_SIGN_XC_BIN)
+production: $(XCC_XC_BIN) $(XCC_SIGN_XC_BIN) $(XCC_AS_XC_BIN)
 
 INSTALL_BINS = $(XTC_BIN) $(XTA_BIN) $(SIM_BIN) $(SIM68K_BIN) $(XTC_FE_BIN) \
                $(XTCG_6502_BIN) $(XTCG_ARM64_BIN) $(XTCG_68K_BIN) \
