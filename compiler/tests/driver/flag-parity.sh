@@ -284,7 +284,9 @@ for pair in x86-64:x86_64 amd64:x86_64 windows:win64 x86_64-windows:win64 \
     else bad "-A $al: status $RC, or not what -A $ca writes"; fi
 done
 same "--arch"               -q --arch x86_64 -o @OUT@ ret.xc
-pend "-A 68000, -A 68030"
+cover 68000 68030
+same "-A 68000"             -q -A 68000 -o @OUT@.prg ret.xc
+same "-A 68030"             -q -A 68030 -o @OUT@.prg ret.xc
 
 # ── memory layouts ──────────────────────────────────────────────────────
 cover -m --memory-model
@@ -442,14 +444,36 @@ grep -q "__data_end" xcout.wat && bad "__data_end exported without --link-libs" 
     || ok "no link-libs exports without --link-libs"
 xcconly "--link-libs (-A arm64, refused)" 1 "applies to -A wasm32" -q -A arm64 --link-libs -o @OUT@ ret.xc
 
-# ── options another change ports ────────────────────────────────────────
-for o in -fthread-safe-arc -fno-thread-safe-arc -fmalloc= -falloc= -fpic -fPIC -mpic \
-         -mhard-float -mfpu -msoft-float -g --no-self-host --needed --with-lib --lib-name \
-         --with-dex; do
-    cover $o
-    pend "$o"
-done
-pend "--emit-lib on win64, android, m68k and 6502"
+# ── code generation, linking and packaging ──────────────────────────────
+# caps-diff compares these byte for byte over a fixture sample; here each is
+# checked for acceptance, status and output kind on both drivers.
+cover -fthread-safe-arc -fno-thread-safe-arc -fmalloc= -falloc= -fpic -fPIC -mpic \
+      -mhard-float -mfpu -msoft-float -g --no-self-host --needed --with-lib --lib-name \
+      --with-dex
+same "-fthread-safe-arc"    -q -fthread-safe-arc -o @OUT@ ret.xc
+same "-fno-thread-safe-arc" -q -fno-thread-safe-arc -o @OUT@ ret.xc
+same "-fmalloc=system"      -q -A x86_64 -fmalloc=system -o @OUT@ ret.xc
+same "-fmalloc=mimalloc"    -q -A x86_64 -fmalloc=mimalloc -o @OUT@ ret.xc
+same "-falloc=heap"         -q -falloc=heap -o @OUT@ ret.xc
+same "-falloc=bump"         -q -falloc=bump -o @OUT@ ret.xc
+same "-fpic (m68k)"         -q -A m68k -fpic -o @OUT@.prg ret.xc
+same "-fPIC (m68k)"         -q -A m68k -fPIC -o @OUT@.prg ret.xc
+same "-mpic (m68k)"         -q -A m68k -mpic -o @OUT@.prg ret.xc
+same "-mhard-float (m68k)"  -q -A 68030 -mhard-float -o @OUT@.prg ret.xc
+same "-mfpu (m68k)"         -q -A 68030 -mfpu -o @OUT@.prg ret.xc
+same "-msoft-float (m68k)"  -q -A m68k -msoft-float -o @OUT@.prg ret.xc
+same "-g"                   -q -g -o @OUT@ ret.xc
+same "--no-self-host"       -q --no-self-host -o @OUT@ ret.xc
+same "--needed"             -q -A android --needed libfoo.so -o @OUT@ ret.xc
+"$XC" -H "$ROOT" -q -A android --emit-lib -o libextra.so ret.xc >/dev/null 2>&1
+printf 'dex\n035\0' > classes.dex
+same "--with-lib"           -q -A android --emit-apk --with-lib libextra.so -o @OUT@.apk ret.xc
+same "--lib-name"           -q -A android --emit-apk --lib-name main -o @OUT@.apk ret.xc
+same "--with-dex"           -q -A android --emit-apk --with-dex classes.dex -o @OUT@.apk ret.xc
+same "--emit-lib (android)" -q -A android --emit-lib -o @OUT@.so ret.xc
+xcconly "--emit-lib (m68k, refused)" 1 "has no shared-library format" -q -A m68k --emit-lib -o @OUT@ ret.xc
+xcconly "--emit-lib (6502, refused)" 1 "has no shared-library format" -q -A 6502 --emit-lib -o @OUT@ ret.xc
+xcconly "--emit-lib (win64, refused)" 1 "not supported for 'win64'" -q -A win64 --emit-lib -o @OUT@ ret.xc
 
 # Signing needs a developer identity; these are covered by the signing tests.
 cover --sign --sign-entitlements --sign-key
