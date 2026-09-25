@@ -13549,6 +13549,12 @@ class ClassInfo
             // parser already swapped NF_EXTERN for NF_EXPORTED on it.
             if (d.hasFlag((u32)NF_EXPORTED))
                 g.setAttr(String.withCString("exported"), true);
+            // A bodyless `extern` global is defined in another module (a C
+            // library or a framework's `kSecClass`): a reference through the
+            // GOT, no storage here. Without this it was emitted as a common
+            // symbol, so the program read its own zeroed copy.
+            if (d.hasFlag((u32)NF_EXTERN))
+                g.setAttr(String.withCString("extern"), true);
             // An initialised global carries its bytes, little-endian, folded
             // at compile time — the backend bakes the payload in, so the
             // initialiser is not code that runs.

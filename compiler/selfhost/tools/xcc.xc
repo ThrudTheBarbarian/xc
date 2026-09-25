@@ -2978,6 +2978,10 @@ DriverOptions* parseDriverArgs(void)
         if (a.equals(String.withCString("-D")) && i + (u32)1 < argc) {
             o.defs().add((Object*)Process.argument(i + (u32)1)); i = i + (u32)2; continue;
         }
+        // `-DNAME[=VALUE]`, attached, as cc spells it.
+        if (a.hasPrefix(String.withCString("-D")) && a.byteLength() > (u32)2) {
+            o.defs().add((Object*)a.substringFromByte((u32)2)); i = i + (u32)1; continue;
+        }
         // ── linker passthrough ───────────────────────────────────────
         //
         // This driver LINKS IN-HOUSE, so there is no clang to forward these to
