@@ -1553,8 +1553,18 @@ static XTCorpusOutcome runM68kPipeline(NSString *xtPath,
     NSString *rawSource  = [NSString stringWithContentsOfFile:xtPath
                                                      encoding:NSUTF8StringEncoding error:NULL];
 
-    NSMutableArray<NSString *> *xtcArgs =
-        [@[@"-mhard-float", @"-A", @"68030", @"-q"] mutableCopy];
+    // `//xtc-flags: m68k-soft-float` builds without the FPU instead, so the
+    // soft-float helpers (line-A math HLE) are what runs.
+    BOOL softFloat = NO;
+    for (NSString *line in [rawSource componentsSeparatedByString:@"\n"]) {
+        NSString *t = [line stringByTrimmingCharactersInSet:
+            [NSCharacterSet whitespaceCharacterSet]];
+        if (![t hasPrefix:@"//xtc-flags:"] && ![t hasPrefix:@"// xtc-flags:"]) continue;
+        if ([t rangeOfString:@"m68k-soft-float"].location != NSNotFound) softFloat = YES;
+    }
+    NSMutableArray<NSString *> *xtcArgs = softFloat
+        ? [@[@"-A", @"68030", @"-q"] mutableCopy]
+        : [@[@"-mhard-float", @"-A", @"68030", @"-q"] mutableCopy];
 
     // //xtc-link companion: m68k emits a whole-program image (like xt6502),
     // so "link" by compiling the pair as ONE unit — strip the caller's

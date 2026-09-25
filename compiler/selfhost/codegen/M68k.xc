@@ -4082,6 +4082,10 @@ class M68k
             _out.appendCString("\tmoveq\t#6,d3\n.pfp1:\n\tbra\t__fmt_dbl_soft\n\n");
             }
         emitXmOps();
+        if (!_hardFloat && usesHelper(String.withCString("_xm_powf")))
+            emitXmHLE(String.withCString("_xm_powf"), (u32)$4B);
+        if (!_hardFloat && usesHelper(String.withCString("_xm_pow")))
+            emitXmHLE(String.withCString("_xm_pow"), (u32)$5B);
         // pow(a,b) is exp(b*ln(a)) — there is no single 68881 instruction.
         if (_hardFloat && usesHelper(String.withCString("_xm_powf")))
             {
@@ -4161,10 +4165,13 @@ class M68k
     // `_xm_<op>f` (float) / `_xm_<op>` (double), each one FPU instruction whose
     // result the emulator (and the Zynq m68k JIT) computes with native libm.
     // A float returns in d0, a double in d0:d1.
+    //
+    // Without the FPU each helper is a line-A math HLE stub instead, like the
+    // soft-float arithmetic: selector $40+i for the float form of the i-th op
+    // below and $50+i for the double form, with pow at $4B / $5B. The
+    // arguments stay where the FPU bodies read them, on the stack from 4(sp).
     void emitXmOps(void)
         {
-        if (!_hardFloat)
-            return;
         Array* ops = new Array();
         Array* mns = new Array();
         addXm(ops, mns, "sqrt", "fsqrt");
@@ -4185,7 +4192,9 @@ class M68k
             String* fname = String.withCString("_xm_");
             fname.append(op);
             fname.appendCString("f");
-            if (usesHelper(fname))
+            if (usesHelper(fname) && !_hardFloat)
+                emitXmHLE(fname, (u32)$40 + i);
+            else if (usesHelper(fname))
                 {
                 _out.appendFormat("\t.globl\t_xm_%sf\n_xm_%sf:\n", op.cString(), op.cString());
                 _out.appendCString("\tfmove.s\t4(sp),fp0\n");
@@ -4194,7 +4203,9 @@ class M68k
                 }
             String* dname = String.withCString("_xm_");
             dname.append(op);
-            if (usesHelper(dname))
+            if (usesHelper(dname) && !_hardFloat)
+                emitXmHLE(dname, (u32)$50 + i);
+            else if (usesHelper(dname))
                 {
                 _out.appendFormat("\t.globl\t_xm_%s\n_xm_%s:\n", op.cString(), op.cString());
                 _out.appendCString("\tfmove.d\t4(sp),fp0\n");
@@ -4202,6 +4213,13 @@ class M68k
                 _out.appendCString("\tfmove.d\tfp0,-(sp)\n\tmove.l\t(sp)+,d0\n\tmove.l\t(sp)+,d1\n\trts\n\n");
                 }
             }
+        }
+
+    void emitXmHLE(String* nm, u32 sel)
+        {
+        u32 word = (u32)$A000 | sel;
+        _out.appendFormat("\t.globl\t%s\n%s:\n", nm.cString(), nm.cString());
+        _out.appendFormat("\t.dc.w\t$%s\t; line-A math HLE\n\trts\n\n", hex4(word).cString());
         }
 
     static void addXm(Array* ops, Array* mns, string op, string mn)

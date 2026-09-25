@@ -983,6 +983,41 @@ static int line_a_step(uint16_t op)
                 &D[0], &D[1]);
         break;
         }
+    /* Math.* transcendentals without the FPU (`_xm_<op>f` / `_xm_<op>`).
+     * Arguments are on the stack where the 68881 bodies read them: an f32 at
+     * 4(sp) (a second at 8(sp)), an f64 at 4(sp):8(sp) (a second at
+     * 12(sp):16(sp)). Each is computed in double and rounded once, as the FPU
+     * path does through a double FP register, so both float modes print the
+     * same digits. pow is exp(b*ln(a)), the FPU body's sequence. */
+    case 0x40: case 0x41: case 0x42: case 0x43: case 0x44: case 0x45:
+    case 0x46: case 0x47: case 0x48: case 0x49: case 0x4A: case 0x4B:
+    case 0x50: case 0x51: case 0x52: case 0x53: case 0x54: case 0x55:
+    case 0x56: case 0x57: case 0x58: case 0x59: case 0x5A: case 0x5B:
+        {
+        int isF = sel < 0x50;
+        double x = isF ? (double)la_f32(rd32(sp + 4)) : a64;
+        double y = isF ? (double)la_f32(rd32(sp + 8)) : b64;
+        switch (sel & 0x0F)
+            {
+        case 0x0: r64 = sqrt(x); break;
+        case 0x1: r64 = sin(x); break;
+        case 0x2: r64 = cos(x); break;
+        case 0x3: r64 = tan(x); break;
+        case 0x4: r64 = atan(x); break;
+        case 0x5: r64 = asin(x); break;
+        case 0x6: r64 = acos(x); break;
+        case 0x7: r64 = log(x); break;
+        case 0x8: r64 = exp(x); break;
+        case 0x9: r64 = log10(x); break;
+        case 0xA: r64 = log2(x); break;
+        default: r64 = exp(y * log(x)); break;
+            }
+        if (isF)
+            D[0] = la_f32b((float)r64);
+        else
+            la_f64d(r64, &D[0], &D[1]);
+        break;
+        }
     default:
         fprintf(stderr, "[line-a] unknown math selector $%03X at PC=$%06X\n", sel, PC - 2);
         return 1; /* halt: unimplemented HLE op */
