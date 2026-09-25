@@ -109,7 +109,7 @@ linker or `clang`.
 | `-Xlinker <file>` | Link a library or object file named by path. |
 | `-Wl,<file>[,<file>…]` | The same, in the form clang users write. `xcc` links in-house, so a linker *flag* here is an error; `xcc-bootstrap` passes flags on. |
 | `--self-host` | In-house assemble + link + sign. This is the default; the flag is accepted but has no effect. |
-| `--no-self-host` | Use the `clang` link path instead. **`xcc-bootstrap` only.** |
+| `--no-self-host` | Hand the link to the platform toolchain instead: `clang` for arm64 macOS, the Android NDK's `clang` for `-A android` (executables and `--emit-apk`), and `arm-none-eabi-gcc` for arm9. Those tools must be installed. x86_64, win64, iOS and arm64 libraries link in-house only; m68k, 6502 and wasm32 images are always written in-house. |
 | `-fpic`, `-fPIC`, `-mpic` | Position-independent code. On m68k it selects the GOT/`a5` model, which lifts the 32 KB limit on a 68000 program. arm64, android and arm9 code is always position-independent, and `--emit-lib` implies it. |
 
 ## Shared libraries

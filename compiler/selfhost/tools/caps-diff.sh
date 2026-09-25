@@ -48,7 +48,12 @@ SETS=(".prg -A 68000"
       "-A android --needed libfoo.so"
       ".apk -A android --emit-apk --needed libfoo.so --lib-name main"
       ".so -A android --emit-lib"
-      "-falloc=heap -fmalloc=system")
+      "-falloc=heap -fmalloc=system"
+      # The vendor-toolchain path: host clang and the NDK. A machine without
+      # them counts these as oracle failures, not passes.
+      "--no-self-host"
+      "-A android --no-self-host"
+      ".apk -A android --emit-apk --no-self-host")
 
 pass=0; fail=0; unsup=0; oracle=0
 declare -a FAILED UNSUP

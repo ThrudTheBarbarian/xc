@@ -312,7 +312,7 @@ static NSString *arm64StubSourceEx(NSString *asmText, BOOL forLibrary) {
             @"void *_xtc_alloc(unsigned long count,unsigned long stride,void(*dealloc)(void*)){"
             @"if(count<1)count=1;unsigned long b=count*stride; if(b<256)b=256;"
             @"uint8_t*p=(uint8_t*)calloc(1,b+38);"
-            @"if(!p){fprintf(stderr,\"xcc: out of memory (%%lu x %%lu bytes)\\n\",count,stride);abort();}"
+            @"if(!p){fprintf(stderr,\"xcc: out of memory (%lu x %lu bytes)\\n\",count,stride);abort();}"
             @"*(uint32_t*)(p+0)=0x58544F42U;*(unsigned long*)(p+4)=stride;*(unsigned long*)(p+12)=count;"
             @"*(void(**)(void*))(p+20)=dealloc;*(void**)(p+28)=0;*(uint16_t*)(p+36)=1;return p+38;}\n"];
     }
@@ -506,7 +506,7 @@ static NSString *arm9StubSource(NSString *asmText, BOOL forLibrary) {
             @"void *_xtc_alloc(unsigned long count,unsigned long stride,void(*dealloc)(void*)){"
             @"if(count<1)count=1;unsigned long b=count*stride; if(b<256)b=256;"
             @"uint8_t*p=(uint8_t*)calloc(1,b+24);"
-            @"if(!p){fprintf(stderr,\"xcc: out of memory (%%lu x %%lu bytes)\\n\",count,stride);abort();}"
+            @"if(!p){fprintf(stderr,\"xcc: out of memory (%lu x %lu bytes)\\n\",count,stride);abort();}"
             @"*(uint32_t*)(p+0)=0x58544F42U;*(uint32_t*)(p+4)=(uint32_t)stride;*(uint32_t*)(p+8)=(uint32_t)count;"
             @"*(void(**)(void*))(p+12)=dealloc;*(void**)(p+16)=0;*(uint16_t*)(p+22)=1;return p+24;}\n"];
     }

@@ -133,7 +133,7 @@ shards_for() {
         xcc)                 echo 4 ;;
         bin)                 echo 6 ;;   # five targets, two in-house links a fixture: ~2.7 h unsharded (measured 2026-09-04)
         wrap65)              echo 3 ;;
-        caps)                echo 2 ;;   # 16 flag sets over one fixture in sixteen
+        caps)                echo 2 ;;   # 19 flag sets over one fixture in sixteen
         x65)                 echo 3 ;;   # not dispatched; for a manual run
         *)                   echo 1 ;;
     esac
