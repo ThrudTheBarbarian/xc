@@ -1114,9 +1114,42 @@ void emitWasm(DriverOptions* d, IRModule* mod)
         Stdio.printf("xcc: error: cannot write '%s'\n", wasmPath.cString());
         Process.exit((i32)1); return;
     }
+    // A starter page beside them, so the module runs in a browser as well as
+    // under node. Written only when there is none: the page is the user's to
+    // change, and a rebuild must not undo that.
+    String* htmlPath = String.withString(base);
+    htmlPath.appendCString(".html");
+    if (!Files.exists(htmlPath)) Files.writeText(htmlPath, starterHtml(baseNameOf(base)));
     if (!d.quiet())
         Stdio.printf("xcc: wasm32 module -> '%s.wasm' + '%s.js' (run: node %s.js)\n",
                      base.cString(), base.cString(), base.cString());
+}
+
+// The starter page: the program's stdout into a <pre>, through the loader's
+// xccOut hook. Byte for byte the page the reference linker writes.
+String* starterHtml(String* n)
+{
+    u8* b = n.cString();
+    String* h = String.withFormat("<!doctype html>\n"
+        "<!-- Generated once by xcc-ln-wasm32 for %s.wasm — edit freely; a rebuild\n"
+        "     rewrites %s.js and %s.wasm but leaves this page alone. -->\n", b, b, b);
+    h.appendCString("<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n");
+    h.append(String.withFormat("<title>%s</title>\n", b));
+    h.appendCString("<style>\n"
+        "  body { background: #1e1e1e; color: #d4d4d4; font: 14px/1.5 ui-monospace, monospace;\n"
+        "         margin: 2rem; }\n"
+        "  pre  { white-space: pre-wrap; }\n"
+        "</style>\n</head>\n<body>\n");
+    h.append(String.withFormat("<h1>%s</h1>\n", b));
+    h.appendCString("<pre id=\"out\"></pre>\n<script>\n"
+        "  const out = document.getElementById(\"out\");\n"
+        "  globalThis.xccOut = (line) => { out.textContent += line + \"\\n\"; };\n"
+        "  // Host packages (#package): define before the loader runs, e.g.\n"
+        "  // globalThis.xccImports = { js: { jsPing: (v) => console.log(v) } };\n"
+        "</script>\n");
+    h.append(String.withFormat("<script src=\"%s.js\"></script>\n", b));
+    h.appendCString("</body>\n</html>\n");
+    return h;
 }
 
 // ── m68k / Atari ST ──────────────────────────────────────────────────────
