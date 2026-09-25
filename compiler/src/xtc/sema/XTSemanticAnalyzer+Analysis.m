@@ -1430,6 +1430,35 @@
     return YES;
     }
 
+// The method of `c` that overrides or implements `want`: the first whose
+// parameters match, EXCEPT that when several do — overloads that differ only by
+// return type, as `Number.value()` has ten of — the one returning the same type
+// wins. Taking the first put `value__v_i8` in all ten of Number's `value` slots
+// in a library build, and published `_cls_Number_value__v_i8` at the slot of
+// `value__v_u8` (bug 252). Mirrors `Vtable.matching` in the port.
+- (nullable XTMethodDeclNode*)methodIn:(XTClassDeclNode*)c matching:(XTMethodDeclNode*)want
+    {
+    XTMethodDeclNode* first = nil;
+    for (XTMethodDeclNode* cm in c.methods)
+        {
+        if (![self methodSignaturesMatch:cm and:want])
+            continue;
+        if ([[self returnSpelling:cm] isEqualToString:[self returnSpelling:want]])
+            return cm;
+        if (!first)
+            first = cm;
+        }
+    return first;
+    }
+
+- (NSString*)returnSpelling:(XTMethodDeclNode*)m
+    {
+    NSMutableArray<NSString*>* parts = [NSMutableArray array];
+    for (XTType* t in m.returnTypes)
+        [parts addObject:t.displayName ?: @"void"];
+    return [parts componentsJoinedByString:@","];
+    }
+
 /****************************************************************************\
 |* PR5 init-chain wiring. For every class that (a) has a parent,
 |* (b) declares its own init method, and (c) doesn't already call
@@ -1901,15 +1930,7 @@
             // ancestors don't add new information.
             for (XTClassDeclNode* a = cls.parentClass; a != nil; a = a.parentClass)
                 {
-                XTMethodDeclNode* match = nil;
-                for (XTMethodDeclNode* m in a.methods)
-                    {
-                    if ([self methodSignaturesMatch:m and:child])
-                        {
-                        match = m;
-                        break;
-                        }
-                    }
+                XTMethodDeclNode* match = [self methodIn:a matching:child];
                 if (match)
                     {
                     // §4.3b: a chain-dispatched method that arrived through an
@@ -2257,15 +2278,8 @@
                 XTClassDeclNode* implCls = nil;
                 for (XTClassDeclNode* c = cls; c != nil; c = c.parentClass)
                     {
-                    for (XTMethodDeclNode* cm in c.methods)
-                        {
-                        if ([self methodSignaturesMatch:cm and:reqM])
-                            {
-                            impl = cm;
-                            implCls = c;
-                            break;
-                            }
-                        }
+                    impl = [self methodIn:c matching:reqM];
+                    implCls = c;
                     if (impl)
                         break;
                     }
@@ -2335,13 +2349,10 @@
                     XTMethodDeclNode* impl = nil;
                     XTClassDeclNode* implCls = nil;
                     for (XTClassDeclNode* k = cls; k != nil && !impl; k = k.parentClass)
-                        for (XTMethodDeclNode* cm in k.methods)
-                            if ([self methodSignaturesMatch:cm and:reqM])
-                                {
-                                impl = cm;
-                                implCls = k;
-                                break;
-                                }
+                        {
+                        impl = [self methodIn:k matching:reqM];
+                        implCls = k;
+                        }
                     [row addObject:(impl ? [NSString stringWithFormat:@"%@$%@",
                                                                       implCls.className, (impl.mangledName ?: impl.methodName)]
                                          : @"")];
@@ -2422,15 +2433,8 @@
             XTClassDeclNode* implCls = nil;
             for (XTClassDeclNode* c = cls; c != nil; c = c.parentClass)
                 {
-                for (XTMethodDeclNode* cm in c.methods)
-                    {
-                    if ([self methodSignaturesMatch:cm and:rootMethod])
-                        {
-                        impl = cm;
-                        implCls = c;
-                        break;
-                        }
-                    }
+                impl = [self methodIn:c matching:rootMethod];
+                implCls = c;
                 if (impl)
                     break;
                 if (c == rootCls)
@@ -2479,13 +2483,21 @@
                 continue;
                 }
             NSNumber* slotNum = pristineSlots[rootLabel];
-            if (!slotNum)
-                slotNum = self->_virtualSlotByLabel[rootLabel];
             // Per-class numbering (bug 201, library build) gives a slot only to a
             // TRUE root; an override's own label has none (its impl is placed at
             // the root's slot when this loop reaches the root label). Without the
             // global counter's "every label gets a number", a missing slot here
             // is an override label — skip it rather than use a nil dictionary key.
+            //
+            // Only the PRISTINE numbering counts in a library build. By now the
+            // conformance pass above has bound an override label such as
+            // `_cls_Number_equals__pCObject` to a PROTOCOL slot (Hashable's), and
+            // reading that back made the label look like a root: it pre-filled
+            // the protocol's slots and put a protocol slot in the name map, so
+            // `n.equals(x)` in a library dispatched through Comparable's slot
+            // while the shipped compiler used Hashable's (bug 253).
+            if (!slotNum && !self.libraryBuild)
+                slotNum = self->_virtualSlotByLabel[rootLabel];
             if (!slotNum)
                 continue;
             slots[slotNum] = implLabel;
@@ -2502,6 +2514,7 @@
         // every protocol the class lists (directly or through an
         // ancestor), find the class's matching impl and store it
         // at the protocol-method's slot.
+        NSSet<NSString*>* rootNamed = [NSSet setWithArray:nameSlot.allKeys];
         for (XTClassDeclNode* c = cls; c != nil; c = c.parentClass)
             {
             for (NSString* pname in c.protocolNames)
@@ -2522,15 +2535,8 @@
                     XTClassDeclNode* implCls = nil;
                     for (XTClassDeclNode* w = cls; w != nil; w = w.parentClass)
                         {
-                        for (XTMethodDeclNode* cm in w.methods)
-                            {
-                            if ([self methodSignaturesMatch:cm and:reqM])
-                                {
-                                impl = cm;
-                                implCls = w;
-                                break;
-                                }
-                            }
+                        impl = [self methodIn:w matching:reqM];
+                        implCls = w;
                         if (impl)
                             break;
                         }
@@ -2544,7 +2550,16 @@
                     slotSym[slotNum] = [NSString stringWithFormat:@"%@$%@",
                                                                   implCls.className,
                                                                   (impl.mangledName ?: impl.methodName)];
-                    nameSlot[reqM.methodName] = slotNum;
+                    // A CLASS-typed call keeps the class's own root slot when
+                    // it has one. The protocol's slot holds the same body in
+                    // this module, but its number is not part of a library's
+                    // interface for a prelude protocol (Comparable, Hashable),
+                    // so a client's subclass has something else there: a
+                    // library's `box.equals(x)` on a client's `Box` subclass
+                    // ran whatever the client kept at that index (bug 253).
+                    // A name only a protocol provides still takes its slot.
+                    if (![rootNamed containsObject:reqM.methodName])
+                        nameSlot[reqM.methodName] = slotNum;
                     }
                 }
             }

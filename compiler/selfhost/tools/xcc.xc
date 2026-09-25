@@ -2126,16 +2126,31 @@ void emitArm9(DriverOptions* d, IRModule* mod)
     // has mapped, so every library that might satisfy one has to be listed —
     // `pow` lives in libm.so, and recording only libc.so is how a program
     // linked cleanly and then failed to LOAD.
+    //
+    // ORDER is the reference's: the auto-imported libc is the first library
+    // its front end records, ahead of every `#import <X>`, then libc and libm
+    // again, each name once. Listing the imports first put libGEM.so ahead of
+    // libc.so in crossmod/bmlib.
     Array* needed = new Array();
+    Array* order = new Array();
+    if (arm9SysrootLib(d, String.withCString("libc.so")) != (String*)0)
+        order.add((Object*)String.withCString("libc.so"));
     Array* nl = d.fe().neededLibs();
     for (u32 i = (u32)0; nl != (Array*)0 && i < nl.count(); i = i + (u32)1)
-        needed.add((Object*)((String*)nl.get(i)).lastPathComponent());
+        order.add((Object*)((String*)nl.get(i)).lastPathComponent());
     Array* sysLibs = new Array();
     sysLibs.add((Object*)String.withCString("libc.so"));
     sysLibs.add((Object*)String.withCString("libm.so"));
     for (u32 i = (u32)0; i < sysLibs.count(); i = i + (u32)1)
         if (arm9SysrootLib(d, (String*)sysLibs.get(i)) != (String*)0)
-            needed.add(sysLibs.get(i));
+            order.add(sysLibs.get(i));
+    for (u32 i = (u32)0; i < order.count(); i = i + (u32)1) {
+        String* n = (String*)order.get(i);
+        bool seen = false;
+        for (u32 k = (u32)0; k < needed.count(); k = k + (u32)1)
+            if (((String*)needed.get(k)).equals(n)) seen = true;
+        if (!seen) needed.add((Object*)n);
+    }
 
     Array* iface = new Array();
     String* ij = d.fe().ifaceJson();

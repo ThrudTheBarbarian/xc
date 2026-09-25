@@ -27,6 +27,7 @@
 #import "Foundation.xc"
 #import "Node.xc"
 #import "Vtable.xc"
+#import "Iface.xc"
 
 class IfaceWrite
 {
@@ -503,7 +504,7 @@ class IfaceWrite
         return prelude.contains((Hashable*)f);
     }
 
-    static String* json(Node* program, Vtable* vt, Set* prelude)
+    static String* json(Node* program, Vtable* vt, Set* prelude, Array* cImports)
     {
         String* out = new String();
         out.appendCString("{\n");
@@ -892,8 +893,16 @@ class IfaceWrite
             IfaceWrite.kv(out, "target", IfaceWrite.esc(d.op()), false);
             out.appendCString("}");
         }
-        out.appendCString("], \"cImports\": []\n");
+        // The C libraries this module's `#import <X>` named. A client
+        // re-imports each through its own DWARF reader rather than trusting
+        // a copy of their types here.
+        out.appendCString("], \"cImports\": [");
+        for (u32 i = (u32)0; cImports != (Array*)0 && i < cImports.count(); i = i + (u32)1) {
+            if (i > (u32)0) out.appendCString(", ");
+            out.appendFormat("\"%s\"", IfaceWrite.esc((String*)cImports.get(i)).cString());
+        }
+        out.appendCString("]\n");
         out.appendCString("}\n");
-        return out;
+        return JsonVal.canonical(out);
     }
 }

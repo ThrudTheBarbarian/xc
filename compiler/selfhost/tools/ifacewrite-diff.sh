@@ -16,11 +16,11 @@
 # interface is a front-end fact and running two full library builds per file
 # would make the harness the slowest stage in all-diff for nothing.
 #
-# The comparison is SEMANTIC, not byte-for-byte, and deliberately: the
-# reference serialises with NSJSONSerialization, whose key order is sorted only
-# on Apple platforms (NSJSONWritingSortedKeys is absent in GNUstep 1.31), so
-# its own output is not byte-stable across hosts. What must match is the
-# CONTENT — the importer reads the object back by key.
+# The comparison is SEMANTIC first, so a difference is reported as the key
+# that differs, and then BYTE for byte: the interface is embedded in every
+# library, and both writers emit the same canonical JSON (no whitespace, keys
+# sorted by their bytes). While the reference pretty-printed and the port did
+# not, this harness passed 847/0 and every library differed (bug 252).
 #
 #   bash selfhost/tools/ifacewrite-diff.sh [pattern]
 
@@ -83,7 +83,11 @@ for f in $FILES; do
         fail=$((fail+1)); FAILED+=("$f (shipped compiler: $(head -1 "$WORK/x.err"))"); continue
     fi
     if out=$(python3 "$WORK/cmp.py" "$WORK/x.json" "$WORK/r.json" 2>&1); then
-        pass=$((pass+1))
+        if cmp -s "$WORK/x.json" "$WORK/r.json"; then
+            pass=$((pass+1))
+        else
+            fail=$((fail+1)); FAILED+=("$f (same content, different bytes)")
+        fi
     else
         fail=$((fail+1)); FAILED+=("$f"$'\n'"$out")
     fi

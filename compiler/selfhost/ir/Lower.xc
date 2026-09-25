@@ -847,6 +847,13 @@ class ClassInfo
         String* pn = base.substringBytes((u32)0, base.byteLength() - (u32)1);
         if (_classDecls.get((Hashable*)pn) != 0)
             return true;
+        // A PROTOCOL pointee is an object too: the reference's type for
+        // `weak : VDel* del` is class-kind, so the slot auto-zeroes. Read as
+        // a plain strong pointer, the field lost its two link words, every
+        // ivar after it moved, and the store retained where it should have
+        // registered (crossmod/bmlib's VApp).
+        if (_protocols.get((Hashable*)pn) != 0)
+            return true;
         return classFor(pn) != 0;
         }
 
@@ -1127,6 +1134,14 @@ class ClassInfo
         {
         if (isArrayLike(t))
             return alignOf(elementOf(t));
+        // A `^` is a PAIR of pointers, and aligns as one pointer — as the
+        // reference lays it out. Its two-word width is a power of two, so the
+        // rule below gave it double alignment: on arm9 and wasm32 a `^` field
+        // after a u32 sat at 16 instead of 12, and every ivar after it moved,
+        // so a library and a client built by different compilers disagreed
+        // about the object's layout.
+        if (isBoundSig(stripQual(t)) && _ptrW != (u32)0 && (_ptrW & (_ptrW - (u32)1)) == (u32)0)
+            return _ptrW;
         Node* st = structDeclFor(t);
         if (st != 0)
             {
@@ -5136,6 +5151,15 @@ class ClassInfo
                     byName = (Object*)0;
                 }
             d = byName;
+            }
+        // The analyser demoted an auto-imported C proto below a `use`-promoted
+        // static and named the class on the call: `printf` on arm9 is both
+        // libc's and Stdio's, under one symbol name.
+        if (d != 0 && ((Node*)d).hasFlag((u32)NF_CABI) && n.cls() != 0)
+            {
+            ClassInfo* dc = classFor(n.cls());
+            if (dc != 0 && methodDeclFor(dc, n) != 0)
+                return lowerUsedStaticCall(dc, n);
             }
         if (d == 0)
             {
@@ -12287,7 +12311,15 @@ class ClassInfo
                 if (m.hasFlag((u32)NF_STATIC))
                     continue;
                 if (want != 0 && paramsMatch(m, want))
-                    return methodSymbolName(c, m);
+                    {
+                    // Several overloads can match the parameters when they
+                    // differ only by return type (`Number.value()`): the one
+                    // returning the same type is the implementation (bug 252).
+                    Node* exact = Vtable.matching(c, want);
+                    if (exact == 0 || exact.hasFlag((u32)NF_SYNTH) || exact.hasFlag((u32)NF_STATIC))
+                        exact = m;
+                    return methodSymbolName(c, exact);
+                    }
                 if (fallback == 0)
                     fallback = m;
                 }
@@ -12572,6 +12604,17 @@ class ClassInfo
                 // the authority on which one owns this slot; ask it first.
                 if (want == 0)
                     want = overloadForSlot(owner, mn, s);
+                // …or the ROOT that owns the slot. A class-typed call keeps
+                // its root slot (bug 253), so the name map can name a slot
+                // whose overload this class declares under another label:
+                // `String.equals` is Object's slot 1, and the first-declared
+                // `equals(String@)` is not what goes there.
+                if (want == 0)
+                    {
+                    Node* rm = rootMethodForSlot(s);
+                    if (rm != 0 && rm.name() != 0 && rm.name().equals(mn))
+                        want = rm;
+                    }
                 if (want == 0)
                     want = methodNamed(owner, mn);
                 String* sym = implementorOf(cls, mn, want);
@@ -12591,6 +12634,43 @@ class ClassInfo
         // requirement, or another class's slot in this class's table — and
         // filling those from the label map puts a symbol in every one of them.
         return overloadSlotSymbol(cls, s);
+        }
+
+    // The method whose ROOT label (`_cls_<Class>_<mangled>`) the analyser
+    // numbered `s`, or null.
+    Node* rootMethodForSlot(u32 s)
+        {
+        if (_vt == 0)
+            return (Node*)0;
+        Array* rl = _vt.rootLabels();
+        for (u32 i = (u32)0; rl != 0 && i < rl.count(); i = i + (u32)1)
+            {
+            String* L = (String*)rl.get(i);
+            Object* sl = _vt.slotForLabel(L);
+            if (sl == 0 || ((Number*)sl).asU32() != s)
+                continue;
+            if (!L.hasPrefix(String.withCString("_cls_")))
+                continue;
+            String* tail = L.substringFromByte((u32)5);
+            u32 us = tail.indexOfByte((u8)'_');
+            if (us == String.notFound())
+                continue;
+            Object* co = _classDecls.get((Hashable*)tail.substringBytes((u32)0, us));
+            if (co == 0)
+                continue;
+            Node* rc = (Node*)co;
+            String* key = tail.substringFromByte(us + (u32)1);
+            for (u32 k = (u32)0; k < rc.kidCount(); k = k + (u32)1)
+                {
+                Node* m = rc.kid(k);
+                if (m.kind() != (u16)nkMethodDecl)
+                    continue;
+                String* mk = m.sym() == 0 ? m.name() : m.sym();
+                if (mk != 0 && mk.equals(key))
+                    return m;
+                }
+            }
+        return (Node*)0;
         }
 
     // The overload of `mn` on `owner` whose own label claims slot `s`, or null

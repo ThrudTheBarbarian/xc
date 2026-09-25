@@ -3,6 +3,72 @@
 #import "XTDeclNodes.h"
 #import "XTType.h"
 
+// The interface as CANONICAL JSON: no whitespace, object keys sorted by their
+// UTF-8 bytes, `/` unescaped, a control byte as `\n`, `\t`, `\r` or `\u00XX`.
+// The text is embedded in every library (`__XTC,__iface`, `.xtc.iface`, the
+// wasm custom section), so it is part of the binary, and the shipped compiler
+// writes the same bytes (`JsonVal.canonical`). NSJSONSerialization cannot give
+// that: its pretty-printed form nearly doubles the section, and it sorts keys
+// only on Apple platforms.
+static void appendCanonicalString(NSMutableString *out, NSString *s) {
+    NSData *utf8 = [s dataUsingEncoding:NSUTF8StringEncoding] ?: [NSData data];
+    const unsigned char *p = utf8.bytes;
+    NSMutableData *b = [NSMutableData dataWithCapacity:utf8.length + 2];
+    [b appendBytes:"\"" length:1];
+    for (NSUInteger i = 0; i < utf8.length; i++) {
+        unsigned char c = p[i];
+        char esc[8];
+        if (c == '"' || c == '\\') { esc[0] = '\\'; esc[1] = (char)c; [b appendBytes:esc length:2]; }
+        else if (c == '\n') [b appendBytes:"\\n" length:2];
+        else if (c == '\t') [b appendBytes:"\\t" length:2];
+        else if (c == '\r') [b appendBytes:"\\r" length:2];
+        else if (c < 0x20) { snprintf(esc, sizeof esc, "\\u%04x", c); [b appendBytes:esc length:6]; }
+        else [b appendBytes:&c length:1];
+    }
+    [b appendBytes:"\"" length:1];
+    [out appendString:[[NSString alloc] initWithData:b encoding:NSUTF8StringEncoding] ?: @"\"\""];
+}
+
+static void appendCanonicalJSON(NSMutableString *out, id v) {
+    if ([v isKindOfClass:[NSDictionary class]]) {
+        NSDictionary *d = v;
+        NSArray *keys = [d.allKeys sortedArrayUsingComparator:^NSComparisonResult(NSString *a, NSString *b) {
+            int c = strcmp(a.UTF8String, b.UTF8String);
+            return c < 0 ? NSOrderedAscending : c > 0 ? NSOrderedDescending : NSOrderedSame;
+        }];
+        [out appendString:@"{"];
+        BOOL first = YES;
+        for (NSString *k in keys) {
+            if (!first) [out appendString:@","];
+            first = NO;
+            appendCanonicalString(out, k);
+            [out appendString:@":"];
+            appendCanonicalJSON(out, d[k]);
+        }
+        [out appendString:@"}"];
+    } else if ([v isKindOfClass:[NSArray class]]) {
+        [out appendString:@"["];
+        BOOL first = YES;
+        for (id e in (NSArray *)v) {
+            if (!first) [out appendString:@","];
+            first = NO;
+            appendCanonicalJSON(out, e);
+        }
+        [out appendString:@"]"];
+    } else if ([v isKindOfClass:[NSString class]]) {
+        appendCanonicalString(out, v);
+    } else if ([v isKindOfClass:[NSNumber class]]) {
+        // A BOOL boxes as 'c' (or 'B' where BOOL is C99 bool).
+        const char *t = [(NSNumber *)v objCType];
+        if (t[0] == 'c' || t[0] == 'B')
+            [out appendString:[(NSNumber *)v boolValue] ? @"true" : @"false"];
+        else
+            [out appendFormat:@"%lld", [(NSNumber *)v longLongValue]];
+    } else {
+        [out appendString:@"null"];
+    }
+}
+
 @implementation XTInterfaceSerializer
 
 // One method signature → dict {name, static, varargs, symbol, params[], returns[]}.
@@ -312,19 +378,9 @@
                             @"methodSlots":   prunedMethodSlots,
                             @"ambientSlots":  ambientSlots,
                             @"cImports":      cImports      ?: @[] };
-    NSError *err = nil;
-    // NSJSONWritingSortedKeys (macOS 10.13+) gives deterministic key order but is
-    // absent in GNUstep 1.31; the importer reads the object back by key, so its
-    // only effect is byte-stability, not correctness. Use it where available.
-    NSJSONWritingOptions jsonOpts = NSJSONWritingPrettyPrinted;
-#if defined(__APPLE__)
-    jsonOpts |= NSJSONWritingSortedKeys;
-#endif
-    NSData *data = [NSJSONSerialization dataWithJSONObject:root
-                                                  options:jsonOpts
-                                                    error:&err];
-    if (!data) return nil;
-    return [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    NSMutableString *out = [NSMutableString string];
+    appendCanonicalJSON(out, root);
+    return out;
 }
 
 @end

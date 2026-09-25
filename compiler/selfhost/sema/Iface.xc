@@ -92,6 +92,107 @@ class JsonVal
             v._keys = new Array();
         return v;
         }
+
+    // The interface as CANONICAL JSON: no whitespace, object keys sorted by
+    // their bytes, `/` unescaped, a control byte as `\n`, `\t`, `\r` or
+    // `\u00XX`. The text is embedded in every library, so it is part of the
+    // binary, and the reference writes the same bytes
+    // (`XTInterfaceSerializer`'s `appendCanonicalJSON`). Text that does not
+    // parse comes back unchanged.
+    static String* canonical(String* json)
+        {
+        JsonVal* v = JsonParser.parse(json);
+        if (v == (JsonVal*)0)
+            return json;
+        String* out = new String();
+        v.write(out);
+        return out;
+        }
+
+    static void writeStr(String* out, String* s)
+        {
+        out.appendByte((u8)'"');
+        for (u32 i = (u32)0; s != (String*)0 && i < s.byteLength(); i = i + (u32)1)
+            {
+            u8 c = s.byteAt(i);
+            if (c == (u8)'"' || c == (u8)92)
+                {
+                out.appendByte((u8)92);
+                out.appendByte(c);
+                }
+            else if (c == (u8)10)
+                out.appendCString("\\n");
+            else if (c == (u8)9)
+                out.appendCString("\\t");
+            else if (c == (u8)13)
+                out.appendCString("\\r");
+            else if (c < (u8)32)
+                {
+                out.appendCString("\\u00");
+                out.appendByte((u8)'0' + (c >> (u8)4));
+                u8 lo = c & (u8)15;
+                out.appendByte(lo < (u8)10 ? (u8)'0' + lo : (u8)'a' + lo - (u8)10);
+                }
+            else
+                out.appendByte(c);
+            }
+        out.appendByte((u8)'"');
+        }
+
+    void write(String* out)
+        {
+        if (_kind == (u8)5)
+            {
+            // Member order by key bytes: an insertion sort over the indices,
+            // stable, so a repeated key keeps its file order.
+            Array* order = new Array();
+            for (u32 i = (u32)0; i < _keys.count(); i = i + (u32)1)
+                {
+                String* k = (String*)_keys.get(i);
+                u32 j = order.count();
+                order.add((Object*)Number.withU32(i));
+                while (j > (u32)0)
+                    {
+                    u32 pj = ((Number*)order.get(j - (u32)1)).asU32();
+                    if (((String*)_keys.get(pj)).compare(k) <= (i8)0)
+                        break;
+                    order.set(j, order.get(j - (u32)1));
+                    j = j - (u32)1;
+                    }
+                order.set(j, (Object*)Number.withU32(i));
+                }
+            out.appendByte((u8)'{');
+            for (u32 i = (u32)0; i < order.count(); i = i + (u32)1)
+                {
+                u32 k = ((Number*)order.get(i)).asU32();
+                if (i > (u32)0)
+                    out.appendByte((u8)',');
+                JsonVal.writeStr(out, (String*)_keys.get(k));
+                out.appendByte((u8)':');
+                ((JsonVal*)_items.get(k)).write(out);
+                }
+            out.appendByte((u8)'}');
+            }
+        else if (_kind == (u8)4)
+            {
+            out.appendByte((u8)'[');
+            for (u32 i = (u32)0; i < _items.count(); i = i + (u32)1)
+                {
+                if (i > (u32)0)
+                    out.appendByte((u8)',');
+                ((JsonVal*)_items.get(i)).write(out);
+                }
+            out.appendByte((u8)']');
+            }
+        else if (_kind == (u8)3)
+            JsonVal.writeStr(out, _s);
+        else if (_kind == (u8)2)
+            out.appendFormat("%lld", _n);
+        else if (_kind == (u8)1)
+            out.appendCString(_b ? "true" : "false");
+        else
+            out.appendCString("null");
+        }
     }
 
     class JsonParser
