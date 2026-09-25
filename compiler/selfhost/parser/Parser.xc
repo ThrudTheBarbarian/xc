@@ -1755,6 +1755,11 @@ class Parser
                 if (Parser._same(w, "cloaked")) owner.addFlag((u32)NF_CLOAKED);
                 if (Parser._same(w, "irq"))     owner.addFlag((u32)NF_IRQ);
                 if (Parser._same(w, "vbi"))     owner.addFlag((u32)NF_VBI);
+                // Spelled `:xtcStack` / `:hwStack`; annotations are
+                // case-insensitive, as the original's are.
+                String* lw = w.lowercased();
+                if (Parser._same(lw, "xtcstack")) owner.addFlag((u32)NF_XTCSTACK);
+                if (Parser._same(lw, "hwstack"))  owner.addFlag((u32)NF_HWSTACK);
                 // uxkit/026: `:action` marks a nib target/action method.
                 if (Parser._same(w, "action"))  owner.addFlag((u32)NF_ACTION);
             }

@@ -31,6 +31,12 @@ static NSArray<NSArray<NSNumber *> *> *defaultZpVarRanges(void) {
 static const uint8_t kSSPLo = 0x8A, kSSPHi = 0x8B;
 static const uint8_t kFPLo  = 0x8C, kFPHi  = 0x8D;
 
+// Module-wide options, set by the code generator's driver before
+// assemblyFromModule: (the back end is a set of class methods).
+static BOOL sDefaultXtcStack = NO;        // --xtc-stack
+static NSUInteger sFnMinBanked = 0;       // -Fmb <n>
+static NSString *sPlacementReport = nil;  // what -dp prints
+
 static XTSourceLocation *synthLoc(void) {
     return [[XTSourceLocation alloc] initWithFilename:@"<xt6502-backend>" line:0 column:0];
 }
@@ -79,6 +85,16 @@ static XTSourceLocation *synthLoc(void) {
 // bytes hold the caller's FP, so the local's address is FP+2+offset);
 // `frameLocalsSize` is the locals-area size (frame reserves 2 + this).
 @property (nonatomic) BOOL usesSoftStack;
+// The xtc-stack calling convention (`:xtcStack`, or `--xtc-stack` on a
+// function without `:hwStack`). The return address and the registers PSH
+// would save go into the software-stack frame instead: the prologue pulls the
+// return address off the hardware stack, so the hardware frame holds only the
+// SP-frame locals (at +1..+N, no guard byte or saved registers) and the
+// parameters start at +N+1. The software frame's header grows from the
+// caller's FP (2 bytes) to FP, return address, P, A, X and Y (8 bytes).
+@property (nonatomic) BOOL xtcStack;
+@property (nonatomic) NSUInteger frameLocalsBase;   // 7, or 1 under xtcStack
+@property (nonatomic) NSUInteger softFrameHeader;   // 2, or 8 under xtcStack
 @property (nonatomic) NSMutableDictionary<NSNumber *, NSNumber *> *frameOffsets;
 @property (nonatomic) NSUInteger frameLocalsSize;
 @property (nonatomic) NSUInteger labelCounter;
@@ -181,6 +197,8 @@ typedef NS_ENUM(uint8_t, XT6502KnownAddrKind) {
         _suppressedAddrOfs = [NSMutableSet set];
         _spFrameSize = 0;
         _spDelta = 0;
+        _frameLocalsBase = 7;
+        _softFrameHeader = 2;
         [self useZpRanges:defaultZpVarRanges()];
     }
     return self;
@@ -376,6 +394,79 @@ typedef NS_ENUM(uint8_t, XT6502KnownAddrKind) {
     ctx.spDelta -= (NSInteger)n;
 }
 
+#pragma mark - The xtc-stack calling convention
+
+// Prologue of a function on the xtc-stack convention. Where PSH #N would keep
+// the registers and the return address on the hardware stack, this moves them
+// into a frame on the software stack:
+//   FP+0,+1  caller's FP      FP+2,+3  return address (hi, lo)
+//   FP+4     P   FP+5 A   FP+6 X   FP+7 Y      FP+8..  spilled locals
+// P, A, X and Y are pushed first so they reach the frame unchanged, then
+// pulled with the return address beneath them. The hardware stack then holds
+// only the N SP-frame local bytes, allocated with ADD SP, and the arguments
+// the caller pushed.
++ (void)emitXtcStackPrologueForCtx:(XT6502FnCtx *)ctx {
+    NSMutableString *out = ctx.out;
+    [out appendString:@"    ; --- xtc-stack frame push: return address and registers ---\n"];
+    [out appendString:@"    PHP\n    PHA\n    TXA\n    PHA\n    TYA\n    PHA\n"];
+    [out appendString:@"    LDY #$07\n"];
+    // Y, X, A, P, return address lo, return address hi: FP+7 down to FP+2.
+    for (NSUInteger k = 0; k < 6; k++) {
+        if (k > 0) [out appendString:@"    DEY\n"];
+        [out appendString:@"    PLA\n"];
+        [out appendFormat:@"    STA ($%02X),Y\n", kSSPLo];
+    }
+    [out appendString:@"    DEY\n"];
+    [out appendFormat:@"    LDA $%02X\n", kFPHi];     // caller FP hi
+    [out appendFormat:@"    STA ($%02X),Y\n", kSSPLo];
+    [out appendString:@"    DEY\n"];
+    [out appendFormat:@"    LDA $%02X\n", kFPLo];     // caller FP lo
+    [out appendFormat:@"    STA ($%02X),Y\n", kSSPLo];
+    NSUInteger total = ctx.softFrameHeader + ctx.frameLocalsSize;
+    [out appendFormat:@"    LDA $%02X\n", kSSPLo];    // FP = SSP
+    [out appendFormat:@"    STA $%02X\n", kFPLo];
+    [out appendFormat:@"    LDA $%02X\n", kSSPHi];
+    [out appendFormat:@"    STA $%02X\n", kFPHi];
+    [out appendString:@"    CLC\n"];                  // SSP += total
+    [out appendFormat:@"    LDA $%02X\n", kSSPLo];
+    [out appendFormat:@"    ADC #$%02X\n", (uint8_t)(total & 0xFF)];
+    [out appendFormat:@"    STA $%02X\n", kSSPLo];
+    [out appendFormat:@"    LDA $%02X\n", kSSPHi];
+    [out appendFormat:@"    ADC #$%02X\n", (uint8_t)((total >> 8) & 0xFF)];
+    [out appendFormat:@"    STA $%02X\n", kSSPHi];
+    if (ctx.spFrameSize > 0)
+        [out appendFormat:@"    ADD SP, #-%lu\n", (unsigned long)ctx.spFrameSize];
+}
+
+// The matching epilogue, run after the return value is staged in $B0..: free
+// the SP-frame locals, push the return address back and the saved registers
+// above it, drop the software frame (SSP = FP, FP = caller's FP), then pull
+// Y, X, A and P. The caller of this emits the result and the RTS.
++ (void)emitXtcStackEpilogueForCtx:(XT6502FnCtx *)ctx {
+    NSMutableString *out = ctx.out;
+    if (ctx.spFrameSize > 0)
+        [out appendFormat:@"    ADD SP, #%lu\n", (unsigned long)ctx.spFrameSize];
+    [out appendString:@"    ; --- xtc-stack frame pop: return address and registers ---\n"];
+    [out appendString:@"    LDY #$02\n"];
+    // Return address hi, lo, then P, A, X, Y: FP+2 up to FP+7.
+    for (NSUInteger k = 0; k < 6; k++) {
+        if (k > 0) [out appendString:@"    INY\n"];
+        [out appendFormat:@"    LDA ($%02X),Y\n", kFPLo];
+        [out appendString:@"    PHA\n"];
+    }
+    [out appendFormat:@"    LDA $%02X\n", kFPLo];     // SSP = FP
+    [out appendFormat:@"    STA $%02X\n", kSSPLo];
+    [out appendFormat:@"    LDA $%02X\n", kFPHi];
+    [out appendFormat:@"    STA $%02X\n", kSSPHi];
+    [out appendString:@"    LDY #$01\n"];             // FP = caller FP
+    [out appendFormat:@"    LDA ($%02X),Y\n", kSSPLo];
+    [out appendFormat:@"    STA $%02X\n", kFPHi];
+    [out appendString:@"    DEY\n"];
+    [out appendFormat:@"    LDA ($%02X),Y\n", kSSPLo];
+    [out appendFormat:@"    STA $%02X\n", kFPLo];
+    [out appendString:@"    PLA\n    TAY\n    PLA\n    TAX\n    PLA\n    PLP\n"];
+}
+
 #pragma mark - Caller-save across calls (task #64)
 
 // Collect the valueIds an instruction USES (Use-kind operands) and
@@ -551,13 +642,22 @@ typedef NS_ENUM(uint8_t, XT6502KnownAddrKind) {
     NSUInteger userParams = (paramCount > 0
         && [fn.paramTypes.lastObject kind] == XTIRTypeKindMemory)
         ? paramCount - 1 : paramCount;
-    NSUInteger pOff = 10 + ctx.spFrameSize;
+    NSUInteger pOff = [self paramBaseForCtx:ctx];
     for (NSUInteger i = 0; i < userParams; i++) {
         NSUInteger w = [self byteWidthForType:fn.paramTypes[i]];
         if (w > 0 && ![pinnedSet containsObject:@((XTIRValueId)i)])
             ctx.spFrameBase[@((XTIRValueId)i)] = @((NSInteger)pOff);
         pOff += w;
     }
+}
+
+// SP-relative offset of the first parameter byte once the prologue has run.
+// After PSH #N: [guard@+0, regs@+1..+6, locals@+7..+N+6, gap@+N+7,
+// ret@+N+8..+N+9, params@+N+10..]. Under the xtc-stack convention the return
+// address has been pulled and only the N local bytes were allocated, so the
+// parameters follow the locals directly: +N+1.
++ (NSUInteger)paramBaseForCtx:(XT6502FnCtx *)ctx {
+    return ctx.xtcStack ? 1 + ctx.spFrameSize : 10 + ctx.spFrameSize;
 }
 
 + (void)computeFrameSlotsForCtx:(XT6502FnCtx *)ctx
@@ -799,7 +899,10 @@ typedef NS_ENUM(uint8_t, XT6502KnownAddrKind) {
     // Frame layout (6502-embellishments §3): SP+0 is the guard byte, the
     // 6 saved-register slots are SP+1..SP+6, and the local area starts at
     // SP+7. (PSH #N allocates N+7 = guard + 6 saved regs + N locals.)
-    NSUInteger maxEnd = 7;
+    // Under the xtc-stack convention there is no guard byte and no saved
+    // registers on the hardware stack, so the locals start at SP+1.
+    NSUInteger base = ctx.frameLocalsBase;
+    NSUInteger maxEnd = base;
     for (NSNumber *k in order) {
         NSUInteger w = widthOf[k].unsignedIntegerValue;
         NSMutableArray<NSArray<NSNumber *> *> *occ = [NSMutableArray array];
@@ -812,7 +915,7 @@ typedef NS_ENUM(uint8_t, XT6502KnownAddrKind) {
         [occ sortUsingComparator:^NSComparisonResult(NSArray *a, NSArray *bb) {
             return [a[0] compare:bb[0]];
         }];
-        NSUInteger o = 7;
+        NSUInteger o = base;
         for (NSArray<NSNumber *> *r in occ) {
             NSUInteger s = r[0].unsignedIntegerValue, e = r[1].unsignedIntegerValue;
             if (o < e && o + w > s) o = e;   // overlap → bump past this range
@@ -820,7 +923,7 @@ typedef NS_ENUM(uint8_t, XT6502KnownAddrKind) {
         ctx.spFrameBase[k] = @(o);
         if (o + w > maxEnd) maxEnd = o + w;
     }
-    ctx.spFrameSize = maxEnd - 7;          // N = local bytes (PSH #N immediate)
+    ctx.spFrameSize = maxEnd - base;       // N = local bytes (PSH #N immediate)
 }
 
 // The per-call ZP byte set (empty if the call has nothing live across it).
@@ -949,6 +1052,96 @@ typedef NS_ENUM(uint8_t, XT6502KnownAddrKind) {
         total += 3;
     }
     return total;
+}
+
+// Count the 6502 instructions in rendered asm text: every line that is not
+// blank, a comment, a bare label or a directive. `-Fmb` compares a function's
+// count, taken from the first sizing render, against its threshold.
++ (NSUInteger)asmInsnCount:(NSString *)asmText {
+    NSUInteger n = 0;
+    for (NSString *raw in [asmText componentsSeparatedByString:@"\n"]) {
+        NSString *line = [raw stringByTrimmingCharactersInSet:
+                          [NSCharacterSet whitespaceCharacterSet]];
+        if (line.length == 0 || [line hasPrefix:@";"]) continue;
+        NSRange sc = [line rangeOfString:@";"];
+        if (sc.location != NSNotFound) {
+            line = [[line substringToIndex:sc.location]
+                    stringByTrimmingCharactersInSet:
+                    [NSCharacterSet whitespaceCharacterSet]];
+            if (line.length == 0) continue;
+        }
+        if ([line hasSuffix:@":"]) continue;
+        NSRange colon = [line rangeOfString:@":"];
+        if (colon.location != NSNotFound) {
+            line = [[line substringFromIndex:colon.location + 1]
+                stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+            if (line.length == 0) continue;
+        }
+        if ([line hasPrefix:@"."]) continue;
+        n++;
+    }
+    return n;
+}
+
+// Pad `s` with spaces to `width` bytes (never truncates). The -dp and -du
+// reports are laid out in columns this way rather than with printf widths,
+// so the text is the same whichever compiler prints it.
+static NSString *padRight(NSString *s, NSUInteger width) {
+    NSMutableString *m = [s mutableCopy];
+    while (m.length < width) [m appendString:@" "];
+    return m;
+}
+
+static NSString *padLeft(NSString *s, NSUInteger width) {
+    NSMutableString *m = [NSMutableString string];
+    while (m.length + s.length < width) [m appendString:@" "];
+    [m appendString:s];
+    return m;
+}
+
+// The -dp text. `order` lists the functions in emission order; `where`
+// gives each one's placement, `sizes` its estimated bytes and `notes` an
+// optional reason in parentheses. `bankSize` is the code window's size, 0
+// on an unbanked layout.
++ (NSString *)placementReportFor:(XTMemoryModel *)model
+                           order:(NSArray<NSString *> *)order
+                           where:(NSDictionary<NSString *, NSString *> *)where
+                           sizes:(NSDictionary<NSString *, NSNumber *> *)sizes
+                           notes:(NSDictionary<NSString *, NSString *> *)notes
+                         bankMap:(nullable NSDictionary<NSString *, NSNumber *> *)bankMap
+                        bankSize:(NSUInteger)bankSize {
+    NSMutableString *r = [NSMutableString string];
+    [r appendFormat:@"xcc: placement for layout '%@' (sizes are the compiler's estimates, an upper bound):\n",
+        model.name ?: @"(unnamed)"];
+    NSUInteger mainBytes = 0, bankCount = 0;
+    NSMutableDictionary<NSNumber *, NSNumber *> *perBank = [NSMutableDictionary dictionary];
+    for (NSString *name in order) {
+        NSUInteger sz = sizes[name].unsignedIntegerValue;
+        NSUInteger b = bankMap[name].unsignedIntegerValue;
+        if (b == 0) {
+            mainBytes += sz;
+        } else {
+            perBank[@(b)] = @(perBank[@(b)].unsignedIntegerValue + sz);
+            if (b > bankCount) bankCount = b;
+        }
+        NSString *note = notes[name];
+        [r appendFormat:@"  %@ %@ bytes  %@%@\n",
+            padRight(where[name], 8),
+            padLeft([NSString stringWithFormat:@"%lu", (unsigned long)sz], 6),
+            name, note.length ? [NSString stringWithFormat:@" (%@)", note] : @""];
+    }
+    [r appendString:@"xcc: bytes used by generated code:\n"];
+    [r appendFormat:@"  %@ %@ bytes (the runtime shares this region)\n",
+        padRight(@"main", 8),
+        padLeft([NSString stringWithFormat:@"%lu", (unsigned long)mainBytes], 6)];
+    for (NSUInteger b = 1; b <= bankCount; b++) {
+        [r appendFormat:@"  %@ %@ of %lu bytes\n",
+            padRight([NSString stringWithFormat:@"bank %lu", (unsigned long)b], 8),
+            padLeft([NSString stringWithFormat:@"%lu",
+                     (unsigned long)perBank[@(b)].unsignedIntegerValue], 6),
+            (unsigned long)bankSize];
+    }
+    return r;
 }
 
 // Bank id of a called symbol: the function's assigned bank, or 0
@@ -2057,14 +2250,16 @@ typedef NS_ENUM(uint8_t, XT6502KnownAddrKind) {
             // with the prologue via ctx. :irq / :vbi handlers skipped
             // the PSH (or used PHA-only register saves) — mirror with
             // the matching pops below instead of PLL.
-            if (!ctx.isIrq && !ctx.isVbi) {
+            if (ctx.xtcStack) {
+                [self emitXtcStackEpilogueForCtx:ctx];
+            } else if (!ctx.isIrq && !ctx.isVbi) {
                 [ctx.out appendFormat:@"    PLL #%lu\n",
                  (unsigned long)ctx.spFrameSize];
             }
             // Software-stack frame pop (STACK-ABI §11.3): SSP = FP (drop
             // this frame), FP = the caller FP saved at the frame base.
             // Clobbers A/X/Y but not $B0.., so the staged result survives.
-            if (ctx.usesSoftStack) {
+            if (ctx.usesSoftStack && !ctx.xtcStack) {
                 [ctx.out appendString:@"    ; --- software-stack frame pop (§11.3) ---\n"];
                 [ctx.out appendString:@"    LDY #$00\n"];
                 [ctx.out appendFormat:@"    LDA ($%02X),Y\n", kFPLo];   // caller FP lo
@@ -2301,10 +2496,11 @@ typedef NS_ENUM(uint8_t, XT6502KnownAddrKind) {
                 NSNumber *frameOff = ctx.frameOffsets[@(op.valueId)];
                 if (frameOff) {
                     // Pinned local in the software-stack frame (§11.3,
-                    // non-leaf). Address = FP + 2 + offset (the +2 skips
-                    // the saved caller-FP at the frame base). 16-bit add
+                    // non-leaf). Address = FP + header + offset (the header
+                    // is the saved caller-FP, plus the return address and
+                    // registers under the xtc-stack convention). 16-bit add
                     // of the constant to the FP pointer.
-                    NSUInteger disp = 2 + frameOff.unsignedIntegerValue;
+                    NSUInteger disp = ctx.softFrameHeader + frameOff.unsignedIntegerValue;
                     [ctx.out appendString:@"    CLC\n"];
                     [ctx.out appendFormat:@"    LDA $%02X\n", kFPLo];
                     [ctx.out appendFormat:@"    ADC #$%02X\n", (uint8_t)(disp & 0xFF)];
@@ -3415,6 +3611,24 @@ typedef NS_ENUM(uint8_t, XT6502KnownAddrKind) {
     XTIRSymbol *fnSym = [mod symbolForName:fn.name];
     ctx.isIrq = [fnSym.attributes[@"irq"] boolValue];
     ctx.isVbi = [fnSym.attributes[@"vbi"] boolValue];
+    // The calling convention: `:xtcStack` / `:hwStack` on the function, else
+    // the --xtc-stack default. An interrupt handler keeps its own shape.
+    ctx.xtcStack = !ctx.isIrq && !ctx.isVbi
+        && ([fnSym.attributes[@"xtcstack"] boolValue]
+            || (sDefaultXtcStack && ![fnSym.attributes[@"hwstack"] boolValue]));
+    if (ctx.xtcStack) {
+        if (!model.stackRangeSet) {
+            if (diag) {
+                [diag emitError:[NSString stringWithFormat:
+                    @"xt6502: function '%@' uses the xtc software stack, but the "
+                    @"layout declares no [stack] region", fn.name] at:synthLoc()];
+            }
+            return NO;
+        }
+        ctx.frameLocalsBase = 1;
+        ctx.softFrameHeader = 8;
+        ctx.usesSoftStack = YES;
+    }
     // Model-driven ZP var pool. nil / empty falls back to $A0..$FF.
     [ctx useZpRanges:model.zpVarsRanges];
     BOOL isLeaf = [self functionIsLeaf:fn];
@@ -3624,6 +3838,8 @@ typedef NS_ENUM(uint8_t, XT6502KnownAddrKind) {
         [out appendString:@"    PHA\n"];
         [out appendString:@"    TYA\n"];
         [out appendString:@"    PHA\n"];
+    } else if (ctx.xtcStack) {
+        [self emitXtcStackPrologueForCtx:ctx];
     } else if (!ctx.isIrq) {
         [out appendFormat:@"    PSH #%lu\n", (unsigned long)N];
     }
@@ -3634,7 +3850,7 @@ typedef NS_ENUM(uint8_t, XT6502KnownAddrKind) {
     // starts at SP-relative offset +N+10 (6502-embellishments §3, with the
     // guard byte). Byte 0 (LSB) is at the lower offset. spDelta is 0 here
     // (no pushes yet), so operandForValueId gives the settled slot operand.
-    NSUInteger paramOffset = 10 + N;
+    NSUInteger paramOffset = [self paramBaseForCtx:ctx];
 
     // The ENTRY function has no caller, so nothing pushed its arguments and
     // those bytes hold whatever the stack happened to contain. `main` is
@@ -3690,7 +3906,7 @@ typedef NS_ENUM(uint8_t, XT6502KnownAddrKind) {
     // caller FP into the frame base, point FP at the new frame, and bump
     // SSP past it. Per-invocation (recursion-safe). Done after the param
     // spill so the SP-relative param offsets above are untouched.
-    if (ctx.usesSoftStack) {
+    if (ctx.usesSoftStack && !ctx.xtcStack) {
         if (diag) {
             [diag emitWarning:[NSString stringWithFormat:
                 @"xt6502: function '%@' uses a software stack (%lu bytes of "
@@ -4158,10 +4374,15 @@ typedef NS_ENUM(uint8_t, XT6502KnownAddrKind) {
     return YES;
 }
 
++ (void)setDefaultXtcStack:(BOOL)on { sDefaultXtcStack = on; }
++ (void)setFnMinBanked:(NSUInteger)n { sFnMinBanked = n; }
++ (nullable NSString *)lastPlacementReport { return sPlacementReport; }
+
 + (nullable NSString *)assemblyFromModule:(XTIRModule *)mod
                               memoryModel:(nullable XTMemoryModel *)model
                               diagnostics:(XTDiagnosticEngine *)diag
 {
+    sPlacementReport = nil;
     NSMutableString *out = [NSMutableString string];
     [out appendString:@"; Generated by XT6502Backend — DO NOT EDIT\n"];
 
@@ -4268,6 +4489,13 @@ typedef NS_ENUM(uint8_t, XT6502KnownAddrKind) {
         // the real emission below owns them.
         NSMutableDictionary<NSString *, NSNumber *> *sizes =
             [NSMutableDictionary dictionary];
+        // -Fmb: a function of fewer instructions than the threshold stays in
+        // main RAM, so a call to it needs no _xcall trampoline. Counted once,
+        // from this bank-independent render, so the decision cannot move
+        // while the refinement below iterates.
+        NSMutableDictionary<NSString *, NSNumber *> *insnCounts =
+            [NSMutableDictionary dictionary];
+        NSMutableSet<NSString *> *keepInMain = [NSMutableSet set];
         for (XTIRFunction *fn in mod.functions) {
             if (fn.blocks.count == 0) continue;
             NSMutableString *tmp = [NSMutableString string];
@@ -4275,6 +4503,9 @@ typedef NS_ENUM(uint8_t, XT6502KnownAddrKind) {
             [self emitFunction:fn module:mod memoryModel:model
                     spillDecls:throwaway bankingActive:NO currentBank:0
                        bankMap:nil codeBankReg:codeReg into:tmp diagnostics:nil];
+            NSUInteger insns = [self asmInsnCount:tmp];
+            insnCounts[fn.name] = @(insns);
+            if (sFnMinBanked > 0 && insns < sFnMinBanked) [keepInMain addObject:fn.name];
             NSUInteger calls = 0;
             for (XTIRBlock *blk in fn.blocks) {
                 for (XTIRInsn *callInsn in blk.instructions) {
@@ -4338,7 +4569,8 @@ typedef NS_ENUM(uint8_t, XT6502KnownAddrKind) {
         for (XTIRFunction *fn in mod.functions) {
             if (fn.blocks.count == 0) continue;
             NSUInteger sz = sizes[fn.name].unsignedIntegerValue;
-            if (fn == entry || [mustUnbank containsObject:fn.name]) {
+            if (fn == entry || [mustUnbank containsObject:fn.name]
+                || [keepInMain containsObject:fn.name]) {
                 bankMap[fn.name] = @0;
                 unbankedUsed += (NSInteger)sz;
                 continue;
@@ -4419,7 +4651,8 @@ typedef NS_ENUM(uint8_t, XT6502KnownAddrKind) {
             for (XTIRFunction *fn in mod.functions) {
                 if (fn.blocks.count == 0) continue;
                 NSUInteger sz = measured[fn.name].unsignedIntegerValue;
-                if (fn == entry || [mustUnbank containsObject:fn.name]) {
+                if (fn == entry || [mustUnbank containsObject:fn.name]
+                    || [keepInMain containsObject:fn.name]) {
                     newBankMap[fn.name] = @0;
                     continue;
                 }
@@ -4481,17 +4714,38 @@ typedef NS_ENUM(uint8_t, XT6502KnownAddrKind) {
         NSMutableString *unbankedBuf = [NSMutableString string];
         NSMutableString *bankedBuf   = [NSMutableString string];
 
+        // What -dp reports: each function's placement, in emission order,
+        // with the size of the text it finally rendered to.
+        NSMutableArray<NSString *> *placeOrder = [NSMutableArray array];
+        NSMutableDictionary<NSString *, NSString *> *placeWhere = [NSMutableDictionary dictionary];
+        NSMutableDictionary<NSString *, NSNumber *> *placeSize = [NSMutableDictionary dictionary];
+        NSMutableDictionary<NSString *, NSString *> *placeNote = [NSMutableDictionary dictionary];
+
         // Unbanked generated functions (bank 0): the entry + any
         // must-stay-unbanked functions. No `.org` — continue the flow.
         for (XTIRFunction *fn in mod.functions) {
             if (fn.blocks.count == 0) continue;
             if (bankMap[fn.name].unsignedIntegerValue != 0) continue;
+            NSUInteger before = unbankedBuf.length;
             if (![self emitFunction:fn module:mod memoryModel:model
                          spillDecls:spillDecls bankingActive:YES
                         currentBank:0 bankMap:bankMap codeBankReg:codeReg
                                into:unbankedBuf diagnostics:diag]) {
                 return nil;
             }
+            XTIRSymbol *fsym = [mod symbolForName:fn.name];
+            BOOL irq = [fsym.attributes[@"irq"] boolValue];
+            BOOL vbi = [fsym.attributes[@"vbi"] boolValue];
+            [placeOrder addObject:fn.name];
+            placeWhere[fn.name] = irq ? @"irq" : vbi ? @"vbi" : @"main";
+            placeSize[fn.name] = @([self asmByteSize:
+                [unbankedBuf substringFromIndex:before]]);
+            if (fn == entry)
+                placeNote[fn.name] = @"entry";
+            else if (!irq && !vbi && [keepInMain containsObject:fn.name])
+                placeNote[fn.name] = [NSString stringWithFormat:@"%lu instructions, under -Fmb %lu",
+                    (unsigned long)insnCounts[fn.name].unsignedIntegerValue,
+                    (unsigned long)sFnMinBanked];
         }
 
         // Banked code: each `.org <window>` is one bank (numbered by
@@ -4503,14 +4757,22 @@ typedef NS_ENUM(uint8_t, XT6502KnownAddrKind) {
             for (XTIRFunction *fn in mod.functions) {
                 if (fn.blocks.count == 0) continue;
                 if (bankMap[fn.name].unsignedIntegerValue != b) continue;
+                NSUInteger before = bankedBuf.length;
                 if (![self emitFunction:fn module:mod memoryModel:model
                              spillDecls:spillDecls bankingActive:YES
                             currentBank:b bankMap:bankMap codeBankReg:codeReg
                                    into:bankedBuf diagnostics:diag]) {
                     return nil;
                 }
+                [placeOrder addObject:fn.name];
+                placeWhere[fn.name] = [NSString stringWithFormat:@"bank %lu", (unsigned long)b];
+                placeSize[fn.name] = @([self asmByteSize:
+                    [bankedBuf substringFromIndex:before]]);
             }
         }
+        sPlacementReport = [self placementReportFor:model order:placeOrder where:placeWhere
+                                              sizes:placeSize notes:placeNote
+                                            bankMap:bankMap bankSize:bankSize];
 
         // Stitch in flow order: unbanked code, then module data (now
         // spillDecls is complete), then the separate banked pages.
@@ -4535,13 +4797,29 @@ typedef NS_ENUM(uint8_t, XT6502KnownAddrKind) {
         [out appendString:@"__xt_indjmp:\n"];
         [out appendString:@"    JMP ($85)\n"];
     }
+    NSMutableArray<NSString *> *placeOrder = [NSMutableArray array];
+    NSMutableDictionary<NSString *, NSString *> *placeWhere = [NSMutableDictionary dictionary];
+    NSMutableDictionary<NSString *, NSNumber *> *placeSize = [NSMutableDictionary dictionary];
+    NSMutableDictionary<NSString *, NSString *> *placeNote = [NSMutableDictionary dictionary];
+    XTIRFunction *flatEntry = [self entryFunctionOf:mod];
     for (XTIRFunction *fn in mod.functions) {
+        NSUInteger before = out.length;
         if (![self emitFunction:fn module:mod memoryModel:model
                      spillDecls:spillDecls bankingActive:NO currentBank:0
                         bankMap:nil codeBankReg:0 into:out diagnostics:diag]) {
             return nil;
         }
+        if (fn.blocks.count == 0) continue;
+        XTIRSymbol *fsym = [mod symbolForName:fn.name];
+        [placeOrder addObject:fn.name];
+        placeWhere[fn.name] = [fsym.attributes[@"irq"] boolValue] ? @"irq"
+                            : [fsym.attributes[@"vbi"] boolValue] ? @"vbi" : @"main";
+        placeSize[fn.name] = @([self asmByteSize:[out substringFromIndex:before]]);
+        if (fn == flatEntry) placeNote[fn.name] = @"entry";
     }
+    sPlacementReport = [self placementReportFor:model order:placeOrder where:placeWhere
+                                          sizes:placeSize notes:placeNote
+                                        bankMap:nil bankSize:0];
     [self emitModuleDataInto:out module:mod spillDecls:spillDecls bankMap:nil];
     if (![self assertSpOffsetsInRange:out diag:diag]) return nil;
     return out;

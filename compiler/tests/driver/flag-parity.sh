@@ -374,9 +374,155 @@ same "-Q loop"              -q -A 6502 -Q loop -o @OUT@.xex ret.xc
 same "--quit-style loop"    -q -A 6502 --quit-style loop -o @OUT@.xex ret.xc
 same "-Q bogus"             -q -A 6502 -Q bogus -o @OUT@.xex ret.xc
 same "--xtc-stack"          -q -A 6502 --xtc-stack -o @OUT@.xex ret.xc
-# -S: the reference reads it as --xtc-stack; in xcc-xc it means "keep the
-# assembly", which the reference spells -a. A decided difference.
+
+# ── the xt6502 options, checked for what they do ────────────────────────
+# Each is built by both drivers, which must write the same bytes, and run on
+# the simulator, whose exit status is main's value.
+SIM="$ROOT/bin/osx/xcc-sim-6502"
+simrc() { "$SIM" -m xt -d "$1" > /dev/null 2>&1; echo $?; }
+# build6502 <tag> args… — both drivers, .xex and .s; they must agree byte for byte.
+build6502() {
+    local tag=$1; shift
+    "$REF" -H "$ROOT" -q -A 6502 "$@" -o "$tag.ref.xex" > /dev/null 2>&1
+    "$XC"  -H "$ROOT" -q -A 6502 "$@" -o "$tag.xc.xex"  > /dev/null 2>&1
+    "$XC"  -H "$ROOT" -q -A 6502 "$@" -o "$tag.s"       > /dev/null 2>&1
+    if [ -s "$tag.xc.xex" ] && cmp -s "$tag.ref.xex" "$tag.xc.xex"; then ok "$tag: the same .xex from both"
+    else bad "$tag: the two drivers' .xex differ (or none was written)"; fi
+}
+cat > many.xc <<'EOF'
+u8 tiny(u8 v)
+{
+    if (v == 0)
+        return 0;
+    return tiny(v - 1) + 1;
+}
+i32 big(i32 n)
+{
+    i32 a[8];
+    i32 t = 0;
+    for (i32 i = 0; i < 8; i++)
+        a[i] = (i32)tiny((u8)(n + i)) * 3 - i;
+    for (i32 i = 0; i < 8; i++)
+        t = t + a[i] + (a[i] >> 1) - (a[i] & 5);
+    return t;
+}
+i32 main(void)
+{
+    return big(2) - (i32)tiny(40);
+}
+EOF
+# main returns 3 in ret.xc and 30 in tail.xc; many.xc returns 100.
+build6502 quit-default ret.xc
+build6502 quit-rts -Q rts ret.xc
+build6502 quit-loop -Q loop ret.xc
+[ "$(simrc quit-default.xc.xex)" = 3 ] && [ "$(simrc quit-rts.xc.xex)" = 3 ] \
+    && ok "-Q rts (the default): main's value is the exit status" || bad "-Q rts: wrong exit status"
+[ "$(simrc quit-loop.xc.xex)" = 3 ] && ok "-Q loop: main's value is the exit status" \
+    || bad "-Q loop: wrong exit status"
+grep -q "^_xt_quit:" quit-loop.s && grep -q "JMP _xt_quit" quit-loop.s \
+    && ! grep -q "^_xt_quit:" quit-rts.s && cmp -s quit-default.s quit-rts.s \
+    && ok "-Q loop jumps to itself after main; -Q rts is the default and returns" \
+    || bad "-Q: the startup is not what the quit style says"
+
+build6502 xtcstack --xtc-stack tail.xc
+build6502 hwstack tail.xc
+[ "$(simrc xtcstack.xc.xex)" = 30 ] && ok "--xtc-stack: the recursion returns 30" \
+    || bad "--xtc-stack: wrong result ($(simrc xtcstack.xc.xex))"
+if grep -q "xtc-stack frame push" xtcstack.s && ! grep -q "xtc-stack frame push" hwstack.s \
+   && ! grep -A1 "^_xt_main:" xtcstack.s | grep -q "PSH #"; then
+    ok "--xtc-stack: functions push their frame on the software stack, and only with the flag"
+else bad "--xtc-stack: the prologues are not the software-stack ones"; fi
+cat > annot.xc <<'EOF'
+i32 soft(i32 v) :xtcStack
+{
+    if (v <= 0)
+        return 0;
+    return soft(v - 1) + 2;
+}
+i32 hard(i32 v) :hwStack
+{
+    if (v <= 0)
+        return 0;
+    return hard(v - 1) + soft(v);
+}
+i32 main(void)
+{
+    return hard(5);
+}
+EOF
+build6502 annot annot.xc
+build6502 annot-flag --xtc-stack annot.xc
+[ "$(simrc annot.xc.xex)" = 30 ] && [ "$(simrc annot-flag.xc.xex)" = 30 ] \
+    && ok ":xtcStack / :hwStack: the mixed recursion returns 30" || bad ":xtcStack / :hwStack: wrong result"
+if grep -A1 "^_soft:" annot.s | grep -q "xtc-stack frame push" \
+   && grep -A1 "^_hard:" annot.s | grep -q "PSH #" && grep -A1 "^_hard:" annot-flag.s | grep -q "PSH #" \
+   && grep -A1 "^_xt_main:" annot-flag.s | grep -q "xtc-stack frame push"; then
+    ok ":xtcStack opts a function in, :hwStack opts one out of --xtc-stack"
+else bad ":xtcStack / :hwStack do not choose the prologue"; fi
+
+# -dp against the assembly: every function it lists is in the section it names.
+# placecheck <dp-text> <asm> — prints the first function whose place disagrees.
+placecheck() {
+    awk -v asm="$2" '
+        BEGIN {
+            where = "main"
+            while ((getline line < asm) > 0) {
+                if (line ~ /^; --- code bank [0-9]+/) { split(line, parts, " "); where = "bank " parts[5] }
+                else if (line ~ /^_[A-Za-z0-9_$]+:$/) { lab = substr(line, 2, length(line) - 2); at[lab] = where }
+            }
+        }
+        /^xcc: bytes used/ { done = 1 }
+        !done && /^  (main|irq|vbi|bank [0-9]+) / {
+            w = ($1 == "bank") ? "bank " $2 : "main"
+            name = ($1 == "bank") ? $5 : $4
+            lab = (name == "main") ? "xt_main" : name
+            n++
+            if (at[lab] != w) { print name " is " w " in -dp, " at[lab] " in the assembly"; exit }
+        }
+        END { if (n == 0) print "no functions listed" }' "$1"
+}
+for mb in 0 50; do
+    run "$REF" refout -q -A 6502 -Fmb $mb -dp -o @OUT@.xex many.xc
+    run "$XC" xcout -q -A 6502 -Fmb $mb -dp -o @OUT@.xex many.xc
+    cmp -s refout.err.txt xcout.err.txt && ok "-dp -Fmb $mb: both print the same placement" \
+        || { bad "-dp -Fmb $mb: the placements printed differ"; diff refout.err.txt xcout.err.txt | head -5; }
+    cp xcout.err.txt dp$mb.txt
+    "$XC" -H "$ROOT" -q -A 6502 -Fmb $mb -o many$mb.s many.xc > /dev/null 2>&1
+    why=$(placecheck dp$mb.txt many$mb.s)
+    [ -z "$why" ] && ok "-dp -Fmb $mb: every function is where the assembly puts it" || bad "-dp -Fmb $mb: $why"
+    cmp -s refout.xex xcout.xex && [ "$(simrc xcout.xex)" = 100 ] \
+        && ok "-Fmb $mb: the same .xex from both, and it returns 100" || bad "-Fmb $mb: .xex differs or wrong result"
+done
+grep -q "^  bank [0-9]* .* tiny$" dp0.txt && grep -q "^  main .* tiny (.* instructions, under -Fmb 50)$" dp50.txt \
+    && grep -q "^  bank [0-9]* .* big$" dp50.txt \
+    && ok "-Fmb 50: the small function moves to main RAM, the large one stays banked" \
+    || bad "-Fmb 50 did not move the small function out of its bank"
+
+# -du against the assembly: one line per code bank the assembly fills.
+for t in many.xc hello.xc; do
+    run "$REF" refout -q -A 6502 -du -o @OUT@.xex $t
+    run "$XC" xcout -q -A 6502 -du -o @OUT@.xex $t
+    cmp -s refout.err.txt xcout.err.txt && ok "-du ($t): both print the same usage" \
+        || { bad "-du ($t): the usage printed differs"; diff refout.err.txt xcout.err.txt | head -5; }
+    "$XC" -H "$ROOT" -q -A 6502 -o du.s $t > /dev/null 2>&1
+    banks=$(( $(grep -c "^; --- code bank" du.s) + $(grep -c "^ *\.bank " du.s) ))
+    lines=$(grep -c "^  code bank [0-9]" xcout.err.txt)
+    [ "$banks" = "$lines" ] && grep -q "^  system " xcout.err.txt && grep -q "unused: code banks" xcout.err.txt \
+        && ok "-du ($t): $lines code bank(s), as the assembly has" \
+        || bad "-du ($t): $lines code bank line(s), the assembly has $banks"
+done
+run "$XC" xcout -q -A 6502 -du -o @OUT@.s ret.xc
+[ $RC = 0 ] && [ -s xcout.s ] && grep -q "^  system " xcout.err.txt \
+    && ok "-du with -o x.s: writes the assembly and measures it" || bad "-du with -o x.s"
+# -S means "keep the assembly" in xcc-xc; the reference takes it and leaves the
+# choice to the output's extension. It is not --xtc-stack's short form, so an
+# xt6502 build with -S uses the default convention.
 equiv "-S (keep assembly)"  "$A -o refout.s ret.xc"  "$A -S -o xcout.s ret.xc"
+"$XC" -H "$ROOT" -q -A 6502 -S -o s6502.s tail.xc > /dev/null 2>&1
+"$REF" -H "$ROOT" -q -A 6502 -S -o s6502ref.s tail.xc > /dev/null 2>&1
+! grep -q "xtc-stack frame push" s6502.s && cmp -s s6502.s s6502ref.s \
+    && ok "-S on xt6502: assembly, with the hardware-stack convention, in both" \
+    || bad "-S on xt6502 selected the software-stack convention or the drivers differ"
 for v in "-ss 512" "-ss=\$200" "--stack-size 0x200" "--stack-size=512" "-ss 0" "-ss 70000"; do
     same "$v"               $A $v -o @OUT@ ret.xc
 done

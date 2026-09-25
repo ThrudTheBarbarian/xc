@@ -7,6 +7,11 @@
 // compared is the CODE GENERATOR alone.
 //
 //   xtcg65 <file.ir> -L <layout.lnk> [-o out.s]
+//          [-Q rts|loop] [--xtc-stack] [-Fmb <n>] [-dp]
+//
+// The last four are xcc-cg-6502's, so a differential can compare the two with
+// any of them set: the quit style, the --xtc-stack default, the -Fmb
+// threshold, and the -dp placement report (on stderr).
 
 #import "Foundation.xc"
 #import "Stdio.xc"
@@ -26,6 +31,10 @@ void main(void)
     String* layoutPath = (String*)0;
     bool partial = false;
     String* wrapRoot = (String*)0;
+    bool quitLoop = false;
+    bool xtcStack = false;
+    u32 fnMinBanked = (u32)0;
+    bool dumpPlacement = false;
     u32 argc = Process.argumentCount();
     u32 i = (u32)1;
     while (i < argc)
@@ -58,6 +67,34 @@ void main(void)
             {
             wrapRoot = Process.argument(i + (u32)1);
             i = i + (u32)2;
+            continue;
+            }
+        if (a.equals(String.withCString("-Q")) && i + (u32)1 < argc)
+            {
+            quitLoop = Process.argument(i + (u32)1).equals(String.withCString("loop"));
+            i = i + (u32)2;
+            continue;
+            }
+        if (a.equals(String.withCString("--xtc-stack")))
+            {
+            xtcStack = true;
+            i = i + (u32)1;
+            continue;
+            }
+        if (a.equals(String.withCString("-Fmb")) && i + (u32)1 < argc)
+            {
+            String* v = Process.argument(i + (u32)1);
+            u32 n = (u32)0;
+            for (u32 k = (u32)0; k < v.byteLength(); k = k + (u32)1)
+                n = n * (u32)10 + (u32)(v.byteAt(k) - (u8)'0');
+            fnMinBanked = n;
+            i = i + (u32)2;
+            continue;
+            }
+        if (a.equals(String.withCString("-dp")))
+            {
+            dumpPlacement = true;
+            i = i + (u32)1;
             continue;
             }
         if (!a.hasPrefix(String.withCString("-")))
@@ -116,6 +153,8 @@ void main(void)
 
     Xt6502* be = new Xt6502();
     be.setLayout(layout);
+    be.setXtcStackDefault(xtcStack);
+    be.setFnMinBanked(fnMinBanked);
     String* asmText = be.assembly(m);
     if (be.failed())
         {
@@ -135,11 +174,14 @@ void main(void)
     // `_main` becomes `_xt_main` so the harness's startup JSR resolves. The
     // DRIVER does this, not the back end — it is a rename over the finished
     // text, on whole-word boundaries so `_main_loop` is left alone.
+    if (dumpPlacement)
+        Stdio.error(be.placementReport());
     asmText = renameMain(asmText);
     if (wrapRoot != (String*)0)
         {
-        asmText = Runtime6502.wrap(asmText, m, layout, wrapRoot,
-                                   String.withCString("xt6502/runtime/xt6502-harness.asm"));
+        asmText = Runtime6502.wrapQuit(asmText, m, layout, wrapRoot,
+                                       String.withCString("xt6502/runtime/xt6502-harness.asm"),
+                                       quitLoop);
         }
     if (output == 0)
         {

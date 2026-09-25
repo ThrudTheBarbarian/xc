@@ -4448,6 +4448,16 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
         // its runtime harness / asm tree under the SAME root the driver used —
         // not cwd or a stale /opt/xtc. (feArgs already forwards -H the same way.)
         if (opts.xtcHome) [cgArgs addObjectsFromArray:@[@"-H", opts.xtcHome]];
+        // The xt6502 options are all the code generator's business: the quit
+        // style edits the startup it wraps round the program, and the rest
+        // change or report the functions it emits and where it puts them.
+        if (opts.quitLoop) [cgArgs addObjectsFromArray:@[@"-Q", @"loop"]];
+        if (opts.useXtcStack) [cgArgs addObject:@"--xtc-stack"];
+        if (opts.fnMinBanked > 0)
+            [cgArgs addObjectsFromArray:@[@"-Fmb",
+                [NSString stringWithFormat:@"%lu", (unsigned long)opts.fnMinBanked]]];
+        if (opts.dumpPlacement) [cgArgs addObject:@"-dp"];
+        if (opts.dumpUsage) [cgArgs addObject:@"-du"];
     }
     if (opts.useM68kBackend) {
         [cgArgs addObjectsFromArray:@[@"--cpu",

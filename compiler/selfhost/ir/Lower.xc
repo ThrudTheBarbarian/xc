@@ -13479,6 +13479,13 @@ class ClassInfo
                 fsym.setIrq();
             if (d.hasFlag((u32)NF_VBI))
                 fsym.setVbi();
+            // `:xtcStack` / `:hwStack`: the xt6502 back end's calling
+            // convention for this function, overriding --xtc-stack. Only when
+            // set, like the flags above.
+            if (d.hasFlag((u32)NF_XTCSTACK))
+                fsym.setAttr(String.withCString("xtcstack"), true);
+            else if (d.hasFlag((u32)NF_HWSTACK))
+                fsym.setAttr(String.withCString("hwstack"), true);
             // Only when SET, like the three above: printed on every function it
             // would rewrite every golden IR file to say "false" about a
             // property almost nothing has. private:docs/bugs/047.

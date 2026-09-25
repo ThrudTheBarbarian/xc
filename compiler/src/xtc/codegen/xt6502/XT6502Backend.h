@@ -55,6 +55,22 @@ NS_ASSUME_NONNULL_BEGIN
                              memoryModel:(nullable XTMemoryModel*)model
                              diagnostics:(nullable XTDiagnosticEngine*)diag;
 
+/// `--xtc-stack`: the calling convention a function takes when it carries
+/// neither `:xtcStack` nor `:hwStack`. NO (the default) keeps the return
+/// address and the saved registers on the hardware stack; YES moves them into
+/// a frame on the software stack. Set before assemblyFromModule:.
++ (void)setDefaultXtcStack:(BOOL)on;
+
+/// `-Fmb <n>`: a function of fewer than `n` instructions stays in main RAM
+/// on a banked layout instead of taking a code bank. 0 (the default) banks
+/// every function except the entry point and the interrupt handlers.
++ (void)setFnMinBanked:(NSUInteger)n;
+
+/// The placement of every function in the last module assemblyFromModule:
+/// rendered, as the text `-dp` prints: main / bank N / irq / vbi, each with
+/// its estimated size, then the bytes used in main RAM and in each bank.
++ (nullable NSString*)lastPlacementReport;
+
 @end
 
 NS_ASSUME_NONNULL_END

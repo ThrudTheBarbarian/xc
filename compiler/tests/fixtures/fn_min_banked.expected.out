@@ -1,0 +1,7 @@
+small(5) = 8
+large(3) = 8677
+times(9) = 27
+apply(4) = 1907
+clampTo(2000, 1500) = 1500
+depth(9) = 9
+halve(40000) = 1

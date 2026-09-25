@@ -112,8 +112,12 @@ start:
     STA $8B
     STA $8D             ; SSP = FP = $0500
 
+    ; What happens when main returns (xcc -Q). `rts`, the default, returns to
+    ; the loader with main's value in A: Atari DOS starts a program with a
+    ; JSR to its run address, so this RTS goes back to DOS. `-Q loop` has the
+    ; compiler replace the RTS with a jump to itself, so the machine spins.
     JSR _xt_main
-    BRK
+    RTS
 
 ; ── _xcall: re-entrant cross-bank trampoline (unbanked, task #60) ─
 ; A banked call site stages the callee address in _xcall_vec and its

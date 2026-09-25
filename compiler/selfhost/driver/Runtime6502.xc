@@ -189,8 +189,20 @@ class Runtime6502
     static String* wrap(String* generatedAsm, IRModule* mod, Layout* layout,
                         String* root, String* harnessRel)
     {
+        return wrapQuit(generatedAsm, mod, layout, root, harnessRel, false);
+    }
+
+    // `quitLoop` is `-Q loop`: the startup's `RTS` back to the loader, after
+    // `JSR _xt_main`, becomes a jump to itself, so the machine spins once main
+    // returns. `-Q rts`, the default, leaves the harness as it is.
+    static String* wrapQuit(String* generatedAsm, IRModule* mod, Layout* layout,
+                            String* root, String* harnessRel, bool quitLoop)
+    {
         String* out = String.withCString("");
         String* harness = readTemplate(root, harnessRel);
+        if (quitLoop)
+            harness = harness.replacing(String.withCString("    JSR _xt_main\n    RTS\n"),
+                                        String.withCString("    JSR _xt_main\n_xt_quit:\n    JMP _xt_quit\n"));
 
         // The base harness ships degenerate weak no-op stubs. When the program
         // really uses weak refs, strip them so the real side-table adapters

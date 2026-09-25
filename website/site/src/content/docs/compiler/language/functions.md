@@ -188,8 +188,8 @@ mapped over RAM. The register targets have none of these. By target:
 | Annotation | Applies to | Purpose |
 |---|---|---|
 | `:naked` | **all targets** | no prologue / epilogue at all |
-| `:hwStack` | xt6502 | use the 6502 hardware stack |
-| `:xtcStack` | xt6502 | use the xcc software stack throughout |
+| `:hwStack` | xt6502 | return address and saved registers on the hardware stack |
+| `:xtcStack` | xt6502 | return address and saved registers on the xcc software stack |
 | `:irq` | xt6502 | hardware-IRQ handler, ends with `RTI` |
 | `:vbi` | xt6502 | vertical-blank handler, chains through the OS |
 | `:needsOS` | xt6502 | wrap the body with ROM enable / disable |
@@ -207,8 +207,8 @@ is the exception and means the same thing everywhere.
 void fn(void) :naked      { ... }    // no register save, just user code — all targets
 
 // xt6502 only, from here down
-void fn(void) :hwStack    { ... }    // use the 6502 hardware stack
-void fn(void) :xtcStack   { ... }    // use the xcc software stack
+void fn(void) :hwStack    { ... }    // hardware-stack convention, even under --xtc-stack
+void fn(void) :xtcStack   { ... }    // software-stack convention
 void fn(void) :needsOS    { ... }    // requires OS ROM mapped in
 void fn(void) :irq        { ... }    // hardware-IRQ handler, ends with RTI
 void fn(void) :vbi        { ... }    // VBI handler — install via Vbi.addImmediate()
@@ -220,8 +220,10 @@ void fn(void) :shadow     { ... }    // place in shadow RAM (no current layout h
 ### Calling convention / prologue (xt6502)
 
 - `:naked`: no prologue or epilogue. The compiler does not save A / X / Y or set up a frame; you write whatever the body needs. Mutually exclusive with `:irq` / `:vbi`.
-- `:hwStack`: the function uses the 6502 hardware stack for return addresses and saved registers. Parameters still go on the xcc software stack.
-- `:xtcStack`: the function uses the xcc software stack throughout. The hardware stack is much smaller (256 bytes), so deep recursion needs the software stack.
+- `:hwStack`: the function keeps its return address and saved registers on the hardware stack, even under `--xtc-stack`.
+- `:xtcStack`: the function keeps its return address and saved registers in a frame on the xcc software stack, with or without `--xtc-stack`.
+
+See [Default calling convention](#default-calling-convention) for what each one puts where.
 
 ### Interrupt handlers (xt6502)
 
@@ -245,9 +247,15 @@ On the banked `xt` target, `:irq` and `:vbi` handlers are placed in main RAM at 
 
 ## Default calling convention
 
-By default, parameters pass on the **xcc software stack**, and return addresses and saved registers go on the **6502 hardware stack**.
+This applies to xt6502. The xt CPU has a 4 KB hardware stack with stack-relative addressing, and the compiler keeps a separate software stack in the layout's `[stack]` region (`$0500-$07FF`, 768 bytes, on `xt`).
 
-The `:hwStack` and `:xtcStack` annotations override the command-line default per function. Parameters always travel on the software stack, whichever annotation applies.
+By default a function uses the **hardware stack**. The caller pushes the arguments there and `JSR` pushes the return address. The function's `PSH` saves P, A, X and Y beside them and reserves its stack-frame locals. A function uses the software stack only for locals whose address is taken, when they do not fit in zero page.
+
+With `--xtc-stack`, or on a function marked `:xtcStack`, the return address and the saved registers move to the **software stack**. The function's prologue takes the return address off the hardware stack and stores it, P, A, X, Y and the caller's frame pointer in a frame on the software stack; the epilogue puts them back before the `RTS`. The arguments and the stack-frame locals stay on the hardware stack, which now holds nothing else for that call.
+
+`:hwStack` keeps a function on the hardware-stack convention under `--xtc-stack`. Calls work in both directions between functions on the two conventions.
+
+Each software-stack frame takes 8 bytes plus the function's address-taken locals. The software stack is smaller than the hardware stack on `xt`, so `--xtc-stack` lowers the depth of recursion a program can reach. `:irq` and `:vbi` handlers always keep their own entry and exit sequences.
 
 ## Worked example
 

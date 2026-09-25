@@ -165,6 +165,11 @@ class DriverOptions
     Array*     _ldDirs;         // -L<dir> from $XTC_LDFLAGS: -l search, link only
     i32        _inlineMax;      // -Fli <n>, or -1 for the inliner's own ceiling
     bool       _dceTrace;       // -fdce-trace
+    bool       _quitLoop;       // -Q loop: an xt6502 program spins after main
+    bool       _xtcStack;       // --xtc-stack: the xt6502 software-stack convention
+    u32        _fnMinBanked;    // -Fmb <n>: keep smaller 6502 functions unbanked
+    bool       _dumpPlacement;  // -dp: print each 6502 function's placement
+    bool       _dumpUsage;      // -du: print the 6502 image's use of the layout
 
     void init(void)
     {
@@ -289,6 +294,16 @@ class DriverOptions
     void setInlineMax(i32 n)        { _inlineMax = n; }
     bool dceTrace(void)             { return _dceTrace; }
     void setDceTrace(bool b)        { _dceTrace = b; }
+    bool quitLoop(void)             { return _quitLoop; }
+    void setQuitLoop(bool b)        { _quitLoop = b; }
+    bool xtcStack(void)             { return _xtcStack; }
+    void setXtcStack(bool b)        { _xtcStack = b; }
+    u32  fnMinBanked(void)          { return _fnMinBanked; }
+    void setFnMinBanked(u32 n)      { _fnMinBanked = n; }
+    bool dumpPlacement(void)        { return _dumpPlacement; }
+    void setDumpPlacement(bool b)   { _dumpPlacement = b; }
+    bool dumpUsage(void)            { return _dumpUsage; }
+    void setDumpUsage(bool b)       { _dumpUsage = b; }
 
     // One token addressed to the LINKER — from -Xlinker, a -Wl, list or
     // $XTC_LDFLAGS. A library or object is a link input, `-rpath <dir>` is
@@ -2307,6 +2322,8 @@ void emitXt6502(DriverOptions* d, IRModule* mod)
 
     Xt6502* be = new Xt6502();
     be.setLayout(layout);
+    be.setXtcStackDefault(d.xtcStack());
+    be.setFnMinBanked(d.fnMinBanked());
     String* asmText = be.assembly(mod);
     if (be.failed()) {
         String* list = String.withCString("");
@@ -2317,6 +2334,7 @@ void emitXt6502(DriverOptions* d, IRModule* mod)
         Stdio.printf("xcc: %s: unsupported: %s\n", d.fe().input().cString(), list.cString());
         Process.exit((i32)3); return;
     }
+    if (d.dumpPlacement()) Stdio.error(be.placementReport());
 
     // The asm-text peephole, -O>=1 as the original gates it, and BEFORE the
     // rename and the wrap so it sees exactly the text the original's does.
@@ -2329,15 +2347,18 @@ void emitXt6502(DriverOptions* d, IRModule* mod)
     // rename over the finished text on WHOLE-WORD boundaries, so `_main_loop`
     // is left alone.
     asmText = renameMainXt(asmText);
-    asmText = Runtime6502.wrap(asmText, mod, layout, root,
-                               String.withCString("xt6502/runtime/xt6502-harness.asm"));
+    asmText = Runtime6502.wrapQuit(asmText, mod, layout, root,
+                                   String.withCString("xt6502/runtime/xt6502-harness.asm"),
+                                   d.quitLoop());
 
+    // -du reports what the ASSEMBLER placed, so with -S the text is assembled
+    // too, only to measure it.
     if (d.keepAsm()) {
         if (!Files.writeText(d.fe().output(), asmText)) {
             Stdio.printf("xcc: error: cannot write '%s'\n", d.fe().output().cString());
             Process.exit((i32)1);
         }
-        return;
+        if (!d.dumpUsage()) return;
     }
 
     // Assemble AND link. The banking configuration comes from the layout —
@@ -2368,6 +2389,8 @@ void emitXt6502(DriverOptions* d, IRModule* mod)
             Stdio.printf("xcc: assembly failed: %s\n", ((String*)a.errors().get(k)).cString());
         Process.exit((i32)1); return;
     }
+    if (d.dumpUsage()) Stdio.error(usageReport6502(a.segments(), layout));
+    if (d.keepAsm()) return;
     u32 entry = (u32)$2000;
     if (a.segments().count() > (u32)0)
         entry = ((XaSegment*)a.segments().get((u32)0)).origin();
@@ -2383,6 +2406,193 @@ void emitXt6502(DriverOptions* d, IRModule* mod)
         Stdio.printf("xcc: error: cannot write '%s'\n", d.fe().output().cString());
         Process.exit((i32)1);
     }
+}
+
+// ── -du: the assembled image against the layout ──────────────────────────
+
+String* padRightTo(String* s, u32 width)
+{
+    String* o = String.withString(s);
+    while (o.byteLength() < width) o.appendCString(" ");
+    return o;
+}
+
+String* padLeftNumTo(u32 v, u32 width)
+{
+    String* num = String.withCString("");
+    num.appendFormat("%lu", v);
+    String* o = String.withCString("");
+    while (o.byteLength() + num.byteLength() < width) o.appendCString(" ");
+    o.append(num);
+    return o;
+}
+
+// `$` and `digits` uppercase hex digits of v.
+String* hexDigitsOf(u32 v, u32 digits)
+{
+    String* o = String.withCString("$");
+    u32 shift = digits * (u32)4;
+    while (shift > (u32)0) {
+        shift = shift - (u32)4;
+        u32 d = (v >> shift) & (u32)$F;
+        o.appendByte(d < (u32)10 ? (u8)((u32)'0' + d) : (u8)((u32)'A' + d - (u32)10));
+    }
+    return o;
+}
+
+String* hexAddr4(u32 v)
+{
+    return hexDigitsOf(v, (u32)4);
+}
+
+// Bytes of [lo, hi] (inclusive) that the unbanked segments occupy.
+u32 segBytesIn(Array* segs, u32 lo, u32 hi, u32 bwStart, u32 bwEnd)
+{
+    u32 n = (u32)0;
+    for (u32 k = (u32)0; k < segs.count(); k = k + (u32)1) {
+        XaSegment* sg = (XaSegment*)segs.get(k);
+        if (sg.isCloaked() || (sg.origin() >= bwStart && sg.origin() <= bwEnd)) continue;
+        u32 a = sg.origin();
+        u32 b = a + sg.data().count();          // [a, b)
+        if (a < lo) a = lo;
+        if (b > hi + (u32)1) b = hi + (u32)1;
+        if (b > a) n = n + (b - a);
+    }
+    return n;
+}
+
+// What the assembled image uses of each region and bank the layout declares.
+// Code banks are numbered as the XEX writer numbers them: a segment in the
+// code window takes its `.bank` number if it has one, else the next page in
+// encounter order.
+String* usageReport6502(Array* segs, Layout* l)
+{
+    String* r = String.withCString("xcc: usage for layout '");
+    r.append(l.name());
+    r.appendCString("':\n");
+    u32 bwStart = l.bankWindowStart();
+    u32 bwEnd = l.bankWindowEnd();
+    bool banked = l.hasBanking() && bwStart != (u32)0;
+    if (!banked) { bwStart = (u32)1; bwEnd = (u32)0; }
+    if (l.varsRanges().count() > (u32)0) {
+        String* list = String.withCString("");
+        u32 total = (u32)0;
+        for (u32 k = (u32)0; k < l.varsRanges().count(); k = k + (u32)1) {
+            LayoutRange* z = (LayoutRange*)l.varsRanges().get(k);
+            if (k > (u32)0) list.appendCString(", ");
+            list.append(hexDigitsOf(z.lo(), (u32)2));
+            list.appendCString("-");
+            list.append(hexDigitsOf(z.hi(), (u32)2));
+            total = total + (z.hi() - z.lo() + (u32)1);
+        }
+        r.appendCString("  ");
+        r.append(padRightTo(String.withCString("zero page"), (u32)12));
+        r.appendFormat(" %s  %lu bytes of variables\n", list.cString(), total);
+    }
+    if (l.stackEnd() != (u32)0) {
+        r.appendCString("  ");
+        r.append(padRightTo(String.withCString("stack"), (u32)12));
+        r.appendFormat(" %s-%s  %lu bytes, the software stack\n",
+                       hexAddr4(l.stackStart()).cString(), hexAddr4(l.stackEnd()).cString(),
+                       l.stackEnd() - l.stackStart() + (u32)1);
+    }
+    Array* names = new Array();
+    Array* los = new Array();
+    Array* his = new Array();
+    if (l.systemEnd() > l.systemStart()) {
+        names.add((Object*)String.withCString("system"));
+        los.add((Object*)Number.withU32(l.systemStart()));
+        his.add((Object*)Number.withU32(l.systemEnd()));
+    }
+    if (l.screenEnd() > l.screenStart()) {
+        names.add((Object*)String.withCString("screen"));
+        los.add((Object*)Number.withU32(l.screenStart()));
+        his.add((Object*)Number.withU32(l.screenEnd()));
+    }
+    for (u32 k = (u32)0; k < l.mainRanges().count(); k = k + (u32)1) {
+        LayoutRange* m = (LayoutRange*)l.mainRanges().get(k);
+        names.add((Object*)String.withCString("main"));
+        los.add((Object*)Number.withU32(m.lo()));
+        his.add((Object*)Number.withU32(m.hi()));
+    }
+    u32 accounted = (u32)0;
+    for (u32 k = (u32)0; k < names.count(); k = k + (u32)1) {
+        String* name = (String*)names.get(k);
+        u32 lo = ((Number*)los.get(k)).asU32();
+        u32 hi = ((Number*)his.get(k)).asU32();
+        u32 used = segBytesIn(segs, lo, hi, bwStart, bwEnd);
+        accounted = accounted + used;
+        r.appendCString("  ");
+        r.append(padRightTo(name, (u32)12));
+        r.appendFormat(" %s-%s  ", hexAddr4(lo).cString(), hexAddr4(hi).cString());
+        if (name.equals(String.withCString("screen")) && used == (u32)0) {
+            r.appendCString("screen RAM\n");
+        } else {
+            r.append(padLeftNumTo(used, (u32)6));
+            r.appendFormat(" of %lu bytes used\n", hi - lo + (u32)1);
+        }
+    }
+    u32 all = segBytesIn(segs, (u32)0, (u32)$FFFF, bwStart, bwEnd);
+    if (all > accounted) {
+        r.appendCString("  ");
+        r.append(padRightTo(String.withCString("other"), (u32)12));
+        r.appendFormat(" %lu bytes outside the declared regions\n", all - accounted);
+    }
+    if (banked) {
+        Array* pages = new Array();       // Number@ page per used segment
+        Array* sizes = new Array();       // Number@ its bytes
+        u32 counter = (u32)1;
+        u32 highest = (u32)0;
+        for (u32 k = (u32)0; k < segs.count(); k = k + (u32)1) {
+            XaSegment* sg = (XaSegment*)segs.get(k);
+            if (sg.isCloaked() || sg.origin() < bwStart || sg.origin() > bwEnd) continue;
+            u32 page = sg.bankNumber() >= (i32)0 ? (u32)sg.bankNumber() : counter;
+            counter = counter + (u32)1;
+            if (sg.data().count() == (u32)0) continue;
+            pages.add((Object*)Number.withU32(page));
+            sizes.add((Object*)Number.withU32(sg.data().count()));
+            if (page > highest) highest = page;
+        }
+        u32 winSize = bwEnd - bwStart + (u32)1;
+        u32 firstUnused = (u32)1;
+        for (u32 b = (u32)1; b <= highest; b = b + (u32)1) {
+            u32 used = (u32)0;
+            bool any = false;
+            for (u32 k = (u32)0; k < pages.count(); k = k + (u32)1)
+                if (((Number*)pages.get(k)).asU32() == b) {
+                    used = used + ((Number*)sizes.get(k)).asU32();
+                    any = true;
+                }
+            if (!any) continue;
+            String* label = String.withCString("code bank ");
+            label.appendFormat("%lu", b);
+            r.appendCString("  ");
+            r.append(padRightTo(label, (u32)12));
+            r.appendFormat(" %s-%s  ", hexAddr4(bwStart).cString(), hexAddr4(bwEnd).cString());
+            r.append(padLeftNumTo(used, (u32)6));
+            r.appendFormat(" of %lu bytes used\n", winSize);
+            firstUnused = b + (u32)1;
+        }
+        if (firstUnused <= (u32)255) {
+            r.appendCString("  ");
+            r.append(padRightTo(String.withCString("code banks"), (u32)12));
+            r.appendFormat(" %s-%s  unused: code banks %lu-255\n",
+                           hexAddr4(bwStart).cString(), hexAddr4(bwEnd).cString(), firstUnused);
+        }
+    }
+    if (l.dataWindowStart() != (u32)0 && l.dataWindowEnd() > l.dataWindowStart()) {
+        r.appendCString("  ");
+        r.append(padRightTo(String.withCString("data window"), (u32)12));
+        r.appendFormat(" %s-%s  ", hexAddr4(l.dataWindowStart()).cString(),
+                       hexAddr4(l.dataWindowEnd()).cString());
+        if (l.heapBankDynamic())
+            r.appendCString("the heap: data banks taken as it grows, at run time\n");
+        else if (l.heapBankFirst() != (u32)0)
+            r.appendFormat("the heap: data banks %lu-%lu\n", l.heapBankFirst(), l.heapBankLast());
+        else
+            r.appendCString("unused\n");
+    }
+    return r;
 }
 
 // Whole-word `_main` -> `_xt_main`.
@@ -3674,6 +3884,22 @@ void usage(void)
     Stdio.printf("  -x-<arch>,<opt>[,<opt>]    Target-specific options. wasm32: return-call\n");
     Stdio.printf("                             (tail calls become return_call)\n");
     Stdio.printf("\n");
+    Stdio.printf("6502 (xt6502):\n");
+    Stdio.printf("  -Q, --quit-style rts|loop  What the program does when main returns: rts\n");
+    Stdio.printf("                             (the default) returns to the loader, DOS, with\n");
+    Stdio.printf("                             main's value in A; loop spins in place\n");
+    Stdio.printf("  --xtc-stack                Keep every function's return address and saved\n");
+    Stdio.printf("                             registers on the software stack, not the\n");
+    Stdio.printf("                             hardware stack. :hwStack on a function opts out;\n");
+    Stdio.printf("                             :xtcStack opts one in without the flag\n");
+    Stdio.printf("  -Fmb, --fn-min-banked <n>  Keep functions of fewer than n instructions in\n");
+    Stdio.printf("                             main RAM instead of a code bank, so calls to\n");
+    Stdio.printf("                             them need no bank switch. Default 0 (off)\n");
+    Stdio.printf("  -dp, --dump-placement      Print each function's placement (main, bank N,\n");
+    Stdio.printf("                             irq, vbi) and the bytes used per bank, to stderr\n");
+    Stdio.printf("  -du, --dump-usage          Print the bytes the image uses in every region\n");
+    Stdio.printf("                             and code bank of the layout, to stderr\n");
+    Stdio.printf("\n");
     Stdio.printf("Paths and definitions:\n");
     Stdio.printf("  -I, --include <path>       Add an include search path\n");
     Stdio.printf("  -D <name[=value]>          Define a preprocessor symbol (also -Dname=value)\n");
@@ -3745,13 +3971,6 @@ void usage(void)
     Stdio.printf("                             region\n");
     Stdio.printf("  -ss, --stack-size <n>      Checked (decimal, $hex or 0xhex; 1..65535); no\n");
     Stdio.printf("                             effect, as no layout has a flat xtc stack\n");
-    Stdio.printf("  -Q, --quit-style rts|loop  Checked, with a warning: an xt6502 program stops\n");
-    Stdio.printf("                             at a BRK when main returns\n");
-    Stdio.printf("  --xtc-stack                Warns: a 6502 function gets a software-stack\n");
-    Stdio.printf("                             frame only when its locals do not fit zero page\n");
-    Stdio.printf("  -Fmb, --fn-min-banked <n>  Checked, with a warning: no effect\n");
-    Stdio.printf("  -dp, --dump-placement      Warns: no effect\n");
-    Stdio.printf("  -du, --dump-usage          Warns: no effect\n");
     Stdio.printf("\n");
     Stdio.printf("Output containers on 6502 and m68k:\n");
     Stdio.printf("    .s .asm                  assembly (stops before the assembler)\n");
@@ -4654,9 +4873,8 @@ DriverOptions* parseDriverArgs(void)
         // A bare -W: every warning category is on unless -Wno- turns it off,
         // so there is nothing more to enable.
         if (a.equals(String.withCString("-W"))) { i = i + (u32)1; continue; }
-        // Options for machinery this compiler does not have. Each is accepted
-        // so a command line written for them still builds, and each says it
-        // changes nothing, rather than letting the reader believe it did.
+        // The xt6502 options. Each is the 6502 back end's or its startup's
+        // business; on another target they change nothing.
         if ((a.equals(String.withCString("-Q")) || a.equals(String.withCString("--quit-style")))
             && i + (u32)1 < argc) {
             String* v = Process.argument(i + (u32)1).lowercased();
@@ -4665,32 +4883,31 @@ DriverOptions* parseDriverArgs(void)
                 Process.exit((i32)1);
                 return (DriverOptions*)0;
             }
-            Stdio.error(String.withFormat("xcc: warning: %s has no effect: an xt6502 program stops at a BRK "
-                         "when main returns\n", a.cString()));
+            d.setQuitLoop(v.equals(String.withCString("loop")));
             i = i + (u32)2; continue;
         }
         if (a.equals(String.withCString("--xtc-stack"))) {
-            Stdio.error(String.withFormat("xcc: warning: --xtc-stack has no effect: the 6502 back end gives a "
-                         "function a software-stack frame only when its locals do not fit "
-                         "zero page\n"));
+            d.setXtcStack(true);
             i = i + (u32)1; continue;
         }
         if ((a.equals(String.withCString("-Fmb")) || a.equals(String.withCString("--fn-min-banked")))
             && i + (u32)1 < argc) {
-            if (parseCount(Process.argument(i + (u32)1)) < (i32)0) {
+            i32 mb = parseCount(Process.argument(i + (u32)1));
+            if (mb < (i32)0 || mb > (i32)65535) {
                 Stdio.printf("xcc: error: -Fmb takes a decimal instruction count, got '%s'\n",
                              Process.argument(i + (u32)1).cString());
                 Process.exit((i32)1);
                 return (DriverOptions*)0;
             }
-            Stdio.error(String.withFormat("xcc: warning: %s has no effect: the 6502 back end banks every "
-                         "function except the entry point and interrupt handlers\n", a.cString()));
+            d.setFnMinBanked((u32)mb);
             i = i + (u32)2; continue;
         }
-        if (a.equals(String.withCString("-dp")) || a.equals(String.withCString("--dump-placement"))
-            || a.equals(String.withCString("-du")) || a.equals(String.withCString("--dump-usage"))) {
-            Stdio.error(String.withFormat("xcc: warning: %s has no effect: this compiler does not report "
-                         "6502 placement or usage\n", a.cString()));
+        if (a.equals(String.withCString("-dp")) || a.equals(String.withCString("--dump-placement"))) {
+            d.setDumpPlacement(true);
+            i = i + (u32)1; continue;
+        }
+        if (a.equals(String.withCString("-du")) || a.equals(String.withCString("--dump-usage"))) {
+            d.setDumpUsage(true);
             i = i + (u32)1; continue;
         }
         // An unrecognised flag is an ERROR, not something to skip. A driver that

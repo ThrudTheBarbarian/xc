@@ -40,6 +40,156 @@
 #define XTC_VERSION "0.0"
 #endif
 
+static NSString* padRight(NSString* s, NSUInteger width)
+    {
+    NSMutableString* m = [s mutableCopy];
+    while (m.length < width)
+        [m appendString:@" "];
+    return m;
+    }
+
+static NSString* padLeft(NSString* s, NSUInteger width)
+    {
+    NSMutableString* m = [NSMutableString string];
+    while (m.length + s.length < width)
+        [m appendString:@" "];
+    [m appendString:s];
+    return m;
+    }
+
+// Bytes of [start, end] (inclusive) that the segments occupy.
+static NSUInteger bytesIn(NSArray<XASegment*>* segs, NSUInteger start, NSUInteger end, uint16_t bwStart,
+                          uint16_t bwEnd)
+    {
+    NSUInteger n = 0;
+    for (XASegment* seg in segs)
+        {
+        if (seg.isCloaked || (seg.origin >= bwStart && seg.origin <= bwEnd))
+            continue;
+        NSUInteger lo = seg.origin, hi = lo + seg.data.length; // [lo, hi)
+        NSUInteger a = MAX(lo, start), b = MIN(hi, end + 1);
+        if (b > a)
+            n += b - a;
+        }
+    return n;
+    }
+
+static NSString* hex4(NSUInteger v)
+    {
+    return [NSString stringWithFormat:@"$%04lX", (unsigned long)v];
+    }
+
+// -du: what the assembled image uses of each region and bank the layout
+// declares. Code banks are numbered as the XEX writer numbers them: a segment
+// in the code window takes its `.bank` number if it has one, else the next
+// page in encounter order.
+static NSString* usageReport(NSArray<XASegment*>* segs, XTMemoryModel* mm)
+    {
+    NSMutableString* r = [NSMutableString string];
+    [r appendFormat:@"xcc: usage for layout '%@':\n", mm.name ?: @"(unnamed)"];
+    uint16_t bwStart = mm.bankWindowStart, bwEnd = mm.bankWindowEnd;
+    BOOL banked = mm.hasBanking && bwStart != 0;
+    if (!banked)
+        {
+        bwStart = 1;
+        bwEnd = 0;
+        }
+    if (mm.zpVarsRanges.count > 0)
+        {
+        NSMutableString* list = [NSMutableString string];
+        NSUInteger total = 0;
+        for (NSArray<NSNumber*>* z in mm.zpVarsRanges)
+            {
+            if (list.length)
+                [list appendString:@", "];
+            [list appendFormat:@"$%02lX-$%02lX", (unsigned long)z[0].unsignedIntegerValue,
+                               (unsigned long)z[1].unsignedIntegerValue];
+            total += z[1].unsignedIntegerValue - z[0].unsignedIntegerValue + 1;
+            }
+        [r appendFormat:@"  %@ %@  %lu bytes of variables\n", padRight(@"zero page", 12), list,
+                        (unsigned long)total];
+        }
+    if (mm.stackRangeSet)
+        [r appendFormat:@"  %@ %@-%@  %lu bytes, the software stack\n", padRight(@"stack", 12),
+                        hex4(mm.stackRangeStart), hex4(mm.stackRangeEnd),
+                        (unsigned long)(mm.stackRangeEnd - mm.stackRangeStart + 1)];
+    // The unbanked regions, each with the bytes the image puts there.
+    NSMutableArray<NSArray*>* regions = [NSMutableArray array];
+    if (mm.systemEnd > mm.systemStart)
+        [regions addObject:@[ @"system", @(mm.systemStart), @(mm.systemEnd) ]];
+    if (mm.screenEnd > mm.screenStart)
+        [regions addObject:@[ @"screen", @(mm.screenStart), @(mm.screenEnd) ]];
+    for (NSArray<NSNumber*>* m in mm.mainRegionRanges)
+        [regions addObject:@[ @"main", m[0], m[1] ]];
+    NSUInteger accounted = 0;
+    for (NSArray* reg in regions)
+        {
+        NSUInteger lo = [reg[1] unsignedIntegerValue], hi = [reg[2] unsignedIntegerValue];
+        NSUInteger used = bytesIn(segs, lo, hi, bwStart, bwEnd);
+        accounted += used;
+        NSString* name = reg[0];
+        if ([name isEqualToString:@"screen"] && used == 0)
+            [r appendFormat:@"  %@ %@-%@  screen RAM\n", padRight(name, 12), hex4(lo), hex4(hi)];
+        else
+            [r appendFormat:@"  %@ %@-%@  %@ of %lu bytes used\n", padRight(name, 12), hex4(lo), hex4(hi),
+                            padLeft([NSString stringWithFormat:@"%lu", (unsigned long)used], 6),
+                            (unsigned long)(hi - lo + 1)];
+        }
+    // Anything the image puts outside every declared region.
+    NSUInteger all = bytesIn(segs, 0, 0xFFFF, bwStart, bwEnd);
+    if (all > accounted)
+        [r appendFormat:@"  %@ %lu bytes outside the declared regions\n", padRight(@"other", 12),
+                        (unsigned long)(all - accounted)];
+    if (banked)
+        {
+        NSMutableDictionary<NSNumber*, NSNumber*>* perBank = [NSMutableDictionary dictionary];
+        NSUInteger counter = 1, highest = 0;
+        for (XASegment* seg in segs)
+            {
+            if (seg.isCloaked || seg.origin < bwStart || seg.origin > bwEnd)
+                continue;
+            NSUInteger page = seg.bankNumber >= 0 ? (NSUInteger)seg.bankNumber : counter;
+            counter++;
+            if (seg.data.length == 0)
+                continue;
+            perBank[@(page)] = @(perBank[@(page)].unsignedIntegerValue + seg.data.length);
+            if (page > highest)
+                highest = page;
+            }
+        NSUInteger winSize = (NSUInteger)bwEnd - bwStart + 1;
+        NSUInteger firstUnused = 1;
+        for (NSUInteger b = 1; b <= highest; b++)
+            {
+            NSNumber* used = perBank[@(b)];
+            if (!used)
+                continue;
+            [r appendFormat:@"  %@ %@-%@  %@ of %lu bytes used\n",
+                            padRight([NSString stringWithFormat:@"code bank %lu", (unsigned long)b], 12),
+                            hex4(bwStart), hex4(bwEnd),
+                            padLeft([NSString stringWithFormat:@"%lu", used.unsignedIntegerValue], 6),
+                            (unsigned long)winSize];
+            firstUnused = b + 1;
+            }
+        if (firstUnused <= 255)
+            [r appendFormat:@"  %@ %@-%@  unused: code banks %lu-255\n", padRight(@"code banks", 12),
+                            hex4(bwStart), hex4(bwEnd), (unsigned long)firstUnused];
+        }
+    if (mm.dataWindowStart != 0 && mm.dataWindowEnd > mm.dataWindowStart)
+        {
+        if (mm.heapBankDynamic)
+            [r appendFormat:@"  %@ %@-%@  the heap: data banks taken as it grows, at run time\n",
+                            padRight(@"data window", 12), hex4(mm.dataWindowStart), hex4(mm.dataWindowEnd)];
+        else if (mm.heapBank)
+            [r appendFormat:@"  %@ %@-%@  the heap: data banks %lu-%lu\n", padRight(@"data window", 12),
+                            hex4(mm.dataWindowStart), hex4(mm.dataWindowEnd), (unsigned long)mm.heapBank,
+                            (unsigned long)mm.heapBankEnd];
+        else
+            [r appendFormat:@"  %@ %@-%@  unused\n", padRight(@"data window", 12), hex4(mm.dataWindowStart),
+                            hex4(mm.dataWindowEnd)];
+        }
+    return r;
+    }
+
 static void usage(void)
     {
     fprintf(stderr,
@@ -51,6 +201,18 @@ static void usage(void)
             "                          .xex/.exe/.bin/.com → assemble to binary\n"
             "                          else → write wrapped 6502 asm.\n"
             "  -O0..-O3              IR opt-pass level.\n"
+            "  -Q, --quit-style rts|loop\n"
+            "                        What the program does when main returns:\n"
+            "                        return to the loader (rts, the default) or\n"
+            "                        spin in place (loop).\n"
+            "  --xtc-stack           Functions keep their return address and saved\n"
+            "                        registers on the software stack unless marked\n"
+            "                        :hwStack.\n"
+            "  -Fmb, --fn-min-banked <n>\n"
+            "                        Keep functions of fewer than n instructions in\n"
+            "                        main RAM instead of a code bank. 0 (default) off.\n"
+            "  -dp, --dump-placement Print each function's placement to stderr.\n"
+            "  -du, --dump-usage     Print the bytes used in each region and bank.\n"
             "  -q, --quiet           Suppress informational stderr.\n"
             "  -v, --version         Print version and exit.\n");
     }
@@ -76,6 +238,11 @@ int main(int argc, const char* argv[])
         NSInteger optLevel = 0;
         BOOL quiet = NO;
         BOOL dumpOptIR = NO;
+        BOOL quitLoop = NO;
+        BOOL xtcStack = NO;
+        NSUInteger fnMinBanked = 0;
+        BOOL dumpPlacement = NO;
+        BOOL dumpUsage = NO;
 
         for (int i = 1; i < argc; i++)
             {
@@ -121,6 +288,44 @@ int main(int argc, const char* argv[])
             else if ([arg isEqualToString:@"-q"] || [arg isEqualToString:@"--quiet"])
                 {
                 quiet = YES;
+                }
+            else if (([arg isEqualToString:@"-Q"] || [arg isEqualToString:@"--quit-style"]) && i + 1 < argc)
+                {
+                NSString* v = [@(argv[++i]) lowercaseString];
+                if ([v isEqualToString:@"loop"])
+                    quitLoop = YES;
+                else if ([v isEqualToString:@"rts"])
+                    quitLoop = NO;
+                else
+                    {
+                    fprintf(stderr, "xcc-cg-6502: -Q expects 'rts' or 'loop', got '%s'\n", v.UTF8String);
+                    return 1;
+                    }
+                }
+            else if ([arg isEqualToString:@"--xtc-stack"])
+                {
+                xtcStack = YES;
+                }
+            else if (([arg isEqualToString:@"-Fmb"] || [arg isEqualToString:@"--fn-min-banked"]) && i + 1 < argc)
+                {
+                NSString* v = @(argv[++i]);
+                NSScanner* sc = [NSScanner scannerWithString:v];
+                long long n = -1;
+                if (![sc scanLongLong:&n] || !sc.isAtEnd || n < 0 || n > 65535)
+                    {
+                    fprintf(stderr, "xcc-cg-6502: -Fmb takes a decimal instruction count, got '%s'\n",
+                            v.UTF8String);
+                    return 1;
+                    }
+                fnMinBanked = (NSUInteger)n;
+                }
+            else if ([arg isEqualToString:@"-dp"] || [arg isEqualToString:@"--dump-placement"])
+                {
+                dumpPlacement = YES;
+                }
+            else if ([arg isEqualToString:@"-du"] || [arg isEqualToString:@"--dump-usage"])
+                {
+                dumpUsage = YES;
                 }
             else if ([arg isEqualToString:@"--dump-opt-ir"])
                 {
@@ -251,6 +456,8 @@ int main(int argc, const char* argv[])
 
         // Backend.
         XTDiagnosticEngine* diag = [[XTDiagnosticEngine alloc] init];
+        [XT6502Backend setDefaultXtcStack:xtcStack];
+        [XT6502Backend setFnMinBanked:fnMinBanked];
         NSString* asmText = [XT6502Backend assemblyFromModule:mod
                                                   memoryModel:mm
                                                   diagnostics:diag];
@@ -260,6 +467,8 @@ int main(int argc, const char* argv[])
             fprintf(stderr, "xcc-cg-6502: backend produced no output\n");
             return 1;
             }
+        if (dumpPlacement)
+            fputs(([XT6502Backend lastPlacementReport] ?: @"").UTF8String, stderr);
 
         // Asm-text peephole — runs over the raw backend output to close
         // patterns the SSA→stack lowering opens up (redundant reload,
@@ -296,6 +505,7 @@ int main(int argc, const char* argv[])
         // came back empty → xt6502 emitted `JSR $0000` for those routines.
         [XTIRRuntimeEmitter setSupportRoot:
                                 [XTCommandLineOptions supportRootForHome:xtcHome]];
+        [XTIRRuntimeEmitter setQuitLoop:quitLoop];
         asmText = [XTIRRuntimeEmitter
             wrapXt6502Asm:asmText
                 forModule:mod
@@ -307,7 +517,9 @@ int main(int argc, const char* argv[])
         NSString* ext = outputPath.pathExtension.lowercaseString;
         BOOL wantBinary = outputPath && [binExts containsObject:ext];
 
-        if (wantBinary)
+        // -du needs the assembled image even when the output is assembly text:
+        // the usage is what the assembler placed, not what the back end guessed.
+        if (wantBinary || dumpUsage)
             {
             XAAssembler* asmer = [[XAAssembler alloc] init];
             asmer.verbose = NO;
@@ -367,6 +579,10 @@ int main(int argc, const char* argv[])
                     fprintf(stderr, "xcc-as: error: %s\n", e.UTF8String);
                 return 1;
                 }
+            if (dumpUsage)
+                fputs(usageReport(segs, mm).UTF8String, stderr);
+            if (!wantBinary)
+                goto writeText;
             uint16_t entry = segs.count > 0 ? segs[0].origin : 0x2000;
             BOOL ok = asmer.bankedMode
                           ? [asmer writeBankedXEX:segs entryPoint:entry toFile:outputPath]
@@ -388,6 +604,7 @@ int main(int argc, const char* argv[])
             return 0;
             }
 
+    writeText:
         if (outputPath)
             {
             NSError* err = nil;

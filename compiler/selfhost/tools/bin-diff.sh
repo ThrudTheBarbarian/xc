@@ -3,6 +3,10 @@
 #
 #   bash selfhost/tools/bin-diff.sh [pattern]
 #
+# BIN_DIFF_TARGETS picks the targets (6502 is not in the default set) and
+# BIN_DIFF_FLAGS adds options to both drivers, e.g.
+# BIN_DIFF_TARGETS=6502 BIN_DIFF_FLAGS="-Q loop".
+#
 # xcc-diff compares the drivers' ASSEMBLY and the ld*-diffs compare the LINKERS
 # given one input. Neither sees what a driver hands its linker or how it calls
 # it — which is exactly where 128 (m68k crt0 prepended), 133 (the port's musl
@@ -40,16 +44,17 @@ FIXTURES=$(ls tests/fixtures/*.xc | sort \
 # device build is Mac-free and byte-identical between the drivers, which is
 # what a human's on-device step relies on before it even reaches the keychain.
 TARGETS=${BIN_DIFF_TARGETS:-"arm64 ios-sim ios x86_64 win64 android"}
+read -r -a EXTRA <<< "${BIN_DIFF_FLAGS:-}"
 for arch in $TARGETS; do
     for f in $FIXTURES; do
         [ -n "$PATTERN" ] && [[ "$f" != *"$PATTERN"* ]] && continue
         b=$(basename "$f" .xc)
         rm -f "$WORK/ref.bin" "$WORK/port.bin"
-        if ! "$BIN/xcc" -A "$arch" -H . -q -o "$WORK/ref.bin" "$f" >/dev/null 2>&1 \
+        if ! "$BIN/xcc" -A "$arch" -H . -q ${EXTRA[@]+"${EXTRA[@]}"} -o "$WORK/ref.bin" "$f" >/dev/null 2>&1 \
              || [ ! -s "$WORK/ref.bin" ]; then
             oracle=$((oracle+1)); continue
         fi
-        "$WORK/xccxc" -A "$arch" -H . -q -o "$WORK/port.bin" "$f" >"$WORK/port.log" 2>&1
+        "$WORK/xccxc" -A "$arch" -H . -q ${EXTRA[@]+"${EXTRA[@]}"} -o "$WORK/port.bin" "$f" >"$WORK/port.log" 2>&1
         if [ ! -s "$WORK/port.bin" ]; then
             why=$(grep -o 'error: .*' "$WORK/port.log" | head -1)
             unsup=$((unsup+1)); UNSUP+=("$arch/$b — ${why:-produced no output}")

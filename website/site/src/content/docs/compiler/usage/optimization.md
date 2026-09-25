@@ -60,6 +60,18 @@ To unroll a specific loop past the cap, use the `:unroll` annotation. See [State
 
 `-Fli <n>` sets the leaf-function inlining cap (default 100, at `-O2` and above). See the [CLI flag reference](/compiler/usage/cli/#optimisation).
 
+## `-Fmb` — small functions in main RAM (xt6502)
+
+```bash
+xcc -m xt -Fmb 50 -o app.xex app.xc
+```
+
+On the banked `xt` layout every function except the entry point and the interrupt handlers goes into a 16 KB code bank. A call into another bank goes through the `_xcall` trampoline, which saves the code-bank register, selects the callee's bank and restores the register on return. For a function of a few instructions the trampoline costs more than the body.
+
+`-Fmb <n>` keeps a function of fewer than `n` instructions in main RAM. Every call to it is a plain `JSR`, from main RAM or from any bank. The count is of the function's own 6502 instructions, prologue and epilogue included. The default, 0, keeps nothing back.
+
+Main RAM also holds the runtime and the program's data. If the functions kept there do not fit, the assembler reports the overflow; lower `n`. `-dp` lists where each function went and `-du` the bytes each region holds. See [the CLI reference](/compiler/usage/cli/#support-tree-and-memory-model).
+
 ## Per-target settings
 
 | Target | Vectorises loops | Unrolls loops with a run-time trip count |

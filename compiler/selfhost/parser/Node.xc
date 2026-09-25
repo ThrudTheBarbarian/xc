@@ -122,6 +122,11 @@ enum NodeKind = {
 // function's, so the symbol has to carry which kind it is.
 #define NF_IRQ $40000
 #define NF_VBI $80000
+// `:xtcStack` / `:hwStack` — the xt6502 calling convention a function asks for,
+// overriding the --xtc-stack default. The flag word is full, so :hwStack shares
+// its bit with NF_RANGE_HI, which only a `case` label ever carries.
+#define NF_XTCSTACK $80000000
+#define NF_HWSTACK $20000
 // A declaration that came from a C interface, so it uses the C ABI. Set by the
 // TOOL on everything it reads out of an interface stub, exactly as the driver
 // sets it on what it reads out of DWARF — there is no source syntax for it,
