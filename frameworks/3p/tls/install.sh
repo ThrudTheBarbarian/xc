@@ -15,7 +15,7 @@
 set -e
 cd "$(dirname "$0")"
 HERE=$(pwd)
-XCC=${XCC:-/opt/xcc/0.4/bin/xcc}
+XCC=${XCC:-xcc}
 DEST=${DEST:-/opt/xcc/3p/tls}
 MB=${MBEDTLS_PREFIX:-/opt/homebrew/opt/mbedtls}
 MBLIN="$HERE/mbedtls-linux"

@@ -262,6 +262,18 @@ $(XCC_XC_BIN): $(XTC_BIN) $(XCC_XC_SRC) $(wildcard selfhost/*/*.xc) \
 	@echo "  xc   building the production compiler with the bootstrap one"
 	@$(XTC_BIN) -O2 -A arm64 -H . -DXCC_VERSION='"$(VERSION)"' -o $@ $(XCC_XC_SRC) $(XCC_XC_INCS)
 
+# Stage 2: the compiler that SHIPS, built by the xc compiler above rather than
+# by the Objective-C one. Every binary that reaches a user (this one, the
+# signers, the assembler, and the Linux and Windows builds of all of them) is
+# compiled by $(XCC_XC2_BIN), so no shipped byte is Objective-C output. Stage 2
+# rebuilding itself gives a byte-identical stage 3, which is the fixed point
+# that makes this safe to ship. Stage 1 stays the binary every harness and
+# differential calls `xcc-xc`.
+XCC_XC2_BIN = $(BIN_DIR)/xcc-xc2
+$(XCC_XC2_BIN): $(XCC_XC_BIN)
+	@echo "  xc   building the shipped compiler with the xc compiler (stage 2)"
+	@$(XCC_XC_BIN) -q -O2 -A arm64 -H . -D XCC_VERSION='"$(VERSION)"' -o $@ $(XCC_XC_SRC) $(XCC_XC_INCS)
+
 # The SAME production compiler, cross-built for the other two hosts. THE GOLDEN
 # RULE is that we never ship the Objective-C build, so a platform
 # without one of these gets no archive at all — these rules are what make Linux
@@ -292,18 +304,18 @@ XCC_SIGN_XC_WIN64_BIN = bin/win64/xcc-sign-xc.exe
 XCC_AS_XC_LINUX_BIN = bin/linux/xcc-as-xc
 XCC_AS_XC_WIN64_BIN = bin/win64/xcc-as-xc.exe
 
-$(XCC_XC_LINUX_BIN): $(XTC_BIN) $(XCC_XC_SRC) $(wildcard selfhost/*/*.xc) \
+$(XCC_XC_LINUX_BIN): $(XCC_XC2_BIN) $(XCC_XC_SRC) $(wildcard selfhost/*/*.xc) \
                      $(wildcard support/generic/lib/*.xc) $(wildcard support/x86_64/lib/*.xc)
 	@echo "  xc   building the production compiler for x86_64 linux"
 	@mkdir -p $(dir $@)
-	@$(XTC_BIN) -O2 -A x86_64 -H . -DXCC_VERSION='"$(VERSION)"' -o $@ $(XCC_XC_SRC) \
+	@$(XCC_XC2_BIN) -q -O2 -A x86_64 -H . -D XCC_VERSION='"$(VERSION)"' -o $@ $(XCC_XC_SRC) \
 	            $(call XCC_XC_TARGET_INCS,x86_64)
 
-$(XCC_XC_WIN64_BIN): $(XTC_BIN) $(XCC_XC_SRC) $(wildcard selfhost/*/*.xc) \
+$(XCC_XC_WIN64_BIN): $(XCC_XC2_BIN) $(XCC_XC_SRC) $(wildcard selfhost/*/*.xc) \
                      $(wildcard support/generic/lib/*.xc) $(wildcard support/win64/lib/*.xc)
 	@echo "  xc   building the production compiler for win64"
 	@mkdir -p $(dir $@)
-	@$(XTC_BIN) -O2 -A win64 -H . -DXCC_VERSION='"$(VERSION)"' -o $@ $(XCC_XC_SRC) \
+	@$(XCC_XC2_BIN) -q -O2 -A win64 -H . -D XCC_VERSION='"$(VERSION)"' -o $@ $(XCC_XC_SRC) \
 	            $(call XCC_XC_TARGET_INCS,win64)
 
 .PHONY: production-linux production-win64 production-all
@@ -324,7 +336,7 @@ production-all:   production production-linux production-win64
 TLS_SRC        ?= ../frameworks/3p/tls
 MBEDTLS_PREFIX ?= /opt/homebrew/opt/mbedtls
 MBEDTLS_LIBS    = mbedtls mbedx509 mbedcrypto tfpsacrypto
-XCC_SIGN_XC_DEPS = $(XTC_BIN) selfhost/tools/xtsign.xc $(wildcard selfhost/link/*.xc) \
+XCC_SIGN_XC_DEPS = $(XCC_XC2_BIN) selfhost/tools/xtsign.xc $(wildcard selfhost/link/*.xc) \
                    $(wildcard support/generic/lib/*.xc)
 XCC_SIGN_XC_INCS = -I selfhost/asm -I selfhost/link
 ifeq ($(UNAME_S),Darwin)
@@ -348,24 +360,24 @@ endif
 endif
 
 # The self-hosted signer (iOS.md stage 1 / signing.md, bug 144): identity code
-# signing in xtc, byte-identical to the reference for the same identity.
+# signing in xtc.
 XCC_SIGN_XC_BIN = $(BIN_DIR)/xcc-sign-xc
 $(XCC_SIGN_XC_BIN): $(XCC_SIGN_XC_DEPS) $(XCC_SIGN_XC_TLS_DEPS)
-	@echo "  xc   building the production signer with the bootstrap compiler"
-	@$(XTC_BIN) -O2 -A arm64 -H . $(XCC_SIGN_XC_HOST) $(XCC_SIGN_XC_TLS) -o $@ selfhost/tools/xtsign.xc \
+	@echo "  xc   building the production signer (stage 2)"
+	@$(XCC_XC2_BIN) -q -O2 -A arm64 -H . $(XCC_SIGN_XC_HOST) $(XCC_SIGN_XC_TLS) -o $@ selfhost/tools/xtsign.xc \
 	            $(XCC_SIGN_XC_INCS)
 
 # ...and for the cross hosts.
 $(XCC_SIGN_XC_LINUX_BIN): $(XCC_SIGN_XC_DEPS) $(XCC_SIGN_XC_LINUX_TLS_DEPS)
 	@echo "  xc   building the production signer for linux"
 	@mkdir -p $(dir $@)
-	@$(XTC_BIN) -O2 -A x86_64 -H . $(XCC_SIGN_XC_LINUX_TLS) -o $@ selfhost/tools/xtsign.xc \
+	@$(XCC_XC2_BIN) -q -O2 -A x86_64 -H . $(XCC_SIGN_XC_LINUX_TLS) -o $@ selfhost/tools/xtsign.xc \
 	            $(XCC_SIGN_XC_INCS)
 
 $(XCC_SIGN_XC_WIN64_BIN): $(XCC_SIGN_XC_DEPS)
 	@echo "  xc   building the production signer for win64"
 	@mkdir -p $(dir $@)
-	@$(XTC_BIN) -O2 -A win64 -H . -o $@ selfhost/tools/xtsign.xc $(XCC_SIGN_XC_INCS)
+	@$(XCC_XC2_BIN) -q -O2 -A win64 -H . -o $@ selfhost/tools/xtsign.xc $(XCC_SIGN_XC_INCS)
 
 # The self-hosted 6502 assembler, xcc-as: selfhost/tools/xta6502.xc over the
 # assembler in selfhost/asm, for each host. xccas-diff compares its command
@@ -373,30 +385,56 @@ $(XCC_SIGN_XC_WIN64_BIN): $(XCC_SIGN_XC_DEPS)
 XCC_AS_XC_SRCS = selfhost/tools/xta6502.xc selfhost/asm/Xta.xc selfhost/asm/Xa6502.xc \
                  selfhost/asm/XtaHost.xc $(wildcard support/generic/lib/*.xc)
 XCC_AS_XC_BIN = $(BIN_DIR)/xcc-as-xc
-$(XCC_AS_XC_BIN): $(XTC_BIN) $(XCC_AS_XC_SRCS) $(wildcard support/arm64/lib/*.xc)
-	@echo "  xc   building the production assembler with the bootstrap compiler"
-	@$(XTC_BIN) -O2 -A arm64 -H . -DXCC_VERSION='"$(VERSION)"' -o $@ selfhost/tools/xta6502.xc -I selfhost/asm
+$(XCC_AS_XC_BIN): $(XCC_XC2_BIN) $(XCC_AS_XC_SRCS) $(wildcard support/arm64/lib/*.xc)
+	@echo "  xc   building the production assembler (stage 2)"
+	@$(XCC_XC2_BIN) -q -O2 -A arm64 -H . -DXCC_VERSION='"$(VERSION)"' -o $@ selfhost/tools/xta6502.xc -I selfhost/asm
 
-$(XCC_AS_XC_LINUX_BIN): $(XTC_BIN) $(XCC_AS_XC_SRCS) $(wildcard support/x86_64/lib/*.xc) \
+$(XCC_AS_XC_LINUX_BIN): $(XCC_XC2_BIN) $(XCC_AS_XC_SRCS) $(wildcard support/x86_64/lib/*.xc) \
                         support/x86_64/runtime/sys-linux.s
 	@echo "  xc   building the production assembler for linux"
 	@mkdir -p $(dir $@)
-	@$(XTC_BIN) -O2 -A x86_64 -H . -DXCC_VERSION='"$(VERSION)"' -o $@ selfhost/tools/xta6502.xc -I selfhost/asm
+	@$(XCC_XC2_BIN) -q -O2 -A x86_64 -H . -DXCC_VERSION='"$(VERSION)"' -o $@ selfhost/tools/xta6502.xc -I selfhost/asm
 
-$(XCC_AS_XC_WIN64_BIN): $(XTC_BIN) $(XCC_AS_XC_SRCS) $(wildcard support/win64/lib/*.xc)
+$(XCC_AS_XC_WIN64_BIN): $(XCC_XC2_BIN) $(XCC_AS_XC_SRCS) $(wildcard support/win64/lib/*.xc)
 	@echo "  xc   building the production assembler for win64"
 	@mkdir -p $(dir $@)
-	@$(XTC_BIN) -O2 -A win64 -H . -DXCC_VERSION='"$(VERSION)"' -o $@ selfhost/tools/xta6502.xc -I selfhost/asm
+	@$(XCC_XC2_BIN) -q -O2 -A win64 -H . -DXCC_VERSION='"$(VERSION)"' -o $@ selfhost/tools/xta6502.xc -I selfhost/asm
 
 .PHONY: production
-production: $(XCC_XC_BIN) $(XCC_SIGN_XC_BIN) $(XCC_AS_XC_BIN)
+production: $(XCC_XC_BIN) $(XCC_XC2_BIN) $(XCC_SIGN_XC_BIN) $(XCC_AS_XC_BIN)
 
-INSTALL_BINS = $(XTC_BIN) $(XTA_BIN) $(SIM_BIN) $(SIM68K_BIN) $(XTC_FE_BIN) \
-               $(XTCG_6502_BIN) $(XTCG_ARM64_BIN) $(XTCG_68K_BIN) \
-               $(XTCG_ARM9_BIN) $(XTCG_X8664_BIN) $(XTCG_WIN64_BIN) \
-               $(XTCG_WASM32_BIN) \
-               $(XTCLN_ARM64_BIN) $(XTCLN_X8664_BIN) $(XTCLN_WIN64_BIN) \
-               $(XTCLN_ARM9_BIN) $(XTCLN_WASM32_BIN) $(XTSIGN_BIN)
+# What ships, and nothing else. Every entry is built by the stage-2 xc compiler
+# (or, for the two simulators, is a plain C program): NO binary built from the
+# Objective-C sources is installed or archived, under any name. That rule has no
+# exceptions; the Objective-C compiler exists only to build stage 1.
+# SHIP_NAMES pairs by position with each SHIP_<plat> list.
+SHIP_NAMES = xcc xcc-sign xcc-as xcc-sim-6502 xcc-sim-68k
+SHIP_OSX   = $(XCC_XC2_BIN) $(XCC_SIGN_XC_BIN) $(XCC_AS_XC_BIN) $(SIM_BIN) $(SIM68K_BIN)
+# The Objective-C build's binaries, named here for ONE purpose: install and
+# dist refuse to ship anything byte-identical to one of them. They are never
+# installed or staged.
+OBJC_BUILT_OSX = $(XTC_BIN) $(XTA_BIN) $(XTC_FE_BIN) $(XTSIGN_BIN) \
+                 $(XTCG_6502_BIN) $(XTCG_ARM64_BIN) $(XTCG_68K_BIN) \
+                 $(XTCG_ARM9_BIN) $(XTCG_X8664_BIN) $(XTCG_WIN64_BIN) \
+                 $(XTCG_WASM32_BIN) $(XTCLN_ARM64_BIN) $(XTCLN_X8664_BIN) \
+                 $(XTCLN_WIN64_BIN) $(XTCLN_ARM9_BIN) $(XTCLN_WASM32_BIN)
+
+# For tools/check-install.sh: the ship lists as make resolves them.
+.PHONY: print-ship
+print-ship:
+	@echo "SHIP_NAMES=$(SHIP_NAMES)"
+	@echo "SHIP_OSX=$(SHIP_OSX)"
+	@echo "SHIP_LINUX=$(SHIP_LINUX)"
+	@echo "SHIP_WIN64=$(SHIP_WIN64)"
+	@echo "OBJC_BUILT_OSX=$(OBJC_BUILT_OSX)"
+	@echo "XCC_XC2_BIN=$(XCC_XC2_BIN)"
+
+# Names an earlier install left in bin/ that no longer ship. install removes
+# them, so an upgrade in place does not keep an Objective-C binary on PATH.
+RETIRED_BIN_NAMES = xcc-bootstrap xcc-sign-bootstrap xcc-fe xcc-cg-6502 \
+                    xcc-cg-68k xcc-cg-arm64 xcc-cg-arm9 xcc-cg-x86_64 \
+                    xcc-cg-win64 xcc-cg-wasm32 xcc-ln-arm64 xcc-ln-arm9 \
+                    xcc-ln-x86_64 xcc-ln-win64 xcc-ln-wasm32
 
 # The three self-hosted linkers. Their *_BIN names are defined HERE, above
 # `all:`, and not next to their link rules further down: make expands a
@@ -427,46 +465,37 @@ check-install: ; @sh tools/check-install.sh
 
 .PHONY: install uninstall
 
-install: all $(XCC_XC_BIN) $(XCC_SIGN_XC_BIN)
+install: $(SHIP_OSX)
 	@echo "installing -> $(PREFIX)"
+	@set -- $(SHIP_NAMES); n=$$#; set -- $(SHIP_OSX); if [ $$# -ne $$n ]; then \
+		echo "install: the ship list has $$# entries for $$n names — a tool has no"; \
+		echo "  self-hosted build, and nothing built from the Objective-C sources ships."; \
+		exit 1; fi
+	@for f in $(SHIP_OSX); do \
+		for o in $(OBJC_BUILT_OSX); do \
+			if [ -f "$$o" ] && cmp -s "$$f" "$$o"; then \
+				echo "install: $$f is the Objective-C build $$o — THE GOLDEN RULE forbids installing it."; \
+				exit 1; fi; \
+		done; \
+		if [ "$$(uname)" = "Darwin" ] && otool -L "$$f" 2>/dev/null | grep -q -E '/Foundation\.framework/|libobjc'; then \
+			echo "install: $$f links Foundation/libobjc — an Objective-C build. THE GOLDEN RULE forbids installing it."; \
+			exit 1; fi; \
+	done
 	@mkdir -p "$(BINDIR)" "$(LIBDIR)" "$(XCDIR)"
-	@for b in $(INSTALL_BINS); do \
-		dst="$(BINDIR)/$$(basename $$b)"; \
-		if ! cmp -s $$b "$$dst" 2>/dev/null; then \
-			$(CP) $$b "$$dst"; echo "  bin  $$(basename $$b)"; \
+	@set -- $(SHIP_NAMES); for src in $(SHIP_OSX); do \
+		dst="$(BINDIR)/$$1"; shift; \
+		if ! cmp -s $$src "$$dst" 2>/dev/null; then \
+			$(CP) $$src "$$dst"; echo "  bin  $$(basename $$dst)"; \
 			case "$$(uname)" in Darwin) codesign -f -s - "$$dst" 2>/dev/null || true;; esac; \
 		fi; \
 	done
 	@# The Darwin codesign above is load-bearing: overwriting an installed
 	@# binary IN PLACE leaves the kernel's code-signature cache stale, and the
 	@# next exec dies with SIGKILL (exit 137) and no message at all. Re-signing
-	@# ad-hoc after the copy resets it. Found when the freshly reinstalled
-	@# /opt/xcc/0.3 xcc was killed before printing -v.
-	@# Content-based, not mtime-based: a stale install that merely looks newer
-	@# must not win over the tree it was built from.
-	@# The shipped `xcc` is the PRODUCTION compiler — selfhost/tools/xcc.xc built
-	@# by the bootstrap one. The Objective-C tree exists to bootstrap the xc
-	@# compiler, so what a developer runs has to be the xc compiler.
-	@#
-	@# The bootstrap goes in beside it as `xcc-bootstrap`, NOT as a second
-	@# thing called `xcc` in another directory: debugging the wrong compiler
-	@# because two of them share a name has cost this project time twice
-	@# (#1000, #1005), and a name that says what it is costs nothing.
-	@$(CP) "$(BINDIR)/xcc" "$(BINDIR)/xcc-bootstrap"
-	@$(CP) $(XCC_XC_BIN) "$(BINDIR)/xcc"
-	@# The signer likewise: the xtc one ships as xcc-sign (identity signing,
-	@# byte-identical to the Objective-C tool); the Objective-C one stays
-	@# beside it as xcc-sign-bootstrap for the keychain export and the App
-	@# Store Connect fetch, which are host APIs the port does not carry.
-	@$(CP) "$(BINDIR)/xcc-sign" "$(BINDIR)/xcc-sign-bootstrap"
-	@$(CP) $(XCC_SIGN_XC_BIN) "$(BINDIR)/xcc-sign"
-	@case "$$(uname)" in Darwin) codesign -f -s - "$(BINDIR)/xcc" 2>/dev/null || true; \
-	                             codesign -f -s - "$(BINDIR)/xcc-bootstrap" 2>/dev/null || true; \
-	                             codesign -f -s - "$(BINDIR)/xcc-sign" 2>/dev/null || true; \
-	                             codesign -f -s - "$(BINDIR)/xcc-sign-bootstrap" 2>/dev/null || true;; esac
-	@echo "  bin  xcc            (production — the xc compiler)"
-	@echo "  bin  xcc-bootstrap  (the Objective-C compiler that built it)"
-	@echo "  bin  xcc-sign       (production — the xc signer; xcc-sign-bootstrap exports/fetches identities)"
+	@# ad-hoc after the copy resets it.
+	@for n in $(RETIRED_BIN_NAMES); do \
+		if [ -e "$(BINDIR)/$$n" ]; then rm -f "$(BINDIR)/$$n"; echo "  rm   $$n (no longer shipped)"; fi; \
+	done
 	@n=0; for src in $(SUPPORT_SRCS); do \
 		dst="$(XCDIR)/$${src#support/}"; \
 		mkdir -p "$$(dirname "$$dst")"; \
@@ -550,7 +579,7 @@ uninstall-legacy:
 
 uninstall:
 	@echo "removing -> $(PREFIX)"
-	@for b in $(INSTALL_BINS); do rm -f "$(BINDIR)/$$(basename $$b)"; done
+	@for n in $(SHIP_NAMES) $(RETIRED_BIN_NAMES); do rm -f "$(BINDIR)/$$n"; done
 	@# The whole support tree: everything under it came from this repo. The
 	@# third-party tree is NOT under it — /opt/xcc/3p is a sibling of the
 	@# versioned root, and PREFIX is that versioned root — so an uninstall
@@ -769,17 +798,10 @@ install-tls: $(XTC_BIN) $(XTC_FE_BIN) $(XTCG_ARM64_BIN) $(XTCLN_ARM64_BIN)
 	@# its own binary, would fall through to the cwd probe, match `./xc`, and
 	@# then miss arm64/runtime → a silent clang fallback that fails. Use the
 	@# INSTALLED xcc (support resolves via its own location) and pin XCC_HOME so
-	@# the ambiguous cwd never enters resolution. Standalone (pre-install), fall
-	@# back to the in-tree binary with the in-tree tree as home.
-	@# …and the BOOTSTRAP one specifically. Building an xtc library needs
-	@# `--emit-lib`, which the xc driver has not ported yet, so the shipped
-	@# `xcc` answers "unrecognised option" here. Naming xcc-bootstrap says that
-	@# out loud instead of leaving the install printing an error, and it is the
-	@# only step in the install that still needs the bootstrap compiler.
-	@# Remove this the day --emit-lib lands in the xc driver.
-	@if [ -x "$(BINDIR)/xcc-bootstrap" ]; then TLSXCC="$(BINDIR)/xcc-bootstrap"; TLSHOME="$(PREFIX)"; \
-	 elif [ -x "$(BINDIR)/xcc" ]; then TLSXCC="$(BINDIR)/xcc"; TLSHOME="$(PREFIX)"; \
-	 else TLSXCC="$(abspath $(XTC_BIN))"; TLSHOME="$(CURDIR)"; fi; \
+	@# the ambiguous cwd never enters resolution. That xcc is the self-hosted
+	@# compiler, and `--emit-lib` for arm64 and x86_64 is all this step needs.
+	@if [ -x "$(BINDIR)/xcc" ]; then TLSXCC="$(BINDIR)/xcc"; TLSHOME="$(PREFIX)"; \
+	 else echo "install-tls: no installed xcc at $(BINDIR) — run make install first"; exit 1; fi; \
 	 XCC="$$TLSXCC" XCC_HOME="$$TLSHOME" sh $(TLS_SRC)/install.sh || \
 	  echo "  NOTE tls xtc-lib install reported an issue (host shim installed)"
 
@@ -1312,72 +1334,50 @@ win64: $(WIN64_BINS) $(WIN64_SIM_BINS)
 DIST_DIR  ?= ../website/downloads
 DIST_STAGE = build/dist
 
+SHIP_LINUX = $(XCC_XC_LINUX_BIN) $(XCC_SIGN_XC_LINUX_BIN) $(XCC_AS_XC_LINUX_BIN) \
+             $(LINUX_SIM_BINS)
+SHIP_WIN64 = $(XCC_XC_WIN64_BIN) $(XCC_SIGN_XC_WIN64_BIN) $(XCC_AS_XC_WIN64_BIN) \
+             $(WIN64_SIM_BINS)
+
 OSX_ARCHIVE   = $(DIST_DIR)/xcc-osx-$(VERSION).tar.bz2
 LINUX_ARCHIVE = $(DIST_DIR)/xcc-linux-$(VERSION).tar.bz2
 WIN64_ARCHIVE = $(DIST_DIR)/xcc-win64-$(VERSION).zip
 
-# Canned staging sequence: $(1) plat, $(2) source bin dir, $(3) binary suffix,
-# $(5) the SELF-HOSTED compiler to ship as `xcc` on this platform. EMPTY means
-# that platform cannot build one yet — and then there is no archive, because we
-# never ship the Objective-C compiler ("THE GOLDEN RULE"). All three
-# platforms have one, so all three archives are cut: XCC_XC_BIN (`-A arm64`),
-# XCC_XC_LINUX_BIN (`production-linux`) and XCC_XC_WIN64_BIN
-# (`production-win64`). The EMPTY guard below stays: a
-# target added later will arrive without a self-hosted build, and it must get
-# NO ARCHIVE rather than an Objective-C one.
-# $(4) strip tool for the staged copies (empty to skip). The build tree keeps
-# its debug info; only the archive is stripped — it halves the cross binaries.
+# Canned staging sequence: $(1) plat, $(2) binary suffix, $(3) strip tool for
+# the staged copies (empty to skip; the build tree keeps its debug info),
+# $(4) the ship list for this host, paired by position with SHIP_NAMES,
+# $(5) that host's Objective-C-built binaries, for the guard.
+#
+# THE GOLDEN RULE: no binary built from the Objective-C sources is shipped,
+# under any name. Only the ship list is staged, an empty entry (a tool this
+# host cannot build self-hosted yet) means NO ARCHIVE, and the staged bin/ is
+# then checked twice: nothing in it may be byte-identical to an Objective-C
+# binary, and on macOS nothing may link Foundation or libobjc.
 # Refuses a dirty tree: an archive must be reproducible from a commit.
 define STAGE_DIST
 @if [ -n "$$(git status --porcelain 2>/dev/null)" ]; then \
 	echo "dist: tree is dirty — commit first (archives must be cut from a commit)"; exit 1; fi
+@set -- $(SHIP_NAMES); n=$$#; set -- $(4); if [ $$# -ne $$n ]; then \
+	echo "dist($(1)): the ship list has $$# entries for $$n names — a tool has no"; \
+	echo "  self-hosted build for this host, so there is no archive."; exit 1; fi
 @rm -rf $(DIST_STAGE)/xcc-$(1)-$(VERSION)
 @mkdir -p $(DIST_STAGE)/xcc-$(1)-$(VERSION)/bin $(DIST_STAGE)/xcc-$(1)-$(VERSION)/lib/xc
-@for b in $(notdir $(INSTALL_BINS)); do \
-	$(CP) $(2)/$$b$(3) $(DIST_STAGE)/xcc-$(1)-$(VERSION)/bin/ || exit 1; done
-	@# THE GOLDEN RULE: we never ship the Objective-C compiler.
-	@# It bootstraps the xc one and is the reference oracle it is diffed
-	@# against; that is all. So `xcc` in an archive is the SELF-HOSTED
-	@# binary, exactly as `install` ships it, and the Objective-C build goes
-	@# beside it as xcc-bootstrap.
-	@#
-	@# This swap used to live ONLY in the install recipe, so every archive
-	@# `make dist` cut shipped the Objective-C compiler as `xcc` — a
-	@# different program from the one `make install` produced and the one
-	@# the 40-harness gate validated, carrying a Foundation/libobjc
-	@# dependency the self-hosted compiler does not have.
-	@if [ -z "$(5)" ]; then \
-		echo "dist($(1)): no self-hosted compiler for this platform."; \
-		echo "  THE GOLDEN RULE: we never ship the Objective-C build as xcc."; \
-		echo "  A platform that cannot build xcc-xc gets NO ARCHIVE until"; \
-		echo "  that gap is closed."; \
-		exit 1; fi
-	@$(CP) $(DIST_STAGE)/xcc-$(1)-$(VERSION)/bin/xcc$(3) \
-	       $(DIST_STAGE)/xcc-$(1)-$(VERSION)/bin/xcc-bootstrap$(3)
-	@$(CP) $(5) $(DIST_STAGE)/xcc-$(1)-$(VERSION)/bin/xcc$(3)
-	@# …and prove it, rather than trusting the copy above. A staged `xcc`
-	@# that still links Foundation is the Objective-C build wearing the
-	@# right name. Checked on macOS, where otool is the tool to hand; the
-	@# cross archives are caught by the $(5) guard above.
-	@if [ "$(UNAME_S)" = "Darwin" ] && [ -z "$(3)" ] && \
-	   otool -L $(DIST_STAGE)/xcc-$(1)-$(VERSION)/bin/xcc 2>/dev/null \
-	   | grep -q Foundation; then \
-		echo "dist($(1)): staged xcc links Foundation — that is the"; \
-		echo "  Objective-C compiler. THE GOLDEN RULE forbids shipping it."; \
-		exit 1; fi
-	@# The SIGNER likewise, mirroring `install` exactly. This swap used to be
-	@# missing here, so every archive shipped the Objective-C xcc-sign as
-	@# `xcc-sign` while `make install` shipped the xc one — the same
-	@# install-vs-dist divergence this file already records fixing for `xcc`.
-	@# The engine is host-neutral, so all three platforms get it.
-	@if [ -z "$(6)" ]; then \
-		echo "dist($(1)): no self-hosted signer for this platform."; \
-		echo "  THE GOLDEN RULE: we never ship the Objective-C build as xcc-sign."; \
-		exit 1; fi
-	@$(CP) $(DIST_STAGE)/xcc-$(1)-$(VERSION)/bin/xcc-sign$(3) \
-	       $(DIST_STAGE)/xcc-$(1)-$(VERSION)/bin/xcc-sign-bootstrap$(3)
-	@$(CP) $(6) $(DIST_STAGE)/xcc-$(1)-$(VERSION)/bin/xcc-sign$(3)
-@if [ -n "$(4)" ]; then $(4) $(DIST_STAGE)/xcc-$(1)-$(VERSION)/bin/*; fi
+@set -- $(SHIP_NAMES); for src in $(4); do \
+	$(CP) $$src $(DIST_STAGE)/xcc-$(1)-$(VERSION)/bin/$$1$(2) || exit 1; shift; done
+@for f in $(DIST_STAGE)/xcc-$(1)-$(VERSION)/bin/*; do \
+	for o in $(5); do \
+		if [ -f "$$o" ] && cmp -s "$$f" "$$o"; then \
+			echo "dist($(1)): $$(basename $$f) is the Objective-C build $$o."; \
+			echo "  THE GOLDEN RULE: nothing built from the Objective-C sources ships."; \
+			exit 1; fi; \
+	done; \
+	if [ "$(UNAME_S)" = "Darwin" ] && [ -z "$(2)" ] && \
+	   otool -L "$$f" 2>/dev/null | grep -q -E '/Foundation\.framework/|libobjc'; then \
+		echo "dist($(1)): $$(basename $$f) links Foundation/libobjc — an Objective-C build."; \
+		echo "  THE GOLDEN RULE: nothing built from the Objective-C sources ships."; \
+		exit 1; fi; \
+done
+@if [ -n "$(3)" ]; then $(3) $(DIST_STAGE)/xcc-$(1)-$(VERSION)/bin/*; fi
 @for src in $(SUPPORT_SRCS); do \
 	dst=$(DIST_STAGE)/xcc-$(1)-$(VERSION)/lib/xc/$${src#support/}; \
 	mkdir -p $$(dirname $$dst); $(CP) $$src $$dst; done
@@ -1397,20 +1397,20 @@ else echo "dist: win64 mingw pool missing at $(WIN64_POOL)"; exit 1; fi
 @mkdir -p $(DIST_DIR)
 endef
 
-$(OSX_ARCHIVE): all production
-	$(call STAGE_DIST,osx,$(BIN_DIR),,,$(XCC_XC_BIN),$(XCC_SIGN_XC_BIN))
+$(OSX_ARCHIVE): $(SHIP_OSX)
+	$(call STAGE_DIST,osx,,,$(SHIP_OSX),$(OBJC_BUILT_OSX))
 	@rm -f $@
 	tar -cjf $@ -C $(DIST_STAGE) xcc-osx-$(VERSION)
 	@echo "dist -> $@"
 
-$(LINUX_ARCHIVE): linux production-linux
-	$(call STAGE_DIST,linux,$(LINUX_BIN_DIR),,/opt/homebrew/opt/llvm/bin/llvm-strip,$(XCC_XC_LINUX_BIN),$(XCC_SIGN_XC_LINUX_BIN))
+$(LINUX_ARCHIVE): $(SHIP_LINUX)
+	$(call STAGE_DIST,linux,,/opt/homebrew/opt/llvm/bin/llvm-strip,$(SHIP_LINUX),$(LINUX_BINS))
 	@rm -f $@
 	tar -cjf $@ -C $(DIST_STAGE) xcc-linux-$(VERSION)
 	@echo "dist -> $@"
 
-$(WIN64_ARCHIVE): win64 production-win64
-	$(call STAGE_DIST,win64,$(WIN64_BIN_DIR),.exe,/opt/homebrew/opt/llvm/bin/llvm-strip,$(XCC_XC_WIN64_BIN),$(XCC_SIGN_XC_WIN64_BIN))
+$(WIN64_ARCHIVE): $(SHIP_WIN64)
+	$(call STAGE_DIST,win64,.exe,/opt/homebrew/opt/llvm/bin/llvm-strip,$(SHIP_WIN64),$(WIN64_BINS))
 	@rm -f $@
 	cd $(DIST_STAGE) && zip -qr $(abspath $@) xcc-win64-$(VERSION)
 	@echo "dist -> $@"
