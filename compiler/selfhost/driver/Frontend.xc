@@ -67,9 +67,11 @@ class FeOptions
                         //   were still <base>, so a call whose MEANING changed
                         //   between the two fails loudly instead of quietly
                         //   resolving to the new one. 0 when not asked for.
+    String* _ppOut;     // -E <path>: where the preprocessed source goes, or 0
 
     void init(void)
         {
+        _ppOut = (String*)0;
         _emitIface = false;
         _libraryBuild = false;
         _analyze = false;
@@ -224,6 +226,14 @@ class FeOptions
         {
         _boundsCheck = b;
         }
+    String* preprocessedPath(void)
+        {
+        return _ppOut;
+        }
+    void setPreprocessedPath(String* p)
+        {
+        _ppOut = p;
+        }
     }
 
     class Frontend
@@ -273,6 +283,17 @@ class FeOptions
         if (source == 0)
             {
             Stdio.printf("xc-fe: error: cannot read '%s'\n", o.input().cString());
+            Process.exit((i32)1);
+            return (IRModule*)0;
+            }
+        // -E <path>: the text the lexer is about to see, platform prelude and
+        // every import expanded. Written here, after the preprocessor has
+        // reported its errors and before anything else runs, so a failure
+        // further on still leaves it behind to look at.
+        if (o.preprocessedPath() != (String*)0 && !Files.writeText(o.preprocessedPath(), source))
+            {
+            Stdio.printf("xcc: error: cannot write -E output to '%s'\n",
+                         o.preprocessedPath().cString());
             Process.exit((i32)1);
             return (IRModule*)0;
             }
@@ -1184,9 +1205,6 @@ void addLibDir(FeOptions* o, String* support, String* plat)
         o.incs().add((Object*)d);
     }
 
-// -H, then the same search list the driver walks. ($XTC_HOME is the driver's
-// third source and the port has no getenv; the driver forwards its resolved
-// home as -H on every spawn, so the path that matters is covered.)
 // The support tree under `base`, in the three spellings an install and a
 // source checkout use: `lib/xc` (an install), `xc` (Windows), `support` (the
 // checkout). 0 when none of them is there.
@@ -1206,6 +1224,26 @@ String* probeRoot(String* base)
             return c;
         }
     return (String*)0;
+    }
+
+// A path from the environment or the command line, cleaned the way a Windows
+// shell leaves it: surrounding whitespace, a pair of enclosing double quotes
+// (`SET XCC_HOME="C:\xcc"` keeps them), and backslash separators. 0 when
+// nothing is left.
+String* sanitiseEnvPath(String* raw)
+    {
+    if (raw == 0)
+        return (String*)0;
+    String* s = raw.trimmed();
+    if (s.byteLength() >= (u32)2 && s.byteAt((u32)0) == (u8)'"'
+        && s.byteAt(s.byteLength() - (u32)1) == (u8)'"')
+        s = s.substringBytes((u32)1, s.byteLength() - (u32)2);
+    String* out = new String();
+    for (u32 i = (u32)0; i < s.byteLength(); i = i + (u32)1)
+        out.appendByte(s.byteAt(i) == (u8)'\\' ? (u8)'/' : s.byteAt(i));
+    if (out.byteLength() == (u32)0)
+        return (String*)0;
+    return out;
     }
 
 // `a/b/xcc` -> `a/b`, and "" for a bare name.
@@ -1257,6 +1295,14 @@ String* supportRoot(FeOptions* o)
         return (String*)0;
         }
     Array* bases = new Array();
+    // $XCC_HOME, then the older $XTC_HOME: an explicit choice of root, so
+    // they come before anything the compiler would find for itself.
+    String* xccHome = sanitiseEnvPath(Platform.env(String.withCString("XCC_HOME")));
+    if (xccHome != 0)
+        bases.add((Object*)xccHome);
+    String* xtcHome = sanitiseEnvPath(Platform.env(String.withCString("XTC_HOME")));
+    if (xtcHome != 0)
+        bases.add((Object*)xtcHome);
     // Beside the binary, then one level up — `<bin>/../lib/xc` is the install.
     String* self = Process.argument((u32)0);
     String* bin = dirOf(self);
@@ -1268,6 +1314,13 @@ String* supportRoot(FeOptions* o)
             bases.add((Object*)up);
         }
     bases.add((Object*)String.withCString("."));
+    // A per-user tree, after the working directory and before the system ones.
+    String* userHome = Platform.home();
+    if (userHome != 0 && userHome.byteLength() > (u32)0)
+        {
+        bases.add((Object*)String.withString(userHome).appending(String.withCString("/xcc")));
+        bases.add((Object*)String.withString(userHome).appending(String.withCString("/xtc")));
+        }
     bases.add((Object*)String.withCString("/opt/xcc/" XCC_VERSION));
     bases.add((Object*)String.withCString("/opt/xcc"));
     bases.add((Object*)String.withCString("/usr/local/xcc"));
