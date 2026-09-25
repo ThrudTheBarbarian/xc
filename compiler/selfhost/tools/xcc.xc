@@ -58,10 +58,78 @@
 #import "Elf64.xc"      // …and the ET_REL object writer `-c` needs
 #import "Pe.xc"         // the Windows PE/COFF writer, shared with xtldwin
 
+// ── capability options ───────────────────────────────────────────────────
+//
+// The flags that change WHAT is built rather than how the driver runs: the
+// allocator and host malloc, atomic ARC, position independence, the FPU, the
+// m68k CPU, debug info, the Android packaging inputs, and the external
+// toolchain. Kept in one class, parsed by parseCapabilityFlag and checked
+// against the target by checkCapabilities once the whole line has been read.
+class CapOptions
+{
+    String* _alloc;        // -falloc=bump|heap, or 0 when not given
+    String* _malloc;       // -fmalloc=system|mimalloc
+    bool    _pic;          // -fpic / -fPIC / -mpic
+    bool    _hardFloat;    // -mhard-float / -mfpu (m68k: the 68881); -msoft-float clears it
+    bool    _softFloat;    // -msoft-float was the LAST float flag given
+    u32     _m68kCpu;      // 68000 | 68030 (-A 68000 / -A 68030)
+    bool    _debugInfo;    // -g
+    Array*  _needed;       // --needed <soname>, repeatable
+    String* _withLib;      // --with-lib <path>
+    String* _libName;      // --lib-name <name>
+    String* _withDex;      // --with-dex <path>
+    bool    _noSelfHost;   // --no-self-host
+    bool    _threadFlag;   // -f[no-]thread-safe-arc was given
+
+    void init(void)
+    {
+        _alloc = (String*)0;
+        _malloc = String.withCString("system");
+        _pic = false;
+        _hardFloat = false;
+        _softFloat = false;
+        _m68kCpu = (u32)68000;
+        _debugInfo = false;
+        _needed = new Array();
+        _withLib = (String*)0;
+        _libName = (String*)0;
+        _withDex = (String*)0;
+        _noSelfHost = false;
+        _threadFlag = false;
+    }
+
+    String* alloc(void)     { return _alloc; }
+    String* hostMalloc(void) { return _malloc; }
+    bool pic(void)          { return _pic; }
+    bool hardFloat(void)    { return _hardFloat; }
+    bool softFloat(void)    { return _softFloat; }
+    u32  m68kCpu(void)      { return _m68kCpu; }
+    bool debugInfo(void)    { return _debugInfo; }
+    Array* needed(void)     { return _needed; }
+    String* withLib(void)   { return _withLib; }
+    String* libName(void)   { return _libName; }
+    String* withDex(void)   { return _withDex; }
+    bool noSelfHost(void)   { return _noSelfHost; }
+    bool threadFlag(void)   { return _threadFlag; }
+
+    void setAlloc(String* v)     { _alloc = v; }
+    void setHostMalloc(String* v) { _malloc = v; }
+    void setPic(bool b)          { _pic = b; }
+    void setHardFloat(bool b)    { _hardFloat = b; _softFloat = !b; }
+    void setM68kCpu(u32 c)       { _m68kCpu = c; }
+    void setDebugInfo(bool b)    { _debugInfo = b; }
+    void setWithLib(String* p)   { _withLib = p; }
+    void setLibName(String* n)   { _libName = n; }
+    void setWithDex(String* p)   { _withDex = p; }
+    void setNoSelfHost(bool b)   { _noSelfHost = b; }
+    void setThreadFlag(bool b)   { _threadFlag = b; }
+}
+
 // ── options ──────────────────────────────────────────────────────────────
 class DriverOptions
 {
     FeOptions* _fe;
+    CapOptions* _caps;       // parseCapabilityFlag's options
     String*    _arch;        // arm64 | android
     u32        _opt;
     bool       _keepAsm;     // -S: stop after the back end
@@ -83,6 +151,7 @@ class DriverOptions
     void init(void)
     {
         _fe = new FeOptions();
+        _caps = new CapOptions();
         // The default target is the HOST — the arch this compiler was itself
         // compiled for — so `xcc -o prog prog.xc` builds a native binary the
         // way cc does, on every host. This was a literal "arm64", which is
@@ -125,6 +194,7 @@ class DriverOptions
     }
 
     FeOptions* fe(void)  { return _fe; }
+    CapOptions* caps(void) { return _caps; }
     String* arch(void)   { return _arch; }
     u32 opt(void)        { return _opt; }
     bool keepAsm(void)   { return _keepAsm; }
@@ -643,6 +713,38 @@ Array* arm64LinkDeps(DriverOptions* d, Array* neededLibs, Array* extraObjects)
     return deps;
 }
 
+// The DT_NEEDED list for an Android image: the base set every image names,
+// then each --needed soname not already in it. bionic resolves a library's
+// imports against its own group only, so a payload that calls into a companion
+// .so has to NAME it.
+Array* androidNeeded(DriverOptions* d, string base)
+{
+    Array* out = new Array();
+    Array* parts = String.withCString(base).splitOnByte((u8)',');
+    for (u32 i = (u32)0; i < parts.count(); i = i + (u32)1)
+        out.add(parts.get(i));
+    Array* extra = d.caps().needed();
+    for (u32 i = (u32)0; i < extra.count(); i = i + (u32)1) {
+        String* n = (String*)extra.get(i);
+        bool have = false;
+        for (u32 k = (u32)0; k < out.count(); k = k + (u32)1)
+            if (((String*)out.get(k)).equals(n)) have = true;
+        if (!have) out.add((Object*)n);
+    }
+    return out;
+}
+
+// A file's bytes as the Array of Numbers the APK writer takes, or 0.
+Array* fileBytes(String* path)
+{
+    Data* dd = Files.readData(path);
+    if (dd == (Data*)0) return (Array*)0;
+    Array* out = Array.withCapacity(dd.length());
+    for (u32 i = (u32)0; i < dd.length(); i = i + (u32)1)
+        out.add((Object*)Number.withU32((u32)dd.byteAt(i)));
+    return out;
+}
+
 void emitApkPackage(DriverOptions* d, String* prog)
 {
     FeOptions* o = d.fe();
@@ -695,12 +797,7 @@ void emitApkPackage(DriverOptions* d, String* prog)
         Stdio.printf("xcc: apk: assembly failed: %s\n", a.why().cString());
         Process.exit((i32)1); return;
     }
-    Array* needed = new Array();
-    needed.add((Object*)String.withCString("libc.so"));
-    needed.add((Object*)String.withCString("libm.so"));
-    needed.add((Object*)String.withCString("libdl.so"));
-    needed.add((Object*)String.withCString("liblog.so"));
-    needed.add((Object*)String.withCString("libandroid.so"));
+    Array* needed = androidNeeded(d, "libc.so,libm.so,libdl.so,liblog.so,libandroid.so");
     Array* exports = new Array();
     exports.add((Object*)String.withCString("ANativeActivity_onCreate"));
     String* soname = String.withCString("lib");
@@ -719,15 +816,53 @@ void emitApkPackage(DriverOptions* d, String* prog)
         Process.exit((i32)1); return;
     }
 
+    // An optional committed classes.dex rides at the archive root, and the
+    // manifest's hasCode follows it: with hasCode="false" ART never looks at
+    // classes.dex, which is indistinguishable from a dex that failed to load.
+    Array* dex = (Array*)0;
+    CapOptions* c = d.caps();
+    if (c.withDex() != (String*)0) {
+        dex = fileBytes(c.withDex());
+        if (dex == (Array*)0) {
+            Stdio.printf("xcc: error: cannot read --with-dex '%s'\n", c.withDex().cString());
+            Process.exit((i32)1); return;
+        }
+    }
+    // An extra prebuilt .so beside the payload (a shim whose onCreate runs
+    // first, say), and --lib-name for which of the two the system loads.
+    // Android loads from lib/arm64-v8a/ by soname, so the stored name has to
+    // be the library's own lib<X>.so.
+    Array* extraLib = (Array*)0;
+    String* extraEntry = (String*)0;
+    if (c.withLib() != (String*)0) {
+        extraLib = fileBytes(c.withLib());
+        if (extraLib == (Array*)0) {
+            Stdio.printf("xcc: error: cannot read --with-lib '%s'\n", c.withLib().cString());
+            Process.exit((i32)1); return;
+        }
+        String* bn = c.withLib().lastPathComponent();
+        if (!bn.hasPrefix(String.withCString("lib")) || !bn.hasSuffix(String.withCString(".so"))) {
+            Stdio.printf("xcc: error: --with-lib '%s' must be named lib<name>.so "
+                         "— Android resolves it from lib/arm64-v8a/ by that name\n", bn.cString());
+            Process.exit((i32)1); return;
+        }
+        extraEntry = String.withCString("lib/arm64-v8a/");
+        extraEntry.append(bn);
+    }
+    String* manifestLib = name;
+    if (c.libName() != (String*)0 && c.libName().byteLength() > (u32)0) manifestLib = c.libName();
+
     String* pkg = String.withCString("org.compile_xc.");
     pkg.append(name);
-    Array* manifest = ApkXml.manifest(pkg, name, name, (u32)24, (u32)35, false);
+    Array* manifest = ApkXml.manifest(pkg, manifestLib, name, (u32)24, (u32)35, dex != (Array*)0);
 
     Array* entries = new Array();
     entries.add((Object*)ApkEntry.with(String.withCString("AndroidManifest.xml"), manifest));
     String* libPath = String.withCString("lib/arm64-v8a/");
     libPath.append(soname);
     entries.add((Object*)ApkEntry.with(libPath, w.bytes()));
+    if (extraLib != (Array*)0) entries.add((Object*)ApkEntry.with(extraEntry, extraLib));
+    if (dex != (Array*)0) entries.add((Object*)ApkEntry.with(String.withCString("classes.dex"), dex));
     Array* zip = ApkZip.build(entries, (u32)4096, String.withCString(".so"));
 
     Data* kd = Files.readData(keyPath);
@@ -1131,6 +1266,7 @@ void emitWin64(DriverOptions* d, IRModule* mod)
 
     X86_64* be = new X86_64();
     be.setWin64(true);
+    be.setThreadSafeArcOverride(d.fe().threadSafeArc());
     String* prog = be.assembly(mod);
     if (be.failed()) {
         String* list = String.withCString("");
@@ -1426,6 +1562,7 @@ void emitX86_64(DriverOptions* d, IRModule* mod)
         ((IRFunc*)mod.funcs().get(f)).numberFreshValues();
 
     X86_64* be = new X86_64();
+    be.setThreadSafeArcOverride(d.fe().threadSafeArc());
     String* prog = be.assembly(mod);
     if (be.failed()) {
         String* list = String.withCString("");
@@ -1520,6 +1657,21 @@ void linkX86_64(DriverOptions* d, String* prog)
     // opposite — it is the libc provider, so the archive is its pool.
     Array* ars = new Array();
     Array* objs = new Array();
+    // -fmalloc=mimalloc: the allocator is an OBJECT, and the first one. An
+    // archive member joins only for a symbol still undefined, so a mimalloc
+    // `.a` would override only what libc had not already supplied — two
+    // allocators in one program. An object's definitions are unconditional,
+    // and libc's malloc members are then never pulled. support/MIMALLOC.md.
+    if (d.caps().hostMalloc().equals(String.withCString("mimalloc"))) {
+        String* mi = supportRoot(d.fe());
+        if (mi != (String*)0) { mi = String.withString(mi); mi.appendCString("/x86_64/runtime/mimalloc.o"); }
+        if (mi == (String*)0 || !Files.exists(mi)) {
+            Stdio.printf("xcc: error: -fmalloc=mimalloc needs x86_64/runtime/mimalloc.o "
+                         "in the support tree, and it is not there\n");
+            Process.exit((i32)1); return;
+        }
+        objs.add((Object*)mi);
+    }
     // Objects and archives named as INPUTS (`xcc a.o lib.a -o prog`) — the
     // link step of separate compilation (bug 138).
     for (u32 i = (u32)0; i < d.objectInputs().count(); i = i + (u32)1) {
@@ -1730,6 +1882,7 @@ void emitArm9(DriverOptions* d, IRModule* mod)
         ((IRFunc*)mod.funcs().get(f)).numberFreshValues();
 
     Arm9* be = new Arm9();
+    be.setThreadSafeArcOverride(d.fe().threadSafeArc());
     // -c: every function this object defines is part of its surface, so it
     // keeps default visibility — the same rule --emit-lib follows.
     be.setEmitLib(d.emitLib() || d.compileOnly());
@@ -1891,6 +2044,9 @@ void emitM68k(DriverOptions* d, IRModule* mod)
         ((IRFunc*)mod.funcs().get(f)).numberFreshValues();
 
     M68k* be = new M68k();
+    be.setCpu(d.caps().m68kCpu());
+    be.setHardFloat(d.caps().hardFloat());
+    be.setPic(d.caps().pic());
     String* prog = be.assembly(mod);
     if (be.failed()) {
         String* list = String.withCString("");
@@ -1923,6 +2079,8 @@ void emitM68k(DriverOptions* d, IRModule* mod)
     // nothing compared the two drivers' .prg until files_roundtrip.xc was
     // built both ways by hand.
     M68kAsm* as = new M68kAsm();
+    as.setCpu(d.caps().m68kCpu());   // 68020+: 32-bit PC-relative, no ±32KB limit
+    as.setPic(d.caps().pic());       // 68000: the GOT/a5 model
     as.assemble(prog);
     if (as.failed()) {
         Stdio.printf("xcc: assembly failed: %s\n", as.why().cString());
@@ -2452,20 +2610,24 @@ void main(void)
                      "[-D k=v] <file.xc> -o <out>\n");
         Process.exit((i32)2); return;
     }
-    // `--emit-lib` is implemented for wasm32 only. On the other targets the
-    // driver ran the ordinary EXECUTABLE path and said nothing: `-A arm64
-    // --emit-lib` produced a Mach-O executable where the reference produces a
-    // dylib, with no `.xtc.iface` beside it, and exit 0. A library that is
-    // silently not a library is the worst of the three outcomes — worse than
-    // refusing, and worse than failing — because it is discovered by whatever
-    // tries to LOAD it, a build step away. See private:docs/bugs/097.
-    if (d.emitLib() && !isWasm(d) && !isX86_64(d) && !isArm9(d)
+    checkCapabilities(d);
+    // `--emit-lib` on a target with no library form is REFUSED, never run
+    // down the executable path: a library that is silently not a library is
+    // discovered by whatever tries to load it, a build step away
+    // (private:docs/bugs/097). A GEMDOS program and a banked XEX are whole
+    // images loaded at one place; neither format has a shared-object form.
+    if (d.emitLib() && (isM68k(d) || isXt6502(d))) {
+        Stdio.printf("xcc: error: --emit-lib: '%s' has no shared-library format — "
+                     "%s is loaded whole, so build the program instead\n",
+                     d.arch().cString(),
+                     isM68k(d) ? "a GEMDOS .prg" : "a banked 6502 .xex");
+        Process.exit((i32)1); return;
+    }
+    if (d.emitLib() && !isWasm(d) && !isX86_64(d) && !isArm9(d) && !isAndroid(d)
         && !d.arch().equals(String.withCString("arm64"))) {
-        Stdio.printf("xcc: error: --emit-lib is implemented for wasm32, arm64, "
-                     "x86_64 and arm9 in this driver (task #52); '%s' would need its "
-                     "shared-library writer ported first.\n"
-                     "  Use `xcc-bootstrap --emit-lib -A %s` until then.\n",
-                     d.arch().cString(), d.arch().cString());
+        Stdio.printf("xcc: error: --emit-lib is not supported for '%s' "
+                     "(it is for arm64, android, x86_64, arm9 and wasm32)\n",
+                     d.arch().cString());
         Process.exit((i32)1); return;
     }
     if (!d.arch().equals(String.withCString("arm64")) && !isAndroid(d)
@@ -2621,6 +2783,7 @@ void emitModule(DriverOptions* d, IRModule* mod)
     Arm64* be = new Arm64();
     be.setAapcs64Abi(isAndroid(d));
     be.setLseAtomics(!isAndroid(d));
+    be.setThreadSafeArcOverride(d.fe().threadSafeArc());
     String* prog = be.assembly(mod);
     if (be.failed()) {
         Stdio.printf("xcc: %s: unsupported: %s\n", d.fe().input().cString(),
@@ -2730,18 +2893,26 @@ void emitModule(DriverOptions* d, IRModule* mod)
 
     Array* image = (Array*)0;
     if (android) {
-        Array* needed = new Array();
-        needed.add((Object*)String.withCString("libc.so"));
-        needed.add((Object*)String.withCString("libm.so"));
-        needed.add((Object*)String.withCString("libdl.so"));
+        Array* needed = androidNeeded(d, "libc.so,libm.so,libdl.so");
         // Bug 124: as above — append the constructor array before linking.
         Array* aData = as.dataBytes();
         Array* aFix  = as.fixups();
         u32 aMi = Arm64Asm.appendModInit(as, aData, aFix);
         ElfArm64* w = new ElfArm64();
-        w.image(as.textBytes(), aData, as.symbols(), as.dataSyms(),
-                new Array(), aFix, (String*)0, needed,
-                String.withCString("_start"), aMi);
+        if (d.emitLib()) {
+            // A real Android shared library: no crt and no glue (that is the
+            // APK payload's shape), its own public API exported — the
+            // module's `.globl`s, read before the runtime was prepended so the
+            // runtime's globals stay private — and a soname naming the file.
+            Array* exports = globlNames(stripLeadingUnderscore(prog), as.symbols());
+            w.image(as.textBytes(), aData, as.symbols(), as.dataSyms(),
+                    exports, aFix, baseNameOf(d.fe().output()), needed,
+                    (String*)0, aMi);
+        } else {
+            w.image(as.textBytes(), aData, as.symbols(), as.dataSyms(),
+                    new Array(), aFix, (String*)0, needed,
+                    String.withCString("_start"), aMi);
+        }
         if (w.failed()) {
             Stdio.printf("xcc: android link failed: %s\n", w.why().cString());
             Process.exit((i32)1); return;
@@ -2906,17 +3077,39 @@ void usage(void)
     // (blewit FINDINGS). A help text that under-reports what the tool does is
     // read as a limitation.
     Stdio.printf("  --emit-lib         build a shared library "
-                 "(arm64, x86_64, arm9, wasm32)\n");
+                 "(arm64, android, x86_64, arm9, wasm32)\n");
     Stdio.printf("  --emit-iface       print the module interface and stop\n");
     Stdio.printf("  -Xlinker <lib>     link against a library (also -l<name>, -framework <F>)\n");
     Stdio.printf("  --emit-apk         (-A android) package an installable APK\n");
     Stdio.printf("  --sign-key <path>  signing key for --emit-apk\n");
+    capabilityUsage();
     Stdio.printf("  -V, --verbose      print the resolved support root and search paths\n");
     Stdio.printf("  -v, --version      print the version and exit\n");
     Stdio.printf("  -h, --help         this text\n");
     Stdio.printf("\n");
     Stdio.printf("An unrecognised option is an ERROR, never ignored: a driver that\n");
     Stdio.printf("quietly drops a flag builds something other than what it was asked for.\n");
+}
+
+// The capability flags' half of --help, beside the parser that reads them.
+void capabilityUsage(void)
+{
+    Stdio.printf("  -A m68k|68000|68030  the Atari ST/TT target, as a 68000 or a 68030\n");
+    Stdio.printf("  -mhard-float, -mfpu  (m68k) use the 68881 FPU for float and double\n");
+    Stdio.printf("  -msoft-float       (m68k) floating point in software (the default)\n");
+    Stdio.printf("  -fpic, -fPIC, -mpic  position-independent code: on m68k the GOT/a5\n");
+    Stdio.printf("                     model; arm64, android and arm9 are always PIC\n");
+    Stdio.printf("  -fthread-safe-arc  force atomic ARC refcounts (default: on exactly when\n");
+    Stdio.printf("                     the program spawns a thread)\n");
+    Stdio.printf("  -fno-thread-safe-arc  force plain, non-atomic refcounts\n");
+    Stdio.printf("  -falloc=bump|heap  allocator; every supported target uses heap\n");
+    Stdio.printf("  -fmalloc=system|mimalloc  the C heap behind the runtime; mimalloc is\n");
+    Stdio.printf("                     -A x86_64 only, linked ahead of libc\n");
+    Stdio.printf("  -g                 accepted; no debug information is emitted yet\n");
+    Stdio.printf("  --needed <soname>  (-A android) add a DT_NEEDED entry; repeatable\n");
+    Stdio.printf("  --with-lib <path>  (--emit-apk) package a prebuilt lib<name>.so too\n");
+    Stdio.printf("  --lib-name <name>  (--emit-apk) the library Android loads first\n");
+    Stdio.printf("  --with-dex <path>  (--emit-apk) package a classes.dex (hasCode=true)\n");
 }
 
 // The warning categories, which must AGREE with the reference's
@@ -2950,6 +3143,163 @@ bool isWarningCategory(String* c)
     return false;
 }
 
+// One capability flag at argv[*i], or false when it is not one. Advances *i
+// past the flag and its value. The target may not be known yet (-A can come
+// later on the line), so anything that depends on it waits for
+// checkCapabilities.
+bool parseCapabilityFlag(DriverOptions* d, u32* ip, u32 argc)
+{
+    u32 i = *ip;
+    String* a = Process.argument(i);
+    CapOptions* c = d.caps();
+    bool hasVal = i + (u32)1 < argc;
+    // -A m68k / 68000 / 68030: the m68k back end, and WHICH 68k. The CPU is a
+    // code-generation choice (32-bit PC-relative addressing on the 030, so no
+    // 32 KB branch limit) and an assembler one, so it rides with the target.
+    if (a.equals(String.withCString("-A")) && hasVal) {
+        String* v = Process.argument(i + (u32)1);
+        if (v.equals(String.withCString("m68k")) || v.equals(String.withCString("68000"))) {
+            d.setArch(String.withCString("m68k"));
+            c.setM68kCpu((u32)68000);
+            *ip = i + (u32)2; return true;
+        }
+        if (v.equals(String.withCString("68030"))) {
+            d.setArch(String.withCString("m68k"));
+            c.setM68kCpu((u32)68030);
+            *ip = i + (u32)2; return true;
+        }
+        return false;
+    }
+    if (a.hasPrefix(String.withCString("-falloc="))) {
+        String* v = a.substringFromByte((u32)8).lowercased();
+        if (!v.equals(String.withCString("bump")) && !v.equals(String.withCString("heap"))) {
+            Stdio.printf("xcc: -falloc= expects 'bump' or 'heap', got '%s'\n", v.cString());
+            Process.exit((i32)1); return true;
+        }
+        c.setAlloc(v);
+        *ip = i + (u32)1; return true;
+    }
+    if (a.hasPrefix(String.withCString("-fmalloc="))) {
+        String* v = a.substringFromByte((u32)9).lowercased();
+        if (!v.equals(String.withCString("system")) && !v.equals(String.withCString("mimalloc"))) {
+            Stdio.printf("xcc: -fmalloc= expects 'system' or 'mimalloc', got '%s'\n", v.cString());
+            Process.exit((i32)1); return true;
+        }
+        c.setHostMalloc(v);
+        *ip = i + (u32)1; return true;
+    }
+    // Atomic ARC is a back-end decision, but the race-free static-init once
+    // that rides the same switch is decided in LOWERING — so the front end is
+    // told as well, and the back ends read it from there.
+    if (a.equals(String.withCString("-fthread-safe-arc"))) {
+        d.fe().setThreadSafeArc((i32)1); c.setThreadFlag(true);
+        *ip = i + (u32)1; return true;
+    }
+    if (a.equals(String.withCString("-fno-thread-safe-arc"))) {
+        d.fe().setThreadSafeArc((i32)0); c.setThreadFlag(true);
+        *ip = i + (u32)1; return true;
+    }
+    if (a.equals(String.withCString("-fpic")) || a.equals(String.withCString("-fPIC"))
+        || a.equals(String.withCString("-mpic"))) {
+        c.setPic(true);
+        *ip = i + (u32)1; return true;
+    }
+    if (a.equals(String.withCString("-mhard-float")) || a.equals(String.withCString("-mfpu"))) {
+        c.setHardFloat(true);
+        *ip = i + (u32)1; return true;
+    }
+    if (a.equals(String.withCString("-msoft-float"))) {
+        c.setHardFloat(false);
+        *ip = i + (u32)1; return true;
+    }
+    if (a.equals(String.withCString("-g"))) {
+        c.setDebugInfo(true);
+        *ip = i + (u32)1; return true;
+    }
+    if (a.equals(String.withCString("--needed")) && hasVal) {
+        String* n = Process.argument(i + (u32)1);
+        bool dup = false;
+        for (u32 k = (u32)0; k < c.needed().count(); k = k + (u32)1)
+            if (((String*)c.needed().get(k)).equals(n)) dup = true;
+        if (!dup && n.byteLength() > (u32)0) c.needed().add((Object*)n);
+        *ip = i + (u32)2; return true;
+    }
+    if (a.equals(String.withCString("--with-lib")) && hasVal) {
+        c.setWithLib(Process.argument(i + (u32)1)); *ip = i + (u32)2; return true;
+    }
+    if (a.equals(String.withCString("--lib-name")) && hasVal) {
+        c.setLibName(Process.argument(i + (u32)1)); *ip = i + (u32)2; return true;
+    }
+    if (a.equals(String.withCString("--with-dex")) && hasVal) {
+        c.setWithDex(Process.argument(i + (u32)1)); *ip = i + (u32)2; return true;
+    }
+    if (a.equals(String.withCString("--no-self-host"))) {
+        c.setNoSelfHost(true); *ip = i + (u32)1; return true;
+    }
+    if (a.equals(String.withCString("--self-host"))) {
+        c.setNoSelfHost(false); *ip = i + (u32)1; return true;
+    }
+    return false;
+}
+
+// The capability flags against the target, once the whole line is read. A
+// flag that cannot apply is refused or named, never silently dropped.
+void checkCapabilities(DriverOptions* d)
+{
+    CapOptions* c = d.caps();
+    String* arch = d.arch();
+    if (c.threadFlag() && (isM68k(d) || isXt6502(d))) {
+        Stdio.printf("xcc: error: -f[no-]thread-safe-arc: '%s' has no threads, so there "
+                     "is no atomic reference count to choose\n", arch.cString());
+        Process.exit((i32)1); return;
+    }
+    if (c.hostMalloc().equals(String.withCString("mimalloc")) && !isX86_64(d)) {
+        Stdio.printf("xcc: -fmalloc=mimalloc is only supported on -A x86_64.\n"
+                     "  mimalloc ships as an x86-64 ELF object linked ahead of libc;\n"
+                     "  '%s' has no build of it to link.\n", arch.cString());
+        Process.exit((i32)1); return;
+    }
+    // The allocator is chosen by the program's LINK. A library uses whatever
+    // malloc the process that loads it already has, and an object is not a
+    // link at all.
+    if (c.hostMalloc().equals(String.withCString("mimalloc")) && (d.emitLib() || d.compileOnly())) {
+        Stdio.printf("xcc: error: -fmalloc=mimalloc applies to an executable's link; "
+                     "a library or object uses the allocator of the program it ends up in\n");
+        Process.exit((i32)1); return;
+    }
+    // Every live target has a free-capable heap, so `heap` is what they all
+    // build with and `bump` changes nothing. Said, rather than dropped.
+    if (c.alloc() != (String*)0 && c.alloc().equals(String.withCString("bump")))
+        Stdio.printf("xcc: warning: -falloc=bump: every supported target uses the "
+                     "free-list heap allocator; the build is unchanged\n");
+    if (c.debugInfo())
+        Stdio.printf("xcc: warning: -g: no debug information is emitted yet; the "
+                     "build is unchanged\n");
+    // The FPU flags choose code only on m68k (the 68881). arm9 code is always
+    // VFP, so -mhard-float is its default and -msoft-float cannot be honoured.
+    if (!isM68k(d)) {
+        if (c.softFloat())
+            Stdio.printf("xcc: warning: -msoft-float has no effect on '%s'; floating "
+                         "point uses the hardware\n", arch.cString());
+        else if (c.hardFloat() && !isArm9(d))
+            Stdio.printf("xcc: warning: -mhard-float has no effect on '%s'\n", arch.cString());
+    }
+    if (c.noSelfHost()) {
+        Stdio.printf("xcc: error: --no-self-host is not implemented in this driver yet\n");
+        Process.exit((i32)1); return;
+    }
+    if (c.needed().count() > (u32)0 && !isAndroid(d)) {
+        Stdio.printf("xcc: error: --needed names an Android DT_NEEDED entry and needs -A android\n");
+        Process.exit((i32)1); return;
+    }
+    if ((c.withLib() != (String*)0 || c.libName() != (String*)0 || c.withDex() != (String*)0)
+        && !(isAndroid(d) && d.emitApk())) {
+        Stdio.printf("xcc: error: --with-lib, --lib-name and --with-dex package an APK "
+                     "and need -A android --emit-apk\n");
+        Process.exit((i32)1); return;
+    }
+}
+
 DriverOptions* parseDriverArgs(void)
 {
     DriverOptions* d = new DriverOptions();
@@ -2957,6 +3307,7 @@ DriverOptions* parseDriverArgs(void)
     u32 argc = Process.argumentCount();
     u32 i = (u32)1;
     while (i < argc) {
+        if (parseCapabilityFlag(d, &i, argc)) continue;
         String* a = Process.argument(i);
         if (a.equals(String.withCString("-o")) && i + (u32)1 < argc) {
             String* out = Process.argument(i + (u32)1);

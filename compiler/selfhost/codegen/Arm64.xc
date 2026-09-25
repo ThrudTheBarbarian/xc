@@ -39,6 +39,9 @@ class Arm64
     // when the module spawns a thread — two threads sharing an object race on a
     // plain load/add/store and either leak it or free it while it is live.
     bool       _atomicArc;
+    // -fthread-safe-arc / -fno-thread-safe-arc: 1 forces atomic refcounts, 0
+    // forces plain ones, -1 (the default) leaves the per-module decision above.
+    i32        _arcOverride;
     // Plain AAPCS64 instead of Darwin's two deviations: the C-variadic tail is
     // placed like a named argument, and every overflow argument gets an 8-byte
     // slot rather than being packed to its natural size. Set for `-A android`.
@@ -71,10 +74,12 @@ class Arm64
         _maxOutStack = (u32)0;
         _aapcs64Abi = false;      // Darwin's deviations unless told otherwise
         _lseAtomics = true;       // Apple Silicon always has them
+        _arcOverride = (i32)-1;
     }
 
     void setAapcs64Abi(bool on) { _aapcs64Abi = on; }
     void setLseAtomics(bool on) { _lseAtomics = on; }
+    void setThreadSafeArcOverride(i32 mode) { _arcOverride = mode; }
 
     bool   failed(void)  { return _failed; }
     String* why(void)    { return _why; }
@@ -146,7 +151,7 @@ class Arm64
     String* assembly(IRModule* m)
     {
         _m = m;
-        _atomicArc = spawnsThreads(m);
+        _atomicArc = _arcOverride >= (i32)0 ? _arcOverride != (i32)0 : spawnsThreads(m);
         _msFns = referencesSymbol(m, String.withCString("_xt_check_bounds"))
                ? new Array() : (Array*)0;
         _out = new String();

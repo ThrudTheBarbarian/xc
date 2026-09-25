@@ -1027,6 +1027,25 @@ static NSString * _Nullable mimallocObjectFor(NSString *arch, const char *argv0,
     return [[NSFileManager defaultManager] fileExistsAtPath:p] ? p : nil;
 }
 
+// The in-house x86-64 link's half of -fmalloc=mimalloc: the object goes in as
+// the FIRST object input (the linker merges objects in order, after the
+// assembled sources), so libc's malloc members are never pulled. It used to be
+// added on the clang path only, which made the flag a silent no-op on the
+// default path. A requested allocator that is missing is an error, not a
+// quiet fall back to the system one.
+static BOOL x86AddMimalloc(const char *argv0, XTCommandLineOptions *opts,
+                           NSMutableArray<NSString *> *args) {
+    if (![opts.hostMalloc isEqualToString:@"mimalloc"]) return YES;
+    NSString *mi = mimallocObjectFor(@"x86_64", argv0, opts);
+    if (!mi) {
+        fprintf(stderr, "xcc: error: -fmalloc=mimalloc needs x86_64/runtime/mimalloc.o "
+                        "in the support tree, and it is not there\n");
+        return NO;
+    }
+    [args addObject:mi];
+    return YES;
+}
+
 // The system toolchain finished a build the in-house one was supposed to do.
 // That is never a detail: it means the binary in front of you was NOT produced
 // by this compiler's own assembler/linker, so any gap in them is invisible to
@@ -2395,6 +2414,7 @@ static int linkX86_64Dynamic(const char *argv0, XTCommandLineOptions *opts, NSSt
             [args addObject:stubPath];
             [args addObject:asmPath];
             { NSString *es = x86ExitStub(support); if (es) [args addObject:es]; }
+            if (!x86AddMimalloc(argv0, opts, args)) return 1;
             // The shared deps go on the line as INPUTS (not -l names): the
             // in-house linker reads each .so's soname (→ DT_NEEDED) and its
             // libc/crt imports, which it then satisfies from libc.a below and
@@ -2667,6 +2687,7 @@ static int linkX86_64Executable(const char *argv0, XTCommandLineOptions *opts,
         NSMutableArray<NSString *> *args = [rtPaths mutableCopy];
         [args addObject:stubPath];
         [args addObject:asmPath];
+        if (!x86AddMimalloc(argv0, opts, args)) return 1;
         // The user's -l archives (finding #15), resolved above — so a program
         // may use Stdio.printf AND link -lmbedcrypto in one build. They come
         // before libc: the user's code references them, and whatever THEY need

@@ -29,6 +29,9 @@ class Arm9
     // in-process thread syscalls yet (threading Phase 3). The codegen is here
     // so that when the kernel work lands, the refcount is already correct.
     bool _atomicArc;
+    // -fthread-safe-arc / -fno-thread-safe-arc: 1 forces atomic refcounts, 0
+    // forces plain ones, -1 (the default) leaves the per-module decision above.
+    i32 _arcOverride;
     // --emit-lib / -c: every function this module defines is part of its
     // exported surface, so it keeps DEFAULT visibility. Hiding them is right
     // for a program (a hidden symbol's references stay R_ARM_RELATIVE rather
@@ -57,6 +60,12 @@ class Arm9
     void init(void)
         {
         _emitLib = false;
+        _arcOverride = (i32)-1;
+        }
+
+    void setThreadSafeArcOverride(i32 mode)
+        {
+        _arcOverride = mode;
         }
 
     void setEmitLib(bool on)
@@ -349,7 +358,7 @@ class Arm9
     String* assembly(IRModule* mod)
         {
         _m = mod;
-        _atomicArc = spawnsThreads(mod);
+        _atomicArc = _arcOverride >= (i32)0 ? _arcOverride != (i32)0 : spawnsThreads(mod);
         _out = String.withCString("");
         // A `.file` naming the MODULE, not the temp `.s`: without one gas falls
         // back to whatever temporary object name it was handed, which is random
