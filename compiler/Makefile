@@ -1326,6 +1326,9 @@ define STAGE_DIST
 @for src in $(SUPPORT_SRCS); do \
 	dst=$(DIST_STAGE)/xcc-$(1)-$(VERSION)/lib/xc/$${src#support/}; \
 	mkdir -p $$(dirname $$dst); $(CP) $$src $$dst; done
+@# The GPLv3 text travels with the binaries. The runtime exception,
+@# lib/xc/COPYING.RUNTIME, is already there via SUPPORT_SRCS.
+@$(CP) ../COPYING $(DIST_STAGE)/xcc-$(1)-$(VERSION)/COPYING
 @if [ -d "$(X86_64_POOL)" ]; then \
 	mkdir -p $(DIST_STAGE)/xcc-$(1)-$(VERSION)/lib/xc/x86_64-sysroot; \
 	for f in $(X86_64_POOL_FILES); do \

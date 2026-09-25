@@ -13,7 +13,7 @@ Each program runs REPEATS times and the fastest is kept, which is the usual
 choice on a machine that is also doing other things.
 
   run.py                     measure everything, write results to <version>/
-  run.py --version v0.6      which directory to write to (default: v0.6)
+  run.py --version v0.61     which directory to write to (default: v<compiler/VERSION>)
   run.py --bench int_accum   restrict to one benchmark
   run.py --repeats 7         runs per data point
   run.py --opt O2            restrict to one optimisation level
@@ -203,7 +203,9 @@ def measure(binary, repeats):
 
 def main():
     ap = argparse.ArgumentParser(description="xc against Objective-C, both with ARC")
-    ap.add_argument("--version", default="v0.6")
+    with open(os.path.join(REPO, "compiler", "VERSION")) as f:
+        default_version = "v" + f.read().strip()
+    ap.add_argument("--version", default=default_version)
     ap.add_argument("--bench", default=None)
     ap.add_argument("--opt", default=None)
     ap.add_argument("--repeats", type=int, default=5)
