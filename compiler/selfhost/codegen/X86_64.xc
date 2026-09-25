@@ -35,6 +35,9 @@ class X86_64
     // Thread-safe ARC (private:docs/Design/threading.md §4.1): a LOCK-prefixed refcount
     // update, on exactly when the module spawns a thread.
     bool _atomicArc;
+    // -fthread-safe-arc / -fno-thread-safe-arc: 1 forces atomic refcounts, 0
+    // forces plain ones, -1 (the default) leaves the per-module decision above.
+    i32 _arcOverride;
     IRFunc* _fn;
     String* _out;
     bool _win64; // the Win64 ABI rather than System V
@@ -47,12 +50,18 @@ class X86_64
         _out = new String();
         _missing = new Array();
         _failed = false;
+        _arcOverride = (i32)-1;
         _win64 = false;
         }
 
     void setWin64(bool v)
         {
         _win64 = v;
+        }
+
+    void setThreadSafeArcOverride(i32 mode)
+        {
+        _arcOverride = mode;
         }
 
     bool failed(void)
@@ -376,7 +385,7 @@ class X86_64
     String* assembly(IRModule* m)
         {
         _m = m;
-        _atomicArc = spawnsThreads(m);
+        _atomicArc = _arcOverride >= (i32)0 ? _arcOverride != (i32)0 : spawnsThreads(m);
         _out = new String();
         _out.appendCString("\t.intel_syntax noprefix\n\t.text\n");
         for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)

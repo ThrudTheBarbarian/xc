@@ -81,7 +81,7 @@ Output containers on the non-native targets:
 | `x86_64` | Linux (musl) | ELF; run it |
 | `win64` | Windows | PE/COFF `.exe` |
 | `arm9` | AArch32 / **XTOS** | ELF, or a `.so` (see `--emit-lib`) |
-| `m68k` | Motorola 68000 | GEMDOS `.prg`/`.tos`; run under `xcc-sim-68k`. `68000` is another spelling of `m68k`; `68030` targets the 68030. |
+| `m68k` | Motorola 68000 | GEMDOS `.prg`/`.tos`; run under `xcc-sim-68k`. `-A 68000` is the same target, and `-A 68030` builds for the 68030 (run with `xcc-sim-68k --cpu 68030`). |
 | `wasm32` | WebAssembly | `.wasm` / WAT |
 | `6502` | banked **xt6502** | banked 6502 executable (`.xex`); run under `xcc-sim-6502 -m xt` |
 
@@ -101,8 +101,8 @@ linker or `clang`.
 | `-Xlinker <file>` | Link a library or object file named by path. |
 | `-Wl,<arg>[,<arg>…]` | The same, in the form clang users write. `xcc` links in-house: a file is linked, `-rpath <dir>` adds a run-path entry on arm64 and iOS, and any other linker flag is ignored with a note. `-Xlinker` takes the same arguments. |
 | `--self-host` | In-house assemble + link + sign. This is the default; the flag is accepted but has no effect. |
-| `--no-self-host` | Link through `clang` instead of in-house. |
-| `-fpic`, `-fPIC`, `-mpic` | Position-independent code. Implied by `--emit-lib`; on arm9 it is what produces an `ET_DYN` `.so` rather than a fixed-load ELF. |
+| `--no-self-host` | Hand the link to the platform toolchain instead: `clang` for arm64 macOS, the Android NDK's `clang` for `-A android` (executables and `--emit-apk`), and `arm-none-eabi-gcc` for arm9. Those tools must be installed. x86_64, win64, iOS and arm64 libraries link in-house only; m68k, 6502 and wasm32 images are always written in-house. |
+| `-fpic`, `-fPIC`, `-mpic` | Position-independent code. On m68k it selects the GOT/`a5` model, which lifts the 32 KB limit on a 68000 program. arm64, android and arm9 code is always position-independent, and `--emit-lib` implies it. |
 
 ## Shared libraries
 
@@ -152,8 +152,8 @@ Full discussion on [Optimisation](/compiler/usage/optimization/).
 
 | Flag | Effect |
 |------|--------|
-| `-falloc=bump` | Inline bump allocator. Fast `new`, no `delete`. |
-| `-falloc=heap` | Coalescing free-list allocator; supports `delete`. Default on targets with a dedicated heap region: the `xt` layouts and the native hosts. |
+| `-falloc=heap` | Coalescing free-list allocator; supports `delete`. Every supported target has a heap region, so this is the allocator they all use. |
+| `-falloc=bump` | Accepted for older build scripts. No supported target uses the bump allocator, so `xcc` warns and builds with the heap. |
 | `-farc[=on\|off]` | Retired. ARC is always on. `xcc` accepts the flag and warns that it does nothing. |
 | `-fthread-safe-arc` | Force atomic ARC refcounts, so two threads can share an object. |
 | `-fno-thread-safe-arc` | Force plain, non-atomic refcounts. |
@@ -163,12 +163,15 @@ thread. These flags override that choice. See
 [Allocator & ARC](/compiler/usage/allocator-arc/) and
 [Threading](/compiler/language/threading/).
 
-## Floating point (arm9)
+## Floating point (m68k)
 
 | Flag | Effect |
 |------|--------|
-| `-mhard-float`, `-mfpu` | Use VFP instructions for `float` and `double`. The default on boards that have it. |
-| `-msoft-float` | Route floating point through the libgcc soft-float helpers instead. |
+| `-mhard-float`, `-mfpu` | Use the 68881/68882 FPU for `float` and `double`. |
+| `-msoft-float` | Floating point in software. The default. |
+
+arm9 code always uses VFP, so `-mhard-float` is its default and `-msoft-float`
+is reported and ignored.
 
 ## Stack control
 
@@ -199,13 +202,14 @@ thread. These flags override that choice. See
 | `-flto` | Link-time optimisation: recompile the whole program from its IR as one module. |
 | `-fbounds-check` | Build with subscript bounds checking; see [Checked builds](#checked-builds). arm64 only so far. |
 | `--sign <identity.pem>` | Sign the output with a developer identity (iOS/macOS); pair with `--sign-entitlements <plist>`. See also the standalone `xcc-sign`. |
-| `--emit-apk` | On `-A android`, package a signed `.apk`. `--sign-key <path>` names the signing key. See the packaging options below. |
+| `--emit-apk` | On `-A android`, package a signed `.apk`. `--sign-key <path>` names the signing key. |
+| `--needed <soname>` | On `-A android`, add a `DT_NEEDED` entry naming `<soname>`. Repeatable. A payload that calls into a companion `.so` must name it. |
+| `--with-lib <path>` | With `--emit-apk`, store a prebuilt `lib<name>.so` in `lib/arm64-v8a/` beside the payload. |
+| `--lib-name <name>` | With `--emit-apk`, the library the system loads first (`android.app.lib_name`). Default: the payload. |
+| `--with-dex <path>` | With `--emit-apk`, package this `classes.dex` and mark the manifest `hasCode="true"`. |
 | `--emit-iface` | Write the module interface (the `.xtc.iface` description) to the `-o` path, or to standard output with no `-o`, and stop. `-c` and `--emit-lib` produce the interface as part of their output without this flag. |
-| `-fmalloc=system\|mimalloc` | Choose the native heap backend. |
-| `--with-dex <path>` | With `--emit-apk`, carry this `classes.dex` in the package and mark the manifest `hasCode="true"`. |
-| `--with-lib <path>` | With `--emit-apk`, store an extra prebuilt `.so` in `lib/arm64-v8a/`. |
-| `--lib-name <name>` | With `--emit-apk`, the manifest's `android.app.lib_name`: which packaged library the system loads. Default: the program itself. |
-| `--needed <soname>` | On `-A android`, add a `DT_NEEDED` entry naming `<soname>`. Repeatable. A library that calls into a companion `.so` must name it. |
+| `-fmalloc=system\|mimalloc` | Choose the C heap behind the runtime. `mimalloc` is `-A x86_64` only: the mimalloc object is linked ahead of libc, so its `malloc` family replaces musl's. |
+| `-g` | Accepted. No debug information is emitted yet, and `xcc` says so. |
 
 `xcc --help` prints the complete flag list.
 

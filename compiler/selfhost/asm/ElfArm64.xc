@@ -277,6 +277,9 @@ class ElfArm64
             if (symbols.get((Hashable*)n) != (Object*)0 && !inArray(exports, n))
                 exports.add((Object*)n);
             }
+        // In NAME order, as the reference writer sorts them: the caller's order
+        // is whatever its set iterated in, and .dynsym must not depend on that.
+        exports.sort();
 
         // ── 3. sizes, then addresses ─────────────────────────────────────
         Array* text = new Array();

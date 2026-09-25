@@ -1067,12 +1067,20 @@ static NSString* m68kSym(NSString* name)
     // _xm_<op>f (float) / _xm_<op> (double); each maps to one FPU
     // instruction whose result the emulator (and the Zynq m68k JIT)
     // computes with native libm. Float returns in d0; double in d0:d1.
-    NSDictionary* xmOps = @{@"sqrt" : @"fsqrt", @"sin" : @"fsin", @"cos" : @"fcos", @"tan" : @"ftan", @"atan" : @"fatan", @"asin" : @"fasin", @"acos" : @"facos", @"ln" : @"flogn", @"exp" : @"fetox", @"log10" : @"flog10", @"log2" : @"flog2"};
-    for (NSString* op in xmOps)
+    //
+    // An ARRAY of pairs, in this order, not a dictionary: the helpers are
+    // emitted in iteration order, and a dictionary's order is its hash
+    // layout's. The self-hosted back end walks the same list in the same order.
+    NSArray<NSArray<NSString*>*>* xmOps = @[
+        @[@"sqrt", @"fsqrt"], @[@"sin", @"fsin"], @[@"cos", @"fcos"], @[@"tan", @"ftan"],
+        @[@"atan", @"fatan"], @[@"asin", @"fasin"], @[@"acos", @"facos"], @[@"ln", @"flogn"],
+        @[@"exp", @"fetox"], @[@"log10", @"flog10"], @[@"log2", @"flog2"]];
+    for (NSArray<NSString*>* pair in xmOps)
         {
         if (!gHardFloat)
             break;
-        NSString* mn = xmOps[op];
+        NSString* op = pair[0];
+        NSString* mn = pair[1];
         if (used([NSString stringWithFormat:@"_xm_%@f", op]))
             [out appendFormat:
                      @"\t.globl\t_xm_%@f\n_xm_%@f:\n\tfmove.s\t4(sp),fp0\n\t%@\tfp0,fp0\n\tfmove.s\tfp0,d0\n\trts\n\n",

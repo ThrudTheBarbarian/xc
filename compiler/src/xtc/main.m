@@ -312,7 +312,7 @@ static NSString *arm64StubSourceEx(NSString *asmText, BOOL forLibrary) {
             @"void *_xtc_alloc(unsigned long count,unsigned long stride,void(*dealloc)(void*)){"
             @"if(count<1)count=1;unsigned long b=count*stride; if(b<256)b=256;"
             @"uint8_t*p=(uint8_t*)calloc(1,b+38);"
-            @"if(!p){fprintf(stderr,\"xcc: out of memory (%%lu x %%lu bytes)\\n\",count,stride);abort();}"
+            @"if(!p){fprintf(stderr,\"xcc: out of memory (%lu x %lu bytes)\\n\",count,stride);abort();}"
             @"*(uint32_t*)(p+0)=0x58544F42U;*(unsigned long*)(p+4)=stride;*(unsigned long*)(p+12)=count;"
             @"*(void(**)(void*))(p+20)=dealloc;*(void**)(p+28)=0;*(uint16_t*)(p+36)=1;return p+38;}\n"];
     }
@@ -506,7 +506,7 @@ static NSString *arm9StubSource(NSString *asmText, BOOL forLibrary) {
             @"void *_xtc_alloc(unsigned long count,unsigned long stride,void(*dealloc)(void*)){"
             @"if(count<1)count=1;unsigned long b=count*stride; if(b<256)b=256;"
             @"uint8_t*p=(uint8_t*)calloc(1,b+24);"
-            @"if(!p){fprintf(stderr,\"xcc: out of memory (%%lu x %%lu bytes)\\n\",count,stride);abort();}"
+            @"if(!p){fprintf(stderr,\"xcc: out of memory (%lu x %lu bytes)\\n\",count,stride);abort();}"
             @"*(uint32_t*)(p+0)=0x58544F42U;*(uint32_t*)(p+4)=(uint32_t)stride;*(uint32_t*)(p+8)=(uint32_t)count;"
             @"*(void(**)(void*))(p+12)=dealloc;*(void**)(p+16)=0;*(uint16_t*)(p+22)=1;return p+24;}\n"];
     }
@@ -1025,6 +1025,25 @@ static NSString * _Nullable mimallocObjectFor(NSString *arch, const char *argv0,
     NSString *p = [support stringByAppendingPathComponent:
                    [NSString stringWithFormat:@"%@/runtime/mimalloc.o", arch]];
     return [[NSFileManager defaultManager] fileExistsAtPath:p] ? p : nil;
+}
+
+// The in-house x86-64 link's half of -fmalloc=mimalloc: the object goes in as
+// the FIRST object input (the linker merges objects in order, after the
+// assembled sources), so libc's malloc members are never pulled. It used to be
+// added on the clang path only, which made the flag a silent no-op on the
+// default path. A requested allocator that is missing is an error, not a
+// quiet fall back to the system one.
+static BOOL x86AddMimalloc(const char *argv0, XTCommandLineOptions *opts,
+                           NSMutableArray<NSString *> *args) {
+    if (![opts.hostMalloc isEqualToString:@"mimalloc"]) return YES;
+    NSString *mi = mimallocObjectFor(@"x86_64", argv0, opts);
+    if (!mi) {
+        fprintf(stderr, "xcc: error: -fmalloc=mimalloc needs x86_64/runtime/mimalloc.o "
+                        "in the support tree, and it is not there\n");
+        return NO;
+    }
+    [args addObject:mi];
+    return YES;
 }
 
 // The system toolchain finished a build the in-house one was supposed to do.
@@ -2395,6 +2414,7 @@ static int linkX86_64Dynamic(const char *argv0, XTCommandLineOptions *opts, NSSt
             [args addObject:stubPath];
             [args addObject:asmPath];
             { NSString *es = x86ExitStub(support); if (es) [args addObject:es]; }
+            if (!x86AddMimalloc(argv0, opts, args)) return 1;
             // The shared deps go on the line as INPUTS (not -l names): the
             // in-house linker reads each .so's soname (→ DT_NEEDED) and its
             // libc/crt imports, which it then satisfies from libc.a below and
@@ -2667,6 +2687,7 @@ static int linkX86_64Executable(const char *argv0, XTCommandLineOptions *opts,
         NSMutableArray<NSString *> *args = [rtPaths mutableCopy];
         [args addObject:stubPath];
         [args addObject:asmPath];
+        if (!x86AddMimalloc(argv0, opts, args)) return 1;
         // The user's -l archives (finding #15), resolved above — so a program
         // may use Stdio.printf AND link -lmbedcrypto in one build. They come
         // before libc: the user's code references them, and whatever THEY need

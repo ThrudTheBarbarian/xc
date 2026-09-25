@@ -7,6 +7,8 @@ description: Picking between -falloc=bump and -falloc=heap, and how automatic re
 
 Reference counting is not a choice: ARC is always on (see [Reference counting](#reference-counting)).
 
+Every supported target has a heap region, so every build uses the heap allocator. `xcc` accepts `-falloc=heap`, and accepts `-falloc=bump` with a warning that the build is unchanged. The bump allocator below applies only to a layout without a `[heap]` region, and no shipped layout lacks one.
+
 ## Allocator: `-falloc=bump|heap`
 
 ```bash

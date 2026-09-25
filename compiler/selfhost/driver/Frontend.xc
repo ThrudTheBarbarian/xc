@@ -49,6 +49,7 @@ class FeOptions
     Array* _libs; // -L dirs: `.xtc.iface` side files resolve here
     bool _verbose;
     bool _boundsCheck; // -fbounds-check
+    i32 _threadSafeArc; // -f[no-]thread-safe-arc: 1 on, 0 off, -1 decide per module
     bool _emitIface;   // compute the module interface (--emit-lib, -c, --emit-iface)
     // …and, SEPARATELY, whether this is a LIBRARY build. The two used to be one
     // flag, so `--emit-iface` — which only asks what the source declares —
@@ -85,6 +86,7 @@ class FeOptions
         _verbose = false;
         _migrate = (String*)0;
         _boundsCheck = false;
+        _threadSafeArc = (i32)-1;
         }
 
     String* input(void)
@@ -126,6 +128,10 @@ class FeOptions
     bool boundsCheck(void)
         {
         return _boundsCheck;
+        }
+    i32 threadSafeArc(void)
+        {
+        return _threadSafeArc;
         }
     bool analyze(void)
         {
@@ -233,6 +239,10 @@ class FeOptions
     void setPreprocessedPath(String* p)
         {
         _ppOut = p;
+        }
+    void setThreadSafeArc(i32 mode)
+        {
+        _threadSafeArc = mode;
         }
     }
 
@@ -660,10 +670,9 @@ class FeOptions
         lower.setItableDispatch(platformOf(o).equals(String.withCString("arm9")) || (platformOf(o).equals(String.withCString("x86_64")) && o.libraryBuild())); // bug 201
         lower.setNativeVarargs(platformOf(o).equals(String.withCString("arm9")) || platformOf(o).equals(String.withCString("arm64")));                         // bug 179
         // The race-free static-init once (threading.md §9.5). -1 = decide per
-        // module, which is what the reference compiler defaults to, so the two
-        // lowerings agree without either being told. xtfe has no
-        // -f[no-]thread-safe-arc of its own yet; wire it here if it ever gains one.
-        lower.setThreadSafeStatics((i32)-1);
+        // module; -f[no-]thread-safe-arc forces it, because atomic ARC and this
+        // once ride the same switch and a program that asks for one gets both.
+        lower.setThreadSafeStatics(o.threadSafeArc());
         lower.setBoundsCheck(o.boundsCheck());
         lower.setVtable(sema.vtable());
         IRModule* mod = lower.run(program, moduleNameOf(o.input()));
