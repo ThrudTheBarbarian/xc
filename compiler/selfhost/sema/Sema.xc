@@ -808,6 +808,31 @@ class Sema
         if (n == 0)
             return;
         u16 k = n.kind();
+        if (k == (u16)nkDelete)
+            {
+            // `delete` / `retain` / `release` on a CLASS instance: ARC already
+            // owns that refcount, so a hand-written one frees an object that
+            // is still aliased. The reference refuses it; this port typed the
+            // operand and said nothing, so `delete p` compiled and ran the
+            // double free. Struct and primitive arrays are not ARC-managed,
+            // and `delete` stays the only way to free them.
+            if (n.kidCount() > (u32)0)
+                {
+                typeExpr(n.kid(0));
+                String* t = n.kid(0).ty();
+                String* cls = (t != 0 && Types.isPointer(t)) ? classNameOf(t) : (String*)0;
+                if (cls != 0 && _classes.get((Hashable*)cls) != 0)
+                    {
+                    String* w = String.withCString("`");
+                    w.append(n.op());
+                    w.appendCString("` is not allowed on a class instance under ARC — ");
+                    w.appendCString(n.num() == (i64)0 ? "let the scope exit release it"
+                                                      : "the compiler manages class refcounts automatically");
+                    _errorAt(w, n);
+                    }
+                }
+            return;
+            }
         if (k == (u16)nkBlock)
             {
             // A DECL-LIST block is not a scope — `Block a, b, c;` is three

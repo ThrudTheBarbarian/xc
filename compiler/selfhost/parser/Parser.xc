@@ -2006,6 +2006,8 @@ class Parser
                 u16 kwType = curType();
                 Token* kw = advance();
                 Node* d = mk((u16)nkDelete);
+                // Positioned at the keyword, as the reference reports it.
+                d.setPos(kw.fileId(), kw.line(), kw.col());
                 d.setOp(kw.value());
                 if      (kwType == (u16)tokRetain)  d.setNum((i64)1);
                 else if (kwType == (u16)tokRelease) d.setNum((i64)2);
