@@ -23,7 +23,17 @@ MyClass* mob = new MyClass[8];      // array of class instances
 
 ## Automatic reference counting (ARC)
 
-The compiler manages reference counts automatically. ARC is always on. Every heap block has a header immediately before the payload. The header shape is **per target**, but on every target the 16-bit retain count sits at `obj-2`, so the back ends emit the same retain/release sequence.
+The compiler manages reference counts automatically. ARC is always on. Every heap block has a header immediately before the payload, and the retain count is the last field of it, so a back end reaches the count at a small fixed offset below the object. The header's shape and the count's width are **per target**:
+
+| Target | Header | Retain count |
+|---|---|---|
+| `xt6502` | 7 bytes | 16-bit at `obj-2` |
+| `m68k` | 14 bytes | 16-bit at `obj-2` |
+| `arm9` | 24 bytes | 16-bit at `obj-2` |
+| `wasm32` | 38 bytes | 16-bit at `obj-2` |
+| `arm64` (macOS, iOS, Android), `x86_64`, `win64` | 40 bytes | 32-bit at `obj-4` |
+
+The hosts use a 32-bit count because one object can be retained more than 65,535 times in an ordinary large program.
 
 **xt6502**: a 7-byte header in a hand-written coalescing free list:
 
@@ -36,11 +46,11 @@ byte, so a single block is capped at **32 KB**. In practice the cap is lower,
 because one heap block lives inside one bank. See
 [Memory models](/compiler/usage/memory-models/).
 
-**arm64, x86_64, win64, arm9, m68k**: a 24-byte header over the host
-allocator, holding a `'BOTX'` cookie, the element stride, the element count,
-the `dealloc` pointer, and the same 16-bit refcount at `obj-2`. Size is a `u32`
-count × `u32` stride, so **there is no 15-bit limit** on these targets. A block
-is bounded by what the host allocator provides.
+**The other targets** allocate through the host allocator (`calloc`), or on
+wasm32 through the module's own allocator. The header holds a `'BOTX'` cookie,
+the element stride, the element count, the `dealloc` pointer and the weak-slot
+list head as well as the retain count, so **there is no 15-bit limit** on
+these targets. A block is bounded by what the allocator provides.
 
 The compiler emits retain / release operations at these points:
 
@@ -214,7 +224,7 @@ The `Heap` library class (`#import <Heap.xc>`) has static helpers for inspecting
 ## Limits
 
 - **On the 6502, a single block cannot exceed one bank** (~12 KB), the size of the data page holding it. The heap holds far more *in total* (it grows across banks on demand), but no single allocation spans a bank boundary. The native backends have no such limit.
-- **Retain counts saturate at `$FFFF`** (65535). This is effectively unlimited for normal ownership patterns; do not work around it with additional retains.
+- **On xt6502 a retain count saturates at `$FFFF`** (65535) rather than wrapping. On arm9, m68k and wasm32 a 16-bit count wraps past 65,535, so an object retained that many times at once is freed while still in use. The 32-bit hosts are not affected in practice.
 - **On the 6502**, a heap pointer carries its own data bank in its third byte, and the backend re-selects that bank on every dereference. The code window and the data window have *separate* selectors, so a `:banked` function can use the heap without swapping its own code page out.
 
 ## Worked example

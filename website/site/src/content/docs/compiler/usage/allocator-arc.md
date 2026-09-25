@@ -44,9 +44,9 @@ delete buf;                     // returns the bytes to the free list
 
 The **heap allocator** differs by target. On **xt6502** it is a hand-written coalescing free list. Every allocation carries a 7-byte header (15-bit size, 1 free bit, 16-bit retain count). Every free returns the block to the list and merges it with any adjacent free blocks. Allocation is O(free-block count) for first-fit traversal. Free is O(1) for the release plus O(neighbour) for coalescing. A single block is capped at 32 KB because the free flag takes the top bit of the size field.
 
-On the **native targets** (`arm64`, `x86_64`, `win64`, `arm9`, `m68k`) allocation goes through the host allocator with a 24-byte header (cookie, stride, count, `dealloc` pointer, refcount). Cost and size limit are the host allocator's, and the 15-bit cap does not apply.
+On the **other targets** allocation goes through the host allocator, or on wasm32 the module's own, with a header holding a cookie, the stride, the count, the `dealloc` pointer, the weak-slot list head and the retain count. Cost and size limit are the allocator's, and the 15-bit cap does not apply.
 
-On every target the **16-bit retain count is at `obj-2`**. The back ends' inline retain/release sequences depend on that position.
+The retain count is the last field of the header: 16-bit at `obj-2` on xt6502, m68k, arm9 and wasm32, and 32-bit at `obj-4` on arm64, x86_64 and win64. The back ends' inline retain/release sequences depend on that position. See [Memory model](/compiler/language/memory/) for the header size on each target.
 
 Use heap when:
 
