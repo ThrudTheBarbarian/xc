@@ -297,7 +297,7 @@ static XTIRInsn* rebuiltInsn(XTIRInsn* insn, NSArray<XTIROperand*>* newOps)
     // the order the IR text lists the blocks. A predecessor that has not been
     // processed yet simply contributes nothing, which costs an opportunity and
     // never correctness.
-    NSMutableDictionary<NSValue*, NSDictionary*>* outPure = [NSMutableDictionary dictionary];
+    NSMutableDictionary<NSValue*, NSDictionary<NSString*, NSNumber*>*>* outPure = [NSMutableDictionary dictionary];
     NSMutableDictionary<NSValue*, NSDictionary*>* outLoaded = [NSMutableDictionary dictionary];
     NSMutableDictionary<NSValue*, NSMutableArray<XTIRBlock*>*>* predsOf =
         [NSMutableDictionary dictionary];
