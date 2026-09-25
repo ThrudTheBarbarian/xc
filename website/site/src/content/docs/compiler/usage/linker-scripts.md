@@ -254,7 +254,8 @@ xcc --list-layouts
 Prints every shipped layout grouped by platform. Each one is a `.lnk` file you can copy as a starting point for a custom variant.
 
 The shipped layouts are `xt` (the standard xt6502 model, with two bank windows and an
-on-demand banked heap) and `xt-heap` (the same map with a fixed heap reservation). Layouts
+on-demand banked heap) and `xt-heap` (the same map with a fixed heap reservation, which
+needs split banking and cannot be built yet). Layouts
 apply to the 6502 backend only; the native targets have no layout to choose.
 
 See [Memory models](/compiler/usage/memory-models/) for what each one is for and when to pick it.

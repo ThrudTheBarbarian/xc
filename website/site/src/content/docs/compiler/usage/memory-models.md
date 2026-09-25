@@ -40,7 +40,7 @@ The shipped layouts are:
 
 ```
 xt         ← the standard model: two bank windows + on-demand banked heap
-xt-heap    ← the same map with a fixed heap reservation
+xt-heap    ← the same map with a fixed heap reservation (not buildable yet)
 ```
 
 `support/xt6502/layouts/xt.lnk` is the **single source of truth** for the map. The code
@@ -129,7 +129,9 @@ There is no fixed reservation to tune, and a program uses as much heap as it nee
 editing the layout. The one limit: **a single allocation cannot span a bank boundary**, so
 no one object may exceed ~12 KB. Total heap size is unaffected.
 
-`xt-heap` uses a fixed heap reservation instead, for deterministic allocation.
+`xt-heap` describes a fixed heap reservation instead. It needs split banking,
+which the 6502 back end does not have yet, so `-m xt-heap` stops with an error
+that names the missing parts. Use `xt`.
 
 ## Libraries resolve by architecture × platform
 

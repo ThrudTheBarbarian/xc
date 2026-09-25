@@ -150,7 +150,37 @@ wasm32:
 
 ### Options
 
-<!-- FLAGS: list of options that now work in xcc -->
+`xcc` in 0.6 answered "unrecognised option" to many options this site
+documented. They all work now, and `xcc -h` lists every option in sections.
+
+- Output and inspection: `--output`, `-a`/`--assemble-only`, `-E`/`--preprocessed
+  <path>`, `--emit-ir`, `--emit-ir-opt`, `-fdce-trace`.
+- Paths and definitions: joined `-DNAME[=VALUE]`, `--include`, `--library-path`,
+  `--xcc-home`, and the `XCC_HOME`, `XTC_HOME` and `XTC_LDFLAGS` environment
+  variables. `~/xcc` and `~/xtc` are searched for the support tree.
+- Targets: `--arch`, the spellings `x86-64`, `amd64`, `windows`, `wasm`, `armv7`
+  and `cortex-a9`, and `-A 68000` / `-A 68030` with `-mhard-float` (68881) and
+  `-fpic` (the GOT/`a5` model) on m68k.
+- 6502 layouts: `-m` takes the built-in layouts the back end supports and a
+  `.lnk` file by path, and names what is missing in a layout it cannot build
+  (`xt-heap` and `xt-test-fallover` need split banking, which the back end does
+  not have). `-ll`/`--list-layouts` and `-dl`/`--dump-layout` print layouts.
+- Optimisation: bare `-O`, `-Fli`/`--fn-leaf-inline`.
+- Code generation: `-fthread-safe-arc`, `-fno-thread-safe-arc`, and
+  `-fmalloc=mimalloc` on x86_64, which the in-house link now honours.
+- Linking: `-Wl,`/`-Xlinker` take linker flags as well as files (`-rpath`
+  becomes a run-path entry; other flags are reported and skipped),
+  `--no-self-host` links arm64, android and arm9 executables with the platform
+  toolchain, and `--emit-lib` builds android and iOS libraries.
+- Android packaging: `--needed`, `--with-lib`, `--lib-name`, `--with-dex`.
+- Accepted with a warning that they have no effect: `-Q`, `--xtc-stack`, `-Fmb`,
+  `-dp`, `-du`, `-falloc=bump`, `-g` and the retired `-farc`.
+
+`xcc-sign` exports a signing identity from the macOS keychain
+(`--export-identity`) and creates one through App Store Connect
+(`--fetch-identity`, with `--list-certs` and `--revoke-cert`), with no other
+tool. `xcc-as` takes the full assembler command line: banked and split-bank
+output, PRG, listings, `-D`, `-I` and multiple inputs.
 
 ### Tools and documentation
 
