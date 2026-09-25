@@ -3806,14 +3806,33 @@ static NSString* m68kSym(NSString* name)
         break;
 
     case XTIROpAsm:
-        // Inline asm is intrinsically per-architecture. The only asm the m68k
-        // backend currently sees is the shared ARC/library asm, #if-guarded to
-        // 6502/arm64 (empty on m68k) — ARC runs through the __arc_retain /
-        // __arc_release *calls*, not the asm — so dropping it is correct. A real
-        // m68k `asm{}` block would need verbatim emission with {{XTLOCAL}} slot
-        // substitution; none exists yet, so this is an explicit, documented
-        // no-op rather than a silent drop. (TODO when m68k asm is exposed.)
+        {
+        // Inline asm is per-architecture and this backend has no lowering for
+        // it (verbatim emission would need frame-slot substitution and homing
+        // suppressed around the block). A block whose body the preprocessor
+        // emptied is harmless and emits nothing. A block with text is refused:
+        // dropping it built a program that ran with the block's effect missing
+        // and exited 0 — double_math_lnexp, whose 6502 `asm { LDA d ... }`
+        // copies never ran, printed FAIL lines that looked like a 68881 bug
+        // (bug 254).
+        BOOL hasText = NO;
+        for (XTIROperand* o in insn.operands)
+            {
+            if (o.kind != XTIROperandKindConstAgg)
+                continue;
+            NSData* bytes = [mod constantForId:o.constantId].stringBytes;
+            const unsigned char* p = bytes.bytes;
+            for (NSUInteger k = 0; k < bytes.length; k++)
+                if (p[k] != 0 && p[k] != ' ' && p[k] != '\t' && p[k] != '\n' && p[k] != '\r')
+                    hasText = YES;
+            }
+        if (hasText)
+            [NSException raise:@"XTM68kInlineAsm"
+                        format:@"inline asm has no m68k lowering (guard the source "
+                               @"with #if ARCH_6502, or the architecture it is "
+                               @"written for)"];
         break;
+        }
 
     default:
         // No silent fall-through: an unhandled opcode here would emit nothing

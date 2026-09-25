@@ -808,13 +808,24 @@ class M68k
             _out.appendCString("\tillegal\n"); // $4AFC
             return;
             }
-        // Inline asm is intrinsically per-architecture, and the only asm this
-        // back end sees is the shared ARC/library asm, #if-guarded to 6502 and
-        // arm64 and therefore empty here — ARC runs through the __arc_retain /
-        // __arc_release CALLS, not the asm. A real m68k asm block would need
-        // verbatim emission with slot substitution; none exists yet.
+        // Inline asm is per-architecture and this back end has no lowering for
+        // it (verbatim emission would need frame-slot substitution and homing
+        // suppressed around the block). A block whose body the preprocessor
+        // emptied is harmless and emits nothing. A block with text is refused:
+        // dropping it built a program that ran with the block's effect
+        // missing and exited 0 — double_math_lnexp, whose 6502 `asm { LDA d
+        // ... }` copies never ran, printed FAIL lines that looked like a 68881
+        // bug (bug 254).
         if (op.equals(String.withCString("Asm")))
+            {
+            if (asmHasText(n))
+                {
+                if (!_failed)
+                    Stdio.error(String.withCString("xcc-cg-68k: error: inline asm has no m68k lowering (guard the source with #if ARCH_6502, or the architecture it is written for)\n"));
+                unsupported(String.withCString("inline-asm"));
+                }
             return;
+            }
         if (op.equals(String.withCString("Call")))
             {
             emitCall(fn, n);
@@ -1686,6 +1697,26 @@ class M68k
     // itself. So the zero offset is caught BEFORE the base is added. A null
     // receiver must likewise give 0 rather than fault, so one `if (h)` covers
     // both "no delegate" and "does not implement it".
+    // True when an Asm instruction's body (its constant-pool operand) holds
+    // anything other than whitespace.
+    bool asmHasText(IRInsn* n)
+        {
+        for (u32 i = (u32)0; i < n.ops().count(); i = i + (u32)1)
+            {
+            IROperand* o = (IROperand*)n.ops().get(i);
+            if (o.kind() != (u8)OPK_CPOOL || o.cid() >= _m.consts().count())
+                continue;
+            Array* bytes = (Array*)_m.consts().get(o.cid());
+            for (u32 k = (u32)0; k < bytes.count(); k = k + (u32)1)
+                {
+                u32 b = ((Number*)bytes.get(k)).asU32();
+                if (b != (u32)0 && b != (u32)32 && b != (u32)9 && b != (u32)10 && b != (u32)13)
+                    return true;
+                }
+            }
+        return false;
+        }
+
     void emitVTblLoad(IRInsn* n)
         {
         if (n.ops().count() < (u32)2)

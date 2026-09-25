@@ -219,7 +219,8 @@ int main(int argc, const char* argv[])
             }
         @catch (NSException* e)
             {
-            if ([e.name isEqualToString:@"XTFrameBudgetExceeded"])
+            if ([e.name isEqualToString:@"XTFrameBudgetExceeded"]
+             || [e.name isEqualToString:@"XTM68kInlineAsm"])
                 {
                 fprintf(stderr, "xcc-cg-68k: error: %s\n", e.reason.UTF8String);
                 return 1;
