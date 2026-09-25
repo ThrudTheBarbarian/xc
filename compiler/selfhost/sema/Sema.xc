@@ -2143,6 +2143,7 @@ class Sema
             return;
             }
         Array* group = (Array*)_functions.get((Hashable*)n.name());
+        bool demotedC = false;
         if (group != 0)
             {
             Node* fn = pickOverload(group, n, (u32)0);
@@ -2157,6 +2158,17 @@ class Sema
             // `Math.rand(u8)` that genuinely matches.
             if (fn == 0 && group.count() == (u32)1 && !usePromotedMatch(n))
                 fn = (Node*)group.get((u32)0);
+            // …and that holds when the libc proto MATCHES too: libc's
+            // variadic `printf` fits any argument list, so on arm9 (libc
+            // auto-imported) `#use Stdio` + bare `printf` called libc where
+            // the reference calls Stdio.printf. An auto-imported C proto
+            // defers to a matching `use`-promoted static, as there.
+            if (fn != 0 && fn.hasFlag((u32)NF_CABI)
+                && (fn.sym() == 0 || fn.sym().equals(n.name())) && usePromotedMatch(n))
+                {
+                fn = (Node*)0;
+                demotedC = true;
+                }
             if (fn != 0)
                 {
                 n.setTy(firstReturn(fn.op()));
@@ -2177,6 +2189,10 @@ class Sema
                 continue;
             n.setTy(m.op());
             n.setSym(m.sym());
+            // The static and the demoted C proto can share a symbol name
+            // (`printf`), so the lowering is told which class answered.
+            if (demotedC)
+                n.setCls(cls.name());
             applyBoxing(n, m, (u32)0);
             // The bare spelling gets the SAME type-directed format upgrade as
             // the explicit one (finding #8) — no receiver kid, so the format
@@ -3963,17 +3979,24 @@ class Sema
         // signature-matching impl claims the root's slot — then the PROTOCOL
         // loop walks the class chain in order, each class's protocol list in
         // DECLARATION order, filling only still-empty requirement slots. The
-        // name map records a name at the LAST slot the sequence filled for
-        // it, which is why `Object : Hashable, Comparable` answers `equals`
-        // at Comparable's slot while `String : Comparable, Hashable, …`
-        // answers at Hashable's.
+        // name map keeps a name the ROOT loop gave a slot (`equals` answers
+        // at Object's root slot on every class); a name only a protocol
+        // provides records the last protocol slot the sequence filled.
+        // In SORTED label order, as the reference walks them: a library
+        // build collects its roots parent-first, and the name map keeps the
+        // last root to claim a name (`equals` is Number's own
+        // `equals(Number@)` root and Object's), so the order decides it.
+        Array* rlabs = new Array();
+        Array* rl0 = _vt.rootLabels();
+        for (u32 q = (u32)0; q < rl0.count(); q = q + (u32)1)
+            rlabs.add(rl0.get(q));
+        Vtable.sortStrings(rlabs);
         Array* names = _classes.allKeys();
         for (u32 i = (u32)0; i < names.count(); i = i + (u32)1)
             {
             Node* cls = (Node*)_classes.get((Hashable*)names.get(i));
             Map* mine = new Map();
             Map* filled = new Map(); // slot -> true, this class
-            Array* rlabs = _vt.rootLabels();
             for (u32 li = (u32)0; li < rlabs.count(); li = li + (u32)1)
                 {
                 String* L = (String*)rlabs.get(li);
@@ -4080,6 +4103,10 @@ class Sema
             // `collection_root_methods`, `foundation_object_default`) and the
             // same three end to end in xcc-diff on every target.
             //
+            // Since bug 253 both compilers keep the class roots (1, 2) for a
+            // class-typed call; the chain walk still decides which protocol
+            // slots this class fills.
+            //
             // The itable walk below keeps its own chain; table PRESENCE
             // (`listsProto`) is the one place the own list is right.
             for (Node* c3 = cls; c3 != 0; c3 = parentOf(c3))
@@ -4109,7 +4136,13 @@ class Sema
                             continue;
                         if (!providesMatching(cls, reqM, reqM.name()))
                             continue;
-                        mine.set((Hashable*)reqM.name(), pslot);
+                        // A CLASS-typed call keeps the class's own root slot
+                        // (`isnap` is the root loop's map). A prelude
+                        // protocol's slot number is not in a library's
+                        // interface, so a client's subclass has something
+                        // else at it (bug 253). The reference does the same.
+                        if (isnap.get((Hashable*)reqM.name()) == 0)
+                            mine.set((Hashable*)reqM.name(), pslot);
                         filled.set((Hashable*)pslot, (Object*)Number.with((u32)1));
                         }
                     }

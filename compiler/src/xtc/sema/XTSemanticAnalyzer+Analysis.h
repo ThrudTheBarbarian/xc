@@ -84,6 +84,8 @@ NS_ASSUME_NONNULL_BEGIN
                                   ownerClassOut:(NSString* _Nullable* _Nullable)ownerOut;
 - (BOOL)methodSignaturesMatch:(XTMethodDeclNode*)a
                           and:(XTMethodDeclNode*)b;
+- (nullable XTMethodDeclNode*)methodIn:(XTClassDeclNode*)c matching:(XTMethodDeclNode*)want;
+- (NSString*)returnSpelling:(XTMethodDeclNode*)m;
 - (void)wireSubclassInitChains;
 - (void)wireSubclassDeallocChains;
 - (void)countSuperCallsTo:(NSString*)methodName

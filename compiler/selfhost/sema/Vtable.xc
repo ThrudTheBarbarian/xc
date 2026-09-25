@@ -233,8 +233,14 @@ class Vtable
         }
 
     // Does `cls` declare a method matching `want`'s name and parameter types?
+    //
+    // When several match — overloads that differ only by return type, as
+    // `Number.value()` has ten of — the one returning the same type wins.
+    // Taking the first put `value__v_i8` in all ten of Number's `value` slots
+    // (bug 252). Mirrors the reference's `methodIn:matching:`.
     static Node* matching(Node* cls, Node* want)
         {
+        Node* first = (Node*)0;
         for (u32 i = (u32)0; i < cls.kidCount(); i = i + (u32)1)
             {
             Node* m = cls.kid(i);
@@ -244,10 +250,25 @@ class Vtable
                 continue;
             if (!m.name().equals(want.name()))
                 continue;
-            if (Vtable.sameParams(m, want))
+            if (!Vtable.sameParams(m, want))
+                continue;
+            if (Vtable.sameReturn(m, want))
                 return m;
+            if (first == 0)
+                first = m;
             }
-        return (Node*)0;
+        return first;
+        }
+
+    // The return types as written, compared as spellings — the reference
+    // compares display names.
+    static bool sameReturn(Node* a, Node* b)
+        {
+        String* x = a.op();
+        String* y = b.op();
+        if (x == 0 || y == 0)
+            return x == y;
+        return x.equals(y);
         }
 
     // The first method of `cls` with this name, whatever its signature.

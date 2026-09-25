@@ -339,6 +339,11 @@ class FeOptions
         // declaration reads as an expression.
         Array* adoptedSlots = new Array();   // of IfaceImport@, for sema
         Array* importedIfaces = new Array(); // of IfaceImport@, prepended below
+        // The C libraries `#import <X>` named — every import that carries no
+        // xtc interface. A library build records them in its own interface
+        // (`cImports`), so a client re-reads those types from the C library
+        // rather than from a copy (the reference's `cImportNames`).
+        Array* cImports = new Array();
             {
             Array* metas = pp.metadataImports();
             // Handed to the DRIVER: a wasm app's loader lists the modules it
@@ -381,6 +386,8 @@ class FeOptions
                     return (IRModule*)0;
                     }
                 IfaceImport* im = IfaceImport.read(mp);
+                if (im == 0)
+                    cImports.add((Object*)cLibraryName(mp));
                 // No `.xtc.iface`? Then this is a library THIS compiler did not
                 // build, and a C library describes itself in DWARF. That is
                 // where its types come from — verbatim, which is the only way
@@ -516,7 +523,7 @@ class FeOptions
         // DWARF reader, so the same declarations come from a bundled stub — and
         // everything in it is marked C-ABI here, because that is a property of
         // where it came from and not something the source can say.
-        injectCInterface(program, o, tokens);
+        injectCInterface(program, o, tokens, pp.preludeFiles());
 
         Sema* sema = Sema.make();
         // §4.2 chain slots exist only where the vtable carries the chain word.
@@ -653,7 +660,7 @@ class FeOptions
         // The prelude's files are the AMBIENT surface: every unit already has
         // them, so this module does not export them as its own.
         if (o.emitIface())
-            o.setIfaceJson(IfaceWrite.json(program, sema.vtable(), pp.preludeFiles()));
+            o.setIfaceJson(IfaceWrite.json(program, sema.vtable(), pp.preludeFiles(), cImports));
 
         Lower* lower = Lower.make();
         lower.setPointerWidth(pointerWidthOf(o));
@@ -872,7 +879,13 @@ String* platformOf(FeOptions* o)
 // libc.so and reads the declarations out of its DWARF. This is the port's
 // substitute — `support/<plat>/selfhost-iface/c.xc`, parsed like any source
 // and then marked as what it is.
-void injectCInterface(Node* program, FeOptions* o, Array* tokens)
+//
+// `ambient` is the set of files whose declarations are not this module's to
+// export. The stub joins it: in the reference these declarations come out of
+// DWARF with no source position, and a library's interface does not publish
+// them (`struct stat` and `timespec` were exported by every arm9 library that
+// named `stat`).
+void injectCInterface(Node* program, FeOptions* o, Array* tokens, Set* ambient)
     {
     String* root = supportRoot(o);
     if (root == 0)
@@ -887,6 +900,8 @@ void injectCInterface(Node* program, FeOptions* o, Array* tokens)
     String* src = Files.readText(path);
     if (src == 0)
         return;
+    if (ambient != 0)
+        ambient.add((Hashable*)String.withString(path));
     Lexer* lex = Lexer.with(src, path);
     Parser* parser = Parser.with(lex.tokenise());
     Node* iface = parser.parse();
@@ -935,6 +950,22 @@ void injectCInterface(Node* program, FeOptions* o, Array* tokens)
         }
     needed.addAll(picked);
     program.kids().insertAll((u32)0, needed);
+    }
+
+// `…/libGEM.so` -> `GEM`: the file name without its last extension and
+// without a `lib` prefix — the reference's cLibraryNameFromPath.
+String* cLibraryName(String* path)
+    {
+    String* base = path.lastPathComponent();
+    u32 dot = String.notFound();
+    for (u32 i = (u32)0; i < base.byteLength(); i = i + (u32)1)
+        if (base.byteAt(i) == (u8)'.')
+            dot = i;
+    if (dot != String.notFound() && dot > (u32)0)
+        base = base.substringBytes((u32)0, dot);
+    if (base.hasPrefix(String.withCString("lib")))
+        base = base.substringFromByte((u32)3);
+    return base;
     }
 
 // If `spelling` names a struct the stub declares, add that declaration to
