@@ -69,9 +69,13 @@ class OptProfile
     bool _layoutHotPath;   // blocks ordered so the expected branch falls through
     bool _narrowIV;        // a counted IV is recomputed at its smallest width
     bool _loopRotate;      // top-tested loops become bottom-tested
+    u32 _inlineMax;        // the largest callee (IR instructions) the inliner splices
+    bool _dceTrace;        // name each function dead-function elimination removes
 
     void init(void)
         {
+        _inlineMax = (u32)64;
+        _dceTrace = false;
         _nativeVarargs = false;
         _sqrtIntrinsic = false;
         _powSquare = false;
@@ -337,6 +341,14 @@ class OptProfile
     u32 unrollBudget(void)
         {
         return _unrollBudget;
+        }
+    u32 inlineMax(void)
+        {
+        return _inlineMax;
+        }
+    bool dceTrace(void)
+        {
+        return _dceTrace;
         }
     bool unrollMultiCarried(void)
         {
@@ -1057,6 +1069,21 @@ class OptProfile
         p._unrollMaxTrip = (u32)n;
         }
 
+    // `-Fli <n>` replaces the inliner's size ceiling, and `-fdce-trace` asks
+    // dead-function elimination to name what it removes. Applied to the
+    // target's profile after its defaults, as the unroll override is.
+    static void setInlineOverride(OptProfile* p, i32 n)
+        {
+        if (p == 0 || n < (i32)0)
+            return;
+        p._inlineMax = (u32)n;
+        }
+    static void setDceTrace(OptProfile* p, bool on)
+        {
+        if (p != 0)
+            p._dceTrace = on;
+        }
+
     static Opt* atLevel(u32 level, OptProfile* profile)
         {
         Opt* o = new Opt();
@@ -1413,6 +1440,9 @@ class OptProfile
             IRFunc* fn = (IRFunc*)m.funcs().get(i);
             if (has(reachable, fn.name()))
                 survivors.add((Object*)fn);
+            else if (_profile != (OptProfile*)0 && _profile.dceTrace())
+                Stdio.error(String.withFormat("xcc: dce: removed unreachable function '%s'\n",
+                                              fn.name().cString()));
             }
         if (survivors.count() == m.funcs().count())
             return;
@@ -2550,8 +2580,8 @@ class OptProfile
             }
         if (returns != (u32)1)
             return (IRFunc*)0;
-        if (total > (u32)64)
-            return (IRFunc*)0; // the size ceiling
+        if (total > _profile.inlineMax())
+            return (IRFunc*)0; // the size ceiling (64 unless -Fli says otherwise)
 
         // The call's shape must match the parameter list exactly: params are
         // [user…, Mem] and the operands [callee, args…, memIn]. A variadic or
