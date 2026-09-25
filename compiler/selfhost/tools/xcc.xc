@@ -42,6 +42,7 @@
 #import "ApkSign.xc"
 #import "RsaKeygen.xc"
 #import "Layout.xc"
+#import "LayoutMap.xc"     // -dl: a layout drawn as a memory map
 #import "Xt6502.xc"
 #import "Xta.xc"
 #import "Runtime6502.xc"
@@ -79,6 +80,22 @@ class DriverOptions
     bool       _quiet;       // -q: errors only
     i32        _unroll;      // -Flu <n>, or -1 for the target's own cap
     String*    _signKey;     // --sign-key: the raw debug key both drivers share
+    bool       _sawArch;        // -A / --arch was given
+    String*    _layoutSpec;     // -m <layout>: as typed, resolved after the parse
+    String*    _layoutPath;     // …the .lnk it resolved to
+    String*    _layoutName;     // …and the model's name (the file's stem)
+    bool       _dumpLayout;     // -dl: print the layout's memory map and stop
+    bool       _listLayouts;    // -ll: list the built-in layouts and stop
+    bool       _emitIR;         // --emit-ir: the lowered IR to stderr
+    bool       _emitIROpt;      // --emit-ir-opt: the optimised IR to stderr
+    bool       _tailCalls;      // -x-wasm32,return-call
+    bool       _linkLibs;       // --link-libs: a wasm32 app that links .wasm libraries
+    Array*     _rawLinkFlags;   // linker FLAGS from -Xlinker / -Wl, / $XTC_LDFLAGS
+    Array*     _rpaths;         // -rpath <dir>: extra LC_RPATH entries (Mach-O)
+    bool       _rpathPending;   // the last flag was -rpath; its directory comes next
+    Array*     _ldDirs;         // -L<dir> from $XTC_LDFLAGS: -l search, link only
+    i32        _inlineMax;      // -Fli <n>, or -1 for the inliner's own ceiling
+    bool       _dceTrace;       // -fdce-trace
 
     void init(void)
     {
@@ -122,6 +139,22 @@ class DriverOptions
         _quiet = false;
         _unroll = (i32)-1;
         _signKey = String.withCString("");
+        _sawArch = false;
+        _layoutSpec = (String*)0;
+        _layoutPath = (String*)0;
+        _layoutName = (String*)0;
+        _dumpLayout = false;
+        _listLayouts = false;
+        _emitIR = false;
+        _emitIROpt = false;
+        _tailCalls = false;
+        _linkLibs = false;
+        _rawLinkFlags = new Array();
+        _rpaths = new Array();
+        _rpathPending = false;
+        _ldDirs = new Array();
+        _inlineMax = (i32)-1;
+        _dceTrace = false;
     }
 
     FeOptions* fe(void)  { return _fe; }
@@ -157,6 +190,64 @@ class DriverOptions
     void setQuiet(bool b)     { _quiet = b; }
     void setUnroll(i32 n)     { _unroll = n; }
     void setSignKey(String* p) { _signKey = p; }
+
+    bool sawArch(void)              { return _sawArch; }
+    void setSawArch(bool b)         { _sawArch = b; }
+    String* layoutSpec(void)        { return _layoutSpec; }
+    void setLayoutSpec(String* s)   { _layoutSpec = s; }
+    String* layoutPath(void)        { return _layoutPath; }
+    void setLayoutPath(String* p)   { _layoutPath = p; }
+    String* layoutName(void)        { return _layoutName; }
+    void setLayoutName(String* n)   { _layoutName = n; }
+    bool dumpLayout(void)           { return _dumpLayout; }
+    void setDumpLayout(bool b)      { _dumpLayout = b; }
+    bool listLayouts(void)          { return _listLayouts; }
+    void setListLayouts(bool b)     { _listLayouts = b; }
+    bool emitIR(void)               { return _emitIR; }
+    void setEmitIR(bool b)          { _emitIR = b; }
+    bool emitIROpt(void)            { return _emitIROpt; }
+    void setEmitIROpt(bool b)       { _emitIROpt = b; }
+    bool tailCalls(void)            { return _tailCalls; }
+    void setTailCalls(bool b)       { _tailCalls = b; }
+    bool linkLibs(void)             { return _linkLibs; }
+    void setLinkLibs(bool b)        { _linkLibs = b; }
+    Array* rawLinkFlags(void)       { return _rawLinkFlags; }
+    Array* rpaths(void)             { return _rpaths; }
+    Array* ldDirs(void)             { return _ldDirs; }
+    i32 inlineMax(void)             { return _inlineMax; }
+    void setInlineMax(i32 n)        { _inlineMax = n; }
+    bool dceTrace(void)             { return _dceTrace; }
+    void setDceTrace(bool b)        { _dceTrace = b; }
+
+    // One token addressed to the LINKER — from -Xlinker, a -Wl, list or
+    // $XTC_LDFLAGS. A library or object is a link input, `-rpath <dir>` is
+    // recorded for the Mach-O writer, and any other flag is kept to be
+    // reported at link time: the linker here is in-house, so a flag it does
+    // not implement is named and skipped, as the in-house arm64 linker does,
+    // rather than silently dropped or handed to a system linker.
+    void addLinkToken(String* t)
+    {
+        if (t == (String*)0 || t.byteLength() == (u32)0) return;
+        if (_rpathPending) {
+            _rpathPending = false;
+            bool seen = false;
+            for (u32 i = (u32)0; i < _rpaths.count(); i = i + (u32)1)
+                if (((String*)_rpaths.get(i)).equals(t)) seen = true;
+            if (!seen && !t.equals(String.withCString("@loader_path"))) _rpaths.add((Object*)t);
+            return;
+        }
+        if (t.equals(String.withCString("-rpath"))) { _rpathPending = true; return; }
+        if (t.hasPrefix(String.withCString("-l")) && t.byteLength() > (u32)2) {
+            _linkInputs.add((Object*)t);
+            return;
+        }
+        if (t.hasPrefix(String.withCString("-L")) && t.byteLength() > (u32)2) {
+            _ldDirs.add((Object*)t.substringFromByte((u32)2));
+            return;
+        }
+        if (t.hasPrefix(String.withCString("-"))) { _rawLinkFlags.add((Object*)t); return; }
+        _linkInputs.add((Object*)t);
+    }
 }
 
 bool isAndroid(DriverOptions* d) { return d.arch().equals(String.withCString("android")); }
@@ -441,7 +532,11 @@ String* resolveLinkInput(DriverOptions* d, String* arg)
         return (String*)0;
     }
     String* stem = arg.substringFromByte((u32)2);
-    Array* dirs = d.fe().libs();
+    // The -L path, then any -L<dir> that reached the linker through
+    // -Wl, / $XTC_LDFLAGS: those name where a -l is found, and nothing else.
+    Array* dirs = new Array();
+    for (u32 i = (u32)0; i < d.fe().libs().count(); i = i + (u32)1) dirs.add(d.fe().libs().get(i));
+    for (u32 i = (u32)0; i < d.ldDirs().count(); i = i + (u32)1) dirs.add(d.ldDirs().get(i));
     // A `.dylib` is a Mach-O library — only a Mach-O target (the arm64 / iOS
     // host) can link it. On an ELF (x86_64 / arm9) or PE (win64) target it must
     // NOT be a `-l<name>` candidate: 0.5 grabbed a stray macOS `libfoo.dylib`
@@ -870,6 +965,7 @@ void emitWasm(DriverOptions* d, IRModule* mod)
 {
     OptProfile* pw = OptProfile.forTarget(String.withCString("wasm32"));
     Opt.setUnrollOverride(pw, d.unroll());
+    applyOptFlags(d, pw);
     Opt* opt = Opt.atLevel(d.opt(), pw);
     // A LIBRARY's public surface is every function it defines: nothing in the
     // module calls them, the CLIENT does, and dead-function elimination cannot
@@ -878,6 +974,7 @@ void emitWasm(DriverOptions* d, IRModule* mod)
     // at instantiation with `depExports[d][n] is not a function`.
     if (d.emitLib()) opt.setKeepAllFunctions(true);
     opt.run(mod);
+    dumpOptIR(d, mod);
 
     for (u32 f = (u32)0; f < mod.funcs().count(); f = f + (u32)1)
         ((IRFunc*)mod.funcs().get(f)).numberFreshValues();
@@ -898,7 +995,10 @@ void emitWasm(DriverOptions* d, IRModule* mod)
         for (u32 i = (u32)0; nl != (Array*)0 && i < nl.count(); i = i + (u32)1)
             if (((String*)nl.get(i)).hasSuffix(String.withCString(".wasm")))
                 be.setLinkLibs(true);
+        if (d.linkLibs()) be.setLinkLibs(true);   // --link-libs asks for it outright
     }
+    // -x-wasm32,return-call: a tail call becomes `return_call`.
+    if (d.tailCalls()) be.setTailCalls(true);
     String* wat = be.assembly(mod);
     // The wasm back end reports a fatal unresolved import rather than a
     // generic failure — a module that imports something the host will not
@@ -1120,11 +1220,13 @@ void emitWin64(DriverOptions* d, IRModule* mod)
 {
     OptProfile* pw = OptProfile.forTarget(String.withCString("win64"));
     Opt.setUnrollOverride(pw, d.unroll());
+    applyOptFlags(d, pw);
     Opt* prof = Opt.atLevel(d.opt(), pw);
     // An OBJECT's functions are all potentially called from ANOTHER object, so
     // cross-function DCE must not read "nothing here calls it" as dead.
     if (d.emitLib() || d.compileOnly()) prof.setKeepAllFunctions(true);
     prof.run(mod);
+    dumpOptIR(d, mod);
 
     for (u32 f = (u32)0; f < mod.funcs().count(); f = f + (u32)1)
         ((IRFunc*)mod.funcs().get(f)).numberFreshValues();
@@ -1414,6 +1516,7 @@ void emitX86_64(DriverOptions* d, IRModule* mod)
 {
     OptProfile* px = OptProfile.forTarget(String.withCString("x86_64"));
     Opt.setUnrollOverride(px, d.unroll());
+    applyOptFlags(d, px);
     Opt* prof = Opt.atLevel(d.opt(), px);
     // A LIBRARY keeps every function it defines — the client is what calls
     // them, and dead-function elimination cannot see the client.
@@ -1421,6 +1524,7 @@ void emitX86_64(DriverOptions* d, IRModule* mod)
     // cross-function DCE must not read "nothing here calls it" as dead.
     if (d.emitLib() || d.compileOnly()) prof.setKeepAllFunctions(true);
     prof.run(mod);
+    dumpOptIR(d, mod);
 
     for (u32 f = (u32)0; f < mod.funcs().count(); f = f + (u32)1)
         ((IRFunc*)mod.funcs().get(f)).numberFreshValues();
@@ -1720,11 +1824,13 @@ void emitArm9(DriverOptions* d, IRModule* mod)
 {
     OptProfile* px = OptProfile.forTarget(String.withCString("arm9"));
     Opt.setUnrollOverride(px, d.unroll());
+    applyOptFlags(d, px);
     Opt* prof = Opt.atLevel(d.opt(), px);
     // A LIBRARY keeps every function it defines — the client is what calls
     // them, and dead-function elimination cannot see the client.
     if (d.emitLib() || d.compileOnly()) prof.setKeepAllFunctions(true);
     prof.run(mod);
+    dumpOptIR(d, mod);
 
     for (u32 f = (u32)0; f < mod.funcs().count(); f = f + (u32)1)
         ((IRFunc*)mod.funcs().get(f)).numberFreshValues();
@@ -1884,8 +1990,10 @@ void emitM68k(DriverOptions* d, IRModule* mod)
     Opt* prof = (Opt*)0;
     OptProfile* p68 = OptProfile.forTarget(String.withCString("atarist"));
     Opt.setUnrollOverride(p68, d.unroll());
+    applyOptFlags(d, p68);
     prof = Opt.atLevel(d.opt(), p68);
     prof.run(mod);
+    dumpOptIR(d, mod);
 
     for (u32 f = (u32)0; f < mod.funcs().count(); f = f + (u32)1)
         ((IRFunc*)mod.funcs().get(f)).numberFreshValues();
@@ -1945,18 +2053,46 @@ void emitXt6502(DriverOptions* d, IRModule* mod)
         Stdio.printf("xcc: error: cannot find the support tree (-H)\n");
         Process.exit((i32)1); return;
     }
-    String* lnk = String.withString(root);
-    lnk.appendCString("/xt6502/layouts/xt.lnk");
+    // The layout -m named, or the xt map.
+    String* lnk = d.layoutPath();
+    String* lname = d.layoutName();
+    if (lnk == (String*)0) {
+        lnk = String.withString(root);
+        lnk.appendCString("/xt6502/layouts/xt.lnk");
+        lname = String.withCString("xt");
+    }
     Layout* layout = Layout.read(lnk);
     if (layout.failed()) {
         Stdio.printf("xcc: %s: %s\n", lnk.cString(), layout.why().cString());
         Process.exit((i32)1); return;
     }
+    // A layout line the back end's reader did not use is a feature this
+    // compiler does not have — split code/data banking, a region-C window, a
+    // startup file of its own. Building anyway would quietly produce the xt
+    // map's program under another layout's name, so each one is named and the
+    // build stops. The two `grows = up` lines are the xt map's own, and say
+    // what the back end already does.
+    u32 unused = (u32)0;
+    for (u32 k = (u32)0; k < layout.unapplied().count(); k = k + (u32)1) {
+        String* u = (String*)layout.unapplied().get(k);
+        if (u.equals(String.withCString("[stack] grows = up"))
+            || u.equals(String.withCString("[heap] grows = up")))
+            continue;
+        if (unused == (u32)0)
+            Stdio.printf("xcc: error: layout '%s' uses what the 6502 back end does not "
+                         "implement:\n", lname.cString());
+        Stdio.printf("  %s\n", u.cString());
+        unused = unused + (u32)1;
+    }
+    if (unused > (u32)0) { Process.exit((i32)1); return; }
     // The model's NAME is its layout file's stem; the emitted header carries it.
-    layout.setName(String.withCString("xt"));
+    layout.setName(lname);
 
-    Opt* opt = Opt.atLevel(d.opt(), OptProfile.forTarget(String.withCString("xt6502")));
+    OptProfile* p65 = OptProfile.forTarget(String.withCString("xt6502"));
+    applyOptFlags(d, p65);
+    Opt* opt = Opt.atLevel(d.opt(), p65);
     opt.run(mod);
+    dumpOptIR(d, mod);
     if (opt.failed()) {
         Stdio.printf("xcc: %s: opt unsupported: %s\n", d.fe().input().cString(),
                      opt.why() == 0 ? "?" : opt.why().cString());
@@ -2191,6 +2327,7 @@ void linkObjectsArm64(DriverOptions* d)
     MachO* m = new MachO();
     if (isIos(d)) m.setApplePlatform(d.arch());
     m.setDeps(deps);
+    m.setRpaths(d.rpaths());      // -rpath <dir> from -Xlinker / -Wl, / $XTC_LDFLAGS
     m.executable(as.textBytes(), ((Number*)entry).asU32(), as.symbols(),
                  dataBytes, as.dataSyms(), fixups, miLen, objcSects);
     Array* image = m.bytes();
@@ -2376,6 +2513,7 @@ String* iosRuntimeSource(DriverOptions* d)
 // naming the gap, never linked as something else.
 void linkObjects(DriverOptions* d)
 {
+    noteLinkFlags(d);
     bool anyObject = false;
     for (u32 i = (u32)0; i < d.objectInputs().count(); i = i + (u32)1)
         if (((String*)d.objectInputs().get(i)).hasSuffix(String.withCString(".o"))) anyObject = true;
@@ -2448,8 +2586,9 @@ void main(void)
 {
     DriverOptions* d = parseDriverArgs();
     if (d == 0 || (d.fe().input() == 0 && d.objectInputs().count() == (u32)0)) {
-        Stdio.printf("usage: xcc [-A arm64|android|xt6502|m68k|wasm32|x86_64|arm9] [-On] [-H home] [-I dir] "
-                     "[-D k=v] <file.xc> -o <out>\n");
+        Stdio.printf("usage: xcc [-A arm64|ios|ios-sim|android|x86_64|win64|arm9|m68k|wasm32|6502] "
+                     "[-On] [-H home] [-I dir] [-D k=v] <file.xc> -o <out>\n"
+                     "       xcc -h lists every option\n");
         Process.exit((i32)2); return;
     }
     // `--emit-lib` is implemented for wasm32 only. On the other targets the
@@ -2463,9 +2602,8 @@ void main(void)
         && !d.arch().equals(String.withCString("arm64"))) {
         Stdio.printf("xcc: error: --emit-lib is implemented for wasm32, arm64, "
                      "x86_64 and arm9 in this driver (task #52); '%s' would need its "
-                     "shared-library writer ported first.\n"
-                     "  Use `xcc-bootstrap --emit-lib -A %s` until then.\n",
-                     d.arch().cString(), d.arch().cString());
+                     "shared-library writer ported first.\n",
+                     d.arch().cString());
         Process.exit((i32)1); return;
     }
     if (!d.arch().equals(String.withCString("arm64")) && !isAndroid(d)
@@ -2510,6 +2648,12 @@ void main(void)
                      "'%s' has no checked runtime\n", d.arch().cString());
         Process.exit((i32)2); return;
     }
+    // --link-libs is a wasm32 app's mode; nothing else has one to switch on.
+    if (d.linkLibs() && !isWasm(d)) {
+        Stdio.printf("xcc: error: --link-libs applies to -A wasm32 (an app that links .wasm "
+                     "libraries); '%s' has no such mode\n", d.arch().cString());
+        Process.exit((i32)1); return;
+    }
     d.fe().setTarget(backendTargetOf(d));
     if (isIos(d)) d.fe().setLibPlatform(d.arch());
 
@@ -2532,6 +2676,8 @@ void main(void)
 
     IRModule* mod = Frontend.lower(d.fe());
     if (mod == 0) { Process.exit((i32)3); return; }
+    // --emit-ir: the module as lowering left it, before any optimisation.
+    if (d.emitIR()) Stdio.error(mod.text());
 
     // --emit-iface stops HERE. Running the optimiser and a back end would be
     // pure latency for a caller that wanted the declarations.
@@ -2585,6 +2731,7 @@ void main(void)
 // objects' MERGED module where a normal build enters with the front end's.
 void emitModule(DriverOptions* d, IRModule* mod)
 {
+    if (!d.keepAsm() && !d.compileOnly()) noteLinkFlags(d);
 
     // A link input this target's path does not consume must not be dropped.
     // arm64 and x86_64 honour them below; anything else says so, because a
@@ -2607,6 +2754,7 @@ void emitModule(DriverOptions* d, IRModule* mod)
 
     OptProfile* prof = OptProfile.forTarget(backendTargetOf(d));
     Opt.setUnrollOverride(prof, d.unroll());
+    applyOptFlags(d, prof);
     Opt* opt = Opt.atLevel(d.opt(), prof);
     // A LIBRARY's public surface is every function it defines: nothing in the
     // module calls them, the CLIENT does, and dead-function elimination cannot
@@ -2617,6 +2765,7 @@ void emitModule(DriverOptions* d, IRModule* mod)
     // for the same reason.
     if (d.emitLib() || d.compileOnly()) opt.setKeepAllFunctions(true);
     opt.run(mod);
+    dumpOptIR(d, mod);
 
     Arm64* be = new Arm64();
     be.setAapcs64Abi(isAndroid(d));
@@ -2825,6 +2974,7 @@ void emitModule(DriverOptions* d, IRModule* mod)
             // exports), then frameworks, then libobjc if an object needs it.
             Array* deps = arm64LinkDeps(d, d.fe().neededLibs(), new Array());
             m.setDeps(deps);
+            m.setRpaths(d.rpaths());      // -rpath <dir>, after @loader_path
             m.executable(as.textBytes(), ((Number*)entry).asU32(), as.symbols(),
                          dataBytes, as.dataSyms(), fixups, miLen, objcSects);
         }
@@ -2857,66 +3007,165 @@ i32 parseCount(String* s)
     return v;
 }
 
-// What this compiler accepts. Deliberately NOT a copy of the reference's help:
-// it lists what THIS driver implements, because a help text that promises flags
-// the compiler refuses is worse than a short one.
+// What this compiler accepts: every option the parser takes, grouped, and
+// nothing it does not. A help text that promises a flag the compiler
+// refuses is worse than a short one, and one that leaves a working flag out
+// sends the reader to look elsewhere.
 void usage(void)
 {
     Stdio.printf("Usage: xcc [options] <input.xc>\n");
+    Stdio.printf("       xcc [options] <a.o> [<b.o> <lib.a> ...] -o <program>\n");
     Stdio.printf("\n");
-    Stdio.printf("  -o <path>          output file\n");
-    // Every target the driver ACTUALLY builds. m68k and wasm32 both worked
-    // and neither was listed, so the help understated the compiler and sent
-    // readers to another toolchain for a target it already had.
-    Stdio.printf("  -A <arch>          arm64 (default) | android | xt6502 | m68k | wasm32 | x86_64\n");
-    Stdio.printf("  -m <layout>        6502 memory layout (xt, xt6502/xt) — implies -A xt6502\n");
-    Stdio.printf("  -O0 … -O3          optimisation level, JOINED (-O0, not -O 0). Default -O3\n");
-    Stdio.printf("  -I <path>          add an include search path\n");
-    Stdio.printf("  -D <name[=value]>  define a preprocessor symbol\n");
-    Stdio.printf("  -L <path>          add a library search path\n");
-    Stdio.printf("  -H <path>          root holding the support tree\n");
-    Stdio.printf("  -S                 stop after the back end, keeping the assembly\n");
-    Stdio.printf("  -c                 compile only: an object plus its .xtc.* sidecars\n");
-    // Every option the parser accepts, because it accepts them and said so
-    // nowhere: someone looking for -fbounds-check after a memory bug could not
-    // find it from the tool and concluded it did not exist. Same lesson as the
-    // wasm32 and --emit-lib omissions above.
-    Stdio.printf("  -fbounds-check     checked build: subscripts are range-checked, and a\n");
-    Stdio.printf("                     failure names the site, the real bounds and a symbolised\n");
-    Stdio.printf("                     stack before aborting. An array with a declared length —\n");
-    Stdio.printf("                     local, global, or sized by its own initialiser — is\n");
-    Stdio.printf("                     checked against that length; a heap allocation against\n");
-    Stdio.printf("                     its own header. A bare pointer has neither, so it is\n");
-    Stdio.printf("                     checked as a heap allocation and means something only\n");
-    Stdio.printf("                     if that is what it points at. Debug builds only; arm64\n");
-    Stdio.printf("                     only so far, and a hard error elsewhere rather than a\n");
-    Stdio.printf("                     silent no-op\n");
-    Stdio.printf("  -flto              link-time optimisation across objects\n");
-    Stdio.printf("  -l<name>           link against a library\n");
-    Stdio.printf("  -framework <F>     link against a macOS framework\n");
-    Stdio.printf("  -Wanalyze          run the deeper analysis warnings\n");
-    Stdio.printf("  -Wno-<category>    silence one warning category (see --help output below)\n");
-    Stdio.printf("  -q, --quiet        suppress the informational stage lines\n");
-    Stdio.printf("  --link-libs        link the support libraries explicitly\n");
-    Stdio.printf("  --fn-loop-unroll <fn>  unroll loops only in the named function\n");
-    Stdio.printf("  --sign <identity>  code-sign the output (macOS/iOS)\n");
-    Stdio.printf("  --sign-entitlements <path>  entitlements plist for --sign\n");
-    // Naming the targets: `--help` used to list arm64/arm9/x86_64/win64 and
-    // leave wasm32 out, while the binary plainly says `wasm32 library -> …`
-    // (blewit FINDINGS). A help text that under-reports what the tool does is
-    // read as a limitation.
-    Stdio.printf("  --emit-lib         build a shared library "
-                 "(arm64, x86_64, arm9, wasm32)\n");
-    Stdio.printf("  --emit-iface       print the module interface and stop\n");
-    Stdio.printf("  -Xlinker <lib>     link against a library (also -l<name>, -framework <F>)\n");
-    Stdio.printf("  --emit-apk         (-A android) package an installable APK\n");
-    Stdio.printf("  --sign-key <path>  signing key for --emit-apk\n");
-    Stdio.printf("  -V, --verbose      print the resolved support root and search paths\n");
-    Stdio.printf("  -v, --version      print the version and exit\n");
-    Stdio.printf("  -h, --help         this text\n");
+    Stdio.printf("With no -A, xcc builds a native executable for this machine:\n");
+    Stdio.printf("    xcc -o prog prog.xc\n");
     Stdio.printf("\n");
-    Stdio.printf("An unrecognised option is an ERROR, never ignored: a driver that\n");
-    Stdio.printf("quietly drops a flag builds something other than what it was asked for.\n");
+    Stdio.printf("Output:\n");
+    Stdio.printf("  -o, --output <path>        Output file. On a native target the result is an\n");
+    Stdio.printf("                             executable unless the path ends in .s (assembly)\n");
+    Stdio.printf("                             or .o (an object, with -c). On 6502 and m68k the\n");
+    Stdio.printf("                             extension picks the container (see below).\n");
+    Stdio.printf("  -c                         Compile to a relocatable object plus its .xtc.*\n");
+    Stdio.printf("                             sidecars (arm64, ios, ios-sim, x86_64, win64, arm9)\n");
+    Stdio.printf("  -S                         Stop after code generation; write assembly to -o\n");
+    Stdio.printf("  -a, --assemble-only        The same as -S\n");
+    Stdio.printf("  --emit-asm-from-ir         The same as -S (an older name)\n");
+    Stdio.printf("  -E, --preprocessed <path>  Also write the preprocessed source to <path>\n");
+    Stdio.printf("  --emit-iface               Write the module interface (JSON) to -o, or to\n");
+    Stdio.printf("                             stdout with no -o, and stop\n");
+    Stdio.printf("  --emit-lib                 Build a shared library, with its interface\n");
+    Stdio.printf("                             embedded (arm64, x86_64, arm9, wasm32)\n");
+    Stdio.printf("  --emit-apk                 (-A android) Package an installable APK\n");
+    Stdio.printf("  --sign-key <path>          Signing key for --emit-apk\n");
+    Stdio.printf("  --sign <identity.pem>      Developer-sign the Mach-O (macOS / iOS)\n");
+    Stdio.printf("  --sign-entitlements <path> Entitlements plist to embed with --sign\n");
+    Stdio.printf("\n");
+    Stdio.printf("Target:\n");
+    Stdio.printf("  -A, --arch <arch>          Target. The default is the host.\n");
+    Stdio.printf("                               arm64    macOS on Apple silicon (Mach-O)\n");
+    Stdio.printf("                               ios      iOS device; ios-sim for the simulator\n");
+    Stdio.printf("                               android  Android on arm64 (--emit-apk: an APK)\n");
+    Stdio.printf("                               x86_64   Linux, static over musl (ELF);\n");
+    Stdio.printf("                                        also x86-64, amd64\n");
+    Stdio.printf("                               win64    Windows (PE); also windows,\n");
+    Stdio.printf("                                        x86_64-windows\n");
+    Stdio.printf("                               arm9     AArch32 / XTOS (ELF, or a .so);\n");
+    Stdio.printf("                                        also armv7, armv7-a, cortex-a9\n");
+    Stdio.printf("                               m68k     Atari ST/TT (GEMDOS .prg/.tos)\n");
+    Stdio.printf("                               wasm32   WebAssembly (.wasm + .js loader);\n");
+    Stdio.printf("                                        also wasm\n");
+    Stdio.printf("                               6502     banked xt6502 (.xex); also xt6502\n");
+    Stdio.printf("  -m, --memory-model <layout>\n");
+    Stdio.printf("                             A memory layout, which selects the 6502 target:\n");
+    Stdio.printf("                             a .lnk path (with or without .lnk),\n");
+    Stdio.printf("                             <platform>/<layout>, or a layout name searched\n");
+    Stdio.printf("                             for under every platform. `arm64`, `atarist`\n");
+    Stdio.printf("                             (m68k), `arm9`, `x86_64`, `win64` and `wasm32`\n");
+    Stdio.printf("                             name a platform instead and select it.\n");
+    Stdio.printf("  --list-layouts, -ll        List the built-in layouts by platform and exit\n");
+    Stdio.printf("  -dl, --dump-layout         Print the layout's memory map and exit (-m, or\n");
+    Stdio.printf("                             the xt map by default)\n");
+    Stdio.printf("  -x-<arch>,<opt>[,<opt>]    Target-specific options. wasm32: return-call\n");
+    Stdio.printf("                             (tail calls become return_call)\n");
+    Stdio.printf("\n");
+    Stdio.printf("Paths and definitions:\n");
+    Stdio.printf("  -I, --include <path>       Add an include search path\n");
+    Stdio.printf("  -D <name[=value]>          Define a preprocessor symbol (also -Dname=value)\n");
+    Stdio.printf("  -L, --library-path <path>  Add a library search path for `#import <Lib>`\n");
+    Stdio.printf("                             and -l (also -L<path>)\n");
+    Stdio.printf("  -H, --xcc-home <path>      Root holding the support tree (also --xtc-home).\n");
+    Stdio.printf("                             Rarely needed: see the search order below.\n");
+    Stdio.printf("\n");
+    Stdio.printf("Optimisation:\n");
+    Stdio.printf("  -O0 ... -O3                Optimisation level, joined (-O0, not -O 0).\n");
+    Stdio.printf("                             Default -O3. A bare -O is -O1.\n");
+    Stdio.printf("  -Flu, --fn-loop-unroll <n> Unroll counted loops whose constant trip count\n");
+    Stdio.printf("                             is at most n (the default depends on the target)\n");
+    Stdio.printf("  -Fli, --fn-leaf-inline <n> Inline callees of up to n IR instructions\n");
+    Stdio.printf("                             (default 64)\n");
+    Stdio.printf("  -flto                      At a link of objects, recompile the IR they\n");
+    Stdio.printf("                             carry as one module\n");
+    Stdio.printf("  -fbounds-check             Checked build: subscripts are range-checked, and a\n");
+    Stdio.printf("                             failure names the site, the real bounds and a\n");
+    Stdio.printf("                             symbolised stack before aborting. An array with a\n");
+    Stdio.printf("                             declared length (local, global, or sized by its\n");
+    Stdio.printf("                             own initialiser) is checked against that length;\n");
+    Stdio.printf("                             a heap allocation against its own header; a bare\n");
+    Stdio.printf("                             pointer as a heap allocation. arm64 only so far,\n");
+    Stdio.printf("                             and an error elsewhere.\n");
+    Stdio.printf("\n");
+    Stdio.printf("Linking (in-house, on every target):\n");
+    Stdio.printf("  -l<name>                   Link a library found on the -L path, or a system\n");
+    Stdio.printf("                             library through its SDK stub\n");
+    Stdio.printf("  -framework <F>             Link a macOS / iOS framework\n");
+    Stdio.printf("  -Xlinker <arg>             Pass <arg> to the linker: a library or object\n");
+    Stdio.printf("                             path joins the link; `-rpath <dir>` adds a search\n");
+    Stdio.printf("                             path (Mach-O); any other flag is reported and\n");
+    Stdio.printf("                             skipped\n");
+    Stdio.printf("  -Wl,<arg>[,<arg>...]       The same as one -Xlinker per argument\n");
+    Stdio.printf("  --link-libs                (-A wasm32) Build the app in the mode that links\n");
+    Stdio.printf("                             .wasm libraries. Chosen by itself when the\n");
+    Stdio.printf("                             program imports one.\n");
+    Stdio.printf("  --self-host                Accepted: linking is always in-house\n");
+    Stdio.printf("\n");
+    Stdio.printf("Diagnostics:\n");
+    Stdio.printf("  -q, --quiet                Errors and warnings only\n");
+    Stdio.printf("  -V, --verbose              Print the support root and include search paths\n");
+    Stdio.printf("  --emit-ir                  Print the IR after lowering to stderr\n");
+    Stdio.printf("  --emit-ir-opt              Print the IR after the optimiser to stderr\n");
+    Stdio.printf("  -fdce-trace                Name each function dead-function elimination\n");
+    Stdio.printf("                             removes, on stderr\n");
+    Stdio.printf("  -W                         All warnings (the default)\n");
+    Stdio.printf("  -Wanalyze                  Also run the static-analysis warnings\n");
+    Stdio.printf("  -Wno-<category>            Silence one warning category:\n");
+    printCategories();
+    Stdio.printf("  --migrate=<base>:<to>      Compile as if the library were still <base>:\n");
+    Stdio.printf("                             members marked since(\"V\") with V newer than\n");
+    Stdio.printf("                             <base> are not found, so a call whose meaning\n");
+    Stdio.printf("                             changed between the versions is an error\n");
+    Stdio.printf("  -v, --version              Print the version and exit\n");
+    Stdio.printf("  -h, --help                 This text\n");
+    Stdio.printf("\n");
+    Stdio.printf("Accepted for compatibility:\n");
+    Stdio.printf("  -fnew-ir, --with-ir        No effect: the IR pipeline is the only one\n");
+    Stdio.printf("  -farc[=...]                Retired, with a warning: ARC is always on\n");
+    Stdio.printf("  -fauto-cloak=never|auto|always\n");
+    Stdio.printf("                             Checked; no effect, as no layout has a cloaked\n");
+    Stdio.printf("                             region\n");
+    Stdio.printf("  -ss, --stack-size <n>      Checked (decimal, $hex or 0xhex; 1..65535); no\n");
+    Stdio.printf("                             effect, as no layout has a flat xtc stack\n");
+    Stdio.printf("  -Q, --quit-style rts|loop  Checked, with a warning: an xt6502 program stops\n");
+    Stdio.printf("                             at a BRK when main returns\n");
+    Stdio.printf("  --xtc-stack                Warns: a 6502 function gets a software-stack\n");
+    Stdio.printf("                             frame only when its locals do not fit zero page\n");
+    Stdio.printf("  -Fmb, --fn-min-banked <n>  Checked, with a warning: no effect\n");
+    Stdio.printf("  -dp, --dump-placement      Warns: no effect\n");
+    Stdio.printf("  -du, --dump-usage          Warns: no effect\n");
+    Stdio.printf("\n");
+    Stdio.printf("Output containers on 6502 and m68k:\n");
+    Stdio.printf("    .s .asm                  assembly (stops before the assembler)\n");
+    Stdio.printf("    .xex .exe .bin .com      banked xt6502 executable (any other name too)\n");
+    Stdio.printf("    .tos .prg                GEMDOS executable (any other name too)\n");
+    Stdio.printf("\n");
+    Stdio.printf("Support tree search. Each root is probed for lib/xc, then xc, then support:\n");
+    Stdio.printf("    -H  >  $XCC_HOME  >  $XTC_HOME  >  the directory holding xcc and its\n");
+    Stdio.printf("    parent  >  the current directory  >  ~/xcc  >  ~/xtc  >  /opt/xcc/<version>\n");
+    Stdio.printf("    >  /opt/xcc  >  /usr/local/xcc  >  /usr/local/xtc  >  /opt/xtc\n");
+    Stdio.printf("\n");
+    Stdio.printf("Environment:\n");
+    Stdio.printf("  XCC_HOME                   A support root, ahead of the built-in search\n");
+    Stdio.printf("  XTC_HOME                   The older spelling of XCC_HOME\n");
+    Stdio.printf("  XTC_LDFLAGS                More linker arguments, read as if each were\n");
+    Stdio.printf("                             given with -Xlinker after the command line's own\n");
+    Stdio.printf("\n");
+    Stdio.printf("An unrecognised option is an error, never ignored.\n");
+}
+
+// The -Wno- categories, one indented line each.
+void printCategories(void)
+{
+    Array* cats = warningCategoryNames().splitOnByte((u8)',');
+    for (u32 i = (u32)0; i < cats.count(); i = i + (u32)1)
+        Stdio.printf("                               %s\n", ((String*)cats.get(i)).trimmed().cString());
 }
 
 // The warning categories, which must AGREE with the reference's
@@ -2950,6 +3199,272 @@ bool isWarningCategory(String* c)
     return false;
 }
 
+// The other spellings `-A` takes for a target, folded to the one name the rest
+// of the driver tests for.
+String* canonicalArch(String* a)
+{
+    if (a.equals(String.withCString("x86-64")) || a.equals(String.withCString("amd64")))
+        return String.withCString("x86_64");
+    if (a.equals(String.withCString("windows")) || a.equals(String.withCString("x86_64-windows")))
+        return String.withCString("win64");
+    if (a.equals(String.withCString("wasm")))
+        return String.withCString("wasm32");
+    if (a.equals(String.withCString("armv7")) || a.equals(String.withCString("armv7-a"))
+        || a.equals(String.withCString("cortex-a9")))
+        return String.withCString("arm9");
+    return a;
+}
+
+// The `-m` names that are a PLATFORM rather than a layout, and the target each
+// selects. 0 for a layout name.
+String* platformLayoutArch(String* m)
+{
+    if (m.equals(String.withCString("arm64"))) return String.withCString("arm64");
+    if (m.equals(String.withCString("atarist"))) return String.withCString("m68k");
+    if (m.equals(String.withCString("arm9"))) return String.withCString("arm9");
+    if (m.equals(String.withCString("x86_64")) || m.equals(String.withCString("x86-64"))
+        || m.equals(String.withCString("amd64")))
+        return String.withCString("x86_64");
+    if (m.equals(String.withCString("win64")) || m.equals(String.withCString("windows")))
+        return String.withCString("win64");
+    if (m.equals(String.withCString("wasm32")) || m.equals(String.withCString("wasm")))
+        return String.withCString("wasm32");
+    return (String*)0;
+}
+
+// `-ss <n>`: decimal, `$hex` or `0xhex`. -1 when it is none of those; the
+// caller range-checks, so a large value only has to stay large.
+i32 parseStackSize(String* v)
+{
+    u32 i = (u32)0;
+    bool hex = false;
+    if (v.byteLength() > (u32)0 && v.byteAt((u32)0) == (u8)'$') { hex = true; i = (u32)1; }
+    else if (v.byteLength() > (u32)1 && v.byteAt((u32)0) == (u8)'0'
+             && (v.byteAt((u32)1) == (u8)'x' || v.byteAt((u32)1) == (u8)'X')) { hex = true; i = (u32)2; }
+    if (i >= v.byteLength()) return (i32)-1;
+    u32 n = (u32)0;
+    for (; i < v.byteLength(); i = i + (u32)1) {
+        u8 c = v.byteAt(i);
+        u32 dgt = (u32)99;
+        if (c >= (u8)'0' && c <= (u8)'9') dgt = (u32)(c - (u8)'0');
+        else if (hex && c >= (u8)'a' && c <= (u8)'f') dgt = (u32)(c - (u8)'a') + (u32)10;
+        else if (hex && c >= (u8)'A' && c <= (u8)'F') dgt = (u32)(c - (u8)'A') + (u32)10;
+        if (dgt == (u32)99) return (i32)-1;
+        n = n * (hex ? (u32)16 : (u32)10) + dgt;
+        if (n > (u32)$10000) n = (u32)$10000;   // out of range either way
+    }
+    return (i32)n;
+}
+
+// ── directory listing ────────────────────────────────────────────────────
+//
+// The layout search and --list-layouts walk directories, and the runtime has
+// no primitive for that, so it goes to the host C library: opendir/readdir on
+// the POSIX hosts, FindFirstFileA on Windows. The entry layout is the host's,
+// hence the per-host offsets: d_type/d_name at 20/21 on macOS, 18/19 on musl.
+#if ARCH_win64
+u8* FindFirstFileA(u8* pattern, u8* data);
+i32 FindNextFileA(u8* h, u8* data);
+i32 FindClose(u8* h);
+#else
+u8* opendir(u8* path);
+u8* readdir(u8* d);
+i32 closedir(u8* d);
+#endif
+
+// The names in `dir`, sorted, without `.`, `..` or symbolic links (a layout
+// directory keeps `default.lnk`-style aliases that are not layouts of their
+// own). Empty when the directory cannot be read.
+Array* listDirectory(String* dir)
+{
+    Array* out = new Array();
+#if ARCH_win64
+    u8 fd[320];
+    String* pat = String.withString(dir);
+    pat.appendCString("/*");
+    u8* h = FindFirstFileA(pat.cString(), &fd[0]);
+    if (h == (u8*)0 || (i64)h == (i64)-1) return out;
+    bool more = true;
+    while (more) {
+        u32 attrs = (u32)fd[0] | ((u32)fd[1] << (u32)8) | ((u32)fd[2] << (u32)16) | ((u32)fd[3] << (u32)24);
+        String* nm = String.withCString(&fd[44]);
+        if ((attrs & (u32)$400) == (u32)0 && !nm.equals(String.withCString("."))
+            && !nm.equals(String.withCString("..")))
+            out.add((Object*)nm);
+        more = FindNextFileA(h, &fd[0]) != (i32)0;
+    }
+    FindClose(h);
+#elif ARCH_arm9
+    // No host C library to ask on this target.
+    return out;
+#else
+#if ARCH_x86_64
+    u32 typeAt = (u32)18;
+    u32 nameAt = (u32)19;
+#else
+    u32 typeAt = (u32)20;
+    u32 nameAt = (u32)21;
+#endif
+    u8* dp = opendir(dir.cString());
+    if (dp == (u8*)0) return out;
+    u8* e = readdir(dp);
+    while (e != (u8*)0) {
+        String* nm = String.withCString(e + nameAt);
+        if (e[typeAt] != (u8)10 && !nm.equals(String.withCString("."))   // 10 = DT_LNK
+            && !nm.equals(String.withCString("..")))
+            out.add((Object*)nm);
+        e = readdir(dp);
+    }
+    closedir(dp);
+#endif
+    out.sort();
+    return out;
+}
+
+// ── layouts ──────────────────────────────────────────────────────────────
+//
+// `-m <spec>` to a `.lnk` path, in the original's order: the spec as a file,
+// the spec with `.lnk` added, then `<platform>/<layout>` — or, with no
+// platform named, every platform directory in turn — under the support root,
+// in `layouts/` and then `internal/`. 0 when nothing matches.
+String* resolveLayoutFile(FeOptions* o, String* spec)
+{
+    if (Files.exists(spec) && !spec.hasSuffix(String.withCString("/"))) {
+        if (Files.readText(spec) != (String*)0) return spec;
+    }
+    String* withExt = String.withString(spec); withExt.appendCString(".lnk");
+    if (Files.exists(withExt)) return withExt;
+    String* root = supportRoot(o);
+    if (root == (String*)0) return (String*)0;
+    Array* platforms = new Array();
+    String* layout = spec;
+    u32 slash = spec.indexOfByte((u8)'/');
+    if (slash != String.notFound()) {
+        platforms.add((Object*)spec.substringBytes((u32)0, slash));
+        layout = spec.substringFromByte(slash + (u32)1);
+    } else {
+        platforms = listDirectory(root);
+        // A host that cannot list a directory still finds the one platform
+        // that has layouts today.
+        if (platforms.count() == (u32)0) platforms.add((Object*)String.withCString("xt6502"));
+    }
+    for (u32 p = (u32)0; p < platforms.count(); p = p + (u32)1) {
+        for (u32 k = (u32)0; k < (u32)2; k = k + (u32)1) {
+            String* c = String.withString(root);
+            c.appendCString("/");
+            c.append((String*)platforms.get(p));
+            c.appendCString(k == (u32)0 ? "/layouts/" : "/internal/");
+            c.append(layout);
+            c.appendCString(".lnk");
+            if (Files.exists(c)) return c;
+        }
+    }
+    return (String*)0;
+}
+
+// --list-layouts: every `.lnk` under `<support>/<platform>/layouts/`, grouped
+// by platform, on stderr — the original's listing, line for line.
+void listLayouts(FeOptions* o)
+{
+    String* root = supportRoot(o);
+    if (root == (String*)0) root = String.withCString("support");
+    String* out = String.withCString("Available layouts (use with -m <platform>/<layout>):\n\n");
+    bool any = false;
+    Array* platforms = listDirectory(root);
+    for (u32 p = (u32)0; p < platforms.count(); p = p + (u32)1) {
+        String* plat = (String*)platforms.get(p);
+        if (plat.equals(String.withCString("generic"))) continue;
+        String* dir = String.withString(root);
+        dir.appendCString("/"); dir.append(plat); dir.appendCString("/layouts");
+        Array* files = listDirectory(dir);
+        Array* names = new Array();
+        for (u32 f = (u32)0; f < files.count(); f = f + (u32)1) {
+            String* fn = (String*)files.get(f);
+            if (fn.hasSuffix(String.withCString(".lnk")))
+                names.add((Object*)fn.substringBytes((u32)0, fn.byteLength() - (u32)4));
+        }
+        if (names.count() == (u32)0) continue;
+        any = true;
+        out.appendCString("  "); out.append(plat); out.appendCString(":\n");
+        for (u32 f = (u32)0; f < names.count(); f = f + (u32)1) {
+            out.appendCString("    -m "); out.append(plat); out.appendCString("/");
+            out.append((String*)names.get(f)); out.appendCString("\n");
+        }
+        out.appendCString("\n");
+    }
+    if (!any) { out.appendCString("  (no layouts found in "); out.append(root); out.appendCString("/)\n"); }
+    Stdio.error(out);
+}
+
+// Every token of $XTC_LDFLAGS joins the link, after the command line's own:
+// `-Xlinker <arg>` and `-Wl,a,b` unwrap, `-framework <F>` names a framework,
+// and the rest go through the same rule as a -Wl, token.
+void addLdFlagsFromEnvironment(DriverOptions* d)
+{
+    String* env = Platform.env(String.withCString("XTC_LDFLAGS"));
+    if (env == (String*)0) return;
+    Array* toks = new Array();
+    String* cur = new String();
+    for (u32 i = (u32)0; i <= env.byteLength(); i = i + (u32)1) {
+        u8 c = i < env.byteLength() ? env.byteAt(i) : (u8)' ';
+        if (c == (u8)' ' || c == (u8)9 || c == (u8)10 || c == (u8)13) {
+            if (cur.byteLength() > (u32)0) { toks.add((Object*)cur); cur = new String(); }
+        } else {
+            cur.appendByte(c);
+        }
+    }
+    u32 k = (u32)0;
+    while (k < toks.count()) {
+        String* t = (String*)toks.get(k);
+        if (t.equals(String.withCString("-Xlinker")) && k + (u32)1 < toks.count()) {
+            d.addLinkToken((String*)toks.get(k + (u32)1)); k = k + (u32)2; continue;
+        }
+        if (t.equals(String.withCString("-framework")) && k + (u32)1 < toks.count()) {
+            d.frameworks().add(toks.get(k + (u32)1)); k = k + (u32)2; continue;
+        }
+        if (t.equals(String.withCString("-L")) && k + (u32)1 < toks.count()) {
+            d.ldDirs().add(toks.get(k + (u32)1)); k = k + (u32)2; continue;
+        }
+        if (t.hasPrefix(String.withCString("-Wl,"))) {
+            Array* parts = t.substringFromByte((u32)4).splitOnByte((u8)',');
+            for (u32 q = (u32)0; q < parts.count(); q = q + (u32)1) d.addLinkToken((String*)parts.get(q));
+            k = k + (u32)1; continue;
+        }
+        d.addLinkToken(t);
+        k = k + (u32)1;
+    }
+}
+
+// Linker flags the in-house linker does not implement are named, once, when a
+// link runs — the same note the in-house arm64 linker gives — and skipped.
+// `-rpath` is implemented only where the output is Mach-O.
+void noteLinkFlags(DriverOptions* d)
+{
+    bool machO = d.arch().equals(String.withCString("arm64")) || isIos(d);
+    for (u32 i = (u32)0; i < d.rawLinkFlags().count(); i = i + (u32)1)
+        Stdio.error(String.withFormat("xcc: note: ignoring unrecognised linker flag '%s'\n",
+                                      ((String*)d.rawLinkFlags().get(i)).cString()));
+    if (!machO)
+        for (u32 i = (u32)0; i < d.rpaths().count(); i = i + (u32)1)
+            Stdio.error(String.withFormat("xcc: note: ignoring '-rpath %s': only a Mach-O "
+                                          "link records a search path\n",
+                                          ((String*)d.rpaths().get(i)).cString()));
+}
+
+// The IR after the optimiser, when --emit-ir-opt asked for it.
+void dumpOptIR(DriverOptions* d, IRModule* mod)
+{
+    if (!d.emitIROpt()) return;
+    Stdio.error(mod.text());
+}
+
+// -Fli and -fdce-trace reach the optimiser through the target's profile.
+void applyOptFlags(DriverOptions* d, OptProfile* p)
+{
+    Opt.setInlineOverride(p, d.inlineMax());
+    Opt.setDceTrace(p, d.dceTrace());
+}
+
 DriverOptions* parseDriverArgs(void)
 {
     DriverOptions* d = new DriverOptions();
@@ -2958,7 +3473,8 @@ DriverOptions* parseDriverArgs(void)
     u32 i = (u32)1;
     while (i < argc) {
         String* a = Process.argument(i);
-        if (a.equals(String.withCString("-o")) && i + (u32)1 < argc) {
+        if ((a.equals(String.withCString("-o")) || a.equals(String.withCString("--output")))
+            && i + (u32)1 < argc) {
             String* out = Process.argument(i + (u32)1);
             o.setOutput(out);
             // The output EXTENSION decides the format, as it does in the
@@ -2972,17 +3488,29 @@ DriverOptions* parseDriverArgs(void)
                 d.setKeepAsm(true);
             i = i + (u32)2; continue;
         }
-        if (a.equals(String.withCString("-A")) && i + (u32)1 < argc) {
-            d.setArch(Process.argument(i + (u32)1)); i = i + (u32)2; continue;
+        if ((a.equals(String.withCString("-A")) || a.equals(String.withCString("--arch")))
+            && i + (u32)1 < argc) {
+            d.setArch(canonicalArch(Process.argument(i + (u32)1)));
+            d.setSawArch(true);
+            i = i + (u32)2; continue;
         }
-        if (a.equals(String.withCString("-H")) && i + (u32)1 < argc) {
-            o.setHome(Process.argument(i + (u32)1)); i = i + (u32)2; continue;
+        // `--xcc-home` is the documented long form; `--xtc-home` is the older
+        // spelling. The value is cleaned as $XCC_HOME is — a Windows shell
+        // keeps the quotes in `-H "C:\path with spaces"`.
+        if ((a.equals(String.withCString("-H")) || a.equals(String.withCString("--xcc-home"))
+             || a.equals(String.withCString("--xtc-home"))) && i + (u32)1 < argc) {
+            o.setHome(sanitiseEnvPath(Process.argument(i + (u32)1))); i = i + (u32)2; continue;
         }
-        if (a.equals(String.withCString("-I")) && i + (u32)1 < argc) {
+        if ((a.equals(String.withCString("-I")) || a.equals(String.withCString("--include")))
+            && i + (u32)1 < argc) {
             o.incs().add((Object*)Process.argument(i + (u32)1)); i = i + (u32)2; continue;
         }
         if (a.equals(String.withCString("-D")) && i + (u32)1 < argc) {
             o.defs().add((Object*)Process.argument(i + (u32)1)); i = i + (u32)2; continue;
+        }
+        // `-DNAME` / `-DNAME=VALUE`, joined, as cc takes it.
+        if (a.hasPrefix(String.withCString("-D")) && a.byteLength() > (u32)2) {
+            o.defs().add((Object*)a.substringFromByte((u32)2)); i = i + (u32)1; continue;
         }
         // ── linker passthrough ───────────────────────────────────────
         //
@@ -2995,9 +3523,14 @@ DriverOptions* parseDriverArgs(void)
             bool isFw = a.equals(String.withCString("-framework"));
             String* v = Process.argument(i + (u32)1);
             if (isFw) d.frameworks().add((Object*)v);
-            else      d.linkInputs().add((Object*)v);
+            else      d.addLinkToken(v);
             i = i + (u32)2;
             continue;
+        }
+        // `-ll` lists the layouts. It has to be tested before `-l<name>`, which
+        // would otherwise read it as a library called `l`.
+        if (a.equals(String.withCString("-ll")) || a.equals(String.withCString("--list-layouts"))) {
+            d.setListLayouts(true); i = i + (u32)1; continue;
         }
         if (a.hasPrefix(String.withCString("-l")) && a.byteLength() > (u32)2) {
             d.linkInputs().add((Object*)a);              // resolved on the -L path
@@ -3005,38 +3538,24 @@ DriverOptions* parseDriverArgs(void)
             continue;
         }
         if (a.hasPrefix(String.withCString("-Wl,"))) {
-            // `-Wl,<file>[,<file>…]`: a FILE the linker takes — an object, an
-            // archive, a dylib or a stub — is honoured exactly as `-Xlinker
-            // <file>` is (bug 139: the harness names its objects this way, as
-            // clang users do). A FLAG is still refused below: there is no
-            // external linker here to hand it to.
+            // `-Wl,a,b,c` is `-Xlinker a -Xlinker b -Xlinker c`. A FILE the
+            // linker takes — an object, an archive, a dylib or a stub — is a
+            // link input (bug 139: the harness names its objects this way, as
+            // clang users do); `-rpath <dir>` is honoured on a Mach-O link; any
+            // other flag is named at link time and skipped (addLinkToken).
             Array* toks = a.substringFromByte((u32)4).splitOnByte((u8)',');
-            bool allFiles = toks.count() > (u32)0;
-            for (u32 k = (u32)0; k < toks.count(); k = k + (u32)1) {
-                String* t = (String*)toks.get(k);
-                bool isLib = t.hasPrefix(String.withCString("-l")) && t.byteLength() > (u32)2;
-                bool isFile = t.hasSuffix(String.withCString(".o")) || t.hasSuffix(String.withCString(".a"))
-                           || t.hasSuffix(String.withCString(".dylib")) || t.hasSuffix(String.withCString(".tbd"))
-                           || t.hasSuffix(String.withCString(".so"));
-                if (!isLib && !isFile) allFiles = false;
-            }
-            if (allFiles) {
-                for (u32 k = (u32)0; k < toks.count(); k = k + (u32)1)
-                    d.linkInputs().add(toks.get(k));
-                i = i + (u32)1;
-                continue;
-            }
-            // A raw linker flag. There is no linker behind this one to take it,
-            // so saying "accepted" would be a lie that surfaces as a missing
-            // symbol at launch. Named, and refused.
-            Stdio.printf("xcc: error: '%s' is a flag for an external linker, and "
-                         "this driver links in-house — there is nothing to pass "
-                         "it to.\n  Use -Xlinker <library> to name a library to "
-                         "link against.\n", a.cString());
-            Process.exit((i32)2); return (DriverOptions*)0;
+            for (u32 k = (u32)0; k < toks.count(); k = k + (u32)1)
+                d.addLinkToken((String*)toks.get(k));
+            i = i + (u32)1;
+            continue;
         }
-        if (a.equals(String.withCString("-L")) && i + (u32)1 < argc) {
+        if ((a.equals(String.withCString("-L")) || a.equals(String.withCString("--library-path")))
+            && i + (u32)1 < argc) {
             o.libs().add((Object*)Process.argument(i + (u32)1)); i = i + (u32)2; continue;
+        }
+        // `-L<dir>`, joined.
+        if (a.hasPrefix(String.withCString("-L")) && a.byteLength() > (u32)2) {
+            o.libs().add((Object*)a.substringFromByte((u32)2)); i = i + (u32)1; continue;
         }
         if (a.equals(String.withCString("-S"))) { d.setKeepAsm(true); i = i + (u32)1; continue; }
         if (a.equals(String.withCString("--emit-apk"))) { d.setEmitApk(true); i = i + (u32)1; continue; }
@@ -3101,21 +3620,24 @@ DriverOptions* parseDriverArgs(void)
             Process.exit((i32)0);
             return (DriverOptions*)0;
         }
-        // `-m <layout>` is the reference's spelling for a 6502 memory model.
-        // Accepted here and mapped onto the target, so one command line drives
-        // either compiler — `-m xt` and `-m xt6502/xt` both mean xt6502.
-        if (a.equals(String.withCString("-m")) && i + (u32)1 < argc) {
+        // `-m <layout>` picks a memory layout, and with it the 6502 target. A
+        // handful of names are PLATFORMS with no layout and select their
+        // target instead. Anything else is a `.lnk` — a file path, a path
+        // without its `.lnk`, `<platform>/<layout>`, or a bare layout name
+        // searched for under every platform — and is resolved after the parse,
+        // when -H and the environment have both been seen.
+        if ((a.equals(String.withCString("-m")) || a.equals(String.withCString("--memory-model")))
+            && i + (u32)1 < argc) {
             String* layout = Process.argument(i + (u32)1);
-            if (layout.hasPrefix(String.withCString("xt"))
-                || layout.hasPrefix(String.withCString("6502"))) {
-                d.setArch(String.withCString("xt6502"));
-            } else if (layout.equals(String.withCString("arm64"))) {
-                d.setArch(String.withCString("arm64"));
+            String* plat = platformLayoutArch(layout);
+            if (plat != (String*)0) {
+                // `atarist` is the m68k PLATFORM, so it leaves an m68k CPU
+                // already chosen by -A alone.
+                if (!plat.equals(String.withCString("m68k")) || !isM68k(d)) d.setArch(plat);
+                d.setLayoutSpec((String*)0);
             } else {
-                Stdio.printf("xcc: error: unknown memory layout '%s'\n", layout.cString());
-                Stdio.printf("       (this compiler drives arm64, android and xt6502)\n");
-                Process.exit((i32)1);
-                return (DriverOptions*)0;
+                d.setArch(String.withCString("xt6502"));
+                d.setLayoutSpec(layout);
             }
             i = i + (u32)2; continue;
         }
@@ -3126,6 +3648,8 @@ DriverOptions* parseDriverArgs(void)
         // sense that the second was SILENTLY IGNORED: `-O 0` left the driver at
         // its -O3 default and compiled the wrong thing without a word, which is
         // exactly the failure this compiler refuses everywhere else.
+        // A bare `-O` is `-O1`, as cc reads it.
+        if (a.equals(String.withCString("-O"))) { d.setOpt((u32)1); i = i + (u32)1; continue; }
         if (a.hasPrefix(String.withCString("-O")) && a.byteLength() == (u32)3) {
             d.setOpt((u32)(a.byteAt((u32)2) - (u8)'0')); i = i + (u32)1; continue;
         }
@@ -3189,24 +3713,175 @@ DriverOptions* parseDriverArgs(void)
             i = i + (u32)1;
             continue;
         }
+        // ── output modes and diagnostics ─────────────────────────────
+        //
+        // -E <path>: the preprocessed source, written as the compile goes on.
+        if ((a.equals(String.withCString("-E")) || a.equals(String.withCString("--preprocessed")))
+            && i + (u32)1 < argc) {
+            o.setPreprocessedPath(Process.argument(i + (u32)1)); i = i + (u32)2; continue;
+        }
+        // The IR after lowering / after the optimiser, to stderr. Diagnostics:
+        // the output file is the same with or without them.
+        if (a.equals(String.withCString("--emit-ir"))) { d.setEmitIR(true); i = i + (u32)1; continue; }
+        if (a.equals(String.withCString("--emit-ir-opt"))) { d.setEmitIROpt(true); i = i + (u32)1; continue; }
+        // -a: stop after the back end and write the assembly, which is what
+        // -S means here. --emit-asm-from-ir is the old name for the same thing,
+        // from when the IR pipeline ran beside another code generator.
+        if (a.equals(String.withCString("-a")) || a.equals(String.withCString("--assemble-only"))
+            || a.equals(String.withCString("--emit-asm-from-ir"))) {
+            d.setKeepAsm(true); i = i + (u32)1; continue;
+        }
+        if (a.equals(String.withCString("-dl")) || a.equals(String.withCString("--dump-layout"))) {
+            d.setDumpLayout(true); i = i + (u32)1; continue;
+        }
+        // -fdce-trace: name each function dead-function elimination removes.
+        if (a.equals(String.withCString("-fdce-trace"))) { d.setDceTrace(true); i = i + (u32)1; continue; }
+        // -Fli <n>: the largest callee, in IR instructions, the inliner splices.
+        if ((a.equals(String.withCString("-Fli")) || a.equals(String.withCString("--fn-leaf-inline")))
+            && i + (u32)1 < argc) {
+            i32 li = parseCount(Process.argument(i + (u32)1));
+            if (li < (i32)0) {
+                Stdio.printf("xcc: error: -Fli takes a decimal instruction count, got '%s'\n",
+                             Process.argument(i + (u32)1).cString());
+                Process.exit((i32)1);
+                return (DriverOptions*)0;
+            }
+            d.setInlineMax(li);
+            i = i + (u32)2; continue;
+        }
+        // -x-<arch>,<option>[,<option>…]: options that exist for one target
+        // only. An arch with none, or an option the arch does not have, is an
+        // error — a typo must not build without the feature it asked for.
+        if (a.hasPrefix(String.withCString("-x-"))) {
+            Array* parts = a.substringFromByte((u32)3).splitOnByte((u8)',');
+            String* xarch = parts.count() > (u32)0 ? (String*)parts.get((u32)0) : String.withCString("");
+            if (parts.count() < (u32)2 || xarch.byteLength() == (u32)0) {
+                Stdio.printf("xcc: error: '%s' — expected -x-<arch>,<option>[,<option>...]\n", a.cString());
+                Process.exit((i32)1);
+                return (DriverOptions*)0;
+            }
+            if (!xarch.equals(String.withCString("wasm32"))) {
+                Stdio.printf("xcc: error: no target-specific options exist for arch '%s'\n", xarch.cString());
+                Process.exit((i32)1);
+                return (DriverOptions*)0;
+            }
+            for (u32 k = (u32)1; k < parts.count(); k = k + (u32)1) {
+                String* xo = (String*)parts.get(k);
+                if (!xo.equals(String.withCString("return-call"))) {
+                    Stdio.printf("xcc: error: unknown wasm32 option '%s' — known: return-call\n", xo.cString());
+                    Process.exit((i32)1);
+                    return (DriverOptions*)0;
+                }
+                d.setTailCalls(true);
+            }
+            i = i + (u32)1; continue;
+        }
+        // --link-libs: build a wasm32 APP in the mode that links .wasm
+        // libraries — it owns memory and the table and exports what each
+        // library's loader wiring needs. The driver chooses it by itself when
+        // the program imports a .wasm library; this asks for it outright.
+        if (a.equals(String.withCString("--link-libs"))) { d.setLinkLibs(true); i = i + (u32)1; continue; }
+        // `-farc` retired (bug 026): ARC is always on. Still accepted so old
+        // command lines build, and said out loud, because a silently ignored
+        // flag is what made "verified with ARC off" mean nothing.
+        if (a.equals(String.withCString("-farc")) || a.hasPrefix(String.withCString("-farc="))) {
+            Stdio.error(String.withFormat("xcc: warning: %s is retired and does nothing — ARC is always "
+                         "on. `delete` on a struct or primitive array is still allowed "
+                         "(ARC never managed those); on a class instance it is not.\n",
+                         a.cString()));
+            i = i + (u32)1; continue;
+        }
+        // -fauto-cloak=never|auto|always: the value is checked, and the flag is
+        // inert — it placed code in the cloaked region of the retired Atari
+        // xl/xe layouts, and no live layout has one.
+        if (a.hasPrefix(String.withCString("-fauto-cloak="))) {
+            String* v = a.substringFromByte((u32)13).lowercased();
+            if (!v.equals(String.withCString("never")) && !v.equals(String.withCString("auto"))
+                && !v.equals(String.withCString("always"))) {
+                Stdio.printf("xcc: -fauto-cloak= expects 'never|auto|always', got '%s'\n", v.cString());
+                Process.exit((i32)1);
+                return (DriverOptions*)0;
+            }
+            i = i + (u32)1; continue;
+        }
+        // -ss / --stack-size <n>, also joined with `=`: checked, and without
+        // effect on every current layout (none has a flat xtc stack to cap).
+        if (a.equals(String.withCString("-ss")) || a.equals(String.withCString("--stack-size"))
+            || a.hasPrefix(String.withCString("-ss=")) || a.hasPrefix(String.withCString("--stack-size="))) {
+            String* v = (String*)0;
+            u32 eq = a.indexOfByte((u8)'=');
+            if (eq != String.notFound()) {
+                v = a.substringFromByte(eq + (u32)1);
+                i = i + (u32)1;
+            } else if (i + (u32)1 < argc) {
+                v = Process.argument(i + (u32)1);
+                i = i + (u32)2;
+            } else {
+                Stdio.printf("xcc: error: %s requires an argument\n", a.cString());
+                Process.exit((i32)1);
+                return (DriverOptions*)0;
+            }
+            i32 n = parseStackSize(v);
+            if (n <= (i32)0 || n > (i32)65535) {
+                Stdio.printf("xcc: --stack-size expects a positive integer up to 65535, got '%s'\n",
+                             v.cString());
+                Process.exit((i32)1);
+                return (DriverOptions*)0;
+            }
+            continue;
+        }
+        // Accepted, and already what happens: every build links in-house, and
+        // the IR pipeline is the only code generator.
+        if (a.equals(String.withCString("--self-host")) || a.equals(String.withCString("-fnew-ir"))
+            || a.equals(String.withCString("--with-ir"))) {
+            i = i + (u32)1; continue;
+        }
+        // A bare -W: every warning category is on unless -Wno- turns it off,
+        // so there is nothing more to enable.
+        if (a.equals(String.withCString("-W"))) { i = i + (u32)1; continue; }
+        // Options for machinery this compiler does not have. Each is accepted
+        // so a command line written for them still builds, and each says it
+        // changes nothing, rather than letting the reader believe it did.
+        if ((a.equals(String.withCString("-Q")) || a.equals(String.withCString("--quit-style")))
+            && i + (u32)1 < argc) {
+            String* v = Process.argument(i + (u32)1).lowercased();
+            if (!v.equals(String.withCString("rts")) && !v.equals(String.withCString("loop"))) {
+                Stdio.printf("xcc: -Q expects 'rts' or 'loop', got '%s'\n", v.cString());
+                Process.exit((i32)1);
+                return (DriverOptions*)0;
+            }
+            Stdio.error(String.withFormat("xcc: warning: %s has no effect: an xt6502 program stops at a BRK "
+                         "when main returns\n", a.cString()));
+            i = i + (u32)2; continue;
+        }
+        if (a.equals(String.withCString("--xtc-stack"))) {
+            Stdio.error(String.withFormat("xcc: warning: --xtc-stack has no effect: the 6502 back end gives a "
+                         "function a software-stack frame only when its locals do not fit "
+                         "zero page\n"));
+            i = i + (u32)1; continue;
+        }
+        if ((a.equals(String.withCString("-Fmb")) || a.equals(String.withCString("--fn-min-banked")))
+            && i + (u32)1 < argc) {
+            if (parseCount(Process.argument(i + (u32)1)) < (i32)0) {
+                Stdio.printf("xcc: error: -Fmb takes a decimal instruction count, got '%s'\n",
+                             Process.argument(i + (u32)1).cString());
+                Process.exit((i32)1);
+                return (DriverOptions*)0;
+            }
+            Stdio.error(String.withFormat("xcc: warning: %s has no effect: the 6502 back end banks every "
+                         "function except the entry point and interrupt handlers\n", a.cString()));
+            i = i + (u32)2; continue;
+        }
+        if (a.equals(String.withCString("-dp")) || a.equals(String.withCString("--dump-placement"))
+            || a.equals(String.withCString("-du")) || a.equals(String.withCString("--dump-usage"))) {
+            Stdio.error(String.withFormat("xcc: warning: %s has no effect: this compiler does not report "
+                         "6502 placement or usage\n", a.cString()));
+            i = i + (u32)1; continue;
+        }
         // An unrecognised flag is an ERROR, not something to skip. A driver that
         // quietly drops an option it does not know builds something other than
         // what it was asked for and says it succeeded.
         if (a.hasPrefix(String.withCString("-"))) {
-            // A flag this driver has not ported YET is worth saying so about.
-            // "unrecognised option" reads as "no such flag", which sends the
-            // reader to check their spelling; the truth is that the flag
-            // exists, the bootstrap compiler has it, and this one does not
-            // yet. Naming the working command beats making them find it.
-            if (a.equals(String.withCString("--link-libs"))) {
-                Stdio.printf("xcc: error: '%s' is not ported to this driver yet (task #52).\n",
-                             a.cString());
-                Stdio.printf("       The bootstrap compiler has it — same arguments:\n");
-                Stdio.printf("         xcc-bootstrap %s ...\n", a.cString());
-                Stdio.printf("       (it sits beside this binary after `make install`)\n");
-                Process.exit((i32)2);
-                return (DriverOptions*)0;
-            }
             Stdio.printf("xcc: error: unrecognised option '%s'\n", a.cString());
             Stdio.printf("       (note: the optimisation level is joined — -O0, not -O 0)\n");
             Process.exit((i32)1);
@@ -3233,5 +3908,69 @@ DriverOptions* parseDriverArgs(void)
         o.setInput(a);
         i = i + (u32)1;
     }
+    finishDriverArgs(d);
     return d;
+}
+
+// What the parse cannot settle argument by argument: $XTC_LDFLAGS joins the
+// link, `-m` resolves against the support root (which -H, wherever it sits on
+// the line, and the environment decide), and -ll / -dl run and exit.
+void finishDriverArgs(DriverOptions* d)
+{
+    FeOptions* o = d.fe();
+    addLdFlagsFromEnvironment(d);
+    if (d.listLayouts()) {
+        listLayouts(o);
+        Process.exit((i32)0);
+        return;
+    }
+    String* spec = d.layoutSpec();
+    if (spec != (String*)0) {
+        String* lp = resolveLayoutFile(o, spec);
+        // `-m xt6502` / `-m 6502` name the platform, and mean its xt map.
+        if (lp == (String*)0 && (spec.equals(String.withCString("xt6502"))
+                                 || spec.equals(String.withCString("6502"))))
+            lp = resolveLayoutFile(o, String.withCString("xt6502/xt"));
+        if (lp == (String*)0) {
+            if (spec.hasPrefix(String.withCString("xe:")))
+                Stdio.printf("xcc: error: '-m %s': the parametric Atari xe layouts are retired; "
+                             "the 6502 target is xt6502 (-m xt)\n", spec.cString());
+            else
+                Stdio.printf("xcc: error: no layout file for -m '%s' (looked for "
+                             "<platform>/layouts/%s.lnk under the support root). The layout is "
+                             "the single source of truth; there is no built-in fallback.\n",
+                             spec.cString(), spec.cString());
+            Process.exit((i32)1);
+            return;
+        }
+        d.setLayoutPath(lp);
+        d.setLayoutName(lp.lastPathComponent().deletingPathExtension());
+    }
+    if (d.dumpLayout()) {
+        String* lp = d.layoutPath();
+        if (lp == (String*)0) {
+            if (d.sawArch() && !isXt6502(d)) {
+                Stdio.printf("xcc: error: --dump-layout draws a 6502 memory layout; '%s' has "
+                             "none (use -m <layout>)\n", d.arch().cString());
+                Process.exit((i32)1);
+                return;
+            }
+            lp = resolveLayoutFile(o, String.withCString("xt6502/xt"));
+            if (lp == (String*)0) {
+                Stdio.printf("xcc: error: cannot find the default layout xt6502/xt under the "
+                             "support root (-H)\n");
+                Process.exit((i32)1);
+                return;
+            }
+        }
+        LayoutMap* m = LayoutMap.read(lp);
+        if (m.failed()) {
+            Stdio.printf("xcc: error: %s\n", m.why().cString());
+            Process.exit((i32)1);
+            return;
+        }
+        Stdio.printf("%s", m.diagram().cString());
+        Process.exit((i32)0);
+        return;
+    }
 }
