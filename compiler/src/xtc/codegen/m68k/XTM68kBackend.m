@@ -1075,12 +1075,30 @@ static NSString* m68kSym(NSString* name)
         @[@"sqrt", @"fsqrt"], @[@"sin", @"fsin"], @[@"cos", @"fcos"], @[@"tan", @"ftan"],
         @[@"atan", @"fatan"], @[@"asin", @"fasin"], @[@"acos", @"facos"], @[@"ln", @"flogn"],
         @[@"exp", @"fetox"], @[@"log10", @"flog10"], @[@"log2", @"flog2"]];
-    for (NSArray<NSString*>* pair in xmOps)
+    //
+    // Without the FPU each helper is a line-A math HLE stub instead, like the
+    // soft-float arithmetic: selector $40+i for the float form of the i-th op
+    // above and $50+i for the double form, with pow at $4B / $5B. The
+    // arguments stay where the FPU bodies read them, on the stack from 4(sp).
+    void (^xmHLE)(NSString*, unsigned) = ^(NSString* nm, unsigned sel) {
+      [out appendFormat:@"\t.globl\t%@\n%@:\n\t.dc.w\t$%04X\t; line-A math HLE\n\trts\n\n", nm, nm,
+                        0xA000u | sel];
+    };
+    for (NSUInteger i = 0; i < xmOps.count; i++)
         {
-        if (!gHardFloat)
-            break;
+        NSArray<NSString*>* pair = xmOps[i];
         NSString* op = pair[0];
         NSString* mn = pair[1];
+        if (!gHardFloat)
+            {
+            NSString* fn = [NSString stringWithFormat:@"_xm_%@f", op];
+            NSString* dn = [NSString stringWithFormat:@"_xm_%@", op];
+            if (used(fn))
+                xmHLE(fn, 0x40u + (unsigned)i);
+            if (used(dn))
+                xmHLE(dn, 0x50u + (unsigned)i);
+            continue;
+            }
         if (used([NSString stringWithFormat:@"_xm_%@f", op]))
             [out appendFormat:
                      @"\t.globl\t_xm_%@f\n_xm_%@f:\n\tfmove.s\t4(sp),fp0\n\t%@\tfp0,fp0\n\tfmove.s\tfp0,d0\n\trts\n\n",
@@ -1091,6 +1109,10 @@ static NSString* m68kSym(NSString* name)
                       "\tfmove.d\tfp0,-(sp)\n\tmove.l\t(sp)+,d0\n\tmove.l\t(sp)+,d1\n\trts\n\n",
                      op, op, mn];
         }
+    if (!gHardFloat && used(@"_xm_powf"))
+        xmHLE(@"_xm_powf", 0x4B);
+    if (!gHardFloat && used(@"_xm_pow"))
+        xmHLE(@"_xm_pow", 0x5B);
     // pow(a,b) = exp(b*ln(a)) — no single 68881 instruction.
     if (gHardFloat && used(@"_xm_powf"))
         [out appendString:

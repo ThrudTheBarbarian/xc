@@ -38,15 +38,16 @@
 //   • PRNG (setSeed / step / rand*): a self-contained Marsaglia
 //     xorshift32 in pure xtc (a real ST has no libc random()).
 //   • Transcendentals (sqrt / sin / cos / tan / atan / ln / exp / pow):
-//     thin wrappers over the host C library (libm), provided by the
-//     corpus C stub as `_xm_*` externs (mirrors `_putc`).
+//     thin wrappers over `_xm_*` helpers the m68k back end defines:
+//     68881 instructions under -mhard-float, line-A math HLE stubs
+//     without it.
 //   • Constants: float / double literals (the Atari version's byte-list
 //     {$..} encodings are 5-byte-Atari-format-specific and would not
 //     decode on arm64's IEEE floats).
 //
 // abs() and the integer helpers are plain xtc arithmetic.
 
-// ── libm wrappers, provided by the corpus C stub (no body here) ──────
+// ── libm wrappers, defined by the back end (no body here) ────────────
 float _xm_sqrtf(float x);
 double _xm_sqrt(double x);
 float _xm_sinf(float x);

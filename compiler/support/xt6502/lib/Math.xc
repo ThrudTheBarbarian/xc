@@ -486,67 +486,86 @@ class Math
 
     // ── ln: natural logarithm ────────────────────────────────────────
     //
-    // For val > 0, write val = m * 2^k where m ∈ [1, 2) is the
-    // mantissa bits with implicit leading 1 and k is the float's
-    // exponent byte. Then:
+    // For val > 0, write val = m * 2^k with m taken from the IEEE
+    // mantissa and k from the biased exponent field. Then:
     //
     //    ln(val) = ln(m) + k * ln(2)
     //
-    // For ln(m) on m ∈ [1, 2), substitute u = (m - 1) / (m + 1),
-    // which puts u in [0, 1/3). Then:
+    // m starts in [1, 2) and is halved (k + 1) when above sqrt(2), so
+    // m ∈ [sqrt(2)/2, sqrt(2)). Substitute u = (m - 1) / (m + 1), which
+    // puts |u| below 0.172. Then:
     //
     //    ln(m) = 2 * atanh(u)
     //          = 2 * (u + u^3/3 + u^5/5 + u^7/7 + ...)
     //
-    // With u bounded by 1/3, the series converges fast — six terms
-    // give a hair under 24-bit relative precision. Evaluated via
-    // Horner on u^2 to avoid the repeated power computation.
+    // Six terms leave the first omitted one near 2^-30 of the result,
+    // below float precision. Evaluated via Horner on u^2.
+    //
+    // binary32 is little-endian: byte 3 holds the sign and exponent
+    // bits 7..1, bit 7 of byte 2 holds exponent bit 0. A subnormal
+    // input is scaled by 2^24 first so its exponent field is nonzero.
     //
     // Special cases:
-    //   val = 0     → returns 0 (caller should check; no NaN encoding
-    //                 for -inf yet, so we pick a tame sentinel).
+    //   val = 0     → returns 0 (a tame sentinel rather than -inf).
     //   val < 0     → returns 0 (ditto; real ln(negative) would be a
     //                 complex number).
-    //   val = 1     → m = 1, u = 0, series collapses to 0, k = 0 too,
-    //                 returns exact 0.
+    //   +inf / NaN  → returned unchanged.
+    //   val = 1     → m = 1, u = 0, k = 0, returns exact 0.
 
     static float ln(float val)
         {
-        // Special cases: non-positive input returns 0 as a tame
-        // sentinel rather than NaN/-inf. Callers that care can check.
         if (val == 0.0)
             return 0.0;
         if (val < 0.0)
             return 0.0;
 
-        // Extract the signed 8-bit exponent byte.
-        i8 k;
+        i16 k = 0;
+        u8 hi;
+        u8 lo;
         asm
         {
-            LDA val+1
-            STA k
+            LDA val+3
+            STA hi
+            LDA val+2
+            STA lo
         }
+        if (hi == 0 && (lo & $80) == 0)
+            {
+            val = val * 16777216.0; // 2^24
+            k = -24;
+            asm
+            {
+                LDA val+3
+                STA hi
+                LDA val+2
+                STA lo
+            }
+            }
+        u16 e = ((u16)(hi & $7F) << 1) | (u16)(lo >> 7);
+        if (e == $FF)
+            return val;
+        k = k + (i16)e - 127;
 
-        // Build m: a copy of val with exponent byte zeroed, so
-        // m = (1 + mantissa/2^24) ∈ [1, 2).
-        float m;
+        // m = val with the exponent field set to the bias (127), so
+        // m = 1.mantissa ∈ [1, 2).
+        float m = val;
         asm
             {
-            LDA val   : STA m
-            LDA #$00  : STA m+1
-            LDA val+2 : STA m+2
-            LDA val+3 : STA m+3
-            LDA val+4 : STA m+4
+            LDA #$3F : STA m+3
+            LDA val+2 : ORA #$80 : STA m+2
+            }
+        if (m > 1.41421356)
+            {
+            m = m * 0.5;
+            k = k + 1;
             }
 
-        // u = (m - 1) / (m + 1), u ∈ [0, 1/3) for m ∈ [1, 2).
         float u = (m - 1.0) / (m + 1.0);
         float u2 = u * u;
 
         // Horner form for atanh series truncated to 6 terms:
         //   atanh(u) = u * (1 + u2 * (1/3 + u2 * (1/5 + u2 * (1/7 +
         //              u2 * (1/9 + u2 * (1/11))))))
-        // Pre-computed reciprocal constants avoid runtime fpDiv.
         float sum = 0.09090909;      // 1/11
         sum = 0.11111111 + u2 * sum; // 1/9
         sum = 0.14285714 + u2 * sum; // 1/7
@@ -555,8 +574,6 @@ class Math
         sum = 1.0 + u2 * sum;
         float lnm = 2.0 * u * sum;
 
-        // Add k * ln(2). k is i8 (−128..127), widens to float by
-        // the mixed-arith int→float conversion path.
         float kf = k;
         return lnm + kf * Math.LN2();
         }
@@ -1056,23 +1073,18 @@ class Math
         return result;
         }
 
-    // Full-precision 48-bit natural log. Same algorithm shape as
-    // ln(float) — range-reduce to m ∈ [1, 2) by extracting the
-    // exponent, compute u = (m-1)/(m+1), then a Horner-form
-    // atanh series on u² with 15 reciprocal-odd coefficients
-    // (1/1, 1/3, …, 1/29). |u| ≤ 1/3 keeps u^29/29 well below
-    // 2^-48, so 15 terms give below-ULP accuracy.
+    // Double natural log. Same algorithm as ln(float): take k from
+    // the IEEE exponent field and m from the mantissa, fold m into
+    // [sqrt(2)/2, sqrt(2)), then a Horner-form atanh series on u²
+    // with 15 reciprocal-odd coefficients (1/1, 1/3, …, 1/29).
+    // |u| < 0.172 puts the first omitted term far below 2^-52.
     //
-    // An asm-file port lived briefly at support/generic/double/
-    // dpLn.asm, but the 2 KB of runtime code overflowed xt's 8 KB
-    // main region on top of the existing fp+dp runtime. Writing
-    // it in xtc source puts the algorithm body in the banked
-    // method page where it belongs (the dp-operator dispatches
-    // already resolve to the dpMul / dpAdd / dpSub / dpDiv asm
-    // routines in main, so precision and speed are identical).
+    // binary64 is little-endian: byte 7 holds the sign and exponent
+    // bits 10..4, the high nibble of byte 6 holds exponent bits 3..0.
+    // A subnormal input is scaled by 2^54 first.
     //
-    // Non-positive / non-finite inputs return 0 as a tame
-    // sentinel, matching the float overload's contract.
+    // Non-positive inputs return 0 as a tame sentinel, matching the
+    // float overload's contract; +inf and NaN are returned unchanged.
     static double ln(double val)
         {
         if (val == 0.0d)
@@ -1080,26 +1092,45 @@ class Math
         if (val < 0.0d)
             return 0.0d;
 
-        // Extract the signed 8-bit exponent byte k.
-        i8 k;
+        i16 k = 0;
+        u8 hi;
+        u8 lo;
         asm
         {
-            LDA val+1
-            STA k
+            LDA val+7
+            STA hi
+            LDA val+6
+            STA lo
         }
+        if (hi == 0 && (lo & $F0) == 0)
+            {
+            val = val * 18014398509481984.0d; // 2^54
+            k = -54;
+            asm
+            {
+                LDA val+7
+                STA hi
+                LDA val+6
+                STA lo
+            }
+            }
+        u16 e = ((u16)(hi & $7F) << 4) | (u16)(lo >> 4);
+        if (e == $7FF)
+            return val;
+        k = k + (i16)e - 1023;
 
-        // m = val with exp zeroed → m ∈ [1, 2).
-        double m;
+        // m = val with the exponent field set to the bias (1023), so
+        // m = 1.mantissa ∈ [1, 2).
+        double m = val;
         asm
             {
-            LDA val   : STA m
-            LDA #$00  : STA m+1
-            LDA val+2 : STA m+2
-            LDA val+3 : STA m+3
-            LDA val+4 : STA m+4
-            LDA val+5 : STA m+5
-            LDA val+6 : STA m+6
-            LDA val+7 : STA m+7
+            LDA #$3F : STA m+7
+            LDA val+6 : AND #$0F : ORA #$F0 : STA m+6
+            }
+        if (m > 1.4142135623730951d)
+            {
+            m = m * 0.5d;
+            k = k + 1;
             }
 
         // u = (m - 1) / (m + 1), u² = u * u.
@@ -1107,8 +1138,7 @@ class Math
         double u2 = u * u;
 
         // Horner on atanh series, 15 terms with reciprocal-odd
-        // coefficients. The compile-time decimal literals below
-        // encode to the closest 48-bit-mantissa double.
+        // coefficients.
         double sum = 0.0344827586206896551724d;     // 1/29
         sum = 0.0370370370370370370370d + u2 * sum; // 1/27
         sum = 0.0400000000000000000000d + u2 * sum; // 1/25
@@ -1127,8 +1157,6 @@ class Math
 
         double lnm = 2.0d * u * sum;
 
-        // Add k * ln(2). k is i8 (−128..127), widens to double
-        // via the mixed-arith path.
         double kd = k;
         return lnm + kd * Math.LN2();
         }
