@@ -3290,12 +3290,22 @@ class Arm64
         storeReg(dst, n.res());
     }
 
+    // A call straight to a named symbol, whatever the callee's placement. A
+    // banked or cloaked callee takes the same arguments in the same places; on
+    // arm64 the placement changes nothing, so a variadic one needs its tail on
+    // the stack like any other.
+    bool isDirectCallOp(String* op)
+    {
+        return op.equals(String.withCString("Call")) || op.equals(String.withCString("CallBanked"))
+            || op.equals(String.withCString("CallCloaked"));
+    }
+
     // YES if this is a DIRECT call, inside a `vaforward` function, to a variadic
     // callee — a `void say(fmt,...) { fmt2(fmt,...); }` forward that re-passes
     // this function's own incoming tail (with no shared buffer, by copying it).
     bool vaForwardRelay(IRInsn* n)
     {
-        if (!n.op().equals(String.withCString("Call")) || n.ops().count() < (u32)2) return false;
+        if (!isDirectCallOp(n.op()) || n.ops().count() < (u32)2) return false;
         IRSymbol* own = symbolNamed(_fn.name());
         if (own == (IRSymbol*)0 || !own.vaforward()) return false;
         IROperand* callee = (IROperand*)n.ops().get((u32)0);
@@ -3418,7 +3428,7 @@ class Arm64
         // opcode reaches offsetsForTypes through HERE, the frame sizing and
         // the marshalling cannot disagree. Mirrors the original.
         i32 vfrom = (i32)-1;
-        if (n.op().equals(String.withCString("Call")) && first == (u32)1) {
+        if (isDirectCallOp(n.op()) && first == (u32)1) {
             IROperand* callee = (IROperand*)n.ops().get((u32)0);
             if (callee.kind() == (u8)OPK_SYM) {
                 IRSymbol* s = symbolNamed(callee.name());
