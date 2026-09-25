@@ -3,7 +3,7 @@
 // 15, whose type is u8 — but sizing the fold node from that u8 truncated the
 // dividend to 840 & 0xFF = 72, giving 72/56 = 1 and 72/7 = 10. The fold node's
 // type must be the WIDER of the operand-widened type and the result type.
-i32 printf(u8* f, ...);
+#import "Stdio.xc"
 
 i32 main(void)
 {
@@ -14,6 +14,6 @@ i32 main(void)
     if (15 * 56 / 56 == 15) ok = ok + (i32)1;  // must keep the wide multiply
     if (65535 / 3 == 21845) ok = ok + (i32)1;
     if (1000000 / 1000 == 1000) ok = ok + (i32)1;   // 32-bit dividend
-    printf("ok %d/6\n", ok);
+    Stdio.printf("ok %d/6\n", ok);
     return (i32)0;
 }

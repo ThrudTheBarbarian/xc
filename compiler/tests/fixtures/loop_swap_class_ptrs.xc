@@ -15,9 +15,10 @@ i32 main(i32 argc, u8** argv)
     src = a;
     for (u32 w = (u32)1; w < (u32)2; w = w * (u32)2) { src = b; }
     printf("plain:       src==a %d (expect 0)\n", (i16)(src == a ? 1 : 0));
-    // 4. the swap inside an if, not a loop
+    // 4. the swap inside an if, not a loop. The condition is true everywhere
+    //    but not a constant: xt6502 starts main with argc 0.
     src = a; dst = b;
-    if (argc > (i32)0) { Array* t = src; src = dst; dst = t; }
+    if (argc >= (i32)0) { Array* t = src; src = dst; dst = t; }
     printf("if-temp:     src==a %d (expect 0)\n", (i16)(src == a ? 1 : 0));
     // 5. the same with a non-class pointer type
     u32 x = (u32)1; u32 y = (u32)2; u32 p = x; u32 q = y;

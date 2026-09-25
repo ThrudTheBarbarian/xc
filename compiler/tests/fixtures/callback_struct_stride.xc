@@ -10,7 +10,7 @@
 // is the control: it agrees trivially and proves the harness isn't rigged.
 
 #import "Foundation.xc"
-i32 printf(u8* f, ...);
+#import "Stdio.xc"
 
 struct S1 { i32 a; callback i32(i32 x) f; }
 struct S2 { i32 a; u8* n; callback i32(i32 x) f; i32 b; }
@@ -34,6 +34,6 @@ i32 main(void)
     if ((i32)sizeof(S3) == strideS3()) ok = ok + (i32)1;
     if ((i32)sizeof(S4) == strideS4()) ok = ok + (i32)1;
     if ((i32)sizeof(S5) == strideS5()) ok = ok + (i32)1;
-    printf("stride==sizeof for %d/5\n", ok);
+    Stdio.printf("stride==sizeof for %d/5\n", ok);
     return (i32)0;
 }

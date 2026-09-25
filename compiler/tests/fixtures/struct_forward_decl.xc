@@ -4,7 +4,7 @@
 // hard-errored ("Expected '{' to begin block") where the self-hosted port
 // already accepted it; now both accept it and register an incomplete placeholder
 // that the later definition fills in.
-i32 printf(u8* f, ...);
+#import "Stdio.xc"
 
 struct node;                                  // forward declaration
 struct node { i32 val; node* next; }          // later definition fills it in
@@ -22,6 +22,6 @@ i32 main(void)
     node c; c.val = (i32)3; c.next = (node*)0;
     node b; b.val = (i32)2; b.next = &c;
     node a; a.val = (i32)1; a.next = &b;
-    printf("sum %d\n", sumList(&a));           // 6
+    Stdio.printf("sum %d\n", sumList(&a));           // 6
     return (i32)0;
 }
