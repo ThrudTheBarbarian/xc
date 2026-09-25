@@ -1,0 +1,6 @@
+fib(15) = 610
+ack(2,3) = 9
+sumDown(10) = 220
+mix(6,1,2,3) = 45
+hwCaller(5) = 112
+addUpTo(12) = 78

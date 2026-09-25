@@ -912,9 +912,17 @@ static NSString* sExecutablePath = nil;
             {
             opts.verbose = YES;
             }
-        else if ([arg isEqualToString:@"-S"] || [arg isEqualToString:@"--xtc-stack"])
+        else if ([arg isEqualToString:@"--xtc-stack"])
             {
             opts.useXtcStack = YES;
+            }
+        else if ([arg isEqualToString:@"-S"])
+            {
+            // cc's "keep the assembly", as in the shipped driver. The output's
+            // extension (.s/.asm) is what selects assembly here, so there is
+            // nothing to set. It used to be --xtc-stack's short form; the
+            // harnesses that pass `-S -o x.s` would then have compared the
+            // software-stack convention against the port's default.
             }
         else if ([arg hasPrefix:@"-fmalloc="])
             {
@@ -1402,7 +1410,10 @@ static NSString* sExecutablePath = nil;
             "  -o, --output <path>        Output file (.asm or binary)\n"
             "  -Q, --quit-style <which>   Action after main() returns: rts (default), loop\n"
             "  -q, --quiet                Suppress informational output\n"
-            "  -S, --xtc-stack            Use xtc software stack globally\n"
+            "  -S                         Keep the assembly (the output's .s extension\n"
+            "                             selects it)\n"
+            "  --xtc-stack                Keep return addresses and saved registers on\n"
+            "                             the xtc software stack (xt6502)\n"
             "  --needed <soname>          -A android: add a DT_NEEDED entry naming\n"
             "                             <soname>. Repeatable. bionic resolves a\n"
             "                             library's imports against its own local\n"

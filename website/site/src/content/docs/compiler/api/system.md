@@ -56,7 +56,9 @@ void main(void)
 }
 ```
 
-If you never call `exit`, returning from `main` ends the program: on xt6502 it
-stops at a `BRK`, and `xcc-sim-6502` exits with `main`'s return value as its status.
+If you never call `exit`, returning from `main` ends the program. On xt6502 it
+returns to the loader (DOS) with `main`'s value in A, and `xcc-sim-6502` exits
+with that value as its status; with `-Q loop` the program jumps to itself
+instead.
 
 [↑ Topics](#topics)

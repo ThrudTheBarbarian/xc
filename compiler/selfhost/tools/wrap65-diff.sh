@@ -16,6 +16,10 @@
 # that needs comparing, and exactly what one hand-picked file cannot cover.
 #
 #   bash selfhost/tools/wrap65-diff.sh [pattern]
+#
+# WRAP65_FLAGS passes code-generator options to BOTH sides, so the paths they
+# select are compared too: e.g. WRAP65_FLAGS="--xtc-stack", "-Fmb 50" or
+# "-Q loop" (any of -Q, --xtc-stack and -Fmb, which both code generators take).
 set -u
 cd "$(dirname "$0")/../.." || exit 1
 BIN=bin/osx
@@ -33,6 +37,8 @@ echo "building xtcg65 (xtc → native arm64)…"
 [ -x "$WORK/xtcg65" ] || { echo "--- wrap65-diff: BROKEN (xtcg65 did not build)"; exit 1; }
 
 RUN_INCS=(-I support/xt6502/lib -I support/generic/lib)
+read -r -a CG_FLAGS <<< "${WRAP65_FLAGS:-}"
+[ ${#CG_FLAGS[@]} -gt 0 ] && echo "code-generator options on both sides: ${CG_FLAGS[*]}"
 
 pass=0; fail=0; unsup=0; oracle=0
 declare -a FAILED
@@ -47,10 +53,10 @@ for f in $FILES; do
     fi
     # The oracle is the FULL text xcc-cg-6502 writes — harness, stubs, lazy
     # links and all. Nothing is stripped: that is the point.
-    if ! "$BIN/xcc-cg-6502" -m xt -H . -O0 -q -o "$WORK/a.s" "$WORK/a.ir" >/dev/null 2>&1; then
+    if ! "$BIN/xcc-cg-6502" -m xt -H . -O0 -q ${CG_FLAGS[@]+"${CG_FLAGS[@]}"} -o "$WORK/a.s" "$WORK/a.ir" >/dev/null 2>&1; then
         oracle=$((oracle+1)); continue
     fi
-    "$WORK/xtcg65" "$WORK/a.ir" -L "$LAYOUT" --wrap support -o "$WORK/b.s" >/dev/null 2>&1
+    "$WORK/xtcg65" "$WORK/a.ir" -L "$LAYOUT" --wrap support ${CG_FLAGS[@]+"${CG_FLAGS[@]}"} -o "$WORK/b.s" >/dev/null 2>&1
     rc=$?
     if [ $rc -eq 3 ]; then unsup=$((unsup+1)); continue; fi
     if [ $rc -ne 0 ]; then fail=$((fail+1)); FAILED+=("$f (exit $rc)"); continue; fi

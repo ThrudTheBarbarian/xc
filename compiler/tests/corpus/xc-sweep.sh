@@ -90,12 +90,19 @@ if [ "${1:-}" = "--one" ]; then
     fi
 
     if [ "$XCTARGET" = xt6502 ]; then
+        # The xt6502 options a fixture names in its //xtc-flags: header, so
+        # the fixture runs the code they generate: -Q, --xtc-stack and -Fmb.
+        xflags=()
+        hdr="$(grep -m1 -E '^//[ ]*xtc-flags:' "$f")"
+        if [[ $hdr =~ -Q[[:space:]]+(rts|loop) ]]; then xflags+=(-Q "${BASH_REMATCH[1]}"); fi
+        [[ $hdr == *--xtc-stack* ]] && xflags+=(--xtc-stack)
+        if [[ $hdr =~ -Fmb[[:space:]]+([0-9]+) ]]; then xflags+=(-Fmb "${BASH_REMATCH[1]}"); fi
         # xt6502 is compiled to a XEX and RUN ON THE SIMULATOR. The program's
         # own output is on stdout; the simulator's tracing goes to stderr, so
         # they must not be merged — doing so makes every fixture look like it
         # printed a bank-register banner.
         if ! $XC_DRIVER_LAUNCH "$XCWORK/xcc-xc" -A xt6502 -H . -I support/xt6502/lib -I support/generic/lib \
-                "-O$XCOPT" "$src" -o "$XCWORK/bin/$b.xex" > "$XCWORK/log/$b.build" 2>&1 \
+                "-O$XCOPT" ${xflags[@]+"${xflags[@]}"} "$src" -o "$XCWORK/bin/$b.xex" > "$XCWORK/log/$b.build" 2>&1 \
            || [ ! -s "$XCWORK/bin/$b.xex" ]; then
             printf 'COMPILE\t%s\n' "$b" > "$XCWORK/res/$b"; exit 0
         fi

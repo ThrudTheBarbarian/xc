@@ -1335,8 +1335,8 @@ static uint64_t insn_count = 0;
    instruction past the cap. */
 static uint64_t insn_limit = 0;
 
-/* Process exit code surfaced by main().  A clean program end (BRK or a
-   self-targeted JMP after main returns) leaves the 6502's return value in A;
+/* Process exit code surfaced by main().  A clean program end (an RTS back to
+   the loader, a BRK, or a self-targeted JMP after main returns) leaves the 6502's return value in A;
    we hand that low byte back as our own exit status so a 6502 program can be
    probed with `$?` exactly like a native one.  An abnormal stop (illegal
    opcode, instruction-limit blow-out) instead sets a reserved code AND writes
@@ -2563,6 +2563,20 @@ static int step(void)
         br = 1;
         break;
     case 0x60:
+        /* RTS with nothing on the stack is the program returning to its
+         * loader. Atari DOS starts a program with `JSR (RUNAD)`, so on the
+         * machine this RTS lands back in DOS; here the run started at an
+         * empty stack (SP = $FFF), so the same RTS ends the run, with main's
+         * value in A as the exit status (the xt6502 `-Q rts` quit style). */
+        if (!loading && reg_sp == 0xFFF)
+            {
+            format_flags(fa, reg_p);
+            if (!opt_dump)
+                printf("A=%02X X=%02X Y=%02X SP=%03X %s  *** return to DOS ***\n",
+                       reg_a, reg_x, reg_y, reg_sp, fa);
+            g_exit_code = reg_a; /* program's DOS return value */
+            return 0;
+            }
         reg_pc = pop16() + 1;
         br = 1;
         break;
@@ -3411,9 +3425,11 @@ static void print_usage(FILE* f)
             "                    codegen migrates globals out of $C0-$DF.\n"
             "\n"
             "Execution:\n"
-            "  The simulator starts at the XEX RUNAD (or $2000 if unset), runs\n"
-            "  until BRK or Ctrl-C, and prints an instruction trace to stdout\n"
-            "  along with register state. Instruction count is reported on exit.\n");
+            "  The simulator starts at the XEX RUNAD (or $2000 if unset) and runs\n"
+            "  until the program ends or Ctrl-C, printing an instruction trace to\n"
+            "  stdout along with register state. The program ends at an RTS with\n"
+            "  an empty stack (a return to the loader), a BRK, or a JMP to itself;\n"
+            "  A is then the exit status. Instruction count is reported on exit.\n");
     }
 
 /* Patch mn_modes and mn_names for the xt CPU additions. The

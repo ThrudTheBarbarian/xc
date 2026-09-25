@@ -9,12 +9,19 @@
 // to the historical cwd-relative behaviour (the in-process corpus runs from the
 // repo root, so that path still works untouched).
 static NSString* sSupportRoot = nil;
+// -Q loop: the startup spins after main returns instead of returning.
+static BOOL sQuitLoop = NO;
 
 @implementation XTIRRuntimeEmitter
 
 + (void)setSupportRoot:(nullable NSString*)root
     {
     sSupportRoot = [root copy];
+    }
+
++ (void)setQuitLoop:(BOOL)loop
+    {
+    sQuitLoop = loop;
     }
 
 // `relPath` is relative to the SUPPORT ROOT (the directory holding xt6502/,
@@ -85,6 +92,12 @@ static NSString* sSupportRoot = nil;
                                @"__xtc_weak_register:\n    RTS\n__xtc_weak_unregister:\n    RTS\n"
                                @"__xtc_weak_load:\n    LDA #0\n    LDX #0\n    TAY\n    RTS\n"
                                                      withString:@"; (weak no-op stubs replaced by the real side-table)\n"];
+        }
+    // -Q loop: the startup's return to the loader becomes a jump to itself.
+    if (sQuitLoop)
+        {
+        harness = [harness stringByReplacingOccurrencesOfString:@"    JSR _xt_main\n    RTS\n"
+                                                     withString:@"    JSR _xt_main\n_xt_quit:\n    JMP _xt_quit\n"];
         }
     [out appendString:harness];
     [out appendString:@"\n"];

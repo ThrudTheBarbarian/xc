@@ -129,8 +129,8 @@ supplies its functions, types and enum constants. See
 | `-m <layout>` | Select a memory layout. `-m xt` is the banked 6502 map and implies `-A 6502`. There is no default: with neither `-m` nor `-A`, `xcc` targets the host. The argument is a built-in layout name, or the path of a `.lnk` file (`.lnk` is appended if missing). The long form is `--memory-model`. See [Linker scripts](/compiler/usage/linker-scripts/). |
 | `-ll`, `--list-layouts` | List every built-in layout, grouped by platform, and exit. |
 | `-dl`, `--dump-layout` | Print the active layout's memory-map diagram and exit. Use with `-m`. |
-| `-dp`, `--dump-placement` | Accepted, with a warning that it has no effect: the compiler does not report 6502 placement. |
-| `-du`, `--dump-usage` | Accepted, with a warning that it has no effect: the compiler does not report 6502 segment usage. |
+| `-dp`, `--dump-placement` | xt6502: after code generation, print where each function went (`main`, `bank <n>`, `irq` or `vbi`) and its size, then the bytes of generated code in main RAM and in each code bank, to stderr. The sizes are the compiler's estimates, an upper bound. |
+| `-du`, `--dump-usage` | xt6502: after assembly, print the bytes the program uses in every region and code bank of the layout, to stderr: zero page, the software stack, the system, screen and main regions, each code bank in use, the unused code banks as one range, and the data window. With `-S` the assembly is written and also assembled to measure it. |
 
 See [Memory models](/compiler/usage/memory-models/).
 
@@ -144,7 +144,7 @@ See [Memory models](/compiler/usage/memory-models/).
 | `-O3` | **The default.** Currently the same pipeline as `-O2`. |
 | `-Flu <n>`, `--fn-loop-unroll <n>` | Fully unroll counted loops whose constant trip count is at most `n`. The default depends on the target; see [Optimisation](/compiler/usage/optimization/#-flu--loop-unroll-cap). |
 | `-Fli <n>`, `--fn-leaf-inline <n>` | Max leaf-function size (instructions) eligible for inlining. Default 100; needs `-O2+`. |
-| `-Fmb <n>`, `--fn-min-banked <n>` | Accepted, with a warning that it has no effect: the 6502 back end banks every function except the entry point and interrupt handlers. |
+| `-Fmb <n>`, `--fn-min-banked <n>` | xt6502: keep a function of fewer than `n` instructions in main RAM instead of a code bank, so a call to it needs no bank switch. The default, 0, banks every function except the entry point and the interrupt handlers. See [Optimisation](/compiler/usage/optimization/#-fmb--small-functions-in-main-ram-xt6502). |
 
 Full discussion on [Optimisation](/compiler/usage/optimization/).
 
@@ -179,14 +179,14 @@ is reported and ignored.
 
 | Flag | Effect |
 |------|--------|
-| `--xtc-stack` | Accepted, with a warning that it has no effect: the 6502 back end gives a function a software-stack frame only when its locals do not fit in zero page. |
+| `--xtc-stack` | xt6502: every function keeps its return address and saved registers in a frame on the xcc software stack instead of on the hardware stack. A function marked `:hwStack` keeps the hardware-stack convention; `:xtcStack` selects the software stack for one function without the flag. See [Functions](/compiler/language/functions/#default-calling-convention). |
 | `-ss <n>`, `--stack-size <n>` | Cap the xcc stack at `n` bytes (decimal, `$hex` or `0xhex`; 1..65535). No effect on banked-heap or non-heap targets, which is all of the current ones. |
 
 ## Runtime behaviour
 
 | Flag | Effect |
 |------|--------|
-| `-Q <rts\|loop>`, `--quit-style <rts\|loop>` | Accepted, with a warning that it has no effect: an xt6502 program stops at a `BRK` when `main` returns. |
+| `-Q <rts\|loop>`, `--quit-style <rts\|loop>` | xt6502: what the program does when `main` returns. `rts`, the default, returns to the loader (DOS) with `main`'s value in A, and `xcc-sim-6502` exits with that value as its status. `loop` makes the program jump to itself forever; the simulator stops there, also with `main`'s value as its status. |
 
 ## Diagnostics
 

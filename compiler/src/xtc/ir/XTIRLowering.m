@@ -16416,6 +16416,12 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
             attrs[@"irq"] = @YES;
         if (fnDecl.isVbi)
             attrs[@"vbi"] = @YES;
+        // `:xtcStack` / `:hwStack` — the xt6502 back end's calling convention
+        // for this function, overriding the --xtc-stack default.
+        if (fnDecl.stackConvention == XTStackXtc)
+            attrs[@"xtcstack"] = @YES;
+        else if (fnDecl.stackConvention == XTStack6502)
+            attrs[@"hwstack"] = @YES;
         // Only when set, like irq/vbi/throws above: an attribute printed on
         // EVERY function would rewrite every golden IR file and every
         // differential's expected text, to say "false" about a property almost
@@ -16469,6 +16475,12 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
         attrs[@"irq"] = @YES;
     if (fnDecl.isVbi)
         attrs[@"vbi"] = @YES;
+    // `:xtcStack` / `:hwStack` — the xt6502 back end's calling convention for
+    // this function, overriding the --xtc-stack default. Only when set.
+    if (fnDecl.stackConvention == XTStackXtc)
+        attrs[@"xtcstack"] = @YES;
+    else if (fnDecl.stackConvention == XTStack6502)
+        attrs[@"hwstack"] = @YES;
     if (fnDecl.forwardsVarargs)
         attrs[@"vaforward"] = @YES;
     // Call sites read this to decide whether to emit an error check after the

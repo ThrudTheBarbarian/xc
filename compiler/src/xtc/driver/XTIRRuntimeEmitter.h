@@ -38,6 +38,13 @@ NS_ASSUME_NONNULL_BEGIN
 + (void)setSupportRoot:(nullable NSString*)root;
 
 /****************************************************************************\
+|* What the startup does when main returns (xcc -Q). NO, the default, keeps
+|* the harness's `RTS` back to the loader; YES replaces it with a jump to
+|* itself (`-Q loop`), so the machine spins.
+\****************************************************************************/
++ (void)setQuitLoop:(BOOL)loop;
+
+/****************************************************************************\
 |* Append the standard `_<name>:` thunks for a set of banked-runtime entry
 |* points (task #121). Each thunk trampolines through the harness's `_xcall`
 |* into the banked label `<name>`, selecting bank `<bankSymbol>` — a

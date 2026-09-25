@@ -16,6 +16,10 @@
 # Compares the ASM rather than the linked file: the linkers are already covered
 # byte-for-byte by ld64-diff and ldandroid-diff, and asm names the divergence in
 # a form you can read.
+#
+# XCC_DIFF_ARCHS picks the targets (default "arm64 android xt6502"), and
+# XCC_DIFF_FLAGS adds options to both drivers' command lines, e.g.
+# XCC_DIFF_ARCHS=xt6502 XCC_DIFF_FLAGS="--xtc-stack -Fmb 50".
 set -u
 cd "$(dirname "$0")/../.." || exit 1
 BIN=bin/osx; [ -x "$BIN/xcc" ] || BIN=bin/linux
@@ -49,7 +53,8 @@ FIXTURES=$(ls tests/fixtures/*.xc | sort \
 # xt6502 joins arm64 and android: the driver wires all three, and the 6502 path
 # has the most moving parts of the three (layout, lazy-linked runtime, peephole,
 # assembler-as-linker), so it is the one most worth comparing end to end.
-for arch in arm64 android xt6502; do
+read -r -a EXTRA <<< "${XCC_DIFF_FLAGS:-}"
+for arch in ${XCC_DIFF_ARCHS:-arm64 android xt6502}; do
     for f in $FIXTURES; do
         [ -n "$PATTERN" ] && [[ "$f" != *"$PATTERN"* ]] && continue
         b=$(basename "$f" .xc)
@@ -66,11 +71,11 @@ for arch in arm64 android xt6502; do
         else
             REFSEL=(-A "$arch"); PORTINC=("${INCS[@]}")
         fi
-        if ! "$BIN/xcc" "${REFSEL[@]}" -H . -q "-O$LEVEL" -S -o "$WORK/ref.s" "$f" \
+        if ! "$BIN/xcc" "${REFSEL[@]}" -H . -q "-O$LEVEL" ${EXTRA[@]+"${EXTRA[@]}"} -S -o "$WORK/ref.s" "$f" \
                 >/dev/null 2>&1 || [ ! -s "$WORK/ref.s" ]; then
             oracle=$((oracle+1)); continue
         fi
-        "$WORK/xccxc" -A "$arch" -H . "${PORTINC[@]}" "-O$LEVEL" -S \
+        "$WORK/xccxc" -A "$arch" -H . "${PORTINC[@]}" "-O$LEVEL" ${EXTRA[@]+"${EXTRA[@]}"} -S \
             -o "$WORK/port.s" "$f" >"$WORK/port.log" 2>&1
         if [ ! -s "$WORK/port.s" ]; then
             # A REFUSAL is a known gap in the port, not a divergence — it is

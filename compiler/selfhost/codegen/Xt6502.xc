@@ -50,6 +50,26 @@ class Xt6502
 
     void setLayout(Layout* l) { _layout = l; }
 
+    // `--xtc-stack`: the calling convention of a function that carries neither
+    // `:xtcStack` nor `:hwStack`. Off keeps the return address and the saved
+    // registers on the hardware stack; on moves them into a software-stack
+    // frame.
+    bool _xtcStackDefault;
+    void setXtcStackDefault(bool on) { _xtcStackDefault = on; }
+
+    // `-Fmb <n>`: a function of fewer than n instructions stays in main RAM on
+    // a banked layout rather than taking a code bank, so a call to it needs no
+    // trampoline. 0, the default, banks everything but the entry point and the
+    // interrupt handlers.
+    u32 _fnMinBanked;
+    void setFnMinBanked(u32 n) { _fnMinBanked = n; }
+
+    // What `-dp` prints for the module last rendered: each function's
+    // placement and estimated size, then the bytes used in main RAM and in
+    // each code bank.
+    String* _placement;
+    String* placementReport(void) { return _placement == (String*)0 ? String.withCString("") : _placement; }
+
     bool    failed(void)  { return _failed; }
     String* why(void)     { return _why; }
     Array*  missing(void) { return _missing; }
@@ -550,7 +570,10 @@ class Xt6502
     // area starts at SP+7 — and `PSH #N` allocates N+7.
     void colourFrame(Map* interf)
     {
-        u32 maxEnd = (u32)7;
+        // Under the xtc-stack convention there is no guard byte and there are
+        // no saved registers on the hardware stack: the locals start at SP+1.
+        u32 base = _frameLocalsBase;
+        u32 maxEnd = base;
         for (u32 i = (u32)0; i < _frameOrder.count(); i = i + (u32)1) {
             IRValue* k = (IRValue*)_frameOrder.get(i);
             u32 w = widthOfFrame(k);
@@ -566,7 +589,7 @@ class Xt6502
                 occHi.add((Object*)Number.withU32(lo + widthOfFrame(nb)));
             }
             sortRangesByLo(occLo, occHi);
-            u32 o = (u32)7;
+            u32 o = base;
             for (u32 r = (u32)0; r < occLo.count(); r = r + (u32)1) {
                 u32 lo = ((Number*)occLo.get(r)).asU32();
                 u32 hi = ((Number*)occHi.get(r)).asU32();
@@ -575,7 +598,7 @@ class Xt6502
             _spFrameBase.set((Hashable*)k, (Object*)Number.withU32(o));
             if (o + w > maxEnd) maxEnd = o + w;
         }
-        _spFrameSize = maxEnd - (u32)7;                // N, the PSH immediate
+        _spFrameSize = maxEnd - base;                  // N, the PSH immediate
     }
 
     static void sortRangesByLo(Array* lo, Array* hi)
@@ -731,10 +754,115 @@ class Xt6502
         // JSR resolves to an undefined symbol, which the assembler quietly
         // makes $0000, and every dispatch jumps there.
         if (needsIndJmp(m)) _out.appendCString("__xt_indjmp:\n    JMP ($85)\n");
-        for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
-            emitFunction((IRFunc*)m.funcs().get(f));
+        beginPlacement();
+        IRFunc* entry = entryFunction(m);
+        for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1) {
+            IRFunc* fn = (IRFunc*)m.funcs().get(f);
+            u32 before = _out.byteLength();
+            emitFunction(fn);
+            if (fn.blocks().count() == (u32)0) continue;
+            notePlacement(fn, (u32)0, _out.substringFromByte(before),
+                          fn == entry ? String.withCString("entry") : (String*)0);
+        }
+        finishPlacement((u32)0);
         emitModuleData(m);
         return _out;
+    }
+
+    // ── Placement report (-dp) ───────────────────────────────────────────
+    Array* _placeNames;         // String@, in emission order
+    Array* _placeWhere;         // String@ — main / irq / vbi / bank N
+    Array* _placeSizes;         // Number@, estimated bytes
+    Array* _placeNotes;         // String@ or a zero-length string
+    Array* _placeBanks;         // Number@, 0 = unbanked
+
+    void beginPlacement(void)
+    {
+        _placeNames = new Array();
+        _placeWhere = new Array();
+        _placeSizes = new Array();
+        _placeNotes = new Array();
+        _placeBanks = new Array();
+    }
+
+    void notePlacement(IRFunc* fn, u32 bank, String* text, String* note)
+    {
+        String* where = String.withCString("main");
+        if (bank != (u32)0) {
+            where = String.withCString("bank ");
+            where.appendFormat("%lu", bank);
+        } else if (isIrq(fn)) where = String.withCString("irq");
+        else if (isVbi(fn)) where = String.withCString("vbi");
+        _placeNames.add((Object*)fn.name());
+        _placeWhere.add((Object*)where);
+        _placeSizes.add((Object*)Number.withU32(asmByteSize(text)));
+        _placeNotes.add((Object*)(note == (String*)0 ? String.withCString("") : note));
+        _placeBanks.add((Object*)Number.withU32(bank));
+    }
+
+    static String* padRight(String* s, u32 width)
+    {
+        String* o = String.withString(s);
+        while (o.byteLength() < width) o.appendCString(" ");
+        return o;
+    }
+
+    static String* padLeftNum(u32 v, u32 width)
+    {
+        String* num = String.withCString("");
+        num.appendFormat("%lu", v);
+        String* o = String.withCString("");
+        while (o.byteLength() + num.byteLength() < width) o.appendCString(" ");
+        o.append(num);
+        return o;
+    }
+
+    void finishPlacement(u32 bankSize)
+    {
+        String* r = String.withCString("xcc: placement for layout '");
+        r.append(_layout.name());
+        r.appendCString("' (sizes are the compiler's estimates, an upper bound):\n");
+        u32 mainBytes = (u32)0;
+        u32 bankCount = (u32)0;
+        for (u32 i = (u32)0; i < _placeNames.count(); i = i + (u32)1) {
+            u32 sz = ((Number*)_placeSizes.get(i)).asU32();
+            u32 b = ((Number*)_placeBanks.get(i)).asU32();
+            if (b == (u32)0) mainBytes = mainBytes + sz;
+            else if (b > bankCount) bankCount = b;
+            r.appendCString("  ");
+            r.append(padRight((String*)_placeWhere.get(i), (u32)8));
+            r.appendCString(" ");
+            r.append(padLeftNum(sz, (u32)6));
+            r.appendCString(" bytes  ");
+            r.append((String*)_placeNames.get(i));
+            String* note = (String*)_placeNotes.get(i);
+            if (note.byteLength() > (u32)0) {
+                r.appendCString(" (");
+                r.append(note);
+                r.appendCString(")");
+            }
+            r.appendCString("\n");
+        }
+        r.appendCString("xcc: bytes used by generated code:\n");
+        r.appendCString("  ");
+        r.append(padRight(String.withCString("main"), (u32)8));
+        r.appendCString(" ");
+        r.append(padLeftNum(mainBytes, (u32)6));
+        r.appendCString(" bytes (the runtime shares this region)\n");
+        for (u32 b = (u32)1; b <= bankCount; b = b + (u32)1) {
+            u32 used = (u32)0;
+            for (u32 i = (u32)0; i < _placeNames.count(); i = i + (u32)1)
+                if (((Number*)_placeBanks.get(i)).asU32() == b)
+                    used = used + ((Number*)_placeSizes.get(i)).asU32();
+            String* label = String.withCString("bank ");
+            label.appendFormat("%lu", b);
+            r.appendCString("  ");
+            r.append(padRight(label, (u32)8));
+            r.appendCString(" ");
+            r.append(padLeftNum(used, (u32)6));
+            r.appendFormat(" of %lu bytes\n", bankSize);
+        }
+        _placement = r;
     }
 
     static bool needsIndJmp(IRModule* m)
@@ -772,6 +900,8 @@ class Xt6502
         String* unbanked = new String();
         String* banked = new String();
         String* real = _out;
+        beginPlacement();
+        IRFunc* entry = entryFunction(m);
 
         _out = unbanked;
         for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1) {
@@ -779,7 +909,16 @@ class Xt6502
             if (fn.blocks().count() == (u32)0) continue;
             if (bankForCallee(fn.name()) != (u32)0) continue;
             _currentBank = (u32)0;
+            u32 before = _out.byteLength();
             emitFunction(fn);
+            String* note = (String*)0;
+            if (fn == entry) note = String.withCString("entry");
+            else if (!isIrq(fn) && !isVbi(fn) && keptInMain(fn.name())) {
+                note = String.withCString("");
+                note.appendFormat("%lu instructions, under -Fmb %lu",
+                                  insnCountOf(fn.name()), _fnMinBanked);
+            }
+            notePlacement(fn, (u32)0, _out.substringFromByte(before), note);
         }
         _out = banked;
         for (u32 b = (u32)1; b <= _bankCount; b = b + (u32)1) {
@@ -791,9 +930,12 @@ class Xt6502
                 if (fn.blocks().count() == (u32)0) continue;
                 if (bankForCallee(fn.name()) != b) continue;
                 _currentBank = b;
+                u32 before = _out.byteLength();
                 emitFunction(fn);
+                notePlacement(fn, b, _out.substringFromByte(before), (String*)0);
             }
         }
+        finishPlacement(_layout.bankWindowEnd() - _layout.bankWindowStart() + (u32)1);
         _out = real;
         _out.appendCString("; --- unbanked code + data (continues the harness region flow — no .org) ---\n");
         _out.append(unbanked);
@@ -813,8 +955,26 @@ class Xt6502
     // decides. Re-render with the CURRENT map, re-pack, repeat until the map
     // stops moving — the same convergence the assembler's long-branch rewriter
     // uses.
+    Map* _insnCounts;           // function name -> instructions, for -Fmb
+
+    u32 insnCountOf(String* name)
+    {
+        if (_insnCounts == (Map*)0) return (u32)0;
+        Object* o = _insnCounts.get((Hashable*)name);
+        return o == (Object*)0 ? (u32)0 : ((Number*)o).asU32();
+    }
+
+    // Under -Fmb, a function smaller than the threshold stays in main RAM.
+    bool keptInMain(String* name)
+    {
+        if (_fnMinBanked == (u32)0 || _insnCounts == (Map*)0) return false;
+        Object* o = _insnCounts.get((Hashable*)name);
+        return o != (Object*)0 && ((Number*)o).asU32() < _fnMinBanked;
+    }
+
     void assignBanks(IRModule* m)
     {
+        _insnCounts = new Map();
         _bankMap = new Map();
         _bankCount = (u32)0;
         u32 bankSize = _layout.bankWindowEnd() - _layout.bankWindowStart() + (u32)1;
@@ -861,6 +1021,10 @@ class Xt6502
             emitFunction(fn);
             sizes.set((Hashable*)fn.name(),
                       (Object*)Number.withU32(asmByteSize(_out) + (u32)16 * callCount(fn)));
+            // -Fmb decides from this first, bank-independent render only, so
+            // the choice cannot move while the refinement iterates.
+            if (!withMap)
+                _insnCounts.set((Hashable*)fn.name(), (Object*)Number.withU32(asmInsnCount(_out)));
         }
         _out = real;
         _spillDecls = realSpills;
@@ -890,7 +1054,7 @@ class Xt6502
         for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1) {
             IRFunc* fn = (IRFunc*)m.funcs().get(f);
             if (fn.blocks().count() == (u32)0) continue;
-            if (fn == entry || mustStayUnbanked(fn.name())) {
+            if (fn == entry || mustStayUnbanked(fn.name()) || keptInMain(fn.name())) {
                 map.set((Hashable*)fn.name(), (Object*)Number.withU32((u32)0));
                 continue;
             }
@@ -997,6 +1161,32 @@ class Xt6502
             total = total + (u32)3;                                     // symbol → absolute
         }
         return total;
+    }
+
+    // The instructions in rendered text: every line that is not blank, a
+    // comment, a bare label or a directive.
+    u32 asmInsnCount(String* text)
+    {
+        u32 n = (u32)0;
+        Array* lines = text.splitOnByte((u8)'\n');
+        for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1) {
+            String* line = ((String*)lines.get(i)).trimmed();
+            if (line.byteLength() == (u32)0 || line.hasPrefix(String.withCString(";"))) continue;
+            u32 sc = line.byteIndexOf(String.withCString(";"));
+            if (sc != (u32)$FFFF_FFFF) {
+                line = line.substringBytes((u32)0, sc).trimmed();
+                if (line.byteLength() == (u32)0) continue;
+            }
+            if (line.hasSuffix(String.withCString(":"))) continue;
+            u32 colon = line.byteIndexOf(String.withCString(":"));
+            if (colon != (u32)$FFFF_FFFF) {
+                line = line.substringFromByte(colon + (u32)1).trimmed();
+                if (line.byteLength() == (u32)0) continue;
+            }
+            if (line.hasPrefix(String.withCString("."))) continue;
+            n = n + (u32)1;
+        }
+        return n;
     }
 
     static bool isBranchMnemonic(String* m)
@@ -1187,6 +1377,18 @@ class Xt6502
         _usesSoftStack = false;
         _frameOffsets = new Map();
         _frameLocalsSize = (u32)0;
+        // The calling convention: `:xtcStack` / `:hwStack` on the function,
+        // else the --xtc-stack default. An interrupt handler keeps its shape.
+        _xtcStack = !isIrq(fn) && !isVbi(fn)
+            && (symbolAttr(fn.name(), String.withCString("xtcstack"))
+                || (_xtcStackDefault && !symbolAttr(fn.name(), String.withCString("hwstack"))));
+        _frameLocalsBase = _xtcStack ? (u32)1 : (u32)7;
+        _softFrameHeader = _xtcStack ? (u32)8 : (u32)2;
+        if (_xtcStack) {
+            if (_layout.stackEnd() == (u32)0)
+                { unsupported(String.withCString("xtcstack:nostackregion")); return; }
+            _usesSoftStack = true;
+        }
         resetZp();
         _isLeaf = functionIsLeaf(fn);
         Array* pinned = collectPinned(fn);
@@ -1202,6 +1404,25 @@ class Xt6502
     }
 
     bool _isLeaf;
+
+    // The xtc-stack calling convention (`:xtcStack`, or `--xtc-stack` on a
+    // function without `:hwStack`): the return address and the registers PSH
+    // would save go into the software-stack frame instead. The prologue pulls
+    // the return address off the hardware stack, so the hardware frame holds
+    // only the SP-frame locals, at +1..+N with no guard byte or saved
+    // registers, and the parameters start at +N+1. The software frame's header
+    // grows from the caller's FP (2 bytes) to FP, return address, P, A, X and
+    // Y (8 bytes).
+    bool _xtcStack;
+    u32  _frameLocalsBase;      // 7, or 1 under the xtc-stack convention
+    u32  _softFrameHeader;      // 2, or 8 under the xtc-stack convention
+
+    // The SP-relative offset of the first parameter byte once the prologue
+    // has run: +N+10 after PSH #N, +N+1 under the xtc-stack convention.
+    u32 paramBase(void)
+    {
+        return _xtcStack ? _spFrameSize + (u32)1 : _spFrameSize + (u32)10;
+    }
 
     // A value must stay in ADDRESSABLE storage — zero page or a spill slot,
     // never the hidden hardware stack — as soon as its address is ever formed.
@@ -1291,7 +1512,7 @@ class Xt6502
         u32 user = n;
         if (n > (u32)0 && isMemTy(((IRValue*)fn.params().get(n - (u32)1)).ty()))
             user = n - (u32)1;
-        u32 off = _spFrameSize + (u32)10;
+        u32 off = paramBase();
         for (u32 i = (u32)0; i < user; i = i + (u32)1) {
             IRValue* p = (IRValue*)fn.params().get(i);
             u32 w = byteWidth(p.ty());
@@ -1415,10 +1636,66 @@ class Xt6502
             _out.appendCString("    PHA\n    TXA\n    PHA\n    TYA\n    PHA\n");
             return;
         }
-        _out.appendFormat("    PSH #%lu\n", _spFrameSize);
+        if (_xtcStack) emitXtcStackPrologue();
+        else _out.appendFormat("    PSH #%lu\n", _spFrameSize);
         emitEntryArgZero(fn);
         emitParamSpill(fn);
-        emitSoftStackPush();
+        if (!_xtcStack) emitSoftStackPush();
+    }
+
+    // The xtc-stack prologue. Where PSH #N keeps the registers and the return
+    // address on the hardware stack, this moves them into a frame on the
+    // software stack:
+    //   FP+0,+1  caller's FP      FP+2,+3  return address (hi, lo)
+    //   FP+4     P   FP+5 A   FP+6 X   FP+7 Y      FP+8..  spilled locals
+    // P, A, X and Y are pushed first so they reach the frame unchanged, then
+    // pulled with the return address beneath them. The hardware stack then
+    // holds only the N SP-frame local bytes, allocated with ADD SP, and the
+    // arguments the caller pushed.
+    void emitXtcStackPrologue(void)
+    {
+        _out.appendCString("    ; --- xtc-stack frame push: return address and registers ---\n");
+        _out.appendCString("    PHP\n    PHA\n    TXA\n    PHA\n    TYA\n    PHA\n");
+        _out.appendCString("    LDY #$07\n");
+        // Y, X, A, P, return address lo, return address hi: FP+7 down to FP+2.
+        for (u32 k = (u32)0; k < (u32)6; k = k + (u32)1) {
+            if (k > (u32)0) _out.appendCString("    DEY\n");
+            _out.appendCString("    PLA\n    STA ($8A),Y\n");
+        }
+        _out.appendCString("    DEY\n    LDA $8D\n    STA ($8A),Y\n");   // caller FP hi
+        _out.appendCString("    DEY\n    LDA $8C\n    STA ($8A),Y\n");   // caller FP lo
+        u32 total = _softFrameHeader + _frameLocalsSize;
+        _out.appendCString("    LDA $8A\n    STA $8C\n");                 // FP = SSP
+        _out.appendCString("    LDA $8B\n    STA $8D\n");
+        _out.appendCString("    CLC\n");                                  // SSP += total
+        _out.appendFormat("    LDA $8A\n    ADC #$%s\n    STA $8A\n",
+                          hex2(total & (u32)$FF).cString());
+        _out.appendFormat("    LDA $8B\n    ADC #$%s\n    STA $8B\n",
+                          hex2((total >> (u32)8) & (u32)$FF).cString());
+        if (_spFrameSize > (u32)0)
+            _out.appendFormat("    ADD SP, #-%lu\n", _spFrameSize);
+    }
+
+    // The matching epilogue, run once the return value is staged in $B0..:
+    // free the SP-frame locals, push the return address back with the saved
+    // registers above it, drop the software frame (SSP = FP, FP = the caller's
+    // FP), then pull Y, X, A and P. The caller emits the result and the RTS.
+    void emitXtcStackEpilogue(void)
+    {
+        if (_spFrameSize > (u32)0)
+            _out.appendFormat("    ADD SP, #%lu\n", _spFrameSize);
+        _out.appendCString("    ; --- xtc-stack frame pop: return address and registers ---\n");
+        _out.appendCString("    LDY #$02\n");
+        // Return address hi, lo, then P, A, X, Y: FP+2 up to FP+7.
+        for (u32 k = (u32)0; k < (u32)6; k = k + (u32)1) {
+            if (k > (u32)0) _out.appendCString("    INY\n");
+            _out.appendCString("    LDA ($8C),Y\n    PHA\n");
+        }
+        _out.appendCString("    LDA $8C\n    STA $8A\n");                 // SSP = FP
+        _out.appendCString("    LDA $8D\n    STA $8B\n");
+        _out.appendCString("    LDY #$01\n    LDA ($8A),Y\n    STA $8D\n"); // FP = caller FP
+        _out.appendCString("    DEY\n    LDA ($8A),Y\n    STA $8C\n");
+        _out.appendCString("    PLA\n    TAY\n    PLA\n    TAX\n    PLA\n    PLP\n");
     }
 
     // The entry function is reached from the startup code, which pushes
@@ -1434,7 +1711,7 @@ class Xt6502
         if (!fn.name().equals(String.withCString("main"))) return;
         u32 user = userParamCount(fn);
         if (user == (u32)0) return;
-        u32 off = (u32)10 + _spFrameSize;
+        u32 off = paramBase();
         u32 end = off;
         for (u32 i = (u32)0; i < user; i = i + (u32)1)
             end = end + byteWidth(((IRValue*)fn.params().get(i)).ty());
@@ -1451,7 +1728,7 @@ class Xt6502
     void emitParamSpill(IRFunc* fn)
     {
         u32 user = userParamCount(fn);
-        u32 off = (u32)10 + _spFrameSize;
+        u32 off = paramBase();
         for (u32 i = (u32)0; i < user; i = i + (u32)1) {
             IRValue* p = (IRValue*)fn.params().get(i);
             u32 w = byteWidth(p.ty());
@@ -1542,6 +1819,17 @@ class Xt6502
 
     bool isIrq(IRFunc* fn) { return symbolFlag(fn.name(), String.withCString("irq")); }
     bool isVbi(IRFunc* fn) { return symbolFlag(fn.name(), String.withCString("vbi")); }
+
+    // A generically carried symbol attribute — `xtcstack`, `hwstack`.
+    bool symbolAttr(String* name, String* key)
+    {
+        if (_m == (IRModule*)0) return false;
+        for (u32 i = (u32)0; i < _m.syms().count(); i = i + (u32)1) {
+            IRSymbol* s = (IRSymbol*)_m.syms().get(i);
+            if (s.name().equals(name)) return s.attr(key);
+        }
+        return false;
+    }
 
     bool symbolFlag(String* name, String* which)
     {
@@ -1859,9 +2147,11 @@ class Xt6502
             Object* fo = _frameOffsets.get((Hashable*)op.val());
             Object* sp = _spillLabel.get((Hashable*)op.val());
             if (fo != (Object*)0) {
-                // In the software-stack frame: address = FP + 2 + offset, the
-                // +2 skipping the caller FP saved at the frame base.
-                u32 disp = (u32)2 + ((Number*)fo).asU32();
+                // In the software-stack frame: address = FP + header + offset,
+                // the header being the caller FP saved at the frame base (and,
+                // under the xtc-stack convention, the return address and the
+                // registers after it).
+                u32 disp = _softFrameHeader + ((Number*)fo).asU32();
                 _out.appendCString("    CLC\n");
                 _out.appendFormat("    LDA $8C\n    ADC #$%s\n", hex2(disp & (u32)$FF).cString());
                 storeAToValue(n.res(), (u32)0);
@@ -3194,9 +3484,10 @@ class Xt6502
         // PLL #N mirrors the prologue's PSH #N (SP += N+7, guard byte
         // included); without it SP is left low and RTS returns to garbage.
         // The :irq / :vbi shapes skipped the PSH and pop by hand below.
-        if (!isIrq(_fn) && !isVbi(_fn))
+        if (_xtcStack) emitXtcStackEpilogue();
+        else if (!isIrq(_fn) && !isVbi(_fn))
             _out.appendFormat("    PLL #%lu\n", _spFrameSize);
-        emitSoftStackPop();
+        if (!_xtcStack) emitSoftStackPop();
         if (hasValue) {
             if (isFloat || isAgg || isWideScalar) {
                 // already staged in the $B0.. mailbox

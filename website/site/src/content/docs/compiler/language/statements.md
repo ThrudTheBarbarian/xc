@@ -377,7 +377,7 @@ i16 main(u8 numArgs, string args[]) {
 }
 ```
 
-On xt6502, when `main` returns the program stops at a `BRK`, and `xcc-sim-6502` exits with `main`'s return value as its status.
+On xt6502, when `main` returns the program returns to the loader (DOS) with `main`'s value in A, and `xcc-sim-6502` exits with that value as its status. `-Q loop` makes the program jump to itself instead; see [`-Q`](/compiler/usage/cli/#runtime-behaviour).
 
 ## Worked example
 
