@@ -218,7 +218,11 @@ class OptProfile
         // keep it off a host back end. matrix_mul was emitting 32 copies of
         // `lea rax, [rbp-4112]`, one per unrolled copy, each spilled to its
         // own frame slot: 3.79x off clang -> 2.06x with them deduped.
-        if (t.equals(String.withCString("x86_64")))
+        // win64 is the same back end and the reference runs it under the
+        // x86-64 profile, so it takes this too. Leaving it out also turned off
+        // the cross-block CSE that reads the same knob, and every win64 build
+        // differed from the reference (bug 251).
+        if (t.equals(String.withCString("x86_64")) || t.equals(String.withCString("win64")))
             p._hoistLocalAddr = true;
         // wasm32: modest caps between the 6502's 4/8 and arm64's 32/64 —
         // code size is download size (XTIRWasm32TargetProfile).

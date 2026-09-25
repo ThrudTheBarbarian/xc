@@ -12280,6 +12280,12 @@ class ClassInfo
                 // `B$init` directly — the vtable is a different question.
                 if (m.hasFlag((u32)NF_SYNTH))
                     continue;
+                // A STATIC method has no receiver and fills no slot. A class
+                // with `static i32 compare(Array*, Array*)` put it in the
+                // Comparable slot, where a call through the protocol would
+                // have passed the object as its first argument (bug 251).
+                if (m.hasFlag((u32)NF_STATIC))
+                    continue;
                 if (want != 0 && paramsMatch(m, want))
                     return methodSymbolName(c, m);
                 if (fallback == 0)
