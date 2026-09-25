@@ -17,19 +17,50 @@ the machine it is running on, finds the standard library relative to its own
 binary, and optimises at `-O3`. A simple program needs nothing else.
 
 ```bash
-xcc [options] <input.xc> [<input2.xc> …]
+xcc [options] <input.xc>
 ```
+
+## One source file per invocation
+
+`xcc` compiles one source file at a time. A second `.xc` on the command line is an
+error:
+
+```
+xcc: error: multi-file inputs not supported on the new-IR path yet
+```
+
+To build a program from several source files, compile each one to an object with
+`-c`, then link the objects in a separate invocation:
+
+```bash
+xcc -c -o main.o main.xc
+xcc -c -o util.o util.xc
+xcc -o prog main.o util.o
+```
+
+Objects (`.o`) and archives (`.a`) may be named together on the link line, but not
+alongside a source file. `-c` is available on `arm64` (including `ios` and
+`ios-sim`), `x86_64`, `win64` and `arm9`. On `6502`, `m68k` and `wasm32` a program
+is compiled from one file; use `#include` to pull in the rest of its source.
+
+## Two drivers
+
+The `xcc` in the download is the self-hosted compiler. Some flags on this page are
+not yet ported to it, and `xcc` rejects them with *unrecognised option*. Those
+flags are marked **`xcc-bootstrap` only** below. `xcc-bootstrap` is the compiler
+`xcc` was built with; it is installed in the same `bin` directory and takes the
+same command line, so a build that needs one of these flags can call it instead.
 
 ## Inputs and outputs
 
 | Flag | Effect |
 |------|--------|
-| `-o <path>`, `--output <path>` | Output file. On a native target this is a runnable executable unless the path ends in `.s` (assembly) or `.o` (object). On 6502 and m68k the extension picks the container (see below). |
+| `-o <path>` | Output file. On a native target this is a runnable executable unless the path ends in `.s` (assembly) or `.o` (object). On 6502 and m68k the extension picks the container (see below). The long form `--output` is `xcc-bootstrap` only. |
 | `-c` | Compile and assemble to a relocatable object (`.o`), but do not link. |
-| `-a`, `--assemble-only` | Stop after producing assembly; don't assemble or link. |
-| `-E <path>`, `--preprocessed <path>` | Write the preprocessed source to `<path>` and continue. Shows what the lexer sees. |
-| `-I <path>`, `--include <path>` | Add an include-search path. Repeatable. |
-| `-D <name>[=<value>]` | Define a preprocessor symbol. `-DDEBUG` is `#define DEBUG 1`; `-DLEVEL=3` defines it as `3`. |
+| `-S` | Stop after code generation and write assembly to the `-o` path. `xcc-bootstrap` uses `-S` for something else (see [Stack control](#stack-control)); its spelling of this is `-a`, `--assemble-only`. |
+| `-E <path>`, `--preprocessed <path>` | Write the preprocessed source to `<path>` and continue. Shows what the lexer sees. **`xcc-bootstrap` only.** |
+| `-I <path>` | Add an include-search path. Repeatable. The long form `--include` is `xcc-bootstrap` only. |
+| `-D <name>[=<value>]` | Define a preprocessor symbol. `-D DEBUG` is `#define DEBUG 1`; `-D LEVEL=3` defines it as `3`. `xcc` takes the name as a separate argument; the joined form `-DDEBUG` is `xcc-bootstrap` only. |
 | `-q`, `--quiet` | Suppress informational output. Errors and warnings still print. |
 | `-V`, `--verbose` | Print the resolved support root and every include path at startup. First stop when *Cannot find include file* fires. |
 | `-v`, `--version` | Print the version and exit. |
@@ -47,7 +78,7 @@ Output containers on the non-native targets:
 
 | Flag | Effect |
 |------|--------|
-| `-A <arch>`, `--arch <arch>` | Target architecture. With no `-A`, `xcc` builds for the machine it is running on. |
+| `-A <arch>` | Target architecture. With no `-A`, `xcc` builds for the machine it is running on. The long form `--arch` is `xcc-bootstrap` only. |
 
 | `-A` | Target | Output |
 |---|---|---|
@@ -58,7 +89,7 @@ Output containers on the non-native targets:
 | `x86_64` | Linux (musl) | ELF; run it |
 | `win64` | Windows | PE/COFF `.exe` |
 | `arm9` | AArch32 / **XTOS** | ELF, or a `.so` (see `--emit-lib`) |
-| `m68k` (`68000`) / `68030` | Motorola 68000/68030 | GEMDOS `.prg`/`.tos`; run under `xcc-sim-68k` |
+| `m68k` | Motorola 68000 | GEMDOS `.prg`/`.tos`; run under `xcc-sim-68k`. The spellings `68000` and `68030` are `xcc-bootstrap` only. |
 | `wasm32` | WebAssembly | `.wasm` / WAT |
 | `6502` | banked **xt6502** | banked 6502 executable (`.xex`); run under `xcc-sim-6502 -m xt` |
 
@@ -75,17 +106,18 @@ linker or `clang`.
 |------|--------|
 | `-l<name>` | Link a system library, forwarded to the linker, for example `-lobjc`. |
 | `-framework <F>` | Link a macOS framework, for example `-framework AppKit`. |
-| `-Xlinker <arg>`, `-Wl,<arg>` | Pass an argument to the linker. `$XTC_LDFLAGS` is also appended. |
-| `--self-host` | In-house assemble + link + sign. This is the default; the flag is accepted but has no effect. |
-| `--no-self-host` | Use the `clang` link path instead. |
-| `-fpic`, `-fPIC`, `-mpic` | Position-independent code. Implied by `--emit-lib`; on arm9 it is what produces an `ET_DYN` `.so` rather than a fixed-load ELF. |
+| `-Xlinker <file>` | Link a library or object file named by path. |
+| `-Wl,<file>[,<file>…]` | The same, in the form clang users write. `xcc` links in-house, so a linker *flag* here is an error; `xcc-bootstrap` passes flags on. |
+| `--self-host` | In-house assemble + link + sign. This is the default; the flag is accepted but has no effect. **`xcc-bootstrap` only.** |
+| `--no-self-host` | Use the `clang` link path instead. **`xcc-bootstrap` only.** |
+| `-fpic`, `-fPIC`, `-mpic` | Position-independent code. Implied by `--emit-lib`; on arm9 it is what produces an `ET_DYN` `.so` rather than a fixed-load ELF. The explicit flags are `xcc-bootstrap` only. |
 
 ## Shared libraries
 
 | Flag | Effect |
 |------|--------|
 | `--emit-lib` | Emit a **shared library** instead of an executable, together with a sibling `.xtc.iface` describing the classes, protocols, structs and enums it exports. Implies `-fpic`. |
-| `-L <path>`, `--library-path <path>` | Add a search path for `#import <Lib>`, which resolves to `lib<Lib>.so` and reads its interface (or, for a C library, its DWARF). Repeatable. |
+| `-L <path>` | Add a search path for `#import <Lib>`, which resolves to `lib<Lib>.so` and reads its interface (or, for a C library, its DWARF). Repeatable. The long form `--library-path` is `xcc-bootstrap` only. |
 
 ```bash
 xcc --emit-lib -o libXtg.so xtg.xc      # build the library
@@ -101,12 +133,12 @@ supplies its functions, types and enum constants. See
 
 | Flag | Effect |
 |------|--------|
-| `-H <path>`, `--xcc-home <path>` | Root holding the support tree. Rarely needed, because `xcc` finds it relative to its own binary. See [Install](/compiler/usage/install/). |
-| `-m <layout>`, `--memory-model <layout>` | Load a memory layout (`.lnk`). Searches `<layout>` as a path (appending `.lnk`), then the built-in layout directories. `-m xt` is the banked 6502 map and implies `-A 6502`. There is no default: with neither `-m` nor `-A`, `xcc` targets the host. |
-| `-ll`, `--list-layouts` | List every built-in layout, grouped by platform, and exit. |
-| `-dl`, `--dump-layout` | Print the active layout's memory-map diagram and exit. Use with `-m`. |
-| `-dp`, `--dump-placement` | After codegen, print every function's final placement (main / banked page N / irq / vbi) with per-bank byte usage. |
-| `-du`, `--dump-usage` | After codegen, print a per-segment usage summary for every region and bank in the layout. |
+| `-H <path>` | Root holding the support tree. Rarely needed, because `xcc` finds it relative to its own binary. See [Install](/compiler/usage/install/). |
+| `-m <layout>` | Select a memory layout. `-m xt` is the banked 6502 map and implies `-A 6502`. There is no default: with neither `-m` nor `-A`, `xcc` targets the host. `xcc` accepts the built-in `xt` layouts; loading a `.lnk` file by path, and the long form `--memory-model`, are `xcc-bootstrap` only. |
+| `--list-layouts` | List every built-in layout, grouped by platform, and exit. **`xcc-bootstrap` only.** The short form `-ll` does not work: both drivers read it as `-l l`, a library named `l`. |
+| `-dl`, `--dump-layout` | Print the active layout's memory-map diagram and exit. Use with `-m`. **`xcc-bootstrap` only.** |
+| `-dp`, `--dump-placement` | After codegen, print every function's final placement (main / banked page N / irq / vbi) with per-bank byte usage. **`xcc-bootstrap` only.** |
+| `-du`, `--dump-usage` | After codegen, print a per-segment usage summary for every region and bank in the layout. **`xcc-bootstrap` only.** |
 
 See [Memory models](/compiler/usage/memory-models/).
 
@@ -115,12 +147,12 @@ See [Memory models](/compiler/usage/memory-models/).
 | Flag | Effect |
 |------|--------|
 | `-O0` | No optimisation. A debug aid; the production level is `-O3`. |
-| `-O`, `-O1` | Peephole + register tracking. |
-| `-O2` | Adds const propagation, dead code / dead store elimination, tail-call optimisation, leaf-function inlining, loop unrolling for small trip counts. |
-| `-O3` | **The default.** Adds branch inversion and threading, strength reduction, cross-function dead-code elimination, label cleanup, and on arm64 the NEON auto-vectoriser. |
-| `-Fli <n>`, `--fn-leaf-inline <n>` | Max leaf-function size (instructions) eligible for inlining. Default 100; needs `-O2+`. |
-| `-Flu <n>`, `--fn-loop-unroll <n>` | Auto-unroll counted `for` loops with trip count ≤ `n`. Default 5 at `-O2+`, 0 below. |
-| `-Fmb <n>`, `--fn-min-banked <n>` | Minimum function size (6502 instructions) to be banked. Smaller functions stay in main RAM so their call sites skip the `_xcall` trampoline. Default 0 (off). |
+| `-O1` | Removes unreachable functions. The bare `-O` is `xcc-bootstrap` only. |
+| `-O2` | The full optimiser: inlining, constant folding, dead-code elimination, if-conversion, loop unrolling, vectorisation on `arm64`, `x86_64`, `win64`, `arm9` and `wasm32`, strength reduction, loop-invariant code motion and block layout. |
+| `-O3` | **The default.** Currently the same pipeline as `-O2`. |
+| `-Flu <n>`, `--fn-loop-unroll <n>` | Fully unroll counted loops whose constant trip count is at most `n`. The default depends on the target; see [Optimisation](/compiler/usage/optimization/#-flu--loop-unroll-cap). |
+| `-Fli <n>`, `--fn-leaf-inline <n>` | Max leaf-function size (instructions) eligible for inlining. Default 100; needs `-O2+`. **`xcc-bootstrap` only.** |
+| `-Fmb <n>`, `--fn-min-banked <n>` | Minimum function size (6502 instructions) to be banked. Smaller functions stay in main RAM so their call sites skip the `_xcall` trampoline. Default 0 (off). **`xcc-bootstrap` only.** |
 
 Full discussion on [Optimisation](/compiler/usage/optimization/).
 
@@ -128,11 +160,11 @@ Full discussion on [Optimisation](/compiler/usage/optimization/).
 
 | Flag | Effect |
 |------|--------|
-| `-falloc=bump` | Inline bump allocator. Fast `new`, no `delete`. |
-| `-falloc=heap` | Coalescing free-list allocator; supports `delete`. Default on targets with a dedicated heap region: the `xt` layouts and the native hosts. |
-| `-farc[=on\|off]` | Automatic reference counting. `on` (default) emits retains and releases and rejects manual `retain` / `release`; `off` disables auto-emit and accepts manual lifecycle. |
-| `-fthread-safe-arc` | Force atomic ARC refcounts, so two threads can share an object. |
-| `-fno-thread-safe-arc` | Force plain, non-atomic refcounts. |
+| `-falloc=bump` | Inline bump allocator. Fast `new`, no `delete`. **`xcc-bootstrap` only.** |
+| `-falloc=heap` | Coalescing free-list allocator; supports `delete`. Default on targets with a dedicated heap region: the `xt` layouts and the native hosts. **`xcc-bootstrap` only.** |
+| `-farc[=on\|off]` | Retired. ARC is always on. `xcc-bootstrap` accepts the flag and warns that it does nothing; `xcc` rejects it. |
+| `-fthread-safe-arc` | Force atomic ARC refcounts, so two threads can share an object. **`xcc-bootstrap` only.** |
+| `-fno-thread-safe-arc` | Force plain, non-atomic refcounts. **`xcc-bootstrap` only.** |
 
 Atomic refcounts are decided **per module** and switch on when the module spawns a
 thread. These flags override that choice. See
@@ -141,12 +173,16 @@ thread. These flags override that choice. See
 
 ## Floating point (arm9)
 
+Both flags are `xcc-bootstrap` only.
+
 | Flag | Effect |
 |------|--------|
 | `-mhard-float`, `-mfpu` | Use VFP instructions for `float` and `double`. The default on boards that have it. |
 | `-msoft-float` | Route floating point through the libgcc soft-float helpers instead. |
 
 ## Stack control
+
+These flags are `xcc-bootstrap` only. In `xcc`, `-S` means *stop after code generation* (see [Inputs and outputs](#inputs-and-outputs)).
 
 | Flag | Effect |
 |------|--------|
@@ -155,12 +191,16 @@ thread. These flags override that choice. See
 
 ## Runtime behaviour
 
+`-Q` is `xcc-bootstrap` only.
+
 | Flag | Effect |
 |------|--------|
 | `-Q rts`, `--quit-style rts` | When `main` returns, `RTS` to the caller (DOS). Default. |
 | `-Q loop`, `--quit-style loop` | When `main` returns, spin. For "the program owns the machine" builds where the caller does not expect control back. |
 
 ## Diagnostics
+
+Both flags are `xcc-bootstrap` only.
 
 | Flag | Effect |
 |------|--------|
@@ -172,11 +212,11 @@ thread. These flags override that choice. See
 | Flag | Effect |
 |------|--------|
 | `-flto` | Link-time optimisation: recompile the whole program from its IR as one module. |
-| `-fbounds-check` | Build with subscript bounds checking — see [Checked builds](#checked-builds). Native targets only. |
+| `-fbounds-check` | Build with subscript bounds checking; see [Checked builds](#checked-builds). arm64 only so far. |
 | `--sign <identity.pem>` | Sign the output with a developer identity (iOS/macOS); pair with `--sign-entitlements <plist>`. See also the standalone `xcc-sign`. |
-| `--emit-apk` | On `-A android`, package a signed `.apk` (with `--with-dex`, `--with-lib`, `--lib-name`, `--needed`). |
-| `--emit-iface` | Emit the `.xtc.iface` module interface alongside the object. |
-| `-fmalloc=system\|mimalloc` | Choose the native heap backend. |
+| `--emit-apk` | On `-A android`, package a signed `.apk`. `--sign-key <path>` names the signing key. The packaging options `--with-dex`, `--with-lib`, `--lib-name` and `--needed` are `xcc-bootstrap` only. |
+| `--emit-iface` | Write the module interface (the `.xtc.iface` description) to the `-o` path, or to standard output with no `-o`, and stop. `-c` and `--emit-lib` produce the interface as part of their output without this flag. |
+| `-fmalloc=system\|mimalloc` | Choose the native heap backend. **`xcc-bootstrap` only.** |
 
 `xcc --help` prints the complete flag list.
 
@@ -230,6 +270,15 @@ Suppress a category with `-Wno-<category>`. All are on by default.
 `xcc --help` prints the full category list, including any checks added after this
 page.
 
+### Static analysis
+
+`-Wanalyze` turns on a further set of checks that are off by default:
+
+- a condition that is always true or always false
+- a value that is overwritten before anything reads it
+- a local that is never used (prefix its name with `_` to say that is intended)
+- code that can never run
+
 ## Library versioning
 
 | Flag | Effect |
@@ -240,9 +289,9 @@ page.
 
 | Variable | Effect |
 |---|---|
-| `XCC_HOME` | Override the support-tree search. `-H` beats it. |
-| `XTC_HOME` | The older spelling, also read. |
-| `XTC_LDFLAGS` | Extra arguments appended to the native link. |
+| `XCC_HOME` | Override the support-tree search. `-H` beats it. Read by `xcc-bootstrap` only; `xcc` uses `-H`. |
+| `XTC_HOME` | The older spelling, also read by `xcc-bootstrap`. |
+| `XTC_LDFLAGS` | Extra arguments appended to the native link. `xcc-bootstrap` only. |
 
 ## Combined examples
 
@@ -263,12 +312,18 @@ xcc --emit-lib -o libgfx.so gfx.xc
 xcc -L . -o app app.xc
 
 # Inspect the generated assembly rather than linking
-xcc -a -o app.s app.xc
+xcc -o app.s app.xc
 
-# See the 6502 memory map, and where functions ended up
-xcc -dl -m xt
-xcc -A 6502 -dp -o app.xex app.xc
+# Build from two source files: compile each, then link
+xcc -c -o main.o main.xc
+xcc -c -o util.o util.xc
+xcc -o app main.o util.o
 
-# Manual lifecycle, debug build, one warning silenced
-xcc -farc=off -O0 -DDEBUG -Wno-escape -o app app.xc
+# Debug build, one symbol defined, one warning silenced
+xcc -O0 -D DEBUG -Wno-escape -o app app.xc
+
+# Flags xcc does not take yet go to xcc-bootstrap: the 6502 memory map,
+# and where functions ended up
+xcc-bootstrap -dl -m xt
+xcc-bootstrap -A 6502 -dp -o app.xex app.xc
 ```

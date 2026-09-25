@@ -54,12 +54,9 @@ frame is cheap.
 MyClass* mine = new MyClass();
 ```
 
-This allocates on the heap and returns a pointer to a block whose **reference count is 1**, in every `-farc` mode. The mode decides who balances the reference:
+This allocates on the heap and returns a pointer to a block whose **reference count is 1**. The variable holding the pointer owns that reference. When its scope exits, the compiler emits a `release`. If that release drops the refcount to zero, the block's `dealloc()` runs and the bytes return to the free list. You write `new MyClass()` and ARC handles the lifecycle.
 
-- **Under default ARC** (`-farc=on`, the default): the variable holding the pointer owns the reference. When its scope exits, the compiler emits a `release`. If that release drops the refcount to zero, the block's `dealloc()` runs and the bytes return to the free list. You write `new MyClass()` and the lifecycle is handled for you.
-- **Under `-farc=off`**: the compiler emits **no automatic releases**. The variable still receives the `+1` from `new`, and you must call `release ptr;` (or its alias `delete ptr;`) before the last reference disappears, or the block leaks.
-
-In both modes, use this form when the instance must outlive the scope that created it. The full lifecycle is on [Heap, ARC & weak refs](/compiler/language/memory/).
+Use this form when the instance must outlive the scope that created it. The full lifecycle is on [Heap, ARC & weak refs](/compiler/language/memory/).
 
 ### Parameterised construction
 

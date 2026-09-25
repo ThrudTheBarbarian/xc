@@ -16,24 +16,20 @@ standard library is found relative to the `xcc` binary, and the optimiser runs
 at `-O3`. Cross-compiling adds one flag:
 
 ```bash
-xcc -A 6502 -Q loop -o game.xex game.xc
+xcc -A 6502 -o game.xex game.xc
 ```
 
-```
-xcc: optimised -O3 (9877 → 9698 instructions)
-xcc: compiled 'game.xc' -> 'game.xex' (0 warnings, 0 errors)
-xcc-as: assembled -> 'game.xex' (19975 bytes, 1 segments)
-```
+A successful build prints nothing on most targets. Errors and warnings go to the terminal with the source line and a caret under the position. A `wasm32` build prints one line naming the module and its loader; `-q` silences it.
 
-By default the compiler prints a short summary of what the optimiser did, what was compiled, and what the assembler emitted. `-q` silences this informational output for build scripts.
+`xcc` compiles one source file per invocation. A program split across several files is built with `-c` and a separate link step; see [CLI → One source file per invocation](/compiler/usage/cli/#one-source-file-per-invocation).
 
 ## What's where
 
 - **[Install](/compiler/usage/install/)**: where `make install` puts things, and how `xcc` locates its own libraries. Read this first.
-- **[CLI flag reference](/compiler/usage/cli/)**: every command-line option, grouped by purpose. Start here to look up a specific flag.
-- **[Optimisation](/compiler/usage/optimization/)**: what each `-O` level adds, the tuning knobs (`-Fli`, `-Flu`), and how to read the optimiser's before/after instruction count.
+- **[CLI flag reference](/compiler/usage/cli/)**: every command-line option, grouped by purpose, and which ones need `xcc-bootstrap`. Start here to look up a specific flag.
+- **[Optimisation](/compiler/usage/optimization/)**: what each `-O` level does, the `-Flu` unroll cap, and which targets vectorise.
 - **[Memory models](/compiler/usage/memory-models/)**: the `xt6502` map, with two bank windows, the 4 KB hardware stack, and the on-demand banked heap. 6502 only; the native targets have no layout to choose.
-- **[Allocator & ARC](/compiler/usage/allocator-arc/)**: `-falloc=bump` vs `-falloc=heap`, and the `-farc=on|off` choice between automatic and manual reference counting.
+- **[Allocator & ARC](/compiler/usage/allocator-arc/)**: `-falloc=bump` vs `-falloc=heap`, and how automatic reference counting works with each.
 - **[Linker scripts (.lnk)](/compiler/usage/linker-scripts/)**: the file format that defines a memory model. Customise an existing layout or write a new one for non-standard hardware.
 
 ## What's not in this section
@@ -63,9 +59,11 @@ Asking for `.asm` or `.s` stops the pipeline after code generation, which lets y
 `xcc` locates its support tree (standard library, linker scripts, runtime asm) by probing each of these roots for `lib/xc`, then `xc`, then `support`:
 
 ```
--H <path> > $XCC_HOME > $XTC_HOME > the directory holding xcc, and its parent
-          > cwd > ~/xcc > ~/xtc > /opt/xcc/<version> > /opt/xcc
+-H <path> > the directory holding xcc, and its parent
+          > cwd > /opt/xcc/<version> > /opt/xcc
           > /usr/local/xcc > /usr/local/xtc > /opt/xtc
 ```
 
-The binary-relative step makes an install self-locating, so in normal use you set nothing. `-H` (or `$XCC_HOME`) points a specific compiler at a specific tree, most often when running one from a source checkout. `-V` prints which root was chosen. Details are on [Install](/compiler/usage/install/).
+`xcc-bootstrap` also reads `$XCC_HOME` and `$XTC_HOME` after `-H`, and `~/xcc` and `~/xtc` after the working directory.
+
+The binary-relative step makes an install self-locating, so in normal use you set nothing. `-H` points a specific compiler at a specific tree, most often when running one from a source checkout. `-V` prints the include paths under the root that was chosen. Details are on [Install](/compiler/usage/install/).

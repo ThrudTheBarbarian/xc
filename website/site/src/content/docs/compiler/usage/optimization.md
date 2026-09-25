@@ -1,99 +1,88 @@
 ---
 title: Optimisation
-description: What -O0 through -O3 add, the tuning knobs (-Fli, -Flu), and how to read the optimiser's summary line.
+description: What -O0 through -O3 do, the -Flu unroll cap, which targets vectorise, and how loops are aligned on x86-64.
 ---
 
-xcc has four optimisation levels and two tuning knobs for the most expensive transforms (leaf inlining and loop unrolling). **The default is `-O3`.** It is the production level and the level the fixture corpus is validated at. The lower levels are debugging aids: use `-O0` when you want the generated code to follow the source line for line.
+xcc has four optimisation levels. **The default is `-O3`.** It is the production level and the level the fixture corpus is validated at. The lower levels are debugging aids: use `-O0` when you want the generated code to follow the source line for line.
 
 ```bash
-xcc -O3 game.xc -o game.xex
+xcc -O0 -o game game.xc
 ```
 
-```
-xcc: optimised -O3 (9877 → 9698 instructions)
-```
-
-The before/after instruction count is printed when any optimisation pass changed the code. Use it to check that a flag had the effect you expect.
+Optimisation happens on the compiler's intermediate representation, before code generation, so the same passes run for every target. What differs per target is a profile of limits and switches, described [below](#per-target-settings).
 
 ## The four levels
 
-### `-O0` — no optimisation
+### `-O0`: no optimisation
 
-Straight code generation. Every variable gets a stable home, every expression evaluates left to right with intermediate stores, and every JSR / RTS pair is emitted. The output is **predictable**: it corresponds closely to the source, which makes single-stepping in `xcc-sim-6502` and reasoning about code paths easier. Use it during development and for asm debugging.
+Straight code generation. Every variable gets a stable home and every expression is evaluated as written. The output corresponds closely to the source, which makes single-stepping and reasoning about code paths easier.
 
-### `-O1` (`-O`) — peephole + register tracking
+### `-O1`: unreachable functions removed
 
-Two cheap, local transforms:
+Functions that nothing calls are dropped from the program. The code inside each function is left as `-O0` produces it.
 
-- **Peephole.** Adjacent instruction patterns are replaced with shorter equivalents. For example, `LDA #0; STA x` followed by `LDA x` collapses, and `LDX foo; CPX #0` collapses to a flag-set form. All changes are local and can be inspected in the listing.
-- **Register tracking.** The code generator models A / X / Y across instructions, so a value already in the right register is not reloaded.
+### `-O2`: the optimiser
 
-Compile time is about the same as `-O0`, so there is little reason to ship below `-O1`.
+The full pass pipeline, including:
 
-### `-O2` — the heavy lifters
+- **Inlining** of small functions at their call sites.
+- **Constant folding** and **dead-code elimination**.
+- **If-conversion**: a short diamond becomes a select instead of a branch.
+- **Jump threading** and **tail-recursion elimination**.
+- **Promotion to registers**: locals and struct fields that do not need a memory home are kept in SSA values.
+- **Loop unrolling**: counted loops with a small constant trip count are unrolled fully. See [`-Flu`](#-flu--loop-unroll-cap).
+- **Vectorisation** of simple loops on the targets that support it.
+- **Strength reduction**, **loop-invariant code motion** and **loop rotation**.
+- **Block layout**, so the hot path falls through.
 
-Adds, on top of `-O1`:
+### `-O3`: the default
 
-- **Constant propagation**: replace reads of compile-time-known values with the immediate value.
-- **Dead code elimination**: drop blocks that are statically unreachable.
-- **Dead store elimination**: drop writes to a variable whose later reads can be proven to come from a later write.
-- **Tail-call optimisation**: convert a `JSR` immediately followed by `RTS` into a `JMP`, saving a hardware-stack slot per recursion depth.
-- **Leaf-function inlining**: expand small leaf functions at the call site instead of emitting a `JSR`. Tunable via [`-Fli`](#-fli--leaf-inline-cap).
-- **Loop unrolling**: unroll `for` loops with small constant trip counts. Tunable via [`-Flu`](#-flu--loop-unroll-cap).
+Currently the same pipeline as `-O2`. It is kept as a separate level so that transforms that trade size for speed have a place to go.
 
-`-O2` is the recommended baseline for shipped programs.
-
-### `-O3` — aggressive (the default)
-
-Adds, on top of `-O2`:
-
-- **Branch inversion**: flip a comparison and its branch when that produces shorter code (for example, to avoid a `JMP` past a body).
-- **Branch threading**: when a branch targets an unconditional branch, retarget the original branch to the final destination.
-- **Strength reduction**: replace expensive operations with cheaper ones. Multiplying by a power of two becomes a shift, a constant divide becomes a multiply-and-shift, and array index multiplication folds when the element size is a power of two.
-- **Cross-function DCE**: remove functions that are statically never reached. The reachability analysis traces every call edge in the program.
-- **Label cleanup**: collapse redundant labels and remove labels that nothing branches to.
-
-`-O3` produces smaller and faster binaries for most programs, but the code is further from the source. Set breakpoints by line number rather than by reading the listing.
-
-## Tuning knobs
-
-### `-Fli` — leaf inline cap
+## `-Flu` — loop-unroll cap
 
 ```bash
-xcc -O2 -Fli 200 app.xc -o app.xex
+xcc -Flu 8 -o app app.xc
 ```
 
-Maximum leaf-function size, **in 6502 instructions**, that the inliner expands at a call site. Default: 100. Requires `-O2` or higher.
+Fully unroll counted loops whose trip count is known at compile time and is at most `<n>`. The unroller runs at `-O2` and above. Set `-Flu 0` to disable it. Without the flag each target uses its own cap:
 
-A leaf function calls no other functions. The inliner targets leaf functions because the inlined copy needs no frame, does not touch the stack, and folds completely into the caller. A larger cap inlines more, which lowers cycle counts and raises byte counts. Lower it if the binary is close to a memory budget.
+| Target | Default cap |
+|---|---|
+| `xt6502` | 4 |
+| `wasm32` | 8 |
+| `m68k`, `arm9` | 16 |
+| `arm64`, `x86_64`, `win64` | 32 |
 
-### `-Flu` — loop-unroll cap
+The cap trades binary size for cycle count. A loop with 12 iterations unrolls into 12 copies of the body: the compare, branch and step disappear, and the body's code is multiplied by 12. A separate limit on body size keeps a large body from being unrolled even when the trip count fits.
 
-```bash
-xcc -O2 -Flu 16 app.xc -o app.xex
-```
+To unroll a specific loop past the cap, use the `:unroll` annotation. See [Statements & control flow → Manual unrolling](/compiler/language/statements/#manual-unrolling-unroll).
 
-Auto-unroll counted `for` loops whose trip count is **≤ `<n>`** at compile time. Default: 5 at `-O2` and above, 0 below. Set to 0 to disable.
+`xcc-bootstrap` also takes `-Fli <n>`, the leaf-function inlining cap, and `-Fmb <n>`, the 6502 banking threshold. `xcc` does not accept them yet.
 
-The threshold trades binary size for cycle count. A loop with 12 iterations unrolls into 12 copies of the body. The loop overhead (compare / branch / step) disappears, but the body's code bytes are multiplied by 12. The default of 5 handles small loops without growing the binary much.
+## Per-target settings
 
-To unroll a specific loop regardless of the cap, use the `:unroll` annotation. See [Statements & control flow → Manual unrolling](/compiler/language/statements/#manual-unrolling-unroll).
+| Target | Vectorises loops | Unrolls loops with a run-time trip count |
+|---|---|---|
+| `arm64` | yes (NEON) | yes |
+| `x86_64`, `win64` | yes (SSE) | yes |
+| `arm9` | yes (NEON) | yes |
+| `wasm32` | yes (SIMD128) | yes |
+| `m68k` | no | no |
+| `xt6502` | no | no |
 
-## How to read "9877 → 9698 instructions"
+A loop whose trip count is only known at run time is unrolled four times, with each copy of the body checking the exit condition, so no separate remainder loop is needed.
 
-The summary line shows the **6502-instruction** count before and after the optimiser ran on the program's intermediate representation. It approximates binary size: most 6502 instructions are 2 or 3 bytes, so the byte-count change tracks the instruction-count change closely.
-
-A small change at `-O2` or `-O3` does not mean the optimiser did nothing. Register tracking and peephole at `-O1` may have done most of the work, leaving little for the higher levels. A program that is already tight at `-O1` often gains ≤2 % at `-O3`; a program with redundant loads and unreachable branches can shrink 15–20 %.
+On `x86_64` and `win64` the head of every loop is aligned to a 32-byte boundary. On `x86_64` the ELF `.text` section starts on a 64-byte boundary, so the alignment holds in the linked program and a loop's position within the processor's fetch window does not depend on how much code precedes it.
 
 ## Choosing a level
 
 | When | Pick |
 |------|------|
-| Active development / asm-level debugging | `-O0` |
-| CI builds, smoke tests | `-O1` |
-| Default ship build | `-O2` |
-| Small-binary / cycle-critical | `-O3` (and consider raising `-Fli` cautiously) |
-| Profiling / measuring real overhead | match the ship build (`-O2` or `-O3`); `-O0` numbers don't predict shipped behaviour |
+| Active development / single-stepping | `-O0` |
+| Debugging with smaller binaries | `-O1` |
+| Shipped builds | `-O3` (the default) |
+| Profiling / measuring real overhead | the ship build; `-O0` numbers don't predict shipped behaviour |
 
 ## Caveat: `volatile` and inline assembly
 

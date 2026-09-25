@@ -19,7 +19,7 @@ When it finishes, `make install` prints the directory to add to `PATH`.
 On macOS and Linux the root is `/opt/xcc/$(VERSION)`:
 
 ```
-/opt/xcc/0.6/
+/opt/xcc/0.61/
 ├── bin/                 xcc and everything it runs
 │   ├── xcc              the driver — this is the one you invoke
 │   ├── xcc-fe           front end (source → IR text)
@@ -65,14 +65,15 @@ On startup `xcc` looks for a **support tree** (the directory holding `generic/`,
 roots in turn for `lib/xc`, then `xc`, then `support`:
 
 1. `-H <path>`
-2. `$XCC_HOME` (`$XTC_HOME` is also read, for older scripts)
-3. **the directory holding the `xcc` binary, and its parent**
-4. the current directory
-5. `~/xcc`, `~/xtc`
-6. `/opt/xcc/<version>`, `/opt/xcc`, `/usr/local/xcc`, `/usr/local/xtc`, `/opt/xtc`
+2. **the directory holding the `xcc` binary, and its parent**
+3. the current directory
+4. `/opt/xcc/<version>`, `/opt/xcc`, `/usr/local/xcc`, `/usr/local/xtc`, `/opt/xtc`
 
-Step 3 is what lets a plain `xcc -o prog prog.xc` work. An installed
-`/opt/xcc/0.6/bin/xcc` goes up one level and finds `/opt/xcc/0.6/lib/xc`; a
+`xcc-bootstrap` also reads `$XCC_HOME` (and the older `$XTC_HOME`) after `-H`, and
+`~/xcc` and `~/xtc` after the current directory.
+
+Step 2 is what lets a plain `xcc -o prog prog.xc` work. An installed
+`/opt/xcc/0.61/bin/xcc` goes up one level and finds `/opt/xcc/0.61/lib/xc`; a
 Windows `xcc.exe` finds `xc\` without going up. Neither needs a flag or an
 environment variable, and two installed versions never see each other's
 libraries.
@@ -82,7 +83,7 @@ from a source checkout. It finds the repository's `support/` directory the same
 way.
 
 If a build fails with *Cannot find include file*, `-V` prints the resolved
-support root and every include path, which usually shows which of the six roots
+support root and every include path, which usually shows which root
 was chosen.
 
 ## Several versions at once
@@ -90,11 +91,11 @@ was chosen.
 The version is part of the path, so several versions can be installed together:
 
 ```bash
-/opt/xcc/0.6/bin/xcc -o prog prog.xc      # explicit
-PATH=/opt/xcc/0.5/bin:$PATH xcc -o prog prog.xc
+/opt/xcc/0.61/bin/xcc -o prog prog.xc      # explicit
+PATH=/opt/xcc/0.6/bin:$PATH xcc -o prog prog.xc
 ```
 
-Each binary resolves its own libraries relative to itself, so a 0.6 compiler
+Each binary resolves its own libraries relative to itself, so a 0.61 compiler
 never picks up an older release's standard library even when both are on `PATH`.
 
 The problem to watch for is a **stale copy earlier in `PATH`**. An old binary in
@@ -122,7 +123,7 @@ SDK is involved.
 the C library out of that file's DWARF, so one extra file has to be reachable.
 
 Either download the [arm9 sysroot archive](/compiler/downloads/) (830 KB), unpack it
-and pass `-L path/to/xcc-arm9-sysroot-0.6`; or set `XTC_ARM9_SYSROOT` in `build.env`
+and pass `-L path/to/xcc-arm9-sysroot-0.61`; or set `XTC_ARM9_SYSROOT` in `build.env`
 to a loader build directory, in which case `make install` copies it into
 `lib/xc/arm9-sysroot/` and `-A arm9` needs no `-L` at all. `make install` reports
 which of the two happened.

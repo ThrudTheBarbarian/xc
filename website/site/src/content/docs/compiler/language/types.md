@@ -154,8 +154,14 @@ u16 local[8];
 u16 n1 = local.length;        // compile-time constant: 8
 
 u16* heap = new u16[64];
-u16 n2 = heap.length;         // 64
+u32 n2 = heap.length;         // 64
 ```
+
+On a heap pointer, `.length` reads the element count from the allocation header.
+Its type is `u32` on `arm64`, `x86_64`, `win64`, `arm9` and `wasm32`, so an array
+of more than 65535 elements reports its full length. On `m68k` the header holds a
+16-bit count and `.length` is `u16`. The same width bounds `for (v in arr)` and
+slice loops over a heap array.
 
 `.length` on a pointer the compiler did not record a count for (one that crossed a
 function boundary, or came from anywhere but `new T[N]`) is a compile error, since
@@ -189,6 +195,33 @@ the difference most likely to surprise a C programmer reading xcc.
 auto-dereferences. Class receivers conventionally use `.`, because a class
 instance is nearly always reached through a pointer, and `sprite.draw()` reads
 better than `sprite->draw()`.
+
+Adding an integer to a pointer steps by elements, as in C. Subtracting two
+pointers gives the number of elements between them, as a signed integer the
+width of a pointer on the target:
+
+```c
+u32  arr[10];
+u32* p = &arr[7];
+u32* q = &arr[2];
+auto d = p - q;               // 5
+u32* r = q + 3;               // &arr[5]
+```
+
+A pointer argument must point at a scalar of the width the parameter declares.
+Passing an `i32*` where an `i64*` is declared would let the callee write eight
+bytes into four, so it is an error:
+
+```c
+void wide(i64* out) { out[0] = (i64)1; }
+
+i32 narrow = 0;
+wide(&narrow);                // error: argument 1 of 'wide' is a i32* where a i64* is declared
+wide((i64*)&narrow);          // accepted: the cast says it is meant
+```
+
+The check compares widths only. `u32*` for `i32*` differs in sign and is accepted,
+as are `void*`, pointers to pointers, and pointers to structs and classes.
 
 A hardware register is a pointer to a fixed address, reached by casting:
 

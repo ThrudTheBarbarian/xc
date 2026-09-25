@@ -135,11 +135,14 @@ Likewise, a comma inside a string argument is part of that argument, not a separ
 
 `#ifdef` / `#ifndef` test for the presence (or absence) of a macro definition. `#if` evaluates a constant integer expression. The chain may include any number of `#elif` clauses and an optional `#else`, terminated by `#endif`.
 
-Macros may be defined on the command line with `-D`:
+Macros may be defined on the command line with `-D`, one name per flag:
 
 ```bash
-xcc app.xc -DENABLE_DOUBLE=0 -DDEBUG -o app.xex
+xcc -D ENABLE_DOUBLE=0 -D DEBUG -o app app.xc
 ```
+
+`xcc` takes the name as a separate argument. `xcc-bootstrap` also accepts the
+joined form, `-DDEBUG`.
 
 ## Predefined macros
 

@@ -10,10 +10,14 @@ The `.lnk` parser understands the `[shadow]` and `[cloaked]` sections described 
 :::
 
 ```bash
-xcc -m ./my-layout.lnk app.xc -o app.xex     # use a custom layout
-xcc -m xt             app.xc -o app.xex      # use a shipped layout by name
-xcc --dump-layout -m xt                       # print a layout's diagram
+xcc-bootstrap -m ./my-layout.lnk app.xc -o app.xex   # use a custom layout
+xcc-bootstrap -m xt app.xc -o app.xex                # use a shipped layout by name
+xcc-bootstrap --dump-layout -m xt                    # print a layout's diagram
 ```
+
+`xcc` always builds 6502 programs against the standard `xt` layout. Loading any
+other layout, and the `--list-layouts` and `--dump-layout` flags, need `xcc-bootstrap`, which
+is installed beside it (see [CLI → Two drivers](/compiler/usage/cli/#two-drivers)).
 
 To support custom hardware (cartridge slots, non-stock RAM expansions, smaller or larger screen areas), write a `.lnk` file and pass it. The compiler does not need changes.
 
@@ -243,12 +247,12 @@ By convention, every shipped `.lnk` opens with a Unicode box-art comment showing
 # └──────────────────────────────────────────────┘
 ```
 
-The diagram is for human readers; the linker does not parse it. `xcc --dump-layout -m <name>` prints the same diagram from the parsed config, so you can confirm a custom file describes what you intend.
+The diagram is for human readers; the linker does not parse it. `xcc-bootstrap --dump-layout -m <name>` prints the same diagram from the parsed config, so you can confirm a custom file describes what you intend.
 
 ## Built-in models
 
 ```bash
-xcc -ll
+xcc-bootstrap --list-layouts
 ```
 
 Prints every shipped layout grouped by platform. Each one is a `.lnk` file you can copy as a starting point for a custom variant.
@@ -263,11 +267,11 @@ See [Memory models](/compiler/usage/memory-models/) for what each one is for and
 
 Start by copying a shipped layout:
 
-1. Run `xcc --dump-layout -m <closest match>` to see the layout you're starting from.
+1. Run `xcc-bootstrap --dump-layout -m <closest match>` to see the layout you're starting from.
 2. Copy `support/<platform>/layouts/<closest>.lnk` to a new file.
 3. Edit the sections you need to change: typically `[memory]`, `[banking]` (if your hardware has a different bank-bit pattern), and the comment-header diagram.
-4. Run `xcc --dump-layout -m ./your-file.lnk` and check that the printed diagram matches your intent.
-5. Compile with `-m ./your-file.lnk`. If the file is next to the shipped layouts under `support/<platform>/layouts/`, you can reference it by name without the path.
+4. Run `xcc-bootstrap --dump-layout -m ./your-file.lnk` and check that the printed diagram matches your intent.
+5. Compile with `xcc-bootstrap -m ./your-file.lnk`. If the file is next to the shipped layouts under `support/<platform>/layouts/`, you can reference it by name without the path.
 
 If you write a layout for hardware that others are likely to use (a memory expansion, a cartridge form factor, an unusual screen-RAM placement), contribute it upstream.
 
@@ -276,6 +280,6 @@ If you write a layout for hardware that others are likely to use (a memory expan
 | Flag | Purpose |
 |------|---------|
 | `-m <layout>` | Activate a layout. Searches `<layout>` as a path (appends `.lnk` if needed), then `support/layouts/<layout>.lnk`, then `support/<platform>/layouts/<layout>.lnk`. |
-| `-ll`, `--list-layouts` | List every built-in layout. |
+| `--list-layouts` | List every built-in layout. |
 | `--dump-layout` | Print the active layout's parsed diagram and exit. |
 | `-H <path>` / `XCC_HOME=...` | Point the search at a specific xcc home (so a custom `support/` tree is preferred over the system one). |

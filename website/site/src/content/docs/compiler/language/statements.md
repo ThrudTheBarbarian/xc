@@ -32,6 +32,15 @@ declared inside a function and give it storage that outlives the call. For
 file-scope persistent state, write a plain top-level declaration (a bare
 `u16 total = 0;`). `static` and `global static` at file scope do not parse.
 
+A file-scope name may be declared more than once, as a header imported down two
+paths does, but only with the same type each time. Two declarations at different
+types are an error, because they would name one object:
+
+```c
+u32 gX;
+u32 gX[64];   // error: global 'gX' is declared twice in this unit with different types
+```
+
 Examples:
 
 ```c
@@ -344,7 +353,7 @@ defer { for (…) { … break; } }          // fine — the break is the inner l
 
 ## Manual unrolling: `:unroll`
 
-The auto-unroller runs at `-O2+` for counted `for` loops with a small trip count (default ≤5; tunable with `-Flu`). To force an unroll regardless of trip count or optimisation level, annotate the loop with `:unroll`:
+The auto-unroller runs at `-O2` and above. It fully unrolls a counted loop whose constant trip count is within the target's cap (4 on xt6502, 32 on arm64 and x86-64; see [Optimisation](/compiler/usage/optimization/#-flu--loop-unroll-cap)), tunable with `-Flu`. To unroll a longer loop, annotate it with `:unroll`, which raises the cap for that loop to 64 iterations, or to the target's cap if that is higher:
 
 ```c
 for (u8 i = 0; i < 40; i++) :unroll {
@@ -352,7 +361,7 @@ for (u8 i = 0; i < 40; i++) :unroll {
 }
 ```
 
-The annotation goes after the closing `)` of the `for` clause and before the body. Use it sparingly: every unroll trades binary size for cycle count.
+The annotation goes after the closing `)` of the `for` clause and before the body. It has no effect at `-O0` or `-O1`, where the unroller does not run. Use it sparingly: every unroll trades binary size for cycle count.
 
 ## Program entry: `main`
 
@@ -368,7 +377,7 @@ i16 main(u8 numArgs, string args[]) {
 }
 ```
 
-When `main` returns, the program issues an `RTS` to the caller. If you pass `-Q loop` on the command line, the runtime spins in an infinite loop instead.
+When `main` returns, the program issues an `RTS` to the caller. If you pass `-Q loop` on the command line (`xcc-bootstrap` only), the runtime spins in an infinite loop instead.
 
 ## Worked example
 

@@ -1,6 +1,6 @@
 ---
 title: Heap, ARC & weak refs
-description: "new and delete, automatic reference counting, weak: references, manual -farc=off mode."
+description: "new and delete, automatic reference counting, and weak: references."
 ---
 
 xcc has a coalescing free-list heap with reference-counted ownership. It is available on any memory layout that declares a `[heap]` region (the shipped 6502 `xt` layouts do) and on all five native backends. On those targets `-falloc=heap` is the default. A layout without a `[heap]` region falls back to a bump allocator, and heap-only statements are rejected at sema time.
@@ -23,7 +23,7 @@ MyClass* mob = new MyClass[8];      // array of class instances
 
 ## Automatic reference counting (ARC)
 
-By default (`-farc` is on), the compiler manages reference counts automatically. Every heap block has a header immediately before the payload. The header shape is **per target**, but on every target the 16-bit retain count sits at `obj-2`, so the back ends emit the same retain/release sequence.
+The compiler manages reference counts automatically. ARC is always on. Every heap block has a header immediately before the payload. The header shape is **per target**, but on every target the 16-bit retain count sits at `obj-2`, so the back ends emit the same retain/release sequence.
 
 **xt6502**: a 7-byte header in a hand-written coalescing free list:
 
@@ -59,7 +59,7 @@ Two calling-convention rules follow:
 - **Always-`+1` returns.** A function whose return type is a class pointer hands the caller an owning reference. The callee has already retained it, so the caller does not.
 - **Callee-retains-params.** A class-pointer parameter is retained on function entry and released on exit. This is net-neutral if the body uses the pointer only transiently. A store that outlives the call (into a global, or into another heap object's field) keeps the +1 from the entry retain.
 
-Under ARC, the manual `retain`, `release`, and `delete` statements are **rejected at sema time**, and the error points you to the `-farc=off` mode described below. Normal code never uses them.
+`retain`, `release` and `delete` on a class instance are **rejected at compile time**, because the compiler owns class refcounts. `delete` remains valid on a struct or a primitive array, which ARC does not manage.
 
 ### A canonical walk-through
 
@@ -194,19 +194,12 @@ Objects that are never weakly referenced pay nothing for the feature. Closing a 
 A `[weak] entries = N` line in a layout is accepted and ignored. There is nothing to configure.
 :::
 
-## Manual lifecycle (`-farc=off`)
+## No manual mode
 
-For explicit lifecycle management, pass `-farc=off` on the command line. In that mode:
-
-```c
-retain ptr;     // refcount++ (saturates at $FFFF, null-safe)
-release ptr;    // refcount--; on reach 0 → dealloc + free
-delete ptr;     // alias of release — single decrement, not unconditional free
-```
-
-`retain` and `release` have the same semantics as the operations ARC emits. Both are null-safe. `retain` saturates at `$FFFF` instead of wrapping, so pathological loops cannot underflow through zero and trigger spurious frees. `delete` is a deprecated alias for `release`; new manual-mode code should use `release`.
-
-Manual mode and ARC mode are **mutually exclusive per compile**. You cannot mix automatic tracking with explicit retain / release in the same program.
+Earlier releases documented a manual lifecycle mode, `-farc=off`. The flag never
+changed the generated code and is retired: `xcc-bootstrap` accepts it with a
+warning that it does nothing, and `xcc` rejects it. Every class instance is
+reference counted.
 
 ## Introspection
 

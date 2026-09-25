@@ -24,7 +24,7 @@ To read the reference in order:
 9. [**Bound methods & callbacks**](/compiler/language/bound-methods/): `callback`, target/action, and why a callback needs no context pointer.
 10. [**Blocks**](/compiler/language/blocks/): `{ … }` closures that capture their surrounding scope, and how they pair with bound methods.
 11. [**Errors**](/compiler/language/errors/): the `throws` effect, `throw`, typed and untyped `catch` arms, the `Error` protocol.
-12. [**Heap, ARC & weak refs**](/compiler/language/memory/): `new` / `delete`, automatic reference counting, `weak:` references, manual `-farc=off` mode.
+12. [**Heap, ARC & weak refs**](/compiler/language/memory/): `new` / `delete`, automatic reference counting, `weak:` references.
 13. [**Collections & strings**](/compiler/language/collections/): `Array<T>`, `Map<V>`, `Set<T>`, `String`, and how element types are checked then erased.
 14. [**Threading**](/compiler/language/threading/): `Thread`, `Mutex`, `Atomic`, `Pool`, and the automatic atomic-refcount decision. Native targets only.
 15. [**Modules & shared libraries**](/compiler/language/modules/): `--emit-lib`, `#import <Lib>`, what crosses a library boundary, and `extern` globals.

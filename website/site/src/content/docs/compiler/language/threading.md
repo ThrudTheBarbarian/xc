@@ -23,7 +23,7 @@ thread-creation runtime, which happens when the program spawns a thread. You do
 not need to request it.
 
 `-fthread-safe-arc` and `-fno-thread-safe-arc` force it on or off when the
-automatic decision is wrong. For example, a separately compiled library that a
+automatic decision is wrong. Both flags are `xcc-bootstrap` only. For example, a separately compiled library that a
 threaded program will use needs the flag on.
 
 ## Spawning

@@ -5,10 +5,21 @@ description: Previous xcc and xtc toolchain releases, kept for archival referenc
 
 These archives are kept so that an existing build can be reproduced byte-for-byte with the version it was compiled with. For new work, use the [most recent release](/compiler/downloads/). The [ChangeLog](/compiler/downloads/changelog/) lists what has changed since.
 
+## xcc 0.6
+
+The previous release line, and the first in which the shipped `xcc` is the
+self-hosted compiler.
+
+| Platform | Download | Size |
+| --- | --- | --- |
+| macOS (Apple silicon) | [xcc-osx-0.6.tar.bz2](/downloads/xcc-osx-0.6.tar.bz2) | 13 MB |
+| Linux (x86_64) | [xcc-linux-0.6.tar.bz2](/downloads/xcc-linux-0.6.tar.bz2) | 67 MB |
+| Windows (x64) | [xcc-win64-0.6.zip](/downloads/xcc-win64-0.6.zip) | 78 MB |
+| arm9 sysroot (any host) | [xcc-arm9-sysroot-0.6.tar.bz2](/downloads/xcc-arm9-sysroot-0.6.tar.bz2) | 830 KB |
+
 ## xcc 0.4
 
-The previous release line, and the last before the self-hosted compiler became
-the shipped one. The driver is `xcc` and the layout is the current `lib/xc` one,
+The last release before the self-hosted compiler became the shipped one. The driver is `xcc` and the layout is the current `lib/xc` one,
 so these archives behave as the rest of this site describes, as an older version.
 
 | Platform | Download | Size |

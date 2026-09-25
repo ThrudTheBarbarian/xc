@@ -245,7 +245,7 @@ On the banked `xt` target, `:irq` and `:vbi` handlers are placed in main RAM at 
 
 ## Default calling convention
 
-By default, parameters pass on the **xcc software stack**, and return addresses and saved registers go on the **6502 hardware stack**. The `-S` / `--xtc-stack` command-line flag moves all stack traffic onto the software stack, which is larger but slower.
+By default, parameters pass on the **xcc software stack**, and return addresses and saved registers go on the **6502 hardware stack**. The `--xtc-stack` command-line flag (`xcc-bootstrap` only) moves all stack traffic onto the software stack, which is larger but slower.
 
 The `:hwStack` and `:xtcStack` annotations override the command-line default per function. Parameters always travel on the software stack, whichever annotation applies.
 

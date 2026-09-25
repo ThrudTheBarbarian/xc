@@ -29,7 +29,7 @@ arithmetic figure is given only for completeness.
 
 ## Per benchmark
 
-Times are seconds for the timed region, best of five.
+Times are seconds for the timed region, best of five. The figures were measured with a 0.61 build of the self-hosted compiler taken before loop heads on x86-64 were aligned to 32 bytes (see below), so the x86-64 columns do not include that change.
 
 | benchmark | arm64 xc | arm64 clang | ratio | x86-64 xc | x86-64 clang | ratio |
 |---|---|---|---|---|---|---|
@@ -78,11 +78,14 @@ rather than the process, and the loops are sized so the region runs for roughly
 a second. Shorter runs were tried and abandoned: at a few milliseconds the
 measurement is dominated by everything that is not the program.
 
-**Alignment noise on x86-64.** An individual x86-64 figure can move by ten to
-fifteen percent between builds whose hot function is instruction-for-instruction
-identical, because where a loop lands relative to a 32-byte fetch boundary
-depends on how much unrelated code precedes it. This is why the summary is a
-geometric mean over nineteen programs rather than any single number.
+**Alignment noise on x86-64.** In the build these figures come from, an
+individual x86-64 figure could move by ten to fifteen percent between builds whose
+hot function was instruction-for-instruction identical, because where a loop
+landed relative to a 32-byte fetch boundary depended on how much unrelated code
+preceded it. This is why the summary is a geometric mean over nineteen programs
+rather than any single number. The released 0.61 aligns every loop head on x86-64
+to a 32-byte boundary and the start of `.text` to 64 bytes, which fixes where a
+loop lands; see [Optimisation](/compiler/usage/optimization/#per-target-settings).
 
 ## Reproducing
 
@@ -90,7 +93,7 @@ The benchmark sources are in `benchmark/src`, one `.xc` and one `.m` per
 program, and the runner builds and times both:
 
 ```
-python3 benchmark/run.py --opt O3 --repeats 5
+python3 benchmark/run.py --version v0.61 --opt O3 --repeats 5
 ```
 
 The x86-64 legs cross-build here and run on a configured Linux host; without
