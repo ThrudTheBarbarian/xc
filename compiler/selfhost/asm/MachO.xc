@@ -545,6 +545,7 @@ class Sha256
     u32 szUUID;
     u32 szCodeSig;
     u32 szRpath;
+    u32 szExtraRpaths;
     u32 szDeps;
     u32 textLen;
     u32 dataLen;
@@ -588,9 +589,11 @@ class Sha256
     u32 _baseHi;
     bool _flatBind;
     Array* _deps; // MachODep@ — the dylibs this image loads
+    Array* _rpaths; // String@ — LC_RPATH entries after @loader_path (-rpath)
 
     void init(void)
         {
+        _rpaths = new Array();
         _objcSects = (Array*)0;
         _out = new Array();
         _dataSegIdx = (u32)2;
@@ -623,6 +626,14 @@ class Sha256
     void setDeps(Array* deps)
         {
         _deps = deps == (Array*)0 ? new Array() : deps;
+        }
+
+    // Search paths an EXECUTABLE carries after `@loader_path`, one LC_RPATH
+    // each, in order: a `-rpath <dir>` handed to the link. Empty (the default)
+    // leaves the output exactly as it was.
+    void setRpaths(Array* rp)
+        {
+        _rpaths = rp == (Array*)0 ? new Array() : rp;
         }
 
     // libSystem is ordinal 1 and each dep follows: 2, 3, … A symbol none of
@@ -2045,6 +2056,9 @@ class Sha256
         // `@loader_path` is always searched, so a program finds a shared library
         // sitting beside it without the caller having to say so.
         L.szRpath = roundUp((u32)12 + (u32)13, (u32)8); // "@loader_path" + NUL
+        L.szExtraRpaths = (u32)0;
+        for (u32 i = (u32)0; i < _rpaths.count(); i = i + (u32)1)
+            L.szExtraRpaths = L.szExtraRpaths + roundUp((u32)12 + ((String*)_rpaths.get(i)).byteLength() + (u32)1, (u32)8);
         // One LC_LOAD_DYLIB per linked library, after libSystem's — the order
         // IS the ordinal numbering the bind stream refers to.
         L.szDeps = (u32)0;
@@ -2052,8 +2066,8 @@ class Sha256
             L.szDeps = L.szDeps + roundUp((u32)24 + ((MachODep*)_deps.get(i)).path().byteLength() + (u32)1, (u32)8);
         L.hasDyldInfo = L.hasImp || L.hasRebase;
         L.ncmds = (u32)10 + (L.hasDataSeg ? (u32)1 : (u32)0) + (L.hasDyldInfo ? (u32)1 : (u32)0) + (u32)1 + (u32)1 // +LC_RPATH
-                  + _deps.count();
-        L.sizeofcmds = L.szPagezero + L.szTextSeg + (L.hasDataSeg ? L.szDataSeg : (u32)0) + L.szLink + (L.hasDyldInfo ? L.szDyldInfo : (u32)0) + L.szDeps + L.szDyld + L.szMain + L.szDylib + L.szSym + L.szDysym + L.szBuild + L.szUUID + L.szCodeSig + L.szRpath;
+                  + _deps.count() + _rpaths.count();
+        L.sizeofcmds = L.szPagezero + L.szTextSeg + (L.hasDataSeg ? L.szDataSeg : (u32)0) + L.szLink + (L.hasDyldInfo ? L.szDyldInfo : (u32)0) + L.szDeps + L.szDyld + L.szMain + L.szDylib + L.szSym + L.szDysym + L.szBuild + L.szUUID + L.szCodeSig + L.szRpath + L.szExtraRpaths;
         }
 
     void emitHeaderAndCommands(MachOLayout* L)
@@ -2263,6 +2277,15 @@ class Sha256
         put32(L.szRpath);
         put32((u32)12);
         putName((u32)11, L.szRpath - (u32)12);
+        for (u32 i = (u32)0; i < _rpaths.count(); i = i + (u32)1)
+            {
+            String* rp = (String*)_rpaths.get(i);
+            u32 rsz = roundUp((u32)12 + rp.byteLength() + (u32)1, (u32)8);
+            put32((u32)$1C | (u32)$80000000);
+            put32(rsz);
+            put32((u32)12);
+            putFixed(rp, rsz - (u32)12);
+            }
         put32((u32)$02);
         put32(L.szSym);
         put32(L.symoff);
