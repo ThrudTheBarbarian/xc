@@ -92,10 +92,12 @@ class LayoutRange
 
     bool _failed;
     String* _why;
+    Array* _unapplied; // String@ "[section] key = value" lines this reader did not use
 
     void init(void)
         {
         _name = String.withCString("");
+        _unapplied = new Array();
         _varsRanges = new Array();
         _mainRanges = new Array();
         _hasBanking = false;
@@ -139,6 +141,15 @@ class LayoutRange
         {
         return _failed;
         }
+    // Every line of the file this reader did not apply, as
+    // `[section] key = value`: a layout written for features the 6502 back
+    // end does not have (split banking, region C, a startup file of its own)
+    // reads here as the plain xt map, and the driver has to be able to see it.
+    Array* unapplied(void)
+        {
+        return _unapplied;
+        }
+
     String* why(void)
         {
         return _why;
@@ -305,6 +316,9 @@ class LayoutRange
         Array* lines = text.splitOnByte((u8)'\n');
         for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1)
             {
+            String* raw = ((String*)lines.get(i)).trimmed();
+            if (raw.hasPrefix(String.withCString("#include")))
+                _unapplied.add((Object*)raw);
             String* line = stripComment((String*)lines.get(i)).trimmed();
             if (line.byteLength() == (u32)0)
                 continue;
@@ -322,7 +336,42 @@ class LayoutRange
             String* key = line.substringBytes((u32)0, eq).trimmed();
             String* val = line.substringFromByte(eq + (u32)1).trimmed();
             apply(section, key, val);
+            if (!applies(section, key))
+                {
+                String* u = String.withCString("[");
+                u.append(section);
+                u.appendCString("] ");
+                u.append(key);
+                u.appendCString(" = ");
+                u.append(val);
+                _unapplied.add((Object*)u);
+                }
             }
+        }
+
+    // The keys apply() acts on, section by section.
+    static bool applies(String* section, String* key)
+        {
+        if (section.equals(String.withCString("zp")))
+            return oneOf(key, "hp", "arc-scratch", "runtime", "vars", "");
+        if (section.equals(String.withCString("memory")))
+            return oneOf(key, "system", "screen", "main", "", "");
+        if (section.equals(String.withCString("banking")))
+            return oneOf(key, "code-window", "data-window", "code-reg", "data-reg", "registers");
+        if (section.equals(String.withCString("stack")))
+            return oneOf(key, "range", "", "", "", "");
+        if (section.equals(String.withCString("heap")))
+            return oneOf(key, "range", "bank", "", "", "");
+        if (section.equals(String.withCString("entry")))
+            return oneOf(key, "address", "", "", "", "");
+        return false;
+        }
+
+    static bool oneOf(String* key, string a, string b, string c, string d, string e)
+        {
+        return key.equals(String.withCString(a)) || key.equals(String.withCString(b))
+            || key.equals(String.withCString(c)) || key.equals(String.withCString(d))
+            || key.equals(String.withCString(e));
         }
 
     // A `#` starts a comment, and the layouts use it liberally for the map
