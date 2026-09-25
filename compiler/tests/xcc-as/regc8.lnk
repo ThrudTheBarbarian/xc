@@ -1,0 +1,5 @@
+[banking]
+code-window = $6000-$7FFF
+code-reg = $C300
+regCWindow = $7000-$7FFF
+regCReg = $84

@@ -50,11 +50,18 @@ for f in $FILES; do
          >"$WORK/b.err" 2>&1; then
         fail=$((fail+1)); FAILED+=("$f ($(head -1 "$WORK/b.err"))"); continue
     fi
-    if cmp -s "$WORK/a.xex" "$WORK/b.xex"; then pass=$((pass+1))
-    else
+    if ! cmp -s "$WORK/a.xex" "$WORK/b.xex"; then
         fail=$((fail+1))
         FAILED+=("$f ($(cmp -l "$WORK/a.xex" "$WORK/b.xex" 2>/dev/null | wc -l | tr -d ' ') bytes)")
+        continue
     fi
+    # The same file through the port's own command line, configured from the
+    # layout exactly as the reference was.
+    if ! "$WORK/xta6502" "$WORK/a.asm" -o "$WORK/c.xex" -b -L "$LAYOUT" -I . -I support \
+         >"$WORK/c.err" 2>&1 || ! cmp -s "$WORK/a.xex" "$WORK/c.xex"; then
+        fail=$((fail+1)); FAILED+=("$f (-L: $(head -1 "$WORK/c.err"))"); continue
+    fi
+    pass=$((pass+1))
 done
 
 if [ "${#FAILED[@]}" -gt 0 ]; then

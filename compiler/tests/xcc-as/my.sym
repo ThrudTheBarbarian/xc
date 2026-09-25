@@ -1,0 +1,4 @@
+; test symbols
+MYREG = $1234
+OTHER = $56   ; zero page
+NOTHEX = 12

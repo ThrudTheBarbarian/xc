@@ -1,0 +1,4 @@
+[cloaked]
+range = $4000-$7FFF
+bank = 2-4
+id = ext

@@ -2016,6 +2016,13 @@ void emitXt6502(DriverOptions* d, IRModule* mod)
     a.setBankWindow(layout.bankWindowStart(), layout.bankWindowEnd());
     a.setDataWindow(layout.dataWindowStart(), layout.dataWindowEnd());
     a.setSplitBanking(false);
+    // The first main range bounds the unbanked code, as the reference's
+    // back end tells its assembler; diagnostics name the output file.
+    if (layout.mainRanges().count() > (u32)0) {
+        LayoutRange* mr = (LayoutRange*)layout.mainRanges().get((u32)0);
+        a.setMainRegion(mr.lo(), mr.hi());
+    }
+    a.setFilename(d.fe().output());
     Array* lines = a.preprocess(asmText, d.fe().output());
     a.assemble(lines);
     if (a.errors().count() > (u32)0) {
@@ -2027,6 +2034,10 @@ void emitXt6502(DriverOptions* d, IRModule* mod)
     if (a.segments().count() > (u32)0)
         entry = ((XaSegment*)a.segments().get((u32)0)).origin();
     Array* img = a.writeBankedXex(entry);
+    if (img == (Array*)0) {
+        Stdio.printf("xcc: error: cannot write '%s'\n", d.fe().output().cString());
+        Process.exit((i32)1); return;
+    }
     Data* img8 = Data.withCapacity((u32)0);
     for (u32 k = (u32)0; k < img.count(); k = k + (u32)1)
         img8.appendByte((u8)((Number*)img.get(k)).asU32());

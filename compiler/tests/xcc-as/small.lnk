@@ -1,0 +1,3 @@
+#include "split.lnk"
+[memory]
+main = $D800-$D803

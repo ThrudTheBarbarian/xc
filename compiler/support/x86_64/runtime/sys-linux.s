@@ -115,6 +115,13 @@ _sys_chmod:				# chmod(path, mode)
 	syscall
 	ret
 
+	.globl	_sys_getdents64
+	.type	_sys_getdents64, @function
+_sys_getdents64:			# getdents64(fd, buf, count)
+	mov	eax, 217
+	syscall
+	ret
+
 	.globl	_sys_exit
 	.type	_sys_exit, @function
 _sys_exit:				# exit_group(status) — never returns

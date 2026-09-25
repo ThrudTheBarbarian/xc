@@ -288,6 +288,9 @@ XCC_XC_WIN64_BIN = bin/win64/xcc-xc.exe
 # to nothing and ship the Objective-C signer again.
 XCC_SIGN_XC_LINUX_BIN = bin/linux/xcc-sign-xc
 XCC_SIGN_XC_WIN64_BIN = bin/win64/xcc-sign-xc.exe
+# The self-hosted 6502 assembler for the cross hosts, here for the same reason.
+XCC_AS_XC_LINUX_BIN = bin/linux/xcc-as-xc
+XCC_AS_XC_WIN64_BIN = bin/win64/xcc-as-xc.exe
 
 $(XCC_XC_LINUX_BIN): $(XTC_BIN) $(XCC_XC_SRC) $(wildcard selfhost/*/*.xc) \
                      $(wildcard support/generic/lib/*.xc) $(wildcard support/x86_64/lib/*.xc)
@@ -304,8 +307,8 @@ $(XCC_XC_WIN64_BIN): $(XTC_BIN) $(XCC_XC_SRC) $(wildcard selfhost/*/*.xc) \
 	            $(call XCC_XC_TARGET_INCS,win64)
 
 .PHONY: production-linux production-win64 production-all
-production-linux: $(XCC_XC_LINUX_BIN) $(XCC_SIGN_XC_LINUX_BIN)
-production-win64: $(XCC_XC_WIN64_BIN) $(XCC_SIGN_XC_WIN64_BIN)
+production-linux: $(XCC_XC_LINUX_BIN) $(XCC_SIGN_XC_LINUX_BIN) $(XCC_AS_XC_LINUX_BIN)
+production-win64: $(XCC_XC_WIN64_BIN) $(XCC_SIGN_XC_WIN64_BIN) $(XCC_AS_XC_WIN64_BIN)
 production-all:   production production-linux production-win64
 
 # The signer's host inputs. The engine is host-neutral: an Apple Development
@@ -364,8 +367,29 @@ $(XCC_SIGN_XC_WIN64_BIN): $(XCC_SIGN_XC_DEPS)
 	@mkdir -p $(dir $@)
 	@$(XTC_BIN) -O2 -A win64 -H . -o $@ selfhost/tools/xtsign.xc $(XCC_SIGN_XC_INCS)
 
+# The self-hosted 6502 assembler, xcc-as: selfhost/tools/xta6502.xc over the
+# assembler in selfhost/asm, for each host. xccas-diff compares its command
+# line with the reference's, option by option.
+XCC_AS_XC_SRCS = selfhost/tools/xta6502.xc selfhost/asm/Xta.xc selfhost/asm/Xa6502.xc \
+                 selfhost/asm/XtaHost.xc $(wildcard support/generic/lib/*.xc)
+XCC_AS_XC_BIN = $(BIN_DIR)/xcc-as-xc
+$(XCC_AS_XC_BIN): $(XTC_BIN) $(XCC_AS_XC_SRCS) $(wildcard support/arm64/lib/*.xc)
+	@echo "  xc   building the production assembler with the bootstrap compiler"
+	@$(XTC_BIN) -O2 -A arm64 -H . -DXCC_VERSION='"$(VERSION)"' -o $@ selfhost/tools/xta6502.xc -I selfhost/asm
+
+$(XCC_AS_XC_LINUX_BIN): $(XTC_BIN) $(XCC_AS_XC_SRCS) $(wildcard support/x86_64/lib/*.xc) \
+                        support/x86_64/runtime/sys-linux.s
+	@echo "  xc   building the production assembler for linux"
+	@mkdir -p $(dir $@)
+	@$(XTC_BIN) -O2 -A x86_64 -H . -DXCC_VERSION='"$(VERSION)"' -o $@ selfhost/tools/xta6502.xc -I selfhost/asm
+
+$(XCC_AS_XC_WIN64_BIN): $(XTC_BIN) $(XCC_AS_XC_SRCS) $(wildcard support/win64/lib/*.xc)
+	@echo "  xc   building the production assembler for win64"
+	@mkdir -p $(dir $@)
+	@$(XTC_BIN) -O2 -A win64 -H . -DXCC_VERSION='"$(VERSION)"' -o $@ selfhost/tools/xta6502.xc -I selfhost/asm
+
 .PHONY: production
-production: $(XCC_XC_BIN) $(XCC_SIGN_XC_BIN)
+production: $(XCC_XC_BIN) $(XCC_SIGN_XC_BIN) $(XCC_AS_XC_BIN)
 
 INSTALL_BINS = $(XTC_BIN) $(XTA_BIN) $(SIM_BIN) $(SIM68K_BIN) $(XTC_FE_BIN) \
                $(XTCG_6502_BIN) $(XTCG_ARM64_BIN) $(XTCG_68K_BIN) \
