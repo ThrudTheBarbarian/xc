@@ -443,6 +443,11 @@ class Arm9
             IRSymbol* s = (IRSymbol*)_m.syms().get(i);
             if (s.kind() != (u8)SYM_DATAGLOBAL || s.dataType() == 0)
                 continue;
+            // An extern global is DEFINED IN ANOTHER MODULE: reserve nothing.
+            // A `.comm` here gave this module its own zeroed copy, so reads
+            // never saw the defining module's value.
+            if (s.isExtern())
+                continue;
             // A zero-init global is a `.comm` and needs no section of its own —
             // only a global with a PAYLOAD opens `.data`.
             Array* b = s.bytes();
