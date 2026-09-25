@@ -2499,8 +2499,14 @@ void main(void)
                      "ported first.\n", d.arch().cString());
         Process.exit((i32)1); return;
     }
-    if (d.fe().boundsCheck() && (isXt6502(d) || isAndroid(d))) {
-        Stdio.printf("xcc: error: -fbounds-check is native-only (arm64); "
+    // The checked runtime is arm64 assembly and only the arm64 back end emits
+    // the parameter map, so every other target is refused here, as the
+    // reference refuses it. This refused only xt6502 and android, so x86_64
+    // and win64 failed at link on `_xt_check_bounds` and wasm32 built a
+    // module that checked nothing.
+    if (d.fe().boundsCheck()
+        && !d.arch().equals(String.withCString("arm64")) && !isIos(d)) {
+        Stdio.printf("xcc: error: -fbounds-check is implemented for arm64 so far; "
                      "'%s' has no checked runtime\n", d.arch().cString());
         Process.exit((i32)2); return;
     }

@@ -1237,6 +1237,13 @@ String* dirOf(String* path)
 // `-H` names a ROOT, not a support directory: it is probed for the same three
 // spellings, so `-H /opt/xcc/0.5` and `-H .` both work. Appending `/support`
 // unconditionally is why `-H /opt/xcc/0.5/lib/xc` also failed.
+//
+// The versioned fallback comes from the VERSION file through -DXCC_VERSION, as
+// xcc.xc's --version line does. It was a literal "/opt/xcc/0.6", so a 0.61
+// compiler run outside an install read 0.6's libraries.
+#ifndef XCC_VERSION
+#define XCC_VERSION "unversioned"
+#endif
 String* supportRoot(FeOptions* o)
     {
     if (o.home() != 0)
@@ -1261,7 +1268,7 @@ String* supportRoot(FeOptions* o)
             bases.add((Object*)up);
         }
     bases.add((Object*)String.withCString("."));
-    bases.add((Object*)String.withCString("/opt/xcc/0.6"));
+    bases.add((Object*)String.withCString("/opt/xcc/" XCC_VERSION));
     bases.add((Object*)String.withCString("/opt/xcc"));
     bases.add((Object*)String.withCString("/usr/local/xcc"));
     bases.add((Object*)String.withCString("/usr/local/xtc"));
