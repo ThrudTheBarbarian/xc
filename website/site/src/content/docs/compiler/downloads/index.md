@@ -4,9 +4,10 @@ description: Prebuilt xcc toolchain archives for macOS, Linux and Windows, and t
 ---
 
 The current release line is **xcc 0.61**. One install contains the whole toolchain: the
-driver (`xcc`), the front end, seven code generators, xcc's own assemblers and
-linkers, the simulators (`xcc-sim-6502`, `xcc-sim-68k`), the complete standard
-library, and the Linux (musl) and Windows (mingw) link pools. A single machine can
+compiler (`xcc`, which runs every stage itself, from parsing through code generation
+for all seven targets to assembly and linking), the signing tool (`xcc-sign`), the
+6502 assembler (`xcc-as`), the simulators (`xcc-sim-6502`, `xcc-sim-68k`), the
+complete standard library, and the Linux (musl) and Windows (mingw) link pools. A single machine can
 cross-build native binaries for every target with **no other toolchain installed**.
 
 | Platform | Download | Size |

@@ -141,8 +141,7 @@ Macros may be defined on the command line with `-D`, one name per flag:
 xcc -D ENABLE_DOUBLE=0 -D DEBUG -o app app.xc
 ```
 
-`xcc` takes the name as a separate argument. `xcc-bootstrap` also accepts the
-joined form, `-DDEBUG`.
+The name may also be joined to the flag: `-DDEBUG` is the same as `-D DEBUG`.
 
 ## Predefined macros
 

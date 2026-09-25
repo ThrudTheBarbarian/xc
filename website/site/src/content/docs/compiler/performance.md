@@ -61,11 +61,7 @@ clang vectorises more aggressively than xcc does.
 
 ## What is being compared, and what is not
 
-**The compiler that ships.** The numbers come from the self-hosted compiler --
-the one in the download -- and not from the Objective-C reference implementation
-it was bootstrapped from. Those two are meant to agree byte for byte and are
-gated on it, but a figure measured on something that is not shipped is not a
-figure about the product.
+**The compiler that ships.** The numbers come from the `xcc` in the download.
 
 **Two different Objective-C runtimes.** The clang column is Apple's Foundation
 and objc_msgSend on arm64/macOS, and GNUstep with libobjc2 on x86-64/Linux.

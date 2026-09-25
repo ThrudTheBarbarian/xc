@@ -141,6 +141,17 @@ wasm32:
 - arm9: `//` comments are accepted as well as `@`, and neither is treated as a
   comment inside a quoted string.
 
+### Install contents
+
+- The install and every archive hold `xcc`, `xcc-sign`, `xcc-as` and the two
+  simulators, `xcc-sim-6502` and `xcc-sim-68k`, plus the support tree in
+  `lib/xc`. `xcc` runs every stage itself, from parsing to linking, so there are
+  no separate stage programs in `bin/`.
+
+### Options
+
+<!-- FLAGS: list of options that now work in xcc -->
+
 ### Tools and documentation
 
 - An `xcc` run from outside an install looked for `/opt/xcc/0.6` as its fallback
@@ -158,25 +169,17 @@ The `xcc` in this release is the compiler written in xtc, compiled by itself. 0.
 the internal line that led to this release and was never published, so its changes are
 all listed here.
 
-### The self-hosted compiler ships
+### `xcc` is written in xtc
 
-- `xcc` is now the self-hosted compiler. On arm64 and xt6502 its output is
-  byte-identical to the previous compiler's at every optimisation level, and the whole
-  toolchain rebuilds itself to a fixed point.
+- `xcc` is the compiler written in xtc, compiled by itself. The whole toolchain
+  rebuilds itself to a fixed point.
 - It ships for all three hosts: macOS on Apple silicon, Linux x86-64 and Windows x64.
-  Each is a single binary with no Objective-C runtime or Foundation dependency. With no
-  `-A`, it builds for the host it runs on.
-- `xcc-sign` is self-hosted too. The previous tools are installed beside them as
-  `xcc-bootstrap` and `xcc-sign-bootstrap`. `--export-identity` and `--fetch-identity`
-  still need `xcc-sign-bootstrap`, because they use the macOS keychain and TLS.
+  Each is a single self-contained binary. With no `-A`, it builds for the host it
+  runs on.
+- `xcc-sign` is written in xtc too.
+- `xcc` rejects an option it does not implement with an error rather than ignoring it.
 - The install goes to `/opt/xcc/0.6` and leaves an installed 0.4 alone. `xcc -v`
   reports `xcc 0.6 (xc, self-hosted)`.
-
-Some options of the previous driver are not in the self-hosted one yet, among them
-`--emit-lib` for win64, android, m68k and 6502, `-A 68000` / `-A 68030`, `-falloc=`,
-`-fmalloc=` and `-g`. `xcc` rejects an option it does not implement with an error
-rather than ignoring it, and those options still work in `xcc-bootstrap`. The
-[CLI reference](/compiler/usage/cli/) marks each one.
 
 ### `callback`
 

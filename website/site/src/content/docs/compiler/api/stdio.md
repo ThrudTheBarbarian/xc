@@ -116,7 +116,7 @@ form. There is no `print(u8)` overload: `u8` widens implicitly to `u16`, so pass
 `printf` through internal emit helpers rather than a public `print(i64)`/`print(u64)`
 overload; the xt6502 build exposes them as `print` overloads too. The
 precision-carrying float/double overloads back the `%.Nf` / `%.Nlf` conversions:
-they round at `N+1` decimal places and keep `N`, matching the native oracle.
+they round at `N+1` decimal places and keep `N`, matching the native targets.
 
 ### printHex
 ```c

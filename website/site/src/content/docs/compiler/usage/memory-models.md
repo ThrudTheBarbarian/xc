@@ -17,20 +17,16 @@ to choose, and `-m` does not apply.
 
 `-m xt` implies `-A 6502`, so it selects the target on its own.
 
-`xcc` always builds against the standard `xt` layout. Choosing another layout,
-and the inspection flags below, need `xcc-bootstrap` (see
-[CLI → Two drivers](/compiler/usage/cli/#two-drivers)).
-
 To list every layout the compiler ships with:
 
 ```bash
-xcc-bootstrap --list-layouts
+xcc --list-layouts
 ```
 
 To inspect a layout's memory map:
 
 ```bash
-xcc-bootstrap --dump-layout -m xt
+xcc --dump-layout -m xt
 ```
 
 ## The xt6502 target

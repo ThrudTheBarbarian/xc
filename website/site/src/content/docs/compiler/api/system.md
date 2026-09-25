@@ -56,9 +56,7 @@ void main(void)
 }
 ```
 
-If you never call `exit`, returning from `main` has the same effect as `exit(0)`
-on default `xcc` builds: the runtime emits an `RTS` back into DOS. The `-Q loop`
-switch makes the program enter an infinite loop after `main` instead of an
-`RTS`. In that mode `System.exit(...)` is the only way to return to DOS.
+If you never call `exit`, returning from `main` ends the program: on xt6502 it
+stops at a `BRK`, and `xcc-sim-6502` exits with `main`'s return value as its status.
 
 [↑ Topics](#topics)

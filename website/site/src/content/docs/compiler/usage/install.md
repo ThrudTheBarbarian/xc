@@ -20,15 +20,12 @@ On macOS and Linux the root is `/opt/xcc/$(VERSION)`:
 
 ```
 /opt/xcc/0.61/
-├── bin/                 xcc and everything it runs
-│   ├── xcc              the driver — this is the one you invoke
-│   ├── xcc-fe           front end (source → IR text)
-│   ├── xcc-cg-<arch>    code generator, one per target
-│   ├── xcc-ln-<fmt>     linker / executable writer
+├── bin/
+│   ├── xcc              the compiler; it runs every stage itself
+│   ├── xcc-sign         code signing
 │   ├── xcc-as           6502 assembler
 │   ├── xcc-sim-6502     6502 simulator
-│   ├── xcc-sim-68k      68000 simulator
-│   └── xcc-sign         code signing
+│   └── xcc-sim-68k      68000 simulator
 ├── lib/                 shared libraries
 │   └── xc/              the support tree: standard library, layouts, runtime
 │       ├── generic/lib/     architecture-neutral classes
@@ -38,9 +35,10 @@ On macOS and Linux the root is `/opt/xcc/$(VERSION)`:
 └── …
 ```
 
-Only `xcc` is meant to be invoked directly. The other programs in `bin/` are
-stages that `xcc` spawns, and `xcc` finds them beside itself. The exceptions are
-`xcc-sim-6502` and `xcc-sim-68k`, which you run to execute what you built.
+`xcc` parses, optimises, generates code, assembles and links in one process; it
+starts no other program. `xcc-sign` signs a finished Mach-O outside a build,
+`xcc-as` assembles hand-written 6502 source, and `xcc-sim-6502` and
+`xcc-sim-68k` run what you built for those targets.
 
 On **Windows** the default root is `C:\Program Files\xcc`. Windows has no
 `bin`/`lib` split, so the binaries sit directly in that directory and the
@@ -65,14 +63,12 @@ On startup `xcc` looks for a **support tree** (the directory holding `generic/`,
 roots in turn for `lib/xc`, then `xc`, then `support`:
 
 1. `-H <path>`
-2. **the directory holding the `xcc` binary, and its parent**
-3. the current directory
-4. `/opt/xcc/<version>`, `/opt/xcc`, `/usr/local/xcc`, `/usr/local/xtc`, `/opt/xtc`
+2. `$XCC_HOME`, then the older `$XTC_HOME`
+3. **the directory holding the `xcc` binary, and its parent**
+4. the current directory, then `~/xcc` and `~/xtc`
+5. `/opt/xcc/<version>`, `/opt/xcc`, `/usr/local/xcc`, `/usr/local/xtc`, `/opt/xtc`
 
-`xcc-bootstrap` also reads `$XCC_HOME` (and the older `$XTC_HOME`) after `-H`, and
-`~/xcc` and `~/xtc` after the current directory.
-
-Step 2 is what lets a plain `xcc -o prog prog.xc` work. An installed
+Step 3 is what lets a plain `xcc -o prog prog.xc` work. An installed
 `/opt/xcc/0.61/bin/xcc` goes up one level and finds `/opt/xcc/0.61/lib/xc`; a
 Windows `xcc.exe` finds `xc\` without going up. Neither needs a flag or an
 environment variable, and two installed versions never see each other's
@@ -106,8 +102,8 @@ resolves to.
 
 ## Cross-compiling
 
-Nothing extra is installed per target. The code generators for all seven live
-targets are part of the same install, and the support tree carries each
+Nothing extra is installed per target. `xcc` contains the code generators for
+all seven live targets, and the support tree carries each
 target's libraries.
 
 ```bash

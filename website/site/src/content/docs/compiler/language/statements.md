@@ -377,7 +377,7 @@ i16 main(u8 numArgs, string args[]) {
 }
 ```
 
-When `main` returns, the program issues an `RTS` to the caller. If you pass `-Q loop` on the command line (`xcc-bootstrap` only), the runtime spins in an infinite loop instead.
+On xt6502, when `main` returns the program stops at a `BRK`, and `xcc-sim-6502` exits with `main`'s return value as its status.
 
 ## Worked example
 

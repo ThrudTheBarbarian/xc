@@ -26,7 +26,7 @@ A successful build prints nothing on most targets. Errors and warnings go to the
 ## What's where
 
 - **[Install](/compiler/usage/install/)**: where `make install` puts things, and how `xcc` locates its own libraries. Read this first.
-- **[CLI flag reference](/compiler/usage/cli/)**: every command-line option, grouped by purpose, and which ones need `xcc-bootstrap`. Start here to look up a specific flag.
+- **[CLI flag reference](/compiler/usage/cli/)**: every command-line option, grouped by purpose. Start here to look up a specific flag.
 - **[Optimisation](/compiler/usage/optimization/)**: what each `-O` level does, the `-Flu` unroll cap, and which targets vectorise.
 - **[Memory models](/compiler/usage/memory-models/)**: the `xt6502` map, with two bank windows, the 4 KB hardware stack, and the on-demand banked heap. 6502 only; the native targets have no layout to choose.
 - **[Allocator & ARC](/compiler/usage/allocator-arc/)**: `-falloc=bump` vs `-falloc=heap`, and how automatic reference counting works with each.
@@ -59,11 +59,11 @@ Asking for `.asm` or `.s` stops the pipeline after code generation, which lets y
 `xcc` locates its support tree (standard library, linker scripts, runtime asm) by probing each of these roots for `lib/xc`, then `xc`, then `support`:
 
 ```
--H <path> > the directory holding xcc, and its parent
-          > cwd > /opt/xcc/<version> > /opt/xcc
+-H <path> > $XCC_HOME > $XTC_HOME
+          > the directory holding xcc, and its parent
+          > cwd > ~/xcc > ~/xtc
+          > /opt/xcc/<version> > /opt/xcc
           > /usr/local/xcc > /usr/local/xtc > /opt/xtc
 ```
-
-`xcc-bootstrap` also reads `$XCC_HOME` and `$XTC_HOME` after `-H`, and `~/xcc` and `~/xtc` after the working directory.
 
 The binary-relative step makes an install self-locating, so in normal use you set nothing. `-H` points a specific compiler at a specific tree, most often when running one from a source checkout. `-V` prints the include paths under the root that was chosen. Details are on [Install](/compiler/usage/install/).

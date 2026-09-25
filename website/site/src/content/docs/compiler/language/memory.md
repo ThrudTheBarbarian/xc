@@ -197,8 +197,8 @@ A `[weak] entries = N` line in a layout is accepted and ignored. There is nothin
 ## No manual mode
 
 Earlier releases documented a manual lifecycle mode, `-farc=off`. The flag never
-changed the generated code and is retired: `xcc-bootstrap` accepts it with a
-warning that it does nothing, and `xcc` rejects it. Every class instance is
+changed the generated code and is retired: `xcc` accepts it with a warning that
+it does nothing. Every class instance is
 reference counted.
 
 ## Introspection

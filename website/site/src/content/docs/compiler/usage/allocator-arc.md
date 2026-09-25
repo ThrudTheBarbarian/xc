@@ -7,8 +7,6 @@ description: Picking between -falloc=bump and -falloc=heap, and how automatic re
 
 Reference counting is not a choice: ARC is always on (see [Reference counting](#reference-counting)).
 
-`-falloc` is `xcc-bootstrap` only; `xcc` uses each target's default allocator. See [CLI → Two drivers](/compiler/usage/cli/#two-drivers).
-
 ## Allocator: `-falloc=bump|heap`
 
 ```bash
@@ -71,7 +69,7 @@ The calling convention follows from these rules:
 
 Full mechanics are on [Heap, ARC & weak refs](/compiler/language/memory/).
 
-Earlier releases documented `-farc=off`, a manual lifecycle mode. The flag never changed the generated code and is retired: `xcc-bootstrap` accepts it with a warning that it does nothing, and `xcc` rejects it.
+Earlier releases documented `-farc=off`, a manual lifecycle mode. The flag never changed the generated code and is retired: `xcc` accepts it with a warning that it does nothing.
 
 ### With the bump allocator
 
