@@ -305,5 +305,21 @@ int runXtOpcodeTests(void) {
         ASSERT_BYTES(d, want, sizeof(want), "complete PSH/SP-relative/PLL/RTS frame");
     }
 
+    // ── An undefined symbol is an error naming it, once per name. It used to
+    //    be a warning and the value 0, so a call to a function declared and
+    //    never defined became JSR $0000. A forward reference and a symbol
+    //    defined as 0 still assemble. ──
+    {
+        NSArray<NSString *> *errs = assembleErrors(
+            @".org $2000\n  JSR nowhere\n  LDA nowhere\n  RTS\n");
+        ASSERT_TRUE(errs.count == 1
+                        && [errs[0] rangeOfString:@"undefined symbol 'nowhere'"].location != NSNotFound
+                        && [errs[0] hasPrefix:@"line 2: "],
+                    "undefined symbol is an error naming it and its line, once");
+        NSData *d = assemble(@"zero = 0\n.org $2000\n  JSR later\n  LDA zero\nlater:\n  RTS\n");
+        uint8_t want[] = { 0x20, 0x06, 0x20, 0xAD, 0x00, 0x00, 0x60 };
+        ASSERT_BYTES(d, want, sizeof(want), "forward reference and a symbol defined as 0 assemble");
+    }
+
     return failures;
 }

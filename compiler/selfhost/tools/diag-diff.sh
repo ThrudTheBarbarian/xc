@@ -88,6 +88,18 @@ check() {
     case "$flagline" in
       *--migrate=*) extra+=("$(printf '%s' "$flagline" | grep -oE '\-\-migrate=[^ ,]+')");;
     esac
+    # A fixture scoped to one target (`target=xt6502`) is judged on it: the
+    # error it tests may exist only there. undefined_function_refused.xc is
+    # a link error on xt6502; on arm64 dyld resolves the name at load.
+    local arch=arm64
+    case "$flagline" in
+      *target=xt6502*|*target=6502*) arch=xt6502;;
+      *target=m68k*) arch=m68k;;
+      *target=arm9*) arch=arm9;;
+      *target=x86_64*) arch=x86_64;;
+      *target=win64*) arch=win64;;
+      *target=wasm32*) arch=wasm32;;
+    esac
     local out rc
     # `${extra[@]}` on an EMPTY array is an unbound-variable error under
     # `set -u` in bash 3.2, which is what macOS ships: the command then failed
@@ -106,7 +118,7 @@ check() {
           cat "$comp"
         } > "$src"
     fi
-    out=$("$WORK/xcc-xc" -H "$ROOT" -A arm64 ${extra[@]+"${extra[@]}"} -o "$WORK/out.bin" "$src" 2>&1)
+    out=$("$WORK/xcc-xc" -H "$ROOT" -A "$arch" ${extra[@]+"${extra[@]}"} -o "$WORK/out.bin" "$src" 2>&1)
     rc=$?
     if [ "$rc" -eq 0 ]; then
         fail=$((fail+1)); FAILED+=("$label	ACCEPTED (exit 0)")

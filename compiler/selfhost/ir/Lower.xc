@@ -347,6 +347,9 @@ class ClassInfo
     // none of this and links none of the runtime.
     bool _boundsCheck;
     bool _threadSafeStatics;
+    // callee symbol -> "file:line:col" of its first direct call. A linker or
+    // assembler that finds the symbol undefined names the call with it.
+    Map* _callSites;
     // Globals whose initialiser could not constant-fold: run as ordinary
     // stores at the top of main (mirror of pendingGlobalInits).
     Array* _pendingGlobalInits;
@@ -553,6 +556,12 @@ class ClassInfo
     void setBoundsCheck(bool b)
         {
         _boundsCheck = b;
+        }
+    Map* callSites(void)
+        {
+        if (_callSites == (Map*)0)
+            _callSites = new Map();
+        return _callSites;
         }
 
     void setVtable(Vtable* v)
@@ -5201,7 +5210,17 @@ class ClassInfo
         if (decl.hasFlag((u32)NF_VARARGS))
             cargs = packVarargs(cargs, fixedParamCount(decl), decl);
         IRInsn* call = IRInsn.with(String.withCString("Call"));
-        call.add(IROperand.sym(decl.sym() == 0 ? n.name() : decl.sym()));
+        String* callee = decl.sym() == 0 ? n.name() : decl.sym();
+        call.add(IROperand.sym(callee));
+        if (n.line() != (u32)0 && n.file() != 0 && callSites().get((Hashable*)callee) == (Object*)0)
+            {
+            String* site = String.withString(n.file());
+            site.appendByte((u8)':');
+            site.append(String.withU32(n.line()));
+            site.appendByte((u8)':');
+            site.append(String.withU32(n.col()));
+            callSites().set((Hashable*)callee, (Object*)site);
+            }
         for (u32 i = (u32)0; i < cargs.count(); i = i + (u32)1)
             call.add(IROperand.useVal((IRValue*)cargs.get(i)));
         call.add(IROperand.useVal(_mem));

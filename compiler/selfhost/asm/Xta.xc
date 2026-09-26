@@ -551,6 +551,11 @@ class Xta
     u32 _regCWindowEnd;
     u32 _regCBankRegLo;
     u32 _regCBankRegHi;
+    // The line pass 2 is emitting, or 0 outside pass 2. Every label is known
+    // by then, so a name evaluate() cannot resolve is undefined for good.
+    XaLine* _evalLine;
+    Map* _undefReported; // name -> Number, one error per undefined name
+    bool _evalUndefined; // the last pass-2 evaluate met an undefined name
 
     void init(void)
         {
@@ -562,6 +567,8 @@ class Xta
         _segments = new Array();
         _ambiguousWarned = new Map();
         _predefines = new Map();
+        _evalLine = (XaLine*)0;
+        _undefReported = new Map();
         _codeBankReg = (u32)0;
         _dataBankReg = (u32)0;
         _shadowStageBase = (u32)0;
@@ -982,6 +989,25 @@ class Xta
                 return ((Number*)_symbols.get((Hashable*)key)).asI64();
             }
 
+        // In pass 2 an undefined name is an error. It used to be a warning
+        // and the value 0, so a call to a function that was declared and never
+        // defined assembled to `JSR $0000` and the program jumped to zero page.
+        if (_evalLine != (XaLine*)0)
+            {
+            _evalUndefined = true;
+            if (_undefReported.get((Hashable*)e) == (Object*)0)
+                {
+                _undefReported.set((Hashable*)e, (Object*)Number.withU32((u32)1));
+                String* m = lineRef(_evalLine);
+                m.appendCString("undefined symbol '");
+                m.append(e);
+                m.appendCString("' in '");
+                m.append(_evalLine.rawText() == (String*)0 ? e : XaText.tws(_evalLine.rawText()));
+                m.appendCString("'");
+                err(m);
+                }
+            return (i64)0;
+            }
         String* m = String.withCString("undefined symbol '");
         m.append(e);
         m.appendCString("', using 0");
@@ -2050,12 +2076,20 @@ class Xta
 
     void pass2(void)
         {
+        _undefReported = new Map();
+        pass2Lines();
+        _evalLine = (XaLine*)0;
+        }
+
+    void pass2Lines(void)
+        {
         _segments = new Array();
         XaSegment* cur = (XaSegment*)0;
         _pc = (u32)0;
         for (u32 i = (u32)0; i < _lines.count(); i = i + (u32)1)
             {
             XaLine* pl = (XaLine*)_lines.get(i);
+            _evalLine = pl;
             u32 t = pl.type();
             if (t == (u32)LT_ORG)
                 {
@@ -2266,11 +2300,13 @@ class Xta
             return;
 
         String* exprStr = extractExpression(pl.operand(), pl.mode());
+        _evalUndefined = false;
         i64 value = evaluate(exprStr);
 
         // A symbolic memory operand that resolves to $0000 is almost always a
-        // reference to a symbol nobody defined. Say so.
-        if (value == (i64)0)
+        // reference to a symbol nobody defined. Say so. An undefined symbol
+        // is already an error; this is for one that IS defined, as 0.
+        if (value == (i64)0 && !_evalUndefined)
             {
             u32 md = pl.mode();
             bool mem = md == (u32)AM_ZEROPAGE || md == (u32)AM_ZEROPAGEX || md == (u32)AM_ZEROPAGEY || md == (u32)AM_ABSOLUTE || md == (u32)AM_ABSOLUTEX || md == (u32)AM_ABSOLUTEY || md == (u32)AM_INDIRECT;

@@ -2859,10 +2859,14 @@ static XTCorpusResult *runFixture(NSString *xtPath, NSString *name) {
             // that surfaces as FailSema — or FailParse, when the rule is
             // enforced during parsing (blocks_wb_escape.xc: the wb-escape
             // check lives in parseReturn); via the m68k/arm9 subprocess a
-            // rejection is just a non-zero rc → FailCodegen. Treat any of the
-            // three as the expected pass; compiling clean is the failure.
+            // rejection is just a non-zero rc → FailCodegen. A program the
+            // assembler or linker refuses (undefined_function_refused.xc: a
+            // call to a function declared and never defined) is FailAssembleLink.
+            // Treat any of these as the expected pass; compiling clean is the
+            // failure.
             #define INVERT_SEMA(O, M) do { \
-                if ((O) == XTCorpusFailSema || (O) == XTCorpusFailCodegen || (O) == XTCorpusFailParse) { (O) = XTCorpusPass; (M) = nil; } \
+                if ((O) == XTCorpusFailSema || (O) == XTCorpusFailCodegen || (O) == XTCorpusFailParse \
+                    || (O) == XTCorpusFailAssembleLink) { (O) = XTCorpusPass; (M) = nil; } \
                 else if ((O) == XTCorpusPass) { (O) = XTCorpusFailSema; \
                     (M) = @"expected a sema error, but compiled clean"; } } while (0)
             INVERT_SEMA(armOutcome, armMsg);
@@ -2889,8 +2893,9 @@ static XTCorpusResult *runFixture(NSString *xtPath, NSString *name) {
         r.oracled = armOracled || xtOracled || m68kOracled || arm9Oracled || x86Oracled;
 
         // Stage 11a — production subprocess pipeline (xt6502 only). Run when
-        // xt6502 applies and its in-process result passed.
-        if (xtApp && xtOutcome == XTCorpusPass && xtFE) {
+        // xt6502 applies and its in-process result passed. Not for a negative
+        // fixture: its pass is a refusal, and there is nothing to run.
+        if (xtApp && xtOutcome == XTCorpusPass && xtFE && !corpusExpectsSemaError(rawSource)) {
             r.subprocessRan = YES;
             NSString *subMsg = nil;
             BOOL subOk = runXt6502SubprocessPipeline(xtPath, fixBuildDir, &subMsg);

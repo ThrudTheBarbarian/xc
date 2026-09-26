@@ -775,6 +775,14 @@ Forward declarations (signature without body, terminated with
 definition in the same compilation unit, so forward declarations
 are mainly needed to declare external functions in headers.
 
+A called function must be defined in the program, in a library it
+links, or in the platform's C library. On xt6502, m68k, x86_64 and
+win64 a call to one defined nowhere is an error naming the function
+and the call. On arm64, arm9 and wasm32 the name is left to the
+dynamic loader or the JavaScript host, which reports it at startup
+or at the call. xt6502 has no C library, so a bodiless `printf`
+prototype is this error there.
+
 ### 6.2 Tuple returns
 
 A function may return multiple values. The return type is a

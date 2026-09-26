@@ -14,12 +14,21 @@
 \****************************************************************************/
 - (NSArray<XASegment*>*)pass2
     {
+    self.undefinedReported = [NSMutableSet set];
+    NSArray<XASegment*>* segments = [self pass2Lines];
+    self.evalLine = nil;
+    return segments;
+    }
+
+- (NSArray<XASegment*>*)pass2Lines
+    {
     NSMutableArray<XASegment*>* segments = [NSMutableArray array];
     XASegment* currentSeg = nil;
     self.pc = 0;
 
     for (XAParsedLine* pl in self.parsedLines)
         {
+        self.evalLine = pl;
         switch (pl.type)
             {
         case XALineDirectiveOrg:
@@ -335,6 +344,7 @@
 
     // Resolve operand
     NSString* exprStr = [self extractExpression:pl.operand mode:pl.addressingMode];
+    self.evalUndefined = NO;
     int64_t value = [self evaluateExpression:exprStr];
 
     // Internal-error tripwire: a memory-addressed instruction whose
@@ -352,7 +362,9 @@
     // that happen to fall at offset 0 shouldn't trigger. An
     // operand is considered symbolic if it contains at least one
     // identifier character.
-    if (value == 0)
+    // An undefined symbol is already an error; the tripwire is for a symbol
+    // that IS defined, as 0.
+    if (value == 0 && !self.evalUndefined)
         {
         BOOL isMemAddressed =
             pl.addressingMode == XAModeZeroPage ||
@@ -800,6 +812,24 @@
             return self.symbols[key].longLongValue;
         }
 
+    // In pass 2 an undefined name is an error. It used to be a warning and
+    // the value 0, so a call to a function that was declared and never
+    // defined assembled to `JSR $0000` and the program jumped to zero page.
+    if (self.evalLine)
+        {
+        self.evalUndefined = YES;
+        if (![self.undefinedReported containsObject:e])
+            {
+            [self.undefinedReported addObject:e];
+            NSString* raw = self.evalLine.rawText
+                                ? [self.evalLine.rawText stringByTrimmingCharactersInSet:
+                                                             [NSCharacterSet whitespaceCharacterSet]]
+                                : e;
+            [self.mutableErrors addObject:[NSString stringWithFormat:@"line %lu: undefined symbol '%@' in '%@'",
+                                                                     (unsigned long)self.evalLine.sourceLine, e, raw]];
+            }
+        return 0;
+        }
     [self.mutableWarnings addObject:[NSString stringWithFormat:@"undefined symbol '%@', using 0", e]];
     return 0;
     }

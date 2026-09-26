@@ -16,6 +16,8 @@ empty.asm
 warn.asm
 warn.asm -V
 warn.asm -D0abch=$40 -D 1FFH=2
+undef.asm
+undef.asm -l u.lst
 dup.asm
 modes.asm
 regions.asm -l r.lst

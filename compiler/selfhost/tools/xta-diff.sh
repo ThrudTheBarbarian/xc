@@ -43,11 +43,17 @@ for f in $FILES; do
        || [ ! -s "$WORK/a.asm" ]; then
         oracle=$((oracle+1)); continue
     fi
-    if ! "$BIN/xcc-as" "$WORK/a.asm" -o "$WORK/a.xex" -b -L "$LAYOUT" -I . -I support >/dev/null 2>&1; then
+    # A library has no main, so the harness's `JSR _xt_main` has nothing to
+    # call, and an undefined symbol is an error in both assemblers. The file
+    # is still worth assembling: give the name a stand-in address.
+    DEFS=()
+    grep -q '^_xt_main:' "$WORK/a.asm" || DEFS=(-D '_xt_main=$2000')
+    if ! "$BIN/xcc-as" "$WORK/a.asm" -o "$WORK/a.xex" -b -L "$LAYOUT" -I . -I support \
+         ${DEFS[@]+"${DEFS[@]}"} >/dev/null 2>&1; then
         oracle=$((oracle+1)); continue
     fi
     if ! "$WORK/xta6502" "$WORK/a.asm" -o "$WORK/b.xex" "${BANKARGS[@]}" \
-         >"$WORK/b.err" 2>&1; then
+         ${DEFS[@]+"${DEFS[@]}"} >"$WORK/b.err" 2>&1; then
         fail=$((fail+1)); FAILED+=("$f ($(head -1 "$WORK/b.err"))"); continue
     fi
     if ! cmp -s "$WORK/a.xex" "$WORK/b.xex"; then
@@ -58,7 +64,7 @@ for f in $FILES; do
     # The same file through the port's own command line, configured from the
     # layout exactly as the reference was.
     if ! "$WORK/xta6502" "$WORK/a.asm" -o "$WORK/c.xex" -b -L "$LAYOUT" -I . -I support \
-         >"$WORK/c.err" 2>&1 || ! cmp -s "$WORK/a.xex" "$WORK/c.xex"; then
+         ${DEFS[@]+"${DEFS[@]}"} >"$WORK/c.err" 2>&1 || ! cmp -s "$WORK/a.xex" "$WORK/c.xex"; then
         fail=$((fail+1)); FAILED+=("$f (-L: $(head -1 "$WORK/c.err"))"); continue
     fi
     pass=$((pass+1))
