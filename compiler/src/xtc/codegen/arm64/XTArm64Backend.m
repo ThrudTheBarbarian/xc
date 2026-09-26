@@ -609,6 +609,10 @@ static const NSUInteger kArm64VaForwardWords = 16;
             if (insn.operands.count < 3) return 0;
             first = 2; argCount = insn.operands.count - 3; startGP = 1;  // receiver in x0
             break;
+        case XTIROpProtoDispatch:
+            if (insn.operands.count < 4) return 0;
+            first = 3; argCount = insn.operands.count - 4; startGP = 1;  // receiver in x0
+            break;
         default:
             return 0;
     }
@@ -702,7 +706,7 @@ static const NSUInteger kArm64VaForwardWords = 16;
     // value live across any of these cannot survive in a caller-saved register.
     return op == XTIROpCall || op == XTIROpCallBanked || op == XTIROpCallCloaked
         || op == XTIROpCallIndirect || op == XTIROpCallBankedIndirect
-        || op == XTIROpVTblDispatch
+        || op == XTIROpVTblDispatch || op == XTIROpProtoDispatch
         || op == XTIROpMemCopy || op == XTIROpMemSet
         || op == XTIROpRelease || op == XTIROpAutorelease
         || op == XTIROpWeakRegister || op == XTIROpWeakUnregister || op == XTIROpWeakLoad;
@@ -3503,6 +3507,29 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
     *sout = p - W;
 }
 
+// Protocol dispatch through the conformance ITABLE: vtable header word 1 points
+// at (protoId, &table) pairs ending in a zero id, and each table lists the
+// protocol's methods in declaration order. Both follow from the protocol alone,
+// so a library and its client agree on them without agreeing on vtable slot
+// numbers, which they cannot do for a protocol the library does not declare
+// (Comparable, Hashable). The walk starts with the itable in x16 and leaves the
+// matching pair's address there; x17 holds each id and x15 the one sought. The
+// arguments are already placed by then, and x15-x17 are never home registers.
++ (void)emitItableWalkFor:(uint32_t)pid hit:(NSString *)hit miss:(NSString *)miss
+                      ctx:(XTArm64FnCtx *)ctx {
+    [ctx.out appendFormat:@"    mov w15, #%u\n", pid & 0xFFFFu];
+    [ctx.out appendFormat:@"    movk w15, #%u, lsl #16\n", (pid >> 16) & 0xFFFFu];
+    NSString *fnl = [ctx.fn.name stringByReplacingOccurrencesOfString:@"$" withString:@"_"];
+    NSUInteger loop = ctx.labelCounter++;
+    [ctx.out appendFormat:@".L%@_itab_walk_%lu:\n", fnl, (unsigned long)loop];
+    [ctx.out appendString:@"    ldr x17, [x16]\n"];
+    [ctx.out appendString:@"    cmp w17, w15\n"];
+    [ctx.out appendFormat:@"    b.eq %@\n", hit];
+    [ctx.out appendString:@"    add x16, x16, #16\n"];
+    [ctx.out appendFormat:@"    cbnz x17, .L%@_itab_walk_%lu\n", fnl, (unsigned long)loop];
+    [ctx.out appendFormat:@"    b %@\n", miss];
+}
+
 + (void)emitInsn:(XTIRInsn *)insn
         inBlock:(XTIRBlock *)block
             ctx:(XTArm64FnCtx *)ctx
@@ -4770,6 +4797,38 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
             [[self class] storeReg:@"x17" intoValue:insn.result.valueId ctx:ctx];
             break;
         }
+        case XTIROpProtoLoad: {
+            // Operands: [receiver, ImmI(protoId), ImmI(index), memInput] -> fn
+            // pointer. `&p.method` through a protocol: the ProtoDispatch walk
+            // without the call. A null receiver, a class with no itable and an
+            // unimplemented `optional` all give 0, which is what the null test
+            // on the result relies on.
+            if (insn.operands.count < 3 || !insn.result) break;
+            XTIROperand *pidOp = insn.operands[1];
+            XTIROperand *idxOp = insn.operands[2];
+            if (pidOp.kind != XTIROperandKindImmI || idxOp.kind != XTIROperandKindImmI) break;
+            [self materialiseOperand:insn.operands[0] intoReg:@"x16" ctx:ctx];
+            NSString *fnl = [ctx.fn.name stringByReplacingOccurrencesOfString:@"$"
+                                                                   withString:@"_"];
+            NSUInteger hit = ctx.labelCounter++;
+            NSUInteger done = ctx.labelCounter++;
+            NSString *doneL = [NSString stringWithFormat:@".L%@_itab_done_%lu", fnl, (unsigned long)done];
+            [ctx.out appendString:@"    mov x17, #0\n"];
+            [ctx.out appendFormat:@"    cbz x16, %@\n", doneL];
+            [ctx.out appendString:@"    ldr x16, [x16]\n"];
+            [ctx.out appendString:@"    ldr x16, [x16, #8]\n"];
+            [ctx.out appendFormat:@"    cbz x16, %@\n", doneL];
+            [self emitItableWalkFor:(uint32_t)pidOp.intValue
+                                hit:[NSString stringWithFormat:@".L%@_itab_hit_%lu", fnl, (unsigned long)hit]
+                               miss:doneL
+                                ctx:ctx];
+            [ctx.out appendFormat:@".L%@_itab_hit_%lu:\n", fnl, (unsigned long)hit];
+            [ctx.out appendString:@"    ldr x16, [x16, #8]\n"];
+            [ctx.out appendFormat:@"    ldr x17, [x16, #%lld]\n", (long long)(idxOp.intValue * 8)];
+            [ctx.out appendFormat:@"%@:\n", doneL];
+            [[self class] storeReg:@"x17" intoValue:insn.result.valueId ctx:ctx];
+            break;
+        }
         case XTIROpRetain: {
             // Operands: [pointer, memInput].
             if (insn.operands.count < 2) break;
@@ -4925,24 +4984,30 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
         }
 
         // ── VTable dispatch / indirect call ───────────────────────
-        case XTIROpVTblDispatch: {
-            // Operands: [receiver, ImmI(slot), arg0, ..., memInput].
-            // Receiver goes in x0 (the implicit self). Other args
+        case XTIROpVTblDispatch:
+        case XTIROpProtoDispatch: {
+            // Operands: [receiver, ImmI(slot), arg0, ..., memInput], or for
+            // ProtoDispatch [receiver, ImmI(protoId), ImmI(index), arg0, ...,
+            // memInput]. Receiver goes in x0 (the implicit self). Other args
             // follow in x1..x7. Vtable ptr lives at [recv, #0]; the
-            // function pointer at vtbl[slot * 8].
-            if (insn.operands.count < 2) break;
+            // function pointer at vtbl[slot * 8], or for a protocol call in
+            // the protocol's table found through the itable.
+            BOOL viaItable = (insn.opcode == XTIROpProtoDispatch);
+            NSUInteger first = viaItable ? 3 : 2;
+            if (insn.operands.count < (viaItable ? 3 : 2)) break;
             XTIROperand *recv = insn.operands[0];
             XTIROperand *slotOp = insn.operands[1];
             if (slotOp.kind != XTIROperandKindImmI) break;
+            if (viaItable && insn.operands[2].kind != XTIROperandKindImmI) break;
             [self materialiseOperand:recv intoReg:@"x0" ctx:ctx];
-            NSUInteger argCount = insn.operands.count >= 3 ? insn.operands.count - 3 : 0;
+            NSUInteger argCount = insn.operands.count >= first + 1 ? insn.operands.count - (first + 1) : 0;
             // Receiver consumed x0, so the GP counter starts at 1; the
             // FP bank (v0..v7) is independent and starts at 0.
-            NSArray *vaTypes = [self arm64ArgTypesForInsn:insn from:2 count:argCount ctx:ctx];
+            NSArray *vaTypes = [self arm64ArgTypesForInsn:insn from:first count:argCount ctx:ctx];
             NSArray<NSNumber *> *vStk = [self arm64ArgStackOffsets:vaTypes startGP:1 startFP:0 totalBytes:NULL];
             int gpIdx = 1, fpIdx = 0;
             for (NSUInteger i = 0; i < argCount; i++) {
-                XTIROperand *a = insn.operands[i + 2];
+                XTIROperand *a = insn.operands[i + first];
                 XTIRValue *av = (a.kind == XTIROperandKindUse)
                     ? [ctx.fn valueForId:a.valueId] : nil;
                 if (av && av.type.kind == XTIRTypeKindAgg) {
@@ -4961,8 +5026,32 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
             int64_t slotIdx = slotOp.intValue;
             // >16-byte struct return: pass the result slot in x8 before the call.
             BOOL vtSret = [self emitSretSetupIfNeeded:insn ctx:ctx];
-            [ctx.out appendString:@"    ldr x16, [x0]\n"];
-            [ctx.out appendFormat:@"    ldr x16, [x16, #%lld]\n", slotIdx * 8];
+            if (viaItable) {
+                // A receiver whose class does not answer to the protocol
+                // calls 0, as an empty vtable slot does.
+                NSString *fnl = [ctx.fn.name stringByReplacingOccurrencesOfString:@"$"
+                                                                       withString:@"_"];
+                NSUInteger hit = ctx.labelCounter++;
+                NSUInteger miss = ctx.labelCounter++;
+                NSUInteger call = ctx.labelCounter++;
+                [ctx.out appendString:@"    ldr x16, [x0]\n"];
+                [ctx.out appendString:@"    ldr x16, [x16, #8]\n"];
+                [ctx.out appendFormat:@"    cbz x16, .L%@_itab_call_%lu\n", fnl, (unsigned long)call];
+                [self emitItableWalkFor:(uint32_t)slotOp.intValue
+                                    hit:[NSString stringWithFormat:@".L%@_itab_hit_%lu", fnl, (unsigned long)hit]
+                                   miss:[NSString stringWithFormat:@".L%@_itab_miss_%lu", fnl, (unsigned long)miss]
+                                    ctx:ctx];
+                [ctx.out appendFormat:@".L%@_itab_miss_%lu:\n", fnl, (unsigned long)miss];
+                [ctx.out appendString:@"    mov x16, #0\n"];
+                [ctx.out appendFormat:@"    b .L%@_itab_call_%lu\n", fnl, (unsigned long)call];
+                [ctx.out appendFormat:@".L%@_itab_hit_%lu:\n", fnl, (unsigned long)hit];
+                [ctx.out appendString:@"    ldr x16, [x16, #8]\n"];
+                [ctx.out appendFormat:@"    ldr x16, [x16, #%lld]\n", (long long)(insn.operands[2].intValue * 8)];
+                [ctx.out appendFormat:@".L%@_itab_call_%lu:\n", fnl, (unsigned long)call];
+            } else {
+                [ctx.out appendString:@"    ldr x16, [x0]\n"];
+                [ctx.out appendFormat:@"    ldr x16, [x16, #%lld]\n", slotIdx * 8];
+            }
             [ctx.out appendString:@"    blr x16\n"];
             if (insn.result) {
                 if (insn.result.type.kind == XTIRTypeKindAgg) {

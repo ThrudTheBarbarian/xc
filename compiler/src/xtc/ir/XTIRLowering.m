@@ -17862,8 +17862,13 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
     // identically, needing no agreement. The itable itself is (protoId, &table)
     // pairs terminated by a zero id, and it lives at vtable entry 0 so a dispatch
     // site can reach it from the receiver alone, in every class, at a fixed offset.
+    //
+    // Not for a class from ANOTHER module: its vtable, and the itable that
+    // vtable points at, are defined in its library. A copy here is never read,
+    // and on ELF it names the library's methods from data, which the x86_64
+    // linker cannot bind.
     NSString* itblName = nil;
-    if ((sItableProtocols || sVtableConforms) && cls.protocolImplSymbols.count > 0)
+    if ((sItableProtocols || sVtableConforms) && cls.protocolImplSymbols.count > 0 && !cls.isExternal)
         {
         NSMutableArray<NSString*>* pairs = [NSMutableArray array];
         for (NSString* pname in [cls.protocolImplSymbols.allKeys

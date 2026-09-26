@@ -1155,14 +1155,20 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
         // The library's vtable numbering, which we must adopt rather than re-derive.
         NSDictionary* sl = [XTInterfaceImporter slotsFromJSON:json];
         [impMethodSlots addEntriesFromDictionary:(sl[@"methodSlots"] ?: @{})];
-        // AMBIENT slots, wasm32 only. Under shared-everything the app and the
-        // library each emit their own `String$vtbl` and each dispatches on
-        // objects the other created, so the layouts have to agree and the
-        // library's is already fixed (bug 091). Shared-object targets resolve
-        // one `$vtbl` through the dynamic linker — one table, nothing to
-        // reconcile, and adopting would widen every client's vtables for
-        // nothing.
-        if (_options.useWasm32Backend)
+        // AMBIENT slots: the numbers a library assumed for the prelude
+        // classes. Under shared-everything wasm the app and the library each
+        // emit their own `String$vtbl` and each dispatches on objects the
+        // other created, so the layouts have to agree and the library's is
+        // already fixed (bug 091). Every other target has the same problem one
+        // step removed: a client class that derives from Object is laid out by
+        // the client, and a library's `a.equals(b)` on an `Object*` reads the
+        // library's slot for Object.equals out of it (bug 266). A library
+        // numbers the prelude per class, from each class's ancestry alone, so
+        // two libraries agree and a client program adopts the numbers. A
+        // library build numbers them the same way itself and does not need to.
+        BOOL clientProgram = !(_options.emitLib || _options.compileOnly) &&
+                             (_options.useArm64Backend || _options.useX86_64Backend || _options.useArm9Backend);
+        if (_options.useWasm32Backend || clientProgram)
             {
             NSDictionary* amb = sl[@"ambientSlots"] ?: @{};
             for (NSString* l in amb)
@@ -1497,14 +1503,27 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     // compiled modules (x86_64 via -c separate compilation), where a
     // program-global protocol slot number is unachievable — dispatch goes
     // through the itable and protocol numbering is not adopted.
-    sema.itableProtocols = _options.useArm9Backend || (_options.useX86_64Backend && sema.libraryBuild);
+    //
+    // Bug 266: the same holds for every module that meets another one. On arm64
+    // (and iOS and Android), x86_64 and wasm32 a library build, a `-c` object
+    // and a program that imports an xtc library each number the protocols they
+    // see themselves, and nothing can make the numbers agree for a protocol the
+    // library does not declare: a library's `h.hash()` on a client's
+    // `Hashable*` read its slot 92 out of a 19-entry client vtable. The itable
+    // key (the protocol's name-derived id and the method's declaration index)
+    // is derived alike everywhere, so no numbering has to cross the interface.
+    // win64 links no libraries yet, so it keeps the slot.
+    BOOL multiModule = sema.libraryBuild || xtcLibJsons.count > 0;
+    BOOL itableDispatch = _options.useArm9Backend ||
+                          ((_options.useArm64Backend || _options.useX86_64Backend || _options.useWasm32Backend) && multiModule);
+    sema.itableProtocols = itableDispatch;
     // Native AAPCS varargs — a variadic's args ride the C ABI (arm9: regs+stack;
     // arm64: all on the stack, Apple's rule), NOT the $04B0 pack buffer. Unifying
     // arm64 onto it (bug 179) lets a cross-unit xc variadic and a C native share
     // one ABI, so a bodyless `...` prototype reaches EITHER — fixing the
     // cross-unit variadic call that arrived empty (c2xc 33).
     sema.nativeVarargs = _options.useArm9Backend || _options.useArm64Backend;
-    [XTIRLowering setItableProtocols:_options.useArm9Backend || (_options.useX86_64Backend && sema.libraryBuild)];
+    [XTIRLowering setItableProtocols:itableDispatch];
     // The race-free static-init once rides the SAME switch as atomic ARC: both
     // answer "can two threads touch this at once?", so -f[no-]thread-safe-arc
     // forces both together and neither can be turned on without the other. The
