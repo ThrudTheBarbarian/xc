@@ -2101,8 +2101,71 @@ static inline uint32_t arg32(int off)
 #define HMAX 64
 static int host_fd[HMAX];
 
-/* Bump allocator within the TPA for Malloc. */
+/* GEMDOS memory: Malloc/Mfree/Mshrink over [heap_ptr, heap_end), the part
+   of the TPA above the program's bss and below its stack. The allocated
+   blocks are kept here, sorted by address, and Malloc takes the first gap
+   that fits, so a block Mfree returns is reused. */
 static uint32_t heap_ptr = 0, heap_end = 0;
+typedef struct { uint32_t addr, size; } MemBlock;
+static MemBlock* mem_blocks = NULL;
+static size_t mem_count = 0, mem_cap = 0;
+
+/* The largest gap, and in *at the first gap of at least `want` bytes
+   (0 when there is none). */
+static uint32_t mem_scan(uint32_t want, uint32_t* at)
+    {
+    uint32_t largest = 0, cur = heap_ptr;
+    *at = 0;
+    for (size_t i = 0; i <= mem_count; i++)
+        {
+        uint32_t next = i < mem_count ? mem_blocks[i].addr : heap_end;
+        uint32_t gap = next > cur ? next - cur : 0;
+        if (gap > largest)
+            largest = gap;
+        if (*at == 0 && want != 0 && gap >= want)
+            *at = cur;
+        if (i < mem_count)
+            cur = mem_blocks[i].addr + mem_blocks[i].size;
+        }
+    return largest;
+    }
+
+static uint32_t mem_alloc(uint32_t amt)
+    {
+    uint32_t size = (amt + 1) & ~1u, at;
+    if (size == 0)
+        size = 2;
+    mem_scan(size, &at);
+    if (at == 0)
+        return 0;
+    if (mem_count == mem_cap)
+        {
+        mem_cap = mem_cap ? mem_cap * 2 : 64;
+        mem_blocks = realloc(mem_blocks, mem_cap * sizeof(MemBlock));
+        if (!mem_blocks)
+            {
+            fprintf(stderr, "xcc-sim-68k: out of host memory\n");
+            exit(1);
+            }
+        }
+    size_t i = 0;
+    while (i < mem_count && mem_blocks[i].addr < at)
+        i++;
+    memmove(&mem_blocks[i + 1], &mem_blocks[i], (mem_count - i) * sizeof(MemBlock));
+    mem_blocks[i].addr = at;
+    mem_blocks[i].size = size;
+    mem_count++;
+    return at;
+    }
+
+/* The index of the block starting at addr, or -1. */
+static long mem_find(uint32_t addr)
+    {
+    for (size_t i = 0; i < mem_count; i++)
+        if (mem_blocks[i].addr == addr)
+            return (long)i;
+    return -1;
+    }
 
 static void put_console(int c)
     {
@@ -2185,32 +2248,52 @@ static void gemdos_call(void)
     /* Malloc */
     case 0x48:
         {
-        uint32_t amt = arg32(2);
+        uint32_t amt = arg32(2), at;
         if (amt == 0xFFFFFFFF)
             {
-            D[0] = heap_end - heap_ptr;
+            D[0] = mem_scan(0, &at);
             break;
             }
-        if (heap_ptr + amt > heap_end)
-            {
-            D[0] = 0;
-            break;
-            }
-        D[0] = heap_ptr;
-        heap_ptr += (amt + 1) & ~1u;
+        D[0] = mem_alloc(amt);
         break;
         }
-    case 0x49: /* Mfree */
+    case 0x49: /* Mfree(block.l): 0, or EIMBA (-40) for an unknown block */
+        {
+        long i = mem_find(arg32(2));
+        if (i < 0)
+            {
+            D[0] = (uint32_t)-40;
+            break;
+            }
+        memmove(&mem_blocks[i], &mem_blocks[i + 1], (mem_count - (size_t)i - 1) * sizeof(MemBlock));
+        mem_count--;
         D[0] = 0;
         break;
+        }
     /* Mshrink(dummy.w, block.l, newsize.l) */
     case 0x4A:
         {
         uint32_t block = arg32(4), newsize = arg32(8);
-        /* Keep [block, block+newsize); the heap (Malloc) lives above it so it
-           doesn't collide with the program's new stack inside the kept TPA. */
-        uint32_t kept_end = block + newsize;
-        if (kept_end > heap_ptr && kept_end < heap_end)
+        long i = mem_find(block);
+        if (i >= 0)
+            {
+            /* A Malloc'd block: shrink it in place (never grow). */
+            uint32_t size = (newsize + 1) & ~1u;
+            if (size > mem_blocks[i].size)
+                {
+                D[0] = (uint32_t)-67; /* EGSBF */
+                break;
+                }
+            mem_blocks[i].size = size ? size : 2;
+            D[0] = 0;
+            break;
+            }
+        /* The program's own TPA: keep [block, block+newsize). The heap lives
+           above it so it doesn't collide with the program's new stack inside
+           the kept TPA. */
+        uint32_t kept_end = (block + newsize + 1) & ~1u;
+        if (kept_end > heap_ptr && kept_end < heap_end
+            && (mem_count == 0 || kept_end <= mem_blocks[0].addr))
             heap_ptr = kept_end;
         D[0] = 0;
         break;
