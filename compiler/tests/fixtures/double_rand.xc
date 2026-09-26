@@ -1,9 +1,10 @@
 //xtc-na: arm64,arm9,m68k,x86_64,win64 — uses inline 6502 assembly
 // double_rand.xc — regression test for Math.rand() (double overload).
 //
-// The double rand() packs 48 random mantissa bits (from 3 xorshift
-// steps) into an 8-byte double with sign=0, exp=-1, giving a value
-// in [0.5, 1.0).
+// Math.rand() for double is the float rand() (two xorshift steps: 23
+// mantissa bits under exponent -1) plus 24 more bits from the spare byte
+// of step 2 and all of step 3, added as e / 2^48. The result is an IEEE
+// binary64 in [0.5, 1.0).
 //
 // Seeding the PRNG deterministically lets us byte-compare the output
 // against the actual xorshift trace. Note the asm in random.asm
@@ -12,10 +13,15 @@
 // xorshift. We just match what the runtime actually does:
 //
 //   seed = 0x0001
-//   step 1 → state = 0x8181 → m0=$81, m1=$81
-//   step 2 → state = 0xA061 → m2=$61, m3=$A0
-//   step 3 → state = 0x39A9 → m4=$A9, m5=$39
-//   result = {$00, $FF, $81, $81, $61, $A0, $A9, $39}
+//   step 1 → state = 0x8181
+//   step 2 → state = 0xA061
+//   step 3 → state = 0x39A9
+//   f = bytes {$81, $81, $61, $3F}      (0.88088232...)
+//   e = $A039A9
+//   f + e / 2^48 = bytes {$20, $35, $07, $34, $30, $30, $EC, $3F}
+//
+// An earlier version packed the retired 8-byte softfloat layout
+// ({$00, $FF, mantissa...}), which reads as IEEE to a value near 0.
 
 #import "Stdio.xc"
 #import "Math.xc"
@@ -48,8 +54,8 @@ void main(void)
         double v = Math.rand();
         asm { LDA v   : STA r0 : LDA v+1 : STA r1 : LDA v+2 : STA r2 : LDA v+3 : STA r3
               LDA v+4 : STA r4 : LDA v+5 : STA r5 : LDA v+6 : STA r6 : LDA v+7 : STA r7 }
-        e0 = $00; e1 = $FF; e2 = $81; e3 = $81;
-        e4 = $61; e5 = $A0; e6 = $A9; e7 = $39; record();
+        e0 = $20; e1 = $35; e2 = $07; e3 = $34;
+        e4 = $30; e5 = $30; e6 = $EC; e7 = $3F; record();
     }
 
     // T2: a second call with a known state should diverge from the
@@ -59,16 +65,17 @@ void main(void)
         Math.setSeed(1);
         double v1 = Math.rand();
         double v2 = Math.rand();
-        // "Different" here = at least one of the 6 mantissa bytes
-        // differs. Encode that as: r0 = 1 if different, else 0.
+        // "Different" here = at least one of the 7 mantissa-bearing
+        // bytes differs. Encode that as: r0 = 1 if different, else 0.
         u8 same; same = 1;
         asm {
+            LDA v1   : CMP v2   : BNE _drand_diff
+            LDA v1+1 : CMP v2+1 : BNE _drand_diff
             LDA v1+2 : CMP v2+2 : BNE _drand_diff
             LDA v1+3 : CMP v2+3 : BNE _drand_diff
             LDA v1+4 : CMP v2+4 : BNE _drand_diff
             LDA v1+5 : CMP v2+5 : BNE _drand_diff
             LDA v1+6 : CMP v2+6 : BNE _drand_diff
-            LDA v1+7 : CMP v2+7 : BNE _drand_diff
             JMP _drand_end
         _drand_diff:
             LDA #$00
@@ -81,15 +88,16 @@ void main(void)
         record();
     }
 
-    // T3: check the flags and exponent of a rand() output are always
-    //     {$00, $FF} — that's the sole signature of the [0.5, 1.0)
-    //     packing, independent of the mantissa.
+    // T3: the sign and exponent of a rand() output are always 0 and
+    //     1022 (2^-1): byte 7 is $3F and the high nibble of byte 6 is
+    //     $E. That is the signature of [0.5, 1.0), independent of the
+    //     mantissa.
     {
         Math.setSeed(42);
         double v = Math.rand();
-        asm { LDA v   : STA r0 : LDA v+1 : STA r1 }
+        asm { LDA v+6 : AND #$F0 : STA r0 : LDA v+7 : STA r1 }
         r2 = 0; r3 = 0; r4 = 0; r5 = 0; r6 = 0; r7 = 0;
-        e0 = $00; e1 = $FF;
+        e0 = $E0; e1 = $3F;
         e2 = 0; e3 = 0; e4 = 0; e5 = 0; e6 = 0; e7 = 0;
         record();
     }

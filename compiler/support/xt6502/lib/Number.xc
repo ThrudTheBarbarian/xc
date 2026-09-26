@@ -27,7 +27,7 @@
 // First step toward heterogeneous collections (Foundation-style
 // Array / Dictionary / Set holding mixed primitive values). Number
 // wraps a single primitive: any of xtc's sized integers (i8 / u8 /
-// i16 / u16 / i32 / u32) OR a 5-byte float. Two storage kinds —
+// i16 / u16 / i32 / u32) OR a float. Two storage kinds —
 // integer (held bit-preserving as i32) and float — drive what the
 // `is*` predicates report and which getters are meaningful.
 //

@@ -51,8 +51,7 @@
 // RANDOM register ($D20A). Call setSeed() to override.
 //
 // The float and double rand() overloads return values in the range
-// [0.5, 1.0) — this is the natural output of a random mantissa with
-// exponent -1 in the 5- / 8-byte float format ((1 + m/2^N) * 2^-1).
+// [0.5, 1.0): a random IEEE mantissa under exponent -1, (1 + m/2^N) * 2^-1.
 //
 // ── ENABLE_DOUBLE ───────────────────────────────────────────────────
 // Gate for the double overloads that require heavier-weight runtime
@@ -282,68 +281,61 @@ class Math
         }
 
     // ── rand (float): random float [0.5, 1.0) ────────────────────────
-    // Generates a 24-bit random mantissa via two xorshift steps, then
-    // packs it into a 5-byte float with exponent -1.
-    // Result = (1 + mantissa/2^24) * 2^-1, giving [0.5, ~1.0).
+    // Two xorshift steps give 24 random bits; the low 23 become the IEEE
+    // binary32 mantissa under a fixed exponent of 126 (2^-1), so the result
+    // is (1 + m/2^23) * 2^-1, in [0.5, 1.0). Little-endian bytes:
+    // 0-2 mantissa (byte 2 bit 7 is the exponent's low bit, 0), 3 = $3F.
 
     static float rand(void)
         {
+        float result = 0.0;
         step();
-        u8 m0;
-        u8 m1;
         asm
             {
-            LDA seedLo : STA m0
-            LDA seedHi : STA m1
+            LDA seedLo : STA result
+            LDA seedHi : STA result+1
             }
         step();
-        u8 m2;
-        asm { LDA seedLo : STA m2 }
-
-        // Pack into 5-byte float: sign=0, exponent=-1 ($FF),
-        // mantissa = 3 random bytes (MSByte first).
-        float result = {$00, $FF, m0, m1, m2};
+        asm
+            {
+            LDA seedLo : AND #$7F : STA result+2
+            LDA #$3F : STA result+3
+            }
         return result;
         }
 
 #if ENABLE_DOUBLE
     // ── rand (double): random double [0.5, 1.0) ──────────────────────
-    // Widened sibling of the float rand(): generates a 48-bit random
-    // mantissa via three xorshift steps (each step returns 16 bits),
-    // then packs it into an 8-byte double with exponent -1.
-    // Result = (1 + mantissa/2^48) * 2^-1, giving [0.5, ~1.0).
+    // The first two steps build the same float rand() does, so a given
+    // seed gives the same leading digits from either overload (as on the
+    // other targets). The spare high byte of step 2 and all of step 3 add
+    // 24 more bits below the float's last one: f + e / 2^48, which is exact
+    // in binary64 and stays below 1.0 (e / 2^48 < 2^-24, the float's ulp).
 
     static double rand(void)
         {
+        float f = 0.0;
+        u32 e = 0;
         step();
-        u8 m0;
-        u8 m1;
         asm
             {
-            LDA seedLo : STA m0
-            LDA seedHi : STA m1
+            LDA seedLo : STA f
+            LDA seedHi : STA f+1
             }
         step();
-        u8 m2;
-        u8 m3;
         asm
             {
-            LDA seedLo : STA m2
-            LDA seedHi : STA m3
+            LDA seedLo : AND #$7F : STA f+2
+            LDA #$3F : STA f+3
+            LDA seedHi : STA e+2
             }
         step();
-        u8 m4;
-        u8 m5;
         asm
-        {
-            LDA seedLo : STA m4
-            LDA seedHi : STA m5
-        }
-
-        // Pack into 8-byte double: sign=0, exponent=-1 ($FF),
-        // mantissa = 6 random bytes (MSByte first).
-        double result = {$00, $FF, m0, m1, m2, m3, m4, m5};
-        return result;
+            {
+            LDA seedLo : STA e
+            LDA seedHi : STA e+1
+            }
+        return (double)f + (double)e / 281474976710656.0d; // 2^48
         }
 #endif // ENABLE_DOUBLE — rand(double)
 
@@ -764,7 +756,7 @@ class Math
 
     // ── Math constants ────────────────────────────────────────────────
     // xtc has no class-level constants, so each value is a zero-arg
-    // static method returning a pre-encoded 5-byte float literal.
+    // static method returning a float literal.
     // Usage: float x = Math.PI();
 
     static float E(void)
@@ -831,31 +823,9 @@ class Math
 
     // ── Double overloads ─────────────────────────────────────────────
     // Parameter-type-overloaded `double` siblings of the float API.
-    // Precision breakdown depends on ENABLE_DOUBLE (set at the top
-    // of this file):
-    //
-    //   Always full dp precision (small routines, no heavy runtime):
-    //     abs(double)         — inline sign-clear + byte copy, no
-    //                           JSR. (There's no standalone dpAbs
-    //                           routine — abs is width-agnostic and
-    //                           fpAbs covers both widths if anything
-    //                           ever needs to call through a label.)
-    //     sqrt(double)        — real 49-iter dpSqrt (defined above)
-    //
-    //   When ENABLE_DOUBLE=1, full dp precision via Horner-Taylor
-    //   bodies compiled into the banked code page:
-    //     sin, cos, tan, atan, ln, exp,
-    //     pow(double, i16), pow(double, double)
-    //
-    //   When ENABLE_DOUBLE=0, #warning + narrow-to-float stopgap.
-    //   The stopgap form is:
-    //     (double)-out ← sin((float)-in)
-    //   Narrowing is free (dpToFp is an RTS — the top 5 bytes of
-    //   a double are already a valid float encoding); widening
-    //   just zeros the low 3 mantissa bytes. The fp algorithms
-    //   give ~14 bits (trig) / ~18 bits (ln/exp) / ~24 bits
-    //   (mul-only paths). Users who need full 48-bit precision
-    //   must enable the real implementations.
+    // IEEE binary64 throughout, arithmetic on MECH. With ENABLE_DOUBLE=0
+    // (set at the top of this file) the block below is left out and only
+    // sqrt(double) remains.
 
 #if ENABLE_DOUBLE
     static double abs(double val)
