@@ -1,0 +1,7 @@
+caught call
+caught cond-a
+caught cond-b
+caught variable
+caught method
+caught new
+done
