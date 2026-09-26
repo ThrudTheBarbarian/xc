@@ -95,7 +95,7 @@ void main(void)
     // ── T6: a null strong pointer leaving scope frees nothing ──
     {
         Tracker* h = 0;
-        Assert.isNull(h);
+        Assert.isNull((pointer)h);
     }
     Assert.isEqual(deallocCount, 4);
 
