@@ -862,7 +862,7 @@ static NSString* m68kSym(NSString* name)
         [out appendString:
                  @"; runtime: _xtc_dealloc(obj) -> dispatch dealloc per element (count at\n"
                   "; obj-14, stride obj-12) then Mfree(obj-14). Loop state in an a6 frame so it\n"
-                  "; survives the dealloc calls. count>=1 (single object => one dispatch).\n"
+                  "; survives the dealloc calls. count 0 => no dispatch, a single object is 1.\n"
                   "\t.globl\t_xtc_dealloc\n_xtc_dealloc:\n"
                   "\tlink\ta6,#-8\n\tmove.l\t8(a6),a0\n"]; // -2 count, -4 elem, -8 eltptr
         // Auto-zero any weak references to this object before the memory is

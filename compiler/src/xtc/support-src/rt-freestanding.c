@@ -400,9 +400,9 @@ void* _xtc_alloc(uint64_t count, uint64_t stride, void (*dealloc)(void*))
     /* An allocation too large to satisfy returns NULL — it does not quietly
        become a small one. `b > (16UL << 20) -> b = 256` handed back a 256-byte
        block for any request over 16 MB and the caller wrote straight past it.
-       A minimum block size is fine; a silent maximum is not. */
-    if (count < 1)
-        count = 1;
+       A minimum block size is fine; a silent maximum is not.
+       A count of 0 is stored as 0: raising it to 1 made freeing `new C[0]` run
+       one dealloc and gave the empty array a `.length` of 1 (bug 472). */
     uint64_t b = count * stride;
     /* A MINIMUM, not a rounding-up. It was 256, which meant a 16-byte object
        asked calloc for 296 bytes and had all of them zeroed: arc_alloc's

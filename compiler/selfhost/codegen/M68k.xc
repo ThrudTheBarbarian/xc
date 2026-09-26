@@ -4039,7 +4039,7 @@ class M68k
             {
             _out.appendCString("; runtime: _xtc_dealloc(obj) -> dispatch dealloc per element (count at\n");
             _out.appendCString("; obj-14, stride obj-12) then Mfree(obj-14). Loop state in an a6 frame so it\n");
-            _out.appendCString("; survives the dealloc calls. count>=1 (single object => one dispatch).\n");
+            _out.appendCString("; survives the dealloc calls. count 0 => no dispatch, a single object is 1.\n");
             _out.appendCString("\t.globl\t_xtc_dealloc\n_xtc_dealloc:\n\tlink\ta6,#-8\n\tmove.l\t8(a6),a0\n");
             // Auto-zero any weak reference to this object BEFORE the memory
             // is freed and possibly reused, then reload obj into a0.

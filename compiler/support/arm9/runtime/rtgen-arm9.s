@@ -98,10 +98,8 @@ _xtc_count:
 _xtc_alloc:
 	@ args = 0, pretend = 0, frame = 0
 	@ frame_needed = 0, uses_anonymous_args = 0
-	cmp	r0, #1
 	push	{r4, r5, r6, lr}
-	movcs	r4, r0
-	movcc	r4, #1
+	mov	r4, r0
 	mul	r0, r1, r4
 	mov	r5, r1
 	mov	r6, r2

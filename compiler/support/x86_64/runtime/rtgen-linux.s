@@ -350,8 +350,6 @@ _xtc_alloc:                             # @_xtc_alloc
 	push	rbx
 	mov	rbx, rdx
 	mov	r14, rdi
-	cmp	rdi, 1
-	adc	r14, 0
 	mov	r15, rsi
 	mov	rax, r14
 	imul	rax, rsi
@@ -396,8 +394,6 @@ _xtc_new_u8:                            # @_xtc_new_u8
 	test	rax, rax
 	je	.LBB7_1
 # %bb.2:
-	cmp	rbx, 1
-	adc	rbx, 0
 	mov	dword ptr [rax], 1481920322
 	mov	qword ptr [rax + 4], 1
 	mov	qword ptr [rax + 12], rbx
@@ -429,8 +425,6 @@ _xtc_new_i8:                            # @_xtc_new_i8
 	test	rax, rax
 	je	.LBB8_1
 # %bb.2:
-	cmp	rbx, 1
-	adc	rbx, 0
 	mov	dword ptr [rax], 1481920322
 	mov	qword ptr [rax + 4], 1
 	mov	qword ptr [rax + 12], rbx
@@ -454,8 +448,6 @@ _xtc_new_u16:                           # @_xtc_new_u16
 # %bb.0:
 	push	rbx
 	mov	rbx, rdi
-	cmp	rdi, 1
-	adc	rbx, 0
 	lea	rax, [rbx + rbx]
 	cmp	rax, 17
 	mov	edi, 16
@@ -488,8 +480,6 @@ _xtc_new_i16:                           # @_xtc_new_i16
 # %bb.0:
 	push	rbx
 	mov	rbx, rdi
-	cmp	rdi, 1
-	adc	rbx, 0
 	lea	rax, [rbx + rbx]
 	cmp	rax, 17
 	mov	edi, 16
@@ -522,8 +512,6 @@ _xtc_new_u32:                           # @_xtc_new_u32
 # %bb.0:
 	push	rbx
 	mov	rbx, rdi
-	cmp	rdi, 1
-	adc	rbx, 0
 	lea	rax, [4*rbx]
 	cmp	rax, 17
 	mov	edi, 16
@@ -556,8 +544,6 @@ _xtc_new_i32:                           # @_xtc_new_i32
 # %bb.0:
 	push	rbx
 	mov	rbx, rdi
-	cmp	rdi, 1
-	adc	rbx, 0
 	lea	rax, [4*rbx]
 	cmp	rax, 17
 	mov	edi, 16
@@ -590,8 +576,6 @@ _xtc_new_pointer:                       # @_xtc_new_pointer
 # %bb.0:
 	push	rbx
 	mov	rbx, rdi
-	cmp	rdi, 1
-	adc	rbx, 0
 	lea	rax, [8*rbx]
 	cmp	rax, 17
 	mov	edi, 16
@@ -624,8 +608,6 @@ _xtc_new_u64:                           # @_xtc_new_u64
 # %bb.0:
 	push	rbx
 	mov	rbx, rdi
-	cmp	rdi, 1
-	adc	rbx, 0
 	lea	rax, [8*rbx]
 	cmp	rax, 17
 	mov	edi, 16
@@ -658,8 +640,6 @@ _xtc_new_i64:                           # @_xtc_new_i64
 # %bb.0:
 	push	rbx
 	mov	rbx, rdi
-	cmp	rdi, 1
-	adc	rbx, 0
 	lea	rax, [8*rbx]
 	cmp	rax, 17
 	mov	edi, 16
@@ -700,8 +680,6 @@ _xtc_new_bool:                          # @_xtc_new_bool
 	test	rax, rax
 	je	.LBB16_1
 # %bb.2:
-	cmp	rbx, 1
-	adc	rbx, 0
 	mov	dword ptr [rax], 1481920322
 	mov	qword ptr [rax + 4], 1
 	mov	qword ptr [rax + 12], rbx
@@ -725,8 +703,6 @@ _xtc_new_float:                         # @_xtc_new_float
 # %bb.0:
 	push	rbx
 	mov	rbx, rdi
-	cmp	rdi, 1
-	adc	rbx, 0
 	lea	rax, [4*rbx]
 	cmp	rax, 17
 	mov	edi, 16
@@ -759,8 +735,6 @@ _xtc_new_double:                        # @_xtc_new_double
 # %bb.0:
 	push	rbx
 	mov	rbx, rdi
-	cmp	rdi, 1
-	adc	rbx, 0
 	lea	rax, [8*rbx]
 	cmp	rax, 17
 	mov	edi, 16
@@ -793,8 +767,6 @@ _xtc_new_string:                        # @_xtc_new_string
 # %bb.0:
 	push	rbx
 	mov	rbx, rdi
-	cmp	rdi, 1
-	adc	rbx, 0
 	lea	rax, [8*rbx]
 	cmp	rax, 17
 	mov	edi, 16

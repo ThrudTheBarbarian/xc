@@ -47,8 +47,7 @@ uint16_t _xtc_count(void* o)
 
 void* _xtc_alloc(unsigned long count, unsigned long stride, void (*dealloc)(void*))
     {
-    if (count < 1)
-        count = 1;
+    /* A count of 0 stays 0, so freeing `new C[0]` runs no dealloc (bug 472). */
     unsigned long b = count * stride;
     if (b < 256)
         b = 256;

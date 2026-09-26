@@ -46,8 +46,7 @@ typedef void xtDealloc_t(pointer);
 
 pointer _xtc_alloc(u32 count, u32 stride, pointer dealloc)
     {
-    if (count < (u32)1)
-        count = (u32)1;
+    // A count of 0 stays 0, so freeing `new C[0]` runs no dealloc (bug 472).
     u32 b = count * stride;
     if (b < (u32)256)
         b = (u32)256;

@@ -3209,7 +3209,6 @@ class Wasm32
         "  (func $_xtc_alloc%s (param $c i32) (param $s i32) (param $d i32) (result i32)\n"
         "    (local $b i32) (local $p i32) (local $end i32) (local $total i32)\n"
         "    (local $prev i32) (local $cur i32) (local $sz i32) (local $rem i32)\n"
-        "    local.get $c\n    i32.eqz\n    if\n      i32.const 1\n      local.set $c\n    end\n"
         "    local.get $c\n    local.get $s\n    i32.mul\n    local.set $b\n"
         "    local.get $b\n    i32.const 256\n    i32.lt_u\n"
         "    if\n      i32.const 256\n      local.set $b\n    end\n"
