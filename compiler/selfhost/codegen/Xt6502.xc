@@ -2927,6 +2927,13 @@ class Xt6502
     // treated conservatively as block-level uses, which can only over-
     // approximate a live range — a few extra slots saved, never fewer, so it
     // cannot reintroduce a clobber.
+    //
+    // An address-taken value (a by-value struct param, a pinned local) is read
+    // through pointers derived from its AddrOf, so its own SSA uses can end at
+    // the AddrOf while a FieldAddr of it is still read after the call. Its ZP
+    // home sits in the pool every function shares, so a callee reuses it. A
+    // live value therefore also keeps alive the values its address derives
+    // from (see addressRoots).
     void computeCallSaveSets(IRFunc* fn)
     {
         _callSaveSets = new Map();
@@ -2934,6 +2941,7 @@ class Xt6502
         Array* liveIn = new Array();
         Array* liveOut = new Array();
         solveLiveness(fn, liveIn, liveOut);
+        Map* roots = addressRoots(fn);
         for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1) {
             IRBlock* bb = (IRBlock*)fn.blocks().get(b);
             Array* live = copyVals((Array*)liveOut.get(b));
@@ -2941,7 +2949,12 @@ class Xt6502
             for (u32 i = (u32)0; i < rev.count(); i = i + (u32)1) {
                 IRInsn* n = (IRInsn*)rev.get(i);
                 if (isCallOp(n.op())) {
-                    Array* bytes = zpBytesForLive(live, n.res());
+                    Array* held = copyVals(live);
+                    for (u32 k = (u32)0; k < live.count(); k = k + (u32)1) {
+                        Object* r = roots.get((Hashable*)(IRValue*)live.get(k));
+                        if (r != (Object*)0) unionVals(held, (Array*)r);
+                    }
+                    Array* bytes = zpBytesForLive(held, n.res());
                     if (bytes.count() > (u32)0) _callSaveSets.set((Hashable*)n, (Object*)bytes);
                 }
                 if (n.res() != (IRValue*)0) removeVal(live, n.res());
@@ -2952,6 +2965,64 @@ class Xt6502
                 }
             }
         }
+    }
+
+    // For each value that is an address formed from another value's storage,
+    // the values whose storage it may point into: AddrOf %v gives {v}, and an
+    // address computed from such a value (FieldAddr, ElementAddr, a cast, a
+    // Select or Phi, integer arithmetic on it) inherits its operands' roots.
+    // Solved to a fixpoint because a Phi can name a later definition.
+    static bool derivesAddress(String* op)
+    {
+        return op.equals(String.withCString("FieldAddr"))
+            || op.equals(String.withCString("ElementAddr"))
+            || op.equals(String.withCString("Bitcast"))
+            || op.equals(String.withCString("Copy"))
+            || op.equals(String.withCString("IntToPtr"))
+            || op.equals(String.withCString("PtrToInt"))
+            || op.equals(String.withCString("Add"))
+            || op.equals(String.withCString("Sub"))
+            || op.equals(String.withCString("Select"))
+            || op.equals(String.withCString("Phi"));
+    }
+
+    Map* addressRoots(IRFunc* fn)
+    {
+        Map* roots = new Map();
+        bool changed = true;
+        while (changed) {
+            changed = false;
+            for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1) {
+                IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+                Array* seq = allInsns(bb);
+                for (u32 i = (u32)0; i < seq.count(); i = i + (u32)1) {
+                    IRInsn* n = (IRInsn*)seq.get(i);
+                    if (n.res() == (IRValue*)0) continue;
+                    bool isAddrOf = n.op().equals(String.withCString("AddrOf"));
+                    if (!isAddrOf && !derivesAddress(n.op())) continue;
+                    Object* mo = roots.get((Hashable*)n.res());
+                    Array* mine = mo == (Object*)0 ? (Array*)0 : (Array*)mo;
+                    for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1) {
+                        IROperand* o = (IROperand*)n.ops().get(k);
+                        if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0) continue;
+                        Array* add = new Array();
+                        if (isAddrOf) addVal(add, o.val());
+                        Object* inh = roots.get((Hashable*)o.val());
+                        if (inh != (Object*)0) unionVals(add, (Array*)inh);
+                        if (add.count() == (u32)0) continue;
+                        if (mine == (Array*)0) {
+                            mine = new Array();
+                            roots.set((Hashable*)n.res(), (Object*)mine);
+                        }
+                        for (u32 j = (u32)0; j < add.count(); j = j + (u32)1) {
+                            IRValue* v = (IRValue*)add.get(j);
+                            if (!hasVal(mine, v)) { mine.add((Object*)v); changed = true; }
+                        }
+                    }
+                }
+            }
+        }
+        return roots;
     }
 
     // The live values' ZP bytes, de-duplicated and ascending.
