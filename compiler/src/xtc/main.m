@@ -2238,7 +2238,8 @@ static NSString *x86_64ClassAllocStubs(NSString *prog, BOOL win64) {
 
 static int linkArm64Shared(const char *argv0, XTCommandLineOptions *opts,
                            NSString *asmPath, NSString *outPath,
-                           NSString *_Nullable ifaceJson) {
+                           NSString *_Nullable ifaceJson,
+                           NSArray<NSString *> *neededLibs) {
     NSFileManager *fm = [NSFileManager defaultManager];
     NSString *asmText = [NSString stringWithContentsOfFile:asmPath
                                                   encoding:NSUTF8StringEncoding error:NULL];
@@ -2288,6 +2289,11 @@ static int linkArm64Shared(const char *argv0, XTCommandLineOptions *opts,
             resolveUserLinkInputs(opts, fm, libDylibs, libRaw, &libSysLibs);
             NSMutableArray<NSString *> *dylibArgs =
                 [@[@"--dylib", instName, ifacePath, exportsPath, combinedPath, outPath] mutableCopy];
+            // The libraries this one `#import`s (bug 440): the linker records
+            // each as an LC_LOAD_DYLIB, so a client that imports only this
+            // library still loads them.
+            for (NSString *p in neededLibs)
+                if ([p.pathExtension isEqualToString:@"dylib"]) [dylibArgs addObject:p];
             for (NSString *p in libDylibs)
                 if ([p.pathExtension isEqualToString:@"a"]) [dylibArgs addObject:p];
             for (NSString *p in libRaw) {
@@ -4571,7 +4577,7 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
             : (opts.androidTarget && opts.emitLib && !opts.compileOnly)
             ? linkAndroidShared(argv0, opts, tmpAsm, opts.outputPath)
             : (opts.useArm64Backend && opts.emitLib && !opts.compileOnly)
-            ? linkArm64Shared(argv0, opts, tmpAsm, opts.outputPath, ifaceJson)
+            ? linkArm64Shared(argv0, opts, tmpAsm, opts.outputPath, ifaceJson, neededLibs)
             : linkArm64Executable(argv0, opts, tmpAsm, opts.outputPath, neededLibs);
         if (!opts.verbose) [[NSFileManager defaultManager] removeItemAtPath:tmpAsm error:NULL];
         return linkRc < 0 ? 1 : linkRc;

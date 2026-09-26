@@ -773,6 +773,25 @@ bool objectsWantObjc(DriverOptions* d, Array* extra)
     return false;
 }
 
+// The libraries an arm64 LIBRARY `#import`s (bug 440), each once, by its
+// `@rpath/` install name — the reference's xcc-ln-arm64 --dylib rule. A -l
+// library or framework on a library build stays recorded on the client.
+Array* dylibImportDeps(Array* neededLibs)
+{
+    Array* deps = new Array();
+    for (u32 i = (u32)0; neededLibs != (Array*)0 && i < neededLibs.count(); i = i + (u32)1) {
+        String* lp = (String*)neededLibs.get(i);
+        if (!lp.hasSuffix(String.withCString(".dylib"))) continue;
+        String* rp = String.withCString("@rpath/");
+        rp.append(lp.lastPathComponent());
+        bool have = false;
+        for (u32 k = (u32)0; k < deps.count(); k = k + (u32)1)
+            if (((MachODep*)deps.get(k)).path().equals(rp)) have = true;
+        if (!have) deps.add((Object*)MachODep.with(rp, IfaceImport.machoExports(lp)));
+    }
+    return deps;
+}
+
 // The dependency list for an arm64 / iOS executable: what the program (or its
 // objects) `#import`ed, then the libraries and frameworks named on the line,
 // then libobjc when the merged objects need it — the reference's order.
@@ -3483,6 +3502,10 @@ void emitModule(DriverOptions* d, IRModule* mod)
             // name would be looked up relative to the working directory.
             String* instName = String.withCString("@rpath/");
             instName.append(baseNameOf(d.fe().output()));
+            // The libraries this one `#import`s (bug 440): each an
+            // LC_LOAD_DYLIB, so a client that imports only this library still
+            // loads them, and the imports each exports bind to it.
+            m.setDeps(dylibImportDeps(d.fe().neededLibs()));
             m.dylib(as.textBytes(), instName, exports, iface,
                     as.symbols(), dataBytes, as.dataSyms(), fixups, miLen, objcSects);
         } else {

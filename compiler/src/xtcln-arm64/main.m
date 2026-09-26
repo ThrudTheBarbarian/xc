@@ -625,14 +625,28 @@ int main(int argc, const char *argv[]) {
             // was passed, and aborted at load on the first wrapped symbol.
             NSMutableArray<NSString *> *dObjs = [NSMutableArray array];
             NSMutableArray<NSString *> *dArchives = [NSMutableArray array];
+            // Bug 440: a .dylib is a library this one imports (`#import <X>`).
+            // It gets an LC_LOAD_DYLIB here, so a client that imports only
+            // this library still loads it. A .tbd (a -l or framework
+            // dependency) stays recorded on the client.
+            NSMutableArray<NSDictionary *> *dDylibs = [NSMutableArray array];
+            NSMutableSet<NSString *> *dSeen = [NSMutableSet set];
             for (int i = 7; i < argc; i++) {
                 NSString *p = @(argv[i]);
                 if ([p hasPrefix:@"-"]) continue;          // ld directives: not ours to honour here
                 NSString *e = p.pathExtension;
                 if      ([e isEqualToString:@"o"]) [dObjs addObject:p];
                 else if ([e isEqualToString:@"a"]) [dArchives addObject:p];
-                // .dylib/.tbd dependencies are recorded by the driver as
-                // LC_LOAD_DYLIB on the client, not bundled into this image.
+                else if ([e isEqualToString:@"dylib"]) {
+                    NSDictionary *info = [XTMachOWriter inspectDylib:p];
+                    if (!info) {
+                        fprintf(stderr, "xcc-ln-arm64: note: skipping unreadable arg '%s'\n", argv[i]);
+                        continue;
+                    }
+                    if ([dSeen containsObject:info[@"install"]]) continue;
+                    [dSeen addObject:info[@"install"]];
+                    [dDylibs addObject:info];
+                }
             }
             NSMutableData *mtext = [text mutableCopy];
             NSMutableDictionary<NSString *, NSNumber *> *msyms = [as.symbols mutableCopy];
@@ -656,7 +670,8 @@ int main(int argc, const char *argv[]) {
                                 exports:exports iface:iface symbols:msyms
                                 data:mdata dataSymbols:mdataSyms fixups:mfix
                           modInitLength:miLen
-                            objcSections:objcSects];
+                            objcSections:objcSects
+                                  dylibs:dDylibs];
             if (![dylib writeToFile:outPath atomically:YES]) {
                 fprintf(stderr, "xcc-ln-arm64: cannot write '%s'\n", argv[6]); return 1;
             }
