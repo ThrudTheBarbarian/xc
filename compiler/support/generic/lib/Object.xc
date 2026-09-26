@@ -47,12 +47,24 @@
 // than it ever saves in cycles. Concrete classes whose hash is
 // genuinely expensive (long Strings) can cache in a private
 // ivar of their own without making everyone else pay.
+//
+//   `encodeWithCoder` / `initWithCoder` — the Codable pair, empty
+//   here, so every class can be handed to a Coder and a class with
+//   state overrides both (see Codable.xc). Not on xt6502, where
+//   Object keeps only hash, equals and description.
 
 #import "Hashable.xc"
 #import "Comparable.xc"
 #import "String.xc"
+#if !ARCH_6502
+#import "Codable.xc"
+#endif
 
+#if ARCH_6502
 class Object<Hashable, Comparable>
+#else
+class Object<Hashable, Comparable, Codable>
+#endif
     {
         // `self` is the receiver pointer. hash XOR-folds its low two
         // address bytes; equals is pointer identity. Written with the
@@ -99,4 +111,16 @@ class Object<Hashable, Comparable>
         {
         return String.withCString("<Object>");
         }
+
+#if !ARCH_6502
+    // <Codable>: nothing to archive at the root. Overrides call these through
+    // `super` like any other method, so the chain always ends here.
+    void encodeWithCoder(Coder* coder)
+        {
+        }
+
+    void initWithCoder(Coder* coder)
+        {
+        }
+#endif
     }
