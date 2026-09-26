@@ -23,10 +23,9 @@
 #
 #   arm64   built and run here (macOS arm64 host)
 #   wasm32  run under node
-#   x86_64  run on $XTC_X86_HOST / $XTC_LINUX_HOST. Only protoclient: a client
-#           subclass of a library class does not link on x86_64 yet, and the
-#           shipped compiler's in-house link of a dynamic client fails there;
-#           its app is checked as assembly, byte for byte against xcc's.
+#   x86_64  run on $XTC_X86_HOST / $XTC_LINUX_HOST. The apps are compared as
+#           assembly: the two drivers' dynamic links export different symbol
+#           sets, so the executables differ where the code does not.
 #   arm9    tests/crossmod/run.sh (needs the loader tree and qemu)
 _root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null)
 [ -f "$_root/tools/build-env.sh" ] && . "$_root/tools/build-env.sh"
@@ -81,6 +80,13 @@ matrix() {  # <target> <libfile> <runner> <clients...>
         done
         for c in "$@"; do
             ls "$TMP/$arch/$L-xcc/$c"* >/dev/null 2>&1 || continue
+            if [ "${APPCMP:-bin}" = asm ]; then
+                buildapp "$arch" xcc "$TMP/$arch/$L-xcc" "$c" "$c.xcc.s" -S 2>/dev/null
+                buildapp "$arch" xcc-xc "$TMP/$arch/$L-xcc" "$c" "$c.xc.s" -S 2>/dev/null
+                cmp -s "$TMP/$arch/$L-xcc/$c.xcc.s" "$TMP/$arch/$L-xcc/$c.xc.s" \
+                    || bad "$arch lib=$L: the two compilers' $c assembly differs"
+                continue
+            fi
             samefiles "$TMP/$arch/$L-xcc" "$TMP/$arch/$L-xcc-xc" $(cd "$TMP/$arch/$L-xcc" && ls "$c" "$c".* 2>/dev/null | grep -v '\.err$') \
                 || bad "$arch lib=$L: the two compilers' $c differs"
         done
@@ -89,6 +95,12 @@ matrix() {  # <target> <libfile> <runner> <clients...>
 
 run_native() { ( cd "$1" && "./$2" ); }
 run_node()   { ( cd "$1" && node "$2.js" ); }
+# run_x86 <dir> <prog> — the program and the libraries beside it, run on $HOST.
+run_x86() {
+    ssh "$HOST" "rm -rf $RD && mkdir -p $RD" </dev/null
+    scp -q "$1/$2" "$1"/*.so "$HOST:$RD/"
+    ssh "$HOST" "cd $RD && ./$2" </dev/null
+}
 
 before=$fail
 case "$(uname -s)-$(uname -m)" in
@@ -110,22 +122,8 @@ before=$fail
 HOST=${XTC_X86_HOST:-${XTC_LINUX_HOST:-}}
 if [ -n "$HOST" ] && ssh -o ConnectTimeout=8 -o BatchMode=yes "$HOST" true 2>/dev/null; then
     RD=/tmp/xc-protocols-$$
-    for L in xcc xcc-xc; do
-        d="$TMP/x86_64/$L"
-        buildlib x86_64 "$L" "$d" libProtoLib.so || { bad "x86_64: $L could not build the library"; continue; }
-        buildapp x86_64 xcc "$d" protoclient protoclient 2>"$d/err" || { bad "x86_64 lib=$L: protoclient did not build"; continue; }
-        ssh "$HOST" "rm -rf $RD && mkdir -p $RD" </dev/null
-        scp -q "$d/protoclient" "$d/libProtoLib.so" "$HOST:$RD/"
-        got=$(ssh "$HOST" "cd $RD && ./protoclient" </dev/null 2>&1)
-        [ "$got" = "$WANT_CLIENT" ] || { bad "x86_64 lib=$L:"; echo "$got" | sed 's/^/        /'; }
-    done
+    APPCMP=asm matrix x86_64 libProtoLib.so run_x86 protoclient protosub
     ssh "$HOST" "rm -rf $RD" </dev/null
-    samefiles "$TMP/x86_64/xcc" "$TMP/x86_64/xcc-xc" libProtoLib.so \
-        || bad "x86_64: the two compilers' libraries differ"
-    d="$TMP/x86_64/xcc"
-    buildapp x86_64 xcc "$d" protoclient xcc.s -S 2>/dev/null
-    buildapp x86_64 xcc-xc "$d" protoclient xc.s -S 2>/dev/null
-    cmp -s "$d/xcc.s" "$d/xc.s" || bad "x86_64: the two compilers' protoclient assembly differs"
     [ $fail = $before ] && echo "PASS  x86_64: prelude protocols, Object and String across a .so (run on $HOST)"
 else
     echo "SKIP  x86_64: no x86-64 host reachable — built nothing, ran nothing"

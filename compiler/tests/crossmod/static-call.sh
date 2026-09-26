@@ -16,8 +16,9 @@
 #
 #   arm64   built and run here (macOS arm64 host)
 #   wasm32  run under node
-#   x86_64  run on $XTC_X86_HOST / $XTC_LINUX_HOST (app built by xcc; the
-#           xcc-xc app is compared as assembly, as in protocols.sh)
+#   x86_64  run on $XTC_X86_HOST / $XTC_LINUX_HOST. The apps are compared as
+#           assembly: the two drivers' dynamic links export different symbol
+#           sets, so the executables differ where the code does not.
 #   arm9    built by both compilers and compared byte for byte (not run; the
 #           port's client used to carry its own copy of every imported class's
 #           vtable)
@@ -64,13 +65,26 @@ matrix() {  # <target> <libfile> <runner>
             got=$($run "$d" scclient 2>&1)
             [ "$got" = "$WANT" ] || { bad "$arch lib=$L app=$A:"; echo "$got" | sed 's/^/        /'; }
         done
-        samefiles "$TMP/$arch/$L-xcc" "$TMP/$arch/$L-xcc-xc" $(cd "$TMP/$arch/$L-xcc" && ls scclient scclient.* 2>/dev/null) \
-            || bad "$arch lib=$L: the two compilers' scclient differs"
+        if [ "${APPCMP:-bin}" = asm ]; then
+            buildapp "$arch" xcc "$TMP/$arch/$L-xcc" xcc.s -S 2>/dev/null
+            buildapp "$arch" xcc-xc "$TMP/$arch/$L-xcc" xc.s -S 2>/dev/null
+            cmp -s "$TMP/$arch/$L-xcc/xcc.s" "$TMP/$arch/$L-xcc/xc.s" \
+                || bad "$arch lib=$L: the two compilers' scclient assembly differs"
+        else
+            samefiles "$TMP/$arch/$L-xcc" "$TMP/$arch/$L-xcc-xc" $(cd "$TMP/$arch/$L-xcc" && ls scclient scclient.* 2>/dev/null) \
+                || bad "$arch lib=$L: the two compilers' scclient differs"
+        fi
     done
 }
 
 run_native() { ( cd "$1" && "./$2" ); }
 run_node()   { ( cd "$1" && node "$2.js" ); }
+# run_x86 <dir> <prog> — the program and the libraries beside it, run on $HOST.
+run_x86() {
+    ssh "$HOST" "rm -rf $RD && mkdir -p $RD" </dev/null
+    scp -q "$1/$2" "$1"/*.so "$HOST:$RD/"
+    ssh "$HOST" "cd $RD && ./$2" </dev/null
+}
 
 before=$fail
 case "$(uname -s)-$(uname -m)" in
@@ -92,22 +106,8 @@ before=$fail
 HOST=${XTC_X86_HOST:-${XTC_LINUX_HOST:-}}
 if [ -n "$HOST" ] && ssh -o ConnectTimeout=8 -o BatchMode=yes "$HOST" true 2>/dev/null; then
     RD=/tmp/xc-static-call-$$
-    for L in xcc xcc-xc; do
-        d="$TMP/x86_64/$L"
-        buildlib x86_64 "$L" "$d" libSCLib.so || { bad "x86_64: $L could not build the library"; continue; }
-        buildapp x86_64 xcc "$d" scclient 2>"$d/err" || { bad "x86_64 lib=$L: scclient did not build"; continue; }
-        ssh "$HOST" "rm -rf $RD && mkdir -p $RD" </dev/null
-        scp -q "$d/scclient" "$d/libSCLib.so" "$HOST:$RD/"
-        got=$(ssh "$HOST" "cd $RD && ./scclient" </dev/null 2>&1)
-        [ "$got" = "$WANT" ] || { bad "x86_64 lib=$L:"; echo "$got" | sed 's/^/        /'; }
-    done
+    APPCMP=asm matrix x86_64 libSCLib.so run_x86
     ssh "$HOST" "rm -rf $RD" </dev/null
-    samefiles "$TMP/x86_64/xcc" "$TMP/x86_64/xcc-xc" libSCLib.so \
-        || bad "x86_64: the two compilers' libraries differ"
-    d="$TMP/x86_64/xcc"
-    buildapp x86_64 xcc "$d" xcc.s -S 2>/dev/null
-    buildapp x86_64 xcc-xc "$d" xc.s -S 2>/dev/null
-    cmp -s "$d/xcc.s" "$d/xc.s" || bad "x86_64: the two compilers' scclient assembly differs"
     [ $fail = $before ] && echo "PASS  x86_64: static calls into a library's imported class (run on $HOST)"
 else
     echo "SKIP  x86_64: no x86-64 host reachable — built nothing, ran nothing"

@@ -1133,22 +1133,38 @@ static uint32_t elfHash(const char* name)
     // load of another object's exported symbol, e.g. a library's `<Class>$vtbl`
     // — is reached by pointing the load's own displacement at a GOT slot the
     // loader fills. Both take a GOT slot + a GLOB_DAT; only the call import also
-    // needs a thunk. Anything else undefined (a bare abs64/pc32 to a symbol we
-    // do not define) still cannot be imported — that WOULD need a code rewrite.
+    // needs a thunk. A `.quad` data word naming an import (a vtable word for
+    // another module's class or method) takes an R_X86_64_64 against the
+    // symbol, which the loader fills with its address; it needs a dynamic
+    // symbol but no GOT slot or thunk. Anything else undefined (a bare pc32 to
+    // a symbol we do not define) still cannot be imported — that WOULD need a
+    // code rewrite.
     NSMutableArray<NSString*>* imports = [NSMutableArray array];
     NSMutableDictionary<NSString*, NSNumber*>* importIdx = [NSMutableDictionary dictionary];
     NSMutableSet<NSString*>* dataImports = [NSMutableSet set];
+    NSMutableArray<NSString*>* wordCand = [NSMutableArray array];
+    NSMutableSet<NSString*>* wordCandSet = [NSMutableSet set];
     for (XAX86_64Fixup* f in fixups)
         {
         if (symbols[f.symbol])
             continue;
         BOOL isGot = (f.kind == XAX86FixupGotLoad || f.kind == XAX86FixupGotRef);
+        if (f.kind == XAX86FixupAbs64)
+            {
+            if (![wordCandSet containsObject:f.symbol])
+                {
+                [wordCandSet addObject:f.symbol];
+                [wordCand addObject:f.symbol];
+                }
+            continue;
+            }
         if (f.kind != XAX86FixupRel32 && !isGot)
             {
             if (error)
                 *error = elfErr(@"'%@' is an undefined DATA symbol reached without a GOT "
                                 @"load; a shared object imports it only through a GOT "
-                                @"indirection (this reference would need rewriting)",
+                                @"indirection, a call or a data word (this reference "
+                                @"would need rewriting)",
                                 f.symbol);
             return nil;
             }
@@ -1159,6 +1175,15 @@ static uint32_t elfHash(const char* name)
         importIdx[f.symbol] = @(imports.count);
         [imports addObject:f.symbol];
         }
+    // Imports named only by data words, after the GOT imports in .dynsym.
+    NSMutableArray<NSString*>* wordImports = [NSMutableArray array];
+    NSMutableDictionary<NSString*, NSNumber*>* wordIdx = [NSMutableDictionary dictionary];
+    for (NSString* w in wordCand)
+        if (!importIdx[w])
+            {
+            wordIdx[w] = @(wordImports.count);
+            [wordImports addObject:w];
+            }
 
     // ── 2. exports ──
     NSMutableArray<NSString*>* exports = [NSMutableArray array];
@@ -1191,9 +1216,34 @@ static uint32_t elfHash(const char* name)
             }
         [data appendData:bss];
         }
+    // A GOT reference to a symbol this image DEFINES that cannot be relaxed to
+    // `lea` — a plain GOTPCREL, which reads the slot as data, or a GOTPCRELX on
+    // an instruction other than `mov` (musl's exit code compares against
+    // `__fini_array_start@GOTPCREL`) — gets a real slot holding the symbol's
+    // address, after the import slots, with a RELATIVE relocation for the load
+    // bias. First-seen order.
+    BOOL (^needsLocalGot)(XAX86_64Fixup*) = ^BOOL(XAX86_64Fixup* f) {
+      if (f.kind != XAX86FixupGotLoad && f.kind != XAX86FixupGotRef)
+          return NO;
+      if (!symbols[f.symbol])
+          return NO;
+      if (f.kind == XAX86FixupGotRef)
+          return YES;
+      return f.offset < 2 || f.offset > text.length || ((const uint8_t*)text.bytes)[f.offset - 2] != 0x8b;
+    };
+    NSMutableArray<NSString*>* localGot = [NSMutableArray array];
+    NSMutableDictionary<NSString*, NSNumber*>* localGotIdx = [NSMutableDictionary dictionary];
+    for (XAX86_64Fixup* f in fixups)
+        if (needsLocalGot(f) && !localGotIdx[f.symbol])
+            {
+            localGotIdx[f.symbol] = @(localGot.count);
+            [localGot addObject:f.symbol];
+            }
+    NSUInteger ngot = imports.count + localGot.count;
+
     NSUInteger nThunk = imports.count;
-    NSUInteger thunkOff = text.length;                   // thunks are appended to __text
-    NSUInteger nsym = 1 + exports.count + imports.count; // index 0 is the null symbol
+    NSUInteger thunkOff = text.length; // thunks are appended to __text
+    NSUInteger nsym = 1 + exports.count + imports.count + wordImports.count; // index 0 is the null symbol
 
     NSMutableData* dynstr = [NSMutableData data];
     NSMutableDictionary<NSString*, NSNumber*>* strOff = [NSMutableDictionary dictionary];
@@ -1212,6 +1262,7 @@ static uint32_t elfHash(const char* name)
     NSMutableArray<NSString*>* symOrder = [NSMutableArray arrayWithObject:@""];
     [symOrder addObjectsFromArray:exports];
     [symOrder addObjectsFromArray:imports];
+    [symOrder addObjectsFromArray:wordImports];
     for (NSUInteger i = 1; i < symOrder.count; i++)
         intern(symOrder[i]);
     uint32_t sonameOff = intern(soname);
@@ -1224,7 +1275,9 @@ static uint32_t elfHash(const char* name)
     NSUInteger hashSz = (2 + nbucket + nsym) * 4;
     NSUInteger nDyn = 8 + (isExec ? 0 : 1) + (runpath.length ? 1 : 0) + neededOff.count + 1; // tags below, NEEDEDs, NULL
 
-    // Relocations: one RELATIVE per .quad-of-a-local-symbol, one GLOB_DAT per import.
+    // Relocations: one RELATIVE per .quad-of-a-local-symbol, one R_X86_64_64
+    // per .quad-of-an-import, one GLOB_DAT per import, one RELATIVE per local
+    // GOT slot.
     // Only Abs64 needs a dynamic reloc (an absolute pointer the loader must
     // bias). A PC32Data slot — a compiler's own .rodata jump table, `.long
     // target - table_base` — is a difference of two in-image addresses, so it is
@@ -1236,7 +1289,7 @@ static uint32_t elfHash(const char* name)
     for (XAX86_64Fixup* f in fixups)
         if (f.kind == XAX86FixupAbs64)
             [absFixups addObject:f];
-    NSUInteger nRela = absFixups.count + imports.count;
+    NSUInteger nRela = absFixups.count + imports.count + localGot.count;
 
     // A library needs R, RX, RW, DYNAMIC, GNU_STACK. An executable adds PT_PHDR
     // and PT_INTERP — and PT_PHDR is not optional: ld.so locates the main
@@ -1260,7 +1313,7 @@ static uint32_t elfHash(const char* name)
     // bytes and every zero would have to be stored.
     uint64_t rwOff = roundUpTo(textOff + textLen, ELF_PAGE) + ELF_PAGE;
     uint64_t gotOff = rwOff;
-    uint64_t dynOff = gotOff + imports.count * 8;
+    uint64_t dynOff = gotOff + ngot * 8;
     uint64_t dataAddr = roundUpTo(dynOff + nDyn * DYN_SZ, 16);
     uint64_t rwEnd = dataAddr + data.length; // memsz end
     // rwFileEnd / dataFileSz are set below, AFTER the fixup loop patches data —
@@ -1294,6 +1347,8 @@ static uint32_t elfHash(const char* name)
         // (loader-filled via GLOB_DAT); a call import resolves to its thunk.
         else if (isGot)
             target = gotOff + importIdx[f.symbol].unsignedIntegerValue * 8;
+        else if (f.kind == XAX86FixupAbs64)
+            target = 0; // an import: the loader writes S + A
         else
             target = thunkAddr + importIdx[f.symbol].unsignedIntegerValue * THUNK_SZ;
 
@@ -1307,7 +1362,7 @@ static uint32_t elfHash(const char* name)
                     *error = elfErr(@"abs64 fixup for '%@' past end of data", f.symbol);
                 return nil;
                 }
-            uint64_t v = target + (uint64_t)f.addend;
+            uint64_t v = off ? target + (uint64_t)f.addend : 0;
             for (int i = 0; i < 8; i++)
                 dp[f.offset + i] = (uint8_t)(v >> (8 * i));
             continue;
@@ -1342,24 +1397,15 @@ static uint32_t elfHash(const char* name)
                 *error = elfErr(@"pc32 fixup for '%@' past end of text", f.symbol);
             return nil;
             }
-        // A GOTPCRELX to a symbol we DEFINE has no GOT slot — relax mov→lea and
-        // resolve S+A-P, as the static path does. A GOT reference to an IMPORT
-        // instead keeps the load: its displacement points at the loader-filled
-        // GOT slot (target, above), so it must NOT be relaxed.
-        if (f.kind == XAX86FixupGotLoad && off)
-            {
-            if (f.offset < 2 || tp[f.offset - 2] != 0x8b)
-                {
-                if (error)
-                    *error = elfErr(@"GOTPCRELX for '%@' is not a relaxable mov "
-                                    @"(opcode 0x%02x) — only the mov→lea "
-                                    @"relaxation is implemented",
-                                    f.symbol,
-                                    f.offset >= 2 ? tp[f.offset - 2] : 0);
-                return nil;
-                }
+        // A GOTPCRELX `mov` to a symbol we DEFINE has no GOT slot — relax
+        // mov→lea and resolve S+A-P, as the static path does. Any other GOT
+        // reference to one we define reads its local slot. A GOT reference to
+        // an IMPORT instead keeps the load: its displacement points at the
+        // loader-filled GOT slot (target, above), so it must NOT be relaxed.
+        if (needsLocalGot(f))
+            target = gotOff + (imports.count + localGotIdx[f.symbol].unsignedIntegerValue) * 8;
+        else if (f.kind == XAX86FixupGotLoad && off)
             tp[f.offset - 2] = 0x8d; // mov → lea
-            }
         int64_t rel = (int64_t)target - (int64_t)(textAddr + f.offset) + f.addend;
         if (rel < INT32_MIN || rel > INT32_MAX)
             {
@@ -1462,10 +1508,13 @@ static uint32_t elfHash(const char* name)
         // `<Class>$vtbl` from another object), is STT_OBJECT; everything else is
         // a function. The type is advisory for GLOB_DAT binding but keeps `nm`
         // and the loader's diagnostics honest.
+        // An import named only by data words may be either, and is STT_NOTYPE.
         BOOL inData = off ? [dataSymbols containsObject:n]
                           : (!isNull && [dataImports containsObject:n]);
+        BOOL wordOnly = !isNull && !off && i >= 1 + exports.count + imports.count;
+        uint8_t stt = wordOnly ? 0 /*STT_NOTYPE*/ : (inData ? STT_OBJECT : STT_FUNC);
         put32v(out, isNull ? 0 : intern(n)); // st_name
-        put8v(out, isNull ? 0 : (uint8_t)((STB_GLOBAL << 4) | (inData ? STT_OBJECT : STT_FUNC)));
+        put8v(out, isNull ? 0 : (uint8_t)((STB_GLOBAL << 4) | stt));
         put8v(out, 0);                         // st_other
         put16v(out, (isNull || !off) ? 0 : 1); // st_shndx: 0 = undefined
         put64v(out, off ? (inData ? dataAddr : textAddr) + off.unsignedLongLongValue : 0);
@@ -1497,10 +1546,20 @@ static uint32_t elfHash(const char* name)
 
     while (out.length < relaOff)
         put8v(out, 0);
-    // R_X86_64_RELATIVE
+    // R_X86_64_RELATIVE, or R_X86_64_64 against an import
     for (XAX86_64Fixup* f in absFixups)
         {
         NSNumber* off = symbols[f.symbol];
+        if (!off)
+            {
+            uint64_t symIdx = importIdx[f.symbol]
+                                  ? 1 + exports.count + importIdx[f.symbol].unsignedLongLongValue
+                                  : 1 + exports.count + imports.count + wordIdx[f.symbol].unsignedLongLongValue;
+            put64v(out, dataAddr + f.offset);
+            put64v(out, (symIdx << 32) | R_X86_64_64);
+            put64v(out, (uint64_t)f.addend);
+            continue;
+            }
         uint64_t target = ([dataSymbols containsObject:f.symbol] ? dataAddr : textAddr) + off.unsignedLongLongValue + (uint64_t)f.addend;
         put64v(out, dataAddr + f.offset);
         put64v(out, R_X86_64_RELATIVE);
@@ -1514,6 +1573,16 @@ static uint32_t elfHash(const char* name)
         put64v(out, (symIdx << 32) | R_X86_64_GLOB_DAT);
         put64v(out, 0);
         }
+    // R_X86_64_RELATIVE for the local GOT slots
+    uint64_t (^localAddr)(NSString*) = ^uint64_t(NSString* n) {
+      return ([dataSymbols containsObject:n] ? dataAddr : textAddr) + symbols[n].unsignedLongLongValue;
+    };
+    for (NSUInteger i = 0; i < localGot.count; i++)
+        {
+        put64v(out, gotOff + (imports.count + i) * 8);
+        put64v(out, R_X86_64_RELATIVE);
+        put64v(out, localAddr(localGot[i]));
+        }
 
     while (out.length < textOff)
         put8v(out, 0);
@@ -1522,6 +1591,8 @@ static uint32_t elfHash(const char* name)
         put8v(out, 0);
     for (NSUInteger i = 0; i < imports.count; i++)
         put64v(out, 0); // filled by ld.so
+    for (NSString* n in localGot)
+        put64v(out, localAddr(n));
 
     while (out.length < dynOff)
         put8v(out, 0);
@@ -1623,7 +1694,7 @@ static uint32_t elfHash(const char* name)
     sec(@".text", SHT_PROGBITS, SHF_ALLOC | SHF_EXECINSTR, textOff, textLen, 0, 0, 16, 0);
     NSAssert(secs.count == kDataSecIdx, @"kDataSecIdx is out of step with the section list");
     sec(@".data", SHT_PROGBITS, SHF_ALLOC | SHF_WRITE, dataAddr, data.length, 0, 0, 16, 0);
-    sec(@".got", SHT_PROGBITS, SHF_ALLOC | SHF_WRITE, gotOff, imports.count * 8, 0, 0, 8, 8);
+    sec(@".got", SHT_PROGBITS, SHF_ALLOC | SHF_WRITE, gotOff, ngot * 8, 0, 0, 8, 8);
     sec(@".dynamic", SHT_DYNAMIC, SHF_ALLOC | SHF_WRITE, dynOff, nDyn * DYN_SZ, 2, 0, 8, DYN_SZ);
     NSUInteger symtabIdx = secs.count, strtabIdx = symtabIdx + 1;
     sec(@".symtab", SHT_SYMTAB, 0, 0, symtab.length, (uint32_t)strtabIdx, 1, 8, SYM_SZ);
