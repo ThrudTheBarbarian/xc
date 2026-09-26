@@ -1537,6 +1537,13 @@ static NSString* m68kSym(NSString* name)
         for (XTIRInsn* in in bb.instructions)
             if (in.result && (in.result.type.kind == XTIRTypeKindI64 || in.result.type.kind == XTIRTypeKindU64))
                 [excluded addObject:@(in.result.valueId)];
+    // A PHI is not in `instructions`, so a loop-carried i64 could be homed:
+    // its edge copies write the slot and never the register (the arm9 back
+    // end returned a stale remainder this way).
+    for (XTIRBlock* bb in fn.blocks)
+        for (XTIRInsn* ph in bb.phiNodes)
+            if (ph.result && (ph.result.type.kind == XTIRTypeKindI64 || ph.result.type.kind == XTIRTypeKindU64))
+                [excluded addObject:@(ph.result.valueId)];
         // A PARAMETER is not an instruction result, so the loop above never sees
         // one. `i64 add(i64 a, i64 b)` homed both into d3/d4 holding only their high
         // longs, while the body read them from 8(a6)/16(a6) — right by luck here,

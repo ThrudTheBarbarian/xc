@@ -446,6 +446,19 @@ class M68k
                     h.exclude(win.res().pid());
                 }
             }
+        // A PHI is not in insns(), so a loop-carried i64 could be homed: its
+        // edge copies write the slot and never the register (the arm9 back
+        // end returned a stale remainder this way).
+        for (u32 wb = (u32)0; wb < fn.blocks().count(); wb = wb + (u32)1)
+            {
+            IRBlock* wbb = (IRBlock*)fn.blocks().get(wb);
+            for (u32 wi = (u32)0; wi < wbb.phis().count(); wi = wi + (u32)1)
+                {
+                IRInsn* wph = (IRInsn*)wbb.phis().get(wi);
+                if (wph.res() != (IRValue*)0 && isI64(wph.res().ty()))
+                    h.exclude(wph.res().pid());
+                }
+            }
         // A PARAMETER is not an instruction result, so the loop above never
         // sees one: `i64 add(i64 a, i64 b)` homed both into single registers
         // holding half of each.

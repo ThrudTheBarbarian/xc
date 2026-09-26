@@ -1014,6 +1014,19 @@ class Arm9
                     h.exclude(hin.res().pid());
                 }
             }
+        // A PHI is not in insns() either. A loop-carried u64 was homed: the
+        // phi copies wrote its slot, and a narrowing read after the loop
+        // (`(u32)rem`) took the home register, which nothing had written.
+        for (u32 hb = (u32)0; hb < _fn.blocks().count(); hb = hb + (u32)1)
+            {
+            IRBlock* hbb = (IRBlock*)_fn.blocks().get(hb);
+            for (u32 hi = (u32)0; hi < hbb.phis().count(); hi = hi + (u32)1)
+                {
+                IRInsn* hph = (IRInsn*)hbb.phis().get(hi);
+                if (hph.res() != (IRValue*)0 && Arm9.isI64(hph.res().ty()))
+                    h.exclude(hph.res().pid());
+                }
+            }
         // A PARAMETER is not an instruction result, so the loop above misses
         // it: `i64 add(i64 a, i64 b)` homed a into r4 holding only its low word.
         for (u32 hp = (u32)0; hp < _fn.params().count(); hp = hp + (u32)1)

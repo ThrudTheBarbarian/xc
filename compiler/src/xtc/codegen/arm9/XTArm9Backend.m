@@ -2965,6 +2965,13 @@ static const NSUInteger kArm9VaForwardWords = 16;
             for (XTIRInsn* wi in wb.instructions)
                 if (wi.result && (wi.result.type.kind == XTIRTypeKindI64 || wi.result.type.kind == XTIRTypeKindU64))
                     [wide addObject:@(wi.result.valueId)];
+        // A PHI is not in `instructions` either. A loop-carried u64 was homed:
+        // the phi copies wrote its slot, and a narrowing read after the loop
+        // (`(u32)rem`) took the home register, which nothing had written.
+        for (XTIRBlock* wb in fn.blocks)
+            for (XTIRInsn* wp in wb.phiNodes)
+                if (wp.result && (wp.result.type.kind == XTIRTypeKindI64 || wp.result.type.kind == XTIRTypeKindU64))
+                    [wide addObject:@(wp.result.valueId)];
         // A PARAMETER is not an instruction result, so the loop above misses it:
         // `i64 add(i64 a, i64 b)` homed a into r4 holding only its low word.
         // Param value id is its positional index.
