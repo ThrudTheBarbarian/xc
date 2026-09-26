@@ -1,0 +1,31 @@
+T1 strings
+{"$archiver":"Coder","$version":1,"$top":{"root":{"$ref":1}},"$objects":["$null",{"$class":"Array","$items":[2,3,4,5,6,7]},"plain","","q\"b\\s/ \n\r\t \u0001\u001f","caf\xc3\xa9 \xe2\x98\x83 \xf0\x9f\x98\x80","$null",{"$class":"String","$base64":"//5B"}]}
+  same text: yes
+  invalid UTF-8 kept: yes
+  "$null" is a string: yes
+T2 numbers
+{"$archiver":"Coder","$version":1,"$top":{"root":{"$ref":1}},"$objects":["$null",{"$class":"Array","$items":[2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17]},0,-1,-9223372036854775808,9223372036854775807,-1,0.1,-0.0,3.0,1.0e+21,1.5e+300,5.0e-324,1.7976931348623157e+308,123456.789,{"$class":"Number","$double":"NaN"},{"$class":"Number","$double":"Infinity"},{"$class":"Number","$double":"-Infinity"}]}
+  same text: yes
+  kinds kept: yes, values exact: yes
+  u64 max: 18446744073709551615
+T3 containers
+{"$archiver":"Coder","$version":1,"$top":{"root":{"$ref":1}},"$objects":["$null",{"$class":"Array","$items":[2,8,11,12,0,13,14]},{"$class":"Map","$keys":[3,4,5],"$values":[6,7,0]},"one","two",3,1,2,{"$class":"Set","$items":[9,10]},"x","y",{"$class":"Data","$base64":"AN6tvu8="},{"$class":"Data","$base64":""},{"$class":"Array","$items":[]},{"$class":"Array","$items":[15]},{"$class":"Array","$items":[16]},"deep"]}
+  same text: yes
+  map count 3, two=2, has 3: yes
+  set count 2, has y: yes
+  data 00deadbeef
+  null element: yes
+T4 sharing
+{"$archiver":"Coder","$version":1,"$top":{"root":{"$ref":1}},"$objects":["$null",{"$class":"Array","$items":[2,2,3,4]},"shared",{"$class":"Array","$items":[2]},"shared"]}
+  same text: yes
+  one object: yes, equal copy separate: yes
+T5 cycle
+{"$archiver":"Coder","$version":1,"$top":{"root":{"$ref":1}},"$objects":["$null",{"$class":"Array","$items":[2,1]},"head"]}
+  same text: yes
+  contains itself: yes
+T6 compressed
+  level 0 is JSON: yes
+  level 1: gzip yes, smaller yes, same graph yes
+  level 5: gzip yes, smaller yes, same graph yes
+  level 9: gzip yes, smaller yes, same graph yes
+done

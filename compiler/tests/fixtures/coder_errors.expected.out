@@ -1,0 +1,38 @@
+T1 not JSON
+  bad JSON at byte 0: unexpected end of input
+  bad JSON at byte 1: expected a key
+  bad JSON at byte 5: expected a value
+  bad JSON at byte 5: expected ':'
+  bad JSON at byte 13: unterminated string
+  bad JSON at byte 0: expected a value
+  bad JSON at byte 1: unexpected text after the JSON value
+  bad JSON at byte 1: bad number
+  bad JSON at byte 2: bad number
+  bad JSON at byte 8: bad escape in a string
+  bad JSON at byte 4: control character in a string
+  bad JSON at byte 4: unexpected text after the JSON value
+T2 not an archive
+  Coder: not a Coder archive
+  Coder: not a Coder archive
+  Coder: the archive's version is not 1
+  Coder: the archive has no object table
+  Coder: the archive has no root
+  Coder: value for key 'root' is not an object reference
+  Coder: reference out of range
+  Coder: unknown class 'NoSuchClass'
+  Coder: an entry in $objects has no class
+  Coder: an archived collection has a bad reference
+  Coder: reference out of range
+  Coder: bad base64 in an archived String or Data
+  Coder: an archived Map has unequal key and value counts
+  Coder: an entry in $objects is not a value
+  no data: Coder: no data
+T3 damaged gzip
+  bad CRC: gzip: CRC mismatch
+  cut short: gzip: compressed data ends early
+  header only: gzip: not gzip data
+T4 valid by hand
+  string of 8 bytes: a\xc3\xa9\xf0\x9f\x98\x80
+  null root: yes
+  archive of null: yes
+done

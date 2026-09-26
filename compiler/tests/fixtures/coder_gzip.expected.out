@@ -1,0 +1,19 @@
+T1 crc
+  CBF43926
+T2 reference streams
+  gzip -1: 2004 bytes, match
+  gzip -9: 2004 bytes, match
+  gzip -9 short: 25 bytes, match
+  stored: 300 bytes, match
+  named: 2004 bytes, match
+T3 our gzip
+  text at 0-9: ok
+  runs at 0-9: ok
+  empty: ok
+  5000 run bytes under 200 at level 9: yes
+T4 damage
+  flipped bit: gzip: distance reaches before the start of the data
+  wrong CRC: gzip: CRC mismatch
+  truncated: gzip: compressed data ends early
+  not gzip: gzip: not gzip data
+done

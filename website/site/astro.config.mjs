@@ -72,6 +72,7 @@ export default defineConfig({
 										{ label: 'Map', slug: 'compiler/api/map' },
 										{ label: 'Set', slug: 'compiler/api/set' },
 										{ label: 'CharacterSet', slug: 'compiler/api/characterset' },
+										{ label: 'Coder', slug: 'compiler/api/coder' },
 									],
 								},
 								{
@@ -81,6 +82,7 @@ export default defineConfig({
 										{ label: 'Hashable', slug: 'compiler/api/hashable' },
 										{ label: 'Enumerable', slug: 'compiler/api/enumerable' },
 										{ label: 'Copying', slug: 'compiler/api/copying' },
+										{ label: 'Codable', slug: 'compiler/api/codable' },
 										{ label: 'Error', slug: 'compiler/api/error' },
 									],
 								},

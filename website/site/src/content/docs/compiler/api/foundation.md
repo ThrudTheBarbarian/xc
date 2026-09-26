@@ -14,8 +14,10 @@ are built on.
 ```
 
 The umbrella pulls in `Object`, `Comparable`, `Hashable`, `Enumerable`, `Copying`, `CharacterSet`,
-`Number`, `String`, `Data`, `Array`, `Map` and `Set`. That is everything below except the
-[`Error`](/compiler/api/error/) protocol, which you import by name (`#import <Error.xc>`).
+`Number`, `String`, `Data`, `Array`, `Map` and `Set`, and `Codable` through `Object`.
+That is everything below except [`Coder`](/compiler/api/coder/) and the
+[`Error`](/compiler/api/error/) protocol, which you import by name
+(`#import <Coder.xc>`, `#import <Error.xc>`).
 
 All of it needs a real heap (**`-falloc=heap`**), which is the default on the
 6502 `xt` layouts and on every native backend.
@@ -31,6 +33,7 @@ All of it needs a real heap (**`-falloc=heap`**), which is the default on the
 | [`Array`](/compiler/api/array/) | An ordered, resizable list of `Object*` with sorting and the callback-based functional methods (`filtered`, `mapped`, …). |
 | [`Map`](/compiler/api/map/) | A hash map keyed by anything `Hashable` + `Comparable`; iterates in insertion order. |
 | [`Set`](/compiler/api/set/) | A hash set with set algebra (`unionWith`, `intersect`, `subtract`, …). |
+| [`Coder`](/compiler/api/coder/) | Keyed archiving of an object graph to JSON, optionally gzipped. **Not** in the umbrella — import by name. |
 
 ### Protocols
 
@@ -40,6 +43,7 @@ All of it needs a real heap (**`-falloc=heap`**), which is the default on the
 | [`Hashable`](/compiler/api/hashable/) | `hash` + `equals`: equal keys must hash equally. Required for a value to be a `Map`/`Set` key. |
 | [`Enumerable`](/compiler/api/enumerable/) | `enumLength` + `enumAt` — the two methods `for (x in collection)` dispatches through. The loop variable is borrowed. |
 | [`Copying`](/compiler/api/copying/) | `copy` — an independent duplicate. `String` and `Data` conform. |
+| [`Codable`](/compiler/api/codable/) | `encodeWithCoder` + `initWithCoder`, the pair a [`Coder`](/compiler/api/coder/) calls. `Object` conforms, so every class does (not on xt6502). |
 | [`Error`](/compiler/api/error/) | A single `message()`, so anything [`throw`](/compiler/language/errors/)n can describe itself. **Not** in the umbrella — import by name. |
 
 Every parentless `class X` inherits from the runtime's built-in
