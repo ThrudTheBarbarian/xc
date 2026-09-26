@@ -59,6 +59,22 @@ Animal* a = d;            // implicit upcast — no check, no cast syntax needed
 
 Unrelated class pointers do not alias. Within one line of descent the upcast is free, but assigning a `Cat*` to a `Dog*` is a compile-time error because the trees diverge.
 
+### Call arguments
+
+A call argument follows a looser rule than an assignment. It may also be typed as an **ancestor** of the parameter's class, and it converts without a cast. This is how an element read from an untyped collection (`Object*` from `Array.get`) is passed to a function that takes the element's class. No runtime check is made, so the argument must hold an instance of the parameter's class. Use `(Dog*)a` where you want the check.
+
+An argument whose class is **unrelated** to the parameter's class (neither a subclass nor an ancestor of it) is a compile-time error:
+
+```c
+void feed(Dog* d) { ... }
+
+Animal* a = new Dog();
+feed(a);            // accepted: Animal is an ancestor of Dog
+feed(new Cat());    // error: argument 1 of 'feed': 'Cat' is not a subclass of 'Dog'
+```
+
+The rule is the same for a free function, a static or instance method, an implicit-`self` call and a call through a protocol. For a protocol parameter, see [Using a protocol as a type](#using-a-protocol-as-a-type). An assignment does not get the looser rule: `Dog* d = a;` still needs the cast.
+
 ### Downcasts — runtime-checked
 
 Recovering a `Dog*` from an `Animal*` variable needs a runtime check, because the runtime type is not known statically. xcc uses the existing `(type)` cast syntax. When the source and target are related classes in the downward direction, the compiler inserts a class-id check.
@@ -162,9 +178,17 @@ class Vehicle { u8 wheels; }
 
 void main(void) {
     Vehicle* v = new Vehicle();
-    render(v);      // error: 'Vehicle' does not conform to protocol 'Drawable'
+    render(v);      // error: argument 1 of 'render': 'Vehicle' does not conform to protocol 'Drawable'
 }
 ```
+
+A call argument is refused only when it could never conform. The rule is the same for functions and methods:
+
+- A class argument is accepted if the class, or any subclass of it, conforms. `Object*` is always accepted, since a conforming class may come from another module.
+- A protocol value passed where a class is declared is accepted if the class, or any subclass of it, conforms to that protocol.
+- A value of one protocol passed where another is declared is accepted if some class conforms to both.
+
+As with a class downcast, no runtime check is made. Assignments keep the strict rule: the value must already conform.
 
 ### Optional methods
 

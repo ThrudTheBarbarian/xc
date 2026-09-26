@@ -1388,8 +1388,9 @@ static BOOL XTIsErasedKeyType(XTType* t)
 /****************************************************************************\
 |* The arguments of a single candidate that scored as a misfit. A width or
 |* scalar-kind difference is a conversion and stays accepted; a bound method
-|* where a single word is expected, or a class pointer that is not the
-|* declared class or a subclass of it, is refused.
+|* where a single word is expected, or a class pointer of a class unrelated to
+|* the declared one, is refused (checkClassPointerArgument). Free functions,
+|* methods and protocol calls all come through here (bug 320).
 |* @param args        The call's arguments.
 |* @param paramTypes  The candidate's parameter types.
 |* @param callee      The callee as the diagnostic names it.
@@ -1422,13 +1423,13 @@ static BOOL XTIsErasedKeyType(XTType* t)
                                      at:loc];
             continue;
             }
-        [self checkClassPointerAssign:pt
-                              rhsType:arg.resolvedType
-                              rhsNode:arg
-                                 site:[NSString stringWithFormat:
-                                                    @"argument %lu of '%@'",
-                                                    (unsigned long)(i + 1), callee]
-                             location:loc];
+        [self checkClassPointerArgument:pt
+                                argType:arg.resolvedType
+                                argNode:arg
+                                   site:[NSString stringWithFormat:
+                                                      @"argument %lu of '%@'",
+                                                      (unsigned long)(i + 1), callee]
+                               location:loc];
         }
     }
 
@@ -2356,6 +2357,15 @@ static BOOL XTIsErasedKeyType(XTType* t)
                     if (only.returnTypes.count > 0)
                         node.resolvedType = only.returnTypes.firstObject;
                     chosen = only;
+                    // ...and so are its class-pointer arguments, as a free
+                    // function's are (bug 320).
+                    NSMutableArray<XTType*>* opt = [NSMutableArray array];
+                    for (XTParamNode* p in only.parameters)
+                        [opt addObject:p.paramType];
+                    [self checkMisfitArguments:node.arguments
+                                    paramTypes:opt
+                                        callee:node.calleeName
+                                      location:node.location];
                     }
                 if (chosen)
                     {
@@ -3347,6 +3357,19 @@ static BOOL XTIsErasedKeyType(XTType* t)
                 node.resolvedType = [XTType u8Type];
                 return;
                 }
+            // Its class-pointer arguments too, when they do not fit (bug 320).
+                {
+                NSMutableArray<XTType*>* ppt = [NSMutableArray array];
+                for (XTParamNode* p in match.parameters)
+                    [ppt addObject:p.paramType];
+                if ([self scoreCandidateParamTypes:ppt
+                                         isVarArgs:match.isVarArgs
+                                         arguments:node.arguments] == NSIntegerMax)
+                    [self checkMisfitArguments:node.arguments
+                                    paramTypes:ppt
+                                        callee:[NSString stringWithFormat:@"%@.%@", protoName, node.methodName]
+                                      location:node.location];
+                }
             NSNumber* slotNum = self.protocolMethodSlots[protoName][node.methodName];
             if (slotNum)
                 {
@@ -3501,6 +3524,15 @@ static BOOL XTIsErasedKeyType(XTType* t)
                     if (only.returnTypes.count > 0)
                         resolved = only.returnTypes.firstObject;
                     chosen = only;
+                    // A misfit's class-pointer arguments are checked as a
+                    // free function's are (bug 320).
+                    NSMutableArray<XTType*>* opt = [NSMutableArray array];
+                    for (XTParamNode* p in only.parameters)
+                        [opt addObject:p.paramType];
+                    [self checkMisfitArguments:node.arguments
+                                    paramTypes:opt
+                                        callee:[NSString stringWithFormat:@"%@.%@", className, node.methodName]
+                                      location:node.location];
                     }
                 else
                     {
