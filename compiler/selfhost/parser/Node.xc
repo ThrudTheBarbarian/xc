@@ -343,6 +343,7 @@ class Node
     bool _autoSuper;     // an `init` that gets `super.init()` injected
     bool _indirect;      // a call through a variable, not to a symbol
     bool _boundCall;     // …and specifically through a bound method
+    String* _calleeTy;   // …and the callee's signature spelling
     String* _setter;     // a property WRITE: the setter the assignment became…
     String* _setterCls;  // …and the class that declared it
     String* _getter;     // a property READ: the getter it became…
@@ -391,6 +392,7 @@ class Node
         _autoSuper = false;
         _indirect = false;
         _boundCall = false;
+        _calleeTy = (String*)0;
         _setter = (String*)0;
         _setterCls = (String*)0;
         _getter = (String*)0;
@@ -431,6 +433,17 @@ class Node
         {
         _indirect = true;
         _boundCall = bound;
+        }
+    // The signature an indirect call goes through. Lowering adjusts each
+    // argument to its parameter from it, as a direct call does from the
+    // declaration.
+    String* calleeTy(void)
+        {
+        return _calleeTy;
+        }
+    void setCalleeTy(String* t)
+        {
+        _calleeTy = t;
         }
     String* setter(void)
         {

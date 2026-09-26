@@ -2111,6 +2111,7 @@ class Sema
                 {
                 n.setTy(returnOfSignature(ct));
                 n.setIndirect(isBoundSignature(ct));
+                n.setCalleeTy(ct);
                 return;
                 }
             // A BLOCK is a pointer to its `Blk$…` impl class, and a block call
@@ -2149,6 +2150,7 @@ class Sema
             {
             n.setTy(returnOfSignature(vt));
             n.setIndirect(isBoundSignature(vt));
+            n.setCalleeTy(vt);
             return;
             }
         Array* group = (Array*)_functions.get((Hashable*)n.name());

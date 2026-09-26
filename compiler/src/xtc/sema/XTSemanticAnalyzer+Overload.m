@@ -1744,6 +1744,7 @@ static BOOL XTIsErasedKeyType(XTType* t)
             XTFunctionType* ft = (XTFunctionType*)ct.boundMethodSignature;
             node.isIndirectCall = YES;
             node.isBoundCall = YES;
+            node.calleeSignature = ft;
             node.resolvedType = ft.returnTypes.firstObject ?: [XTType voidType];
             return;
             }
@@ -1751,6 +1752,7 @@ static BOOL XTIsErasedKeyType(XTType* t)
             {
             XTFunctionType* ft = (XTFunctionType*)((XTPointerType*)ct).pointeeType;
             node.isIndirectCall = YES;
+            node.calleeSignature = ft;
             node.resolvedType = ft.returnTypes.firstObject ?: [XTType voidType];
             return;
             }
@@ -1799,6 +1801,7 @@ static BOOL XTIsErasedKeyType(XTType* t)
                 {
                 XTFunctionType* ft = (XTFunctionType*)pointee;
                 node.isIndirectCall = YES;
+                node.calleeSignature = ft;
                 node.resolvedType = ft.returnTypes.firstObject ?: [XTType voidType];
                 return;
                 }
@@ -1814,6 +1817,7 @@ static BOOL XTIsErasedKeyType(XTType* t)
                 (XTFunctionType*)varSym.symbolType.boundMethodSignature;
             node.isIndirectCall = YES;
             node.isBoundCall = YES;
+            node.calleeSignature = ft;
             node.resolvedType = ft.returnTypes.firstObject ?: [XTType voidType];
             for (XTASTNode* arg in node.arguments)
                 [self analyzeNode:arg];
