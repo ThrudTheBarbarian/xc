@@ -502,11 +502,75 @@ static XTIRValue* freshVal(XTIRFunction* fn, XTIRType* type, XTIRBlock* blk)
     return ok;
     }
 
+// ── Can the init block be cloned to the function entry? ──────────────────────
+//
+// The clone runs ahead of every block the function had, so it may use only what
+// it defines itself, the flag pointer and memory token the check block rebuilds,
+// and the function's parameters. The cross-block CSE that runs earlier can leave
+// the init block reading a value defined in the guard block: an
+// `AddrOf @__sdata_X` shared with code after the guard. An address or a constant
+// is rebuilt in the clone; anything else defined outside the block cannot be,
+// and that guard is not hoisted. Cloned verbatim, the use read a register
+// nothing had set yet, and the init wrote through it the first time the flag
+// was clear on entry: a library's `Number.with` called from a client, whose
+// own guard sets the client's flag and not the library's
+// (private:docs/bugs/270).
+static BOOL isRematerialisable(XTIRInsn* def)
+    {
+    if (def.opcode != XTIROpAddrOf && def.opcode != XTIROpConst)
+        return NO;
+    if (!def.result || def.memoryResult)
+        return NO;
+    for (XTIROperand* op in def.operands)
+        if (op.kind == XTIROperandKindUse)
+            return NO;
+    return YES;
+    }
+
+static BOOL runIsCloneable(XTSinitGuard* g, NSDictionary<NSNumber*, XTIRInsn*>* defOf)
+    {
+    NSMutableSet<NSNumber*>* defined = [NSMutableSet set];
+    [defined addObject:@(g.addrOfInsn.result.valueId)];
+    if (g.loadInsn.memoryResult)
+        [defined addObject:@(g.loadInsn.memoryResult.valueId)];
+    for (XTIRInsn* insn in g.run.instructions)
+        {
+        for (XTIROperand* op in insn.operands)
+            {
+            if (op.kind != XTIROperandKindUse || [defined containsObject:@(op.valueId)])
+                continue;
+            XTIRInsn* def = defOf[@(op.valueId)];
+            // No def: a parameter, which dominates the clone.
+            if (def && !isRematerialisable(def))
+                return NO;
+            }
+        if (insn.result)
+            [defined addObject:@(insn.result.valueId)];
+        if (insn.memoryResult)
+            [defined addObject:@(insn.memoryResult.valueId)];
+        }
+    return YES;
+    }
+
 - (void)hoistGuardsToEntry:(XTIRFunction*)fn guards:(NSArray<XTSinitGuard*>*)guards
                     module:(XTIRModule*)mod
     {
     if (guards.count == 0 || fn.blocks.count == 0)
         return;
+    NSMutableDictionary<NSNumber*, XTIRInsn*>* defOf = [NSMutableDictionary dictionary];
+    for (XTIRBlock* bb in fn.blocks)
+        {
+        for (XTIRInsn* p in bb.phiNodes)
+            if (p.result)
+                defOf[@(p.result.valueId)] = p;
+        for (XTIRInsn* i in bb.instructions)
+            {
+            if (i.result)
+                defOf[@(i.result.valueId)] = i;
+            if (i.memoryResult)
+                defOf[@(i.memoryResult.valueId)] = i;
+            }
+        }
     XTIRType* memTy = [XTIRType memoryType];
     // The function's memory token is its last parameter; reference it as the
     // entry guard's incoming memory (it dominates everything).
@@ -525,6 +589,8 @@ static XTIRValue* freshVal(XTIRFunction* fn, XTIRType* type, XTIRBlock* blk)
             continue;
         // bug 059: only relocate an initialiser that cannot tell it moved.
         if (![self initIsHoistableFor:g.sym module:mod])
+            continue;
+        if (!runIsCloneable(g, defOf))
             continue;
         [seen addObject:g.sym];
         [reps addObject:g];
@@ -598,6 +664,22 @@ static XTIRValue* freshVal(XTIRFunction* fn, XTIRType* type, XTIRBlock* blk)
             map[@(g.loadInsn.memoryResult.valueId)] = @(m1.valueId);
         for (XTIRInsn* insn in g.run.instructions)
             {
+            // A value from outside the block is rebuilt here, ahead of its
+            // first use (runIsCloneable admitted only those that can be).
+            for (XTIROperand* op in insn.operands)
+                {
+                if (op.kind != XTIROperandKindUse || map[@(op.valueId)])
+                    continue;
+                XTIRInsn* def = defOf[@(op.valueId)];
+                if (!def)
+                    continue;
+                XTIRValue* rv = freshVal(fn, def.result.type, R);
+                [R appendInstruction:[[XTIRInsn alloc] initWithOpcode:def.opcode
+                                                               result:rv
+                                                             operands:def.operands
+                                                               dbgLoc:nil]];
+                map[@(op.valueId)] = @(rv.valueId);
+                }
             NSMutableArray<XTIROperand*>* ops = [NSMutableArray array];
             for (XTIROperand* op in insn.operands)
                 {
