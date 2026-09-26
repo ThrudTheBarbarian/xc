@@ -40,6 +40,7 @@
 #define R_X86_64_GLOB_DAT 6
 #define R_X86_64_RELATIVE 8
 #define STB_GLOBAL 1
+#define STT_NOTYPE 0
 #define STT_OBJECT 1
 #define STT_FUNC 2
 #define SYM_SZ 24
@@ -603,25 +604,39 @@ class ElfSharedInfo
 
         // ── 1. imports ───────────────────────────────────────────────────
         // A call (Rel32) import is reached through a thunk; a GOT-loaded DATA
-        // import through a slot the loader fills. Anything else undefined
-        // cannot be imported at all — the referencing instruction would have to
-        // be rewritten — so it is refused rather than relocated against zero,
-        // which would be a null call at run time.
+        // import through a slot the loader fills. A `.quad` data word naming an
+        // import (a vtable word for another module's class or method) takes an
+        // R_X86_64_64 against the symbol, which the loader fills with its
+        // address. Anything else undefined cannot be imported at all — the
+        // referencing instruction would have to be rewritten — so it is refused
+        // rather than relocated against zero, which would be a null call at run
+        // time.
         Array* imports = new Array();
         Array* dataImports = new Array();
         Map* importsSet = new Map();
         Map* dataImportsSet = new Map();
+        Array* wordCand = new Array();
+        Map* wordCandSet = new Map();
         for (u32 i = (u32)0; i < fixups.count(); i = i + (u32)1)
             {
             X86Fixup* f = (X86Fixup*)fixups.get(i);
             if (symbols.get((Hashable*)f.symbol()) != (Object*)0)
                 continue;
             bool isGot = f.kind() == (u32)X86FIX_GOTLOAD || f.kind() == (u32)X86FIX_GOTREF;
+            if (f.kind() == (u32)X86FIX_ABS64)
+                {
+                if (!Elf64.inSet(wordCandSet, f.symbol()))
+                    {
+                    wordCand.add((Object*)f.symbol());
+                    wordCandSet.set((Hashable*)f.symbol(), (Object*)Number.withU32((u32)1));
+                    }
+                continue;
+                }
             if (f.kind() != (u32)X86FIX_REL32 && !isGot)
                 {
                 failWith(String.withCString(
                              "undefined symbol reached without a GOT load (a shared object "
-                             "imports only through a GOT indirection or a call):"),
+                             "imports only through a GOT indirection, a call or a data word):"),
                          f.symbol());
                 return;
                 }
@@ -636,6 +651,12 @@ class ElfSharedInfo
                 importsSet.set((Hashable*)f.symbol(), (Object*)Number.withU32((u32)1));
                 }
             }
+        // A symbol named only by data words needs a dynamic symbol but no GOT
+        // slot or thunk; one also called or GOT-loaded is already an import.
+        Array* wordImports = new Array();
+        for (u32 i = (u32)0; i < wordCand.count(); i = i + (u32)1)
+            if (!Elf64.inSet(importsSet, (String*)wordCand.get(i)))
+                wordImports.add(wordCand.get(i));
 
         // ── 2. exports ───────────────────────────────────────────────────
         // SORTED, not in `.globl` order: the symbol table's order is part of
@@ -701,10 +722,29 @@ class ElfSharedInfo
                 absGotSet.set((Hashable*)fx.symbol(), (Object*)Number.withU32((u32)1));
                 }
             }
-        u32 ngot = imports.count() + absGot.count();
+        // A GOT reference to a symbol this image DEFINES that cannot be relaxed
+        // to `lea` — a plain GOTPCREL, which reads the slot as data, or a
+        // GOTPCRELX on an instruction other than `mov` (musl's exit code
+        // compares against `__fini_array_start@GOTPCREL`) — gets a real slot
+        // holding the symbol's address, with a RELATIVE relocation for the load
+        // bias. First-seen order.
+        Array* localGot = new Array();
+        Map* localGotSet = new Map();
+        for (u32 i = (u32)0; i < fixups.count(); i = i + (u32)1)
+            {
+            X86Fixup* fx = (X86Fixup*)fixups.get(i);
+            if (!Elf64.needsLocalGotSlot(fx, symbols, absSet, text))
+                continue;
+            if (!Elf64.inSet(localGotSet, fx.symbol()))
+                {
+                localGot.add((Object*)fx.symbol());
+                localGotSet.set((Hashable*)fx.symbol(), (Object*)Number.withU32((u32)1));
+                }
+            }
+        u32 ngot = imports.count() + absGot.count() + localGot.count();
 
         u32 thunkOff = text.length(); // thunks are appended to .text
-        u32 nsym = (u32)1 + exports.count() + imports.count();
+        u32 nsym = (u32)1 + exports.count() + imports.count() + wordImports.count();
 
         Array* symOrder = new Array();
         symOrder.add((Object*)String.withCString(""));
@@ -712,6 +752,8 @@ class ElfSharedInfo
             symOrder.add(exports.get(i));
         for (u32 i = (u32)0; i < imports.count(); i = i + (u32)1)
             symOrder.add(imports.get(i));
+        for (u32 i = (u32)0; i < wordImports.count(); i = i + (u32)1)
+            symOrder.add(wordImports.get(i));
 
         Array* dynstr = new Array();
         Map* strOff = new Map();
@@ -733,7 +775,8 @@ class ElfSharedInfo
         u32 hashSz = ((u32)2 + nbucket + nsym) * (u32)4;
         u32 nDyn = (u32)8 + (isExec ? (u32)0 : (u32)1) + (hasRunpath ? (u32)1 : (u32)0) + neededOff.count() + (u32)1;
 
-        // Only an ABS64 needs a dynamic relocation. A PC32Data slot — a jump
+        // Only an ABS64 needs a dynamic relocation: RELATIVE for a symbol this
+        // image defines, R_X86_64_64 for an import. A PC32Data slot — a jump
         // table's `.long target - base` — is a difference of two in-image
         // addresses, invariant under the load bias, so it is resolved here and
         // gets none. (Lumping it in emitted an 8-byte RELATIVE over a 4-byte
@@ -745,7 +788,7 @@ class ElfSharedInfo
             if (f.kind() == (u32)X86FIX_ABS64)
                 absFixups.add((Object*)f);
             }
-        u32 nRela = absFixups.count() + imports.count();
+        u32 nRela = absFixups.count() + imports.count() + localGot.count();
 
         u32 nphdr = isExec ? (u32)7 : (u32)5;
         u32 interpOff = roundUpTo((u32)EHDR_SZ + nphdr * (u32)PHDR_SZ, (u32)8);
@@ -794,6 +837,8 @@ class ElfSharedInfo
                              : (Elf64.inSet(dataSet, f.symbol()) ? dataAddr : textAddr) + ((Number*)off).asU32();
             else if (isGot)
                 target = gotOff + Elf64.indexIn(imports, f.symbol()) * (u32)8;
+            else if (f.kind() == (u32)X86FIX_ABS64)
+                target = (u32)0; // an import: the loader writes S + A
             else
                 target = thunkAddr + Elf64.indexIn(imports, f.symbol()) * (u32)THUNK_SZ;
 
@@ -804,7 +849,7 @@ class ElfSharedInfo
                     failWith(String.withCString("abs64 fixup past end of data:"), f.symbol());
                     return;
                     }
-                u32 v = target + (u32)f.addend();
+                u32 v = off == (Object*)0 ? (u32)0 : target + (u32)f.addend();
                 for (u32 b = (u32)0; b < (u32)8; b = b + (u32)1)
                     data.setByteAt(f.offset() + b, (u8)(b < (u32)4 ? ((v >> ((u32)8 * b)) & (u32)$FF) : (u32)0));
                 continue;
@@ -827,23 +872,21 @@ class ElfSharedInfo
                 failWith(String.withCString("fixup past end of text:"), f.symbol());
                 return;
                 }
-            // A GOTPCRELX to a symbol we DEFINE has no GOT slot: relax mov→lea
-            // and resolve directly. One to an IMPORT keeps the load, because
-            // its displacement must point at the loader-filled slot.
+            // A GOTPCRELX `mov` to a symbol we DEFINE has no GOT slot: relax
+            // mov→lea and resolve directly. Any other GOT reference to one we
+            // define reads its local slot. One to an IMPORT keeps the load,
+            // because its displacement must point at the loader-filled slot.
             bool isAbsSym = off != (Object*)0 && absSyms != (Array*)0 && Elf64.inSet(absSet, f.symbol());
             if (isGot && isAbsSym)
                 {
                 target = gotOff + (imports.count() + Elf64.indexIn(absGot, f.symbol())) * (u32)8;
                 }
+            else if (Elf64.needsLocalGotSlot(f, symbols, absSet, text))
+                {
+                target = gotOff + (imports.count() + absGot.count() + Elf64.indexIn(localGot, f.symbol())) * (u32)8;
+                }
             else if (f.kind() == (u32)X86FIX_GOTLOAD && off != (Object*)0)
                 {
-                if (f.offset() < (u32)2 || (u32)text.byteAt(f.offset() - (u32)2) != (u32)$8B)
-                    {
-                    failWith(String.withCString(
-                                 "GOTPCRELX is not a relaxable mov (only mov->lea is implemented):"),
-                             f.symbol());
-                    return;
-                    }
                 text.setByteAt(f.offset() - (u32)2, (u8)((u32)$8D));
                 }
             i32 rel = (i32)target - (i32)(textAddr + f.offset()) + f.addend();
@@ -927,11 +970,14 @@ class ElfSharedInfo
             Object* off = isNull ? (Object*)0 : symbols.get((Hashable*)n);
             // A defined data symbol, or an undefined DATA import, is
             // STT_OBJECT; everything else a function. Advisory for GLOB_DAT,
-            // but it keeps `nm` and the loader's diagnostics honest.
+            // but it keeps `nm` and the loader's diagnostics honest. An import
+            // named only by data words may be either, and is STT_NOTYPE.
             bool inData = off != (Object*)0 ? Elf64.inSet(dataSet, n)
                                             : (!isNull && Elf64.inSet(dataImportsSet, n));
+            bool wordOnly = !isNull && off == (Object*)0 && i >= (u32)1 + exports.count() + imports.count();
+            u32 stt = wordOnly ? (u32)STT_NOTYPE : (inData ? (u32)STT_OBJECT : (u32)STT_FUNC);
             p32(isNull ? (u32)0 : Elf64.lookupStr(strOff, n));
-            p8(isNull ? (u32)0 : (((u32)STB_GLOBAL << (u32)4) | (inData ? (u32)STT_OBJECT : (u32)STT_FUNC)));
+            p8(isNull ? (u32)0 : (((u32)STB_GLOBAL << (u32)4) | stt));
             p8((u32)0);
             bool isAbs = off != (Object*)0 && Elf64.inSet(absSet, n);
             // SHN_ABS: the value is the answer, and the loader must not add a
@@ -968,10 +1014,23 @@ class ElfSharedInfo
             p32(((Number*)chain.get(i)).asU32());
 
         padTo(relaOff);
-        // R_X86_64_RELATIVE
+        // R_X86_64_RELATIVE, or R_X86_64_64 against an import
         for (u32 i = (u32)0; i < absFixups.count(); i = i + (u32)1)
             {
             X86Fixup* f = (X86Fixup*)absFixups.get(i);
+            if (symbols.get((Hashable*)f.symbol()) == (Object*)0)
+                {
+                u32 wi = Elf64.indexIn(imports, f.symbol());
+                u32 symIdx = wi < imports.count()
+                                 ? (u32)1 + exports.count() + wi
+                                 : (u32)1 + exports.count() + imports.count() + Elf64.indexIn(wordImports, f.symbol());
+                p64(dataAddr + f.offset());
+                p32((u32)R_X86_64_64);
+                p32(symIdx);
+                p32((u32)f.addend()); // r_addend, sign-extended
+                p32(f.addend() < 0 ? (u32)$FFFFFFFF : (u32)0);
+                continue;
+                }
             u32 target = (Elf64.inSet(dataSet, f.symbol()) ? dataAddr : textAddr) + ((Number*)symbols.get((Hashable*)f.symbol())).asU32() + (u32)f.addend();
             p64(dataAddr + f.offset());
             p64((u32)R_X86_64_RELATIVE);
@@ -988,6 +1047,13 @@ class ElfSharedInfo
             p32(symIdx);
             p64((u32)0);
             }
+        // R_X86_64_RELATIVE for the local GOT slots
+        for (u32 i = (u32)0; i < localGot.count(); i = i + (u32)1)
+            {
+            p64(gotOff + (imports.count() + absGot.count() + i) * (u32)8);
+            p64((u32)R_X86_64_RELATIVE);
+            p64(Elf64.localAddr(symbols, dataSet, (String*)localGot.get(i), textAddr, dataAddr));
+            }
 
         padTo(textOff);
         for (u32 i = (u32)0; i < text.length(); i = i + (u32)1)
@@ -1000,6 +1066,8 @@ class ElfSharedInfo
             Object* v = symbols.get((Hashable*)absGot.get(i));
             p64(v == (Object*)0 ? (u32)0 : ((Number*)v).asU32());
             }
+        for (u32 i = (u32)0; i < localGot.count(); i = i + (u32)1)
+            p64(Elf64.localAddr(symbols, dataSet, (String*)localGot.get(i), textAddr, dataAddr));
 
         padTo(dynOff);
         for (u32 i = (u32)0; i < neededOff.count(); i = i + (u32)1)
@@ -1141,6 +1209,27 @@ class ElfSharedInfo
         patch32(shoffField, shOff);
         patch16(shnumField, nsec);
         patch16(shnumField + (u32)2, shstrIdx);
+        }
+
+    // Whether a GOT reference to a symbol this image defines needs a real
+    // slot: a plain GOTPCREL, or a GOTPCRELX whose instruction is not the
+    // relaxable `mov` (0x8b). An absolute symbol has its own slots (absGot).
+    static bool needsLocalGotSlot(X86Fixup* f, Map* symbols, Map* absSet, Data* text)
+        {
+        if (f.kind() != (u32)X86FIX_GOTLOAD && f.kind() != (u32)X86FIX_GOTREF)
+            return false;
+        if (symbols.get((Hashable*)f.symbol()) == (Object*)0 || Elf64.inSet(absSet, f.symbol()))
+            return false;
+        if (f.kind() == (u32)X86FIX_GOTREF)
+            return true;
+        return f.offset() < (u32)2 || f.offset() > text.length()
+               || (u32)text.byteAt(f.offset() - (u32)2) != (u32)$8B;
+        }
+
+    // The link-time address of a symbol this image defines.
+    static u32 localAddr(Map* symbols, Map* dataSet, String* n, u32 textAddr, u32 dataAddr)
+        {
+        return (Elf64.inSet(dataSet, n) ? dataAddr : textAddr) + ((Number*)symbols.get((Hashable*)n)).asU32();
         }
 
     void phdr(u32 type, u32 flags, u32 off, u32 sz, u32 align)

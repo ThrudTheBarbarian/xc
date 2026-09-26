@@ -2413,7 +2413,11 @@ static int linkX86_64Dynamic(const char *argv0, XTCommandLineOptions *opts, NSSt
             NSMutableArray<NSString *> *args = [rtPaths mutableCopy];
             [args addObject:stubPath];
             [args addObject:asmPath];
-            { NSString *es = x86ExitStub(support); if (es) [args addObject:es]; }
+            // The exit stub only when there is no musl pool: libc.a's exit(3)
+            // runs the atexit handlers and flushes stdio, and a second `exit`
+            // would keep it from being pulled. The shipped driver never adds it.
+            if (!x86MuslLibc(support))
+                { NSString *es = x86ExitStub(support); if (es) [args addObject:es]; }
             if (!x86AddMimalloc(argv0, opts, args)) return 1;
             // The shared deps go on the line as INPUTS (not -l names): the
             // in-house linker reads each .so's soname (→ DT_NEEDED) and its
