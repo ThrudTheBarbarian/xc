@@ -5270,6 +5270,7 @@ class ClassInfo
             IRValue* a = lowerExpr(n.kid(i));
             if (_failed)
                 return (IRValue*)0;
+            a = coerceIndirectArg(n, i, a);
             c.add(IROperand.useVal(a));
             }
         c.add(IROperand.useVal(_mem));
@@ -5379,6 +5380,7 @@ class ClassInfo
             IRValue* a = lowerExpr(n.kid(i));
             if (_failed)
                 return (IRValue*)0;
+            a = coerceIndirectArg(n, i, a);
             c.add(IROperand.useVal(a));
             }
         c.add(IROperand.useVal(_mem));
@@ -5395,6 +5397,56 @@ class ClassInfo
         _blk.add(c);
         _mem = nm;
         return res;
+        }
+
+    // An argument of a call through a function pointer or a callback is
+    // adjusted to the SIGNATURE's parameter, exactly as a direct call's is to
+    // the declaration's. Without it a narrow argument kept its own width: a
+    // byte literal passed to an `i32` parameter pushed one byte on xt6502,
+    // where the callee reads four, and a negative `i8` passed to an `i64`
+    // parameter arrived zero-extended on every target.
+    IRValue* coerceIndirectArg(Node* call, u32 i, IRValue* a)
+        {
+        String* sig = call.calleeTy();
+        if (sig == 0)
+            return a;
+        Array* ptys = sigParamTypes(sigParamList(sig));
+        if (i >= ptys.count())
+            return a;
+        String* want = (String*)ptys.get(i);
+        if (isName(want, "..."))
+            return a;
+        return coerceArg(a, call.kid(i).ty(), want);
+        }
+
+    // The parameter list of a signature spelling, parentheses included: the
+    // LAST top-level group, so a return type that is itself a signature does
+    // not answer for it.
+    String* sigParamList(String* sig)
+        {
+        u32 close = String.notFound();
+        for (u32 i = sig.byteLength(); i > (u32)0; i = i - (u32)1)
+            if (sig.byteAt(i - (u32)1) == (u8)')')
+                {
+                close = i - (u32)1;
+                break;
+                }
+        if (close == String.notFound())
+            return sig;
+        u32 depth = (u32)0;
+        for (u32 i = close + (u32)1; i > (u32)0; i = i - (u32)1)
+            {
+            u8 c = sig.byteAt(i - (u32)1);
+            if (c == (u8)')')
+                depth = depth + (u32)1;
+            else if (c == (u8)'(')
+                {
+                depth = depth - (u32)1;
+                if (depth == (u32)0)
+                    return sig.substringBytes(i - (u32)1, close + (u32)2 - i);
+                }
+            }
+        return sig;
         }
 
     // An ARGUMENT is adjusted to the callee's parameter, and this is NOT the

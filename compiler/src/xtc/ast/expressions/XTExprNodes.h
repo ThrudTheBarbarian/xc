@@ -1,5 +1,7 @@
 #import "XTASTNode.h"
 
+@class XTFunctionType;
+
 NS_ASSUME_NONNULL_BEGIN
 
 typedef NS_ENUM(NSInteger, XTBinaryOp) {
@@ -203,6 +205,12 @@ typedef NS_ENUM(NSInteger, XTAssignOp) {
 |* receiver to prepend. See private:docs/Design/bound-methods.md.
 \****************************************************************************/
 @property(nonatomic) BOOL isBoundCall;
+/****************************************************************************\
+|* The signature an indirect call goes through, stamped by sema with the
+|* two flags above. Lowering adjusts each argument to its parameter from it,
+|* as a direct call does from the callee's declaration.
+\****************************************************************************/
+@property(nonatomic, nullable) XTFunctionType* calleeSignature;
 /****************************************************************************\
 |* The callee as an EXPRESSION, for a call whose callee is not a name:
 |* `tbl[0](5)`, `s.fn(6)`, `obj.cbIvar(7)`, `makeCallback()(8)`. nil for the

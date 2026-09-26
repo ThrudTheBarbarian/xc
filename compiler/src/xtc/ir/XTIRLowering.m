@@ -1413,6 +1413,67 @@ static uint32_t xtProtocolId(NSString* name)
         args[idx] = w;
     }
 
+/****************************************************************************\
+|* An argument of a call through a function pointer or a callback, adjusted
+|* to the SIGNATURE's parameter as a direct call's is to the declaration's.
+|* Without it a narrow argument kept its own width: a byte literal passed to
+|* an `i32` parameter pushed one byte on xt6502, where the callee reads four,
+|* and a negative `i8` passed to an `i64` parameter arrived zero-extended on
+|* every target. Returns `av` unchanged when nothing needs doing.
+\****************************************************************************/
+- (nullable XTIRValue*)coerceIndirectArg:(XTIRValue*)av
+                                  ofCall:(XTCallExprNode*)node
+                                      at:(NSUInteger)k
+    {
+    XTFunctionType* sig = node.calleeSignature;
+    if (!sig || k >= sig.paramTypes.count || k >= node.arguments.count)
+        return av;
+    XTType* dstAST = sig.paramTypes[k];
+    XTType* srcAST = node.arguments[k].resolvedType;
+    if (!dstAST || !srcAST)
+        return av;
+    XTIRType* dstIR = [self irTypeForASTType:dstAST at:node.location];
+    if (!dstIR || dstIR.kind == XTIRTypeKindVoid || dstIR.kind == XTIRTypeKindPtr)
+        return av;
+    // A plain function pointer reaching a `^` parameter widens into one; any
+    // other aggregate is already the value the callee wants.
+    if (dstIR.kind == XTIRTypeKindAgg)
+        {
+        if (dstAST.boundMethodSignature == nil)
+            return av;
+        XTFunctionType* wsig = [self fnSignatureForWidening:srcAST];
+        if (!wsig)
+            return av;
+        XTIRValue* w = [self widenFunctionPointer:av signature:wsig toAggType:dstIR];
+        return w ?: av;
+        }
+    BOOL srcFlt = av.type && XTIRTypeKindIsFloating(av.type.kind);
+    BOOL dstFlt = XTIRTypeKindIsFloating(dstIR.kind);
+    XTIROpcode op;
+    if (srcFlt != dstFlt)
+        op = dstFlt ? (srcAST.isSigned ? XTIROpSIToFp : XTIROpUIToFp)
+                    : (dstAST.isSigned ? XTIROpFpToSI : XTIROpFpToUI);
+    else if (srcFlt)
+        {
+        if (srcAST.byteWidth == dstAST.byteWidth)
+            return av;
+        op = dstAST.byteWidth > srcAST.byteWidth ? XTIROpFpExt : XTIROpFpTrunc;
+        }
+    else
+        {
+        NSUInteger srcW = srcAST.byteWidth, dstW = dstIR.byteWidth;
+        BOOL srcSgn = srcAST.isSigned, dstSgn = XTIRTypeKindIsSigned(dstIR.kind);
+        if (srcW == dstW && srcSgn == dstSgn)
+            return av;
+        op = dstW > srcW   ? (srcSgn ? XTIROpSExt : XTIROpZExt)
+             : dstW < srcW ? XTIROpTrunc
+                           : XTIROpBitcast;
+        }
+    return [self emitInsnOpcode:op
+                         result:dstIR
+                       operands:@[ [XTIROperand useWithValueId:av.valueId] ]];
+    }
+
 // Coerce `src` to `dstASTType`, emitting SExt / ZExt / Trunc / Bitcast
 // as needed. Returns the (possibly-new) IR value. If types already
 // match, returns `src` unchanged.
@@ -8823,9 +8884,9 @@ static const NSUInteger kVarargSlotBytes = 8;
     // Indirect call through a function pointer (`fp(args)`). Sema sets
     // isIndirectCall when calleeName resolves to a local / parameter /
     // global of `FuncType@` type rather than a function symbol. Lower
-    // that variable to its pointer value and dispatch through it. Args
-    // are already cast to the signature's types by sema, so they lower
-    // directly. (Reaches here only as a free-call form — method calls
+    // that variable to its pointer value and dispatch through it. Each
+    // arg is adjusted to the signature sema recorded (coerceIndirectArg).
+    // (Reaches here only as a free-call form — method calls
     // through a member fn-pointer would route via lowerMethodCallExpr.)
     // Call through a bound method (`^`): split the fat pointer into its two
     // words and dispatch through `code` with `recv` prepended as the implicit
@@ -8884,9 +8945,12 @@ static const NSUInteger kVarargSlotBytes = 8;
 
         NSMutableArray<XTIRValue*>* bargs = [NSMutableArray array];
         [bargs addObject:recv]; // implicit self
-        for (XTASTNode* a in node.arguments)
+        for (NSUInteger k = 0; k < node.arguments.count; k++)
             {
-            XTIRValue* av = [self lowerExpression:a];
+            XTIRValue* av = [self lowerExpression:node.arguments[k]];
+            if (!av)
+                return nil;
+            av = [self coerceIndirectArg:av ofCall:node at:k];
             if (!av)
                 return nil;
             [bargs addObject:av];
@@ -8918,9 +8982,12 @@ static const NSUInteger kVarargSlotBytes = 8;
         if (!fnPtr)
             return nil;
         NSMutableArray<XTIRValue*>* iargs = [NSMutableArray array];
-        for (XTASTNode* a in node.arguments)
+        for (NSUInteger k = 0; k < node.arguments.count; k++)
             {
-            XTIRValue* av = [self lowerExpression:a];
+            XTIRValue* av = [self lowerExpression:node.arguments[k]];
+            if (!av)
+                return nil;
+            av = [self coerceIndirectArg:av ofCall:node at:k];
             if (!av)
                 return nil;
             [iargs addObject:av];
