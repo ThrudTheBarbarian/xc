@@ -1539,6 +1539,98 @@
     }
 
 /****************************************************************************\
+|* A call ARGUMENT into a class-pointer or protocol parameter (bug 320). The
+|* same rule for a method and a free function. An argument is refused only
+|* when no object could be both what it is typed as and what the parameter
+|* wants:
+|*   class -> class        the argument's class is neither the parameter's
+|*                         class, a subclass nor an ancestor of it.
+|*   class -> protocol     neither the argument's class nor any known
+|*                         subclass of it conforms (`Object` always may).
+|*   protocol -> class     neither the parameter's class nor any known
+|*                         subclass of it conforms.
+|*   protocol -> protocol  different protocols no known class conforms to
+|*                         both.
+|* An ancestor is the implicit downcast collection code is written against
+|* (`Object*` from `Array.get`), and it stays legal in a call. Everything else
+|* is the assignment rule, with its wording.
+\****************************************************************************/
+- (void)checkClassPointerArgument:(nullable XTType*)paramType
+                          argType:(nullable XTType*)argType
+                          argNode:(XTASTNode*)argNode
+                             site:(NSString*)site
+                         location:(XTSourceLocation*)loc
+    {
+    if ([self classPointerArgument:argType mayBe:paramType])
+        return;
+    [self checkClassPointerAssign:paramType
+                          rhsType:argType
+                          rhsNode:argNode
+                             site:site
+                         location:loc];
+    }
+
+// The protocol a class-pointer pointee names, or nil for a class.
+- (nullable NSString*)protocolOfPointee:(XTType*)p
+    {
+    if (p.protocolConstraint.length > 0)
+        return p.protocolConstraint;
+    if (p.displayName && self.protocolsByName[p.displayName])
+        return p.displayName;
+    return nil;
+    }
+
+// Does `cls` or some known subclass of it conform to `proto`? `Object` is
+// taken to: a conforming class may come from another module.
+- (BOOL)class:(XTClassDeclNode*)cls mayConformTo:(NSString*)proto
+    {
+    if ([cls.className isEqualToString:@"Object"])
+        return YES;
+    for (XTClassDeclNode* c in self.classesByName.allValues)
+        {
+        if ([self class:c inheritsFromOrEquals:cls] && [self class:c conformsToProtocol:proto])
+            return YES;
+        }
+    return NO;
+    }
+
+- (BOOL)classPointerArgument:(nullable XTType*)argType mayBe:(nullable XTType*)paramType
+    {
+    if (!argType || !paramType)
+        return NO;
+    if (argType.boundMethodSignature != nil || paramType.boundMethodSignature != nil)
+        return NO;
+    if (![argType isKindOfClass:[XTPointerType class]] ||
+        ![paramType isKindOfClass:[XTPointerType class]])
+        return NO;
+    XTType* ap = ((XTPointerType*)argType).pointeeType;
+    XTType* pp = ((XTPointerType*)paramType).pointeeType;
+    if (!ap || !pp || ap.kind != XTTypeKindClass || pp.kind != XTTypeKindClass)
+        return NO;
+    NSString* aProto = [self protocolOfPointee:ap];
+    NSString* pProto = [self protocolOfPointee:pp];
+    XTClassDeclNode* ac = aProto ? nil : self.classesByName[ap.displayName];
+    XTClassDeclNode* pc = pProto ? nil : self.classesByName[pp.displayName];
+    if (ac && pc)
+        return [self class:pc inheritsFromOrEquals:ac];
+    if (ac && pProto)
+        return [self class:ac mayConformTo:pProto];
+    if (aProto && pc)
+        return [self class:pc mayConformTo:aProto];
+    if (aProto && pProto)
+        {
+        if ([aProto isEqualToString:pProto])
+            return YES;
+        for (XTClassDeclNode* c in self.classesByName.allValues)
+            {
+            if ([self class:c conformsToProtocol:aProto] && [self class:c conformsToProtocol:pProto])
+                return YES;
+            }
+        }
+    return NO;
+    }
+
+/****************************************************************************\
 |* Extract a compile-time integer value from a case-label expression.
 |* Accepts integer literals (any width) and identifiers bound to enum
 |* constants (their symbol carries `constantValue`). Returns nil for

@@ -482,6 +482,81 @@ class Sema
         _errorAt(e, at);
         }
 
+    // A call ARGUMENT into a class-pointer or protocol parameter (bug 320),
+    // the same rule for a method and a free function. It is refused only when
+    // no object could be both what the argument is typed as and what the
+    // parameter wants:
+    //   class -> class        neither the parameter's class, a subclass nor
+    //                         an ancestor of it.
+    //   class -> protocol     neither the class nor any known subclass of it
+    //                         conforms (`Object` always may).
+    //   protocol -> class     neither the parameter's class nor any known
+    //                         subclass of it conforms.
+    //   protocol -> protocol  different protocols no known class conforms to
+    //                         both.
+    // An ancestor is the implicit downcast collection code is written against
+    // (`Object*` from `Array.get`), so it stays legal in a call. Everything
+    // else is the assignment rule, in its words.
+    void checkClassPointerArgAt(String* lhs, String* rhs, Node* rhsNode, string site, Node* at)
+        {
+        if (classPointerArgMayBe(rhs, lhs))
+            return;
+        checkClassPointerAssignAt(lhs, rhs, rhsNode, site, at);
+        }
+
+    bool classPointerArgMayBe(String* arg, String* par)
+        {
+        if (arg == 0 || par == 0)
+            return false;
+        if (isBoundSignature(arg) || isBoundSignature(par))
+            return false;
+        if (!Types.isPointer(arg) || !Types.isPointer(par))
+            return false;
+        String* ap = classNameOf(arg);
+        String* pp = classNameOf(par);
+        if (ap == 0 || pp == 0)
+            return false;
+        bool aProto = _protocols.get((Hashable*)ap) != 0;
+        bool pProto = _protocols.get((Hashable*)pp) != 0;
+        bool aCls = !aProto && _classes.get((Hashable*)ap) != 0;
+        bool pCls = !pProto && _classes.get((Hashable*)pp) != 0;
+        if (aCls && pCls)
+            return Overload.descendsFrom(pp, ap);
+        if (aCls && pProto)
+            return classMayConform(ap, pp);
+        if (aProto && pCls)
+            return classMayConform(pp, ap);
+        if (aProto && pProto)
+            {
+            if (ap.equals(pp))
+                return true;
+            Array* names = _classes.allKeys();
+            for (u32 i = (u32)0; i < names.count(); i = i + (u32)1)
+                {
+                String* c = (String*)names.get(i);
+                if (Overload.conformsTo(c, ap) && Overload.conformsTo(c, pp))
+                    return true;
+                }
+            }
+        return false;
+        }
+
+    // Does `cls` or some known subclass of it conform to `proto`? `Object` is
+    // taken to: a conforming class may come from another module.
+    bool classMayConform(String* cls, String* proto)
+        {
+        if (_isOp(cls, "Object"))
+            return true;
+        Array* names = _classes.allKeys();
+        for (u32 i = (u32)0; i < names.count(); i = i + (u32)1)
+            {
+            String* c = (String*)names.get(i);
+            if (Overload.descendsFrom(c, cls) && Overload.conformsTo(c, proto))
+                return true;
+            }
+        return false;
+        }
+
     // Enforce `final`. Without both halves it is an unsound promise — a way to
     // silently devirtualise a method that IS overridden.
     //
@@ -2099,6 +2174,7 @@ class Sema
                 // is checked here (bug 271).
                 if (!checkArity(m, n, (u32)0, n.name()))
                     return;
+                checkMisfitArgs(m, n, (u32)0, n.name());
                 n.setTy(m.op());
                 n.setSym(m.sym());
                 // An implicit-self call DOES reach the method through the
@@ -2797,6 +2873,7 @@ class Sema
                     plbl.append(n.name());
                     if (!checkArity(pm, n, (u32)1, plbl))
                         return;
+                    checkMisfitArgs(pm, n, (u32)1, plbl);
                     n.setTy(pm.op());
                     Map* ps = _vt.protoSlotsFor(owner);
                     if (ps != 0)
@@ -2907,6 +2984,7 @@ class Sema
         mlbl.append(n.name());
         if (!checkArity(m, n, (u32)1, mlbl))
             return;
+        checkMisfitArgs(m, n, (u32)1, mlbl);
         if (owner2 != 0 && owner2 != cls)
             n.setCls(owner2.name());
         n.setTy(firstReturn(m.op()));
@@ -3888,12 +3966,13 @@ class Sema
         return false;
         }
 
-    // A single FREE function taken although it scored as a misfit still has
-    // its class-pointer arguments checked: a width or scalar-kind difference
-    // is a conversion, but a `B*` where an `A*` is declared is not, and the
-    // callee would read B's fields at A's offsets. Positioned at the call, as
-    // the reference places it. (Method calls keep the implicit downcast from
-    // `Object*` that collection code relies on; neither compiler checks them.)
+    // A single candidate taken although it scored as a misfit — a free
+    // function, a method, an implicit-self or a protocol call — still has its
+    // class-pointer arguments checked: a width or scalar-kind difference is a
+    // conversion, but a `B*` where an unrelated `A*` is declared is not, and
+    // the callee would read B's fields at A's offsets (bug 320). An ancestor
+    // stays legal (checkClassPointerArgAt). Positioned at the call, as the
+    // reference places it.
     void checkMisfitArgs(Node* decl, Node* call, u32 argBase, String* callee)
         {
         if (scoreCandidate(decl, call, argBase) != Overload.noMatch())
@@ -3932,7 +4011,7 @@ class Sema
             site.appendCString(" of '");
             site.append(callee);
             site.appendByte((u8)0x27);
-            checkClassPointerAssignAt(p.op(), a.ty(), a, site.cString(), call);
+            checkClassPointerArgAt(p.op(), a.ty(), a, site.cString(), call);
             }
         }
 

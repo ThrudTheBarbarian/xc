@@ -1328,6 +1328,29 @@ skipping the vtable, regardless of further subclassing.
 A null operand passes through unchanged for both downcast
 flavours.
 
+#### Call arguments
+
+A call argument converts implicitly in both directions along one
+line of descent. An argument typed as an ancestor of the
+parameter's class is accepted without a cast and without a runtime
+check, so an element read from an untyped collection (`Object@`
+from `Array.get`) can be passed where its class is declared. An
+argument whose class is neither a subclass nor an ancestor of the
+parameter's class is a compile-time error:
+
+```c
+void feed(Dog@ d) { ... }
+
+Animal@ a = new Dog();
+feed(a);             // accepted: Animal is an ancestor of Dog
+feed(new Cat());     // error: argument 1 of 'feed': 'Cat' is not a subclass of 'Dog'
+```
+
+The rule is the same for free functions, static and instance
+methods, implicit-`self` calls and calls through a protocol.
+Assignments, initialisers and returns do not take the downcast:
+`Dog@ d = a;` needs `(Dog@)a`.
+
 ### 8.5 Protocols
 
 A protocol is a named interface: a list of method signatures
@@ -1378,7 +1401,18 @@ Sprite@  s = new Sprite();
 render(s);                 // calls Sprite.draw
 ```
 
-Passing a non-conforming instance is a compile-time error.
+Passing a non-conforming instance is a compile-time error. A call
+argument is refused only when it could never conform (§8.4, call
+arguments):
+
+- a class argument is accepted when the class or any subclass of
+  it conforms; `Object@` is always accepted;
+- a protocol value passed for a class parameter is accepted when
+  that class or any subclass of it conforms to the protocol;
+- a value of one protocol passed for another is accepted when some
+  class conforms to both.
+
+An assignment keeps the strict rule: the value must conform.
 
 #### Dispatch
 

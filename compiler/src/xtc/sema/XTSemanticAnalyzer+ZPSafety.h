@@ -92,6 +92,11 @@ NS_ASSUME_NONNULL_BEGIN
                         rhsNode:(XTASTNode*)rhsNode
                            site:(NSString*)site
                        location:(XTSourceLocation*)loc;
+- (void)checkClassPointerArgument:(nullable XTType*)paramType
+                          argType:(nullable XTType*)argType
+                          argNode:(XTASTNode*)argNode
+                             site:(NSString*)site
+                         location:(XTSourceLocation*)loc;
 - (nullable NSNumber*)caseConstantValueOf:(XTASTNode*)expr;
 - (void)visitSwitch:(XTSwitchNode*)node;
 - (void)visitBreak:(XTASTNode*)node;
