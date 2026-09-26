@@ -644,6 +644,24 @@ static BOOL arm9EncodableImm(uint32_t v)
     [self emitSpAccess:@"ldr" reg:hi off:off + 4 out:out];
     }
 
+// Load a branch or select condition into `reg` as a word that is zero exactly
+// when the condition is false. A 64-bit condition ORs its two halves (into
+// `scratch` as well): read as its low word alone, `1 << 32` was false (bug 293).
++ (void)loadCondition:(XTIROperand*)op into:(NSString*)reg scratch:(NSString*)scratch
+                 slot:(NSDictionary<NSNumber*, NSNumber*>*)slot
+                   fn:(XTIRFunction*)fn
+                  out:(NSMutableString*)out
+    {
+    XTIRType* t = [self typeOfOperand:op fn:fn];
+    if (t && (t.kind == XTIRTypeKindI64 || t.kind == XTIRTypeKindU64))
+        {
+        [self loadInt64Operand:op lo:reg hi:scratch slot:slot fn:fn out:out];
+        [out appendFormat:@"\torr\t%@, %@, %@\n", reg, reg, scratch];
+        return;
+        }
+    [self loadOperand:op into:reg slot:slot out:out];
+    }
+
 // Emit `ldr reg, [base, #off]` for an off that may exceed A32's 12-bit (4095)
 // immediate, where `base` is a register the CALLER OWNS — the high bits are
 // folded into it in place. No scratch is needed: what is left over after the
@@ -1510,7 +1528,7 @@ static const NSUInteger kArm9VaForwardWords = 16;
         // operands: cond, trueVal, falseVal → cond ? true : false
         if (res && ops.count >= 3)
             {
-            [self loadOperand:ops[0] into:@"r2" slot:slot out:out];
+            [self loadCondition:ops[0] into:@"r2" scratch:@"r3" slot:slot fn:fn out:out];
             [self loadOperand:ops[1] into:@"r0" slot:slot out:out];
             [self loadOperand:ops[2] into:@"r1" slot:slot out:out];
             [out appendString:@"\tcmp\tr2, #0\n\tmoveq\tr0, r1\n"];
@@ -2845,7 +2863,10 @@ static const NSUInteger kArm9VaForwardWords = 16;
             }
         else
             {
-            [self loadOperand:cond into:@"r0" slot:slot out:out];
+            if (cond)
+                [self loadCondition:cond into:@"r0" scratch:@"r1" slot:slot fn:fn out:out];
+            else
+                [self loadOperand:cond into:@"r0" slot:slot out:out];
             [out appendString:@"\tcmp\tr0, #0\n"];
             [out appendFormat:@"\tbeq\t%@\n", flab];
             }

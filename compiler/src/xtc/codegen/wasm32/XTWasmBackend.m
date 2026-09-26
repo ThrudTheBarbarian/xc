@@ -1228,6 +1228,17 @@ static NSString *wasmExportNameOf(XTIRSymbol *sym, NSString *fallback) {
 
 #pragma mark - Operand loading
 
+// Push a branch or select condition as the i32 that `if` and `select` take. An
+// i64, f32 or f64 condition is tested against zero in its own type: pushed as
+// it was, it made a module that does not validate (bug 293).
++ (void)pushCondition:(XTIROperand *)op fn:(XTIRFunction *)fn out:(NSMutableString *)out {
+    [self pushOperand:op fn:fn out:out];
+    XTIRType *t = (op.kind == XTIROperandKindUse) ? fn.values[@(op.valueId)].type : op.type;
+    NSString *vt = wasmValType(t);
+    if ([vt isEqualToString:@"i64"] || [vt isEqualToString:@"f32"] || [vt isEqualToString:@"f64"])
+        [out appendFormat:@"    %@.const 0\n    %@.ne\n", vt, vt];
+}
+
 // Push one operand onto the wasm stack.
 + (void)pushOperand:(XTIROperand *)op fn:(XTIRFunction *)fn out:(NSMutableString *)out {
     switch (op.kind) {
@@ -1646,7 +1657,7 @@ static NSString *opPrefix(XTIRType *t) { return wasmValType(t); }
         if (!res || ops.count < 3) return;
         [self pushOperand:ops[1] fn:fn out:out];
         [self pushOperand:ops[2] fn:fn out:out];
-        [self pushOperand:ops[0] fn:fn out:out];
+        [self pushCondition:ops[0] fn:fn out:out];
         [out appendString:@"    select\n"];
         [self setResult:res canon:NO out:out];    // both arms canonical already
         return;
@@ -2700,7 +2711,7 @@ static NSString *opPrefix(XTIRType *t) { return wasmValType(t); }
         XTIRBlock *elseB = ops.count > 2 ? ops[2].blockRef : nil;
         NSNumber *ti = blockIndex[[NSValue valueWithNonretainedObject:thenB]];
         NSNumber *ei = blockIndex[[NSValue valueWithNonretainedObject:elseB]];
-        [self pushOperand:ops[0] fn:fn out:out];
+        [self pushCondition:ops[0] fn:fn out:out];
         [out appendString:@"    if\n"];
         [self emitPhiCopiesFrom:b to:thenB fn:fn out:out];
         [out appendFormat:@"    i32.const %u\n    local.set $pc\n    else\n",
@@ -2945,7 +2956,7 @@ static BOOL wasmDominates(NSArray<NSNumber *> *idom, NSUInteger a, NSUInteger b)
         NSArray<XTIROperand *> *ops = [self dataOperandsOf:term fn:fn];
         NSNumber *ti = blockIndex[[NSValue valueWithNonretainedObject:ops[1].blockRef]];
         NSNumber *ei = blockIndex[[NSValue valueWithNonretainedObject:ops[2].blockRef]];
-        [self pushOperand:ops[0] fn:fn out:out];
+        [self pushCondition:ops[0] fn:fn out:out];
         [out appendString:@"    if\n"];
         [self emitStructuredBranchTo:ti.unsignedIntegerValue from:u plan:plan
                                   fn:fn module:mod ctx:ctx blockIndex:blockIndex out:out];

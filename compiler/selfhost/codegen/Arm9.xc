@@ -1583,6 +1583,21 @@ class Arm9
         return op.ty();
         }
 
+    // Load a branch or select condition into `reg` as a word that is zero
+    // exactly when the condition is false. A 64-bit condition ORs its two
+    // halves (into `scratch` as well): read as its low word alone, `1 << 32`
+    // was false (bug 293).
+    void loadCondition(IROperand* op, String* reg, String* scratch)
+        {
+        if (Arm9.isI64(operandTy(op)))
+            {
+            loadInt64(op, reg, scratch);
+            _out.appendFormat("\torr\t%s, %s, %s\n", reg.cString(), reg.cString(), scratch.cString());
+            return;
+            }
+        loadOperand(op, reg);
+        }
+
     void loadInt64(IROperand* op, String* lo, String* hi)
         {
         if (op.kind() == (u8)OPK_IMMI)
@@ -2707,7 +2722,7 @@ class Arm9
         {
         if (res == 0 || ops.count() < (u32)3)
             return;
-        loadOperand((IROperand*)ops.get((u32)0), String.withCString("r2"));
+        loadCondition((IROperand*)ops.get((u32)0), String.withCString("r2"), String.withCString("r3"));
         loadOperand((IROperand*)ops.get((u32)1), String.withCString("r0"));
         loadOperand((IROperand*)ops.get((u32)2), String.withCString("r1"));
         _out.appendCString("\tcmp\tr2, #0\n\tmoveq\tr0, r1\n");
@@ -3452,7 +3467,7 @@ class Arm9
         else
             {
             if (cond != 0)
-                loadOperand(cond, String.withCString("r0"));
+                loadCondition(cond, String.withCString("r0"), String.withCString("r1"));
             _out.appendCString("\tcmp\tr0, #0\n");
             _out.appendFormat("\tbeq\t%s\n", flab.cString());
             }

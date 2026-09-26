@@ -189,6 +189,22 @@ static NSInteger sWin64SretOff = 0;
     return w;
     }
 
+// The width a branch or select condition is tested at: 8 for a pointer or a
+// 64-bit integer, else 4. A condition is true when ANY of its bits is set, so
+// `test eax, eax` read an i64 of 1 << 32, or a pointer whose low 32 bits are
+// zero, as false (bug 293).
++ (NSUInteger)condWidth:(XTIROperand*)op fn:(XTIRFunction*)fn
+    {
+    if (op.kind == XTIROperandKindUse)
+        {
+        XTIRValue* v = fn.values[@(op.valueId)];
+        return (v && [self widthOf:v] >= 8) ? 8 : 4;
+        }
+    if (op.kind == XTIROperandKindImmI && op.type)
+        return (op.type.kind == XTIRTypeKindPtr || op.type.byteWidth >= 8) ? 8 : 4;
+    return 4;
+    }
+
 // Sub-register name for one of the scratch bases a/c/d at a given byte width.
 + (NSString*)reg:(char)base width:(NSUInteger)w
     {
@@ -4187,7 +4203,8 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
             return;
             }
         [self loadZX:ops[0] into:'c' fn:fn slot:slot out:out]; // cond → rcx (zero-extended)
-        [out appendString:@"\ttest\tecx, ecx\n"];
+        NSUInteger cw = [self condWidth:ops[0] fn:fn];
+        [out appendFormat:@"\ttest\t%@, %@\n", [self reg:'c' width:cw], [self reg:'c' width:cw]];
         [out appendFormat:@"\tcmove\t%@, %@\n", [self reg:'a' width:(w < 4 ? 4 : w)], [self reg:'d' width:(w < 4 ? 4 : w)]];
         [self store:'a' into:res slot:slot out:out];
         return;
@@ -4858,9 +4875,13 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
             // Zero-extend the condition: a narrow (bool/u8) cond loaded as `mov al`
             // leaves stale high bits, and `test eax,eax` would then see a false
             // (0) condition as non-zero. loadZX cleans the full register first.
+            NSUInteger cw = 4;
             if (cond)
+                {
                 [self loadZX:cond into:'a' fn:fn slot:slot out:out];
-            [out appendString:@"\ttest\teax, eax\n"];
+                cw = [self condWidth:cond fn:fn];
+                }
+            [out appendFormat:@"\ttest\t%@, %@\n", [self reg:'a' width:cw], [self reg:'a' width:cw]];
             [out appendFormat:@"\tje\t%@\n", flab]; // false → flab
             }
         if (tb)

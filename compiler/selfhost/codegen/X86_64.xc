@@ -212,6 +212,19 @@ class X86_64
         return (u32)0;
         }
 
+    // The width a branch or select condition is tested at: 8 for a pointer or
+    // a 64-bit integer, else 4. A condition is true when ANY of its bits is
+    // set, so `test eax, eax` read an i64 of 1 << 32, or a pointer whose low
+    // 32 bits are zero, as false (bug 293).
+    static u32 condWidth(IROperand* op)
+        {
+        if (op.kind() == (u8)OPK_USE)
+            return (op.val() != (IRValue*)0 && widthOfValue(op.val()) >= (u32)8) ? (u32)8 : (u32)4;
+        if (op.kind() == (u8)OPK_IMMI && op.ty() != (String*)0)
+            return (isPtrTy(op.ty()) || irWidth(op.ty()) >= (u32)8) ? (u32)8 : (u32)4;
+        return (u32)4;
+        }
+
     // The width a value loads and stores at: its own, clamped to 1..8. A
     // pointer's IR width is 0 here, so the default of 8 covers it.
     static u32 widthOfValue(IRValue* v)
@@ -4438,9 +4451,13 @@ class X86_64
             // The condition ZERO-extends: a narrow bool loaded as `mov al` leaves
             // stale high bits, and `test eax, eax` would then read a false
             // condition as non-zero.
+            u32 cw = (u32)4;
             if (cond != (IROperand*)0)
+                {
                 loadZX(cond, (u8)'a');
-            _out.appendCString("\ttest\teax, eax\n");
+                cw = condWidth(cond);
+                }
+            _out.appendFormat("\ttest\t%s, %s\n", reg((u8)'a', cw).cString(), reg((u8)'a', cw).cString());
             _out.appendFormat("\tje\t%s\n", flab.cString());
             }
         if (tb != (IRBlock*)0)
@@ -5669,7 +5686,8 @@ class X86_64
             return;
             }
         loadZX(c0, (u8)'c'); // the condition
-        _out.appendCString("\ttest\tecx, ecx\n");
+        u32 ccw = condWidth(c0);
+        _out.appendFormat("\ttest\t%s, %s\n", reg((u8)'c', ccw).cString(), reg((u8)'c', ccw).cString());
         _out.appendFormat("\tcmove\t%s, %s\n", reg((u8)'a', w).cString(), reg((u8)'d', w).cString());
         store((u8)'a', n.res());
         }

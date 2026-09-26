@@ -1574,7 +1574,7 @@ class M68k
             }
         u32 lbl = _labelSeq;
         _labelSeq = _labelSeq + (u32)1;
-        loadOperand((IROperand*)n.ops().get((u32)0), String.withCString("d0"));
+        loadCondition((IROperand*)n.ops().get((u32)0), String.withCString("d0"));
         _out.appendFormat("\ttst.l\td0\n\tbeq.s\t.Lsel%luf\n", lbl);
         loadOperand((IROperand*)n.ops().get((u32)1), String.withCString("d0"));
         _out.appendFormat("\tbra.s\t.Lsel%lud\n.Lsel%luf:\n", lbl, lbl);
@@ -2339,7 +2339,7 @@ class M68k
             }
         else
             {
-            loadOperand(cond, String.withCString("d0"));
+            loadCondition(cond, String.withCString("d0"));
             _out.appendCString("\ttst.l\td0\n");
             _out.appendFormat("\tbeq\t.Lcbf%lu\n", lbl);
             }
@@ -3125,6 +3125,31 @@ class M68k
         if (op.kind() == (u8)OPK_USE && op.val() != (IRValue*)0 && isI64(op.val().ty()) && hasSlot(op.val()))
             {
             _out.appendFormat("\tmove.l\t%ld(a6),%s\n", slotOf(op.val()) + (i32)4, reg.cString());
+            return;
+            }
+        loadOperand(op, reg);
+        }
+
+    // Load a branch or select condition into `reg` as a long that is zero
+    // exactly when the condition is false. A 64-bit condition ORs its two
+    // longs: loadOperand delivers the HIGH one alone, so an i64 of 1 read as
+    // false (bug 293).
+    void loadCondition(IROperand* op, String* reg)
+        {
+        String* t = op.kind() == (u8)OPK_USE
+                  ? (op.val() == (IRValue*)0 ? (String*)0 : op.val().ty())
+                  : op.ty();
+        bool wide = isI64(t);
+        if (wide && op.kind() == (u8)OPK_IMMI)
+            {
+            _out.appendFormat("\tmove.l\t#%lu,%s\n", op.imm() != (i64)0 ? (u32)1 : (u32)0, reg.cString());
+            return;
+            }
+        if (wide && op.kind() == (u8)OPK_USE && hasSlot(op.val()))
+            {
+            i32 off = slotOf(op.val());
+            _out.appendFormat("\tmove.l\t%ld(a6),%s\n\tor.l\t%ld(a6),%s\n",
+                              off, reg.cString(), off + (i32)4, reg.cString());
             return;
             }
         loadOperand(op, reg);

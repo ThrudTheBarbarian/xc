@@ -1752,6 +1752,16 @@ static BOOL arm64LogicalImm(uint64_t v, int width) {
     }
 }
 
+// The scratch a branch or select condition is tested in: x16 for a pointer
+// or a 64-bit integer, w16 otherwise. A condition is true when ANY of its bits
+// is set, so a 64-bit one tested in w16 read `1 << 32`, or a pointer whose low
+// 32 bits are zero, as false (bug 293).
++ (NSString *)condRegForOperand:(XTIROperand *)c ctx:(XTArm64FnCtx *)ctx {
+    XTIRType *vt = (c.kind == XTIROperandKindUse)
+        ? [ctx.fn valueForId:c.valueId].type : c.type;
+    return [self irTypeNeedsXReg:vt] ? @"x16" : @"w16";
+}
+
 // Pick the integer-register name for `scratch` (16 or 17) sized to
 // `ty`. Returns w16/w17 for narrow integers, x16/x17 for pointers.
 + (NSString *)regName:(int)scratch forType:(XTIRType *)ty {
@@ -4060,21 +4070,23 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
                 NSString *s1 = dbl ? @"d17" : @"s17";
                 NSString *s2 = dbl ? @"d16" : @"s16";
                 NSString *s0 = dbl ? @"d16" : @"s16";
-                [self materialiseOperand:insn.operands[0] intoReg:@"w16" ctx:ctx];
+                NSString *cr = [self condRegForOperand:insn.operands[0] ctx:ctx];
+                [self materialiseOperand:insn.operands[0] intoReg:cr ctx:ctx];
                 [self loadFPOperand:insn.operands[1] intoReg:s1 double:dbl ctx:ctx];
                 [self loadFPOperand:insn.operands[2] intoReg:s2 double:dbl ctx:ctx];
-                [ctx.out appendString:@"    cmp w16, #0\n"];
+                [ctx.out appendFormat:@"    cmp %@, #0\n", cr];
                 [ctx.out appendFormat:@"    fcsel %@, %@, %@, ne\n", s0, s1, s2];
                 [self storeReg:s0 intoValue:insn.result.valueId ctx:ctx];
                 break;
             }
             BOOL needX = [self irTypeNeedsXReg:insn.result.type];
-            [self materialiseOperand:insn.operands[0] intoReg:@"w16" ctx:ctx];
+            NSString *cr = [self condRegForOperand:insn.operands[0] ctx:ctx];
+            [self materialiseOperand:insn.operands[0] intoReg:cr ctx:ctx];
             NSString *r1 = [self operandReg:insn.operands[1]
                                 intoScratch:(needX ? @"x17" : @"w17") ctx:ctx];
             NSString *r2 = [self operandReg:insn.operands[2]
                                 intoScratch:(needX ? @"x15" : @"w15") ctx:ctx];
-            [ctx.out appendString:@"    cmp w16, #0\n"];
+            [ctx.out appendFormat:@"    cmp %@, #0\n", cr];
             NSString *r0 = [self resultReg:insn.result.valueId
                                    scratch:(needX ? @"x16" : @"w16") ctx:ctx];
             [ctx.out appendFormat:@"    csel %@, %@, %@, ne\n", r0, r1, r2];
@@ -4261,10 +4273,11 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
             // condition into w16 FIRST (so the post-branch copies can clobber
             // w16 freely) and skip to the fall path when the condition is false.
             if (takenPhiClobbersFallSrc(t.blockRef, f.blockRef, block)) {
-                [self materialiseOperand:c intoReg:@"w16" ctx:ctx];
+                NSString *cr = [self condRegForOperand:c ctx:ctx];
+                [self materialiseOperand:c intoReg:cr ctx:ctx];
                 NSUInteger lbl = ctx.labelCounter++;
                 NSString *Lf = [NSString stringWithFormat:@".Lpc_%lu", (unsigned long)lbl];
-                [ctx.out appendFormat:@"    cbz w16, %@\n", Lf];
+                [ctx.out appendFormat:@"    cbz %@, %@\n", cr, Lf];
                 [self emitPhiCopiesFrom:block to:t.blockRef ctx:ctx];
                 [ctx.out appendFormat:@"    b %@\n",
                  [self blockLabelForFn:ctx.fn block:t.blockRef]];
@@ -4275,8 +4288,9 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
                 break;
             }
             [self emitPhiCopiesFrom:block to:t.blockRef ctx:ctx];
-            [self materialiseOperand:c intoReg:@"w16" ctx:ctx];
-            [ctx.out appendFormat:@"    cbnz w16, %@\n",
+            NSString *cr = [self condRegForOperand:c ctx:ctx];
+            [self materialiseOperand:c intoReg:cr ctx:ctx];
+            [ctx.out appendFormat:@"    cbnz %@, %@\n", cr,
              [self blockLabelForFn:ctx.fn block:t.blockRef]];
             [self emitPhiCopiesFrom:block to:f.blockRef ctx:ctx];
             [ctx.out appendFormat:@"    b %@\n",
