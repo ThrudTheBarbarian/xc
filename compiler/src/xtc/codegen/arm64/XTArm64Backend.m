@@ -5125,6 +5125,10 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
                 if (insn.result.type.kind == XTIRTypeKindAgg) {
                     // HFA in v0.., ≤16 B in x0:x1, >16 B non-float via the x8 sret.
                     [self captureAggResult:insn sretUsed:indSret ctx:ctx];
+                } else if (XTIRTypeKindIsFloating(insn.result.type.kind)) {
+                    // AAPCS returns FP in s0/d0, as for a direct Call.
+                    [self storeReg:[self fregName:0 forType:insn.result.type]
+                         intoValue:insn.result.valueId ctx:ctx];
                 } else {
                     NSString *destReg = [self regName:0 forType:insn.result.type];
                     if (!([self irTypeNeedsXReg:insn.result.type])) {
