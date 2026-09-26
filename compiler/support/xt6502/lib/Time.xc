@@ -123,7 +123,7 @@ class Time
     // ── secondsSince: seconds elapsed since a previous timer value ───
     // Reads timer, subtracts oldValue, converts elapsed ticks to float
     // via direct float-from-u32 assignment, detects PAL/NTSC, divides by the appropriate
-    // Hz rate (50 or 60) via fpDiv.
+    // Hz rate (50 or 60).
 
     static float secondsSince(u32 oldValue)
         {
@@ -168,43 +168,7 @@ class Time
         // Convert Hz rate to float (auto u8→float conversion)
         float fhz = hz;
 
-        // Divide: seconds = ticks / hz
-        float result;
-        asm
-            {
-            LDA fticks
-            STA $B0
-            LDA fticks+1
-            STA $B1
-            LDA fticks+2
-            STA $B2
-            LDA fticks+3
-            STA $B3
-            LDA fticks+4
-            STA $B4
-            LDA fhz
-            STA $B5
-            LDA fhz+1
-            STA $B6
-            LDA fhz+2
-            STA $B7
-            LDA fhz+3
-            STA $B8
-            LDA fhz+4
-            STA $B9
-            JSR fpDiv
-            LDA $B0
-            STA result
-            LDA $B1
-            STA result+1
-            LDA $B2
-            STA result+2
-            LDA $B3
-            STA result+3
-            LDA $B4
-            STA result+4
-            }
-        return result;
+        return fticks / fhz;
         }
 
     // ── dpSecondsSince: dp version of secondsSince ────────────────────
@@ -272,17 +236,9 @@ class Time
         }
 
     // ── delaySeconds: busy-wait for `secs` seconds ───────────────────
-    // Converts `secs` to a jiffy count (secs * Hz) using integer math
-    // on the float's raw mantissa/exponent, then hands off to
-    // delayJiffies. Detects PAL (50 Hz) / NTSC (60 Hz) from GTIA $D014.
-    //
-    // The 5-byte float is value = (1 + mantissa24/2^24) * 2^exp, with
-    // the implicit leading 1 unstored. Let M = (1<<24) | mantissa24 as
-    // a u32; then value * hz = (M * hz) >> (24 - exp). We compute M*hz
-    // with a u32 shift-and-add (hz ≤ 60 < 2^6, M ≤ 2^25, so the u32
-    // product never overflows), then shift right to yield jiffies.
-    // Going through fpMul is not an option — it hangs on floats whose
-    // stored mantissa is zero (e.g. 1.0 = {0,0,0,0,0}).
+    // jiffies = secs * Hz, truncated, in IEEE float on MECH. Hz is 50 (PAL)
+    // or 60 (NTSC), from GTIA $D014. A negative, NaN or zero `secs` waits no
+    // time; so does one whose jiffy count does not fit a u32.
 
     static void delaySeconds(float secs)
         {
@@ -300,103 +256,14 @@ class Time
             STA hz
             }
 
-        u32 jiffies;
-        u8 count;
-        asm
+        u32 jiffies = 0;
+        if (secs > 0.0)
             {
-                // Negative → 0 jiffies
-            LDA secs
-            AND #$01
-            BNE .ds_zero
-
-                            // jiffies = M = (1<<24) | mantissa24
-            LDA secs+4
-            STA jiffies
-            LDA secs+3
-            STA jiffies+1
-            LDA secs+2
-            STA jiffies+2
-            LDA #$01
-            STA jiffies+3
-
-                                                                        // acc ($B0..$B3) = jiffies * hz via shift-and-add on hz.
-                                                                        // $B4 holds a working copy of hz that we LSR each round;
-                                                                        // jiffies is shifted left in place to align the partial sums.
-            LDA #$00
-            STA $B0
-            STA $B1
-            STA $B2
-            STA $B3
-            LDA hz
-            STA $B4
-        .ds_mul_loop:
-            LDA $B4
-            BEQ .ds_mul_done
-            LSR $B4
-            BCC .ds_mul_noadd
-            CLC
-            LDA $B0
-            ADC jiffies
-            STA $B0
-            LDA $B1
-            ADC jiffies+1
-            STA $B1
-            LDA $B2
-            ADC jiffies+2
-            STA $B2
-            LDA $B3
-            ADC jiffies+3
-            STA $B3
-        .ds_mul_noadd:
-            ASL jiffies
-            ROL jiffies+1
-            ROL jiffies+2
-            ROL jiffies+3
-            JMP .ds_mul_loop
-        .ds_mul_done:
-            LDA $B0
-            STA jiffies
-            LDA $B1
-            STA jiffies+1
-            LDA $B2
-            STA jiffies+2
-            LDA $B3
-            STA jiffies+3
-
-                                                                                                                                                                                                                  // Shift right by (24 - exp). exp is the signed byte in secs+1;
-                                                                                                                                                                                                                  // negative exp (e.g. 0.5 → exp=-1) widens the shift correctly
-                                                                                                                                                                                                                  // in unsigned 8-bit arithmetic (24 - 0xFF with borrow = 25).
-                                                                                                                                                                                                                  // exp ≥ 25 would overflow u32 — clamp to 0 (no sane delay is
-                                                                                                                                                                                                                  // that long).
-            LDA secs+1
-            BMI .ds_rshift
-            CMP #25
-            BCS .ds_zero
-        .ds_rshift:
-            STA count
-            LDA #24
-            SEC
-            SBC count
-            CMP #32 // shift ≥ 32 → result is 0
-            BCS .ds_zero
-            TAX
-            BEQ .ds_done
-        .ds_shr_loop:
-            LSR jiffies+3
-            ROR jiffies+2
-            ROR jiffies+1
-            ROR jiffies
-            DEX
-            BNE .ds_shr_loop
-            JMP .ds_done
-
-        .ds_zero:
-            LDA #$00
-            STA jiffies
-            STA jiffies+1
-            STA jiffies+2
-            STA jiffies+3
-        .ds_done:
+            float j = secs * (float)hz;
+            if (j < 4294967296.0)
+                {
+                jiffies = (u32)j;
+                }
             }
 
         Time.delayJiffies(jiffies);

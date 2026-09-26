@@ -68,7 +68,7 @@
 // Text modes: GR.0 = 40 columns, GR.1/2/3 = 20 columns.
 // Graphics modes (4+) have no text output; printf silently does nothing.
 //
-// Class state and the fp2Asc output buffer are stored inline in the
+// Class state is stored inline in the
 // code segment (via __sdata_Stdio), so no ZP or heap is consumed
 // for static calls. Works in both standard and banked modes.
 //
@@ -81,7 +81,7 @@
 //   %lx  unsigned 32-bit hex (8 digits, uppercase)
 //   %c   single ATASCII character (u8) — control codes are acted on
 //   %s   ATASCII string (u8*)
-//   %f   float (5-byte) — printed via fp2Asc
+//   %f   float (IEEE binary32) — printed by printFpDec
 //   %e   text version enum if possible to resolve
 //   %@   struct/class (data ptr + descriptor ptr)
 //   %%   literal '%'
@@ -333,45 +333,6 @@ main:
     *out = 0;
     }
 
-// Cloaked wrapper for fp2Asc. The caller stages the 5-byte float
-// into $B0-$B4 via the banked calling convention (that's what the
-// `float f` param triggers). fp2Asc reads the same window, so the
-// compiler-generated prologue's $B0→ZP copy leaves the original
-// bytes intact for the JSR. The asm body just points fp2Asc at
-// XT_STDIO_FMT_BUF (the layout's `stdio_fmt` buffer, in the Atari
-// workspace below the bank window so always visible) and calls it.
-// The main-bank wrapper then walks that buffer through putChar.
-//
-// Moves ~370 bytes of fp2Asc machinery out of main RAM when no
-// other code path references fp2Asc (helper-promotion picks that
-// up automatically).
-void _printfFloat(float f) : cloaked
-    {
-    asm {
-        LDA #<XT_STDIO_FMT_BUF
-        STA $B5
-        LDA #>XT_STDIO_FMT_BUF
-        STA $B6
-        JSR fp2Asc
-    }
-    }
-
-// Cloaked wrapper for dp2Asc. Same shape as _printfFloat: caller
-// stages the 8-byte double into $B0-$B7, dp2Asc reads it there,
-// output pointer sits in $B8/$B9 per dp2Asc's convention. The
-// static fpbuf is sized to 32 bytes by the codegen when dp2Asc is
-// linked, so dp2Asc's wider output fits.
-void _printfDouble(double d) : cloaked
-    {
-    asm {
-        LDA #<XT_STDIO_FMT_BUF
-        STA $B8
-        LDA #>XT_STDIO_FMT_BUF
-        STA $B9
-        JSR dp2Asc
-    }
-    }
-
 // Cloaked decimal formatter for u32. Same algorithm as _printfU16
 // but uses u32 / 10 and u32 % 10 — those expand to JSRs into the
 // u32Div / u32Mod runtime helpers. Thanks to the stage-4b helper-
@@ -451,7 +412,7 @@ class Stdio
     u8 cols;             // offset 4
     u8 mode;             // offset 5
     u8 canPrint;         // offset 6
-    main : u8* fpBufPtr; // offset 7 — roving pointer into fp2Asc output.
+    main : u8* fpBufPtr; // offset 7 — unused; kept so later ivar offsets stay put.
                          // Held as an ivar so it survives the putChar
                          // call inside print(float) / print(double);
                          // a ZP local would be clobbered by putChar's
@@ -978,19 +939,6 @@ class Stdio
         }
 #endif
 
-    // ── Print float via fp2Asc ───────────────────────────────────────
-    // Uses a 16-byte buffer at stdio_fmt scratch (emitted in the code segment)
-    // for the fp2Asc output. Works in both standard and banked modes.
-    // The 5-byte float must already be in $B0-$B4.
-
-    // ── print(float) ─ 5-byte float via fp2Asc ───────────────────────
-    // Loads the caller's float into $B0-$B4, points fp2Asc's output
-    // buffer (in $B5/$B6) at the shared stdio_fmt scratch, runs the
-    // conversion, then walks the ATASCII result out one char at a
-    // time. fpBufPtr is an ivar (not a ZP local) so it survives the
-    // nested putChar call — a ZP local would be clobbered by
-    // putChar's own frame.
-
     // ── Float / double printing via MECH ─────────────────────────────
     // The math coprocessor gives IEEE f32/f64 arithmetic, so a float now
     // prints by MECH digit extraction — no fp2Asc/dp2Asc softfloat formatter.
@@ -1106,60 +1054,15 @@ class Stdio
             }
         }
 
-#if XTC_HAS_CLOAKED
-    // xe: fp2Asc's JSR is the only thing that moves into the cloaked
-    // bank — the ivar setup and the flush walk stay here. The bracket-
-    // call to `_printfFloat(f)` stages the float into $B0-$B4 and
-    // keeps the bytes alive across the PORTB transition, and the
-    // cloaked helper takes it from there. Moves ~370 bytes of fp2Asc
-    // out of main RAM when fp2Asc isn't reached by anything else.
-    static void print(float f) XTC_CLOAKED
-        {
-        u8 ch;
-
-        if (canPrint == 0)
-            {
-            return;
-            }
-
-        // Seed fpBufPtr (class ivar, offset 7) with the start of
-        // stdio_fmt scratch. Ivars survive putChar calls, while a ZP
-        // local would get clobbered by putChar's own frame.
-        asm
-            {
-            LDA #<XT_STDIO_FMT_BUF
-            LDY #_ivar_Stdio_fpBufPtr
-            STA (__self),Y
-            LDA #>XT_STDIO_FMT_BUF
-            LDY #_ivar_Stdio_fpBufPtr+1
-            STA (__self),Y
-            }
-
-        _printfFloat(f);
-
-        ch = *fpBufPtr;
-        while (ch != 0)
-            {
-            putChar(ch);
-            fpBufPtr = fpBufPtr + 1;
-            ch = *fpBufPtr;
-            }
-        }
-#else
     static void print(float f) XTC_CLOAKED
         {
         printFpDec((double)f, 6, 6); // bare %f → round at 6dp
         }
-#endif
 
     // ── print(float, u8 precision) — `%.Nf` ──────────────────────────
-    // Same fp2Asc plumbing as print(float); after the conversion, walk
-    // the ATASCII output but stop after `precision` characters past the
-    // decimal point. `precision == 0` reverts to the historic 6dp full-
-    // width output (matches the no-`.N` printf call site, which the
-    // parser arrives at with `prec` still zero). Truncates without
-    // rounding — sufficient for cross-arch oracle matching where two
-    // backends' float representations differ in the trailing digits.
+    // Prints `precision` digits past the decimal point, rounded at the
+    // next one. `precision == 0` is the bare %f (6dp) form, which the
+    // no-`.N` printf call site reaches with `prec` still zero.
     static void print(float f, u8 precision) XTC_CLOAKED
         {
         // bare %f
@@ -1174,61 +1077,14 @@ class Stdio
             }
         }
 
-    // ── print(double) ─ 8-byte double via dp2Asc ─────────────────────
-    // Same shape as print(float) but uses dp2Asc with the output-
-    // buffer pointer in $B8/$B9 (dp2Asc's calling convention) instead
-    // of $B5/$B6. The shared stdio_fmt scratch is automatically sized to
-    // 32 bytes when dp2Asc is linked (handled by the codegen's
-    // runtime manifest). fpBufPtr is reused to walk the result.
-    //
-    // dp2Asc is ~800 bytes but lands in a banked page on xt6502, so
-    // print(double) is always compiled in (the flat-6502 `#if HAS_LFMT`
-    // gate that used to make it conditional is parked in support/6502).
-
-#if XTC_HAS_CLOAKED
-    // xe: same split as print(float) — the dp2Asc JSR lives in the
-    // cloaked helper, the wrapper sets up fpBufPtr and walks.
-    // Moves ~390 bytes of dp2Asc out of main RAM when cloaked.
-    static void print(double d) XTC_CLOAKED
-        {
-        u8 ch;
-
-        if (canPrint == 0)
-            {
-            return;
-            }
-
-        asm
-            {
-            LDA #<XT_STDIO_FMT_BUF
-            LDY #_ivar_Stdio_fpBufPtr
-            STA (__self),Y
-            LDA #>XT_STDIO_FMT_BUF
-            LDY #_ivar_Stdio_fpBufPtr+1
-            STA (__self),Y
-            }
-
-        _printfDouble(d);
-
-        ch = *fpBufPtr;
-        while (ch != 0)
-            {
-            putChar(ch);
-            fpBufPtr = fpBufPtr + 1;
-            ch = *fpBufPtr;
-            }
-        }
-#else
+    // ── print(double) ─ MECH digit extraction, bare %lf ──────────────
     static void print(double d) XTC_CLOAKED
         {
         printFpDec(d, 10, 10); // bare %lf → round at 10dp
         }
-#endif
 
     // ── print(double, u8 precision) — `%.Nlf` ────────────────────────
-    // Same dp2Asc plumbing as print(double); walks the ATASCII output
-    // but stops after `precision` digits past the decimal point.
-    // `precision == 0` reverts to the historic 10dp full-width output.
+    // As print(float, u8); `precision == 0` is the bare %lf (10dp) form.
     static void print(double d, u8 precision) XTC_CLOAKED
         {
         // bare %lf
@@ -1570,9 +1426,8 @@ class Stdio
 
                 // Optional .precision before the type char. Stores in
                 // `prec`; the per-type branches below consult it on %f
-                // / %lf. Default for %f stays at the historic 6 dp
-                // (fp2Asc's native width) and 10 dp for %lf (dp2Asc's
-                // historic width) when no `.N` was supplied.
+                // / %lf. Default is 6 dp for %f and 10 dp for %lf when
+                // no `.N` was supplied.
                 // Flags and a field width are CONSUMED here but not APPLIED on this
                 // target. Parsing them is the half that matters: printf used to fall
                 // through `%10s` as unknown, emit "0s" as literal text and consume NO
