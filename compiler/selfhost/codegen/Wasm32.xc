@@ -158,12 +158,14 @@ class Wasm32
     bool      _linkLibs;        // this module is an APP that #imports .wasm libs
     Array*    _libImage;        // emit-lib: Number@ bytes, ONE relative image
     Array*    _libRelocAddr;    // emit-lib: Number@ word offsets
-    Array*    _libRelocIsFn;    // emit-lib: Number@ 1=table index, 0=data addr
-    Array*    _libRelocVal;     // emit-lib: Number@ value (index / rel addr)
+    Array*    _libRelocIsFn;    // emit-lib: Number@ 1=table index, 0=data addr,
+                                //   2=another library's data (its __addr_ getter)
+    Array*    _libRelocVal;     // emit-lib: Number@ value (index / rel addr),
+                                //   or String@ the symbol name for kind 2
     Array*    _getterNames;     // emit-lib: String@ __addr_ getter symbols
     Array*    _getterOffs;      // emit-lib: Number@ their offsets
-    Map*      _externAddrPkg;   // link-libs: extern data sym name -> pkg
-    Array*    _externAddrOrder; // link-libs: registration order
+    Map*      _externAddrPkg;   // link-libs/emit-lib: extern data sym name -> pkg
+    Array*    _externAddrOrder; // link-libs/emit-lib: registration order
     Array*    _fixupAddrs;      // link-libs: Number@ app vtable word addrs
     Array*    _fixupNames;      // link-libs: String@ the extern sym each holds
     bool      _needsWeakReg;    // emit-lib: WeakRegister opcodes present
@@ -1076,7 +1078,8 @@ class Wasm32
             if (sym.isExtern()) {
                 // An imported class's vtable lives IN ITS LIBRARY (the RTTI
                 // downcast compares vtable ADDRESSES); reach it through the
-                // library's __addr_ getter.
+                // library's __addr_ getter. A library imports the getter on
+                // first reference instead.
                 if (_linkLibs) ensureAddrGetterImport(sym);
                 continue;
             }
@@ -1126,18 +1129,34 @@ class Wasm32
                                 _libRelocVal.add((Object*)addr);
                             } else w = addr.asU32();
                         } else {
+                            // A word naming ANOTHER module's symbol: an
+                            // imported method takes a slot in this module's
+                            // own table; another library's data comes from
+                            // its __addr_ getter (an app patches the word in
+                            // __xtc_fixup_imports, a library in
+                            // __wasm_apply_relocs).
                             IRSymbol* ext = symbolNamed(e);
-                            if (_linkLibs && ext != 0 && ext.isFunc()) {
-                                // An imported method in an app vtable: give
-                                // it a slot in the app's own table.
-                                w = ensureImportedFnSlot(ext);
-                            } else if (_linkLibs && ext != 0 && ext.isExtern()
+                            if ((_linkLibs || _emitLib) && ext != 0 && ext.isFunc()) {
+                                u32 slot = ensureImportedFnSlot(ext);
+                                if (_emitLib) {
+                                    w = (u32)0;
+                                    _libRelocAddr.add((Object*)Number.with(vbase + k * (u32)4));
+                                    _libRelocIsFn.add((Object*)Number.with((u32)1));
+                                    _libRelocVal.add((Object*)Number.with(slot));
+                                } else w = slot;
+                            } else if ((_linkLibs || _emitLib) && ext != 0 && ext.isExtern()
                                        && (ext.kind() == (u8)SYM_VTABLE
                                            || ext.kind() == (u8)SYM_DATAGLOBAL)) {
                                 ensureAddrGetterImport(ext);
                                 w = (u32)0;
-                                _fixupAddrs.add((Object*)Number.with(vbase + k * (u32)4));
-                                _fixupNames.add((Object*)e);
+                                if (_emitLib) {
+                                    _libRelocAddr.add((Object*)Number.with(vbase + k * (u32)4));
+                                    _libRelocIsFn.add((Object*)Number.with((u32)2));
+                                    _libRelocVal.add((Object*)e);
+                                } else {
+                                    _fixupAddrs.add((Object*)Number.with(vbase + k * (u32)4));
+                                    _fixupNames.add((Object*)e);
+                                }
                             } else w = (u32)0;        // unresolved: TODO note only
                         }
                     }
@@ -1282,7 +1301,9 @@ class Wasm32
 
     // link-libs: a slot in the app's own funcref table for an IMPORTED
     // function (dedup'd; registers the import from the declared signature
-    // when no call site did).
+    // when no call site did). An --emit-lib module does the same for ANOTHER
+    // library's function: the slot is in its own elem segment, relative to
+    // __table_base like its local functions.
     u32 ensureImportedFnSlot(IRSymbol* sym)
     {
         Number* have = (Number*)_fnTableIndex.get((Hashable*)sym.name());
@@ -1296,7 +1317,7 @@ class Wasm32
             if (!pkg.equals(String.withCString("env")))
                 _importPkg.set((Hashable*)sym.name(), (Object*)pkg);
         }
-        u32 idx = _fnTableOrder.count() + (u32)1;               // 0 stays null
+        u32 idx = _fnTableOrder.count() + (_emitLib ? (u32)0 : (u32)1); // app: 0 stays null
         _fnTableIndex.set((Hashable*)sym.name(), (Object*)Number.with(idx));
         _fnTableOrder.add((Object*)sym.name());
         return idx;
@@ -1368,7 +1389,17 @@ class Wasm32
         }
         out.appendCString("  (func $__wasm_apply_relocs (export \"__wasm_apply_relocs\")\n");
         for (u32 i = (u32)0; i < _libRelocAddr.count(); i = i + (u32)1) {
-            bool isFn = ((Number*)_libRelocIsFn.get(i)).asU32() != (u32)0;
+            u32 kind = ((Number*)_libRelocIsFn.get(i)).asU32();
+            if (kind == (u32)2) {
+                // Another library's data address, from its __addr_ getter.
+                out.appendFormat(
+                "    global.get $__memory_base\n    i32.const %lu\n    i32.add\n"
+                "    call $__addr_%s\n    i32.store\n",
+                ((Number*)_libRelocAddr.get(i)).asU32(),
+                ((String*)_libRelocVal.get(i)).cString());
+                continue;
+            }
+            bool isFn = kind != (u32)0;
             out.appendFormat(
             "    global.get $__memory_base\n    i32.const %lu\n    i32.add\n",
             ((Number*)_libRelocAddr.get(i)).asU32());
@@ -1777,17 +1808,22 @@ class Wasm32
                 else
                     out.appendFormat("    i32.const %lu ;; table:%s\n",
                                      fnIdx.asU32(), sym.name().cString());
-            } else if (_linkLibs && sym != 0 && sym.isExtern()
+            } else if ((_linkLibs || _emitLib) && sym != 0 && sym.isExtern()
                        && (sym.kind() == (u8)SYM_VTABLE
                            || sym.kind() == (u8)SYM_DATAGLOBAL)) {
                 ensureAddrGetterImport(sym);
                 out.appendFormat("    call $__addr_%s ;; &%s (import)\n",
                                  sym.name().cString(), sym.name().cString());
-            } else if (_linkLibs && sym != 0 && sym.isFunc()
+            } else if ((_linkLibs || _emitLib) && sym != 0 && sym.isFunc()
                        && !isDefined(sym.name())) {
                 u32 slot = ensureImportedFnSlot(sym);
-                out.appendFormat("    i32.const %lu ;; table:%s (import)\n",
-                                 slot, sym.name().cString());
+                if (_emitLib)
+                    out.appendFormat("    global.get $__table_base\n"
+                                     "    i32.const %lu\n    i32.add ;; table:%s (import)\n",
+                                     slot, sym.name().cString());
+                else
+                    out.appendFormat("    i32.const %lu ;; table:%s (import)\n",
+                                     slot, sym.name().cString());
             } else
                 out.appendCString("    i32.const 0\n");
             return;

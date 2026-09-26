@@ -226,14 +226,17 @@ static BOOL sNeedsARC, sNeedsAlloc, sNeedsHeapInfo;
 // The single relative data image (segment offset = global.get $__memory_base;
 // every sSymAddr/sConstAddr value is an offset INTO it), the reloc word list
 // (@[wordRel, @"fn"|@"data", value] — applied by __wasm_apply_relocs because
-// a data segment cannot compute base+k), and the __addr_ getter list
-// (@[name, off] in placement order).
+// a data segment cannot compute base+k; @[wordRel, @"ext", symName] for a
+// word holding ANOTHER library's data address, filled through that library's
+// imported __addr_ getter), and the __addr_ getter list (@[name, off] in
+// placement order).
 static NSMutableData *sLibImage;
 static NSMutableArray<NSArray *> *sLibRelocs;
 static NSMutableArray<NSArray *> *sAddrGetters;
 // ── link-libs state ────────────────────────────────────────────────────────
 // Extern data symbols resolved through an imported __addr_<name> getter
-// (name → package, plus a deterministic registration order), and the app
+// (name → package, plus a deterministic registration order; a library that
+// references another library's data uses them too), and the app
 // vtable words that hold a library data address (@[absWordAddr, symName] —
 // patched by $__xtc_fixup_imports before the module inits run).
 static NSMutableDictionary<NSString *, NSString *> *sExternAddrPkg;
@@ -317,8 +320,8 @@ static NSString *watStringLit(NSData *bytes) {
     sLibImage = sEmitLib ? [NSMutableData data] : nil;
     sLibRelocs = sEmitLib ? [NSMutableArray array] : nil;
     sAddrGetters = sEmitLib ? [NSMutableArray array] : nil;
-    sExternAddrPkg = sLinkLibs ? [NSMutableDictionary dictionary] : nil;
-    sExternAddrOrder = sLinkLibs ? [NSMutableArray array] : nil;
+    sExternAddrPkg = (sLinkLibs || sEmitLib) ? [NSMutableDictionary dictionary] : nil;
+    sExternAddrOrder = (sLinkLibs || sEmitLib) ? [NSMutableArray array] : nil;
     sAppFixups = sLinkLibs ? [NSMutableArray array] : nil;
     // sTailCalls is a caller-set mode (like sOptLevel), not per-module state.
     // Data starts ABOVE 0x10000: an instance's word 0 holds EITHER a vtable
@@ -630,7 +633,9 @@ static NSString *wasmExportNameOf(XTIRSymbol *sym, NSString *fallback) {
 // (dedup'd), registering its import from the shell signature when no call
 // site did. The slot's funcref is the import — calling it forwards through
 // the loader's thunk into the library — so a table INDEX for an imported
-// function is as good as one for a local function.
+// function is as good as one for a local function. An --emit-lib module does
+// the same for ANOTHER library's function: the slot is in its own elem
+// segment, relative to __table_base like its local functions.
 + (uint32_t)ensureImportedFnSlot:(XTIRSymbol *)sym {
     NSNumber *have = sFnTableIndex[sym.name];
     if (have) return have.unsignedIntValue;
@@ -642,7 +647,7 @@ static NSString *wasmExportNameOf(XTIRSymbol *sym, NSString *fallback) {
         NSString *pkg = [self packageOfSymbol:sym];
         if (![pkg isEqualToString:@"env"]) sImportPkg[sym.name] = pkg;
     }
-    uint32_t idx = (uint32_t)(sFnTableOrder.count + 1);         // 0 stays null
+    uint32_t idx = (uint32_t)(sFnTableOrder.count + (sEmitLib ? 0 : 1)); // app: 0 stays null
     sFnTableIndex[sym.name] = @(idx);
     [sFnTableOrder addObject:sym.name];
     return idx;
@@ -723,8 +728,9 @@ static NSString *wasmExportNameOf(XTIRSymbol *sym, NSString *fallback) {
             // An imported class's vtable is DEFINED IN ITS LIBRARY; the app
             // reaches it through the library's __addr_ getter (RTTI compares
             // vtable ADDRESSES, so a local copy would break the downcast).
+            // A library imports the getter on first reference instead.
             if (sLinkLibs) [self ensureAddrGetterImport:sym];
-            else [self todo:[NSString stringWithFormat:
+            else if (!sEmitLib) [self todo:[NSString stringWithFormat:
                 @"extern vtable '%@' (multi-module)", sym.name]];
             continue;
         }
@@ -746,9 +752,10 @@ static NSString *wasmExportNameOf(XTIRSymbol *sym, NSString *fallback) {
         //                     / $itab references)
         // A library's index/address words cannot be computed by a data
         // segment — they are emitted as ZERO and patched by
-        // __wasm_apply_relocs. An app's word naming a LIBRARY symbol takes
+        // __wasm_apply_relocs. A word naming ANOTHER module's symbol takes
         // an imported-function table slot (functions) or a fixup through the
-        // __addr_ getter (data) applied before the module inits run.
+        // owning library's __addr_ getter (data): in an app, applied before
+        // the module inits run; in a library, by __wasm_apply_relocs.
         NSArray<NSString *> *entries = sym.vtableEntryNames ?: @[];
         NSMutableData *words = [NSMutableData dataWithLength:entries.count * 4];
         uint32_t *w = words.mutableBytes;
@@ -781,18 +788,25 @@ static NSString *wasmExportNameOf(XTIRSymbol *sym, NSString *fallback) {
                 continue;
             }
             XTIRSymbol *ext = [mod symbolForName:e];
-            if (sLinkLibs && ext && ext.kind == XTIRSymbolKindFunction
+            if ((sLinkLibs || sEmitLib) && ext && ext.kind == XTIRSymbolKindFunction
                 && ext.function) {
-                w[i] = [self ensureImportedFnSlot:ext];
+                uint32_t slot = [self ensureImportedFnSlot:ext];
+                if (sEmitLib) {
+                    w[i] = 0;
+                    [sLibRelocs addObject:@[@(base + i * 4), @"fn", @(slot)]];
+                } else {
+                    w[i] = slot;
+                }
                 continue;
             }
-            if (sLinkLibs && ext
+            if ((sLinkLibs || sEmitLib) && ext
                 && (ext.kind == XTIRSymbolKindVTable
                     || ext.kind == XTIRSymbolKindDataGlobal)
                 && ext.isExternalGlobal) {
                 [self ensureAddrGetterImport:ext];
                 w[i] = 0;
-                [sAppFixups addObject:@[@(base + i * 4), e]];
+                if (sEmitLib) [sLibRelocs addObject:@[@(base + i * 4), @"ext", e]];
+                else [sAppFixups addObject:@[@(base + i * 4), e]];
                 continue;
             }
             [self todo:[NSString stringWithFormat:
@@ -1294,7 +1308,7 @@ static NSString *wasmExportNameOf(XTIRSymbol *sym, NSString *fallback) {
                 else
                     [out appendFormat:@"    i32.const %u ;; table:%@\n",
                                       fnIdx.unsignedIntValue, sym.name];
-            } else if (sLinkLibs && sym && sym.isExternalGlobal
+            } else if ((sLinkLibs || sEmitLib) && sym && sym.isExternalGlobal
                        && (sym.kind == XTIRSymbolKindVTable
                            || sym.kind == XTIRSymbolKindDataGlobal)) {
                 // Library-owned data: its runtime address comes through the
@@ -1302,13 +1316,18 @@ static NSString *wasmExportNameOf(XTIRSymbol *sym, NSString *fallback) {
                 [XTWasmBackend ensureAddrGetterImport:sym];
                 [out appendFormat:@"    call $__addr_%@ ;; &%@ (import)\n",
                                   sym.name, sym.name];
-            } else if (sLinkLibs && sym && sym.kind == XTIRSymbolKindFunction
+            } else if ((sLinkLibs || sEmitLib) && sym && sym.kind == XTIRSymbolKindFunction
                        && sym.function && ![sDefinedFns containsObject:sym.name]) {
                 // An imported function taken as a VALUE gets a slot in the
-                // app's own table (the funcref is the import's thunk).
+                // module's own table (the funcref is the import).
                 uint32_t slot = [XTWasmBackend ensureImportedFnSlot:sym];
-                [out appendFormat:@"    i32.const %u ;; table:%@ (import)\n",
-                                  slot, sym.name];
+                if (sEmitLib)
+                    [out appendFormat:@"    global.get $__table_base\n"
+                                      @"    i32.const %u\n    i32.add ;; table:%@ (import)\n",
+                                      slot, sym.name];
+                else
+                    [out appendFormat:@"    i32.const %u ;; table:%@ (import)\n",
+                                      slot, sym.name];
             } else {
                 [XTWasmBackend todo:[NSString stringWithFormat:@"address of symbol '%@'",
                                      sym.name ?: @"?"]];
@@ -2630,6 +2649,14 @@ static NSString *opPrefix(XTIRType *t) { return wasmValType(t); }
     }
     [out appendString:@"  (func $__wasm_apply_relocs (export \"__wasm_apply_relocs\")\n"];
     for (NSArray *r in sLibRelocs) {
+        if ([r[1] isEqualToString:@"ext"]) {
+            // Another library's data address, from its __addr_ getter.
+            [out appendFormat:@""
+            "    global.get $__memory_base\n    i32.const %u\n    i32.add\n"
+            "    call $__addr_%@\n    i32.store\n",
+            [r[0] unsignedIntValue], r[2]];
+            continue;
+        }
         BOOL isFn = [r[1] isEqualToString:@"fn"];
         [out appendFormat:@""
         "    global.get $__memory_base\n    i32.const %u\n    i32.add\n"
