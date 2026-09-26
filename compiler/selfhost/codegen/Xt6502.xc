@@ -2968,59 +2968,96 @@ class Xt6502
     }
 
     // For each value that is an address formed from another value's storage,
-    // the values whose storage it may point into: AddrOf %v gives {v}, and an
-    // address computed from such a value (FieldAddr, ElementAddr, a cast, a
-    // Select or Phi, integer arithmetic on it) inherits its operands' roots.
-    // Solved to a fixpoint because a Phi can name a later definition.
+    // the values whose storage it points into: AddrOf %v gives {v}, and
+    // FieldAddr, ElementAddr, Bitcast, Copy, Select and Phi inherit their
+    // operands' roots (a fixpoint, since a Phi can name a later definition).
+    //
+    // A root is dropped when any address derived from it is used other than
+    // to load or store through it, form another such address or compare it:
+    // passed to a call, stored as a value, registered as a weak slot,
+    // converted to an integer. Its storage is then shared with code that may
+    // change it during a call, and restoring the caller's copy afterwards
+    // would undo that.
     static bool derivesAddress(String* op)
     {
         return op.equals(String.withCString("FieldAddr"))
             || op.equals(String.withCString("ElementAddr"))
             || op.equals(String.withCString("Bitcast"))
             || op.equals(String.withCString("Copy"))
-            || op.equals(String.withCString("IntToPtr"))
-            || op.equals(String.withCString("PtrToInt"))
-            || op.equals(String.withCString("Add"))
-            || op.equals(String.withCString("Sub"))
             || op.equals(String.withCString("Select"))
             || op.equals(String.withCString("Phi"));
+    }
+
+    static bool accessesThrough(String* op)
+    {
+        return op.equals(String.withCString("Load"))
+            || op.equals(String.withCString("Store"))
+            || op.equals(String.withCString("LoadVolatile"))
+            || op.equals(String.withCString("StoreVolatile"));
+    }
+
+    static void appendInsns(Array* into, Array* from)
+    {
+        for (u32 i = (u32)0; i < from.count(); i = i + (u32)1) into.add(from.get(i));
     }
 
     Map* addressRoots(IRFunc* fn)
     {
         Map* roots = new Map();
+        Array* all = new Array();
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            appendInsns(all, allInsns((IRBlock*)fn.blocks().get(b)));
         bool changed = true;
         while (changed) {
             changed = false;
-            for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1) {
-                IRBlock* bb = (IRBlock*)fn.blocks().get(b);
-                Array* seq = allInsns(bb);
-                for (u32 i = (u32)0; i < seq.count(); i = i + (u32)1) {
-                    IRInsn* n = (IRInsn*)seq.get(i);
-                    if (n.res() == (IRValue*)0) continue;
-                    bool isAddrOf = n.op().equals(String.withCString("AddrOf"));
-                    if (!isAddrOf && !derivesAddress(n.op())) continue;
-                    Object* mo = roots.get((Hashable*)n.res());
-                    Array* mine = mo == (Object*)0 ? (Array*)0 : (Array*)mo;
-                    for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1) {
-                        IROperand* o = (IROperand*)n.ops().get(k);
-                        if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0) continue;
-                        Array* add = new Array();
-                        if (isAddrOf) addVal(add, o.val());
-                        Object* inh = roots.get((Hashable*)o.val());
-                        if (inh != (Object*)0) unionVals(add, (Array*)inh);
-                        if (add.count() == (u32)0) continue;
-                        if (mine == (Array*)0) {
-                            mine = new Array();
-                            roots.set((Hashable*)n.res(), (Object*)mine);
-                        }
-                        for (u32 j = (u32)0; j < add.count(); j = j + (u32)1) {
-                            IRValue* v = (IRValue*)add.get(j);
-                            if (!hasVal(mine, v)) { mine.add((Object*)v); changed = true; }
-                        }
+            for (u32 i = (u32)0; i < all.count(); i = i + (u32)1) {
+                IRInsn* n = (IRInsn*)all.get(i);
+                if (n.res() == (IRValue*)0) continue;
+                bool isAddrOf = n.op().equals(String.withCString("AddrOf"));
+                if (!isAddrOf && !derivesAddress(n.op())) continue;
+                Object* mo = roots.get((Hashable*)n.res());
+                Array* mine = mo == (Object*)0 ? (Array*)0 : (Array*)mo;
+                for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1) {
+                    IROperand* o = (IROperand*)n.ops().get(k);
+                    if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0) continue;
+                    Array* add = new Array();
+                    if (isAddrOf) addVal(add, o.val());
+                    Object* inh = roots.get((Hashable*)o.val());
+                    if (inh != (Object*)0) unionVals(add, (Array*)inh);
+                    if (add.count() == (u32)0) continue;
+                    if (mine == (Array*)0) {
+                        mine = new Array();
+                        roots.set((Hashable*)n.res(), (Object*)mine);
+                    }
+                    for (u32 j = (u32)0; j < add.count(); j = j + (u32)1) {
+                        IRValue* v = (IRValue*)add.get(j);
+                        if (!hasVal(mine, v)) { mine.add((Object*)v); changed = true; }
                     }
                 }
             }
+        }
+        Array* escaped = new Array();
+        for (u32 i = (u32)0; i < all.count(); i = i + (u32)1) {
+            IRInsn* n = (IRInsn*)all.get(i);
+            bool derives = n.op().equals(String.withCString("AddrOf"))
+                        || derivesAddress(n.op())
+                        || n.op().equals(String.withCString("ICmp"));
+            for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1) {
+                IROperand* o = (IROperand*)n.ops().get(k);
+                if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0) continue;
+                Object* r = roots.get((Hashable*)o.val());
+                if (r == (Object*)0) continue;
+                bool through = k == (u32)0 && accessesThrough(n.op());
+                if (!derives && !through) unionVals(escaped, (Array*)r);
+            }
+        }
+        if (escaped.count() == (u32)0) return roots;
+        for (u32 i = (u32)0; i < all.count(); i = i + (u32)1) {
+            IRInsn* n = (IRInsn*)all.get(i);
+            if (n.res() == (IRValue*)0) continue;
+            Object* r = roots.get((Hashable*)n.res());
+            if (r == (Object*)0) continue;
+            roots.set((Hashable*)n.res(), (Object*)minusVals((Array*)r, escaped));
         }
         return roots;
     }

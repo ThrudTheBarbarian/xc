@@ -506,49 +506,82 @@ typedef NS_ENUM(uint8_t, XT6502KnownAddrKind) {
 }
 
 // For each value that is an address formed from another value's storage,
-// the values whose storage it may point into: AddrOf %v gives {v}, and an
-// address computed from such a value (FieldAddr, ElementAddr, a cast, a
-// Select or Phi, integer arithmetic on it) inherits its operands' roots.
-// Solved to a fixpoint because a Phi can name a later definition.
+// the values whose storage it points into: AddrOf %v gives {v}, and FieldAddr,
+// ElementAddr, Bitcast, Copy, Select and Phi inherit their operands' roots
+// (a fixpoint, since a Phi can name a later definition).
+//
+// A root is dropped when any address derived from it is used other than to
+// load or store through it, form another such address or compare it: passed
+// to a call, stored as a value, registered as a weak slot, converted to an
+// integer. Its storage is then shared with code that may change it during a
+// call, and restoring the caller's copy afterwards would undo that.
++ (BOOL)opcodeDerivesAddress:(XTIROpcode)op {
+    switch (op) {
+        case XTIROpFieldAddr: case XTIROpElementAddr:
+        case XTIROpBitcast: case XTIROpCopy:
+        case XTIROpSelect: case XTIROpPhi:
+            return YES;
+        default:
+            return NO;
+    }
+}
+
 + (NSDictionary<NSNumber *, NSSet<NSNumber *> *> *)addressRootsForFunction:(XTIRFunction *)fn {
     NSMutableDictionary<NSNumber *, NSMutableSet<NSNumber *> *> *roots =
         [NSMutableDictionary dictionary];
+    NSMutableArray<XTIRInsn *> *all = [NSMutableArray array];
+    for (XTIRBlock *b in fn.blocks) {
+        [all addObjectsFromArray:b.phiNodes];
+        [all addObjectsFromArray:b.instructions];
+        if (b.terminator) [all addObject:b.terminator];
+    }
     BOOL changed = YES;
     while (changed) {
         changed = NO;
-        for (XTIRBlock *b in fn.blocks) {
-            NSMutableArray<XTIRInsn *> *seq = [NSMutableArray array];
-            [seq addObjectsFromArray:b.phiNodes];
-            [seq addObjectsFromArray:b.instructions];
-            for (XTIRInsn *insn in seq) {
-                if (!insn.result) continue;
-                BOOL isAddrOf = NO;
-                switch (insn.opcode) {
-                    case XTIROpAddrOf: isAddrOf = YES; break;
-                    case XTIROpFieldAddr: case XTIROpElementAddr:
-                    case XTIROpBitcast: case XTIROpCopy:
-                    case XTIROpIntToPtr: case XTIROpPtrToInt:
-                    case XTIROpAdd: case XTIROpSub:
-                    case XTIROpSelect: case XTIROpPhi:
-                        break;
-                    default: continue;
-                }
-                NSNumber *key = @(insn.result.valueId);
-                NSMutableSet<NSNumber *> *mine = roots[key];
-                for (XTIROperand *op in insn.operands) {
-                    if (op.kind != XTIROperandKindUse) continue;
-                    NSMutableSet<NSNumber *> *add = [NSMutableSet set];
-                    if (isAddrOf) [add addObject:@(op.valueId)];
-                    NSSet<NSNumber *> *inherited = roots[@(op.valueId)];
-                    if (inherited) [add unionSet:inherited];
-                    if (add.count == 0) continue;
-                    if (!mine) { mine = [NSMutableSet set]; roots[key] = mine; }
-                    if (![add isSubsetOfSet:mine]) { [mine unionSet:add]; changed = YES; }
-                }
+        for (XTIRInsn *insn in all) {
+            if (!insn.result) continue;
+            BOOL isAddrOf = (insn.opcode == XTIROpAddrOf);
+            if (!isAddrOf && ![self opcodeDerivesAddress:insn.opcode]) continue;
+            NSNumber *key = @(insn.result.valueId);
+            NSMutableSet<NSNumber *> *mine = roots[key];
+            for (XTIROperand *op in insn.operands) {
+                if (op.kind != XTIROperandKindUse) continue;
+                NSMutableSet<NSNumber *> *add = [NSMutableSet set];
+                if (isAddrOf) [add addObject:@(op.valueId)];
+                NSSet<NSNumber *> *inherited = roots[@(op.valueId)];
+                if (inherited) [add unionSet:inherited];
+                if (add.count == 0) continue;
+                if (!mine) { mine = [NSMutableSet set]; roots[key] = mine; }
+                if (![add isSubsetOfSet:mine]) { [mine unionSet:add]; changed = YES; }
             }
         }
     }
-    return roots;
+    NSMutableSet<NSNumber *> *escaped = [NSMutableSet set];
+    for (XTIRInsn *insn in all) {
+        BOOL derives = (insn.opcode == XTIROpAddrOf
+                        || [self opcodeDerivesAddress:insn.opcode]
+                        || insn.opcode == XTIROpICmp);
+        NSUInteger i = 0;
+        for (XTIROperand *op in insn.operands) {
+            NSUInteger idx = i++;
+            if (op.kind != XTIROperandKindUse) continue;
+            NSSet<NSNumber *> *r = roots[@(op.valueId)];
+            if (!r) continue;
+            BOOL through = (idx == 0
+                            && (insn.opcode == XTIROpLoad || insn.opcode == XTIROpStore
+                                || insn.opcode == XTIROpLoadVolatile
+                                || insn.opcode == XTIROpStoreVolatile));
+            if (!derives && !through) [escaped unionSet:r];
+        }
+    }
+    if (escaped.count == 0) return roots;
+    NSMutableDictionary<NSNumber *, NSSet<NSNumber *> *> *kept = [NSMutableDictionary dictionary];
+    for (NSNumber *k in roots) {
+        NSMutableSet<NSNumber *> *r = [roots[k] mutableCopy];
+        [r minusSet:escaped];
+        if (r.count > 0) kept[k] = r;
+    }
+    return kept;
 }
 
 // Compute, per call instruction, the ZP bytes that must be preserved
