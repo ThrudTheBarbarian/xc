@@ -4,7 +4,7 @@ description: "The universal root class: pointer-identity equals, an address-deri
 ---
 
 `Object` is the universal root class. Every class you write without an explicit
-parent (every `class X { … }`) inherits from it implicitly. Its three methods
+parent (every `class X { … }`) inherits from it implicitly. Its methods
 are the defaults your own types get, and the ones a
 [`Map`](/compiler/api/map/), [`Set`](/compiler/api/set/) or
 [`Array`](/compiler/api/array/) uses when you don't override them.
@@ -26,6 +26,8 @@ Its defaults are the cheapest correct implementations:
 - [`hash`](#hash) folds the receiver's **address**. Distinct instances live at
   distinct addresses, so they always hash apart.
 - [`description`](#description) returns the placeholder `<Object>`.
+- [`encodeWithCoder`](#encodewithcoder--initwithcoder) and
+  [`initWithCoder`](#encodewithcoder--initwithcoder) archive nothing.
 
 The pointer hash is **not cached** on the instance. It takes two instructions,
 so a one-byte cache field on every object in the program would cost more memory
@@ -56,19 +58,23 @@ than duplicated.
 - [`Comparable`](/compiler/api/comparable/): [`equals`](#equals) is the
   required slot. The optional `compare` is not implemented (identity has no
   natural order), so plain `Object`s have equality but no ordering.
+- [`Codable`](/compiler/api/codable/): the empty
+  [`encodeWithCoder` / `initWithCoder`](#encodewithcoder--initwithcoder) pair,
+  so any object can be given to a [`Coder`](/compiler/api/coder/). Not on
+  xt6502, where `Object` has only the three methods above.
 
 Every class is an `Object`, so every class has these protocol vtables and
 defaults from the moment it is declared.
 
 ## Topics
 
-**Protocol methods** · [equals](#equals) · [hash](#hash) · [description](#description)
+**Protocol methods** · [equals](#equals) · [hash](#hash) · [description](#description) · [encodeWithCoder / initWithCoder](#encodewithcoder--initwithcoder)
 
 ---
 
 ## Protocol methods
 
-The complete public surface: the three hooks your classes inherit and override.
+The hooks your classes inherit and override.
 
 ### equals
 ```c
@@ -99,5 +105,15 @@ the placeholder `<Object>`. `Stdio.printf`'s `%@` conversion dispatches through
 this hook, so overriding it controls how your class prints: a
 [`Number`](/compiler/api/number/) renders its value, and a
 [`Data`](/compiler/api/data/) renders `<Data 4: deadbeef>`.
+
+### encodeWithCoder / initWithCoder
+```c
+void encodeWithCoder(Coder* coder)
+void initWithCoder(Coder* coder)
+```
+The [`Codable`](/compiler/api/codable/) pair, empty here. A class with state to
+archive overrides both and calls `super` first, so every level of a hierarchy
+codes its own fields; see [`Codable`](/compiler/api/codable/) for an example.
+Not present on xt6502.
 
 [↑ Topics](#topics)

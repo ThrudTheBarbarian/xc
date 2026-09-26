@@ -13,7 +13,8 @@ support/
     Foundation.xc       ← umbrella: Object + Number + String + Data + Array + Map + Set
     Object.xc           ← the runtime's root class
     Number.xc  String.xc  Data.xc  Array.xc  Map.xc  Set.xc  CharacterSet.xc
-    Comparable.xc  Hashable.xc  Enumerable.xc  Copying.xc  Error.xc   ← protocols
+    Comparable.xc  Hashable.xc  Enumerable.xc  Copying.xc  Codable.xc  Error.xc   ← protocols
+    Coder.xc            ← keyed archiving to JSON, with gzip
     Thread.xc  Mutex.xc  Cond.xc  Sem.xc  Atomic.xc  ThreadLocal.xc  Pool.xc
     Assert.xc  Sort.xc
     Platform.xc         ← auto-included prelude
@@ -41,7 +42,7 @@ In an **installed** toolchain this tree is `lib/xc/` under the install root
 (`xc\` on Windows); see [Install](/compiler/usage/install/). The paths above
 show a source checkout. Both layouts resolve.
 
-The compiler's `#import` machinery searches the active target's directory first, then `generic/lib/`, so a class with the same name in both wins on the active platform. This is how `Stdio.xc` gets per-platform implementations, and how Foundation ships two builds behind one API: a 32-bit one in `generic/lib/` and a 6502-tuned one in `xt6502/lib/`. Files with no integer width in them (`Object`, `Comparable`, `Error`, `Assert`, `Sort`, the `Foundation` umbrella) exist once and are shared by both. The width-bearing ones (the containers, plus `Hashable` and `Enumerable`) are duplicated. Every target except xt6502 uses the `generic/lib/` Foundation directly. The **threading** classes (`Thread`, `Mutex`, `Cond`, `Sem`, `Atomic`, `ThreadLocal`, `Pool`) also live in `generic/lib/`, but are a hard `#error` on xt6502 and m68k rather than a stub; see [Threading](/compiler/language/threading/).
+The compiler's `#import` machinery searches the active target's directory first, then `generic/lib/`, so a class with the same name in both wins on the active platform. This is how `Stdio.xc` gets per-platform implementations, and how Foundation ships two builds behind one API: a 32-bit one in `generic/lib/` and a 6502-tuned one in `xt6502/lib/`. Files with no integer width in them (`Object`, `Comparable`, `Error`, `Assert`, `Sort`, the `Foundation` umbrella) exist once and are shared by both. The width-bearing ones (the containers, plus `Hashable` and `Enumerable`) are duplicated. Every target except xt6502 uses the `generic/lib/` Foundation directly. The **threading** classes (`Thread`, `Mutex`, `Cond`, `Sem`, `Atomic`, `ThreadLocal`, `Pool`) also live in `generic/lib/`, but are a hard `#error` on xt6502 and m68k rather than a stub; see [Threading](/compiler/language/threading/). `Coder` and `Codable` are a hard `#error` on xt6502 only.
 
 `Platform.xc` is different from the rest: the compiler emits an implicit `#import "Platform.xc"` before every compilation. It is where a target's system bindings live, so the user's source stays platform-agnostic. Every shipped copy is currently an empty placeholder.
 
@@ -99,8 +100,9 @@ and every method grouped by task with a jump-list at the top.
 | [`Array`](/compiler/api/array/) | an ordered, growable list with map / filter / reduce and sort |
 | [`Map`](/compiler/api/map/) | an insertion-ordered hash map |
 | [`Set`](/compiler/api/set/) | a hash set with union / intersection / difference |
+| [`Coder`](/compiler/api/coder/) | keyed archiving of an object graph to JSON, optionally gzipped |
 
-**Protocols**: [`Comparable`](/compiler/api/comparable/), [`Hashable`](/compiler/api/hashable/), [`Enumerable`](/compiler/api/enumerable/), [`Copying`](/compiler/api/copying/) and [`Error`](/compiler/api/error/), the small interfaces the classes conform to.
+**Protocols**: [`Comparable`](/compiler/api/comparable/), [`Hashable`](/compiler/api/hashable/), [`Enumerable`](/compiler/api/enumerable/), [`Copying`](/compiler/api/copying/), [`Codable`](/compiler/api/codable/) and [`Error`](/compiler/api/error/), the small interfaces the classes conform to.
 
 **System utilities** (cross-platform):
 
