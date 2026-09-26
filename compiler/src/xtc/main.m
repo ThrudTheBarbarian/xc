@@ -4517,7 +4517,9 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
     }
     if (opts.threadSafeARC == 1)      [cgArgs addObject:@"--thread-safe-arc"];
     else if (opts.threadSafeARC == 0) [cgArgs addObject:@"--no-thread-safe-arc"];
-    if (arm9Pic) [cgArgs addObject:@"--pic"];   // Tier-2 position-independent codegen
+    // Every arm9 output is position-independent, so `-S` shows the PIC asm the
+    // link would assemble, as the shipped driver's does.
+    if (opts.useArm9Backend) [cgArgs addObject:@"--pic"];
     if (opts.emitLib) [cgArgs addObject:@"--emit-lib"];  // L1: keep + export the public class API
     // -c: an object's functions are all potentially called from another object,
     // so cross-function DCE must not treat "nothing here calls it" as dead.
@@ -4558,6 +4560,13 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
     if (cgRc != 0) {
         if (tmpAsm) [[NSFileManager defaultManager] removeItemAtPath:tmpAsm error:NULL];
         return cgRc < 0 ? 1 : cgRc;
+    }
+    // arm9 `-S` writes the asm a link would assemble: a program's `main` is
+    // the renamed `xt_main` the runtime calls. A library or an object keeps it.
+    if (opts.useArm9Backend && !arm9Pic && cgOut && !opts.emitLib && !opts.compileOnly) {
+        NSString *s = [NSString stringWithContentsOfFile:cgOut encoding:NSUTF8StringEncoding error:NULL];
+        if (s) [renameArm9MainSymbol(s) writeToFile:cgOut atomically:YES
+                                            encoding:NSUTF8StringEncoding error:NULL];
     }
     if (arm64Exe || arm9Pic || x86Exe || win64Exe || wasm32Mod) {
         // --emit-apk is an Android-only packaging step. Silently producing a

@@ -637,6 +637,25 @@ diag() {
 diag "preprocessor diagnostics"
 diag "preprocessor diagnostics, -Wno-comment -Wno-unknown-pragma" -Wno-comment -Wno-unknown-pragma
 
+# ── arm9 -S: both drivers write the PIC asm a link would assemble ──────────
+# (a program's `main` renamed to `xt_main`; a library keeps its names). Needs
+# the arm9 sysroot, named by XTC_ARM9_SYSROOT in the environment or build.env.
+A9SR=${XTC_ARM9_SYSROOT:-$(sed -n 's/^XTC_ARM9_SYSROOT=//p' "$ROOT/../build.env" 2>/dev/null | tr -d "\"'")}
+a9s() {
+    local name=$1; shift
+    "$REF" -H "$ROOT" -q -A arm9 -L "$A9SR" "$@" -S -o a9.ref.s hello.xc > /dev/null 2>&1
+    "$XC"  -H "$ROOT" -q -A arm9 -L "$A9SR" "$@" -S -o a9.xc.s  hello.xc > /dev/null 2>&1
+    if [ -s a9.ref.s ] && cmp -s a9.ref.s a9.xc.s; then ok "$name"
+    else bad "$name: the two drivers' asm differ"; fi
+    rm -f a9.ref.s a9.xc.s
+}
+if [ -n "$A9SR" ] && [ -d "$A9SR" ]; then
+    a9s "arm9 -S"
+    a9s "arm9 -S --emit-lib" --emit-lib
+else
+    echo "note     arm9 -S not compared: no arm9 sysroot (XTC_ARM9_SYSROOT)"
+fi
+
 # Signing needs a developer identity; these are covered by the signing tests.
 cover --sign --sign-entitlements --sign-key
 
