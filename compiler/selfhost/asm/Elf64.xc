@@ -34,6 +34,8 @@
 #define DT_SYMENT 11
 #define DT_SONAME 14
 #define DT_RUNPATH 29
+#define DT_INIT_ARRAY 25
+#define DT_INIT_ARRAYSZ 27
 #define R_X86_64_64 1
 #define R_X86_64_PC32 2
 #define R_X86_64_PLT32 4
@@ -662,11 +664,17 @@ class ElfSharedInfo
         // SORTED, not in `.globl` order: the symbol table's order is part of
         // the file, and leaving it to the order the assembler happened to see
         // the directives would make the output depend on the source's layout.
+        // A library's constructor-table bounds stay private: its table reaches
+        // the program through its init entry (below), and an exported
+        // `__xt_ctors_start` is only something another image could bind to.
         Array* exports = new Array();
         Map* exportsSet = new Map();
         for (u32 i = (u32)0; exportsIn != (Array*)0 && i < exportsIn.count(); i = i + (u32)1)
             {
             String* n = (String*)exportsIn.get(i);
+            if (!isExec && (n.equals(String.withCString("__xt_ctors_start"))
+                            || n.equals(String.withCString("__xt_ctors_end"))))
+                continue;
             if (symbols.get((Hashable*)n) != (Object*)0 && !Elf64.inSet(exportsSet, n))
                 {
                 exports.add((Object*)n);
@@ -773,7 +781,20 @@ class ElfSharedInfo
 
         u32 nbucket = nsym < (u32)4 ? (u32)1 : nsym / (u32)4 + (u32)1;
         u32 hashSz = ((u32)2 + nbucket + nsym) * (u32)4;
-        u32 nDyn = (u32)8 + (isExec ? (u32)0 : (u32)1) + (hasRunpath ? (u32)1 : (u32)0) + neededOff.count() + (u32)1;
+        // A library's init entry (bug 470): libinit-linux.s lays out one
+        // pointer between __xt_init_array_start and __xt_init_array_end, the
+        // function that registers the library's constructor table with the
+        // program. It becomes DT_INIT_ARRAY; its word already has a RELATIVE
+        // relocation.
+        String* iaS = String.withCString("__xt_init_array_start");
+        String* iaE = String.withCString("__xt_init_array_end");
+        bool hasInit = !isExec && Elf64.inSet(dataSet, iaS) && Elf64.inSet(dataSet, iaE)
+                       && symbols.get((Hashable*)iaS) != (Object*)0
+                       && symbols.get((Hashable*)iaE) != (Object*)0
+                       && ((Number*)symbols.get((Hashable*)iaE)).asU32()
+                              > ((Number*)symbols.get((Hashable*)iaS)).asU32();
+        u32 nDyn = (u32)8 + (isExec ? (u32)0 : (u32)1) + (hasRunpath ? (u32)1 : (u32)0)
+                   + (hasInit ? (u32)2 : (u32)0) + neededOff.count() + (u32)1;
 
         // Only an ABS64 needs a dynamic relocation: RELATIVE for a symbol this
         // image defines, R_X86_64_64 for an import. A PC32Data slot — a jump
@@ -1084,6 +1105,12 @@ class ElfSharedInfo
         dyn((u32)DT_RELA, relaOff);
         dyn((u32)DT_RELASZ, nRela * (u32)RELA_SZ);
         dyn((u32)DT_RELAENT, (u32)RELA_SZ);
+        if (hasInit)
+            {
+            u32 ia = ((Number*)symbols.get((Hashable*)iaS)).asU32();
+            dyn((u32)DT_INIT_ARRAY, dataAddr + ia);
+            dyn((u32)DT_INIT_ARRAYSZ, ((Number*)symbols.get((Hashable*)iaE)).asU32() - ia);
+            }
         dyn((u32)DT_NULL, (u32)0);
 
         padTo(dataAddr);

@@ -129,6 +129,30 @@ _start:
 	mov	r12, rdi
 	mov	r13, rsi
 	mov	r14, rdx
+	# First the shared libraries' tables (bug 470): each library's loader
+	# init call appended a {next, start, end} node to __xt_lib_ctors
+	# (libinit-linux.s), dependencies first. They run here rather than from
+	# the loader because they need the runtime set up above.
+	mov	rbx, [rip + __xt_lib_ctors]
+.Llibs:
+	test	rbx, rbx
+	jz	.Llibs_done
+	push	rbx
+	push	rbx			# two pushes keep rsp 16-aligned
+	mov	r15, [rbx + 16]
+	mov	rbx, [rbx + 8]
+.Llib_ctors:
+	cmp	rbx, r15
+	jae	.Llib_done
+	call	qword ptr [rbx]
+	add	rbx, 8
+	jmp	.Llib_ctors
+.Llib_done:
+	pop	rbx
+	pop	rbx
+	mov	rbx, [rbx]		# next
+	jmp	.Llibs
+.Llibs_done:
 	lea	rbx, [rip + __xt_ctors_start]
 	lea	r15, [rip + __xt_ctors_end]
 .Lctors:
@@ -159,6 +183,16 @@ _start:
 # on the slot — the startup stores envp, libc reads it. In .data, NOT text:
 # the store above faults on a read-only page otherwise.
 	.data
+# The shared libraries' constructor tables, {head, last} of a list of
+# {next, start, end} nodes that each library's loader init call appends to
+# (libinit-linux.s). Global so a library can import it; zero in a program
+# that loads none.
+	.globl	__xt_lib_ctors
+	.p2align	3, 0x0
+__xt_lib_ctors:
+	.zero	16
+	.size	__xt_lib_ctors, 16
+
 	.globl	__environ
 	.p2align	3, 0x0
 __environ:
