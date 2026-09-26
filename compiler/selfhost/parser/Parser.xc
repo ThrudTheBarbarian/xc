@@ -1339,6 +1339,9 @@ class Parser
                 if (check((u16)tokVoid) && checkAt((u32)1, (u16)tokRParen)) { advance(); break; }
                 if (!first) sig.appendByte((u8)',');
                 first = false;
+                // A variadic signature — `typedef void log_t(i32 n, ...);` —
+                // ends in `...`, spelled as XTFunctionType spells it.
+                if (match((u16)tokEllipsis)) { sig.appendCString("..."); break; }
                 sig.append(parseTypeSpelling());
                 if (check((u16)tokIdentifier)) advance();      // an optional name
                 if (!match((u16)tokComma)) break;
@@ -2882,6 +2885,10 @@ class Parser
                 n.add(node);
                 node = n;
             } else if (t == (u16)tokLParen) {
+                // A call is placed where the reference places it: a call on
+                // a NAME at the name, any other at its `(`. It was placed at
+                // the `)`, so a diagnostic about the call pointed past it.
+                Token* lpTok = cur();
                 match((u16)tokLParen);          // splits a merged `((`
                 Array* args = parseArgList();
                 expect((u16)tokRParen);
@@ -2913,6 +2920,10 @@ class Parser
                 } else {
                     n = mkNamed((u16)nkCall, String.withCString("<indirect>"));
                 }
+                if (node.kind() == (u16)nkIdent)
+                    n.setPos(node.fileId(), node.line(), node.col());
+                else if (lpTok != 0)
+                    n.setPos(lpTok.fileId(), lpTok.line(), lpTok.col());
                 for (u32 i = (u32)0; i < args.count(); i = i + (u32)1)
                     n.add((Node*)args.get(i));
                 n.setNum((i64)args.count());
@@ -2999,11 +3010,13 @@ class Parser
             return n;
         }
         if (t == (u16)tokNew) {
-            advance();
+            Token* newTok = advance();
             String* ty = String.withCString("?");
             if (check((u16)tokIdentifier) || isTypeKeywordToken(curType()))
                 ty = advance().value();
             Node* n = mkNamed((u16)nkNew, ty);
+            // At `new`, where the reference places it, not at the type name.
+            n.setPos(newTok.fileId(), newTok.line(), newTok.col());
             if (match((u16)tokLBracket)) {
                 n.add(parseExpression());
                 expect((u16)tokRBracket);

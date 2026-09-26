@@ -356,6 +356,13 @@ class Sema
     // OR about how they say so.
     void checkClassPointerAssign(String* lhs, String* rhs, Node* rhsNode, string site)
         {
+        checkClassPointerAssignAt(lhs, rhs, rhsNode, site, rhsNode);
+        }
+
+    // The same, reported at `at`: a call argument is placed at the CALL, as
+    // the reference places it.
+    void checkClassPointerAssignAt(String* lhs, String* rhs, Node* rhsNode, string site, Node* at)
+        {
         if (lhs == 0 || rhs == 0)
             return;
 
@@ -379,7 +386,7 @@ class Sema
             e.appendCString("pair, so the value would be read back as null or called as ");
             e.appendCString("garbage. Pass '&obj.method' where a '^' is expected, or make ");
             e.appendCString("the slot a block type.");
-            _errorAt(e, rhsNode);
+            _errorAt(e, at);
             return;
             }
         if (rBound && !lBound && lBlk)
@@ -391,7 +398,7 @@ class Sema
             e.appendCString("reference cycle) or give you a block with no owner. It is a ");
             e.appendCString("non-goal, not a missing feature. Declare the slot as ");
             e.appendCString("'callback <name> RET(params)' instead.");
-            _errorAt(e, rhsNode);
+            _errorAt(e, at);
             return;
             }
         if (lBound || rBound)
@@ -438,7 +445,7 @@ class Sema
                 e.appendCString("' — take the bytes you mean (e.g. cString()/bytes()), ");
                 e.appendCString("or cast explicitly");
                 }
-            _errorAt(e, rhsNode);
+            _errorAt(e, at);
             return;
             }
 
@@ -457,7 +464,7 @@ class Sema
             e.appendCString("' does not conform to protocol '");
             e.append(lp);
             e.appendByte((u8)0x27);
-            _errorAt(e, rhsNode);
+            _errorAt(e, at);
             return;
             }
         // Every class that conforms to a protocol descends from Object, so a
@@ -472,7 +479,7 @@ class Sema
         e.appendCString("' is not a subclass of '");
         e.append(lp);
         e.appendByte((u8)0x27);
-        _errorAt(e, rhsNode);
+        _errorAt(e, at);
         }
 
     // Enforce `final`. Without both halves it is an unsound promise — a way to
@@ -2088,6 +2095,10 @@ class Sema
                 m = (Node*)0;
             if (m != 0)
                 {
+                // A single candidate is taken without scoring, so its count
+                // is checked here (bug 271).
+                if (!checkArity(m, n, (u32)0, n.name()))
+                    return;
                 n.setTy(m.op());
                 n.setSym(m.sym());
                 // An implicit-self call DOES reach the method through the
@@ -2109,6 +2120,13 @@ class Sema
             String* ct = ck.ty();
             if (ct != 0 && isSignature(ct))
                 {
+                // No candidate to choose, but the signature fixes the count
+                // (bug 271). A field callback is named by its field.
+                String* lbl = (ck.kind() == (u16)nkMember && ck.name() != 0)
+                                  ? ck.name()
+                                  : String.withCString(isBoundSignature(ct) ? "<bound method>" : "<function pointer>");
+                if (!checkSignatureArity(ct, n, lbl))
+                    return;
                 n.setTy(returnOfSignature(ct));
                 n.setIndirect(isBoundSignature(ct));
                 n.setCalleeTy(ct);
@@ -2148,6 +2166,8 @@ class Sema
         String* vt = lookup(n.name());
         if (vt != 0 && isSignature(vt))
             {
+            if (!checkSignatureArity(vt, n, n.name()))
+                return;
             n.setTy(returnOfSignature(vt));
             n.setIndirect(isBoundSignature(vt));
             n.setCalleeTy(vt);
@@ -2169,8 +2189,20 @@ class Sema
             // bare call: the single-candidate rule must not let the imported
             // `rand(void)` claim `rand(100)` when `use Math;` promotes a
             // `Math.rand(u8)` that genuinely matches.
+            bool single = false;
             if (fn == 0 && group.count() == (u32)1 && !usePromotedMatch(n))
+                {
                 fn = (Node*)group.get((u32)0);
+                single = true;
+                }
+            // That single candidate is taken UNSCORED, so the count and the
+            // class-pointer arguments are checked here instead (bug 271).
+            if (single)
+                {
+                if (!checkArity(fn, n, (u32)0, n.name()))
+                    return;
+                checkMisfitArgs(fn, n, (u32)0, n.name());
+                }
             // …and that holds when the libc proto MATCHES too: libc's
             // variadic `printf` fits any argument list, so on arm9 (libc
             // auto-imported) `#use Stdio` + bare `printf` called libc where
@@ -2199,6 +2231,12 @@ class Sema
                 continue;
             Node* m = methodOverload(cls, n, (u32)0);
             if (m == 0)
+                continue;
+            // A promoted static must FIT: the single-candidate courtesy is
+            // for a name the call spells in full, not for one it reaches
+            // through `use`, where the reference scores every candidate and
+            // a misfit is no candidate at all (bug 271).
+            if (!arityFits(m, callArgc(n, (u32)0)) || scoreCandidate(m, n, (u32)0) == Overload.noMatch())
                 continue;
             n.setTy(m.op());
             n.setSym(m.sym());
@@ -2231,6 +2269,42 @@ class Sema
         // message with nothing in it, as a bad include path. The wording here
         // is the REFERENCE's, exactly, because byte-identical diagnostics are
         // the invariant (bug 209).
+        //
+        // A name that IS declared, as overloads none of which fits, says so
+        // instead: "undeclared" sent the reader looking for a missing import.
+        if (group != 0 && !demotedC && group.count() > (u32)1)
+            {
+            u32 argc = callArgc(n, (u32)0);
+            u32 fitting = (u32)0;
+            for (u32 i = (u32)0; i < group.count(); i = i + (u32)1)
+                {
+                Node* d = (Node*)group.get(i);
+                if (arityFits(d, argc) && scoreCandidate(d, n, (u32)0) != Overload.noMatch())
+                    fitting = fitting + (u32)1;
+                }
+            String* e = String.withCString("");
+            if (fitting > (u32)1)
+                {
+                e.appendCString("Call to '");
+                e.append(n.name());
+                e.appendByte((u8)'(');
+                e.append(describeArgTypes(n, (u32)0));
+                e.appendCString(")' is ambiguous among ");
+                e.append(String.withU32(group.count()));
+                e.appendCString(" overloads");
+                }
+            else
+                {
+                e.appendCString("No overload of '");
+                e.append(n.name());
+                e.appendCString("' matches argument types (");
+                e.append(describeArgTypes(n, (u32)0));
+                e.appendByte((u8)')');
+                }
+            _errorAt(e, n);
+            n.setTy(String.withCString("u8"));
+            return;
+            }
         _errorAt(String.withFormat("Call to undeclared function '%s'",
                                    n.name().cString()),
                  n);
@@ -2582,6 +2656,9 @@ class Sema
             return false;
 
         Node* call = Node.withName((u16)nkCall, String.withCString("<indirect>"));
+        // The call is where the user wrote it, so a diagnostic on it (a wrong
+        // argument count, bug 271) is placed there.
+        call.setPos(n.fileId(), n.line(), n.col());
         for (u32 i = (u32)0; i < nargs; i = i + (u32)1)
             call.add(n.kid(i + (u32)1));
         call.setNum((i64)nargs);
@@ -2623,14 +2700,51 @@ class Sema
         Node* r0 = n.kid((u32)0);
         if (r0.kind() == (u16)nkIdent && r0.name() != 0 && _isOp(r0.name(), "super") && _curClass != 0)
             {
+            // The candidates come from the NEAREST ancestor that declares the
+            // name, and they must FIT: `super` has no single-candidate
+            // courtesy, so a wrong count or an argument that does not convert
+            // is refused rather than passed to the parent's body (bug 271).
+            // Among fitting ones the first with the best score wins, as in the
+            // reference.
             Node* p = parentOf(_curClass);
             while (p != 0)
                 {
-                Node* m = methodOverload(p, n, (u32)1);
-                if (m != 0)
+                Node* best = (Node*)0;
+                u32 bestScore = Overload.noMatch();
+                bool named = false;
+                u32 argc = callArgc(n, (u32)1);
+                for (u32 i = (u32)0; i < p.kidCount(); i = i + (u32)1)
                     {
-                    n.setTy(m.op());
-                    n.setSym(m.sym());
+                    Node* m = p.kid(i);
+                    if (m.kind() != (u16)nkMethodDecl || m.name() == 0 || !m.name().equals(n.name()))
+                        continue;
+                    named = true;
+                    if (!arityFits(m, argc))
+                        continue;
+                    u32 sc = scoreCandidate(m, n, (u32)1);
+                    if (sc == Overload.noMatch())
+                        continue;
+                    if (best == 0 || sc < bestScore)
+                        {
+                        best = m;
+                        bestScore = sc;
+                        }
+                    }
+                if (named)
+                    {
+                    if (best == 0)
+                        {
+                        String* w = String.withCString("No overload of 'super.");
+                        w.append(n.name());
+                        w.appendCString("' matches (");
+                        w.append(describeArgTypes(n, (u32)1));
+                        w.appendCString(")");
+                        _errorAt(w, n);
+                        n.setTy(String.withCString("u8"));
+                        return;
+                        }
+                    n.setTy(best.op());
+                    n.setSym(best.sym());
                     n.setCls(p.name());
                     return;
                     }
@@ -2674,6 +2788,15 @@ class Sema
                     continue;
                 if (pm.name() != 0 && pm.name().equals(n.name()))
                     {
+                    // A protocol method is the only candidate there is, and
+                    // dispatch reaches whichever class implements it — so a
+                    // wrong count lands in a body that reads parameters that
+                    // were never passed (bug 271).
+                    String* plbl = String.withString(owner);
+                    plbl.appendByte((u8)'.');
+                    plbl.append(n.name());
+                    if (!checkArity(pm, n, (u32)1, plbl))
+                        return;
                     n.setTy(pm.op());
                     Map* ps = _vt.protoSlotsFor(owner);
                     if (ps != 0)
@@ -2726,15 +2849,64 @@ class Sema
             // It is also what makes --migrate work: hiding a member newer than
             // the base leaves the call unresolved, and unresolved has to report
             // or the flag does nothing at all.
-            String* e = String.withCString("No method '");
-            e.append(n.name());
-            e.appendCString("' on class '");
-            e.append(owner);
-            e.appendByte((u8)0x27);
+            //
+            // A name that IS declared, with overloads none of which fits, is
+            // a different complaint, and says so in the reference's words.
+            u32 named = (u32)0;
+            u32 fitting = (u32)0;
+            u32 argc = callArgc(n, (u32)1);
+            for (Node* c = cls; c != 0 && named == (u32)0; c = parentOf(c))
+                for (u32 i = (u32)0; i < c.kidCount(); i = i + (u32)1)
+                    {
+                    Node* d = c.kid(i);
+                    if (d.kind() != (u16)nkMethodDecl || d.name() == 0 || !d.name().equals(n.name()))
+                        continue;
+                    if (!memberVisibleUnderMigrate(d, c, n))
+                        continue;
+                    named = named + (u32)1;
+                    if (arityFits(d, argc) && scoreCandidate(d, n, (u32)1) != Overload.noMatch())
+                        fitting = fitting + (u32)1;
+                    }
+            String* e = String.withCString("");
+            if (named == (u32)0)
+                {
+                e.appendCString("No method '");
+                e.append(n.name());
+                e.appendCString("' on class '");
+                e.append(owner);
+                e.appendByte((u8)0x27);
+                }
+            else if (fitting > (u32)1)
+                {
+                e.appendCString("Call to '");
+                e.append(owner);
+                e.appendByte((u8)'.');
+                e.append(n.name());
+                e.appendByte((u8)'(');
+                e.append(describeArgTypes(n, (u32)1));
+                e.appendCString(")' is ambiguous");
+                }
+            else
+                {
+                e.appendCString("No overload of '");
+                e.append(owner);
+                e.appendByte((u8)'.');
+                e.append(n.name());
+                e.appendCString("' matches argument types (");
+                e.append(describeArgTypes(n, (u32)1));
+                e.appendByte((u8)')');
+                }
             _errorAt(e, n);
             n.setTy(String.withCString("u8"));
             return;
             }
+        // One candidate by name is taken without scoring, so its count is
+        // checked here, named as the receiver's class spells it (bug 271).
+        String* mlbl = String.withString(owner);
+        mlbl.appendByte((u8)'.');
+        mlbl.append(n.name());
+        if (!checkArity(m, n, (u32)1, mlbl))
+            return;
         if (owner2 != 0 && owner2 != cls)
             n.setCls(owner2.name());
         n.setTy(firstReturn(m.op()));
@@ -3645,6 +3817,173 @@ class Sema
             if (pickOverload(group, call, (u32)0) != 0)
                 return true;
             }
+        return false;
+        }
+
+    // The arguments a call supplies. A method call's first child is its
+    // receiver, so `argBase` is 1 there and 0 for a free call.
+    u32 callArgc(Node* call, u32 argBase)
+        {
+        return call.kidCount() > argBase ? call.kidCount() - argBase : (u32)0;
+        }
+
+    // A `...` declaration takes AT LEAST its fixed parameters; any other
+    // takes exactly them.
+    bool arityFits(Node* decl, u32 argc)
+        {
+        u32 pc = paramCount(decl);
+        return decl.hasFlag((u32)NF_VARARGS) ? (argc >= pc) : (argc == pc);
+        }
+
+    // `'K.m' takes 1 argument; 0 given` — the reference's wording. A call
+    // whose count does not match its only candidate is refused: accepted, it
+    // passes the wrong number of values and the callee reads its parameters
+    // from whatever the registers or the stack hold.
+    void reportArity(String* label, bool varargs, u32 fixed, u32 given, Node* at)
+        {
+        String* msg = String.withCString("'");
+        msg.append(label);
+        msg.appendCString("' takes ");
+        if (varargs)
+            msg.appendCString("at least ");
+        msg.appendFormat("%lu", fixed);
+        msg.appendCString(fixed == (u32)1 ? " argument; " : " arguments; ");
+        msg.appendFormat("%lu", given);
+        msg.appendCString(" given");
+        _errorAt(msg, at);
+        }
+
+    // The same test on a resolved candidate. False (and reported) when the
+    // count does not fit; the call is then typed u8, the reference's fallback.
+    bool checkArity(Node* decl, Node* call, u32 argBase, String* label)
+        {
+        u32 argc = callArgc(call, argBase);
+        if (arityFits(decl, argc))
+            return true;
+        reportArity(label, decl.hasFlag((u32)NF_VARARGS), paramCount(decl), argc, call);
+        call.setTy(String.withCString("u8"));
+        return false;
+        }
+
+    // A single FREE function taken although it scored as a misfit still has
+    // its class-pointer arguments checked: a width or scalar-kind difference
+    // is a conversion, but a `B*` where an `A*` is declared is not, and the
+    // callee would read B's fields at A's offsets. Positioned at the call, as
+    // the reference places it. (Method calls keep the implicit downcast from
+    // `Object*` that collection code relies on; neither compiler checks them.)
+    void checkMisfitArgs(Node* decl, Node* call, u32 argBase, String* callee)
+        {
+        if (scoreCandidate(decl, call, argBase) != Overload.noMatch())
+            return;
+        u32 pi = (u32)0;
+        for (u32 i = (u32)0; i < decl.kidCount(); i = i + (u32)1)
+            {
+            Node* p = decl.kid(i);
+            if (p.kind() != (u16)nkParam)
+                continue;
+            u32 ai = argBase + pi;
+            pi = pi + (u32)1;
+            if (ai >= call.kidCount())
+                break;
+            Node* a = call.kid(ai);
+            if (a.ty() == 0 || p.op() == 0)
+                continue;
+            // A bound method is TWO words and has no single-word slot to
+            // arrive in — a C function in particular cannot take one.
+            if (isBoundSignature(a.ty()) && !isBoundSignature(p.op()))
+                {
+                String* e = String.withCString("argument ");
+                e.append(String.withU32(pi));
+                e.appendCString(" of '");
+                e.append(callee);
+                e.appendCString("': cannot pass a bound method ('^') where '");
+                e.append(p.op());
+                e.appendCString("' is expected — a '^' is two words and has no "
+                                "equivalent there (a C function cannot take one). "
+                                "Pass a plain function pointer ('@').");
+                _errorAt(e, call);
+                continue;
+                }
+            String* site = String.withCString("argument ");
+            site.append(String.withU32(pi));
+            site.appendCString(" of '");
+            site.append(callee);
+            site.appendByte((u8)0x27);
+            checkClassPointerAssignAt(p.op(), a.ty(), a, site.cString(), call);
+            }
+        }
+
+    // `C*, u8` — the argument types as a diagnostic lists them.
+    String* describeArgTypes(Node* call, u32 argBase)
+        {
+        String* s = String.withCString("");
+        for (u32 i = argBase; i < call.kidCount(); i = i + (u32)1)
+            {
+            if (i > argBase)
+                s.appendCString(", ");
+            String* t = call.kid(i).ty();
+            s.append(t != 0 ? t : String.withCString("?"));
+            }
+        return s;
+        }
+
+    // The parameter spellings of a signature — `void(i32,u8*)` gives two,
+    // `void()` and `void(void)` none, and a trailing `...` is kept as one.
+    // Commas inside a nested signature or a generic argument list do not
+    // separate.
+    Array* signatureParams(String* sig)
+        {
+        Array* out = new Array();
+        String* s = sig;
+        if (s.hasPrefix(String.withCString("$wbound_")))
+            s = s.substringFromByte((u32)8);
+        else if (s.hasPrefix(String.withCString("$bound_")))
+            s = s.substringFromByte((u32)7);
+        u32 open = String.notFound();
+        for (u32 i = (u32)0; i < s.byteLength(); i = i + (u32)1)
+            if (s.byteAt(i) == (u8)'(')
+                {
+                open = i;
+                break;
+                }
+        if (open == String.notFound())
+            return out;
+        u32 depth = (u32)0;
+        u32 start = open + (u32)1;
+        for (u32 i = start; i < s.byteLength(); i = i + (u32)1)
+            {
+            u8 c = s.byteAt(i);
+            if (c == (u8)'(' || c == (u8)'<')
+                depth = depth + (u32)1;
+            else if ((c == (u8)')' || c == (u8)'>') && depth > (u32)0)
+                depth = depth - (u32)1;
+            else if ((c == (u8)',' || c == (u8)')') && depth == (u32)0)
+                {
+                String* p = s.substringBytes(start, i - start).trimmed();
+                if (p.byteLength() > (u32)0 && !_isOp(p, "void"))
+                    out.add((Object*)p);
+                start = i + (u32)1;
+                if (c == (u8)')')
+                    break;
+                }
+            }
+        return out;
+        }
+
+    // A call through a function pointer or a bound method has no candidate
+    // to choose, but its signature still fixes the count.
+    bool checkSignatureArity(String* sig, Node* call, String* label)
+        {
+        Array* ps = signatureParams(sig);
+        u32 fixed = ps.count();
+        bool va = fixed > (u32)0 && _isOp((String*)ps.get(fixed - (u32)1), "...");
+        if (va)
+            fixed = fixed - (u32)1;
+        u32 argc = (u32)call.num();
+        if (va ? (argc >= fixed) : (argc == fixed))
+            return true;
+        reportArity(label, va, fixed, argc, call);
+        call.setTy(String.withCString("u8"));
         return false;
         }
 
