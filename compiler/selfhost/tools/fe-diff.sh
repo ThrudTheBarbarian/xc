@@ -22,6 +22,11 @@ cd "$(dirname "$0")/../.." || exit 1
 BIN=bin/osx
 [ -x "$BIN/xcc-fe" ] || BIN=bin/linux
 TARGET=${1:-arm64}
+# The banked 6502 is `-m xt` to the reference front end and `-m xt6502` to the
+# port's; either spelling here drives both.
+ORACLE_TARGET=$TARGET
+PORT_TARGET=$TARGET
+case "$TARGET" in xt|xt6502) ORACLE_TARGET=xt; PORT_TARGET=xt6502 ;; esac
 PATTERN=${2:-}
 WORK=${TMPDIR:-/tmp}/fediff.$$
 mkdir -p "$WORK"
@@ -64,11 +69,11 @@ declare -a FAILED
 FILES=$(find tests support selfhost -name '*.xc' -not -path 'tests/fuzz/findings/*' | sort | awk -v i="${SHARD_I:-0}" -v n="${SHARD_N:-1}" 'NR % n == i')
 for f in $FILES; do
     [ -n "$PATTERN" ] && [[ "$f" != *"$PATTERN"* ]] && continue
-    if ! "$BIN/xcc-fe" -m "$TARGET" -H . "${RUN_INCS[@]}" ${LIBARGS[@]+"${LIBARGS[@]}"} "$f" -o "$WORK/oracle.ir" \
+    if ! "$BIN/xcc-fe" -m "$ORACLE_TARGET" -H . "${RUN_INCS[@]}" ${LIBARGS[@]+"${LIBARGS[@]}"} "$f" -o "$WORK/oracle.ir" \
          >/dev/null 2>&1 || [ ! -s "$WORK/oracle.ir" ]; then
         oracle=$((oracle+1)); continue
     fi
-    "$WORK/xtfe" -m "$TARGET" -H . "${RUN_INCS[@]}" "$f" -o "$WORK/port.ir" >/dev/null 2>&1
+    "$WORK/xtfe" -m "$PORT_TARGET" -H . "${RUN_INCS[@]}" "$f" -o "$WORK/port.ir" >/dev/null 2>&1
     rc=$?
     if [ $rc -eq 3 ]; then unsup=$((unsup+1)); FAILED+=("$f (unsupported)"); continue; fi
     if [ $rc -ne 0 ]; then fail=$((fail+1)); FAILED+=("$f (exit $rc)"); continue; fi
