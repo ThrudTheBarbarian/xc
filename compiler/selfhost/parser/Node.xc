@@ -684,6 +684,10 @@ class Node
         {
         return FileTable.name(_fileId);
         }
+    u32 fileId(void)
+        {
+        return _fileId;
+        }
     void setPos(u32 fileId, u32 l, u32 c)
         {
         _fileId = fileId;

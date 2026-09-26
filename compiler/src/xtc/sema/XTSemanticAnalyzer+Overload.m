@@ -1332,6 +1332,107 @@ static BOOL XTIsErasedKeyType(XTType* t)
     }
 
 /****************************************************************************\
+|* Check an argument count against a fixed parameter count. A `...` callee
+|* takes at least `fixed`; any other takes exactly `fixed`.
+|* @param label      The callee as the diagnostic names it.
+|* @param fixed      Declared parameter count.
+|* @param isVarArgs  Whether the callee is variadic.
+|* @param given      Arguments supplied.
+|* @param loc        Where to report.
+|* @return  YES when the count fits; NO after reporting it.
+\****************************************************************************/
+- (BOOL)checkArityOf:(NSString*)label
+               fixed:(NSUInteger)fixed
+           isVarArgs:(BOOL)isVarArgs
+               given:(NSUInteger)given
+            location:(XTSourceLocation*)loc
+    {
+    BOOL ok = isVarArgs ? (given >= fixed) : (given == fixed);
+    if (ok)
+        return YES;
+    [self.diagnostics emitError:[NSString stringWithFormat:
+                                              @"'%@' takes %@%lu argument%@; %lu given",
+                                              label,
+                                              isVarArgs ? @"at least " : @"",
+                                              (unsigned long)fixed,
+                                              fixed == 1 ? @"" : @"s",
+                                              (unsigned long)given]
+                             at:loc];
+    return NO;
+    }
+
+/****************************************************************************\
+|* A call through a function pointer or a bound method has no candidate to
+|* choose, but its signature still fixes the count. Accepted with the wrong
+|* count, the callee reads parameters that were never passed.
+|* @param node   The call.
+|* @param ft     The callee's signature.
+|* @param label  The callee as the diagnostic names it.
+|* @return  YES when the count fits; NO after reporting it (the call is then
+|*          typed u8).
+\****************************************************************************/
+- (BOOL)checkIndirectCall:(XTCallExprNode*)node
+                signature:(XTFunctionType*)ft
+                    label:(NSString*)label
+    {
+    if ([self checkArityOf:label
+                     fixed:ft.paramTypes.count
+                 isVarArgs:ft.isVarArgs
+                     given:node.arguments.count
+                  location:node.location])
+        return YES;
+    node.resolvedType = [XTType u8Type];
+    return NO;
+    }
+
+/****************************************************************************\
+|* The arguments of a single candidate that scored as a misfit. A width or
+|* scalar-kind difference is a conversion and stays accepted; a bound method
+|* where a single word is expected, or a class pointer that is not the
+|* declared class or a subclass of it, is refused.
+|* @param args        The call's arguments.
+|* @param paramTypes  The candidate's parameter types.
+|* @param callee      The callee as the diagnostic names it.
+|* @param loc        Where to report.
+\****************************************************************************/
+- (void)checkMisfitArguments:(NSArray<XTASTNode*>*)args
+                  paramTypes:(NSArray<XTType*>*)paramTypes
+                      callee:(NSString*)callee
+                    location:(XTSourceLocation*)loc
+    {
+    NSUInteger np = MIN(paramTypes.count, args.count);
+    for (NSUInteger i = 0; i < np; i++)
+        {
+        XTType* pt = paramTypes[i];
+        XTASTNode* arg = args[i];
+        // A bound method is TWO words. It must never marshal into a
+        // slot that isn't a `^` — most sharply at a C boundary,
+        // where there is no C-ABI equivalent and it would arrive as
+        // garbage. (A plain function pointer `@`, and
+        // `&Class.staticMethod`, are single words and stay legal.)
+        if (arg.resolvedType.boundMethodSignature != nil && pt.boundMethodSignature == nil)
+            {
+            [self.diagnostics emitError:[NSString stringWithFormat:
+                                                      @"argument %lu of '%@': cannot pass a bound method "
+                                                      @"('^') where '%@' is expected — a '^' is two words "
+                                                      @"and has no equivalent there (a C function cannot "
+                                                      @"take one). Pass a plain function pointer ('@').",
+                                                      (unsigned long)(i + 1), callee,
+                                                      pt.displayName ?: @"?"]
+                                     at:loc];
+            continue;
+            }
+        [self checkClassPointerAssign:pt
+                              rhsType:arg.resolvedType
+                              rhsNode:arg
+                                 site:[NSString stringWithFormat:
+                                                    @"argument %lu of '%@'",
+                                                    (unsigned long)(i + 1), callee]
+                             location:loc];
+        }
+    }
+
+/****************************************************************************\
 |* Side-effect-free probe: would a `use`-promoted static method resolve this
 |* bare call? Used to give libc (and any free function) LOWEST precedence — a
 |* non-matching free-function candidate (e.g. the auto-imported libc
@@ -1739,9 +1840,16 @@ static BOOL XTIsErasedKeyType(XTType* t)
         {
         [self analyzeNode:node.calleeExpr];
         XTType* ct = node.calleeExpr.resolvedType;
+        // A field callback is named by its field; any other callee
+        // expression by what kind of value it is.
+        NSString* exprLabel = [node.calleeExpr isKindOfClass:[XTMemberAccessNode class]]
+                                  ? ((XTMemberAccessNode*)node.calleeExpr).memberName
+                                  : nil;
         if (ct && ct.boundMethodSignature != nil)
             {
             XTFunctionType* ft = (XTFunctionType*)ct.boundMethodSignature;
+            if (![self checkIndirectCall:node signature:ft label:(exprLabel ?: @"<bound method>")])
+                return;
             node.isIndirectCall = YES;
             node.isBoundCall = YES;
             node.calleeSignature = ft;
@@ -1751,6 +1859,8 @@ static BOOL XTIsErasedKeyType(XTType* t)
         if ([ct isKindOfClass:[XTPointerType class]] && [((XTPointerType*)ct).pointeeType isKindOfClass:[XTFunctionType class]])
             {
             XTFunctionType* ft = (XTFunctionType*)((XTPointerType*)ct).pointeeType;
+            if (![self checkIndirectCall:node signature:ft label:(exprLabel ?: @"<function pointer>")])
+                return;
             node.isIndirectCall = YES;
             node.calleeSignature = ft;
             node.resolvedType = ft.returnTypes.firstObject ?: [XTType voidType];
@@ -1800,6 +1910,8 @@ static BOOL XTIsErasedKeyType(XTType* t)
             if ([pointee isKindOfClass:[XTFunctionType class]])
                 {
                 XTFunctionType* ft = (XTFunctionType*)pointee;
+                if (![self checkIndirectCall:node signature:ft label:node.calleeName])
+                    return;
                 node.isIndirectCall = YES;
                 node.calleeSignature = ft;
                 node.resolvedType = ft.returnTypes.firstObject ?: [XTType voidType];
@@ -1815,6 +1927,8 @@ static BOOL XTIsErasedKeyType(XTType* t)
             {
             XTFunctionType* ft =
                 (XTFunctionType*)varSym.symbolType.boundMethodSignature;
+            if (![self checkIndirectCall:node signature:ft label:node.calleeName])
+                return;
             node.isIndirectCall = YES;
             node.isBoundCall = YES;
             node.calleeSignature = ft;
@@ -1994,36 +2108,10 @@ static BOOL XTIsErasedKeyType(XTType* t)
                     // of silently accepting. Other mismatches (width,
                     // unrelated scalar kinds) still fall through to the
                     // older shallow-accept behaviour.
-                    NSUInteger np = MIN(ft.paramTypes.count, node.arguments.count);
-                    for (NSUInteger i = 0; i < np; i++)
-                        {
-                        XTType* pt = ft.paramTypes[i];
-                        XTASTNode* arg = node.arguments[i];
-                        // A bound method is TWO words. It must never marshal into a
-                        // slot that isn't a `^` — most sharply at a C boundary,
-                        // where there is no C-ABI equivalent and it would arrive as
-                        // garbage. (A plain function pointer `@`, and
-                        // `&Class.staticMethod`, are single words and stay legal.)
-                        if (arg.resolvedType.boundMethodSignature != nil && pt.boundMethodSignature == nil)
-                            {
-                            [self.diagnostics emitError:[NSString stringWithFormat:
-                                                                      @"argument %lu of '%@': cannot pass a bound method "
-                                                                      @"('^') where '%@' is expected — a '^' is two words "
-                                                                      @"and has no equivalent there (a C function cannot "
-                                                                      @"take one). Pass a plain function pointer ('@').",
-                                                                      (unsigned long)(i + 1), node.calleeName,
-                                                                      pt.displayName ?: @"?"]
-                                                     at:node.location];
-                            continue;
-                            }
-                        [self checkClassPointerAssign:pt
-                                              rhsType:arg.resolvedType
-                                              rhsNode:arg
-                                                 site:[NSString stringWithFormat:
-                                                                    @"argument %lu of '%@'",
-                                                                    (unsigned long)(i + 1), node.calleeName]
-                                             location:node.location];
-                        }
+                    [self checkMisfitArguments:node.arguments
+                                    paramTypes:ft.paramTypes
+                                        callee:node.calleeName
+                                      location:node.location];
                     return;
                     }
                 }
@@ -3247,6 +3335,18 @@ static BOOL XTIsErasedKeyType(XTType* t)
                 }
             for (XTASTNode* arg in node.arguments)
                 [self analyzeNode:arg];
+            // The protocol's method is the only candidate, and dispatch
+            // reaches whichever class implements it — a wrong count lands in
+            // a body that reads parameters that were never passed.
+            if (![self checkArityOf:[NSString stringWithFormat:@"%@.%@", protoName, node.methodName]
+                              fixed:match.parameters.count
+                          isVarArgs:match.isVarArgs
+                              given:node.arguments.count
+                           location:node.location])
+                {
+                node.resolvedType = [XTType u8Type];
+                return;
+                }
             NSNumber* slotNum = self.protocolMethodSlots[protoName][node.methodName];
             if (slotNum)
                 {
