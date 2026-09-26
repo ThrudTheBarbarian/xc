@@ -1371,6 +1371,28 @@ static NSString *padLeft(NSString *s, NSUInteger width) {
     [self mechUnmap:ctx];
 }
 
+// Leave Z clear when a branch or Select condition is true. A bool is one byte,
+// but a pointer or callback tested for null reaches here too, and its low byte
+// alone is 0 for a function at $xx00: a pointer tests its two address bytes,
+// anything else every byte, ORed together in $BF.
++ (void)loadCondTest:(XTIROperand *)cond ctx:(XT6502FnCtx *)ctx {
+    NSUInteger cw = 1;
+    if (cond.kind == XTIROperandKindUse) {
+        XTIRValue *cv = [ctx.fn valueForId:cond.valueId];
+        if (cv) cw = [self byteWidthForType:cv.type];
+        if (cv && cv.type.kind == XTIRTypeKindPtr) cw = 2;
+    } else if (cond.kind == XTIROperandKindImmI && cond.type) {
+        cw = [self byteWidthForType:cond.type];
+    }
+    if (cw < 2) { [self loadOperandByte:cond byteIndex:0 ctx:ctx]; return; }
+    [self loadOperandByte:cond byteIndex:cw - 1 ctx:ctx];
+    for (NSUInteger b = cw - 1; b > 0; b--) {
+        [ctx.out appendString:@"    STA $BF\n"];
+        [self loadOperandByte:cond byteIndex:b - 1 ctx:ctx];
+        [ctx.out appendString:@"    ORA $BF\n"];
+    }
+}
+
 // A u64 with its top bit set is negative to MECH's signed i64. Halve it first,
 // keeping the bit shifted out as a sticky low bit so the rounding is unchanged,
 // convert, and double the result, which is exact.
@@ -1915,7 +1937,7 @@ static NSString *padLeft(NSString *s, NSUInteger width) {
             if (insn.operands.count < 3 || !insn.result) break;
             NSUInteger width = [self byteWidthForType:insn.result.type];
             if (width == 0) width = 1;
-            [self loadOperandByte:insn.operands[0] byteIndex:0 ctx:ctx];
+            [self loadCondTest:insn.operands[0] ctx:ctx];
             NSUInteger lbl = ctx.labelCounter++;
             [ctx.out appendFormat:@"    BEQ .Lselfalse_%lu\n",
                  (unsigned long)lbl];
@@ -2272,7 +2294,7 @@ static NSString *padLeft(NSString *s, NSUInteger width) {
             [self emitPhiCopiesFrom:block to:f.blockRef ctx:ctx];
             // Re-load cond after the copies (might have been
             // clobbered by intermediate LDA/STA).
-            [self loadOperandByte:cond byteIndex:0 ctx:ctx];
+            [self loadCondTest:cond ctx:ctx];
             // BEQ <skip-true> ; JMP <true> ; skip-true: ; JMP <false>
             // The BEQ has the same ±127 range limit as BRA, but
             // it now spans only the JMP-true (3 bytes), which is

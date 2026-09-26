@@ -2396,7 +2396,7 @@ class Xt6502
         if (n.ops().count() < (u32)3 || n.res() == (IRValue*)0) return;
         u32 width = byteWidth(n.res().ty());
         if (width == (u32)0) width = (u32)1;
-        loadOperandByte((IROperand*)n.ops().get((u32)0), (u32)0);
+        loadCondTest((IROperand*)n.ops().get((u32)0));
         u32 lbl = _labelCounter; _labelCounter = _labelCounter + (u32)1;
         _out.appendFormat("    BEQ .Lselfalse_%lu\n", lbl);
         for (u32 b = (u32)0; b < width; b = b + (u32)1) {
@@ -3444,6 +3444,26 @@ class Xt6502
     // the jump goes. The allocator never aliases a phi source with a phi
     // result, so they cannot conflict; the condition is simply re-loaded
     // afterwards, since the copies clobber A.
+    // Leave Z clear when a branch or Select condition is true. A bool is one byte, but
+    // a pointer or callback tested for null reaches here too, and its low
+    // byte alone is 0 for a function at $xx00: a pointer tests its two
+    // address bytes, anything else every byte, ORed together in $BF.
+    void loadCondTest(IROperand* cond)
+    {
+        u32 w = valueWidthOf(cond);
+        if (cond.kind() == (u8)OPK_USE && cond.val() != (IRValue*)0 && isPtrTy(cond.val().ty()))
+            w = (u32)2;
+        if (w < (u32)2) { loadOperandByte(cond, (u32)0); return; }
+        loadOperandByte(cond, w - (u32)1);
+        u32 b = w - (u32)1;
+        while (b > (u32)0) {
+            b = b - (u32)1;
+            _out.appendCString("    STA $BF\n");
+            loadOperandByte(cond, b);
+            _out.appendCString("    ORA $BF\n");
+        }
+    }
+
     void emitCondBranch(IRBlock* bb, IRInsn* n)
     {
         if (n.ops().count() < (u32)3) return;
@@ -3453,7 +3473,7 @@ class Xt6502
         loadOperandByte(cond, (u32)0);
         emitPhiCopies(bb, t.blk());
         emitPhiCopies(bb, f.blk());
-        loadOperandByte(cond, (u32)0);
+        loadCondTest(cond);
         // BEQ has the same ±127 reach as BRA, but here it spans only the
         // 3-byte JMP-true, which is always in range; the JMPs carry the
         // long-distance cases.
