@@ -1,13 +1,15 @@
 ---
 title: Object
-description: "The universal root class: pointer-identity equals, an address-derived hash, and the description hook every class inherits and overrides."
+description: "The universal root class: pointer-identity equals, an address-derived hash, the description hook every class inherits and overrides, and runtime class names."
 ---
 
 `Object` is the universal root class. Every class you write without an explicit
-parent (every `class X { … }`) inherits from it implicitly. Its three methods
-are the defaults your own types get, and the ones a
+parent (every `class X { … }`) inherits from it implicitly. Its three protocol
+methods are the defaults your own types get, and the ones a
 [`Map`](/compiler/api/map/), [`Set`](/compiler/api/set/) or
-[`Array`](/compiler/api/array/) uses when you don't override them.
+[`Array`](/compiler/api/array/) uses when you don't override them. It also
+gives every object its class name at run time, and makes an instance from a
+class name.
 
 ```c
 #import "Foundation.xc"          // Object comes in with the umbrella
@@ -64,6 +66,8 @@ defaults from the moment it is declared.
 
 **Protocol methods** · [equals](#equals) · [hash](#hash) · [description](#description)
 
+**Class names** · [className](#classname) · [newInstanceOfClass](#newinstanceofclass)
+
 ---
 
 ## Protocol methods
@@ -99,5 +103,63 @@ the placeholder `<Object>`. `Stdio.printf`'s `%@` conversion dispatches through
 this hook, so overriding it controls how your class prints: a
 [`Number`](/compiler/api/number/) renders its value, and a
 [`Data`](/compiler/api/data/) renders `<Data 4: deadbeef>`.
+
+[↑ Topics](#topics)
+
+---
+
+## Class names
+
+The name of an object's class at run time, and an instance made from a name.
+A keyed archiver uses the pair: it writes `className()` beside each object's
+fields, and reads the object back with `newInstanceOfClass`.
+
+```c
+Object* o = new Circle();
+Stdio.printf("%s\n", o.className().cString());      // Circle
+
+Object* c = Object.newInstanceOfClass(String.withCString("Circle"));
+```
+
+:::note[Availability]
+Every target except xt6502. On xt6502 `Object` does not have these methods,
+and calling one is a compile error.
+:::
+
+### className
+```c
+final String* className(void)
+```
+The name of the receiver's class as written in its source: `"Circle"` for a
+`Circle`, even when you hold it as an `Object*` or as a pointer to one of its
+parents. The result is a new [`String`](/compiler/api/string/) that the caller
+owns. `className` is `final`: a class cannot override it.
+
+It works for an instance whose class came from another module, a `-c` object
+or an `--emit-lib` library, because each module records the names of the
+classes it defines. It returns null for an instance of a class built by an
+older compiler, which recorded no names.
+
+### newInstanceOfClass
+```c
+static Object* newInstanceOfClass(String* name)
+```
+A new instance of the class called `name`, made as `new C()` makes one: it
+comes back with a reference count of 1, owned by the caller, and the class's
+zero-argument `init` runs, after its parents' `init`s as usual. A class that
+declares only `init`s with parameters comes back zero-filled with no `init`
+run, as `new C()` does for it. Returns null when `name` is null or no class of
+that name can be found.
+
+The search covers the classes of the module that holds `main` (or, called from
+inside a library, the library's own classes), and then every module it
+imports, and every module those import, in import order. A class in a `-c`
+object or an `--emit-lib` library is found when the program `#import`s that
+module. A library cannot find a class that only its client defines.
+
+A program that uses neither method and imports no module pays a few dozen
+bytes at most. A library, a `-c` object, or a program that imports one carries
+a small table: one name function per class, and one function that makes each
+class by name.
 
 [↑ Topics](#topics)

@@ -1463,6 +1463,43 @@ h = &delegate.windowShouldClose;   // empty if absent OR delegate is null
 if (h) { shouldClose = h(win); }
 ```
 
+### 8.6 Runtime class names
+
+`Object` gives every object its class name at run time, and makes an
+instance from a class name:
+
+```c
+final String* className(void);                        // "Circle"
+static Object* newInstanceOfClass(String* name);      // null if none
+```
+
+`o.className()` is the name of the receiver's **dynamic** class, as
+written in its source. A `Circle` held as an `Object*` answers
+`"Circle"`. The result is a new `String` the caller owns. `className`
+is `final`, so a class cannot override it.
+
+`Object.newInstanceOfClass(name)` behaves like `new C()` for the class
+called `name`. The instance comes back with a reference count of 1,
+owned by the caller. The class's zero-argument `init` runs, with the
+usual implicit call to each parent's `init` (§8.2). A class that
+declares only `init`s with parameters comes back zero-filled with no
+`init` run, as `new C()` does for it. An unknown or null name gives
+null.
+
+Across modules:
+
+- `className()` works on any instance whose class was built by a
+  compiler that records names, whichever module built it: each module
+  records the names of its own classes.
+- `newInstanceOfClass` searches the module that holds `main` (or the
+  library it is called from), then each module it `#import`s, then the
+  modules those import. A class in a `-c` object or an `--emit-lib`
+  library is found when the program imports that module. A library
+  does not see the classes of the program that loads it.
+
+Both methods exist on every target except xt6502, where calling either
+is a compile error.
+
 ---
 
 ## 9. Heap, ARC, and weak references
