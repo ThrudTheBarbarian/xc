@@ -486,7 +486,22 @@ class Vtable
             own.add((Object*)Vtable.label(cn, m));
             }
         Vtable.sortStrings(own);
+        // An ADOPTED root (from an imported library's methodSlots) keeps its
+        // number, and the class's size still has to cover it: a subclass
+        // declared here numbers its own roots after it. Without this an
+        // imported class was sized as its parent, and a subclass's first new
+        // root took the imported class's first slot (bug 278). The adopted
+        // numbers are taken first, so a new root never lands on one.
         u32 n = base;
+        for (u32 j = (u32)0; j < own.count(); j = j + (u32)1)
+            {
+            String* l = (String*)own.get(j);
+            if (_chainLabels != 0 && _chainLabels.get((Hashable*)l) != 0)
+                continue;
+            Object* ad = _slotByLabel.get((Hashable*)l);
+            if (ad != 0 && ((Number*)ad).asU32() >= n)
+                n = ((Number*)ad).asU32() + (u32)1;
+            }
         for (u32 j = (u32)0; j < own.count(); j = j + (u32)1)
             {
             String* l = (String*)own.get(j);

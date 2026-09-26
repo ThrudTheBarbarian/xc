@@ -1890,7 +1890,19 @@
                                                   cls.className, (m.mangledName ?: m.methodName)]];
         }
     [own sortUsingSelector:@selector(compare:)];
+    // An adopted root (from an imported library's methodSlots) keeps its
+    // number, and the class's size still has to cover it, so a subclass
+    // declared here numbers its own roots after it (bug 278). The adopted
+    // numbers are taken first, so a new root never lands on one.
     NSUInteger n = base;
+    for (NSString* l in own)
+        {
+        if (self->_chainSlotByLabel[l])
+            continue;
+        NSNumber* ad = self->_virtualSlotByLabel[l];
+        if (ad && ad.unsignedIntegerValue >= n)
+            n = ad.unsignedIntegerValue + 1;
+        }
     for (NSString* l in own)
         {
         if (self->_chainSlotByLabel[l])
