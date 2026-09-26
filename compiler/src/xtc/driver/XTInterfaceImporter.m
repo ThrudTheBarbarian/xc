@@ -538,6 +538,16 @@ static NSMutableSet<NSString*>* sUnresolved = nil;
     return [a isKindOfClass:[NSArray class]] ? a : @[];
     }
 
++ (nullable NSString*)classTableFromJSON:(NSString*)json
+    {
+    NSData* jd = [json dataUsingEncoding:NSUTF8StringEncoding];
+    NSDictionary* root = jd ? [NSJSONSerialization JSONObjectWithData:jd options:0 error:NULL] : nil;
+    if (![root isKindOfClass:[NSDictionary class]])
+        return nil;
+    NSString* t = root[@"classTable"];
+    return [t isKindOfClass:[NSString class]] && t.length ? t : nil;
+    }
+
 + (NSDictionary*)slotsFromJSON:(NSString*)json
     {
     NSData* jd = [json dataUsingEncoding:NSUTF8StringEncoding];

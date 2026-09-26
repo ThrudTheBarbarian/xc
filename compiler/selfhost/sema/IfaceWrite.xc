@@ -506,6 +506,15 @@ class IfaceWrite
 
     static String* json(Node* program, Vtable* vt, Set* prelude, Array* cImports)
     {
+        return IfaceWrite.jsonWithTable(program, vt, prelude, cImports, (String*)0);
+    }
+
+    // As json(), also naming the module's class table function (`classTable`,
+    // for Object.newInstanceOfClass). The key is written only when there is a
+    // table, so an interface without one reads exactly as before.
+    static String* jsonWithTable(Node* program, Vtable* vt, Set* prelude, Array* cImports,
+                                 String* classTable)
+    {
         String* out = new String();
         out.appendCString("{\n");
         out.appendCString("\"ifaceVersion\": 1, \"version\": 1,\n");
@@ -912,7 +921,10 @@ class IfaceWrite
             if (i > (u32)0) out.appendCString(", ");
             out.appendFormat("\"%s\"", IfaceWrite.esc((String*)cImports.get(i)).cString());
         }
-        out.appendCString("]\n");
+        out.appendCString("]");
+        if (classTable != (String*)0 && classTable.byteLength() > (u32)0)
+            out.appendFormat(", \"classTable\": \"%s\"", IfaceWrite.esc(classTable).cString());
+        out.appendCString("\n");
         out.appendCString("}\n");
         return JsonVal.canonical(out);
     }

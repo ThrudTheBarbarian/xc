@@ -598,7 +598,8 @@ int main(int argc, const char* argv[])
                                                          protocolSlots:driver.protocolSlots
                                                            methodSlots:driver.virtualMethodSlots
                                                               cImports:driver.cLibraryImports
-                                                          excludeFiles:driver.preludeFiles];
+                                                          excludeFiles:driver.preludeFiles
+                                                            classTable:driver.classTableSymbol];
                 if (json.length)
                     {
                     [json writeToFile:ifacePath

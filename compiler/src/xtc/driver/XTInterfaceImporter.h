@@ -36,6 +36,13 @@ NS_ASSUME_NONNULL_BEGIN
 + (NSArray<NSString*>*)cImportsFromJSON:(NSString*)json;
 
 /****************************************************************************\
+|* The module's class table function (`_xtc_cnew_<hash>`), which a client's own
+|* table calls so `Object.newInstanceOfClass` finds this module's classes. nil
+|* for an interface written before class tables existed.
+\****************************************************************************/
++ (nullable NSString*)classTableFromJSON:(NSString*)json;
+
+/****************************************************************************\
 |* Type names an imported interface NAMED but that could not be resolved. Drained
 |* by the driver and turned into real, FATAL diagnostics — printing to stderr and
 |* carrying on is how the compiler ends up emitting a program built on a type it

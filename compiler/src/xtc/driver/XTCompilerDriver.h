@@ -41,6 +41,13 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, readonly, nullable) NSArray<NSString *> *cLibraryImports;
 @property (nonatomic, readonly, nullable) NSDictionary *protocolSlots;
 @property (nonatomic, readonly, nullable) NSDictionary *virtualMethodSlots;
+/****************************************************************************\
+|* The name of this module's class table function (`_xtc_cnew_<hash>`), which
+|* `Object.newInstanceOfClass` reaches from a module that imports this one.
+|* nil when the module emitted none. Serialised into the interface as
+|* `classTable`.
+\****************************************************************************/
+@property (nonatomic, readonly, nullable) NSString *classTableSymbol;
 
 /****************************************************************************\
 |* Initialise the compiler driver with parsed command-line options.
