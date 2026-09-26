@@ -3288,17 +3288,53 @@ class Xt6502
 
     // IntToPtr widens; the source width has to be known or loadOperandByte
     // reads whatever adjacent slot follows, which is another live value.
+    //
+    // The pointer is {lo, hi, bank}. The integer's low three bytes fill it,
+    // so a pointer converted to an integer and back keeps its bank (bug 360).
+    // A narrower source fills the 16-bit address and the bank is 0: the bank
+    // is not the high part of the address, so a sign is never carried into
+    // it. An i8 is sign-extended to the 16-bit address.
     void emitIntToPtr(IRInsn* n)
     {
         if (n.ops().count() < (u32)1 || n.res() == (IRValue*)0) return;
         u32 dstW = byteWidth(n.res().ty());
         IROperand* src = (IROperand*)n.ops().get((u32)0);
-        u32 srcW = src.kind() == (u8)OPK_USE ? byteWidth(src.val().ty()) : dstW;
+        u32 srcW = srcWidthOf(src, dstW);
+        String* st = src.kind() == (u8)OPK_USE ? src.val().ty() : src.ty();
+        bool sx8 = srcW == (u32)1 && st != (String*)0 && st.equals(String.withCString("I8"));
         for (u32 b = (u32)0; b < dstW; b = b + (u32)1) {
             if (b < srcW) loadOperandByte(src, b);
+            else if (b == (u32)1 && sx8) signFill(src, srcW);
             else          _out.appendCString("    LDA #$00\n");
             storeAToValue(n.res(), b);
         }
+    }
+
+    // Leave $00 or $FF in A: the sign of a source `srcW` bytes wide.
+    void signFill(IROperand* src, u32 srcW)
+    {
+        if (src.kind() == (u8)OPK_USE) {
+            u32 labelN = _labelCounter; _labelCounter = _labelCounter + (u32)1;
+            if (onSPFrame(src.val())) {
+                // BIT has no d,SP form — stage the MSB through $BF.
+                _out.appendFormat("    LDA %s\n",
+                                  operandFor(src.val(), srcW - (u32)1).cString());
+                _out.appendCString("    STA $BF\n    LDA #$00\n    BIT $BF\n");
+            } else {
+                i32 srcBase = slotOf(src.val());
+                _out.appendCString("    LDA #$00\n");
+                _out.appendFormat("    BIT $%s\n",
+                                  hex2((u32)srcBase + srcW - (u32)1).cString());
+            }
+            _out.appendFormat("    BPL .Lse%lu_done\n", labelN);
+            _out.appendCString("    LDA #$FF\n");
+            _out.appendFormat(".Lse%lu_done:\n", labelN);
+            return;
+        }
+        i32 v = (i32)src.imm();
+        bool negative = (((u32)v >> ((u32)8 * srcW - (u32)1)) & (u32)1) != (u32)0;
+        _out.appendFormat("    LDA #$%s\n", (negative ? String.withCString("FF")
+                                                      : String.withCString("00")).cString());
     }
 
     // PtrToInt narrows — copy what fits and drop the high bytes.

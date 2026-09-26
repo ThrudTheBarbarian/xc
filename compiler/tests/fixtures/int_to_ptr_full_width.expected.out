@@ -1,0 +1,16 @@
+global 1 1 1 1
+q 77
+heap 1 1 1 1
+heap object 88
+stack 1 1 1 1
+null 1
+one 1 1
+u16 1234
+u32 1
+from i32 1 1
+signed 1 1
+signed i8 1
+signed u16 65535
+bank 1
+unsigned 1 1
+high u32 1 1

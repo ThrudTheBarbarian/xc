@@ -4954,7 +4954,12 @@ class X86_64
             emitPlainCast(n);
             return true;
             }
-        if (op.equals(String.withCString("IntToPtr")) || op.equals(String.withCString("PtrToInt")))
+        if (op.equals(String.withCString("IntToPtr")))
+            {
+            emitIntToPtr(n);
+            return true;
+            }
+        if (op.equals(String.withCString("PtrToInt")))
             {
             emitReinterpret(n);
             return true;
@@ -5367,6 +5372,16 @@ class X86_64
         if (n.res() == (IRValue*)0 || n.ops().count() < (u32)1)
             return;
         loadZX((IROperand*)n.ops().get((u32)0), (u8)'a');
+        store((u8)'a', n.res());
+        }
+
+    // An integer becomes a full 64-bit pointer (bug 360): a signed source is
+    // sign-extended, an unsigned one zero-extended.
+    void emitIntToPtr(IRInsn* n)
+        {
+        if (n.res() == (IRValue*)0 || n.ops().count() < (u32)1)
+            return;
+        loadIndex((IROperand*)n.ops().get((u32)0), (u8)'a');
         store((u8)'a', n.res());
         }
 

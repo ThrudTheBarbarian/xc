@@ -404,6 +404,16 @@ allocations cannot span banks. So
 for every `n`. Both operands should address the same object;
 this is not checked.
 
+**Integer to pointer keeps the full pointer width.** `(T*)i`
+takes the target's whole pointer from `i`: a wider integer gives
+its low bytes, a narrower signed one is sign-extended and a
+narrower unsigned one is zero-extended. A pointer converted to an
+`i64` or `u64`, or to a `u32` where pointers are 4 bytes or less,
+converts back to the same pointer. On xt6502 the integer's third
+byte is the bank; an integer narrower than three bytes fills the
+16-bit address and gives bank 0, so its sign never reaches the
+bank. `(pointer)0` and `(pointer)1` are 0 and 1 on every target.
+
 **A raw pointer is not a class reference** (since 0.4). A value
 conversion where exactly one side is a class pointer (`String* s =
 buf;`, `u8* p = obj;`, a `u8*` argument into a `String*` parameter, a

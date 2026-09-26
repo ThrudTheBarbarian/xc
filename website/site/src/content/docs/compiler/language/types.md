@@ -23,6 +23,13 @@ arm64. Only pointers vary: 3 bytes on the banked xt6502 (`{lo, hi, bank}`), 8
 bytes on the 64-bit hosts, 4 on arm9/m68k. Code that needs the number should use
 `sizeof(T*)` instead of a fixed constant.
 
+Casting an integer to a pointer keeps the full width of the target's pointer. A
+wider integer gives its low bytes, and a narrower one is sign-extended if it is
+signed and zero-extended if not. So a pointer stored in an `i64` or `u64`, or in
+a `u32` where pointers are 4 bytes or less, converts back to the same pointer. On
+xt6502 the integer's third byte is the bank. An integer narrower than three bytes
+fills the 16-bit address and gives bank 0, so its sign never reaches the bank.
+
 Floating point is IEEE-754 on every target, including the 6502, where a software
 runtime or hardware on the FPGA does the arithmetic.
 

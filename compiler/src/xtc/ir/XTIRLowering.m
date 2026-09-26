@@ -6644,9 +6644,8 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
                                            operands:@[ [XTIROperand useWithValueId:src.valueId] ]];
             XTIRValue* vtbl = [self emitLoad:objPP pointeeType:ptrVoid];
             // Threshold 0xFFFF: any non-vtable class-id (a U16, < 0x10000) is below
-            // it and any real vtable address is above it. 0xFFFF (not 0x10000) so
-            // IntToPtr — which narrows to the 16-bit front-end pointer width — keeps
-            // it intact instead of truncating 0x10000 to 0. The compare against the
+            // it and any real vtable address is above it. The threshold is a U16
+            // constant, so it is 0xFFFF rather than 0x10000. The compare against the
             // vtbl pointer itself is full width (the backend compares real pointers).
             XTIRValue* thrI = [self emitU16Const:0xFFFF];
             XTIRValue* thrP = [self emitInsnOpcode:XTIROpIntToPtr
