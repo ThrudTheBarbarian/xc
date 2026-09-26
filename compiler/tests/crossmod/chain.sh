@@ -23,7 +23,11 @@
 #   - the second library's assembly is the same from both compilers (on arm9,
 #     both libraries' .so files, since the drivers' -S text differs in form).
 # Run as well:
-#   arm64   a lib x app compiler matrix, built and run here (macOS arm64 host)
+#   arm64   a lib x app compiler matrix, built and run here (macOS arm64 host).
+#           The third library had no LC_LOAD_DYLIB for the first and bound
+#           its imports by flat lookup, so for chainuseonly nothing loaded
+#           the first (dyld: symbol not found '_UXNib$booted'). It now loads
+#           it, and its imports from it are bound to it
 #   wasm32  the same matrix under node. The second library's vtable words
 #           for Base$vtbl, Base$description and Base$g name the first
 #           library's symbols; they were left 0, so b.g() was a null call.
@@ -40,9 +44,6 @@
 #           link before they were
 # Not run:
 #   arm9    running needs the loader tree and qemu
-#   chainuseonly on arm64: the third library does not record that it needs
-#           the first, so nothing loads it (dyld: symbol not found
-#           '_UXNib$booted')
 #   chainuse on x86_64: the shared link refuses ChainU.many's address of
 #           the imported Base$dealloc
 _root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null)
@@ -159,8 +160,7 @@ run_x86() {
 before=$fail
 case "$(uname -s)-$(uname -m)" in
     Darwin-arm64)
-        # Not chainuseonly: a dylib does not load the libraries it imports.
-        runmatrix arm64 .dylib run_native "Base Sub Use" chainclient chainrev
+        runmatrix arm64 .dylib run_native "Base Sub Use" chainclient chainrev chainuseonly
         [ $fail = $before ] && echo "PASS  arm64: run, lib x app compiler matrix" ;;
     *)  echo "SKIP  arm64 run: needs a macOS arm64 host" ;;
 esac

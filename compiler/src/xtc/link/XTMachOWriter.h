@@ -117,6 +117,22 @@ NS_ASSUME_NONNULL_BEGIN
            // the ONLY thing that makes them run.
            modInitLength:(NSUInteger)modInitLength
             objcSections:(NSArray<NSDictionary*>*)objcSections;
+
+// As above, for a library that imports other libraries: `dylibs` in the
+// executable's shape (@{@"install", @"symbols"}). Each becomes an
+// LC_LOAD_DYLIB (ordinals 2..) and claims the imports it exports; the rest
+// bind by flat lookup. A non-empty list adds an LC_RPATH of @loader_path.
++ (NSData*)dylibFromText:(NSData*)text
+             installName:(NSString*)installName
+                 exports:(NSSet<NSString*>*)exports
+                   iface:(nullable NSData*)iface
+                 symbols:(NSDictionary<NSString*, NSNumber*>*)symbols
+                    data:(nullable NSData*)data
+             dataSymbols:(nullable NSSet<NSString*>*)dataSymbols
+                  fixups:(NSArray<XAArm64Fixup*>*)fixups
+           modInitLength:(NSUInteger)modInitLength
+            objcSections:(NSArray<NSDictionary*>*)objcSections
+                  dylibs:(NSArray<NSDictionary*>*)dylibs;
 @end
 
 NS_ASSUME_NONNULL_END

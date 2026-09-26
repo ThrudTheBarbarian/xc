@@ -582,9 +582,9 @@ class Sha256
     // branched on at forty sites. An executable has a __PAGEZERO, so __DATA is
     // segment 2 and its addresses carry VMBASE; a dylib has neither, so __DATA
     // is segment 1 and its addresses ARE its file offsets. And a dylib binds
-    // FLAT: its imports may come from another xtc library whose LC_LOAD_DYLIB
-    // lives on the client, so naming libSystem's ordinal sends dyld to the one
-    // place the symbol is not.
+    // an import no library it imports exports FLAT: it may come from a
+    // dependency recorded on the client, so naming libSystem's ordinal sends
+    // dyld to the one place the symbol is not.
     u32 _dataSegIdx;
     u32 _baseHi;
     bool _flatBind;
@@ -620,9 +620,10 @@ class Sha256
         _names.add((Object*)String.withCString("__iface"));                    // 14
         }
 
-    // The dylibs an EXECUTABLE links against. Set before executable(); empty
-    // (the default) leaves the output exactly as it was, which is what lets
-    // ld64-diff keep gating the ordinary path.
+    // The dylibs an EXECUTABLE links against, or the libraries a DYLIB
+    // imports (bug 440). Set before executable() / dylib(); empty (the
+    // default) leaves the output exactly as it was, which is what lets
+    // ld64-diff and lddylib-diff keep gating the ordinary path.
     void setDeps(Array* deps)
         {
         _deps = deps == (Array*)0 ? new Array() : deps;
@@ -638,13 +639,20 @@ class Sha256
 
     // libSystem is ordinal 1 and each dep follows: 2, 3, … A symbol none of
     // them exports stays with libSystem, which is where the C runtime calls
-    // live.
+    // live — or, in a dylib, binds by flat lookup ($FE).
     u32 ordinalFor(String* sym)
         {
         for (u32 i = (u32)0; i < _deps.count(); i = i + (u32)1)
             if (inArray(((MachODep*)_deps.get(i)).syms(), sym))
                 return (u32)2 + i;
-        return (u32)1;
+        return _flatBind ? (u32)$FE : (u32)1;
+        }
+
+    // The bind opcode that selects `ord`: SET_DYLIB_SPECIAL_IMM FLAT_LOOKUP
+    // for $FE, else SET_DYLIB_ORDINAL_IMM.
+    static u32 setDylibOp(u32 ord)
+        {
+        return ord == (u32)$FE ? ((u32)$30 | (u32)$0E) : ((u32)$10 | ord);
         }
 
     void setApplePlatform(String* p)
@@ -1363,7 +1371,8 @@ class Sha256
     //   * based at 0, not VMBASE, and with no __PAGEZERO — so __DATA is
     //     segment 1 and every address IS its file offset;
     //   * MH_DYLIB with LC_ID_DYLIB in place of LC_MAIN — no entry point;
-    //   * FLAT binds, because an import may come from another xtc library
+    //   * an import binds to the library it imports that exports it (setDeps,
+    //     bug 440), and otherwise FLAT, because it may come from a dependency
     //     whose LC_LOAD_DYLIB lives on the client, not here;
     //   * an optional read-only `__XTC,__iface` section carrying the module
     //     interface, so `#import <X>` reads the types out of the binary
@@ -1581,8 +1590,16 @@ class Sha256
         u32 szUUID = (u32)24;
         u32 szCodeSig = (u32)16;
         bool hasDyldInfo = hasImp || hasRebase || hasExport;
-        u32 ncmds = (u32)1 + (hasDataSeg ? (u32)1 : (u32)0) + (hasIface ? (u32)1 : (u32)0) + (u32)1 + (hasDyldInfo ? (u32)1 : (u32)0) + (u32)1 + (u32)1 + (u32)1 + (u32)1 + (u32)1 + (u32)1 + (u32)1 + (u32)1;
-        u32 sizeofcmds = szTextSeg + (hasDataSeg ? szDataSeg : (u32)0) + (hasIface ? szXtcSeg : (u32)0) + szLink + (hasDyldInfo ? szDyldInfo : (u32)0) + szDyld + szId + szDylib + szSym + szDysym + szBuild + szUUID + szCodeSig;
+        // Bug 440: an LC_LOAD_DYLIB per imported library, and an LC_RPATH of
+        // @loader_path so its @rpath install name resolves beside this one.
+        // Neither is written for a library that imports none.
+        u32 nDeps = _deps.count();
+        u32 szDeps = (u32)0;
+        for (u32 i = (u32)0; i < nDeps; i = i + (u32)1)
+            szDeps = szDeps + roundUp((u32)24 + ((MachODep*)_deps.get(i)).path().byteLength() + (u32)1, (u32)8);
+        u32 szRpath = nDeps > (u32)0 ? roundUp((u32)12 + name((u32)11).byteLength() + (u32)1, (u32)8) : (u32)0;
+        u32 ncmds = (u32)1 + (hasDataSeg ? (u32)1 : (u32)0) + (hasIface ? (u32)1 : (u32)0) + (u32)1 + (hasDyldInfo ? (u32)1 : (u32)0) + (u32)1 + (u32)1 + (u32)1 + nDeps + (nDeps > (u32)0 ? (u32)1 : (u32)0) + (u32)1 + (u32)1 + (u32)1 + (u32)1 + (u32)1;
+        u32 sizeofcmds = szTextSeg + (hasDataSeg ? szDataSeg : (u32)0) + (hasIface ? szXtcSeg : (u32)0) + szLink + (hasDyldInfo ? szDyldInfo : (u32)0) + szDyld + szId + szDylib + szDeps + szRpath + szSym + szDysym + szBuild + szUUID + szCodeSig;
 
         // 6. Header and commands. A segment_command_64 is cmd, cmdsize,
         //    segname[16], vmaddr, vmsize, fileoff, filesize, maxprot,
@@ -1777,6 +1794,25 @@ class Sha256
         put32((u32)$510000);
         put32((u32)$10000);
         putFixed(name((u32)9), szDylib - (u32)24);
+        for (u32 i = (u32)0; i < nDeps; i = i + (u32)1)
+            {
+            String* dp = ((MachODep*)_deps.get(i)).path();
+            u32 sz = roundUp((u32)24 + dp.byteLength() + (u32)1, (u32)8);
+            put32((u32)$0C);
+            put32(sz);
+            put32((u32)24); // LC_LOAD_DYLIB, ordinal 2 + i
+            put32((u32)2);
+            put32((u32)$10000);
+            put32((u32)$10000);
+            putFixed(dp, sz - (u32)24);
+            }
+        if (nDeps > (u32)0)
+            {
+            put32((u32)$1C | (u32)$80000000);
+            put32(szRpath); // LC_RPATH @loader_path
+            put32((u32)12);
+            putName((u32)11, szRpath - (u32)12);
+            }
         put32((u32)2);
         put32(szSym); // LC_SYMTAB
         put32(symoff);
@@ -1856,7 +1892,8 @@ class Sha256
     // Three things differ from the executable's — an exported name carries
     // N_EXT, an address is base-0, and an import's library ordinal is
     // DYNAMIC_LOOKUP (0xFE) rather than libSystem's 1, which is the nlist half
-    // of the flat binding the bind stream asks for.
+    // of the flat binding the bind stream asks for — or the ordinal of the
+    // imported library that exports it.
     void dylibSymbolTables(Map* symbols, Array* dataSyms, Array* locals,
                            Array* externs, Array* exports, Array* strtab,
                            Array* nlist, Array* indirect,
@@ -1890,7 +1927,7 @@ class Sha256
             nlist.add((Object*)Number.withU32((u32)$01)); // N_UNDF | N_EXT
             nlist.add((Object*)Number.withU32((u32)0));
             nlist.add((Object*)Number.withU32((u32)0));
-            nlist.add((Object*)Number.withU32((u32)$FE)); // DYNAMIC_LOOKUP
+            nlist.add((Object*)Number.withU32(ordinalFor((String*)_imports.get(i)))); // $FE: DYNAMIC_LOOKUP
             u32Into(nlist, (u32)0);
             u32Into(nlist, (u32)0);
             }
@@ -2357,21 +2394,20 @@ class Sha256
         Array* bind = new Array();
         if (!hasImp)
             return bind;
-        // A dylib sets FLAT lookup once, up front; an executable names
-        // libSystem's ordinal per symbol.
+        // Both name the ordinal whenever it changes. A dylib's is FLAT
+        // lookup unless a library it imports exports the symbol (bug 440), so
+        // one that imports none sets FLAT once, up front.
         // SET_DYLIB_SPECIAL_IMM with the ordinal in a 4-bit SIGNED field:
         // FLAT_LOOKUP is -2, which is 0x0E, not 0x0F (that is -1, and means
         // nothing). One byte, and the only one in a 278 KB image that was
         // wrong — plus the 32 signature bytes that hash the page it sits in.
-        if (_flatBind)
-            bind.add((Object*)Number.withU32((u32)$30 | (u32)$0E));
         u32 curOrd = (u32)0; // force an initial SET
         for (u32 i = (u32)0; i < _imports.count(); i = i + (u32)1)
             {
             u32 ord = ordinalFor((String*)_imports.get(i));
-            if (!_flatBind && ord != curOrd)
+            if (ord != curOrd)
                 {
-                bind.add((Object*)Number.withU32((u32)$10 | ord));
+                bind.add((Object*)Number.withU32(setDylibOp(ord)));
                 curOrd = ord;
                 }
             bind.add((Object*)Number.withU32((u32)$40)); // SET_SYMBOL_FLAGS
@@ -2384,10 +2420,12 @@ class Sha256
         for (u32 k = (u32)0; k < _dataBinds.count(); k = k + (u32)1)
             {
             Arm64Fixup* f = (Arm64Fixup*)_dataBinds.get(k);
-            if (!_flatBind)
+            // An executable names the ordinal before every data bind; a
+            // dylib only when it changes.
+            u32 ord = ordinalFor(f.symbol());
+            if (!_flatBind || ord != curOrd)
                 {
-                u32 ord = ordinalFor(f.symbol());
-                bind.add((Object*)Number.withU32((u32)$10 | ord));
+                bind.add((Object*)Number.withU32(setDylibOp(ord)));
                 curOrd = ord;
                 }
             bind.add((Object*)Number.withU32((u32)$40)); // SET_SYMBOL_FLAGS

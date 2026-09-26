@@ -58,10 +58,9 @@ enum
     BIND_DONE = 0x00,
     BIND_SET_DYLIB_ORDINAL_IMM = 0x10,
     // SPECIAL_IMM's low nibble is SIGN-extended: FLAT_LOOKUP is ordinal -2,
-    // so the whole opcode byte is 0x30 | 0x0E. A dylib's own imports bind
-    // this way (see dylibFromText) — its DEPENDENCIES are recorded on the
-    // CLIENT, so at bind time dyld must search every loaded image rather
-    // than an ordinal this image cannot name.
+    // so the whole opcode byte is 0x30 | 0x0E. A dylib's imports that none of
+    // the libraries it imports export bind this way (see dylibFromText):
+    // dyld searches every loaded image for them.
     BIND_SET_DYLIB_SPECIAL_FLAT = 0x3E,
     BIND_SET_SYMBOL_FLAGS = 0x40,
     BIND_SET_TYPE_IMM = 0x50,
@@ -2187,8 +2186,27 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
            modInitLength:(NSUInteger)modInitLength
             objcSections:(NSArray<NSDictionary*>*)objcSections
     {
+    return [self dylibFromText:textIn installName:installName exports:exports iface:ifaceIn
+                       symbols:symbols data:dataIn dataSymbols:dataSymbols fixups:fixups
+                 modInitLength:modInitLength objcSections:objcSections dylibs:@[]];
+    }
+
++ (NSData*)dylibFromText:(NSData*)textIn
+             installName:(NSString*)installName
+                 exports:(NSSet<NSString*>*)exports
+                   iface:(NSData*)ifaceIn
+                 symbols:(NSDictionary<NSString*, NSNumber*>*)symbols
+                    data:(NSData*)dataIn
+             dataSymbols:(NSSet<NSString*>*)dataSymbols
+                  fixups:(NSArray<XAArm64Fixup*>*)fixups
+           modInitLength:(NSUInteger)modInitLength
+            objcSections:(NSArray<NSDictionary*>*)objcSections
+                  dylibs:(NSArray<NSDictionary*>*)dylibs
+    {
     if (!objcSections)
         objcSections = @[];
+    if (!dylibs)
+        dylibs = @[];
     NSMutableData* text = [textIn mutableCopy];
     NSMutableData* data = dataIn ? [dataIn mutableCopy] : [NSMutableData data];
     if (!dataSymbols)
@@ -2240,6 +2258,27 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
     NSUInteger nimp = imports.count;
     BOOL hasImp = nimp > 0;
     BOOL hasDataSeg = hasData || hasImp;
+
+    // Bug 440: per-import ordinal. An import that a library this library
+    // imports exports binds to that library (ordinal 2, 3, … after
+    // libSystem); the rest bind by flat lookup (0xFE), since a library's
+    // other dependencies (a -l library, a framework) are recorded on the
+    // client.
+    NSMutableArray<NSNumber*>* importOrdinal = [NSMutableArray array];
+    for (NSString* sym in imports)
+        {
+        uint8_t ord = 0xFE;
+        for (NSUInteger di = 0; di < dylibs.count; di++)
+            if ([dylibs[di][@"symbols"] containsObject:sym])
+                {
+                ord = (uint8_t)(2 + di);
+                break;
+                }
+        [importOrdinal addObject:@(ord)];
+        }
+    uint8_t (^setDylib)(uint8_t) = ^uint8_t(uint8_t ord) {
+      return ord == 0xFE ? BIND_SET_DYLIB_SPECIAL_FLAT : (uint8_t)(BIND_SET_DYLIB_ORDINAL_IMM | ord);
+    };
 
     // ── 2. layout — base 0 (dylib), vmaddr == file offset. Segment order is
     // __TEXT(0) [__DATA(1)] [__XTC] __LINKEDIT — note __DATA is segment index 1
@@ -2384,15 +2423,22 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
     NSMutableData* bind = [NSMutableData data];
     if (hasImp)
         {
-        // FLAT LOOKUP, not libSystem's ordinal: a library's imports may come
-        // from ANOTHER xtc library (`_SB$vtbl` — a lib extending / subclassing
-        // an imported lib's class), whose LC_LOAD_DYLIB lives on the CLIENT.
+        // An import from a library this one imports binds to that library's
+        // ordinal; everything else by FLAT LOOKUP, not libSystem's ordinal.
         // Binding to ordinal 1 sent dyld to libSystem alone, and the load
         // died with "Symbol not found … Expected in: libSystem". Flat lookup
-        // still finds the real libSystem symbols too.
-        put8(bind, BIND_SET_DYLIB_SPECIAL_FLAT);
+        // still finds the real libSystem symbols too. The ordinal is set only
+        // when it changes, so a library that imports no library binds as
+        // before: one flat SET up front.
+        int curOrd = -1;
         for (NSUInteger i = 0; i < nimp; i++)
             {
+            uint8_t ord = importOrdinal[i].unsignedCharValue;
+            if (ord != curOrd)
+                {
+                put8(bind, setDylib(ord));
+                curOrd = ord;
+                }
             put8(bind, BIND_SET_SYMBOL_FLAGS | 0);
             const char* nm = imports[i].UTF8String;
             [bind appendBytes:nm length:strlen(nm) + 1];
@@ -2405,6 +2451,12 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
         for (XAArm64Fixup* f in dataBinds)
             {
             NSUInteger i = importIndex[f.symbol].unsignedIntegerValue;
+            uint8_t ord = importOrdinal[i].unsignedCharValue;
+            if (ord != curOrd)
+                {
+                put8(bind, setDylib(ord));
+                curOrd = ord;
+                }
             put8(bind, BIND_SET_SYMBOL_FLAGS | 0);
             const char* nm = imports[i].UTF8String;
             [bind appendBytes:nm length:strlen(nm) + 1];
@@ -2461,16 +2513,16 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
         emitDef(nm);
     for (NSString* nm in externs)
         emitDef(nm);
-    for (NSString* nm in imports)
+    for (NSUInteger ii = 0; ii < nimp; ii++)
         {
         uint32_t strx = (uint32_t)strtab.length;
-        const char* c = nm.UTF8String;
+        const char* c = imports[ii].UTF8String;
         [strtab appendBytes:c length:strlen(c) + 1];
         put32(nlist, strx);
         put8(nlist, XN_UNDF | XN_EXT);
         put8(nlist, 0);
         put8(nlist, 0);
-        put8(nlist, 0xFE); // n_desc: DYNAMIC_LOOKUP ordinal (flat)
+        put8(nlist, importOrdinal[ii].unsignedCharValue); // n_desc: library ordinal (0xFE: flat)
         put64(nlist, 0);
         }
     uint32_t nloc = (uint32_t)locals.count, nexp = (uint32_t)externs.count, nsyms = (uint32_t)(defNames.count + imports.count);
@@ -2520,9 +2572,17 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
     uint32_t szDyldInfo = 48, szDyld = (uint32_t)roundUp(12 + strlen(dyld) + 1, 8);
     uint32_t szId = (uint32_t)roundUp(24 + strlen(instName) + 1, 8), szDylib = (uint32_t)roundUp(24 + strlen(libSys) + 1, 8);
     uint32_t szSym = 24, szDysym = 80, szBuild = 24, szUUID = 24, szCodeSig = 16;
+    // Bug 440: an LC_LOAD_DYLIB per imported library, and an LC_RPATH of
+    // @loader_path so its @rpath install name resolves beside this library.
+    // Neither is written for a library that imports none.
+    const char* loaderPath = "@loader_path";
+    uint32_t szDeps = 0;
+    for (NSDictionary* dl in dylibs)
+        szDeps += (uint32_t)roundUp(24 + strlen([dl[@"install"] UTF8String]) + 1, 8);
+    uint32_t szRpath = dylibs.count ? (uint32_t)roundUp(12 + strlen(loaderPath) + 1, 8) : 0;
     BOOL hasDyldInfo = hasImp || hasRebase || hasExport;
-    uint32_t ncmds = 1 + (hasDataSeg ? 1 : 0) + (hasIface ? 1 : 0) + 1 + (hasDyldInfo ? 1 : 0) + 1 /*dyld*/ + 1 /*id*/ + 1 /*libSystem*/ + 1 /*sym*/ + 1 /*dysym*/ + 1 /*build*/ + 1 /*uuid*/ + 1 /*codesig*/;
-    uint32_t sizeofcmds = szTextSeg + (hasDataSeg ? szDataSeg : 0) + (hasIface ? szXtcSeg : 0) + szLink + (hasDyldInfo ? szDyldInfo : 0) + szDyld + szId + szDylib + szSym + szDysym + szBuild + szUUID + szCodeSig;
+    uint32_t ncmds = 1 + (hasDataSeg ? 1 : 0) + (hasIface ? 1 : 0) + 1 + (hasDyldInfo ? 1 : 0) + 1 /*dyld*/ + 1 /*id*/ + 1 /*libSystem*/ + (uint32_t)dylibs.count + (dylibs.count ? 1 : 0) /*rpath*/ + 1 /*sym*/ + 1 /*dysym*/ + 1 /*build*/ + 1 /*uuid*/ + 1 /*codesig*/;
+    uint32_t sizeofcmds = szTextSeg + (hasDataSeg ? szDataSeg : 0) + (hasIface ? szXtcSeg : 0) + szLink + (hasDyldInfo ? szDyldInfo : 0) + szDyld + szId + szDylib + szDeps + szRpath + szSym + szDysym + szBuild + szUUID + szCodeSig;
 
     // ── 6. emit ──
     NSMutableData* out = [NSMutableData data];
@@ -2748,6 +2808,26 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
     put32(out, 0x510000);
     put32(out, 0x10000);
     putFixed(out, libSys, (int)(szDylib - 24));
+    // LC_LOAD_DYLIB per imported library (ordinals 2..), then @loader_path
+    for (NSDictionary* dl in dylibs)
+        {
+        const char* inm = [dl[@"install"] UTF8String];
+        uint32_t sz = (uint32_t)roundUp(24 + strlen(inm) + 1, 8);
+        put32(out, XLC_LOAD_DYLIB);
+        put32(out, sz);
+        put32(out, 24);
+        put32(out, 2);
+        put32(out, 0x10000);
+        put32(out, 0x10000);
+        putFixed(out, inm, (int)(sz - 24));
+        }
+    if (dylibs.count)
+        {
+        put32(out, XLC_RPATH);
+        put32(out, szRpath);
+        put32(out, 12);
+        putFixed(out, loaderPath, (int)(szRpath - 12));
+        }
     // LC_SYMTAB
     put32(out, XLC_SYMTAB);
     put32(out, szSym);
