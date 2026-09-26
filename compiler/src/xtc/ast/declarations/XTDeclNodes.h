@@ -608,9 +608,15 @@ typedef NS_ENUM(NSInteger, XTPlacement) {
 |* `totalVirtualSlots`. `vtableMethodSlots[methodName]` = the slot a virtual
 |* call named `methodName` on this class dispatches through. Both nil when
 |* the program has no virtual/protocol dispatch.
+|*
+|* `vtableSymbolSlots[symbol]` = the slot a call that resolved to the method
+|* `symbol` (`<implClass>$<mangled>`, as seen from this class) dispatches
+|* through. A name can have several overloads, each in its own slot, so the
+|* name map cannot answer for a call; this one can.
 \****************************************************************************/
 @property(nonatomic, nullable) NSArray<NSString*>* vtableSlotSymbols;
 @property(nonatomic, nullable) NSDictionary<NSString*, NSNumber*>* vtableMethodSlots;
+@property(nonatomic, nullable) NSDictionary<NSString*, NSNumber*>* vtableSymbolSlots;
 /****************************************************************************\
 |* The CATEGORY-CHAIN table for this class (separate-compilation §4.2), also
 |* stamped by `computeVirtualMethodTables`. A category on a class that came

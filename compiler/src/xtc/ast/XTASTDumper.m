@@ -303,6 +303,22 @@ static NSString* semaAnnotation(XTASTNode* node)
                 }
             [a appendString:@"]"];
             }
+        if (n.vtableSymbolSlots.count)
+            {
+            NSArray* keys = [n.vtableSymbolSlots.allKeys sortedArrayUsingComparator:
+                                                             ^NSComparisonResult(NSString* x, NSString* y) {
+                                                               NSComparisonResult c = [n.vtableSymbolSlots[x] compare:n.vtableSymbolSlots[y]];
+                                                               return c == NSOrderedSame ? [x compare:y] : c;
+                                                             }];
+            [a appendString:@" syms=["];
+            for (NSUInteger i = 0; i < keys.count; i++)
+                {
+                if (i)
+                    [a appendString:@","];
+                [a appendFormat:@"%@:%@", keys[i], n.vtableSymbolSlots[keys[i]]];
+                }
+            [a appendString:@"]"];
+            }
         break;
         }
     default:

@@ -53,6 +53,11 @@
 // owning class's mangled symbol so direct calls can shortcut the
 // vtable. Slots are parent-first to match the inheritance layout.
 @property(nonatomic) NSMutableDictionary<NSString*, NSNumber*>* methodSlot;
+// The same, keyed by the impl SYMBOL a call resolved to
+// (`<Class>$<mangled>`): each overload of a name has its own slot, and this is
+// what a call site reads (bug 265). methodSlot stays for the few lookups that
+// are by name (`enumLength`, `enumAt`).
+@property(nonatomic) NSMutableDictionary<NSString*, NSNumber*>* symbolSlot;
 @property(nonatomic) NSMutableDictionary<NSString*, NSString*>* methodMangled;
 // methodName → the method's declared (first) return type. The for-in
 // lowering reads `enumLength`'s width from here rather than assuming one:
@@ -7524,17 +7529,6 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
             return nil;
         }
 
-    // Virtual dispatch — sema stamps `resolvedVirtualSlot` for protocol
-    // calls; for inheritance we look up the method's slot in the
-    // receiver class's slot table. Direct call when the method has no
-    // vtable slot (i.e. non-overridable).
-    NSNumber* vslot = node.resolvedVirtualSlot;
-    if (!vslot)
-        {
-        NSNumber* s = recvCi.methodSlot[node.methodName];
-        if (s)
-            vslot = s;
-        }
     // §4.2: a category method on a class from another module has a CHAIN slot
     // instead of a vtable slot — the two spaces are disjoint, and sema gives a
     // method one or the other, never both.
@@ -7569,6 +7563,13 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
         return nil;
         }
     XTIRSymbolId sid = [self.module.symbols indexOfObjectIdenticalTo:sym];
+
+    // Virtual dispatch — sema stamps `resolvedVirtualSlot` for protocol
+    // calls; for inheritance the slot is the one the receiver class gives
+    // the SYMBOL this call resolved to. Keyed by symbol, not name: each
+    // overload of a name owns its own slot (bug 265). Direct call when the
+    // method has no vtable slot (i.e. non-overridable).
+    NSNumber* vslot = node.resolvedVirtualSlot ?: recvCi.symbolSlot[symName];
 
     // Coerce each fixed arg to the callee's matching param type — the same
     // width/sign adjustment lowerCallExpr applies to free calls. Without it
@@ -9077,8 +9078,9 @@ static const NSUInteger kVarargSlotBytes = 8;
                                        argValues:[margs subarrayWithRange:NSMakeRange(1, margs.count - 1)]
                                       resultType:mResult];
                     }
-                NSNumber* vslot = selfCi.methodSlot[methodMangled]
-                                      ?: ci.methodSlot[methodMangled];
+                // By the SYMBOL the call resolved to (`cand`), so an
+                // overload dispatches through its own slot (bug 265).
+                NSNumber* vslot = selfCi.symbolSlot[cand] ?: ci.symbolSlot[cand];
                 if (vslot)
                     {
                     return [self emitVTblDispatch:self.currentSelf
@@ -17587,6 +17589,7 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
     info.ivarASTType = [NSMutableDictionary dictionary];
     info.staticIvarSymbol = [NSMutableDictionary dictionary];
     info.methodSlot = [NSMutableDictionary dictionary];
+    info.symbolSlot = [NSMutableDictionary dictionary];
     info.methodMangled = [NSMutableDictionary dictionary];
     info.methodReturnAST = [NSMutableDictionary dictionary];
 
@@ -17918,6 +17921,7 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
             }
         info.vtableEntrySymbolNames = ents;
         info.methodSlot = [(cls.vtableMethodSlots ?: @{}) mutableCopy];
+        info.symbolSlot = [(cls.vtableSymbolSlots ?: @{}) mutableCopy];
         for (NSUInteger i = 0; i < ents.count; i++)
             {
             [vtblFields addObject:[[XTIRLayoutField alloc] initWithOffset:vtblOffset
@@ -17945,6 +17949,7 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
                     nextSlot = parentSlot.unsignedIntegerValue + 1;
                     }
                 }
+            [info.symbolSlot addEntriesFromDictionary:parentInfo.symbolSlot];
             while (vtblFields.count < nextSlot)
                 {
                 [vtblFields addObject:[[XTIRLayoutField alloc] initWithOffset:vtblOffset
@@ -17966,6 +17971,7 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
                 }
             NSUInteger slot = info.methodSlot[m.methodName].unsignedIntegerValue;
             NSString* entrySym = [NSString stringWithFormat:@"%@$%@", cls.className, mangled];
+            info.symbolSlot[entrySym] = @(slot);
             while (vtblEntries.count <= slot)
                 [vtblEntries addObject:@""];
             vtblEntries[slot] = entrySym;

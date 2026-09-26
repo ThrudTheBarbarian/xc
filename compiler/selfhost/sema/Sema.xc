@@ -3996,6 +3996,16 @@ class Sema
             {
             Node* cls = (Node*)_classes.get((Hashable*)names.get(i));
             Map* mine = new Map();
+            // The slot a call that RESOLVED to an impl symbol dispatches
+            // through. `mine` cannot say it once a name is overloaded:
+            // `f(i32)` and `f(double)` own two slots and one name remembers
+            // only the last, so `a.f(1.5)` ran `f(i32)`'s body (bug 265).
+            Map* msyms = new Map();
+            // slot -> the impl symbol this class puts there, "" for none: the
+            // table itself, as the reference fills it.
+            Array* ssyms = new Array();
+            for (u32 q = (u32)0; q < _vt.total(); q = q + (u32)1)
+                ssyms.add((Object*)String.withCString(""));
             Map* filled = new Map(); // slot -> true, this class
             for (u32 li = (u32)0; li < rlabs.count(); li = li + (u32)1)
                 {
@@ -4048,13 +4058,19 @@ class Sema
                 if (!descends)
                     continue;
                 Node* impl = (Node*)0;
+                Node* implCls = (Node*)0;
                 Node* c2 = cls;
                 while (c2 != 0)
                     {
                     Node* m2 = Vtable.matching(c2, rootMethod);
+                    // A method returning what a SIBLING overload of the root
+                    // returns overrides that sibling, not this root (bug 265).
+                    if (m2 != 0 && c2 != rootCls && Vtable.overridesSibling(rootCls, rootMethod, m2))
+                        m2 = (Node*)0;
                     if (m2 != 0)
                         {
                         impl = m2;
+                        implCls = c2;
                         c2 = (Node*)0;
                         }
                     else if (c2 == rootCls)
@@ -4069,6 +4085,10 @@ class Sema
                 if (impl == 0)
                     continue;
                 mine.set((Hashable*)rootMethod.name(), slObj);
+                msyms.set((Hashable*)implSymbol(implCls, impl), slObj);
+                u32 sl = ((Number*)slObj).asU32();
+                if (sl < ssyms.count())
+                    ssyms.set(sl, (Object*)implSymbol(implCls, impl));
                 filled.set((Hashable*)slObj, (Object*)Number.with((u32)1));
                 }
             // Snapshot for the INTERFACE, taken between the two loops: what a
@@ -4081,6 +4101,11 @@ class Sema
             for (u32 q = (u32)0; q < mk0.count(); q = q + (u32)1)
                 isnap.set((Hashable*)mk0.get(q), mine.get((Hashable*)mk0.get(q)));
             cls.setIfaceSlots(isnap);
+            Map* rootSyms = new Map();
+            Array* sk0 = msyms.allKeys();
+            for (u32 q = (u32)0; q < sk0.count(); q = q + (u32)1)
+                rootSyms.set((Hashable*)sk0.get(q), msyms.get((Hashable*)sk0.get(q)));
+            cls.setIfaceSymSlots(rootSyms);
             // The ANCESTOR CHAIN, class first, each class's protocol list in
             // declaration order — NOT the class's own list alone.
             //
@@ -4143,6 +4168,12 @@ class Sema
                         // else at it (bug 253). The reference does the same.
                         if (isnap.get((Hashable*)reqM.name()) == 0)
                             mine.set((Hashable*)reqM.name(), pslot);
+                        String* psym = nearestImplSymbol(cls, reqM);
+                        if (psym != 0 && rootSyms.get((Hashable*)psym) == 0)
+                            msyms.set((Hashable*)psym, pslot);
+                        u32 psl = ((Number*)pslot).asU32();
+                        if (psym != 0 && psl < ssyms.count())
+                            ssyms.set(psl, (Object*)psym);
                         filled.set((Hashable*)pslot, (Object*)Number.with((u32)1));
                         }
                     }
@@ -4159,7 +4190,31 @@ class Sema
             if (mine.count() == (u32)0 && !listsProto)
                 continue;
             cls.setSlots(mine, _vt.total());
+            cls.setSymSlots(msyms);
+            cls.setSlotSyms(ssyms);
             }
+        }
+
+    // `<Class>$<mangled>`, the symbol a method's body is emitted under.
+    String* implSymbol(Node* cls, Node* m)
+        {
+        String* s = String.withString(cls.name());
+        s.appendByte((u8)'$');
+        s.append(m.sym() == 0 ? m.name() : m.sym());
+        return s;
+        }
+
+    // The symbol of the nearest method from `cls` up whose signature matches
+    // `want` — the body a protocol slot on `cls` holds — or null.
+    String* nearestImplSymbol(Node* cls, Node* want)
+        {
+        for (Node* c = cls; c != 0; c = parentOf(c))
+            {
+            Node* m = Vtable.matching(c, want);
+            if (m != 0)
+                return implSymbol(c, m);
+            }
+        return (String*)0;
         }
 
     // ── §4.2/§4.3b: category-chain slot numbering ────────────────────────

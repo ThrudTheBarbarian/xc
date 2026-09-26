@@ -1,0 +1,15 @@
+B.f(i32) 7
+A.f(double) 15
+A.g(u8) 1
+B.g(u8,u8) 2 3
+B.f(i32) 3
+A.f(double) 45
+A.f(i32) 8
+C.f(double) 25
+A.f(i32) 3
+C.f(double) 45
+A.f(i32) 9
+A.f(double) 35
+v 10 25
+v 1 25
+v 1 75
