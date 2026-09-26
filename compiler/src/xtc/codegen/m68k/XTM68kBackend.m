@@ -2479,15 +2479,20 @@ static NSString* m68kSym(NSString* name)
     // 64-bit constant — it is a 32-bit Const followed by a ZExt — so without
     // this the low long was written and the high long kept whatever the slot
     // held, which is a correct low half and a wrong high half.
-    if (insn.result && (insn.result.type.kind == XTIRTypeKindI64 || insn.result.type.kind == XTIRTypeKindU64) && (insn.opcode == XTIROpZExt || insn.opcode == XTIROpSExt) && insn.operands.count >= 1)
+    // A pointer converted to a 64-bit integer is the same widening: the
+    // 32-bit address zero-extended into both longs. As a plain copy it wrote
+    // the address into the HIGH long only, so `(i64)(pointer)p` read as 0
+    // through its low half (bug 269).
+    if (insn.result && (insn.result.type.kind == XTIRTypeKindI64 || insn.result.type.kind == XTIRTypeKindU64) && (insn.opcode == XTIROpZExt || insn.opcode == XTIROpSExt || insn.opcode == XTIROpPtrToInt) && insn.operands.count >= 1)
         {
         NSNumber* off = slots[@(insn.result.valueId)];
         if (off)
             {
             int r = off.intValue;
+            BOOL ptr = (insn.opcode == XTIROpPtrToInt);
             [self loadOperand:insn.operands[0] intoReg:@"d0" slots:slots into:out];
             [self extendD0ToPairSigned:(insn.opcode == XTIROpSExt)
-                                 width:[self widthOf:insn.operands[0] fn:fn]
+                                 width:ptr ? 4 : [self widthOf:insn.operands[0] fn:fn]
                                   into:out];
             // Big-endian: the HIGH long sits at the lower address.
             [out appendFormat:@"\tmove.l\td1,%d(a6)\n\tmove.l\td0,%d(a6)\n", r, r + 4];
@@ -2919,42 +2924,72 @@ static NSString* m68kSym(NSString* name)
                                   ro.intValue, ro.intValue + 4];
             break;
             }
+        // A narrow result (8 to 32 bits) is the 64-bit truncation, kept only
+        // when it fits the destination and 0 otherwise (LANGUAGE-SPEC §3.1,
+        // what arm64 and xt6502 give). Neither 32-bit conversion can decide
+        // that: the 68881's fmove.l saturates to INT_MAX/INT_MIN, the soft
+        // __fixdfsi is a signed cast, and a u32 needs the range up to 2^32
+        // with a negative value giving 0. So the value is formed as an i64 in
+        // d0:d1 (high:low) and range-checked for the destination's width and
+        // signedness.
+        //
+        // With the 68881, a magnitude below 2^31 (biased exponent under
+        // bias+31) converts exactly in hardware; fintrz truncates whatever the
+        // FPCR rounding mode is. Anything larger, and every soft-float
+        // conversion, goes through __fix{d,s}fdi, which gives 0 outside the
+        // i64 range.
+        // Labels from the module sequence, not the value id: an id is not
+        // stable across a dump-and-reparse of the IR.
+        int vid = gLabelSeq++;
+        uint32_t W = insn.result.type.byteWidth ?: 4;
+        BOOL sgn = (insn.opcode == XTIROpFpToSI);
         if (gHardFloat)
             {
-            // LANGUAGE-SPEC §3.1: an out-of-range float→int saturates to 0 (what
-            // arm64/xt6502 do), but the FPU's fmove.l saturates to INT_MAX/MIN.
-            // Guard with the IEEE exponent: if the unbiased exponent reaches the
-            // destination's signed/unsigned bit width, the magnitude can't fit,
-            // so produce 0.
-            int vid = insn.result ? (int)insn.result.valueId : 0;
-            NSUInteger W = insn.result.type.byteWidth ?: 4;
-            int thr = (int)(8 * W) - ((insn.opcode == XTIROpFpToSI) ? 1 : 0);
             if (dbl)
-                {
                 [out appendFormat:@"\tmove.l\t%d(a6),d1\n\tswap\td1\n\tlsr.w\t#4,d1\n"
-                                  @"\tand.w\t#$7ff,d1\n\tcmp.w\t#%d,d1\n\tbge.s\t.fsat%d\n",
-                                  o0, 1023 + thr, vid];
-                [out appendFormat:@"\tfmove.d\t%d(a6),fp0\n\tfmove.l\tfp0,d0\n", o0];
-                }
+                                  @"\tand.w\t#$7ff,d1\n\tcmp.w\t#%d,d1\n\tbge.s\t.fsw%d\n",
+                                  o0, 1023 + 31, vid];
             else
-                {
                 [out appendFormat:@"\tmove.l\t%d(a6),d1\n\tswap\td1\n\tlsr.w\t#7,d1\n"
-                                  @"\tand.w\t#$ff,d1\n\tcmp.w\t#%d,d1\n\tbge.s\t.fsat%d\n",
-                                  o0, 127 + thr, vid];
-                [out appendFormat:@"\tfmove.s\t%d(a6),fp0\n\tfmove.l\tfp0,d0\n", o0];
-                }
-            [out appendFormat:@"\tbra.s\t.fsd%d\n.fsat%d:\tmoveq\t#0,d0\n.fsd%d:\n",
-                              vid, vid, vid];
+                                  @"\tand.w\t#$ff,d1\n\tcmp.w\t#%d,d1\n\tbge.s\t.fsw%d\n",
+                                  o0, 127 + 31, vid];
+            [out appendFormat:@"\tfmove.%@\t%d(a6),fp0\n\tfintrz\tfp0,fp0\n\tfmove.l\tfp0,d1\n",
+                              dbl ? @"d" : @"s", o0];
+            [out appendString:@"\tmove.l\td1,d0\n\tasr.l\t#8,d0\n\tasr.l\t#8,d0\n"
+                              @"\tasr.l\t#8,d0\n\tasr.l\t#7,d0\n"];
+            [out appendFormat:@"\tbra.s\t.fsc%d\n.fsw%d:\n", vid, vid];
             }
-        else if (dbl)
+        if (dbl)
+            [out appendFormat:@"\tmove.l\t%d(a6),-(sp)\n\tmove.l\t%d(a6),-(sp)\n"
+                              @"\tjsr\t__fixdfdi\n\taddq.l\t#8,sp\n",
+                              o0 + 4, o0];
+        else
+            [out appendFormat:@"\tmove.l\t%d(a6),d0\n\tjsr\t__fixsfdi\n", o0];
+        if (gHardFloat)
+            [out appendFormat:@".fsc%d:\n", vid];
+        if (sgn)
             {
-            [out appendFormat:@"\tmove.l\t%d(a6),-(sp)\n\tmove.l\t%d(a6),-(sp)\n", o0 + 4, o0];
-            [out appendString:@"\tjsr\t__fixdfsi\n\taddq.l\t#8,sp\n"];
+            // Fits iff d0:d1 is the sign extension of the low W bytes of d1.
+            [out appendString:@"\tmove.l\td1,d2\n"];
+            if (W < 4)
+                {
+                [out appendString:(W == 1) ? @"\text.w\td2\n\text.l\td2\n" : @"\text.l\td2\n"];
+                [out appendFormat:@"\tcmp.l\td1,d2\n\tbne.s\t.fsat%d\n", vid];
+                }
+            [out appendFormat:@"\tasr.l\t#8,d2\n\tasr.l\t#8,d2\n\tasr.l\t#8,d2\n\tasr.l\t#7,d2\n"
+                              @"\tcmp.l\td0,d2\n\tbne.s\t.fsat%d\n",
+                              vid];
             }
         else
             {
-            [out appendFormat:@"\tmove.l\t%d(a6),d0\n\tjsr\t__fixsfsi\n", o0];
+            // Fits iff the high long is 0 and so are the low long's bits above W bytes.
+            [out appendFormat:@"\ttst.l\td0\n\tbne.s\t.fsat%d\n", vid];
+            if (W < 4)
+                [out appendFormat:@"\tmove.l\td1,d2\n\tand.l\t#%@,d2\n\tbne.s\t.fsat%d\n",
+                                  (W == 1) ? @"$ffffff00" : @"$ffff0000", vid];
             }
+        [out appendFormat:@"\tmove.l\td1,d0\n\tbra.s\t.fsd%d\n.fsat%d:\n\tmoveq\t#0,d0\n.fsd%d:\n",
+                          vid, vid, vid];
         [self storeReg:@"d0" toResult:insn.result slots:slots into:out];
         break;
         }
@@ -3140,7 +3175,8 @@ static NSString* m68kSym(NSString* name)
 
     case XTIROpIntToPtr:
     case XTIROpPtrToInt:
-        [self loadOperand:insn.operands[0] intoReg:@"d0" slots:slots into:out];
+        // A 64-bit source gives its LOW long: the address is the low half.
+        [self loadOperandLow32:insn.operands[0] fn:fn intoReg:@"d0" slots:slots into:out];
         [self storeReg:@"d0" toResult:insn.result slots:slots into:out];
         break;
 

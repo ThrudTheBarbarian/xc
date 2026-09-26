@@ -883,7 +883,9 @@ class M68k
             }
         if (op.equals(String.withCString("IntToPtr")) || op.equals(String.withCString("PtrToInt")))
             {
-            emitCopy(n);
+            // A 64-bit source gives its LOW long: the address is the low half.
+            loadOperandLow32((IROperand*)n.ops().get((u32)0), String.withCString("d0"));
+            storeReg(String.withCString("d0"), n.res());
             return;
             }
         if (op.equals(String.withCString("Bitcast")))
@@ -1885,10 +1887,8 @@ class M68k
         }
 
     // Float to integer. The spec says an out-of-range conversion produces 0,
-    // which is what arm64 and xt6502 do — but the FPU's fmove.l saturates to
-    // INT_MAX/MIN instead. So the IEEE EXPONENT is checked first: once the
-    // unbiased exponent reaches the destination's bit width the magnitude
-    // cannot fit, and the result is 0.
+    // which is what arm64 and xt6502 do. A 64-bit result comes from the HLE
+    // helper directly; a narrower one is range-checked below.
     void emitFpToInt(IRFunc* fn, IRInsn* n)
         {
         if (n.ops().count() < (u32)1 || n.res() == (IRValue*)0)
@@ -1924,38 +1924,76 @@ class M68k
             _out.appendFormat("\tmove.l\td0,%ld(a6)\n\tmove.l\td1,%ld(a6)\n", rw, rw + (i32)4);
             return;
             }
+        // A narrow result (8 to 32 bits) is the 64-bit truncation, kept only
+        // when it fits the destination and 0 otherwise (LANGUAGE-SPEC §3.1,
+        // what arm64 and xt6502 give). Neither 32-bit conversion can decide
+        // that: the 68881's fmove.l saturates to INT_MAX/INT_MIN, the soft
+        // __fixdfsi is a signed cast, and a u32 needs the range up to 2^32
+        // with a negative value giving 0. So the value is formed as an i64 in
+        // d0:d1 (high:low) and range-checked for the destination's width and
+        // signedness.
+        //
+        // With the 68881, a magnitude below 2^31 (biased exponent under
+        // bias+31) converts exactly in hardware; fintrz truncates whatever the
+        // FPCR rounding mode is. Anything larger, and every soft-float
+        // conversion, goes through __fix{d,s}fdi, which gives 0 outside the
+        // i64 range.
+        // Labels from the module sequence, not the value id: an id is not
+        // stable across a dump-and-reparse of the IR.
+        u32 vid = _labelSeq;
+        _labelSeq = _labelSeq + (u32)1;
+        u32 w = irWidth(n.res().ty());
+        if (w == (u32)0)
+            w = (u32)4;
+        bool sgn = n.op().equals(String.withCString("FpToSI"));
         if (_hardFloat)
             {
-            u32 vid = n.res().pid();
-            u32 w = irWidth(n.res().ty());
-            if (w == (u32)0)
-                w = (u32)4;
-            i32 thr = (i32)((u32)8 * w) - (n.op().equals(String.withCString("FpToSI")) ? (i32)1 : (i32)0);
             if (dbl)
                 {
                 _out.appendFormat("\tmove.l\t%ld(a6),d1\n\tswap\td1\n\tlsr.w\t#4,d1\n", o0);
-                _out.appendFormat("\tand.w\t#$7ff,d1\n\tcmp.w\t#%ld,d1\n\tbge.s\t.fsat%lu\n",
-                                  (i32)1023 + thr, vid);
-                _out.appendFormat("\tfmove.d\t%ld(a6),fp0\n\tfmove.l\tfp0,d0\n", o0);
+                _out.appendFormat("\tand.w\t#$7ff,d1\n\tcmp.w\t#%ld,d1\n\tbge.s\t.fsw%lu\n",
+                                  (i32)1023 + (i32)31, vid);
                 }
             else
                 {
                 _out.appendFormat("\tmove.l\t%ld(a6),d1\n\tswap\td1\n\tlsr.w\t#7,d1\n", o0);
-                _out.appendFormat("\tand.w\t#$ff,d1\n\tcmp.w\t#%ld,d1\n\tbge.s\t.fsat%lu\n",
-                                  (i32)127 + thr, vid);
-                _out.appendFormat("\tfmove.s\t%ld(a6),fp0\n\tfmove.l\tfp0,d0\n", o0);
+                _out.appendFormat("\tand.w\t#$ff,d1\n\tcmp.w\t#%ld,d1\n\tbge.s\t.fsw%lu\n",
+                                  (i32)127 + (i32)31, vid);
                 }
-            _out.appendFormat("\tbra.s\t.fsd%lu\n.fsat%lu:\tmoveq\t#0,d0\n.fsd%lu:\n", vid, vid, vid);
+            _out.appendFormat("\tfmove.%s\t%ld(a6),fp0\n\tfintrz\tfp0,fp0\n\tfmove.l\tfp0,d1\n",
+                              dbl ? "d" : "s", o0);
+            _out.appendCString("\tmove.l\td1,d0\n\tasr.l\t#8,d0\n\tasr.l\t#8,d0\n\tasr.l\t#8,d0\n\tasr.l\t#7,d0\n");
+            _out.appendFormat("\tbra.s\t.fsc%lu\n.fsw%lu:\n", vid, vid);
             }
-        else if (dbl)
+        if (dbl)
+            _out.appendFormat("\tmove.l\t%ld(a6),-(sp)\n\tmove.l\t%ld(a6),-(sp)\n\tjsr\t__fixdfdi\n\taddq.l\t#8,sp\n",
+                              o0 + (i32)4, o0);
+        else
+            _out.appendFormat("\tmove.l\t%ld(a6),d0\n\tjsr\t__fixsfdi\n", o0);
+        if (_hardFloat)
+            _out.appendFormat(".fsc%lu:\n", vid);
+        if (sgn)
             {
-            _out.appendFormat("\tmove.l\t%ld(a6),-(sp)\n\tmove.l\t%ld(a6),-(sp)\n", o0 + (i32)4, o0);
-            _out.appendCString("\tjsr\t__fixdfsi\n\taddq.l\t#8,sp\n");
+            // Fits iff d0:d1 is the sign extension of the low w bytes of d1.
+            _out.appendCString("\tmove.l\td1,d2\n");
+            if (w < (u32)4)
+                {
+                _out.appendCString(w == (u32)1 ? "\text.w\td2\n\text.l\td2\n" : "\text.l\td2\n");
+                _out.appendFormat("\tcmp.l\td1,d2\n\tbne.s\t.fsat%lu\n", vid);
+                }
+            _out.appendFormat("\tasr.l\t#8,d2\n\tasr.l\t#8,d2\n\tasr.l\t#8,d2\n\tasr.l\t#7,d2\n\tcmp.l\td0,d2\n\tbne.s\t.fsat%lu\n",
+                              vid);
             }
         else
             {
-            _out.appendFormat("\tmove.l\t%ld(a6),d0\n\tjsr\t__fixsfsi\n", o0);
+            // Fits iff the high long is 0 and so are the low long's bits above w bytes.
+            _out.appendFormat("\ttst.l\td0\n\tbne.s\t.fsat%lu\n", vid);
+            if (w < (u32)4)
+                _out.appendFormat("\tmove.l\td1,d2\n\tand.l\t#%s,d2\n\tbne.s\t.fsat%lu\n",
+                                  w == (u32)1 ? "$ffffff00" : "$ffff0000", vid);
             }
+        _out.appendFormat("\tmove.l\td1,d0\n\tbra.s\t.fsd%lu\n.fsat%lu:\n\tmoveq\t#0,d0\n.fsd%lu:\n",
+                          vid, vid, vid);
         storeReg(String.withCString("d0"), n.res());
         }
 
@@ -3259,10 +3297,15 @@ class M68k
         // Widening INTO 64 bits. `(u64)1000000` is not a 64-bit constant — it
         // is a 32-bit Const followed by a ZExt — so without this the low long
         // was written and the high long kept whatever the slot held.
-        if (op.equals(String.withCString("ZExt")) || op.equals(String.withCString("SExt")))
+        // A pointer converted to a 64-bit integer is the same widening: the
+        // 32-bit address zero-extended into both longs. As a plain copy it
+        // wrote the address into the HIGH long only, so `(i64)(pointer)p`
+        // read as 0 through its low half (bug 269).
+        bool ptr = op.equals(String.withCString("PtrToInt"));
+        if (op.equals(String.withCString("ZExt")) || op.equals(String.withCString("SExt")) || ptr)
             {
             loadOperand(a0, String.withCString("d0"));
-            extendD0ToPair(op.equals(String.withCString("SExt")), widthOfOperand(a0));
+            extendD0ToPair(op.equals(String.withCString("SExt")), ptr ? (u32)4 : widthOfOperand(a0));
             // Big-endian: the HIGH long sits at the lower address.
             _out.appendFormat("\tmove.l\td1,%ld(a6)\n\tmove.l\td0,%ld(a6)\n", r, r + (i32)4);
             return true;
