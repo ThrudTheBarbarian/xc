@@ -876,6 +876,14 @@ i16    myValue(void) { ... }
 string myValue(void) { ... }
 ```
 
+An argument is assigned to its parameter, so the parameter's type is
+the context there: with `void show(i16 v)`, `show(myValue())` calls the
+`i16` form. When the overloads of the called function declare different
+types for that parameter, the context of the whole call carries on
+down: `double x = Math.ln(Math.E());` uses the `double` forms of both.
+With no context at all, a call such as `Math.E()` takes the `float`
+form.
+
 ### 6.6 Function annotations
 
 Annotations follow the parameter list, each introduced by `:`.

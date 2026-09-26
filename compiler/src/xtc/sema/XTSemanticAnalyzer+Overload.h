@@ -91,6 +91,9 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)notePackingVariadicCall:(NSString*)callee at:(nullable XTSourceLocation*)loc;
 - (id)tiebreakOverloadCandidates:(NSArray*)candidates
                returnTypeOfBlock:(XTType* (^)(id))returnTypeOf;
+- (nullable XTType*)parameterHintForBareCall:(XTCallExprNode*)node argument:(NSUInteger)idx;
+- (nullable XTType*)parameterHintForMethodCall:(XTMethodCallExprNode*)node argument:(NSUInteger)idx;
+- (void)analyzeArgument:(XTASTNode*)arg withHint:(nullable XTType*)hint;
 - (NSString*)describeArgTypes:(NSArray<XTASTNode*>*)args;
 - (BOOL)resolveVarargsIntrinsic:(XTCallExprNode*)node;
 - (BOOL)resolveArcIntrinsic:(XTCallExprNode*)node;

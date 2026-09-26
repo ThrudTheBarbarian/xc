@@ -1174,6 +1174,151 @@ static BOOL XTIsErasedKeyType(XTType* t)
     }
 
 /****************************************************************************\
+|* The parameter type every candidate agrees on at argument `idx`, or nil.
+|* An argument is assigned to its parameter, so the parameter's type is the
+|* context that picks a return-type-only overload in the argument:
+|* `check(Math.E())` with `check(double)` wants the double `E`. When the
+|* candidates disagree (`Math.ln` has a float and a double form) there is no
+|* single type to want, and the caller keeps the context it already had.
+|* Candidates are those of the right arity; `paramsOf` gives each one's
+|* parameter types and `varArgsOf` whether it takes a `...` tail.
+\****************************************************************************/
+- (nullable XTType*)agreedParameterAt:(NSUInteger)idx
+                             argCount:(NSUInteger)argc
+                           candidates:(NSArray*)cands
+                             paramsOf:(NSArray<XTType*>* (^)(id))paramsOf
+                            varArgsOf:(BOOL (^)(id))varArgsOf
+    {
+    XTType* agreed = nil;
+    for (id c in cands)
+        {
+        NSArray<XTType*>* pt = paramsOf(c);
+        BOOL fits = varArgsOf(c) ? (argc >= pt.count) : (argc == pt.count);
+        if (!fits || idx >= pt.count)
+            continue;
+        XTType* t = pt[idx];
+        if (!t.displayName.length)
+            return nil;
+        if (!agreed)
+            agreed = t;
+        else if (![agreed.displayName isEqualToString:t.displayName])
+            return nil;
+        }
+    return agreed;
+    }
+
+- (NSArray<XTMethodDeclNode*>*)methodsNamed:(NSString*)name nearestFrom:(XTClassDeclNode*)cls
+    {
+    NSMutableArray<XTMethodDeclNode*>* out = [NSMutableArray array];
+    for (XTClassDeclNode* c = cls; c != nil && out.count == 0; c = c.parentClass)
+        for (XTMethodDeclNode* m in c.methods)
+            if ([m.methodName isEqualToString:name])
+                [out addObject:m];
+    return out;
+    }
+
+- (nullable XTType*)agreedMethodParameterAt:(NSUInteger)idx
+                                   argCount:(NSUInteger)argc
+                                    methods:(NSArray<XTMethodDeclNode*>*)ms
+    {
+    return [self agreedParameterAt:idx
+                          argCount:argc
+                        candidates:ms
+                          paramsOf:^NSArray<XTType*>*(id c) {
+                            NSMutableArray<XTType*>* pt = [NSMutableArray array];
+                            for (XTParamNode* p in ((XTMethodDeclNode*)c).parameters)
+                                [pt addObject:p.paramType];
+                            return pt;
+                          }
+                         varArgsOf:^BOOL(id c) {
+                           return ((XTMethodDeclNode*)c).isVarArgs;
+                         }];
+    }
+
+/****************************************************************************\
+|* A bare call `f(args)`: the enclosing class chain's methods of that name when
+|* it declares one (member scope first, as resolution does, including the
+|* exception for a method calling its own name), otherwise the free functions.
+|* A callee expression or a variable holding a function has no hint.
+\****************************************************************************/
+- (nullable XTType*)parameterHintForBareCall:(XTCallExprNode*)node argument:(NSUInteger)idx
+    {
+    if (node.calleeExpr || !node.calleeName.length)
+        return nil;
+    NSUInteger argc = node.arguments.count;
+    if ([self enclosingClassChainDeclaresMethodNamed:node.calleeName])
+        return [self agreedMethodParameterAt:idx
+                                    argCount:argc
+                                     methods:[self methodsNamed:node.calleeName
+                                                    nearestFrom:self.currentClassNode]];
+    XTSymbol* varSym = [[self currentScope] lookupSymbol:node.calleeName];
+    if (varSym && varSym.storageClass != XTStorageClassFunction)
+        return nil;
+    NSArray<XTSymbol*>* cands = [[self currentScope] lookupFunctionCandidates:node.calleeName];
+    NSMutableArray* fns = [NSMutableArray array];
+    for (XTSymbol* s in cands)
+        if ([s.symbolType isKindOfClass:[XTFunctionType class]])
+            [fns addObject:s];
+    return [self agreedParameterAt:idx
+                          argCount:argc
+                        candidates:fns
+                          paramsOf:^NSArray<XTType*>*(id c) {
+                            return ((XTFunctionType*)((XTSymbol*)c).symbolType).paramTypes;
+                          }
+                         varArgsOf:^BOOL(id c) {
+                           return ((XTFunctionType*)((XTSymbol*)c).symbolType).isVarArgs;
+                         }];
+    }
+
+/****************************************************************************\
+|* `recv.m(args)` on a class (named, or the class a pointer points at): the
+|* methods of that name on the nearest class up the chain that declares it,
+|* which is the set resolution scores. `super`, protocols and anything that is
+|* not a known class have no hint.
+\****************************************************************************/
+- (nullable XTType*)parameterHintForMethodCall:(XTMethodCallExprNode*)node argument:(NSUInteger)idx
+    {
+    NSString* className = nil;
+    if ([node.receiver isKindOfClass:[XTIdentifierNode class]])
+        {
+        NSString* recvName = ((XTIdentifierNode*)node.receiver).identName;
+        if ([recvName isEqualToString:@"super"])
+            return nil;
+        if (self.classesByName[recvName])
+            className = recvName;
+        }
+    if (!className)
+        {
+        XTType* rt = node.receiver.resolvedType;
+        if ([rt isKindOfClass:[XTPointerType class]])
+            rt = ((XTPointerType*)rt).pointeeType;
+        if (rt && rt.kind == XTTypeKindClass && !rt.protocolConstraint.length)
+            className = [rt.displayName hasSuffix:@"@"]
+                            ? [rt.displayName substringToIndex:rt.displayName.length - 1]
+                            : rt.displayName;
+        }
+    XTClassDeclNode* cls = className ? self.classesByName[className] : nil;
+    if (!cls)
+        return nil;
+    return [self agreedMethodParameterAt:idx
+                                argCount:node.arguments.count
+                                 methods:[self methodsNamed:node.methodName nearestFrom:cls]];
+    }
+
+/****************************************************************************\
+|* Analyse one argument with `hint` as its expected type (unchanged context
+|* when nil).
+\****************************************************************************/
+- (void)analyzeArgument:(XTASTNode*)arg withHint:(nullable XTType*)hint
+    {
+    XTType* prev = self.expectedType;
+    if (hint)
+        self.expectedType = hint;
+    [self analyzeNode:arg];
+    self.expectedType = prev;
+    }
+
+/****************************************************************************\
 |* Format argument types as a comma-separated string for diagnostics.
 |* @param args  The call argument AST nodes.
 |* @return  A string like "u8, u16, pointer".
@@ -1565,8 +1710,8 @@ static BOOL XTIsErasedKeyType(XTType* t)
     // lowering has something to build. private:docs/bugs/047.
     if (node.forwardsVarargs)
         [self checkVarargForwardAt:node.location];
-    for (XTASTNode* arg in node.arguments)
-        [self analyzeNode:arg];
+    for (NSUInteger i = 0; i < node.arguments.count; i++)
+        [self analyzeArgument:node.arguments[i] withHint:[self parameterHintForBareCall:node argument:i]];
     // Intercept varargs intrinsics (va_start / va_end / va_arg_*) before
     // the normal function-lookup path. The intrinsics share no
     // declaration with user code — they're recognised by name and
@@ -2913,11 +3058,9 @@ static BOOL XTIsErasedKeyType(XTType* t)
                         hint = (XTType*)entry;
                     }
                 }
-            XTType* prev = self.expectedType;
-            if (hint)
-                self.expectedType = hint;
-            [self analyzeNode:arg];
-            self.expectedType = prev;
+            if (!hint)
+                hint = [self parameterHintForMethodCall:node argument:i];
+            [self analyzeArgument:arg withHint:hint];
             }
         // Type-directed format upgrade: widen `%d/%u/%x` to their `l` form
         // where the argument is statically 32-bit (integer promotion makes
@@ -2945,8 +3088,9 @@ static BOOL XTIsErasedKeyType(XTType* t)
         }
     else
         {
-        for (XTASTNode* arg in node.arguments)
-            [self analyzeNode:arg];
+        for (NSUInteger i = 0; i < node.arguments.count; i++)
+            [self analyzeArgument:node.arguments[i]
+                         withHint:[self parameterHintForMethodCall:node argument:i]];
         }
 
     // Resolve the return type by looking up the target method on the

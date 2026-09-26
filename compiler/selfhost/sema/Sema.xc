@@ -67,6 +67,8 @@ class Sema
                               // `Math.rand()` has five zero-argument overloads
                               // that differ only in return type, so the context
                               // is the only thing that can choose between them.
+    bool _tieToFloat;         // pickOverload may settle a return-type tie on
+                              // the float form (explicit and free calls only)
     Array* _used;             // classes named by `use X;` — their statics are
                               // reachable by bare name for the rest of the file
     Vtable* _vt;              // program-wide virtual slot numbering
@@ -120,6 +122,7 @@ class Sema
         _setterOwner = (String*)0;
         _curReturn = (String*)0;
         _expected = (String*)0;
+        _tieToFloat = false;
         _used = new Array();
         _vt = new Vtable();
         _cyclic = new Map();
@@ -1206,6 +1209,12 @@ class Sema
             {
             String* hint = printfHint(n, i);
             if (hint == 0)
+                hint = paramHint(n, i);
+            // A cast's type is its operand's context, as in the reference:
+            // `(double)Math.E()` is the double `E`.
+            if (hint == 0 && k == (u16)nkCast && i == (u32)0)
+                hint = n.name();
+            if (hint == 0)
                 {
                 typeExpr(n.kid(i));
                 continue;
@@ -2146,7 +2155,9 @@ class Sema
         bool demotedC = false;
         if (group != 0)
             {
+            _tieToFloat = true;
             Node* fn = pickOverload(group, n, (u32)0);
+            _tieToFloat = false;
             // With a SINGLE candidate the call resolves even when the argument
             // does not convert — the original resolves it and diagnoses the
             // argument separately, which is how `render(v)` still names
@@ -2420,6 +2431,22 @@ class Sema
                     return d;
                 }
             }
+        // No context, or none of the tied forms returns what it wants: an
+        // explicit `Class.m()` or a free call takes the FLOAT-returning form,
+        // as the original does (its "printf defaults to float" rule). Other
+        // call shapes leave the tie unresolved there too.
+        if (_tieToFloat)
+            {
+            for (u32 i = (u32)0; i < arity.count(); i = i + (u32)1)
+                {
+                Node* d = (Node*)arity.get(i);
+                if (scoreCandidate(d, call, argBase) != bestScore)
+                    continue;
+                String* rt = d.op() != 0 ? firstReturn(d.op()) : (String*)0;
+                if (rt != 0 && _isOp(rt, "float"))
+                    return d;
+                }
+            }
         return (Node*)0;
         }
 
@@ -2678,6 +2705,7 @@ class Sema
         // Found on the receiver's own class, or inherited — and if inherited,
         // the call records WHICH class it came from.
         Node* owner2 = cls;
+        _tieToFloat = true;
         Node* m = methodOverload(cls, n, (u32)1);
         while (m == 0 && owner2 != 0)
             {
@@ -2686,6 +2714,7 @@ class Sema
                 break;
             m = methodOverload(owner2, n, (u32)1);
             }
+        _tieToFloat = false;
         if (m == 0)
             {
             // An unresolved method call is an ERROR — and it was silent, so
@@ -3075,6 +3104,117 @@ class Sema
         u32 first = argBase + pi;
         for (u32 j = first; j < call.kidCount(); j = j + (u32)1)
             call.setKid(j, unboxCollectionElement(call.kid(j)));
+        }
+
+    // The parameter type every candidate agrees on for the argument at kid
+    // `kidIdx`, or none. An argument is assigned to its parameter, so the
+    // parameter's type is the context that picks a return-type-only overload
+    // in the argument: `check(Math.E())` with `check(double)` wants the double
+    // `E`. When the candidates disagree (`Math.ln` has a float and a double
+    // form) there is no single type to want, and the context already in hand
+    // stays. The candidate set is the one resolution scores: for a bare call
+    // the enclosing class chain's methods when it declares the name (except a
+    // method calling its own name), otherwise the free functions; for
+    // `recv.m()` the methods of that name on the nearest class up the chain
+    // that declares it. `super`, protocols, callee expressions and variables
+    // holding a function have none.
+    String* paramHint(Node* call, u32 kidIdx)
+        {
+        u16 k = call.kind();
+        if (call.name() == 0)
+            return (String*)0;
+        if (k == (u16)nkCall)
+            {
+            if (kidIdx >= (u32)call.num() || call.kidCount() > (u32)call.num())
+                return (String*)0;
+            u32 argc = (u32)call.num();
+            if (_curClass != 0 && !(_curMethod != 0 && _curMethod.name() != 0 && call.name().equals(_curMethod.name())))
+                {
+                Array* ms = methodsNamedNearest(_curClass, call.name());
+                if (ms.count() > (u32)0)
+                    return agreedParam(ms, kidIdx, argc);
+                }
+            if (lookup(call.name()) != 0)
+                return (String*)0;
+            Array* group = (Array*)_functions.get((Hashable*)call.name());
+            if (group == 0)
+                return (String*)0;
+            return agreedParam(group, kidIdx, argc);
+            }
+        if (k != (u16)nkMethodCall || kidIdx == (u32)0 || call.kidCount() == (u32)0)
+            return (String*)0;
+        Node* r = call.kid((u32)0);
+        Node* cls = (Node*)0;
+        if (r.kind() == (u16)nkIdent && r.name() != 0)
+            {
+            if (_isOp(r.name(), "super"))
+                return (String*)0;
+            cls = (Node*)_classes.get((Hashable*)r.name());
+            }
+        if (cls == 0 && r.ty() != 0)
+            {
+            String* cn = classNameOf(r.ty());
+            if (cn != 0)
+                cls = (Node*)_classes.get((Hashable*)cn);
+            }
+        if (cls == 0)
+            return (String*)0;
+        return agreedParam(methodsNamedNearest(cls, call.name()), kidIdx - (u32)1,
+                           call.kidCount() - (u32)1);
+        }
+
+    // Every method called `name` on the nearest class from `cls` up that
+    // declares one.
+    Array* methodsNamedNearest(Node* cls, String* name)
+        {
+        Array* out = new Array();
+        for (Node* c = cls; c != 0 && out.count() == (u32)0; c = parentOf(c))
+            {
+            for (u32 i = (u32)0; i < c.kidCount(); i = i + (u32)1)
+                {
+                Node* m = c.kid(i);
+                if (m.kind() == (u16)nkMethodDecl && m.name() != 0 && m.name().equals(name))
+                    out.add((Object*)m);
+                }
+            }
+        return out;
+        }
+
+    // The type of parameter `idx` when every candidate that takes `argc`
+    // arguments declares the same one there.
+    String* agreedParam(Array* cands, u32 idx, u32 argc)
+        {
+        String* agreed = (String*)0;
+        for (u32 i = (u32)0; i < cands.count(); i = i + (u32)1)
+            {
+            Node* d = (Node*)cands.get(i);
+            u32 pc = paramCount(d);
+            bool fits = d.hasFlag((u32)NF_VARARGS) ? (argc >= pc) : (argc == pc);
+            if (!fits || idx >= pc)
+                continue;
+            String* t = (String*)0;
+            u32 pi = (u32)0;
+            for (u32 j = (u32)0; j < d.kidCount() && t == 0; j = j + (u32)1)
+                {
+                Node* p = d.kid(j);
+                if (p.kind() != (u16)nkParam)
+                    continue;
+                if (pi == idx)
+                    {
+                    t = p.op();
+                    if (t == 0 || t.byteLength() == (u32)0)
+                        return (String*)0;
+                    }
+                pi = pi + (u32)1;
+                }
+            if (t == 0)
+                return (String*)0;
+            if (agreed == 0)
+                agreed = t;
+            else if (!agreed.equals(t))
+                return (String*)0;
+            }
+        return agreed;
         }
 
     // The type the format string wants for the argument at `argIdx`, or none.
