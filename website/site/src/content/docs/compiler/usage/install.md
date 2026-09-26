@@ -19,7 +19,7 @@ When it finishes, `make install` prints the directory to add to `PATH`.
 On macOS and Linux the root is `/opt/xcc/$(VERSION)`:
 
 ```
-/opt/xcc/0.61/
+/opt/xcc/0.62/
 ├── bin/
 │   ├── xcc              the compiler; it runs every stage itself
 │   ├── xcc-sign         code signing
@@ -69,7 +69,7 @@ roots in turn for `lib/xc`, then `xc`, then `support`:
 5. `/opt/xcc/<version>`, `/opt/xcc`, `/usr/local/xcc`, `/usr/local/xtc`, `/opt/xtc`
 
 Step 3 is what lets a plain `xcc -o prog prog.xc` work. An installed
-`/opt/xcc/0.61/bin/xcc` goes up one level and finds `/opt/xcc/0.61/lib/xc`; a
+`/opt/xcc/0.62/bin/xcc` goes up one level and finds `/opt/xcc/0.62/lib/xc`; a
 Windows `xcc.exe` finds `xc\` without going up. Neither needs a flag or an
 environment variable, and two installed versions never see each other's
 libraries.
@@ -87,11 +87,11 @@ was chosen.
 The version is part of the path, so several versions can be installed together:
 
 ```bash
-/opt/xcc/0.61/bin/xcc -o prog prog.xc      # explicit
-PATH=/opt/xcc/0.6/bin:$PATH xcc -o prog prog.xc
+/opt/xcc/0.62/bin/xcc -o prog prog.xc      # explicit
+PATH=/opt/xcc/0.61/bin:$PATH xcc -o prog prog.xc
 ```
 
-Each binary resolves its own libraries relative to itself, so a 0.61 compiler
+Each binary resolves its own libraries relative to itself, so a 0.62 compiler
 never picks up an older release's standard library even when both are on `PATH`.
 
 The problem to watch for is a **stale copy earlier in `PATH`**. An old binary in
@@ -119,7 +119,7 @@ SDK is involved.
 the C library out of that file's DWARF, so one extra file has to be reachable.
 
 Either download the [arm9 sysroot archive](/compiler/downloads/) (830 KB), unpack it
-and pass `-L path/to/xcc-arm9-sysroot-0.61`; or set `XTC_ARM9_SYSROOT` in `build.env`
+and pass `-L path/to/xcc-arm9-sysroot-0.62`; or set `XTC_ARM9_SYSROOT` in `build.env`
 to a loader build directory, in which case `make install` copies it into
 `lib/xc/arm9-sysroot/` and `-A arm9` needs no `-L` at all. `make install` reports
 which of the two happened.

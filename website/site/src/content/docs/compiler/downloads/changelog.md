@@ -3,6 +3,123 @@ title: ChangeLog
 description: Release notes for the xcc toolchain, with bug fixes and new features per version.
 ---
 
+## Version 0.62 — wrong code fixed, shared libraries that work together
+
+Most of this release fixes wrong code and makes xtc libraries work with each
+other: a library can now import another library and be used from a program on
+arm64, x86_64 and wasm32. Several mistakes that used to compile are now
+errors. Libraries built by an earlier release must be rebuilt, and on x86_64
+programs that use them must be rebuilt too.
+
+### New errors
+
+- Every call checks its argument count: static, instance, inherited,
+  category, protocol and free-function calls, library imports, and calls
+  through function pointers, callbacks and blocks. A variadic call must pass
+  at least the fixed arguments.
+- A call argument whose class is unrelated to the parameter's (neither a
+  subclass nor an ancestor) is refused, for methods and functions alike.
+  Passing an ancestor, such as the `Object*` a collection returns, where a
+  subclass is declared is still accepted. A class reference still does not
+  convert to a raw `pointer` implicitly; cast it.
+- `delete` on a class instance is refused. ARC owns the object; freeing it by
+  hand freed it twice. `delete` on a struct or primitive array is unchanged.
+- On xt6502, a call to a function that is declared but never defined is an
+  error naming the function and the call's position. It used to become a jump
+  to address 0.
+- m68k refuses inline assembly it cannot compile. It used to drop the block.
+- Errors in a call now point at the name being called, not at the closing `)`.
+
+### Wrong code fixed
+
+- A virtual call to an overloaded method could run another overload's body.
+  Each overload now dispatches through its own slot.
+- An overload that differs only by return type, passed directly as an
+  argument (`Math.ln(Math.E())`), takes the parameter's type.
+- A call through a callback or function pointer now converts each argument to
+  the parameter's type, as a direct call does. On xt6502 the callee read
+  garbage; on arm64 a negative narrow integer passed to a 64-bit parameter
+  arrived as a large positive number.
+- A condition is tested on its whole value on every target. arm64, x86_64 and
+  win64 tested only the low 32 bits of a 64-bit value or pointer, arm9 and m68k
+  one half of a 64-bit value, and xt6502 the low byte of a pointer. The right
+  side of `&&` and `||` was reduced to its low byte. A floating-point
+  condition was tested by its bits, so `-0.0` counted as true.
+- `!p` on a pointer tests the whole pointer. On arm64 a pointer on a 64 KB
+  boundary read as null.
+- An integer converted to a pointer keeps the full pointer width. arm64 kept
+  only 16 bits, so an address round-tripped through an integer crashed.
+- On arm64 and x86_64 at `-O2` and above, the first call to a static method of
+  a class from a library could crash.
+- xt6502 at `-O3` could lose a struct parameter across a call when only the
+  addresses of its fields were still in use.
+- On arm9, m68k, wasm32 and xt6502 the 16-bit retain count now stops at
+  `$FFFF` in both directions. It used to wrap, freeing an object that was
+  still in use. An object that reaches the limit is never freed.
+- Freeing `new C[0]` ran one element's `dealloc`, and an empty array created
+  at run time reported a `.length` of 1.
+- xt6502 converts between floating point and 64-bit integers correctly.
+- m68k converts a floating-point value to a narrow integer correctly: out of
+  range gives 0, and values from 2^31 to 2^32 reach `u32`. A pointer converted
+  to a 64-bit integer fills both halves.
+- On arm64, a call to a cloaked or banked variadic function put its extra
+  arguments in the wrong place.
+- A struct passed to a variadic function had all its fields written to its
+  first byte.
+- A static method could fill a protocol's method slot, so a call through the
+  protocol passed the object as an extra first argument.
+- On arm9, inside a class or block body, a bare `printf` called the C library
+  instead of the `Stdio.printf` that `use Stdio;` brings in.
+- A `weak` field of protocol type was not cleared when its object was freed.
+- A bound-method field was aligned to 8 bytes on 32-bit targets.
+- win64 code is optimised as fully as x86_64 code.
+
+### Library and runtime
+
+- xt6502: `Math.ln`, `Math.exp` and `Math.pow` give correct results for
+  `double` and `float`. `Math.rand()` returns a value in [0.5, 1.0) instead of
+  0. `Time.secondsSince` no longer always returns 0, and `Time.delaySeconds`
+  reads its argument correctly.
+- Soft-float m68k has `Math.sqrt`, the trigonometric functions, `ln`, `exp`
+  and `pow`. They used to fail at assembly.
+
+### Libraries that import libraries
+
+- A library can subclass a class from another library. Its new methods took
+  slots the parent library already used.
+- Calls through `Hashable`, `Comparable`, `Object*` and `String*` across a
+  library boundary use each class's protocol table, which every module numbers
+  the same way. They used each module's own slot numbers and gave wrong
+  answers or crashed. This makes protocol calls in a multi-module program a
+  short table walk, and a program that uses an xtc library now carries every
+  built-in method.
+- arm64: a library records the libraries it imports and binds its imports to
+  them, so a program that names only the dependent library runs.
+- x86_64: programs that use xtc libraries link, including a client class that
+  subclasses a library class, and a library that takes the address of another
+  library's function. A library records the libraries it imports, and its
+  load-time constructors run, in dependency order, before the program's own.
+- wasm32: a library's vtable entries that name another library's methods are
+  filled in. The loader loads every library a program needs, including those
+  imported only by other libraries, in dependency order, and reports a missing
+  library or a cycle. A library's `.json` sidecar lists the libraries it
+  imports.
+- Library builds are byte-identical between runs and machines, with the
+  interface written in one canonical form.
+
+### xt6502 options
+
+- `-Q rts|loop` chooses what happens when `main` returns: return to DOS with
+  `main`'s value (the default) or spin. Programs used to stop at a `BRK`.
+  `xcc-sim-6502` still exits with `main`'s value.
+- `--xtc-stack` moves return addresses and saved registers onto the software
+  stack, and the `:xtcStack` and `:hwStack` annotations choose per function.
+  The software stack is smaller than the hardware stack, so recursion runs out
+  sooner, and there is no overflow check.
+- `-Fmb <n>` keeps functions shorter than `n` instructions in main RAM.
+- `-dp` prints each function's placement and `-du` each region's and bank's
+  usage.
+
 ## Version 0.61 — optimiser work, measured, and wrong code fixed
 
 Most of this release is optimiser and back-end work, measured against clang on

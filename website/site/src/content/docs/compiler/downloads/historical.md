@@ -5,10 +5,20 @@ description: Previous xcc and xtc toolchain releases, kept for archival referenc
 
 These archives are kept so that an existing build can be reproduced byte-for-byte with the version it was compiled with. For new work, use the [most recent release](/compiler/downloads/). The [ChangeLog](/compiler/downloads/changelog/) lists what has changed since.
 
+## xcc 0.61
+
+The previous release line.
+
+| Platform | Download | Size |
+| --- | --- | --- |
+| macOS (Apple silicon) | [xcc-osx-0.61.tar.bz2](/downloads/xcc-osx-0.61.tar.bz2) | 7.9 MB |
+| Linux (x86_64) | [xcc-linux-0.61.tar.bz2](/downloads/xcc-linux-0.61.tar.bz2) | 6.4 MB |
+| Windows (x64) | [xcc-win64-0.61.zip](/downloads/xcc-win64-0.61.zip) | 7.4 MB |
+| arm9 sysroot (any host) | [xcc-arm9-sysroot-0.61.tar.bz2](/downloads/xcc-arm9-sysroot-0.61.tar.bz2) | 830 KB |
+
 ## xcc 0.6
 
-The previous release line, and the first in which the shipped `xcc` is the
-self-hosted compiler.
+The first release in which the shipped `xcc` is the self-hosted compiler.
 
 | Platform | Download | Size |
 | --- | --- | --- |
