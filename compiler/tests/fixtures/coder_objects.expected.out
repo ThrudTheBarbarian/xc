@@ -1,0 +1,24 @@
+T1 scalars
+{"$archiver":"Coder","$version":1,"$top":{"root":{"$ref":1}},"$objects":["$null",{"$class":"Scalars","yes":true,"no":false,"small":-2147483648,"big":4294967295,"least":-9223372036854775808,"most":9223372036854775807,"top":18446744073709551615,"f":0.1,"d":0.6666666666666666,"nan":"NaN","inf":"-Infinity","text":{"$ref":2},"nothing":{"$ref":0},"$$class":42},"tab\there \xc3\xa9"]}
+  has text: yes, has absent: no, absent reads 0
+  true false -2147483648 4294967295
+  -9223372036854775808 9223372036854775807 18446744073709551615
+  float same: yes, double same: yes, nan: yes, -inf: yes
+  text "tab	here \xc3\xa9", nothing null, $class key 42
+T2 subclass
+{"$archiver":"Coder","$version":1,"$top":{"root":{"$ref":1}},"$objects":["$null",{"$class":"Point","name":{"$ref":2},"id":7,"x":-3,"y":4,"next":{"$ref":0}},"solo"]}
+  solo #7 (-3,4) next none
+T3 sharing and a cycle
+{"$archiver":"Coder","$version":1,"$top":{"root":{"$ref":1}},"$objects":["$null",{"$class":"Array","$items":[2,4,2]},{"$class":"Point","name":{"$ref":3},"id":1,"x":1,"y":2,"next":{"$ref":4}},"a",{"$class":"Point","name":{"$ref":5},"id":2,"x":3,"y":4,"next":{"$ref":2}},"b"]}
+  a #1 (1,2) next b
+  b #2 (3,4) next a
+  shared: yes, cycle: yes
+T4 collections, gzipped
+  gzip yes, smaller yes
+  point 17 #17 (170,-17) next none
+  40 points, map finds the same object: yes
+  same graph: yes
+T5 wrong types
+  Coder: value for key 'n' is not a number
+  Coder: value for key 'wide' is out of range
+done
