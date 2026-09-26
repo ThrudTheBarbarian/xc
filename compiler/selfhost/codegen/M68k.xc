@@ -1506,7 +1506,12 @@ class M68k
         // the mirror-image guard, and this makes the pair symmetric.
         _out.appendCString("\tmove.w\t-2(a0),d1\n");
         _out.appendFormat("\tbeq\t.Lrt%lu\n", lbl);
-        _out.appendCString("\taddq.w\t#1,d1\n\tmove.w\td1,-2(a0)\n");
+        // The count saturates at $FFFF rather than wrapping to 0, which would
+        // free the object while it is still referenced (bug 261): an addq that
+        // carries out of $FFFF leaves zero, and the store is skipped.
+        _out.appendCString("\taddq.w\t#1,d1\n");
+        _out.appendFormat("\tbeq\t.Lrt%lu\n", lbl);
+        _out.appendCString("\tmove.w\td1,-2(a0)\n");
         _out.appendFormat(".Lrt%lu:\n", lbl);
         }
 
@@ -1522,7 +1527,12 @@ class M68k
         loadOperand((IROperand*)n.ops().get((u32)0), String.withCString("a0"));
         _out.appendCString("\tmove.l\ta0,d0\n\tcmp.l\t#$10000,d0\n");
         _out.appendFormat("\tbcs\t.Lrl%lu\n", lbl);
-        _out.appendCString("\tmove.w\t-2(a0),d1\n\tsubq.w\t#1,d1\n\tmove.w\td1,-2(a0)\n");
+        // A saturated count ($FFFF) is left alone: once retain stopped
+        // counting, the true number of references is unknown, so the object is
+        // leaked rather than freed while it may still be in use (bug 261).
+        _out.appendCString("\tmove.w\t-2(a0),d1\n\tcmp.w\t#$FFFF,d1\n");
+        _out.appendFormat("\tbeq\t.Lrl%lu\n", lbl);
+        _out.appendCString("\tsubq.w\t#1,d1\n\tmove.w\td1,-2(a0)\n");
         _out.appendFormat("\tbne\t.Lrl%lu\n", lbl);
         _out.appendCString("\tmove.l\ta0,-(sp)\n\tjsr\t_xtc_dealloc\n\taddq.l\t#4,sp\n");
         _out.appendFormat(".Lrl%lu:\n", lbl);

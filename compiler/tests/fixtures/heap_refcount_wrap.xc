@@ -10,9 +10,11 @@
 // twice. This one does: 70,000 retains, then 70,000 releases, then USE the
 // object. On a 16-bit count the releases reach zero after the wrap, the object
 // is freed with a reference still held, and the final call reads freed memory.
+// arm9, m68k and wasm32 keep a 16-bit count that saturates at 65,535 instead
+// (bug 261), so there the object is leaked and the fixture passes too.
 //
-//xtc-na: xt6502,arm9,m68k — those keep a 16-bit count by design (two bytes an
-//        object is a real cost there, and no program on them gets near 65,536)
+//xtc-na: xt6502 — a 70,000-slot Array does not fit in its heap;
+//        arc_retain_saturate.xc covers the saturating count there
 #import "Stdio.xc"
 
 class Marker

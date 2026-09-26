@@ -3471,7 +3471,12 @@ static NSString* m68kSym(NSString* name)
         // object whose dealloc is running relaunches dealloc (bug 038).
         [out appendString:@"\tmove.w\t-2(a0),d1\n"];
         [out appendFormat:@"\tbeq\t.Lrt%d\n", n];
-        [out appendString:@"\taddq.w\t#1,d1\n\tmove.w\td1,-2(a0)\n"];
+        // The count saturates at $FFFF rather than wrapping to 0, which would
+        // free the object while it is still referenced (bug 261): an addq
+        // that carries out of $FFFF leaves zero, and the store is skipped.
+        [out appendString:@"\taddq.w\t#1,d1\n"];
+        [out appendFormat:@"\tbeq\t.Lrt%d\n", n];
+        [out appendString:@"\tmove.w\td1,-2(a0)\n"];
         [out appendFormat:@".Lrt%d:\n", n];
         break;
         }
@@ -3482,7 +3487,12 @@ static NSString* m68kSym(NSString* name)
         [self loadOperand:insn.operands[0] intoReg:@"a0" slots:slots into:out];
         [out appendString:@"\tmove.l\ta0,d0\n\tcmp.l\t#$10000,d0\n"];
         [out appendFormat:@"\tbcs\t.Lrl%d\n", n];
-        [out appendString:@"\tmove.w\t-2(a0),d1\n\tsubq.w\t#1,d1\n\tmove.w\td1,-2(a0)\n"];
+        // A saturated count ($FFFF) is left alone: once retain stopped
+        // counting, the true number of references is unknown, so the object
+        // is leaked rather than freed while it may still be in use (bug 261).
+        [out appendString:@"\tmove.w\t-2(a0),d1\n\tcmp.w\t#$FFFF,d1\n"];
+        [out appendFormat:@"\tbeq\t.Lrl%d\n", n];
+        [out appendString:@"\tsubq.w\t#1,d1\n\tmove.w\td1,-2(a0)\n"];
         [out appendFormat:@"\tbne\t.Lrl%d\n", n];
         [out appendString:@"\tmove.l\ta0,-(sp)\n\tjsr\t_xtc_dealloc\n\taddq.l\t#4,sp\n"];
         [out appendFormat:@".Lrl%d:\n", n];

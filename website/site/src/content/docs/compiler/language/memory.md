@@ -33,7 +33,7 @@ The compiler manages reference counts automatically. ARC is always on. Every hea
 | `wasm32` | 38 bytes | 16-bit at `obj-2` |
 | `arm64` (macOS, iOS, Android), `x86_64`, `win64` | 40 bytes | 32-bit at `obj-4` |
 
-The hosts use a 32-bit count because one object can be retained more than 65,535 times in an ordinary large program.
+The hosts use a 32-bit count because one object can be retained more than 65,535 times in an ordinary large program. On the other targets the 16-bit count saturates at 65,535: a retain at that value leaves it there, and so does a release, so an object that reaches it is never freed.
 
 **xt6502**: a 7-byte header in a hand-written coalescing free list:
 
@@ -224,7 +224,7 @@ The `Heap` library class (`#import <Heap.xc>`) has static helpers for inspecting
 ## Limits
 
 - **On the 6502, a single block cannot exceed one bank** (~12 KB), the size of the data page holding it. The heap holds far more *in total* (it grows across banks on demand), but no single allocation spans a bank boundary. The native backends have no such limit.
-- **On xt6502 a retain count saturates at `$FFFF`** (65535) rather than wrapping. On arm9, m68k and wasm32 a 16-bit count wraps past 65,535, so an object retained that many times at once is freed while still in use. The 32-bit hosts are not affected in practice.
+- **On xt6502, arm9, m68k and wasm32 a retain count saturates at `$FFFF`** (65535) rather than wrapping. Once it is there, releases leave it there too, so an object retained that many times at once is leaked rather than freed while still in use. The 32-bit hosts are not affected in practice.
 - **On the 6502**, a heap pointer carries its own data bank in its third byte, and the backend re-selects that bank on every dereference. The code window and the data window have *separate* selectors, so a `:banked` function can use the heap without swapping its own code page out.
 
 ## Worked example
