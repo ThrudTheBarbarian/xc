@@ -347,6 +347,10 @@ class ClassInfo
     // none of this and links none of the runtime.
     bool _boundsCheck;
     bool _threadSafeStatics;
+    // Classes whose name function the driver generated (`_xtc_cname_<C>`,
+    // runtime class names): class name -> itself. Their itable carries the
+    // name pair (buildItable).
+    Map* _cnameClasses;
     // callee symbol -> "file:line:col" of its first direct call. A linker or
     // assembler that finds the symbol undefined names the call with it.
     Map* _callSites;
@@ -12354,7 +12358,11 @@ class ClassInfo
                 rows.add((Object*)row);
                 }
             }
-        if (names.count() == (u32)0)
+        // Runtime class names: the class's generated `_xtc_cname_<C>` rides
+        // in the itable as one more (id, pointer) pair after the protocols,
+        // under a pseudo-id no protocol can have (FNV-1a of "$className").
+        bool namePair = info.needsVtable() && _cnameClasses.get((Hashable*)cls.name()) != (Object*)0;
+        if (names.count() == (u32)0 && !namePair)
             return String.withCString("");
 
         Array* order = new Array();
@@ -12381,6 +12389,15 @@ class ClassInfo
             pid.appendFormat("%lu", (i32)protocolId(pn));
             pairs.add((Object*)pid);
             pairs.add((Object*)tab);
+            }
+        if (namePair)
+            {
+            String* pid = String.withCString("__protoid_");
+            pid.appendFormat("%lu", (i32)protocolId(String.withCString("$className")));
+            pairs.add((Object*)pid);
+            String* fn = String.withCString("_xtc_cname_");
+            fn.append(cls.name());
+            pairs.add((Object*)fn);
             }
         pairs.add((Object*)String.withCString("__protoid_0"));
         pairs.add((Object*)String.withCString(""));
@@ -13289,6 +13306,25 @@ class ClassInfo
                 if (td.name().equals(String.withCString("_xt_thread_create")))
                     _threadSafeStatics = true;
                 }
+            }
+        // The classes whose `_xtc_cname_<C>` the driver generated; each goes
+        // in its class's itable, where Object.className() looks for it.
+        _cnameClasses = new Map();
+        for (u32 ci = (u32)0; ci < program.kidCount(); ci = ci + (u32)1)
+            {
+            Node* cd = program.kid(ci);
+            if (cd.kind() != (u16)nkFunctionDecl || cd.name() == (String*)0)
+                continue;
+            if (!cd.name().hasPrefix(String.withCString("_xtc_cname_")))
+                continue;
+            bool defined = false;
+            for (u32 b = (u32)0; b < cd.kidCount(); b = b + (u32)1)
+                if (cd.kid(b) != (Node*)0 && cd.kid(b).kind() == (u16)nkBlock)
+                    defined = true;
+            if (!defined)
+                continue;
+            String* cn = cd.name().substringFromByte((u32)11);
+            _cnameClasses.set((Hashable*)cn, (Object*)cn);
             }
 
         // Struct shapes first — a signature or a global can name one, and a

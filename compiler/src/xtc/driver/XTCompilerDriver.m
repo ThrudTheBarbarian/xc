@@ -595,6 +595,204 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     return [[XTProgramNode alloc] initWithDeclarations:decls location:ast.location];
     }
 
+/****************************************************************************\
+|* Runtime class names: the per-module half of `Object.className()` and
+|* `Object.newInstanceOfClass(name)` (support/generic/lib/Object.xc).
+|*
+|* Generated as xc source, like the conformance helper, so it needs no IR or
+|* back-end support:
+|*
+|*   String* _xtc_cname_<C>(void)          one per class; its address goes in
+|*                                         C's itable (XTIRLowering), where
+|*                                         className() finds it
+|*   Object* _xtc_cnew_<hash>(String* n)   `new C()` for the class named n,
+|*                                         then each imported module's table
+|*   Object* _xtc_class_new(String* n)     the root, in the module that holds
+|*                                         main (or the library): calls the
+|*                                         table, or returns null without one
+|*   String* _xtc_class_name(Object* o)    m68k only: downcasts, most derived
+|*                                         class first
+|*
+|* The table is emitted when this module is a library or `-c` object, imports
+|* another xc module, or names either method (a `.className` or
+|* `.newInstanceOfClass` token). Otherwise only the root is emitted, returning
+|* null, and dead-function elimination removes it. The table's name is a hash
+|* of its body, so two objects that emit the same table merge harmlessly at
+|* link and two different ones cannot collide.
+\****************************************************************************/
+- (XTProgramNode*)injectClassNames:(XTProgramNode*)ast
+                            tokens:(NSArray<XTToken*>*)tokens
+                        ifaceJsons:(NSArray<NSString*>*)ifaceJsons
+                        ifacePaths:(NSArray<NSString*>*)ifacePaths
+                         typeTable:(XTTypeTable*)tt
+                             arm64:(BOOL)arm64
+    {
+    _classTableSymbol = nil;
+    // Only where Object declares the methods: not on the 6502, and not when
+    // the program runs without the library Object.
+    BOOL haveObject = NO;
+    BOOL definesMain = NO;
+    for (XTASTNode* d in ast.declarations)
+        {
+        if ([d isKindOfClass:[XTClassDeclNode class]])
+            {
+            XTClassDeclNode* c = (XTClassDeclNode*)d;
+            if (c.isExternal || c.isCategory || ![c.className isEqualToString:@"Object"])
+                continue;
+            for (XTMethodDeclNode* m in c.methods)
+                if ([m.methodName isEqualToString:@"newInstanceOfClass"])
+                    haveObject = YES;
+            }
+        else if ([d isKindOfClass:[XTFunctionDeclNode class]])
+            {
+            XTFunctionDeclNode* f = (XTFunctionDeclNode*)d;
+            if (f.body && [f.funcName isEqualToString:@"main"])
+                definesMain = YES;
+            }
+        }
+    if (!haveObject)
+        return ast;
+    BOOL m68k = _options.m68kPlatform;
+    BOOL named = NO;
+    for (NSUInteger i = 1; i < tokens.count; i++)
+        {
+        XTToken* t = tokens[i];
+        XTTokenType pt = tokens[i - 1].type;
+        if (t.type == XTTokenIdentifier && (pt == XTTokenDot || pt == XTTokenArrow) &&
+            ([t.value isEqualToString:@"className"] || [t.value isEqualToString:@"newInstanceOfClass"]))
+            {
+            named = YES;
+            break;
+            }
+        }
+    BOOL isLib = _options.emitLib || _options.compileOnly;
+    BOOL emit = named || (!m68k && (isLib || ifaceJsons.count > 0));
+    BOOL isRoot = !_options.compileOnly || definesMain;
+
+    // The classes this module defines, by name.
+    NSMutableDictionary<NSString*, XTClassDeclNode*>* byName = [NSMutableDictionary dictionary];
+    for (XTASTNode* d in ast.declarations)
+        {
+        if (![d isKindOfClass:[XTClassDeclNode class]])
+            continue;
+        XTClassDeclNode* c = (XTClassDeclNode*)d;
+        // `$` cannot occur in a name anybody wrote: those are the compiler's
+        // own classes (block shapes), which no one can name.
+        if (c.isExternal || c.isCategory || [c.className containsString:@"$"])
+            continue;
+        byName[c.className] = c;
+        }
+    NSArray<NSString*>* names = [byName.allKeys sortedArrayUsingSelector:@selector(compare:)];
+
+    NSMutableString* src = [NSMutableString string];
+    NSString* table = nil;
+    if (emit)
+        {
+        if (!m68k)
+            for (NSString* n in names)
+                [src appendFormat:@"String* _xtc_cname_%@(void)\n{\nreturn String.withCString(\"%@\");\n}\n", n, n];
+        NSMutableString* body = [NSMutableString stringWithString:@"{\n"];
+        for (NSString* n in names)
+            [body appendFormat:@"if (_xtc_class_is(name, \"%@\")) return (Object*)new %@();\n", n, n];
+        NSMutableArray<NSString*>* imported = [NSMutableArray array];
+        for (NSString* json in ifaceJsons)
+            {
+            NSString* t = [XTInterfaceImporter classTableFromJSON:json];
+            if (t.length && ![imported containsObject:t])
+                [imported addObject:t];
+            }
+        if (imported.count)
+            {
+            [body appendString:@"Object* o = (Object*)0;\n"];
+            for (NSString* t in imported)
+                [body appendFormat:@"o = %@(name);\nif (o != (Object*)0) return o;\n", t];
+            }
+        [body appendString:@"return (Object*)0;\n}\n"];
+        uint32_t h = 2166136261u;
+        for (const char* p = body.UTF8String; *p; p++)
+            {
+            h ^= (uint8_t)*p;
+            h *= 16777619u;
+            }
+        table = [NSString stringWithFormat:@"_xtc_cnew_%u", h];
+        for (NSString* t in imported)
+            [src appendFormat:@"Object* %@(String* name);\n", t];
+        [src appendFormat:@"Object* %@(String* name)\n%@", table, body];
+        }
+    if (isRoot)
+        {
+        if (table)
+            [src appendFormat:@"Object* _xtc_class_new(String* name)\n{\nreturn %@(name);\n}\n", table];
+        else
+            [src appendString:@"Object* _xtc_class_new(String* name)\n{\nreturn (Object*)0;\n}\n"];
+        }
+    if (m68k && isRoot)
+        {
+        [src appendString:@"String* _xtc_class_name(Object* o)\n{\n"];
+        if (emit)
+            {
+            // Most derived first, so the first downcast that succeeds names the
+            // receiver's own class rather than one of its ancestors.
+            NSMutableDictionary<NSString*, NSNumber*>* depth = [NSMutableDictionary dictionary];
+            for (NSString* n in names)
+                {
+                NSUInteger k = 0;
+                XTClassDeclNode* c = byName[n];
+                while (c && ![c.className isEqualToString:@"Object"] && k < 64)
+                    {
+                    k++;
+                    c = byName[c.parentName ?: @"Object"];
+                    }
+                depth[n] = @(k);
+                }
+            NSArray<NSString*>* order = [names sortedArrayUsingComparator:^NSComparisonResult(NSString* a, NSString* b) {
+                NSUInteger da = depth[a].unsignedIntegerValue, db = depth[b].unsignedIntegerValue;
+                if (da != db)
+                    return da > db ? NSOrderedAscending : NSOrderedDescending;
+                return [a compare:b];
+            }];
+            for (NSString* n in order)
+                [src appendFormat:@"if ((%@* ?)o != (%@*)0) return String.withCString(\"%@\");\n", n, n, n];
+            }
+        [src appendString:@"return (String*)0;\n}\n"];
+        }
+    if (src.length == 0)
+        return ast;
+
+    XTLexer* lexer = [[XTLexer alloc] initWithSource:src
+                                            filename:@"<class-names>"
+                                         diagnostics:_diagnostics];
+    NSArray<XTToken*>* toks = [lexer tokenise];
+    XTParser* parser = [[XTParser alloc] initWithTokens:toks typeTable:tt diagnostics:_diagnostics];
+    parser.defaultPointerPlacement = arm64 ? XTPointerPlacementMain : XTPointerPlacementHeap;
+    XTProgramNode* synth = [parser parse];
+    if (!synth || _diagnostics.errorCount > 0)
+        return ast;
+    // wasm32: a table imported from a library resolves in that library's
+    // package, like every other function it exports.
+    if (_options.useWasm32Backend)
+        {
+        for (NSUInteger li = 0; li < ifaceJsons.count && li < ifacePaths.count; li++)
+            {
+            NSString* t = [XTInterfaceImporter classTableFromJSON:ifaceJsons[li]];
+            NSString* stem = ifacePaths[li].lastPathComponent;
+            if (!t.length)
+                continue;
+            if ([stem hasPrefix:@"lib"])
+                stem = [stem substringFromIndex:3];
+            stem = stem.stringByDeletingPathExtension;
+            for (XTASTNode* d in synth.declarations)
+                if ([d isKindOfClass:[XTFunctionDeclNode class]] && !((XTFunctionDeclNode*)d).body &&
+                    [((XTFunctionDeclNode*)d).funcName isEqualToString:t])
+                    ((XTFunctionDeclNode*)d).importPackage = stem;
+            }
+        }
+    _classTableSymbol = table;
+    NSMutableArray<XTASTNode*>* decls = [ast.declarations mutableCopy];
+    [decls addObjectsFromArray:synth.declarations];
+    return [[XTProgramNode alloc] initWithDeclarations:decls location:ast.location];
+    }
+
 // NIB reflection (uxkit/026, XG-NIB §4): auto-conform designable classes to the
 // binding protocol and synthesise the
 // three reflection bodies. A class is "designable" if it declares any `outlet`
@@ -1394,6 +1592,20 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
             [_diagnostics printAll];
             return nil;
             }
+        }
+
+    // Runtime class names (className / newInstanceOfClass): the per-module
+    // tables, before sema like the helpers above.
+    ast = [self injectClassNames:ast
+                          tokens:tokens
+                      ifaceJsons:xtcLibJsons
+                      ifacePaths:xtcLibPaths
+                       typeTable:tt
+                           arm64:arm64];
+    if (_diagnostics.errorCount > 0)
+        {
+        [_diagnostics printAll];
+        return nil;
         }
 
     // Record which libraries are actually needed at link time: a library is

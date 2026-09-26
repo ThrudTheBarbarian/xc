@@ -52,6 +52,45 @@
 #import "Comparable.xc"
 #import "String.xc"
 
+// Runtime class names: `className()` and `Object.newInstanceOfClass(name)`.
+// Not on the 6502, where Object stays as it was.
+//
+// The compiler writes the per-class parts of this into each module that needs
+// them (a library, a `-c` object, a program that imports one, or a program
+// that names either method):
+//
+//   * `String* _xtc_cname_<C>(void)` for each class C, returning "C". On the
+//     targets that link several modules its address sits in C's conformance
+//     itable under the id _XTC_CLASSNAME_ID, so className() reads it from the
+//     receiver's own vtable, whichever module built the class.
+//   * `Object* _xtc_cnew_<hash>(String* name)`, which runs `new C()` for the
+//     class with that name, then asks each imported module's own function.
+//     A library or `-c` object names its function in its interface.
+//   * `Object* _xtc_class_new(String* name)`, defined by the module that holds
+//     `main` (or by the library), which calls that module's function. Where
+//     nothing needs the table it returns null.
+//   * m68k links one module, so className() there is `_xtc_class_name(o)`, a
+//     chain of downcasts from the most derived class up.
+#if !ARCH_6502
+#define _XTC_CLASSNAME_ID 278412134
+typedef String* _xtc_cname_fn(void);
+Object* _xtc_class_new(String* name);
+#if ARCH_m68k
+String* _xtc_class_name(Object* o);
+#endif
+
+// Does the String `name` spell the C string `lit`? Used by the generated
+// `_xtc_cnew_<hash>` functions.
+bool _xtc_class_is(String* name, u8* lit)
+    {
+    u8* a = name.cString();
+    i32 i = (i32)0;
+    while (a[i] != (u8)0 && a[i] == lit[i])
+        i = i + (i32)1;
+    return a[i] == lit[i];
+    }
+#endif
+
 class Object<Hashable, Comparable>
     {
         // `self` is the receiver pointer. hash XOR-folds its low two
@@ -99,4 +138,47 @@ class Object<Hashable, Comparable>
         {
         return String.withCString("<Object>");
         }
+
+#if !ARCH_6502
+    // The name of the receiver's dynamic class, as written in its source:
+    // "Point" for a Point held as an Object*. Null when the class was built
+    // by a compiler that did not record names.
+    final String* className(void)
+        {
+#if ARCH_m68k
+        return _xtc_class_name(self);
+#else
+        // obj[0] is the vtable and vtable[1] its conformance itable: (id,
+        // pointer) pairs ending in a zero id.
+        pointer* op = (pointer*)(pointer)self;
+        pointer* vp = (pointer*)op[0];
+        if (vp == (pointer*)0)
+            return (String*)0;
+        pointer* ip = (pointer*)vp[1];
+        if (ip == (pointer*)0)
+            return (String*)0;
+        i32 k = (i32)0;
+        while (ip[k + k] != (pointer)0)
+            {
+            if ((u32)ip[k + k] == (u32)_XTC_CLASSNAME_ID)
+                {
+                _xtc_cname_fn* f = (_xtc_cname_fn*)ip[k + k + (i32)1];
+                return f();
+                }
+            k = k + (i32)1;
+            }
+        return (String*)0;
+#endif
+        }
+
+    // A new instance of the class called `name`, as `new C()` makes one: its
+    // zero-argument init runs if it has one. Null when no class of that name
+    // is in the program or in a module it imports.
+    static Object* newInstanceOfClass(String* name)
+        {
+        if (name == (String*)0)
+            return (Object*)0;
+        return _xtc_class_new(name);
+        }
+#endif
     }

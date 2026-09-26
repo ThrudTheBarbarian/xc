@@ -430,6 +430,12 @@ class JsonVal
     // methodSlots: an ABI assumption the client has to honour, nothing more.
     Map* _ambientSlots;
     Map* _protoSlots; // proto -> Map(method -> Number(slot))
+    // The module's class table function (`_xtc_cnew_<hash>`), or null for an
+    // interface written before class tables existed. A client's own table
+    // calls it, so Object.newInstanceOfClass finds this module's classes.
+    String* _classTab;
+    // The wasm package the module's symbols resolve in, or null.
+    String* _pkg;
 
     void init(void)
         {
@@ -437,6 +443,21 @@ class JsonVal
         _methodSlots = new Map();
         _ambientSlots = new Map();
         _protoSlots = new Map();
+        _classTab = (String*)0;
+        _pkg = (String*)0;
+        }
+
+    String* classTab(void)
+        {
+        return _classTab;
+        }
+    String* pkg(void)
+        {
+        return _pkg;
+        }
+    void setPkg(String* p)
+        {
+        _pkg = p;
         }
 
     Array* decls(void)
@@ -919,6 +940,9 @@ class JsonVal
 
     void readSlots(JsonVal* root)
         {
+        String* ct = root.memberStr((u8*)"classTable");
+        if (ct != (String*)0 && ct.byteLength() > (u32)0)
+            _classTab = String.withString(ct);
         JsonVal* ms = root.member((u8*)"methodSlots");
         if (ms != 0 && ms.kind() == (u8)5)
             {

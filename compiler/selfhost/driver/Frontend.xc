@@ -58,6 +58,12 @@ class FeOptions
     // them apart: `--emit-lib` and `-c` are library builds, `--emit-iface` is
     // a question.
     bool _libraryBuild;
+    // …and whether it is `-c` in particular: an object without `main` leaves
+    // the class-name root (`_xtc_class_new`) to the module that has it.
+    bool _compileOnly;
+    // This module's class table function (`_xtc_cnew_<hash>`), or 0; written
+    // into the interface as `classTable`.
+    String* _classTable;
     bool _analyze;      // -Wanalyze: run the static analyser
     String* _ifaceJson; // …and where it lands
     Array* _neededLibs; // the library FILES `#import <X>` resolved to, for the
@@ -77,6 +83,8 @@ class FeOptions
         _ppOut = (String*)0;
         _emitIface = false;
         _libraryBuild = false;
+        _compileOnly = false;
+        _classTable = (String*)0;
         _analyze = false;
         _ifaceJson = (String*)0;
         _neededLibs = new Array();
@@ -180,6 +188,22 @@ class FeOptions
     void setLibraryBuild(bool b)
         {
         _libraryBuild = b;
+        }
+    bool compileOnly(void)
+        {
+        return _compileOnly;
+        }
+    void setCompileOnly(bool b)
+        {
+        _compileOnly = b;
+        }
+    String* classTable(void)
+        {
+        return _classTable;
+        }
+    void setClassTable(String* t)
+        {
+        _classTable = t;
         }
     String* ifaceJson(void)
         {
@@ -456,6 +480,8 @@ class FeOptions
                         pkgStem = fn.substringBytes((u32)3,
                                                     fn.byteLength() - (u32)3 - (u32)5);
                     }
+                if (pkgStem != (String*)0)
+                    im.setPkg(pkgStem);
                 for (u32 j = (u32)0; j < im.decls().count(); j = j + (u32)1)
                     {
                     Node* d = (Node*)im.decls().get(j);
@@ -534,6 +560,9 @@ class FeOptions
         synthesizeDesignable(program);
         if (carriesItable(o))
             injectConformanceHelper(program);
+        // Runtime class names (className / newInstanceOfClass): the
+        // per-module tables, before sema like the helpers above.
+        injectClassNames(program, o, tokens, importedIfaces, xtcImports);
         // The C interface the driver reads out of libc's DWARF. The port has no
         // DWARF reader, so the same declarations come from a bundled stub — and
         // everything in it is marked C-ABI here, because that is a property of
@@ -682,7 +711,8 @@ class FeOptions
         // The prelude's files are the AMBIENT surface: every unit already has
         // them, so this module does not export them as its own.
         if (o.emitIface())
-            o.setIfaceJson(IfaceWrite.json(program, sema.vtable(), pp.preludeFiles(), cImports));
+            o.setIfaceJson(IfaceWrite.jsonWithTable(program, sema.vtable(), pp.preludeFiles(), cImports,
+                                                    o.classTable()));
 
         Lower* lower = Lower.make();
         lower.setPointerWidth(pointerWidthOf(o));
@@ -1125,6 +1155,238 @@ void injectConformanceHelper(Node* program)
         synth.kid(i).addFlag((u32)NF_SYNTH);
         program.add(synth.kid(i));
         }
+    }
+
+// Runtime class names: the per-module half of `Object.className()` and
+// `Object.newInstanceOfClass(name)` (support/generic/lib/Object.xc), mirrored
+// from the reference's `injectClassNames:`. Generated as SOURCE, so it needs no
+// IR or back-end support:
+//
+//   String* _xtc_cname_<C>(void)          one per class; the lowering puts its
+//                                         address in C's itable, where
+//                                         className() finds it
+//   Object* _xtc_cnew_<hash>(String* n)   `new C()` for the class named n,
+//                                         then each imported module's table
+//   Object* _xtc_class_new(String* n)     the root, in the module that holds
+//                                         main (or the library)
+//   String* _xtc_class_name(Object* o)    m68k only: downcasts, most derived
+//                                         class first
+//
+// The table is emitted for a library or `-c` object, for a module that
+// imports another xc module, and for one that names either method (a
+// `.className` or `.newInstanceOfClass` token). Otherwise only the root is,
+// returning null, and dead-function elimination drops it. The table's name is
+// a hash of its body, so equal tables merge at link and different ones cannot
+// collide.
+void injectClassNames(Node* program, FeOptions* o, Array* tokens, Array* ifaces, u32 xtcImports)
+    {
+    o.setClassTable((String*)0);
+    bool haveObject = false;
+    bool definesMain = false;
+    for (u32 i = (u32)0; i < program.kidCount(); i = i + (u32)1)
+        {
+        Node* d = program.kid(i);
+        if (d.kind() == (u16)nkClassDecl)
+            {
+            if (d.hasFlag((u32)NF_EXTERNAL) || d.isCategory() || !d.name().equals(String.withCString("Object")))
+                continue;
+            for (u32 j = (u32)0; j < d.kidCount(); j = j + (u32)1)
+                {
+                Node* m = d.kid(j);
+                if (m.kind() == (u16)nkMethodDecl && m.name() != (String*)0 &&
+                    m.name().equals(String.withCString("newInstanceOfClass")))
+                    haveObject = true;
+                }
+            }
+        else if (d.kind() == (u16)nkFunctionDecl)
+            {
+            if (d.name() != (String*)0 && d.name().equals(String.withCString("main")) && IfaceWrite.hasBody(d))
+                definesMain = true;
+            }
+        }
+    if (!haveObject)
+        return;
+    bool m68k = platformOf(o).equals(String.withCString("atarist"));
+    bool named = false;
+    for (u32 i = (u32)1; i < tokens.count() && !named; i = i + (u32)1)
+        {
+        Token* t = (Token*)tokens.get(i);
+        u16 pt = ((Token*)tokens.get(i - (u32)1)).type();
+        if (t.type() == (u16)tokIdentifier && (pt == (u16)tokDot || pt == (u16)tokArrow) &&
+            (t.value().equals(String.withCString("className")) ||
+             t.value().equals(String.withCString("newInstanceOfClass"))))
+            named = true;
+        }
+    bool emit = named || (!m68k && (o.libraryBuild() || xtcImports > (u32)0));
+    bool isRoot = !o.compileOnly() || definesMain;
+
+    // The classes this module defines, by name. `$` cannot occur in a name
+    // anybody wrote: those are the compiler's own (block shapes).
+    Map* byName = new Map();
+    Array* names = new Array();
+    for (u32 i = (u32)0; i < program.kidCount(); i = i + (u32)1)
+        {
+        Node* d = program.kid(i);
+        if (d.kind() != (u16)nkClassDecl || d.hasFlag((u32)NF_EXTERNAL) || d.isCategory())
+            continue;
+        if (d.name().indexOfByte((u8)'$') != String.notFound())
+            continue;
+        if (byName.get((Hashable*)d.name()) == (Object*)0)
+            names.add((Object*)d.name());
+        byName.set((Hashable*)d.name(), (Object*)d);
+        }
+    Vtable.sortStrings(names);
+
+    String* src = String.withCString("");
+    String* table = (String*)0;
+    if (emit)
+        {
+        if (!m68k)
+            for (u32 i = (u32)0; i < names.count(); i = i + (u32)1)
+                {
+                String* n = (String*)names.get(i);
+                src.appendCString("String* _xtc_cname_");
+                src.append(n);
+                src.appendCString("(void)\n{\nreturn String.withCString(\"");
+                src.append(n);
+                src.appendCString("\");\n}\n");
+                }
+        String* body = String.withCString("{\n");
+        for (u32 i = (u32)0; i < names.count(); i = i + (u32)1)
+            {
+            String* n = (String*)names.get(i);
+            body.appendCString("if (_xtc_class_is(name, \"");
+            body.append(n);
+            body.appendCString("\")) return (Object*)new ");
+            body.append(n);
+            body.appendCString("();\n");
+            }
+        Array* imported = new Array();
+        for (u32 i = (u32)0; i < ifaces.count(); i = i + (u32)1)
+            {
+            String* t = ((IfaceImport*)ifaces.get(i)).classTab();
+            if (t == (String*)0)
+                continue;
+            bool seen = false;
+            for (u32 k = (u32)0; k < imported.count(); k = k + (u32)1)
+                if (((String*)imported.get(k)).equals(t))
+                    seen = true;
+            if (!seen)
+                imported.add((Object*)t);
+            }
+        if (imported.count() > (u32)0)
+            {
+            body.appendCString("Object* o = (Object*)0;\n");
+            for (u32 i = (u32)0; i < imported.count(); i = i + (u32)1)
+                {
+                body.appendCString("o = ");
+                body.append((String*)imported.get(i));
+                body.appendCString("(name);\nif (o != (Object*)0) return o;\n");
+                }
+            }
+        body.appendCString("return (Object*)0;\n}\n");
+        u32 h = (u32)2166136261;
+        for (u32 i = (u32)0; i < body.byteLength(); i = i + (u32)1)
+            {
+            h = h ^ (u32)body.byteAt(i);
+            h = h * (u32)16777619;
+            }
+        table = String.withCString("_xtc_cnew_");
+        table.appendFormat("%lu", (i32)h);
+        for (u32 i = (u32)0; i < imported.count(); i = i + (u32)1)
+            {
+            src.appendCString("Object* ");
+            src.append((String*)imported.get(i));
+            src.appendCString("(String* name);\n");
+            }
+        src.appendCString("Object* ");
+        src.append(table);
+        src.appendCString("(String* name)\n");
+        src.append(body);
+        }
+    if (isRoot)
+        {
+        src.appendCString("Object* _xtc_class_new(String* name)\n{\n");
+        if (table != (String*)0)
+            {
+            src.appendCString("return ");
+            src.append(table);
+            src.appendCString("(name);\n}\n");
+            }
+        else
+            src.appendCString("return (Object*)0;\n}\n");
+        }
+    if (m68k && isRoot)
+        {
+        src.appendCString("String* _xtc_class_name(Object* o)\n{\n");
+        if (emit)
+            {
+            // Most derived first, so the first downcast that succeeds names the
+            // receiver's own class rather than one of its ancestors.
+            Array* depth = new Array();
+            u32 maxDepth = (u32)0;
+            for (u32 i = (u32)0; i < names.count(); i = i + (u32)1)
+                {
+                u32 k = (u32)0;
+                Node* c = (Node*)byName.get((Hashable*)names.get(i));
+                while (c != (Node*)0 && !c.name().equals(String.withCString("Object")) && k < (u32)64)
+                    {
+                    k = k + (u32)1;
+                    String* pn = c.op();
+                    if (pn == (String*)0 || pn.equals(String.withCString("-")))
+                        pn = String.withCString("Object");
+                    c = (Node*)byName.get((Hashable*)pn);
+                    }
+                depth.add((Object*)Number.withU32(k));
+                if (k > maxDepth)
+                    maxDepth = k;
+                }
+            for (u32 dp = maxDepth + (u32)1; dp > (u32)0; dp = dp - (u32)1)
+                for (u32 i = (u32)0; i < names.count(); i = i + (u32)1)
+                    {
+                    if (((Number*)depth.get(i)).asU32() != dp - (u32)1)
+                        continue;
+                    String* n = (String*)names.get(i);
+                    src.appendCString("if ((");
+                    src.append(n);
+                    src.appendCString("* ?)o != (");
+                    src.append(n);
+                    src.appendCString("*)0) return String.withCString(\"");
+                    src.append(n);
+                    src.appendCString("\");\n");
+                    }
+            }
+        src.appendCString("return (String*)0;\n}\n");
+        }
+    if (src.byteLength() == (u32)0)
+        return;
+
+    Lexer* lex = Lexer.with(src, String.withCString("<class-names>"));
+    Parser* parser = Parser.with(lex.tokenise());
+    parser.addTypeName(String.withCString("Object"));
+    parser.addTypeName(String.withCString("String"));
+    for (u32 i = (u32)0; i < names.count(); i = i + (u32)1)
+        parser.addTypeName((String*)names.get(i));
+    Node* synth = parser.parse();
+    if (synth == 0)
+        return;
+    // wasm32: a table imported from a library resolves in that library's
+    // package, like every other function it exports.
+    for (u32 i = (u32)0; i < ifaces.count(); i = i + (u32)1)
+        {
+        IfaceImport* im = (IfaceImport*)ifaces.get(i);
+        if (im.classTab() == (String*)0 || im.pkg() == (String*)0)
+            continue;
+        for (u32 k = (u32)0; k < synth.kidCount(); k = k + (u32)1)
+            {
+            Node* d = synth.kid(k);
+            if (d.kind() == (u16)nkFunctionDecl && !IfaceWrite.hasBody(d) && d.name().equals(im.classTab()))
+                d.setPkg(im.pkg());
+            }
+        }
+    o.setClassTable(table);
+    for (u32 i = (u32)0; i < synth.kidCount(); i = i + (u32)1)
+        program.add(synth.kid(i));
     }
 
 // Is there a `Platform.xc` on the search path? That is what gates the implicit

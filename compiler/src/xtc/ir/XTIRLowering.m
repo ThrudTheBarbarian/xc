@@ -417,6 +417,9 @@
 // This module gets the race-free static-init once (§9.5). Decided once in
 // lowerProgram, read by emitStaticInitGuardForClass:.
 @property(nonatomic) BOOL threadSafeStatics;
+// Classes with a generated `_xtc_cname_<C>` (runtime class names): their
+// itable carries the (XTClassNameId, &_xtc_cname_<C>) pair.
+@property(nonatomic) NSMutableSet<NSString*>* classNameFunctions;
 @end
 
 static BOOL sItableProtocols = NO;
@@ -17978,7 +17981,14 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
     // and on ELF it names the library's methods from data, which the x86_64
     // linker cannot bind.
     NSString* itblName = nil;
-    if ((sItableProtocols || sVtableConforms) && cls.protocolImplSymbols.count > 0 && !cls.isExternal)
+    // Runtime class names: the class's `_xtc_cname_<C>` rides in the itable as
+    // one more (id, pointer) pair, after the protocols. A pseudo-id no protocol
+    // can have (FNV-1a of "$className"; `$` is not an identifier character),
+    // so conformance tests and itable dispatch never match it, and a module
+    // built without names simply lacks the pair.
+    BOOL namePair = info.needsVtable && cls.vtableSlotSymbols.count > 0 &&
+                    [self.classNameFunctions containsObject:cls.className];
+    if ((sItableProtocols || sVtableConforms) && (cls.protocolImplSymbols.count > 0 || namePair) && !cls.isExternal)
         {
         NSMutableArray<NSString*>* pairs = [NSMutableArray array];
         for (NSString* pname in [cls.protocolImplSymbols.allKeys
@@ -18001,6 +18011,11 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
             [self.module addSymbol:tsym];
             [pairs addObject:[NSString stringWithFormat:@"__protoid_%u", xtProtocolId(pname)]];
             [pairs addObject:tabName];
+            }
+        if (namePair)
+            {
+            [pairs addObject:[NSString stringWithFormat:@"__protoid_%u", xtProtocolId(@"$className")]];
+            [pairs addObject:[@"_xtc_cname_" stringByAppendingString:cls.className]];
             }
         [pairs addObject:@"__protoid_0"]; // terminator
         [pairs addObject:@""];
@@ -19049,6 +19064,18 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
     L.threadSafeStatics = (sThreadSafeStatics >= 0)
                               ? (sThreadSafeStatics != 0)
                               : XTProgramDeclaresThreadCreate(program);
+    // The classes whose name function the driver generated (`_xtc_cname_<C>`,
+    // see -[XTCompilerDriver injectClassNames:…]); each goes in its class's
+    // itable, where Object.className() looks for it.
+    L.classNameFunctions = [NSMutableSet set];
+    for (XTASTNode* decl in program.declarations)
+        {
+        if (decl.nodeKind != XTASTNodeKindFunctionDecl)
+            continue;
+        XTFunctionDeclNode* fn = (XTFunctionDeclNode*)decl;
+        if (fn.body && [fn.funcName hasPrefix:@"_xtc_cname_"])
+            [L.classNameFunctions addObject:[fn.funcName substringFromIndex:11]];
+        }
 
     // Index every class decl by name so the pre-scan can walk parent
     // chains via `parentName` even when sema didn't populate

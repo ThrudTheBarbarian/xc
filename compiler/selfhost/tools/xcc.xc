@@ -4850,6 +4850,7 @@ DriverOptions* parseDriverArgs(void)
         }
         if (a.equals(String.withCString("-c"))) {
             d.setCompileOnly(true);
+            o.setCompileOnly(true);   // …so `main`, if any, is the class-name root
             o.setEmitIface(true);     // the interface is a build artifact of -c
             // An object is part of a library too: the overrides may live in a
             // module that is not being compiled, so every instance method

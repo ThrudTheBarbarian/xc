@@ -60,6 +60,18 @@ NS_ASSUME_NONNULL_BEGIN
                          methodSlots:(nullable NSDictionary*)methodSlots
                             cImports:(nullable NSArray<NSString*>*)cImports
                         excludeFiles:(nullable NSSet<NSString*>*)excludeFiles;
+
+/****************************************************************************\
+|* As above, also naming the module's class table function (`classTable`), so
+|* a client's `Object.newInstanceOfClass` can reach this module's classes. The
+|* key is written only when there is a table.
+\****************************************************************************/
++ (nullable NSString*)jsonForProgram:(XTProgramNode*)program
+                       protocolSlots:(nullable NSDictionary*)protocolSlots
+                         methodSlots:(nullable NSDictionary*)methodSlots
+                            cImports:(nullable NSArray<NSString*>*)cImports
+                        excludeFiles:(nullable NSSet<NSString*>*)excludeFiles
+                          classTable:(nullable NSString*)classTable;
 @end
 
 NS_ASSUME_NONNULL_END

@@ -125,6 +125,17 @@ static void appendCanonicalJSON(NSMutableString *out, id v) {
                  methodSlots:(NSDictionary *)methodSlots
                     cImports:(NSArray<NSString *> *)cImports
                 excludeFiles:(NSSet<NSString *> *)excludeFiles {
+    return [self jsonForProgram:program protocolSlots:protocolSlots
+                    methodSlots:methodSlots cImports:cImports
+                   excludeFiles:excludeFiles classTable:nil];
+}
+
++ (NSString *)jsonForProgram:(XTProgramNode *)program
+               protocolSlots:(NSDictionary *)protocolSlots
+                 methodSlots:(NSDictionary *)methodSlots
+                    cImports:(NSArray<NSString *> *)cImports
+                excludeFiles:(NSSet<NSString *> *)excludeFiles
+                  classTable:(NSString *)classTable {
     if (!program) return nil;
     NSMutableArray *classes   = [NSMutableArray array];
     NSMutableArray *protocols = [NSMutableArray array];
@@ -378,6 +389,13 @@ static void appendCanonicalJSON(NSMutableString *out, id v) {
                             @"methodSlots":   prunedMethodSlots,
                             @"ambientSlots":  ambientSlots,
                             @"cImports":      cImports      ?: @[] };
+    // The module's class table (`Object.newInstanceOfClass`). Only when there
+    // is one, so an interface without it reads exactly as before.
+    if (classTable.length) {
+        NSMutableDictionary *withTable = [root mutableCopy];
+        withTable[@"classTable"] = classTable;
+        root = withTable;
+    }
     NSMutableString *out = [NSMutableString string];
     appendCanonicalJSON(out, root);
     return out;
