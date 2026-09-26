@@ -1837,6 +1837,32 @@ static NSString* m68kSym(NSString* name)
     [self loadOperand:op intoReg:reg slots:slots into:out];
     }
 
+// Load a branch or select condition into `reg` as a long that is zero exactly
+// when the condition is false. A 64-bit condition ORs its two longs: loadOperand
+// delivers the HIGH one alone, so an i64 of 1 read as false (bug 293).
++ (void)loadCondition:(XTIROperand*)op
+                   fn:(XTIRFunction*)fn
+              intoReg:(NSString*)reg
+                slots:(NSDictionary<NSNumber*, NSNumber*>*)slots
+                 into:(NSMutableString*)out
+    {
+    XTIRType* t = (op.kind == XTIROperandKindUse) ? [fn valueForId:op.valueId].type : op.type;
+    BOOL wide = t && (t.kind == XTIRTypeKindI64 || t.kind == XTIRTypeKindU64);
+    if (wide && op.kind == XTIROperandKindImmI)
+        {
+        [out appendFormat:@"\tmove.l\t#%d,%@\n", op.intValue != 0 ? 1 : 0, reg];
+        return;
+        }
+    NSNumber* off = (wide && op.kind == XTIROperandKindUse) ? slots[@(op.valueId)] : nil;
+    if (off)
+        {
+        [out appendFormat:@"\tmove.l\t%d(a6),%@\n\tor.l\t%d(a6),%@\n",
+                          off.intValue, reg, off.intValue + 4, reg];
+        return;
+        }
+    [self loadOperand:op intoReg:reg slots:slots into:out];
+    }
+
 // An eight-byte scalar return arrives in d0:d1 (high:low) — TWO longs. Every
 // call site has to store both, and each one used to say so in its own words:
 // the direct Call handled F64/I64/U64, CallIndirect handled only F64, and
@@ -3468,7 +3494,7 @@ static NSString* m68kSym(NSString* name)
         if (insn.operands.count < 3 || !insn.result)
             break;
         int n = gLabelSeq++;
-        [self loadOperand:insn.operands[0] intoReg:@"d0" slots:slots into:out]; // cond
+        [self loadCondition:insn.operands[0] fn:fn intoReg:@"d0" slots:slots into:out]; // cond
         [out appendFormat:@"\ttst.l\td0\n\tbeq.s\t.Lsel%df\n", n];
         [self loadOperand:insn.operands[1] intoReg:@"d0" slots:slots into:out]; // ifTrue
         [out appendFormat:@"\tbra.s\t.Lsel%dd\n.Lsel%df:\n", n, n];
@@ -3803,7 +3829,7 @@ static NSString* m68kSym(NSString* name)
             }
         else
             {
-            [self loadOperand:cond intoReg:@"d0" slots:slots into:out];
+            [self loadCondition:cond fn:fn intoReg:@"d0" slots:slots into:out];
             [out appendString:@"\ttst.l\td0\n"];
             [out appendFormat:@"\tbeq\t.Lcbf%d\n", n]; // false edge
             }

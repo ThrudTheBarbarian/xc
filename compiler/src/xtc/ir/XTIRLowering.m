@@ -3106,6 +3106,12 @@ static uint32_t xtProtocolId(NSString* name)
 // zero, not a Const of pointer type, which the arm64 back end mis-sizes.
 - (XTIRValue*)emitPointerIsNull:(XTIRValue*)p
     {
+    return [self emitPointerCompareNull:p predicate:XTIRICmpEQ];
+    }
+
+// `p == null` (EQ) or `p != null` (NE) as a Bool, by the rule above.
+- (XTIRValue*)emitPointerCompareNull:(XTIRValue*)p predicate:(XTIRICmpPredicate)pred
+    {
     XTIRValue* lhs = p;
     XTIRValue* rhs = nil;
     if ([XTPointerType pointerToType:[XTType u8Type]].byteWidth == 3)
@@ -3130,7 +3136,68 @@ static uint32_t xtProtocolId(NSString* name)
                                                                    result:rv
                                                                  operands:@[ [XTIROperand useWithValueId:lhs.valueId],
                                                                              [XTIROperand useWithValueId:rhs.valueId] ]
-                                                                predicate:XTIRICmpEQ
+                                                                predicate:pred
+                                                                   dbgLoc:nil]];
+    return rv;
+    }
+
+// The truth of a value that is about to BECOME a Bool: `v != 0` for an integer
+// wider than a byte or a float, `v != null` for a pointer. nil when none
+// applies, and the caller converts as before. A Trunc to Bool keeps the low
+// byte only, and a float converts by truncating toward zero, so the right side
+// of `a && b` read a u16 of 256, an i64 of 1 << 32, a pointer whose low byte is
+// zero or a float of 0.5 as false (bug 293).
+- (nullable XTIRValue*)emitTruthTest:(XTIRValue*)v
+    {
+    XTIRType* t = v.type;
+    if (!t)
+        return nil;
+    if (t.kind == XTIRTypeKindPtr)
+        return [self emitPointerCompareNull:v predicate:XTIRICmpNE];
+    if (XTIRTypeKindIsFloating(t.kind))
+        {
+        // !(f == 0.0): OEQ is the float compare every back end has, as `!f`
+        // uses. A NaN is not equal to zero, so it is true, as in C.
+        XTIRValue* fzero = [self allocateValueOfType:t atSite:self.currentBlock];
+        [self.currentBlock appendInstruction:[[XTIRInsn alloc] initWithOpcode:XTIROpConst
+                                                                       result:fzero
+                                                                     operands:@[ [XTIROperand immFWithType:t rawBytes:0] ]
+                                                                       dbgLoc:nil]];
+        XTIRValue* isZero = [self allocateValueOfType:[XTIRType boolType] atSite:self.currentBlock];
+        [self.currentBlock appendInstruction:[[XTIRInsn alloc] initWithOpcode:XTIROpFCmp
+                                                                       result:isZero
+                                                                     operands:@[ [XTIROperand useWithValueId:v.valueId],
+                                                                                 [XTIROperand useWithValueId:fzero.valueId] ]
+                                                                    predicate:XTIRFCmpOEQ
+                                                                       dbgLoc:nil]];
+        XTIRType* bt = [XTIRType boolType];
+        XTIRValue* bzero = [self allocateValueOfType:bt atSite:self.currentBlock];
+        [self.currentBlock appendInstruction:[[XTIRInsn alloc] initWithOpcode:XTIROpConst
+                                                                       result:bzero
+                                                                     operands:@[ [XTIROperand immIWithType:bt value:0] ]
+                                                                       dbgLoc:nil]];
+        XTIRValue* fr = [self allocateValueOfType:bt atSite:self.currentBlock];
+        [self.currentBlock appendInstruction:[[XTIRInsn alloc] initWithOpcode:XTIROpICmp
+                                                                       result:fr
+                                                                     operands:@[ [XTIROperand useWithValueId:isZero.valueId],
+                                                                                 [XTIROperand useWithValueId:bzero.valueId] ]
+                                                                    predicate:XTIRICmpEQ
+                                                                       dbgLoc:nil]];
+        return fr;
+        }
+    if (!XTIRTypeKindIsInteger(t.kind) || t.byteWidth <= 1)
+        return nil;
+    XTIRValue* zero = [self allocateValueOfType:t atSite:self.currentBlock];
+    [self.currentBlock appendInstruction:[[XTIRInsn alloc] initWithOpcode:XTIROpConst
+                                                                   result:zero
+                                                                 operands:@[ [XTIROperand immIWithType:t value:0] ]
+                                                                   dbgLoc:nil]];
+    XTIRValue* rv = [self allocateValueOfType:[XTIRType boolType] atSite:self.currentBlock];
+    [self.currentBlock appendInstruction:[[XTIRInsn alloc] initWithOpcode:XTIROpICmp
+                                                                   result:rv
+                                                                 operands:@[ [XTIROperand useWithValueId:v.valueId],
+                                                                             [XTIROperand useWithValueId:zero.valueId] ]
+                                                                predicate:XTIRICmpNE
                                                                    dbgLoc:nil]];
     return rv;
     }
@@ -14699,6 +14766,14 @@ static NSString* XTIRTypeKindName(XTIRTypeKind k)
     XTIRValue* lhs = [self lowerExpression:node.left];
     if (!lhs)
         return nil;
+    // The left side is a branch condition: a float is tested as one (see
+    // lowerConditionExpr:).
+    if (lhs.type && XTIRTypeKindIsFloating(lhs.type.kind))
+        {
+        lhs = [self emitTruthTest:lhs];
+        if (!lhs)
+            return nil;
+        }
 
     NSString* prefix = [NSString stringWithFormat:@"bb_%lu",
                                                   (unsigned long)self.currentFunction.blocks.count];
@@ -14741,10 +14816,12 @@ static NSString* XTIRTypeKindName(XTIRTypeKind k)
         self.condDepth -= 1;
         return nil;
         }
-    rhs = [self coerceValue:rhs
-                   fromType:node.right.resolvedType
-                     toType:[XTType boolType]
-                   location:node.location];
+    XTIRValue* truth = [self emitTruthTest:rhs];
+    rhs = truth ? truth
+                : [self coerceValue:rhs
+                           fromType:node.right.resolvedType
+                             toType:[XTType boolType]
+                           location:node.location];
     if (!rhs)
         {
         self.condDepth -= 1;
@@ -14817,6 +14894,11 @@ static NSString* XTIRTypeKindName(XTIRTypeKind k)
     XTIRValue* v = [self lowerExpression:e];
     if (!v)
         return nil;
+    // A float is true when it is not 0.0. Handed to the branch as it is, a back
+    // end tests its bits: -0.0 read as true, and arm64 tested a double's low 32
+    // bits, so 0.5 read as false (bug 293).
+    if (v.type && XTIRTypeKindIsFloating(v.type.kind))
+        return [self emitTruthTest:v];
     XTType* t = e.resolvedType;
     // The AST type is not enough on its own. sema types a comparison as the
     // WIDENING OF ITS OPERANDS, not as bool — so `f == (Sink^)0` is itself

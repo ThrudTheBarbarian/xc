@@ -1,0 +1,18 @@
+i64 hi 1017
+i64 neg 1017
+i64 one 1017
+i64 zero 6
+u64 top 1017
+u64 hi 1017
+u64 low 1017
+u64 zero 6
+ptr 1017
+null 6
+u16 256 1017
+float half 1017
+float zero 6
+float -0 6
+double half 1017
+double -0 6
+pick 3 4
+pick 7 9

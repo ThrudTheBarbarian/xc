@@ -5038,6 +5038,15 @@ class Arm64
         _out.appendFormat("    fmov %s, %s\n", reg.cString(), gp.cString());
     }
 
+    // The scratch a branch or select condition is tested in: x16 for a pointer
+    // or a 64-bit integer, w16 otherwise. A condition is true when ANY of its
+    // bits is set, so a 64-bit one tested in w16 read `1 << 32`, or a pointer
+    // whose low 32 bits are zero, as false (bug 293).
+    static String* condReg(IROperand* c)
+    {
+        return String.withCString(needsXReg(opType(c)) ? "x16" : "w16");
+    }
+
     void emitSelect(IRInsn* n)
     {
         if (n.res() == (IRValue*)0 || n.ops().count() < (u32)3) { unsupported(n.op()); return; }
@@ -5058,22 +5067,24 @@ class Arm64
             String* f1 = fregName((u32)17, ty);
             String* f2 = fregName((u32)16, ty);
             String* f0 = fregName((u32)16, ty);
-            materialise((IROperand*)n.ops().get((u32)0), String.withCString("w16"));
+            String* cr = condReg((IROperand*)n.ops().get((u32)0));
+            materialise((IROperand*)n.ops().get((u32)0), cr);
             loadFPOperand((IROperand*)n.ops().get((u32)1), f1, dbl);
             loadFPOperand((IROperand*)n.ops().get((u32)2), f2, dbl);
-            _out.appendCString("    cmp w16, #0\n");
+            _out.appendFormat("    cmp %s, #0\n", cr.cString());
             _out.appendFormat("    fcsel %s, %s, %s, ne\n",
                               f0.cString(), f1.cString(), f2.cString());
             storeReg(f0, n.res());
             return;
         }
         bool x = needsXReg(ty);
-        materialise((IROperand*)n.ops().get((u32)0), String.withCString("w16"));
+        String* cr = condReg((IROperand*)n.ops().get((u32)0));
+        materialise((IROperand*)n.ops().get((u32)0), cr);
         String* r1 = operandReg((IROperand*)n.ops().get((u32)1),
                                 String.withCString(x ? "x17" : "w17"));
         String* r2 = operandReg((IROperand*)n.ops().get((u32)2),
                                 String.withCString(x ? "x15" : "w15"));
-        _out.appendCString("    cmp w16, #0\n");
+        _out.appendFormat("    cmp %s, #0\n", cr.cString());
         String* r0 = resultReg(n.res(), String.withCString(x ? "x16" : "w16"));
         _out.appendFormat("    csel %s, %s, %s, ne\n", r0.cString(), r1.cString(), r2.cString());
         canonicalise(r0, ty);
@@ -5159,11 +5170,12 @@ class Arm64
         // taken-edge copy DESTINATION is a fall-edge copy SOURCE, in which case
         // the taken copies must run on the taken path only.
         if (takenPhiClobbersFallSrc(t, f, _bb)) {
-            materialise(c, String.withCString("w16"));
+            String* cr = condReg(c);
+            materialise(c, cr);
             String* lf = String.withCString(".Lpc_");
             lf.appendFormat("%lu", _labelCounter);
             _labelCounter = _labelCounter + (u32)1;
-            _out.appendFormat("    cbz w16, %s\n", lf.cString());
+            _out.appendFormat("    cbz %s, %s\n", cr.cString(), lf.cString());
             emitPhiCopies(_bb, t);
             _out.appendFormat("    b %s\n", blockLabel(t).cString());
             _out.appendFormat("%s:\n", lf.cString());
@@ -5172,8 +5184,9 @@ class Arm64
             return;
         }
         emitPhiCopies(_bb, t);
-        materialise(c, String.withCString("w16"));
-        _out.appendFormat("    cbnz w16, %s\n", blockLabel(t).cString());
+        String* cr = condReg(c);
+        materialise(c, cr);
+        _out.appendFormat("    cbnz %s, %s\n", cr.cString(), blockLabel(t).cString());
         emitPhiCopies(_bb, f);
         _out.appendFormat("    b %s\n", blockLabel(f).cString());
     }

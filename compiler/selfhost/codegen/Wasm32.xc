@@ -1707,6 +1707,19 @@ class Wasm32
     }
 
     // ── Operand loading ──────────────────────────────────────────────────
+    // Push a branch or select condition as the i32 that `if` and `select`
+    // take. An i64, f32 or f64 condition is tested against zero in its own
+    // type: pushed as it was, it made a module that does not validate (bug
+    // 293).
+    void pushCondition(IROperand* op, String* out)
+    {
+        pushOperand(op, out);
+        String* vt = Wasm32.valType(tyOfOp(op));
+        if (vt.equals(String.withCString("i64")) || vt.equals(String.withCString("f32"))
+         || vt.equals(String.withCString("f64")))
+            out.appendFormat("    %s.const 0\n    %s.ne\n", vt.cString(), vt.cString());
+    }
+
     void pushOperand(IROperand* op, String* out)
     {
         u8 k = op.kind();
@@ -2213,7 +2226,7 @@ class Wasm32
             if (res == 0 || ops.count() < (u32)3) return true;
             pushOperand((IROperand*)ops.get((u32)1), out);
             pushOperand((IROperand*)ops.get((u32)2), out);
-            pushOperand((IROperand*)ops.get((u32)0), out);
+            pushCondition((IROperand*)ops.get((u32)0), out);
             out.appendCString("    select\n");
             setResult(res, false, out);
             return true;
@@ -2850,7 +2863,7 @@ class Wasm32
                 ? ((IROperand*)ops.get((u32)1)).blk() : (IRBlock*)0;
             IRBlock* elseB = ops.count() > (u32)2
                 ? ((IROperand*)ops.get((u32)2)).blk() : (IRBlock*)0;
-            pushOperand((IROperand*)ops.get((u32)0), out);
+            pushCondition((IROperand*)ops.get((u32)0), out);
             out.appendCString("    if\n");
             emitPhiCopies(b, thenB, out);
             out.appendFormat("    i32.const %lu\n    local.set $pc\n    else\n",
@@ -3085,7 +3098,7 @@ class Wasm32
             Array* ops = Wasm32.dataOps(term);
             u32 ti = blockIndexOf(fn, ((IROperand*)ops.get((u32)1)).blk());
             u32 ei = blockIndexOf(fn, ((IROperand*)ops.get((u32)2)).blk());
-            pushOperand((IROperand*)ops.get((u32)0), out);
+            pushCondition((IROperand*)ops.get((u32)0), out);
             out.appendCString("    if\n");
             emitStructuredBranchTo(ti, u, plan, fn, ctx, out);
             out.appendCString("    else\n");

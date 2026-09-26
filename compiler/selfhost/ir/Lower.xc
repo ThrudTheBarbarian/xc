@@ -1622,6 +1622,10 @@ class ClassInfo
         IRValue* l = lowerExpr(n.kid((u32)0));
         if (_failed)
             return (IRValue*)0;
+        // The left side is a branch condition: a float is tested as one (see
+        // lowerCondition).
+        if (isFloatIr(l.ty()))
+            l = truthTest(l);
 
         String* prefix = blockPrefix();
         String* rn = String.withString(prefix);
@@ -1654,7 +1658,9 @@ class ClassInfo
         // The right side becomes the answer, so it has to BE a boolean — but
         // a comparison already is one, and forcing a cast onto it emits an
         // instruction the original does not.
-        IRValue* rb = coerce(r, n.kid((u32)1).ty(), String.withCString("bool"));
+        IRValue* rb = truthTest(r);
+        if (rb == (IRValue*)0)
+            rb = coerce(r, n.kid((u32)1).ty(), String.withCString("bool"));
         // The `+1` temps born in THIS arm are released before it branches away.
         // They are live on this path only, and a short-circuit arm's value is a
         // Bool — so unlike a ternary arm, none of them can BE the result. Left
@@ -2319,12 +2325,18 @@ class ClassInfo
     // null.
     IRValue* cmpPtrZero(IRValue* p)
         {
+        return cmpPtrNull(p, String.withCString("EQ"));
+        }
+
+    // `p == null` (EQ) or `p != null` (NE) as a Bool, by the rule above.
+    IRValue* cmpPtrNull(IRValue* p, String* pred)
+        {
         if (_ptrW != (u32)3)
             {
             IRValue* nullP = nullPtrOf(p.ty());
             IRInsn* fc = IRInsn.with(String.withCString("ICmp"));
             fc.setRes(new IRValue(String.withCString("Bool")));
-            fc.setPred(String.withCString("EQ"));
+            fc.setPred(pred);
             fc.add(IROperand.useVal(p));
             fc.add(IROperand.useVal(nullP));
             _blk.add(fc);
@@ -2338,11 +2350,65 @@ class ClassInfo
         IRValue* zero = emit(String.withCString("Const"), String.withCString("U16"), zo);
         IRInsn* c = IRInsn.with(String.withCString("ICmp"));
         c.setRes(new IRValue(String.withCString("Bool")));
-        c.setPred(String.withCString("EQ"));
+        c.setPred(pred);
         c.add(IROperand.useVal(asInt));
         c.add(IROperand.useVal(zero));
         _blk.add(c);
         return c.res();
+        }
+
+    // The truth of a value that is about to BECOME a Bool: `v != 0` for an
+    // integer wider than a byte or a float, `v != null` for a pointer. Null
+    // when none applies, and the caller converts as before. A Trunc to Bool
+    // keeps the low byte only, and a float converts by truncating toward zero,
+    // so the right side of `a && b` read a u16 of 256, an i64 of 1 << 32, a
+    // pointer whose low byte is zero or a float of 0.5 as false (bug 293).
+    IRValue* truthTest(IRValue* v)
+        {
+        String* t = v.ty();
+        if (t == 0)
+            return (IRValue*)0;
+        if (isPtrIr(t))
+            return cmpPtrNull(v, String.withCString("NE"));
+        if (isFloatIr(t))
+            {
+            // !(f == 0.0): OEQ is the float compare every back end has, as
+            // `!f` uses. A NaN is not equal to zero, so it is true, as in C.
+            Array* zo = new Array();
+            zo.add((Object*)IROperand.immF(String.withCString("0000000000000000"), t));
+            IRValue* fz = emit(String.withCString("Const"), t, zo);
+            IRInsn* fc = IRInsn.with(String.withCString("FCmp"));
+            fc.setRes(new IRValue(String.withCString("Bool")));
+            fc.setPred(String.withCString("OEQ"));
+            fc.add(IROperand.useVal(v));
+            fc.add(IROperand.useVal(fz));
+            _blk.add(fc);
+            Array* bo = new Array();
+            bo.add((Object*)IROperand.immI((i32)0, String.withCString("Bool")));
+            IRValue* bz = emit(String.withCString("Const"), String.withCString("Bool"), bo);
+            IRInsn* ne = IRInsn.with(String.withCString("ICmp"));
+            ne.setRes(new IRValue(String.withCString("Bool")));
+            ne.setPred(String.withCString("EQ"));
+            ne.add(IROperand.useVal(fc.res()));
+            ne.add(IROperand.useVal(bz));
+            _blk.add(ne);
+            return ne.res();
+            }
+        if (t.hasPrefix(String.withCString("Agg(")))
+            return (IRValue*)0;
+        u32 w = irWidth(t);
+        if (w != (u32)2 && w != (u32)4 && w != (u32)8)
+            return (IRValue*)0;
+        Array* cops = new Array();
+        cops.add((Object*)IROperand.immI((i32)0, t));
+        IRValue* zero = emit(String.withCString("Const"), t, cops);
+        IRInsn* i = IRInsn.with(String.withCString("ICmp"));
+        i.setRes(new IRValue(String.withCString("Bool")));
+        i.setPred(String.withCString("NE"));
+        i.add(IROperand.useVal(v));
+        i.add(IROperand.useVal(zero));
+        _blk.add(i);
+        return i.res();
         }
 
     // The instance's slot 0 IS its class's vtable address, so one load and one
@@ -6425,6 +6491,11 @@ class ClassInfo
         IRValue* v = lowerExpr(e);
         if (_failed || v == 0)
             return v;
+        // A float is true when it is not 0.0. Handed to the branch as it is, a
+        // back end tests its bits: -0.0 read as true, and arm64 tested a
+        // double's low 32 bits, so 0.5 read as false (bug 293).
+        if (isFloatIr(v.ty()))
+            return truthTest(v);
         if (e.ty() == 0 || !isBoundSig(stripQual(e.ty())))
             return v;
         // The AST type is not enough on its own. Sema types a comparison as the
