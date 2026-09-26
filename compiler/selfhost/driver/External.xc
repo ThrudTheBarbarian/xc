@@ -250,7 +250,7 @@ class External
             bool hasDe = asmText.contains(deName);
             if (hasDe) { s.appendCString("extern void "); s.append(suf); s.appendCString("$dealloc(void*);\n"); }
             s.appendCString("void *_xtc_new_"); s.append(suf);
-            s.appendCString("(unsigned long count,unsigned long stride){if(count<1)count=1;");
+            s.appendCString("(unsigned long count,unsigned long stride){");
             s.appendCString("unsigned long b=count*stride; if(b<256)b=256;");
             s.appendCString("uint8_t*p=(uint8_t*)calloc(1,b+38);");
             s.appendCString("if(!p){fprintf(stderr,\"xcc: out of memory (%lu x %lu bytes)\\n\",count,stride);abort();}");
@@ -265,7 +265,7 @@ class External
         }
         if (asmText.contains(String.withCString("__xtc_alloc"))) {
             s.appendCString("void *_xtc_alloc(unsigned long count,unsigned long stride,void(*dealloc)(void*)){");
-            s.appendCString("if(count<1)count=1;unsigned long b=count*stride; if(b<256)b=256;");
+            s.appendCString("unsigned long b=count*stride; if(b<256)b=256;");
             s.appendCString("uint8_t*p=(uint8_t*)calloc(1,b+38);");
             s.appendCString("if(!p){fprintf(stderr,\"xcc: out of memory (%lu x %lu bytes)\\n\",count,stride);abort();}");
             s.appendCString("*(uint32_t*)(p+0)=0x58544F42U;*(unsigned long*)(p+4)=stride;*(unsigned long*)(p+12)=count;");
@@ -350,7 +350,7 @@ class External
             bool hasDe = asmText.contains(deName);
             if (hasDe) { s.appendCString("extern void "); s.append(suf); s.appendCString("$dealloc(void*);\n"); }
             s.appendCString("void *_xtc_new_"); s.append(suf);
-            s.appendCString("(unsigned long count,unsigned long stride){if(count<1)count=1;");
+            s.appendCString("(unsigned long count,unsigned long stride){");
             s.appendCString("unsigned long b=count*stride; if(b<256)b=256;");
             s.appendCString("uint8_t*p=(uint8_t*)calloc(1,b+24);");
             s.appendCString("if(!p){fprintf(stderr,\"xcc: out of memory (%lu x %lu bytes)\\n\",count,stride);abort();}");
@@ -362,7 +362,7 @@ class External
         }
         if (asmText.contains(String.withCString("_xtc_alloc"))) {
             s.appendCString("void *_xtc_alloc(unsigned long count,unsigned long stride,void(*dealloc)(void*)){");
-            s.appendCString("if(count<1)count=1;unsigned long b=count*stride; if(b<256)b=256;");
+            s.appendCString("unsigned long b=count*stride; if(b<256)b=256;");
             s.appendCString("uint8_t*p=(uint8_t*)calloc(1,b+24);");
             s.appendCString("if(!p){fprintf(stderr,\"xcc: out of memory (%lu x %lu bytes)\\n\",count,stride);abort();}");
             s.appendCString("*(uint32_t*)(p+0)=0x58544F42U;*(uint32_t*)(p+4)=(uint32_t)stride;*(uint32_t*)(p+8)=(uint32_t)count;");

@@ -287,7 +287,7 @@ static NSString *arm64StubSourceEx(NSString *asmText, BOOL forLibrary) {
         if (hasDealloc) {
             [s appendFormat:
                 @"extern void %@$dealloc(void*);\n"
-                @"void *_xtc_new_%@(unsigned long count,unsigned long stride){if(count<1)count=1;"
+                @"void *_xtc_new_%@(unsigned long count,unsigned long stride){"
                 @"unsigned long b=count*stride; if(b<256)b=256;"
                 @"uint8_t*p=(uint8_t*)calloc(1,b+38);"
             @"if(!p){fprintf(stderr,\"xcc: out of memory (%%lu x %%lu bytes)\\n\",count,stride);abort();}"
@@ -296,7 +296,7 @@ static NSString *arm64StubSourceEx(NSString *asmText, BOOL forLibrary) {
                 suffix, suffix, suffix];
         } else {
             [s appendFormat:
-                @"void *_xtc_new_%@(unsigned long count,unsigned long stride){if(count<1)count=1;"
+                @"void *_xtc_new_%@(unsigned long count,unsigned long stride){"
                 @"unsigned long b=count*stride; if(b<256)b=256;"
                 @"uint8_t*p=(uint8_t*)calloc(1,b+38);"
             @"if(!p){fprintf(stderr,\"xcc: out of memory (%%lu x %%lu bytes)\\n\",count,stride);abort();}"
@@ -310,7 +310,7 @@ static NSString *arm64StubSourceEx(NSString *asmText, BOOL forLibrary) {
     if ([asmText containsString:@"__xtc_alloc"]) {
         [s appendString:
             @"void *_xtc_alloc(unsigned long count,unsigned long stride,void(*dealloc)(void*)){"
-            @"if(count<1)count=1;unsigned long b=count*stride; if(b<256)b=256;"
+            @"unsigned long b=count*stride; if(b<256)b=256;"
             @"uint8_t*p=(uint8_t*)calloc(1,b+38);"
             @"if(!p){fprintf(stderr,\"xcc: out of memory (%lu x %lu bytes)\\n\",count,stride);abort();}"
             @"*(uint32_t*)(p+0)=0x58544F42U;*(unsigned long*)(p+4)=stride;*(unsigned long*)(p+12)=count;"
@@ -485,7 +485,7 @@ static NSString *arm9StubSource(NSString *asmText, BOOL forLibrary) {
             [NSString stringWithFormat:@"%@$dealloc:", suffix]];
         [s appendFormat:
             @"%@"
-            @"void *_xtc_new_%@(unsigned long count,unsigned long stride){if(count<1)count=1;"
+            @"void *_xtc_new_%@(unsigned long count,unsigned long stride){"
             @"unsigned long b=count*stride; if(b<256)b=256;"
             @"uint8_t*p=(uint8_t*)calloc(1,b+24);"
             @"if(!p){fprintf(stderr,\"xcc: out of memory (%%lu x %%lu bytes)\\n\",count,stride);abort();}"
@@ -504,7 +504,7 @@ static NSString *arm9StubSource(NSString *asmText, BOOL forLibrary) {
     if ([asmText containsString:@"_xtc_alloc"]) {
         [s appendString:
             @"void *_xtc_alloc(unsigned long count,unsigned long stride,void(*dealloc)(void*)){"
-            @"if(count<1)count=1;unsigned long b=count*stride; if(b<256)b=256;"
+            @"unsigned long b=count*stride; if(b<256)b=256;"
             @"uint8_t*p=(uint8_t*)calloc(1,b+24);"
             @"if(!p){fprintf(stderr,\"xcc: out of memory (%lu x %lu bytes)\\n\",count,stride);abort();}"
             @"*(uint32_t*)(p+0)=0x58544F42U;*(uint32_t*)(p+4)=(uint32_t)stride;*(uint32_t*)(p+8)=(uint32_t)count;"
@@ -712,7 +712,7 @@ static NSString *x86_64StubSource(NSString *asmText, NSString *supportRoot) {
         BOOL hasDealloc = [asmText containsString:[NSString stringWithFormat:@"%@$dealloc:", suffix]];
         [s appendFormat:
             @"%@"
-            @"void *_xtc_new_%@(unsigned long count,unsigned long stride){if(count<1)count=1;"
+            @"void *_xtc_new_%@(unsigned long count,unsigned long stride){"
             @"unsigned long b=count*stride; if(b<256)b=256;"
             @"uint8_t*p=(uint8_t*)calloc(1,b+30);*(uint32_t*)(p+0)=0x58544F42U;*(uint32_t*)(p+4)=(uint32_t)stride;*(uint32_t*)(p+8)=(uint32_t)count;"
             @"*(void(**)(void*))(p+12)=%@;*(void**)(p+20)=0;*(uint16_t*)(p+28)=1;return p+30;}\n",
@@ -723,7 +723,7 @@ static NSString *x86_64StubSource(NSString *asmText, NSString *supportRoot) {
     if ([asmText containsString:@"_xtc_alloc"]) {
         [s appendString:
             @"void *_xtc_alloc(unsigned long count,unsigned long stride,void(*dealloc)(void*)){"
-            @"if(count<1)count=1;unsigned long b=count*stride; if(b<256)b=256;"
+            @"unsigned long b=count*stride; if(b<256)b=256;"
             @"uint8_t*p=(uint8_t*)calloc(1,b+30);*(uint32_t*)(p+0)=0x58544F42U;*(uint32_t*)(p+4)=(uint32_t)stride;*(uint32_t*)(p+8)=(uint32_t)count;"
             @"*(void(**)(void*))(p+12)=dealloc;*(void**)(p+20)=0;*(uint16_t*)(p+28)=1;return p+30;}\n"];
     }
