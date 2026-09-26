@@ -109,6 +109,11 @@ static XTSourceLocation *synthLoc(void) {
 // code-bank selector address ($82 on xt). arm64 and flat models
 // leave bankingActive NO, so the call path is byte-identical to before.
 @property (nonatomic) BOOL bankingActive;
+// The LAYOUT is banked: it has a data-bank register to write. Unlike
+// bankingActive this holds during the first sizing pass too, which is what
+// the two dispatch selects key off (private:docs/bugs/054). A flat model has
+// no `__bank_data_reg` at all.
+@property (nonatomic) BOOL modelBanked;
 @property (nonatomic) NSUInteger currentBank;
 @property (nonatomic) NSDictionary<NSString *, NSNumber *> *bankMap;
 @property (nonatomic) uint16_t codeBankReg;
@@ -3181,7 +3186,7 @@ static NSString *padLeft(NSString *s, NSUInteger width) {
             // Bank-select the receiver's bank before reading through it —
             // byte 2 of a 3-byte pointer is the data-bank selector.
             XTIRValue *recvVal = [ctx.fn valueForId:recv.valueId];
-            if (recvVal && [self byteWidthForType:recvVal.type] > 2) {
+            if (ctx.modelBanked && recvVal && [self byteWidthForType:recvVal.type] > 2) {
                 [self loadOperandByte:recv byteIndex:2 ctx:ctx];
                 [ctx.out appendString:@"    STA __bank_data_reg\n"];
             }
@@ -3295,7 +3300,7 @@ static NSString *padLeft(NSString *s, NSUInteger width) {
                 // vtable pointer. With 3-byte pointers, byte 2 is the
                 // single-byte data-bank selector (written to $83). No $84.
                 XTIRValue *recvOrFnVal = [ctx.fn valueForId:recvOrFn.valueId];
-                if (recvOrFnVal && [self byteWidthForType:recvOrFnVal.type] > 2) {
+                if (ctx.modelBanked && recvOrFnVal && [self byteWidthForType:recvOrFnVal.type] > 2) {
                     [self loadOperandByte:recvOrFn byteIndex:2 ctx:ctx];
                     [ctx.out appendString:@"    STA __bank_data_reg\n"];
                 }
@@ -3813,6 +3818,8 @@ static NSString *padLeft(NSString *s, NSUInteger width) {
     ctx.module = mod;
     ctx.out = out;
     ctx.bankingActive = bankingActive;
+    ctx.modelBanked = model.hasBanking && model.bankWindowStart != 0
+                      && model.mainRegionRanges.count > 0;
     ctx.currentBank = currentBank;
     ctx.bankMap = bankMap;
     ctx.codeBankReg = codeBankReg;   // from the layout; 0 only when unbanked

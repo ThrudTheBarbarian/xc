@@ -26,6 +26,14 @@ result on the way out. The *assignment* widens; the operator never does. See
 
 Forward declarations (a signature without a body, terminated with `;`) work as in C. You rarely need them, because xcc lets you call a function defined later in the same compilation unit. Their main use is declaring external functions in headers.
 
+A declared function that is called must be defined somewhere the build can find it: in the program, in a library it links, or in the platform's C library. On xt6502, m68k, x86_64 and win64, a call to a function that is defined nowhere is an error naming the function and the call:
+
+```text
+prog.xc:5:22: error: call to 'nothere', which is declared but never defined
+```
+
+xt6502 has no C library, so a bodiless `i32 printf(u8* fmt, ...);` is this error there. Use `Stdio.printf`. On arm64, arm9 and wasm32 an undefined name is left to the dynamic loader or the JavaScript host, which reports it when the program starts or makes the call.
+
 ## Return types and tuples
 
 A function may return more than one value. The return type is a comma-separated list of types, and the `return` statement provides a matching list of values.

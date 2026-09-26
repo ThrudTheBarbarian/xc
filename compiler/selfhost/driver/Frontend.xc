@@ -69,9 +69,11 @@ class FeOptions
                         //   between the two fails loudly instead of quietly
                         //   resolving to the new one. 0 when not asked for.
     String* _ppOut;     // -E <path>: where the preprocessed source goes, or 0
+    Map* _callSites;    // callee symbol -> "file:line:col" of its first call
 
     void init(void)
         {
+        _callSites = new Map();
         _ppOut = (String*)0;
         _emitIface = false;
         _libraryBuild = false;
@@ -194,6 +196,14 @@ class FeOptions
     void setNeededLibs(Array* a)
         {
         _neededLibs = a;
+        }
+    Map* callSites(void)
+        {
+        return _callSites;
+        }
+    void setCallSites(Map* m)
+        {
+        _callSites = m;
         }
 
     void setInput(String* s)
@@ -695,6 +705,7 @@ class FeOptions
         lower.setBoundsCheck(o.boundsCheck());
         lower.setVtable(sema.vtable());
         IRModule* mod = lower.run(program, moduleNameOf(o.input()));
+        o.setCallSites(lower.callSites());
         if (mod == 0 || lower.failed())
             {
             Stdio.printf("xc-fe: %s: unsupported: %s\n", o.input().cString(),

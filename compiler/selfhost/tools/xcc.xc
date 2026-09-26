@@ -1637,6 +1637,7 @@ void linkWin64(DriverOptions* d, String* prog)
     pe.executable(a.text(), a.data(), a.symbols(), a.dataSyms(), a.fixups(),
                   String.withCString("_start"), dlls, syms);
     if (pe.failed()) {
+        noteUndefinedCall(d, pe.why());
         Stdio.printf("xcc: %s\n", pe.why().cString());
         Process.exit((i32)1); return;
     }
@@ -1918,6 +1919,7 @@ void linkX86_64(DriverOptions* d, String* prog)
             img = ln.link(srcs, objs, ars, String.withCString("_start"));
     }
     if (ln.failed()) {
+        noteUndefinedCall(d, ln.why());
         Stdio.printf("xcc: %s\n", ln.why().cString());
         Process.exit((i32)1); return;
     }
@@ -2265,6 +2267,7 @@ void emitM68k(DriverOptions* d, IRModule* mod)
     as.setPic(d.caps().pic());       // 68000: the GOT/a5 model
     as.assemble(prog);
     if (as.failed()) {
+        noteUndefinedCall(d, as.why());
         Stdio.printf("xcc: assembly failed: %s\n", as.why().cString());
         Process.exit((i32)1); return;
     }
@@ -2276,6 +2279,34 @@ void emitM68k(DriverOptions* d, IRModule* mod)
         Stdio.printf("xcc: error: cannot write '%s'\n", d.fe().output().cString());
         Process.exit((i32)1); return;
     }
+}
+
+// An assembler or linker error about an undefined symbol, placed at the
+// source call that needs it. The symbol is the first quoted name after
+// "undefined symbol"; a back end that prefixes `_` is matched with it
+// stripped. Nothing is printed when no direct call to it was lowered.
+void noteUndefinedCall(DriverOptions* d, String* msg)
+{
+    if (msg == (String*)0) return;
+    u32 at = msg.byteIndexOf(String.withCString("undefined symbol"));
+    if (at == String.notFound()) return;
+    u32 q1 = msg.byteIndexOf(String.withCString("'"), at);
+    if (q1 == String.notFound()) return;
+    u32 q2 = msg.byteIndexOf(String.withCString("'"), q1 + (u32)1);
+    if (q2 == String.notFound()) return;
+    String* name = msg.substringBytes(q1 + (u32)1, q2 - q1 - (u32)1);
+    Map* sites = d.fe().callSites();
+    Object* site = sites.get((Hashable*)name);
+    if (site == (Object*)0 && name.hasPrefix(String.withCString("_"))) {
+        name = name.substringFromByte((u32)1);
+        site = sites.get((Hashable*)name);
+    }
+    if (site == (Object*)0) return;
+    String* m = String.withString((String*)site);
+    m.appendCString(": error: call to '");
+    m.append(name);
+    m.appendCString("', which is declared but never defined");
+    Frontend.printDiagnostic(m);
 }
 
 void emitXt6502(DriverOptions* d, IRModule* mod)
@@ -2400,8 +2431,10 @@ void emitXt6502(DriverOptions* d, IRModule* mod)
     Array* lines = a.preprocess(asmText, d.fe().output());
     a.assemble(lines);
     if (a.errors().count() > (u32)0) {
-        for (u32 k = (u32)0; k < a.errors().count(); k = k + (u32)1)
+        for (u32 k = (u32)0; k < a.errors().count(); k = k + (u32)1) {
+            noteUndefinedCall(d, (String*)a.errors().get(k));
             Stdio.printf("xcc: assembly failed: %s\n", ((String*)a.errors().get(k)).cString());
+        }
         Process.exit((i32)1); return;
     }
     if (d.dumpUsage()) Stdio.error(usageReport6502(a.segments(), layout));

@@ -57,6 +57,7 @@ NS_ASSUME_NONNULL_BEGIN
 @interface XAAssembler (Pass2)
 
 - (NSArray<XASegment*>*)pass2;
+- (NSArray<XASegment*>*)pass2Lines;
 - (void)emitInstruction:(XAParsedLine*)pl into:(XASegment*)seg;
 - (NSString*)extractExpression:(NSString*)operand mode:(XAAddressingMode)mode;
 - (NSString*)scopeLocalLabelsInOperand:(NSString*)operand;

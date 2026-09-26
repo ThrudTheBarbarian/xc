@@ -115,6 +115,11 @@ typedef NS_ENUM(NSInteger, XALineType) {
 @property(nonatomic, nullable) NSString* lastGlobalLabel;
 // Labels that shadow a Z80-style hex literal — warn once per name.
 @property(nonatomic) NSMutableSet<NSString*>* ambiguousHexLabelsWarned;
+// The line pass 2 is emitting, or nil outside pass 2. Every label is known by
+// then, so a name the evaluator cannot resolve is undefined for good.
+@property(nonatomic, nullable) XAParsedLine* evalLine;
+@property(nonatomic, nullable) NSMutableSet<NSString*>* undefinedReported;
+@property(nonatomic) BOOL evalUndefined; // the last pass-2 evaluate met an undefined name
 // Code-region spillover: ordered list of (start, end) pairs parsed
 // from the last .code_regions directive. The assembler starts in
 // region 0 (whichever contains the active .org) and auto-advances
