@@ -32,12 +32,14 @@ echo "building xcc.xc (the xtc driver → native arm64)…"
     "${SELF[@]}" > "$WORK/build.log" 2>&1
 if [ ! -x "$WORK/xccxc" ]; then grep -a error "$WORK/build.log" | head -5; exit 1; fi
 
-LIBS="tests/arm64/emit-lib/TheLib.xc tests/x86_64/emit-lib/TheLib.xc
+LIBS="tests/arm64/emit-lib/TheLib.xc tests/arm64/emit-lib-overload/OvLib.xc
+      tests/x86_64/emit-lib/TheLib.xc
       tests/wasm32/emit-lib/TheLib.xc tests/wasm-shared/SLib.xc
       tests/crossmod/bmlib.xc tests/crossmod/blib.xc tests/crossmod/clib.xc
       tests/crossmod/dclib.xc tests/interop/optional-proto-import/optlib.xc
       tests/selfhost-iface/mod-shape.xc tests/fixtures/class_final.xc
-      tests/fixtures/foundation_comparable.xc"
+      tests/fixtures/foundation_comparable.xc
+      tests/fixtures/overload_virtual_dispatch.xc"
 SAMPLE=$(ls tests/fixtures/*.xc | sort | awk 'NR % 16 == 0')
 FILES=$(printf '%s\n' $LIBS $SAMPLE | awk '!seen[$0]++' \
     | awk -v i="${SHARD_I:-0}" -v n="${SHARD_N:-1}" 'NR % n == i')

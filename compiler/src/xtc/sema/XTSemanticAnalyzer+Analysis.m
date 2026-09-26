@@ -1451,6 +1451,25 @@
     return first;
     }
 
+// Does `impl` (a parameter match for `root` found below `rootCls`) return what
+// another overload of `root` in `rootCls` returns, while `root` returns
+// something else? Then it overrides that overload, not `root`. Mirrors
+// `Vtable.overridesSibling` in the port.
+- (BOOL)method:(XTMethodDeclNode*)impl overridesSiblingOf:(XTMethodDeclNode*)root in:(XTClassDeclNode*)rootCls
+    {
+    NSString* ir = [self returnSpelling:impl];
+    if ([ir isEqualToString:[self returnSpelling:root]])
+        return NO;
+    for (XTMethodDeclNode* s in rootCls.methods)
+        {
+        if (s == root || ![self methodSignaturesMatch:s and:root])
+            continue;
+        if ([[self returnSpelling:s] isEqualToString:ir])
+            return YES;
+        }
+    return NO;
+    }
+
 - (NSString*)returnSpelling:(XTMethodDeclNode*)m
     {
     NSMutableArray<NSString*>* parts = [NSMutableArray array];
@@ -2376,6 +2395,11 @@
         // the slot a virtual call by that source name dispatches through.
         NSMutableDictionary<NSNumber*, NSString*>* slotSym = [NSMutableDictionary dictionary];
         NSMutableDictionary<NSString*, NSNumber*>* nameSlot = [NSMutableDictionary dictionary];
+        // symSlot[symbol] = the slot a call that RESOLVED to that impl symbol
+        // dispatches through. nameSlot cannot say it once a name is
+        // overloaded: `f(i32)` and `f(double)` own two slots and one name
+        // remembers only the last, so `a.f(1.5)` ran `f(i32)`'s body (bug 265).
+        NSMutableDictionary<NSString*, NSNumber*>* symSlot = [NSMutableDictionary dictionary];
         // §4.2: the same two maps for the category-chain slot space, filled by
         // the same walk. A class touches these only if it is, or descends from,
         // an extended class — `chainHost` stays nil otherwise and nothing is
@@ -2435,6 +2459,12 @@
                 {
                 impl = [self methodIn:c matching:rootMethod];
                 implCls = c;
+                // A method returning what a SIBLING overload of the root
+                // returns overrides that sibling, not this root: a subclass
+                // `double v()` over `i32 v()` + `double v()` fills only the
+                // double slot (bug 265).
+                if (impl && c != rootCls && [self method:impl overridesSiblingOf:rootMethod in:rootCls])
+                    impl = nil;
                 if (impl)
                     break;
                 if (c == rootCls)
@@ -2505,6 +2535,7 @@
                                                           implCls.className,
                                                           (impl.mangledName ?: impl.methodName)];
             nameSlot[rootMethod.methodName] = slotNum;
+            symSlot[slotSym[slotNum]] = slotNum;
             // Participant label picks up the same slot so call
             // sites that statically resolved to a descendant's
             // override still hit the vtable path.
@@ -2515,6 +2546,7 @@
         // ancestor), find the class's matching impl and store it
         // at the protocol-method's slot.
         NSSet<NSString*>* rootNamed = [NSSet setWithArray:nameSlot.allKeys];
+        NSSet<NSString*>* rootSyms = [NSSet setWithArray:symSlot.allKeys];
         for (XTClassDeclNode* c = cls; c != nil; c = c.parentClass)
             {
             for (NSString* pname in c.protocolNames)
@@ -2560,6 +2592,8 @@
                     // A name only a protocol provides still takes its slot.
                     if (![rootNamed containsObject:reqM.methodName])
                         nameSlot[reqM.methodName] = slotNum;
+                    if (![rootSyms containsObject:slotSym[slotNum]])
+                        symSlot[slotSym[slotNum]] = slotNum;
                     }
                 }
             }
@@ -2577,6 +2611,7 @@
             }
         cls.vtableSlotSymbols = symArr;
         cls.vtableMethodSlots = nameSlot;
+        cls.vtableSymbolSlots = symSlot;
         // XTC_DUMP_VSLOTS=1 also prints the FILLED table per class — the thing
         // the back end emits — next to the root map printed above. Bug 136 was
         // the two disagreeing in a library build, and only a dump of both

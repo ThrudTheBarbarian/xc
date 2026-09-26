@@ -681,7 +681,18 @@ class IfaceWrite
                         if (o.name() != (String*)0 && o.name().equals(m.name()))
                             sameName = sameName + (u32)1;
                     }
-                    if (sameName == (u32)1)
+                    // By SYMBOL first: the name map holds whichever root of
+                    // that name the class saw last, and a class that overrides
+                    // one overload of an inherited family (`C.f(double)` under
+                    // `A.f(i32)`, `A.f(double)`) is still unique by name.
+                    Map* rsyms = c.ifaceSymSlots();
+                    if (sameName == (u32)1 && rsyms != (Map*)0) {
+                        String* sym = String.withString(IfaceWrite.nm(c.name()));
+                        sym.appendByte((u8)'$');
+                        sym.append(m.sym() == (String*)0 ? m.name() : m.sym());
+                        sl = rsyms.get((Hashable*)sym);
+                    }
+                    if (sameName == (u32)1 && sl == (Object*)0)
                         sl = resolved.get((Hashable*)m.name());
                 }
                 if (sl == (Object*)0)

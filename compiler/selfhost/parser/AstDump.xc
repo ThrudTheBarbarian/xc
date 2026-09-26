@@ -154,6 +154,22 @@ class AstDump
                 a.appendFormat("%lu", ((Number*)n.slots().get((Hashable*)k)).asU32());
                 }
             a.appendByte((u8)']');
+            if (n.symSlots() != 0 && n.symSlots().count() > (u32)0)
+                {
+                Array* sk = n.symSlots().allKeys();
+                AstDump.sortBySlot(sk, n.symSlots());
+                a.appendCString(" syms=[");
+                for (u32 i = (u32)0; i < sk.count(); i = i + (u32)1)
+                    {
+                    if (i > (u32)0)
+                        a.appendByte((u8)',');
+                    String* k = (String*)sk.get(i);
+                    a.append(k);
+                    a.appendByte((u8)':');
+                    a.appendFormat("%lu", ((Number*)n.symSlots().get((Hashable*)k)).asU32());
+                    }
+                a.appendByte((u8)']');
+                }
             }
         return a;
         }

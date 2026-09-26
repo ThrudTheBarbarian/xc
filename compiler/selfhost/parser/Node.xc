@@ -326,6 +326,7 @@ class Node
     // client dispatching on the class itself uses the class slot; publishing
     // the protocol one sent `p.ping()` off the end of the table.
     Map* _islots;
+    Map* _isyms;          // ifaceSlots keyed by impl symbol
     u32 _col;
 
     // ── What the ANALYSER stamps (M6) ───────────────────────────────────
@@ -354,6 +355,9 @@ class Node
     String* _proto;      // the protocol a call dispatches through…
     i32 _protoIdx;       // …and the method's index within it
     Map* _slots;         // methodName -> slot, for a class with a vtable
+    Map* _symSlots;      // impl symbol (`<Class>$<mangled>`) -> slot: what a
+                         // call reads, since each overload owns its own slot
+    Array* _slotSyms;    // slot -> the impl symbol this class puts there ("")
     u32 _vslots;         // the table's width (the program-wide total)
     String* _since;      // since("V") on a member: version that introduced it
     String* _category;   // category/extension marker (see setCategory)
@@ -377,6 +381,7 @@ class Node
         _line = (u32)0;
         _pkg = (String*)0;
         _islots = (Map*)0;
+        _isyms = (Map*)0;
         _col = (u32)0;
         _fileId = (u32)0;
         _ty = (String*)0;
@@ -398,6 +403,8 @@ class Node
         _proto = (String*)0;
         _protoIdx = (i32)-1;
         _slots = (Map*)0;
+        _symSlots = (Map*)0;
+        _slotSyms = (Array*)0;
         _vslots = (u32)0;
         _usedByNew = false;
         _heapRecv = false;
@@ -507,6 +514,22 @@ class Node
         {
         _slots = m;
         _vslots = total;
+        }
+    Map* symSlots(void)
+        {
+        return _symSlots;
+        }
+    void setSymSlots(Map* m)
+        {
+        _symSlots = m;
+        }
+    Array* slotSyms(void)
+        {
+        return _slotSyms;
+        }
+    void setSlotSyms(Array* a)
+        {
+        _slotSyms = a;
         }
 
     // §4.2/§4.3b, on a CLASS in a chain-extended family: the extended class,
@@ -706,6 +729,16 @@ class Node
     void setIfaceSlots(Map* m)
         {
         _islots = m;
+        }
+    // The same snapshot keyed by impl symbol (`<Class>$<mangled>`), which
+    // tells overloads of one name apart.
+    Map* ifaceSymSlots(void)
+        {
+        return _isyms;
+        }
+    void setIfaceSymSlots(Map* m)
+        {
+        _isyms = m;
         }
     String* pkg(void)
         {

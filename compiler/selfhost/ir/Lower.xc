@@ -45,6 +45,8 @@ class ClassInfo
     Map* _ivarIndex;     // ivar name -> its FIELD index in the instance
     Map* _ivarType;      // ivar name -> its declared type spelling
     Map* _methodSlot;    // method name -> its vtable slot
+    Map* _symSlot;       // impl symbol -> its vtable slot: what a call reads,
+                         // since each overload of a name owns its own slot
     Map* _methodMangled; // method name -> the symbol suffix it compiles to
     Array* _vtblEntries; // slot -> the symbol that fills it ("" = none)
     Map* _catSlot;       // §4.2: method name -> its CHAIN slot
@@ -58,6 +60,7 @@ class ClassInfo
         _ivarIndex = new Map();
         _ivarType = new Map();
         _methodSlot = new Map();
+        _symSlot = new Map();
         _methodMangled = new Map();
         _vtblEntries = new Array();
         }
@@ -105,6 +108,10 @@ class ClassInfo
     Map* methodSlot(void)
         {
         return _methodSlot;
+        }
+    Map* symSlot(void)
+        {
+        return _symSlot;
         }
     Map* methodMangled(void)
         {
@@ -5129,8 +5136,9 @@ class ClassInfo
             if (!st && catSlotFor(_curClass, n) >= (i32)0)
                 return emitCatDispatch(_self, _curClass.catAnchor(),
                                        (u32)catSlotFor(_curClass, n), args, ret);
-            if (!st && selfSlotFor(_curClass, n) >= (i32)0)
-                return emitDispatch(_self, (u32)selfSlotFor(_curClass, n), args, ret);
+            i32 vs = st ? (i32)-1 : selfSlotFor(_curClass, n);
+            if (vs >= (i32)0)
+                return emitDispatch(_self, (u32)vs, args, ret);
             return emitMethodCall(methodSymbolFor(_curClass, n), st ? (IRValue*)0 : _self,
                                   args, ret, hasRes);
             }
@@ -10339,11 +10347,14 @@ class ClassInfo
             }
         bool hasRes = retTy != 0 && !isName(stripQual(retTy), "void");
         IRValue* res = (IRValue*)0;
+        i32 vs = (i32)-1;
+        if (!isStatic && catSlotFor(ci, n) < (i32)0)
+            vs = slotFor(ci, n);
         if (!isStatic && catSlotFor(ci, n) >= (i32)0)
             res = emitCatDispatch(recvVal, ci.catAnchor(),
                                   (u32)catSlotFor(ci, n), args, retTy);
-        else if (!isStatic && slotFor(ci, n) >= (i32)0)
-            res = emitDispatch(recvVal, (u32)slotFor(ci, n), args, retTy);
+        else if (vs >= (i32)0)
+            res = emitDispatch(recvVal, (u32)vs, args, retTy);
         else
             res = emitMethodCall(methodSymbolFor(ci, n), recvVal, args, retTy, hasRes);
         if (erasedRet != 0 && res != 0)
@@ -10478,18 +10489,16 @@ class ClassInfo
         return emitMethodCall(sym, _self, args, retTy, hasRes);
         }
 
-    // The slot this call dispatches through, or -1 for a direct call. The
-    // slot map is keyed by method NAME, but a name can have several
-    // overloads and only one of them occupies the slot: `String.equals` has
-    // an `Object@` form that answers Comparable and a `String@` form that does
-    // not. So the slot only applies when the symbol IT holds is the symbol
-    // this call actually resolved to — otherwise dispatching would run a
-    // different function with the same name.
+    // The slot this call dispatches through, or -1 for a direct call. It is
+    // the slot the receiver's class gives the SYMBOL the call resolved to,
+    // not its name: a name can have several overloads, each in its own slot
+    // (`f(i32)` and `f(double)`), and a name-keyed map remembers only one of
+    // them, so `a.f(1.5)` ran `f(i32)`'s body (bug 265).
     i32 slotFor(ClassInfo* ci, Node* call)
         {
-        if (ci == 0 || !ci.needsVtable())
+        if (ci == 0 || !ci.needsVtable() || ci.symSlot().count() == (u32)0)
             return (i32)-1;
-        Object* so = ci.methodSlot().get((Hashable*)call.name());
+        Object* so = ci.symSlot().get((Hashable*)methodSymbolFor(ci, call));
         if (so == 0)
             return (i32)-1;
         return (i32)((Number*)so).asU32();
@@ -10509,16 +10518,29 @@ class ClassInfo
         return (i32)((Number*)so).asU32();
         }
 
-    // Through an IMPLICIT self the slot is looked up by the MANGLED name,
-    // which only matches when the method is not overloaded — the slot table
-    // is keyed by plain name. So an overload resolves statically:
-    // `String.equals(String@)` is not the `equals` that answers Comparable,
-    // and dispatching would run the other one.
+    // Through an IMPLICIT self the slot is the one the current class gives
+    // the symbol the call resolved to (the nearest `<Class>$<mangled>` up
+    // the chain), else the one the class that owns that symbol gives it.
     i32 selfSlotFor(ClassInfo* ci, Node* call)
         {
-        if (call.sym() != 0 && !call.sym().equals(call.name()))
+        if (ci == 0 || !ci.needsVtable())
             return (i32)-1;
-        return slotFor(ci, call);
+        String* mangled = call.sym() == 0 ? call.name() : call.sym();
+        for (ClassInfo* c = ci; c != 0; c = c.parent())
+            {
+            String* sym = String.withString(c.name());
+            sym.appendByte((u8)'$');
+            sym.append(mangled);
+            if (!symbolExists(sym))
+                continue;
+            Object* so = ci.symSlot().get((Hashable*)sym);
+            if (so == 0)
+                so = c.symSlot().get((Hashable*)sym);
+            if (so == 0)
+                return (i32)-1;
+            return (i32)((Number*)so).asU32();
+            }
+        return (i32)-1;
         }
 
     // Every vtable opens with header words — entry 0 the parent link, entry 1
@@ -12079,13 +12101,24 @@ class ClassInfo
         u32 vtblOff = (u32)0;
         if (info.needsVtable() && cls.slots() != 0 && cls.vslots() > (u32)0)
             {
+            // The table is the one the analyser filled, slot by slot — the
+            // same table the reference stamps as `vtableSlotSymbols`. It used
+            // to be rebuilt here from the NAME map, which remembers one
+            // overload per name, and several heuristics recovered the rest;
+            // they still put `C$f` (an override of `f(double)`) in the slot of
+            // `A.f(i32)` (bug 265).
+            Array* ss = cls.slotSyms();
             for (u32 s = (u32)0; s < cls.vslots(); s = s + (u32)1)
                 {
-                info.vtblEntries().add((Object*)slotSymbolFor(cls, s));
+                String* e = String.withCString("");
+                if (ss != 0 && s < ss.count())
+                    e = (String*)ss.get(s);
+                info.vtblEntries().add((Object*)e);
                 vtblOff = vtblOff + (u32)2;
                 }
-            fillProtocolSlots(info, cls);
             copyInto(cls.slots(), info.methodSlot());
+            if (cls.symSlots() != 0)
+                copyInto(cls.symSlots(), info.symSlot());
             // The itable pointer, ahead of the methods. EVERY class reserves
             // it — null when the class conforms to nothing — so a conformance
             // search reaches it at the same offset in any receiver.
@@ -12141,11 +12174,6 @@ class ClassInfo
         _m.addLayout(vt);
         }
 
-    // A class's own slot map names each method ONCE, but a method can answer
-    // more than one requirement: `equals` is Comparable's and Hashable's, at
-    // two different slots. So after the class's own slots are placed, every
-    // protocol it conforms to — its own or an ancestor's — has its still-empty
-    // requirement slots filled with whichever implementation the chain offers.
     // The conformance itable: one table per protocol this class answers to,
     // laid out in the PROTOCOL's own declaration order — an index every module
     // derives identically, so no agreement between them is needed. The itable
@@ -12247,42 +12275,6 @@ class ClassInfo
         return h == (u32)0 ? (u32)1 : h;
         }
 
-    void fillProtocolSlots(ClassInfo* info, Node* cls)
-        {
-        if (_vt == 0)
-            return;
-        for (Node* c = cls; c != 0; c = parentDeclOf(c))
-            {
-            Array* protos = splitList(c.extra());
-            for (u32 i = (u32)0; i < protos.count(); i = i + (u32)1)
-                {
-                String* pn = (String*)protos.get(i);
-                Map* ps = _vt.protoSlotsFor(pn);
-                Object* pd = _protocols.get((Hashable*)pn);
-                if (ps == 0 || pd == 0)
-                    continue;
-                Node* proto = (Node*)pd;
-                for (u32 j = (u32)0; j < proto.kidCount(); j = j + (u32)1)
-                    {
-                    Node* req = proto.kid(j);
-                    if (req.kind() != (u16)nkMethodDecl)
-                        continue;
-                    Object* so = ps.get((Hashable*)req.name());
-                    if (so == 0)
-                        continue;
-                    u32 slot = ((Number*)so).asU32();
-                    if (slot >= info.vtblEntries().count())
-                        continue;
-                    if (((String*)info.vtblEntries().get(slot)).byteLength() > (u32)0)
-                        continue;
-                    String* sym = implementorOf(cls, req.name(), req);
-                    if (sym != 0)
-                        info.vtblEntries().set(slot, (Object*)sym);
-                    }
-                }
-            }
-        }
-
     // The nearest class up the chain that declares `name` — and, among that
     // class's overloads of it, the one whose parameters match what the slot
     // expects. Falling back to the first would put `equals(String@)` where
@@ -12327,37 +12319,6 @@ class ClassInfo
                 return methodSymbolName(c, fallback);
             }
         return (String*)0;
-        }
-
-    // The protocol requirement that owns slot `s`, looking at every protocol
-    // this class or an ancestor conforms to.
-    Node* protoReqForSlot(Node* cls, u32 s)
-        {
-        if (_vt == 0)
-            return (Node*)0;
-        for (Node* c = cls; c != 0; c = parentDeclOf(c))
-            {
-            Array* protos = splitList(c.extra());
-            for (u32 i = (u32)0; i < protos.count(); i = i + (u32)1)
-                {
-                String* pn = (String*)protos.get(i);
-                Map* ps = _vt.protoSlotsFor(pn);
-                Object* pd = _protocols.get((Hashable*)pn);
-                if (ps == 0 || pd == 0)
-                    continue;
-                Node* proto = (Node*)pd;
-                for (u32 j = (u32)0; j < proto.kidCount(); j = j + (u32)1)
-                    {
-                    Node* req = proto.kid(j);
-                    if (req.kind() != (u16)nkMethodDecl)
-                        continue;
-                    Object* so = ps.get((Hashable*)req.name());
-                    if (so != 0 && ((Number*)so).asU32() == s)
-                        return req;
-                    }
-                }
-            }
-        return (Node*)0;
         }
 
     Node* methodNamed(Node* cls, String* name)
@@ -12417,6 +12378,7 @@ class ClassInfo
             for (u32 i = (u32)0; i < parent.vtblEntries().count(); i = i + (u32)1)
                 info.vtblEntries().add(parent.vtblEntries().get(i));
             copyInto(parent.methodSlot(), info.methodSlot());
+            copyInto(parent.symSlot(), info.symSlot());
             }
         u32 next = (u32)0;
         Array* mk = info.methodSlot().allKeys();
@@ -12444,6 +12406,7 @@ class ClassInfo
             while (info.vtblEntries().count() <= slot)
                 info.vtblEntries().add((Object*)String.withCString(""));
             info.vtblEntries().set(slot, (Object*)methodSymbolName(cls, m));
+            info.symSlot().set((Hashable*)methodSymbolName(cls, m), (Object*)Number.with(slot));
             }
         return vtblOff;
         }
@@ -12544,16 +12507,8 @@ class ClassInfo
             }
         }
 
-    // Which symbol fills slot `s` of this class's table: the method the
-    // analyser gave that slot, implemented by the nearest class up the chain
-    // that declares it.
-    // Which method owns slot `s`, asked of this class and then of every
-    // ancestor: a class that overrides nothing still dispatches, and its table
-    // has to point at whatever the chain does implement. The IMPLEMENTATION is
-    // then the nearest one going back down — so an override wins over the
-    // parent's body at the same slot.
-    // The impl symbol for CHAIN slot `s` on this class — slotSymbolFor's twin
-    // over the chain slot space (§4.2). "" when nothing in the ancestry fills
+    // The impl symbol for CHAIN slot `s` on this class, over the chain slot
+    // space (§4.2). "" when nothing in the ancestry fills
     // it, exactly as a vtable entry prints `_`.
     String* chainSlotSymbolFor(Node* cls, u32 s)
         {
@@ -12574,254 +12529,6 @@ class ClassInfo
                 }
             }
         return String.withCString("");
-        }
-
-    String* slotSymbolFor(Node* cls, u32 s)
-        {
-        for (Node* owner = cls; owner != 0; owner = parentDeclOf(owner))
-            {
-            if (owner.slots() == 0)
-                continue;
-            Array* ks = owner.slots().allKeys();
-            for (u32 i = (u32)0; i < ks.count(); i = i + (u32)1)
-                {
-                String* mn = (String*)ks.get(i);
-                if (((Number*)owner.slots().get((Hashable*)mn)).asU32() != s)
-                    continue;
-                // What signature does this slot expect? When it belongs to a
-                // protocol, the REQUIREMENT says — and that is the answer that
-                // matters, because a class may have several overloads of the
-                // name and only one of them answers the protocol.
-                // `String.equals(String@)` is not what Comparable asked for.
-                Node* want = protoReqForSlot(cls, s);
-                // The slot map is keyed by method NAME, so with two OVERLOADS
-                // it can only remember one of them — and `methodNamed` then
-                // returns whichever was declared FIRST for BOTH their slots.
-                // `String.byteIndexOf(needle)` filled the slot belonging to
-                // `byteIndexOf(needle, from)` as well, so a virtual call to the
-                // two-argument form dispatched to the one-argument body. The
-                // analyser's LABEL map names each overload separately and is
-                // the authority on which one owns this slot; ask it first.
-                if (want == 0)
-                    want = overloadForSlot(owner, mn, s);
-                // …or the ROOT that owns the slot. A class-typed call keeps
-                // its root slot (bug 253), so the name map can name a slot
-                // whose overload this class declares under another label:
-                // `String.equals` is Object's slot 1, and the first-declared
-                // `equals(String@)` is not what goes there.
-                if (want == 0)
-                    {
-                    Node* rm = rootMethodForSlot(s);
-                    if (rm != 0 && rm.name() != 0 && rm.name().equals(mn))
-                        want = rm;
-                    }
-                if (want == 0)
-                    want = methodNamed(owner, mn);
-                String* sym = implementorOf(cls, mn, want);
-                if (sym != 0)
-                    return sym;
-                }
-            }
-        // The slot map is keyed by method NAME, so two OVERLOADS of one name
-        // own two slots and it can only remember one of them: `Gfx.lineTo` has
-        // a `(SPoint)` form and an `(i16, i16)` form, and the forgotten one
-        // came out as an empty vtable entry. Recover it from the analyser's
-        // LABEL map, which names each overload separately —
-        // `_cls_<Class>_<mangled>`.
-        //
-        // ONLY for a name the map claims at a DIFFERENT slot. A slot no name
-        // claims is legitimately empty — an unimplemented `optional`
-        // requirement, or another class's slot in this class's table — and
-        // filling those from the label map puts a symbol in every one of them.
-        return overloadSlotSymbol(cls, s);
-        }
-
-    // The method whose ROOT label (`_cls_<Class>_<mangled>`) the analyser
-    // numbered `s`, or null.
-    Node* rootMethodForSlot(u32 s)
-        {
-        if (_vt == 0)
-            return (Node*)0;
-        Array* rl = _vt.rootLabels();
-        for (u32 i = (u32)0; rl != 0 && i < rl.count(); i = i + (u32)1)
-            {
-            String* L = (String*)rl.get(i);
-            Object* sl = _vt.slotForLabel(L);
-            if (sl == 0 || ((Number*)sl).asU32() != s)
-                continue;
-            if (!L.hasPrefix(String.withCString("_cls_")))
-                continue;
-            String* tail = L.substringFromByte((u32)5);
-            u32 us = tail.indexOfByte((u8)'_');
-            if (us == String.notFound())
-                continue;
-            Object* co = _classDecls.get((Hashable*)tail.substringBytes((u32)0, us));
-            if (co == 0)
-                continue;
-            Node* rc = (Node*)co;
-            String* key = tail.substringFromByte(us + (u32)1);
-            for (u32 k = (u32)0; k < rc.kidCount(); k = k + (u32)1)
-                {
-                Node* m = rc.kid(k);
-                if (m.kind() != (u16)nkMethodDecl)
-                    continue;
-                String* mk = m.sym() == 0 ? m.name() : m.sym();
-                if (mk != 0 && mk.equals(key))
-                    return m;
-                }
-            }
-        return (Node*)0;
-        }
-
-    // The overload of `mn` on `owner` whose own label claims slot `s`, or null
-    // when the name has only one form (or none claims that slot).
-    Node* overloadForSlot(Node* owner, String* mn, u32 s)
-        {
-        if (_vt == 0)
-            return (Node*)0;
-        for (u32 i = (u32)0; i < owner.kidCount(); i = i + (u32)1)
-            {
-            Node* m = owner.kid(i);
-            if (m.kind() != (u16)nkMethodDecl || m.hasFlag((u32)NF_STATIC))
-                continue;
-            if (!m.name().equals(mn))
-                continue;
-            Object* sl = _vt.slotForLabel(Vtable.label(owner.name(), m));
-            if (sl != 0 && ((Number*)sl).asU32() == s)
-                return m;
-            }
-        return (Node*)0;
-        }
-
-    String* overloadSlotSymbol(Node* cls, u32 s)
-        {
-        if (_vt == 0)
-            return String.withCString("");
-        for (Node* owner = cls; owner != 0; owner = parentDeclOf(owner))
-            {
-            for (u32 i = (u32)0; i < owner.kidCount(); i = i + (u32)1)
-                {
-                Node* m = owner.kid(i);
-                if (m.kind() != (u16)nkMethodDecl || m.hasFlag((u32)NF_STATIC))
-                    continue;
-                Object* sl = _vt.slotForLabel(Vtable.label(owner.name(), m));
-                if (sl == 0 || ((Number*)sl).asU32() != s)
-                    continue;
-                if (!nameClaimsOtherSlot(cls, m.name(), s))
-                    continue;
-                // (A proto-answering method fills BOTH its root slot and the
-                // requirement's: the analyser's fill reads the PRISTINE slot
-                // assignment — the participant rebind serves call sites, not
-                // later fills — so `Object.equals` lands at its root slot
-                // here and at Comparable's through fillProtocolSlots. The
-                // guard that skipped these matched an older, iteration-order-
-                // dependent fill; task #36.)
-                // …and only for a label that is a genuine INDEPENDENT root.
-                // A method that overrides an ancestor's is usually a
-                // PARTICIPANT — the analyser rebinds its label to the
-                // ancestor's slot, and the name map fills that slot — but a
-                // mid-chain method can be an override AND a root of its own
-                // when a descendant overrode IT: the synthesised description
-                // chain is exactly that (Dog roots at Animal, Animal roots
-                // at Object, and BOTH slots are real — the original fills
-                // both; task #36). The participant case is recognisable by
-                // its slot: a rebound label answers the ANCESTOR's slot, an
-                // independent root answers its own.
-                if (overridesAnAncestor(owner, m))
-                    {
-                    bool independent = false;
-                    Node* a = parentDeclOf(owner);
-                    while (a != 0)
-                        {
-                        Node* am = Vtable.matching(a, m);
-                        if (am != 0)
-                            {
-                            Object* asl = _vt.slotForLabel(Vtable.label(a.name(), am));
-                            independent = (asl == 0) || ((Number*)asl).asU32() != s;
-                            a = (Node*)0; // nearest ancestor decides
-                            }
-                        else
-                            {
-                            a = parentDeclOf(a);
-                            }
-                        }
-                    if (!independent)
-                        continue;
-                    }
-                // A STRICT signature match, with no fall back to "some method
-                // of that name": the slot belongs to one overload, and the
-                // class that does not implement THAT one leaves it empty.
-                // `init()` and `init(i16)` are two slots, and filling the
-                // second with the first's body is how a fallback breaks them.
-                // Synthesised bodies count: the original's nearest-impl walk
-                // has no synth exclusion, and the independent-root fill's
-                // nearest impl IS the synthesised description.
-                String* sym = strictImplementorOfAllowSynth(cls, m, true);
-                if (sym != 0)
-                    return sym;
-                }
-            }
-        return String.withCString("");
-        }
-
-    // Does an ANCESTOR of `owner` declare the same signature?
-    bool overridesAnAncestor(Node* owner, Node* m)
-        {
-        for (Node* a = parentDeclOf(owner); a != 0; a = parentDeclOf(a))
-            if (Vtable.matching(a, m) != 0)
-                return true;
-        return false;
-        }
-
-    // The nearest class up the chain that declares EXACTLY this signature.
-    String* strictImplementorOf(Node* cls, Node* want)
-        {
-        return strictImplementorOfAllowSynth(cls, want, false);
-        }
-
-    String* strictImplementorOfAllowSynth(Node* cls, Node* want, bool allowSynth)
-        {
-        for (Node* c = cls; c != 0; c = parentDeclOf(c))
-            {
-            Node* m = Vtable.matching(c, want);
-            if (m != 0 && (allowSynth || !m.hasFlag((u32)NF_SYNTH)))
-                return methodSymbolName(c, m);
-            }
-        return (String*)0;
-        }
-
-    // Does some protocol in this class's chain require exactly this method?
-    bool answersAProtocol(Node* cls, Node* m)
-        {
-        for (Node* c = cls; c != 0; c = parentDeclOf(c))
-            {
-            Array* protos = splitList(c.extra());
-            for (u32 i = (u32)0; i < protos.count(); i = i + (u32)1)
-                {
-                Object* pd = _protocols.get((Hashable*)(String*)protos.get(i));
-                if (pd == 0)
-                    continue;
-                Node* proto = (Node*)pd;
-                if (Vtable.matching(proto, m) != 0)
-                    return true;
-                }
-            }
-        return false;
-        }
-
-    // Is this method NAME recorded against some OTHER slot? Then the name map
-    // is answering for a different overload and this slot is the one it lost.
-    bool nameClaimsOtherSlot(Node* cls, String* name, u32 s)
-        {
-        for (Node* owner = cls; owner != 0; owner = parentDeclOf(owner))
-            {
-            if (owner.slots() == 0)
-                continue;
-            Object* o = owner.slots().get((Hashable*)name);
-            if (o != 0 && ((Number*)o).asU32() != s)
-                return true;
-            }
-        return false;
         }
 
     bool absent(String* s)

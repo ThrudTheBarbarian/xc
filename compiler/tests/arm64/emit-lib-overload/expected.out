@@ -1,0 +1,10 @@
+lib numbers 5000000000 77 5000000
+Circle.f(i32) 1
+Shape.f(double) 15
+app v 1 75
+Circle.f(i32) 4
+Shape.f(double) 45
+lib v 1 75
+Shape.f(i32) 4
+Shape.f(double) 45
+lib v 1 25

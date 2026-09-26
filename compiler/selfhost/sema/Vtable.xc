@@ -260,6 +260,31 @@ class Vtable
         return first;
         }
 
+    // Does `impl` (a parameter match for `root` found below `rootCls`) return
+    // what another overload of `root` in `rootCls` returns, while `root`
+    // returns something else? Then it overrides that overload, not `root`:
+    // a subclass `double v()` over `i32 v()` + `double v()` fills only the
+    // double slot (bug 265). Mirrors the reference's
+    // `method:overridesSiblingOf:in:`.
+    static bool overridesSibling(Node* rootCls, Node* root, Node* impl)
+        {
+        if (Vtable.sameReturn(impl, root))
+            return false;
+        for (u32 i = (u32)0; i < rootCls.kidCount(); i = i + (u32)1)
+            {
+            Node* m = rootCls.kid(i);
+            if (m == root || m.kind() != (u16)nkMethodDecl)
+                continue;
+            if (m.name() == 0 || root.name() == 0 || !m.name().equals(root.name()))
+                continue;
+            if (!Vtable.sameParams(m, root))
+                continue;
+            if (Vtable.sameReturn(m, impl))
+                return true;
+            }
+        return false;
+        }
+
     // The return types as written, compared as spellings — the reference
     // compares display names.
     static bool sameReturn(Node* a, Node* b)

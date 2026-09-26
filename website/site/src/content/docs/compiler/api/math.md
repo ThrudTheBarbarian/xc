@@ -24,6 +24,8 @@ routines and an xorshift generator that matches the host sequence bit-for-bit.
 Zero-argument methods use xcc's overloading by **return type**: `Math.rand()`
 and constants such as `Math.PI()` resolve from the type of the variable they
 are assigned to, and the compiler emits the version that produces that type.
+An argument takes the type of its parameter, so `check(Math.E())` with
+`void check(double v)` gets the `double` constant.
 
 Both `float` (IEEE-754 binary32) and `double` (IEEE-754 binary64) values have the
 same bit layout on every target, so a value computed on one target and read on
