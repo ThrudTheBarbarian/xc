@@ -5,12 +5,16 @@
 // destination it wrongly csel'd every value above 2^32 to 0, and separately
 // stored only the low 32 bits (w16 instead of x16). Both halves are fixed here.
 //
+// xt6502 had the same shape through MECH: every conversion went through i32,
+// so an i64 source lost its high half, an i64/u64 destination read four stale
+// bytes, and a narrow destination wrapped instead of giving 0 (bug 264).
+//
 // Uses binary64 sources only — a `d`-suffixed literal or a widened integer —
 // because an UNSUFFIXED float literal is binary32 by language design (float is
 // the default; double is opt-in via `1.5d`, docs/double.md), which would lose
 // precision before the conversion even runs.
 
-i32 printf(u8* f, ...);
+#import "Stdio.xc"
 
 i32 main(void)
 {
@@ -37,6 +41,6 @@ i32 main(void)
     double small = 2000000000.5d;
     if ((i32)small == (i32)2000000000) ok = ok + (i32)1;
 
-    printf("ok %d/7\n", ok);
+    Stdio.printf("ok %d/7\n", ok);
     return (i32)0;
 }

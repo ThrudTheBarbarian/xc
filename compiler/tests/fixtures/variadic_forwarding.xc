@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — prints through the C printf (a bodiless `...` prototype), and xt6502 has no C library to call
 // variadic_forwarding.xc — bug 179. A `...`-forwarding variadic function must
 // re-pass its incoming pack to the callee. On arm64 (native AAPCS va_list, no
 // shared buffer) the forwarder relays its incoming tail into the callee's

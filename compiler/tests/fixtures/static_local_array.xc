@@ -14,7 +14,7 @@
 //   T3  a pointer returned into a static array is still valid after return
 //   T4  a second static array in the same function is independent
 
-i32 printf(u8* f, ...);
+#import "Stdio.xc"
 
 // T2/T3: append c to a persistent buffer, return it.
 u8* appended(u8 c)
@@ -41,19 +41,19 @@ i32 counter(void) { static i32 n = -1; n = n + 1; return n; }
 i32 main(void)
 {
     // T1
-    printf("counter %d %d %d\n", counter(), counter(), counter());   // 0 1 2
+    Stdio.printf("counter %d %d %d\n", counter(), counter(), counter());   // 0 1 2
 
     // T2/T3: buffer persists and accumulates.
     appended((u8)'a');
     appended((u8)'b');
     u8* p = appended((u8)'c');
-    printf("buf %s\n", p);            // "abc" — persists, pointer valid
+    Stdio.printf("buf %s\n", p);            // "abc" — persists, pointer valid
 
     // T4: independent static array accumulates a running sum.
     i32 a = sumSlots(10);
     i32 b = sumSlots(20);
     i32 c = sumSlots(30);
-    printf("sums %d %d %d\n", a, b, c);   // 10 30 60
+    Stdio.printf("sums %d %d %d\n", a, b, c);   // 10 30 60
 
     return (i32)0;
 }

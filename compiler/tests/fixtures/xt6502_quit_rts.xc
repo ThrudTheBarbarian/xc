@@ -1,4 +1,5 @@
 //xtc-flags: -Q rts
+//xtc-na: arm64,arm9,m68k,x86_64,win64,wasm32 — -Q is an xt6502 option; elsewhere main's return of 42 is a failing exit status
 // xt6502_quit_rts.xc — `-Q rts`, the default quit style: when main returns,
 // the startup returns to the loader with main's value in A. xcc-sim-6502 treats
 // that return as the end of the run and exits with the value; on the machine

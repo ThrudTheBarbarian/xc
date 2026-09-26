@@ -514,6 +514,14 @@ static unsigned xtArm64GlobalP2Align(uint32_t size) {
 }
 
 
+// A call straight to a named symbol, whatever the callee's placement. A banked
+// or cloaked callee takes the same arguments in the same places; on arm64 the
+// placement changes nothing, so a variadic one needs its tail on the stack like
+// any other.
+static BOOL arm64IsDirectCallOpcode(XTIROpcode op) {
+    return op == XTIROpCall || op == XTIROpCallBanked || op == XTIROpCallCloaked;
+}
+
 // The first C-variadic TAIL index for a call insn, or -1. Only a direct call
 // to a symbol marked variadic AND cabi qualifies (a bodyless `...` source
 // declaration or a DWARF C import); the fixed count is the declared parameter
@@ -523,7 +531,7 @@ static unsigned xtArm64GlobalP2Align(uint32_t size) {
     // placed exactly like a named one, so the ordinary path already does the
     // right thing and the Darwin deviation must NOT be applied.
     if (sArm64Aapcs64Abi) return -1;
-    if (insn.opcode != XTIROpCall || insn.operands.count < 2) return -1;
+    if (!arm64IsDirectCallOpcode(insn.opcode) || insn.operands.count < 2) return -1;
     XTIROperand *callee = insn.operands[0];
     if (callee.kind != XTIROperandKindSym) return -1;
     XTIRSymbol *sym = [ctx.module symbolForId:callee.symbolId];
@@ -563,7 +571,7 @@ static const NSUInteger kArm64VaForwardWords = 16;
 // re-passes this function's own incoming variadic tail; with no shared buffer
 // on arm64 that means copying the tail into the callee's outgoing slots.
 + (BOOL)arm64VaForwardRelayForInsn:(XTIRInsn *)insn ctx:(XTArm64FnCtx *)ctx {
-    if (insn.opcode != XTIROpCall || insn.operands.count < 2) return NO;
+    if (!arm64IsDirectCallOpcode(insn.opcode) || insn.operands.count < 2) return NO;
     XTIRSymbol *own = [ctx.module symbolForName:ctx.fn.name];
     if (!own.attributes[@"vaforward"].boolValue) return NO;
     XTIROperand *callee = insn.operands[0];

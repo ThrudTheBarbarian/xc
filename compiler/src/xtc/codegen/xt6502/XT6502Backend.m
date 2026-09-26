@@ -1371,6 +1371,119 @@ static NSString *padLeft(NSString *s, NSUInteger width) {
     [self mechUnmap:ctx];
 }
 
+// Leave Z clear when a branch or Select condition is true. A bool is one byte,
+// but a pointer or callback tested for null reaches here too, and its low byte
+// alone is 0 for a function at $xx00: a pointer tests its two address bytes,
+// anything else every byte, ORed together in $BF.
++ (void)loadCondTest:(XTIROperand *)cond ctx:(XT6502FnCtx *)ctx {
+    NSUInteger cw = 1;
+    if (cond.kind == XTIROperandKindUse) {
+        XTIRValue *cv = [ctx.fn valueForId:cond.valueId];
+        if (cv) cw = [self byteWidthForType:cv.type];
+        if (cv && cv.type.kind == XTIRTypeKindPtr) cw = 2;
+    } else if (cond.kind == XTIROperandKindImmI && cond.type) {
+        cw = [self byteWidthForType:cond.type];
+    }
+    if (cw < 2) { [self loadOperandByte:cond byteIndex:0 ctx:ctx]; return; }
+    [self loadOperandByte:cond byteIndex:cw - 1 ctx:ctx];
+    for (NSUInteger b = cw - 1; b > 0; b--) {
+        [ctx.out appendString:@"    STA $BF\n"];
+        [self loadOperandByte:cond byteIndex:b - 1 ctx:ctx];
+        [ctx.out appendString:@"    ORA $BF\n"];
+    }
+}
+
+// A u64 with its top bit set is negative to MECH's signed i64. Halve it first,
+// keeping the bit shifted out as a sticky low bit so the rounding is unchanged,
+// convert, and double the result, which is exact.
++ (void)emitMechU64ToFp:(XTIRInsn *)insn dstType:(unsigned)dstType
+            resultBytes:(NSUInteger)dw ctx:(XT6502FnCtx *)ctx {
+    NSMutableString *o = ctx.out;
+    unsigned long l = (unsigned long)ctx.labelCounter++;
+    [self mechMap:ctx];
+    [self mechStore:insn.operands[0] width:8 slot:0 slotBytes:8 signExtend:NO ctx:ctx];
+    [o appendFormat:@"    LDA $4047\n    BPL .Lu64f%lu_p\n    LSR $4047\n", l];
+    for (unsigned b = 7; b > 0; b--)
+        [o appendFormat:@"    ROR $%04X\n", 0x4040 + b - 1];
+    [o appendFormat:@"    BCC .Lu64f%lu_s\n    LDA $4040\n    ORA #$01\n    STA $4040\n.Lu64f%lu_s:\n", l, l];
+    [self mechOpWord:0 b0:((dstType & 3) << 6) | 0x20 s1:0 s2:3 dst:2 ctx:ctx];
+    [self mechOpWord:1 b0:((dstType & 3) << 6) | 0x01 s1:2 s2:2 dst:2 ctx:ctx];
+    [self mechRun:2 ctx:ctx];
+    [o appendFormat:@"    JMP .Lu64f%lu_d\n.Lu64f%lu_p:\n", l, l];
+    [self mechOpWord:0 b0:((dstType & 3) << 6) | 0x20 s1:0 s2:3 dst:2 ctx:ctx];
+    [self mechRun:1 ctx:ctx];
+    [o appendFormat:@".Lu64f%lu_d:\n", l];
+    [self mechResult:insn slot:2 bytes:dw ctx:ctx];
+    [self mechUnmap:ctx];
+}
+
+// MECH CVT, float source, always to i64 so every destination width sees the
+// whole truncated value. A narrower destination then keeps it only if it fits,
+// and is 0 otherwise, as on every other target.
++ (void)emitMechFpToInt:(XTIRInsn *)insn floatWidth:(NSUInteger)fw intWidth:(NSUInteger)iw
+                 signed:(BOOL)sgn ctx:(XT6502FnCtx *)ctx {
+    NSMutableString *o = ctx.out;
+    unsigned srcType = (fw == 8) ? 1 : 0;
+    if (!sgn && iw == 8) { [self emitMechFpToU64:insn floatWidth:fw srcType:srcType ctx:ctx]; return; }
+    [self mechMap:ctx];
+    [self mechStore:insn.operands[0] width:fw slot:0 slotBytes:fw signExtend:NO ctx:ctx];
+    [self mechOpWord:0 b0:(3 << 6) | 0x20 s1:0 s2:srcType dst:2 ctx:ctx];
+    [self mechRun:1 ctx:ctx];
+    if (iw < 8) {
+        unsigned long l = (unsigned long)ctx.labelCounter++;
+        [o appendString:@"    LDX #$00\n"];
+        if (sgn)
+            [o appendFormat:@"    LDA $%04X\n    BPL .Lfi%lu_f\n    LDX #$FF\n.Lfi%lu_f:\n",
+                (unsigned)(0x4050 + iw - 1), l, l];
+        for (NSUInteger b = iw; b < 8; b++)
+            [o appendFormat:@"    CPX $%04X\n    BNE .Lfi%lu_z\n", (unsigned)(0x4050 + b), l];
+        [o appendFormat:@"    JMP .Lfi%lu_k\n.Lfi%lu_z:\n    LDA #$00\n", l, l];
+        for (NSUInteger b = 0; b < iw; b++)
+            [o appendFormat:@"    STA $%04X\n", (unsigned)(0x4050 + b)];
+        [o appendFormat:@".Lfi%lu_k:\n", l];
+    }
+    [self mechResult:insn slot:2 bytes:iw ctx:ctx];
+    [self mechUnmap:ctx];
+}
+
+// A u64 destination reaches 2^64, past MECH's signed i64. Convert both the
+// value and the value less 2^63, and compare it with 2^63 to pick one: the
+// second with its top bit set back, or the first, which is 0 when negative.
++ (void)emitMechFpToU64:(XTIRInsn *)insn floatWidth:(NSUInteger)fw srcType:(unsigned)srcType
+                    ctx:(XT6502FnCtx *)ctx {
+    NSMutableString *o = ctx.out;
+    unsigned long l = (unsigned long)ctx.labelCounter++;
+    [self mechMap:ctx];
+    [self mechStore:insn.operands[0] width:fw slot:0 slotBytes:fw signExtend:NO ctx:ctx];
+    // 2^63 in the source's own format, in slot 1.
+    for (NSUInteger b = 0; b < fw; b++) {
+        unsigned v = 0;
+        if (fw == 8 && b == 6) v = 0xE0;
+        if (fw == 8 && b == 7) v = 0x43;
+        if (fw == 4 && b == 3) v = 0x5F;
+        [o appendFormat:@"    LDA #$%02X\n    STA $%04X\n", v, (unsigned)(0x4048 + b)];
+    }
+    unsigned st = (srcType & 3) << 6;
+    [self mechOpWord:0 b0:(3 << 6) | 0x20 s1:0 s2:srcType dst:2 ctx:ctx];
+    [self mechOpWord:1 b0:st | 0x02 s1:0 s2:1 dst:3 ctx:ctx];
+    [self mechOpWord:2 b0:(3 << 6) | 0x20 s1:3 s2:srcType dst:3 ctx:ctx];
+    [self mechOpWord:3 b0:st | 0x0A s1:0 s2:1 dst:4 ctx:ctx];
+    [self mechRun:4 ctx:ctx];
+    [o appendFormat:@"    LDA $4060\n    CMP #$FF\n    BNE .Lfu%lu_h\n", l];
+    [o appendFormat:@"    LDA $4057\n    BPL .Lfu%lu_k\n    LDA #$00\n", l];
+    for (unsigned b = 0; b < 8; b++)
+        [o appendFormat:@"    STA $%04X\n", 0x4050 + b];
+    [o appendFormat:@"    JMP .Lfu%lu_k\n.Lfu%lu_h:\n", l, l];
+    for (unsigned b = 0; b < 8; b++) {
+        [o appendFormat:@"    LDA $%04X\n", 0x4058 + b];
+        if (b == 7) [o appendString:@"    EOR #$80\n"];
+        [o appendFormat:@"    STA $%04X\n", 0x4050 + b];
+    }
+    [o appendFormat:@".Lfu%lu_k:\n", l];
+    [self mechResult:insn slot:2 bytes:8 ctx:ctx];
+    [self mechUnmap:ctx];
+}
+
 #pragma mark - Block labels
 
 + (NSString *)blockLabelForFn:(XTIRFunction *)fn block:(XTIRBlock *)block {
@@ -1824,7 +1937,7 @@ static NSString *padLeft(NSString *s, NSUInteger width) {
             if (insn.operands.count < 3 || !insn.result) break;
             NSUInteger width = [self byteWidthForType:insn.result.type];
             if (width == 0) width = 1;
-            [self loadOperandByte:insn.operands[0] byteIndex:0 ctx:ctx];
+            [self loadCondTest:insn.operands[0] ctx:ctx];
             NSUInteger lbl = ctx.labelCounter++;
             [ctx.out appendFormat:@"    BEQ .Lselfalse_%lu\n",
                  (unsigned long)lbl];
@@ -2181,7 +2294,7 @@ static NSString *padLeft(NSString *s, NSUInteger width) {
             [self emitPhiCopiesFrom:block to:f.blockRef ctx:ctx];
             // Re-load cond after the copies (might have been
             // clobbered by intermediate LDA/STA).
-            [self loadOperandByte:cond byteIndex:0 ctx:ctx];
+            [self loadCondTest:cond ctx:ctx];
             // BEQ <skip-true> ; JMP <true> ; skip-true: ; JMP <false>
             // The BEQ has the same ±127 range limit as BRA, but
             // it now spans only the JMP-true (3 bytes), which is
@@ -3485,10 +3598,15 @@ static NSString *padLeft(NSString *s, NSUInteger width) {
                 // non-negative i64 (MECH ints are signed); narrower ints
                 // sign- or zero-extend to i32.
                 BOOL sgn = (insn.opcode == XTIROpSIToFp);
-                unsigned srcType; NSUInteger srcBytes; BOOL sx;
-                if (!sgn && sw == 4) { srcType = 3; srcBytes = 8; sx = NO; }
-                else                 { srcType = 2; srcBytes = 4; sx = sgn; }
                 unsigned dstType = (dw == 8) ? 1 : 0;
+                if (!sgn && sw == 8) {
+                    [self emitMechU64ToFp:insn dstType:dstType resultBytes:dw ctx:ctx];
+                    break;
+                }
+                unsigned srcType; NSUInteger srcBytes; BOOL sx;
+                if (sw == 8)              { srcType = 3; srcBytes = 8; sx = NO; }
+                else if (!sgn && sw == 4) { srcType = 3; srcBytes = 8; sx = NO; }
+                else                      { srcType = 2; srcBytes = 4; sx = sgn; }
                 [self emitMechUnary:insn srcWidth:sw srcType:srcType srcBytes:srcBytes
                          signExtend:sx dstType:dstType mcOp:0x20 resultBytes:dw ctx:ctx];
                 break;
@@ -3518,12 +3636,8 @@ static NSString *padLeft(NSString *s, NSUInteger width) {
             NSUInteger fw = [self byteWidthForType:av.type];
             NSUInteger iw = [self byteWidthForType:insn.result.type];
             if ([XTType floatIsIEEE]) {
-                // MECH CVT: F32/F64 -> I32; the low `iw` bytes are the truncated
-                // integer's bit pattern (correct for u32/u16/u8 too, since the
-                // low 32 bits of the wrapped i32 equal the unsigned value).
-                unsigned srcType = (fw == 8) ? 1 : 0;
-                [self emitMechUnary:insn srcWidth:fw srcType:srcType srcBytes:fw
-                         signExtend:NO dstType:2 mcOp:0x20 resultBytes:iw ctx:ctx];
+                [self emitMechFpToInt:insn floatWidth:fw intWidth:iw
+                               signed:(insn.opcode == XTIROpFpToSI) ctx:ctx];
                 break;
             }
             for (NSUInteger b = 0; b < fw; b++) {

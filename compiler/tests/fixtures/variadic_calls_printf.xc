@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — prints through the C printf (a bodiless `...` prototype), and xt6502 has no C library to call
 // variadic_calls_printf.xc — bug 175. A DEFINED variadic that consumes its own
 // pack with va_arg and then calls printf (a bodiless C-variadic prototype) must
 // compile. The reentrance guard wrongly counted a bodiless prototype as a
