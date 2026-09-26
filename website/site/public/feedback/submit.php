@@ -113,7 +113,7 @@ $ip       = $_SERVER['REMOTE_ADDR'] ?? '?';
 $ua       = substr((string)($_SERVER['HTTP_USER_AGENT'] ?? '?'), 0, 200);
 $now      = gmdate('Y-m-d H:i:s') . ' UTC';
 
-$plain  = "xtc bug report" . $eol . str_repeat('-', 60) . $eol;
+$plain  = "xcc bug report" . $eol . str_repeat('-', 60) . $eol;
 $plain .= "Submitted: $now" . $eol;
 $plain .= "From IP:   $ip" . $eol;
 $plain .= "User-Agent: $ua" . $eol;
@@ -145,19 +145,19 @@ foreach ($attachments as $a) {
 }
 $body .= "--$boundary--$eol";
 
-$subject = '[xtc bug] ' . preg_replace('/[\r\n]+/', ' ', $summary);
+$subject = '[xcc bug] ' . preg_replace('/[\r\n]+/', ' ', $summary);
 // RFC 2047 encoding for non-ASCII in the subject.
 if (preg_match('/[^\x20-\x7e]/', $subject)) {
     $subject = '=?UTF-8?B?' . base64_encode($subject) . '?=';
 }
 
-$headers  = "From: xtc bug form <" . FROM_ADDRESS . ">$eol";
+$headers  = "From: xcc bug form <" . FROM_ADDRESS . ">$eol";
 $headers .= "MIME-Version: 1.0$eol";
 $headers .= "Content-Type: multipart/mixed; boundary=\"$boundary\"$eol";
 if ($email !== '') {
     $headers .= "Reply-To: $email$eol";
 }
-$headers .= "X-Mailer: xtc-bug-form/1$eol";
+$headers .= "X-Mailer: xcc-bug-form/1$eol";
 
 $ok = mail(RECIPIENT, $subject, $body, $headers, '-f' . FROM_ADDRESS);
 if (!$ok) {
