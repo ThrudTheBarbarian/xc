@@ -679,10 +679,9 @@ double _coder_parseDouble(u8* s, u32 n)
         e10 = e10 - (i32)1;
         }
     double v = _coder_toDouble(d, e10, ndig);
-    // The sign goes on as a bit: `-v` of a zero gives +0 on some targets, and
-    // -0.0 has to come back as itself.
+    // Negation flips the sign bit, so -0.0 comes back as itself.
     if (neg)
-        return _coder_dfrom(_coder_dbits(v) | (u64)0x8000000000000000);
+        return -v;
     return v;
     }
 
