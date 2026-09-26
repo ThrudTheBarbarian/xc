@@ -2491,7 +2491,8 @@ static int linkX86_64Dynamic(const char *argv0, XTCommandLineOptions *opts, NSSt
 // independent, so `-shared -fPIC` needs no text relocations. The serialised
 // interface rides along as a `.xtc.iface` ELF section for `#import <Lib>`.
 static int linkX86_64Shared(const char *argv0, XTCommandLineOptions *opts, NSString *asmPath,
-                            NSString *outPath, NSString *_Nullable ifaceJson) {
+                            NSString *outPath, NSString *_Nullable ifaceJson,
+                            NSArray<NSString *> *neededLibs) {
     NSFileManager *fm = [NSFileManager defaultManager];
 
     // ── --self-host: write the ET_DYN in-house (no clang, no ld.lld, no glibc) ──
@@ -2534,6 +2535,16 @@ static int linkX86_64Shared(const char *argv0, XTCommandLineOptions *opts, NSStr
                           encoding:NSUTF8StringEncoding error:NULL];
         }
         NSMutableArray<NSString *> *args = [rtPaths mutableCopy];
+        // A library with load-time constructors registers its table with the
+        // program at load, and the program's _start runs it (bug 470).
+        if ([prog containsString:@"\n__xt_ctors_start:"]) {
+            NSString *li = [support stringByAppendingPathComponent:@"x86_64/runtime/libinit-linux.s"];
+            if (![fm fileExistsAtPath:li]) {
+                fprintf(stderr, "xcc: error: x86-64 runtime file missing: %s\n", li.UTF8String);
+                return 1;
+            }
+            [args addObject:li];
+        }
         [args addObject:stubPath];
         [args addObject:asmPath];
         // The user's own objects and archives, so a library that WRAPS external
@@ -2566,8 +2577,15 @@ static int linkX86_64Shared(const char *argv0, XTCommandLineOptions *opts, NSStr
             NSString *gccA = x86MuslLibgcc(support);
             if (gccA) [args addObject:gccA];
         }
+        // The libraries this one `#import`s (bug 471): each a DT_NEEDED, found
+        // beside this library through a DT_RUNPATH of $ORIGIN, so a program
+        // that imports only this library still loads them, and before this one.
+        BOOL anySo = NO;
+        for (NSString *lib in neededLibs)
+            if ([lib.pathExtension isEqualToString:@"so"]) { [args addObject:lib]; anySo = YES; }
         [args addObjectsFromArray:@[@"-shared", @"-soname", outPath.lastPathComponent,
                                     @"-iface", ifacePath, @"-o", outPath]];
+        if (anySo) [args addObjectsFromArray:@[@"-rpath", @"$ORIGIN"]];
         int rc = runChild(ln, args);
         if (!opts.verbose) [fm removeItemAtPath:stubPath error:NULL];
         if (rc == 0) {
@@ -4561,7 +4579,7 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
             // a compile that imported a library was being routed into one of
             // them and handed the `.xtc.iface` to ld.lld ("unknown file type").
             : (x86Exe && opts.emitLib && !opts.compileOnly)
-            ? linkX86_64Shared(argv0, opts, tmpAsm, opts.outputPath, ifaceJson)
+            ? linkX86_64Shared(argv0, opts, tmpAsm, opts.outputPath, ifaceJson, neededLibs)
             : (x86Exe && neededLibs.count > 0 && !opts.compileOnly)
             ? linkX86_64Dynamic(argv0, opts, tmpAsm, opts.outputPath, neededLibs)
             : x86Exe

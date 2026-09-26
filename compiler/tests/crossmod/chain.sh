@@ -43,13 +43,14 @@
 #           against the first library's symbols; the second library did not
 #           link before they were. chainmany calls ChainU.many only: the
 #           third library takes the address of the imported Base$dealloc
-#           through the GOT, and did not link before it did
+#           through the GOT, and did not link before it did. chainrev and
+#           chainuseonly as well: the third library had no DT_NEEDED for the
+#           first (undefined symbol UXNib$booted), and its load-time
+#           constructor never ran (boot=0). It now records the first, and
+#           registers its constructor table at load for the program's _start
+#           to run, dependencies first
 # Not run:
 #   arm9    running needs the loader tree and qemu
-#   chainrev on x86_64: a library's load-time constructors never run, so
-#           boot=0
-#   chainuseonly on x86_64: the third library does not record that it needs
-#           the first (undefined symbol UXNib$booted)
 _root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null)
 [ -f "$_root/tools/build-env.sh" ] && . "$_root/tools/build-env.sh"
 set -u
@@ -182,7 +183,7 @@ before=$fail
 HOST=${XTC_X86_HOST:-${XTC_LINUX_HOST:-}}
 if [ -n "$HOST" ] && ssh -o ConnectTimeout=8 -o BatchMode=yes "$HOST" true 2>/dev/null; then
     RD=/tmp/xc-chain-$$
-    runmatrix x86_64 .so run_x86 "Base Sub Use" chainclient chainmany
+    runmatrix x86_64 .so run_x86 "Base Sub Use" chainclient chainmany chainrev chainuseonly
     ssh "$HOST" "rm -rf $RD" </dev/null
     [ $fail = $before ] && echo "PASS  x86_64: run on $HOST, lib x app compiler matrix"
 else

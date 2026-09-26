@@ -1842,6 +1842,11 @@ void linkX86_64(DriverOptions* d, String* prog)
     rtNames.add((Object*)String.withCString("rtgen-linux.s"));
     rtNames.add((Object*)String.withCString("rtfiles-linux.s"));
     rtNames.add((Object*)String.withCString("libmgen-linux.s"));
+    // A library with load-time constructors registers its table with the
+    // program at load, and the program's _start runs it (bug 470).
+    if (d.emitLib() && prog != (String*)0
+        && prog.contains(String.withCString("\n__xt_ctors_start:")))
+        rtNames.add((Object*)String.withCString("libinit-linux.s"));
     for (u32 k = (u32)0; k < rtNames.count(); k = k + (u32)1) {
         String* t = readRuntimeIn(d.fe(), "x86_64/runtime", (String*)rtNames.get(k));
         if (t == 0) {
@@ -1929,9 +1934,26 @@ void linkX86_64(DriverOptions* d, String* prog)
         if (ij != (String*)0)
             for (u32 i = (u32)0; i < ij.byteLength(); i = i + (u32)1)
                 iface.add((Object*)Number.withU32((u32)ij.byteAt(i)));
+        // The libraries this one `#import`s (bug 471): each a DT_NEEDED,
+        // found beside this library through a DT_RUNPATH of $ORIGIN, so a
+        // program that imports only this library still loads them, and
+        // before this one.
+        Array* needed = new Array();
+        Array* nl = d.fe().neededLibs();
+        for (u32 i = (u32)0; nl != (Array*)0 && i < nl.count(); i = i + (u32)1) {
+            String* lp = (String*)nl.get(i);
+            if (!lp.hasSuffix(String.withCString(".so"))) continue;
+            ElfSharedInfo* info = Elf64.sharedInfo(lp);
+            String* sn = info != (ElfSharedInfo*)0 ? info.soname() : lp.lastPathComponent();
+            bool have = false;
+            for (u32 k = (u32)0; k < needed.count(); k = k + (u32)1)
+                if (((String*)needed.get(k)).equals(sn)) have = true;
+            if (!have) needed.add((Object*)sn);
+        }
         img = ln.linkShared(srcs, objs, ars,
                             baseNameOf(d.fe().output()), (Array*)0,
-                            new Array(), (String*)0, iface);
+                            needed, needed.count() > (u32)0 ? String.withCString("$ORIGIN") : (String*)0,
+                            iface);
     } else {
         // A program that `#import <Lib>`ed a `.so` must be DYNAMIC: a static
         // image has no interpreter and no DT_NEEDED, so the library it named

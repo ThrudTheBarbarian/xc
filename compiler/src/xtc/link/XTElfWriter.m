@@ -112,6 +112,8 @@ enum
     DT_SYMENT = 11,
     DT_SONAME = 14,
     DT_RUNPATH = 29,
+    DT_INIT_ARRAY = 25,
+    DT_INIT_ARRAYSZ = 27,
     R_X86_64_64 = 1,
     R_X86_64_GLOB_DAT = 6,
     R_X86_64_RELATIVE = 8,
@@ -1187,8 +1189,12 @@ static uint32_t elfHash(const char* name)
 
     // ── 2. exports ──
     NSMutableArray<NSString*>* exports = [NSMutableArray array];
+    // A library's constructor-table bounds stay private: its table reaches
+    // the program through its init entry (below), and an exported
+    // `__xt_ctors_start` is only something another image could bind to.
     for (NSString* n in [globalSymbols.allObjects sortedArrayUsingSelector:@selector(compare:)])
-        if (symbols[n])
+        if (symbols[n] && (isExec || !([n isEqualToString:@"__xt_ctors_start"]
+                                       || [n isEqualToString:@"__xt_ctors_end"])))
             [exports addObject:n];
 
     // ── 3. sizes, then addresses ──
@@ -1273,7 +1279,16 @@ static uint32_t elfHash(const char* name)
 
     NSUInteger nbucket = nsym < 4 ? 1 : nsym / 4 + 1;
     NSUInteger hashSz = (2 + nbucket + nsym) * 4;
-    NSUInteger nDyn = 8 + (isExec ? 0 : 1) + (runpath.length ? 1 : 0) + neededOff.count + 1; // tags below, NEEDEDs, NULL
+    // A library's init entry (bug 470): libinit-linux.s lays out one pointer
+    // between __xt_init_array_start and __xt_init_array_end, the function that
+    // registers the library's constructor table with the program. It becomes
+    // DT_INIT_ARRAY; its word already has a RELATIVE relocation.
+    BOOL hasInit = !isExec && [dataSymbols containsObject:@"__xt_init_array_start"]
+                   && [dataSymbols containsObject:@"__xt_init_array_end"]
+                   && symbols[@"__xt_init_array_end"].unsignedLongLongValue
+                          > symbols[@"__xt_init_array_start"].unsignedLongLongValue;
+    NSUInteger nDyn = 8 + (isExec ? 0 : 1) + (runpath.length ? 1 : 0) + (hasInit ? 2 : 0)
+                      + neededOff.count + 1; // tags below, NEEDEDs, NULL
 
     // Relocations: one RELATIVE per .quad-of-a-local-symbol, one R_X86_64_64
     // per .quad-of-an-import, one GLOB_DAT per import, one RELATIVE per local
@@ -1618,6 +1633,12 @@ static uint32_t elfHash(const char* name)
     dyn(DT_RELA, relaOff);
     dyn(DT_RELASZ, nRela * RELA_SZ);
     dyn(DT_RELAENT, RELA_SZ);
+    if (hasInit)
+        {
+        uint64_t ia = symbols[@"__xt_init_array_start"].unsignedLongLongValue;
+        dyn(DT_INIT_ARRAY, dataAddr + ia);
+        dyn(DT_INIT_ARRAYSZ, symbols[@"__xt_init_array_end"].unsignedLongLongValue - ia);
+        }
     dyn(DT_NULL, 0);
 
     // .data last in the RW segment, and only the bytes that are not trailing zeros.
