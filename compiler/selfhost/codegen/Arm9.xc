@@ -3263,6 +3263,9 @@ class Arm9
         // the mirror-image guard, and this makes the pair symmetric.
         _out.appendCString("\tldrh\tr1, [r0, #-2]\n\tcmp\tr1, #0\n");
         _out.appendFormat("\tbeq\t%s\n", lbl.cString());
+        // The count saturates at 0xFFFF rather than wrapping to 0, which would
+        // free the object while it is still referenced (bug 261). The add is
+        // done in 32 bits, so 0xFFFF + 1 is 0x10000 and the store is skipped.
         if (_atomicArc)
             {
             // LDREXH tags the address; STREXH stores only if nothing else wrote
@@ -3271,12 +3274,17 @@ class Arm9
             // or System mode, and still correct if a second core is brought up.
             String* retry = arcLabel();
             _out.appendFormat("\tsub\tr3, r0, #2\n%s:\n", retry.cString());
-            _out.appendCString("\tldrexh\tr1, [r3]\n\tadd\tr1, r1, #1\n\tstrexh\tr2, r1, [r3]\n");
+            _out.appendCString("\tldrexh\tr1, [r3]\n\tadd\tr1, r1, #1\n\tcmp\tr1, #0x10000\n");
+            _out.appendFormat("\tbeq\t%s\n", lbl.cString());
+            _out.appendCString("\tstrexh\tr2, r1, [r3]\n");
             _out.appendFormat("\tcmp\tr2, #0\n\tbne\t%s\n", retry.cString());
             }
         else
             {
-            _out.appendCString("\tldrh\tr1, [r0, #-2]\n\tadd\tr1, r1, #1\n\tstrh\tr1, [r0, #-2]\n");
+            // r1 still holds the count the zero test just read.
+            _out.appendCString("\tadd\tr1, r1, #1\n\tcmp\tr1, #0x10000\n");
+            _out.appendFormat("\tbeq\t%s\n", lbl.cString());
+            _out.appendCString("\tstrh\tr1, [r0, #-2]\n");
             }
         _out.appendFormat("%s:\n", lbl.cString());
         }
@@ -3289,6 +3297,10 @@ class Arm9
         String* lbl = arcLabel();
         _out.appendCString("\tcmp\tr0, #0x10000\n");
         _out.appendFormat("\tblo\t%s\n", lbl.cString());
+        // A saturated count (0xFFFF) is left alone: the true number of
+        // references is unknown once retain stopped counting, so the object
+        // is leaked rather than freed while it may still be in use (bug 261).
+        // The plain path reads it sign-extended, so 0xFFFF is -1.
         if (_atomicArc)
             {
             // Same monitor loop, decrementing. "Was I the last reference?" uses
@@ -3297,14 +3309,18 @@ class Arm9
             // destructor's reads.
             String* retry = arcLabel();
             _out.appendFormat("\tsub\tr3, r0, #2\n%s:\n", retry.cString());
-            _out.appendCString("\tldrexh\tr1, [r3]\n\tsub\tr1, r1, #1\n\tstrexh\tr2, r1, [r3]\n");
+            _out.appendCString("\tldrexh\tr1, [r3]\n\tadd\tr2, r1, #1\n\tcmp\tr2, #0x10000\n");
+            _out.appendFormat("\tbeq\t%s\n", lbl.cString());
+            _out.appendCString("\tsub\tr1, r1, #1\n\tstrexh\tr2, r1, [r3]\n");
             _out.appendFormat("\tcmp\tr2, #0\n\tbne\t%s\n", retry.cString());
             _out.appendCString("\tdmb\tish\n");
             _out.appendFormat("\tcmp\tr1, #0\n\tbne\t%s\n", lbl.cString());
             }
         else
             {
-            _out.appendCString("\tldrh\tr1, [r0, #-2]\n\tsubs\tr1, r1, #1\n\tstrh\tr1, [r0, #-2]\n");
+            _out.appendCString("\tldrsh\tr1, [r0, #-2]\n\tcmn\tr1, #1\n");
+            _out.appendFormat("\tbeq\t%s\n", lbl.cString());
+            _out.appendCString("\tsubs\tr1, r1, #1\n\tstrh\tr1, [r0, #-2]\n");
             _out.appendFormat("\tbne\t%s\n", lbl.cString());
             }
         _out.appendCString("\tbl\t_xtc_dealloc\n");

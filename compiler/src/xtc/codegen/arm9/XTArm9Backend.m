@@ -2261,6 +2261,10 @@ static const NSUInteger kArm9VaForwardWords = 16;
             // an object whose dealloc is running relaunches dealloc (bug 038).
             [out appendString:@"\tldrh\tr1, [r0, #-2]\n\tcmp\tr1, #0\n"];
             [out appendFormat:@"\tbeq\t.L_arc_%lu\n", (unsigned long)n];
+            // The count saturates at 0xFFFF rather than wrapping to 0, which
+            // would free the object while it is still referenced (bug 261).
+            // The add is 32-bit, so 0xFFFF + 1 is 0x10000 and the store is
+            // skipped.
             if (sArm9ThreadSafeARC)
                 {
                 // Exclusive-monitor retry loop: LDREXH tags the address,
@@ -2275,12 +2279,17 @@ static const NSUInteger kArm9VaForwardWords = 16;
                 // are held to byte-identical output.
                 NSUInteger rl = sArcLabel++;
                 [out appendFormat:@"\tsub\tr3, r0, #2\n.L_arc_%lu:\n", (unsigned long)rl];
-                [out appendString:@"\tldrexh\tr1, [r3]\n\tadd\tr1, r1, #1\n\tstrexh\tr2, r1, [r3]\n"];
+                [out appendString:@"\tldrexh\tr1, [r3]\n\tadd\tr1, r1, #1\n\tcmp\tr1, #0x10000\n"];
+                [out appendFormat:@"\tbeq\t.L_arc_%lu\n", (unsigned long)n];
+                [out appendString:@"\tstrexh\tr2, r1, [r3]\n"];
                 [out appendFormat:@"\tcmp\tr2, #0\n\tbne\t.L_arc_%lu\n", (unsigned long)rl];
                 }
             else
                 {
-                [out appendString:@"\tldrh\tr1, [r0, #-2]\n\tadd\tr1, r1, #1\n\tstrh\tr1, [r0, #-2]\n"];
+                // r1 still holds the count the zero test just read.
+                [out appendString:@"\tadd\tr1, r1, #1\n\tcmp\tr1, #0x10000\n"];
+                [out appendFormat:@"\tbeq\t.L_arc_%lu\n", (unsigned long)n];
+                [out appendString:@"\tstrh\tr1, [r0, #-2]\n"];
                 }
             [out appendFormat:@".L_arc_%lu:\n", (unsigned long)n];
             }
@@ -2294,6 +2303,10 @@ static const NSUInteger kArm9VaForwardWords = 16;
             NSUInteger n = sArcLabel++;
             [self loadOperand:ops[0] into:@"r0" slot:slot out:out];
             [out appendFormat:@"\tcmp\tr0, #0x10000\n\tblo\t.L_arc_%lu\n", (unsigned long)n];
+            // A saturated count (0xFFFF) is left alone: once retain stopped
+            // counting, the true number of references is unknown, so the
+            // object is leaked rather than freed while it may still be in use
+            // (bug 261). The plain path reads it sign-extended, so 0xFFFF is -1.
             if (sArm9ThreadSafeARC)
                 {
                 // Same monitor loop, decrementing. The "was I the last
@@ -2302,14 +2315,18 @@ static const NSUInteger kArm9VaForwardWords = 16;
                 // threads re-reading a zero would both call dealloc.
                 NSUInteger rl = sArcLabel++;
                 [out appendFormat:@"\tsub\tr3, r0, #2\n.L_arc_%lu:\n", (unsigned long)rl];
-                [out appendString:@"\tldrexh\tr1, [r3]\n\tsub\tr1, r1, #1\n\tstrexh\tr2, r1, [r3]\n"];
+                [out appendString:@"\tldrexh\tr1, [r3]\n\tadd\tr2, r1, #1\n\tcmp\tr2, #0x10000\n"];
+                [out appendFormat:@"\tbeq\t.L_arc_%lu\n", (unsigned long)n];
+                [out appendString:@"\tsub\tr1, r1, #1\n\tstrexh\tr2, r1, [r3]\n"];
                 [out appendFormat:@"\tcmp\tr2, #0\n\tbne\t.L_arc_%lu\n", (unsigned long)rl];
                 [out appendString:@"\tdmb\tish\n"]; // acquire before the destructor reads
                 [out appendFormat:@"\tcmp\tr1, #0\n\tbne\t.L_arc_%lu\n", (unsigned long)n];
                 }
             else
                 {
-                [out appendString:@"\tldrh\tr1, [r0, #-2]\n\tsubs\tr1, r1, #1\n\tstrh\tr1, [r0, #-2]\n"];
+                [out appendString:@"\tldrsh\tr1, [r0, #-2]\n\tcmn\tr1, #1\n"];
+                [out appendFormat:@"\tbeq\t.L_arc_%lu\n", (unsigned long)n];
+                [out appendString:@"\tsubs\tr1, r1, #1\n\tstrh\tr1, [r0, #-2]\n"];
                 [out appendFormat:@"\tbne\t.L_arc_%lu\n", (unsigned long)n];
                 }
             [out appendString:@"\tbl\t_xtc_dealloc\n"]; // r0 = obj; reads header fnptr

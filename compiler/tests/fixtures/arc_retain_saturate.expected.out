@@ -1,0 +1,4 @@
+retained: freed=0
+released: freed=0
+tag=123456 method=123456 other=777,888
+distinct=1 freed=0

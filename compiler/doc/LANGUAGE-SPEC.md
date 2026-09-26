@@ -1570,7 +1570,9 @@ same retains and releases as without it.
 
 Language-level limits that apply across all targets:
 
-- **Retain counts saturate at $FFFF** (65535).
+- **Retain counts saturate at $FFFF** (65535) on xt6502, arm9, m68k
+  and wasm32. A release leaves a saturated count unchanged, so the
+  object is never freed. The 64-bit hosts use a 32-bit count.
 - **Weak side table** defaults to 64 entries; max 255.
 
 Target-specific limits (6502 platforms):

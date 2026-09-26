@@ -3364,6 +3364,9 @@ class Wasm32
             rtExp(String.withCString("_xtc_heap_largest")).cString());
         }
 
+        // The 16-bit count saturates at 65535: retain stops there instead of
+        // wrapping to 0, and release leaves a saturated count alone, so the
+        // object is leaked rather than freed while still referenced (bug 261).
         out.appendFormat(
         "  (func $__xtc_retain%s (param $p i32)\n"
         "    (local $rc i32)\n"
@@ -3371,6 +3374,8 @@ class Wasm32
         "    if\n      return\n    end\n"
         "    local.get $p\n    i32.const 2\n    i32.sub\n    i32.load16_u\n"
         "    local.tee $rc\n    i32.eqz\n"
+        "    if\n      return\n    end\n"
+        "    local.get $rc\n    i32.const 65535\n    i32.eq\n"
         "    if\n      return\n    end\n"
         "    local.get $p\n    i32.const 2\n    i32.sub\n"
         "    local.get $rc\n    i32.const 1\n    i32.add\n    i32.store16\n  )\n",
@@ -3383,6 +3388,8 @@ class Wasm32
         "    if\n      return\n    end\n"
         "    local.get $p\n    i32.const 2\n    i32.sub\n    i32.load16_u\n"
         "    local.tee $rc\n    i32.eqz\n"
+        "    if\n      return\n    end\n"
+        "    local.get $rc\n    i32.const 65535\n    i32.eq\n"
         "    if\n      return\n    end\n"
         "    local.get $p\n    i32.const 2\n    i32.sub\n"
         "    local.get $rc\n    i32.const 1\n    i32.sub\n    i32.store16\n"

@@ -114,7 +114,8 @@ _or_done:
 ;                 path and JSR _heap_free.
 ;   Carry clear → block still has live references, or the input was
 ;                 null, or the stored count was already 0 (guard
-;                 against double-release): caller takes no action.
+;                 against double-release), or it was saturated at
+;                 $FFFF: caller takes no action.
 ;
 ; The payload pointer + bank are preserved in A/X/Y across the call
 ; so the caller can feed them straight into the dealloc/_heap_free
@@ -148,6 +149,17 @@ _obj_decref:
     INY
     ORA ({{zp.tmp}}),Y             ; | hi
     BEQ _od_restore_cc
+
+    ; A saturated count stays saturated. _obj_retain stops at $FFFF, so
+    ; once it is there the true number of references is unknown, and
+    ; counting down from it would free the block while references are
+    ; still live (bug 261). The block is leaked instead.
+    DEY
+    LDA ({{zp.tmp}}),Y             ; lo
+    INY
+    AND ({{zp.tmp}}),Y             ; & hi
+    CMP #$FF
+    BEQ _od_restore_cc             ; $FFFF → leave it, carry clear
 
     ; 16-bit decrement through (tmp),Y.
     LDY #$00
