@@ -3943,11 +3943,14 @@ class X86_64
         if (o.kind() == (u8)OPK_SYM)
             {
             String* nm = safeSym(o.name());
-            if (symbolIsExtern(o.name()) && !_win64)
+            if ((symbolIsExtern(o.name()) || functionIsImported(o.name())) && !_win64)
                 {
                 // Imported from another shared object — an imported class's
-                // vtable, say. Its address is not fixed at static-link time, so
-                // it comes FROM the GOT rather than a direct RIP-relative form.
+                // vtable, say, or a function with no body here (another
+                // library's Base$dealloc for `new Base[N]`). Its address is not
+                // fixed at static-link time, so it comes FROM the GOT rather
+                // than a direct RIP-relative form. A static link relaxes the
+                // load back to the lea when the image defines the symbol.
                 _out.appendFormat("\tmov\trax, [rip+%s@GOTPCREL]\n", nm.cString());
                 }
             else
@@ -3964,6 +3967,27 @@ class X86_64
             _out.appendCString("\txor\teax, eax\n");
             }
         store((u8)'a', n.res());
+        }
+
+    // A function symbol with no function of that name DEFINED in this module:
+    // a prototype, or a method of a class imported from another library.
+    bool functionIsImported(String* name)
+        {
+        if (_m == (IRModule*)0)
+            return false;
+        IRSymbol* sym = (IRSymbol*)0;
+        for (u32 i = (u32)0; i < _m.syms().count() && sym == (IRSymbol*)0; i = i + (u32)1)
+            {
+            IRSymbol* s = (IRSymbol*)_m.syms().get(i);
+            if (s.name().equals(name))
+                sym = s;
+            }
+        if (sym == (IRSymbol*)0 || !sym.isFunc())
+            return false;
+        for (u32 i = (u32)0; i < _m.funcs().count(); i = i + (u32)1)
+            if (((IRFunc*)_m.funcs().get(i)).name().equals(name))
+                return false;
+        return true;
         }
 
     bool symbolIsExtern(String* name)

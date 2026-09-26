@@ -2532,7 +2532,18 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         if (ops[0].kind == XTIROperandKindSym)
             {
             XTIRSymbol* sym = [mod symbolForId:ops[0].symbolId];
-            if (sym.isExternalGlobal && !sWin64)
+            // A function with no body in this module — a prototype, or a
+            // method of a class imported from another library (Base$dealloc
+            // for `new Base[N]`) — is imported too. A static link relaxes the
+            // GOT load back to the lea when the image defines the symbol.
+            BOOL imported = sym.isExternalGlobal;
+            if (!imported && sym.kind == XTIRSymbolKindFunction)
+                {
+                imported = YES;
+                for (XTIRFunction* f in mod.functions)
+                    if ([f.name isEqualToString:sym.name]) { imported = NO; break; }
+                }
+            if (imported && !sWin64)
                 {
                 // Imported from another .so (e.g. an imported class's vtable): its
                 // address isn't fixed at static-link time, so load it FROM the GOT
