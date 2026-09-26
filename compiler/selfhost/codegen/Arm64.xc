@@ -4784,9 +4784,13 @@ class Arm64
     void emitIntToPtr(IRInsn* n)
     {
         if (n.ops().count() < (u32)1 || n.res() == (IRValue*)0) { unsupported(n.op()); return; }
-        // The source slot was written by a 32-bit store, so its upper four
-        // bytes are stale: read it 32-bit first, and the "a write to w<n>
-        // zero-extends x<n>" rule gives a clean pointer-width value.
+        // The result is the full 64-bit pointer (bug 360). A 64-bit source is
+        // read whole. A narrower one is read 32-bit, because its slot's upper
+        // four bytes are stale, and then extended as its signedness says: a
+        // signed source is sign-extended, an unsigned one zero-extended (a
+        // write to w<n> clears the top half of x<n>). The Map/Set sentinels
+        // `(pointer)0` and `(pointer)1` are small integers and come out as 0
+        // and 1 either way.
         //
         // A USE goes through loadValue, NOT materialise. materialise rebuilds
         // a constant rather than fetching it — worth it for a call argument,
@@ -4795,15 +4799,26 @@ class Arm64
         // against two. The original takes the same branch; taking the other
         // one made every file in arm64-diff differ (bug 222).
         IROperand* a0 = (IROperand*)n.ops().get((u32)0);
+        String* st = a0.kind() == (u8)OPK_USE && a0.val() != (IRValue*)0
+                   ? a0.val().ty() : a0.ty();
+        bool full = width(st) >= (u32)8;
+        String* r = String.withCString(full ? "x16" : "w16");
         if (a0.kind() == (u8)OPK_USE)
-            loadValue(a0.val(), String.withCString("w16"));
+            loadValue(a0.val(), r);
         else
-            materialise(a0, String.withCString("w16"));
-        // An int→ptr is a 16-bit address value, masked so the Map/Set
-        // `(pointer)0` / `(pointer)1` sentinels and the `(u16)(pointer)N == N`
-        // round trip stay honest. Native pointers never come through here —
-        // they arrive from Call or AddrOf at full host width.
-        _out.appendCString("    and w16, w16, #0xFFFF\n");
+            materialise(a0, r);
+        if (!full && st != (String*)0) {
+            if (st.equals(String.withCString("I8")))
+                _out.appendCString("    sxtb x16, w16\n");
+            else if (st.equals(String.withCString("I16")))
+                _out.appendCString("    sxth x16, w16\n");
+            else if (st.equals(String.withCString("I32")))
+                _out.appendCString("    sxtw x16, w16\n");
+            else if (st.equals(String.withCString("U8")) || st.equals(String.withCString("Bool")))
+                _out.appendCString("    uxtb w16, w16\n");
+            else if (st.equals(String.withCString("U16")))
+                _out.appendCString("    uxth w16, w16\n");
+        }
         storeReg(String.withCString("x16"), n.res());
     }
 

@@ -1138,7 +1138,7 @@ static const NSUInteger kArm9VaForwardWords = 16;
     // word and leaves the high word holding whatever the slot did: `(i64)5`
     // stored 5 and a stale high half, which then propagated through every
     // arithmetic result computed from it.
-    if (res && (res.type.kind == XTIRTypeKindI64 || res.type.kind == XTIRTypeKindU64) && ops.count >= 1 && slot[@(res.valueId)] && (op == XTIROpZExt || op == XTIROpSExt || op == XTIROpBitcast || op == XTIROpConst))
+    if (res && (res.type.kind == XTIRTypeKindI64 || res.type.kind == XTIRTypeKindU64) && ops.count >= 1 && slot[@(res.valueId)] && (op == XTIROpZExt || op == XTIROpSExt || op == XTIROpBitcast || op == XTIROpConst || op == XTIROpPtrToInt))
         {
         NSUInteger ro = slot[@(res.valueId)].unsignedIntegerValue;
         if (op == XTIROpConst && ops[0].kind == XTIROperandKindImmI)

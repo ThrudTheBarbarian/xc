@@ -3844,6 +3844,14 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         return;
 
     case XTIROpIntToPtr:
+        // An integer becomes a full 64-bit pointer (bug 360): a signed source
+        // is sign-extended, an unsigned one zero-extended.
+        if (res && ops.count >= 1)
+            {
+            [self loadIndex:ops[0] into:'a' fn:fn slot:slot out:out];
+            [self store:'a' into:res slot:slot out:out];
+            }
+        return;
     case XTIROpPtrToInt:
         // Reinterpret — zero-extend so a width change leaves no stale high bits.
         if (res && ops.count >= 1)

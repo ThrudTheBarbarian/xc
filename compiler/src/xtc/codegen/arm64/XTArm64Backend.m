@@ -4729,38 +4729,45 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
         // ── IntToPtr / PtrToInt ───────────────────────────────────
         case XTIROpIntToPtr: {
             if (insn.operands.count < 1 || !insn.result) break;
-            // The source slot was written by a 32-bit store (str w),
-            // so its upper 4 bytes are stale. Force a 32-bit load
-            // first so AArch64's "writes to w<n> zero-extend the
-            // upper 32 bits of x<n>" semantics gives us a clean
-            // pointer-width value, then store the full 8 bytes.
+            // The result is the full 64-bit pointer (bug 360). A 64-bit
+            // source is read whole. A narrower one is read 32-bit, because
+            // its slot's upper 4 bytes are stale, and then extended as its
+            // signedness says: a signed source is sign-extended, an unsigned
+            // one zero-extended (a write to w<n> clears the top half of
+            // x<n>). The Map/Set sentinels `(pointer)0` and `(pointer)1` are
+            // small integers and come out as 0 and 1 either way.
             XTIROperand *op = insn.operands[0];
+            XTIRType *st = (op.kind == XTIROperandKindUse)
+                ? [ctx.fn valueForId:op.valueId].type : op.type;
+            BOOL full = st && (st.kind == XTIRTypeKindI64 || st.kind == XTIRTypeKindU64
+                               || st.kind == XTIRTypeKindF64 || st.kind == XTIRTypeKindPtr
+                               || st.kind == XTIRTypeKindVec);
+            NSString *r = full ? @"x16" : @"w16";
             if (op.kind == XTIROperandKindUse) {
-                [self loadValue:op.valueId intoReg:@"w16" ctx:ctx];
+                [self loadValue:op.valueId intoReg:r ctx:ctx];
             } else {
-                [self materialiseOperand:op intoReg:@"w16" ctx:ctx];
+                [self materialiseOperand:op intoReg:r ctx:ctx];
             }
-            // An int→ptr is a 16-bit Atari-style address value: mask to
-            // 16 bits so the Map/Set `(pointer)0`/`(pointer)1` sentinel
-            // scheme and the `(u16)(pointer)N == N` round-trip stay honest.
-            // There is no address remapping — arm64 is a flat host and
-            // dereferences pointers directly. Native pointers (heap / AddrOf)
-            // never flow through IntToPtr; they come from Call / AddrOf and
-            // keep their full host width. A program that casts a literal
-            // absolute Atari address (a hardware register, ZP) and derefs it
-            // is 6502-only and is never compiled for this backend.
-            [ctx.out appendString:@"    and w16, w16, #0xFFFF\n"];
+            if (!full && st) {
+                switch (st.kind) {
+                    case XTIRTypeKindI8:   [ctx.out appendString:@"    sxtb x16, w16\n"]; break;
+                    case XTIRTypeKindI16:  [ctx.out appendString:@"    sxth x16, w16\n"]; break;
+                    case XTIRTypeKindI32:  [ctx.out appendString:@"    sxtw x16, w16\n"]; break;
+                    case XTIRTypeKindU8:
+                    case XTIRTypeKindBool: [ctx.out appendString:@"    uxtb w16, w16\n"]; break;
+                    case XTIRTypeKindU16:  [ctx.out appendString:@"    uxth w16, w16\n"]; break;
+                    default: break;
+                }
+            }
             [self storeReg:@"x16" intoValue:insn.result.valueId ctx:ctx];
             break;
         }
         case XTIROpPtrToInt: {
             if (insn.operands.count < 1 || !insn.result) break;
             [self materialiseOperand:insn.operands[0] intoReg:@"x16" ctx:ctx];
-            // No sandbox to un-bias — the pointer value is used as-is. A
-            // `(pointer)N` cast kept N (masked to 16 bits) at IntToPtr, so
+            // No sandbox to un-bias — the pointer value is used as-is, so
             // `(u16)(pointer)N == N` round-trips and the Map/Set tag scheme
-            // reads `(pointer)0` as 0 (empty) / `(pointer)1` as 1 (tombstone)
-            // directly from the canonicalised low bits.
+            // reads `(pointer)0` as 0 (empty) / `(pointer)1` as 1 (tombstone).
             NSString *destReg = [self regName:16 forType:insn.result.type];
             // Canonicalise to the result width: `(u16)ptr` keeps only the
             // low 16 bits, etc. Without this the result is the full low

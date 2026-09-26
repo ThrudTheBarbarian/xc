@@ -341,6 +341,32 @@ typedef NS_ENUM(uint8_t, XT6502KnownAddrKind) {
     return n ? n.integerValue : -1;
 }
 
+// Leave $00 or $FF in A: the sign of a source `srcW` bytes wide.
++ (void)emitSignFill:(XTIROperand *)src width:(NSUInteger)srcW ctx:(XT6502FnCtx *)ctx {
+    if (src.kind == XTIROperandKindUse) {
+        NSUInteger labelN = ctx.labelCounter++;
+        if ([self valueOnSPFrame:src.valueId ctx:ctx]) {
+            // BIT has no d,SP form — stage the MSB through $BF.
+            NSString *msb = [self operandForValueId:src.valueId byteIndex:srcW - 1 ctx:ctx];
+            [ctx.out appendFormat:@"    LDA %@\n", msb];
+            [ctx.out appendString:@"    STA $BF\n"];
+            [ctx.out appendString:@"    LDA #$00\n"];
+            [ctx.out appendString:@"    BIT $BF\n"];
+        } else {
+            NSInteger srcBase = [self slotForValueId:src.valueId ctx:ctx];
+            [ctx.out appendString:@"    LDA #$00\n"];
+            [ctx.out appendFormat:@"    BIT $%02lX\n", (unsigned long)(srcBase + srcW - 1)];
+        }
+        [ctx.out appendFormat:@"    BPL .Lse%lu_done\n", (unsigned long)labelN];
+        [ctx.out appendString:@"    LDA #$FF\n"];
+        [ctx.out appendFormat:@".Lse%lu_done:\n", (unsigned long)labelN];
+        return;
+    }
+    int64_t v = src.intValue;
+    BOOL negative = (v & (1LL << (8 * srcW - 1))) != 0;
+    [ctx.out appendFormat:@"    LDA #$%02X\n", negative ? 0xFF : 0x00];
+}
+
 #pragma mark - Unified value-byte addressing (ZP vs SP frame)
 
 // The xt ISA provides `d,SP` variants of exactly the byte-moving and
@@ -3009,16 +3035,30 @@ static NSString *padLeft(NSString *s, NSUInteger width) {
             // the source width so bytes beyond it are zero-extended;
             // without this check loadOperandByte reads adjacent stack
             // slots (other live values) for byte indices ≥ srcW.
+            //
+            // The pointer is {lo, hi, bank}. The integer's low three bytes
+            // fill it, so a pointer converted to an integer and back keeps
+            // its bank (bug 360). A narrower source fills the 16-bit address
+            // and the bank is 0: the bank is not the high part of the
+            // address, so a sign is never carried into it. An i8 is
+            // sign-extended to the 16-bit address.
             NSUInteger dstW = [self byteWidthForType:insn.result.type];
             XTIROperand *srcOp = insn.operands[0];
             NSUInteger srcW = dstW; // fallback: copy all bytes
+            XTIRType *st = nil;
             if (srcOp.kind == XTIROperandKindUse) {
                 XTIRValue *srcVal = [ctx.fn valueForId:srcOp.valueId];
-                if (srcVal) srcW = [self byteWidthForType:srcVal.type];
+                if (srcVal) { srcW = [self byteWidthForType:srcVal.type]; st = srcVal.type; }
+            } else if (srcOp.kind == XTIROperandKindImmI && srcOp.type) {
+                srcW = [self byteWidthForType:srcOp.type];
+                st = srcOp.type;
             }
+            BOOL sx8 = srcW == 1 && st && st.kind == XTIRTypeKindI8;
             for (NSUInteger b = 0; b < dstW; b++) {
                 if (b < srcW) {
                     [self loadOperandByte:srcOp byteIndex:b ctx:ctx];
+                } else if (b == 1 && sx8) {
+                    [self emitSignFill:srcOp width:srcW ctx:ctx];
                 } else {
                     [ctx.out appendString:@"    LDA #$00\n"];
                 }

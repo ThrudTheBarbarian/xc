@@ -2264,9 +2264,8 @@ class ClassInfo
         }
 
     // Read obj[0] and hand the helper a vtable pointer or null. A value below
-    // 0xFFFF is a non-vtable class's id, never an address — and the threshold
-    // is 0xFFFF rather than 0x10000 because IntToPtr narrows to the front
-    // end's pointer width, which would truncate 0x10000 to zero.
+    // 0xFFFF is a non-vtable class's id, never an address. The threshold is a
+    // U16 constant, so it is 0xFFFF rather than 0x10000.
     IRValue* emitConformsCall(IRValue* src, String* proto, String* voidP)
         {
         Array* bops = new Array();

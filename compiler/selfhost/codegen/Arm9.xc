@@ -1669,7 +1669,7 @@ class Arm9
         // Producing a 64-bit value from a narrower one, or from another 64-bit
         // one: each falls through to a one-word path that leaves the high word
         // holding whatever the slot did.
-        if (op.equals(String.withCString("Const")) || op.equals(String.withCString("Bitcast")) || op.equals(String.withCString("ZExt")) || op.equals(String.withCString("SExt")))
+        if (op.equals(String.withCString("Const")) || op.equals(String.withCString("Bitcast")) || op.equals(String.withCString("ZExt")) || op.equals(String.withCString("SExt")) || op.equals(String.withCString("PtrToInt")))
             {
             IROperand* a0 = (IROperand*)ops.get((u32)0);
             if (op.equals(String.withCString("Const")) && a0.kind() == (u8)OPK_IMMI)
