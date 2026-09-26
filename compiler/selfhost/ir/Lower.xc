@@ -5666,14 +5666,20 @@ class ClassInfo
     // Enough of it for what an initialiser can be: a literal, a negation, and
     // the binary operators. `_constOk` goes false the moment something is not
     // foldable, so a caller never mistakes a zero for a value.
+    //
+    // The fold is 64-bit, as the original's (tryFoldInitialiserInt) is. It
+    // was 32-bit, which dropped the high half of every wide initialiser:
+    // `u64 g = 0x199999999999999A;` was baked as 0x9999999A. A shift count
+    // is taken mod 64 and `>>` shifts the 64-bit value LOGICALLY, both as the
+    // original does. A caller that wants a narrower value truncates.
     bool _constOk;
 
-    i32 constEval(Node* n)
+    i64 constEval(Node* n)
         {
         if (n == 0)
             {
             _constOk = false;
-            return (i32)0;
+            return (i64)0;
             }
         u16 k = n.kind();
         if (k == (u16)nkInt || k == (u16)nkChar || k == (u16)nkBool)
@@ -5682,22 +5688,22 @@ class ClassInfo
             return constEval(n.kid((u32)0));
         if (k == (u16)nkUnary)
             {
-            i32 v = constEval(n.kid((u32)0));
+            i64 v = constEval(n.kid((u32)0));
             if (isName(n.op(), "-"))
-                return (i32)0 - v;
+                return (i64)0 - v;
             if (isName(n.op(), "~"))
                 return ~v;
             if (isName(n.op(), "!"))
-                return v == (i32)0 ? (i32)1 : (i32)0;
+                return v == (i64)0 ? (i64)1 : (i64)0;
             _constOk = false;
-            return (i32)0;
+            return (i64)0;
             }
         if (k == (u16)nkBinary)
             {
-            i32 a = constEval(n.kid((u32)0));
-            i32 b = constEval(n.kid((u32)1));
+            i64 a = constEval(n.kid((u32)0));
+            i64 b = constEval(n.kid((u32)1));
             if (!_constOk)
-                return (i32)0;
+                return (i64)0;
             if (isName(n.op(), "+"))
                 return a + b;
             if (isName(n.op(), "-"))
@@ -5706,19 +5712,19 @@ class ClassInfo
                 return a * b;
             if (isName(n.op(), "/"))
                 {
-                if (b == (i32)0)
+                if (b == (i64)0)
                     {
                     _constOk = false;
-                    return (i32)0;
+                    return (i64)0;
                     }
                 return a / b;
                 }
             if (isName(n.op(), "%"))
                 {
-                if (b == (i32)0)
+                if (b == (i64)0)
                     {
                     _constOk = false;
-                    return (i32)0;
+                    return (i64)0;
                     }
                 return a % b;
                 }
@@ -5729,12 +5735,12 @@ class ClassInfo
             if (isName(n.op(), "^"))
                 return a ^ b;
             if (isName(n.op(), "<<"))
-                return a << b;
+                return a << (b & (i64)63);
             if (isName(n.op(), ">>"))
-                return a >> b;
+                return (i64)((u64)a >> (u64)(b & (i64)63));
             }
         _constOk = false;
-        return (i32)0;
+        return (i64)0;
         }
 
     // A float literal's 64 bits, most significant digit first — the order the
@@ -5837,6 +5843,7 @@ class ClassInfo
                 {
                 text = String.withCString("-");
                 text.append(lit.kid((u32)0).name());
+                lit = lit.kid((u32)0);
                 }
             else if (lit.kind() == (u16)nkFloat)
                 {
@@ -5846,14 +5853,99 @@ class ClassInfo
                 {
                 return (Array*)0;
                 }
-            Data* d = FloatEncoding.ieeeBytes(text, astWidth(ty) == (u32)8);
+            if (astWidth(ty) == (u32)8)
+                return literalDoubleBytes(text, lit);
+            Data* d = FloatEncoding.ieeeBytes(text, false);
             return bytesOfData(d);
             }
         _constOk = true;
-        i32 v = constEval(e);
+        i64 v = constEval(e);
         if (!_constOk)
             return (Array*)0;
         return leBytes(v, width);
+        }
+
+    // The eight IEEE bytes, low first, of the double a float literal
+    // denotes at the literal's OWN precision. `3.1` is a float literal, so
+    // its value is the float nearest 3.1, widened: what the same literal
+    // gives at run time, and what the original bakes from the literal's
+    // value. Only `3.1d` is the double nearest 3.1. Encoding every literal
+    // as a double put a different value in a `double` global than the one
+    // `double x = 3.1;` computes. The parser records the `d` suffix in the
+    // literal's `num`; its type is not used, since sema does not visit every
+    // initialiser (a static ivar's, for one).
+    Array* literalDoubleBytes(String* text, Node* lit)
+        {
+        if (lit.num() != (i64)0)
+            return bytesOfData(FloatEncoding.ieeeBytes(text, true));
+        String* hx = fpBitsOfBytes(bytesOfData(FloatEncoding.ieeeBytes(text, false)));
+        Array* out = new Array();
+        u32 i = (u32)8;
+        while (i > (u32)0)
+            {
+            i = i - (u32)1;
+            u32 hi = hexDigit(hx.byteAt(i * (u32)2));
+            u32 lo = hexDigit(hx.byteAt(i * (u32)2 + (u32)1));
+            out.add((Object*)Number.with((hi << 4) | lo));
+            }
+        return out;
+        }
+
+    static u32 hexDigit(u8 c)
+        {
+        if (c >= (u8)'0' && c <= (u8)'9')
+            return (u32)(c - (u8)'0');
+        if (c >= (u8)'a' && c <= (u8)'f')
+            return (u32)(c - (u8)'a') + (u32)10;
+        return (u32)(c - (u8)'A') + (u32)10;
+        }
+
+    // A global's (or a static's) initial image: its bytes, little-endian,
+    // folded at compile time, or null when the initialiser has no image. The
+    // mirror of the original's tryFoldInitialiser, which the file-scope
+    // global, the static local and the static ivar all share. The port's
+    // static local and static ivar folded through the integer path alone, so
+    // a `static double` came out zero.
+    Array* foldInitialiser(Node* ini, String* ty)
+        {
+        // A FLOAT global's payload is the literal as an IEEE DOUBLE, eight
+        // bytes, whether the slot is declared `float` or `double` — the
+        // backend narrows it if it has to.
+        if (Types.isFloating(ty) && ini.kind() != (u16)nkBlock)
+            {
+            if (ini.kind() == (u16)nkFloat)
+                return literalDoubleBytes(ini.name(), ini);
+            return (Array*)0;
+            }
+        // An AGGREGATE's initialiser is baked into the image, so its bytes
+        // are laid out here rather than written by code at run time.
+        if (isArrayLike(ty) || structDeclFor(ty) != 0)
+            return aggregateInitBytes(expandRange(ini, ty), ty);
+        // A SCALAR with a byte list is those bytes, low to high, truncated or
+        // zero-padded to the slot: the list is the storage written out, not a
+        // value to fold.
+        if (ini.kind() == (u16)nkBlock)
+            {
+            Array* bytes = new Array();
+            for (u32 b = (u32)0; b < astWidth(ty); b = b + (u32)1)
+                {
+                i32 v = (i32)0;
+                if (b < ini.kidCount())
+                    {
+                    _constOk = true;
+                    v = (i32)constEval(ini.kid(b));
+                    if (!_constOk)
+                        v = (i32)0;
+                    }
+                bytes.add((Object*)Number.with((u32)v & (u32)$FF));
+                }
+            return bytes;
+            }
+        _constOk = true;
+        i64 v = constEval(ini);
+        if (!_constOk)
+            return (Array*)0;
+        return leBytes(v, astWidth(ty));
         }
 
     Array* zeroBytes(u32 n)
@@ -5923,7 +6015,7 @@ class ClassInfo
         for (u32 i = (u32)0; i < list.kidCount(); i = i + (u32)1)
             {
             _constOk = true;
-            i32 v = constEval(list.kid(i));
+            i32 v = (i32)constEval(list.kid(i));
             if (!_constOk)
                 {
                 giveUp(String.withCString("byte-list entry is not constant"));
@@ -5993,8 +6085,8 @@ class ClassInfo
         if (ini == 0 || ini.kind() != (u16)nkRange)
             return ini;
         _constOk = true;
-        i32 lo = constEval(ini.kid((u32)0));
-        i32 hi = constEval(ini.kid((u32)1));
+        i32 lo = (i32)constEval(ini.kid((u32)0));
+        i32 hi = (i32)constEval(ini.kid((u32)1));
         if (!_constOk)
             {
             giveUp(String.withCString("range bounds are not constant"));
@@ -6209,14 +6301,14 @@ class ClassInfo
         return out;
         }
 
-    Array* leBytes(i32 v, u32 width)
+    Array* leBytes(i64 v, u32 width)
         {
         Array* out = new Array();
-        u32 u = (u32)v;
+        u64 u = (u64)v;
         for (u32 i = (u32)0; i < width; i = i + (u32)1)
             {
-            out.add((Object*)Number.with((u32)(u & (u32)$FF)));
-            u = u >> 8;
+            out.add((Object*)Number.with((u32)(u & (u64)$FF)));
+            u = u >> (u64)8;
             }
         return out;
         }
@@ -7887,7 +7979,7 @@ class ClassInfo
                 return (i32)((Number*)ev).asU32();
             }
         _constOk = true;
-        i32 v = constEval(e);
+        i32 v = (i32)constEval(e);
         if (!_constOk)
             giveUp(String.withCString("case label is not a constant"));
         return v;
@@ -8364,7 +8456,7 @@ class ClassInfo
             if (ne.kidCount() > (u32)ne.num())
                 {
                 _constOk = true;
-                i32 cnt = constEval(ne.kid((u32)0));
+                i32 cnt = (i32)constEval(ne.kid((u32)0));
                 if (_constOk && cnt >= (i32)0)
                     _heapArrayLen.set((Hashable*)n.name(), (Object*)Number.with((u32)cnt));
                 }
@@ -8638,10 +8730,9 @@ class ClassInfo
         IRSymbol* g = IRSymbol.dataGlobal(mangled, irType(n.op()));
         if (n.kidCount() > (u32)0)
             {
-            _constOk = true;
-            i32 v = constEval(n.kid((u32)0));
-            if (_constOk)
-                g.setBytes(leBytes(v, astWidth(n.op())));
+            Array* bytes = foldInitialiser(n.kid((u32)0), n.op());
+            if (bytes != 0)
+                g.setBytes(bytes);
             }
         _m.addSym(g);
         _globals.set((Hashable*)n.name(), (Object*)n.op());
@@ -12135,10 +12226,9 @@ class ClassInfo
         IRSymbol* g = IRSymbol.dataGlobal(name, irType(iv.op()));
         if (iv.kidCount() > (u32)0)
             {
-            _constOk = true;
-            i32 v = constEval(iv.kid((u32)0));
-            if (_constOk)
-                g.setBytes(leBytes(v, astWidth(iv.op())));
+            Array* bytes = foldInitialiser(iv.kid((u32)0), iv.op());
+            if (bytes != 0)
+                g.setBytes(bytes);
             }
         _m.addSym(g);
         }
@@ -13536,65 +13626,15 @@ class ClassInfo
             // initialiser is not code that runs.
             if (d.kidCount() > (u32)0)
                 {
-                // A FLOAT global's payload is the literal as an IEEE DOUBLE,
-                // eight bytes, whether the slot is declared `float` or
-                // `double` — the backend narrows it if it has to. Nothing else
-                // about the literal survives, so the value has to be encoded
-                // here rather than folded through the integer path.
-                if (Types.isFloating(d.op()) && d.kid((u32)0).kind() != (u16)nkBlock)
-                    {
-                    Node* lit = d.kid((u32)0);
-                    if (lit.kind() == (u16)nkFloat)
-                        g.setBytes(bytesOfData(FloatEncoding.ieeeBytes(lit.name(), true)));
-                    else if (!isWeakSlot(d.op()))
-                        _pendingGlobalInits.add((Object*)d);
-                    }
-                else if (isArrayLike(d.op()) || structDeclFor(d.op()) != 0)
-                    {
-                    // An AGGREGATE global's initialiser is baked into the
-                    // image, so its bytes are laid out here rather than
-                    // written by code at run time.
-                    Array* bytes = aggregateInitBytes(expandRange(d.kid((u32)0), d.op()),
-                                                      d.op());
-                    if (bytes != 0)
-                        g.setBytes(bytes);
-                    else if (!isWeakSlot(d.op()))
-                        _pendingGlobalInits.add((Object*)d);
-                    }
-                else if (d.kid((u32)0).kind() == (u16)nkBlock)
-                    {
-                    // A SCALAR with a byte list is those bytes, low to high,
-                    // truncated or zero-padded to the slot: the list is the
-                    // storage written out, not a value to fold.
-                    Array* bytes = new Array();
-                    Node* list = d.kid((u32)0);
-                    for (u32 b = (u32)0; b < astWidth(d.op()); b = b + (u32)1)
-                        {
-                        i32 v = (i32)0;
-                        if (b < list.kidCount())
-                            {
-                            _constOk = true;
-                            v = constEval(list.kid(b));
-                            if (!_constOk)
-                                v = (i32)0;
-                            }
-                        bytes.add((Object*)Number.with((u32)v & (u32)$FF));
-                        }
+                Array* bytes = foldInitialiser(d.kid((u32)0), d.op());
+                if (bytes != 0)
                     g.setBytes(bytes);
-                    }
-                else
-                    {
-                    _constOk = true;
-                    i32 v = constEval(d.kid((u32)0));
-                    if (_constOk)
-                        g.setBytes(leBytes(v, astWidth(d.op())));
-                    // Not foldable — a string literal is an ADDRESS, an
-                    // expression has no image at all. main's prologue runs
-                    // these as ordinary stores (mirror of the original's
-                    // pendingGlobalInits; the base32-alphabet report).
-                    else if (!isWeakSlot(d.op()))
-                        _pendingGlobalInits.add((Object*)d);
-                    }
+                // Not foldable — a string literal is an ADDRESS, an
+                // expression has no image at all. main's prologue runs
+                // these as ordinary stores (mirror of the original's
+                // pendingGlobalInits; the base32-alphabet report).
+                else if (!isWeakSlot(d.op()))
+                    _pendingGlobalInits.add((Object*)d);
                 }
             _m.addSym(g);
             }

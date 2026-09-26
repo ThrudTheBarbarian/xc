@@ -4548,8 +4548,9 @@ class M68k
                 r.add(k < bytes.count() ? bytes.get(k) : (Object*)Number.with((i32)0));
             return reversed(r);
             }
-        bool scalarInt = ty.equals(String.withCString("I16")) || ty.equals(String.withCString("U16")) || ty.equals(String.withCString("I32")) || ty.equals(String.withCString("U32"));
-        if (scalarInt && (bytes.count() == (u32)2 || bytes.count() == (u32)4))
+        // i64/u64 were missing here, so `u64 g = 1;` read back as 1 << 56.
+        bool scalarInt = ty.equals(String.withCString("I16")) || ty.equals(String.withCString("U16")) || ty.equals(String.withCString("I32")) || ty.equals(String.withCString("U32")) || ty.equals(String.withCString("I64")) || ty.equals(String.withCString("U64"));
+        if (scalarInt && (bytes.count() == (u32)2 || bytes.count() == (u32)4 || bytes.count() == (u32)8))
             return reversed(bytes);
         return bytes;
         }

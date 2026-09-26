@@ -267,13 +267,15 @@ static NSString* m68kSym(NSString* name)
                 [out appendFormat:@"\t.even\n%@:\n", m68kSym(s.name)];
                 // The IR stores a scalar initialiser in its canonical
                 // little-endian order; m68k is big-endian, so reverse a scalar
-                // integer's bytes (u16/i16/u32/i32) before emitting. Strings /
-                // aggregates / pointers keep their byte order.
+                // integer's bytes (16, 32 or 64 bits) before emitting. Strings /
+                // aggregates / pointers keep their byte order. i64/u64 were
+                // missing here, so `u64 g = 1;` read back as 1 << 56.
                 NSData* bytes = s.initialBytes;
                 XTIRTypeKind gk = s.globalType ? s.globalType.kind : XTIRTypeKindVoid;
                 BOOL scalarInt = (gk == XTIRTypeKindI16 || gk == XTIRTypeKindU16 ||
-                                  gk == XTIRTypeKindI32 || gk == XTIRTypeKindU32);
-                if (scalarInt && (bytes.length == 2 || bytes.length == 4))
+                                  gk == XTIRTypeKindI32 || gk == XTIRTypeKindU32 ||
+                                  gk == XTIRTypeKindI64 || gk == XTIRTypeKindU64);
+                if (scalarInt && (bytes.length == 2 || bytes.length == 4 || bytes.length == 8))
                     {
                     NSMutableData* r = [NSMutableData dataWithLength:bytes.length];
                     const uint8_t* src = bytes.bytes;
