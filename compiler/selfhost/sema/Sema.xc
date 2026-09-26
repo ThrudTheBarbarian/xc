@@ -3792,11 +3792,15 @@ class Sema
         }
 
     // Would a `use`-promoted static method resolve this bare call — with a
-    // real conversion, not the single-candidate courtesy? Side-effect free;
-    // gated on being outside a class body, where use-promotion applies at all.
+    // real conversion, not the single-candidate courtesy? Side-effect free.
+    // It applies inside a class body too, as the use list does (bug 145): a
+    // block literal is a method of a synthesised class, and gating this on
+    // being outside one let libc's auto-imported `printf` claim a bare
+    // `printf` in a block or method on arm9 (bug 361). A name the enclosing
+    // class chain declares is member scope, not a use-promoted call (bug 147).
     bool usePromotedMatch(Node* call)
         {
-        if (_curClass != 0)
+        if (classChainDeclares(call.name()))
             return false;
         for (u32 i = (u32)0; i < _used.count(); i = i + (u32)1)
             {
@@ -3817,6 +3821,25 @@ class Sema
             if (pickOverload(group, call, (u32)0) != 0)
                 return true;
             }
+        return false;
+        }
+
+    // Does the class being compiled, or an ancestor, declare a method of this
+    // name? A method naming ITSELF does not count: that is how a wrapper
+    // reaches the free function it wraps (`Math.sqrt` calling `sqrt`).
+    bool classChainDeclares(String* name)
+        {
+        if (name == 0 || _curClass == 0)
+            return false;
+        if (_curMethod != 0 && _curMethod.name() != 0 && name.equals(_curMethod.name()))
+            return false;
+        for (Node* c = _curClass; c != 0; c = parentOf(c))
+            for (u32 k = (u32)0; k < c.kidCount(); k = k + (u32)1)
+                {
+                Node* m = c.kid(k);
+                if (m.kind() == (u16)nkMethodDecl && m.name() != 0 && m.name().equals(name))
+                    return true;
+                }
         return false;
         }
 

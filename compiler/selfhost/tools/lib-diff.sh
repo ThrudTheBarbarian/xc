@@ -40,7 +40,8 @@ LIBS="tests/arm64/emit-lib/TheLib.xc tests/arm64/emit-lib-overload/OvLib.xc
       tests/interop/optional-proto-import/optlib.xc
       tests/selfhost-iface/mod-shape.xc tests/fixtures/class_final.xc
       tests/fixtures/foundation_comparable.xc
-      tests/fixtures/overload_virtual_dispatch.xc"
+      tests/fixtures/overload_virtual_dispatch.xc
+      tests/fixtures/block_calls_use.xc tests/fixtures/class_calls_use.xc"
 SAMPLE=$(ls tests/fixtures/*.xc | sort | awk 'NR % 16 == 0')
 FILES=$(printf '%s\n' $LIBS $SAMPLE | awk '!seen[$0]++' \
     | awk -v i="${SHARD_I:-0}" -v n="${SHARD_N:-1}" 'NR % n == i')
