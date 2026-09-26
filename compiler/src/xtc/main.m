@@ -3540,16 +3540,17 @@ static int linkWasm32Module(const char *argv0, XTCommandLineOptions *opts,
                           encoding:NSUTF8StringEncoding error:NULL];
             [args addObjectsFromArray:@[@"--iface", ifaceTmp]];
         }
-    } else {
-        // App build: bake the imported library names into the loader so it
-        // fetches lib<X>.wasm + lib<X>.json beside the app and wires them.
-        for (NSString *lib in neededLibs) {
-            NSString *fn = lib.lastPathComponent;
-            if (![fn hasPrefix:@"lib"] || ![fn.pathExtension isEqualToString:@"wasm"])
-                continue;
-            [args addObjectsFromArray:@[@"--dep",
-                [[fn substringFromIndex:3] stringByDeletingPathExtension]]];
-        }
+    }
+    // The imported library names, bare. An app bakes them into its loader,
+    // which fetches lib<X>.wasm + lib<X>.json beside the app and wires them.
+    // A library writes them into its .json, so the loader also loads the
+    // libraries it imports and sets them up before it.
+    for (NSString *lib in neededLibs) {
+        NSString *fn = lib.lastPathComponent;
+        if (![fn hasPrefix:@"lib"] || ![fn.pathExtension isEqualToString:@"wasm"])
+            continue;
+        [args addObjectsFromArray:@[@"--dep",
+            [[fn substringFromIndex:3] stringByDeletingPathExtension]]];
     }
     int rc = runChild(ln, args);
     if (ifaceTmp)

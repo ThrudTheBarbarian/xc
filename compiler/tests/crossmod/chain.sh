@@ -6,6 +6,10 @@
 # chainbase.xc is a library with class Base (roots f, g). chainsub.xc is a
 # second library that imports it and declares Sub : Base, overriding f and
 # adding a root h. chainclient.xc imports both and calls a Sub through each.
+# chainuse.xc is a third library that uses the first only inside its bodies
+# and has startup code (a designable class's load-time constructor) that
+# calls into the first. chainrev.xc imports it before the first library, and
+# chainuseonly.xc imports it alone.
 #
 # Base's slots reach the second library as adopted numbers from the first
 # library's interface. Its per-class numbering sized Base as its parent without
@@ -22,12 +26,25 @@
 #   arm64   a lib x app compiler matrix, built and run here (macOS arm64 host)
 #   wasm32  the same matrix under node. The second library's vtable words
 #           for Base$vtbl, Base$description and Base$g name the first
-#           library's symbols; they were left 0, so b.g() was a null call
-#   x86_64  the same matrix on $XTC_X86_HOST / $XTC_LINUX_HOST. Those vtable
-#           words are R_X86_64_64 relocations against the first library's
-#           symbols; the second library did not link before they were
+#           library's symbols; they were left 0, so b.g() was a null call.
+#           The loader loaded only the libraries the app names, so
+#           chainuseonly failed at instantiation ("ChainBase": module is not
+#           an object), and it relocated them in the app's import order, so
+#           chainrev's startup code called through the first library's
+#           vtable before it was filled (null function). ChainU.many frees
+#           a `new Base[N]` made in the third library: each element runs
+#           the first library's Base$dealloc
+#   x86_64  the first two libraries and chainclient on $XTC_X86_HOST /
+#           $XTC_LINUX_HOST. Those vtable words are R_X86_64_64 relocations
+#           against the first library's symbols; the second library did not
+#           link before they were
 # Not run:
 #   arm9    running needs the loader tree and qemu
+#   chainuseonly on arm64: the third library does not record that it needs
+#           the first, so nothing loads it (dyld: symbol not found
+#           '_UXNib$booted')
+#   chainuse on x86_64: the shared link refuses ChainU.many's address of
+#           the imported Base$dealloc
 _root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null)
 [ -f "$_root/tools/build-env.sh" ] && . "$_root/tools/build-env.sh"
 set -u
@@ -37,7 +54,9 @@ T="$ROOT/tests/crossmod"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
-WANT=$'base=502\nsub=27\napp=705'
+WANT_chainclient=$'base=502\nsub=27\napp=705'
+WANT_chainrev=$'boot=102\nmany=4\nbase=102'
+WANT_chainuseonly=$'boot=102\nmany=3'
 
 fail=0
 bad() { echo "FAIL  $*"; fail=$((fail+1)); }
@@ -100,48 +119,55 @@ for spec in arm64:.dylib x86_64:.so arm9:.so wasm32:; do
     [ $fail = $before ] && echo "PASS  $a: Sub's slot map, and the two compilers agree"
 done
 
-# runmatrix <target> <ext> <runner> — both libraries from each compiler, and
-# an app from each compiler against each pair, built and run.
+# runmatrix <target> <ext> <runner> <libs> <app>... — the libraries (<libs>,
+# e.g. "Base Sub") from each compiler, and each app from each compiler
+# against each set, built and run.
 runmatrix() {
-    local a=$1 x=$2 run=$3 L A d got
+    local a=$1 x=$2 run=$3 libs=$4 L A d got app want l ok
+    shift 4
     for L in xcc xcc-xc; do
-        d="$TMP/run-$a/lib-$L"; mkdir -p "$d"
-        { lib "$a" "$L" "$d" "libChainBase$x" chainbase &&
-          lib "$a" "$L" "$d" "libChainSub$x" chainsub; } 2>"$d.err" \
-            || { bad "$a: $L could not build the libraries"; continue; }
+        d="$TMP/run-$a/lib-$L"; mkdir -p "$d"; ok=1
+        for l in $libs; do
+            lib "$a" "$L" "$d" "libChain$l$x" "chain$(echo "$l" | tr 'A-Z' 'a-z')" 2>>"$d.err" || ok=0
+        done
+        [ $ok = 1 ] || { bad "$a: $L could not build the libraries"; sed 's/^/        /' "$d.err" | head -5; }
     done
     samefiles "$TMP/run-$a/lib-xcc" "$TMP/run-$a/lib-xcc-xc" $(ls "$TMP/run-$a/lib-xcc") \
         || bad "$a: the two compilers' libraries differ"
     for L in xcc xcc-xc; do
         for A in xcc xcc-xc; do
-            d="$TMP/run-$a/$L-$A"
-            mkdir -p "$d"; cp "$TMP/run-$a/lib-$L"/* "$d/"
-            ( cd "$d" && "$BIN/$A" -A "$a" -H "$ROOT" -q -L . -o chainclient "$T/chainclient.xc" ) 2>"$d/err" \
-                || { bad "$a lib=$L app=$A: the app did not build"; continue; }
-            got=$($run "$d" 2>&1)
-            [ "$got" = "$WANT" ] || { bad "$a lib=$L app=$A:"; echo "$got" | sed 's/^/        /'; }
+            for app in "$@"; do
+                d="$TMP/run-$a/$L-$A-$app"
+                mkdir -p "$d"; cp "$TMP/run-$a/lib-$L"/* "$d/"
+                ( cd "$d" && "$BIN/$A" -A "$a" -H "$ROOT" -q -L . -o "$app" "$T/$app.xc" ) 2>"$d/err" \
+                    || { bad "$a lib=$L app=$A $app: the app did not build"; continue; }
+                got=$($run "$d" "$app" 2>&1)
+                want=WANT_$app
+                [ "$got" = "${!want}" ] || { bad "$a lib=$L app=$A $app:"; echo "$got" | head -5 | sed 's/^/        /'; }
+            done
         done
     done
 }
-run_native() { ( cd "$1" && ./chainclient ); }
-run_node()   { ( cd "$1" && node chainclient.js ); }
+run_native() { ( cd "$1" && ./"$2" ); }
+run_node()   { ( cd "$1" && node "$2.js" ); }
 run_x86() {
     ssh "$HOST" "rm -rf $RD && mkdir -p $RD" </dev/null
-    scp -q "$1/chainclient" "$1"/*.so "$HOST:$RD/"
-    ssh "$HOST" "cd $RD && ./chainclient" </dev/null
+    scp -q "$1/$2" "$1"/*.so "$HOST:$RD/"
+    ssh "$HOST" "cd $RD && ./$2" </dev/null
 }
 
 before=$fail
 case "$(uname -s)-$(uname -m)" in
     Darwin-arm64)
-        runmatrix arm64 .dylib run_native
+        # Not chainuseonly: a dylib does not load the libraries it imports.
+        runmatrix arm64 .dylib run_native "Base Sub Use" chainclient chainrev
         [ $fail = $before ] && echo "PASS  arm64: run, lib x app compiler matrix" ;;
     *)  echo "SKIP  arm64 run: needs a macOS arm64 host" ;;
 esac
 
 before=$fail
 if command -v node >/dev/null 2>&1; then
-    runmatrix wasm32 "" run_node
+    runmatrix wasm32 "" run_node "Base Sub Use" chainclient chainrev chainuseonly
     [ $fail = $before ] && echo "PASS  wasm32: run under node, lib x app compiler matrix"
 else
     echo "SKIP  wasm32 run: no node"
@@ -151,7 +177,9 @@ before=$fail
 HOST=${XTC_X86_HOST:-${XTC_LINUX_HOST:-}}
 if [ -n "$HOST" ] && ssh -o ConnectTimeout=8 -o BatchMode=yes "$HOST" true 2>/dev/null; then
     RD=/tmp/xc-chain-$$
-    runmatrix x86_64 .so run_x86
+    # Not chainuse: an x86-64 shared object cannot take the address of an
+    # imported function yet (ChainU.many's Base$dealloc).
+    runmatrix x86_64 .so run_x86 "Base Sub" chainclient
     ssh "$HOST" "rm -rf $RD" </dev/null
     [ $fail = $before ] && echo "PASS  x86_64: run on $HOST, lib x app compiler matrix"
 else

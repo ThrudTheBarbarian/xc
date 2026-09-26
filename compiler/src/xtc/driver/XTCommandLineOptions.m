@@ -1438,7 +1438,7 @@ static NSString* sExecutablePath = nil;
             "                             type-checks a client against. -fpic is\n"
             "                             implied.\n"
             "                             On wasm32 it writes lib<Name>.wasm plus\n"
-            "                             lib<Name>.json (dataSize/tableSize); the\n"
+            "                             lib<Name>.json (dataSize/tableSize/deps); the\n"
             "                             loader needs BOTH before it can place the\n"
             "                             library's statics and grow the table.\n"
             "  --with-dex <path>          (-A android --emit-apk) Carry this\n"

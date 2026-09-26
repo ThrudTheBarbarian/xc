@@ -13,11 +13,14 @@
 // Library mode (W2, `xcc --emit-lib -A wasm32`): --emit-lib writes
 // <out>.wasm (with the `.xtc.iface` interface JSON embedded as a wasm
 // CUSTOM section, the same role the ELF section plays) plus the
-// <out>.json placement sidecar {dataSize, tableSize} the loader reads —
+// <out>.json sidecar {dataSize, tableSize, deps} the loader reads —
 // and NO .js/.html (a library is instantiated by its app's loader).
-// App mode gains --dep <name> (repeatable): the imported library names are
-// baked into <out>.js, and its loader instantiates lib<name>.wasm beside
-// the app with the app's memory/table/runtime wired through.
+// --dep <name> (repeatable) names an imported library. In an app the names
+// are baked into <out>.js, and its loader instantiates lib<name>.wasm beside
+// the app with the app's memory/table/runtime wired through. In a library
+// they are the sidecar's `deps`, which the loader follows to load the
+// libraries an app does not import itself, and to set each library up
+// before the libraries that import it.
 //
 // Usage:
 //   xcc-ln-wasm32 <input.wat> <output-base> [-q] [--emit-lib]
@@ -359,9 +362,44 @@ static NSString* loaderJS(NSString* baseName, NSArray<NSString*>* deps)
                    "  // Imported xtc libraries (W2): each dep package is satisfied by LAZY\n"
                    "  // thunks so the app can instantiate FIRST (it owns memory + table); the\n"
                    "  // thunks resolve once the dep's exports exist.\n"
+                   "  //\n"
+                   "  // `deps` is what the app imports. Each library's .json lists the libraries\n"
+                   "  // IT imports, and the loader follows those lists: a library the app does\n"
+                   "  // not name is loaded as well, and `order` puts every library after the\n"
+                   "  // libraries it imports. That is the order they are instantiated and\n"
+                   "  // relocated in, so a library's startup code finds its imports set up.\n"
                    "  const deps = __DEPS__;\n"
                    "  const depExports = {};\n"
-                   "  for (const d of deps)\n"
+                   "  const libBytes = {}, libMeta = {}, order = [], visiting = [];\n"
+                   "  const readLib = async (d) => {\n"
+                   "    if (isNode) {\n"
+                   "      const p = require(\"path\"), f = require(\"fs\");\n"
+                   "      return [f.readFileSync(p.join(__dirname, `lib${d}.wasm`)),\n"
+                   "              JSON.parse(f.readFileSync(p.join(__dirname, `lib${d}.json`), \"utf8\"))];\n"
+                   "    }\n"
+                   "    const w = await fetch(`lib${d}.wasm`), j = await fetch(`lib${d}.json`);\n"
+                   "    if (!w.ok) throw new Error(`lib${d}.wasm: HTTP ${w.status}`);\n"
+                   "    if (!j.ok) throw new Error(`lib${d}.json: HTTP ${j.status}`);\n"
+                   "    return [await w.arrayBuffer(), await j.json()];\n"
+                   "  };\n"
+                   "  const visit = async (d, from) => {\n"
+                   "    if (order.includes(d)) return;\n"
+                   "    if (visiting.includes(d))\n"
+                   "      throw new Error(\"xcc: the libraries import each other: \" +\n"
+                   "        visiting.slice(visiting.indexOf(d)).concat(d).map((n) => `lib${n}`).join(\" -> \"));\n"
+                   "    visiting.push(d);\n"
+                   "    let lib;\n"
+                   "    try { lib = await readLib(d); }\n"
+                   "    catch (e) {\n"
+                   "      throw new Error(`xcc: cannot load lib${d}${from ? `, which lib${from} imports` : \"\"}: ${e.message}`);\n"
+                   "    }\n"
+                   "    [libBytes[d], libMeta[d]] = lib;\n"
+                   "    for (const o of libMeta[d].deps || []) await visit(o, d);\n"
+                   "    visiting.pop();\n"
+                   "    order.push(d);\n"
+                   "  };\n"
+                   "  for (const d of deps) await visit(d, null);\n"
+                   "  for (const d of order)\n"
                    "    imports[d] = new Proxy({}, { get: (t, n) => (...a) => depExports[d][n](...a) });\n"
                    "  let bytes;\n"
                    "  if (isNode) {\n"
@@ -391,17 +429,9 @@ static NSString* loaderJS(NSString* baseName, NSArray<NSString*>* deps)
                    "  // app's exported runtime, and the dep's reloc-apply patches the vtable\n"
                    "  // words a data segment cannot compute. __stack_low is raised past the\n"
                    "  // last dep so the shadow stack cannot grow down into library data.\n"
-                   "  let dcur = deps.length ? instance.exports.__data_end.value : 0;\n"
-                   "  for (const d of deps) {\n"
-                   "    let dbytes, dmeta;\n"
-                   "    if (isNode) {\n"
-                   "      const p = require(\"path\"), f = require(\"fs\");\n"
-                   "      dbytes = f.readFileSync(p.join(__dirname, `lib${d}.wasm`));\n"
-                   "      dmeta = JSON.parse(f.readFileSync(p.join(__dirname, `lib${d}.json`), \"utf8\"));\n"
-                   "    } else {\n"
-                   "      dbytes = await (await fetch(`lib${d}.wasm`)).arrayBuffer();\n"
-                   "      dmeta = await (await fetch(`lib${d}.json`)).json();\n"
-                   "    }\n"
+                   "  let dcur = order.length ? instance.exports.__data_end.value : 0;\n"
+                   "  for (const d of order) {\n"
+                   "    const dbytes = libBytes[d], dmeta = libMeta[d];\n"
                    "    const dbase = (dcur + 15) & ~15;\n"
                    "    if (dbase < 0x10000) throw new Error(`xcc: lib${d} data base ${dbase} below 0x10000 (classid guard)`);\n"
                    "    if (dbase + dmeta.dataSize > 0x100000)\n"
@@ -433,15 +463,17 @@ static NSString* loaderJS(NSString* baseName, NSArray<NSString*>* deps)
                    "    // its vtable words). A dep already instantiated is passed as its real\n"
                    "    // exports, so those table slots hold its wasm functions directly.\n"
                    "    const dimp = Object.assign({}, imports, { env: denv });\n"
-                   "    for (const o of deps) if (o !== d) dimp[o] = depExports[o] || imports[o];\n"
+                   "    for (const o of order) if (o !== d) dimp[o] = depExports[o] || imports[o];\n"
                    "    const di = await WebAssembly.instantiate(dbytes, dimp);\n"
                    "    depExports[d] = di.instance.exports;\n"
                    "    dcur = dbase + dmeta.dataSize;\n"
                    "  }\n"
                    "  // Relocate after every dep exists: a library's vtable words can name\n"
                    "  // another library's data, read through that library's __addr_ getter.\n"
-                   "  for (const d of deps) depExports[d].__wasm_apply_relocs();\n"
-                   "  if (deps.length) instance.exports.__stack_low.value = (dcur + 15) & ~15;\n"
+                   "  // Relocating also runs the library's startup code, which may call into the\n"
+                   "  // libraries it imports, so it goes in `order`: those are relocated first.\n"
+                   "  for (const d of order) depExports[d].__wasm_apply_relocs();\n"
+                   "  if (order.length) instance.exports.__stack_low.value = (dcur + 15) & ~15;\n"
                    "  const rc = instance.exports.main();\n"
                    "  flush();\n"
                    "  if (isNode) process.exitCode = rc | 0;\n"
@@ -523,7 +555,9 @@ int main(int argc, const char* argv[])
                 }
             else if ([a isEqualToString:@"--dep"] && i + 1 < argc)
                 {
-                [deps addObject:@(argv[++i])];
+                NSString* d = @(argv[++i]);
+                if (![deps containsObject:d])
+                    [deps addObject:d];
                 }
             else if (!inPath)
                 {
@@ -630,10 +664,16 @@ int main(int argc, const char* argv[])
                 tableSize = t;
                 break;
                 }
+            // 3. The libraries this one imports, by bare name: the loader
+            //    loads them too, and relocates each before its importers.
+            NSMutableArray<NSString*>* quotedDeps = [NSMutableArray array];
+            for (NSString* d in deps)
+                [quotedDeps addObject:[NSString stringWithFormat:@"\"%@\"", d]];
             NSString* jsonPath = [base stringByAppendingPathExtension:@"json"];
             NSString* sidecar = [NSString stringWithFormat:
-                                              @"{\"dataSize\": %llu, \"tableSize\": %llu}\n",
-                                              (unsigned long long)dataSize, (unsigned long long)tableSize];
+                                              @"{\"dataSize\": %llu, \"tableSize\": %llu, \"deps\": [%@]}\n",
+                                              (unsigned long long)dataSize, (unsigned long long)tableSize,
+                                              [quotedDeps componentsJoinedByString:@", "]];
             if (![sidecar writeToFile:jsonPath
                            atomically:YES
                              encoding:NSUTF8StringEncoding
