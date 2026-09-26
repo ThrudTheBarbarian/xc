@@ -344,6 +344,9 @@ class FeOptions
         // (`cImports`), so a client re-reads those types from the C library
         // rather than from a copy (the reference's `cImportNames`).
         Array* cImports = new Array();
+        // How many of the imports are XTC libraries (they carry an interface).
+        // A C library read from DWARF does not count: nothing in it dispatches.
+        u32 xtcImports = (u32)0;
             {
             Array* metas = pp.metadataImports();
             // Handed to the DRIVER: a wasm app's loader lists the modules it
@@ -388,6 +391,8 @@ class FeOptions
                 IfaceImport* im = IfaceImport.read(mp);
                 if (im == 0)
                     cImports.add((Object*)cLibraryName(mp));
+                else
+                    xtcImports = xtcImports + (u32)1;
                 // No `.xtc.iface`? Then this is a library THIS compiler did not
                 // build, and a C library describes itself in DWARF. That is
                 // where its types come from — verbatim, which is the only way
@@ -554,15 +559,22 @@ class FeOptions
         // arm9 AND x86_64 (bug 201): both link as several independently compiled
         // modules, where a program-global protocol slot number is unachievable —
         // dispatch goes through the itable and protocol numbering is not adopted.
-        bool itableProtos = platformOf(o).equals(String.withCString("arm9")) || (platformOf(o).equals(String.withCString("x86_64")) && o.libraryBuild());
-        // AMBIENT slots are adopted on wasm32 only. Under shared-everything the
-        // app and the library each emit their own `String$vtbl`, and an object
-        // created by one is dispatched on by the other — so the two layouts
-        // have to agree, and the library's is the one already fixed (bug 091).
-        // The shared-object targets resolve a single `$vtbl` symbol through the
-        // dynamic linker: there is one table, nothing to reconcile, and
-        // adopting would widen every client's vtables for no gain.
-        bool adoptAmbient = platformOf(o).equals(String.withCString("wasm32"));
+        // Bug 266: the same holds for EVERY module that meets another one — see
+        // itableDispatchOf.
+        bool itableProtos = itableDispatchOf(o, xtcImports > (u32)0);
+        // AMBIENT slots: the numbers a library assumed for the prelude classes.
+        // Under shared-everything wasm the app and the library each emit their
+        // own `String$vtbl`, and an object created by one is dispatched on by
+        // the other — so the two layouts have to agree, and the library's is
+        // the one already fixed (bug 091). Every other target has the same
+        // problem one step removed: a client class that derives from Object
+        // is laid out by the client, and a library's `a.equals(b)` on an
+        // `Object*` reads the library's slot for Object.equals out of it (bug
+        // 266). A library numbers the prelude per class, from each class's
+        // ancestry alone, so two libraries agree and a client program adopts
+        // the numbers. A library build numbers them the same way itself and
+        // does not need to.
+        bool adoptAmbient = platformOf(o).equals(String.withCString("wasm32")) || (itableProtos && !o.libraryBuild());
         Map* ambientSeen = new Map();
         for (u32 i = (u32)0; i < adoptedSlots.count(); i = i + (u32)1)
             {
@@ -672,9 +684,9 @@ class FeOptions
         // parent-free vtable and decide conformance at compile time.
         lower.setVtableAncestry(carriesItable(o));
         lower.setVtableItable(carriesItable(o));
-        // arm9 is the one target linked as several modules, so a program-global
-        // protocol slot cannot be handed out and dispatch goes through the itable.
-        lower.setItableDispatch(platformOf(o).equals(String.withCString("arm9")) || (platformOf(o).equals(String.withCString("x86_64")) && o.libraryBuild())); // bug 201
+        // Where a program-global protocol slot cannot be handed out, dispatch
+        // goes through the itable (bugs 201, 266).
+        lower.setItableDispatch(itableProtos);
         lower.setNativeVarargs(platformOf(o).equals(String.withCString("arm9")) || platformOf(o).equals(String.withCString("arm64")));                         // bug 179
         // The race-free static-init once (threading.md §9.5). -1 = decide per
         // module; -f[no-]thread-safe-arc forces it, because atomic ARC and this
@@ -1045,6 +1057,27 @@ bool carriesItable(FeOptions* o)
     {
     String* p = platformOf(o);
     return p.equals(String.withCString("arm64")) || p.equals(String.withCString("x86_64")) || p.equals(String.withCString("win64")) || p.equals(String.withCString("arm9")) || p.equals(String.withCString("wasm32"));
+    }
+
+// Does a call through a protocol go through the itable rather than a vtable
+// slot? A slot number is only good inside the program that numbered it. arm9
+// always links as several modules. On arm64 (and iOS and Android, which use its
+// back end), x86_64 and wasm32 the same is true of a library build, a `-c`
+// object, and a program that imports an xtc library: each numbers the
+// protocols it sees itself, and nothing can make the numbers agree for a
+// protocol the library does not declare. A library's `h.hash()` on a client's
+// `Hashable*` read the library's slot 92 out of a 19-entry client vtable (bug
+// 266). The itable is keyed by the protocol's name-derived id and the method's
+// declaration index, which every module derives alike, so no numbering has to
+// cross the interface. win64 links no libraries yet, so it keeps the slot.
+bool itableDispatchOf(FeOptions* o, bool importsLibrary)
+    {
+    String* p = platformOf(o);
+    if (p.equals(String.withCString("arm9")))
+        return true;
+    if (p.equals(String.withCString("arm64")) || p.equals(String.withCString("x86_64")) || p.equals(String.withCString("wasm32")))
+        return o.libraryBuild() || importsLibrary;
+    return false;
     }
 
 // The helper takes the object's ALREADY-VALIDATED vtable pointer: the caller

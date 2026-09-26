@@ -36,7 +36,8 @@ LIBS="tests/arm64/emit-lib/TheLib.xc tests/arm64/emit-lib-overload/OvLib.xc
       tests/x86_64/emit-lib/TheLib.xc
       tests/wasm32/emit-lib/TheLib.xc tests/wasm-shared/SLib.xc
       tests/crossmod/bmlib.xc tests/crossmod/blib.xc tests/crossmod/clib.xc
-      tests/crossmod/dclib.xc tests/interop/optional-proto-import/optlib.xc
+      tests/crossmod/dclib.xc tests/crossmod/protolib.xc
+      tests/interop/optional-proto-import/optlib.xc
       tests/selfhost-iface/mod-shape.xc tests/fixtures/class_final.xc
       tests/fixtures/foundation_comparable.xc
       tests/fixtures/overload_virtual_dispatch.xc"

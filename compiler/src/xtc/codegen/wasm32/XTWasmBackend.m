@@ -243,6 +243,8 @@ static NSMutableArray<NSArray *> *sAppFixups;
 // Release and the weak family emit direct `call`s, not XTIROpCall insns, so
 // the call-site import collector cannot see them).
 static BOOL sNeedsWeakReg, sNeedsWeakUnreg;
+// ProtoDispatch/ProtoLoad present: the module carries its own $__xtc_itab.
+static BOOL sNeedsItab;
 // -x-wasm32,return-call: emit tail calls (return_call / return_call_indirect)
 // for calls in tail position. Off by default — the instructions are
 // standardised and shipped in current engines, but the baseline module stays
@@ -363,6 +365,7 @@ static NSString *watStringLit(NSData *bytes) {
     }
     if (needsCount) [sNewSuffixes addObject:@"__count__"];   // marker, emitted below
     sNeedsWeakReg = sNeedsWeakUnreg = NO;
+    sNeedsItab = NO;
     for (XTIRFunction *fn in mod.functions) {
         for (XTIRBlock *b in fn.blocks) {
             for (XTIRInsn *insn in b.instructions) {
@@ -370,6 +373,8 @@ static NSString *watStringLit(NSData *bytes) {
                     || insn.opcode == XTIROpAutorelease) sNeedsARC = YES;
                 else if (insn.opcode == XTIROpWeakRegister) sNeedsWeakReg = YES;
                 else if (insn.opcode == XTIROpWeakUnregister) sNeedsWeakUnreg = YES;
+                else if (insn.opcode == XTIROpProtoDispatch
+                         || insn.opcode == XTIROpProtoLoad) sNeedsItab = YES;
             }
         }
     }
@@ -422,6 +427,7 @@ static NSString *watStringLit(NSData *bytes) {
     NSMutableString *fnsOut = [NSMutableString string];
     for (XTIRFunction *fn in mod.functions)
         [self emitFunction:fn module:mod into:fnsOut];
+    if (sNeedsItab) [self emitItabHelperInto:fnsOut];
     if (sEmitLib) [self emitLibStubsInto:fnsOut];
     else if (sNeedsAlloc) [self emitRuntimeInto:fnsOut];
     if (sEmitLib) [self emitLibTailInto:fnsOut module:mod];
@@ -1927,16 +1933,44 @@ static NSString *opPrefix(XTIRType *t) { return wasmValType(t); }
                           vnum(res.valueId), vnum(res.valueId)];
         return;
     }
-    case XTIROpProtoDispatch:
-        [XTWasmBackend todo:@"ProtoDispatch (itable, stage 2b)"];
-        if (res && !isMemOrVoid(res.type)) {
-            [out appendFormat:@"    %@.const 0\n", wasmValType(res.type)];
-            [self setResult:res canon:NO out:out];
+    case XTIROpProtoDispatch: {
+        // [recv, ImmI(protoId), ImmI(index), args…, mem]: the callee's table
+        // index comes from the receiver's itable ($__xtc_itab, emitted into
+        // this module), and the call is the VTblDispatch call_indirect. A
+        // class that does not answer to the protocol gives index 0, which
+        // traps.
+        if (ops.count < 3) return;
+        BOOL sretCall = res && res.type.kind == XTIRTypeKindAgg;
+        if (sretCall) [out appendFormat:@"    local.get $v%u\n", vnum(res.valueId)];
+        NSMutableArray<XTIRType *> *argTys = [NSMutableArray array];
+        XTIROperand *recv = ops[0];
+        XTIRType *rt = (recv.kind == XTIROperandKindUse)
+            ? fn.values[@(recv.valueId)].type : recv.type;
+        [argTys addObject:rt ?: [XTIRType i32Type]];
+        [self pushOperand:recv fn:fn out:out];
+        for (NSUInteger i = 3; i < ops.count; i++) {
+            XTIROperand *a = ops[i];
+            XTIRType *t = (a.kind == XTIROperandKindUse)
+                ? fn.values[@(a.valueId)].type : a.type;
+            [argTys addObject:t ?: [XTIRType i32Type]];
+            [self pushOperand:a fn:fn out:out];
         }
+        [self pushOperand:recv fn:fn out:out];
+        [self emitItabLookup:ops out:out];
+        NSString *ty = [self indirectTypeForArgs:argTys
+                                          result:sretCall ? nil : res.type];
+        [out appendFormat:@"    call_indirect (type $%@)\n", ty];
+        if (res && !sretCall && !isMemOrVoid(res.type))
+            [self setResult:res canon:NO out:out];
         return;
+    }
     case XTIROpProtoLoad:
-        [XTWasmBackend todo:@"ProtoLoad (itable, stage 2b)"];
-        if (res) { [out appendString:@"    i32.const 0\n"]; [self setResult:res canon:NO out:out]; }
+        // [recv, ImmI(protoId), ImmI(index), mem] → the table index alone, 0
+        // for a null receiver or an unimplemented `optional` (respondsTo).
+        if (!res || ops.count < 3) return;
+        [self pushOperand:ops[0] fn:fn out:out];
+        [self emitItabLookup:ops out:out];
+        [self setResult:res canon:NO out:out];
         return;
 
     // ── ARC ────────────────────────────────────────────────────────────────
@@ -2503,6 +2537,40 @@ static NSString *opPrefix(XTIRType *t) { return wasmValType(t); }
 // --emit-lib: ONLY the per-type allocator stubs are defined locally — they
 // bake this module's element widths and (rebased) dealloc table indices; the
 // allocator itself is the app's, reached through the imported _xtc_alloc.
+// With the receiver on the stack, push the protocol id and the method index
+// from a ProtoDispatch/ProtoLoad and look the table index up.
++ (void)emitItabLookup:(NSArray<XTIROperand *> *)ops out:(NSMutableString *)out {
+    [out appendFormat:@"    i32.const %d\n", (int32_t)ops[1].intValue];
+    [out appendFormat:@"    i32.const %d\n", (int32_t)ops[2].intValue];
+    [out appendString:@"    call $__xtc_itab\n"];
+}
+
+// The itable walk, one private copy per module that dispatches through a
+// protocol. Vtable word 1 is the itable: (protoId, &table) pairs ending in a
+// zero id, each table the protocol's methods in declaration order. Both follow
+// from the protocol alone, so a library and its client agree on them without
+// agreeing on vtable slot numbers (bug 266).
++ (void)emitItabHelperInto:(NSMutableString *)out {
+    [out appendString:
+        @"  (func $__xtc_itab (param $o i32) (param $pid i32) (param $idx i32) (result i32)\n"
+        @"    (local $t i32)\n"
+        @"    local.get $o\n    i32.eqz\n"
+        @"    if\n      i32.const 0\n      return\n    end\n"
+        @"    local.get $o\n    i32.load\n    i32.load offset=4\n    local.tee $t\n    i32.eqz\n"
+        @"    if\n      i32.const 0\n      return\n    end\n"
+        @"    block $miss\n    loop $walk\n"
+        @"    local.get $t\n    i32.load\n    local.get $pid\n    i32.eq\n"
+        @"    if\n"
+        @"      local.get $t\n      i32.load offset=4\n"
+        @"      local.get $idx\n      i32.const 2\n      i32.shl\n      i32.add\n"
+        @"      i32.load\n      return\n"
+        @"    end\n"
+        @"    local.get $t\n    i32.load\n    i32.eqz\n    br_if $miss\n"
+        @"    local.get $t\n    i32.const 8\n    i32.add\n    local.set $t\n"
+        @"    br $walk\n    end\n    end\n"
+        @"    i32.const 0\n  )\n"];
+}
+
 + (void)emitLibStubsInto:(NSMutableString *)out {
     NSDictionary<NSString *, NSNumber *> *widths = @{
         @"u8": @1, @"i8": @1, @"bool": @1, @"u16": @2, @"i16": @2,

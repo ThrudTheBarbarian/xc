@@ -108,3 +108,26 @@ if [ "$GOT3" = "$(cat tests/crossmod/dc.expected.out)" ]; then
 else
   echo "FAIL  conformance downcast (Object@ -> protocol) across a .so"; echo "--- want:"; cat tests/crossmod/dc.expected.out; echo "--- got:"; echo "$GOT3"; exit 1
 fi
+
+# ── The prelude protocols, Object and String across a .so: the library calls
+# them on objects its client made (protocols.sh runs the same pair on arm64,
+# wasm32 and x86_64). arm9 has always dispatched a protocol through the itable;
+# what this checks there is the client adopting the library's slots for the
+# prelude classes, without which `a.equals(b)` on an `Object*` called 0.
+$XTC -A arm9 --emit-lib -L "$SR" -o "$TMP/libProtoLib.so" tests/crossmod/protolib.xc -q
+$XTC -A arm9 -L "$SR" -L "$TMP" -o "$TMP/protoclient.so" tests/crossmod/protoclient.xc -q
+$XTC -A arm9 -L "$SR" -L "$TMP" -o "$TMP/protosub.so" tests/crossmod/protosub.xc -q
+cp "$TMP/libProtoLib.so" "$LOADER/romfs-overlay/Library/"
+make -C "$LOADER" hosttest BUILD="$(basename "$SR")" >/dev/null 2>&1
+
+GOT4=$(run_prog "$TMP/protoclient.so")
+GOT5=$(run_prog "$TMP/protosub.so")
+
+rm -f "$LOADER/romfs-overlay/Library/libProtoLib.so"
+WANT4=$'own=2\nlib-hash=77\nlib-cmp=1\nlib-obj=1\nlib-bound=77\nlib-len=5\napp-hash=22\napp-cmp=0\napp-obj=0'
+WANT5=$'own=2\nlib-hash=99\nlib-cmp=1\nlib-obj=1\nlib-bound=99\napp-hash=99\napp-box=99'
+if [ "$GOT4" = "$WANT4" ] && [ "$GOT5" = "$WANT5" ]; then
+  echo "PASS  prelude protocols, Object and String across a .so"
+else
+  echo "FAIL  prelude protocols, Object and String across a .so"; echo "--- got:"; echo "$GOT4"; echo "$GOT5"; exit 1
+fi

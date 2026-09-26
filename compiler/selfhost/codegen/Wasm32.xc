@@ -168,6 +168,7 @@ class Wasm32
     Array*    _fixupNames;      // link-libs: String@ the extern sym each holds
     bool      _needsWeakReg;    // emit-lib: WeakRegister opcodes present
     bool      _needsWeakUnreg;  // emit-lib: WeakUnregister opcodes present
+    bool      _needsItab;       // ProtoDispatch/ProtoLoad present: emit $__xtc_itab
 
     void init(void) { _optLevel = (u32)0; _tailCalls = false; _vRank = (u32*)0; _vRankN = (u32)0; }
 
@@ -711,6 +712,7 @@ class Wasm32
         String* fnsOut = String.withCString("");
         for (u32 f = (u32)0; f < mod.funcs().count(); f = f + (u32)1)
             emitFunction((IRFunc*)mod.funcs().get(f), fnsOut);
+        if (_needsItab) emitItabHelper(fnsOut);
         if (_emitLib) emitLibStubs(fnsOut);
         else if (_needsAlloc) emitRuntime(fnsOut);
         if (_emitLib) emitLibTail(fnsOut, mod);
@@ -821,6 +823,7 @@ class Wasm32
         if (needsCount) addSuffix(String.withCString("__count__"));
         _needsWeakReg = false;
         _needsWeakUnreg = false;
+        _needsItab = false;
         for (u32 f = (u32)0; f < mod.funcs().count(); f = f + (u32)1) {
             IRFunc* fn = (IRFunc*)mod.funcs().get(f);
             for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1) {
@@ -832,6 +835,8 @@ class Wasm32
                      || op.equals(String.withCString("Autorelease"))) _needsARC = true;
                     else if (op.equals(String.withCString("WeakRegister"))) _needsWeakReg = true;
                     else if (op.equals(String.withCString("WeakUnregister"))) _needsWeakUnreg = true;
+                    else if (op.equals(String.withCString("ProtoDispatch"))
+                          || op.equals(String.withCString("ProtoLoad"))) _needsItab = true;
                 }
             }
         }
@@ -2593,23 +2598,82 @@ class Wasm32
         return false;
     }
 
+    // With the receiver on the stack, push the protocol id and the method
+    // index from a ProtoDispatch/ProtoLoad and look the table index up.
+    void emitItabLookup(Array* ops, String* out)
+    {
+        out.appendFormat("    i32.const %ld\n", (i32)((IROperand*)ops.get((u32)1)).imm());
+        out.appendFormat("    i32.const %ld\n", (i32)((IROperand*)ops.get((u32)2)).imm());
+        out.appendCString("    call $__xtc_itab\n");
+    }
+
+    // The itable walk, one private copy per module that dispatches through
+    // a protocol. Vtable word 1 is the itable: (protoId, &table) pairs ending
+    // in a zero id, each table the protocol's methods in declaration order.
+    // Both follow from the protocol alone, so a library and its client agree
+    // on them without agreeing on vtable slot numbers (bug 266).
+    void emitItabHelper(String* out)
+    {
+        out.appendCString(
+        "  (func $__xtc_itab (param $o i32) (param $pid i32) (param $idx i32) (result i32)\n"
+        "    (local $t i32)\n"
+        "    local.get $o\n    i32.eqz\n"
+        "    if\n      i32.const 0\n      return\n    end\n"
+        "    local.get $o\n    i32.load\n    i32.load offset=4\n    local.tee $t\n    i32.eqz\n"
+        "    if\n      i32.const 0\n      return\n    end\n"
+        "    block $miss\n    loop $walk\n"
+        "    local.get $t\n    i32.load\n    local.get $pid\n    i32.eq\n"
+        "    if\n"
+        "      local.get $t\n      i32.load offset=4\n"
+        "      local.get $idx\n      i32.const 2\n      i32.shl\n      i32.add\n"
+        "      i32.load\n      return\n"
+        "    end\n"
+        "    local.get $t\n    i32.load\n    i32.eqz\n    br_if $miss\n"
+        "    local.get $t\n    i32.const 8\n    i32.add\n    local.set $t\n"
+        "    br $walk\n    end\n    end\n"
+        "    i32.const 0\n  )\n");
+    }
+
     bool emitArc(IRInsn* insn, String* op, String* out)
     {
         IRValue* res = insn.res();
         Array* ops = Wasm32.dataOps(insn);
 
+        // [recv, protoId, index, args…]: the callee's table index comes from
+        // the receiver's itable ($__xtc_itab, emitted into this module), and
+        // the call is the VTblDispatch call_indirect. A class that does not
+        // answer to the protocol gives index 0, which traps.
         if (op.equals(String.withCString("ProtoDispatch"))) {
-            if (res != 0 && !Wasm32.memOrVoid(res.ty())) {
-                out.appendFormat("    %s.const 0\n", Wasm32.valType(res.ty()).cString());
-                setResult(res, false, out);
+            if (ops.count() < (u32)3) return true;
+            bool sretCall = res != 0 && Wasm32.isAggTy(res.ty());
+            if (sretCall) out.appendFormat("    local.get $v%lu\n", vnum(res.pid()));
+            Array* argTys = new Array();
+            IROperand* recv = (IROperand*)ops.get((u32)0);
+            String* rt = Wasm32.tyOfOp(recv);
+            argTys.add((Object*)(rt == 0 ? String.withCString("I32") : rt));
+            pushOperand(recv, out);
+            for (u32 i = (u32)3; i < ops.count(); i = i + (u32)1) {
+                IROperand* a = (IROperand*)ops.get(i);
+                String* t = Wasm32.tyOfOp(a);
+                argTys.add((Object*)(t == 0 ? String.withCString("I32") : t));
+                pushOperand(a, out);
             }
+            pushOperand(recv, out);
+            emitItabLookup(ops, out);
+            String* ty = indirectTypeFor(argTys, sretCall ? (String*)0
+                                        : (res == 0 ? (String*)0 : res.ty()));
+            out.appendFormat("    call_indirect (type $%s)\n", ty.cString());
+            if (res != 0 && !sretCall && !Wasm32.memOrVoid(res.ty()))
+                setResult(res, false, out);
             return true;
         }
+        // [recv, protoId, index]: the table index alone, 0 for a null
+        // receiver or an unimplemented `optional` (the respondsTo test).
         if (op.equals(String.withCString("ProtoLoad"))) {
-            if (res != 0) {
-                out.appendCString("    i32.const 0\n");
-                setResult(res, false, out);
-            }
+            if (res == 0 || ops.count() < (u32)3) return true;
+            pushOperand((IROperand*)ops.get((u32)0), out);
+            emitItabLookup(ops, out);
+            setResult(res, false, out);
             return true;
         }
         if (op.equals(String.withCString("Retain"))) {

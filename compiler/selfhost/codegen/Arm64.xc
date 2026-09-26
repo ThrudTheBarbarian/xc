@@ -539,6 +539,8 @@ class Arm64
             { emitWeakCall(n, String.withCString("__xtc_weak_load"), (u32)1, true); return true; }
         if (op.equals(String.withCString("VTblLoad")))     { emitVTblLoad(n); return true; }
         if (op.equals(String.withCString("VTblDispatch"))) { emitVTblDispatch(n); return true; }
+        if (op.equals(String.withCString("ProtoLoad")))    { emitProtoLoad(n); return true; }
+        if (op.equals(String.withCString("ProtoDispatch"))) { emitProtoDispatch(n); return true; }
         if (op.equals(String.withCString("CallIndirect")))  { emitCallIndirect(n); return true; }
         if (op.equals(String.withCString("ClassDowncast"))
          || op.equals(String.withCString("ClassDowncastFailable"))) { emitDowncast(n); return true; }
@@ -1363,6 +1365,84 @@ class Arm64
         _out.appendFormat("    ldr x16, [x16, #%ld]\n", slot.imm() * (i32)8);
         _out.appendCString("    blr x16\n");
         captureResult(n, sret);
+    }
+
+    // Protocol dispatch through the conformance ITABLE: vtable header word 1
+    // points at (protoId, &table) pairs ending in a zero id, and each table
+    // lists the protocol's methods in declaration order. Both follow from the
+    // protocol alone, so a library and its client agree on them without
+    // agreeing on vtable slot numbers, which they cannot do for a protocol the
+    // library does not declare (Comparable, Hashable). The walk starts with
+    // the itable in x16 and leaves the matching pair's address there; x17
+    // holds each id and x15 the one sought. The arguments are already placed
+    // by then, and x15-x17 are never home registers.
+    void emitItableWalk(u32 pid, String* hit, String* miss)
+    {
+        _out.appendFormat("    mov w15, #%lu\n", pid & (u32)$FFFF);
+        _out.appendFormat("    movk w15, #%lu, lsl #16\n", (pid >> (u32)16) & (u32)$FFFF);
+        String* loop = localLabel(String.withCString("itab_walk"));
+        _out.appendFormat("%s:\n", loop.cString());
+        _out.appendCString("    ldr x17, [x16]\n");
+        _out.appendCString("    cmp w17, w15\n");
+        _out.appendFormat("    b.eq %s\n", hit.cString());
+        _out.appendCString("    add x16, x16, #16\n");
+        _out.appendFormat("    cbnz x17, %s\n", loop.cString());
+        _out.appendFormat("    b %s\n", miss.cString());
+    }
+
+    // Operands: [recv, protoId, index, args..., mem]. A receiver whose class
+    // does not answer to the protocol calls 0, as an empty vtable slot does.
+    void emitProtoDispatch(IRInsn* n)
+    {
+        if (n.ops().count() < (u32)3) { unsupported(n.op()); return; }
+        IROperand* pid = (IROperand*)n.ops().get((u32)1);
+        IROperand* idx = (IROperand*)n.ops().get((u32)2);
+        if (pid.kind() != (u8)OPK_IMMI || idx.kind() != (u8)OPK_IMMI) { unsupported(String.withCString("ProtoDispatch:id")); return; }
+        materialise((IROperand*)n.ops().get((u32)0), String.withCString("x0"));
+        u32 argc = n.ops().count() >= (u32)4 ? n.ops().count() - (u32)4 : (u32)0;
+        if (!marshalArgs(n, (u32)3, argc, (u32)1)) return;
+        bool sret = emitSretSetupIfNeeded(n);
+        String* hit = localLabel(String.withCString("itab_hit"));
+        String* miss = localLabel(String.withCString("itab_miss"));
+        String* call = localLabel(String.withCString("itab_call"));
+        _out.appendCString("    ldr x16, [x0]\n");
+        _out.appendCString("    ldr x16, [x16, #8]\n");
+        _out.appendFormat("    cbz x16, %s\n", call.cString());
+        emitItableWalk((u32)pid.imm(), hit, miss);
+        _out.appendFormat("%s:\n", miss.cString());
+        _out.appendCString("    mov x16, #0\n");
+        _out.appendFormat("    b %s\n", call.cString());
+        _out.appendFormat("%s:\n", hit.cString());
+        _out.appendCString("    ldr x16, [x16, #8]\n");
+        _out.appendFormat("    ldr x16, [x16, #%ld]\n", idx.imm() * (i32)8);
+        _out.appendFormat("%s:\n", call.cString());
+        _out.appendCString("    blr x16\n");
+        captureResult(n, sret);
+    }
+
+    // `&p.method` through a protocol: the same walk without the call. A null
+    // receiver, a class with no itable and an unimplemented `optional` all
+    // give 0, which is what the null test on the result relies on.
+    void emitProtoLoad(IRInsn* n)
+    {
+        if (n.ops().count() < (u32)3 || n.res() == (IRValue*)0) { unsupported(n.op()); return; }
+        IROperand* pid = (IROperand*)n.ops().get((u32)1);
+        IROperand* idx = (IROperand*)n.ops().get((u32)2);
+        if (pid.kind() != (u8)OPK_IMMI || idx.kind() != (u8)OPK_IMMI) { unsupported(String.withCString("ProtoLoad:id")); return; }
+        materialise((IROperand*)n.ops().get((u32)0), String.withCString("x16"));
+        String* hit = localLabel(String.withCString("itab_hit"));
+        String* done = localLabel(String.withCString("itab_done"));
+        _out.appendCString("    mov x17, #0\n");
+        _out.appendFormat("    cbz x16, %s\n", done.cString());
+        _out.appendCString("    ldr x16, [x16]\n");
+        _out.appendCString("    ldr x16, [x16, #8]\n");
+        _out.appendFormat("    cbz x16, %s\n", done.cString());
+        emitItableWalk((u32)pid.imm(), hit, done);
+        _out.appendFormat("%s:\n", hit.cString());
+        _out.appendCString("    ldr x16, [x16, #8]\n");
+        _out.appendFormat("    ldr x17, [x16, #%ld]\n", idx.imm() * (i32)8);
+        _out.appendFormat("%s:\n", done.cString());
+        storeReg(String.withCString("x17"), n.res());
     }
 
     void emitCallIndirect(IRInsn* n)
@@ -3553,6 +3633,9 @@ class Arm64
         } else if (op.equals(String.withCString("VTblDispatch"))) {
             if (n.ops().count() < (u32)3) return (u32)0;
             first = (u32)2; argc = n.ops().count() - (u32)3; startGP = (u32)1;  // receiver in x0
+        } else if (op.equals(String.withCString("ProtoDispatch"))) {
+            if (n.ops().count() < (u32)4) return (u32)0;
+            first = (u32)3; argc = n.ops().count() - (u32)4; startGP = (u32)1;  // receiver in x0
         } else {
             return (u32)0;
         }
@@ -5962,8 +6045,8 @@ class Arm64
 
     // Does this opcode emit a call, so that anything live across it must take a
     // callee-saved home? Direct calls plus the opcodes arm64 lowers to a hidden
-    // runtime `bl`. Note what is NOT here: Retain is inlined, ProtoDispatch
-    // does not reach this backend, and the divides are hardware instructions —
+    // runtime `bl`. Note what is NOT here: Retain is inlined, and the divides
+    // are hardware instructions —
     // guessing any of those in would wrongly push values out of the
     // caller-saved tier and change which registers get used.
     static bool emitsCall(String* op)
@@ -5974,6 +6057,7 @@ class Arm64
             || op.equals(String.withCString("CallIndirect"))
             || op.equals(String.withCString("CallBankedIndirect"))
             || op.equals(String.withCString("VTblDispatch"))
+            || op.equals(String.withCString("ProtoDispatch"))
             || op.equals(String.withCString("MemCopy"))
             || op.equals(String.withCString("MemSet"))
             || op.equals(String.withCString("Release"))

@@ -12235,8 +12235,15 @@ class ClassInfo
     // this class's own list: every class descends from Object, which conforms
     // to Hashable and Comparable, so a plain `class Box {}` is reachable
     // through `Hashable@` without saying anything.
+    //
+    // Not for a class from ANOTHER module: its vtable, and the itable that
+    // vtable points at, are defined in its library. A copy here is never read,
+    // and on ELF it names the library's methods from data, which the x86_64
+    // linker cannot bind.
     String* buildItable(ClassInfo* info, Node* cls)
         {
+        if (cls.hasFlag((u32)NF_EXTERNAL))
+            return String.withCString("");
         Array* names = new Array(); // protocol names, nearest first
         Array* rows = new Array();  // Array@ of impl symbol names
         for (Node* c = cls; c != 0; c = parentDeclOf(c))
