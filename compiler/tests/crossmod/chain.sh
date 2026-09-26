@@ -34,17 +34,21 @@
 #           vtable before it was filled (null function). ChainU.many frees
 #           a `new Base[N]` made in the third library: each element runs
 #           the first library's Base$dealloc
-#   x86_64  the first two libraries and chainclient on $XTC_X86_HOST /
+#   x86_64  the three libraries, chainclient and chainmany on $XTC_X86_HOST /
 #           $XTC_LINUX_HOST. Those vtable words are R_X86_64_64 relocations
 #           against the first library's symbols; the second library did not
-#           link before they were
+#           link before they were. chainmany calls ChainU.many only: the
+#           third library takes the address of the imported Base$dealloc
+#           through the GOT, and did not link before it did
 # Not run:
 #   arm9    running needs the loader tree and qemu
 #   chainuseonly on arm64: the third library does not record that it needs
 #           the first, so nothing loads it (dyld: symbol not found
 #           '_UXNib$booted')
-#   chainuse on x86_64: the shared link refuses ChainU.many's address of
-#           the imported Base$dealloc
+#   chainrev on x86_64: a library's load-time constructors never run, so
+#           boot=0
+#   chainuseonly on x86_64: as on arm64, the third library does not record
+#           that it needs the first (undefined symbol UXNib$booted)
 _root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null)
 [ -f "$_root/tools/build-env.sh" ] && . "$_root/tools/build-env.sh"
 set -u
@@ -57,6 +61,7 @@ trap 'rm -rf "$TMP"' EXIT
 WANT_chainclient=$'base=502\nsub=27\napp=705'
 WANT_chainrev=$'boot=102\nmany=4\nbase=102'
 WANT_chainuseonly=$'boot=102\nmany=3'
+WANT_chainmany=$'many=4\nmany=2'
 
 fail=0
 bad() { echo "FAIL  $*"; fail=$((fail+1)); }
@@ -177,9 +182,7 @@ before=$fail
 HOST=${XTC_X86_HOST:-${XTC_LINUX_HOST:-}}
 if [ -n "$HOST" ] && ssh -o ConnectTimeout=8 -o BatchMode=yes "$HOST" true 2>/dev/null; then
     RD=/tmp/xc-chain-$$
-    # Not chainuse: an x86-64 shared object cannot take the address of an
-    # imported function yet (ChainU.many's Base$dealloc).
-    runmatrix x86_64 .so run_x86 "Base Sub" chainclient
+    runmatrix x86_64 .so run_x86 "Base Sub Use" chainclient chainmany
     ssh "$HOST" "rm -rf $RD" </dev/null
     [ $fail = $before ] && echo "PASS  x86_64: run on $HOST, lib x app compiler matrix"
 else
