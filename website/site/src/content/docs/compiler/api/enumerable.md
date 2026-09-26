@@ -13,7 +13,7 @@ class MyContainer <Enumerable> { ... }
 
 ## Overview
 
-xtc's `for … in` handles fixed-size arrays, slices, ranges and heap-allocated
+xc's `for … in` handles fixed-size arrays, slices, ranges and heap-allocated
 pointers: anything where the codegen can derive a count and an element address
 up front. A **class instance** can't be walked that way because its storage
 layout is private. A class that conforms to `Enumerable` provides two methods

@@ -112,7 +112,7 @@ Comparison does not use identity or pointers. Two buffers built separately from
 the same bytes are equal, which a pasteboard round-trip test needs.
 
 :::note[It is `isEqualTo`, not `equals`]
-Dispatch in xtc is by name, and `Object.equals(Object@)` would shadow a custom
+Dispatch in xc is by name, and `Object.equals(Object@)` would shadow a custom
 `equals`. For that reason the toolkit spells content comparison `isEqualTo`
 throughout.
 :::

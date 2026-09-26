@@ -1,6 +1,6 @@
 ---
 title: Blocks
-description: "Function values with captures (xtc 0.4): declare them like variables, call them like functions, capture by value, and use `block:` for copy-in/write-back when a callback must return results."
+description: "Function values with captures (xcc 0.4): declare them like variables, call them like functions, capture by value, and use `block:` for copy-in/write-back when a callback must return results."
 ---
 
 A block is a function value that captures variables from its enclosing
@@ -126,7 +126,7 @@ before the method that calls it; `self.cb.invoke(…)` always works.
 `examples/compiler/blocks.xc`, compiled and run by the docs harness:
 
 ```c
-// blocks.xc — blocks: function values with captures (xtc 0.4).
+// blocks.xc — blocks: function values with captures (xcc 0.4).
 #import "Stdio.xc"
 #import "Foundation.xc"
 

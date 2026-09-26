@@ -1,6 +1,6 @@
 # Using the xcc compiler
 
-`xcc` compiles the xtc language, a C-like language described in
+`xcc` compiles the xc language, a C-like language described in
 [doc/LANGUAGE-SPEC.md](doc/LANGUAGE-SPEC.md) and at <https://compile-xc.org>,
 to one of seven backends:
 
@@ -15,13 +15,13 @@ to one of seven backends:
 | **xt6502**   | `-A 6502` / `-m xt6502` | banked XEX binary (`.xex`)          | `xcc-sim-6502`        |
 
 `-A` picks the target; with none, the native host is the default. All seven
-back ends are self-hosting (the compiler exists a second time in the xtc
+back ends are self-hosting (the compiler exists a second time in the xc
 language, byte-identical at every stage).
 
 ## Which of those the SHIPPED compiler drives
 
 The table above is the whole toolchain. The binary you install as `xcc` is the
-**xc-built** compiler, the one written in the xtc language, and it drives
+**xc-built** compiler, the one written in the xc language, and it drives
 every target end to end. It is the only compiler that ships.
 
 | Target | Shipped `xcc` | Notes |

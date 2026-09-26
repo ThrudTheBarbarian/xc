@@ -1,6 +1,6 @@
 ---
 title: UXNibV2
-description: "The UXNB v2 nib chunk, parsed in xtc rather than in the host, so variant selection and logical-id resolution work on every backend."
+description: "The UXNB v2 nib chunk, parsed in xc rather than in the host, so variant selection and logical-id resolution work on every backend."
 ---
 
 `UXNibV2` reads the **UXNB v2** chunk out of a `.rsc` file, entirely in portable

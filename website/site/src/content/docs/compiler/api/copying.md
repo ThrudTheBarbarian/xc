@@ -19,7 +19,7 @@ them, so the first `dealloc` over-releases and the second touches freed memory.
 Each type defines how it copies, as Objective-C does with `NSCopying`.
 
 There is **no `mutableCopy`**. Foundation splits types into immutable/mutable
-class pairs (`NSString`/`NSMutableString`). xtc has one `String`, one `Array`
+class pairs (`NSString`/`NSMutableString`). xc has one `String`, one `Array`
 and one `Map`, each already mutable, so `copy` and `mutableCopy` would return
 the same thing. When porting code from Foundation, treat both `-copy` and
 `-mutableCopy` as this one method.

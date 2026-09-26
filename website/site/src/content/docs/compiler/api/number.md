@@ -4,7 +4,7 @@ description: "An Object wrapping any sized integer or float, with lazy cached cr
 ---
 
 `Number` is an [`Object`](/compiler/api/object/) that wraps a single primitive:
-any of xtc's sized integers (`i8`/`u8`/`i16`/`u16`/`i32`/`u32`/`i64`/`u64`) **or**
+any of xc's sized integers (`i8`/`u8`/`i16`/`u16`/`i32`/`u32`/`i64`/`u64`) **or**
 a `float`/`double`. A typed collection stores primitives in it (an `Array<i32>`
 keeps its elements as `Number`s), and it lets a heterogeneous collection hold
 mixed values.

@@ -68,7 +68,7 @@ The same problem affects any loop of this shape: a consume-then-wait loop
 loses whatever happens between the consume and the wait.
 :::
 
-## The shim keeps structs out of xtc
+## The shim keeps structs out of xc
 
 As on every other hosted backend, the exported signatures use primitives
 only:

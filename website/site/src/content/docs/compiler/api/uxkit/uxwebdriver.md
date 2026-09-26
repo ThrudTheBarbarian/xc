@@ -35,7 +35,7 @@ The module runs in a **Worker**, and the three blocking methods block on the
 loader's `SharedArrayBuffer` ring via `_xt_ring_wait`.
 
 Nothing else touches shared memory. One worker runs the whole toolkit as
-single-threaded xtc, so **atomic ARC is not needed**: one thread updates
+single-threaded xc, so **atomic ARC is not needed**: one thread updates
 reference counts, with no atomics.
 
 This is an intended constraint. Allowing a second thread into the toolkit would

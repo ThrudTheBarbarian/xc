@@ -1,4 +1,4 @@
-// blocks.xc — blocks: function values with captures (xtc 0.4).
+// blocks.xc — blocks: function values with captures (xcc 0.4).
 #import "Stdio.xc"
 #import "Foundation.xc"
 

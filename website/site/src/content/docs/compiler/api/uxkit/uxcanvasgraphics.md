@@ -33,7 +33,7 @@ i32 penR(i32 pen) { … }     // and penG, penB
 ```
 
 The toolkit draws with VDI pen indices. Resolving an index to a colour happens
-**xtc-side**, so the JS surface only sees `r`, `g`, `b`.
+**xc-side**, so the JS surface only sees `r`, `g`, `b`.
 
 There are two reasons. A pen table in JS would be a second copy of the table in
 [`UXGdiGraphics`](/compiler/api/uxkit/uxgdigraphics/), free to drift. And the

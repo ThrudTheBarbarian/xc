@@ -41,7 +41,7 @@ void ux_gtk_clip_end(void);
 ```
 
 Clipping is push and pop, with no clip object. A clip object would be a
-`cairo_rectangle_t`, which is a struct, and structs do not travel into xtc.
+`cairo_rectangle_t`, which is a struct, and structs do not travel into xc.
 
 The whole shim surface uses primitives only: integers, and `u8*` with an
 explicit capacity. Both sides of the foreign-function boundary can agree on that

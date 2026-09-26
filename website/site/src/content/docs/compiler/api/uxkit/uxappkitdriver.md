@@ -72,7 +72,7 @@ stays the single source of truth and there is no synchronisation step.
 ## The shim owns every NSRect
 
 Everything AppKit-specific goes through `libUXAppKit.m`. At that boundary,
-**no `NSRect` crosses into xtc**. The shim's exported signatures use only
+**no `NSRect` crosses into xc**. The shim's exported signatures use only
 primitives:
 
 ```c

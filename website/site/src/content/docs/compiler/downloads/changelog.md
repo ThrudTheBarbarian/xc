@@ -5,7 +5,7 @@ description: Release notes for the xcc toolchain, with bug fixes and new feature
 
 ## Version 0.62 — wrong code fixed, shared libraries that work together
 
-Most of this release fixes wrong code and makes xtc libraries work with each
+Most of this release fixes wrong code and makes xc libraries work with each
 other: a library can now import another library and be used from a program on
 arm64, x86_64 and wasm32. Several mistakes that used to compile are now
 errors. Libraries built by an earlier release must be rebuilt, and on x86_64
@@ -91,11 +91,11 @@ programs that use them must be rebuilt too.
   library boundary use each class's protocol table, which every module numbers
   the same way. They used each module's own slot numbers and gave wrong
   answers or crashed. This makes protocol calls in a multi-module program a
-  short table walk, and a program that uses an xtc library now carries every
+  short table walk, and a program that uses an xc library now carries every
   built-in method.
 - arm64: a library records the libraries it imports and binds its imports to
   them, so a program that names only the dependent library runs.
-- x86_64: programs that use xtc libraries link, including a client class that
+- x86_64: programs that use xc libraries link, including a client class that
   subclasses a library class, and a library that takes the address of another
   library's function. A library records the libraries it imports, and its
   load-time constructors run, in dependency order, before the program's own.
@@ -187,7 +187,7 @@ programs, and refuses several mistakes that used to compile without a word.
 ### Performance
 
 The repository has a benchmark suite in `benchmark/`: nineteen programs, each
-written in xtc and in Objective-C with ARC, both built at `-O3`, with a
+written in xc and in Objective-C with ARC, both built at `-O3`, with a
 checksum that must agree. The figures come from the compiler that ships.
 Against clang the geometric mean is 0.92x on arm64 and 1.04x on x86-64, where
 lower is faster. The [Performance](/compiler/performance/) page has the
@@ -313,20 +313,20 @@ output, PRG, listings, `-D`, `-I` and multiple inputs.
 - The language reference has a Grammar page, and `docs/xtc.bnf` holds the same
   grammar.
 
-## Version 0.6 — the compiler is written in xtc
+## Version 0.6 — the compiler is written in xc
 
-The `xcc` in this release is the compiler written in xtc, compiled by itself. 0.5 was
+The `xcc` in this release is the compiler written in xc, compiled by itself. 0.5 was
 the internal line that led to this release and was never published, so its changes are
 all listed here.
 
-### `xcc` is written in xtc
+### `xcc` is written in xc
 
-- `xcc` is the compiler written in xtc, compiled by itself. The whole toolchain
+- `xcc` is the compiler written in xc, compiled by itself. The whole toolchain
   rebuilds itself to a fixed point.
 - It ships for all three hosts: macOS on Apple silicon, Linux x86-64 and Windows x64.
   Each is a single self-contained binary. With no `-A`, it builds for the host it
   runs on.
-- `xcc-sign` is written in xtc too.
+- `xcc-sign` is written in xc too.
 - `xcc` rejects an option it does not implement with an error rather than ignoring it.
 - The install goes to `/opt/xcc/0.6` and leaves an installed 0.4 alone. `xcc -v`
   reports `xcc 0.6 (xc, self-hosted)`.
@@ -399,7 +399,7 @@ library uses it. A stored callback always auto-zeroes when its receiver dies, so
 
 ### Targets
 
-- **arm64:** variadic functions use the native AAPCS convention, so a variadic xtc
+- **arm64:** variadic functions use the native AAPCS convention, so a variadic xc
   function can be called through a prototype from another unit or from C. Structs and
   callbacks passed by value that do not fit in registers go on the stack as AAPCS
   requires.
@@ -575,7 +575,7 @@ needs an Apple SDK's `.tbd` stubs. x86-64 shared libraries link and run in-house
 ### Renamed to `xcc`, and installable
 
 The binaries are renamed: the driver is **`xcc`**, the assembler `xcc-as`, and the
-simulators `xcc-sim-6502` / `xcc-sim-68k`. The language keeps the xtc name.
+simulators `xcc-sim-6502` / `xcc-sim-68k`. The language is still called xc.
 `make install` puts the toolchain in `/opt/xcc/<version>`, and the compiler finds its
 libraries relative to its own binary. With no `-A` or `-m`, `xcc` builds for the host,
 as `cc` does; the 6502 is `-A 6502`.
@@ -652,7 +652,7 @@ I/O and `argv`. `Map` and `Set` iterate in insertion order.
 ### Self-hosting
 
 The front end, optimiser, every back end, the assemblers and the linkers are ported to
-xtc. The port produces byte-identical output and builds itself to a fixed point.
+xc. The port produces byte-identical output and builds itself to a fixed point.
 
 ### Options
 

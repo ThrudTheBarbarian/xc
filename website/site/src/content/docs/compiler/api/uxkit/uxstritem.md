@@ -27,7 +27,7 @@ wrapper.
 
 [`UXPathComp`](/compiler/api/uxkit/uxpathcomp/) and
 [`UXKVEntry`](/compiler/api/uxkit/uxkventry/) exist for the same reason. Boxing
-is explicit in xtc, not automatic, so the wrapper appears in signatures:
+is explicit in xc, not automatic, so the wrapper appears in signatures:
 
 ```c
 static Array<UXStrItem>* split(u8* s, u8 delim)

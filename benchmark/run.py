@@ -17,6 +17,8 @@ choice on a machine that is also doing other things.
   run.py --bench int_accum   restrict to one benchmark
   run.py --repeats 7         runs per data point
   run.py --opt O2            restrict to one optimisation level
+  run.py --max-load 0.25     wait until each machine's 1-minute load average,
+                             per core, is at or below this before timing on it
 
 Hosts for platforms other than this one come from build.env at the repository
 root. A variable left empty turns off that platform and the run reports the skip.
@@ -28,12 +30,59 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(ROOT)
 SRC = os.path.join(ROOT, "src")
+with open(os.path.join(REPO, "compiler", "VERSION")) as _vf:
+    COMPILER_VERSION = _vf.read().strip()
 OPTS = ["O0", "O1", "O2", "O3"]
 BASELINE = "baseline"
+
+MAX_LOAD = 0.25          # per core; --max-load overrides
+LOAD_POLL = 15           # seconds between checks
+LOAD_GIVE_UP = 3600      # seconds before the run stops rather than time a busy machine
+_load_ok = {}            # host -> time of the last passing check
+
+
+def load_per_core(host=None):
+    """1-minute load average divided by core count, here or on `host`."""
+    if host is None:
+        return os.getloadavg()[0] / (os.cpu_count() or 1)
+    r = subprocess.run(["ssh", "-o", "ConnectTimeout=10", host,
+                        "cut -d' ' -f1 /proc/loadavg; nproc"],
+                       capture_output=True, text=True)
+    load, cores = r.stdout.split()
+    return float(load) / int(cores)
+
+
+def wait_quiet(host=None):
+    """Do not time anything on a busy machine: wait for its load to drop.
+
+    Checked at most once a minute per machine, so the check itself does not
+    add ssh traffic to every run.
+    """
+    now = time.time()
+    if now - _load_ok.get(host, 0) < 60:
+        return
+    start, said = now, False
+    while True:
+        lpc = load_per_core(host)
+        if lpc <= MAX_LOAD:
+            _load_ok[host] = time.time()
+            if said:
+                print("  load on %s is %.2f per core: continuing" % (host or "this host", lpc),
+                      flush=True)
+            return
+        if time.time() - start > LOAD_GIVE_UP:
+            sys.exit("run.py: %s stayed above %.2f load per core for %d s; not timing a busy machine"
+                     % (host or "this host", MAX_LOAD, LOAD_GIVE_UP))
+        if not said:
+            print("  load on %s is %.2f per core (limit %.2f): waiting"
+                  % (host or "this host", lpc, MAX_LOAD), flush=True)
+            said = True
+        time.sleep(LOAD_POLL)
 
 
 def build_env():
@@ -67,21 +116,33 @@ def benchmarks():
 
 
 def xcc_path():
-    """The SHIPPED compiler, not the bootstrap one.
+    """The SHIPPED compiler: the installed release, /opt/xcc/<VERSION>/bin/xcc.
 
-    `xcc` is the Objective-C reference; `xcc-xc` is the self-hosted compiler
-    that is actually released, and it is the only one a published figure may
-    come from. The two are gated byte-identical, but "gated byte-identical" has
-    meant -O0 for most of this project's life and the benchmarks build at -O3 —
-    where they were NOT identical until the optimisers were made to agree
-    (private bug 228). Measuring the oracle and publishing it as the product is
-    exactly the mistake that invites.
+    The performance page says its figures come from the xcc in the download,
+    and the installed release is that binary (make install and make dist stage
+    the same stage-2 build). A build-tree compiler is used only when no release
+    is installed, and the run says so. The Objective-C bootstrap is never
+    measured.
     """
-    return os.path.join(REPO, "compiler", "bin", "osx", "xcc-xc")
+    installed = os.path.join("/opt/xcc", COMPILER_VERSION, "bin", "xcc")
+    if os.access(installed, os.X_OK):
+        return installed
+    for name in ("xcc-xc2", "xcc-xc"):
+        p = os.path.join(REPO, "compiler", "bin", "osx", name)
+        if os.access(p, os.X_OK):
+            print("note: no installed xcc %s; measuring the build tree's %s"
+                  % (COMPILER_VERSION, name))
+            return p
+    sys.exit("run.py: no xcc to measure (make install, or make production)")
+
+
+def xcc_home_args():
+    """An installed xcc finds its own library; a build-tree one needs -H."""
+    return [] if xcc_path().startswith("/opt/xcc/") else ["-H", os.path.join(REPO, "compiler")]
 
 
 def compile_xc(name, opt, out):
-    cmd = [xcc_path(), "-H", os.path.join(REPO, "compiler"), "-I", SRC, "-" + opt,
+    cmd = [xcc_path()] + xcc_home_args() + ["-I", SRC, "-" + opt,
            "-o", out, os.path.join(SRC, name + ".xc")]
     r = subprocess.run(cmd, capture_output=True, text=True)
     return r.returncode == 0, (r.stderr or r.stdout)
@@ -90,7 +151,7 @@ def compile_xc(name, opt, out):
 def compile_xc_x86(name, opt, out):
     """Cross-build for x86-64 Linux. The result is a static ELF, so the remote
     host needs no toolchain and no loader of its own."""
-    cmd = [xcc_path(), "-H", os.path.join(REPO, "compiler"), "-I", SRC, "-A", "x86_64",
+    cmd = [xcc_path()] + xcc_home_args() + ["-I", SRC, "-A", "x86_64",
            "-" + opt, "-o", out, os.path.join(SRC, name + ".xc")]
     r = subprocess.run(cmd, capture_output=True, text=True)
     return r.returncode == 0, (r.stderr or r.stdout)
@@ -128,6 +189,7 @@ def run_remote(remote_path, repeats, host, env_prefix=""):
     """Run an already-present remote binary and take the fastest report."""
     best, checksum = None, None
     for _ in range(repeats):
+        wait_quiet(host)
         r = subprocess.run(["ssh", "-o", "ConnectTimeout=10", host,
                             "%schmod +x %s && %s x" % (env_prefix, remote_path, remote_path)],
                            capture_output=True, text=True)
@@ -152,6 +214,7 @@ def measure_remote(binary, repeats, host):
     remote = "/tmp/" + os.path.basename(binary)
     best, checksum = None, None
     for _ in range(repeats):
+        wait_quiet(host)
         r = subprocess.run(["ssh", "-o", "ConnectTimeout=10", host,
                             "chmod +x %s && %s x" % (remote, remote)],
                            capture_output=True, text=True)
@@ -185,6 +248,7 @@ def measure(binary, repeats):
     """
     best, checksum = None, None
     for _ in range(repeats):
+        wait_quiet()
         r = subprocess.run([binary, "x"], capture_output=True, text=True)
         if r.returncode != 0:
             return None, "exit %d" % r.returncode
@@ -202,6 +266,7 @@ def measure(binary, repeats):
 
 
 def main():
+    global MAX_LOAD
     ap = argparse.ArgumentParser(description="xc against Objective-C, both with ARC")
     with open(os.path.join(REPO, "compiler", "VERSION")) as f:
         default_version = "v" + f.read().strip()
@@ -209,7 +274,9 @@ def main():
     ap.add_argument("--bench", default=None)
     ap.add_argument("--opt", default=None)
     ap.add_argument("--repeats", type=int, default=5)
+    ap.add_argument("--max-load", type=float, default=MAX_LOAD)
     args = ap.parse_args()
+    MAX_LOAD = args.max_load
 
     names, unpaired = benchmarks()
     if unpaired:
@@ -256,7 +323,7 @@ def main():
                     checks[lang] = checksum
                     results.setdefault(name, {}).setdefault(opt, {})[lang] = secs
                     print("  %-14s %-11s %-2s  %8.4fs  checksum %s"
-                          % (name, lang, opt, secs, checksum))
+                          % (name, lang, opt, secs, checksum), flush=True)
                     continue
                 out = os.path.join(work, "%s.%s.%s" % (name, lang, opt))
                 ok, log = compiler(name, opt, out)
@@ -273,7 +340,7 @@ def main():
                 checks[lang] = checksum
                 results.setdefault(name, {}).setdefault(opt, {})[lang] = secs
                 print("  %-14s %-9s %-2s  %8.4fs  checksum %s"
-                      % (name, lang, opt, secs, checksum))
+                      % (name, lang, opt, secs, checksum), flush=True)
             if len(set(checks.values())) > 1:
                 mismatches.append((name, opt, checks))
                 print("  %-14s %-9s %-2s  CHECKSUM MISMATCH %s" % (name, "", opt, checks))

@@ -1,13 +1,13 @@
 ---
 title: UXStr
-description: "Concatenation and number conversion: the small amount of string work a UI toolkit needs, since xtc's Stdio has no snprintf."
+description: "Concatenation and number conversion: the small amount of string work a UI toolkit needs, since xc's Stdio has no snprintf."
 ---
 
 `UXStr` covers the minimum: joining two strings, and turning integers into text
 and back.
 
 Building a label, a status line or an alert body means concatenating and
-formatting, and xtc's `Stdio` has no `snprintf` to format *into* a buffer. Every
+formatting, and xc's `Stdio` has no `snprintf` to format *into* a buffer. Every
 application would otherwise write this code, so it lives here.
 
 ```c

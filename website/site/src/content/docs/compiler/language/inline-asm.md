@@ -105,7 +105,7 @@ This helper disables NMI generation around a critical section and then restores 
 ```c
 volatile u8* NMIEN = (u8*)$D40E;
 
-// xtc has no C function pointers; a callback is a bound method.
+// xc has no C function pointers; a callback is a bound method.
 typedef void Body(void);
 
 void atomic(callback body void(void)) {

@@ -10,7 +10,7 @@ export default defineConfig({
 		starlight({
 			title: 'xc',
 			description:
-				'The xc compiler and toolchain — a modern, typed, class-based C-like language (the "xtc language") compiled through a shared SSA intermediate representation to multiple backends: native arm64, x86-64, arm9 and win64, WebAssembly, and a banked-6502 target. Ships as xcc.',
+				'xcc, the compiler and toolchain for xc — a modern, typed, class-based C-like language — compiled through a shared SSA intermediate representation to multiple backends: native arm64, x86-64, arm9 and win64, WebAssembly, and a banked-6502 target.',
 			customCss: ['./src/styles/xtc.css'],
 			// Browser-tab icon, cropped to the golden jigsaw piece (see public/).
 			favicon: '/favicon.png',

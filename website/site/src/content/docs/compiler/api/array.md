@@ -96,7 +96,7 @@ static Array* with(Object* a, Object* b, Object* c)
 static Array* with(Object* a, Object* b, Object* c, Object* d)
 ```
 Builds a small Array from a fixed list of one to four elements, the equivalent
-of `arrayWithObjects:` for common counts (xtc has no nil-terminated vararg
+of `arrayWithObjects:` for common counts (xc has no nil-terminated vararg
 convention). Each element is retained.
 
 ### withArray

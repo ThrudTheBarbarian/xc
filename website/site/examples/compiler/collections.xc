@@ -1,6 +1,6 @@
 // collections.xc — Array, Map, Set and String, with element types.
 //
-// The containers are ordinary xtc classes in the standard library. What makes
+// The containers are ordinary xc classes in the standard library. What makes
 // them pleasant to use is the ELEMENT TYPE in angle brackets: `Array<String>*`
 // stores and returns `String*`, so nothing at the use site needs a cast, and
 // putting the wrong type in is a compile error rather than a crash later.

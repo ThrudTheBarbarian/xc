@@ -1,6 +1,6 @@
-# xtc language specification
+# xc language specification
 
-This specification covers the xtc source language as you type it.
+This specification covers the xc source language as you type it.
 The canonical documentation is the website at
 https://compile-xc.org. Where this document and the website
 disagree, the website is correct.
@@ -199,7 +199,7 @@ width uses `sizeof(T*)` at compile time rather than a constant.
 
 **Float and double encoding is target-decided.** The language
 commits only to the abstract precision (single or double). On
-6502 targets `float` is xtc's 5-byte format (1 sign byte, a
+6502 targets `float` is xc's 5-byte format (1 sign byte, a
 signed 8-bit exponent and a 24-bit mantissa; **not** IEEE 754)
 and `double` is the corresponding 8-byte format with a 48-bit
 mantissa. On FPU targets (arm64, x86-64) `float` is IEEE 754
@@ -257,7 +257,7 @@ array's is its element's. The caps are the target's C ABI:
 
 A default struct therefore lays out as the target's C compiler
 lays out the equivalent C struct. A naturally padded C header
-type (`struct timespec`, `llhttp_t`, …) can be declared in xtc
+type (`struct timespec`, `llhttp_t`, …) can be declared in xc
 verbatim, and every member lands where the C side reads it.
 Layouts still differ across targets (a pointer is 8 bytes on
 arm64 and 3 on the 6502), but each target agrees with its own
@@ -824,7 +824,7 @@ void printAll(string fmt, ...) { ... }
 ```
 
 **A body-less variadic declaration names a C function.** With no
-xtc body to walk a pack, the call is made with the target's C
+xc body to walk a pack, the call is made with the target's C
 calling convention: the trailing arguments are C-default-promoted
 (`float` → `double`, sub-`int` integers widen) and passed as the
 platform ABI requires, with no pack buffer and no `va_list`.
@@ -834,7 +834,7 @@ i32 dprintf(i32 fd, u8* fmt, ...);   // C linkage: fcntl, ioctl,
 dprintf(1, "n=%d\n", n);             // open(2), the printf family
 ```
 
-The rest of this section describes variadics with an xtc body,
+The rest of this section describes variadics with an xc body,
 which use the pack-buffer convention.
 
 Walk the argument pack with `va_start`, `va_arg`, `va_end`. The
@@ -1165,7 +1165,7 @@ Stdio.printInt(c.value());     // 2
   ARC walker cannot see). It runs once; for arrays of class
   instances, once per element.
 
-xtc has method overloading but **no operator overloading**.
+xc has method overloading but **no operator overloading**.
 
 ### 7.3 Static methods + `use ClassName`
 
@@ -2058,9 +2058,9 @@ omits, or the reverse) appear under the `asm-clobbers` warning
 category. Suppress them with `-Wno-asm-clobbers` once you have
 checked the block.
 
-### 10.2 Accessing xtc variables
+### 10.2 Accessing xc variables
 
-Identifiers declared in xtc are visible inside `asm` blocks
+Identifiers declared in xc are visible inside `asm` blocks
 under their declared names; the assembler resolves them to
 their allocated address.
 
@@ -2108,10 +2108,10 @@ asm {
 ### 10.4 What the assembler accepts
 
 The grammar inside `asm { ... }` blocks is **target-specific**:
-xtc dispatches to the per-target inline assembler. Conventions
+xc dispatches to the per-target inline assembler. Conventions
 common to all targets:
 
-- Instructions end with `;` (matching xtc's statement terminator).
+- Instructions end with `;` (matching xc's statement terminator).
 - Labels are bare identifiers followed by `:`, local to the
   current `asm` block.
 - Platform memory-map symbols are predefined for the active
@@ -2125,7 +2125,7 @@ beyond the stock ISA):
 | Target | Inline-asm reference |
 |--------|----------------------|
 | 6502 family (including xt) | instruction set in `src/xta/XA6502.m` |
-| arm64-macOS | not supported in `asm { }` blocks; put the routine in a `.S` file and call it from xtc |
+| arm64-macOS | not supported in `asm { }` blocks; put the routine in a `.S` file and call it from xc |
 
 > **6502 family: what xta accepts.** Every official 6502
 > instruction with the standard operand modes: implied,
@@ -2141,8 +2141,8 @@ Longer asm helpers (multi-byte arithmetic, bank-switching
 trampolines, hardware-seeded PRNGs) go in a hand-written `.asm`
 file under `support/<arch>/asm/` or `support/<platform>/asm/`
 (for example `support/xt6502/asm/`), called with `JSR` (or `BL`
-on arm64) from xtc. Use inline `asm { }` blocks for short
-sequences inside xtc code.
+on arm64) from xc. Use inline `asm { }` blocks for short
+sequences inside xc code.
 
 ---
 

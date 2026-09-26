@@ -153,7 +153,7 @@ The two versions differ in capability. v2 does not replace v1.
 | **v2** (`UXNB`) | parsed by [`UXNibV2`](/compiler/api/uxkit/uxnibv2/) in portable code — **every backend** |
 
 The other six backends cannot use a format that only one platform's C library
-reads. v2 is therefore parsed in xtc, from the raw bytes, with no host
+reads. v2 is therefore parsed in xc, from the raw bytes, with no host
 dependency. Variant selection, logical-id resolution and validation can then
 run, and be **gated**, on wasm32 as well as on the board.
 

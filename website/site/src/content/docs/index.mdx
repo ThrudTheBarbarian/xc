@@ -22,7 +22,7 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
 ## What is xc?
 
 **xc** (repo: [`xc`](https://github.com/ThrudTheBarbarian/xc)) is a
-compiler and toolchain for the **xtc language**, a typed, class-based take on C.
+compiler and toolchain for the **xc language**, a typed, class-based take on C.
 It provides `auto` type inference, classes with inheritance and protocols,
 automatic reference counting (ARC) with weak references, a heap with `new` /
 `delete`, closures and bound methods, multiple return values with tuple
@@ -40,7 +40,7 @@ target needs only a new back end.
 The driver ships as **`xcc`** and behaves like a C compiler: `xcc -o prog
 file.xc` builds a native binary for the host, and `-A <arch>` cross-compiles to
 another target. The compiler is also **self-hosting**: a second implementation
-written in the xtc language is byte-identical through every stage.
+written in the xc language is byte-identical through every stage.
 
 ## Targets
 
@@ -62,7 +62,7 @@ The toolchain drives several back ends from one language and one IR:
 
 <CardGrid>
 	<Card title="The language" icon="open-book">
-		The xtc language reference: types, operators, control flow, classes,
+		The xc language reference: types, operators, control flow, classes,
 		inheritance and protocols, ARC and the heap, closures and bound methods,
 		threading, modules and shared libraries, and inline assembly.
 
