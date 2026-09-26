@@ -1601,6 +1601,17 @@ class M68k
         _labelSeq = _labelSeq + (u32)1;
         loadCondition((IROperand*)n.ops().get((u32)0), String.withCString("d0"));
         _out.appendFormat("\ttst.l\td0\n\tbeq.s\t.Lsel%luf\n", lbl);
+        // An i64, u64 or double is two longs in its slot. Built in d0 and
+        // stored from d0, only the HIGH long reached the result and the low
+        // one kept whatever the slot held (bug 520). Copy both, as a phi does.
+        if (isI64(n.res().ty()) || isF64(n.res().ty()))
+            {
+            emitWidePhiCopy(n.res(), (IROperand*)n.ops().get((u32)1));
+            _out.appendFormat("\tbra.s\t.Lsel%lud\n.Lsel%luf:\n", lbl, lbl);
+            emitWidePhiCopy(n.res(), (IROperand*)n.ops().get((u32)2));
+            _out.appendFormat(".Lsel%lud:\n", lbl);
+            return;
+            }
         loadOperand((IROperand*)n.ops().get((u32)1), String.withCString("d0"));
         _out.appendFormat("\tbra.s\t.Lsel%lud\n.Lsel%luf:\n", lbl, lbl);
         loadOperand((IROperand*)n.ops().get((u32)2), String.withCString("d0"));

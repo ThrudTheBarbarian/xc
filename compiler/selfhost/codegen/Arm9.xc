@@ -2742,6 +2742,34 @@ class Arm9
         if (res == 0 || ops.count() < (u32)3)
             return;
         loadCondition((IROperand*)ops.get((u32)0), String.withCString("r2"), String.withCString("r3"));
+        // An i64, u64 or double is two words in its slot, and the one-word
+        // path below copied only the low one (bug 520). Pick both words:
+        // true in r0:r1, false in r2:r3, low word first. Nothing between the
+        // cmp and the moveqs sets the flags.
+        i32 rs = slotOf(res);
+        if ((Arm9.isI64(res.ty()) || Arm9.isF64(res.ty())) && rs >= (i32)0)
+            {
+            _out.appendCString("\tcmp\tr2, #0\n");
+            for (u32 k = (u32)1; k <= (u32)2; k = k + (u32)1)
+                {
+                String* lo = String.withCString(k == (u32)1 ? "r0" : "r2");
+                String* hi = String.withCString(k == (u32)1 ? "r1" : "r3");
+                IROperand* o = (IROperand*)ops.get(k);
+                if (o.kind() == (u8)OPK_IMMF)
+                    {
+                    emitMovImm((i32)Arm9.hexWord(o.fpHex(), (u32)8), lo);
+                    emitMovImm((i32)Arm9.hexWord(o.fpHex(), (u32)0), hi);
+                    }
+                else
+                    {
+                    loadInt64(o, lo, hi);
+                    }
+                }
+            _out.appendCString("\tmoveq\tr0, r2\n\tmoveq\tr1, r3\n");
+            emitSpAccess(String.withCString("str"), String.withCString("r0"), (u32)rs);
+            emitSpAccess(String.withCString("str"), String.withCString("r1"), (u32)rs + (u32)4);
+            return;
+            }
         loadOperand((IROperand*)ops.get((u32)1), String.withCString("r0"));
         loadOperand((IROperand*)ops.get((u32)2), String.withCString("r1"));
         _out.appendCString("\tcmp\tr2, #0\n\tmoveq\tr0, r1\n");

@@ -3551,6 +3551,19 @@ static NSString* m68kSym(NSString* name)
         int n = gLabelSeq++;
         [self loadCondition:insn.operands[0] fn:fn intoReg:@"d0" slots:slots into:out]; // cond
         [out appendFormat:@"\ttst.l\td0\n\tbeq.s\t.Lsel%df\n", n];
+        // An i64, u64 or double is two longs in its slot. Built in d0 and
+        // stored from d0, only the HIGH long reached the result and the low
+        // one kept whatever the slot held (bug 520). Copy both, as a phi does.
+        XTIRTypeKind sk = insn.result.type.kind;
+        if ((sk == XTIRTypeKindI64 || sk == XTIRTypeKindU64 || sk == XTIRTypeKindF64) &&
+            slots[@(insn.result.valueId)])
+            {
+            [self emitWidePhiCopyTo:insn.result from:insn.operands[1] slots:slots into:out];
+            [out appendFormat:@"\tbra.s\t.Lsel%dd\n.Lsel%df:\n", n, n];
+            [self emitWidePhiCopyTo:insn.result from:insn.operands[2] slots:slots into:out];
+            [out appendFormat:@".Lsel%dd:\n", n];
+            break;
+            }
         [self loadOperand:insn.operands[1] intoReg:@"d0" slots:slots into:out]; // ifTrue
         [out appendFormat:@"\tbra.s\t.Lsel%dd\n.Lsel%df:\n", n, n];
         [self loadOperand:insn.operands[2] intoReg:@"d0" slots:slots into:out]; // ifFalse

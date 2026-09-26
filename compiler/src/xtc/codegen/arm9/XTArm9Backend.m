@@ -1529,6 +1529,35 @@ static const NSUInteger kArm9VaForwardWords = 16;
         if (res && ops.count >= 3)
             {
             [self loadCondition:ops[0] into:@"r2" scratch:@"r3" slot:slot fn:fn out:out];
+            // An i64, u64 or double is two words in its slot, and the one-word
+            // path below copied only the low one (bug 520). Pick both words:
+            // true in r0:r1, false in r2:r3, low word first. Nothing between
+            // the cmp and the moveqs sets the flags.
+            XTIRTypeKind sk = res.type.kind;
+            if ((sk == XTIRTypeKindI64 || sk == XTIRTypeKindU64 || sk == XTIRTypeKindF64) && slot[@(res.valueId)])
+                {
+                [out appendString:@"\tcmp\tr2, #0\n"];
+                for (NSUInteger k = 1; k <= 2; k++)
+                    {
+                    NSString* lo = k == 1 ? @"r0" : @"r2";
+                    NSString* hi = k == 1 ? @"r1" : @"r3";
+                    if (ops[k].kind == XTIROperandKindImmF)
+                        {
+                        uint64_t bits = ops[k].floatRawBytes;
+                        [self emitMovImm:(int64_t)(uint32_t)(bits & 0xFFFFFFFFu) reg:lo into:out];
+                        [self emitMovImm:(int64_t)(uint32_t)(bits >> 32) reg:hi into:out];
+                        }
+                    else
+                        {
+                        [self loadInt64Operand:ops[k] lo:lo hi:hi slot:slot fn:fn out:out];
+                        }
+                    }
+                [out appendString:@"\tmoveq\tr0, r2\n\tmoveq\tr1, r3\n"];
+                NSUInteger ro = slot[@(res.valueId)].unsignedIntegerValue;
+                [self emitSpAccess:@"str" reg:@"r0" off:ro out:out];
+                [self emitSpAccess:@"str" reg:@"r1" off:ro + 4 out:out];
+                return;
+                }
             [self loadOperand:ops[1] into:@"r0" slot:slot out:out];
             [self loadOperand:ops[2] into:@"r1" slot:slot out:out];
             [out appendString:@"\tcmp\tr2, #0\n\tmoveq\tr0, r1\n"];
