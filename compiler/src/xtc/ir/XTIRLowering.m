@@ -3099,6 +3099,42 @@ static uint32_t xtProtocolId(NSString* name)
 
 // Emit a u16 immediate constant into the current block. Used for the
 // (count, elemSize) array-cookie args passed to a class allocator.
+// `p == null` as a Bool. On the banked 6502 a pointer is three bytes and is
+// null by its two-byte ADDRESS, so the bank byte is dropped, as a condition
+// does. On a flat target the WHOLE pointer is compared: narrowing it to 16
+// bits reads a 64 KB-aligned address as null. The null is IntToPtr of a u16
+// zero, not a Const of pointer type, which the arm64 back end mis-sizes.
+- (XTIRValue*)emitPointerIsNull:(XTIRValue*)p
+    {
+    XTIRValue* lhs = p;
+    XTIRValue* rhs = nil;
+    if ([XTPointerType pointerToType:[XTType u8Type]].byteWidth == 3)
+        {
+        lhs = [self emitInsnOpcode:XTIROpPtrToInt
+                            result:[XTIRType u16Type]
+                          operands:@[ [XTIROperand useWithValueId:p.valueId] ]];
+        if (!lhs)
+            return nil;
+        rhs = [self emitU16Const:0];
+        }
+    else
+        {
+        rhs = [self emitInsnOpcode:XTIROpIntToPtr
+                            result:p.type
+                          operands:@[ [XTIROperand useWithValueId:[self emitU16Const:0].valueId] ]];
+        if (!rhs)
+            return nil;
+        }
+    XTIRValue* rv = [self allocateValueOfType:[XTIRType boolType] atSite:self.currentBlock];
+    [self.currentBlock appendInstruction:[[XTIRInsn alloc] initWithOpcode:XTIROpICmp
+                                                                   result:rv
+                                                                 operands:@[ [XTIROperand useWithValueId:lhs.valueId],
+                                                                             [XTIROperand useWithValueId:rhs.valueId] ]
+                                                                predicate:XTIRICmpEQ
+                                                                   dbgLoc:nil]];
+    return rv;
+    }
+
 - (XTIRValue*)emitU16Const:(uint32_t)value
     {
     XTIRType* u16 = [XTIRType u16Type];
@@ -4719,8 +4755,7 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
         // `!x` → (x == 0) as a bool, mirroring the binary `==`
         // path (ICmp + XTIRICmpEQ). Integer/bool operands compare
         // directly against a same-typed Const #0; a pointer is
-        // PtrToInt'd to u16 first (ICmp wants integer operands).
-        // A float operand isn't handled yet.
+        // tested by emitPointerIsNull:, and a float by FCmp below.
         XTIRValue* cmpOperand = operand;
         XTIRType* cmpType = operand.type;
 
@@ -4749,17 +4784,11 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
 
         if (cmpType && cmpType.kind == XTIRTypeKindPtr)
             {
-            // PtrToInt the value we actually intend to test — which for a
-            // `^` is the extracted recv word above, NOT the aggregate it
-            // came out of. Narrowing the whole 16-byte aggregate to a u16
-            // yields garbage, and `!h` then answers at random.
-            XTIRValue* src = cmpOperand;
-            cmpType = [XTIRType u16Type];
-            cmpOperand = [self emitInsnOpcode:XTIROpPtrToInt
-                                       result:cmpType
-                                     operands:@[ [XTIROperand useWithValueId:src.valueId] ]];
-            if (!cmpOperand)
-                return nil;
+            // Test the value we actually intend to test — which for a `^` is
+            // the extracted recv word above, NOT the aggregate it came out of.
+            // A pointer is null by its whole width on a flat target: narrowing
+            // it to a u16 first read a 64 KB-aligned address as null.
+            return [self emitPointerIsNull:cmpOperand];
             }
         // A float operand: `!f` is `f == 0.0` (bug 181). Compare against a
         // zero-bits constant (0.0 is all-zero IEEE bytes) with FCmp OEQ,

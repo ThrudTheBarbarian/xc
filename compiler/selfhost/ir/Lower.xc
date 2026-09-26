@@ -1833,21 +1833,13 @@ class ClassInfo
                 eops.add((Object*)IROperand.immI((i32)0, String.withCString("U16")));
                 IRValue* recvW = emit(String.withCString("AggExtract"),
                                       ptrTo(String.withCString("Void")), eops);
-                Array* pops = new Array();
-                pops.add((Object*)IROperand.useVal(recvW));
-                IRValue* asInt = emit(String.withCString("PtrToInt"),
-                                      String.withCString("U16"), pops);
-                Array* zo = new Array();
-                zo.add((Object*)IROperand.immI((i32)0, String.withCString("U16")));
-                IRValue* z0 = emit(String.withCString("Const"), String.withCString("U16"), zo);
-                IRInsn* ic = IRInsn.with(String.withCString("ICmp"));
-                ic.setRes(new IRValue(String.withCString("Bool")));
-                ic.setPred(String.withCString("EQ"));
-                ic.add(IROperand.useVal(asInt));
-                ic.add(IROperand.useVal(z0));
-                _blk.add(ic);
-                return ic.res();
+                return cmpPtrZero(recvW);
                 }
+            // A pointer is null by its whole width on a flat target, and by
+            // its address on the banked 6502 (cmpPtrZero). A Const of pointer
+            // type is not used for the null: the arm64 back end mis-sizes it.
+            if (isPtrIr(v.ty()))
+                return cmpPtrZero(v);
             // A float operand: `!f` is `f == 0.0` (bug 181). FCmp OEQ against a
             // zero-bits const, exactly as the binary `f == 0` path does — an
             // ICmp on a float register is bad codegen (cmp s8, #0).

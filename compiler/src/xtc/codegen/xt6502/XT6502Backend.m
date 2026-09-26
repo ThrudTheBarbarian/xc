@@ -505,6 +505,85 @@ typedef NS_ENUM(uint8_t, XT6502KnownAddrKind) {
     return out;
 }
 
+// For each value that is an address formed from another value's storage,
+// the values whose storage it points into: AddrOf %v gives {v}, and FieldAddr,
+// ElementAddr, Bitcast, Copy, Select and Phi inherit their operands' roots
+// (a fixpoint, since a Phi can name a later definition).
+//
+// A root is dropped when any address derived from it is used other than to
+// load or store through it, form another such address or compare it: passed
+// to a call, stored as a value, registered as a weak slot, converted to an
+// integer. Its storage is then shared with code that may change it during a
+// call, and restoring the caller's copy afterwards would undo that.
++ (BOOL)opcodeDerivesAddress:(XTIROpcode)op {
+    switch (op) {
+        case XTIROpFieldAddr: case XTIROpElementAddr:
+        case XTIROpBitcast: case XTIROpCopy:
+        case XTIROpSelect: case XTIROpPhi:
+            return YES;
+        default:
+            return NO;
+    }
+}
+
++ (NSDictionary<NSNumber *, NSSet<NSNumber *> *> *)addressRootsForFunction:(XTIRFunction *)fn {
+    NSMutableDictionary<NSNumber *, NSMutableSet<NSNumber *> *> *roots =
+        [NSMutableDictionary dictionary];
+    NSMutableArray<XTIRInsn *> *all = [NSMutableArray array];
+    for (XTIRBlock *b in fn.blocks) {
+        [all addObjectsFromArray:b.phiNodes];
+        [all addObjectsFromArray:b.instructions];
+        if (b.terminator) [all addObject:b.terminator];
+    }
+    BOOL changed = YES;
+    while (changed) {
+        changed = NO;
+        for (XTIRInsn *insn in all) {
+            if (!insn.result) continue;
+            BOOL isAddrOf = (insn.opcode == XTIROpAddrOf);
+            if (!isAddrOf && ![self opcodeDerivesAddress:insn.opcode]) continue;
+            NSNumber *key = @(insn.result.valueId);
+            NSMutableSet<NSNumber *> *mine = roots[key];
+            for (XTIROperand *op in insn.operands) {
+                if (op.kind != XTIROperandKindUse) continue;
+                NSMutableSet<NSNumber *> *add = [NSMutableSet set];
+                if (isAddrOf) [add addObject:@(op.valueId)];
+                NSSet<NSNumber *> *inherited = roots[@(op.valueId)];
+                if (inherited) [add unionSet:inherited];
+                if (add.count == 0) continue;
+                if (!mine) { mine = [NSMutableSet set]; roots[key] = mine; }
+                if (![add isSubsetOfSet:mine]) { [mine unionSet:add]; changed = YES; }
+            }
+        }
+    }
+    NSMutableSet<NSNumber *> *escaped = [NSMutableSet set];
+    for (XTIRInsn *insn in all) {
+        BOOL derives = (insn.opcode == XTIROpAddrOf
+                        || [self opcodeDerivesAddress:insn.opcode]
+                        || insn.opcode == XTIROpICmp);
+        NSUInteger i = 0;
+        for (XTIROperand *op in insn.operands) {
+            NSUInteger idx = i++;
+            if (op.kind != XTIROperandKindUse) continue;
+            NSSet<NSNumber *> *r = roots[@(op.valueId)];
+            if (!r) continue;
+            BOOL through = (idx == 0
+                            && (insn.opcode == XTIROpLoad || insn.opcode == XTIROpStore
+                                || insn.opcode == XTIROpLoadVolatile
+                                || insn.opcode == XTIROpStoreVolatile));
+            if (!derives && !through) [escaped unionSet:r];
+        }
+    }
+    if (escaped.count == 0) return roots;
+    NSMutableDictionary<NSNumber *, NSSet<NSNumber *> *> *kept = [NSMutableDictionary dictionary];
+    for (NSNumber *k in roots) {
+        NSMutableSet<NSNumber *> *r = [roots[k] mutableCopy];
+        [r minusSet:escaped];
+        if (r.count > 0) kept[k] = r;
+    }
+    return kept;
+}
+
 // Compute, per call instruction, the ZP bytes that must be preserved
 // across it = the values LIVE immediately after the call (defined
 // before, used after), intersected with the ZP allocation, minus the
@@ -518,6 +597,13 @@ typedef NS_ENUM(uint8_t, XT6502KnownAddrKind) {
 // That over-approximates a value's live range (it may look live out of
 // predecessors it isn't really defined on), which only ever saves a few
 // extra slots — never fewer — so it can't reintroduce a clobber.
+//
+// An address-taken value (a by-value struct param, a pinned local) is read
+// through pointers derived from its AddrOf, so its own SSA uses can end at
+// the AddrOf while a FieldAddr of it is still read after the call. Its ZP
+// home sits in the pool every function shares, so a callee reuses it. A
+// live value therefore also keeps alive the values its address derives
+// from (see addressRootsForFunction:).
 + (void)computeCallerSaveSetsForCtx:(XT6502FnCtx *)ctx {
     XTIRFunction *fn = ctx.fn;
     ctx.callSaveSets = [NSMutableDictionary dictionary];
@@ -583,6 +669,9 @@ typedef NS_ENUM(uint8_t, XT6502KnownAddrKind) {
         }
     }
 
+    NSDictionary<NSNumber *, NSSet<NSNumber *> *> *roots =
+        [self addressRootsForFunction:fn];
+
     // Per-block backward walk: seed `live` with liveOut(B), step back
     // through terminator + instructions, and at each call record the
     // live-after set (= `live` at that point) as its save set.
@@ -597,7 +686,12 @@ typedef NS_ENUM(uint8_t, XT6502KnownAddrKind) {
                            || insn.opcode == XTIROpVTblDispatch);
             if (isCall) {
                 NSInteger rvid = insn.result ? (NSInteger)insn.result.valueId : -1;
-                NSArray<NSNumber *> *bytes = [self zpBytesForLive:live
+                NSMutableSet<NSNumber *> *held = [live mutableCopy];
+                for (NSNumber *v in live) {
+                    NSSet<NSNumber *> *r = roots[v];
+                    if (r) [held unionSet:r];
+                }
+                NSArray<NSNumber *> *bytes = [self zpBytesForLive:held
                                                         exceptVid:rvid
                                                               ctx:ctx];
                 if (bytes.count > 0) {
