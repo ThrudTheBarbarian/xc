@@ -361,13 +361,19 @@
     // `#package browser` died at instantiation with "Import #8 browser: module
     // is not an object or function" until the caller re-supplied it by hand.
     // env is the one entry that must be the DEP's thunked version.
+    // A library that subclasses another library's class imports that
+    // library's methods (into its own table slots) and __addr_ getters (for
+    // its vtable words). A dep already instantiated is passed as its real
+    // exports, so those table slots hold its wasm functions directly.
     const dimp = Object.assign({}, imports, { env: denv });
-    for (const o of deps) if (o !== d) dimp[o] = imports[o];
+    for (const o of deps) if (o !== d) dimp[o] = depExports[o] || imports[o];
     const di = await WebAssembly.instantiate(dbytes, dimp);
     depExports[d] = di.instance.exports;
-    di.instance.exports.__wasm_apply_relocs();
     dcur = dbase + dmeta.dataSize;
   }
+  // Relocate after every dep exists: a library's vtable words can name
+  // another library's data, read through that library's __addr_ getter.
+  for (const d of deps) depExports[d].__wasm_apply_relocs();
   if (deps.length) instance.exports.__stack_low.value = (dcur + 15) & ~15;
   const rc = instance.exports.main();
   flush();
