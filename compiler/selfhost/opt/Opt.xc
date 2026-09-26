@@ -5989,6 +5989,7 @@ class OptProfile
         IROperand* entryMem = IROperand.useVal((IRValue*)fn.params().get(pc - (u32)1));
         IRBlock* oldEntry = (IRBlock*)fn.blocks().get((u32)0);
 
+        Map* defOf = defMapAll(fn);
         Array* reps = new Array(); // one guard index per class
         Array* seen = new Array();
         for (u32 i = (u32)0; i < _sgGuards.count(); i = i + (u32)1)
@@ -5998,6 +5999,8 @@ class OptProfile
                 continue;
             // bug 059: only relocate an initialiser that cannot tell it moved.
             if (!initIsHoistable(m, sym))
+                continue;
+            if (!runIsCloneable(i, defOf))
                 continue;
             seen.add((Object*)sym);
             reps.add((Object*)Number.with(i));
@@ -6011,7 +6014,7 @@ class OptProfile
         for (u32 r = (u32)0; r < reps.count(); r = r + (u32)1)
             {
             u32 idx = ((Number*)reps.get(r)).asU32();
-            buildHoistedGuard(fn, idx, entryMem, newBlocks, checks, merges);
+            buildHoistedGuard(fn, idx, entryMem, defOf, newBlocks, checks, merges);
             }
 
         // mrg_i branches to chk_{i+1}; the last one to the old entry.
@@ -6027,7 +6030,65 @@ class OptProfile
         fn.blocks().insertAll((u32)0, newBlocks);
         }
 
-    void buildHoistedGuard(IRFunc* fn, u32 idx, IROperand* entryMem,
+    // ── Can the init block be cloned to the function entry? ─────────────────
+    //
+    // The clone runs ahead of every block the function had, so it may use only
+    // what it defines itself, the flag pointer and memory token the check block
+    // rebuilds, and the function's parameters. The cross-block CSE that runs
+    // earlier can leave the init block reading a value defined in the guard
+    // block: an `AddrOf @__sdata_X` shared with code after the guard. An address
+    // or a constant is rebuilt in the clone; anything else defined outside the
+    // block cannot be, and that guard is not hoisted. Cloned verbatim, the use
+    // read a register nothing had set yet, and the init wrote through it the
+    // first time the flag was clear on entry: a library's `Number.with` called
+    // from a client, whose own guard sets the client's flag and not the
+    // library's (private:docs/bugs/270).
+    bool isRematerialisable(IRInsn* def)
+        {
+        if (!def.op().equals(String.withCString("AddrOf"))
+            && !def.op().equals(String.withCString("Const")))
+            return false;
+        if (def.res() == 0 || def.memRes() != 0)
+            return false;
+        for (u32 k = (u32)0; k < def.ops().count(); k = k + (u32)1)
+            if (((IROperand*)def.ops().get(k)).kind() == (u8)OPK_USE)
+                return false;
+        return true;
+        }
+
+    bool runIsCloneable(u32 idx, Map* defOf)
+        {
+        IRInsn* addr = (IRInsn*)_sgAddrs.get(idx);
+        IRInsn* load = (IRInsn*)_sgLoads.get(idx);
+        IRBlock* run = (IRBlock*)_sgRuns.get(idx);
+        Map* defined = new Map();
+        defined.set((Hashable*)addr.res(), (Object*)addr);
+        if (load.memRes() != 0)
+            defined.set((Hashable*)load.memRes(), (Object*)load);
+        for (u32 i = (u32)0; i < run.insns().count(); i = i + (u32)1)
+            {
+            IRInsn* n = (IRInsn*)run.insns().get(i);
+            for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
+                {
+                IROperand* op = (IROperand*)n.ops().get(k);
+                if (op.kind() != (u8)OPK_USE || op.val() == 0)
+                    continue;
+                if (defined.get((Hashable*)op.val()) != 0)
+                    continue;
+                // No def: a parameter, which dominates the clone.
+                IRInsn* def = (IRInsn*)defOf.get((Hashable*)op.val());
+                if (def != 0 && !isRematerialisable(def))
+                    return false;
+                }
+            if (n.res() != 0)
+                defined.set((Hashable*)n.res(), (Object*)n);
+            if (n.memRes() != 0)
+                defined.set((Hashable*)n.memRes(), (Object*)n);
+            }
+        return true;
+        }
+
+    void buildHoistedGuard(IRFunc* fn, u32 idx, IROperand* entryMem, Map* defOf,
                            Array* newBlocks, Array* checks, Array* merges)
         {
         String* sym = (String*)_sgSyms.get(idx);
@@ -6048,7 +6109,7 @@ class OptProfile
         IRValue* m1 = new IRValue(String.withCString("Mem"));
 
         buildHoistedCheck(C, R, M, addr, load, icmp, const0, entryMem, a, v, m1);
-        cloneInitBlock(run, R, M, addr, load, a, m1);
+        cloneInitBlock(run, R, M, addr, load, a, m1, defOf);
 
         newBlocks.add((Object*)C);
         newBlocks.add((Object*)R);
@@ -6109,14 +6170,38 @@ class OptProfile
     // guard block's AddrOf and threads the guard Load's memory, so both remap
     // onto the clones the check block just built.
     void cloneInitBlock(IRBlock* run, IRBlock* R, IRBlock* M,
-                        IRInsn* addr, IRInsn* load, IRValue* a, IRValue* m1)
+                        IRInsn* addr, IRInsn* load, IRValue* a, IRValue* m1,
+                        Map* defOf)
         {
         Map* map = new Map();
         map.set((Hashable*)addr.res(), (Object*)IROperand.useVal(a));
         if (load.memRes() != 0)
             map.set((Hashable*)load.memRes(), (Object*)IROperand.useVal(m1));
         for (u32 i = (u32)0; i < run.insns().count(); i = i + (u32)1)
-            R.add(cloneWithFreshResults(map, (IRInsn*)run.insns().get(i)));
+            {
+            IRInsn* n = (IRInsn*)run.insns().get(i);
+            // A value from outside the block is rebuilt here, ahead of its
+            // first use (runIsCloneable admitted only those that can be).
+            for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
+                {
+                IROperand* op = (IROperand*)n.ops().get(k);
+                if (op.kind() != (u8)OPK_USE || op.val() == 0)
+                    continue;
+                if (map.get((Hashable*)op.val()) != 0)
+                    continue;
+                IRInsn* def = (IRInsn*)defOf.get((Hashable*)op.val());
+                if (def == 0)
+                    continue;
+                IRValue* rv = new IRValue(def.res().ty());
+                IRInsn* re = IRInsn.with(def.op());
+                re.setRes(rv);
+                for (u32 j = (u32)0; j < def.ops().count(); j = j + (u32)1)
+                    re.add((IROperand*)def.ops().get(j));
+                R.add(re);
+                map.set((Hashable*)op.val(), (Object*)IROperand.useVal(rv));
+                }
+            R.add(cloneWithFreshResults(map, n));
+            }
         IRInsn* rbr = IRInsn.with(String.withCString("Branch"));
         rbr.add(IROperand.block(M));
         R.setTerm(rbr);

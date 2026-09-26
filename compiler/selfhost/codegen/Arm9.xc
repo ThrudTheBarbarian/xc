@@ -484,6 +484,12 @@ class Arm9
             IRSymbol* s = (IRSymbol*)_m.syms().get(i);
             if (s.kind() != (u8)SYM_VTABLE)
                 continue;
+            // An imported class's vtable lives in its library. A copy here
+            // would sit at a different address and break RTTI identity, which
+            // compares vtable addresses; the reference resolves to the one
+            // exported table through the loader.
+            if (s.isExtern())
+                continue;
             if (!emitted)
                 {
                 _out.appendCString("\n\t.data\n");
