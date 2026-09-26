@@ -1319,16 +1319,18 @@ class X86_64
         loadF((IROperand*)n.ops().get(swap ? (u32)1 : (u32)0), String.withCString("xmm0"));
         loadF((IROperand*)n.ops().get(swap ? (u32)0 : (u32)1), String.withCString("xmm1"));
         _out.appendFormat("\tucomi%s\txmm0, xmm1\n", d ? "sd" : "ss");
-        String* cc;
+        // An unordered compare (a NaN operand) sets ZF, PF and CF together,
+        // so ZF alone reads as "equal". == also needs PF clear, and != is
+        // true when PF is set (bug 526). seta/setae already need CF clear.
         if (p != (String*)0 && p.equals(String.withCString("OEQ")))
-            cc = String.withCString("sete");
+            _out.appendCString("\tsete\tal\n\tsetnp\tcl\n\tand\tal, cl\n");
         else if (p != (String*)0 && p.equals(String.withCString("ONE")))
-            cc = String.withCString("setne");
+            _out.appendCString("\tsetne\tal\n\tsetp\tcl\n\tor\tal, cl\n");
         else if (p != (String*)0 && (p.equals(String.withCString("OGE")) || p.equals(String.withCString("OLE"))))
-            cc = String.withCString("setae");
+            _out.appendCString("\tsetae\tal\n");
         else
-            cc = String.withCString("seta");
-        _out.appendFormat("\t%s\tal\n\tmovzx\teax, al\n", cc.cString());
+            _out.appendCString("\tseta\tal\n");
+        _out.appendCString("\tmovzx\teax, al\n");
         store((u8)'a', n.res());
         }
 

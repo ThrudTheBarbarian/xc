@@ -3816,10 +3816,16 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         [self loadF:ops[swap ? 1 : 0] into:@"xmm0" fn:fn slot:slot out:out];
         [self loadF:ops[swap ? 0 : 1] into:@"xmm1" fn:fn slot:slot out:out];
         [out appendFormat:@"\tucomi%@\txmm0, xmm1\n", d ? @"sd" : @"ss"];
-        NSString* cc = (p == XTIRFCmpOEQ) ? @"sete" : (p == XTIRFCmpONE)                   ? @"setne"
-                                                  : (p == XTIRFCmpOGE || p == XTIRFCmpOLE) ? @"setae"
-                                                                                           : @"seta";
-        [out appendFormat:@"\t%@\tal\n\tmovzx\teax, al\n", cc];
+        // An unordered compare (a NaN operand) sets ZF, PF and CF together,
+        // so ZF alone reads as "equal". == also needs PF clear, and != is
+        // true when PF is set (bug 526). seta/setae already need CF clear.
+        if (p == XTIRFCmpOEQ)
+            [out appendString:@"\tsete\tal\n\tsetnp\tcl\n\tand\tal, cl\n"];
+        else if (p == XTIRFCmpONE)
+            [out appendString:@"\tsetne\tal\n\tsetp\tcl\n\tor\tal, cl\n"];
+        else
+            [out appendFormat:@"\t%@\tal\n", (p == XTIRFCmpOGE || p == XTIRFCmpOLE) ? @"setae" : @"seta"];
+        [out appendString:@"\tmovzx\teax, al\n"];
         [self store:'a' into:res slot:slot out:out];
         return;
         }

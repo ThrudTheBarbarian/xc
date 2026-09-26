@@ -138,6 +138,7 @@ static uint32_t D[8];
 static uint32_t A[8];      /* A[7] = active stack pointer        */
 static double FP[8];       /* 68881/68882 FP registers (host f64) */
 static int fpcc_n, fpcc_z; /* FPU condition: N (less), Z (equal)  */
+static int fpcc_nan;        /* FPU condition: NAN (unordered)       */
 static uint32_t PC;
 static int flag_c, flag_v, flag_z, flag_n, flag_x;
 static int flag_s = 1; /* supervisor (programs start super-ish)*/
@@ -523,7 +524,9 @@ static void fpu_write(EA* e, int fmt, double val)
         store32(a, (uint32_t)(int32_t)val); /* Long: truncate */
     }
 
-/* IEEE FP conditional predicate → truth, from the FPCC (N=less, Z=equal). */
+/* IEEE FP conditional predicate → truth, from the FPCC (N=less, Z=equal,
+ * NAN=unordered). An unordered compare is false for every predicate but NE,
+ * as on the 68881. */
 static int fpu_cond(int pred)
     {
     switch (pred)
@@ -537,9 +540,9 @@ static int fpu_cond(int pred)
     case 0x0E:
         return !fpcc_z; /* NE */
     case 0x12:
-        return !fpcc_n && !fpcc_z; /* GT */
+        return !fpcc_n && !fpcc_z && !fpcc_nan; /* GT */
     case 0x13:
-        return !fpcc_n; /* GE */
+        return fpcc_z || (!fpcc_n && !fpcc_nan); /* GE */
     case 0x14:
         return fpcc_n && !fpcc_z; /* LT */
     case 0x15:
@@ -655,10 +658,12 @@ static int fpu_step(uint16_t op)
         case 0x38: /* FCMP: FPn - src */
             fpcc_z = (FP[fpn] == src);
             fpcc_n = (FP[fpn] < src);
+            fpcc_nan = (FP[fpn] != FP[fpn]) || (src != src);
             break;
         case 0x3A: /* FTST: test src */
             fpcc_z = (src == 0);
             fpcc_n = (src < 0);
+            fpcc_nan = (src != src);
             break;
         default:
             fprintf(stderr, "sim68k: unimplemented FPU opmode $%02X at $%06X\n", opmode, PC);

@@ -3075,6 +3075,15 @@ static NSString* m68kSym(NSString* name)
         else
             {
             // soft compare returns d0 = sign(a-b) in {-1,0,1}; map predicate.
+            // An unordered pair (a NaN) returns 1, as libgcc's does, which
+            // reads as "greater". So > and >= swap their operands and test
+            // < and <= instead, which are false on 1 (bug 526).
+            if (insn.predicate == XTIRFCmpOGT || insn.predicate == XTIRFCmpOGE)
+                {
+                int t = o0;
+                o0 = o1;
+                o1 = t;
+                }
             if (dbl)
                 {
                 [out appendFormat:@"\tmove.l\t%d(a6),-(sp)\n\tmove.l\t%d(a6),-(sp)\n", o1 + 4, o1];
@@ -3086,7 +3095,7 @@ static NSString* m68kSym(NSString* name)
                 [out appendFormat:@"\tmove.l\t%d(a6),d0\n\tmove.l\t%d(a6),d1\n\tjsr\t__cmpsf2\n", o0, o1];
                 }
             // d0 <=> 0; set d2 = (d0 <pred> 0)
-            NSArray* icc = @[ @"eq", @"ne", @"lt", @"gt", @"le", @"ge" ];
+            NSArray* icc = @[ @"eq", @"ne", @"lt", @"lt", @"le", @"le" ];
             NSString* cc = insn.predicate < icc.count ? icc[insn.predicate] : @"eq";
             [out appendFormat:@"\tmoveq\t#0,d2\n\ttst.l\td0\n\ts%@\td2\n\tand.l\t#1,d2\n", cc];
             }
