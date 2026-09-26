@@ -1,0 +1,16 @@
+static Point, dynamic Point3D: Point3D
+Point: Point
+a String: String
+Plain: Plain
+made Point3D x=3 y=4 z=5
+made Point3D x=3 y=4 z=5
+made Point3D x=3 y=4 z=5
+live after the loop: 1
+OnlyArgs: OnlyArgs
+OnlyArgs.v=0
+Nope: null
+empty name: null
+null name: null
+prefix of a name: null
+String by name: String
+Object by name: Object
