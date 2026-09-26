@@ -5,7 +5,7 @@
 // dereferenced in xc. Both compilers must accept it and agree byte-for-byte.
 // (An opaque LOCAL `iop* p;` stays unsupported — ambiguous with a multiply —
 // so every opaque value here is a field, a parameter, a return, or a cast.)
-i32 printf(u8* fmt, ...);
+#import "Stdio.xc"
 
 struct Handle { i32 tag; iop* raw; }
 
@@ -19,6 +19,6 @@ i32 main(void) {
     // a sentinel address carried through param/return/cast into an opaque field
     put(&h, wrap((iop*)0x1234));
     // read it back out and prove the handle round-trips unchanged
-    printf("%d %d\n", tag_of(&h), (i32)((u32)h.raw));
+    Stdio.printf("%d %d\n", tag_of(&h), (i32)((u32)h.raw));
     return 0;
 }
