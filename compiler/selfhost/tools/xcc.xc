@@ -1088,7 +1088,11 @@ void appendWasmCustomSection(Data* mod, String* name, String* payload)
 // recomputed here: `;; xtc-lib data=<N> table=<M>`. Recomputing would be a
 // second implementation of the layout, free to disagree with the one that
 // actually laid it out.
-String* wasmLibSidecar(String* wat)
+//
+// `deps` names the libraries this one imports, so the loader can load the
+// ones an app does not import itself and set each library up before the
+// libraries that import it.
+String* wasmLibSidecar(String* wat, Array* deps)
 {
     u32 dataSize = (u32)0;
     u32 tableSize = (u32)0;
@@ -1101,8 +1105,44 @@ String* wasmLibSidecar(String* wat)
         break;
     }
     String* j = new String();
-    j.appendFormat("{\"dataSize\": %lu, \"tableSize\": %lu}\n", dataSize, tableSize);
+    j.appendFormat("{\"dataSize\": %lu, \"tableSize\": %lu, \"deps\": ", dataSize, tableSize);
+    j.append(wasmDepList(deps));
+    j.appendCString("}\n");
     return j;
+}
+
+// The wasm libraries `#import <X>` resolved to, by bare name (lib<X>.wasm ->
+// X), each once, in import order.
+Array* wasmDepNames(FeOptions* fe)
+{
+    Array* names = new Array();
+    Array* nl = fe.neededLibs();
+    for (u32 i = (u32)0; nl != (Array*)0 && i < nl.count(); i = i + (u32)1) {
+        String* lp = (String*)nl.get(i);
+        if (!lp.hasSuffix(String.withCString(".wasm"))) continue;
+        String* fn = baseNameOf(lp);
+        if (!fn.hasPrefix(String.withCString("lib"))) continue;
+        String* nm = fn.substringBytes((u32)3, fn.byteLength() - (u32)3 - (u32)5);
+        bool seen = false;
+        for (u32 k = (u32)0; k < names.count(); k = k + (u32)1)
+            if (((String*)names.get(k)).equals(nm)) seen = true;
+        if (!seen) names.add((Object*)nm);
+    }
+    return names;
+}
+
+// `["A", "B"]`, the form both the loader's __DEPS__ and the sidecar use.
+String* wasmDepList(Array* names)
+{
+    String* s = String.withCString("[");
+    for (u32 i = (u32)0; i < names.count(); i = i + (u32)1) {
+        if (i > (u32)0) s.appendCString(", ");
+        s.appendCString("\"");
+        s.append((String*)names.get(i));
+        s.appendCString("\"");
+    }
+    s.appendCString("]");
+    return s;
 }
 
 u32 uintAfter(String* s, String* key)
@@ -1180,9 +1220,10 @@ void emitWasm(DriverOptions* d, IRModule* mod)
     //   * the interface, embedded as a `xtc.iface` CUSTOM section — the wasm
     //     analogue of the ELF `.xtc.iface`, so `#import <X>` reads the types
     //     out of the binary itself rather than a side file that can go missing.
-    //   * lib<Name>.json, the placement sidecar {dataSize, tableSize}, which
-    //     the loader needs BEFORE instantiating to know where to put the
-    //     library's statics and how far to grow the table.
+    //   * lib<Name>.json, the placement sidecar {dataSize, tableSize, deps},
+    //     which the loader needs BEFORE instantiating to know where to put the
+    //     library's statics, how far to grow the table, and which libraries
+    //     must be loaded and set up before this one.
     if (d.emitLib()) {
         String* lbase = out;
         if (lbase.hasSuffix(String.withCString(".wasm")))
@@ -1203,7 +1244,7 @@ void emitWasm(DriverOptions* d, IRModule* mod)
             Process.exit((i32)1); return;
         }
         String* jpath = String.withString(lbase); jpath.appendCString(".json");
-        if (!Files.writeText(jpath, wasmLibSidecar(wat))) {
+        if (!Files.writeText(jpath, wasmLibSidecar(wat, wasmDepNames(d.fe())))) {
             Stdio.printf("xcc: error: cannot write '%s'\n", jpath.cString());
             Process.exit((i32)1); return;
         }
@@ -1236,23 +1277,7 @@ void emitWasm(DriverOptions* d, IRModule* mod)
     // its imports. Empty here meant the app instantiated with no library at
     // all and died on `missing host import env.Greeter$init` — the imports were
     // in the module, and nothing supplied them.
-    String* deps = String.withCString("[");
-    Array* nl = d.fe().neededLibs();
-    bool dfirst = true;
-    for (u32 i = (u32)0; nl != (Array*)0 && i < nl.count(); i = i + (u32)1) {
-        String* lp = (String*)nl.get(i);
-        if (!lp.hasSuffix(String.withCString(".wasm"))) continue;
-        String* fn = baseNameOf(lp);
-        if (!fn.hasPrefix(String.withCString("lib"))) continue;
-        String* nm = fn.substringBytes((u32)3, fn.byteLength() - (u32)3 - (u32)5);
-        if (!dfirst) deps.appendCString(", ");
-        dfirst = false;
-        deps.appendCString("\"");
-        deps.append(nm);
-        deps.appendCString("\"");
-    }
-    deps.appendCString("]");
-    js = js.replacing(String.withCString("__DEPS__"), deps);
+    js = js.replacing(String.withCString("__DEPS__"), wasmDepList(wasmDepNames(d.fe())));
     String* jsPath = String.withString(base);
     jsPath.appendCString(".js");
     if (!Files.writeText(jsPath, js)) {
