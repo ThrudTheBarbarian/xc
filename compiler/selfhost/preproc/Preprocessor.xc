@@ -160,6 +160,9 @@ class IfFrame
         {
         return _errors;
         }
+    // Each warning is "<category>\t<file:line:1: warning: text>". The
+    // category is what `-Wno-<category>` names; it is empty for `#warning`,
+    // which cannot be switched off.
     Array* warnings(void)
         {
         return _warnings;
@@ -228,6 +231,12 @@ class IfFrame
     // when it is not (a synthesised prelude include has no line).
     static String* positioned(String* filename, u32 line, String* msg)
         {
+        return Preprocessor.positionedAs(filename, line, "error", msg);
+        }
+
+    // The same, labelled `kind` ("error" or "warning").
+    static String* positionedAs(String* filename, u32 line, string kind, String* msg)
+        {
         String* out = String.withString(filename);
         if (line != (u32)0)
             {
@@ -235,13 +244,18 @@ class IfFrame
             out.append(String.withU32(line));
             out.appendCString(":1");
             }
-        out.appendCString(": error: ");
+        out.appendCString(": ");
+        out.appendCString(kind);
+        out.appendCString(": ");
         out.append(msg);
         return out;
         }
-    void _warn(String* msg)
+    void _warn(string category, String* msg)
         {
-        _warnings.add((Object*)msg);
+        String* w = String.withCString(category);
+        w.appendByte((u8)9);
+        w.append(msg);
+        _warnings.add((Object*)w);
         }
 
     // ── Entry points ─────────────────────────────────────────────
@@ -262,7 +276,7 @@ class IfFrame
     // everything else becomes a space, so line numbering is untouched — and the
     // pass knows about string and character literals, so a "// not a comment"
     // inside a string survives.
-    String* stripComments(String* src)
+    String* stripComments(String* src, String* filename)
         {
         String* out = String.withCString("");
         out.reserve(src.byteLength());
@@ -297,9 +311,13 @@ class IfFrame
                     if (!warnedNested && c == (u8)'/' && next == (u8)'*')
                         {
                         // Once per comment: a run of them is one mistake.
-                        _warn(String.withCString(
-                            "'/*' within a block comment - comments do not nest, "
-                            "so the first '*/' ends it"));
+                        u32 line = (u32)1;
+                        for (u32 k = (u32)0; k < i; k = k + (u32)1)
+                            if (b[k] == (u8)10)
+                                line = line + (u32)1;
+                        _warn("comment", Preprocessor.positionedAs(filename, line, "warning",
+                            String.withCString("'/*' within a block comment \u2014 comments do not nest, "
+                                               "so the first '*/' ends it")));
                         warnedNested = true;
                         }
                     out.appendByte((c == (u8)10) ? c : (u8)32);
@@ -397,7 +415,7 @@ class IfFrame
             _imported.add((Hashable*)Preprocessor.canonPath(filename));
         _sourceDepth = _sourceDepth + (u32)1;
 
-        String* stripped = stripComments(source);
+        String* stripped = stripComments(source, filename);
 
         // Join continuation lines, remembering each joined line's ORIGINAL
         // number so the emitted #line directives stay truthful.
@@ -1150,14 +1168,22 @@ class IfFrame
             _macros.remove((Hashable*)name);
             return;
             }
+        // #warning and #error carry their location, as every other
+        // diagnostic does, and an empty one names the directive.
         if (Preprocessor._hasCPrefix(content, "warning"))
             {
-            _warn(content.substringFromByte((u32)7).trimmed());
+            String* msg = content.substringFromByte((u32)7).trimmed();
+            if (msg.byteLength() == (u32)0)
+                msg = String.withCString("#warning");
+            _warn("", Preprocessor.positionedAs(filename, lineNumber, "warning", msg));
             return;
             }
         if (Preprocessor._hasCPrefix(content, "error"))
             {
-            _error(content.substringFromByte((u32)5).trimmed());
+            String* msg = content.substringFromByte((u32)5).trimmed();
+            if (msg.byteLength() == (u32)0)
+                msg = String.withCString("#error");
+            _error(Preprocessor.positionedAs(filename, lineNumber, "error", msg));
             return;
             }
         if (Preprocessor._hasCPrefix(content, "ifdef") && (content.byteLength() == (u32)5 || !Preprocessor.isIdentChar(content.byteAt((u32)5))))
@@ -1204,7 +1230,9 @@ class IfFrame
             return;
             }
 
-        _warn(String.withCString("Unknown preprocessor directive"));
+        String* unknown = String.withCString("Unknown preprocessor directive: #");
+        unknown.append(content);
+        _warn("unknown-pragma", Preprocessor.positionedAs(filename, lineNumber, "warning", unknown));
         output.appendByte((u8)10);
         }
 

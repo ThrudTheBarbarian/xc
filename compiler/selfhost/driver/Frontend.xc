@@ -312,6 +312,18 @@ class FeOptions
                   String.withCString(hasAt ? "1" : "0"));
 
         String* source = pp.preprocessFile(o.input());
+        // Preprocessor warnings are "<category>\t<diagnostic>", filtered by
+        // `-Wno-<category>` as the parser's are.
+        for (u32 w = (u32)0; w < pp.warnings().count(); w = w + (u32)1)
+            {
+            String* raw = (String*)pp.warnings().get(w);
+            u32 tab = raw.indexOfByte((u8)9);
+            if (tab == String.notFound())
+                continue;
+            if (tab > (u32)0 && o.warningSuppressed(raw.substringBytes((u32)0, tab)))
+                continue;
+            Frontend.printDiagnostic(raw.substringFromByte(tab + (u32)1));
+            }
         // PREPROCESSOR errors are errors. They were collected and thrown away
         // here — the same shape as bug 077 one stage later — so a missing
         // `#import` produced no message, exit 0 and a binary built without the
@@ -782,14 +794,27 @@ class FeOptions
         String* red = String.withCString("\x1b[1;31m");
         String* green = String.withCString("\x1b[1;32m");
         String* reset = String.withCString("\x1b[0m");
+        String* magenta = String.withCString("\x1b[1;35m");
+        // "<loc>: error: <text>" or "<loc>: warning: <text>".
+        string kind = "error:";
+        String* colour = red;
+        u32 skip = (u32)9;
         u32 ep = msg.byteIndexOf(String.withCString(": error: "));
+        u32 wp = msg.byteIndexOf(String.withCString(": warning: "));
+        if (wp != String.notFound() && (ep == String.notFound() || wp < ep))
+            {
+            ep = wp;
+            kind = "warning:";
+            colour = magenta;
+            skip = (u32)11;
+            }
         if (ep == String.notFound() || ep == (u32)0)
             {
             Stdio.error(Frontend.withNewline(msg));
             return;
             }
         String* loc = msg.substringBytes((u32)0, ep); // file:line:col
-        String* text = msg.substringFromByte(ep + (u32)9);
+        String* text = msg.substringFromByte(ep + skip);
         // Split the location from the right: col, then line, then the path
         // (which may itself contain ':' on Windows).
         u32 c2 = loc.lastIndexOfByte((u8)':');
@@ -814,8 +839,8 @@ class FeOptions
         out.appendByte((u8)':');
         out.append(reset);
         out.appendByte((u8)' ');
-        out.append(red);
-        out.appendCString("error:");
+        out.append(colour);
+        out.appendCString(kind);
         out.append(reset);
         out.appendByte((u8)' ');
         out.append(text);

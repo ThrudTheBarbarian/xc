@@ -621,6 +621,22 @@ xcconly "--emit-lib (m68k, refused)" 1 "has no shared-library format" -q -A m68k
 xcconly "--emit-lib (6502, refused)" 1 "has no shared-library format" -q -A 6502 --emit-lib -o @OUT@ ret.xc
 xcconly "--emit-lib (win64, refused)" 1 "not supported for 'win64'" -q -A win64 --emit-lib -o @OUT@ ret.xc
 
+# ── preprocessor diagnostics: same text, location and filtering ─────────
+# #error/#warning, a nested comment and an unknown directive, each reported at
+# file:line:1 with the source line; -Wno-<category> drops the last two.
+printf '/* a /* b */\n#bogus thing\n#warning careful\n#warning\n#error stop here\nvoid main(void) { }\n' > diag.xc
+diag() {
+    local name=$1; shift
+    "$REF" -H "$ROOT" -q "$@" -o d.ref diag.xc 2>&1 | sed $'s/\x1b\\[[0-9;]*m//g' | grep -v '^xcc' > diag.ref
+    local rr=${PIPESTATUS[0]}
+    "$XC" -H "$ROOT" -q "$@" -o d.xc diag.xc 2>&1 | sed $'s/\x1b\\[[0-9;]*m//g' | grep -v '^xcc' > diag.out
+    local xr=${PIPESTATUS[0]}
+    if [ "$rr" = "$xr" ] && cmp -s diag.ref diag.out && [ -s diag.ref ]; then ok "$name"
+    else bad "$name: exit $rr/$xr; $(diff diag.ref diag.out | head -3 | tr '\n' ' ')"; fi
+}
+diag "preprocessor diagnostics"
+diag "preprocessor diagnostics, -Wno-comment -Wno-unknown-pragma" -Wno-comment -Wno-unknown-pragma
+
 # Signing needs a developer identity; these are covered by the signing tests.
 cover --sign --sign-entitlements --sign-key
 
