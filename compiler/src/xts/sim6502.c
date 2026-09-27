@@ -425,7 +425,11 @@ static mc_val mc_convert(uint8_t dst_t, uint8_t src_t, mc_val v)
     switch (dst_t)
         {
     case MC_T_F32:
-        r.f = (float)mc_as_double(v, src_t);
+        /* An i64 converts straight to float, rounding ONCE. Going through a
+           double rounded twice, and a value with bits below the double's last
+           place could land on the wrong float: (float)(2^60 + 2^36 + 1) gave
+           2^60 (bug 545). Every narrower source is exact in a double. */
+        r.f = (src_t == MC_T_I64) ? (float)v.l : (float)mc_as_double(v, src_t);
         break;
     case MC_T_F64:
         r.d = mc_as_double(v, src_t);

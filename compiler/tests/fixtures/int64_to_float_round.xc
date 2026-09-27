@@ -4,10 +4,8 @@
 // The float must be the nearest to the INTEGER. Going through a double first
 // rounds twice: 2^60 + 2^36 + 1 becomes the double 2^60 + 2^36, a tie, which
 // then goes to the even 2^60 instead of up to 2^60 + 2^37. arm9's
-// __floatdisf folds the dropped bits into a sticky bit to avoid that.
-// xt6502 converts through a double and rounds twice, so this is not shared
-// with it.
-//xtc-flags: target=arm64
+// __floatdisf folds the dropped bits into a sticky bit to avoid that, and
+// xt6502's MECH coprocessor rounds the i64 straight to f32 (bug 545).
 #import "Stdio.xc"
 
 i64    idi(i64 v)    { return v; }
