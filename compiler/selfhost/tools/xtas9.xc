@@ -98,6 +98,7 @@ void main(void)
         // shipped `-A arm9` path (which uses `Elf32.sharedObject`) and this one
         // would have produced different images from the same object.
         Elf32* w = new Elf32();
+        w.setCtorTable(a.ctorTable());
         payload = w.sharedObject(a.bytes(), a.data(), a.symbols(), a.relocations(),
                                  new Array(), (String*)0, new Array());
         if (w.failed() || payload == (Array*)0)
@@ -111,6 +112,7 @@ void main(void)
     else if (!raw)
         {
         Elf32* elf = new Elf32();
+        elf.setCtorTable(a.ctorTable());
         payload = elf.write(a.bytes(), a.data(), a.symbols(), a.relocations());
         }
     Data* d = Data.withCapacity((u32)0);

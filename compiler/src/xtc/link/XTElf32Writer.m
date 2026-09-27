@@ -62,6 +62,8 @@ enum
     DT_REL_T = 17,
     DT_RELSZ_T = 18,
     DT_RELENT_T = 19,
+    DT_INIT_ARRAY_T = 25,
+    DT_INIT_ARRAYSZ_T = 27,
     ELF32_PAGE = 0x1000,
     VENEER_SZ = 8,
     };
@@ -132,8 +134,18 @@ static void patchWord(NSMutableData* sec, uint32_t at, uint32_t value, BOOL keep
                   symbols:(NSArray<XAArm32Symbol*>*)symbols
               relocations:(NSArray<XAArm32Reloc*>*)relocations
     {
+    return [self objectFromText:text data:data ctors:nil symbols:symbols relocations:relocations];
+    }
+
++ (NSData*)objectFromText:(NSData*)text
+                     data:(NSData*)data
+                    ctors:(nullable NSData*)ctors
+                  symbols:(NSArray<XAArm32Symbol*>*)symbols
+              relocations:(NSArray<XAArm32Reloc*>*)relocations
+    {
     text = text ?: [NSData data];
     data = data ?: [NSData data];
+    ctors = ctors ?: [NSData data];
 
     // An UNDEFINED symbol is global by definition: it is a reference the linker
     // has to satisfy from another object, and a local one it would simply refuse
@@ -144,10 +156,14 @@ static void patchWord(NSMutableData* sec, uint32_t at, uint32_t value, BOOL keep
             s.isGlobal = YES;
 
     // The ELF symbol table requires locals first, and `sh_info` on .symtab is
-    // the index of the first global.
+    // the index of the first global. The SECTION symbols a section-relative
+    // relocation names (`$sec<N>` in the assembler) lead the locals.
     NSMutableArray<XAArm32Symbol*>* ordered = [NSMutableArray array];
     for (XAArm32Symbol* s in symbols)
-        if (!s.isGlobal)
+        if (!s.isGlobal && [s.name hasPrefix:@"$sec"])
+            [ordered addObject:s];
+    for (XAArm32Symbol* s in symbols)
+        if (!s.isGlobal && ![s.name hasPrefix:@"$sec"])
             [ordered addObject:s];
     uint32_t firstGlobal = (uint32_t)ordered.count + 1; // +1 for the null entry
     for (XAArm32Symbol* s in symbols)
@@ -156,8 +172,12 @@ static void patchWord(NSMutableData* sec, uint32_t at, uint32_t value, BOOL keep
 
     NSMutableArray<XAArm32Reloc*>* textRel = [NSMutableArray array];
     NSMutableArray<XAArm32Reloc*>* dataRel = [NSMutableArray array];
+    NSMutableArray<XAArm32Reloc*>* ctorRel = [NSMutableArray array];
     for (XAArm32Reloc* r in relocations)
-        [(r.section == 1 ? textRel : dataRel) addObject:r];
+        [(r.section == 1 ? textRel : r.section == 4 ? ctorRel : dataRel) addObject:r];
+    // The constructor table and its relocations are sections only when there
+    // is one, so an object without constructors is laid out as it always was.
+    BOOL hasCtors = ctors.length > 0;
 
     // ── The string table. Names are stored once, NUL-separated, and referred
     // to by byte offset; index 0 is the empty string a nameless entry points at.
@@ -168,7 +188,7 @@ static void patchWord(NSMutableData* sec, uint32_t at, uint32_t value, BOOL keep
     for (NSUInteger i = 0; i < ordered.count; i++)
         {
         NSString* n = ordered[i].name;
-        if (n.length && !strOff[n])
+        if (n.length && !strOff[n] && ![n hasPrefix:@"$sec"])
             {
             strOff[n] = @(strtab.length);
             [strtab appendData:[n dataUsingEncoding:NSUTF8StringEncoding]];
@@ -182,10 +202,14 @@ static void patchWord(NSMutableData* sec, uint32_t at, uint32_t value, BOOL keep
     // below are computed rather than fixed.
     NSMutableArray<NSString*>* shNames =
         [@[ @"", @".text", @".data", @".bss" ] mutableCopy];
+    if (hasCtors)
+        [shNames addObject:@".init_array"];
     if (textRel.count)
         [shNames addObject:@".rel.text"];
     if (dataRel.count)
         [shNames addObject:@".rel.data"];
+    if (hasCtors && ctorRel.count)
+        [shNames addObject:@".rel.init_array"];
     [shNames addObjectsFromArray:@[ @".symtab", @".strtab", @".shstrtab" ]];
 
     NSMutableData* shstr = [NSMutableData data];
@@ -206,10 +230,14 @@ static void patchWord(NSMutableData* sec, uint32_t at, uint32_t value, BOOL keep
     off = align4(off + (uint32_t)text.length);
     uint32_t dataOff = off;
     off = align4(off + (uint32_t)data.length);
+    uint32_t ctorOff = off;
+    off = align4(off + (uint32_t)ctors.length);
     uint32_t textRelOff = off;
     off = align4(off + (uint32_t)textRel.count * ELF32_REL_SZ);
     uint32_t dataRelOff = off;
     off = align4(off + (uint32_t)dataRel.count * ELF32_REL_SZ);
+    uint32_t ctorRelOff = off;
+    off = align4(off + (uint32_t)(hasCtors ? ctorRel.count : 0) * ELF32_REL_SZ);
     uint32_t symOff = off;
     off = align4(off + ((uint32_t)ordered.count + 1) * ELF32_SYM_SZ);
     uint32_t strTabOff = off;
@@ -221,11 +249,16 @@ static void patchWord(NSMutableData* sec, uint32_t at, uint32_t value, BOOL keep
     // Section indices, in the order the headers are written.
     uint32_t idx = 1;
     uint32_t textIdx = idx++, dataIdx = idx++, bssIdx = idx++;
+    uint32_t ctorIdx = 0;
+    if (hasCtors)
+        ctorIdx = idx++;
     uint32_t textRelIdx = 0, dataRelIdx = 0;
     if (textRel.count)
         textRelIdx = idx++;
     if (dataRel.count)
         dataRelIdx = idx++;
+    if (hasCtors && ctorRel.count)
+        idx++;
     uint32_t symIdx = idx++, strIdx = idx++, shstrIdx = idx++;
     uint32_t shCount = idx;
     (void)bssIdx;
@@ -275,10 +308,15 @@ static void patchWord(NSMutableData* sec, uint32_t at, uint32_t value, BOOL keep
     [out appendData:text];
     pad(dataOff);
     [out appendData:data];
+    pad(ctorOff);
+    [out appendData:ctors];
     pad(textRelOff);
     writeRel(textRel);
     pad(dataRelOff);
     writeRel(dataRel);
+    pad(ctorRelOff);
+    if (hasCtors)
+        writeRel(ctorRel);
 
     pad(symOff);
     e32(out, 0);
@@ -294,8 +332,21 @@ static void patchWord(NSMutableData* sec, uint32_t at, uint32_t value, BOOL keep
             shndx = dataIdx;
         else if (s.section == 3)
             shndx = SHN_COMMON;
+        else if (s.section == 4)
+            shndx = ctorIdx;
         uint32_t bind = s.isGlobal ? STB_GLOBAL : STB_LOCAL;
         uint32_t type = s.isFunction ? STT_FUNC : STT_NOTYPE;
+        if (!s.isGlobal && [s.name hasPrefix:@"$sec"])
+            {
+            // A section symbol: no name, the section's start.
+            e32(out, 0);
+            e32(out, 0);
+            e32(out, 0);
+            e8(out, (uint8_t)((STB_LOCAL << 4) | 3 /*STT_SECTION*/));
+            e8(out, 0);
+            e16(out, (uint16_t)shndx);
+            continue;
+            }
         if (s.section == 3)
             {
             // COMMON: the value is the ALIGNMENT and the size the storage, which
@@ -342,12 +393,18 @@ static void patchWord(NSMutableData* sec, uint32_t at, uint32_t value, BOOL keep
          (uint32_t)data.length, 0, 0, 4);
     shdr(@".bss", SHT_NOBITS, SHF_ALLOC | SHF_WRITE,
          dataOff + (uint32_t)data.length, 0, 0, 0, 4);
+    if (hasCtors)
+        shdr(@".init_array", 14 /*SHT_INIT_ARRAY*/, SHF_ALLOC | SHF_WRITE, ctorOff,
+             (uint32_t)ctors.length, 0, 0, 4);
     if (textRel.count)
         shdr(@".rel.text", SHT_REL, 0, textRelOff,
              (uint32_t)textRel.count * ELF32_REL_SZ, symIdx, textIdx, 4);
     if (dataRel.count)
         shdr(@".rel.data", SHT_REL, 0, dataRelOff,
              (uint32_t)dataRel.count * ELF32_REL_SZ, symIdx, dataIdx, 4);
+    if (hasCtors && ctorRel.count)
+        shdr(@".rel.init_array", SHT_REL, 0, ctorRelOff,
+             (uint32_t)ctorRel.count * ELF32_REL_SZ, symIdx, ctorIdx, 4);
     shdr(@".symtab", SHT_SYMTAB, 0, symOff,
          ((uint32_t)ordered.count + 1) * ELF32_SYM_SZ, strIdx, firstGlobal, 4);
     shdr(@".strtab", SHT_STRTAB, 0, strTabOff, (uint32_t)strtab.length, 0, 0, 1);
@@ -441,8 +498,67 @@ static void patchWord(NSMutableData* sec, uint32_t at, uint32_t value, BOOL keep
                                    iface:(NSData*)iface
                                    error:(NSError**)error
     {
+    return [self sharedObjectFromText:textIn
+                                 data:dataIn
+                                ctors:nil
+                              symbols:syms
+                          relocations:relocs
+                               needed:needed
+                               soname:soname
+                                iface:iface
+                                error:error];
+    }
+
++ (nullable NSData*)sharedObjectFromText:(NSData*)textIn
+                                    data:(NSData*)dataIn
+                                   ctors:(nullable NSData*)ctors
+                                 symbols:(NSArray<XAArm32Symbol*>*)syms
+                             relocations:(NSArray<XAArm32Reloc*>*)relocs
+                                  needed:(NSArray<NSString*>*)needed
+                                  soname:(NSString*)soname
+                                   iface:(NSData*)iface
+                                   error:(NSError**)error
+    {
     NSData* text = textIn ?: [NSData data];
     NSData* data = dataIn ?: [NSData data];
+    // The load-time constructor table goes at the END of .data, word-aligned,
+    // and becomes plain data from here on: its words are ordinary absolute
+    // references (R_ARM_RELATIVE once laid out), and DT_INIT_ARRAY /
+    // DT_INIT_ARRAYSZ tell the loader where they are. The XTOS loader runs a
+    // library's table when it loads it as a dependency and a program's before
+    // its entry, each after that object's own DT_NEEDED (bug 500).
+    uint32_t ctorOff = 0, ctorLen = (uint32_t)ctors.length;
+    if (ctorLen)
+        {
+        NSMutableData* d = [data mutableCopy];
+        while (d.length & 3)
+            e8(d, 0);
+        ctorOff = (uint32_t)d.length;
+        [d appendData:ctors];
+        data = d;
+        NSMutableArray<XAArm32Reloc*>* rs = [NSMutableArray array];
+        for (XAArm32Reloc* r in relocs)
+            {
+            if (r.section != 4)
+                {
+                [rs addObject:r];
+                continue;
+                }
+            XAArm32Reloc* m = [XAArm32Reloc new];
+            m.section = 2;
+            m.offset = r.offset + ctorOff;
+            m.symbol = r.symbol;
+            m.kind = r.kind;
+            [rs addObject:m];
+            }
+        relocs = rs;
+        for (XAArm32Symbol* sy in syms)
+            if (sy.section == 4)
+                {
+                sy.section = 2;
+                sy.value += ctorOff;
+                }
+        }
         // ONE DT_NEEDED per library. The driver builds this list from two sources —
         // the `#import <Lib>` dependencies and the device sysroot scan — and libc.so
         // is in both, so an arm9 program recorded it twice. Harmless at load (a
@@ -525,7 +641,7 @@ static void patchWord(NSMutableData* sec, uint32_t at, uint32_t value, BOOL keep
 
     uint32_t symCount = (uint32_t)dyn.count + 1; // + the null entry
     uint32_t nbucket = 1;                        // one chain is enough
-    uint32_t dynCount = 9 + (uint32_t)needed.count + (soname.length ? 1 : 0);
+    uint32_t dynCount = 9 + (uint32_t)needed.count + (soname.length ? 1 : 0) + (ctorLen ? 2 : 0);
 
     // Where everything lands: the read-only metadata sits in the text segment
     // after the code, and the writable segment starts on the next page.
@@ -714,6 +830,11 @@ static void patchWord(NSMutableData* sec, uint32_t at, uint32_t value, BOOL keep
     dynEntry(DT_REL_T, relAddr);
     dynEntry(DT_RELSZ_T, nDynRel * 8);
     dynEntry(DT_RELENT_T, 8);
+    if (ctorLen)
+        {
+        dynEntry(DT_INIT_ARRAY_T, dataBase + ctorOff);
+        dynEntry(DT_INIT_ARRAYSZ_T, ctorLen);
+        }
     dynEntry(0 /*DT_NULL*/, 0);
 
     pad(dataBase);
@@ -871,7 +992,7 @@ static void patchWord(NSMutableData* sec, uint32_t at, uint32_t value, BOOL keep
     };
     uint32_t shstrOff = sh(shstrndx, 16);
 
-    uint16_t textIdx = 0, dataIdx = 0, symIdx = 0, strIdx = 0;
+    uint16_t textIdx = 0, dataIdx = 0, symIdx = 0, strIdx = 0, ctorIdx = 0;
     for (uint16_t i = 1; i < shnum; i++)
         {
         uint32_t o = shstrOff + sh(i, 0);
@@ -880,6 +1001,8 @@ static void patchWord(NSMutableData* sec, uint32_t at, uint32_t value, BOOL keep
             textIdx = i;
         else if ([n isEqualToString:@".data"])
             dataIdx = i;
+        else if ([n isEqualToString:@".init_array"])
+            ctorIdx = i;
         else if ([n isEqualToString:@".symtab"])
             symIdx = i;
         else if ([n isEqualToString:@".strtab"])
@@ -891,6 +1014,8 @@ static void patchWord(NSMutableData* sec, uint32_t at, uint32_t value, BOOL keep
                            : [NSData data];
     NSData* data = dataIdx ? [d subdataWithRange:NSMakeRange(sh(dataIdx, 16), sh(dataIdx, 20))]
                            : [NSData data];
+    NSData* ctors = ctorIdx ? [d subdataWithRange:NSMakeRange(sh(ctorIdx, 16), sh(ctorIdx, 20))]
+                            : [NSData data];
 
     uint32_t symOff = sh(symIdx, 16), strOff = sh(strIdx, 16);
     uint32_t nsym = sh(symIdx, 20) / SYM_SZ;
@@ -900,6 +1025,17 @@ static void patchWord(NSMutableData* sec, uint32_t at, uint32_t value, BOOL keep
         {
         uint32_t e = symOff + i * SYM_SZ;
         NSString* nm = @((const char*)(b + strOff + r32(e)));
+        // A SECTION symbol is what a section-relative relocation names; it
+        // comes back as the assembler's `$sec<N>`.
+        if (i && (b[e + 12] & 0xF) == 3)
+            {
+            uint16_t sx = r16(e + 14);
+            uint32_t ss = (textIdx && sx == textIdx)   ? 1
+                          : (dataIdx && sx == dataIdx) ? 2
+                          : (ctorIdx && sx == ctorIdx) ? 4
+                                                       : 0;
+            nm = ss ? [NSString stringWithFormat:@"$sec%u", ss] : @"";
+            }
         [byIndex addObject:nm];
         if (!i || !nm.length)
             continue; // the null entry
@@ -917,6 +1053,8 @@ static void patchWord(NSMutableData* sec, uint32_t at, uint32_t value, BOOL keep
             sec = 1;
         else if (dataIdx && shndx == dataIdx)
             sec = 2;
+        else if (ctorIdx && shndx == ctorIdx)
+            sec = 4;
         else if (shndx == 0)
             sec = 0; // undefined: the link resolves it
         else
@@ -944,6 +1082,7 @@ static void patchWord(NSMutableData* sec, uint32_t at, uint32_t value, BOOL keep
         uint32_t target = sh(i, 28); // sh_info: the section relocated
         uint32_t which = (textIdx && target == textIdx)   ? 1
                          : (dataIdx && target == dataIdx) ? 2
+                         : (ctorIdx && target == ctorIdx) ? 4
                                                           : 0;
         if (!which)
             continue;
@@ -964,7 +1103,7 @@ static void patchWord(NSMutableData* sec, uint32_t at, uint32_t value, BOOL keep
             [relocs addObject:r];
             }
         }
-    return @{@"text" : text, @"data" : data, @"symbols" : syms, @"relocs" : relocs};
+    return @{@"text" : text, @"data" : data, @"ctors" : ctors, @"symbols" : syms, @"relocs" : relocs};
     }
 
 @end

@@ -10,9 +10,11 @@
     {
     NSMutableData* _text;
     NSMutableData* _data;
+    NSMutableData* _ctors; // `.section .init_array`
     NSMutableArray<XAArm32Symbol*>* _syms;
     NSMutableArray<XAArm32Reloc*>* _relocs;
     NSMutableArray<NSString*>* _missing;
+    uint32_t _secUsed; // bit N: a relocation is relative to section N
 
     NSMutableDictionary<NSString*, NSNumber*>* _labels;
     // A NUMERIC label (`1:`) may be defined many times; `1f` is the next one
@@ -24,8 +26,8 @@
 
     NSArray<NSString*>* _lines;
     uint32_t _pass;
-    uint32_t _section; // 1 .text, 2 .data
-    uint32_t _pc, _dataPc;
+    uint32_t _section; // 1 .text, 2 .data, 4 .init_array
+    uint32_t _pc, _dataPc, _ctorPc;
     NSString* _failWhy;
 
     // Set by splitMnemonic for the instruction being encoded.
@@ -41,6 +43,10 @@
 - (NSData*)data
     {
     return _data ?: [NSData data];
+    }
+- (NSData*)ctorTable
+    {
+    return _ctors ?: [NSData data];
     }
 - (NSArray<XAArm32Symbol*>*)symbols
     {
@@ -380,6 +386,16 @@ static NSString* stripComment(NSString* l)
         _pc++;
         return;
         }
+    if (_section == 4)
+        {
+        if (_pass == 2)
+            {
+            uint8_t v = (uint8_t)b;
+            [_ctors appendBytes:&v length:1];
+            }
+        _ctorPc++;
+        return;
+        }
     if (_pass == 2)
         {
         uint8_t v = (uint8_t)b;
@@ -390,7 +406,7 @@ static NSString* stripComment(NSString* l)
 
 - (uint32_t)cursor
     {
-    return _section == 1 ? _pc : _dataPc;
+    return _section == 1 ? _pc : _section == 4 ? _ctorPc : _dataPc;
     }
 
 // `<op>{cond}{s} Rd, Rn, <operand2>` — the shape most of the subset has. A
@@ -520,11 +536,24 @@ static NSString* stripComment(NSString* l)
     _relocs = [NSMutableArray array];
     _missing = nil;
     _failWhy = nil;
+    _secUsed = 0;
 
     _pass = 1;
     [self run];
     _pass = 2;
     [self run];
+    // The section symbols the section-relative relocations name (see
+    // relocTarget:word:), in a fixed order.
+    for (uint32_t sec = 1; sec <= 4; sec++)
+        {
+        if (!(_secUsed & (1u << sec)))
+            continue;
+        XAArm32Symbol* ss = [XAArm32Symbol new];
+        ss.name = [NSString stringWithFormat:@"$sec%u", sec];
+        ss.section = sec;
+        ss.value = 0;
+        [_syms addObject:ss];
+        }
 
     if (_failWhy)
         {
@@ -547,9 +576,11 @@ static NSString* stripComment(NSString* l)
     {
     _text = [NSMutableData data];
     _data = [NSMutableData data];
+    _ctors = [NSMutableData data];
     _section = 1;
     _pc = 0;
     _dataPc = 0;
+    _ctorPc = 0;
     _pool = [NSMutableArray array];
     _poolSites = [NSMutableArray array];
     if (_pass == 2)
@@ -802,7 +833,10 @@ static NSString* labelOn(NSString* line)
         NSRange comma = [nm rangeOfString:@","];
         if (comma.location != NSNotFound)
             nm = trimmed([nm substringToIndex:comma.location]);
-        _section = [nm hasPrefix:@".text"] ? 1 : 2;
+        // `.init_array` is its own section: the words are the load-time
+        // constructors, and folded into .data they were unlabelled bytes
+        // nothing could find, so no constructor ever ran (bug 500).
+        _section = [nm hasPrefix:@".text"] ? 1 : [nm hasPrefix:@".init_array"] ? 4 : 2;
         return;
         }
     if ([d isEqualToString:@".ltorg"])
@@ -962,7 +996,7 @@ static NSString* labelOn(NSString* line)
             XAArm32Reloc* r = [XAArm32Reloc new];
             r.section = _section;
             r.offset = [self cursor];
-            r.symbol = name;
+            r.symbol = [self relocTarget:name word:&addend];
             r.kind = XAArm32RelocAbs32;
             [_relocs addObject:r];
             }
@@ -973,6 +1007,30 @@ static NSString* labelOn(NSString* line)
         [self putByte:addend >> 16];
         [self putByte:addend >> 24];
         }
+    }
+
+// What an absolute word's relocation names, as `arm-none-eabi-as` has it: a
+// GLOBAL (or undefined) symbol by name, with the addend in the word; a LOCAL
+// one as its SECTION, with the symbol's own offset added into the word — a
+// local symbol is not visible outside the object, so the object has to say
+// where it is. A local FUNCTION is the exception and keeps its symbol. The section is named `$sec<N>` here and becomes the section
+// symbol in an object. Without this every literal-pool word pointing at a
+// (local) string literal held 0 where the oracle's held the offset.
+- (NSString*)relocTarget:(NSString*)name word:(uint32_t*)word
+    {
+    for (XAArm32Symbol* s in _syms)
+        {
+        if (![s.name isEqualToString:name])
+            continue;
+        // A FUNCTION keeps its own symbol even when local, as the oracle
+        // does (ARM ELF preserves a function symbol for interworking).
+        if (s.section == 0 || s.section == 3 || s.isGlobal || s.isFunction)
+            return name;
+        *word += s.value;
+        _secUsed |= 1u << s.section;
+        return [NSString stringWithFormat:@"$sec%u", s.section];
+        }
+    return name;
     }
 
 - (void)align:(NSString*)rest
@@ -1001,6 +1059,7 @@ static NSString* labelOn(NSString* line)
         {
         NSString* sym = _pool[i];
         uint32_t site = _poolSites[i].unsignedIntValue;
+        uint32_t w0 = 0;
         if (_pass == 2)
             {
             // Patch the ldr's 12-bit offset: pool word minus (site + 8).
@@ -1015,14 +1074,14 @@ static NSString* labelOn(NSString* line)
             XAArm32Reloc* r = [XAArm32Reloc new];
             r.section = 1;
             r.offset = _pc;
-            r.symbol = sym;
+            r.symbol = [self relocTarget:sym word:&w0];
             r.kind = XAArm32RelocAbs32;
             [_relocs addObject:r];
             }
-        [self putByte:0];
-        [self putByte:0];
-        [self putByte:0];
-        [self putByte:0];
+        [self putByte:w0];
+        [self putByte:w0 >> 8];
+        [self putByte:w0 >> 16];
+        [self putByte:w0 >> 24];
         }
     _pool = [NSMutableArray array];
     _poolSites = [NSMutableArray array];

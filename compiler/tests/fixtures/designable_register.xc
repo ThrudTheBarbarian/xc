@@ -1,7 +1,8 @@
-//xtc-na: xt6502,m68k,arm9,wasm32 — no load-time constructors there yet.
+//xtc-na: xt6502,m68k,wasm32 — no load-time constructors there yet.
 //        x86_64 and win64 are IN SCOPE: their crts walk the __xt_ctors table
 //        since bug 134 (before it, this fixture carried a legacy
-//        `target=arm64` and the corpus never asked).
+//        `target=arm64` and the corpus never asked). arm9 is too: the image
+//        carries DT_INIT_ARRAY and the XTOS loader runs it (bug 500).
 // designable_register.xc — uxkit/026 piece 3: the per-module factory registers
 // ITSELF at load, with no line of per-app code.
 //

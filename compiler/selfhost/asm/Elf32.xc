@@ -42,6 +42,8 @@
 #define DT_REL_T 17
 #define DT_RELSZ_T 18
 #define DT_RELENT_T 19
+#define DT_INIT_ARRAY_T 25
+#define DT_INIT_ARRAYSZ_T 27
 
 // One dynamic relocation the loader will apply.
 class Elf32DynRel
@@ -82,11 +84,21 @@ class Elf32DynRel
     Array* _out; // Number@ per byte
     bool _failed;
     String* _why;
+    Array* _ctors; // the load-time constructor table (section 4), or empty
 
     void init(void)
         {
         _failed = false;
         _why = (String*)0;
+        _ctors = new Array();
+        }
+
+    // The words assembled under `.section .init_array`. An object writes
+    // them as an `.init_array` section; a shared object puts them after
+    // .data and gives the loader their bounds (DT_INIT_ARRAY).
+    void setCtorTable(Array* c)
+        {
+        _ctors = c == (Array*)0 ? new Array() : c;
         }
 
     bool failed(void)
@@ -183,6 +195,42 @@ class Elf32DynRel
         Array* data = new Array();
         for (u32 i = (u32)0; i < dataIn.count(); i = i + (u32)1)
             data.add(dataIn.get(i));
+        // The load-time constructor table goes at the END of .data,
+        // word-aligned, and becomes plain data from here on: its words are
+        // ordinary absolute references (R_ARM_RELATIVE once laid out), and
+        // DT_INIT_ARRAY / DT_INIT_ARRAYSZ tell the loader where they are. The
+        // XTOS loader runs a library's table when it loads it as a dependency
+        // and a program's before its entry, each after that object's own
+        // DT_NEEDED (bug 500).
+        u32 ctorOff = (u32)0;
+        u32 ctorLen = _ctors.count();
+        if (ctorLen > (u32)0)
+            {
+            while ((data.count() & (u32)3) != (u32)0)
+                data.add((Object*)Number.with((u32)0));
+            ctorOff = data.count();
+            for (u32 i = (u32)0; i < ctorLen; i = i + (u32)1)
+                data.add(_ctors.get(i));
+            Array* rs = new Array();
+            for (u32 i = (u32)0; i < relocs.count(); i = i + (u32)1)
+                {
+                AsmReloc* r = (AsmReloc*)relocs.get(i);
+                if (r.section() != (u32)4)
+                    rs.add((Object*)r);
+                else
+                    rs.add((Object*)AsmReloc.with((u32)2, r.offset() + ctorOff, r.symbol(), r.type()));
+                }
+            relocs = rs;
+            for (u32 i = (u32)0; i < syms.count(); i = i + (u32)1)
+                {
+                AsmSymbol* sy = (AsmSymbol*)syms.get(i);
+                if (sy.section() == (u32)4)
+                    {
+                    sy.setSection((u32)2);
+                    sy.setValue(sy.value() + ctorOff);
+                    }
+                }
+            }
         // ONE DT_NEEDED per library. The driver builds this list from two
         // sources — the `#import <Lib>` dependencies and the device sysroot
         // scan — and libc.so is in both, so an arm9 program recorded it twice.
@@ -267,7 +315,8 @@ class Elf32DynRel
 
         u32 symCount = dyn.count() + (u32)1; // + the null entry
         u32 nbucket = (u32)1;                // one chain is enough
-        u32 dynCount = (u32)9 + needed.count() + (hasSoname ? (u32)1 : (u32)0);
+        u32 dynCount = (u32)9 + needed.count() + (hasSoname ? (u32)1 : (u32)0)
+                     + (ctorLen > (u32)0 ? (u32)2 : (u32)0);
 
         u32 off = align4(textBase + textSize);
         u32 hashAddr = off;
@@ -436,6 +485,13 @@ class Elf32DynRel
         word(nDynRel * (u32)8);
         word((u32)DT_RELENT_T);
         word((u32)8);
+        if (ctorLen > (u32)0)
+            {
+            word((u32)DT_INIT_ARRAY_T);
+            word(dataBase + ctorOff);
+            word((u32)DT_INIT_ARRAYSZ_T);
+            word(ctorLen);
+            }
         word((u32)0);
         word((u32)0); // DT_NULL
 
@@ -709,11 +765,19 @@ class Elf32DynRel
             if (s.section() == (u32)0)
                 s.setGlobal();
             }
+        // The SECTION symbols a section-relative relocation names (`$sec<N>`
+        // in the assembler) lead the locals.
         Array* ordered = new Array();
         for (u32 i = (u32)0; i < syms.count(); i = i + (u32)1)
             {
             AsmSymbol* s = (AsmSymbol*)syms.get(i);
-            if (!s.isGlobal())
+            if (!s.isGlobal() && Elf32.isSectionSym(s.name()))
+                ordered.add((Object*)s);
+            }
+        for (u32 i = (u32)0; i < syms.count(); i = i + (u32)1)
+            {
+            AsmSymbol* s = (AsmSymbol*)syms.get(i);
+            if (!s.isGlobal() && !Elf32.isSectionSym(s.name()))
                 ordered.add((Object*)s);
             }
         u32 firstGlobal = ordered.count() + (u32)1; // +1 for the null entry
@@ -726,21 +790,31 @@ class Elf32DynRel
 
         Array* textRel = new Array();
         Array* dataRel = new Array();
+        Array* ctorRel = new Array();
         for (u32 i = (u32)0; i < relocs.count(); i = i + (u32)1)
             {
             AsmReloc* r = (AsmReloc*)relocs.get(i);
             if (r.section() == (u32)1)
                 textRel.add((Object*)r);
+            else if (r.section() == (u32)4)
+                ctorRel.add((Object*)r);
             else
                 dataRel.add((Object*)r);
             }
+        // The constructor table and its relocations are sections only when
+        // there is one, so an object without constructors is laid out as it
+        // always was.
+        Array* ctors = _ctors;
+        bool hasCtors = ctors.count() > (u32)0;
+        bool hasCtorRel = hasCtors && ctorRel.count() > (u32)0;
 
         strTableInit();
         Map* symIndex = new Map();
         for (u32 i = (u32)0; i < ordered.count(); i = i + (u32)1)
             {
             AsmSymbol* s = (AsmSymbol*)ordered.get(i);
-            strAdd(s.name());
+            if (!Elf32.isSectionSym(s.name()))
+                strAdd(s.name());
             symIndex.set((Hashable*)s.name(), (Object*)Number.with(i + (u32)1));
             }
 
@@ -751,10 +825,14 @@ class Elf32DynRel
         shNames.add((Object*)String.withCString(".text"));
         shNames.add((Object*)String.withCString(".data"));
         shNames.add((Object*)String.withCString(".bss"));
+        if (hasCtors)
+            shNames.add((Object*)String.withCString(".init_array"));
         if (textRel.count() > (u32)0)
             shNames.add((Object*)String.withCString(".rel.text"));
         if (dataRel.count() > (u32)0)
             shNames.add((Object*)String.withCString(".rel.data"));
+        if (hasCtorRel)
+            shNames.add((Object*)String.withCString(".rel.init_array"));
         shNames.add((Object*)String.withCString(".symtab"));
         shNames.add((Object*)String.withCString(".strtab"));
         shNames.add((Object*)String.withCString(".shstrtab"));
@@ -778,10 +856,14 @@ class Elf32DynRel
         off = Elf32.align4(off + text.count());
         u32 dataOff = off;
         off = Elf32.align4(off + data.count());
+        u32 ctorOff = off;
+        off = Elf32.align4(off + ctors.count());
         u32 textRelOff = off;
         off = Elf32.align4(off + textRel.count() * (u32)8);
         u32 dataRelOff = off;
         off = Elf32.align4(off + dataRel.count() * (u32)8);
+        u32 ctorRelOff = off;
+        off = Elf32.align4(off + (hasCtors ? ctorRel.count() : (u32)0) * (u32)8);
         u32 symOff = off;
         off = Elf32.align4(off + (ordered.count() + (u32)1) * (u32)16);
         u32 strOff = off;
@@ -798,6 +880,12 @@ class Elf32DynRel
         idx = idx + (u32)1;
         u32 bssIdx = idx;
         idx = idx + (u32)1;
+        u32 ctorIdx = (u32)0;
+        if (hasCtors)
+            {
+            ctorIdx = idx;
+            idx = idx + (u32)1;
+            }
         u32 textRelIdx = (u32)0;
         u32 dataRelIdx = (u32)0;
         if (textRel.count() > (u32)0)
@@ -810,6 +898,8 @@ class Elf32DynRel
             dataRelIdx = idx;
             idx = idx + (u32)1;
             }
+        if (hasCtorRel)
+            idx = idx + (u32)1;
         u32 symIdx = idx;
         idx = idx + (u32)1;
         u32 strIdx = idx;
@@ -848,12 +938,17 @@ class Elf32DynRel
         bytesFrom(text);
         padTo(dataOff);
         bytesFrom(data);
+        padTo(ctorOff);
+        bytesFrom(ctors);
         padTo(textRelOff);
         writeRelocs(textRel, symIndex);
         padTo(dataRelOff);
         writeRelocs(dataRel, symIndex);
+        padTo(ctorRelOff);
+        if (hasCtors)
+            writeRelocs(ctorRel, symIndex);
         padTo(symOff);
-        writeSymbols(ordered, textIdx, dataIdx);
+        writeSymbols(ordered, textIdx, dataIdx, ctorIdx);
         padTo(strOff);
         bytesFrom(_strBytes);
         padTo(shstrOffset);
@@ -871,12 +966,19 @@ class Elf32DynRel
         // .bss — allocated, writable, occupies no file space.
         sectionHeader(shstrIndexOf(shstrOff, ".bss"), (u32)8, (u32)3, (u32)0,
                       dataOff + data.count(), (u32)0, (u32)0, (u32)0, (u32)4);
+        // .init_array — SHT_INIT_ARRAY, allocated, writable.
+        if (hasCtors)
+            sectionHeader(shstrIndexOf(shstrOff, ".init_array"), (u32)14, (u32)3, (u32)0,
+                          ctorOff, ctors.count(), (u32)0, (u32)0, (u32)4);
         if (textRel.count() > (u32)0)
             sectionHeader(shstrIndexOf(shstrOff, ".rel.text"), (u32)9, (u32)0, (u32)0,
                           textRelOff, textRel.count() * (u32)8, symIdx, textIdx, (u32)4);
         if (dataRel.count() > (u32)0)
             sectionHeader(shstrIndexOf(shstrOff, ".rel.data"), (u32)9, (u32)0, (u32)0,
                           dataRelOff, dataRel.count() * (u32)8, symIdx, dataIdx, (u32)4);
+        if (hasCtorRel)
+            sectionHeader(shstrIndexOf(shstrOff, ".rel.init_array"), (u32)9, (u32)0, (u32)0,
+                          ctorRelOff, ctorRel.count() * (u32)8, symIdx, ctorIdx, (u32)4);
         // .symtab — sh_link is the string table, sh_info the first global.
         sectionHeader(shstrIndexOf(shstrOff, ".symtab"), (u32)2, (u32)0, (u32)0,
                       symOff, (ordered.count() + (u32)1) * (u32)16, strIdx, firstGlobal, (u32)4);
@@ -885,6 +987,12 @@ class Elf32DynRel
         sectionHeader(shstrIndexOf(shstrOff, ".shstrtab"), (u32)3, (u32)0, (u32)0,
                       shstrOffset, shstr.count(), (u32)0, (u32)0, (u32)1);
         return _out;
+        }
+
+    // `$sec<N>`: the assembler's name for section N's own symbol.
+    static bool isSectionSym(String* n)
+        {
+        return n != (String*)0 && n.hasPrefix(String.withCString("$sec"));
         }
 
     u32 shstrIndexOf(Map* table, string name)
@@ -921,7 +1029,7 @@ class Elf32DynRel
             }
         }
 
-    void writeSymbols(Array* ordered, u32 textIdx, u32 dataIdx)
+    void writeSymbols(Array* ordered, u32 textIdx, u32 dataIdx, u32 ctorIdx)
         {
         // The null symbol. Index 0 means "no symbol" everywhere else.
         word((u32)0);
@@ -944,6 +1052,8 @@ class Elf32DynRel
                 // which is the one place those two fields swap meaning.
                 shndx = (u32)$FFF2;
                 }
+            else if (s.section() == (u32)4)
+                shndx = ctorIdx;
             u32 bind = s.isGlobal() ? (u32)1 : (u32)0; // GLOBAL / LOCAL
             if (s.section() == (u32)3)
                 bind = (u32)1;
@@ -951,6 +1061,17 @@ class Elf32DynRel
             if (s.section() == (u32)3)
                 type = (u32)1;                        // OBJECT
             u32 other = s.hidden() ? (u32)2 : (u32)0; // STV_HIDDEN
+            if (!s.isGlobal() && Elf32.isSectionSym(s.name()))
+                {
+                // A section symbol: no name, the section's start.
+                word((u32)0);
+                word((u32)0);
+                word((u32)0);
+                byte((u32)3); // LOCAL, STT_SECTION
+                byte((u32)0);
+                half(shndx);
+                continue;
+                }
             word(strAdd(s.name()));
             word(value);
             word(size);
@@ -958,5 +1079,222 @@ class Elf32DynRel
             byte(other);
             half(shndx);
             }
+        }
+    }
+
+// ── Reading an ELF32 relocatable back ────────────────────────────────────
+//
+// The object half of an arm9 link from `-c` objects: the image is written by
+// Elf32.sharedObject from the assembled runtime with each object merged in,
+// so what an object has to give back is exactly what the assembler gave the
+// writer — the section bytes, the symbols, and the relocations against them.
+// It reads the objects Elf32.write produces (and any other ELF32 relocatable
+// with the same two relocation types); anything else is refused, never
+// guessed at. Mirrors the reference's `objectFromData:`.
+class Elf32Object
+    {
+    Array* _text;   // Number@ per byte
+    Array* _data;
+    Array* _ctors;  // `.init_array`: the load-time constructor table
+    Array* _syms;   // AsmSymbol@
+    Array* _relocs; // AsmReloc@
+
+    void init(void)
+        {
+        _text = new Array();
+        _data = new Array();
+        _ctors = new Array();
+        _syms = new Array();
+        _relocs = new Array();
+        }
+    Array* ctorTable(void)
+        {
+        return _ctors;
+        }
+    Array* text(void)
+        {
+        return _text;
+        }
+    Array* data(void)
+        {
+        return _data;
+        }
+    Array* symbols(void)
+        {
+        return _syms;
+        }
+    Array* relocations(void)
+        {
+        return _relocs;
+        }
+
+    static u32 rd16(Data* d, u32 o)
+        {
+        return (u32)d.byteAt(o) | ((u32)d.byteAt(o + (u32)1) << (u32)8);
+        }
+    static u32 rd32(Data* d, u32 o)
+        {
+        return (u32)d.byteAt(o) | ((u32)d.byteAt(o + (u32)1) << (u32)8)
+             | ((u32)d.byteAt(o + (u32)2) << (u32)16) | ((u32)d.byteAt(o + (u32)3) << (u32)24);
+        }
+    // The NUL-terminated string at `o` (empty past the end).
+    static String* cstr(Data* d, u32 o)
+        {
+        String* s = new String();
+        while (o < d.length() && d.byteAt(o) != (u8)0)
+            {
+            s.appendByte(d.byteAt(o));
+            o = o + (u32)1;
+            }
+        return s;
+        }
+    static void slice(Data* d, u32 off, u32 len, Array* into)
+        {
+        for (u32 i = (u32)0; i < len && off + i < d.length(); i = i + (u32)1)
+            into.add((Object*)Number.with((u32)d.byteAt(off + i)));
+        }
+
+    // 0 when `d` is not an ARM ELF32 little-endian relocatable this reads.
+    static Elf32Object* read(Data* d)
+        {
+        if (d == (Data*)0 || d.length() < (u32)52)
+            return (Elf32Object*)0;
+        if (d.byteAt((u32)0) != (u8)$7F || d.byteAt((u32)1) != (u8)'E' || d.byteAt((u32)2) != (u8)'L' || d.byteAt((u32)3) != (u8)'F')
+            return (Elf32Object*)0;
+        if (d.byteAt((u32)4) != (u8)1 || d.byteAt((u32)5) != (u8)1)
+            return (Elf32Object*)0;
+        if (Elf32Object.rd16(d, (u32)16) != (u32)1)
+            return (Elf32Object*)0; // ET_REL only
+        u32 shoff = Elf32Object.rd32(d, (u32)32);
+        u32 shentsz = Elf32Object.rd16(d, (u32)46);
+        u32 shnum = Elf32Object.rd16(d, (u32)48);
+        u32 shstrndx = Elf32Object.rd16(d, (u32)50);
+        if (shnum == (u32)0 || shoff + shnum * shentsz > d.length())
+            return (Elf32Object*)0;
+        u32 shstrOff = Elf32Object.rd32(d, shoff + shstrndx * shentsz + (u32)16);
+        u32 textIdx = (u32)0;
+        u32 dataIdx = (u32)0;
+        u32 symIdx = (u32)0;
+        u32 strIdx = (u32)0;
+        u32 ctorIdx = (u32)0;
+        for (u32 i = (u32)1; i < shnum; i = i + (u32)1)
+            {
+            String* n = Elf32Object.cstr(d, shstrOff + Elf32Object.rd32(d, shoff + i * shentsz));
+            if (n.equals(String.withCString(".text")))
+                textIdx = i;
+            else if (n.equals(String.withCString(".data")))
+                dataIdx = i;
+            else if (n.equals(String.withCString(".symtab")))
+                symIdx = i;
+            else if (n.equals(String.withCString(".strtab")))
+                strIdx = i;
+            else if (n.equals(String.withCString(".init_array")))
+                ctorIdx = i;
+            }
+        if (symIdx == (u32)0 || strIdx == (u32)0)
+            return (Elf32Object*)0;
+        Elf32Object* o = new Elf32Object();
+        if (textIdx != (u32)0)
+            Elf32Object.slice(d, Elf32Object.rd32(d, shoff + textIdx * shentsz + (u32)16),
+                              Elf32Object.rd32(d, shoff + textIdx * shentsz + (u32)20), o._text);
+        if (dataIdx != (u32)0)
+            Elf32Object.slice(d, Elf32Object.rd32(d, shoff + dataIdx * shentsz + (u32)16),
+                              Elf32Object.rd32(d, shoff + dataIdx * shentsz + (u32)20), o._data);
+        if (ctorIdx != (u32)0)
+            Elf32Object.slice(d, Elf32Object.rd32(d, shoff + ctorIdx * shentsz + (u32)16),
+                              Elf32Object.rd32(d, shoff + ctorIdx * shentsz + (u32)20), o._ctors);
+
+        u32 symOff = Elf32Object.rd32(d, shoff + symIdx * shentsz + (u32)16);
+        u32 nsym = Elf32Object.rd32(d, shoff + symIdx * shentsz + (u32)20) / (u32)16;
+        u32 strOff = Elf32Object.rd32(d, shoff + strIdx * shentsz + (u32)16);
+        Array* byIndex = new Array();
+        for (u32 i = (u32)0; i < nsym; i = i + (u32)1)
+            {
+            u32 e = symOff + i * (u32)16;
+            String* nm = Elf32Object.cstr(d, strOff + Elf32Object.rd32(d, e));
+            // A SECTION symbol is what a section-relative relocation names; it
+            // comes back as the assembler's `$sec<N>`.
+            if (i != (u32)0 && ((u32)d.byteAt(e + (u32)12) & (u32)$F) == (u32)3)
+                {
+                u32 sx = Elf32Object.rd16(d, e + (u32)14);
+                u32 ss = (u32)0;
+                if (textIdx != (u32)0 && sx == textIdx)
+                    ss = (u32)1;
+                else if (dataIdx != (u32)0 && sx == dataIdx)
+                    ss = (u32)2;
+                else if (ctorIdx != (u32)0 && sx == ctorIdx)
+                    ss = (u32)4;
+                nm = String.withCString("");
+                if (ss != (u32)0)
+                    {
+                    nm = String.withCString("$sec");
+                    nm.appendFormat("%lu", ss);
+                    }
+                }
+            byIndex.add((Object*)nm);
+            if (i == (u32)0 || nm.byteLength() == (u32)0)
+                continue; // the null entry
+            u32 shndx = Elf32Object.rd16(d, e + (u32)14);
+            u32 info = (u32)d.byteAt(e + (u32)12);
+            u32 other = (u32)d.byteAt(e + (u32)13);
+            // A COMMON symbol is NOT droppable: the static-init state every
+            // class-using module has lives there, and the writer gives it
+            // storage from section 3, where `value` is an ALIGNMENT.
+            u32 sec = (u32)0;
+            if (shndx == (u32)$FFF2)
+                sec = (u32)3;
+            else if (textIdx != (u32)0 && shndx == textIdx)
+                sec = (u32)1;
+            else if (dataIdx != (u32)0 && shndx == dataIdx)
+                sec = (u32)2;
+            else if (ctorIdx != (u32)0 && shndx == ctorIdx)
+                sec = (u32)4;
+            else if (shndx != (u32)0)
+                continue; // .bss &c, carried by nothing here
+            AsmSymbol* s = AsmSymbol.named(nm);
+            s.setSection(sec);
+            s.setValue(Elf32Object.rd32(d, e + (u32)4));
+            s.setSize(Elf32Object.rd32(d, e + (u32)8));
+            if ((info >> (u32)4) != (u32)0)
+                s.setGlobal();
+            if ((info & (u32)$F) == (u32)2)
+                s.setFunction();
+            if ((other & (u32)3) == (u32)2)
+                s.setHidden();
+            o._syms.add((Object*)s);
+            }
+
+        for (u32 i = (u32)1; i < shnum; i = i + (u32)1)
+            {
+            u32 sh = shoff + i * shentsz;
+            if (Elf32Object.rd32(d, sh + (u32)4) != (u32)9)
+                continue; // SHT_REL
+            // sh_info, at 28: the section these relocate.
+            u32 target = Elf32Object.rd32(d, sh + (u32)28);
+            u32 which = (u32)0;
+            if (textIdx != (u32)0 && target == textIdx)
+                which = (u32)1;
+            else if (dataIdx != (u32)0 && target == dataIdx)
+                which = (u32)2;
+            else if (ctorIdx != (u32)0 && target == ctorIdx)
+                which = (u32)4;
+            if (which == (u32)0)
+                continue;
+            u32 ro = Elf32Object.rd32(d, sh + (u32)16);
+            u32 rsz = Elf32Object.rd32(d, sh + (u32)20);
+            for (u32 k = (u32)0; k + (u32)8 <= rsz; k = k + (u32)8)
+                {
+                u32 off = Elf32Object.rd32(d, ro + k);
+                u32 rinfo = Elf32Object.rd32(d, ro + k + (u32)4);
+                u32 type = rinfo & (u32)$FF;
+                u32 sidx = rinfo >> (u32)8;
+                if (type != (u32)R_ARM_ABS32 && type != (u32)R_ARM_CALL)
+                    return (Elf32Object*)0;
+                if (sidx >= byIndex.count())
+                    return (Elf32Object*)0;
+                o._relocs.add((Object*)AsmReloc.with(which, off, (String*)byIndex.get(sidx), type));
+                }
+            }
+        return o;
         }
     }

@@ -130,6 +130,31 @@ for spec in arm64:.dylib x86_64:.so win64:.dll arm9:.so wasm32:; do
     [ $fail = $before ] && echo "PASS  $a: Sub's slot map, and the two compilers agree"
 done
 
+# arm9: a library's load-time constructor reaches the loader. UsePanel's
+# `outlet` gives libChainUse one, and the XTOS loader runs a dependency's
+# DT_INIT_ARRAY when it loads it, so the tag has to be there: the words used
+# to sit in .data unlabelled and nothing ran them. Running it needs the
+# library in the loader's romfs (tests/crossmod/run.sh rebuilds that), so
+# here it is built by both compilers, compared, and read.
+if [ -n "${XTC_ARM9_SYSROOT:-}" ]; then
+    before=$fail
+    RE=$(command -v arm-none-eabi-readelf || command -v llvm-readelf || command -v readelf)
+    for c in xcc xcc-xc; do
+        d="$TMP/arm9/$c"
+        lib arm9 "$c" "$d" libChainUse.so chainuse 2>"$d.use.err" \
+            || { bad "arm9: $c could not build libChainUse"; sed 's/^/        /' "$d.use.err" | head -5; }
+    done
+    samefiles "$TMP/arm9/xcc" "$TMP/arm9/xcc-xc" libChainUse.so \
+        || bad "arm9: the two compilers' libChainUse differs"
+    if [ -n "$RE" ]; then
+        "$RE" -d "$TMP/arm9/xcc-xc/libChainUse.so" 2>/dev/null | grep -q 'INIT_ARRAY' \
+            || bad "arm9: libChainUse.so has no DT_INIT_ARRAY, so its constructor never runs"
+        [ $fail = $before ] && echo "PASS  arm9: libChainUse carries DT_INIT_ARRAY, and the two compilers agree"
+    else
+        echo "SKIP  arm9: no readelf to read libChainUse's dynamic section (built and compared only)"
+    fi
+fi
+
 # runmatrix <target> <ext> <runner> <libs> <app>... — the libraries (<libs>,
 # e.g. "Base Sub") from each compiler, and each app from each compiler
 # against each set, built and run.

@@ -26,6 +26,13 @@ NS_ASSUME_NONNULL_BEGIN
                      data:(NSData*)data
                   symbols:(NSArray<XAArm32Symbol*>*)symbols
               relocations:(NSArray<XAArm32Reloc*>*)relocations;
+// …with the load-time constructor table (`.init_array`, section 4 in the
+// assembler's model) written as a section of its own.
++ (NSData*)objectFromText:(NSData*)text
+                     data:(NSData*)data
+                    ctors:(nullable NSData*)ctors
+                  symbols:(NSArray<XAArm32Symbol*>*)symbols
+              relocations:(NSArray<XAArm32Reloc*>*)relocations;
 
 // Link into the loader-hosted ET_DYN image the XTOS loader takes — the other
 // half of the arm9 toolchain, and the last piece that belonged to GNU.
@@ -47,6 +54,17 @@ NS_ASSUME_NONNULL_BEGIN
 // Returns nil and sets `error` on an undefined symbol that is not an import.
 + (nullable NSData*)sharedObjectFromText:(NSData*)text
                                     data:(NSData*)data
+                                 symbols:(NSArray<XAArm32Symbol*>*)symbols
+                             relocations:(NSArray<XAArm32Reloc*>*)relocations
+                                  needed:(NSArray<NSString*>*)needed
+                                  soname:(nullable NSString*)soname
+                                   iface:(nullable NSData*)iface
+                                   error:(NSError**)error;
+// …with a load-time constructor table: its words go after .data, and
+// DT_INIT_ARRAY / DT_INIT_ARRAYSZ give the loader their bounds.
++ (nullable NSData*)sharedObjectFromText:(NSData*)text
+                                    data:(NSData*)data
+                                   ctors:(nullable NSData*)ctors
                                  symbols:(NSArray<XAArm32Symbol*>*)symbols
                              relocations:(NSArray<XAArm32Reloc*>*)relocations
                                   needed:(NSArray<NSString*>*)needed

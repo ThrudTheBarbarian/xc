@@ -35,7 +35,7 @@ typedef NS_ENUM(uint32_t, XAArm32RelocKind) {
 // One entry in the object's symbol table.
 @interface XAArm32Symbol : NSObject
 @property(nonatomic, copy) NSString* name;
-@property(nonatomic) uint32_t section; // 0 undefined, 1 .text, 2 .data, 3 COMMON
+@property(nonatomic) uint32_t section; // 0 undefined, 1 .text, 2 .data, 3 COMMON, 4 .init_array
 @property(nonatomic) uint32_t value;   // offset in the section (alignment, for COMMON)
 @property(nonatomic) uint32_t size;
 @property(nonatomic) BOOL isGlobal;
@@ -45,7 +45,7 @@ typedef NS_ENUM(uint32_t, XAArm32RelocKind) {
 
 // One relocation: patch `offset` in `section` against `symbol`.
 @interface XAArm32Reloc : NSObject
-@property(nonatomic) uint32_t section; // 1 .text, 2 .data
+@property(nonatomic) uint32_t section; // 1 .text, 2 .data, 4 .init_array
 @property(nonatomic) uint32_t offset;
 @property(nonatomic, copy) NSString* symbol;
 @property(nonatomic) XAArm32RelocKind kind;
@@ -60,6 +60,10 @@ typedef NS_ENUM(uint32_t, XAArm32RelocKind) {
 
 @property(nonatomic, readonly) NSData* text;
 @property(nonatomic, readonly) NSData* data;
+// The load-time constructor table: the words written under
+// `.section .init_array`, kept apart from .data so a link can give the loader
+// their bounds (DT_INIT_ARRAY). Its relocations carry section 4.
+@property(nonatomic, readonly) NSData* ctorTable;
 @property(nonatomic, readonly) NSArray<XAArm32Symbol*>* symbols;
 @property(nonatomic, readonly) NSArray<XAArm32Reloc*>* relocations;
 // Mnemonics the subset does not cover, in first-seen order. Named rather than
