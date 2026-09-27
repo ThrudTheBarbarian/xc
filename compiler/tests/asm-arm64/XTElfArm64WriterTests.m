@@ -151,11 +151,26 @@ int runArm64ElfWriterTests(void) {
     // `puts` — the only symbol nothing here defines.
     CHECK(nGlobDat == 1, "the one bionic import got a GLOB_DAT (got %d)", nGlobDat);
 
-    // An undefined symbol reached ABSOLUTELY cannot be imported: it would need
+    // A `.quad` naming an undefined symbol is a data-word import (a vtable
+    // word for another library's class): it links, with an R_AARCH64_ABS64.
+    XAArm64Fixup *word = [XAArm64Fixup new];
+    word.offset = 0; word.kind = XAArm64FixupPointer64; word.symbol = @"elsewhere";
+    NSError *wErr = nil;
+    NSData *wimg = [XTElfArm64Writer sharedObjectFromText:text data:as.data
+                                                  symbols:as.symbols
+                                              dataSymbols:as.dataSymbols
+                                            globalSymbols:[NSSet set]
+                                                   fixups:[as.fixups arrayByAddingObject:word]
+                                                   soname:nil needed:nil
+                                              entrySymbol:@"_start"
+                                            modInitLength:0 error:&wErr];
+    CHECK(wimg != nil, "a .quad naming an undefined symbol links as an import");
+
+    // An undefined symbol reached by an adrp cannot be imported: it would need
     // the referencing instruction rewritten. Silently emitting a relocation
     // against 0 is the failure this refuses.
     XAArm64Fixup *bad = [XAArm64Fixup new];
-    bad.offset = 0; bad.kind = XAArm64FixupPointer64; bad.symbol = @"nowhere";
+    bad.offset = 0; bad.kind = XAArm64FixupPage21; bad.symbol = @"nowhere";
     NSError *bErr = nil;
     NSData *bimg = [XTElfArm64Writer sharedObjectFromText:text data:as.data
                                                   symbols:as.symbols

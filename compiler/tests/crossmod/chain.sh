@@ -53,6 +53,10 @@
 #           name the first library's symbols and are filled at load from its
 #           export table (pseudo-relocations), and chainrev and chainuseonly
 #           run the third library's constructor from its DllMain
+#   android the libraries and apps from both compilers, compared byte for
+#           byte, and run over adb when a device or emulator is up. An
+#           android .so had no interface, so nothing could import it, and no
+#           image recorded an imported library as DT_NEEDED
 # Not run:
 #   arm9    running needs the loader tree and qemu
 _root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null)
@@ -236,6 +240,80 @@ if command -v wine >/dev/null 2>&1; then
     [ $fail = $before ] && echo "PASS  win64: run under wine, lib x app compiler matrix"
 else
     echo "SKIP  win64 run: no wine"
+fi
+
+# ── android: the libraries import each other (bug 460) ────────────────────
+# An android .so carried no interface, so `#import <ChainBase>` failed in the
+# client, and neither android link recorded an imported library as DT_NEEDED.
+# Both compilers build the three libraries and the apps; the files must agree
+# byte for byte (both links are in-house), each library and app must name
+# what it imports, and the apps run over adb when a device or emulator is up.
+# needed <elf> — the DT_NEEDED names of an ELF64 image, one per line.
+needed() {
+    python3 - "$1" <<'PY'
+import struct, sys
+b = open(sys.argv[1], "rb").read()
+shoff, = struct.unpack_from("<Q", b, 0x28)
+shent, shnum = struct.unpack_from("<HH", b, 0x3a)
+secs = [struct.unpack_from("<IIQQQQIIQQ", b, shoff + i * shent) for i in range(shnum)]
+for s in secs:
+    if s[1] != 6:  # SHT_DYNAMIC
+        continue
+    stroff = secs[s[6]][4]
+    for o in range(s[4], s[4] + s[5], 16):
+        tag, val = struct.unpack_from("<qQ", b, o)
+        if tag == 0:
+            break
+        if tag == 1:
+            print(b[stroff + val:b.index(b"\0", stroff + val)].decode())
+PY
+}
+: "${ANDROID_HOME:=$HOME/Library/Android/sdk}"
+ADB="$ANDROID_HOME/platform-tools/adb"
+run_adb() {
+    local rd=/data/local/tmp/xc-chain-$$
+    "$ADB" shell "rm -rf $rd && mkdir -p $rd" </dev/null >/dev/null
+    "$ADB" push "$1"/*.so "$1/$2" "$rd/" >/dev/null 2>&1
+    "$ADB" shell "cd $rd && LD_LIBRARY_PATH=. ./$2; s=\$?; rm -rf $rd; exit \$s" </dev/null 2>&1 | tr -d '\r'; return ${PIPESTATUS[0]}
+}
+before=$fail
+for c in xcc xcc-xc; do
+    d="$TMP/android/$c"; mkdir -p "$d"
+    for l in Base Sub Use; do
+        lib android "$c" "$d" "libChain$l.so" "chain$(echo "$l" | tr 'A-Z' 'a-z')" 2>>"$d.err" \
+            || bad "android: $c could not build libChain$l.so"
+    done
+    for app in chainclient chainmany chainrev chainuseonly; do
+        ( cd "$d" && "$BIN/$c" -A android -H "$ROOT" -q -L . -o "$app" "$T/$app.xc" ) 2>>"$d.err" \
+            || bad "android: $c could not build $app"
+    done
+    [ -s "$d.err" ] && sed 's/^/        /' "$d.err" | head -5
+done
+samefiles "$TMP/android/xcc" "$TMP/android/xcc-xc" libChainBase.so libChainSub.so libChainUse.so \
+    chainclient chainmany chainrev chainuseonly \
+    || bad "android: the two compilers' files differ"
+d="$TMP/android/xcc-xc"
+for pair in libChainSub.so:libChainBase.so libChainUse.so:libChainBase.so \
+            chainclient:libChainSub.so chainuseonly:libChainUse.so chainrev:libChainBase.so; do
+    needed "$d/${pair%%:*}" 2>/dev/null | grep -qx "${pair#*:}" \
+        || bad "android: ${pair%%:*} has no DT_NEEDED for ${pair#*:}"
+done
+[ $fail = $before ] && echo "PASS  android: libraries import each other, and the two compilers agree"
+before=$fail
+if [ -x "$ADB" ] && [ "$("$ADB" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; then
+    # The printed NUMBERS are not compared: Stdio.printf's variadic arguments
+    # come out wrong on android in any program, library or not (a separate
+    # bug). What is checked is that each app loads its libraries, runs to the
+    # end and prints each line.
+    for app in chainclient chainmany chainrev chainuseonly; do
+        got=$(run_adb "$d" "$app"; echo "rc=$?")
+        want=WANT_$app
+        [ "$(echo "$got" | sed '$!s/=.*//')" = "$(printf '%s\nrc=0\n' "${!want}" | sed '$!s/=.*//')" ] \
+            || { bad "android $app:"; echo "$got" | head -5 | sed 's/^/        /'; }
+    done
+    [ $fail = $before ] && echo "PASS  android: run over adb"
+else
+    echo "SKIP  android run: no device or emulator visible to adb"
 fi
 
 echo "--- chain: $fail failing ---"

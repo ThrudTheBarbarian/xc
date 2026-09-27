@@ -505,7 +505,7 @@ int main(int argc, const char *argv[]) {
 
         // Android mode:
         //   xcc-ln-arm64 --android exe <entry> <exports|-> <needed-csv> <in.s> <out>
-        //   xcc-ln-arm64 --android so  <soname> <exports|-> <needed-csv> <in.s> <out>
+        //   xcc-ln-arm64 --android so  <soname> <exports|-> <needed-csv> <in.s> <out> [iface|-]
         // Same assembler, different last stage: XTElfArm64Writer instead of
         // XTMachOWriter. Android runs ET_DYN only — an app is a PIE, a
         // NativeActivity payload is a .so — so both shapes come out of one call,
@@ -526,6 +526,16 @@ int main(int argc, const char *argv[]) {
             NSString *exportsPath = @(argv[4]);
             NSString *neededCsv = @(argv[5]);
             NSString *inPath = @(argv[6]), *outPath = @(argv[7]);
+            // The library's serialised interface, for its `.xtc.iface` section
+            // (bug 460). Optional, so the six-argument form still links.
+            NSData *iface = nil;
+            if (argc >= 9 && strcmp(argv[8], "-") != 0) {
+                iface = [NSData dataWithContentsOfFile:@(argv[8])];
+                if (!iface) {
+                    fprintf(stderr, "xcc-ln-arm64: cannot read '%s'\n", argv[8]);
+                    return 1;
+                }
+            }
             NSError *err = nil;
             NSString *src = [NSString stringWithContentsOfFile:inPath
                                                       encoding:NSUTF8StringEncoding error:&err];
@@ -574,6 +584,7 @@ int main(int argc, const char *argv[]) {
                                                           needed:needed
                                                      entrySymbol:isExe ? entryOrSoname : nil
                                                    modInitLength:miLen
+                                                           iface:iface
                                                            error:&err];
             if (!img) {
                 fprintf(stderr, "xcc-ln-arm64: android link failed: %s\n",

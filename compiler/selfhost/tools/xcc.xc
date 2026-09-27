@@ -864,6 +864,29 @@ Array* androidNeeded(DriverOptions* d, string base)
     return out;
 }
 
+// The same list with the `.so` libraries the program or library `#import`ed
+// after the base set, each by its file name, which is the soname an android
+// `--emit-lib` records (bug 460). Without them the image had no DT_NEEDED for
+// a library it calls into, and bionic had nothing to resolve those imports in.
+Array* androidNeededWithImports(DriverOptions* d, string base)
+{
+    String* all = String.withCString(base);
+    Array* nl = d.fe().neededLibs();
+    for (u32 i = (u32)0; nl != (Array*)0 && i < nl.count(); i = i + (u32)1) {
+        String* lp = (String*)nl.get(i);
+        if (!lp.hasSuffix(String.withCString(".so"))) continue;
+        String* sn = lp.lastPathComponent();
+        Array* have = all.splitOnByte((u8)',');
+        bool seen = false;
+        for (u32 k = (u32)0; k < have.count(); k = k + (u32)1)
+            if (((String*)have.get(k)).equals(sn)) seen = true;
+        if (seen) continue;
+        all.appendCString(",");
+        all.append(sn);
+    }
+    return androidNeeded(d, all.cString());
+}
+
 // A file's bytes as the Array of Numbers the APK writer takes, or 0.
 Array* fileBytes(String* path)
 {
@@ -3789,7 +3812,7 @@ void emitModule(DriverOptions* d, IRModule* mod)
 
     Array* image = (Array*)0;
     if (android) {
-        Array* needed = androidNeeded(d, "libc.so,libm.so,libdl.so");
+        Array* needed = androidNeededWithImports(d, "libc.so,libm.so,libdl.so");
         // Bug 124: as above — append the constructor array before linking.
         Array* aData = as.dataBytes();
         Array* aFix  = as.fixups();
@@ -3801,9 +3824,16 @@ void emitModule(DriverOptions* d, IRModule* mod)
             // module's `.globl`s, read before the runtime was prepended so the
             // runtime's globals stay private — and a soname naming the file.
             Array* exports = globlNames(stripLeadingUnderscore(prog), as.symbols());
+            // The interface rides in a `.xtc.iface` section, as on the other
+            // ELF targets, so a client's `#import <Lib>` reads it (bug 460).
+            Array* iface = new Array();
+            String* ij = d.fe().ifaceJson();
+            if (ij != (String*)0)
+                for (u32 i = (u32)0; i < ij.byteLength(); i = i + (u32)1)
+                    iface.add((Object*)Number.withU32((u32)ij.byteAt(i)));
             w.image(as.textBytes(), aData, as.symbols(), as.dataSyms(),
                     exports, aFix, baseNameOf(d.fe().output()), needed,
-                    (String*)0, aMi);
+                    (String*)0, aMi, iface);
         } else {
             w.image(as.textBytes(), aData, as.symbols(), as.dataSyms(),
                     new Array(), aFix, (String*)0, needed,

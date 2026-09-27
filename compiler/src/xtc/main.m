@@ -1565,8 +1565,24 @@ static NSString *androidNeededCsv(XTCommandLineOptions *opts, NSString *base) {
     return [all componentsJoinedByString:@","];
 }
 
+// The same list with the `.so` libraries the program or library `#import`ed
+// after the base set, each by its file name, which is the soname an android
+// `--emit-lib` records (bug 460). Without them the image had no DT_NEEDED for
+// a library it calls into, and bionic had nothing to resolve those imports in.
+static NSString *androidNeededCsvWithImports(XTCommandLineOptions *opts, NSString *base,
+                                             NSArray<NSString *> *neededLibs) {
+    NSMutableArray<NSString *> *all =
+        [[base componentsSeparatedByString:@","] mutableCopy];
+    for (NSString *lib in neededLibs)
+        if ([lib.pathExtension isEqualToString:@"so"]
+            && ![all containsObject:lib.lastPathComponent])
+            [all addObject:lib.lastPathComponent];
+    return androidNeededCsv(opts, [all componentsJoinedByString:@","]);
+}
+
 static int linkAndroidSelfHost(const char *argv0, XTCommandLineOptions *opts,
-                               NSString *support, NSString *asmPath, NSString *outPath) {
+                               NSString *support, NSString *asmPath, NSString *outPath,
+                               NSArray<NSString *> *neededLibs) {
     NSFileManager *fm = [NSFileManager defaultManager];
     NSString *ln  = resolveSiblingTool(argv0, @"xcc-ln-arm64");
     NSString *crt = [support stringByAppendingPathComponent:@"arm64/runtime/crt-android.s"];
@@ -1597,7 +1613,8 @@ static int linkAndroidSelfHost(const char *argv0, XTCommandLineOptions *opts,
     // libc.so covers stdio/malloc/pthread; libm.so the _xm_* wrappers' tail
     // calls; libdl.so is what every Android image is expected to name.
     int rc = runChild(ln, @[@"--android", @"exe", @"_start", @"-",
-                            androidNeededCsv(opts, @"libc.so,libm.so,libdl.so"),
+                            androidNeededCsvWithImports(opts, @"libc.so,libm.so,libdl.so",
+                                                        neededLibs),
                             combinedPath, outPath]);
     if (!opts.verbose) [fm removeItemAtPath:combinedPath error:NULL];
     if (rc == 0 && !opts.quiet)
@@ -1620,7 +1637,8 @@ static int linkAndroidSelfHost(const char *argv0, XTCommandLineOptions *opts,
 // wrong FILE FORMAT for a target that cannot load one, under a name that said
 // otherwise.
 static int linkAndroidShared(const char *argv0, XTCommandLineOptions *opts,
-                             NSString *asmPath, NSString *outPath) {
+                             NSString *asmPath, NSString *outPath,
+                             NSString *_Nullable ifaceJson, NSArray<NSString *> *neededLibs) {
     NSFileManager *fm = [NSFileManager defaultManager];
     NSString *support = resolveSupportRoot(argv0, opts);
     NSString *ln = resolveSiblingTool(argv0, @"xcc-ln-arm64");
@@ -1661,10 +1679,20 @@ static int linkAndroidShared(const char *argv0, XTCommandLineOptions *opts,
     [[[exports allObjects] componentsJoinedByString:@"\n"] writeToFile:exportsPath
         atomically:YES encoding:NSUTF8StringEncoding error:NULL];
 
+    // The interface rides in a `.xtc.iface` section, as on the other ELF
+    // targets, so a client's `#import <Lib>` reads it out of the library.
+    NSString *ifacePath = @"-";
+    if (ifaceJson.length) {
+        ifacePath = [tmp stringByAppendingPathComponent:@"xtc-android-lib-iface.json"];
+        [ifaceJson writeToFile:ifacePath atomically:YES
+                      encoding:NSUTF8StringEncoding error:NULL];
+    }
+
     NSString *soname = outPath.lastPathComponent;
     int rc = runChild(ln, @[@"--android", @"so", soname, exportsPath,
-                            androidNeededCsv(opts, @"libc.so,libm.so,libdl.so"),
-                            elfPath, outPath]);
+                            androidNeededCsvWithImports(opts, @"libc.so,libm.so,libdl.so",
+                                                        neededLibs),
+                            elfPath, outPath, ifacePath]);
     if (rc != 0) {
         fprintf(stderr, "xcc: error: android shared-library link failed\n");
         return 1;
@@ -1676,11 +1704,12 @@ static int linkAndroidShared(const char *argv0, XTCommandLineOptions *opts,
 }
 
 static int linkAndroidExecutable(const char *argv0, XTCommandLineOptions *opts,
-                                 NSString *asmPath, NSString *outPath) {
+                                 NSString *asmPath, NSString *outPath,
+                                 NSArray<NSString *> *neededLibs) {
     NSFileManager *fm = [NSFileManager defaultManager];
     NSString *support = resolveSupportRoot(argv0, opts);
     if (support && useSelfHost(opts)) {
-        int rc = linkAndroidSelfHost(argv0, opts, support, asmPath, outPath);
+        int rc = linkAndroidSelfHost(argv0, opts, support, asmPath, outPath, neededLibs);
         if (rc == 0) return 0;
         if (!clangFallbackAllowed())
             return clangFallbackRefused("android in-house link");
@@ -2014,7 +2043,7 @@ static int linkArm64Executable(const char *argv0, XTCommandLineOptions *opts,
                                NSArray<NSString *> *neededLibs) {
     if (opts.androidTarget)
         return opts.emitApk ? linkAndroidApk(argv0, opts, asmPath, outPath)
-                            : linkAndroidExecutable(argv0, opts, asmPath, outPath);
+                            : linkAndroidExecutable(argv0, opts, asmPath, outPath, neededLibs);
     NSFileManager *fm = [NSFileManager defaultManager];
     NSString *support = resolveSupportRoot(argv0, opts);
     if (!support) {
@@ -4648,7 +4677,7 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
             // (an android .so is its own link: no glue, no crt, exported API,
             // soname + the base DT_NEEDED set).
             : (opts.androidTarget && opts.emitLib && !opts.compileOnly)
-            ? linkAndroidShared(argv0, opts, tmpAsm, opts.outputPath)
+            ? linkAndroidShared(argv0, opts, tmpAsm, opts.outputPath, ifaceJson, neededLibs)
             : (opts.useArm64Backend && opts.emitLib && !opts.compileOnly)
             ? linkArm64Shared(argv0, opts, tmpAsm, opts.outputPath, ifaceJson, neededLibs)
             : linkArm64Executable(argv0, opts, tmpAsm, opts.outputPath, neededLibs);

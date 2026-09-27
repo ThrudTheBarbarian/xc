@@ -10,10 +10,11 @@
 // the executable, nil for the library.
 //
 // We are the whole-program linker, so an intra-image reference is resolved here
-// and never becomes a dynamic relocation. Exactly two kinds survive to load
-// time: R_AARCH64_RELATIVE for each `.quad <symbol>` (a vtable word — an
-// absolute address the loader must bias) and R_AARCH64_GLOB_DAT for each symbol
-// we import from bionic. A `bl` to an import goes through a 16-byte thunk that
+// and never becomes a dynamic relocation. Three kinds survive to load time:
+// R_AARCH64_RELATIVE for each `.quad <symbol>` (a vtable word — an absolute
+// address the loader must bias), R_AARCH64_ABS64 for a `.quad` naming a symbol
+// another library defines, and R_AARCH64_GLOB_DAT for each symbol we import
+// from bionic or a library. A `bl` to an import goes through a 16-byte thunk that
 // loads the import's GOT slot and branches, so the backend's direct call needs
 // no rewriting.
 #import <Foundation/Foundation.h>
@@ -48,6 +49,24 @@ NS_ASSUME_NONNULL_BEGIN
                                   needed:(nullable NSArray<NSString*>*)needed
                              entrySymbol:(nullable NSString*)entrySymbol
                            modInitLength:(NSUInteger)modInitLength
+                                   error:(NSError**)error;
+
+// The same, with the library's serialised interface. A non-empty `iface` is
+// written after everything addressable as a `.xtc.iface` section, the one the
+// arm9 and x86_64 `.so` files carry, so `#import <Lib>` reads the library's
+// declarations out of the file (bug 460). Nil or empty leaves the image as
+// the call above writes it.
++ (nullable NSData*)sharedObjectFromText:(NSData*)text
+                                    data:(NSData*)data
+                                 symbols:(NSDictionary<NSString*, NSNumber*>*)symbols
+                             dataSymbols:(NSSet<NSString*>*)dataSymbols
+                           globalSymbols:(NSSet<NSString*>*)globalSymbols
+                                  fixups:(NSArray<XAArm64Fixup*>*)fixups
+                                  soname:(nullable NSString*)soname
+                                  needed:(nullable NSArray<NSString*>*)needed
+                             entrySymbol:(nullable NSString*)entrySymbol
+                           modInitLength:(NSUInteger)modInitLength
+                                   iface:(nullable NSData*)iface
                                    error:(NSError**)error;
 
 @end

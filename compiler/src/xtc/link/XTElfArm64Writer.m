@@ -27,6 +27,7 @@ enum
     DT_SONAME = 14,
     DT_INIT_ARRAY = 25,
     DT_INIT_ARRAYSZ = 27,
+    R_AARCH64_ABS64 = 257,
     R_AARCH64_GLOB_DAT = 1025,
     R_AARCH64_RELATIVE = 1027,
     STB_GLOBAL = 1,
@@ -194,7 +195,35 @@ static BOOL patchLo12(uint8_t* p, uint64_t off, uint64_t target, uint32_t scale,
                            modInitLength:(NSUInteger)modInitLength
                                    error:(NSError**)error
     {
+    return [self sharedObjectFromText:textIn
+                                 data:dataIn
+                              symbols:symbols
+                          dataSymbols:dataSymbols
+                        globalSymbols:globalSymbols
+                               fixups:fixups
+                               soname:soname
+                               needed:needed
+                          entrySymbol:entrySymbol
+                        modInitLength:modInitLength
+                                iface:nil
+                                error:error];
+    }
+
++ (nullable NSData*)sharedObjectFromText:(NSData*)textIn
+                                    data:(NSData*)dataIn
+                                 symbols:(NSDictionary<NSString*, NSNumber*>*)symbols
+                             dataSymbols:(NSSet<NSString*>*)dataSymbols
+                           globalSymbols:(NSSet<NSString*>*)globalSymbols
+                                  fixups:(NSArray<XAArm64Fixup*>*)fixups
+                                  soname:(NSString*)soname
+                                  needed:(NSArray<NSString*>*)needed
+                             entrySymbol:(NSString*)entrySymbol
+                           modInitLength:(NSUInteger)modInitLength
+                                   iface:(nullable NSData*)iface
+                                   error:(NSError**)error
+    {
     BOOL isExec = (entrySymbol != nil);
+    BOOL hasIface = iface.length > 0;
     if (isExec && (!symbols[entrySymbol] || [dataSymbols containsObject:entrySymbol]))
         {
         if (error)
@@ -211,11 +240,26 @@ static BOOL patchLo12(uint8_t* p, uint64_t off, uint64_t target, uint32_t scale,
     NSMutableArray<NSString*>* imports = [NSMutableArray array];
     NSMutableDictionary<NSString*, NSNumber*>* importIdx = [NSMutableDictionary dictionary];
     NSMutableSet<NSString*>* dataImports = [NSMutableSet set];
+    // A `.quad` naming an import — a vtable word for another library's class
+    // or method, when a library subclasses a class it imported — takes an
+    // R_AARCH64_ABS64 against the symbol, which the loader fills with its
+    // address. It needs a dynamic symbol but no GOT slot or thunk (bug 460).
+    NSMutableArray<NSString*>* wordCand = [NSMutableArray array];
+    NSMutableSet<NSString*>* wordCandSet = [NSMutableSet set];
     for (XAArm64Fixup* f in fixups)
         {
         if (symbols[f.symbol])
             continue;
         BOOL isGot = (f.kind == XAArm64FixupGotPage21 || f.kind == XAArm64FixupGotPageOff12);
+        if (f.kind == XAArm64FixupPointer64)
+            {
+            if (![wordCandSet containsObject:f.symbol])
+                {
+                [wordCandSet addObject:f.symbol];
+                [wordCand addObject:f.symbol];
+                }
+            continue;
+            }
         if (f.kind != XAArm64FixupBranch26 && !isGot)
             {
             if (error)
@@ -232,6 +276,15 @@ static BOOL patchLo12(uint8_t* p, uint64_t off, uint64_t target, uint32_t scale,
         importIdx[f.symbol] = @(imports.count);
         [imports addObject:f.symbol];
         }
+    // Imports named only by data words, after the GOT imports in .dynsym.
+    NSMutableArray<NSString*>* wordImports = [NSMutableArray array];
+    NSMutableDictionary<NSString*, NSNumber*>* wordIdx = [NSMutableDictionary dictionary];
+    for (NSString* w in wordCand)
+        if (!importIdx[w])
+            {
+            wordIdx[w] = @(wordImports.count);
+            [wordImports addObject:w];
+            }
 
     // ── 2. exports ────────────────────────────────────────────────────────
     NSMutableArray<NSString*>* exports = [NSMutableArray array];
@@ -245,7 +298,7 @@ static BOOL patchLo12(uint8_t* p, uint64_t off, uint64_t target, uint32_t scale,
     NSUInteger thunkOff = roundUpTo(text.length, 16); // thunks append to .text
     while (text.length < thunkOff)
         put32v(text, 0xD503201Fu);                       // nop padding
-    NSUInteger nsym = 1 + exports.count + imports.count; // index 0 is the null symbol
+    NSUInteger nsym = 1 + exports.count + imports.count + wordImports.count; // index 0 is the null symbol
 
     NSMutableData* dynstr = [NSMutableData data];
     NSMutableDictionary<NSString*, NSNumber*>* strOff = [NSMutableDictionary dictionary];
@@ -264,6 +317,7 @@ static BOOL patchLo12(uint8_t* p, uint64_t off, uint64_t target, uint32_t scale,
     NSMutableArray<NSString*>* symOrder = [NSMutableArray arrayWithObject:@""];
     [symOrder addObjectsFromArray:exports];
     [symOrder addObjectsFromArray:imports];
+    [symOrder addObjectsFromArray:wordImports];
     for (NSUInteger i = 1; i < symOrder.count; i++)
         intern(symOrder[i]);
     uint32_t sonameOff = (!isExec && soname.length) ? intern(soname) : 0;
@@ -357,9 +411,11 @@ static BOOL patchLo12(uint8_t* p, uint64_t off, uint64_t target, uint32_t scale,
                 return nil;
                 }
             // Written with the link-time address; the RELATIVE relocation makes
-            // the loader add the load bias on top.
+            // the loader add the load bias on top. A word naming an import is
+            // 0 until the loader writes S + A.
+            uint64_t v = off ? target : 0;
             for (int i = 0; i < 8; i++)
-                dp[f.offset + i] = (uint8_t)(target >> (8 * i));
+                dp[f.offset + i] = (uint8_t)(v >> (8 * i));
             continue;
             }
         if (f.offset + 4 > text.length)
@@ -425,8 +481,8 @@ static BOOL patchLo12(uint8_t* p, uint64_t off, uint64_t target, uint32_t scale,
     put16v(out, PHDR_SZ); // e_phentsize
     put16v(out, (uint16_t)nphdr);
     put16v(out, SHDR_SZ); // e_shentsize
-    put16v(out, 4);       // e_shnum: null/.dynamic/.dynstr/.shstrtab
-    put16v(out, 3);       // e_shstrndx
+    put16v(out, hasIface ? 5 : 4); // e_shnum: null/.dynamic/.dynstr/.shstrtab[/.xtc.iface]
+    put16v(out, 3);                // e_shstrndx
 
     void (^phdr)(uint32_t, uint32_t, uint64_t, uint64_t, uint64_t) =
         ^(uint32_t type, uint32_t flags, uint64_t off, uint64_t sz, uint64_t align) {
@@ -485,8 +541,11 @@ static BOOL patchLo12(uint8_t* p, uint64_t off, uint64_t target, uint32_t scale,
         NSNumber* off = isNull ? nil : symbols[n];
         BOOL inData = off ? [dataSymbols containsObject:n]
                           : (!isNull && [dataImports containsObject:n]);
+        // An import named only by data words may be either, and is STT_NOTYPE.
+        BOOL wordOnly = !isNull && !off && i >= 1 + exports.count + imports.count;
+        uint8_t stt = wordOnly ? 0 /*STT_NOTYPE*/ : (inData ? STT_OBJECT : STT_FUNC);
         put32v(out, isNull ? 0 : intern(n)); // st_name
-        put8v(out, isNull ? 0 : (uint8_t)((STB_GLOBAL << 4) | (inData ? STT_OBJECT : STT_FUNC)));
+        put8v(out, isNull ? 0 : (uint8_t)((STB_GLOBAL << 4) | stt));
         put8v(out, 0);                         // st_other
         put16v(out, (isNull || !off) ? 0 : 1); // st_shndx: 0 = undefined
         put64v(out, off ? (inData ? dataAddr : textAddr) + off.unsignedLongLongValue : 0);
@@ -518,10 +577,20 @@ static BOOL patchLo12(uint8_t* p, uint64_t off, uint64_t target, uint32_t scale,
 
     while (out.length < relaOff)
         put8v(out, 0);
-    // R_AARCH64_RELATIVE
+    // R_AARCH64_RELATIVE, or R_AARCH64_ABS64 against an import
     for (XAArm64Fixup* f in absFixups)
         {
         NSNumber* off = symbols[f.symbol];
+        if (!off)
+            {
+            uint64_t symIdx = importIdx[f.symbol]
+                                  ? 1 + exports.count + importIdx[f.symbol].unsignedLongLongValue
+                                  : 1 + exports.count + imports.count + wordIdx[f.symbol].unsignedLongLongValue;
+            put64v(out, dataAddr + f.offset);
+            put64v(out, (symIdx << 32) | R_AARCH64_ABS64);
+            put64v(out, (uint64_t)f.addend);
+            continue;
+            }
         uint64_t target = ([dataSymbols containsObject:f.symbol] ? dataAddr : textAddr) + off.unsignedLongLongValue + (uint64_t)f.addend;
         put64v(out, dataAddr + f.offset);
         put64v(out, R_AARCH64_RELATIVE);
@@ -602,6 +671,12 @@ static BOOL patchLo12(uint8_t* p, uint64_t off, uint64_t target, uint32_t scale,
     };
     uint32_t nDynamic = shName(".dynamic"), nDynstr = shName(".dynstr"),
              nShstrtab = shName(".shstrtab");
+    // A library's interface (bug 460): not loaded, so it goes after the data
+    // with the other non-allocated contents and moves no address.
+    uint32_t nIface = hasIface ? shName(".xtc.iface") : 0;
+    uint64_t ifaceOff = out.length;
+    if (hasIface)
+        [out appendData:iface];
     uint64_t shstrOff = out.length;
     [out appendData:shstr];
     while (out.length % 8)
@@ -636,6 +711,8 @@ static BOOL patchLo12(uint8_t* p, uint64_t off, uint64_t target, uint32_t scale,
          nDyn * DYN_SZ, 2, 8, DYN_SZ);
     shdr(nDynstr, SHT_STRTAB, SHF_ALLOC, strOffB, strOffB, dynstr.length, 0, 1, 0);
     shdr(nShstrtab, SHT_STRTAB, 0, 0, shstrOff, shstr.length, 0, 1, 0);
+    if (hasIface)
+        shdr(nIface, 1 /*SHT_PROGBITS*/, 0, 0, ifaceOff, iface.length, 0, 1, 0);
 
     uint8_t* ob = out.mutableBytes;
     for (int i = 0; i < 8; i++)

@@ -9,10 +9,11 @@
 // so one method writes both — pass an entry symbol for the executable, or 0.
 //
 // Being the whole-program linker, an intra-image reference is resolved here and
-// never becomes a dynamic relocation. Exactly two kinds survive to load time:
+// never becomes a dynamic relocation. Three kinds survive to load time:
 // R_AARCH64_RELATIVE for each `.quad <symbol>` — a vtable word, an absolute
-// address the loader must bias — and R_AARCH64_GLOB_DAT for each symbol
-// imported from bionic, reached from a 16-byte adrp/ldr/br thunk so the back
+// address the loader must bias — R_AARCH64_ABS64 for a `.quad` naming a symbol
+// another library defines, and R_AARCH64_GLOB_DAT for each symbol imported
+// from bionic or a library, reached from a 16-byte adrp/ldr/br thunk so the back
 // end's direct `bl` needs no rewriting.
 //
 // As in the other writers, addresses are kept as 32-bit FILE OFFSETS and the
@@ -233,7 +234,20 @@ class ElfArm64
                Array* exportsIn, Array* fixups, String* soname, Array* needed,
                String* entry, u32 modInitLength)
         {
+        image(textIn, dataIn, symbols, dataSyms, exportsIn, fixups, soname, needed,
+              entry, modInitLength, (Array*)0);
+        }
+
+    // The same, with the library's serialised interface (bytes). A non-empty
+    // `iface` becomes a `.xtc.iface` section after everything addressable,
+    // the one the arm9 and x86_64 `.so` files carry, so `#import <Lib>` reads
+    // the library's declarations out of the file (bug 460).
+    void image(Array* textIn, Array* dataIn, Map* symbols, Array* dataSyms,
+               Array* exportsIn, Array* fixups, String* soname, Array* needed,
+               String* entry, u32 modInitLength, Array* iface)
+        {
         bool isExec = entry != (String*)0 && entry.byteLength() > (u32)0;
+        bool hasIface = iface != (Array*)0 && iface.count() > (u32)0;
         if (isExec && (symbols.get((Hashable*)entry) == (Object*)0 || inArray(dataSyms, entry)))
             {
             failWith(String.withCString("entry symbol is not defined in .text:"), entry);
@@ -249,12 +263,24 @@ class ElfArm64
         // against zero, which would be a null call at run time.
         Array* imports = new Array();
         Array* dataImports = new Array();
+        // A `.quad` naming an import — a vtable word for another library's
+        // class or method, when a library subclasses a class it imported —
+        // takes an R_AARCH64_ABS64 against the symbol, which the loader fills
+        // with its address. It needs a dynamic symbol but no GOT slot or
+        // thunk (bug 460).
+        Array* wordCand = new Array();
         for (u32 i = (u32)0; i < fixups.count(); i = i + (u32)1)
             {
             Arm64Fixup* f = (Arm64Fixup*)fixups.get(i);
             if (symbols.get((Hashable*)f.symbol()) != (Object*)0)
                 continue;
             bool isGot = f.kind() == (u32)FIXUP_GOTPAGE21 || f.kind() == (u32)FIXUP_GOTPAGEOFF12;
+            if (f.kind() == (u32)FIXUP_POINTER64)
+                {
+                if (!inArray(wordCand, f.symbol()))
+                    wordCand.add((Object*)f.symbol());
+                continue;
+                }
             if (f.kind() != (u32)FIXUP_BRANCH26 && !isGot)
                 {
                 failWith(String.withCString(
@@ -268,6 +294,11 @@ class ElfArm64
             if (!inArray(imports, f.symbol()))
                 imports.add((Object*)f.symbol());
             }
+        // Imports named only by data words, after the GOT imports in .dynsym.
+        Array* wordImports = new Array();
+        for (u32 i = (u32)0; i < wordCand.count(); i = i + (u32)1)
+            if (!inArray(imports, (String*)wordCand.get(i)))
+                wordImports.add(wordCand.get(i));
 
         // ── 2. exports ───────────────────────────────────────────────────
         Array* exports = new Array();
@@ -296,7 +327,7 @@ class ElfArm64
             wrwAppend(text, (u32)$D503201F);
             }
 
-        u32 nsym = (u32)1 + exports.count() + imports.count();
+        u32 nsym = (u32)1 + exports.count() + imports.count() + wordImports.count();
 
         Array* symOrder = new Array();
         symOrder.add((Object*)String.withCString(""));
@@ -304,6 +335,8 @@ class ElfArm64
             symOrder.add(exports.get(i));
         for (u32 i = (u32)0; i < imports.count(); i = i + (u32)1)
             symOrder.add(imports.get(i));
+        for (u32 i = (u32)0; i < wordImports.count(); i = i + (u32)1)
+            symOrder.add(wordImports.get(i));
 
         Array* dynstr = new Array();
         Map* strOff = new Map();
@@ -403,11 +436,13 @@ class ElfArm64
                     return;
                     }
                 // Written with the link-time address; the RELATIVE relocation
-                // makes the loader add the load bias on top.
+                // makes the loader add the load bias on top. A word naming an
+                // import is 0 until the loader writes S + A.
+                u32 v = off != (Object*)0 ? target : (u32)0;
                 for (u32 b = (u32)0; b < (u32)8; b = b + (u32)1)
                     data.set(f.offset() + b,
                              (Object*)Number.withU32(b < (u32)4
-                                                         ? ((target >> ((u32)8 * b)) & (u32)$FF)
+                                                         ? ((v >> ((u32)8 * b)) & (u32)$FF)
                                                          : (u32)0));
                 continue;
                 }
@@ -461,8 +496,8 @@ class ElfArm64
         p16((u32)APHDR_SZ);
         p16(nphdr);
         p16((u32)ASHDR_SZ);
-        p16((u32)4); // e_shnum
-        p16((u32)3); // e_shstrndx
+        p16(hasIface ? (u32)5 : (u32)4); // e_shnum
+        p16((u32)3);                     // e_shstrndx
 
         if (isExec)
             {
@@ -512,8 +547,11 @@ class ElfArm64
             Object* off = isNull ? (Object*)0 : symbols.get((Hashable*)n);
             bool inData = off != (Object*)0 ? inArray(dataSyms, n)
                                             : (!isNull && inArray(dataImports, n));
+            // An import named only by data words may be either: STT_NOTYPE.
+            bool wordOnly = !isNull && off == (Object*)0 && i >= (u32)1 + exports.count() + imports.count();
+            u32 stt = wordOnly ? (u32)0 : (inData ? (u32)1 : (u32)2);
             p32(isNull ? (u32)0 : lookupStr(strOff, n));
-            p8(isNull ? (u32)0 : ((u32)1 << (u32)4) | (inData ? (u32)1 : (u32)2));
+            p8(isNull ? (u32)0 : ((u32)1 << (u32)4) | stt);
             p8((u32)0);
             p16((isNull || off == (Object*)0) ? (u32)0 : (u32)1); // st_shndx
             p64(off != (Object*)0
@@ -548,11 +586,24 @@ class ElfArm64
             }
 
         padTo(relaOff);
-        // R_AARCH64_RELATIVE
+        // R_AARCH64_RELATIVE, or R_AARCH64_ABS64 against an import
         for (u32 i = (u32)0; i < absFixups.count(); i = i + (u32)1)
             {
             Arm64Fixup* f = (Arm64Fixup*)absFixups.get(i);
             Object* off = symbols.get((Hashable*)f.symbol());
+            if (off == (Object*)0)
+                {
+                u32 wi = indexIn(imports, f.symbol());
+                u32 symIdx = wi < imports.count()
+                                 ? (u32)1 + exports.count() + wi
+                                 : (u32)1 + exports.count() + imports.count() + indexIn(wordImports, f.symbol());
+                p64(dataAddr + f.offset());
+                p32((u32)257); // R_AARCH64_ABS64
+                p32(symIdx);   // r_info: type | sym<<32
+                p32((u32)f.addend());
+                p32(f.addend() < 0 ? (u32)$FFFFFFFF : (u32)0);
+                continue;
+                }
             u32 target = (inArray(dataSyms, f.symbol()) ? dataAddr : textAddr) + ((Number*)off).asU32() + (u32)f.addend();
             p64(dataAddr + f.offset());
             p64((u32)1027);
@@ -621,6 +672,12 @@ class ElfArm64
         u32 nDynamic = internStr(shstr, shOff, String.withCString(".dynamic"));
         u32 nDynstr = internStr(shstr, shOff, String.withCString(".dynstr"));
         u32 nShstrtab = internStr(shstr, shOff, String.withCString(".shstrtab"));
+        // A library's interface (bug 460): not loaded, so it goes after the
+        // data with the other non-allocated contents and moves no address.
+        u32 nIface = hasIface ? internStr(shstr, shOff, String.withCString(".xtc.iface")) : (u32)0;
+        u32 ifaceOff = _out.count();
+        for (u32 i = (u32)0; hasIface && i < iface.count(); i = i + (u32)1)
+            p8(((Number*)iface.get(i)).asU32());
         u32 shstrOff = _out.count();
         for (u32 i = (u32)0; i < shstr.count(); i = i + (u32)1)
             p8(((Number*)shstr.get(i)).asU32());
@@ -633,6 +690,8 @@ class ElfArm64
              (u32)2, (u32)8, (u32)ADYN_SZ);
         shdr(nDynstr, (u32)3, (u32)2, strOffB, strOffB, dynstr.count(), (u32)0, (u32)1, (u32)0);
         shdr(nShstrtab, (u32)3, (u32)0, (u32)0, shstrOff, shstr.count(), (u32)0, (u32)1, (u32)0);
+        if (hasIface)
+            shdr(nIface, (u32)1, (u32)0, (u32)0, ifaceOff, iface.count(), (u32)0, (u32)1, (u32)0);
 
         for (u32 i = (u32)0; i < (u32)8; i = i + (u32)1)
             _out.set(shoffField + i,

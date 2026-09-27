@@ -1,7 +1,7 @@
 // xtlnandroid.xc — assemble an aarch64 `.s` and write the Android ELF image.
 // =================================================================
 //
-//   xtlnandroid <exe|so> <entry|soname> <exports|-> <needed-csv> <in.s> <out>
+//   xtlnandroid <exe|so> <entry|soname> <exports|-> <needed-csv> <in.s> <out> [iface|-]
 //
 // The self-hosted counterpart of `xcc-ln-arm64 --android`: no NDK clang, no
 // ld.lld. Same argument order as the reference so one harness can drive both
@@ -47,6 +47,20 @@ void main(void)
     String* neededCsv     = Process.argument((u32)4);
     String* inPath        = Process.argument((u32)5);
     String* outPath       = Process.argument((u32)6);
+    // The library's serialised interface, for its `.xtc.iface` section (bug
+    // 460). Optional, as in the reference.
+    Array* iface = (Array*)0;
+    if (Process.argumentCount() > (u32)7
+        && !Process.argument((u32)7).equals(String.withCString("-"))) {
+        Data* id = Files.readData(Process.argument((u32)7));
+        if (id == (Data*)0) {
+            Stdio.printf("xtlnandroid: cannot read '%s'\n", Process.argument((u32)7).cString());
+            Process.exit((i32)1); return;
+        }
+        iface = new Array();
+        for (u32 i = (u32)0; i < id.length(); i = i + (u32)1)
+            iface.add((Object*)Number.withU32((u32)id.byteAt(i)));
+    }
 
     String* src = Files.readText(inPath);
     if (src == 0) {
@@ -90,7 +104,7 @@ void main(void)
             exports, lnFix,
             isExe ? (String*)0 : entryOrSoname,
             splitCsv(neededCsv),
-            isExe ? entryOrSoname : (String*)0, lnMi);
+            isExe ? entryOrSoname : (String*)0, lnMi, iface);
     if (w.failed()) {
         Stdio.printf("xtlnandroid: android link failed: %s\n", w.why().cString());
         Process.exit((i32)1); return;
