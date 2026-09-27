@@ -446,6 +446,19 @@ class M68k
                     h.exclude(win.res().pid());
                 }
             }
+        // A PHI is not in insns(), so a loop-carried i64 could be homed: its
+        // edge copies write the slot and never the register (the arm9 back
+        // end returned a stale remainder this way).
+        for (u32 wb = (u32)0; wb < fn.blocks().count(); wb = wb + (u32)1)
+            {
+            IRBlock* wbb = (IRBlock*)fn.blocks().get(wb);
+            for (u32 wi = (u32)0; wi < wbb.phis().count(); wi = wi + (u32)1)
+                {
+                IRInsn* wph = (IRInsn*)wbb.phis().get(wi);
+                if (wph.res() != (IRValue*)0 && isI64(wph.res().ty()))
+                    h.exclude(wph.res().pid());
+                }
+            }
         // A PARAMETER is not an instruction result, so the loop above never
         // sees one: `i64 add(i64 a, i64 b)` homed both into single registers
         // holding half of each.
@@ -1588,6 +1601,17 @@ class M68k
         _labelSeq = _labelSeq + (u32)1;
         loadCondition((IROperand*)n.ops().get((u32)0), String.withCString("d0"));
         _out.appendFormat("\ttst.l\td0\n\tbeq.s\t.Lsel%luf\n", lbl);
+        // An i64, u64 or double is two longs in its slot. Built in d0 and
+        // stored from d0, only the HIGH long reached the result and the low
+        // one kept whatever the slot held (bug 520). Copy both, as a phi does.
+        if (isI64(n.res().ty()) || isF64(n.res().ty()))
+            {
+            emitWidePhiCopy(n.res(), (IROperand*)n.ops().get((u32)1));
+            _out.appendFormat("\tbra.s\t.Lsel%lud\n.Lsel%luf:\n", lbl, lbl);
+            emitWidePhiCopy(n.res(), (IROperand*)n.ops().get((u32)2));
+            _out.appendFormat(".Lsel%lud:\n", lbl);
+            return;
+            }
         loadOperand((IROperand*)n.ops().get((u32)1), String.withCString("d0"));
         _out.appendFormat("\tbra.s\t.Lsel%lud\n.Lsel%luf:\n", lbl, lbl);
         loadOperand((IROperand*)n.ops().get((u32)2), String.withCString("d0"));
@@ -4558,8 +4582,9 @@ class M68k
                 r.add(k < bytes.count() ? bytes.get(k) : (Object*)Number.with((i32)0));
             return reversed(r);
             }
-        bool scalarInt = ty.equals(String.withCString("I16")) || ty.equals(String.withCString("U16")) || ty.equals(String.withCString("I32")) || ty.equals(String.withCString("U32"));
-        if (scalarInt && (bytes.count() == (u32)2 || bytes.count() == (u32)4))
+        // i64/u64 were missing here, so `u64 g = 1;` read back as 1 << 56.
+        bool scalarInt = ty.equals(String.withCString("I16")) || ty.equals(String.withCString("U16")) || ty.equals(String.withCString("I32")) || ty.equals(String.withCString("U32")) || ty.equals(String.withCString("I64")) || ty.equals(String.withCString("U64"));
+        if (scalarInt && (bytes.count() == (u32)2 || bytes.count() == (u32)4 || bytes.count() == (u32)8))
             return reversed(bytes);
         return bytes;
         }

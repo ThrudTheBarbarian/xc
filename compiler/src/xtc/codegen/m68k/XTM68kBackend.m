@@ -267,13 +267,15 @@ static NSString* m68kSym(NSString* name)
                 [out appendFormat:@"\t.even\n%@:\n", m68kSym(s.name)];
                 // The IR stores a scalar initialiser in its canonical
                 // little-endian order; m68k is big-endian, so reverse a scalar
-                // integer's bytes (u16/i16/u32/i32) before emitting. Strings /
-                // aggregates / pointers keep their byte order.
+                // integer's bytes (16, 32 or 64 bits) before emitting. Strings /
+                // aggregates / pointers keep their byte order. i64/u64 were
+                // missing here, so `u64 g = 1;` read back as 1 << 56.
                 NSData* bytes = s.initialBytes;
                 XTIRTypeKind gk = s.globalType ? s.globalType.kind : XTIRTypeKindVoid;
                 BOOL scalarInt = (gk == XTIRTypeKindI16 || gk == XTIRTypeKindU16 ||
-                                  gk == XTIRTypeKindI32 || gk == XTIRTypeKindU32);
-                if (scalarInt && (bytes.length == 2 || bytes.length == 4))
+                                  gk == XTIRTypeKindI32 || gk == XTIRTypeKindU32 ||
+                                  gk == XTIRTypeKindI64 || gk == XTIRTypeKindU64);
+                if (scalarInt && (bytes.length == 2 || bytes.length == 4 || bytes.length == 8))
                     {
                     NSMutableData* r = [NSMutableData dataWithLength:bytes.length];
                     const uint8_t* src = bytes.bytes;
@@ -1535,6 +1537,13 @@ static NSString* m68kSym(NSString* name)
         for (XTIRInsn* in in bb.instructions)
             if (in.result && (in.result.type.kind == XTIRTypeKindI64 || in.result.type.kind == XTIRTypeKindU64))
                 [excluded addObject:@(in.result.valueId)];
+    // A PHI is not in `instructions`, so a loop-carried i64 could be homed:
+    // its edge copies write the slot and never the register (the arm9 back
+    // end returned a stale remainder this way).
+    for (XTIRBlock* bb in fn.blocks)
+        for (XTIRInsn* ph in bb.phiNodes)
+            if (ph.result && (ph.result.type.kind == XTIRTypeKindI64 || ph.result.type.kind == XTIRTypeKindU64))
+                [excluded addObject:@(ph.result.valueId)];
         // A PARAMETER is not an instruction result, so the loop above never sees
         // one. `i64 add(i64 a, i64 b)` homed both into d3/d4 holding only their high
         // longs, while the body read them from 8(a6)/16(a6) — right by luck here,
@@ -3551,6 +3560,19 @@ static NSString* m68kSym(NSString* name)
         int n = gLabelSeq++;
         [self loadCondition:insn.operands[0] fn:fn intoReg:@"d0" slots:slots into:out]; // cond
         [out appendFormat:@"\ttst.l\td0\n\tbeq.s\t.Lsel%df\n", n];
+        // An i64, u64 or double is two longs in its slot. Built in d0 and
+        // stored from d0, only the HIGH long reached the result and the low
+        // one kept whatever the slot held (bug 520). Copy both, as a phi does.
+        XTIRTypeKind sk = insn.result.type.kind;
+        if ((sk == XTIRTypeKindI64 || sk == XTIRTypeKindU64 || sk == XTIRTypeKindF64) &&
+            slots[@(insn.result.valueId)])
+            {
+            [self emitWidePhiCopyTo:insn.result from:insn.operands[1] slots:slots into:out];
+            [out appendFormat:@"\tbra.s\t.Lsel%dd\n.Lsel%df:\n", n, n];
+            [self emitWidePhiCopyTo:insn.result from:insn.operands[2] slots:slots into:out];
+            [out appendFormat:@".Lsel%dd:\n", n];
+            break;
+            }
         [self loadOperand:insn.operands[1] intoReg:@"d0" slots:slots into:out]; // ifTrue
         [out appendFormat:@"\tbra.s\t.Lsel%dd\n.Lsel%df:\n", n, n];
         [self loadOperand:insn.operands[2] intoReg:@"d0" slots:slots into:out]; // ifFalse
