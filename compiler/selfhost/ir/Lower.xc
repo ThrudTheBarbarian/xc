@@ -5850,35 +5850,122 @@ class ClassInfo
             }
         if (Types.isFloating(ty))
             {
-            // A NEGATIVE literal is a unary minus over a positive one — the
-            // lexer never produces a signed float token — so the sign is
-            // carried in the spelling handed to the encoder.
-            Node* lit = e;
-            String* text = (String*)0;
-            if (lit.kind() == (u16)nkUnary && isName(lit.op(), "-") && lit.kidCount() > (u32)0 && lit.kid((u32)0).kind() == (u16)nkFloat)
-                {
-                text = String.withCString("-");
-                text.append(lit.kid((u32)0).name());
-                lit = lit.kid((u32)0);
-                }
-            else if (lit.kind() == (u16)nkFloat)
-                {
-                text = lit.name();
-                }
-            else
-                {
-                return (Array*)0;
-                }
+            // The leaf's value as a double, then stored at the slot's width:
+            // eight bytes for a double, the float nearest it for a float. An
+            // INTEGER leaf (`double a[2] = {1, 2};`) folds too, as the
+            // original's does; this used to accept only a float literal, so
+            // such a global was written by code at run time instead.
+            Array* d8 = floatLeafBytes(e);
+            if (d8 == 0)
+                return d8;
             if (astWidth(ty) == (u32)8)
-                return literalDoubleBytes(text, lit);
-            Data* d = FloatEncoding.ieeeBytes(text, false);
-            return bytesOfData(d);
+                return d8;
+            return floatBytesOfDouble(d8);
             }
         _constOk = true;
         i64 v = constEval(e);
         if (!_constOk)
             return (Array*)0;
         return leBytes(v, width);
+        }
+
+    // The eight IEEE bytes, low first, of a float leaf's compile-time value,
+    // or null when it has none. The mirror of the original's
+    // tryFoldInitialiserFloat: a float literal at its own precision, a
+    // negation of anything foldable (the sign bit flips, so `-0` is -0.0), a
+    // cast looked through, and otherwise an integer constant converted to
+    // the nearest double. `~` and `!` are not float operators, so they stop
+    // the fold rather than reaching the integer path.
+    Array* floatLeafBytes(Node* e)
+        {
+        u16 k = e.kind();
+        if (k == (u16)nkFloat)
+            return literalDoubleBytes(e.name(), e);
+        if (k == (u16)nkUnary)
+            {
+            if (!isName(e.op(), "-") || e.kidCount() == (u32)0)
+                return (Array*)0;
+            Array* inner = floatLeafBytes(e.kid((u32)0));
+            if (inner == 0)
+                return inner;
+            u32 top = ((Number*)inner.get((u32)7)).asU32() ^ (u32)$80;
+            inner.set((u32)7, (Object*)Number.with(top));
+            return inner;
+            }
+        if (k == (u16)nkCast)
+            return floatLeafBytes(e.kid((u32)0));
+        _constOk = true;
+        i64 v = constEval(e);
+        if (!_constOk)
+            return (Array*)0;
+        // The decimal text of an integer converts to the double nearest it,
+        // which is what the original's `(double)v` gives.
+        return bytesOfData(FloatEncoding.ieeeBytes(String.withI64(v), true));
+        }
+
+    // A double's eight bytes (low first) narrowed to the float nearest it,
+    // four bytes, rounding to nearest-even as a C `(float)` conversion does.
+    Array* floatBytesOfDouble(Array* d8)
+        {
+        u64 bits = (u64)0;
+        u32 i = (u32)8;
+        while (i > (u32)0)
+            {
+            i = i - (u32)1;
+            bits = (bits << (u64)8) | (u64)((Number*)d8.get(i)).asU32();
+            }
+        u32 sign = (u32)(bits >> (u64)63) << (u32)31;
+        i32 exp = (i32)((bits >> (u64)52) & (u64)$7FF);
+        u64 mant = bits & (((u64)1 << (u64)52) - (u64)1);
+        u32 out = sign;
+        if (exp == (i32)$7FF)
+            {
+            // Infinity stays infinity; a NaN keeps a non-zero payload.
+            u32 m = (u32)(mant >> (u64)29);
+            if (mant != (u64)0 && m == (u32)0)
+                m = (u32)1;
+            out = sign | ((u32)$FF << (u32)23) | m;
+            }
+        else if (exp != (i32)0)
+            {
+            i32 e = exp - (i32)1023 + (i32)127;
+            u64 m = mant | ((u64)1 << (u64)52);
+            // A result below the normal range keeps fewer bits: the shift
+            // grows by one for every step the exponent falls short of 1.
+            u64 shift = (u64)29;
+            if (e <= (i32)0)
+                shift = (u64)29 + (u64)((i32)1 - e);
+            if (shift < (u64)64)
+                {
+                u64 q = m >> shift;
+                u64 rem = m & (((u64)1 << shift) - (u64)1);
+                u64 half = (u64)1 << (shift - (u64)1);
+                if (rem > half || (rem == half && (q & (u64)1) != (u64)0))
+                    q = q + (u64)1;
+                if (e <= (i32)0)
+                    {
+                    // A carry out of the subnormal range is the smallest
+                    // normal, which is exactly how its bits read.
+                    out = sign | (u32)q;
+                    }
+                else
+                    {
+                    if (q == ((u64)1 << (u64)24))
+                        {
+                        q = q >> (u64)1;
+                        e = e + (i32)1;
+                        }
+                    if (e >= (i32)$FF)
+                        out = sign | ((u32)$FF << (u32)23);
+                    else
+                        out = sign | ((u32)e << (u32)23) | ((u32)q & (u32)$7FFFFF);
+                    }
+                }
+            }
+        Array* r = new Array();
+        for (u32 b = (u32)0; b < (u32)4; b = b + (u32)1)
+            r.add((Object*)Number.with((out >> (b * (u32)8)) & (u32)$FF));
+        return r;
         }
 
     // The eight IEEE bytes, low first, of the double a float literal

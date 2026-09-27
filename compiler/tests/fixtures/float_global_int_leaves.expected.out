@@ -1,0 +1,14 @@
+gd 4 8 -12
+gd3 ok
+gf 4 -8 2 67108864
+gmix 4 10 -16 28 48
+gfmix -5 24 260
+gp 20 -24
+gp.n 7
+gps 4 10
+gps.n 3
+gps -16 20
+gps.n 6
+gbig0 ok
+gbig1 ok
+gfbig ok
