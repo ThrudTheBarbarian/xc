@@ -1117,6 +1117,42 @@ static uint32_t elfHash(const char* name)
                                 bssAlign:(uint64_t)bssAlign
                                    error:(NSError**)error
     {
+    return [self sharedObjectFromText:textIn
+                                 data:dataIn
+                              symbols:symbolsIn
+                          dataSymbols:dataSymbols
+                        globalSymbols:globalSymbols
+                               fixups:fixups
+                               soname:soname
+                               needed:needed
+                          entrySymbol:entrySymbol
+                              runpath:runpath
+                                iface:iface
+                           absSymbols:nil
+                                  bss:bss
+                           bssSymbols:bssSyms
+                             bssAlign:bssAlign
+                                error:error];
+    }
+
++ (nullable NSData*)sharedObjectFromText:(NSData*)textIn
+                                    data:(NSData*)dataIn
+                                 symbols:(NSDictionary<NSString*, NSNumber*>*)symbolsIn
+                             dataSymbols:(NSSet<NSString*>*)dataSymbols
+                           globalSymbols:(NSSet<NSString*>*)globalSymbols
+                                  fixups:(NSArray<XAX86_64Fixup*>*)fixups
+                                  soname:(NSString*)soname
+                                  needed:(NSArray<NSString*>*)needed
+                             entrySymbol:(NSString*)entrySymbol
+                                 runpath:(NSString*)runpath
+                                   iface:(NSData*)iface
+                              absSymbols:(nullable NSSet<NSString*>*)absSymbolsIn
+                                     bss:(nullable NSData*)bss
+                              bssSymbols:(nullable NSArray<NSString*>*)bssSyms
+                                bssAlign:(uint64_t)bssAlign
+                                   error:(NSError**)error
+    {
+    NSSet<NSString*>* absSymbols = absSymbolsIn ?: [NSSet set];
     NSMutableDictionary<NSString*, NSNumber*>* symbols = [symbolsIn mutableCopy];
     // A dynamically-linked executable is this same file plus an entry point and
     // a PT_INTERP naming the loader — the kernel maps us, then hands control to
@@ -1228,10 +1264,29 @@ static uint32_t elfHash(const char* name)
     // `__fini_array_start@GOTPCREL`) — gets a real slot holding the symbol's
     // address, after the import slots, with a RELATIVE relocation for the load
     // bias. First-seen order.
+    // A GOT reference to an ABSOLUTE symbol (a weak undefined resolved to
+    // zero) cannot be relaxed to `lea`: lea computes a PC-relative address, and
+    // an absolute symbol's value IS the answer. Each gets a slot holding that
+    // value, with no relocation, because there is no load bias to add to it.
+    // They sit between the import slots and the local ones, first-seen order.
+    NSMutableArray<NSString*>* absGot = [NSMutableArray array];
+    NSMutableDictionary<NSString*, NSNumber*>* absGotIdx = [NSMutableDictionary dictionary];
+    for (XAX86_64Fixup* f in fixups)
+        {
+        if (f.kind != XAX86FixupGotLoad && f.kind != XAX86FixupGotRef)
+            continue;
+        if (!symbols[f.symbol] || ![absSymbols containsObject:f.symbol])
+            continue;
+        if (!absGotIdx[f.symbol])
+            {
+            absGotIdx[f.symbol] = @(absGot.count);
+            [absGot addObject:f.symbol];
+            }
+        }
     BOOL (^needsLocalGot)(XAX86_64Fixup*) = ^BOOL(XAX86_64Fixup* f) {
       if (f.kind != XAX86FixupGotLoad && f.kind != XAX86FixupGotRef)
           return NO;
-      if (!symbols[f.symbol])
+      if (!symbols[f.symbol] || [absSymbols containsObject:f.symbol])
           return NO;
       if (f.kind == XAX86FixupGotRef)
           return YES;
@@ -1245,7 +1300,7 @@ static uint32_t elfHash(const char* name)
             localGotIdx[f.symbol] = @(localGot.count);
             [localGot addObject:f.symbol];
             }
-    NSUInteger ngot = imports.count + localGot.count;
+    NSUInteger ngot = imports.count + absGot.count + localGot.count;
 
     NSUInteger nThunk = imports.count;
     NSUInteger thunkOff = text.length; // thunks are appended to __text
@@ -1302,9 +1357,11 @@ static uint32_t elfHash(const char* name)
     // relocation. (It was being lumped with Abs64 here, which emitted an 8-byte
     // RELATIVE reloc over a 4-byte slot and left the jump table zero — every
     // `switch` in bundled C then dispatched through a null table entry.)
+    // A `.quad` of an ABSOLUTE symbol is its value and nothing more: no bias,
+    // so no relocation.
     NSMutableArray<XAX86_64Fixup*>* absFixups = [NSMutableArray array];
     for (XAX86_64Fixup* f in fixups)
-        if (f.kind == XAX86FixupAbs64)
+        if (f.kind == XAX86FixupAbs64 && !(symbols[f.symbol] && [absSymbols containsObject:f.symbol]))
             [absFixups addObject:f];
     NSUInteger nRela = absFixups.count + imports.count + localGot.count;
 
@@ -1358,7 +1415,10 @@ static uint32_t elfHash(const char* name)
         NSNumber* off = symbols[f.symbol];
         BOOL isGot = (f.kind == XAX86FixupGotLoad || f.kind == XAX86FixupGotRef);
         uint64_t target;
-        if (off)
+        BOOL isAbsSym = off && [absSymbols containsObject:f.symbol];
+        if (isAbsSym)
+            target = off.unsignedLongLongValue;
+        else if (off)
             target = ([dataSymbols containsObject:f.symbol] ? dataAddr : textAddr) + off.unsignedLongLongValue;
         // A GOT-based reference to an IMPORT resolves to that import's GOT slot
         // (loader-filled via GLOB_DAT); a call import resolves to its thunk.
@@ -1419,8 +1479,10 @@ static uint32_t elfHash(const char* name)
         // reference to one we define reads its local slot. A GOT reference to
         // an IMPORT instead keeps the load: its displacement points at the
         // loader-filled GOT slot (target, above), so it must NOT be relaxed.
-        if (needsLocalGot(f))
-            target = gotOff + (imports.count + localGotIdx[f.symbol].unsignedIntegerValue) * 8;
+        if (isGot && isAbsSym)
+            target = gotOff + (imports.count + absGotIdx[f.symbol].unsignedIntegerValue) * 8;
+        else if (needsLocalGot(f))
+            target = gotOff + (imports.count + absGot.count + localGotIdx[f.symbol].unsignedIntegerValue) * 8;
         else if (f.kind == XAX86FixupGotLoad && off)
             tp[f.offset - 2] = 0x8d; // mov → lea
         int64_t rel = (int64_t)target - (int64_t)(textAddr + f.offset) + f.addend;
@@ -1532,9 +1594,14 @@ static uint32_t elfHash(const char* name)
         uint8_t stt = wordOnly ? 0 /*STT_NOTYPE*/ : (inData ? STT_OBJECT : STT_FUNC);
         put32v(out, isNull ? 0 : intern(n)); // st_name
         put8v(out, isNull ? 0 : (uint8_t)((STB_GLOBAL << 4) | stt));
-        put8v(out, 0);                         // st_other
-        put16v(out, (isNull || !off) ? 0 : 1); // st_shndx: 0 = undefined
-        put64v(out, off ? (inData ? dataAddr : textAddr) + off.unsignedLongLongValue : 0);
+        put8v(out, 0); // st_other
+        // st_shndx: 0 = undefined. SHN_ABS for an absolute symbol: its value is
+        // the answer, and the loader must not add a base to it.
+        BOOL isAbs = off && [absSymbols containsObject:n];
+        put16v(out, (isNull || !off) ? 0 : (isAbs ? 0xFFF1 : 1));
+        put64v(out, off ? (isAbs ? off.unsignedLongLongValue
+                                 : (inData ? dataAddr : textAddr) + off.unsignedLongLongValue)
+                        : 0);
         put64v(out, 0); // st_size — unknown, unused
         }
     while (out.length < strOffB)
@@ -1596,7 +1663,7 @@ static uint32_t elfHash(const char* name)
     };
     for (NSUInteger i = 0; i < localGot.count; i++)
         {
-        put64v(out, gotOff + (imports.count + i) * 8);
+        put64v(out, gotOff + (imports.count + absGot.count + i) * 8);
         put64v(out, R_X86_64_RELATIVE);
         put64v(out, localAddr(localGot[i]));
         }
@@ -1608,6 +1675,8 @@ static uint32_t elfHash(const char* name)
         put8v(out, 0);
     for (NSUInteger i = 0; i < imports.count; i++)
         put64v(out, 0); // filled by ld.so
+    for (NSString* n in absGot)
+        put64v(out, symbols[n].unsignedLongLongValue); // the value; no relocation
     for (NSString* n in localGot)
         put64v(out, localAddr(n));
 

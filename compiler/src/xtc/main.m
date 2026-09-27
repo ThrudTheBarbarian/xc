@@ -2425,6 +2425,22 @@ static int linkX86_64Dynamic(const char *argv0, XTCommandLineOptions *opts, NSSt
             if (!x86MuslLibc(support))
                 { NSString *es = x86ExitStub(support); if (es) [args addObject:es]; }
             if (!x86AddMimalloc(argv0, opts, args)) return 1;
+            // The user's own objects and archives (`-Wl,shim.o`), after the
+            // allocator object and before libc, the order the shipped driver
+            // links them in. They used to be dropped here, so a dynamic program
+            // that named one fell back to clang instead.
+            {
+                NSMutableArray<NSString *> *uLibs = [NSMutableArray array];
+                NSMutableArray<NSString *> *uRaw  = [NSMutableArray array];
+                BOOL uSys = NO;
+                resolveUserLinkInputs(opts, fm, uLibs, uRaw, &uSys);
+                for (NSString *p in uRaw)
+                    if ([p.pathExtension isEqualToString:@"o"]) [args addObject:p];
+                for (NSString *p in uLibs)
+                    if ([p.pathExtension isEqualToString:@"a"]) [args addObject:p];
+                for (NSString *p in uRaw)
+                    if ([p.pathExtension isEqualToString:@"a"]) [args addObject:p];
+            }
             // The shared deps go on the line as INPUTS (not -l names): the
             // in-house linker reads each .so's soname (→ DT_NEEDED) and its
             // libc/crt imports, which it then satisfies from libc.a below and

@@ -801,13 +801,17 @@ class ElfSharedInfo
         // table's `.long target - base` — is a difference of two in-image
         // addresses, invariant under the load bias, so it is resolved here and
         // gets none. (Lumping it in emitted an 8-byte RELATIVE over a 4-byte
-        // slot and left the table zero.)
+        // slot and left the table zero.) A `.quad` of an ABSOLUTE symbol is
+        // its value, which no load bias changes, so it gets none either.
         Array* absFixups = new Array();
         for (u32 i = (u32)0; i < fixups.count(); i = i + (u32)1)
             {
             X86Fixup* f = (X86Fixup*)fixups.get(i);
-            if (f.kind() == (u32)X86FIX_ABS64)
-                absFixups.add((Object*)f);
+            if (f.kind() != (u32)X86FIX_ABS64)
+                continue;
+            if (symbols.get((Hashable*)f.symbol()) != (Object*)0 && Elf64.inSet(absSet, f.symbol()))
+                continue;
+            absFixups.add((Object*)f);
             }
         u32 nRela = absFixups.count() + imports.count() + localGot.count();
 

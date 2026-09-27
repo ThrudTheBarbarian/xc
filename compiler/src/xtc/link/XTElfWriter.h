@@ -78,6 +78,29 @@ NS_ASSUME_NONNULL_BEGIN
                                 bssAlign:(uint64_t)bssAlign
                                    error:(NSError**)error;
 
+// The same, with `absSymbols` as in the static case: names whose value is an
+// ABSOLUTE address (a weak undefined that resolved to 0 once foreign objects
+// were merged). A GOT reference to one reads its own slot holding the value,
+// with no relocation; its `.dynsym` entry is SHN_ABS with the value unbiased;
+// a `.quad` of it is the value, with no RELATIVE. The port's
+// Elf64.sharedObject does the same (private:docs/bugs/421).
++ (nullable NSData*)sharedObjectFromText:(NSData*)text
+                                    data:(NSData*)data
+                                 symbols:(NSDictionary<NSString*, NSNumber*>*)symbols
+                             dataSymbols:(NSSet<NSString*>*)dataSymbols
+                           globalSymbols:(NSSet<NSString*>*)globalSymbols
+                                  fixups:(NSArray<XAX86_64Fixup*>*)fixups
+                                  soname:(NSString*)soname
+                                  needed:(nullable NSArray<NSString*>*)needed
+                             entrySymbol:(nullable NSString*)entrySymbol
+                                 runpath:(nullable NSString*)runpath
+                                   iface:(nullable NSData*)iface
+                              absSymbols:(nullable NSSet<NSString*>*)absSymbols
+                                     bss:(nullable NSData*)bss
+                              bssSymbols:(nullable NSArray<NSString*>*)bssSymbols
+                                bssAlign:(uint64_t)bssAlign
+                                   error:(NSError**)error;
+
 // Write an ET_REL relocatable object: the text and data verbatim, every
 // remaining fixup recorded as a relocation, and a symbol table that says what
 // this unit defines and what it still needs. `globalSymbols` (the `.globl`

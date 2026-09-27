@@ -810,6 +810,7 @@ int main(int argc, const char* argv[])
                                                   iface:(ifacePath && ![ifacePath isEqualToString:@"-"]
                                                              ? [NSData dataWithContentsOfFile:ifacePath]
                                                              : nil)
+                                                   absSymbols:mabs
                                                           bss:mbss
                                                    bssSymbols:mbssSyms
                                                      bssAlign:mbssAlign
