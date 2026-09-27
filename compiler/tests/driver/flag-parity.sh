@@ -619,7 +619,15 @@ same "--with-dex"           -q -A android --emit-apk --with-dex classes.dex -o @
 same "--emit-lib (android)" -q -A android --emit-lib -o @OUT@.so ret.xc
 xcconly "--emit-lib (m68k, refused)" 1 "has no shared-library format" -q -A m68k --emit-lib -o @OUT@ ret.xc
 xcconly "--emit-lib (6502, refused)" 1 "has no shared-library format" -q -A 6502 --emit-lib -o @OUT@ ret.xc
-xcconly "--emit-lib (win64, refused)" 1 "not supported for 'win64'" -q -A win64 --emit-lib -o @OUT@ ret.xc
+same "--emit-lib (win64)"   -q -A win64 --emit-lib -o @OUT@.dll ret.xc
+# A DLL records its own file name, so the byte comparison builds both under one
+# name.
+mkdir -p dll-ref dll-xc
+( cd dll-ref && "$REF" -H "$ROOT" -q -A win64 --emit-lib -o libret.dll ../ret.xc ) > /dev/null 2>&1
+( cd dll-xc && "$XC" -H "$ROOT" -q -A win64 --emit-lib -o libret.dll ../ret.xc ) > /dev/null 2>&1
+if [ -s dll-ref/libret.dll ] && cmp -s dll-ref/libret.dll dll-xc/libret.dll; then
+    ok "--emit-lib (win64): identical DLL"
+else bad "--emit-lib (win64): the two DLLs differ"; fi
 
 # ── preprocessor diagnostics: same text, location and filtering ─────────
 # #error/#warning, a nested comment and an unknown directive, each reported at

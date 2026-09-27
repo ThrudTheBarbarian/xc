@@ -23,7 +23,8 @@
 #   x86_64  both, run on $XTC_X86_HOST / $XTC_LINUX_HOST. A library client is
 #           compared as assembly: the two drivers' dynamic links export
 #           different symbol sets.
-#   win64   the object, run under wine (win64 links no libraries)
+#   win64   both, run under wine; libraries, objects and programs compared
+#           byte for byte
 #   arm9    both shapes built by both compilers and compared, not run. A
 #           library needs the romfs rebuilt to run (tests/crossmod/run.sh does
 #           that), and linking arm9 objects fails at load on an undefined
@@ -115,7 +116,9 @@ objmatrix() {
 
 run_native() { ( cd "$1" && "./$2" ); }
 run_node()   { ( cd "$1" && node "$2.js" ); }
-run_wine()   { ( cd "$1" && WINEDEBUG=-all wine "./$2" 2>/dev/null | tr -d '\r' ); }
+# run_wine: the crash dialog off, so a program that faults fails the test
+# rather than opening a window.
+run_wine()   { ( cd "$1" && WINEDLLOVERRIDES="winedbg.exe=d" WINEDEBUG=-all wine "./$2" 2>/dev/null | tr -d '\r' ); }
 # run_x86 <dir> <prog> — the program and any libraries beside it, run on $HOST.
 run_x86() {
     ssh "$HOST" "rm -rf $RD && mkdir -p $RD" </dev/null
@@ -154,8 +157,9 @@ fi
 
 before=$fail
 if command -v wine >/dev/null 2>&1; then
+    libmatrix win64 libCnLib.dll run_wine
     objmatrix win64 cnobjmain.exe run_wine
-    [ $fail = $before ] && echo "PASS  win64: class names across an object (under wine)"
+    [ $fail = $before ] && echo "PASS  win64: class names across a library and an object (under wine)"
 else
     echo "SKIP  win64: no wine"
 fi

@@ -19,6 +19,7 @@
 #   x86_64  run on $XTC_X86_HOST / $XTC_LINUX_HOST. The apps are compared as
 #           assembly: the two drivers' dynamic links export different symbol
 #           sets, so the executables differ where the code does not.
+#   win64   run under wine; the DLLs and the apps are compared byte for byte
 #   arm9    built by both compilers and compared byte for byte (not run; the
 #           port's client used to carry its own copy of every imported class's
 #           vtable)
@@ -79,6 +80,9 @@ matrix() {  # <target> <libfile> <runner>
 
 run_native() { ( cd "$1" && "./$2" ); }
 run_node()   { ( cd "$1" && node "$2.js" ); }
+# run_wine <dir> <prog> — under wine, with the crash dialog off: a program that
+# faults must fail the test, not open a window.
+run_wine() { ( cd "$1" && WINEDLLOVERRIDES="winedbg.exe=d" WINEDEBUG=-all wine "./$2" 2>/dev/null | tr -d '\r' ); }
 # run_x86 <dir> <prog> — the program and the libraries beside it, run on $HOST.
 run_x86() {
     ssh "$HOST" "rm -rf $RD && mkdir -p $RD" </dev/null
@@ -111,6 +115,14 @@ if [ -n "$HOST" ] && ssh -o ConnectTimeout=8 -o BatchMode=yes "$HOST" true 2>/de
     [ $fail = $before ] && echo "PASS  x86_64: static calls into a library's imported class (run on $HOST)"
 else
     echo "SKIP  x86_64: no x86-64 host reachable — built nothing, ran nothing"
+fi
+
+before=$fail
+if command -v wine >/dev/null 2>&1; then
+    matrix win64 libSCLib.dll run_wine
+    [ $fail = $before ] && echo "PASS  win64: static calls into a library's imported class (under wine)"
+else
+    echo "SKIP  win64: no wine"
 fi
 
 before=$fail

@@ -49,6 +49,10 @@
 #           constructor never ran (boot=0). It now records the first, and
 #           registers its constructor table at load for the program's _start
 #           to run, dependencies first
+#   win64   the same matrix under wine. The second library's vtable words
+#           name the first library's symbols and are filled at load from its
+#           export table (pseudo-relocations), and chainrev and chainuseonly
+#           run the third library's constructor from its DllMain
 # Not run:
 #   arm9    running needs the loader tree and qemu
 _root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null)
@@ -119,7 +123,7 @@ check() {
     fi
 }
 
-for spec in arm64:.dylib x86_64:.so arm9:.so wasm32:; do
+for spec in arm64:.dylib x86_64:.so win64:.dll arm9:.so wasm32:; do
     a=${spec%%:*}; x=${spec#*:}
     before=$fail
     check "$a" "$x"
@@ -153,10 +157,21 @@ runmatrix() {
                 [ "$got" = "${!want}" ] || { bad "$a lib=$L app=$A $app:"; echo "$got" | head -5 | sed 's/^/        /'; }
             done
         done
+        # win64 links every image in-house in both drivers, so the programs
+        # must agree byte for byte as the libraries do.
+        if [ "$a" = win64 ]; then
+            for app in "$@"; do
+                cmp -s "$TMP/run-$a/$L-xcc-$app/$app" "$TMP/run-$a/$L-xcc-xc-$app/$app" \
+                    || bad "$a lib=$L: the two compilers' $app differs"
+            done
+        fi
     done
 }
 run_native() { ( cd "$1" && ./"$2" ); }
 run_node()   { ( cd "$1" && node "$2.js" ); }
+# run_wine <dir> <prog> — under wine, with the crash dialog off: a program that
+# faults must fail the test, not open a window.
+run_wine() { ( cd "$1" && WINEDLLOVERRIDES="winedbg.exe=d" WINEDEBUG=-all wine "./$2" 2>/dev/null | tr -d '\r' ); }
 run_x86() {
     ssh "$HOST" "rm -rf $RD && mkdir -p $RD" </dev/null
     scp -q "$1/$2" "$1"/*.so "$HOST:$RD/"
@@ -188,6 +203,14 @@ if [ -n "$HOST" ] && ssh -o ConnectTimeout=8 -o BatchMode=yes "$HOST" true 2>/de
     [ $fail = $before ] && echo "PASS  x86_64: run on $HOST, lib x app compiler matrix"
 else
     echo "SKIP  x86_64 run: no x86-64 host reachable"
+fi
+
+before=$fail
+if command -v wine >/dev/null 2>&1; then
+    runmatrix win64 .dll run_wine "Base Sub Use" chainclient chainmany chainrev chainuseonly
+    [ $fail = $before ] && echo "PASS  win64: run under wine, lib x app compiler matrix"
+else
+    echo "SKIP  win64 run: no wine"
 fi
 
 echo "--- chain: $fail failing ---"

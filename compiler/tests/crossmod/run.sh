@@ -1,6 +1,9 @@
 #!/bin/bash
 # run.sh — the cross-module (.so) bound-method test.
 #
+# The win64 leg (first, below) needs only wine and runs whether or not the
+# loader tree is there.
+#
 # NOT part of `make corpus`: it needs the XTOS loader tree and rebuilds the
 # hosttest kernel (the loader resolves DT_NEEDED from the romfs, so the library
 # has to be baked in). Run it by hand after touching bound methods, weak refs,
@@ -36,6 +39,47 @@ _root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null)
 [ -f "$_root/tools/build-env.sh" ] && . "$_root/tools/build-env.sh"
 set -e
 cd "$(dirname "$0")/../.."
+
+# ── win64: the same pairs as DLLs, under wine ──────────────────────────────
+# Every pair below except the bound-method one (bmlib imports libGEM, an arm9
+# C library): two independent libraries and a protocol from each, the
+# conformance downcast of a client class, and the prelude protocols. Each
+# compiler builds the libraries and the programs, the two compilers' DLLs and
+# programs are compared byte for byte, and every program runs under wine with
+# the crash dialog off.
+if command -v wine >/dev/null 2>&1; then
+  W=$(mktemp -d); WROOT=$PWD
+  wfail=0
+  wine_run() { ( cd "$1" && WINEDLLOVERRIDES="winedbg.exe=d" WINEDEBUG=-all wine "./$2" 2>/dev/null | tr -d '\r' ); }
+  wine_pair() {  # <want> <client> <source:Name>... — build with both compilers, compare, run
+    local want=$1 app=$2 c l got; shift 2
+    for c in xcc xcc-xc; do
+      mkdir -p "$W/$c"
+      for l in "$@"; do
+        ( cd "$W/$c" && "$WROOT/bin/osx/$c" -A win64 -H "$WROOT" -q --emit-lib \
+            -o "lib${l#*:}.dll" "$WROOT/tests/crossmod/${l%%:*}.xc" ) || { echo "FAIL  win64: $c could not build lib${l#*:}.dll"; wfail=1; return; }
+      done
+      ( cd "$W/$c" && "$WROOT/bin/osx/$c" -A win64 -H "$WROOT" -q -L . -o "$app" \
+          "$WROOT/tests/crossmod/$app.xc" ) || { echo "FAIL  win64: $c could not build $app"; wfail=1; return; }
+      got=$(wine_run "$W/$c" "$app")
+      [ "$got" = "$want" ] || { echo "FAIL  win64 ($c): $app"; echo "$got" | head -5; wfail=1; }
+    done
+    for l in "$@"; do
+      cmp -s "$W/xcc/lib${l#*:}.dll" "$W/xcc-xc/lib${l#*:}.dll" || { echo "FAIL  win64: the two compilers' lib${l#*:}.dll differ"; wfail=1; }
+    done
+    cmp -s "$W/xcc/$app" "$W/xcc-xc/$app" || { echo "FAIL  win64: the two compilers' $app differs"; wfail=1; }
+  }
+  wine_pair "$(cat tests/crossmod/twolibs.expected.out)" twolibs blib:blib clib:clib
+  wine_pair "$(cat tests/crossmod/dc.expected.out)" dcclient dclib:dclib
+  wine_pair $'own=2\nlib-hash=77\nlib-cmp=1\nlib-obj=1\nlib-bound=77\nlib-len=5\napp-hash=22\napp-cmp=0\napp-obj=0' protoclient protolib:ProtoLib
+  wine_pair $'own=2\nlib-hash=99\nlib-cmp=1\nlib-obj=1\nlib-bound=99\napp-hash=99\napp-box=99' protosub protolib:ProtoLib
+  rm -rf "$W"
+  [ $wfail = 0 ] && echo "PASS  win64: two libraries, conformance downcast and prelude protocols across DLLs (under wine)"
+  [ $wfail = 0 ] || exit 1
+else
+  echo "SKIP  win64: no wine"
+fi
+
 SR="${XTC_ARM9_SYSROOT:-}"
 LOADER="$(dirname "$SR")"
 XTC=bin/osx/xcc
