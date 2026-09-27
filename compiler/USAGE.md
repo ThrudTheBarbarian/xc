@@ -37,20 +37,18 @@ every target end to end. It is the only compiler that ships.
 | `ios`    | **yes** | Mach-O arm64 with in-house bundle + signing |
 
 Every row above was checked by building with the installed `xcc` for that
-target and inspecting the output. `xcc-bootstrap` sits beside it as the
-Objective-C compiler that built it, and never ships.
+target and inspecting the output.
 
 The compiler always runs the IR pipeline (parse → sema → IR-lower → verify →
-backend). `--with-ir` is accepted and ignored. Internally `xcc` is a thin
-dispatcher that spawns `xcc-fe` (front end → IR text), `xcc-cg-<arch>`
-(IR → asm) and, for the linked targets, `xcc-ln-<arch>`. The native links are
-done **in-house, with no clang** (6502 links through `xcc-as`, m68k emits the
+optimise → back end), and `xcc` does all of it itself, assembling and linking
+included. `--with-ir` is accepted and ignored. The native links are done
+**in-house, with no clang** (6502 links through `xcc-as`, m68k emits the
 GEMDOS executable directly).
 
 Build the toolchain first:
 
 ```bash
-make            # builds bin/<platform>/xcc and the xcc-* tools
+make            # builds the toolchain
 make install    # installs to /opt/xcc/<version>  (override with PREFIX=)
 ```
 
@@ -74,7 +72,7 @@ xcc test.xc -O2 -A arm64 -o test.s     # any .s output path → assembly only
 ```
 
 When the `-o` path does **not** end in `.s`, `xcc` assembles and links a native
-executable in-house (`xcc-ln-arm64`, no clang). The arm64 backend ignores `-m`
+executable in-house (no clang). The arm64 backend ignores `-m`
 (no memory model is loaded); libraries resolve from `support/arm64/lib/` with a
 small host runtime in `support/arm64/runtime/libxt.c`.
 
@@ -90,7 +88,7 @@ node test.js                        # Node
 # or serve test.js + test.wasm and add <script src="test.js"></script>
 ```
 
-The output is `test.wasm` (built by the in-house `xcc-ln-wasm32`, no external
+The output is `test.wasm` (built by the in-house linker, no external
 tools) and `test.js`, one loader that runs under Node (CommonJS) and in a
 browser. The loader provides the `env` host surface (stdout, time, math, rand);
 in a browser, output goes to `globalThis.xccOut` (or `console.log`). After
