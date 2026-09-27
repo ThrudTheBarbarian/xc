@@ -1271,7 +1271,9 @@ static uint32_t elfHash(const char* name)
     [symOrder addObjectsFromArray:wordImports];
     for (NSUInteger i = 1; i < symOrder.count; i++)
         intern(symOrder[i]);
-    uint32_t sonameOff = intern(soname);
+    // An executable carries no DT_SONAME (below), so its name is not interned
+    // either; the string table then matches the shipped writer's.
+    uint32_t sonameOff = isExec ? 0 : intern(soname);
     NSMutableArray<NSNumber*>* neededOff = [NSMutableArray array];
     for (NSString* n in needed ?: @[])
         [neededOff addObject:@(intern(n))];

@@ -122,7 +122,7 @@ before=$fail
 HOST=${XTC_X86_HOST:-${XTC_LINUX_HOST:-}}
 if [ -n "$HOST" ] && ssh -o ConnectTimeout=8 -o BatchMode=yes "$HOST" true 2>/dev/null; then
     RD=/tmp/xc-protocols-$$
-    APPCMP=asm matrix x86_64 libProtoLib.so run_x86 protoclient protosub
+    matrix x86_64 libProtoLib.so run_x86 protoclient protosub
     ssh "$HOST" "rm -rf $RD" </dev/null
     [ $fail = $before ] && echo "PASS  x86_64: prelude protocols, Object and String across a .so (run on $HOST)"
 else

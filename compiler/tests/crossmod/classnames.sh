@@ -144,7 +144,7 @@ before=$fail
 HOST=${XTC_X86_HOST:-${XTC_LINUX_HOST:-}}
 if [ -n "$HOST" ] && ssh -o ConnectTimeout=8 -o BatchMode=yes "$HOST" true 2>/dev/null; then
     RD=/tmp/xc-classnames-$$
-    APPCMP=asm libmatrix x86_64 libCnLib.so run_x86
+    libmatrix x86_64 libCnLib.so run_x86
     objmatrix x86_64 cnobjmain run_x86
     ssh "$HOST" "rm -rf $RD" </dev/null
     [ $fail = $before ] && echo "PASS  x86_64: class names across a library and an object (run on $HOST)"

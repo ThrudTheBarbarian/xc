@@ -483,6 +483,11 @@ int main(int argc, const char* argv[])
         NSMutableArray<NSDictionary*>* mtlsAbs = [NSMutableArray array];
         NSMutableSet<NSString*>* mdataSyms = [as.dataSymbols mutableCopy] ?: [NSMutableSet set];
         NSMutableSet<NSString*>* mglobals = [as.globalSymbols mutableCopy] ?: [NSMutableSet set];
+        // What a dynamic image EXPORTS: this unit's own globals (runtime and
+        // program) plus what its shared dependencies need from it. The globals
+        // of merged objects and libc.a members are not re-exported, the same
+        // policy as the shipped linker (bug 420).
+        NSMutableSet<NSString*>* mexport = [as.globalSymbols mutableCopy] ?: [NSMutableSet set];
         NSMutableArray<XAX86_64Fixup*>* mfix = [as.fixups mutableCopy] ?: [NSMutableArray array];
         NSMutableData* mbss = [NSMutableData data]; // COMMON (NOBITS) pool
         NSMutableArray<NSString*>* mbssSyms = [NSMutableArray array];
@@ -783,7 +788,10 @@ int main(int argc, const char* argv[])
         // becomes this image's own import, which is the honest outcome.)
         for (NSString* u in soNeeds)
             if (msyms[u])
+                {
                 [mglobals addObject:u];
+                [mexport addObject:u];
+                }
 
         // -pie: the dynamically-linked executable form. Same ET_DYN machinery as a
         // library, plus an entry point and a PT_INTERP — that is what lets a
@@ -793,7 +801,7 @@ int main(int argc, const char* argv[])
                                                          data:mdata
                                                       symbols:msyms
                                                   dataSymbols:mdataSyms
-                                                globalSymbols:mglobals
+                                                globalSymbols:mexport
                                                        fixups:mfix
                                                        soname:soname ?: output.lastPathComponent
                                                        needed:needed

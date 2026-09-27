@@ -106,7 +106,7 @@ before=$fail
 HOST=${XTC_X86_HOST:-${XTC_LINUX_HOST:-}}
 if [ -n "$HOST" ] && ssh -o ConnectTimeout=8 -o BatchMode=yes "$HOST" true 2>/dev/null; then
     RD=/tmp/xc-static-call-$$
-    APPCMP=asm matrix x86_64 libSCLib.so run_x86
+    matrix x86_64 libSCLib.so run_x86
     ssh "$HOST" "rm -rf $RD" </dev/null
     [ $fail = $before ] && echo "PASS  x86_64: static calls into a library's imported class (run on $HOST)"
 else
