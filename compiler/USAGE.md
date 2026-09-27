@@ -32,7 +32,7 @@ every target end to end. It is the only compiler that ships.
 | `android`| **yes** | arm64 back end, Android ABI and link |
 | `m68k`   | **yes** | GEMDOS `.prg` |
 | `wasm32` | **yes** | `.wasm` + loader |
-| `win64`  | **yes** | PE32+ console executable, in-house COFF writer and linker |
+| `win64`  | **yes** | PE32+ console executable or DLL (`--emit-lib`), in-house COFF writer and linker |
 | `arm9`   | **yes** | ELF ARM EABI5; no `arm-none-eabi-gcc` or other external toolchain |
 | `ios`    | **yes** | Mach-O arm64 with in-house bundle + signing |
 

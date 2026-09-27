@@ -144,33 +144,9 @@ void _xt_alloc_lock(void);
 void _xt_alloc_unlock(void);
 
 // ───────────────────────────── allocator ─────────────────────────────
-// Bump allocation out of mmap'd arenas, with power-of-two size classes recycled
-// through free lists. Freed blocks are reused but arenas are never returned to
-// the kernel: a compiler test binary is short-lived, and a coalescing allocator
-// would cost more than it saves here. Each block carries its class in an 8-byte
-// prefix so _xt_free knows which list to push it onto.
-#define NCLASS 28
-static void* xt_freelist[NCLASS];
-static uint8_t *xt_cur, *xt_end;
-
-static void* xt_bump(uint64_t n)
-    {
-    if (xt_cur + n > xt_end)
-        {
-        uint64_t want = n + 0xFFFFFUL;
-        want &= ~0xFFFFFUL; // whole megabytes
-        if (want < (1UL << 20))
-            want = 1UL << 20;
-        void* p = xt_os_alloc(want);
-        if (!p)
-            return 0;
-        xt_cur = (uint8_t*)p;
-        xt_end = xt_cur + want;
-        }
-    void* r = xt_cur;
-    xt_cur += n;
-    return r;
-    }
+// Neither target keeps an allocator of its own: Linux delegates to the libc
+// pool's malloc (with a cache in front), win64 to kernel32's process heap.
+// Both for the same reason — one heap per process, whatever image allocates.
 
 #ifndef XT_WIN64
 // On Linux/x86-64 the libc pool (musl) is ALWAYS in the link, so the xtc
@@ -178,8 +154,8 @@ static void* xt_bump(uint64_t n)
 // any whole-image override (mimalloc as a plain object — blewit's startup
 // probe refuses a split heap, and it is right to: a split is cross-allocator
 // free() waiting to happen). This restores the pre-in-house contract, where
-// the clang-path stub mapped _xtc_* onto calloc. The freelist below survives
-// for the win64 build only.
+// the clang-path stub mapped _xtc_* onto calloc. win64 uses the process heap
+// instead (below).
 extern void* calloc(uint64_t, uint64_t);
 extern void free(void*);
 extern void* malloc(uint64_t);
@@ -268,52 +244,30 @@ void _xt_free(void* q)
     }
 #endif
 #ifdef XT_WIN64
+/* The PROCESS heap, kernel32's, and nothing of our own in front of it. A DLL
+   built by `xcc -A win64 --emit-lib` carries this runtime too, so a per-image
+   free list would give the program and each of its DLLs a heap of its own,
+   and an object made in one image and released in another would go back to
+   an allocator that never handed it out. GetProcessHeap() is the same heap
+   in every image of the process, so any image may free what any other
+   allocated. (rtgen-win64.s is hand-edited to match; see its header.) */
+extern void* GetProcessHeap(void);
+extern void* HeapAlloc(void* heap, uint32_t flags, uint64_t bytes);
+extern int HeapFree(void* heap, uint32_t flags, void* p);
 void* _xt_calloc(uint64_t n)
     {
-    uint64_t need = n + 8;
-    int c = 0;
-    uint64_t sz = 16;
-    while (sz < need && c < NCLASS - 1)
-        {
-        sz <<= 1;
-        c++;
-        }
-    if (sz < need)
-        return 0; // larger than the largest class
-    // The free-list pop and the bump pointer are shared state the moment a
-    // second thread exists: two threads popping the same class would both take
-    // the same block. Only the list surgery is locked — the zeroing below is on
-    // memory nobody else can reach yet.
-    _xt_alloc_lock();
-    void* p = xt_freelist[c];
-    if (p)
-        xt_freelist[c] = *(void**)p;
-    else
-        p = xt_bump(sz);
-    _xt_alloc_unlock();
-    if (!p)
-        return 0;
-    *(uint64_t*)p = (uint64_t)c;
-    uint8_t* u = (uint8_t*)p + 8;
-    for (uint64_t i = 0; i < n; i++)
-        u[i] = 0; // calloc semantics: ARC relies
-    return u;     //   on ivars starting zeroed
+    /* HEAP_ZERO_MEMORY: ARC relies on ivars starting zeroed. The 8-byte
+       prefix keeps a payload 16-aligned after the 40-byte object header. */
+    uint8_t* p = (uint8_t*)HeapAlloc(GetProcessHeap(), 8, n + 8);
+    return p ? p + 8 : 0;
     }
 
 void _xt_free(void* q)
     {
-    if (!q)
-        return;
-    void* p = (uint8_t*)q - 8;
-    uint64_t c = *(uint64_t*)p;
-    if (c >= NCLASS)
-        return; // not ours / already corrupted
-    _xt_alloc_lock();
-    *(void**)p = xt_freelist[c];
-    xt_freelist[c] = p;
-    _xt_alloc_unlock();
+    if (q)
+        HeapFree(GetProcessHeap(), 0, (uint8_t*)q - 8);
     }
-#endif // XT_WIN64 (the freelist allocator)
+#endif // XT_WIN64 (the process-heap allocator)
 
 // ───────────────────────────── memset ─────────────────────────────
 // The backend lowers XTIROpMemSet to a `call memset`, so one has to exist. The

@@ -3,6 +3,12 @@
 //
 //   xtldwin <input.s>... -o <out.exe> [-e entry] [-import <dll>:<sym>,...]
 //                                     [-importmap <file>]
+//   xtldwin <input.s>... -shared -o <lib.dll> -e <entry> [-iface <json>]
+//
+// A `.dll` among the inputs is linked against: every name its export
+// directory lists is imported from it, after the explicit -import entries and
+// before the map. The same arguments as `xtcln-win64`, so one harness drives
+// both (ldwin-diff, ldwindll-diff).
 //
 // The self-hosted counterpart of `xtcln-win64`: no mingw, no lld-link, no
 // Windows SDK. Windows has no stable syscall ABI, so unlike the Linux target
@@ -70,6 +76,9 @@ void main(void)
     String* outPath = (String*)0;
     String* entry = String.withCString("_start");
     String* mapPath = (String*)0;
+    String* ifacePath = (String*)0;
+    bool shared = false;
+    Array* dllInputs = new Array();
     u32 argc = Process.argumentCount();
     u32 i = (u32)1;
     while (i < argc)
@@ -84,6 +93,18 @@ void main(void)
         if (a.equals(String.withCString("-e")) && i + (u32)1 < argc)
             {
             entry = Process.argument(i + (u32)1);
+            i = i + (u32)2;
+            continue;
+            }
+        if (a.equals(String.withCString("-shared")) || a.equals(String.withCString("--shared")))
+            {
+            shared = true;
+            i = i + (u32)1;
+            continue;
+            }
+        if (a.equals(String.withCString("-iface")) && i + (u32)1 < argc)
+            {
+            ifacePath = Process.argument(i + (u32)1);
             i = i + (u32)2;
             continue;
             }
@@ -112,7 +133,12 @@ void main(void)
             continue;
             }
         if (!a.hasPrefix(String.withCString("-")))
-            inputs.add((Object*)a);
+            {
+            if (a.lowercased().hasSuffix(String.withCString(".dll")))
+                dllInputs.add((Object*)a);
+            else
+                inputs.add((Object*)a);
+            }
         i = i + (u32)1;
         }
     if (inputs.count() == (u32)0 || outPath == 0)
@@ -120,6 +146,27 @@ void main(void)
         Stdio.printf("usage: xtldwin <input.s>... -o <out.exe> [-e entry] [-import <dll>:<sym>,...] [-importmap <file>]\n");
         Process.exit((i32)2);
         return;
+        }
+
+    // The DLLs linked against, in command-line order: an export not already
+    // listed is imported from the first DLL that provides it.
+    for (u32 k = (u32)0; k < dllInputs.count(); k = k + (u32)1)
+        {
+        String* dp = (String*)dllInputs.get(k);
+        Array* ex = Pe.dllExports(dp);
+        if (ex == (Array*)0)
+            {
+            Stdio.printf("xtldwin: error: '%s' is not a DLL with an export directory\n", dp.cString());
+            Process.exit((i32)1);
+            return;
+            }
+        u32 slot = dllSlot(dp.lastPathComponent());
+        for (u32 j = (u32)0; j < ex.count(); j = j + (u32)1)
+            {
+            String* sym = (String*)ex.get(j);
+            if (!alreadyListed(sym))
+                ((Array*)gSyms.get(slot)).add((Object*)sym);
+            }
         }
 
     // Fold the map in. Listing a symbol here does NOT put it in the output: the
@@ -178,8 +225,25 @@ void main(void)
         return;
         }
     Pe* pe = new Pe();
-    pe.executable(a.text(), a.data(), a.symbols(), a.dataSyms(), a.fixups(),
-                  entry, gDlls, gSyms);
+    if (shared)
+        {
+        Data* iface = (Data*)0;
+        if (ifacePath != (String*)0 && !ifacePath.equals(String.withCString("-")))
+            {
+            iface = Files.readData(ifacePath);
+            if (iface == (Data*)0)
+                {
+                Stdio.printf("xtldwin: cannot read interface '%s'\n", ifacePath.cString());
+                Process.exit((i32)1);
+                return;
+                }
+            }
+        pe.dll(a.text(), a.data(), a.symbols(), a.dataSyms(), a.fixups(),
+               entry, gDlls, gSyms, outPath.lastPathComponent(), a.globalSyms(), iface);
+        }
+    else
+        pe.executable(a.text(), a.data(), a.symbols(), a.dataSyms(), a.fixups(),
+                      entry, gDlls, gSyms);
     if (pe.failed())
         {
         Stdio.printf("xtldwin: %s\n", pe.why().cString());

@@ -79,7 +79,7 @@ Output containers on the non-native targets:
 | `ios` / `ios-sim` | iOS device / simulator (arm64) | Mach-O; sign with `xcc-sign`, install on device/simulator |
 | `android` | Android (arm64) | with `--emit-apk`, a signed `.apk` |
 | `x86_64` | Linux (musl) | ELF; run it |
-| `win64` | Windows | PE/COFF `.exe` |
+| `win64` | Windows | PE/COFF `.exe`, or a DLL (see `--emit-lib`) |
 | `arm9` | AArch32 / **XTOS** | ELF, or a `.so` (see `--emit-lib`) |
 | `m68k` | Motorola 68000 | GEMDOS `.prg`/`.tos`; run under `xcc-sim-68k`. `-A 68000` is the same target, and `-A 68030` builds for the 68030 (run with `xcc-sim-68k --cpu 68030`). |
 | `wasm32` | WebAssembly | `.wasm` / WAT |

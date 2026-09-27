@@ -1365,7 +1365,8 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
         // two libraries agree and a client program adopts the numbers. A
         // library build numbers them the same way itself and does not need to.
         BOOL clientProgram = !(_options.emitLib || _options.compileOnly) &&
-                             (_options.useArm64Backend || _options.useX86_64Backend || _options.useArm9Backend);
+                             (_options.useArm64Backend || _options.useX86_64Backend || _options.useWin64Backend
+                              || _options.useArm9Backend);
         if (_options.useWasm32Backend || clientProgram)
             {
             NSDictionary* amb = sl[@"ambientSlots"] ?: @{};
@@ -1724,10 +1725,11 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     // `Hashable*` read its slot 92 out of a 19-entry client vtable. The itable
     // key (the protocol's name-derived id and the method's declaration index)
     // is derived alike everywhere, so no numbering has to cross the interface.
-    // win64 links no libraries yet, so it keeps the slot.
+    // win64 joined them with its DLLs (bug 255).
     BOOL multiModule = sema.libraryBuild || xtcLibJsons.count > 0;
     BOOL itableDispatch = _options.useArm9Backend ||
-                          ((_options.useArm64Backend || _options.useX86_64Backend || _options.useWasm32Backend) && multiModule);
+                          ((_options.useArm64Backend || _options.useX86_64Backend || _options.useWin64Backend
+                            || _options.useWasm32Backend) && multiModule);
     sema.itableProtocols = itableDispatch;
     // Native AAPCS varargs — a variadic's args ride the C ABI (arm9: regs+stack;
     // arm64: all on the stack, Apple's rule), NOT the $04B0 pack buffer. Unifying

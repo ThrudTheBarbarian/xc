@@ -2803,6 +2803,17 @@ static int linkX86_64Executable(const char *argv0, XTCommandLineOptions *opts,
     return rc;
 }
 
+// The per-program inputs a win64 link adds to the runtime: the class
+// allocator stubs, and for a DLL whose module has no load-time constructors an
+// empty constructor table, so dllmain-win64.s always has one to walk.
+static NSString *win64StubSource(NSString *prog, BOOL shared) {
+    NSString *stubs = x86_64ClassAllocStubs(prog, YES);
+    if (shared && ![prog containsString:@"\n__xt_ctors_start:"])
+        stubs = [stubs stringByAppendingString:
+                 @"\t.data\n__xt_ctors_start:\n__xt_ctors_end:\n\t.text\n"];
+    return stubs;
+}
+
 // Link a Win64 program (from xtcg-win64 output) into a static PE (.exe) with the
 // mingw-w64 cross-clang. Toolchain root from $XTC_WIN64_TOOLCHAIN (default
 // /opt/clang/win64). The mingw clang drives the whole pipeline — assembles the
@@ -2833,10 +2844,17 @@ static NSSet<NSString *> *win64SelfHostCoveredLibs(const char *argv0,
 }
 
 // Wine on macOS/Linux or natively on Windows.
+//
+// With --emit-lib the same in-house link writes a DLL instead (bug 255): the
+// runtime without crt-win64.s, whose place dllmain-win64.s takes, every `.globl`
+// exported, and the interface in an `xtciface` section. Nothing else differs,
+// and a DLL has no toolchain fallback.
 static int linkWin64Executable(const char *argv0, XTCommandLineOptions *opts,
                                NSString *asmPath, NSString *outPath,
-                               NSArray<NSString *> *neededLibs) {
+                               NSArray<NSString *> *neededLibs,
+                               NSString *_Nullable ifaceJson) {
     NSFileManager *fm = [NSFileManager defaultManager];
+    BOOL shared = opts.emitLib && !opts.compileOnly;
 
     // ── -c: compile to a relocatable COFF object and stop ─────────────────
     // The arm64/x86_64 shape exactly: the object carries the MODULE and nothing
@@ -2874,7 +2892,15 @@ static int linkWin64Executable(const char *argv0, XTCommandLineOptions *opts,
     // in-house linker could have resolved it).
     NSSet<NSString *> *coveredLibs = win64SelfHostCoveredLibs(argv0, opts);
     BOOL onlySystemLibs = YES;
+    // An xc library (`#import <Lib>` found libLib.dll) is linked against by
+    // the in-house linker, which reads the DLL's export directory: no import
+    // library, and no toolchain.
+    NSMutableArray<NSString *> *xcDlls = [NSMutableArray array];
     for (NSString *lib in neededLibs) {
+        if ([lib.pathExtension.lowercaseString isEqualToString:@"dll"]) {
+            [xcDlls addObject:lib];
+            continue;
+        }
         if (![coveredLibs containsObject:lib.lastPathComponent.lowercaseString]) {
             onlySystemLibs = NO; break;
         }
@@ -2890,12 +2916,21 @@ static int linkWin64Executable(const char *argv0, XTCommandLineOptions *opts,
         @[[w64tc stringByAppendingPathComponent:@"x86_64-w64-mingw32/lib"],
           [w64tc stringByAppendingPathComponent:@"x86_64-w64-mingw32/clang-rt"]];
     BOOL w64ArchivesOK = dashLResolveArchives(opts, fm, w64DefDirs, w64UserArchives);
-    if (selfHostByDefault(opts) && onlySystemLibs && w64ArchivesOK) {
+    if (shared && !(onlySystemLibs && w64ArchivesOK)) {
+        fprintf(stderr, "xcc: error: a win64 DLL links in-house only, and this one names "
+                "a library the in-house linker cannot read (-l finds no static archive, "
+                "or a system library outside the import map)\n");
+        return 1;
+    }
+    if ((selfHostByDefault(opts) || shared) && onlySystemLibs && w64ArchivesOK) {
         NSString *support = resolveSupportRoot(argv0, opts);
         NSString *ln = resolveSiblingTool(argv0, @"xcc-ln-win64");
         NSMutableArray<NSString *> *rtPaths = [NSMutableArray array];
         BOOL haveRt = (support != nil && ln != nil);
-        for (NSString *n in @[@"crt-win64.s", @"rtgen-win64.s", @"rtfiles-win64.s", @"libmgen-win64.s"]) {
+        NSArray<NSString *> *rtNames = shared
+            ? @[@"rtgen-win64.s", @"rtfiles-win64.s", @"libmgen-win64.s", @"dllmain-win64.s"]
+            : @[@"crt-win64.s", @"rtgen-win64.s", @"rtfiles-win64.s", @"libmgen-win64.s"];
+        for (NSString *n in rtNames) {
             NSString *pth = [support stringByAppendingPathComponent:
                              [@"win64/runtime/" stringByAppendingString:n]];
             if (![fm fileExistsAtPath:pth]) { haveRt = NO; break; }
@@ -2905,11 +2940,13 @@ static int linkWin64Executable(const char *argv0, XTCommandLineOptions *opts,
             NSString *prog = [NSString stringWithContentsOfFile:asmPath
                                                        encoding:NSUTF8StringEncoding error:NULL];
             NSString *stubPath = [xtcTempDir() stringByAppendingPathComponent:@"xtc-win64-newstubs.s"];
-            [x86_64ClassAllocStubs(prog, YES) writeToFile:stubPath atomically:YES
-                                                 encoding:NSUTF8StringEncoding error:NULL];
+            [win64StubSource(prog, shared) writeToFile:stubPath atomically:YES
+                                              encoding:NSUTF8StringEncoding error:NULL];
             NSMutableArray<NSString *> *args = [rtPaths mutableCopy];
             [args addObject:stubPath];
             [args addObject:asmPath];
+            // The xc DLLs this image imports, after the assembly inputs.
+            [args addObjectsFromArray:xcDlls];
             // The user's -l archives before the libc pool (finding #15).
             [args addObjectsFromArray:w64UserArchives];
             // The real C runtime goes LAST, so it is only ever a POOL for what
@@ -2930,15 +2967,33 @@ static int linkWin64Executable(const char *argv0, XTCommandLineOptions *opts,
             NSString *impMap = [support stringByAppendingPathComponent:@"win64/win32-imports.map"];
             if ([fm fileExistsAtPath:impMap])
                 [args addObjectsFromArray:@[@"-importmap", impMap]];
-            [args addObjectsFromArray:@[@"-e", @"_start", @"-o", outPath]];
+            NSString *ifacePath = nil;
+            if (shared) {
+                // The interface rides in the DLL, as it does in every other
+                // target's library, so `#import <Lib>` reads it from the binary.
+                ifacePath = @"-";
+                if (ifaceJson.length) {
+                    ifacePath = [xtcTempDir() stringByAppendingPathComponent:@"xtc-win64-dll-iface.json"];
+                    [ifaceJson writeToFile:ifacePath atomically:YES
+                                  encoding:NSUTF8StringEncoding error:NULL];
+                }
+                [args addObjectsFromArray:@[@"-shared", @"-iface", ifacePath,
+                                            @"-e", @"_xt_dll_main", @"-o", outPath]];
+            } else
+                [args addObjectsFromArray:@[@"-e", @"_start", @"-o", outPath]];
             int rc = runChild(ln, args);
-            if (!opts.verbose) [fm removeItemAtPath:stubPath error:NULL];
+            if (!opts.verbose) {
+                [fm removeItemAtPath:stubPath error:NULL];
+                if (ifacePath.length > 1) [fm removeItemAtPath:ifacePath error:NULL];
+            }
             if (rc == 0) {
                 if (!opts.quiet)
-                    fprintf(stderr, "xcc: win64 PE (self-hosted, no mingw) -> '%s'\n",
+                    fprintf(stderr, shared ? "xcc: win64 DLL (self-hosted, no mingw) -> '%s'\n"
+                                           : "xcc: win64 PE (self-hosted, no mingw) -> '%s'\n",
                             outPath.UTF8String);
                 return 0;
             }
+            if (shared) return 1;
             // A FAILED in-house link is the case the other four back ends already
             // treat as fatal (arm64, and x86-64 static/dynamic/shared). win64 was
             // the one site that never joined them, and that omission is precisely
@@ -2946,6 +3001,10 @@ static int linkWin64Executable(const char *argv0, XTCommandLineOptions *opts,
             if (!clangFallbackAllowed()) return clangFallbackRefused("win64 in-house link");
             warnToolchainFallback(opts, "this win64 PE",
                                   "the in-house link failed and XTC_ALLOW_CLANG_FALLBACK is set");
+        } else if (shared) {
+            fprintf(stderr, "xcc: error: the win64 runtime .s files or xcc-ln-win64 could "
+                    "not be found (check -H / the support tree)\n");
+            return 1;
         } else {
             // A missing runtime .s or an unresolvable xcc-ln-win64 dropped
             // straight through to mingw without a word — the same silence, one
@@ -3005,61 +3064,6 @@ static int linkWin64Executable(const char *argv0, XTCommandLineOptions *opts,
     if (!opts.verbose) [fm removeItemAtPath:stubPath error:NULL];
     if (rc == 0 && !opts.quiet)
         fprintf(stderr, "xcc: win64 PE -> '%s'\n", outPath.UTF8String);
-    return rc;
-}
-
-// Build a Win64 DLL from `--emit-lib` output — the Windows analogue of
-// linkX86_64Shared/linkArm64Shared. The mingw clang links `-shared` and, with
-// `--out-implib`, drops an import library (`<dll>.a`) beside the DLL so a client
-// links by name and the loader binds the DLL at run time; `--export-all-symbols`
-// exports every `.globl` the backend emitted for the public API. The serialised
-// interface rides along as a `.xtc.iface` PE section for `#import <Lib>`.
-static int linkWin64Shared(const char *argv0, XTCommandLineOptions *opts, NSString *asmPath,
-                           NSString *outPath, NSString *_Nullable ifaceJson) {
-    NSFileManager *fm = [NSFileManager defaultManager];
-    const char *tcEnv = getenv("XTC_WIN64_TOOLCHAIN");
-    NSString *tc = tcEnv ? @(tcEnv) : @"/opt/clang/win64";
-    NSString *cc      = [tc stringByAppendingPathComponent:@"bin/x86_64-w64-mingw32-clang"];
-    NSString *sysroot = [tc stringByAppendingPathComponent:@"x86_64-w64-mingw32"];
-    if (![fm fileExistsAtPath:cc]) {
-        fprintf(stderr, "xcc: error: win64 mingw toolchain not found at '%s' "
-                "(set XTC_WIN64_TOOLCHAIN)\n", tc.UTF8String);
-        return 1;
-    }
-    NSString *asmText = [NSString stringWithContentsOfFile:asmPath encoding:NSUTF8StringEncoding error:NULL];
-    NSString *stubPath = [xtcTempDir() stringByAppendingPathComponent:@"xtc-win64-dll-stub.c"];
-    [x86_64StubSource(asmText, resolveSupportRoot(argv0, opts)) writeToFile:stubPath atomically:YES encoding:NSUTF8StringEncoding error:NULL];
-
-    // Embed the interface JSON as a `.xtc.iface` COFF/PE section (a tiny .s with
-    // .incbin) so an app that `#import <Lib>`s this DLL reconstructs the public
-    // declarations from the DLL itself.
-    NSString *ifaceAsmPath = nil;
-    if (ifaceJson.length) {
-        NSString *jsonPath = [xtcTempDir() stringByAppendingPathComponent:@"xtc-win64-iface.json"];
-        [ifaceJson writeToFile:jsonPath atomically:YES encoding:NSUTF8StringEncoding error:NULL];
-        ifaceAsmPath = [xtcTempDir() stringByAppendingPathComponent:@"xtc-win64-iface.s"];
-        // COFF section names are capped at 8 chars (longer ones spill to the
-        // string table), so use `xtciface` (exactly 8) rather than `.xtc.iface`.
-        NSString *ifaceAsm = [NSString stringWithFormat:
-            @"\t.section xtciface,\"dr\"\n\t.incbin \"%@\"\n\t.byte 0\n", jsonPath];
-        [ifaceAsm writeToFile:ifaceAsmPath atomically:YES encoding:NSUTF8StringEncoding error:NULL];
-    }
-
-    // The import library sits beside the DLL as `<dll>.a` (mingw convention:
-    // libFoo.dll → libFoo.dll.a). A client links it and the loader binds the DLL.
-    NSString *implib = [outPath stringByAppendingPathExtension:@"a"];
-    NSMutableArray<NSString *> *a = [@[cc, @"--target=x86_64-w64-mingw32",
-        [@"--sysroot=" stringByAppendingString:sysroot], @"-O2", @"-shared",
-        [@"-Wl,--out-implib," stringByAppendingString:implib],
-        @"-Wl,--export-all-symbols", asmPath, stubPath] mutableCopy];
-    if (ifaceAsmPath) [a addObject:ifaceAsmPath];
-    [a addObjectsFromArray:@[@"-o", outPath]];
-    int rc = runChild(@"/usr/bin/env", a);
-    if (!opts.verbose) { [fm removeItemAtPath:stubPath error:NULL];
-                         if (ifaceAsmPath) [fm removeItemAtPath:ifaceAsmPath error:NULL]; }
-    if (rc == 0 && !opts.quiet)
-        fprintf(stderr, "xcc: win64 DLL -> '%s' (import lib '%s')\n",
-                outPath.UTF8String, implib.UTF8String);
     return rc;
 }
 
@@ -4602,10 +4606,8 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
             ? linkWasm32Module(argv0, opts, tmpAsm, opts.outputPath, neededLibs, ifaceJson)
             : arm9Pic
             ? linkArm9Shared(argv0, opts, tmpAsm, opts.outputPath, neededLibs, ifaceJson)
-            : (win64Exe && opts.emitLib && !opts.compileOnly)
-            ? linkWin64Shared(argv0, opts, tmpAsm, opts.outputPath, ifaceJson)
             : win64Exe
-            ? linkWin64Executable(argv0, opts, tmpAsm, opts.outputPath, neededLibs)
+            ? linkWin64Executable(argv0, opts, tmpAsm, opts.outputPath, neededLibs, ifaceJson)
             // `-c` must reach linkX86_64Executable, which is where the object
             // path lives — the -shared and dynamic-exe variants are LINKS, and
             // a compile that imported a library was being routed into one of

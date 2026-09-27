@@ -425,10 +425,10 @@ class FeOptions
                     if (sysDir != (String*)0 && mp.hasPrefix(sysDir))
                         continue;
                     }
-                if (!mp.hasSuffix(String.withCString(".xtc.iface")) && !mp.hasSuffix(String.withCString(".wasm")) && !mp.hasSuffix(String.withCString(".dylib")) && !mp.hasSuffix(String.withCString(".so")))
+                if (!mp.hasSuffix(String.withCString(".xtc.iface")) && !mp.hasSuffix(String.withCString(".wasm")) && !mp.hasSuffix(String.withCString(".dylib")) && !mp.hasSuffix(String.withCString(".so")) && !mp.lowercased().hasSuffix(String.withCString(".dll")))
                     {
                     Stdio.printf("xc-fe: error: '%s' is a binary library; the ported "
-                                 "front end reads .wasm modules, .dylib and .so "
+                                 "front end reads .wasm modules, .dylib, .so and .dll "
                                  "libraries, and bare .xtc.iface files\n",
                                  mp.cString());
                     Process.exit((i32)1);
@@ -1138,13 +1138,14 @@ bool carriesItable(FeOptions* o)
 // `Hashable*` read the library's slot 92 out of a 19-entry client vtable (bug
 // 266). The itable is keyed by the protocol's name-derived id and the method's
 // declaration index, which every module derives alike, so no numbering has to
-// cross the interface. win64 links no libraries yet, so it keeps the slot.
+// cross the interface. win64 joined them with its DLLs (bug 255).
 bool itableDispatchOf(FeOptions* o, bool importsLibrary)
     {
     String* p = platformOf(o);
     if (p.equals(String.withCString("arm9")))
         return true;
-    if (p.equals(String.withCString("arm64")) || p.equals(String.withCString("x86_64")) || p.equals(String.withCString("wasm32")))
+    if (p.equals(String.withCString("arm64")) || p.equals(String.withCString("x86_64"))
+        || p.equals(String.withCString("win64")) || p.equals(String.withCString("wasm32")))
         return o.libraryBuild() || importsLibrary;
     return false;
     }

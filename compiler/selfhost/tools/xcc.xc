@@ -1556,18 +1556,37 @@ Array* win64Pool(DriverOptions* d)
     return out;
 }
 
+// The per-program inputs a win64 link adds to the runtime: the class
+// allocator stubs, and for a DLL whose module has no load-time constructors an
+// empty constructor table, so dllmain-win64.s always has one to walk.
+String* win64StubSource(String* prog, bool shared)
+{
+    String* stubs = x86ClassAllocStubs(prog, true);
+    if (shared && !prog.contains(String.withCString("\n__xt_ctors_start:")))
+        stubs.appendCString("\t.data\n__xt_ctors_start:\n__xt_ctors_end:\n\t.text\n");
+    return stubs;
+}
+
 // The win64 link, from program asm (or none — an object-only link) to the PE
 // on disk: runtime + stubs + program assembled as one input, then the
 // objects and archives named on the line, then the C-runtime pool, then the
 // kernel32 imports and the import map for whatever the pool did not define.
+//
+// With --emit-lib the same link writes a DLL (bug 255): the runtime without
+// crt-win64.s, whose place dllmain-win64.s takes, every `.globl` exported, and
+// the interface in an `xtciface` section. An xc library the program imports
+// (`libLib.dll`) is linked against by reading its export directory — no import
+// library.
 void linkWin64(DriverOptions* d, String* prog)
 {
+    bool shared = d.emitLib() && !d.compileOnly();
     Array* srcs = new Array();
     Array* rtNames = new Array();
-    rtNames.add((Object*)String.withCString("crt-win64.s"));
+    if (!shared) rtNames.add((Object*)String.withCString("crt-win64.s"));
     rtNames.add((Object*)String.withCString("rtgen-win64.s"));
     rtNames.add((Object*)String.withCString("rtfiles-win64.s"));
     rtNames.add((Object*)String.withCString("libmgen-win64.s"));
+    if (shared) rtNames.add((Object*)String.withCString("dllmain-win64.s"));
     for (u32 k = (u32)0; k < rtNames.count(); k = k + (u32)1) {
         String* t = readRuntimeIn(d.fe(), "win64/runtime", (String*)rtNames.get(k));
         if (t == 0) {
@@ -1577,7 +1596,7 @@ void linkWin64(DriverOptions* d, String* prog)
         }
         srcs.add((Object*)t);
     }
-    srcs.add((Object*)x86ClassAllocStubs(prog, true));
+    srcs.add((Object*)win64StubSource(prog, shared));
     srcs.add((Object*)prog);
 
     String* src = new String();
@@ -1641,6 +1660,41 @@ void linkWin64(DriverOptions* d, String* prog)
     k32.add((Object*)String.withCString("GetSystemTimeAsFileTime"));
     k32.add((Object*)String.withCString("Sleep"));
     syms.add((Object*)k32);
+    // Every name already importable, so each symbol lands in ONE list: an
+    // explicit entry wins, then the xc DLLs in the order the program imported
+    // them, then the map.
+    Map* listed = new Map();
+    for (u32 j = (u32)0; j < k32.count(); j = j + (u32)1)
+        listed.set((Hashable*)(String*)k32.get(j), (Object*)k32.get(j));
+    {
+        Array* nl = d.fe().neededLibs();
+        for (u32 i = (u32)0; nl != (Array*)0 && i < nl.count(); i = i + (u32)1) {
+            String* lp = (String*)nl.get(i);
+            if (!lp.lowercased().hasSuffix(String.withCString(".dll"))) continue;
+            Array* ex = Pe.dllExports(lp);
+            if (ex == (Array*)0) {
+                Stdio.printf("xcc: error: '%s' is not a DLL with an export directory\n",
+                             lp.cString());
+                Process.exit((i32)1); return;
+            }
+            String* dn = lp.lastPathComponent();
+            i32 at = (i32)-1;
+            for (u32 k = (u32)0; k < dlls.count(); k = k + (u32)1)
+                if (((String*)dlls.get(k)).equals(dn)) at = (i32)k;
+            if (at < (i32)0) {
+                dlls.add((Object*)dn);
+                syms.add((Object*)new Array());
+                at = (i32)(dlls.count() - (u32)1);
+            }
+            Array* into = (Array*)syms.get((u32)at);
+            for (u32 k = (u32)0; k < ex.count(); k = k + (u32)1) {
+                String* sym = (String*)ex.get(k);
+                if (listed.get((Hashable*)sym) != (Object*)0) continue;
+                listed.set((Hashable*)sym, (Object*)sym);
+                into.add((Object*)sym);
+            }
+        }
+    }
     {
         String* body = readRuntimeIn(d.fe(), "win64",
                                      String.withCString("win32-imports.map"));
@@ -1657,13 +1711,8 @@ void linkWin64(DriverOptions* d, String* prog)
                 // An explicit entry wins: the floor above is what the runtime
                 // itself calls, and the map is a wider catalogue that may name
                 // the same symbol in a different DLL.
-                bool have = false;
-                for (u32 i = (u32)0; i < syms.count(); i = i + (u32)1) {
-                    Array* one = (Array*)syms.get(i);
-                    for (u32 j = (u32)0; j < one.count(); j = j + (u32)1)
-                        if (((String*)one.get(j)).equals(sym)) have = true;
-                }
-                if (have) continue;
+                if (listed.get((Hashable*)sym) != (Object*)0) continue;
+                listed.set((Hashable*)sym, (Object*)sym);
                 i32 at = (i32)-1;
                 for (u32 i = (u32)0; i < dlls.count(); i = i + (u32)1)
                     if (((String*)dlls.get(i)).equals(dll)) at = (i32)i;
@@ -1678,8 +1727,23 @@ void linkWin64(DriverOptions* d, String* prog)
     }
 
     Pe* pe = new Pe();
-    pe.executable(a.text(), a.data(), a.symbols(), a.dataSyms(), a.fixups(),
-                  String.withCString("_start"), dlls, syms);
+    if (shared) {
+        // The library publishes what the assembler saw `.globl`, as the x86-64
+        // shared object does, and carries its interface so `#import <Lib>`
+        // reads the types out of the binary.
+        Data* iface = (Data*)0;
+        String* ij = d.fe().ifaceJson();
+        if (ij != (String*)0 && ij.byteLength() > (u32)0) {
+            iface = Data.withCapacity(ij.byteLength());
+            for (u32 i = (u32)0; i < ij.byteLength(); i = i + (u32)1)
+                iface.appendByte(ij.byteAt(i));
+        }
+        pe.dll(a.text(), a.data(), a.symbols(), a.dataSyms(), a.fixups(),
+               String.withCString("_xt_dll_main"), dlls, syms,
+               d.fe().output().lastPathComponent(), a.globalSyms(), iface);
+    } else
+        pe.executable(a.text(), a.data(), a.symbols(), a.dataSyms(), a.fixups(),
+                      String.withCString("_start"), dlls, syms);
     if (pe.failed()) {
         noteUndefinedCall(d, pe.why());
         Stdio.printf("xcc: %s\n", pe.why().cString());
@@ -3184,9 +3248,10 @@ void main(void)
         Process.exit((i32)1); return;
     }
     if (d.emitLib() && !isWasm(d) && !isX86_64(d) && !isArm9(d) && !isAndroid(d)
-        && !isIos(d) && !d.arch().equals(String.withCString("arm64"))) {
+        && !isIos(d) && !d.arch().equals(String.withCString("arm64"))
+        && !d.arch().equals(String.withCString("win64"))) {
         Stdio.printf("xcc: error: --emit-lib is not supported for '%s' "
-                     "(it is for arm64, ios, android, x86_64, arm9 and wasm32)\n",
+                     "(it is for arm64, ios, android, x86_64, win64, arm9 and wasm32)\n",
                      d.arch().cString());
         Process.exit((i32)1); return;
     }
