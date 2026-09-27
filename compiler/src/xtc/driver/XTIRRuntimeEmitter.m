@@ -118,87 +118,62 @@ static BOOL sQuitLoop = NO;
           // FOUR, not five. Five was the width of the bespoke float
           // format retired when the language moved to IEEE binary32 on
           // every target; the back end was updated and this table was
-          // not (private:docs/bugs/073). It over-allocated by 25% and, because
-          // 5 is not a power of two, emitted the repeated-addition
-          // stride path instead of two shifts.
+          // not (private:docs/bugs/073). It over-allocated by 25%.
           @"float" : @4,
           @"double" : @8,
       };
     });
+    // ── Allocators ─────────────────────────────────────────────────────
+    // Every heap allocation made by `new` is sized to its contents:
+    // count * stride payload bytes, plus a 7-byte TRAILER at the end of the
+    // heap block:
+    //
+    //   block end - 7  dealloc descriptor [bank, addr-lo, addr-hi]
+    //                  (all zero: no destructor)
+    //   block end - 4  element stride (lo, hi)
+    //   block end - 2  element count  (lo, hi)
+    //
+    // __xtc_release finds it again from the block size in the heap header
+    // (`_heap_trailer`), so the header never overlaps the payload whatever the
+    // object's size. (It used to sit at payload+56..62 of a fixed 64-byte
+    // block, which any class over 56 bytes overwrote: private:docs/bugs/510.)
+    //
+    // One allocator core serves every shape. `_xa_args` holds the trailer to
+    // write, in trailer order; the core takes the stride in A/X and the count
+    // from the caller's stack (+3,+4 — every stub reaches it by JMP, so the
+    // stack is the caller's own).
+    //   __xtc_alloc(count, stride, deallocPtr)  a class `new` (IR `_xtc_alloc`):
+    //       count @+3,+4, stride @+5,+6, deallocPtr lo@+7 hi@+8 bank@+9.
+    //   _xtc_new_<prim>(count)                  a primitive array: the stride is
+    //       the element width, baked into the stub; no destructor.
+    //   _xtc_new_<T>(count, stride)             a struct array: no destructor
+    //       unless the module defines <T>$dealloc.
+    // A primitive or struct array carries a zero descriptor too, so releasing
+    // one through __xtc_release frees it without dispatching anything.
+    BOOL usesAlloc = NO;
+    BOOL needNoDesc = NO;
+    NSMutableString* stubs = [NSMutableString string];
     for (XTIRSymbol* sym in mod.symbols)
         {
         if (sym.kind != XTIRSymbolKindRuntimeHelper)
             continue;
+        if ([sym.name isEqualToString:@"_xtc_alloc"])
+            usesAlloc = YES;
         if (![sym.name hasPrefix:@"_xtc_new_"])
             continue;
         NSString* suffix = [sym.name substringFromIndex:@"_xtc_new_".length];
         NSNumber* widthNum = primElemWidths[suffix];
         if (widthNum)
             {
-            NSUInteger w = widthNum.unsignedIntegerValue;
-            NSUInteger shift = 0;
-            NSUInteger tmp = w;
-            while ((tmp & 1) == 0 && tmp > 1)
-                {
-                shift++;
-                tmp >>= 1;
-                }
-            BOOL isPowerOfTwo = (tmp == 1);
-
-            NSMutableString* stub = [NSMutableString string];
-            [stub appendFormat:@"_%@:\n", sym.name];
-            if (isPowerOfTwo && shift == 0)
-                {
-                [stub appendString:@"    LDA +3,SP\n"
-                                   @"    LDX +4,SP\n"
-                                   @"    JMP _heap_alloc16\n"];
-                }
-            else if (isPowerOfTwo)
-                {
-                [stub appendString:@"    LDA +3,SP\n"
-                                   @"    TAX\n"
-                                   @"    LDA +4,SP\n"];
-                for (NSUInteger b = 0; b < shift; b++)
-                    {
-                    [stub appendString:@"    ASL A\n"
-                                       @"    PHA\n"
-                                       @"    TXA\n"
-                                       @"    ROL A\n"
-                                       @"    TAX\n"
-                                       @"    PLA\n"];
-                    }
-                [stub appendString:@"    STX _tmp\n"
-                                   @"    ADC #$00\n"
-                                   @"    TAX\n"
-                                   @"    LDA _tmp\n"
-                                   @"    JMP _heap_alloc16\n"];
-                }
-            else
-                {
-                NSUInteger nbW = widthNum.unsignedIntegerValue;
-                [stub appendString:@"    LDA +3,SP\n"
-                                   @"    STA _tmp\n"
-                                   @"    LDA +4,SP\n"
-                                   @"    STA _tmp+1\n"];
-                for (NSUInteger r = 1; r < nbW; r++)
-                    {
-                    [stub appendString:@"    CLC\n"
-                                       @"    LDA _tmp\n"
-                                       @"    ADC +3,SP\n"
-                                       @"    STA _tmp\n"
-                                       @"    LDA _tmp+1\n"
-                                       @"    ADC +4,SP\n"
-                                       @"    STA _tmp+1\n"];
-                    }
-                [stub appendString:@"    LDA _tmp\n"
-                                   @"    LDX _tmp+1\n"
-                                   @"    JMP _heap_alloc16\n"];
-                }
-            [out appendString:stub];
+            [stubs appendFormat:@"_%@:\n"
+                                @"    LDA #$%02lX\n"
+                                @"    LDX #$00\n"
+                                @"    JMP __xa_nodesc\n",
+                                sym.name, (unsigned long)widthNum.unsignedIntegerValue];
+            needNoDesc = YES;
             continue;
             }
-        NSString* className = suffix;
-        NSString* deallocName = [NSString stringWithFormat:@"%@$dealloc", className];
+        NSString* deallocName = [NSString stringWithFormat:@"%@$dealloc", suffix];
         BOOL hasDealloc = NO;
         for (XTIRFunction* fn in mod.functions)
             {
@@ -210,113 +185,113 @@ static BOOL sQuitLoop = NO;
             }
         if (hasDealloc)
             {
-            [out appendFormat:
-                     @"_%@:\n"
-                     @"    LDX #$00\n"
-                     @"    LDA #$40\n"
-                     @"    JSR _heap_alloc16\n"
-                     @"    STA $90\n"
-                     @"    STX $91\n"
-                     @"    STY $92\n"
-                     @"    STY __bank_data_reg\n"
-                     @"    LDA $90\n"
-                     @"    STA $98\n"
-                     @"    LDA $91\n"
-                     @"    STA $99\n"
-                     @"    LDY #xtc_desc_off\n"
-                     @"    LDA #__dbank_%@$dealloc\n"
-                     @"    STA ($98),Y\n"
-                     @"    INY\n"
-                     @"    LDA #<_%@$dealloc\n"
-                     @"    STA ($98),Y\n"
-                     @"    INY\n"
-                     @"    LDA #>_%@$dealloc\n"
-                     @"    STA ($98),Y\n"
-                     @"    LDY #56\n"
-                     @"    LDA +5,SP\n"
-                     @"    STA ($98),Y\n"
-                     @"    INY\n"
-                     @"    LDA +6,SP\n"
-                     @"    STA ($98),Y\n"
-                     @"    INY\n"
-                     @"    LDA +3,SP\n"
-                     @"    STA ($98),Y\n"
-                     @"    INY\n"
-                     @"    LDA +4,SP\n"
-                     @"    STA ($98),Y\n"
-                     @"    LDA #$00\n"
-                     @"    STA __bank_data_reg\n"
-                     @"    LDA $90\n"
-                     @"    LDX $91\n"
-                     @"    LDY $92\n"
-                     @"    RTS\n",
-                     sym.name, className, className, className];
+            [stubs appendFormat:@"_%@:\n"
+                                @"    LDA #__dbank_%@\n"
+                                @"    STA _xa_args\n"
+                                @"    LDA #<_%@\n"
+                                @"    STA _xa_args+1\n"
+                                @"    LDA #>_%@\n"
+                                @"    STA _xa_args+2\n"
+                                @"    LDA +5,SP\n"
+                                @"    LDX +6,SP\n"
+                                @"    JMP __xa_stride\n",
+                                sym.name, deallocName, deallocName, deallocName];
             }
         else
             {
-            [out appendFormat:
-                     @"_%@:\n"
-                     @"    LDX #$00\n"
-                     @"    LDA #$40\n"
-                     @"    JSR _heap_alloc16\n"
-                     @"    STA $90\n"
-                     @"    STX $91\n"
-                     @"    STY $92\n"
-                     @"    STY __bank_data_reg\n"
-                     @"    LDA $90\n"
-                     @"    STA $98\n"
-                     @"    LDA $91\n"
-                     @"    STA $99\n"
-                     @"    LDA #$00\n"
-                     @"    LDY #xtc_desc_off\n"
-                     @"    STA ($98),Y\n"
-                     @"    INY\n"
-                     @"    STA ($98),Y\n"
-                     @"    INY\n"
-                     @"    STA ($98),Y\n"
-                     @"    STA __bank_data_reg\n"
-                     @"    LDA $90\n"
-                     @"    LDX $91\n"
-                     @"    LDY $92\n"
-                     @"    RTS\n",
-                     sym.name];
+            [stubs appendFormat:@"_%@:\n"
+                                @"    LDA +5,SP\n"
+                                @"    LDX +6,SP\n"
+                                @"    JMP __xa_nodesc\n",
+                                sym.name];
+            needNoDesc = YES;
             }
         }
-    // B1: the single generic class allocator. `new T` lowers to
-    // `_xtc_alloc(count, stride, deallocPtr)`; one allocator serves every class
-    // (the per-class loop above now fires only for primitive-element arrays).
-    // Args on the hw stack (little-endian): count @+3,+4; stride @+5,+6;
-    // deallocPtr (3-byte banked fn ptr) lo@+7, hi@+8, bank@+9. The descriptor
-    // at obj+60 is [bank, lo, hi] (the order __xtc_release reads); a null
-    // deallocPtr → all-zero → the no-destructor sentinel. The dealloc fn now
-    // carries its code bank (stage 2), so it can stay banked.
-    BOOL usesAlloc = NO;
-    for (XTIRSymbol* sym in mod.symbols)
-        {
-        if (sym.kind == XTIRSymbolKindRuntimeHelper && [sym.name isEqualToString:@"_xtc_alloc"])
-            {
-            usesAlloc = YES;
-            break;
-            }
-        }
+    [out appendString:stubs];
     if (usesAlloc)
         {
-        [out appendString:
-                 @"__xtc_alloc:\n"
-                 @"    LDX #$00\n    LDA #$40\n    JSR _heap_alloc16\n"
-                 @"    STA $90\n    STX $91\n    STY $92\n    STY __bank_data_reg\n"
-                 @"    LDA $90\n    STA $98\n    LDA $91\n    STA $99\n"
-                 @"    LDY #xtc_desc_off\n"
-                 @"    LDA +9,SP\n    STA ($98),Y\n"          // descriptor bank   <- deallocPtr bank
-                 @"    INY\n    LDA +7,SP\n    STA ($98),Y\n" // descriptor lo  <- deallocPtr lo
-                 @"    INY\n    LDA +8,SP\n    STA ($98),Y\n" // descriptor hi  <- deallocPtr hi
-                 @"    LDY #56\n"
-                 @"    LDA +5,SP\n    STA ($98),Y\n"          // cookie elemSize lo
-                 @"    INY\n    LDA +6,SP\n    STA ($98),Y\n" // cookie elemSize hi
-                 @"    INY\n    LDA +3,SP\n    STA ($98),Y\n" // cookie count lo
-                 @"    INY\n    LDA +4,SP\n    STA ($98),Y\n" // cookie count hi
-                 @"    LDA #$00\n    STA __bank_data_reg\n"
-                 @"    LDA $90\n    LDX $91\n    LDY $92\n    RTS\n"];
+        [out appendString:@"__xtc_alloc:\n"
+                          @"    LDA +9,SP\n"
+                          @"    STA _xa_args\n"
+                          @"    LDA +7,SP\n"
+                          @"    STA _xa_args+1\n"
+                          @"    LDA +8,SP\n"
+                          @"    STA _xa_args+2\n"
+                          @"    LDA +5,SP\n"
+                          @"    LDX +6,SP\n"];
+        if (needNoDesc)
+            [out appendString:@"    JMP __xa_stride\n"];
+        }
+    if (needNoDesc)
+        {
+        [out appendString:@"__xa_nodesc:\n"
+                          @"    LDY #$00\n"
+                          @"    STY _xa_args\n"
+                          @"    STY _xa_args+1\n"
+                          @"    STY _xa_args+2\n"];
+        }
+    if (usesAlloc || stubs.length)
+        {
+        // size = count * stride + 7, by shift-and-add (the count in $90/$91 is
+        // the multiplier, the stride in _tmp the multiplicand, the sum in $98).
+        [out appendString:@"__xa_stride:\n"
+                          @"    STA _xa_args+3\n"
+                          @"    STX _xa_args+4\n"
+                          @"    STA _tmp\n"
+                          @"    STX _tmp+1\n"
+                          @"    LDA +3,SP\n"
+                          @"    STA _xa_args+5\n"
+                          @"    STA $90\n"
+                          @"    LDA +4,SP\n"
+                          @"    STA _xa_args+6\n"
+                          @"    STA $91\n"
+                          @"    LDA #$07\n"
+                          @"    STA $98\n"
+                          @"    LDA #$00\n"
+                          @"    STA $99\n"
+                          @"__xa_mul:\n"
+                          @"    LSR $91\n"
+                          @"    ROR $90\n"
+                          @"    BCC __xa_dbl\n"
+                          @"    CLC\n"
+                          @"    LDA $98\n"
+                          @"    ADC _tmp\n"
+                          @"    STA $98\n"
+                          @"    LDA $99\n"
+                          @"    ADC _tmp+1\n"
+                          @"    STA $99\n"
+                          @"__xa_dbl:\n"
+                          @"    ASL _tmp\n"
+                          @"    ROL _tmp+1\n"
+                          @"    LDA $90\n"
+                          @"    ORA $91\n"
+                          @"    BNE __xa_mul\n"
+                          @"    LDA $98\n"
+                          @"    LDX $99\n"
+                          @"    JSR _heap_alloc16\n"
+                          @"    STA $90\n"
+                          @"    STX $91\n"
+                          @"    STY $92\n"
+                          @"    ORA $91\n"
+                          @"    BEQ __xa_ret\n" // out of memory: null, nothing to write
+                          @"    STY __bank_data_reg\n"
+                          @"    LDA $90\n"
+                          @"    LDX $91\n"
+                          @"    JSR _heap_trailer\n"
+                          @"    LDY #$06\n"
+                          @"__xa_copy:\n"
+                          @"    LDA _xa_args,Y\n"
+                          @"    STA ($98),Y\n"
+                          @"    DEY\n"
+                          @"    BPL __xa_copy\n"
+                          @"    LDA #$00\n"
+                          @"    STA __bank_data_reg\n"
+                          @"__xa_ret:\n"
+                          @"    LDA $90\n"
+                          @"    LDX $91\n"
+                          @"    LDY $92\n"
+                          @"    RTS\n"
+                          @"_xa_args: .byte $00, $00, $00, $00, $00, $00, $00\n"];
         }
     for (XTIRSymbol* sym in mod.symbols)
         {
