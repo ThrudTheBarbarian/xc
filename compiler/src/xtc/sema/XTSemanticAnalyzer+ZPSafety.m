@@ -2,6 +2,7 @@
 |* XTSemanticAnalyzer+ZPSafety.m
 \****************************************************************************/
 #import "XTSemanticAnalyzer+Private.h"
+#import "XTSemanticAnalyzer+Overload.h"
 
 @implementation XTSemanticAnalyzer (ZPSafety)
 
@@ -1471,6 +1472,13 @@
         {
         if ([rhsNode isKindOfClass:[XTLiteralIntNode class]] &&
             ((XTLiteralIntNode*)rhsNode).intValue == 0)
+            return;
+        // A value the call will AUTOBOX (a string into a String for an
+        // Object* / Hashable* parameter) is not a raw pointer passed as a class
+        // reference: the conversion builds one. The shipped compiler boxes
+        // before this check sees it (bug 544).
+        if (lp.kind == XTTypeKindClass
+            && [self autoboxClassNameForArgType:rhsType toParamType:lhsType])
             return;
         if (lp.kind == XTTypeKindClass)
             {
