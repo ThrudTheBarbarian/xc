@@ -1206,6 +1206,47 @@ static const NSUInteger kArm9VaForwardWords = 16;
         return;
         }
 
+    // A float to a 64-bit integer. The VFP converts to 32 bits only, and the
+    // one-word path below wrote the low word and left the high word stale:
+    // `(i64)-3.0` printed 4294967293. The conversion is a call into
+    // aeabi64.s, which takes the double in r0:r1; a float is widened first,
+    // which is exact.
+    if (res && (res.type.kind == XTIRTypeKindI64 || res.type.kind == XTIRTypeKindU64) && ops.count == 1 && slot[@(res.valueId)] && (op == XTIROpFpToSI || op == XTIROpFpToUI))
+        {
+        XTIRType* st = (ops[0].kind == XTIROperandKindUse) ? fn.values[@(ops[0].valueId)].type : ops[0].type;
+        if (st && st.kind == XTIRTypeKindF64)
+            [self loadInt64Operand:ops[0] lo:@"r0" hi:@"r1" slot:slot fn:fn out:out];
+        else
+            {
+            [self vfpLoad:@"s0" operand:ops[0] slot:slot out:out];
+            [out appendString:@"\tvcvt.f64.f32\td2, s0\n\tvmov\tr0, s4\n\tvmov\tr1, s5\n"];
+            }
+        [out appendFormat:@"\tbl\t%@\n", op == XTIROpFpToSI ? @"__fixdfdi" : @"__fixunsdfdi"];
+        NSUInteger ro = slot[@(res.valueId)].unsignedIntegerValue;
+        [self emitSpAccess:@"str" reg:@"r0" off:ro out:out];
+        [self emitSpAccess:@"str" reg:@"r1" off:ro + 4 out:out];
+        return;
+        }
+
+    // ...and a 64-bit integer to a float. Read as its low word, 5000000000
+    // converted as 705032704.
+    if (res && (res.type.kind == XTIRTypeKindF64 || res.type.kind == XTIRTypeKindF32) && ops.count == 1 && slot[@(res.valueId)] && (op == XTIROpSIToFp || op == XTIROpUIToFp))
+        {
+        XTIRType* st = (ops[0].kind == XTIROperandKindUse) ? fn.values[@(ops[0].valueId)].type : ops[0].type;
+        if (st && (st.kind == XTIRTypeKindI64 || st.kind == XTIRTypeKindU64))
+            {
+            BOOL dbl = res.type.kind == XTIRTypeKindF64;
+            [self loadInt64Operand:ops[0] lo:@"r0" hi:@"r1" slot:slot fn:fn out:out];
+            [out appendFormat:@"\tbl\t__float%@di%@f\n", op == XTIROpUIToFp ? @"un" : @"",
+                              dbl ? @"d" : @"s"];
+            NSUInteger ro = slot[@(res.valueId)].unsignedIntegerValue;
+            [self emitSpAccess:@"str" reg:@"r0" off:ro out:out];
+            if (dbl)
+                [self emitSpAccess:@"str" reg:@"r1" off:ro + 4 out:out];
+            return;
+            }
+        }
+
     if (res && (res.type.kind == XTIRTypeKindI64 || res.type.kind == XTIRTypeKindU64) && ops.count >= 2 && slot[@(res.valueId)])
         {
         NSString *h = nil, *loOp = nil, *hiOp = nil;

@@ -35,7 +35,7 @@ else echo "  FAIL x86_64: compile"; sed 's/^/    /' "$TMP/log"; fail=1; fi
 
 if "$BIN/xcc" -A win64 -H . -o "$TMP/w.exe" "$SRC" >"$TMP/log" 2>&1; then
     if [ -x /opt/homebrew/bin/wine ]; then
-        if diff -q <(/opt/homebrew/bin/wine "$TMP/w.exe" 2>/dev/null) "$WANT" >/dev/null; then echo "  PASS win64"
+        if diff -q <(WINEDLLOVERRIDES="winedbg.exe=d" WINEDEBUG=-all /opt/homebrew/bin/wine "$TMP/w.exe" 2>/dev/null) "$WANT" >/dev/null; then echo "  PASS win64"
         else echo "  FAIL win64"; fail=1; fi
     else echo "  SKIP win64 (no wine — NOT a pass)"; fi
 else echo "  FAIL win64: compile"; sed 's/^/    /' "$TMP/log"; fail=1; fi
@@ -50,7 +50,7 @@ else echo "  FAIL win64: compile"; sed 's/^/    /' "$TMP/log"; fail=1; fi
 #
 # Every target runs BOTH. The arm9 line filter is per-fixture because that
 # harness has to pick the program's output out of a shell transcript.
-FIXTURES="ops cmp arith dphi"
+FIXTURES="ops cmp arith dphi f2i i2f i2fr"
 ops_SRC=tests/fixtures/int64_ops.xc
 ops_WANT=tests/fixtures/int64_ops.expected.out
 ops_RE='^(shl|shr|add|sub|mul|div|mod|sar|ndiv|nmod) '
@@ -66,9 +66,23 @@ arith_RE='^(2\^40|10\^12|sub|div|mod|and|neg|cmp)'
 dphi_SRC=tests/fixtures/double_phi.xc
 dphi_WANT=tests/fixtures/double_phi.expected.out
 dphi_RE='^(tern_|loop_|nest_|dptr|darr|uptr|uarr|vararg)'
+# Conversions between the 64-bit integers and the floats (arm9 used the VFP's
+# 32-bit forms and lost the high word). i2fr is a float rounded from an integer
+# with bits below the double's last place; xt6502 converts through a double
+# and rounds twice there, so it skips that one.
+f2i_SRC=tests/fixtures/float_to_int64.xc
+f2i_WANT=tests/fixtures/float_to_int64.expected.out
+f2i_RE='^cv_'
+i2f_SRC=tests/fixtures/int64_to_float.xc
+i2f_WANT=tests/fixtures/int64_to_float.expected.out
+i2f_RE='^cv_'
+i2fr_SRC=tests/fixtures/int64_to_float_round.xc
+i2fr_WANT=tests/fixtures/int64_to_float_round.expected.out
+i2fr_RE='^cv_'
+i2fr_NO6502=1
 
 for F in $FIXTURES; do
-  eval "SRC=\$${F}_SRC; WANT=\$${F}_WANT; RE=\$${F}_RE"
+  eval "SRC=\$${F}_SRC; WANT=\$${F}_WANT; RE=\$${F}_RE; NO6502=\${${F}_NO6502:-}"
 
   for O in 0 3; do
     if "$BIN/xcc" -O$O -A arm64 -H . -o "$TMP/p" "$SRC" >"$TMP/log" 2>&1; then
@@ -78,6 +92,7 @@ for F in $FIXTURES; do
   done
 
   for O in 0 3; do
+    [ -n "$NO6502" ] && break
     if "$BIN/xcc" -O$O -A 6502 -H . -o "$TMP/p.xex" "$SRC" >"$TMP/log" 2>&1; then
         # xts puts the trace on stderr and the program's output on stdout.
         if diff -q <("$BIN/xcc-sim-6502" -m xt -d "$TMP/p.xex" 2>/dev/null) "$WANT" >/dev/null; then

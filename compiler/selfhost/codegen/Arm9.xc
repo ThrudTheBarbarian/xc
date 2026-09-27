@@ -1646,6 +1646,11 @@ class Arm9
     // wide Const) printed a high half of $A5A5A5A5, the stack fill pattern.
     bool emitInt64Unary(String* op, Array* ops, i32 rs)
         {
+        if (op.equals(String.withCString("FpToSI")) || op.equals(String.withCString("FpToUI")))
+            {
+            emitFloatToInt64(op, ops, rs);
+            return true;
+            }
         bool isNeg = op.equals(String.withCString("Neg"));
         if (!isNeg && !op.equals(String.withCString("Not")))
             return false;
@@ -1664,6 +1669,50 @@ class Arm9
             }
         emitSpAccess(String.withCString("str"), String.withCString("r0"), (u32)rs);
         emitSpAccess(String.withCString("str"), String.withCString("r1"), (u32)rs + (u32)4);
+        return true;
+        }
+
+    // A float to a 64-bit integer. The VFP converts to 32 bits only, and the
+    // one-word path wrote the low word and left the high word stale:
+    // `(i64)-3.0` printed 4294967293. The conversion is a call into
+    // aeabi64.s, which takes the double in r0:r1; a float is widened first,
+    // which is exact.
+    void emitFloatToInt64(String* op, Array* ops, i32 rs)
+        {
+        IROperand* a0 = (IROperand*)ops.get((u32)0);
+        if (Arm9.isF64(operandType(a0)))
+            {
+            loadInt64(a0, String.withCString("r0"), String.withCString("r1"));
+            }
+        else
+            {
+            vfpLoad(String.withCString("s0"), a0);
+            _out.appendCString("\tvcvt.f64.f32\td2, s0\n\tvmov\tr0, s4\n\tvmov\tr1, s5\n");
+            }
+        _out.appendFormat("\tbl\t%s\n", op.equals(String.withCString("FpToSI"))
+                                            ? "__fixdfdi" : "__fixunsdfdi");
+        emitSpAccess(String.withCString("str"), String.withCString("r0"), (u32)rs);
+        emitSpAccess(String.withCString("str"), String.withCString("r1"), (u32)rs + (u32)4);
+        }
+
+    // ...and a 64-bit integer to a float. Read as its low word, 5000000000
+    // converted as 705032704.
+    bool emitInt64ToFloat(String* op, Array* ops, IRValue* res)
+        {
+        IROperand* a0 = (IROperand*)ops.get((u32)0);
+        if (!Arm9.isI64(operandType(a0)))
+            return false;
+        i32 rs = slotOf(res);
+        if (rs < (i32)0)
+            return false;
+        bool dbl = Arm9.isF64(res.ty());
+        loadInt64(a0, String.withCString("r0"), String.withCString("r1"));
+        _out.appendFormat("\tbl\t__float%sdi%sf\n",
+                          op.equals(String.withCString("UIToFp")) ? "un" : "",
+                          dbl ? "d" : "s");
+        emitSpAccess(String.withCString("str"), String.withCString("r0"), (u32)rs);
+        if (dbl)
+            emitSpAccess(String.withCString("str"), String.withCString("r1"), (u32)rs + (u32)4);
         return true;
         }
 
@@ -2467,6 +2516,8 @@ class Arm9
     void emitIntToFloat(String* op, Array* ops, IRValue* res)
         {
         if (ops.count() == (u32)0 || res == 0)
+            return true;
+        if (emitInt64ToFloat(op, ops, res))
             return true;
         bool d = Arm9.isF64(res.ty());
         bool sgn = op.equals(String.withCString("SIToFp"));
