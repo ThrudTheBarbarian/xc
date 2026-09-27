@@ -722,6 +722,51 @@ class JsonVal
         return true;
         }
 
+    // The `xtciface` SECTION of a win64 DLL (bug 255). COFF caps a section
+    // name at eight bytes, hence the spelling. Walked through the PE section
+    // table; the section's virtual size is the interface's length, and any
+    // NUL padding after it is dropped.
+    static String* peIfaceSection(String* path)
+        {
+        Data* d = Files.readData(path);
+        if (d == (Data*)0 || d.length() < (u32)$40)
+            return (String*)0;
+        if (d.byteAt((u32)0) != (u8)'M' || d.byteAt((u32)1) != (u8)'Z')
+            return (String*)0;
+        u32 pe = IfaceImport.le32(d, (u32)$3C);
+        if (pe + (u32)24 > d.length() || IfaceImport.le32(d, pe) != (u32)$00004550)
+            return (String*)0;
+        u32 nsect = IfaceImport.le16(d, pe + (u32)6);
+        u32 secTab = pe + (u32)24 + IfaceImport.le16(d, pe + (u32)20);
+        for (u32 i = (u32)0; i < nsect; i = i + (u32)1)
+            {
+            u32 rec = secTab + i * (u32)40;
+            if (rec + (u32)40 > d.length())
+                return (String*)0;
+            bool hit = true;
+            string want = "xtciface";
+            String* w = String.withCString(want);
+            for (u32 k = (u32)0; k < (u32)8; k = k + (u32)1)
+                if (d.byteAt(rec + k) != w.byteAt(k))
+                    hit = false;
+            if (!hit)
+                continue;
+            u32 vsz = IfaceImport.le32(d, rec + (u32)8);
+            u32 rawSz = IfaceImport.le32(d, rec + (u32)16);
+            u32 rawPtr = IfaceImport.le32(d, rec + (u32)20);
+            u32 len = vsz < rawSz ? vsz : rawSz;
+            if (rawPtr + len > d.length())
+                return (String*)0;
+            while (len > (u32)0 && d.byteAt(rawPtr + len - (u32)1) == (u8)0)
+                len = len - (u32)1;
+            String* out = new String();
+            for (u32 b = (u32)0; b < len; b = b + (u32)1)
+                out.appendByte(d.byteAt(rawPtr + b));
+            return out;
+            }
+        return (String*)0;
+        }
+
     // The `.xtc.iface` SECTION of an ELF shared object — the ELF analogue of
     // the wasm custom section and the Mach-O `__XTC,__iface`. Section headers
     // only: our own writer emits them for readers like this one.
@@ -794,6 +839,8 @@ class JsonVal
             text = IfaceImport.machoIfaceSection(path);
         else if (path.hasSuffix(String.withCString(".so")))
             text = IfaceImport.elfIfaceSection(path);
+        else if (path.lowercased().hasSuffix(String.withCString(".dll")))
+            text = IfaceImport.peIfaceSection(path);
         else
             text = Files.readText(path);
         if (text == 0)
