@@ -123,6 +123,25 @@ CFLAGS += -g -fno-eliminate-unused-debug-types
 ```
 :::
 
+## Windows DLLs
+
+On `win64`, `--emit-lib` writes a DLL, and `#import <Lib>` finds `libLib.dll` on the `-L`
+path:
+
+```bash
+xcc -A win64 --emit-lib -o libXtg.dll xtg.xc
+xcc -A win64 -L . -o app.exe app.xc
+```
+
+- **No import library.** The client links against the DLL itself: `xcc` reads the DLL's
+  export table. Keep the DLL beside the program (or on `PATH`) when it runs.
+- **Every public symbol is exported**, and the interface rides in the DLL as an
+  `xtciface` section.
+- **One heap.** The program and every DLL allocate from the process heap, so an object may
+  be created in one image and released in another.
+- **Load-time code runs in dependency order.** A library's load-time constructors run from
+  its `DllMain`, after those of the DLLs it imports and before the program's.
+
 ## Limits
 
 - **6502 and m68k are whole-program.** They have no dynamic loader, so `--emit-lib` does
