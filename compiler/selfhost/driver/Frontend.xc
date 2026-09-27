@@ -558,8 +558,8 @@ class FeOptions
             Process.exit((i32)3);
             return (IRModule*)0;
             }
+        u32 at = (u32)0;
             {
-            u32 at = (u32)0;
             for (u32 i = (u32)0; i < importedIfaces.count(); i = i + (u32)1)
                 {
                 IfaceImport* im = (IfaceImport*)importedIfaces.get(i);
@@ -591,7 +591,7 @@ class FeOptions
         // DWARF reader, so the same declarations come from a bundled stub — and
         // everything in it is marked C-ABI here, because that is a property of
         // where it came from and not something the source can say.
-        injectCInterface(program, o, tokens, pp.preludeFiles());
+        injectCInterface(program, o, tokens, pp.preludeFiles(), at);
 
         Sema* sema = Sema.make();
         // §4.2 chain slots exist only where the vtable carries the chain word.
@@ -978,7 +978,7 @@ String* platformOf(FeOptions* o)
 // DWARF with no source position, and a library's interface does not publish
 // them (`struct stat` and `timespec` were exported by every arm9 library that
 // named `stat`).
-void injectCInterface(Node* program, FeOptions* o, Array* tokens, Set* ambient)
+void injectCInterface(Node* program, FeOptions* o, Array* tokens, Set* ambient, u32 xtcDecls)
     {
     String* root = supportRoot(o);
     if (root == 0)
@@ -1044,8 +1044,13 @@ void injectCInterface(Node* program, FeOptions* o, Array* tokens, Set* ambient)
         for (u32 k = (u32)0; k < st.kidCount(); k = k + (u32)1)
             noteStructRef(iface, needed, st.kid(k).op());
         }
-    needed.addAll(picked);
+    // The prototypes go AFTER the imported xtc declarations, which the
+    // reference prepends last and so puts first: an imported `-c` function
+    // was listed after the libc ones in the module's IR, and before them in
+    // the reference's. The structs stay at the front, where the reference's
+    // type table has them.
     program.kids().insertAll((u32)0, needed);
+    program.kids().insertAll(needed.count() + xtcDecls, picked);
     }
 
 // `…/libGEM.so` -> `GEM`: the file name without its last extension and

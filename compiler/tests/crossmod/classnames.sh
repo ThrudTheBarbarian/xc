@@ -24,10 +24,10 @@
 #           compared as assembly: the two drivers' dynamic links export
 #           different symbol sets.
 #   win64   the object, run under wine (win64 links no libraries)
-#   arm9    both shapes built by both compilers and compared, not run. A
-#           library needs the romfs rebuilt to run (tests/crossmod/run.sh does
-#           that), and linking arm9 objects fails at load on an undefined
-#           `_xtc_new_pointer` for any program, with or without class names.
+#   arm9    both shapes built by both compilers and compared; the object
+#           shape is run on the XTOS loader under qemu. A library needs the
+#           romfs rebuilt to run (tests/crossmod/run.sh does that), so it is
+#           not run here.
 _root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null)
 [ -f "$_root/tools/build-env.sh" ] && . "$_root/tools/build-env.sh"
 set -u
@@ -115,7 +115,17 @@ objmatrix() {
 
 run_native() { ( cd "$1" && "./$2" ); }
 run_node()   { ( cd "$1" && node "$2.js" ); }
-run_wine()   { ( cd "$1" && WINEDEBUG=-all wine "./$2" 2>/dev/null | tr -d '\r' ); }
+# run_arm9 <dir> <prog.so> — on the XTOS loader under qemu; the program's
+# stdout picked out of the shell transcript.
+run_arm9() {
+    printf 'runhost %s\nexit\n' "$1/$2" \
+      | timeout 90 qemu-system-arm -M xilinx-zynq-a9 -display none -no-reboot -m 1024 \
+          -chardev stdio,id=sh0 -semihosting-config enable=on,target=native,chardev=sh0 \
+          -kernel "$SR/freertos-hosttest.elf" 2>/dev/null \
+      | sed -e '1,/XTOS shell/d' | sed 's/^xtos\$ //' | sed -e '/^bye$/,$d' \
+      | grep -v '^\[net\]' | sed 's/\r$//' | sed -e '/^$/d'
+}
+run_wine()   { ( cd "$1" &&WINEDLLOVERRIDES="winedbg.exe=d" WINEDEBUG=-all wine "./$2" 2>/dev/null | tr -d '\r' ); }
 # run_x86 <dir> <prog> — the program and any libraries beside it, run on $HOST.
 run_x86() {
     ssh "$HOST" "rm -rf $RD && mkdir -p $RD" </dev/null
@@ -163,20 +173,23 @@ fi
 before=$fail
 SR=${XTC_ARM9_SYSROOT:-}
 if [ -n "$SR" ] && [ -d "$SR" ]; then
-    for L in xcc xcc-xc; do
-        d="$TMP/arm9/obj-$L"
-        mkdir -p "$d"
-        ( cd "$d" && "$BIN/$L" -c -A arm9 -H "$ROOT" -q -L "$SR" -o cnobj.o "$T/cnobj.xc" \
-            && "$BIN/$L" -c -A arm9 -H "$ROOT" -q -L "$SR" -L . -o cnobjmain.o "$T/cnobjmain.xc" ) \
-            || bad "arm9: $L could not compile the objects"
-    done
-    # cnobj's IR and interface sidecars, not the objects: the two drivers'
-    # arm9 `-c` objects already differ in literal-pool placement (`.ltorg`)
-    # for any source, and on arm9 a module that imports a `-c` interface
-    # already lists the imported function's symbol at a different place in
-    # its IR, with or without class names.
-    samefiles "$TMP/arm9/obj-xcc" "$TMP/arm9/obj-xcc-xc" cnobj.xtc.ir cnobj.xtc.iface \
-        || bad "arm9: the two compilers' object IR or interface differ"
+    # The object shape is the full matrix, objects and programs compared byte
+    # for byte, and run on the XTOS loader under qemu when it is here.
+    if [ -f "$SR/freertos-hosttest.elf" ] && command -v qemu-system-arm >/dev/null 2>&1; then
+        objmatrix arm9 cnobjmain.so run_arm9 -L "$SR"
+        A9RAN="objects run"
+    else
+        for L in xcc xcc-xc; do
+            d="$TMP/arm9/obj-$L"
+            mkdir -p "$d"
+            ( cd "$d" && "$BIN/$L" -c -A arm9 -H "$ROOT" -q -L "$SR" -o cnobj.o "$T/cnobj.xc" \
+                && "$BIN/$L" -c -A arm9 -H "$ROOT" -q -L "$SR" -L . -o cnobjmain.o "$T/cnobjmain.xc" ) \
+                || bad "arm9: $L could not compile the objects"
+        done
+        samefiles "$TMP/arm9/obj-xcc" "$TMP/arm9/obj-xcc-xc" cnobj.o cnobj.xtc.iface cnobjmain.o \
+            || bad "arm9: the two compilers' objects or interface differ"
+        A9RAN="objects not run: no loader kernel or qemu"
+    fi
     for L in xcc xcc-xc; do
         d="$TMP/arm9/lib-$L"
         buildlib arm9 "$L" "$d" libCnLib.so -L "$SR" || { bad "arm9: $L could not build the library"; continue; }
@@ -184,7 +197,7 @@ if [ -n "$SR" ] && [ -d "$SR" ]; then
     done
     samefiles "$TMP/arm9/lib-xcc" "$TMP/arm9/lib-xcc-xc" $(ls "$TMP/arm9/lib-xcc" 2>/dev/null) \
         || bad "arm9: the two compilers' library or client differs"
-    [ $fail = $before ] && echo "PASS  arm9: objects, library and client built and compared (not run)"
+    [ $fail = $before ] && echo "PASS  arm9: objects, library and client built and compared ($A9RAN; the library is not run)"
 else
     echo "SKIP  arm9: no \$XTC_ARM9_SYSROOT"
 fi
