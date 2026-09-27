@@ -12,6 +12,8 @@
 # toolchain and agree on the answer.
 #
 # NOT set -e: a target's runner may legitimately be unavailable.
+# A crashing test program must not open the Wine crash dialog.
+export WINEDLLOVERRIDES="winedbg.exe=d;${WINEDLLOVERRIDES:-}"
 _root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null)
 [ -f "$_root/tools/build-env.sh" ] && . "$_root/tools/build-env.sh"
 cd "$(dirname "$0")/../.."

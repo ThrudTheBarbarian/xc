@@ -11,6 +11,8 @@
 # missing is worse than one that says so.
 #
 #   bash tests/win64/xc-run.sh
+# A crashing test program must not open the Wine crash dialog.
+export WINEDLLOVERRIDES="winedbg.exe=d;${WINEDLLOVERRIDES:-}"
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BIN="$ROOT/bin/osx"; [ -d "$BIN" ] || BIN="$ROOT/bin/linux"

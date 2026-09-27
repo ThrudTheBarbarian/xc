@@ -5,6 +5,8 @@
 # self-host differentials cover them. They stay wired in here too, because this
 # runner is the only thing that RUNS them on m68k, arm9 and xt6502 — the
 # differentials compare assembly text and never execute it.
+# A crashing test program must not open the Wine crash dialog.
+export WINEDLLOVERRIDES="winedbg.exe=d;${WINEDLLOVERRIDES:-}"
 _root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null)
 [ -f "$_root/tools/build-env.sh" ] && . "$_root/tools/build-env.sh"
 set -u

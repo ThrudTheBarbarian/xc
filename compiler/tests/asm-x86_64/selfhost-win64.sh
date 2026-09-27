@@ -5,6 +5,8 @@
 #
 # Needs Wine on PATH (or set XTC_WINE). Skips cleanly if it is absent.
 # NOT set -e: the exit-status test deliberately runs a program that exits 42.
+# A crashing test program must not open the Wine crash dialog.
+export WINEDLLOVERRIDES="winedbg.exe=d;${WINEDLLOVERRIDES:-}"
 cd "$(dirname "$0")/../.."
 ROOT=$(pwd)
 

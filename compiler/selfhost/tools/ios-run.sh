@@ -12,6 +12,8 @@
 #
 # Skips CLEANLY (exit 0, and says so) with no xcrun or no booted simulator:
 # a CI host without Xcode has not checked anything, and the line says that.
+# A crashing test program must not open the Wine crash dialog.
+export WINEDLLOVERRIDES="winedbg.exe=d;${WINEDLLOVERRIDES:-}"
 set -u
 cd "$(dirname "$0")/../.." || exit 1
 BIN=bin/osx

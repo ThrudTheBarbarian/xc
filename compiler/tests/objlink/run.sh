@@ -18,6 +18,8 @@
 #   4. Our linker turns the two objects into a program that runs and prints 9.
 #   5. Apple's ld reads our object too — an independent check that the file is
 #      a real object rather than merely one we can read back.
+# A crashing test program must not open the Wine crash dialog.
+export WINEDLLOVERRIDES="winedbg.exe=d;${WINEDLLOVERRIDES:-}"
 _root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null)
 [ -f "$_root/tools/build-env.sh" ] && . "$_root/tools/build-env.sh"
 set -u

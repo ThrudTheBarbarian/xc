@@ -13,6 +13,8 @@
 #
 # Skips cleanly if the Linux host, its xtc, or Wine are unavailable.
 # NOT set -e: runners may legitimately be absent.
+# A crashing test program must not open the Wine crash dialog.
+export WINEDLLOVERRIDES="winedbg.exe=d;${WINEDLLOVERRIDES:-}"
 _root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null)
 [ -f "$_root/tools/build-env.sh" ] && . "$_root/tools/build-env.sh"
 cd "$(dirname "$0")/../.."

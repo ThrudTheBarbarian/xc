@@ -28,6 +28,8 @@
 #           library needs the romfs rebuilt to run (tests/crossmod/run.sh does
 #           that), and linking arm9 objects fails at load on an undefined
 #           `_xtc_new_pointer` for any program, with or without class names.
+# A crashing test program must not open the Wine crash dialog.
+export WINEDLLOVERRIDES="winedbg.exe=d;${WINEDLLOVERRIDES:-}"
 _root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null)
 [ -f "$_root/tools/build-env.sh" ] && . "$_root/tools/build-env.sh"
 set -u
