@@ -14301,11 +14301,22 @@ class ClassInfo
     // down, and — for `main` — produce a status.
     void finishFunction(void)
         {
-        if (_blk.term() == 0)
+        // Only `main` (an i32 main) exits with 0 when it falls off the end. Any
+        // other non-void body cannot be reached there — a `for (;;)` that only
+        // leaves by `return` — and ends in Unreachable, as the reference ends
+        // it (bug 542), rather than returning an invented 0.
+        bool isVoid = isName(irType(_fnReturn), "Void");
+        bool intMain = _fn.name() != 0 && _fn.name().equals(String.withCString("main"))
+                    && isName(irType(_fnReturn), "I32");
+        if (_blk.term() == 0 && !isVoid && !intMain)
+            {
+            _blk.setTerm(IRInsn.with(String.withCString("Unreachable")));
+            }
+        else if (_blk.term() == 0)
             {
             releaseAlongExit();
             IRInsn* r = IRInsn.with(String.withCString("Return"));
-            if (!isName(irType(_fnReturn), "Void"))
+            if (!isVoid)
                 {
                 IRValue* z = constOf((i64)0, _fnReturn);
                 r.add(IROperand.useVal(z));
