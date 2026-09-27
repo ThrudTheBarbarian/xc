@@ -850,6 +850,12 @@
 - (void)validateVariadicNonReentrance
     {
     static const NSUInteger kChainCap = 5;
+    // arm64 and arm9 pass variadic arguments by the C ABI (registers and the
+    // stack), so there is no shared pack buffer to clobber. Refusing there
+    // rejected valid programs, such as a va_start variadic that calls
+    // Stdio.printf.
+    if (self.nativeVarargs)
+        return;
     for (NSDictionary* entry in self.variadicDecls)
         {
         NSString* start = entry[@"label"];
@@ -938,7 +944,11 @@
         NSMutableArray<NSString*>* next = [NSMutableArray array];
         for (NSString* caller in frontier)
             {
-            for (NSString* callee in self.callEdges[caller])
+            // Callees in SORTED order: a set's order is a hash order, and the
+            // chain a message names must not depend on it.
+            NSArray<NSString*>* callees = [self.callEdges[caller].allObjects
+                sortedArrayUsingSelector:@selector(compare:)];
+            for (NSString* callee in callees)
                 {
                 if ([callee isEqualToString:start])
                     {
