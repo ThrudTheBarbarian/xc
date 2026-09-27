@@ -1,0 +1,5 @@
+T1 p bad 0 q bad 0
+T2 deallocs 1 tags 500
+T3 deallocs 3 tags 321
+T4 sum 10 bytes 70
+T5 p bad 0 q bad 0

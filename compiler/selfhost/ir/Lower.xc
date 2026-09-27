@@ -5286,8 +5286,8 @@ class ClassInfo
             }
         if (decl.hasFlag((u32)NF_VARARGS))
             cargs = packVarargs(cargs, fixedParamCount(decl), decl);
-        IRInsn* call = IRInsn.with(String.withCString("Call"));
         String* callee = decl.sym() == 0 ? n.name() : decl.sym();
+        IRInsn* call = IRInsn.with(placedCallOp(decl));
         call.add(IROperand.sym(callee));
         if (n.line() != (u32)0 && n.file() != 0 && callSites().get((Hashable*)callee) == (Object*)0)
             {
@@ -5310,7 +5310,7 @@ class ClassInfo
             res = new IRValue(irType(ret));
             call.setRes(res);
             }
-        call.setCc(String.withCString("CallConv::Standard"));
+        call.setCc(placedCallConv(decl));
         _blk.add(call);
         _mem = nextMem;
         noteOwnedTemp(res, ret);
@@ -8448,8 +8448,9 @@ class ClassInfo
                 return;
             cargs.add((Object*)a);
             }
-        IRInsn* call = IRInsn.with(String.withCString("Call"));
-        call.add(IROperand.sym(decl.sym() == 0 ? src.name() : decl.sym()));
+        String* tcallee = decl.sym() == 0 ? src.name() : decl.sym();
+        IRInsn* call = IRInsn.with(placedCallOp(decl));
+        call.add(IROperand.sym(tcallee));
         for (u32 i = (u32)0; i < cargs.count(); i = i + (u32)1)
             call.add(IROperand.useVal((IRValue*)cargs.get(i)));
         call.add(IROperand.useVal(_mem));
@@ -8457,7 +8458,7 @@ class ClassInfo
         call.setRes(res);
         IRValue* nextMem = new IRValue(String.withCString("Mem"));
         call.setMemRes(nextMem);
-        call.setCc(String.withCString("CallConv::Standard"));
+        call.setCc(placedCallConv(decl));
         _blk.add(call);
         _mem = nextMem;
 
@@ -11066,6 +11067,25 @@ class ClassInfo
     // The call OPCODE follows the callee's PLACEMENT, not the call site: a
     // banked callee lives in a window that has to be selected before the jump
     // and restored after it, so reaching it is a different instruction.
+    // A free-function call follows the same rule, as it does in the original
+    // (its emitCall derives the opcode from the callee symbol for every
+    // call): a `:banked` function is reached through CallBanked. A free
+    // function's symbol is never cloaked, and its `banked` comes from this
+    // flag, so the declaration answers without a symbol-table scan.
+    String* placedCallOp(Node* decl)
+        {
+        if (decl != 0 && decl.hasFlag((u32)NF_BANKED))
+            return String.withCString("CallBanked");
+        return String.withCString("Call");
+        }
+
+    String* placedCallConv(Node* decl)
+        {
+        if (decl != 0 && decl.hasFlag((u32)NF_BANKED))
+            return String.withCString("CallConv::Banked");
+        return String.withCString("CallConv::Standard");
+        }
+
     IRValue* emitMethodCall(String* sym, IRValue* recvVal, Array* args,
                             String* retTy, bool hasRes)
         {
@@ -12249,6 +12269,10 @@ class ClassInfo
             // without it (private:docs/bugs/047).
             if (m.hasFlag((u32)NF_VAFWD))
                 msym.setAttr(String.withCString("vaforward"), true);
+            // `:main` keeps the method out of the xt6502 code banks. Only when
+            // set.
+            if (m.hasFlag((u32)NF_MAINRAM))
+                msym.setAttr(String.withCString("main"), true);
             _m.addSym(msym);
             // The return type is FROZEN here, at the moment the symbol is
             // made. A class named in it that has not been registered yet
@@ -13664,6 +13688,14 @@ class ClassInfo
                 fsym.setIrq();
             if (d.hasFlag((u32)NF_VBI))
                 fsym.setVbi();
+            // `:banked` / `:main` reach the symbol the way they do on a
+            // method: the xt6502 placement reads `banked` (never kept in main
+            // RAM, even under -Fmb) and `main` (never banked). `main` only
+            // when set, like irq/vbi. private:docs/bugs/267.
+            if (d.hasFlag((u32)NF_BANKED))
+                fsym.setAttr(String.withCString("banked"), true);
+            if (d.hasFlag((u32)NF_MAINRAM))
+                fsym.setAttr(String.withCString("main"), true);
             // `:xtcStack` / `:hwStack`: the xt6502 back end's calling
             // convention for this function, overriding --xtc-stack. Only when
             // set, like the flags above.

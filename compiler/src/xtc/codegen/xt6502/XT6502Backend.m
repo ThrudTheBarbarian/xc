@@ -1284,15 +1284,24 @@ static NSString *padLeft(NSString *s, NSUInteger width) {
 // HARDWARE-dispatched handler cannot: the Atari ROM jumps to an :irq/:vbi
 // handler via $FFFE / VVBLKI directly — a raw jump with no bank trampoline — so
 // the handler's body must live in the unbanked region. Force exactly those.
-// (The entry is forced unbanked separately by the placement.)
+// (The entry is forced unbanked separately by the placement.) A function the
+// source placed with `:main` stays unbanked too (private:docs/bugs/267).
 + (NSSet<NSString *> *)mustStayUnbankedFunctionsIn:(XTIRModule *)mod {
     NSMutableSet<NSString *> *set = [NSMutableSet set];
     for (XTIRSymbol *s in mod.symbols) {
         if (s.kind != XTIRSymbolKindFunction || !s.name.length) continue;
-        if ([s.attributes[@"irq"] boolValue] || [s.attributes[@"vbi"] boolValue])
+        if ([s.attributes[@"irq"] boolValue] || [s.attributes[@"vbi"] boolValue]
+            || [s.attributes[@"main"] boolValue])
             [set addObject:s.name];
     }
     return set;
+}
+
+// `:banked` in the source: the function goes in a code bank even when -Fmb
+// would keep it in main RAM for its size.
++ (BOOL)placedBanked:(NSString *)name module:(XTIRModule *)mod {
+    XTIRSymbol *s = [mod symbolForName:name];
+    return s.kind == XTIRSymbolKindFunction && [s.attributes[@"banked"] boolValue];
 }
 
 #pragma mark - Operand materialisation
@@ -4760,7 +4769,8 @@ static NSString *padLeft(NSString *s, NSUInteger width) {
                        bankMap:nil codeBankReg:codeReg into:tmp diagnostics:nil];
             NSUInteger insns = [self asmInsnCount:tmp];
             insnCounts[fn.name] = @(insns);
-            if (sFnMinBanked > 0 && insns < sFnMinBanked) [keepInMain addObject:fn.name];
+            if (sFnMinBanked > 0 && insns < sFnMinBanked
+                && ![self placedBanked:fn.name module:mod]) [keepInMain addObject:fn.name];
             NSUInteger calls = 0;
             for (XTIRBlock *blk in fn.blocks) {
                 for (XTIRInsn *callInsn in blk.instructions) {
@@ -4997,6 +5007,8 @@ static NSString *padLeft(NSString *s, NSUInteger width) {
                 [unbankedBuf substringFromIndex:before]]);
             if (fn == entry)
                 placeNote[fn.name] = @"entry";
+            else if ([fsym.attributes[@"main"] boolValue])
+                placeNote[fn.name] = @":main";
             else if (!irq && !vbi && [keepInMain containsObject:fn.name])
                 placeNote[fn.name] = [NSString stringWithFormat:@"%lu instructions, under -Fmb %lu",
                     (unsigned long)insnCounts[fn.name].unsignedIntegerValue,

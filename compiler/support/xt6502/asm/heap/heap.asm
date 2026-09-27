@@ -474,6 +474,35 @@ _hg_full:
     RTS
 
 ; ─────────────────────────────────────────────────────────────────────
+; _heap_trailer — A=lo / X=hi = payload of an ALLOCATED block whose bank
+; is mapped. Sets {{zp.tmp}} to the block's last seven bytes (payload +
+; block size − 14), where the compiler's `new` allocators keep the object
+; trailer (dealloc descriptor, stride, count). Taking it from the stored
+; size rather than from the object's size means the allocator and
+; __xtc_release agree even when the allocator consumed a whole free block
+; a few bytes larger than it asked for. Clobbers A, X, Y.
+; ─────────────────────────────────────────────────────────────────────
+_heap_trailer:
+    SEC
+    SBC #$0E
+    STA {{zp.tmp}}
+    TXA
+    SBC #$00
+    STA {{zp.tmp}}+1
+    LDY #$08
+    LDA ({{zp.tmp}}),Y             ; size hi (bit 7 clear: allocated)
+    TAX
+    DEY
+    LDA ({{zp.tmp}}),Y             ; size lo
+    CLC
+    ADC {{zp.tmp}}
+    STA {{zp.tmp}}
+    TXA
+    ADC {{zp.tmp}}+1
+    STA {{zp.tmp}}+1
+    RTS
+
+; ─────────────────────────────────────────────────────────────────────
 ; _heap_free — free block at payload A=lo / X=hi / Y=bank. Null-safe.
 ; Y is the bank the pointer lives in (1-based id). On flat-heap builds
 ; (no _heap_select_bank emitted) this routine is still callable, but

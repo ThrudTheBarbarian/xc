@@ -198,10 +198,13 @@ _xc_res:
 ; $95 is the corpus's dealloc counter — bumped on each actual free so the
 ; arc_* fixtures' dealloc-count asserts still hold.
 
-; Fixed payload offset of the 3-byte dealloc descriptor that
-; `_xtc_new_<Class>` stages and `__xtc_release` reads (task #122). Past
-; every released class's ivars, inside the conservative 64-byte payload.
-xtc_desc_off = 60
+; Every `new` block ends in a 7-byte trailer, written by the allocator the
+; driver emits (__xtc_alloc / _xtc_new_<T>) and found again from the block
+; size in the heap header (_heap_trailer, heap.asm):
+;   +0..2  dealloc descriptor [bank, addr-lo, addr-hi]; all zero → none
+;   +3..4  element stride
+;   +5..6  element count (1 for a scalar `new T()`)
+; It sits past the payload, so an object of any size keeps it intact.
 
 ; @@LL-ARC-BEGIN@@ (driver strips the ARC retain/release/dealloc stubs when
 ; the program performs no retain/release — they pull in retain.asm)
@@ -232,17 +235,15 @@ __xtc_release:
     STA _rel_stk,X
     INX
     STX _rel_sp
-    ; Refcount reached 0 — find the dealloc descriptor (3 bytes at obj+60:
-    ; [dealloc-bank, addr-lo, addr-hi]; all-zero → no destructor). Read needs
+    ; Refcount reached 0 — find the block's trailer (see above). Read needs
     ; $83 = the object's bank ($A000-$CFFF data window); then $83 = 0 for the
     ; bank-0 ivar view a banked dealloc runs against. See private:docs/bugs/003-004.
     LDY $92                  ; object bank
     STY __bank_data_reg      ; select object's data bank
     LDA $90
-    STA $98                  ; ZP pointer lo
-    LDA $91
-    STA $99                  ; ZP pointer hi
-    LDY #xtc_desc_off        ; descriptor at object + 60
+    LDX $91
+    JSR _heap_trailer        ; $98/$99 → the trailer
+    LDY #$00
     LDA ($98),Y              ; descriptor: dealloc code bank
     STA _xc_bank
     INY
@@ -251,17 +252,16 @@ __xtc_release:
     INY
     LDA ($98),Y              ; addr-hi
     STA $86
-    ; Array cookie (written by the class allocator): elemSize at obj+56,
-    ; element count at obj+58 — read while $83 still selects the object's
-    ; bank. count=1 for a scalar `new T()`. Stashed in free ZP temps; the
-    ; dispatch loop below moves them into a hardware-stack frame.
-    LDY #56
+    ; Array cookie — read while $83 still selects the object's bank. Stashed
+    ; in free ZP temps; the dispatch loop below moves them into a
+    ; hardware-stack frame.
+    INY
     LDA ($98),Y              ; elemSize lo
     STA $87
     INY
     LDA ($98),Y              ; elemSize hi
     STA $88
-    INY                      ; Y = 58
+    INY
     LDA ($98),Y              ; count lo
     STA $89
     INY

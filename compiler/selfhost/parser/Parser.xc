@@ -1754,13 +1754,20 @@ class Parser
         while (check((u16)tokIdentifier) && !checkBlockOpen()) {
             String* w = cur().value();
             if (owner != 0) {
-                if (Parser._same(w, "banked"))  owner.addFlag((u32)NF_BANKED);
-                if (Parser._same(w, "cloaked")) owner.addFlag((u32)NF_CLOAKED);
-                if (Parser._same(w, "irq"))     owner.addFlag((u32)NF_IRQ);
-                if (Parser._same(w, "vbi"))     owner.addFlag((u32)NF_VBI);
                 // Spelled `:xtcStack` / `:hwStack`; annotations are
                 // case-insensitive, as the original's are.
                 String* lw = w.lowercased();
+                // The placement words are one choice, and the last one written
+                // wins, as in the original: each clears the others.
+                u32 place = (u32)NF_BANKED | (u32)NF_CLOAKED | (u32)NF_MAINRAM;
+                if (Parser._same(w, "banked") || Parser._same(w, "cloaked")
+                    || Parser._same(lw, "main") || Parser._same(lw, "shadow"))
+                    owner.setFlags(owner.flags() & ~place);
+                if (Parser._same(w, "banked"))  owner.addFlag((u32)NF_BANKED);
+                if (Parser._same(w, "cloaked")) owner.addFlag((u32)NF_CLOAKED);
+                if (Parser._same(lw, "main"))   owner.addFlag((u32)NF_MAINRAM);
+                if (Parser._same(w, "irq"))     owner.addFlag((u32)NF_IRQ);
+                if (Parser._same(w, "vbi"))     owner.addFlag((u32)NF_VBI);
                 if (Parser._same(lw, "xtcstack")) owner.addFlag((u32)NF_XTCSTACK);
                 if (Parser._same(lw, "hwstack"))  owner.addFlag((u32)NF_HWSTACK);
                 // uxkit/026: `:action` marks a nib target/action method.
