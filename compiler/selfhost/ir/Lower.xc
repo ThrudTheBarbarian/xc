@@ -1813,6 +1813,22 @@ class ClassInfo
     IRValue* lowerUnary(Node* n)
         {
         String* op = n.op();
+        // A negated integer LITERAL is typed by the value it negates to, which
+        // can need more bytes than the literal: `-3000000000` negates a u32
+        // into an i64, `-200` a u8 into an i16. Negating the literal's own
+        // narrower Const gave a Neg whose operand was narrower than its result,
+        // and a back end that reads the operand at the result's width reads
+        // bytes nobody wrote. The literal is materialised at the result's width.
+        Node* lk = n.kid((u32)0);
+        if (isName(op, "-") && lk.kind() == (u16)nkInt && lk.ty() != 0 && n.ty() != 0
+            && Types.isInteger(lk.ty()) && Types.isInteger(n.ty())
+            && Types.byteWidth(n.ty()) > Types.byteWidth(lk.ty()))
+            {
+            IRValue* wide = constOf(lk.num(), n.ty());
+            Array* wops = new Array();
+            wops.add((Object*)IROperand.useVal(wide));
+            return emit(String.withCString("Neg"), irType(n.ty()), wops);
+            }
         IRValue* v = lowerExpr(n.kid((u32)0));
         if (_failed)
             return (IRValue*)0;
