@@ -3196,12 +3196,9 @@ static int linkArm9Shared(const char *argv0, XTCommandLineOptions *opts,
     // someone else's toolchain to produce an object is not portable, merely
     // hosted. A win64 box can now emit arm9 objects.
     //
-    // Deliberately NO runtime stub in the object. On the other three targets our
-    // own linkers take first-wins on a duplicate, so each object can carry its
-    // own copy of the generated ARC/heap helpers; GNU ld (which still performs
-    // the final LINK) does not, and two objects each defining `_xtc_alloc`
-    // would be a hard error. The stub is therefore generated ONCE at the final
-    // link, from the objects' own symbol table.
+    // The fixed runtime is NOT in the object: it belongs to the final link,
+    // which merges the prebuilt runtime `.s` with the objects. Only the
+    // per-type allocation trampolines, which vary with the module, are.
     //
     // `main` still gives up its name here, not at the link: the C stub owns
     // `main` and calls `xt_main`, and the rename has to happen in the module
@@ -3215,7 +3212,15 @@ static int linkArm9Shared(const char *argv0, XTCommandLineOptions *opts,
         NSString *asmText = [NSString stringWithContentsOfFile:asmPath
                                                       encoding:NSUTF8StringEncoding error:NULL];
         if (asmText) {
+            // The per-type `_xtc_new_<T>` trampolines the module calls go IN
+            // the object, ahead of its code, as the shipped driver does: an
+            // all-source link generates them from the program's asm, and an
+            // object link has no asm left to generate them from. Every link
+            // path here takes the first definition of a duplicate (the gcc
+            // fallback with --allow-multiple-definition), so two objects
+            // carrying `_xtc_new_u8` is the same body twice.
             asmText = renameArm9MainSymbol(asmText);
+            asmText = [NSString stringWithFormat:@"%@\n%@", arm9ClassAllocStubs(asmText), asmText];
             [asmText writeToFile:asmPath atomically:YES encoding:NSUTF8StringEncoding error:NULL];
         }
         int crc = runChild(ln, @[@"--object", asmPath, outPath]);

@@ -627,16 +627,16 @@ fi
 if "$XCC" -q -A win64 "$W/modMain-win.o" "$W/modA-win.o" -o "$W/wprog.exe" 2>"$W/wl.err" \
    && "$XCC" -q -A win64 "$W/catOver-win.o" "$W/catBase-win.o" -o "$W/wcat.exe" 2>>"$W/wl.err"; then
     if command -v wine >/dev/null 2>&1; then
-        out="$(WINEDEBUG=-all timeout 120 wine "$W/wprog.exe" 2>/dev/null | tr -d '\r')"
+        out="$(WINEDLLOVERRIDES="winedbg.exe=d" WINEDEBUG=-all timeout 120 wine "$W/wprog.exe" 2>/dev/null | tr -d '\r')"
         [ "$out" = "9" ] && ok "win64 linked program runs under wine (got 9)" \
                          || bad "win64 linked program (got '$out', want 9)"
-        out="$(WINEDEBUG=-all timeout 120 wine "$W/wcat.exe" 2>/dev/null | tr -d '\r')"
+        out="$(WINEDLLOVERRIDES="winedbg.exe=d" WINEDEBUG=-all timeout 120 wine "$W/wcat.exe" 2>/dev/null | tr -d '\r')"
         [ "$out" = "1011 1012 2011" ] \
             && ok "win64 interface + category chain across objects (got '$out')" \
             || bad "win64 category chain (got '$out', want '1011 1012 2011')"
         if "$XCC" -q -A win64 -flto "$W/modMain-win.o" "$W/modA-win.o" \
              -o "$W/wlto.exe" 2>"$W/wt.err"; then
-            out="$(WINEDEBUG=-all timeout 120 wine "$W/wlto.exe" 2>/dev/null | tr -d '\r')"
+            out="$(WINEDLLOVERRIDES="winedbg.exe=d" WINEDEBUG=-all timeout 120 wine "$W/wlto.exe" 2>/dev/null | tr -d '\r')"
             [ "$out" = "9" ] && ok "win64 -flto links and runs (got 9)" \
                              || bad "win64 -flto (got '$out', want 9)"
         else
@@ -665,7 +665,7 @@ if command -v ar >/dev/null 2>&1; then
     fi
     if "$XCC" -q -A win64 "$W/modMain-win.o" "$W/wlib.a" -o "$W/war.exe" 2>"$W/war.err"; then
         if command -v wine >/dev/null 2>&1; then
-            out="$(WINEDEBUG=-all timeout 120 wine "$W/war.exe" 2>/dev/null | tr -d '\r')"
+            out="$(WINEDLLOVERRIDES="winedbg.exe=d" WINEDEBUG=-all timeout 120 wine "$W/war.exe" 2>/dev/null | tr -d '\r')"
             [ "$out" = "9" ] && ok "win64 COFF archive member pulled on demand (got 9)" \
                              || bad "win64 archive pull (got '$out', want 9)"
         else
@@ -709,7 +709,7 @@ EOF
          -importmap support/win64/win32-imports.map \
          -import "kernel32.dll:ExitProcess,GetStdHandle,WriteFile,VirtualAlloc,GetSystemTimeAsFileTime,Sleep" \
          -o "$W/mgw.exe" 2>"$W/mgw.err"; then
-        out="$(WINEDEBUG=-all timeout 120 wine "$W/mgw.exe" 2>/dev/null | tr -d '\r')"
+        out="$(WINEDLLOVERRIDES="winedbg.exe=d" WINEDEBUG=-all timeout 120 wine "$W/mgw.exe" 2>/dev/null | tr -d '\r')"
         [ "$out" = "ab" ] && ok "win64 pulls from a REAL mingw archive (got 'ab')" \
                           || bad "win64 third-party archive (got '$out', want 'ab')"
     else
@@ -740,7 +740,7 @@ i32 main(void)
 }
 EOF
     if "$XCC" -q -A win64 "$W/ucrt.xc" -o "$W/ucrt.exe" 2>"$W/ucrt.err"; then
-        out="$(WINEDEBUG=-all timeout 120 wine "$W/ucrt.exe" 2>/dev/null | tr -d '\r')"
+        out="$(WINEDLLOVERRIDES="winedbg.exe=d" WINEDEBUG=-all timeout 120 wine "$W/ucrt.exe" 2>/dev/null | tr -d '\r')"
         [ "$out" = "n=5 s=hello" ] \
             && ok "win64 snprintf is the REAL libc via ucrtbase (got '$out')" \
             || bad "win64 real-libc snprintf (got '$out', want 'n=5 s=hello')"
@@ -749,16 +749,18 @@ EOF
     fi
 fi
 
-# ── arm9: the fourth target, and the one that is a different SHAPE ───────
-# arm9 has no in-house assembler in this tree and no xcc-ln-arm9 — it shells out
-# to arm-none-eabi-gcc — so `-c` is that toolchain's `-c` and the object is
-# written by it, not by us. Two consequences the other three do not have:
-#   · the objects carry NO runtime stub. Our own linkers take first-wins on a
-#     duplicate; GNU ld does not, so the ARC/heap helpers are generated once at
-#     the final link, from the objects' own symbol table via `nm`.
-#   · ld runs with --allow-multiple-definition to match our linkers' semantics,
-#     which costs its duplicate diagnostic — so the one duplicate that is never
-#     benign, `<Class>$cat`, is checked in the driver against that same nm read.
+# ── arm9: the objects and the link are both in-house ─────────────────────
+# `-c` assembles with the in-house ARM32 assembler and writes the ELF32
+# object; the link merges the objects into the assembled runtime and writes
+# the loader-hosted ET_DYN. Two things differ from the other targets:
+#   · each object carries the `_xtc_new_<T>` trampolines it calls, because
+#     an object link has no program asm to generate them from; the link takes
+#     the first definition of a duplicate. Without them every program that
+#     allocated an array failed at LOAD on `_xtc_new_pointer`.
+#   · the module that defines `main` gives the name up to the runtime in the
+#     object (`xt_main`), since a link cannot rename inside an object.
+# Both compilers run every check, and their objects and images are compared
+# byte for byte: the shipped driver could not link arm9 objects at all.
 # It needs the XTOS loader tree and qemu, so it SKIPS where they are absent —
 # and says so, because a skipped run that reads as a pass is the failure mode
 # this whole file exists to prevent.
@@ -772,47 +774,51 @@ if [ -f "$A9SYS/freertos-hosttest.elf" ] && command -v qemu-system-arm >/dev/nul
           | sed -e '1,/XTOS shell/d' | sed 's/^xtos\$ //' | sed -e '/^bye$/,$d' \
           | grep -v '^\[net\]' | sed 's/\r$//' | sed -e '/^$/d'
     }
-    "$XCC" -q -A arm9 -L "$A9SYS" -c "$W/modA.xc"    -o "$W/modA-a9.o"    2>"$W/9a.err"
-    "$XCC" -q -A arm9 -L "$A9SYS" -c "$W/modMain.xc" -o "$W/modMain-a9.o" 2>>"$W/9a.err"
-    if file "$W/modA-a9.o" 2>/dev/null | grep -q "ELF 32-bit LSB relocatable, ARM"; then
-        ok "arm9 -c emits an ARM relocatable"
+  for A9C in bin/osx/xcc bin/osx/xcc-xc; do
+    t=$(basename "$A9C")          # this compiler's files live in their own dir
+    D="$W/a9-$t"; mkdir -p "$D"
+    "$A9C" -q -A arm9 -L "$A9SYS" -c "$W/modA.xc"    -o "$D/modA.o"    2>"$D/9a.err"
+    "$A9C" -q -A arm9 -L "$A9SYS" -c "$W/modMain.xc" -o "$D/modMain.o" 2>>"$D/9a.err"
+    if file "$D/modA.o" 2>/dev/null | grep -q "ELF 32-bit LSB relocatable, ARM"; then
+        ok "arm9 $t -c emits an ARM relocatable"
     else
-        bad "arm9 -c object: $(file "$W/modA-a9.o" 2>&1 | head -1)"; head -3 "$W/9a.err"
+        bad "arm9 $t -c object: $(file "$D/modA.o" 2>&1 | head -1)"; head -3 "$D/9a.err"
     fi
-    "$XCC" -q -A arm9 -L "$A9SYS" -c "$W/catBase.xc" -o "$W/catBase-a9.o" 2>>"$W/9a.err"
-    "$XCC" -q -A arm9 -L "$A9SYS" -L "$W" -c "$W/catOver.xc" -o "$W/catOver-a9.o" 2>>"$W/9a.err"
-    if "$XCC" -q -A arm9 -L "$A9SYS" "$W/modMain-a9.o" "$W/modA-a9.o" -o "$W/a9prog.so" 2>"$W/9l.err" \
-       && "$XCC" -q -A arm9 -L "$A9SYS" "$W/catOver-a9.o" "$W/catBase-a9.o" -o "$W/a9cat.so" 2>>"$W/9l.err"; then
-        out="$(a9run "$W/a9prog.so")"
-        [ "$out" = "9" ] && ok "arm9 linked program runs on the loader (got 9)" \
-                         || bad "arm9 linked program (got '$out', want 9)"
-        out="$(a9run "$W/a9cat.so")"
+    # catOver imports catBase's interface, which -c leaves beside the object.
+    "$A9C" -q -A arm9 -L "$A9SYS" -c "$W/catBase.xc" -o "$D/catBase.o" 2>>"$D/9a.err"
+    "$A9C" -q -A arm9 -L "$A9SYS" -L "$D" -c "$W/catOver.xc" -o "$D/catOver.o" 2>>"$D/9a.err"
+    if "$A9C" -q -A arm9 -L "$A9SYS" "$D/modMain.o" "$D/modA.o" -o "$D/a9prog.so" 2>"$D/9l.err" \
+       && "$A9C" -q -A arm9 -L "$A9SYS" "$D/catOver.o" "$D/catBase.o" -o "$D/a9cat.so" 2>>"$D/9l.err"; then
+        out="$(a9run "$D/a9prog.so")"
+        [ "$out" = "9" ] && ok "arm9 $t linked program runs on the loader (got 9)" \
+                         || bad "arm9 $t linked program (got '$out', want 9)"
+        out="$(a9run "$D/a9cat.so")"
         [ "$out" = "1011 1012 2011" ] \
-            && ok "arm9 interface + category chain across objects (got '$out')" \
-            || bad "arm9 category chain (got '$out', want '1011 1012 2011')"
+            && ok "arm9 $t interface + category chain across objects (got '$out')" \
+            || bad "arm9 $t category chain (got '$out', want '1011 1012 2011')"
         # The same object through a STATIC ARCHIVE. arm9 was the last hosted
         # target that could not resolve a symbol out of a `.a`, and the pull has
         # to be on DEMAND: a member joins only because something is undefined
         # without it. The paired no-archive link must fail, or this proves
         # nothing.
         if command -v ar >/dev/null 2>&1; then
-            rm -f "$W/a9lib.a"
-            ar rcs "$W/a9lib.a" "$W/modA-a9.o" 2>/dev/null
+            rm -f "$D/a9lib.a"
+            ar rcs "$D/a9lib.a" "$D/modA.o" 2>/dev/null
             # NOT "the link must fail": a shared object may legitimately carry
             # undefined symbols, which the loader resolves — that is how every
             # libc call works here. So the check is that it does not RUN without
             # the archive, which is what proves the archive supplied helperA.
-            "$XCC" -q -A arm9 -L "$A9SYS" "$W/modMain-a9.o" -o "$W/a9noar.so" 2>/dev/null
-            [ "$(a9run "$W/a9noar.so" 2>/dev/null)" = "9" ] \
-                && bad "arm9 prints 9 without modA at all (the archive check is vacuous)" \
-                || ok "arm9 cannot run without the archive that defines helperA"
-            if "$XCC" -q -A arm9 -L "$A9SYS" "$W/modMain-a9.o" "$W/a9lib.a" \
-                 -o "$W/a9ar.so" 2>"$W/9r.err"; then
-                out="$(a9run "$W/a9ar.so")"
-                [ "$out" = "9" ] && ok "arm9 archive member pulled on demand (got 9)" \
-                                 || bad "arm9 archive pull (got '$out', want 9)"
+            "$A9C" -q -A arm9 -L "$A9SYS" "$D/modMain.o" -o "$D/a9noar.so" 2>/dev/null
+            [ "$(a9run "$D/a9noar.so" 2>/dev/null)" = "9" ] \
+                && bad "arm9 $t prints 9 without modA at all (the archive check is vacuous)" \
+                || ok "arm9 $t cannot run without the archive that defines helperA"
+            if "$A9C" -q -A arm9 -L "$A9SYS" "$D/modMain.o" "$D/a9lib.a" \
+                 -o "$D/a9ar.so" 2>"$D/9r.err"; then
+                out="$(a9run "$D/a9ar.so")"
+                [ "$out" = "9" ] && ok "arm9 $t archive member pulled on demand (got 9)" \
+                                 || bad "arm9 $t archive pull (got '$out', want 9)"
             else
-                bad "arm9 link against a .a"; grep -v "ABI flags" "$W/9r.err" | head -3
+                bad "arm9 $t link against a .a"; grep -v "ABI flags" "$D/9r.err" | head -3
             fi
         fi
 
@@ -821,17 +827,26 @@ if [ -f "$A9SYS/freertos-hosttest.elf" ] && command -v qemu-system-arm >/dev/nul
         # --pic here, as the ordinary path does — without it the image links,
         # is 5.2 KB smaller, and DATA-ABORTs, because the loader maps it as a
         # PIC ET_DYN. Running it is the only check that catches that.
-        if "$XCC" -q -A arm9 -L "$A9SYS" -flto "$W/modMain-a9.o" "$W/modA-a9.o" \
-             -o "$W/a9lto.so" 2>"$W/9t.err"; then
-            out="$(a9run "$W/a9lto.so")"
-            [ "$out" = "9" ] && ok "arm9 -flto links and runs (got 9)" \
-                             || bad "arm9 -flto (got '$out', want 9)"
+        if "$A9C" -q -A arm9 -L "$A9SYS" -flto "$D/modMain.o" "$D/modA.o" \
+             -o "$D/a9lto.so" 2>"$D/9t.err"; then
+            out="$(a9run "$D/a9lto.so")"
+            [ "$out" = "9" ] && ok "arm9 $t -flto links and runs (got 9)" \
+                             || bad "arm9 $t -flto (got '$out', want 9)"
         else
-            bad "arm9 -flto link"; grep -v "ABI flags" "$W/9t.err" | head -3
+            bad "arm9 $t -flto link"; grep -v "ABI flags" "$D/9t.err" | head -3
         fi
     else
-        bad "arm9 link objects"; grep -v "ABI flags" "$W/9l.err" | head -4
+        bad "arm9 $t link objects"; grep -v "ABI flags" "$D/9l.err" | head -4
     fi
+  done
+    # The shipped compiler must write what the reference writes: every object,
+    # sidecar and linked image.
+    same=1
+    for f in modA.o modMain.o catBase.o catOver.o modMain.xtc.needs \
+             a9prog.so a9cat.so a9ar.so a9lto.so; do
+        cmp -s "$W/a9-xcc/$f" "$W/a9-xcc-xc/$f" || { same=0; bad "arm9: the two compilers' $f differ"; }
+    done
+    [ $same = 1 ] && ok "arm9: both compilers' objects, sidecars and images are byte-identical"
 else
     echo "SKIP  arm9 — no loader build at '$A9SYS' or no qemu-system-arm (NOT CHECKED AT ALL)"
 fi

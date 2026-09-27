@@ -468,7 +468,11 @@ class Arm9
                 _out.appendCString("\n\t.data\n");
                 emitted = true;
                 }
-            _out.appendFormat("\t.global\t%s\n%s:\n", s.name().cString(), s.name().cString());
+            // LOCAL, as on arm64 and x86_64: a literal is module-private, and a
+            // global `str_N` met the next object's `str_N` in a link from `-c`
+            // objects, where the first definition won and one module printed
+            // another's strings.
+            _out.appendFormat("%s:\n", s.name().cString());
             Array* b = s.bytes();
             if (b == 0 || b.count() == (u32)0)
                 {

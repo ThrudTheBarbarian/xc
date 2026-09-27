@@ -218,7 +218,25 @@ int main(int argc, const char* argv[])
                 if (sy.section)
                     [defined addObject:sy.name];
             __block BOOL mergeFailed = NO;
+            __block NSUInteger objSeq = 0;
             BOOL (^mergeObj)(NSDictionary*) = ^BOOL(NSDictionary* o) {
+              // A LOCAL symbol is private to its object, so it is tagged per
+              // object (`name$o<n>`), in its definition and in the object's
+              // own relocations. Merged under the bare name, the first
+              // object's `str_0` answered for every later object's, and one
+              // module printed another's strings.
+              NSMutableDictionary<NSString*, NSString*>* local = [NSMutableDictionary dictionary];
+              for (XAArm32Symbol* sy in o[@"symbols"])
+                  if (sy.section && !sy.isGlobal)
+                      local[sy.name] = [NSString stringWithFormat:@"%@$o%lu", sy.name,
+                                                                  (unsigned long)objSeq];
+              objSeq++;
+              for (XAArm32Symbol* sy in o[@"symbols"])
+                  if (local[sy.name] && sy.section && !sy.isGlobal)
+                      sy.name = local[sy.name];
+              for (XAArm32Reloc* r in o[@"relocs"])
+                  if (local[r.symbol])
+                      r.symbol = local[r.symbol];
               while (mtext.length & 3)
                   {
                   uint8_t z = 0;

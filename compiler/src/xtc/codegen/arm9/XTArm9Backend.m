@@ -3890,7 +3890,11 @@ static NSInteger sArm9ThreadSafeARCOverride = -1;
         if (sym.kind != XTIRSymbolKindStringLit)
             continue;
         dataHeader();
-        [out appendFormat:@"\t.global\t%@\n%@:\n", sym.name, sym.name];
+        // LOCAL, as on arm64 and x86_64: a literal is module-private, and a
+        // global `str_N` met the next object's `str_N` in a link from `-c`
+        // objects, where the first definition won and one module printed
+        // another's strings.
+        [out appendFormat:@"%@:\n", sym.name];
         const uint8_t* p = sym.stringBytes.bytes;
         NSUInteger len = sym.stringBytes.length;
         if (len == 0)

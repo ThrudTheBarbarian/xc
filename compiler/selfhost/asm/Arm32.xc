@@ -56,6 +56,11 @@ class AsmSymbol
         {
         return _name;
         }
+    // A link tags an object's LOCAL symbols per object.
+    void setName(String* n)
+        {
+        _name = n;
+        }
     u32 section(void)
         {
         return _section;

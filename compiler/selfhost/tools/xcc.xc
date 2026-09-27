@@ -1719,6 +1719,19 @@ void writeObjectSidecars(DriverOptions* d)
     }
     String* needs = new String();
     Array* nl = d.fe().neededLibs();
+    // arm9's libc is auto-imported rather than `#import`ed, and the reference
+    // lists it first when the module names any of its functions. Without it
+    // an object link ordered DT_NEEDED differently from the reference's.
+    if (isArm9(d) && d.fe().libcReferenced()) {
+        String* libc = arm9SysrootLib(d, String.withCString("libc.so"));
+        if (libc != (String*)0) {
+            Array* withLibc = new Array();
+            withLibc.add((Object*)libc);
+            for (u32 i = (u32)0; nl != (Array*)0 && i < nl.count(); i = i + (u32)1)
+                if (!((String*)nl.get(i)).equals(libc)) withLibc.add(nl.get(i));
+            nl = withLibc;
+        }
+    }
     for (u32 i = (u32)0; nl != (Array*)0 && i < nl.count(); i = i + (u32)1) {
         String* l = (String*)nl.get(i);
         if (!l.hasSuffix(String.withCString(".so"))
@@ -2128,9 +2141,8 @@ void emitArm9(DriverOptions* d, IRModule* mod)
         Process.exit((i32)3); return;
     }
     // The xtc entry gives up the name `main` to the runtime, unless this is a
-    // library, which has no entry to give up.
-    // An OBJECT keeps `main`: the runtime that renames it is not in this file,
-    // and the final link is what decides which module owns the entry.
+    // library, which has no entry to give up. An object gives it up too, but
+    // only in the object (below): `-S` shows the module as it was compiled.
     if (!d.emitLib() && !d.compileOnly()) prog = renameArm9Main(prog);
     if (d.keepAsm()) {
         if (!Files.writeText(d.fe().output(), prog)) {
@@ -2142,9 +2154,14 @@ void emitArm9(DriverOptions* d, IRModule* mod)
 
     // ── -c: an object, not an image ──────────────────────────────────────
     //
-    // The runtime is deliberately absent: it belongs to the final link, and
-    // baking it into every object would collide the moment two of them met.
+    // The fixed runtime is absent: it belongs to the final link, which merges
+    // the prebuilt runtime `.s` with the objects. The per-type allocation
+    // trampolines the module calls vary with it, so they are here, ahead of
+    // its code; the link takes the first of any duplicate. `main` becomes
+    // `xt_main` here, in the module that defines it, because the runtime's
+    // `main` calls that and a link cannot rename inside an object.
     if (d.compileOnly()) {
+        prog = renameArm9Main(prog);
         String* one = new String();
         one.append(arm9ClassAllocStubs(prog));
         one.appendCString("\n");
@@ -2278,6 +2295,228 @@ String* arm9SysrootLib(DriverOptions* d, String* libName)
         if (Files.exists(p)) return p;
     }
     return (String*)0;
+}
+
+// ── arm9: link `-c` objects into the loader-hosted ET_DYN ───────────────
+//
+// The same image an all-source link writes: the prebuilt runtime `.s` files
+// assembled as one unit (each file's local labels namespaced), each object
+// merged in after it, the archives pulled from on demand, and the whole
+// handed to Elf32.sharedObject. The objects carry their own `_xtc_new_<T>`
+// trampolines (see `-c` in emitArm9), so nothing is generated here. Mirrors
+// the reference's object link through `xcc-ln-arm9 --shared`.
+void linkObjectsArm9(DriverOptions* d)
+{
+    Array* all = new Array();
+    Array* rtNames = new Array();
+    rtNames.add((Object*)String.withCString("rtgen-arm9.s"));
+    rtNames.add((Object*)String.withCString("libxtgen-arm9.s"));
+    rtNames.add((Object*)String.withCString("aeabi64.s"));
+    String* src = new String();
+    for (u32 k = (u32)0; k < rtNames.count(); k = k + (u32)1) {
+        String* t = readRuntimeIn(d.fe(), "arm9/runtime", (String*)rtNames.get(k));
+        if (t == 0) {
+            Stdio.printf("xcc: error: cannot read %s from the support tree\n",
+                         ((String*)rtNames.get(k)).cString());
+            Process.exit((i32)1); return;
+        }
+        src.append(X86Link.namespaceLocals(t, k));
+        src.appendCString("\n");
+    }
+    Arm32* as = new Arm32();
+    Array* text = as.assemble(src);
+    if (as.failed()) {
+        Stdio.printf("xcc: %s\n", as.why().cString());
+        Process.exit((i32)1); return;
+    }
+    Array* mdata = new Array();
+    for (u32 i = (u32)0; i < as.data().count(); i = i + (u32)1) mdata.add(as.data().get(i));
+    Array* msyms = new Array();
+    for (u32 i = (u32)0; i < as.symbols().count(); i = i + (u32)1) msyms.add(as.symbols().get(i));
+    Array* mrels = new Array();
+    for (u32 i = (u32)0; i < as.relocations().count(); i = i + (u32)1) mrels.add(as.relocations().get(i));
+
+    Map* defined = new Map();
+    for (u32 i = (u32)0; i < msyms.count(); i = i + (u32)1) {
+        AsmSymbol* sy = (AsmSymbol*)msyms.get(i);
+        if (sy.section() != (u32)0) defined.set((Hashable*)sy.name(), (Object*)Number.withU32((u32)1));
+    }
+    Array* pool = new Array();
+    u32 seq = (u32)0; // which merged object this is, for tagging its locals
+    for (u32 i = (u32)0; i < d.objectInputs().count(); i = i + (u32)1) {
+        String* op = (String*)d.objectInputs().get(i);
+        if (op.hasSuffix(String.withCString(".o"))) {
+            Elf32Object* o = Elf32Object.read(Files.readData(op));
+            if (o == (Elf32Object*)0) {
+                Stdio.printf("xcc: error: '%s' is not a readable ARM ELF32 object (or carries "
+                             "a relocation this linker does not emit)\n", op.cString());
+                Process.exit((i32)1); return;
+            }
+            if (!mergeArm9Object(o, text, mdata, msyms, mrels, defined, seq)) {
+                Process.exit((i32)1); return;
+            }
+            seq = seq + (u32)1;
+        }
+    }
+    // A `.a` is a POOL: a member joins only when it defines something still
+    // undefined, and pulling one can make new names undefined, so this runs
+    // to a fixpoint. Archives are read after every object, as the reference
+    // separates them.
+    for (u32 i = (u32)0; i < d.objectInputs().count(); i = i + (u32)1) {
+        String* ap = (String*)d.objectInputs().get(i);
+        if (!ap.hasSuffix(String.withCString(".a"))) continue;
+        Array* ms = ArArchive.membersOfFile(ap);
+        if (ms == (Array*)0) {
+            Stdio.printf("xcc: error: '%s' is not a static archive\n", ap.cString());
+            Process.exit((i32)1); return;
+        }
+        for (u32 k = (u32)0; k < ms.count(); k = k + (u32)1) {
+            Elf32Object* o = Elf32Object.read(((ArMember*)ms.get(k)).data());
+            if (o != (Elf32Object*)0) pool.add((Object*)o);
+        }
+    }
+    Map* taken = new Map();
+    bool progress = pool.count() > (u32)0;
+    while (progress) {
+        progress = false;
+        Map* needed = new Map();
+        for (u32 i = (u32)0; i < mrels.count(); i = i + (u32)1) {
+            String* s = ((AsmReloc*)mrels.get(i)).symbol();
+            if (s != (String*)0 && s.byteLength() > (u32)0 && defined.get((Hashable*)s) == (Object*)0)
+                needed.set((Hashable*)s, (Object*)Number.withU32((u32)1));
+        }
+        if (needed.count() == (u32)0) break;
+        for (u32 mi = (u32)0; mi < pool.count(); mi = mi + (u32)1) {
+            String* key = Number.withU32(mi).description();
+            if (taken.get((Hashable*)key) != (Object*)0) continue;
+            Elf32Object* o = (Elf32Object*)pool.get(mi);
+            bool defines = false;
+            for (u32 k = (u32)0; k < o.symbols().count() && !defines; k = k + (u32)1) {
+                AsmSymbol* sy = (AsmSymbol*)o.symbols().get(k);
+                if (sy.section() != (u32)0 && sy.isGlobal() && needed.get((Hashable*)sy.name()) != (Object*)0)
+                    defines = true;
+            }
+            if (!defines) continue;
+            taken.set((Hashable*)key, (Object*)Number.withU32((u32)1));
+            progress = true;
+            if (!mergeArm9Object(o, text, mdata, msyms, mrels, defined, seq)) {
+                Process.exit((i32)1); return;
+            }
+            seq = seq + (u32)1;
+        }
+    }
+
+    // DT_NEEDED: what the objects `#import <Lib>`ed (their .xtc.needs
+    // sidecars), then the device libc and libm, as the reference lists them.
+    Array* needed = new Array();
+    Array* on = objectNeeds(d.objectInputs());
+    for (u32 i = (u32)0; i < on.count(); i = i + (u32)1)
+        needed.add((Object*)((String*)on.get(i)).lastPathComponent());
+    if (arm9SysrootLib(d, String.withCString("libc.so")) != (String*)0)
+        needed.add((Object*)String.withCString("libc.so"));
+    if (arm9SysrootLib(d, String.withCString("libm.so")) != (String*)0)
+        needed.add((Object*)String.withCString("libm.so"));
+
+    Elf32* w = new Elf32();
+    Array* img = w.sharedObject(text, mdata, msyms, mrels, needed, (String*)0, new Array());
+    if (w.failed() || img == (Array*)0) {
+        Stdio.printf("xcc: %s\n", w.failed() ? w.why().cString() : "arm9 link failed");
+        Process.exit((i32)1); return;
+    }
+    Data* out = Data.withCapacity(img.count());
+    for (u32 i = (u32)0; i < img.count(); i = i + (u32)1)
+        out.appendByte((u8)((Number*)img.get(i)).asU32());
+    if (!Files.writeData(d.fe().output(), out)) {
+        Stdio.printf("xcc: error: cannot write '%s'\n", d.fe().output().cString());
+        Process.exit((i32)1); return;
+    }
+    Files.setExecutable(d.fe().output());
+}
+
+// One object into the image being built: its text and data appended (each
+// padded to a word first), its defined symbols rebased, its relocations
+// moved with it. FIRST DEFINITION WINS, as every in-house linker does — `-c`
+// compiles a module's imports into it, so a duplicate is the same body twice —
+// except the category-chain anchors (§4.3b), where first-wins would run one
+// module's category method as another's body. False (having said why) on
+// one of those.
+bool mergeArm9Object(Elf32Object* o, Array* mtext, Array* mdata, Array* msyms,
+                     Array* mrels, Map* defined, u32 seq)
+{
+    // A LOCAL symbol is private to its object, so it is tagged per object
+    // (`name$o<n>`), in its definition and in the object's own relocations.
+    // Merged under the bare name, the first object's `str_0` answered for
+    // every later object's, and one module printed another's strings.
+    Map* local = new Map();
+    for (u32 i = (u32)0; i < o.symbols().count(); i = i + (u32)1) {
+        AsmSymbol* sy = (AsmSymbol*)o.symbols().get(i);
+        if (sy.section() == (u32)0 || sy.isGlobal()) continue;
+        String* tagged = String.withString(sy.name());
+        tagged.appendFormat("$o%lu", seq);
+        local.set((Hashable*)sy.name(), (Object*)tagged);
+    }
+    for (u32 i = (u32)0; i < o.symbols().count(); i = i + (u32)1) {
+        AsmSymbol* sy = (AsmSymbol*)o.symbols().get(i);
+        Object* t = local.get((Hashable*)sy.name());
+        if (t != (Object*)0 && sy.section() != (u32)0 && !sy.isGlobal()) sy.setName((String*)t);
+    }
+    Array* rels = new Array();
+    for (u32 i = (u32)0; i < o.relocations().count(); i = i + (u32)1) {
+        AsmReloc* r = (AsmReloc*)o.relocations().get(i);
+        Object* t = local.get((Hashable*)r.symbol());
+        rels.add((Object*)(t == (Object*)0 ? r
+                           : AsmReloc.with(r.section(), r.offset(), (String*)t, r.type())));
+    }
+    while ((mtext.count() & (u32)3) != (u32)0) mtext.add((Object*)Number.withU32((u32)0));
+    u32 tbase = mtext.count();
+    for (u32 i = (u32)0; i < o.text().count(); i = i + (u32)1) mtext.add(o.text().get(i));
+    while ((mdata.count() & (u32)3) != (u32)0) mdata.add((Object*)Number.withU32((u32)0));
+    u32 dbase = mdata.count();
+    for (u32 i = (u32)0; i < o.data().count(); i = i + (u32)1) mdata.add(o.data().get(i));
+    for (u32 i = (u32)0; i < o.symbols().count(); i = i + (u32)1) {
+        AsmSymbol* sy = (AsmSymbol*)o.symbols().get(i);
+        if (sy.section() == (u32)0) continue; // undefined: the link resolves it
+        String* nm = sy.name();
+        if (defined.get((Hashable*)nm) != (Object*)0) {
+            u32 cat = nm.byteIndexOf(String.withCString("$cat$"));
+            if (cat != String.notFound()) {
+                Stdio.printf("xcc: error: two modules define category '%s' on class '%s' ('%s' "
+                             "defined twice). The category name is the extender's identity "
+                             "(separate-compilation §4.3b) — rename one, or compile both from "
+                             "one module\n",
+                             nm.substringFromByte(cat + (u32)5).cString(),
+                             nm.substringBytes((u32)0, cat).cString(), nm.cString());
+                return false;
+            }
+            if (nm.hasSuffix(String.withCString("$cat"))) {
+                Stdio.printf("xcc: error: class '%s' is compiled into two modules ('%s', its "
+                             "category-chain table, defined twice)\n",
+                             nm.substringBytes((u32)0, nm.byteLength() - (u32)4).cString(), nm.cString());
+                return false;
+            }
+            continue;
+        }
+        defined.set((Hashable*)nm, (Object*)Number.withU32((u32)1));
+        // Drop the UNDEFINED entry the runtime's assembly left for this name,
+        // or it goes into .dynsym twice, once defined and once not.
+        for (u32 k = (u32)0; k < msyms.count(); k = k + (u32)1) {
+            AsmSymbol* u = (AsmSymbol*)msyms.get(k);
+            if (u.section() == (u32)0 && u.name().equals(nm)) {
+                msyms.removeAt(k);
+                k = msyms.count();
+            }
+        }
+        // A COMMON symbol's value is its ALIGNMENT, not an offset.
+        if (sy.section() == (u32)1) sy.setValue(sy.value() + tbase);
+        else if (sy.section() == (u32)2) sy.setValue(sy.value() + dbase);
+        msyms.add((Object*)sy);
+    }
+    for (u32 i = (u32)0; i < rels.count(); i = i + (u32)1) {
+        AsmReloc* r = (AsmReloc*)rels.get(i);
+        u32 base = r.section() == (u32)1 ? tbase : dbase;
+        mrels.add((Object*)AsmReloc.with(r.section(), r.offset() + base, r.symbol(), r.type()));
+    }
+    return true;
 }
 
 void emitM68k(DriverOptions* d, IRModule* mod)
@@ -3136,6 +3375,10 @@ void linkObjects(DriverOptions* d)
             Process.exit((i32)3); return;
         }
         d.setIrText(merged);
+        // arm9 records the objects' `#import <Lib>` dependencies as DT_NEEDED
+        // from their sidecars, as the reference's LTO link does; the merged
+        // module has no front end to name them.
+        if (isArm9(d)) d.fe().setNeededLibs(objectNeeds(d.objectInputs()));
         d.fe().setTarget(backendTargetOf(d));
     if (isIos(d)) d.fe().setLibPlatform(d.arch());
         emitModule(d, mod);
@@ -3143,6 +3386,7 @@ void linkObjects(DriverOptions* d)
     }
     if (d.arch().equals(String.withCString("arm64")) || isIos(d)) { linkObjectsArm64(d); return; }
     if (isX86_64(d)) { linkX86_64(d, String.withCString("")); return; }
+    if (isArm9(d)) { linkObjectsArm9(d); return; }
     if (d.arch().equals(String.withCString("win64"))) {
         // A win64 object link is a STATIC PE and cannot record a DLL
         // dependency for an xtc library the objects imported.
@@ -3157,7 +3401,7 @@ void linkObjects(DriverOptions* d)
         return;
     }
     Stdio.printf("xcc: error: linking objects for '%s' is not ported in this driver yet "
-                 "(arm64, ios, ios-sim, x86_64 and win64 are)\n", d.arch().cString());
+                 "(arm64, ios, ios-sim, x86_64, win64 and arm9 are)\n", d.arch().cString());
     Process.exit((i32)1);
 }
 

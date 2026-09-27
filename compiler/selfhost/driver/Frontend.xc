@@ -74,6 +74,7 @@ class FeOptions
                         //   were still <base>, so a call whose MEANING changed
                         //   between the two fails loudly instead of quietly
                         //   resolving to the new one. 0 when not asked for.
+    bool _libcReferenced; // the module names a function of the auto-imported libc
     String* _ppOut;     // -E <path>: where the preprocessed source goes, or 0
     Map* _callSites;    // callee symbol -> "file:line:col" of its first call
 
@@ -94,6 +95,7 @@ class FeOptions
         _defs = new Array();
         _libs = new Array();
         _verbose = false;
+        _libcReferenced = false;
         _migrate = (String*)0;
         _boundsCheck = false;
         _threadSafeArc = (i32)-1;
@@ -216,6 +218,16 @@ class FeOptions
     Array* neededLibs(void)
         {
         return _neededLibs;
+        }
+    // The auto-imported libc was named by the module (arm9), so the object's
+    // `.xtc.needs` lists it first, as the reference's does.
+    bool libcReferenced(void)
+        {
+        return _libcReferenced;
+        }
+    void setLibcReferenced(bool v)
+        {
+        _libcReferenced = v;
         }
     void setNeededLibs(Array* a)
         {
@@ -1003,6 +1015,9 @@ void injectCInterface(Node* program, FeOptions* o, Array* tokens, Set* ambient)
             continue;
         if (!mentions(tokens, d.name()))
             continue;
+        // Named at all, shadowed or not, is what makes libc a dependency:
+        // the reference's "is any of its functions referenced" test.
+        o.setLibcReferenced(true);
         if (declaresFunction(program, d.name()))
             continue;
         d.addFlag((u32)NF_CABI);
