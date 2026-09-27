@@ -616,10 +616,10 @@ $(XTC_BIN): $(XTC_OBJS_TRIM) | $(BIN_DIR)
 $(XTA_BIN): $(XTA_OBJS) $(XTA_MODEL_OBJS) | $(BIN_DIR)
 	$(CC) $(LDFLAGS) -o $@ $(XTA_OBJS) $(XTA_MODEL_OBJS)
 
-$(SIM_BIN): src/xts/sim6502.c | $(BIN_DIR)
+$(SIM_BIN): src/xts/sim6502.c VERSION | $(BIN_DIR)
 	$(CC) -Wall -Wextra -O2 -std=c11 $(VERSION_DEF) -o $@ $< -lm
 
-$(SIM68K_BIN): src/xst/sim68k.c | $(BIN_DIR)
+$(SIM68K_BIN): src/xst/sim68k.c VERSION | $(BIN_DIR)
 	$(CC) -Wall -Wextra -O2 -std=c11 $(VERSION_DEF) -o $@ $< -lm
 
 # xtc-fe — frontend only. Preprocess + lex + parse + sema + IR-lower +
@@ -804,6 +804,16 @@ install-tls: $(XTC_BIN) $(XTC_FE_BIN) $(XTCG_ARM64_BIN) $(XTCLN_ARM64_BIN)
 	 else echo "install-tls: no installed xcc at $(BINDIR) — run make install first"; exit 1; fi; \
 	 XCC="$$TLSXCC" XCC_HOME="$$TLSHOME" sh $(TLS_SRC)/install.sh || \
 	  echo "  NOTE tls xtc-lib install reported an issue (host shim installed)"
+
+
+# Every file that embeds XTC_VERSION rebuilds when VERSION changes, so a
+# release bump cannot ship a binary that reports the previous version (the
+# 0.62 simulators said 0.61).
+VERSIONED_OBJS = src/xtc/main.o src/xtc/driver/XTCommandLineOptions.o src/xtc-fe/main.o \
+                 src/xta/main.o src/xtcln-wasm32/main.o src/xtcg-6502/main.o \
+                 src/xtcg-68k/main.o src/xtcg-arm64/main.o src/xtcg-arm9/main.o \
+                 src/xtcg-wasm32/main.o src/xtcg-win64/main.o src/xtcg-x86_64/main.o
+$(VERSIONED_OBJS): VERSION
 
 %.o: %.m
 	$(CC) $(CFLAGS) -c -o $@ $<
@@ -1196,9 +1206,9 @@ $(LINUX_BIN_DIR)/xcc-sign: $(call LINUXIZE,$(XTSIGN_BASE_OBJS)) $(LINUX_TLS_OBJS
 
 # The simulators are plain C — no GNUstep, just the musl target.
 LINUX_SIM_BINS = $(LINUX_BIN_DIR)/xcc-sim-6502 $(LINUX_BIN_DIR)/xcc-sim-68k
-$(LINUX_BIN_DIR)/xcc-sim-6502: src/xts/sim6502.c | $(LINUX_BIN_DIR)
+$(LINUX_BIN_DIR)/xcc-sim-6502: src/xts/sim6502.c VERSION | $(LINUX_BIN_DIR)
 	$(LINUX_CC) $(LINUX_BASE_FLAGS) -static-pie -Wall -Wextra -O2 -std=c11 $(VERSION_DEF) -o $@ $< -lm
-$(LINUX_BIN_DIR)/xcc-sim-68k: src/xst/sim68k.c | $(LINUX_BIN_DIR)
+$(LINUX_BIN_DIR)/xcc-sim-68k: src/xst/sim68k.c VERSION | $(LINUX_BIN_DIR)
 	$(LINUX_CC) $(LINUX_BASE_FLAGS) -static-pie -Wall -Wextra -O2 -std=c11 $(VERSION_DEF) -o $@ $< -lm
 
 $(LINUX_BIN_DIR):
@@ -1297,9 +1307,9 @@ $(eval $(call WIN64_BIN_template,xcc-sign,$(XTSIGN_BASE_OBJS)))
 
 # The simulators: `-static` gets a fully static .exe with no CRT DLL dep.
 WIN64_SIM_BINS = $(WIN64_BIN_DIR)/xcc-sim-6502.exe $(WIN64_BIN_DIR)/xcc-sim-68k.exe
-$(WIN64_BIN_DIR)/xcc-sim-6502.exe: src/xts/sim6502.c | $(WIN64_BIN_DIR)
+$(WIN64_BIN_DIR)/xcc-sim-6502.exe: src/xts/sim6502.c VERSION | $(WIN64_BIN_DIR)
 	$(WIN64_CC) -static -Wall -Wextra -O2 -std=c11 $(VERSION_DEF) -o $@ $<
-$(WIN64_BIN_DIR)/xcc-sim-68k.exe: src/xst/sim68k.c | $(WIN64_BIN_DIR)
+$(WIN64_BIN_DIR)/xcc-sim-68k.exe: src/xst/sim68k.c VERSION | $(WIN64_BIN_DIR)
 	$(WIN64_CC) -static -Wall -Wextra -O2 -std=c11 $(VERSION_DEF) -o $@ $<
 
 $(WIN64_BIN_DIR):

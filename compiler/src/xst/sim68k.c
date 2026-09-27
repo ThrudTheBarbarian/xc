@@ -101,7 +101,7 @@ static inline void wr8(uint32_t a, uint8_t v)
         }
     else if (!oob_warned)
         {
-        fprintf(stderr, "sim68k: write out of range @ $%06X (suppressed)\n", a);
+        fprintf(stderr, "xcc-sim-68k: write out of range @ $%06X (suppressed)\n", a);
         oob_warned = 1;
         }
     }
@@ -271,10 +271,10 @@ typedef struct
 static void require_68020(const char* what)
     {
     fprintf(stderr,
-            "sim68k: %s requires a 68020+ core, but this is a 68000.\n"
-            "sim68k: the binary was built for 68020+ (xtc -A 68030). Either run\n"
-            "sim68k: `xst --cpu 68030`, or rebuild for this CPU with `xtc -A m68k`\n"
-            "sim68k: (add -mpic if the program is too large for 16-bit PC-relative).\n",
+            "xcc-sim-68k: %s requires a 68020+ core, but this is a 68000.\n"
+            "xcc-sim-68k: the binary was built for 68020+ (xcc -A 68030). Either run\n"
+            "xcc-sim-68k: `xcc-sim-68k --cpu 68030`, or rebuild for this CPU with `xcc -A m68k`\n"
+            "xcc-sim-68k: (add -mpic if the program is too large for 16-bit PC-relative).\n",
             what);
     exit(2);
     }
@@ -666,12 +666,12 @@ static int fpu_step(uint16_t op)
             fpcc_nan = (src != src);
             break;
         default:
-            fprintf(stderr, "sim68k: unimplemented FPU opmode $%02X at $%06X\n", opmode, PC);
+            fprintf(stderr, "xcc-sim-68k: unimplemented FPU opmode $%02X at $%06X\n", opmode, PC);
             return 1;
             }
         return 0;
         }
-    fprintf(stderr, "sim68k: unimplemented FPU word2 $%04X at $%06X\n", w2, PC);
+    fprintf(stderr, "xcc-sim-68k: unimplemented FPU word2 $%04X at $%06X\n", w2, PC);
     return 1;
     }
 
@@ -1067,7 +1067,7 @@ static int step(void)
      * six bytes later. Real hardware takes vector 4; this reports the abort.  */
     if (op == 0x4AFC)
         {
-        fprintf(stderr, "sim68k: illegal instruction at $%06X — aborted "
+        fprintf(stderr, "xcc-sim-68k: illegal instruction at $%06X — aborted "
                         "(failed checked downcast, or a reached "
                         "`unreachable`)\n",
                 op_pc);
@@ -1526,7 +1526,7 @@ static int step(void)
             break;
             }
         /* Unknown 0100-group opcode */
-        fprintf(stderr, "sim68k: unimplemented opcode $%04X at $%06X\n", op, op_pc);
+        fprintf(stderr, "xcc-sim-68k: unimplemented opcode $%04X at $%06X\n", op, op_pc);
         running = 0;
         return 1;
         }
@@ -1886,7 +1886,7 @@ static int step(void)
             set_cmp_flags(imm, d, r, sz);
             break; /* CMPI */
         default:
-            fprintf(stderr, "sim68k: bad immediate group $%04X at $%06X\n", op, op_pc);
+            fprintf(stderr, "xcc-sim-68k: bad immediate group $%04X at $%06X\n", op, op_pc);
             running = 0;
             return 1;
             }
@@ -2067,7 +2067,7 @@ static int step(void)
                 PC = base + disp;
             break;
             }
-        fprintf(stderr, "sim68k: unimplemented FPU opcode $%04X at $%06X\n", op, op_pc);
+        fprintf(stderr, "xcc-sim-68k: unimplemented FPU opcode $%04X at $%06X\n", op, op_pc);
         running = 0;
         return 1;
         }
@@ -2075,7 +2075,7 @@ static int step(void)
     default:
         /* ILLEGAL ($4AFC) never reaches here — it is caught ahead of the
          * dispatch, because line-4 would claim it first. See the top of step().  */
-        fprintf(stderr, "sim68k: unimplemented opcode $%04X at $%06X\n", op, op_pc);
+        fprintf(stderr, "xcc-sim-68k: unimplemented opcode $%04X at $%06X\n", op, op_pc);
         running = 0;
         return 1;
         }
@@ -2583,7 +2583,7 @@ static void do_trap(int vec)
         D[0] = 0;
         break;
     case 5:
-        fprintf(stderr, "sim68k: integer divide-by-zero\n");
+        fprintf(stderr, "xcc-sim-68k: integer divide-by-zero\n");
         running = 0;
         break;
     default:
@@ -2601,7 +2601,7 @@ static int load_prg(const char* fn, const char* cmdline)
     FILE* f = fopen(fn, "rb");
     if (!f)
         {
-        fprintf(stderr, "sim68k: cannot open '%s'\n", fn);
+        fprintf(stderr, "xcc-sim-68k: cannot open '%s'\n", fn);
         return -1;
         }
     fseek(f, 0, SEEK_END);
@@ -2618,7 +2618,7 @@ static int load_prg(const char* fn, const char* cmdline)
 
     if (flen < 28 || buf[0] != 0x60 || buf[1] != 0x1A)
         {
-        fprintf(stderr, "sim68k: '%s' is not a GEMDOS ($601A) executable\n", fn);
+        fprintf(stderr, "xcc-sim-68k: '%s' is not a GEMDOS ($601A) executable\n", fn);
         free(buf);
         return -1;
         }
@@ -2635,7 +2635,7 @@ static int load_prg(const char* fn, const char* cmdline)
 
     if (!in_range(tbase, tsize + dsize + bsize))
         {
-        fprintf(stderr, "sim68k: program too large for %u MB of RAM\n", mem_bytes >> 20);
+        fprintf(stderr, "xcc-sim-68k: program too large for %u MB of RAM\n", mem_bytes >> 20);
         free(buf);
         return -1;
         }
@@ -2734,7 +2734,7 @@ static void load_map(const char* fn)
     FILE* f = fopen(fn, "r");
     if (!f)
         {
-        fprintf(stderr, "sim68k: cannot open map '%s'\n", fn);
+        fprintf(stderr, "xcc-sim-68k: cannot open map '%s'\n", fn);
         return;
         }
     char line[1024];
@@ -2775,10 +2775,10 @@ static void sigint_handler(int s)
 static void print_usage(FILE* f)
     {
     fprintf(f,
-            "Usage: xst [options] <file.prg> [mapfile]\n"
+            "Usage: xcc-sim-68k [options] <file.prg> [mapfile]\n"
             "\n"
             "A Motorola 68000/68030 simulator for Atari ST GEMDOS executables\n"
-            "($601A .PRG/.TOS/.TTP/.ACC) produced by xtc. GEMDOS/BIOS/XBIOS calls\n"
+            "($601A .PRG/.TOS/.TTP/.ACC) produced by xcc. GEMDOS/BIOS/XBIOS calls\n"
             "are high-level-emulated; console output streams to stdout.\n"
             "\n"
             "Arguments:\n"
@@ -2818,7 +2818,7 @@ int main(int argc, char** argv)
             }
         else if (!strcmp(a, "-v") || !strcmp(a, "--version"))
             {
-            printf("xst %s\n", XTC_VERSION);
+            printf("xcc-sim-68k %s\n", XTC_VERSION);
             return 0;
             }
         else if (!strcmp(a, "-d") || !strcmp(a, "--dump-output"))
@@ -2833,7 +2833,7 @@ int main(int argc, char** argv)
             cmdline = argv[++i];
         else if (a[0] == '-')
             {
-            fprintf(stderr, "sim68k: unknown option '%s'\n", a);
+            fprintf(stderr, "xcc-sim-68k: unknown option '%s'\n", a);
             return 2;
             }
         else if (!prog)
@@ -2851,7 +2851,7 @@ int main(int argc, char** argv)
     mem = calloc(mem_bytes, 1);
     if (!mem)
         {
-        fprintf(stderr, "sim68k: out of memory (%u MB)\n", mem_mb);
+        fprintf(stderr, "xcc-sim-68k: out of memory (%u MB)\n", mem_mb);
         return 1;
         }
 
@@ -2899,14 +2899,14 @@ int main(int argc, char** argv)
         /* runaway guard */
         if (insn_count > 2000000000ull)
             {
-            fprintf(stderr, "sim68k: instruction cap reached\n");
+            fprintf(stderr, "xcc-sim-68k: instruction cap reached\n");
             break;
             }
         }
 
     fflush(stdout);
     if (opt_cycles)
-        fprintf(stderr, "sim68k: %llu instructions\n", (unsigned long long)insn_count);
+        fprintf(stderr, "xcc-sim-68k: %llu instructions\n", (unsigned long long)insn_count);
     free(mem);
     /* 134 = 128 + SIGABRT, the shell's spelling of "the program was killed".  */
     return terminated_via_pterm ? exit_code : 134;

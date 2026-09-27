@@ -2920,7 +2920,7 @@ static int step(void)
         format_flags(fa, reg_p);
         if (!opt_dump)
             printf("A=%02X X=%02X Y=%02X SP=%03X %s  ??? $%02X\n", reg_a, reg_x, reg_y, reg_sp, fa, opc);
-        fprintf(stderr, "xts: illegal opcode $%02X at $%04X — run aborted\n", opc, reg_pc);
+        fprintf(stderr, "xcc-sim-6502: illegal opcode $%02X at $%04X — run aborted\n", opc, reg_pc);
         g_exit_code = XTS_EXIT_ILLEGAL_OPCODE;
         return -1;
         }
@@ -2933,7 +2933,7 @@ static int step(void)
     insn_count++;
     if (insn_limit && insn_count >= insn_limit)
         {
-        fprintf(stderr, "sim6502: instruction limit %llu exceeded\n",
+        fprintf(stderr, "xcc-sim-6502: instruction limit %llu exceeded\n",
                 (unsigned long long)insn_limit);
         g_exit_code = XTS_EXIT_INSN_LIMIT;
         return -1;
@@ -3062,7 +3062,7 @@ static int load_xex(const char* fn)
     FILE* f = fopen(fn, "rb");
     if (!f)
         {
-        fprintf(stderr, "sim6502: cannot open '%s'\n", fn);
+        fprintf(stderr, "xcc-sim-6502: cannot open '%s'\n", fn);
         return 0;
         }
     loading = 1;
@@ -3230,7 +3230,7 @@ static int load_xex(const char* fn)
             regc_reg_lo_addr != 0x84 || regc_reg_hi_addr != 0x85)
             {
             fprintf(stderr,
-                    "sim6502: auto-detected bank regs:"
+                    "xcc-sim-6502: auto-detected bank regs:"
                     " code=$%04X data=$%04X",
                     code_reg_addr, data_reg_addr);
             if (cn >= 3)
@@ -3250,7 +3250,7 @@ static int load_xex(const char* fn)
         if (bank_mode == BANK_NONE)
             bank_mode = BANK_XT;
         const char* modeName = (bank_mode == BANK_XE) ? "xe" : "xt";
-        fprintf(stderr, "sim6502: %s mode (%d bank segments)\n",
+        fprintf(stderr, "xcc-sim-6502: %s mode (%d bank segments)\n",
                 modeName, seg4);
         }
     return 1;
@@ -3271,7 +3271,7 @@ static void load_map(const char* fn)
     FILE* f = fopen(fn, "r");
     if (!f)
         {
-        fprintf(stderr, "xts: cannot open map '%s'\n", fn);
+        fprintf(stderr, "xcc-sim-6502: cannot open map '%s'\n", fn);
         return;
         }
     uint16_t addr = 0;
@@ -3329,7 +3329,7 @@ static int load_rom(const char* fn)
     FILE* f = fopen(fn, "rb");
     if (!f)
         {
-        fprintf(stderr, "xts: cannot open ROM '%s'\n", fn);
+        fprintf(stderr, "xcc-sim-6502: cannot open ROM '%s'\n", fn);
         return 0;
         }
     fseek(f, 0, SEEK_END);
@@ -3337,14 +3337,14 @@ static int load_rom(const char* fn)
     fseek(f, 0, SEEK_SET);
     if (sz != ROM_SIZE)
         {
-        fprintf(stderr, "xts: ROM '%s' is %ld bytes, expected %d\n",
+        fprintf(stderr, "xcc-sim-6502: ROM '%s' is %ld bytes, expected %d\n",
                 fn, sz, ROM_SIZE);
         fclose(f);
         return 0;
         }
     if (fread(rom, 1, ROM_SIZE, f) != ROM_SIZE)
         {
-        fprintf(stderr, "xts: short read on ROM '%s'\n", fn);
+        fprintf(stderr, "xcc-sim-6502: short read on ROM '%s'\n", fn);
         fclose(f);
         return 0;
         }
@@ -3368,9 +3368,9 @@ static void sigint_handler(int s)
 static void print_usage(FILE* f)
     {
     fprintf(f,
-            "Usage: xts [options] <file.xex> [map]\n"
+            "Usage: xcc-sim-6502 [options] <file.xex> [map]\n"
             "\n"
-            "A 6502 simulator for Atari XEX binaries produced by xtc/xta.\n"
+            "A 6502 simulator for Atari XEX binaries produced by xcc and xcc-as.\n"
             "\n"
             "Arguments:\n"
             "  <file.xex>     Atari XEX binary to load and execute.\n"
@@ -3520,7 +3520,7 @@ int main(int argc, char* argv[])
             }
         else if (!strcmp(argv[i], "-v") || !strcmp(argv[i], "--version"))
             {
-            printf("xts %s\n", XTC_VERSION);
+            printf("xcc-sim-6502 %s\n", XTC_VERSION);
             return 0;
             }
         else if (!strcmp(argv[i], "-d") || !strcmp(argv[i], "--dump-output"))
@@ -3535,7 +3535,7 @@ int main(int argc, char* argv[])
             {
             if (i + 1 >= argc)
                 {
-                fprintf(stderr, "xts: -M requires an argument\n");
+                fprintf(stderr, "xcc-sim-6502: -M requires an argument\n");
                 return 1;
                 }
             insn_limit = strtoull(argv[++i], NULL, 0);
@@ -3548,7 +3548,7 @@ int main(int argc, char* argv[])
                about the size field here, only the mask. */
             if (i + 1 >= argc)
                 {
-                fprintf(stderr, "xts: -m requires an argument\n");
+                fprintf(stderr, "xcc-sim-6502: -m requires an argument\n");
                 return 1;
                 }
             const char* spec = argv[++i];
@@ -3596,7 +3596,7 @@ int main(int argc, char* argv[])
                     mask = (uint8_t)strtoul(maskStr, &ep, 16);
                     if (*ep)
                         {
-                        fprintf(stderr, "xts: bad xe mask '%s'\n", maskStr);
+                        fprintf(stderr, "xcc-sim-6502: bad xe mask '%s'\n", maskStr);
                         return 1;
                         }
                     }
@@ -3612,7 +3612,7 @@ int main(int argc, char* argv[])
                 }
             else
                 {
-                fprintf(stderr, "xts: unknown memory model '%s'\n", spec);
+                fprintf(stderr, "xcc-sim-6502: unknown memory model '%s'\n", spec);
                 return 1;
                 }
             }
@@ -3620,7 +3620,7 @@ int main(int argc, char* argv[])
             {
             if (i + 1 >= argc)
                 {
-                fprintf(stderr, "xts: -r requires a filename\n");
+                fprintf(stderr, "xcc-sim-6502: -r requires a filename\n");
                 return 1;
                 }
             if (!load_rom(argv[++i]))
@@ -3630,7 +3630,7 @@ int main(int argc, char* argv[])
             {
             if (i + 1 >= argc)
                 {
-                fprintf(stderr, "xts: --shadow-mask requires a hex value\n");
+                fprintf(stderr, "xcc-sim-6502: --shadow-mask requires a hex value\n");
                 return 1;
                 }
             shadow_mask = (uint8_t)strtoul(argv[++i], NULL, 16);
@@ -3639,7 +3639,7 @@ int main(int argc, char* argv[])
             {
             if (i + 1 >= argc)
                 {
-                fprintf(stderr, "xts: --nmi-interval requires a number\n");
+                fprintf(stderr, "xcc-sim-6502: --nmi-interval requires a number\n");
                 return 1;
                 }
             nmi_interval = strtoull(argv[++i], NULL, 0);
@@ -3648,7 +3648,7 @@ int main(int argc, char* argv[])
             {
             if (i + 1 >= argc)
                 {
-                fprintf(stderr, "xts: --code-reg requires a hex addr\n");
+                fprintf(stderr, "xcc-sim-6502: --code-reg requires a hex addr\n");
                 return 1;
                 }
             code_reg_addr = (uint16_t)strtoul(argv[++i], NULL, 16);
@@ -3658,7 +3658,7 @@ int main(int argc, char* argv[])
             {
             if (i + 1 >= argc)
                 {
-                fprintf(stderr, "xts: --data-reg requires a hex addr\n");
+                fprintf(stderr, "xcc-sim-6502: --data-reg requires a hex addr\n");
                 return 1;
                 }
             data_reg_addr = (uint16_t)strtoul(argv[++i], NULL, 16);
@@ -3669,7 +3669,7 @@ int main(int argc, char* argv[])
             /* Accept "$lo" or "$lo:$hi" for the 16-bit pair. */
             if (i + 1 >= argc)
                 {
-                fprintf(stderr, "xts: --regc-reg requires a hex addr or addr:addr\n");
+                fprintf(stderr, "xcc-sim-6502: --regc-reg requires a hex addr or addr:addr\n");
                 return 1;
                 }
             const char* spec = argv[++i];
@@ -3683,7 +3683,7 @@ int main(int argc, char* argv[])
             }
         else if (argv[i][0] == '-')
             {
-            fprintf(stderr, "xts: unknown option '%s'\n", argv[i]);
+            fprintf(stderr, "xcc-sim-6502: unknown option '%s'\n", argv[i]);
             print_usage(stderr);
             return 1;
             }
@@ -3751,7 +3751,7 @@ int main(int argc, char* argv[])
 
     if (!opt_dump)
         {
-        fprintf(stderr, "sim6502: starting at $%04X%s", run_addr, banked_mode ? " (banked)" : "");
+        fprintf(stderr, "xcc-sim-6502: starting at $%04X%s", run_addr, banked_mode ? " (banked)" : "");
         if (rom_loaded)
             fprintf(stderr, " (ROM loaded, shadow mask $%02X)", shadow_mask);
         fprintf(stderr, "\n");
