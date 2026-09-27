@@ -1593,7 +1593,11 @@ class Wasm32
             u32 a = w >= (u32)8 ? (u32)8 : (w >= (u32)4 ? (u32)4 : (w >= (u32)2 ? (u32)2 : (u32)1));
             frame = Wasm32.alignUp(frame, a);
             u32 vid = pl.val().pid();
-            if (vid < nIds) {
+            // A pinned local the optimiser removed from the body keeps its
+            // frame bytes but gets no slot: its value is no longer the
+            // function's, and its stale id must not name another value — it
+            // read as 0 and seeded `self` with a frame address (uxkit/037).
+            if (vid < nIds && fn.valueWithId(vid) == pl.val()) {
                 if (ctx._pinnedOff[vid] == (u32)$FFFFFFFF)
                     ctx._pinnedKeys.add((Object*)Number.with(vid));
                 ctx._pinnedOff[vid] = frame;
