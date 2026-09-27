@@ -3609,7 +3609,7 @@ static NSString *mergeIRTexts(NSArray<NSString *> *texts) {
     NSMutableArray<NSString *> *constants = [NSMutableArray array];
     NSMutableArray<NSString *> *symbols = [NSMutableArray array];
     NSMutableArray<NSString *> *functions = [NSMutableArray array];
-    NSMutableSet<NSString *> *seenSym = [NSMutableSet set];
+    NSMutableDictionary<NSString *, NSNumber *> *seenSym = [NSMutableDictionary dictionary];
     NSMutableSet<NSString *> *seenFn = [NSMutableSet set];
 
     NSRegularExpression *aggRe = [NSRegularExpression
@@ -3642,9 +3642,23 @@ static NSString *mergeIRTexts(NSArray<NSString *> *texts) {
         return out;
     };
 
+    // String literals are module-local symbols numbered from 0 in every module
+    // (`str_<n>`), so two objects both have a `str_3` that mean different text.
+    // Module `k` (k > 0) renames its own to `str_<k>_<n>`; the originals are
+    // `str_` and digits only, so the new names cannot collide.
+    NSRegularExpression *strRe = [NSRegularExpression
+        regularExpressionWithPattern:@"(?<![A-Za-z0-9_$])str_(\\d+)(?![A-Za-z0-9_$])"
+                             options:0 error:NULL];
+    NSUInteger moduleIndex = 0;
     for (NSString *raw in texts) {
         NSUInteger dLayout = layouts.count, dConst = constants.count;
         NSString *text = shift(raw, dLayout, dConst);
+        if (moduleIndex > 0)
+            text = [strRe stringByReplacingMatchesInString:text options:0
+                        range:NSMakeRange(0, text.length)
+                        withTemplate:[NSString stringWithFormat:@"str_%lu_$1",
+                                      (unsigned long)moduleIndex]];
+        moduleIndex++;
         NSArray<NSString *> *lines = [text componentsSeparatedByString:@"\n"];
         for (NSUInteger i = 0; i < lines.count; i++) {
             NSString *l = lines[i];
@@ -3672,8 +3686,6 @@ static NSString *mergeIRTexts(NSArray<NSString *> *texts) {
                 NSString *nm = sp.location == NSNotFound ? t
                     : [[t substringWithRange:NSMakeRange(7, sp.location - 7)]
                           stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
-                BOOL dup = [seenSym containsObject:nm];
-                if (!dup) [seenSym addObject:nm];
                 // The `attributes:` continuation belongs to its symbol line.
                 NSMutableString *blk = [NSMutableString stringWithString:l];
                 while (i + 1 < lines.count) {
@@ -3682,7 +3694,18 @@ static NSString *mergeIRTexts(NSArray<NSString *> *texts) {
                     if (![nx hasPrefix:@"attributes:"]) break;
                     [blk appendFormat:@"\n%@", lines[++i]];
                 }
-                if (!dup) [symbols addObject:blk];
+                // The first declaration of a name is kept, except that a
+                // DEFINITION replaces an `extern` one: the object that imports
+                // a class may come first, and its vtable declaration is only a
+                // reference to the one the defining object carries.
+                NSNumber *at = seenSym[nm];
+                if (!at) {
+                    seenSym[nm] = @(symbols.count);
+                    [symbols addObject:blk];
+                } else if ([symbols[at.unsignedIntegerValue] containsString:@"extern: true"]
+                           && ![blk containsString:@"extern: true"]) {
+                    symbols[at.unsignedIntegerValue] = blk;
+                }
                 continue;
             }
             if ([t hasPrefix:@"function "]) {

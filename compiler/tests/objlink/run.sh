@@ -455,6 +455,53 @@ rm -f "$W/modA.xtc.ir"
   | grep -q "needs" && ok "-flto without carried IR is refused loudly" \
                     || bad "-flto without carried IR is refused loudly"
 
+# -flto across objects that each define classes and string literals (bug 531):
+# the program imports a class from the other object, so its IR declares that
+# vtable `extern` and must not win over the definition; and both objects number
+# their string literals from str_0, so the merge must keep them apart. Checked
+# with both compilers against the plain link.
+cat > "$W/ltoObj.xc" <<'EOF2'
+class Shape
+    {
+    i32 w;
+    void init(void) { w = (i32)3; }
+    i32 area(void) { return w; }
+    }
+class Square : Shape
+    {
+    i32 area(void) { return w * w; }
+    }
+Shape* makeSquare(void)
+    {
+    return new Square();
+    }
+EOF2
+cat > "$W/ltoMain.xc" <<'EOF2'
+#import "Stdio.xc"
+#import <ltoObj>
+i32 main(void)
+{
+    Shape* s = makeSquare();
+    Square* q = new Square();
+    Stdio.printf("%d %d %@ %s\n", s.area(), q.area(), q, q.className().cString());
+    return 0;
+}
+EOF2
+for C in bin/osx/xcc bin/osx/xcc-xc; do
+    n=$(basename "$C")
+    if ( cd "$W" && "$ROOT/$C" -q -A arm64 -H "$ROOT" -c -o ltoObj.o ltoObj.xc \
+             && "$ROOT/$C" -q -A arm64 -H "$ROOT" -c -L . -o ltoMain.o ltoMain.xc \
+             && "$ROOT/$C" -q -A arm64 -H "$ROOT" -o ltoPlain ltoMain.o ltoObj.o \
+             && "$ROOT/$C" -q -A arm64 -H "$ROOT" -flto -o ltoMerged ltoMain.o ltoObj.o ) 2>"$W/lto3.err"; then
+        want="$("$W/ltoPlain" 2>&1)"; got="$("$W/ltoMerged" 2>&1)"
+        [ "$got" = "$want" ] && [ "$want" = "9 9 <Shape>(3) Square" ] \
+            && ok "$n -flto keeps an imported vtable and each object's strings" \
+            || bad "$n -flto across classes and strings (plain '$want', lto '$got')"
+    else
+        bad "$n -flto across classes and strings: build"; cat "$W/lto3.err"
+    fi
+done
+
 # ── x86_64: the same two stages, in ELF ──────────────────────────────────
 # `-c` writes an ET_REL through XTElfWriter and the linker merges `.o` inputs
 # the way the arm64 one does. The structural checks are done by parsing the

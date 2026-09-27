@@ -2926,6 +2926,37 @@ String* shiftIRIndices(String* text, u32 dLayout, u32 dConst)
     return out;
 }
 
+// String literals are module-local symbols numbered from 0 in every module
+// (`str_<n>`), so two objects both have a `str_3` that mean different text.
+// Module `k` (k > 0) renames its own to `str_<k>_<n>` before the merge; the
+// originals are `str_` and digits only, so the new names cannot collide.
+String* renameIRStrLits(String* text, u32 k)
+{
+    if (k == (u32)0) return text;
+    String* out = new String();
+    u8* b = text.cString();
+    u32 n = text.byteLength();
+    u32 i = (u32)0;
+    while (i < n) {
+        if (i + (u32)4 < n && b[i] == (u8)'s' && b[i + (u32)1] == (u8)'t' && b[i + (u32)2] == (u8)'r'
+            && b[i + (u32)3] == (u8)'_' && (i == (u32)0 || !identByte(b[i - (u32)1]))) {
+            u32 j = i + (u32)4;
+            while (j < n && b[j] >= (u8)'0' && b[j] <= (u8)'9') j = j + (u32)1;
+            if (j > i + (u32)4 && (j == n || !identByte(b[j]))) {
+                out.appendCString("str_");
+                out.append(Number.withU32(k).description());
+                out.appendByte((u8)'_');
+                out.append(text.substringBytes(i + (u32)4, j - i - (u32)4));
+                i = j;
+                continue;
+            }
+        }
+        out.appendByte(b[i]);
+        i = i + (u32)1;
+    }
+    return out;
+}
+
 // Merge several IR modules into one, for a link-time recompile. The IR text
 // is name-based at module scope, so the merge is mostly concatenation. TWO
 // things are INDEXED and must be renumbered — `layout N` (referenced as
@@ -2938,7 +2969,7 @@ String* mergeIRTexts(Array* texts)
     Array* symbols = new Array(); Array* functions = new Array();
     Map* seenSym = new Map(); Map* seenFn = new Map();
     for (u32 ti = (u32)0; ti < texts.count(); ti = ti + (u32)1) {
-        String* text = shiftIRIndices((String*)texts.get(ti), layouts.count(), constants.count());
+        String* text = renameIRStrLits(shiftIRIndices((String*)texts.get(ti), layouts.count(), constants.count()), ti);
         Array* lines = text.splitOnByte((u8)10);
         for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1) {
             String* l = (String*)lines.get(i);
@@ -2964,8 +2995,6 @@ String* mergeIRTexts(Array* texts)
             if (t.hasPrefix(String.withCString("symbol "))) {
                 u32 sp = t.byteIndexOf(String.withCString(":"));
                 String* nm = sp == String.notFound() ? t : t.substringBytes((u32)7, sp - (u32)7).trimmed();
-                bool dup = seenSym.get((Hashable*)nm) != (Object*)0;
-                if (!dup) seenSym.set((Hashable*)nm, (Object*)Number.withU32((u32)1));
                 String* blk = String.withString(l);
                 while (i + (u32)1 < lines.count()) {
                     String* nx = ((String*)lines.get(i + (u32)1)).trimmed();
@@ -2973,7 +3002,20 @@ String* mergeIRTexts(Array* texts)
                     i = i + (u32)1;
                     blk.appendCString("\n"); blk.append((String*)lines.get(i));
                 }
-                if (!dup) symbols.add((Object*)blk);
+                // The first declaration of a name is kept, except that a
+                // DEFINITION replaces an `extern` one: the object that imports
+                // a class may come first, and its vtable declaration is only a
+                // reference to the one the defining object carries.
+                Number* at = (Number*)seenSym.get((Hashable*)nm);
+                if (at == (Number*)0) {
+                    seenSym.set((Hashable*)nm, (Object*)Number.withU32(symbols.count()));
+                    symbols.add((Object*)blk);
+                } else {
+                    String* kept = (String*)symbols.get(at.asU32());
+                    String* ext = String.withCString("extern: true");
+                    if (kept.contains(ext) && !blk.contains(ext))
+                        symbols.set(at.asU32(), (Object*)blk);
+                }
                 continue;
             }
             if (t.hasPrefix(String.withCString("function "))) {
