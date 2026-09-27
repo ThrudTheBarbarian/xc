@@ -459,12 +459,16 @@ class X86_64
             }
         _frame = (cur + (u32)15) & ~(u32)15;
 
+        // A function named after a register (`si`, `ax`, `r8`) is renamed as a
+        // data symbol is: the assembler reads `call si` as an indirect call
+        // through the register, and the program jumps into whatever it held.
+        String* fname = safeSym(fn.name());
         // `.type … @function` is ELF-only; PE/COFF rejects it.
         if (_win64)
-            _out.appendFormat("\t.globl\t%s\n%s:\n", fn.name().cString(), fn.name().cString());
+            _out.appendFormat("\t.globl\t%s\n%s:\n", fname.cString(), fname.cString());
         else
             _out.appendFormat("\t.globl\t%s\n\t.type\t%s, @function\n%s:\n",
-                              fn.name().cString(), fn.name().cString(), fn.name().cString());
+                              fname.cString(), fname.cString(), fname.cString());
         _out.appendCString("\tpush\trbp\n\tmov\trbp, rsp\n");
         if (_frame != (u32)0)
             _out.appendFormat("\tsub\trsp, %lu\n", _frame);
@@ -3727,7 +3731,7 @@ class X86_64
         if (indirect)
             _out.appendCString("\tcall\tr11\n");
         else
-            _out.appendFormat("\tcall\t%s\n", ((IROperand*)n.ops().get((u32)0)).name().cString());
+            _out.appendFormat("\tcall\t%s\n", safeSym(((IROperand*)n.ops().get((u32)0)).name()).cString());
         _out.appendFormat("\tadd\trsp, %lu\n", resv);
         if (bigRet)
             return; // already written through the sret
@@ -3850,7 +3854,7 @@ class X86_64
         if (indirect)
             _out.appendCString("\tcall\tr11\n");
         else
-            _out.appendFormat("\tcall\t%s\n", ((IROperand*)n.ops().get((u32)0)).name().cString());
+            _out.appendFormat("\tcall\t%s\n", safeSym(((IROperand*)n.ops().get((u32)0)).name()).cString());
         if (resv != (u32)0)
             _out.appendFormat("\tadd\trsp, %lu\n", resv);
         if (memRet)
@@ -5907,7 +5911,7 @@ class X86_64
             {
             _out.appendCString("\t.data\n\t.p2align 3\n\t.globl\t__xt_ctors_start\n__xt_ctors_start:\n");
             for (u32 i = (u32)0; i < m.modinits().count(); i = i + (u32)1)
-                _out.appendFormat("\t.quad\t%s\n", ((String*)m.modinits().get(i)).cString());
+                _out.appendFormat("\t.quad\t%s\n", safeSym((String*)m.modinits().get(i)).cString());
             _out.appendCString("\t.globl\t__xt_ctors_end\n__xt_ctors_end:\n");
             }
         }
@@ -5992,7 +5996,7 @@ class X86_64
                 if (entry.hasPrefix(pfx))
                     vtbl.appendFormat("\t.quad\t%s\n", entry.substringFromByte(pfx.byteLength()).cString());
                 else
-                    vtbl.appendFormat("\t.quad\t%s\n", entry.cString());
+                    vtbl.appendFormat("\t.quad\t%s\n", safeSym(entry).cString());
                 }
             }
         }

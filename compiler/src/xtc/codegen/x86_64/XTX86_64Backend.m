@@ -1501,7 +1501,7 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
             if ([e hasPrefix:@"__protoid_"])
                 [vtbl appendFormat:@"\t.quad\t%@\n", [e substringFromIndex:[@"__protoid_" length]]];
             else
-                [vtbl appendFormat:@"\t.quad\t%@\n", e];
+                [vtbl appendFormat:@"\t.quad\t%@\n", [self safeSym:e]];
             }
         }
 
@@ -1555,7 +1555,7 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
         {
         [out appendString:@"\t.data\n\t.p2align 3\n\t.globl\t__xt_ctors_start\n__xt_ctors_start:\n"];
         for (NSString* initName in mod.moduleInitFunctionNames)
-            [out appendFormat:@"\t.quad\t%@\n", initName];
+            [out appendFormat:@"\t.quad\t%@\n", [self safeSym:initName]];
         [out appendString:@"\t.globl\t__xt_ctors_end\n__xt_ctors_end:\n"];
         }
     return out;
@@ -1841,7 +1841,10 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
 
 + (void)emitFunction:(XTIRFunction*)fn module:(XTIRModule*)mod into:(NSMutableString*)out
     {
-    NSString* name = fn.name;
+    // A function named after a register (`si`, `ax`, `r8`) is renamed as a
+    // data symbol is: the assembler reads `call si` as an indirect call
+    // through the register, and the program jumps into whatever it held.
+    NSString* name = [self safeSym:fn.name];
     // `.type … @function` is ELF-only; PE/COFF (Win64) rejects it.
     if (sWin64)
         [out appendFormat:@"\t.globl\t%@\n%@:\n", name, name];
@@ -3049,7 +3052,7 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
             if (indirect)
                 [out appendString:@"\tcall\tr11\n"];
             else
-                [out appendFormat:@"\tcall\t%@\n", callee.name ?: @"0"];
+                [out appendFormat:@"\tcall\t%@\n", [self safeSym:callee.name] ?: @"0"];
             [out appendFormat:@"\tadd\trsp, %lu\n", (unsigned long)resv];
             // result already written through sret into its slot
             if (bigRet)
@@ -3164,7 +3167,7 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
             if (indirect)
                 [out appendString:@"\tcall\tr11\n"];
             else
-                [out appendFormat:@"\tcall\t%@\n", callee.name ?: @"0"];
+                [out appendFormat:@"\tcall\t%@\n", [self safeSym:callee.name] ?: @"0"];
             if (resv)
                 [out appendFormat:@"\tadd\trsp, %lu\n", (unsigned long)resv]; // reclaim stack args
             // result already written through sret into its slot
