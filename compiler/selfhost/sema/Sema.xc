@@ -688,6 +688,7 @@ class Sema
         if (program == 0)
             return;
         collectDeclarations(program);
+        checkParents();
         findCycles();
         _vt.setCyclic(_cyclic);
         synthesiseDescriptions();
@@ -5258,6 +5259,43 @@ class Sema
                 m.set((Hashable*)(String*)names.get(i), (Object*)all);
             }
         return m;
+        }
+
+    // A class whose parent names no class is refused, as the reference
+    // refuses it: its layout and dispatch start from the parent's, so there is
+    // nothing to build it from (bug 442). That includes an IMPORTED class
+    // whose parent lives in a library the program did not import.
+    void checkParents(void)
+        {
+        Array* names = new Array();
+        Array* raw = _classes.allKeys();
+        for (u32 i = (u32)0; i < raw.count(); i = i + (u32)1)
+            names.add(raw.get(i));
+        Vtable.sortStrings(names);
+        for (u32 i = (u32)0; i < names.count(); i = i + (u32)1)
+            {
+            Node* cls = (Node*)_classes.get((Hashable*)names.get(i));
+            if (cls == 0)
+                continue;
+            String* pn = Vtable.parentName(cls);
+            if (pn == 0 || _classes.get((Hashable*)pn) != 0)
+                continue;
+            String* msg = String.withCString("Unknown parent class '");
+            msg.append(pn);
+            msg.appendCString("' for class '");
+            msg.append((String*)names.get(i));
+            msg.appendCString("'");
+            // An imported class has no source position; the reference reports
+            // it at `<imported>:0:0`, and so does this.
+            if (cls.hasFlag((u32)NF_EXTERNAL) && cls.line() == (u32)0)
+                {
+                String* at = String.withCString("<imported>:0:0: error: ");
+                at.append(msg);
+                _errors.add((Object*)at);
+                }
+            else
+                _errorAt(msg, cls);
+            }
         }
 
     void findCycles(void)
