@@ -3029,6 +3029,19 @@ static NSString* m68kSym(NSString* name)
             break;
             }
         [self loadOperand:insn.operands[0] intoReg:@"d0" slots:slots into:out];
+        // A u32 is out of reach of the SIGNED 32-bit conversions (fmove.l,
+        // __floatsidf): 3000000000 converted as -1294967296. It goes through
+        // the u64 helper with a zero high half, in both float modes.
+        if (insn.opcode == XTIROpUIToFp && srcT && srcT.kind == XTIRTypeKindU32)
+            {
+            [out appendFormat:@"\tmove.l\td0,-(sp)\n\tclr.l\t-(sp)\n\tjsr\t%@\n\taddq.l\t#8,sp\n",
+                              dbl ? @"__floatundidf" : @"__floatundisf"];
+            if (dbl)
+                [out appendFormat:@"\tmove.l\td0,%d(a6)\n\tmove.l\td1,%d(a6)\n", r, r + 4];
+            else
+                [out appendFormat:@"\tmove.l\td0,%d(a6)\n", r];
+            break;
+            }
         if (gHardFloat)
             {
             [out appendFormat:@"\tfmove.l\td0,fp0\n\tfmove.%@\tfp0,%d(a6)\n", dbl ? @"d" : @"s", r];

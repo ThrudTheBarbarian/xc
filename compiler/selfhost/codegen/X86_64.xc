@@ -1268,19 +1268,58 @@ class X86_64
         bool d = n.res().ty().equals(String.withCString("F64"));
         IROperand* src = (IROperand*)n.ops().get((u32)0);
         u32 w = (src.kind() == (u8)OPK_USE && widthOfValue(src.val()) >= (u32)8) ? (u32)8 : (u32)4;
+        string sfx = d ? "sd" : "ss";
         // cvtsi2* reads a SIGNED register, so a signed source must be
         // sign-extended — zero-extending would turn a negative i8 into a large
         // positive integer.
         if (n.op().equals(String.withCString("SIToFp")))
+            {
             loadExt(src, (u8)'a', true, w);
+            _out.appendFormat("\tcvtsi2%s\txmm0, %s\n", sfx, reg((u8)'a', w).cString());
+            }
         else
+            {
             loadZX(src, (u8)'a');
-        _out.appendFormat("\tcvtsi2%s\txmm0, %s\n", d ? "sd" : "ss", reg((u8)'a', w).cString());
+            emitUintToFp(sfx, w);
+            }
         storeF(String.withCString("xmm0"), n.res());
         }
 
-    // The spec saturates an out-of-range or NaN conversion to 0; cvtt* yields
-    // the "integer indefinite" (0x8000…0) for those, so that value maps to 0.
+    // An unsigned integer, zero-extended into rax, to a float in xmm0.
+    // cvtsi2* reads a SIGNED register. Narrower than 64 bits, the
+    // zero-extended value is a non-negative i64 (read as an i32, a u32 of
+    // 3000000000 was -1294967296). A u64 with its top bit set is halved, the
+    // dropped bit kept as a sticky bit so the one rounding is still to
+    // nearest, converted and doubled; the doubling is added through a mask,
+    // so there is no branch.
+    void emitUintToFp(string sfx, u32 w)
+        {
+        if (w < (u32)8)
+            {
+            _out.appendFormat("\tcvtsi2%s\txmm0, rax\n", sfx);
+            return;
+            }
+        _out.appendCString("\tmov\trcx, rax\n\tshr\trcx, 1\n\tmov\tedx, eax\n\tand\tedx, 1\n");
+        _out.appendCString("\tor\trcx, rdx\n\ttest\trax, rax\n\tcmovns\trcx, rax\n");
+        _out.appendFormat("\tcvtsi2%s\txmm0, rcx\n\tsar\trax, 63\n\tmovq\txmm1, rax\n", sfx);
+        _out.appendFormat("\tandps\txmm1, xmm0\n\tadd%s\txmm0, xmm1\n", sfx);
+        }
+
+    // A float in xmm0 to an integer in rax (LANGUAGE-SPEC §3.1: a NaN or a
+    // value out of the destination's range is 0). cvtt* converts to a SIGNED
+    // integer and gives the "integer indefinite" INT_MIN for anything it
+    // cannot represent.
+    //
+    //   narrower than 64 bits  convert at 64 bits and keep the result only
+    //                          when the destination holds it, as arm64 does.
+    //                          The 32-bit form took every u32 from 2^31 up to
+    //                          0, and an i8 or u8 kept the low byte of 300.
+    //   i64                    the indefinite value is 0, except for -2^63
+    //                          itself, which it also spells.
+    //   u64                    a value from 2^63 up is converted less 2^63 and
+    //                          the top bit put back; a negative one is 0.
+    //
+    // Clobbers rcx, rdx, r11 and xmm1; xmm0 is the scratch copy of the operand.
     void emitFpToInt(IRInsn* n)
         {
         if (n.res() == (IRValue*)0 || n.ops().count() < (u32)1)
@@ -1288,13 +1327,43 @@ class X86_64
         IROperand* src = (IROperand*)n.ops().get((u32)0);
         bool d = src.kind() == (u8)OPK_USE && src.val() != (IRValue*)0 && src.val().ty().equals(String.withCString("F64"));
         u32 rw = widthOfValue(n.res());
+        bool sgn = n.op().equals(String.withCString("FpToSI"));
+        string sfx = d ? "sd" : "ss";
         loadF(src, String.withCString("xmm0"));
-        _out.appendFormat("\tcvtt%s2si\t%s, xmm0\n", d ? "sd" : "ss",
-                          reg((u8)'a', rw >= (u32)8 ? (u32)8 : (u32)4).cString());
-        if (rw >= (u32)8)
-            _out.appendCString("\txor\tecx, ecx\n\tmov\trdx, 0x8000000000000000\n\tcmp\trax, rdx\n\tcmove\trax, rcx\n");
+        if (rw < (u32)8)
+            {
+            _out.appendFormat("\tcvtt%s2si\trax, xmm0\n", sfx);
+            if (sgn)
+                _out.appendCString(rw == (u32)1 ? "\tmovsx\trcx, al\n" : rw == (u32)2 ? "\tmovsx\trcx, ax\n" : "\tmovsxd\trcx, eax\n");
+            else
+                _out.appendCString(rw == (u32)1 ? "\tmovzx\tecx, al\n" : rw == (u32)2 ? "\tmovzx\tecx, ax\n" : "\tmov\tecx, eax\n");
+            _out.appendCString("\txor\tedx, edx\n\tcmp\trax, rcx\n\tcmovne\trax, rdx\n");
+            store((u8)'a', n.res());
+            return;
+            }
+        // The bit pattern of -2^63 (signed) or 2^63 (unsigned) in the
+        // source's format, into xmm1.
+        if (d)
+            _out.appendFormat("\tmovabs\trcx, %s\n\tmovq\txmm1, rcx\n",
+                              sgn ? "0xC3E0000000000000" : "0x43E0000000000000");
         else
-            _out.appendCString("\txor\tecx, ecx\n\tcmp\teax, 0x80000000\n\tcmove\teax, ecx\n");
+            _out.appendFormat("\tmov\tecx, %s\n\tmovd\txmm1, ecx\n", sgn ? "0xDF000000" : "0x5F000000");
+        if (sgn)
+            {
+            // Equal to -2^63 and ordered: a NaN sets ZF as well, and PF with it.
+            _out.appendFormat("\tcvtt%s2si\trax, xmm0\n", sfx);
+            _out.appendCString("\tmovabs\trdx, 0x8000000000000000\n\txor\tecx, ecx\n");
+            _out.appendCString("\tcmp\trax, rdx\n\tcmove\trax, rcx\n");
+            _out.appendFormat("\tucomi%s\txmm0, xmm1\n\tcmove\trax, rdx\n\tcmovp\trax, rcx\n", sfx);
+            store((u8)'a', n.res());
+            return;
+            }
+        _out.appendFormat("\tucomi%s\txmm0, xmm1\n\tsetae\tdl\n", sfx);
+        _out.appendFormat("\tcvtt%s2si\trax, xmm0\n", sfx);
+        _out.appendCString("\txor\tecx, ecx\n\ttest\trax, rax\n\tcmovs\trax, rcx\n");
+        _out.appendFormat("\tsub%s\txmm0, xmm1\n\tcvtt%s2si\trcx, xmm0\n", sfx, sfx);
+        _out.appendCString("\tmovabs\tr11, 0x8000000000000000\n\txor\trcx, r11\n");
+        _out.appendCString("\ttest\tdl, dl\n\tcmovne\trax, rcx\n");
         store((u8)'a', n.res());
         }
 

@@ -2060,6 +2060,20 @@ class M68k
             return;
             }
         loadOperand(s0, String.withCString("d0"));
+        // A u32 is out of reach of the SIGNED 32-bit conversions (fmove.l,
+        // __floatsidf): 3000000000 converted as -1294967296. It goes through
+        // the u64 helper with a zero high half, in both float modes.
+        String* st = (s0.kind() == (u8)OPK_USE && s0.val() != (IRValue*)0) ? s0.val().ty() : s0.ty();
+        if (n.op().equals(String.withCString("UIToFp")) && st != (String*)0 && st.equals(String.withCString("U32")))
+            {
+            _out.appendFormat("\tmove.l\td0,-(sp)\n\tclr.l\t-(sp)\n\tjsr\t%s\n\taddq.l\t#8,sp\n",
+                              dbl ? "__floatundidf" : "__floatundisf");
+            if (dbl)
+                _out.appendFormat("\tmove.l\td0,%ld(a6)\n\tmove.l\td1,%ld(a6)\n", r, r + (i32)4);
+            else
+                _out.appendFormat("\tmove.l\td0,%ld(a6)\n", r);
+            return;
+            }
         if (_hardFloat)
             {
             _out.appendFormat("\tfmove.l\td0,fp0\n\tfmove.%s\tfp0,%ld(a6)\n", dbl ? "d" : "s", r);

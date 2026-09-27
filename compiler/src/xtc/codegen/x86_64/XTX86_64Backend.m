@@ -171,6 +171,79 @@ static NSInteger sWin64SretOff = 0;
     return [R containsObject:[n lowercaseString]] ? [n stringByAppendingString:@"$x"] : n;
     }
 
+// An unsigned integer, zero-extended into rax, to a float in xmm0.
+// cvtsi2* reads a SIGNED register. Narrower than 64 bits, the zero-extended
+// value is a non-negative i64 (read as an i32, a u32 of 3000000000 was
+// -1294967296). A u64 with its top bit set is halved, the dropped bit kept as
+// a sticky bit so the one rounding is still to nearest, converted and doubled;
+// the doubling is added through a mask, so there is no branch.
++ (NSString*)uintToFpText:(NSString*)sfx width:(NSUInteger)w
+    {
+    if (w < 8)
+        return [NSString stringWithFormat:@"\tcvtsi2%@\txmm0, rax\n", sfx];
+    return [NSString stringWithFormat:
+                         @"\tmov\trcx, rax\n\tshr\trcx, 1\n\tmov\tedx, eax\n\tand\tedx, 1\n"
+                          "\tor\trcx, rdx\n\ttest\trax, rax\n\tcmovns\trcx, rax\n"
+                          "\tcvtsi2%@\txmm0, rcx\n\tsar\trax, 63\n\tmovq\txmm1, rax\n"
+                          "\tandps\txmm1, xmm0\n\tadd%@\txmm0, xmm1\n",
+                         sfx, sfx];
+    }
+
+// A float in xmm0 to an integer in rax (LANGUAGE-SPEC §3.1: a NaN or a value
+// out of the destination's range is 0). cvtt* converts to a SIGNED integer and
+// gives the "integer indefinite" INT_MIN for anything it cannot represent.
+//
+//   narrower than 64 bits  convert at 64 bits and keep the result only when
+//                          the destination holds it, as arm64 does. The
+//                          32-bit form took every u32 from 2^31 up to 0, and
+//                          an i8 or u8 kept the low byte of 300.
+//   i64                    the indefinite value is 0, except for -2^63
+//                          itself, which it also spells.
+//   u64                    a value from 2^63 up is converted less 2^63 and
+//                          the top bit put back; a negative one is 0.
+//
+// Clobbers rcx, rdx, r11 and xmm1; xmm0 is the scratch copy of the operand.
++ (NSString*)fpToIntText:(NSString*)sfx signed:(BOOL)sgn width:(NSUInteger)rw
+    {
+    BOOL d = [sfx isEqualToString:@"sd"];
+    NSMutableString* o = [NSMutableString string];
+    if (rw < 8)
+        {
+        [o appendFormat:@"\tcvtt%@2si\trax, xmm0\n", sfx];
+        if (sgn)
+            [o appendString:rw == 1 ? @"\tmovsx\trcx, al\n" : rw == 2 ? @"\tmovsx\trcx, ax\n"
+                                                                  : @"\tmovsxd\trcx, eax\n"];
+        else
+            [o appendString:rw == 1 ? @"\tmovzx\tecx, al\n" : rw == 2 ? @"\tmovzx\tecx, ax\n"
+                                                                  : @"\tmov\tecx, eax\n"];
+        [o appendString:@"\txor\tedx, edx\n\tcmp\trax, rcx\n\tcmovne\trax, rdx\n"];
+        return o;
+        }
+    // The bit pattern of -2^63 (signed) or 2^63 (unsigned) in the source's
+    // format, into xmm1.
+    if (d)
+        [o appendFormat:@"\tmovabs\trcx, %@\n\tmovq\txmm1, rcx\n",
+                        sgn ? @"0xC3E0000000000000" : @"0x43E0000000000000"];
+    else
+        [o appendFormat:@"\tmov\tecx, %@\n\tmovd\txmm1, ecx\n", sgn ? @"0xDF000000" : @"0x5F000000"];
+    if (sgn)
+        {
+        // Equal to -2^63 and ordered: a NaN sets ZF as well, and PF with it.
+        [o appendFormat:@"\tcvtt%@2si\trax, xmm0\n", sfx];
+        [o appendString:@"\tmovabs\trdx, 0x8000000000000000\n\txor\tecx, ecx\n"
+                         "\tcmp\trax, rdx\n\tcmove\trax, rcx\n"];
+        [o appendFormat:@"\tucomi%@\txmm0, xmm1\n\tcmove\trax, rdx\n\tcmovp\trax, rcx\n", sfx];
+        return o;
+        }
+    [o appendFormat:@"\tucomi%@\txmm0, xmm1\n\tsetae\tdl\n", sfx];
+    [o appendFormat:@"\tcvtt%@2si\trax, xmm0\n", sfx];
+    [o appendString:@"\txor\tecx, ecx\n\ttest\trax, rax\n\tcmovs\trax, rcx\n"];
+    [o appendFormat:@"\tsub%@\txmm0, xmm1\n\tcvtt%@2si\trcx, xmm0\n", sfx, sfx];
+    [o appendString:@"\tmovabs\tr11, 0x8000000000000000\n\txor\trcx, r11\n"
+                     "\ttest\tdl, dl\n\tcmovne\trax, rcx\n"];
+    return o;
+    }
+
 + (BOOL)isMem:(XTIRValue*)v
     {
     return v.type && v.type.kind == XTIRTypeKindMemory;
@@ -3754,13 +3827,19 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         BOOL d = res.type.kind == XTIRTypeKindF64;
         XTIRValue* sv = ops[0].kind == XTIROperandKindUse ? fn.values[@(ops[0].valueId)] : nil;
         NSUInteger w = (sv && [self widthOf:sv] >= 8) ? 8 : 4;
+        NSString* sfx = d ? @"sd" : @"ss";
         // cvtsi2ss reads a signed reg, so a SIGNED source must be sign-extended
         // (zero-extend would turn a negative i8 into a large positive int).
         if (op == XTIROpSIToFp)
+            {
             [self loadExt:ops[0] into:'a' signed:YES width:w fn:fn slot:slot out:out];
+            [out appendFormat:@"\tcvtsi2%@\txmm0, %@\n", sfx, [self reg:'a' width:w]];
+            }
         else
+            {
             [self loadZX:ops[0] into:'a' fn:fn slot:slot out:out];
-        [out appendFormat:@"\tcvtsi2%@\txmm0, %@\n", d ? @"sd" : @"ss", [self reg:'a' width:w]];
+            [out appendString:[self uintToFpText:sfx width:w]];
+            }
         [self storeF:@"xmm0" into:res slot:slot out:out];
         return;
         }
@@ -3773,14 +3852,7 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         BOOL d = sv && sv.type.kind == XTIRTypeKindF64;
         NSUInteger rw = [self widthOf:res];
         [self loadF:ops[0] into:@"xmm0" fn:fn slot:slot out:out];
-        [out appendFormat:@"\tcvtt%@2si\t%@, xmm0\n", d ? @"sd" : @"ss", [self reg:'a' width:(rw >= 8 ? 8 : 4)]];
-        // xtc semantics: out-of-range / NaN saturate to 0. cvtt* yields the
-        // "integer indefinite" (0x8000…0) for those, so map that value → 0.
-        if (rw >= 8)
-            [out appendString:@"\txor\tecx, ecx\n\tmov\trdx, 0x8000000000000000\n"
-                               "\tcmp\trax, rdx\n\tcmove\trax, rcx\n"];
-        else
-            [out appendString:@"\txor\tecx, ecx\n\tcmp\teax, 0x80000000\n\tcmove\teax, ecx\n"];
+        [out appendString:[self fpToIntText:(d ? @"sd" : @"ss") signed:(op == XTIROpFpToSI) width:rw]];
         [self store:'a' into:res slot:slot out:out];
         return;
         }
