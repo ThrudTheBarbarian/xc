@@ -1,0 +1,5 @@
+T1 :main free function in bank 0
+T2 unannotated free function banked 1
+T3 :banked free function banked 1
+...........
+T4 88

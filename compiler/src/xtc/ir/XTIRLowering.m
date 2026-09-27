@@ -16590,7 +16590,7 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
         XTIRSymbol* sym = [XTIRSymbol functionWithName:irName function:irFn type:nil];
         NSMutableDictionary<NSString*, NSNumber*>* attrs = [@{
             @"cloaked" : @NO,
-            @"banked" : @NO,
+            @"banked" : @(fnDecl.placement == XTPlacementBanked),
             @"variadic" : @(fnDecl.isVarArgs),
             @"cabi" : @(XTFnIsCABI(fnDecl))
         } mutableCopy];
@@ -16598,6 +16598,8 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
             attrs[@"irq"] = @YES;
         if (fnDecl.isVbi)
             attrs[@"vbi"] = @YES;
+        if (fnDecl.placement == XTPlacementMain)
+            attrs[@"main"] = @YES;
         // `:xtcStack` / `:hwStack` — the xt6502 back end's calling convention
         // for this function, overriding the --xtc-stack default.
         if (fnDecl.stackConvention == XTStackXtc)
@@ -16647,9 +16649,13 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
                                                  paramTypes:paramTypes
                                                  entryBlock:entry];
     XTIRSymbol* sym = [XTIRSymbol functionWithName:irName function:irFn type:nil];
+    // `:banked` / `:main` reach the symbol the way they do on a method: the
+    // xt6502 placement reads `banked` (never kept in main RAM, even under
+    // -Fmb) and `main` (never banked). `main` is added only when set, like
+    // irq/vbi. private:docs/bugs/267.
     NSMutableDictionary<NSString*, NSNumber*>* attrs = [@{
         @"cloaked" : @NO,
-        @"banked" : @NO,
+        @"banked" : @(fnDecl.placement == XTPlacementBanked),
         @"variadic" : @(fnDecl.isVarArgs),
         @"cabi" : @(XTFnIsCABI(fnDecl))
     } mutableCopy];
@@ -16657,6 +16663,8 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
         attrs[@"irq"] = @YES;
     if (fnDecl.isVbi)
         attrs[@"vbi"] = @YES;
+    if (fnDecl.placement == XTPlacementMain)
+        attrs[@"main"] = @YES;
     // `:xtcStack` / `:hwStack` — the xt6502 back end's calling convention for
     // this function, overriding the --xtc-stack default. Only when set.
     if (fnDecl.stackConvention == XTStackXtc)
@@ -18352,6 +18360,9 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
             mattrs[@"throws"] = @YES;
         if (m.forwardsVarargs)
             mattrs[@"vaforward"] = @YES;
+        // `:main` keeps the method out of the xt6502 code banks. Only when set.
+        if (m.placement == XTPlacementMain)
+            mattrs[@"main"] = @YES;
         // W2: an imported class's method shells import from the library's
         // package on wasm32 (same pkg_<X> key the #package plumbing uses).
         if (cls.isExternal && cls.importPackage.length)

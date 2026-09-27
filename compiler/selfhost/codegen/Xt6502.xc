@@ -913,6 +913,7 @@ class Xt6502
             emitFunction(fn);
             String* note = (String*)0;
             if (fn == entry) note = String.withCString("entry");
+            else if (symbolAttr(fn.name(), String.withCString("main"))) note = String.withCString(":main");
             else if (!isIrq(fn) && !isVbi(fn) && keptInMain(fn.name())) {
                 note = String.withCString("");
                 note.appendFormat("%lu instructions, under -Fmb %lu",
@@ -964,10 +965,12 @@ class Xt6502
         return o == (Object*)0 ? (u32)0 : ((Number*)o).asU32();
     }
 
-    // Under -Fmb, a function smaller than the threshold stays in main RAM.
+    // Under -Fmb, a function smaller than the threshold stays in main RAM —
+    // unless the source placed it `:banked`.
     bool keptInMain(String* name)
     {
         if (_fnMinBanked == (u32)0 || _insnCounts == (Map*)0) return false;
+        if (placedBanked(name)) return false;
         Object* o = _insnCounts.get((Hashable*)name);
         return o != (Object*)0 && ((Number*)o).asU32() < _fnMinBanked;
     }
@@ -1100,7 +1103,22 @@ class Xt6502
         for (u32 i = (u32)0; i < _m.syms().count(); i = i + (u32)1) {
             IRSymbol* s = (IRSymbol*)_m.syms().get(i);
             if (s.kind() != (u8)SYM_FUNCTION || !s.name().equals(name)) continue;
-            return s.irq() || s.vbi();
+            // `:main` in the source keeps it unbanked too (private:docs/bugs/267).
+            return s.irq() || s.vbi() || s.attr(String.withCString("main"));
+        }
+        return false;
+    }
+
+    // `:banked` in the source: the function goes in a code bank even when -Fmb
+    // would keep it in main RAM for its size. The first symbol of that name
+    // answers, as in the original.
+    bool placedBanked(String* name)
+    {
+        if (_m == (IRModule*)0) return false;
+        for (u32 i = (u32)0; i < _m.syms().count(); i = i + (u32)1) {
+            IRSymbol* s = (IRSymbol*)_m.syms().get(i);
+            if (!s.name().equals(name)) continue;
+            return s.kind() == (u8)SYM_FUNCTION && s.banked();
         }
         return false;
     }

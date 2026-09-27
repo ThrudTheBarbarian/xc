@@ -118,6 +118,10 @@ enum NodeKind = {
 // a banked callee is reached through a different call opcode.
 #define NF_BANKED $8000
 #define NF_CLOAKED $10000
+// `:main` — keep the function out of the xt6502 code banks. The flag word is
+// full, so it shares its bit with NF_INCLUSIVE, which only a range or slice
+// node carries.
+#define NF_MAINRAM $0400
 // `:irq` / `:vbi` — an interrupt handler's prologue and epilogue are not a
 // function's, so the symbol has to carry which kind it is.
 #define NF_IRQ $40000
