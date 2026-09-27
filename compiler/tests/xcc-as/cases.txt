@@ -29,12 +29,12 @@ badrange.asm
 longbr.asm -l l.lst
 longbr.asm -V
 bank.asm -L @SUPPORT@/xt6502/layouts/xt.lnk -l b.lst
-bank.asm -L @SUPPORT@/xt6502/layouts/xt-heap.lnk
+bank.asm -L @SUPPORT@/xt6502/internal/xt-heap.lnk
 bank.asm -b
 bank.asm -b -o bank.prg
 regc.asm -L regc.lnk
 regc.asm -L regc8.lnk
-regc.asm -L @SUPPORT@/xt6502/layouts/xt-test-fallover.lnk
+regc.asm -L @SUPPORT@/xt6502/internal/xt-test-fallover.lnk
 split.asm -L split.lnk
 split.asm -L small.lnk
 split.asm -b --split-bank --data-window $8000:$9FFF

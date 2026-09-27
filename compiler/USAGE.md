@@ -165,7 +165,6 @@ Available xt6502 layouts (`--list-layouts` shows all):
 | Layout            | Notes                                          |
 |-------------------|------------------------------------------------|
 | `xt6502/xt`       | the standard banked target                     |
-| `xt6502/xt-heap`  | on-demand banked heap (`[heap] bank = true`)   |
 
 The standalone assembler `xcc-as` can also turn a hand-written `.asm` into an
 XEX (`xcc-as foo.asm -o foo.xex -b` for banked output).

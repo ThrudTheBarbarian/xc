@@ -36,11 +36,10 @@ There is **one** 6502 target: **xt6502**, a custom FPGA 6502 core. The `xl`
 the Commodore `c64` target are **not supported**. `-m xl`, `-m xe` and `-m c64` fail with
 an error instead of producing a program that won't run.
 
-The shipped layouts are:
+The shipped layout is:
 
 ```
 xt         ← the standard model: two bank windows + on-demand banked heap
-xt-heap    ← the same map with a fixed heap reservation (not buildable yet)
 ```
 
 `support/xt6502/layouts/xt.lnk` is the **single source of truth** for the map. The code
@@ -128,10 +127,6 @@ needs it, grows up to the window's last page (3 MB), and gives empty banks back.
 There is no fixed reservation to tune, and a program uses as much heap as it needs without
 editing the layout. The one limit: **a single allocation cannot span a bank boundary**, so
 no one object may exceed ~12 KB. Total heap size is unaffected.
-
-`xt-heap` describes a fixed heap reservation instead. It needs split banking,
-which the 6502 back end does not have yet, so `-m xt-heap` stops with an error
-that names the missing parts. Use `xt`.
 
 ## Libraries resolve by architecture × platform
 

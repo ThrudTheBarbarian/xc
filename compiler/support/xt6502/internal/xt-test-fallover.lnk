@@ -1,7 +1,7 @@
 # xt-test-fallover.lnk — INTERNAL test layout for region-C fallover.
 #
 # **INTERNAL — do not use for user code.** Lives in
-# support/6502/internal/ rather than support/6502/layouts/ so
+# support/xt6502/internal/ rather than support/xt6502/layouts/ so
 # `--list-layouts` doesn't surface it. Only the heap-fallover
 # regression fixtures (heap_regC, heap_regC_walk, heap_regc_method)
 # should reference this layout.

@@ -3,7 +3,7 @@ title: Linker scripts (.lnk)
 description: The .lnk format that defines a memory model, with sections, address syntax, banking and shadow specs, and how to write your own.
 ---
 
-A **linker script** (`.lnk`) is a UTF-8 text file that describes a complete target layout: zero-page reservations, address spaces, banking mechanism (if any), shadow-mode configuration, stack and heap placement, and the startup hook. Each shipped memory model (`xt`, `xt-heap`) is a `.lnk` file under `support/xt6502/layouts/`.
+A **linker script** (`.lnk`) is a UTF-8 text file that describes a complete target layout: zero-page reservations, address spaces, banking mechanism (if any), shadow-mode configuration, stack and heap placement, and the startup hook. The shipped memory model, `xt`, is a `.lnk` file under `support/xt6502/layouts/`.
 
 :::note[The format is broader than the shipped layouts]
 The `.lnk` parser understands the `[shadow]` and `[cloaked]` sections described below, but **no shipped layout uses them**. They are documented because the format supports them and a custom layout may use them. The `xt6502` target reaches its extra RAM through the two bank windows instead.
@@ -253,10 +253,9 @@ xcc --list-layouts
 
 Prints every shipped layout grouped by platform. Each one is a `.lnk` file you can copy as a starting point for a custom variant.
 
-The shipped layouts are `xt` (the standard xt6502 model, with two bank windows and an
-on-demand banked heap) and `xt-heap` (the same map with a fixed heap reservation, which
-needs split banking and cannot be built yet). Layouts
-apply to the 6502 backend only; the native targets have no layout to choose.
+The shipped layout is `xt`, the standard xt6502 model, with two bank windows and an
+on-demand banked heap. Layouts apply to the 6502 backend only; the native targets have no
+layout to choose.
 
 See [Memory models](/compiler/usage/memory-models/) for what each one is for and when to pick it.
 

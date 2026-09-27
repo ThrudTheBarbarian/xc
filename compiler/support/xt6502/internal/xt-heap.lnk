@@ -2,7 +2,7 @@
 #
 # **INTERNAL — do not use for user code.** Retired in favour of
 # xt (~22 KB main + banked free-list heap, shadow on). Lives in
-# support/6502/internal/ rather than support/6502/layouts/ so
+# support/xt6502/internal/ rather than support/xt6502/layouts/ so
 # `--list-layouts` doesn't surface it; spill_overflow references
 # this file by path, nothing else should.
 #
