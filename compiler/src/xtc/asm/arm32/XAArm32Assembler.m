@@ -10,6 +10,7 @@
     {
     NSMutableData* _text;
     NSMutableData* _data;
+    NSMutableData* _ctors; // `.section .init_array`
     NSMutableArray<XAArm32Symbol*>* _syms;
     NSMutableArray<XAArm32Reloc*>* _relocs;
     NSMutableArray<NSString*>* _missing;
@@ -24,8 +25,8 @@
 
     NSArray<NSString*>* _lines;
     uint32_t _pass;
-    uint32_t _section; // 1 .text, 2 .data
-    uint32_t _pc, _dataPc;
+    uint32_t _section; // 1 .text, 2 .data, 4 .init_array
+    uint32_t _pc, _dataPc, _ctorPc;
     NSString* _failWhy;
 
     // Set by splitMnemonic for the instruction being encoded.
@@ -41,6 +42,10 @@
 - (NSData*)data
     {
     return _data ?: [NSData data];
+    }
+- (NSData*)ctorTable
+    {
+    return _ctors ?: [NSData data];
     }
 - (NSArray<XAArm32Symbol*>*)symbols
     {
@@ -380,6 +385,16 @@ static NSString* stripComment(NSString* l)
         _pc++;
         return;
         }
+    if (_section == 4)
+        {
+        if (_pass == 2)
+            {
+            uint8_t v = (uint8_t)b;
+            [_ctors appendBytes:&v length:1];
+            }
+        _ctorPc++;
+        return;
+        }
     if (_pass == 2)
         {
         uint8_t v = (uint8_t)b;
@@ -390,7 +405,7 @@ static NSString* stripComment(NSString* l)
 
 - (uint32_t)cursor
     {
-    return _section == 1 ? _pc : _dataPc;
+    return _section == 1 ? _pc : _section == 4 ? _ctorPc : _dataPc;
     }
 
 // `<op>{cond}{s} Rd, Rn, <operand2>` — the shape most of the subset has. A
@@ -547,9 +562,11 @@ static NSString* stripComment(NSString* l)
     {
     _text = [NSMutableData data];
     _data = [NSMutableData data];
+    _ctors = [NSMutableData data];
     _section = 1;
     _pc = 0;
     _dataPc = 0;
+    _ctorPc = 0;
     _pool = [NSMutableArray array];
     _poolSites = [NSMutableArray array];
     if (_pass == 2)
@@ -802,7 +819,10 @@ static NSString* labelOn(NSString* line)
         NSRange comma = [nm rangeOfString:@","];
         if (comma.location != NSNotFound)
             nm = trimmed([nm substringToIndex:comma.location]);
-        _section = [nm hasPrefix:@".text"] ? 1 : 2;
+        // `.init_array` is its own section: the words are the load-time
+        // constructors, and folded into .data they were unlabelled bytes
+        // nothing could find, so no constructor ever ran (bug 500).
+        _section = [nm hasPrefix:@".text"] ? 1 : [nm hasPrefix:@".init_array"] ? 4 : 2;
         return;
         }
     if ([d isEqualToString:@".ltorg"])

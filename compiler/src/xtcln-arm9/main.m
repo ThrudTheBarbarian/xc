@@ -209,6 +209,7 @@ int main(int argc, const char* argv[])
         // objects image has the same shape rather than a second code path.
         NSMutableData* mtext = [text mutableCopy];
         NSMutableData* mdata = [(as.data ?: [NSData data]) mutableCopy];
+        NSMutableData* mctors = [(as.ctorTable ?: [NSData data]) mutableCopy];
         NSMutableArray<XAArm32Symbol*>* msyms = [(as.symbols ?: @[]) mutableCopy];
         NSMutableArray<XAArm32Reloc*>* mrels = [(as.relocations ?: @[]) mutableCopy];
         if (objInputs.count || arInputs.count)
@@ -252,6 +253,16 @@ int main(int argc, const char* argv[])
               uint32_t dbase = (uint32_t)mdata.length;
               if ([o[@"data"] length])
                   [mdata appendData:o[@"data"]];
+              // The constructor tables are concatenated, so the image has ONE,
+              // whose bounds the loader is given.
+              while (mctors.length & 3)
+                  {
+                  uint8_t z = 0;
+                  [mctors appendBytes:&z length:1];
+                  }
+              uint32_t cbase = (uint32_t)mctors.length;
+              if ([o[@"ctors"] length])
+                  [mctors appendData:o[@"ctors"]];
               for (XAArm32Symbol* sy in o[@"symbols"])
                   {
                   if (!sy.section)
@@ -311,11 +322,13 @@ int main(int argc, const char* argv[])
                       sy.value += tbase;
                   else if (sy.section == 2)
                       sy.value += dbase;
+                  else if (sy.section == 4)
+                      sy.value += cbase;
                   [msyms addObject:sy];
                   }
               for (XAArm32Reloc* r in o[@"relocs"])
                   {
-                  r.offset += (r.section == 1) ? tbase : dbase;
+                  r.offset += (r.section == 1) ? tbase : (r.section == 4) ? cbase : dbase;
                   [mrels addObject:r];
                   }
               return YES;
@@ -397,6 +410,7 @@ int main(int argc, const char* argv[])
             {
             obj = [XTElf32Writer sharedObjectFromText:text
                                                  data:mdata
+                                                ctors:mctors
                                               symbols:msyms
                                           relocations:mrels
                                                needed:needed
@@ -413,6 +427,7 @@ int main(int argc, const char* argv[])
             {
             obj = [XTElf32Writer objectFromText:text
                                            data:as.data
+                                          ctors:as.ctorTable
                                         symbols:as.symbols
                                     relocations:as.relocations];
             }

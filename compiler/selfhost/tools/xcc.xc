@@ -2173,6 +2173,7 @@ void emitArm9(DriverOptions* d, IRModule* mod)
             Process.exit((i32)1); return;
         }
         Elf32* ow = new Elf32();
+        ow.setCtorTable(oas.ctorTable());
         Array* img = ow.write(otext, oas.data(), oas.symbols(), oas.relocations());
         if (img == (Array*)0) {
             Stdio.printf("xcc: error: arm9 object write failed\n");
@@ -2259,6 +2260,7 @@ void emitArm9(DriverOptions* d, IRModule* mod)
             iface.add((Object*)Number.withU32((u32)ij.byteAt(i)));
 
     Elf32* w = new Elf32();
+    w.setCtorTable(as.ctorTable());
     Array* img = w.sharedObject(text, as.data(), as.symbols(), as.relocations(),
                                 needed,
                                 d.emitLib() ? baseNameOf(d.fe().output()) : (String*)0,
@@ -2335,6 +2337,10 @@ void linkObjectsArm9(DriverOptions* d)
     for (u32 i = (u32)0; i < as.symbols().count(); i = i + (u32)1) msyms.add(as.symbols().get(i));
     Array* mrels = new Array();
     for (u32 i = (u32)0; i < as.relocations().count(); i = i + (u32)1) mrels.add(as.relocations().get(i));
+    // The constructor tables are concatenated, so the image has ONE, whose
+    // bounds the loader is given.
+    Array* mctors = new Array();
+    for (u32 i = (u32)0; i < as.ctorTable().count(); i = i + (u32)1) mctors.add(as.ctorTable().get(i));
 
     Map* defined = new Map();
     for (u32 i = (u32)0; i < msyms.count(); i = i + (u32)1) {
@@ -2352,7 +2358,7 @@ void linkObjectsArm9(DriverOptions* d)
                              "a relocation this linker does not emit)\n", op.cString());
                 Process.exit((i32)1); return;
             }
-            if (!mergeArm9Object(o, text, mdata, msyms, mrels, defined, seq)) {
+            if (!mergeArm9Object(o, text, mdata, mctors, msyms, mrels, defined, seq)) {
                 Process.exit((i32)1); return;
             }
             seq = seq + (u32)1;
@@ -2399,7 +2405,7 @@ void linkObjectsArm9(DriverOptions* d)
             if (!defines) continue;
             taken.set((Hashable*)key, (Object*)Number.withU32((u32)1));
             progress = true;
-            if (!mergeArm9Object(o, text, mdata, msyms, mrels, defined, seq)) {
+            if (!mergeArm9Object(o, text, mdata, mctors, msyms, mrels, defined, seq)) {
                 Process.exit((i32)1); return;
             }
             seq = seq + (u32)1;
@@ -2418,6 +2424,7 @@ void linkObjectsArm9(DriverOptions* d)
         needed.add((Object*)String.withCString("libm.so"));
 
     Elf32* w = new Elf32();
+    w.setCtorTable(mctors);
     Array* img = w.sharedObject(text, mdata, msyms, mrels, needed, (String*)0, new Array());
     if (w.failed() || img == (Array*)0) {
         Stdio.printf("xcc: %s\n", w.failed() ? w.why().cString() : "arm9 link failed");
@@ -2440,8 +2447,8 @@ void linkObjectsArm9(DriverOptions* d)
 // except the category-chain anchors (§4.3b), where first-wins would run one
 // module's category method as another's body. False (having said why) on
 // one of those.
-bool mergeArm9Object(Elf32Object* o, Array* mtext, Array* mdata, Array* msyms,
-                     Array* mrels, Map* defined, u32 seq)
+bool mergeArm9Object(Elf32Object* o, Array* mtext, Array* mdata, Array* mctors,
+                     Array* msyms, Array* mrels, Map* defined, u32 seq)
 {
     // A LOCAL symbol is private to its object, so it is tagged per object
     // (`name$o<n>`), in its definition and in the object's own relocations.
@@ -2473,6 +2480,9 @@ bool mergeArm9Object(Elf32Object* o, Array* mtext, Array* mdata, Array* msyms,
     while ((mdata.count() & (u32)3) != (u32)0) mdata.add((Object*)Number.withU32((u32)0));
     u32 dbase = mdata.count();
     for (u32 i = (u32)0; i < o.data().count(); i = i + (u32)1) mdata.add(o.data().get(i));
+    while ((mctors.count() & (u32)3) != (u32)0) mctors.add((Object*)Number.withU32((u32)0));
+    u32 cbase = mctors.count();
+    for (u32 i = (u32)0; i < o.ctorTable().count(); i = i + (u32)1) mctors.add(o.ctorTable().get(i));
     for (u32 i = (u32)0; i < o.symbols().count(); i = i + (u32)1) {
         AsmSymbol* sy = (AsmSymbol*)o.symbols().get(i);
         if (sy.section() == (u32)0) continue; // undefined: the link resolves it
@@ -2509,11 +2519,12 @@ bool mergeArm9Object(Elf32Object* o, Array* mtext, Array* mdata, Array* msyms,
         // A COMMON symbol's value is its ALIGNMENT, not an offset.
         if (sy.section() == (u32)1) sy.setValue(sy.value() + tbase);
         else if (sy.section() == (u32)2) sy.setValue(sy.value() + dbase);
+        else if (sy.section() == (u32)4) sy.setValue(sy.value() + cbase);
         msyms.add((Object*)sy);
     }
     for (u32 i = (u32)0; i < rels.count(); i = i + (u32)1) {
         AsmReloc* r = (AsmReloc*)rels.get(i);
-        u32 base = r.section() == (u32)1 ? tbase : dbase;
+        u32 base = r.section() == (u32)1 ? tbase : r.section() == (u32)4 ? cbase : dbase;
         mrels.add((Object*)AsmReloc.with(r.section(), r.offset() + base, r.symbol(), r.type()));
     }
     return true;

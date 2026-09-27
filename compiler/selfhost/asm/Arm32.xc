@@ -31,7 +31,7 @@
 class AsmSymbol
     {
     String* _name;
-    u32 _section; // 0 = undefined, 1 = .text, 2 = .data, 3 = COMMON
+    u32 _section; // 0 = undefined, 1 = .text, 2 = .data, 3 = COMMON, 4 = .init_array
     u32 _value;   // offset within the section (or size, for COMMON)
     u32 _size;
     bool _isGlobal;
@@ -114,7 +114,7 @@ class AsmSymbol
     // One relocation: patch `offset` in `section` against `symbol`.
     class AsmReloc
     {
-    u32 _section; // 1 = .text, 2 = .data
+    u32 _section; // 1 = .text, 2 = .data, 4 = .init_array
     u32 _offset;
     String* _symbol;
     u32 _type; // R_ARM_*
@@ -156,6 +156,7 @@ class AsmSymbol
     {
     Array* _bytes;     // Number@ per emitted byte — the .text payload
     Array* _data;      // …and the .data one
+    Array* _ctors;     // …and `.section .init_array`, the load-time constructors
     Array* _syms;      // AsmSymbol@
     Array* _relocs;    // AsmReloc@
     Array* _pool;      // symbols pending a literal-pool word
@@ -176,6 +177,13 @@ class AsmSymbol
     Array* data(void)
         {
         return _data;
+        }
+    // The load-time constructor table, kept apart from .data so a link can
+    // give the loader its bounds (DT_INIT_ARRAY). Its relocations carry
+    // section 4.
+    Array* ctorTable(void)
+        {
+        return _ctors;
         }
     Array* symbols(void)
         {
@@ -489,9 +497,11 @@ class AsmSymbol
         {
         _bytes = new Array();
         _data = new Array();
+        _ctors = new Array();
         _section = (u32)1;
         _pc = (u32)0;
         _dataPc = (u32)0;
+        _ctorPc = (u32)0;
         _pool = new Array();
         _poolSites = new Array();
         if (_pass == (u32)2)
@@ -502,10 +512,13 @@ class AsmSymbol
         }
 
     u32 _dataPc;
+    u32 _ctorPc;
 
     // Where the next byte goes, in whichever section is current.
     u32 cursor(void)
         {
+        if (_section == (u32)4)
+            return _ctorPc;
         return _section == (u32)1 ? _pc : _dataPc;
         }
 
@@ -758,7 +771,12 @@ class AsmSymbol
             u32 c2 = nm.indexOfByte((u8)',');
             if (c2 != String.notFound())
                 nm = nm.substringBytes((u32)0, c2).trimmed();
+            // `.init_array` is its own section: the words are the load-time
+            // constructors, and folded into .data they were unlabelled bytes
+            // nothing could find, so no constructor ever ran (bug 500).
             _section = nm.hasPrefix(String.withCString(".text")) ? (u32)1 : (u32)2;
+            if (nm.hasPrefix(String.withCString(".init_array")))
+                _section = (u32)4;
             return;
             }
         if (d.equals(String.withCString(".ltorg")))
@@ -906,6 +924,13 @@ class AsmSymbol
             if (_pass == (u32)2)
                 _bytes.add((Object*)Number.with(b & (u32)$FF));
             _pc = _pc + (u32)1;
+            return;
+            }
+        if (_section == (u32)4)
+            {
+            if (_pass == (u32)2)
+                _ctors.add((Object*)Number.with(b & (u32)$FF));
+            _ctorPc = _ctorPc + (u32)1;
             return;
             }
         if (_pass == (u32)2)

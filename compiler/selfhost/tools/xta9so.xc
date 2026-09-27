@@ -141,6 +141,7 @@ void main(void)
         }
 
     Elf32* w = new Elf32();
+    w.setCtorTable(as.ctorTable());
     Array* img = w.sharedObject(text, as.data(), as.symbols(), as.relocations(),
                                 needed, soname, iface);
     if (w.failed() || img == (Array*)0)

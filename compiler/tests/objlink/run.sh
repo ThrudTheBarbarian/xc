@@ -838,11 +838,22 @@ if [ -f "$A9SYS/freertos-hosttest.elf" ] && command -v qemu-system-arm >/dev/nul
     else
         bad "arm9 $t link objects"; grep -v "ABI flags" "$D/9l.err" | head -4
     fi
+    # A load-time constructor through an object: the `.init_array` section
+    # survives -c, the merge and the link (DT_INIT_ARRAY), and the loader runs
+    # it before main. It prints DONE 2 only if the factory registered itself.
+    if "$A9C" -q -A arm9 -L "$A9SYS" -c tests/fixtures/designable_register.xc -o "$D/ctor.o" 2>"$D/9c.err" \
+       && "$A9C" -q -A arm9 -L "$A9SYS" "$D/ctor.o" -o "$D/a9ctor.so" 2>>"$D/9c.err"; then
+        out="$(a9run "$D/a9ctor.so")"
+        [ "$out" = "DONE 2" ] && ok "arm9 $t load-time constructor from an object runs (got '$out')" \
+                              || bad "arm9 $t load-time constructor from an object (got '$out', want 'DONE 2')"
+    else
+        bad "arm9 $t constructor object"; grep -v "ABI flags" "$D/9c.err" | head -3
+    fi
   done
     # The shipped compiler must write what the reference writes: every object,
     # sidecar and linked image.
     same=1
-    for f in modA.o modMain.o catBase.o catOver.o modMain.xtc.needs \
+    for f in modA.o modMain.o catBase.o catOver.o modMain.xtc.needs ctor.o a9ctor.so \
              a9prog.so a9cat.so a9ar.so a9lto.so; do
         cmp -s "$W/a9-xcc/$f" "$W/a9-xcc-xc/$f" || { same=0; bad "arm9: the two compilers' $f differ"; }
     done
