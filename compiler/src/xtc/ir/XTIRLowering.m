@@ -8409,7 +8409,9 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
                                                        pointee.displayName, m.memberName]];
                 return nil;
                 }
-            XTIRValue* basePtr = [self lowerExpression:m.base];
+            // An element of an inline class array (`arr[k].data[i]`) is an
+            // instance lvalue: its address, not a pointer loaded from it (bug 538).
+            XTIRValue* basePtr = [self selfPointerForClassBase:m.base];
             if (!basePtr)
                 return nil;
             return [self emitFieldAddr:basePtr
