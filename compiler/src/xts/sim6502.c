@@ -1372,6 +1372,8 @@ static uint64_t rtclok_step_counter = 0;
    that the stream mirrors what the program intended to draw. */
 static int dump_last_row = -1;
 static int dump_last_col = -1;
+static uint16_t dump_prev_addr = 0;
+static int dump_in_scroll = 0;
 static char screen_code_to_ascii(uint8_t sc);
 /* -d mode treats screen writes as a log stream, not a bounded 40x24
    visible frame. A fixture that outputs more than 24 rows would
@@ -1409,6 +1411,33 @@ static void dump_emit_char(uint16_t addr, uint8_t sc)
         return;
     uint16_t off = addr - base;
     int row = off / 40, col = off % 40;
+    /* Stdio's scroll() walks the text region up by one row (row k into
+       row k-1, then the bottom row is cleared) when a print overflows the
+       last row. Every byte it writes is a byte the region already held, so
+       logging them would print the screen's contents again instead of what
+       the program printed. A scroll is recognisable from the writes alone:
+       it begins at the region's first cell, which the print cursor only
+       reaches from below, and its first byte is the one the row underneath
+       holds at that column. The copies stay contiguous and keep matching
+       the row below them, and the tail clear continues that run as zeros,
+       so the same test carries the whole thing to its end. */
+    if (dump_in_scroll)
+        {
+        if (addr == (uint16_t)(dump_prev_addr + 1)
+            && (sc == 0 || sc == mem[(uint16_t)(addr + 40)]))
+            {
+            dump_prev_addr = addr;
+            return;
+            }
+        dump_in_scroll = 0;
+        }
+    dump_prev_addr = addr;
+    if (row == 0 && col == 0 && dump_last_row > 0
+        && sc == mem[(uint16_t)(addr + 40)])
+        {
+        dump_in_scroll = 1;
+        return;
+        }
     /* Treat the write stream as a log: a continuation of the current row
        prints inline, a next-row write emits a single newline, and any
        other jump (forward skip, cursor move via printfAt) also emits a

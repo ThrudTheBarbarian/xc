@@ -49,6 +49,8 @@
 #import "XTParser.h"
 #import "XTSemanticAnalyzer.h"
 #import "XTDesignableSynthesis.h"
+#import "XTCompilerDriver.h"
+#import "XTCommandLineOptions.h"
 #import "XTDiagnosticEngine.h"
 #import "XTTypeTable.h"
 #import "XTDeclNodes.h"
@@ -1081,7 +1083,7 @@ static NSString *buildStubCForFunction(XTIRFunction *fn,
     for (XTIRSymbol *sym in mod.symbols) {
         if ([sym.name isEqualToString:@"_xtc_count"]) {
             [s appendString:
-                @"uint16_t _xtc_count(void*o){return (uint16_t)*(unsigned long*)((uint8_t*)o-20);}\n"];
+                @"uint32_t _xtc_count(void*o){return (uint32_t)*(unsigned long*)((uint8_t*)o-20);}\n"];
             break;
         }
     }
@@ -1169,7 +1171,7 @@ static NSString *buildStubCForFunction(XTIRFunction *fn,
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         primElemTypes = [NSSet setWithArray:@[@"pointer", @"bool",
-            @"i8", @"u8", @"i16", @"u16", @"i32", @"u32",
+            @"i8", @"u8", @"i16", @"u16", @"i32", @"u32", @"i64", @"u64",
             @"float", @"double", @"string"]];
     });
     // Object header layout (uniform across every allocation):
@@ -1190,8 +1192,11 @@ static NSString *buildStubCForFunction(XTIRFunction *fn,
             // Count-aware: bytes = n * 8 (8 = the widest element this
             // language has — an arm64 pointer / double). Floored at
             // 256 so a scalar `new T` (no count, garbage x0) and the
-            // header are always covered; capped so a stray garbage
-            // count can't request an absurd allocation. Null dealloc.
+            // header are always covered. No cap and no count floor:
+            // both used to stand in for an oversized request, and a
+            // fixture that asks for 0 or for more than the cap then
+            // ran against a buffer the real runtime would never have
+            // handed it. Null dealloc.
             // Uniform 28-byte header [stride:8][count:8][fnptr:8][rc:4];
             // data = base+28, rc at obj-4 (the backend's 32-bit refcount slot).
             // Null dealloc fn-ptr → _xtc_dealloc's per-element loop is
@@ -1199,7 +1204,6 @@ static NSString *buildStubCForFunction(XTIRFunction *fn,
             [s appendFormat:@"void *%@(unsigned long n) {\n"
                              @"    unsigned long b = n * 8;\n"
                              @"    if (b < 256) b = 256;\n"
-                             @"    if (b > (16UL << 20)) b = 256;\n"
                              @"    uint8_t *p = (uint8_t *)malloc(b + 28);\n"
                              @"    *(unsigned long *)(p + 0) = 8;\n"   // stride (unused)
                              @"    *(unsigned long *)(p + 8) = n;\n"   // count
@@ -1227,10 +1231,8 @@ static NSString *buildStubCForFunction(XTIRFunction *fn,
             // the Mach-O symbol `_Foo$dealloc` the backend emits.
             [s appendFormat:@"extern void %@(void *);\n"
                              @"void *%@(unsigned long count, unsigned long stride) {\n"
-                             @"    if (count < 1) count = 1;\n"
                              @"    unsigned long b = count * stride;\n"
                              @"    if (b < 256) b = 256;\n"
-                             @"    if (b > (16UL << 20)) b = 256;\n"
                              @"    uint8_t *p = (uint8_t *)malloc(b + 28);\n"
                              @"    *(unsigned long *)(p + 0) = stride;\n"
                              @"    *(unsigned long *)(p + 8) = count;\n"
@@ -1240,10 +1242,8 @@ static NSString *buildStubCForFunction(XTIRFunction *fn,
                              @"}\n", deallocName, sym.name, deallocName];
         } else {
             [s appendFormat:@"void *%@(unsigned long count, unsigned long stride) {\n"
-                             @"    if (count < 1) count = 1;\n"
                              @"    unsigned long b = count * stride;\n"
                              @"    if (b < 256) b = 256;\n"
-                             @"    if (b > (16UL << 20)) b = 256;\n"
                              @"    uint8_t *p = (uint8_t *)malloc(b + 28);\n"
                              @"    *(unsigned long *)(p + 0) = stride;\n"
                              @"    *(unsigned long *)(p + 8) = count;\n"
@@ -1264,10 +1264,8 @@ static NSString *buildStubCForFunction(XTIRFunction *fn,
         if (usesAlloc)
             [s appendString:
                 @"void *_xtc_alloc(unsigned long count, unsigned long stride, void (*dealloc)(void *)) {\n"
-                @"    if (count < 1) count = 1;\n"
                 @"    unsigned long b = count * stride;\n"
                 @"    if (b < 256) b = 256;\n"
-                @"    if (b > (16UL << 20)) b = 256;\n"
                 @"    uint8_t *p = (uint8_t *)malloc(b + 28);\n"
                 @"    *(unsigned long *)(p + 0) = stride;\n"
                 @"    *(unsigned long *)(p + 8) = count;\n"
@@ -2445,6 +2443,21 @@ static BOOL corpusFrontend(NSString *rawSource, NSString *xtPath,
         return NO;
     }
 
+    // The runtime class-name tables, as the driver injects them before sema:
+    // without them a program that calls newInstanceOfClass does not link
+    // (`_xtc_class_new` undefined, bug 537).
+    {
+        XTCompilerDriver *cn = [[XTCompilerDriver alloc]
+                                   initWithOptions:[[XTCommandLineOptions alloc] init]];
+        ast = [cn injectClassNames:ast tokens:tokens ifaceJsons:@[] ifacePaths:@[]
+                         typeTable:tt arm64:arm64Target];
+        if (!ast || cn.diagnostics.errorCount > 0) {
+            *outcome = XTCorpusFailParse;
+            *msg = @"class-name table";
+            return NO;
+        }
+    }
+
     // uxkit/026: a class with an `outlet` field or an `:action` method
     // auto-conforms to the binding protocol and has its setOutlet/wireAction
     // bodies synthesised. BEFORE sema, so conformance checking sees them — this
@@ -2500,6 +2513,10 @@ static BOOL corpusFrontend(NSString *rawSource, NSString *xtPath,
         // vtable ancestry link and native varargs, xt6502 without the link
         // (its banked pointers cannot walk it) and with the pack buffer.
         [XTIRLowering setVtableAncestry:arm64Target];
+        // arm64 builds the conformance itable, as the driver does; className()
+        // finds a class's name there (bug 537).
+        [XTIRLowering setVtableConforms:arm64Target];
+        [XTIRLowering setItableProtocols:NO];
         mod = [XTIRLowering lowerProgram:ast moduleName:name diagnostics:diag
                            nativeVarargs:arm64Target];
     } @catch (NSException *e) {
@@ -2784,6 +2801,7 @@ static XTCorpusResult *runFixture(NSString *xtPath, NSString *name) {
         [XTType setFloatWidth:4];       // arm64 is IEEE single
         [XTType setFloatIsIEEE:YES];
         [XTStructType setFieldAlignmentCap:8];   // C natural alignment (blewit #5)
+        [XTPointerType setHeapCountWidth:4];     // `.length` is u32 on arm64 (bug 234)
         BOOL armFE = corpusFrontend(sourceForFE, xtPath, name,
             @[@"support/arm64/lib", @"support/generic/lib"],
             XTPointerPlacementMain, YES,
@@ -2799,6 +2817,7 @@ static XTCorpusResult *runFixture(NSString *xtPath, NSString *name) {
         [XTType setFloatWidth:4];       // xt6502 float is IEEE single via the MECH coprocessor
         [XTType setFloatIsIEEE:YES];    // (the driver sets this unconditionally; match it here)
         [XTStructType setFieldAlignmentCap:1];   // xt6502 stays tightly packed (blewit #5)
+        [XTPointerType setHeapCountWidth:2];
         XTIRModule *xtMod = nil; XTIRFunction *xtEntry = nil;
         XTCorpusOutcome xtOutcome = XTCorpusPass; NSString *xtMsg = nil;
         BOOL xtFE = corpusFrontend(sourceForFE, xtPath, name,
@@ -2867,15 +2886,18 @@ static XTCorpusResult *runFixture(NSString *xtPath, NSString *name) {
             // A correct compiler REJECTS the program. In-process (arm64/xt6502)
             // that surfaces as FailSema — or FailParse, when the rule is
             // enforced during parsing (blocks_wb_escape.xc: the wb-escape
-            // check lives in parseReturn); via the m68k/arm9 subprocess a
-            // rejection is just a non-zero rc → FailCodegen. A program the
-            // assembler or linker refuses (undefined_function_refused.xc: a
-            // call to a function declared and never defined) is FailAssembleLink.
+            // check lives in parseReturn), or FailPreproc, when the library
+            // says so with #error at the include (coder_xt6502_refused.xc:
+            // Coder.xc refuses xt6502 before a token is parsed); via the
+            // m68k/arm9 subprocess a rejection is just a non-zero rc →
+            // FailCodegen. A program the assembler or linker refuses
+            // (undefined_function_refused.xc: a call to a function declared
+            // and never defined) is FailAssembleLink.
             // Treat any of these as the expected pass; compiling clean is the
             // failure.
             #define INVERT_SEMA(O, M) do { \
                 if ((O) == XTCorpusFailSema || (O) == XTCorpusFailCodegen || (O) == XTCorpusFailParse \
-                    || (O) == XTCorpusFailAssembleLink) { (O) = XTCorpusPass; (M) = nil; } \
+                    || (O) == XTCorpusFailPreproc || (O) == XTCorpusFailAssembleLink) { (O) = XTCorpusPass; (M) = nil; } \
                 else if ((O) == XTCorpusPass) { (O) = XTCorpusFailSema; \
                     (M) = @"expected a sema error, but compiled clean"; } } while (0)
             INVERT_SEMA(armOutcome, armMsg);

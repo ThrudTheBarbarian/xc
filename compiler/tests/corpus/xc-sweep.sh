@@ -196,6 +196,20 @@ fi
 # Is this fixture in scope for the xc compiler on arm64? Same directives the
 # in-process harness honours. A fixture ruled out here is NOT a pass and is
 # counted apart, so the headline can never be inflated by exclusions.
+
+# The backend list of a fixture's `//xtc-na:` line, and nothing else. The REASON
+# after it routinely names a backend ("uses inline 6502 assembly", "the Gfx
+# library is not ported to x86_64"), because that is the clearest way to say why
+# the fixture is inapplicable — so the list has to be cut at the separator, or
+# those lines read as an exclusion from the very backend they belong to. The
+# in-process harness cuts at —/--/: too; without this the two sweeps score
+# different fixture sets, which is exactly what the parity claim rests on.
+naBackends() {
+    grep -hE '//[ ]*xtc-na:' "$1" | head -1 \
+        | sed -e 's/.*xtc-na:[[:space:]]*//' -e 's/—.*//' -e 's/--.*//' -e 's/:.*//' \
+              -e 's/[[:space:]]//g'
+}
+
 NA=0; NOORACLE=0; UNSUP=0; LIST="$WORK/list"; : > "$LIST"
 for f in tests/fixtures/*.xc; do
     b="$(basename "$f" .xc)"
@@ -204,7 +218,7 @@ for f in tests/fixtures/*.xc; do
     grep -qiE '//[ ]*xtc-flags:.*\bskip\b'    "$f" && { NA=$((NA+1)); continue; }
     grep -qiE '//[ ]*xtc-flags:.*expect=sema' "$f" && { NA=$((NA+1)); continue; }
     if [ "$TARGET" = xt6502 ]; then
-        if grep -hE '//[ ]*xtc-na:' "$f" | head -1 | grep -qE '\b(6502|xt6502|xt)\b'; then
+        if printf ',%s,' "$(naBackends "$f")" | grep -qE ',(6502|xt6502|xt),'; then
             NA=$((NA+1)); continue
         fi
         if grep -qE '//[ ]*xtc-flags:.*target=' "$f"; then   # X-only → ours iff X=xt6502
@@ -212,7 +226,7 @@ for f in tests/fixtures/*.xc; do
                 | grep -qE 'target=(xt6502|6502|xt)\b' || { NA=$((NA+1)); continue; }
         fi
     else
-        if grep -hE '//[ ]*xtc-na:' "$f" | head -1 | grep -qE '\b(arm64|x86_64|x86-64)\b'; then
+        if printf ',%s,' "$(naBackends "$f")" | grep -qE ',(arm64|x86_64|x86-64),'; then
             NA=$((NA+1)); continue
         fi
         if grep -qE '//[ ]*xtc-flags:.*target=' "$f"; then   # X-only → ours iff X=arm64

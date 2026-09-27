@@ -7,6 +7,8 @@
 NS_ASSUME_NONNULL_BEGIN
 
 @class XTProgramNode;
+@class XTToken;
+@class XTTypeTable;
 
 @interface XTCompilerDriver : NSObject
 
@@ -55,6 +57,15 @@ NS_ASSUME_NONNULL_BEGIN
 |* @return  A configured compiler driver ready to compile.
 \****************************************************************************/
 - (instancetype)initWithOptions:(XTCommandLineOptions *)options NS_DESIGNATED_INITIALIZER;
+// The runtime class-name tables (className / newInstanceOfClass), injected
+// before sema. Exposed for the in-process corpus sweep, which parses and
+// analyses without the driver's full pipeline.
+- (XTProgramNode *)injectClassNames:(XTProgramNode *)ast
+                            tokens:(NSArray<XTToken *> *)tokens
+                        ifaceJsons:(NSArray<NSString *> *)ifaceJsons
+                        ifacePaths:(NSArray<NSString *> *)ifacePaths
+                         typeTable:(XTTypeTable *)tt
+                             arm64:(BOOL)arm64;
 
 /****************************************************************************\
 |* Run the IR frontend (preprocess → lex → parse → sema → IR-lower →

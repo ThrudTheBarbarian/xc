@@ -5,10 +5,14 @@
 // xt6502's Math.init reads $D20A (POKEY hardware random) at boot
 // and arm64's reads a host-clock-derived value, both of which
 // drift the result every time the simulator changes its tick
-// model. The accuracy column depends only on float precision, so
-// it stays per-backend (xt6502's 5-byte float drifts; arm64's
-// IEEE double resolves to zero) — the corpus matches each
-// backend against its own oracle (`ahl.expected.<arch>.out`).
+// model. The accuracy column is the residue the sqrt/pow round trip
+// leaves, which is a per-backend number — what that backend's float
+// width and library give, not something that can be asserted once.
+// On arm64 the loop sums in f32, so the residue is the accumulation
+// error of that sum (about -0.0115; the double-precision figures in
+// the timings note at the end of this file are a different run) —
+// the corpus matches each backend against its own oracle
+// (`ahl.expected.<arch>.out`).
 
 #import "Stdio.xc"
 #import "Time.xc"

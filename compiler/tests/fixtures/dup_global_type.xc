@@ -8,7 +8,7 @@
 //
 // Identical redeclarations still merge — a header declaring a global and being
 // imported down two paths is ordinary — so only a DIFFERENT type is refused.
-//xtc-link: dup_global_type_b.xc
+//xtc-link: dup_global_type_b
 #use Stdio
 
 u32 gX;
