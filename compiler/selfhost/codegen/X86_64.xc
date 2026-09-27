@@ -2343,7 +2343,7 @@ class X86_64
             return;
         if (_win64)
             {
-            emitWin64VTblDispatch(n, slotOp);
+            emitWin64VTblDispatch(n, slotOp, (IROperand*)0);
             return;
             }
         u32 argEnd = n.ops().count();
@@ -2484,6 +2484,13 @@ class X86_64
         IROperand* idxOp = (IROperand*)n.ops().get((u32)2);
         if (idxOp.kind() != (u8)OPK_IMMI)
             return;
+        // Under the Microsoft ABI: emitWin64VTblDispatch's marshalling with
+        // this walk as the callee (bug 255).
+        if (_win64)
+            {
+            emitWin64VTblDispatch(n, idxOp, pidOp);
+            return;
+            }
         u32 argEnd = n.ops().count();
         if (argEnd > (u32)3)
             {
@@ -2611,10 +2618,16 @@ class X86_64
     // built and passed on 0.4 (uxkit bug 034-A). The refusal predates `-A
     // win64` being wired into the shipped driver, which is why nothing noticed:
     // until then this back end was never asked.
-    void emitWin64VTblDispatch(IRInsn* n, IROperand* slotOp)
+    //
+    // With `pidOp` set this is a ProtoDispatch instead: `slotOp` is then the
+    // method's index in the protocol's table, the arguments start one operand
+    // later, and the callee comes from the itable walk emitProtoDispatchX86
+    // does, less the vector-arg count the Microsoft ABI does not have.
+    void emitWin64VTblDispatch(IRInsn* n, IROperand* slotOp, IROperand* pidOp)
         {
+        u32 argFirst = pidOp != (IROperand*)0 ? (u32)3 : (u32)2;
         u32 argEnd = n.ops().count();
-        if (argEnd > (u32)2)
+        if (argEnd > argFirst)
             {
             IROperand* last = (IROperand*)n.ops().get(argEnd - (u32)1);
             if (last.kind() == (u8)OPK_USE && last.val() != (IRValue*)0 && isMemTy(last.val().ty()))
@@ -2622,7 +2635,7 @@ class X86_64
             }
         Array* args = new Array();
         args.add((Object*)(IROperand*)n.ops().get((u32)0)); // the receiver is argument 0
-        for (u32 i = (u32)2; i < argEnd; i = i + (u32)1)
+        for (u32 i = argFirst; i < argEnd; i = i + (u32)1)
             args.add(n.ops().get(i));
 
         bool bigRet = n.res() != (IRValue*)0 && returnsBigAgg(n.res().ty());
@@ -2721,9 +2734,35 @@ class X86_64
         // The callee, from the receiver's vtable. rax is free scratch here —
         // it is not an argument register in this ABI, and every argument above
         // has already been placed.
-        loadZX((IROperand*)n.ops().get((u32)0), (u8)'a');
-        _out.appendCString("\tmov\tr11, [rax]\n"); // the vtable at object+0
-        _out.appendFormat("\tmov\tr11, [r11 + %ld]\n", slotOp.imm() * (i32)8);
+        if (pidOp != (IROperand*)0)
+            {
+            u32 lbl = _arcLabel;
+            _arcLabel = _arcLabel + (u32)1;
+            loadZX((IROperand*)n.ops().get((u32)0), (u8)'a'); // rax = recv
+            _out.appendCString("\tmov\tr11, [rax]\n");        // vtable
+            _out.appendCString("\tmov\tr11, [r11 + 8]\n");    // itable ptr (header entry 1)
+            _out.appendFormat(".L_it_%lu:\n", lbl);
+            _out.appendCString("\tmov\tr10, [r11]\n"); // entry protoId
+            _out.appendFormat("\tcmp\tr10d, %lu\n", pidOp.imm() & (u32)$FFFF_FFFF);
+            _out.appendFormat("\tje\t.L_ith_%lu\n", lbl);
+            _out.appendCString("\ttest\tr10, r10\n");
+            _out.appendFormat("\tjz\t.L_itm_%lu\n", lbl); // 0 terminates -> miss
+            _out.appendCString("\tadd\tr11, 16\n");
+            _out.appendFormat("\tjmp\t.L_it_%lu\n", lbl);
+            _out.appendFormat(".L_itm_%lu:\n", lbl);
+            _out.appendCString("\txor\tr11d, r11d\n"); // miss: null
+            _out.appendFormat("\tjmp\t.L_itc_%lu\n", lbl);
+            _out.appendFormat(".L_ith_%lu:\n", lbl);
+            _out.appendCString("\tmov\tr11, [r11 + 8]\n"); // &table
+            _out.appendFormat("\tmov\tr11, [r11 + %ld]\n", slotOp.imm() * (i32)8);
+            _out.appendFormat(".L_itc_%lu:\n", lbl);
+            }
+        else
+            {
+            loadZX((IROperand*)n.ops().get((u32)0), (u8)'a');
+            _out.appendCString("\tmov\tr11, [rax]\n"); // the vtable at object+0
+            _out.appendFormat("\tmov\tr11, [r11 + %ld]\n", slotOp.imm() * (i32)8);
+            }
         if (bigRet && hasSlot(n.res())) // the hidden result pointer
             _out.appendFormat("\tlea\trcx, [rbp-%lu]\n", slotOf(n.res()));
         _out.appendCString("\tcall\tr11\n");

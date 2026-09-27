@@ -2512,6 +2512,110 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
     return NO;
     }
 
+/****************************************************************************\
+|* The Win64 argument marshalling shared by VTblDispatch and ProtoDispatch:
+|* the 32-byte shadow store, one positional counter over rcx/rdx/r8/r9 and
+|* xmm0-3, positions 4+ at [rsp+32], and a >8-byte struct passed by reference
+|* to a caller-owned copy. Returns the bytes reserved, which the caller gives
+|* back after the call.
+\****************************************************************************/
++ (NSUInteger)marshalWin64Args:(NSArray<XTIROperand*>*)args
+                        bigRet:(BOOL)vBigRet
+                            fn:(XTIRFunction*)fn
+                          slot:(NSDictionary<NSNumber*, NSNumber*>*)slot
+                           out:(NSMutableString*)out
+    {
+    NSUInteger cpos = vBigRet ? 1 : 0, wstack = 0, copyBytes = 0;
+    for (XTIROperand* a in args)
+        {
+        XTIRValue* v = a.kind == XTIROperandKindUse ? fn.values[@(a.valueId)] : nil;
+        if (v && [self isBigAgg:v.type])
+            copyBytes += ([self aggSize:v.type.layout] + 15) & ~(NSUInteger)15;
+        if (cpos >= 4)
+            wstack++;
+        cpos++;
+        }
+    NSUInteger copyBase = 32 + wstack * 8;
+    NSUInteger vShadow = ((copyBase + copyBytes) + 15) & ~(NSUInteger)15;
+    [out appendFormat:@"\tsub\trsp, %lu\n", (unsigned long)vShadow];
+    NSUInteger pos = vBigRet ? 1 : 0, sstack = 0, copyOff = copyBase;
+    for (XTIROperand* a in args)
+        {
+        XTIRValue* v = a.kind == XTIROperandKindUse ? fn.values[@(a.valueId)] : nil;
+        // >8-byte struct → by reference
+        if (v && [self isBigAgg:v.type])
+            {
+            NSNumber* sv = slot[@(a.valueId)];
+            NSUInteger sz = [self aggSize:v.type.layout];
+            if (sv)
+                [self copyQwords:sz
+                         fromReg:@"rbp"
+                            disp:-(long)sv.integerValue
+                           toReg:@"rsp"
+                            disp:(long)copyOff
+                            into:out];
+            if (pos < 4)
+                {
+                [out appendFormat:@"\tlea\t%@, [rsp+%lu]\n", [self argRegs64][pos], (unsigned long)copyOff];
+                }
+            else
+                {
+                [out appendFormat:@"\tlea\trax, [rsp+%lu]\n", (unsigned long)copyOff];
+                [out appendFormat:@"\tmov\t[rsp+%lu], rax\n", (unsigned long)(32 + 8 * sstack)];
+                sstack++;
+                }
+            copyOff += (sz + 15) & ~(NSUInteger)15;
+            pos++;
+            }
+        // ≤8-byte struct → by value
+        else if (v && v.type.kind == XTIRTypeKindAgg)
+            {
+            NSNumber* sv = slot[@(a.valueId)];
+            if (pos < 4)
+                {
+                if (sv)
+                    [out appendFormat:@"\tmov\t%@, [rbp-%@]\n", [self argRegs64][pos], sv];
+                }
+            else if (sv)
+                {
+                [out appendFormat:@"\tmov\trax, [rbp-%@]\n", sv];
+                [out appendFormat:@"\tmov\t[rsp+%lu], rax\n", (unsigned long)(32 + 8 * sstack)];
+                sstack++;
+                }
+            pos++;
+            }
+        else if ([self isFloatVal:v])
+            {
+            if (pos < 4)
+                [self loadF:a
+                       into:[NSString stringWithFormat:@"xmm%lu", (unsigned long)pos]
+                         fn:fn
+                       slot:slot
+                        out:out];
+            else
+                {
+                [self loadZX:a into:'a' fn:fn slot:slot out:out];
+                [out appendFormat:@"\tmov\t[rsp+%lu], rax\n", (unsigned long)(32 + 8 * sstack)];
+                sstack++;
+                }
+            pos++;
+            }
+        else if (pos < 4)
+            {
+            [self readArgOp:a into64:[self argRegs64][pos] into32:[self argRegs32][pos] fn:fn slot:slot out:out];
+            pos++;
+            }
+        else
+            {
+            [self loadZX:a into:'a' fn:fn slot:slot out:out];
+            [out appendFormat:@"\tmov\t[rsp+%lu], rax\n", (unsigned long)(32 + 8 * sstack)];
+            sstack++;
+            pos++;
+            }
+        }
+    return vShadow;
+    }
+
 + (void)emitInsn:(XTIRInsn*)in fn:(XTIRFunction*)fn module:(XTIRModule*)mod
             slot:(NSDictionary<NSNumber*, NSNumber*>*)slot
              out:(NSMutableString*)out
@@ -3210,94 +3314,7 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
             // xmm0-3), stack args above the shadow, >8-byte structs by reference,
             // and a hidden sret in rcx for a >8-byte struct result. Same rules as a
             // plain Call — VTblDispatch just computes the callee from the vtable.
-            NSUInteger cpos = vBigRet ? 1 : 0, wstack = 0, copyBytes = 0;
-            for (XTIROperand* a in args)
-                {
-                XTIRValue* v = a.kind == XTIROperandKindUse ? fn.values[@(a.valueId)] : nil;
-                if (v && [self isBigAgg:v.type])
-                    copyBytes += ([self aggSize:v.type.layout] + 15) & ~(NSUInteger)15;
-                if (cpos >= 4)
-                    wstack++;
-                cpos++;
-                }
-            NSUInteger copyBase = 32 + wstack * 8;
-            vShadow = ((copyBase + copyBytes) + 15) & ~(NSUInteger)15;
-            [out appendFormat:@"\tsub\trsp, %lu\n", (unsigned long)vShadow];
-            NSUInteger pos = vBigRet ? 1 : 0, sstack = 0, copyOff = copyBase;
-            for (XTIROperand* a in args)
-                {
-                XTIRValue* v = a.kind == XTIROperandKindUse ? fn.values[@(a.valueId)] : nil;
-                // >8-byte struct → by reference
-                if (v && [self isBigAgg:v.type])
-                    {
-                    NSNumber* sv = slot[@(a.valueId)];
-                    NSUInteger sz = [self aggSize:v.type.layout];
-                    if (sv)
-                        [self copyQwords:sz
-                                 fromReg:@"rbp"
-                                    disp:-(long)sv.integerValue
-                                   toReg:@"rsp"
-                                    disp:(long)copyOff
-                                    into:out];
-                    if (pos < 4)
-                        {
-                        [out appendFormat:@"\tlea\t%@, [rsp+%lu]\n", [self argRegs64][pos], (unsigned long)copyOff];
-                        }
-                    else
-                        {
-                        [out appendFormat:@"\tlea\trax, [rsp+%lu]\n", (unsigned long)copyOff];
-                        [out appendFormat:@"\tmov\t[rsp+%lu], rax\n", (unsigned long)(32 + 8 * sstack)];
-                        sstack++;
-                        }
-                    copyOff += (sz + 15) & ~(NSUInteger)15;
-                    pos++;
-                    }
-                // ≤8-byte struct → by value
-                else if (v && v.type.kind == XTIRTypeKindAgg)
-                    {
-                    NSNumber* sv = slot[@(a.valueId)];
-                    if (pos < 4)
-                        {
-                        if (sv)
-                            [out appendFormat:@"\tmov\t%@, [rbp-%@]\n", [self argRegs64][pos], sv];
-                        }
-                    else if (sv)
-                        {
-                        [out appendFormat:@"\tmov\trax, [rbp-%@]\n", sv];
-                        [out appendFormat:@"\tmov\t[rsp+%lu], rax\n", (unsigned long)(32 + 8 * sstack)];
-                        sstack++;
-                        }
-                    pos++;
-                    }
-                else if ([self isFloatVal:v])
-                    {
-                    if (pos < 4)
-                        [self loadF:a
-                               into:[NSString stringWithFormat:@"xmm%lu", (unsigned long)pos]
-                                 fn:fn
-                               slot:slot
-                                out:out];
-                    else
-                        {
-                        [self loadZX:a into:'a' fn:fn slot:slot out:out];
-                        [out appendFormat:@"\tmov\t[rsp+%lu], rax\n", (unsigned long)(32 + 8 * sstack)];
-                        sstack++;
-                        }
-                    pos++;
-                    }
-                else if (pos < 4)
-                    {
-                    [self readArgOp:a into64:[self argRegs64][pos] into32:[self argRegs32][pos] fn:fn slot:slot out:out];
-                    pos++;
-                    }
-                else
-                    {
-                    [self loadZX:a into:'a' fn:fn slot:slot out:out];
-                    [out appendFormat:@"\tmov\t[rsp+%lu], rax\n", (unsigned long)(32 + 8 * sstack)];
-                    sstack++;
-                    pos++;
-                    }
-                }
+            vShadow = [self marshalWin64Args:args bigRet:vBigRet fn:fn slot:slot out:out];
             }
         else
             {
@@ -3451,8 +3468,6 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         // the self-hosted emitProtoDispatchX86.
         if (ops.count < 3 || ops[1].kind != XTIROperandKindImmI || ops[2].kind != XTIROperandKindImmI)
             return;
-        if (sWin64)
-            return; // itable dispatch is x86_64/linux only
         NSMutableArray<XTIROperand*>* args = [NSMutableArray arrayWithObject:ops[0]];
         NSUInteger argEnd = ops.count;
         if (argEnd > 3 && ops[argEnd - 1].kind == XTIROperandKindUse)
@@ -3463,6 +3478,54 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
             }
         for (NSUInteger i = 3; i < argEnd; i++)
             [args addObject:ops[i]];
+        if (sWin64)
+            {
+            // The Win64 half (bug 255): a DLL and its client dispatch a
+            // protocol through the itable as every other multi-module target
+            // does. VTblDispatch's marshalling, the same walk as below, and no
+            // vector-arg count, which the Microsoft ABI does not have.
+            BOOL wBigRet = res && [self isBigAgg:res.type];
+            NSUInteger wShadow = [self marshalWin64Args:args bigRet:wBigRet fn:fn slot:slot out:out];
+            NSUInteger wl = sArcLabel++;
+            [self loadZX:ops[0] into:'a' fn:fn slot:slot out:out];
+            [out appendString:@"\tmov\tr11, [rax]\n"];
+            [out appendString:@"\tmov\tr11, [r11 + 8]\n"];
+            [out appendFormat:@".L_it_%lu:\n", (unsigned long)wl];
+            [out appendString:@"\tmov\tr10, [r11]\n"];
+            [out appendFormat:@"\tcmp\tr10d, %lu\n", (unsigned long)(uint32_t)ops[1].intValue];
+            [out appendFormat:@"\tje\t.L_ith_%lu\n", (unsigned long)wl];
+            [out appendString:@"\ttest\tr10, r10\n"];
+            [out appendFormat:@"\tjz\t.L_itm_%lu\n", (unsigned long)wl];
+            [out appendString:@"\tadd\tr11, 16\n"];
+            [out appendFormat:@"\tjmp\t.L_it_%lu\n", (unsigned long)wl];
+            [out appendFormat:@".L_itm_%lu:\n", (unsigned long)wl];
+            [out appendString:@"\txor\tr11d, r11d\n"];
+            [out appendFormat:@"\tjmp\t.L_itc_%lu\n", (unsigned long)wl];
+            [out appendFormat:@".L_ith_%lu:\n", (unsigned long)wl];
+            [out appendString:@"\tmov\tr11, [r11 + 8]\n"];
+            [out appendFormat:@"\tmov\tr11, [r11 + %lld]\n", (long long)(ops[2].intValue * 8)];
+            [out appendFormat:@".L_itc_%lu:\n", (unsigned long)wl];
+            if (wBigRet)
+                {
+                NSNumber* rs = slot[@(res.valueId)];
+                if (rs)
+                    [out appendFormat:@"\tlea\trcx, [rbp-%@]\n", rs];
+                }
+            [out appendString:@"\tcall\tr11\n"];
+            [out appendFormat:@"\tadd\trsp, %lu\n", (unsigned long)wShadow];
+            if (wBigRet)
+                return;
+            if (res && ![self isMem:res])
+                {
+                if (res.type.kind == XTIRTypeKindAgg)
+                    [self aggFromRetRegs:res slot:slot out:out];
+                else if ([self isFloatVal:res])
+                    [self storeF:@"xmm0" into:res slot:slot out:out];
+                else
+                    [self store:'a' into:res slot:slot out:out];
+                }
+            return;
+            }
         NSUInteger vFreg = 0;
         BOOL vMemRet = (res && [self isSysVMemRet:res.type]);
         NSUInteger cIreg = vMemRet ? 1 : 0, cFreg = 0, nstack = 0;

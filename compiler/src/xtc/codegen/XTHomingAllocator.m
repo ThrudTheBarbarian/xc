@@ -23,9 +23,11 @@
 // memory ops, ARC/weak helpers). A value whose range spans any of these can't
 // live in a caller-saved register; treating them all as calls is conservative
 // (a backend that inlines memcpy just gets a value nudged to callee-saved).
+// ProtoDispatch is a call through the itable: leaving it out let x86-64 keep a
+// value in r8 across `b.bee()`, and the callee's r8 came back instead (bug 255).
 + (BOOL)isCallOpcode:(XTIROpcode)op
     {
-    return op == XTIROpCall || op == XTIROpCallBanked || op == XTIROpCallCloaked || op == XTIROpCallIndirect || op == XTIROpCallBankedIndirect || op == XTIROpVTblDispatch || op == XTIROpMemCopy || op == XTIROpMemSet || op == XTIROpRelease || op == XTIROpAutorelease || op == XTIROpWeakRegister || op == XTIROpWeakUnregister || op == XTIROpWeakLoad;
+    return op == XTIROpCall || op == XTIROpCallBanked || op == XTIROpCallCloaked || op == XTIROpCallIndirect || op == XTIROpCallBankedIndirect || op == XTIROpVTblDispatch || op == XTIROpProtoDispatch || op == XTIROpMemCopy || op == XTIROpMemSet || op == XTIROpRelease || op == XTIROpAutorelease || op == XTIROpWeakRegister || op == XTIROpWeakUnregister || op == XTIROpWeakLoad;
     }
 
 + (XTHomingResult*)assignHomesForFunction:(XTIRFunction*)fn
