@@ -1030,13 +1030,13 @@ class Sema
             msg.append(name);
             if (selfOrMutual)
                 {
-                msg.appendCString("' is transitively recursive — the shared varargs pack buffer at $04B0 cannot hold two live va_lists at once");
+                msg.appendCString("' is transitively recursive — the shared varargs buffer cannot hold two live va_lists at once");
                 }
             else
                 {
                 msg.appendCString("' transitively calls variadic '");
                 msg.append(displayOf(leaf));
-                msg.appendCString("' — both share the pack buffer at $04B0 and would clobber each other");
+                msg.appendCString("' — both use the shared varargs buffer and would clobber each other");
                 }
             for (u32 i = (u32)1; i < chain.count(); i = i + (u32)1)
                 {

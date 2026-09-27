@@ -883,15 +883,14 @@
             {
             msg = [NSMutableString stringWithFormat:
                                        @"variadic '%@' is transitively recursive — the shared "
-                                       @"varargs pack buffer at $04B0 cannot hold two live "
-                                       @"va_lists at once",
+                                       @"varargs buffer cannot hold two live va_lists at once",
                                        name];
             }
         else
             {
             msg = [NSMutableString stringWithFormat:
                                        @"variadic '%@' transitively calls variadic '%@' — both "
-                                       @"share the pack buffer at $04B0 and would clobber each "
+                                       @"use the shared varargs buffer and would clobber each "
                                        @"other",
                                        name, leafName];
             }
