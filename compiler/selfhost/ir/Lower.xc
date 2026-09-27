@@ -10912,6 +10912,35 @@ class ClassInfo
         return r;
         }
 
+    // The number of parameters in a function signature `(A, B) -> R`. A type
+    // spelling nests its own parentheses (`Ptr(Agg(7), unbanked)`), so only a
+    // comma at depth one separates two parameters.
+    u32 sigParamCount(String* sig)
+        {
+        if (sig == 0 || sig.byteLength() == (u32)0 || sig.byteAt((u32)0) != (u8)'(')
+            return (u32)0;
+        u32 depth = (u32)0;
+        u32 commas = (u32)0;
+        bool any = false;
+        for (u32 i = (u32)0; i < sig.byteLength(); i = i + (u32)1)
+            {
+            u8 ch = sig.byteAt(i);
+            if (ch == (u8)'(')
+                depth = depth + (u32)1;
+            else if (ch == (u8)')')
+                {
+                depth = depth - (u32)1;
+                if (depth == (u32)0)
+                    break;
+                }
+            else if (ch == (u8)',' && depth == (u32)1)
+                commas = commas + (u32)1;
+            else if (ch != (u8)' ')
+                any = true;
+            }
+        return any ? commas + (u32)1 : (u32)0;
+        }
+
     IRSymbol* symbolNamed(String* name)
         {
         for (u32 i = (u32)0; i < _m.syms().count(); i = i + (u32)1)
@@ -13842,6 +13871,14 @@ class ClassInfo
                 initSym = cand;
             }
         if (initSym == 0)
+            return;
+        // Only an `init(void)` can run here: the guard has no arguments to give.
+        // An init that takes some was called with them missing, which is
+        // garbage in the argument registers on the native targets and a module
+        // that fails validation on wasm32 (bug 524). An instance init(void)
+        // still takes `self`; a static one takes nothing.
+        IRSymbol* isym = symbolNamed(initSym);
+        if (isym == 0 || sigParamCount(isym.signature()) != (isym.isStaticMethod() ? (u32)0 : (u32)1))
             return;
 
         // Single-threaded: flagVal == 0 means "not yet run". Threaded: the flag

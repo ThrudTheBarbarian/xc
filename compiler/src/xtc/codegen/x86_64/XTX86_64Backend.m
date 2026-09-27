@@ -3718,14 +3718,17 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         if (!res || ops.count < 1)
             return;
         BOOL d = res.type.kind == XTIRTypeKindF64;
-        // The operand goes to the scratch FIRST, so zeroing the destination
-        // cannot destroy it even when result and operand share a home.
+        // Flip the sign bit: all-ones shifted left to leave only the sign,
+        // then xor. `0 - x` was wrong for x = +0.0, which gave +0.0 rather
+        // than -0.0 (bug 525). The operand goes to the scratch FIRST, so
+        // building the mask cannot destroy it when result and operand share
+        // a home.
         [self loadF:ops[0] into:@"xmm0" fn:fn slot:slot out:out];
         NSString* Dn = res ? sHome[@(res.valueId)] : nil;
         if (!Dn || ![self isXmmHome:Dn] || [Dn isEqualToString:@"xmm0"])
             Dn = @"xmm1";
-        [out appendFormat:@"\txorps\t%@, %@\n\tsub%@\t%@, xmm0\n",
-                          Dn, Dn, d ? @"sd" : @"ss", Dn]; // 0-x
+        [out appendFormat:@"\tpcmpeqd\t%@, %@\n\t%@\t%@, %d\n\txorps\t%@, xmm0\n",
+                          Dn, Dn, d ? @"psllq" : @"pslld", Dn, d ? 63 : 31, Dn];
         [self storeF:Dn into:res slot:slot out:out];
         return;
         }
@@ -3813,10 +3816,16 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         [self loadF:ops[swap ? 1 : 0] into:@"xmm0" fn:fn slot:slot out:out];
         [self loadF:ops[swap ? 0 : 1] into:@"xmm1" fn:fn slot:slot out:out];
         [out appendFormat:@"\tucomi%@\txmm0, xmm1\n", d ? @"sd" : @"ss"];
-        NSString* cc = (p == XTIRFCmpOEQ) ? @"sete" : (p == XTIRFCmpONE)                   ? @"setne"
-                                                  : (p == XTIRFCmpOGE || p == XTIRFCmpOLE) ? @"setae"
-                                                                                           : @"seta";
-        [out appendFormat:@"\t%@\tal\n\tmovzx\teax, al\n", cc];
+        // An unordered compare (a NaN operand) sets ZF, PF and CF together,
+        // so ZF alone reads as "equal". == also needs PF clear, and != is
+        // true when PF is set (bug 526). seta/setae already need CF clear.
+        if (p == XTIRFCmpOEQ)
+            [out appendString:@"\tsete\tal\n\tsetnp\tcl\n\tand\tal, cl\n"];
+        else if (p == XTIRFCmpONE)
+            [out appendString:@"\tsetne\tal\n\tsetp\tcl\n\tor\tal, cl\n"];
+        else
+            [out appendFormat:@"\t%@\tal\n", (p == XTIRFCmpOGE || p == XTIRFCmpOLE) ? @"setae" : @"seta"];
+        [out appendString:@"\tmovzx\teax, al\n"];
         [self store:'a' into:res slot:slot out:out];
         return;
         }

@@ -1101,6 +1101,10 @@ class IRValue
         {
         return _ty;
         }
+    bool isStaticMethod(void)
+        {
+        return _static;
+        }
     bool variadic(void)
         {
         return _variadic;

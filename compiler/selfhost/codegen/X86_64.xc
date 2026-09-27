@@ -1231,14 +1231,18 @@ class X86_64
         if (n.res() == (IRValue*)0 || n.ops().count() < (u32)1)
             return;
         bool d = n.res().ty().equals(String.withCString("F64"));
-        // The operand goes to the scratch FIRST, so zeroing the destination
-        // cannot destroy it even when result and operand share a home.
+        // Flip the sign bit: all-ones shifted left to leave only the sign,
+        // then xor. `0 - x` was wrong for x = +0.0, which gave +0.0 rather
+        // than -0.0 (bug 525). The operand goes to the scratch FIRST, so
+        // building the mask cannot destroy it when result and operand share
+        // a home.
         loadF((IROperand*)n.ops().get((u32)0), String.withCString("xmm0"));
         String* Dn = homeOf(n.res());
         if (!isXmmHome(Dn) || Dn.equals(String.withCString("xmm0")))
             Dn = String.withCString("xmm1");
-        _out.appendFormat("\txorps\t%s, %s\n", Dn.cString(), Dn.cString());
-        _out.appendFormat("\tsub%s\t%s, xmm0\n", d ? "sd" : "ss", Dn.cString());
+        _out.appendFormat("\tpcmpeqd\t%s, %s\n", Dn.cString(), Dn.cString());
+        _out.appendFormat("\t%s\t%s, %d\n", d ? "psllq" : "pslld", Dn.cString(), d ? (i32)63 : (i32)31);
+        _out.appendFormat("\txorps\t%s, xmm0\n", Dn.cString());
         storeF(Dn, n.res());
         }
 
@@ -1315,16 +1319,18 @@ class X86_64
         loadF((IROperand*)n.ops().get(swap ? (u32)1 : (u32)0), String.withCString("xmm0"));
         loadF((IROperand*)n.ops().get(swap ? (u32)0 : (u32)1), String.withCString("xmm1"));
         _out.appendFormat("\tucomi%s\txmm0, xmm1\n", d ? "sd" : "ss");
-        String* cc;
+        // An unordered compare (a NaN operand) sets ZF, PF and CF together,
+        // so ZF alone reads as "equal". == also needs PF clear, and != is
+        // true when PF is set (bug 526). seta/setae already need CF clear.
         if (p != (String*)0 && p.equals(String.withCString("OEQ")))
-            cc = String.withCString("sete");
+            _out.appendCString("\tsete\tal\n\tsetnp\tcl\n\tand\tal, cl\n");
         else if (p != (String*)0 && p.equals(String.withCString("ONE")))
-            cc = String.withCString("setne");
+            _out.appendCString("\tsetne\tal\n\tsetp\tcl\n\tor\tal, cl\n");
         else if (p != (String*)0 && (p.equals(String.withCString("OGE")) || p.equals(String.withCString("OLE"))))
-            cc = String.withCString("setae");
+            _out.appendCString("\tsetae\tal\n");
         else
-            cc = String.withCString("seta");
-        _out.appendFormat("\t%s\tal\n\tmovzx\teax, al\n", cc.cString());
+            _out.appendCString("\tseta\tal\n");
+        _out.appendCString("\tmovzx\teax, al\n");
         store((u8)'a', n.res());
         }
 

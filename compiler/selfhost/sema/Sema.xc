@@ -4367,7 +4367,10 @@ class Sema
                     continue;
                 if (iv.hasFlag((u32)NF_STATIC))
                     continue;
-                if (!Types.isInteger(iv.op()))
+                // An enum is an integer type (an unsigned byte), as it is to
+                // the original's isInteger; leaving it out gave a class whose
+                // only integer ivar is an enum no description (bug 523).
+                if (!Types.isInteger(iv.op()) && !Types.isEnumName(iv.op()))
                     continue;
                 if (ivars.count() < (u32)8 && Types.isSigned(iv.op()))
                     mask = mask | ((u32)1 << ivars.count());

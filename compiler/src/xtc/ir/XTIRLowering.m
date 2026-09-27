@@ -18540,6 +18540,17 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
         }
     if (!isym)
         return;
+    // Only an `init(void)` can run here: the guard has no arguments to give.
+    // An init that takes some was called with them missing, which is garbage
+    // in the argument registers on the native targets and a module that fails
+    // validation on wasm32 (bug 524). An instance init(void) still takes
+    // `self`; a static one takes nothing.
+    NSUInteger initParams = 0;
+    for (XTIRType* t in isym.function.paramTypes)
+        if (t.kind != XTIRTypeKindMemory) // the trailing memory token
+            initParams++;
+    if (initParams != (isym.attributes[@"static"].boolValue ? 0u : 1u))
+        return;
     XTIRSymbolId iid = [self.module.symbols indexOfObjectIdenticalTo:isym];
 
     XTIRSymbolId flagSid = [self staticInitFlagSymbolForClass:recvCi];

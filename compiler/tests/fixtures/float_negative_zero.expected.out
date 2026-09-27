@@ -1,0 +1,5 @@
+literal  d=1 f=1
+variable d=1 f=1
+call     d=1 f=1
+twice    d=0 f=0
+nonzero  -25 -25

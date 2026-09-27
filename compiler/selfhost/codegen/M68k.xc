@@ -2101,7 +2101,17 @@ class M68k
         else
             {
             // The soft comparison returns sign(a - b) in {-1, 0, 1}, so the
-            // predicate becomes an integer test against zero.
+            // predicate becomes an integer test against zero. An unordered
+            // pair (a NaN) returns 1, as libgcc's does, which reads as
+            // "greater". So > and >= swap their operands and test < and <=
+            // instead, which are false on 1 (bug 526).
+            String* sp = n.pred();
+            if (sp != (String*)0 && (sp.equals(String.withCString("OGT")) || sp.equals(String.withCString("OGE"))))
+                {
+                i32 t = o0;
+                o0 = o1;
+                o1 = t;
+                }
             if (dbl)
                 {
                 _out.appendFormat("\tmove.l\t%ld(a6),-(sp)\n\tmove.l\t%ld(a6),-(sp)\n", o1 + (i32)4, o1);
@@ -2149,11 +2159,11 @@ class M68k
         if (p.equals(String.withCString("OLT")))
             return String.withCString("lt");
         if (p.equals(String.withCString("OGT")))
-            return String.withCString("gt");
+            return String.withCString("lt"); // operands swapped
         if (p.equals(String.withCString("OLE")))
             return String.withCString("le");
         if (p.equals(String.withCString("OGE")))
-            return String.withCString("ge");
+            return String.withCString("le"); // operands swapped
         return String.withCString("eq");
         }
 
