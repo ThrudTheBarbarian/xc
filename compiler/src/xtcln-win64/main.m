@@ -6,6 +6,11 @@
 //
 //   xtcln-win64 <input.s>... -o <output.exe> [-e <entry>] [--dump]
 //                            [-import <dll>:<sym>[,<sym>...]]
+//   xtcln-win64 <input.s>... -shared -o <lib.dll> -e <DllMain> [-iface <json>]
+//
+// A `.dll` among the inputs is a library to link AGAINST: its export directory
+// is read and every name in it becomes an import from that DLL. No import
+// library is involved.
 //
 // Unlike the Linux target, imports are unavoidable: Windows has no stable
 // syscall ABI, so even a freestanding program reaches the OS through
@@ -84,12 +89,17 @@ int main(int argc, const char* argv[])
         // symbol → owning DLL, from -importmap. Folded into `imports` after parsing,
         // so explicit -import entries take precedence.
         NSMutableDictionary<NSString*, NSString*>* mapOwner = [NSMutableDictionary dictionary];
-        BOOL dump = NO;
+        BOOL dump = NO, shared = NO;
+        NSString* ifacePath = nil;
         for (int i = 1; i < argc; i++)
             {
             NSString* a = @(argv[i]);
             if ([a isEqualToString:@"-o"] && i + 1 < argc)
                 output = @(argv[++i]);
+            else if ([a isEqualToString:@"-shared"] || [a isEqualToString:@"--shared"])
+                shared = YES;
+            else if ([a isEqualToString:@"-iface"] && i + 1 < argc)
+                ifacePath = @(argv[++i]);
             else if ([a isEqualToString:@"-e"] && i + 1 < argc)
                 entry = @(argv[++i]);
             else if ([a isEqualToString:@"--dump"])
@@ -154,8 +164,48 @@ int main(int argc, const char* argv[])
         if (!inputs.count || (!output && !dump))
             {
             fprintf(stderr, "usage: xtcln-win64 <input.s>... -o <output.exe> [-e entry] "
-                            "[-import <dll>:<sym>,...] [-importmap <file>] [--dump]\n");
+                            "[-import <dll>:<sym>,...] [-importmap <file>] [--dump]\n"
+                            "       xtcln-win64 <input.s>... -shared -o <lib.dll> -e <entry> "
+                            "[-iface <json>]\n");
             return 2;
+            }
+            // The DLLs this image links against, in command-line order. Each
+            // export not already named by an explicit -import (or by an earlier
+            // DLL) is imported from it; the map below only fills in what none of
+            // them provides. They take no part in the assembly, so they are
+            // removed from the inputs here and the `.s` inputs keep their
+            // indices.
+            {
+            NSMutableSet<NSString*>* have = [NSMutableSet set];
+            for (NSString* dll in imports)
+                [have addObjectsFromArray:imports[dll]];
+            NSMutableArray<NSString*>* rest = [NSMutableArray array];
+            for (NSString* inp in inputs)
+                {
+                if (![inp.pathExtension.lowercaseString isEqualToString:@"dll"])
+                    {
+                    [rest addObject:inp];
+                    continue;
+                    }
+                NSArray<NSString*>* ex = [XTPEWriter exportNamesOfDLL:inp];
+                if (!ex)
+                    {
+                    fprintf(stderr, "xcc-ln-win64: error: '%s' is not a DLL with an export "
+                                    "directory\n",
+                            inp.UTF8String);
+                    return 1;
+                    }
+                NSString* dll = inp.lastPathComponent;
+                if (!imports[dll])
+                    imports[dll] = [NSMutableArray array];
+                for (NSString* sym in ex)
+                    if (![have containsObject:sym])
+                        {
+                        [have addObject:sym];
+                        [imports[dll] addObject:sym];
+                        }
+                }
+            [inputs setArray:rest];
             }
             // Fold the map in. Listing a symbol here does NOT put it in the output: the
             // PE writer emits a descriptor only for names the program actually
@@ -313,14 +363,39 @@ int main(int argc, const char* argv[])
         if (objInputs.count || archives.count)
             text = mtext;
 
-        NSData* pe = [XTPEWriter executableFromText:text
-                                               data:mdata
-                                            symbols:msyms
-                                        dataSymbols:mdataSyms
-                                             fixups:mfix
-                                        entrySymbol:entry
-                                            imports:imports
-                                              error:&err];
+        NSData* iface = nil;
+        if (ifacePath && ![ifacePath isEqualToString:@"-"])
+            {
+            iface = [NSData dataWithContentsOfFile:ifacePath];
+            if (!iface)
+                {
+                fprintf(stderr, "xcc-ln-win64: cannot read interface '%s'\n", ifacePath.UTF8String);
+                return 1;
+                }
+            }
+        // A DLL exports what the assembled unit declared `.globl` (runtime and
+        // program); merged objects and archive members are not re-exported,
+        // the same policy as the x86-64 shared-object link.
+        NSData* pe = shared
+                         ? [XTPEWriter dllFromText:text
+                                              data:mdata
+                                           symbols:msyms
+                                       dataSymbols:mdataSyms
+                                            fixups:mfix
+                                       entrySymbol:entry
+                                           imports:imports
+                                           dllName:output.lastPathComponent
+                                           exports:as.globalSymbols ?: [NSSet set]
+                                             iface:iface
+                                             error:&err]
+                         : [XTPEWriter executableFromText:text
+                                                     data:mdata
+                                                  symbols:msyms
+                                              dataSymbols:mdataSyms
+                                                   fixups:mfix
+                                              entrySymbol:entry
+                                                  imports:imports
+                                                    error:&err];
         if (!pe)
             {
             fprintf(stderr, "xcc-ln-win64: %s\n", err.localizedDescription.UTF8String);

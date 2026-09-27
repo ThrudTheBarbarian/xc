@@ -63,6 +63,15 @@ NS_ASSUME_NONNULL_BEGIN
 // name to the symbols taken from it (e.g. @{@"kernel32.dll": @[@"ExitProcess"]}).
 // A symbol that is neither defined nor listed there is an error rather than a
 // zero-filled call.
+//
+// An import is not only a call target. A `lea` of an imported symbol (a
+// vtable, an itable, a function taken by address) is rewritten to a `mov` that
+// loads the address from the symbol's IAT slot — the same length, the inverse
+// of ELF's GOTPCRELX relaxation. A `.quad` naming an import becomes a
+// pseudo-relocation: the writer puts a short stub in front of the entry point
+// that adds the IAT slot's value into the word before anything else runs. PE
+// has no symbolic data relocation, so this is the only way a vtable word can
+// name another image's method.
 + (nullable NSData*)executableFromText:(NSData*)text
                                   data:(NSData*)data
                                symbols:(NSDictionary<NSString*, NSNumber*>*)symbols
@@ -71,6 +80,30 @@ NS_ASSUME_NONNULL_BEGIN
                            entrySymbol:(NSString*)entrySymbol
                                imports:(NSDictionary<NSString*, NSArray<NSString*>*>*)imports
                                  error:(NSError**)error;
+
+// Link the same inputs into a DLL named `dllName`. The differences from an
+// executable: IMAGE_FILE_DLL, a relocatable ImageBase with a `.reloc` section
+// for every absolute data word, an export directory naming every defined
+// symbol in `exports` (the `.globl` names), and the module interface, when
+// there is one, in an `xtciface` section. `entrySymbol` is the DllMain the
+// loader calls; the pseudo-relocation stub in front of it runs only for
+// DLL_PROCESS_ATTACH.
++ (nullable NSData*)dllFromText:(NSData*)text
+                           data:(NSData*)data
+                        symbols:(NSDictionary<NSString*, NSNumber*>*)symbols
+                    dataSymbols:(NSSet<NSString*>*)dataSymbols
+                         fixups:(NSArray<XAX86_64Fixup*>*)fixups
+                    entrySymbol:(NSString*)entrySymbol
+                        imports:(NSDictionary<NSString*, NSArray<NSString*>*>*)imports
+                        dllName:(NSString*)dllName
+                        exports:(NSSet<NSString*>*)exports
+                          iface:(nullable NSData*)iface
+                          error:(NSError**)error;
+
+// The names a DLL exports, in its name-pointer-table order. nil if the file is
+// not a PE image with an export directory. A client links against a DLL by
+// reading this list: no import library is needed.
++ (nullable NSArray<NSString*>*)exportNamesOfDLL:(NSString*)path;
 
 @end
 

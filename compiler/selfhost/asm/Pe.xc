@@ -26,6 +26,7 @@
 #import "Foundation.xc"
 #import "X86Asm.xc"
 #import "CoffObject.xc"
+#import "Files.xc"
 
 #define PE_FILE_ALIGN $200
 #define PE_SECT_ALIGN $1000
@@ -33,6 +34,7 @@
 #define PE_SECT_HDR_SIZE 40
 #define PE_THUNK_SZ 6
 #define PE_BASE_LO $40000000
+#define PE_DLL_BASE_LO $80000000
 #define PE_BASE_HI 1
 
 class Pe
@@ -359,6 +361,57 @@ class Pe
                     Array* fixups, String* entrySymbol,
                     Array* importDlls, Array* importSyms)
         {
+        _isDll = false;
+        _baseLo = (u32)PE_BASE_LO;
+        link(textIn, dataIn, symbols, dataSyms, fixups, entrySymbol, importDlls, importSyms);
+        }
+
+    // The same inputs as a DLL named `dllName` (bug 255): IMAGE_FILE_DLL, a
+    // relocatable ImageBase with a `.reloc` section for every absolute data
+    // word, an export directory naming every defined name in `globals` (the
+    // `.globl` names), and the interface, when there is one, in an `xtciface`
+    // section. `entrySymbol` is the DllMain the loader calls. Mirrors
+    // XTPEWriter's dllFromText.
+    void dll(Array* textIn, Array* dataIn, Map* symbols, Array* dataSyms,
+             Array* fixups, String* entrySymbol,
+             Array* importDlls, Array* importSyms,
+             String* dllName, Array* globals, Data* iface)
+        {
+        _isDll = true;
+        _baseLo = (u32)PE_DLL_BASE_LO;
+        _dllName = dllName;
+        _iface = iface;
+        // Every defined `.globl` name, in byte order (the loader binary-searches
+        // the name pointer table). The constructor-table bounds stay private,
+        // as they do in an ELF library.
+        _exports = new Array();
+        Map* seen = new Map();
+        for (u32 i = (u32)0; globals != (Array*)0 && i < globals.count(); i = i + (u32)1)
+            {
+            String* n = (String*)globals.get(i);
+            if (symbols.get((Hashable*)n) == (Object*)0)
+                continue;
+            if (n.equals(String.withCString("__xt_ctors_start")) || n.equals(String.withCString("__xt_ctors_end")))
+                continue;
+            if (seen.get((Hashable*)n) != (Object*)0)
+                continue;
+            seen.set((Hashable*)n, (Object*)n);
+            _exports.add((Object*)n);
+            }
+        Pe.sortStrings(_exports);
+        link(textIn, dataIn, symbols, dataSyms, fixups, entrySymbol, importDlls, importSyms);
+        }
+
+    bool _isDll;
+    u32 _baseLo; // ImageBase's low half; the high half is PE_BASE_HI either way
+    String* _dllName;
+    Data* _iface;
+    Array* _exports;
+
+    void link(Array* textIn, Array* dataIn, Map* symbols, Array* dataSyms,
+              Array* fixups, String* entrySymbol,
+              Array* importDlls, Array* importSyms)
+        {
         Object* entry = symbols.get((Hashable*)entrySymbol);
         if (entry == (Object*)0 || inArray(dataSyms, entrySymbol))
             {
@@ -394,7 +447,11 @@ class Pe
                          f.symbol());
                 return;
                 }
-            if (f.kind() != (u32)X86FIX_REL32 && viaImp == (String*)0)
+            // A call reaches an import through its stub, a `lea` through its
+            // IAT slot, and a data word through a pseudo-relocation. Nothing
+            // else can reach one.
+            if (f.kind() != (u32)X86FIX_REL32 && f.kind() != (u32)X86FIX_PC32
+                && f.kind() != (u32)X86FIX_ABS64 && viaImp == (String*)0)
                 {
                 failWith(String.withCString("undefined DATA symbol; only function imports are supported (a data import would need the referencing instruction rewritten to an indirection)"),
                          f.symbol());
@@ -475,6 +532,23 @@ class Pe
         return (i32)-1;
         }
 
+    // Offsets in ascending order (the base-relocation blocks are per page).
+    static void sortU32(Array* a)
+        {
+        for (u32 i = (u32)1; i < a.count(); i = i + (u32)1)
+            {
+            Object* v = a.get(i);
+            u32 key = ((Number*)v).asU32();
+            u32 j = i;
+            while (j > (u32)0 && ((Number*)a.get(j - (u32)1)).asU32() > key)
+                {
+                a.set(j, a.get(j - (u32)1));
+                j = j - (u32)1;
+                }
+            a.set(j, v);
+            }
+        }
+
     // ── Layout ───────────────────────────────────────────────────────────
     //
     // Nothing below depends on an address, so the whole layout is fixed before
@@ -502,12 +576,51 @@ class Pe
     u32 _dataFileSz;
     Map* _nameRVA; // imported symbol -> the RVA of its hint/name entry
     Map* _dllNameRVA;
+    // The pseudo-relocation stub, the export directory, and the DLL-only
+    // sections after .data.
+    Array* _pseudo; // X86Fixup@: the data words naming an import
+    u32 _stubOff;
+    u32 _stubSz;
+    u32 _entryRVA;
+    u32 _expRVA;
+    u32 _expEnd;
+    u32 _eatRVA;
+    u32 _nptRVA;
+    u32 _ordRVA;
+    u32 _expNamesRVA;
+    u32 _expDllNameRVA;
+    Array* _relocOffs; // Number@: data offsets of words needing a base relocation
+    Array* _reloc;     // Number@: the .reloc bytes
+    bool _hasIface;
+    u32 _ifaceRVA;
+    u32 _ifaceRaw;
+    u32 _relocRVA;
+    u32 _relocRaw;
+    u32 _afterRVA;
 
     void buildImage(Array* text, Array* data, Map* symbols, Array* dataSyms,
                     Array* fixups, u32 entryOffset)
         {
+        // Data words naming an import: each is filled at startup from the
+        // import's IAT slot by the stub in front of the entry point.
+        _pseudo = new Array();
+        for (u32 i = (u32)0; i < fixups.count(); i = i + (u32)1)
+            {
+            X86Fixup* f = (X86Fixup*)fixups.get(i);
+            if (f.kind() == (u32)X86FIX_ABS64 && symbols.get((Hashable*)f.symbol()) == (Object*)0
+                && Pe.impTarget(f.symbol()) == (String*)0)
+                _pseudo.add((Object*)f);
+            }
         _thunkOff = text.count(); // the stubs append to .text
-        _textLen = text.count() + _nImports * (u32)PE_THUNK_SZ;
+        // The pseudo-relocation stub: in a DLL `cmp edx, 1; jne entry` first
+        // (the loader calls the entry again for every thread and at unload),
+        // then per word `mov rax, [rip + slot]; add [rip + word], rax`, then
+        // `jmp entry`.
+        _stubOff = _thunkOff + _nImports * (u32)PE_THUNK_SZ;
+        _stubSz = (u32)0;
+        if (_pseudo.count() > (u32)0)
+            _stubSz = (_isDll ? (u32)9 : (u32)0) + _pseudo.count() * (u32)14 + (u32)5;
+        _textLen = text.count() + _nImports * (u32)PE_THUNK_SZ + _stubSz;
 
         // .rdata holds the import machinery: descriptors, then per-DLL ILT and
         // IAT (two identical arrays — the loader overwrites the IAT), then the
@@ -520,7 +633,25 @@ class Pe
         _iltSz = thunkArraySz;
         _iatSz = thunkArraySz;
 
-        _nSect = data.count() > (u32)0 ? (u32)3 : (u32)2;
+        // Base relocations: every absolute data word whose target is in this
+        // image. A word a pseudo-relocation fills is not one — the IAT value it
+        // takes is already the final address.
+        _relocOffs = new Array();
+        if (_isDll)
+            {
+            for (u32 i = (u32)0; i < fixups.count(); i = i + (u32)1)
+                {
+                X86Fixup* f = (X86Fixup*)fixups.get(i);
+                if (f.kind() == (u32)X86FIX_ABS64
+                    && (symbols.get((Hashable*)f.symbol()) != (Object*)0 || Pe.impTarget(f.symbol()) != (String*)0))
+                    _relocOffs.add((Object*)Number.withU32(f.offset()));
+                }
+            Pe.sortU32(_relocOffs);
+            }
+        _hasIface = _isDll && _iface != (Data*)0 && _iface.length() > (u32)0;
+
+        _nSect = (data.count() > (u32)0 ? (u32)3 : (u32)2) + (_hasIface ? (u32)1 : (u32)0)
+                 + (_relocOffs.count() > (u32)0 ? (u32)1 : (u32)0);
         _hdrSz = alignUp((u32)$40 + (u32)$40 + (u32)4 + (u32)20 + (u32)PE_OPT_HDR_SIZE + _nSect * (u32)PE_SECT_HDR_SIZE, (u32)PE_FILE_ALIGN);
         _textRVA = (u32)PE_SECT_ALIGN;
         _textRaw = _hdrSz;
@@ -552,6 +683,25 @@ class Pe
             _dllNameRVA.set((Hashable*)dll, (Object*)Number.withU32(cur));
             cur = cur + dll.byteLength() + (u32)1;
             }
+        // The export directory follows, 4-aligned: the directory table, the
+        // address table, the name pointer table, the ordinal table, the names,
+        // and the DLL's own name. Address i and name i are the same symbol, so
+        // ordinal i is simply i.
+        if (_isDll)
+            {
+            u32 ne = _exports.count();
+            _expRVA = alignUp(cur, (u32)4);
+            _eatRVA = _expRVA + (u32)40;
+            _nptRVA = _eatRVA + ne * (u32)4;
+            _ordRVA = _nptRVA + ne * (u32)4;
+            _expNamesRVA = _ordRVA + ne * (u32)2;
+            u32 e = _expNamesRVA;
+            for (u32 i = (u32)0; i < ne; i = i + (u32)1)
+                e = e + ((String*)_exports.get(i)).byteLength() + (u32)1;
+            _expDllNameRVA = e;
+            _expEnd = e + _dllName.byteLength() + (u32)1;
+            cur = _expEnd;
+            }
         _rdataLen = cur - _rdataRVA;
         _dataRVA = alignUp(_rdataRVA + _rdataLen, (u32)PE_SECT_ALIGN);
         _dataRaw = alignUp(_rdataRaw + _rdataLen, (u32)PE_FILE_ALIGN);
@@ -569,6 +719,29 @@ class Pe
                 text.add((Object*)Number.withU32(((u32)rel >> ((u32)8 * k)) & (u32)$FF));
             }
 
+        // The pseudo-relocation stub.
+        _entryRVA = _textRVA + entryOffset;
+        if (_pseudo.count() > (u32)0)
+            {
+            if (_isDll)
+                {
+                Pe.b3(text, (u32)$83, (u32)$FA, (u32)$01); // cmp edx, 1 (DLL_PROCESS_ATTACH)
+                text.add((Object*)Number.withU32((u32)$0F));
+                text.add((Object*)Number.withU32((u32)$85)); // jne entry
+                ripRel(text, _entryRVA);
+                }
+            for (u32 i = (u32)0; i < _pseudo.count(); i = i + (u32)1)
+                {
+                X86Fixup* f = (X86Fixup*)_pseudo.get(i);
+                Pe.b3(text, (u32)$48, (u32)$8B, (u32)$05); // mov rax, [rip + slot]
+                ripRel(text, _iatRVA + ((Number*)_iatSlot.get((Hashable*)f.symbol())).asU32() * (u32)8);
+                Pe.b3(text, (u32)$48, (u32)$01, (u32)$05); // add [rip + word], rax
+                ripRel(text, _dataRVA + f.offset());
+                }
+            text.add((Object*)Number.withU32((u32)$E9)); // jmp entry
+            ripRel(text, _entryRVA);
+            }
+
         if (!resolveFixups(text, data, symbols, dataSyms, fixups))
             return;
 
@@ -578,7 +751,73 @@ class Pe
         // file, and the slot would read back null — a virtual call to zero.
         _dataFileSz = rawSizeOf(data);
 
-        emitFile(text, data, entryOffset);
+        // The DLL-only sections after .data: the interface, then the
+        // relocations.
+        _afterRVA = data.count() > (u32)0 ? _dataRVA + data.count() : _rdataRVA + _rdataLen;
+        u32 afterRaw = data.count() > (u32)0 ? _dataRaw + alignUp(_dataFileSz, (u32)PE_FILE_ALIGN)
+                                             : _rdataRaw + alignUp(_rdataLen, (u32)PE_FILE_ALIGN);
+        if (_hasIface)
+            {
+            _ifaceRVA = alignUp(_afterRVA, (u32)PE_SECT_ALIGN);
+            _ifaceRaw = afterRaw;
+            _afterRVA = _ifaceRVA + _iface.length();
+            afterRaw = _ifaceRaw + alignUp(_iface.length(), (u32)PE_FILE_ALIGN);
+            }
+        // One block per 4 KB page: {page RVA, block size}, then a u16 per word
+        // — type 10 (DIR64) in the top four bits, the offset in the page below
+        // — padded to a multiple of four with an absolute (type 0) entry.
+        _reloc = new Array();
+        u32 i = (u32)0;
+        while (i < _relocOffs.count())
+            {
+            u32 page = (_dataRVA + ((Number*)_relocOffs.get(i)).asU32()) & ~(u32)$FFF;
+            u32 j = i;
+            while (j < _relocOffs.count()
+                   && ((_dataRVA + ((Number*)_relocOffs.get(j)).asU32()) & ~(u32)$FFF) == page)
+                j = j + (u32)1;
+            u32 n = j - i;
+            Pe.put32(_reloc, page);
+            Pe.put32(_reloc, (u32)8 + (n + (n & (u32)1)) * (u32)2);
+            for (u32 k = i; k < j; k = k + (u32)1)
+                {
+                u32 e = (u32)$A000 | ((_dataRVA + ((Number*)_relocOffs.get(k)).asU32()) & (u32)$FFF);
+                _reloc.add((Object*)Number.withU32(e & (u32)$FF));
+                _reloc.add((Object*)Number.withU32((e >> (u32)8) & (u32)$FF));
+                }
+            if ((n & (u32)1) != (u32)0)
+                {
+                _reloc.add((Object*)Number.withU32((u32)0));
+                _reloc.add((Object*)Number.withU32((u32)0));
+                }
+            i = j;
+            }
+        if (_reloc.count() > (u32)0)
+            {
+            _relocRVA = alignUp(_afterRVA, (u32)PE_SECT_ALIGN);
+            _relocRaw = afterRaw;
+            _afterRVA = _relocRVA + _reloc.count();
+            }
+
+        emitFile(text, data, symbols, dataSyms);
+        }
+
+    static void b3(Array* a, u32 x, u32 y, u32 z)
+        {
+        a.add((Object*)Number.withU32(x));
+        a.add((Object*)Number.withU32(y));
+        a.add((Object*)Number.withU32(z));
+        }
+    static void put32(Array* a, u32 v)
+        {
+        for (u32 k = (u32)0; k < (u32)4; k = k + (u32)1)
+            a.add((Object*)Number.withU32((v >> ((u32)8 * k)) & (u32)$FF));
+        }
+    // The rel32 of an instruction whose displacement is its last four bytes,
+    // appended at the end of `text`.
+    void ripRel(Array* text, u32 targetRVA)
+        {
+        i32 r = (i32)targetRVA - (i32)(_textRVA + text.count() + (u32)4);
+        Pe.put32(text, (u32)r);
         }
 
     bool resolveFixups(Array* text, Array* data, Map* symbols, Array* dataSyms, Array* fixups)
@@ -593,6 +832,44 @@ class Pe
                 target = (inArray(dataSyms, f.symbol()) ? _dataRVA : _textRVA) + ((Number*)off).asU32();
             else if (viaImp != (String*)0)
                 target = _iatRVA + ((Number*)_iatSlot.get((Hashable*)viaImp)).asU32() * (u32)8;
+            else if (f.kind() == (u32)X86FIX_ABS64)
+                {
+                // A pseudo-relocation: the word holds the addend until the stub
+                // adds the import's address to it.
+                if (f.offset() + (u32)8 > data.count())
+                    {
+                    failWith(String.withCString("abs64 fixup past the end of data"), f.symbol());
+                    return false;
+                    }
+                u32 lo = (u32)f.addend();
+                u32 hi = f.addend() < (i32)0 ? (u32)$FFFF_FFFF : (u32)0;
+                for (u32 k = (u32)0; k < (u32)4; k = k + (u32)1)
+                    data.set(f.offset() + k, (Object*)Number.withU32((lo >> ((u32)8 * k)) & (u32)$FF));
+                for (u32 k = (u32)0; k < (u32)4; k = k + (u32)1)
+                    data.set(f.offset() + (u32)4 + k,
+                             (Object*)Number.withU32((hi >> ((u32)8 * k)) & (u32)$FF));
+                continue;
+                }
+            else if (f.kind() == (u32)X86FIX_PC32)
+                {
+                // `lea reg, [rip + import]` becomes `mov reg, [rip + slot]`:
+                // REX.W, 8D -> 8B, and a ModRM of [rip + disp32]. Anything else
+                // would need a longer instruction.
+                u32 o = f.offset();
+                bool isLea = o >= (u32)3 && o + (u32)4 <= text.count()
+                             && (((Number*)text.get(o - (u32)3)).asU32() & (u32)$F8) == (u32)$48
+                             && ((Number*)text.get(o - (u32)2)).asU32() == (u32)$8D
+                             && (((Number*)text.get(o - (u32)1)).asU32() & (u32)$C7) == (u32)$05
+                             && f.addend() == (i32)-4;
+                if (!isLea)
+                    {
+                    failWith(String.withCString("an imported symbol reached by an instruction other than `lea` (only a `lea` can be rewritten to load the address from the import table)"),
+                             f.symbol());
+                    return false;
+                    }
+                text.set(o - (u32)2, (Object*)Number.withU32((u32)$8B));
+                target = _iatRVA + ((Number*)_iatSlot.get((Hashable*)f.symbol())).asU32() * (u32)8;
+                }
             else
                 target = _thunkRVA + ((Number*)_iatIndex.get((Hashable*)f.symbol())).asU32() * (u32)PE_THUNK_SZ;
 
@@ -603,9 +880,9 @@ class Pe
                     failWith(String.withCString("abs64 fixup past the end of data"), f.symbol());
                     return false;
                     }
-                // A full virtual address, which is only correct if the image
-                // really loads at ImageBase — hence DYNAMIC_BASE stays off.
-                u32 lo = (u32)PE_BASE_LO + target + (u32)f.addend();
+                // A full virtual address. An executable keeps DYNAMIC_BASE off
+                // so ImageBase holds; a DLL carries a base relocation for it.
+                u32 lo = _baseLo + target + (u32)f.addend();
                 u32 hi = (u32)PE_BASE_HI;
                 if (lo < target)
                     hi = hi + (u32)1; // carry out of the low half
@@ -630,7 +907,7 @@ class Pe
         return true;
         }
 
-    void emitFile(Array* text, Array* data, u32 entryOffset)
+    void emitFile(Array* text, Array* data, Map* symbols, Array* dataSyms)
         {
         // DOS header. Windows does not care about the stub, but it must be
         // there and e_lfanew must point PAST it — pointing at 0x40 puts the
@@ -651,18 +928,19 @@ class Pe
         p32((u32)0); //   the output reproducible
         p32((u32)0); // NumberOfSymbols
         p16((u32)PE_OPT_HDR_SIZE);
-        p16((u32)$0002 | (u32)$0020); // EXECUTABLE | LARGE_ADDRESS
+        p16((u32)$0002 | (u32)$0020 | (_isDll ? (u32)$2000 : (u32)0)); // EXECUTABLE | LARGE_ADDRESS [| DLL]
 
+        u32 ifaceLen = _hasIface ? _iface.length() : (u32)0;
         // Optional header (PE32+).
         p16((u32)$20B);
         p8((u32)14);
         p8((u32)0);                                 // linker version
         p32(alignUp(_textLen, (u32)PE_FILE_ALIGN)); // SizeOfCode
-        p32(alignUp(_rdataLen + _dataFileSz, (u32)PE_FILE_ALIGN));
+        p32(alignUp(_rdataLen + _dataFileSz + ifaceLen + _reloc.count(), (u32)PE_FILE_ALIGN));
         p32((u32)0);                           // SizeOfUninitializedData
-        p32(_textRVA + entryOffset);           // AddressOfEntryPoint
+        p32(_pseudo.count() > (u32)0 ? _textRVA + _stubOff : _entryRVA); // AddressOfEntryPoint
         p32(_textRVA);                         // BaseOfCode
-        p64((u32)PE_BASE_LO, (u32)PE_BASE_HI); // ImageBase
+        p64(_baseLo, (u32)PE_BASE_HI);         // ImageBase
         p32((u32)PE_SECT_ALIGN);
         p32((u32)PE_FILE_ALIGN);
         p16((u32)6);
@@ -672,14 +950,13 @@ class Pe
         p16((u32)6);
         p16((u32)0); // subsystem version 6.0
         p32((u32)0); // Win32VersionValue
-        u32 sizeOfImage = alignUp(data.count() > (u32)0 ? _dataRVA + data.count()
-                                                        : _rdataRVA + _rdataLen,
-                                  (u32)PE_SECT_ALIGN);
-        p32(sizeOfImage);
+        p32(alignUp(_afterRVA, (u32)PE_SECT_ALIGN)); // SizeOfImage
         p32(_hdrSz);
-        p32((u32)0); // CheckSum — only DLLs need one
+        p32((u32)0); // CheckSum — only drivers and boot-time DLLs need one
         p16((u32)3); // console subsystem
-        p16((u32)0); // no DYNAMIC_BASE, so ImageBase holds
+        // An executable leaves DYNAMIC_BASE off, so ImageBase holds. A DLL is
+        // relocatable: DYNAMIC_BASE | HIGH_ENTROPY_VA | NX_COMPAT.
+        p16(_isDll ? (u32)$0160 : (u32)0);
         p64((u32)$100000, (u32)0);
         p64((u32)$1000, (u32)0); // stack reserve / commit
         p64((u32)$100000, (u32)0);
@@ -688,10 +965,20 @@ class Pe
         p32((u32)16);            // NumberOfRvaAndSizes
         for (u32 i = (u32)0; i < (u32)16; i = i + (u32)1)
             {
-            if (i == (u32)1 && _nImports != (u32)0)
+            if (i == (u32)0 && _isDll)
+                {
+                p32(_expRVA);
+                p32(_expEnd - _expRVA);
+                }
+            else if (i == (u32)1 && _nImports != (u32)0)
                 {
                 p32(_descRVA);
                 p32(_descSz);
+                }
+            else if (i == (u32)5 && _reloc.count() > (u32)0)
+                {
+                p32(_relocRVA);
+                p32(_reloc.count());
                 }
             else if (i == (u32)12 && _nImports != (u32)0)
                 {
@@ -712,21 +999,156 @@ class Pe
         if (data.count() > (u32)0)
             sect(String.withCString(".data"), data.count(), _dataRVA, _dataFileSz, _dataRaw,
                  (u32)$40 | (u32)$40000000 | (u32)$80000000);
+        // The interface is read out of the FILE by a compiler, never by the
+        // program, so the loader may discard it.
+        if (_hasIface)
+            sect(String.withCString("xtciface"), ifaceLen, _ifaceRVA, ifaceLen, _ifaceRaw,
+                 (u32)$40 | (u32)$40000000 | (u32)$02000000);
+        if (_reloc.count() > (u32)0)
+            sect(String.withCString(".reloc"), _reloc.count(), _relocRVA, _reloc.count(), _relocRaw,
+                 (u32)$40 | (u32)$40000000 | (u32)$02000000);
 
         padTo(_textRaw);
         appendAll(text);
         padTo(_rdataRaw);
         emitImportTables();
+        if (_isDll)
+            emitExports(symbols, dataSyms);
         if (data.count() > (u32)0)
             {
             padTo(_dataRaw);
             for (u32 i = (u32)0; i < _dataFileSz; i = i + (u32)1)
                 _out.add(data.get(i));
             }
+        if (_hasIface)
+            {
+            padTo(_ifaceRaw);
+            for (u32 i = (u32)0; i < ifaceLen; i = i + (u32)1)
+                p8((u32)_iface.byteAt(i));
+            }
+        if (_reloc.count() > (u32)0)
+            {
+            padTo(_relocRaw);
+            appendAll(_reloc);
+            }
         // Every section's raw data is FileAlignment-padded; a short final
         // section makes some loaders reject the image.
         while (_out.count() % (u32)PE_FILE_ALIGN != (u32)0)
             p8((u32)0);
+        }
+
+    void emitExports(Map* symbols, Array* dataSyms)
+        {
+        padTo(_rdataRaw + (_expRVA - _rdataRVA));
+        u32 ne = _exports.count();
+        p32((u32)0); // ExportFlags
+        p32((u32)0); // TimeDateStamp
+        p16((u32)0);
+        p16((u32)0); // version
+        p32(_expDllNameRVA);
+        p32((u32)1); // OrdinalBase
+        p32(ne);
+        p32(ne);
+        p32(_eatRVA);
+        p32(_nptRVA);
+        p32(_ordRVA);
+        for (u32 i = (u32)0; i < ne; i = i + (u32)1)
+            {
+            String* n = (String*)_exports.get(i);
+            p32((inArray(dataSyms, n) ? _dataRVA : _textRVA)
+                + ((Number*)symbols.get((Hashable*)n)).asU32());
+            }
+        u32 nm = _expNamesRVA;
+        for (u32 i = (u32)0; i < ne; i = i + (u32)1)
+            {
+            p32(nm);
+            nm = nm + ((String*)_exports.get(i)).byteLength() + (u32)1;
+            }
+        for (u32 i = (u32)0; i < ne; i = i + (u32)1)
+            p16(i);
+        for (u32 i = (u32)0; i < ne; i = i + (u32)1)
+            {
+            String* n = (String*)_exports.get(i);
+            for (u32 c = (u32)0; c < n.byteLength(); c = c + (u32)1)
+                p8((u32)n.byteAt(c));
+            p8((u32)0);
+            }
+        for (u32 c = (u32)0; c < _dllName.byteLength(); c = c + (u32)1)
+            p8((u32)_dllName.byteAt(c));
+        p8((u32)0);
+        }
+
+    // The names a DLL exports, in its name-pointer-table order — the client
+    // side of a DLL link, which needs no import library. Null when the file is
+    // not a PE32+ image with an export directory. Mirrors XTPEWriter's
+    // exportNamesOfDLL.
+    static Array* dllExports(String* path)
+        {
+        Data* d = Files.readData(path);
+        if (d == (Data*)0)
+            return (Array*)0;
+        u32 n = d.length();
+        if (n < (u32)$40 || d.byteAt((u32)0) != (u8)'M' || d.byteAt((u32)1) != (u8)'Z')
+            return (Array*)0;
+        u32 pe = Pe.le32(d, (u32)$3C);
+        if (Pe.le32(d, pe) != (u32)$00004550 || Pe.le16(d, pe + (u32)24) != (u32)$20B)
+            return (Array*)0;
+        u32 nsect = Pe.le16(d, pe + (u32)6);
+        u32 opt = pe + (u32)24;
+        u32 secTab = opt + Pe.le16(d, pe + (u32)20);
+        u32 expRVA = Pe.le32(d, opt + (u32)112); // data directory 0 in a PE32+ header
+        if (expRVA == (u32)0)
+            return (Array*)0;
+        i32 e = Pe.fileOff(d, nsect, secTab, expRVA);
+        if (e < (i32)0)
+            return (Array*)0;
+        u32 nNames = Pe.le32(d, (u32)e + (u32)24);
+        i32 npt = Pe.fileOff(d, nsect, secTab, Pe.le32(d, (u32)e + (u32)32));
+        if (npt < (i32)0)
+            return (Array*)0;
+        Array* out = new Array();
+        for (u32 i = (u32)0; i < nNames; i = i + (u32)1)
+            {
+            i32 s = Pe.fileOff(d, nsect, secTab, Pe.le32(d, (u32)npt + (u32)4 * i));
+            if (s < (i32)0)
+                return (Array*)0;
+            String* nm = new String();
+            u32 k = (u32)s;
+            while (k < n && d.byteAt(k) != (u8)0)
+                {
+                nm.appendByte(d.byteAt(k));
+                k = k + (u32)1;
+                }
+            out.add((Object*)nm);
+            }
+        return out;
+        }
+
+    static i32 fileOff(Data* d, u32 nsect, u32 secTab, u32 rva)
+        {
+        for (u32 i = (u32)0; i < nsect; i = i + (u32)1)
+            {
+            u32 s = secTab + i * (u32)PE_SECT_HDR_SIZE;
+            u32 va = Pe.le32(d, s + (u32)12);
+            u32 vsz = Pe.le32(d, s + (u32)8);
+            u32 raw = Pe.le32(d, s + (u32)20);
+            if (rva >= va && rva < va + vsz)
+                return (i32)(raw + (rva - va));
+            }
+        return (i32)-1;
+        }
+    static u32 le16(Data* d, u32 at)
+        {
+        if (at + (u32)2 > d.length())
+            return (u32)0;
+        return (u32)d.byteAt(at) | ((u32)d.byteAt(at + (u32)1) << (u32)8);
+        }
+    static u32 le32(Data* d, u32 at)
+        {
+        if (at + (u32)4 > d.length())
+            return (u32)0;
+        return (u32)d.byteAt(at) | ((u32)d.byteAt(at + (u32)1) << (u32)8)
+             | ((u32)d.byteAt(at + (u32)2) << (u32)16) | ((u32)d.byteAt(at + (u32)3) << (u32)24);
         }
 
     // A stub that prints the usual message if the program is run under DOS.

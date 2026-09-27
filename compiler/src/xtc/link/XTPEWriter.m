@@ -9,6 +9,10 @@ enum
     PE_MACHINE_AMD64 = 0x8664,
     PE_CHAR_EXECUTABLE = 0x0002,
     PE_CHAR_LARGE_ADDRESS = 0x0020,
+    PE_CHAR_DLL = 0x2000,
+    // DYNAMIC_BASE | HIGH_ENTROPY_VA | NX_COMPAT: a DLL carries base
+    // relocations and may be loaded anywhere.
+    PE_DLLCHAR_DLL = 0x0160,
     PE_MAGIC_PE32PLUS = 0x20B,
     PE_SUBSYSTEM_CUI = 3, // console
     // Section characteristics.
@@ -23,7 +27,9 @@ enum
     PE_FILE_ALIGN = 0x200,
     PE_SECT_ALIGN = 0x1000,
     PE_NUM_DIRECTORIES = 16,
+    PE_DIR_EXPORT = 0,
     PE_DIR_IMPORT = 1,
+    PE_DIR_BASERELOC = 5,
     PE_DIR_IAT = 12,
     PE_OPT_HDR_SIZE = 240, // PE32+ optional header incl. 16 directories
     PE_SECT_HDR_SIZE = 40,
@@ -34,6 +40,9 @@ enum
 // no .reloc section is needed. That is the simplest thing that is correct; the
 // cost is no ASLR, which is a hardening property rather than a correctness one.
 #define PE_IMAGE_BASE 0x140000000ull
+// A DLL's preferred base. Two DLLs that both prefer it are fine: the second is
+// moved, and its `.reloc` section says which words to adjust.
+#define PE_DLL_IMAGE_BASE 0x180000000ull
 
 static void p8(NSMutableData* d, uint8_t v)
     {
@@ -529,6 +538,73 @@ static uint64_t rawSizeOf(NSData* d)
                                imports:(NSDictionary<NSString*, NSArray<NSString*>*>*)imports
                                  error:(NSError**)error
     {
+    return [self imageFromText:textIn
+                          data:dataIn
+                       symbols:symbols
+                   dataSymbols:dataSymbols
+                        fixups:fixups
+                   entrySymbol:entrySymbol
+                       imports:imports
+                       dllName:nil
+                       exports:nil
+                         iface:nil
+                         error:error];
+    }
+
++ (nullable NSData*)dllFromText:(NSData*)textIn
+                           data:(NSData*)dataIn
+                        symbols:(NSDictionary<NSString*, NSNumber*>*)symbols
+                    dataSymbols:(NSSet<NSString*>*)dataSymbols
+                         fixups:(NSArray<XAX86_64Fixup*>*)fixups
+                    entrySymbol:(NSString*)entrySymbol
+                        imports:(NSDictionary<NSString*, NSArray<NSString*>*>*)imports
+                        dllName:(NSString*)dllName
+                        exports:(NSSet<NSString*>*)exports
+                          iface:(nullable NSData*)iface
+                          error:(NSError**)error
+    {
+    return [self imageFromText:textIn
+                          data:dataIn
+                       symbols:symbols
+                   dataSymbols:dataSymbols
+                        fixups:fixups
+                   entrySymbol:entrySymbol
+                       imports:imports
+                       dllName:dllName
+                       exports:exports ?: [NSSet set]
+                         iface:iface
+                         error:error];
+    }
+
+// Byte order, as the loader's binary search over the name pointer table
+// expects — not NSString's ordering.
+static NSInteger byteOrder(id x, id y, void* ctx)
+    {
+    (void)ctx;
+    int c = strcmp([x UTF8String], [y UTF8String]);
+    return c < 0 ? NSOrderedAscending : (c > 0 ? NSOrderedDescending : NSOrderedSame);
+    }
+
+// The image writer behind both entry points. `dllName` nil means an executable,
+// and every DLL-only piece below is then skipped, so an executable's bytes do
+// not depend on any of it.
++ (nullable NSData*)imageFromText:(NSData*)textIn
+                             data:(NSData*)dataIn
+                          symbols:(NSDictionary<NSString*, NSNumber*>*)symbols
+                      dataSymbols:(NSSet<NSString*>*)dataSymbols
+                           fixups:(NSArray<XAX86_64Fixup*>*)fixups
+                      entrySymbol:(NSString*)entrySymbol
+                          imports:(NSDictionary<NSString*, NSArray<NSString*>*>*)imports
+                          dllName:(nullable NSString*)dllName
+                          exports:(nullable NSSet<NSString*>*)exportSet
+                            iface:(nullable NSData*)iface
+                            error:(NSError**)error
+    {
+    BOOL isDll = (dllName != nil);
+    // A DLL's preferred base sits above the executable's. It is only a
+    // preference: the image carries base relocations and the loader moves it
+    // when two DLLs want the same address.
+    uint64_t imageBase = isDll ? PE_DLL_IMAGE_BASE : PE_IMAGE_BASE;
     NSNumber* entry = symbols[entrySymbol];
     if (!entry || [dataSymbols containsObject:entrySymbol])
         {
@@ -579,7 +655,11 @@ static uint64_t rawSizeOf(NSData* d)
                                f.symbol);
             return nil;
             }
-        if (f.kind != XAX86FixupRel32 && !viaImp)
+        // A call reaches an import through its stub; a `lea` through its IAT
+        // slot, and a data word through a pseudo-relocation (both below).
+        // Nothing else can reach one.
+        if (f.kind != XAX86FixupRel32 && f.kind != XAX86FixupPC32
+            && f.kind != XAX86FixupAbs64 && !viaImp)
             {
             if (error)
                 *error = peErr(@"'%@' is an undefined DATA symbol; only function "
@@ -620,13 +700,25 @@ static uint64_t rawSizeOf(NSData* d)
             }
         }
 
+    // Data words naming an import: each is filled at startup from the import's
+    // IAT slot by the stub in front of the entry point (pseudo-relocations).
+    NSMutableArray<XAX86_64Fixup*>* pseudo = [NSMutableArray array];
+    for (XAX86_64Fixup* f in fixups)
+        if (f.kind == XAX86FixupAbs64 && !symbols[f.symbol] && !impTarget(f.symbol))
+            [pseudo addObject:f];
+
     // ── 2. sizes, then addresses ──
     // Nothing below depends on an address, so the whole layout is fixed before a
     // byte is written.
     NSMutableData* text = [textIn mutableCopy];
     NSMutableData* data = [dataIn mutableCopy];
     NSUInteger thunkOff = text.length; // stubs append to .text
-    uint64_t textLen = text.length + nImports * PE_THUNK_SZ;
+    // The pseudo-relocation stub: in a DLL `cmp edx, 1; jne entry` first (the
+    // loader calls the entry again for every thread and at unload), then per
+    // word `mov rax, [rip + slot]; add [rip + word], rax`, then `jmp entry`.
+    uint64_t prStubOff = thunkOff + nImports * PE_THUNK_SZ;
+    uint64_t prStubSz = pseudo.count ? (isDll ? 9 : 0) + pseudo.count * 14 + 5 : 0;
+    uint64_t textLen = text.length + nImports * PE_THUNK_SZ + prStubSz;
 
     // .rdata holds the import machinery: descriptors, then per-DLL ILT and IAT
     // (two identical arrays — the loader overwrites the IAT), then the hint/name
@@ -638,7 +730,29 @@ static uint64_t rawSizeOf(NSData* d)
         thunkArraySz += (used[dll].count + 1) * 8;
     uint64_t iltSz = thunkArraySz, iatSz = thunkArraySz;
 
-    uint32_t nSect = data.length ? 3 : 2; // .text, .rdata, [.data]
+    // A DLL's exports: every defined `.globl` name, in byte order. The
+    // constructor-table bounds stay private, as they do in an ELF library.
+    NSMutableArray<NSString*>* exportNames = [NSMutableArray array];
+    if (isDll)
+        for (NSString* n in [exportSet.allObjects sortedArrayUsingFunction:byteOrder context:NULL])
+            if (symbols[n] && ![n isEqualToString:@"__xt_ctors_start"]
+                && ![n isEqualToString:@"__xt_ctors_end"])
+                [exportNames addObject:n];
+
+    // Base relocations: every absolute data word whose target is in this image.
+    // A word filled by a pseudo-relocation is not one — the IAT value it takes
+    // is already the final address.
+    NSMutableArray<NSNumber*>* relocOffs = [NSMutableArray array];
+    if (isDll)
+        {
+        for (XAX86_64Fixup* f in fixups)
+            if (f.kind == XAX86FixupAbs64 && (symbols[f.symbol] || impTarget(f.symbol)))
+                [relocOffs addObject:@(f.offset)];
+        [relocOffs sortUsingSelector:@selector(compare:)];
+        }
+
+    uint32_t nSect = (data.length ? 3 : 2) + (isDll && iface.length ? 1 : 0)
+                     + (relocOffs.count ? 1 : 0);
     uint64_t hdrSz = alignUp(0x40 + 0x40 + 4 + 20 + PE_OPT_HDR_SIZE + (uint64_t)nSect * PE_SECT_HDR_SIZE, PE_FILE_ALIGN);
 
     uint64_t textRVA = PE_SECT_ALIGN;
@@ -665,13 +779,33 @@ static uint64_t rawSizeOf(NSData* d)
         dllNameRVA[dll] = @(cur);
         cur += [dll lengthOfBytesUsingEncoding:NSUTF8StringEncoding] + 1;
         }
+    // The export directory follows, 4-aligned: the directory table, the address
+    // table, the name pointer table, the ordinal table, the names, and the
+    // DLL's own name. Address i and name i are the same symbol, so ordinal i is
+    // simply i.
+    uint64_t expRVA = 0, expEnd = 0, eatRVA = 0, nptRVA = 0, ordRVA = 0, expNamesRVA = 0,
+             expDllNameRVA = 0;
+    if (isDll)
+        {
+        expRVA = alignUp(cur, 4);
+        eatRVA = expRVA + 40;
+        nptRVA = eatRVA + exportNames.count * 4;
+        ordRVA = nptRVA + exportNames.count * 4;
+        expNamesRVA = ordRVA + exportNames.count * 2;
+        uint64_t e = expNamesRVA;
+        for (NSString* n in exportNames)
+            e += [n lengthOfBytesUsingEncoding:NSUTF8StringEncoding] + 1;
+        expDllNameRVA = e;
+        expEnd = e + [dllName lengthOfBytesUsingEncoding:NSUTF8StringEncoding] + 1;
+        cur = expEnd;
+        }
     uint64_t rdataLen = cur - rdataRVA;
 
     uint64_t dataRVA = alignUp(rdataRVA + rdataLen, PE_SECT_ALIGN);
     uint64_t dataRaw = alignUp(rdataRaw + rdataLen, PE_FILE_ALIGN);
 
-    uint64_t textAddr = PE_IMAGE_BASE + textRVA;
-    uint64_t dataAddr = PE_IMAGE_BASE + dataRVA;
+    uint64_t textAddr = imageBase + textRVA;
+    uint64_t dataAddr = imageBase + dataRVA;
     uint64_t thunkAddr = textAddr + thunkOff;
 
     // ── 3. import stubs ──
@@ -679,10 +813,42 @@ static uint64_t rawSizeOf(NSData* d)
         {
         uint64_t here = thunkAddr + i * PE_THUNK_SZ;
         uint64_t slot = iatSlot[stubSym[i]].unsignedLongLongValue;
-        int64_t rel = (int64_t)(PE_IMAGE_BASE + iatRVA + slot * 8) - (int64_t)(here + PE_THUNK_SZ);
+        int64_t rel = (int64_t)(imageBase + iatRVA + slot * 8) - (int64_t)(here + PE_THUNK_SZ);
         p8(text, 0xFF);
         p8(text, 0x25); // jmp qword ptr [rip + disp32]
         p32(text, (uint32_t)(int32_t)rel);
+        }
+
+    // ── 3b. the pseudo-relocation stub ──
+    uint64_t entryRVA = textRVA + entry.unsignedLongLongValue;
+    if (pseudo.count)
+        {
+        void (^ripRel)(uint64_t) = ^(uint64_t targetRVA) {
+          int64_t r = (int64_t)targetRVA - (int64_t)(textRVA + text.length + 4);
+          p32(text, (uint32_t)(int32_t)r);
+        };
+        if (isDll)
+            {
+            p8(text, 0x83);
+            p8(text, 0xFA);
+            p8(text, 0x01); // cmp edx, 1   (DLL_PROCESS_ATTACH)
+            p8(text, 0x0F);
+            p8(text, 0x85); // jne entry
+            ripRel(entryRVA);
+            }
+        for (XAX86_64Fixup* f in pseudo)
+            {
+            p8(text, 0x48);
+            p8(text, 0x8B);
+            p8(text, 0x05); // mov rax, [rip + slot]
+            ripRel(iatRVA + iatSlot[f.symbol].unsignedLongLongValue * 8);
+            p8(text, 0x48);
+            p8(text, 0x01);
+            p8(text, 0x05); // add [rip + word], rax
+            ripRel(dataRVA + f.offset);
+            }
+        p8(text, 0xE9); // jmp entry
+        ripRel(entryRVA);
         }
 
     // ── 4. resolve fixups ──
@@ -695,7 +861,41 @@ static uint64_t rawSizeOf(NSData* d)
         if (off)
             target = ([dataSymbols containsObject:f.symbol] ? dataAddr : textAddr) + off.unsignedLongLongValue;
         else if (viaImp)
-            target = PE_IMAGE_BASE + iatRVA + iatSlot[viaImp].unsignedLongLongValue * 8;
+            target = imageBase + iatRVA + iatSlot[viaImp].unsignedLongLongValue * 8;
+        else if (f.kind == XAX86FixupAbs64)
+            {
+            // A pseudo-relocation: the word holds the addend until the stub
+            // adds the import's address to it.
+            if (f.offset + 8 > data.length)
+                {
+                if (error)
+                    *error = peErr(@"abs64 fixup for '%@' past end of data", f.symbol);
+                return nil;
+                }
+            for (int i = 0; i < 8; i++)
+                dp[f.offset + i] = (uint8_t)((uint64_t)f.addend >> (8 * i));
+            continue;
+            }
+        else if (f.kind == XAX86FixupPC32)
+            {
+            // `lea reg, [rip + import]` becomes `mov reg, [rip + slot]`: REX.W,
+            // 8D → 8B, and a ModRM of [rip + disp32]. Anything else would need
+            // a longer instruction.
+            BOOL isLea = f.offset >= 3 && f.offset + 4 <= text.length
+                         && (tp[f.offset - 3] & 0xF8) == 0x48 && tp[f.offset - 2] == 0x8D
+                         && (tp[f.offset - 1] & 0xC7) == 0x05 && f.addend == -4;
+            if (!isLea)
+                {
+                if (error)
+                    *error = peErr(@"'%@' is an imported symbol reached by an instruction "
+                                   @"other than `lea` (only a `lea` can be rewritten to "
+                                   @"load the address from the import table)",
+                                   f.symbol);
+                return nil;
+                }
+            tp[f.offset - 2] = 0x8B;
+            target = imageBase + iatRVA + iatSlot[f.symbol].unsignedLongLongValue * 8;
+            }
         else
             target = thunkAddr + iatIndex[f.symbol].unsignedIntegerValue * PE_THUNK_SZ;
 
@@ -730,13 +930,56 @@ static uint64_t rawSizeOf(NSData* d)
             tp[f.offset + i] = (uint8_t)((uint64_t)rel >> (8 * i));
         }
     // An abs64 in .data holds a full VA, which is only correct if the image
-    // really loads at ImageBase — hence DYNAMIC_BASE stays off (see PE_IMAGE_BASE).
+    // really loads at ImageBase. An executable keeps DYNAMIC_BASE off so the
+    // loader honours it; a DLL carries a base relocation for each such word.
 
     // Measure the file size AFTER patching: a vtable slot that held a symbolic
     // .quad was zero until the abs64 fixup above wrote its VA. Measuring before
     // would count it as a trailing zero, drop it from the file, and the slot
     // would read back null — a virtual call straight to address 0.
     uint64_t dataFileSz = rawSizeOf(data);
+
+    // The DLL-only sections after .data: the interface, then the relocations.
+    uint64_t afterRVA = data.length ? dataRVA + data.length : rdataRVA + rdataLen;
+    uint64_t afterRaw = data.length ? dataRaw + alignUp(dataFileSz, PE_FILE_ALIGN)
+                                    : rdataRaw + alignUp(rdataLen, PE_FILE_ALIGN);
+    BOOL hasIface = isDll && iface.length;
+    uint64_t ifaceRVA = 0, ifaceRaw = 0;
+    if (hasIface)
+        {
+        ifaceRVA = alignUp(afterRVA, PE_SECT_ALIGN);
+        ifaceRaw = afterRaw;
+        afterRVA = ifaceRVA + iface.length;
+        afterRaw = ifaceRaw + alignUp(iface.length, PE_FILE_ALIGN);
+        }
+    // One block per 4 KB page: {page RVA, block size}, then a u16 per word —
+    // type 10 (DIR64) in the top four bits, the offset in the page below —
+    // padded to a multiple of four with an absolute (type 0) entry.
+    NSMutableData* reloc = [NSMutableData data];
+    for (NSUInteger i = 0; i < relocOffs.count;)
+        {
+        uint64_t page = (dataRVA + relocOffs[i].unsignedLongLongValue) & ~0xFFFull;
+        NSUInteger j = i;
+        while (j < relocOffs.count
+               && ((dataRVA + relocOffs[j].unsignedLongLongValue) & ~0xFFFull) == page)
+            j++;
+        NSUInteger n = j - i;
+        p32(reloc, (uint32_t)page);
+        p32(reloc, (uint32_t)(8 + (n + (n & 1)) * 2));
+        for (NSUInteger k = i; k < j; k++)
+            p16(reloc, (uint16_t)(0xA000 | ((dataRVA + relocOffs[k].unsignedLongLongValue) & 0xFFF)));
+        if (n & 1)
+            p16(reloc, 0);
+        i = j;
+        }
+    uint64_t relocRVA = 0, relocRaw = 0;
+    if (reloc.length)
+        {
+        relocRVA = alignUp(afterRVA, PE_SECT_ALIGN);
+        relocRaw = afterRaw;
+        afterRVA = relocRVA + reloc.length;
+        afterRaw = relocRaw + alignUp(reloc.length, PE_FILE_ALIGN);
+        }
 
     // ── 5. the file ──
     NSMutableData* out = [NSMutableData data];
@@ -767,18 +1010,19 @@ static uint64_t rawSizeOf(NSData* d)
     p32(out, 0); //   the output reproducible
     p32(out, 0); // NumberOfSymbols
     p16(out, PE_OPT_HDR_SIZE);
-    p16(out, PE_CHAR_EXECUTABLE | PE_CHAR_LARGE_ADDRESS);
+    p16(out, PE_CHAR_EXECUTABLE | PE_CHAR_LARGE_ADDRESS | (isDll ? PE_CHAR_DLL : 0));
 
     // Optional header (PE32+).
     p16(out, PE_MAGIC_PE32PLUS);
     p8(out, 14);
     p8(out, 0);                                          // linker version
     p32(out, (uint32_t)alignUp(textLen, PE_FILE_ALIGN)); // SizeOfCode
-    p32(out, (uint32_t)alignUp(rdataLen + dataFileSz, PE_FILE_ALIGN));
+    p32(out, (uint32_t)alignUp(rdataLen + dataFileSz + (hasIface ? iface.length : 0) + reloc.length,
+                               PE_FILE_ALIGN));
     p32(out, 0);                                                 // SizeOfUninitializedData
-    p32(out, (uint32_t)(textRVA + entry.unsignedLongLongValue)); // AddressOfEntryPoint
+    p32(out, (uint32_t)(pseudo.count ? textRVA + prStubOff : entryRVA)); // AddressOfEntryPoint
     p32(out, (uint32_t)textRVA);                                 // BaseOfCode
-    p64(out, PE_IMAGE_BASE);
+    p64(out, imageBase);
     p32(out, PE_SECT_ALIGN);
     p32(out, PE_FILE_ALIGN);
     p16(out, 6);
@@ -788,15 +1032,14 @@ static uint64_t rawSizeOf(NSData* d)
     p16(out, 6);
     p16(out, 0); // subsystem version 6.0
     p32(out, 0); // Win32VersionValue
-    uint64_t sizeOfImage = alignUp(data.length ? dataRVA + data.length
-                                               : rdataRVA + rdataLen,
-                                   PE_SECT_ALIGN);
+    uint64_t sizeOfImage = alignUp(afterRVA, PE_SECT_ALIGN);
     p32(out, (uint32_t)sizeOfImage);
     p32(out, (uint32_t)hdrSz);
-    p32(out, 0); // CheckSum — only DLLs/drivers need one
+    p32(out, 0); // CheckSum — only drivers and boot-time DLLs need one
     p16(out, PE_SUBSYSTEM_CUI);
-    p16(out, 0); // DllCharacteristics: no DYNAMIC_BASE,
-                 //   so the loader honours ImageBase
+    // An executable leaves DYNAMIC_BASE off, so the loader honours ImageBase. A
+    // DLL is relocatable (DYNAMIC_BASE, with HIGH_ENTROPY_VA and NX_COMPAT).
+    p16(out, isDll ? PE_DLLCHAR_DLL : 0);
     p64(out, 0x100000);
     p64(out, 0x1000); // stack reserve / commit
     p64(out, 0x100000);
@@ -805,10 +1048,20 @@ static uint64_t rawSizeOf(NSData* d)
     p32(out, PE_NUM_DIRECTORIES);
     for (int i = 0; i < PE_NUM_DIRECTORIES; i++)
         {
-        if (i == PE_DIR_IMPORT && nImports)
+        if (i == PE_DIR_EXPORT && isDll)
+            {
+            p32(out, (uint32_t)expRVA);
+            p32(out, (uint32_t)(expEnd - expRVA));
+            }
+        else if (i == PE_DIR_IMPORT && nImports)
             {
             p32(out, (uint32_t)descRVA);
             p32(out, (uint32_t)descSz);
+            }
+        else if (i == PE_DIR_BASERELOC && reloc.length)
+            {
+            p32(out, (uint32_t)relocRVA);
+            p32(out, (uint32_t)reloc.length);
             }
         else if (i == PE_DIR_IAT && nImports)
             {
@@ -844,6 +1097,14 @@ static uint64_t rawSizeOf(NSData* d)
     if (data.length)
         sect(".data\0\0\0", data.length, dataRVA, dataFileSz, dataRaw,
              PE_SCN_INITIALIZED_DATA | PE_SCN_MEM_READ | PE_SCN_MEM_WRITE);
+    // The interface is read out of the FILE by a compiler, never by the program,
+    // so the loader may discard it.
+    if (hasIface)
+        sect("xtciface", iface.length, ifaceRVA, iface.length, ifaceRaw,
+             PE_SCN_INITIALIZED_DATA | PE_SCN_MEM_READ | PE_SCN_MEM_DISCARDABLE);
+    if (reloc.length)
+        sect(".reloc\0\0", reloc.length, relocRVA, reloc.length, relocRaw,
+             PE_SCN_INITIALIZED_DATA | PE_SCN_MEM_READ | PE_SCN_MEM_DISCARDABLE);
 
     while (out.length < textRaw)
         p8(out, 0);
@@ -890,16 +1151,123 @@ static uint64_t rawSizeOf(NSData* d)
         p8(out, 0);
         }
 
+    if (isDll)
+        {
+        while (out.length < rdataRaw + (expRVA - rdataRVA))
+            p8(out, 0);
+        // Export Directory Table.
+        p32(out, 0); // ExportFlags
+        p32(out, 0); // TimeDateStamp
+        p16(out, 0);
+        p16(out, 0); // version
+        p32(out, (uint32_t)expDllNameRVA);
+        p32(out, 1); // OrdinalBase
+        p32(out, (uint32_t)exportNames.count);
+        p32(out, (uint32_t)exportNames.count);
+        p32(out, (uint32_t)eatRVA);
+        p32(out, (uint32_t)nptRVA);
+        p32(out, (uint32_t)ordRVA);
+        for (NSString* n in exportNames)
+            p32(out, (uint32_t)(([dataSymbols containsObject:n] ? dataRVA : textRVA)
+                                + symbols[n].unsignedLongLongValue));
+        uint64_t nm = expNamesRVA;
+        for (NSString* n in exportNames)
+            {
+            p32(out, (uint32_t)nm);
+            nm += [n lengthOfBytesUsingEncoding:NSUTF8StringEncoding] + 1;
+            }
+        for (NSUInteger i = 0; i < exportNames.count; i++)
+            p16(out, (uint16_t)i);
+        for (NSString* n in exportNames)
+            {
+            [out appendData:[n dataUsingEncoding:NSUTF8StringEncoding]];
+            p8(out, 0);
+            }
+        [out appendData:[dllName dataUsingEncoding:NSUTF8StringEncoding]];
+        p8(out, 0);
+        }
+
     if (data.length)
         {
         while (out.length < dataRaw)
             p8(out, 0);
         [out appendData:[data subdataWithRange:NSMakeRange(0, (NSUInteger)dataFileSz)]];
         }
+    if (hasIface)
+        {
+        while (out.length < ifaceRaw)
+            p8(out, 0);
+        [out appendData:iface];
+        }
+    if (reloc.length)
+        {
+        while (out.length < relocRaw)
+            p8(out, 0);
+        [out appendData:reloc];
+        }
     // Every section's raw data is FileAlignment-padded; a short final section
     // makes some loaders reject the image.
     while (out.length % PE_FILE_ALIGN)
         p8(out, 0);
+    return out;
+    }
+
+// ── reading a DLL's export names ──────────────────────────────────────────
+// The client side of a DLL link. The export directory's name pointer table is
+// all a linker needs: which names the DLL provides. Walked through the section
+// table because the directory is given as an RVA, not a file offset.
++ (nullable NSArray<NSString*>*)exportNamesOfDLL:(NSString*)path
+    {
+    NSData* d = [NSData dataWithContentsOfFile:path];
+    if (!d)
+        return nil;
+    const uint8_t* b = d.bytes;
+    NSUInteger n = d.length;
+    uint32_t (^r32)(uint64_t) = ^uint32_t(uint64_t o) {
+      return o + 4 <= n ? (uint32_t)(b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | ((uint32_t)b[o + 3] << 24)) : 0;
+    };
+    uint16_t (^r16)(uint64_t) = ^uint16_t(uint64_t o) {
+      return o + 2 <= n ? (uint16_t)(b[o] | (b[o + 1] << 8)) : 0;
+    };
+    if (n < 0x40 || b[0] != 'M' || b[1] != 'Z')
+        return nil;
+    uint32_t pe = r32(0x3C);
+    if (r32(pe) != 0x00004550 || r16(pe + 24) != PE_MAGIC_PE32PLUS)
+        return nil;
+    uint16_t nsect = r16(pe + 6);
+    uint64_t opt = pe + 24;
+    uint64_t secTab = opt + r16(pe + 20);
+    uint32_t expRVA = r32(opt + 112); // data directory 0 in a PE32+ header
+    if (!expRVA)
+        return nil;
+    int64_t (^fileOff)(uint32_t) = ^int64_t(uint32_t rva) {
+      for (uint16_t i = 0; i < nsect; i++)
+          {
+          uint64_t s = secTab + (uint64_t)i * PE_SECT_HDR_SIZE;
+          uint32_t va = r32(s + 12), vsz = r32(s + 8), raw = r32(s + 20);
+          if (rva >= va && rva < va + vsz)
+              return (int64_t)raw + (rva - va);
+          }
+      return -1;
+    };
+    int64_t e = fileOff(expRVA);
+    if (e < 0)
+        return nil;
+    uint32_t nNames = r32(e + 24);
+    int64_t npt = fileOff(r32(e + 32));
+    if (npt < 0)
+        return nil;
+    NSMutableArray<NSString*>* out = [NSMutableArray array];
+    for (uint32_t i = 0; i < nNames; i++)
+        {
+        int64_t s = fileOff(r32(npt + 4ull * i));
+        if (s < 0)
+            return nil;
+        uint64_t k = s;
+        while (k < n && b[k])
+            k++;
+        [out addObject:[[NSString alloc] initWithBytes:b + s length:k - s encoding:NSUTF8StringEncoding] ?: @""];
+        }
     return out;
     }
 
