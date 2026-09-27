@@ -51,6 +51,20 @@ class Sema
     String* _migrateBase;
     String* _fnPackingCallee; // the first packing call seen, or 0
     bool _fnForwardsVarargs;  // a `...` forward was seen
+    // The variadic non-reentrance check (checkVariadicReentrance). A variadic
+    // that runs va_start reads its arguments from the ONE shared pack buffer,
+    // so on a target that packs, another variadic reached from it overwrites
+    // that buffer mid-read. The call graph is recorded as bodies are walked,
+    // by the same `_fn_<sym>` / `_cls_<Class>_<sym>` labels the original uses.
+    bool _nativeVarargs;      // arm64 / arm9: arguments ride the C ABI, no buffer
+    String* _curLabel;        // the label of the body being walked, or 0
+    Map* _callEdges;          // label -> Array of callee labels, first-seen order
+    Map* _labelDisplay;       // label -> the name a message shows for it
+    Map* _variadicLabels;     // labels of the variadics defined in this unit
+    Map* _usesVaList;         // labels of the variadics that run va_start
+    Array* _variadicDecls;    // their declarations, in program order
+    Array* _variadicDeclLabels;
+    Array* _variadicDeclNames;
     bool _rangeIsInitialiser; // inside an ARRAY declaration's initialiser,
                               // the one position a range survives the parser
     Array* _errors;           // of String@
@@ -113,6 +127,15 @@ class Sema
         _migrateBase = (String*)0;
         _fnPackingCallee = (String*)0;
         _fnForwardsVarargs = false;
+        _nativeVarargs = false;
+        _curLabel = (String*)0;
+        _callEdges = new Map();
+        _labelDisplay = new Map();
+        _variadicLabels = new Map();
+        _usesVaList = new Map();
+        _variadicDecls = new Array();
+        _variadicDeclLabels = new Array();
+        _variadicDeclNames = new Array();
         _scopes = new Array();
         _globals = new Map();
         _structs = new Map();
@@ -174,6 +197,10 @@ class Sema
     void setMigrateBase(String* v)
         {
         _migrateBase = v;
+        }
+    void setNativeVarargs(bool v)
+        {
+        _nativeVarargs = v;
         }
 
     // §4.3b: record a category name on an external host — the sorted names
@@ -684,6 +711,7 @@ class Sema
         markAutoSuperInit();
         checkFinalMethods(program);
         typeProgram(program);
+        checkVariadicReentrance();
         }
 
     // ── Pass 2: types ───────────────────────────────────────────────────
@@ -786,6 +814,7 @@ class Sema
         _curClass = owner;
         _curMethod = decl;
         _curReturn = decl.op();
+        _curLabel = callableLabel(decl, owner);
         pushScope();
         // `self` is the receiver: a pointer to the class whose method this is.
         if (owner != 0 && owner.name() != 0)
@@ -881,11 +910,228 @@ class Sema
             e.appendCString("and print that");
             _error(e);
             }
+        noteCallable(decl, owner);
         popScope();
+        _curLabel = (String*)0;
         _curClass = (Node*)0;
         _getterOwner = (String*)0;
         _setterOwner = (String*)0;
         _curReturn = (String*)0;
+        }
+
+    // ── The variadic non-reentrance check ────────────────────────────────
+    // `_fn_<sym>` for a free function, `_cls_<Class>_<sym>` for a method: the
+    // labels the original's call graph uses, so a walk over the two graphs
+    // visits the same names in the same order.
+    String* callableLabel(Node* decl, Node* owner)
+        {
+        String* key = decl.sym() != 0 ? decl.sym() : decl.name();
+        if (owner == 0)
+            return fnLabel(key);
+        return clsLabel(owner.name(), key);
+        }
+
+    String* fnLabel(String* key)
+        {
+        String* l = String.withCString("_fn_");
+        if (key != 0)
+            l.append(key);
+        return l;
+        }
+
+    String* clsLabel(String* cls, String* key)
+        {
+        String* l = String.withCString("_cls_");
+        l.append(cls != 0 ? cls : String.withCString("?"));
+        l.appendByte((u8)'_');
+        if (key != 0)
+            l.append(key);
+        return l;
+        }
+
+    // A call from the body being walked. File scope has no caller to record.
+    void noteCallEdge(String* callee)
+        {
+        if (_curLabel == 0 || callee == 0)
+            return;
+        Array* out = (Array*)_callEdges.get((Hashable*)_curLabel);
+        if (out == 0)
+            {
+            out = new Array();
+            _callEdges.set((Hashable*)_curLabel, (Object*)out);
+            }
+        Vtable.addUnique(out, callee);
+        }
+
+    // After a body: the name its label shows in a message, and — for a
+    // variadic defined here — its place among the check's starting points. A
+    // C import, or a free variadic with no body, passes its arguments by the C
+    // ABI or lives in another unit, so it can clobber nothing of this unit's;
+    // a METHOD counts whatever its body, as in the original.
+    void noteCallable(Node* decl, Node* owner)
+        {
+        if (_curLabel == 0)
+            return;
+        String* shown = String.withCString("");
+        if (owner != 0)
+            {
+            shown.append(owner.name() != 0 ? owner.name() : String.withCString("?"));
+            shown.appendByte((u8)'.');
+            }
+        shown.append(decl.name());
+        _labelDisplay.set((Hashable*)_curLabel, (Object*)shown);
+        if (!decl.hasFlag((u32)NF_VARARGS))
+            return;
+        if (owner == 0)
+            {
+            if (decl.hasFlag((u32)NF_CABI))
+                return;
+            bool hasBody = false;
+            for (u32 i = (u32)0; i < decl.kidCount(); i = i + (u32)1)
+                if (decl.kid(i).kind() == (u16)nkBlock)
+                    hasBody = true;
+            if (!hasBody)
+                return;
+            }
+        _variadicLabels.set((Hashable*)_curLabel, (Object*)Number.with((u32)1));
+        _variadicDecls.add((Object*)decl);
+        _variadicDeclLabels.add((Object*)_curLabel);
+        _variadicDeclNames.add((Object*)shown);
+        }
+
+    // A variadic that runs va_start reads its arguments out of the ONE shared
+    // pack buffer while it runs, and any variadic it reaches — directly or
+    // through ordinary functions — packs its own arguments into that same
+    // buffer. So a variadic that consumes its va_list must not reach another
+    // variadic, nor itself. A pure forwarder (no va_start) is exempt: it never
+    // reads the buffer, which is how Stdio.printfAt hands its arguments on.
+    //
+    // arm64 and arm9 pass variadic arguments by the C ABI and have no shared
+    // buffer, so the check does not apply there.
+    //
+    // The route is the SHORTEST one within five calls, found breadth first
+    // over callees in sorted order, so both compilers name the same chain.
+    void checkVariadicReentrance(void)
+        {
+        if (_nativeVarargs)
+            return;
+        for (u32 d = (u32)0; d < _variadicDecls.count(); d = d + (u32)1)
+            {
+            String* start = (String*)_variadicDeclLabels.get(d);
+            if (_usesVaList.get((Hashable*)start) == 0)
+                continue;
+            Array* chain = shortestVariadicPath(start, (u32)5);
+            if (chain.count() < (u32)2)
+                continue;
+            String* name = (String*)_variadicDeclNames.get(d);
+            String* leaf = (String*)chain.get(chain.count() - (u32)1);
+            bool selfOrMutual = leaf.equals(start);
+            String* msg = String.withCString("variadic '");
+            msg.append(name);
+            if (selfOrMutual)
+                {
+                msg.appendCString("' is transitively recursive — the shared varargs pack buffer at $04B0 cannot hold two live va_lists at once");
+                }
+            else
+                {
+                msg.appendCString("' transitively calls variadic '");
+                msg.append(displayOf(leaf));
+                msg.appendCString("' — both share the pack buffer at $04B0 and would clobber each other");
+                }
+            for (u32 i = (u32)1; i < chain.count(); i = i + (u32)1)
+                {
+                String* step = (String*)chain.get(i);
+                bool last = i == chain.count() - (u32)1;
+                String* shown = (last && selfOrMutual) ? name : displayOf(step);
+                msg.appendCString("\n  note: calls '");
+                msg.append(shown);
+                if (last)
+                    msg.appendCString("' (variadic)");
+                else
+                    msg.appendCString("' which");
+                }
+            _errorAt(msg, (Node*)_variadicDecls.get(d));
+            }
+        }
+
+    String* displayOf(String* label)
+        {
+        String* s = (String*)_labelDisplay.get((Hashable*)label);
+        return s != 0 ? s : label;
+        }
+
+    // Breadth first from `start` to the nearest variadic, or back to `start`
+    // itself (recursion). The chain runs start..leaf; empty when nothing is
+    // reachable within `cap` calls.
+    Array* shortestVariadicPath(String* start, u32 cap)
+        {
+        Array* none = new Array();
+        if (_callEdges.get((Hashable*)start) == 0)
+            return none;
+        Map* parent = new Map();
+        String* selfReturn = String.withCString("__self_return");
+        parent.set((Hashable*)start, (Object*)String.withCString(""));
+        Array* frontier = new Array();
+        frontier.add((Object*)start);
+        String* leaf = (String*)0;
+        for (u32 h = (u32)0; h < cap && leaf == 0; h = h + (u32)1)
+            {
+            Array* next = new Array();
+            for (u32 f = (u32)0; f < frontier.count() && leaf == 0; f = f + (u32)1)
+                {
+                String* caller = (String*)frontier.get(f);
+                Array* edges = (Array*)_callEdges.get((Hashable*)caller);
+                if (edges == 0)
+                    continue;
+                Array* callees = new Array();
+                for (u32 c = (u32)0; c < edges.count(); c = c + (u32)1)
+                    callees.add(edges.get(c));
+                Vtable.sortStrings(callees);
+                for (u32 c = (u32)0; c < callees.count(); c = c + (u32)1)
+                    {
+                    String* callee = (String*)callees.get(c);
+                    if (callee.equals(start))
+                        {
+                        parent.set((Hashable*)selfReturn, (Object*)caller);
+                        leaf = selfReturn;
+                        break;
+                        }
+                    if (parent.get((Hashable*)callee) != 0)
+                        continue;
+                    parent.set((Hashable*)callee, (Object*)caller);
+                    if (_variadicLabels.get((Hashable*)callee) != 0)
+                        {
+                        leaf = callee;
+                        break;
+                        }
+                    next.add((Object*)callee);
+                    }
+                }
+            frontier = next;
+            }
+        if (leaf == 0)
+            return none;
+        // Walk back from the leaf; the start's parent is the empty string.
+        Array* rev = new Array();
+        String* cur = leaf;
+        u32 guard = (u32)0;
+        while (cur != 0 && guard < cap + (u32)2)
+            {
+            guard = guard + (u32)1;
+            rev.add((Object*)(cur.equals(selfReturn) ? start : cur));
+            String* p = (String*)parent.get((Hashable*)cur);
+            if (p == 0 || p.byteLength() == (u32)0)
+                break;
+            cur = p;
+            }
+        Array* chain = new Array();
+        u32 k = rev.count();
+        while (k > (u32)0)
+            {
+            k = k - (u32)1;
+            chain.add(rev.get(k));
+            }
+        return chain;
         }
 
     void typeStmt(Node* n)
@@ -1472,7 +1718,10 @@ class Sema
                 // accepting it.
                 Node* ini = initOverload(cls, n);
                 if (ini != 0)
+                    {
                     n.setSym(ini.sym());
+                    noteCallEdge(clsLabel(n.name(), ini.sym() != 0 ? ini.sym() : ini.name()));
+                    }
                 else
                     reportUnmatchedInit(cls, n);
                 }
@@ -2150,8 +2399,12 @@ class Sema
         if (_curClass != 0)
             {
             Node* m = (Node*)0;
+            Node* mOwner = (Node*)0;
             for (Node* c = _curClass; c != 0 && m == 0; c = parentOf(c))
+                {
                 m = methodOverload(c, n, (u32)0);
+                mOwner = c;
+                }
             // A call that would resolve to the very method being compiled means
             // the FREE function of that name, if there is one: `Math.sqrt`
             // calls the extern `sqrt`, it does not recurse into itself. Only
@@ -2177,6 +2430,7 @@ class Sema
                 checkMisfitArgs(m, n, (u32)0, n.name());
                 n.setTy(m.op());
                 n.setSym(m.sym());
+                noteCallEdge(clsLabel(mOwner.name(), m.sym() != 0 ? m.sym() : m.name()));
                 // An implicit-self call DOES reach the method through the
                 // class's own storage, so it counts as a stack receiver. A
                 // `use`-promoted bare call (below) does not — measured, not
@@ -2294,6 +2548,7 @@ class Sema
                 {
                 n.setTy(firstReturn(fn.op()));
                 n.setSym(fn.sym());
+                noteCallEdge(fnLabel(fn.sym() != 0 ? fn.sym() : n.name()));
                 applyBoxing(n, fn, (u32)0);
                 return;
                 }
@@ -2316,6 +2571,7 @@ class Sema
                 continue;
             n.setTy(m.op());
             n.setSym(m.sym());
+            noteCallEdge(clsLabel(cls.name(), m.sym() != 0 ? m.sym() : m.name()));
             // The static and the demoted C proto can share a symbol name
             // (`printf`), so the lowering is told which class answered.
             if (demotedC)
@@ -2433,7 +2689,13 @@ class Sema
             return false;
         String* ty = (String*)0;
         if (_isOp(nm, "va_start") || _isOp(nm, "va_end"))
+            {
             ty = String.withCString("void");
+            // A variadic that runs va_start CONSUMES its arguments, so it is
+            // one the non-reentrance check has to look at.
+            if (_isOp(nm, "va_start") && _curLabel != 0 && _curMethod != 0 && _curMethod.hasFlag((u32)NF_VARARGS))
+                _usesVaList.set((Hashable*)_curLabel, (Object*)Number.with((u32)1));
+            }
         else if (_isOp(nm, "va_arg_u8"))
             ty = String.withCString("u8");
         else if (_isOp(nm, "va_arg_i8"))
@@ -2822,6 +3084,7 @@ class Sema
                     n.setTy(best.op());
                     n.setSym(best.sym());
                     n.setCls(p.name());
+                    noteCallEdge(clsLabel(p.name(), best.sym() != 0 ? best.sym() : best.name()));
                     return;
                     }
                 p = parentOf(p);
@@ -3067,6 +3330,7 @@ class Sema
             }
         notePackOrForward(n, m, owner);
         n.setSym(m.sym());
+        noteCallEdge(clsLabel(owner2 != 0 ? owner2.name() : owner, m.sym() != 0 ? m.sym() : m.name()));
         rewriteFormat(n, owner);
         // Which KIND of receiver reached this method decides whether its
         // prologue retains self. Only an EXPLICIT receiver counts: a bare call

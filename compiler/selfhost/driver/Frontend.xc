@@ -595,6 +595,9 @@ class FeOptions
         // made BEFORE the slots are assigned, not when they are written out.
         sema.vtable().setLibraryBuild(o.libraryBuild());
         sema.setMigrateBase(migrateBaseOf(o.migrate()));
+        // arm64 and arm9 pass variadic arguments by the C ABI; every other
+        // target shares one pack buffer, which sema guards (bug 273).
+        sema.setNativeVarargs(platformOf(o).equals(String.withCString("arm9")) || platformOf(o).equals(String.withCString("arm64")));
         // Adopt each imported module's vtable numbering — its vtables are emitted,
         // so its slots are authoritative and local numbering continues above them.
         // Protocol numbering is NOT adopted in itable mode (every live multi-module

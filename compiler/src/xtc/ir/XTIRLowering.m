@@ -4765,6 +4765,31 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
                           location:node.location];
         }
 
+    // A negated integer LITERAL is typed by the value it negates to, which can
+    // need more bytes than the literal: `-3000000000` negates a u32 into an
+    // i64, `-200` a u8 into an i16. Negating the literal's own narrower Const
+    // gave a Neg whose operand was narrower than its result, and a back end
+    // that reads the operand at the result's width reads bytes nobody wrote
+    // (arm9 printed -72340175821233664; arm64 emitted `neg xN, wM`). The
+    // literal is materialised at the result's width instead.
+    if (node.op == XTUnaryOpNeg && node.operand.nodeKind == XTASTNodeKindLiteralInt)
+        {
+        XTIRType* litTy = [self irTypeForASTType:node.operand.resolvedType at:node.location];
+        XTIRType* negTy = [self irTypeForASTType:node.resolvedType at:node.location];
+        if (litTy && negTy && XTIRTypeKindIsInteger(litTy.kind) && XTIRTypeKindIsInteger(negTy.kind) && negTy.byteWidth > litTy.byteWidth)
+            {
+            XTIRValue* wide = [self allocateValueOfType:negTy atSite:self.currentBlock];
+            XTIRInsn* cinsn = [[XTIRInsn alloc] initWithOpcode:XTIROpConst
+                                                         result:wide
+                                                       operands:@[ [XTIROperand immIWithType:negTy value:((XTLiteralIntNode*)node.operand).intValue] ]
+                                                         dbgLoc:nil];
+            [self.currentBlock appendInstruction:cinsn];
+            return [self emitInsnOpcode:XTIROpNeg
+                                 result:negTy
+                               operands:@[ [XTIROperand useWithValueId:wide.valueId] ]];
+            }
+        }
+
     XTIRValue* operand = [self lowerExpression:node.operand];
     if (!operand)
         return nil;
