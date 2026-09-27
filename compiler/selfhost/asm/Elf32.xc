@@ -765,11 +765,19 @@ class Elf32DynRel
             if (s.section() == (u32)0)
                 s.setGlobal();
             }
+        // The SECTION symbols a section-relative relocation names (`$sec<N>`
+        // in the assembler) lead the locals.
         Array* ordered = new Array();
         for (u32 i = (u32)0; i < syms.count(); i = i + (u32)1)
             {
             AsmSymbol* s = (AsmSymbol*)syms.get(i);
-            if (!s.isGlobal())
+            if (!s.isGlobal() && Elf32.isSectionSym(s.name()))
+                ordered.add((Object*)s);
+            }
+        for (u32 i = (u32)0; i < syms.count(); i = i + (u32)1)
+            {
+            AsmSymbol* s = (AsmSymbol*)syms.get(i);
+            if (!s.isGlobal() && !Elf32.isSectionSym(s.name()))
                 ordered.add((Object*)s);
             }
         u32 firstGlobal = ordered.count() + (u32)1; // +1 for the null entry
@@ -805,7 +813,8 @@ class Elf32DynRel
         for (u32 i = (u32)0; i < ordered.count(); i = i + (u32)1)
             {
             AsmSymbol* s = (AsmSymbol*)ordered.get(i);
-            strAdd(s.name());
+            if (!Elf32.isSectionSym(s.name()))
+                strAdd(s.name());
             symIndex.set((Hashable*)s.name(), (Object*)Number.with(i + (u32)1));
             }
 
@@ -980,6 +989,12 @@ class Elf32DynRel
         return _out;
         }
 
+    // `$sec<N>`: the assembler's name for section N's own symbol.
+    static bool isSectionSym(String* n)
+        {
+        return n != (String*)0 && n.hasPrefix(String.withCString("$sec"));
+        }
+
     u32 shstrIndexOf(Map* table, string name)
         {
         Object* o = table.get((Hashable*)String.withCString(name));
@@ -1046,6 +1061,17 @@ class Elf32DynRel
             if (s.section() == (u32)3)
                 type = (u32)1;                        // OBJECT
             u32 other = s.hidden() ? (u32)2 : (u32)0; // STV_HIDDEN
+            if (!s.isGlobal() && Elf32.isSectionSym(s.name()))
+                {
+                // A section symbol: no name, the section's start.
+                word((u32)0);
+                word((u32)0);
+                word((u32)0);
+                byte((u32)3); // LOCAL, STT_SECTION
+                byte((u32)0);
+                half(shndx);
+                continue;
+                }
             word(strAdd(s.name()));
             word(value);
             word(size);
@@ -1186,6 +1212,25 @@ class Elf32Object
             {
             u32 e = symOff + i * (u32)16;
             String* nm = Elf32Object.cstr(d, strOff + Elf32Object.rd32(d, e));
+            // A SECTION symbol is what a section-relative relocation names; it
+            // comes back as the assembler's `$sec<N>`.
+            if (i != (u32)0 && ((u32)d.byteAt(e + (u32)12) & (u32)$F) == (u32)3)
+                {
+                u32 sx = Elf32Object.rd16(d, e + (u32)14);
+                u32 ss = (u32)0;
+                if (textIdx != (u32)0 && sx == textIdx)
+                    ss = (u32)1;
+                else if (dataIdx != (u32)0 && sx == dataIdx)
+                    ss = (u32)2;
+                else if (ctorIdx != (u32)0 && sx == ctorIdx)
+                    ss = (u32)4;
+                nm = String.withCString("");
+                if (ss != (u32)0)
+                    {
+                    nm = String.withCString("$sec");
+                    nm.appendFormat("%lu", ss);
+                    }
+                }
             byIndex.add((Object*)nm);
             if (i == (u32)0 || nm.byteLength() == (u32)0)
                 continue; // the null entry

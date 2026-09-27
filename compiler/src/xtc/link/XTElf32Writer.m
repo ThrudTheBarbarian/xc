@@ -156,10 +156,14 @@ static void patchWord(NSMutableData* sec, uint32_t at, uint32_t value, BOOL keep
             s.isGlobal = YES;
 
     // The ELF symbol table requires locals first, and `sh_info` on .symtab is
-    // the index of the first global.
+    // the index of the first global. The SECTION symbols a section-relative
+    // relocation names (`$sec<N>` in the assembler) lead the locals.
     NSMutableArray<XAArm32Symbol*>* ordered = [NSMutableArray array];
     for (XAArm32Symbol* s in symbols)
-        if (!s.isGlobal)
+        if (!s.isGlobal && [s.name hasPrefix:@"$sec"])
+            [ordered addObject:s];
+    for (XAArm32Symbol* s in symbols)
+        if (!s.isGlobal && ![s.name hasPrefix:@"$sec"])
             [ordered addObject:s];
     uint32_t firstGlobal = (uint32_t)ordered.count + 1; // +1 for the null entry
     for (XAArm32Symbol* s in symbols)
@@ -184,7 +188,7 @@ static void patchWord(NSMutableData* sec, uint32_t at, uint32_t value, BOOL keep
     for (NSUInteger i = 0; i < ordered.count; i++)
         {
         NSString* n = ordered[i].name;
-        if (n.length && !strOff[n])
+        if (n.length && !strOff[n] && ![n hasPrefix:@"$sec"])
             {
             strOff[n] = @(strtab.length);
             [strtab appendData:[n dataUsingEncoding:NSUTF8StringEncoding]];
@@ -332,6 +336,17 @@ static void patchWord(NSMutableData* sec, uint32_t at, uint32_t value, BOOL keep
             shndx = ctorIdx;
         uint32_t bind = s.isGlobal ? STB_GLOBAL : STB_LOCAL;
         uint32_t type = s.isFunction ? STT_FUNC : STT_NOTYPE;
+        if (!s.isGlobal && [s.name hasPrefix:@"$sec"])
+            {
+            // A section symbol: no name, the section's start.
+            e32(out, 0);
+            e32(out, 0);
+            e32(out, 0);
+            e8(out, (uint8_t)((STB_LOCAL << 4) | 3 /*STT_SECTION*/));
+            e8(out, 0);
+            e16(out, (uint16_t)shndx);
+            continue;
+            }
         if (s.section == 3)
             {
             // COMMON: the value is the ALIGNMENT and the size the storage, which
@@ -1010,6 +1025,17 @@ static void patchWord(NSMutableData* sec, uint32_t at, uint32_t value, BOOL keep
         {
         uint32_t e = symOff + i * SYM_SZ;
         NSString* nm = @((const char*)(b + strOff + r32(e)));
+        // A SECTION symbol is what a section-relative relocation names; it
+        // comes back as the assembler's `$sec<N>`.
+        if (i && (b[e + 12] & 0xF) == 3)
+            {
+            uint16_t sx = r16(e + 14);
+            uint32_t ss = (textIdx && sx == textIdx)   ? 1
+                          : (dataIdx && sx == dataIdx) ? 2
+                          : (ctorIdx && sx == ctorIdx) ? 4
+                                                       : 0;
+            nm = ss ? [NSString stringWithFormat:@"$sec%u", ss] : @"";
+            }
         [byIndex addObject:nm];
         if (!i || !nm.length)
             continue; // the null entry

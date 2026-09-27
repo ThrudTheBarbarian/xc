@@ -157,6 +157,7 @@ class AsmSymbol
     Array* _bytes;     // Number@ per emitted byte — the .text payload
     Array* _data;      // …and the .data one
     Array* _ctors;     // …and `.section .init_array`, the load-time constructors
+    u32 _secUsed;      // bit N: a relocation is relative to section N
     Array* _syms;      // AsmSymbol@
     Array* _relocs;    // AsmReloc@
     Array* _pool;      // symbols pending a literal-pool word
@@ -486,9 +487,53 @@ class AsmSymbol
         _pass = (u32)1;
         run();
         // Pass 2 encodes, with the same pool placement.
+        _secUsed = (u32)0;
         _pass = (u32)2;
         run();
+        // The section symbols the section-relative relocations name (see
+        // relocTarget), in a fixed order.
+        for (u32 sec = (u32)1; sec <= (u32)4; sec = sec + (u32)1)
+            {
+            if ((_secUsed & ((u32)1 << sec)) == (u32)0)
+                continue;
+            String* nm = String.withCString("$sec");
+            nm.appendFormat("%lu", sec);
+            AsmSymbol* ss = AsmSymbol.named(nm);
+            ss.setSection(sec);
+            _syms.add((Object*)ss);
+            }
         return _bytes;
+        }
+
+    // What an absolute word's relocation names, as `arm-none-eabi-as` has
+    // it: a GLOBAL (or undefined) symbol by name, with the addend in the word;
+    // a LOCAL one as its SECTION, with the symbol's own offset added into the
+    // word — a local symbol is not visible outside the object, so the object
+    // has to say where it is (a local FUNCTION is the exception and keeps its
+    // symbol). The section is named `$sec<N>` here and becomes
+    // the section symbol in an object. Without this every literal-pool word
+    // pointing at a (local) string literal held 0 where the oracle's held the
+    // offset. Returns the name; `_relocWord` is the word to write.
+    u32 _relocWord;
+    String* relocTarget(String* name, u32 word)
+        {
+        _relocWord = word;
+        for (u32 i = (u32)0; i < _syms.count(); i = i + (u32)1)
+            {
+            AsmSymbol* s = (AsmSymbol*)_syms.get(i);
+            if (!s.name().equals(name))
+                continue;
+            // A FUNCTION keeps its own symbol even when local, as the oracle
+            // does (ARM ELF preserves a function symbol for interworking).
+            if (s.section() == (u32)0 || s.section() == (u32)3 || s.isGlobal() || s.isFunction())
+                return name;
+            _relocWord = word + s.value();
+            _secUsed = _secUsed | ((u32)1 << s.section());
+            String* nm = String.withCString("$sec");
+            nm.appendFormat("%lu", s.section());
+            return nm;
+            }
+        return name;
         }
 
     u32 _pass;
@@ -1013,7 +1058,11 @@ class AsmSymbol
                 addend = Arm32.immediateValue(t.substringFromByte(plus + (u32)1).trimmed());
                 }
             if (_pass == (u32)2)
-                _relocs.add((Object*)AsmReloc.with(_section, cursor(), name, (u32)R_ARM_ABS32));
+                {
+                String* target = relocTarget(name, addend);
+                addend = _relocWord;
+                _relocs.add((Object*)AsmReloc.with(_section, cursor(), target, (u32)R_ARM_ABS32));
+                }
             if (_pass == (u32)1)
                 symbolFor(name);
             putByte(addend);
@@ -1049,6 +1098,7 @@ class AsmSymbol
             {
             String* sym = (String*)_pool.get(i);
             u32 site = ((Number*)_poolSites.get(i)).asU32();
+            u32 w0 = (u32)0;
             if (_pass == (u32)2)
                 {
                 // Patch the ldr's 12-bit offset: pool word minus (site + 8).
@@ -1060,12 +1110,14 @@ class AsmSymbol
                 _bytes.set(idx + (u32)1, (Object*)Number.with((w >> 8) & (u32)$FF));
                 _bytes.set(idx + (u32)2, (Object*)Number.with((w >> 16) & (u32)$FF));
                 _bytes.set(idx + (u32)3, (Object*)Number.with((w >> 24) & (u32)$FF));
-                _relocs.add((Object*)AsmReloc.with((u32)1, _pc, sym, (u32)R_ARM_ABS32));
+                String* target = relocTarget(sym, (u32)0);
+                w0 = _relocWord;
+                _relocs.add((Object*)AsmReloc.with((u32)1, _pc, target, (u32)R_ARM_ABS32));
                 }
-            putByte((u32)0);
-            putByte((u32)0);
-            putByte((u32)0);
-            putByte((u32)0);
+            putByte(w0);
+            putByte(w0 >> 8);
+            putByte(w0 >> 16);
+            putByte(w0 >> 24);
             }
         _pool = new Array();
         _poolSites = new Array();
