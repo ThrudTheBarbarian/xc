@@ -2300,6 +2300,7 @@ static BOOL corpusFrontend(NSString *rawSource, NSString *xtPath,
                            NSString *name,
                            NSArray<NSString *> *includePaths,
                            XTPointerPlacement defaultPlacement,
+                           BOOL arm64Target,
                            XTIRModule **outMod, XTIRFunction **outEntry,
                            XTCorpusOutcome *outcome, NSString **msg) {
     *outMod = nil; *outEntry = nil;
@@ -2472,6 +2473,10 @@ static BOOL corpusFrontend(NSString *rawSource, NSString *xtPath,
     // reached the IR lowering, so every fixture that carried it was an ARC
     // build regardless, and the per-fixture directive scan that used to sit
     // here selected a mode that did not exist.
+    // arm64 passes varargs natively (AAPCS), as the driver tells sema and the
+    // lowering; without it the call sites packed __xtc_va_buf while the
+    // callee read registers (bug 219).
+    sema.nativeVarargs = arm64Target;
     @try {
         [sema analyzeProgram:ast];
     } @catch (NSException *e) {
@@ -2491,14 +2496,12 @@ static BOOL corpusFrontend(NSString *rawSource, NSString *xtPath,
 
     XTIRModule *mod = nil;
     @try {
-        // The in-process path lowers ONE module shared by the arm64 and xt6502
-        // backends, so it can't carry a target-specific vtable layout. These
-        // fixtures are all single-module, where the compile-time-subtree downcast is
-        // complete — so lower without the runtime-ancestry parent slot (which xt6502's
-        // banked pointers can't walk). Cross-`.so` ancestry is covered by the driver
-        // (subprocess path) and the dedicated cross-module tests.
-        [XTIRLowering setVtableAncestry:NO];
-        mod = [XTIRLowering lowerProgram:ast moduleName:name diagnostics:diag];
+        // Each target is lowered as the driver lowers it: arm64 with the
+        // vtable ancestry link and native varargs, xt6502 without the link
+        // (its banked pointers cannot walk it) and with the pack buffer.
+        [XTIRLowering setVtableAncestry:arm64Target];
+        mod = [XTIRLowering lowerProgram:ast moduleName:name diagnostics:diag
+                           nativeVarargs:arm64Target];
     } @catch (NSException *e) {
         *outcome = XTCorpusFailLower;
         *msg = [NSString stringWithFormat:@"lower exception: %@", e.reason];
@@ -2783,7 +2786,7 @@ static XTCorpusResult *runFixture(NSString *xtPath, NSString *name) {
         [XTStructType setFieldAlignmentCap:8];   // C natural alignment (blewit #5)
         BOOL armFE = corpusFrontend(sourceForFE, xtPath, name,
             @[@"support/arm64/lib", @"support/generic/lib"],
-            XTPointerPlacementMain,
+            XTPointerPlacementMain, YES,
             &armMod, &armEntry, &armOutcome, &armMsg);
 
         // ── xt6502 frontend (3-byte pointers) ─────────────────────
@@ -2800,13 +2803,19 @@ static XTCorpusResult *runFixture(NSString *xtPath, NSString *name) {
         XTCorpusOutcome xtOutcome = XTCorpusPass; NSString *xtMsg = nil;
         BOOL xtFE = corpusFrontend(sourceForFE, xtPath, name,
             @[@"support/xt6502/lib", @"support/generic/lib"],
-            XTPointerPlacementHeap,
+            XTPointerPlacementHeap, NO,
             &xtMod, &xtEntry, &xtOutcome, &xtMsg);
 
         // Run each backend's pipeline only if its frontend succeeded;
         // otherwise corpusFrontend already set its outcome/message.
         if (armFE) {
+            // The xt6502 front end above set its own widths; the arm64 back end
+            // must run under arm64's (type-width invariant).
+            [XTPointerType setHeapPointerWidth:8];
+            [XTStructType setFieldAlignmentCap:8];
             armOutcome = runArm64Pipeline(armMod, armEntry, fixBuildDir, &armOracled, &armMsg);
+            [XTPointerType setHeapPointerWidth:3];
+            [XTStructType setFieldAlignmentCap:1];
         }
         if (xtFE) {
             xtOutcome = runXt6502Pipeline(xtMod, xtEntry, fixBuildDir, &xtOracled, &xtMsg);
