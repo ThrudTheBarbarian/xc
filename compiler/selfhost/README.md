@@ -1,13 +1,13 @@
-# `selfhost/` — the compiler, written in xtc
+# `selfhost/` — the compiler, written in xc
 
-This tree holds the compiler written in xtc, plus the tools that prove it
+This tree holds the compiler written in xc, plus the tools that prove it
 matches the Objective-C compiler it was ported from.
 
 The `xcc` that ships is built from here, which is the point of self-hosting: a
-downloaded toolchain compiles xtc programs on its own, with no Objective-C
+downloaded toolchain compiles xc programs on its own, with no Objective-C
 compiler present. The Objective-C build in `src/` bootstraps this one and is the
-reference the differentials compare it against. It ships beside `xcc` as
-`xcc-bootstrap` and is never what compiles your code.
+reference the differentials compare it against. It is never installed or
+shipped.
 
 ## Layout
 
@@ -59,7 +59,7 @@ format changes. The original makes the same choice for the same reason.
 ## How a module is proved
 
 Every module has an **oracle** (a flag on the Objective-C `xtc-fe` that dumps
-one stage's output in a canonical text form) and a **driver** in xtc that
+one stage's output in a canonical text form) and a **driver** in xc that
 prints the same form. A harness runs both over every `.xc` file in the tree and
 diffs them **byte for byte**.
 
@@ -90,7 +90,7 @@ branch emits blank lines rather than nothing. A "better" version is a version
 that disagrees.
 
 **Where a port cannot be faithful, the source says so.** Integer literals are
-u32 because xtc has no 64-bit integer; columns count bytes rather than UTF-16
+u32 because xc had no 64-bit integer; columns count bytes rather than UTF-16
 units; three double constants differ in their last mantissa bit because the
 decimal→binary conversion is not correctly rounded. Each of those is a comment
 at the site.
@@ -98,7 +98,7 @@ at the site.
 ## The AST is one class, not forty-seven
 
 `parser/Node.xc` is a single node type carrying a kind and a few general fields,
-where `src/xtc/ast/` has ~47 classes. xtc has no generics, so 47 classes would
+where `src/xtc/ast/` has ~47 classes. xc has no generics, so 47 classes would
 mean 47 downcasts at every visitor site. The harness compares the tree's SHAPE,
 and one dispatch on `kind` is what a later sema pass wants anyway.
 
