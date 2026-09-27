@@ -7140,7 +7140,8 @@ class ClassInfo
             }
         else
             {
-            lo = u16Const((u32)0);
+            // At the count width, as a given bound is (bug 541).
+            lo = countConst((u32)0);
             }
         IRValue* hi = (IRValue*)0;
         if (hiN != 0)
