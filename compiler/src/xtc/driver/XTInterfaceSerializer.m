@@ -277,6 +277,9 @@ static void appendCanonicalJSON(NSMutableString *out, id v) {
                                   @"type": v.declaredType.displayName ?: @"void" }];
         } else if ([d isKindOfClass:[XTProtocolDeclNode class]]) {
             XTProtocolDeclNode *p = (XTProtocolDeclNode *)d;
+            // Another library's protocol, imported: a client that wants it
+            // imports the library that owns it (bug 443).
+            if (p.isExternal) continue;
             NSMutableArray *methods = [NSMutableArray array];
             for (XTMethodDeclNode *m in p.methods) [methods addObject:[self dictForMethod:m inClass:nil]];
             [protocols addObject:@{ @"name": p.protocolName ?: @"", @"methods": methods }];

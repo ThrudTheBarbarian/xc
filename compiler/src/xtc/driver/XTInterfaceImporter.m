@@ -703,7 +703,9 @@ static NSMutableSet<NSString*>* sUnresolved = nil;
         NSMutableArray<XTMethodDeclNode*>* methods = [NSMutableArray array];
         for (NSDictionary* m in (p[@"methods"] ?: @[]))
             [methods addObject:[self methodFrom:m tt:tt protos:protos location:loc]];
-        [decls addObject:[[XTProtocolDeclNode alloc] initWithName:(p[@"name"] ?: @"") methods:methods location:loc]];
+        XTProtocolDeclNode* pd = [[XTProtocolDeclNode alloc] initWithName:(p[@"name"] ?: @"") methods:methods location:loc];
+        pd.isExternal = YES;
+        [decls addObject:pd];
         }
     for (NSDictionary* e in jEnums)
         {

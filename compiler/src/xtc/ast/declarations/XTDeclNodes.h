@@ -683,6 +683,9 @@ typedef NS_ENUM(NSInteger, XTPlacement) {
 @interface XTProtocolDeclNode : XTASTNode
 @property(nonatomic, readonly) NSString* protocolName;
 @property(nonatomic, readonly) NSArray<XTMethodDeclNode*>* methods;
+// Arrived through an imported interface: another library's protocol, which
+// this module's own interface does not re-export.
+@property(nonatomic) BOOL isExternal;
 - (instancetype)initWithName:(NSString*)name
                      methods:(NSArray<XTMethodDeclNode*>*)methods
                     location:(XTSourceLocation*)location;
