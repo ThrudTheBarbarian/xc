@@ -17429,6 +17429,27 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
                     NSUInteger count = at.elementCount ?: items.count;
                     for (NSUInteger i = 0; i < items.count && i < count; i++)
                         {
+                        XTIRValue* idxC = [self emitU16Const:(uint16_t)i];
+                        XTIRValue* ea = [self emitInsnOpcode:XTIROpElementAddr
+                                                      result:elemPtr
+                                                    operands:@[ [XTIROperand useWithValueId:base.valueId],
+                                                                [XTIROperand useWithValueId:idxC.valueId] ]];
+                        if (!ea)
+                            continue;
+                        // A nested brace list for a struct/array element is
+                        // another byte list, not an expression: recurse the way
+                        // a local aggregate initialiser does, so a global
+                        // `Row t[] = { {"a",1}, … }` with a string literal in
+                        // each row lowers (bug 553).
+                        if (!weakElem && items[i].nodeKind == XTASTNodeKindBlock
+                            && (elemAST.kind == XTTypeKindStruct || elemAST.kind == XTTypeKindArray))
+                            {
+                            [self lowerAggregateByteListInitAt:ea
+                                                     declType:elemAST
+                                                         list:(XTBlockNode*)items[i]
+                                                     location:g.location];
+                            continue;
+                            }
                         XTIRValue* ev = [self lowerExpression:items[i]];
                         if (!ev)
                             continue;
@@ -17438,19 +17459,34 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
                                       location:g.location];
                         if (!ev)
                             continue;
-                        XTIRValue* idxC = [self emitU16Const:(uint16_t)i];
-                        XTIRValue* ea = [self emitInsnOpcode:XTIROpElementAddr
-                                                      result:elemPtr
-                                                    operands:@[ [XTIROperand useWithValueId:base.valueId],
-                                                                [XTIROperand useWithValueId:idxC.valueId] ]];
                         // Past the two link words to the payload, as the read does.
-                        if (ea && weakElem)
+                        if (weakElem)
                             ea = [self emitFieldAddr:ea fieldIndex:2 resultType:payloadPtr];
-                        if (ea)
-                            [self emitStore:ea value:ev];
+                        [self emitStore:ea value:ev];
                         }
                     continue;
                     }
+                }
+            // A STRUCT initialiser `{ … }` with a non-foldable element (a
+            // string literal, a symbol address) likewise lowers element-wise
+            // rather than through lowerExpression, which has no Block case
+            // (bug 553).
+            if (g.declaredType.kind == XTTypeKindStruct && [g.declaredType isKindOfClass:[XTStructType class]] && g.initialiser.nodeKind == XTASTNodeKindBlock)
+                {
+                XTIRType* slotTy = [self irTypeForASTTypeQuiet:g.declaredType];
+                if (slotTy)
+                    {
+                    XTIRValue* addr = [self emitInsnOpcode:XTIROpAddrOf
+                                                    result:[XTIRType ptrToType:slotTy window:XTIRWindowUnbanked]
+                                                  operands:@[ [XTIROperand symWithSymbolId:
+                                                                               (XTIRSymbolId)sid.unsignedIntegerValue] ]];
+                    if (addr)
+                        [self lowerAggregateByteListInitAt:addr
+                                                 declType:g.declaredType
+                                                     list:(XTBlockNode*)g.initialiser
+                                                 location:g.location];
+                    }
+                continue;
                 }
             XTIRValue* v = [self lowerExpression:g.initialiser];
             if (!v)

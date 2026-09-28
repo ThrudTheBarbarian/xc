@@ -14401,14 +14401,6 @@ class ClassInfo
                     u32 cnt = arrayCount(aty);
                     for (u32 ei = (u32)0; ei < list.kidCount() && ei < cnt; ei = ei + (u32)1)
                         {
-                        IRValue* ev = lowerExpr(list.kid(ei));
-                        if (_failed)
-                            return;
-                        if (ev == (IRValue*)0)
-                            continue;
-                        ev = coerce(ev, list.kid(ei).ty(), elem);
-                        if (ev == (IRValue*)0)
-                            continue;
                         Array* io = new Array();
                         io.add((Object*)IROperand.immI((i32)ei, String.withCString("U16")));
                         IRValue* idxC = emit(String.withCString("Const"),
@@ -14418,10 +14410,43 @@ class ClassInfo
                         eo.add((Object*)IROperand.useVal(idxC));
                         IRValue* ea = emit(String.withCString("ElementAddr"),
                                            ptrTo(elemIr), eo);
+                        // A nested brace list for a struct/array element is
+                        // another byte list, not an expression, so recurse the
+                        // way a local aggregate initialiser does (bug 553).
+                        if (!weakElem && list.kid(ei).kind() == (u16)nkBlock
+                            && (isArrayLike(elem) || structDeclFor(elem) != (Node*)0))
+                            {
+                            lowerAggregateByteList(ea, elem, list.kid(ei));
+                            if (_failed)
+                                return;
+                            continue;
+                            }
+                        IRValue* ev = lowerExpr(list.kid(ei));
+                        if (_failed)
+                            return;
+                        if (ev == (IRValue*)0)
+                            continue;
+                        ev = coerce(ev, list.kid(ei).ty(), elem);
+                        if (ev == (IRValue*)0)
+                            continue;
                         if (weakElem)
                             ea = fieldAddr(ea, (u32)2, ptrTo(payloadIr));
                         storeThrough(ea, ev);
                         }
+                    continue;
+                    }
+                // A STRUCT initialiser with a non-foldable element (a string
+                // literal, a symbol address) likewise lowers element-wise
+                // rather than through lowerExpr, which has no Block case
+                // (bug 553).
+                if (structDeclFor(aty) != (Node*)0 && g.kid((u32)0).kind() == (u16)nkBlock)
+                    {
+                    Array* sop = new Array();
+                    sop.add((Object*)IROperand.sym(globalSymName(g.name())));
+                    IRValue* addr = emit(String.withCString("AddrOf"), ptrTo(irType(aty)), sop);
+                    lowerAggregateByteList(addr, aty, g.kid((u32)0));
+                    if (_failed)
+                        return;
                     continue;
                     }
                 IRValue* v = lowerExpr(g.kid((u32)0));
