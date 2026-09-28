@@ -65,6 +65,7 @@ EOF
             echo "--- Mach-O: $c built but would not run:"
             head -2 "$WORK/mo/$c.out"; return 1; }
     done
+    mocmp=1
     if cmp -s "$WORK/mo/xcc.out" "$WORK/mo/xcc-xc.out"; then
         echo "--- dwarf-diff [Mach-O/.dSYM]: identical  [$(cat "$WORK/mo/xcc.out")]"
         return 0
@@ -81,11 +82,24 @@ EOF
 [ -x "$BIN/xcc-xc" ] || { echo "!!! $BIN/xcc-xc missing — run 'make production'"; exit 1; }
 
 rc=0
+mocmp=0
 machoCase || rc=1
 
 GEMDIR="${GEMLIB:-}"
 if [ ! -f "$GEMDIR/libGEM.so" ]; then
     echo "  SKIP  ELF case (no $GEMDIR/libGEM.so) — NOT counted as matching"
+    # A skipped case is not a pass, but it is not a reason to say NOTHING
+    # either. The Mach-O probe above runs on the host and is the comparison
+    # most developers here can actually make; this used to `exit` straight out
+    # of the skip, so all-diff saw no "pass=N fail=M" line at all and
+    # tabulated the run BROKEN — a green comparison presented as a red one,
+    # which is the same failure of trust as the reverse. The summary counts
+    # only the comparisons that HAPPENED.
+    echo "--- dwarf-diff: pass=$(( mocmp - rc )) fail=$rc (ELF case SKIPPED) ---"
+    # ...and if the Mach-O probe was skipped too, then nothing was compared,
+    # which this harness's own rule says is not a pass either.
+    [ $(( mocmp + rc )) -gt 0 ] || {
+        echo "!!! dwarf-diff: NOTHING WAS COMPARED — this is not a pass"; exit 1; }
     exit $rc
 fi
 
@@ -135,7 +149,7 @@ fi
 # a run in which BOTH probes agreed was tabulated as a harness that did not
 # run — a green result presented as a red one, which is the same failure of
 # trust as the reverse. Two probes, so two comparisons.
-mopass=$(( 1 - rc )); elfpass=$(( 1 - elffail ))
+mopass=$(( mocmp - rc )); elfpass=$(( 1 - elffail ))
 echo "--- dwarf-diff: pass=$(( mopass + elfpass )) fail=$(( rc + elffail )) ---"
 [ $(( rc + elffail )) -eq 0 ] || exit 1
 exit 0
