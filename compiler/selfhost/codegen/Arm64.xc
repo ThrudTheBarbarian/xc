@@ -3518,11 +3518,21 @@ class Arm64
                     // fixed count. Every variadic call (not just a C import)
                     // places its tail on the stack under the native va_list ABI
                     // (bug 179), so an xc variadic is marked too.
-                    // Under plain AAPCS64 a variadic argument is placed
-                    // exactly like a named one, so there is no tail to mark
-                    // and the ordinary path below is already right.
+                    //
+                    // The ONE exception is a C-ABI import on a target whose C
+                    // convention puts a variadic argument in a register — plain
+                    // AAPCS64, i.e. android. It is an exception precisely
+                    // because the CALLEE is not ours: bionic's printf was
+                    // compiled by clang and reads its variadic arguments out of
+                    // its own register save area, so handing it a stack tail
+                    // would give it nothing. Our OWN variadic functions have no
+                    // such callee: their va_list is this back end's (the first
+                    // incoming STACK argument), so a tail left in registers is
+                    // read from an address the caller never wrote — which is
+                    // what printed garbage on android and nowhere else.
                     i32 fixed = sigParamCount(s.signature());
-                    if (fixed >= (i32)0 && !_aapcs64Abi) vfrom = fixed;
+                    bool cCallee = _aapcs64Abi && s.cabi();
+                    if (fixed >= (i32)0 && !cCallee) vfrom = fixed;
                 }
             }
         }

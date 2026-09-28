@@ -527,19 +527,25 @@ static BOOL arm64IsDirectCallOpcode(XTIROpcode op) {
 // declaration or a DWARF C import); the fixed count is the declared parameter
 // list, whose IR signature carries a trailing Mem.
 + (NSInteger)arm64CVariadicFromForInsn:(XTIRInsn *)insn ctx:(XTArm64FnCtx *)ctx {
-    // Under plain AAPCS64 there is no tail to mark: a variadic argument is
-    // placed exactly like a named one, so the ordinary path already does the
-    // right thing and the Darwin deviation must NOT be applied.
-    if (sArm64Aapcs64Abi) return -1;
     if (!arm64IsDirectCallOpcode(insn.opcode) || insn.operands.count < 2) return -1;
     XTIROperand *callee = insn.operands[0];
     if (callee.kind != XTIROperandKindSym) return -1;
     XTIRSymbol *sym = [ctx.module symbolForId:callee.symbolId];
-    // Every variadic call places its tail on the stack under Darwin's rule —
-    // not just a C import. Since arm64 uses the native AAPCS va_list (bug 179),
-    // an xc variadic (marked `variadic`, not `cabi`) is called the same way, so
-    // its callee's va_start finds the tail where the caller wrote it.
     if (!sym || !sym.attributes[@"variadic"].boolValue) return -1;
+    // Under plain AAPCS64 a C-VARIADIC argument is placed exactly like a named
+    // one — in a register while registers remain — and the tail is not marked.
+    // That is true of a callee that is NOT ours (bionic's printf was compiled
+    // by clang and reads its variadic arguments out of its own register save
+    // area), and only of one: an xtc-BODIED variadic is our function, and our
+    // va_list is this back end's — the first incoming STACK argument. Leaving
+    // ITS tail in registers pointed va_start at an address the caller never
+    // wrote, which is why android printed garbage where arm64 did not.
+    if (sArm64Aapcs64Abi && sym.attributes[@"cabi"].boolValue) return -1;
+    // Every other variadic call places its tail on the stack under that
+    // convention — not just a C import. Since arm64 uses the native AAPCS
+    // va_list (bug 179), an xc variadic (marked `variadic`, not `cabi`) is
+    // called the same way, so its callee's va_start finds the tail where the
+    // caller wrote it.
     NSInteger fixed = (NSInteger)sym.function.paramTypes.count - 1;   // drop Mem
     return fixed >= 0 ? fixed : -1;
 }

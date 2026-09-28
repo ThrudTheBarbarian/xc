@@ -301,14 +301,18 @@ done
 [ $fail = $before ] && echo "PASS  android: libraries import each other, and the two compilers agree"
 before=$fail
 if [ -x "$ADB" ] && [ "$("$ADB" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; then
-    # The printed NUMBERS are not compared: Stdio.printf's variadic arguments
-    # come out wrong on android in any program, library or not (a separate
-    # bug). What is checked is that each app loads its libraries, runs to the
-    # end and prints each line.
+    # The printed NUMBERS are compared, not just the labels. They used to be
+    # skipped: Stdio.printf's variadic arguments came out wrong on android in
+    # any program, library or not (bug 547 — `-A android` switches the code
+    # generator to AAPCS64, and an xc-BODIED variadic reads its tail from a
+    # stack va_list, so the arguments had to stay on the stack rather than
+    # follow the C rule into x0-x7 and the vector registers). Every app here
+    # prints its numbers through that call, so this is the guard: an argument
+    # placed for the wrong reader is a failure, not a comment.
     for app in chainclient chainmany chainrev chainuseonly; do
         got=$(run_adb "$d" "$app"; echo "rc=$?")
         want=WANT_$app
-        [ "$(echo "$got" | sed '$!s/=.*//')" = "$(printf '%s\nrc=0\n' "${!want}" | sed '$!s/=.*//')" ] \
+        [ "$got" = "$(printf '%s\nrc=0\n' "${!want}")" ] \
             || { bad "android $app:"; echo "$got" | head -5 | sed 's/^/        /'; }
     done
     [ $fail = $before ] && echo "PASS  android: run over adb"
