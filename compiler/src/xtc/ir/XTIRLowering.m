@@ -5764,7 +5764,13 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
 
     // Ivar reference shorthand (bare identifier that names an ivar) —
     // route through the same field-store path so writes hit memory.
-    if (self.currentClassInfo && self.currentSelf)
+    //
+    // A local or parameter that SHADOWS an ivar name does not reach here:
+    // the read path (lowerIdentifier) and the ++/-- path both prefer
+    // pinnedLocals / locals to the ivar, so a bare-name write has to prefer
+    // them too or the read and the write would name DIFFERENT storage — the
+    // increment was read from the local and stored into the field (bug 562).
+    if (!self.pinnedLocals[lhs.identName] && !self.locals[lhs.identName] && self.currentClassInfo && self.currentSelf)
         {
         for (XTIRClassInfo* ci = self.currentClassInfo; ci != nil; ci = ci.parent)
             {

@@ -1,0 +1,28 @@
+module "shadow-ivar" {
+  layout 0: size=2 align=1 fields=[(0:Ptr(Void, unbanked))]
+  layout 1: size=6 align=1 fields=[(0:Ptr(Void, unbanked)), (2:I32)]
+  layout 2: size=0 align=1
+  layout 3: size=4 align=1 fields=[(0:Ptr(Void, unbanked)), (2:Ptr(Void, unbanked))]
+  symbol C$shadowLocal: function (Ptr(Agg(1), unbanked)) -> I32
+    attributes: { banked: false, cloaked: false, static: false, variadic: false }
+  symbol C$shadowParam: function (Ptr(Agg(1), unbanked), I32) -> I32
+    attributes: { banked: false, cloaked: false, static: false, variadic: false }
+  function C$shadowLocal(%0: Ptr(Agg(1), unbanked), %1: Mem) -> (I32, Mem) {
+    bb_entry:
+      preds: -
+      %2:U8 = Const #10:U8
+      %3:I32 = ZExt %2
+      %4:U8 = Const #5:U8
+      %5:I32 = ZExt %4
+      %6:I32 = Add %3, %5
+      Return %6, %1
+  }
+  function C$shadowParam(%0: Ptr(Agg(1), unbanked), %1: I32, %2: Mem) -> (I32, Mem) {
+    bb_entry:
+      preds: -
+      %3:U8 = Const #1:U8
+      %4:I32 = ZExt %3
+      %5:I32 = Add %1, %4
+      Return %5, %2
+  }
+}

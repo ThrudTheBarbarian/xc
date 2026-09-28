@@ -4925,16 +4925,26 @@ class ClassInfo
         IRValue* v = lowerExpr(n.kid((u32)1));
         if (_failed)
             return (IRValue*)0;
+        // A name that is bound as a LOCAL or PARAMETER never reaches the ivar
+        // paths below, however the ivar is spelled. The READ side already
+        // prefers the binding (lowerIdentifier checks _locals before the ivar),
+        // so letting the WRITE fall through to the ivar would name two
+        // different pieces of storage for one name — the value was read from
+        // the local and stored into the field (bug 562, the same fix the
+        // reference carries in lowerAssignExpr).
+        bool nameIsLocal = pinOf(lhs.name()) != 0
+                           || _locals.get((Hashable*)lhs.name()) != 0
+                           || _localTypes.get((Hashable*)lhs.name()) != 0;
         // An IVAR is memory, so its write is a Store — the name has no SSA
         // binding to rebind.
-        if (_curClass != 0 && staticIvarFor(_curClass, lhs.name()) != 0)
+        if (!nameIsLocal && _curClass != 0 && staticIvarFor(_curClass, lhs.name()) != 0)
             {
             String* sty = staticIvarTypeFor(_curClass, lhs.name());
             IRValue* sv = coerce(v, n.kid((u32)1).ty(), sty);
             storeGlobalARC(staticIvarFor(_curClass, lhs.name()), sty, sv, n.kid((u32)1));
             return sv;
             }
-        if (ivarIndexOf(lhs.name()) >= (i32)0)
+        if (!nameIsLocal && ivarIndexOf(lhs.name()) >= (i32)0)
             {
             String* ity = (String*)_curClass.ivarType().get((Hashable*)lhs.name());
             IRValue* iv = coerce(v, n.kid((u32)1).ty(), ity);
