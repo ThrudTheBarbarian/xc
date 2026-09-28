@@ -136,6 +136,12 @@ u16 scores[8] = {100, 87};               // remaining 6 slots zero-filled
 Array size is part of the type; with an initialiser present the size in `[ ]` may
 be omitted.
 
+Arrays are one-dimensional. A second `[ ]` on the same declarator is a parse
+error — `i32 g[2][3];` is rejected at the second bracket, in a global position
+and in a local one alike — so a rectangular table is flattened by hand and
+indexed `row * width + col`. (Heap arrays from `new T[N]` are one-dimensional
+for the same reason.)
+
 ### Range initialiser
 
 Fixed-size arrays with an integer element type also accept a range:
