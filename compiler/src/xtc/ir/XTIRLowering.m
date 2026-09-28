@@ -3328,22 +3328,15 @@ static uint32_t xtProtocolId(NSString* name)
         if (!dstAST || !srcAST)
             continue;
         // Pointers/aggregates are passed as-is (a `^`/`@` arg needs no int ext);
-        // only scalar integer width/sign differences need a cast.
+        // only scalar width/sign/domain differences need a cast.
         if (dstAST.kind == XTTypeKindPointer || dstAST.kind == XTTypeKindStruct || dstAST.kind == XTTypeKindVoid)
             continue;
         XTIRType* dstIR = [self irTypeForASTType:dstAST at:node.location];
         if (!dstIR || dstIR.kind == XTIRTypeKindPtr || dstIR.kind == XTIRTypeKindAgg || dstIR.kind == XTIRTypeKindVoid)
             continue;
-        NSUInteger srcW = srcAST.byteWidth, dstW = dstIR.byteWidth;
-        BOOL srcSgn = srcAST.isSigned, dstSgn = XTIRTypeKindIsSigned(dstIR.kind);
-        if (srcW == dstW && srcSgn == dstSgn)
-            continue;
-        XTIROpcode op = dstW > srcW   ? (srcSgn ? XTIROpSExt : XTIROpZExt)
-                        : dstW < srcW ? XTIROpTrunc
-                                      : XTIROpBitcast;
-        XTIRValue* cv = [self emitInsnOpcode:op
-                                      result:dstIR
-                                    operands:@[ [XTIROperand useWithValueId:((XTIRValue*)args[k]).valueId] ]];
+        XTIRValue* cv = [self coerceScalarValue:args[k]
+                                    fromASTType:srcAST
+                                        toIRType:dstIR];
         if (cv)
             args[k] = cv;
         }
@@ -7453,6 +7446,61 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
                        operands:@[ [XTIROperand useWithValueId:v.valueId] ]];
     }
 
+/****************************************************************************
+|* Coerce a scalar call argument (or any value) `av` to the callee's IR
+|* parameter type `dstIR`, given the source's AST type `srcAST`.
+|*
+|* This is the INT/FLOAT-aware counterpart of the inline integer width/sign
+|* adjuster that the method-call sites used to carry. Crossing between the
+|* integer and float domains is a CONVERSION — the bit pattern changes
+|* completely — not a resize, so a widening ZExt would hand the callee an
+|* integer's bit pattern where it reads a float (fadd(6.0, (u16)3) saw 3,
+|* not 3.0). In-domain float widen/narrow is FpExt/FpTrunc; integer
+|* width/sign adjust stays SExt/ZExt/Trunc/Bitcast. Mirrors the free-
+|* function call path and the port's unified coerceArg.
+|*
+|* Returns `av` unchanged when no coercion is needed, or nil if an emit
+|* fails (callers keep the old value on nil).
+\****************************************************************************/
+- (nullable XTIRValue*)coerceScalarValue:(XTIRValue*)av
+                             fromASTType:(XTType*)srcAST
+                                 toIRType:(XTIRType*)dstIR
+    {
+    if (!av || !srcAST || !dstIR)
+        return av;
+    if (dstIR.kind == XTIRTypeKindVoid || dstIR.kind == XTIRTypeKindPtr)
+        return av;
+    BOOL srcFlt = av.type && XTIRTypeKindIsFloating(av.type.kind);
+    BOOL dstFlt = XTIRTypeKindIsFloating(dstIR.kind);
+    if (srcFlt || dstFlt)
+        {
+        XTIROpcode fop = 0;
+        if (srcFlt && dstFlt)
+            {
+            if (av.type.byteWidth == dstIR.byteWidth)
+                return av;
+            fop = (dstIR.byteWidth > av.type.byteWidth) ? XTIROpFpExt : XTIROpFpTrunc;
+            }
+        else if (dstFlt)
+            fop = srcAST.isSigned ? XTIROpSIToFp : XTIROpUIToFp;
+        else
+            fop = XTIRTypeKindIsSigned(dstIR.kind) ? XTIROpFpToSI : XTIROpFpToUI;
+        return [self emitInsnOpcode:fop
+                             result:dstIR
+                           operands:@[ [XTIROperand useWithValueId:av.valueId] ]];
+        }
+    NSUInteger srcW = srcAST.byteWidth, dstW = dstIR.byteWidth;
+    BOOL srcSgn = srcAST.isSigned, dstSgn = XTIRTypeKindIsSigned(dstIR.kind);
+    if (srcW == dstW && srcSgn == dstSgn)
+        return av;
+    XTIROpcode op = dstW > srcW   ? (srcSgn ? XTIROpSExt : XTIROpZExt)
+                    : dstW < srcW ? XTIROpTrunc
+                                  : XTIROpBitcast;
+    return [self emitInsnOpcode:op
+                         result:dstIR
+                       operands:@[ [XTIROperand useWithValueId:av.valueId] ]];
+    }
+
 - (nullable XTIRValue*)lowerMethodCallExpr:(XTMethodCallExprNode*)node
     {
     // Sema found the "method" was a FIELD holding something callable and
@@ -7551,16 +7599,9 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
                     [self widenBoundArgAt:i in:args ofASTType:srcAST toAgg:dstIR];
                     continue;
                     }
-                NSUInteger srcW = srcAST.byteWidth, dstW = dstIR.byteWidth;
-                BOOL srcSgn = srcAST.isSigned, dstSgn = XTIRTypeKindIsSigned(dstIR.kind);
-                if (srcW == dstW && srcSgn == dstSgn)
-                    continue;
-                XTIROpcode op = dstW > srcW   ? (srcSgn ? XTIROpSExt : XTIROpZExt)
-                                : dstW < srcW ? XTIROpTrunc
-                                              : XTIROpBitcast;
-                XTIRValue* cv = [self emitInsnOpcode:op
-                                              result:dstIR
-                                            operands:@[ [XTIROperand useWithValueId:((XTIRValue*)args[i]).valueId] ]];
+                XTIRValue* cv = [self coerceScalarValue:args[i]
+                                            fromASTType:srcAST
+                                                toIRType:dstIR];
                 if (cv)
                     args[i] = cv;
                 }
@@ -7792,16 +7833,9 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
                 [self widenBoundArgAt:i in:args ofASTType:srcAST toAgg:dstIR];
                 continue;
                 }
-            NSUInteger srcW = srcAST.byteWidth, dstW = dstIR.byteWidth;
-            BOOL srcSgn = srcAST.isSigned, dstSgn = XTIRTypeKindIsSigned(dstIR.kind);
-            if (srcW == dstW && srcSgn == dstSgn)
-                continue;
-            XTIROpcode op = dstW > srcW   ? (srcSgn ? XTIROpSExt : XTIROpZExt)
-                            : dstW < srcW ? XTIROpTrunc
-                                          : XTIROpBitcast;
-            XTIRValue* cv = [self emitInsnOpcode:op
-                                          result:dstIR
-                                        operands:@[ [XTIROperand useWithValueId:((XTIRValue*)args[i]).valueId] ]];
+            XTIRValue* cv = [self coerceScalarValue:args[i]
+                                        fromASTType:srcAST
+                                            toIRType:dstIR];
             if (cv)
                 args[i] = cv;
             }
@@ -8167,16 +8201,9 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
                         [self widenBoundArgAt:i in:ctorArgs ofASTType:srcAST toAgg:dstIR];
                         continue;
                         }
-                    NSUInteger srcW = srcAST.byteWidth, dstW = dstIR.byteWidth;
-                    BOOL srcSgn = srcAST.isSigned, dstSgn = XTIRTypeKindIsSigned(dstIR.kind);
-                    if (srcW == dstW && srcSgn == dstSgn)
-                        continue;
-                    XTIROpcode op = dstW > srcW   ? (srcSgn ? XTIROpSExt : XTIROpZExt)
-                                    : dstW < srcW ? XTIROpTrunc
-                                                  : XTIROpBitcast;
-                    XTIRValue* cv = [self emitInsnOpcode:op
-                                                  result:dstIR
-                                                operands:@[ [XTIROperand useWithValueId:((XTIRValue*)ctorArgs[i]).valueId] ]];
+                    XTIRValue* cv = [self coerceScalarValue:ctorArgs[i]
+                                                fromASTType:srcAST
+                                                    toIRType:dstIR];
                     if (cv)
                         ctorArgs[i] = cv;
                     }
@@ -9223,16 +9250,9 @@ static const NSUInteger kVarargSlotBytes = 8;
                         [self widenBoundArgAt:pIdx in:margs ofASTType:srcAST toAgg:dstIR];
                         continue;
                         }
-                    NSUInteger srcW = srcAST.byteWidth, dstW = dstIR.byteWidth;
-                    BOOL srcSgn = srcAST.isSigned, dstSgn = XTIRTypeKindIsSigned(dstIR.kind);
-                    if (srcW == dstW && srcSgn == dstSgn)
-                        continue;
-                    XTIROpcode op = dstW > srcW   ? (srcSgn ? XTIROpSExt : XTIROpZExt)
-                                    : dstW < srcW ? XTIROpTrunc
-                                                  : XTIROpBitcast;
-                    XTIRValue* cv = [self emitInsnOpcode:op
-                                                  result:dstIR
-                                                operands:@[ [XTIROperand useWithValueId:((XTIRValue*)margs[pIdx]).valueId] ]];
+                    XTIRValue* cv = [self coerceScalarValue:margs[pIdx]
+                                                fromASTType:srcAST
+                                                    toIRType:dstIR];
                     if (cv)
                         margs[pIdx] = cv;
                     }
@@ -9351,16 +9371,9 @@ static const NSUInteger kVarargSlotBytes = 8;
                         [self widenBoundArgAt:i in:uargs ofASTType:srcAST toAgg:dstIR];
                         continue;
                         }
-                    NSUInteger srcW = srcAST.byteWidth, dstW = dstIR.byteWidth;
-                    BOOL srcSgn = srcAST.isSigned, dstSgn = XTIRTypeKindIsSigned(dstIR.kind);
-                    if (srcW == dstW && srcSgn == dstSgn)
-                        continue;
-                    XTIROpcode op = dstW > srcW   ? (srcSgn ? XTIROpSExt : XTIROpZExt)
-                                    : dstW < srcW ? XTIROpTrunc
-                                                  : XTIROpBitcast;
-                    XTIRValue* cv = [self emitInsnOpcode:op
-                                                  result:dstIR
-                                                operands:@[ [XTIROperand useWithValueId:((XTIRValue*)uargs[i]).valueId] ]];
+                    XTIRValue* cv = [self coerceScalarValue:uargs[i]
+                                                fromASTType:srcAST
+                                                    toIRType:dstIR];
                     if (cv)
                         uargs[i] = cv;
                     }

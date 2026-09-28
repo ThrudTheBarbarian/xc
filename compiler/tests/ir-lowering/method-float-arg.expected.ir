@@ -1,0 +1,35 @@
+module "method-float-arg" {
+  layout 0: size=2 align=1 fields=[(0:Ptr(Void, unbanked))]
+  layout 1: size=6 align=1 fields=[(0:Ptr(Void, unbanked)), (2:I32)]
+  layout 2: size=0 align=1
+  layout 3: size=4 align=1 fields=[(0:Ptr(Void, unbanked)), (2:Ptr(Void, unbanked))]
+  symbol C$m: function (Ptr(Agg(1), unbanked), F64) -> F64
+    attributes: { banked: false, cloaked: false, static: false, variadic: false }
+  symbol C$run: function (Ptr(Agg(1), unbanked), F32, I32, U32) -> F64
+    attributes: { banked: false, cloaked: false, static: false, variadic: false }
+  function C$m(%0: Ptr(Agg(1), unbanked), %1: F64, %2: Mem) -> (F64, Mem) {
+    bb_entry:
+      preds: -
+      Return %1, %2
+  }
+  function C$run(%0: Ptr(Agg(1), unbanked), %1: F32, %2: I32, %3: U32, %4: Mem) -> (F64, Mem) {
+    bb_entry:
+      preds: -
+      %5:F32 = Const #fp4000000000000000:F32
+      %6:F64 = FpExt %5
+      %7:F64, %8 = Call @C$m, [%0, %6], CallConv::Standard, %4
+      %9:F64 = Const #fp4000000000000000:F64
+      %10:F64, %11 = Call @C$m, [%0, %9], CallConv::Standard, %8
+      %12:F64 = FpExt %1
+      %13:F64, %14 = Call @C$m, [%0, %12], CallConv::Standard, %11
+      %15:F64 = SIToFp %2
+      %16:F64, %17 = Call @C$m, [%0, %15], CallConv::Standard, %14
+      %18:F64 = UIToFp %3
+      %19:F64, %20 = Call @C$m, [%0, %18], CallConv::Standard, %17
+      %21:F64 = FAdd %7, %10
+      %22:F64 = FAdd %21, %13
+      %23:F64 = FAdd %22, %16
+      %24:F64 = FAdd %23, %19
+      Return %24, %20
+  }
+}
