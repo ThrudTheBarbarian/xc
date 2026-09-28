@@ -3041,14 +3041,16 @@ class Parser
             advance();
             Node* n = mk((u16)nkSizeof);
             bool paren = match((u16)tokLParen);
-            // `sizeof(P)` where P names a type reads as a TYPE, not as an
-            // expression: inside the parens, an identifier followed by `)` or
-            // by a pointer star can only be a type name.
-            bool bareTypeName = check((u16)tokIdentifier)
-                             && (checkAt((u32)1, (u16)tokRParen)
-                                 || isPointerSigil(peek((u32)1).type())
-                                 || checkAt((u32)1, (u16)tokLBracket));
-            if (looksLikeType() || isTypeKeywordToken(curType()) || bareTypeName) {
+            // `sizeof(T)` where T names a type is a size query; `sizeof(x)`
+            // where x is a variable is a size-of-an-expression. Same test as a
+            // cast, and for the same reason: a bare identifier is a type only
+            // when the unit declared it as one. The old local rule here read
+            // ANY identifier followed by `)` as a type, so `sizeof(k)` parsed
+            // `k` as a type name, no such type resolved, and the size came out
+            // 0 — for every variable and every array (bug 560). The reference
+            // has no local rule; it calls its cast predicate, which is what
+            // `looksLikeCast` mirrors.
+            if (looksLikeCast()) {
                 n.setName(parseTypeSpelling());
             } else {
                 n.setName(String.withCString("-"));

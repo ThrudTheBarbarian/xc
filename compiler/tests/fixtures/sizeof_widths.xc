@@ -31,4 +31,18 @@ void main()
     // 6 — 3-byte ptr rounds the 5-byte body up to 6 either way).
     u16 padded = ((ptr + 2 + ptr - 1) / ptr) * ptr;
     if (pst == padded)   Stdio.printf("struct-sum=ok\n"); else Stdio.printf("struct-sum=BAD\n");
+
+    // sizeof of an EXPRESSION, not a type. A bare identifier inside `sizeof(…)`
+    // used to be read as a TYPE name on the port, so `sizeof(one)` resolved no
+    // type and came back 0 — while `sizeof(one + 1)` and `sizeof(f())` were
+    // right, because those are not a lone identifier (bug 560). A local, an
+    // array and a struct value are the three shapes that failed.
+    u8  one = 0;
+    u16 pair[2];
+    P   pp;
+    if (sizeof(one) == 1 && sizeof(pair) == (u16)(2 * sizeof(u16)) && sizeof(pp) == pst)
+        Stdio.printf("expr=ok\n");
+    else
+        Stdio.printf("expr=BAD %d %d %d\n",
+                     (i32)sizeof(one), (i32)sizeof(pair), (i32)sizeof(pp));
 }
