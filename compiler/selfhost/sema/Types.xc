@@ -162,7 +162,8 @@ class Types
         }
 
     // The narrowest type that holds a value — the analyser's
-    // `inferTypeFromLiteral` (visitLiteralInt), ladder for ladder.
+    // `visitLiteralInt`, ladder for ladder. This types a LITERAL WRITTEN IN
+    // THE SOURCE, so it reaches u64/i64: `5000000000` is a u64.
     //
     // This used to be TWO doors, because the payload was an i32: a literal that
     // arrived negative could only be a large positive that had overflowed into
@@ -195,6 +196,31 @@ class Types
         if (v >= (i64)-2147483648)
             return String.withCString("i32");
         return String.withCString("i64");
+        }
+
+    // The analyser's OTHER integer ladder: `inferTypeFromLiteral:`, which types
+    // the RESULT of a constant FOLD (and an `auto` declaration's initialiser).
+    // It is the same ladder as forIntLiteral except that it STOPS AT 32 BITS —
+    // a folded `1000000 * 1000000` is a u32 even though the value needs 40
+    // bits, because the fold's type came from a 32-bit rung and nothing above
+    // it exists. The VALUE is still carried in full (bug 198: the fold is done
+    // in 64 bits); only the type it lands on is capped, which is what keeps
+    // the two compilers' trees byte-identical.
+    static String* forFoldedValue(i64 v)
+        {
+        if (v >= (i64)0)
+            {
+            if (v <= (i64)255)
+                return String.withCString("u8");
+            if (v <= (i64)65535)
+                return String.withCString("u16");
+            return String.withCString("u32");
+            }
+        if (v >= (i64)-128)
+            return String.withCString("i8");
+        if (v >= (i64)-32768)
+            return String.withCString("i16");
+        return String.withCString("i32");
         }
 
     static bool _is(String* s, string lit)

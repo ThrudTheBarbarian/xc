@@ -761,7 +761,6 @@ class Sema
             u16 k = d.kind();
             if (k == (u16)nkVariableDecl)
                 {
-                d.setTy(d.op());
                 // A global's INITIALISER is an expression like any other and
                 // gets typed like one — `u8 g = 0;` types that 0.
                 //
@@ -778,6 +777,32 @@ class Sema
                     typeExpr(d.kid(j));
                 popScope();
                 _rangeIsInitialiser = saveRange;
+                // `auto g = expr;` — the type is the initialiser's, now that
+                // the initialiser HAS one. The declaration is stamped and
+                // registered here rather than in the forward-reference
+                // pre-pass, which runs before any expression is typed and so
+                // has nothing to infer from (see the pre-pass). The reference
+                // does the same: an auto global skips that pre-pass, is given
+                // its initialiser's type, and is defined under it. Before this
+                // the word "auto" stayed in the tree and lowering refused the
+                // declaration outright — `unsupported: type auto` — where the
+                // reference compiled and ran it.
+                if (_isOp(d.op(), "auto") && d.kidCount() > (u32)0)
+                    {
+                    String* inferred = d.kid((u32)0).ty();
+                    // The initialiser's own type, or — with no type on the
+                    // node, as for a literal the walk left alone — the same
+                    // capped ladder the reference's inferTypeFromLiteral:
+                    // walks, then u8 for anything else.
+                    if (inferred == 0 && d.kid((u32)0).kind() == (u16)nkInt)
+                        inferred = Types.forFoldedValue(d.kid((u32)0).num());
+                    if (inferred == 0)
+                        inferred = String.withCString("u8");
+                    d.setOp(inferred);
+                    if (d.name() != 0)
+                        _globals.set((Hashable*)d.name(), (Object*)inferred);
+                    }
+                d.setTy(d.op());
                 }
             else if (k == (u16)nkFunctionDecl)
                 {
@@ -1811,7 +1836,12 @@ class Sema
             v = (a != b) ? (i64)1 : (i64)0;
         else
             return (String*)0;
-        return Types.forIntLiteral(v);
+        // The folded RESULT's type, and so the CAPPED ladder the reference's
+        // foldBinaryExpr uses (`inferTypeFromLiteral:`): a folded constant is
+        // 32-bit at the widest, whatever the value, so that both compilers put
+        // the same type on the node. A literal WRITTEN in the source is typed
+        // by forIntLiteral instead, where u64/i64 are reachable.
+        return Types.forFoldedValue(v);
         }
 
     // The full-precision integer value of a wholly-constant expression, true on
@@ -2002,8 +2032,9 @@ class Sema
                 }
             if (ok)
                 {
-                // Same widen-to-operands guard as the block above (bug 180).
-                String* ft2 = Types.forValue(v); // folded: may be negative
+                // Same widen-to-operands guard as the block above (bug 180),
+                // and the same capped ladder for the folded value.
+                String* ft2 = Types.forFoldedValue(v); // folded: may be negative
                 String* opw = Types.widen(n.kid((u32)0).ty(), n.kid((u32)1).ty());
                 if (opw != 0 && Types.byteWidth(opw) > Types.byteWidth(ft2))
                     ft2 = opw;
@@ -5715,20 +5746,32 @@ class Sema
                 // scalar's write landed in the array's element 0. Identical
                 // redeclarations still merge (a header imported down two
                 // paths is ordinary); only a DIFFERENT type is refused.
-                String* priorTy = (String*)_globals.get((Hashable*)d.name());
-                if (priorTy != (String*)0 && d.op() != (String*)0
-                    && !priorTy.equals(d.op()))
+                //
+                // `auto` is not a type — it is FILLED IN from the initialiser
+                // — and the initialiser has no type yet, so an auto global
+                // cannot be registered here. It is inferred and registered
+                // where the declaration is typed (typeProgram), which is what
+                // the reference does with the same pre-pass: an auto global is
+                // left out of it and defined on the ordinary path. Registering
+                // it here put the word "auto" in the global table and every
+                // use of it lowered as an unsupported type.
+                if (d.op() == (String*)0 || !_isOp(d.op(), "auto"))
                     {
-                    String* m = String.withCString("global '");
-                    m.append(d.name());
-                    m.appendCString("' is declared twice in this unit with different types: '");
-                    m.append(priorTy);
-                    m.appendCString("' and '");
-                    m.append(d.op());
-                    m.appendCString("' — they would share one object, and a write through one would be read through the other");
-                    _errorAt(m, d);
+                    String* priorTy = (String*)_globals.get((Hashable*)d.name());
+                    if (priorTy != (String*)0 && d.op() != (String*)0
+                        && !priorTy.equals(d.op()))
+                        {
+                        String* m = String.withCString("global '");
+                        m.append(d.name());
+                        m.appendCString("' is declared twice in this unit with different types: '");
+                        m.append(priorTy);
+                        m.appendCString("' and '");
+                        m.append(d.op());
+                        m.appendCString("' — they would share one object, and a write through one would be read through the other");
+                        _errorAt(m, d);
+                        }
+                    _globals.set((Hashable*)d.name(), (Object*)d.op());
                     }
-                _globals.set((Hashable*)d.name(), (Object*)d.op());
                 }
             else if (k == (u16)nkEnumDecl)
                 {
