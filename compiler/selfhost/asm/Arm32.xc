@@ -1094,15 +1094,27 @@ class AsmSymbol
             _poolSites = new Array();
             return;
             }
+        // ONE WORD PER DISTINCT EXPRESSION, not one per load. GNU as reuses a
+        // pool entry when the same `=<expr>` is loaded again inside the same
+        // pool, so loading one symbol twice costs ONE word; this emitted a
+        // word per LOAD, and every pool after such a pair sat four bytes too
+        // far along. That is what as9-diff saw as three fixtures whose .text
+        // differed from the oracle's — and a pool that is the wrong size is
+        // not cosmetic: every label placed after it moves with it.
+        Map* seen = new Map();
         for (u32 i = (u32)0; i < _pool.count(); i = i + (u32)1)
             {
             String* sym = (String*)_pool.get(i);
             u32 site = ((Number*)_poolSites.get(i)).asU32();
+            Number* prior = (Number*)seen.get((Hashable*)sym);
+            // The word this load must target: one already in this pool for the
+            // same expression, or the one about to be emitted.
+            u32 wordAt = (prior == (Number*)0) ? _pc : prior.asU32();
             u32 w0 = (u32)0;
             if (_pass == (u32)2)
                 {
                 // Patch the ldr's 12-bit offset: pool word minus (site + 8).
-                u32 disp = _pc - (site + (u32)8);
+                u32 disp = wordAt - (site + (u32)8);
                 u32 idx = site;
                 u32 w = ((Number*)_bytes.get(idx)).asU32() | (((Number*)_bytes.get(idx + (u32)1)).asU32() << 8) | (((Number*)_bytes.get(idx + (u32)2)).asU32() << 16) | (((Number*)_bytes.get(idx + (u32)3)).asU32() << 24);
                 w = (w & ~(u32)$FFF) | (disp & (u32)$FFF);
@@ -1110,6 +1122,12 @@ class AsmSymbol
                 _bytes.set(idx + (u32)1, (Object*)Number.with((w >> 8) & (u32)$FF));
                 _bytes.set(idx + (u32)2, (Object*)Number.with((w >> 16) & (u32)$FF));
                 _bytes.set(idx + (u32)3, (Object*)Number.with((w >> 24) & (u32)$FF));
+                }
+            if (prior != (Number*)0)
+                continue; // reuses the word; nothing more to emit for this load
+            seen.set((Hashable*)sym, (Object*)Number.with(_pc));
+            if (_pass == (u32)2)
+                {
                 String* target = relocTarget(sym, (u32)0);
                 w0 = _relocWord;
                 _relocs.add((Object*)AsmReloc.with((u32)1, _pc, target, (u32)R_ARM_ABS32));
