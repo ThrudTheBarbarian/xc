@@ -316,6 +316,11 @@
 - (void)escClassifyAssignTarget:(XTASTNode*)lhs
                          origin:(NSString*)origin
                        location:(XTSourceLocation*)loc;
+- (BOOL)statementCanFallThrough:(nullable XTASTNode*)stmt;
+- (void)checkReturnReachabilityFor:(nullable NSString*)funcName
+                        returnTypes:(nullable NSArray<XTType*>*)returnTypes
+                              body:(nullable XTASTNode*)body
+                          location:(nullable XTSourceLocation*)loc;
 @end
 
 #pragma clang diagnostic pop

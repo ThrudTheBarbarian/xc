@@ -60,6 +60,16 @@ u16 y;
 
 If the return type is `void`, the `return` statement has no arguments.
 
+A non-`void` function whose body can reach its closing brace — a path with no
+`return` — is reported as `control reaches the end of non-void function 'name'`.
+The body has no value to give back, so it compiles to an `Unreachable` that
+traps at run time with no message; the warning names the function at compile
+time instead, which is where the missing `return` can still be written. Silence
+it with `-Wno-return-type`. `main` is exempt — a fall-off there exits with 0 —
+and the check is deliberately conservative, so an unbounded loop (`for (;;)`,
+`while (1)`) whose only exit is a `return`, or an `if`/`else` where both arms
+return, is never reported.
+
 ## Variable arguments (varargs)
 
 A function with `...` in its parameter list takes a variable number of trailing arguments:

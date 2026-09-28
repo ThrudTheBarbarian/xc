@@ -74,6 +74,13 @@ typedef NS_ENUM(NSInteger, XTWarningCategory) {
                              // regenerated the runtime for the wrong target,
                              // and every build still "succeeded"). Suppress
                              // it only when falling back ON PURPOSE.
+    XTWarnReturnType,        // -Wno-return-type — a non-void function whose
+                             // body can reach its closing brace without
+                             // returning. The body lowers to `Unreachable`, so
+                             // the program TRAPS at run time with no message;
+                             // this names the function at compile time instead.
+                             // The missing `return` is the author's slip, and
+                             // it reads as a memory fault at run time.
 };
 
 /****************************************************************************\

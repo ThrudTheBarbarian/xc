@@ -1527,6 +1527,8 @@ static NSString* sExecutablePath = nil;
             "    escape                   stack-addr stored in longer-lived slot\n"
             "                             (global, heap field, outer scope)\n"
             "    packed-align             :packed field at an offset the target may fault on\n"
+            "    return-type              non-void function that can reach its closing brace\n"
+            "                             without returning (traps at run time)\n"
             "    toolchain-fallback       built by the SYSTEM toolchain (clang/mingw),\n"
             "                             not the in-house assembler+linker\n"
             "    unguarded-action         a `^` called without being tested since its\n"

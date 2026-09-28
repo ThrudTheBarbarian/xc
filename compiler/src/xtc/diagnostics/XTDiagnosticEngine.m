@@ -44,6 +44,8 @@ NSString* XTWarningCategoryName(XTWarningCategory cat)
         return @"unguarded-action";
     case XTWarnToolchainFallback:
         return @"toolchain-fallback";
+    case XTWarnReturnType:
+        return @"return-type";
         }
     return @"";
     }
@@ -85,6 +87,8 @@ XTWarningCategory XTWarningCategoryFromName(NSString* name)
         return XTWarnUnguardedAction;
     if ([name isEqualToString:@"toolchain-fallback"])
         return XTWarnToolchainFallback;
+    if ([name isEqualToString:@"return-type"])
+        return XTWarnReturnType;
     return XTWarnNone;
     }
 
@@ -113,6 +117,7 @@ NSArray<NSString*>* XTWarningCategoryAllNames(void)
         @"covariant-return",
         @"toolchain-fallback",
         @"unguarded-action",
+        @"return-type",
     ];
     }
 

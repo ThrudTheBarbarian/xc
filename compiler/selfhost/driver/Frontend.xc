@@ -699,6 +699,23 @@ class FeOptions
                 }
             }
         sema.analyse(program);
+        // SEMA warnings — same shape and same suppression as the parser's
+        // ("<category>\t<text>"), and printed BEFORE the error check so a
+        // warning about the code that then failed still reaches the reader.
+        for (u32 w = (u32)0; w < sema.warnings().count(); w = w + (u32)1)
+            {
+            String* raw = (String*)sema.warnings().get(w);
+            u32 tab = (u32)0;
+            while (tab < raw.byteLength() && raw.byteAt(tab) != (u8)9)
+                tab = tab + (u32)1;
+            String* cat = raw.substringBytes((u32)0, tab);
+            if (o.warningSuppressed(cat))
+                continue;
+            String* line = raw.substringBytes(tab + (u32)1,
+                                              raw.byteLength() - tab - (u32)1);
+            line.appendByte((u8)'\n');
+            Stdio.error(line);
+            }
         // Same for SEMANTIC errors, and for the same reason.
         if (sema.errors().count() > (u32)0)
             {

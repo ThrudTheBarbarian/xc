@@ -377,6 +377,143 @@ static int xtVersionGT(NSString* a, NSString* b)
     }
 
 /****************************************************************************\
+|* Does control definitely NOT fall off the end of `stmt`? The inverse of
+|* "can fall through", and the thing that decides whether a non-void body
+|* reaches its closing brace.
+|*
+|* DELIBERATELY CONSERVATIVE, and in one direction only: an unrecognised
+|* construct answers "can fall through" (so the caller warns), while a
+|* construct that merely MIGHT not fall through answers the other way (so
+|* the caller stays quiet). A warning that fires on code that is fine is
+|* worse than no warning, so the only shapes treated as terminating are the
+|* ones where a fall-through is impossible:
+|*
+|*   - `return` / `throw`
+|*   - a block ending in, or containing, a terminating statement (anything
+|*     after an unconditional transfer is unreachable)
+|*   - an `if` with an `else` where BOTH arms terminate
+|*   - an unbounded loop — `for (;;)` or `while (1)` — whose body has no
+|*     `break` at its own level (a `break` leaves the loop, so it CAN fall out)
+|*
+|* `break` and `continue` are NOT terminating: they leave a loop, they do not
+|* end the function. A `switch`, a `for-in`, an inline-asm block, a loop with
+|* a real condition, and every expression statement all answer "can fall
+|* through" — the last one even for a call to `exit`, which we do not model.
+\****************************************************************************/
+- (BOOL)statementCanFallThrough:(nullable XTASTNode*)stmt
+    {
+    if (!stmt)
+        return YES;
+    if ([stmt isKindOfClass:[XTReturnNode class]] || [stmt isKindOfClass:[XTThrowNode class]])
+        return NO;
+    if ([stmt isKindOfClass:[XTBlockNode class]])
+        {
+        for (XTASTNode* s in ((XTBlockNode*)stmt).statements)
+            if (![self statementCanFallThrough:s])
+                return NO;
+        return YES;
+        }
+    if ([stmt isKindOfClass:[XTIfNode class]])
+        {
+        XTIfNode* n = (XTIfNode*)stmt;
+        if (!n.elseBlock)
+            return YES;
+        if ([self statementCanFallThrough:n.thenBlock])
+            return YES;
+        if ([self statementCanFallThrough:n.elseBlock])
+            return YES;
+        return NO;
+        }
+    if ([stmt isKindOfClass:[XTWhileNode class]])
+        {
+        XTWhileNode* n = (XTWhileNode*)stmt;
+        if ([self conditionIsConstantTrue:n.condition] && ![self bodyBreaksOwnLoop:n.body])
+            return NO;
+        return YES;
+        }
+    if ([stmt isKindOfClass:[XTForCStyleNode class]])
+        {
+        XTForCStyleNode* n = (XTForCStyleNode*)stmt;
+        // A nil condition is `for (;;)`; a literal condition is `for (;1;)`.
+        BOOL unbounded = (n.condition == nil) || [self conditionIsConstantTrue:n.condition];
+        if (unbounded && ![self bodyBreaksOwnLoop:n.body])
+            return NO;
+        return YES;
+        }
+    return YES;
+    }
+
+// A loop condition that is certainly true: the integer literal 1 (or any
+// negative nonzero, i.e. every nonzero constant). `true` is not a keyword —
+// the language spells it `(u32)1` or `1` — so an identifier answers NO and
+// only a literal counts.
+- (BOOL)conditionIsConstantTrue:(nullable XTASTNode*)cond
+    {
+    if (!cond)
+        return NO;
+    if ([cond isKindOfClass:[XTLiteralIntNode class]])
+        return ((XTLiteralIntNode*)cond).intValue != 0;
+    return NO;
+    }
+
+// YES if `body` contains a `break` that would leave THIS loop — one not inside
+// a nested loop or switch, where it would target the inner construct instead.
+- (BOOL)bodyBreaksOwnLoop:(nullable XTASTNode*)body
+    {
+    if (!body)
+        return NO;
+    if ([body isKindOfClass:[XTBreakNode class]])
+        return YES;
+    if ([body isKindOfClass:[XTWhileNode class]] ||
+        [body isKindOfClass:[XTForCStyleNode class]] ||
+        [body isKindOfClass:[XTForInNode class]] ||
+        [body isKindOfClass:[XTSwitchNode class]])
+        return NO; // a break inside belongs to the inner construct
+    if ([body isKindOfClass:[XTBlockNode class]])
+        {
+        for (XTASTNode* s in ((XTBlockNode*)body).statements)
+            if ([self bodyBreaksOwnLoop:s])
+                return YES;
+        return NO;
+        }
+    if ([body isKindOfClass:[XTIfNode class]])
+        {
+        XTIfNode* n = (XTIfNode*)body;
+        return [self bodyBreaksOwnLoop:n.thenBlock] || [self bodyBreaksOwnLoop:n.elseBlock];
+        }
+    if ([body isKindOfClass:[XTDeferNode class]])
+        return [self bodyBreaksOwnLoop:((XTDeferNode*)body).body];
+    return NO;
+    }
+
+/****************************************************************************\
+|* Warn when a non-void function can reach its closing brace. The body lowers
+|* to `Unreachable`, so the program TRAPS at run time with no message; naming
+|* the function at compile time is the line an author needs to write the
+|* `return` they forgot. `main` is exempt: a fall-off there is normalised to
+|* `return 0`.
+\****************************************************************************/
+- (void)checkReturnReachabilityFor:(nullable NSString*)funcName
+                       returnTypes:(nullable NSArray<XTType*>*)returnTypes
+                             body:(nullable XTASTNode*)body
+                         location:(nullable XTSourceLocation*)loc
+    {
+    if (!body || !funcName || [funcName isEqualToString:@"main"])
+        return;
+    // Void (or no declared return) is not a fall-through bug.
+    if (returnTypes.count == 0)
+        return;
+    if (returnTypes.count == 1 && returnTypes.firstObject.isVoid)
+        return;
+    if (![self statementCanFallThrough:body])
+        return;
+    NSString* msg = [NSString stringWithFormat:
+                                  @"control reaches the end of non-void function '%@' without returning a value",
+                                  funcName];
+    [self.diagnostics emitWarning:msg category:XTWarnReturnType at:loc];
+    }
+
+/****************************************************************************\
 |* Visit a function declaration: push scope, define parameters, analyse body,
 |* run escape analysis, then pop scope.
 |* @param node  The function declaration node.
@@ -428,6 +565,11 @@ static int xtVersionGT(NSString* a, NSString* b)
         }
     if (node.body)
         [self analyzeNode:node.body];
+    if (node.body)
+        [self checkReturnReachabilityFor:node.funcName
+                             returnTypes:node.returnTypes
+                                   body:node.body
+                               location:node.location];
     if (node.body)
         [self runEscapeAnalysisOnBody:node.body];
     if (node.body)

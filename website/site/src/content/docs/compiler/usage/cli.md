@@ -259,6 +259,7 @@ Suppress a category with `-Wno-<category>`. All are on by default.
 | `unknown-annotation` | an unrecognised function annotation, e.g. `:foo` |
 | `unknown-pragma` | an unrecognised `#` directive |
 | `toolchain-fallback` | the build fell back from the in-house assembler/linker to an external tool |
+| `return-type` | a non-`void` function that can reach its closing brace without returning — its body traps at run time, so the missing `return` is named at compile time |
 
 `xcc --help` prints the full category list, including any checks added after this
 page.

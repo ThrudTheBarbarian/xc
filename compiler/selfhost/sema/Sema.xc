@@ -68,6 +68,7 @@ class Sema
     bool _rangeIsInitialiser; // inside an ARRAY declaration's initialiser,
                               // the one position a range survives the parser
     Array* _errors;           // of String@
+    Array* _warnings;         // of String@ — "<cat>\t<file:line:col: warning: text>"
     Array* _scopes;           // of Map@ (name -> type spelling); innermost last
     Map* _globals;            // file-scope variables
     Map* _structs;            // struct name -> StructDecl node
@@ -123,6 +124,7 @@ class Sema
         _classDecls = new Array();
         _functions = new Map();
         _errors = new Array();
+        _warnings = new Array();
         _rangeIsInitialiser = false;
         _migrateBase = (String*)0;
         _fnPackingCallee = (String*)0;
@@ -181,6 +183,10 @@ class Sema
     Array* errors(void)
         {
         return _errors;
+        }
+    Array* warnings(void)
+        {
+        return _warnings;
         }
     void setChainCapable(bool c)
         {
@@ -262,6 +268,145 @@ class Sema
         out.appendCString(": error: ");
         out.append(msg);
         _errors.add((Object*)out);
+        }
+
+    // A WARNING from sema, positioned and CATEGORISED. Same wire shape as the
+    // parser's warnAt — "<category>\t<file:line:col: warning: text>" — so the
+    // driver prints it, and drops it under `-Wno-<category>`, without knowing
+    // which pass produced it (bug 553).
+    void _warnAt(String* cat, String* msg, Node* n)
+        {
+        String* out = String.withString(cat);
+        out.appendByte((u8)'\t');
+        if (n != 0 && n.line() != (u32)0)
+            {
+            out.append(n.file() != 0 ? n.file() : String.withCString("?"));
+            out.appendByte((u8)':');
+            out.append(String.withU32(n.line()));
+            out.appendByte((u8)':');
+            out.append(String.withU32(n.col()));
+            out.appendCString(": ");
+            }
+        out.appendCString("warning: ");
+        out.append(msg);
+        _warnings.add((Object*)out);
+        }
+
+    // ── Control reaching the end of a non-void function ──────────────────
+    // A non-void body that can reach its closing brace lowers to `Unreachable`
+    // and the program TRAPS at run time with no message (finishFunction in
+    // Lower.xc). The missing `return` is a source mistake, so it is named at
+    // compile time: statementCanFallThrough answers whether the body can fall
+    // off, and finishFunction's own trap stays as the backstop.
+    //
+    // CONSERVATIVE, in ONE direction: a construct we do not model answers
+    // "can fall through" (so we warn), while a construct that merely MIGHT
+    // not fall through answers the other way (so we stay quiet). Firing on
+    // code that is fine is worse than staying silent, so only these are
+    // treated as unable to fall through:
+    //   - `return` / `throw`
+    //   - a block containing a terminating statement (the rest is unreachable)
+    //   - an `if` with an `else` where BOTH arms terminate
+    //   - an unbounded loop (`for (;;)` or `while (1)`) whose body has no
+    //     `break` at its own level
+    // `break`/`continue` are NOT terminating — they leave a loop, not the
+    // function. `switch`, `for-in`, inline asm and every expression statement
+    // answer "can fall through" (the last even for a call to exit).
+    bool statementCanFallThrough(Node* s)
+        {
+        if (s == 0)
+            return true;
+        u16 k = s.kind();
+        if (k == (u16)nkReturn || k == (u16)nkThrow)
+            return false;
+        if (k == (u16)nkBlock)
+            {
+            for (u32 i = (u32)0; i < s.kidCount(); i = i + (u32)1)
+                if (!statementCanFallThrough(s.kid(i)))
+                    return false;
+            return true;
+            }
+        if (k == (u16)nkIf)
+            {
+            if (s.kidCount() < (u32)3)
+                return true;
+            if (statementCanFallThrough(s.kid((u32)1)))
+                return true;
+            if (statementCanFallThrough(s.kid((u32)2)))
+                return true;
+            return false;
+            }
+        if (k == (u16)nkWhile)
+            {
+            if (s.kidCount() >= (u32)2 && conditionConstTrue(s.kid((u32)0))
+                && !bodyBreaksOwnLoop(s.kid((u32)1)))
+                return false;
+            return true;
+            }
+        if (k == (u16)nkForCStyle)
+            {
+            Node* body = 0;
+            bool unbounded = false;
+            for (u32 i = (u32)0; i < s.kidCount(); i = i + (u32)1)
+                {
+                Node* kid = s.kid(i);
+                u16 kk = kid.kind();
+                if (kk == (u16)nkMarkerCond)
+                    unbounded = (kid.kidCount() == (u32)0)
+                             || conditionConstTrue(kid.kid((u32)0));
+                else if (kk != (u16)nkMarkerInit && kk != (u16)nkMarkerStep)
+                    body = kid;
+                }
+            if (unbounded && !bodyBreaksOwnLoop(body))
+                return false;
+            return true;
+            }
+        return true;
+        }
+
+    // A loop condition that is certainly true: the integer literal 1 (any
+    // nonzero constant). `true` is not a keyword, so an identifier answers
+    // false and only a literal counts.
+    bool conditionConstTrue(Node* c)
+        {
+        return c != 0 && c.kind() == (u16)nkInt && c.num() != (i64)0;
+        }
+
+    // YES if `body` holds a `break` that would leave THIS loop — one not
+    // inside a nested loop or switch, where it would target the inner
+    // construct instead.
+    bool bodyBreaksOwnLoop(Node* b)
+        {
+        if (b == 0)
+            return false;
+        u16 k = b.kind();
+        if (k == (u16)nkBreak)
+            return true;
+        if (k == (u16)nkWhile || k == (u16)nkForCStyle || k == (u16)nkForIn
+            || k == (u16)nkSwitch)
+            return false;
+        if (k == (u16)nkBlock)
+            {
+            for (u32 i = (u32)0; i < b.kidCount(); i = i + (u32)1)
+                if (bodyBreaksOwnLoop(b.kid(i)))
+                    return true;
+            return false;
+            }
+        if (k == (u16)nkIf)
+            {
+            for (u32 i = (u32)0; i < b.kidCount(); i = i + (u32)1)
+                if (bodyBreaksOwnLoop(b.kid(i)))
+                    return true;
+            return false;
+            }
+        if (k == (u16)nkDefer)
+            {
+            for (u32 i = (u32)0; i < b.kidCount(); i = i + (u32)1)
+                if (bodyBreaksOwnLoop(b.kid(i)))
+                    return true;
+            return false;
+            }
+        return false;
         }
 
     // ── Pass 1: declarations ────────────────────────────────────────────
@@ -911,6 +1056,7 @@ class Sema
             }
         _fnPackingCallee = (String*)0;
         _fnForwardsVarargs = false;
+        Node* fnBody = (Node*)0;
         for (u32 i = (u32)0; i < decl.kidCount(); i = i + (u32)1)
             {
             Node* b = decl.kid(i);
@@ -918,6 +1064,24 @@ class Sema
                 {
                 typeStmt(b);
                 markVaForward(b, decl);
+                fnBody = b;
+                }
+            }
+        // A non-void FREE function whose body can reach its closing brace
+        // lowers to `Unreachable` and traps at run time; name it here, where
+        // the reader can still write the `return` (bug 553). `main` is exempt:
+        // a fall-off there is normalised to `return 0`. Methods are left for
+        // the reference to lead with.
+        if (owner == 0 && fnBody != 0 && decl.name() != 0
+            && !decl.name().equals(String.withCString("main")))
+            {
+            bool isVoid = decl.op() == 0 || _isOp(decl.op(), "void");
+            if (!isVoid && statementCanFallThrough(fnBody))
+                {
+                String* wmsg = String.withCString("control reaches the end of non-void function '");
+                wmsg.append(decl.name());
+                wmsg.appendCString("' without returning a value");
+                _warnAt(String.withCString("return-type"), wmsg, decl);
                 }
             }
         // On every target but arm9 a variadic's arguments live in ONE shared
