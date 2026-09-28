@@ -12,9 +12,9 @@ cross-build native binaries for every target with **no other toolchain installed
 
 | Platform | Download | Size |
 | --- | --- | --- |
-| macOS (Apple silicon) | [xcc-osx-0.63.tar.bz2](/downloads/xcc-osx-0.63.tar.bz2) | 8.0 MB |
-| Linux (x86_64) | [xcc-linux-0.63.tar.bz2](/downloads/xcc-linux-0.63.tar.bz2) | 6.5 MB |
-| Windows (x64) | [xcc-win64-0.63.zip](/downloads/xcc-win64-0.63.zip) | 7.5 MB |
+| macOS (Apple silicon) | [xcc-osx-0.63.tar.bz2](/downloads/xcc-osx-0.63.tar.bz2) | 8.1 MB |
+| Linux (x86_64) | [xcc-linux-0.63.tar.bz2](/downloads/xcc-linux-0.63.tar.bz2) | 6.6 MB |
+| Windows (x64) | [xcc-win64-0.63.zip](/downloads/xcc-win64-0.63.zip) | 7.6 MB |
 | arm9 sysroot (any host) | [xcc-arm9-sysroot-0.63.tar.bz2](/downloads/xcc-arm9-sysroot-0.63.tar.bz2) | 830 KB |
 
 Every archive contains the same compiler. Each host build cross-compiles to **all**

@@ -16,7 +16,7 @@ parity.
 | | arm64 | x86-64 |
 |---|---|---|
 | **Geometric mean** | **0.93** | **1.03** |
-| Arithmetic mean | 1.06 | 1.15 |
+| Arithmetic mean | 1.05 | 1.15 |
 | Within 0.3x-2.0x of clang | 18 of 19 | 16 of 19 |
 
 On arm64 the suite is slightly faster than clang overall. On x86-64 it is
@@ -29,29 +29,29 @@ arithmetic figure is given only for completeness.
 
 ## Per benchmark
 
-Times are seconds for the timed region, best of five, measured with the released 0.62 `xcc`. Each run waits until the machine doing the timing is otherwise idle.
+Times are seconds for the timed region, best of five, measured with the released 0.63 `xcc`. Each run waits until the machine doing the timing is otherwise idle.
 
 | benchmark | arm64 xcc | arm64 clang | ratio | x86-64 xcc | x86-64 clang | ratio |
 |---|---|---|---|---|---|---|
-| `arc_array` | 0.99 | 5.56 | **0.18** | 1.16 | 3.72 | **0.31** |
-| `method_call` | 0.96 | 2.88 | **0.33** | 1.35 | 1.90 | **0.71** |
-| `string_scan` | 1.00 | 2.62 | **0.38** | 1.62 | 3.15 | **0.52** |
-| `arc_alloc` | 1.03 | 1.41 | **0.73** | 0.95 | 2.06 | **0.46** |
-| `sieve` | 1.21 | 1.58 | **0.77** | 1.85 | 0.81 | **2.30** |
-| `call_depth` | 1.01 | 1.07 | **0.94** | 1.06 | 0.95 | **1.11** |
-| `array_sum` | 0.96 | 0.96 | **1.00** | 1.20 | 1.44 | **0.84** |
-| `hash_mix` | 1.26 | 1.23 | **1.03** | 1.01 | 1.12 | **0.91** |
-| `branch_mix` | 1.22 | 1.10 | **1.11** | 0.82 | 0.81 | **1.01** |
-| `int_accum` | 1.42 | 1.27 | **1.12** | 0.97 | 0.97 | **1.00** |
-| `bit_ops` | 1.42 | 1.27 | **1.13** | 0.97 | 0.97 | **1.00** |
-| `poly_dispatch` | 1.37 | 1.20 | **1.14** | 0.97 | 1.23 | **0.79** |
-| `struct_copy` | 1.33 | 1.09 | **1.21** | 1.13 | 0.79 | **1.44** |
-| `int_muldiv` | 1.23 | 1.02 | **1.21** | 2.02 | 1.70 | **1.19** |
-| `sort_small` | 1.33 | 1.03 | **1.29** | 2.24 | 1.49 | **1.50** |
-| `array_map` | 1.69 | 1.18 | **1.43** | 2.12 | 1.57 | **1.35** |
-| `float_math` | 1.26 | 0.85 | **1.48** | 1.51 | 0.74 | **2.03** |
-| `mem_copy` | 1.68 | 0.94 | **1.80** | 1.54 | 1.05 | **1.46** |
-| `matrix_mul` | 1.83 | 1.00 | **1.83** | 2.43 | 1.20 | **2.02** |
+| `arc_array` | 0.99 | 5.58 | **0.18** | 1.18 | 3.72 | **0.32** |
+| `method_call` | 1.07 | 2.89 | **0.37** | 1.35 | 1.90 | **0.71** |
+| `string_scan` | 1.01 | 2.64 | **0.38** | 1.62 | 3.15 | **0.51** |
+| `arc_alloc` | 1.02 | 1.41 | **0.73** | 0.94 | 2.06 | **0.46** |
+| `sieve` | 1.22 | 1.58 | **0.77** | 1.84 | 0.81 | **2.29** |
+| `call_depth` | 1.00 | 1.07 | **0.94** | 1.06 | 0.95 | **1.11** |
+| `array_sum` | 0.95 | 0.95 | **1.00** | 1.21 | 1.44 | **0.84** |
+| `hash_mix` | 1.36 | 1.30 | **1.04** | 1.01 | 1.08 | **0.93** |
+| `branch_mix` | 1.21 | 1.10 | **1.11** | 0.92 | 0.81 | **1.13** |
+| `bit_ops` | 1.42 | 1.26 | **1.12** | 0.97 | 0.97 | **1.00** |
+| `int_accum` | 1.43 | 1.27 | **1.12** | 0.97 | 0.97 | **1.00** |
+| `poly_dispatch` | 1.38 | 1.20 | **1.14** | 0.97 | 1.23 | **0.79** |
+| `struct_copy` | 1.33 | 1.13 | **1.17** | 1.13 | 0.78 | **1.44** |
+| `int_muldiv` | 1.23 | 1.01 | **1.22** | 2.02 | 1.70 | **1.19** |
+| `sort_small` | 1.33 | 1.05 | **1.28** | 1.86 | 1.49 | **1.25** |
+| `array_map` | 1.65 | 1.20 | **1.38** | 2.14 | 1.57 | **1.37** |
+| `float_math` | 1.33 | 0.92 | **1.45** | 1.51 | 0.74 | **2.03** |
+| `mem_copy` | 1.66 | 0.93 | **1.78** | 1.53 | 1.05 | **1.46** |
+| `matrix_mul` | 1.82 | 1.00 | **1.83** | 2.42 | 1.20 | **2.02** |
 
 The fastest results are where the runtime does the work: `arc_array`,
 `method_call` and `string_scan` are reference counting, dynamic dispatch and
@@ -89,7 +89,7 @@ The benchmark sources are in `benchmark/src`, one `.xc` and one `.m` per
 program, and the runner builds and times both:
 
 ```
-python3 benchmark/run.py --version v0.62 --opt O3 --repeats 5
+python3 benchmark/run.py --version v0.63 --opt O3 --repeats 5
 ```
 
 The x86-64 legs cross-build here and run on a configured Linux host; without
