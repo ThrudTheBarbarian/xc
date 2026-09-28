@@ -607,6 +607,16 @@ static NSDictionary<NSString *, NSNumber *> *sKeywordMap = nil;
         isDouble = YES;
         isFloat = YES;
         [self advance];
+    } else if ([self currentChar] == 'f' || [self currentChar] == 'F') {
+        // `f`/`F` is C's (and Java's) single-precision suffix, accepted for the
+        // same reason `d` is: a table of floats ported from either arrives with
+        // one on every row, and the alternative was one "Undefined identifier
+        // 'f'" per row — `0.68f` is the number 0.68 and then an identifier,
+        // which is true and useless. A literal with a decimal point is already
+        // a float, so the suffix only decides the WIDTH here; `1f` is the case
+        // it adds, matching `1d`.
+        isFloat = YES;
+        [self advance];
     }
 
     if (isFloat) {

@@ -34,6 +34,31 @@ u32 mask = 0xFFFF_0000;   // underscores work in either hex spelling
 `$` comes from 6502 assembler tradition and `0x` (or `0X`) from C. They mean the
 same thing and either can be used anywhere. Binary uses `%`.
 
+### Float literals
+
+A decimal literal with a `.` and digits after it is a `float` (4-byte IEEE-754):
+
+```c
+float f = 0.5;
+float g = 3.25;
+```
+
+A trailing suffix sets the width, and either suffix makes a literal a floating
+point number even without a decimal point:
+
+| Suffix | Type | Example |
+|--------|------|---------|
+| `f` / `F` | `float` | `0.68f`, `1f` |
+| `d` / `D` | `double` | `0.68d`, `1d` |
+
+`f` and `d` are C's (and Java's) spellings, so a table of constants ported from
+either compiles unchanged.
+
+A literal with **no suffix is a `float`**, whatever it is assigned to, and is
+widened to `double` afterwards if that is where it lands. `double d = 0.1;` is
+therefore the `float` value `0.1` widened, printed as `0.10000000149011611`, not
+the `double` `0.1`. Write `0.1d` when the extra precision matters.
+
 ## String and character literals
 
 Strings are double-quoted and null-terminated. The trailing `\0` is not counted in `length`. The recognised escape sequences are:

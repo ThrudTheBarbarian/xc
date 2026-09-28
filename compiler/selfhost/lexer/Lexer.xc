@@ -682,11 +682,22 @@ class Lexer
             }
 
         // A `d`/`D` suffix means double, and implies float even without a point.
+        // An `f`/`F` suffix is C's (and Java's) single-precision spelling and is
+        // accepted for the same reason `d` is: a table of floats ported from
+        // either arrives with one on every row, and the alternative is one
+        // "Undefined identifier 'f'" per row — `0.68f` is the number 0.68 and
+        // then an identifier, which is true and useless. A literal with a point
+        // is already a float, so the suffix only decides the WIDTH here.
         bool isDouble = false;
         if (_cur() == (u8)'d' || _cur() == (u8)'D')
             {
             isFloat = true;
             isDouble = true;
+            _advance();
+            }
+        else if (_cur() == (u8)'f' || _cur() == (u8)'F')
+            {
+            isFloat = true;
             _advance();
             }
 
