@@ -1,0 +1,15 @@
+empty 0 0
+count 2
+alpha one beta two
+count 2 alpha ONE
+key0 alpha
+missing (none)
+after remove 1 has-beta 0
+n -41 bad 7 absent 7
+on 1 off 0
+[alpha = ONE
+n = -41
+on = true
+]loaded 2 one 2
+bool1 0 bool2 1
+save 0 reload 0 path 1

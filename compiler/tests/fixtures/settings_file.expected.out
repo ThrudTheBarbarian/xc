@@ -1,0 +1,12 @@
+fresh 0 save 1
+created size 0
+count 2 alpha one beta two
+path settings_file.tmp
+save 1
+text [alpha = one
+beta = two
+]again 1 same 1
+dirty CHANGED
+reload 1 clean one
+before 1
+after 2 reload 1 now 1
