@@ -763,12 +763,49 @@ class IrParser
         if (_ci >= _cur.byteLength() || _cur.byteAt(_ci) != (u8)'%')
             return (String*)0;
         _ci = _ci + (u32)1;
+        // `%?N` is how the dumper spells an id it never named — a value that is
+        // USED but has no definition in the function, which the optimiser
+        // leaves behind (the printer names what it can place and leaves the
+        // rest as their old numbers, marked).
+        //
+        // The `?` is KEPT as part of the id text, and that is the whole point
+        // of carrying it. The printed names are renumbered densely over the
+        // values the function still contains, so a dangling id is an OLD
+        // number: `%?19` and a `%19` printed on another line are two different
+        // values whose spellings collide by accident. Dropping the `?` aliased
+        // them onto one object — the optimiser's dead memory token became the
+        // result of a Load elsewhere in the function, gaining that value a use
+        // (and an interval) it does not have and losing it the frame slot it
+        // does, so the frame came out 16 bytes short and the slot numbers for
+        // everything above it shifted.
+        bool dead = false;
+        if (_ci < _cur.byteLength() && _cur.byteAt(_ci) == (u8)'?')
+            {
+            dead = true;
+            _ci = _ci + (u32)1;
+            }
         u32 start = _ci;
         while (_ci < _cur.byteLength() && _cur.byteAt(_ci) >= (u8)'0' && _cur.byteAt(_ci) <= (u8)'9')
             _ci = _ci + (u32)1;
         if (_ci == start)
             return (String*)0;
+        if (dead)
+            start = start - (u32)1;
         return _cur.substringBytes(start, _ci - start);
+        }
+
+    // The number an id text carries, '?' and all.
+    static u32 idNumber(String* id)
+        {
+        u32 n = (u32)0;
+        for (u32 i = (u32)0; i < id.byteLength(); i = i + (u32)1)
+            {
+            u8 c = id.byteAt(i);
+            if (c < (u8)'0' || c > (u8)'9')
+                continue;
+            n = n * (u32)10 + (u32)(c - (u8)'0');
+            }
+        return n;
         }
 
     IRValue* defineValue(String* id, String* ty)
@@ -784,13 +821,31 @@ class IrParser
         IRValue* v = new IRValue(ty == 0 ? String.withCString("Void") : ty);
         // The id the TEXT gave it, kept as the value's own: a back end assigns
         // frame slots in id order, so the numbering has to survive parsing.
-        u32 n = (u32)0;
-        for (u32 i = (u32)0; i < id.byteLength(); i = i + (u32)1)
-            n = n * (u32)10 + (u32)(id.byteAt(i) - (u8)'0');
+        u32 n = IrParser.idNumber(id);
         v.setPid(n);
         _vals.set((Hashable*)id, (Object*)v);
         if (_fn != 0)
             _fn.noteValue(n, v);
+        return v;
+        }
+
+    // A `%?N` id: USED, never defined anywhere in the function. It is a real
+    // value with a real type — a memory token, since nothing else is used
+    // without a definition and the optimiser leaves these on Calls — so it is
+    // created on demand, under its own `?`-spelled key, rather than aliased to
+    // whatever numbered value happens to share the digits.
+    //
+    // It keeps NO pid from the text: that number belongs to the OTHER value,
+    // and two values sharing an id would be conflated by every pass that keys
+    // off one. `numberFreshValues` gives it an id of its own in creation order,
+    // which is where a value the parser never saw a definition for belongs.
+    IRValue* useDeadValue(String* id)
+        {
+        Object* have = _vals.get((Hashable*)id);
+        if (have != 0)
+            return (IRValue*)have;
+        IRValue* v = new IRValue(String.withCString("Mem"));
+        _vals.set((Hashable*)id, (Object*)v);
         return v;
         }
 
@@ -799,6 +854,8 @@ class IrParser
         Object* have = _vals.get((Hashable*)id);
         if (have != 0)
             return (IRValue*)have;
+        if (id.byteLength() > (u32)0 && id.byteAt((u32)0) == (u8)'?')
+            return useDeadValue(id);
         // A reference the definition pass never saw. It cannot be made right
         // by guessing a type, so it is a hard stop rather than a Void that
         // prints as something plausible.
