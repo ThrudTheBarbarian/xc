@@ -3,6 +3,65 @@ title: ChangeLog
 description: Release notes for the xcc toolchain, with bug fixes and new features per version.
 ---
 
+## Version 0.63 — archiving, class names and Windows DLLs
+
+This release adds keyed archiving to the language, gives every object a runtime
+class name, and lets win64 build a DLL in-house. It also fixes wrong code across
+the back ends, and arm9 gains load-time constructors and can build a program
+from objects.
+
+### New
+
+- `Codable` and `Coder`: keyed archiving. A class that adopts `Codable` gains
+  `encodeWith(coder)` and `initWith(coder)`; a `Coder` writes a keyed archive as
+  JSON, optionally gzipped. `Object` adopts `Codable`.
+- `Object.className()` returns an object's runtime class name, and
+  `Object.newInstanceOfClass()` makes another instance of it. Class and block
+  names are carried into the image.
+- Windows: `xcc -A win64 --emit-lib` builds a DLL in-house, with an entry point,
+  imports and an export table. A DLL's interface is read back, and a module
+  dispatches protocols through the itable under the Microsoft ABI.
+- arm9: a load-time constructor in an object runs, and both compilers' `-c`
+  objects and IR are the same, so a program can be built from objects and linked
+  in-house.
+- `xcc-sim-6502` and `xcc-sim-68k` report their own name and the version they
+  were built from.
+
+### Wrong code fixed
+
+- Floating point: a comparison follows IEEE where either operand is a NaN; a
+  negated float flips its sign bit instead of subtracting from zero; a negated
+  integer literal wider than its type is built at the wider type; and an integer
+  initialiser for a float global is folded into the image rather than built at
+  run time.
+- Conversions between floating point and unsigned or 64-bit integers are
+  complete on x86-64, win64, m68k and arm9. On xt6502 a 64-bit integer converts
+  straight to `float` and rounds once.
+- x86-64 and win64 no longer rename a function that is named after a register,
+  which broke a call to one.
+- A 64-bit select copies both words on m68k and arm9, and a 64-bit phi stays out
+  of a register home on those targets.
+- wasm32: a local the optimiser pinned and then removed is given no slot.
+- x86-64: a weak undefined symbol in a dynamic link keeps its value 0.
+- arm32: both assemblers write one literal-pool word per distinct expression, as
+  `as` does, so the linked images agree.
+- xt6502: `:main` and `:banked` place free functions and methods; every new
+  block is sized to its contents with its header in a trailer; and a variadic
+  reentrance error no longer names the 6502 packing-buffer address.
+- arm9 and android place the extra arguments of a variadic call where the callee
+  reads them. On android a library can also be `#import`ed.
+- `-flto` keeps an imported vtable and each object's string literals.
+- The shipped compiler refuses a class whose parent is not a class, an
+  unreachable function end is `Unreachable`, an open slice start is a zero of the
+  count's width, and preprocessor diagnostics carry their location.
+- The reference compiler catches up on several points of its own: a `float`
+  result returned through an indirect call comes from `s0`/`d0`; an autoboxed
+  argument is not a raw pointer for a class parameter; an array ivar of an
+  inline class-array element is at its address; an enum ivar counts as an
+  integer ivar; a library interface does not re-export a protocol it imported;
+  an x86-64 dynamic link exports what the shipped linker exports; and `-S` on
+  arm9 writes the assembly a link would assemble.
+
 ## Version 0.62 — wrong code fixed, shared libraries that work together
 
 Most of this release fixes wrong code and makes xc libraries work with each
