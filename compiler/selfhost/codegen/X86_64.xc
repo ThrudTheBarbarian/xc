@@ -1108,6 +1108,31 @@ class X86_64
             _out.appendFormat("\tmov\t%s, %s\n", regView(home, w).cString(), src.cString());
         }
 
+    // Emit a load of `memop` STRAIGHT into the value's home register, and answer
+    // true, when that is safe. Staging a load through a scratch register and then
+    // copying it to the home is a wasted instruction on the most common
+    // instruction there is — `mov dl, [rbx+rsi]` immediately followed by
+    // `mov r8b, dl` — and it sits in the hot loop of every indexed access, which
+    // is where `sieve` and `mem_copy` spend their time.
+    //
+    // Two cases are NOT safe and fall back to the staging form:
+    //   * an xmm home, where the instruction is a movd/movq rather than a mov;
+    //   * an address that itself names the home register, because writing the
+    //     home would destroy the address before the read. That covers a folded
+    //     operand left in rax/rcx by foldedMemOp, and the plain `[rax]` form.
+    bool loadHome(IRValue* res, String* memop, u32 w)
+        {
+        String* home = homeOf(res);
+        if (home == (String*)0)
+            return false;
+        if (isXmmHome(home))
+            return false;
+        if (mentions(memop, regView(home, (u32)8)))
+            return false;
+        _out.appendFormat("\tmov\t%s, %s\n", regView(home, w).cString(), memop.cString());
+        return true;
+        }
+
     void loadF(IROperand* op, String* xmm)
         {
         if (op.kind() != (u8)OPK_USE || op.val() == (IRValue*)0)
@@ -4341,6 +4366,8 @@ class X86_64
                 return;
                 }
             u32 w = widthOfValue(n.res());
+            if (loadHome(n.res(), memop, w))
+                return;
             _out.appendFormat("\tmov\t%s, %s\n", reg((u8)'d', w).cString(), memop.cString());
             store((u8)'d', n.res());
             return;
@@ -4361,6 +4388,8 @@ class X86_64
             return;
             }
         u32 w = widthOfValue(n.res());
+        if (loadHome(n.res(), String.withCString("[rax]"), w))
+            return;
         _out.appendFormat("\tmov\t%s, [rax]\n", reg((u8)'c', w).cString());
         store((u8)'c', n.res());
         }

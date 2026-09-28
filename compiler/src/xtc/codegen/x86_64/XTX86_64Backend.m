@@ -1089,6 +1089,30 @@ static NSInteger sWin64SretOff = 0;
 }
 
 
+// Emit a load of `memop` STRAIGHT into the value's home register, and answer
+// YES, when that is safe. Staging a load through a scratch register and then
+// copying it to the home is a wasted instruction on the most common instruction
+// there is — `mov dl, [rbx+rsi]` immediately followed by `mov r8b, dl` — and it
+// sits in the hot loop of every indexed access, which is where `sieve` and
+// `mem_copy` spend their time.
+//
+// Two cases are NOT safe and fall back to the staging form:
+//   * an xmm home, where the instruction is a movd/movq rather than a mov;
+//   * an address that itself names the home register, because writing the home
+//     would destroy the address before the read. That covers a folded operand
+//     left in rax/rcx by foldedMemOp, and the plain `mov %@, [rax]` form.
++ (BOOL)loadHome:(XTIRValue*)res memop:(NSString*)memop width:(NSUInteger)w
+             out:(NSMutableString*)out
+    {
+    NSString* home = sHome[@(res.valueId)];
+    if (!home || [self isXmmHome:home])
+        return NO;
+    if (x86Mentions(memop, [self regView:home width:8]))
+        return NO;
+    [out appendFormat:@"\tmov\t%@, %@\n", [self regView:home width:w], memop];
+    return YES;
+    }
+
 // Move a value between its HOME register and a GP register, choosing the
 // cross-file instruction when the home is an xmm one. `mov ecx, xmm9` is not an
 // instruction: between the integer and FP files it is movd (32) / movq (64).
@@ -3001,6 +3025,8 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
                 return;
                 }
             NSUInteger w = [self widthOf:res];
+            if ([self loadHome:res memop:memop width:w out:out])
+                return;
             [out appendFormat:@"\tmov\t%@, %@\n", [self reg:'d' width:w], memop];
             [self store:'d' into:res slot:slot out:out];
             return;
@@ -3027,6 +3053,8 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
             return;
             }
         NSUInteger w = [self widthOf:res];
+        if ([self loadHome:res memop:@"[rax]" width:w out:out])
+            return;
         [out appendFormat:@"\tmov\t%@, [rax]\n", [self reg:'c' width:w]];
         [self store:'c' into:res slot:slot out:out];
         return;
