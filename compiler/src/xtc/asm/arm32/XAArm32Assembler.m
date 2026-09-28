@@ -1055,15 +1055,30 @@ static NSString* labelOn(NSString* line)
         _poolSites = [NSMutableArray array];
         return;
         }
+    // ONE WORD PER DISTINCT EXPRESSION, not one per load, which is what `as`
+    // does: loading the same `=sym` twice inside one pool costs one word and
+    // one relocation, and the second ldr is patched to the word the first one
+    // placed. Emitting a word per LOAD is four bytes too long per repeat, and
+    // a pool that is the wrong size is not cosmetic — every label, table and
+    // function placed after it moves with it. The ported assembler had the
+    // same defect (fixed as `1c03c7ea`) and this one kept it, so the two
+    // compilers' arm32 `.so` files differed by exactly the repeats in the
+    // file; the seam was visible only in the LINKED image, which is what
+    // ldarm9-diff compares.
+    NSMutableDictionary<NSString*, NSNumber*>* seen = [NSMutableDictionary dictionary];
     for (NSUInteger i = 0; i < _pool.count; i++)
         {
         NSString* sym = _pool[i];
         uint32_t site = _poolSites[i].unsignedIntValue;
+        NSNumber* prior = seen[sym];
+        // The word this load must target: one already in this pool for the same
+        // expression, or the one about to be emitted.
+        uint32_t wordAt = prior ? prior.unsignedIntValue : _pc;
         uint32_t w0 = 0;
         if (_pass == 2)
             {
             // Patch the ldr's 12-bit offset: pool word minus (site + 8).
-            uint32_t disp = _pc - (site + 8);
+            uint32_t disp = wordAt - (site + 8);
             uint8_t* p = (uint8_t*)_text.mutableBytes + site;
             uint32_t w = p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
             w = (w & ~0xFFFu) | (disp & 0xFFFu);
@@ -1071,6 +1086,12 @@ static NSString* labelOn(NSString* line)
             p[1] = (uint8_t)(w >> 8);
             p[2] = (uint8_t)(w >> 16);
             p[3] = (uint8_t)(w >> 24);
+            }
+        if (prior)
+            continue; // reuses that word; nothing more to emit for this load
+        seen[sym] = @(_pc);
+        if (_pass == 2)
+            {
             XAArm32Reloc* r = [XAArm32Reloc new];
             r.section = 1;
             r.offset = _pc;
