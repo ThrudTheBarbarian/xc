@@ -1364,9 +1364,16 @@ WIN64_ARCHIVE = $(DIST_DIR)/xcc-win64-$(VERSION).zip
 # then checked twice: nothing in it may be byte-identical to an Objective-C
 # binary, and on macOS nothing may link Foundation or libobjc.
 # Refuses a dirty tree: an archive must be reproducible from a commit.
+#
+# The check is scoped to what goes INTO the archive — this subtree (minus
+# doc/, which is never a build input) and the repo-root COPYING — rather than
+# the whole repository. In the monorepo every other stream's working tree is
+# visible to `git status`, so a repo-wide check made `make dist` impossible
+# whenever any of them had uncommitted work, none of which an archive
+# contains.
 define STAGE_DIST
-@if [ -n "$$(git status --porcelain 2>/dev/null)" ]; then \
-	echo "dist: tree is dirty — commit first (archives must be cut from a commit)"; exit 1; fi
+@if [ -n "$$(git status --porcelain --untracked-files=all -- . ':!doc' ':(top)COPYING' 2>/dev/null)" ]; then \
+	echo "dist: the compiler tree is dirty — commit first (archives must be cut from a commit)"; exit 1; fi
 @set -- $(SHIP_NAMES); n=$$#; set -- $(4); if [ $$# -ne $$n ]; then \
 	echo "dist($(1)): the ship list has $$# entries for $$n names — a tool has no"; \
 	echo "  self-hosted build for this host, so there is no archive."; exit 1; fi
