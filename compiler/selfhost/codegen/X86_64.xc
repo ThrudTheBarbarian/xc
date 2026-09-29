@@ -4724,7 +4724,20 @@ class X86_64
             {
             for (u32 i = (u32)0; i < dests.count(); i = i + (u32)1)
                 {
-                load((IROperand*)srcs.get(i), (u8)'a');
+                // xmm to xmm is one register move. Going through rax put two
+                // GPR<->XMM transfers on every loop-carried float — the
+                // accumulator of a reduction, whose chain is the loop's cost.
+                IROperand* src = (IROperand*)srcs.get(i);
+                String* dh = homeOf((IRValue*)dests.get(i));
+                String* sh = (src.kind() == (u8)OPK_USE && src.val() != (IRValue*)0) ? homeOf(src.val()) : (String*)0;
+                if (dh != (String*)0 && sh != (String*)0
+                    && dh.hasPrefix(String.withCString("xmm")) && sh.hasPrefix(String.withCString("xmm")))
+                    {
+                    if (!dh.equals(sh))
+                        _out.appendFormat("\tmovaps\t%s, %s\n", dh.cString(), sh.cString());
+                    continue;
+                    }
+                load(src, (u8)'a');
                 store((u8)'a', (IRValue*)dests.get(i));
                 }
             return;

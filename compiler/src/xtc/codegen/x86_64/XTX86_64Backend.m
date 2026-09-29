@@ -4954,6 +4954,17 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         {
         for (NSUInteger i = 0; i < dests.count; i++)
             {
+            // xmm to xmm is one register move. Going through rax put two
+            // GPR<->XMM transfers on every loop-carried float — the
+            // accumulator of a reduction, whose chain is the loop's cost.
+            NSString* dh = sHome[@(dests[i].valueId)];
+            NSString* sh = srcs[i].kind == XTIROperandKindUse ? sHome[@(srcs[i].valueId)] : nil;
+            if (dh && sh && [self isXmmHome:dh] && [self isXmmHome:sh])
+                {
+                if (![dh isEqualToString:sh])
+                    [out appendFormat:@"\tmovaps\t%@, %@\n", dh, sh];
+                continue;
+                }
             [self load:srcs[i] into:'a' fn:fn slot:slot out:out];
             [self store:'a' into:dests[i] slot:slot out:out];
             }
