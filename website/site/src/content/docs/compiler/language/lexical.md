@@ -43,6 +43,14 @@ float f = 0.5;
 float g = 3.25;
 ```
 
+A decimal exponent, `e` or `E` with an optional sign and digits, also makes a
+float, with or without a decimal point:
+
+```c
+float big = 1e30;
+double small = 2.5e-3d;
+```
+
 A trailing suffix sets the width, and either suffix makes a literal a floating
 point number even without a decimal point:
 

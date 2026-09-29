@@ -645,6 +645,7 @@ class Lexer
         {
         String* raw = String.withCString("");
         bool isFloat = false;
+        bool sawExponent = false;
 
         while (_pos < _len)
             {
@@ -665,8 +666,15 @@ class Lexer
                 raw.appendByte(ch);
                 _advance();
                 }
-            else if ((ch == (u8)'e' || ch == (u8)'E') && isFloat)
+            else if ((ch == (u8)'e' || ch == (u8)'E') && !sawExponent
+                     && (_digits.contains(_peek((u32)1))
+                         || ((_peek((u32)1) == (u8)'+' || _peek((u32)1) == (u8)'-')
+                             && _digits.contains(_peek((u32)2)))))
                 {
+                // An exponent makes a float with or without a point (`1e30`),
+                // and only when digits follow: `2e` is the number 2 and then `e`.
+                isFloat = true;
+                sawExponent = true;
                 raw.appendByte(ch);
                 _advance();
                 if (_cur() == (u8)'+' || _cur() == (u8)'-')

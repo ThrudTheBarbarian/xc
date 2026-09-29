@@ -581,6 +581,7 @@ static NSDictionary<NSString *, NSNumber *> *sKeywordMap = nil;
 - (void)scanNumericLiteral:(XTSourceLocation *)loc {
     NSMutableString *raw = [NSMutableString string];
     BOOL isFloat = NO;
+    BOOL sawExponent = NO;
 
     while (_pos < _source.length) {
         unichar ch = [self currentChar];
@@ -590,7 +591,13 @@ static NSDictionary<NSString *, NSNumber *> *sKeywordMap = nil;
             isFloat = YES;
             [raw appendFormat:@"%C", ch];
             [self advance];
-        } else if ((ch == 'e' || ch == 'E') && isFloat) {
+        } else if ((ch == 'e' || ch == 'E') && !sawExponent
+                   && (isdigit([self peekChar:1])
+                       || (([self peekChar:1] == '+' || [self peekChar:1] == '-') && isdigit([self peekChar:2])))) {
+            // An exponent makes a float with or without a point (`1e30`), and
+            // only when digits follow: `2e` is the number 2 and then `e`.
+            isFloat = YES;
+            sawExponent = YES;
             [raw appendFormat:@"%C", ch]; [self advance];
             if ([self currentChar] == '+' || [self currentChar] == '-') {
                 [raw appendFormat:@"%C", [self currentChar]]; [self advance];
