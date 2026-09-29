@@ -1,0 +1,6 @@
+write 1
+read [one
+two
+]
+missing 1
+drained, len 8

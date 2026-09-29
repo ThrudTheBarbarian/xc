@@ -1,6 +1,10 @@
 # Build artifacts (each subtree builds in place; never tracked)
 compiler/build/
 compiler/bin/
+# Scratch files the Files/Settings/Bundle/AsyncFiles fixtures write in the
+# directory they run from.
+compiler/*.tmp
+compiler/*.tmp/
 **/*.o
 **/*.d
 
