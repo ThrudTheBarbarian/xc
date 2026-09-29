@@ -21,6 +21,7 @@ support/
     Settings.xc  Bundle.xc   ← persistent settings, and a program's own files
     Http.xc  HttpTls.xc      ← HTTP/1.1 client and url.fetch transport; https
     AsyncFiles.xc       ← Files operations on a background thread, in order
+    RunLoop.xc          ← hand work to one thread, and timers
   arm64/lib/          ← macOS / Linux on 64-bit ARM
     Stdio.xc  Math.xc  Time.xc  Heap.xc  FILE.xc  Files.xc  Process.xc
     Gfx*.xc  GfxFactory.xc  Platform.xc
@@ -121,6 +122,7 @@ and every method grouped by task with a jump-list at the top.
 | [`Http`](/compiler/api/http/) | HTTP/1.1 requests, blocking or on their own thread, and the transport behind `url.fetch`; https through the optional TLS library |
 | [`Files`](/compiler/api/files/) | whole-file reads and writes, appends, directories and existence checks |
 | [`AsyncFiles`](/compiler/api/asyncfiles/) | the `Files` operations off the calling thread, run in order, with a completion block |
+| [`RunLoop`](/compiler/api/runloop/) | a queue of blocks run on one thread, posted to from any thread, and timers |
 
 **[6502 (8-bit)](/compiler/api/6502/)**: the utilities the 8-bit target provides in place of an OS: [`Time`](/compiler/api/time/), [`Heap`](/compiler/api/heap/), [`Vbi`](/compiler/api/vbi/), [`System`](/compiler/api/system/). On the native targets these are thin wrappers over the host. On the 6502 they are target-specific implementations.
 

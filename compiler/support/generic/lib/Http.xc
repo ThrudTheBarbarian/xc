@@ -34,8 +34,10 @@
 // `get` blocks the calling thread until the response has arrived (or failed).
 // `fetch` runs the same request on a new thread and calls the block ON THAT
 // THREAD when it finishes, so the block must not touch state the caller's
-// thread is using without a Mutex. `install` makes this the platform
-// delegate's fetch, which is how `url.fetch` reaches it.
+// thread is using without a Mutex — unless `Http.deliverOn(RunLoop.main())`
+// has been called, which posts every completion to that run loop instead.
+// `install` makes this the platform delegate's fetch, which is how
+// `url.fetch` reaches it.
 //
 // One request per connection (`Connection: close`). Redirects (301, 302, 303,
 // 307, 308) are followed, up to five. A chunked or Content-Length body is
@@ -55,6 +57,7 @@
 
 #import "Thread.xc"
 #import "Mutex.xc"
+#import "RunLoop.xc"
 
 // ── the host's sockets ──────────────────────────────────────────────────
 //
@@ -384,12 +387,21 @@ class HttpResponse
 HttpSecureLayer* _http_secure = (HttpSecureLayer*)0;
 Mutex* _http_jobs_lock = (Mutex*)0;
 Array* _http_jobs = (Array*)0;
+RunLoop* _http_deliver = (RunLoop*)0;
 
 class Http
     {
     static void setSecureLayer(HttpSecureLayer* layer)
         {
         _http_secure = layer;
+        }
+
+    // Run every completion (from fetch, and url.fetch after install) on
+    // `loop`'s thread instead of the request's own; 0 goes back to the
+    // request's thread. Set it before starting requests.
+    static void deliverOn(RunLoop* loop)
+        {
+        _http_deliver = loop;
         }
 
     // GET `url`, following redirects; blocks until it has an answer.
@@ -681,8 +693,15 @@ class _HttpJob
     void run(void)
         {
         HttpResponse* r = Http.get(url);
-        String* body = r.status() == (u32)0 ? (String*)0 : r.bodyString();
-        cb(r.status(), body);
+        u32 status = r.status();
+        String* body = status == (u32)0 ? (String*)0 : r.bodyString();
+        if (_http_deliver != (RunLoop*)0)
+            {
+            block done void(u32, String*) = cb;
+            _http_deliver.post(block void(void) { done(status, body); });
+            }
+        else
+            cb(status, body);
         Http._finished(self);
         }
     }

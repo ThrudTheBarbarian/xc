@@ -54,8 +54,10 @@ Redirects (301, 302, 303, 307 and 308) are followed, up to five. A chunked or
 The block passed to [`fetch`](#fetch), and to `url.fetch` after
 [`install`](#install), runs on the request's own thread. Anything it shares
 with the rest of the program needs a `Mutex`, and a UI toolkit's objects
-should only be touched from the toolkit's own thread. Importing `Http.xc`
-turns on thread-safe reference counting, as any use of `Thread` does.
+should only be touched from the toolkit's own thread. Or call
+[`deliverOn`](#deliveron) with a [`RunLoop`](/compiler/api/runloop/), and the
+completions run on that loop's thread instead. Importing `Http.xc` turns on
+thread-safe reference counting, as any use of `Thread` does.
 :::
 
 :::note[Availability]
@@ -114,6 +116,17 @@ static void install(void)
 
 Sets the platform delegate to one whose fetch runs [`fetch`](#fetch), so
 `url.fetch(…)` uses this transport. It replaces any delegate already set.
+
+### deliverOn
+
+```c
+static void deliverOn(RunLoop* loop)
+```
+
+Posts every completion (from [`fetch`](#fetch), and from `url.fetch` after
+[`install`](#install)) to `loop`, so it runs on that loop's thread. `0` goes
+back to running completions on the request's own thread. Set it before
+starting requests.
 
 ### setSecureLayer
 

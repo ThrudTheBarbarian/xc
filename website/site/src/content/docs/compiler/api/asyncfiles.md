@@ -37,8 +37,10 @@ a test calls it before it checks the files.
 Completion blocks run on the worker thread, not the thread that queued the
 operation. Anything a block shares with the rest of the program needs a
 `Mutex`, and a UI toolkit's objects should only be touched from the toolkit's
-own thread. Importing `AsyncFiles.xc` turns on thread-safe reference counting,
-as any use of `Thread` does.
+own thread. Or call [`deliverOn`](#deliveron) with a
+[`RunLoop`](/compiler/api/runloop/), and the completions run on that loop's
+thread instead. Importing `AsyncFiles.xc` turns on thread-safe reference
+counting, as any use of `Thread` does.
 :::
 
 :::note[Availability]
@@ -90,6 +92,17 @@ static void appendText(String* path, String* text, block cb void(bool))
 
 Adds `text` to the end of the file, creating it if needed; `cb` gets whether
 it worked.
+
+### deliverOn
+
+```c
+static void deliverOn(RunLoop* loop)
+```
+
+Posts every completion to `loop`, so it runs on that loop's thread. `0` goes
+back to running completions on the worker. Set it before queueing. With a
+loop set, [`drain`](#drain) waits for the operations, not for the posted
+completions. Not on **arm9**, which has no `RunLoop`.
 
 ### drain
 

@@ -32,7 +32,9 @@
 // the same file reads what was written, and two appends land in the order
 // they were made. The completion block runs on that worker thread: anything
 // it shares with the rest of the program needs a Mutex, and a UI toolkit's
-// objects should only be touched from the toolkit's own thread.
+// objects should only be touched from the toolkit's own thread. Or call
+// AsyncFiles.deliverOn(RunLoop.main()), and the completions are posted to
+// that run loop instead (not on arm9, which has no RunLoop).
 //
 // A completion may be null when the caller does not need to know. Results
 // are those of Files: a missing file reads as null, a failed write is false.
@@ -48,6 +50,11 @@
 #import "Thread.xc"
 #import "Mutex.xc"
 #import "Cond.xc"
+#if ARCH_arm9
+#else
+#import "RunLoop.xc"
+RunLoop* _async_files_deliver = (RunLoop*)0;
+#endif
 
 #define _AF_READ_TEXT 1
 #define _AF_READ_DATA 2
@@ -74,14 +81,34 @@ class _AsyncFileOp
         if (kind == (u32)_AF_READ_TEXT)
             {
             String* t = Files.readText(path);
-            if (hasText)
-                onText(t);
+            if (!hasText)
+                return;
+#if ARCH_arm9
+#else
+            if (_async_files_deliver != (RunLoop*)0)
+                {
+                block done void(String*) = onText;
+                _async_files_deliver.post(block void(void) { done(t); });
+                return;
+                }
+#endif
+            onText(t);
             }
         else if (kind == (u32)_AF_READ_DATA)
             {
             Data* d = Files.readData(path);
-            if (hasData)
-                onData(d);
+            if (!hasData)
+                return;
+#if ARCH_arm9
+#else
+            if (_async_files_deliver != (RunLoop*)0)
+                {
+                block done void(Data*) = onData;
+                _async_files_deliver.post(block void(void) { done(d); });
+                return;
+                }
+#endif
+            onData(d);
             }
         else
             {
@@ -92,8 +119,18 @@ class _AsyncFileOp
                 ok = Files.writeData(path, data);
             else if (kind == (u32)_AF_APPEND_TEXT)
                 ok = Files.appendText(path, text);
-            if (hasDone)
-                onDone(ok);
+            if (!hasDone)
+                return;
+#if ARCH_arm9
+#else
+            if (_async_files_deliver != (RunLoop*)0)
+                {
+                block done void(bool) = onDone;
+                _async_files_deliver.post(block void(void) { done(ok); });
+                return;
+                }
+#endif
+            onDone(ok);
             }
         }
     }
@@ -216,6 +253,17 @@ class AsyncFiles
         {
         AsyncFiles._write((u32)_AF_APPEND_TEXT, path, text, (Data*)0, cb);
         }
+
+#if ARCH_arm9
+#else
+    // Post every completion to `loop` instead of running it on the worker; 0
+    // goes back to the worker. Set it before queueing. drain() then waits for
+    // the operations, not for the posted completions.
+    static void deliverOn(RunLoop* loop)
+        {
+        _async_files_deliver = loop;
+        }
+#endif
 
     // Block until every operation queued before this call has run and its
     // completion has returned. Not to be called from a completion block.
