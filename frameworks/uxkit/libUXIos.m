@@ -616,18 +616,69 @@ void ux_ios_text_font(const char* s, int x, int y, int r, int g, int b,
     UIFont* f = family && family[0] ? [UIFont fontWithName:[NSString stringWithUTF8String:family] size:pt] : nil;
     if (!f)
         f = bold ? [UIFont boldSystemFontOfSize:pt] : [UIFont systemFontOfSize:pt];
-    drawString(s, x, y, r, g, b, f);
+    drawString(s, x, y, r, g, b, 255, f);
     }
-void ux_ios_stroke_path(int* ops, int n, int width, int startCap, int endCap,
-                        int r, int g, int b)
+/* A font at a numeric CSS weight, through a font descriptor's weight trait so a named family is
+   honoured and a family without the exact weight resolves to the nearest it has. */
+static UIFont* ios_weighted_font(const char* family, CGFloat pt, int weight, int italic)
     {
-    if (!gCtx || n <= 0 || width <= 0)
+    CGFloat w; /* UIFontWeight* on the CSS 100..900 scale */
+    if (weight <= 100)      w = UIFontWeightThin;
+    else if (weight <= 300) w = UIFontWeightLight;
+    else if (weight <= 400) w = UIFontWeightRegular;
+    else if (weight <= 500) w = UIFontWeightMedium;
+    else if (weight <= 600) w = UIFontWeightSemibold;
+    else if (weight <= 700) w = UIFontWeightBold;
+    else if (weight <= 800) w = UIFontWeightHeavy;
+    else                    w = UIFontWeightBlack;
+    UIFontDescriptor* base = (family && family[0])
+        ? [UIFontDescriptor fontDescriptorWithName:[NSString stringWithUTF8String:family] size:pt]
+        : [UIFont systemFontOfSize:pt].fontDescriptor;
+    UIFontDescriptor* d = [base fontDescriptorByAddingAttributes:
+        @{UIFontDescriptorTraitsAttribute : @{UIFontWeightTrait : @(w)}}];
+    if (italic)
+        d = [d fontDescriptorWithSymbolicTraits:(d.symbolicTraits | UIFontDescriptorTraitItalic)];
+    UIFont* f = [UIFont fontWithDescriptor:d size:pt];
+    if (!f)
+        f = [UIFont systemFontOfSize:pt weight:w];
+    return f;
+    }
+void ux_ios_text_weight(const char* s, int x, int y, const char* family, int size,
+                        int weight, int italic, int r, int g, int b, int a)
+    {
+    if (!gCtx)
         return;
-    CGContextSetRGBStrokeColor(gCtx, r / 255.0, g / 255.0, b / 255.0, 1.0);
-    CGContextSetLineWidth(gCtx, width);
-    CGContextSetLineJoin(gCtx, kCGLineJoinRound);
+    UIFont* f = ios_weighted_font(family, (CGFloat)(size > 0 ? size : 13), weight, italic);
+    drawString(s, x, y, r, g, b, a, f);
+    }
+/* The width is in device points and may be fractional: CGContextSetLineWidth takes a CGFloat, so a
+ * 1.536-pt border is exactly that.
+ * dash/ndash/phase: the on/off run in device points and the offset into it (ndash 0 = solid); a
+ * negative offset starts the run before its beginning, as lineDashOffset does. */
+void ux_ios_stroke_path(int* ops, int n, double width, int startCap, int endCap, int join,
+                        int* dash, int ndash, int phase, int r, int g, int b, int a)
+    {
+    if (!gCtx || n <= 0 || width <= 0.0)
+        return;
+    CGContextSetRGBStrokeColor(gCtx, r / 255.0, g / 255.0, b / 255.0, a / 255.0);
+    CGContextSetLineWidth(gCtx, (CGFloat)width);
+    /* join: 0 miter, 1 round, 2 bevel (UXJOIN_*) */
+    CGContextSetLineJoin(gCtx, join == 0 ? kCGLineJoinMiter
+                             : join == 2 ? kCGLineJoinBevel : kCGLineJoinRound);
     int cap = startCap > endCap ? startCap : endCap;
     CGContextSetLineCap(gCtx, cap == 1 ? kCGLineCapRound : (cap == 2 ? kCGLineCapSquare : kCGLineCapButt));
+    if (ndash > 0)
+        {
+        CGFloat pat[8];
+        int k = ndash > 8 ? 8 : ndash;
+        for (int j = 0; j < k; j++)
+            pat[j] = dash[j] > 0 ? (CGFloat)dash[j] : (CGFloat)1;
+        CGContextSetLineDash(gCtx, (CGFloat)phase, pat, (size_t)k);
+        }
+    else
+        {
+        CGContextSetLineDash(gCtx, 0, NULL, 0);
+        }
     CGContextBeginPath(gCtx);
     int i = 0, started = 0;
     CGFloat sx = 0, sy = 0;
@@ -689,6 +740,19 @@ int ux_ios_text_width_font(const char* s, const char* family, int size, int bold
         f = bold ? [UIFont boldSystemFontOfSize:pt] : [UIFont systemFontOfSize:pt];
     NSString* t = [NSString stringWithUTF8String:s];
     return (int)([t sizeWithAttributes:@{NSFontAttributeName : f}].width + 0.5);
+    }
+/* The measure at a NUMERIC weight, through the same face the drawing call builds. */
+int ux_ios_text_width_weight(const char* s, const char* family, int size, int weight, int italic)
+    {
+    UIFont* f = ios_weighted_font(family, (CGFloat)(size > 0 ? size : 13), weight, italic);
+    NSString* t = [NSString stringWithUTF8String:s];
+    return (int)([t sizeWithAttributes:@{NSFontAttributeName : f}].width + 0.5);
+    }
+/* The FACE's ascent: the distance from the top of the line to the baseline. */
+int ux_ios_text_ascent(const char* family, int size, int weight, int italic)
+    {
+    UIFont* f = ios_weighted_font(family, (CGFloat)(size > 0 ? size : 13), weight, italic);
+    return (int)ceil(f.ascender);
     }
 int ux_ios_now_ms(void)
     {

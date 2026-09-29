@@ -282,11 +282,19 @@ class UXGemDriver : Object<UXViewDriver>
     // workstation back exactly as drawTextFont does — these are sticky ws state.
     i32 textWidthStyled(u8* s, u8* family, i32 size, bool bold, bool italic)
         {
+        return self.textWidthWeight(s, family, size,
+                                    bold ? (i32)UXWEIGHT_SEMIBOLD : (i32)UXWEIGHT_NORMAL, italic);
+        }
+    // The same measure at a NUMERIC weight.  The VDI synthesises only bold, and the toolkit's GEM
+    // drawing folds the CSS scale at semibold (UXGemGraphics.drawTextFontRGBA), so the measure folds
+    // there too rather than measuring a face it will not draw in.
+    i32 textWidthWeight(u8* s, u8* family, i32 size, i32 weight, bool italic)
+        {
         i32 h = aes_handle();
         i16 ext[8];
         vst_font(h, gGemGraphics != (UXGemGraphics*)0 ? gGemGraphics.fontIdFor(family) : (i32)1);
         i32 fx = (i32)0;
-        if (bold)
+        if (weight >= (i32)UXWEIGHT_SEMIBOLD)
             {
             fx = fx | (i32)1;
             }
@@ -303,7 +311,38 @@ class UXGemDriver : Object<UXViewDriver>
         vst_height(h, (i32)16, (pointer)0, (pointer)0, (pointer)0, (pointer)0);
         return w > (i32)0 ? w : (i32)0;
         }
-
+    // The face's ascent, from the workstation the drawing call would size: vqt_fontinfo's five
+    // distances are bottom, descent, half, ascent and top — the ASCENT line is dists[3], which is the
+    // FreeType ascender at this size — and v_gtext puts the string's cell top at y (the workstation's
+    // default vertical alignment is TA_TOP), so this is the distance from y down to the baseline.
+    // (maxade is not a distance at all: it is the top of the character range, 255.)
+    i32 textAscent(u8* family, i32 size, i32 weight, bool italic)
+        {
+        i32 h = aes_handle();
+        i16 minade = (i16)0;
+        i16 maxade = (i16)0;
+        i16 dists[5];
+        i16 maxw = (i16)0;
+        i16 eff = (i16)0;
+        vst_font(h, gGemGraphics != (UXGemGraphics*)0 ? gGemGraphics.fontIdFor(family) : (i32)1);
+        i32 fx = (i32)0;
+        if (weight >= (i32)UXWEIGHT_SEMIBOLD)
+            {
+            fx = fx | (i32)1;
+            }
+        if (italic)
+            {
+            fx = fx | (i32)4;
+            }
+        vst_effects(h, fx);
+        vst_height(h, size > (i32)0 ? size : (i32)16, (pointer)0, (pointer)0, (pointer)0, (pointer)0);
+        vqt_fontinfo(h, (pointer)&minade, (pointer)&maxade, (pointer)&dists[(i32)0],
+                     (pointer)&maxw, (pointer)&eff);
+        vst_effects(h, (i32)0);
+        vst_font(h, (i32)1);
+        vst_height(h, (i32)16, (pointer)0, (pointer)0, (pointer)0, (pointer)0);
+        return (i32)dists[(i32)3] > (i32)0 ? (i32)dists[(i32)3] : (size > (i32)0 ? size : (i32)16);
+        }
     // GEM has no native popup control (UXKindPopup falls through to the toolkit's own drawRect), and it
     // cannot borrow the AES's menu_popup either: that places its panel in SCREEN coordinates by opening a
     // panel WINDOW, and in the gemd split neither half of that is available to a client.  A client's work

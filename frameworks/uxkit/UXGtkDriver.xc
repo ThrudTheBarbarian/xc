@@ -88,6 +88,8 @@ void ux_gtk_make_segmented(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, i32
 void ux_gtk_seg_set_label(i32 handle, i32 node, i32 seg, u8* label);
 void ux_gtk_seg_select(i32 handle, i32 node, i32 seg);
 i32 ux_gtk_text_width(u8* s, u8* family, i32 size, i32 bold, i32 italic);
+i32 ux_gtk_text_width_weight(u8* s, u8* family, i32 size, i32 weight, i32 italic);
+i32 ux_gtk_text_ascent(u8* family, i32 size, i32 weight, i32 italic);
 i32 ux_gtk_now_ms(void);
 void ux_gtk_now_utc(i32* out7);
 i32 ux_gtk_local_offset_minutes(void);
@@ -551,7 +553,16 @@ class UXGtkDriver : Object<UXViewDriver>
         }
     i32 textWidthStyled(u8* s, u8* family, i32 size, bool bold, bool italic)
         {
-        return ux_gtk_text_width(s, family, size, bold ? (i32)1 : (i32)0, italic ? (i32)1 : (i32)0);
+        return self.textWidthWeight(s, family, size,
+                                    bold ? (i32)UXWEIGHT_SEMIBOLD : (i32)UXWEIGHT_NORMAL, italic);
+        }
+    i32 textWidthWeight(u8* s, u8* family, i32 size, i32 weight, bool italic)
+        {
+        return ux_gtk_text_width_weight(s, family, size, weight, italic ? (i32)1 : (i32)0);
+        }
+    i32 textAscent(u8* family, i32 size, i32 weight, bool italic)
+        {
+        return ux_gtk_text_ascent(family, size, weight, italic ? (i32)1 : (i32)0);
         }
     i32 runPopupMenu(pointer peer, i32 x, i32 y)
         {

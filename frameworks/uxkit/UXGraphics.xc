@@ -19,16 +19,44 @@
 #define UXSTROKE_CURVE 2
 #define UXSTROKE_CLOSE 3
 
+// The line join a native stroke uses at every interior vertex: UXJOIN_MITER / UXJOIN_ROUND /
+// UXJOIN_BEVEL, defined with the caps in UXShapePath.xc (the vector pass owns the vocabulary).
+// GEM ignores it because it keeps the neutral stroker, which is round.
+
+// A font weight for drawTextFontRGBA, on the CSS scale (100 thin .. 900 black, 400 normal).  A number
+// rather than a bool because a map's labels are 600 and a semibold is neither bold nor not.
+#define UXWEIGHT_THIN 100
+#define UXWEIGHT_LIGHT 300
+#define UXWEIGHT_NORMAL 400
+#define UXWEIGHT_MEDIUM 500
+#define UXWEIGHT_SEMIBOLD 600
+#define UXWEIGHT_BOLD 700
+#define UXWEIGHT_BLACK 900
+
 protocol UXGraphics
     {
     void fillRect(UXRect r, i32 pen);                         // a solid rectangle (VDI pen index)
     void fillRectRGB(UXRect r, i32 red, i32 green, i32 blue); // a solid rectangle in true 8-bit RGB
+    void fillRectRGBA(UXRect r, i32 red, i32 green, i32 blue, i32 alpha); // ... and with an alpha
+    // Make a rectangle carry NOTHING.  A layer that composites over a map has to start empty each frame,
+    // and there is no other call that empties: fillRectRGBA(r,0,0,0,0) is a source-over fill, so alpha 0
+    // paints nothing at all rather than erasing.  Where the surface has an alpha this clears to
+    // transparent; where it does not (GEM, GDI — the same two that answer blendsAlpha false) it is the
+    // window background, which is the closest a surface with no transparency can come to empty.
+    void clearRect(UXRect r);
     void drawTheme(u8 * slice, UXRect r);                     // a themed 9-slice (native widget art)
     void drawText(u8 * s, i16 x, i16 y, i32 pen, i32 size);
+    void drawTextRGBA(u8 * s, i16 x, i16 y, i32 red, i32 green, i32 blue, i32 alpha, i32 size);
     // Styled text: a named family at a size, optionally bold/italic (the font chooser's preview).  Win32
     // and Cocoa render the real family + traits; GEM synthesises bold/italic (vst_effects) on its single
     // loaded face and honours the size.  size 0 means the UI default; family "" or unknown falls back.
     void drawTextFont(u8 * s, i16 x, i16 y, i32 pen, u8 * family, i32 size, bool bold, bool italic);
+    // Text with a family AND weight AND colour AND alpha at once: drawTextFont has the face and a pen
+    // index, drawTextRGBA has the colour and alpha and no face, and a map's labels need all four.
+    // `weight` is UXWEIGHT_* (a family with no such weight resolves to the nearest it has); `italic`
+    // selects the italic face.  alpha is the same straight 0..255 as the RGBA family above.
+    void drawTextFontRGBA(u8 * s, i16 x, i16 y, u8 * family, i32 size, i32 weight, bool italic,
+                          i32 red, i32 green, i32 blue, i32 alpha);
     void fillTriangle(i16 x0, i16 y0, i16 x1, i16 y1, i16 x2, i16 y2, i32 pen);
     void fillCircle(i16 cx, i16 cy, i16 r, i32 pen);        // a filled disc (GEM radio; native art elsewhere)
     bool hasThemeArt(void);                                 // TRUE where drawTheme renders real atlas art (GEM, web);

@@ -157,6 +157,20 @@
       ctx.font = font(cstr(famp), size, bold, italic);
       return Math.round(ctx.measureText(cstr(sp)).width);
     },
+    ux_text_width_weight: (sp, famp, size, weight, italic) => {
+      ctx.font = fontW(cstr(famp), size, weight, italic);
+      return Math.round(ctx.measureText(cstr(sp)).width);
+    },
+    // The face's ascent, for a caller converting a baseline into the seam's top-of-line y.  The
+    // font's own box, NOT actualBoundingBoxAscent: that one follows the string (a line of digits is
+    // shorter than a line with a bracket), and a line moved by its own text is the bug this avoids.
+    ux_text_ascent: (famp, size, weight, italic) => {
+      ctx.font = fontW(cstr(famp), size, weight, italic);
+      const m = ctx.measureText('H');
+      const a = (m.fontBoundingBoxAscent !== undefined) ? m.fontBoundingBoxAscent
+                                                       : (0.8 * (size > 0 ? size : 13));
+      return Math.round(a);
+    },
 
     ux_now_utc: (p7) => {
       const d = new Date();

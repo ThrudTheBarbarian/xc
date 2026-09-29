@@ -133,6 +133,31 @@ class UXGemGraphics : Object<UXGraphics>
         vst_effects(vh, (i32)0); // reset ws state
         vst_font(vh, (i32)1);
         }
+    // A family at a numeric weight with a true colour.  The VDI has one loaded face per family and
+    // only a synthetic bold, so a weight at or above semibold sets FX_BOLD and a lighter one does not
+    // — the nearest the VDI can do — and the colour rides the same scratch pen the RGB fills use.
+    // Alpha is dropped; see blendsAlpha.
+    void drawTextFontRGBA(u8* s, i16 x, i16 y, u8* family, i32 size, i32 weight, bool italic,
+                          i32 red, i32 green, i32 blue, i32 alpha)
+        {
+        v_setrgb(vh, (i32)255, red, green, blue);
+        vst_color(vh, (i32)255);
+        vst_font(vh, self.fontIdFor(family));
+        vst_height(vh, size > (i32)0 ? size : (i32)16, (pointer)0, (pointer)0, (pointer)0, (pointer)0);
+        i32 fx = (i32)0;
+        if (weight >= (i32)UXWEIGHT_SEMIBOLD)
+            {
+            fx = fx | (i32)1; // FX_BOLD
+            }
+        if (italic)
+            {
+            fx = fx | (i32)4; // FX_ITALIC
+            }
+        vst_effects(vh, fx);
+        v_gtext(vh, (i32)(origin.x + x), (i32)(origin.y + y), s);
+        vst_effects(vh, (i32)0);
+        vst_font(vh, (i32)1);
+        }
 
     // A filled triangle.  The one shape GEM has no object type for, and an outline view
     // needs it for the disclosure marker: ▶ when collapsed, ▼ when expanded.

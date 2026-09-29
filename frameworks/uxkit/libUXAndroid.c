@@ -807,6 +807,20 @@ int ux_and_text_width_font(const char *s, const char *family, int size, int bold
     (void)family; (void)bold; (void)italic;   /* Typeface: a later slice */
     return ux_and_text_width(s, size);
 }
+int ux_and_text_width_weight(const char *s, const char *family, int size, int weight, int italic) {
+    (void)family; (void)weight; (void)italic; /* one face until the Typeface slice lands */
+    return ux_and_text_width(s, size);
+}
+/* The FACE's ascent: the same function the two text entries place with, so this answers with the
+   distance a paint is offset by.  It is the face's own metric, so a family or weight the caller names
+   would move it once the Typeface slice pins the face on the Paint. */
+int ux_and_text_ascent(const char *family, int size, int weight, int italic) {
+    (void)family; (void)weight; (void)italic;
+    JNIEnv *env = envNow();
+    if (!gPaint) return (int)((size > 0 ? size : 14) * 0.8);
+    (*env)->CallVoidMethod(env, gPaint, gPaintSetTextSize, (jfloat)(size > 0 ? size : 14));
+    return and_line_ascent(env, size > 0 ? size : 14);
+}
 
 /* ── the offscreen proof rig (Bitmap-backed Canvas, getPixel) ───────────── */
 static jobject gShotBmp;                  /* global ref */

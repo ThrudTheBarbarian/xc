@@ -183,6 +183,21 @@ protocol UXViewDriver
     // with the plain measure without overflowing its column.  The measuring counterpart of
     // drawTextFont, and it must agree with it or the wrap will not match the drawing.
     i32 textWidthStyled(u8 * s, u8 * family, i32 size, bool bold, bool italic);
+    // The same measure at a NUMERIC weight, because drawTextFontRGBA draws at one (UXWEIGHT_*): the
+    // seam could draw at a weight it could not measure, so a centred label was centred by the width of
+    // a face it was not drawn in (the same string measures 27 bold and 25 at 600).  textWidthStyled is
+    // this call at UXWEIGHT_SEMIBOLD or UXWEIGHT_NORMAL, and a backend must answer both with the same
+    // face the drawing call would use, or wrapping and drawing disagree.
+    i32 textWidthWeight(u8 * s, u8 * family, i32 size, i32 weight, bool italic);
+    // The FACE's ascent at that size and weight: how far BELOW the line's top — the y drawText lays
+    // text at — the BASELINE sits.  A caller holding a baseline (a canvas, a stylesheet, another
+    // toolkit) cannot convert it into this seam's y without this number, and it is not cosmetic: on
+    // the map, moving a label so its baseline lands where the canvas put it is a 3.7x change in the
+    // distance to the browser's own raster (0.00917 -> 0.00246), and the minimum is sharp.
+    //
+    // It is a property of the FACE, not of the string: an ascent that followed the string's own ink
+    // (a canvas's actualBoundingBoxAscent) would move a line every time its text changed.
+    i32 textAscent(u8 * family, i32 size, i32 weight, bool italic);
 
     // Run a popup button's menu, for a backend whose popup is NOT a native control.  `peer` is the
     // UXPopUpButton (it answers nativeItemCount/nativeItemTitle); x,y are window-local, the button's

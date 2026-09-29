@@ -6,11 +6,16 @@
 #import "UXGeometry.xc"
 #import "UXGraphics.xc"
 
-// The shim's drawing ops (act on the NSGraphicsContext set by the draw in flight).
-void ux_ak_fill(i32 x, i32 y, i32 w, i32 h, i32 r, i32 g, i32 b);
-void ux_ak_text(u8* s, i32 x, i32 y, i32 r, i32 g, i32 b, i32 size);
+// The shim's drawing ops (act on the NSGraphicsContext set by the draw in flight).  The colour is
+// RGBA; alpha is the usual 0..255 straight value.
+void ux_ak_fill(i32 x, i32 y, i32 w, i32 h, i32 r, i32 g, i32 b, i32 a);
+void ux_ak_clear(i32 x, i32 y, i32 w, i32 h); // erase the rect to transparent (compositing Clear)
+void ux_ak_text(u8* s, i32 x, i32 y, i32 r, i32 g, i32 b, i32 a, i32 size);
 void ux_ak_text_font(u8* s, i32 x, i32 y, i32 r, i32 g, i32 b, u8* family, i32 size, i32 bold, i32 italic);
+void ux_ak_text_weight(u8* s, i32 x, i32 y, u8* family, i32 size, i32 weight, i32 italic,
+                       i32 r, i32 g, i32 b, i32 a);
 i32 ux_ak_now_ms(void);
+i32 ux_ak_now_us(void);
 void ux_ak_now_utc(i32* out7);
 i32 ux_ak_local_offset_minutes(void); // the host's current UTC offset (DST applied)               // wall clock, UTC civil components, for UXDate                     // the toolkit's clock (event recorder, animation)
 // Persistent settings, in NSUserDefaults — a named suite per domain, the standard suite for the
@@ -127,6 +132,12 @@ class UXCocoaGraphics : Object<UXGraphics>
         self.penRGB(pen, &cr, &cg, &cb);
         ux_ak_text_font(s, (i32)(origin.x + x), (i32)(origin.y + y), cr, cg, cb,
                         family, size, bold ? (i32)1 : (i32)0, italic ? (i32)1 : (i32)0);
+        }
+    void drawTextFontRGBA(u8* s, i16 x, i16 y, u8* family, i32 size, i32 weight, bool italic,
+                          i32 red, i32 green, i32 blue, i32 alpha)
+        {
+        ux_ak_text_weight(s, (i32)(origin.x + x), (i32)(origin.y + y), family, size, weight,
+                          italic ? (i32)1 : (i32)0, red, green, blue, alpha);
         }
 
     void fillTriangle(i16 x0, i16 y0, i16 x1, i16 y1, i16 x2, i16 y2, i32 pen)

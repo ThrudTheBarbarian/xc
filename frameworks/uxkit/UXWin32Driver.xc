@@ -1389,6 +1389,13 @@ class UXWin32Driver : Object<UXViewDriver>
 
     i32 textWidthStyled(u8* s, u8* family, i32 size, bool bold, bool italic)
         {
+        return self.textWidthWeight(s, family, size,
+                                    bold ? (i32)UXWEIGHT_SEMIBOLD : (i32)UXWEIGHT_NORMAL, italic);
+        }
+    // GDI's CreateFontA takes the 0..1000 weight directly, so the measure and the drawing call build
+    // the SAME face from the same number (see UXGdiGraphics.drawTextFontRGBA).
+    i32 textWidthWeight(u8* s, u8* family, i32 size, i32 weight, bool italic)
+        {
         if (gW32MeasureDC == (pointer)0)
             {
             gW32MeasureDC = CreateCompatibleDC((pointer)0);
@@ -1413,6 +1420,32 @@ class UXWin32Driver : Object<UXViewDriver>
         SelectObject(gW32MeasureDC, old);
         DeleteObject(fnt);
         return sz.cx;
+        }
+    // TextOutA puts y at the TOP of the cell, so the baseline is tmAscent below it.
+    i32 textAscent(u8* family, i32 size, i32 weight, bool italic)
+        {
+        if (gW32MeasureDC == (pointer)0)
+            {
+            gW32MeasureDC = CreateCompatibleDC((pointer)0);
+            }
+        if (gW32MeasureDC == (pointer)0)
+            {
+            return (size > (i32)0 ? size : (i32)12);
+            }
+        i32 h = (i32)0 - (size > (i32)0 ? size : (i32)12);
+        i32 w = weight > (i32)0 ? weight : (i32)400;
+        pointer fnt = CreateFontA(h, (i32)0, (i32)0, (i32)0, w,
+                                  italic ? (u32)1 : (u32)0, (u32)0, (u32)0, (u32)1, (u32)0, (u32)0, (u32)0, (u32)0, family);
+        pointer old = SelectObject(gW32MeasureDC, fnt);
+        TEXTMETRICA tm;
+        tm.tmHeight = (i32)0;
+        tm.tmAscent = (i32)0;
+        tm.tmDescent = (i32)0;
+        tm.tmInternalLeading = (i32)0;
+        GetTextMetricsA(gW32MeasureDC, (pointer)&tm);
+        SelectObject(gW32MeasureDC, old);
+        DeleteObject(fnt);
+        return tm.tmAscent > (i32)0 ? tm.tmAscent : (size > (i32)0 ? size : (i32)12);
         }
 
     // The native COMBOBOX drops its own list and reports CBN_SELCHANGE — nothing to run here.

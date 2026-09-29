@@ -536,7 +536,16 @@ class UXAppKitDriver : Object<UXViewDriver>
         }
     i32 textWidthStyled(u8* s, u8* family, i32 size, bool bold, bool italic)
         {
-        return ux_ak_text_width_font(s, family, size, bold ? (i32)1 : (i32)0, italic ? (i32)1 : (i32)0);
+        return self.textWidthWeight(s, family, size,
+                                    bold ? (i32)UXWEIGHT_SEMIBOLD : (i32)UXWEIGHT_NORMAL, italic);
+        }
+    i32 textWidthWeight(u8* s, u8* family, i32 size, i32 weight, bool italic)
+        {
+        return ux_ak_text_width_weight(s, family, size, weight, italic ? (i32)1 : (i32)0);
+        }
+    i32 textAscent(u8* family, i32 size, i32 weight, bool italic)
+        {
+        return ux_ak_text_ascent(family, size, weight, italic ? (i32)1 : (i32)0);
         }
     // NSPopUpButton pops its own menu and reports back through applyNativeSelection — nothing to run here.
     i32 runPopupMenu(pointer peer, i32 x, i32 y)

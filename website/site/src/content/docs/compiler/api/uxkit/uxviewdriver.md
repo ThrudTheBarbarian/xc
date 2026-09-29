@@ -121,12 +121,35 @@ immediately.
 ```c
 i32 textWidth(u8* s, i32 size);
 i32 textWidthStyled(u8* s, u8* family, i32 size, bool bold, bool italic);
+i32 textWidthWeight(u8* s, u8* family, i32 size, i32 weight, bool italic);
+i32 textAscent(u8* family, i32 size, i32 weight, bool italic);
 ```
 
 Only the backend knows its glyphs.
 [`UXTextLayout.wrapFont`](/compiler/api/uxkit/uxtextlayout/) breaks lines using
 these, while its `wrap` uses a uniform width and needs no driver. Layout logic
 is therefore testable headlessly; rendering is not.
+
+`textWidthWeight` is `textWidthStyled` with the weight on the CSS scale rather
+than a bool, so a measure and a
+[`drawTextFontRGBA`](/compiler/api/uxkit/uxgraphics/#drawtextfontrgba) at the
+same weight agree: `textWidthStyled(s, family, size, bold, italic)` answers
+exactly as `textWidthWeight` at `UXWEIGHT_SEMIBOLD` or `UXWEIGHT_NORMAL`. The
+same string can measure 27 at bold and 25 at 600, and only one of those is what
+the backend draws.
+
+`textAscent` is the other half of a measure: the distance from the **top of the
+line** — the `y` a
+[`drawText*`](/compiler/api/uxkit/uxgraphics/#drawtext) call is handed — down to
+the **baseline**, for a family, size and weight. A caller holding a baseline (a
+canvas' `y`, a print metric, another toolkit's metric) converts it with
+`y = baseline - driver.textAscent(...)`. It is the **face's** ascent, not the
+string's: a line of digits is not shorter than a line with a bracket, and a line
+whose height moves with its own text is the bug this avoids. It is also the
+number each backend's own draw call offsets by, so a conversion done with it
+lands the ink where the caller asked: every bring-up gate lays one cap-height
+row and checks the ink's last row against the baseline the metric names
+(`make mac-weight`, `make gtk-real`, `make ios-real`, `make android-real`).
 
 ## The whole protocol
 
@@ -225,6 +248,8 @@ bool scrollsNatively(void)
 ```c
 i32 textWidth(u8* s, i32 size)
 i32 textWidthStyled(u8* s, u8* family, i32 size, bool bold, bool italic)
+i32 textWidthWeight(u8* s, u8* family, i32 size, i32 weight, bool italic)
+i32 textAscent(u8* family, i32 size, i32 weight, bool italic)
 i32 fontFamilyCount(void)
 i32 fontFamilyName(i32 idx, u8* out, i32 cap)
 ```

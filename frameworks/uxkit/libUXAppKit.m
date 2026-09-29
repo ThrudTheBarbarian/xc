@@ -1271,13 +1271,70 @@ void ux_ak_text_font(const char* s, int x, int y, int r, int g, int b,
                         NSFontAttributeName : f};
     [[NSString stringWithUTF8String:s] drawAtPoint:NSMakePoint(x, y) withAttributes:a];
     }
+
+/* A font at a WEIGHT, not just bold: the CSS 100..900 scale mapped onto AppKit's NSFontWeight*,
+   applied through a font descriptor so a named family is honoured and a family without the exact
+   weight resolves to the nearest it has (the whole point -- the map's 600 is a semibold, and a bool
+   `bold` cannot say it).  Italic is a trait conversion on top, as in ux_ak_text_font. */
+static NSFont* ak_weighted_font(const char* family, CGFloat sz, int weight, int italic)
+    {
+    CGFloat w;
+    if (weight <= 100)      w = -0.80;  /* thin */
+    else if (weight <= 300) w = -0.40;  /* light */
+    else if (weight <= 400) w = 0.00;   /* regular */
+    else if (weight <= 500) w = 0.23;   /* medium */
+    else if (weight <= 600) w = 0.30;   /* semibold */
+    else if (weight <= 700) w = 0.40;   /* bold */
+    else if (weight <= 800) w = 0.56;   /* heavy */
+    else                    w = 0.62;   /* black */
+    NSDictionary* traits = @{NSFontWeightTrait : @(w)};
+    NSDictionary* attrs = (family && *family)
+        ? @{NSFontFamilyAttribute : [NSString stringWithUTF8String:family], NSFontTraitsAttribute : traits}
+        : @{NSFontTraitsAttribute : traits};
+    NSFont* f = [NSFont fontWithDescriptor:[NSFontDescriptor fontDescriptorWithFontAttributes:attrs] size:sz];
+    if (!f)
+        f = [NSFont systemFontOfSize:sz weight:w];
+    if (italic)
+        f = [[NSFontManager sharedFontManager] convertFont:f toHaveTrait:NSItalicFontMask];
+    return f;
+    }
+
+// The measure at a NUMERIC weight — the counterpart of ux_ak_text_weight below, through the SAME
+// ak_weighted_font, so a string is measured in the face it will be drawn in.
+int ux_ak_text_width_weight(const char* s, const char* family, int size, int weight, int italic)
+    {
+    NSFont* f = ak_weighted_font(family, (CGFloat)(size > 0 ? size : 12), weight, italic);
+    NSSize z = [[NSString stringWithUTF8String:s] sizeWithAttributes:@{NSFontAttributeName : f}];
+    return (int)ceil(z.width);
+    }
+// The FACE's ascent: the distance from the top of the line to the baseline, which is where
+// NSBezierPath/NSAttributedString put a drawAtPoint in this flipped context.  Rounded UP for the same
+// reason a width is: a caller converting a baseline into the seam's y must not land inside the glyphs.
+int ux_ak_text_ascent(const char* family, int size, int weight, int italic)
+    {
+    NSFont* f = ak_weighted_font(family, (CGFloat)(size > 0 ? size : 12), weight, italic);
+    return (int)ceil([f ascender]);
+    }
+
+void ux_ak_text_weight(const char* s, int x, int y, const char* family, int size,
+                       int weight, int italic, int r, int g, int b, int a)
+    {
+    NSFont* f = ak_weighted_font(family, (CGFloat)(size > 0 ? size : 12), weight, italic);
+    NSDictionary* at = @{NSForegroundColorAttributeName :
+                             [NSColor colorWithRed:r / 255.0
+                                             green:g / 255.0
+                                              blue:b / 255.0
+                                             alpha:a / 255.0],
+                         NSFontAttributeName : f};
+    [[NSString stringWithUTF8String:s] drawAtPoint:NSMakePoint(x, y) withAttributes:at];
+    }
 // A filled polygon from a flat x,y,x,y... array — the general form of ux_ak_tri, and what the
 // neutral painter hands down for stroke quads, joins, caps and gradient bands alike.
-void ux_ak_poly(const short* xy, int n, int r, int g, int b)
+void ux_ak_poly(const short* xy, int n, int r, int g, int b, int a)
     {
     if (n < 3)
         return;
-    [[NSColor colorWithRed:r / 255.0 green:g / 255.0 blue:b / 255.0 alpha:1.0] setFill];
+    [[NSColor colorWithRed:r / 255.0 green:g / 255.0 blue:b / 255.0 alpha:a / 255.0] setFill];
     NSBezierPath* p = [NSBezierPath bezierPath];
     [p moveToPoint:NSMakePoint(xy[0], xy[1])];
     for (int i = 1; i < n; i++)

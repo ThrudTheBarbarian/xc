@@ -104,12 +104,27 @@ class UXAndroidGraphics : Object<UXGraphics>
         i32 cg = (i32)0;
         i32 cb = (i32)0;
         self.penRGB(pen, &cr, &cg, &cb);
-        ux_and_text(s, (i32)(origin.x + x), (i32)(origin.y + y), cr, cg, cb, size);
+        ux_and_text(s, (i32)(origin.x + x), (i32)(origin.y + y), cr, cg, cb, (i32)255, size);
+        }
+    void drawTextRGBA(u8* s, i16 x, i16 y, i32 red, i32 green, i32 blue, i32 alpha, i32 size)
+        {
+        ux_and_text(s, (i32)(origin.x + x), (i32)(origin.y + y), red, green, blue, alpha, size);
         }
     void drawTextFont(u8* s, i16 x, i16 y, i32 pen, u8* family, i32 size, bool bold, bool italic)
         {
-        // Typeface selection is a later slice; size and colour are honoured.
-        self.drawText(s, x, y, pen, size);
+        i32 cr = (i32)0;
+        i32 cg = (i32)0;
+        i32 cb = (i32)0;
+        self.penRGB(pen, &cr, &cg, &cb);
+        ux_and_text_weight(s, (i32)(origin.x + x), (i32)(origin.y + y), family, size,
+                           bold ? (i32)UXWEIGHT_SEMIBOLD : (i32)UXWEIGHT_NORMAL,
+                           italic ? (i32)1 : (i32)0, cr, cg, cb, (i32)255);
+        }
+    void drawTextFontRGBA(u8* s, i16 x, i16 y, u8* family, i32 size, i32 weight, bool italic,
+                          i32 red, i32 green, i32 blue, i32 alpha)
+        {
+        ux_and_text_weight(s, (i32)(origin.x + x), (i32)(origin.y + y), family, size, weight,
+                           italic ? (i32)1 : (i32)0, red, green, blue, alpha);
         }
 
     void fillTriangle(i16 x0, i16 y0, i16 x1, i16 y1, i16 x2, i16 y2, i32 pen)

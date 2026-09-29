@@ -380,7 +380,16 @@ class UXWebDriver : Object<UXViewDriver>
         }
     i32 textWidthStyled(u8* s, u8* family, i32 size, bool bold, bool italic)
         {
-        return ux_text_width(s, family, size, bold ? (i32)1 : (i32)0, italic ? (i32)1 : (i32)0);
+        return self.textWidthWeight(s, family, size,
+                                    bold ? (i32)UXWEIGHT_SEMIBOLD : (i32)UXWEIGHT_NORMAL, italic);
+        }
+    i32 textWidthWeight(u8* s, u8* family, i32 size, i32 weight, bool italic)
+        {
+        return ux_text_width_weight(s, family, size, weight, italic ? (i32)1 : (i32)0);
+        }
+    i32 textAscent(u8* family, i32 size, i32 weight, bool italic)
+        {
+        return ux_text_ascent(family, size, weight, italic ? (i32)1 : (i32)0);
         }
 
     // ---- popup / fonts -------------------------------------------------------

@@ -186,6 +186,30 @@ macOS render the real family and traits. GEM synthesises bold and italic
 (`vst_effects`) on its single loaded face and honours the size. An unknown
 or empty family falls back instead of failing.
 
+### drawTextFontRGBA
+
+```c
+void drawTextFontRGBA(u8* s, i16 x, i16 y, u8* family, i32 size, i32 weight, bool italic,
+                      i32 red, i32 green, i32 blue, i32 alpha)
+```
+
+A family **and** a colour **and** an alpha at once, with the weight on the
+CSS scale rather than a bool — a map's labels are `600`, and semibold is
+neither bold nor not:
+
+```c
+g.drawTextFontRGBA((u8*)"N", x, y, (u8*)"ui-monospace", 10,
+                   UXWEIGHT_SEMIBOLD, false, 70, 80, 90, 200);
+```
+
+`weight` is one of `UXWEIGHT_THIN` (100), `UXWEIGHT_LIGHT` (300),
+`UXWEIGHT_NORMAL` (400), `UXWEIGHT_MEDIUM` (500), `UXWEIGHT_SEMIBOLD`
+(600), `UXWEIGHT_BOLD` (700) or `UXWEIGHT_BLACK` (900). A family with no
+such weight resolves to the nearest it has; the number is passed through, so
+an intermediate value is honoured rather than snapped to a named step. GEM has
+one loaded face, so the weight picks its bold or regular cut; the other
+backends ask the platform for the real weight.
+
 ### drawTheme
 
 ```c
