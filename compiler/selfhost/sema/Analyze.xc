@@ -334,6 +334,11 @@ class Analyze
             return false;
         if (n.kind() == (u16)nkIdent && n.name() != (String*)0 && n.name().equals(name))
             return true;
+        // A call through a function-pointer local (`f()`) is a call node that
+        // carries the local's name, with no identifier under it. A function of
+        // the same name also matches, which can only hide a warning.
+        if (n.kind() == (u16)nkCall && n.name() != (String*)0 && n.name().equals(name))
+            return true;
         for (u32 i = (u32)0; i < n.kidCount(); i = i + (u32)1)
             if (namesLocal(n.kid(i), name))
                 return true;
