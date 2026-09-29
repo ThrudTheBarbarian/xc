@@ -2483,6 +2483,7 @@ static BOOL XTIsErasedKeyType(XTType* t)
                  callName:(NSString*)callName
     {
     NSMutableArray<NSString*>* specs = [NSMutableArray array];
+    NSMutableArray<NSString*>* spellings = [NSMutableArray array];
     NSUInteger i = 0;
     NSUInteger n = fmt.length;
     while (i < n)
@@ -2490,14 +2491,69 @@ static BOOL XTIsErasedKeyType(XTType* t)
         unichar c = [fmt characterAtIndex:i++];
         if (c != '%' || i >= n)
             continue;
+        NSUInteger start = i - 1;   // the '%'
+        // Flags, then width, then precision — all before the conversion. A `*`
+        // width or precision consumes an ARGUMENT of its own, so it is counted
+        // (as a "*" entry, which no branch type-checks) but not folded into the
+        // conversion. Skipping these is what lets `%.9f` / `%12f` reach the `f`
+        // branch at all: reading the byte after the '%' as the conversion saw
+        // "." or "1", matched nothing, and silently checked nothing.
+        while (i < n)
+            {
+            unichar fl = [fmt characterAtIndex:i];
+            if (fl != '-' && fl != '+' && fl != ' ' && fl != '#' && fl != '0')
+                break;
+            i++;
+            }
+        if (i < n && [fmt characterAtIndex:i] == '*')
+            {
+            [specs addObject:@"*"];
+            [spellings addObject:@"*"];
+            i++;
+            }
+        else
+            {
+            while (i < n)
+                {
+                unichar d = [fmt characterAtIndex:i];
+                if (d < '0' || d > '9')
+                    break;
+                i++;
+                }
+            }
+        if (i < n && [fmt characterAtIndex:i] == '.')
+            {
+            i++;
+            if (i < n && [fmt characterAtIndex:i] == '*')
+                {
+                [specs addObject:@"*"];
+                [spellings addObject:@"*"];
+                i++;
+                }
+            else
+                {
+                while (i < n)
+                    {
+                    unichar d = [fmt characterAtIndex:i];
+                    if (d < '0' || d > '9')
+                        break;
+                    i++;
+                    }
+                }
+            }
+        if (i >= n)
+            break;
         unichar s = [fmt characterAtIndex:i++];
         if (s == '%')
             continue;
+        NSString* spelling =
+            [fmt substringWithRange:NSMakeRange(start, i - start)];
         if (s == 'l')
             {
             if (i >= n)
                 {
                 [specs addObject:@"l?"];
+                [spellings addObject:spelling];
                 break;
                 }
             unichar sub = [fmt characterAtIndex:i++];
@@ -2507,16 +2563,22 @@ static BOOL XTIsErasedKeyType(XTType* t)
                 if (i >= n)
                     {
                     [specs addObject:@"ll?"];
+                    [spellings addObject:spelling];
                     break;
                     }
                 unichar sub2 = [fmt characterAtIndex:i++];
                 [specs addObject:[NSString stringWithFormat:@"ll%C", sub2]];
+                [spellings addObject:
+                    [fmt substringWithRange:NSMakeRange(start, i - start)]];
                 continue;
                 }
             [specs addObject:[NSString stringWithFormat:@"l%C", sub]];
+            [spellings addObject:
+                [fmt substringWithRange:NSMakeRange(start, i - start)]];
             continue;
             }
         [specs addObject:[NSString stringWithFormat:@"%C", s]];
+        [spellings addObject:spelling];
         }
 
     NSUInteger argCount = (args.count > firstVaIdx) ? args.count - firstVaIdx : 0;
@@ -2553,7 +2615,7 @@ static BOOL XTIsErasedKeyType(XTType* t)
         BOOL isStruct = (kd == XTTypeKindStruct || kd == XTTypeKindClass);
 
         NSString* hint = nil;
-        NSString* spelling = [NSString stringWithFormat:@"%%%@", spec];
+        NSString* spelling = spellings[k];
 
         if ([spec isEqualToString:@"d"] || [spec isEqualToString:@"u"] ||
             [spec isEqualToString:@"x"])
@@ -2672,6 +2734,53 @@ static BOOL XTIsErasedKeyType(XTType* t)
         unichar c = [fmt characterAtIndex:i++];
         if (c != '%' || i >= n)
             continue;
+        // Flags, width and precision sit between the '%' and the conversion,
+        // and a `*` width or precision is an ARGUMENT of its own. Without
+        // this a `%12d` gave no hint at all and the hint list desynchronised
+        // from the argument list at the next specifier.
+        while (i < n)
+            {
+            unichar fl = [fmt characterAtIndex:i];
+            if (fl != '-' && fl != '+' && fl != ' ' && fl != '#' && fl != '0')
+                break;
+            i++;
+            }
+        if (i < n && [fmt characterAtIndex:i] == '*')
+            {
+            [types addObject:(id)[NSNull null]];
+            i++;
+            }
+        else
+            {
+            while (i < n)
+                {
+                unichar d = [fmt characterAtIndex:i];
+                if (d < '0' || d > '9')
+                    break;
+                i++;
+                }
+            }
+        if (i < n && [fmt characterAtIndex:i] == '.')
+            {
+            i++;
+            if (i < n && [fmt characterAtIndex:i] == '*')
+                {
+                [types addObject:(id)[NSNull null]];
+                i++;
+                }
+            else
+                {
+                while (i < n)
+                    {
+                    unichar d = [fmt characterAtIndex:i];
+                    if (d < '0' || d > '9')
+                        break;
+                    i++;
+                    }
+                }
+            }
+        if (i >= n)
+            break;
         unichar s = [fmt characterAtIndex:i++];
         if (s == '%')
             continue;
@@ -2736,11 +2845,31 @@ static BOOL XTIsErasedKeyType(XTType* t)
         i++;
         if (i >= n)
             return nil;
-        unichar s = [fmt characterAtIndex:i];
-        if (s == '.')
+        // FLAGS, then WIDTH, then PRECISION — the same grammar the checker
+        // walks. Reading the byte after '%' as the conversion is what made
+        // `%12d` and `%-8d` unrecognised, and an unrecognised specifier
+        // abandons the WHOLE rewrite, so a u32 stayed on `%d` and printed its
+        // low 16 bits: the exact truncation this pass exists to prevent.
+        while (i < n)
             {
-            [out appendString:@"."];
+            unichar fl = [fmt characterAtIndex:i];
+            if (fl != '-' && fl != '+' && fl != ' ' && fl != '#' && fl != '0')
+                break;
+            [out appendFormat:@"%C", fl];
             i++;
+            }
+        if (i >= n)
+            return nil;
+        if ([fmt characterAtIndex:i] == '*')     // a `*` width reads an ARG
+            {
+            if (va >= args.count)
+                return nil;
+            [out appendString:@"*"];
+            i++;
+            va++;
+            }
+        else
+            {
             while (i < n)
                 {
                 unichar d = [fmt characterAtIndex:i];
@@ -2748,6 +2877,35 @@ static BOOL XTIsErasedKeyType(XTType* t)
                     break;
                 [out appendFormat:@"%C", d];
                 i++;
+                }
+            }
+        if (i >= n)
+            return nil;
+        unichar s = [fmt characterAtIndex:i];
+        if (s == '.')
+            {
+            [out appendString:@"."];
+            i++;
+            if (i >= n)
+                return nil;
+            if ([fmt characterAtIndex:i] == '*')  // a `*` precision reads an ARG
+                {
+                if (va >= args.count)
+                    return nil;
+                [out appendString:@"*"];
+                i++;
+                va++;
+                }
+            else
+                {
+                while (i < n)
+                    {
+                    unichar d = [fmt characterAtIndex:i];
+                    if (d < '0' || d > '9')
+                        break;
+                    [out appendFormat:@"%C", d];
+                    i++;
+                    }
                 }
             if (i >= n)
                 return nil;

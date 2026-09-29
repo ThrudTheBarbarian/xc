@@ -2779,9 +2779,15 @@ class Sema
             if (_isOp(cls.name(), "Stdio"))
                 {
                 if (_isOp(n.name(), "printf"))
+                    {
                     rewriteFormatAt(n, (u32)0);
+                    checkFormatAt(n, (u32)0, useFormatCallName(n.name(), "printf"));
+                    }
                 else if (_isOp(n.name(), "printfAt"))
+                    {
                     rewriteFormatAt(n, (u32)2);
+                    checkFormatAt(n, (u32)2, useFormatCallName(n.name(), "printfAt"));
+                    }
                 }
             return;
             }
@@ -3528,6 +3534,7 @@ class Sema
         n.setSym(m.sym());
         noteCallEdge(clsLabel(owner2 != 0 ? owner2.name() : owner, m.sym() != 0 ? m.sym() : m.name()));
         rewriteFormat(n, owner);
+        checkFormat(n, owner);
         // Which KIND of receiver reached this method decides whether its
         // prologue retains self. Only an EXPLICIT receiver counts: a bare call
         // promoted by `use`, or an implicit-self call inside the class, leaves
@@ -3966,10 +3973,46 @@ class Sema
                 continue;
                 }
             i = i + (u32)1;
-            while (i < f.byteLength() && (f.byteAt(i) == (u8)'.' || f.byteAt(i) == (u8)'-' || (f.byteAt(i) >= (u8)'0' && f.byteAt(i) <= (u8)'9')))
+            // The full grammar, so the walk stays aligned with the arguments:
+            // flags, width, precision, and a `*` in either position is an
+            // ARGUMENT that must be counted or every later hint lands on the
+            // wrong argument.
+            while (i < f.byteLength())
+                {
+                u8 fl = f.byteAt(i);
+                if (fl != (u8)'-' && fl != (u8)'+' && fl != (u8)' ' && fl != (u8)'#'
+                    && fl != (u8)'0')
+                    break;
                 i = i + (u32)1;
+                }
             if (i >= f.byteLength())
                 return (String*)0;
+            if (f.byteAt(i) == (u8)'*')
+                {
+                i = i + (u32)1;
+                seen = seen + (u32)1;
+                }
+            else
+                while (i < f.byteLength() && f.byteAt(i) >= (u8)'0' && f.byteAt(i) <= (u8)'9')
+                    i = i + (u32)1;
+            if (i >= f.byteLength())
+                return (String*)0;
+            if (f.byteAt(i) == (u8)'.')
+                {
+                i = i + (u32)1;
+                if (i >= f.byteLength())
+                    return (String*)0;
+                if (f.byteAt(i) == (u8)'*')
+                    {
+                    i = i + (u32)1;
+                    seen = seen + (u32)1;
+                    }
+                else
+                    while (i < f.byteLength() && f.byteAt(i) >= (u8)'0' && f.byteAt(i) <= (u8)'9')
+                        i = i + (u32)1;
+                if (i >= f.byteLength())
+                    return (String*)0;
+                }
             bool lng = false;
             if (f.byteAt(i) == (u8)'l')
                 {
@@ -4060,16 +4103,60 @@ class Sema
             i = i + (u32)1;
             if (i >= f.byteLength())
                 return;
-            u8 sp = f.byteAt(i);
-            if (sp == (u8)'.')
+            // FLAGS, then WIDTH, then PRECISION — the same grammar the checker
+            // walks. Reading the byte after '%' as the conversion is what made
+            // `%12d` and `%-8d` unrecognised, and an unrecognised specifier
+            // abandons the WHOLE rewrite, so a u32 stayed on `%d` and printed
+            // its low 16 bits: the exact truncation this pass exists to
+            // prevent. A `*` width or precision is an ARGUMENT of its own.
+            while (i < f.byteLength())
                 {
-                out.appendByte((u8)'.');
+                u8 fl = f.byteAt(i);
+                if (fl != (u8)'-' && fl != (u8)'+' && fl != (u8)' ' && fl != (u8)'#'
+                    && fl != (u8)'0')
+                    break;
+                out.appendByte(fl);
                 i = i + (u32)1;
+                }
+            if (i >= f.byteLength())
+                return;
+            if (f.byteAt(i) == (u8)'*')
+                {
+                if (va >= call.kidCount())
+                    return;
+                out.appendByte((u8)'*');
+                i = i + (u32)1;
+                va = va + (u32)1;
+                }
+            else
                 while (i < f.byteLength() && f.byteAt(i) >= (u8)'0' && f.byteAt(i) <= (u8)'9')
                     {
                     out.appendByte(f.byteAt(i));
                     i = i + (u32)1;
                     }
+            if (i >= f.byteLength())
+                return;
+            u8 sp = f.byteAt(i);
+            if (sp == (u8)'.')
+                {
+                out.appendByte((u8)'.');
+                i = i + (u32)1;
+                if (i >= f.byteLength())
+                    return;
+                if (f.byteAt(i) == (u8)'*')
+                    {
+                    if (va >= call.kidCount())
+                        return;
+                    out.appendByte((u8)'*');
+                    i = i + (u32)1;
+                    va = va + (u32)1;
+                    }
+                else
+                    while (i < f.byteLength() && f.byteAt(i) >= (u8)'0' && f.byteAt(i) <= (u8)'9')
+                        {
+                        out.appendByte(f.byteAt(i));
+                        i = i + (u32)1;
+                        }
                 if (i >= f.byteLength())
                     return;
                 sp = f.byteAt(i);
@@ -4146,6 +4233,282 @@ class Sema
             }
         if (changed)
             lit.setName(out);
+        }
+
+    // The reference names a `use`-promoted bare call in the diagnostic
+    // differently from an explicit one: `printf (Stdio.printf via use)`, so
+    // that a reader can tell which spelling they wrote. Built here so the
+    // two `use` call sites cannot drift from the reference's wording.
+    String* useFormatCallName(String* callee, string method)
+        {
+        String* s = String.withString(callee);
+        s.appendCString(" (Stdio.");
+        s.appendCString(method);
+        s.appendCString(" via use)");
+        return s;
+        }
+
+    // ── FORMAT-STRING CHECKER ─────────────────────────────────────────────
+    // The reference walks a LITERAL format string's %-specifiers and warns
+    // when the matching vararg is not the type the conversion reads: `%d`/`%u`
+    // /`%x` are 16-bit, `%ld` 32, `%lld` 64, `%f` is float and `%lf` double.
+    // The port carried the `printf-format` category name in `--help` and no
+    // checker behind it, so a port-only build lost a diagnostic the reference
+    // had always emitted (bug 565). Same grammar as the type-directed upgrade
+    // above: flags, width and precision are skipped, and a `*` width or
+    // precision is its own ARGUMENT slot — counted, but checked by nobody.
+    void checkFormat(Node* call, String* owner)
+        {
+        u32 fmtIdx = (u32)0;
+        if (_isOp(owner, "Stdio"))
+            {
+            if (_isOp(call.name(), "printf"))
+                fmtIdx = (u32)1;
+            else if (_isOp(call.name(), "printfAt"))
+                fmtIdx = (u32)3;
+            else
+                return;
+            }
+        else if (_isOp(owner, "String"))
+            {
+            if (_isOp(call.name(), "withFormat") || _isOp(call.name(), "appendFormat"))
+                fmtIdx = (u32)1;
+            else
+                return;
+            }
+        else
+            return;
+        String* name = String.withString(owner);
+        name.appendByte((u8)'.');
+        name.append(call.name());
+        checkFormatAt(call, fmtIdx, name);
+        }
+
+    String* expectedForSpec(String* spec)
+        {
+        if (_isOp(spec, "d"))   return String.withCString("16-bit signed integer");
+        if (_isOp(spec, "u"))   return String.withCString("16-bit unsigned integer");
+        if (_isOp(spec, "x"))   return String.withCString("16-bit unsigned integer");
+        if (_isOp(spec, "ld"))  return String.withCString("32-bit signed integer");
+        if (_isOp(spec, "lu"))  return String.withCString("32-bit unsigned integer");
+        if (_isOp(spec, "lx"))  return String.withCString("32-bit unsigned integer");
+        if (_isOp(spec, "lld")) return String.withCString("64-bit signed integer");
+        if (_isOp(spec, "llu")) return String.withCString("64-bit unsigned integer");
+        if (_isOp(spec, "llx")) return String.withCString("64-bit hex");
+        if (_isOp(spec, "f"))   return String.withCString("float");
+        if (_isOp(spec, "lf"))  return String.withCString("double");
+        if (_isOp(spec, "c"))   return String.withCString("character");
+        if (_isOp(spec, "s"))   return String.withCString("string");
+        if (_isOp(spec, "@"))   return String.withCString("struct/class");
+        return String.withCString("?");
+        }
+
+    bool isAggType(String* t)
+        {
+        if (t == 0)
+            return false;
+        String* bare = Node.stripElem(t);
+        return _classes.get((Hashable*)bare) != 0 || _protocols.get((Hashable*)bare) != 0;
+        }
+
+    void checkFormatAt(Node* call, u32 fmtIdx, String* callName)
+        {
+        if (call.kidCount() <= fmtIdx)
+            return;
+        Node* lit = call.kid(fmtIdx);
+        if (lit.kind() != (u16)nkStr || lit.name() == 0)
+            return;
+        String* f = lit.name();
+
+        Array* specs = new Array();     // conversion keys, one per argument read
+        Array* spellings = new Array(); // the source text of each, for the message
+        u32 i = (u32)0;
+        u32 n = f.byteLength();
+        while (i < n)
+            {
+            u8 c = f.byteAt(i);
+            i = i + (u32)1;
+            if (c != (u8)'%' || i >= n)
+                continue;
+            u32 start = i - (u32)1;
+            while (i < n)
+                {
+                u8 fl = f.byteAt(i);
+                if (fl != (u8)'-' && fl != (u8)'+' && fl != (u8)' ' && fl != (u8)'#' && fl != (u8)'0')
+                    break;
+                i = i + (u32)1;
+                }
+            if (i < n && f.byteAt(i) == (u8)'*')
+                {
+                specs.add((Object*)String.withCString("*"));
+                spellings.add((Object*)String.withCString("*"));
+                i = i + (u32)1;
+                }
+            else
+                while (i < n && f.byteAt(i) >= (u8)'0' && f.byteAt(i) <= (u8)'9')
+                    i = i + (u32)1;
+            if (i < n && f.byteAt(i) == (u8)'.')
+                {
+                i = i + (u32)1;
+                if (i < n && f.byteAt(i) == (u8)'*')
+                    {
+                    specs.add((Object*)String.withCString("*"));
+                    spellings.add((Object*)String.withCString("*"));
+                    i = i + (u32)1;
+                    }
+                else
+                    while (i < n && f.byteAt(i) >= (u8)'0' && f.byteAt(i) <= (u8)'9')
+                        i = i + (u32)1;
+                }
+            if (i >= n)
+                break;
+            u8 s = f.byteAt(i);
+            i = i + (u32)1;
+            if (s == (u8)'%')
+                continue;
+            String* spelling = f.substringBytes(start, i - start);
+            if (s == (u8)'l')
+                {
+                if (i >= n)
+                    {
+                    specs.add((Object*)String.withCString("l?"));
+                    spellings.add((Object*)spelling);
+                    break;
+                    }
+                u8 sub = f.byteAt(i);
+                i = i + (u32)1;
+                if (sub == (u8)'l')
+                    {
+                    if (i >= n)
+                        {
+                        specs.add((Object*)String.withCString("ll?"));
+                        spellings.add((Object*)spelling);
+                        break;
+                        }
+                    u8 sub2 = f.byteAt(i);
+                    i = i + (u32)1;
+                    String* k2 = String.withCString("ll");
+                    k2.appendByte(sub2);
+                    specs.add((Object*)k2);
+                    spellings.add((Object*)f.substringBytes(start, i - start));
+                    continue;
+                    }
+                String* k1 = String.withCString("l");
+                k1.appendByte(sub);
+                specs.add((Object*)k1);
+                spellings.add((Object*)f.substringBytes(start, i - start));
+                continue;
+                }
+            String* k = String.withCString("");
+            k.appendByte(s);
+            specs.add((Object*)k);
+            spellings.add((Object*)spelling);
+            }
+
+        u32 argCount = call.kidCount() > fmtIdx + (u32)1 ? call.kidCount() - (fmtIdx + (u32)1) : (u32)0;
+        if (argCount != specs.count())
+            {
+            String* msg = String.withString(callName);
+            msg.appendCString(": format string expects ");
+            msg.append(String.withU32(specs.count()));
+            msg.appendCString(specs.count() == (u32)1 ? " argument, " : " arguments, ");
+            msg.append(String.withU32(argCount));
+            msg.appendCString(" supplied");
+            _warnAt(String.withCString("printf-format"), msg, call);
+            }
+
+        u32 pairs = specs.count() < argCount ? specs.count() : argCount;
+        for (u32 kk = (u32)0; kk < pairs; kk = kk + (u32)1)
+            {
+            String* spec = (String*)specs.get(kk);
+            Node* a = call.kid(fmtIdx + (u32)1 + kk);
+            String* at = a.ty();
+            if (at == 0)
+                continue;
+            bool isNarrow = _isOp(at, "i8") || _isOp(at, "u8") || _isOp(at, "i16")
+                            || _isOp(at, "u16") || _isOp(at, "bool");
+            bool isWide = _isOp(at, "i32") || _isOp(at, "u32");
+            bool isVeryWide = _isOp(at, "i64") || _isOp(at, "u64");
+            bool isInt = isNarrow || isWide || isVeryWide;
+            bool isF = _isOp(at, "float");
+            bool isD = _isOp(at, "double");
+            bool isP = Types.isPointer(at);
+            bool isAgg = isAggType(at);
+
+            String* hint = 0;
+            if (_isOp(spec, "d") || _isOp(spec, "u") || _isOp(spec, "x"))
+                {
+                if (isVeryWide) hint = String.withCString("use %ll<specifier> for 64-bit integers");
+                else if (isWide) hint = String.withCString("use %l<specifier> for 32-bit integers");
+                else if (isF || isD) hint = String.withCString("use %f or %lf for floating-point");
+                else if (isP || isAgg) hint = 0;
+                else if (isInt) continue;
+                else hint = 0;
+                }
+            else if (_isOp(spec, "ld") || _isOp(spec, "lu") || _isOp(spec, "lx"))
+                {
+                if (isVeryWide) hint = String.withCString("use %ll<specifier> for 64-bit integers");
+                else if (isF || isD) hint = String.withCString("use %f or %lf for floating-point");
+                else if (isInt) continue;
+                else hint = 0;
+                }
+            else if (_isOp(spec, "lld") || _isOp(spec, "llu") || _isOp(spec, "llx"))
+                {
+                if (isF || isD) hint = String.withCString("use %f or %lf for floating-point");
+                else if (isInt) continue;
+                else hint = 0;
+                }
+            else if (_isOp(spec, "f"))
+                {
+                if (isD) hint = String.withCString("use %lf for double");
+                else if (isF) continue;
+                else hint = 0;
+                }
+            else if (_isOp(spec, "lf"))
+                {
+                if (isF) hint = String.withCString("use %f for float");
+                else if (isD) continue;
+                else hint = 0;
+                }
+            else if (_isOp(spec, "c"))
+                {
+                if (isNarrow) continue;
+                hint = 0;
+                }
+            else if (_isOp(spec, "s"))
+                {
+                if (isP) continue;
+                hint = 0;
+                }
+            else if (_isOp(spec, "@"))
+                {
+                if (isAgg || isP) continue;
+                hint = 0;
+                }
+            else
+                continue;   // `*` and unknown specifiers: no diagnostic
+
+            String* msg = String.withString(callName);
+            msg.appendCString(": '");
+            msg.append((String*)spellings.get(kk));
+            msg.appendCString("' expects ");
+            msg.append(expectedForSpec(spec));
+            msg.appendCString(" but argument ");
+            msg.append(String.withU32(kk + (u32)1));
+            msg.appendCString(" is ");
+            // The reference keeps an element annotation on the type OBJECT
+            // and prints only the bare name (`Array*`, not `Array<String>*`),
+            // so printing the port's spelled type here would diverge on any
+            // aggregate argument that warns.
+            msg.append(Node.stripElem(at));
+            if (hint != 0)
+                {
+                msg.appendCString(" (");
+                msg.append(hint);
+                msg.appendByte((u8)')');
+                }
+            _warnAt(String.withCString("printf-format"), msg, call);
+            }
         }
 
     // `u8 f(u8 a, u16 b)` is `u8(u8,u16)`; as a BOUND method the same shape
