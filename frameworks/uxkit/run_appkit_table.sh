@@ -19,10 +19,10 @@ case "$(uname)" in Darwin) ;; *) echo "== appkit-table: skipped (not macOS) ==";
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
 
 echo "== appkit-table: building the ObjC shim + the demo for arm64 =="
-cc -fobjc-arc -fno-objc-msgsend-selector-stubs -dynamiclib -install_name "$work/libUXAppKit.dylib" "$here/libUXAppKit.m" -framework Cocoa -o "$work/libUXAppKit.dylib"
+cc -fobjc-arc -fno-objc-msgsend-selector-stubs -dynamiclib -install_name "$work/libUXAppKit.dylib" "$here/libUXAppKit.m" -framework Cocoa -framework OpenGL -o "$work/libUXAppKit.dylib"
 "$xcc" -A arm64 -I "$here" "$here/demo_appkit_table.xc" \
-    -Xlinker "$work/libUXAppKit.dylib" -framework Cocoa -o "$work/demo_appkit_table" -q 2>/dev/null
+    -Xlinker "$work/libUXAppKit.dylib" -framework Cocoa -framework OpenGL -o "$work/demo_appkit_table" -q 2>/dev/null
 
-echo "== appkit-table: launching — click a row, scroll the list, then close the window =="
+echo "== appkit-table: launching (self-closing; --stay to keep it up) =="
 "$work/demo_appkit_table"
 echo "== appkit-table: done =="

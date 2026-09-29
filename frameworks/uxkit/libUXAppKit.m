@@ -16,6 +16,11 @@
 // (the menu tree) use __bridge / __bridge_retained to hand ARC ownership across the boundary.
 #import <Cocoa/Cocoa.h>
 #include <sys/time.h>
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <dlfcn.h>
+#include <OpenGL/gl.h>
 #import <objc/runtime.h>
 
 #define UX_MAXW 64
@@ -200,6 +205,519 @@ void ux_ak_raise_shield(int handle)
 int ux_ak_has_shield(int handle)
     {
     return g_shield[handle] != nil;
+    }
+
+/* ── the GL surface ──────────────────────────────────────────────────────────
+ * The drawable a GL view renders into: the one native view the toolkit makes for
+ * a view it does not paint itself.
+ *
+ * It is a plain NSView with an NSOpenGLContext attached by setView:, and not an
+ * NSOpenGLView, for one reason.  NSOpenGLView owns a draw cycle of its own --
+ * drawRect:, reshape, and a display link if it is asked for one -- and the whole
+ * point of this seam is that the DRIVER owns the present.  setView: gives a
+ * context a surface and says nothing about when anything is drawn, so presentGL
+ * is the only thing that ever swaps.
+ *
+ * Surface order is the default and it is the order the toolkit wants: a context
+ * attached this way is composited with the window's other content by its place in
+ * the view hierarchy, so a sibling that paints 2D lands OVER the map with neither
+ * side asking, which is exactly the client's two-layer stack.  The surface is
+ * therefore added at the BOTTOM of the content view's subviews.
+ *
+ * It takes presses, like the shield, and for the same reason: a real NSView under
+ * the pointer is where AppKit routes a click, and the map needs those clicks.
+ * They are converted into the CONTENT view's coordinates, the space the toolkit
+ * hit-tests in.
+ *
+ * Keyed by the NEUTRAL view pointer, because that is the only name the two sides
+ * share -- the driver is handed a view and nothing else.  A handful per app, so
+ * parallel arrays and a linear scan, like the shield. */
+#define UX_AK_MAXGL 8
+static void* g_glPeer[UX_AK_MAXGL];              // the neutral view (xtc object), the key
+static NSView* g_glView[UX_AK_MAXGL];            // ARC-strong: assignment retains, = nil releases
+static NSOpenGLContext* g_glCtx[UX_AK_MAXGL];    // ARC-strong
+static NSOpenGLPixelFormat* g_glPf[UX_AK_MAXGL]; // ARC-strong: the context is made from it on request
+static int g_glWin[UX_AK_MAXGL];
+static int g_glCount = 0;
+static Class g_glClass = 0;
+static int g_glSwapInterval = 1; // 1 = the swap waits for the display; see ux_ak_gl_vsync
+
+static int ak_gl_find(void* peer)
+    {
+    for (int i = 0; i < g_glCount; i++)
+        {
+        if (g_glPeer[i] == peer)
+            return i;
+        }
+    return -1;
+    }
+
+static void ak_glMouseDown(__unsafe_unretained id self, SEL _cmd, __unsafe_unretained id ev)
+    {
+    if (!g_dispatch)
+        return;
+    int h = 0;
+    for (int i = 0; i < g_glCount; i++)
+        {
+        if (g_glView[i] == (NSView*)self)
+            {
+            h = g_glWin[i];
+            break;
+            }
+        }
+    if (!h || !g_view[h])
+        return;
+    NSPoint p = [g_view[h] convertPoint:[(NSEvent*)ev locationInWindow] fromView:nil];
+    g_dispatch(1, (int)p.x, (int)p.y, h);
+    }
+
+static Class ak_gl_class(void)
+    {
+    if (g_glClass)
+        return g_glClass;
+    Class c = objc_allocateClassPair([NSView class], "UXGLSurface", 0);
+    class_addMethod(c, sel_registerName("isFlipped"), (IMP)ak_isFlipped, "B@:");
+    class_addMethod(c, sel_registerName("acceptsFirstMouse:"), (IMP)ak_acceptsFirstMouse, "B@:@");
+    class_addMethod(c, sel_registerName("mouseDown:"), (IMP)ak_glMouseDown, "v@:@");
+    objc_registerClassPair(c);
+    g_glClass = c;
+    return c;
+    }
+
+/* Which GL, the answer a renderer loads its entry points from.  These mirror the
+ * UX_GL_* values in UXViewDriver.xc and are ABI.  macOS offers a 3.2 or a 4.1
+ * CORE profile and both are the same call set, so the answer is GL33: a version
+ * number would be a second, redundant answer that another backend could not give. */
+int ux_ak_gl_kind(void)
+    {
+    return 2; /* UX_GL_GL33 */
+    }
+
+/* An entry point by name, for the renderer.  On Apple the framework's symbols are in the
+ * process already -- the link line is the loader -- so this is a lookup among the loaded
+ * images and not a library the driver has to open.  It is here rather than in the renderer
+ * because "how" is a property of the platform, and the renderer is the file that must not
+ * know which platform it is on. */
+void* ux_ak_gl_proc(const char* name)
+    {
+    if (!name)
+        return 0;
+    return dlsym(RTLD_DEFAULT, name);
+    }
+
+/* Make (or move) the SURFACE.  No context here: a view that never asks for one
+ * costs nothing, which is what keeps a software-only run of a GL app identical to
+ * a plain one.
+ *
+ * A HEADLESS GL CLIENT REACHES THIS ONLY VIA ux_ak_set_capture(1): realizeTree
+ * builds no native view at all in a plain non-interactive run, so without the
+ * capture switch there is no surface for ux_ak_gl_make to bind and a GL view
+ * fails as if the backend had no GL.  Capture mode realises WITHOUT showing,
+ * which is what a headless GL client wants and what the portrait pipeline uses
+ * it for; set it before boot. */
+void ux_ak_gl_place(int handle, void* peer, int x, int y, int w, int h, int hidden)
+    {
+    NSView* content = g_view[handle];
+    if (!content || !peer)
+        return;
+    int i = ak_gl_find(peer);
+    if (i >= 0)
+        {
+        [g_glView[i] setFrame:NSMakeRect(x, y, w, h)];
+        [g_glView[i] setHidden:hidden ? YES : NO];
+        return;
+        }
+    if (hidden)
+        return; /* nothing to hide yet, and the surface is made on demand */
+    if (g_glCount >= UX_AK_MAXGL)
+        return;
+    /* A 4x multisample buffer, so hexagon edges antialias the way the browser's
+     * context does (client/gl.js asks for `antialias: true`).  The whole of the
+     * residual difference between the two frames was a faint honeycomb where
+     * hexagons meet, and this is it.  A pixel format that cannot give sample
+     * buffers falls back to none rather than failing -- the surface matters more
+     * than its edges. */
+    NSOpenGLPixelFormatAttribute attrs[] =
+        {
+        NSOpenGLPFAOpenGLProfile, NSOpenGLProfileVersion3_2Core,
+        NSOpenGLPFAColorSize, 24,
+        NSOpenGLPFAAlphaSize, 8,
+        NSOpenGLPFADoubleBuffer,
+        NSOpenGLPFAAccelerated,
+        NSOpenGLPFASampleBuffers, 1,
+        NSOpenGLPFASamples, 4,
+        0
+        };
+    NSOpenGLPixelFormat* pf = [[NSOpenGLPixelFormat alloc] initWithAttributes:attrs];
+    if (!pf)
+        {
+        NSOpenGLPixelFormatAttribute plain[] =
+            {
+            NSOpenGLPFAOpenGLProfile, NSOpenGLProfileVersion3_2Core,
+            NSOpenGLPFAColorSize, 24,
+            NSOpenGLPFAAlphaSize, 8,
+            NSOpenGLPFADoubleBuffer,
+            NSOpenGLPFAAccelerated,
+            0
+            };
+        pf = [[NSOpenGLPixelFormat alloc] initWithAttributes:plain];
+        }
+    if (!pf)
+        return;
+    NSView* v = [[ak_gl_class() alloc] initWithFrame:NSMakeRect(x, y, w, h)];
+    [v setWantsBestResolutionOpenGLSurface:YES];
+    g_glPeer[g_glCount] = peer;
+    g_glView[g_glCount] = v;
+    g_glCtx[g_glCount] = nil;
+    g_glPf[g_glCount] = pf;
+    g_glWin[g_glCount] = handle;
+    g_glCount = g_glCount + 1;
+    /* BELOW every sibling: the map is the bottom of the stack, and a 2D view
+     * painted over it has to land over it. */
+    [content addSubview:v positioned:NSWindowBelow relativeTo:nil];
+    }
+
+/* The VIEWPORT is the driver's.  It is the drawable's size in PIXELS, and the
+ * driver is the only side that knows it -- the view's frame is in points and the
+ * two differ by the backing scale.  Set when the context is made and reset when
+ * the surface is resized, both times in the same turn as the drawable itself, so a
+ * renderer never has to set it and never has to ask what it is. */
+static void ak_gl_viewport(int i)
+    {
+    NSRect b = [g_glView[i] bounds];
+    float scale = [[g_glView[i] window] backingScaleFactor];
+    if (scale <= 0)
+        scale = 1;
+    GLint pw = (GLint)(b.size.width * scale);
+    GLint ph = (GLint)(b.size.height * scale);
+    if (pw < 1)
+        pw = 1;
+    if (ph < 1)
+        ph = 1;
+    glViewport(0, 0, pw, ph);
+    }
+
+/* Bind a context to the surface.  The token returned is an opaque handle and NOT
+ * the NSOpenGLContext: the renderer hands it straight back and never reads
+ * through it, and a small integer cannot be dereferenced by accident.  The
+ * context is left CURRENT on the calling thread, which is the contract the seam
+ * states -- a renderer that is handed a context it must make current itself would
+ * have to know it is on AppKit. */
+void* ux_ak_gl_make(void* peer)
+    {
+    int i = ak_gl_find(peer);
+    if (i < 0)
+        return 0;
+    if (!g_glCtx[i])
+        {
+        NSOpenGLContext* c = [[NSOpenGLContext alloc] initWithFormat:g_glPf[i] shareContext:nil];
+        if (!c)
+            return 0;
+        [c setView:g_glView[i]];
+        GLint v = (GLint)(g_glSwapInterval > 0 ? 1 : 0);
+        [c setValues:&v forParameter:NSOpenGLCPSwapInterval];
+        g_glCtx[i] = c;
+        }
+    [g_glCtx[i] makeCurrentContext];
+    ak_gl_viewport(i);
+    return (void*)(long)(i + 1);
+    }
+
+void ux_ak_gl_resize(void* peer, int w, int h)
+    {
+    int i = ak_gl_find(peer);
+    if (i < 0)
+        return;
+    NSRect f = [g_glView[i] frame];
+    [g_glView[i] setFrame:NSMakeRect(f.origin.x, f.origin.y, w, h)];
+    if (g_glCtx[i])
+        {
+        [g_glCtx[i] makeCurrentContext];
+        [g_glCtx[i] update]; /* the drawable, not just the view */
+        ak_gl_viewport(i);
+        }
+    }
+
+void ux_ak_gl_present(void* peer)
+    {
+    int i = ak_gl_find(peer);
+    if (i < 0 || !g_glCtx[i])
+        return;
+    [g_glCtx[i] makeCurrentContext];
+    [g_glCtx[i] flushBuffer]; /* the swap, and the only one */
+    }
+
+/* How hard the swap blocks.  A map app wants 1; a frame-time measurement wants 0,
+ * because with a blocking swap the number is the refresh rate.  Applied to the
+ * surfaces that already exist and to any made later, so the order of the two calls
+ * does not matter. */
+void ux_ak_gl_vsync(int interval)
+    {
+    g_glSwapInterval = interval;
+    GLint v = (GLint)(interval > 0 ? 1 : 0);
+    for (int i = 0; i < g_glCount; i++)
+        {
+        if (g_glCtx[i])
+            [g_glCtx[i] setValues:&v forParameter:NSOpenGLCPSwapInterval];
+        }
+    }
+
+/* Read the frame back off the drawable and write it as a PNG.
+ *
+ * After a present, from the FRONT buffer, and deliberately not from a framebuffer
+ * object: a dump from an FBO proves the renderer can draw and says nothing about
+ * whether the surface ever got it, which is the failure this is here to catch.  The
+ * context is made current first, so it is valid to call straight after presentGL. */
+int ux_ak_gl_grab(void* peer, const char* path)
+    {
+    int i = ak_gl_find(peer);
+    if (i < 0 || !g_glCtx[i] || !g_glView[i])
+        return 0;
+    NSView* v = g_glView[i];
+    NSRect b = [v bounds];
+    int w = (int)b.size.width;
+    int h = (int)b.size.height;
+    float scale = [[v window] backingScaleFactor];
+    int pw = (int)(w * scale);
+    int ph = (int)(h * scale);
+    if (pw <= 0 || ph <= 0)
+        return 0;
+    [g_glCtx[i] makeCurrentContext];
+    unsigned char* px = (unsigned char*)malloc((size_t)pw * (size_t)ph * 4);
+    if (!px)
+        return 0;
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glReadBuffer(GL_FRONT);
+    glReadPixels(0, 0, pw, ph, GL_RGBA, GL_UNSIGNED_BYTE, px);
+    /* GL hands back bottom-up; a PNG is top-down.  Flip rows rather than ask the
+     * reader to remember, because the whole point is that somebody LOOKS at it. */
+    unsigned char* row = (unsigned char*)malloc((size_t)pw * 4);
+    if (row)
+        {
+        for (int y = 0; y < ph / 2; y++)
+            {
+            memcpy(row, px + (size_t)y * pw * 4, (size_t)pw * 4);
+            memcpy(px + (size_t)y * pw * 4, px + (size_t)(ph - 1 - y) * pw * 4, (size_t)pw * 4);
+            memcpy(px + (size_t)(ph - 1 - y) * pw * 4, row, (size_t)pw * 4);
+            }
+        free(row);
+        }
+    NSBitmapImageRep* rep = [[NSBitmapImageRep alloc] initWithBitmapDataPlanes:NULL
+        pixelsWide:pw pixelsHigh:ph bitsPerSample:8 samplesPerPixel:4 hasAlpha:YES
+        isPlanar:NO colorSpaceName:NSDeviceRGBColorSpace bytesPerRow:pw * 4 bitsPerPixel:32];
+    int ok = 0;
+    if (rep)
+        {
+        unsigned char* dst = [rep bitmapData];
+        if (dst)
+            {
+            memcpy(dst, px, (size_t)pw * (size_t)ph * 4);
+            NSData* png = [rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+            ok = png && [png writeToFile:[NSString stringWithUTF8String:path] atomically:YES];
+            }
+        }
+    free(px);
+    if (ok)
+        g_lastGrab = rep;
+    return ok ? 1 : 0;
+    }
+
+/* How many pixels in the last GL grab differ from its top-left pixel, sampling every
+ * 2nd pixel.  A blank dump reads 0; a map or a line of text reads many.  Distinct-colour
+ * counting is not enough here: a thin line of text on white is dozens of greys but a
+ * 16-pixel stride can walk straight between the glyph strokes and find none. */
+int ux_ak_gl_grab_marks(void)
+    {
+    if (!g_lastGrab)
+        return 0;
+    NSInteger pw = [g_lastGrab pixelsWide];
+    NSInteger ph = [g_lastGrab pixelsHigh];
+    if (pw <= 0 || ph <= 0)
+        return 0;
+    NSColor* bg = [g_lastGrab colorAtX:0 y:0];
+    int br = (int)([bg redComponent] * 255.0 + 0.5);
+    int bgc = (int)([bg greenComponent] * 255.0 + 0.5);
+    int bb = (int)([bg blueComponent] * 255.0 + 0.5);
+    int marks = 0;
+    for (NSInteger y = 0; y < ph; y += 2)
+        {
+        for (NSInteger x = 0; x < pw; x += 2)
+            {
+            NSColor* c = [g_lastGrab colorAtX:x y:y];
+            if (!c)
+                continue;
+            int R = (int)([c redComponent] * 255.0 + 0.5);
+            int G = (int)([c greenComponent] * 255.0 + 0.5);
+            int B = (int)([c blueComponent] * 255.0 + 0.5);
+            if (R != br || G != bgc || B != bb)
+                marks = marks + 1;
+            }
+        }
+    return marks;
+    }
+
+/* The drawable's size in pixels and the view's size in points, so a harness can
+ * STATE the ratio it measured at instead of assuming one.  Fills out4 with
+ * { pointW, pointH, pixelW, pixelH } and returns 1. */
+/* How many samples the context's framebuffer actually carries.  4 when the multisample
+ * pixel format was accepted, 0 when it fell back to none; asking the GL itself is the only
+ * way to know which, since initWithAttributes: succeeds for either. */
+int ux_ak_gl_samples(void* peer)
+    {
+    int i = ak_gl_find(peer);
+    if (i < 0 || !g_glCtx[i])
+        return 0;
+    NSOpenGLContext* prev = [NSOpenGLContext currentContext];
+    [g_glCtx[i] makeCurrentContext];
+    GLint s = 0;
+    glGetIntegerv(GL_SAMPLES, &s);
+    if (prev)
+        [prev makeCurrentContext];
+    else
+        [NSOpenGLContext clearCurrentContext];
+    return (int)s;
+    }
+
+int ux_ak_gl_backing(void* peer, int* out4)
+    {
+    int i = ak_gl_find(peer);
+    if (i < 0 || !g_glView[i])
+        return 0;
+    NSRect b = [g_glView[i] bounds];
+    float scale = [[g_glView[i] window] backingScaleFactor];
+    if (scale <= 0)
+        scale = 1;
+    out4[0] = (int)b.size.width;
+    out4[1] = (int)b.size.height;
+    out4[2] = (int)(b.size.width * scale);
+    out4[3] = (int)(b.size.height * scale);
+    return 1;
+    }
+
+/* Draw the view that holds the tree -- the UXDrawView, which is where the GL surface
+ * and the native label overlays live -- into a PNG.  `peer` is the same token the GL
+ * calls take -- the neutral view, not the surface.
+ *
+ * The sibling of ux_ak_gl_grab and NOT a replacement for it: the front-buffer read
+ * shows what the SURFACE got, and this shows what the toolkit's own view tree holds --
+ * the 2D views, their text and their order.  The GL surface draws its software fallback
+ * here (drawRect), because a composited surface is not part of the bitmap AppKit
+ * renders, so this picture shows the overlay and not the map.  Two dumps on purpose:
+ * which of the two holds what is the answer to where the drawing went.
+ *
+ * The window's own background is not painted by the toolkit, so the bitmap is filled
+ * white first; without it the labels draw dark-on-black and the dump reads as empty. */
+int ux_ak_gl_grab_window(void* peer, const char* path)
+    {
+    int i = ak_gl_find(peer);
+    if (i < 0 || !g_glView[i])
+        return 0;
+    /* The view that holds the tree, NOT the window's contentView: the window wraps
+     * the toolkit's draw view in an NSScrollView, and the GL surface is a subview of
+     * the draw view.  Grabbing the scroll view misses both. */
+    NSView* content = [g_glView[i] superview];
+    if (!content)
+        return 0;
+    NSRect b = [content bounds];
+    int w = (int)b.size.width;
+    int h = (int)b.size.height;
+    if (w <= 0 || h <= 0)
+        return 0;
+    /* A window has a background the toolkit does not paint, so the bitmap starts as
+     * the window's own colour.  Without this the labels draw dark-on-black and the
+     * dump looks empty when it is not. */
+    NSBitmapImageRep* rep = [[NSBitmapImageRep alloc] initWithBitmapDataPlanes:NULL
+        pixelsWide:w pixelsHigh:h bitsPerSample:8 samplesPerPixel:4 hasAlpha:YES
+        isPlanar:NO colorSpaceName:NSDeviceRGBColorSpace bytesPerRow:w * 4 bitsPerPixel:32];
+    if (!rep)
+        return 0;
+    NSGraphicsContext* gctx = [NSGraphicsContext graphicsContextWithBitmapImageRep:rep];
+    if (!gctx)
+        return 0;
+    [NSGraphicsContext saveGraphicsState];
+    [NSGraphicsContext setCurrentContext:gctx];
+    [[NSColor whiteColor] set];
+    NSRectFill(b);
+    /* displayRectIgnoringOpacity:inContext: draws the view and every subview into our
+     * bitmap regardless of the backing.  The GL surface draws its FALLBACK here (an
+     * empty drawRect in the harness), never its composited contents, which is the
+     * point of taking both pictures. */
+    [content displayRectIgnoringOpacity:b inContext:gctx];
+    [NSGraphicsContext restoreGraphicsState];
+    g_lastGrab = rep;
+    NSData* png = [rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+    return (png && [png writeToFile:[NSString stringWithUTF8String:path] atomically:YES]) ? 1 : 0;
+    }
+
+/* The environment, for a harness that takes an input path (the real atlas) without a
+ * path living in the source.  Returns "" for an unset name, never NULL. */
+const char* ux_ak_env(const char* name)
+    {
+    const char* v = getenv(name);
+    return v ? v : "";
+    }
+
+/* A file's size in bytes, or -1.  Paired with ux_ak_read_file so the caller allocates
+ * (in xc's heap) and the shim only fills it, which keeps one allocator. */
+int ux_ak_file_size(const char* path)
+    {
+    FILE* f = fopen(path, "rb");
+    if (!f)
+        return -1;
+    if (fseek(f, 0, SEEK_END) != 0)
+        {
+        fclose(f);
+        return -1;
+        }
+    long n = ftell(f);
+    fclose(f);
+    return (int)n;
+    }
+
+int ux_ak_read_file(const char* path, unsigned char* buf, int cap)
+    {
+    FILE* f = fopen(path, "rb");
+    if (!f)
+        return -1;
+    size_t n = fread(buf, 1, (size_t)cap, f);
+    fclose(f);
+    return (int)n;
+    }
+
+void ux_ak_gl_destroy(void* peer)
+    {
+    int i = ak_gl_find(peer);
+    if (i < 0)
+        return;
+    if (g_glCtx[i])
+        {
+        /* Current on the calling thread, per the contract: clearDrawable on a
+         * context that is not current is how a GL client crashes on window close. */
+        [g_glCtx[i] makeCurrentContext];
+        [g_glCtx[i] clearDrawable];
+        [NSOpenGLContext clearCurrentContext];
+        g_glCtx[i] = nil;
+        }
+    [g_glView[i] removeFromSuperview];
+    /* Cleared IN PLACE and not compacted: the index is what an outstanding token
+     * means, so shuffling entries down would silently point a live token at
+     * somebody else's surface. */
+    g_glPeer[i] = 0;
+    g_glView[i] = nil;
+    g_glPf[i] = nil;
+    g_glWin[i] = 0;
+    }
+
+/* Every surface a window made goes with that window.  Called from the close path
+ * BEFORE the window is dropped, so a context still has a drawable to be cleared
+ * from. */
+void ux_ak_gl_close(int handle)
+    {
+    for (int i = 0; i < g_glCount; i++)
+        {
+        if (g_glWin[i] == handle && g_glPeer[i] != 0)
+            ux_ak_gl_destroy(g_glPeer[i]);
+        }
     }
 
 static void ak_windowWillClose(__unsafe_unretained id self, SEL _cmd, __unsafe_unretained id note)
@@ -503,6 +1021,9 @@ void ux_ak_window_close(int handle)
     {
     if (!g_win[handle])
         return;
+    /* Before the window goes: a live context needs a drawable to be cleared from,
+     * and after this line there is not one. */
+    ux_ak_gl_close(handle);
     [g_win[handle] close];
     g_win[handle] = nil;
     g_view[handle] = nil;

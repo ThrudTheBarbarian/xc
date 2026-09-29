@@ -19,9 +19,9 @@ trap cleanup EXIT
 
 echo "== mac-settings: building the ObjC shim + the test for arm64 =="
 cc -fobjc-arc -fno-objc-msgsend-selector-stubs -dynamiclib -install_name "$work/libUXAppKit.dylib" \
-    "$here/libUXAppKit.m" -framework Cocoa -o "$work/libUXAppKit.dylib"
+    "$here/libUXAppKit.m" -framework Cocoa -framework OpenGL -o "$work/libUXAppKit.dylib"
 "$xcc" -A arm64 -I "$here" "$here/test_mac_settings.xc" \
-    -Xlinker "$work/libUXAppKit.dylib" -framework Cocoa -o "$work/test_mac_settings" -q 2>/dev/null
+    -Xlinker "$work/libUXAppKit.dylib" -framework Cocoa -framework OpenGL -o "$work/test_mac_settings" -q 2>/dev/null
 
 # Start from nothing, so a stale suite from an earlier run cannot stand in for a working write.
 for d in xg.test xg.test.ks xg.test.paint xg.test.other test_mac_settings; do

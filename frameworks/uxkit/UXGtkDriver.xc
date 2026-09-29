@@ -65,6 +65,15 @@ void ux_gtk_make_shield(i32 handle, i32 x, i32 y, i32 w, i32 h, i32 hidden);
 void ux_gtk_raise_shield(i32 handle);
 i32 ux_gtk_has_shield(i32 handle);
 i32 ux_gtk_shield_on_top(i32 handle);
+// The GL surface (UXKindGLView).  The shim makes a real GtkGLArea at realization and the
+// context only when the app asks; the driver reaches both through these, and the entry
+// points through glProc.  A null name, or one the platform has not got, resolves to 0.
+void ux_gtk_make_gl(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, i32 hidden);
+i32 ux_gtk_gl_make_current(i32 handle, i32 node);
+void ux_gtk_gl_viewport(i32 handle, i32 node);
+void ux_gtk_gl_present(i32 handle, i32 node);
+i32 ux_gtk_gl_error(i32 handle, i32 node);
+pointer ux_gtk_gl_proc(u8* name);
 void ux_gtk_set_align(i32 handle, i32 node, i32 a); // label/entry text alignment
 i32 ux_gtk_get_align(i32 handle, i32 node);         // ...and what it actually is
 i32 ux_gtk_drag_next(i32* x, i32* y);               // one modal drag-track step: 1 = dragging, 0 = up
@@ -280,10 +289,117 @@ class UXGtkDriver : Object<UXViewDriver>
             ux_gtk_set_control_fire((pointer)&uxGtkFireControl);
             ux_gtk_set_value_changed((pointer)&uxGtkValueChanged);
             ux_gtk_set_field_hooks((pointer)&uxGtkFieldChanged);
+            ux_gtk_set_field_submit_hooks((pointer)&uxGtkFieldSubmitted);
             ux_gtk_set_mouse((pointer)&uxGtkDispatch);
             }
         return ux_gtk_boot(screenW, screenH) != (i32)0;
         }
+    // ---- GL ------------------------------------------------------------------
+    // A real GtkGLArea surface, made by the shim at realization.  The KIND is a property
+    // of the backend: GTK4 on the desktop offers a core-profile context, and a machine or
+    // a display that cannot give one makes GtkGLArea report an error, at which point
+    // makeGLContext returns 0 and the view paints its drawRect fallback like any other.
+    //
+    // The shim keys its widgets by (window, node); the driver keys the OPAQUE view it is
+    // handed by (window, node) too, because that pair is what the shim needs and the peer
+    // alone does not carry it.  The peer only exists from makeGL on, so the binding is
+    // taken on whichever realization arrives first with a non-null peer.
+    pointer gGtkGlPeer[16];
+    i32 gGtkGlHandle[16];
+    i32 gGtkGlNode[16];
+    i32 gGtkGlCount;
+
+    void glBindPeer(pointer peer, i32 handle, i32 node)
+        {
+        if (peer == (pointer)0)
+            {
+            return;
+            }
+        for (i32 k = (i32)0; k < self.gGtkGlCount; k = k + (i32)1)
+            {
+            if (self.gGtkGlPeer[k] == peer)
+                {
+                return;
+                }
+            }
+        if (self.gGtkGlCount >= (i32)16)
+            {
+            return;
+            }
+        self.gGtkGlPeer[self.gGtkGlCount] = peer;
+        self.gGtkGlHandle[self.gGtkGlCount] = handle;
+        self.gGtkGlNode[self.gGtkGlCount] = node;
+        self.gGtkGlCount = self.gGtkGlCount + (i32)1;
+        }
+    i32 glSlot(pointer view)
+        {
+        for (i32 k = (i32)0; k < self.gGtkGlCount; k = k + (i32)1)
+            {
+            if (self.gGtkGlPeer[k] == view)
+                {
+                return k;
+                }
+            }
+        return (i32)-1;
+        }
+
+    i32 glKind(void)
+        {
+        return (i32)UX_GL_GL33;
+        }
+    pointer glProc(u8* name)
+        {
+        return ux_gtk_gl_proc(name);
+        }
+    pointer makeGLContext(pointer view)
+        {
+        i32 k = self.glSlot(view);
+        if (k < (i32)0)
+            {
+            return (pointer)0; // no surface (unrealized, or the span was never realized)
+            }
+        if (ux_gtk_gl_make_current(self.gGtkGlHandle[k], self.gGtkGlNode[k]) == (i32)0)
+            {
+            return (pointer)0; // no GL context: the view keeps its drawRect fallback
+            }
+        ux_gtk_gl_viewport(self.gGtkGlHandle[k], self.gGtkGlNode[k]);
+        return (pointer)(k + (i32)1); // the opaque token, never the toolkit's context
+        }
+    void destroyGLContext(pointer view)
+        {
+        // The GtkGLArea owns its context and frees it with the window, so there is nothing
+        // to delete here; releasing the token is the whole of it (the app drops the pointer).
+        }
+    void resizeGL(pointer view, i32 w, i32 h)
+        {
+        i32 k = self.glSlot(view);
+        if (k >= (i32)0)
+            {
+            ux_gtk_gl_viewport(self.gGtkGlHandle[k], self.gGtkGlNode[k]);
+            }
+        }
+    void presentGL(pointer view)
+        {
+        i32 k = self.glSlot(view);
+        if (k >= (i32)0)
+            {
+            ux_gtk_gl_present(self.gGtkGlHandle[k], self.gGtkGlNode[k]);
+            }
+        }
+    void glSetSwapInterval(i32 interval)
+        {
+        // GTK paces the frame against the compositor and gives no interval seam; the VSync
+        // the harness turns off is not something this backend can turn off either.
+        }
+
+    // The frame clock: the neutral loop calls fn (its nextEvent takes the wait, so a turn
+    // comes round with no input).  This driver has no turn of its own to offer -- it does
+    // not own the loop -- so the answer is false and UXApplication paces itself.
+    bool setTurnHook(turnHook_t* fn, i32 ms)
+        {
+        return false;
+        }
+
     i32 formFactorClass(void)
         {
         return (i32)UX_FORM_DESKTOP;
@@ -840,6 +956,16 @@ class UXGtkDriver : Object<UXViewDriver>
             if ((i32)n.kind == (i32)UXKindShield)
                 {
                 ux_gtk_make_shield(handle, ax, ay, aw, ah, self.effectiveHidden(tree, i));
+                continue;
+                }
+            if ((i32)n.kind == (i32)UXKindGLView)
+                {
+                // The SURFACE, made with the tree and not before.  It sits BELOW the cairo
+                // drawing area, so the toolkit's 2D paints over the map.  The context is not
+                // made here -- that is makeGLContext's job -- and the peer that makeGLContext
+                // is handed only exists from makeGL on, so the slot is bound on every pass.
+                ux_gtk_make_gl(handle, i, ax, ay, aw, ah, self.effectiveHidden(tree, i));
+                self.glBindPeer(n.peer, handle, i);
                 continue;
                 }
             if (ux_gtk_has_control(handle, i) != (i32)0)

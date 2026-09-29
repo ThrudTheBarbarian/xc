@@ -16,9 +16,9 @@ case "$(uname)" in Darwin) ;; *) echo "== mac-vector: skipped (not macOS) =="; e
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
 echo "== mac-vector: building the shim + the renderer =="
 cc -fobjc-arc -fno-objc-msgsend-selector-stubs -dynamiclib -install_name "$work/libUXAppKit.dylib" \
-    "$here/libUXAppKit.m" -framework Cocoa -o "$work/libUXAppKit.dylib"
+    "$here/libUXAppKit.m" -framework Cocoa -framework OpenGL -o "$work/libUXAppKit.dylib"
 "$xcc" -A arm64 -I "$here" "$here/test_mac_vector.xc" \
-    -Xlinker "$work/libUXAppKit.dylib" -framework Cocoa -o "$work/test_mac_vector" -q 2>/dev/null
+    -Xlinker "$work/libUXAppKit.dylib" -framework Cocoa -framework OpenGL -o "$work/test_mac_vector" -q 2>/dev/null
 rm -f /tmp/ux_vec_check.ppm
 "$work/test_mac_vector" >/dev/null
 [ -f /tmp/ux_vec_check.ppm ] || { echo "== mac-vector: FAIL (nothing rendered) =="; exit 1; }

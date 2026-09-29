@@ -100,14 +100,63 @@ Not implemented:
 When reading the driver, treat an unimplemented method as a gap and an
 intentionally absent one as a decision.
 
+## Headless, capture, and getting a GL surface
+
+A plain run is headless: it paints offscreen and the app draws its own controls.
+A headless client that needs the **real** view tree — GL above all — calls
+`ux_ak_set_capture(1)` before boot. Capture mode realises the tree *without ever
+showing a window*, which is what the portrait pipeline wants it for; without it
+`realizeTree` builds no native view at all, so there is no surface for `makeGL`
+to bind and it returns false with a message that reads like a missing GL
+backend on a backend whose `glKind` says otherwise.
+
+Two dumps answer "where did the drawing go", and they are a pair on purpose:
+
+- `ux_ak_gl_grab(peer, path)` reads back the GL **surface** — the map and
+  nothing over it.
+- `ux_ak_gl_grab_window(peer, path)` reads back the view the tree hangs in — the
+  2-D views and their text. A panel appears in the window grab and not the
+  surface grab; that asymmetry is the answer, not a bug in either dump.
+
+Which grab a panel's own drawing lands in follows from one rule, and it is the
+one thing a GL app has to know:
+
+- a 2-D **paint** goes into the parent's `drawRect`, and a view's own paint is
+  drawn *before* its subviews, so a paint is **under** the surface;
+- a native **view** — a control, or a scroll view's document view — is a real
+  subview, and the surface is added at the bottom of the stack, so a view is
+  **over** the surface.
+
+A panel over the map is therefore a *mix*, not one kind of thing. A drawn sheet
+needs a native subview of its own — `UXScrollView`'s document is the one the
+toolkit makes for you, and it draws the peer's subtree into it — while the
+buttons and fields standing on that sheet are ordinary native controls and need
+nothing special. `ux_ak_gl_place` puts the surface below every sibling for
+exactly that reason, and neither grab on its own shows the whole window.
+
+Any view can ask for that native subview directly with
+[`UXView.setOwnSurface`](/compiler/api/uxkit/uxview/#setownsurface): its kind
+becomes `UXKindSurface`, and AppKit realises a real subview at the view's frame
+whose `drawRect` draws the view's subtree — so the view's own paint and its
+children land *over* the surface, which is the general form of the scroll
+document. A backend that cannot make one declines and draws the view inline, so
+one tree is correct everywhere and only the stacking over a GL surface differs.
+
 ## Interactive mode
 
-Under `[NSApp run]`, AppKit owns the run loop, and the toolkit's dispatch is
+Under `[NSApp run]`, AppKit owns the thread, and the toolkit's dispatch is
 driven from it (see [`UXApplication`](/compiler/api/uxkit/uxapplication/)).
 
-This is the usual arrangement for a hosted toolkit. For the same reason, an
-`@autoreleasepool` around window ordering or activation causes trouble: the
-scope ends inside AppKit's own bookkeeping.
+Note the nuance: `driverOwnsRunLoop` returns **false** for AppKit, because the
+neutral loop is still the one that runs — its `nextEvent` simply blocks in
+`[NSApp run]` while the platform's loop dispatches. The consequence is that
+nothing *above* the driver gets a turn, which is why an interactive app's frame
+clock comes from the driver's own timer
+([`setTurnHook`](/compiler/api/uxkit/uxviewdriver/#a-turn-comes-from-the-driver-or-from-the-loop)
+answers true here, and false in a headless run).
+
+For the same reason, an `@autoreleasepool` around window ordering or activation
+causes trouble: the scope ends inside AppKit's own bookkeeping.
 
 ## See also
 

@@ -13,9 +13,9 @@ case "$(uname)" in Darwin) ;; *) echo "== appkit-memgate: skipped (not macOS) ==
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
 
 echo "== appkit-memgate: compiling the ObjC shim + the §10 gate for arm64 =="
-cc -fobjc-arc -fno-objc-msgsend-selector-stubs -dynamiclib -install_name "$work/libUXAppKit.dylib" "$here/libUXAppKit.m" -framework Cocoa -o "$work/libUXAppKit.dylib"
+cc -fobjc-arc -fno-objc-msgsend-selector-stubs -dynamiclib -install_name "$work/libUXAppKit.dylib" "$here/libUXAppKit.m" -framework Cocoa -framework OpenGL -o "$work/libUXAppKit.dylib"
 "$xcc" -A arm64 -I "$here" "$here/test_appkit_memgate.xc" \
-    -Xlinker "$work/libUXAppKit.dylib" -framework Cocoa -o "$work/test_appkit_memgate" -q 2>/dev/null
+    -Xlinker "$work/libUXAppKit.dylib" -framework Cocoa -framework OpenGL -o "$work/test_appkit_memgate" -q 2>/dev/null
 
 echo "== appkit-memgate: running the create/destroy loop native =="
 got=$(timeout 30 "$work/test_appkit_memgate" 2>/dev/null)

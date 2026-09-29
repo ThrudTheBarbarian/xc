@@ -11,10 +11,10 @@ case "$(uname)" in Darwin) ;; *) echo "== appkit-demo: skipped (not macOS) =="; 
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
 
 echo "== appkit-demo: building the ObjC shim + the demo for arm64 =="
-cc -fobjc-arc -fno-objc-msgsend-selector-stubs -dynamiclib -install_name "$work/libUXAppKit.dylib" "$here/libUXAppKit.m" -framework Cocoa -o "$work/libUXAppKit.dylib"
+cc -fobjc-arc -fno-objc-msgsend-selector-stubs -dynamiclib -install_name "$work/libUXAppKit.dylib" "$here/libUXAppKit.m" -framework Cocoa -framework OpenGL -o "$work/libUXAppKit.dylib"
 "$xcc" -A arm64 -I "$here" "$here/demo_appkit.xc" \
-    -Xlinker "$work/libUXAppKit.dylib" -framework Cocoa -o "$work/demo_appkit" -q 2>/dev/null
+    -Xlinker "$work/libUXAppKit.dylib" -framework Cocoa -framework OpenGL -o "$work/demo_appkit" -q 2>/dev/null
 
-echo "== appkit-demo: launching — close the window to exit =="
+echo "== appkit-demo: launching (self-closing; --stay to keep it up) =="
 "$work/demo_appkit"
 echo "== appkit-demo: done =="

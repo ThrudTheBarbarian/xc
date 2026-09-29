@@ -14,10 +14,10 @@ echo "== mac: building the ObjC shim + the kitchen-sink for arm64 =="
 # The shim is a real dylib (install_name = where it lives for this run): xcc's -q linker references a
 # -Xlinker input by name at load time, and a bare .o is an unloadable MH_OBJECT.  The dylib loads.
 cc -fobjc-arc -fno-objc-msgsend-selector-stubs -dynamiclib -install_name "$work/libUXAppKit.dylib" \
-    "$here/libUXAppKit.m" -framework Cocoa -o "$work/libUXAppKit.dylib"
+    "$here/libUXAppKit.m" -framework Cocoa -framework OpenGL -o "$work/libUXAppKit.dylib"
 "$xcc" -A arm64 -I "$here" "$here/ks_mac.xc" \
-    -Xlinker "$work/libUXAppKit.dylib" -framework Cocoa -o "$work/ks_mac" -q 2>/dev/null
+    -Xlinker "$work/libUXAppKit.dylib" -framework Cocoa -framework OpenGL -o "$work/ks_mac" -q 2>/dev/null
 
-echo "== mac: launching — close the window to exit =="
+echo "== mac: launching (self-closing; --stay to keep it up) =="
 "$work/ks_mac"
 echo "== mac: done =="

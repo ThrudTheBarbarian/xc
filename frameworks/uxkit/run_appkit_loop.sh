@@ -14,9 +14,9 @@ case "$(uname)" in Darwin) ;; *) echo "== appkit-loop: skipped (not macOS) =="; 
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
 
 echo "== appkit-loop: compiling the ObjC shim + the neutral run loop for arm64 =="
-cc -fobjc-arc -fno-objc-msgsend-selector-stubs -dynamiclib -install_name "$work/libUXAppKit.dylib" "$here/libUXAppKit.m" -framework Cocoa -o "$work/libUXAppKit.dylib"
+cc -fobjc-arc -fno-objc-msgsend-selector-stubs -dynamiclib -install_name "$work/libUXAppKit.dylib" "$here/libUXAppKit.m" -framework Cocoa -framework OpenGL -o "$work/libUXAppKit.dylib"
 "$xcc" -A arm64 -I "$here" "$here/test_appkit_loop.xc" \
-    -Xlinker "$work/libUXAppKit.dylib" -framework Cocoa -o "$work/test_appkit_loop" -q 2>/dev/null
+    -Xlinker "$work/libUXAppKit.dylib" -framework Cocoa -framework OpenGL -o "$work/test_appkit_loop" -q 2>/dev/null
 
 echo "== appkit-loop: running native under UXApplication.run() =="
 got=$(timeout 20 "$work/test_appkit_loop" 2>/dev/null)

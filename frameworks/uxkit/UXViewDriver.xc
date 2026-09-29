@@ -39,7 +39,27 @@ enum UXKind = {UXKindBox = 0, UXKindView = 1, UXKindButton = 2, UXKindField = 3,
     // never hears about it.  A design surface (an interface builder's canvas) needs the
     // opposite: real widgets, drawn by the real backend, that a click SELECTS rather than
     // operates.  The shield is the one place that inversion lives.
-    UXKindShield = 15};
+    UXKindShield = 15,
+    // A view rendered by GL rather than by drawRect.  It is a kind, and not a flag on
+    // UXKindView, because the DRAWER decides what to call: the neutral ux_userdraw enters
+    // app code only for a node whose backing view draws itself, so a GL node is skipped by
+    // construction on every backend rather than by a test each driver has to remember.
+    //
+    // It is also the node the backend realizes its surface on, which is why it exists at
+    // all: the surface belongs to the window (an NSOpenGLView is a subview of the content
+    // view, a GtkGLArea a child of the box), and realizeTree is where the driver already
+    // reconciles native objects with the tree.  The CONTEXT is made on request, bound to
+    // the view; the SURFACE is made here.
+    UXKindGLView = 16,
+    // A view that PAINTS IN ITS OWN SURFACE.  On a backend that can make one (AppKit) a real
+    // native subview is placed at the view's frame and its drawRect draws that view's SUBTREE
+    // at the surface's own 0,0 -- the mechanism a scroll view's document already uses,
+    // generalized to any view.  It exists because a view's own paint is drawn BEFORE its
+    // subviews, so a plain paint is UNDER a GL surface, while a surface is a real subview and
+    // so is OVER it.  A backend that cannot make one (GEM, Win32, web, and GTK for now)
+    // DECLINES by drawing the view inline where it stands, exactly like a UXKindView -- so one
+    // tree is correct on every backend and only the z-order over a GL surface differs.
+    UXKindSurface = 17};
 
 // Autoresize mask (springs & struts): how a view follows its window on resize.  A backend that
 // resizes natively (AppKit) applies it so the control tracks the frame LIVE during a drag, with no
@@ -253,6 +273,91 @@ protocol UXViewDriver
     void nativeScrollTo(pointer h, i32 node, i32 px);
     i32 nativeScrollPx(pointer h, i32 node);
 
+    // ---- GL ------------------------------------------------------------------
+    // A view may own a GL context instead of being painted by drawRect.  The split is the
+    // one the X server learned the hard way: the driver owns the SURFACE (the native render
+    // target, its order and its swap) and the app owns the RENDERER, which loads its own
+    // entry points.  Routing GL through the 2D seam instead is indirect GLX — every call a
+    // round trip — and it is refused.
+    //
+    // WHICH GL, not whether.  The answer picks the call set and how the renderer loads it,
+    // and a boolean cannot; UX_GL_NONE means there is no GL.  The app then draws its
+    // fallback through drawRect like any other view, which is the software path the headless
+    // gates run and the reason a GL client is still testable on a build box.
+    i32 glKind(void);
+    // An entry point by NAME, or 0.  A renderer owns its calls but not the way it FINDS them:
+    // on Apple they resolve at link time against the framework, on Linux and Windows through a
+    // loader, on the web through host imports.  A renderer that knew which of those it was on
+    // would be a renderer that tests the platform, which is the whole thing this seam exists to
+    // stop.  So the backend answers this one question -- where is this name -- and what is
+    // loaded, when, and in what order stays the app's business.  A backend with no GL answers 0.
+    pointer glProc(u8* name);
+    // Bind a context to a view and return an OPAQUE handle.  The renderer hands it back and
+    // never dereferences it, so it never owns the drawable, the resize or the swap — owning
+    // the swap is owning the clock.  The view is a pointer so this header need not name
+    // UXView (it imports UXGraphics and UXEvent only).  The driver skips drawRect for a view
+    // that owns a context: the two are alternative renderers, never both.
+    //
+    // The driver owns the VIEWPORT too: it is the drawable's size in PIXELS, which only the
+    // driver knows, the view's bounds being in points and the two differing by the backing
+    // scale.  It is set here and reset by resizeGL, in the same turn as the drawable, so a
+    // renderer neither sets it nor asks what it is -- a renderer that sets one is guessing at
+    // a number the driver is holding.
+    pointer makeGLContext(pointer view);
+    // The context dies with the view, and it is current on the calling thread when this is
+    // called.  This is where GL clients leak and crash on window close, so it is a contract
+    // rather than a cleanup detail.
+    void destroyGLContext(pointer view);
+    // The surface and the view bounds are two systems that must agree, and this is where
+    // stale sizes and flicker live.  The driver resizes both and sets the viewport, once, in
+    // the same turn as the resize and BEFORE that turn's draw — otherwise the map and the
+    // numbers over it are a frame apart.
+    void resizeGL(pointer view, i32 w, i32 h);
+    // The swap, and it is enough on its own: there is no separate draw call for the toolkit
+    // to interleave with, because a GL view is the BOTTOM of the stack and every other view
+    // is above it, so nothing is ever drawn between two GL draws.  At most once per loop
+    // turn, after damage is consolidated (§6 redraw).  A GL view may be permanently dirty —
+    // the map asks for the next frame from inside this turn — and the driver's present is
+    // what paces it.  The driver owns the frame clock; a GL view never runs one of its own.
+    void presentGL(pointer view);
+    // How hard the swap blocks, in frames: 1 waits for the display, 0 does not.  This is on the
+    // seam and not in a benchmark because it IS the pacing the driver owns — a map app swaps at
+    // 1, and anything that wants to measure what a frame COSTS rather than how often the display
+    // comes round sets 0, because with a blocking swap the number is the refresh rate and says
+    // nothing about the map.  Applies to the next present.
+    void glSetSwapInterval(i32 interval);
+
+    // ---- the frame clock ----------------------------------------------------------------------
+    // A live client hangs its frame clock HERE rather than making up its own pacing.  fn() is
+    // called once per TURN -- one pass of whatever loop is running -- at most every `ms`
+    // milliseconds (0 = as often as the loop turns).  Passing (0, 0) stops it.
+    //
+    // THE RETURN VALUE SAYS WHO WILL CALL IT, and that is why this is one method rather than a
+    // query beside a method:
+    //
+    //   true   the DRIVER armed its own source and will call fn.  This is the backends that OWN
+    //          the loop -- AppKit interactive, whose nextEvent blocks inside [NSApp run], and
+    //          iOS/Android, whose runLoop never returns -- where nothing else knows when a turn
+    //          is.  A driver that returns true must call fn until it is told to stop.
+    //   false  the driver has no turn of its own to offer, and the NEUTRAL loop calls fn
+    //          instead: it uses `ms` as the wait it hands nextEvent -- so a turn comes round
+    //          even when no input does -- and fires fn after that turn's draws.  That is every
+    //          backend whose nextEvent takes a timeout, which is all of them: a backend that
+    //          ignored the wait would have no turns to offer at all and says so by returning
+    //          true with a source of its own, or by returning false only where it can keep the
+    //          promise.
+    //
+    // fn takes no arguments and runs on the loop's thread, OUTSIDE any draw and serialised with
+    // every other callback -- so it may draw, present GL and stop the app without a lock, which
+    // is exactly what a client drawing GL and presenting from its own clock does.
+    bool setTurnHook(turnHook_t* fn, i32 ms);
+
+    // The rule the seam rests on, and there is no query for it because it is a property of
+    // the loop rather than of any platform: the driver owns the ORDER of the two surfaces and
+    // the PACING of the frame.  The app keeps its surfaces in step by damaging both in one
+    // present turn.  GL never interleaves, and GL never owns the clock — on every backend,
+    // which is why nothing here asks which backend this is.
+
     // Reconcile any NATIVE control widgets with the tree (§ native-overlay).  GEM/Win32 draw their
     // controls, so this is a no-op there; an AppKit driver creates/positions real NSButton/
     // NSTextField subviews here (called from UXWindow.displayAll, outside the draw).
@@ -336,6 +441,23 @@ protocol UXViewDriver
 #define UX_FORM_DESKTOP 1
 #define UX_FORM_TABLET 2
 #define UX_FORM_PHONE 3
+
+// Which GL a backend offers, the answer to glKind().  Allocated here so the values are ABI.
+// The members are the CALL SETS, not the vendors: GLES3 and GL 3.3 core take the same GLSL
+// ES 3.00 source, with the desktop profile needing a version preamble; WebGL2 is that same
+// language through a different loader.  A renderer picks which entry points to load from
+// this, and a backend that cannot do mipmaps is the one thing a map of textured hexes
+// cannot work around.
+//
+// HOW the entry points are reached is the backend's business and is NOT in the answer: on
+// Apple they resolve at link time against the framework and a renderer needs no loader at
+// all, on Linux and Windows they come from a loader the renderer opens, and on the web they
+// are host imports.  A renderer that tests for one of those is testing the platform, which
+// is the thing this whole seam exists to stop.
+#define UX_GL_NONE 0
+#define UX_GL_GLES3 1     // a GLES3 call set
+#define UX_GL_GL33 2      // GL 3.3 / 4.1 core: GLES3 source plus a version preamble
+#define UX_GL_WEBGL2 3    // WebGL2, reached through host imports
 
 // The one driver for this process, chosen at boot (UXApplication.boot).  A global, like
 // gGraphics/gTheme — the neutral layer reaches it without threading it through every call.

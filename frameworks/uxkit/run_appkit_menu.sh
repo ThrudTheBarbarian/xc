@@ -10,9 +10,9 @@ case "$(uname)" in Darwin) ;; *) echo "== appkit-menu: skipped (not macOS) =="; 
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
 
 echo "== appkit-menu: compiling the ObjC shim + the menu smoke test for arm64 =="
-cc -fobjc-arc -fno-objc-msgsend-selector-stubs -dynamiclib -install_name "$work/libUXAppKit.dylib" "$here/libUXAppKit.m" -framework Cocoa -o "$work/libUXAppKit.dylib"
+cc -fobjc-arc -fno-objc-msgsend-selector-stubs -dynamiclib -install_name "$work/libUXAppKit.dylib" "$here/libUXAppKit.m" -framework Cocoa -framework OpenGL -o "$work/libUXAppKit.dylib"
 "$xcc" -A arm64 -I "$here" "$here/test_appkit_menu.xc" \
-    -Xlinker "$work/libUXAppKit.dylib" -framework Cocoa -o "$work/test_appkit_menu" -q 2>/dev/null
+    -Xlinker "$work/libUXAppKit.dylib" -framework Cocoa -framework OpenGL -o "$work/test_appkit_menu" -q 2>/dev/null
 
 echo "== appkit-menu: building an NSMenu from the neutral model =="
 got=$(timeout 15 "$work/test_appkit_menu" 2>/dev/null)

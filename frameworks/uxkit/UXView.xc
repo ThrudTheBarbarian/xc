@@ -357,3 +357,154 @@ class UXView : UXResponder
         return false;
         }
     }
+
+// A view that OWNS A GL CONTEXT.  An app subclasses this for the map, the charts, anything
+// it draws itself with GL, and the toolkit then treats it as one more view in the tree: a
+// frame, springs and struts, siblings, z-order, and mouse events, which the TOOLKIT routes
+// (a GL view is not a native view, so nothing is stolen from the toolkit's own hit-test).
+//
+// What it is NOT is a GL windowing toolkit.  There is no loop here, no frame callback and no
+// swap of its own: presentGL is called from the app's own turn and the driver paces it.  A
+// GL view with its own requestAnimationFrame would be a second clock against the window's,
+// and two clocks in one window tear.  The rule the seam rests on is that the driver owns the
+// ORDER of the two surfaces and the PACING of the frame.
+//
+// One order matters and it is the surface before the context: the backend makes the SURFACE
+// when it realizes the tree (an NSOpenGLView child, a GtkGLArea child), and makeGL binds the
+// context to it.  So makeGL after the window is open — and it forces a realize itself, so a
+// caller that gets there first is not left with a half-made view.
+class UXGLView : UXView
+    {
+    pointer glCtx; // the backend's opaque context; 0 = none.  Never dereferenced here.
+
+    void init(void)
+        {
+        super.init();
+        glCtx = (pointer)0;
+        }
+
+    UXKind kind(void)
+        {
+        return UXKindGLView;
+        }
+    bool ownsGL(void)
+        {
+        return glCtx != (pointer)0;
+        }
+
+    // What the RENDERER is handed.  Opaque: GL.xc passes it back to the driver and never
+    // reads through it, which is what keeps the platform's drawable, resize and swap the
+    // driver's business rather than the renderer's.
+    pointer glContext(void)
+        {
+        return glCtx;
+        }
+    // Which GL this backend offers — the answer a renderer needs before it can load a single
+    // entry point.  UX_GL_NONE means the view will be drawn by drawRect instead.
+    i32 glKind(void)
+        {
+        return gDriver.glKind();
+        }
+
+    // Bind a context to this view.  False where the backend has no GL, or where the surface
+    // could not be made — and in BOTH cases the view is still a view: drawRect paints it.
+    // Idempotent, so a caller that is not sure whether it already ran can just call it.
+    bool makeGL(void)
+        {
+        if (glCtx != (pointer)0)
+            {
+            return true;
+            }
+        if (gDriver.glKind() == (i32)UX_GL_NONE)
+            {
+            return false;
+            }
+        if (owner != (UXViewTree*)0)
+            {
+            // The backend keys its surface on the neutral view and is handed nothing else, so
+            // the view has to be reachable FROM the tree before the tree is realized.  This is
+            // the same registration a control makes when it sets an action; a plain view has
+            // never needed one, which is why it is here and not in attachTo.
+            owner.setPeerOf(index, (pointer)self);
+            owner.realize(); // the surface is the backend's, made during realization
+            }
+        glCtx = gDriver.makeGLContext((pointer)self);
+        return glCtx != (pointer)0;
+        }
+
+    // The swap.  Once per turn, after the frame is drawn — and after any 2D over this view
+    // has been damaged, so both surfaces land in one present.
+    void presentGL(void)
+        {
+        if (glCtx != (pointer)0)
+            {
+            gDriver.presentGL((pointer)self);
+            }
+        }
+
+    // Release the context.  Idempotent, because a GL client that double-frees on window
+    // close is the classic crash.
+    void destroyGL(void)
+        {
+        if (glCtx == (pointer)0)
+            {
+            return;
+            }
+        gDriver.destroyGLContext((pointer)self);
+        glCtx = (pointer)0;
+        }
+
+    // The context dies with the view — this is the contract the driver seam states, not a
+    // tidiness rule: it is where GL clients leak and crash on window close.
+    void removeFromSuperview(void)
+        {
+        self.destroyGL();
+        super.removeFromSuperview();
+        }
+    void dealloc(void)
+        {
+        self.destroyGL();
+        }
+    }
+
+// ---- drawing a subtree into a native sub-surface ------------------------------------------------
+// A native sub-surface (an AppKit scroll view's document view, or a plain view that paints in its
+// own surface) is a SECOND drawing surface at its own 0,0.  To fill it, the driver's tree walk is
+// pointed at the node whose subtree is the picture and the draw offset is set to that node's
+// absolute position, so every view in the subtree lands at surface-local coordinates.  Both the
+// scroll document and the self-surface go through here; they differ only in which node they name.
+i32 ux_surface_userdraw(pointer tree, i32 obj, pointer ud)
+    {
+    UXViewTree* vt = (UXViewTree*)ud;
+    UXView* v = (UXView* ?)vt.viewAt((u16)obj);
+    if (v == (UXView*)0)
+        {
+        return (i32)0;
+        }
+    UXRect abs = vt.absoluteFrame((u16)obj);
+    UXGraphics* g = gDriver.beginViewDraw((i32)abs.x, (i32)abs.y, (i32)abs.w, (i32)abs.h);
+    v.drawRect(g, UXGeom.make((i16)0, (i16)0, abs.w, abs.h));
+    return (i32)0;
+    }
+// Draw `node`'s subtree into a surface `w`x`h` whose 0,0 is the node's top-left.
+void ux_draw_node_surface(UXViewTree* vt, i32 node, i32 w, i32 h)
+    {
+    if (vt == (UXViewTree*)0 || node < (i32)0)
+        {
+        return;
+        }
+    UXRect abs = vt.absoluteFrame((u16)node);
+    gDriver.setDrawOffset((i32)abs.x, (i32)abs.y);
+    gDriver.treeSetUserDraw((pointer)&ux_surface_userdraw, (pointer)vt);
+    gDriver.treeDraw((pointer)vt.objects(), node, (i32)0, (i32)0, w, h);
+    gDriver.setDrawOffset((i32)0, (i32)0);
+    }
+// The shim's callback for a self-surface view: it is handed the VIEW, and draws that view's subtree.
+void ux_view_surface_draw(UXView* v, i32 w, i32 h)
+    {
+    if (v == (UXView*)0)
+        {
+        return;
+        }
+    ux_draw_node_surface(v.owner, (i32)v.index, w, h);
+    }

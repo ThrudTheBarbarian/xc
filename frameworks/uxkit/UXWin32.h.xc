@@ -146,6 +146,45 @@ i32 SetScrollRange(pointer hwnd, i32 bar, i32 lo, i32 hi, i32 redraw);
 i32 SetScrollPos(pointer hwnd, i32 bar, i32 pos, i32 redraw);
 i32 GetScrollPos(pointer hwnd, i32 bar);
 
+// ---- OpenGL -------------------------------------------------------------------------------
+// opengl32 is NOT in the toolchain's Win64 import map, so the wgl entry points cannot be
+// linked; they are found at run time, which is how a GL program finds them everywhere.
+// The GDI half of the surface (ChoosePixelFormat and friends) IS imported, and the pixel
+// format descriptor is spelled out here because the ABI is fixed and has not moved since 1993.
+struct PIXELFORMATDESCRIPTOR
+    {
+    u16 nSize;
+    u16 nVersion;
+    u32 dwFlags;
+    u8 iPixelType; u8 iColorBits; u8 iRedBits; u8 iRedShift;
+    u8 iGreenBits; u8 iGreenShift; u8 iBlueBits; u8 iBlueShift;
+    u8 iAlphaBits; u8 iAlphaShift; u8 iAccumBits; u8 iAccumRedBits;
+    u8 iAccumGreenBits; u8 iAccumBlueBits; u8 iAccumAlphaBits; u8 iDepthBits;
+    u8 iStencilBits; u8 iAuxBuffers; u8 iLayerType; u8 bReserved;
+    u32 dwLayerMask; u32 dwVisibleMask; u32 dwDamageMask;
+    }
+
+i32 ChoosePixelFormat(pointer hdc, pointer pfd);
+i32 SetPixelFormat(pointer hdc, i32 fmt, pointer pfd);
+i32 DescribePixelFormat(pointer hdc, i32 fmt, u32 n, pointer pfd);
+i32 SwapBuffers(pointer hdc); // GDI32, and the swap on this backend
+pointer LoadLibraryA(pointer name);
+pointer GetProcAddress(pointer mod, u8* name);
+
+#define PFD_DOUBLEBUFFER $00000001
+#define PFD_DRAW_TO_WINDOW $00000004
+#define PFD_SUPPORT_OPENGL $00000020
+#define PFD_TYPE_RGBA 0
+#define CS_OWNDC $0020
+#define WS_CLIPSIBLINGS $04000000
+// wglCreateContextAttribsARB, the only way to ask for a core profile: GL 3.3 is the
+// call set the seam promises (GLES3 and GL 3.3 core are the same GLSL ES 3.00 source).
+#define WGL_CONTEXT_MAJOR_VERSION_ARB $2091
+#define WGL_CONTEXT_MINOR_VERSION_ARB $2092
+#define WGL_CONTEXT_PROFILE_MASK_ARB $9126
+#define WGL_CONTEXT_CORE_PROFILE_BIT_ARB $00000001
+#define WGL_CONTEXT_FLAGS_ARB $2094
+
 #define GWLP_USERDATA (-21)
 #define WM_DESTROY $0002
 #define WM_CLOSE $0010

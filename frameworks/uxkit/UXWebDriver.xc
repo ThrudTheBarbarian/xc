@@ -684,6 +684,25 @@ class UXWebDriver : Object<UXViewDriver>
     // DOM overlays come later (§2)
     void realizeTree(i32 handle, pointer tree)
         {
+        WebTree* t = (WebTree*)tree;
+        for (i32 i = (i32)0; i < t.count; i = i + (i32)1)
+            {
+            if (t.nodes[i].kind != (i32)UXKindGLView)
+                {
+                continue;
+                }
+            // The SURFACE, made with the tree and not before.  The host draws the
+            // map first and the toolkit's 2D over it, which is the client's two
+            // layers.  The context is the host's and is made only when the app
+            // asks (makeGLContext), so a view that never asks costs nothing.
+            i32 ax = (i32)0;
+            i32 ay = (i32)0;
+            i32 w = (i32)0;
+            i32 hh = (i32)0;
+            self.structAbsFrame(tree, i, &ax, &ay, &w, &hh);
+            ux_gl_create(handle, i, ax, ay, w, hh);
+            self.glBindPeer(t.nodes[i].peer, handle, i);
+            }
         }
 
     // Walk the shadow tree; a custom view calls back into drawRect, the stock
@@ -1083,6 +1102,115 @@ class UXWebDriver : Object<UXViewDriver>
         {
         return gWebNative;
         }
+    // ---- GL ------------------------------------------------------------------
+    // WebGL2, and the SURFACE is the host's: a canvas made at realization, a
+    // context the host makes on request, a viewport the host sets from the
+    // canvas and its devicePixelRatio, and a present the browser does itself (so
+    // ux_gl_present is a bookkeeping call, not a swap, which is why the seam
+    // calls the web's present a no-op).  Where the host has no GL, ux_gl_* are
+    // no-ops and makeGLContext returns 0, and the view paints drawRect.
+    pointer gWebGlPeer[16];
+    i32 gWebGlHandle[16];
+    i32 gWebGlNode[16];
+    i32 gWebGlCount;
+
+    void glBindPeer(pointer peer, i32 handle, i32 node)
+        {
+        if (peer == (pointer)0)
+            {
+            return; // the peer exists only from makeGL on: retried every realize
+            }
+        for (i32 k = (i32)0; k < self.gWebGlCount; k = k + (i32)1)
+            {
+            if (self.gWebGlPeer[k] == peer)
+                {
+                return;
+                }
+            }
+        if (self.gWebGlCount >= (i32)16)
+            {
+            return;
+            }
+        self.gWebGlPeer[self.gWebGlCount] = peer;
+        self.gWebGlHandle[self.gWebGlCount] = handle;
+        self.gWebGlNode[self.gWebGlCount] = node;
+        self.gWebGlCount = self.gWebGlCount + (i32)1;
+        }
+    i32 glSlot(pointer view)
+        {
+        for (i32 k = (i32)0; k < self.gWebGlCount; k = k + (i32)1)
+            {
+            if (self.gWebGlPeer[k] == view)
+                {
+                return k;
+                }
+            }
+        return (i32)-1;
+        }
+
+    i32 glKind(void)
+        {
+        return (i32)UX_GL_WEBGL2;
+        }
+    pointer glProc(u8* name)
+        {
+        // The web's entry points are HOST IMPORTS the renderer declares, exactly as
+        // on Apple: the link is the loader.  This is not a choice -- taking the
+        // address of an import compiles but produces a funcref that traps when
+        // called ("null function or function signature mismatch"), so a pointer
+        // answer here could never be called.  A renderer on this backend declares
+        // glFoo directly and never asks.
+        return (pointer)0;
+        }
+    pointer makeGLContext(pointer view)
+        {
+        i32 k = self.glSlot(view);
+        if (k < (i32)0)
+            {
+            return (pointer)0; // no surface (the span was never realized)
+            }
+        if (ux_gl_make_current(self.gWebGlHandle[k], self.gWebGlNode[k]) == (i32)0)
+            {
+            return (pointer)0; // no GL: the view keeps its drawRect fallback
+            }
+        ux_gl_viewport(self.gWebGlHandle[k], self.gWebGlNode[k]);
+        return (pointer)(k + (i32)1); // the opaque token, never the host's context
+        }
+    void destroyGLContext(pointer view)
+        {
+        // The host owns the context and frees it with the window; there is nothing
+        // to delete here, and releasing the token is the whole of it.
+        }
+    void resizeGL(pointer view, i32 w, i32 h)
+        {
+        i32 k = self.glSlot(view);
+        if (k >= (i32)0)
+            {
+            ux_gl_viewport(self.gWebGlHandle[k], self.gWebGlNode[k]);
+            }
+        }
+    void presentGL(pointer view)
+        {
+        i32 k = self.glSlot(view);
+        if (k >= (i32)0)
+            {
+            ux_gl_present(self.gWebGlHandle[k], self.gWebGlNode[k]);
+            }
+        }
+    void glSetSwapInterval(i32 interval)
+        {
+        // The browser paces the frame against the display and gives no interval
+        // seam; there is nothing here to set.
+        }
+
+    // The frame clock: the neutral loop calls fn (its nextEvent takes the wait, so a turn
+    // comes round with no input).  This driver has no turn of its own to offer -- it does
+    // not own the loop -- so the answer is false and UXApplication paces itself.
+    bool setTurnHook(turnHook_t* fn, i32 ms)
+        {
+        return false;
+        }
+
     i32 formFactorClass(void)
         {
         return (i32)UX_FORM_DESKTOP;

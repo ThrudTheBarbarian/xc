@@ -20,14 +20,14 @@ case "$(uname)" in Darwin) ;; *) echo "== doc-examples: skipped (AppKit examples
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
 cc -fobjc-arc -fno-objc-msgsend-selector-stubs -dynamiclib \
    -install_name "$work/libUXAppKit.dylib" "$here/libUXAppKit.m" \
-   -framework Cocoa -o "$work/libUXAppKit.dylib" 2>/dev/null
+   -framework Cocoa -framework OpenGL -o "$work/libUXAppKit.dylib" 2>/dev/null
 
 n=0; fail=""
 for f in "$ex"/*.xc; do
   [ -e "$f" ] || continue
   b=$(basename "$f" .xc); n=$((n+1))
   if "$xcc" -A arm64 -I "$here" "$f" -Xlinker "$work/libUXAppKit.dylib" \
-       -framework Cocoa -o "$work/$b" -q >"$work/$b.err" 2>&1
+       -framework Cocoa -framework OpenGL -o "$work/$b" -q >"$work/$b.err" 2>&1
   then printf "  %-22s compiles\n" "$b"
   else printf "  %-22s FAILED\n" "$b"; sed 's/^/      /' "$work/$b.err" | head -4; fail="$fail $b"; fi
 done

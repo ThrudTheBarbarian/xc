@@ -1072,6 +1072,43 @@ class UXGemDriver : Object<UXViewDriver>
         {
         return gGemNativeLive;
         }
+    // ---- GL ------------------------------------------------------------------
+    // No GL on this backend: glKind() is NONE, so the app draws its fallback through
+    // drawRect like any other view.  That is the software path the gates run.
+    i32 glKind(void)
+        {
+        return (i32)UX_GL_NONE;
+        }
+    pointer glProc(u8* name)
+        {
+        return (pointer)0; // no GL on this backend: glKind() is NONE, so nothing asks
+        }
+    pointer makeGLContext(pointer view)
+        {
+        return (pointer)0;
+        }
+    void destroyGLContext(pointer view)
+        {
+        }
+    void resizeGL(pointer view, i32 w, i32 h)
+        {
+        }
+    void presentGL(pointer view)
+        {
+        }
+    void glSetSwapInterval(i32 interval)
+        {
+        // No GL, so there is nothing to pace.
+        }
+
+    // The frame clock: the neutral loop calls fn (its nextEvent takes the wait, so a turn
+    // comes round with no input).  This driver has no turn of its own to offer -- it does
+    // not own the loop -- so the answer is false and UXApplication paces itself.
+    bool setTurnHook(turnHook_t* fn, i32 ms)
+        {
+        return false;
+        }
+
     i32 formFactorClass(void)
         {
         return (i32)UX_FORM_DESKTOP;

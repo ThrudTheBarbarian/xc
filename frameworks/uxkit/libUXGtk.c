@@ -374,6 +374,158 @@ int ux_gtk_shield_on_top(int handle)
     return gtk_widget_get_last_child(GTK_WIDGET(gFix[handle])) == gShieldW[handle];
     }
 
+/* ── GL surface (UXKindGLView) ───────────────────────────────────────────────
+ * A real GtkGLArea, placed BELOW the cairo drawing area: the map is the bottom
+ * of the stack and a 2D view painted over it lands over it, which is the
+ * client's two layers.  The SURFACE is made here, with the tree; the CONTEXT is
+ * made only when the app asks, so a view that never asks costs nothing.
+ *
+ * GTK's GL model is its own and the difference is worth a line: drawing has to
+ * happen with the area's FRAMEBUFFER bound, which gtk_gl_area_make_current
+ * does, and the toolkit otherwise wants it done inside the "render" signal.
+ * The seam's promise is that the context is current for the APP's turn, so
+ * make_current is called when the context is made and again after each swap,
+ * and the render signal returns TRUE without clearing -- so GTK presents the
+ * app's frame instead of wiping it first.
+ *
+ * The entry points are resolved at run time (dlsym, with libGL/libEGL as the
+ * fallback), never linked: the renderer reaches them through ux_gtk_gl_proc and
+ * this shim needs only glViewport for itself.
+ */
+static GtkWidget* gGlA[UXGTK_MAXW][256];
+
+static gboolean gl_render_cb(GtkGLArea* a, GdkGLContext* c, gpointer ud)
+    {
+    (void)a; (void)c; (void)ud;
+    return TRUE; /* the app's frame is already in the FBO: no default clear */
+    }
+
+void ux_gtk_make_gl(int handle, int node, int x, int y, int w, int h, int hidden)
+    {
+    if (!gFix[handle] || node < 0 || node >= 256)
+        return;
+    if (!gGlA[handle][node])
+        {
+        GtkWidget* gl = gtk_gl_area_new();
+        g_signal_connect(gl, "render", G_CALLBACK(gl_render_cb), NULL);
+        /* BELOW the cairo drawing area, so the toolkit's 2D lands over the map. */
+        gtk_widget_insert_before(gl, GTK_WIDGET(gFix[handle]), gArea[handle]);
+        gtk_fixed_move(gFix[handle], gl, x, y);
+        gGlA[handle][node] = gl;
+        }
+    else
+        {
+        gtk_fixed_move(gFix[handle], gGlA[handle][node], x, y);
+        }
+    gtk_widget_set_size_request(gGlA[handle][node], w, h);
+    gtk_widget_set_visible(gGlA[handle][node], hidden ? FALSE : TRUE);
+    }
+
+/* The drawable's pixel size: the widget's allocation times its scale factor.
+ * The toolkit reports both, so the driver never guesses -- the GTK twin of
+ * AppKit's bounds times backingScaleFactor. */
+static void gl_pixel_size(int handle, int node, int* pw, int* ph)
+    {
+    int w = gtk_widget_get_width(gGlA[handle][node]);
+    int h = gtk_widget_get_height(gGlA[handle][node]);
+    int s = gtk_widget_get_scale_factor(gGlA[handle][node]);
+    if (s < 1)
+        s = 1;
+    *pw = w * s;
+    *ph = h * s;
+    }
+
+/* The context is the area's and outlives the token the driver hands the app, so
+ * "release" only forgets the widget; GTK frees it with the window. */
+int ux_gtk_gl_make_current(int handle, int node)
+    {
+    if (handle < 0 || handle >= UXGTK_MAXW || node < 0 || node >= 256 || !gGlA[handle][node])
+        return 0;
+    if (!gtk_widget_get_realized(gGlA[handle][node]))
+        return 0;
+    gtk_gl_area_make_current(GTK_GL_AREA(gGlA[handle][node]));
+    if (gtk_gl_area_get_error(GTK_GL_AREA(gGlA[handle][node])))
+        return 0;
+    return 1;
+    }
+
+/* A GL entry point by name.  dlsym on the process first (the workspace on
+ * macOS, the framework's symbols already loaded); libGL/libEGL opened lazily as
+ * the fallback, because on Linux the toolkit loads GL private to itself. */
+static void* gl_entry(const char* name)
+    {
+    void* p = dlsym(RTLD_DEFAULT, name);
+    if (p)
+        return p;
+    static void* lib;
+    if (!lib)
+        {
+        lib = dlopen("libGL.so.1", RTLD_LAZY | RTLD_GLOBAL);
+        if (!lib)
+            lib = dlopen("libGL.so", RTLD_LAZY | RTLD_GLOBAL);
+        if (!lib)
+            lib = dlopen("libEGL.so.1", RTLD_LAZY | RTLD_GLOBAL);
+        }
+    if (lib)
+        return dlsym(lib, name);
+    return NULL;
+    }
+
+/* The viewport is the driver's: the drawable's size in PIXELS, set from the
+ * allocation and not from anything the app could guess at. */
+void ux_gtk_gl_viewport(int handle, int node)
+    {
+    if (!ux_gtk_gl_make_current(handle, node))
+        return;
+    typedef void (*vpfn)(int, int, int, int);
+    vpfn vp = (vpfn)gl_entry("glViewport");
+    if (!vp)
+        return;
+    int pw, ph;
+    gl_pixel_size(handle, node, &pw, &ph);
+    if (pw < 1)
+        pw = 1;
+    if (ph < 1)
+        ph = 1;
+    vp(0, 0, pw, ph);
+    }
+
+/* The swap is the toolkit's: the frame is in the area's FBO and queue_render
+ * makes GTK present it.  The context is made current again afterwards so the
+ * NEXT app turn has it, which is the promise the seam makes. */
+void ux_gtk_gl_present(int handle, int node)
+    {
+    if (handle < 0 || handle >= UXGTK_MAXW || node < 0 || node >= 256 || !gGlA[handle][node])
+        return;
+    gtk_gl_area_queue_render(GTK_GL_AREA(gGlA[handle][node]));
+    ux_gtk_gl_make_current(handle, node);
+    }
+
+/* 1 when the area reports a context error (no GL, or a failed context), 0 when
+ * it is healthy, -1 when there is no surface.  A renderer that never asks does
+ * not care, but the gate does. */
+int ux_gtk_gl_error(int handle, int node)
+    {
+    if (handle < 0 || handle >= UXGTK_MAXW || node < 0 || node >= 256 || !gGlA[handle][node])
+        return -1;
+    return gtk_gl_area_get_error(GTK_GL_AREA(gGlA[handle][node])) ? 1 : 0;
+    }
+
+void* ux_gtk_gl_proc(const char* name)
+    {
+    if (!name)
+        return NULL;
+    return gl_entry(name);
+    }
+
+void ux_gtk_gl_forget(int handle)
+    {
+    if (handle < 0 || handle >= UXGTK_MAXW)
+        return;
+    for (int n = 0; n < 256; n++)
+        gGlA[handle][n] = NULL;
+    }
+
 static void draw_cb(GtkDrawingArea* a, cairo_t* cr, int w, int h, gpointer ud)
     {
     int handle = GPOINTER_TO_INT(ud);
@@ -433,6 +585,7 @@ void ux_gtk_window_close(int handle)
     gtk_window_destroy(gWin[handle]);
     for (int n = 0; n < 256; n++)
         gCtl[handle][n] = NULL;
+    ux_gtk_gl_forget(handle);
     gWin[handle] = NULL;
     gFix[handle] = NULL;
     gArea[handle] = NULL;
@@ -1160,10 +1313,32 @@ int ux_gtk_dump_ppm(const char* path)
     fclose(f);
     return 1;
     }
+/* Test rig: spin the frame clock until the window's fixed has an allocation.
+ * A headless gate has no window manager driving frames, and a GtkGLArea is
+ * realized -- and so can make a context -- only once the widget tree is mapped
+ * AND laid out.  The fixed's own width comes from the window; its CHILDREN are
+ * allocated during a paint, so one draw is queued and the clock ticked for it
+ * (the same shape as ux_gtk_render_scene), which also runs the cairo content
+ * callback so a GL view with no context paints its drawRect fallback. */
+void ux_gtk_wait_allocated(int handle)
+    {
+    if (!gWin[handle] || !gFix[handle])
+        return;
+    guint beat = g_timeout_add(5, ux_gtk_heartbeat, NULL);
+    int spins = 0;
+    while (gtk_widget_get_width(GTK_WIDGET(gFix[handle])) <= 0 && spins < 120)
+        {
+        g_main_context_iteration(NULL, TRUE);
+        spins++;
+        }
+    gtk_widget_queue_draw(GTK_WIDGET(gFix[handle]));
+    for (int i = 0; i < 30; i++)
+        g_main_context_iteration(NULL, TRUE);
+    g_source_remove(beat);
+    }
 int ux_gtk_pixel(int x, int y)
     {
-    if (!gShot)
-        return -1;
+    if (!gShot)        return -1;
     int w = cairo_image_surface_get_width(gShot), h = cairo_image_surface_get_height(gShot);
     if (x < 0 || y < 0 || x >= w || y >= h)
         return -1;

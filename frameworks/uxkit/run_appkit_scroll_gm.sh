@@ -14,9 +14,9 @@ xcc=${XCC:-xcc}
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
 
 echo "== building (no guard malloc during build) =="
-cc -fobjc-arc -fno-objc-msgsend-selector-stubs -dynamiclib -install_name "$work/libUXAppKit.dylib" "$here/libUXAppKit.m" -framework Cocoa -o "$work/libUXAppKit.dylib"
+cc -fobjc-arc -fno-objc-msgsend-selector-stubs -dynamiclib -install_name "$work/libUXAppKit.dylib" "$here/libUXAppKit.m" -framework Cocoa -framework OpenGL -o "$work/libUXAppKit.dylib"
 "$xcc" -A arm64 -I "$here" "$here/demo_appkit_scroll.xc" \
-    -Xlinker "$work/libUXAppKit.dylib" -framework Cocoa -o "$work/demo_appkit_scroll" -q 2>/dev/null
+    -Xlinker "$work/libUXAppKit.dylib" -framework Cocoa -framework OpenGL -o "$work/demo_appkit_scroll" -q 2>/dev/null
 
 echo "== launching under guard malloc — drag the window SMALLER to reproduce the crash =="
 MallocScribble=1 DYLD_INSERT_LIBRARIES=/usr/lib/libgmalloc.dylib "$work/demo_appkit_scroll"

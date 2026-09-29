@@ -265,10 +265,48 @@ class UXIosDriver : Object<UXViewDriver>
             ux_ios_set_control_fire((pointer)&uxIosFireControl);
             ux_ios_set_value_changed((pointer)&uxIosValueChanged);
             ux_ios_set_field_hooks((pointer)&uxIosFieldChanged);
+            ux_ios_set_field_submit_hooks((pointer)&uxIosFieldSubmitted);
             }
         return ux_ios_boot(screenW, screenH) != (i32)0;
         }
     // phone or tablet, by idiom
+    // ---- GL ------------------------------------------------------------------
+    // No GL on this backend: glKind() is NONE, so the app draws its fallback through
+    // drawRect like any other view.  That is the software path the gates run.
+    i32 glKind(void)
+        {
+        return (i32)UX_GL_NONE;
+        }
+    pointer glProc(u8* name)
+        {
+        return (pointer)0; // no GL on this backend: glKind() is NONE, so nothing asks
+        }
+    pointer makeGLContext(pointer view)
+        {
+        return (pointer)0;
+        }
+    void destroyGLContext(pointer view)
+        {
+        }
+    void resizeGL(pointer view, i32 w, i32 h)
+        {
+        }
+    void presentGL(pointer view)
+        {
+        }
+    void glSetSwapInterval(i32 interval)
+        {
+        // No GL, so there is nothing to pace.
+        }
+
+    // The frame clock.  iOS owns the loop, so the driver answers true and arms its own source:
+    // a repeating NSTimer on the main run loop (libUXIos ux_ios_set_turn_hook).
+    bool setTurnHook(turnHook_t* fn, i32 ms)
+        {
+        ux_ios_set_turn_hook((pointer)fn, ms);
+        return true;
+        }
+
     i32 formFactorClass(void)
         {
         return ux_ios_form_factor();

@@ -175,5 +175,65 @@
     },
     ux_setting_set: (dp, kp, vp) => { settings.set(cstr(dp) + ' ' + cstr(kp), cstr(vp)); return 1; },
     ux_setting_remove: (dp, kp) => { settings.delete(cstr(dp) + ' ' + cstr(kp)); return 1; },
-  }) });
+  });
+
+  // ── GL (WebGL2) ─────────────────────────────────────────────────────────────
+  // The page twin of the Node rig's GL surface, over a real context.  One <canvas>
+  // per GL view, inserted BEFORE the shared 2D canvas so the map is the bottom of
+  // the stack, and the 2D canvas is left unfilled behind a window that has one
+  // (see ux_gfx_target) so the toolkit's 2D composites over the map.
+  //
+  // The entry points are HOST IMPORTS the renderer declares -- this backend has no
+  // glProc, because on wasm a pointer to an import traps when called.  The names a
+  // WebGL2 context answers are enumerated once (not hardcoded) and each becomes an
+  // import that forwards to the CURRENT context, so the renderer's declarations
+  // bind the same way Apple's do.
+  let curGl = null;
+  const glViews = new Map(); // handle -> [{node, el, gl}]
+
+  const glNames = (() => {
+    const c = document.createElement('canvas');
+    const g = c.getContext('webgl2');
+    if (!g) return [];
+    const out = new Set();
+    for (let o = g; o; o = Object.getPrototypeOf(o))
+      for (const k of Object.getOwnPropertyNames(o))
+        if (k.startsWith('gl') && typeof g[k] === 'function') out.add(k);
+    return [...out];
+  })();
+  for (const name of glNames)
+    env[name] = (...args) => (curGl ? curGl[name](...args) : undefined);
+
+  env.ux_gl_create = (h, node, x, y, w, hh) => {
+    const s = wins.get(h);
+    if (!s) return;
+    let arr = glViews.get(h);
+    if (!arr) { arr = []; glViews.set(h, arr); }
+    const dpr = globalThis.devicePixelRatio || 1;
+    const el = document.createElement('canvas');
+    el.style.position = 'absolute';
+    el.style.left = (s.x + x) + 'px';
+    el.style.top = (s.y + y) + 'px';
+    el.style.width = w + 'px';
+    el.style.height = hh + 'px';
+    el.width = Math.round(w * dpr);
+    el.height = Math.round(hh * dpr);
+    canvas.parentNode.insertBefore(el, canvas); // BELOW the 2D canvas: the map first
+    s.hasGl = true;
+    arr.push({ node, el, gl: el.getContext('webgl2', { alpha: true, premultipliedAlpha: true, antialias: false }) });
+  };
+  env.ux_gl_make_current = (h, node) => {
+    const arr = glViews.get(h);
+    if (!arr) return 0;
+    for (const e of arr) if (e.node === node && e.gl) { curGl = e.gl; return 1; }
+    return 0;
+  };
+  env.ux_gl_viewport = (h, node) => {
+    const arr = glViews.get(h);
+    if (!arr) return;
+    for (const e of arr) if (e.node === node && e.gl) { curGl = e.gl; e.gl.viewport(0, 0, e.el.width, e.el.height); }
+  };
+  env.ux_gl_present = (h, node) => {}; // the browser composites: nothing to swap
+
+  globalThis.xccImports = Object.assign(globalThis.xccImports || {}, { env });
 })();

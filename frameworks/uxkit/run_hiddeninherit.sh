@@ -17,9 +17,9 @@ case "$(uname)" in Darwin) ;; *) echo "== hiddeninherit: skipped (not macOS) =="
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
 
 echo "== hiddeninherit: compiling the ObjC shim + the REAL neutral layer for arm64 =="
-cc -fobjc-arc -fno-objc-msgsend-selector-stubs -dynamiclib -install_name "$work/libUXAppKit.dylib" "$here/libUXAppKit.m" -framework Cocoa -o "$work/libUXAppKit.dylib"
+cc -fobjc-arc -fno-objc-msgsend-selector-stubs -dynamiclib -install_name "$work/libUXAppKit.dylib" "$here/libUXAppKit.m" -framework Cocoa -framework OpenGL -o "$work/libUXAppKit.dylib"
 "$xcc" -A arm64 -I "$here" "$here/test_hiddeninherit.xc" \
-    -Xlinker "$work/libUXAppKit.dylib" -framework Cocoa -o "$work/test_hiddeninherit" -q 2>/dev/null
+    -Xlinker "$work/libUXAppKit.dylib" -framework Cocoa -framework OpenGL -o "$work/test_hiddeninherit" -q 2>/dev/null
 
 echo "== hiddeninherit: running native (offscreen paint, no window shown) =="
 got=$("$work/test_hiddeninherit" 2>/dev/null)

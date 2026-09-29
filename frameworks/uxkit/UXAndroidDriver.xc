@@ -284,10 +284,48 @@ class UXAndroidDriver : Object<UXViewDriver>
             ux_and_set_control_fire((pointer)&uxAndFireControl);
             ux_and_set_value_changed((pointer)&uxAndValueChanged);
             ux_and_set_field_hooks((pointer)&uxAndFieldChanged);
+            ux_and_set_field_submit_hooks((pointer)&uxAndFieldSubmitted);
             }
         return ux_and_boot(screenW, screenH) != (i32)0;
         }
     // phone or tablet, by size
+    // ---- GL ------------------------------------------------------------------
+    // No GL on this backend: glKind() is NONE, so the app draws its fallback through
+    // drawRect like any other view.  That is the software path the gates run.
+    i32 glKind(void)
+        {
+        return (i32)UX_GL_NONE;
+        }
+    pointer glProc(u8* name)
+        {
+        return (pointer)0; // no GL on this backend: glKind() is NONE, so nothing asks
+        }
+    pointer makeGLContext(pointer view)
+        {
+        return (pointer)0;
+        }
+    void destroyGLContext(pointer view)
+        {
+        }
+    void resizeGL(pointer view, i32 w, i32 h)
+        {
+        }
+    void presentGL(pointer view)
+        {
+        }
+    void glSetSwapInterval(i32 interval)
+        {
+        // No GL, so there is nothing to pace.
+        }
+
+    // The frame clock.  Android owns the loop, so the driver answers true and arms its own
+    // source: a self-reposting Handler message on the UI thread (libUXAndroid ux_and_set_turn_hook).
+    bool setTurnHook(turnHook_t* fn, i32 ms)
+        {
+        ux_and_set_turn_hook((pointer)fn, ms);
+        return true;
+        }
+
     i32 formFactorClass(void)
         {
         return ux_and_form_factor();

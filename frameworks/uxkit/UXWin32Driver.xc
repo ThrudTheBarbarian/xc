@@ -796,6 +796,206 @@ pointer UXShield32Proc(pointer hwnd, u32 msg, pointer wp, pointer lp)
     return DefWindowProcA(hwnd, msg, wp, lp);
     }
 
+// ── the GL surface (UXKindGLView) ───────────────────────────────────────────
+// The seam's split, exactly as on AppKit: this driver owns the SURFACE -- the child
+// window, its device context, the pixel format, the swap -- and the app owns the
+// renderer.  A GL view that never asks for a context costs nothing: no surface is made
+// until the view is realized and no context until makeGL.
+//
+// THE LOADER LIVES HERE, and that is the whole reason glProc() is on the seam.  The
+// toolchain's Win64 import map carries the GDI and USER entry points but NOT opengl32's
+// wgl*, and an import that is not in the map does not link.  So the library is opened at
+// run time and the entry points are resolved by name -- which is how a GL program finds
+// them on this platform in any case, and which keeps the platform out of the renderer.
+pointer gW32GlLib;       // opengl32.dll, opened on the first GL view
+pointer gW32GlPeer[8];   // the neutral view pointer -> its surface
+pointer gW32GlHwnd[8];
+pointer gW32GlDc[8];     // the surface's own device context (CS_OWNDC: stable for its life)
+pointer gW32GlCtx[8];
+i32 gW32GlCount;
+i32 gW32GlSwap = (i32)1; // 1 = the swap waits for the display (glSetSwapInterval)
+pointer gW32WglCreate;   // wglCreateContext
+pointer gW32WglMakeCur;  // wglMakeCurrent
+pointer gW32WglDeleteCtx;
+pointer gW32WglGetProc;
+pointer gW32WglCreateAttribs; // wglCreateContextAttribsARB, or 0 (the core-profile request)
+pointer gW32WglSwapInterval;  // wglSwapIntervalEXT, or 0
+pointer gW32GlViewport;       // glViewport, resolved with the rest
+
+typedef pointer WglCreateFn(pointer hdc);
+typedef pointer WglCreateAttribsFn(pointer hdc, pointer share, i32* attribs);
+typedef pointer WglMakeCurFn(pointer hdc, pointer ctx);
+typedef i32 WglDeleteCtxFn(pointer ctx);
+typedef pointer WglGetProcFn(u8* name);
+typedef i32 WglSwapIntervalFn(i32 interval);
+typedef void GlViewportFn(i32 x, i32 y, i32 w, i32 h);
+
+// Open opengl32 and resolve what the DRIVER needs.  wglGetProcAddress is the documented way
+// to reach the extension entry points (the core-profile request, the swap interval); the
+// base ones opengl32 exports by name and GetProcAddress finds them.
+void w32_gl_load(void)
+    {
+    if (gW32GlLib != (pointer)0)
+        {
+        return;
+        }
+    gW32GlLib = LoadLibraryA((pointer)"opengl32.dll");
+    if (gW32GlLib == (pointer)0)
+        {
+        return;
+        }
+    gW32WglCreate = GetProcAddress(gW32GlLib, (u8*)"wglCreateContext");
+    gW32WglMakeCur = GetProcAddress(gW32GlLib, (u8*)"wglMakeCurrent");
+    gW32WglDeleteCtx = GetProcAddress(gW32GlLib, (u8*)"wglDeleteContext");
+    gW32WglGetProc = GetProcAddress(gW32GlLib, (u8*)"wglGetProcAddress");
+    gW32GlViewport = GetProcAddress(gW32GlLib, (u8*)"glViewport");
+    if (gW32WglGetProc != (pointer)0)
+        {
+        WglGetProcFn* g = (WglGetProcFn*)gW32WglGetProc;
+        gW32WglCreateAttribs = g((u8*)"wglCreateContextAttribsARB");
+        gW32WglSwapInterval = g((u8*)"wglSwapIntervalEXT");
+        }
+    }
+
+i32 w32_gl_find(pointer peer)
+    {
+    for (i32 i = (i32)0; i < gW32GlCount; i = i + (i32)1)
+        {
+        if (gW32GlPeer[i] == peer)
+            {
+            return i;
+            }
+        }
+    return (i32)-1;
+    }
+
+// The viewport belongs to the driver here as it does everywhere: it is the drawable's size
+// in pixels, and on this backend the client rect IS in pixels (there is no point/pixel
+// split to reconcile).  Called when the context is made and again whenever the surface
+// moves or resizes, so a renderer never sets one and never asks what it is.
+void w32_gl_viewport(pointer peer)
+    {
+    i32 i = w32_gl_find(peer);
+    if (i < (i32)0 || gW32GlCtx[i] == (pointer)0 || gW32GlViewport == (pointer)0 || gW32WglMakeCur == (pointer)0)
+        {
+        return;
+        }
+    WglMakeCurFn* mc = (WglMakeCurFn*)gW32WglMakeCur;
+    if (mc(gW32GlDc[i], gW32GlCtx[i]) == (pointer)0)
+        {
+        return;
+        }
+    RECT r;
+    r.left = (i32)0;
+    r.top = (i32)0;
+    r.right = (i32)0;
+    r.bottom = (i32)0;
+    GetClientRect(gW32GlHwnd[i], (pointer)&r);
+    i32 w = r.right - r.left;
+    i32 hh = r.bottom - r.top;
+    if (w < (i32)1)
+        {
+        w = (i32)1;
+        }
+    if (hh < (i32)1)
+        {
+        hh = (i32)1;
+        }
+    GlViewportFn* vp = (GlViewportFn*)gW32GlViewport;
+    vp((i32)0, (i32)0, w, hh);
+    }
+
+// Take the surface: a device context of its own and the pixel format chosen for it.  The
+// format is set ONCE per window -- the OS permits no second SetPixelFormat -- which is why
+// it happens at realization and the context at makeGL.
+void w32_gl_attach(pointer peer, pointer hwnd)
+    {
+    w32_gl_load();
+    if (gW32GlLib == (pointer)0 || gW32GlCount >= (i32)8)
+        {
+        return;
+        }
+    // Key the surface on the NEUTRAL VIEW, which is what makeGLContext is handed and the
+    // only handle it has.  A plain view registers no peer, so the FIRST realization -- the
+    // one that happens before makeGL -- arrives here with none; the surface is taken on
+    // the realization that FOLLOWS makeGL, and it is taken ONCE per view.  So this is
+    // find-or-create by peer and a no-op once the peer has one.
+    if (peer == (pointer)0 || w32_gl_find(peer) >= (i32)0)
+        {
+        return;
+        }
+    pointer dc = GetDC(hwnd);
+    if (dc == (pointer)0)
+        {
+        return;
+        }
+    PIXELFORMATDESCRIPTOR pfd;
+    pfd.nSize = (u16)sizeof(PIXELFORMATDESCRIPTOR);
+    pfd.nVersion = (u16)1;
+    pfd.dwFlags = (u32)PFD_DRAW_TO_WINDOW | (u32)PFD_SUPPORT_OPENGL | (u32)PFD_DOUBLEBUFFER;
+    pfd.iPixelType = (u8)PFD_TYPE_RGBA;
+    pfd.iColorBits = (u8)24;
+    pfd.iRedBits = (u8)0; pfd.iRedShift = (u8)0;
+    pfd.iGreenBits = (u8)0; pfd.iGreenShift = (u8)0;
+    pfd.iBlueBits = (u8)0; pfd.iBlueShift = (u8)0;
+    pfd.iAlphaBits = (u8)8; pfd.iAlphaShift = (u8)0;
+    pfd.iAccumBits = (u8)0; pfd.iAccumRedBits = (u8)0; pfd.iAccumGreenBits = (u8)0;
+    pfd.iAccumBlueBits = (u8)0; pfd.iAccumAlphaBits = (u8)0;
+    pfd.iDepthBits = (u8)0;
+    pfd.iStencilBits = (u8)0;
+    pfd.iAuxBuffers = (u8)0;
+    pfd.iLayerType = (u8)0;
+    pfd.bReserved = (u8)0;
+    pfd.dwLayerMask = (u32)0;
+    pfd.dwVisibleMask = (u32)0;
+    pfd.dwDamageMask = (u32)0;
+    i32 fmt = ChoosePixelFormat(dc, (pointer)&pfd);
+    if (fmt == (i32)0 || SetPixelFormat(dc, fmt, (pointer)&pfd) == (i32)0)
+        {
+        ReleaseDC(hwnd, dc);
+        return; // no surface: the view keeps its drawRect fallback
+        }
+    i32 i = gW32GlCount;
+    gW32GlPeer[i] = peer;
+    gW32GlHwnd[i] = hwnd;
+    gW32GlDc[i] = dc;
+    gW32GlCtx[i] = (pointer)0;
+    gW32GlCount = i + (i32)1;
+    }
+
+// The GL surface window.  It erases nothing (the swap has already put the picture up, and
+// erasing would flash the background between frames) and paints nothing (the app draws into
+// the surface, not the toolkit).  A press is translated to the parent's coordinates and
+// posted there, the same forwarding the input shield does, so a click on the map reaches
+// the toolkit's own hit-test.
+pointer UXGl32Proc(pointer hwnd, u32 msg, pointer wp, pointer lp)
+    {
+    if (msg == (u32)WM_ERASEBKGND)
+        {
+        return (pointer)1;
+        }
+    if (msg == (u32)WM_PAINT)
+        {
+        return (pointer)0;
+        }
+    if (msg == (u32)WM_LBUTTONDOWN)
+        {
+        UXView* gv = (UXView* ?)GetWindowLongPtrA(hwnd, (i32)GWLP_USERDATA);
+        pointer par = GetParent(hwnd);
+        if (gv != (UXView*)0 && par != (pointer)0)
+            {
+            u32 lpw = (u32)lp;
+            UXRect a = gv.absoluteFrame();
+            i32 x = (i32)(i16)lpw + (i32)a.x;
+            i32 y = (i32)(i16)(lpw >> (u32)16) + (i32)a.y;
+            PostMessageA(par, (u32)WM_LBUTTONDOWN, wp,
+                         (pointer)(((u32)y << (u32)16) | ((u32)x & (u32)$FFFF)));
+            }
+        return (pointer)0;
+        }
+    return DefWindowProcA(hwnd, msg, wp, lp);
+    }
+
 class UXWin32Driver : Object<UXViewDriver>
     {
     void init(void)
@@ -1627,6 +1827,10 @@ class UXWin32Driver : Object<UXViewDriver>
             i32 ah = (i32)0;
             self.structAbsFrame(h, i, &ax, &ay, &aw, &ah);
             MoveWindow(n.ctrl, ax, ay, aw, ah, (i32)1);
+            if ((i32)n.kind == (i32)UXKindGLView)
+                {
+                w32_gl_viewport(n.peer); // the drawable moved: the viewport is the driver's
+                }
             }
         }
     // Drive the UXScroll32 child: SetScrollPos clamps to the range the container already set from
@@ -2174,6 +2378,30 @@ class UXWin32Driver : Object<UXViewDriver>
                     MoveWindow(t.nodes[i].ctrl, ax, ay, w, hh, (i32)1);
                     }
                 gW32Shield[handle] = t.nodes[i].ctrl;
+                ShowWindow(t.nodes[i].ctrl, self.effectiveHidden(tree, i) != (i32)0 ? (i32)0 : (i32)SW_SHOW);
+                }
+            else if (k == (i32)UXKindGLView)
+                {
+                // The surface, made with the tree and not before: a GL view that never calls
+                // makeGL still pays for a child window, which is the price of having one the
+                // driver owns.  The context is NOT made here -- that is makeGLContext's job.
+                // The attach is tried on EVERY realization, because the view's peer only
+                // exists from makeGL on: the child window is made on the first realization
+                // and the SURFACE is taken on the one that follows the first makeGL.
+                if (t.nodes[i].ctrl == (pointer)0)
+                    {
+                    pointer c = CreateWindowExA((u32)0, (pointer) "UXGl32", (pointer) "",
+                                                (u32)WS_CHILD | (u32)WS_VISIBLE | (u32)WS_CLIPSIBLINGS,
+                                                ax, ay, w, hh, parent, (pointer)(W32_CTRL_ID_BASE + i), gW32Inst, (pointer)0);
+                    t.nodes[i].ctrl = c;
+                    w32_gl_attach(t.nodes[i].peer, c);
+                    }
+                else
+                    {
+                    MoveWindow(t.nodes[i].ctrl, ax, ay, w, hh, (i32)1);
+                    w32_gl_attach(t.nodes[i].peer, t.nodes[i].ctrl);
+                    w32_gl_viewport(t.nodes[i].peer);
+                    }
                 ShowWindow(t.nodes[i].ctrl, self.effectiveHidden(tree, i) != (i32)0 ? (i32)0 : (i32)SW_SHOW);
                 }
             else if (k == (i32)UXKindButton)
@@ -2735,8 +2963,13 @@ class UXWin32Driver : Object<UXViewDriver>
             {
             return;
             }
-        // A SHIELD is app-drawn too: it intercepts input, it is not invisible.
-        if ((k == (i32)UXKindView || k == (i32)UXKindShield) && gW32UserFn != (pointer)0)
+        // A SHIELD is app-drawn too: it intercepts input, it is not invisible.  A GL view is
+        // here for the same reason: what it draws is its SOFTWARE FALLBACK, and once makeGL
+        // has bound a context the neutral ux_userdraw declines to enter app code at all, so
+        // the surface is the picture and this costs one virtual call.  A self-surface view is
+        // here because Win32 makes no surface to hold its paint: it DECLINES, and drawing the
+        // view inline as a UXKindView is exactly that decline.
+        if ((k == (i32)UXKindView || k == (i32)UXKindShield || k == (i32)UXKindGLView || k == (i32)UXKindSurface) && gW32UserFn != (pointer)0)
             {
             UXUserDrawFn* f = (UXUserDrawFn*)gW32UserFn;
             f((pointer)t.nodes, i, gW32UserUd);
@@ -3223,6 +3456,153 @@ class UXWin32Driver : Object<UXViewDriver>
         {
         return gW32Native;
         }
+    // ---- GL ------------------------------------------------------------------
+    // The surface is described above UXGl32Proc; these are the protocol's half of it.
+    // glKind is a property of the BACKEND and not of a context, so it answers before
+    // anything is made: this backend can offer a GL 3.3 core context, and a machine whose
+    // driver refuses one gets a compatibility context instead, which compiles the same
+    // GLSL ES 3.00 source.  If even that fails, makeGLContext returns 0 and the view
+    // falls back to drawRect, which is the software path the gates run.
+    i32 glKind(void)
+        {
+        return (i32)UX_GL_GL33;
+        }
+
+    pointer glProc(u8* name)
+        {
+        w32_gl_load();
+        if (gW32GlLib == (pointer)0)
+            {
+            return (pointer)0;
+            }
+        if (gW32WglGetProc != (pointer)0)
+            {
+            WglGetProcFn* g = (WglGetProcFn*)gW32WglGetProc;
+            pointer p = g(name);
+            if (p != (pointer)0)
+                {
+                return p;
+                }
+            }
+        return GetProcAddress(gW32GlLib, name);
+        }
+
+    pointer makeGLContext(pointer view)
+        {
+        i32 i = w32_gl_find(view);
+        if (i < (i32)0)
+            {
+            return (pointer)0; // no surface (unrealized, or the library would not open)
+            }
+        if (gW32GlCtx[i] == (pointer)0)
+            {
+            // Ask for a core profile first.  wglCreateContextAttribsARB is an EXTENSION, so
+            // it is reached through wglGetProcAddress and may not be there at all.
+            if (gW32WglCreateAttribs != (pointer)0)
+                {
+                i32 attribs[7];
+                attribs[0] = (i32)WGL_CONTEXT_MAJOR_VERSION_ARB;
+                attribs[1] = (i32)3;
+                attribs[2] = (i32)WGL_CONTEXT_MINOR_VERSION_ARB;
+                attribs[3] = (i32)3;
+                attribs[4] = (i32)WGL_CONTEXT_PROFILE_MASK_ARB;
+                attribs[5] = (i32)WGL_CONTEXT_CORE_PROFILE_BIT_ARB;
+                attribs[6] = (i32)0;
+                WglCreateAttribsFn* f = (WglCreateAttribsFn*)gW32WglCreateAttribs;
+                gW32GlCtx[i] = f(gW32GlDc[i], (pointer)0, &attribs[0]);
+                }
+            if (gW32GlCtx[i] == (pointer)0 && gW32WglCreate != (pointer)0)
+                {
+                WglCreateFn* f = (WglCreateFn*)gW32WglCreate;
+                gW32GlCtx[i] = f(gW32GlDc[i]);
+                }
+            if (gW32GlCtx[i] == (pointer)0)
+                {
+                return (pointer)0;
+                }
+            }
+        if (gW32WglMakeCur == (pointer)0)
+            {
+            return (pointer)0;
+            }
+        WglMakeCurFn* mc = (WglMakeCurFn*)gW32WglMakeCur;
+        if (mc(gW32GlDc[i], gW32GlCtx[i]) == (pointer)0)
+            {
+            return (pointer)0;
+            }
+        // The context is current on the calling thread, exactly as the seam promises, and
+        // the pacing and the viewport are set in this same turn.
+        if (gW32WglSwapInterval != (pointer)0)
+            {
+            WglSwapIntervalFn* si = (WglSwapIntervalFn*)gW32WglSwapInterval;
+            si(gW32GlSwap > (i32)0 ? (i32)1 : (i32)0);
+            }
+        w32_gl_viewport(view);
+        return (pointer)(i + (i32)1); // the opaque token, never the context
+        }
+
+    void destroyGLContext(pointer view)
+        {
+        i32 i = w32_gl_find(view);
+        if (i < (i32)0 || gW32GlCtx[i] == (pointer)0)
+            {
+            return;
+            }
+        if (gW32WglMakeCur != (pointer)0)
+            {
+            WglMakeCurFn* mc = (WglMakeCurFn*)gW32WglMakeCur;
+            mc((pointer)0, (pointer)0); // unbind first: a context deleted while current leaks
+            }
+        if (gW32WglDeleteCtx != (pointer)0)
+            {
+            WglDeleteCtxFn* d = (WglDeleteCtxFn*)gW32WglDeleteCtx;
+            d(gW32GlCtx[i]);
+            }
+        gW32GlCtx[i] = (pointer)0;
+        }
+
+    void resizeGL(pointer view, i32 w, i32 h)
+        {
+        // The child window is moved by the tree (structSetFrame), which is the same turn;
+        // what is left for the driver is the drawable's pixel size.
+        w32_gl_viewport(view);
+        }
+
+    void presentGL(pointer view)
+        {
+        i32 i = w32_gl_find(view);
+        if (i < (i32)0 && gW32GlCtx[i] != (pointer)0)
+            {
+            SwapBuffers(gW32GlDc[i]); // the swap, and the only one
+            }
+        }
+
+    void glSetSwapInterval(i32 interval)
+        {
+        gW32GlSwap = interval;
+        if (gW32WglSwapInterval == (pointer)0 || gW32WglMakeCur == (pointer)0)
+            {
+            return;
+            }
+        WglSwapIntervalFn* si = (WglSwapIntervalFn*)gW32WglSwapInterval;
+        WglMakeCurFn* mc = (WglMakeCurFn*)gW32WglMakeCur;
+        for (i32 i = (i32)0; i < gW32GlCount; i = i + (i32)1)
+            {
+            if (gW32GlCtx[i] != (pointer)0 && mc(gW32GlDc[i], gW32GlCtx[i]) != (pointer)0)
+                {
+                si(interval > (i32)0 ? (i32)1 : (i32)0);
+                }
+            }
+        }
+
+    // The frame clock: the neutral loop calls fn, and its wait is honoured by nextEvent (a
+    // timed wait on the message queue).  The driver does not own the loop, so it answers
+    // false and lets UXApplication pace itself.
+    bool setTurnHook(turnHook_t* fn, i32 ms)
+        {
+        return false;
+        }
+
     i32 formFactorClass(void)
         {
         return (i32)UX_FORM_DESKTOP;

@@ -169,6 +169,14 @@ web-memgate: ; XCC=$(XCC) sh run_web_memgate.sh
 web-drag: ; XCC=$(XCC) sh run_web_drag.sh
 web-alert: ; XCC=$(XCC) sh run_web_alert.sh
 
+# ---- web-gl — the GL SURFACE on the web (a host WebGL2 canvas) --------------------
+# The driver owns the surface (a host canvas made at realization), makes the context,
+# sets the viewport from the view's frame and presents.  The entry points are HOST
+# IMPORTS the renderer declares and glProc answers 0 by design: a pointer to a wasm
+# import traps when called.  The Node rig has no GPU, so this proves the surface
+# plumbing and not a shader draw.
+web-gl: ; XCC=$(XCC) sh run_web_gl.sh
+
 # The iOS backend (simulator): native UIKit realization, the settled B+A loop.
 ios-real: ; XCC=$(XCC) sh run_ios_real.sh
 ios-alert: ; XCC=$(XCC) sh run_ios_alert.sh
@@ -180,6 +188,14 @@ gtk-loop: ; XCC=$(XCC) sh run_gtk_loop.sh
 gtk-alert: ; XCC=$(XCC) sh run_gtk_alert.sh
 gtk-settings: ; XCC=$(XCC) sh run_gtk_settings.sh
 gtk-linux: ; XCC=$(XCC) sh run_gtk_linux.sh
+
+# ---- gtk-gl — the GL SURFACE on GTK (a real GtkGLArea core context) ---------------
+# The driver owns the surface (a GtkGLArea below the cairo drawing area), makes the
+# context, sets the viewport from the widget's pixel size and presents; the app owns the
+# renderer and reaches the entry points through glProc.  Unlike the Win32 gate under Wine,
+# this backend gives a core-profile context, but this gate still tests the plumbing: a
+# colour drawn, read back, and a clean close.
+gtk-gl: ; XCC=$(XCC) sh run_gtk_gl.sh
 
 # The Android backend (device realm; needs the SDK/NDK and an emulator/device).
 android-real: ; XCC=$(XCC) sh run_android_real.sh
@@ -259,10 +275,37 @@ appkit-outline: ; XCC=$(XCC) sh run_appkit_outline.sh
 # ---- appkit-multisel — the neutral multi-selection model, exercised headless ----------------
 appkit-multisel: ; XCC=$(XCC) sh run_appkit_multisel.sh
 
+# ---- appkit-winroute — a click on the second window routes to the second window --------------
+# The headless posted-click path asks the driver to resolve a point; the answer comes from the
+# NSEvent's own window, not from "window 1".  macOS-only.
+appkit-winroute: ; XCC=$(XCC) sh run_appkit_winroute.sh
+
 # ---- appkit-resize — a live-resizable window: the neutral toolkit tracks the native frame ----
 # Drag the edge: the custom view reflows to fill, a native button anchors to the corner, and a label
-# shows the live size — via the neutral windowDidResize hook.  Foreground; macOS-only.
+# shows the live size — via the neutral windowDidResize hook.  It closes itself after a moment;
+# --stay keeps it up.  macOS-only.
 appkit-resize: ; XCC=$(XCC) sh run_appkit_resize.sh
+
+# ---- appkit-gl — the GL SEAM on AppKit: the driver owns the surface, the app the renderer ----
+# A window with a UXGLView: the driver makes a core-profile context, sets the viewport from
+# the drawable's PIXELS, and swaps; the renderer links its own entry points (no loader on
+# Apple).  Asserts the surface binds, the swap runs, a paint with a context does not fall
+# back to drawRect, and both go away clean.  macOS-only.
+appkit-gl: ; XCC=$(XCC) sh run_appkit_gl.sh
+
+# ---- appkit-surface — a view that paints in its OWN surface, over a GL surface ---------------
+# A UXView with setOwnSurface(true) becomes a real NSView subview ABOVE the GL surface (which the
+# driver keeps at the bottom), so its ink lands over the map rather than under it.  The gate checks
+# the surface is above the GL and that its ink is the window picture (hiding the view takes it back
+# out), and the headless shape checks the decline: no surface, and the view draws inline.  macOS-only.
+appkit-surface: ; XCC=$(XCC) sh run_appkit_surface.sh
+
+# ---- appkit-glbench — the GL FRAME harness (T0's instrument): four timed configurations ----
+# Checks the PLUMBING and not the numbers: a context made, the sheet uploaded, the device
+# ratio stated, one draw call per frame, four configurations timed, and both frame dumps
+# non-blank (the surface holds the map, the view tree holds the text).  UX_GL_ATLAS=<png>
+# uploads the real atlas through the toolkit's own decoder.  macOS-only.
+appkit-glbench: ; XCC=$(XCC) sh run_appkit_glbench.sh
 
 # ---- notify — the neutral notification centre, exercised natively (no backend) ---------------
 notify: ; $(XCC) -A arm64 -I . test_notify.xc -o $(CURDIR)/test_notify && $(CURDIR)/test_notify
@@ -376,6 +419,14 @@ win32-hidden: ; XCC=$(XCC) sh run_win32_hidden.sh
 
 # ---- win32-kitchensink — a whole form (all controls + menu) on Win32 -------------
 win32-kitchensink: ; XCC=$(XCC) sh run_win32_kitchensink.sh
+
+# ---- win32-gl — the GL SURFACE on Win32 (a real wglCreateContext context) ---------
+# The driver owns the surface (a child window with CS_OWNDC), makes the context, sets the
+# viewport from the client rect and swaps; the app owns the renderer and reaches the entry
+# points through glProc.  The gate draws a colour, reads it back, and closes cleanly.
+# Under Wine this box gives a 2.1 compatibility context, so it proves the PLUMBING and not
+# a core-profile shader draw, and it prints the version rather than matching it.
+win32-gl: ; XCC=$(XCC) sh run_win32_gl.sh
 
 # ---- win32-toolbar — native ToolbarWindow32 (segmented check-group + toolbar row) on Win32 ----
 win32-toolbar: ; XCC=$(XCC) sh run_win32_toolbar.sh

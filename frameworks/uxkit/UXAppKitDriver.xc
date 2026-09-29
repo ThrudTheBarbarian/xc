@@ -131,6 +131,18 @@ void ux_ak_set_progress(i32 handle, i32 node, i32 mille, i32 indeterminate);
 void ux_ak_toolbar_begin(i32 handle, i32 node); // build a native NSToolbar (window chrome)
 void ux_ak_toolbar_add(i32 handle, i32 node, i32 tag, u8* label, i32 type);
 void ux_ak_toolbar_install(i32 handle, i32 node);
+// GL (UXKindGLView).  The surface is placed during realization, like every other native
+// thing here; the context is made on request, so a GL view that never asks for one costs
+// nothing.  `peer` is the neutral view pointer, which is the only name the two sides share.
+i32 ux_ak_gl_kind(void);
+pointer ux_ak_gl_proc(u8* name);
+void ux_ak_gl_place(i32 handle, pointer peer, i32 x, i32 y, i32 w, i32 h, i32 hidden);
+pointer ux_ak_gl_make(pointer peer);
+void ux_ak_gl_resize(pointer peer, i32 w, i32 h);
+void ux_ak_gl_present(pointer peer);
+void ux_ak_gl_vsync(i32 interval);
+void ux_ak_gl_destroy(pointer peer);
+void ux_ak_gl_close(i32 handle);
 
 // The draw-seam callbacks, as callable function-pointer types (xtc can call these directly).
 typedef void UXContentFn(i32 handle, i32 wx, i32 wy, i32 ww, i32 wh, pointer ud);
@@ -838,6 +850,18 @@ class UXAppKitDriver : Object<UXViewDriver>
             self.structAbsFrame(h, i, &ax, &ay, &aw, &ah);
             ux_ak_set_control_frame(t.win, i, ax, ay, aw, ah);
             }
+        // A GL view has no native control, so the test above cannot see it and a
+        // programmatic move would leave the map where it was born.  Same rule, same
+        // place: mask-free, and moved now.
+        if (t.win > (i32)0 && n.autoresize == (i32)0 && n.kind == (i32)UXKindGLView)
+            {
+            i32 ax = (i32)0;
+            i32 ay = (i32)0;
+            i32 aw = (i32)0;
+            i32 ah = (i32)0;
+            self.structAbsFrame(h, i, &ax, &ay, &aw, &ah);
+            ux_ak_gl_place(t.win, t.nodes[i].peer, ax, ay, aw, ah, (i32)n.hidden);
+            }
         }
     void structFrame(pointer h, i32 i, i32* x, i32* y, i32* w, i32* ht)
         {
@@ -1173,7 +1197,12 @@ class UXAppKitDriver : Object<UXViewDriver>
         // A SHIELD is app-drawn too: it intercepts input, it is not invisible.  Leaving it
         // out of this list is subtle -- the shield keeps working and its drawRect silently
         // stops being called, so an overlay that draws alignment guides goes blank.
-        if ((k == (i32)UXKindView || k == (i32)UXKindShield || k == (i32)UXKindCheckbox || k == (i32)UXKindRadio || k == (i32)UXKindToolbar) && gAKUserFn != (pointer)0)
+        // A GL view is in this list for the same reason the shield is: it has to be able to
+        // draw.  What it draws is its SOFTWARE FALLBACK -- the raster it wants when there is
+        // no context, which is every backend without GL and the capture booth.  Once makeGL
+        // has bound a context the neutral ux_userdraw declines to enter app code at all, so
+        // the surface is the picture and this costs one virtual call.
+        if ((k == (i32)UXKindView || k == (i32)UXKindSurface || k == (i32)UXKindShield || k == (i32)UXKindGLView || k == (i32)UXKindCheckbox || k == (i32)UXKindRadio || k == (i32)UXKindToolbar) && gAKUserFn != (pointer)0)
             {
             UXUserDrawFn* f = (UXUserDrawFn*)gAKUserFn; // checkbox/radio: app-drawn on AppKit (no native art yet)
             f((pointer)t.nodes, i, gAKUserUd);
@@ -1340,6 +1369,66 @@ class UXAppKitDriver : Object<UXViewDriver>
                 i32 hh = (i32)0;
                 self.structAbsFrame(tree, i, &ax, &ay, &w, &hh);
                 ux_ak_make_shield(handle, ax, ay, w, hh, self.effectiveHidden(tree, i));
+                }
+            else if (k == (i32)UXKindGLView)
+                {
+                // The SURFACE, not the context.  A real NSView, placed at the BOTTOM of
+                // the content view (the shim does that) so a sibling that paints 2D lands
+                // over it, which is the client's two-layer stack.  No context is made
+                // here: makeGLContext does that when the app asks, so a view that never
+                // asks -- or a run that never realizes at all, like every headless gate --
+                // leaves nothing behind.
+                //
+                // A HEADLESS CLIENT THAT WANTS GL MUST CALL ux_ak_set_capture(1) FIRST.
+                // realizeTree returns above when nativeUI() is false, and the surface is
+                // made here, so in a plain non-interactive run there is no surface for
+                // makeGL to bind and it fails with "no GL context" on a backend whose
+                // glKind says otherwise.  Capture mode is the switch that realises
+                // WITHOUT showing -- the same "realise without showing" a headless GL
+                // gate wants, which is why the portrait pipeline and this share it.
+                i32 ax = (i32)0;
+                i32 ay = (i32)0;
+                i32 w = (i32)0;
+                i32 hh = (i32)0;
+                self.structAbsFrame(tree, i, &ax, &ay, &w, &hh);
+                ux_ak_gl_place(handle, t.nodes[i].peer, ax, ay, w, hh, self.effectiveHidden(tree, i));
+                }
+            else if (k == (i32)UXKindSurface)
+                {
+                // A view that paints in its OWN surface: a real NSView at the view's frame whose
+                // drawRect draws the view's SUBTREE, through the content callback set at boot
+                // (ux_ak_set_surface_content -> ux_view_surface_draw, which points the neutral
+                // walk at this node and sets the draw offset to its absolute position).  It is
+                // made HERE for the same reason a GL surface is: a surface belongs to the WINDOW,
+                // and realization is where native objects are reconciled with the tree.  Being a
+                // real subview it sits ABOVE the GL surface, which is the whole point -- a view's
+                // own paint is UNDER a GL surface, an added subview is over it.
+                //
+                // Like every control it is made once and then moved: the ink it holds changes
+                // each frame, so a reposition alone is not enough and the surface is marked dirty
+                // on every pass.  A backend that cannot make one never reaches this branch --
+                // headless AppKit returns above on nativeUI(), and GEM/Win32/web draw the view
+                // inline as a UXKindView -- which is the decline, and why one tree is correct
+                // everywhere with only the stacking over GL differing.
+                i32 ax = (i32)0;
+                i32 ay = (i32)0;
+                i32 w = (i32)0;
+                i32 hh = (i32)0;
+                self.structAbsFrame(tree, i, &ax, &ay, &w, &hh);
+                if (ux_ak_has_control(handle, i) == (i32)0)
+                    {
+                    ux_ak_make_surface(handle, i, ax, ay, w, hh, t.nodes[i].peer);
+                    ux_ak_set_control_autoresize(handle, i, (i32)t.nodes[i].autoresize);
+                    }
+                else
+                    {
+                    if ((i32)t.nodes[i].autoresize == (i32)0)
+                        {
+                        ux_ak_set_control_frame(handle, i, ax, ay, w, hh);
+                        }
+                    ux_ak_surface_refresh(handle, i);
+                    }
+                ux_ak_set_control_hidden(handle, i, self.effectiveHidden(tree, i));
                 }
             else if (k == (i32)UXKindCheckbox || k == (i32)UXKindRadio)
                 {
@@ -1919,6 +2008,57 @@ class UXAppKitDriver : Object<UXViewDriver>
         {
         return ux_ak_native_count();
         }
+    // ---- GL ------------------------------------------------------------------
+    // A 3.2 or 4.1 CORE profile: the call set GL.xc compiles GLSL ES 3.00 for, so the
+    // answer is GL33 and not a version.  The surface is an NSView realized with the rest
+    // of the tree; the context is made only when the app asks, and a view that never
+    // asks is an ordinary UXView drawn by drawRect -- which is what a headless run gets.
+    i32 glKind(void)
+        {
+        return ux_ak_gl_kind();
+        }
+    // On Apple nothing has to be loaded: the framework's symbols are bound at link time when
+    // the process starts, so the answer is a lookup in the loaded images.  The renderer still
+    // asks by name, which is what keeps it from knowing that.
+    pointer glProc(u8* name)
+        {
+        return ux_ak_gl_proc(name);
+        }
+    pointer makeGLContext(pointer view)
+        {
+        return ux_ak_gl_make(view);
+        }
+    void destroyGLContext(pointer view)
+        {
+        ux_ak_gl_destroy(view);
+        }
+    void resizeGL(pointer view, i32 w, i32 h)
+        {
+        ux_ak_gl_resize(view, w, h);
+        }
+    void presentGL(pointer view)
+        {
+        ux_ak_gl_present(view);
+        }
+    void glSetSwapInterval(i32 interval)
+        {
+        ux_ak_gl_vsync(interval);
+        }
+    // The frame clock.  INTERACTIVE AppKit owns the loop -- nextEvent blocks inside [NSApp run]
+    // -- so the driver provides the turns itself and answers true; a repeating main-queue timer
+    // (the shim's) fires fn between run-loop passes.  HEADLESS, nextEvent is the neutral loop's
+    // and it takes the wait, so the driver hands the work back and answers false.
+    bool setTurnHook(turnHook_t* fn, i32 ms)
+        {
+        if (ux_ak_interactive() != (i32)0)
+            {
+            ux_ak_set_turn_hook((pointer)fn, ms);
+            return true;
+            }
+        ux_ak_set_turn_hook((pointer)0, (i32)0);
+        return false;
+        }
+
     i32 formFactorClass(void)
         {
         return (i32)UX_FORM_DESKTOP;

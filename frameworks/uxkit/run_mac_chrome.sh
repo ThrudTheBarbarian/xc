@@ -8,9 +8,9 @@ case "$(uname)" in Darwin) ;; *) echo "== mac-chrome: skipped (not macOS) =="; e
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
 echo "== mac-chrome: building the shim + the test =="
 cc -fobjc-arc -fno-objc-msgsend-selector-stubs -dynamiclib -install_name "$work/libUXAppKit.dylib" \
-    "$here/libUXAppKit.m" -framework Cocoa -o "$work/libUXAppKit.dylib"
+    "$here/libUXAppKit.m" -framework Cocoa -framework OpenGL -o "$work/libUXAppKit.dylib"
 "$xcc" -A arm64 -I "$here" "$here/test_mac_chrome.xc" \
-    -Xlinker "$work/libUXAppKit.dylib" -framework Cocoa -o "$work/test_mac_chrome" -q 2>/dev/null
+    -Xlinker "$work/libUXAppKit.dylib" -framework Cocoa -framework OpenGL -o "$work/test_mac_chrome" -q 2>/dev/null
 got=$("$work/test_mac_chrome" 2>&1)
 printf '%s\n' "$got"
 if printf '%s\n' "$got" | grep -q '^PASS: AppKit window chrome$'; then

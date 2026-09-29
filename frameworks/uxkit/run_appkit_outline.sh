@@ -15,8 +15,8 @@ echo "== appkit-outline: building the ObjC shim + the test for arm64 =="
 # name at load time, so an MH_OBJECT is unloadable and a relative .o path resolves against whatever
 # the cwd happens to be — which is why this ran at all the first time (a stale .o in the repo).
 cc -fobjc-arc -fno-objc-msgsend-selector-stubs -dynamiclib -install_name "$work/libUXAppKit.dylib" \
-    "$here/libUXAppKit.m" -framework Cocoa -o "$work/libUXAppKit.dylib"
+    "$here/libUXAppKit.m" -framework Cocoa -framework OpenGL -o "$work/libUXAppKit.dylib"
 "$xcc" -A arm64 -I "$here" "$here/test_appkit_outline.xc" \
-    -Xlinker "$work/libUXAppKit.dylib" -framework Cocoa -o "$work/test_appkit_outline" -q 2>/dev/null
+    -Xlinker "$work/libUXAppKit.dylib" -framework Cocoa -framework OpenGL -o "$work/test_appkit_outline" -q 2>/dev/null
 echo "== appkit-outline: running =="
 "$work/test_appkit_outline"

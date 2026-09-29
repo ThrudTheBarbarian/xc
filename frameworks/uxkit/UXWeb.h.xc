@@ -52,6 +52,28 @@ extern void ux_stroke_rect_edges(i32 x, i32 y, i32 w, i32 h);
 // ctx.measureText — real shaped-width measurement, the thing UXTextLayout needs
 // to agree with what drawTextFont later paints.
 extern i32 ux_text_width(u8* s, u8* family, i32 size, i32 bold, i32 italic);
+// The same measure at a numeric weight — the face the DW call above would paint in.
+extern i32 ux_text_width_weight(u8* s, u8* family, i32 size, i32 weight, i32 italic);
+// The face's ascent: how far below the y a drawText places the line the baseline sits (the shim
+// paints with textBaseline 'top', so this is fontBoundingBoxAscent).
+extern i32 ux_text_ascent(u8* family, i32 size, i32 weight, i32 italic);
+
+// ── GL (WebGL2) ─────────────────────────────────────────────────────────────
+// The SURFACE is a canvas the host owns: the driver asks for one at realization
+// and asks the host to set the viewport and to present.  All four are no-ops
+// where the host has no GL, so a GL view falls back to drawRect by the seam's
+// own rule rather than by a special case.
+//
+// The ENTRY POINTS are NOT here.  The renderer declares glCreateShader and the
+// rest itself and the loader binds them to host imports — the link IS the
+// loader, exactly as on Apple.  That is not a shortcut but a constraint: on wasm
+// a pointer to an import is not a callable funcref (calling one traps with
+// "null function or function signature mismatch"), so glProc cannot hand them
+// out and the renderer must not ask it to.  See UXWebDriver.glProc.
+extern void ux_gl_create(i32 h, i32 node, i32 x, i32 y, i32 w, i32 hh);
+extern i32  ux_gl_make_current(i32 h, i32 node);
+extern void ux_gl_viewport(i32 h, i32 node);
+extern void ux_gl_present(i32 h, i32 node);
 
 // ── time / zone ─────────────────────────────────────────────────────────────
 // nowMs maps to the loader's own time_ms (already in the base env).
