@@ -321,7 +321,7 @@ pointer UXScroll32Proc(pointer hwnd, u32 msg, pointer wp, pointer lp)
             gW32CurHdc = hdc;
             // abs -> child-client, scrolled: a view at (vx,vy) draws at (vx-svAbs.x, vy-svAbs.y-pos).
             gDriver.setDrawOffset((i32)svAbs.x, (i32)svAbs.y + pos);
-            gDriver.treeSetUserDraw((pointer)&ux_scroll_userdraw, (pointer)sv.owner);
+            gDriver.treeSetUserDraw((pointer)&ux_surface_userdraw, (pointer)sv.owner);
             gDriver.treeDraw((pointer)sv.owner.objects(), sv.nativeDocNode(),
                              (i32)0, (i32)0, (i32)(rc.right - rc.left), (i32)(rc.bottom - rc.top));
             gDriver.setDrawOffset((i32)0, (i32)0);

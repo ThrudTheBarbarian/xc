@@ -26,6 +26,7 @@ class UXView : UXResponder
     weak : UXView* superview;
     Array* subviews;    // strong: a view owns its children
     i32 autoresizeMask; // springs & struts (UX_ANCHOR_* | UX_FLEX_*); 0 = pinned top-left
+    bool ownSurface;    // paints in its own native surface where the backend can make one
 
     void init(void)
         {
@@ -35,14 +36,51 @@ class UXView : UXResponder
         superview = (UXView*)0;
         subviews = new Array();
         autoresizeMask = (i32)0;
+        ownSurface = false;
+        }
+
+    // Ask this view to paint in its OWN SURFACE rather than in its parent's.  A backend that can
+    // make one (AppKit) puts a real native subview at the view's frame and draws the view's
+    // subtree into it, so the view lands OVER a GL surface instead of under it; a backend that
+    // cannot declines and draws the view inline, exactly as if this were never called.  So the
+    // call is safe on every backend and only the stacking over GL changes.
+    //
+    // Set it BEFORE the view is added to a parent: the choice becomes the view's KIND, and a
+    // node's kind is fixed when it is appended.  A surface view tracks its frame the way a
+    // custom-drawn view does, so it wants springs and struts like one.
+    void setOwnSurface(bool on)
+        {
+        ownSurface = on;
+        if (owner != (UXViewTree*)0)
+            {
+            owner.setPeerOf(index, (pointer)self); // the backend keys the surface on the view
+            }
+        }
+    bool paintsInOwnSurface(void)
+        {
+        return ownSurface;
         }
 
     // The neutral kind this view realizes as.  Override in a subclass:
     //   UXButton -> UXKindButton, UXTextField -> UXKindField, a container -> UXKindBox.
-    // The base is UXKindView: a custom-drawn view whose drawRect paints it.
+    // The base is UXKindView: a custom-drawn view whose drawRect paints it — or UXKindSurface
+    // when the view has asked to paint in its own surface.
     UXKind kind(void)
         {
-        return UXKindView;
+        return ownSurface ? UXKindSurface : UXKindView;
+        }
+
+    // True while this view OWNS A GL CONTEXT and is therefore rendered by GL rather than
+    // by drawRect.  False here, and true only on UXGLView after a context was made.
+    //
+    // The question is deliberately "does it own a context" and not "is it a GL view": a
+    // backend with no GL (glKind() NONE) must still get a picture, and the way it gets one
+    // is drawRect.  So a UXGLView on GEM draws its software fallback like any other view,
+    // and the same view on a backend with a context skips drawRect entirely.  ux_userdraw
+    // is where that is decided, so the two renderers can never both run.
+    bool ownsGL(void)
+        {
+        return false;
         }
 
     // Attach to a tree, creating the backing object.  Called by the tree/window, not by
@@ -51,6 +89,13 @@ class UXView : UXResponder
         {
         owner = t;
         index = t.append((i32)self.kind(), frame, self);
+        if (ownSurface)
+            {
+            // The backend keys the native surface on the view, so a surface view registers its
+            // peer here the way a control does when it sets an action — and it must, because set
+            // before the view was attached the peer was set on the previous (absent) tree.
+            t.setPeerOf(index, (pointer)self);
+            }
         }
 
     // Attach to an OBJECT that ALREADY exists — the .rsc path.  The resource
@@ -270,7 +315,7 @@ class UXView : UXResponder
                 // works in bounds(), so a view that lays its own content out (wrapped text) was
                 // still using the width it was born with.  Recurse either way — a native control
                 // can hold custom views.
-                if (!gDriver.driverAutoresizes() || c.kind() == UXKindView)
+                if (!gDriver.driverAutoresizes() || c.kind() == UXKindView || c.kind() == UXKindSurface)
                     {
                     c.setFrame(UXGeom.make((i16)nx, (i16)ny, (i16)nw, (i16)nh));
                     }

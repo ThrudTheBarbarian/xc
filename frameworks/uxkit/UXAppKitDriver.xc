@@ -108,6 +108,11 @@ void ux_ak_scroll_reload(i32 handle, i32 node, i32 contentH);
 void ux_ak_scroll_set(i32 handle, i32 node, i32 px); // drive it from the toolkit
 i32 ux_ak_scroll_get(i32 handle, i32 node);          // ...and read where it ended up
 void ux_ak_set_scroll_content(pointer fn);
+// A plain view that paints in its OWN surface (UXKindSurface): a real subview at the view's frame
+// whose drawRect draws the view's subtree.  Above the GL surface, unlike an inline paint.
+void ux_ak_set_surface_content(pointer fn);
+void ux_ak_make_surface(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, pointer view);
+void ux_ak_surface_refresh(i32 handle, i32 node);
 i32 ux_ak_drag_next(i32* x, i32* y);
 // The input shield (UXKindShield): a real NSView above the controls, so a click on a
 // design surface reaches the toolkit instead of pressing the button under it.
@@ -1154,6 +1159,17 @@ class UXAppKitDriver : Object<UXViewDriver>
         // A native NSScrollView (realizeTree) overlays the scroll view's whole area and draws its
         // document subtree into its own surface, so don't also draw it inline here.
         if (k == (i32)UXKindScroll && self.nativeUI() != (i32)0)
+            {
+            return;
+            }
+        // A view painting in its OWN surface (realizeTree) has a real subview that draws its
+        // subtree ABOVE the GL surface, so a plain inline draw here would be the wrong layer (under
+        // the map) -- SKIP it in the MAIN window pass.  But the surface's drawRect draws the SAME
+        // node's subtree, through this very walk with the userdraw pointed at ux_surface_userdraw,
+        // and there the root must draw or the surface is blank.  So the skip is the main pass only:
+        // during a sub-surface draw (gAKUserFn is the shared surface userdraw) it falls through.
+        // Headless has no surface at all, so it always falls through and draws inline like a view.
+        if (k == (i32)UXKindSurface && self.nativeUI() != (i32)0 && gAKUserFn != (pointer)&ux_surface_userdraw)
             {
             return;
             }

@@ -67,6 +67,7 @@ so a synthetic test click and a native tap land in the same place.
 **State** · [isHidden](#ishidden--sethidden) · [setHidden](#ishidden--sethidden) · [isEnabled](#isenabled--setenabled) · [setEnabled](#isenabled--setenabled)
 **Layout** · [setAutoresizeMask](#setautoresizemask) · [resizeSubviews](#resizesubviews)
 **Drawing** · [drawRect](#drawrect) · [setNeedsDisplay](#setneedsdisplay) · [setNeedsDisplayInRect](#setneedsdisplayinrect)
+**Surfaces** · [setOwnSurface](#setownsurface) · [paintsInOwnSurface](#setownsurface)
 
 ### kind
 
@@ -78,6 +79,8 @@ The neutral kind this view realizes as, which the driver maps to a platform
 realization. The base returns `UXKindView`: a custom-drawn view painted by its
 `drawRect`. Subclasses return their own (`UXButton` → `UXKindButton`). This is
 the whole mechanism by which one class gets a native button on five platforms.
+A base `UXView` returns `UXKindSurface` instead once
+[`setOwnSurface`](#setownsurface) asks it to paint in its own surface.
 
 ### attachTo
 
@@ -242,6 +245,33 @@ void setNeedsDisplayInRect(UXRect abs)
 
 The precise form: damages only `abs` (absolute coordinates). A text editor uses
 this to repaint one line instead of the whole window.
+
+### setOwnSurface
+
+```c
+void setOwnSurface(bool on)
+bool paintsInOwnSurface(void)
+```
+
+Asks the view to paint in its **own** surface rather than in its parent's. The
+call sets the view's [kind](#kind): with it, [`kind`](#kind) returns
+`UXKindSurface` instead of `UXKindView`.
+
+It exists for one reason: **a view's own paint is drawn before its subviews.** A
+surface is a real native subview placed over a GL surface, so a view that asks
+for one lands *over* the map, while the same view painting inline lands *under*
+it. Call it **before** the view is attached; the choice becomes the view's kind,
+and a node's kind is fixed when it is appended. The view then tracks its frame
+the way a custom-drawn view does, so it wants springs and struts like one.
+
+A backend that can make a surface (AppKit) realises it natively: a subview at the
+view's frame whose `drawRect` draws the view's subtree, so the view's own
+`drawRect` and its children all land in the surface. A backend that cannot (GEM,
+Win32, the web, and GTK for now) **declines** and draws the view inline exactly
+as a `UXKindView`. The call is therefore safe on every backend; only the stacking
+over a GL surface differs.
+
+`paintsInOwnSurface` reports the flag.
 
 ## Example
 

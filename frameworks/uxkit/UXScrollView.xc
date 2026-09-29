@@ -375,19 +375,8 @@ class UXScrollbar : UXView
     // document view, which is a second surface at its own origin.  So draw the subtree with the driver's
     // draw-offset set to the document node's absolute position: every view then lands at doc-local coords,
     // and the native container owns the scroll offset.  (Only AppKit calls this; GEM/win32 draw inline.)
-    i32 ux_scroll_userdraw(pointer tree, i32 obj, pointer ud)
-    {
-    UXViewTree* vt = (UXViewTree*)ud;
-    UXView* v = (UXView* ?)vt.viewAt((u16)obj);
-    if (v == (UXView*)0)
-        {
-        return (i32)0;
-        }
-    UXRect abs = vt.absoluteFrame((u16)obj);
-    UXGraphics* g = gDriver.beginViewDraw((i32)abs.x, (i32)abs.y, (i32)abs.w, (i32)abs.h);
-    v.drawRect(g, UXGeom.make((i16)0, (i16)0, abs.w, abs.h));
-    return (i32)0;
-    }
+    // The walk itself is ux_draw_node_surface (UXView.xc), shared with every self-surface view: the
+    // document and a view that paints in its own surface differ only in which node they name.
 void ux_scroll_draw(pointer sp, i32 docW, i32 docH)
     {
     UXScrollView* sv = (UXScrollView*)sp;
@@ -400,10 +389,5 @@ void ux_scroll_draw(pointer sp, i32 docW, i32 docH)
         {
         return;
         }
-    UXViewTree* vt = sv.document().owner;
-    UXRect docAbs = vt.absoluteFrame((u16)docNode);
-    gDriver.setDrawOffset((i32)docAbs.x, (i32)docAbs.y); // abs -> doc-local in beginViewDraw
-    gDriver.treeSetUserDraw((pointer)&ux_scroll_userdraw, (pointer)vt);
-    gDriver.treeDraw((pointer)vt.objects(), docNode, (i32)0, (i32)0, docW, docH);
-    gDriver.setDrawOffset((i32)0, (i32)0);
+    ux_draw_node_surface(sv.document().owner, docNode, docW, docH);
     }

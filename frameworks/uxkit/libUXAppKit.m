@@ -2836,6 +2836,114 @@ void ux_ak_scroll_reload(int handle, int node, int contentH)
     [doc setNeedsDisplay:YES];
     }
 
+// ---- a self-painting surface (a plain UXView that paints in its own surface) ---------------------
+// The same shape as the scroll document just above, but for an ordinary view instead of a scroll
+// container: a flipped NSView at the view's frame whose drawRect calls back to draw that view's
+// SUBTREE, with the neutral draw offset set to the view's absolute position first, so the subtree
+// lands at this surface's own 0,0.  Because it is a real subview it sits ABOVE the GL surface (which
+// ux_ak_gl_place puts at the bottom of the stack) -- which is the whole reason it exists: a view's
+// own paint is drawn before its subviews, so a plain paint is UNDER a GL surface, and only a real
+// subview is over it.  Only AppKit makes one; the other backends draw the view inline (the decline).
+static void (*g_surface_content)(void* view, int w, int h) = 0;
+void ux_ak_set_surface_content(void* fn)
+    {
+    g_surface_content = (void (*)(void*, int, int))fn;
+    }
+
+#define UX_MAXSURFACE 128
+static NSView* g_surface_view[UX_MAXSURFACE];
+static void* g_surface_owner[UX_MAXSURFACE];
+static int g_surface_n = 0;
+
+static void ak_surface_drawRect(__unsafe_unretained id self, SEL _cmd, NSRect dirty)
+    {
+    for (int i = 0; i < g_surface_n; i++)
+        {
+        if (g_surface_view[i] == (NSView*)self)
+            {
+            if (g_surface_content)
+                {
+                NSRect b = [(NSView*)self bounds];
+                g_surface_content(g_surface_owner[i], (int)b.size.width, (int)b.size.height);
+                }
+            return;
+            }
+        }
+    }
+static Class ak_surface_class(void)
+    {
+    static Class c = nil;
+    if (c)
+        return c;
+    c = objc_allocateClassPair([NSView class], "UXSurfaceView", 0);
+    class_addMethod(c, sel_registerName("drawRect:"), (IMP)ak_surface_drawRect,
+                    "v@:{CGRect={CGPoint=dd}{CGSize=dd}}");
+    class_addMethod(c, sel_registerName("isFlipped"), (IMP)ak_isFlipped, "B@:");
+    objc_registerClassPair(c);
+    return c;
+    }
+
+void ux_ak_make_surface(int handle, int node, int x, int y, int w, int h, void* view)
+    {
+    NSView* content = g_view[handle];
+    if (!content || node < 0 || node >= 256)
+        return;
+    NSView* s = [[ak_surface_class() alloc] initWithFrame:NSMakeRect(x, y, w, h)];
+    if (g_surface_n < UX_MAXSURFACE)
+        {
+        g_surface_view[g_surface_n] = s;
+        g_surface_owner[g_surface_n] = view;
+        g_surface_n++;
+        }
+    [content addSubview:s];
+    g_ctl[handle][node] = s;
+    [s setNeedsDisplay:YES];
+    }
+
+// Mark the surface dirty so its subtree is redrawn on the next display.  Called from realizeTree on
+// every pass, because the surface holds INK that changes each frame and a reposition alone does not
+// repaint it.
+void ux_ak_surface_refresh(int handle, int node)
+    {
+    if (node < 0 || node >= 256)
+        return;
+    NSView* s = (NSView*)g_ctl[handle][node];
+    if (s)
+        [s setNeedsDisplay:YES];
+    }
+
+// Is a self-painting surface (the view `surfPeer`) ABOVE the GL surface `glPeer` in their shared
+// parent's subview order?  1 = above, 0 = below or in a different stack, -1 = one of them is not
+// present.  The whole reason a self-surface view exists is that a real subview lands OVER the
+// composited GL (a plain inline paint would be under it), so this is the structural half of that
+// promise; the pixel half is a window grab.  Keyed by the neutral view pointers, like makeGL, so a
+// caller names the same token the seam already gave it.
+int ux_ak_surface_over_gl(void* surfPeer, void* glPeer)
+    {
+    NSView* surf = nil;
+    for (int i = 0; i < g_surface_n; i++)
+        {
+        if (g_surface_owner[i] == surfPeer)
+            {
+            surf = g_surface_view[i];
+            break;
+            }
+        }
+    int gi = ak_gl_find(glPeer);
+    NSView* gl = gi >= 0 ? g_glView[gi] : nil;
+    if (!surf || !gl)
+        return -1;
+    NSView* parent = [surf superview];
+    if (!parent || parent != [gl superview])
+        return 0; /* different stacks: not comparable, and not over */
+    NSArray* subs = [parent subviews];
+    NSUInteger si = [subs indexOfObjectIdenticalTo:surf];
+    NSUInteger gg = [subs indexOfObjectIdenticalTo:gl];
+    if (si == NSNotFound || gg == NSNotFound)
+        return -1;
+    return si > gg ? 1 : 0;
+    }
+
 // One modal drag-track step (a split-view divider, etc.): pull the next left-mouse dragged/up event.
 // Returns window-local (g_view) coords + 1 while dragging, 0 once released.
 int ux_ak_drag_next(int* x, int* y)
