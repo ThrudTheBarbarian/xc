@@ -284,8 +284,12 @@ class Settings
                 continue;
             if (line.byteAt((u32)0) == (u8)'#')
                 continue;
+            // The sentinel is the PLATFORM's index type: a 6502 String index
+            // is u16, so `notFound()` is $FFFF there and 0xFFFFFFFF on the
+            // 32-bit targets. Comparing against a u32 literal silently
+            // accepted every line with no '=' on xt6502.
             u32 eq = line.indexOfByte((u8)'=');
-            if (eq == (u32)0xFFFFFFFF)
+            if (eq == String.notFound())
                 continue;
             String* k = line.substringBytes((u32)0, eq).trimmed();
             if (k.byteLength() == (u32)0)
