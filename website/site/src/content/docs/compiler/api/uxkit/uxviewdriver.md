@@ -113,6 +113,50 @@ event mask, the web ring waits on the deadline, and headless AppKit polls for
 exactly that long. Zero or less keeps the old block-until-there-is-one
 behaviour, so a client without a clock is unchanged.
 
+### GL: the driver owns the surface and the frame
+
+```c
+i32     glKind(void);
+bool    compositesWithGL(void);
+pointer glProc(u8* name);
+pointer makeGLContext(pointer view);
+void    destroyGLContext(pointer view);
+void    resizeGL(pointer view, i32 w, i32 h);
+void    presentGL(pointer view);
+void    glSetSwapInterval(i32 interval);
+```
+
+A view may own a GL context instead of being painted by `drawRect`. This is the
+DRI split, not indirect GLX: **the driver owns the surface** — the native
+drawable, its order, its resize, its swap — and **the app owns the renderer**,
+which loads its own entry points through `glProc`. Routing GL through
+`UXGraphics` instead would be one round trip per call, and is refused.
+
+`glKind()` names the call set (`UX_GL_NONE`, `UX_GL_GLES3`, `UX_GL_GL33`,
+`UX_GL_WEBGL2`); a backend with none answers `UX_GL_NONE`, and the view is drawn
+by `drawRect` like any other. `makeGLContext` binds a context to a view and
+`presentGL` swaps. The driver sets the viewport from the drawable's own pixels,
+resizes both in the same turn as the resize, and skips `drawRect` for a view
+that owns a context — the two are alternative renderers, never both.
+
+**The present cadence is the rule GL rests on: present happens at most once per
+loop turn, after damage is consolidated, and the driver owns the frame clock.**
+A GL view is the bottom of the stack and every other view is above it, so
+nothing is ever drawn between two GL draws and the swap is enough on its own. A
+GL view never runs a clock of its own: it requests a frame
+([the turn hook](#a-turn-comes-from-the-driver-or-from-the-loop)) and lets the
+driver pace it.
+
+`compositesWithGL()` is the one query about ordering. It asks whether the
+platform composites the 2-D layer and the GL present in **one step**, or leaves
+the driver two producers to order and pace. A view drawn over a GL surface
+composites on every backend, because the display server composites; the question
+is who owns that step, and the app picks its overlay and redraw strategy from the
+answer. AppKit, Win32, GTK and the web answer **true** (the surface is a distinct
+plane the compositor merges — an `NSOpenGLView` subview, a GL child window, a
+`GtkGLArea`, a canvas stacked under the 2-D one); GEM, iOS and Android answer
+**false** (no GL).
+
 ### The shadow tree is the platform's, not ours
 
 ```c

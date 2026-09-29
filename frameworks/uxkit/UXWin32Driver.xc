@@ -3580,6 +3580,11 @@ class UXWin32Driver : Object<UXViewDriver>
         {
         return (i32)UX_GL_GL33;
         }
+    // The GL surface is its own child window, composited with the parent's GDI content in one step.
+    bool compositesWithGL(void)
+        {
+        return true;
+        }
 
     pointer glProc(u8* name)
         {

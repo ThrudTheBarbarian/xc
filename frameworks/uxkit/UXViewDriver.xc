@@ -352,6 +352,21 @@ protocol UXViewDriver
     // comes round sets 0, because with a blocking swap the number is the refresh rate and says
     // nothing about the map.  Applies to the next present.
     void glSetSwapInterval(i32 interval);
+    // Whether the platform composites the 2-D layer and the GL present in ONE step, or leaves the
+    // driver two producers to order and pace itself.  It is a question about ORDERING and PACING,
+    // not occlusion: a view drawn over a GL surface composites on every backend, because the
+    // display server composites.  What differs is who owns that step, and the app picks its
+    // overlay AND redraw strategy from the answer.
+    //
+    //   true   the surface is a distinct plane the platform's compositor merges with the rest of
+    //          the window -- an AppKit NSOpenGLView subview, a GTK GtkGLArea, a Win32 GL child
+    //          window, a web canvas stacked under the 2-D one.  The app may damage the 2-D layer
+    //          and present GL and rely on the compositor to put them together.
+    //   false  there is no such plane: either no GL at all (the answer is moot but stated), or GL
+    //          that shares the 2-D backing and so must be ordered and paced by the driver.
+    //
+    // A view that owns no context never cares.
+    bool compositesWithGL(void);
 
     // ---- the frame clock ----------------------------------------------------------------------
     // A live client hangs its frame clock HERE rather than making up its own pacing.  fn() is
@@ -378,11 +393,10 @@ protocol UXViewDriver
     // is exactly what a client drawing GL and presenting from its own clock does.
     bool setTurnHook(turnHook_t* fn, i32 ms);
 
-    // The rule the seam rests on, and there is no query for it because it is a property of
-    // the loop rather than of any platform: the driver owns the ORDER of the two surfaces and
-    // the PACING of the frame.  The app keeps its surfaces in step by damaging both in one
-    // present turn.  GL never interleaves, and GL never owns the clock — on every backend,
-    // which is why nothing here asks which backend this is.
+    // The rule the seam rests on: the driver owns the ORDER of the two surfaces and the PACING
+    // of the frame.  The app keeps its surfaces in step by damaging both in one present turn.
+    // GL never interleaves, and GL never owns the clock.  compositesWithGL above says whether
+    // that order and pace are the platform compositor's step or the driver's own.
 
     // Reconcile any NATIVE control widgets with the tree (§ native-overlay).  GEM/Win32 draw their
     // controls, so this is a no-op there; an AppKit driver creates/positions real NSButton/

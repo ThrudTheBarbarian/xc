@@ -1172,6 +1172,11 @@ class UXWebDriver : Object<UXViewDriver>
         {
         return (i32)UX_GL_WEBGL2;
         }
+    // The GL canvas is a sibling of the 2-D canvas, composited by the browser in one step.
+    bool compositesWithGL(void)
+        {
+        return true;
+        }
     pointer glProc(u8* name)
         {
         // The web's entry points are HOST IMPORTS the renderer declares, exactly as

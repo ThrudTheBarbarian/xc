@@ -370,6 +370,11 @@ class UXGtkDriver : Object<UXViewDriver>
         {
         return (i32)UX_GL_GL33;
         }
+    // GtkGLArea is an ordinary widget, composited with its siblings in one step.
+    bool compositesWithGL(void)
+        {
+        return true;
+        }
     pointer glProc(u8* name)
         {
         return ux_gtk_gl_proc(name);

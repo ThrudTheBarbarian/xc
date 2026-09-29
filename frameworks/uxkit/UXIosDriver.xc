@@ -300,6 +300,11 @@ class UXIosDriver : Object<UXViewDriver>
         {
         return (i32)UX_GL_NONE;
         }
+    // No GL at all, so there is no plane to composite: the answer is moot but stated as false.
+    bool compositesWithGL(void)
+        {
+        return false;
+        }
     pointer glProc(u8* name)
         {
         return (pointer)0; // no GL on this backend: glKind() is NONE, so nothing asks

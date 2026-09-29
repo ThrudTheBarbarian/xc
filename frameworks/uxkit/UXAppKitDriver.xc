@@ -2087,6 +2087,12 @@ class UXAppKitDriver : Object<UXViewDriver>
         {
         return ux_ak_gl_kind();
         }
+    // The surface is an ordinary NSOpenGLView subview and the window server composites it with
+    // the rest of the window in one step.
+    bool compositesWithGL(void)
+        {
+        return true;
+        }
     // On Apple nothing has to be loaded: the framework's symbols are bound at link time when
     // the process starts, so the answer is a lookup in the loaded images.  The renderer still
     // asks by name, which is what keeps it from knowing that.
