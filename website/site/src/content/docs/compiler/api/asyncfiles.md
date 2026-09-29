@@ -3,7 +3,7 @@ title: AsyncFiles
 description: "Files operations run off the calling thread, in order, with a completion block: read, write and append without blocking. A complete method reference."
 ---
 
-`AsyncFiles` queues the [`Files`](/compiler/api/file/) operations and runs
+`AsyncFiles` queues the [`Files`](/compiler/api/files/) operations and runs
 them on a background thread, so the calling thread does not wait for the
 disk.
 
@@ -14,7 +14,7 @@ disk.
 ## Overview
 
 Each call returns at once. When the operation has finished, its completion
-block is called with the result [`Files`](/compiler/api/file/) would have
+block is called with the result [`Files`](/compiler/api/files/) would have
 returned:
 
 ```c

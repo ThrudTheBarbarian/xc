@@ -119,6 +119,7 @@ and every method grouped by task with a jump-list at the top.
 | [`Settings`](/compiler/api/settings/) | a persistent key/value store: in memory always, in a text file where there is a filesystem |
 | [`Bundle`](/compiler/api/bundle/) | where a program's own files live, and the resources inside |
 | [`Http`](/compiler/api/http/) | HTTP/1.1 requests, blocking or on their own thread, and the transport behind `url.fetch`; https through the optional TLS library |
+| [`Files`](/compiler/api/files/) | whole-file reads and writes, appends, directories and existence checks |
 | [`AsyncFiles`](/compiler/api/asyncfiles/) | the `Files` operations off the calling thread, run in order, with a completion block |
 
 **[6502 (8-bit)](/compiler/api/6502/)**: the utilities the 8-bit target provides in place of an OS: [`Time`](/compiler/api/time/), [`Heap`](/compiler/api/heap/), [`Vbi`](/compiler/api/vbi/), [`System`](/compiler/api/system/). On the native targets these are thin wrappers over the host. On the 6502 they are target-specific implementations.
