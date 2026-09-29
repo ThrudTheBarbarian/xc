@@ -19,6 +19,7 @@ support/
     Assert.xc  Sort.xc
     Platform.xc         ← auto-included prelude
     Settings.xc  Bundle.xc   ← persistent settings, and a program's own files
+    Http.xc  HttpTls.xc      ← HTTP/1.1 client and url.fetch transport; https
   arm64/lib/          ← macOS / Linux on 64-bit ARM
     Stdio.xc  Math.xc  Time.xc  Heap.xc  FILE.xc  Files.xc  Process.xc
     Gfx*.xc  GfxFactory.xc  Platform.xc
@@ -116,6 +117,7 @@ and every method grouped by task with a jump-list at the top.
 | [`Assert`](/compiler/api/assert/) | test-fixture assertions; no-ops under `-DNDEBUG` / `-DRELEASE` |
 | [`Settings`](/compiler/api/settings/) | a persistent key/value store: in memory always, in a text file where there is a filesystem |
 | [`Bundle`](/compiler/api/bundle/) | where a program's own files live, and the resources inside |
+| [`Http`](/compiler/api/http/) | HTTP/1.1 requests, blocking or on their own thread, and the transport behind `url.fetch`; https through the optional TLS library |
 
 **[6502 (8-bit)](/compiler/api/6502/)**: the utilities the 8-bit target provides in place of an OS: [`Time`](/compiler/api/time/), [`Heap`](/compiler/api/heap/), [`Vbi`](/compiler/api/vbi/), [`System`](/compiler/api/system/). On the native targets these are thin wrappers over the host. On the 6502 they are target-specific implementations.
 

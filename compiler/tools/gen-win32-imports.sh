@@ -29,7 +29,7 @@ OUT=support/win64/win32-imports.map
 # snprintf reaches through (`__imp___stdio_common_vsprintf`). libucrt.a would
 # spread the same symbols over the api-ms-win-crt-* API sets, which is more
 # descriptors for no gain, so the single-DLL spelling is the one used.
-DLLS="kernel32 user32 gdi32 advapi32 shell32 ole32 oleaut32 comctl32 comdlg32 winmm msimg32 winspool ucrtbase"
+DLLS="kernel32 user32 gdi32 advapi32 shell32 ole32 oleaut32 comctl32 comdlg32 winmm msimg32 winspool ws2_32 ucrtbase"
 
 TMP=$(mktemp); trap 'rm -f "$TMP"' EXIT
 {

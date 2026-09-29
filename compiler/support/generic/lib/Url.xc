@@ -178,6 +178,19 @@ class Url
         }
     static void complete(u32 token, u32 status, String* body)
         {
+        FetchReq* r = Url.take(token);
+        if (r == 0)
+            return;
+        r.fire(status, body);
+        // Unlinked by take; the local's scope exit is the last release.
+        }
+
+    // Unlink and return the pending fetch for `token`, or null. A transport
+    // that finishes on another thread claims its request here, on the thread
+    // that started it, and fires it itself — the pending list is not
+    // thread-safe.
+    static FetchReq* take(u32 token)
+        {
         FetchReq* prev = (FetchReq*)0;
         FetchReq* r = _url_reqs;
         while (r != 0 && r.token != token)
@@ -186,13 +199,12 @@ class Url
             r = r.next;
             }
         if (r == 0)
-            return;
+            return (FetchReq*)0;
         if (prev == 0)
             _url_reqs = r.next;
         else
             prev.next = r.next;
-        r.fire(status, body);
-        // Unlinked above; the local's scope exit is the last release.
+        return r;
         }
 
     // ── internals ────────────────────────────────────────────────────────
