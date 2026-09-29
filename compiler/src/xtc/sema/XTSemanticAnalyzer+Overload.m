@@ -2397,6 +2397,11 @@ static BOOL XTIsErasedKeyType(XTType* t)
                         {
                         [pt addObject:p.paramType];
                         }
+                    // Box and unbox as the free-call and explicit-receiver
+                    // paths do. Without it a literal passed to a `String*`
+                    // parameter reached the callee as a raw u8* (bug 568).
+                    [self applyAutoboxToArguments:node paramTypes:pt];
+                    [self applyUnboxToArguments:node paramTypes:pt];
                     [self recordFnPointerArgs:node.arguments
                                    paramTypes:pt
                                   calleeLabel:calleeLbl];
