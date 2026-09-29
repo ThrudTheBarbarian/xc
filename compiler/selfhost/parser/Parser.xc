@@ -856,6 +856,29 @@ class Parser
         _fatal = true;
     }
 
+    // As `_error`, at a node's own position rather than the token the parser
+    // stopped at. The reference reports an array size that does not fold at
+    // the size expression (the operator of `Q + 1`), not after it. The node
+    // is in the current token's file.
+    void _errorAt(String* msg, Node* n)
+    {
+        Token* t = cur();
+        if (n == (Node*)0 || n.line() == (u32)0 || t == (Token*)0) {
+            _error(msg);
+            return;
+        }
+        String* out = String.withCString("");
+        if (t.file() != (String*)0) { out.append(t.file()); } else { out.appendCString("?"); }
+        out.appendByte((u8)':');
+        out.append(String.withU32(n.line()));
+        out.appendByte((u8)':');
+        out.append(String.withU32(n.col()));
+        out.appendCString(": error: ");
+        out.append(msg);
+        _errors.add((Object*)out);
+        _fatal = true;
+    }
+
     // The token's own text when it has one (an identifier, a literal, an
     // operator), else its kind's name — so `Expected ';' but found 'return'`.
     String* tokenText(Token* t)
@@ -940,7 +963,7 @@ class Parser
             m.append(sz.name());
             m.appendCString("' does not fold — check for typos or a missing #define)");
         }
-        _error(m);
+        _errorAt(m, sz);
         _fatal = true;
     }
 
@@ -1951,10 +1974,12 @@ class Parser
         return check((u16)tokRBrace);
     }
 
+    // The reference's own wording for a missing `}`, not `expect`'s
+    // "Expected '}' but found …".
     void closeBlock(void)
     {
         if (match((u16)tokRBrace)) return;
-        expect((u16)tokRBrace);
+        _error(String.withCString("Expected '}' to end block"));
     }
 
     Node* parseBlock(void)
