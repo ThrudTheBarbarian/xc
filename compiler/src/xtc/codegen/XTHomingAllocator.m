@@ -88,6 +88,8 @@
     NSMutableArray<NSMutableSet<NSNumber*>*>* phiResAt = [NSMutableArray array];
     NSMutableArray<NSMutableSet<NSNumber*>*>* phiEdge = [NSMutableArray array];
     NSMutableArray<NSNumber*>* blkEnd = [NSMutableArray array];
+    NSMutableArray<NSNumber*>* blkStart = [NSMutableArray array];
+    NSMutableDictionary<NSNumber*, NSMutableArray<NSNumber*>*>* usePos = [NSMutableDictionary dictionary];
     for (NSUInteger i = 0; i < nb; i++)
         {
         [defSet addObject:[NSMutableSet set]];
@@ -95,6 +97,7 @@
         [phiResAt addObject:[NSMutableSet set]];
         [phiEdge addObject:[NSMutableSet set]];
         [blkEnd addObject:@0];
+        [blkStart addObject:@0];
         }
     NSMutableDictionary<NSNumber*, NSNumber*>* defPos = [NSMutableDictionary dictionary];
     NSMutableDictionary<NSNumber*, NSNumber*>* lastUse = [NSMutableDictionary dictionary];
@@ -106,6 +109,7 @@
     for (NSUInteger bi = 0; bi < nb; bi++)
         {
         XTIRBlock* b = blocks[bi];
+        blkStart[bi] = @(pos);
         NSMutableSet<NSNumber*>*defs = defSet[bi], *ue = ueUse[bi];
         for (XTIRInsn* phi in b.phiNodes)
             {
@@ -126,6 +130,9 @@
               [ue addObject:v];
           lastUse[v] = @(pos);
           useCount[v] = @(useCount[v].integerValue + 1);
+          if (!usePos[v])
+              usePos[v] = [NSMutableArray array];
+          [usePos[v] addObject:@(pos)];
         };
         for (XTIRInsn* insn in b.instructions)
             {
@@ -207,6 +214,9 @@
                     {
                     [phiEdge[predBi] addObject:@(vo.valueId)];
                     useCount[@(vo.valueId)] = @(useCount[@(vo.valueId)].integerValue + 1);
+                    if (!usePos[@(vo.valueId)])
+                        usePos[@(vo.valueId)] = [NSMutableArray array];
+                    [usePos[@(vo.valueId)] addObject:blkEnd[predBi]];
                     }
                 }
 
@@ -314,14 +324,50 @@
     // the self-hosted allocator reads the printed numbering, so an id
     // tie-break gave the same value r14 on one side and r13 on the other
     // (bug 090's last residue). Print order is the one sequence both see.
+    // Each use weighted by the loops around it: 1 outside any loop, 8 in one,
+    // 64 in two, capped at four deep. A loop is found from the block layout
+    // alone — a branch from block j back to block i (i <= j) makes the
+    // positions from i's start to j's end its body. Without the weight, a
+    // value read on every iteration of an inner loop but live across the
+    // whole function (an array's base) ranked as rarely used.
+    NSMutableArray<NSNumber*>*loopLo = [NSMutableArray array], *loopHi = [NSMutableArray array];
+    for (NSUInteger bi = 0; bi < nb; bi++)
+        for (NSNumber* sn in succIdx[bi])
+            if (sn.unsignedIntegerValue <= bi)
+                {
+                [loopLo addObject:blkStart[sn.unsignedIntegerValue]];
+                [loopHi addObject:blkEnd[bi]];
+                }
+    NSMutableDictionary<NSNumber*, NSNumber*>* weight = [NSMutableDictionary dictionary];
+    for (NSNumber* v in usePos)
+        {
+        NSUInteger w = 0;
+        for (NSNumber* pn in usePos[v])
+            {
+            NSInteger p = pn.integerValue;
+            NSUInteger depth = 0;
+            for (NSUInteger r = 0; r < loopLo.count; r++)
+                if (loopLo[r].integerValue <= p && p <= loopHi[r].integerValue)
+                    depth++;
+            w += (NSUInteger)1 << (3 * MIN(depth, (NSUInteger)4));
+            }
+        weight[v] = @(w);
+        }
     NSArray<XTIRValue*>* printOrder = [fn valuesInPrintOrder];
     NSMutableDictionary<NSNumber*, NSNumber*>* rank = [NSMutableDictionary dictionary];
     for (NSUInteger i = 0; i < printOrder.count; i++)
         rank[@(printOrder[i].valueId)] = @(i);
+    // Densest first: loop-weighted uses per unit of live range, compared
+    // cross-multiplied so it stays in integers. Raw use count let values that live across a
+    // whole loop body take every register and left the loop's short-lived
+    // temporaries — the ones on its critical path — in stack slots.
     NSComparator byUsesDesc = ^NSComparisonResult(NSNumber* a, NSNumber* b) {
-      NSInteger ua = useCount[a].integerValue, ub = useCount[b].integerValue;
-      if (ua != ub)
-          return ua > ub ? NSOrderedAscending : NSOrderedDescending;
+      NSInteger ua = weight[a].integerValue, ub = weight[b].integerValue;
+      NSInteger la = endOf[a].integerValue - startOf[a].integerValue + 1;
+      NSInteger lb = endOf[b].integerValue - startOf[b].integerValue + 1;
+      NSInteger da = ua * lb, db = ub * la;
+      if (da != db)
+          return da > db ? NSOrderedAscending : NSOrderedDescending;
       NSInteger ra = rank[a] ? rank[a].integerValue : (NSInteger)a.integerValue + 1000000;
       NSInteger rb = rank[b] ? rank[b].integerValue : (NSInteger)b.integerValue + 1000000;
       return ra < rb ? NSOrderedAscending : NSOrderedDescending; // stable

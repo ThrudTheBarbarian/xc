@@ -135,6 +135,9 @@ class BitSet
     Array* _defPos; // Number@ per value, or 0
     Array* _lastUse;
     Array* _useCount;
+    Array* _usePos;   // per value: Number@ positions of its uses
+    Array* _blkStart; // Number@ per block: its first position
+    Array* _weight;   // Number@ per value: uses weighted by loop depth
     BitSet* _phiResults;
     BitSet* _excluded;
     Array* _callPos; // Number@
@@ -246,6 +249,7 @@ class BitSet
         phiEdges();
         liveness();
         intervals();
+        weights();
         Array* gp = new Array();
         Array* fp = new Array();
         candidates(gp, fp);
@@ -258,11 +262,15 @@ class BitSet
         _defPos = new Array();
         _lastUse = new Array();
         _useCount = new Array();
+        _usePos = new Array();
+        _weight = new Array();
         for (u32 i = (u32)0; i < _nv; i = i + (u32)1)
             {
             _defPos.add((Object*)0);
             _lastUse.add((Object*)0);
             _useCount.add((Object*)Number.with((u32)0));
+            _usePos.add((Object*)new Array());
+            _weight.add((Object*)Number.with((u32)0));
             }
         _phiResults = BitSet.withCapacity(_nv);
         _excluded = BitSet.withCapacity(_nv);
@@ -302,6 +310,7 @@ class BitSet
         _lastUse.set(v, (Object*)Number.with(pos));
         u32 c = ((Number*)_useCount.get(v)).asU32();
         _useCount.set(v, (Object*)Number.with(c + (u32)1));
+        ((Array*)_usePos.get(v)).add((Object*)Number.with(pos));
         }
 
     void recordUses(IRInsn* insn, u32 pos, BitSet* defs, BitSet* ue)
@@ -318,8 +327,10 @@ class BitSet
     void scan(void)
         {
         u32 pos = (u32)0;
+        _blkStart = new Array();
         for (u32 bi = (u32)0; bi < _nb; bi = bi + (u32)1)
             {
+            _blkStart.add((Object*)Number.with(pos));
             IRBlock* b = (IRBlock*)_fn.blocks().get(bi);
             BitSet* defs = (BitSet*)_defSet.get(bi);
             BitSet* ue = (BitSet*)_ueUse.get(bi);
@@ -438,6 +449,7 @@ class BitSet
                     ((BitSet*)_phiEdge.get((u32)pbi)).add(v);
                     u32 c = ((Number*)_useCount.get(v)).asU32();
                     _useCount.set(v, (Object*)Number.with(c + (u32)1));
+                    ((Array*)_usePos.get(v)).add(_blkEnd.get((u32)pbi));
                     }
                 }
             }
@@ -579,6 +591,48 @@ class BitSet
         sortByUses(fp);
         }
 
+    // Each use weighted by the loops around it: 1 outside any loop, 8 in one,
+    // 64 in two, capped at four deep. A loop is found from the block layout
+    // alone — a branch from block j back to block i (i <= j) makes the
+    // positions from i's start to j's end its body. Without the weight, a
+    // value read on every iteration of an inner loop but live across the
+    // whole function (an array's base) ranked as rarely used.
+    void weights(void)
+        {
+        Array* lo = new Array();
+        Array* hi = new Array();
+        for (u32 bi = (u32)0; bi < _nb; bi = bi + (u32)1)
+            {
+            Array* s = (Array*)_succ.get(bi);
+            for (u32 k = (u32)0; k < s.count(); k = k + (u32)1)
+                {
+                u32 si = ((Number*)s.get(k)).asU32();
+                if (si <= bi)
+                    {
+                    lo.add(_blkStart.get(si));
+                    hi.add(_blkEnd.get(bi));
+                    }
+                }
+            }
+        for (u32 v = (u32)0; v < _nv; v = v + (u32)1)
+            {
+            Array* ps = (Array*)_usePos.get(v);
+            u32 w = (u32)0;
+            for (u32 i = (u32)0; i < ps.count(); i = i + (u32)1)
+                {
+                u32 p = ((Number*)ps.get(i)).asU32();
+                u32 depth = (u32)0;
+                for (u32 r = (u32)0; r < lo.count(); r = r + (u32)1)
+                    if (((Number*)lo.get(r)).asU32() <= p && p <= ((Number*)hi.get(r)).asU32())
+                        depth = depth + (u32)1;
+                if (depth > (u32)4)
+                    depth = (u32)4;
+                w = w + ((u32)1 << ((u32)3 * depth));
+                }
+            _weight.set(v, (Object*)Number.with(w));
+            }
+        }
+
     void sortByUses(Array* a)
         {
         for (u32 i = (u32)1; i < a.count(); i = i + (u32)1)
@@ -594,12 +648,21 @@ class BitSet
             }
         }
 
+    // Densest first: loop-weighted uses (see weights) per unit of live range,
+    // compared cross-multiplied so it stays in integers. Raw use count let
+    // values that live across a whole loop body take every register and left
+    // the loop's short-lived temporaries — the ones on its critical path — in
+    // stack slots. Mirrors the original.
     bool lessThan(Number* a, Number* b)
         {
-        u32 ua = ((Number*)_useCount.get(a.asU32())).asU32();
-        u32 ub = ((Number*)_useCount.get(b.asU32())).asU32();
-        if (ua != ub)
-            return ua > ub;
+        u32 ua = ((Number*)_weight.get(a.asU32())).asU32();
+        u32 ub = ((Number*)_weight.get(b.asU32())).asU32();
+        u64 la = (u64)(((Number*)_end.get(a.asU32())).asU32() - ((Number*)_start.get(a.asU32())).asU32()) + (u64)1;
+        u64 lb = (u64)(((Number*)_end.get(b.asU32())).asU32() - ((Number*)_start.get(b.asU32())).asU32()) + (u64)1;
+        u64 da = (u64)ua * lb;
+        u64 db = (u64)ub * la;
+        if (da != db)
+            return da > db;
         Object* ra = _rank.get((Hashable*)a);
         Object* rb = _rank.get((Hashable*)b);
         u32 ka = ra == (Object*)0 ? a.asU32() + (u32)1000000 : ((Number*)ra).asU32();
