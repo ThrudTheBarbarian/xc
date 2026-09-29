@@ -1279,16 +1279,16 @@ class Parser
         if (match((u16)tokLBracket)) {
             String* dims = String.withCString("[");
             if (!check((u16)tokRBracket)) {
-                // Only an integer literal folds here; anything else is
-                // recorded verbatim (see the header note).
-                if (check((u16)tokIntLiteral)) {
-                    Token* t = advance();
-                    dims.append(String.withU32((u32)t.intValue()));
-                } else {
-                    Node* e = parseExpression();
+                // A bound that folds (`[4 + 1]` once a macro has expanded)
+                // is its count; anything else is recorded verbatim (see the
+                // header note).
+                i64 v = (i64)0;
+                Node* e = parseExpression();
+                if (foldIntConst(e, &v) && v >= (i64)0)
+                    dims.append(String.withU32((u32)v));
+                else
                     dims.append((e != 0 && e.name() != 0) ? e.name()
                                                           : String.withCString("?"));
-                }
             }
             expect((u16)tokRBracket);
             dims.appendByte((u8)']');
@@ -1407,8 +1407,7 @@ class Parser
                     String* fieldTy = String.withString(ty);
                     if (match((u16)tokLBracket)) {
                         fieldTy.appendByte((u8)'[');
-                        if (check((u16)tokIntLiteral)) fieldTy.append(String.withU32((u32)advance().intValue()));
-                        else if (!check((u16)tokRBracket)) parseExpression();
+                        if (!check((u16)tokRBracket)) appendArraySize(fieldTy);
                         expect((u16)tokRBracket);
                         fieldTy.appendByte((u8)']');
                     }
