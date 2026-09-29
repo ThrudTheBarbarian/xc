@@ -340,6 +340,25 @@ class UXApplication : UXResponder
                 w.dispatchWheel(ev);
                 }
             }
+        else if (k == (u8)UXEventMouseMoved)
+            {
+            // Hover is like the wheel: it acts on the window it is over, and takes no focus.
+            UXWindow* w = ev.handle != (i32)0 ? self.windowWithHandle(ev.handle) : self.windowAt((i32)ev.x, (i32)ev.y);
+            if (w != (UXWindow*)0)
+                {
+                w.dispatchMouseMoved(ev);
+                }
+            }
+        else if (k == (u8)UXEventRightMouseDown)
+            {
+            // Like a click: it gives the window the keyboard and acts on the point under the pointer.
+            UXWindow* w = ev.handle != (i32)0 ? self.windowWithHandle(ev.handle) : self.windowAt((i32)ev.x, (i32)ev.y);
+            if (w != (UXWindow*)0)
+                {
+                keyWindow = w;
+                w.dispatchRightMouse(ev);
+                }
+            }
         else if (k == (u8)UXEventKeyDown)
             {
             // The KEY WINDOW routes it — not "the first window", which is only ever right by accident.

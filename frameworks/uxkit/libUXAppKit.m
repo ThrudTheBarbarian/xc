@@ -97,6 +97,66 @@ static void ak_keyDown(__unsafe_unretained id self, SEL _cmd, __unsafe_unretaine
     NSString* ch = [(NSEvent*)ev characters];
     g_dispatch(4, 0, 0, [ch length] > 0 ? (int)[ch characterAtIndex:0] : 0);
     }
+/* The window a view belongs to, or 0 — the dispatch tags the event with it so the toolkit routes
+ * to the window that got it rather than always to #1. */
+static int ak_win_of(NSView* v)
+    {
+    for (int i = 1; i < UX_MAXW; i++)
+        if (g_view[i] == v)
+            return i;
+    return 0;
+    }
+/* Pointer movement, the secondary button and the wheel go through the SAME dispatch as the press,
+ * in the view's own (document) coordinates, so the toolkit hit-tests the point and routes it as it
+ * would a click.  mouseMoved: only fires if the view has a tracking area with NSTrackingMouseMoved
+ * (see ak_updateTrackingAreas).
+ *
+ * The dispatch word carries ONE extra value beside the point, and the wheel needs two — the window
+ * it happened over, and how many notches.  So the wheel packs both into that word: the window in
+ * the high bits, the (signed) notch count in the low byte.  The driver unpacks it; it is a private
+ * encoding between this shim and xgAKDispatch, not part of the seam. */
+#define AK_WHEEL_PACK(win, n) (((win) << 8) | ((n) & 0xFF))
+static void ak_mouseMoved(__unsafe_unretained id self, SEL _cmd, __unsafe_unretained id ev)
+    {
+    if (!g_dispatch)
+        return;
+    NSPoint p = [(NSView*)self convertPoint:[(NSEvent*)ev locationInWindow] fromView:nil];
+    g_dispatch(15, (int)p.x, (int)p.y, ak_win_of((NSView*)self)); // 15 = UXEventMouseMoved
+    }
+static void ak_rightMouseDown(__unsafe_unretained id self, SEL _cmd, __unsafe_unretained id ev)
+    {
+    if (!g_dispatch)
+        return;
+    NSPoint p = [(NSView*)self convertPoint:[(NSEvent*)ev locationInWindow] fromView:nil];
+    g_dispatch(16, (int)p.x, (int)p.y, ak_win_of((NSView*)self)); // 16 = UXEventRightMouseDown
+    }
+static void ak_scrollWheel(__unsafe_unretained id self, SEL _cmd, __unsafe_unretained id ev)
+    {
+    if (!g_dispatch)
+        return;
+    NSPoint p = [(NSView*)self convertPoint:[(NSEvent*)ev locationInWindow] fromView:nil];
+    /* Notches, not pixels: the toolkit's wheel event counts notches (UXEventWheel: "a = notches").
+     * A precise trackpad delta that rounds to 0 is turned into a one-notch push rather than
+     * dropped, so a slow two-finger scroll is never silently lost. */
+    double dy = [(NSEvent*)ev scrollingDeltaY];
+    int notches = (int)(dy / 10.0);
+    if (notches == 0 && dy != 0.0)
+        notches = dy > 0.0 ? 1 : -1;
+    g_dispatch(11, (int)p.x, (int)p.y, AK_WHEEL_PACK(ak_win_of((NSView*)self), notches)); // 11 = UXEventWheel
+    }
+/* A tracking area is what makes AppKit send mouseMoved: — without one the message is never
+ * delivered, which is why the toolkit heard clicks and nothing else.  The rect is NSZeroRect with
+ * NSTrackingInVisibleRect, so it always covers the view without being repositioned. */
+static void ak_updateTrackingAreas(__unsafe_unretained id self, SEL _cmd)
+    {
+    for (NSTrackingArea* ta in [(NSView*)self trackingAreas])
+        [(NSView*)self removeTrackingArea:ta];
+    NSTrackingAreaOptions opt = NSTrackingMouseMoved | NSTrackingMouseEnteredAndExited
+        | NSTrackingActiveInKeyWindow | NSTrackingActiveInActiveApp | NSTrackingInVisibleRect;
+    NSTrackingArea* ta = [[NSTrackingArea alloc] initWithRect:NSZeroRect options:opt
+                                                       owner:self userInfo:nil];
+    [(NSView*)self addTrackingArea:ta];
+    }
 
 static Class ak_view_class(void)
     {
@@ -109,6 +169,10 @@ static Class ak_view_class(void)
     class_addMethod(c, sel_registerName("acceptsFirstResponder"), (IMP)ak_acceptsFirstResponder, "B@:");
     class_addMethod(c, sel_registerName("mouseDown:"), (IMP)ak_mouseDown, "v@:@");
     class_addMethod(c, sel_registerName("keyDown:"), (IMP)ak_keyDown, "v@:@");
+    class_addMethod(c, sel_registerName("mouseMoved:"), (IMP)ak_mouseMoved, "v@:@");
+    class_addMethod(c, sel_registerName("rightMouseDown:"), (IMP)ak_rightMouseDown, "v@:@");
+    class_addMethod(c, sel_registerName("scrollWheel:"), (IMP)ak_scrollWheel, "v@:@");
+    class_addMethod(c, sel_registerName("updateTrackingAreas"), (IMP)ak_updateTrackingAreas, "v@:");
     objc_registerClassPair(c);
     g_drawViewClass = c;
     return c;
@@ -256,23 +320,58 @@ static int ak_gl_find(void* peer)
     return -1;
     }
 
+static int ak_gl_win_of(NSView* v)
+    {
+    for (int i = 0; i < g_glCount; i++)
+        if (g_glView[i] == v)
+            return g_glWin[i];
+    return 0;
+    }
 static void ak_glMouseDown(__unsafe_unretained id self, SEL _cmd, __unsafe_unretained id ev)
     {
     if (!g_dispatch)
         return;
-    int h = 0;
-    for (int i = 0; i < g_glCount; i++)
-        {
-        if (g_glView[i] == (NSView*)self)
-            {
-            h = g_glWin[i];
-            break;
-            }
-        }
+    int h = ak_gl_win_of((NSView*)self);
     if (!h || !g_view[h])
         return;
     NSPoint p = [g_view[h] convertPoint:[(NSEvent*)ev locationInWindow] fromView:nil];
     g_dispatch(1, (int)p.x, (int)p.y, h);
+    }
+/* The map's own surface hears move / right-click / wheel too, in the same coordinates the press
+ * uses, so hit-testing the point lands on the GL view like any other. */
+static void ak_glMouseMoved(__unsafe_unretained id self, SEL _cmd, __unsafe_unretained id ev)
+    {
+    if (!g_dispatch)
+        return;
+    int h = ak_gl_win_of((NSView*)self);
+    if (!h || !g_view[h])
+        return;
+    NSPoint p = [g_view[h] convertPoint:[(NSEvent*)ev locationInWindow] fromView:nil];
+    g_dispatch(15, (int)p.x, (int)p.y, h);
+    }
+static void ak_glRightMouseDown(__unsafe_unretained id self, SEL _cmd, __unsafe_unretained id ev)
+    {
+    if (!g_dispatch)
+        return;
+    int h = ak_gl_win_of((NSView*)self);
+    if (!h || !g_view[h])
+        return;
+    NSPoint p = [g_view[h] convertPoint:[(NSEvent*)ev locationInWindow] fromView:nil];
+    g_dispatch(16, (int)p.x, (int)p.y, h);
+    }
+static void ak_glScrollWheel(__unsafe_unretained id self, SEL _cmd, __unsafe_unretained id ev)
+    {
+    if (!g_dispatch)
+        return;
+    int h = ak_gl_win_of((NSView*)self);
+    if (!h || !g_view[h])
+        return;
+    NSPoint p = [g_view[h] convertPoint:[(NSEvent*)ev locationInWindow] fromView:nil];
+    double dy = [(NSEvent*)ev scrollingDeltaY];
+    int notches = (int)(dy / 10.0);
+    if (notches == 0 && dy != 0.0)
+        notches = dy > 0.0 ? 1 : -1;
+    g_dispatch(11, (int)p.x, (int)p.y, AK_WHEEL_PACK(h, notches));
     }
 
 static Class ak_gl_class(void)
@@ -283,6 +382,10 @@ static Class ak_gl_class(void)
     class_addMethod(c, sel_registerName("isFlipped"), (IMP)ak_isFlipped, "B@:");
     class_addMethod(c, sel_registerName("acceptsFirstMouse:"), (IMP)ak_acceptsFirstMouse, "B@:@");
     class_addMethod(c, sel_registerName("mouseDown:"), (IMP)ak_glMouseDown, "v@:@");
+    class_addMethod(c, sel_registerName("mouseMoved:"), (IMP)ak_glMouseMoved, "v@:@");
+    class_addMethod(c, sel_registerName("rightMouseDown:"), (IMP)ak_glRightMouseDown, "v@:@");
+    class_addMethod(c, sel_registerName("scrollWheel:"), (IMP)ak_glScrollWheel, "v@:@");
+    class_addMethod(c, sel_registerName("updateTrackingAreas"), (IMP)ak_updateTrackingAreas, "v@:");
     objc_registerClassPair(c);
     g_glClass = c;
     return c;

@@ -528,4 +528,36 @@ class UXWindow : UXResponder
             }
         v.scrollWheel(e);
         }
+    // Pointer movement: hit-test the point and hand it to that view, exactly as the wheel does —
+    // hover acts on what the pointer is OVER, and no focus changes.
+    void dispatchMouseMoved(UXEvent* e)
+        {
+        i32 hit = tree.hitTest(e.x, e.y);
+        if (hit < (i32)0)
+            {
+            return;
+            }
+        UXView* v = (UXView* ?)tree.viewAt((u16)hit);
+        if (v == (UXView*)0)
+            {
+            return;
+            }
+        v.mouseMoved(e);
+        }
+    // The secondary button: like a click, it gives the window the keyboard and acts on what is
+    // under the pointer.
+    void dispatchRightMouse(UXEvent* e)
+        {
+        i32 hit = tree.hitTest(e.x, e.y);
+        if (hit < (i32)0)
+            {
+            return;
+            }
+        UXView* v = (UXView* ?)tree.viewAt((u16)hit);
+        if (v == (UXView*)0)
+            {
+            return;
+            }
+        v.rightMouseDown(e);
+        }
     }

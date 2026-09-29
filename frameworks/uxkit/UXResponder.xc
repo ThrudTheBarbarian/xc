@@ -64,6 +64,24 @@ class UXResponder
             nextResponder.scrollWheel(e);
             }
         }
+    // The pointer moved with no button down.  Like scrollWheel, it acts on what the pointer is
+    // OVER (the toolkit hit-tests it), so it climbs from that view up — hover highlighting.
+    void mouseMoved(UXEvent* e)
+        {
+        if (nextResponder != (UXResponder*)0)
+            {
+            nextResponder.mouseMoved(e);
+            }
+        }
+    // The secondary (right) button.  Like mouseDown, but its own handler: a view opens a context
+    // menu here and selects on mouseDown, and the two must not be confused.
+    void rightMouseDown(UXEvent* e)
+        {
+        if (nextResponder != (UXResponder*)0)
+            {
+            nextResponder.rightMouseDown(e);
+            }
+        }
     // ---- first responder ---------------------------------------------------
     // Can I take the keyboard?  A view says yes by overriding this (UXTextField does).
     bool acceptsFirstResponder(void)

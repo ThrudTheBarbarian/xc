@@ -251,6 +251,25 @@ void xgAKDispatch(i32 kind, i32 x, i32 y, i32 key)
         {
         gAKMouseWin = key;
         }
+    // Hover and the right-click tag the window that got the event, so the toolkit routes to THAT
+    // window and not by guessing from the point.
+    if (kind == (i32)UXEventMouseMoved || kind == (i32)UXEventRightMouseDown)
+        {
+        gAKEvent.handle = key;
+        }
+    // The wheel packs (window, notches) into the one dispatch word: window in the high bits, the
+    // signed notch count in the low byte (see AK_WHEEL_PACK in libUXAppKit.m).  Unpack to the
+    // event's handle and a -- the wheel's own contract is "x,y = point, a = notches".
+    if (kind == (i32)UXEventWheel)
+        {
+        i32 n = key & (i32)$FF;
+        if (n >= (i32)128)
+            {
+            n = n - (i32)256;
+            }
+        gAKEvent.handle = key >> 8;
+        gAKEvent.a = n;
+        }
     gAKApp.dispatchEvent(gAKEvent);
     gAKApp.displayIfNeeded();
     // close box -> quit

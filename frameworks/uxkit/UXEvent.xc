@@ -23,7 +23,13 @@ enum UXEventKind = {
     // A native text field's contents changed (a = its node index, data = a String).  Keystrokes
     // go straight to the native EDIT/NSTextField and surface only as "the text changed", never as
     // keys — so this is the only trace a recorder can keep of typing on those backends.
-    UXEventTextChanged = 14};
+    UXEventTextChanged = 14,
+    // Pointer movement with NO button down (x,y = point, handle = window).  The toolkit hit-tests
+    // it and hands it to the view under the pointer, the way it does a click; hover needs it.
+    UXEventMouseMoved = 15,
+    // The secondary (right) button (x,y = point, handle = window).  Its own kind and not mouseDown
+    // with a flag: a view that opens a context menu and a view that selects must tell them apart.
+    UXEventRightMouseDown = 16};
 
 // GEM hands us key = (scancode << 8) | ascii, so mask the low byte for the character.
 #define UX_KEY_ASCII $00FF
