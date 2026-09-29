@@ -8,6 +8,7 @@
 #import "UXGraphics.xc"
 #import "UXScrollView.xc"
 #import "UXString.xc"
+#import "demo_autoquit.xc"
 
 #define SV_CARDS 20
 #define SV_CARDH 34
@@ -85,5 +86,6 @@ class Card : UXView
     UXApplication* app = new UXApplication();
     d.attachApp(app);
     app.setDelegate(kit);
+    uxAutoQuit(); // close by itself unless UX_AUTOQUIT says to wait
     app.run();
     }

@@ -4,12 +4,18 @@
 # app's tableSelectionDidChange) and scroll the list.  The same datasource drives the GEM object
 # tree on arm9.  Nothing in the app is AppKit-aware except the driver.  macOS-only.  Foreground.
 set -e
-# --auto-quit [ms]: close the demo by itself after a delay, so a sweep can run it
-# unattended.  It exits through the SAME path the close box takes, so it still
-# prints whatever it prints -- a killed demo reports nothing and is
-# indistinguishable from one that crashed.  An XC main() takes no argv, so the
-# option lives here and reaches the binary as UX_AUTOQUIT.
+# The demo closes ITSELF after a moment (see demo_autoquit.xc), so a run cannot
+# camp on the screen and hold the keyboard focus.  It exits through the SAME path
+# the close box takes, so it still prints whatever it prints -- a killed demo
+# reports nothing and is indistinguishable from one that crashed.
+#
+#   --stay           keep the window up until you close it (what poking wants)
+#   --auto-quit [ms] stay self-closing, with a different delay
+#
+# An XC main() takes no argv, so the options live here and reach the binary as
+# UX_AUTOQUIT.
 case "${1:-}" in
+  --stay)      UX_AUTOQUIT=0; export UX_AUTOQUIT ;;
   --auto-quit) UX_AUTOQUIT=${2:-1500}; export UX_AUTOQUIT ;;
 esac
 here=$(cd "$(dirname "$0")" && pwd)

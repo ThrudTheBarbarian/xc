@@ -10,6 +10,7 @@
 #import "UXGraphics.xc"
 #import "UXSplitView.xc"
 #import "UXString.xc"
+#import "demo_autoquit.xc"
 
 class Pane : UXView
     {
@@ -76,5 +77,6 @@ class Pane : UXView
     UXApplication* app = new UXApplication();
     d.attachApp(app);
     app.setDelegate(kit);
+    uxAutoQuit(); // close by itself unless UX_AUTOQUIT says to wait
     app.run();
     }

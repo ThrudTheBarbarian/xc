@@ -6,6 +6,9 @@
 #
 #   Run in your Terminal:  sh frameworks/uxkit/appkit_bisect.sh
 set -e
+# The demos close themselves now (demo_autoquit.xc), and this tool is the one place that must NOT:
+# a self-quit could mask the race it is bisecting.  Pin it off for every variant.
+UX_AUTOQUIT=0; export UX_AUTOQUIT
 here=$(cd "$(dirname "$0")" && pwd)
 xcc=${XCC:-xcc}
 N=${N:-25}

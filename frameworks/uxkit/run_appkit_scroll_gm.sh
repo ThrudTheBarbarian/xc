@@ -3,10 +3,10 @@
 # faults AT the offending access (with a precise stack) instead of later in AppKit.  Drag the window
 # smaller to reproduce the resize crash.  macOS-only.
 set -e
-# --auto-quit [ms]: as in run_appkit_scroll.sh.  This runs the SAME demo binary,
-# so it needs the same option -- otherwise a sweep hangs here instead.  Guard
-# Malloc makes everything slower, hence the larger default.
+# As in run_appkit_scroll.sh: the demo closes itself, so this cannot hang.  Guard
+# Malloc makes everything slower, hence the larger delay.  --stay waits for you.
 case "${1:-}" in
+  --stay)      UX_AUTOQUIT=0; export UX_AUTOQUIT ;;
   --auto-quit) UX_AUTOQUIT=${2:-4000}; export UX_AUTOQUIT ;;
 esac
 here=$(cd "$(dirname "$0")" && pwd)

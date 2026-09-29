@@ -1,7 +1,8 @@
 // demo_appkit.xc — the INTERACTIVE AppKit demo: the neutral UXKit toolkit as a real macOS app.
 //
 // Unlike the headless slice tests, this shows a real window and runs the real NSApplication event
-// loop: click the buttons, type in the field, use the menu bar, pop an NSAlert, close the window.
+// loop: click the buttons, type in the field, use the menu bar, pop an NSAlert.  It closes itself
+// after a moment (demo_autoquit.xc) so it cannot camp on the screen; UX_AUTOQUIT=0 to keep it up.
 // Nothing here is AppKit-aware except `gDriver = new UXAppKitDriver()` + `setInteractive(true)`.
 //
 //   Build+run:  make appkit-demo   (or: sh run_appkit_demo.sh) — macOS, shows a window.
@@ -16,6 +17,7 @@
 #import "UXGeometry.xc"
 #import "UXGraphics.xc"
 #import "UXEvent.xc"
+#import "demo_autoquit.xc"
 
 // A custom view: paints a backdrop, an accent bar, and a title — through UXGraphics, not AppKit.
 class Canvas : UXView
@@ -114,7 +116,7 @@ class Canvas : UXView
         app.setMenuBar(bar);
 
         win.displayAll();
-        Stdio.printf("demo up — Alert/Quit buttons, a text field, a Demo+Edit menu; close the window to exit\n");
+        Stdio.printf("demo up — Alert/Quit buttons, a text field, a Demo+Edit menu; it closes itself shortly\n");
         return (i32)0;
         }
     }
@@ -129,6 +131,7 @@ class Canvas : UXView
     UXApplication* app = new UXApplication();
     d.attachApp(app); // forward native events into this app
     app.setDelegate(c);
+    uxAutoQuit(); // close by itself unless UX_AUTOQUIT says to wait
     app.run();
     Stdio.printf("demo exited\n");
     }

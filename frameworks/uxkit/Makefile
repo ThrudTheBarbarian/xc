@@ -275,17 +275,20 @@ appkit-interactive: ; XCC=$(XCC) sh run_appkit_interactive.sh
 
 # ---- appkit-demo — the INTERACTIVE demo: the neutral toolkit as a real macOS app --
 # Shows a real window (buttons, a text field, a menu bar, an NSAlert), runs the real NSApplication
-# event loop.  Foreground; close the window to exit.  macOS-only.
+# event loop.  It closes itself after a moment; --stay keeps it up.  macOS-only.
+#   sh run_appkit_demo.sh [--stay | --auto-quit ms]
 appkit-demo: ; XCC=$(XCC) sh run_appkit_demo.sh
 
 # ---- appkit-scroll — native scrolling: the neutral toolkit inside a real NSScrollView ----
 # A document taller than the window; scroll with the trackpad/wheel/scrollbar.  The app writes no
-# scroll code — it reports its content size and NSScrollView owns the offset.  Foreground; macOS-only.
+# scroll code — it reports its content size and NSScrollView owns the offset.  It closes itself
+# after a moment; --stay keeps it up.  macOS-only.
 appkit-scroll: ; XCC=$(XCC) sh run_appkit_scroll.sh
 
 # ---- appkit-table — a native NSTableView driven by the neutral UXTableView datasource -----
 # A column-headed, alternating-row, scrollable native table; click a row and the app's
-# tableSelectionDidChange updates a label.  The same datasource drives the GEM tree.  macOS-only.
+# tableSelectionDidChange updates a label.  The same datasource drives the GEM tree.  It closes
+# itself after a moment; --stay keeps it up.  macOS-only.
 appkit-table: ; XCC=$(XCC) sh run_appkit_table.sh
 
 # ---- appkit-scrolldrive — code must be able to scroll a native NSScrollView -----------------

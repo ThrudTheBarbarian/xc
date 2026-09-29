@@ -2,8 +2,15 @@
 # The INTERACTIVE AppKit demo — the neutral UXKit toolkit as a real macOS app.  Shows a window: click
 # the Alert/Quit buttons, type in the text field, use the Demo/Edit menu bar, pop an NSAlert, close
 # the window to exit.  Nothing in the app is AppKit-aware except the driver + setInteractive(true).
-# macOS-only.  Runs in the foreground; close the window (or Demo > Quit) to return.
+# macOS-only.  Closes itself after a moment; --stay keeps it up to poke at.
 set -e
+# The demo closes ITSELF after a moment (see demo_autoquit.xc), so a run cannot camp
+# on the screen and hold the keyboard focus.  --stay keeps it up until you close it;
+# --auto-quit [ms] keeps it self-closing with a different delay.
+case "${1:-}" in
+  --stay)      UX_AUTOQUIT=0; export UX_AUTOQUIT ;;
+  --auto-quit) UX_AUTOQUIT=${2:-1500}; export UX_AUTOQUIT ;;
+esac
 here=$(cd "$(dirname "$0")" && pwd)
 xcc=${XCC:-xcc}
 case "$(uname)" in Darwin) ;; *) echo "== appkit-demo: skipped (not macOS) =="; exit 0 ;; esac

@@ -1,6 +1,7 @@
 // ks_mac.xc — the kitchen-sink on the AppKit backend (native widgets).  make mac.
 #import "UXAppKitDriver.xc"
 #import "ks_app.xc"
+#import "demo_autoquit.xc"
 void main(void)
     {
     UXAppKitDriver* d = new UXAppKitDriver();
@@ -10,6 +11,7 @@ void main(void)
     UXApplication* app = new UXApplication();
     d.attachApp(app); // forward native events into the app
     app.setDelegate(ks);
+    uxAutoQuit(); // close by itself unless UX_AUTOQUIT says to wait
     app.run();
     Stdio.printf("kitchen sink exited\n");
     }
