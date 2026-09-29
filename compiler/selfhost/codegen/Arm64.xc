@@ -1360,6 +1360,16 @@ class Arm64
         // The receiver consumed x0, so the GP counter starts at 1; the FP bank
         // is independent and starts at 0.
         if (!marshalArgs(n, (u32)2, argc, (u32)1)) return;
+        // A forwarding method calling a variadic method virtually relays its
+        // incoming tail, as emitCall does (bug 572).
+        if (vaForwardRelay(n)) {
+            u32 tailBase = _lastOutStack;
+            u32 inVa = _frame + fixedParamStackBytes();
+            _out.appendFormat("    // vararg forward: relay 16 words #%lu -> #%lu\n", inVa, tailBase);
+            for (u32 i = (u32)0; i < (u32)16; i = i + (u32)1)
+                _out.appendFormat("    ldr x9, [sp, #%lu]\n    str x9, [sp, #%lu]\n",
+                                  inVa + i * (u32)8, tailBase + i * (u32)8);
+        }
         bool sret = emitSretSetupIfNeeded(n);
         _out.appendCString("    ldr x16, [x0]\n");
         _out.appendFormat("    ldr x16, [x16, #%ld]\n", slot.imm() * (i32)8);
@@ -3385,13 +3395,65 @@ class Arm64
     // this function's own incoming tail (with no shared buffer, by copying it).
     bool vaForwardRelay(IRInsn* n)
     {
-        if (!isDirectCallOp(n.op()) || n.ops().count() < (u32)2) return false;
         IRSymbol* own = symbolNamed(_fn.name());
         if (own == (IRSymbol*)0 || !own.vaforward()) return false;
+        if (n.op().equals(String.withCString("VTblDispatch"))) {
+            IRSymbol* m = virtualCallee(n);
+            return m != (IRSymbol*)0 && m.variadic();
+        }
+        if (!isDirectCallOp(n.op()) || n.ops().count() < (u32)2) return false;
         IROperand* callee = (IROperand*)n.ops().get((u32)0);
         if (callee.kind() != (u8)OPK_SYM) return false;
         IRSymbol* cs = symbolNamed(callee.name());
         return cs != (IRSymbol*)0 && cs.variadic();
+    }
+
+    // The method a VTblDispatch reaches through its receiver's STATIC class,
+    // or 0. The IR names no callee on a virtual call, but the receiver's type
+    // is a pointer to the class's layout, every method of that class takes
+    // `self` of that type, and the slot indexes `<Class>$vtbl`. Every override
+    // of a method has its shape, so the static class's entry answers whether
+    // the call is variadic and how many arguments are fixed (bug 572: a
+    // variadic method called virtually had its tail left in registers, where
+    // its va_start never looks). Mirrors the original.
+    IRSymbol* virtualCallee(IRInsn* n)
+    {
+        if (!n.op().equals(String.withCString("VTblDispatch")) || n.ops().count() < (u32)2) return (IRSymbol*)0;
+        IROperand* recv = (IROperand*)n.ops().get((u32)0);
+        IROperand* slot = (IROperand*)n.ops().get((u32)1);
+        if (recv.kind() != (u8)OPK_USE || recv.val() == (IRValue*)0 || slot.kind() != (u8)OPK_IMMI) return (IRSymbol*)0;
+        String* rt = recv.val().ty();
+        if (rt == (String*)0 || !rt.hasPrefix(String.withCString("Ptr(Agg("))) return (IRSymbol*)0;
+        String* lead = String.withCString("(");
+        lead.append(rt);
+        for (u32 i = (u32)0; i < _m.syms().count(); i = i + (u32)1) {
+            IRSymbol* s = (IRSymbol*)_m.syms().get(i);
+            if (s.kind() != (u8)SYM_FUNCTION || s.signature() == (String*)0) continue;
+            u32 d = s.name().indexOfByte((u8)'$');
+            if (d == String.notFound() || d == (u32)0) continue;
+            String* sig = s.signature();
+            // `(Ptr(Agg(70), unbanked)` then `,` or `)`: the whole first
+            // parameter, not a prefix of a longer type.
+            if (!sig.hasPrefix(lead) || sig.byteLength() <= lead.byteLength()) continue;
+            u8 after = sig.byteAt(lead.byteLength());
+            if (after != (u8)',' && after != (u8)')') continue;
+            String* vtName = s.name().substringBytes((u32)0, d);
+            vtName.appendCString("$vtbl");
+            IRSymbol* vt = symbolNamed(vtName);
+            if (vt == (IRSymbol*)0 || vt.kind() != (u8)SYM_VTABLE) continue;
+            // An INSTANCE method of the class: one its vtable lists. A static
+            // method whose first parameter happens to be the same class (a
+            // `Log.warning(String*)`) is not one.
+            bool listed = false;
+            for (u32 j = (u32)0; j < vt.slots().count() && !listed; j = j + (u32)1)
+                if (((String*)vt.slots().get(j)).equals(s.name()))
+                    listed = true;
+            if (!listed) continue;
+            i64 k = slot.imm();
+            if (k < (i64)0 || (u64)k >= (u64)vt.slots().count()) return (IRSymbol*)0;
+            return symbolNamed((String*)vt.slots().get((u32)k));
+        }
+        return (IRSymbol*)0;
     }
 
     void emitCall(IRInsn* n)
@@ -3508,6 +3570,15 @@ class Arm64
         // opcode reaches offsetsForTypes through HERE, the frame sizing and
         // the marshalling cannot disagree. Mirrors the original.
         i32 vfrom = (i32)-1;
+        if (n.op().equals(String.withCString("VTblDispatch")) && first == (u32)2) {
+            // An xc method: its tail goes on the stack, like any xc variadic.
+            // The index counts the args AFTER the receiver, so self is not one.
+            IRSymbol* m = virtualCallee(n);
+            if (m != (IRSymbol*)0 && m.variadic()) {
+                i32 fixed = sigParamCount(m.signature()) - (i32)1;
+                if (fixed >= (i32)0) vfrom = fixed;
+            }
+        }
         if (isDirectCallOp(n.op()) && first == (u32)1) {
             IROperand* callee = (IROperand*)n.ops().get((u32)0);
             if (callee.kind() == (u8)OPK_SYM) {

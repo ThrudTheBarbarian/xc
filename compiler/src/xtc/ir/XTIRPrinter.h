@@ -9,10 +9,16 @@
 NS_ASSUME_NONNULL_BEGIN
 
 @class XTIRModule;
+@class XTIRType;
 
 @interface XTIRPrinter : NSObject
 
 + (NSString*)stringFromModule:(XTIRModule*)mod;
+
+/// A type as the printer spells it (`Ptr(Agg(70), unbanked)`) — what the
+/// xc compiler's back ends read, so a back end matching types by name here
+/// matches them the same way.
++ (NSString*)stringFromType:(XTIRType*)t module:(XTIRModule*)mod;
 
 @end
 

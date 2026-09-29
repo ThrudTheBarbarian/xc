@@ -527,6 +527,14 @@ static BOOL arm64IsDirectCallOpcode(XTIROpcode op) {
 // declaration or a DWARF C import); the fixed count is the declared parameter
 // list, whose IR signature carries a trailing Mem.
 + (NSInteger)arm64CVariadicFromForInsn:(XTIRInsn *)insn ctx:(XTArm64FnCtx *)ctx {
+    if (insn.opcode == XTIROpVTblDispatch) {
+        // An xc method: its tail goes on the stack, like any xc variadic. The
+        // index is into the args AFTER the receiver, so self is not counted.
+        XTIRSymbol *m = [self arm64VirtualCalleeForInsn:insn ctx:ctx];
+        if (!m.attributes[@"variadic"].boolValue) return -1;
+        NSInteger fixed = (NSInteger)m.function.paramTypes.count - 2;   // drop self and Mem
+        return fixed >= 0 ? fixed : -1;
+    }
     if (!arm64IsDirectCallOpcode(insn.opcode) || insn.operands.count < 2) return -1;
     XTIROperand *callee = insn.operands[0];
     if (callee.kind != XTIROperandKindSym) return -1;
@@ -577,13 +585,50 @@ static const NSUInteger kArm64VaForwardWords = 16;
 // re-passes this function's own incoming variadic tail; with no shared buffer
 // on arm64 that means copying the tail into the callee's outgoing slots.
 + (BOOL)arm64VaForwardRelayForInsn:(XTIRInsn *)insn ctx:(XTArm64FnCtx *)ctx {
-    if (!arm64IsDirectCallOpcode(insn.opcode) || insn.operands.count < 2) return NO;
     XTIRSymbol *own = [ctx.module symbolForName:ctx.fn.name];
     if (!own.attributes[@"vaforward"].boolValue) return NO;
+    if (insn.opcode == XTIROpVTblDispatch)
+        return [self arm64VirtualCalleeForInsn:insn ctx:ctx].attributes[@"variadic"].boolValue;
+    if (!arm64IsDirectCallOpcode(insn.opcode) || insn.operands.count < 2) return NO;
     XTIROperand *callee = insn.operands[0];
     if (callee.kind != XTIROperandKindSym) return NO;
     XTIRSymbol *cs = [ctx.module symbolForId:callee.symbolId];
     return cs.attributes[@"variadic"].boolValue;
+}
+
+// The method a VTblDispatch reaches through its receiver's STATIC class, or
+// nil. The IR names no callee on a virtual call, but the receiver's type is a
+// pointer to the class's layout, every method of that class takes `self` of
+// that type, and the slot indexes `<Class>$vtbl`. Every override of a method
+// has its shape, so the static class's entry answers whether the call is
+// variadic and how many arguments are fixed (bug 572: a variadic method called
+// virtually had its tail left in registers, where its va_start never looks).
++ (nullable XTIRSymbol *)arm64VirtualCalleeForInsn:(XTIRInsn *)insn ctx:(XTArm64FnCtx *)ctx {
+    if (insn.opcode != XTIROpVTblDispatch || insn.operands.count < 2) return nil;
+    XTIROperand *recv = insn.operands[0], *slot = insn.operands[1];
+    if (recv.kind != XTIROperandKindUse || slot.kind != XTIROperandKindImmI) return nil;
+    XTIRType *rt = [ctx.fn valueForId:recv.valueId].type;
+    if (rt.kind != XTIRTypeKindPtr || rt.pointeeType.kind != XTIRTypeKindAgg) return nil;
+    // Types compare by their printed spelling, which is what the xc compiler's
+    // back end reads — the two must pick the same method.
+    NSString *want = [XTIRPrinter stringFromType:rt module:ctx.module];
+    for (XTIRSymbol *s in ctx.module.symbols) {
+        if (s.kind != XTIRSymbolKindFunction || s.function.paramTypes.count == 0) continue;
+        NSRange d = [s.name rangeOfString:@"$"];
+        if (d.location == NSNotFound || d.location == 0) continue;
+        XTIRType *self0 = s.function.paramTypes.firstObject;
+        if (![[XTIRPrinter stringFromType:self0 module:ctx.module] isEqualToString:want]) continue;
+        // An INSTANCE method of the class: one its vtable lists. A static
+        // method whose first parameter happens to be the same class (a
+        // `Log.warning(String*)`) is not one.
+        NSString *cls = [s.name substringToIndex:d.location];
+        XTIRSymbol *vt = [ctx.module symbolForName:[cls stringByAppendingString:@"$vtbl"]];
+        if (!vt || vt.kind != XTIRSymbolKindVTable || ![vt.vtableEntryNames containsObject:s.name]) continue;
+        int64_t k = slot.intValue;
+        if (k < 0 || (NSUInteger)k >= vt.vtableEntryNames.count) return nil;
+        return [ctx.module symbolForName:vt.vtableEntryNames[(NSUInteger)k]];
+    }
+    return nil;
 }
 
 // The arg IR types of a call insn, in order — NSNull for an untyped immediate.
@@ -5031,7 +5076,9 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
             // Receiver consumed x0, so the GP counter starts at 1; the
             // FP bank (v0..v7) is independent and starts at 0.
             NSArray *vaTypes = [self arm64ArgTypesForInsn:insn from:first count:argCount ctx:ctx];
-            NSArray<NSNumber *> *vStk = [self arm64ArgStackOffsets:vaTypes startGP:1 startFP:0 totalBytes:NULL];
+            NSInteger vFrom = viaItable ? -1 : [self arm64CVariadicFromForInsn:insn ctx:ctx];
+            NSArray<NSNumber *> *vStk = [self arm64ArgStackOffsets:vaTypes startGP:1 startFP:0
+                                                         totalBytes:NULL variadicFrom:vFrom];
             int gpIdx = 1, fpIdx = 0;
             for (NSUInteger i = 0; i < argCount; i++) {
                 XTIROperand *a = insn.operands[i + first];
@@ -5049,6 +5096,19 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
                     [self marshalArgOperand:a value:av stackOffset:vStk[i].integerValue
                                       gpIdx:&gpIdx fpIdx:&fpIdx ctx:ctx];
                 }
+            }
+            // A forwarding method calling a variadic method virtually relays
+            // its incoming tail, as the direct-call path does (bug 572).
+            if (!viaItable && [self arm64VaForwardRelayForInsn:insn ctx:ctx]) {
+                NSUInteger inVa = ctx.frameSize + [self arm64FixedParamStackBytes:ctx];
+                NSUInteger tailBase = 0;
+                [self arm64ArgStackOffsets:vaTypes startGP:1 startFP:0
+                                totalBytes:&tailBase variadicFrom:vFrom];
+                [ctx.out appendFormat:@"    // vararg forward: relay %lu words #%lu -> #%lu\n",
+                 (unsigned long)kArm64VaForwardWords, (unsigned long)inVa, (unsigned long)tailBase];
+                for (NSUInteger i = 0; i < kArm64VaForwardWords; i++)
+                    [ctx.out appendFormat:@"    ldr x9, [sp, #%lu]\n    str x9, [sp, #%lu]\n",
+                     (unsigned long)(inVa + i * 8), (unsigned long)(tailBase + i * 8)];
             }
             int64_t slotIdx = slotOp.intValue;
             // >16-byte struct return: pass the result slot in x8 before the call.
