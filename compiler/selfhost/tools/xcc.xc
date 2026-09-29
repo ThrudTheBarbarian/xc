@@ -5451,6 +5451,10 @@ DriverOptions* parseDriverArgs(void)
         o.setInput(a);
         i = i + (u32)1;
     }
+    // Android shares the arm64 ISA macro with macOS; the platform layer is
+    // what tells library source which one it is building for.
+    if (isAndroid(d))
+        o.defs().add((Object*)String.withCString("PLATFORM_android=1"));
     finishDriverArgs(d);
     return d;
 }

@@ -152,6 +152,7 @@ keep one copy of each class:
 | Target | Defined |
 |---|---|
 | `-A arm64` | `ARCH_arm64` |
+| `-A android` | `ARCH_arm64` **and** `PLATFORM_android` |
 | `-A x86_64` | `ARCH_x86_64` |
 | `-A win64` | `ARCH_x86_64` **and** `ARCH_win64` |
 | `-A arm9` | `ARCH_arm9` |
@@ -161,7 +162,10 @@ keep one copy of each class:
 
 Windows defines both because it uses the x86-64 instruction set. ISA-guarded
 code (inline assembly, register names) keys off `ARCH_x86_64`, and OS-specific
-code (calling convention, system calls) keys off `ARCH_win64`.
+code (calling convention, system calls) keys off `ARCH_win64`. Android is the
+arm64 instruction set on a different operating system, so it adds
+`PLATFORM_android`; the iOS targets add `PLATFORM_ios` (and `PLATFORM_ios_sim`
+for the simulator) in the same way.
 
 ```c
 #if ARCH_6502

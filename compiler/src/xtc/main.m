@@ -4352,6 +4352,10 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
     [opts.defines enumerateKeysAndObjectsUsingBlock:^(NSString *k, NSString *v, BOOL *s) {
         [feArgs addObject:[NSString stringWithFormat:@"-D%@=%@", k, v]];
     }];
+    // Android shares the arm64 ISA macro with macOS; the platform layer is
+    // what tells library source which one it is building for.
+    if (opts.androidTarget)
+        [feArgs addObject:@"-DPLATFORM_android=1"];
     // Warning suppressions. Every -Wno- category is diagnosed by the FRONT END
     // (lexer / preprocessor / sema), so a flag the dispatcher keeps to itself
     // silences nothing: `xcc -Wno-comment` still printed the warning while
