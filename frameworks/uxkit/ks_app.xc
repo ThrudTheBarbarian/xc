@@ -2108,6 +2108,12 @@ class KSVectorBoard : UXView
         {
         self.say(UXStr.append((u8*)"typing: ", f.text()));
         }
+    // The line being FINISHED, rather than each keystroke: Return reports the field's contents and
+    // does not enter them.  Beside onType, so both halves of a field are visible in one demo.
+    void onEnter(UXTextField* f)
+        {
+        self.say(UXStr.append((u8*)"entered: ", f.text()));
+        }
     void onQuit(UXControl* c)
         {
         app.stop();
@@ -2388,6 +2394,7 @@ class KSVectorBoard : UXView
         field = new UXTextField();
         field.setPlaceholder((u8*)"type something…"); // grey prompt (AppKit/Win32; GEM starts empty)
         field.setOnChange(&self.onType);              // echo keystrokes into the status line
+        field.setOnSubmit(&self.onEnter);             // and Return as "the line is done"
         canvas.addSubview(field, UXGeom.make((i16)64, (i16)42, (i16)220, (i16)22));
         UXLabel* pinLbl = new UXLabel();
         pinLbl.setText((u8*)"PIN:");

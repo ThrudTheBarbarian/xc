@@ -228,6 +228,11 @@ class UXScrollbar : UXView
         headerH = h;
         self.relayout();
         }
+    // Set how tall the scrolling content is.  A MODEL value: the neutral docHeight is what maxScroll()
+    // reads and is honest immediately, but a native container (AppKit's clip view, the win32 scrollbar)
+    // only picks up the new page when the tree next REALISES, inside a window display.  So set the
+    // height and then DISPLAY in the same turn; a scroll attempted between the two clamps against the
+    // page as it was, and a clamp looks like a successful scroll, which is the failure to watch for.
     void setDocumentHeight(i32 h)
         {
         docHeight = h;

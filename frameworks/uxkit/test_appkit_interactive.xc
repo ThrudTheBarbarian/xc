@@ -21,6 +21,20 @@
 #import "UXEvent.xc"
 
 i32 gFired;
+i32 gTurns;
+i32 gWinHandle;
+#define CLICK_AT_TURN 2
+
+// The hook: a plain argument-less function, the only shape a C-held pointer can carry.
+void tickFn(void)
+    {
+    gTurns = gTurns + (i32)1;
+    if (gTurns == (i32)CLICK_AT_TURN)
+        {
+        ux_ak_post_click(gWinHandle, (i32)40, (i32)52); // inject a click inside the Quit button
+        }
+    }
+
 class Canvas : UXView
     {
     void init(void)
@@ -74,6 +88,8 @@ class Canvas : UXView
     d.attachApp(app);
     app.setDelegate(c);
     app.run();
-    Stdio.printf(gFired == (i32)1 ? "PASS: interactive click -> button action -> quit\n"
-                                  : "FAIL: click did not reach the button\n");
+    Stdio.printf("interactive: turns=%d fired=%d\n", gTurns, gFired);
+    Stdio.printf((gFired == (i32)1 && gTurns >= (i32)CLICK_AT_TURN)
+                     ? "PASS: the driver's own turn injected the click -> button action -> quit\n"
+                     : "FAIL: the turn-driven click did not reach the button\n");
     }

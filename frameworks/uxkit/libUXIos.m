@@ -442,6 +442,13 @@ void ux_ios_set_field_hooks(void* fn)
     {
     gFieldChanged = (ux_field_fn)fn;
     }
+// ...and the other announcement: Return.  UIControlEventEditingDidEndOnExit is that key alone
+// (the Return/done key ending editing), so no movement test is needed.
+static ux_field_fn gFieldSubmit;
+void ux_ios_set_field_submit_hooks(void* fn)
+    {
+    gFieldSubmit = (ux_field_fn)fn;
+    }
 static char* gFieldBuf[UXIOS_MAXW * 256];
 static int gFieldCap[UXIOS_MAXW * 256];
 
@@ -462,6 +469,13 @@ static UXFieldTarget* gFieldTarget;
     if (gFieldChanged)
         gFieldChanged(handle, node);
     }
+- (void)submitted:(UITextField*)tf
+    {
+    int handle = (int)(tf.tag >> 8), node = (int)(tf.tag & 0xFF);
+    // The text is synced by the editing-changed path per keystroke; this is the Return alone.
+    if (gFieldSubmit)
+        gFieldSubmit(handle, node);
+    }
 @end
 void ux_ios_make_field(int handle, int node, int x, int y, int w, int h,
                        char* buf, int cap, int secure)
@@ -480,6 +494,9 @@ void ux_ios_make_field(int handle, int node, int x, int y, int w, int h,
     [tf addTarget:gFieldTarget
                   action:@selector(edited:)
         forControlEvents:UIControlEventEditingChanged];
+    [tf addTarget:gFieldTarget
+                  action:@selector(submitted:)
+        forControlEvents:UIControlEventEditingDidEndOnExit];
     [gWin[handle] addSubview:tf];
     gCtl[handle][node] = tf;
     }
@@ -586,12 +603,26 @@ static void setRGB(int r, int g, int b)
     {
     CGContextSetRGBFillColor(gCtx, r / 255.0, g / 255.0, b / 255.0, 1.0);
     }
-void ux_ios_fill(int x, int y, int w, int h, int r, int g, int b)
+/* alpha is the straight 0..255 value; CoreGraphics blends every fill and stroke source-over,
+   so a translucent primitive composites with what is under it.  a == 255 is the opaque case. */
+static void setRGBA(int r, int g, int b, int a)
+    {
+    CGContextSetRGBFillColor(gCtx, r / 255.0, g / 255.0, b / 255.0, a / 255.0);
+    }
+void ux_ios_fill(int x, int y, int w, int h, int r, int g, int b, int a)
     {
     if (!gCtx)
         return;
-    setRGB(r, g, b);
+    setRGBA(r, g, b, a);
     CGContextFillRect(gCtx, CGRectMake(x, y, w, h));
+    }
+/* CLEAR: erase the rect whatever is under it, so a compositing layer starts empty.  A source-over
+   fill at alpha 0 would paint nothing instead of emptying. */
+void ux_ios_clear(int x, int y, int w, int h)
+    {
+    if (!gCtx)
+        return;
+    CGContextClearRect(gCtx, CGRectMake(x, y, w, h));
     }
 void ux_ios_tri(int x0, int y0, int x1, int y1, int x2, int y2, int r, int g, int b)
     {
@@ -605,11 +636,11 @@ void ux_ios_tri(int x0, int y0, int x1, int y1, int x2, int y2, int r, int g, in
     CGContextClosePath(gCtx);
     CGContextFillPath(gCtx);
     }
-void ux_ios_poly(short* xy, int n, int r, int g, int b)
+void ux_ios_poly(short* xy, int n, int r, int g, int b, int a)
     {
     if (!gCtx || n < 3)
         return;
-    setRGB(r, g, b);
+    setRGBA(r, g, b, a);
     CGContextBeginPath(gCtx);
     CGContextMoveToPoint(gCtx, xy[0], xy[1]);
     for (int i = 1; i < n; i++)
@@ -617,7 +648,7 @@ void ux_ios_poly(short* xy, int n, int r, int g, int b)
     CGContextClosePath(gCtx);
     CGContextFillPath(gCtx);
     }
-static void drawString(const char* s, int x, int y, int r, int g, int b, UIFont* font)
+static void drawString(const char* s, int x, int y, int r, int g, int b, int a, UIFont* font)
     {
     NSString* t = [NSString stringWithUTF8String:s];
     [t drawAtPoint:CGPointMake(x, y)
@@ -626,13 +657,13 @@ static void drawString(const char* s, int x, int y, int r, int g, int b, UIFont*
                              [UIColor colorWithRed:r / 255.0
                                              green:g / 255.0
                                               blue:b / 255.0
-                                             alpha:1]}];
+                                             alpha:a / 255.0]}];
     }
-void ux_ios_text(const char* s, int x, int y, int r, int g, int b, int size)
+void ux_ios_text(const char* s, int x, int y, int r, int g, int b, int a, int size)
     {
     if (!gCtx)
         return;
-    drawString(s, x, y, r, g, b, [UIFont systemFontOfSize:size > 0 ? size : 13]);
+    drawString(s, x, y, r, g, b, a, [UIFont systemFontOfSize:size > 0 ? size : 13]);
     }
 void ux_ios_text_font(const char* s, int x, int y, int r, int g, int b,
                       const char* family, int size, int bold, int italic)

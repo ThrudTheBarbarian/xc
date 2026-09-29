@@ -25,6 +25,7 @@
 i32 ux_gtk_boot(i32* w, i32* h);
 void ux_gtk_pump(void);
 void ux_gtk_wait_event(void);
+void ux_gtk_wait_event_ms(i32 ms);
 i32 ux_gtk_alert(i32 parent, u8* lines, u8* buttons, i32 defBtn);
 void ux_gtk_clip(i32 x, i32 y, i32 w, i32 h);
 void ux_gtk_clip_end(void);
@@ -58,6 +59,7 @@ void ux_gtk_make_progress(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, i32 
 void ux_gtk_set_progress(i32 handle, i32 node, i32 mille, i32 indeterminate);
 void ux_gtk_make_popup(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h);
 void ux_gtk_set_field_hooks(pointer fn);
+void ux_gtk_set_field_submit_hooks(pointer fn);
 void ux_gtk_set_mouse(pointer fn); // register the pointer-event forwarder
 // The input shield (UXKindShield): a bare widget above the controls, so a click on a
 // design surface reaches the toolkit instead of operating the widget under it.
@@ -205,6 +207,25 @@ void uxGtkFieldChanged(i32 handle, i32 node)
         return;
         }
     f.fieldDidChange();
+    if (gApp != (UXApplication*)0)
+        {
+        gApp.displayIfNeeded();
+        }
+    }
+// Return in a native GtkEntry: the field's onSubmit.  The buffer is already synced (entry_cb runs
+// per keystroke), so this announces and nothing else.
+void uxGtkFieldSubmitted(i32 handle, i32 node)
+    {
+    if (handle < (i32)0 || handle >= (i32)64 || node < (i32)0 || node >= (i32)256)
+        {
+        return;
+        }
+    UXTextField* f = (UXTextField* ?)gGtkCtlPeer[handle * (i32)256 + node];
+    if (f == (UXTextField*)0)
+        {
+        return;
+        }
+    f.fieldDidSubmit();
     if (gApp != (UXApplication*)0)
         {
         gApp.displayIfNeeded();
@@ -1352,7 +1373,9 @@ class UXGtkDriver : Object<UXViewDriver>
     void nextEvent(i32 timeoutMs, UXEvent* ev)
         {
         ev.init();
-        ux_gtk_wait_event();
+        // A frame clock turns the wait into a deadline: wait_event_ms returns on the deadline
+        // when no input does, so the neutral loop's turn comes round.  0 = the old blocking wait.
+        ux_gtk_wait_event_ms(timeoutMs);
         }
     void pumpMessages(i32 timeoutMs, UXEvent* ev)
         {

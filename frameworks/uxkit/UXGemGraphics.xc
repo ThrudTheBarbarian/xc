@@ -62,6 +62,18 @@ class UXGemGraphics : Object<UXGraphics>
         vsf_perimeter(vh, (i32)0);
         vr_recfl(vh, (pointer)&pxy[0]);
         }
+    // The VDI has no compositing: a pen is a palette entry and a fill replaces what is under it.
+    // blendsAlpha() answers false, and the colour is drawn opaque rather than pretending otherwise.
+    void fillRectRGBA(UXRect r, i32 red, i32 green, i32 blue, i32 alpha)
+        {
+        self.fillRectRGB(r, red, green, blue);
+        }
+    // No alpha on the VDI, so "empty" is the window background the AES paints — pen 0, the white a
+    // G_BOX fills with.  A layer that needs to be see-through takes the other path at blendsAlpha.
+    void clearRect(UXRect r)
+        {
+        self.fillRect(r, (i32)0);
+        }
 
     // A 9-slice from the theme — the same call the AES makes for stock widgets.
     void drawTheme(u8* slice, UXRect r)
@@ -78,6 +90,13 @@ class UXGemGraphics : Object<UXGraphics>
         // to the VDI default (16px) explicitly so each call is self-contained.  size>0 scales (the preview).
         vst_height(vh, size > (i32)0 ? size : (i32)16, (pointer)0, (pointer)0, (pointer)0, (pointer)0);
         v_gtext(vh, (i32)(origin.x + x), (i32)(origin.y + y), s);
+        }
+    // True-colour text: the same scratch pen the fills use, so the glyphs take the colour.  The alpha
+    // is dropped with the rest — the VDI has no compositing.
+    void drawTextRGBA(u8* s, i16 x, i16 y, i32 red, i32 green, i32 blue, i32 alpha, i32 size)
+        {
+        v_setrgb(vh, (i32)255, red, green, blue);
+        self.drawText(s, x, y, (i32)255, size);
         }
 
     // Styled text: pick the registry face whose name matches `family` (vst_font), synthesise bold/italic
@@ -204,6 +223,10 @@ class UXGemGraphics : Object<UXGraphics>
         {
         v_setrgb(vh, (i32)255, red, green, blue); // the same scratch pen fillRectRGB uses
         self.fillPolygon(xy, n, (i32)255);
+        }
+    void fillPolygonRGBA(i16* xy, i32 n, i32 red, i32 green, i32 blue, i32 alpha)
+        {
+        self.fillPolygonRGB(xy, n, red, green, blue);
         }
 
     // The VDI has vsl_width for straight polylines but nothing that strokes a CURVE at width, and no

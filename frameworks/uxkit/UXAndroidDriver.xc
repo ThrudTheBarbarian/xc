@@ -65,13 +65,17 @@ void ux_and_set_control_hidden(i32 handle, i32 node, i32 on);
 void ux_and_set_control_fire(pointer fn);
 void ux_and_set_value_changed(pointer fn);
 void ux_and_set_field_hooks(pointer fn);
+void ux_and_set_field_submit_hooks(pointer fn);
 void ux_and_set_entry(pointer fn);
+void ux_and_set_turn_hook(pointer fn, i32 ms);
 void ux_and_shell_run(void);
 void ux_and_quit(i32 rc);
 void ux_and_clip(i32 x, i32 y, i32 w, i32 h);
 void ux_and_clip_end(void);
 i32 ux_and_text_width(u8* s, i32 size);
 i32 ux_and_text_width_font(u8* s, u8* family, i32 size, i32 bold, i32 italic);
+i32 ux_and_text_width_weight(u8* s, u8* family, i32 size, i32 weight, i32 italic);
+i32 ux_and_text_ascent(u8* family, i32 size, i32 weight, i32 italic);
 i32 ux_and_now_ms(void);
 void ux_and_now_utc(i32* out7);
 i32 ux_and_local_offset_minutes(void);
@@ -207,6 +211,25 @@ void uxAndFieldChanged(i32 handle, i32 node)
         return;
         }
     f.fieldDidChange();
+    if (gApp != (UXApplication*)0)
+        {
+        gApp.displayIfNeeded();
+        }
+    }
+// Return (the IME's done action) in a native EditText: the field's onSubmit.  The buffer is
+// already synced (afterTextChanged runs per keystroke), so this announces and nothing else.
+void uxAndFieldSubmitted(i32 handle, i32 node)
+    {
+    if (handle < (i32)0 || handle >= (i32)64 || node < (i32)0 || node >= (i32)256)
+        {
+        return;
+        }
+    UXTextField* f = (UXTextField* ?)gAndCtlPeer[handle * (i32)256 + node];
+    if (f == (UXTextField*)0)
+        {
+        return;
+        }
+    f.fieldDidSubmit();
     if (gApp != (UXApplication*)0)
         {
         gApp.displayIfNeeded();

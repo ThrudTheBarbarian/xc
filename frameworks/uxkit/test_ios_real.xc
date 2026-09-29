@@ -150,7 +150,7 @@ void testBody(void)
     UXButton* button = new UXButton();
     button.setTitle((u8*)"OK");
     button.setAction(&ctl.onButton);
-    win.open((u8*)"UXKit on iOS", UXGeom.make((i16)80, (i16)80, (i16)220, (i16)140), canvas);
+    win.open((u8*)"UXKit on iOS", UXGeom.make((i16)80, (i16)80, (i16)220, (i16)175), canvas);
     canvas.addSubview(button, UXGeom.make((i16)8, (i16)90, (i16)80, (i16)32));
     win.displayAll(); // realizeTree overlays the REAL UIButton
 

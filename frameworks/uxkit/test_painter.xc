@@ -48,9 +48,11 @@ class RecG : Object<UXGraphics>
     i32 firstR;
     i32 firstG;
     i32 firstB;
+    i32 firstA;
     i32 lastR;
     i32 lastG;
     i32 lastB;
+    i32 lastA;
     void init(void)
         {
         self.reset();
@@ -88,9 +90,11 @@ class RecG : Object<UXGraphics>
         firstR = (i32)-1;
         firstG = (i32)-1;
         firstB = (i32)-1;
+        firstA = (i32)-1;
         lastR = (i32)-1;
         lastG = (i32)-1;
         lastB = (i32)-1;
+        lastA = (i32)-1;
         }
     void note(i16* xy, i32 n)
         {

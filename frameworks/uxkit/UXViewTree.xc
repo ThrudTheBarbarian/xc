@@ -34,17 +34,37 @@ class UXViewTree
     UXRect dirty;
     bool hasDirty;
 
+    // The window this tree belongs to, set by UXWindow when it takes the tree.  It is here
+    // rather than on UXView because a view must not know what a window is (the import would
+    // be a cycle), and the two things that need it — realize(), and therefore the GL surface
+    // a GL view asks for — are tree-level operations.  0 = not in a window yet.
+    i32 winHandle;
+
     void init(void)
         {
         dirty = UXGeom.zero();
         hasDirty = false;
         structHandle = gDriver.structNew();
         views = new Array();
+        winHandle = (i32)0;
         }
 
     void dealloc(void)
         {
         gDriver.structFree(structHandle);
+        }
+
+    // Reconcile the backend's NATIVE objects with this tree: an AppKit driver creates and
+    // positions real controls here, and a backend with GL creates a GL view's SURFACE here.
+    // The window calls it on every paint (inside display/displayAll); a view that needs its
+    // surface BEFORE the first paint — a GL view making its context — asks for it here.
+    // A tree with no window yet has no backend objects to reconcile, so that is a no-op.
+    void realize(void)
+        {
+        if (winHandle != (i32)0)
+            {
+            gDriver.realizeTree(winHandle, self.objects());
+            }
         }
 
     // Adopt a structure somebody else owns — a tree straight out of a .rsc.  The raw handle

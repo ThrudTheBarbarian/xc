@@ -48,10 +48,11 @@ static ux_entry_fn    gEntry;
 static ux_fire_fn     gFire;
 static ux_value_fn    gValueChanged;      /* value controls: a later slice */
 static ux_fire_fn     gFieldChanged;      /* the field overlay: a later slice */
+static ux_fire_fn     gFieldSubmit;       /* the same field's Return (onEditorAction) */
 
 static jclass gBridgeCls, gRunCls, gDrawCls;          /* global refs, dex classes  */
 static jclass gBtnCls, gLabelCls, gFrameCls, gViewCls, gCanvasCls, gPaintCls,
-    gBitmapCls, gPathCls,
+    gBitmapCls, gPathCls, gDashCls,
     gCheckCls, gRadioCls, gCompoundCls, gSeekCls, gProgCls, gSpinCls, gEditCls, gAdapterCls, gLinearCls;
 static jmethodID gRadioSetChecked;
 static jmethodID gBtnInit, gBtnSetText, gLabelInit, gLabelSetText, gFrameInit,
@@ -66,12 +67,19 @@ static jmethodID gBtnInit, gBtnSetText, gLabelInit, gLabelSetText, gFrameInit,
     gEditInit, gEditSetText, gEditGetText, gEditWatch, gEditSetInputType,
     gCanvasDrawRect, gCanvasDrawText, gCanvasDrawPath, gCanvasInitBmp,
     gPaintInit, gPaintSetColor, gPaintSetTextSize, gPaintSetStyle,
-    gPaintSetStrokeWidth, gPaintSetStrokeCap, gPaintMeasure,
+    gPaintSetStrokeWidth, gPaintSetStrokeCap, gPaintSetStrokeJoin, gPaintSetTypeface, gPaintMeasure,
+    gPaintSetPathEffect, gDashInit, gPaintMetricsInt,
+    gTypefaceCreate,
     gPathInit, gPathMoveTo, gPathLineTo, gPathCubicTo, gPathClose,
     gBmpCreate, gBmpGetPixel;
 static jobject gPaint;                    /* the one Paint, global ref */
 static jobject gStyleFill, gStyleStroke;  /* Paint.Style values, global refs */
 static jobject gCapButt, gCapRound, gCapSquare;   /* Paint.Cap values */
+static jobject gJoinMiter, gJoinRound, gJoinBevel; /* Paint.Join values */
+static jobject gDuffClear;                         /* PorterDuff.Mode.CLEAR */
+static jclass gTypefaceCls;                        /* android.graphics.Typeface */
+static jclass gMetricsIntCls;                      /* android.graphics.Paint$FontMetricsInt */
+static jfieldID gMetricsAscent;                    /* ...its `ascent` field */
 
 static JNIEnv *envNow(void) {
     JNIEnv *env = NULL;
@@ -113,6 +121,7 @@ void ux_and_set_entry(void *fn)         { gEntry = (ux_entry_fn)fn; }
 void ux_and_set_control_fire(void *fn)  { gFire = (ux_fire_fn)fn; }
 void ux_and_set_value_changed(void *fn) { gValueChanged = (ux_value_fn)fn; }
 void ux_and_set_field_hooks(void *fn)   { gFieldChanged = (ux_fire_fn)fn; }
+void ux_and_set_field_submit_hooks(void *fn) { gFieldSubmit = (ux_fire_fn)fn; }
 
 /* ── the natives the dex classes funnel into ────────────────────────────── */
 static void alertFinish(JNIEnv *env, int neutralIdx);   /* the modal alert, below */
@@ -138,6 +147,10 @@ static void n_value(JNIEnv *env, jclass c, jint id, jint value) {
     }
     (void)env;
     if (gValueChanged) gValueChanged(id >> 8, id & 0xFF, value);
+}
+static void n_submit(JNIEnv *env, jclass c, jint id) {
+    (void)env; (void)c;
+    if (gFieldSubmit) gFieldSubmit(id >> 8, id & 0xFF);
 }
 static void n_text(JNIEnv *env, jclass c, jint id, jstring s) {
     (void)c;
@@ -177,7 +190,7 @@ static void n_run(JNIEnv *env, jclass c, jint id) {
     }
 }
 static jobject gDrawCanvas;               /* the Canvas of the draw in flight */
-static jmethodID gCanvasScale, gCanvasSave, gCanvasRestore, gCanvasClipRect;
+static jmethodID gCanvasScale, gCanvasSave, gCanvasRestore, gCanvasClipRect, gCanvasDrawColor;
 static int gInsetsKnown;                  /* shared with queryInsets below */
 static void queryInsets(JNIEnv *env);
 static void applyInsets(JNIEnv *env);
@@ -291,6 +304,7 @@ int ux_and_boot(int *w, int *h) {
     gPaintCls  = gref(env, "android/graphics/Paint");
     gBitmapCls = gref(env, "android/graphics/Bitmap");
     gPathCls   = gref(env, "android/graphics/Path");
+    gDashCls   = gref(env, "android/graphics/DashPathEffect");
     gCheckCls  = gref(env, "android/widget/CheckBox");
     gRadioCls  = gref(env, "android/widget/RadioButton");
     gCompoundCls = gref(env, "android/widget/CompoundButton");
@@ -421,6 +435,10 @@ int ux_and_boot(int *w, int *h) {
     gCapButt     = enumVal(env, "android/graphics/Paint$Cap", "BUTT");
     gCapRound    = enumVal(env, "android/graphics/Paint$Cap", "ROUND");
     gCapSquare   = enumVal(env, "android/graphics/Paint$Cap", "SQUARE");
+    gJoinMiter   = enumVal(env, "android/graphics/Paint$Join", "MITER");
+    gJoinRound   = enumVal(env, "android/graphics/Paint$Join", "ROUND");
+    gJoinBevel   = enumVal(env, "android/graphics/Paint$Join", "BEVEL");
+    gDuffClear   = enumVal(env, "android/graphics/PorterDuff$Mode", "CLEAR");
     if (!check(env, "paint")) return 0;
 
     /* the root FrameLayout is the content view; windows nest in it.  View
@@ -673,6 +691,13 @@ void ux_and_make_field(int handle, int node, int x, int y, int w, int h,
     (*env)->CallVoidMethod(env, ed, gEditSetText, (*env)->NewStringUTF(env, buf));
     gFieldMute = 0;
     (*env)->CallVoidMethod(env, ed, gEditWatch, bridge(env, handle, node));
+    /* ONE line, and the keyboard's Return becomes the IME's done action rather than a newline
+     * in the buffer -- which is also what makes the editor-action listener below fire. */
+    jmethodID single = (*env)->GetMethodID(env, gEditCls, "setSingleLine", "(Z)V");
+    if (single) (*env)->CallVoidMethod(env, ed, single, (jboolean)1);
+    jmethodID onAct = (*env)->GetMethodID(env, gEditCls, "setOnEditorActionListener",
+                                          "(Landroid/widget/TextView$OnEditorActionListener;)V");
+    if (onAct) (*env)->CallVoidMethod(env, ed, onAct, bridge(env, handle, node));
     place(env, handle, node, ed, x, y, w, h);
     check(env, "make_field");
 }
@@ -748,29 +773,85 @@ void ux_and_test_click(int handle, int node) {
 }
 
 /* ── drawing ops (the Canvas of the draw in flight) ─────────────────────── */
-static void paintColor(JNIEnv *env, int r, int g, int b) {
+/* alpha is the straight 0..255 value; Canvas blends every fill and stroke source-over, so a
+   translucent primitive composites with what is under it.  a == 255 is the opaque case. */
+static void paintColor(JNIEnv *env, int r, int g, int b, int a) {
     (*env)->CallVoidMethod(env, gPaint, gPaintSetColor,
-                           (jint)(0xFF000000u | ((unsigned)r << 16) | ((unsigned)g << 8) | (unsigned)b));
+                           (jint)(((unsigned)a << 24) | ((unsigned)r << 16) | ((unsigned)g << 8) | (unsigned)b));
 }
-void ux_and_fill(int x, int y, int w, int h, int r, int g, int b) {
+void ux_and_fill(int x, int y, int w, int h, int r, int g, int b, int a) {
     if (!gDrawCanvas) return;
     JNIEnv *env = envNow();
-    paintColor(env, r, g, b);
+    paintColor(env, r, g, b, a);
     (*env)->CallVoidMethod(env, gPaint, gPaintSetStyle, gStyleFill);
     (*env)->CallVoidMethod(env, gDrawCanvas, gCanvasDrawRect,
                            (jfloat)x, (jfloat)y, (jfloat)(x + w), (jfloat)(y + h), gPaint);
 }
-void ux_and_text(const char *s, int x, int y, int r, int g, int b, int size) {
+/* Canvas has no clearRect: save the clip, clip to the rect, drawColor(0, Mode.CLEAR) to punch it
+   back to transparent, restore.  A source-over fill at alpha 0 would paint nothing instead. */
+void ux_and_clear(int x, int y, int w, int h) {
+    if (!gDrawCanvas) return;
+    JNIEnv *env = envNow();
+    (*env)->CallIntMethod(env, gDrawCanvas, gCanvasSave);
+    (*env)->CallBooleanMethod(env, gDrawCanvas, gCanvasClipRect,
+                              (jfloat)x, (jfloat)y, (jfloat)(x + w), (jfloat)(y + h));
+    (*env)->CallVoidMethod(env, gDrawCanvas, gCanvasDrawColor, (jint)0, gDuffClear);
+    (*env)->CallVoidMethod(env, gDrawCanvas, gCanvasRestore);
+}
+/* The seam's y is the top of the line; Canvas.drawText wants the baseline.  The step between them is
+   the FACE's ascent, read off the Paint that is about to draw (FontMetricsInt reports it above the
+   baseline as a negative number), with the em size as the floor when the field is unavailable.
+   ux_and_text_ascent calls this same function, so a paint and a measure cannot disagree — the em size
+   it used to be put Android text a couple of pixels low, and test_android_real's ink row checks it. */
+static int and_line_ascent(JNIEnv *env, int px) {
+    if (gPaintMetricsInt && gMetricsAscent) {
+        jobject m = (*env)->CallObjectMethod(env, gPaint, gPaintMetricsInt);
+        if (m) {
+            jint a = (*env)->GetIntField(env, m, gMetricsAscent);
+            (*env)->DeleteLocalRef(env, m);
+            if (a < 0) return (int)(-a);
+        }
+    }
+    return px;
+}
+void ux_and_text(const char *s, int x, int y, int r, int g, int b, int a, int size) {
     if (!gDrawCanvas) return;
     JNIEnv *env = envNow();
     int px = size > 0 ? size : 14;
-    paintColor(env, r, g, b);
+    paintColor(env, r, g, b, a);
     (*env)->CallVoidMethod(env, gPaint, gPaintSetStyle, gStyleFill);
     (*env)->CallVoidMethod(env, gPaint, gPaintSetTextSize, (jfloat)px);
     jstring js = (*env)->NewStringUTF(env, s);
     /* the seam's y is text TOP; Canvas.drawText wants the baseline */
     (*env)->CallVoidMethod(env, gDrawCanvas, gCanvasDrawText, js,
-                           (jfloat)x, (jfloat)(y + px), gPaint);
+                           (jfloat)x, (jfloat)(y + and_line_ascent(env, px)), gPaint);
+    (*env)->DeleteLocalRef(env, js);
+}
+/* A family at a numeric CSS weight.  Typeface.create(String, int) takes a STYLE, not a weight, so
+   the CSS scale folds at semibold into bold — the nearest a Typeface can name below API 28, which
+   is this shim's floor. */
+void ux_and_text_weight(const char *s, int x, int y, const char *family, int size,
+                        int weight, int italic, int r, int g, int b, int a) {
+    if (!gDrawCanvas) return;
+    JNIEnv *env = envNow();
+    int px = size > 0 ? size : 14;
+    paintColor(env, r, g, b, a);
+    (*env)->CallVoidMethod(env, gPaint, gPaintSetStyle, gStyleFill);
+    (*env)->CallVoidMethod(env, gPaint, gPaintSetTextSize, (jfloat)px);
+    if (gTypefaceCreate) {
+        int bold = weight >= 600;
+        int style = (bold ? 1 : 0) | (italic ? 2 : 0);   /* BOLD | ITALIC */
+        jstring jf = (*env)->NewStringUTF(env, family ? family : "");
+        jobject tf = (*env)->CallStaticObjectMethod(env, gTypefaceCls, gTypefaceCreate, jf, (jint)style);
+        if (tf) {
+            (*env)->CallVoidMethod(env, gPaint, gPaintSetTypeface, tf);
+            (*env)->DeleteLocalRef(env, tf);
+        }
+        (*env)->DeleteLocalRef(env, jf);
+    }
+    jstring js = (*env)->NewStringUTF(env, s);
+    (*env)->CallVoidMethod(env, gDrawCanvas, gCanvasDrawText, js,
+                           (jfloat)x, (jfloat)(y + and_line_ascent(env, px)), gPaint);
     (*env)->DeleteLocalRef(env, js);
 }
 void ux_and_tri(int x0, int y0, int x1, int y1, int x2, int y2, int r, int g, int b) {
@@ -781,12 +862,12 @@ void ux_and_tri(int x0, int y0, int x1, int y1, int x2, int y2, int r, int g, in
     (*env)->CallVoidMethod(env, path, gPathLineTo, (jfloat)x1, (jfloat)y1);
     (*env)->CallVoidMethod(env, path, gPathLineTo, (jfloat)x2, (jfloat)y2);
     (*env)->CallVoidMethod(env, path, gPathClose);
-    paintColor(env, r, g, b);
+    paintColor(env, r, g, b, 255);
     (*env)->CallVoidMethod(env, gPaint, gPaintSetStyle, gStyleFill);
     (*env)->CallVoidMethod(env, gDrawCanvas, gCanvasDrawPath, path, gPaint);
     (*env)->DeleteLocalRef(env, path);
 }
-void ux_and_poly(short *xy, int n, int r, int g, int b) {
+void ux_and_poly(short *xy, int n, int r, int g, int b, int a) {
     if (!gDrawCanvas || n < 3) return;
     JNIEnv *env = envNow();
     jobject path = (*env)->NewObject(env, gPathCls, gPathInit);
@@ -1292,10 +1373,11 @@ JNIEXPORT void ANativeActivity_onCreate(ANativeActivity *activity,
         { "nativeFire", "(I)V", (void *)n_fire },
         { "nativeValue", "(II)V", (void *)n_value },
         { "nativeText", "(ILjava/lang/String;)V", (void *)n_text },
+        { "nativeSubmit", "(I)V", (void *)n_submit },
     };
     static const JNINativeMethod nr[] = { { "nativeRun", "(I)V", (void *)n_run } };
     static const JNINativeMethod nd[] = { { "nativeDraw", "(ILandroid/graphics/Canvas;II)V", (void *)n_draw } };
-    (*env)->RegisterNatives(env, gBridgeCls, nb, 3);
+    (*env)->RegisterNatives(env, gBridgeCls, nb, 4);
     (*env)->RegisterNatives(env, gRunCls, nr, 1);
     (*env)->RegisterNatives(env, gDrawCls, nd, 1);
     gRunInit = (*env)->GetMethodID(env, gRunCls, "<init>", "(I)V");

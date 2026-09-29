@@ -8,10 +8,12 @@
 // NSRect): NSApplication/NSWindow, a flipped UXDrawView whose drawRect: is the paint seam, and an
 // NSGraphicsContext drawing vocabulary (UXCocoaGraphics).
 //
-// Events, menus, alerts, scrolling, tables/outlines and the native open/colour/font panels are all
-// live here now.  What is not: windowSetSubtitle/Info/Icon/Modified (NSWindow has subtitle and
-// documentEdited — this is unfinished, not unavailable), and the toolkit's own file-panel ops
-// (listDir/fileDelete/...), which are deliberately unused because macOS presents NSOpenPanel.
+// Events, menus, alerts, scrolling, tables/outlines, the native open/colour/font panels and the
+// whole window chrome are live here now: the title, the subtitle (NSWindow.subtitle), the modified
+// dot (documentEdited) and the title-bar icon (representedURL — the proxy icon of the document the
+// window stands for).  The AES's info LINE has no macOS counterpart and is the one chrome call that
+// is deliberately empty.  The toolkit's own file-panel ops (listDir/fileDelete/...) are unused for
+// the same reason: macOS presents NSOpenPanel.
 #import "UXViewDriver.xc"
 #import "UXGeometry.xc"
 #import "UXGraphics.xc"
@@ -42,8 +44,11 @@ void ux_ak_window_close(i32 handle);
 void ux_ak_window_set_title(i32 handle, u8* s);
 void ux_ak_window_set_subtitle(i32 handle, u8* s);  // NSWindow.subtitle (macOS 11+)
 void ux_ak_window_set_modified(i32 handle, i32 on); // the dot in the close button
+void ux_ak_window_set_icon(i32 handle, u8* s);      // NSWindow.representedURL — the proxy icon
 i32 ux_ak_window_modified(i32 handle);              // read-back, for tests
 i32 ux_ak_window_subtitle(i32 handle, u8* out, i32 cap);
+i32 ux_ak_window_icon(i32 handle, u8* out, i32 cap);
+i32 ux_ak_last_mouse_win(void); // the window the headless pump's last mouse event was for
 void ux_ak_window_invalidate(i32 handle);
 i32 ux_ak_native_count(void);
 void ux_ak_content_size(i32 handle, i32 w, i32 h); // scrolling: document-view extent + set offset
@@ -102,6 +107,8 @@ void ux_ak_outline_reload(i32 handle, i32 node);
 void ux_ak_set_outline_hooks(pointer children, pointer child, pointer expandable, pointer value, pointer didexpand);
 // The NSTextField's controlTextDidChange: calls this (handle, node) after syncing the buffer.
 void ux_ak_set_field_hooks(pointer changed);
+// The same delegate's controlTextDidEndEditing with a RETURN movement: the field's onSubmit.
+void ux_ak_set_field_submit_hooks(pointer submitted);
 void ux_ak_set_field_placeholder(i32 handle, i32 node, u8* text); // -> NSTextField placeholderString
 // Native NSScrollView over a generic scroll view: its document view draws the scroll's subtree.
 void ux_ak_make_scroll(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, i32 contentH, pointer sv);
@@ -373,6 +380,26 @@ void xgAKFieldChanged(i32 handle, i32 node)
         }
     }
 
+// Return in a native NSTextField: the field's onSubmit.  The delegate's buffer sync has already
+// happened (controlTextDidChange fires per keystroke), so this is the announcement and nothing else.
+void xgAKFieldSubmitted(i32 handle, i32 node)
+    {
+    if (handle < (i32)0 || handle >= (i32)64 || node < (i32)0 || node >= (i32)256)
+        {
+        return;
+        }
+    UXTextField* f = (UXTextField* ?)gAKCtlPeer[handle * (i32)256 + node];
+    if (f == (UXTextField*)0)
+        {
+        return;
+        }
+    f.fieldDidSubmit();
+    if (gAKApp != (UXApplication*)0)
+        {
+        gAKApp.displayIfNeeded();
+        }
+    }
+
 // Table-data trampolines: the shim's NSTableView datasource calls these with the peer UXTableView
 // (stored at make_table time), so the SAME neutral datasource that feeds the GEM subtree feeds the
 // native table.  Registered once with the shim (ux_ak_set_table_hooks) in boot.
@@ -451,7 +478,9 @@ class UXAppKitDriver : Object<UXViewDriver>
                                 (pointer)&xgAKOutlineExpandable, (pointer)&xgAKOutlineValue,
                                 (pointer)&xgAKOutlineDidExpand);
         ux_ak_set_field_hooks((pointer)&xgAKFieldChanged);  // NSTextField edits fire onChange
+        ux_ak_set_field_submit_hooks((pointer)&xgAKFieldSubmitted); // ...and Return fires onSubmit
         ux_ak_set_scroll_content((pointer)&ux_scroll_draw); // a scroll doc view draws its subtree
+        ux_ak_set_surface_content((pointer)&ux_view_surface_draw); // a self-surface view draws its subtree
         screenW[0] = (i32)1440;
         screenH[0] = (i32)900;
         return true;
@@ -655,15 +684,18 @@ class UXAppKitDriver : Object<UXViewDriver>
         {
         ux_ak_window_set_subtitle(handle, s);
         }
-    // No AppKit equivalent for these two.  The AES's info LINE is a strip of text below the title bar
-    // that macOS simply does not have (a toolbar or an accessory view is the idiom, and neither is
-    // this call's shape); the icon is a GEM icon SLICE, which is not an image AppKit could load.
-    // No-ops on purpose, unlike before, when all four were no-ops by omission.
+    // The AES's info LINE is a strip of text below the title bar that macOS simply does not have (a
+    // toolbar or an accessory view is the idiom, and neither is this call's shape).  No-op on
+    // purpose.
     void windowSetInfo(i32 handle, u8* s)
         {
         }
+    // The title-bar icon: macOS has no window-title image, but it draws the PROXY ICON of the
+    // document a window stands for, which is what WF_ICON means ("proxy / document icon").  A path
+    // names that document; a bare theme slice name is GEM-only art and clears the icon.
     void windowSetIcon(i32 handle, u8* slice)
         {
+        ux_ak_window_set_icon(handle, slice);
         }
     void windowSetModified(i32 handle, bool m)
         {
@@ -702,12 +734,20 @@ class UXAppKitDriver : Object<UXViewDriver>
         {
         self.windowInvalidate(handle);
         }
-    // The window that actually received the NSEvent, not a guess from coordinates: ak_mouseDown
-    // resolves its content view to a handle and hands it in, so multi-window mouse routing is exact.
-    // (The coords in the event are already local to that window, which is what dispatchMouse wants.)
+    // The window that actually received the NSEvent, not a guess from coordinates — and the coords in
+    // the event are already local to it, which is what dispatchMouse wants.  Interactive: the content
+    // view that got the press resolved itself to a handle and handed it in (ak_mouseDown ->
+    // gAKMouseWin).  Headless: the posted click was pulled by the neutral pump, and the NSEvent still
+    // says which window it was for, so the shim recorded that.  Only an event with no window behind
+    // it at all (a synthetic event a test built by hand) falls back to the first window.
     i32 windowAtPoint(i32 x, i32 y)
         {
-        return gAKMouseWin != (i32)0 ? gAKMouseWin : (i32)1;
+        if (gAKMouseWin != (i32)0)
+            {
+            return gAKMouseWin;
+            }
+        i32 h = ux_ak_last_mouse_win();
+        return h != (i32)0 ? h : (i32)1;
         }
     // Native tables own their own drag-select, but a toolkit-drawn drag (a split divider) needs a modal
     // step: pull the next NSEvent mouse-dragged/up.  (Tables never call this — they route through AppKit.)
@@ -1248,11 +1288,11 @@ class UXAppKitDriver : Object<UXViewDriver>
                 i32 w = (i32)0;
                 i32 hh = (i32)0;
                 self.structAbsFrame((pointer)t, i, &ax, &ay, &w, &hh);
-                ux_ak_fill(ax, ay, w, hh, (i32)192, (i32)192, (i32)192); // raised grey box
+                ux_ak_fill(ax, ay, w, hh, (i32)192, (i32)192, (i32)192, (i32)255); // raised grey box
                 if (t.nodes[i].spec != (pointer)0)
                     {
                     i32 c = t.nodes[i].enabled != (i16)0 ? (i32)0 : (i32)128; // black / grey if disabled
-                    ux_ak_text((u8*)t.nodes[i].spec, ax + (i32)6, ay + (i32)3, c, c, c, (i32)12);
+                    ux_ak_text((u8*)t.nodes[i].spec, ax + (i32)6, ay + (i32)3, c, c, c, (i32)255, (i32)12);
                     }
                 }
             }
@@ -1266,11 +1306,11 @@ class UXAppKitDriver : Object<UXViewDriver>
                 i32 w = (i32)0;
                 i32 hh = (i32)0;
                 self.structAbsFrame((pointer)t, i, &ax, &ay, &w, &hh);
-                ux_ak_fill(ax, ay, w, hh, (i32)255, (i32)255, (i32)255); // white field box
+                ux_ak_fill(ax, ay, w, hh, (i32)255, (i32)255, (i32)255, (i32)255); // white field box
                 AKField* f = (AKField*)t.nodes[i].spec;
                 if (f != (AKField*)0 && f.buf[0] != (u8)0)
                     {
-                    ux_ak_text(f.buf, ax + (i32)3, ay + (i32)2, (i32)0, (i32)0, (i32)0, (i32)12);
+                    ux_ak_text(f.buf, ax + (i32)3, ay + (i32)2, (i32)0, (i32)0, (i32)0, (i32)255, (i32)12);
                     }
                 }
             }
@@ -1284,7 +1324,7 @@ class UXAppKitDriver : Object<UXViewDriver>
                 i32 w = (i32)0;
                 i32 hh = (i32)0;
                 self.structAbsFrame((pointer)t, i, &ax, &ay, &w, &hh);
-                ux_ak_text((u8*)t.nodes[i].spec, ax + (i32)2, ay + (i32)2, (i32)0, (i32)0, (i32)0, (i32)12);
+                ux_ak_text((u8*)t.nodes[i].spec, ax + (i32)2, ay + (i32)2, (i32)0, (i32)0, (i32)0, (i32)255, (i32)12);
                 }
             }
         i16 c = t.nodes[i].head;

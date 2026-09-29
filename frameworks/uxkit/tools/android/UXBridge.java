@@ -13,19 +13,24 @@ import android.content.DialogInterface;
 import android.graphics.Canvas;
 import android.text.Editable;
 import android.text.TextWatcher;
+import android.view.KeyEvent;
 import android.view.View;
+import android.view.inputmethod.EditorInfo;
 import android.widget.AdapterView;
 import android.widget.CompoundButton;
+import android.widget.EditText;
+import android.widget.TextView;
 import android.widget.SeekBar;
 
 public class UXBridge implements View.OnClickListener, SeekBar.OnSeekBarChangeListener,
-        AdapterView.OnItemSelectedListener, TextWatcher,
+        AdapterView.OnItemSelectedListener, TextWatcher, TextView.OnEditorActionListener,
         DialogInterface.OnClickListener, DialogInterface.OnCancelListener {
     private final int id;
     public UXBridge(int id) { this.id = id; }
     private static native void nativeFire(int id);
     private static native void nativeValue(int id, int value);
     private static native void nativeText(int id, String s);
+    private static native void nativeSubmit(int id);
 
     // buttons and toggles (a toggle's click reports its new state)
     @Override public void onClick(View v) {
@@ -50,6 +55,19 @@ public class UXBridge implements View.OnClickListener, SeekBar.OnSeekBarChangeLi
     @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) { }
     @Override public void onTextChanged(CharSequence s, int a, int b, int c) { }
     @Override public void afterTextChanged(Editable e) { nativeText(id, e.toString()); }
+    // Return / the soft keyboard's done key: "the line is done", not a character.  The key can
+    // arrive as a real ENTER key event (a hardware keyboard) or as the IME's action id (the soft
+    // keyboard), and the two never come together, so both are tested.
+    @Override public boolean onEditorAction(TextView v, int actionId, KeyEvent ev) {
+        boolean done = (ev != null && ev.getKeyCode() == KeyEvent.KEYCODE_ENTER
+                        && ev.getAction() == KeyEvent.ACTION_DOWN)
+                    || actionId == EditorInfo.IME_ACTION_DONE
+                    || actionId == EditorInfo.IME_ACTION_GO
+                    || actionId == EditorInfo.IME_ACTION_SEND
+                    || actionId == EditorInfo.IME_ACTION_SEARCH;
+        if (done) { nativeSubmit(id); return true; }
+        return false;
+    }
     // AlertDialog buttons (which: -1 positive, -2 negative, -3 neutral) and its
     // cancel (back / outside tap) — the modal alert's whole listener surface
     @Override public void onClick(DialogInterface d, int which) { nativeValue(id, which); }

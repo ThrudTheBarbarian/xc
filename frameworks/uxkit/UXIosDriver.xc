@@ -65,17 +65,21 @@ void ux_ios_seg_set_label(i32 handle, i32 node, i32 seg, u8* label);
 void ux_ios_seg_select(i32 handle, i32 node, i32 seg);
 void ux_ios_make_popup(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h);
 void ux_ios_set_field_hooks(pointer fn);
+void ux_ios_set_field_submit_hooks(pointer fn);
 void ux_ios_make_field(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, u8* buf, i32 cap, i32 secure);
 void ux_ios_update_field(i32 handle, i32 node);
 void ux_ios_popup_add_item(i32 handle, i32 node, u8* title);
 void ux_ios_popup_select(i32 handle, i32 node, i32 i);
 void ux_ios_set_entry(pointer fn);
+void ux_ios_set_turn_hook(pointer fn, i32 ms);
 void ux_ios_shell_run(void);
 void ux_ios_quit(i32 rc);
 void ux_ios_clip(i32 x, i32 y, i32 w, i32 h);
 void ux_ios_clip_end(void);
 i32 ux_ios_text_width(u8* s, i32 size);
 i32 ux_ios_text_width_font(u8* s, u8* family, i32 size, i32 bold, i32 italic);
+i32 ux_ios_text_width_weight(u8* s, u8* family, i32 size, i32 weight, i32 italic);
+i32 ux_ios_text_ascent(u8* family, i32 size, i32 weight, i32 italic);
 i32 ux_ios_now_ms(void);
 void ux_ios_now_utc(i32* out7);
 i32 ux_ios_local_offset_minutes(void);
@@ -207,6 +211,25 @@ void uxIosFieldChanged(i32 handle, i32 node)
         return;
         }
     f.fieldDidChange();
+    if (gApp != (UXApplication*)0)
+        {
+        gApp.displayIfNeeded();
+        }
+    }
+// Return in a native UITextField: the field's onSubmit.  The buffer is already synced (the
+// editing-changed path runs per keystroke), so this announces and nothing else.
+void uxIosFieldSubmitted(i32 handle, i32 node)
+    {
+    if (handle < (i32)0 || handle >= (i32)64 || node < (i32)0 || node >= (i32)256)
+        {
+        return;
+        }
+    UXTextField* f = (UXTextField* ?)gIosCtlPeer[handle * (i32)256 + node];
+    if (f == (UXTextField*)0)
+        {
+        return;
+        }
+    f.fieldDidSubmit();
     if (gApp != (UXApplication*)0)
         {
         gApp.displayIfNeeded();

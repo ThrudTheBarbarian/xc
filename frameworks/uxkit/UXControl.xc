@@ -378,6 +378,7 @@ class UXControl : UXView
     u8* place;                                   // placeholder prompt shown while empty (AppKit/Win32; GEM ignores it)
     bool secure;                                 // mask input as a password (AppKit/Win32; GEM shows plain text)
     callback onChange void(UXTextField* sender); // per-keystroke hook; never owns its receiver
+    callback onSubmit void(UXTextField* sender); // Return; "the line is done"; never owns its receiver
 
     void init(void)
         {
@@ -390,6 +391,7 @@ class UXControl : UXView
         place = (u8*)0;
         secure = false;
         onChange = (callback void(UXTextField * sender))0;
+        onSubmit = (callback void(UXTextField * sender))0;
         }
 
     void dealloc(void)
@@ -425,6 +427,15 @@ class UXControl : UXView
     void setOnChange(callback c void(UXTextField* sender))
         {
         onChange = c;
+        }
+
+    // "The line is done": called when Return is pressed in the field.  A command line, a search
+    // box and a login form all want it, and none of them wants to be told a CR was typed -- which
+    // is the difference between a client that has a text field in it and one whose field is an
+    // imitation (see fieldDidSubmit).
+    void setOnSubmit(callback c void(UXTextField* sender))
+        {
+        onSubmit = c;
         }
 
     // A grey prompt shown while the field is empty.  Set it before OR after attach.
@@ -466,6 +477,24 @@ class UXControl : UXView
         if (onChange)
             {
             onChange(self);
+            }
+        }
+
+    // The backend calls this when its native control reports Return (AppKit: controlTextDidEndEditing
+    // with a return movement; GTK: the entry's "activate"; iOS: editing-end-on-exit; Android: the
+    // IME's done action; Win32: a Return key aimed at the EDIT child, which DISCARDS it and so can
+    // never be seen as a character), and the neutral keyDown calls it directly where the toolkit's
+    // own editor is what sees the key (GEM, the synthetic Win32 path, headless AppKit, web).  One
+    // path, like fieldDidChange.
+    //
+    // Deliberately NOT an event-tap kind: the keystroke that caused it is already on the tap as
+    // UXEventKeyDown, so a recording holds everything a replay needs.  What the tap records is
+    // INPUT; a submit is a callback, like a button's action.
+    void fieldDidSubmit(void)
+        {
+        if (onSubmit)
+            {
+            onSubmit(self);
             }
         }
 
@@ -516,6 +545,15 @@ class UXControl : UXView
     // ---- the whole of "text editing" -----------------------------------------
     void keyDown(UXEvent* e)
         {
+        // Return ends the line, and only a field that asked to hear about it consumes it -- every
+        // other field keeps the old behaviour of passing the key up the chain (a window that binds
+        // Return itself still gets it).  Both CR and LF, because the backends disagree on which one
+        // a Return key is: GEM and Win32 arrive as 13, some keymaps as 10.
+        if (onSubmit != (callback void(UXTextField * sender))0 && (e.key == (u16)13 || e.key == (u16)10))
+            {
+            self.fieldDidSubmit();
+            return;
+            }
         i32 used = owner.editText(index, (i32)e.key, &caret, (i32)UXEditKey);
         if (used != (i32)0)
             {

@@ -38,6 +38,10 @@ static void* g_contentUd[UX_MAXW]; // an xtc object (not ObjC) — no bridging
 static int g_native = 0;
 static Class g_drawViewClass = 0;
 static NSBitmapImageRep* g_lastRep = 0;
+/* The rep the LAST GL grab wrote, so a harness can ask what the picture holds instead
+ * of trusting that the call returned.  A dump that is one flat colour is a blank dump,
+ * which is the failure a spike of this kind produces. */
+static NSBitmapImageRep* g_lastGrab = 0;
 static int g_interactive = 0;
 static int g_quit = 0;
 static id g_winDelegate = 0;
@@ -1112,6 +1116,39 @@ int ux_ak_window_subtitle(int handle, char* out, int cap)
     return 1;
     }
 
+// The title-bar icon.  A GEM window carries an icon SLICE that the AES draws (WF_ICON — the "proxy /
+// document icon"); macOS has no window-title image at all, but it has the PROXY ICON: the icon of the
+// document a window stands for, shown at the left of the title and driven by a file URL.  So a name
+// that is a path IS that document, and a bare theme slice name has no Cocoa counterpart — it is
+// cleared rather than guessed at, since a made-up URL would show a bogus generic document.
+void ux_ak_window_set_icon(int handle, const char* s)
+    {
+    if (!g_win[handle])
+        return;
+    if (!s || !s[0] || !strchr(s, '/'))
+        {
+        [g_win[handle] setRepresentedURL:nil];
+        return;
+        }
+    [g_win[handle] setRepresentedURL:[NSURL fileURLWithPath:[NSString stringWithUTF8String:s]]];
+    }
+// Read-back, so a test can assert the WINDOW shows it rather than that the call returned.
+int ux_ak_window_icon(int handle, char* out, int cap)
+    {
+    if (out && cap > 0)
+        out[0] = 0;
+    if (!g_win[handle] || !out || cap <= 0)
+        return 0;
+    NSURL* u = [g_win[handle] representedURL];
+    if (!u)
+        return 0;
+    NSString* p = [u path];
+    if (!p)
+        return 0;
+    snprintf(out, (size_t)cap, "%s", [p UTF8String]);
+    return 1;
+    }
+
 void ux_ak_window_invalidate(int handle)
     {
     NSView* v = g_view[handle];
@@ -1170,21 +1207,31 @@ void ux_ak_content_geometry(int handle, int* w, int* h)
     }
 
 // ---- drawing vocabulary (current NSGraphicsContext) -----------------------------------------
-void ux_ak_fill(int x, int y, int w, int h, int r, int g, int b)
+void ux_ak_fill(int x, int y, int w, int h, int r, int g, int b, int a)
     {
-    [[NSColor colorWithRed:r / 255.0 green:g / 255.0 blue:b / 255.0 alpha:1.0] setFill];
-    NSRectFill(NSMakeRect(x, y, w, h));
+    [[NSColor colorWithRed:r / 255.0 green:g / 255.0 blue:b / 255.0 alpha:a / 255.0] setFill];
+    /* SOURCE OVER, not NSRectFill: NSRectFill composites with COPY, which writes the fill
+     * colour straight in -- so a translucent rectangle came out solid.  Blending is the
+     * point of the alpha, and for an opaque colour source-over is the same pixels. */
+    NSRectFillUsingOperation(NSMakeRect(x, y, w, h), NSCompositingOperationSourceOver);
     }
-void ux_ak_text(const char* s, int x, int y, int r, int g, int b, int size)
+void ux_ak_clear(int x, int y, int w, int h)
+    {
+    /* CLEAR, not a fill: it takes the rect back to transparent whatever is under it, so a layer that
+     * composites over a map starts empty each frame.  A source-over fill at alpha 0 (the obvious
+     * stand-in) would paint nothing at all and leave last frame's ink in place. */
+    NSRectFillUsingOperation(NSMakeRect(x, y, w, h), NSCompositingOperationClear);
+    }
+void ux_ak_text(const char* s, int x, int y, int r, int g, int b, int a, int size)
     {
     NSFont* f = [NSFont systemFontOfSize:(size > 0 ? size : 12)];
-    NSDictionary* a = @{NSForegroundColorAttributeName :
+    NSDictionary* attr = @{NSForegroundColorAttributeName :
                             [NSColor colorWithRed:r / 255.0
                                             green:g / 255.0
                                              blue:b / 255.0
-                                            alpha:1.0],
+                                            alpha:a / 255.0],
                         NSFontAttributeName : f};
-    [[NSString stringWithUTF8String:s] drawAtPoint:NSMakePoint(x, y) withAttributes:a];
+    [[NSString stringWithUTF8String:s] drawAtPoint:NSMakePoint(x, y) withAttributes:attr];
     }
 // How wide a string renders in the UI font — what the toolkit breaks lines with.  Rounded UP: a
 // fractional width that rounds down puts a line one pixel over the measure and it wraps short.
@@ -1507,6 +1554,26 @@ void ux_ak_post_quit(void)
     {
     g_quit = 1;
     }
+// Which window a pulled mouse event was addressed to.  The INTERACTIVE path gets this for free (the
+// content view that got the press hands its own handle to the dispatch callback); the headless pump
+// has it too — the NSEvent says which window it is — so record it here rather than let the driver
+// fall back to "window 1" and route a second window's clicks into the first.
+static int g_lastMouseWin = 0;
+int ux_ak_last_mouse_win(void)
+    {
+    return g_lastMouseWin;
+    }
+static int ak_handle_of_window(NSWindow* w)
+    {
+    if (!w)
+        return 0;
+    for (int i = 1; i < UX_MAXW; i++)
+        {
+        if (g_win[i] == w)
+            return i;
+        }
+    return 0;
+    }
 // Headless: drive a resize through the neutral path (nextEvent returns kind 9) without a live drag.
 static int g_pendingResize = 0; // count of pending synthetic resizes
 static int g_pendingResizeHandle = 0;
@@ -1571,10 +1638,22 @@ int ux_ak_next_event(int timeoutMs, int* kind, int* x, int* y, int* key)
         *x = g_pendingResizeHandle;
         return 9;
         }
-    [[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode
-                             beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.02]];
+    // A frame clock turns this poll into the clock's own period: the deadline IS the wait, so a
+    // headless turn comes round when the app asked rather than on the toolkit's default poll.  The
+    // extra run-loop pass below stays with the default poll only -- with a deadline it would put
+    // its own wait in FRONT of the deadline and make a turn cost twice what was asked for.
+    double secs = 0.05;
+    if (timeoutMs > 0)
+        {
+        secs = (double)timeoutMs / 1000.0;
+        }
+    else
+        {
+        [[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode
+                                 beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.02]];
+        }
     NSEvent* e = [NSApp nextEventMatchingMask:NSEventMaskAny
-                                    untilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]
+                                    untilDate:[NSDate dateWithTimeIntervalSinceNow:secs]
                                        inMode:NSDefaultRunLoopMode
                                       dequeue:YES];
     if (!e)
@@ -1587,6 +1666,7 @@ int ux_ak_next_event(int timeoutMs, int* kind, int* x, int* y, int* key)
         {
         NSView* v = [[e window] contentView];
         NSPoint p = v ? [v convertPoint:[e locationInWindow] fromView:nil] : [e locationInWindow];
+        g_lastMouseWin = ak_handle_of_window([e window]);
         *kind = 1;
         *x = (int)p.x;
         *y = (int)p.y;
@@ -2116,6 +2196,14 @@ void ux_ak_set_field_hooks(void* changed)
     {
     g_field_changed = (void (*)(int, int))changed;
     }
+// The same delegate's other half: Return.  controlTextDidEndEditing fires for every way a field
+// can lose the focus, so the movement in the notification's userInfo is what says whether the key
+// was Return; anything else (a Tab, a click elsewhere, the window closing) is not a submit.
+static void (*g_field_submit)(int, int) = 0; // -> the neutral field's onSubmit (handle, node)
+void ux_ak_set_field_submit_hooks(void* submitted)
+    {
+    g_field_submit = (void (*)(int, int))submitted;
+    }
 static void ak_field_changed(__unsafe_unretained id self, SEL _cmd, __unsafe_unretained id note)
     {
     NSTextField* tf = [(NSNotification*)note object];
@@ -2137,12 +2225,44 @@ static void ak_field_changed(__unsafe_unretained id self, SEL _cmd, __unsafe_unr
     if (g_field_changed)
         g_field_changed(handle, node); // fire the neutral field's onChange
     }
+// Return, as opposed to any other way a field gives up the focus.  AppKit reports the movement
+// that ended editing in the notification's userInfo (the key is the literal string, the value the
+// movement); a Return is NSTextMovementReturn, and a Tab, a click elsewhere or the window closing
+// is not a submit.
+static void ak_field_end_editing(__unsafe_unretained id self, SEL _cmd, __unsafe_unretained id note)
+    {
+    NSNumber* mv = [(NSNotification*)note userInfo][@"NSTextMovement"];
+    if (!mv || [mv integerValue] != NSTextMovementReturn)
+        return;
+    NSTextField* tf = [(NSNotification*)note object];
+    int tag = (int)[tf tag], handle = tag / 1000, node = tag % 1000;
+    if (g_field_submit)
+        g_field_submit(handle, node); // fire the neutral field's onSubmit
+    }
+/* The rigs' editing-end: post the notification the text system posts, carrying the movement it
+ * would carry.  This is how the GATE reaches the delegate path at all -- a posted key event is
+ * dequeued by the driver before AppKit can route it to the field, so the neutral key path is what
+ * a posted Return exercises, and this is the other one.  movement is an NSTextMovement:
+ * NSTextMovementReturn (0x10) is a submit, NSTextMovementTab (0x11) and the rest are not. */
+void ux_ak_test_end_editing(int handle, int node, int movement)
+    {
+    if (node < 0 || node >= 256)
+        return;
+    NSTextField* tf = (NSTextField*)g_ctl[handle][node];
+    if (!tf)
+        return;
+    [[NSNotificationCenter defaultCenter]
+        postNotificationName:NSControlTextDidEndEditingNotification
+                      object:tf
+                    userInfo:@{@"NSTextMovement" : @(movement)}];
+    }
 static id ak_field_delegate(void)
     {
     if (g_field_delegate)
         return g_field_delegate;
     Class c = objc_allocateClassPair([NSObject class], "UXFieldDelegate", 0);
     class_addMethod(c, sel_registerName("controlTextDidChange:"), (IMP)ak_field_changed, "v@:@");
+    class_addMethod(c, sel_registerName("controlTextDidEndEditing:"), (IMP)ak_field_end_editing, "v@:@");
     objc_registerClassPair(c);
     g_field_delegate = [[c alloc] init];
     return g_field_delegate;
@@ -3236,4 +3356,14 @@ int ux_ak_pixel(int handle, int x, int y)
     int G = (int)([c greenComponent] * 255 + 0.5);
     int B = (int)([c blueComponent] * 255 + 0.5);
     return (R << 16) | (G << 8) | B;
+    }
+// The alpha at a pixel, on its own.  ux_ak_pixel drops it (a cleared pixel and a black one both read
+// as 0,0,0 through the components), so a test that has to tell "emptied" from "painted black" asks
+// this instead.
+int ux_ak_pixel_alpha(int handle, int x, int y)
+    {
+    if (!g_lastRep)
+        return -1;
+    NSColor* c = [g_lastRep colorAtX:x y:y];
+    return (int)([c alphaComponent] * 255 + 0.5);
     }

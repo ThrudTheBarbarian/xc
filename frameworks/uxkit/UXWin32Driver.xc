@@ -1052,6 +1052,21 @@ class UXWin32Driver : Object<UXViewDriver>
         hc.lpszMenuName = (pointer)0;
         hc.lpszClassName = (pointer) "UXShield32";
         RegisterClassA((pointer)&hc);
+        // The GL surface class.  CS_OWNDC is the point of it: the window gets a device
+        // context of its own, which is what makes the pixel format chosen for it stick.
+        WNDCLASSA gc;
+        gc.style = (u32)CS_OWNDC;
+        gc._p0 = (u32)0;
+        gc.lpfnWndProc = &UXGl32Proc;
+        gc.cbClsExtra = (i32)0;
+        gc.cbWndExtra = (i32)0;
+        gc.hInstance = gW32Inst;
+        gc.hIcon = (pointer)0;
+        gc.hCursor = (pointer)0;
+        gc.hbrBackground = (pointer)0; // no brush: nothing is ever erased behind the swap
+        gc.lpszMenuName = (pointer)0;
+        gc.lpszClassName = (pointer) "UXGl32";
+        RegisterClassA((pointer)&gc);
         gW32Font = GetStockObject((i32)DEFAULT_GUI_FONT); // the OS UI font, for every native control
         INITCOMMONCONTROLSEX icc;
         icc.dwSize = (u32)8;
@@ -1417,7 +1432,8 @@ class UXWin32Driver : Object<UXViewDriver>
             n = n + (i32)1;
             }
         i32 h = (i32)0 - (size > (i32)0 ? size : (i32)12);
-        pointer fnt = CreateFontA(h, (i32)0, (i32)0, (i32)0, bold ? (i32)700 : (i32)400,
+        i32 w = weight > (i32)0 ? weight : (i32)400;
+        pointer fnt = CreateFontA(h, (i32)0, (i32)0, (i32)0, w,
                                   italic ? (u32)1 : (u32)0, (u32)0, (u32)0, (u32)1, (u32)0, (u32)0, (u32)0, (u32)0, family);
         pointer old = SelectObject(gW32MeasureDC, fnt);
         SIZE sz;
@@ -3356,6 +3372,25 @@ class UXWin32Driver : Object<UXViewDriver>
         {
         return self.handleOf(hwnd) != (i32)0 ? (i32)1 : (i32)0;
         }
+    // Does this HWND's window class name the standard single-line edit control?  The class is
+    // spelled "Edit", not "EDIT": the API that REGISTERS it (CreateWindowExA) takes the name
+    // case-insensitively, which is how comparing GetClassNameA's answer against "EDIT" looks right
+    // and matches nothing.  Fold the four letters to upper case first.
+    i32 isEditClass(pointer hwnd)
+        {
+        u8 cn[16];
+        if (GetClassNameA(hwnd, (pointer)&cn[0], (i32)16) <= (i32)0)
+            {
+            return (i32)0;
+            }
+        if (cn[0] == (u8)'e') { cn[0] = (u8)'E'; }
+        if (cn[1] == (u8)'d') { cn[1] = (u8)'D'; }
+        if (cn[2] == (u8)'i') { cn[2] = (u8)'I'; }
+        if (cn[3] == (u8)'t') { cn[3] = (u8)'T'; }
+        return (cn[0] == (u8)'E' && cn[1] == (u8)'D' && cn[2] == (u8)'I' && cn[3] == (u8)'T' && cn[4] == (u8)0)
+                   ? (i32)1
+                   : (i32)0;
+        }
     i32 handleOf(pointer hwnd)
         {
         for (i32 i = (i32)1; i < gW32NextHandle; i = i + (i32)1)
@@ -3372,10 +3407,29 @@ class UXWin32Driver : Object<UXViewDriver>
         ev.kind = (u8)UXEventNone;
         ev.handle = (i32)0;
         MSG msg;
-        if (GetMessageA((pointer)&msg, (pointer)0, (u32)0, (u32)0) <= (i32)0)
+        // With a frame clock the wait must END on its own: wait for input OR the deadline, and
+        // return an empty turn when the deadline beats it.  GetMessageA (below) blocks until there
+        // IS a message, which would keep the app's turn from ever arriving.  A zero timeout keeps
+        // the old block-until-there-is-one behaviour, so nothing changes for a client without a
+        // clock.
+        if (timeoutMs > (i32)0)
             {
-            ev.kind = (u8)UXEventClose;
-            return; // WM_QUIT -> stop the loop
+            if (MsgWaitForMultipleObjects((u32)0, (pointer)0, (i32)0, (u32)timeoutMs, (u32)QS_ALLINPUT) == (u32)WAIT_TIMEOUT)
+                {
+                return; // empty turn: the clock fired, no input
+                }
+            if (PeekMessageA((pointer)&msg, (pointer)0, (u32)0, (u32)0, (u32)PM_REMOVE) == (i32)0)
+                {
+                return; // a message was consumed by another thread's pump; turn is empty
+                }
+            }
+        else
+            {
+            if (GetMessageA((pointer)&msg, (pointer)0, (u32)0, (u32)0) <= (i32)0)
+                {
+                ev.kind = (u8)UXEventClose;
+                return; // WM_QUIT -> stop the loop
+                }
             }
         // A click or keystroke aimed at a native CHILD control belongs to the OS: it must be
         // dispatched so the button fires (-> WM_COMMAND) and the EDIT focuses + edits.  ONLY the
@@ -3397,6 +3451,25 @@ class UXWin32Driver : Object<UXViewDriver>
             ev.kind = (u8)UXEventKeyDown;
             ev.key = (u16)((u32)msg.wParam & (u32)$FF); // ASCII byte
             return;
+            }
+        // Return aimed at a native EDIT child: a single-line EDIT DISCARDS the key (and beeps),
+        // so the field's onSubmit would never fire from a real keystroke -- only from the
+        // synthetic WM_CHAR path above.  The class name is checked before the userdata is read as a
+        // W32Field, because a BUTTON's userdata is an UXControl and reading the wrong one is how
+        // the EN_CHANGE comment below says this crashes.
+        if (msg.message == (u32)WM_KEYDOWN && onWindow == (i32)0 && (u32)msg.wParam == (u32)VK_RETURN
+            && self.isEditClass(msg.hwnd) != (i32)0)
+            {
+            W32Field* wf = (W32Field*)GetWindowLongPtrA(msg.hwnd, (i32)GWLP_USERDATA);
+            if (wf != (W32Field*)0 && wf.field != (pointer)0)
+                {
+                ((UXTextField*)wf.field).fieldDidSubmit();
+                if (gApp != (UXApplication*)0)
+                    {
+                    gApp.displayIfNeeded(); // a submit may change what the app draws
+                    }
+                return; // consumed: the field owns its Return
+                }
             }
         if (msg.message == (u32)WM_CLOSE && onWindow != (i32)0)
             {

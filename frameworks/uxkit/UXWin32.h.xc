@@ -67,10 +67,21 @@ i32 ShowWindow(pointer hwnd, i32 cmd);
 i32 PostMessageA(pointer hwnd, u32 msg, pointer wp, pointer lp);
 pointer GetDlgItem(pointer hwnd, i32 id); // a child by its control id (W32_CTRL_ID_BASE + node index)
 pointer GetParent(pointer hwnd);          // a child's owning window (the scroll container's canvas)
+// A child's class name ("EDIT", "BUTTON", …), so the message pump can tell which kind of control a
+// keystroke is aimed at without trusting userdata it has not identified yet.
+i32 GetClassNameA(pointer hwnd, pointer buf, i32 cap);
+// A direct child by class name: the tests' way to the native EDIT, to aim a real key at it.
+pointer FindWindowExA(pointer parent, pointer after, pointer cls, pointer title);
 i32 DestroyWindow(pointer hwnd);
 void PostQuitMessage(i32 code);
 i32 GetMessageA(pointer msg, pointer hwnd, u32 mn, u32 mx);
 i32 PeekMessageA(pointer msg, pointer hwnd, u32 mn, u32 mx, u32 remove);
+// The timed wait nextEvent uses when a frame clock is set: wait for input OR a deadline, so a
+// turn comes round with no input.  No handles and QS_ALLINPUT means "wake on any queued
+// message"; WAIT_TIMEOUT ($102) is the deadline arriving.
+u32 MsgWaitForMultipleObjects(u32 count, pointer handles, i32 waitAll, u32 ms, u32 wakeMask);
+#define WAIT_TIMEOUT $102
+#define QS_ALLINPUT $04FF
 i32 TranslateMessage(pointer msg);
 pointer DispatchMessageA(pointer msg);
 pointer SetWindowLongPtrA(pointer hwnd, i32 idx, pointer v);
@@ -115,6 +126,8 @@ i32 DrawEdge(pointer hdc, pointer r, u32 edge, u32 flags);
 #define BF_RECT $000F     // all four sides
 pointer SelectObject(pointer hdc, pointer o);
 pointer GetStockObject(i32 which);
+#define WHITE_BRUSH 0
+#define BLACK_BRUSH 4
 // A sized font for custom-drawn text (drawText's size argument).  Negative cHeight requests a character
 // (em) height; the rest are defaults (weight 400, no italic, default charset/precision/quality/pitch,
 // empty face = let GDI pick).  Select it, draw, then restore + DeleteObject.
@@ -195,6 +208,7 @@ pointer GetProcAddress(pointer mod, u8* name);
 #define WM_ERASEBKGND $0014
 #define WM_LBUTTONDOWN $0201
 #define WM_KEYDOWN $0100
+#define VK_RETURN $0D
 #define WM_CHAR $0102
 #define PM_REMOVE $0001
 #define WM_COMMAND $0111
@@ -405,6 +419,36 @@ pointer CreateCompatibleDC(pointer hdc);
 // Measure a string in the DC's current font: fills a SIZE {cx,cy}.  The toolkit needs this to break
 // lines in the font it will actually draw with, outside any WM_PAINT.
 i32 GetTextExtentPoint32A(pointer hdc, pointer s, i32 n, pointer size);
+// Font metrics for the selected font: GetTextMetricsA fills a TEXTMETRICA, whose first four LONGs are
+// the cell height, the ASCENT (above the baseline), the descent and the internal leading.  TextOutA
+// places y at the top of the cell, so the ascent is how far below a drawText's y the baseline sits —
+// the number a caller with a baseline needs.  The rest of the struct is declared because GDI writes
+// it: a shorter one would be overwritten and the fields here are read back by the gate
+// (ascent + descent == height, height - internal leading ~= the requested em size).
+i32 GetTextMetricsA(pointer hdc, pointer metrics);
+struct TEXTMETRICA
+    {
+    i32 tmHeight;
+    i32 tmAscent;
+    i32 tmDescent;
+    i32 tmInternalLeading;
+    i32 tmExternalLeading;
+    i32 tmAveCharWidth;
+    i32 tmMaxCharWidth;
+    i32 tmWeight;
+    i32 tmOverhang;
+    i32 tmDigitizedAspectX;
+    i32 tmDigitizedAspectY;
+    u8 tmFirstChar;
+    u8 tmLastChar;
+    u8 tmDefaultChar;
+    u8 tmBreakChar;
+    u8 tmItalic;
+    u8 tmUnderlined;
+    u8 tmStruckOut;
+    u8 tmPitchAndFamily;
+    u8 tmCharSet;
+    }
 i32 DeleteDC(pointer hdc);
 pointer CreateCompatibleBitmap(pointer hdc, i32 w, i32 h);
 u32 GetPixel(pointer hdc, i32 x, i32 y); // read a pixel back (COLORREF 0x00BBGGRR) — offscreen tests
@@ -606,6 +650,8 @@ i32 PolyBezierTo(pointer hdc, pointer pts, u32 n); // 3 points per cubic, from t
 #define PS_ENDCAP_SQUARE $00000100
 #define PS_ENDCAP_FLAT $00000200
 #define PS_JOIN_ROUND $00000000
+#define PS_JOIN_BEVEL $00001000
+#define PS_JOIN_MITER $00002000
 #define BS_SOLID 0
 // AppendMenu / Check / Enable flags
 #define MF_STRING $0000

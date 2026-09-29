@@ -26,6 +26,11 @@ class UXCanvasGraphics : Object<UXGraphics>
         {
         return true;
         }
+    // Canvas2D composites every fill and stroke source-over, so alpha blends here.
+    bool blendsAlpha(void)
+        {
+        return true;
+        }
 
     // The VDI pen indices the toolkit draws with, as RGB — the same table the
     // GDI driver keeps (penColor), split per channel for the import signature.
@@ -102,12 +107,21 @@ class UXCanvasGraphics : Object<UXGraphics>
     void fillRect(UXRect r, i32 pen)
         {
         ux_fill_rect((i32)(origin.x + r.x), (i32)(origin.y + r.y), (i32)r.w, (i32)r.h,
-                     self.penR(pen), self.penG(pen), self.penB(pen));
+                     self.penR(pen), self.penG(pen), self.penB(pen), (i32)255);
         }
     void fillRectRGB(UXRect r, i32 red, i32 green, i32 blue)
         {
+        self.fillRectRGBA(r, red, green, blue, (i32)255);
+        }
+    void fillRectRGBA(UXRect r, i32 red, i32 green, i32 blue, i32 alpha)
+        {
         ux_fill_rect((i32)(origin.x + r.x), (i32)(origin.y + r.y), (i32)r.w, (i32)r.h,
-                     red, green, blue);
+                     red, green, blue, alpha);
+        }
+    // Canvas2D's own clearRect.
+    void clearRect(UXRect r)
+        {
+        ux_clear_rect((i32)(origin.x + r.x), (i32)(origin.y + r.y), (i32)r.w, (i32)r.h);
         }
     void drawTheme(u8* slice, UXRect r)
         {
@@ -116,13 +130,24 @@ class UXCanvasGraphics : Object<UXGraphics>
     void drawText(u8* s, i16 x, i16 y, i32 pen, i32 size)
         {
         ux_draw_text(s, (i32)(origin.x + x), (i32)(origin.y + y), (u8*)"", size, (i32)0, (i32)0,
-                     self.penR(pen), self.penG(pen), self.penB(pen));
+                     self.penR(pen), self.penG(pen), self.penB(pen), (i32)255);
+        }
+    void drawTextRGBA(u8* s, i16 x, i16 y, i32 red, i32 green, i32 blue, i32 alpha, i32 size)
+        {
+        ux_draw_text(s, (i32)(origin.x + x), (i32)(origin.y + y), (u8*)"", size, (i32)0, (i32)0,
+                     red, green, blue, alpha);
         }
     void drawTextFont(u8* s, i16 x, i16 y, i32 pen, u8* family, i32 size, bool bold, bool italic)
         {
         ux_draw_text(s, (i32)(origin.x + x), (i32)(origin.y + y), family, size,
                      bold ? (i32)1 : (i32)0, italic ? (i32)1 : (i32)0,
-                     self.penR(pen), self.penG(pen), self.penB(pen));
+                     self.penR(pen), self.penG(pen), self.penB(pen), (i32)255);
+        }
+    void drawTextFontRGBA(u8* s, i16 x, i16 y, u8* family, i32 size, i32 weight, bool italic,
+                          i32 red, i32 green, i32 blue, i32 alpha)
+        {
+        ux_draw_text_weight(s, (i32)(origin.x + x), (i32)(origin.y + y), family, size, weight,
+                            italic ? (i32)1 : (i32)0, red, green, blue, alpha);
         }
     void fillTriangle(i16 x0, i16 y0, i16 x1, i16 y1, i16 x2, i16 y2, i32 pen)
         {
@@ -150,13 +175,17 @@ class UXCanvasGraphics : Object<UXGraphics>
     // the import reads i16 pairs straight out of linear memory, one crossing per shape.
     void fillPolygon(i16* xy, i32 n, i32 pen)
         {
-        self.polyRGB(xy, n, self.penR(pen), self.penG(pen), self.penB(pen));
+        self.polyRGBA(xy, n, self.penR(pen), self.penG(pen), self.penB(pen), (i32)255);
         }
     void fillPolygonRGB(i16* xy, i32 n, i32 red, i32 green, i32 blue)
         {
-        self.polyRGB(xy, n, red, green, blue);
+        self.polyRGBA(xy, n, red, green, blue, (i32)255);
         }
-    void polyRGB(i16* xy, i32 n, i32 red, i32 green, i32 blue)
+    void fillPolygonRGBA(i16* xy, i32 n, i32 red, i32 green, i32 blue, i32 alpha)
+        {
+        self.polyRGBA(xy, n, red, green, blue, alpha);
+        }
+    void polyRGBA(i16* xy, i32 n, i32 red, i32 green, i32 blue, i32 alpha)
         {
         if (n < (i32)3)
             {
@@ -173,7 +202,7 @@ class UXCanvasGraphics : Object<UXGraphics>
             abs[i * (i32)2] = (i16)(origin.x + xy[i * (i32)2]);
             abs[i * (i32)2 + (i32)1] = (i16)(origin.y + xy[i * (i32)2 + (i32)1]);
             }
-        ux_fill_poly(&abs[0], n, red, green, blue);
+        ux_fill_poly(&abs[0], n, red, green, blue, alpha);
         }
 
     // Canvas2D strokes real cubics with width, round joins and caps — the same

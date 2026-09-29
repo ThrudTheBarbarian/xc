@@ -51,6 +51,11 @@ class UXCocoaGraphics : Object<UXGraphics>
         {
         return false;
         }
+    // CoreGraphics and NSColor blend: a fill or stroke at alpha 200 blends with what is under it.
+    bool blendsAlpha(void)
+        {
+        return true;
+        }
 
     // A VDI pen index -> RGB (mirror of UXGdiGraphics.penColor).  Enough for the toolkit's palette.
     void penRGB(i32 pen, i32* r, i32* g, i32* b)
@@ -106,12 +111,23 @@ class UXCocoaGraphics : Object<UXGraphics>
         i32 cg = (i32)0;
         i32 cb = (i32)0;
         self.penRGB(pen, &cr, &cg, &cb);
-        ux_ak_fill((i32)(origin.x + r.x), (i32)(origin.y + r.y), (i32)r.w, (i32)r.h, cr, cg, cb);
+        ux_ak_fill((i32)(origin.x + r.x), (i32)(origin.y + r.y), (i32)r.w, (i32)r.h, cr, cg, cb, (i32)255);
         }
 
     void fillRectRGB(UXRect r, i32 red, i32 green, i32 blue)
         {
-        ux_ak_fill((i32)(origin.x + r.x), (i32)(origin.y + r.y), (i32)r.w, (i32)r.h, red, green, blue);
+        self.fillRectRGBA(r, red, green, blue, (i32)255);
+        }
+    void fillRectRGBA(UXRect r, i32 red, i32 green, i32 blue, i32 alpha)
+        {
+        ux_ak_fill((i32)(origin.x + r.x), (i32)(origin.y + r.y), (i32)r.w, (i32)r.h,
+                   red, green, blue, alpha);
+        }
+    // A real erase: NSCompositingOperationClear takes the rect back to transparent regardless of what
+    // is under it, which is what a layer over a map needs at the top of every frame.
+    void clearRect(UXRect r)
+        {
+        ux_ak_clear((i32)(origin.x + r.x), (i32)(origin.y + r.y), (i32)r.w, (i32)r.h);
         }
 
     // No native 9-slice in the minimal driver — a filled grey box stands in for themed widget art.
@@ -126,7 +142,11 @@ class UXCocoaGraphics : Object<UXGraphics>
         i32 cg = (i32)0;
         i32 cb = (i32)0;
         self.penRGB(pen, &cr, &cg, &cb);
-        ux_ak_text(s, (i32)(origin.x + x), (i32)(origin.y + y), cr, cg, cb, size);
+        ux_ak_text(s, (i32)(origin.x + x), (i32)(origin.y + y), cr, cg, cb, (i32)255, size);
+        }
+    void drawTextRGBA(u8* s, i16 x, i16 y, i32 red, i32 green, i32 blue, i32 alpha, i32 size)
+        {
+        ux_ak_text(s, (i32)(origin.x + x), (i32)(origin.y + y), red, green, blue, alpha, size);
         }
     void drawTextFont(u8* s, i16 x, i16 y, i32 pen, u8* family, i32 size, bool bold, bool italic)
         {
@@ -163,13 +183,17 @@ class UXCocoaGraphics : Object<UXGraphics>
         i32 cg = (i32)0;
         i32 cb = (i32)0;
         self.penRGB(pen, &cr, &cg, &cb);
-        self.polyRGB(xy, n, cr, cg, cb);
+        self.polyRGBA(xy, n, cr, cg, cb, (i32)255);
         }
     void fillPolygonRGB(i16* xy, i32 n, i32 red, i32 green, i32 blue)
         {
-        self.polyRGB(xy, n, red, green, blue);
+        self.polyRGBA(xy, n, red, green, blue, (i32)255);
         }
-    void polyRGB(i16* xy, i32 n, i32 r, i32 g, i32 b)
+    void fillPolygonRGBA(i16* xy, i32 n, i32 red, i32 green, i32 blue, i32 alpha)
+        {
+        self.polyRGBA(xy, n, red, green, blue, alpha);
+        }
+    void polyRGBA(i16* xy, i32 n, i32 r, i32 g, i32 b, i32 a)
         {
         if (n < (i32)3)
             {
@@ -185,7 +209,7 @@ class UXCocoaGraphics : Object<UXGraphics>
             pts[i * (i32)2] = (i16)(origin.x + xy[i * (i32)2]);
             pts[i * (i32)2 + (i32)1] = (i16)(origin.y + xy[i * (i32)2 + (i32)1]);
             }
-        ux_ak_poly(&pts[(i32)0], n, r, g, b);
+        ux_ak_poly(&pts[(i32)0], n, r, g, b, a);
         }
 
     // Cocoa strokes paths itself — that is why this backend answers true.  The op run's coordinates

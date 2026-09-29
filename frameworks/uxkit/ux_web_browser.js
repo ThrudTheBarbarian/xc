@@ -76,12 +76,18 @@
   };
   const wi32 = (p, v) => { I32()[(p >>> 0) >> 2] = v; };
   const rgb = (r, g, b) => `rgb(${r},${g},${b})`;
+  // alpha is the straight 0..255 value; a == 255 renders as the opaque rgb() form.
+  const rgba = (r, g, b, a) => (a >= 255 ? rgb(r, g, b) : `rgba(${r},${g},${b},${a / 255})`);
   const ox = () => (wins.get(target)?.x ?? 0);
   const oy = () => (wins.get(target)?.y ?? 0);
   const font = (fam, size, bold, italic) =>
     `${italic ? 'italic ' : ''}${bold ? 'bold ' : ''}${size > 0 ? size : 13}px ${fam && fam.length ? fam : 'system-ui'}`;
+  // The CSS font shorthand takes a numeric weight straight (400 normal, 600 semibold), so a CSS
+  // weight passes through unmodified and the browser resolves the nearest face the family has.
+  const fontW = (fam, size, weight, italic) =>
+    `${italic ? 'italic ' : ''}${weight > 0 ? weight : 400} ${size > 0 ? size : 13}px ${fam && fam.length ? fam : 'system-ui'}`;
 
-  globalThis.xccImports = Object.assign(globalThis.xccImports || {}, { env: Object.assign((globalThis.xccImports || {}).env || {}, {
+  const env = Object.assign((globalThis.xccImports || {}).env || {}, {
     ux_boot: (pw, ph) => { wi32(pw, canvas.width); wi32(ph, canvas.height); return 1; },
     ux_win_create: (x, y, w, h) => { const hh = nextH++; wins.set(hh, { x, y, w, h }); return hh; },
     ux_win_open: (h, x, y, w, hh) => { const s = wins.get(h); if (s) { s.x = x; s.y = y; s.w = w; s.h = hh; front = h; } },
@@ -94,11 +100,16 @@
     ux_gfx_target: (h) => {
       target = h;
       const s = wins.get(h);
-      if (s) { ctx.fillStyle = '#ffffff'; ctx.fillRect(s.x, s.y, s.w, s.h); }
+      // A window with a GL surface clears to TRANSPARENT, not white, so the map
+      // canvas below shows through and the toolkit's 2D composites over it.  A
+      // window without one paints the opaque white backdrop it always did.
+      if (s && s.hasGl) ctx.clearRect(s.x, s.y, s.w, s.h);
+      else if (s) { ctx.fillStyle = '#ffffff'; ctx.fillRect(s.x, s.y, s.w, s.h); }
     },
     ux_clip: (x, y, w, h) => { ctx.save(); ctx.beginPath(); ctx.rect(ox() + x, oy() + y, w, h); ctx.clip(); },
     ux_clip_end: () => { ctx.restore(); },
-    ux_fill_rect: (x, y, w, h, r, g, b) => { ctx.fillStyle = rgb(r, g, b); ctx.fillRect(ox() + x, oy() + y, w, h); },
+    ux_fill_rect: (x, y, w, h, r, g, b, a) => { ctx.fillStyle = rgba(r, g, b, a); ctx.fillRect(ox() + x, oy() + y, w, h); },
+    ux_clear_rect: (x, y, w, h) => { ctx.clearRect(ox() + x, oy() + y, w, h); },
     ux_fill_circle: (cx, cy, rad, r, g, b) => {
       ctx.fillStyle = rgb(r, g, b);
       ctx.beginPath(); ctx.arc(ox() + cx, oy() + cy, rad, 0, Math.PI * 2); ctx.fill();
@@ -149,9 +160,15 @@
       }
       ctx.stroke();
     },
-    ux_draw_text: (sp, x, y, famp, size, bold, italic, r, g, b) => {
-      ctx.fillStyle = rgb(r, g, b);
+    ux_draw_text: (sp, x, y, famp, size, bold, italic, r, g, b, a) => {
+      ctx.fillStyle = rgba(r, g, b, a);
       ctx.font = font(cstr(famp), size, bold, italic);
+      ctx.textBaseline = 'top';
+      ctx.fillText(cstr(sp), ox() + x, oy() + y);
+    },
+    ux_draw_text_weight: (sp, x, y, famp, size, weight, italic, r, g, b, a) => {
+      ctx.fillStyle = rgba(r, g, b, a);
+      ctx.font = fontW(cstr(famp), size, weight, italic);
       ctx.textBaseline = 'top';
       ctx.fillText(cstr(sp), ox() + x, oy() + y);
     },

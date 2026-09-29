@@ -72,6 +72,20 @@ protocol UXGraphics
     // UXPainter only ever hands over convex pieces, so the difference never shows.
     void fillPolygon(i16 * xy, i32 n, i32 pen);
     void fillPolygonRGB(i16 * xy, i32 n, i32 red, i32 green, i32 blue);
+    void fillPolygonRGBA(i16 * xy, i32 n, i32 red, i32 green, i32 blue, i32 alpha);
+
+    // ---- alpha --------------------------------------------------------------------------------
+    // The RGBA family above is the RGB family with a fourth component: alpha, 0..255, straight (not
+    // premultiplied), where 255 is what the RGB form draws.  It is what the map's ink needs — a
+    // coastline at 0.92, a border glow at 0.12, 0.28 and 0.75 — and it keeps the two-dimensional
+    // layer able to draw it without moving the ink into the GL layer as geometry.
+    //
+    // NOT EVERY BACKEND BLENDS, and this says which.  GEM draws hard VDI pixels into a palette and
+    // has no compositing; GDI fills and strokes opaque and would need an offscreen DIB per shape to
+    // do better.  Those two answer false and DRAW THE COLOUR OPAQUE — a shape that is meant to be
+    // 12% still covers what is under it.  Ask before relying on alpha: a layer that cannot blend
+    // should be told so rather than quietly draw at 1.0.
+    bool blendsAlpha(void);
 
     // ---- native stroking ------------------------------------------------------------------------
     // True where the BACKEND can stroke a path itself: AppKit (NSBezierPath + setLineWidth:) and GDI

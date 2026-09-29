@@ -45,6 +45,16 @@ i32 ux_userdraw(pointer tree, i32 obj, pointer ud)
         return (i32)0;
         }
 
+    // A view that OWNS A GL CONTEXT is rendered by GL, not by us: the two are alternative
+    // renderers and never both.  Note the question is ownership and not kind — a backend
+    // with no GL leaves the context null, so the same view draws its software fallback
+    // through drawRect and has a picture on every backend, which is what makes a GL client
+    // testable on a box with no display.
+    if (v.ownsGL())
+        {
+        return (i32)0;
+        }
+
     UXRect abs = vt.absoluteFrame((u16)obj);
 
     // The VDI would clip our drawing anyway — but it cannot stop us DOING it.  A view
@@ -152,6 +162,7 @@ class UXWindow : UXResponder
         content.setNextResponder(self); // the chain ends at the window
 
         handle = gDriver.windowCreate((i32)f.x, (i32)f.y, (i32)f.w, (i32)f.h);
+        tree.winHandle = handle; // so the tree can realize native objects on its own
         self.setTitle(title);
         gDriver.windowSetContent(handle, (pointer)&ux_window_draw, (pointer)self);
         gDriver.windowOpen(handle, (i32)f.x, (i32)f.y, (i32)f.w, (i32)f.h);
@@ -172,6 +183,7 @@ class UXWindow : UXResponder
             }
 
         handle = gDriver.windowCreate((i32)f.x, (i32)f.y, (i32)f.w, (i32)f.h);
+        tree.winHandle = handle;
         self.setTitle(title);
         gDriver.windowSetContent(handle, (pointer)&ux_window_draw, (pointer)self);
         gDriver.windowOpen(handle, (i32)f.x, (i32)f.y, (i32)f.w, (i32)f.h);
@@ -350,6 +362,7 @@ class UXWindow : UXResponder
             }
         gDriver.windowDestroy(handle);
         handle = (i32)0;
+        tree.winHandle = (i32)0; // the surface a GL view realized is gone with the window
         }
 
     // A window dropped without an explicit close must still release its native object — the

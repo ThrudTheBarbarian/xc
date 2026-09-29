@@ -221,6 +221,23 @@ fills.
 void fillRectRGB(UXRect r, i32 red, i32 green, i32 blue)
 ```
 
+### fillRectRGBA
+
+```c
+void fillRectRGBA(UXRect r, i32 red, i32 green, i32 blue, i32 alpha)
+```
+
+[`fillRectRGB`](#fillrectrgb) with an alpha. See [Alpha](#alpha) and
+[`blendsAlpha`](#blendsalpha).
+
+### clearRect
+
+```c
+void clearRect(UXRect r)
+```
+
+Make the rect carry nothing. See [Emptying a rect](#emptying-a-rect).
+
 ### fillPolygon
 
 ```c
@@ -245,6 +262,15 @@ difference never shows.
 ```c
 void fillPolygonRGB(i16* xy, i32 n, i32 red, i32 green, i32 blue)
 ```
+
+### fillPolygonRGBA
+
+```c
+void fillPolygonRGBA(i16* xy, i32 n, i32 red, i32 green, i32 blue, i32 alpha)
+```
+
+[`fillPolygonRGB`](#fillpolygonrgb) with an alpha. The polygon must still be
+convex.
 
 ### fillTriangle
 
@@ -277,6 +303,14 @@ void drawText(u8* s, i16 x, i16 y, i32 pen, i32 size)
 ```
 
 Text in the UI font at `size`; `0` means the platform default.
+
+### drawTextRGBA
+
+```c
+void drawTextRGBA(u8* s, i16 x, i16 y, i32 red, i32 green, i32 blue, i32 alpha, i32 size)
+```
+
+[`drawText`](#drawtext) in true colour with an alpha.
 
 ### drawTextFont
 

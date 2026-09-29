@@ -262,8 +262,14 @@ appkit-memgate: ; XCC=$(XCC) sh run_appkit_memgate.sh
 
 # ---- appkit-field — live text editing native on macOS ----------------------------
 # A field form driven through the neutral run loop: posted key-downs travel driver.nextEvent ->
-# dispatchKey -> UXTextField.keyDown -> driver.editText.  Proves keyboard input on AppKit.
+# dispatchKey -> UXTextField.keyDown -> driver.editText.  Proves keyboard input on AppKit, and
+# that a posted Return reaches onSubmit and leaves no CR in the buffer.
 appkit-field: ; XCC=$(XCC) sh run_appkit_field.sh
+
+# ---- submit-native — the AppKit half of the submit seam ---------------------------
+# A field's OWN end-of-editing, which is the path a real Return takes on AppKit (the driver dequeues
+# a posted key before AppKit can route it).  Asserts a Return movement submits and a Tab does not.
+submit-native: ; XCC=$(XCC) sh run_submit_native.sh
 
 # ---- appkit-menu — headless smoke test for the NSMenu path -----------------------
 appkit-menu: ; XCC=$(XCC) sh run_appkit_menu.sh

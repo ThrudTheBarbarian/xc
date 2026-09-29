@@ -83,6 +83,24 @@ class UXGdiGraphics : Object<UXGraphics>
         FillRect(hdc, (pointer)&rc, br);
         DeleteObject(br);
         }
+    // GDI fills and strokes opaque: a solid brush has no alpha, and per-shape blending would need an
+    // offscreen DIB per primitive.  blendsAlpha() answers false; the colour is drawn opaque.
+    void fillRectRGBA(UXRect r, i32 red, i32 green, i32 blue, i32 alpha)
+        {
+        self.fillRectRGB(r, red, green, blue);
+        }
+    // No alpha in a solid brush, so "empty" is the window background: WHITE_BRUSH, the same white the
+    // toolkit's own backgrounds use.  See the protocol note; a see-through layer takes the blendsAlpha
+    // path instead.
+    void clearRect(UXRect r)
+        {
+        RECT rc;
+        rc.left = (i32)(origin.x + r.x);
+        rc.top = (i32)(origin.y + r.y);
+        rc.right = (i32)(origin.x + r.x + r.w);
+        rc.bottom = (i32)(origin.y + r.y + r.h);
+        FillRect(hdc, (pointer)&rc, GetStockObject((i32)WHITE_BRUSH));
+        }
 
     // No native 9-slice in the minimal driver — a filled box stands in for themed widget art.
     void drawTheme(u8* slice, UXRect r)
@@ -92,8 +110,16 @@ class UXGdiGraphics : Object<UXGraphics>
 
     void drawText(u8* s, i16 x, i16 y, i32 pen, i32 size)
         {
+        self.textCore(s, x, y, self.penColor(pen), size);
+        }
+    void drawTextRGBA(u8* s, i16 x, i16 y, i32 red, i32 green, i32 blue, i32 alpha, i32 size)
+        {
+        self.textCore(s, x, y, (u32)red | ((u32)green << (u32)8) | ((u32)blue << (u32)16), size);
+        }
+    void textCore(u8* s, i16 x, i16 y, u32 colorref, i32 size)
+        {
         SetBkMode(hdc, (i32)TRANSPARENT);
-        SetTextColor(hdc, self.penColor(pen));
+        SetTextColor(hdc, colorref);
         i32 n = (i32)0;
         while (s[n] != (u8)0)
             {
@@ -137,6 +163,28 @@ class UXGdiGraphics : Object<UXGraphics>
         SelectObject(hdc, old);
         DeleteObject(fnt);
         }
+    // A family at a numeric WEIGHT: GDI's CreateFontA takes the 0..1000 weight directly, so the CSS
+    // 600 goes through as 600 and the face is the nearest the family has.  Alpha is dropped with the
+    // rest of GDI's compositing; see blendsAlpha.
+    void drawTextFontRGBA(u8* s, i16 x, i16 y, u8* family, i32 size, i32 weight, bool italic,
+                          i32 red, i32 green, i32 blue, i32 alpha)
+        {
+        SetBkMode(hdc, (i32)TRANSPARENT);
+        SetTextColor(hdc, (u32)((u32)red | ((u32)green << (u32)8) | ((u32)blue << (u32)16)));
+        i32 n = (i32)0;
+        while (s[n] != (u8)0)
+            {
+            n = n + (i32)1;
+            }
+        i32 h = (i32)0 - (size > (i32)0 ? size : (i32)12);
+        i32 w = weight > (i32)0 ? weight : (i32)400;
+        pointer fnt = CreateFontA(h, (i32)0, (i32)0, (i32)0, w,
+                                  italic ? (u32)1 : (u32)0, (u32)0, (u32)0, (u32)1, (u32)0, (u32)0, (u32)0, (u32)0, family);
+        pointer old = SelectObject(hdc, fnt);
+        TextOutA(hdc, (i32)(origin.x + x), (i32)(origin.y + y), (pointer)s, n);
+        SelectObject(hdc, old);
+        DeleteObject(fnt);
+        }
 
     void fillTriangle(i16 x0, i16 y0, i16 x1, i16 y1, i16 x2, i16 y2, i32 pen)
         {
@@ -160,6 +208,11 @@ class UXGdiGraphics : Object<UXGraphics>
     void fillPolygonRGB(i16* xy, i32 n, i32 red, i32 green, i32 blue)
         {
         self.fillPoly(xy, n, (u32)((u32)red | ((u32)green << (u32)8) | ((u32)blue << (u32)16)));
+        }
+    // Opaque, like every GDI fill; see blendsAlpha's note.
+    void fillPolygonRGBA(i16* xy, i32 n, i32 red, i32 green, i32 blue, i32 alpha)
+        {
+        self.fillPolygonRGB(xy, n, red, green, blue);
         }
     // GDI wants 32-bit POINTs, so the i16 pairs are widened on the way through; 128 matches the
     // ceiling libGEM's v_fillarea imposes, so a shape that draws on one backend draws on all.
@@ -244,7 +297,10 @@ class UXGdiGraphics : Object<UXGraphics>
         i32 cap = startCap > endCap ? startCap : endCap;
         u32 capBit = cap == (i32)1 ? (u32)PS_ENDCAP_ROUND
                                    : (cap == (i32)2 ? (u32)PS_ENDCAP_SQUARE : (u32)PS_ENDCAP_FLAT);
-        pointer pn = ExtCreatePen((u32)PS_GEOMETRIC | (u32)PS_SOLID | capBit | (u32)PS_JOIN_ROUND,
+        // join: 0 miter, 1 round, 2 bevel (UXJOIN_*)
+        u32 joinBit = join == (i32)0 ? (u32)PS_JOIN_MITER
+                                    : (join == (i32)2 ? (u32)PS_JOIN_BEVEL : (u32)PS_JOIN_ROUND);
+        pointer pn = ExtCreatePen((u32)PS_GEOMETRIC | (u32)PS_SOLID | capBit | joinBit,
                                   (u32)width, (pointer)&lb, (u32)0, (pointer)0);
         if (pn == (pointer)0)
             {

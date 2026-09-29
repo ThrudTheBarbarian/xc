@@ -56,6 +56,18 @@ void main(void)
         Stdio.printf("  ok   subtitle unsupported on this macOS — call was harmless\n");
         }
 
+    // The title-bar icon.  WF_ICON is the "proxy / document icon": a GEM theme SLICE the AES draws,
+    // and on macOS the proxy icon of the document the window stands for, which takes a path.  So a
+    // path round-trips into NSWindow.representedURL and a slice name (no path) has no counterpart.
+    u8 icon[256];
+    win.setIcon((u8*)"/System/OS/Apps/Desktop/desktop.rsc");
+    checkTrue("setIcon(path) sets the native proxy icon",
+              ux_ak_window_icon(win.handle, &icon[(i32)0], (i32)256) != (i32)0
+                  && icon[(i32)0] == (u8)'/');
+    win.setIcon((u8*)"alert.note");
+    checkTrue("...and a theme slice name clears it (no Cocoa counterpart)",
+              ux_ak_window_icon(win.handle, &icon[(i32)0], (i32)256) == (i32)0);
+
     if (gFails == (i32)0)
         {
         Stdio.printf("PASS: AppKit window chrome\n");

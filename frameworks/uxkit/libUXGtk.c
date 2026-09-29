@@ -21,6 +21,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <dlfcn.h>
 
 #define UXGTK_MAXW 64
 
@@ -44,6 +45,13 @@ void ux_gtk_set_value_changed(void* fn)
 void ux_gtk_set_field_hooks(void* fn)
     {
     gField = (ux_field_fn)fn;
+    }
+/* The same field's other announcement: Return.  GtkEntry's "activate" is exactly that key (and
+ * nothing else), so this is the signal the neutral onSubmit rides on. */
+static ux_field_fn gFieldSubmit;
+void ux_gtk_set_field_submit_hooks(void* fn)
+    {
+    gFieldSubmit = (ux_field_fn)fn;
     }
 
 /* ── pointer input ───────────────────────────────────────────────────────────
@@ -172,6 +180,36 @@ void ux_gtk_pump(void)
 void ux_gtk_wait_event(void)
     {
     g_main_context_iteration(NULL, TRUE);
+    }
+static gboolean ux_gtk_turn_timer(gpointer data)
+    {
+    (void)data;
+    return G_SOURCE_REMOVE;
+    }
+/* The same wait, given a deadline.  With a frame clock the loop must come back
+ * even when nothing is pending, so a one-shot timeout source is attached for
+ * the deadline and the blocking wait runs as usual: it returns early when real
+ * input arrives, and on the deadline when it does not.  A timeout of 0 or less
+ * keeps the plain blocking wait above, so a client without a clock is
+ * unchanged. */
+void ux_gtk_wait_event_ms(int ms)
+    {
+    GMainContext* ctx = g_main_context_default();
+    if (ms <= 0)
+        {
+        g_main_context_iteration(ctx, TRUE);
+        return;
+        }
+    g_main_context_iteration(ctx, FALSE); // drain whatever is already ready
+    if (g_main_context_pending(ctx))
+        {
+        return;
+        }
+    GSource* timer = g_timeout_source_new((guint)ms);
+    g_source_set_callback(timer, ux_gtk_turn_timer, NULL, NULL);
+    g_source_attach(timer, ctx);
+    g_source_unref(timer); // the context holds its own reference until it fires
+    g_main_context_iteration(ctx, TRUE);
     }
 
 /* ── windows ─────────────────────────────────────────────────────────────── */
@@ -854,6 +892,13 @@ static void entry_cb(GtkEditable* e, gpointer ud)
     if (gField)
         gField(handle, node);
     }
+/* Return in a GtkEntry: "activate" fires for that key alone, so no movement test is needed. */
+static void entry_activate_cb(GtkWidget* w, gpointer ud)
+    {
+    (void)ud;
+    if (gFieldSubmit)
+        gFieldSubmit(hOf(w), nOf(w));
+    }
 void ux_gtk_make_field(int handle, int node, int x, int y, int w, int h,
                        char* buf, int cap, int secure)
     {
@@ -863,6 +908,7 @@ void ux_gtk_make_field(int handle, int node, int x, int y, int w, int h,
     gFieldBuf[handle * 256 + node] = buf;
     gFieldCap[handle * 256 + node] = cap;
     g_signal_connect(e, "changed", G_CALLBACK(entry_cb), NULL);
+    g_signal_connect(e, "activate", G_CALLBACK(entry_activate_cb), NULL);
     park(handle, node, e, x, y, w, h);
     }
 void ux_gtk_update_field(int handle, int node)
@@ -878,13 +924,31 @@ static void setRGB(int r, int g, int b)
     {
     cairo_set_source_rgb(gCr, r / 255.0, g / 255.0, b / 255.0);
     }
-void ux_gtk_fill(int x, int y, int w, int h, int r, int g, int b)
+/* alpha is the straight 0..255 value; cairo blends every fill and stroke source-over, so a
+   translucent primitive composites with what is under it.  a == 255 is the opaque case. */
+static void setRGBA(int r, int g, int b, int a)
+    {
+    cairo_set_source_rgba(gCr, r / 255.0, g / 255.0, b / 255.0, a / 255.0);
+    }
+void ux_gtk_fill(int x, int y, int w, int h, int r, int g, int b, int a)
     {
     if (!gCr)
         return;
-    setRGB(r, g, b);
+    setRGBA(r, g, b, a);
     cairo_rectangle(gCr, x, y, w, h);
     cairo_fill(gCr);
+    }
+/* CLEAR: erase the rect whatever is under it, so a compositing layer starts empty.  A source-over
+   fill at alpha 0 would paint nothing instead of emptying. */
+void ux_gtk_clear(int x, int y, int w, int h)
+    {
+    if (!gCr)
+        return;
+    cairo_save(gCr);
+    cairo_set_operator(gCr, CAIRO_OPERATOR_CLEAR);
+    cairo_rectangle(gCr, x, y, w, h);
+    cairo_fill(gCr);
+    cairo_restore(gCr);
     }
 void ux_gtk_tri(int x0, int y0, int x1, int y1, int x2, int y2, int r, int g, int b)
     {
@@ -897,25 +961,39 @@ void ux_gtk_tri(int x0, int y0, int x1, int y1, int x2, int y2, int r, int g, in
     cairo_close_path(gCr);
     cairo_fill(gCr);
     }
-void ux_gtk_poly(short* xy, int n, int r, int g, int b)
+void ux_gtk_poly(short* xy, int n, int r, int g, int b, int a)
     {
     if (!gCr || n < 3)
         return;
-    setRGB(r, g, b);
+    setRGBA(r, g, b, a);
     cairo_move_to(gCr, xy[0], xy[1]);
     for (int i = 1; i < n; i++)
         cairo_line_to(gCr, xy[i * 2], xy[i * 2 + 1]);
     cairo_close_path(gCr);
     cairo_fill(gCr);
     }
-void ux_gtk_text(const char* s, int x, int y, int r, int g, int b, int size)
+/* The distance from the top of the line — the y a drawText is handed — down to the baseline: cairo's
+ * ascent for the face and size, with 0.8 of the em as the floor for a face that reports nothing.  The
+ * three entries below and ux_gtk_text_ascent all come through it, so the number a caller converts a
+ * canvas baseline with cannot drift from where the shim puts the baseline.  It used to be the em size,
+ * which sat GTK text a few pixels lower than every other backend's top-of-line; cairo reports an
+ * ascent of 18 at size 24, and the ink lands where that says (test_gtk_real checks the row). */
+static int gtk_line_ascent(cairo_t* c, const char* family, int size, int weight, int italic);
+void ux_gtk_text(const char* s, int x, int y, int r, int g, int b, int a, int size)
     {
     if (!gCr)
         return;
-    setRGB(r, g, b);
-    cairo_select_font_face(gCr, "sans-serif", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
-    cairo_set_font_size(gCr, size > 0 ? size : 13);
-    cairo_move_to(gCr, x, y + (size > 0 ? size : 13)); /* top-left in, baseline out */
+    setRGBA(r, g, b, a);
+    cairo_move_to(gCr, x, y + gtk_line_ascent(gCr, "", size, 400, 0)); /* top-left in, baseline out */
+    cairo_show_text(gCr, s);
+    }
+void ux_gtk_text_weight(const char* s, int x, int y, const char* family, int size,
+                        int weight, int italic, int r, int g, int b, int a)
+    {
+    if (!gCr)
+        return;
+    setRGBA(r, g, b, a);
+    cairo_move_to(gCr, x, y + gtk_line_ascent(gCr, family, size, weight, italic));
     cairo_show_text(gCr, s);
     }
 void ux_gtk_text_font(const char* s, int x, int y, int r, int g, int b,

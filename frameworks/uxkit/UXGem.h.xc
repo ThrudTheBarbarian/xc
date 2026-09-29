@@ -146,6 +146,11 @@ struct menu_item
     i32 nsub;
     u32 flags;
     } i32 menu_popup(pointer items, i32 n, i32 x, i32 y);
+// The selected face's metrics, for the size in force: minade/maxade are the FIRST and LAST printable
+// characters (a range, not a distance), dists receives five baseline-relative words — bottom, descent,
+// half, ascent, top, so dists[3] is the ascent a caller with a baseline needs to convert it into the
+// top-of-line y this seam draws at — maxwidth the widest cell, effects the synthesised effects.
+void vqt_fontinfo(i32 h, pointer minade, pointer maxade, pointer dists, pointer maxwidth, pointer effects);
 // The font registry: vst_load_fonts maps the font dir (id 1 = system, 2..N = the files, sorted by name),
 // vst_font selects a face by id, vdi_font_name reports a face's name, vst_effects synthesises bold/italic.
 i32 vst_font(i32 h, i32 id);

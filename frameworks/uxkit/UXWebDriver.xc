@@ -763,7 +763,7 @@ class UXWebDriver : Object<UXViewDriver>
                 i32 tw = ux_text_width(title, (u8*)"", (i32)0, (i32)0, (i32)0);
                 i32 grey = t.nodes[i].enabled != (i16)0 ? (i32)40 : (i32)128;
                 ux_draw_text(title, ax + (w - tw) / (i32)2, ay + (hh - (i32)16) / (i32)2,
-                             (u8*)"", (i32)0, (i32)0, (i32)0, grey, grey, grey);
+                             (u8*)"", (i32)0, (i32)0, (i32)0, grey, grey, grey, (i32)255);
                 }
             }
         else if (k == (i32)UXKindField)
@@ -789,20 +789,20 @@ class UXWebDriver : Object<UXViewDriver>
                     src = &shown[(i32)0];
                     }
                 ux_draw_text(src, ax + (i32)4, ay + (i32)3,
-                             (u8*)"", (i32)0, (i32)0, (i32)0, (i32)0, (i32)0, (i32)0);
+                             (u8*)"", (i32)0, (i32)0, (i32)0, (i32)0, (i32)0, (i32)0, (i32)255);
                 }
             }
         else if (k == (i32)UXKindTable)
             {
             self.structAbsFrame((pointer)t, i, &ax, &ay, &w, &hh);
-            ux_fill_rect(ax, ay, w, hh, (i32)255, (i32)255, (i32)255);
+            ux_fill_rect(ax, ay, w, hh, (i32)255, (i32)255, (i32)255, (i32)255);
             ux_stroke_rect_edges(ax, ay, w, hh);
             }
         else if (k == (i32)UXKindLabel && t.nodes[i].spec != (pointer)0)
             {
             self.structAbsFrame((pointer)t, i, &ax, &ay, &w, &hh);
             ux_draw_text((u8*)t.nodes[i].spec, ax + (i32)2, ay + (i32)2,
-                         (u8*)"", (i32)0, (i32)0, (i32)0, (i32)0, (i32)0, (i32)0);
+                         (u8*)"", (i32)0, (i32)0, (i32)0, (i32)0, (i32)0, (i32)0, (i32)255);
             }
         // A clipping node (a scroll view's viewport) confines its SUBTREE — the
         // document is taller than the clip and draws at fixed coordinates, so
@@ -1052,8 +1052,12 @@ class UXWebDriver : Object<UXViewDriver>
         {
         i32 r[8];
         ev.init();
+        // A deadline waits for the deadline; anything else BLOCKS until an event arrives.  The
+        // ring primitive reads 0 as "no wait at all", so a plain 0 here would spin the worker at
+        // 100% instead of parking it — which is the one thing the worker exists to avoid.  -1 is
+        // the ring's "block indefinitely"; the neutral loop passes 0 when no frame clock is set.
         // timed out: UXEventNone
-        if (_xt_ring_wait(timeoutMs) == (i32)0)
+        if (_xt_ring_wait(timeoutMs > (i32)0 ? timeoutMs : (i32)-1) == (i32)0)
             {
             return;
             }

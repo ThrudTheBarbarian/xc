@@ -39,6 +39,11 @@ class UXCairoGraphics : Object<UXGraphics>
         {
         return false;
         }
+    // cairo blends every source-over, so a translucent fill or stroke composites here.
+    bool blendsAlpha(void)
+        {
+        return true;
+        }
 
     // A VDI pen index -> RGB (the shared toolkit palette, as every backend keeps it).
     void penRGB(i32 pen, i32* r, i32* g, i32* b)
@@ -94,11 +99,20 @@ class UXCairoGraphics : Object<UXGraphics>
         i32 cg = (i32)0;
         i32 cb = (i32)0;
         self.penRGB(pen, &cr, &cg, &cb);
-        ux_gtk_fill((i32)(origin.x + r.x), (i32)(origin.y + r.y), (i32)r.w, (i32)r.h, cr, cg, cb);
+        ux_gtk_fill((i32)(origin.x + r.x), (i32)(origin.y + r.y), (i32)r.w, (i32)r.h, cr, cg, cb, (i32)255);
         }
     void fillRectRGB(UXRect r, i32 red, i32 green, i32 blue)
         {
-        ux_gtk_fill((i32)(origin.x + r.x), (i32)(origin.y + r.y), (i32)r.w, (i32)r.h, red, green, blue);
+        self.fillRectRGBA(r, red, green, blue, (i32)255);
+        }
+    void fillRectRGBA(UXRect r, i32 red, i32 green, i32 blue, i32 alpha)
+        {
+        ux_gtk_fill((i32)(origin.x + r.x), (i32)(origin.y + r.y), (i32)r.w, (i32)r.h, red, green, blue, alpha);
+        }
+    // Cairo's CLEAR operator: the rect comes back transparent, whatever was under it.
+    void clearRect(UXRect r)
+        {
+        ux_gtk_clear((i32)(origin.x + r.x), (i32)(origin.y + r.y), (i32)r.w, (i32)r.h);
         }
     // no 9-slice yet
     void drawTheme(u8* slice, UXRect r)
@@ -112,7 +126,11 @@ class UXCairoGraphics : Object<UXGraphics>
         i32 cg = (i32)0;
         i32 cb = (i32)0;
         self.penRGB(pen, &cr, &cg, &cb);
-        ux_gtk_text(s, (i32)(origin.x + x), (i32)(origin.y + y), cr, cg, cb, size);
+        ux_gtk_text(s, (i32)(origin.x + x), (i32)(origin.y + y), cr, cg, cb, (i32)255, size);
+        }
+    void drawTextRGBA(u8* s, i16 x, i16 y, i32 red, i32 green, i32 blue, i32 alpha, i32 size)
+        {
+        ux_gtk_text(s, (i32)(origin.x + x), (i32)(origin.y + y), red, green, blue, alpha, size);
         }
     void drawTextFont(u8* s, i16 x, i16 y, i32 pen, u8* family, i32 size, bool bold, bool italic)
         {
@@ -122,6 +140,12 @@ class UXCairoGraphics : Object<UXGraphics>
         self.penRGB(pen, &cr, &cg, &cb);
         ux_gtk_text_font(s, (i32)(origin.x + x), (i32)(origin.y + y), cr, cg, cb,
                          family, size, bold ? (i32)1 : (i32)0, italic ? (i32)1 : (i32)0);
+        }
+    void drawTextFontRGBA(u8* s, i16 x, i16 y, u8* family, i32 size, i32 weight, bool italic,
+                          i32 red, i32 green, i32 blue, i32 alpha)
+        {
+        ux_gtk_text_weight(s, (i32)(origin.x + x), (i32)(origin.y + y), family, size, weight,
+                           italic ? (i32)1 : (i32)0, red, green, blue, alpha);
         }
 
     void fillTriangle(i16 x0, i16 y0, i16 x1, i16 y1, i16 x2, i16 y2, i32 pen)
@@ -140,13 +164,17 @@ class UXCairoGraphics : Object<UXGraphics>
         i32 cg = (i32)0;
         i32 cb = (i32)0;
         self.penRGB(pen, &cr, &cg, &cb);
-        self.polyRGB(xy, n, cr, cg, cb);
+        self.polyRGBA(xy, n, cr, cg, cb, (i32)255);
         }
     void fillPolygonRGB(i16* xy, i32 n, i32 red, i32 green, i32 blue)
         {
-        self.polyRGB(xy, n, red, green, blue);
+        self.polyRGBA(xy, n, red, green, blue, (i32)255);
         }
-    void polyRGB(i16* xy, i32 n, i32 r, i32 g, i32 b)
+    void fillPolygonRGBA(i16* xy, i32 n, i32 red, i32 green, i32 blue, i32 alpha)
+        {
+        self.polyRGBA(xy, n, red, green, blue, alpha);
+        }
+    void polyRGBA(i16* xy, i32 n, i32 r, i32 g, i32 b, i32 a)
         {
         if (n < (i32)3)
             {

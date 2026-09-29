@@ -1002,10 +1002,18 @@ class UXGemDriver : Object<UXViewDriver>
             return;
             }
         }
-    // The run loop: block for the next input or window message.
+    // The run loop: block for the next input or window message.  With a frame clock the wait
+    // becomes a deadline: MU_TIMER joins the class mask, evnt_multi returns when it expires with
+    // nothing to report, and the caller sees an empty turn (kind == UXEventNone) — which is
+    // exactly what the clock needs.  0 keeps the old block-until-there-is-one mask.
     void nextEvent(i32 timeoutMs, UXEvent* ev)
         {
-        self.gemPump(MU_KEYBD | MU_BUTTON | MU_MESAG, timeoutMs, ev);
+        i32 classes = MU_KEYBD | MU_BUTTON | MU_MESAG;
+        if (timeoutMs > (i32)0)
+            {
+            classes = classes | MU_TIMER;
+            }
+        self.gemPump(classes, timeoutMs, ev);
         }
     // Drain pending window messages without consuming input (async gemd state sync).
     void pumpMessages(i32 timeoutMs, UXEvent* ev)

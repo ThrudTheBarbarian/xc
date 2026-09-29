@@ -49,11 +49,25 @@ class UXPainter
         }
     static i32 rgb(i32 r, i32 g, i32 b)
         {
-        return (i32)$1000000 | (r << (i32)16) | (g << (i32)8) | b;
+        return (i32)$FF000000 | (r << (i32)16) | (g << (i32)8) | b;
+        }
+    static i32 rgba(i32 r, i32 g, i32 b, i32 a)
+        {
+        // a colour that would pack to zero is a pen, and a transparent shape is "do not draw": clamp
+        // so a caller that fades to nothing gets an invisible shape rather than a black one
+        if (a < (i32)1)
+            {
+            a = (i32)1;
+            }
+        return ((a & (i32)255) << (i32)24) | (r << (i32)16) | (g << (i32)8) | b;
         }
     static bool isRGB(i32 c)
         {
-        return (c & (i32)$1000000) != (i32)0;
+        return c > (i32)255 || c < (i32)0;
+        }
+    static i32 alphaOf(i32 c)
+        {
+        return (c >> (i32)24) & (i32)255;
         }
 
     // Hand one convex piece to the backend.  The scratch is a file-scope buffer rather than a local:
@@ -600,8 +614,9 @@ class UXPainter
             return;
             }
         // The neutral stroker, for GEM.  The centreline comes back in 1/16 px and stays there until
-        // each finished quad or disc is rounded — see strokeSegmentFx.
-        i32 widthFx = (i32)width * (i32)UX_FX;
+        // each finished quad or disc is rounded — see strokeSegmentFx.  The width quantises to that
+        // same 1/16 px, so a 1.536-px pen is 25/16 px here rather than 1.
+        i32 widthFx = (i32)(width * (double)UX_FX + 0.5);
         i32 n = p.flattenFx(&gUXFlatFx[(i32)0], (i32)UX_FLAT_MAX);
         i32 px = (i32)0;
         i32 py = (i32)0;

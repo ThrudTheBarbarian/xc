@@ -38,6 +38,16 @@ void onNameEdited(UXTextField* sender) {
 }
 ```
 
+A second hook reports **the line being finished** rather than each keystroke:
+
+```c
+name.setOnSubmit(&controller.onNameSubmitted);
+...
+void onNameSubmitted(UXTextField* sender) {
+    logIn(sender.text());      // Return was pressed; the key is not in the buffer
+}
+```
+
 For a password, choose the secure treatment before attach, because the native
 control type is selected at realization:
 
@@ -54,7 +64,7 @@ pw.setSecure(true);
 ## Topics
 
 **Text** · [text](#text) · [setText](#settext)
-**Change reporting** · [setOnChange](#setonchange) · [fieldDidChange](#fielddidchange)
+**Change reporting** · [setOnChange](#setonchange) · [fieldDidChange](#fielddidchange) · [setOnSubmit](#setonsubmit) · [fieldDidSubmit](#fielddidsubmit)
 **Treatment** · [setPlaceholder](#setplaceholder) · [setSecure](#setsecure) · [setValidation](#setvalidation)
 
 ### text
@@ -96,6 +106,36 @@ changes (with the buffer synced first), and GEM's neutral edit path calls it
 directly. It also feeds the event tap (`UXEventTextChanged`) with a **copy** of
 the text, because a recording must hold what was typed at that moment, not what
 the buffer contains later.
+
+### setOnSubmit
+
+```c
+void setOnSubmit(callback c void(UXTextField* sender))
+```
+
+The "the line is done" hook, beside `setOnChange`. It fires when the user
+presses Return, and the key is **not** treated as a character: a command line,
+a search box, and a login form all want to know the line was finished, and
+none of them wants to be told a carriage return was typed. Read `sender.text()`
+for what was in the field. A field with no submit hook is unchanged, and keeps
+passing Return up the chain.
+
+### fieldDidSubmit
+
+```c
+void fieldDidSubmit(void)
+```
+
+The single submit announcement, the twin of `fieldDidChange`. Each backend
+calls it from wherever its toolkit reports that the line is done — the
+`NSTextField` delegate's end-editing with a return movement, `GtkEntry`'s
+`activate` signal, `UITextField`'s return, the `EditText` IME's done action, a
+Win32 `EDIT` receiving a Return key — and the neutral key path calls it
+directly where the toolkit's own editor is what sees the key.
+
+It is deliberately **not** an event-tap kind: the keystroke that caused it is
+already on the tap as `UXEventKeyDown`, so a recording holds everything a
+replay needs. A submit is a callback, like a button's action.
 
 ### setPlaceholder
 

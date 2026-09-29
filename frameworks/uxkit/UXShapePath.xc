@@ -237,7 +237,7 @@ class UXPathElement : Object
         self.curveTo((i16)c1x, (i16)c1y, (i16)c2x, (i16)c2y, x, y);
         }
 
-    // ---- caps -----------------------------------------------------------------
+    // ---- caps and joins -------------------------------------------------------
     void setStartCap(i32 c)
         {
         startCap = c;
@@ -762,7 +762,7 @@ class UXPathElement : Object
             {
             return out;
             }
-        i32 w = (i32)(width > (i16)0 ? width : capWidth);
+        i32 w = (i32)(width > 0.0 ? width + 0.5 : capWidth);
         if (w <= (i32)0)
             {
             return out;

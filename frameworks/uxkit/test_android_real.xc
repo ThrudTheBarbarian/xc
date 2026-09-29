@@ -161,7 +161,7 @@ void testBody(void)
     UXCheckbox* check = new UXCheckbox();
     check.setTitle((u8*)"Enable");
     check.setAction(&ctl.onCheck);
-    win.open((u8*)"UXKit on Android", UXGeom.make((i16)80, (i16)80, (i16)220, (i16)140), canvas);
+    win.open((u8*)"UXKit on Android", UXGeom.make((i16)80, (i16)80, (i16)220, (i16)175), canvas);
     canvas.addSubview(button, UXGeom.make((i16)8, (i16)90, (i16)80, (i16)32));
     canvas.addSubview(check, UXGeom.make((i16)100, (i16)90, (i16)110, (i16)32));
     win.displayAll(); // realizeTree overlays the REAL Button + CheckBox
