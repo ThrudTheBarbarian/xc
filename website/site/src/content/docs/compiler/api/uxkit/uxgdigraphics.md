@@ -54,6 +54,31 @@ strokesNatively()      // true
 GDI the path, and GDI draws the curve at its own precision with its own
 joins, instead of the toolkit offsetting a whole-pixel polyline.
 
+## The stroke width rounds to a whole pixel
+
+```c
+// strokeNative* take a double, but GDI's pen is an integer:
+// 1.536 is drawn at 2, 1.0 at 1, 0 at 1.
+```
+
+A GDI pen has no fractional width, so the seam's `double` width — which the
+five real strokers draw exactly — is **rounded to the nearest pixel** here (a
+width below half a pixel becomes a hairline rather than nothing). The VDI is
+the same. It is the one place where the width the caller passed and the width
+drawn are not the same number, and it errs towards ink.
+
+## It does not dash natively
+
+```c
+dashesNatively()       // false
+```
+
+`ExtCreatePen` takes `PS_DASH` only on a **cosmetic** pen: one pixel wide, no
+joins, no phase, no width. A dash that cannot honour the caller's width or
+phase is a worse answer than none, so a dashed border here goes through
+[`UXPainter`](/compiler/api/uxkit/uxpainter/)'s neutral dasher, which emits
+the ON pieces of the flattened centreline.
+
 Arrowheads stay neutral, because GDI has none. All six hosted backends use
 this split: the platform draws what it draws well, and the toolkit draws
 what no platform has.

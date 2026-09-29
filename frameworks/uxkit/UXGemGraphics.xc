@@ -214,11 +214,30 @@ class UXGemGraphics : Object<UXGraphics>
         {
         return false;
         }
-    void strokeNative(i32* ops, i32 n, i32 width, i32 startCap, i32 endCap, i32 pen)
+    // ...and with no curve stroker of its own the VDI has no dasher either, so a dash falls to the
+    // neutral dasher — UXPainter's walk over the flattened centreline.  False rather than a silent
+    // approximation here, so that the caller knows which of the two it is getting.
+    bool dashesNatively(void)
+        {
+        return false;
+        }
+    // The VDI cannot blend, so a translucent layer is drawn opaque here.  Ask blendsAlpha() first.
+    bool blendsAlpha(void)
+        {
+        return false;
+        }
+    // Empty, and strokesNatively() is false: the VDI has no path stroker, so UXPainter's neutral
+    // stroker draws every stroke here, quantising the width to the 1/16 px it works in (UX_FX).
+    void strokeNative(i32* ops, i32 n, double width, i32 startCap, i32 endCap, i32 join,
+                      i32* dash, i32 ndash, i32 phase, i32 pen)
         {
         }
-    void strokeNativeRGB(i32* ops, i32 n, i32 width, i32 startCap, i32 endCap,
-                         i32 red, i32 green, i32 blue)
+    void strokeNativeRGB(i32* ops, i32 n, double width, i32 startCap, i32 endCap, i32 join,
+                         i32* dash, i32 ndash, i32 phase, i32 red, i32 green, i32 blue)
+        {
+        }
+    void strokeNativeRGBA(i32* ops, i32 n, double width, i32 startCap, i32 endCap, i32 join,
+                          i32* dash, i32 ndash, i32 phase, i32 red, i32 green, i32 blue, i32 alpha)
         {
         }
 

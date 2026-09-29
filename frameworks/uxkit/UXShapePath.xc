@@ -51,6 +51,30 @@
 #define UXCAP_SQUARE 2 // a half-width square extension
 #define UXCAP_ARROW 3  // an arrowhead pointing the way the path was going
 
+// The interior-vertex join a NATIVE stroke uses (the seam's strokeNative*).  Not a cap: a cap is an
+// end, a join is a corner, and a canvas names them separately — round is the neutral stroker's own
+// join, so a path that never sets one strokes as it always has.
+#define UXJOIN_MITER 0
+#define UXJOIN_ROUND 1
+#define UXJOIN_BEVEL 2
+
+// The DASH of a stroke: an on/off run in whole DEVICE pixels plus the phase — how far into that run
+// the stroke starts.  It lives on the path for the same reason the caps and the join do: it is a
+// property of the shape the author drew, and the seam takes it as a parameter rather than as state
+// because it changes every frame.  (A crawler animates it as -(t * zoom * 0.16) % (dash * 1.55), so it
+// is a different number in every frame; state would leak it into the next stroke that did not set it,
+// which is a bug the client this toolkit replaces was bitten by.)
+//
+// THE PHASE RESTARTS AT EVERY SUBPATH.  A move starts a fresh run.  That is not a choice: it is what
+// Canvas2D and SVG do, and it is what every native dasher does too (the alternative — one rhythm over
+// an entire multi-subpath stroke — was measured against the browser's own raster and is the wrong
+// picture by a factor of 2.5 on the pixels that can tell, so it is not a matter of taste).
+//
+// The run is a small fixed array because every pattern a dash is actually used for is two or three
+// numbers; UX_DASH_MAX is the point past which a caller should be questioning the design rather than
+// the buffer.
+#define UX_DASH_MAX 8
+
 // cos/sin of k*22.5 degrees scaled by 256, k = 0..8 — a half turn, which is all a round cap needs.
 // A table rather than repeated rotation of a vector: rotating accumulates error, and at 1/256 the
 // drift is visible by the eighth step.
@@ -126,6 +150,10 @@ class UXPathElement : Object
     i16 lastY; // the current point, for quadTo's control-point elevation
     i32 startCap;
     i32 endCap;
+    i32 join;     // interior-vertex join for a native stroke (UXJOIN_ROUND by default)
+    i32 dashN;    // dash run length in entries; 0 = solid (the default, and what every path was)
+    i32 dashOff;  // phase into the run, in device pixels, may be negative
+    i32 dashPat[UX_DASH_MAX];
     i16 capWidth; // the stroke width the caps are built for (0 = ask at cap time)
     i16 arrowLen; // arrowhead length along the direction of travel (0 = 3x the width)
 
@@ -137,6 +165,9 @@ class UXPathElement : Object
         lastY = (i16)0;
         startCap = (i32)UXCAP_NONE;
         endCap = (i32)UXCAP_NONE;
+        join = (i32)UXJOIN_ROUND;
+        dashN = (i32)0;
+        dashOff = (i32)0;
         capWidth = (i16)0;
         arrowLen = (i16)0;
         }
@@ -235,6 +266,53 @@ class UXPathElement : Object
         {
         return endCap;
         }
+    // The interior-vertex join a native stroke uses (UXJOIN_*).  Round is the default because it is
+    // what the neutral stroker has always drawn, so a path that never sets it strokes the same.
+    void setJoin(i32 j)
+        {
+        join = j;
+        }
+    i32 joinKind(void)
+        {
+        return join;
+        }
+    // Set the dash run (device pixels) and the phase into it.  n <= 0 clears it back to solid, and a
+    // non-positive entry is lifted to 1: a zero-length run is a pattern that never advances, which
+    // every canvas treats as "no dash" and which would otherwise divide by zero in the neutral
+    // dasher's walk.  Past UX_DASH_MAX the extra entries are dropped rather than overflowing.
+    void setDash(i32* pat, i32 n, i32 phase)
+        {
+        dashN = (i32)0;
+        dashOff = phase;
+        if (n <= (i32)0)
+            {
+            return;
+            }
+        i32 k = (i32)0;
+        while (k < n && k < (i32)UX_DASH_MAX)
+            {
+            i32 v = pat[k];
+            dashPat[k] = v > (i32)0 ? v : (i32)1;
+            k = k + (i32)1;
+            }
+        dashN = k;
+        }
+    void clearDash(void)
+        {
+        dashN = (i32)0;
+        }
+    i32 dashCount(void)
+        {
+        return dashN;
+        }
+    i32 dashAt(i32 i)
+        {
+        return dashPat[i];
+        }
+    i32 dashPhase(void)
+        {
+        return dashOff;
+        }
 
     static UXShapePath* rect(i16 x, i16 y, i16 w, i16 h)
         {
@@ -329,6 +407,13 @@ class UXPathElement : Object
         UXShapePath* out = new UXShapePath();
         out.startCap = startCap;
         out.endCap = endCap;
+        out.join = join;
+        out.dashN = dashN;
+        out.dashOff = dashOff;
+        for (i32 k = (i32)0; k < dashN; k = k + (i32)1)
+            {
+            out.dashPat[k] = dashPat[k];
+            }
         out.capWidth = capWidth;
         out.arrowLen = arrowLen;
         i32 n = (i32)elements.count();
@@ -617,15 +702,15 @@ class UXPathElement : Object
     //     L' = L + rim*S/H              (the tip runs on, further the sharper the point)
     //     H' = H + H*rim*(S+H)/(S*L) + rim*L/S
     // which is exact, and stays in i32 at any width worth drawing.
-    UXShapePath* capOutlineRim(bool atStart, i16 width, i16 rim)
+    UXShapePath* capOutlineRim(bool atStart, double width, double rim)
         {
         i32 which = atStart ? startCap : endCap;
         if (which != (i32)UXCAP_ARROW)
             {
-            return self.capOutline(atStart, (i16)((i32)width + (i32)2 * (i32)rim));
+            return self.capOutline(atStart, width + 2.0 * rim);
             }
         UXShapePath* out = new UXShapePath();
-        i32 w = (i32)(width > (i16)0 ? width : capWidth);
+        i32 w = (i32)(width > 0.0 ? width + 0.5 : capWidth);
         if (w <= (i32)0)
             {
             return out;
@@ -667,7 +752,9 @@ class UXPathElement : Object
         return out;
         }
 
-    UXShapePath* capOutline(bool atStart, i16 width)
+    // The cap is a shape, so a fractional stroke width rounds to the pixel here rather than carrying a
+    // fraction into an arrowhead's geometry (the stroke itself keeps its fraction; see UXPainter).
+    UXShapePath* capOutline(bool atStart, double width)
         {
         UXShapePath* out = new UXShapePath();
         i32 which = atStart ? startCap : endCap;

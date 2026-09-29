@@ -7,13 +7,19 @@
 #import "UXGraphics.xc"
 
 // The shim's drawing ops (act on the cairo_t set by the draw in flight).
-void ux_gtk_fill(i32 x, i32 y, i32 w, i32 h, i32 r, i32 g, i32 b);
-void ux_gtk_text(u8* s, i32 x, i32 y, i32 r, i32 g, i32 b, i32 size);
+void ux_gtk_fill(i32 x, i32 y, i32 w, i32 h, i32 r, i32 g, i32 b, i32 a);
+void ux_gtk_clear(i32 x, i32 y, i32 w, i32 h);
+void ux_gtk_text(u8* s, i32 x, i32 y, i32 r, i32 g, i32 b, i32 a, i32 size);
 i32 ux_gtk_text_width(u8* s, u8* family, i32 size, i32 bold, i32 italic);
+i32 ux_gtk_text_width_weight(u8* s, u8* family, i32 size, i32 weight, i32 italic);
+i32 ux_gtk_text_ascent(u8* family, i32 size, i32 weight, i32 italic);
 void ux_gtk_text_font(u8* s, i32 x, i32 y, i32 r, i32 g, i32 b, u8* family, i32 size, i32 bold, i32 italic);
+void ux_gtk_text_weight(u8* s, i32 x, i32 y, u8* family, i32 size, i32 weight, i32 italic,
+                        i32 r, i32 g, i32 b, i32 a);
 void ux_gtk_tri(i32 x0, i32 y0, i32 x1, i32 y1, i32 x2, i32 y2, i32 r, i32 g, i32 b);
-void ux_gtk_poly(i16* xy, i32 n, i32 r, i32 g, i32 b);
-void ux_gtk_stroke_path(i32* ops, i32 n, i32 width, i32 startCap, i32 endCap, i32 r, i32 g, i32 b);
+void ux_gtk_poly(i16* xy, i32 n, i32 r, i32 g, i32 b, i32 a);
+void ux_gtk_stroke_path(i32* ops, i32 n, double width, i32 startCap, i32 endCap, i32 join,
+                        i32* dash, i32 ndash, i32 phase, i32 r, i32 g, i32 b, i32 a);
 void ux_gtk_circle(i32 cx, i32 cy, i32 r, i32 cr, i32 cg, i32 cb);
 
 class UXCairoGraphics : Object<UXGraphics>
@@ -157,27 +163,41 @@ class UXCairoGraphics : Object<UXGraphics>
             pts[i * (i32)2] = (i16)(origin.x + xy[i * (i32)2]);
             pts[i * (i32)2 + (i32)1] = (i16)(origin.y + xy[i * (i32)2 + (i32)1]);
             }
-        ux_gtk_poly(&pts[(i32)0], n, r, g, b);
+        ux_gtk_poly(&pts[(i32)0], n, r, g, b, a);
         }
 
-    // CoreGraphics strokes real cubics with joins and caps, same as the mac.
+    // cairo strokes real cubics with joins and caps, the same silhouette the mac gets.
     bool strokesNatively(void)
         {
         return true;
         }
-    void strokeNative(i32* ops, i32 n, i32 width, i32 startCap, i32 endCap, i32 pen)
+    // ...and cairo_set_dash takes a run and a phase, so a dash is one call like the width.
+    bool dashesNatively(void)
+        {
+        return true;
+        }
+    void strokeNative(i32* ops, i32 n, double width, i32 startCap, i32 endCap, i32 join,
+                      i32* dash, i32 ndash, i32 phase, i32 pen)
         {
         i32 cr = (i32)0;
         i32 cg = (i32)0;
         i32 cb = (i32)0;
         self.penRGB(pen, &cr, &cg, &cb);
-        self.strokeNativeRGB(ops, n, width, startCap, endCap, cr, cg, cb);
+        self.strokeNativeRGBA(ops, n, width, startCap, endCap, join, dash, ndash, phase,
+                              cr, cg, cb, (i32)255);
         }
-    void strokeNativeRGB(i32* ops, i32 n, i32 width, i32 startCap, i32 endCap,
-                         i32 red, i32 green, i32 blue)
+    void strokeNativeRGB(i32* ops, i32 n, double width, i32 startCap, i32 endCap, i32 join,
+                         i32* dash, i32 ndash, i32 phase, i32 red, i32 green, i32 blue)
+        {
+        self.strokeNativeRGBA(ops, n, width, startCap, endCap, join, dash, ndash, phase,
+                              red, green, blue, (i32)255);
+        }
+    void strokeNativeRGBA(i32* ops, i32 n, double width, i32 startCap, i32 endCap, i32 join,
+                          i32* dash, i32 ndash, i32 phase, i32 red, i32 green, i32 blue, i32 alpha)
         {
         self.offsetOps(ops, n, (i32)origin.x, (i32)origin.y);
-        ux_gtk_stroke_path(ops, n, width, startCap, endCap, red, green, blue);
+        ux_gtk_stroke_path(ops, n, width, startCap, endCap, join, dash, ndash, phase,
+                           red, green, blue, alpha);
         self.offsetOps(ops, n, -(i32)origin.x, -(i32)origin.y); // the caller's run stays as it was
         }
     void offsetOps(i32* ops, i32 n, i32 dx, i32 dy)

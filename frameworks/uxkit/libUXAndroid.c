@@ -376,12 +376,39 @@ int ux_and_boot(int *w, int *h) {
     gPaintSetStrokeWidth = (*env)->GetMethodID(env, gPaintCls, "setStrokeWidth", "(F)V");
     gPaintSetStrokeCap   = (*env)->GetMethodID(env, gPaintCls, "setStrokeCap",
                                                "(Landroid/graphics/Paint$Cap;)V");
+    gPaintSetStrokeJoin  = (*env)->GetMethodID(env, gPaintCls, "setStrokeJoin",
+                                               "(Landroid/graphics/Paint$Join;)V");
+    /* setTypeface returns the PREVIOUS typeface, not void. */
+    gPaintSetTypeface    = (*env)->GetMethodID(env, gPaintCls, "setTypeface",
+                                               "(Landroid/graphics/Typeface;)Landroid/graphics/Typeface;");
+    jclass tfCls = gref(env, "android/graphics/Typeface");
+    gTypefaceCls  = tfCls;
+    gTypefaceCreate = tfCls ? (*env)->GetStaticMethodID(env, tfCls, "create",
+                                              "(Ljava/lang/String;I)Landroid/graphics/Typeface;") : 0;
     gPaintMeasure = (*env)->GetMethodID(env, gPaintCls, "measureText", "(Ljava/lang/String;)F");
+    /* FontMetricsInt: the FACE's ascent (above the baseline, reported negative), which is the
+       distance from the top of a line to its baseline. */
+    gPaintMetricsInt = (*env)->GetMethodID(env, gPaintCls, "getFontMetricsInt",
+                                           "()Landroid/graphics/Paint$FontMetricsInt;");
+    gMetricsIntCls = gref(env, "android/graphics/Paint$FontMetricsInt");
+    gMetricsAscent = gMetricsIntCls
+        ? (*env)->GetFieldID(env, gMetricsIntCls, "ascent", "I") : 0;
+    /* Canvas has no clearRect.  gCanvasSave/gCanvasClipRect/gCanvasRestore already exist for the
+       offscreen rig, so a clear is save, clip to the rect, drawColor(0, Mode.CLEAR), restore.
+       Only the drawColor id and the PorterDuff Mode are new. */
+    gCanvasDrawColor   = (*env)->GetMethodID(env, gCanvasCls, "drawColor",
+                                             "(ILandroid/graphics/PorterDuff$Mode;)V");
     gPathInit    = (*env)->GetMethodID(env, gPathCls, "<init>", "()V");
     gPathMoveTo  = (*env)->GetMethodID(env, gPathCls, "moveTo", "(FF)V");
     gPathLineTo  = (*env)->GetMethodID(env, gPathCls, "lineTo", "(FF)V");
     gPathCubicTo = (*env)->GetMethodID(env, gPathCls, "cubicTo", "(FFFFFF)V");
     gPathClose   = (*env)->GetMethodID(env, gPathCls, "close", "()V");
+    /* The dash: DashPathEffect(float[] intervals, float phase) set on the Paint.  setPathEffect
+       returns the PREVIOUS effect, the way setTypeface returns the previous face. */
+    gDashInit = gDashCls
+              ? (*env)->GetMethodID(env, gDashCls, "<init>", "([FF)V") : 0;
+    gPaintSetPathEffect = (*env)->GetMethodID(env, gPaintCls, "setPathEffect",
+                                              "(Landroid/graphics/PathEffect;)Landroid/graphics/PathEffect;");
     gBmpCreate = (*env)->GetStaticMethodID(env, gBitmapCls, "createBitmap",
                     "(IILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;");
     gBmpGetPixel = (*env)->GetMethodID(env, gBitmapCls, "getPixel", "(II)I");
@@ -767,15 +794,14 @@ void ux_and_poly(short *xy, int n, int r, int g, int b) {
     for (int i = 1; i < n; i++)
         (*env)->CallVoidMethod(env, path, gPathLineTo, (jfloat)xy[i * 2], (jfloat)xy[i * 2 + 1]);
     (*env)->CallVoidMethod(env, path, gPathClose);
-    paintColor(env, r, g, b);
+    paintColor(env, r, g, b, a);
     (*env)->CallVoidMethod(env, gPaint, gPaintSetStyle, gStyleFill);
     (*env)->CallVoidMethod(env, gDrawCanvas, gCanvasDrawPath, path, gPaint);
     (*env)->DeleteLocalRef(env, path);
 }
-/* ops encoding: UXSTROKE_MOVE x y | LINE x y | CURVE c1..c2..xy | CLOSE */
-void ux_and_stroke_path(int *ops, int n, int width, int startCap, int endCap, int r, int g, int b) {
-    if (!gDrawCanvas) return;
-    JNIEnv *env = envNow();
+/* ops encoding: UXSTROKE_MOVE x y | LINE x y | CURVE c1..c2..xy | CLOSE.  One op run = one Path; a
+   dash needs the run split at each MOVE (see ux_and_stroke_path), so the building is its own call. */
+static void and_stroke_run(JNIEnv *env, const int *ops, int n) {
     jobject path = (*env)->NewObject(env, gPathCls, gPathInit);
     int i = 0;
     while (i < n) {
@@ -792,16 +818,48 @@ void ux_and_stroke_path(int *ops, int n, int width, int startCap, int endCap, in
             (*env)->CallVoidMethod(env, path, gPathClose);
         } else break;
     }
-    paintColor(env, r, g, b);
+    (*env)->CallVoidMethod(env, gDrawCanvas, gCanvasDrawPath, path, gPaint);
+    (*env)->DeleteLocalRef(env, path);
+}
+/* The width is in device pixels and may be fractional: Paint.setStrokeWidth takes a float, so a
+ * 1.536-px border is exactly that.
+ * dash/ndash/phase: the on/off run in device pixels and the offset into it (ndash 0 = solid). */
+void ux_and_stroke_path(int *ops, int n, double width, int startCap, int endCap, int join,
+                        int *dash, int ndash, int phase, int r, int g, int b, int a) {
+    if (!gDrawCanvas) return;
+    JNIEnv *env = envNow();
+    paintColor(env, r, g, b, a);
     (*env)->CallVoidMethod(env, gPaint, gPaintSetStyle, gStyleStroke);
-    (*env)->CallVoidMethod(env, gPaint, gPaintSetStrokeWidth, (jfloat)(width > 0 ? width : 1));
+    (*env)->CallVoidMethod(env, gPaint, gPaintSetStrokeWidth, (jfloat)(width > 0.0 ? width : 1.0));
     /* one Cap per Paint: round if either end asks, square above butt */
     jobject cap = (startCap == 1 || endCap == 1) ? gCapRound
                 : (startCap == 2 || endCap == 2) ? gCapSquare : gCapButt;
     (*env)->CallVoidMethod(env, gPaint, gPaintSetStrokeCap, cap);
-    (*env)->CallVoidMethod(env, gDrawCanvas, gCanvasDrawPath, path, gPaint);
+    /* join: 0 miter, 1 round, 2 bevel (UXJOIN_*) */
+    jobject jn = join == 0 ? gJoinMiter : (join == 2 ? gJoinBevel : gJoinRound);
+    (*env)->CallVoidMethod(env, gPaint, gPaintSetStrokeJoin, jn);
+
+    int dashed = ndash > 0 && gDashInit;
+    if (dashed) {
+        jfloat pat[8];
+        int k = ndash > 8 ? 8 : ndash;
+        for (int j = 0; j < k; j++) pat[j] = dash[j] > 0 ? (jfloat)dash[j] : 1.0f;
+        jfloatArray arr = (*env)->NewFloatArray(env, k);
+        (*env)->SetFloatArrayRegion(env, arr, 0, k, pat);
+        jobject eff = (*env)->NewObject(env, gDashCls, gDashInit, arr, (jfloat)phase);
+        (*env)->CallObjectMethod(env, gPaint, gPaintSetPathEffect, eff);
+        (*env)->DeleteLocalRef(env, arr);
+        if (eff) (*env)->DeleteLocalRef(env, eff);
+    } else {
+        (*env)->CallObjectMethod(env, gPaint, gPaintSetPathEffect, (jobject)0);
+    }
+
+    /* Skia's DashPathEffect restarts the phase at every contour, the browser's rule — measured, not
+       assumed, by test_android_real's two-subpath dash: with the run stroked whole the two rows come
+       back identical to the pixel (and the AppKit and cairo dashers answer the same way). */
+    and_stroke_run(env, ops, n);
     (*env)->CallVoidMethod(env, gPaint, gPaintSetStyle, gStyleFill);
-    (*env)->DeleteLocalRef(env, path);
+    if (dashed) (*env)->CallObjectMethod(env, gPaint, gPaintSetPathEffect, (jobject)0);
 }
 /* subtree clipping for the draw walk (neutral coords — the canvas is pre-scaled) */
 void ux_and_clip(int x, int y, int w, int h) {

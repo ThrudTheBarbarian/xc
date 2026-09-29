@@ -64,6 +64,10 @@ The VDI has no path stroker with joins and caps, so `strokeNative` is empty
 and [`UXPainter`](/compiler/api/uxkit/uxpainter/)'s neutral stroker does all
 the work: a quad per segment, a fan per join, a polygon per cap.
 
+`dashesNatively()` is false for the same reason — with no stroker there is
+nothing to dash with — so a dashed border is the neutral dasher's ON pieces
+here too.
+
 Because GEM is the one backend where the neutral stroker is the **only**
 path, that stroker is exercised every time anything is stroked here. A
 regression in it shows up as a failing GEM test instead of going unnoticed.

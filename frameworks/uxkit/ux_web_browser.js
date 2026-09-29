@@ -107,19 +107,30 @@
       ctx.strokeStyle = rgb(r, g, b); ctx.lineWidth = 2;
       ctx.beginPath(); ctx.moveTo(ox() + x0, oy() + y0); ctx.lineTo(ox() + x1, oy() + y1); ctx.stroke();
     },
-    ux_fill_poly: (xyp, n, r, g, b) => {
+    ux_fill_poly: (xyp, n, r, g, b, a) => {
       const m = I16(); const base = (xyp >>> 0) >> 1;
       if (n < 3) return;
-      ctx.fillStyle = rgb(r, g, b);
+      ctx.fillStyle = rgba(r, g, b, a);
       ctx.beginPath(); ctx.moveTo(ox() + m[base], oy() + m[base + 1]);
       for (let i = 1; i < n; i++) ctx.lineTo(ox() + m[base + i * 2], oy() + m[base + i * 2 + 1]);
       ctx.closePath(); ctx.fill();
     },
-    ux_stroke_ops: (opsp, n, width, cap, r, g, b) => {
+    ux_stroke_ops: (opsp, n, width, cap, join, dashp, ndash, phase, r, g, b, a) => {
       const m = I32(); const base = (opsp >>> 0) >> 2;
-      ctx.strokeStyle = rgb(r, g, b); ctx.lineWidth = width;
-      ctx.lineJoin = 'round';
+      const dm = I32(); const dbase = (dashp >>> 0) >> 2;
+      ctx.strokeStyle = rgba(r, g, b, a); ctx.lineWidth = width;
+      ctx.lineJoin = join === 0 ? 'miter' : (join === 2 ? 'bevel' : 'round');
       ctx.lineCap = cap === 1 ? 'round' : (cap === 2 ? 'square' : 'butt');
+      // The dash run and its phase; [] is solid.  setLineDash restarts the phase at each subpath —
+      // the rule the seam promises and the reason the run is handed over rather than chopped up here.
+      if (ndash > 0) {
+        const pat = [];
+        for (let k = 0; k < ndash && k < 8; k++) pat.push(dm[dbase + k] > 0 ? dm[dbase + k] : 1);
+        ctx.setLineDash(pat);
+      } else {
+        ctx.setLineDash([]);
+      }
+      ctx.lineDashOffset = ndash > 0 ? phase : 0;
       ctx.beginPath();
       let i = 0, sx = 0, sy = 0, started = false;
       while (i < n) {

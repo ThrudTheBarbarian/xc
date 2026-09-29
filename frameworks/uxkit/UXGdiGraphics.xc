@@ -195,18 +195,42 @@ class UXGdiGraphics : Object<UXGraphics>
         {
         return true;
         }
-    void strokeNative(i32* ops, i32 n, i32 width, i32 startCap, i32 endCap, i32 pen)
+    // ...but GDI cannot DASH a geometric pen.  ExtCreatePen only accepts a style like PS_DASH on a
+    // COSMETIC pen — one pixel wide, flat caps, no join — so there is no phase to hand over and the
+    // run would be silently dropped, which is a solid border where a dashed one was asked for.  False
+    // sends it to the neutral dasher instead: the flattened centreline, coarser, but the right picture
+    // and the same picture the VDI draws.
+    bool dashesNatively(void)
         {
-        self.strokeOps(ops, n, width, startCap, endCap, self.penColor(pen));
+        return false;
         }
-    void strokeNativeRGB(i32* ops, i32 n, i32 width, i32 startCap, i32 endCap,
-                         i32 red, i32 green, i32 blue)
+    // A geometric pen is opaque like every other GDI brush; see blendsAlpha's note.
+    bool blendsAlpha(void)
         {
-        self.strokeOps(ops, n, width, startCap, endCap,
+        return false;
+        }
+    void strokeNative(i32* ops, i32 n, double width, i32 startCap, i32 endCap, i32 join,
+                      i32* dash, i32 ndash, i32 phase, i32 pen)
+        {
+        self.strokeOps(ops, n, width, startCap, endCap, join, self.penColor(pen));
+        }
+    void strokeNativeRGB(i32* ops, i32 n, double width, i32 startCap, i32 endCap, i32 join,
+                         i32* dash, i32 ndash, i32 phase, i32 red, i32 green, i32 blue)
+        {
+        self.strokeOps(ops, n, width, startCap, endCap, join,
                        (u32)((u32)red | ((u32)green << (u32)8) | ((u32)blue << (u32)16)));
         }
-    void strokeOps(i32* ops, i32 n, i32 width, i32 startCap, i32 endCap, u32 colorref)
+    void strokeNativeRGBA(i32* ops, i32 n, double width, i32 startCap, i32 endCap, i32 join,
+                          i32* dash, i32 ndash, i32 phase, i32 red, i32 green, i32 blue, i32 alpha)
         {
+        self.strokeNativeRGB(ops, n, width, startCap, endCap, join, dash, ndash, phase,
+                             red, green, blue);
+        }
+    void strokeOps(i32* ops, i32 n, double widthFx, i32 startCap, i32 endCap, i32 join, u32 colorref)
+        {
+        // ExtCreatePen's width is a whole number of pixels, so a fractional pen rounds here — the
+        // coarse-but-honest half of the seam's width rule (see UXGraphics' strokeNative comment).
+        i32 width = (i32)(widthFx + 0.5);
         if (n <= (i32)0 || width <= (i32)0)
             {
             return;

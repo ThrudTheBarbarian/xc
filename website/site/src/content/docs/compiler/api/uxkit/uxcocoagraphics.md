@@ -57,6 +57,9 @@ A stroked path goes to Cocoa at sub-pixel precision with Cocoa's own joins. The
 neutral offsetter's whole-pixel vertices wobble by up to half a pixel, which is
 visible under antialiasing.
 
+`dashesNatively()` is true as well: `NSBezierPath` takes the run with
+`setLineDash:count:phase:`, and the phase restarts at every subpath.
+
 Arrowheads remain neutral, because Cocoa has no arrowhead. See
 [`UXPainter`](/compiler/api/uxkit/uxpainter/#native-stroking-where-it-is-better).
 

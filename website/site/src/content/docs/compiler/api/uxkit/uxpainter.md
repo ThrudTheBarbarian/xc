@@ -71,6 +71,8 @@ The neutral code always handles:
 
 - **Arrowheads**, because no backend has one
 - **GEM entirely**, which has no native stroker
+- **Dashes on Windows**, whose `PS_DASH` exists only on a one-pixel cosmetic
+  pen — see [`dashesNatively`](/compiler/api/uxkit/uxgraphics/#dashesnatively)
 
 The neutral path is therefore the only path on one backend and part of every
 stroke on the others.
@@ -142,18 +144,36 @@ Fill in an explicit colour, when you have components instead of a packed value.
 ### strokePath
 
 ```c
-static void strokePath(UXGraphics* g, UXShapePath* p, i16 width, i32 colour)
+static void strokePath(UXGraphics* g, UXShapePath* p, double width, i32 colour)
 ```
 
 Stroke, including any [caps](/compiler/api/uxkit/uxshapepath/#caps-belong-to-the-path)
-the path carries. Uses the backend's stroker where there is one; see
-[above](#native-stroking-where-it-is-better).
+and any [dash](/compiler/api/uxkit/uxshapepath/#dashes) the path carries. Uses
+the backend's stroker where there is one; see
+[above](#native-stroking-where-it-is-better). A dash the backend cannot lay
+down itself goes through the neutral dasher, which walks the flattened
+centreline and emits the ON pieces as segments — so a dashed border is never a
+silently solid one.
+
+`width` is in device pixels and may be a **fraction**. A backend with a real
+stroker draws it exactly; a backend without one (GEM, and GDI for the dashes)
+goes through the toolkit's own stroker, which works in sixteenths of a pixel
+and so rounds to the nearest one. The picture is the same on every backend
+down to the pixel for whole-pixel widths, and within one sixteenth for the
+rest.
+
+A width of **zero or less is floored to one pixel**. No backend strokes at
+width 0 — every one of them draws nothing — and nothing is never the wanted
+picture: a caller that means "no line" skips the call, so a zero is always a
+fault. It is also the invisible kind (an empty run) where a wrong width is at
+least visible, so the seam floors it and the fault becomes a thin line you can
+see.
 
 ### strokeOutlined
 
 ```c
-static void strokeOutlined(UXGraphics* g, UXShapePath* p, i16 width,
-                           i32 fill, i32 outline, i16 rim)
+static void strokeOutlined(UXGraphics* g, UXShapePath* p, double width,
+                           i32 fill, i32 outline, double rim)
 ```
 
 A stroke with a border of `rim` pixels each side.

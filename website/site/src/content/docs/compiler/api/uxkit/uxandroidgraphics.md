@@ -58,6 +58,9 @@ strokesNatively()      // true
 not through the neutral offsetter. Arrowheads stay neutral, as on every
 backend.
 
+`dashesNatively()` is true through `DashPathEffect`, whose phase Skia restarts
+at every contour — the same rule the gate measures on AppKit and cairo.
+
 ## See also
 
 - [`UXGraphics`](/compiler/api/uxkit/uxgraphics/): the protocol

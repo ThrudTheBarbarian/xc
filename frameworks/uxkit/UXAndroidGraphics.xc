@@ -8,11 +8,15 @@
 #import "UXGraphics.xc"
 
 // The shim's drawing ops (act on the Canvas set by the draw in flight).
-void ux_and_fill(i32 x, i32 y, i32 w, i32 h, i32 r, i32 g, i32 b);
-void ux_and_text(u8* s, i32 x, i32 y, i32 r, i32 g, i32 b, i32 size);
+void ux_and_fill(i32 x, i32 y, i32 w, i32 h, i32 r, i32 g, i32 b, i32 a);
+void ux_and_clear(i32 x, i32 y, i32 w, i32 h);
+void ux_and_text(u8* s, i32 x, i32 y, i32 r, i32 g, i32 b, i32 a, i32 size);
+void ux_and_text_weight(u8* s, i32 x, i32 y, u8* family, i32 size, i32 weight, i32 italic,
+                        i32 r, i32 g, i32 b, i32 a);
 void ux_and_tri(i32 x0, i32 y0, i32 x1, i32 y1, i32 x2, i32 y2, i32 r, i32 g, i32 b);
-void ux_and_poly(i16* xy, i32 n, i32 r, i32 g, i32 b);
-void ux_and_stroke_path(i32* ops, i32 n, i32 width, i32 startCap, i32 endCap, i32 r, i32 g, i32 b);
+void ux_and_poly(i16* xy, i32 n, i32 r, i32 g, i32 b, i32 a);
+void ux_and_stroke_path(i32* ops, i32 n, double width, i32 startCap, i32 endCap, i32 join,
+                        i32* dash, i32 ndash, i32 phase, i32 r, i32 g, i32 b, i32 a);
 
 class UXAndroidGraphics : Object<UXGraphics>
     {
@@ -174,19 +178,35 @@ class UXAndroidGraphics : Object<UXGraphics>
         {
         return true;
         }
-    void strokeNative(i32* ops, i32 n, i32 width, i32 startCap, i32 endCap, i32 pen)
+    // DashPathEffect takes a run and a phase like cairo and CGPath, and Skia restarts the phase at
+    // each contour — the browser rule again, so one path per call is the whole story (measured by
+    // test_android_real's two-subpath dash).
+    bool dashesNatively(void)
+        {
+        return true;
+        }
+    void strokeNative(i32* ops, i32 n, double width, i32 startCap, i32 endCap, i32 join,
+                      i32* dash, i32 ndash, i32 phase, i32 pen)
         {
         i32 cr = (i32)0;
         i32 cg = (i32)0;
         i32 cb = (i32)0;
         self.penRGB(pen, &cr, &cg, &cb);
-        self.strokeNativeRGB(ops, n, width, startCap, endCap, cr, cg, cb);
+        self.strokeNativeRGBA(ops, n, width, startCap, endCap, join, dash, ndash, phase,
+                              cr, cg, cb, (i32)255);
         }
-    void strokeNativeRGB(i32* ops, i32 n, i32 width, i32 startCap, i32 endCap,
-                         i32 red, i32 green, i32 blue)
+    void strokeNativeRGB(i32* ops, i32 n, double width, i32 startCap, i32 endCap, i32 join,
+                         i32* dash, i32 ndash, i32 phase, i32 red, i32 green, i32 blue)
+        {
+        self.strokeNativeRGBA(ops, n, width, startCap, endCap, join, dash, ndash, phase,
+                              red, green, blue, (i32)255);
+        }
+    void strokeNativeRGBA(i32* ops, i32 n, double width, i32 startCap, i32 endCap, i32 join,
+                          i32* dash, i32 ndash, i32 phase, i32 red, i32 green, i32 blue, i32 alpha)
         {
         self.offsetOps(ops, n, (i32)origin.x, (i32)origin.y);
-        ux_and_stroke_path(ops, n, width, startCap, endCap, red, green, blue);
+        ux_and_stroke_path(ops, n, width, startCap, endCap, join, dash, ndash, phase,
+                           red, green, blue, alpha);
         self.offsetOps(ops, n, -(i32)origin.x, -(i32)origin.y); // the caller's run stays as it was
         }
     void offsetOps(i32* ops, i32 n, i32 dx, i32 dy)

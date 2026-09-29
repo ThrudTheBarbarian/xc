@@ -34,15 +34,27 @@ extern void ux_present(i32 h);
 extern void ux_gfx_target(i32 h);
 extern void ux_clip(i32 x, i32 y, i32 w, i32 h);
 extern void ux_clip_end(void);
-extern void ux_fill_rect(i32 x, i32 y, i32 w, i32 h, i32 r, i32 g, i32 b);
+extern void ux_fill_rect(i32 x, i32 y, i32 w, i32 h, i32 r, i32 g, i32 b, i32 a);
+// Canvas2D's clearRect: the rect comes back transparent, whatever was under it.
+extern void ux_clear_rect(i32 x, i32 y, i32 w, i32 h);
 extern void ux_fill_circle(i32 cx, i32 cy, i32 rad, i32 r, i32 g, i32 b);
 extern void ux_draw_line(i32 x0, i32 y0, i32 x1, i32 y1, i32 r, i32 g, i32 b);
-extern void ux_fill_poly(i16* xy, i32 n, i32 r, i32 g, i32 b);
+extern void ux_fill_poly(i16* xy, i32 n, i32 r, i32 g, i32 b, i32 a);
 // The UXSTROKE_* op run, walked JS-side into one Path2D + stroke() — Canvas2D
-// strokes real cubics with joins/caps, so the web answers strokesNatively true.
-extern void ux_stroke_ops(i32* ops, i32 n, i32 width, i32 cap, i32 r, i32 g, i32 b);
+// strokes real cubics with joins/caps, and dashes with setLineDash, so the web
+// answers strokesNatively and dashesNatively true.  `dash`/`ndash`/`phase` is the
+// on/off run in device pixels and the offset into it (ndash 0 = solid); setLineDash
+// restarts that offset at every subpath, which is the rule the seam promises.
+// `a` is the straight 0..255 alpha; Canvas2D blends it source-over.  `width` is in device pixels
+// and may be fractional (lineWidth is a double), so a 1.536-px border is a 1.536-px border.
+extern void ux_stroke_ops(i32* ops, i32 n, double width, i32 cap, i32 join,
+                          i32* dash, i32 ndash, i32 phase, i32 r, i32 g, i32 b, i32 a);
 extern void ux_draw_text(u8* s, i32 x, i32 y, u8* family, i32 size, i32 bold, i32 italic,
-                         i32 r, i32 g, i32 b);
+                         i32 r, i32 g, i32 b, i32 a);
+// Text at a numeric CSS weight (400/600/700) — the shorthand takes it straight, so a semibold
+// label is a real semibold and not a bold.
+extern void ux_draw_text_weight(u8* s, i32 x, i32 y, u8* family, i32 size, i32 weight, i32 italic,
+                                i32 r, i32 g, i32 b, i32 a);
 // A themed 9-slice: `slice` names an ImageBitmap the page preloaded (Aristo
 // assets).  The Node rig and a theme-less page fill a grey stand-in.
 extern void ux_draw_theme(u8* slice, i32 x, i32 y, i32 w, i32 h);

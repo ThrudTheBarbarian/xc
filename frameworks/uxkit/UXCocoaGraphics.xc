@@ -25,10 +25,14 @@ i32 ux_ak_setting_set(u8* domain, u8* key, u8* value);
 i32 ux_ak_setting_remove(u8* domain, u8* key);
 i32 ux_ak_text_width(u8* s, i32 size);                                        // measurement for line breaking (UXTextLayout)
 i32 ux_ak_text_width_font(u8* s, u8* family, i32 size, i32 bold, i32 italic); // ...styled
+i32 ux_ak_text_width_weight(u8* s, u8* family, i32 size, i32 weight, i32 italic); // ...at a numeric weight
+i32 ux_ak_text_ascent(u8* family, i32 size, i32 weight, i32 italic); // top of the line -> baseline
 void ux_ak_tri(i32 x0, i32 y0, i32 x1, i32 y1, i32 x2, i32 y2, i32 r, i32 g, i32 b);
-void ux_ak_poly(i16* xy, i32 n, i32 r, i32 g, i32 b); // the general filled polygon
-// Native stroking: Cocoa draws the curve itself, sub-pixel, with its own joins and caps.
-void ux_ak_stroke_path(i32* ops, i32 n, i32 width, i32 startCap, i32 endCap, i32 r, i32 g, i32 b);
+void ux_ak_poly(i16* xy, i32 n, i32 r, i32 g, i32 b, i32 a); // the general filled polygon
+// Native stroking: Cocoa draws the curve itself, sub-pixel, with its own joins and caps, and dashes
+// it too — `dash`/`ndash`/`phase` is the run in device points (ndash 0 = solid).
+void ux_ak_stroke_path(i32* ops, i32 n, double width, i32 startCap, i32 endCap, i32 join,
+                       i32* dash, i32 ndash, i32 phase, i32 r, i32 g, i32 b, i32 a);
 
 class UXCocoaGraphics : Object<UXGraphics>
     {
@@ -191,19 +195,33 @@ class UXCocoaGraphics : Object<UXGraphics>
         {
         return true;
         }
-    void strokeNative(i32* ops, i32 n, i32 width, i32 startCap, i32 endCap, i32 pen)
+    // NSBezierPath has setLineDash:count:phase:, which is a run in device points and a phase into it.
+    bool dashesNatively(void)
+        {
+        return true;
+        }
+    void strokeNative(i32* ops, i32 n, double width, i32 startCap, i32 endCap, i32 join,
+                      i32* dash, i32 ndash, i32 phase, i32 pen)
         {
         i32 cr = (i32)0;
         i32 cg = (i32)0;
         i32 cb = (i32)0;
         self.penRGB(pen, &cr, &cg, &cb);
-        self.strokeNativeRGB(ops, n, width, startCap, endCap, cr, cg, cb);
+        self.strokeNativeRGBA(ops, n, width, startCap, endCap, join, dash, ndash, phase,
+                              cr, cg, cb, (i32)255);
         }
-    void strokeNativeRGB(i32* ops, i32 n, i32 width, i32 startCap, i32 endCap,
-                         i32 red, i32 green, i32 blue)
+    void strokeNativeRGB(i32* ops, i32 n, double width, i32 startCap, i32 endCap, i32 join,
+                         i32* dash, i32 ndash, i32 phase, i32 red, i32 green, i32 blue)
+        {
+        self.strokeNativeRGBA(ops, n, width, startCap, endCap, join, dash, ndash, phase,
+                              red, green, blue, (i32)255);
+        }
+    void strokeNativeRGBA(i32* ops, i32 n, double width, i32 startCap, i32 endCap, i32 join,
+                          i32* dash, i32 ndash, i32 phase, i32 red, i32 green, i32 blue, i32 alpha)
         {
         self.offsetOps(ops, n, (i32)origin.x, (i32)origin.y);
-        ux_ak_stroke_path(ops, n, width, startCap, endCap, red, green, blue);
+        ux_ak_stroke_path(ops, n, width, startCap, endCap, join, dash, ndash, phase,
+                          red, green, blue, alpha);
         self.offsetOps(ops, n, -(i32)origin.x, -(i32)origin.y); // leave the caller's run as it was
         }
     // Shift every coordinate in an op run.  The opcodes say how many follow, so this cannot walk off.

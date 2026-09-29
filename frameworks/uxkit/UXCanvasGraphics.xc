@@ -183,20 +183,33 @@ class UXCanvasGraphics : Object<UXGraphics>
         {
         return true;
         }
-    void strokeNative(i32* ops, i32 n, i32 width, i32 startCap, i32 endCap, i32 pen)
+    // ...and Canvas2D dashes, per subpath, which is where the rule the seam promises comes from.
+    bool dashesNatively(void)
         {
-        self.strokeOps(ops, n, width, startCap, endCap,
-                       self.penR(pen), self.penG(pen), self.penB(pen));
+        return true;
         }
-    void strokeNativeRGB(i32* ops, i32 n, i32 width, i32 startCap, i32 endCap,
-                         i32 red, i32 green, i32 blue)
+    void strokeNative(i32* ops, i32 n, double width, i32 startCap, i32 endCap, i32 join,
+                      i32* dash, i32 ndash, i32 phase, i32 pen)
         {
-        self.strokeOps(ops, n, width, startCap, endCap, red, green, blue);
+        self.strokeOps(ops, n, width, startCap, endCap, join, dash, ndash, phase,
+                       self.penR(pen), self.penG(pen), self.penB(pen), (i32)255);
         }
-    void strokeOps(i32* ops, i32 n, i32 width, i32 startCap, i32 endCap,
-                   i32 red, i32 green, i32 blue)
+    void strokeNativeRGB(i32* ops, i32 n, double width, i32 startCap, i32 endCap, i32 join,
+                         i32* dash, i32 ndash, i32 phase, i32 red, i32 green, i32 blue)
         {
-        if (n <= (i32)0 || width <= (i32)0 || n > (i32)512)
+        self.strokeOps(ops, n, width, startCap, endCap, join, dash, ndash, phase,
+                       red, green, blue, (i32)255);
+        }
+    void strokeNativeRGBA(i32* ops, i32 n, double width, i32 startCap, i32 endCap, i32 join,
+                          i32* dash, i32 ndash, i32 phase, i32 red, i32 green, i32 blue, i32 alpha)
+        {
+        self.strokeOps(ops, n, width, startCap, endCap, join, dash, ndash, phase,
+                       red, green, blue, alpha);
+        }
+    void strokeOps(i32* ops, i32 n, double width, i32 startCap, i32 endCap, i32 join,
+                   i32* dash, i32 ndash, i32 phase, i32 red, i32 green, i32 blue, i32 alpha)
+        {
+        if (n <= (i32)0 || width <= 0.0 || n > (i32)512)
             {
             return;
             }
@@ -235,6 +248,6 @@ class UXCanvasGraphics : Object<UXGraphics>
             }
         // One cap for the whole path, the rounder end wins — the GDI rule, kept for parity.
         i32 cap = startCap > endCap ? startCap : endCap;
-        ux_stroke_ops(&abs[0], i, width, cap, red, green, blue);
+        ux_stroke_ops(&abs[0], i, width, cap, join, dash, ndash, phase, red, green, blue, alpha);
         }
     }

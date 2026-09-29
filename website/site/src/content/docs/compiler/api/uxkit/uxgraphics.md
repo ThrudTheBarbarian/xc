@@ -42,9 +42,41 @@ and the AES use them. Use a pen when you want the platform's own ink colour.
 Use RGB when you have a specific colour, typically from
 [`UXColor`](/compiler/api/uxkit/uxcolor/).
 
+## Alpha
+
+Every RGB primitive has an RGBA sibling, with `alpha` as a straight `0..255`
+(`255` is the opaque form):
+
+```c
+g.fillRectRGBA(r, 48, 80, 160, 128);   // half over what is behind it
+g.fillPolygonRGBA(xy, n, 48, 80, 160, 64);
+g.drawTextRGBA((u8*)"12", 6, 4, 48, 80, 160, 200, 12);
+g.strokeNativeRGBA(ops, n, width, startCap, endCap, join, dashes, ndash, 0, 48, 80, 160, 128);
+                                                 // ^ dash run, count, phase (see dashesNatively)
+```
+
+The alpha is **straight**, not premultiplied: `128` over white gives mid
+grey, not a darkened colour. Where a translucent shape overlaps another, the
+blend is source-over, the same on every backend that blurs at all.
+
+### Emptying a rect
+
+A layer that composites over something has to start empty each frame, and no
+RGBA fill does that: `fillRectRGBA(r, 0, 0, 0, 0)` is a source-over fill, so
+alpha 0 paints **nothing** and leaves whatever was there:
+
+```c
+g.clearRect(g.bounds());   // the rect carries nothing afterwards
+```
+
+`clearRect` clears to transparent where the surface has an alpha, and to the
+window background where it does not (GEM and GDI — the same two that answer
+[`blendsAlpha`](#blendsalpha) false). It is the one call whose meaning is
+"nothing here", and it is deliberately not alpha 0 of the family above.
+
 ## Capability flags, not assumptions
 
-Two methods ask the backend what it can do. A well-written widget draws
+Three methods ask the backend what it can do. A well-written widget draws
 differently depending on the answer.
 
 ### hasThemeArt
@@ -65,11 +97,33 @@ else                 { /* draw the ring and dot with primitives */ }
 With this check, one `drawRect` gives a radio button that looks native on
 GEM and still looks right on a backend with no atlas.
 
+### blendsAlpha
+
+```c
+bool blendsAlpha(void)
+```
+
+True where a translucent fill or stroke actually **composites** over what is
+behind it. The VDI has no compositing and GDI's solid brushes have no alpha,
+so GEM and Windows answer **false** and draw the colour opaque. The other
+backends blend.
+
+This matters when a layer is built from overlapping translucent pieces — a
+coastline at 0.92 drawn as three concentric slabs reads as a coastline only
+if they blend. Ask first, and pick a different construction when the answer
+is false rather than let the shape silently flatten to solid:
+
+```c
+if (g.blendsAlpha()) { /* layered translucent slabs */ }
+else                 { /* one opaque outline */ }
+```
+
 ### strokesNatively
 
 ```c
 bool strokesNatively(void)
-void strokeNative(i32* ops, i32 n, i32 width, i32 startCap, i32 endCap, i32 pen)
+void strokeNative(i32* ops, i32 n, double width, i32 startCap, i32 endCap, i32 join,
+                  i32* dash, i32 ndash, i32 phase, i32 pen)
 ```
 
 True where the **backend** can stroke a path itself: AppKit through
@@ -94,11 +148,61 @@ UXSTROKE_CLOSE
 ```
 
 Caps are none, round or square only. An arrowhead is a *shape*, and
-[`UXPainter`](/compiler/api/uxkit/uxpainter/) draws it as one.
+[`UXPainter`](/compiler/api/uxkit/uxpainter/) draws it as one. Joins are
+miter, round or bevel (`UXJOIN_*` from
+[`UXShapePath`](/compiler/api/uxkit/uxshapepath/#joins)), passed the same way
+as a cap because they belong to the path, not the backend.
+
+The last three arguments are the **dash** ([`dashesNatively`](#dashesnatively)).
+
+`width` is in **device pixels and may be a fraction** — a border stroked at
+`1.536` is a border stroked at 1.536, not at 2. Every backend that strokes
+through a real stroker (AppKit, cairo, Skia, CoreGraphics, Canvas2D) draws the
+fraction exactly. GDI's pen width and the VDI's line width are whole numbers,
+so those two round to the nearest pixel: a coarse hairline beats a wrong
+precise one. The **dash run and phase stay whole pixels** — a paint's dashes
+are its solid rhythm, and no caller has wanted a fraction of one.
+
+### dashesNatively
+
+```c
+bool dashesNatively(void)
+```
+
+True where the backend's stroker also lays down a **dash**: an on/off run in
+whole **device pixels** plus a phase. The run and the phase are whole pixels
+even where the stroke [width](#strokenative) is a fraction. AppKit
+(`setLineDash:count:phase:`), cairo (`cairo_set_dash`), Skia
+(`DashPathEffect`), CoreGraphics (`CGContextSetLineDash`) and Canvas2D
+(`setLineDash` with `lineDashOffset`) all do.
+
+GEM answers false — it has no path stroker to dash with. Windows answers
+false as well: `ExtCreatePen` accepts `PS_DASH` only on a **cosmetic** pen,
+which is one pixel wide, has no joins and takes no phase. A correctly coarse
+dash beats a wrong precise one, so the neutral dasher takes it.
+
+Where the answer is false,
+[`UXPainter`](/compiler/api/uxkit/uxpainter/) walks the flattened centreline
+and emits the ON pieces as segments of its own — never a silently solid
+line.
+
+The run and the phase travel with the **call**, not as context state:
+`ndash == 0` means solid, the phase may be negative, and a two-element
+pattern is the common case (up to `UX_DASH_MAX`, 8). The run itself lives on
+the [path](/compiler/api/uxkit/uxshapepath/#dashes).
+
+All five dashers share one rule, and it was measured on each of them rather
+than assumed from one: **the phase restarts at every subpath**. Two subpaths
+of 85 px in one call with the run `[8,8]` put 85 % 16 = 5 px between the
+restart rule and a phase that continued, so the two answers cannot be
+confused; `make mac-dash`, `make gtk-real`, `make android-real` and
+`make ios-real` each draw that pair and compare it pixel for pixel. A run
+**shorter than the stroke's width** — `[2,2]` at width 6 — still dashes on
+all five.
 
 ## Topics
 
-[fillRect](#fillrect) · [fillRectRGB](#fillrectrgb) · [fillPolygon](#fillpolygon) · [fillPolygonRGB](#fillpolygonrgb) · [fillTriangle](#filltriangle) · [fillCircle](#fillcircle) · [drawLine](#drawline) · [drawText](#drawtext) · [drawTextFont](#drawtextfont) · [drawTheme](#drawtheme) · [hasThemeArt](#hasthemeart) · [strokesNatively](#strokesnatively) · [strokeNative](#strokenative) · [strokeNativeRGB](#strokenativergb)
+[fillRect](#fillrect) · [fillRectRGB](#fillrectrgb) · [fillRectRGBA](#fillrectrgba) · [clearRect](#clearrect) · [fillPolygon](#fillpolygon) · [fillPolygonRGB](#fillpolygonrgb) · [fillPolygonRGBA](#fillpolygonrgba) · [fillTriangle](#filltriangle) · [fillCircle](#fillcircle) · [drawLine](#drawline) · [drawText](#drawtext) · [drawTextRGBA](#drawtextrgba) · [drawTextFont](#drawtextfont) · [drawTextFontRGBA](#drawtextfontrgba) · [drawTheme](#drawtheme) · [hasThemeArt](#hasthemeart) · [blendsAlpha](#blendsalpha) · [strokesNatively](#strokesnatively) · [dashesNatively](#dashesnatively) · [strokeNative](#strokenative) · [strokeNativeRGB](#strokenativergb) · [strokeNativeRGBA](#strokenativergba)
 
 ### fillRect
 
@@ -223,7 +327,8 @@ the widget has a geometric fallback.
 ### strokeNative
 
 ```c
-void strokeNative(i32* ops, i32 n, i32 width, i32 startCap, i32 endCap, i32 pen)
+void strokeNative(i32* ops, i32 n, double width, i32 startCap, i32 endCap, i32 join,
+                  i32* dash, i32 ndash, i32 phase, i32 pen)
 ```
 
 Strokes a path with the backend's own stroker, when
@@ -236,7 +341,11 @@ a struct to get through it.
 
 Caps are passed alongside because they belong to the
 [shape](/compiler/api/uxkit/uxshapepath/#caps-belong-to-the-path), not to
-the backend. An arrowhead is never passed here. No platform has one, so
+the backend. The line **join** is passed the same way (`UXJOIN_MITER`,
+`UXJOIN_ROUND`, `UXJOIN_BEVEL`). `dash`/`ndash`/`phase` are the dash run,
+its length and the phase, and `ndash == 0` means solid — see
+[`dashesNatively`](#dashesnatively). An arrowhead is never passed here. No
+platform has one, so
 [`UXPainter`](/compiler/api/uxkit/uxpainter/) draws every arrowhead itself
 on every backend.
 
@@ -247,11 +356,21 @@ one does all the work there.
 ### strokeNativeRGB
 
 ```c
-void strokeNativeRGB(i32* ops, i32 n, i32 width, i32 startCap, i32 endCap,
-                     i32 red, i32 green, i32 blue)
+void strokeNativeRGB(i32* ops, i32 n, double width, i32 startCap, i32 endCap, i32 join,
+                     i32* dash, i32 ndash, i32 phase, i32 red, i32 green, i32 blue)
 ```
 
 [`strokeNative`](#strokenative) in true colour instead of a pen index.
+
+### strokeNativeRGBA
+
+```c
+void strokeNativeRGBA(i32* ops, i32 n, double width, i32 startCap, i32 endCap, i32 join,
+                      i32* dash, i32 ndash, i32 phase, i32 red, i32 green, i32 blue, i32 alpha)
+```
+
+[`strokeNativeRGB`](#strokenativergb) with an alpha. The map's ink is
+strokes, so this is the call that carries a translucent border.
 
 ## Implementations
 

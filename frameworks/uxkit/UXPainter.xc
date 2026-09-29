@@ -28,10 +28,13 @@
 class UXPainter
     {
     // A COLOUR here is either a VDI pen index (0..255, what the rest of the toolkit passes around) or
-    // a packed true-colour value with bit 24 set.  One i32 rather than a pen argument AND three
-    // colour arguments, because strokeSegment already takes seven and xtc's arm64 backend has a
-    // history with arguments past the eighth — and because every call below would otherwise need a
-    // duplicate.  UXPainter.rgb(r,g,b) builds one.
+    // a packed 0xAARRGGBB true-colour value.  One i32 rather than a pen argument AND four colour
+    // arguments, because strokeSegment already takes seven and every call below would otherwise need
+    // a duplicate.  UXPainter.rgb(r,g,b) builds an opaque one, UXPainter.rgba(r,g,b,a) the rest.
+    //
+    // A pen has every bit above 7 clear, so anything else is a true colour and the two cannot be
+    // confused — except for a fully transparent colour whose channels are all under 256, which packs
+    // into the pen range; rgba() clamps alpha up to 1 so that value cannot be built.
     // Divide with ROUNDING, for a positive divisor.  Truncation is what made a stroke look blocky:
     // the half-width normal was computed as (-dy*256/len)*r/256, truncating twice, so the width of
     // the quad varied by up to a pixel with the segment's direction and the silhouette wobbled from
@@ -64,21 +67,29 @@ class UXPainter
             }
         if (UXPainter.isRGB(colour))
             {
-            g.fillPolygonRGB(&gUXPaintXY[(i32)0], n, (colour >> (i32)16) & (i32)255,
-                             (colour >> (i32)8) & (i32)255, colour & (i32)255);
+            g.fillPolygonRGBA(&gUXPaintXY[(i32)0], n, (colour >> (i32)16) & (i32)255,
+                              (colour >> (i32)8) & (i32)255, colour & (i32)255,
+                              UXPainter.alphaOf(colour));
             }
         else
             {
             g.fillPolygon(&gUXPaintXY[(i32)0], n, colour);
             }
         }
-    static void fillShapeRGB(UXGraphics* g, UXShapePath* p, i32 r, i32 gr, i32 b)
+    static void fillShapeRGBA(UXGraphics* g, UXShapePath* p, i32 r, i32 gr, i32 b, i32 a)
         {
         i32 n = UXPainter.flatten(p);
         if (n >= (i32)3)
             {
-            g.fillPolygonRGB(&gUXPaintXY[(i32)0], n, r, gr, b);
+            g.fillPolygonRGBA(&gUXPaintXY[(i32)0], n, r, gr, b, a);
             }
+        }
+    // The opaque form of the above, kept as its own name the way fillRectRGB and fillPolygonRGB are:
+    // a caller that has no alpha to give should not have to write one, and the docs are checked against
+    // the names the source actually declares.
+    static void fillShapeRGB(UXGraphics* g, UXShapePath* p, i32 r, i32 gr, i32 b)
+        {
+        UXPainter.fillShapeRGBA(g, p, r, gr, b, (i32)255);
         }
     // Copy a path's points into the flat x,y array the seam takes, flattening curves on the way.
     //
@@ -185,8 +196,9 @@ class UXPainter
             }
         if (UXPainter.isRGB(colour))
             {
-            g.fillPolygonRGB(&gUXPaintXY[(i32)0], n, (colour >> (i32)16) & (i32)255,
-                             (colour >> (i32)8) & (i32)255, colour & (i32)255);
+            g.fillPolygonRGBA(&gUXPaintXY[(i32)0], n, (colour >> (i32)16) & (i32)255,
+                              (colour >> (i32)8) & (i32)255, colour & (i32)255,
+                              UXPainter.alphaOf(colour));
             }
         else
             {
@@ -323,10 +335,227 @@ class UXPainter
         return cap == (i32)UXCAP_ARROW ? (i32)UXCAP_NONE : cap;
         }
 
-    // Stroke `p` at `width`, honouring its caps.  The path flattens first, so a curve strokes as the
-    // polyline it approximates — which is exactly what makes the result identical on every backend.
-    static void strokePath(UXGraphics* g, UXShapePath* p, i16 width, i32 colour)
+    // ---- the dashes -----------------------------------------------------------------------------
+    // Two things walk a dash run: the seam, which hands the run and the phase to a backend that has a
+    // dasher of its own, and the neutral walk below, for the ones that do not (GEM and GDI).  Both
+    // have to agree, so both take the run in whole DEVICE pixels and both restart the phase at every
+    // subpath — the rule UXShapePath's dash comment derives.
+    //
+    // Where in the run pattern-coordinate `q` falls: true when the pen is down, and how far it is
+    // until the pen comes up again.  `q` is already reduced into [0, total).
+    static bool dashRun(i32 q, i32* pat, i32 np, i32 total, i32* toEnd)
         {
+        i32 acc = (i32)0;
+        for (i32 k = (i32)0; k < np; k = k + (i32)1)
+            {
+            acc = acc + pat[k];
+            if (q < acc)
+                {
+                *toEnd = acc - q;
+                return (k & (i32)1) == (i32)0;
+                }
+            }
+        *toEnd = total - q; // unreachable while q < total
+        return false;
+        }
+    // Length in 1/16 px, for a run long enough that squaring it would overflow.  UXGeom.length does
+    // dx*dx + dy*dy in i32, which leaves the rails once either delta passes 46340 (2900 px at this
+    // scale); halving both first keeps the ratio and scales the answer back.
+    static i32 segLenFx(i32 dx, i32 dy)
+        {
+        i32 s = (i32)1;
+        while (dx > (i32)16384 || dx < (i32)-16384 || dy > (i32)16384 || dy < (i32)-16384)
+            {
+            dx = dx / (i32)2;
+            dy = dy / (i32)2;
+            s = s * (i32)2;
+            }
+        return UXGeom.isqrt(dx * dx + dy * dy) * s;
+        }
+    // The dashes of ONE segment, from pattern-coordinate `q`; returns the coordinate at the far end.
+    // Each ON piece is stroked as its own quad, the endpoints taken from the exact fraction of the
+    // segment rather than accumulated, so consecutive pieces abut instead of drifting apart.
+    static i32 dashSegment(UXGraphics* g, i32 x0, i32 y0, i32 x1, i32 y1, i32 q,
+                           i32* pat, i32 np, i32 total, i32 widthFx, i32 colour)
+        {
+        i32 dx = x1 - x0;
+        i32 dy = y1 - y0;
+        if (dx == (i32)0 && dy == (i32)0)
+            {
+            return q;
+            }
+        i32 len = UXPainter.segLenFx(dx, dy);
+        if (len <= (i32)0)
+            {
+            return q;
+            }
+        // A segment longer than 2000 px is split at its midpoint before the walk: dx*len has to stay
+        // inside i32 and it is the SQUARE of the length.  Nothing a UI draws is that long, but a
+        // silent overflow here would be a dash in the wrong place rather than a visible failure.
+        if (len > (i32)32000)
+            {
+            i32 mx = (x0 + x1) / (i32)2;
+            i32 my = (y0 + y1) / (i32)2;
+            i32 q2 = UXPainter.dashSegment(g, x0, y0, mx, my, q, pat, np, total, widthFx, colour);
+            return UXPainter.dashSegment(g, mx, my, x1, y1, q2, pat, np, total, widthFx, colour);
+            }
+        i32 done = (i32)0;
+        while (done < len)
+            {
+            i32 take = len - done;
+            i32 toEnd = (i32)0;
+            bool on = UXPainter.dashRun(q, pat, np, total, &toEnd);
+            if (toEnd < take)
+                {
+                take = toEnd;
+                }
+            if (on)
+                {
+                i32 ax = x0 + UXPainter.divRound(dx * done, len);
+                i32 ay = y0 + UXPainter.divRound(dy * done, len);
+                i32 bx = x0 + UXPainter.divRound(dx * (done + take), len);
+                i32 by = y0 + UXPainter.divRound(dy * (done + take), len);
+                UXPainter.strokeSegmentFx(g, ax, ay, bx, by, widthFx, colour);
+                }
+            done = done + take;
+            q = q + take;
+            if (q >= total)
+                {
+                q = q - total;
+                }
+            }
+        return q;
+        }
+    // The neutral dasher: flatten, then emit only the ON pieces of each subpath's centreline.  The
+    // phase restarts at every MOVE — that is the point of doing it here rather than leaving it to the
+    // caller, and it is the same rule the seam hands to a backend that can dash for itself.
+    static void strokeDashedNeutral(UXGraphics* g, UXShapePath* p, double width, i32 colour)
+        {
+        i32 np = p.dashCount();
+        if (np <= (i32)0)
+            {
+            return;
+            }
+        i32 pat[UX_DASH_MAX];
+        i32 total = (i32)0;
+        for (i32 k = (i32)0; k < np; k = k + (i32)1)
+            {
+            pat[k] = (i32)p.dashAt(k) * (i32)UX_FX;
+            if (pat[k] < (i32)1)
+                {
+                pat[k] = (i32)1;
+                }
+            total = total + pat[k];
+            }
+        if (total <= (i32)0)
+            {
+            return;
+            }
+        i32 phase = p.dashPhase() * (i32)UX_FX;
+        // reduce the phase into the run once, so the walk's own arithmetic stays in range
+        phase = phase - (phase / total) * total;
+        while (phase < (i32)0)
+            {
+            phase = phase + total;
+            }
+        i32 widthFx = (i32)(width * (double)UX_FX + 0.5); // the neutral stroker works in 1/16 px
+        i32 n = p.flattenFx(&gUXFlatFx[(i32)0], (i32)UX_FLAT_MAX);
+        i32 px = (i32)0;
+        i32 py = (i32)0;
+        i32 sx = (i32)0;
+        i32 sy = (i32)0; // subpath start, for CLOSE
+        i32 q = (i32)0;
+        bool have = false;
+        for (i32 i = (i32)0; i < n; i = i + (i32)1)
+            {
+            i32 ex = gUXFlatFx[i * (i32)2];
+            i32 ey = gUXFlatFx[i * (i32)2 + (i32)1];
+            if (ex == (i32)UX_FX_MOVE)
+                {
+                i = i + (i32)1;
+                if (i >= n)
+                    {
+                    break;
+                    }
+                px = gUXFlatFx[i * (i32)2];
+                py = gUXFlatFx[i * (i32)2 + (i32)1];
+                sx = px;
+                sy = py;
+                q = phase; // A NEW SUBPATH STARTS A NEW RUN — the rule, not an accident
+                have = true;
+                continue;
+                }
+            i32 tx = ex;
+            i32 ty = ey;
+            bool closing = false;
+            if (ex == (i32)UX_FX_CLOSE)
+                {
+                if (!have)
+                    {
+                    continue;
+                    }
+                tx = sx;
+                ty = sy;
+                closing = true;
+                }
+            else if (!have)
+                {
+                px = ex;
+                py = ey;
+                sx = ex;
+                sy = ey;
+                have = true;
+                continue;
+                }
+            q = UXPainter.dashSegment(g, px, py, tx, ty, q, &pat[0], np, total, widthFx, colour);
+            // An interior vertex carries its join only while the pen is down across it; at a dash
+            // boundary the two pieces meeting there are ends, and a disc would round a cut the
+            // backend's dasher leaves square.
+            if (i + (i32)1 < n)
+                {
+                i32 toEnd = (i32)0;
+                if (UXPainter.dashRun(q, &pat[0], np, total, &toEnd))
+                    {
+                    UXPainter.strokeJoinFx(g, tx, ty, widthFx, colour);
+                    }
+                }
+            if (closing)
+                {
+                px = sx;
+                py = sy;
+                }
+            else
+                {
+                px = tx;
+                py = ty;
+                }
+            }
+        }
+
+    // Stroke `p` at `width` device pixels — a fraction is fine (1.536 is a real border width on a
+    // map), and it stays a fraction all the way to a backend whose stroker takes one.  The path
+    // flattens first, so a curve strokes as the polyline it approximates, which is exactly what makes
+    // the result identical on every backend.
+    static void strokePath(UXGraphics* g, UXShapePath* p, double width, i32 colour)
+        {
+        // A width of zero strokes NOTHING on every backend — none treats it as a hairline — and
+        // nothing is never the wanted picture: a caller that means "no line" skips the call, so a
+        // zero here is always a fault.  The fault is also the invisible kind (no pixels), where a
+        // wrong width at least shows; a bare float literal passed in the wrong register is enough to
+        // produce it, so the seam floors the width and the fault becomes a thin line, not an absence.
+        if (width <= 0.0)
+            {
+            width = 1.0;
+            }
+        // A dashed stroke goes down the neutral dasher unless the backend can dash for itself: a
+        // backend that strokes but cannot dash (GDI) would otherwise drop the run on the floor and
+        // draw a solid border, which is a wrong picture rather than a coarse one.
+        bool dashed = p.dashCount() > (i32)0;
+        if (dashed && !(g.strokesNatively() && g.dashesNatively()))
+            {
+            UXPainter.strokeDashedNeutral(g, p, width, colour);
+            return;
+            }
         // Where the backend strokes, let it: it draws the CURVE at sub-pixel precision with its own
         // joins, which the neutral stroker cannot — it offsets a polyline whose vertices are whole
         // pixels, so its silhouette wobbles by up to half a pixel and looks lumpy wherever something
@@ -338,15 +567,24 @@ class UXPainter
                 {
                 i32 sc = UXPainter.nativeCap(p.startCapKind());
                 i32 ec = UXPainter.nativeCap(p.endCapKind());
+                i32 jn = p.joinKind();
+                i32 nd = p.dashCount();
+                for (i32 k = (i32)0; k < nd; k = k + (i32)1)
+                    {
+                    gUXDash[k] = p.dashAt(k);
+                    }
                 if (UXPainter.isRGB(colour))
                     {
-                    g.strokeNativeRGB(&gUXOps[(i32)0], n, (i32)width, sc, ec,
-                                      (colour >> (i32)16) & (i32)255,
-                                      (colour >> (i32)8) & (i32)255, colour & (i32)255);
+                    g.strokeNativeRGBA(&gUXOps[(i32)0], n, width, sc, ec, jn,
+                                       &gUXDash[(i32)0], nd, p.dashPhase(),
+                                       (colour >> (i32)16) & (i32)255,
+                                       (colour >> (i32)8) & (i32)255, colour & (i32)255,
+                                       UXPainter.alphaOf(colour));
                     }
                 else
                     {
-                    g.strokeNative(&gUXOps[(i32)0], n, (i32)width, sc, ec, colour);
+                    g.strokeNative(&gUXOps[(i32)0], n, width, sc, ec, jn,
+                                   &gUXDash[(i32)0], nd, p.dashPhase(), colour);
                     }
                 }
             UXShapePath* a0 = p.capOutline(true, width);
@@ -434,7 +672,7 @@ class UXPainter
     // different widths makes the outline arrow 2.5x rim LONGER as well as wider.  That is why the
     // demo showed a fat black spike at the tip and no outline at all behind the head.  Setting the
     // arrow length explicitly for each pass dilates it by exactly rim, like every other edge.
-    static void strokeOutlined(UXGraphics* g, UXShapePath* p, i16 width, i32 fill, i32 outline, i16 rim)
+    static void strokeOutlined(UXGraphics* g, UXShapePath* p, double width, i32 fill, i32 outline, double rim)
         {
         i32 sc = p.startCapKind();
         i32 ec = p.endCapKind();
@@ -452,7 +690,7 @@ class UXPainter
             {
             p.setEndCap((i32)UXCAP_NONE);
             }
-        UXPainter.strokePath(g, p, (i16)((i32)width + (i32)2 * (i32)rim), outline);
+        UXPainter.strokePath(g, p, width + 2.0 * rim, outline);
         p.setStartCap(sc);
         p.setEndCap(ec);
 
@@ -518,7 +756,7 @@ class UXPainter
             i32 t = (i32)255 - (i32)255 * b / (bands - (i32)1);
             UXColor* c = grad.colorAt(t);
             UXShapePath* ring = b == (i32)0 ? p : UXPainter.shrunk(p, cx, cy, bands - b, bands);
-            UXPainter.fillShapeRGB(g, ring, (i32)c.r, (i32)c.g, (i32)c.b);
+            UXPainter.fillShapeRGBA(g, ring, (i32)c.r, (i32)c.g, (i32)c.b, (i32)c.a);
             }
         }
     }
@@ -528,3 +766,6 @@ class UXPainter
     i16 gUXPaintXY[256];
 i32 gUXOps[2048];
 i32 gUXFlatFx[4000];
+// The dash run on its way to a backend that can dash: filled from the path for each stroke call, so
+// nothing about it is remembered between calls — which is the property the phase depends on.
+i32 gUXDash[UX_DASH_MAX];

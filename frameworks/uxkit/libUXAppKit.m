@@ -1396,8 +1396,13 @@ void ux_ak_poly(const short* xy, int n, int r, int g, int b, int a)
 //   caps: 0 = butt, 1 = round, 2 = square (UXCAP_*); an arrowhead is drawn as a polygon, not here.
 // NSBezierPath has ONE line cap for the whole path, so when the two ends differ the rounder of the
 // two wins and the other end is covered by whatever shape the painter puts there.
-void ux_ak_stroke_path(const int* ops, int n, int width, int startCap, int endCap,
-                       int r, int g, int b)
+//   dash/ndash/phase: the on/off run in device POINTS and how far into it the stroke starts (ndash 0
+// = solid).  The phase may be negative, which starts the run before its beginning: exactly what
+// lineDashOffset does, and what a crawling border is.
+//   width: device points, and may be FRACTIONAL — setLineWidth: takes a CGFloat, so a 1.536-pt border
+// is exactly that.
+void ux_ak_stroke_path(const int* ops, int n, double width, int startCap, int endCap, int join,
+                       const int* dash, int ndash, int phase, int r, int g, int b, int a)
     {
     if (n <= 0)
         return;
@@ -1463,8 +1468,26 @@ void ux_ak_stroke_path(const int* ops, int n, int width, int startCap, int endCa
     int cap = startCap > endCap ? startCap : endCap;
     [p setLineCapStyle:(cap == 1 ? NSLineCapStyleRound
                                  : (cap == 2 ? NSLineCapStyleSquare : NSLineCapStyleButt))];
-    [p setLineJoinStyle:NSLineJoinStyleRound];
-    [[NSColor colorWithRed:r / 255.0 green:g / 255.0 blue:b / 255.0 alpha:1.0] setStroke];
+    // join: 0 miter, 1 round, 2 bevel (UXJOIN_*).
+    [p setLineJoinStyle:(join == 0 ? NSLineJoinStyleMiter
+                                   : (join == 2 ? NSLineJoinStyleBevel : NSLineJoinStyleRound))];
+    // The dash run.  NSBezierPath takes it in the same units as the line width (points), and it
+    // restarts the run at each subpath — which is the rule the seam promises, so nothing has to be
+    // split here.  A zero or negative entry is lifted to 1, as a dasher with a zero-length run either
+    // stalls or is undefined.
+    if (ndash > 0)
+        {
+        CGFloat pat[8];
+        int k = ndash > 8 ? 8 : ndash;
+        for (int j = 0; j < k; j++)
+            pat[j] = dash[j] > 0 ? (CGFloat)dash[j] : (CGFloat)1;
+        [p setLineDash:pat count:(NSInteger)k phase:(CGFloat)phase];
+        }
+    else
+        {
+        [p setLineDash:NULL count:0 phase:(CGFloat)0];
+        }
+    [[NSColor colorWithRed:r / 255.0 green:g / 255.0 blue:b / 255.0 alpha:a / 255.0] setStroke];
     [p stroke];
     }
 

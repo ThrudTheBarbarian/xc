@@ -84,9 +84,33 @@ protocol UXGraphics
     // The path is handed over as a flat OP RUN rather than an object, because the AppKit half of this
     // lives in Objective-C and the Win32 half in GDI calls — neither can walk an xt class.  See
     // UXSTROKE_* for the encoding.  Caps are NONE/ROUND/SQUARE only: an ARROW is a shape, and
-    // UXPainter keeps drawing it as one.
+    // UXPainter keeps drawing it as one.  `join` (UXJOIN_*) is the interior-vertex join — the map's
+    // borders set round and miter, and it is the cap's sibling rather than a new kind of thing.
     bool strokesNatively(void);
-    void strokeNative(i32 * ops, i32 n, i32 width, i32 startCap, i32 endCap, i32 pen);
-    void strokeNativeRGB(i32 * ops, i32 n, i32 width, i32 startCap, i32 endCap,
-                         i32 red, i32 green, i32 blue);
+    // True where the backend's stroker can take a DASH as well: an on/off run in device pixels plus a
+    // phase into it, both passed per call.  AppKit, cairo, Skia (Android), CoreGraphics and Canvas2D
+    // all have one; GDI does not (its only phase-less dash is a cosmetic pen's, and a cosmetic pen is
+    // one pixel wide with no join) and the VDI has neither, so those two answer false and the caller
+    // dashes the flattened polyline itself — coarser, but at least the right picture.
+    //
+    // `ndash` 0 means solid, so a caller need not build an empty pattern.  The phase is in DEVICE
+    // pixels and may be negative: a negative offset starts the run before its beginning, which is a
+    // stroke beginning part-way through an off run rather than a different pattern.
+    //
+    // THE PHASE RESTARTS AT EVERY SUBPATH of the op run.  That is the browser's rule, and all five
+    // dashers already keep it — AppKit, cairo, Skia, CoreGraphics and Canvas2D each measured with a
+    // two-subpath run (make mac-dash / gtk-real / android-real / ios-real), so a run goes to the
+    // backend whole and no shim splits anything.  See UXShapePath's dash comment.
+    bool dashesNatively(void);
+    // The stroke width is in DEVICE PIXELS and is a FRACTION: a pen of 1.536 is a pen of 1.536.  The
+    // backends that stroke through a real stroker (AppKit, cairo, Skia, CoreGraphics, Canvas2D) draw
+    // it exactly; GDI's pen width and the VDI's line width are whole numbers, so those two round to
+    // the nearest pixel — a coarse hairline beats a wrong one.  The dash run and phase stay whole
+    // pixels: a paint's dashes are its solid rhythm, and no caller has wanted a fraction of one yet.
+    void strokeNative(i32 * ops, i32 n, double width, i32 startCap, i32 endCap, i32 join,
+                      i32 * dash, i32 ndash, i32 phase, i32 pen);
+    void strokeNativeRGB(i32 * ops, i32 n, double width, i32 startCap, i32 endCap, i32 join,
+                         i32 * dash, i32 ndash, i32 phase, i32 red, i32 green, i32 blue);
+    void strokeNativeRGBA(i32 * ops, i32 n, double width, i32 startCap, i32 endCap, i32 join,
+                          i32 * dash, i32 ndash, i32 phase, i32 red, i32 green, i32 blue, i32 alpha);
     }

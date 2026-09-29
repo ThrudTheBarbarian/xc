@@ -139,9 +139,57 @@ the author drew**, whatever renders it. The cap geometry uses the same integer
 arithmetic as the rest of this page. A closed subpath has no ends and therefore
 no caps.
 
+## Joins
+
+```c
+outline.setJoin(UXJOIN_MITER);
+```
+
+| | |
+| --- | --- |
+| `UXJOIN_MITER` | the two edges extended to a point (a sharp corner) |
+| `UXJOIN_ROUND` | the default: a disc fills the outside of every turn |
+| `UXJOIN_BEVEL` | the corner cut flat |
+
+A join is where the two segments of a turn meet, and like a cap it belongs to
+the shape, not the backend — a nation's border is drawn mitred or it is a
+different border. The default is round: the toolkit's own stroker covers the
+outside of a turn with a disc, and round is what that produces, so a path that
+never sets a join draws the way it always did. The native strokers pass the
+join straight through (`NSLineJoinStyle`, `PS_JOIN_*`, `kCGLineJoin*`).
+
+## Dashes
+
+```c
+i32 pat[2];
+pat[0] = (i32)8;
+pat[1] = (i32)8;
+outline.setDash(&pat[0], (i32)2, (i32)0);   // 8 on, 8 off, starting at the run's start
+```
+
+An on/off run in whole **device pixels** plus a phase — how far into the run
+the stroke starts. It lives on the path for the same reason the caps and the
+join do: it is a property of the shape the author drew. The dash reaches the
+seam as an **argument** rather than as context state, because it changes
+every frame (a coastline crawler animates it), and state would leak it into
+the next stroke that did not set one.
+
+The phase **restarts at every subpath**: a move starts a fresh run. That is
+what Canvas2D and SVG do, and what every native dasher measured does.
+
+`n <= 0` clears the run back to solid, a non-positive entry is lifted to
+`1`, and entries past `UX_DASH_MAX` (8) are dropped rather than overflowing
+the buffer. [`flattened()`](#flattened) carries the run, so a copy of the
+path strokes the same.
+
+Whether a backend lays the dash down itself is
+[`UXGraphics.dashesNatively`](/compiler/api/uxkit/uxgraphics/#dashesnatively).
+Where it answers false, [`UXPainter`](/compiler/api/uxkit/uxpainter/) dashes
+the flattened centreline instead.
+
 ## Topics
 
-[moveTo](#moveto) · [lineTo](#lineto) · [curveTo](#curveto) · [quadTo](#quadto) · [close](#close) · [rect](#rect) · [hasCurves](#hascurves) · [flattened](#flattened) · [boundingBox](#boundingbox) · [edges](#edges) · [containsPoint](#containspoint) · [setStartCap](#setstartcap--setendcap) · [setEndCap](#setstartcap--setendcap) · [setCapWidth](#setcapwidth) · [setArrowLength](#setarrowlength) · [capOutline](#capoutline)
+[moveTo](#moveto) · [lineTo](#lineto) · [curveTo](#curveto) · [quadTo](#quadto) · [close](#close) · [rect](#rect) · [hasCurves](#hascurves) · [flattened](#flattened) · [boundingBox](#boundingbox) · [edges](#edges) · [containsPoint](#containspoint) · [setStartCap](#setstartcap--setendcap) · [setEndCap](#setstartcap--setendcap) · [setCapWidth](#setcapwidth) · [setArrowLength](#setarrowlength) · [capOutline](#capoutline) · [setJoin](#setjoin) · [joinKind](#joinkind) · [setDash](#setdash) · [clearDash](#cleardash) · [dashCount](#dashcount) · [dashAt](#dashat) · [dashPhase](#dashphase)
 
 ### moveTo
 
@@ -305,11 +353,70 @@ Arrowhead length along the direction of travel. `0` means three times the width.
 ### capOutline
 
 ```c
-UXShapePath* capOutline(bool atStart, i16 width)
+UXShapePath* capOutline(bool atStart, double width)
 ```
 
 The cap as its own path, ready to fill. Null when that end has no cap (a closed
 subpath, or `UXCAP_NONE`).
+
+### setJoin
+
+```c
+void setJoin(i32 j)
+```
+
+The join at each turn: `UXJOIN_MITER`, `UXJOIN_ROUND` or `UXJOIN_BEVEL`. See
+[Joins](#joins).
+
+### joinKind
+
+```c
+i32 joinKind(void)
+```
+
+Read back the join, the way `startCapKind` reads back a cap.
+
+### setDash
+
+```c
+void setDash(i32* pat, i32 n, i32 phase)
+```
+
+The dash run, its entry count and the phase into it. `n <= 0` clears it back
+to solid. See [Dashes](#dashes).
+
+### clearDash
+
+```c
+void clearDash(void)
+```
+
+Back to a solid stroke.
+
+### dashCount
+
+```c
+i32 dashCount(void)
+```
+
+The number of run entries — `0` when the stroke is solid.
+
+### dashAt
+
+```c
+i32 dashAt(i32 i)
+```
+
+One entry of the run, in device pixels.
+
+### dashPhase
+
+```c
+i32 dashPhase(void)
+```
+
+The phase into the run. It may be negative; whoever consumes it reduces it
+into the run.
 
 ## Example
 

@@ -46,6 +46,9 @@ CoreGraphics strokes at sub-pixel precision with its own joins, so a path goes
 to it rather than through the neutral offsetter. Arrowheads stay neutral
 because CoreGraphics has no arrowhead, as on every hosted backend.
 
+`dashesNatively()` is true through `CGContextSetLineDash`, which restarts the
+phase at every subpath.
+
 ## See also
 
 - [`UXGraphics`](/compiler/api/uxkit/uxgraphics/): the protocol

@@ -66,6 +66,9 @@ strokesNatively()      // true
 Canvas2D has a real stroker with joins and caps, so paths go to it directly.
 Arrowheads stay neutral, as on every backend.
 
+`dashesNatively()` is true: `setLineDash` with `lineDashOffset`, which is the
+rule every other dasher here was measured against.
+
 ## See also
 
 - [`UXGraphics`](/compiler/api/uxkit/uxgraphics/): the protocol

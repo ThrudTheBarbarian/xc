@@ -924,25 +924,15 @@ void ux_gtk_text_font(const char* s, int x, int y, int r, int g, int b,
     if (!gCr)
         return;
     setRGB(r, g, b);
-    cairo_select_font_face(gCr, family && family[0] ? family : "sans-serif",
-                           italic ? CAIRO_FONT_SLANT_ITALIC : CAIRO_FONT_SLANT_NORMAL,
-                           bold ? CAIRO_FONT_WEIGHT_BOLD : CAIRO_FONT_WEIGHT_NORMAL);
-    cairo_set_font_size(gCr, size > 0 ? size : 13);
-    cairo_move_to(gCr, x, y + (size > 0 ? size : 13));
+    cairo_move_to(gCr, x, y + gtk_line_ascent(gCr, family, size, bold ? 700 : 400, italic));
     cairo_show_text(gCr, s);
     }
-void ux_gtk_stroke_path(int* ops, int n, int width, int startCap, int endCap,
-                        int r, int g, int b)
+/* Build one op run into the cairo context and stroke it.  A dashed stroke needs nothing special here:
+ * cairo restarts the dash phase at every MOVE, which is the browser rule — measured, not assumed, by
+ * test_gtk_real's two-subpath dash (the two rows come back identical to the pixel with the run stroked
+ * whole).  */
+static void gtk_stroke_run(const int* ops, int n)
     {
-    if (!gCr || n <= 0 || width <= 0)
-        return;
-    setRGB(r, g, b);
-    cairo_set_line_width(gCr, width);
-    cairo_set_line_join(gCr, CAIRO_LINE_JOIN_ROUND);
-    int cap = startCap > endCap ? startCap : endCap;
-    cairo_set_line_cap(gCr, cap == 1   ? CAIRO_LINE_CAP_ROUND
-                            : cap == 2 ? CAIRO_LINE_CAP_SQUARE
-                                       : CAIRO_LINE_CAP_BUTT);
     int i = 0;
     while (i < n)
         {
@@ -963,11 +953,101 @@ void ux_gtk_stroke_path(int* ops, int n, int width, int startCap, int endCap,
             i += 6;
             }
         else if (op == 3)
+            {
             cairo_close_path(gCr);
+            }
         else
+            {
             break;
+            }
         }
     cairo_stroke(gCr);
+    }
+/* Ints occupied by the op at i, or 0 if it runs off the end. */
+/* The width is in device pixels and may be fractional — cairo_set_line_width is a double, so a
+ * 1.536-px border is exactly that.
+ * dash/ndash/phase: the on/off run in device pixels and the offset into it (ndash 0 = solid).  cairo
+ * takes a negative offset the same way Canvas2D takes a negative lineDashOffset: the run starts
+ * before its beginning.  */
+void ux_gtk_stroke_path(int* ops, int n, double width, int startCap, int endCap, int join,
+                        int* dash, int ndash, int phase, int r, int g, int b, int a)
+    {
+    if (!gCr || n <= 0 || width <= 0.0)
+        return;
+    setRGBA(r, g, b, a);
+    cairo_set_line_width(gCr, width);
+    /* join: 0 miter, 1 round, 2 bevel (UXJOIN_*) */
+    cairo_set_line_join(gCr, join == 0   ? CAIRO_LINE_JOIN_MITER
+                             : join == 2 ? CAIRO_LINE_JOIN_BEVEL
+                                         : CAIRO_LINE_JOIN_ROUND);
+    int cap = startCap > endCap ? startCap : endCap;
+    cairo_set_line_cap(gCr, cap == 1   ? CAIRO_LINE_CAP_ROUND
+                            : cap == 2 ? CAIRO_LINE_CAP_SQUARE
+                                       : CAIRO_LINE_CAP_BUTT);
+    int dashed = ndash > 0;
+    if (dashed)
+        {
+        double pat[8];
+        int k = ndash > 8 ? 8 : ndash;
+        for (int j = 0; j < k; j++)
+            {
+            pat[j] = dash[j] > 0 ? (double)dash[j] : 1.0;
+            }
+        cairo_set_dash(gCr, pat, k, (double)phase);
+        }
+    else
+        {
+        cairo_set_dash(gCr, NULL, 0, 0.0);
+        }
+    gtk_stroke_run(ops, n);
+    }
+/* Text metrics and the drawing calls share one face, so a measure and a paint can never disagree:
+ * the toy font API has two weights, so the CSS scale folds at semibold here exactly as it does in
+ * ux_gtk_text_weight. */
+static void gtk_set_font(cairo_t* c, const char* family, int size, int weight, int italic)
+    {
+    cairo_select_font_face(c, family && family[0] ? family : "sans-serif",
+                           italic ? CAIRO_FONT_SLANT_ITALIC : CAIRO_FONT_SLANT_NORMAL,
+                           weight >= 600 ? CAIRO_FONT_WEIGHT_BOLD : CAIRO_FONT_WEIGHT_NORMAL);
+    cairo_set_font_size(c, size > 0 ? size : 13);
+    }
+static int gtk_line_ascent(cairo_t* c, const char* family, int size, int weight, int italic)
+    {
+    gtk_set_font(c, family, size, weight, italic);
+    cairo_font_extents_t fe;
+    cairo_font_extents(c, &fe);   /* void: an unset font reports zeros, which the floor below covers */
+    if (fe.ascent <= 0)
+        {
+        return (int)((size > 0 ? size : 13) * 0.8);
+        }
+    return (int)(fe.ascent + 0.5);
+    }
+int ux_gtk_text_width_weight(const char* s, const char* family, int size, int weight, int italic)
+    {
+    static cairo_surface_t* ms;
+    static cairo_t* mc;
+    if (!mc)
+        {
+        ms = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 1, 1);
+        mc = cairo_create(ms);
+        }
+    gtk_set_font(mc, family, size, weight, italic);
+    cairo_text_extents_t te;
+    cairo_text_extents(mc, s, &te);
+    return (int)(te.x_advance + 0.5);
+    }
+/* The FACE's ascent: how far below the top of the line the baseline sits — the same function the text
+ * entries place with, so the measure answers with the distance a paint is offset by. */
+int ux_gtk_text_ascent(const char* family, int size, int weight, int italic)
+    {
+    static cairo_surface_t* as2;
+    static cairo_t* ac;
+    if (!ac)
+        {
+        as2 = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 1, 1);
+        ac = cairo_create(as2);
+        }
+    return gtk_line_ascent(ac, family, size, weight, italic);
     }
 int ux_gtk_text_width(const char* s, const char* family, int size, int bold, int italic)
     {

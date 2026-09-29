@@ -135,16 +135,30 @@ run-window:  test_window.so ; $(MAKE) -C $(LOADER) xtcrun XTC_SO=$(CURDIR)/test_
 
 # ---- the KITCHEN SINK — one neutral app (ks_app.xc), shown on every backend --------
 # The same KitchenSink delegate on each driver: native widgets on AppKit, GDI on Win32, GEM
-# objects on arm9.  It grows as the toolkit does.  make mac / make win32 / make a9 / make gem.
+# objects on arm9.  It grows as the toolkit does.  AppKit closes itself after a moment and Win32 is
+# bounded (--stay keeps either up to poke at).  make mac / make win32 / make a9 / make gem.
 mac:   ; XCC=$(XCC) sh run_mac.sh
 # ---- mac-settings — preferences in NSUserDefaults --------------------------------
 # Written by one process, read by the next; the test's suites are deleted afterwards.
 mac-settings: ; XCC=$(XCC) sh run_mac_settings.sh
-# ---- mac-chrome — subtitle + the modified dot on NSWindow ------------------------
+# ---- mac-chrome — NSWindow chrome: subtitle, modified dot, the proxy icon ---------
 mac-chrome: ; XCC=$(XCC) sh run_mac_chrome.sh
 # ---- mac-vector — the vector board rendered on AppKit, checked for stroke seams ---
 # The antialiasing seam bug shipped once; geometry tests cannot see it, only a real render can.
 mac-vector: ; XCC=$(XCC) sh run_mac_vector.sh
+# ---- mac-alpha — the RGBA family blended on AppKit, read back as pixels -----------
+# Fills a window white, draws the same black at alpha 255/128/64 and translucent shapes, and reads the
+# pixels back: the mid grey has to be mid grey, not black.  It is what the map's ink needs.
+mac-alpha: ; XCC=$(XCC) sh run_mac_alpha.sh
+# ---- mac-weight — a family at a numeric WEIGHT, on AppKit, checked as pixels -----
+# The map's labels are `600 10px ui-monospace, Menlo, monospace` in an rgba() colour.  drawTextFont had
+# a family but only a bool `bold`; this renders weight 400 and 600 in one family and compares the ink.
+mac-weight: ; XCC=$(XCC) sh run_mac_weight.sh
+# ---- mac-dash — a DASH at a phase, on AppKit, over two subpaths, checked as pixels ---
+# The map's border is a dash that crawls every frame.  Two subpaths in ONE stroke call: a phase that
+# restarts at the move makes them identical, one that carries on cannot, and the two disagree at every
+# sample.  It also prints the run lengths of a pattern shorter than the stroke is wide.
+mac-dash: ; XCC=$(XCC) sh run_mac_dash.sh
 # (The old standalone widget demos — make demo / make demo-win32 — are gone: the slider/progress/
 # stepper/popup/segmented/toolbar showcase now lives in the kitchen sink, as the Windows > Widgets window.)
 win32: ; XCC=$(XCC) sh run_win32_ks.sh
@@ -465,4 +479,5 @@ win64-lib:
 
 clean: ; rm -f $(PROGS) libUXKit.so test_host
 
-.PHONY: all lib host clean version run-demo run-nibdemo run-spine run-window mac a9 gem gem-build win32 win64 win32-real win32-loop win32-field win32-memgate win32-menu win32-focus win32-check win32-radio win32-valid win32-alert win32-scroll win32-enabled win32-hidden win32-kitchensink win32-toolbar win32-winroute win64-lib
+.PHONY: all lib host clean version run-demo run-nibdemo run-spine run-window mac a9 gem gem-build win32 win64 win32-real win32-loop win32-field win32-memgate win32-menu win32-focus win32-check win32-radio win32-valid win32-alert win32-scroll win32-enabled win32-hidden win32-kitchensink win32-toolbar win32-winroute win32-gl gtk-gl web-gl appkit-gl appkit-glbench win64-lib
+.PHONY: mac-alpha mac-weight mac-dash mac-vector mac-chrome mac-settings

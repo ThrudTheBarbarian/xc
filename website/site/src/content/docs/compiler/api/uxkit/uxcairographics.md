@@ -56,6 +56,9 @@ strokesNatively()      // true
 Cairo is a good stroker, so a path goes to it directly with its own joins and
 sub-pixel precision. Arrowheads stay neutral, as on every backend.
 
+A dash is one more call (`cairo_set_dash`), and cairo restarts the phase at
+every subpath — the browser rule, which the gate measures rather than assumes.
+
 ## See also
 
 - [`UXGraphics`](/compiler/api/uxkit/uxgraphics/): the protocol
