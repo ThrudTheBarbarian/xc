@@ -207,6 +207,9 @@ pointer GetProcAddress(pointer mod, u8* name);
 #define WM_PAINT $000F
 #define WM_ERASEBKGND $0014
 #define WM_LBUTTONDOWN $0201
+#define WM_MOUSEMOVE $0200
+#define WM_RBUTTONDOWN $0204
+#define WHEEL_DELTA 120
 #define WM_KEYDOWN $0100
 #define VK_RETURN $0D
 #define WM_CHAR $0102

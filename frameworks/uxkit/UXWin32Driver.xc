@@ -3446,6 +3446,41 @@ class UXWin32Driver : Object<UXViewDriver>
             ev.handle = self.handleOf(msg.hwnd);
             return;
             }
+        // Pointer movement and the secondary button: client coords in lParam, tagged like the click.
+        if (msg.message == (u32)WM_MOUSEMOVE && onWindow != (i32)0)
+            {
+            u32 lpw = (u32)msg.lParam;
+            ev.kind = (u8)UXEventMouseMoved;
+            ev.x = (i16)lpw;
+            ev.y = (i16)(lpw >> (u32)16);
+            ev.handle = self.handleOf(msg.hwnd);
+            return;
+            }
+        if (msg.message == (u32)WM_RBUTTONDOWN && onWindow != (i32)0)
+            {
+            u32 lpw = (u32)msg.lParam;
+            ev.kind = (u8)UXEventRightMouseDown;
+            ev.x = (i16)lpw;
+            ev.y = (i16)(lpw >> (u32)16);
+            ev.handle = self.handleOf(msg.hwnd);
+            return;
+            }
+        if (msg.message == (u32)WM_MOUSEWHEEL && onWindow != (i32)0)
+            {
+            // The wheel's delta is the signed HIWORD of wParam in WHEEL_DELTA (120) units, and its
+            // point is in SCREEN coords, so convert it to this window's client coords first.
+            i32 delta = (i32)((i16)((u32)msg.wParam >> (u32)16));
+            POINT pt;
+            pt.x = (i32)(i16)((u32)msg.lParam & (u32)$FFFF);
+            pt.y = (i32)(i16)((u32)msg.lParam >> (u32)16);
+            ScreenToClient(msg.hwnd, (pointer)&pt);
+            ev.kind = (u8)UXEventWheel;
+            ev.x = (i16)pt.x;
+            ev.y = (i16)pt.y;
+            ev.a = delta / (i32)WHEEL_DELTA; // notches (a = notches)
+            ev.handle = self.handleOf(msg.hwnd);
+            return;
+            }
         if (msg.message == (u32)WM_CHAR && onWindow != (i32)0)
             {
             ev.kind = (u8)UXEventKeyDown;
