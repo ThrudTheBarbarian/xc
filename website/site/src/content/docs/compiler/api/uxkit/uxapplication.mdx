@@ -130,6 +130,38 @@ bool isRunning(void)
 
 True between a successful start and `stop()`.
 
+### everyTurn
+
+```c
+void everyTurn(turnHook_t* fn, i32 ms)
+bool turnIsDriven(void)
+```
+
+The app's **frame clock**: `fn` is called once per turn — at most every `ms`
+milliseconds, `0` meaning "every turn the loop has" — from outside any draw, so
+it is the place to step a simulation and mark what moved. Passing `(0, 0)`
+stops it, and the app can stop its own clock from inside a turn (which is what a
+client that wants to exit cleanly needs, since [`stop`](#stop) only lowers a
+flag).
+
+`fn` takes no arguments and must be a plain function, not a bound method: on the
+backends that own their loop the driver holds it as a C function pointer.
+
+**Who calls `fn` is the driver's answer**, and this method remembers it:
+`true` from [`setTurnHook`](/compiler/api/uxkit/uxviewdriver/#a-turn-comes-from-the-driver-or-from-the-loop)
+means the driver armed its own source and calls `fn` (interactive AppKit, iOS,
+Android — the loop owners whose native loop leaves nothing above the driver able
+to get a turn); `false` means the loop paces itself, using `ms` as the wait it
+hands `nextEvent` so that a turn comes round even when no input does.
+`turnIsDriven()` returns that answer, so a client that needs to know whether the
+clock it asked for is the clock it got asks rather than assumes:
+
+```c
+app.everyTurn(&tick, 16);
+if (!app.turnIsDriven())
+    // the neutral loop is doing the calling
+```
+
 ### pump
 
 ```c

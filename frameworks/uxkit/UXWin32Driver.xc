@@ -1283,6 +1283,13 @@ class UXWin32Driver : Object<UXViewDriver>
         {
         return (i32)GetTickCount();
         }
+    // The fine clock is the coarse one in microseconds: this backend's clock has no more
+    // resolution than a millisecond, and inventing bits that are not there would make a
+    // frame-time measurement look precise on a backend where it is not.
+    i32 nowUs(void)
+        {
+        return (i32)GetTickCount() * (i32)1000;
+        }
     // The offset as the DIFFERENCE between local and UTC civil time, rather than
     // GetTimeZoneInformation's bias-plus-daylight-bias arithmetic: fewer ways to get the sign wrong,
     // and DST is already in whatever GetLocalTime returns.  Rounded to the minute; the date rollover

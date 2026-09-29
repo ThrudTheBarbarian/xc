@@ -63,6 +63,7 @@ void ux_ak_run(void); // interactive: [NSApp run] owns the loop
 i32 ux_ak_quit(void); // nonzero once the close box was hit
 void ux_ak_stop(void);
 void ux_ak_set_dispatch(pointer fn);     // register the toolkit event forwarder
+void ux_ak_set_turn_hook(pointer fn, i32 ms); // the frame clock: interactive AppKit answers with a timer
 void ux_ak_set_control_fire(pointer fn); // register the control-click -> action forwarder
 pointer ux_ak_menu_new(void);
 pointer ux_ak_menu_add_title(pointer bar, u8* title);
@@ -504,6 +505,10 @@ class UXAppKitDriver : Object<UXViewDriver>
     i32 nowMs(void)
         {
         return ux_ak_now_ms();
+        }
+    i32 nowUs(void)
+        {
+        return ux_ak_now_us();
         }
     void nowUTC(i32* out7)
         {

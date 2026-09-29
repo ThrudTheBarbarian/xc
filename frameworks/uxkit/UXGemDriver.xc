@@ -231,6 +231,13 @@ class UXGemDriver : Object<UXViewDriver>
         {
         return xg_now_ms();
         }
+    // The fine clock is the coarse one in microseconds: this backend's clock has no more
+    // resolution than a millisecond, and inventing bits that are not there would make a
+    // frame-time measurement look precise on a backend where it is not.
+    i32 nowUs(void)
+        {
+        return xg_now_ms() * (i32)1000;
+        }
     void nowUTC(i32* out7)
         {
         xg_now_utc(out7);

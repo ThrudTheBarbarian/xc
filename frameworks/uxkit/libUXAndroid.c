@@ -155,9 +155,19 @@ static void n_text(JNIEnv *env, jclass c, jint id, jstring s) {
     if (gFieldChanged) gFieldChanged(handle, node);
 }
 void ux_and_test_click(int handle, int node);
+/* the frame clock (everyTurn): a self-reposting Handler message on the UI
+ * thread.  n_run re-arms it after each call; clearing the hook stops it. */
+static void (*gTurnFn)(void);
+static int gTurnMs;
+static int gTurnArmed;
+static void uxTurnArm(void);
 static void n_run(JNIEnv *env, jclass c, jint id) {
     (void)env; (void)c;
     if (id == 0) { if (gEntry) gEntry(); return; }         /* id 0 = the app's start */
+    if (id == 0x80000) {                                   /* the app's frame clock */
+        if (gTurnFn) { void (*f)(void) = gTurnFn; f(); uxTurnArm(); }
+        return;
+    }
     if (id & 0x10000) { ux_and_test_click((id >> 8) & 0xFF, id & 0xFF); return; }
     if (id & 0x40000) { alertAuto(env, id & 1); return; }  /* the alert rig's auto-cancel */
     if (id & 0x20000) {                                    /* the loop gate's watchdog */
@@ -207,6 +217,19 @@ void ux_and_test_click_later(int handle, int node, int ms) {
 }
 void ux_and_test_watchdog(int ms, int rc) {
     postRunDelayed(envNow(), 0x20000 | (rc & 0xFF), ms);
+}
+static void uxTurnArm(void) {
+    if (!gTurnFn) { gTurnArmed = 0; return; }
+    postRunDelayed(envNow(), 0x80000, gTurnMs > 0 ? gTurnMs : 16);
+}
+/* Install (or clear) the app's frame clock.  Android's loop belongs to the
+ * platform, so the driver answers setTurnHook with true and arms this Handler
+ * instead: fn runs on the UI thread, outside any draw, once per post. */
+void ux_and_set_turn_hook(void *fn, int ms) {
+    gTurnFn = (void (*)(void))fn;
+    gTurnMs = ms;
+    if (gTurnFn) { if (!gTurnArmed) { gTurnArmed = 1; uxTurnArm(); } }
+    else { gTurnArmed = 0; }
 }
 
 /* ── boot: cache the widget world (UI thread, from the posted entry) ────── */

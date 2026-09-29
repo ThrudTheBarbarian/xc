@@ -1,0 +1,3 @@
+clock: driven=0
+clock: turns=8 clicked=1
+PASS: the Win32 deadline ends the wait and the turn comes round

@@ -233,6 +233,14 @@ hiddeninherit-win32: ; XCC=$(XCC) sh run_hiddeninherit_win32.sh
 # travels driver.nextEvent -> dispatchEvent -> the view.  Proves the run loop on the third backend.
 appkit-loop: ; XCC=$(XCC) sh run_appkit_loop.sh
 
+# ---- frameclock — the app's frame clock (UXApplication.everyTurn) -----------------
+# Headless AppKit, so the driver answers setTurnHook false and the neutral loop paces itself: ms
+# becomes the deadline it hands nextEvent, and fn runs once per turn after that turn's draws.
+# Gates that turns arrive, that they come at the cadence asked for (not the toolkit's default
+# poll), that a click queued between turns is still dispatched, and that the caller is told which
+# clock it got.  macOS-only.
+frameclock: ; XCC=$(XCC) sh run_frameclock.sh
+
 # ---- appkit-memgate — the §10 per-backend memory gate for AppKit ------------------
 # Opens/closes N windows (each a real form) and asserts the native-object counter returns to
 # baseline.  The heap oracle is printed but not asserted (Cocoa cache churn).  macOS-only.
@@ -322,10 +330,18 @@ run-autoresize: test_autoresize.so ; $(MAKE) -C $(LOADER) xtcrun XTC_SO=$(CURDIR
 # on a second backend.  Skips if wine is absent.
 win32-loop: ; XCC=$(XCC) sh run_win32_loop.sh
 
+# ---- win32-frameclock — the frame clock on the BLOCKING backend -------------------
+# The same everyTurn contract as `frameclock`, on the backend whose nextEvent blocks in
+# GetMessageA: the deadline has to be MsgWaitForMultipleObjects and must return an empty turn when
+# it wins, or the loop spins through its turns in no time at all.  Skips if wine is absent.
+win32-frameclock: ; XCC=$(XCC) sh run_win32_frameclock.sh
+
 # ---- win32-field — live text editing on the Win32 backend -------------------------
 # A form with a text field: a posted click focuses it, posted WM_CHARs type through the real
 # message pump into driver.editText (the driver is the edit engine, as objc_edit is on GEM).
-# Proves keyboard input + a live control on a second backend.  Skips if wine is absent.
+# Proves keyboard input + a live control on a second backend, and that Return reaches onSubmit by
+# BOTH routes a real one can take (the window's WM_CHAR queue and a key aimed at the EDIT child),
+# with the CR kept out of the buffer.  Skips if wine is absent.
 win32-field: ; XCC=$(XCC) sh run_win32_field.sh
 
 # ---- win32-memgate — the §10 per-backend memory gate for Win32 --------------------

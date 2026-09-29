@@ -87,6 +87,11 @@ struct UXMenuDef
     // maps these to its edit engine (GEM: ED_INIT / ED_CHAR / ED_END).
     enum UXEdit = {UXEditBegin = 0, UXEditKey = 1, UXEditEnd = 2};
 
+// The app's turn callback (setTurnHook).  A bare "an argument-less function" type rather than a
+// class method, because the backends that call it are C/Objective-C and can hold a plain function
+// pointer and nothing else; the neutral loop calls it the same way.
+typedef void turnHook_t(void);
+
 protocol UXViewDriver
     {
     // Native window lifecycle.  windowCreate mints a native window and counts it;
@@ -149,6 +154,12 @@ protocol UXViewDriver
     // Milliseconds since some fixed point — differences are all anyone may read from it.  The event
     // recorder stamps each captured event with it; an animation or a double-click test would too.
     i32 nowMs(void);
+    // The same clock, in microseconds, for the things a millisecond cannot see: a frame, a
+    // redraw, a hit-test.  A frame-time measurement has to ask in microseconds because the
+    // answer is often under a millisecond and always under two, so a millisecond clock reports
+    // 0, 1, 1, 0 and the percentiles are quantisation rather than the map.  Same fixed point as
+    // nowMs — differences only, and the two must never be mixed in one subtraction.
+    i32 nowUs(void);
     // The WALL CLOCK in UTC civil components, written into out7 as
     //     [0]=year [1]=month(1..12) [2]=day [3]=hour [4]=minute [5]=second [6]=microsecond
     // Components, not an epoch count, because every backend HAS them natively (Win32 SYSTEMTIME,

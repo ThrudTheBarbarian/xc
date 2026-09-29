@@ -43,6 +43,33 @@ void ux_ios_set_entry(void* fn)
     {
     gEntry = (ux_entry_fn)fn;
     }
+// The frame clock (everyTurn).  iOS owns the loop, so the driver answers true and arms this
+// repeating timer on the main run loop instead; fn runs on the UI thread, outside any draw.
+static void (*g_ios_turn_fn)(void) = NULL;
+static NSTimer* g_ios_turn_timer = nil;
+void ux_ios_set_turn_hook(void* fn, int ms)
+    {
+    if (g_ios_turn_timer != nil)
+        {
+        [g_ios_turn_timer invalidate];
+        g_ios_turn_timer = nil;
+        }
+    g_ios_turn_fn = (void (*)(void))fn;
+    if (g_ios_turn_fn == NULL)
+        {
+        return;
+        }
+    double secs = ms > 0 ? (double)ms / 1000.0 : (1.0 / 60.0);
+    g_ios_turn_timer = [NSTimer scheduledTimerWithTimeInterval:secs
+                                                       repeats:YES
+                                                         block:^(NSTimer* t) {
+                                                           (void)t;
+                                                           if (g_ios_turn_fn)
+                                                               {
+                                                               g_ios_turn_fn();
+                                                               }
+                                                         }];
+    }
 void ux_ios_set_control_fire(void* fn)
     {
     gFire = (ux_fire_fn)fn;

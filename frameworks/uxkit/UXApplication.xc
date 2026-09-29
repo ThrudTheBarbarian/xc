@@ -28,6 +28,9 @@ class UXApplication : UXResponder
     i32 screenW;
     i32 screenH;
     Array<UXWindow>* pendingCloses; // windows a control's action asked to close (see closeWindowLater)
+    turnHook_t* turnFn;             // the app's frame clock (see everyTurn), or 0
+    i32 turnMs;
+    bool driverCallsTurn;           // true: the driver's own source calls turnFn, the loop does not
 
     void init(void)
         {
@@ -39,6 +42,9 @@ class UXApplication : UXResponder
         screenH = (i32)0;
         menuBar = (UXMenuBar*)0;
         pendingCloses = new Array();
+        turnFn = (turnHook_t*)0;
+        turnMs = (i32)0;
+        driverCallsTurn = false;
         }
 
     // Install a menu bar.  From here on GEM owns the bar: it draws it, tracks the
@@ -181,6 +187,26 @@ class UXApplication : UXResponder
         self.dispatchEvent(ev);
         }
 
+    // A live client's frame clock.  fn() is called once per turn, at most every ms milliseconds
+    // (0 = as often as the loop turns), from outside any draw; passing (0, 0) stops it.  The
+    // DRIVER decides who does the calling -- see UXViewDriver.setTurnHook, whose answer this
+    // remembers: true means the driver armed its own source and the loop keeps its hands off,
+    // false means the loop paces itself (a `ms` wait before nextEvent, then fn after the draws).
+    // A client that needs to know whether the clock it asked for is the clock it got reads
+    // `turnIsDriven()` rather than assuming.
+    void everyTurn(turnHook_t* fn, i32 ms)
+        {
+        turnFn = fn;
+        turnMs = ms;
+        driverCallsTurn = gDriver.setTurnHook(fn, ms);
+        }
+
+    // True where the driver's own source calls the turn hook, false where the neutral loop does.
+    bool turnIsDriven(void)
+        {
+        return driverCallsTurn;
+        }
+
     // The delegate's start moment, factored so BOTH loop shapes share it: the
     // neutral loop below runs it inline; a driver that owns the loop (iOS)
     // calls it from its native start callback (didFinishLaunching) — the
@@ -235,13 +261,22 @@ class UXApplication : UXResponder
         UXEvent* ev = new UXEvent();
         while (running)
             {
-            gDriver.nextEvent((i32)0, ev); // block for the next input or window message
+            // With a frame clock the app drives us, so the wait must END: `ms` is how long
+            // nextEvent may block before the turn comes round anyway (0 keeps the old
+            // block-until-there-is-one behaviour).  A driver that armed its own source answers
+            // nextEvent exactly as before and fires fn itself.
+            i32 wait = (turnFn != (turnHook_t*)0 && !driverCallsTurn) ? turnMs : (i32)0;
+            gDriver.nextEvent(wait, ev); // block for the next input or window message
             self.dispatchEvent(ev);
             if (gNeedsDisplay)
                 {
                 self.displayIfNeeded();
                 }
             self.drainPendingCloses(); // now safe: no window proc is on the stack
+            if (turnFn != (turnHook_t*)0 && !driverCallsTurn)
+                {
+                turnFn(); // the app's turn: after the draws, outside them
+                }
             }
         return (i32)0;
         }

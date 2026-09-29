@@ -62,10 +62,56 @@ native facility or the toolkit's own. This is how
 [`UXFilePanel`](/compiler/api/uxkit/uxfilepanel/) is a real `NSOpenPanel` on
 macOS and a drawn panel on GEM, from one call site.
 
-`driverOwnsRunLoop` has the largest effect. AppKit returns **true** because
-`[NSApp run]` owns the loop and events must be pushed into the application. GEM
-and Win32 return **false** and let the neutral loop pull events with
-`nextEvent`. Both shapes exist because each platform requires its own.
+`driverOwnsRunLoop` has the largest effect. iOS and Android return **true**:
+their native loops never return from `runLoop`, so the neutral loop is never
+entered and the app's life continues through driver callbacks. Everything else
+— AppKit (interactive included), GEM, Win32, GTK and the web — returns
+**false** and lets the neutral loop pull events with `nextEvent`. Both shapes
+exist because each platform requires its own; an interactive AppKit app is the
+interesting middle case, because the driver does not own the loop and yet
+`nextEvent` blocks in `[NSApp run]` anyway (see
+[the turn hook](#a-turn-comes-from-the-driver-or-from-the-loop)).
+
+### A turn comes from the driver, or from the loop
+
+```c
+bool setTurnHook(turnHook_t* fn, i32 ms)
+```
+
+An animated app asks for a turn with
+[`UXApplication.everyTurn`](/compiler/api/uxkit/uxapplication/#everyturn), and
+this is where the answer comes from. The **return value says who calls `fn`**:
+
+- **true** — the driver armed its own source and calls `fn`. This is the
+  loop-owning case: interactive AppKit blocks in `[NSApp run]` inside
+  `nextEvent`, and iOS and Android never return from `runLoop`, so nothing
+  above the driver would get a turn at all. AppKit arms a repeating
+  `NSTimer` on the main queue; Android reposts a `Handler` message; iOS
+  schedules the same timer.
+- **false** — the driver has no turn of its own to offer, and the **neutral
+  loop** paces itself instead: `ms` becomes the wait it hands `nextEvent`, so a
+  turn comes round even when no input does, and `fn` runs after that turn's
+  draws.
+
+A client that needs to know which it got asks `turnIsDriven()` rather than
+guessing. `fn` takes **no arguments** and is a plain function, not a bound
+method: the loop-owning backends hold it as a C function pointer, which has
+nowhere to keep a captured `self`. `ms` of 0 means "every turn the loop has",
+and `everyTurn(0, 0)` stops the clock.
+
+Because the answer is *false* for a driver that does not own the loop,
+`nextEvent`'s timeout is a real deadline:
+
+```c
+void nextEvent(i32 timeoutMs, UXEvent* ev)   // >0: return UXEventNone on the deadline
+```
+
+A positive `timeoutMs` means the wait must **end** on its own — Win32 waits
+with `MsgWaitForMultipleObjects` instead of blocking in `GetMessageA`, GTK
+attaches a one-shot timer to its `GMainContext`, GEM adds `MU_TIMER` to the
+event mask, the web ring waits on the deadline, and headless AppKit polls for
+exactly that long. Zero or less keeps the old block-until-there-is-one
+behaviour, so a client without a clock is unchanged.
 
 ### The shadow tree is the platform's, not ours
 
@@ -233,6 +279,7 @@ void pumpMessages(i32 timeoutMs, UXEvent* ev)
 i32 trackDragStep(i32* x, i32* y)
 bool driverOwnsRunLoop(void)
 void runLoop(void)
+bool setTurnHook(turnHook_t* fn, i32 ms)
 ```
 
 ### Drawing

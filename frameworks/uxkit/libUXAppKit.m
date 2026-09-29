@@ -900,6 +900,42 @@ void ux_ak_quit_after_ms(int ms)
                    });
     }
 
+/* The frame clock (UXViewDriver.setTurnHook).  An app asks to be called once per turn, and
+ * INTERACTIVE AppKit is the case where the app cannot do the calling itself: [NSApp run]
+ * owns the thread inside nextEvent, so nothing above the driver ever gets a turn unless the
+ * driver provides one.  The turn is a repeating timer on the MAIN QUEUE -- the same
+ * machinery ux_ak_close_after_ms uses, on the same thread the neutral loop would have used,
+ * which is what makes the callback serialised with every other callback (no lock, no
+ * queue) and OUTSIDE any draw (a timer fires between run-loop passes, never inside
+ * drawRect).  fn == NULL, or a non-interactive run where the neutral loop does the calling,
+ * clears it.  ms 0 means "every turn the loop has", which for a timer is the display rate. */
+static void (*g_turn_fn)(void) = NULL;
+static NSTimer* g_turn_timer = nil;
+
+void ux_ak_set_turn_hook(void* fn, int ms)
+    {
+    if (g_turn_timer != nil)
+        {
+        [g_turn_timer invalidate];
+        g_turn_timer = nil;
+        }
+    g_turn_fn = (void (*)(void))fn;
+    if (g_turn_fn == NULL || !g_interactive)
+        {
+        return;
+        }
+    double secs = ms > 0 ? (double)ms / 1000.0 : (1.0 / 60.0);
+    g_turn_timer = [NSTimer scheduledTimerWithTimeInterval:secs
+                                                   repeats:YES
+                                                     block:^(NSTimer* t) {
+                                                       (void)t;
+                                                       if (g_turn_fn)
+                                                           {
+                                                           g_turn_fn();
+                                                           }
+                                                     }];
+    }
+
 void ux_ak_boot(void)
     {
     [NSApplication sharedApplication];
@@ -1234,6 +1270,17 @@ int ux_ak_now_ms(void)
     if (base == 0)
         base = now;
     return (int)((now - base) * 1000.0);
+    }
+/* The same clock at full resolution.  systemUptime is a double, so the microseconds
+ * were always there -- nowMs was simply throwing them away, and a frame is usually
+ * under a millisecond. */
+int ux_ak_now_us(void)
+    {
+    static double base = 0;
+    double now = [[NSProcessInfo processInfo] systemUptime];
+    if (base == 0)
+        base = now;
+    return (int)((now - base) * 1000000.0);
     }
 // Styled measurement — the counterpart of ux_ak_text_font, and it must agree with it.
 int ux_ak_text_width_font(const char* s, const char* family, int size, int bold, int italic)

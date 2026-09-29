@@ -5,6 +5,11 @@
 // view's mouseDown: -> the dispatch trampoline -> UXApplication.dispatchEvent -> the toolkit's
 // hit-test -> the button's action -> app.stop() -> [NSApp run] returns.  If the app quits, the whole
 // interactive chain works (and doesn't hang).  macOS-only.
+//
+// The click is injected FROM A TURN: this is the other half of the frame-clock contract, the shape
+// where the driver answers setTurnHook with true because [NSApp run] owns the thread and nothing
+// above the driver would ever get a turn otherwise.  So the gate proves both at once -- the driver's
+// own turn source fires, and a click it injects still travels the whole interactive chain.
 #import <Stdio.xc>
 #import "UXAppKitDriver.xc"
 #import "UXApplication.xc"
@@ -51,7 +56,11 @@ class Canvas : UXView
         b.setAction(&self.onQuit);
         canvas.addSubview(b, UXGeom.make((i16)20, (i16)40, (i16)80, (i16)26));
         win.displayAll();
-        ux_ak_post_click(win.handle, (i32)40, (i32)52); // inject a click inside the Quit button
+        gWinHandle = win.handle;
+        // Ask for a turn.  Interactive AppKit answers true and arms its own timer, so the click
+        // above comes from the driver's turn rather than from the start-up path.
+        a.everyTurn(&tickFn, (i32)16);
+        Stdio.printf("interactive: driven=%d\n", a.turnIsDriven() ? (i32)1 : (i32)0);
         return (i32)0;
         }
     } void main(void)
