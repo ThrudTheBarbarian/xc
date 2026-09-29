@@ -28,6 +28,7 @@
 class Analyze
     {
     Array* _out; // String@ — the diagnostics, in source order
+    Map* _classes; // class name → its declaration, for the field check
 
     void init(void)
         {
@@ -61,6 +62,15 @@ class Analyze
         {
         if (program == (Node*)0)
             return;
+        // Every class the unit can see, interface imports included: a field
+        // inherited from a library class is hidden just as well.
+        _classes = new Map();
+        for (u32 i = (u32)0; i < program.kidCount(); i = i + (u32)1)
+            {
+            Node* d = program.kid(i);
+            if (d.kind() == (u16)nkClassDecl && d.name() != (String*)0)
+                _classes.set((Hashable*)d.name(), (Object*)d);
+            }
         for (u32 i = (u32)0; i < program.kidCount(); i = i + (u32)1)
             {
             Node* d = program.kid(i);
@@ -72,9 +82,74 @@ class Analyze
             if (k == (u16)nkFunctionDecl || k == (u16)nkMethodDecl)
                 checkBody(d);
             else if (k == (u16)nkClassDecl)
+                {
+                Array* fields = fieldsOf(d);
                 for (u32 j = (u32)0; j < d.kidCount(); j = j + (u32)1)
-                    if (d.kid(j).kind() == (u16)nkMethodDecl)
-                        checkBody(d.kid(j));
+                    {
+                    Node* m = d.kid(j);
+                    if (m.kind() != (u16)nkMethodDecl)
+                        continue;
+                    checkBody(m);
+                    // A static method has no self, so it has no fields to hide.
+                    if (!m.hasFlag((u32)NF_STATIC))
+                        for (u32 b = (u32)0; b < m.kidCount(); b = b + (u32)1)
+                            if (m.kid(b).kind() == (u16)nkBlock)
+                                hiddenFields(m.kid(b), fields, d.name());
+                    }
+                }
+            }
+        }
+
+    // ── a local that hides a field ───────────────────────────────────────
+    //
+    // `i32 on = …;` in a method of a class with a field `on`: from there to
+    // the end of the block `on` is the local, and the field is reachable only
+    // as `self.on`. Correct, and exactly what someone who meant the field does
+    // not expect — a count that stays 0, an address of the local passed where
+    // the field was wanted. A parameter is not reported: `void setX(i32 x)
+    // { self.x = x; }` is the ordinary way to write a setter.
+
+    // The field names of a class and its ancestors, as far as the unit can see.
+    Array* fieldsOf(Node* cls)
+        {
+        Array* out = new Array();
+        Node* c = cls;
+        for (u32 depth = (u32)0; c != (Node*)0 && depth < (u32)64; depth = depth + (u32)1)
+            {
+            for (u32 i = (u32)0; i < c.kidCount(); i = i + (u32)1)
+                {
+                Node* f = c.kid(i);
+                if (f.kind() == (u16)nkVariableDecl && f.name() != (String*)0)
+                    out.add((Object*)f.name());
+                }
+            String* parent = c.op();
+            if (parent == (String*)0 || parent.equals(String.withCString("-")))
+                break;
+            c = (Node*)_classes.get((Hashable*)parent);
+            }
+        return out;
+        }
+
+    void hiddenFields(Node* n, Array* fields, String* cls)
+        {
+        for (u32 i = (u32)0; i < n.kidCount(); i = i + (u32)1)
+            {
+            Node* k = n.kid(i);
+            if (k.kind() == (u16)nkVariableDecl && k.name() != (String*)0)
+                for (u32 f = (u32)0; f < fields.count(); f = f + (u32)1)
+                    if (((String*)fields.get(f)).equals(k.name()))
+                        {
+                        String* msg = String.withCString("the local '");
+                        msg.append(k.name());
+                        msg.appendCString("' hides the field of the same name in ");
+                        msg.append(cls);
+                        msg.appendCString(" — here it means the local; write self.");
+                        msg.append(k.name());
+                        msg.appendCString(" for the field, or rename the local");
+                        warnAt(k, msg.cString());
+                        break;
+                        }
+            hiddenFields(k, fields, cls);
             }
         }
 
