@@ -1771,6 +1771,24 @@ Preprocessor* buildPP(FeOptions* o)
         pp.addIncludePath((String*)o.incs().get(i));
     for (u32 i = (u32)0; i < o.libs().count(); i = i + (u32)1)
         pp.addLibraryPath((String*)o.libs().get(i));
+    // Third-party libraries: $XCC_3P first, then the SIBLING of the compiler
+    // home, /opt/xcc/<version> -> /opt/xcc/3p, so an upgrade keeps them.
+    // An install's support root is <home>/lib/xc, an in-tree one <home>/support.
+    String* env3p = sanitiseEnvPath(Platform.env(String.withCString("XCC_3P")));
+    if (env3p != 0 && Files.exists(env3p))
+        pp.addThirdPartyRoot(env3p);
+    String* sup = supportRoot(o);
+    if (sup != 0)
+        {
+        String* home = sup.hasSuffix(String.withCString("/lib/xc")) ? dirOf(dirOf(sup)) : dirOf(sup);
+        String* up = home == 0 ? (String*)0 : dirOf(home);
+        if (up != 0)
+            {
+            String* sib = up.appendingPathComponent(String.withCString("3p"));
+            if (Files.exists(sib) && (env3p == 0 || !sib.equals(env3p)))
+                pp.addThirdPartyRoot(sib);
+            }
+        }
     // The target's implicit platform header, when it has one. win64's declares
     // the Win32 entry points a program reaches the native API through; a target
     // without one simply skips it rather than failing every compile.

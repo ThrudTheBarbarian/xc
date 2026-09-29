@@ -795,6 +795,38 @@ Array* dylibImportDeps(Array* neededLibs)
 // The dependency list for an arm64 / iOS executable: what the program (or its
 // objects) `#import`ed, then the libraries and frameworks named on the line,
 // then libobjc when the merged objects need it — the reference's order.
+// The LC_RPATH entries after @loader_path, in the reference linker's order:
+// the directory of each `#import`ed dylib, then of each -l dylib, then each
+// -rpath. A `.tbd` names a shared-cache library dyld finds without help, so it
+// adds none. Without the dylib directories a program importing a library
+// from /opt/xcc/3p (`#use <tls>`) built but could not load it.
+Array* arm64Rpaths(DriverOptions* d, Array* neededLibs)
+{
+    Array* out = new Array();
+    Array* dirs = new Array();
+    for (u32 i = (u32)0; neededLibs != (Array*)0 && i < neededLibs.count(); i = i + (u32)1) {
+        String* lp = (String*)neededLibs.get(i);
+        if (lp.hasSuffix(String.withCString(".dylib"))) dirs.add((Object*)lp.deletingLastPathComponent());
+    }
+    Array* li = d.linkInputs();
+    for (u32 i = (u32)0; li != (Array*)0 && i < li.count(); i = i + (u32)1) {
+        String* lp = resolveLinkInput(d, (String*)li.get(i));
+        if (lp != (String*)0 && lp.hasSuffix(String.withCString(".dylib")))
+            dirs.add((Object*)lp.deletingLastPathComponent());
+    }
+    for (u32 i = (u32)0; i < d.rpaths().count(); i = i + (u32)1)
+        dirs.add(d.rpaths().get(i));
+    for (u32 i = (u32)0; i < dirs.count(); i = i + (u32)1) {
+        String* dir = (String*)dirs.get(i);
+        if (dir.byteLength() == (u32)0 || dir.equals(String.withCString("@loader_path"))) continue;
+        bool seen = false;
+        for (u32 k = (u32)0; k < out.count(); k = k + (u32)1)
+            if (((String*)out.get(k)).equals(dir)) seen = true;
+        if (!seen) out.add((Object*)dir);
+    }
+    return out;
+}
+
 Array* arm64LinkDeps(DriverOptions* d, Array* neededLibs, Array* extraObjects)
 {
     Array* deps = new Array();
@@ -3201,7 +3233,7 @@ void linkObjectsArm64(DriverOptions* d)
     MachO* m = new MachO();
     if (isIos(d)) m.setApplePlatform(d.arch());
     m.setDeps(deps);
-    m.setRpaths(d.rpaths());      // -rpath <dir> from -Xlinker / -Wl, / $XTC_LDFLAGS
+    m.setRpaths(arm64Rpaths(d, objectNeeds(d.objectInputs())));
     m.executable(as.textBytes(), ((Number*)entry).asU32(), as.symbols(),
                  dataBytes, as.dataSyms(), fixups, miLen, objcSects);
     Array* image = m.bytes();
@@ -3932,7 +3964,7 @@ void emitModule(DriverOptions* d, IRModule* mod)
             // exports), then frameworks, then libobjc if an object needs it.
             Array* deps = arm64LinkDeps(d, d.fe().neededLibs(), new Array());
             m.setDeps(deps);
-            m.setRpaths(d.rpaths());      // -rpath <dir>, after @loader_path
+            m.setRpaths(arm64Rpaths(d, d.fe().neededLibs()));
             m.executable(as.textBytes(), ((Number*)entry).asU32(), as.symbols(),
                          dataBytes, as.dataSyms(), fixups, miLen, objcSects);
         }

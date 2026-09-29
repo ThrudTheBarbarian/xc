@@ -97,6 +97,7 @@ class IfFrame
     Array* _includePaths;    // of String@
     Array* _libraryPaths;    // of String@
     Array* _metadataImports; // of String@ — libraries seen, not text-included
+    Array* _thirdPartyRoots; // of String@ — /opt/xcc/3p and $XCC_3P (see addThirdPartyRoot)
     String* _prelude;        // the target's implicit platform header, if any
     Array* _errors;
     // `#package <ns>` — the host import namespace in force for subsequent
@@ -118,6 +119,7 @@ class IfFrame
         _includePaths = new Array();
         _libraryPaths = new Array();
         _metadataImports = new Array();
+        _thirdPartyRoots = new Array();
         _errors = new Array();
         _currentPackage = (String*)0;
         _arch = (String*)0;
@@ -134,6 +136,61 @@ class IfFrame
     void addIncludePath(String* dir)
         {
         _includePaths.add((Object*)dir);
+        }
+    // A third-party library root: `<root>/<vendor>/<arch>/lib<X>.*`, with the
+    // vendor's arch-neutral sources at `<root>/<vendor>/xc`. Probed after the
+    // -L directories, as the reference probes it.
+    void addThirdPartyRoot(String* dir)
+        {
+        _thirdPartyRoots.add((Object*)dir);
+        }
+
+    // `<X>` from the third-party tree: `<root>/X/<arch>/lib<X>.<ext>`, or, for
+    // the qualified `<vendor/X>`, `<root>/vendor/<arch>/lib<X>.<ext>`. A hit
+    // is recorded like a -L library, and the vendor's `xc/` sources join the
+    // END of the include path, so they can never shadow the standard library.
+    // The reference also finds a library whose vendor directory has another
+    // name by listing the root; this probes the vendor named after the
+    // library, which is how the installed libraries are laid out.
+    bool probeThirdParty(String* target, bool isSystemForm, Array* exts)
+        {
+        String* vendor = target;
+        String* stem = target;
+        u32 slash = target.indexOfByte((u8)'/');
+        if (isSystemForm && slash != String.notFound())
+            {
+            vendor = target.substringBytes((u32)0, slash);
+            stem = target.substringFromByte(slash + (u32)1);
+            }
+        for (u32 r = (u32)0; r < _thirdPartyRoots.count(); r = r + (u32)1)
+            {
+            String* vdir = ((String*)_thirdPartyRoots.get(r)).appendingPathComponent(vendor);
+            String* adir = vdir.appendingPathComponent(_arch);
+            for (u32 e = (u32)0; e < exts.count(); e = e + (u32)1)
+                {
+                String* cand = String.withCString("lib");
+                cand.append(stem);
+                cand.appendCString(".");
+                cand.append((String*)exts.get(e));
+                String* p = adir.appendingPathComponent(cand);
+                if (Files.existsExact(p))
+                    {
+                    _metadataImports.add((Object*)p);
+                    String* xc = vdir.appendingPathComponent(String.withCString("xc"));
+                    if (Files.exists(xc))
+                        {
+                        bool have = false;
+                        for (u32 i = (u32)0; i < _includePaths.count(); i = i + (u32)1)
+                            if (((String*)_includePaths.get(i)).equals(xc))
+                                have = true;
+                        if (!have)
+                            _includePaths.add((Object*)xc);
+                        }
+                    return true;
+                    }
+                }
+            }
+        return false;
         }
     Array* includePaths(void)
         {
@@ -1336,7 +1393,7 @@ class IfFrame
         // candidate order (separate-compilation stage 3). Binary libraries are
         // recorded but the port has no Mach-O/ELF section readers, so the
         // caller refuses them loudly rather than compiling without imports.
-        if (foundPath == 0 && _libraryPaths.count() > (u32)0)
+        if (foundPath == 0 && (_libraryPaths.count() > (u32)0 || _thirdPartyRoots.count() > (u32)0))
             {
             // The extension order is TARGET-DRIVEN, as the reference does it
             // (XTCompilerDriver's `sharedLibExtensions`): pin the right object
@@ -1406,6 +1463,8 @@ class IfFrame
                     return;
                     }
                 }
+            if (_arch != 0 && probeThirdParty(target, isSystemForm, exts))
+                return;
             }
 
         if (foundPath == 0)
