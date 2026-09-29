@@ -331,6 +331,13 @@ appkit-gl: ; XCC=$(XCC) sh run_appkit_gl.sh
 # out), and the headless shape checks the decline: no surface, and the view draws inline.  macOS-only.
 appkit-surface: ; XCC=$(XCC) sh run_appkit_surface.sh
 
+# ---- appkit-scrollpanel — a native control inside a scroll view scrolls with it ----------------
+# A native control is created flat in the content view, so one inside a scroll view's document
+# stayed put when the scroll moved and was not clipped to it.  realizeTree now moves such controls
+# into the scroll's DOCUMENT view at a relative frame; the gate counts the move (and asserts none
+# headless, where there is no native control to move).  macOS-only.
+appkit-scrollpanel: ; XCC=$(XCC) sh run_appkit_scrollpanel.sh
+
 # ---- appkit-glbench — the GL FRAME harness (T0's instrument): four timed configurations ----
 # Checks the PLUMBING and not the numbers: a context made, the sheet uploaded, the device
 # ratio stated, one draw call per frame, four configurations timed, and both frame dumps

@@ -121,6 +121,9 @@ void ux_ak_set_scroll_content(pointer fn);
 void ux_ak_set_surface_content(pointer fn);
 void ux_ak_make_surface(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, pointer view);
 void ux_ak_surface_refresh(i32 handle, i32 node);
+// Move a native control into the document view of a scroll view it is inside, so it scrolls and
+// clips with the scroll (ax,ay is the control's absolute origin; setFrame 0 leaves it to AppKit).
+void ux_ak_reparent_to_scroll(i32 handle, i32 node, i32 scrollNode, i32 ax, i32 ay, i32 aw, i32 ah, i32 setFrame);
 i32 ux_ak_drag_next(i32* x, i32* y);
 // The input shield (UXKindShield): a real NSView above the controls, so a click on a
 // design surface reaches the toolkit instead of pressing the button under it.
@@ -1849,6 +1852,38 @@ class UXAppKitDriver : Object<UXViewDriver>
                     {
                     ux_ak_set_control_align(handle, i, self.alignOf(t.nodes[i].peer));
                     }
+                }
+            }
+        // Native controls are created FLAT, as children of the window's content view, so a control
+        // inside a scroll view's document stayed put when the scroll moved and was not clipped to
+        // it.  One pass after the loop (when every control exists) moves each such control into its
+        // nearest realized scroll's DOCUMENT view, at a frame relative to it.  A scroll/table/GL
+        // node owns its own scrolling and is left where it is (nesting one in another scroll is the
+        // bug, not the fix).  Runs before the shield is raised, so the shield still ends up on top.
+        for (i32 i = (i32)0; i < t.count; i = i + (i32)1)
+            {
+            i32 kk = (i32)t.nodes[i].kind;
+            if (kk == (i32)UXKindScroll || kk == (i32)UXKindTable || kk == (i32)UXKindGLView)
+                {
+                continue;
+                }
+            i32 anc = (i32)t.nodes[i].parent;
+            while (anc >= (i32)0)
+                {
+                if ((i32)t.nodes[anc].kind == (i32)UXKindScroll && ux_ak_has_control(handle, anc) != (i32)0)
+                    {
+                    i32 ax = (i32)0;
+                    i32 ay = (i32)0;
+                    i32 aw = (i32)0;
+                    i32 ah = (i32)0;
+                    self.structAbsFrame(tree, i, &ax, &ay, &aw, &ah);
+                    // A masked control is tracked by AppKit, so leave its frame; a mask-free one is
+                    // ours to place, relative to the document.
+                    i32 setFrame = (i32)t.nodes[i].autoresize == (i32)0 ? (i32)1 : (i32)0;
+                    ux_ak_reparent_to_scroll(handle, i, anc, ax, ay, aw, ah, setFrame);
+                    break;
+                    }
+                anc = (i32)t.nodes[anc].parent;
                 }
             }
         // Anything realized during THIS pass was added above the shield, so put

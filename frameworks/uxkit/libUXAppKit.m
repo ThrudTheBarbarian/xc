@@ -3170,6 +3170,43 @@ int ux_ak_scroll_get(int handle, int node)
     return (int)[[nsv contentView] bounds].origin.y;
     }
 
+/* Re-parent a native control into the DOCUMENT view of the scroll view it sits inside, so it
+ * scrolls and clips with the scroll instead of staying put over it.  The control was created as a
+ * flat child of the content view with an absolute (content-view) frame; `ax,ay` is that absolute
+ * origin, converted here into the document view's coordinates (the clip offset, the bezel and the
+ * flip are all the shim's to get right).  setFrame 0 leaves the frame alone, for a control AppKit
+ * tracks natively (an autoresize mask) -- re-setting it every pass would fight the live track.
+ * A control already in the right document view is left where it is. */
+static int g_akReparentN = 0; // how many controls this pass has moved (ux_ak_reparent_count)
+void ux_ak_reparent_to_scroll(int handle, int node, int scrollNode, int ax, int ay, int aw, int ah, int setFrame)
+    {
+    NSView* ctl = g_ctl[handle][node];
+    NSScrollView* sv = (NSScrollView*)g_ctl[handle][scrollNode];
+    NSView* content = g_view[handle];
+    if (!ctl || !sv || !content || ![sv isKindOfClass:[NSScrollView class]])
+        return;
+    NSView* doc = [sv documentView];
+    if (!doc)
+        return;
+    if ([ctl superview] != doc)
+        {
+        [ctl removeFromSuperview];
+        [doc addSubview:ctl];
+        g_akReparentN = g_akReparentN + 1;
+        }
+    if (setFrame)
+        {
+        NSPoint p = [content convertPoint:NSMakePoint(ax, ay) toView:doc];
+        [ctl setFrame:NSMakeRect(p.x, p.y, aw, ah)];
+        }
+    }
+/* How many controls the re-parent pass has moved into a scroll document, cumulatively -- a gate
+ * asserts it went up, which is the one thing a picture cannot show. */
+int ux_ak_reparent_count(void)
+    {
+    return g_akReparentN;
+    }
+
 void ux_ak_scroll_reload(int handle, int node, int contentH)
     {
     if (node < 0 || node >= 256)
