@@ -3279,6 +3279,16 @@ void ux_ak_make_surface(int handle, int node, int x, int y, int w, int h, void* 
     if (!content || node < 0 || node >= 256)
         return;
     NSView* s = [[ak_surface_class() alloc] initWithFrame:NSMakeRect(x, y, w, h)];
+    /* TRANSPARENT, or the surface is a black rectangle over the GL map.  Its drawRect clears to
+     * transparent where it draws nothing, and for that to reveal the MAP the surface must be a
+     * LAYER the window server composites over the GL plane -- a plain view draws into the window
+     * backing, whose "transparent" is the window background (black in dark mode), not the map.  This
+     * is the §6 hazard (uniform layer backing); a layer-backed sibling also upgrades the GL view to
+     * its layer form, which is the preferred compositing path.  Needed for rounded menu/panel
+     * corners and for the ink layer over the map. */
+    [s setWantsLayer:YES];
+    [s.layer setOpaque:NO];
+    [s.layer setBackgroundColor:NULL]; // no background: transparent where nothing is drawn
     if (g_surface_n < UX_MAXSURFACE)
         {
         g_surface_view[g_surface_n] = s;
