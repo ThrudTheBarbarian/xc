@@ -15,12 +15,13 @@ parity.
 
 | | arm64 | x86-64 |
 |---|---|---|
-| **Geometric mean** | **0.93** | **1.03** |
-| Arithmetic mean | 1.05 | 1.15 |
-| Within 0.3x-2.0x of clang | 18 of 19 | 16 of 19 |
+| **Geometric mean** | **0.94** | **0.88** |
+| Arithmetic mean | 1.06 | 0.94 |
+| Within 0.3x-2.0x of clang | 18 of 19 | 19 of 19 |
 
-On arm64 the suite is slightly faster than clang overall. On x86-64 it is
-within three percent.
+On both targets the suite is faster than clang overall: by six percent on
+arm64 and by twelve on x86-64, where 0.64's register allocation and loop
+rotation closed most of the gap.
 
 The geometric mean is the one to read. Averaging ratios arithmetically is
 misleading: a benchmark at 2.00x and one at 0.50x are exactly compensating,
@@ -29,35 +30,35 @@ arithmetic figure is given only for completeness.
 
 ## Per benchmark
 
-Times are seconds for the timed region, best of five, measured with the released 0.63 `xcc`. Each run waits until the machine doing the timing is otherwise idle.
+Times are seconds for the timed region, best of five, measured with the released 0.64 `xcc`. Each run waits until the machine doing the timing is otherwise idle.
 
 | benchmark | arm64 xcc | arm64 clang | ratio | x86-64 xcc | x86-64 clang | ratio |
 |---|---|---|---|---|---|---|
-| `arc_array` | 0.99 | 5.58 | **0.18** | 1.18 | 3.72 | **0.32** |
-| `method_call` | 1.07 | 2.89 | **0.37** | 1.35 | 1.90 | **0.71** |
-| `string_scan` | 1.01 | 2.64 | **0.38** | 1.62 | 3.15 | **0.51** |
-| `arc_alloc` | 1.02 | 1.41 | **0.73** | 0.94 | 2.06 | **0.46** |
-| `sieve` | 1.22 | 1.58 | **0.77** | 1.84 | 0.81 | **2.29** |
-| `call_depth` | 1.00 | 1.07 | **0.94** | 1.06 | 0.95 | **1.11** |
-| `array_sum` | 0.95 | 0.95 | **1.00** | 1.21 | 1.44 | **0.84** |
-| `hash_mix` | 1.36 | 1.30 | **1.04** | 1.01 | 1.08 | **0.93** |
-| `branch_mix` | 1.21 | 1.10 | **1.11** | 0.92 | 0.81 | **1.13** |
-| `bit_ops` | 1.42 | 1.26 | **1.12** | 0.97 | 0.97 | **1.00** |
-| `int_accum` | 1.43 | 1.27 | **1.12** | 0.97 | 0.97 | **1.00** |
-| `poly_dispatch` | 1.38 | 1.20 | **1.14** | 0.97 | 1.23 | **0.79** |
-| `struct_copy` | 1.33 | 1.13 | **1.17** | 1.13 | 0.78 | **1.44** |
-| `int_muldiv` | 1.23 | 1.01 | **1.22** | 2.02 | 1.70 | **1.19** |
-| `sort_small` | 1.33 | 1.05 | **1.28** | 1.86 | 1.49 | **1.25** |
-| `array_map` | 1.65 | 1.20 | **1.38** | 2.14 | 1.57 | **1.37** |
-| `float_math` | 1.33 | 0.92 | **1.45** | 1.51 | 0.74 | **2.03** |
-| `mem_copy` | 1.66 | 0.93 | **1.78** | 1.53 | 1.05 | **1.46** |
-| `matrix_mul` | 1.82 | 1.00 | **1.83** | 2.42 | 1.20 | **2.02** |
+| `arc_array` | 0.96 | 5.40 | **0.18** | 1.15 | 3.72 | **0.31** |
+| `method_call` | 1.04 | 2.81 | **0.37** | 1.35 | 1.90 | **0.71** |
+| `string_scan` | 0.95 | 2.47 | **0.38** | 1.62 | 3.15 | **0.51** |
+| `arc_alloc` | 1.01 | 1.38 | **0.74** | 0.93 | 2.05 | **0.45** |
+| `sieve` | 1.17 | 1.52 | **0.77** | 1.49 | 0.82 | **1.82** |
+| `call_depth` | 0.98 | 1.04 | **0.94** | 1.05 | 0.95 | **1.11** |
+| `array_sum` | 0.94 | 0.94 | **1.00** | 0.93 | 1.44 | **0.65** |
+| `hash_mix` | 1.32 | 1.24 | **1.06** | 1.01 | 1.08 | **0.94** |
+| `branch_mix` | 1.19 | 1.07 | **1.11** | 0.81 | 0.81 | **1.00** |
+| `bit_ops` | 1.38 | 1.24 | **1.12** | 0.97 | 0.97 | **1.00** |
+| `int_accum` | 1.37 | 1.22 | **1.12** | 0.97 | 0.97 | **1.00** |
+| `poly_dispatch` | 1.34 | 1.17 | **1.14** | 0.97 | 1.23 | **0.79** |
+| `int_muldiv` | 1.20 | 0.99 | **1.22** | 2.01 | 1.70 | **1.19** |
+| `struct_copy` | 1.24 | 0.99 | **1.25** | 0.85 | 0.78 | **1.09** |
+| `sort_small` | 1.32 | 0.99 | **1.34** | 1.80 | 1.49 | **1.21** |
+| `array_map` | 1.47 | 1.07 | **1.37** | 1.56 | 1.56 | **0.99** |
+| `float_math` | 1.31 | 0.89 | **1.48** | 0.74 | 0.75 | **0.99** |
+| `mem_copy` | 1.60 | 0.90 | **1.78** | 1.07 | 1.05 | **1.02** |
+| `matrix_mul` | 1.77 | 0.97 | **1.82** | 1.30 | 1.20 | **1.08** |
 
 The fastest results are where the runtime does the work: `arc_array`,
 `method_call` and `string_scan` are reference counting, dynamic dispatch and
 string scanning, and those are library code rather than generated code. The
-slowest are `sieve`, `float_math` and `matrix_mul` on x86-64, all of which
-clang vectorises more aggressively than xcc does.
+slowest are `matrix_mul` and `mem_copy` on arm64 and `sieve` on x86-64, whose
+inner loops clang vectorises and xcc does not.
 
 ## What is being compared, and what is not
 
@@ -89,7 +90,7 @@ The benchmark sources are in `benchmark/src`, one `.xc` and one `.m` per
 program, and the runner builds and times both:
 
 ```
-python3 benchmark/run.py --version v0.63 --opt O3 --repeats 5
+python3 benchmark/run.py --version v0.64 --opt O3 --repeats 5
 ```
 
 The x86-64 legs cross-build here and run on a configured Linux host; without

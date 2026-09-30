@@ -3,6 +3,66 @@ title: ChangeLog
 description: Release notes for the xcc toolchain, with bug fixes and new features per version.
 ---
 
+## Version 0.64 — C's printf, an HTTP client and a run loop
+
+`printf` and the other format functions now follow C, keeping `%@` for objects.
+The library gains settings files, bundles, an HTTP client, file operations on a
+background thread and a run loop to deliver their results. The x86-64 back end
+is faster, and a number of wrong-code bugs are fixed.
+
+### Changed
+
+- `Stdio.printf`, `String.withFormat`, `String.appendFormat` and `Log.error`,
+  `Log.warning` and `Log.info` take C's conversions, flags, field widths,
+  precisions and `*`, with C's output: `%x` has no leading zeros, `%f` and `%lf`
+  both print six places, `%e` and `%g` are C's, and the floating conversions
+  round exactly as C does. `%@` still prints an object's `description()`, and
+  now an enum's name too.
+- The arguments follow C: an integer narrower than `int` is passed as an `int`
+  and a `float` as a `double`. `int` is 32 bits, 16 on xt6502; `long` is 64 bits
+  on the 64-bit targets.
+- With a literal format the compiler sizes each integer conversion to the
+  argument actually passed, so `%d` prints an `i64` whole; the check now reports
+  only an argument of the wrong kind or a wrong count. A variadic function that
+  passes its format and `...` on to one of these is treated the same way at its
+  own call sites.
+
+### New
+
+- `Settings` (a key/value file) and `Bundle` (a program's resources).
+- `Http`: an HTTP/1.1 client, with TLS where the platform provides it, and the
+  native transport for `url.fetch`.
+- `AsyncFiles`: the `Files` operations on a background thread, and `RunLoop`,
+  which the completions can be delivered to.
+- Third-party libraries resolve and load with the compiler.
+- A float literal may have an exponent without a point (`1e30`), and the
+  `f`/`F` suffix marks a single-precision literal.
+- `PLATFORM_android` is defined for `-A android`.
+- New warnings: a non-void function that can reach its closing brace, and a
+  local that hides a field.
+
+### Faster
+
+- x86-64: values are loaded straight into their home registers, registers are
+  ranked by loop-weighted use and shared along live segments, a float phi copy
+  is one `movaps`, and loops rotate so the test sits at the bottom.
+  Across the benchmark suite x86-64 code is now 0.88× clang's time (geometric
+  mean), from 1.03×; see [Performance](/compiler/performance/).
+
+### Wrong code fixed
+
+- A `%@` argument to `String.withFormat` or `appendFormat` was released once
+  too often, so a local object could be freed while still in use.
+- A method called through the vtable with variadic arguments got its tail on
+  arm64.
+- A scalar argument converts to a `float` parameter; a local that shadows a
+  field writes the local; `sizeof(x)` on a variable measures the variable; a
+  string literal in a global aggregate initialiser is emitted; an implicit-self
+  call boxes its arguments; an array bound folds in a struct field and a prefix
+  type.
+- A `double` literal below the smallest normal value is kept rather than
+  flushed to zero.
+
 ## Version 0.63 — archiving, class names and Windows DLLs
 
 This release adds keyed archiving to the language, gives every object a runtime
