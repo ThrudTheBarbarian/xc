@@ -10,12 +10,11 @@ i32 main(void)
     s.appendCString("llo");
     s.appendChar((u32)$26A1);        // ⚡  U+26A1, encoded as 3 bytes
 
-    Stdio.printf("bytes %d, chars %d\n",
-                 (i16)s.byteLength(), (i16)s.charCount());
+    Stdio.printf("bytes %u, chars %u\n", s.byteLength(), s.charCount());
 
     // Byte in the name = byte semantics; Char = code points.
-    Stdio.printf("byteAt(1) %lx, charAt(1) U+%lx\n",
-                 (u32)s.byteAt((u32)1), s.charAt((u32)1));
+    Stdio.printf("byteAt(1) %X, charAt(1) U+%04X\n",
+                 s.byteAt((u32)1), s.charAt((u32)1));
 
     Stdio.printf("slice chars '%s'\n",
                  s.substringChars((u32)1, (u32)2).cString());
@@ -23,7 +22,7 @@ i32 main(void)
     // Walking characters by byte index — no O(n^2) charAt loop.
     u32 i = (u32)0;
     while (i < s.byteLength()) {
-        Stdio.printf("U+%lx ", s.charAtByte(i));
+        Stdio.printf("U+%04X ", s.charAtByte(i));
         i = s.nextCharByte(i);
     }
     Stdio.printf("\n");

@@ -22,10 +22,11 @@ The native backends (arm64 and the other register targets) format each value to
 ASCII and push it a byte at a time through the host runtime's `_putc`, so output
 is an ordinary byte stream with no addressable grid.
 
-The two builds produce **byte-compatible** formatted text, so the dual-backend
-test corpus gives the same output on every target: decimals carry no padding,
-`%x` is four uppercase hex digits, `%lx` is eight, `%f` is six decimal places and
-`%lf` ten.
+`printf` follows C: the same conversions, flags, widths and precisions, with the
+same output, plus `%@` for objects. On the native backends it is built on
+[`String.withFormat`](/compiler/api/string/#withformat), so the two always agree.
+The xt6502 build is a smaller formatter with the same argument rules; see
+[Format specifiers](#format-specifiers) for what it leaves out.
 
 :::note[Availability]
 - [`putChar`](#putchar), [`scroll`](#scroll) and [`printFpDec`](#printfpdec) exist
@@ -35,10 +36,10 @@ test corpus gives the same output on every target: decimals carry no padding,
 - [`setCursor`](#setcursor) and the `(x, y)` position of [`printfAt`](#printfat)
   are no-ops on the native backends: stdout has no cursor.
 - The 64-bit `print` overloads ([`print(i64)` / `print(u64)`](#print)) and
-  `%lld`/`%llu` are on both; `%llx` and `printHex(u64)` are **arm64 only**
+  `%lld`/`%llu` are on both; `%llx` and `printHex(u64)` are **native only**
   (xt6502's `printHex` tops out at 32-bit and its `printf` has no `%llx`).
-- `%@` object formatting is gated on the front-end `HAS_ATFMT` pre-scan so a
-  program that never uses it pays no `Object`/`String` footprint.
+- On xt6502, `%@` object formatting is gated on the front-end `HAS_ATFMT`
+  pre-scan so a program that never uses it pays no `Object`/`String` footprint.
 :::
 
 ## Topics
@@ -146,18 +147,17 @@ a bare `%lf` uses `10`; `%.Nf` uses `keep = N, roundAt = N+1`.
 ```c
 static void printf(string fmt, ...)
 ```
-The main formatted-output method. Walks `fmt`, copying literal bytes and
-expanding `%` conversions by pulling matching arguments from the varargs buffer.
-See [Format specifiers](#format-specifiers) below for the full contract.
+The main formatted-output method: C's `printf`, plus `%@`. See
+[Format specifiers](#format-specifiers) below for the full contract.
 
 ### printfAt
 ```c
 static void printfAt(u8 x, u8 y, string fmt, ...)
 ```
 [`setCursor(x, y)`](#setcursor) followed by [`printf`](#printf), for
-table-style screens. It is a pure forwarder that does not call `va_start`
-itself, so it is exempt from the xt6502 varargs-reentrance check. On the native
-backends the `(x, y)` is ignored.
+table-style screens. On xt6502 it is a pure forwarder that does not call
+`va_start` itself, so it is exempt from the varargs-reentrance check. On the
+native backends the `(x, y)` is ignored.
 
 [↑ Topics](#topics)
 
@@ -192,38 +192,68 @@ the native backends it does nothing. Static callers never need it.
 
 ## Format specifiers
 
-The `printf` / `printfAt` conversions. The **width contract** is shared with [`String.appendFormat`](/compiler/api/string/#appendformat):
-`%d`/`%u` are 16-bit, `%ld`/`%lu` are 32-bit.
+The conversions are C's, and so are the rules for the arguments. The same
+contract covers [`String.withFormat`](/compiler/api/string/#withformat),
+[`String.appendFormat`](/compiler/api/string/#appendformat) and `Log.error`,
+`Log.warning` and `Log.info`.
 
-| Specifier | Argument type | Output |
-|-----------|---------------|--------|
-| `%d`  | `i16` | signed decimal, 16-bit |
-| `%u`  | `u16` | unsigned decimal, 16-bit |
-| `%x`  | `u16` | hex, 4 digits, uppercase |
-| `%ld` | `i32` | signed decimal, 32-bit |
-| `%lu` | `u32` | unsigned decimal, 32-bit |
-| `%lx` | `u32` | hex, 8 digits |
-| `%lld`| `i64` | signed decimal, 64-bit |
-| `%llu`| `u64` | unsigned decimal, 64-bit |
-| `%llx`| `u64` | hex, 16 digits — **arm64 only** |
-| `%f`  | `float` | float, 6 dp (`%.Nf` for N places) |
-| `%lf` | `double` | double, 10 dp (`%.Nlf` for N places) |
-| `%c`  | `u8` | one character (no width promotion) |
-| `%s`  | `string` (`u8*`) | NUL-terminated string |
-| `%e`  | enum value (statically typed as an enum) | textual name of the enum value |
-| `%@`  | class instance | the object's `description()`, through its vtable |
-| `%%`  | — | literal `%` |
+A conversion is `%`, then any flags (`-` left-justify, `+` always a sign, space
+a space for a positive number, `#` the alternate form, `0` pad with zeros), a
+field width, a `.` and a precision, a length, and the conversion letter. A `*`
+for the width or precision takes it from an `i32` argument.
+
+| Conversion | Argument | Output |
+|------------|----------|--------|
+| `%d` `%i` | integer | signed decimal |
+| `%u` | integer | unsigned decimal |
+| `%x` `%X` | integer | hex, lower / upper case, no leading zeros |
+| `%o` | integer | octal |
+| `%c` | integer | one character |
+| `%f` `%F` | `float` or `double` | fixed point, 6 places unless a precision is given |
+| `%e` `%E` | `float` or `double` | exponent form, `1.500000e+03` |
+| `%g` `%G` | `float` or `double` | the shorter of the two, trailing zeros removed |
+| `%s` | `string` (`u8*`) | NUL-terminated string |
+| `%p` | pointer | `0x` and the address in hex |
+| `%@` | class instance, or an enum | the object's `description()`; an enum's name |
+| `%%` | — | literal `%` |
+
+The arguments follow C. An integer narrower than `int` is passed as an `int` and
+a `float` as a `double`, so `%c` takes a `u8` and `%f` a `float` as they are.
+`int` is 32 bits, except on xt6502, where it is 16. The length says how wide the
+integer is: none for an `int`, `h` and `hh` for narrower ones, `l` for a `long`,
+which is 64 bits on the 64-bit targets and 32 elsewhere, `ll` for 64 bits, and
+`z` or `t` for a pointer-sized value.
+
+When the format is a **string literal**, the compiler sets each integer
+conversion's length from the argument actually passed, so the length can be
+left off: `%d` prints an `i64` whole, and `%lld` given an `i32` reads only the
+32 bits that are there. What it cannot fix is the wrong kind of argument — a
+`double` for `%d`, an integer for `%s` — and it warns about that, and about a
+count that does not match (`-Wno-printf-format` silences both). A format built
+at run time is read as C reads it, and then the length has to be right.
+
+A variadic function or method that passes its own format parameter and `...`
+straight on to one of these gets the same treatment at its own call sites:
+
+```c
+void say(string fmt, ...) { _out.appendFormat(fmt, ...); }
+```
 
 ```c
 u16 score  = 1234;
-i32 millis = -50000;
+i64 millis = -50000;
 float pi   = 3.14159;
 string name = "Player 1";
 
-Stdio.printf("%s scored %u in %ld ms\n", name, score, millis);
-Stdio.printf("pi ~ %f\n", pi);
-Stdio.printf("ratio: %u%%\n", (u16)42);   // "ratio: 42%"
+Stdio.printf("%s scored %u in %d ms\n", name, score, millis);
+Stdio.printf("pi ~ %.2f\n", pi);              // pi ~ 3.14
+Stdio.printf("[%-6s|%06x]\n", "id", 255);     // [id    |0000ff]
+Stdio.printf("ratio: %u%%\n", 42);            // ratio: 42%
 ```
+
+On **xt6502** the formatter is smaller: a width, the flags and a precision are
+read but only the precision is applied, `%e` and `%g` print in fixed point as
+`%f` does, and `%o`, `%p` and `%llx` are not there.
 
 ### Objects: `%@`
 
@@ -262,40 +292,24 @@ Sprite s = {160, 96, 7};
 Stdio.printf("sprite=%@\n", s);       // sprite=(160, 96, 7)
 ```
 
-### Enum names: `%e`
+### Enum names
 
-`%e` prints the **textual name** of an enum value. The translation happens at
-**compile time**, so the runtime `printf` never sees a `%e`:
-
-1. The compiler scans every `printf` / `printfAt` format string at the call site.
-2. Each `%e` is rewritten in place to `%s`.
-3. A small `_enum_lookup_<EnumName>(value)` helper is generated for any enum
-   reached by a `%e`; the call site emits a `JSR` to it and packs its returned
-   string pointer as the matching `%s` argument.
-
-In the binary every `%e` is an ordinary `%s`, and the feature costs one helper
-per enum (emitted once, however many call sites use it).
+Given a value **statically typed as an enum**, `%@` prints the member's name.
+`%e` does the same with an enum; with a `float` or `double` it is C's exponent
+form. The translation happens at **compile time**: the conversion becomes `%s`,
+and a small `_enum_lookup_<EnumName>(value)` helper, emitted once per enum,
+supplies the name.
 
 ```c
 enum direction = {N = 1, E, S, W};
 
 direction d = E;
-Stdio.printf("heading: %e\n", d);      // heading: E
-Stdio.printf("raw    : %u\n", (u16)d); // raw    : 2
+Stdio.printf("heading: %@\n", d);     // heading: E
+Stdio.printf("raw    : %u\n", d);     // raw    : 2
 ```
 
-The argument paired with `%e` **must be statically typed as an enum**; a non-enum
-argument is a compile-time error (`printf '%e' requires an enum argument`). For
-the underlying number, use `%u`/`%d` and cast explicitly; there is no automatic
-fallback.
-
-### Pre-scanning and code-size gating
-
-The compiler scans every `printf` format string at compile time and links only
-the specifier handlers in use. A program that prints only strings and `u16`s
-pays for `%s` and `%u`, and none of the floating-point, double or `%@` code
-reaches the binary. Force-include or force-exclude specifiers with
-`-DHAS_FFMT=1`, `-DHAS_LFMT=0`, `-DHAS_ATFMT=1`, and so on.
+This needs a literal format, where the compiler can see which conversion the
+enum meets. A value outside the enum prints `?`.
 
 ## Variadic limits (xt6502 only)
 

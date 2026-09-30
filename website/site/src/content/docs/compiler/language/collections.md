@@ -158,9 +158,9 @@ String* s = String.withFormat("(%ld|%ld)", x, y);   // construct
 s.appendFormat(" tint=%d", tint);                   // append
 ```
 
-Supported: `%@` `%s` `%d` `%i` `%u` `%ld` `%lu` `%x` `%lx` `%c` `%f` `%lf` `%%`,
-with optional width and zero-padding (`%04lx`). `%d`/`%u`/`%x` are 16-bit and
-the `l` forms 32-bit, as in `Stdio.printf`.
+The conversions are C's `printf` ones, with flags, widths and precisions, plus
+`%@` for an object — the same contract as
+[`Stdio.printf`](/compiler/api/stdio/#format-specifiers).
 
 The usual way to write `description()`:
 

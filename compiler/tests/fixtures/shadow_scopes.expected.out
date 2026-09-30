@@ -1,5 +1,5 @@
-T1 0000DEAD
+T1 dead
 T2 outer
-T3 00012000 outer
-T4 00000066 outer
+T3 12000 outer
+T4 66 outer
 T5 deep

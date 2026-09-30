@@ -111,6 +111,7 @@ static int xtVersionGT(NSString* a, NSString* b)
         _scopeStack = [NSMutableArray arrayWithObject:_globalScope];
         _registeredEnumNames = [NSMutableSet set];
         _classesByName = [NSMutableDictionary dictionary];
+        _formatWrappers = [NSMutableDictionary dictionary];
         _classesUsedWithTypeArgument = [NSMutableSet set];
         _protocolsByName = [NSMutableDictionary dictionary];
         _protocolMethodSlots = [NSMutableDictionary dictionary];
@@ -372,6 +373,7 @@ static int xtVersionGT(NSString* a, NSString* b)
 \****************************************************************************/
 - (void)visitProgram:(XTProgramNode*)node
     {
+    [self collectFormatWrappers:node.declarations];
     for (XTASTNode* decl in node.declarations)
         [self analyzeNode:decl];
     }

@@ -333,9 +333,10 @@ i32 main(void)
     i32 wide  = (i32)-100000;
     u64 huge  = (u64)1 << (u64)40;
 
-    // printf's width contract: %d is 16-BIT and %ld is 32-bit, and both are
-    // signed — which is why 60000 in a u16 prints as -5536.
-    Stdio.printf("u8=%d u16=%d (as i32 %ld) i32=%ld\n", small, mid, (i32)mid, wide);
+    // printf follows C: a narrower integer is passed as an int, and with a
+    // literal format the compiler sizes each conversion to its argument, so
+    // plain %d prints every one of these whole.
+    Stdio.printf("u8=%d u16=%d (as i32 %d) i32=%d\n", small, mid, (i32)mid, wide);
     Stdio.printf("2^40 = %ld:%ld (hi:lo)\n", (u32)(huge >> (u64)32), (u32)huge);
 
     // Same-width arithmetic stays at that width.
@@ -373,12 +374,12 @@ i32 main(void)
 ```
 
 ```
-u8=200 u16=-5536 (as i32 60000) i32=-100000
+u8=200 u16=60000 (as i32 60000) i32=-100000
 2^40 = 256:0 (hi:lo)
 u8 200+100 -> 44   widened -> 300
 hex=48879 bin=165 big=1000000
 *p = 1234
 value now 4321
 both pointers: 4321 4321
-bool=1 float=1.500000 double=3.1000000000
+bool=1 float=1.500000 double=3.100000
 ```

@@ -126,6 +126,9 @@
 // analysis so nested assigns don't lose context.
 @property(nonatomic) BOOL memberAccessAsLValue;
 @property(nonatomic) NSMutableDictionary<NSString*, XTClassDeclNode*>* classesByName;
+// Format wrappers (a function's name, or `Class.method`) → the index of the
+// format parameter. See -collectFormatWrappers:.
+@property(nonatomic) NSMutableDictionary<NSString*, NSNumber*>* formatWrappers;
 
 // Escape-analysis transient state — reset per function/method body.
 @property(nonatomic, nullable) NSMutableDictionary<NSString*, NSNumber*>* escStackClassDepth; // local varName → block depth at decl

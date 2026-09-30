@@ -36,6 +36,7 @@
 class Sema
     {
     Map* _classes;      // class name  -> ClassDecl node
+    Map* _fmtWrappers;  // function name or `Class.method` -> its format index (see fmtWrapperIndex)
     Map* _protocols;    // protocol name -> ProtocolDecl node
     Array* _classDecls; // EVERY class/protocol declaration node, duplicates
                         // included — a double import parses the same class
@@ -120,6 +121,7 @@ class Sema
     void init(void)
         {
         _classes = new Map();
+        _fmtWrappers = new Map();
         _protocols = new Map();
         _classDecls = new Array();
         _functions = new Map();
@@ -856,6 +858,7 @@ class Sema
         synthesiseInits();
         markAutoSuperInit();
         checkFinalMethods(program);
+        collectFormatWrappers(program);
         typeProgram(program);
         checkVariadicReentrance();
         }
@@ -1720,9 +1723,8 @@ class Sema
             }
         // A printf VARARG is typed with the format's expectation in hand:
         // `Math.PI()` has a float and a double overload and nothing but the
-        // conversion can choose between them, so `%f` picks float and `%lf`
-        // picks double. Only the float conversions hint — the integer ones
-        // would start choosing where the original does not.
+        // conversion can choose between them, so a floating conversion picks
+        // the double. Only the float conversions hint.
         for (u32 i = (u32)0; i < n.kidCount(); i = i + (u32)1)
             {
             String* hint = printfHint(n, i);
@@ -2746,6 +2748,12 @@ class Sema
                 n.setSym(fn.sym());
                 noteCallEdge(fnLabel(fn.sym() != 0 ? fn.sym() : n.name()));
                 applyBoxing(n, fn, (u32)0);
+                if (fn.hasFlag((u32)NF_VARARGS))
+                    {
+                    u32 wk = fmtWrapperFor(n.name());
+                    if (wk != (u32)0)
+                        formatCallAt(n, wk - (u32)1, n.name());
+                    }
                 return;
                 }
             }
@@ -2773,20 +2781,22 @@ class Sema
             if (demotedC)
                 n.setCls(cls.name());
             applyBoxing(n, m, (u32)0);
-            // The bare spelling gets the SAME type-directed format upgrade as
-            // the explicit one (finding #8) — no receiver kid, so the format
-            // sits one position earlier.
+            // The bare spelling gets the SAME format treatment as the explicit
+            // one (finding #8) — no receiver kid, so the format sits one
+            // position earlier.
             if (_isOp(cls.name(), "Stdio"))
                 {
                 if (_isOp(n.name(), "printf"))
                     {
                     rewriteFormatAt(n, (u32)0);
                     checkFormatAt(n, (u32)0, useFormatCallName(n.name(), "printf"));
+                    promoteFormatAt(n, (u32)0);
                     }
                 else if (_isOp(n.name(), "printfAt"))
                     {
                     rewriteFormatAt(n, (u32)2);
                     checkFormatAt(n, (u32)2, useFormatCallName(n.name(), "printfAt"));
+                    promoteFormatAt(n, (u32)2);
                     }
                 }
             return;
@@ -3535,6 +3545,22 @@ class Sema
         noteCallEdge(clsLabel(owner2 != 0 ? owner2.name() : owner, m.sym() != 0 ? m.sym() : m.name()));
         rewriteFormat(n, owner);
         checkFormat(n, owner);
+        promoteFormat(n, owner);
+        // A call to a format WRAPPER, keyed by the class that declares it.
+        if (formatIndex(n, owner) == (u32)0 && m.hasFlag((u32)NF_VARARGS))
+            {
+            String* wkey = String.withString(owner2 != 0 ? owner2.name() : owner);
+            wkey.appendByte((u8)'.');
+            wkey.append(n.name());
+            u32 wk = fmtWrapperFor(wkey);
+            if (wk != (u32)0)
+                {
+                String* cname = String.withString(owner);
+                cname.appendByte((u8)'.');
+                cname.append(n.name());
+                formatCallAt(n, wk, cname);
+                }
+            }
         // Which KIND of receiver reached this method decides whether its
         // prologue retains self. Only an EXPLICIT receiver counts: a bare call
         // promoted by `use`, or an implicit-self call inside the class, leaves
@@ -3936,147 +3962,207 @@ class Sema
         return agreed;
         }
 
-    // The type the format string wants for the argument at `argIdx`, or none.
-    // The conversions are walked in order; `%%` consumes no argument. Only
-    // `%f`/`%e`/`%g` answer, since those are the only ones where the choice
-    // is otherwise unmakeable — a zero-argument overload set that differs
-    // only in its return type.
-    String* printfHint(Node* call, u32 argIdx)
+    // ── C PRINTF FORMATS ──────────────────────────────────────────────────
+    // One scanner walks a format the way C's printf does:
+    //     % flags* (width | *) (. (digits | *))? length? conversion
+    // with the length one of hh h l ll j z t L q. A `*` width or precision
+    // reads an argument of its own, ahead of the conversion's. `%%` reads
+    // nothing. The next conversion from sp[6] onward fills sp[0..5] — the
+    // '%', the length's first byte, the conversion's position, one past it,
+    // the conversion, and how many `*` arguments it reads — and moves sp[6]
+    // past it. False when there are no more.
+    bool fmtNext(String* f, u32* sp)
         {
-        if (call.kind() != (u16)nkMethodCall)
-            return (String*)0;
-        u32 fmtIdx = (u32)0;
-        if (_isOp(call.name(), "printf"))
-            fmtIdx = (u32)1;
-        else if (_isOp(call.name(), "printfAt"))
-            fmtIdx = (u32)3;
-        else
-            return (String*)0;
-        if (argIdx <= fmtIdx || call.kidCount() <= fmtIdx)
-            return (String*)0;
-        Node* recv = call.kid((u32)0);
-        if (recv.kind() != (u16)nkIdent || !_isOp(recv.name(), "Stdio"))
-            return (String*)0;
-        Node* lit = call.kid(fmtIdx);
-        if (lit.kind() != (u16)nkStr || lit.name() == 0)
-            return (String*)0;
-
-        String* f = lit.name();
-        u32 want = argIdx - fmtIdx; // 1-based position in the vararg list
-        u32 seen = (u32)0;
-        u32 i = (u32)0;
-        while (i < f.byteLength())
-            {
-            if (f.byteAt(i) != (u8)'%')
-                {
-                i = i + (u32)1;
-                continue;
-                }
+        u32 n = f.byteLength();
+        u32 i = sp[6];
+        while (i < n && f.byteAt(i) != (u8)'%')
             i = i + (u32)1;
-            // The full grammar, so the walk stays aligned with the arguments:
-            // flags, width, precision, and a `*` in either position is an
-            // ARGUMENT that must be counted or every later hint lands on the
-            // wrong argument.
-            while (i < f.byteLength())
-                {
-                u8 fl = f.byteAt(i);
-                if (fl != (u8)'-' && fl != (u8)'+' && fl != (u8)' ' && fl != (u8)'#'
-                    && fl != (u8)'0')
-                    break;
+        if (i + (u32)1 >= n)
+            {
+            sp[6] = n;
+            return false;
+            }
+        sp[0] = i;
+        sp[5] = (u32)0;
+        i = i + (u32)1;
+        while (i < n)
+            {
+            u8 fl = f.byteAt(i);
+            if (fl != (u8)'-' && fl != (u8)'+' && fl != (u8)' ' && fl != (u8)'#' && fl != (u8)'0')
+                break;
+            i = i + (u32)1;
+            }
+        if (i < n && f.byteAt(i) == (u8)'*')
+            {
+            sp[5] = sp[5] + (u32)1;
+            i = i + (u32)1;
+            }
+        else
+            while (i < n && f.byteAt(i) >= (u8)'0' && f.byteAt(i) <= (u8)'9')
                 i = i + (u32)1;
-                }
-            if (i >= f.byteLength())
-                return (String*)0;
-            if (f.byteAt(i) == (u8)'*')
+        if (i < n && f.byteAt(i) == (u8)'.')
+            {
+            i = i + (u32)1;
+            if (i < n && f.byteAt(i) == (u8)'*')
                 {
+                sp[5] = sp[5] + (u32)1;
                 i = i + (u32)1;
-                seen = seen + (u32)1;
                 }
             else
-                while (i < f.byteLength() && f.byteAt(i) >= (u8)'0' && f.byteAt(i) <= (u8)'9')
+                while (i < n && f.byteAt(i) >= (u8)'0' && f.byteAt(i) <= (u8)'9')
                     i = i + (u32)1;
-            if (i >= f.byteLength())
-                return (String*)0;
-            if (f.byteAt(i) == (u8)'.')
-                {
-                i = i + (u32)1;
-                if (i >= f.byteLength())
-                    return (String*)0;
-                if (f.byteAt(i) == (u8)'*')
-                    {
-                    i = i + (u32)1;
-                    seen = seen + (u32)1;
-                    }
-                else
-                    while (i < f.byteLength() && f.byteAt(i) >= (u8)'0' && f.byteAt(i) <= (u8)'9')
-                        i = i + (u32)1;
-                if (i >= f.byteLength())
-                    return (String*)0;
-                }
-            bool lng = false;
-            if (f.byteAt(i) == (u8)'l')
-                {
-                lng = true;
-                i = i + (u32)1;
-                if (i >= f.byteLength())
-                    return (String*)0;
-                }
-            u8 sp = f.byteAt(i);
-            i = i + (u32)1;
-            if (sp == (u8)'%')
-                continue;
-            seen = seen + (u32)1;
-            if (seen != want)
-                continue;
-            if (sp == (u8)'f' || sp == (u8)'e' || sp == (u8)'g')
-                {
-                if (lng)
-                    return String.withCString("double");
-                return String.withCString("float");
-                }
-            return (String*)0;
             }
-        return (String*)0;
+        sp[1] = i;
+        if (i < n)
+            {
+            u8 c = f.byteAt(i);
+            if ((c == (u8)'h' || c == (u8)'l') && i + (u32)1 < n && f.byteAt(i + (u32)1) == c)
+                i = i + (u32)2;
+            else if (c == (u8)'h' || c == (u8)'l' || c == (u8)'j' || c == (u8)'z' || c == (u8)'t'
+                     || c == (u8)'L' || c == (u8)'q')
+                i = i + (u32)1;
+            }
+        if (i >= n)
+            {
+            sp[6] = n;
+            return false;
+            }
+        sp[2] = i;
+        sp[4] = (u32)f.byteAt(i);
+        sp[3] = i + (u32)1;
+        sp[6] = sp[3];
+        return true;
         }
 
-    // TYPE-DIRECTED FORMAT UPGRADE. `Stdio.printf("%d", w * h)` prints the
-    // full promoted product rather than its low 16 bits, because sema widens
-    // the conversion to its `l` form when the matching argument is statically
-    // 32-bit — arithmetic promotion having made `w * h` a u32.
-    //
-    // It rewrites the LITERAL, so the tree carries `%ld` where the source said
-    // `%d`, and the dump shows it. Conservative like the original: anything
-    // unrecognised, or the arguments running out, abandons the rewrite rather
-    // than risk desynchronising the argument stream.
-    void rewriteFormat(Node* call, String* owner)
+    // 0 `%%`, 1 d i u x X o, 2 c, 3 f F e E g G a A, 4 s, 5 @, 6 p n, 7 unknown.
+    u32 fmtKind(u32 c)
         {
-        // The four formatters share one width contract, so they share one
-        // upgrade (finding #8: they used to disagree — String.withFormat
-        // truncated a u32 where Stdio.printf upgraded).
-        u32 fmtIdx = (u32)0;
+        if (c == (u32)'%')
+            return (u32)0;
+        if (c == (u32)'d' || c == (u32)'i' || c == (u32)'u' || c == (u32)'x' || c == (u32)'X' || c == (u32)'o')
+            return (u32)1;
+        if (c == (u32)'c')
+            return (u32)2;
+        if (c == (u32)'f' || c == (u32)'F' || c == (u32)'e' || c == (u32)'E' || c == (u32)'g' || c == (u32)'G'
+            || c == (u32)'a' || c == (u32)'A')
+            return (u32)3;
+        if (c == (u32)'s')
+            return (u32)4;
+        if (c == (u32)'@')
+            return (u32)5;
+        if (c == (u32)'p' || c == (u32)'n')
+            return (u32)6;
+        return (u32)7;
+        }
+
+    // `int` is 16 bits where a pointer is narrower than 4 bytes (xt6502), and
+    // 32 everywhere else.
+    u32 fmtIntWidth(void)
+        {
+        return _ptrW < (u32)4 ? (u32)2 : (u32)4;
+        }
+
+    // An enum is an integer here, as it is in the reference's type table.
+    bool fmtIsInt(String* t)
+        {
+        return Types.isInteger(t) || Types.isEnumName(t);
+        }
+
+    // How many arguments a format reads.
+    u32 fmtArgCount(String* f)
+        {
+        u32 sp[7];
+        sp[6] = (u32)0;
+        u32 want = (u32)0;
+        while (fmtNext(f, &sp[0]))
+            if (fmtKind(sp[4]) != (u32)0)
+                want = want + sp[5] + (u32)1;
+        return want;
+        }
+
+    // Where the format sits among a call's kids (the receiver is kid 0), or 0
+    // when this is not a format function: Stdio.printf/printfAt,
+    // String.withFormat/appendFormat, Log.error/warning/info.
+    u32 formatIndex(Node* call, String* owner)
+        {
         if (_isOp(owner, "Stdio"))
             {
             if (_isOp(call.name(), "printf"))
-                fmtIdx = (u32)1; // after the receiver
-            else if (_isOp(call.name(), "printfAt"))
-                fmtIdx = (u32)3;
-            else
-                return;
+                return (u32)1;
+            if (_isOp(call.name(), "printfAt"))
+                return (u32)3;
             }
         else if (_isOp(owner, "String"))
             {
             if (_isOp(call.name(), "withFormat") || _isOp(call.name(), "appendFormat"))
-                fmtIdx = (u32)1;
-            else
-                return;
+                return (u32)1;
             }
-        else
-            return;
-        rewriteFormatAt(call, fmtIdx);
+        else if (_isOp(owner, "Log"))
+            {
+            if (_isOp(call.name(), "error") || _isOp(call.name(), "warning") || _isOp(call.name(), "info"))
+                return (u32)1;
+            }
+        return (u32)0;
         }
 
-    // The BARE spelling (`use Stdio;` + `printf(…)`) has no receiver kid, so
-    // its format sits one position earlier — same upgrade, same contract.
+    // The type a LITERAL format wants for the argument at `argIdx`, or none:
+    // `double` for a floating conversion, so `Math.PI()` — a float and a
+    // double overload that differ only in their return type — picks the
+    // double. Asked while the kids are typed, so the receiver already is.
+    String* printfHint(Node* call, u32 argIdx)
+        {
+        if (call.kind() != (u16)nkMethodCall || call.kidCount() == (u32)0)
+            return (String*)0;
+        Node* recv = call.kid((u32)0);
+        u32 fmtIdx = (u32)0;
+        if (_isOp(call.name(), "appendFormat"))
+            {
+            if (recv.ty() != 0 && (_isOp(Node.stripElem(recv.ty()), "String*")
+                                   || _isOp(Node.stripElem(recv.ty()), "String")))
+                fmtIdx = (u32)1;
+            }
+        else if (recv.kind() == (u16)nkIdent && (_isOp(recv.name(), "Stdio") || _isOp(recv.name(), "String")
+                                                 || _isOp(recv.name(), "Log")))
+            fmtIdx = formatIndex(call, recv.name());
+        if (fmtIdx == (u32)0 || argIdx <= fmtIdx || call.kidCount() <= fmtIdx)
+            return (String*)0;
+        Node* lit = call.kid(fmtIdx);
+        if (lit.kind() != (u16)nkStr || lit.name() == 0)
+            return (String*)0;
+        String* f = lit.name();
+        u32 want = argIdx - fmtIdx - (u32)1; // 0-based position in the tail
+        u32 seen = (u32)0;
+        u32 sp[7];
+        sp[6] = (u32)0;
+        while (fmtNext(f, &sp[0]))
+            {
+            u32 kind = fmtKind(sp[4]);
+            if (kind == (u32)0)
+                continue;
+            seen = seen + sp[5];
+            if (seen == want)
+                return kind == (u32)3 ? String.withCString("double") : (String*)0;
+            if (seen > want)
+                return (String*)0;
+            seen = seen + (u32)1;
+            }
+        return (String*)0;
+        }
+
+    void rewriteFormat(Node* call, String* owner)
+        {
+        u32 fmtIdx = formatIndex(call, owner);
+        if (fmtIdx != (u32)0)
+            rewriteFormatAt(call, fmtIdx);
+        }
+
+    // A LITERAL format's integer conversions are fitted to the arguments
+    // actually passed: the length modifier is replaced by the one that reads
+    // the argument's real size — none for up to an `int`, `l` for 32 bits
+    // where `int` is 16, `ll` for 64. So `%d` prints an i64 whole and `%lld`
+    // on an i32 does not read past it. An argument that is not an integer
+    // keeps the conversion as written (the check reports it). The arguments
+    // running out leaves the format alone.
     void rewriteFormatAt(Node* call, u32 fmtIdx)
         {
         if (call.kidCount() <= fmtIdx)
@@ -4084,154 +4170,44 @@ class Sema
         Node* lit = call.kid(fmtIdx);
         if (lit.kind() != (u16)nkStr || lit.name() == 0)
             return;
-
         String* f = lit.name();
         String* out = String.withCString("");
-        u32 i = (u32)0;
+        u32 intW = fmtIntWidth();
+        u32 copied = (u32)0;
         u32 va = fmtIdx + (u32)1;
-        bool changed = false;
-        while (i < f.byteLength())
+        u32 sp[7];
+        sp[6] = (u32)0;
+        while (fmtNext(f, &sp[0]))
             {
-            u8 c = f.byteAt(i);
-            if (c != (u8)'%')
-                {
-                out.appendByte(c);
-                i = i + (u32)1;
+            u32 kind = fmtKind(sp[4]);
+            if (kind == (u32)0)
                 continue;
-                }
-            out.appendByte((u8)'%');
-            i = i + (u32)1;
-            if (i >= f.byteLength())
+            va = va + sp[5];
+            if (va >= call.kidCount())
                 return;
-            // FLAGS, then WIDTH, then PRECISION — the same grammar the checker
-            // walks. Reading the byte after '%' as the conversion is what made
-            // `%12d` and `%-8d` unrecognised, and an unrecognised specifier
-            // abandons the WHOLE rewrite, so a u32 stayed on `%d` and printed
-            // its low 16 bits: the exact truncation this pass exists to
-            // prevent. A `*` width or precision is an ARGUMENT of its own.
-            while (i < f.byteLength())
+            String* at = call.kid(va).ty();
+            va = va + (u32)1;
+            // An enum's name is printed by the lowering's `%e` rewrite, so
+            // `%@` given an enum is spelled that way.
+            if (kind == (u32)5 && at != 0 && Types.isEnumName(at))
                 {
-                u8 fl = f.byteAt(i);
-                if (fl != (u8)'-' && fl != (u8)'+' && fl != (u8)' ' && fl != (u8)'#'
-                    && fl != (u8)'0')
-                    break;
-                out.appendByte(fl);
-                i = i + (u32)1;
-                }
-            if (i >= f.byteLength())
-                return;
-            if (f.byteAt(i) == (u8)'*')
-                {
-                if (va >= call.kidCount())
-                    return;
-                out.appendByte((u8)'*');
-                i = i + (u32)1;
-                va = va + (u32)1;
-                }
-            else
-                while (i < f.byteLength() && f.byteAt(i) >= (u8)'0' && f.byteAt(i) <= (u8)'9')
-                    {
-                    out.appendByte(f.byteAt(i));
-                    i = i + (u32)1;
-                    }
-            if (i >= f.byteLength())
-                return;
-            u8 sp = f.byteAt(i);
-            if (sp == (u8)'.')
-                {
-                out.appendByte((u8)'.');
-                i = i + (u32)1;
-                if (i >= f.byteLength())
-                    return;
-                if (f.byteAt(i) == (u8)'*')
-                    {
-                    if (va >= call.kidCount())
-                        return;
-                    out.appendByte((u8)'*');
-                    i = i + (u32)1;
-                    va = va + (u32)1;
-                    }
-                else
-                    while (i < f.byteLength() && f.byteAt(i) >= (u8)'0' && f.byteAt(i) <= (u8)'9')
-                        {
-                        out.appendByte(f.byteAt(i));
-                        i = i + (u32)1;
-                        }
-                if (i >= f.byteLength())
-                    return;
-                sp = f.byteAt(i);
-                }
-            if (sp == (u8)'%')
-                {
-                out.appendByte((u8)'%');
-                i = i + (u32)1;
+                out.append(f.substringBytes(copied, sp[2] - copied));
+                out.appendByte((u8)'e');
+                copied = sp[3];
                 continue;
                 }
-            if (sp == (u8)'d' || sp == (u8)'u' || sp == (u8)'x')
-                {
-                if (va >= call.kidCount())
-                    return;
-                String* at = call.kid(va).ty();
-                // 8 bytes upgrades TWICE — `%d` on an i64 becomes `%lld`, not
-                // the `%ld` that would still truncate. Same rule, one more
-                // width.
-                if (at != 0 && Types.isInteger(at) && Types.byteWidth(at) >= (u32)8)
-                    {
-                    out.appendCString("ll");
-                    changed = true;
-                    }
-                else if (at != 0 && Types.isInteger(at) && Types.byteWidth(at) >= (u32)4)
-                    {
-                    out.appendByte((u8)'l');
-                    changed = true;
-                    }
-                out.appendByte(sp);
-                i = i + (u32)1;
-                va = va + (u32)1;
+            if (kind != (u32)1 || at == 0 || !fmtIsInt(at))
                 continue;
-                }
-            // Everything else consumes one argument and is copied verbatim;
-            // an unrecognised specifier abandons the rewrite.
-            if (sp == (u8)'l' || sp == (u8)'s' || sp == (u8)'c' || sp == (u8)'f' || sp == (u8)'e' || sp == (u8)'g' || sp == (u8)'@' || sp == (u8)'p')
-                {
-                out.appendByte(sp);
-                i = i + (u32)1;
-                if (sp == (u8)'l')
-                    {
-                    if (i >= f.byteLength())
-                        return;
-                    u8 sub = f.byteAt(i);
-                    // an explicit `%ll<spec>`
-                    if (sub == (u8)'l')
-                        {
-                        out.appendByte(sub);
-                        i = i + (u32)1;
-                        if (i >= f.byteLength())
-                            return;
-                        out.appendByte(f.byteAt(i));
-                        i = i + (u32)1;
-                        va = va + (u32)1;
-                        continue;
-                        }
-                    // `%ld` on a 64-bit argument still truncates, so widen it.
-                    if (sub == (u8)'d' || sub == (u8)'u' || sub == (u8)'x')
-                        {
-                        String* lat = (va < call.kidCount()) ? call.kid(va).ty() : (String*)0;
-                        if (lat != 0 && Types.isInteger(lat) && Types.byteWidth(lat) >= (u32)8)
-                            {
-                            out.appendByte((u8)'l');
-                            changed = true;
-                            }
-                        }
-                    out.appendByte(sub);
-                    i = i + (u32)1;
-                    }
-                va = va + (u32)1;
-                continue;
-                }
-            return;
+            u32 w = Types.byteWidth(at);
+            out.append(f.substringBytes(copied, sp[1] - copied));
+            if (w >= (u32)8)
+                out.appendCString("ll");
+            else if (w > intW)
+                out.appendByte((u8)'l');
+            copied = sp[2];
             }
-        if (changed)
+        out.append(f.substringBytes(copied, f.byteLength() - copied));
+        if (!out.equals(f))
             lit.setName(out);
         }
 
@@ -4249,58 +4225,19 @@ class Sema
         }
 
     // ── FORMAT-STRING CHECKER ─────────────────────────────────────────────
-    // The reference walks a LITERAL format string's %-specifiers and warns
-    // when the matching vararg is not the type the conversion reads: `%d`/`%u`
-    // /`%x` are 16-bit, `%ld` 32, `%lld` 64, `%f` is float and `%lf` double.
-    // The port carried the `printf-format` category name in `--help` and no
-    // checker behind it, so a port-only build lost a diagnostic the reference
-    // had always emitted (bug 565). Same grammar as the type-directed upgrade
-    // above: flags, width and precision are skipped, and a `*` width or
-    // precision is its own ARGUMENT slot — counted, but checked by nobody.
+    // With each conversion's length fitted to its argument, the mistakes left
+    // to report are a wrong KIND of argument — a double for `%d`, an integer
+    // for `%s` — and a count that does not match. A format that is not a
+    // literal is not checked.
     void checkFormat(Node* call, String* owner)
         {
-        u32 fmtIdx = (u32)0;
-        if (_isOp(owner, "Stdio"))
-            {
-            if (_isOp(call.name(), "printf"))
-                fmtIdx = (u32)1;
-            else if (_isOp(call.name(), "printfAt"))
-                fmtIdx = (u32)3;
-            else
-                return;
-            }
-        else if (_isOp(owner, "String"))
-            {
-            if (_isOp(call.name(), "withFormat") || _isOp(call.name(), "appendFormat"))
-                fmtIdx = (u32)1;
-            else
-                return;
-            }
-        else
+        u32 fmtIdx = formatIndex(call, owner);
+        if (fmtIdx == (u32)0)
             return;
         String* name = String.withString(owner);
         name.appendByte((u8)'.');
         name.append(call.name());
         checkFormatAt(call, fmtIdx, name);
-        }
-
-    String* expectedForSpec(String* spec)
-        {
-        if (_isOp(spec, "d"))   return String.withCString("16-bit signed integer");
-        if (_isOp(spec, "u"))   return String.withCString("16-bit unsigned integer");
-        if (_isOp(spec, "x"))   return String.withCString("16-bit unsigned integer");
-        if (_isOp(spec, "ld"))  return String.withCString("32-bit signed integer");
-        if (_isOp(spec, "lu"))  return String.withCString("32-bit unsigned integer");
-        if (_isOp(spec, "lx"))  return String.withCString("32-bit unsigned integer");
-        if (_isOp(spec, "lld")) return String.withCString("64-bit signed integer");
-        if (_isOp(spec, "llu")) return String.withCString("64-bit unsigned integer");
-        if (_isOp(spec, "llx")) return String.withCString("64-bit hex");
-        if (_isOp(spec, "f"))   return String.withCString("float");
-        if (_isOp(spec, "lf"))  return String.withCString("double");
-        if (_isOp(spec, "c"))   return String.withCString("character");
-        if (_isOp(spec, "s"))   return String.withCString("string");
-        if (_isOp(spec, "@"))   return String.withCString("struct/class");
-        return String.withCString("?");
         }
 
     bool isAggType(String* t)
@@ -4320,194 +4257,251 @@ class Sema
             return;
         String* f = lit.name();
 
-        Array* specs = new Array();     // conversion keys, one per argument read
-        Array* spellings = new Array(); // the source text of each, for the message
-        u32 i = (u32)0;
-        u32 n = f.byteLength();
-        while (i < n)
-            {
-            u8 c = f.byteAt(i);
-            i = i + (u32)1;
-            if (c != (u8)'%' || i >= n)
-                continue;
-            u32 start = i - (u32)1;
-            while (i < n)
-                {
-                u8 fl = f.byteAt(i);
-                if (fl != (u8)'-' && fl != (u8)'+' && fl != (u8)' ' && fl != (u8)'#' && fl != (u8)'0')
-                    break;
-                i = i + (u32)1;
-                }
-            if (i < n && f.byteAt(i) == (u8)'*')
-                {
-                specs.add((Object*)String.withCString("*"));
-                spellings.add((Object*)String.withCString("*"));
-                i = i + (u32)1;
-                }
-            else
-                while (i < n && f.byteAt(i) >= (u8)'0' && f.byteAt(i) <= (u8)'9')
-                    i = i + (u32)1;
-            if (i < n && f.byteAt(i) == (u8)'.')
-                {
-                i = i + (u32)1;
-                if (i < n && f.byteAt(i) == (u8)'*')
-                    {
-                    specs.add((Object*)String.withCString("*"));
-                    spellings.add((Object*)String.withCString("*"));
-                    i = i + (u32)1;
-                    }
-                else
-                    while (i < n && f.byteAt(i) >= (u8)'0' && f.byteAt(i) <= (u8)'9')
-                        i = i + (u32)1;
-                }
-            if (i >= n)
-                break;
-            u8 s = f.byteAt(i);
-            i = i + (u32)1;
-            if (s == (u8)'%')
-                continue;
-            String* spelling = f.substringBytes(start, i - start);
-            if (s == (u8)'l')
-                {
-                if (i >= n)
-                    {
-                    specs.add((Object*)String.withCString("l?"));
-                    spellings.add((Object*)spelling);
-                    break;
-                    }
-                u8 sub = f.byteAt(i);
-                i = i + (u32)1;
-                if (sub == (u8)'l')
-                    {
-                    if (i >= n)
-                        {
-                        specs.add((Object*)String.withCString("ll?"));
-                        spellings.add((Object*)spelling);
-                        break;
-                        }
-                    u8 sub2 = f.byteAt(i);
-                    i = i + (u32)1;
-                    String* k2 = String.withCString("ll");
-                    k2.appendByte(sub2);
-                    specs.add((Object*)k2);
-                    spellings.add((Object*)f.substringBytes(start, i - start));
-                    continue;
-                    }
-                String* k1 = String.withCString("l");
-                k1.appendByte(sub);
-                specs.add((Object*)k1);
-                spellings.add((Object*)f.substringBytes(start, i - start));
-                continue;
-                }
-            String* k = String.withCString("");
-            k.appendByte(s);
-            specs.add((Object*)k);
-            spellings.add((Object*)spelling);
-            }
-
         u32 argCount = call.kidCount() > fmtIdx + (u32)1 ? call.kidCount() - (fmtIdx + (u32)1) : (u32)0;
-        if (argCount != specs.count())
+        u32 want = fmtArgCount(f);
+        if (argCount != want)
             {
             String* msg = String.withString(callName);
             msg.appendCString(": format string expects ");
-            msg.append(String.withU32(specs.count()));
-            msg.appendCString(specs.count() == (u32)1 ? " argument, " : " arguments, ");
+            msg.append(String.withU32(want));
+            msg.appendCString(want == (u32)1 ? " argument, " : " arguments, ");
             msg.append(String.withU32(argCount));
             msg.appendCString(" supplied");
             _warnAt(String.withCString("printf-format"), msg, call);
             }
 
-        u32 pairs = specs.count() < argCount ? specs.count() : argCount;
-        for (u32 kk = (u32)0; kk < pairs; kk = kk + (u32)1)
+        u32 next = (u32)0;
+        u32 sp[7];
+        sp[6] = (u32)0;
+        while (fmtNext(f, &sp[0]))
             {
-            String* spec = (String*)specs.get(kk);
-            Node* a = call.kid(fmtIdx + (u32)1 + kk);
-            String* at = a.ty();
+            u32 kind = fmtKind(sp[4]);
+            if (kind == (u32)0)
+                continue;
+            u32 ai = next + sp[5];
+            next = ai + (u32)1;
+            if (ai >= argCount)
+                continue;
+            String* at = call.kid(fmtIdx + (u32)1 + ai).ty();
             if (at == 0)
                 continue;
-            bool isNarrow = _isOp(at, "i8") || _isOp(at, "u8") || _isOp(at, "i16")
-                            || _isOp(at, "u16") || _isOp(at, "bool");
-            bool isWide = _isOp(at, "i32") || _isOp(at, "u32");
-            bool isVeryWide = _isOp(at, "i64") || _isOp(at, "u64");
-            bool isInt = isNarrow || isWide || isVeryWide;
-            bool isF = _isOp(at, "float");
-            bool isD = _isOp(at, "double");
             bool isP = Types.isPointer(at);
-            bool isAgg = isAggType(at);
-
-            String* hint = 0;
-            if (_isOp(spec, "d") || _isOp(spec, "u") || _isOp(spec, "x"))
+            // An enum given to %@ or %e prints its member's name.
+            if (Types.isEnumName(at) && (sp[4] == (u32)'@' || sp[4] == (u32)'e'))
+                continue;
+            string expects = (string)0;
+            if (kind == (u32)1 || kind == (u32)2)
                 {
-                if (isVeryWide) hint = String.withCString("use %ll<specifier> for 64-bit integers");
-                else if (isWide) hint = String.withCString("use %l<specifier> for 32-bit integers");
-                else if (isF || isD) hint = String.withCString("use %f or %lf for floating-point");
-                else if (isP || isAgg) hint = 0;
-                else if (isInt) continue;
-                else hint = 0;
+                if (!fmtIsInt(at))
+                    expects = "an integer";
                 }
-            else if (_isOp(spec, "ld") || _isOp(spec, "lu") || _isOp(spec, "lx"))
+            else if (kind == (u32)3)
                 {
-                if (isVeryWide) hint = String.withCString("use %ll<specifier> for 64-bit integers");
-                else if (isF || isD) hint = String.withCString("use %f or %lf for floating-point");
-                else if (isInt) continue;
-                else hint = 0;
+                if (!Types.isFloating(at))
+                    expects = "a floating-point value";
                 }
-            else if (_isOp(spec, "lld") || _isOp(spec, "llu") || _isOp(spec, "llx"))
+            else if (kind == (u32)4)
                 {
-                if (isF || isD) hint = String.withCString("use %f or %lf for floating-point");
-                else if (isInt) continue;
-                else hint = 0;
+                if (!isP)
+                    expects = "a string";
                 }
-            else if (_isOp(spec, "f"))
+            else if (kind == (u32)5)
                 {
-                if (isD) hint = String.withCString("use %lf for double");
-                else if (isF) continue;
-                else hint = 0;
+                if (!isP && !isAggType(at))
+                    expects = "an object";
                 }
-            else if (_isOp(spec, "lf"))
+            else if (kind == (u32)6)
                 {
-                if (isF) hint = String.withCString("use %f for float");
-                else if (isD) continue;
-                else hint = 0;
+                if (!isP)
+                    expects = "a pointer";
                 }
-            else if (_isOp(spec, "c"))
-                {
-                if (isNarrow) continue;
-                hint = 0;
-                }
-            else if (_isOp(spec, "s"))
-                {
-                if (isP) continue;
-                hint = 0;
-                }
-            else if (_isOp(spec, "@"))
-                {
-                if (isAgg || isP) continue;
-                hint = 0;
-                }
-            else
-                continue;   // `*` and unknown specifiers: no diagnostic
-
+            if (expects == (string)0)
+                continue;
             String* msg = String.withString(callName);
             msg.appendCString(": '");
-            msg.append((String*)spellings.get(kk));
+            msg.append(f.substringBytes(sp[0], sp[3] - sp[0]));
             msg.appendCString("' expects ");
-            msg.append(expectedForSpec(spec));
+            msg.appendCString(expects);
             msg.appendCString(" but argument ");
-            msg.append(String.withU32(kk + (u32)1));
+            msg.append(String.withU32(ai + (u32)1));
             msg.appendCString(" is ");
             // The reference keeps an element annotation on the type OBJECT
             // and prints only the bare name (`Array*`, not `Array<String>*`),
             // so printing the port's spelled type here would diverge on any
             // aggregate argument that warns.
             msg.append(Node.stripElem(at));
-            if (hint != 0)
-                {
-                msg.appendCString(" (");
-                msg.append(hint);
-                msg.appendByte((u8)')');
-                }
             _warnAt(String.withCString("printf-format"), msg, call);
+            }
+        }
+
+    // A FORMAT WRAPPER is a variadic function or method that hands its own
+    // last named parameter, followed by `...`, to a format function:
+    //     void say(string fmt, ...) { s.appendFormat(fmt, ...); }
+    // Its callers then get what a format function's callers get — lengths
+    // fitted, the check, the promotions — or a `%d` given a u8 would read an
+    // int the caller never passed. Found by a scan of the body for such a
+    // call: through blocks, ifs, loops, expression statements, declarations
+    // and returns, and into the arguments (and receiver) of calls — the same
+    // shapes the reference walks.
+    bool fmtIsFormatName(String* n)
+        {
+        return _isOp(n, "printf") || _isOp(n, "printfAt") || _isOp(n, "withFormat")
+               || _isOp(n, "appendFormat") || _isOp(n, "error") || _isOp(n, "warning")
+               || _isOp(n, "info");
+        }
+
+    bool fmtForwards(Node* n, String* param)
+        {
+        if (n == 0)
+            return false;
+        u16 k = n.kind();
+        if (k == (u16)nkCall || k == (u16)nkMethodCall)
+            {
+            u32 first = k == (u16)nkMethodCall ? (u32)1 : (u32)0;
+            if (n.hasFlag((u32)NF_VAFWD) && fmtIsFormatName(n.name()) && n.kidCount() > first)
+                {
+                Node* last = n.kid(n.kidCount() - (u32)1);
+                if (last.kind() == (u16)nkIdent && last.name() != 0 && last.name().equals(param))
+                    return true;
+                }
+            }
+        else if (k != (u16)nkBlock && k != (u16)nkIf && k != (u16)nkWhile && k != (u16)nkForCStyle
+                 && k != (u16)nkForIn && k != (u16)nkExprStatement && k != (u16)nkVariableDecl
+                 && k != (u16)nkReturn && k != (u16)nkMarkerInit && k != (u16)nkMarkerCond
+                 && k != (u16)nkMarkerStep)
+            return false;
+        for (u32 i = (u32)0; i < n.kidCount(); i = i + (u32)1)
+            if (fmtForwards(n.kid(i), param))
+                return true;
+        return false;
+        }
+
+    // The index of a wrapper's format parameter plus one, or 0.
+    u32 fmtWrapperIndex(Node* decl)
+        {
+        if (!decl.hasFlag((u32)NF_VARARGS))
+            return (u32)0;
+        u32 params = (u32)0;
+        Node* last = 0;
+        Node* body = 0;
+        for (u32 i = (u32)0; i < decl.kidCount(); i = i + (u32)1)
+            {
+            Node* c = decl.kid(i);
+            if (c.kind() == (u16)nkParam)
+                {
+                params = params + (u32)1;
+                last = c;
+                }
+            else if (c.kind() == (u16)nkBlock)
+                body = c;
+            }
+        if (last == 0 || body == 0 || last.name() == 0)
+            return (u32)0;
+        return fmtForwards(body, last.name()) ? params : (u32)0;
+        }
+
+    // Every format wrapper in the program, before any body is typed, so a
+    // call ahead of the wrapper's definition is treated like one after it.
+    void collectFormatWrappers(Node* program)
+        {
+        for (u32 i = (u32)0; i < program.kidCount(); i = i + (u32)1)
+            {
+            Node* d = program.kid(i);
+            if (d.kind() == (u16)nkFunctionDecl)
+                {
+                u32 k = fmtWrapperIndex(d);
+                if (k != (u32)0)
+                    _fmtWrappers.set((Hashable*)d.name(), (Object*)String.withU32(k));
+                }
+            else if (d.kind() == (u16)nkClassDecl)
+                {
+                for (u32 j = (u32)0; j < d.kidCount(); j = j + (u32)1)
+                    {
+                    Node* m = d.kid(j);
+                    if (m.kind() != (u16)nkMethodDecl)
+                        continue;
+                    u32 k = fmtWrapperIndex(m);
+                    if (k == (u32)0)
+                        continue;
+                    String* key = String.withString(d.name());
+                    key.appendByte((u8)'.');
+                    key.append(m.name());
+                    _fmtWrappers.set((Hashable*)key, (Object*)String.withU32(k));
+                    }
+                }
+            }
+        }
+
+    // The format index a wrapper was recorded with (plus one), or 0.
+    u32 fmtWrapperFor(String* key)
+        {
+        String* v = (String*)_fmtWrappers.get((Hashable*)key);
+        if (v == 0)
+            return (u32)0;
+        u32 k = (u32)0;
+        for (u32 i = (u32)0; i < v.byteLength(); i = i + (u32)1)
+            k = k * (u32)10 + (u32)(v.byteAt(i) - (u8)'0');
+        return k;
+        }
+
+    // Everything a format call gets, for a call whose format is kid `fmtIdx`.
+    void formatCallAt(Node* call, u32 fmtIdx, String* callName)
+        {
+        checkFormatAt(call, fmtIdx, callName);
+        rewriteFormatAt(call, fmtIdx);
+        promoteFormatAt(call, fmtIdx);
+        }
+
+    void promoteFormat(Node* call, String* owner)
+        {
+        u32 fmtIdx = formatIndex(call, owner);
+        if (fmtIdx != (u32)0)
+            promoteFormatAt(call, fmtIdx);
+        }
+
+    // C's default argument promotions for a format call's variadic tail, on
+    // every call, literal format or not: an integer narrower than `int` is
+    // passed as an `int`, and a float as a double. The formatter reads
+    // exactly those.
+    void promoteFormatAt(Node* call, u32 fmtIdx)
+        {
+        u32 intW = fmtIntWidth();
+        // A literal format's `%e` given an enum prints the member's name,
+        // which the lowering finds by the argument's enum type — so that one
+        // stays. Marked by kid index.
+        Map* names = new Map();
+        Node* lit = call.kidCount() > fmtIdx ? call.kid(fmtIdx) : (Node*)0;
+        if (lit != 0 && lit.kind() == (u16)nkStr && lit.name() != 0)
+            {
+            u32 va = fmtIdx + (u32)1;
+            u32 sp[7];
+            sp[6] = (u32)0;
+            while (fmtNext(lit.name(), &sp[0]))
+                {
+                if (fmtKind(sp[4]) == (u32)0)
+                    continue;
+                va = va + sp[5];
+                if (sp[4] == (u32)'e')
+                    names.set((Hashable*)String.withU32(va), (Object*)String.withU32(va));
+                va = va + (u32)1;
+                }
+            }
+        for (u32 i = fmtIdx + (u32)1; i < call.kidCount(); i = i + (u32)1)
+            {
+            Node* a = call.kid(i);
+            String* at = a.ty();
+            String* to = 0;
+            if (at != 0 && Types.isEnumName(at) && names.get((Hashable*)String.withU32(i)) != 0)
+                continue;
+            if (at != 0 && fmtIsInt(at) && Types.byteWidth(at) < intW)
+                to = String.withCString(intW == (u32)2 ? "i16" : "i32");
+            else if (at != 0 && _isOp(at, "float"))
+                to = String.withCString("double");
+            if (to == 0)
+                continue;
+            Node* c = castTo(to, a);
+            c.setTy(to);
+            call.setKid(i, c);
             }
         }
 

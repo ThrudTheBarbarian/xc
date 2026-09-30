@@ -1383,6 +1383,42 @@ class Stdio
             }
         }
 
+    // printf's %f and %lf: six places unless `.N` says otherwise (`prec` 0
+    // is none), rounded at the last one kept.
+    static void _printF(double d, u8 prec) XTC_CLOAKED
+        {
+        if (prec == 0)
+            {
+            prec = 6;
+            }
+        printFpDec(d, prec, prec);
+        }
+
+    // %x as C prints it: as few lower-case digits as the value needs.
+    static void _hexC(u32 v) XTC_CLOAKED
+        {
+        u8 i;
+        u8 nib;
+        i = 1;
+        while (i < 8 && (v >> ((u16)i * 4)) != 0)
+            {
+            i = i + 1;
+            }
+        while (i != 0)
+            {
+            i = i - 1;
+            nib = (u8)((v >> ((u16)i * 4)) & $0F);
+            if (nib < 10)
+                {
+                putChar(nib + $30);
+                }
+            else
+                {
+                putChar(nib + $57);
+                }
+            }
+        }
+
     // ── printf — main formatted output method ────────────────────────
 
     // printf and printfAt deliberately keep main-RAM placement on
@@ -1437,7 +1473,7 @@ class Stdio
                 // and the locals it needs pushed the library to 123 and it stopped
                 // compiling. A field width on a 40-column screen is the least
                 // valuable half; the other five targets pad in full.
-                while (spec == $2D || (spec >= $30 && spec <= $39))
+                while (spec == $2D || spec == $2B || spec == $20 || spec == $23 || (spec >= $30 && spec <= $39))
                     {
                     fmt = fmt + 1;
                     spec = *fmt;
@@ -1455,13 +1491,21 @@ class Stdio
                         }
                     }
 
+                // 'h' / 'hh': an int, which is what a narrower argument
+                // was promoted to.
+                while (spec == $68)
+                    {
+                    fmt = fmt + 1;
+                    spec = *fmt;
+                    }
+
                 if (spec == $25)
                     {
                     putChar($25);
                     }
-                else if (spec == $64)
+                else if (spec == $64 || spec == $69)
                     {
-                    // %d — signed 16-bit
+                    // %d %i — int, 16 bits here
                     print(va_arg_i16(ap));
                     }
                 else if (spec == $75)
@@ -1471,8 +1515,8 @@ class Stdio
                     }
                 else if (spec == $78)
                     {
-                    // %x — unsigned 16-bit hex (4 digits)
-                    printHex(va_arg_u16(ap));
+                    // %x — as few digits as needed, as C prints it
+                    _hexC((u32)va_arg_u16(ap));
                     }
                 else if (spec == $6C)
                     {
@@ -1509,11 +1553,11 @@ class Stdio
                         }
                     else if (spec == $78)
                         {
-                        printHex(va_arg_u32(ap));
+                        _hexC(va_arg_u32(ap));
                         }
-                    else if (spec == $66)
+                    else if (spec == $66 || spec == $65 || spec == $67)
                         {
-                        // %lf — double. Pass
+                        // %lf — double, as %f. Pass
                         // va_arg_double's result straight through —
                         // capturing to a local would bump printf's
                         // ZP high-water mark by 8 bytes, and
@@ -1521,26 +1565,26 @@ class Stdio
                         // every subsequent free function's local
                         // budget, forcing user floats and structs
                         // into heap-allocated spill slots.
-                        print(va_arg_double(ap), prec);
+                        _printF(va_arg_double(ap), prec);
                         }
                     }
                 else if (spec == $63)
                     {
-                    // %c — character
-                    putChar(va_arg_u8(ap));
+                    // %c — a character, promoted to int
+                    putChar((u8)va_arg_i16(ap));
                     }
                 else if (spec == $73)
                     {
                     // %s — string
                     print(va_arg_string(ap));
                     }
-                else if (spec == $66)
+                else if (spec == $66 || spec == $65 || spec == $67)
                     {
-                    // %f — float (see the %lf comment above for the
-                    // reason we don't capture to a local). `prec` carries
-                    // the optional `.N` modifier; 0 falls through to the
-                    // historic 6dp default inside print(float, prec).
-                    print(va_arg_float(ap), prec);
+                    // %f — a double, which is what a float was promoted to
+                    // (%e and %g print the same way here, in fixed point)
+                    // (see the %lf comment above for the reason we don't
+                    // capture to a local). `prec` carries the optional `.N`.
+                    _printF(va_arg_double(ap), prec);
                     }
 #if HAS_ATFMT
                 else if (spec == $40)

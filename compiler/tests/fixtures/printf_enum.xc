@@ -1,10 +1,10 @@
-// Exercises the `%e` printf specifier — expands an enum-typed argument
-// to its symbol-name string at call time. The test leans on the fixture
-// harness's PASS/FAIL detector: each enum's first member is literally
-// named `PASS`, so a correctly-working `%e` emits "PASS" on screen and
-// the harness greps it. A broken `%e` (silently prints the numeric
-// value, or lands in the fallback "?" sentinel) emits something that
-// doesn't contain PASS and the test fails.
+// Exercises `%e` (and `%@`) given an enum-typed argument — expands it to
+// its symbol-name string at call time (a double for `%e` is C's exponent
+// form, tested elsewhere). The test leans on the fixture harness's PASS/FAIL
+// detector: each enum's first member is literally named `PASS`, so a
+// correctly-working `%e` emits "PASS" on screen and the harness greps it. A
+// broken `%e` (silently prints the numeric value, or lands in the fallback
+// "?" sentinel) emits something that doesn't contain PASS and the test fails.
 
 #import "Stdio.xc"
 
@@ -45,4 +45,7 @@ void main(void)
     // came back from the lookup cleanly.
     Colour mystery = (Colour) 99;
     Stdio.printf("T6 %e PASS\n", mystery);
+
+    // T7: `%@` given an enum prints the name too.
+    Stdio.printf("T7 %@ PASS\n", (Colour) 2);
     }

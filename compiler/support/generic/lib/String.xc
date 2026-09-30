@@ -1545,6 +1545,25 @@ class String<Comparable, Hashable, Copying>
         append(tail);
         }
 
+    // ── formatting: C's printf, plus %@ ──────────────────────────────────
+    //
+    // The grammar is C's: `%[flags][width][.precision][length]conversion`.
+    // Flags `-` (left-justify), `+` (always a sign), space (a space for a
+    // positive number), `#` (alternate form: 0x / 0X / a leading 0, or a point
+    // that is always shown) and `0` (pad with zeros). Width and precision may
+    // be `*`, which takes an int argument. Conversions d i u o x X c s p f F e
+    // E g G and %%, plus %@ for an object's description().
+    //
+    // Argument sizes follow C on this target: `int` is i32; `long` is i64 on
+    // the 64-bit targets and i32 on the others; `long long`, `j` and `L` are
+    // 64-bit; `z` and `t` are pointer-sized; `h` and `hh` read an int and
+    // narrow it. A float argument arrives as a double, as C promotes it. For
+    // a LITERAL format the compiler rewrites each conversion's length to fit
+    // the argument actually passed, so `%d` prints an i64 whole.
+    //
+    // %f, %e and %g convert the double EXACTLY (its binary value written out
+    // in decimal) and then round half to even, which is what C's own printf
+    // does, so the digits match a C program's.
     void appendFormat(string fmt, ...)
         {
         u8 ap;
@@ -1554,135 +1573,531 @@ class String<Comparable, Hashable, Copying>
         while (f[i] != (u8)0)
             {
             u8 c = f[i];
-            // '%'
-            if (c != (u8)37)
+            if (c != (u8)'%')
                 {
                 appendByte(c);
                 i = i + (u32)1;
                 continue;
                 }
             i = i + (u32)1;
-            if (f[i] == (u8)37)
-                {
-                appendByte((u8)37);
-                i = i + (u32)1;
-                continue;
-                }
-
-            // width / zero-pad
+            bool left = false;
+            bool plus = false;
+            bool space = false;
+            bool alt = false;
             bool zero = false;
-            u32 width = (u32)0;
-            // '0'
-            if (f[i] == (u8)48)
+            while (true)
                 {
-                zero = true;
+                u8 fl = f[i];
+                if (fl == (u8)'-')
+                    left = true;
+                else if (fl == (u8)'+')
+                    plus = true;
+                else if (fl == (u8)' ')
+                    space = true;
+                else if (fl == (u8)'#')
+                    alt = true;
+                else if (fl == (u8)'0')
+                    zero = true;
+                else
+                    break;
                 i = i + (u32)1;
                 }
-            while (f[i] >= (u8)48 && f[i] <= (u8)57)
+            i32 width = (i32)0;
+            if (f[i] == (u8)'*')
                 {
-                width = width * (u32)10 + (u32)(f[i] - (u8)48);
+                width = va_arg(ap, i32);
+                if (width < (i32)0)
+                    {
+                    left = true;
+                    width = (i32)0 - width;
+                    }
                 i = i + (u32)1;
                 }
-            bool isLong = false;
-            bool isLL = false;
-            // 'l'
-            if (f[i] == (u8)108)
+            else
+                while (f[i] >= (u8)'0' && f[i] <= (u8)'9')
+                    {
+                    width = width * (i32)10 + (i32)(f[i] - (u8)'0');
+                    i = i + (u32)1;
+                    }
+            i32 prec = (i32)-1;
+            if (f[i] == (u8)'.')
                 {
-                isLong = true;
+                i = i + (u32)1;
+                prec = (i32)0;
+                if (f[i] == (u8)'*')
+                    {
+                    prec = va_arg(ap, i32);
+                    if (prec < (i32)0)
+                        prec = (i32)-1;
+                    i = i + (u32)1;
+                    }
+                else
+                    while (f[i] >= (u8)'0' && f[i] <= (u8)'9')
+                        {
+                        prec = prec * (i32)10 + (i32)(f[i] - (u8)'0');
+                        i = i + (u32)1;
+                        }
+                }
+            // 0: int  1: hh  2: h  3: l  4: ll / j / L  5: z / t
+            u8 len = (u8)0;
+            if (f[i] == (u8)'h')
+                {
+                len = (u8)2;
+                i = i + (u32)1;
+                if (f[i] == (u8)'h')
+                    {
+                    len = (u8)1;
+                    i = i + (u32)1;
+                    }
+                }
+            else if (f[i] == (u8)'l')
+                {
+                len = (u8)3;
+                i = i + (u32)1;
+                if (f[i] == (u8)'l')
+                    {
+                    len = (u8)4;
+                    i = i + (u32)1;
+                    }
+                }
+            else if (f[i] == (u8)'j' || f[i] == (u8)'L')
+                {
+                len = (u8)4;
                 i = i + (u32)1;
                 }
-            // 'll'
-            if (isLong && f[i] == (u8)108)
+            else if (f[i] == (u8)'z' || f[i] == (u8)'t')
                 {
-                isLL = true;
+                len = (u8)5;
                 i = i + (u32)1;
                 }
-
-            u32 mark = byteLength();
             u8 k = f[i];
+            if (k == (u8)0)
+                break;
             i = i + (u32)1;
-            // '@'
-            if (k == (u8)64)
+
+            if (k == (u8)'%')
+                {
+                appendByte((u8)'%');
+                }
+            else if (k == (u8)'d' || k == (u8)'i')
+                {
+                i64 v = (i64)0;
+                if (len == (u8)4 || String._fmtWide(len))
+                    v = va_arg_i64(ap);
+                else
+                    {
+                    i32 w = va_arg(ap, i32);
+                    if (len == (u8)1)
+                        w = (i32)(i8)w;
+                    else if (len == (u8)2)
+                        w = (i32)(i16)w;
+                    v = (i64)w;
+                    }
+                bool neg = v < (i64)0;
+                u64 mag = neg ? (u64)0 - (u64)v : (u64)v;
+                String* pre = String.withCString("");
+                if (neg)
+                    pre.appendByte((u8)'-');
+                else if (plus)
+                    pre.appendByte((u8)'+');
+                else if (space)
+                    pre.appendByte((u8)' ');
+                _fmtOut(pre, String._fmtDigits(mag, (u32)10, false, prec), width, left, zero && prec < (i32)0);
+                }
+            else if (k == (u8)'u' || k == (u8)'x' || k == (u8)'X' || k == (u8)'o')
+                {
+                u64 v = (u64)0;
+                if (len == (u8)4 || String._fmtWide(len))
+                    v = va_arg_u64(ap);
+                else
+                    {
+                    u32 w = va_arg(ap, u32);
+                    if (len == (u8)1)
+                        w = w & (u32)$FF;
+                    else if (len == (u8)2)
+                        w = w & (u32)$FFFF;
+                    v = (u64)w;
+                    }
+                u32 base = k == (u8)'o' ? (u32)8 : (k == (u8)'u' ? (u32)10 : (u32)16);
+                String* body = String._fmtDigits(v, base, k == (u8)'X', prec);
+                String* pre = String.withCString("");
+                if (alt && k == (u8)'o' && (body.byteLength() == (u32)0 || body.byteAt((u32)0) != (u8)'0'))
+                    pre.appendByte((u8)'0');
+                else if (alt && k == (u8)'x' && v != (u64)0)
+                    pre.appendCString((u8*)"0x");
+                else if (alt && k == (u8)'X' && v != (u64)0)
+                    pre.appendCString((u8*)"0X");
+                _fmtOut(pre, body, width, left, zero && prec < (i32)0);
+                }
+            else if (k == (u8)'c')
+                {
+                String* body = String.withCString("");
+                body.appendByte((u8)va_arg(ap, i32));
+                _fmtOut(String.withCString(""), body, width, left, false);
+                }
+            else if (k == (u8)'s')
+                {
+                u8* sv = (u8*)va_arg(ap, string);
+                String* body = sv == (u8*)0 ? String.withCString("(null)") : String.withCString(sv);
+                if (prec >= (i32)0 && (u32)prec < body.byteLength())
+                    body = body.substringBytes((u32)0, (u32)prec);
+                _fmtOut(String.withCString(""), body, width, left, false);
+                }
+            else if (k == (u8)'@')
                 {
                 Object* o = va_arg(ap, Object*);
-                if (o == (Object*)0)
-                    appendCString((u8*)"(null)");
-                else
-                    append(o.description());
+                String* body = o == (Object*)0 ? String.withCString("(null)") : o.description();
+                if (prec >= (i32)0 && (u32)prec < body.byteLength())
+                    body = body.substringBytes((u32)0, (u32)prec);
+                _fmtOut(String.withCString(""), body, width, left, false);
                 }
-            // 's'
-            else if (k == (u8)115)
+            else if (k == (u8)'p')
                 {
-                appendCString((u8*)va_arg(ap, string));
+                Object* o = va_arg(ap, Object*);
+                String* body = String._fmtDigits((u64)(pointer)o, (u32)16, false, (i32)-1);
+                _fmtOut(String.withCString("0x"), body, width, left, false);
                 }
-            // 'c'
-            else if (k == (u8)99)
+            else if (k == (u8)'f' || k == (u8)'F' || k == (u8)'e' || k == (u8)'E' || k == (u8)'g' || k == (u8)'G')
                 {
-                appendByte((u8)va_arg(ap, u16));
+                double v = va_arg(ap, double);
+                _fmtFloat(v, k, prec, width, left, plus, space, alt, zero);
                 }
-            // 'd','i'
-            else if (k == (u8)100 || k == (u8)105)
+            else if (k == (u8)'n')
                 {
-                // %lld matches Stdio.printf's 64-bit tier (finding #14: the
-                // specifier used to fall through to "unknown" and the output
-                // was the LITERAL text "%ld" — a heartbeat file that existed,
-                // had a fresh mtime, and contained nothing parseable).
-                if (isLL)
-                    append(String.withI64(va_arg_i64(ap)));
-                else if (isLong)
-                    _appendI32(va_arg(ap, i32));
-                else
-                    _appendI32((i32)va_arg(ap, i16));
-                }
-            // 'u'
-            else if (k == (u8)117)
-                {
-                if (isLL)
-                    append(String.withU64(va_arg_u64(ap)));
-                else if (isLong)
-                    _appendU32(va_arg(ap, u32));
-                else
-                    _appendU32((u32)va_arg(ap, u16));
-                }
-            // 'x'
-            else if (k == (u8)120)
-                {
-                if (isLL)
-                    _appendHex64(va_arg_u64(ap), (u8)16);
-                else if (isLong)
-                    _appendHex(va_arg(ap, u32), (u8)8);
-                else
-                    _appendHex((u32)va_arg(ap, u16), (u8)4);
-                }
-            // 'f'
-            else if (k == (u8)102)
-                {
-                // %f float / %lf double, via the existing String.withFloat.
-                if (isLong)
-                    append(String.withFloat((float)va_arg(ap, double)));
-                else
-                    append(String.withFloat(va_arg(ap, float)));
-                }
-            // 'e'
-            else if (k == (u8)101)
-                {
-                // Enum: Stdio.printf emits the underlying value; match that.
-                if (isLong)
-                    _appendU32(va_arg(ap, u32));
-                else
-                    _appendU32((u32)va_arg(ap, u16));
+                // C's %n writes the count so far through a pointer; it is
+                // consumed and ignored here rather than honoured.
+                va_arg(ap, Object*);
                 }
             else
                 {
-                // Unknown specifier: emit it literally rather than silently
-                // dropping the argument's worth of output.
-                appendByte((u8)37);
+                // Not a conversion: shown as written, and it consumes nothing.
+                appendByte((u8)'%');
                 appendByte(k);
                 }
-            if (width > (u32)0)
-                _padTo(mark, width, zero);
             }
         va_end(ap);
+        }
+
+    // Whether `l` (3) or `z` (5) is 64-bit on this target: `long` and the
+    // pointer-sized types are on the 64-bit targets.
+    static bool _fmtWide(u8 len)
+        {
+#if ARCH_arm64 || ARCH_x86_64
+        return len == (u8)3 || len == (u8)5;
+#else
+        return false;
+#endif
+        }
+
+    // `prefix` (sign, 0x) then `body`, padded to `width`: spaces on the left,
+    // zeros between prefix and body, or spaces on the right.
+    void _fmtOut(String* prefix, String* body, i32 width, bool left, bool zeroPad)
+        {
+        i32 n = (i32)(prefix.byteLength() + body.byteLength());
+        i32 pad = width > n ? width - n : (i32)0;
+        if (!left && !zeroPad)
+            for (i32 p = (i32)0; p < pad; p = p + (i32)1)
+                appendByte((u8)' ');
+        append(prefix);
+        if (!left && zeroPad)
+            for (i32 p = (i32)0; p < pad; p = p + (i32)1)
+                appendByte((u8)'0');
+        append(body);
+        if (left)
+            for (i32 p = (i32)0; p < pad; p = p + (i32)1)
+                appendByte((u8)' ');
+        }
+
+    // The digits of `v` in `base`, at least `prec` of them; `.0` of zero is none.
+    static String* _fmtDigits(u64 v, u32 base, bool upper, i32 prec)
+        {
+        u8 buf[72];
+        u32 n = (u32)0;
+        while (v != (u64)0)
+            {
+            u32 d = (u32)(v % (u64)base);
+            buf[n] = d < (u32)10 ? (u8)((u32)'0' + d) : (u8)((upper ? (u32)'A' : (u32)'a') + d - (u32)10);
+            n = n + (u32)1;
+            v = v / (u64)base;
+            }
+        i32 want = prec < (i32)0 ? (i32)1 : prec;
+        while ((i32)n < want)
+            {
+            buf[n] = (u8)'0';
+            n = n + (u32)1;
+            }
+        String* s = String.withCString("");
+        while (n > (u32)0)
+            {
+            n = n - (u32)1;
+            s.appendByte(buf[n]);
+            }
+        return s;
+        }
+
+    // %f %e %g of one double, with C's rules for each.
+    void _fmtFloat(double v, u8 k, i32 prec, i32 width, bool left, bool plus, bool space, bool alt, bool zero)
+        {
+        u64* bp = (u64*)&v;
+        u64 bits = *bp;
+        bool neg = (bits >> (u64)63) != (u64)0;
+        bool upper = k == (u8)'F' || k == (u8)'E' || k == (u8)'G';
+        String* pre = String.withCString("");
+        if (neg)
+            pre.appendByte((u8)'-');
+        else if (plus)
+            pre.appendByte((u8)'+');
+        else if (space)
+            pre.appendByte((u8)' ');
+        u32 ex = (u32)((bits >> (u64)52) & (u64)$7FF);
+        if (ex == (u32)$7FF)
+            {
+            bool isNan = (bits & (u64)$F_FFFF_FFFF_FFFF) != (u64)0;
+            String* body = String.withCString(isNan ? (upper ? (u8*)"NAN" : (u8*)"nan") : (upper ? (u8*)"INF" : (u8*)"inf"));
+            _fmtOut(pre, body, width, left, false);
+            return;
+            }
+        if (prec < (i32)0)
+            prec = (i32)6;
+        i32 pp = (i32)0;
+        String* d = String._fmtExact(bits, &pp);
+        String* body = (String*)0;
+        if (k == (u8)'f' || k == (u8)'F')
+            body = String._fmtFixed(d, pp, prec, alt);
+        else if (k == (u8)'e' || k == (u8)'E')
+            body = String._fmtExp(d, pp, prec, alt, upper);
+        else
+            {
+            i32 P = prec == (i32)0 ? (i32)1 : prec;
+            i32 X = (i32)0;
+            if (d.byteLength() > (u32)0)
+                {
+                i32 rpp = pp;
+                String._fmtRound(d, P, &rpp);
+                X = rpp - (i32)1;
+                }
+            if (P > X && X >= (i32)-4)
+                body = String._fmtFixed(d, pp, P - (i32)1 - X, alt);
+            else
+                body = String._fmtExp(d, pp, P - (i32)1, alt, upper);
+            if (!alt)
+                body = String._fmtTrimZeros(body);
+            }
+        _fmtOut(pre, body, width, left, zero);
+        }
+
+    // The exact decimal digits of a finite double's magnitude, without
+    // trailing zeros ("" for zero), and in *pp where the point goes: the value
+    // is 0.DIGITS × 10^pp. The binary value m × 2^e is m × 2^e for e ≥ 0, and
+    // m × 5^-e / 10^-e for e < 0, so one big-integer multiply writes it out.
+    static String* _fmtExact(u64 bits, i32* pp)
+        {
+        u64 m = bits & (u64)$F_FFFF_FFFF_FFFF;
+        i32 ex = (i32)((bits >> (u64)52) & (u64)$7FF);
+        if (ex == (i32)0)
+            ex = (i32)1;
+        else
+            m = m | ((u64)1 << (u64)52);
+        *pp = (i32)0;
+        if (m == (u64)0)
+            return String.withCString("");
+        i32 e2 = ex - (i32)1075;
+        u32 limbs[96];
+        u32 n = (u32)2;
+        limbs[0] = (u32)(m & (u64)$FFFF_FFFF);
+        limbs[1] = (u32)(m >> (u64)32);
+        i32 scale = (i32)0;          // the value is N / 10^scale
+        if (e2 >= (i32)0)
+            {
+            i32 left = e2;
+            while (left > (i32)0)
+                {
+                i32 s = left > (i32)31 ? (i32)31 : left;
+                n = String._fmtMul(&limbs[0], n, (u64)1 << (u64)s);
+                left = left - s;
+                }
+            }
+        else
+            {
+            scale = (i32)0 - e2;
+            i32 left = scale;
+            while (left > (i32)0)
+                {
+                i32 s = left > (i32)13 ? (i32)13 : left;
+                u64 p5 = (u64)1;
+                for (i32 q = (i32)0; q < s; q = q + (i32)1)
+                    p5 = p5 * (u64)5;
+                n = String._fmtMul(&limbs[0], n, p5);
+                left = left - s;
+                }
+            }
+        // Write N in decimal, nine digits at a time from the bottom.
+        String* rev = String.withCString("");
+        while (n > (u32)0)
+            {
+            u64 rem = (u64)0;
+            u32 q = n;
+            while (q > (u32)0)
+                {
+                q = q - (u32)1;
+                u64 cur = (rem << (u64)32) | (u64)limbs[q];
+                limbs[q] = (u32)(cur / (u64)1000000000);
+                rem = cur % (u64)1000000000;
+                }
+            while (n > (u32)0 && limbs[n - (u32)1] == (u32)0)
+                n = n - (u32)1;
+            for (u32 t = (u32)0; t < (u32)9; t = t + (u32)1)
+                {
+                if (n == (u32)0 && rem == (u64)0)
+                    break;
+                rev.appendByte((u8)((u64)'0' + rem % (u64)10));
+                rem = rem / (u64)10;
+                }
+            }
+        String* d = String.withCString("");
+        u32 L = rev.byteLength();
+        for (u32 t = L; t > (u32)0; t = t - (u32)1)
+            d.appendByte(rev.byteAt(t - (u32)1));
+        *pp = (i32)d.byteLength() - scale;
+        u32 end = d.byteLength();
+        while (end > (u32)0 && d.byteAt(end - (u32)1) == (u8)'0')
+            end = end - (u32)1;
+        return d.substringBytes((u32)0, end);
+        }
+
+    // limbs[0..n) *= mul (mul < 2^32 after the caller's chunking); new count.
+    static u32 _fmtMul(u32* limbs, u32 n, u64 mul)
+        {
+        u64 carry = (u64)0;
+        for (u32 t = (u32)0; t < n; t = t + (u32)1)
+            {
+            u64 prod = (u64)limbs[t] * mul + carry;
+            limbs[t] = (u32)(prod & (u64)$FFFF_FFFF);
+            carry = prod >> (u64)32;
+            }
+        while (carry != (u64)0)
+            {
+            limbs[n] = (u32)(carry & (u64)$FFFF_FFFF);
+            carry = carry >> (u64)32;
+            n = n + (u32)1;
+            }
+        return n;
+        }
+
+    // Keep the first `keep` digits of 0.d × 10^*pp, rounding half to even on
+    // the exact value; *pp moves when a carry adds a digit. "" is zero.
+    static String* _fmtRound(String* d, i32 keep, i32* pp)
+        {
+        i32 n = (i32)d.byteLength();
+        if (keep >= n)
+            return d;
+        if (keep < (i32)0)
+            return String.withCString("");
+        u8 rd = d.byteAt((u32)keep);
+        bool more = keep + (i32)1 < n;   // d has no trailing zeros
+        bool odd = keep > (i32)0 && ((d.byteAt((u32)(keep - (i32)1)) - (u8)'0') & (u8)1) != (u8)0;
+        bool up = rd > (u8)'5' || (rd == (u8)'5' && (more || odd));
+        String* r = d.substringBytes((u32)0, (u32)keep);
+        if (!up)
+            return r;
+        // Add one in the last kept place, right to left, into a reversed copy.
+        String* rev = String.withCString("");
+        bool carry = true;
+        for (i32 t = keep - (i32)1; t >= (i32)0; t = t - (i32)1)
+            {
+            u8 ch = r.byteAt((u32)t);
+            if (carry && ch == (u8)'9')
+                rev.appendByte((u8)'0');
+            else if (carry)
+                {
+                rev.appendByte(ch + (u8)1);
+                carry = false;
+                }
+            else
+                rev.appendByte(ch);
+            }
+        if (carry)
+            {
+            rev.appendByte((u8)'1');
+            *pp = *pp + (i32)1;
+            }
+        String* out = String.withCString("");
+        for (u32 t = rev.byteLength(); t > (u32)0; t = t - (u32)1)
+            out.appendByte(rev.byteAt(t - (u32)1));
+        return out;
+        }
+
+    static u8 _fmtDigitAt(String* d, i32 t)
+        {
+        if (t < (i32)0 || t >= (i32)d.byteLength())
+            return (u8)'0';
+        return d.byteAt((u32)t);
+        }
+
+    // %f: all the integer digits, a point, `prec` fraction digits.
+    static String* _fmtFixed(String* d0, i32 pp0, i32 prec, bool alt)
+        {
+        i32 pp = pp0;
+        String* d = String._fmtRound(d0, pp0 + prec, &pp);
+        String* s = String.withCString("");
+        if (pp <= (i32)0)
+            s.appendByte((u8)'0');
+        else
+            for (i32 t = (i32)0; t < pp; t = t + (i32)1)
+                s.appendByte(String._fmtDigitAt(d, t));
+        if (prec > (i32)0 || alt)
+            s.appendByte((u8)'.');
+        for (i32 t = (i32)0; t < prec; t = t + (i32)1)
+            s.appendByte(String._fmtDigitAt(d, pp + t));
+        return s;
+        }
+
+    // %e: one digit, a point, `prec` digits, then e±dd.
+    static String* _fmtExp(String* d0, i32 pp0, i32 prec, bool alt, bool upper)
+        {
+        i32 pp = pp0;
+        String* d = String._fmtRound(d0, prec + (i32)1, &pp);
+        i32 x = d.byteLength() == (u32)0 ? (i32)0 : pp - (i32)1;
+        String* s = String.withCString("");
+        s.appendByte(String._fmtDigitAt(d, (i32)0));
+        if (prec > (i32)0 || alt)
+            s.appendByte((u8)'.');
+        for (i32 t = (i32)1; t <= prec; t = t + (i32)1)
+            s.appendByte(String._fmtDigitAt(d, t));
+        s.appendByte(upper ? (u8)'E' : (u8)'e');
+        s.appendByte(x < (i32)0 ? (u8)'-' : (u8)'+');
+        u32 ax = x < (i32)0 ? (u32)((i32)0 - x) : (u32)x;
+        if (ax < (u32)10)
+            s.appendByte((u8)'0');
+        s.append(String._fmtDigits((u64)ax, (u32)10, false, (i32)-1));
+        return s;
+        }
+
+    // %g without `#`: no trailing zeros in the fraction, and no bare point.
+    static String* _fmtTrimZeros(String* s)
+        {
+        u32 n = s.byteLength();
+        u32 dot = n;
+        u32 ePos = n;
+        for (u32 t = (u32)0; t < n; t = t + (u32)1)
+            {
+            u8 ch = s.byteAt(t);
+            if (ch == (u8)'.')
+                dot = t;
+            if (ch == (u8)'e' || ch == (u8)'E')
+                ePos = t;
+            }
+        if (dot == n)
+            return s;
+        u32 end = ePos;
+        while (end > dot + (u32)1 && s.byteAt(end - (u32)1) == (u8)'0')
+            end = end - (u32)1;
+        if (end == dot + (u32)1)
+            end = dot;
+        String* r = s.substringBytes((u32)0, end);
+        if (ePos < n)
+            r.append(s.substringFromByte(ePos));
+        return r;
         }
 
     // The same formatting as a CONSTRUCTOR:

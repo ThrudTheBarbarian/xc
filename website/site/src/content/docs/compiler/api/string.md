@@ -412,9 +412,11 @@ Appends `n` bytes.
 ```c
 void appendFormat(string fmt, ...)
 ```
-Appends `printf`-style formatted text. Conversions: `%d`/`%u` (16-bit),
-`%ld`/`%lu` (32-bit), `%x`/`%lx`, `%s`, `%c`, `%f`, `%%`. See
-[Stdio](/compiler/api/stdio/) for the shared format contract.
+Appends formatted text: C's `printf` conversions, flags, widths and precisions,
+plus `%@` for an object's `description()` (or an enum's name). `%f`, `%e` and
+`%g` convert the `double` exactly and round half to even, as C does, so the
+digits match a C program's. See [Stdio → Format specifiers](/compiler/api/stdio/#format-specifiers)
+for the full contract, which `Stdio.printf` shares.
 
 ### insertAtByte
 ```c
@@ -741,17 +743,16 @@ i32 main(void)
     s.appendCString("llo");
     s.appendChar((u32)$26A1);        // ⚡  U+26A1, encoded as 3 bytes
 
-    Stdio.printf("bytes %d, chars %d\n",
-                 (i16)s.byteLength(), (i16)s.charCount());
+    Stdio.printf("bytes %u, chars %u\n", s.byteLength(), s.charCount());
 
     // Byte in the name = byte semantics; Char = code points.
-    Stdio.printf("byteAt(1) %lx, charAt(1) U+%lx\n",
-                 (u32)s.byteAt((u32)1), s.charAt((u32)1));
+    Stdio.printf("byteAt(1) %X, charAt(1) U+%04X\n",
+                 s.byteAt((u32)1), s.charAt((u32)1));
 
     // Walk characters by byte index — no O(n^2) charAt loop.
     u32 i = (u32)0;
     while (i < s.byteLength()) {
-        Stdio.printf("U+%lx ", s.charAtByte(i));
+        Stdio.printf("U+%04X ", s.charAtByte(i));
         i = s.nextCharByte(i);
     }
     Stdio.printf("\n");
@@ -761,8 +762,8 @@ i32 main(void)
 
 ```
 bytes 9, chars 6
-byteAt(1) 000000C3, charAt(1) U+000000E9
-U+00000068 U+000000E9 U+0000006C U+0000006C U+0000006F U+000026A1
+byteAt(1) C3, charAt(1) U+00E9
+U+0068 U+00E9 U+006C U+006C U+006F U+26A1
 ```
 
 String literals also take Unicode escapes directly: `"héllo⚡"` is the same

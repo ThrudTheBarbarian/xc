@@ -11,10 +11,10 @@ i32 main(void)
     u16 mid   = (u16)60000;
     i32 wide  = (i32)-100000;
     u64 huge  = (u64)1 << (u64)40;      // 64-bit works on every target
-    // printf's width contract: %d is 16-BIT and %ld is 32-bit, and both are
-    // signed — which is why 60000 in a u16 prints as -5536. Cast to the width
-    // you want to see.
-    Stdio.printf("u8=%d u16=%d (as i32 %ld) i32=%ld\n", small, mid, (i32)mid, wide);
+    // printf follows C: a narrower integer is passed as an int, and with a
+    // literal format the compiler sizes each conversion to its argument, so
+    // plain %d prints every one of these whole.
+    Stdio.printf("u8=%d u16=%d (as i32 %d) i32=%d\n", small, mid, (i32)mid, wide);
     Stdio.printf("2^40 = %ld:%ld (hi:lo)\n", (u32)(huge >> (u64)32), (u32)huge);
 
     // Same-width arithmetic stays at that width: u8 + u8 wraps at 8 bits, so

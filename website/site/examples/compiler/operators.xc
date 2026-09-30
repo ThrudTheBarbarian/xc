@@ -21,15 +21,15 @@ i32 main(void)
     // `<<` and `>>` shift; `<:` and `:>` ROTATE through the carry flag, which
     // is what lets you chain bytes together. On the 6502 they are ROL / ROR.
     u8 hi = $81;
-    Stdio.printf("$81 << 1 = $%x   $81 >> 1 = $%x\n",
+    Stdio.printf("$81 << 1 = $%02X   $81 >> 1 = $%02X\n",
                  (u16)(hi << (u8)1), (u16)(hi >> (u8)1));
-    Stdio.printf("$81 <: 1 = $%x   $81 :> 1 = $%x\n",
+    Stdio.printf("$81 <: 1 = $%02X   $81 :> 1 = $%02X\n",
                  (u16)(hi <: (u8)1), (u16)(hi :> (u8)1));
 
     // ---- Bitwise ------------------------------------------------------------
     u8 m = $F0;
     u8 k = $AA;
-    Stdio.printf("and=$%x or=$%x xor=$%x not=$%x\n",
+    Stdio.printf("and=$%02X or=$%02X xor=$%02X not=$%02X\n",
                  (u16)(m & k), (u16)(m | k), (u16)(m ^ k), (u16)(~m));
 
     // ---- Logical, and short-circuit ----------------------------------------

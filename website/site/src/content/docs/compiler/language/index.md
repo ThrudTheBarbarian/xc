@@ -38,11 +38,10 @@ For day-to-day reference, open the page you need from the sidebar.
   not a pointer and an integer.
 - **No promotion to `int`.** Same-width arithmetic stays at that width, so
   `u8 + u8` wraps at 8 bits. Only mixed-width operands widen.
-- **`printf` widths are explicit.** `%d` is 16-bit, `%ld` is 32-bit and `%lld`
-  is 64-bit. All three are signed, so use the `%u` family (`%u`, `%lu`, `%llu`)
-  for unsigned. The compiler checks the format string against the argument
-  types, and *widens* a conversion whose argument is statically wider, so
-  `%d` on an `i64` prints the whole value instead of truncating.
+- **`printf` is C's.** The conversions, flags and arguments are C's, plus `%@`
+  for an object. With a literal format the compiler sizes each integer
+  conversion to the argument actually passed, so `%d` prints an `i64` whole,
+  and it warns when an argument is the wrong kind, a `double` for `%d`.
 - **Source files are `.xc`.**
 
 ## What's not on these pages

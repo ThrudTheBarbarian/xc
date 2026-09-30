@@ -180,7 +180,7 @@ i32 main()
     for (i32 i = 0; i < 10; i = i + 1) ((
         sum = sum + i;
     ))
-    Stdio.printf("sum=%ld\n", sum);     // %ld = 32-bit, %d = 16-bit
+    Stdio.printf("sum=%d\n", sum);
     return 0;
 ))
 ```
@@ -299,7 +299,9 @@ depending on which backend you compiled for.
   all), then `-H` / `$XCC_HOME`, the cwd, and the well-known install roots.
   The tree is `lib/xc` in an install and `support/` in the source tree; both
   spellings are accepted.
-- `printf`-family format width contract in xcc: `%d` is 16-bit, `%ld` is 32-bit.
+- The `printf` family follows C, plus `%@` for objects. With a literal format
+  the compiler sizes each integer conversion to its argument, so `%d` prints
+  any integer whole.
 - **Threads** (`#import "Thread.xc"`, plus `Mutex`/`Cond`/`Sem`/`Atomic`/
   `ThreadLocal`/`Pool`) are available on the native hosts. Spawning one turns
   atomic ARC on automatically (see

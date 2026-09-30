@@ -4,5 +4,5 @@ Name: Atari
 At 10,5: 42
 At 10,3: 42
 Pi: 3.141593
-long: DEADBEEF
+long: deadbeef
 Point: (30, 40, (5,6,7))

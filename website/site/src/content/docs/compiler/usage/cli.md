@@ -253,7 +253,7 @@ Suppress a category with `-Wno-<category>`. All are on by default.
 | `asm-clobbers` | an `asm{}` block's `clobbers` annotation disagrees with the registers the compiler thinks it touched |
 | `class-init` | a bad initialiser on a stack-allocated class |
 | `escape` | a stack address stored into a longer-lived slot (global, heap field, outer scope), which is likely to dangle |
-| `printf-format` | a `printf`-family format string that disagrees with its arguments (`%d` is 16-bit, `%ld` is 32-bit) |
+| `printf-format` | a `printf`-family format string whose arguments are the wrong kind (a `double` for `%d`) or the wrong count |
 | `unguarded-action` | an action used before it was tested since assignment |
 | `packed-align` | a `packed` struct field whose access may be misaligned on the target |
 | `unknown-annotation` | an unrecognised function annotation, e.g. `:foo` |

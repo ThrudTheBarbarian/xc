@@ -1490,26 +1490,32 @@ class String<Comparable, Hashable>
     // Matches Stdio._emitHex: FIXED width, UPPERCASE — %x is 4 digits and %lx
     // is 8, not a minimal rendering. Deliberately the same so a format string
     // moved between Stdio.printf and appendFormat produces identical text.
-    void _appendHex(u32 v, u8 digits)
+    // As few digits as the value needs, as C prints it. `alpha` is what is
+    // added to 10..15: $57 gives a-f (%x), $37 A-F (%X).
+    void _appendHex(u32 v, u8 alpha)
         {
-        u8 i = digits;
+        u8 i = (u8)1;
+        while (i < (u8)8 && (v >> ((u16)i * (u16)4)) != (u32)0)
+            i = i + (u8)1;
         while (i != (u8)0)
             {
             i = i - (u8)1;
             u8 nib = (u8)((v >> ((u16)i * (u16)4)) & (u32)$0F);
-            appendChar(nib < (u8)10 ? nib + (u8)$30 : nib + (u8)$37); // 0-9 A-F
+            appendChar(nib < (u8)10 ? nib + (u8)$30 : nib + alpha);
             }
         }
 
     // The same, one width up — %llx (finding #14).
-    void _appendHex64(u64 v, u8 digits)
+    void _appendHex64(u64 v, u8 alpha)
         {
-        u8 i = digits;
+        u8 i = (u8)1;
+        while (i < (u8)16 && (v >> ((u64)i * (u64)4)) != (u64)0)
+            i = i + (u8)1;
         while (i != (u8)0)
             {
             i = i - (u8)1;
             u8 nib = (u8)((v >> ((u64)i * (u64)4)) & (u64)$0F);
-            appendChar(nib < (u8)10 ? nib + (u8)$30 : nib + (u8)$37); // 0-9 A-F
+            appendChar(nib < (u8)10 ? nib + (u8)$30 : nib + alpha);
             }
         }
 
@@ -1536,30 +1542,23 @@ class String<Comparable, Hashable>
     // reused as a formatter. String is generic — one copy — and platform code
     // can depend on it, so Stdio can delegate here rather than the reverse.
     //
-    // Width contract matches Stdio.printf and the language spec: %d/%u/%x are
-    // 16-bit, %ld/%lu/%lx are 32-bit. Supported:
+    // C's printf grammar, sized for this target: `int` is 16 bits, so %d %i
+    // %u %x %X read 16, with `l` 32 and `ll` 64 (under ENABLE_64BIT). The
+    // compiler fits a literal format's lengths to the arguments and promotes
+    // narrower integers to int and float to double, as C does. Supported:
     //
     //     %@   Object*   — dispatches description()
     //     %s   string    — NUL-terminated bytes
-    //     %d %i %u       — 16-bit signed / unsigned
-    //     %ld %lu        — 32-bit signed / unsigned
-    //     %x %lx         — hex, 16- and 32-bit
+    //     %d %i %u       — signed / unsigned decimal
+    //     %x %X          — hex, lower / upper case, no leading zeros
     //     %c             — single character
-    //     %f %lf         — float (6dp) / double, via String.withFloat
-    //     %e             — enum; a '?' placeholder, matching Stdio.printf
+    //     %f %e %g       — a double, in fixed point via String.withFloat
     //     %%             — a literal '%'
     //
-    // Zero/space padding to a width is honoured (`%04lu`, `%3d`). This is the
-    // the same specifier set Stdio.printf accepts. Integer, hex, char, string
-    // and %@ renderings match it exactly — %x is 4 UPPERCASE digits and %lx is 8
-    // — so those move between the two unchanged.
-    //
-    // ONE KNOWN DIVERGENCE: %f here renders at String.withFloat's 3 decimal
-    // places, where Stdio.printf uses the host formatter at 6. Matching would
-    // need a precision-taking float conversion, which String does not have yet;
-    // adding `withFloat(float, u8 precision)` is the fix. Precision syntax
-    // (`%.6f`) is likewise not parsed. Flagged rather than silently differing,
-    // since a format string moved between the two WILL change its float output.
+    // A width is honoured, zero-padded under the '0' flag; a `*` width reads
+    // its argument. The other flags and a precision are read and not applied
+    // — the size of the full formatter the hosted targets use is not worth it
+    // on a 40-column screen.
     void _padTo(u16 startLen, u16 width, bool zero)
         {
         u16 grew = length() - startLen;
@@ -1599,13 +1598,19 @@ class String<Comparable, Hashable>
                 continue;
                 }
 
-            // width / zero-pad
+            // Flags, then width. Of the flags only '0' is applied; '-', '+',
+            // ' ' and '#' are read past so the conversion is still found.
             bool zero = false;
             u16 width = (u16)0;
-            // '0'
-            if (f[i] == (u8)48)
+            while (f[i] == (u8)'0' || f[i] == (u8)'-' || f[i] == (u8)'+' || f[i] == (u8)' ' || f[i] == (u8)'#')
                 {
-                zero = true;
+                if (f[i] == (u8)'0')
+                    zero = true;
+                i = i + (u16)1;
+                }
+            if (f[i] == (u8)'*')
+                {
+                width = (u16)va_arg(ap, i16);
                 i = i + (u16)1;
                 }
             while (f[i] >= (u8)48 && f[i] <= (u8)57)
@@ -1613,6 +1618,22 @@ class String<Comparable, Hashable>
                 width = width * (u16)10 + (u16)(f[i] - (u8)48);
                 i = i + (u16)1;
                 }
+            // A precision is read past; a `*` one still takes its argument.
+            if (f[i] == (u8)'.')
+                {
+                i = i + (u16)1;
+                if (f[i] == (u8)'*')
+                    {
+                    va_arg(ap, i16);
+                    i = i + (u16)1;
+                    }
+                while (f[i] >= (u8)48 && f[i] <= (u8)57)
+                    i = i + (u16)1;
+                }
+            // h and hh read an int like no length at all: that is what a
+            // narrower argument was promoted to.
+            while (f[i] == (u8)'h')
+                i = i + (u16)1;
             bool isLong = false;
             bool isLL = false;
             // 'l'
@@ -1697,14 +1718,15 @@ class String<Comparable, Hashable>
                 else
                     _appendU32((u32)va_arg(ap, u16));
                 }
-            // 'x'
-            else if (k == (u8)120)
+            // 'x', 'X'
+            else if (k == (u8)120 || k == (u8)88)
                 {
+                u8 alpha = k == (u8)120 ? (u8)$57 : (u8)$37;
 #if ENABLE_64BIT
                 if (isLL)
-                    _appendHex64(va_arg_u64(ap), (u8)16);
+                    _appendHex64(va_arg_u64(ap), alpha);
                 else if (isLong)
-                    _appendHex(va_arg(ap, u32), (u8)8);
+                    _appendHex(va_arg(ap, u32), alpha);
 #else
                 if (isLL)
                     {
@@ -1712,28 +1734,17 @@ class String<Comparable, Hashable>
                     appendCString((u8*)"<u64:ENABLE_64BIT>");
                     }
                 else if (isLong)
-                    _appendHex(va_arg(ap, u32), (u8)8);
+                    _appendHex(va_arg(ap, u32), alpha);
 #endif
                 else
-                    _appendHex((u32)va_arg(ap, u16), (u8)4);
+                    _appendHex((u32)va_arg(ap, u16), alpha);
                 }
-            // 'f'
-            else if (k == (u8)102)
+            // 'f', 'e', 'g' and their capitals: a float arrives as a double,
+            // as C promotes it. All three render in fixed point here, through
+            // String.withFloat.
+            else if (k == (u8)'f' || k == (u8)'F' || k == (u8)'e' || k == (u8)'E' || k == (u8)'g' || k == (u8)'G')
                 {
-                // %f float / %lf double, via the existing String.withFloat.
-                if (isLong)
-                    append(String.withFloat((float)va_arg(ap, double)));
-                else
-                    append(String.withFloat(va_arg(ap, float)));
-                }
-            // 'e'
-            else if (k == (u8)101)
-                {
-                // Enum: Stdio.printf emits the underlying value; match that.
-                if (isLong)
-                    _appendU32(va_arg(ap, u32));
-                else
-                    _appendU32((u32)va_arg(ap, u16));
+                append(String.withFloat((float)va_arg(ap, double)));
                 }
             else
                 {

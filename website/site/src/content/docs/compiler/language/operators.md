@@ -127,15 +127,15 @@ i32 main(void)
     // `<<` and `>>` shift; `<:` and `:>` ROTATE through the carry flag, which
     // is what lets you chain bytes together. On the 6502 they are ROL / ROR.
     u8 hi = $81;
-    Stdio.printf("$81 << 1 = $%x   $81 >> 1 = $%x\n",
+    Stdio.printf("$81 << 1 = $%02X   $81 >> 1 = $%02X\n",
                  (u16)(hi << (u8)1), (u16)(hi >> (u8)1));
-    Stdio.printf("$81 <: 1 = $%x   $81 :> 1 = $%x\n",
+    Stdio.printf("$81 <: 1 = $%02X   $81 :> 1 = $%02X\n",
                  (u16)(hi <: (u8)1), (u16)(hi :> (u8)1));
 
     // ---- Bitwise ------------------------------------------------------------
     u8 m = $F0;
     u8 k = $AA;
-    Stdio.printf("and=$%x or=$%x xor=$%x not=$%x\n",
+    Stdio.printf("and=$%02X or=$%02X xor=$%02X not=$%02X\n",
                  (u16)(m & k), (u16)(m | k), (u16)(m ^ k), (u16)(~m));
 
     // ---- Logical, and short-circuit ----------------------------------------
@@ -187,9 +187,9 @@ i32 main(void)
 u8   200+100=44  200*3=88
 wide 200+100=300
 -17/5=-3  -17%5=-2
-$81 << 1 = $0002   $81 >> 1 = $0040
-$81 <: 1 = $0003   $81 :> 1 = $00C0
-and=$00A0 or=$00FA xor=$005A not=$000F
+$81 << 1 = $02   $81 >> 1 = $40
+$81 <: 1 = $03   $81 :> 1 = $C0
+and=$A0 or=$FA xor=$5A not=$0F
 short-circuit ok: 0
 max=11  eq=0  ne=1
 compound=31

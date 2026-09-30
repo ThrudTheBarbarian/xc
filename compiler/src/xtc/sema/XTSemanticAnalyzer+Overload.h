@@ -116,7 +116,16 @@ NS_ASSUME_NONNULL_BEGIN
                  location:(XTSourceLocation*)loc
                  callName:(NSString*)callName;
 - (NSArray*)fmtArgTypesForFormatString:(NSString*)fmt;
-- (NSString*)expectedTypeForSpec:(NSString*)spec;
+- (nullable NSString*)typeDirectedFormatString:(NSString*)fmt
+                                     arguments:(NSArray<XTASTNode*>*)args
+                                    firstVaIdx:(NSUInteger)firstVa;
+- (void)collectFormatWrappers:(NSArray<XTASTNode*>*)decls;
+- (nullable NSArray<XTASTNode*>*)formatCallArguments:(NSArray<XTASTNode*>*)args
+                                              fmtIdx:(NSUInteger)fmtIdx
+                                            location:(XTSourceLocation*)loc
+                                            callName:(NSString*)callName;
+- (nullable NSArray<XTASTNode*>*)promotedFormatArguments:(NSArray<XTASTNode*>*)args
+                                              firstVaIdx:(NSUInteger)firstVa;
 - (void)visitMethodCallExpr:(XTMethodCallExprNode*)node;
 - (void)visitSubscriptExpr:(XTSubscriptExprNode*)node;
 - (void)visitMemberAccess:(XTMemberAccessNode*)node;

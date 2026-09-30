@@ -39,18 +39,19 @@ void main(void)
     float f = 3.566666;
     Stdio.printf("f=%f\n", f);
     // For p=%lu f=%f the packer stores slot 0 (dummy:u32) then
-    // slot 1 (f:float). New-IR slot stride is 8 bytes, so slot 1
-    // begins at `___xtc_va_buf + 8`. For f = 3.566666 the xtc
-    // float byte 1 is the exponent (~$02 for 2^2 ≈ 4 magnitude);
-    // for IEEE 754 single on arm64 byte 1 is the middle mantissa
-    // byte (~$7F). Either way: non-zero on a successfully-packed
-    // value, $00 on the stale-zero "1.0" pattern.
+    // slot 1 (f, promoted to a double as C does). New-IR slot stride is
+    // 8 bytes, so slot 1 begins at `___xtc_va_buf + 8`. Its low bytes are
+    // zero — a float widened to a double has no bits there — so the check
+    // reads byte 6, the exponent's low half with the top of the mantissa
+    // ($0C for 3.566666). On arm64 it reads byte 1 of f itself. Either
+    // way: non-zero on a successfully-packed value, $00 on the stale-zero
+    // pattern.
     u32 dummy = 0;
     Stdio.printf("p=%lu f=%f\n", dummy, f);
     u8 fbyte1;
     asm {
 #if ARCH_6502
-        LDA ___xtc_va_buf+9
+        LDA ___xtc_va_buf+14
         STA fbyte1
 #elif ARCH_arm64
         ldrb w0, [f]

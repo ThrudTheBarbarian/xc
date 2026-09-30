@@ -2015,6 +2015,12 @@ static BOOL XTIsErasedKeyType(XTType* t)
             node.resolvedType = ft.returnTypes.firstObject ?: [XTType voidType];
             [self applyAutoboxToArguments:node paramTypes:ft.paramTypes];
             [self applyUnboxToArguments:node paramTypes:ft.paramTypes];
+            NSNumber* wrapperFmt = self.formatWrappers[node.calleeName];
+            if (wrapperFmt && ft.isVarArgs)
+                node.arguments = [self formatCallArguments:node.arguments
+                                                    fmtIdx:wrapperFmt.unsignedIntegerValue
+                                                  location:node.location
+                                                  callName:node.calleeName] ?: node.arguments;
             NSString* key = best.mangledName ?: node.calleeName;
             // Checked effects: a call that can raise must be inside a `try`, or
             // the caller must itself be `throws` so the error can propagate.
@@ -2183,9 +2189,9 @@ static BOOL XTIsErasedKeyType(XTType* t)
                 if (bestM && !amb)
                     {
                     // The BARE spelling of Stdio.printf/printfAt (via `use`)
-                    // gets the SAME literal-format treatment as the explicit
-                    // one: the type-directed %d/%u/%x → %l upgrade for
-                    // statically-32-bit arguments, then the format check.
+                    // gets the SAME treatment as the explicit one: lengths
+                    // fitted to the arguments, the format check, and the
+                    // default promotions.
                     // Without this the two spellings DISAGREED at runtime —
                     // bare printed a u32's low 16 bits where explicit
                     // upgraded to the full value (finding #8).
@@ -2224,6 +2230,10 @@ static BOOL XTIsErasedKeyType(XTType* t)
                                                                   @"%@ (Stdio.%@ via use)",
                                                                   node.calleeName, bestM.methodName]];
                             }
+                        NSArray* promoted = [self promotedFormatArguments:node.arguments
+                                                               firstVaIdx:fmtIdx + 1];
+                        if (promoted)
+                            node.arguments = promoted;
                         }
                     [self checkThrowsEffectForMethod:bestM at:node.location];
                     node.resolvedMangledName = bestM.mangledName;
@@ -2465,21 +2475,121 @@ static BOOL XTIsErasedKeyType(XTType* t)
     }
 
 /****************************************************************************\
-|* printf format-string checking. Parses the fmt string, walks the %-specifiers,
-|* and matches each against the corresponding vararg's resolved type. Emits
-|* category XTWarnPrintfFormat warnings (suppressible via -Wno-printf-format)
-|* for every mismatch and for argument-count disagreement.
-|*
-|* Specifier → expected arg type:
-|*   %d %u %x           narrow int (≤ 2 bytes). u32/i32/float/double/ptr warn.
-|*   %ld %lu %lx        wide int   (4 bytes). float/double/ptr warn.
-|*   %f                 float (exactly 5 bytes — width mismatch against double).
-|*   %lf                double (exactly 8 bytes — width mismatch against float).
-|*   %c                 narrow int (u8/i8/u16/i16 all accepted).
-|*   %s                 pointer-to-u8 (string).
-|*   %@                 class/struct pointer or class value.
-|*
-|* Non-literal format strings skip checking silently. %% consumes no arg.
+|* C printf formats. One scanner walks a format the way C's printf does:
+|*     % flags* (width | *) (. (digits | *))? length? conversion
+|* with the length one of hh h l ll j z t L q. A `*` width or precision reads
+|* an argument of its own, ahead of the conversion's. `%%` reads nothing.
+\****************************************************************************/
+typedef struct
+    {
+    NSUInteger start;       // the '%'
+    NSUInteger lenStart;    // first byte of the length modifier
+    NSUInteger lenEnd;      // the conversion character
+    NSUInteger end;         // one past the conversion
+    unichar conv;
+    NSUInteger stars;       // arguments read by `*` width and precision
+    } XTFmtSpec;
+
+typedef NS_ENUM(NSInteger, XTFmtKind)
+    {
+    XTFmtKindNone,      // %%
+    XTFmtKindInt,       // d i u x X o
+    XTFmtKindChar,      // c
+    XTFmtKindFloat,     // f F e E g G a A
+    XTFmtKindString,    // s
+    XTFmtKindObject,    // @
+    XTFmtKindPointer,   // p n
+    XTFmtKindUnknown,
+    };
+
+static BOOL XTFmtNext(NSString* f, NSUInteger* pos, XTFmtSpec* sp)
+    {
+    NSUInteger n = f.length;
+    NSUInteger i = *pos;
+    while (i < n && [f characterAtIndex:i] != '%')
+        i++;
+    if (i + 1 >= n)
+        {
+        *pos = n;
+        return NO;
+        }
+    sp->start = i++;
+    sp->stars = 0;
+    while (i < n && strchr("-+ #0", (int)[f characterAtIndex:i]) != NULL)
+        i++;
+    if (i < n && [f characterAtIndex:i] == '*')
+        {
+        sp->stars++;
+        i++;
+        }
+    else
+        while (i < n && isdigit((int)[f characterAtIndex:i]))
+            i++;
+    if (i < n && [f characterAtIndex:i] == '.')
+        {
+        i++;
+        if (i < n && [f characterAtIndex:i] == '*')
+            {
+            sp->stars++;
+            i++;
+            }
+        else
+            while (i < n && isdigit((int)[f characterAtIndex:i]))
+                i++;
+        }
+    sp->lenStart = i;
+    if (i < n)
+        {
+        unichar c = [f characterAtIndex:i];
+        if ((c == 'h' || c == 'l') && i + 1 < n && [f characterAtIndex:i + 1] == c)
+            i += 2;
+        else if (strchr("hljztLq", (int)c) != NULL)
+            i++;
+        }
+    if (i >= n)
+        {
+        *pos = n;
+        return NO;
+        }
+    sp->lenEnd = i;
+    sp->conv = [f characterAtIndex:i];
+    sp->end = i + 1;
+    *pos = sp->end;
+    return YES;
+    }
+
+static XTFmtKind XTFmtKindOf(unichar c)
+    {
+    if (c == '%')
+        return XTFmtKindNone;
+    if (strchr("diuxXo", (int)c) != NULL)
+        return XTFmtKindInt;
+    if (c == 'c')
+        return XTFmtKindChar;
+    if (strchr("fFeEgGaA", (int)c) != NULL)
+        return XTFmtKindFloat;
+    if (c == 's')
+        return XTFmtKindString;
+    if (c == '@')
+        return XTFmtKindObject;
+    if (c == 'p' || c == 'n')
+        return XTFmtKindPointer;
+    return XTFmtKindUnknown;
+    }
+
+// `int` is 16 bits where a pointer is narrower than 4 bytes (xt6502), and 32
+// everywhere else.
+static NSUInteger XTFmtIntWidth(void)
+    {
+    return [XTPointerType heapPointerWidth] < 4 ? 2 : 4;
+    }
+
+/****************************************************************************\
+|* printf format-string checking. With the conversion's length fitted to its
+|* argument (below), the only mistakes left to report are a wrong KIND of
+|* argument — a double for `%d`, an integer for `%s` — and a count that does
+|* not match. Category XTWarnPrintfFormat (-Wno-printf-format). A format that
+|* is not a literal is not checked.
 \****************************************************************************/
 - (void)checkPrintfFormat:(NSString*)fmt
                 arguments:(NSArray<XTASTNode*>*)args
@@ -2487,548 +2597,356 @@ static BOOL XTIsErasedKeyType(XTType* t)
                  location:(XTSourceLocation*)loc
                  callName:(NSString*)callName
     {
-    NSMutableArray<NSString*>* specs = [NSMutableArray array];
-    NSMutableArray<NSString*>* spellings = [NSMutableArray array];
-    NSUInteger i = 0;
-    NSUInteger n = fmt.length;
-    while (i < n)
-        {
-        unichar c = [fmt characterAtIndex:i++];
-        if (c != '%' || i >= n)
-            continue;
-        NSUInteger start = i - 1;   // the '%'
-        // Flags, then width, then precision — all before the conversion. A `*`
-        // width or precision consumes an ARGUMENT of its own, so it is counted
-        // (as a "*" entry, which no branch type-checks) but not folded into the
-        // conversion. Skipping these is what lets `%.9f` / `%12f` reach the `f`
-        // branch at all: reading the byte after the '%' as the conversion saw
-        // "." or "1", matched nothing, and silently checked nothing.
-        while (i < n)
-            {
-            unichar fl = [fmt characterAtIndex:i];
-            if (fl != '-' && fl != '+' && fl != ' ' && fl != '#' && fl != '0')
-                break;
-            i++;
-            }
-        if (i < n && [fmt characterAtIndex:i] == '*')
-            {
-            [specs addObject:@"*"];
-            [spellings addObject:@"*"];
-            i++;
-            }
-        else
-            {
-            while (i < n)
-                {
-                unichar d = [fmt characterAtIndex:i];
-                if (d < '0' || d > '9')
-                    break;
-                i++;
-                }
-            }
-        if (i < n && [fmt characterAtIndex:i] == '.')
-            {
-            i++;
-            if (i < n && [fmt characterAtIndex:i] == '*')
-                {
-                [specs addObject:@"*"];
-                [spellings addObject:@"*"];
-                i++;
-                }
-            else
-                {
-                while (i < n)
-                    {
-                    unichar d = [fmt characterAtIndex:i];
-                    if (d < '0' || d > '9')
-                        break;
-                    i++;
-                    }
-                }
-            }
-        if (i >= n)
-            break;
-        unichar s = [fmt characterAtIndex:i++];
-        if (s == '%')
-            continue;
-        NSString* spelling =
-            [fmt substringWithRange:NSMakeRange(start, i - start)];
-        if (s == 'l')
-            {
-            if (i >= n)
-                {
-                [specs addObject:@"l?"];
-                [spellings addObject:spelling];
-                break;
-                }
-            unichar sub = [fmt characterAtIndex:i++];
-            // `%ll<spec>` — 64-bit
-            if (sub == 'l')
-                {
-                if (i >= n)
-                    {
-                    [specs addObject:@"ll?"];
-                    [spellings addObject:spelling];
-                    break;
-                    }
-                unichar sub2 = [fmt characterAtIndex:i++];
-                [specs addObject:[NSString stringWithFormat:@"ll%C", sub2]];
-                [spellings addObject:
-                    [fmt substringWithRange:NSMakeRange(start, i - start)]];
-                continue;
-                }
-            [specs addObject:[NSString stringWithFormat:@"l%C", sub]];
-            [spellings addObject:
-                [fmt substringWithRange:NSMakeRange(start, i - start)]];
-            continue;
-            }
-        [specs addObject:[NSString stringWithFormat:@"%C", s]];
-        [spellings addObject:spelling];
-        }
-
     NSUInteger argCount = (args.count > firstVaIdx) ? args.count - firstVaIdx : 0;
-    if (argCount != specs.count)
+    NSUInteger want = [self fmtArgTypesForFormatString:fmt].count;
+    if (argCount != want)
         {
         [self.diagnostics emitWarning:[NSString stringWithFormat:
                                                     @"%@: format string expects %lu argument%s, %lu supplied",
-                                                    callName, (unsigned long)specs.count,
-                                                    specs.count == 1 ? "" : "s",
+                                                    callName, (unsigned long)want,
+                                                    want == 1 ? "" : "s",
                                                     (unsigned long)argCount]
                              category:XTWarnPrintfFormat
                                    at:loc];
         }
-
-    NSUInteger pairs = MIN(specs.count, argCount);
-    for (NSUInteger k = 0; k < pairs; k++)
+    NSUInteger next = 0;
+    NSUInteger pos = 0;
+    XTFmtSpec sp;
+    while (XTFmtNext(fmt, &pos, &sp))
         {
-        NSString* spec = specs[k];
-        XTASTNode* a = args[firstVaIdx + k];
-        XTType* at = a.resolvedType;
+        XTFmtKind kind = XTFmtKindOf(sp.conv);
+        if (kind == XTFmtKindNone)
+            continue;
+        NSUInteger ai = next + sp.stars;
+        next = ai + 1;
+        if (ai >= argCount)
+            continue;
+        XTType* at = args[firstVaIdx + ai].resolvedType;
         if (!at)
             continue;
-        XTTypeKind kd = at.kind;
-
-        BOOL isNarrowInt = (kd == XTTypeKindI8 || kd == XTTypeKindU8 ||
-                            kd == XTTypeKindI16 || kd == XTTypeKindU16 ||
-                            kd == XTTypeKindBool);
-        BOOL isWideInt = (kd == XTTypeKindI32 || kd == XTTypeKindU32);
-        BOOL isVeryWideInt = (kd == XTTypeKindI64 || kd == XTTypeKindU64);
-        BOOL isInt = isNarrowInt || isWideInt || isVeryWideInt;
-        BOOL isFloat = (kd == XTTypeKindFloat);
-        BOOL isDouble = (kd == XTTypeKindDouble);
-        BOOL isPointer = (kd == XTTypeKindPointer);
-        BOOL isStruct = (kd == XTTypeKindStruct || kd == XTTypeKindClass);
-
-        NSString* hint = nil;
-        NSString* spelling = spellings[k];
-
-        if ([spec isEqualToString:@"d"] || [spec isEqualToString:@"u"] ||
-            [spec isEqualToString:@"x"])
-            {
-            if (isVeryWideInt)
-                hint = @"use %ll<specifier> for 64-bit integers";
-            else if (isWideInt)
-                hint = @"use %l<specifier> for 32-bit integers";
-            else if (isFloat || isDouble)
-                hint = @"use %f or %lf for floating-point";
-            else if (isPointer || isStruct)
-                hint = nil;
-            else if (isInt)
-                continue; // OK, narrow int
-            else
-                hint = nil;
-            }
-        else if ([spec isEqualToString:@"ld"] || [spec isEqualToString:@"lu"] ||
-                 [spec isEqualToString:@"lx"])
-            {
-            if (isVeryWideInt)
-                hint = @"use %ll<specifier> for 64-bit integers";
-            else if (isFloat || isDouble)
-                hint = @"use %f or %lf for floating-point";
-            else if (isInt)
-                continue; // any int is fine; narrower widen in pack
-            else
-                hint = nil;
-            }
-        else if ([spec isEqualToString:@"lld"] || [spec isEqualToString:@"llu"] ||
-                 [spec isEqualToString:@"llx"])
-            {
-            // The pack widens a narrower int into the 8-byte slot, so any
-            // integer is readable here; only a non-integer is a mistake.
-            if (isFloat || isDouble)
-                hint = @"use %f or %lf for floating-point";
-            else if (isInt)
-                continue;
-            else
-                hint = nil;
-            }
-        else if ([spec isEqualToString:@"f"])
-            {
-            if (isDouble)
-                hint = @"use %lf for double";
-            else if (isFloat)
-                continue;
-            else
-                hint = nil;
-            }
-        else if ([spec isEqualToString:@"lf"])
-            {
-            if (isFloat)
-                hint = @"use %f for float";
-            else if (isDouble)
-                continue;
-            else
-                hint = nil;
-            }
-        else if ([spec isEqualToString:@"c"])
-            {
-            if (isNarrowInt)
-                continue;
-            hint = nil;
-            }
-        else if ([spec isEqualToString:@"s"])
-            {
-            // Accept pointer-to-u8/i8. displayName of `string` resolves
-            // through XTPointerType; just require the kind.
-            if (isPointer)
-                continue;
-            hint = nil;
-            }
-        else if ([spec isEqualToString:@"@"])
-            {
-            if (isStruct || isPointer)
-                continue;
-            hint = nil;
-            }
-        else
-            {
-            // Unknown specifier — printf itself will ignore it at runtime;
-            // no diagnostic.
+        BOOL isInt = at.isInteger;
+        BOOL isFloat = at.isFloating;
+        BOOL isPtr = [at isKindOfClass:[XTPointerType class]];
+        BOOL isAgg = (at.kind == XTTypeKindStruct || at.kind == XTTypeKindClass);
+        // An enum given to %@ or %e prints its member's name.
+        if (at.kind == XTTypeKindEnum && (sp.conv == '@' || sp.conv == 'e'))
             continue;
+        NSString* expects = nil;
+        switch (kind)
+            {
+            case XTFmtKindInt:
+            case XTFmtKindChar:
+                if (!isInt)
+                    expects = @"an integer";
+                break;
+            case XTFmtKindFloat:
+                if (!isFloat)
+                    expects = @"a floating-point value";
+                break;
+            case XTFmtKindString:
+                if (!isPtr)
+                    expects = @"a string";
+                break;
+            case XTFmtKindObject:
+                if (!isPtr && !isAgg)
+                    expects = @"an object";
+                break;
+            case XTFmtKindPointer:
+                if (!isPtr)
+                    expects = @"a pointer";
+                break;
+            default:
+                break;
             }
-
-        NSString* msg = [NSString stringWithFormat:
-                                      @"%@: '%@' expects %@ but argument %lu is %@%@%@",
-                                      callName, spelling,
-                                      [self expectedTypeForSpec:spec],
-                                      (unsigned long)(k + 1),
-                                      at.displayName,
-                                      hint ? @" (" : @"",
-                                      hint ? [hint stringByAppendingString:@")"] : @""];
-        [self.diagnostics emitWarning:msg category:XTWarnPrintfFormat at:loc];
+        if (!expects)
+            continue;
+        NSString* spelling = [fmt substringWithRange:NSMakeRange(sp.start, sp.end - sp.start)];
+        [self.diagnostics emitWarning:[NSString stringWithFormat:
+                                                    @"%@: '%@' expects %@ but argument %lu is %@",
+                                                    callName, spelling, expects,
+                                                    (unsigned long)(ai + 1), at.displayName]
+                             category:XTWarnPrintfFormat
+                                   at:loc];
         }
     }
 
 /****************************************************************************\
-|* Parse a format string and return one XTType per conversion specifier,
-|* suitable for use as an `self.expectedType` hint when resolving the
-|* matching vararg. Unknown specifiers get a nil entry (sema treats
-|* nil as "no hint" and falls back to the default tiebreaker).
+|* One overload-resolution hint per argument the format reads: `double` for a
+|* floating conversion, so `Stdio.printf("%f", Math.PI())` picks the double
+|* PI; NSNull for everything else.
 \****************************************************************************/
 - (NSArray*)fmtArgTypesForFormatString:(NSString*)fmt
     {
-    // Returns one entry per conversion specifier, either an XTType
-    // (overload-resolution hint) or NSNull if the specifier has no
-    // useful hint (e.g. %s / %@ where the arg is a pointer / struct
-    // and there's nothing to tiebreak).
     NSMutableArray* types = [NSMutableArray array];
-    NSUInteger i = 0;
-    NSUInteger n = fmt.length;
-    while (i < n)
+    NSUInteger pos = 0;
+    XTFmtSpec sp;
+    while (XTFmtNext(fmt, &pos, &sp))
         {
-        unichar c = [fmt characterAtIndex:i++];
-        if (c != '%' || i >= n)
+        XTFmtKind kind = XTFmtKindOf(sp.conv);
+        if (kind == XTFmtKindNone)
             continue;
-        // Flags, width and precision sit between the '%' and the conversion,
-        // and a `*` width or precision is an ARGUMENT of its own. Without
-        // this a `%12d` gave no hint at all and the hint list desynchronised
-        // from the argument list at the next specifier.
-        while (i < n)
-            {
-            unichar fl = [fmt characterAtIndex:i];
-            if (fl != '-' && fl != '+' && fl != ' ' && fl != '#' && fl != '0')
-                break;
-            i++;
-            }
-        if (i < n && [fmt characterAtIndex:i] == '*')
-            {
+        for (NSUInteger s = 0; s < sp.stars; s++)
             [types addObject:(id)[NSNull null]];
-            i++;
-            }
-        else
-            {
-            while (i < n)
-                {
-                unichar d = [fmt characterAtIndex:i];
-                if (d < '0' || d > '9')
-                    break;
-                i++;
-                }
-            }
-        if (i < n && [fmt characterAtIndex:i] == '.')
-            {
-            i++;
-            if (i < n && [fmt characterAtIndex:i] == '*')
-                {
-                [types addObject:(id)[NSNull null]];
-                i++;
-                }
-            else
-                {
-                while (i < n)
-                    {
-                    unichar d = [fmt characterAtIndex:i];
-                    if (d < '0' || d > '9')
-                        break;
-                    i++;
-                    }
-                }
-            }
-        if (i >= n)
-            break;
-        unichar s = [fmt characterAtIndex:i++];
-        if (s == '%')
-            continue;
-        XTType* t = nil;
-        if (s == 'l')
-            {
-            if (i >= n)
-                break;
-            unichar sub = [fmt characterAtIndex:i++];
-            if (sub == 'd')
-                t = [XTType i32Type];
-            else if (sub == 'u')
-                t = [XTType u32Type];
-            else if (sub == 'x')
-                t = [XTType u32Type];
-            else if (sub == 'f')
-                t = [XTType doubleType];
-            }
-        else if (s == 'd')
-            t = [XTType i16Type];
-        else if (s == 'u')
-            t = [XTType u16Type];
-        else if (s == 'x')
-            t = [XTType u16Type];
-        else if (s == 'f')
-            t = [XTType floatType];
-        else if (s == 'c')
-            t = [XTType u8Type];
-        [types addObject:(t ?: (id)[NSNull null])];
+        [types addObject:(kind == XTFmtKindFloat ? [XTType doubleType] : (id)[NSNull null])];
         }
     return types;
     }
 
 /****************************************************************************\
-|* Type-directed printf: given a LITERAL format string and the actual
-|* variadic argument nodes (already analysed, so their resolvedType is set),
-|* upgrade each 16-bit integer conversion whose argument is statically 32-bit
-|* to its `l` (long) form — `%d`→`%ld`, `%u`→`%lu`, `%x`→`%lx` — so
-|* `Stdio.printf("%d", w * h)` prints the full promoted product instead of
-|* truncating to the low 16 bits. Conservative: mirrors Stdio.xc's own spec
-|* grammar and bails (returns nil) on anything unrecognised or if the args
-|* run out, rather than risk desynchronising the arg stream. Returns the
-|* rewritten string only when a conversion was widened; nil otherwise.
+|* A LITERAL format's integer conversions are fitted to the arguments actually
+|* passed: the length modifier is replaced by the one that reads the
+|* argument's real size — none for up to an `int`, `l` for a 32-bit value
+|* where `int` is 16 bits, `ll` for 64 bits. So `%d` prints an i64 whole and
+|* `%lld` on an i32 does not read past it. An argument that is not an integer
+|* keeps the conversion as written (the check reports it). Returns the new
+|* text, or nil when nothing changed or the arguments run out.
 \****************************************************************************/
 - (nullable NSString*)typeDirectedFormatString:(NSString*)fmt
                                      arguments:(NSArray<XTASTNode*>*)args
                                     firstVaIdx:(NSUInteger)firstVa
     {
     NSMutableString* out = [NSMutableString string];
-    NSUInteger i = 0, n = fmt.length, va = firstVa;
-    BOOL changed = NO;
-    while (i < n)
+    NSUInteger intW = XTFmtIntWidth();
+    NSUInteger pos = 0, copied = 0, va = firstVa;
+    XTFmtSpec sp;
+    while (XTFmtNext(fmt, &pos, &sp))
         {
-        unichar c = [fmt characterAtIndex:i];
-        if (c != '%')
-            {
-            [out appendFormat:@"%C", c];
-            i++;
+        XTFmtKind kind = XTFmtKindOf(sp.conv);
+        if (kind == XTFmtKindNone)
             continue;
-            }
-        [out appendString:@"%"];
-        i++;
-        if (i >= n)
+        va += sp.stars;
+        if (va >= args.count)
             return nil;
-        // FLAGS, then WIDTH, then PRECISION — the same grammar the checker
-        // walks. Reading the byte after '%' as the conversion is what made
-        // `%12d` and `%-8d` unrecognised, and an unrecognised specifier
-        // abandons the WHOLE rewrite, so a u32 stayed on `%d` and printed its
-        // low 16 bits: the exact truncation this pass exists to prevent.
-        while (i < n)
+        XTType* at = args[va++].resolvedType;
+        // An enum's name is printed by the lowering's `%e` rewrite, so `%@`
+        // given an enum is spelled that way.
+        if (kind == XTFmtKindObject && at && at.kind == XTTypeKindEnum)
             {
-            unichar fl = [fmt characterAtIndex:i];
-            if (fl != '-' && fl != '+' && fl != ' ' && fl != '#' && fl != '0')
-                break;
-            [out appendFormat:@"%C", fl];
-            i++;
-            }
-        if (i >= n)
-            return nil;
-        if ([fmt characterAtIndex:i] == '*')     // a `*` width reads an ARG
-            {
-            if (va >= args.count)
-                return nil;
-            [out appendString:@"*"];
-            i++;
-            va++;
-            }
-        else
-            {
-            while (i < n)
-                {
-                unichar d = [fmt characterAtIndex:i];
-                if (d < '0' || d > '9')
-                    break;
-                [out appendFormat:@"%C", d];
-                i++;
-                }
-            }
-        if (i >= n)
-            return nil;
-        unichar s = [fmt characterAtIndex:i];
-        if (s == '.')
-            {
-            [out appendString:@"."];
-            i++;
-            if (i >= n)
-                return nil;
-            if ([fmt characterAtIndex:i] == '*')  // a `*` precision reads an ARG
-                {
-                if (va >= args.count)
-                    return nil;
-                [out appendString:@"*"];
-                i++;
-                va++;
-                }
-            else
-                {
-                while (i < n)
-                    {
-                    unichar d = [fmt characterAtIndex:i];
-                    if (d < '0' || d > '9')
-                        break;
-                    [out appendFormat:@"%C", d];
-                    i++;
-                    }
-                }
-            if (i >= n)
-                return nil;
-            s = [fmt characterAtIndex:i];
-            }
-        if (s == '%')
-            {
-            [out appendString:@"%"];
-            i++;
+            [out appendString:[fmt substringWithRange:NSMakeRange(copied, sp.lenEnd - copied)]];
+            [out appendString:@"e"];
+            copied = sp.end;
             continue;
             }
-        if (s == 'd' || s == 'u' || s == 'x')
-            {
-            if (va >= args.count)
-                return nil;
-            XTType* at = args[va].resolvedType;
-            // 8 bytes upgrades twice — `%d` on an i64 becomes `%lld`, not the
-            // `%ld` that would still truncate. Same rule, one more width.
-            if (at && at.isInteger && at.byteWidth >= 8)
-                {
-                [out appendString:@"ll"];
-                changed = YES;
-                }
-            else if (at && at.isInteger && at.byteWidth >= 4)
-                {
-                [out appendString:@"l"];
-                changed = YES;
-                }
-            [out appendFormat:@"%C", s];
-            i++;
-            va++;
+        if (kind != XTFmtKindInt || !at || !at.isInteger)
             continue;
-            }
-        if (s == 'l')
-            {
-            [out appendString:@"l"];
-            i++;
-            if (i >= n)
-                return nil;
-            unichar sub = [fmt characterAtIndex:i];
-            // an explicit `%ll<spec>`
-            if (sub == 'l')
-                {
-                [out appendString:@"l"];
-                i++;
-                if (i >= n)
-                    return nil;
-                unichar sub2 = [fmt characterAtIndex:i];
-                if (sub2 != 'd' && sub2 != 'u' && sub2 != 'x')
-                    return nil;
-                [out appendFormat:@"%C", sub2];
-                i++;
-                va++;
-                continue;
-                }
-            // `%ld` on a 64-bit argument still truncates, so widen it too.
-            if (sub == 'd' || sub == 'u' || sub == 'x')
-                {
-                XTType* lat = (va < args.count) ? args[va].resolvedType : nil;
-                if (lat && lat.isInteger && lat.byteWidth >= 8)
-                    {
-                    [out appendString:@"l"];
-                    changed = YES;
-                    }
-                }
-            if (sub != 'd' && sub != 'u' && sub != 'x' && sub != 'f')
-                return nil;
-            [out appendFormat:@"%C", sub];
-            i++;
-            va++;
-            continue;
-            }
-        if (s == 'c' || s == 's' || s == 'f' || s == 'e' || s == '@')
-            {
-            [out appendFormat:@"%C", s];
-            i++;
-            va++;
-            continue;
-            }
-        return nil;
+        NSString* len = at.byteWidth >= 8 ? @"ll" : (at.byteWidth > intW ? @"l" : @"");
+        [out appendString:[fmt substringWithRange:NSMakeRange(copied, sp.lenStart - copied)]];
+        [out appendString:len];
+        copied = sp.lenEnd;
         }
-    return changed ? out : nil;
+    [out appendString:[fmt substringFromIndex:copied]];
+    return [out isEqualToString:fmt] ? nil : out;
     }
 
 /****************************************************************************\
-|* Human-readable expected-type string for a printf specifier.
+|* A FORMAT WRAPPER is a variadic function or method that hands its own last
+|* named parameter, followed by `...`, to a format function:
+|*     void say(string fmt, ...) { s.appendFormat(fmt, ...); }
+|* Its callers then get what a format function's callers get — lengths fitted,
+|* the check, the promotions — or a `%d` given a u8 would read an int the
+|* caller never passed. Found by a scan of the body for such a call: through
+|* blocks, ifs, loops, expression statements, declarations and returns, and
+|* into the arguments (and receiver) of calls.
 \****************************************************************************/
-- (NSString*)expectedTypeForSpec:(NSString*)spec
+static BOOL XTFmtIsFormatName(NSString* n)
     {
-    if ([spec isEqualToString:@"d"])
-        return @"16-bit signed integer";
-    if ([spec isEqualToString:@"u"])
-        return @"16-bit unsigned integer";
-    if ([spec isEqualToString:@"x"])
-        return @"16-bit unsigned integer";
-    if ([spec isEqualToString:@"ld"])
-        return @"32-bit signed integer";
-    if ([spec isEqualToString:@"lld"])
-        return @"64-bit signed integer";
-    if ([spec isEqualToString:@"llu"])
-        return @"64-bit unsigned integer";
-    if ([spec isEqualToString:@"llx"])
-        return @"64-bit hex";
-    if ([spec isEqualToString:@"lu"])
-        return @"32-bit unsigned integer";
-    if ([spec isEqualToString:@"lx"])
-        return @"32-bit unsigned integer";
-    if ([spec isEqualToString:@"f"])
-        return @"float";
-    if ([spec isEqualToString:@"lf"])
-        return @"double";
-    if ([spec isEqualToString:@"c"])
-        return @"character";
-    if ([spec isEqualToString:@"s"])
-        return @"string";
-    if ([spec isEqualToString:@"@"])
-        return @"struct/class";
-    return @"?";
+    return [n isEqualToString:@"printf"] || [n isEqualToString:@"printfAt"] ||
+           [n isEqualToString:@"withFormat"] || [n isEqualToString:@"appendFormat"] ||
+           [n isEqualToString:@"error"] || [n isEqualToString:@"warning"] ||
+           [n isEqualToString:@"info"];
+    }
+
+static BOOL XTFmtLastArgIs(NSArray<XTASTNode*>* args, NSString* param)
+    {
+    XTASTNode* last = args.lastObject;
+    return [last isKindOfClass:[XTIdentifierNode class]] &&
+           [((XTIdentifierNode*)last).identName isEqualToString:param];
+    }
+
+static BOOL XTFmtForwards(XTASTNode* n, NSString* param)
+    {
+    if (!n)
+        return NO;
+    if ([n isKindOfClass:[XTBlockNode class]])
+        {
+        for (XTASTNode* st in ((XTBlockNode*)n).statements)
+            if (XTFmtForwards(st, param))
+                return YES;
+        return NO;
+        }
+    if ([n isKindOfClass:[XTIfNode class]])
+        {
+        XTIfNode* i = (XTIfNode*)n;
+        return XTFmtForwards(i.condition, param) || XTFmtForwards(i.thenBlock, param) ||
+               XTFmtForwards(i.elseBlock, param);
+        }
+    if ([n isKindOfClass:[XTWhileNode class]])
+        return XTFmtForwards(((XTWhileNode*)n).condition, param) ||
+               XTFmtForwards(((XTWhileNode*)n).body, param);
+    if ([n isKindOfClass:[XTForCStyleNode class]])
+        {
+        XTForCStyleNode* f = (XTForCStyleNode*)n;
+        return XTFmtForwards(f.loopInit, param) || XTFmtForwards(f.condition, param) ||
+               XTFmtForwards(f.increment, param) || XTFmtForwards(f.body, param);
+        }
+    if ([n isKindOfClass:[XTForInNode class]])
+        return XTFmtForwards(((XTForInNode*)n).collection, param) ||
+               XTFmtForwards(((XTForInNode*)n).body, param);
+    if ([n isKindOfClass:[XTExpressionStatementNode class]])
+        return XTFmtForwards(((XTExpressionStatementNode*)n).expression, param);
+    if ([n isKindOfClass:[XTVariableDeclNode class]])
+        return XTFmtForwards(((XTVariableDeclNode*)n).initialiser, param);
+    if ([n isKindOfClass:[XTReturnNode class]])
+        {
+        for (XTASTNode* v in ((XTReturnNode*)n).values)
+            if (XTFmtForwards(v, param))
+                return YES;
+        return NO;
+        }
+    if ([n isKindOfClass:[XTCallExprNode class]])
+        {
+        XTCallExprNode* c = (XTCallExprNode*)n;
+        if (c.forwardsVarargs && XTFmtIsFormatName(c.calleeName) && XTFmtLastArgIs(c.arguments, param))
+            return YES;
+        for (XTASTNode* a in c.arguments)
+            if (XTFmtForwards(a, param))
+                return YES;
+        return NO;
+        }
+    if ([n isKindOfClass:[XTMethodCallExprNode class]])
+        {
+        XTMethodCallExprNode* c = (XTMethodCallExprNode*)n;
+        if (c.forwardsVarargs && XTFmtIsFormatName(c.methodName) && XTFmtLastArgIs(c.arguments, param))
+            return YES;
+        if (XTFmtForwards(c.receiver, param))
+            return YES;
+        for (XTASTNode* a in c.arguments)
+            if (XTFmtForwards(a, param))
+                return YES;
+        return NO;
+        }
+    return NO;
+    }
+
+// The index of a wrapper's format parameter, or -1.
+static NSInteger XTFmtWrapperIndex(BOOL isVarArgs, NSArray<XTParamNode*>* params, XTASTNode* body)
+    {
+    if (!isVarArgs || !body || params.count == 0)
+        return -1;
+    return XTFmtForwards(body, params.lastObject.paramName) ? (NSInteger)params.count - 1 : -1;
+    }
+
+/****************************************************************************\
+|* Record every format wrapper in the program — functions by name, methods as
+|* `Class.method` — before any body is analysed, so a call ahead of the
+|* wrapper's definition is treated the same as one after it.
+\****************************************************************************/
+- (void)collectFormatWrappers:(NSArray<XTASTNode*>*)decls
+    {
+    for (XTASTNode* d in decls)
+        {
+        if ([d isKindOfClass:[XTFunctionDeclNode class]])
+            {
+            XTFunctionDeclNode* f = (XTFunctionDeclNode*)d;
+            NSInteger k = XTFmtWrapperIndex(f.isVarArgs, f.parameters, f.body);
+            if (k >= 0)
+                self.formatWrappers[f.funcName] = @(k);
+            }
+        else if ([d isKindOfClass:[XTClassDeclNode class]])
+            {
+            XTClassDeclNode* c = (XTClassDeclNode*)d;
+            for (XTMethodDeclNode* m in c.methods)
+                {
+                NSInteger k = XTFmtWrapperIndex(m.isVarArgs, m.parameters, m.body);
+                if (k >= 0)
+                    self.formatWrappers[[NSString stringWithFormat:@"%@.%@", c.className, m.methodName]] = @(k);
+                }
+            }
+        }
+    }
+
+/****************************************************************************\
+|* Lengths fitted, the check, then the promotions: everything a format call
+|* gets, for a call whose format is argument `fmtIdx`.
+\****************************************************************************/
+- (nullable NSArray<XTASTNode*>*)formatCallArguments:(NSArray<XTASTNode*>*)args
+                                              fmtIdx:(NSUInteger)fmtIdx
+                                            location:(XTSourceLocation*)loc
+                                            callName:(NSString*)callName
+    {
+    if (args.count <= fmtIdx)
+        return nil;
+    NSMutableArray<XTASTNode*>* out = [args mutableCopy];
+    if ([out[fmtIdx] isKindOfClass:[XTLiteralStringNode class]])
+        {
+        XTLiteralStringNode* lit = (XTLiteralStringNode*)out[fmtIdx];
+        [self checkPrintfFormat:lit.stringValue
+                      arguments:out
+                     firstVaIdx:fmtIdx + 1
+                       location:loc
+                       callName:callName];
+        NSString* rewritten = [self typeDirectedFormatString:lit.stringValue
+                                                   arguments:out
+                                                  firstVaIdx:fmtIdx + 1];
+        if (rewritten)
+            {
+            XTLiteralStringNode* newLit = [[XTLiteralStringNode alloc] initWithString:rewritten
+                                                                             location:lit.location];
+            newLit.resolvedType = lit.resolvedType;
+            out[fmtIdx] = newLit;
+            }
+        }
+    NSArray* promoted = [self promotedFormatArguments:out firstVaIdx:fmtIdx + 1];
+    return promoted ?: out;
+    }
+
+/****************************************************************************\
+|* C's default argument promotions for a format call's variadic tail: an
+|* integer narrower than `int` is passed as an `int`, and a float as a double.
+|* The formatter reads exactly those. Returns the new argument list, or nil
+|* when nothing needed promoting.
+\****************************************************************************/
+- (nullable NSArray<XTASTNode*>*)promotedFormatArguments:(NSArray<XTASTNode*>*)args
+                                              firstVaIdx:(NSUInteger)firstVa
+    {
+    NSUInteger intW = XTFmtIntWidth();
+    // A literal format's `%e` given an enum prints the member's name, which
+    // the lowering finds by the argument's enum type — so that one stays.
+    NSMutableIndexSet* names = [NSMutableIndexSet indexSet];
+    if (firstVa > 0 && [args[firstVa - 1] isKindOfClass:[XTLiteralStringNode class]])
+        {
+        NSString* fmt = ((XTLiteralStringNode*)args[firstVa - 1]).stringValue;
+        NSUInteger pos = 0, va = firstVa;
+        XTFmtSpec sp;
+        while (XTFmtNext(fmt, &pos, &sp))
+            {
+            if (XTFmtKindOf(sp.conv) == XTFmtKindNone)
+                continue;
+            va += sp.stars;
+            if (sp.conv == 'e')
+                [names addIndex:va];
+            va++;
+            }
+        }
+    NSMutableArray<XTASTNode*>* out = nil;
+    for (NSUInteger i = firstVa; i < args.count; i++)
+        {
+        XTASTNode* a = args[i];
+        XTType* at = a.resolvedType;
+        XTType* to = nil;
+        if (at && at.kind == XTTypeKindEnum && [names containsIndex:i])
+            continue;
+        if (at && at.isInteger && at.byteWidth < intW)
+            to = intW == 2 ? [XTType i16Type] : [XTType i32Type];
+        else if (at && at.kind == XTTypeKindFloat)
+            to = [XTType doubleType];
+        if (!to)
+            continue;
+        if (!out)
+            out = [args mutableCopy];
+        out[i] = [[XTCastExprNode alloc] initWithType:to operand:a location:a.location];
+        }
+    return out;
     }
 
 /****************************************************************************\
@@ -3266,6 +3184,7 @@ static BOOL XTIsErasedKeyType(XTType* t)
     // fixed params).
     NSArray* fmtArgTypes = nil;
     NSUInteger fmtFirstVaIdx = 0;
+    NSString* fmtWrapperKey = nil;
         {
         // Which literal-format calls get the expected-type hints and the
         // type-directed upgrade: Stdio.printf/printfAt, and (finding #8's
@@ -3286,6 +3205,14 @@ static BOOL XTIsErasedKeyType(XTType* t)
             fmtIdx = [node.methodName isEqualToString:@"printfAt"] ? 2 : 0;
             }
         else if (recvIsStringCls && [node.methodName isEqualToString:@"withFormat"])
+            {
+            isFmt = YES;
+            }
+        else if ([node.receiver isKindOfClass:[XTIdentifierNode class]] &&
+                 [((XTIdentifierNode*)node.receiver).identName isEqualToString:@"Log"] &&
+                 ([node.methodName isEqualToString:@"error"] ||
+                  [node.methodName isEqualToString:@"warning"] ||
+                  [node.methodName isEqualToString:@"info"]))
             {
             isFmt = YES;
             }
@@ -3327,10 +3254,9 @@ static BOOL XTIsErasedKeyType(XTType* t)
                 hint = [self parameterHintForMethodCall:node argument:i];
             [self analyzeArgument:arg withHint:hint];
             }
-        // Type-directed format upgrade: widen `%d/%u/%x` to their `l` form
-        // where the argument is statically 32-bit (integer promotion makes
-        // `w * h` a u32). Replace the format-string node with a fresh literal
-        // carrying the rewritten text.
+        // Fit each integer conversion's length to its argument, so `%d`
+        // prints an i64 whole. Replace the format-string node with a fresh
+        // literal carrying the rewritten text.
         if (fmtFirstVaIdx > 0 &&
             [node.arguments[fmtFirstVaIdx - 1] isKindOfClass:[XTLiteralStringNode class]])
             {
@@ -3741,6 +3667,8 @@ static BOOL XTIsErasedKeyType(XTType* t)
                 // ownerCls == cls in that case — keeping pre-PR3
                 // emission unchanged for non-inherited calls.
                 NSString* ownerName = ownerCls ? ownerCls.className : className;
+                if (chosen.isVarArgs)
+                    fmtWrapperKey = [NSString stringWithFormat:@"%@.%@", ownerName, node.methodName];
                 if (ownerCls && ownerCls != cls)
                     {
                     node.resolvedClassName = ownerName;
@@ -3912,19 +3840,20 @@ static BOOL XTIsErasedKeyType(XTType* t)
 
     node.resolvedType = resolved ?: [XTType u8Type];
 
-    // Stdio.printf / Stdio.printfAt / String.withFormat / String.appendFormat
-    // — check format specifiers against argument types. The check fires only
-    // when the format argument is a compile-time string literal (anything
-    // computed at runtime is unknowable at sema time). String's formatters
-    // share Stdio's width contract (%d/%u = 16-bit, %ld = 32, %lld = 64), and
-    // were UNCOVERED — a u32 against %u silently printed its low 16 bits
-    // (finding #14's second half), which this warning is exactly for.
+    // The format functions — Stdio.printf/printfAt, String.withFormat/
+    // appendFormat and Log.error/warning/info. A literal format is checked
+    // against its arguments, and every call's variadic tail gets C's default
+    // promotions, since the formatter reads an int or a double.
     BOOL fmtCheck = ([className isEqualToString:@"Stdio"] &&
                      ([node.methodName isEqualToString:@"printf"] ||
                       [node.methodName isEqualToString:@"printfAt"])) ||
                     ([className isEqualToString:@"String"] &&
                      ([node.methodName isEqualToString:@"withFormat"] ||
-                      [node.methodName isEqualToString:@"appendFormat"]));
+                      [node.methodName isEqualToString:@"appendFormat"])) ||
+                    ([className isEqualToString:@"Log"] &&
+                     ([node.methodName isEqualToString:@"error"] ||
+                      [node.methodName isEqualToString:@"warning"] ||
+                      [node.methodName isEqualToString:@"info"]));
     if (fmtCheck)
         {
         NSUInteger fmtIdx = [node.methodName isEqualToString:@"printfAt"] ? 2 : 0;
@@ -3941,6 +3870,17 @@ static BOOL XTIsErasedKeyType(XTType* t)
                                callName:[NSString stringWithFormat:@"%@.%@", className, node.methodName]];
                 }
             }
+        NSArray* promoted = [self promotedFormatArguments:node.arguments firstVaIdx:fmtIdx + 1];
+        if (promoted)
+            node.arguments = promoted;
+        }
+    else if (fmtWrapperKey && self.formatWrappers[fmtWrapperKey])
+        {
+        node.arguments = [self formatCallArguments:node.arguments
+                                            fmtIdx:self.formatWrappers[fmtWrapperKey].unsignedIntegerValue
+                                          location:node.location
+                                          callName:[NSString stringWithFormat:@"%@.%@", className, node.methodName]]
+                             ?: node.arguments;
         }
     }
 
