@@ -11383,6 +11383,13 @@ class ClassInfo
             {
             if (rhs.boundCall())
                 return false;
+            // `va_arg(ap, T@)` is not a call: it reads a reference the
+            // CALLER still holds out of the argument pack, so it is borrowed.
+            // Counting it owned let a strong local take it without a retain
+            // and release it at scope exit — one release too many for every
+            // object formatted by `%@`.
+            if (rhs.sym() != 0 && rhs.sym().hasPrefix(String.withCString("__intrinsic_va_")))
+                return true;
             return !isClassPointer(rhs.ty());
             }
         if (k == (u16)nkMethodCall)
