@@ -2602,7 +2602,14 @@ void ux_ak_set_control_hidden(int handle, int node, int on)
         return;
     NSView* v = g_ctl[handle][node];
     if (v)
+        {
         [v setHidden:(on ? YES : NO)];
+        /* Showing a view must repaint it: a view that was hidden while its content changed comes
+         * back with a stale backing otherwise, and a surface that never drew shows as a blank or
+         * garbage rectangle.  Mark it dirty on the way IN (not out). */
+        if (!on)
+            [v setNeedsDisplay:YES];
+        }
     }
 // Springs & struts (UX_ANCHOR_* | UX_FLEX_*, see UXViewDriver.xt) -> NSView autoresizing mask, so
 // AppKit tracks the control LIVE during a window drag.  A spring is a FLEXIBLE margin: to pin to an
