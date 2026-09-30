@@ -722,10 +722,10 @@ int ux_ak_gl_grab_window(void* peer, const char* path)
     int i = ak_gl_find(peer);
     if (i < 0 || !g_glView[i])
         return 0;
-    /* The view that holds the tree, NOT the window's contentView: the window wraps
-     * the toolkit's draw view in an NSScrollView, and the GL surface is a subview of
-     * the draw view.  Grabbing the scroll view misses both. */
-    NSView* content = [g_glView[i] superview];
+    /* The WINDOW'S content view, so the picture holds everything: the toolkit's draw view (inside an
+     * NSScrollView) AND any overlay surface, which lives on the content view ABOVE the scroll clip.
+     * Grabbing only the draw view would miss the surface. */
+    NSView* content = [g_glView[i] window] != nil ? [[g_glView[i] window] contentView] : [g_glView[i] superview];
     if (!content)
         return 0;
     NSRect b = [content bounds];
@@ -2525,6 +2525,7 @@ void ux_ak_set_control_check(int handle, int node, int on)
     if ([b isKindOfClass:[NSButton class]])
         [b setState:(on ? NSControlStateValueOn : NSControlStateValueOff)];
     }
+static Class ak_surface_class(void); // fwd: an overlay surface lives in the window content view
 void ux_ak_set_control_frame(int handle, int node, int x, int y, int w, int h)
     {
     if (node < 0 || node >= 256)
@@ -2534,6 +2535,17 @@ void ux_ak_set_control_frame(int handle, int node, int x, int y, int w, int h)
         return;
     if ([v isKindOfClass:[NSButton class]])
         ak_place_button((NSButton*)v, x, y, w, h);
+    else if ([v isKindOfClass:ak_surface_class()])
+        {
+        /* A surface lives in the window's CONTENT view, above the scroll clip, so a frame given in
+         * the toolkit's document-view space is converted here -- the flip and the clip inset are the
+         * shim's to get right. */
+        NSView* content = g_view[handle];
+        NSWindow* win = g_win[handle];
+        NSView* target = win ? [win contentView] : content;
+        if (content && target)
+            [v setFrame:[content convertRect:NSMakeRect(x, y, w, h) toView:target]];
+        }
     else
         [v setFrame:NSMakeRect(x, y, w, h)];
     }
@@ -3302,7 +3314,16 @@ void ux_ak_make_surface(int handle, int node, int x, int y, int w, int h, void* 
         g_surface_owner[g_surface_n] = view;
         g_surface_n++;
         }
-    [content addSubview:s];
+    /* WINDOW-PLACED, not scrolled content: the surface goes ABOVE the window's scroll clip, on the
+     * window's content view.  Inside the clip a layer-backed view cleared/tiled in regions, leaving
+     * a black rectangle over the map, and the surface is window-sized so it need not scroll. */
+    NSWindow* win = g_win[handle];
+    NSView* target = win ? [win contentView] : content;
+    if (target)
+        {
+        [s setFrame:[content convertRect:NSMakeRect(x, y, w, h) toView:target]];
+        [target addSubview:s];
+        }
     g_ctl[handle][node] = s;
     [s setNeedsDisplay:YES];
     }
@@ -3341,14 +3362,21 @@ int ux_ak_surface_over_gl(void* surfPeer, void* glPeer)
     if (!surf || !gl)
         return -1;
     NSView* parent = [surf superview];
-    if (!parent || parent != [gl superview])
-        return 0; /* different stacks: not comparable, and not over */
-    NSArray* subs = [parent subviews];
-    NSUInteger si = [subs indexOfObjectIdenticalTo:surf];
-    NSUInteger gg = [subs indexOfObjectIdenticalTo:gl];
-    if (si == NSNotFound || gg == NSNotFound)
+    if (!parent)
         return -1;
-    return si > gg ? 1 : 0;
+    if (parent == [gl superview])
+        {
+        NSArray* subs = [parent subviews];
+        NSUInteger si = [subs indexOfObjectIdenticalTo:surf];
+        NSUInteger gg = [subs indexOfObjectIdenticalTo:gl];
+        if (si == NSNotFound || gg == NSNotFound)
+            return -1;
+        return si > gg ? 1 : 0;
+        }
+    /* Different levels of the hierarchy: the surface is over the GL when the GL is inside the
+     * surface's parent -- the surface sits on the window content view, above the scroll clip that
+     * holds the map. */
+    return [gl isDescendantOf:parent] ? 1 : 0;
     }
 
 // One modal drag-track step (a split-view divider, etc.): pull the next left-mouse dragged/up event.

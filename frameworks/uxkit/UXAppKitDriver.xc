@@ -1863,7 +1863,7 @@ class UXAppKitDriver : Object<UXViewDriver>
         for (i32 i = (i32)0; i < t.count; i = i + (i32)1)
             {
             i32 kk = (i32)t.nodes[i].kind;
-            if (kk == (i32)UXKindScroll || kk == (i32)UXKindTable || kk == (i32)UXKindGLView)
+            if (kk == (i32)UXKindScroll || kk == (i32)UXKindTable || kk == (i32)UXKindGLView || kk == (i32)UXKindSurface)
                 {
                 continue;
                 }
