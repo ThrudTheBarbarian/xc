@@ -88,7 +88,10 @@ static void ak_mouseDown(__unsafe_unretained id self, SEL _cmd, __unsafe_unretai
             break;
             }
         }
-    g_dispatch(1, (int)p.x, (int)p.y, h); // route to the window that got the event, not always #1
+    // A Control-click is the secondary button on macOS (the browser fires `contextmenu` for it), so
+    // deliver it as UXEventRightMouseDown (16) -- a trackpad player has no other way to a menu.
+    g_dispatch((([(NSEvent*)ev modifierFlags] & NSEventModifierFlagControl) != 0) ? 16 : 1,
+               (int)p.x, (int)p.y, h); // route to the window that got the event, not always #1
     }
 static void ak_keyDown(__unsafe_unretained id self, SEL _cmd, __unsafe_unretained id ev)
     {
@@ -213,7 +216,7 @@ static void ak_shieldMouseDown(__unsafe_unretained id self, SEL _cmd, __unsafe_u
      * the whole window tree, and a point in shield-local space would be short
      * by the shield's own origin. */
     NSPoint p = [g_view[h] convertPoint:[(NSEvent*)ev locationInWindow] fromView:nil];
-    g_dispatch(1, (int)p.x, (int)p.y, h);
+    g_dispatch((([(NSEvent*)ev modifierFlags] & NSEventModifierFlagControl) != 0) ? 16 : 1, (int)p.x, (int)p.y, h);
     }
 /* A click into an INACTIVE window is normally swallowed to activate it, and the
  * press never reaches the view -- which is why the shield was found by
@@ -335,7 +338,7 @@ static void ak_glMouseDown(__unsafe_unretained id self, SEL _cmd, __unsafe_unret
     if (!h || !g_view[h])
         return;
     NSPoint p = [g_view[h] convertPoint:[(NSEvent*)ev locationInWindow] fromView:nil];
-    g_dispatch(1, (int)p.x, (int)p.y, h);
+    g_dispatch((([(NSEvent*)ev modifierFlags] & NSEventModifierFlagControl) != 0) ? 16 : 1, (int)p.x, (int)p.y, h);
     }
 /* The map's own surface hears move / right-click / wheel too, in the same coordinates the press
  * uses, so hit-testing the point lands on the GL view like any other. */
