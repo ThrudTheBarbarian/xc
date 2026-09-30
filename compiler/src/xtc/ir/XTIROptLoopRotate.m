@@ -11,7 +11,9 @@
 
 @interface XTLoopRotCand : NSObject
 @property(nonatomic) XTIRBlock* H;       // header (becomes the peeled first test)
-@property(nonatomic) XTIRBlock* B;       // latch/body (becomes the loop header)
+@property(nonatomic) XTIRBlock* B;       // the body's entry (becomes the loop header)
+@property(nonatomic) XTIRBlock* L;       // the latch: the one body block that branches back to H
+@property(nonatomic) NSSet<XTIRBlock*>* R; // the body: everything reachable from B without passing H
 @property(nonatomic) XTIRBlock* E;       // exit
 @property(nonatomic) XTIRValueId condId; // the guard result feeding H's CondBranch
 @end
@@ -171,36 +173,109 @@ static NSArray<XTIRBlock*>* predsOf(XTIRBlock* target, XTIRFunction* fn)
         XTIRValueId condId = term.operands[0].valueId;
         if (defBlk[@(condId)] != H)
             continue; // guard must be computed in H
+        // …by an INSTRUCTION. A condition that is itself one of H's phis
+        // (`while (again)`) has no guard to clone: the rewrite removes the
+        // phi and left both branches testing a value that no longer existed.
+        BOOL condIsPhi = NO;
+        for (XTIRInsn* p in H.phiNodes)
+            if (p.result && p.result.valueId == condId)
+                condIsPhi = YES;
+        if (condIsPhi)
+            continue;
 
         XTIRBlock *t0 = term.operands[1].blockRef, *t1 = term.operands[2].blockRef;
         if (!t0 || !t1 || t0 == t1)
             continue;
-        BOOL (^latch)(XTIRBlock*) = ^BOOL(XTIRBlock* b) {
-          return b && b != H && b.phiNodes.count == 0 && b.terminator &&
-                 b.terminator.opcode == XTIROpBranch && b.terminator.operands.count >= 1 &&
-                 b.terminator.operands[0].blockRef == H;
-        };
-        XTIRBlock *B = nil, *E = nil;
-        if (latch(t0))
+        // The body is a REGION, not only a single block: B, the successor of H
+        // that starts it, and everything reachable from B without passing
+        // through H. It must be left only by going back to H, and exactly one
+        // of its blocks — the latch L — does that, with a plain branch. A
+        // one-block body is the case L == B.
+        XTIRBlock *B = nil, *E = nil, *L = nil;
+        NSMutableSet<XTIRBlock*>* R = nil;
+        for (NSUInteger side = 0; side < 2 && !B; side++)
             {
-            B = t0;
-            E = t1;
+            XTIRBlock* b = side == 0 ? t0 : t1;
+            XTIRBlock* e = side == 0 ? t1 : t0;
+            if (b == H || b.phiNodes.count != 0)
+                continue;
+            NSMutableSet<XTIRBlock*>* reg = [NSMutableSet setWithObject:b];
+            NSMutableArray<XTIRBlock*>* work = [NSMutableArray arrayWithObject:b];
+            BOOL okR = YES;
+            XTIRBlock* latchBlk = nil;
+            while (work.count && okR)
+                {
+                XTIRBlock* x = work.lastObject;
+                [work removeLastObject];
+                XTIRInsn* xt = x.terminator;
+                if (!xt)
+                    {
+                    okR = NO;
+                    break;
+                    }
+                for (XTIROperand* o in xt.operands)
+                    {
+                    if (o.kind != XTIROperandKindBlock || !o.blockRef)
+                        continue;
+                    XTIRBlock* s = o.blockRef;
+                    if (s == H)
+                        {
+                        // The one way back, and an unconditional one.
+                        if (latchBlk || xt.opcode != XTIROpBranch)
+                            okR = NO;
+                        latchBlk = x;
+                        continue;
+                        }
+                    if (s == e)
+                        {
+                        okR = NO; // a second exit
+                        break;
+                        }
+                    if (![reg containsObject:s])
+                        {
+                        [reg addObject:s];
+                        [work addObject:s];
+                        }
+                    }
+                }
+            if (!okR || !latchBlk || [reg containsObject:e])
+                continue;
+            // Nothing outside the region may enter it except through B.
+            BOOL closed = YES;
+            for (XTIRBlock* x in reg)
+                for (XTIRBlock* pb in predsOf(x, fn))
+                    if (![reg containsObject:pb] && !(x == b && pb == H))
+                        closed = NO;
+            if (!closed)
+                continue;
+            // A multi-block body with no branching of its own — the chain of
+            // blocks an unrolled body is split into — is left as it was: the
+            // one-block rule never rotated it, and rotating it measured slower
+            // (mem_copy on the x86-64 host, 1.08 s -> 1.41 s) with no branch
+            // saved. Rotation pays where the body branches (an `if`, an inner
+            // loop): there it removes the trip through the header.
+            if (reg.count > 1)
+                {
+                BOOL branches = NO;
+                for (XTIRBlock* x in reg)
+                    if (x.terminator.opcode != XTIROpBranch)
+                        branches = YES;
+                if (!branches)
+                    continue;
+                }
+            B = b;
+            E = e;
+            L = latchBlk;
+            R = reg;
             }
-        else if (latch(t1))
-            {
-            B = t1;
-            E = t0;
-            }
-        else
-            continue;
-        if (B == E || !E)
+        if (!B || B == E || !E)
             continue;
 
-        // B's only predecessor is H; H's predecessors are exactly {PH, B}.
+        // B's only predecessor is H; H's predecessors are exactly {PH, L}.
         if (predsOf(B, fn).count != 1)
-            continue; // == {H} (B latches to H)
+            continue;
         NSArray<XTIRBlock*>* hp = predsOf(H, fn);
-        if (hp.count != 2 || ![hp containsObject:B])
+        if (hp.count != 2 || ![hp containsObject:L])
             continue;
 
         // Every header non-phi instruction is the guard: safe to duplicate, with
@@ -216,7 +291,7 @@ static NSArray<XTIRBlock*>* predsOf(XTIRBlock* target, XTIRFunction* fn)
                 break;
                 }
             for (XTIROperand* o in insn.operands)
-                if (o.kind == XTIROperandKindUse && defBlk[@(o.valueId)] == B)
+                if (o.kind == XTIROperandKindUse && defBlk[@(o.valueId)] && [R containsObject:defBlk[@(o.valueId)]])
                     {
                     ok = NO;
                     break;
@@ -274,7 +349,7 @@ static NSArray<XTIRBlock*>* predsOf(XTIRBlock* target, XTIRFunction* fn)
             for (NSUInteger i = 0; i + 1 < phi.operands.count; i += 2)
                 {
                 if (phi.operands[i].kind == XTIROperandKindBlock &&
-                    phi.operands[i].blockRef == B &&
+                    phi.operands[i].blockRef == L &&
                     phi.operands[i + 1].kind == XTIROperandKindUse &&
                     defBlk[@(phi.operands[i + 1].valueId)] == H)
                     {
@@ -297,7 +372,7 @@ static NSArray<XTIRBlock*>* predsOf(XTIRBlock* target, XTIRFunction* fn)
             BOOL esc = NO;
             for (XTIRBlock* bb in fn.blocks)
                 {
-                if (bb == H || bb == B)
+                if (bb == H || [R containsObject:bb])
                     continue;
                 NSMutableArray<XTIRInsn*>* all = [NSMutableArray array];
                 [all addObjectsFromArray:bb.phiNodes];
@@ -332,6 +407,8 @@ static NSArray<XTIRBlock*>* predsOf(XTIRBlock* target, XTIRFunction* fn)
         XTLoopRotCand* c = [XTLoopRotCand new];
         c.H = H;
         c.B = B;
+        c.L = L;
+        c.R = R;
         c.E = E;
         c.condId = condId;
         return c;
@@ -341,7 +418,8 @@ static NSArray<XTIRBlock*>* predsOf(XTIRBlock* target, XTIRFunction* fn)
 
 - (void)apply:(XTLoopRotCand*)c inFunction:(XTIRFunction*)fn
     {
-    XTIRBlock *H = c.H, *B = c.B, *E = c.E;
+    XTIRBlock *H = c.H, *B = c.B, *E = c.E, *L = c.L;
+    NSSet<XTIRBlock*>* R = c.R;
     XTIRType* memTy = [XTIRType memoryType];
 
     // 1. Capture each phi's (PH-incoming init, B-incoming next) operands.
@@ -354,7 +432,7 @@ static NSArray<XTIRBlock*>* predsOf(XTIRBlock* target, XTIRFunction* fn)
         XTIROperand *fromPH = nil, *fromB = nil;
         for (NSUInteger k = 0; k + 1 < phi.operands.count; k += 2)
             {
-            if (phi.operands[k].blockRef == B)
+            if (phi.operands[k].blockRef == L)
                 fromB = phi.operands[k + 1];
             else
                 fromPH = phi.operands[k + 1];
@@ -397,7 +475,7 @@ static NSArray<XTIRBlock*>* predsOf(XTIRBlock* target, XTIRFunction* fn)
         [pbPhis addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpPhi
                                                     result:pbVals[i]
                                                   operands:@[ [XTIROperand blockWithRef:H], initOp[i],
-                                                              [XTIROperand blockWithRef:B], nextMapped[i] ]
+                                                              [XTIROperand blockWithRef:L], nextMapped[i] ]
                                                     dbgLoc:phis[i].dbgLoc]];
 
     // Remap helpers.
@@ -429,15 +507,18 @@ static NSArray<XTIRBlock*>* predsOf(XTIRBlock* target, XTIRFunction* fn)
               }
         };
 
-    // 3. In B's body, current-iteration phi values become the new B-phis.
+    // 3. In the body, current-iteration phi values become the new B-phis. B
+    //    dominates every block of the region, so they are valid throughout.
     NSMutableDictionary<NSNumber*, NSNumber*>* bMap = [NSMutableDictionary dictionary];
     for (NSUInteger i = 0; i < phis.count; i++)
         bMap[phiIds[i]] = @(pbVals[i].valueId);
-    remapBlock(B, bMap);
+    for (XTIRBlock* rb in fn.blocks)
+        if ([R containsObject:rb])
+            remapBlock(rb, bMap);
     [B.phiNodes insertObjects:pbPhis
                     atIndexes:[NSIndexSet indexSetWithIndexesInRange:NSMakeRange(0, pbPhis.count)]];
 
-    // 4. Clone H's guard instructions to the bottom of B FIRST (while H still
+    // 4. Clone H's guard instructions to the bottom of L FIRST (while H still
     //    references the phis), with the phi values replaced by their
     //    next-iteration values; the clone of `cond` is c_B. Must precede the H
     //    remap below, which rewrites H's operands to the preheader inits.
@@ -467,7 +548,7 @@ static NSArray<XTIRBlock*>* predsOf(XTIRBlock* target, XTIRFunction* fn)
             XTIRValueId rid = [fn allocateValueId];
             nr = [[XTIRValue alloc] initWithValueId:rid
                                                type:insn.result.type
-                                            defSite:[[XTIRDefSite alloc] initWithBlock:B insnIndex:B.instructions.count]];
+                                            defSite:[[XTIRDefSite alloc] initWithBlock:L insnIndex:L.instructions.count]];
             [fn registerValue:nr];
             gMap[@(insn.result.valueId)] = @(rid);
             }
@@ -476,7 +557,7 @@ static NSArray<XTIRBlock*>* predsOf(XTIRBlock* target, XTIRFunction* fn)
             XTIRValueId mid = [fn allocateValueId];
             nm = [[XTIRValue alloc] initWithValueId:mid
                                                type:memTy
-                                            defSite:[[XTIRDefSite alloc] initWithBlock:B insnIndex:B.instructions.count]];
+                                            defSite:[[XTIRDefSite alloc] initWithBlock:L insnIndex:L.instructions.count]];
             [fn registerValue:nm];
             }
         XTIRInsn* clone;
@@ -489,7 +570,7 @@ static NSArray<XTIRBlock*>* predsOf(XTIRBlock* target, XTIRFunction* fn)
         else
             clone = [[XTIRInsn alloc] initWithOpcode:insn.opcode result:nr operands:ops dbgLoc:insn.dbgLoc];
         clone.memoryResult = nm;
-        [B.instructions addObject:clone];
+        [L.instructions addObject:clone];
         if (insn.result && insn.result.valueId == c.condId)
             cBId = nr.valueId;
         }
@@ -519,12 +600,12 @@ static NSArray<XTIRBlock*>* predsOf(XTIRBlock* target, XTIRFunction* fn)
             [insn replaceOperands:ops];
         }
 
-    // 6. B's terminator: the conditional back-edge (same orientation as H's).
+    // 6. L's terminator: the conditional back-edge to B (same orientation as H's).
     XTIRInsn* ht = H.terminator;
     XTIROperand* bt0 = (ht.operands[1].blockRef == B) ? [XTIROperand blockWithRef:B] : ht.operands[1];
     XTIROperand* bt1 = (ht.operands[2].blockRef == B) ? [XTIROperand blockWithRef:B] : ht.operands[2];
-    [B resetTerminator];
-    [B setTerminator:[[XTIRInsn alloc] initWithOpcode:XTIROpCondBranch
+    [L resetTerminator];
+    [L setTerminator:[[XTIRInsn alloc] initWithOpcode:XTIROpCondBranch
                                                result:nil
                                              operands:@[ [XTIROperand useWithValueId:cBId], bt0, bt1 ]
                                             predicate:ht.predicate
@@ -543,7 +624,7 @@ static NSArray<XTIRBlock*>* predsOf(XTIRBlock* target, XTIRFunction* fn)
         BOOL esc = NO;
         for (XTIRBlock* bb in fn.blocks)
             {
-            if (bb == H || bb == B)
+            if (bb == H || [R containsObject:bb])
                 continue;
             NSMutableArray<XTIRInsn*>* all = [NSMutableArray array];
             [all addObjectsFromArray:bb.phiNodes];
@@ -577,7 +658,7 @@ static NSArray<XTIRBlock*>* predsOf(XTIRBlock* target, XTIRFunction* fn)
         XTIRInsn* ep = [[XTIRInsn alloc] initWithOpcode:XTIROpPhi
                                                  result:v
                                                operands:@[ [XTIROperand blockWithRef:H], initOp[i],
-                                                           [XTIROperand blockWithRef:B], bInc ]
+                                                           [XTIROperand blockWithRef:L], bInc ]
                                                  dbgLoc:nil];
         [E.phiNodes insertObject:ep atIndex:0];
         [exitPhis addObject:ep];
@@ -587,7 +668,7 @@ static NSArray<XTIRBlock*>* predsOf(XTIRBlock* target, XTIRFunction* fn)
         {
         for (XTIRBlock* bb in fn.blocks)
             {
-            if (bb == H || bb == B)
+            if (bb == H || [R containsObject:bb])
                 continue;
             NSMutableArray<XTIRInsn*>* all = [NSMutableArray array];
             [all addObjectsFromArray:bb.phiNodes];

@@ -15610,9 +15610,16 @@ class OptProfile
         }
 
     IRBlock* _rotH;
-    IRBlock* _rotB;
+    IRBlock* _rotB;   // the body's entry (becomes the loop header)
+    IRBlock* _rotL;   // the latch: the one body block that branches back to H
+    Array* _rotR;     // the body: everything reachable from B without passing H
     IRBlock* _rotE;
     IRValue* _rotCond;
+
+    bool rotInRegion(IRBlock* b)
+        {
+        return _rotR != (Array*)0 && hasBlock(_rotR, b);
+        }
 
     bool rotOne(IRFunc* fn)
         {
@@ -15649,6 +15656,8 @@ class OptProfile
         {
         _rotH = (IRBlock*)0;
         _rotB = (IRBlock*)0;
+        _rotL = (IRBlock*)0;
+        _rotR = (Array*)0;
         _rotE = (IRBlock*)0;
         _rotCond = (IRValue*)0;
         if (H.phis().count() == (u32)0)
@@ -15671,34 +15680,125 @@ class OptProfile
         Object* cb = defBlk.get((Hashable*)c0.val());
         if (cb == (Object*)0 || (IRBlock*)cb != H)
             return false; // guard computed in H
+        // …by an INSTRUCTION. A condition that is itself one of H's phis
+        // (`while (again)`) has no guard to clone: the rewrite removes the
+        // phi and left both branches testing a value that no longer existed.
+        // Mirrors the original.
+        for (u32 i = (u32)0; i < H.phis().count(); i = i + (u32)1)
+            if (((IRInsn*)H.phis().get(i)).res() == c0.val())
+                return false;
 
         IRBlock* t0 = ((IROperand*)term.ops().get((u32)1)).blk();
         IRBlock* t1 = ((IROperand*)term.ops().get((u32)2)).blk();
         if (t0 == (IRBlock*)0 || t1 == (IRBlock*)0 || t0 == t1)
             return false;
+        // The body is a REGION, not only a single block: B, the successor of
+        // H that starts it, and everything reachable from B without passing
+        // through H. It must be left only by going back to H, and exactly one
+        // of its blocks — the latch L — does that, with a plain branch. A
+        // one-block body is the case L == B. Mirrors the original.
         IRBlock* B = (IRBlock*)0;
         IRBlock* E = (IRBlock*)0;
-        if (rotIsLatch(t0, H))
+        IRBlock* L = (IRBlock*)0;
+        Array* R = (Array*)0;
+        for (u32 side = (u32)0; side < (u32)2 && B == (IRBlock*)0; side = side + (u32)1)
             {
-            B = t0;
-            E = t1;
+            IRBlock* b = side == (u32)0 ? t0 : t1;
+            IRBlock* e = side == (u32)0 ? t1 : t0;
+            if (b == H || b.phis().count() != (u32)0)
+                continue;
+            Array* reg = new Array();
+            reg.add((Object*)b);
+            Array* work = new Array();
+            work.add((Object*)b);
+            bool okR = true;
+            IRBlock* latchBlk = (IRBlock*)0;
+            while (work.count() > (u32)0 && okR)
+                {
+                IRBlock* x = (IRBlock*)work.get(work.count() - (u32)1);
+                work.removeAt(work.count() - (u32)1);
+                IRInsn* xt = x.term();
+                if (xt == (IRInsn*)0)
+                    {
+                    okR = false;
+                    break;
+                    }
+                for (u32 k = (u32)0; k < xt.ops().count(); k = k + (u32)1)
+                    {
+                    IROperand* o = (IROperand*)xt.ops().get(k);
+                    if (o.kind() != (u8)OPK_BLOCK || o.blk() == (IRBlock*)0)
+                        continue;
+                    IRBlock* sb = o.blk();
+                    if (sb == H)
+                        {
+                        // The one way back, and an unconditional one.
+                        if (latchBlk != (IRBlock*)0 || !xt.op().equals(String.withCString("Branch")))
+                            okR = false;
+                        latchBlk = x;
+                        continue;
+                        }
+                    if (sb == e)
+                        {
+                        okR = false; // a second exit
+                        break;
+                        }
+                    if (!hasBlock(reg, sb))
+                        {
+                        reg.add((Object*)sb);
+                        work.add((Object*)sb);
+                        }
+                    }
+                }
+            if (!okR || latchBlk == (IRBlock*)0 || hasBlock(reg, e))
+                continue;
+            // Nothing outside the region may enter it except H into B.
+            bool closed = true;
+            for (u32 r = (u32)0; r < reg.count() && closed; r = r + (u32)1)
+                {
+                IRBlock* x = (IRBlock*)reg.get(r);
+                Array* ps = predsOfBlock(fn, x);
+                for (u32 q = (u32)0; q < ps.count(); q = q + (u32)1)
+                    {
+                    IRBlock* pb = (IRBlock*)ps.get(q);
+                    if (!hasBlock(reg, pb) && !(x == b && pb == H))
+                        closed = false;
+                    }
+                }
+            if (!closed)
+                continue;
+            // A multi-block body with no branching of its own — the chain of
+            // blocks an unrolled body is split into — is left as it was: the
+            // one-block rule never rotated it, and rotating it measured slower
+            // (mem_copy on the x86-64 host, 1.08 s -> 1.41 s) with no branch
+            // saved. Rotation pays where the body branches (an `if`, an inner
+            // loop): there it removes the trip through the header.
+            if (reg.count() > (u32)1)
+                {
+                bool branches = false;
+                for (u32 r = (u32)0; r < reg.count(); r = r + (u32)1)
+                    if (!((IRBlock*)reg.get(r)).term().op().equals(String.withCString("Branch")))
+                        branches = true;
+                if (!branches)
+                    continue;
+                }
+            B = b;
+            E = e;
+            L = latchBlk;
+            R = reg;
             }
-        else if (rotIsLatch(t1, H))
-            {
-            B = t1;
-            E = t0;
-            }
-        else
-            return false;
-        if (B == E || E == (IRBlock*)0)
+        if (B == (IRBlock*)0 || B == E || E == (IRBlock*)0)
             return false;
 
-        // B's only predecessor is H, and H's are exactly the preheader and B.
+        // B's only predecessor is H, and H's are exactly the preheader and L.
         if (predsOfBlock(fn, B).count() != (u32)1)
             return false;
         Array* hp = predsOfBlock(fn, H);
-        if (hp.count() != (u32)2 || !hasBlock(hp, B))
+        if (hp.count() != (u32)2 || !hasBlock(hp, L))
             return false;
+        // rotUsedOutsideLoop reads these two, so they are set before the
+        // escape test below (they are cleared again on every bail).
+        _rotH = H;
+        _rotR = R;
 
         // Every header non-phi instruction is part of the guard: safe to
         // duplicate, referencing no B-defined value (the peeled copy must be
@@ -15716,7 +15816,7 @@ class OptProfile
                 if (op.kind() != (u8)OPK_USE)
                     continue;
                 Object* db = defBlk.get((Hashable*)op.val());
-                if (db != (Object*)0 && (IRBlock*)db == B)
+                if (db != (Object*)0 && hasBlock(R, (IRBlock*)db))
                     return false;
                 }
             if (n.res() != (IRValue*)0 && rotUsedOutside(fn, n.res(), H, H))
@@ -15745,7 +15845,7 @@ class OptProfile
                 {
                 IROperand* bo = (IROperand*)p.ops().get(k);
                 IROperand* vo = (IROperand*)p.ops().get(k + (u32)1);
-                if (bo.blk() == B && vo.kind() == (u8)OPK_USE)
+                if (bo.blk() == L && vo.kind() == (u8)OPK_USE)
                     {
                     Object* db = defBlk.get((Hashable*)vo.val());
                     if (db != (Object*)0 && (IRBlock*)db == H)
@@ -15761,7 +15861,7 @@ class OptProfile
         for (u32 i = (u32)0; i < H.phis().count(); i = i + (u32)1)
             {
             IRInsn* p = (IRInsn*)H.phis().get(i);
-            if (rotUsedOutside(fn, p.res(), H, B))
+            if (rotUsedOutsideLoop(fn, p.res()))
                 {
                 anyEscape = true;
                 break;
@@ -15778,9 +15878,24 @@ class OptProfile
 
         _rotH = H;
         _rotB = B;
+        _rotL = L;
         _rotE = E;
         _rotCond = c0.val();
         return true;
+        }
+
+    // Is `v` read anywhere outside the header and the loop's body region?
+    bool rotUsedOutsideLoop(IRFunc* fn, IRValue* v)
+        {
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            if (bb == _rotH || rotInRegion(bb))
+                continue;
+            if (unrollUsesValue(bb, v))
+                return true;
+            }
+        return false;
         }
 
     bool rotIsLatch(IRBlock* b, IRBlock* H)
@@ -15819,7 +15934,7 @@ class OptProfile
         {
         IRBlock* H = _rotH;
         IRBlock* B = _rotB;
-        IRBlock* E = _rotE;
+        IRBlock* L = _rotL;
 
         // 1. Each phi's (preheader init, back-edge next) operands.
         Array* phis = new Array();
@@ -15835,7 +15950,7 @@ class OptProfile
                 {
                 IROperand* bo = (IROperand*)phi.ops().get(k);
                 IROperand* vo = (IROperand*)phi.ops().get(k + (u32)1);
-                if (bo.blk() == B)
+                if (bo.blk() == L)
                     fromB = vo;
                 else
                     fromPH = vo;
@@ -15877,13 +15992,19 @@ class OptProfile
             p.setRes((IRValue*)pbVals.get(i));
             p.add(IROperand.block(H));
             p.add((IROperand*)initOp.get(i));
-            p.add(IROperand.block(B));
+            p.add(IROperand.block(L));
             p.add((IROperand*)nextMapped.get(i));
             pbPhis.add((Object*)p);
             }
 
-        // 3. In the body, this iteration's phi values become the new B-phis.
-        rotRemapBlock(B, bMap);
+        // 3. In the body, this iteration's phi values become the new B-phis. B
+        //    dominates every block of the region, so they are valid throughout.
+        for (u32 rb = (u32)0; rb < fn.blocks().count(); rb = rb + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(rb);
+            if (rotInRegion(bb))
+                rotRemapBlock(bb, bMap);
+            }
         for (u32 i = (u32)0; i < pbPhis.count(); i = i + (u32)1)
             B.phis().insert(i, pbPhis.get(i));
 
@@ -15898,7 +16019,7 @@ class OptProfile
             if (nx.kind() == (u8)OPK_USE)
                 gMap.set((Hashable*)((IRInsn*)phis.get(i)).res(), (Object*)nx.val());
             }
-        IRValue* cB = rotCloneGuard(H, B, gMap);
+        IRValue* cB = rotCloneGuard(H, L, gMap);
 
         // 5. In H — now the peeled test — each phi value becomes its preheader
         //    init. That init may be an IMMEDIATE, so this substitutes operands
@@ -15930,7 +16051,7 @@ class OptProfile
         bt.add(IROperand.useVal(cB));
         bt.add(h1.blk() == B ? IROperand.block(B) : h1);
         bt.add(h2.blk() == B ? IROperand.block(B) : h2);
-        B.setTerm(bt);
+        L.setTerm(bt);
 
         // 7. H keeps its (now init-using) guard and branch; its phis are gone,
         //    since it is entered only from the preheader — the back edge is B→B.
@@ -15980,14 +16101,14 @@ class OptProfile
     void rotExitPhis(IRFunc* fn, Array* phis, Array* initOp, Array* nextMapped)
         {
         IRBlock* H = _rotH;
-        IRBlock* B = _rotB;
+        IRBlock* L = _rotL;
         IRBlock* E = _rotE;
         Array* exitPhis = new Array();
         Map* exitMap = new Map();
         for (u32 i = (u32)0; i < phis.count(); i = i + (u32)1)
             {
             IRValue* pid = ((IRInsn*)phis.get(i)).res();
-            if (!rotUsedOutside(fn, pid, H, B))
+            if (!rotUsedOutsideLoop(fn, pid))
                 continue;
             IRValue* v = new IRValue(pid.ty());
             // The B→E incoming is the carried value on the exit edge as
@@ -15997,7 +16118,7 @@ class OptProfile
             ep.setRes(v);
             ep.add(IROperand.block(H));
             ep.add(initOp.get(i));
-            ep.add(IROperand.block(B));
+            ep.add(IROperand.block(L));
             ep.add(bInc);
             E.phis().insert((u32)0, (Object*)ep);
             exitPhis.add((Object*)ep);
@@ -16008,7 +16129,7 @@ class OptProfile
         for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
             {
             IRBlock* bb = (IRBlock*)fn.blocks().get(b);
-            if (bb == H || bb == B)
+            if (bb == H || rotInRegion(bb))
                 continue;
             for (u32 k = (u32)0; k < bb.phis().count(); k = k + (u32)1)
                 {
