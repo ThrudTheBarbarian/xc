@@ -118,7 +118,7 @@ static int ak_win_of(NSView* v)
  * it happened over, and how many notches.  So the wheel packs both into that word: the window in
  * the high bits, the (signed) notch count in the low byte.  The driver unpacks it; it is a private
  * encoding between this shim and xgAKDispatch, not part of the seam. */
-#define AK_WHEEL_PACK(win, n) (((win) << 8) | ((n) & 0xFF))
+#define AK_WHEEL_PACK(win, px) (((win) << 16) | ((px) & 0xFFFF))
 static void ak_mouseMoved(__unsafe_unretained id self, SEL _cmd, __unsafe_unretained id ev)
     {
     if (!g_dispatch)
@@ -138,14 +138,13 @@ static void ak_scrollWheel(__unsafe_unretained id self, SEL _cmd, __unsafe_unret
     if (!g_dispatch)
         return;
     NSPoint p = [(NSView*)self convertPoint:[(NSEvent*)ev locationInWindow] fromView:nil];
-    /* Notches, not pixels: the toolkit's wheel event counts notches (UXEventWheel: "a = notches").
-     * A precise trackpad delta that rounds to 0 is turned into a one-notch push rather than
-     * dropped, so a slow two-finger scroll is never silently lost. */
+    /* PIXELS, the browser's contract.  A precise device (trackpad / Magic Mouse) reports pixels
+     * already; a line-based wheel reports LINES, and one line steps 100px the way WebKit and Chrome
+     * do, so a click zooms the map the ~17% the web client does rather than the ~1.6% a 10px notch
+     * gave.  Passing the delta unrounded, as the browser does. */
     double dy = [(NSEvent*)ev scrollingDeltaY];
-    int notches = (int)(dy / 10.0);
-    if (notches == 0 && dy != 0.0)
-        notches = dy > 0.0 ? 1 : -1;
-    g_dispatch(11, (int)p.x, (int)p.y, AK_WHEEL_PACK(ak_win_of((NSView*)self), notches)); // 11 = UXEventWheel
+    int px = [(NSEvent*)ev hasPreciseScrollingDeltas] ? (int)dy : (int)(dy * 100.0);
+    g_dispatch(11, (int)p.x, (int)p.y, AK_WHEEL_PACK(ak_win_of((NSView*)self), px)); // 11 = UXEventWheel
     }
 /* A tracking area is what makes AppKit send mouseMoved: — without one the message is never
  * delivered, which is why the toolkit heard clicks and nothing else.  The rect is NSZeroRect with
@@ -371,10 +370,8 @@ static void ak_glScrollWheel(__unsafe_unretained id self, SEL _cmd, __unsafe_unr
         return;
     NSPoint p = [g_view[h] convertPoint:[(NSEvent*)ev locationInWindow] fromView:nil];
     double dy = [(NSEvent*)ev scrollingDeltaY];
-    int notches = (int)(dy / 10.0);
-    if (notches == 0 && dy != 0.0)
-        notches = dy > 0.0 ? 1 : -1;
-    g_dispatch(11, (int)p.x, (int)p.y, AK_WHEEL_PACK(h, notches));
+    int px = [(NSEvent*)ev hasPreciseScrollingDeltas] ? (int)dy : (int)(dy * 100.0);
+    g_dispatch(11, (int)p.x, (int)p.y, AK_WHEEL_PACK(h, px));
     }
 
 static Class ak_gl_class(void)
@@ -3148,6 +3145,9 @@ void ux_ak_make_scroll(int handle, int node, int x, int y, int w, int h, int con
         return;
     NSScrollView* nsv = [[NSScrollView alloc] initWithFrame:NSMakeRect(x, y, w, h)];
     [nsv setHasVerticalScroller:YES];
+    /* Hide the bar when the whole page fits, the way the browser's `overflow: auto` does -- a
+     * panel whose content is shorter than it should not wear a scrollbar. */
+    [nsv setAutohidesScrollers:YES];
     [nsv setBorderType:NSBezelBorder];
     NSSize cs = [nsv contentSize];
     int dh = contentH > (int)cs.height ? contentH : (int)cs.height;

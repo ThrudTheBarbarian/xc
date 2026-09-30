@@ -260,18 +260,20 @@ void xgAKDispatch(i32 kind, i32 x, i32 y, i32 key)
         {
         gAKEvent.handle = key;
         }
-    // The wheel packs (window, notches) into the one dispatch word: window in the high bits, the
-    // signed notch count in the low byte (see AK_WHEEL_PACK in libUXAppKit.m).  Unpack to the
-    // event's handle and a -- the wheel's own contract is "x,y = point, a = notches".
+    // The wheel packs (window, deltaY in PIXELS) into the one dispatch word: window in the high
+    // bits, the signed pixel delta in the low 16 (AK_WHEEL_PACK in libUXAppKit.m).  UXEventWheel's
+    // contract: x,y = point; b = pixels (the browser's deltaY); a = notches, ~px/100, kept for the
+    // readers that still count notches.
     if (kind == (i32)UXEventWheel)
         {
-        i32 n = key & (i32)$FF;
-        if (n >= (i32)128)
+        i32 px = key & (i32)$FFFF;
+        if (px >= (i32)32768)
             {
-            n = n - (i32)256;
+            px = px - (i32)65536;
             }
-        gAKEvent.handle = key >> 8;
-        gAKEvent.a = n;
+        gAKEvent.handle = key >> 16;
+        gAKEvent.b = px;
+        gAKEvent.a = px / (i32)100;
         }
     gAKApp.dispatchEvent(gAKEvent);
     gAKApp.displayIfNeeded();
