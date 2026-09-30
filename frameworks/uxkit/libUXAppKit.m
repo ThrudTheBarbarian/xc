@@ -473,6 +473,14 @@ void ux_ak_gl_place(int handle, void* peer, int x, int y, int w, int h, int hidd
         return;
     NSView* v = [[ak_gl_class() alloc] initWithFrame:NSMakeRect(x, y, w, h)];
     [v setWantsBestResolutionOpenGLSurface:YES];
+    /* The GL surface is a LAYER, not a plain sibling plane.  A window that mixes an
+     * NSOpenGLView's own surface with a transparent layer-backed overlay (the ink/menu
+     * surface) composites the two as separate planes, and a region of one goes stale
+     * intermittently (client-reported).  With the GL layer-backed too, the window server
+     * orders both in ONE layer tree -- PLAN 6's "prefer the layer-backed surface" -- so
+     * there is nothing to go stale.  Must be set before makeGLContext, whose context binds
+     * to the layer AppKit makes here. */
+    [v setWantsLayer:YES];
     g_glPeer[g_glCount] = peer;
     g_glView[g_glCount] = v;
     g_glCtx[g_glCount] = nil;
