@@ -2612,12 +2612,22 @@ void ux_ak_set_control_hidden(int handle, int node, int on)
     NSView* v = g_ctl[handle][node];
     if (v)
         {
+        /* Hiding an overlay leaves its region to the view BELOW: mark that area dirty so the map
+         * under a just-hidden menu is recomposited (a stale dark panel is the client's report).
+         * Showing marks the view itself. */
+        if (on)
+            {
+            NSView* par = [v superview];
+            if (par)
+                {
+                [par setNeedsDisplayInRect:[v frame]];
+                }
+            }
         [v setHidden:(on ? YES : NO)];
-        /* Showing a view must repaint it: a view that was hidden while its content changed comes
-         * back with a stale backing otherwise, and a surface that never drew shows as a blank or
-         * garbage rectangle.  Mark it dirty on the way IN (not out). */
         if (!on)
+            {
             [v setNeedsDisplay:YES];
+            }
         }
     }
 // Springs & struts (UX_ANCHOR_* | UX_FLEX_*, see UXViewDriver.xt) -> NSView autoresizing mask, so
