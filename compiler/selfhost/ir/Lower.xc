@@ -10617,7 +10617,20 @@ class ClassInfo
             }
         if (ci == 0)
             {
-            giveUp(String.withCString("method call on a non-class"));
+            // A bare name that is not a class, a value or anything else in
+            // scope — `Files.exists(p)` without the import — says so at the
+            // name, as a plain unbound identifier does (bug 571). It used to
+            // say "method call on a non-class" with no position at all.
+            Node* recv = n.kid((u32)0);
+            if (recv != (Node*)0 && recv.kind() == (u16)nkIdent && recv.name() != (String*)0
+                && _classes.get((Hashable*)recv.name()) == 0)
+                {
+                String* w = String.withCString("unbound identifier ");
+                w.append(recv.name());
+                giveUpAt(w, recv);
+                return (IRValue*)0;
+                }
+            giveUpAt(String.withCString("method call on a non-class"), n);
             return (IRValue*)0;
             }
 
