@@ -100,28 +100,24 @@ class BitSet
         }
     }
 
-    // One value's live interval, in doubled positions.
-    class Interval
+    // One piece of a value's liveness, in doubled positions. `allow` is the
+    // one value it may overlap: a phi's edge-copy point allows the value that
+    // edge copies in (-1: none).
+    class Seg
     {
     u32 _lo;
     u32 _hi;
+    i64 _allow;
     void init(void)
         {
         }
-    static Interval* with(u32 lo, u32 hi)
+    static Seg* with(u32 lo, u32 hi, i64 allow)
         {
-        Interval* i = new Interval();
-        i._lo = lo;
-        i._hi = hi;
-        return i;
-        }
-    u32 lo(void)
-        {
-        return _lo;
-        }
-    u32 hi(void)
-        {
-        return _hi;
+        Seg* g = new Seg();
+        g._lo = lo;
+        g._hi = hi;
+        g._allow = allow;
+        return g;
         }
     }
 
@@ -138,7 +134,6 @@ class BitSet
     Array* _usePos;   // per value: Number@ positions of its uses
     Array* _blkStart; // Number@ per block: its first position
     Array* _weight;   // Number@ per value: uses weighted by loop depth
-    BitSet* _phiResults;
     BitSet* _excluded;
     Array* _callPos; // Number@
 
@@ -154,6 +149,10 @@ class BitSet
     Array* _start; // Number@ per value, doubled
     Array* _end;
     BitSet* _crossesCall;
+    Array* _segs;    // per value: Seg@ list, or 0
+    Array* _segLo;   // per value: span of its segments
+    Array* _segHi;
+    Array* _related; // per value: Number@ phis it feeds / values it is fed
     Map* _home;          // value id (as Number@ key) -> register name
     Array* _usedCallee;  // callee-saved registers actually homed in
     Array* _preExcluded; // ids a BACK END rules out before the run
@@ -272,7 +271,6 @@ class BitSet
             _usePos.add((Object*)new Array());
             _weight.add((Object*)Number.with((u32)0));
             }
-        _phiResults = BitSet.withCapacity(_nv);
         _excluded = BitSet.withCapacity(_nv);
         for (u32 i = (u32)0; i < _preExcluded.count(); i = i + (u32)1)
             {
@@ -343,7 +341,6 @@ class BitSet
                     _defPos.set(v, (Object*)Number.with(pos));
                     defs.add(v);
                     ((BitSet*)_phiResAt.get(bi)).add(v);
-                    _phiResults.add(v);
                     }
                 pos = pos + (u32)1;
                 }
@@ -543,24 +540,176 @@ class BitSet
             _start.set(v, (Object*)Number.with(st));
             _end.set(v, (Object*)Number.with(en));
             }
+        segments();
         _crossesCall = BitSet.withCapacity(_nv);
         for (u32 v = (u32)0; v < _nv; v = v + (u32)1)
             {
-            Object* so = _start.get(v);
-            if (so == 0)
+            Array* sg = (Array*)_segs.get(v);
+            if (sg == (Array*)0)
                 continue;
-            u32 s = ((Number*)so).asU32();
-            u32 e = ((Number*)_end.get(v)).asU32();
             for (u32 i = (u32)0; i < _callPos.count(); i = i + (u32)1)
                 {
                 u32 c = (u32)2 * ((Number*)_callPos.get(i)).asU32();
-                if (s <= c && c <= e)
+                bool hit = false;
+                for (u32 k = (u32)0; k < sg.count(); k = k + (u32)1)
+                    {
+                    Seg* g = (Seg*)sg.get(k);
+                    if (g._lo <= c && c <= g._hi)
+                        hit = true;
+                    }
+                if (hit)
                     {
                     _crossesCall.add(v);
                     i = _callPos.count();
                     }
                 }
             }
+        }
+
+    // The hull [start,end] is filled by a loop-carried value from its phi to
+    // the back edge. Two values conflict only where BOTH are live, so each
+    // value also gets one segment per block it is live in: from the block's
+    // start (live-in) or its definition, to the block's end (live-out) or its
+    // last use there. A phi additionally occupies a point at the end of each
+    // predecessor, where its edge copy writes it; that point may overlap the
+    // value copied in on that edge, so the two can share a register and the
+    // copy disappears. `_related` pairs a phi with its incoming values, so
+    // each prefers the other's register. Mirrors the original.
+    void segments(void)
+        {
+        _segs = new Array();
+        _related = new Array();
+        _segLo = new Array();
+        _segHi = new Array();
+        for (u32 v = (u32)0; v < _nv; v = v + (u32)1)
+            {
+            _related.add((Object*)0);
+            _segLo.add((Object*)0);
+            _segHi.add((Object*)0);
+            if (_start.get(v) == 0)
+                {
+                _segs.add((Object*)0);
+                continue;
+                }
+            Array* list = new Array();
+            Object* dpo = _defPos.get(v);
+            bool hasDef = dpo != 0;
+            u32 dp = hasDef ? ((Number*)dpo).asU32() : (u32)0;
+            for (u32 bi = (u32)0; bi < _nb; bi = bi + (u32)1)
+                {
+                u32 bs = ((Number*)_blkStart.get(bi)).asU32();
+                u32 be = ((Number*)_blkEnd.get(bi)).asU32();
+                bool inL = ((BitSet*)_liveIn.get(bi)).has(v);
+                bool outL = ((BitSet*)_liveOut.get(bi)).has(v);
+                bool defHere = hasDef && dp >= bs && dp <= be;
+                if (!inL && !defHere)
+                    continue;
+                u32 lo = inL ? (u32)2 * bs : (u32)2 * dp + (u32)1;
+                u32 hi = lo;
+                if (outL)
+                    hi = (u32)2 * be + (u32)2;
+                else
+                    {
+                    Array* ps = (Array*)_usePos.get(v);
+                    for (u32 i = (u32)0; i < ps.count(); i = i + (u32)1)
+                        {
+                        u32 p = ((Number*)ps.get(i)).asU32();
+                        if (p >= bs && p <= be && (u32)2 * p > hi)
+                            hi = (u32)2 * p;
+                        }
+                    }
+                list.add((Object*)Seg.with(lo, hi, (i64)-1));
+                }
+            _segs.add((Object*)list);
+            }
+        for (u32 bi = (u32)0; bi < _nb; bi = bi + (u32)1)
+            {
+            IRBlock* b = (IRBlock*)_fn.blocks().get(bi);
+            for (u32 i = (u32)0; i < b.phis().count(); i = i + (u32)1)
+                {
+                IRInsn* phi = (IRInsn*)b.phis().get(i);
+                if (phi.res() == 0)
+                    continue;
+                u32 pv = phi.res().pid();
+                Array* pl = (Array*)_segs.get(pv);
+                if (pl == (Array*)0)
+                    continue;
+                for (u32 k = (u32)0; k + (u32)1 < phi.ops().count(); k = k + (u32)2)
+                    {
+                    IROperand* bo = (IROperand*)phi.ops().get(k);
+                    IROperand* vo = (IROperand*)phi.ops().get(k + (u32)1);
+                    if (bo.kind() != (u8)OPK_BLOCK || bo.blk() == 0)
+                        continue;
+                    i32 pbi = blockIndexOf(bo.blk());
+                    if (pbi < (i32)0)
+                        continue;
+                    u32 c = (u32)2 * ((Number*)_blkEnd.get((u32)pbi)).asU32();
+                    i64 allow = (vo.kind() == (u8)OPK_USE && vo.val() != 0) ? (i64)vo.val().pid() : (i64)-1;
+                    pl.add((Object*)Seg.with(c, c, allow));
+                    if (allow >= (i64)0)
+                        {
+                        relate(pv, (u32)allow);
+                        relate((u32)allow, pv);
+                        }
+                    }
+                }
+            }
+        for (u32 v = (u32)0; v < _nv; v = v + (u32)1)
+            {
+            Array* sg = (Array*)_segs.get(v);
+            if (sg == (Array*)0 || sg.count() == (u32)0)
+                continue;
+            u32 lo = ((Seg*)sg.get((u32)0))._lo;
+            u32 hi = ((Seg*)sg.get((u32)0))._hi;
+            for (u32 k = (u32)1; k < sg.count(); k = k + (u32)1)
+                {
+                Seg* g = (Seg*)sg.get(k);
+                if (g._lo < lo) lo = g._lo;
+                if (g._hi > hi) hi = g._hi;
+                }
+            _segLo.set(v, (Object*)Number.with(lo));
+            _segHi.set(v, (Object*)Number.with(hi));
+            }
+        }
+
+    void relate(u32 a, u32 b)
+        {
+        if (a >= _nv)
+            return;
+        Array* l = (Array*)_related.get(a);
+        if (l == (Array*)0)
+            {
+            l = new Array();
+            _related.set(a, (Object*)l);
+            }
+        l.add((Object*)Number.with(b));
+        }
+
+    // Do x and y need different registers? Only where both are live, and a
+    // phi's edge copy does not collide with the value it copies.
+    bool conflict(u32 x, u32 y)
+        {
+        Array* sx = (Array*)_segs.get(x);
+        Array* sy = (Array*)_segs.get(y);
+        if (sx == (Array*)0 || sy == (Array*)0 || sx.count() == (u32)0 || sy.count() == (u32)0)
+            return false;
+        if (((Number*)_segHi.get(x)).asU32() < ((Number*)_segLo.get(y)).asU32()
+            || ((Number*)_segHi.get(y)).asU32() < ((Number*)_segLo.get(x)).asU32())
+            return false;
+        for (u32 i = (u32)0; i < sx.count(); i = i + (u32)1)
+            {
+            Seg* a = (Seg*)sx.get(i);
+            for (u32 j = (u32)0; j < sy.count(); j = j + (u32)1)
+                {
+                Seg* b = (Seg*)sy.get(j);
+                if (a._lo > b._hi || b._lo > a._hi)
+                    continue;
+                if (a._allow == (i64)y || b._allow == (i64)x)
+                    continue;
+                return true;
+                }
+            }
+        return false;
         }
 
     // Every value that could take a register, split by class and ordered by how
@@ -682,6 +831,20 @@ class BitSet
         return false;
         }
 
+    // Values whose segments do not conflict share a register, and a value
+    // first tries the registers of the values it is copied to or from at a
+    // phi, so the copy disappears. Mirrors the original.
+    bool fits(u32 v, u32 r, Array* regVals, bool mayUseCaller, u32 nCaller)
+        {
+        if (!mayUseCaller && r < nCaller)
+            return false; // needs callee-saved
+        Array* occ = (Array*)regVals.get(r);
+        for (u32 k = (u32)0; k < occ.count(); k = k + (u32)1)
+            if (conflict(v, ((Number*)occ.get(k)).asU32()))
+                return false;
+        return true;
+        }
+
     void assign(Array* cands, Array* callee, Array* caller)
         {
         Array* pool = new Array();
@@ -692,51 +855,36 @@ class BitSet
         u32 nr = pool.count();
         if (nr == (u32)0)
             return;
-        Array* regIvls = new Array();
-        Array* exclusive = new Array();
+        Array* regVals = new Array();
         for (u32 i = (u32)0; i < nr; i = i + (u32)1)
-            {
-            regIvls.add((Object*)new Array());
-            exclusive.add((Object*)Number.with((u32)0));
-            }
+            regVals.add((Object*)new Array());
         for (u32 ci = (u32)0; ci < cands.count(); ci = ci + (u32)1)
             {
             u32 v = ((Number*)cands.get(ci)).asU32();
-            u32 s = ((Number*)_start.get(v)).asU32();
-            u32 e = ((Number*)_end.get(v)).asU32();
-            bool isPhi = _phiResults.has(v);
             bool mayUseCaller = !_crossesCall.has(v);
             i32 chosen = (i32)-1;
-            for (u32 r = (u32)0; r < nr && chosen < (i32)0; r = r + (u32)1)
+            Array* rel = (Array*)_related.get(v);
+            for (u32 k = (u32)0; rel != (Array*)0 && k < rel.count() && chosen < (i32)0; k = k + (u32)1)
                 {
-                if (!mayUseCaller && r < caller.count())
+                String* hr = homeOf(((Number*)rel.get(k)).asU32());
+                if (hr == (String*)0)
                     continue;
-                if (((Number*)exclusive.get(r)).asU32() != (u32)0)
-                    continue;
-                Array* ivls = (Array*)regIvls.get(r);
-                if (isPhi)
-                    {
-                    if (ivls.count() == (u32)0)
-                        chosen = (i32)r;
-                    continue;
-                    }
-                bool ok = true;
-                for (u32 k = (u32)0; k < ivls.count() && ok; k = k + (u32)1)
-                    {
-                    Interval* iv = (Interval*)ivls.get(k);
-                    if (s <= iv.hi() && iv.lo() <= e)
-                        ok = false;
-                    }
-                if (ok)
-                    chosen = (i32)r;
+                for (u32 r = (u32)0; r < nr; r = r + (u32)1)
+                    if (((String*)pool.get(r)).equals(hr))
+                        {
+                        if (fits(v, r, regVals, mayUseCaller, caller.count()))
+                            chosen = (i32)r;
+                        r = nr;
+                        }
                 }
+            for (u32 r = (u32)0; r < nr && chosen < (i32)0; r = r + (u32)1)
+                if (fits(v, r, regVals, mayUseCaller, caller.count()))
+                    chosen = (i32)r;
             if (chosen < (i32)0)
                 continue; // unhomed: stays in its slot
             String* reg = (String*)pool.get((u32)chosen);
             _home.set((Hashable*)Number.with(v), (Object*)reg);
-            ((Array*)regIvls.get((u32)chosen)).add((Object*)Interval.with(s, e));
-            if (isPhi)
-                exclusive.set((u32)chosen, (Object*)Number.with((u32)1));
+            ((Array*)regVals.get((u32)chosen)).add((Object*)Number.with(v));
             // A caller-saved home needs no prologue save; a callee-saved one is
             // recorded once, in pool order.
             if ((u32)chosen >= caller.count() && !hasReg(_usedCallee, reg))

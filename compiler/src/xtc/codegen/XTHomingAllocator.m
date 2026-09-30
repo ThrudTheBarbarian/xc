@@ -102,7 +102,6 @@
     NSMutableDictionary<NSNumber*, NSNumber*>* defPos = [NSMutableDictionary dictionary];
     NSMutableDictionary<NSNumber*, NSNumber*>* lastUse = [NSMutableDictionary dictionary];
     NSMutableDictionary<NSNumber*, NSNumber*>* useCount = [NSMutableDictionary dictionary];
-    NSMutableSet<NSNumber*>* phiResults = [NSMutableSet set];
     NSMutableArray<NSNumber*>* callPositions = [NSMutableArray array];
 
     __block NSInteger pos = 0;
@@ -118,7 +117,6 @@
                 defPos[@(phi.result.valueId)] = @(pos);
                 [defs addObject:@(phi.result.valueId)];
                 [phiResAt[bi] addObject:@(phi.result.valueId)];
-                [phiResults addObject:@(phi.result.valueId)];
                 }
             pos++;
             }
@@ -283,15 +281,112 @@
         endOf[v] = @(en);
         }
 
-    // crosses-a-call: any call's doubled position lies within [start,end].
+    // ── live segments ────────────────────────────────────────────────────
+    // [start,end] above is the HULL, which a loop-carried value fills from its
+    // phi to the back edge. Two values conflict only where they are both live,
+    // so each value also gets one segment per block it is live in: from the
+    // block's start (live-in) or its definition, to the block's end (live-out)
+    // or its last use there. A phi additionally occupies a point at the end of
+    // each predecessor, where its edge copy writes it; that point may overlap
+    // the value copied in on that edge (seg[2]) — they can share a register,
+    // which turns the copy into nothing. `related` pairs a phi with its
+    // incoming values, so each prefers the other's register.
+    NSMutableDictionary<NSNumber*, NSMutableArray<NSArray<NSNumber*>*>*>* segs = [NSMutableDictionary dictionary];
+    NSMutableDictionary<NSNumber*, NSMutableArray<NSNumber*>*>* related = [NSMutableDictionary dictionary];
+    for (NSNumber* v in allVals)
+        {
+        NSMutableArray<NSArray<NSNumber*>*>* list = [NSMutableArray array];
+        NSInteger dp = defPos[v] ? defPos[v].integerValue : -1;
+        for (NSUInteger bi = 0; bi < nb; bi++)
+            {
+            NSInteger bs = blkStart[bi].integerValue, be = blkEnd[bi].integerValue;
+            BOOL inL = [liveIn[bi] containsObject:v], outL = [liveOut[bi] containsObject:v];
+            BOOL defHere = dp >= bs && dp <= be;
+            if (!inL && !defHere)
+                continue;
+            NSInteger lo = inL ? 2 * bs : 2 * dp + 1;
+            NSInteger hi = lo;
+            if (outL)
+                hi = 2 * be + 2;
+            else
+                for (NSNumber* pn in usePos[v])
+                    {
+                    NSInteger p = pn.integerValue;
+                    if (p >= bs && p <= be && 2 * p > hi)
+                        hi = 2 * p;
+                    }
+            [list addObject:@[ @(lo), @(hi), @(-1) ]];
+            }
+        segs[v] = list;
+        }
+    for (NSUInteger bi = 0; bi < nb; bi++)
+        for (XTIRInsn* phi in blocks[bi].phiNodes)
+            {
+            if (!phi.result || !segs[@(phi.result.valueId)])
+                continue;
+            NSNumber* pv = @(phi.result.valueId);
+            for (NSUInteger k = 0; k + 1 < phi.operands.count; k += 2)
+                {
+                XTIROperand *bo = phi.operands[k], *vo = phi.operands[k + 1];
+                if (bo.kind != XTIROperandKindBlock || !bo.blockRef)
+                    continue;
+                NSUInteger predBi = [blocks indexOfObjectIdenticalTo:bo.blockRef];
+                if (predBi == NSNotFound)
+                    continue;
+                NSInteger c = 2 * blkEnd[predBi].integerValue;
+                NSInteger allow = vo.kind == XTIROperandKindUse ? (NSInteger)vo.valueId : -1;
+                [segs[pv] addObject:@[ @(c), @(c), @(allow) ]];
+                if (allow >= 0)
+                    {
+                    if (!related[pv])
+                        related[pv] = [NSMutableArray array];
+                    [related[pv] addObject:@(allow)];
+                    if (!related[@(allow)])
+                        related[@(allow)] = [NSMutableArray array];
+                    [related[@(allow)] addObject:pv];
+                    }
+                }
+            }
+    // The span of each value's segments, to skip pairs that cannot meet.
+    NSMutableDictionary<NSNumber*, NSNumber*>*segLo = [NSMutableDictionary dictionary], *segHi = [NSMutableDictionary dictionary];
+    for (NSNumber* v in segs)
+        {
+        NSInteger lo = NSIntegerMax, hi = NSIntegerMin;
+        for (NSArray<NSNumber*>* sg in segs[v])
+            {
+            lo = MIN(lo, sg[0].integerValue);
+            hi = MAX(hi, sg[1].integerValue);
+            }
+        segLo[v] = @(lo);
+        segHi[v] = @(hi);
+        }
+    BOOL (^conflict)(NSNumber*, NSNumber*) = ^BOOL(NSNumber* x, NSNumber* y) {
+      if (segHi[x].integerValue < segLo[y].integerValue || segHi[y].integerValue < segLo[x].integerValue)
+          return NO;
+      for (NSArray<NSNumber*>* a in segs[x])
+          for (NSArray<NSNumber*>* b in segs[y])
+              {
+              if (a[0].integerValue > b[1].integerValue || b[0].integerValue > a[1].integerValue)
+                  continue;
+              if (a[2].integerValue == y.integerValue || b[2].integerValue == x.integerValue)
+                  continue; // a phi's edge copy meeting the value it copies
+              return YES;
+              }
+      return NO;
+    };
+
+    // crosses-a-call: any call's doubled position lies within one of its segments.
     NSMutableSet<NSNumber*>* crossesCall = [NSMutableSet set];
     for (NSNumber* v in allVals)
         {
-        NSInteger s = startOf[v].integerValue, e = endOf[v].integerValue;
         for (NSNumber* cp in callPositions)
             {
             NSInteger c = 2 * cp.integerValue;
-            if (s <= c && c <= e)
+            BOOL hit = NO;
+            for (NSArray<NSNumber*>* sg in segs[v])
+                if (sg[0].integerValue <= c && c <= sg[1].integerValue)
+                    hit = YES;
+            if (hit)
                 {
                 [crossesCall addObject:v];
                 break;
@@ -380,8 +475,9 @@
     NSMutableSet<NSString*>* usedCalleeSet = [NSMutableSet set];
     // assign one register class. `callee`/`caller` are the two tiers; a value is
     // offered caller-saved first when it crosses no call (no prologue save), else
-    // only callee-saved. Non-overlapping intervals share a register; phi results
-    // get an exclusive register (edge copies write it out of interval-model band).
+    // only callee-saved. Values whose segments do not conflict share a register,
+    // and a value first tries the registers of the values it is copied to or
+    // from at a phi, so the copy disappears.
     void (^assign)(NSArray<NSNumber*>*, NSArray<NSString*>*, NSArray<NSString*>*) =
         ^(NSArray<NSNumber*>* cands, NSArray<NSString*>* callee, NSArray<NSString*>* caller) {
           // Build a combined pool: caller-saved first (preferred), then callee-saved.
@@ -389,58 +485,39 @@
           [pool addObjectsFromArray:callee];
           NSSet<NSString*>* callerSet = [NSSet setWithArray:caller];
           NSUInteger nr = pool.count;
-          NSMutableArray<NSMutableArray<NSValue*>*>* regIvls = [NSMutableArray array];
-          NSMutableArray<NSNumber*>* exclusive = [NSMutableArray array];
+          NSMutableArray<NSMutableArray<NSNumber*>*>* regVals = [NSMutableArray array];
           for (NSUInteger i = 0; i < nr; i++)
-              {
-              [regIvls addObject:[NSMutableArray array]];
-              [exclusive addObject:@NO];
-              }
+              [regVals addObject:[NSMutableArray array]];
           for (NSNumber* v in cands)
               {
-              NSInteger s = startOf[v].integerValue, e = endOf[v].integerValue;
-              BOOL isPhi = [phiResults containsObject:v];
               BOOL mayUseCaller = ![crossesCall containsObject:v];
+              BOOL (^fits)(NSUInteger) = ^BOOL(NSUInteger r) {
+                if (!mayUseCaller && [callerSet containsObject:pool[r]])
+                    return NO; // needs callee-saved
+                for (NSNumber* y in regVals[r])
+                    if (conflict(v, y))
+                        return NO;
+                return YES;
+              };
               NSInteger chosen = -1;
-              for (NSUInteger r = 0; r < nr; r++)
+              for (NSNumber* rv in related[v])
                   {
-                  if (!mayUseCaller && [callerSet containsObject:pool[r]])
-                      continue; // needs callee-saved
-                  if (exclusive[r].boolValue)
-                      continue;
-                  if (isPhi)
-                      {
-                      if (regIvls[r].count == 0)
-                          {
-                          chosen = (NSInteger)r;
-                          break;
-                          }
-                      continue;
-                      }
-                  BOOL ok = YES;
-                  for (NSValue* iv in regIvls[r])
-                      {
-                      NSRange rg = iv.rangeValue;
-                      NSInteger s2 = (NSInteger)rg.location, e2 = s2 + (NSInteger)rg.length;
-                      if (s <= e2 && s2 <= e)
-                          {
-                          ok = NO;
-                          break;
-                          }
-                      }
-                  if (ok)
+                  NSString* hr = homeReg[rv];
+                  NSUInteger r = hr ? [pool indexOfObject:hr] : NSNotFound;
+                  if (r != NSNotFound && fits(r))
                       {
                       chosen = (NSInteger)r;
                       break;
                       }
                   }
+              for (NSUInteger r = 0; chosen < 0 && r < nr; r++)
+                  if (fits(r))
+                      chosen = (NSInteger)r;
               if (chosen < 0)
                   continue; // unhomed → stays in its slot
               NSString* reg = pool[chosen];
               homeReg[v] = reg;
-              [regIvls[chosen] addObject:[NSValue valueWithRange:NSMakeRange((NSUInteger)s, (NSUInteger)(e - s))]];
-              if (isPhi)
-                  exclusive[chosen] = @YES;
+              [regVals[chosen] addObject:v];
               if (![callerSet containsObject:reg] && ![usedCalleeSet containsObject:reg])
                   {
                   [usedCalleeSet addObject:reg];

@@ -4730,6 +4730,9 @@ class X86_64
                 IROperand* src = (IROperand*)srcs.get(i);
                 String* dh = homeOf((IRValue*)dests.get(i));
                 String* sh = (src.kind() == (u8)OPK_USE && src.val() != (IRValue*)0) ? homeOf(src.val()) : (String*)0;
+                // Coalesced: the phi and the value copied into it share a home.
+                if (dh != (String*)0 && sh != (String*)0 && dh.equals(sh))
+                    continue;
                 if (dh != (String*)0 && sh != (String*)0
                     && dh.hasPrefix(String.withCString("xmm")) && sh.hasPrefix(String.withCString("xmm")))
                     {

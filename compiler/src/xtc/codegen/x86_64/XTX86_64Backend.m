@@ -4959,6 +4959,9 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
             // accumulator of a reduction, whose chain is the loop's cost.
             NSString* dh = sHome[@(dests[i].valueId)];
             NSString* sh = srcs[i].kind == XTIROperandKindUse ? sHome[@(srcs[i].valueId)] : nil;
+            // Coalesced: the phi and the value copied into it share a home.
+            if (dh && sh && [dh isEqualToString:sh])
+                continue;
             if (dh && sh && [self isXmmHome:dh] && [self isXmmHome:sh])
                 {
                 if (![dh isEqualToString:sh])
