@@ -338,6 +338,12 @@ appkit-surface: ; XCC=$(XCC) sh run_appkit_surface.sh
 # headless, where there is no native control to move).  macOS-only.
 appkit-scrollpanel: ; XCC=$(XCC) sh run_appkit_scrollpanel.sh
 
+# ---- appkit-hud — the on-screen frame-time HUD (fps, fastest/last/slowest frame) --------------
+# The Metal-style readout as a toggleable UXKit view: it samples the app's own turn (no second
+# clock) and draws the extremes over a rolling second, so a weak device shows itself at a glance.
+# The gate runs 240 real turns and prints what the HUD would draw.  macOS-only.
+appkit-hud: ; XCC=$(XCC) sh run_appkit_hud.sh
+
 # ---- appkit-glbench — the GL FRAME harness (T0's instrument): four timed configurations ----
 # Checks the PLUMBING and not the numbers: a context made, the sheet uploaded, the device
 # ratio stated, one draw call per frame, four configurations timed, and both frame dumps
