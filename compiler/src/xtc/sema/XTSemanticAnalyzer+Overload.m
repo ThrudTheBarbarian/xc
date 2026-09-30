@@ -3254,28 +3254,6 @@ static NSInteger XTFmtWrapperIndex(BOOL isVarArgs, NSArray<XTParamNode*>* params
                 hint = [self parameterHintForMethodCall:node argument:i];
             [self analyzeArgument:arg withHint:hint];
             }
-        // Fit each integer conversion's length to its argument, so `%d`
-        // prints an i64 whole. Replace the format-string node with a fresh
-        // literal carrying the rewritten text.
-        if (fmtFirstVaIdx > 0 &&
-            [node.arguments[fmtFirstVaIdx - 1] isKindOfClass:[XTLiteralStringNode class]])
-            {
-            NSUInteger fmtIdx = fmtFirstVaIdx - 1;
-            XTLiteralStringNode* lit = (XTLiteralStringNode*)node.arguments[fmtIdx];
-            NSString* rewritten = [self typeDirectedFormatString:lit.stringValue
-                                                       arguments:node.arguments
-                                                      firstVaIdx:fmtFirstVaIdx];
-            if (rewritten)
-                {
-                XTLiteralStringNode* newLit =
-                    [[XTLiteralStringNode alloc] initWithString:rewritten
-                                                       location:lit.location];
-                newLit.resolvedType = lit.resolvedType;
-                NSMutableArray* newArgs = [node.arguments mutableCopy];
-                newArgs[fmtIdx] = newLit;
-                node.arguments = newArgs;
-                }
-            }
         }
     else
         {
@@ -3854,25 +3832,17 @@ static NSInteger XTFmtWrapperIndex(BOOL isVarArgs, NSArray<XTParamNode*>* params
                      ([node.methodName isEqualToString:@"error"] ||
                       [node.methodName isEqualToString:@"warning"] ||
                       [node.methodName isEqualToString:@"info"]));
+    // Fitting the lengths waits until here, after resolution, because an
+    // argument read out of a typed collection is only unboxed to its integer
+    // type by then — fitted any earlier, `%ld` stayed and read 8 bytes.
     if (fmtCheck)
         {
         NSUInteger fmtIdx = [node.methodName isEqualToString:@"printfAt"] ? 2 : 0;
-        if (node.arguments.count > fmtIdx)
-            {
-            XTASTNode* fmtArg = node.arguments[fmtIdx];
-            if ([fmtArg isKindOfClass:[XTLiteralStringNode class]])
-                {
-                NSString* fmt = ((XTLiteralStringNode*)fmtArg).stringValue;
-                [self checkPrintfFormat:fmt
-                              arguments:node.arguments
-                             firstVaIdx:fmtIdx + 1
-                               location:node.location
-                               callName:[NSString stringWithFormat:@"%@.%@", className, node.methodName]];
-                }
-            }
-        NSArray* promoted = [self promotedFormatArguments:node.arguments firstVaIdx:fmtIdx + 1];
-        if (promoted)
-            node.arguments = promoted;
+        node.arguments = [self formatCallArguments:node.arguments
+                                            fmtIdx:fmtIdx
+                                          location:node.location
+                                          callName:[NSString stringWithFormat:@"%@.%@", className, node.methodName]]
+                             ?: node.arguments;
         }
     else if (fmtWrapperKey && self.formatWrappers[fmtWrapperKey])
         {
