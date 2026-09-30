@@ -3308,6 +3308,12 @@ void ux_ak_make_surface(int handle, int node, int x, int y, int w, int h, void* 
     [s setWantsLayer:YES];
     [s.layer setOpaque:NO];
     [s.layer setBackgroundColor:NULL]; // no background: transparent where nothing is drawn
+    /* A big layer is drawn in backing-store TILES, and a tile that is not redrawn shows as a stale
+     * quadrant over the map (client-reported: the lower-left quarter, exactly a 2x2 split of the
+     * 2560x1664 px layer at 2x).  Redraw the whole layer whenever the view is marked dirty, and
+     * match the window's backing scale once it is in a window, or a tile is drawn at 1x into a 2x
+     * layer and covers a quarter of it. */
+    [s setLayerContentsRedrawPolicy:NSViewLayerContentsRedrawOnSetNeedsDisplay];
     if (g_surface_n < UX_MAXSURFACE)
         {
         g_surface_view[g_surface_n] = s;
@@ -3323,6 +3329,11 @@ void ux_ak_make_surface(int handle, int node, int x, int y, int w, int h, void* 
         {
         [s setFrame:[content convertRect:NSMakeRect(x, y, w, h) toView:target]];
         [target addSubview:s];
+        NSWindow* sw = [s window];
+        if (sw)
+            {
+            [s.layer setContentsScale:[sw backingScaleFactor]];
+            }
         }
     g_ctl[handle][node] = s;
     [s setNeedsDisplay:YES];
