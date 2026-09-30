@@ -800,19 +800,33 @@ Array* dylibImportDeps(Array* neededLibs)
 // -rpath. A `.tbd` names a shared-cache library dyld finds without help, so it
 // adds none. Without the dylib directories a program importing a library
 // from /opt/xcc/3p (`#use <tls>`) built but could not load it.
+// The directory a dylib's rpath names, or "" for none. A library in the
+// current directory gets none: "." is resolved against wherever the program is
+// RUN from, and the @loader_path every image carries already finds a library
+// beside the binary — which is also all the reference's in-process link writes.
+String* rpathDirOf(String* lp)
+{
+    String* dir = lp.deletingLastPathComponent();
+    if (dir.equals(String.withCString(".")) || dir.equals(String.withCString("./")))
+        return String.withCString("");
+    for (u32 i = (u32)0; i < lp.byteLength(); i = i + (u32)1)
+        if (lp.byteAt(i) == (u8)'/') return dir;
+    return String.withCString("");
+}
+
 Array* arm64Rpaths(DriverOptions* d, Array* neededLibs)
 {
     Array* out = new Array();
     Array* dirs = new Array();
     for (u32 i = (u32)0; neededLibs != (Array*)0 && i < neededLibs.count(); i = i + (u32)1) {
         String* lp = (String*)neededLibs.get(i);
-        if (lp.hasSuffix(String.withCString(".dylib"))) dirs.add((Object*)lp.deletingLastPathComponent());
+        if (lp.hasSuffix(String.withCString(".dylib"))) dirs.add((Object*)rpathDirOf(lp));
     }
     Array* li = d.linkInputs();
     for (u32 i = (u32)0; li != (Array*)0 && i < li.count(); i = i + (u32)1) {
         String* lp = resolveLinkInput(d, (String*)li.get(i));
         if (lp != (String*)0 && lp.hasSuffix(String.withCString(".dylib")))
-            dirs.add((Object*)lp.deletingLastPathComponent());
+            dirs.add((Object*)rpathDirOf(lp));
     }
     for (u32 i = (u32)0; i < d.rpaths().count(); i = i + (u32)1)
         dirs.add(d.rpaths().get(i));
