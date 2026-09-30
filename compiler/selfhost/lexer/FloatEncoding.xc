@@ -134,6 +134,7 @@ class FloatEncoding
     static i32 _rExp;
     static bool _rZero;
     static bool _rInf;
+    static bool _rDen; // _rHi/_rLo hold a denormal's raw fraction
 
     static void _convert(BigNat* m, i32 k)
         {
@@ -142,6 +143,7 @@ class FloatEncoding
         _rExp = (i32)0;
         _rZero = false;
         _rInf = false;
+        _rDen = false;
 
         if (m.isZero())
             {
@@ -217,28 +219,44 @@ class FloatEncoding
             return;
             }
 
+        // Below 2^-1022 the value is DENORMAL: its last bit weighs 2^-1074
+        // whatever its size, so fewer than 53 bits are kept, and the rounding
+        // happens there — once, not at 53 bits and again at the denormal's.
+        i32 exp = ((i32)60 - (i32)j) - e2; // weight of the significand's top bit
+        u32 keep = (u32)53;
+        if (exp < (i32)-1022)
+            {
+            i32 kk = (i32)53 - ((i32)-1022 - exp);
+            if (kk < (i32)0)
+                {
+                _rZero = true;
+                return;
+                }
+            keep = (u32)kk;
+            _rDen = true;
+            }
         u32 hi = (u32)0;
         u32 lo = (u32)0;
-        for (u32 t = (u32)0; t < (u32)53; t = t + (u32)1)
+        for (u32 t = (u32)0; t < keep; t = t + (u32)1)
             {
             hi = ((hi << (u32)1) | (lo >> (u32)31)) & (u32)$1FFFFF;
             lo = (lo << (u32)1) | bits[j + t];
             }
-        u32 rbit = bits[j + (u32)53];
+        u32 rbit = bits[j + keep];
         bool sticky = !num.isZero();
-        for (u32 t = j + (u32)54; t < (u32)61; t = t + (u32)1)
+        for (u32 t = j + keep + (u32)1; t < (u32)61; t = t + (u32)1)
             if (bits[t] != (u32)0)
                 sticky = true;
 
-        // Nearest, ties to even.
-        i32 exp = ((i32)60 - (i32)j) - e2; // weight of the significand's top bit
+        // Nearest, ties to even. A denormal that rounds up into bit 52 has
+        // become the smallest normal, which its encoding already says.
         if (rbit != (u32)0 && (sticky || (lo & (u32)1) != (u32)0))
             {
             lo = lo + (u32)1;
             if (lo == (u32)0)
                 hi = hi + (u32)1;
             // carried out of 53 bits: 2^53
-            if (hi > (u32)$1FFFFF)
+            if (!_rDen && hi > (u32)$1FFFFF)
                 {
                 hi = (u32)$100000;
                 lo = (u32)0;
@@ -275,6 +293,10 @@ class FloatEncoding
                 {
                 hi = (u32)0;
                 lo = (u32)0;
+                }
+            else if (_rDen)
+                {
+                biased = hi >> (u32)20;
                 }
             else
                 {
@@ -314,9 +336,26 @@ class FloatEncoding
             {
             word = (sign << (u32)31) | ((u32)255 << (u32)23);
             }
-        else if (_rZero)
+        else if (_rZero || _rDen)
             {
             word = sign << (u32)31;
+            }
+        else if (_rExp < (i32)-126)
+            {
+            // A denormal single: the double's significand rounded (again, as
+            // `(float)d` does) to a last bit of 2^-149.
+            i32 sh = (i32)-97 - _rExp;
+            u32 q = (u32)0;
+            if (sh <= (i32)54)
+                {
+                u64 sig = ((u64)_rHi << (u64)32) | (u64)_rLo;
+                q = (u32)(sig >> (u64)sh);
+                u64 rest = sig - ((u64)q << (u64)sh);
+                u64 half = (u64)1 << (u64)(sh - (i32)1);
+                if (rest > half || (rest == half && (q & (u32)1) != (u32)0))
+                    q = q + (u32)1;
+                }
+            word = (sign << (u32)31) | q;
             }
         else
             {
