@@ -105,6 +105,58 @@ class UXPainter
         {
         UXPainter.fillShapeRGBA(g, p, r, gr, b, (i32)255);
         }
+    // A filled rectangle with rounded corners, in RGBA.  The toolkit has no arc, so the corners are
+    // a quarter circle TESSELLATED -- 8 segments each, walked clockwise -- into one polygon the seam
+    // already knows how to fill.  Eight, not the four or seven a hand-rolled corner uses: at a 2x
+    // backing a coarse arc reads octagonal, which is what this exists to fix.  A radius past half
+    // the shorter side is clamped to it, and 0 draws a plain rectangle.
+    static void fillRoundRectRGBA(UXGraphics* g, UXRect r, i32 radius, i32 rr, i32 gg, i32 bb, i32 aa)
+        {
+        i32 rad = radius;
+        i32 mn = (i32)r.w < (i32)r.h ? (i32)r.w : (i32)r.h;
+        if (rad > mn / (i32)2)
+            {
+            rad = mn / (i32)2;
+            }
+        if (rad <= (i32)0)
+            {
+            g.fillRectRGBA(r, rr, gg, bb, aa);
+            return;
+            }
+        // The unit quarter circle, 0..90 degrees, in thousandths, 8 segments (9 points).
+        i32 qc[9]; i32 qs[9];
+        qc[0]=1000; qs[0]=0;    qc[1]=981; qs[1]=195;   qc[2]=924; qs[2]=383;
+        qc[3]=831;  qs[3]=556;  qc[4]=707; qs[4]=707;   qc[5]=556; qs[5]=831;
+        qc[6]=383;  qs[6]=924;  qc[7]=195; qs[7]=981;   qc[8]=0;   qs[8]=1000;
+        // Corner centres, clockwise from the top-right: (x,y) of the arc's centre.
+        i32 csx[4]; i32 csy[4];
+        csx[0]=(i32)r.x+(i32)r.w-rad; csy[0]=(i32)r.y+rad;               // top-right
+        csx[1]=(i32)r.x+(i32)r.w-rad; csy[1]=(i32)r.y+(i32)r.h-rad;      // bottom-right
+        csx[2]=(i32)r.x+rad;          csy[2]=(i32)r.y+(i32)r.h-rad;      // bottom-left
+        csx[3]=(i32)r.x+rad;          csy[3]=(i32)r.y+rad;               // top-left
+        i32 n = (i32)0;
+        for (i32 c = (i32)0; c < (i32)4; c = c + (i32)1)
+            {
+            for (i32 k = (i32)0; k <= (i32)8; k = k + (i32)1)
+                {
+                i32 ux = (qc[k] * rad) / (i32)1000;
+                i32 uy = (qs[k] * rad) / (i32)1000;
+                i32 px; i32 py;
+                if (c == (i32)0)      { px = csx[c] + uy; py = csy[c] - ux; } // top   -> right
+                else if (c == (i32)1) { px = csx[c] + ux; py = csy[c] + uy; } // right -> bottom
+                else if (c == (i32)2) { px = csx[c] - uy; py = csy[c] + ux; } // bottom-> left
+                else                  { px = csx[c] - ux; py = csy[c] - uy; } // left  -> top
+                gUXPaintXY[n * (i32)2] = (i16)px;
+                gUXPaintXY[n * (i32)2 + (i32)1] = (i16)py;
+                n = n + (i32)1;
+                }
+            }
+        g.fillPolygonRGBA(&gUXPaintXY[(i32)0], n, rr, gg, bb, aa);
+        }
+    static void fillRoundRectRGB(UXGraphics* g, UXRect r, i32 radius, i32 rr, i32 gg, i32 bb)
+        {
+        UXPainter.fillRoundRectRGBA(g, r, radius, rr, gg, bb, (i32)255);
+        }
     // Copy a path's points into the flat x,y array the seam takes, flattening curves on the way.
     //
     // Through the SUB-PIXEL flattener and rounded exactly as the stroker rounds, which matters more

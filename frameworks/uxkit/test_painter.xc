@@ -557,6 +557,19 @@ void main(void)
     // Bands shrink toward the middle: nothing may escape the shape.
     checkTrue("no band escapes the shape", g.minx >= (i32)0 && g.maxx <= (i32)100);
 
+    // A rounded rectangle is ONE polygon -- four corners of 8 segments, 9 points each, 36 in all --
+    // that lies inside its rect, and a radius of 0 is a plain rectangle (the seam's fillRect).
+    RecG* rr = new RecG();
+    UXPainter.fillRoundRectRGBA((UXGraphics*)rr, UXGeom.make((i16)10, (i16)20, (i16)100, (i16)40),
+                                (i32)10, (i32)200, (i32)100, (i32)50, (i32)255);
+    check("a rounded rect is one polygon", rr.polys, (i32)1);
+    check("...of 36 points (four 8-segment corners)", rr.points, (i32)36);
+    checkTrue("...inside its rect", rr.minx >= (i32)10 && rr.maxx <= (i32)110 && rr.miny >= (i32)20 && rr.maxy <= (i32)60);
+    RecG* rr0 = new RecG();
+    UXPainter.fillRoundRectRGBA((UXGraphics*)rr0, UXGeom.make((i16)0, (i16)0, (i16)20, (i16)20),
+                                (i32)0, (i32)0, (i32)0, (i32)0, (i32)255);
+    check("radius 0 draws no polygon (it is a plain rectangle)", rr0.polys, (i32)0);
+
     if (gFails == (i32)0)
         {
         Stdio.printf("PASS: UXPainter — stroking, joins, caps, radial bands.\n");

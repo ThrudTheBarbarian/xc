@@ -118,7 +118,7 @@ The result is a set of **bands**. 24 is smooth at widget size, and the cost is
 
 ## Topics
 
-[fillShape](#fillshape) · [fillShapeRGB](#fillshapergb) · [strokePath](#strokepath) · [strokeOutlined](#strokeoutlined) · [fillShapeRadial](#fillshaperadial)
+[fillShape](#fillshape) · [fillShapeRGB](#fillshapergb) · [strokePath](#strokepath) · [strokeOutlined](#strokeoutlined) · [fillShapeRadial](#fillshaperadial) · [fillRoundRectRGBA](#fillroundrectrgba)
 
 ### fillShape
 
@@ -193,6 +193,21 @@ static void fillShapeRadial(UXGraphics* g, UXShapePath* p,
 
 Centre-to-edge gradient fill. The centre is the bounding box's centre; `bands`
 is clamped to `2`–`64`.
+
+### fillRoundRectRGBA
+
+```c
+static void fillRoundRectRGBA(UXGraphics* g, UXRect r, i32 radius,
+                              i32 red, i32 green, i32 blue, i32 alpha)
+```
+
+A filled rectangle with rounded corners, in RGBA. The toolkit has no arc, so the
+four corners are one quarter circle **tessellated** — 8 segments each, walked
+clockwise into a single polygon the seam already fills — rather than the four or
+seven points a hand-rolled corner uses, which read octagonal at a 2× backing. A
+`radius` past half the shorter side is clamped to it; `0` is a plain rectangle
+([`fillRectRGBA`](/compiler/api/uxkit/uxgraphics/)). `fillRoundRectRGB` is the
+same in a solid colour.
 
 ## Conforms to
 
