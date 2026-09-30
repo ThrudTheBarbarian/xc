@@ -3112,7 +3112,11 @@ class Parser
                 return call;
             }
             Token* tok = advance();
-            blkNoteUse(tok.value());                    // task #26
+            // A name about to be CALLED is noted by the call, after its
+            // arguments and only when it is a block binding — the reference's
+            // order, which decides the order of a literal's captures.
+            if (!check((u16)tokLParen))
+                blkNoteUse(tok.value());                // task #26
             return mkNamed((u16)nkIdent, tok.value());
         }
         // `delete(40, 2)` in EXPRESSION position is a call to a user function
