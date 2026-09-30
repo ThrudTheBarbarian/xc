@@ -944,6 +944,10 @@ class UXAppKitDriver : Object<UXViewDriver>
             i32 ah = (i32)0;
             self.structAbsFrame(h, i, &ax, &ay, &aw, &ah);
             ux_ak_gl_place(t.win, t.nodes[i].peer, ax, ay, aw, ah, (i32)n.hidden);
+            // A moved GL view must take its DRAWABLE and viewport with it, or the old drawable is
+            // stretched over the new frame (the app hit this and now calls resizeGL itself; doing it
+            // here means the next client need not).
+            ux_ak_gl_resize(t.nodes[i].peer, aw, ah);
             }
         }
     void structFrame(pointer h, i32 i, i32* x, i32* y, i32* w, i32* ht)
