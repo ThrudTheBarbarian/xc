@@ -356,6 +356,12 @@ static unsigned xtArm64GlobalP2Align(uint32_t size) {
             NSUInteger agg = [self arm64AggSize:v.type.layout];
             w = (agg + 7) & ~(NSUInteger)7;
             if (w < 8) w = 8;
+            // An aggregate of 16 bytes or more starts on a 16-byte boundary
+            // (sp is 16-aligned), so a 16-byte access to it never straddles a
+            // cache line. A local array 8 bytes off was what a vectorised loop
+            // over it paid for: mem_copy ran 1.6 s against 0.9 s aligned.
+            if (w >= 16)
+                cur = (cur + 15) & ~(NSUInteger)15;
         }
         offs[vid] = @(cur);
         cur += w;
@@ -1312,6 +1318,61 @@ static NSMutableArray<NSDictionary *> *sArm64MSFns = nil;
     NSArray<NSString *> *gpArgTier = @[@"x0", @"x1", @"x2", @"x3",
                                        @"x4", @"x5", @"x6", @"x7"];
     NSUInteger nParams = ctx.fn.paramTypes.count;
+    // A parameter's OWN arrival register. Parameters are held out of x0-x7
+    // (above) because homing one in ANOTHER argument register turns the
+    // prologue into a parallel move; homed in the register it arrives in, the
+    // prologue move is `mov x0, x0` and vanishes. That matters most in a small
+    // method: `return v + k` copied self and v out to x10/x11 on entry, and
+    // each copy is a cycle on the caller's dependency chain — poly_dispatch's
+    // accumulator ran through four such copies per call. Only when every
+    // parameter is a GP scalar or pointer, so parameter k arrives in xk, and
+    // not in a checked build, whose trap reporter finds parameters in the
+    // frame. crossesCall still keeps one live across a call out of it.
+    NSMutableDictionary<NSNumber *, NSString *> *ownArgReg = [NSMutableDictionary dictionary];
+    if (!sArm64MSFns) {
+        NSUInteger nUser = nParams;
+        if (nUser > 0 && [ctx.fn.paramTypes.lastObject kind] == XTIRTypeKindMemory) nUser--;
+        BOOL allGP = nUser <= 8;
+        for (NSUInteger p = 0; p < nUser && allGP; p++) {
+            XTIRTypeKind k = [ctx.fn.paramTypes[p] kind];
+            if (k == XTIRTypeKindAgg || k == XTIRTypeKindVec || k == XTIRTypeKindVoid
+                || k == XTIRTypeKindMemory || XTIRTypeKindIsFloating(k)) allGP = NO;
+        }
+        if (allGP)
+            for (NSUInteger p = 0; p < nUser; p++)
+                ownArgReg[@(p)] = [NSString stringWithFormat:@"x%lu", (unsigned long)p];
+    }
+    // The same for the two other values that ARRIVE in or LEAVE through a
+    // fixed register: a call's integer result is in x0 when the call returns,
+    // and a returned value must be in x0 at the `ret`. Homed anywhere else each
+    // costs a copy — the caller's `mov w11, w0` after every dispatch, the
+    // method's `mov w0, w10` before every return. Preferences only: the
+    // interval test still decides, and a value live across a call still cannot
+    // take a caller-saved register at all.
+    BOOL (^gpScalar)(XTIRType *) = ^BOOL(XTIRType *t) {
+        if (!t) return NO;
+        XTIRTypeKind k = t.kind;
+        return !(k == XTIRTypeKindAgg || k == XTIRTypeKindVec || k == XTIRTypeKindVoid
+                 || k == XTIRTypeKindMemory || XTIRTypeKindIsFloating(k));
+    };
+    for (XTIRBlock *pb in fn.blocks) {
+        for (XTIRInsn *pi in pb.instructions) {
+            XTIROpcode op = pi.opcode;
+            if ((op == XTIROpCall || op == XTIROpCallIndirect || op == XTIROpVTblDispatch
+                 || op == XTIROpProtoDispatch) && pi.result && gpScalar(pi.result.type)
+                && !ownArgReg[@(pi.result.valueId)])
+                ownArgReg[@(pi.result.valueId)] = @"x0";
+        }
+        XTIRInsn *rt = pb.terminator;
+        if (rt && rt.opcode == XTIROpReturn)
+            for (XTIROperand *o in rt.operands) {
+                if (o.kind != XTIROperandKindUse) continue;
+                XTIRValue *rv = [fn valueForId:o.valueId];
+                if (rv && gpScalar(rv.type) && !ownArgReg[@(o.valueId)])
+                    ownArgReg[@(o.valueId)] = @"x0";
+                break;
+            }
+    }
 
     // ── Live-range reuse assignment ──────────────────────────────────
     // Compute live intervals, then assign registers greedily in priority
@@ -1331,6 +1392,12 @@ static NSMutableArray<NSDictionary *> *sArm64MSFns = nil;
     [self computeLiveIntervalsForCtx:ctx startOf:startOf endOf:endOf
                           phiResults:phiResults crossesCall:crossesCall
                            blockEnds:rhBlkEnd];
+
+    // The starts as computed, before the extension below. The phi-input
+    // coalescing further down asks a narrower question than register sharing
+    // in general — whether the back-edge value v can live in its own phi's
+    // register — and for that the linear start is the right one: see there.
+    NSDictionary<NSNumber *, NSNumber *> *linearStart = [startOf copy];
 
     // Loop-aware START extension, the same soundness fix slot-colouring applies
     // to its own intervals. The intervals above are LINEAR and the CFG is not: a
@@ -1398,7 +1465,20 @@ static NSMutableArray<NSDictionary *> *sArm64MSFns = nil;
             BOOL mayUseCaller = ![crossesCall containsObject:v];
             BOOL isParam = v.integerValue >= 0 && (NSUInteger)v.integerValue < nParams;
             NSInteger chosen = -1;
-            for (NSUInteger r = 0; r < nr; r++) {
+            NSString *own = mayUseCaller && !isPhi ? ownArgReg[v] : nil;
+            if (own) {
+                NSUInteger r = [regs indexOfObject:own];
+                if (r != NSNotFound && !exclusive[r].boolValue) {
+                    BOOL ok = YES;
+                    for (NSValue *iv in regIvls[r]) {
+                        NSRange rg = iv.rangeValue;
+                        NSInteger s2 = (NSInteger)rg.location, e2 = s2 + (NSInteger)rg.length;
+                        if (s <= e2 && s2 <= e) { ok = NO; break; }
+                    }
+                    if (ok) chosen = (NSInteger)r;
+                }
+            }
+            for (NSUInteger r = 0; r < nr && chosen < 0; r++) {
                 if (!mayUseCaller && [callerSet containsObject:regs[r]]) continue;
                 if (isParam && [gpArgRegs containsObject:regs[r]]) continue;
                 if (exclusive[r].boolValue) continue;
@@ -1544,8 +1624,22 @@ static NSMutableArray<NSDictionary *> *sArm64MSFns = nil;
                 // OLD value is dereferenced after `p = p.next`) overlaps P and is
                 // rejected — which the earlier coarse block-position gate missed,
                 // mis-coalescing pointer-walker / for-in loops.
+                // In a SINGLE-BLOCK loop (header == latch, as rotation leaves
+                // a simple loop) v's LINEAR start, not the loop-extended one.
+                // The extension drags every value live out of the latch back
+                // to the header, so that a register shared with some other
+                // value is not clobbered on the next iteration. Here nothing
+                // else shares — the phi's register is exclusive to it — and in
+                // one block linear order IS execution order, so the only
+                // question is whether P is read after v is written: the linear
+                // test. With the extended start every back-edge value overlapped
+                // its phi and none coalesced, a copy per carried value at the
+                // bottom of every rotated loop. Across several blocks linear
+                // order is not execution order (an inner loop runs its earlier
+                // positions again after v is written), and taking the linear
+                // start there miscompiled the self-hosted compiler.
                 NSNumber *pS = startOf[@(phi.result.valueId)], *pE = endOf[@(phi.result.valueId)];
-                NSNumber *vS = startOf[@(vIn)], *vE = endOf[@(vIn)];
+                NSNumber *vS = (ti == si ? linearStart[@(vIn)] : nil) ?: startOf[@(vIn)], *vE = endOf[@(vIn)];
                 if (!pS || !pE || !vS || !vE) continue;
                 NSInteger ps = pS.integerValue, pe = pE.integerValue;
                 NSInteger vs = vS.integerValue, ve = vE.integerValue;
@@ -1553,8 +1647,11 @@ static NSMutableArray<NSDictionary *> *sArm64MSFns = nil;
                 // A caller-saved phi home is only safe for v if v also crosses no
                 // call — a call after the phi's last body use (so the phi is
                 // caller-saved) can still sit inside v's [def..back-edge] range.
+                // Any register outside the callee-saved sets is clobbered by a
+                // call — the argument tier x0-x7 included, which the caller-
+                // saved list above does not name.
                 if ([crossesCall containsObject:@(vIn)]
-                    && ([gpCallerRegs containsObject:R] || [fpCallerRegs containsObject:R])) continue;
+                    && !([gpRegs containsObject:R] || [fpRegs containsObject:R])) continue;
                 ctx.homeReg[@(vIn)] = R;                       // coalesce
                 [coalesced addObject:@(phi.result.valueId)];
             }
@@ -6208,6 +6305,77 @@ static BOOL sameArm64Reg(NSString *a, NSString *b) {
     return [out componentsJoinedByString:@"\n"];
 }
 
+// A LEAF that never touches its frame needs no frame. Every function opens
+// with `stp x29, x30, [sp, #-N]!; mov x29, sp`, which for a method such as
+// `return v + k` is four instructions of overhead around two of work, paid on
+// every call — poly_dispatch makes 768 million of them. Decided on the FINAL
+// text, after every peephole, because only then is it known that no slot
+// access survived: the function is frameless when nothing but the prologue and
+// its matching `ldp x29, x30, [sp], #N` epilogues names sp, x29, x30 or the
+// frame base x28, and nothing calls (a call needs x30 saved). Then those lines
+// go and x29/x30 stay the caller's, which is what a frameless leaf is under
+// AAPCS64. A checked build keeps every frame: its trap reporter walks the x29
+// chain and recovers parameters from the frame.
+static BOOL arm64TokByte(unichar c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+        || c == '_' || c == '$' || c == '.';
+}
+
+static BOOL arm64NamesFrameReg(NSString *t) {
+    static NSSet *frameRegs;
+    if (!frameRegs) frameRegs = [NSSet setWithArray:@[@"sp", @"wsp", @"x29", @"w29", @"fp",
+                                                      @"x30", @"w30", @"lr", @"x28", @"w28"]];
+    NSUInteger n = t.length, i = 0;
+    while (i < n) {
+        if (!arm64TokByte([t characterAtIndex:i])) { i++; continue; }
+        NSUInteger j = i;
+        while (j < n && arm64TokByte([t characterAtIndex:j])) j++;
+        if ([frameRegs containsObject:[t substringWithRange:NSMakeRange(i, j - i)]]) return YES;
+        i = j;
+    }
+    return NO;
+}
+
++ (NSString *)elideLeafFrame:(NSString *)text {
+    if (sArm64MSFns) return text;
+    NSArray<NSString *> *lines = [text componentsSeparatedByString:@"\n"];
+    NSCharacterSet *ws = [NSCharacterSet whitespaceCharacterSet];
+    NSString *pre = @"stp x29, x30, [sp, #-";
+    NSInteger pro = -1;
+    NSString *size = nil;
+    for (NSUInteger i = 0; i < lines.count; i++) {
+        NSString *t = [lines[i] stringByTrimmingCharactersInSet:ws];
+        if ([t hasPrefix:pre] && [t hasSuffix:@"]!"]) {
+            pro = (NSInteger)i;
+            size = [t substringWithRange:NSMakeRange(pre.length, t.length - pre.length - 2)];
+            break;
+        }
+    }
+    if (pro < 0 || (NSUInteger)pro + 1 >= lines.count) return text;
+    if (![[lines[pro + 1] stringByTrimmingCharactersInSet:ws] isEqualToString:@"mov x29, sp"])
+        return text;
+    NSString *epi = [NSString stringWithFormat:@"ldp x29, x30, [sp], #%@", size];
+    static NSSet *calls;
+    if (!calls) calls = [NSSet setWithArray:@[@"bl", @"blr", @"blraa", @"blraaz", @"blrab",
+                                              @"blrabz", @"svc", @"hvc", @"smc"]];
+    NSMutableIndexSet *drop = [NSMutableIndexSet indexSet];
+    [drop addIndex:(NSUInteger)pro];
+    [drop addIndex:(NSUInteger)pro + 1];
+    for (NSUInteger i = 0; i < lines.count; i++) {
+        if ([drop containsIndex:i]) continue;
+        NSString *t = [lines[i] stringByTrimmingCharactersInSet:ws];
+        if ([t isEqualToString:epi]) { [drop addIndex:i]; continue; }
+        NSRange sp = [t rangeOfCharacterFromSet:ws];
+        NSString *mnem = sp.location == NSNotFound ? t : [t substringToIndex:sp.location];
+        if ([calls containsObject:mnem]) return text;
+        if (arm64NamesFrameReg(t)) return text;
+    }
+    NSMutableArray<NSString *> *kept = [NSMutableArray array];
+    for (NSUInteger i = 0; i < lines.count; i++)
+        if (![drop containsIndex:i]) [kept addObject:lines[i]];
+    return [kept componentsJoinedByString:@"\n"];
+}
+
 + (NSString *)peepholeFallthrough:(NSString *)text {
     static NSDictionary *inv;
     if (!inv) inv = @{@"eq":@"ne",@"ne":@"eq",@"lo":@"hs",@"hs":@"lo",
@@ -6739,7 +6907,7 @@ static BOOL sameArm64Reg(NSString *a, NSString *b) {
     NSUInteger aliasLo = 0, aliasHi = NSUIntegerMax;
     [self aliasableRangeForCtx:ctx lo:&aliasLo hi:&aliasHi];
     [moduleOut appendString:
-        [self expandStagedSlots:
+        [self elideLeafFrame:[self expandStagedSlots:
             [self peepholeFallthrough:[self peepholeCopyProp:
              [self peepholeRedundantReloads:
               [self peepholeSpills:[self canonicaliseStagedSlots:body]
@@ -6747,7 +6915,7 @@ static BOOL sameArm64Reg(NSString *a, NSString *b) {
                                   argArea:ctx.maxOutStack]]]]
                        frameBase:ctx.frameBase
                     saveAreaFrom:ctx.saveAreaOffset
-                              to:ctx.saveAreaOffset + 8 * ctx.savedRegs.count]];
+                              to:ctx.saveAreaOffset + 8 * ctx.savedRegs.count]]];
 }
 
 #pragma mark - Public

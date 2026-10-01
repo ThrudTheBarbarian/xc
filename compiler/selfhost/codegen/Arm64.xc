@@ -165,9 +165,9 @@ class Arm64
             _out = new String();
             emitFunction((IRFunc*)m.funcs().get(f));
             _out.appendCString("\n");   // the blank line before the next function
-            module.append(expandStagedSlots(
+            module.append(elideLeafFrame(expandStagedSlots(
                 peepholeFallthrough(peepholeCopyProp(
-                    peepholeRedundantReloads(peepholeSpills(_out))))));
+                    peepholeRedundantReloads(peepholeSpills(_out)))))));
             _out = module;
         }
         emitModuleData(m);
@@ -189,6 +189,10 @@ class Arm64
         computeNoWrap(fn);          // needs defOf, which computeAddrFold built
         scanUses(fn);
         computeIntervals(fn);
+        _linearStart = new Map();
+        Array* lsKeys = _start.allKeys();
+        for (u32 q = (u32)0; q < lsKeys.count(); q = q + (u32)1)
+            _linearStart.set((Hashable*)lsKeys.get(q), _start.get((Hashable*)lsKeys.get(q)));
         loopExtendStarts(fn);       // register homing needs the loop-aware
                                     // intervals too, not just slot colouring (bug 203)
         assignRegisters(fn);
@@ -4321,6 +4325,87 @@ class Arm64
     //
     // Safe by construction: the two branch lines have to be ADJACENT to match,
     // so no edge phi-copy sits between them (which an inversion would break).
+    // A LEAF that never touches its frame needs no frame. Every function opens
+    // with `stp x29, x30, [sp, #-N]!; mov x29, sp`, which for a method such as
+    // `return v + k` is four instructions of overhead around two of work, paid
+    // on every call. Decided on the FINAL text, after every peephole, because
+    // only then is it known that no slot access survived: the function is
+    // frameless when nothing but the prologue and its matching
+    // `ldp x29, x30, [sp], #N` epilogues names sp, x29, x30 or the frame base
+    // x28, and nothing calls (a call needs x30 saved). A checked build keeps
+    // every frame: its trap reporter walks the x29 chain.
+    static bool tokByte(u8 c)
+    {
+        return (c >= (u8)'a' && c <= (u8)'z') || (c >= (u8)'A' && c <= (u8)'Z')
+            || (c >= (u8)'0' && c <= (u8)'9') || c == (u8)'_' || c == (u8)'$' || c == (u8)'.';
+    }
+
+    static bool namesFrameReg(String* t)
+    {
+        u32 n = t.byteLength();
+        u32 i = (u32)0;
+        while (i < n) {
+            if (!tokByte(t.byteAt(i))) { i = i + (u32)1; continue; }
+            u32 j = i;
+            while (j < n && tokByte(t.byteAt(j))) j = j + (u32)1;
+            String* w = t.substringBytes(i, j - i);
+            if (w.equals(String.withCString("sp")) || w.equals(String.withCString("wsp"))
+             || w.equals(String.withCString("x29")) || w.equals(String.withCString("w29"))
+             || w.equals(String.withCString("fp")) || w.equals(String.withCString("x30"))
+             || w.equals(String.withCString("w30")) || w.equals(String.withCString("lr"))
+             || w.equals(String.withCString("x28")) || w.equals(String.withCString("w28")))
+                return true;
+            i = j;
+        }
+        return false;
+    }
+
+    static bool isCallMnemonic(String* m)
+    {
+        return m.equals(String.withCString("bl")) || m.equals(String.withCString("blr"))
+            || m.equals(String.withCString("blraa")) || m.equals(String.withCString("blraaz"))
+            || m.equals(String.withCString("blrab")) || m.equals(String.withCString("blrabz"))
+            || m.equals(String.withCString("svc")) || m.equals(String.withCString("hvc"))
+            || m.equals(String.withCString("smc"));
+    }
+
+    String* elideLeafFrame(String* text)
+    {
+        if (_msFns != (Array*)0) return text;
+        Array* lines = linesOf(text);
+        String* pre = String.withCString("stp x29, x30, [sp, #-");
+        i32 pro = (i32)-1;
+        String* size = (String*)0;
+        for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1) {
+            String* t = ((String*)lines.get(i)).trimmed();
+            if (t.hasPrefix(pre) && t.hasSuffix(String.withCString("]!"))) {
+                pro = (i32)i;
+                size = t.substringBytes(pre.byteLength(), t.byteLength() - pre.byteLength() - (u32)2);
+                break;
+            }
+        }
+        if (pro < (i32)0 || (u32)pro + (u32)1 >= lines.count()) return text;
+        if (!((String*)lines.get((u32)pro + (u32)1)).trimmed().equals(String.withCString("mov x29, sp")))
+            return text;
+        String* epi = String.withCString("ldp x29, x30, [sp], #");
+        epi.append(size);
+        Array* kept = new Array();
+        for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1) {
+            if (i == (u32)pro || i == (u32)pro + (u32)1) continue;
+            String* ln = (String*)lines.get(i);
+            String* t = ln.trimmed();
+            if (t.equals(epi)) continue;
+            u32 sp = t.indexOfByte((u8)' ');
+            u32 tb = t.indexOfByte((u8)'\t');
+            if (tb < sp) sp = tb;
+            String* mnem = sp == (u32)$FFFF_FFFF ? t : t.substringBytes((u32)0, sp);
+            if (isCallMnemonic(mnem)) return text;
+            if (namesFrameReg(t)) return text;
+            kept.add((Object*)ln);
+        }
+        return joinLines(kept);
+    }
+
     String* peepholeFallthrough(String* text)
     {
         Array* lines = linesOf(text);
@@ -6141,6 +6226,7 @@ class Arm64
     // is what lets a value defined by an instruction share a register with one
     // that dies at it.
     Map* _start;        // value -> interval start
+    Map* _linearStart;  // the same before loopExtendStarts; see coalescePhiInputs
     Map* _end;          // value -> interval end
     Array* _phiRes;     // values defined by a phi
     Array* _crossCall;  // values live across a call
@@ -6660,7 +6746,7 @@ class Arm64
         assignTier(fn, gp, gpCallee, gpCaller);
         assignTier(fn, fp, fpCallee, fpCaller);
         sortSaved(gpCallee, fpCallee);
-        coalescePhiInputs(fn, gpCaller, fpCaller);
+        coalescePhiInputs(fn, gpCallee, fpCallee);
     }
 
     // ── Phi-input coalescing ─────────────────────────────────────────────
@@ -6678,7 +6764,7 @@ class Arm64
     // the body. A use of P outside the body is a loop-exit read of the carried
     // value, and after the loop R holds the final v — so those reads are
     // satisfied by R too.
-    void coalescePhiInputs(IRFunc* fn, Array* gpCaller, Array* fpCaller)
+    void coalescePhiInputs(IRFunc* fn, Array* gpCallee, Array* fpCallee)
     {
         u32 nb = fn.blocks().count();
         // Definition block, per value, so "defined inside the loop body" is a
@@ -6741,14 +6827,28 @@ class Arm64
                     if (!hasIvl(phi.res()) || !hasIvl(vIn)) continue;
                     i32 ps = ivlStart(phi.res());
                     i32 pe = ivlEnd(phi.res());
-                    i32 vs = ivlStart(vIn);
+                    // In a SINGLE-BLOCK loop (header == latch, as rotation leaves
+                    // a simple loop) v's LINEAR start, not the loop-extended
+                    // one. The extension drags every value live out of the latch
+                    // back to the header, so a register shared with some other
+                    // value is not clobbered next iteration. Nothing else shares
+                    // here — the phi's register is exclusive to it — and in one
+                    // block linear order IS execution order, so the only question
+                    // is whether P is read after v is written: the linear test.
+                    // Across several blocks linear order is not execution order,
+                    // and taking the linear start there miscompiled the compiler.
+                    Object* lsv = (_linearStart == (Map*)0 || (u32)ti != si) ? (Object*)0 : _linearStart.get((Hashable*)vIn);
+                    i32 vs = lsv != (Object*)0 ? ((Number*)lsv).asI32() : ivlStart(vIn);
                     i32 ve = ivlEnd(vIn);
                     if (vs <= pe && ps <= ve) continue;         // they overlap
                     // A caller-saved phi home is only safe for v when v crosses
                     // no call: a call AFTER the phi's last body use leaves the
                     // phi caller-saveable but can still sit inside v's range.
+                    // Any register outside the callee-saved sets is clobbered
+                    // by a call — the argument tier x0-x7 included, which the
+                    // caller-saved list does not name.
                     if (hasVal(_crossCall, vIn)
-                     && (hasStr(gpCaller, R) || hasStr(fpCaller, R))) continue;
+                     && !(hasStr(gpCallee, R) || hasStr(fpCallee, R))) continue;
                     _home.set((Hashable*)vIn, (Object*)R);
                     addVal(coalesced, phi.res());
                 }
@@ -6839,6 +6939,12 @@ class Arm64
             || r.equals(String.withCString("x6")) || r.equals(String.withCString("x7"));
     }
 
+    static bool gpScalarTy(String* t)
+    {
+        return t != (String*)0 && !(isAggTy(t) || isVecTy(t) || isMemTy(t) || isFloatTy(t)
+                                    || t.equals(String.withCString("Void")));
+    }
+
     bool isParamValue(IRFunc* fn, IRValue* v)
     {
         for (u32 i = (u32)0; i < fn.params().count(); i = i + (u32)1)
@@ -6853,6 +6959,56 @@ class Arm64
         for (u32 i = (u32)0; i < caller.count(); i = i + (u32)1) regs.add(caller.get(i));
         for (u32 i = (u32)0; i < callee.count(); i = i + (u32)1) regs.add(callee.get(i));
         u32 nCaller = caller.count();
+
+        // A parameter's OWN arrival register (the reference explains): homed
+        // there, its prologue move is `mov x0, x0` and vanishes. Only when
+        // every parameter is a GP scalar or pointer, so parameter k arrives in
+        // xk, and not in a checked build.
+        Map* ownArg = new Map();
+        if (_msFns == (Array*)0) {
+            u32 nUser = fn.params().count();
+            if (nUser > (u32)0 && isMemTy(((IRValue*)fn.params().get(nUser - (u32)1)).ty()))
+                nUser = nUser - (u32)1;
+            bool allGP = nUser <= (u32)8;
+            for (u32 p = (u32)0; p < nUser && allGP; p = p + (u32)1) {
+                String* pt = ((IRValue*)fn.params().get(p)).ty();
+                if (pt == (String*)0 || isAggTy(pt) || isVecTy(pt) || isMemTy(pt) || isFloatTy(pt)
+                    || pt.equals(String.withCString("Void")))
+                    allGP = false;
+            }
+            if (allGP)
+                for (u32 p = (u32)0; p < nUser; p = p + (u32)1) {
+                    String* rn = String.withCString("x");
+                    rn.append(String.withU32(p));
+                    ownArg.set((Hashable*)fn.params().get(p), (Object*)rn);
+                }
+        }
+        // The same for a call's integer result, which arrives in x0, and a
+        // returned value, which leaves through it (the reference explains).
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1) {
+            IRBlock* pb = (IRBlock*)fn.blocks().get(b);
+            for (u32 i = (u32)0; i < pb.insns().count(); i = i + (u32)1) {
+                IRInsn* pi = (IRInsn*)pb.insns().get(i);
+                String* op = pi.op();
+                if (!(op.equals(String.withCString("Call")) || op.equals(String.withCString("CallIndirect"))
+                      || op.equals(String.withCString("VTblDispatch"))
+                      || op.equals(String.withCString("ProtoDispatch"))))
+                    continue;
+                if (pi.res() == (IRValue*)0 || !gpScalarTy(pi.res().ty())) continue;
+                if (ownArg.get((Hashable*)pi.res()) != (Object*)0) continue;
+                ownArg.set((Hashable*)pi.res(), (Object*)String.withCString("x0"));
+            }
+            IRInsn* rt = pb.term();
+            if (rt != (IRInsn*)0 && rt.op().equals(String.withCString("Return")))
+                for (u32 q = (u32)0; q < rt.ops().count(); q = q + (u32)1) {
+                    IROperand* o = (IROperand*)rt.ops().get(q);
+                    if (o.kind() != (u8)OPK_USE) continue;
+                    IRValue* rv = o.val();
+                    if (rv != (IRValue*)0 && gpScalarTy(rv.ty()) && ownArg.get((Hashable*)rv) == (Object*)0)
+                        ownArg.set((Hashable*)rv, (Object*)String.withCString("x0"));
+                    break;
+                }
+        }
 
         // Per register: the intervals already placed there, and whether a phi
         // has claimed it exclusively.
@@ -6873,7 +7029,24 @@ class Arm64
             bool mayCaller = !hasVal(_crossCall, v);
             bool isParam = isParamValue(fn, v);
             u32 chosen = regs.count();
-            for (u32 r = (u32)0; r < regs.count(); r = r + (u32)1) {
+            Object* own = (mayCaller && !isPhi) ? ownArg.get((Hashable*)v) : (Object*)0;
+            if (own != (Object*)0) {
+                for (u32 r = (u32)0; r < regs.count(); r = r + (u32)1) {
+                    if (!((String*)regs.get(r)).equals((String*)own)) continue;
+                    if (((Number*)excl.get(r)).asU32() != (u32)0) break;
+                    Array* olo = (Array*)lo.get(r);
+                    Array* ohi = (Array*)hi.get(r);
+                    bool ok = true;
+                    for (u32 k = (u32)0; k < olo.count(); k = k + (u32)1) {
+                        i32 s2 = ((Number*)olo.get(k)).asI32();
+                        i32 e2 = ((Number*)ohi.get(k)).asI32();
+                        if (s <= e2 && s2 <= e) { ok = false; break; }
+                    }
+                    if (ok) chosen = r;
+                    break;
+                }
+            }
+            for (u32 r = (u32)0; r < regs.count() && chosen == regs.count(); r = r + (u32)1) {
                 if (!mayCaller && r < nCaller) continue;
                 if (isParam && isArgReg((String*)regs.get(r))) continue;
                 if (((Number*)excl.get(r)).asU32() != (u32)0) continue;
@@ -7194,6 +7367,13 @@ class Arm64
             IRValue* v = (IRValue*)ordered.get(i);
             if (slotShareable(v, hasAsm, noShare)) continue;
             u32 w = slotWidthOf(v);
+            // An aggregate of 16 bytes or more starts on a 16-byte boundary
+            // (sp is 16-aligned), so a 16-byte access to it never straddles a
+            // cache line. A local array 8 bytes off was what a vectorised loop
+            // over it paid for: mem_copy ran 1.6 s against 0.9 s aligned. Only
+            // an aggregate is wider than 8, as in the reference.
+            if (w >= (u32)16)
+                cur = (cur + (u32)15) & ~(u32)15;
             if (v != (IRValue*)0) _slot.set((Hashable*)v, (Object*)Number.with((i32)cur));
             cur = cur + w;
         }
