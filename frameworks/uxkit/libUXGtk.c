@@ -930,6 +930,50 @@ static void setRGBA(int r, int g, int b, int a)
     {
     cairo_set_source_rgba(gCr, r / 255.0, g / 255.0, b / 255.0, a / 255.0);
     }
+/* drawPixels: the region is converted to cairo's ARGB32 -- premultiplied, native-endian words --
+ * in a surface of its own, then painted scaled (bilinear) with the overall alpha.  Converted per call
+ * and region only, so an icon out of a large atlas costs only its own pixels.  `fmt` 1 is UXPIX_ARGB32
+ * (0xAARRGGBB words, B,G,R,A in memory), 0 is UXPIX_RGBA (bytes R,G,B,A). */
+void ux_gtk_draw_pixels(const unsigned char* data, int w, int h, int fmt, int sx, int sy, int sw, int sh,
+                        int dx, int dy, int dw, int dh, int alpha)
+    {
+    if (!gCr || !data || alpha <= 0 || dw <= 0 || dh <= 0)
+        return;
+    if (sx < 0) sx = 0;
+    if (sy < 0) sy = 0;
+    if (sx + sw > w) sw = w - sx;
+    if (sy + sh > h) sh = h - sy;
+    if (sw <= 0 || sh <= 0)
+        return;
+    cairo_surface_t* s = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, sw, sh);
+    if (cairo_surface_status(s) != CAIRO_STATUS_SUCCESS)
+        return;
+    cairo_surface_flush(s);
+    unsigned char* out = cairo_image_surface_get_data(s);
+    int stride = cairo_image_surface_get_stride(s);
+    for (int y = 0; y < sh; y++)
+        {
+        unsigned int* row = (unsigned int*)(out + (size_t)y * stride);
+        for (int x = 0; x < sw; x++)
+            {
+            const unsigned char* q = data + ((size_t)(sy + y) * w + (sx + x)) * 4;
+            unsigned int r = fmt == 1 ? q[2] : q[0], g = q[1], b = fmt == 1 ? q[0] : q[2], a = q[3];
+            row[x] = (a << 24) | (((r * a + 127) / 255) << 16) | (((g * a + 127) / 255) << 8) | ((b * a + 127) / 255);
+            }
+        }
+    cairo_surface_mark_dirty(s);
+    cairo_save(gCr);
+    cairo_translate(gCr, dx, dy);
+    cairo_scale(gCr, (double)dw / sw, (double)dh / sh);
+    cairo_set_source_surface(gCr, s, 0, 0);
+    cairo_pattern_set_filter(cairo_get_source(gCr), CAIRO_FILTER_BILINEAR);
+    cairo_pattern_set_extend(cairo_get_source(gCr), CAIRO_EXTEND_PAD);
+    cairo_rectangle(gCr, 0, 0, sw, sh);
+    cairo_clip(gCr);
+    cairo_paint_with_alpha(gCr, alpha >= 255 ? 1.0 : alpha / 255.0);
+    cairo_restore(gCr);
+    cairo_surface_destroy(s);
+    }
 void ux_gtk_fill(int x, int y, int w, int h, int r, int g, int b, int a)
     {
     if (!gCr)
