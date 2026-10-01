@@ -3,6 +3,47 @@ title: ChangeLog
 description: Release notes for the xcc toolchain, with bug fixes and new features per version.
 ---
 
+## Version 0.65 — faster loops, native settings and system frameworks
+
+The optimiser and the arm64 back end close most of the remaining distance to
+clang: across the benchmark suite arm64 code is now 0.98× clang's C++ time
+(geometric mean), from 1.24×, and matrix multiply is four times faster.
+`Settings.standard()` keeps its values in the platform's own settings store, and
+`#import <Framework>` links a macOS or iOS system framework.
+
+### New
+
+- `Settings.standard(name)` uses the platform's own store: the user's
+  preferences on macOS and iOS, the registry on Windows, `localStorage` in a
+  browser, and a text file under `$XDG_CONFIG_HOME` (or `~/.config`) elsewhere.
+  The API is unchanged. A 0.64 settings file is read the first time and the next
+  `save` writes the new location.
+- `#import <Framework>` links a macOS or iOS system framework, as `-framework`
+  does.
+- The wasm32 loader passes the mouse wheel and the right button to the program.
+
+### Faster
+
+- A loop around a reduction loop is vectorised across the outer loop: four
+  neighbouring outer iterations are four lanes, which is the shape of a matrix
+  multiply.
+- Pointers step through strided and offset array walks (`a[i*n + k]`) instead
+  of recomputing the index.
+- An integer reduction in an unrolled loop keeps one operation per iteration on
+  the carried value; the rest run in parallel.
+- More loops are rotated so the test sits at the bottom, and a value computed
+  in a loop's condition is not computed again in its body.
+- arm64: a leaf function that never touches its frame has none; parameters and
+  call results stay in the registers they arrive in; `madd`, `msub` and `mla`
+  replace multiply-then-add; local arrays and functions start on 16-byte
+  boundaries.
+- x86-64: local arrays start on 16-byte boundaries.
+
+### Wrong code fixed
+
+- arm64: a value live across a call could share an argument register with a
+  loop-carried value at -O2 and above.
+
 ## Version 0.64 — C's printf, an HTTP client and a run loop
 
 `printf` and the other format functions now follow C, keeping `%@` for objects.
