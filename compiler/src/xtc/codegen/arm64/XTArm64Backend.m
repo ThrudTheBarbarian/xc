@@ -2923,6 +2923,41 @@ static XTIROperand *icmpZeroTestValue(XTIRInsn *icmp, XTArm64FnCtx *ctx) {
         }
     }
 
+    // ── Vector integer multiply-accumulate: VAdd with a single-use VMul ──
+    // acc + a*b → mla. The VMul must be IMMEDIATELY before the VAdd, for the
+    // FMA fusion's reason; integer lanes only (an fmla rounds once, a separate
+    // fmul and fadd twice). A dot product vectorised across its outer loop is
+    // one mla per step.
+    for (XTIRBlock *bb in fn.blocks) {
+        XTIRInsn *prevInsn = nil;
+        for (XTIRInsn *insn in bb.instructions) {
+            XTIRInsn *localPrev = prevInsn;
+            prevInsn = insn;
+            if (insn.opcode != XTIROpVAdd || !insn.result || insn.operands.count < 2) continue;
+            XTIRType *lane = insn.result.type.pointeeType;
+            if (!lane || !XTIRTypeKindIsInteger(lane.kind)) continue;
+            if (ctx.fuseAt[@(insn.result.valueId)]) continue;
+            XTIROperand *o0 = insn.operands[0], *o1 = insn.operands[1];
+            if (o0.kind != XTIROperandKindUse || o1.kind != XTIROperandKindUse) continue;
+            XTIRInsn *(^vmulOf)(XTIROperand *) = ^XTIRInsn *(XTIROperand *o) {
+                if ([uses countForObject:@(o.valueId)] != 1) return nil;
+                if ([ctx.fusedAway containsObject:@(o.valueId)]) return nil;
+                XTIRInsn *d = defOf[@(o.valueId)];
+                if (!(d && d.opcode == XTIROpVMul && d.operands.count >= 2 && d.result &&
+                      d.operands[0].kind == XTIROperandKindUse && d.operands[1].kind == XTIROperandKindUse)) return nil;
+                return (d == localPrev) ? d : nil;
+            };
+            XTIRInsn *mul = nil; XTIROperand *addend = nil;
+            if ((mul = vmulOf(o1))) addend = o0;
+            else if ((mul = vmulOf(o0))) addend = o1;
+            if (!mul) continue;
+            ctx.fuseAt[@(insn.result.valueId)] = @{
+                @"kind": @"vmla", @"a": mul.operands[0], @"b": mul.operands[1], @"c": addend,
+            };
+            [ctx.fusedAway addObject:@(mul.result.valueId)];
+        }
+    }
+
     // ── Shifted register operand: `orr Rd, Rn, Rm, lsr #k` ──
     // arm64 lets a data-processing instruction shift its SECOND source for
     // free, so a constant shift feeding one of these never needs to exist. It
@@ -3649,6 +3684,23 @@ static uint64_t satMul64(uint64_t a, uint64_t b) {
         NSString *d  = [self resultReg:insn.result.valueId scratch:[self fregName:0 forType:ty] ctx:ctx];
         [ctx.out appendFormat:@"    %@ %@, %@, %@, %@\n", fz[@"mnem"], d, ra, rb, rc];
         [self storeReg:d intoValue:insn.result.valueId ctx:ctx];
+    } else if ([kind isEqualToString:@"vmla"]) {
+        // d = c + a*b. mla accumulates IN PLACE, so d must hold c first; when
+        // d is one of the multiplicands that copy would destroy it, and the
+        // product goes through the v16 scratch instead.
+        NSString *arr = [self neonArrFor:insn.result.type.pointeeType];
+        NSUInteger a = [self vecIndexForValue:[fz[@"a"] valueId] ctx:ctx];
+        NSUInteger b = [self vecIndexForValue:[fz[@"b"] valueId] ctx:ctx];
+        NSUInteger c = [self vecIndexForValue:[fz[@"c"] valueId] ctx:ctx];
+        NSUInteger d = [self vecIndexForValue:insn.result.valueId ctx:ctx];
+        if (d != c && (d == a || d == b)) {
+            [ctx.out appendFormat:@"    mul v16.%@, v%lu.%@, v%lu.%@\n", arr, (unsigned long)a, arr, (unsigned long)b, arr];
+            [ctx.out appendFormat:@"    add v%lu.%@, v%lu.%@, v16.%@\n", (unsigned long)d, arr, (unsigned long)c, arr, arr];
+        } else {
+            if (d != c)
+                [ctx.out appendFormat:@"    orr v%lu.16b, v%lu.16b, v%lu.16b\n", (unsigned long)d, (unsigned long)c, (unsigned long)c];
+            [ctx.out appendFormat:@"    mla v%lu.%@, v%lu.%@, v%lu.%@\n", (unsigned long)d, arr, (unsigned long)a, arr, (unsigned long)b, arr];
+        }
     } else if ([kind isEqualToString:@"ima"]) {
         XTIRType *ty = insn.result.type;
         NSString *ra = [self operandReg:fz[@"a"] intoScratch:[self regName:15 forType:ty] ctx:ctx];
@@ -6658,6 +6710,7 @@ static BOOL arm64NamesFrameReg(NSString *t) {
         if (!hi[cls] || pos > hi[cls].integerValue) hi[cls] = @(pos);
     };
     NSInteger pos = 0;
+    NSMutableDictionary<NSNumber *, XTIRInsn *> *vecDef = [NSMutableDictionary dictionary];
     NSMutableArray<NSNumber *> *blkPosStart = [NSMutableArray array];   // per-block first linear pos
     NSMutableArray<NSNumber *> *blkPosEnd = [NSMutableArray array];     // per-block last linear pos
     for (XTIRBlock *bb in fn.blocks) {
@@ -6668,6 +6721,7 @@ static BOOL arm64NamesFrameReg(NSString *t) {
         if (bb.terminator) [all addObject:bb.terminator];
         for (XTIRInsn *insn in all) {
             if (insn.result) touch(insn.result.valueId, pos);
+            if (insn.result && insn.result.type.kind == XTIRTypeKindVec) vecDef[@(insn.result.valueId)] = insn;
             for (XTIROperand *o in insn.operands)
                 if (o.kind == XTIROperandKindUse) touch(o.valueId, pos);
             pos++;
@@ -6733,8 +6787,34 @@ static BOOL arm64NamesFrameReg(NSString *t) {
                             fn.name.UTF8String);
             exit(1);
         }
-        NSNumber *reg = freePool.lastObject;
-        [freePool removeLastObject];
+        // A VAdd may take the register of an operand that dies AT it: emitted
+        // plain it is one `add` (both read before the write), fused it is an
+        // `mla` accumulating in place — which is the point: an unrolled dot
+        // product's chain of partial sums then stays in one register, and
+        // every step is a single mla. The operand that is not a product is
+        // preferred, since that is the accumulator.
+        NSNumber *reg = nil;
+        XTIRInsn *def = vecDef[cls];
+        if (def && def.opcode == XTIROpVAdd && def.operands.count == 2 &&
+            def.operands[0].kind == XTIROperandKindUse && def.operands[1].kind == XTIROperandKindUse) {
+            for (int pass = 0; pass < 2 && !reg; pass++) {
+                for (XTIROperand *o in def.operands) {
+                    XTIRInsn *od = vecDef[@(o.valueId)];
+                    BOOL isProduct = od && od.opcode == XTIROpVMul;
+                    if ((pass == 0) == isProduct) continue;
+                    NSNumber *ocls = @(classOf(o.valueId));
+                    if ([ocls isEqual:cls] || !regOfClass[ocls] || ![active containsObject:ocls]) continue;
+                    if (hi[ocls].integerValue != start) continue;
+                    reg = regOfClass[ocls];
+                    [active removeObject:ocls];
+                    break;
+                }
+            }
+        }
+        if (!reg) {
+            reg = freePool.lastObject;
+            [freePool removeLastObject];
+        }
         regOfClass[cls] = reg;
         [active addObject:cls];
         [active sortUsingComparator:^NSComparisonResult(NSNumber *a, NSNumber *b) { return [hi[a] compare:hi[b]]; }];

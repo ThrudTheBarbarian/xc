@@ -1773,6 +1773,7 @@ class Arm64
             }
         }
         fuseIntMultiplyAdds(fn);
+        fuseVectorMla(fn);
         computeShiftFusions(fn);
     }
 
@@ -1823,6 +1824,54 @@ class Arm64
                 _fusedAway.set((Hashable*)mul.res(), (Object*)mul.res());
             }
         }
+    }
+
+    // acc + a*b over integer lanes becomes mla (the reference explains); the
+    // VMul must be immediately before the VAdd.
+    void fuseVectorMla(IRFunc* fn)
+    {
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1) {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1) {
+                IRInsn* n = (IRInsn*)bb.insns().get(i);
+                if (!n.op().equals(String.withCString("VAdd")) || n.res() == (IRValue*)0 || n.ops().count() < (u32)2)
+                    continue;
+                String* lane = laneOf(n.res().ty());
+                if (lane == (String*)0 || isFloatTy(lane)) continue;
+                if (_fuseKind.get((Hashable*)n.res()) != (Object*)0) continue;
+                IROperand* o0 = (IROperand*)n.ops().get((u32)0);
+                IROperand* o1 = (IROperand*)n.ops().get((u32)1);
+                if (o0.kind() != (u8)OPK_USE || o1.kind() != (u8)OPK_USE) continue;
+                IRInsn* prev = (i > (u32)0) ? (IRInsn*)bb.insns().get(i - (u32)1) : (IRInsn*)0;
+                IRInsn* mul = singleUseVMul(o1, prev);
+                IROperand* addend = o0;
+                if (mul == (IRInsn*)0) {
+                    mul = singleUseVMul(o0, prev);
+                    addend = o1;
+                }
+                if (mul == (IRInsn*)0) continue;
+                _fuseKind.set((Hashable*)n.res(), (Object*)String.withCString("vmla"));
+                _fuseA.set((Hashable*)n.res(), (Object*)mul.ops().get((u32)0));
+                _fuseB.set((Hashable*)n.res(), (Object*)mul.ops().get((u32)1));
+                _fuseC.set((Hashable*)n.res(), (Object*)addend);
+                _fusedAway.set((Hashable*)mul.res(), (Object*)mul.res());
+            }
+        }
+    }
+
+    IRInsn* singleUseVMul(IROperand* o, IRInsn* prev)
+    {
+        if (o.val() == (IRValue*)0 || useCountOf(o.val()) != (u32)1) return (IRInsn*)0;
+        if (inMap(_fusedAway, o.val())) return (IRInsn*)0;
+        Object* d = _defOf.get((Hashable*)o.val());
+        if (d == (Object*)0) return (IRInsn*)0;
+        IRInsn* n = (IRInsn*)d;
+        if (!n.op().equals(String.withCString("VMul")) || n.ops().count() < (u32)2 || n.res() == (IRValue*)0)
+            return (IRInsn*)0;
+        if (((IROperand*)n.ops().get((u32)0)).kind() != (u8)OPK_USE || ((IROperand*)n.ops().get((u32)1)).kind() != (u8)OPK_USE)
+            return (IRInsn*)0;
+        if (n != prev) return (IRInsn*)0;
+        return n;
     }
 
     IRInsn* singleUseIMul(IROperand* o, IRInsn* prev, String* ty)
@@ -1953,6 +2002,22 @@ class Arm64
                               ((Number*)_fuseAmt.get((Hashable*)n.res())).asU32());
             canonicaliseUnlessProven(d, n.res());
             storeReg(d, n.res());
+            return;
+        }
+        if (kind.equals(String.withCString("vmla"))) {
+            String* arr = neonArr(laneOf(ty));
+            u32 va = vecIndex(((IROperand*)_fuseA.get((Hashable*)n.res())).val());
+            u32 vb = vecIndex(((IROperand*)_fuseB.get((Hashable*)n.res())).val());
+            u32 vc = vecIndex(((IROperand*)_fuseC.get((Hashable*)n.res())).val());
+            u32 vd = vecIndex(n.res());
+            if (vd != vc && (vd == va || vd == vb)) {
+                _out.appendFormat("    mul v16.%s, v%lu.%s, v%lu.%s\n", arr.cString(), va, arr.cString(), vb, arr.cString());
+                _out.appendFormat("    add v%lu.%s, v%lu.%s, v16.%s\n", vd, arr.cString(), vc, arr.cString(), arr.cString());
+            } else {
+                if (vd != vc)
+                    _out.appendFormat("    orr v%lu.16b, v%lu.16b, v%lu.16b\n", vd, vc, vc);
+                emitVec3(String.withCString("mla"), arr, vd, va, vb);
+            }
             return;
         }
         if (kind.equals(String.withCString("ima"))) {
@@ -3041,8 +3106,13 @@ class Arm64
                              fn.name().cString());
                 Process.exit((i32)1);
             }
-            Object* reg = (Object*)freePool.get(freePool.count() - (u32)1);
-            freePool.removeAt(freePool.count() - (u32)1);
+            // A VAdd may take the register of an operand that dies AT it (the
+            // reference explains), the non-product operand first.
+            Object* reg = vecReuseFor(fn, cls, start, active, regOf, hi);
+            if (reg == (Object*)0) {
+                reg = (Object*)freePool.get(freePool.count() - (u32)1);
+                freePool.removeAt(freePool.count() - (u32)1);
+            }
             regOf.set((Hashable*)cls, reg);
             active.add((Object*)cls);
             sortByEnd(active, hi);
@@ -3055,6 +3125,46 @@ class Arm64
             name.appendFormat("%ld", ((Number*)r).asI32());
             _vecReg.set((Hashable*)v, (Object*)name);
         }
+    }
+
+    IRInsn* vecDefOf(IRFunc* fn, IRValue* v)
+    {
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1) {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1) {
+                IRInsn* n = (IRInsn*)bb.insns().get(i);
+                if (n.res() == v) return n;
+            }
+        }
+        return (IRInsn*)0;
+    }
+
+    Object* vecReuseFor(IRFunc* fn, IRValue* cls, i32 start, Array* active, Map* regOf, Map* hi)
+    {
+        IRInsn* def = vecDefOf(fn, cls);
+        if (def == (IRInsn*)0 || !def.op().equals(String.withCString("VAdd")) || def.ops().count() != (u32)2)
+            return (Object*)0;
+        IROperand* d0 = (IROperand*)def.ops().get((u32)0);
+        IROperand* d1 = (IROperand*)def.ops().get((u32)1);
+        if (d0.kind() != (u8)OPK_USE || d1.kind() != (u8)OPK_USE) return (Object*)0;
+        for (u32 pass = (u32)0; pass < (u32)2; pass = pass + (u32)1) {
+            for (u32 q = (u32)0; q < (u32)2; q = q + (u32)1) {
+                IROperand* o = q == (u32)0 ? d0 : d1;
+                IRInsn* od = vecDefOf(fn, o.val());
+                bool isProduct = od != (IRInsn*)0 && od.op().equals(String.withCString("VMul"));
+                if ((pass == (u32)0) == isProduct) continue;
+                IRValue* ocls = classOfVec(o.val());
+                if (ocls == cls || regOf.get((Hashable*)ocls) == (Object*)0) continue;
+                u32 ai = active.count();
+                for (u32 k = (u32)0; k < active.count(); k = k + (u32)1)
+                    if ((IRValue*)active.get(k) == ocls) { ai = k; break; }
+                if (ai == active.count()) continue;
+                if (((Number*)hi.get((Hashable*)ocls)).asI32() != start) continue;
+                active.removeAt(ai);
+                return regOf.get((Hashable*)ocls);
+            }
+        }
+        return (Object*)0;
     }
 
     IRValue* classOfVec(IRValue* v)
