@@ -1,7 +1,8 @@
 // pixels_a9.xc — drawPixels on the GEM backend (native arm64 on host gemd), checked as pixels.
 //
 // The same sheet and the same checks as mac-pixels, win32-pixels and the rest: the right way up, the
-// right region, scaled, alpha honoured, both byte layouts, and a view's drawing kept inside its frame.
+// right region, scaled, alpha honoured, both byte layouts, and a view's drawing kept inside its frame --
+// plus a translucent fillRectRGBA, which composites through the same blitter transfer.
 // The last view to draw reads the window's own surface back (vro_cpyfm, surface -> memory) -- the
 // surface gemd composites -- and writes the verdict to the outcome file; run_pixels.sh asserts it.
 #import <Stdio.xc>
@@ -104,6 +105,7 @@ class Spill : UXView
         near("alpha 128 red over white is pink", (i32)105, (i32)15, (i32)255, (i32)127, (i32)127);
         near("a UXImage's left pixel is magenta", (i32)15, (i32)50, (i32)255, (i32)0, (i32)255);
         near("...and its right one cyan", (i32)45, (i32)50, (i32)0, (i32)255, (i32)255);
+        near("a translucent fill composites (blue at 128 over white)", (i32)110, (i32)50, (i32)127, (i32)127, (i32)255);
         near("outside every draw it is white", (i32)150, (i32)70, (i32)255, (i32)255, (i32)255);
         near("a view paints inside its frame", (i32)140, (i32)62, (i32)255, (i32)0, (i32)0);
         near("...and NOT past it (its drawing is clipped to its frame)", (i32)130, (i32)50, (i32)255, (i32)255, (i32)255);
@@ -123,6 +125,7 @@ class Board : UXView
         g.drawPixels(&gSheet[(i32)0], (i32)4, (i32)2, (i32)UXPIX_RGBA, UXGeom.make((i16)0, (i16)0, (i16)4, (i16)2),
                      UXGeom.make((i16)100, (i16)10, (i16)40, (i16)20), (i32)128);
         gImg.drawIn(g, UXGeom.make((i16)0, (i16)0, (i16)2, (i16)1), UXGeom.make((i16)10, (i16)40, (i16)40, (i16)20), (i32)255);
+        g.fillRectRGBA(UXGeom.make((i16)100, (i16)40, (i16)30, (i16)20), (i32)0, (i32)0, (i32)255, (i32)128);
         }
     }
 

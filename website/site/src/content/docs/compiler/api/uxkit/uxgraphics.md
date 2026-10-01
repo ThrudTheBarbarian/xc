@@ -104,8 +104,9 @@ bool blendsAlpha(void)
 ```
 
 True where a translucent fill or stroke actually **composites** over what is
-behind it. The VDI has no compositing and GDI's solid brushes have no alpha,
-so GEM and Windows answer **false** and draw the colour opaque. The other
+behind it. GDI's solid brushes have no alpha, so Windows answers **false**. GEM
+answers **false** too: its blitter composites a translucent rectangle and a
+bitmap, but a translucent polygon, stroke or text run is drawn opaque. The other
 backends blend.
 
 This matters when a layer is built from overlapping translucent pieces — a
@@ -255,8 +256,8 @@ straight (not premultiplied) alpha and sRGB. `src` is in the bitmap's pixels and
 The bitmap is not copied. A backend may keep what it builds from `data` keyed by
 its address — a 28 MB texture atlas is wrapped once, not on every call — so the
 bytes must not change after they are first drawn; draw changed pixels from a new
-buffer. Every backend draws it. GEM's VDI neither scales nor blends a raster, so
-there it reads the destination back, blends in software and copies the result in.
+buffer. Every backend draws it. On GEM the region goes through the blitter's
+scaled source-over transfer (`vr_transfer_bits`, `VR_OVER`).
 
 ### fillPolygon
 

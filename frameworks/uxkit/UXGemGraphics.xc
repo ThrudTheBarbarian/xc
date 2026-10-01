@@ -62,16 +62,45 @@ class UXGemGraphics : Object<UXGraphics>
         vsf_perimeter(vh, (i32)0);
         vr_recfl(vh, (pointer)&pxy[0]);
         }
-    // The VDI has no compositing: a pen is a palette entry and a fill replaces what is under it.
-    // blendsAlpha() answers false, and the colour is drawn opaque rather than pretending otherwise.
+    // A translucent rectangle composites: one pixel of the colour, stretched over the rect by the
+    // blitter's source-over transfer (vr_transfer_bits, VR_OVER), clipped to the ws clip.  Opaque
+    // takes the plain fill.
     void fillRectRGBA(UXRect r, i32 red, i32 green, i32 blue, i32 alpha)
         {
-        self.fillRectRGB(r, red, green, blue);
+        if (alpha >= (i32)255)
+            {
+            self.fillRectRGB(r, red, green, blue);
+            return;
+            }
+        if (alpha <= (i32)0 || r.w <= (i16)0 || r.h <= (i16)0)
+            {
+            return;
+            }
+        u32 px[1];
+        px[0] = ((u32)(red & (i32)255) << (u32)24) | ((u32)(green & (i32)255) << (u32)16) |
+                ((u32)(blue & (i32)255) << (u32)8) | (u32)alpha;
+        MFDB one;
+        one.addr = &px[(i32)0];
+        one.w = (i16)1;
+        one.h = (i16)1;
+        one.stride = (i16)1;
+        one.nplanes = (i16)32;
+        one.stand = (i16)0;
+        i16 pxy[8];
+        pxy[0] = (i16)0;
+        pxy[1] = (i16)0;
+        pxy[2] = (i16)0;
+        pxy[3] = (i16)0;
+        pxy[4] = (i16)(origin.x + r.x);
+        pxy[5] = (i16)(origin.y + r.y);
+        pxy[6] = (i16)(origin.x + r.x + r.w - (i16)1);
+        pxy[7] = (i16)(origin.y + r.y + r.h - (i16)1);
+        vr_transfer_bits(vh, (pointer)&one, (pointer)0, (pointer)&pxy[0], (i32)VR_OVER);
         }
-    // A bitmap region, scaled, with alpha.  The VDI copies rasters but neither scales nor blends, so this
-    // is a read-modify-write of the destination: copy it out of the surface (vro_cpyfm, screen -> a
-    // scratch raster), blend the source over it here -- nearest sampling, straight alpha -- and copy it
-    // back, which the ws clip cuts to the view.  The surface's pixels are 0xRRGGBBAA words.
+    // A bitmap region, scaled, with alpha: vr_transfer_bits in VR_OVER mode scales the source onto the
+    // destination and composites it with the source's own alpha, clipped to the ws clip.  It wants
+    // device-format words (0xRRGGBBAA), so the region is converted first, with the overall alpha
+    // folded into each pixel's.
     void drawPixels(u8* data, i32 w, i32 h, i32 format, UXRect src, UXRect dst, i32 alpha)
         {
         i32 sx = (i32)src.x;
@@ -96,9 +125,7 @@ class UXGemGraphics : Object<UXGraphics>
             {
             sh = h - sy;
             }
-        i32 dw = (i32)dst.w;
-        i32 dh = (i32)dst.h;
-        if (data == (u8*)0 || alpha <= (i32)0 || sw <= (i32)0 || sh <= (i32)0 || dw <= (i32)0 || dh <= (i32)0)
+        if (data == (u8*)0 || alpha <= (i32)0 || sw <= (i32)0 || sh <= (i32)0 || dst.w <= (i16)0 || dst.h <= (i16)0)
             {
             return;
             }
@@ -106,68 +133,42 @@ class UXGemGraphics : Object<UXGraphics>
             {
             alpha = (i32)255;
             }
-        u32* buf = (u32*)malloc((u32)(dw * dh * (i32)4));
+        u32* buf = (u32*)malloc((u32)(sw * sh * (i32)4));
         if (buf == (u32*)0)
             {
             return;
             }
-        i32 dx = (i32)origin.x + (i32)dst.x;
-        i32 dy = (i32)origin.y + (i32)dst.y;
-        MFDB screen;
-        screen.addr = (u32*)0;
-        MFDB mem;
-        mem.addr = buf;
-        mem.w = (i16)dw;
-        mem.h = (i16)dh;
-        mem.stride = (i16)dw;
-        mem.nplanes = (i16)32;
-        mem.stand = (i16)0;
-        i16 pxy[8];
-        pxy[0] = (i16)dx;
-        pxy[1] = (i16)dy;
-        pxy[2] = (i16)(dx + dw - (i32)1);
-        pxy[3] = (i16)(dy + dh - (i32)1);
-        pxy[4] = (i16)0;
-        pxy[5] = (i16)0;
-        pxy[6] = (i16)(dw - (i32)1);
-        pxy[7] = (i16)(dh - (i32)1);
-        vro_cpyfm(vh, (i32)VRO_COPY, (pointer)&pxy[0], (pointer)&screen, (pointer)&mem); // what is under
-        for (i32 y = (i32)0; y < dh; y = y + (i32)1)
+        for (i32 y = (i32)0; y < sh; y = y + (i32)1)
             {
-            i32 v = sy + (y * sh) / dh;
-            for (i32 x = (i32)0; x < dw; x = x + (i32)1)
+            for (i32 x = (i32)0; x < sw; x = x + (i32)1)
                 {
-                i32 u = sx + (x * sw) / dw;
-                u8* q = data + (v * w + u) * (i32)4;
-                i32 r = format == (i32)UXPIX_ARGB32 ? (i32)q[2] : (i32)q[0];
-                i32 g = (i32)q[1];
-                i32 b = format == (i32)UXPIX_ARGB32 ? (i32)q[0] : (i32)q[2];
-                i32 a = ((i32)q[3] * alpha + (i32)127) / (i32)255;
-                if (a == (i32)0)
-                    {
-                    continue;
-                    }
-                i32 k = y * dw + x;
-                if (a < (i32)255)
-                    {
-                    u32 d = buf[k];
-                    i32 ia = (i32)255 - a;
-                    r = (r * a + (i32)((d >> (u32)24) & (u32)255) * ia + (i32)127) / (i32)255;
-                    g = (g * a + (i32)((d >> (u32)16) & (u32)255) * ia + (i32)127) / (i32)255;
-                    b = (b * a + (i32)((d >> (u32)8) & (u32)255) * ia + (i32)127) / (i32)255;
-                    }
-                buf[k] = ((u32)r << (u32)24) | ((u32)g << (u32)16) | ((u32)b << (u32)8) | (u32)255;
+                u8* q = data + ((sy + y) * w + (sx + x)) * (i32)4;
+                u32 r = format == (i32)UXPIX_ARGB32 ? (u32)q[2] : (u32)q[0];
+                u32 g = (u32)q[1];
+                u32 b = format == (i32)UXPIX_ARGB32 ? (u32)q[0] : (u32)q[2];
+                u32 a = alpha == (i32)255 ? (u32)q[3] : ((u32)q[3] * (u32)alpha + (u32)127) / (u32)255;
+                buf[y * sw + x] = (r << (u32)24) | (g << (u32)16) | (b << (u32)8) | a;
                 }
             }
+        MFDB mem;
+        mem.addr = buf;
+        mem.w = (i16)sw;
+        mem.h = (i16)sh;
+        mem.stride = (i16)sw;
+        mem.nplanes = (i16)32;
+        mem.stand = (i16)0;
+        i32 dx = (i32)origin.x + (i32)dst.x;
+        i32 dy = (i32)origin.y + (i32)dst.y;
+        i16 pxy[8];
         pxy[0] = (i16)0;
         pxy[1] = (i16)0;
-        pxy[2] = (i16)(dw - (i32)1);
-        pxy[3] = (i16)(dh - (i32)1);
+        pxy[2] = (i16)(sw - (i32)1);
+        pxy[3] = (i16)(sh - (i32)1);
         pxy[4] = (i16)dx;
         pxy[5] = (i16)dy;
-        pxy[6] = (i16)(dx + dw - (i32)1);
-        pxy[7] = (i16)(dy + dh - (i32)1);
-        vro_cpyfm(vh, (i32)VRO_COPY, (pointer)&pxy[0], (pointer)&mem, (pointer)&screen);
+        pxy[6] = (i16)(dx + (i32)dst.w - (i32)1);
+        pxy[7] = (i16)(dy + (i32)dst.h - (i32)1);
+        vr_transfer_bits(vh, (pointer)&mem, (pointer)0, (pointer)&pxy[0], (i32)VR_OVER);
         free((pointer)buf);
         }
     // No alpha on the VDI, so "empty" is the window background the AES paints — pen 0, the white a
@@ -193,8 +194,9 @@ class UXGemGraphics : Object<UXGraphics>
         vst_height(vh, size > (i32)0 ? size : (i32)16, (pointer)0, (pointer)0, (pointer)0, (pointer)0);
         v_gtext(vh, (i32)(origin.x + x), (i32)(origin.y + y), s);
         }
-    // True-colour text: the same scratch pen the fills use, so the glyphs take the colour.  The alpha
-    // is dropped with the rest — the VDI has no compositing.
+    // True-colour text: the same scratch pen the fills use, so the glyphs take the colour.  The glyph
+    // path blends each glyph's coverage over what is under it, but takes no alpha from the colour,
+    // so the alpha is dropped; see blendsAlpha.
     void drawTextRGBA(u8* s, i16 x, i16 y, i32 red, i32 green, i32 blue, i32 alpha, i32 size)
         {
         v_setrgb(vh, (i32)255, red, green, blue);
@@ -346,7 +348,9 @@ class UXGemGraphics : Object<UXGraphics>
         {
         return false;
         }
-    // The VDI cannot blend, so a translucent layer is drawn opaque here.  Ask blendsAlpha() first.
+    // A translucent RECTANGLE and bitmap composite here (the blitter's VR_OVER transfer), but a
+    // translucent polygon, stroke or text run is drawn opaque -- v_fillarea is opaque and the glyph
+    // path takes no alpha from the colour -- so this answers false.  Ask blendsAlpha() first.
     bool blendsAlpha(void)
         {
         return false;

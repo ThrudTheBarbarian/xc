@@ -131,6 +131,11 @@ void vro_cpyfm(i32 h, i32 mode, pointer pxy, pointer src, pointer dst);
 // The clip STACK: on = 1 pushes the rect intersected with the current clip, on = 0 pops it.
 void vs_clip(i32 h, i32 on, pointer pxy);
 #define VRO_COPY 3 // vdi.h's enum: replace the destination
+// A SCALED raster transfer, src rect onto dst rect (pxy = src x1,y1,x2,y2, dst x1,y1,x2,y2), clipped
+// to the ws clip when dst is 0 (the workstation surface).  VR_OVER composites with the source's own
+// alpha -- the path the theme's stretched art takes.
+void vr_transfer_bits(i32 h, pointer src, pointer dst, pointer pxy, i32 mode);
+#define VR_OVER 20
 void vst_color(i32 h, i32 pen);
 void vst_height(i32 h, i32 pts, pointer a, pointer b, pointer c, pointer d);
 void v_gtext(i32 h, i32 x, i32 y, u8* s);
