@@ -20,11 +20,13 @@ int main(int argc, char **argv)
     @autoreleasepool {
         uint32_t seed = (uint32_t)argc;
         uint32_t acc  = 0;
+        Node *keep = [[Node alloc] initWithV:seed];
         int64_t t0 = bench_now_us();
         for (uint32_t r = 0; r < 80000000; r++)
             {
             Node *n = [[Node alloc] initWithV:r + seed];
-            acc = acc + [n get];
+            acc = (acc ^ [n get]) + [keep get];
+            keep = n;
             }
         int64_t t1 = bench_now_us();
         printf("%u %lld\n", acc, (long long)(t1 - t0));

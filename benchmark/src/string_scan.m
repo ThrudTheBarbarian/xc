@@ -7,7 +7,7 @@
 int main(int argc, char **argv)
     {
     @autoreleasepool {
-        static uint8_t buf[N]; uint32_t seed = (uint32_t)argc, acc = 0;
+        uint8_t buf[N]; uint32_t seed = (uint32_t)argc, acc = 0;
         for (uint32_t i = 0; i < N; i++) buf[i] = (uint8_t)(((i * 31u) + seed) & 127u);
         int64_t t0 = bench_now_us();
         for (uint32_t r = 0; r < 3800000; r++)

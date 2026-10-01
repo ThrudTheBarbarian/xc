@@ -7,7 +7,7 @@
 int main(int argc, char **argv)
     {
     @autoreleasepool {
-        static uint32_t a[M * M], b[M * M], c[M * M];
+        uint32_t a[M * M], b[M * M], c[M * M];
         uint32_t seed = (uint32_t)argc;
         for (uint32_t i = 0; i < M * M; i++)
             { a[i] = (i + seed) & 15u; b[i] = (i ^ seed) & 15u; }

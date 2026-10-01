@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Benchmark xc against Objective-C, both with ARC, over the same programs.
+"""Benchmark xc against Objective-C (both with ARC), C++ and Swift, over the same
+programs.
 
-Every benchmark is a pair in src/: <name>.xc and <name>.m. The two compute the
-same thing and print the same checksum, so a mismatch is a miscompile in one of
-them rather than a timing result.
+Every benchmark is a pair in src/, <name>.xc and <name>.m, and may also have a
+<name>.cpp and a <name>.swift. They all compute the same thing and print the
+same checksum, so a mismatch is a miscompile in one of them rather than a
+timing result. C++ is built with clang++ and Swift with swiftc, on each host.
 
 Each program times its own measured region with clock_gettime(CLOCK_MONOTONIC)
 and prints "<checksum> <elapsed_us>". Both languages call the same primitive
@@ -17,6 +19,7 @@ choice on a machine that is also doing other things.
   run.py --bench int_accum   restrict to one benchmark
   run.py --repeats 7         runs per data point
   run.py --opt O2            restrict to one optimisation level
+  run.py --langs cpp,swift   restrict to some languages (xc objc cpp swift)
   run.py --max-load 0.25     wait until each machine's 1-minute load average,
                              per core, is at or below this before timing on it
 
@@ -157,27 +160,38 @@ def compile_xc_x86(name, opt, out):
     return r.returncode == 0, (r.stderr or r.stdout)
 
 
-def build_objc_remote(name, opt, tag, host):
-    """Compile the Objective-C half ON the remote host.
+def build_remote(name, opt, tag, host, lang):
+    """Compile the Objective-C, C++ or Swift version ON the remote host.
 
     GNUstep Objective-C cannot be cross-built from macOS, so the source goes
-    over and clang runs there against libobjc2 and gnustep-base. The flags
-    mirror the ones that host's own environment script sets.
+    over and clang runs there against libobjc2 and gnustep-base, with the
+    flags that host's own environment script sets. C++ and Swift are built
+    there too, with that host's clang++ and swiftc.
     """
-    src = os.path.join(SRC, name + ".m")
-    inc = os.path.join(SRC, "include", "bench_time.h")
+    ext = {"objc": ".m", "cpp": ".cpp", "swift": ".swift"}[lang]
+    src = os.path.join(SRC, name + ext)
+    incs = [os.path.join(SRC, "include", "bench_time.h")]
+    if lang == "swift":
+        incs.append(os.path.join(SRC, "include", "bench_time.swift"))
     rdir = "/tmp/xcbench"
     pre = ("mkdir -p %s/include" % rdir)
     if subprocess.run(["ssh", "-o", "ConnectTimeout=10", host, pre]).returncode != 0:
         return None, "remote mkdir failed"
-    for f, dest in ((src, rdir + "/"), (inc, rdir + "/include/")):
+    for f, dest in [(src, rdir + "/")] + [(i, rdir + "/include/") for i in incs]:
         if subprocess.run(["scp", "-q", f, "%s:%s" % (host, dest)]).returncode != 0:
             return None, "scp failed"
-    out = "%s/%s.%s" % (rdir, name, tag)
-    cmd = ("set -a; [ -f ~/ci/ci-env.sh ] && . ~/ci/ci-env.sh; set +a; cd %s && "
-           "clang -fobjc-arc -fobjc-runtime=gnustep-2.2 -I/opt/gnustep/include -I%s "
-           "-%s -L/opt/gnustep/lib -lobjc -lgnustep-base -o %s %s.m"
-           % (rdir, rdir, opt, out, name))
+    out = "%s/%s.%s.%s" % (rdir, name, lang, tag)
+    if lang == "objc":
+        build = ("clang -fobjc-arc -fobjc-runtime=gnustep-2.2 -I/opt/gnustep/include -I%s "
+                 "-%s -L/opt/gnustep/lib -lobjc -lgnustep-base -o %s %s.m"
+                 % (rdir, opt, out, name))
+    elif lang == "cpp":
+        build = "clang++ -std=c++17 -I%s -%s -o %s %s.cpp" % (rdir, opt, out, name)
+    else:
+        build = ("swiftc %s -parse-as-library -o %s include/bench_time.swift %s.swift"
+                 % (swift_opt(opt), out, name))
+    cmd = ("set -a; [ -f ~/ci/ci-env.sh ] && . ~/ci/ci-env.sh; set +a; cd %s && %s"
+           % (rdir, build))
     r = subprocess.run(["ssh", "-o", "ConnectTimeout=20", host, cmd],
                        capture_output=True, text=True)
     if r.returncode != 0:
@@ -231,6 +245,27 @@ def measure_remote(binary, repeats, host):
     return best, checksum
 
 
+def compile_cpp(name, opt, out):
+    cmd = ["clang++", "-std=c++17", "-" + opt, "-I", SRC,
+           "-o", out, os.path.join(SRC, name + ".cpp")]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    return r.returncode == 0, (r.stderr or r.stdout)
+
+
+def swift_opt(opt):
+    """swiftc has -Onone and -O; every optimising level maps to -O. Each
+    program is an @main struct (-parse-as-library), so its counters are locals
+    of main, as they are in the C versions, rather than globals."""
+    return "-Onone" if opt == "O0" else "-O"
+
+
+def compile_swift(name, opt, out):
+    cmd = ["swiftc", swift_opt(opt), "-parse-as-library", "-o", out,
+           os.path.join(SRC, "include", "bench_time.swift"), os.path.join(SRC, name + ".swift")]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    return r.returncode == 0, (r.stderr or r.stdout)
+
+
 def compile_objc(name, opt, out):
     cmd = ["clang", "-fobjc-arc", "-" + opt, "-I", SRC, "-framework", "Foundation",
            "-o", out, os.path.join(SRC, name + ".m")]
@@ -275,6 +310,8 @@ def main():
     ap.add_argument("--opt", default=None)
     ap.add_argument("--repeats", type=int, default=5)
     ap.add_argument("--max-load", type=float, default=MAX_LOAD)
+    ap.add_argument("--langs", default=None,
+                    help="comma-separated subset of xc,objc,cpp,swift")
     args = ap.parse_args()
     MAX_LOAD = args.max_load
 
@@ -296,33 +333,45 @@ def main():
     os.makedirs(work, exist_ok=True)
 
     results, failures, mismatches = {}, [], []
-    langs = [("xc", compile_xc), ("objc", compile_objc)]
+    langs = [("xc", compile_xc), ("objc", compile_objc),
+             ("cpp", compile_cpp), ("swift", compile_swift)]
     host = env.get("XTC_LINUX_HOST")
     if host:
         langs.append(("xc_x86_64", compile_xc_x86))
         langs.append(("objc_x86_64", None))   # compiled on the remote host
+        langs.append(("cpp_x86_64", None))
+        langs.append(("swift_x86_64", None))
         print("x86-64 legs enabled on the configured host: xc is cross-built here "
-              "and shipped as a static ELF; Objective-C is compiled there against "
-              "libobjc2 and gnustep-base, which cannot be cross-built from macOS.")
+              "and shipped as a static ELF; Objective-C, C++ and Swift are compiled "
+              "there (GNUstep Objective-C cannot be cross-built from macOS).")
+    if args.langs:
+        want = set(args.langs.split(","))
+        langs = [(l, c) for l, c in langs if l.split("_x86_64")[0] in want]
+    source_ext = {"xc": ".xc", "objc": ".m", "cpp": ".cpp", "swift": ".swift"}
 
     for opt in opts:
         for name in names:
             checks = {}
             for lang, compiler in langs:
-                if lang == "objc_x86_64":
-                    rpath, err = build_objc_remote(name, opt, opt, host)
+                base = lang.split("_x86_64")[0]
+                # C++ and Swift versions are optional: a benchmark without one
+                # is simply not measured in that language.
+                if not os.path.isfile(os.path.join(SRC, name + source_ext[base])):
+                    continue
+                if lang in ("objc_x86_64", "cpp_x86_64", "swift_x86_64"):
+                    rpath, err = build_remote(name, opt, opt, host, base)
                     if rpath is None:
                         failures.append((name, lang, opt, err if isinstance(err, list) else [str(err)]))
                         continue
                     secs, checksum = run_remote(
                         rpath, args.repeats, host,
-                        env_prefix="export LD_LIBRARY_PATH=/opt/gnustep/lib; ")
+                        env_prefix="export LD_LIBRARY_PATH=/opt/gnustep/lib; " if base == "objc" else "")
                     if secs is None:
                         failures.append((name, lang, opt, [checksum]))
                         continue
                     checks[lang] = checksum
                     results.setdefault(name, {}).setdefault(opt, {})[lang] = secs
-                    print("  %-14s %-11s %-2s  %8.4fs  checksum %s"
+                    print("  %-14s %-12s %-2s  %8.4fs  checksum %s"
                           % (name, lang, opt, secs, checksum), flush=True)
                     continue
                 out = os.path.join(work, "%s.%s.%s" % (name, lang, opt))
@@ -339,7 +388,7 @@ def main():
                     continue
                 checks[lang] = checksum
                 results.setdefault(name, {}).setdefault(opt, {})[lang] = secs
-                print("  %-14s %-9s %-2s  %8.4fs  checksum %s"
+                print("  %-14s %-12s %-2s  %8.4fs  checksum %s"
                       % (name, lang, opt, secs, checksum), flush=True)
             if len(set(checks.values())) > 1:
                 mismatches.append((name, opt, checks))
@@ -348,10 +397,21 @@ def main():
     # Timing is taken inside the program, so there is nothing to subtract.
     # The baseline pair is kept only to show that startup is excluded: it
     # reports zero.
-    adjusted = {n: v for n, v in results.items() if n != BASELINE}
-
     outdir = os.path.join(ROOT, args.version)
     os.makedirs(outdir, exist_ok=True)
+    # A run restricted with --langs or --bench adds to the results already in
+    # this version's directory instead of replacing them, so a language can be
+    # measured later without re-timing the others.
+    prev_path = os.path.join(outdir, "results.json")
+    if (args.langs or args.bench) and os.path.isfile(prev_path):
+        with open(prev_path) as fh:
+            prev = json.load(fh).get("raw", {})
+        for n, by_opt in results.items():
+            for o, by_lang in by_opt.items():
+                prev.setdefault(n, {}).setdefault(o, {}).update(by_lang)
+        results = prev
+    adjusted = {n: v for n, v in results.items() if n != BASELINE}
+
     payload = {
         "version": args.version,
         "platform": subprocess.run(["uname", "-m"], capture_output=True, text=True).stdout.strip(),

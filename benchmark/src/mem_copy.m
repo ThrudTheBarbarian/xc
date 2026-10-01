@@ -7,7 +7,7 @@
 int main(int argc, char **argv)
     {
     @autoreleasepool {
-        static uint32_t src[N], dst[N];
+        uint32_t src[N], dst[N];
         uint32_t seed = (uint32_t)argc;
         for (uint32_t i = 0; i < N; i++) src[i] = i + seed;
         uint32_t acc = 0;

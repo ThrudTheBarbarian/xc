@@ -7,7 +7,7 @@
 int main(int argc, char **argv)
     {
     @autoreleasepool {
-        static uint32_t a[N], b[N], c[N];
+        uint32_t a[N], b[N], c[N];
         uint32_t seed = (uint32_t)argc;
         for (uint32_t i = 0; i < N; i++) { a[i] = i + seed; b[i] = (i * 3u) + seed; }
         int64_t t0 = bench_now_us();

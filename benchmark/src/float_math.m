@@ -7,7 +7,7 @@
 int main(int argc, char **argv)
     {
     @autoreleasepool {
-        static float a[N], b[N];
+        float a[N], b[N];
         uint32_t seed = (uint32_t)argc;
         for (uint32_t i = 0; i < N; i++)
             { a[i] = (float)((i + seed) % 16u); b[i] = (float)((i % 7u) + 1u); }
