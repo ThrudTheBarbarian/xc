@@ -25,6 +25,16 @@ void put(i32 i, i32 r, i32 g, i32 b)
     }
 UXImage@ gImg;
 
+// A view that paints far past its own frame, as a self-scrolling panel paints its page: the part
+// outside its frame must not reach the window.
+class Spill : UXView
+    {
+    void drawRect(UXGraphics* g, UXRect dirty)
+        {
+        g.fillRectRGB(UXGeom.make((i16)-10, (i16)-10, (i16)60, (i16)60), (i32)255, (i32)0, (i32)0);
+        }
+    }
+
 class Board : UXView
     {
     void drawRect(UXGraphics* g, UXRect dirty)
@@ -83,7 +93,9 @@ void main(void)
         return;
         }
     UXWindow* win = new UXWindow();
-    win.open((u8*)"Pixels", UXGeom.make((i16)80, (i16)80, (i16)160, (i16)80), new Board());
+    Board* board = new Board();
+    win.open((u8*)"Pixels", UXGeom.make((i16)80, (i16)80, (i16)160, (i16)80), board);
+    board.addSubview(new Spill(), UXGeom.make((i16)135, (i16)55, (i16)15, (i16)15));
     win.displayAll();
     ux_gtk_render((i32)1);
     near("top-left of the sheet is red (not upside down)", (i32)13, (i32)12, (i32)255, (i32)0, (i32)0);
@@ -95,6 +107,8 @@ void main(void)
     near("alpha 128 red over white is pink", (i32)103, (i32)12, (i32)255, (i32)127, (i32)127);
     near("a UXImage's left pixel is magenta", (i32)15, (i32)50, (i32)255, (i32)0, (i32)255);
     near("...and its right one cyan", (i32)45, (i32)50, (i32)0, (i32)255, (i32)255);
+    near("a view paints inside its frame", (i32)140, (i32)62, (i32)255, (i32)0, (i32)0);
+    near("...and NOT past it (its drawing is clipped to its frame)", (i32)130, (i32)50, (i32)255, (i32)255, (i32)255);
     if (gFails == (i32)0)
         {
         Stdio.printf("PASS: drawPixels on GTK -- region, scale, alpha, both layouts, the right way up\n");

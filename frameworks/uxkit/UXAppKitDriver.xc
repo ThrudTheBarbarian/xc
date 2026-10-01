@@ -121,6 +121,9 @@ void ux_ak_scroll_style(i32 handle, i32 node, i32 radius, i32 rgb);
 // A transparency layer over (x,y,w,h) of the current 2-D context, and its end: a self-surface
 // view's own layer inside the one surface (see drawOne).
 void ux_ak_layer_begin(i32 x, i32 y, i32 w, i32 h);
+// A clip to (x,y,w,h) of the current 2-D context, and its pop: a view's drawing stays in its frame.
+void ux_ak_clip_push(i32 x, i32 y, i32 w, i32 h);
+void ux_ak_clip_pop();
 void ux_ak_layer_end();
 // Move a native control into the document view of a scroll view it is inside, so it scrolls and
 // clips with the scroll (ax,ay is the control's absolute origin; setFrame 0 leaves it to AppKit).
@@ -1333,8 +1336,17 @@ class UXAppKitDriver : Object<UXViewDriver>
             }
         if ((k == (i32)UXKindView || k == (i32)UXKindSurface || k == (i32)UXKindShield || k == (i32)UXKindGLView || k == (i32)UXKindCheckbox || k == (i32)UXKindRadio || k == (i32)UXKindToolbar) && gAKUserFn != (pointer)0)
             {
+            // A view's drawing stays INSIDE ITS FRAME, as an NSView's does: a panel that draws its own
+            // page offset by a scroll relies on its box to cut the rest off.
+            i32 vx = (i32)0;
+            i32 vy = (i32)0;
+            i32 vw = (i32)0;
+            i32 vh = (i32)0;
+            self.structAbsFrame((pointer)t, i, &vx, &vy, &vw, &vh);
+            ux_ak_clip_push(vx - gAKDrawOX, vy - gAKDrawOY, vw, vh);
             UXUserDrawFn* f = (UXUserDrawFn*)gAKUserFn; // checkbox/radio: app-drawn on AppKit (no native art yet)
             f((pointer)t.nodes, i, gAKUserUd);
+            ux_ak_clip_pop();
             }
         else if (k == (i32)UXKindButton)
             {
@@ -1386,11 +1398,27 @@ class UXAppKitDriver : Object<UXViewDriver>
                 ux_ak_text((u8*)t.nodes[i].spec, ax + (i32)2, ay + (i32)2, (i32)0, (i32)0, (i32)0, (i32)255, (i32)12);
                 }
             }
+        // A CLIPPING view (setClipsOf: a scroll view's viewport, a table's rows) keeps its whole
+        // subtree inside its frame.
+        bool clips = t.nodes[i].clips != (i16)0;
+        if (clips)
+            {
+            i32 cx = (i32)0;
+            i32 cy = (i32)0;
+            i32 cw = (i32)0;
+            i32 chh = (i32)0;
+            self.structAbsFrame((pointer)t, i, &cx, &cy, &cw, &chh);
+            ux_ak_clip_push(cx - gAKDrawOX, cy - gAKDrawOY, cw, chh);
+            }
         i16 c = t.nodes[i].head;
         while (c >= (i16)0)
             {
             self.drawOne(t, (i32)c);
             c = t.nodes[c].next;
+            }
+        if (clips)
+            {
+            ux_ak_clip_pop();
             }
         }
     void treeDraw(pointer tree, i32 start, i32 clx, i32 cly, i32 clw, i32 clh)

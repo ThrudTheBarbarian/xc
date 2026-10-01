@@ -1671,6 +1671,23 @@ void ux_ak_draw_pixels(const void* data, int w, int h, int format, int sx, int s
     CGImageRelease(part);
     }
 
+/* A view's drawing stays inside its frame, as an NSView's does: the walk clips to the view's rect
+ * around its drawRect (and around a clipping view's whole subtree), and pops it after. */
+void ux_ak_clip_push(int x, int y, int w, int h)
+    {
+    CGContextRef c = [[NSGraphicsContext currentContext] CGContext];
+    if (!c)
+        return;
+    CGContextSaveGState(c);
+    CGContextClipToRect(c, CGRectMake(x, y, w, h));
+    }
+void ux_ak_clip_pop(void)
+    {
+    CGContextRef c = [[NSGraphicsContext currentContext] CGContext];
+    if (c)
+        CGContextRestoreGState(c);
+    }
+
 /* A transparency layer: everything drawn until the matching end goes into a buffer that starts
  * EMPTY, and is composited over what was already drawn when it ends.  A clear inside it erases the
  * layer's own pixels only.  It is how a view that asked for its own surface keeps that meaning in

@@ -22,6 +22,16 @@ void put(i32 i, i32 r, i32 g, i32 b)
     }
 UXImage@ gImg;
 
+// A view that paints far past its own frame, as a self-scrolling panel paints its page: the part
+// outside its frame must not reach the window.
+class Spill : UXView
+    {
+    void drawRect(UXGraphics* g, UXRect dirty)
+        {
+        g.fillRectRGB(UXGeom.make((i16)-10, (i16)-10, (i16)60, (i16)60), (i32)255, (i32)0, (i32)0);
+        }
+    }
+
 class Board : UXView
     {
     void drawRect(UXGraphics* g, UXRect dirty)
@@ -66,6 +76,7 @@ class Delegate : Object<UXApplicationDelegate>
         Board* board = new Board();
         UXWindow* win = new UXWindow();
         win.open((u8*)"Pixels", UXGeom.make((i16)40, (i16)40, (i16)160, (i16)80), board);
+        board.addSubview(new Spill(), UXGeom.make((i16)135, (i16)55, (i16)15, (i16)15));
         app.addWindow(win);
         win.displayAll();
         pointer hw = gW32Hwnds[win.handle];
@@ -81,6 +92,8 @@ class Delegate : Object<UXApplicationDelegate>
         near("a UXImage's left pixel is magenta", (i32)15, (i32)50, (i32)255, (i32)0, (i32)255);
         near("...and its right one cyan", (i32)45, (i32)50, (i32)0, (i32)255, (i32)255);
         near("outside every draw it is white", (i32)150, (i32)70, (i32)255, (i32)255, (i32)255);
+        near("a view paints inside its frame", (i32)140, (i32)62, (i32)255, (i32)0, (i32)0);
+        near("...and NOT past it (its drawing is clipped to its frame)", (i32)130, (i32)50, (i32)255, (i32)255, (i32)255);
         ReleaseDC(hw, gDc);
         if (gFails == (i32)0)
             {

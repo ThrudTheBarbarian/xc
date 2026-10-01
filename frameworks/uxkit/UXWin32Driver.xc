@@ -857,6 +857,12 @@ pointer gW32FbStatus;
 pointer gW32ReadPx;
 pointer gW32StretchDIBits; // gdi32, by name: it is not in the toolchain's import map
 i32 gW32FboTried;
+pointer gW32SaveDC;          // a view's clip, by name like the rest: SaveDC / IntersectClipRect / RestoreDC
+pointer gW32RestoreDC;
+pointer gW32IntersectClip;
+typedef i32 W32SaveDCFn(pointer hdc);
+typedef i32 W32RestoreDCFn(pointer hdc, i32 n);
+typedef i32 W32IntersectClipFn(pointer hdc, i32 l, i32 t, i32 r, i32 b);
 typedef void W32GlGenFn(i32 n, u32* out);
 typedef void W32GlBindFn(u32 target, u32 id);
 typedef void W32GlRbStorageFn(u32 target, u32 fmt, i32 w, i32 h);
@@ -3233,8 +3239,39 @@ class UXWin32Driver : Object<UXViewDriver>
         // view inline as a UXKindView is exactly that decline.
         if ((k == (i32)UXKindView || k == (i32)UXKindShield || k == (i32)UXKindGLView || k == (i32)UXKindSurface) && gW32UserFn != (pointer)0)
             {
+            // A view's drawing stays INSIDE ITS FRAME, as an NSView's does.
+            if (gW32SaveDC == (pointer)0)
+                {
+                pointer gdi = LoadLibraryA((pointer)"gdi32.dll");
+                if (gdi != (pointer)0)
+                    {
+                    gW32SaveDC = GetProcAddress(gdi, (u8*)"SaveDC");
+                    gW32RestoreDC = GetProcAddress(gdi, (u8*)"RestoreDC");
+                    gW32IntersectClip = GetProcAddress(gdi, (u8*)"IntersectClipRect");
+                    }
+                }
+            i32 saved = (i32)0;
+            if (gW32SaveDC != (pointer)0 && gW32RestoreDC != (pointer)0 && gW32IntersectClip != (pointer)0 && gW32CurHdc != (pointer)0)
+                {
+                i32 vx = (i32)0;
+                i32 vy = (i32)0;
+                i32 vw = (i32)0;
+                i32 vh = (i32)0;
+                self.structAbsFrame((pointer)t, i, &vx, &vy, &vw, &vh);
+                vx = vx - gW32DrawOX;
+                vy = vy - gW32DrawOY;
+                W32SaveDCFn* sd = (W32SaveDCFn*)gW32SaveDC;
+                saved = sd(gW32CurHdc);
+                W32IntersectClipFn* ic = (W32IntersectClipFn*)gW32IntersectClip;
+                ic(gW32CurHdc, vx, vy, vx + vw, vy + vh);
+                }
             UXUserDrawFn* f = (UXUserDrawFn*)gW32UserFn;
             f((pointer)t.nodes, i, gW32UserUd);
+            if (saved != (i32)0)
+                {
+                W32RestoreDCFn* rd = (W32RestoreDCFn*)gW32RestoreDC;
+                rd(gW32CurHdc, saved);
+                }
             }
         else if (k == (i32)UXKindButton && t.nodes[i].ctrl != (pointer)0)
             {

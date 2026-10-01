@@ -745,8 +745,16 @@ class UXWebDriver : Object<UXViewDriver>
         bool fallback = k == (i32)UXKindButton || k == (i32)UXKindField || k == (i32)UXKindTable || k == (i32)UXKindLabel;
         if (!fallback && gWebUserFn != (pointer)0)
             {
+            // A view's drawing stays INSIDE ITS FRAME, as an NSView's does.
+            i32 vx = (i32)0;
+            i32 vy = (i32)0;
+            i32 vw = (i32)0;
+            i32 vh = (i32)0;
+            self.structAbsFrame((pointer)t, i, &vx, &vy, &vw, &vh);
+            ux_clip(vx, vy, vw, vh);
             UXWebUserDrawFn* f = (UXWebUserDrawFn*)gWebUserFn;
             f((pointer)t.nodes, i, gWebUserUd);
+            ux_clip_end();
             }
         else if (k == (i32)UXKindButton)
             {

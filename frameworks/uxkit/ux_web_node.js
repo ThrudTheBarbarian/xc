@@ -16,6 +16,7 @@ const wins = new Map();
 let nextH = 1;
 let target = 0;
 let clip = null;                       // {x,y,w,h} or null
+const clipStack = [];                  // the clips under the current one
 const settings = new Map();
 
 const U8  = () => new Uint8Array(globalThis.xcc.memory.buffer);
@@ -88,8 +89,17 @@ globalThis.xccImports = { env: {
 
   // ── drawing ──
   ux_gfx_target: (h) => { target = h; },
-  ux_clip:     (x, y, w, h) => { clip = { x, y, w, h }; },
-  ux_clip_end: () => { clip = null; },
+  // A STACK, as the page's save/clip/restore is: a view's clip nested inside a clipping subtree
+  // intersects with it, and ending the inner one restores the outer.
+  ux_clip:     (x, y, w, h) => {
+    clipStack.push(clip);
+    if (clip) {
+      const x1 = Math.max(x, clip.x), y1 = Math.max(y, clip.y);
+      const x2 = Math.min(x + w, clip.x + clip.w), y2 = Math.min(y + h, clip.y + clip.h);
+      clip = { x: x1, y: y1, w: Math.max(0, x2 - x1), h: Math.max(0, y2 - y1) };
+    } else clip = { x, y, w, h };
+  },
+  ux_clip_end: () => { clip = clipStack.length ? clipStack.pop() : null; },
   ux_fill_rect: (x, y, w, h, r, g, b, a) => {
     const c = clipRect(x, y, w, h);
     if (c) rec({ op: 'fill', ...c, rgb: (r << 16) | (g << 8) | b, a });

@@ -1178,8 +1178,16 @@ class UXGtkDriver : Object<UXViewDriver>
             // same fix as the web driver; the capture pipeline found it.)
             if (gGtkUserFn != (pointer)0)
                 {
+                // A view's drawing stays INSIDE ITS FRAME, as an NSView's does.
+                i32 vx = (i32)0;
+                i32 vy = (i32)0;
+                i32 vw = (i32)0;
+                i32 vh = (i32)0;
+                self.structAbsFrame((pointer)t, i, &vx, &vy, &vw, &vh);
+                ux_gtk_clip(vx, vy, vw, vh);
                 UXGtkUserDrawFn* f = (UXGtkUserDrawFn*)gGtkUserFn;
                 f((pointer)t.nodes, i, gGtkUserUd);
+                ux_gtk_clip_end();
                 }
             }
         bool clips = t.nodes[i].clips != (i16)0;

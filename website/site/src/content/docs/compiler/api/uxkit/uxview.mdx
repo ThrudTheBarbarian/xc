@@ -228,6 +228,12 @@ void drawRect(UXGraphics* g, UXRect dirty)
 clip. Draw through `g` in [`bounds`](#bounds) coordinates. Do not call it
 yourself.
 
+What a view draws stays inside its frame, as an `NSView`'s does: a panel that
+paints its own page offset by a scroll can rely on its box to cut off the rest.
+A view whose subtree must stay inside it too (a viewport over a taller document)
+is marked clipping by the tree, as [`UXScrollView`](/compiler/api/uxkit/uxscrollview/)
+does for its clip view.
+
 ### setNeedsDisplay
 
 ```c
