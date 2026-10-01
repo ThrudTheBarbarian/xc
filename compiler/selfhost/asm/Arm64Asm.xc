@@ -2615,7 +2615,15 @@ class Arm64Asm
                     if (comma != (u32)$FFFF_FFFF) aTxt = aTxt.substringBytes((u32)0, comma);
                     U64* a = parseImm(aTxt.trimmed());
                     u32 al = (u32)1 << a.lo();
-                    if (section == (u32)0) { while (textAddr % al != (u32)0) textAddr = textAddr + (u32)1; }
+                    // In text the padding is NOPS, emitted as instructions: moving
+                    // the address without emitting anything would put every
+                    // later label out of step with the bytes.
+                    if (section == (u32)0) {
+                        while (textAddr % al != (u32)0) {
+                            insns.add((Object*)String.withCString("nop"));
+                            textAddr = textAddr + (u32)4;
+                        }
+                    }
                     else {
                         while (dataAddr % al != (u32)0) {
                             _dataBytes.add((Object*)Number.withU32((u32)0));

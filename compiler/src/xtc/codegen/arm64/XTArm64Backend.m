@@ -2882,6 +2882,47 @@ static XTIROperand *icmpZeroTestValue(XTIRInsn *icmp, XTArm64FnCtx *ctx) {
         }
     }
 
+    // ── Integer multiply-add: Add/Sub with a single-use Mul operand ──
+    // a*b+c → madd, c-a*b → msub. Exact (integer arithmetic wraps the same
+    // either way), and it takes the multiply off its own instruction: a dot
+    // product such as matrix_mul's inner loop is one madd per element. The Mul
+    // must be IMMEDIATELY before the Add/Sub, for the reason the FMA fusion
+    // above documents. 32- and 64-bit only: a narrow result is canonicalised
+    // after the op, and the fused form would have to do that too.
+    for (XTIRBlock *bb in fn.blocks) {
+        XTIRInsn *prevInsn = nil;
+        for (XTIRInsn *insn in bb.instructions) {
+            XTIRInsn *localPrev = prevInsn;
+            prevInsn = insn;
+            if ((insn.opcode != XTIROpAdd && insn.opcode != XTIROpSub)
+                || !insn.result || insn.operands.count < 2) continue;
+            XTIRType *ty = insn.result.type;
+            if (!ty || !XTIRTypeKindIsInteger(ty.kind) || (ty.byteWidth != 4 && ty.byteWidth != 8)) continue;
+            if (ctx.fuseAt[@(insn.result.valueId)]) continue;
+            XTIROperand *o0 = insn.operands[0], *o1 = insn.operands[1];
+            XTIRInsn *(^mulOf)(XTIROperand *) = ^XTIRInsn *(XTIROperand *o) {
+                if (o.kind != XTIROperandKindUse) return nil;
+                if ([uses countForObject:@(o.valueId)] != 1) return nil;
+                if ([ctx.fusedAway containsObject:@(o.valueId)]) return nil;
+                XTIRInsn *d = defOf[@(o.valueId)];
+                if (!(d && d.opcode == XTIROpMul && d.operands.count >= 2 && d.result)) return nil;
+                if (d.result.type.byteWidth != ty.byteWidth) return nil;
+                return (d == localPrev) ? d : nil;
+            };
+            XTIRInsn *mul = nil; XTIROperand *addend = nil; NSString *mnem = nil;
+            if (insn.opcode == XTIROpAdd) {
+                if ((mul = mulOf(o0))) { addend = o1; mnem = @"madd"; }
+                else if ((mul = mulOf(o1))) { addend = o0; mnem = @"madd"; }
+            } else if ((mul = mulOf(o1))) { addend = o0; mnem = @"msub"; }   // c - a*b
+            if (!mul) continue;
+            ctx.fuseAt[@(insn.result.valueId)] = @{
+                @"kind": @"ima", @"mnem": mnem,
+                @"a": mul.operands[0], @"b": mul.operands[1], @"c": addend,
+            };
+            [ctx.fusedAway addObject:@(mul.result.valueId)];
+        }
+    }
+
     // ── Shifted register operand: `orr Rd, Rn, Rm, lsr #k` ──
     // arm64 lets a data-processing instruction shift its SECOND source for
     // free, so a constant shift feeding one of these never needs to exist. It
@@ -3606,6 +3647,14 @@ static uint64_t satMul64(uint64_t a, uint64_t b) {
         NSString *rb = [self operandReg:fz[@"b"] intoScratch:[self fregName:1 forType:ty] ctx:ctx];
         NSString *rc = [self operandReg:fz[@"c"] intoScratch:[self fregName:2 forType:ty] ctx:ctx];
         NSString *d  = [self resultReg:insn.result.valueId scratch:[self fregName:0 forType:ty] ctx:ctx];
+        [ctx.out appendFormat:@"    %@ %@, %@, %@, %@\n", fz[@"mnem"], d, ra, rb, rc];
+        [self storeReg:d intoValue:insn.result.valueId ctx:ctx];
+    } else if ([kind isEqualToString:@"ima"]) {
+        XTIRType *ty = insn.result.type;
+        NSString *ra = [self operandReg:fz[@"a"] intoScratch:[self regName:15 forType:ty] ctx:ctx];
+        NSString *rb = [self operandReg:fz[@"b"] intoScratch:[self regName:16 forType:ty] ctx:ctx];
+        NSString *rc = [self operandReg:fz[@"c"] intoScratch:[self regName:17 forType:ty] ctx:ctx];
+        NSString *d  = [self resultReg:insn.result.valueId scratch:[self regName:16 forType:ty] ctx:ctx];
         [ctx.out appendFormat:@"    %@ %@, %@, %@, %@\n", fz[@"mnem"], d, ra, rb, rc];
         [self storeReg:d intoValue:insn.result.valueId ctx:ctx];
     }
@@ -6759,7 +6808,7 @@ static BOOL arm64NamesFrameReg(NSString *t) {
     // Function label + prologue. Mach-O underscore convention so
     // a C stub linking against `add` finds `_add`.
     [out appendFormat:@".globl _%@\n", fn.name];
-    [out appendFormat:@".align 2\n_%@:\n", fn.name];
+    [out appendFormat:@".p2align 4\n_%@:\n", fn.name];
     // Prologue. The pre-indexed `stp [sp, #-N]!` immediate caps at
     // 504 bytes; for larger frames adjust SP separately (sub allows
     // imm12 up to 4095, or a temp-register-built value beyond that).

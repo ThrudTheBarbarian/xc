@@ -1530,7 +1530,11 @@ static NSString *quadSymbolOperand(NSString *l) {
             if([l hasPrefix:@".align"]||[l hasPrefix:@".p2align"]){
                 int64_t a; NSScanner*s=[NSScanner scannerWithString:[l substringFromIndex:([l hasPrefix:@".p2align"]?8:6)]];
                 [s scanInteger:(NSInteger*)&a]; uint64_t al=1ull<<a;
-                if(section==0){ while(textAddr%al) textAddr++; } else { while(dataAddr%al){ uint8_t z=0;[_data appendBytes:&z length:1]; dataAddr++; } }
+                // In text the padding is NOPS, emitted as instructions: an
+                // alignment there only ever falls between whole instructions,
+                // and moving the address without emitting anything would put
+                // every later label out of step with the bytes.
+                if(section==0){ while(textAddr%al){ [insns addObject:@"nop"]; textAddr+=4; } } else { while(dataAddr%al){ uint8_t z=0;[_data appendBytes:&z length:1]; dataAddr++; } }
                 continue;
             }
             if([l hasPrefix:@".comm"]||[l hasPrefix:@".zerofill"]||[l hasPrefix:@".lcomm"]) {

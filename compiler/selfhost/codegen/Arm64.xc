@@ -254,7 +254,7 @@ class Arm64
     void emitPrologue(IRFunc* fn)
     {
         _out.appendFormat(".globl _%s\n", fn.name().cString());
-        _out.appendFormat(".align 2\n_%s:\n", fn.name().cString());
+        _out.appendFormat(".p2align 4\n_%s:\n", fn.name().cString());
         // The pre-indexed `stp [sp, #-N]!` immediate caps at 504 bytes; a
         // larger frame adjusts sp separately.
         if (_maxOutStack == (u32)0) {
@@ -1772,7 +1772,72 @@ class Arm64
                 _fusedAway.set((Hashable*)mul.res(), (Object*)mul.res());
             }
         }
+        fuseIntMultiplyAdds(fn);
         computeShiftFusions(fn);
+    }
+
+    // a*b+c becomes madd, c-a*b msub (the reference explains). 32- and 64-bit
+    // only, and the Mul must be immediately before its consumer.
+    static bool isWordIntTy(String* t)
+    {
+        return t != (String*)0 && (t.equals(String.withCString("I32")) || t.equals(String.withCString("U32"))
+                                || t.equals(String.withCString("I64")) || t.equals(String.withCString("U64")));
+    }
+
+    void fuseIntMultiplyAdds(IRFunc* fn)
+    {
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1) {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1) {
+                IRInsn* n = (IRInsn*)bb.insns().get(i);
+                bool isAdd = n.op().equals(String.withCString("Add"));
+                bool isSub = n.op().equals(String.withCString("Sub"));
+                if (!isAdd && !isSub) continue;
+                if (n.res() == (IRValue*)0 || n.ops().count() < (u32)2) continue;
+                String* ty = n.res().ty();
+                if (!isWordIntTy(ty)) continue;
+                if (_fuseKind.get((Hashable*)n.res()) != (Object*)0) continue;
+                IROperand* o0 = (IROperand*)n.ops().get((u32)0);
+                IROperand* o1 = (IROperand*)n.ops().get((u32)1);
+                IRInsn* prev = (i > (u32)0) ? (IRInsn*)bb.insns().get(i - (u32)1) : (IRInsn*)0;
+                IRInsn* mul = (IRInsn*)0;
+                IROperand* addend = (IROperand*)0;
+                String* mnem = (String*)0;
+                if (isAdd) {
+                    mul = singleUseIMul(o0, prev, ty);
+                    if (mul != (IRInsn*)0) { addend = o1; mnem = String.withCString("madd"); }
+                    else {
+                        mul = singleUseIMul(o1, prev, ty);
+                        if (mul != (IRInsn*)0) { addend = o0; mnem = String.withCString("madd"); }
+                    }
+                } else {
+                    mul = singleUseIMul(o1, prev, ty);
+                    if (mul != (IRInsn*)0) { addend = o0; mnem = String.withCString("msub"); }
+                }
+                if (mul == (IRInsn*)0) continue;
+                _fuseKind.set((Hashable*)n.res(), (Object*)String.withCString("ima"));
+                _fuseMnem.set((Hashable*)n.res(), (Object*)mnem);
+                _fuseA.set((Hashable*)n.res(), (Object*)mul.ops().get((u32)0));
+                _fuseB.set((Hashable*)n.res(), (Object*)mul.ops().get((u32)1));
+                _fuseC.set((Hashable*)n.res(), (Object*)addend);
+                _fusedAway.set((Hashable*)mul.res(), (Object*)mul.res());
+            }
+        }
+    }
+
+    IRInsn* singleUseIMul(IROperand* o, IRInsn* prev, String* ty)
+    {
+        if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0) return (IRInsn*)0;
+        if (useCountOf(o.val()) != (u32)1) return (IRInsn*)0;
+        if (inMap(_fusedAway, o.val())) return (IRInsn*)0;
+        Object* d = _defOf.get((Hashable*)o.val());
+        if (d == (Object*)0) return (IRInsn*)0;
+        IRInsn* n = (IRInsn*)d;
+        if (!n.op().equals(String.withCString("Mul")) || n.ops().count() < (u32)2 || n.res() == (IRValue*)0)
+            return (IRInsn*)0;
+        if (width(n.res().ty()) != width(ty)) return (IRInsn*)0;
+        if (n != prev) return (IRInsn*)0;
+        return n;
     }
 
     // Shifted register operand: `orr Rd, Rn, Rm, lsr #k`. arm64 lets a
@@ -1888,6 +1953,17 @@ class Arm64
                               ((Number*)_fuseAmt.get((Hashable*)n.res())).asU32());
             canonicaliseUnlessProven(d, n.res());
             storeReg(d, n.res());
+            return;
+        }
+        if (kind.equals(String.withCString("ima"))) {
+            String* ia = operandReg((IROperand*)_fuseA.get((Hashable*)n.res()), scratchName((u32)15, ty));
+            String* ib = operandReg((IROperand*)_fuseB.get((Hashable*)n.res()), scratchName((u32)16, ty));
+            String* ic = operandReg((IROperand*)_fuseC.get((Hashable*)n.res()), scratchName((u32)17, ty));
+            String* id = resultReg(n.res(), scratchName((u32)16, ty));
+            _out.appendFormat("    %s %s, %s, %s, %s\n",
+                              ((String*)_fuseMnem.get((Hashable*)n.res())).cString(),
+                              id.cString(), ia.cString(), ib.cString(), ic.cString());
+            storeReg(id, n.res());
             return;
         }
         String* ra = operandReg((IROperand*)_fuseA.get((Hashable*)n.res()), fregName((u32)0, ty));
