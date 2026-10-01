@@ -47,6 +47,7 @@ static int g_quit = 0;
 static id g_winDelegate = 0;
 static id g_menuTarget = 0;
 static ux_dispatch_fn g_dispatch = 0;
+static void ak_no_implicit_actions(NSView* v); // fwd (defined near the surface below)
 
 void ux_ak_stop(void); // fwd
 
@@ -481,6 +482,7 @@ void ux_ak_gl_place(int handle, void* peer, int x, int y, int w, int h, int hidd
      * there is nothing to go stale.  Must be set before makeGLContext, whose context binds
      * to the layer AppKit makes here. */
     [v setWantsLayer:YES];
+    ak_no_implicit_actions(v); // no implicit animation between GL frames either
     g_glPeer[g_glCount] = peer;
     g_glView[g_glCount] = v;
     g_glCtx[g_glCount] = nil;
@@ -3310,6 +3312,22 @@ static Class ak_surface_class(void)
     return c;
     }
 
+// Turn off Core Animation's implicit animations on a view's layer.  A layer that ANIMATES its bounds
+// or position shows the OLD content sliding over the new frame for the animation's duration, which
+// reads as a stale/ shaded patch (the client's, dividing at the window's midlines).  AppKit adds
+// these wherever a layer-backed view's geometry or contents change; nothing here wants an animation.
+static void ak_no_implicit_actions(NSView* v)
+    {
+    if (!v || !v.layer)
+        return;
+    NSMutableDictionary* d = [NSMutableDictionary dictionary];
+    for (NSString* k in @[@"position", @"bounds", @"contents", @"opacity", @"hidden",
+                          @"backgroundColor", @"transform", @"sublayers", @"onOrderIn", @"onOrderOut"])
+        {
+        d[k] = [NSNull null];
+        }
+    [v.layer setActions:d];
+    }
 void ux_ak_make_surface(int handle, int node, int x, int y, int w, int h, void* view)
     {
     NSView* content = g_view[handle];
@@ -3324,6 +3342,7 @@ void ux_ak_make_surface(int handle, int node, int x, int y, int w, int h, void* 
      * its layer form, which is the preferred compositing path.  Needed for rounded menu/panel
      * corners and for the ink layer over the map. */
     [s setWantsLayer:YES];
+    ak_no_implicit_actions(s);
     [s.layer setOpaque:NO];
     [s.layer setBackgroundColor:NULL]; // no background: transparent where nothing is drawn
     /* A big layer is drawn in backing-store TILES, and a tile that is not redrawn shows as a stale
