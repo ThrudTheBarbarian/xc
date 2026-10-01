@@ -156,11 +156,13 @@ child window. GTK and the web still put the GL on a plane of its own.
 view's size at the display's scale, but a maximised window on a 5K display, or
 one stretched across two monitors, can be larger than an older GPU's limit
 (`GL_MAX_TEXTURE_SIZE`, `GL_MAX_RENDERBUFFER_SIZE`, `GL_MAX_VIEWPORT_DIMS`). Then
-AppKit, Win32 and the web shrink the drawable by one factor on both sides, so
-the aspect is kept, and stretch the frame back over the view. The picture gets
+every backend with GL shrinks the drawable by one factor on both sides, so the
+aspect is kept, and stretches the frame back over the view. The picture gets
 softer but is never cropped. The viewport follows the drawable, so the renderer
 needs no change. On the web the canvas keeps the view's CSS size and the
-browser does the stretching.
+browser does the stretching. On GTK, whose `GtkGLArea` sizes its own
+framebuffer, the renderer draws into one the driver makes at the clamped size,
+and the area's render signal stretches it over GTK's.
 
 **The present cadence is the rule GL rests on: present happens at most once per
 loop turn, after damage is consolidated, and the driver owns the frame clock.**

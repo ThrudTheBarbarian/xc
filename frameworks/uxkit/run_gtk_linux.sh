@@ -16,6 +16,7 @@ _root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null)
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
 xcc=${XCC:-xcc}
+test=${1:-test_gtk_real} # another GTK test to run on the Linux host, e.g. test_gtk_gl
 # The Linux machine is UX_LINUX_HOST, or XTC_LINUX_HOST when that is empty
 # (both in build.env).
 host=${UX_LINUX_HOST:-${XTC_LINUX_HOST:-}}
@@ -26,7 +27,7 @@ ssh "$host" 'pkg-config --exists gtk4 && which xvfb-run' >/dev/null 2>&1 || { ec
 
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
 echo "== gtk-linux: emitting x86_64 asm =="
-"$xcc" -A x86_64 -I "$here" "$here/test_gtk_real.xc" -o "$work/test.s" -q 2>/dev/null
+"$xcc" -A x86_64 -I "$here" "$here/$test.xc" -o "$work/test.s" -q 2>/dev/null
 
 echo "== gtk-linux: building the hybrid on $host =="
 rdir=$(ssh "$host" 'mktemp -d')

@@ -30,6 +30,9 @@
 
 // The rig surface (libUXGtk.c), not part of the driver.
 extern void ux_gtk_wait_allocated(i32 handle);
+extern void ux_gtk_gl_test_max(i32 px);
+extern i32 ux_gtk_gl_test_corner(i32 handle, i32 node);
+extern void ux_gtk_pump(void);
 
 typedef u8* GetStrFn(u32 which);
 typedef void ClearColorFn(float r, float g, float b, float a);
@@ -140,6 +143,33 @@ void main(void)
     ck(ge() == (u32)0, "no GL error over the frame");
     map.presentGL();
     ck(ge() == (u32)0, "no GL error over the swap");
+
+    // The drawable is CLAMPED to what the GPU can hold.  GtkGLArea sizes its own framebuffer, so over
+    // the limit the renderer draws into the driver's (the clamped size, the aspect kept) and the area's
+    // render signal stretches it over GTK's.  The real limit is far above 640, so lower it to 64.
+    ux_gtk_gl_test_max((i32)64);
+    map.presentGL(); // make_current after the present notices the area is over the limit
+    gi((u32)0x0BA2, &viewport[0]);
+    Stdio.printf("clamped viewport %d %d %d %d\n", viewport[0], viewport[1], viewport[2], viewport[3]);
+    ck(viewport[2] == (i32)64 && viewport[3] == (i32)40, "the drawable is clamped to 64 with the view's aspect");
+    cc(0.125, 0.75, 0.25, 1.0);
+    cl((u32)0x00004000);
+    fin();
+    map.presentGL();
+    i32 corner = (i32)0;
+    for (i32 k = (i32)0; k < (i32)200 && corner == (i32)0; k = k + (i32)1)
+        {
+        ux_gtk_pump();
+        corner = ux_gtk_gl_test_corner(win.handle, (i32)map.index);
+        }
+    Stdio.printf("clamped corner %06x\n", corner);
+    ck(((corner >> (i32)8) & (i32)255) > (i32)160 && ((corner >> (i32)16) & (i32)255) < (i32)60,
+       "the clamped frame is stretched over GTK's framebuffer to its far corner");
+    ux_gtk_gl_test_max((i32)0);
+    map.presentGL(); // back under the limit: GTK's own framebuffer again
+    gi((u32)0x0BA2, &viewport[0]);
+    ck(viewport[2] >= (i32)640 && viewport[3] >= (i32)400, "and back under the limit the viewport is the full size");
+    ck(ge() == (u32)0, "no GL error over the clamp");
 
     pointer tok = map.glContext();
     ck(map.makeGL() && map.glContext() == tok, "makeGL is idempotent");

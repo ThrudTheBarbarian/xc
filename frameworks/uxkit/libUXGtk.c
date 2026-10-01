@@ -498,11 +498,156 @@ int ux_gtk_shield_on_top(int handle)
  * this shim needs only glViewport for itself.
  */
 static GtkWidget* gGlA[UXGTK_MAXW][256];
+static void* gl_entry(const char* name);
 
-static gboolean gl_render_cb(GtkGLArea* a, GdkGLContext* c, gpointer ud)
+/* THE CLAMP.  The area's framebuffer is GTK's, sized at the allocation times the scale factor, and
+ * GTK offers no way to cap it -- but a maximised window at 150-200% scaling on an old integrated GPU,
+ * or one across two monitors, can be larger than the GPU's limit.  So when the area is over the limit
+ * the renderer gets OUR framebuffer instead, at the clamped size (one factor on both sides, keeping
+ * the aspect), bound by make_current with the viewport set to it; and in the render signal, where GTK
+ * has bound its own framebuffer, the frame is blitted across, stretched with linear filtering.  Under
+ * the limit nothing changes.  ux_gtk_gl_test_max lowers the limit for a gate. */
+typedef struct { unsigned fbo, rb; int w, h; unsigned areaFbo; int cornerRGB; } GlClamp;
+static GlClamp gClamp[UXGTK_MAXW][256];
+static int gGlTestMax = 0;
+void ux_gtk_gl_test_max(int px)
     {
-    (void)a; (void)c; (void)ud;
+    gGlTestMax = px;
+    }
+typedef void (*gl_genfn)(int, unsigned*);
+typedef void (*gl_bindfn)(unsigned, unsigned);
+typedef void (*gl_getintfn)(unsigned, int*);
+static int gl_max_px(void)
+    {
+    gl_getintfn gi = (gl_getintfn)gl_entry("glGetIntegerv");
+    int m = 0;
+    if (gi)
+        {
+        int v[2] = {0, 0};
+        gi(0x0D33, v); /* GL_MAX_TEXTURE_SIZE */
+        m = v[0];
+        v[0] = 0;
+        gi(0x84E8, v); /* GL_MAX_RENDERBUFFER_SIZE */
+        if (v[0] > 0 && (m <= 0 || v[0] < m))
+            m = v[0];
+        v[0] = v[1] = 0;
+        gi(0x0D3A, v); /* GL_MAX_VIEWPORT_DIMS */
+        if (v[0] > 0 && (m <= 0 || v[0] < m))
+            m = v[0];
+        if (v[1] > 0 && (m <= 0 || v[1] < m))
+            m = v[1];
+        }
+    if (gGlTestMax > 0 && (m <= 0 || gGlTestMax < m))
+        m = gGlTestMax;
+    return m;
+    }
+static void gl_clamp_free(GlClamp* c)
+    {
+    gl_genfn delFb = (gl_genfn)gl_entry("glDeleteFramebuffers");
+    gl_genfn delRb = (gl_genfn)gl_entry("glDeleteRenderbuffers");
+    if (c->fbo && delFb)
+        delFb(1, &c->fbo);
+    if (c->rb && delRb)
+        delRb(1, &c->rb);
+    c->fbo = c->rb = 0;
+    c->w = c->h = 0;
+    }
+/* With the context current: make sure the renderer's framebuffer is the right one for the area's
+ * size now, and bind it.  Returns 1 when the clamp is in force. */
+static int gl_clamp_bind(int handle, int node, int pw, int ph)
+    {
+    GlClamp* c = &gClamp[handle][node];
+    gl_bindfn bindFb = (gl_bindfn)gl_entry("glBindFramebuffer");
+    int m = gl_max_px();
+    if (m <= 0 || (pw <= m && ph <= m) || !bindFb)
+        {
+        if (c->fbo)
+            {
+            gl_clamp_free(c);
+            bindFb(0x8D40, c->areaFbo); /* back to GTK's own, as when the area was never clamped */
+            typedef void (*vpfn)(int, int, int, int);
+            vpfn vp = (vpfn)gl_entry("glViewport");
+            if (vp)
+                vp(0, 0, pw, ph); /* the viewport follows the drawable */
+            }
+        return 0;
+        }
+    double k = (double)m / (pw > ph ? pw : ph);
+    int cw = (int)(pw * k), ch = (int)(ph * k);
+    if (cw < 1)
+        cw = 1;
+    if (ch < 1)
+        ch = 1;
+    if (!c->fbo || c->w != cw || c->h != ch)
+        {
+        gl_clamp_free(c);
+        gl_genfn genFb = (gl_genfn)gl_entry("glGenFramebuffers");
+        gl_genfn genRb = (gl_genfn)gl_entry("glGenRenderbuffers");
+        gl_bindfn bindRb = (gl_bindfn)gl_entry("glBindRenderbuffer");
+        typedef void (*storefn)(unsigned, unsigned, int, int);
+        typedef void (*attachfn)(unsigned, unsigned, unsigned, unsigned);
+        storefn store = (storefn)gl_entry("glRenderbufferStorage");
+        attachfn attach = (attachfn)gl_entry("glFramebufferRenderbuffer");
+        if (!genFb || !genRb || !bindRb || !store || !attach)
+            return 0;
+        genRb(1, &c->rb);
+        bindRb(0x8D41, c->rb);             /* GL_RENDERBUFFER */
+        store(0x8D41, 0x8058, cw, ch);     /* GL_RGBA8 */
+        genFb(1, &c->fbo);
+        bindFb(0x8D40, c->fbo);
+        attach(0x8D40, 0x8CE0, 0x8D41, c->rb); /* COLOR_ATTACHMENT0 */
+        c->w = cw;
+        c->h = ch;
+        typedef void (*vpfn)(int, int, int, int);
+        vpfn vp = (vpfn)gl_entry("glViewport");
+        if (vp)
+            vp(0, 0, cw, ch); /* the viewport follows the drawable */
+        }
+    bindFb(0x8D40, c->fbo);
+    return 1;
+    }
+
+static gboolean gl_render_cb(GtkGLArea* a, GdkGLContext* ctx, gpointer ud)
+    {
+    (void)ctx;
+    int key = GPOINTER_TO_INT(ud);
+    int handle = key >> 8, node = key & 255;
+    GlClamp* c = (handle >= 0 && handle < UXGTK_MAXW) ? &gClamp[handle][node] : NULL;
+    gl_getintfn gi = (gl_getintfn)gl_entry("glGetIntegerv");
+    int bound = 0;
+    if (gi)
+        gi(0x8CA6, &bound); /* GL_DRAW_FRAMEBUFFER_BINDING: GTK's own, bound for this signal */
+    if (c)
+        c->areaFbo = (unsigned)bound;
+    if (c && c->fbo)
+        {
+        /* The app's frame is in our clamped framebuffer: stretch it over the area's. */
+        gl_bindfn bindFb = (gl_bindfn)gl_entry("glBindFramebuffer");
+        typedef void (*blitfn)(int, int, int, int, int, int, int, int, unsigned, unsigned);
+        blitfn blit = (blitfn)gl_entry("glBlitFramebuffer");
+        int s = gtk_widget_get_scale_factor(GTK_WIDGET(a));
+        int aw = gtk_widget_get_width(GTK_WIDGET(a)) * (s < 1 ? 1 : s);
+        int ah = gtk_widget_get_height(GTK_WIDGET(a)) * (s < 1 ? 1 : s);
+        if (bindFb && blit)
+            {
+            bindFb(0x8CA8, c->fbo);            /* READ */
+            bindFb(0x8CA9, (unsigned)bound);   /* DRAW */
+            blit(0, 0, c->w, c->h, 0, 0, aw, ah, 0x4000, 0x2601); /* COLOR, LINEAR */
+            bindFb(0x8D40, (unsigned)bound);
+            typedef void (*rpfn)(int, int, int, int, unsigned, unsigned, void*);
+            rpfn rp = (rpfn)gl_entry("glReadPixels");
+            unsigned char px[4] = {0, 0, 0, 0};
+            if (rp)
+                rp(aw - 2, ah - 2, 1, 1, 0x1908, 0x1401, px); /* the far corner, for a gate */
+            c->cornerRGB = (px[0] << 16) | (px[1] << 8) | px[2];
+            }
+        }
     return TRUE; /* the app's frame is already in the FBO: no default clear */
+    }
+/* Test only: the far corner of the area's framebuffer after the last clamped blit (0xRRGGBB). */
+int ux_gtk_gl_test_corner(int handle, int node)
+    {
+    return (handle >= 0 && handle < UXGTK_MAXW && node >= 0 && node < 256) ? gClamp[handle][node].cornerRGB : -1;
     }
 
 void ux_gtk_make_gl(int handle, int node, int x, int y, int w, int h, int hidden)
@@ -512,7 +657,7 @@ void ux_gtk_make_gl(int handle, int node, int x, int y, int w, int h, int hidden
     if (!gGlA[handle][node])
         {
         GtkWidget* gl = gtk_gl_area_new();
-        g_signal_connect(gl, "render", G_CALLBACK(gl_render_cb), NULL);
+        g_signal_connect(gl, "render", G_CALLBACK(gl_render_cb), GINT_TO_POINTER((handle << 8) | node));
         /* BELOW the cairo drawing area, so the toolkit's 2D lands over the map. */
         gtk_widget_insert_before(gl, GTK_WIDGET(gFix[handle]), gArea[handle]);
         gtk_fixed_move(gFix[handle], gl, x, y);
@@ -551,6 +696,9 @@ int ux_gtk_gl_make_current(int handle, int node)
     gtk_gl_area_make_current(GTK_GL_AREA(gGlA[handle][node]));
     if (gtk_gl_area_get_error(GTK_GL_AREA(gGlA[handle][node])))
         return 0;
+    int pw, ph;
+    gl_pixel_size(handle, node, &pw, &ph);
+    gl_clamp_bind(handle, node, pw, ph); /* over the GPU's limit: the renderer draws into ours */
     return 1;
     }
 
@@ -588,6 +736,12 @@ void ux_gtk_gl_viewport(int handle, int node)
         return;
     int pw, ph;
     gl_pixel_size(handle, node, &pw, &ph);
+    GlClamp* c = &gClamp[handle][node];
+    if (c->fbo)
+        {
+        pw = c->w; /* clamped: the drawable is ours, smaller than the area */
+        ph = c->h;
+        }
     if (pw < 1)
         pw = 1;
     if (ph < 1)
@@ -628,7 +782,11 @@ void ux_gtk_gl_forget(int handle)
     if (handle < 0 || handle >= UXGTK_MAXW)
         return;
     for (int n = 0; n < 256; n++)
+        {
         gGlA[handle][n] = NULL;
+        gClamp[handle][n].fbo = gClamp[handle][n].rb = 0; /* freed with the window's context */
+        gClamp[handle][n].w = gClamp[handle][n].h = 0;
+        }
     }
 
 static void draw_cb(GtkDrawingArea* a, cairo_t* cr, int w, int h, gpointer ud)
