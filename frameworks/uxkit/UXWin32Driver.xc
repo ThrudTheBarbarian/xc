@@ -3439,6 +3439,10 @@ class UXWin32Driver : Object<UXViewDriver>
         gW32DrawTree = (W32Tree*)tree;
         self.drawOne((W32Tree*)tree, start);
         }
+    // the view is clipped to its frame by this driver's own tree walk
+    void endViewDraw(void)
+        {
+        }
     UXGraphics* beginViewDraw(i32 ax, i32 ay, i32 aw, i32 ah)
         {
         gW32Gfx.bind(gW32CurHdc, UXGeom.make((i16)(ax - gW32DrawOX), (i16)(ay - gW32DrawOY), (i16)aw, (i16)ah));

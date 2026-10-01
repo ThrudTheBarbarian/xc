@@ -279,8 +279,9 @@ void xtos_host_inject(const struct os_event* ev)
 // 23-arg call from xtc to this C function reads garbage for every arg after the 8th.  This wrapper
 // takes 4 args (all in registers, which xtc passes correctly) and makes the real 23-arg call itself
 // — a C→C call, so the C compiler's correct AAPCS marshaling applies.  out[0..5] = mx,my,mb,ks,key,nc.
-// UXKit always calls evnt_multi with bclk/bmask/bstate = 1 and every mouse-rect = 0, so those are fixed
-// here.  Board (arm9) UXKit keeps the direct call; this exists only in the host libxtos.
+// UXKit asks for every press AND release of any button (bmask 0 matches them all) and, when the
+// flags carry MU_M1, for any motion (a zero rect with m1f = 1 fires on leaving it, i.e. on every move);
+// it decodes which button and which edge itself.  So those arguments are fixed here.  Board (arm9) UXKit keeps the direct call; this exists only in the host libxtos.
 extern int evnt_multi(int flags, int bclk, int bmask, int bstate,
                       int m1f, int m1x, int m1y, int m1w, int m1h,
                       int m2f, int m2x, int m2y, int m2w, int m2h,
@@ -290,7 +291,7 @@ extern int evnt_multi(int flags, int bclk, int bmask, int bstate,
 int xg_evnt_multi(int flags, void* mepbuf, int timeout_ms, int* out)
     {
     int mx = 0, my = 0, mb = 0, ks = 0, key = 0, nc = 0;
-    int r = evnt_multi(flags, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    int r = evnt_multi(flags, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0,
                        (short*)mepbuf, timeout_ms & 0xFFFF, (timeout_ms >> 16) & 0xFFFF,
                        &mx, &my, &mb, &ks, &key, &nc);
     out[0] = mx;

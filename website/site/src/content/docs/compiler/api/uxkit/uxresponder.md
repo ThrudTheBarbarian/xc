@@ -56,7 +56,7 @@ tree.
 
 ## Topics
 
-[setNextResponder](#setnextresponder) · [mouseDown](#mousedown) · [mouseUp](#mouseup) · [mouseDragged](#mousedragged) · [scrollWheel](#scrollwheel) · [keyDown](#keydown) · [acceptsFirstResponder](#acceptsfirstresponder) · [becomeFirstResponder](#becomefirstresponder) · [resignFirstResponder](#resignfirstresponder)
+[setNextResponder](#setnextresponder) · [mouseDown](#mousedown) · [mouseUp](#mouseup) · [mouseDragged](#mousedragged) · [scrollWheel](#scrollwheel) · [mouseMoved](#mousemoved) · [rightMouseDown](#rightmousedown) · [keyDown](#keydown) · [acceptsFirstResponder](#acceptsfirstresponder) · [becomeFirstResponder](#becomefirstresponder) · [resignFirstResponder](#resignfirstresponder)
 
 ### setNextResponder
 
@@ -115,10 +115,33 @@ Movement with a button held, on backends that report it.
 void scrollWheel(UXEvent* e)
 ```
 
-A wheel notch, count in `e.a`. This handler is designed to climb. A table row or
+The wheel: `e.b` is the DOM's `deltaY` in pixels (positive scrolls down, 100 a
+notch), so code ported from a web page reads the same number, and `e.a` is the
+whole notches (positive scrolls up). This handler is designed to climb. A table row or
 a cell does not scroll, so it forwards, and the first ancestor that scrolls (the
 table, or a [`UXScrollView`](/compiler/api/uxkit/uxscrollview/)) consumes it. The
 wheel acts on whatever the pointer is over, not on the focused view.
+
+### mouseMoved
+
+```c
+void mouseMoved(UXEvent* e)
+```
+
+The pointer moved with no button held, at `e.x, e.y`: hover. Like the wheel, it
+goes to the view under the pointer and gives it no focus, and an unhandled one
+climbs to the next responder. On GEM it reaches the focused window only, since
+that is where gemd sends motion.
+
+### rightMouseDown
+
+```c
+void rightMouseDown(UXEvent* e)
+```
+
+A press of the secondary button, at `e.x, e.y`. It is separate from `mouseDown`,
+so a view that opens a context menu and a view that selects can tell them apart.
+Like a click, it gives the window the keyboard. An unhandled one climbs.
 
 ### keyDown
 

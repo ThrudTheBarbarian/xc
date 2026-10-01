@@ -33,6 +33,24 @@ static void inject_click(int x, int y, int shift)
     usleep(60 * 1000); // a real click: down, brief hold, up
     xtos_host_inject(&up);
     }
+// The secondary button: motion, then a right press and release (button bit 2, VDI_BTN_RIGHT).
+static void inject_rclick(int x, int y)
+    {
+    struct os_event mv = {.type = OS_EV_MOTION, .mx = x, .my = y};
+    struct os_event dn = {.type = OS_EV_BTN_DOWN, .mx = x, .my = y, .button = 2};
+    struct os_event up = {.type = OS_EV_BTN_UP, .mx = x, .my = y, .button = 2};
+    xtos_host_inject(&mv);
+    usleep(20 * 1000);
+    xtos_host_inject(&dn);
+    usleep(60 * 1000);
+    xtos_host_inject(&up);
+    }
+// Pointer motion with no button held: hover.
+static void inject_move(int x, int y)
+    {
+    struct os_event mv = {.type = OS_EV_MOTION, .mx = x, .my = y};
+    xtos_host_inject(&mv);
+    }
 static void inject_at(int x, int y)
     {
     inject_click(x, y, 0);
@@ -121,9 +139,13 @@ static int bar_height(void)
 //   MITEM  <title_x> <yoff>              click <yoff> px below the strip — into the just-opened dropdown
 //                                        (the client owns the strip height; the SERVER here does, so
 //                                        the harness resolves the y from its own aes_top_reserve)
-//   WHEEL  <handle> <local_x> <local_y> <notches>   a wheel scroll over a window (+notches = down);
+//   WHEEL  <handle> <local_x> <local_y> <notches>   a wheel scroll over a window (+notches = UP, the
+//                                        AES and SDL sense; -ve scrolls down);
 //                                        gemd scrolls the window under the point, so it's window-local
 //   KEY    <ascii> <shift>               a keystroke (shift = GEM Kbshift bits)
+//   MOVE   <handle> <local_x> <local_y>  pointer motion with no button held (hover); gemd sends
+//                                        motion to the FOCUSED window, so click it first
+//   RCLICK <handle> <local_x> <local_y>  a right-button press+release at a point
 //   DELAY  <ms>                          wait, so the client processes + repaints between steps
 // Returns 1 if the script was found and played, 0 if it never appeared within timeout_ms.
 static int play_script(const char* path, int timeout_ms)
@@ -184,9 +206,23 @@ static int play_script(const char* path, int timeout_ms)
         else if (sscanf(line, "WHEEL %d %d %d %d", &a, &b, &c, &d) == 4)
             {
             int ox = 0, oy = 0;
-            wind_work_origin(a, &ox, &oy); // d = notches (+ down)
+            wind_work_origin(a, &ox, &oy); // d = notches (+ up)
             printf("script: WHEEL win %d local %d,%d -> screen %d,%d notches %d\n", a, b, c, ox + b, oy + c, d);
             inject_wheel(ox + b, oy + c, d);
+            }
+        else if (sscanf(line, "MOVE %d %d %d", &a, &b, &c) == 3)
+            {
+            int ox = 0, oy = 0;
+            wind_work_origin(a, &ox, &oy);
+            printf("script: MOVE win %d local %d,%d -> screen %d,%d\n", a, b, c, ox + b, oy + c);
+            inject_move(ox + b, oy + c);
+            }
+        else if (sscanf(line, "RCLICK %d %d %d", &a, &b, &c) == 3)
+            {
+            int ox = 0, oy = 0;
+            wind_work_origin(a, &ox, &oy);
+            printf("script: RCLICK win %d local %d,%d -> screen %d,%d\n", a, b, c, ox + b, oy + c);
+            inject_rclick(ox + b, oy + c);
             }
         else if (sscanf(line, "KEY %d %d", &a, &b) == 2)
             {

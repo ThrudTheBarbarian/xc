@@ -71,6 +71,7 @@ i32 ux_userdraw(pointer tree, i32 obj, pointer ud)
 
     // Virtual dispatch into app code, from inside the backend's own traversal.
     v.drawRect(g, UXGeom.make((i16)0, (i16)0, abs.w, abs.h));
+    gDriver.endViewDraw();
     return (i32)0;
     }
 

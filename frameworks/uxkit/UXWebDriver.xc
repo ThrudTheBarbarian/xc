@@ -848,6 +848,10 @@ class UXWebDriver : Object<UXViewDriver>
         {
         self.drawOne((WebTree*)tree, start);
         }
+    // the view is clipped to its frame by this driver's own tree walk
+    void endViewDraw(void)
+        {
+        }
     UXGraphics* beginViewDraw(i32 ax, i32 ay, i32 aw, i32 ah)
         {
         gWebGfx.bind(UXGeom.make((i16)(ax - gWebDrawOX), (i16)(ay - gWebDrawOY), (i16)aw, (i16)ah));

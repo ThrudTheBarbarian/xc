@@ -1227,6 +1227,10 @@ class UXGtkDriver : Object<UXViewDriver>
         gGtkDrawTree = (GKTree*)tree;
         self.drawOne((GKTree*)tree, start);
         }
+    // the view is clipped to its frame by this driver's own tree walk
+    void endViewDraw(void)
+        {
+        }
     UXGraphics* beginViewDraw(i32 ax, i32 ay, i32 aw, i32 ah)
         {
         gGtkGfx.bind(UXGeom.make((i16)(ax - gGtkDrawOX), (i16)(ay - gGtkDrawOY), (i16)aw, (i16)ah));

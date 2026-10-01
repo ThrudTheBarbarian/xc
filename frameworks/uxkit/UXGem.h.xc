@@ -111,7 +111,8 @@ i32 evnt_multi(i32 flags, i32 bclk, i32 bmask, i32 bstate,
 #ifdef ARCH_arm64
 // Host-only compact wrapper (libxtos): xtc's arm64 backend mis-passes arguments past the 8th, so the
 // 23-arg evnt_multi above returns garbage output pointers on macOS.  This 4-arg form (all in
-// registers) makes the real call C-side.  out6 = i32[6] -> mx,my,mb,ks,key,nc.i32     xg_evnt_multi(i32 flags, pointer mepbuf, i32 timeoutMs, pointer out6);
+// registers) makes the real call C-side.  out6 = i32[6] -> mx,my,mb,ks,key,nc.
+i32 xg_evnt_multi(i32 flags, pointer mepbuf, i32 timeoutMs, pointer out6);
 i32 xg_drag_next(i32* x, i32* y); // one modal drag-track step: 1 = dragging (x,y set), 0 = released
 #endif
 
@@ -124,6 +125,12 @@ void vsf_color(i32 h, i32 pen);
 void vsf_interior(i32 h, i32 style);
 void vsf_perimeter(i32 h, i32 on);
 void vr_recfl(i32 h, pointer pxy);
+// Copy a raster, opaque (mode VRO_COPY): pxy = src x1,y1,x2,y2, dst x1,y1,x2,y2.  An MFDB whose addr
+// is 0 is the workstation's target surface; the copy INTO it is clipped to the ws clip.
+void vro_cpyfm(i32 h, i32 mode, pointer pxy, pointer src, pointer dst);
+// The clip STACK: on = 1 pushes the rect intersected with the current clip, on = 0 pops it.
+void vs_clip(i32 h, i32 on, pointer pxy);
+#define VRO_COPY 3 // vdi.h's enum: replace the destination
 void vst_color(i32 h, i32 pen);
 void vst_height(i32 h, i32 pts, pointer a, pointer b, pointer c, pointer d);
 void v_gtext(i32 h, i32 x, i32 y, u8* s);

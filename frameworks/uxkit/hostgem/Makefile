@@ -29,6 +29,12 @@ events: ; bash run_events.sh
 # Broader coverage: drive table selection, text-field typing, and button actions by injection.
 events-full: ; bash run_events_full.sh
 
+# Hover, the secondary button and the wheel reach the views, as on every other backend.
+input: ; bash run_input.sh
+
+# drawPixels: the shared sheet, read back from the window surface (region, scale, alpha, clip).
+pixels: ; bash run_pixels.sh
+
 # Settings: UXKeyValueStore over the XTOS SQLite registry, written by one process and read by the
 # next.  No gemd and no window — the settings seam is the only part of the AES that needs neither.
 settings:  ; bash run_settings.sh

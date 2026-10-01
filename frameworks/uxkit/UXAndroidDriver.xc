@@ -1099,6 +1099,10 @@ class UXAndroidDriver : Object<UXViewDriver>
         gAndDrawTree = (ANTree*)tree;
         self.drawOne((ANTree*)tree, start);
         }
+    // the view is clipped to its frame by this driver's own tree walk
+    void endViewDraw(void)
+        {
+        }
     UXGraphics* beginViewDraw(i32 ax, i32 ay, i32 aw, i32 ah)
         {
         gAndGfx.bind(UXGeom.make((i16)(ax - gAndDrawOX), (i16)(ay - gAndDrawOY), (i16)aw, (i16)ah));

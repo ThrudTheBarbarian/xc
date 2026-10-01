@@ -285,6 +285,10 @@ protocol UXViewDriver
     void treeSetUserDraw(pointer fn, pointer ud);
     void treeDraw(pointer tree, i32 start, i32 clx, i32 cly, i32 clw, i32 clh);
     UXGraphics* beginViewDraw(i32 ax, i32 ay, i32 aw, i32 ah);
+    // The view's drawRect has returned.  A backend that clips each view to its frame inside
+    // beginViewDraw (GEM, whose traversal is the AES's objc_draw) undoes that clip here; one that
+    // clips in its own tree walk does nothing.
+    void endViewDraw(void);
     // Subtracted from every beginViewDraw origin: lets a subtree be drawn into a native sub-surface
     // (a scroll view's document view) at that surface's own 0,0.  0,0 for the normal window draw.
     void setDrawOffset(i32 x, i32 y);

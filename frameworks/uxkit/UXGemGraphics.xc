@@ -68,9 +68,107 @@ class UXGemGraphics : Object<UXGraphics>
         {
         self.fillRectRGB(r, red, green, blue);
         }
-    // NOT YET on this backend: the bitmap is not drawn.  AppKit draws it; see STATE-OF-UXKIT.
+    // A bitmap region, scaled, with alpha.  The VDI copies rasters but neither scales nor blends, so this
+    // is a read-modify-write of the destination: copy it out of the surface (vro_cpyfm, screen -> a
+    // scratch raster), blend the source over it here -- nearest sampling, straight alpha -- and copy it
+    // back, which the ws clip cuts to the view.  The surface's pixels are 0xRRGGBBAA words.
     void drawPixels(u8* data, i32 w, i32 h, i32 format, UXRect src, UXRect dst, i32 alpha)
         {
+        i32 sx = (i32)src.x;
+        i32 sy = (i32)src.y;
+        i32 sw = (i32)src.w;
+        i32 sh = (i32)src.h;
+        if (sx < (i32)0)
+            {
+            sw = sw + sx;
+            sx = (i32)0;
+            }
+        if (sy < (i32)0)
+            {
+            sh = sh + sy;
+            sy = (i32)0;
+            }
+        if (sx + sw > w)
+            {
+            sw = w - sx;
+            }
+        if (sy + sh > h)
+            {
+            sh = h - sy;
+            }
+        i32 dw = (i32)dst.w;
+        i32 dh = (i32)dst.h;
+        if (data == (u8*)0 || alpha <= (i32)0 || sw <= (i32)0 || sh <= (i32)0 || dw <= (i32)0 || dh <= (i32)0)
+            {
+            return;
+            }
+        if (alpha > (i32)255)
+            {
+            alpha = (i32)255;
+            }
+        u32* buf = (u32*)malloc((u32)(dw * dh * (i32)4));
+        if (buf == (u32*)0)
+            {
+            return;
+            }
+        i32 dx = (i32)origin.x + (i32)dst.x;
+        i32 dy = (i32)origin.y + (i32)dst.y;
+        MFDB screen;
+        screen.addr = (u32*)0;
+        MFDB mem;
+        mem.addr = buf;
+        mem.w = (i16)dw;
+        mem.h = (i16)dh;
+        mem.stride = (i16)dw;
+        mem.nplanes = (i16)32;
+        mem.stand = (i16)0;
+        i16 pxy[8];
+        pxy[0] = (i16)dx;
+        pxy[1] = (i16)dy;
+        pxy[2] = (i16)(dx + dw - (i32)1);
+        pxy[3] = (i16)(dy + dh - (i32)1);
+        pxy[4] = (i16)0;
+        pxy[5] = (i16)0;
+        pxy[6] = (i16)(dw - (i32)1);
+        pxy[7] = (i16)(dh - (i32)1);
+        vro_cpyfm(vh, (i32)VRO_COPY, (pointer)&pxy[0], (pointer)&screen, (pointer)&mem); // what is under
+        for (i32 y = (i32)0; y < dh; y = y + (i32)1)
+            {
+            i32 v = sy + (y * sh) / dh;
+            for (i32 x = (i32)0; x < dw; x = x + (i32)1)
+                {
+                i32 u = sx + (x * sw) / dw;
+                u8* q = data + (v * w + u) * (i32)4;
+                i32 r = format == (i32)UXPIX_ARGB32 ? (i32)q[2] : (i32)q[0];
+                i32 g = (i32)q[1];
+                i32 b = format == (i32)UXPIX_ARGB32 ? (i32)q[0] : (i32)q[2];
+                i32 a = ((i32)q[3] * alpha + (i32)127) / (i32)255;
+                if (a == (i32)0)
+                    {
+                    continue;
+                    }
+                i32 k = y * dw + x;
+                if (a < (i32)255)
+                    {
+                    u32 d = buf[k];
+                    i32 ia = (i32)255 - a;
+                    r = (r * a + (i32)((d >> (u32)24) & (u32)255) * ia + (i32)127) / (i32)255;
+                    g = (g * a + (i32)((d >> (u32)16) & (u32)255) * ia + (i32)127) / (i32)255;
+                    b = (b * a + (i32)((d >> (u32)8) & (u32)255) * ia + (i32)127) / (i32)255;
+                    }
+                buf[k] = ((u32)r << (u32)24) | ((u32)g << (u32)16) | ((u32)b << (u32)8) | (u32)255;
+                }
+            }
+        pxy[0] = (i16)0;
+        pxy[1] = (i16)0;
+        pxy[2] = (i16)(dw - (i32)1);
+        pxy[3] = (i16)(dh - (i32)1);
+        pxy[4] = (i16)dx;
+        pxy[5] = (i16)dy;
+        pxy[6] = (i16)(dx + dw - (i32)1);
+        pxy[7] = (i16)(dy + dh - (i32)1);
+        vro_cpyfm(vh, (i32)VRO_COPY, (pointer)&pxy[0], (pointer)&mem, (pointer)&screen);
+        free((pointer)buf);
         }
     // No alpha on the VDI, so "empty" is the window background the AES paints — pen 0, the white a
     // G_BOX fills with.  A layer that needs to be see-through takes the other path at blendsAlpha.

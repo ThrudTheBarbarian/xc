@@ -255,7 +255,8 @@ straight (not premultiplied) alpha and sRGB. `src` is in the bitmap's pixels and
 The bitmap is not copied. A backend may keep what it builds from `data` keyed by
 its address — a 28 MB texture atlas is wrapped once, not on every call — so the
 bytes must not change after they are first drawn; draw changed pixels from a new
-buffer. Every backend draws it except GEM.
+buffer. Every backend draws it. GEM's VDI neither scales nor blends a raster, so
+there it reads the destination back, blends in software and copies the result in.
 
 ### fillPolygon
 

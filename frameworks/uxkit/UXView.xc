@@ -529,6 +529,7 @@ i32 ux_surface_userdraw(pointer tree, i32 obj, pointer ud)
     UXRect abs = vt.absoluteFrame((u16)obj);
     UXGraphics* g = gDriver.beginViewDraw((i32)abs.x, (i32)abs.y, (i32)abs.w, (i32)abs.h);
     v.drawRect(g, UXGeom.make((i16)0, (i16)0, abs.w, abs.h));
+    gDriver.endViewDraw();
     return (i32)0;
     }
 // Draw `node`'s subtree into a surface `w`x`h` whose 0,0 is the node's top-left.

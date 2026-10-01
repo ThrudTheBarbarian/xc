@@ -47,7 +47,12 @@ keeping other objects alive. The one exception is
 | `UXEventMouseUp` | a release |
 | `UXEventMouseDragged` | movement with a button held |
 | `UXEventKeyDown` | a key, in [`key`](#keys-and-modifiers) |
-| `UXEventWheel` | a wheel notch over a client-drawn scroll region; `a` is the notch count |
+| `UXEventWheel` | the wheel, at `x, y`: `b` is the DOM's `deltaY` in pixels (positive scrolls down, 100 a notch), `a` the whole notches (positive scrolls up) |
+| `UXEventMouseMoved` | the pointer moved with no button held, at `x, y` (hover) |
+| `UXEventRightMouseDown` | a press of the secondary button, at `x, y` |
+
+Every backend delivers the wheel, hover and the secondary button in this form,
+whatever its native sign or message.
 
 ### From the window system
 

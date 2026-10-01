@@ -804,11 +804,23 @@ class UXGemDriver : Object<UXViewDriver>
         }
     // Bind the driver's context to the view at `abs` and hand it back as UXGraphics — this is
     // what the draw seam calls per custom view, so it never touches the VDI handle or theme.
+    // The view's drawing is clipped to its frame, as on every backend: the frame is pushed onto the
+    // VDI's clip stack (intersected with the damage clip objc_draw set) and popped in endViewDraw.
     UXGraphics* beginViewDraw(i32 ax, i32 ay, i32 aw, i32 ah)
         {
         gGemGraphics.bind(aes_handle(), (pointer)&gGemTheme,
                           UXGeom.make((i16)ax, (i16)ay, (i16)aw, (i16)ah));
+        i16 pxy[4];
+        pxy[0] = (i16)ax;
+        pxy[1] = (i16)ay;
+        pxy[2] = (i16)(ax + aw - (i32)1);
+        pxy[3] = (i16)(ay + ah - (i32)1);
+        vs_clip(aes_handle(), (i32)1, (pointer)&pxy[0]);
         return gGemGraphics;
+        }
+    void endViewDraw(void)
+        {
+        vs_clip(aes_handle(), (i32)0, (pointer)0);
         }
     // GEM draws scroll content inline; no sub-surface
     void setDrawOffset(i32 x, i32 y)
@@ -943,8 +955,10 @@ class UXGemDriver : Object<UXViewDriver>
         key = out[4];
         nc = out[5];
 #else
-        i32 what = evnt_multi(classes, (i32)1, (i32)1, (i32)1,
-                              (i32)0, (i32)0, (i32)0, (i32)0, (i32)0,
+        // bmask 0: every press and release of any button (decoded below); m1f 1 over a zero rect: any
+        // motion, when the classes ask for MU_M1.  The same arguments the arm64 wrapper fixes.
+        i32 what = evnt_multi(classes, (i32)1, (i32)0, (i32)0,
+                              (i32)1, (i32)0, (i32)0, (i32)0, (i32)0,
                               (i32)0, (i32)0, (i32)0, (i32)0, (i32)0,
                               (pointer)&msg[0], timeoutMs, (i32)0,
                               (pointer)&mx, (pointer)&my, (pointer)&mb,
@@ -994,11 +1008,35 @@ class UXGemDriver : Object<UXViewDriver>
             }
         if ((what & MU_BUTTON) != (i32)0)
             {
-            ev.kind = (u8)UXEventMouseDown;
+            // A release (no button held) is not an event the run loop takes -- a control that follows
+            // the press tracks it in trackDragStep -- so it is an empty turn.  The right button alone
+            // is the secondary click; the left, alone or with the right, is the click.
+            if ((mb & (i32)3) == (i32)0)
+                {
+                return;
+                }
+            ev.kind = (mb & (i32)1) != (i32)0 ? (u8)UXEventMouseDown : (u8)UXEventRightMouseDown;
             ev.x = (i16)mx;
             ev.y = (i16)my;
             ev.buttons = (u16)mb;
             ev.modifiers = (u16)ks; // shift/ctrl on a click — a table reads it for multi-select
+            if (ev.kind == (u8)UXEventRightMouseDown)
+                {
+                ev.handle = aes_event_win(); // routed like the wheel: the window it happened in
+                }
+            return;
+            }
+        if ((what & MU_M1) != (i32)0)
+            {
+            // Hover: motion with no button held, in the window gemd sent it to (the focused one).  A
+            // motion with a button down outside a modal track is a drag nobody is following: dropped.
+            if ((mb & (i32)3) == (i32)0)
+                {
+                ev.kind = (u8)UXEventMouseMoved;
+                ev.x = (i16)mx;
+                ev.y = (i16)my;
+                ev.handle = aes_event_win();
+                }
             return;
             }
         if ((what & MU_KEYBD) != (i32)0)
@@ -1015,7 +1053,7 @@ class UXGemDriver : Object<UXViewDriver>
     // exactly what the clock needs.  0 keeps the old block-until-there-is-one mask.
     void nextEvent(i32 timeoutMs, UXEvent* ev)
         {
-        i32 classes = MU_KEYBD | MU_BUTTON | MU_MESAG;
+        i32 classes = MU_KEYBD | MU_BUTTON | MU_MESAG | MU_M1; // M1: hover
         if (timeoutMs > (i32)0)
             {
             classes = classes | MU_TIMER;

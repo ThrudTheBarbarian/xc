@@ -349,9 +349,16 @@ bool setTurnHook(turnHook_t* fn, i32 ms)
 
 ```c
 UXGraphics* beginViewDraw(i32 ax, i32 ay, i32 aw, i32 ah)
+void endViewDraw(void)
 void setDrawOffset(i32 x, i32 y)
 bool scrollsNatively(void)
 ```
+
+`beginViewDraw` binds the drawing context to one view, and `endViewDraw` follows
+when that view's `drawRect` returns. A view's drawing is clipped to its frame on
+every backend. GEM does it here: its traversal is the AES's `objc_draw`, so it
+pushes the frame onto the VDI clip stack in `beginViewDraw` and pops it in
+`endViewDraw`. The others clip in their own tree walk and do nothing here.
 
 ### Text measurement
 
