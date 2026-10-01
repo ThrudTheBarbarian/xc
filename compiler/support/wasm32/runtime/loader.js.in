@@ -300,6 +300,28 @@
     _b_log(lvl, p, n) {
       (lvl >= 2 ? console.error : lvl === 1 ? console.warn : console.log)(bstr(p, n));
     },
+    _b_store_load(dp, dn) {
+      // Settings.standard() in a browser: one localStorage item per domain,
+      // a JSON object of strings. Handed back as `key = value` lines in a
+      // buffer from _xt_browser_alloc, its length in the first four bytes.
+      let o = {};
+      try { o = JSON.parse(globalThis.localStorage.getItem(bstr(dp, dn)) || "{}"); } catch (e) {}
+      const t = new TextEncoder().encode(Object.keys(o).sort()
+        .map(k => k + " = " + String(o[k])).join("\n"));
+      const p = XCC.instance.exports._xt_browser_alloc(t.length + 4);
+      new DataView(XCC.memory.buffer).setUint32(p, t.length, true);
+      bmem().set(t, p + 4);
+      return p;
+    },
+    _b_store_save(dp, dn, tp, tn) {
+      const o = {};
+      for (const line of bstr(tp, tn).split("\n")) {
+        const eq = line.indexOf("=");
+        if (eq > 0) o[line.slice(0, eq).trim()] = line.slice(eq + 1).trim();
+      }
+      try { globalThis.localStorage.setItem(bstr(dp, dn), JSON.stringify(o)); return 1; }
+      catch (e) { return 0; }
+    },
   }, extra.browser || {});
   // Imported xtc libraries (W2): each dep package is satisfied by LAZY
   // thunks so the app can instantiate FIRST (it owns memory + table); the

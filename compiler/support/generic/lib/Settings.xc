@@ -36,9 +36,11 @@
 //                            with no filesystem at all.
 //   Settings.open(path)      memory plus a file: read once here, rewritten in
 //                            full by save(). Needs Files.
-//   Settings.standard(name)  open() at the conventional per-user path
-//                            ($XCC_SETTINGS_DIR, else $HOME/.config/xcc),
-//                            falling back to memory() where there is no home.
+//   Settings.standard(name)  the platform's own settings store where it has
+//                            one (CFPreferences on macOS and iOS, the registry
+//                            on Windows, localStorage in a browser), else
+//                            open() at the conventional per-user path; see
+//                            standard() for the order.
 //
 // The FILE is text: one `key = value` per line, `#` starts a comment, blank
 // lines are ignored, and both sides are trimmed. A value cannot contain a
@@ -58,6 +60,7 @@
 #import "String.xc"
 #import "Array.xc"
 #import "Platform.xc"
+#import "SettingsStore.xc"
 
 #if ARCH_6502
 // A 6502 has no filesystem: the store stays in memory and save()/reload()
@@ -72,12 +75,14 @@ class Settings
     Array* _keys;    // String*, in insertion order
     Array* _values;  // String*, parallel to _keys
     String* _path;   // the backing file, or 0 for memory-only
+    String* _domain; // the platform store's name for these values, or 0
 
     void init(void)
         {
         _keys = new Array();
         _values = new Array();
         _path = (String*)0;
+        _domain = (String*)0;
         }
 
     // ── construction ─────────────────────────────────────────────────────
@@ -105,22 +110,56 @@ class Settings
 #endif
         }
 
-    // The conventional location for an app called `name`: $XCC_SETTINGS_DIR
-    // when it is set, else $HOME/.config/xcc. Where there is no home to read
-    // — a 6502, a bare ARM9, a browser tab — this is memory().
+    // The settings of an app called `name`, kept where this platform keeps
+    // them:
+    //
+    //   1. $XCC_SETTINGS_DIR/<name>.conf when that is set — a text file, on
+    //      every platform, so a test or a script can say exactly where.
+    //   2. The platform's own store, where there is one: CFPreferences domain
+    //      `name` on macOS and iOS (what `defaults` reads), the registry key
+    //      HKEY_CURRENT_USER\Software\<name> on Windows, localStorage in a
+    //      browser. path() is 0 for these.
+    //   3. Otherwise a text file: $XDG_CONFIG_HOME/<name>.conf, or
+    //      $HOME/.config/<name>.conf. A file 0.64 left at
+    //      $HOME/.config/xcc/<name>.conf is read when the new one is not
+    //      there yet; the next save() writes the new one.
+    //
+    // Where there is no store and no home — a 6502, a bare ARM9 — this is
+    // memory().
     static Settings* standard(String* name)
         {
         String* dir = Platform.env(String.withCString("XCC_SETTINGS_DIR"));
-        if (dir == 0 || dir.byteLength() == (u32)0)
+        if (dir != 0 && dir.byteLength() > (u32)0)
+            return Settings.open(dir.appending(String.withCString("/")).appending(name)
+                                 .appending(String.withCString(".conf")));
+        if (SettingsStore.native())
             {
-            String* home = Platform.home();
+            Settings* s = new Settings();
+            s._domain = String.withString(name);
+            SettingsStore.load(s._domain, s._keys, s._values);
+            return s;
+            }
+        String* home = Platform.home();
+        String* config = Platform.env(String.withCString("XDG_CONFIG_HOME"));
+        if (config == 0 || config.byteLength() == (u32)0)
+            {
             if (home == 0 || home.byteLength() == (u32)0)
                 return Settings.memory();
-            dir = home.appending(String.withCString("/.config/xcc"));
+            config = home.appending(String.withCString("/.config"));
             }
-        String* path = dir.appending(String.withCString("/")).appending(name)
+        String* path = config.appending(String.withCString("/")).appending(name)
                       .appending(String.withCString(".conf"));
-        return Settings.open(path);
+        Settings* s = Settings.open(path);
+#if !ARCH_6502
+        if (s.count() == (u32)0 && home != 0 && home.byteLength() > (u32)0 && !Files.exists(path))
+            {
+            String* old = Files.readText(home.appending(String.withCString("/.config/xcc/")).appending(name)
+                                         .appending(String.withCString(".conf")));
+            if (old != 0)
+                s.loadText(old);
+            }
+#endif
+        return s;
         }
 
     // ── reading ──────────────────────────────────────────────────────────
@@ -298,11 +337,13 @@ class Settings
             }
         }
 
-    // Write the store to the backing file. False when there is no file to
-    // write (memory-only, or a target with no filesystem) — the caller can
-    // then say so instead of believing the settings persisted.
+    // Write the store to the platform store or the backing file. False when
+    // there is neither (memory-only, or a target with no filesystem) — the
+    // caller can then say so instead of believing the settings persisted.
     since("0.64") bool save(void)
         {
+        if (_domain != 0)
+            return SettingsStore.save(_domain, _keys, _values);
         if (_path == 0)
             return false;
 #if ARCH_6502
@@ -327,10 +368,12 @@ class Settings
         }
 #endif
 
-    // Re-read the backing file. A file that has since gone leaves the store
-    // EMPTY, not stale: the file is the truth.
+    // Re-read the platform store or the backing file. A file that has since
+    // gone leaves the store EMPTY, not stale: the file is the truth.
     since("0.64") bool reload(void)
         {
+        if (_domain != 0)
+            return SettingsStore.load(_domain, _keys, _values);
         if (_path == 0)
             return false;
 #if ARCH_6502
