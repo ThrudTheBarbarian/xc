@@ -84,6 +84,7 @@ i32 gWebSx[UXWEB_MAXW]; // handle -> scroll offset (the toolkit owns it: §5 web
 i32 gWebSy[UXWEB_MAXW];
 pointer gWebContentFn[UXWEB_MAXW];
 pointer gWebContentUd[UXWEB_MAXW];
+bool gWebPressed;     // the primary button is down: a move is a drag, not a hover
 i32 gWebFront;      // topmost window (single canvas z-order, JS composites)
 pointer gWebUserFn; // the per-view draw callback
 pointer gWebUserUd;
@@ -1006,18 +1007,30 @@ class UXWebDriver : Object<UXViewDriver>
 
     // ---- events (§3: the ring) -----------------------------------------------
     // The loader's event slots are [type, a, b, ...]: 1/2/3 mouse down/up/move
-    // (a=x, b=y, c=button), 4/5 key down/up (a=keyCode), 6 an animation tick
-    // the page pushes for the §3.2 consolidation.  window coordinates ARE
-    // canvas coordinates until multi-window compositing lands.
+    // (a=x, b=y, c=button: 0 primary, 2 secondary), 4/5 key down/up (a=keyCode), 6 an animation
+    // tick the page pushes for the §3.2 consolidation, 8 the wheel (a=x, b=y, c=deltaY in pixels,
+    // the DOM's own; 7 is a modal's answer).  window coordinates ARE canvas coordinates until
+    // multi-window compositing lands.
+    //
+    // A move is a DRAG only while the primary button is down, and a HOVER otherwise: the loader
+    // does not say which, so the driver remembers the press.  The secondary button is the context
+    // menu (UXEventRightMouseDown), never a press that starts a drag.
     void decodeRing(i32* r, UXEvent* ev)
         {
         i32 t = r[0];
-        if (t == (i32)1)
+        if (t == (i32)1 && r[3] == (i32)2)
+            {
+            ev.kind = (u8)UXEventRightMouseDown;
+            ev.x = (i16)r[1];
+            ev.y = (i16)r[2];
+            }
+        else if (t == (i32)1)
             {
             ev.kind = (u8)UXEventMouseDown;
             ev.x = (i16)r[1];
             ev.y = (i16)r[2];
             ev.buttons = (u16)1;
+            gWebPressed = true;
             }
         else if (t == (i32)2)
             {
@@ -1025,12 +1038,24 @@ class UXWebDriver : Object<UXViewDriver>
             ev.x = (i16)r[1];
             ev.y = (i16)r[2];
             ev.buttons = (u16)0;
+            if (r[3] != (i32)2)
+                {
+                gWebPressed = false;
+                }
             }
         else if (t == (i32)3)
             {
-            ev.kind = (u8)UXEventMouseDragged;
+            ev.kind = gWebPressed ? (u8)UXEventMouseDragged : (u8)UXEventMouseMoved;
             ev.x = (i16)r[1];
             ev.y = (i16)r[2];
+            }
+        else if (t == (i32)8)
+            {
+            ev.kind = (u8)UXEventWheel;
+            ev.x = (i16)r[1];
+            ev.y = (i16)r[2];
+            ev.b = r[3];                // pixels, as the DOM reports them
+            ev.a = r[3] / (i32)100;     // notches, for the readers that count them
             }
         else if (t == (i32)4)
             {
