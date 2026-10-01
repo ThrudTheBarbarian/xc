@@ -616,6 +616,64 @@ void ux_ios_fill(int x, int y, int w, int h, int r, int g, int b, int a)
     setRGBA(r, g, b, a);
     CGContextFillRect(gCtx, CGRectMake(x, y, w, h));
     }
+/* drawPixels: a bitmap region drawn into the draw in flight.  As on AppKit, the bitmap is wrapped in
+ * a CGImage ONCE, cached by address, size and layout (an atlas is not re-wrapped per icon), and read
+ * in place -- so the bytes must not change once drawn.  sRGB, straight alpha, top row first. */
+#define IOS_PIXCACHE 8
+static struct
+    {
+    const void* data;
+    int w, h, format;
+    CGImageRef img;
+    } gPixCache[IOS_PIXCACHE];
+static int gPixNext = 0;
+static CGImageRef ios_pixels_image(const void* data, int w, int h, int format)
+    {
+    for (int i = 0; i < IOS_PIXCACHE; i++)
+        if (gPixCache[i].img && gPixCache[i].data == data && gPixCache[i].w == w && gPixCache[i].h == h
+            && gPixCache[i].format == format)
+            return gPixCache[i].img;
+    CGColorSpaceRef cs = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+    CGDataProviderRef dp = CGDataProviderCreateWithData(NULL, data, (size_t)w * h * 4, NULL);
+    CGBitmapInfo bi = format == 1 ? (kCGImageAlphaFirst | kCGBitmapByteOrder32Little)
+                                  : (kCGImageAlphaLast | kCGBitmapByteOrderDefault);
+    CGImageRef img = CGImageCreate(w, h, 8, 32, (size_t)w * 4, cs, bi, dp, NULL, true, kCGRenderingIntentDefault);
+    CGDataProviderRelease(dp);
+    CGColorSpaceRelease(cs);
+    if (!img)
+        return NULL;
+    int k = gPixNext;
+    gPixNext = (gPixNext + 1) % IOS_PIXCACHE;
+    if (gPixCache[k].img)
+        CGImageRelease(gPixCache[k].img);
+    gPixCache[k].data = data;
+    gPixCache[k].w = w;
+    gPixCache[k].h = h;
+    gPixCache[k].format = format;
+    gPixCache[k].img = img;
+    return img;
+    }
+void ux_ios_draw_pixels(const void* data, int w, int h, int format, int sx, int sy, int sw, int sh,
+                        int dx, int dy, int dw, int dh, int alpha)
+    {
+    if (!gCtx || !data || w <= 0 || h <= 0 || sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0 || alpha <= 0)
+        return;
+    CGImageRef img = ios_pixels_image(data, w, h, format);
+    if (!img)
+        return;
+    CGImageRef part = CGImageCreateWithImageInRect(img, CGRectMake(sx, sy, sw, sh));
+    if (!part)
+        return;
+    CGContextSaveGState(gCtx);
+    CGContextSetAlpha(gCtx, alpha >= 255 ? 1.0 : alpha / 255.0);
+    CGContextSetInterpolationQuality(gCtx, kCGInterpolationHigh);
+    /* UIKit's context is y-down and an image is drawn y-up: flip it about its destination. */
+    CGContextTranslateCTM(gCtx, dx, dy + dh);
+    CGContextScaleCTM(gCtx, 1, -1);
+    CGContextDrawImage(gCtx, CGRectMake(0, 0, dw, dh), part);
+    CGContextRestoreGState(gCtx);
+    CGImageRelease(part);
+    }
 /* CLEAR: erase the rect whatever is under it, so a compositing layer starts empty.  A source-over
    fill at alpha 0 would paint nothing instead of emptying. */
 void ux_ios_clear(int x, int y, int w, int h)
