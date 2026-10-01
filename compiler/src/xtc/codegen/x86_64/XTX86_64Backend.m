@@ -2171,7 +2171,14 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
         {
         if ([self isMem:v])
             continue;
-        cur += [self slotSizeOf:v]; // aggregates (pinned locals) get full size
+        NSUInteger sz = [self slotSizeOf:v]; // aggregates (pinned locals) get full size
+        cur += sz;
+        // A slot of 16 bytes or more is 16-aligned (rbp is, after `push rbp`;
+        // the slot starts at rbp-cur), so a 16-byte access to a local array
+        // never straddles a cache line. One 8 bytes off cost a vectorised copy
+        // over it most of its speed. Mirrors the arm64 frame.
+        if (sz >= 16)
+            cur = (cur + 15) & ~(NSUInteger)15;
         slot[@(v.valueId)] = @(cur);
         }
     NSMutableDictionary<NSString*, NSNumber*>* saves = [NSMutableDictionary dictionary];

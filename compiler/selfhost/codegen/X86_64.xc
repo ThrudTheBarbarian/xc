@@ -5978,7 +5978,13 @@ class X86_64
             IRValue* v = (IRValue*)order.get(i);
             if (isMemTy(v.ty()))
                 continue;
-            cur = cur + slotSizeOf(v);
+            u32 sz = slotSizeOf(v);
+            cur = cur + sz;
+            // A slot of 16 bytes or more is 16-aligned (rbp is, after
+            // `push rbp`; the slot starts at rbp-cur), so a 16-byte access to a
+            // local array never straddles a cache line. Mirrors the arm64 frame.
+            if (sz >= (u32)16)
+                cur = (cur + (u32)15) & ~(u32)15;
             _slot.set((Hashable*)v, (Object*)Number.withU32(cur));
             }
         _frame = cur;
