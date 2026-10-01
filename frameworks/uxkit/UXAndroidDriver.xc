@@ -72,6 +72,7 @@ void ux_and_shell_run(void);
 void ux_and_quit(i32 rc);
 void ux_and_clip(i32 x, i32 y, i32 w, i32 h);
 void ux_and_clip_end(void);
+void ux_and_clip_round(i32 x, i32 y, i32 w, i32 h, i32 r); // ...with rounded corners
 i32 ux_and_text_width(u8* s, i32 size);
 i32 ux_and_text_width_font(u8* s, u8* family, i32 size, i32 bold, i32 italic);
 i32 ux_and_text_width_weight(u8* s, u8* family, i32 size, i32 weight, i32 italic);
@@ -98,6 +99,8 @@ struct ANNode
     i16 selected;
     i16 enabled;
     i16 clips;
+    i16 clipR;     // a clipping node's corner radius (structSetClipShape)
+    i16 clipIn;    // ...and the inset of its clip from its frame
     i16 selectable;
     i16 editable;
     pointer spec;
@@ -603,6 +606,8 @@ class UXAndroidDriver : Object<UXViewDriver>
         n.selected = (i16)0;
         n.enabled = (i16)1;
         n.clips = (i16)0;
+        n.clipR = (i16)0;
+        n.clipIn = (i16)0;
         n.selectable = (i16)0;
         n.editable = (i16)0;
         n.spec = (pointer)0;
@@ -803,6 +808,11 @@ class UXAndroidDriver : Object<UXViewDriver>
     void structSetClips(pointer h, i32 i, i32 on)
         {
         ((ANTree*)h).nodes[i].clips = (i16)on;
+        }
+    void structSetClipShape(pointer h, i32 i, i32 radius, i32 inset)
+        {
+        ((ANTree*)h).nodes[i].clipR = (i16)radius;
+        ((ANTree*)h).nodes[i].clipIn = (i16)inset;
         }
     void structSetSpec(pointer h, i32 i, pointer spec)
         {
@@ -1070,7 +1080,8 @@ class UXAndroidDriver : Object<UXViewDriver>
             i32 cw = (i32)0;
             i32 chh = (i32)0;
             self.structAbsFrame((pointer)t, i, &cx, &cy, &cw, &chh);
-            ux_and_clip(cx, cy, cw, chh);
+            i32 ci = (i32)t.nodes[i].clipIn;
+            ux_and_clip_round(cx + ci, cy + ci, cw - ci * (i32)2, chh - ci * (i32)2, (i32)t.nodes[i].clipR);
             }
         i16 c = t.nodes[i].head;
         while (c >= (i16)0)

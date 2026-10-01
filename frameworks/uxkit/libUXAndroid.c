@@ -1007,6 +1007,35 @@ void ux_and_clip(int x, int y, int w, int h) {
     (*env)->CallBooleanMethod(env, gDrawCanvas, gCanvasClipRect,
                               (jfloat)x, (jfloat)y, (jfloat)(x + w), (jfloat)(y + h));
 }
+/* A rounded clip: Path.addRoundRect(RectF, rx, ry, Direction.CW) + Canvas.clipPath.  The ids are
+ * resolved on first use.  ux_and_clip_end pops it. */
+static jmethodID gPathAddRoundRect, gCanvasClipPath, gRectFInit2;
+static jclass gRectFCls2;
+static jobject gDirCW;
+void ux_and_clip_round(int x, int y, int w, int h, int r) {
+    if (!gDrawCanvas) return;
+    if (r <= 0) { ux_and_clip(x, y, w, h); return; }
+    JNIEnv *env = envNow();
+    if (!gCanvasClipPath) {
+        gRectFCls2 = gref(env, "android/graphics/RectF");
+        gRectFInit2 = gRectFCls2 ? (*env)->GetMethodID(env, gRectFCls2, "<init>", "(FFFF)V") : 0;
+        gPathAddRoundRect = (*env)->GetMethodID(env, gPathCls, "addRoundRect",
+                               "(Landroid/graphics/RectF;FFLandroid/graphics/Path$Direction;)V");
+        gCanvasClipPath = (*env)->GetMethodID(env, gCanvasCls, "clipPath", "(Landroid/graphics/Path;)Z");
+        jobject cw = enumVal(env, "android/graphics/Path$Direction", "CW");
+        gDirCW = cw ? (*env)->NewGlobalRef(env, cw) : 0;
+        if (!check(env, "clip round ids") || !gRectFInit2 || !gDirCW) { gCanvasClipPath = 0; ux_and_clip(x, y, w, h); return; }
+    }
+    float rr = r * 2 > w ? w / 2.0f : r * 2 > h ? h / 2.0f : (float)r;
+    (*env)->CallIntMethod(env, gDrawCanvas, gCanvasSave);
+    if ((*env)->PushLocalFrame(env, 4) != 0) return;
+    jobject rect = (*env)->NewObject(env, gRectFCls2, gRectFInit2, (jfloat)x, (jfloat)y, (jfloat)(x + w), (jfloat)(y + h));
+    jobject path = (*env)->NewObject(env, gPathCls, gPathInit);
+    (*env)->CallVoidMethod(env, path, gPathAddRoundRect, rect, (jfloat)rr, (jfloat)rr, gDirCW);
+    (*env)->CallBooleanMethod(env, gDrawCanvas, gCanvasClipPath, path);
+    check(env, "clip round");
+    (*env)->PopLocalFrame(env, NULL);
+}
 void ux_and_clip_end(void) {
     if (!gDrawCanvas) return;
     JNIEnv *env = envNow();

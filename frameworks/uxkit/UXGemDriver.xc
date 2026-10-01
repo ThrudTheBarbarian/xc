@@ -724,6 +724,11 @@ class UXGemDriver : Object<UXViewDriver>
         OBJECT* t = ((UXGemTree*)h).tree;
         return (t[i].ob_state & (u16)OS_SELECTED) != (u16)0 ? (i32)1 : (i32)0;
         }
+    // The AES clips a subtree to the object's rectangle (OF_CLIPCHILDREN) and has no rounded clip, so
+    // a rounded panel keeps its square clip here: the decline.
+    void structSetClipShape(pointer h, i32 i, i32 radius, i32 inset)
+        {
+        }
     void structSetClips(pointer h, i32 i, i32 on)
         {
         OBJECT* t = ((UXGemTree*)h).tree;

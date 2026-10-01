@@ -454,6 +454,17 @@ struct TEXTMETRICA
     }
 i32 DeleteDC(pointer hdc);
 pointer CreateCompatibleBitmap(pointer hdc, i32 w, i32 h);
+// A rounded panel (UXScrollView.setCornerRadius on the native scroll container): the window region
+// clips the child to a rounded rectangle, and the edge is framed along that region.
+pointer CreateRoundRectRgn(i32 x1, i32 y1, i32 x2, i32 y2, i32 we, i32 he);
+i32 SetWindowRgn(pointer hwnd, pointer rgn, i32 redraw); // the system owns rgn afterwards
+i32 GetWindowRgn(pointer hwnd, pointer rgn);
+i32 PtInRegion(pointer rgn, i32 x, i32 y);
+i32 FrameRgn(pointer hdc, pointer rgn, pointer brush, i32 w, i32 h);
+pointer GetWindowDC(pointer hwnd);                     // the whole window, non-client area included
+u32 GetSysColor(i32 index);
+#define COLOR_WINDOWFRAME 6
+#define WM_NCPAINT $0085
 u32 GetPixel(pointer hdc, i32 x, i32 y); // read a pixel back (COLORREF 0x00BBGGRR) — offscreen tests
 pointer ImageList_Create(i32 cx, i32 cy, u32 flags, i32 cInitial, i32 cGrow);
 i32 ImageList_Add(pointer himl, pointer hbmImage, pointer hbmMask);

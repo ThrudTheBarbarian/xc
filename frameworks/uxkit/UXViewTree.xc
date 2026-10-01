@@ -188,6 +188,11 @@ class UXViewTree
         {
         gDriver.structSetClips(structHandle, (i32)i, on ? (i32)1 : (i32)0);
         }
+    // A clipping node's subtree clip, rounded and inset (see UXViewDriver.structSetClipShape).
+    void setClipShapeOf(u16 i, i32 radius, i32 inset)
+        {
+        gDriver.structSetClipShape(structHandle, (i32)i, radius, inset);
+        }
 
     // ---- control realization (delegated to the driver) ----------------------
     void setSpecOf(u16 i, pointer spec)

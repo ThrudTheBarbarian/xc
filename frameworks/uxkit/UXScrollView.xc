@@ -13,6 +13,8 @@
 #import "UXView.xc"
 #import "UXEvent.xc"
 #import "UXGraphics.xc"
+#import "UXShapePath.xc"
+#import "UXPainter.xc"   // a rounded panel's edge
 #import "UXApplication.xc" // gApp — to repaint mid thumb-drag (the run loop is parked then)
 
 // The scrollbar widget.  Generic: it reads its geometry from an UXScrollView and drives it.
@@ -214,6 +216,10 @@ class UXScrollbar : UXView
         vbar.scroll = self;
         self.addSubview(vbar, UXGeom.make((i16)((i32)frame.w - (i32)sbWidth), (i16)0, sbWidth, frame.h));
         vbar.setAutoresizeMask((i32)UX_ANCHOR_RIGHT | (i32)UX_FLEX_HEIGHT);
+        if (cornerRadius > (i16)0 || borderRGB >= (i32)0)
+            {
+            self.applyShape();
+            }
         }
 
     // ---- client surface -------------------------------------------------------
@@ -239,7 +245,7 @@ class UXScrollbar : UXView
     void setCornerRadius(i32 r)
         {
         cornerRadius = (i16)(r < (i32)0 ? (i32)0 : r);
-        self.setNeedsDisplay();
+        self.applyShape();
         }
     i32 nativeCornerRadius(void)
         {
@@ -249,12 +255,44 @@ class UXScrollbar : UXView
     void setBorderRGB(i32 r, i32 g, i32 b)
         {
         borderRGB = ((r & (i32)255) << (i32)16) | ((g & (i32)255) << (i32)8) | (b & (i32)255);
-        self.setNeedsDisplay();
+        self.applyShape();
         }
     void clearBorder(void)
         {
         borderRGB = (i32)-1;
+        self.applyShape();
+        }
+    // Where the TOOLKIT draws the scroll view (every backend but AppKit and Win32, whose scroll view is
+    // a native container and is rounded there): the edge is 1px inside the frame, the content and the
+    // bar are clipped to the rounded shape inside the edge, and the bar is inset between the corners.
+    i32 edgePx(void)
+        {
+        return (!gDriver.scrollsNatively() && borderRGB >= (i32)0) ? (i32)1 : (i32)0;
+        }
+    void applyShape(void)
+        {
+        if (owner != (UXViewTree*)0 && !gDriver.scrollsNatively())
+            {
+            i32 b = self.edgePx();
+            i32 r = (i32)cornerRadius - b;
+            owner.setClipsOf(index, cornerRadius > (i16)0 || b > (i32)0);
+            owner.setClipShapeOf(index, r > (i32)0 ? r : (i32)0, b);
+            self.relayout();
+            }
         self.setNeedsDisplay();
+        }
+    // The edge, drawn under the content (which is clipped inside it): a rounded stroke of width 2 along
+    // the frame's edge, whose outer half the view's own clip cuts away -- one crisp pixel inside.
+    void drawRect(UXGraphics* g, UXRect dirty)
+        {
+        if (borderRGB < (i32)0 || gDriver.scrollsNatively())
+            {
+            return;
+            }
+        UXRect bb = self.bounds();
+        UXShapePath* p = UXShapePath.roundRect((i16)0, (i16)0, bb.w, bb.h, (i32)cornerRadius);
+        UXPainter.strokePath(g, p, 2.0, UXPainter.rgb((borderRGB >> (i32)16) & (i32)255,
+                                                       (borderRGB >> (i32)8) & (i32)255, borderRGB & (i32)255));
         }
     i32 nativeBorderRGB(void)
         {
@@ -316,10 +354,16 @@ class UXScrollbar : UXView
             }
         UXRect f = self.frame();
         bool bar = self.needsBar();
-        i16 vw = bar ? (i16)((i32)f.w - (i32)sbWidth) : f.w;
+        // A rounded panel the toolkit draws: the content sits inside the 1px edge, and the bar between
+        // the corners so its ends are not cut off by the rounding.
+        i32 e = self.edgePx();
+        i32 ri = gDriver.scrollsNatively() ? (i32)0 : ((i32)cornerRadius > e ? (i32)cornerRadius : e);
+        i32 iw = (i32)f.w - e * (i32)2;
+        i16 vw = bar ? (i16)(iw - (i32)sbWidth) : (i16)iw;
         i16 vh = (i16)((i32)f.h - (i32)headerH);
-        owner.setFrameOf(clip.index, UXGeom.make((i16)0, headerH, vw, vh));
-        owner.setFrameOf(vbar.index, UXGeom.make((i16)((i32)f.w - (i32)sbWidth), headerH, sbWidth, vh));
+        owner.setFrameOf(clip.index, UXGeom.make((i16)e, (i16)((i32)headerH + e), vw, (i16)((i32)vh - e * (i32)2)));
+        owner.setFrameOf(vbar.index, UXGeom.make((i16)((i32)f.w - (i32)sbWidth - e), (i16)((i32)headerH + ri), sbWidth,
+                                                 (i16)((i32)vh - ri * (i32)2)));
         owner.setHiddenOf(vbar.index, !bar);
         i16 mo = (i16)self.maxScroll();
         if (scrollOffset > mo)

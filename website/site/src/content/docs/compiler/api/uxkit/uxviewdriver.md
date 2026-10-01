@@ -311,6 +311,7 @@ i32 structIsEnabled(pointer h, i32 i)
 void structSetSelected(pointer h, i32 i, i32 on)
 i32 structIsSelected(pointer h, i32 i)
 void structSetClips(pointer h, i32 i, i32 on)
+void structSetClipShape(pointer h, i32 i, i32 radius, i32 inset)
 void structSetSpec(pointer h, i32 i, pointer spec)
 void structSetSelectable(pointer h, i32 i, i32 on)
 void structSetEditable(pointer h, i32 i, i32 on)
@@ -319,6 +320,11 @@ void structSetAutoresize(pointer h, i32 i, i32 mask)
 void treeSetUserDraw(pointer fn, pointer ud)
 void treeDraw(pointer tree, i32 start, i32 clx, i32 cly, i32 clw, i32 clh)
 ```
+
+`structSetClipShape` gives a clipping node's subtree clip a shape: its frame inset
+by `inset` on every side, with corners of `radius` (`0` is square). It is how a
+rounded scroll view clips its content where the toolkit draws the scroll view.
+GEM's AES clip is a rectangle, so GEM keeps the square clip.
 
 ### Realization
 

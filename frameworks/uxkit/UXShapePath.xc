@@ -314,6 +314,38 @@ class UXPathElement : Object
         return dashOff;
         }
 
+    // A rectangle with rounded corners: four quarter circles as cubics (the 0.5523 control length that
+    // keeps a quarter circle within a fraction of a pixel), clockwise from the top edge.  The radius is
+    // clamped to half the shorter side; 0 is a plain rectangle.
+    static UXShapePath* roundRect(i16 x, i16 y, i16 w, i16 h, i32 r)
+        {
+        i32 mn = (i32)w < (i32)h ? (i32)w : (i32)h;
+        if (r > mn / (i32)2)
+            {
+            r = mn / (i32)2;
+            }
+        if (r <= (i32)0)
+            {
+            return UXShapePath.rect(x, y, w, h);
+            }
+        i32 k = (r * (i32)5523) / (i32)10000; // the control-point distance
+        i32 x0 = (i32)x;
+        i32 y0 = (i32)y;
+        i32 x1 = (i32)x + (i32)w;
+        i32 y1 = (i32)y + (i32)h;
+        UXShapePath* p = new UXShapePath();
+        p.moveTo((i16)(x0 + r), (i16)y0);
+        p.lineTo((i16)(x1 - r), (i16)y0);
+        p.curveTo((i16)(x1 - r + k), (i16)y0, (i16)x1, (i16)(y0 + r - k), (i16)x1, (i16)(y0 + r));
+        p.lineTo((i16)x1, (i16)(y1 - r));
+        p.curveTo((i16)x1, (i16)(y1 - r + k), (i16)(x1 - r + k), (i16)y1, (i16)(x1 - r), (i16)y1);
+        p.lineTo((i16)(x0 + r), (i16)y1);
+        p.curveTo((i16)(x0 + r - k), (i16)y1, (i16)x0, (i16)(y1 - r + k), (i16)x0, (i16)(y1 - r));
+        p.lineTo((i16)x0, (i16)(y0 + r));
+        p.curveTo((i16)x0, (i16)(y0 + r - k), (i16)(x0 + r - k), (i16)y0, (i16)(x0 + r), (i16)y0);
+        p.close();
+        return p;
+        }
     static UXShapePath* rect(i16 x, i16 y, i16 w, i16 h)
         {
         UXShapePath* p = new UXShapePath();

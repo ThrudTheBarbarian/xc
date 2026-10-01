@@ -36,7 +36,12 @@ const clipRect = (x, y, w, h) => {
   if (x1 <= x0 || y1 <= y0) return null;
   return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
 };
-const rec = (op) => { const w = wins.get(target); if (w) w.ops.push(op); };
+const rec = (op) => { const w = wins.get(target); if (w) w.ops.push(clip && clip.rounds ? { ...op, rounds: clip.rounds } : op); };
+// Is (px, py) -- a pixel centre -- inside every rounded clip an op was recorded under?
+const inRounds = (o, px, py) => (o.rounds || []).every(({ x, y, w, h, r }) => {
+  const cx = Math.min(Math.max(px, x + r), x + w - r), cy = Math.min(Math.max(py, y + r), y + h - r);
+  return (px - cx) ** 2 + (py - cy) ** 2 <= r * r;
+});
 
 globalThis.xccImports = { env: {
   // ── boot / windows ──
@@ -96,10 +101,18 @@ globalThis.xccImports = { env: {
     if (clip) {
       const x1 = Math.max(x, clip.x), y1 = Math.max(y, clip.y);
       const x2 = Math.min(x + w, clip.x + clip.w), y2 = Math.min(y + h, clip.y + clip.h);
-      clip = { x: x1, y: y1, w: Math.max(0, x2 - x1), h: Math.max(0, y2 - y1) };
+      clip = { x: x1, y: y1, w: Math.max(0, x2 - x1), h: Math.max(0, y2 - y1), rounds: clip.rounds };
     } else clip = { x, y, w, h };
   },
   ux_clip_end: () => { clip = clipStack.length ? clipStack.pop() : null; },
+  // A rounded clip: its rectangle clips as ux_clip does, and the rounded shape rides on the clip so
+  // every op recorded under it carries it -- ux_test_pixel then drops a point outside a corner, the
+  // way the page's roundRect clip would.
+  ux_clip_round: (x, y, w, h, r) => {
+    globalThis.xccImports.env.ux_clip(x, y, w, h);
+    const rr = Math.max(0, Math.min(r, w / 2, h / 2));
+    if (rr > 0) clip = { ...clip, rounds: [...(clip.rounds || []), { x, y, w, h, r: rr }] };
+  },
   ux_fill_rect: (x, y, w, h, r, g, b, a) => {
     const c = clipRect(x, y, w, h);
     if (c) rec({ op: 'fill', ...c, rgb: (r << 16) | (g << 8) | b, a });
@@ -198,7 +211,8 @@ globalThis.xccImports = { env: {
     if (!s) return -1;
     let r = 255, g = 255, b = 255, painted = false;
     for (const o of s.ops)
-      if ((o.op === 'fill' || o.op === 'clear' || o.op === 'pixels') && x >= o.x && x < o.x + o.w && y >= o.y && y < o.y + o.h) {
+      if ((o.op === 'fill' || o.op === 'clear' || o.op === 'pixels') && x >= o.x && x < o.x + o.w && y >= o.y && y < o.y + o.h
+          && inRounds(o, x + 0.5, y + 0.5)) {
         if (o.op === 'clear') { r = 255; g = 255; b = 255; painted = false; continue; }
         if (o.op === 'pixels') {
           const u = Math.min(o.sw - 1, Math.floor((x - o.dx) * o.sw / o.dw));

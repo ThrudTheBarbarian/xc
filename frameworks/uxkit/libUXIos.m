@@ -128,6 +128,27 @@ void ux_ios_clip(int x, int y, int w, int h)
     CGContextSaveGState(gCtx);
     CGContextClipToRect(gCtx, CGRectMake(x, y, w, h));
     }
+void ux_ios_clip_round(int x, int y, int w, int h, int r)
+    {
+    if (!gCtx)
+        return;
+    CGContextSaveGState(gCtx);
+    if (w <= 0 || h <= 0)
+        {
+        CGContextClipToRect(gCtx, CGRectZero);
+        return;
+        }
+    CGFloat rr = r * 2 > w ? w / 2.0 : r * 2 > h ? h / 2.0 : r;
+    if (rr <= 0)
+        {
+        CGContextClipToRect(gCtx, CGRectMake(x, y, w, h));
+        return;
+        }
+    CGPathRef path = CGPathCreateWithRoundedRect(CGRectMake(x, y, w, h), rr, rr, NULL);
+    CGContextAddPath(gCtx, path);
+    CGContextClip(gCtx);
+    CGPathRelease(path);
+    }
 void ux_ios_clip_end(void)
     {
     if (gCtx)

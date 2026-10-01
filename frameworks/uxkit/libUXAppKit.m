@@ -1681,6 +1681,28 @@ void ux_ak_clip_push(int x, int y, int w, int h)
     CGContextSaveGState(c);
     CGContextClipToRect(c, CGRectMake(x, y, w, h));
     }
+void ux_ak_clip_round(int x, int y, int w, int h, int r)
+    {
+    CGContextRef c = [[NSGraphicsContext currentContext] CGContext];
+    if (!c)
+        return;
+    CGContextSaveGState(c);
+    if (w <= 0 || h <= 0)
+        {
+        CGContextClipToRect(c, CGRectZero);
+        return;
+        }
+    CGFloat rr = r * 2 > w ? w / 2.0 : r * 2 > h ? h / 2.0 : r;
+    if (rr <= 0)
+        {
+        CGContextClipToRect(c, CGRectMake(x, y, w, h));
+        return;
+        }
+    CGPathRef path = CGPathCreateWithRoundedRect(CGRectMake(x, y, w, h), rr, rr, NULL);
+    CGContextAddPath(c, path);
+    CGContextClip(c);
+    CGPathRelease(path);
+    }
 void ux_ak_clip_pop(void)
     {
     CGContextRef c = [[NSGraphicsContext currentContext] CGContext];

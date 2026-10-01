@@ -37,6 +37,8 @@ extern void ux_clip_end(void);
 extern void ux_fill_rect(i32 x, i32 y, i32 w, i32 h, i32 r, i32 g, i32 b, i32 a);
 // Canvas2D's clearRect: the rect comes back transparent, whatever was under it.
 extern void ux_clear_rect(i32 x, i32 y, i32 w, i32 h);
+// ux_clip with rounded corners (a rounded panel's subtree); ux_clip_end pops it.
+extern void ux_clip_round(i32 x, i32 y, i32 w, i32 h, i32 r);
 // A region of a bitmap in wasm memory, scaled into a rect, with an overall alpha: Canvas2D's
 // drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh).  format is UXPIX_*; the host may keep what it builds
 // from `data`, keyed by its address, so the bytes must not change once drawn.

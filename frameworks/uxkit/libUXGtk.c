@@ -162,6 +162,31 @@ void ux_gtk_clip(int x, int y, int w, int h)
     cairo_rectangle(gCr, x, y, w, h);
     cairo_clip(gCr);
     }
+void ux_gtk_clip_round(int x, int y, int w, int h, int r)
+    {
+    if (!gCr)
+        return;
+    cairo_save(gCr);
+    double rr = r * 2 > w ? w / 2.0 : r * 2 > h ? h / 2.0 : r;
+    if (w <= 0 || h <= 0)
+        {
+        cairo_rectangle(gCr, 0, 0, 0, 0);
+        cairo_clip(gCr);
+        return;
+        }
+    if (rr <= 0)
+        cairo_rectangle(gCr, x, y, w, h);
+    else
+        {
+        cairo_new_sub_path(gCr);
+        cairo_arc(gCr, x + w - rr, y + rr, rr, -1.5707963268, 0);
+        cairo_arc(gCr, x + w - rr, y + h - rr, rr, 0, 1.5707963268);
+        cairo_arc(gCr, x + rr, y + h - rr, rr, 1.5707963268, 3.1415926536);
+        cairo_arc(gCr, x + rr, y + rr, rr, 3.1415926536, 4.7123889804);
+        cairo_close_path(gCr);
+        }
+    cairo_clip(gCr);
+    }
 void ux_gtk_clip_end(void)
     {
     if (gCr)

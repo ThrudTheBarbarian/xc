@@ -108,8 +108,12 @@ A rounded panel: the scroll view clips its content and its scroller to a rounded
 rectangle of radius `r`, as a browser panel with `border-radius` and
 `overflow: auto` does, and the scroller runs between the corners rather than into
 them. `0` is square. It is read when the tree next realises, so display in the
-same turn. On AppKit the native scroll view is clipped by its layer; a backend
-that draws its own scroll view does not round it yet.
+same turn.
+
+Every backend rounds it except GEM, whose clip is a rectangle. On AppKit the
+native scroll view is clipped by its layer, and on Win32 the native scroll
+container is clipped by a window region. GTK, the web, iOS and Android draw the
+scroll view themselves, so they clip the subtree to the rounded shape.
 
 ### setBorderRGB / clearBorder
 
@@ -118,8 +122,11 @@ void setBorderRGB(i32 r, i32 g, i32 b)
 void clearBorder(void)
 ```
 
-A 1-pixel edge in this colour that follows the rounding, or none. With neither a
-radius nor an edge, AppKit draws its usual bezel.
+A 1-pixel edge in this colour that follows the rounding, or none. Where the
+toolkit draws the scroll view, the edge sits just inside the frame and the
+content is inset by a pixel to clear it. With neither a radius nor an edge,
+AppKit and Win32 draw their usual border. On Win32 a radius with no edge colour
+draws the edge in the system's window-frame colour.
 
 ### contentPx
 

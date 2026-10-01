@@ -255,6 +255,11 @@ protocol UXViewDriver
     void structSetSelected(pointer h, i32 i, i32 on);
     i32 structIsSelected(pointer h, i32 i);
     void structSetClips(pointer h, i32 i, i32 on);
+    // The SHAPE of a clipping node's subtree clip: its frame inset by `inset` on every side, with
+    // corners of `radius` (0 = square).  A rounded panel -- border-radius with overflow: auto.  A
+    // backend that cannot clip round (GEM's AES clip) keeps the rectangle; one whose scroll view is a
+    // native container (Win32) rounds that instead.
+    void structSetClipShape(pointer h, i32 i, i32 radius, i32 inset);
 
     // Control realization: an object's content descriptor + its selectable/editable kind.
     void structSetSpec(pointer h, i32 i, pointer spec);

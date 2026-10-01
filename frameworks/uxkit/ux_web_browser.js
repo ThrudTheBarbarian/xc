@@ -108,6 +108,13 @@
       else if (s) { ctx.fillStyle = '#ffffff'; ctx.fillRect(s.x, s.y, s.w, s.h); }
     },
     ux_clip: (x, y, w, h) => { ctx.save(); ctx.beginPath(); ctx.rect(ox() + x, oy() + y, w, h); ctx.clip(); },
+    ux_clip_round: (x, y, w, h, r) => {
+      ctx.save(); ctx.beginPath();
+      const rr = Math.max(0, Math.min(r, w / 2, h / 2));
+      if (rr > 0 && ctx.roundRect) ctx.roundRect(ox() + x, oy() + y, w, h, rr);
+      else ctx.rect(ox() + x, oy() + y, w, h);
+      ctx.clip();
+    },
     ux_clip_end: () => { ctx.restore(); },
     ux_fill_rect: (x, y, w, h, r, g, b, a) => { ctx.fillStyle = rgba(r, g, b, a); ctx.fillRect(ox() + x, oy() + y, w, h); },
     ux_clear_rect: (x, y, w, h) => { ctx.clearRect(ox() + x, oy() + y, w, h); },

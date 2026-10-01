@@ -189,7 +189,7 @@ the flattened centreline instead.
 
 ## Topics
 
-[moveTo](#moveto) · [lineTo](#lineto) · [curveTo](#curveto) · [quadTo](#quadto) · [close](#close) · [rect](#rect) · [hasCurves](#hascurves) · [flattened](#flattened) · [boundingBox](#boundingbox) · [edges](#edges) · [containsPoint](#containspoint) · [setStartCap](#setstartcap--setendcap) · [setEndCap](#setstartcap--setendcap) · [setCapWidth](#setcapwidth) · [setArrowLength](#setarrowlength) · [capOutline](#capoutline) · [setJoin](#setjoin) · [joinKind](#joinkind) · [setDash](#setdash) · [clearDash](#cleardash) · [dashCount](#dashcount) · [dashAt](#dashat) · [dashPhase](#dashphase)
+[moveTo](#moveto) · [lineTo](#lineto) · [curveTo](#curveto) · [quadTo](#quadto) · [close](#close) · [rect](#rect) · [roundRect](#roundrect) · [hasCurves](#hascurves) · [flattened](#flattened) · [boundingBox](#boundingbox) · [edges](#edges) · [containsPoint](#containspoint) · [setStartCap](#setstartcap--setendcap) · [setEndCap](#setstartcap--setendcap) · [setCapWidth](#setcapwidth) · [setArrowLength](#setarrowlength) · [capOutline](#capoutline) · [setJoin](#setjoin) · [joinKind](#joinkind) · [setDash](#setdash) · [clearDash](#cleardash) · [dashCount](#dashcount) · [dashAt](#dashat) · [dashPhase](#dashphase)
 
 ### moveTo
 
@@ -238,6 +238,15 @@ static UXShapePath* rect(i16 x, i16 y, i16 w, i16 h)
 ```
 
 A shortcut for the commonest shape.
+
+### roundRect
+
+```c
+static UXShapePath* roundRect(i16 x, i16 y, i16 w, i16 h, i32 r)
+```
+
+A rectangle with corners of radius `r`, each a quarter circle drawn as a cubic.
+The radius is clamped to half the shorter side, and `0` gives `rect`.
 
 ### elementCount / elemAt
 

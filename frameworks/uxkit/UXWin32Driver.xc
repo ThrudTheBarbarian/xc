@@ -46,6 +46,8 @@ struct W32Node
     i16 selected;
     i16 enabled;
     i16 clips;
+    i16 clipR;     // a clipping node's corner radius (structSetClipShape)
+    i16 clipIn;    // ...and the inset of its clip from its frame
     i16 selectable;
     i16 editable;
     pointer spec;
@@ -301,6 +303,42 @@ void w32ScrollRange(pointer hwnd, i32 contentH, i32 winH)
     SetScrollPos(hwnd, (i32)SB_VERT, GetScrollPos(hwnd, (i32)SB_VERT), (i32)1); // re-clamp
     }
 
+// A rounded panel's edge: the rounded region framed 1px in the panel's border colour (the system's
+// window-frame colour when only the radius is set, so the WS_BORDER it replaces keeps its look).  The
+// edge crosses the client area at the corners and the scrollbar along the right, so it is framed after
+// both paint: over the window DC from WM_NCPAINT, over the client from WM_PAINT (whose origin is the
+// window's (1,1), hence the -1 offset).  Nothing for a square, unbordered panel.
+void w32ScrollFrame(pointer hwnd, pointer hdc, i32 off)
+    {
+    UXScrollView* sv = (UXScrollView* ?)GetWindowLongPtrA(hwnd, (i32)GWLP_USERDATA);
+    if (sv == (UXScrollView*)0)
+        {
+        return;
+        }
+    i32 r = sv.nativeCornerRadius();
+    i32 rgb = sv.nativeBorderRGB();
+    if (r <= (i32)0 && rgb < (i32)0)
+        {
+        return;
+        }
+    UXRect f = sv.frame();
+    u32 col = rgb >= (i32)0
+            ? ((u32)(rgb & (i32)255) << (u32)16) | ((u32)((rgb >> (i32)8) & (i32)255) << (u32)8) | (u32)((rgb >> (i32)16) & (i32)255)
+            : GetSysColor((i32)COLOR_WINDOWFRAME);
+    pointer rgn = CreateRoundRectRgn(-off, -off, (i32)f.w + (i32)1 - off, (i32)f.h + (i32)1 - off, r * (i32)2, r * (i32)2);
+    pointer br = CreateSolidBrush(col);
+    FrameRgn(hdc, rgn, br, (i32)1, (i32)1);
+    DeleteObject(br);
+    DeleteObject(rgn);
+    }
+// After the bar moves: SetScrollPos repaints the bar straight over the edge, so frame it again.
+void w32ScrollReframe(pointer hwnd)
+    {
+    pointer wdc = GetWindowDC(hwnd);
+    w32ScrollFrame(hwnd, wdc, (i32)0);
+    ReleaseDC(hwnd, wdc);
+    }
+
 // The scroll-child window proc: WS_VSCROLL owns the bar; WM_PAINT draws the peer UXScrollView's
 // DOCUMENT subtree offset by the scroll position, into this child's client (its own 0,0).
 pointer UXScroll32Proc(pointer hwnd, u32 msg, pointer wp, pointer lp)
@@ -326,8 +364,15 @@ pointer UXScroll32Proc(pointer hwnd, u32 msg, pointer wp, pointer lp)
                              (i32)0, (i32)0, (i32)(rc.right - rc.left), (i32)(rc.bottom - rc.top));
             gDriver.setDrawOffset((i32)0, (i32)0);
             }
+        w32ScrollFrame(hwnd, hdc, (i32)1);
         EndPaint(hwnd, (pointer)&ps);
         return (pointer)0;
+        }
+    if (msg == (u32)WM_NCPAINT)
+        {
+        pointer res = DefWindowProcA(hwnd, msg, wp, lp); // the bar and the square border
+        w32ScrollReframe(hwnd);
+        return res;
         }
     if (msg == (u32)WM_VSCROLL)
         {
@@ -354,6 +399,7 @@ pointer UXScroll32Proc(pointer hwnd, u32 msg, pointer wp, pointer lp)
             pos = (i32)(((u32)wp >> (u32)16) & (u32)$FFFF);
             }
         SetScrollPos(hwnd, (i32)SB_VERT, pos, (i32)1); // clamps to the range
+        w32ScrollReframe(hwnd);
         InvalidateRect(hwnd, (pointer)0, (i32)1);
         return (pointer)0;
         }
@@ -387,6 +433,7 @@ pointer UXScroll32Proc(pointer hwnd, u32 msg, pointer wp, pointer lp)
             }
         i32 pos = GetScrollPos(hwnd, (i32)SB_VERT) - (delta / (i32)120) * (i32)40;
         SetScrollPos(hwnd, (i32)SB_VERT, pos, (i32)1);
+        w32ScrollReframe(hwnd);
         InvalidateRect(hwnd, (pointer)0, (i32)1);
         return (pointer)0;
         }
@@ -1995,6 +2042,8 @@ class UXWin32Driver : Object<UXViewDriver>
         n.selected = (i16)0;
         n.enabled = (i16)1;
         n.clips = (i16)0;
+        n.clipR = (i16)0;
+        n.clipIn = (i16)0;
         n.selectable = (i16)0;
         n.editable = (i16)0;
         n.spec = (pointer)0;
@@ -2294,6 +2343,11 @@ class UXWin32Driver : Object<UXViewDriver>
     void structSetClips(pointer h, i32 i, i32 on)
         {
         ((W32Tree*)h).nodes[i].clips = (i16)on;
+        }
+    void structSetClipShape(pointer h, i32 i, i32 radius, i32 inset)
+        {
+        ((W32Tree*)h).nodes[i].clipR = (i16)radius;
+        ((W32Tree*)h).nodes[i].clipIn = (i16)inset;
         }
     void structSetSpec(pointer h, i32 i, pointer spec)
         {
@@ -2982,6 +3036,12 @@ class UXWin32Driver : Object<UXViewDriver>
                     MoveWindow(t.nodes[i].ctrl, ax, ay, w, hh, (i32)1);
                     w32ScrollRange(t.nodes[i].ctrl, ch, hh);
                     }
+                // Rounded: the window region clips the child (and its bar) to the rounded shape, every
+                // pass, as the size may have changed; square drops the region.  The system owns it.
+                i32 cr = sv != (UXScrollView*)0 ? sv.nativeCornerRadius() : (i32)0;
+                SetWindowRgn(t.nodes[i].ctrl,
+                             cr > (i32)0 ? CreateRoundRectRgn((i32)0, (i32)0, w + (i32)1, hh + (i32)1, cr * (i32)2, cr * (i32)2)
+                                         : (pointer)0, (i32)1);
                 }
             // apply the node's INITIAL state to a control created THIS pass:
             // the model setters above only reach a ctrl that already exists,

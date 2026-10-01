@@ -124,6 +124,8 @@ void ux_ak_layer_begin(i32 x, i32 y, i32 w, i32 h);
 // A clip to (x,y,w,h) of the current 2-D context, and its pop: a view's drawing stays in its frame.
 void ux_ak_clip_push(i32 x, i32 y, i32 w, i32 h);
 void ux_ak_clip_pop();
+// The same push, with rounded corners (a rounded panel's subtree): popped by ux_ak_clip_pop.
+void ux_ak_clip_round(i32 x, i32 y, i32 w, i32 h, i32 r);
 void ux_ak_layer_end();
 // Move a native control into the document view of a scroll view it is inside, so it scrolls and
 // clips with the scroll (ax,ay is the control's absolute origin; setFrame 0 leaves it to AppKit).
@@ -182,6 +184,8 @@ struct AKNode
     i16 selected;
     i16 enabled;
     i16 clips;
+    i16 clipR;     // a clipping node's corner radius (structSetClipShape)
+    i16 clipIn;    // ...and the inset of its clip from its frame
     i16 selectable;
     i16 editable;
     i32 autoresize;
@@ -855,6 +859,8 @@ class UXAppKitDriver : Object<UXViewDriver>
         n.selected = (i16)0;
         n.enabled = (i16)1;
         n.clips = (i16)0;
+        n.clipR = (i16)0;
+        n.clipIn = (i16)0;
         n.selectable = (i16)0;
         n.editable = (i16)0;
         n.autoresize = (i32)0;
@@ -1128,6 +1134,11 @@ class UXAppKitDriver : Object<UXViewDriver>
     void structSetClips(pointer h, i32 i, i32 on)
         {
         ((AKTree*)h).nodes[i].clips = (i16)on;
+        }
+    void structSetClipShape(pointer h, i32 i, i32 radius, i32 inset)
+        {
+        ((AKTree*)h).nodes[i].clipR = (i16)radius;
+        ((AKTree*)h).nodes[i].clipIn = (i16)inset;
         }
     void structSetSpec(pointer h, i32 i, pointer spec)
         {
@@ -1408,7 +1419,8 @@ class UXAppKitDriver : Object<UXViewDriver>
             i32 cw = (i32)0;
             i32 chh = (i32)0;
             self.structAbsFrame((pointer)t, i, &cx, &cy, &cw, &chh);
-            ux_ak_clip_push(cx - gAKDrawOX, cy - gAKDrawOY, cw, chh);
+            i32 ci = (i32)t.nodes[i].clipIn;
+            ux_ak_clip_round(cx - gAKDrawOX + ci, cy - gAKDrawOY + ci, cw - ci * (i32)2, chh - ci * (i32)2, (i32)t.nodes[i].clipR);
             }
         i16 c = t.nodes[i].head;
         while (c >= (i16)0)

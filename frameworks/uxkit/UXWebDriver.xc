@@ -46,6 +46,8 @@ struct WebNode
     i16 selected;
     i16 enabled;
     i16 clips;
+    i16 clipR;     // a clipping node's corner radius (structSetClipShape)
+    i16 clipIn;    // ...and the inset of its clip from its frame
     i16 selectable;
     i16 editable;
     pointer spec;
@@ -508,6 +510,8 @@ class UXWebDriver : Object<UXViewDriver>
         n.selected = (i16)0;
         n.enabled = (i16)1;
         n.clips = (i16)0;
+        n.clipR = (i16)0;
+        n.clipIn = (i16)0;
         n.selectable = (i16)0;
         n.editable = (i16)0;
         n.spec = (pointer)0;
@@ -607,6 +611,11 @@ class UXWebDriver : Object<UXViewDriver>
     void structSetClips(pointer h, i32 i, i32 on)
         {
         ((WebTree*)h).nodes[i].clips = (i16)on;
+        }
+    void structSetClipShape(pointer h, i32 i, i32 radius, i32 inset)
+        {
+        ((WebTree*)h).nodes[i].clipR = (i16)radius;
+        ((WebTree*)h).nodes[i].clipIn = (i16)inset;
         }
     void structSetSpec(pointer h, i32 i, pointer spec)
         {
@@ -821,7 +830,8 @@ class UXWebDriver : Object<UXViewDriver>
         if (clips)
             {
             self.structAbsFrame((pointer)t, i, &ax, &ay, &w, &hh);
-            ux_clip(ax, ay, w, hh);
+            i32 ci = (i32)t.nodes[i].clipIn;
+            ux_clip_round(ax + ci, ay + ci, w - ci * (i32)2, hh - ci * (i32)2, (i32)t.nodes[i].clipR);
             }
         i16 c = t.nodes[i].head;
         while (c >= (i16)0)
