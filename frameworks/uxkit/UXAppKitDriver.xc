@@ -961,9 +961,10 @@ class UXAppKitDriver : Object<UXViewDriver>
             ux_ak_set_control_frame(t.win, i, ax, ay, aw, ah);
             }
         // A GL view has no native control, so the test above cannot see it and a
-        // programmatic move would leave the map where it was born.  Same rule, same
-        // place: mask-free, and moved now.
-        if (t.win > (i32)0 && n.autoresize == (i32)0 && n.kind == (i32)UXKindGLView)
+        // programmatic move would leave the map where it was born.  Its NSView carries no
+        // autoresizing mask -- the toolkit lays it out, as it does a custom view, mask or not --
+        // so it is moved now whatever its mask.
+        if (t.win > (i32)0 && n.kind == (i32)UXKindGLView)
             {
             i32 ax = (i32)0;
             i32 ay = (i32)0;

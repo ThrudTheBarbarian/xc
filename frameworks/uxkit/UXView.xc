@@ -313,9 +313,11 @@ class UXView : UXResponder
                 // controls alone — but a CUSTOM-DRAWN view has no NSView to track, so its frame is
                 // ours to update or it never changes size at all.  That is not cosmetic: drawRect
                 // works in bounds(), so a view that lays its own content out (wrapped text) was
-                // still using the width it was born with.  Recurse either way — a native control
-                // can hold custom views.
-                if (!gDriver.driverAutoresizes() || c.kind() == UXKindView || c.kind() == UXKindSurface)
+                // still using the width it was born with.  A GL view is the same: its surface is the
+                // driver's, not an NSView AppKit resizes, so a stretching map kept its old size and its
+                // old drawable.  Recurse either way — a native control can hold custom views.
+                if (!gDriver.driverAutoresizes() || c.kind() == UXKindView || c.kind() == UXKindSurface ||
+                    c.kind() == UXKindGLView)
                     {
                     c.setFrame(UXGeom.make((i16)nx, (i16)ny, (i16)nw, (i16)nh));
                     }

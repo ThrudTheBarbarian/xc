@@ -19,6 +19,19 @@ extern void ux_ak_test_live_resize(i32 handle, i32 w, i32 h, i32 ms);
 extern i32 ux_ak_test_live_done(void);
 extern i32 ux_ak_in_live_resize(i32 handle);
 extern i32 ux_ak_control_frame(i32 handle, i32 node, i32* x, i32* y, i32* w, i32* h);
+extern i32 ux_ak_gl_surface_size(pointer peer, i32* out2);
+extern i32 ux_ak_gl_backing(pointer peer, i32* out4);
+
+// A GL view that stretches with the window, as the client's map does: its drawable must follow, and
+// so must the size the toolkit reports for it, or the app draws the old territory into a bigger frame.
+class Map : UXGLView
+    {
+    void drawRect(UXGraphics* g, UXRect dirty)
+        {
+        g.fillRectRGB(self.bounds(), (i32)40, (i32)90, (i32)160);
+        }
+    }
+Map* gMap;
 
 i32 gFails;
 void ck(bool ok, u8* what)
@@ -43,6 +56,10 @@ UXButton* gBtn;
 void liveTick(void)
     {
     gTicks = gTicks + (i32)1;
+    if (gMap != (Map*)0 && gMap.ownsGL())
+        {
+        gMap.presentGL(); // a frame a turn, as the client's renderer does
+        }
     if (gPhase == (i32)0 && gTicks == (i32)5)
         {
         gPhase = (i32)1;
@@ -68,6 +85,17 @@ void liveTick(void)
         // button keeps its 20 px right margin and its 12 px bottom margin (200 - 160 - 28).
         Stdio.printf("  the button is at %d,%d (from the bottom-left)\n", bx, by);
         ck(bx == (i32)420 - (i32)100 && by == (i32)12, "the anchored button followed the window");
+        // The map: anchored on all sides at 200,40 -> 280 x 100 grows by the window's 120 x 100.
+        i32 bk[4];
+        i32 sz[2];
+        ux_ak_gl_backing((pointer)gMap, &bk[(i32)0]);
+        i32 got = ux_ak_gl_surface_size((pointer)gMap, &sz[(i32)0]);
+        UXRect mf = gMap.frame();
+        Stdio.printf("  map: native %dx%d pt (%dx%d px), drawable %dx%d, toolkit frame %dx%d\n",
+                     bk[(i32)0], bk[(i32)1], bk[(i32)2], bk[(i32)3], sz[(i32)0], sz[(i32)1], (i32)mf.w, (i32)mf.h);
+        ck(bk[(i32)0] == (i32)200 && bk[(i32)1] == (i32)200, "the map's view grew with the window (80x100 -> 200x200)");
+        ck(got == (i32)0 || (sz[(i32)0] == bk[(i32)2] && sz[(i32)1] == bk[(i32)3]), "its drawable followed it");
+        ck((i32)mf.w == bk[(i32)0] && (i32)mf.h == bk[(i32)1], "and the toolkit's frame says the same, so the app draws more territory, not a stretched map");
         gApp.stop();
         }
     }
@@ -89,11 +117,15 @@ class Del : Object<UXApplicationDelegate>
         content.addSubview(sv, UXGeom.make((i16)10, (i16)40, (i16)180, (i16)100));
         sv.setDocumentHeight((i32)600);
         sv.setAutoresizeMask((i32)UX_FLEX_WIDTH | (i32)UX_FLEX_HEIGHT);
+        gMap = new Map();
+        content.addSubview(gMap, UXGeom.make((i16)200, (i16)40, (i16)80, (i16)100));
+        gMap.setAutoresizeMask((i32)UX_FLEX_WIDTH | (i32)UX_FLEX_HEIGHT);
         gBtn = new UXButton();
         gBtn.setTitle((u8*)"OK");
         content.addSubview(gBtn, UXGeom.make((i16)200, (i16)160, (i16)80, (i16)28));
         gBtn.setAutoresizeMask((i32)UX_ANCHOR_RIGHT | (i32)UX_ANCHOR_BOTTOM);
         gWin.displayAll();
+        gMap.makeGL();
         a.everyTurn(&liveTick, (i32)0);
         return (i32)0;
         }
