@@ -6,6 +6,28 @@
 #import "UXGeometry.xc"
 #import "UXGraphics.xc"
 
+// drawPixels' GDI calls, resolved from gdi32 by name: neither is in the toolchain's import map.
+pointer gGdiCreateDIBSection;
+pointer gGdiAlphaBlend;
+i32 gGdiPixTried;
+typedef pointer GdiCreateDIBSectionFn(pointer hdc, pointer bmi, u32 usage, pointer* bits, pointer sec, u32 off);
+typedef i32 GdiAlphaBlendFn(pointer d, i32 xd, i32 yd, i32 wd, i32 hd, pointer s, i32 xs, i32 ys, i32 ws, i32 hs,
+                            u32 blend);
+struct GdiBmiHeader
+    {
+    u32 biSize;
+    i32 biWidth;
+    i32 biHeight;
+    u16 biPlanes;
+    u16 biBitCount;
+    u32 biCompression;
+    u32 biSizeImage;
+    i32 biXPelsPerMeter;
+    i32 biYPelsPerMeter;
+    u32 biClrUsed;
+    u32 biClrImportant;
+    }
+
 class UXGdiGraphics : Object<UXGraphics>
     {
     pointer hdc;
@@ -89,13 +111,94 @@ class UXGdiGraphics : Object<UXGraphics>
         {
         self.fillRectRGB(r, red, green, blue);
         }
+    // A bitmap region: the region is converted to PREMULTIPLIED BGRA in a DIB section (what
+    // AlphaBlend reads), then AlphaBlend scales it into the destination with its per-pixel alpha and
+    // the overall `alpha` as the constant.  Converted per call, region only: an icon is a few hundred
+    // pixels, and the whole atlas is never touched.
+    void drawPixels(u8* data, i32 w, i32 h, i32 format, UXRect src, UXRect dst, i32 alpha)
+        {
+        if (hdc == (pointer)0 || data == (u8*)0 || alpha <= (i32)0 || dst.w <= (i16)0 || dst.h <= (i16)0)
+            {
+            return;
+            }
+        if (gGdiPixTried == (i32)0)
+            {
+            gGdiPixTried = (i32)1;
+            pointer gdi = LoadLibraryA((pointer)"gdi32.dll");
+            if (gdi != (pointer)0)
+                {
+                gGdiCreateDIBSection = GetProcAddress(gdi, (u8*)"CreateDIBSection");
+                gGdiAlphaBlend = GetProcAddress(gdi, (u8*)"GdiAlphaBlend");
+                }
+            }
+        if (gGdiCreateDIBSection == (pointer)0 || gGdiAlphaBlend == (pointer)0)
+            {
+            return;
+            }
+        i32 sx = (i32)src.x < (i32)0 ? (i32)0 : (i32)src.x;
+        i32 sy = (i32)src.y < (i32)0 ? (i32)0 : (i32)src.y;
+        i32 sw = (i32)src.w;
+        i32 sh = (i32)src.h;
+        if (sx + sw > w) { sw = w - sx; }
+        if (sy + sh > h) { sh = h - sy; }
+        if (sw <= (i32)0 || sh <= (i32)0)
+            {
+            return;
+            }
+        GdiBmiHeader bmi;
+        bmi.biSize = (u32)40;
+        bmi.biWidth = sw;
+        bmi.biHeight = (i32)0 - sh; // negative: top-down, the order the bitmap is in
+        bmi.biPlanes = (u16)1;
+        bmi.biBitCount = (u16)32;
+        bmi.biCompression = (u32)0;
+        bmi.biSizeImage = (u32)0;
+        bmi.biXPelsPerMeter = (i32)0;
+        bmi.biYPelsPerMeter = (i32)0;
+        bmi.biClrUsed = (u32)0;
+        bmi.biClrImportant = (u32)0;
+        pointer bits = (pointer)0;
+        GdiCreateDIBSectionFn* mk = (GdiCreateDIBSectionFn*)gGdiCreateDIBSection;
+        pointer dib = mk(hdc, (pointer)&bmi, (u32)0, &bits, (pointer)0, (u32)0);
+        if (dib == (pointer)0 || bits == (pointer)0)
+            {
+            return;
+            }
+        u8* out = (u8*)bits;
+        for (i32 y = (i32)0; y < sh; y = y + (i32)1)
+            {
+            for (i32 x = (i32)0; x < sw; x = x + (i32)1)
+                {
+                u8* q = data + ((sy + y) * w + (sx + x)) * (i32)4;
+                i32 r = (i32)q[0];
+                i32 g = (i32)q[1];
+                i32 b = (i32)q[2];
+                i32 a = (i32)q[3];
+                if (format == (i32)UXPIX_ARGB32) // 0xAARRGGBB words, little-endian: B,G,R,A in memory
+                    {
+                    r = (i32)q[2];
+                    b = (i32)q[0];
+                    }
+                u8* o = out + (y * sw + x) * (i32)4;
+                o[0] = (u8)((b * a + (i32)127) / (i32)255);
+                o[1] = (u8)((g * a + (i32)127) / (i32)255);
+                o[2] = (u8)((r * a + (i32)127) / (i32)255);
+                o[3] = (u8)a;
+                }
+            }
+        pointer mem = CreateCompatibleDC(hdc);
+        pointer old = SelectObject(mem, dib);
+        // BLENDFUNCTION by value: AC_SRC_OVER, 0 flags, the constant alpha, AC_SRC_ALPHA.
+        u32 blend = ((u32)(alpha > (i32)255 ? (i32)255 : alpha) << (u32)16) | ((u32)1 << (u32)24);
+        GdiAlphaBlendFn* ab = (GdiAlphaBlendFn*)gGdiAlphaBlend;
+        ab(hdc, (i32)(origin.x + dst.x), (i32)(origin.y + dst.y), (i32)dst.w, (i32)dst.h, mem, (i32)0, (i32)0, sw, sh, blend);
+        SelectObject(mem, old);
+        DeleteObject(dib);
+        DeleteDC(mem);
+        }
     // No alpha in a solid brush, so "empty" is the window background: WHITE_BRUSH, the same white the
     // toolkit's own backgrounds use.  See the protocol note; a see-through layer takes the blendsAlpha
     // path instead.
-    // NOT YET on this backend: the bitmap is not drawn.  AppKit draws it; see STATE-OF-UXKIT.
-    void drawPixels(u8* data, i32 w, i32 h, i32 format, UXRect src, UXRect dst, i32 alpha)
-        {
-        }
     void clearRect(UXRect r)
         {
         RECT rc;

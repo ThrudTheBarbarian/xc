@@ -68,12 +68,12 @@ class UXGemGraphics : Object<UXGraphics>
         {
         self.fillRectRGB(r, red, green, blue);
         }
-    // No alpha on the VDI, so "empty" is the window background the AES paints — pen 0, the white a
-    // G_BOX fills with.  A layer that needs to be see-through takes the other path at blendsAlpha.
     // NOT YET on this backend: the bitmap is not drawn.  AppKit draws it; see STATE-OF-UXKIT.
     void drawPixels(u8* data, i32 w, i32 h, i32 format, UXRect src, UXRect dst, i32 alpha)
         {
         }
+    // No alpha on the VDI, so "empty" is the window background the AES paints — pen 0, the white a
+    // G_BOX fills with.  A layer that needs to be see-through takes the other path at blendsAlpha.
     void clearRect(UXRect r)
         {
         self.fillRect(r, (i32)0);

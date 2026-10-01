@@ -1,0 +1,117 @@
+// test_win32_pixels.xc — a bitmap region drawn in a drawRect on Win32 (drawPixels), read back as pixels.
+//
+// The same checks as mac-pixels -- the right way up, the right region, scaled, alpha honoured, both
+// byte layouts -- read from the window's own DC after a paint.  GDI does no colour management, so the
+// colours are checked as they were written.  Build+run: sh run_win32_pixels.sh (under Wine).
+#import <Stdio.xc>
+#import "UXWin32Driver.xc"
+#import "UXApplication.xc"
+#import "UXWindow.xc"
+#import "UXView.xc"
+#import "UXGeometry.xc"
+#import "UXGraphics.xc"
+#import "UXImage.xc"
+
+u8 gSheet[32]; // 4x2 RGBA:  R R G G  /  B B Y Y
+void put(i32 i, i32 r, i32 g, i32 b)
+    {
+    gSheet[i * (i32)4] = (u8)r;
+    gSheet[i * (i32)4 + (i32)1] = (u8)g;
+    gSheet[i * (i32)4 + (i32)2] = (u8)b;
+    gSheet[i * (i32)4 + (i32)3] = (u8)255;
+    }
+UXImage@ gImg;
+
+class Board : UXView
+    {
+    void drawRect(UXGraphics* g, UXRect dirty)
+        {
+        g.fillRectRGB(self.bounds(), (i32)255, (i32)255, (i32)255);
+        g.drawPixels(&gSheet[(i32)0], (i32)4, (i32)2, (i32)UXPIX_RGBA, UXGeom.make((i16)0, (i16)0, (i16)4, (i16)2),
+                     UXGeom.make((i16)10, (i16)10, (i16)40, (i16)20), (i32)255);
+        g.drawPixels(&gSheet[(i32)0], (i32)4, (i32)2, (i32)UXPIX_RGBA, UXGeom.make((i16)2, (i16)0, (i16)2, (i16)2),
+                     UXGeom.make((i16)60, (i16)10, (i16)20, (i16)20), (i32)255);
+        g.drawPixels(&gSheet[(i32)0], (i32)4, (i32)2, (i32)UXPIX_RGBA, UXGeom.make((i16)0, (i16)0, (i16)4, (i16)2),
+                     UXGeom.make((i16)100, (i16)10, (i16)40, (i16)20), (i32)128);
+        gImg.drawIn(g, UXGeom.make((i16)0, (i16)0, (i16)2, (i16)1), UXGeom.make((i16)10, (i16)40, (i16)40, (i16)20), (i32)255);
+        }
+    }
+
+i32 gFails = 0;
+pointer gDc;
+void near(u8* what, i32 x, i32 y, i32 r, i32 g, i32 b)
+    {
+    u32 c = GetPixel(gDc, x, y); // COLORREF 0x00BBGGRR
+    i32 pr = (i32)(c & (u32)255);
+    i32 pg = (i32)((c >> (u32)8) & (u32)255);
+    i32 pb = (i32)((c >> (u32)16) & (u32)255);
+    i32 dr = pr > r ? pr - r : r - pr;
+    i32 dg = pg > g ? pg - g : g - pg;
+    i32 db = pb > b ? pb - b : b - pb;
+    if (dr <= (i32)10 && dg <= (i32)10 && db <= (i32)10)
+        {
+        Stdio.printf("  ok   %s (%d,%d,%d)\n", what, pr, pg, pb);
+        }
+    else
+        {
+        Stdio.printf("  FAIL %s: got (%d,%d,%d), want (%d,%d,%d)\n", what, pr, pg, pb, r, g, b);
+        gFails = gFails + (i32)1;
+        }
+    }
+
+class Delegate : Object<UXApplicationDelegate>
+    {
+    i32 applicationDidStart(UXApplication* app)
+        {
+        Board* board = new Board();
+        UXWindow* win = new UXWindow();
+        win.open((u8*)"Pixels", UXGeom.make((i16)40, (i16)40, (i16)160, (i16)80), board);
+        app.addWindow(win);
+        win.displayAll();
+        pointer hw = gW32Hwnds[win.handle];
+        UpdateWindow(hw);
+        gDc = GetDC(hw);
+        near("top-left of the sheet is red (not upside down)", (i32)15, (i32)15, (i32)255, (i32)0, (i32)0);
+        near("bottom-left is blue", (i32)15, (i32)25, (i32)0, (i32)0, (i32)255);
+        near("top-right is green", (i32)45, (i32)15, (i32)0, (i32)200, (i32)0);
+        near("bottom-right is yellow", (i32)45, (i32)25, (i32)255, (i32)220, (i32)0);
+        near("the sub-region starts at its own left (green)", (i32)65, (i32)15, (i32)0, (i32)200, (i32)0);
+        near("...and holds its bottom row (yellow)", (i32)75, (i32)25, (i32)255, (i32)220, (i32)0);
+        near("alpha 128 red over white is pink", (i32)105, (i32)15, (i32)255, (i32)127, (i32)127);
+        near("a UXImage's left pixel is magenta", (i32)15, (i32)50, (i32)255, (i32)0, (i32)255);
+        near("...and its right one cyan", (i32)45, (i32)50, (i32)0, (i32)255, (i32)255);
+        near("outside every draw it is white", (i32)150, (i32)70, (i32)255, (i32)255, (i32)255);
+        ReleaseDC(hw, gDc);
+        if (gFails == (i32)0)
+            {
+            Stdio.printf("PASS: drawPixels on Win32 -- region, scale, alpha, both layouts, the right way up\n");
+            }
+        else
+            {
+            Stdio.printf("FAIL: %d\n", gFails);
+            }
+        app.stop();
+        return (i32)0;
+        }
+    }
+
+void main(void)
+    {
+    put((i32)0, (i32)255, (i32)0, (i32)0);
+    put((i32)1, (i32)255, (i32)0, (i32)0);
+    put((i32)2, (i32)0, (i32)200, (i32)0);
+    put((i32)3, (i32)0, (i32)200, (i32)0);
+    put((i32)4, (i32)0, (i32)0, (i32)255);
+    put((i32)5, (i32)0, (i32)0, (i32)255);
+    put((i32)6, (i32)255, (i32)220, (i32)0);
+    put((i32)7, (i32)255, (i32)220, (i32)0);
+    gImg = UXImage.make((i32)2, (i32)1);
+    gImg.setPixelRaw((i32)0, (i32)0, (u32)$FFFF00FF);
+    gImg.setPixelRaw((i32)1, (i32)0, (u32)$FF00FFFF);
+    UXWin32Driver* d = new UXWin32Driver();
+    gDriver = d;
+    Delegate* del = new Delegate();
+    UXApplication* app = new UXApplication();
+    app.setDelegate(del);
+    app.run();
+    }

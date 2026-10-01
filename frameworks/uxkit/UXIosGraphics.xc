@@ -107,11 +107,11 @@ class UXIosGraphics : Object<UXGraphics>
         {
         ux_ios_fill((i32)(origin.x + r.x), (i32)(origin.y + r.y), (i32)r.w, (i32)r.h, red, green, blue, alpha);
         }
-    // CGContextClearRect: the rect comes back transparent, whatever was under it.
     // NOT YET on this backend: the bitmap is not drawn.  AppKit draws it; see STATE-OF-UXKIT.
     void drawPixels(u8* data, i32 w, i32 h, i32 format, UXRect src, UXRect dst, i32 alpha)
         {
         }
+    // CGContextClearRect: the rect comes back transparent, whatever was under it.
     void clearRect(UXRect r)
         {
         ux_ios_clear((i32)(origin.x + r.x), (i32)(origin.y + r.y), (i32)r.w, (i32)r.h);

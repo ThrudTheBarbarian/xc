@@ -125,13 +125,13 @@ class UXCocoaGraphics : Object<UXGraphics>
         ux_ak_fill((i32)(origin.x + r.x), (i32)(origin.y + r.y), (i32)r.w, (i32)r.h,
                    red, green, blue, alpha);
         }
-    // A real erase: NSCompositingOperationClear takes the rect back to transparent regardless of what
-    // is under it, which is what a layer over a map needs at the top of every frame.
     void drawPixels(u8* data, i32 w, i32 h, i32 format, UXRect src, UXRect dst, i32 alpha)
         {
         ux_ak_draw_pixels(data, w, h, format, (i32)src.x, (i32)src.y, (i32)src.w, (i32)src.h,
                           (i32)(origin.x + dst.x), (i32)(origin.y + dst.y), (i32)dst.w, (i32)dst.h, alpha);
         }
+    // A real erase: NSCompositingOperationClear takes the rect back to transparent regardless of what
+    // is under it, which is what a layer over a map needs at the top of every frame.
     void clearRect(UXRect r)
         {
         ux_ak_clear((i32)(origin.x + r.x), (i32)(origin.y + r.y), (i32)r.w, (i32)r.h);
