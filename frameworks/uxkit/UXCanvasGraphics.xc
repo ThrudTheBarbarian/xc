@@ -118,9 +118,12 @@ class UXCanvasGraphics : Object<UXGraphics>
         ux_fill_rect((i32)(origin.x + r.x), (i32)(origin.y + r.y), (i32)r.w, (i32)r.h,
                      red, green, blue, alpha);
         }
-    // NOT YET on this backend: the bitmap is not drawn.  AppKit draws it; see STATE-OF-UXKIT.
+    // Canvas2D's drawImage, through the host: it wraps the bitmap once (by its address) and draws the
+    // region scaled with imageSmoothingEnabled and globalAlpha.
     void drawPixels(u8* data, i32 w, i32 h, i32 format, UXRect src, UXRect dst, i32 alpha)
         {
+        ux_draw_pixels(data, w, h, format, (i32)src.x, (i32)src.y, (i32)src.w, (i32)src.h,
+                       (i32)(origin.x + dst.x), (i32)(origin.y + dst.y), (i32)dst.w, (i32)dst.h, alpha);
         }
     // Canvas2D's own clearRect.
     void clearRect(UXRect r)

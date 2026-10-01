@@ -78,6 +78,7 @@
   const rgb = (r, g, b) => `rgb(${r},${g},${b})`;
   // alpha is the straight 0..255 value; a == 255 renders as the opaque rgb() form.
   const rgba = (r, g, b, a) => (a >= 255 ? rgb(r, g, b) : `rgba(${r},${g},${b},${a / 255})`);
+  const pixCache = new Map(); // drawPixels: bitmap canvases by address/size/layout
   const ox = () => (wins.get(target)?.x ?? 0);
   const oy = () => (wins.get(target)?.y ?? 0);
   const font = (fam, size, bold, italic) =>
@@ -110,6 +111,32 @@
     ux_clip_end: () => { ctx.restore(); },
     ux_fill_rect: (x, y, w, h, r, g, b, a) => { ctx.fillStyle = rgba(r, g, b, a); ctx.fillRect(ox() + x, oy() + y, w, h); },
     ux_clear_rect: (x, y, w, h) => { ctx.clearRect(ox() + x, oy() + y, w, h); },
+    // drawPixels: the bitmap is copied out of wasm memory into a canvas ONCE, keyed by its address,
+    // size and layout (UXPIX_ARGB32 words are B,G,R,A in memory and are reordered), then each call is
+    // one drawImage of the region.
+    ux_draw_pixels: (p, w, h, fmt, sx, sy, sw, sh, dx, dy, dw, dh, a) => {
+      if (w <= 0 || h <= 0 || sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0 || a <= 0) return;
+      const key = (p >>> 0) + ':' + w + 'x' + h + ':' + fmt;
+      let c = pixCache.get(key);
+      if (!c) {
+        c = document.createElement('canvas'); c.width = w; c.height = h;
+        const src = U8().subarray(p >>> 0, (p >>> 0) + w * h * 4);
+        const img = new ImageData(w, h);
+        if (fmt === 1) {
+          for (let i = 0; i < w * h * 4; i += 4) {
+            img.data[i] = src[i + 2]; img.data[i + 1] = src[i + 1]; img.data[i + 2] = src[i]; img.data[i + 3] = src[i + 3];
+          }
+        } else img.data.set(src);
+        c.getContext('2d').putImageData(img, 0, 0);
+        if (pixCache.size >= 8) pixCache.delete(pixCache.keys().next().value);
+        pixCache.set(key, c);
+      }
+      ctx.save();
+      ctx.globalAlpha = a >= 255 ? 1 : a / 255;
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(c, sx, sy, sw, sh, ox() + dx, oy() + dy, dw, dh);
+      ctx.restore();
+    },
     ux_fill_circle: (cx, cy, rad, r, g, b) => {
       ctx.fillStyle = rgb(r, g, b);
       ctx.beginPath(); ctx.arc(ox() + cx, oy() + cy, rad, 0, Math.PI * 2); ctx.fill();
