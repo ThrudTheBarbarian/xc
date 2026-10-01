@@ -308,9 +308,24 @@ class Settings
 #if ARCH_6502
         return false;
 #else
+        Settings._makeParents(_path);
         return Files.writeText(_path, serialise());
 #endif
         }
+
+#if !ARCH_6502
+    // Create every directory above `path` that is missing, so the first save
+    // to ~/.config/xcc on a machine that has never had one succeeds. One that
+    // is already there is fine; one that cannot be made shows up as the write
+    // failing.
+    static void _makeParents(String* path)
+        {
+        u32 n = path.byteLength();
+        for (u32 i = (u32)1; i < n; i = i + (u32)1)
+            if (path.byteAt(i) == (u8)'/')
+                Files.createDirectory(path.substringBytes((u32)0, i));
+        }
+#endif
 
     // Re-read the backing file. A file that has since gone leaves the store
     // EMPTY, not stale: the file is the truth.

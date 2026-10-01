@@ -224,7 +224,9 @@ Replaces the store with what `text` says, in the format described in
 ```c
 bool save(void)
 ```
-Writes the store to the backing file, replacing its contents. `false` when there
+Writes the store to the backing file, replacing its contents, and first creates
+any directory above it that is missing, so the first save to
+`~/.config/xcc/<name>.conf` works on a machine that has never had one. `false` when there
 is no file to write — a memory-only store, or a target with no filesystem — so a
 caller can say the settings did not persist instead of believing they did.
 
