@@ -73,7 +73,7 @@ class MapView : UXGLView
         ck(v.ownsGL() == false, "no context before makeGL");
         ck(v.glContext() == (pointer)0, "no context pointer before makeGL");
         ck(v.glKind() == (i32)UX_GL_GL33, "glKind() is GL33 on AppKit, not NONE");
-        ck(gDriver.compositesWithGL(), "AppKit composites the 2-D layer and the GL surface in one step");
+        ck(!gDriver.compositesWithGL(), "AppKit has no GL plane: the driver paints the frame into the 2-D pass");
 
         bool made = v.makeGL();
         ck(made, "makeGL() found a surface to bind to");
@@ -114,7 +114,7 @@ class MapView : UXGLView
         {
         MapView* v = map;
         ck(v.glKind() == (i32)UX_GL_GL33, "the backend still reports its GL");
-        ck(gDriver.compositesWithGL(), "and still composites 2-D and GL with no window shown");
+        ck(!gDriver.compositesWithGL(), "...and answers the same with no window shown");
         ck(v.makeGL() == false, "but with no window there is no surface to bind to");
         ck(v.ownsGL() == false, "so the view owns no context");
         ck(v.glContext() == (pointer)0, "and the token is null");

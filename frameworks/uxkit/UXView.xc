@@ -39,11 +39,11 @@ class UXView : UXResponder
         ownSurface = false;
         }
 
-    // Ask this view to paint in its OWN SURFACE rather than in its parent's.  A backend that can
-    // make one (AppKit) puts a real native subview at the view's frame and draws the view's
-    // subtree into it, so the view lands OVER a GL surface instead of under it; a backend that
-    // cannot declines and draws the view inline, exactly as if this were never called.  So the
-    // call is safe on every backend and only the stacking over GL changes.
+    // Ask this view to paint in its OWN SURFACE: its subtree is drawn as a layer that starts empty
+    // (a clearRect in it erases only its own ink, never what is under it) and lands OVER a GL map.
+    // On AppKit it is a transparency layer in the window's one 2-D pass; a backend without one
+    // declines and draws the view inline, exactly as if this were never called.  So the call is
+    // safe on every backend.
     //
     // Set it BEFORE the view is added to a parent: the choice becomes the view's KIND, and a
     // node's kind is fixed when it is appended.  A surface view tracks its frame the way a
@@ -477,8 +477,8 @@ class UXGLView : UXView
         return glCtx != (pointer)0;
         }
 
-    // The swap.  Once per turn, after the frame is drawn — and after any 2D over this view
-    // has been damaged, so both surfaces land in one present.
+    // The frame is finished.  Once per turn, after it is drawn -- and after any 2D over this view
+    // has been damaged, so both land in one present.
     void presentGL(void)
         {
         if (glCtx != (pointer)0)

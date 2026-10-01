@@ -51,14 +51,11 @@ enum UXKind = {UXKindBox = 0, UXKindView = 1, UXKindButton = 2, UXKindField = 3,
     // reconciles native objects with the tree.  The CONTEXT is made on request, bound to
     // the view; the SURFACE is made here.
     UXKindGLView = 16,
-    // A view that PAINTS IN ITS OWN SURFACE.  On a backend that can make one (AppKit) a real
-    // native subview is placed at the view's frame and its drawRect draws that view's SUBTREE
-    // at the surface's own 0,0 -- the mechanism a scroll view's document already uses,
-    // generalized to any view.  It exists because a view's own paint is drawn BEFORE its
-    // subviews, so a plain paint is UNDER a GL surface, while a surface is a real subview and
-    // so is OVER it.  A backend that cannot make one (GEM, Win32, web, and GTK for now)
-    // DECLINES by drawing the view inline where it stands, exactly like a UXKindView -- so one
-    // tree is correct on every backend and only the z-order over a GL surface differs.
+    // A view that PAINTS IN ITS OWN SURFACE: its subtree is drawn as a layer of its own, which
+    // starts empty (so a clearRect in it erases only its own ink) and lands OVER a GL map.
+    // AppKit paints the GL frame into the window's one 2-D pass, so this is a transparency layer
+    // in that pass, drawn in tree order.  A backend with no such layer DECLINES and draws the view
+    // inline exactly like a UXKindView, so one tree is correct on every backend.
     UXKindSurface = 17};
 
 // Autoresize mask (springs & struts): how a view follows its window on resize.  A backend that
@@ -339,9 +336,11 @@ protocol UXViewDriver
     // the same turn as the resize and BEFORE that turn's draw — otherwise the map and the
     // numbers over it are a frame apart.
     void resizeGL(pointer view, i32 w, i32 h);
-    // The swap, and it is enough on its own: there is no separate draw call for the toolkit
-    // to interleave with, because a GL view is the BOTTOM of the stack and every other view
-    // is above it, so nothing is ever drawn between two GL draws.  At most once per loop
+    // The frame is finished.  Where the GL is its own plane this is the swap; on AppKit the GL
+    // renders offscreen and this resolves the frame and marks the window dirty, so the toolkit
+    // paints it in its next 2-D pass with the 2-D views over it in tree order.  Either way it is
+    // enough on its own: a GL view is the BOTTOM of the stack and nothing draws between two GL
+    // frames.  At most once per loop
     // turn, after damage is consolidated (§6 redraw).  A GL view may be permanently dirty —
     // the map asks for the next frame from inside this turn — and the driver's present is
     // what paces it.  The driver owns the frame clock; a GL view never runs one of its own.
@@ -359,11 +358,12 @@ protocol UXViewDriver
     // overlay AND redraw strategy from the answer.
     //
     //   true   the surface is a distinct plane the platform's compositor merges with the rest of
-    //          the window -- an AppKit NSOpenGLView subview, a GTK GtkGLArea, a Win32 GL child
-    //          window, a web canvas stacked under the 2-D one.  The app may damage the 2-D layer
-    //          and present GL and rely on the compositor to put them together.
-    //   false  there is no such plane: either no GL at all (the answer is moot but stated), or GL
-    //          that shares the 2-D backing and so must be ordered and paced by the driver.
+    //          the window -- a GTK GtkGLArea, a Win32 GL child window, a web canvas stacked under
+    //          the 2-D one.  The app may damage the 2-D layer and present GL and rely on the
+    //          compositor to put them together.
+    //   false  there is no such plane: no GL at all (GEM, iOS, Android), or GL that shares the
+    //          2-D surface and is ordered and paced by the driver (AppKit: the frame is rendered
+    //          offscreen and painted into the window's one 2-D pass).
     //
     // A view that owns no context never cares.
     bool compositesWithGL(void);

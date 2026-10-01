@@ -110,37 +110,33 @@ showing a window*, which is what the portrait pipeline wants it for; without it
 to bind and it returns false with a message that reads like a missing GL
 backend on a backend whose `glKind` says otherwise.
 
-Two dumps answer "where did the drawing go", and they are a pair on purpose:
+### The GL frame is painted into the window
 
-- `ux_ak_gl_grab(peer, path)` reads back the GL **surface** — the map and
+The GL never draws to the window. It renders into a 4× multisampled framebuffer
+the driver owns, which is the renderer's default framebuffer, so a renderer needs
+no change. `presentGL` resolves that into an IOSurface-backed texture and marks
+the GL view's part of the window dirty; the toolkit's next 2-D pass draws the
+frame where the GL view sits, and every view after it in the tree is drawn over
+it by draw order. There is no second plane, so nothing can be ordered wrongly,
+tiled or left stale by the window server, and `compositesWithGL` answers false.
+The IOSurface entry points are resolved at run time, so the shim's link line is
+unchanged.
+
+A view that asked for [its own surface](/compiler/api/uxkit/uxview/#setownsurface)
+is drawn as a transparency layer in the same pass: it starts empty, so its
+`clearRect` erases only its own ink and leaves the map under it.
+
+Two dumps answer "what was drawn":
+
+- `ux_ak_gl_grab(peer, path)` reads the last **presented frame** — the map and
   nothing over it.
-- `ux_ak_gl_grab_window(peer, path)` reads back the view the tree hangs in — the
-  2-D views and their text. A panel appears in the window grab and not the
-  surface grab; that asymmetry is the answer, not a bug in either dump.
+- `ux_ak_gl_grab_window(peer, path)` draws the window's own picture — the map
+  with the 2-D views over it, as the window shows them. `ux_ak_gl_grab_pixel(x, y)`
+  reads one colour from that picture, for a test that has to say which thing is
+  on top at a point.
 
-Which grab a panel's own drawing lands in follows from one rule, and it is the
-one thing a GL app has to know:
-
-- a 2-D **paint** goes into the parent's `drawRect`, and a view's own paint is
-  drawn *before* its subviews, so a paint is **under** the surface;
-- a native **view** — a control, or a scroll view's document view — is a real
-  subview, and the surface is added at the bottom of the stack, so a view is
-  **over** the surface.
-
-A panel over the map is therefore a *mix*, not one kind of thing. A drawn sheet
-needs a native subview of its own — `UXScrollView`'s document is the one the
-toolkit makes for you, and it draws the peer's subtree into it — while the
-buttons and fields standing on that sheet are ordinary native controls and need
-nothing special. `ux_ak_gl_place` puts the surface below every sibling for
-exactly that reason, and neither grab on its own shows the whole window.
-
-Any view can ask for that native subview directly with
-[`UXView.setOwnSurface`](/compiler/api/uxkit/uxview/#setownsurface): its kind
-becomes `UXKindSurface`, and AppKit realises a real subview at the view's frame
-whose `drawRect` draws the view's subtree — so the view's own paint and its
-children land *over* the surface, which is the general form of the scroll
-document. A backend that cannot make one declines and draws the view inline, so
-one tree is correct everywhere and only the stacking over a GL surface differs.
+If something appears in both, the renderer drew it; if only in the window grab,
+a 2-D view did.
 
 ## Interactive mode
 

@@ -1,18 +1,16 @@
-// demo_appkit_surface.xc — a view that paints in its OWN surface, over a GL surface (AppKit).
+// demo_appkit_surface.xc — 2-D drawn over a GL map, in ONE surface (AppKit).
 //
-// A UXView with setOwnSurface(true) realises as a real NSView subview (UXSurfaceView) whose
-// drawRect draws the view's SUBTREE; being a real subview it sits ABOVE the GL surface, which the
-// driver keeps at the BOTTOM of the stack.  That is the whole reason the kind exists: a view's own
-// paint is drawn before its subviews, so a plain inline paint is UNDER a GL surface and only a real
-// subview is over it.  A backend that cannot make one declines and draws the view inline.
+// The GL view renders offscreen and the driver paints its frame into the window's single 2-D pass,
+// in tree order, so a view AFTER it in the tree is drawn over it -- with no native layer, no second
+// plane and nothing for the compositor to leave stale.  A view that asks for its own surface
+// (setOwnSurface) keeps its kind, and AppKit DECLINES the surface: it is drawn inline, which is
+// already over the map.
 //
-// The gate checks the two halves of that promise in the two shapes it is made:
-//   live      a real window.  The surface is realised natively, it sits ABOVE the GL surface, and
-//             its ink is in the window's picture.  The harness GL fallback is empty, so the picture
-//             is background plus the surface's ink alone -- hiding the view takes the ink back out,
-//             which proves the marks really were the view's and not the map's.
-//   headless  no window and no surface, which is how CI runs and how a backend that cannot make one
-//             behaves: the view must still be PAINTED, inline through drawRect like any UXView.
+// What the gate checks, at points of the window's own picture:
+//   live      the map is IN the window (a point on it is not the window background), the ink is
+//             OVER it (a point where the ink covers the map is the ink's colour), and hiding the
+//             ink shows the map again at that point -- the order is draw order, nothing else.
+//   headless  no window and no GL: the ink paints inline through drawRect, the same as anywhere.
 #import <Stdio.xc>
 #import "UXAppKitDriver.xc"
 #import "UXApplication.xc"
@@ -25,10 +23,9 @@
 #import "demo_autoquit.xc"
 
 u8* getenv(u8* name);
-// From libUXAppKit.m -- the shim's own surface tooling, not part of the drawing seam.
+// From libUXAppKit.m -- the shim's own picture tooling, not part of the drawing seam.
 i32 ux_ak_gl_grab_window(pointer peer, u8* path);
-i32 ux_ak_gl_grab_marks(void);
-i32 ux_ak_surface_over_gl(pointer surfPeer, pointer glPeer);
+i32 ux_ak_gl_grab_pixel(i32 x, i32 y);
 
 i32 gFails = 0;
 void ck(bool ok, u8* what)
@@ -40,22 +37,15 @@ void ck(bool ok, u8* what)
         }
     }
 
-// The GL view: it owns a surface the app renders into, and keeps a software fallback for the
-// backends (and the headless run) that cannot give it a context.  The fallback is EMPTY, like the
-// frame harness: in a window grab it is drawn and the map's composited contents are not, so an
-// empty fallback leaves the picture to the surface ink on top.
+// The GL view.  Its fallback is EMPTY, so in a run with no GL nothing of it is drawn at all.
 class MapView : UXGLView
     {
-    i32 painted;
-    void init(void) { super.init(); painted = (i32)0; }
     void drawRect(UXGraphics* g, UXRect dirty)
         {
-        painted = painted + (i32)1;
         }
     }
 
-// The ink view: a plain view that asks to paint in its OWN surface.  On AppKit that puts a real
-// subview over the map; everywhere else it is an ordinary drawn view.
+// The ink: a plain view that asks for its own surface, drawing a solid red block.
 class InkView : UXView
     {
     i32 painted;
@@ -63,9 +53,12 @@ class InkView : UXView
     void drawRect(UXGraphics* g, UXRect dirty)
         {
         painted = painted + (i32)1;
-        g.fillRect(UXGeom.make((i16)0, (i16)0, (i16)120, (i16)48), (i32)8); // a solid ink block
+        g.clearRect(self.bounds()); // the client's ink starts every frame like this
+        g.fillRectRGB(UXGeom.make((i16)0, (i16)0, (i16)120, (i16)48), (i32)230, (i32)20, (i32)20);
         }
     }
+
+i32 isRed(i32 c) { return ((c >> (i32)16) & (i32)255) > (i32)200 && ((c >> (i32)8) & (i32)255) < (i32)60 ? (i32)1 : (i32)0; }
 
 class Controller : Object<UXApplicationDelegate>
     {
@@ -77,37 +70,40 @@ class Controller : Object<UXApplicationDelegate>
     void checkLive(void)
         {
         ck(ink.kind() == UXKindSurface, "the ink view reports UXKindSurface");
-        ck(ink.paintsInOwnSurface(), "and says it paints in its own surface");
-        ck(map.makeGL(), "the map bound a GL context to its surface");
-        // The structural promise: the surface is a real subview ABOVE the composited GL.
-        ck(ux_ak_surface_over_gl((pointer)ink, (pointer)map) == (i32)1, "the ink surface sits OVER the GL surface");
+        ck(map.makeGL(), "the map made its offscreen surface");
+        map.presentGL();
+        win.displayAll();
 
+        // (100,100) is on the map and under the ink; (40,40) is on the map only; (5,5) is neither.
         ux_ak_gl_grab_window((pointer)map, (u8*)"/tmp/surface_over_gl.png");
-        i32 shown = ux_ak_gl_grab_marks();
-        ck(shown > (i32)0, "the window picture holds the ink");
-        // Hide the view: the surface subview goes with it, and the ink leaves the picture -- so the
-        // marks above were really the view's, not the map's fallback.
+        i32 bg = ux_ak_gl_grab_pixel((i32)5, (i32)5);
+        i32 onMap = ux_ak_gl_grab_pixel((i32)40, (i32)40);
+        i32 underInk = ux_ak_gl_grab_pixel((i32)100, (i32)100);
+        ck(onMap != bg, "the map is in the window picture");
+        ck(isRed(underInk) != (i32)0, "the ink is drawn OVER the map");
+        // (230,140) is inside the ink view's bounds, which it CLEARED, but outside what it inked.
+        ck(ux_ak_gl_grab_pixel((i32)230, (i32)140) == onMap, "the ink's clearRect leaves the map beneath it");
+
         ink.setHidden(true);
+        map.presentGL();
         win.displayAll();
         ux_ak_gl_grab_window((pointer)map, (u8*)"/tmp/surface_over_gl_hidden.png");
-        i32 gone = ux_ak_gl_grab_marks();
-        ck(gone < shown, "hiding the view takes its ink back out of the picture");
+        i32 afterHide = ux_ak_gl_grab_pixel((i32)100, (i32)100);
+        ck(isRed(afterHide) == (i32)0, "hiding the ink shows the map at that point again");
+        ck(afterHide == ux_ak_gl_grab_pixel((i32)40, (i32)40), "...the same map as next to it");
         ink.setHidden(false);
-        win.displayAll();
-        Stdio.printf("  ink painted=%d, grab shown=%d hidden=%d\n", ink.painted, shown, gone);
+        Stdio.printf("  bg=%06lx map=%06lx ink=%06lx hidden=%06lx\n", bg, onMap, underInk, afterHide);
         }
 
     void checkHeadless(void)
         {
         ck(ink.kind() == UXKindSurface, "the ink view still reports UXKindSurface");
-        // No window, so realizeTree never ran and no surface was made: the decline.
-        ck(ux_ak_surface_over_gl((pointer)ink, (pointer)map) == (i32)-1, "there is no surface to be over anything");
         win.displayAll();
         i32 first = ink.painted;
         ck(first > (i32)0, "the view painted inline through drawRect");
         win.displayAll();
         ck(ink.painted > first, "and paints again -- drawRect is the renderer here");
-        Stdio.printf("  ink painted=%d (inline), no surface\n", ink.painted);
+        Stdio.printf("  ink painted=%d (inline)\n", ink.painted);
         }
 
     i32 applicationDidStart(UXApplication* a)
@@ -117,13 +113,13 @@ class Controller : Object<UXApplicationDelegate>
 
         UXView* canvas = new UXView();
         win = new UXWindow();
-        win.open((u8*)"UXKit surface over GL", UXGeom.make((i16)160, (i16)160, (i16)340, (i16)260), canvas);
+        win.open((u8*)"UXKit 2-D over GL", UXGeom.make((i16)160, (i16)160, (i16)340, (i16)260), canvas);
 
         map = new MapView();
         canvas.addSubview(map, UXGeom.make((i16)20, (i16)20, (i16)300, (i16)180));
         ink = new InkView();
         ink.setOwnSurface(true); // BEFORE it is attached: the choice becomes the view's kind
-        canvas.addSubview(ink, UXGeom.make((i16)60, (i16)60, (i16)120, (i16)48));
+        canvas.addSubview(ink, UXGeom.make((i16)60, (i16)60, (i16)200, (i16)100)); // bigger than its ink
 
         win.displayAll();
         if (headless)
@@ -155,9 +151,9 @@ void main(void)
     if (gFails == 0)
         {
         if (headless)
-            Stdio.printf("PASS: AppKit surface (headless) -- no surface, and the view paints inline\n");
+            Stdio.printf("PASS: AppKit 2-D over GL (headless) -- the view paints inline\n");
         else
-            Stdio.printf("PASS: AppKit surface -- a real subview over the GL surface, and its ink is the picture\n");
+            Stdio.printf("PASS: AppKit 2-D over GL -- the map is in the window and the ink is drawn over it, one surface\n");
         }
     else
         {

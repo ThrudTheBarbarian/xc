@@ -135,14 +135,21 @@ which loads its own entry points through `glProc`. Routing GL through
 `glKind()` names the call set (`UX_GL_NONE`, `UX_GL_GLES3`, `UX_GL_GL33`,
 `UX_GL_WEBGL2`); a backend with none answers `UX_GL_NONE`, and the view is drawn
 by `drawRect` like any other. `makeGLContext` binds a context to a view and
-`presentGL` swaps. The driver sets the viewport from the drawable's own pixels,
-resizes both in the same turn as the resize, and skips `drawRect` for a view
-that owns a context — the two are alternative renderers, never both.
+`presentGL` ends the frame. The driver sets the viewport from the drawable's own
+pixels, resizes both in the same turn as the resize, and skips `drawRect` for a
+view that owns a context — the two are alternative renderers, never both.
+
+On AppKit the drawable is **offscreen**: the renderer draws into a framebuffer
+the driver owns (it is the renderer's default framebuffer, so the renderer does
+not change), `presentGL` resolves it, and the toolkit paints the frame into the
+window's one 2-D pass. A view after the GL view in the tree is drawn over the map
+by draw order, and there is no GL plane for the window server to order. Win32,
+GTK and the web still put the GL on a plane of its own.
 
 **The present cadence is the rule GL rests on: present happens at most once per
 loop turn, after damage is consolidated, and the driver owns the frame clock.**
 A GL view is the bottom of the stack and every other view is above it, so
-nothing is ever drawn between two GL draws and the swap is enough on its own. A
+nothing is ever drawn between two GL draws and the present is enough on its own. A
 GL view never runs a clock of its own: it requests a frame
 ([the turn hook](#a-turn-comes-from-the-driver-or-from-the-loop)) and lets the
 driver pace it.
@@ -152,10 +159,10 @@ platform composites the 2-D layer and the GL present in **one step**, or leaves
 the driver two producers to order and pace. A view drawn over a GL surface
 composites on every backend, because the display server composites; the question
 is who owns that step, and the app picks its overlay and redraw strategy from the
-answer. AppKit, Win32, GTK and the web answer **true** (the surface is a distinct
-plane the compositor merges — an `NSOpenGLView` subview, a GL child window, a
-`GtkGLArea`, a canvas stacked under the 2-D one); GEM, iOS and Android answer
-**false** (no GL).
+answer. Win32, GTK and the web answer **true** (the surface is a distinct plane
+the compositor merges — a GL child window, a `GtkGLArea`, a canvas stacked under
+the 2-D one). AppKit answers **false**: its frame is painted into the 2-D pass
+and ordered by the driver. GEM, iOS and Android answer **false** (no GL).
 
 ### The shadow tree is the platform's, not ours
 

@@ -257,19 +257,20 @@ Asks the view to paint in its **own** surface rather than in its parent's. The
 call sets the view's [kind](#kind): with it, [`kind`](#kind) returns
 `UXKindSurface` instead of `UXKindView`.
 
-It exists for one reason: **a view's own paint is drawn before its subviews.** A
-surface is a real native subview placed over a GL surface, so a view that asks
-for one lands *over* the map, while the same view painting inline lands *under*
-it. Call it **before** the view is attached; the choice becomes the view's kind,
-and a node's kind is fixed when it is appended. The view then tracks its frame
-the way a custom-drawn view does, so it wants springs and struts like one.
+The view's subtree is drawn as a **layer of its own**: it starts empty, so a
+[`clearRect`](/compiler/api/uxkit/uxgraphics/) inside it erases only the view's
+own drawing and never what lies under it, and it is composited over everything
+drawn before it. That is the shape of a map's ink: cleared and redrawn every
+frame, over a GL map that must survive the clear. Call it **before** the view is
+attached; the choice becomes the view's kind, and a node's kind is fixed when it
+is appended. The view tracks its frame the way a custom-drawn view does, so it
+wants springs and struts like one.
 
-A backend that can make a surface (AppKit) realises it natively: a subview at the
-view's frame whose `drawRect` draws the view's subtree, so the view's own
-`drawRect` and its children all land in the surface. A backend that cannot (GEM,
-Win32, the web, and GTK for now) **declines** and draws the view inline exactly
-as a `UXKindView`. The call is therefore safe on every backend; only the stacking
-over a GL surface differs.
+On AppKit the GL map is painted into the window's one 2-D pass, so the surface is
+a transparency layer in that same pass, drawn in tree order: no native view, no
+second plane. A backend with no such layer (GEM, Win32, the web, and GTK for now)
+**declines** and draws the view inline exactly as a `UXKindView`. The call is
+therefore safe on every backend.
 
 `paintsInOwnSurface` reports the flag.
 

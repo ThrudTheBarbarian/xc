@@ -21,6 +21,8 @@
 #include <stdlib.h>
 #include <dlfcn.h>
 #include <OpenGL/gl.h>
+#include <OpenGL/OpenGL.h>      // CGL: CGLTexImageIOSurface2D, for the offscreen GL surface
+#include <IOSurface/IOSurface.h> // the texture the GL renders into, drawn by the toolkit
 #import <objc/runtime.h>
 
 #define UX_MAXW 64
@@ -47,7 +49,6 @@ static int g_quit = 0;
 static id g_winDelegate = 0;
 static id g_menuTarget = 0;
 static ux_dispatch_fn g_dispatch = 0;
-static void ak_no_implicit_actions(NSView* v); // fwd (defined near the surface below)
 
 void ux_ak_stop(void); // fwd
 
@@ -309,6 +310,19 @@ static NSView* g_glView[UX_AK_MAXGL];            // ARC-strong: assignment retai
 static NSOpenGLContext* g_glCtx[UX_AK_MAXGL];    // ARC-strong
 static NSOpenGLPixelFormat* g_glPf[UX_AK_MAXGL]; // ARC-strong: the context is made from it on request
 static int g_glWin[UX_AK_MAXGL];
+/* THE OFFSCREEN SURFACE (the one-surface decision, 2026-10-01).  The GL never draws to the
+ * window.  It renders into a 4x multisampled framebuffer of its own, which presentGL resolves into
+ * an IOSurface-backed texture; the toolkit then DRAWS that surface as an image in the window's one
+ * 2-D pass, in tree order, with the ink and the panels painted over it like anything else.  There
+ * is no GL plane for the compositor to order, tile or leave stale -- the shaded-rectangle reports
+ * were exactly that -- and the map and the 2-D layer cannot disagree about a frame. */
+static IOSurfaceRef g_glSurf[UX_AK_MAXGL]; // the resolved frame, read by the 2-D blit
+static unsigned g_glTex[UX_AK_MAXGL];      // a GL_TEXTURE_RECTANGLE over g_glSurf
+static unsigned g_glFbo[UX_AK_MAXGL];      // resolve target: g_glTex
+static unsigned g_glMsFbo[UX_AK_MAXGL];    // render target: 4x MSAA (0 = render into g_glFbo)
+static unsigned g_glMsRb[UX_AK_MAXGL];
+static int g_glW[UX_AK_MAXGL];             // pixels
+static int g_glH[UX_AK_MAXGL];
 static int g_glCount = 0;
 static Class g_glClass = 0;
 static int g_glSwapInterval = 1; // 1 = the swap waits for the display; see ux_ak_gl_vsync
@@ -474,15 +488,9 @@ void ux_ak_gl_place(int handle, void* peer, int x, int y, int w, int h, int hidd
         return;
     NSView* v = [[ak_gl_class() alloc] initWithFrame:NSMakeRect(x, y, w, h)];
     [v setWantsBestResolutionOpenGLSurface:YES];
-    /* The GL surface is a LAYER, not a plain sibling plane.  A window that mixes an
-     * NSOpenGLView's own surface with a transparent layer-backed overlay (the ink/menu
-     * surface) composites the two as separate planes, and a region of one goes stale
-     * intermittently (client-reported).  With the GL layer-backed too, the window server
-     * orders both in ONE layer tree -- PLAN 6's "prefer the layer-backed surface" -- so
-     * there is nothing to go stale.  Must be set before makeGLContext, whose context binds
-     * to the layer AppKit makes here. */
-    [v setWantsLayer:YES];
-    ak_no_implicit_actions(v); // no implicit animation between GL frames either
+    /* This view DRAWS NOTHING: the frame is rendered offscreen and painted by the toolkit in its 2-D
+     * pass (the offscreen surface, above).  It is here for the input -- presses, hover, the wheel and
+     * the right button on the map arrive on it -- and as the frame the driver sizes the surface to. */
     g_glPeer[g_glCount] = peer;
     g_glView[g_glCount] = v;
     g_glCtx[g_glCount] = nil;
@@ -520,6 +528,179 @@ static void ak_gl_viewport(int i)
  * context is left CURRENT on the calling thread, which is the contract the seam
  * states -- a renderer that is handed a context it must make current itself would
  * have to know it is on AppKit. */
+/* IOSurface, reached at RUN TIME.  Linking it would add -framework IOSurface to every build of this
+ * shim -- the toolkit's gates and every client's -- for four calls; dlsym keeps the link line exactly
+ * what it was.  The keys are the strings the kIOSurface* constants hold. */
+static struct
+    {
+    int tried;
+    IOSurfaceRef (*create)(CFDictionaryRef);
+    void* (*base)(IOSurfaceRef);
+    size_t (*rowBytes)(IOSurfaceRef);
+    size_t (*width)(IOSurfaceRef);
+    size_t (*height)(IOSurfaceRef);
+    size_t (*allocSize)(IOSurfaceRef);
+    kern_return_t (*lock)(IOSurfaceRef, uint32_t, uint32_t*);
+    kern_return_t (*unlock)(IOSurfaceRef, uint32_t, uint32_t*);
+    } g_ios;
+static int ak_ios_load(void)
+    {
+    if (g_ios.tried)
+        return g_ios.create != NULL;
+    g_ios.tried = 1;
+    void* h = dlopen("/System/Library/Frameworks/IOSurface.framework/IOSurface", RTLD_LAZY);
+    if (!h)
+        return 0;
+    g_ios.create = dlsym(h, "IOSurfaceCreate");
+    g_ios.base = dlsym(h, "IOSurfaceGetBaseAddress");
+    g_ios.rowBytes = dlsym(h, "IOSurfaceGetBytesPerRow");
+    g_ios.width = dlsym(h, "IOSurfaceGetWidth");
+    g_ios.height = dlsym(h, "IOSurfaceGetHeight");
+    g_ios.allocSize = dlsym(h, "IOSurfaceGetAllocSize");
+    g_ios.lock = dlsym(h, "IOSurfaceLock");
+    g_ios.unlock = dlsym(h, "IOSurfaceUnlock");
+    if (!g_ios.base || !g_ios.rowBytes || !g_ios.width || !g_ios.height || !g_ios.allocSize
+        || !g_ios.lock || !g_ios.unlock)
+        g_ios.create = NULL;
+    return g_ios.create != NULL;
+    }
+/* ---- the offscreen surface (one-surface decision) -------------------------------------------- */
+static void ak_gl_free_offscreen(int i)
+    {
+    if (g_glMsFbo[i])
+        {
+        glDeleteFramebuffers(1, &g_glMsFbo[i]);
+        g_glMsFbo[i] = 0;
+        }
+    if (g_glMsRb[i])
+        {
+        glDeleteRenderbuffers(1, &g_glMsRb[i]);
+        g_glMsRb[i] = 0;
+        }
+    if (g_glFbo[i])
+        {
+        glDeleteFramebuffers(1, &g_glFbo[i]);
+        g_glFbo[i] = 0;
+        }
+    if (g_glTex[i])
+        {
+        glDeleteTextures(1, &g_glTex[i]);
+        g_glTex[i] = 0;
+        }
+    if (g_glSurf[i])
+        {
+        CFRelease(g_glSurf[i]);
+        g_glSurf[i] = NULL;
+        }
+    g_glW[i] = 0;
+    g_glH[i] = 0;
+    }
+/* The framebuffer the renderer draws into: the multisampled one when there is one. */
+static unsigned ak_gl_target(int i)
+    {
+    return g_glMsFbo[i] ? g_glMsFbo[i] : g_glFbo[i];
+    }
+/* Make (or remake at `w`x`h` PIXELS) the offscreen surface, and leave the render target bound, so
+ * the renderer's default framebuffer IS it and it never has to know.
+ *
+ * The resolve texture is a RECTANGLE texture because that is the only target an IOSurface binds to
+ * (CGLTexImageIOSurface2D answers kCGLBadValue for GL_TEXTURE_2D), and the IOSurface is the point:
+ * the 2-D blit reads that same memory, so a frame reaches the window with no glReadPixels copy. */
+static int ak_gl_alloc_offscreen(int i, int w, int h)
+    {
+    if (w <= 0 || h <= 0)
+        return 0;
+    if (g_glFbo[i] && g_glW[i] == w && g_glH[i] == h)
+        {
+        glBindFramebuffer(GL_FRAMEBUFFER, ak_gl_target(i));
+        return 1;
+        }
+    ak_gl_free_offscreen(i);
+    if (!ak_ios_load())
+        {
+        fprintf(stderr, "gl: IOSurface is not available\n");
+        return 0;
+        }
+    NSDictionary* props = @{ @"IOSurfaceWidth" : @(w), @"IOSurfaceHeight" : @(h),
+                             @"IOSurfaceBytesPerElement" : @(4),
+                             @"IOSurfacePixelFormat" : @((unsigned)'BGRA') };
+    IOSurfaceRef surf = g_ios.create((__bridge CFDictionaryRef)props);
+    if (!surf)
+        {
+        fprintf(stderr, "gl: IOSurfaceCreate %dx%d failed\n", w, h);
+        return 0;
+        }
+    GLuint tex = 0;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_RECTANGLE_ARB, tex);
+    CGLError ce = CGLTexImageIOSurface2D(CGLGetCurrentContext(), GL_TEXTURE_RECTANGLE_ARB, GL_RGBA,
+                                         w, h, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, surf, 0);
+    glBindTexture(GL_TEXTURE_RECTANGLE_ARB, 0);
+    if (ce != kCGLNoError)
+        {
+        fprintf(stderr, "gl: CGLTexImageIOSurface2D failed (%d)\n", (int)ce);
+        glDeleteTextures(1, &tex);
+        CFRelease(surf);
+        return 0;
+        }
+    GLuint fbo = 0;
+    glGenFramebuffers(1, &fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_RECTANGLE_ARB, tex, 0);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+        {
+        fprintf(stderr, "gl: resolve framebuffer incomplete\n");
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glDeleteFramebuffers(1, &fbo);
+        glDeleteTextures(1, &tex);
+        CFRelease(surf);
+        return 0;
+        }
+    g_glSurf[i] = surf;
+    g_glTex[i] = tex;
+    g_glFbo[i] = fbo;
+    g_glW[i] = w;
+    g_glH[i] = h;
+    /* The RENDER target is 4x multisampled, so hexagon edges antialias as the window drawable's
+     * did (and as the browser's context does).  A context that cannot is not a failure: the
+     * renderer draws straight into the resolve framebuffer and the edges are aliased. */
+    GLint maxs = 0;
+    glGetIntegerv(GL_MAX_SAMPLES, &maxs);
+    if (maxs >= 2)
+        {
+        GLuint rb = 0;
+        GLuint ms = 0;
+        glGenRenderbuffers(1, &rb);
+        glBindRenderbuffer(GL_RENDERBUFFER, rb);
+        glRenderbufferStorageMultisample(GL_RENDERBUFFER, maxs >= 4 ? 4 : maxs, GL_RGBA8, w, h);
+        glBindRenderbuffer(GL_RENDERBUFFER, 0);
+        glGenFramebuffers(1, &ms);
+        glBindFramebuffer(GL_FRAMEBUFFER, ms);
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, rb);
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE)
+            {
+            g_glMsRb[i] = rb;
+            g_glMsFbo[i] = ms;
+            }
+        else
+            {
+            glDeleteFramebuffers(1, &ms);
+            glDeleteRenderbuffers(1, &rb);
+            }
+        }
+    glBindFramebuffer(GL_FRAMEBUFFER, ak_gl_target(i));
+    return 1;
+    }
+static void ak_gl_size_px(int i, int* pw, int* ph)
+    {
+    NSRect b = [g_glView[i] bounds];
+    float scale = [[g_glView[i] window] backingScaleFactor];
+    if (scale <= 0)
+        scale = 1;
+    *pw = (int)(b.size.width * scale);
+    *ph = (int)(b.size.height * scale);
+    }
+
 void* ux_ak_gl_make(void* peer)
     {
     int i = ak_gl_find(peer);
@@ -530,12 +711,15 @@ void* ux_ak_gl_make(void* peer)
         NSOpenGLContext* c = [[NSOpenGLContext alloc] initWithFormat:g_glPf[i] shareContext:nil];
         if (!c)
             return 0;
-        [c setView:g_glView[i]];
-        GLint v = (GLint)(g_glSwapInterval > 0 ? 1 : 0);
-        [c setValues:&v forParameter:NSOpenGLCPSwapInterval];
+        /* NO setView: -- the context never draws to the window; see the offscreen surface. */
         g_glCtx[i] = c;
         }
     [g_glCtx[i] makeCurrentContext];
+    int pw = 0;
+    int ph = 0;
+    ak_gl_size_px(i, &pw, &ph);
+    if (!ak_gl_alloc_offscreen(i, pw, ph))
+        return 0;
     ak_gl_viewport(i);
     return (void*)(long)(i + 1);
     }
@@ -550,18 +734,69 @@ void ux_ak_gl_resize(void* peer, int w, int h)
     if (g_glCtx[i])
         {
         [g_glCtx[i] makeCurrentContext];
-        [g_glCtx[i] update]; /* the drawable, not just the view */
+        int pw = 0;
+        int ph = 0;
+        ak_gl_size_px(i, &pw, &ph);
+        ak_gl_alloc_offscreen(i, pw, ph);
         ak_gl_viewport(i);
         }
     }
 
+/* The frame is finished.  There is no swap: the multisampled target is resolved into the
+ * IOSurface, the GPU is waited for (the 2-D blit reads that memory on the CPU), and the part of the
+ * window the GL view covers is marked dirty, so the toolkit draws the new frame in its next 2-D
+ * pass -- the one present the driver owns, at most once a turn. */
 void ux_ak_gl_present(void* peer)
     {
     int i = ak_gl_find(peer);
-    if (i < 0 || !g_glCtx[i])
+    if (i < 0 || !g_glCtx[i] || !g_glFbo[i])
         return;
     [g_glCtx[i] makeCurrentContext];
-    [g_glCtx[i] flushBuffer]; /* the swap, and the only one */
+    if (g_glMsFbo[i])
+        {
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, g_glMsFbo[i]);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, g_glFbo[i]);
+        glBlitFramebuffer(0, 0, g_glW[i], g_glH[i], 0, 0, g_glW[i], g_glH[i], GL_COLOR_BUFFER_BIT,
+                          GL_NEAREST);
+        }
+    glBindFramebuffer(GL_FRAMEBUFFER, ak_gl_target(i)); // the renderer's again, for the next frame
+    glFinish();
+    NSView* dv = g_glWin[i] > 0 ? g_view[g_glWin[i]] : nil;
+    if (dv && ![g_glView[i] isHidden])
+        [dv setNeedsDisplayInRect:[g_glView[i] frame]];
+    }
+
+/* Draw a GL view's last presented frame into the CURRENT 2-D context at (x,y,w,h), the toolkit's
+ * coordinates.  1 when it drew; 0 when there is no frame (no GL on this run, or no context yet), so
+ * the caller falls back to the view's drawRect.
+ *
+ * No flip: the surface's rows are GL's, bottom-up, and the toolkit's context is FLIPPED (y down), so
+ * an image drawn straight into it lands the right way up -- the two inversions cancel.  Opaque on
+ * purpose (the alpha is skipped), as the window drawable was: the map is the bottom of the stack. */
+int ux_ak_gl_draw_view(void* peer, int x, int y, int w, int h)
+    {
+    int i = ak_gl_find(peer);
+    if (i < 0 || !g_glSurf[i] || w <= 0 || h <= 0)
+        return 0;
+    CGContextRef ctx = [[NSGraphicsContext currentContext] CGContext];
+    if (!ctx)
+        return 0;
+    IOSurfaceRef s = g_glSurf[i];
+    g_ios.lock(s, 1u /* kIOSurfaceLockReadOnly */, NULL);
+    CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+    CGDataProviderRef dp = CGDataProviderCreateWithData(NULL, g_ios.base(s),
+                                                        g_ios.allocSize(s), NULL);
+    CGImageRef img = CGImageCreate(g_ios.width(s), g_ios.height(s), 8, 32,
+                                   g_ios.rowBytes(s), cs,
+                                   kCGImageAlphaNoneSkipFirst | kCGBitmapByteOrder32Little, dp, NULL,
+                                   false, kCGRenderingIntentDefault);
+    if (img)
+        CGContextDrawImage(ctx, CGRectMake(x, y, w, h), img);
+    CGImageRelease(img);
+    CGDataProviderRelease(dp);
+    CGColorSpaceRelease(cs);
+    g_ios.unlock(s, 1u /* kIOSurfaceLockReadOnly */, NULL);
+    return img ? 1 : 0;
     }
 
 /* How hard the swap blocks.  A map app wants 1; a frame-time measurement wants 0,
@@ -579,64 +814,59 @@ void ux_ak_gl_vsync(int interval)
         }
     }
 
-/* Read the frame back off the drawable and write it as a PNG.
- *
- * After a present, from the FRONT buffer, and deliberately not from a framebuffer
- * object: a dump from an FBO proves the renderer can draw and says nothing about
- * whether the surface ever got it, which is the failure this is here to catch.  The
- * context is made current first, so it is valid to call straight after presentGL. */
+/* The last PRESENTED frame, as a PNG.  The resolved surface is exactly what the toolkit draws in
+ * the window, so this is the picture of "what the map was" -- and the window grab beside it shows
+ * that it reached the window, with the 2-D layer over it.  Rows are flipped to top-down, because
+ * the whole point is that somebody LOOKS at it. */
 int ux_ak_gl_grab(void* peer, const char* path)
     {
     int i = ak_gl_find(peer);
-    if (i < 0 || !g_glCtx[i] || !g_glView[i])
+    if (i < 0 || !g_glSurf[i])
         return 0;
-    NSView* v = g_glView[i];
-    NSRect b = [v bounds];
-    int w = (int)b.size.width;
-    int h = (int)b.size.height;
-    float scale = [[v window] backingScaleFactor];
-    int pw = (int)(w * scale);
-    int ph = (int)(h * scale);
-    if (pw <= 0 || ph <= 0)
-        return 0;
-    [g_glCtx[i] makeCurrentContext];
-    unsigned char* px = (unsigned char*)malloc((size_t)pw * (size_t)ph * 4);
-    if (!px)
-        return 0;
-    glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    glReadBuffer(GL_FRONT);
-    glReadPixels(0, 0, pw, ph, GL_RGBA, GL_UNSIGNED_BYTE, px);
-    /* GL hands back bottom-up; a PNG is top-down.  Flip rows rather than ask the
-     * reader to remember, because the whole point is that somebody LOOKS at it. */
-    unsigned char* row = (unsigned char*)malloc((size_t)pw * 4);
-    if (row)
-        {
-        for (int y = 0; y < ph / 2; y++)
-            {
-            memcpy(row, px + (size_t)y * pw * 4, (size_t)pw * 4);
-            memcpy(px + (size_t)y * pw * 4, px + (size_t)(ph - 1 - y) * pw * 4, (size_t)pw * 4);
-            memcpy(px + (size_t)(ph - 1 - y) * pw * 4, row, (size_t)pw * 4);
-            }
-        free(row);
-        }
+    IOSurfaceRef s = g_glSurf[i];
+    int pw = (int)g_ios.width(s);
+    int ph = (int)g_ios.height(s);
+    size_t stride = g_ios.rowBytes(s);
     NSBitmapImageRep* rep = [[NSBitmapImageRep alloc] initWithBitmapDataPlanes:NULL
         pixelsWide:pw pixelsHigh:ph bitsPerSample:8 samplesPerPixel:4 hasAlpha:YES
         isPlanar:NO colorSpaceName:NSDeviceRGBColorSpace bytesPerRow:pw * 4 bitsPerPixel:32];
-    int ok = 0;
-    if (rep)
+    if (!rep || ![rep bitmapData])
+        return 0;
+    unsigned char* dst = [rep bitmapData];
+    g_ios.lock(s, 1u /* kIOSurfaceLockReadOnly */, NULL);
+    const unsigned char* src = (const unsigned char*)g_ios.base(s);
+    for (int y = 0; y < ph; y++)
         {
-        unsigned char* dst = [rep bitmapData];
-        if (dst)
+        const unsigned char* r = src + (size_t)(ph - 1 - y) * stride; // bottom-up -> top-down
+        unsigned char* d = dst + (size_t)y * pw * 4;
+        for (int x = 0; x < pw; x++)
             {
-            memcpy(dst, px, (size_t)pw * (size_t)ph * 4);
-            NSData* png = [rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
-            ok = png && [png writeToFile:[NSString stringWithUTF8String:path] atomically:YES];
+            d[x * 4 + 0] = r[x * 4 + 2]; // BGRA -> RGBA
+            d[x * 4 + 1] = r[x * 4 + 1];
+            d[x * 4 + 2] = r[x * 4 + 0];
+            d[x * 4 + 3] = 255;
             }
         }
-    free(px);
+    g_ios.unlock(s, 1u /* kIOSurfaceLockReadOnly */, NULL);
+    NSData* png = [rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+    int ok = png && [png writeToFile:[NSString stringWithUTF8String:path] atomically:YES];
     if (ok)
         g_lastGrab = rep;
     return ok ? 1 : 0;
+    }
+
+/* The colour at (x,y) of the last grab, as 0xRRGGBB, or -1 off the picture.  A gate that has to
+ * say WHICH thing is on top at a point -- the ink, or the map under it -- needs a colour, not a
+ * count of marks. */
+int ux_ak_gl_grab_pixel(int x, int y)
+    {
+    if (!g_lastGrab || x < 0 || y < 0 || x >= [g_lastGrab pixelsWide] || y >= [g_lastGrab pixelsHigh])
+        return -1;
+    NSColor* c = [[g_lastGrab colorAtX:x y:y] colorUsingColorSpace:[NSColorSpace deviceRGBColorSpace]];
+    int r = (int)([c redComponent] * 255.0 + 0.5);
+    int g = (int)([c greenComponent] * 255.0 + 0.5);
+    int b = (int)([c blueComponent] * 255.0 + 0.5);
+    return (r << 16) | (g << 8) | b;
     }
 
 /* How many pixels in the last GL grab differ from its top-left pixel, sampling every
@@ -811,6 +1041,7 @@ void ux_ak_gl_destroy(void* peer)
         /* Current on the calling thread, per the contract: clearDrawable on a
          * context that is not current is how a GL client crashes on window close. */
         [g_glCtx[i] makeCurrentContext];
+        ak_gl_free_offscreen(i); // the FBO, its texture and the IOSurface go with the context
         [g_glCtx[i] clearDrawable];
         [NSOpenGLContext clearCurrentContext];
         g_glCtx[i] = nil;
@@ -1327,6 +1558,26 @@ void ux_ak_fill(int x, int y, int w, int h, int r, int g, int b, int a)
      * colour straight in -- so a translucent rectangle came out solid.  Blending is the
      * point of the alpha, and for an opaque colour source-over is the same pixels. */
     NSRectFillUsingOperation(NSMakeRect(x, y, w, h), NSCompositingOperationSourceOver);
+    }
+/* A transparency layer: everything drawn until the matching end goes into a buffer that starts
+ * EMPTY, and is composited over what was already drawn when it ends.  A clear inside it erases the
+ * layer's own pixels only.  It is how a view that asked for its own surface keeps that meaning in
+ * the one 2-D surface, with no native layer. */
+void ux_ak_layer_begin(int x, int y, int w, int h)
+    {
+    CGContextRef c = [[NSGraphicsContext currentContext] CGContext];
+    if (!c)
+        return;
+    CGContextSaveGState(c);
+    CGContextBeginTransparencyLayerWithRect(c, CGRectMake(x, y, w, h), NULL);
+    }
+void ux_ak_layer_end(void)
+    {
+    CGContextRef c = [[NSGraphicsContext currentContext] CGContext];
+    if (!c)
+        return;
+    CGContextEndTransparencyLayer(c);
+    CGContextRestoreGState(c);
     }
 void ux_ak_clear(int x, int y, int w, int h)
     {
@@ -2532,7 +2783,6 @@ void ux_ak_set_control_check(int handle, int node, int on)
     if ([b isKindOfClass:[NSButton class]])
         [b setState:(on ? NSControlStateValueOn : NSControlStateValueOff)];
     }
-static Class ak_surface_class(void); // fwd: an overlay surface lives in the window content view
 void ux_ak_set_control_frame(int handle, int node, int x, int y, int w, int h)
     {
     if (node < 0 || node >= 256)
@@ -2542,17 +2792,6 @@ void ux_ak_set_control_frame(int handle, int node, int x, int y, int w, int h)
         return;
     if ([v isKindOfClass:[NSButton class]])
         ak_place_button((NSButton*)v, x, y, w, h);
-    else if ([v isKindOfClass:ak_surface_class()])
-        {
-        /* A surface lives in the window's CONTENT view, above the scroll clip, so a frame given in
-         * the toolkit's document-view space is converted here -- the flip and the clip inset are the
-         * shim's to get right. */
-        NSView* content = g_view[handle];
-        NSWindow* win = g_win[handle];
-        NSView* target = win ? [win contentView] : content;
-        if (content && target)
-            [v setFrame:[content convertRect:NSMakeRect(x, y, w, h) toView:target]];
-        }
     else
         [v setFrame:NSMakeRect(x, y, w, h)];
     }
@@ -3263,168 +3502,6 @@ void ux_ak_scroll_reload(int handle, int node, int contentH)
     f.size.height = contentH > (int)cs.height ? contentH : (int)cs.height;
     [doc setFrame:f];
     [doc setNeedsDisplay:YES];
-    }
-
-// ---- a self-painting surface (a plain UXView that paints in its own surface) ---------------------
-// The same shape as the scroll document just above, but for an ordinary view instead of a scroll
-// container: a flipped NSView at the view's frame whose drawRect calls back to draw that view's
-// SUBTREE, with the neutral draw offset set to the view's absolute position first, so the subtree
-// lands at this surface's own 0,0.  Because it is a real subview it sits ABOVE the GL surface (which
-// ux_ak_gl_place puts at the bottom of the stack) -- which is the whole reason it exists: a view's
-// own paint is drawn before its subviews, so a plain paint is UNDER a GL surface, and only a real
-// subview is over it.  Only AppKit makes one; the other backends draw the view inline (the decline).
-static void (*g_surface_content)(void* view, int w, int h) = 0;
-void ux_ak_set_surface_content(void* fn)
-    {
-    g_surface_content = (void (*)(void*, int, int))fn;
-    }
-
-#define UX_MAXSURFACE 128
-static NSView* g_surface_view[UX_MAXSURFACE];
-static void* g_surface_owner[UX_MAXSURFACE];
-static int g_surface_n = 0;
-
-static void ak_surface_drawRect(__unsafe_unretained id self, SEL _cmd, NSRect dirty)
-    {
-    for (int i = 0; i < g_surface_n; i++)
-        {
-        if (g_surface_view[i] == (NSView*)self)
-            {
-            if (g_surface_content)
-                {
-                NSRect b = [(NSView*)self bounds];
-                g_surface_content(g_surface_owner[i], (int)b.size.width, (int)b.size.height);
-                }
-            return;
-            }
-        }
-    }
-static Class ak_surface_class(void)
-    {
-    static Class c = nil;
-    if (c)
-        return c;
-    c = objc_allocateClassPair([NSView class], "UXSurfaceView", 0);
-    class_addMethod(c, sel_registerName("drawRect:"), (IMP)ak_surface_drawRect,
-                    "v@:{CGRect={CGPoint=dd}{CGSize=dd}}");
-    class_addMethod(c, sel_registerName("isFlipped"), (IMP)ak_isFlipped, "B@:");
-    objc_registerClassPair(c);
-    return c;
-    }
-
-// Turn off Core Animation's implicit animations on a view's layer.  A layer that ANIMATES its bounds
-// or position shows the OLD content sliding over the new frame for the animation's duration, which
-// reads as a stale/ shaded patch (the client's, dividing at the window's midlines).  AppKit adds
-// these wherever a layer-backed view's geometry or contents change; nothing here wants an animation.
-static void ak_no_implicit_actions(NSView* v)
-    {
-    if (!v || !v.layer)
-        return;
-    NSMutableDictionary* d = [NSMutableDictionary dictionary];
-    for (NSString* k in @[@"position", @"bounds", @"contents", @"opacity", @"hidden",
-                          @"backgroundColor", @"transform", @"sublayers", @"onOrderIn", @"onOrderOut"])
-        {
-        d[k] = [NSNull null];
-        }
-    [v.layer setActions:d];
-    }
-void ux_ak_make_surface(int handle, int node, int x, int y, int w, int h, void* view)
-    {
-    NSView* content = g_view[handle];
-    if (!content || node < 0 || node >= 256)
-        return;
-    NSView* s = [[ak_surface_class() alloc] initWithFrame:NSMakeRect(x, y, w, h)];
-    /* TRANSPARENT, or the surface is a black rectangle over the GL map.  Its drawRect clears to
-     * transparent where it draws nothing, and for that to reveal the MAP the surface must be a
-     * LAYER the window server composites over the GL plane -- a plain view draws into the window
-     * backing, whose "transparent" is the window background (black in dark mode), not the map.  This
-     * is the §6 hazard (uniform layer backing); a layer-backed sibling also upgrades the GL view to
-     * its layer form, which is the preferred compositing path.  Needed for rounded menu/panel
-     * corners and for the ink layer over the map. */
-    [s setWantsLayer:YES];
-    ak_no_implicit_actions(s);
-    [s.layer setOpaque:NO];
-    [s.layer setBackgroundColor:NULL]; // no background: transparent where nothing is drawn
-    /* A big layer is drawn in backing-store TILES, and a tile that is not redrawn shows as a stale
-     * quadrant over the map (client-reported: the lower-left quarter, exactly a 2x2 split of the
-     * 2560x1664 px layer at 2x).  Redraw the whole layer whenever the view is marked dirty, and
-     * match the window's backing scale once it is in a window, or a tile is drawn at 1x into a 2x
-     * layer and covers a quarter of it. */
-    [s setLayerContentsRedrawPolicy:NSViewLayerContentsRedrawOnSetNeedsDisplay];
-    if (g_surface_n < UX_MAXSURFACE)
-        {
-        g_surface_view[g_surface_n] = s;
-        g_surface_owner[g_surface_n] = view;
-        g_surface_n++;
-        }
-    /* WINDOW-PLACED, not scrolled content: the surface goes ABOVE the window's scroll clip, on the
-     * window's content view.  Inside the clip a layer-backed view cleared/tiled in regions, leaving
-     * a black rectangle over the map, and the surface is window-sized so it need not scroll. */
-    NSWindow* win = g_win[handle];
-    NSView* target = win ? [win contentView] : content;
-    if (target)
-        {
-        [s setFrame:[content convertRect:NSMakeRect(x, y, w, h) toView:target]];
-        [target addSubview:s];
-        NSWindow* sw = [s window];
-        if (sw)
-            {
-            [s.layer setContentsScale:[sw backingScaleFactor]];
-            }
-        }
-    g_ctl[handle][node] = s;
-    [s setNeedsDisplay:YES];
-    }
-
-// Mark the surface dirty so its subtree is redrawn on the next display.  Called from realizeTree on
-// every pass, because the surface holds INK that changes each frame and a reposition alone does not
-// repaint it.
-void ux_ak_surface_refresh(int handle, int node)
-    {
-    if (node < 0 || node >= 256)
-        return;
-    NSView* s = (NSView*)g_ctl[handle][node];
-    if (s)
-        [s setNeedsDisplay:YES];
-    }
-
-// Is a self-painting surface (the view `surfPeer`) ABOVE the GL surface `glPeer` in their shared
-// parent's subview order?  1 = above, 0 = below or in a different stack, -1 = one of them is not
-// present.  The whole reason a self-surface view exists is that a real subview lands OVER the
-// composited GL (a plain inline paint would be under it), so this is the structural half of that
-// promise; the pixel half is a window grab.  Keyed by the neutral view pointers, like makeGL, so a
-// caller names the same token the seam already gave it.
-int ux_ak_surface_over_gl(void* surfPeer, void* glPeer)
-    {
-    NSView* surf = nil;
-    for (int i = 0; i < g_surface_n; i++)
-        {
-        if (g_surface_owner[i] == surfPeer)
-            {
-            surf = g_surface_view[i];
-            break;
-            }
-        }
-    int gi = ak_gl_find(glPeer);
-    NSView* gl = gi >= 0 ? g_glView[gi] : nil;
-    if (!surf || !gl)
-        return -1;
-    NSView* parent = [surf superview];
-    if (!parent)
-        return -1;
-    if (parent == [gl superview])
-        {
-        NSArray* subs = [parent subviews];
-        NSUInteger si = [subs indexOfObjectIdenticalTo:surf];
-        NSUInteger gg = [subs indexOfObjectIdenticalTo:gl];
-        if (si == NSNotFound || gg == NSNotFound)
-            return -1;
-        return si > gg ? 1 : 0;
-        }
-    /* Different levels of the hierarchy: the surface is over the GL when the GL is inside the
-     * surface's parent -- the surface sits on the window content view, above the scroll clip that
-     * holds the map. */
-    return [gl isDescendantOf:parent] ? 1 : 0;
     }
 
 // One modal drag-track step (a split-view divider, etc.): pull the next left-mouse dragged/up event.

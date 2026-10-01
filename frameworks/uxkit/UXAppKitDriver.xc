@@ -116,11 +116,10 @@ void ux_ak_scroll_reload(i32 handle, i32 node, i32 contentH);
 void ux_ak_scroll_set(i32 handle, i32 node, i32 px); // drive it from the toolkit
 i32 ux_ak_scroll_get(i32 handle, i32 node);          // ...and read where it ended up
 void ux_ak_set_scroll_content(pointer fn);
-// A plain view that paints in its OWN surface (UXKindSurface): a real subview at the view's frame
-// whose drawRect draws the view's subtree.  Above the GL surface, unlike an inline paint.
-void ux_ak_set_surface_content(pointer fn);
-void ux_ak_make_surface(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, pointer view);
-void ux_ak_surface_refresh(i32 handle, i32 node);
+// A transparency layer over (x,y,w,h) of the current 2-D context, and its end: a self-surface
+// view's own layer inside the one surface (see drawOne).
+void ux_ak_layer_begin(i32 x, i32 y, i32 w, i32 h);
+void ux_ak_layer_end();
 // Move a native control into the document view of a scroll view it is inside, so it scrolls and
 // clips with the scroll (ax,ay is the control's absolute origin; setFrame 0 leaves it to AppKit).
 void ux_ak_reparent_to_scroll(i32 handle, i32 node, i32 scrollNode, i32 ax, i32 ay, i32 aw, i32 ah, i32 setFrame);
@@ -156,6 +155,8 @@ void ux_ak_gl_place(i32 handle, pointer peer, i32 x, i32 y, i32 w, i32 h, i32 hi
 pointer ux_ak_gl_make(pointer peer);
 void ux_ak_gl_resize(pointer peer, i32 w, i32 h);
 void ux_ak_gl_present(pointer peer);
+// Draw a GL view's texture into the current 2-D context (the one-surface decision); 1 if drawn.
+i32 ux_ak_gl_draw_view(pointer peer, i32 x, i32 y, i32 w, i32 h);
 void ux_ak_gl_vsync(i32 interval);
 void ux_ak_gl_destroy(pointer peer);
 void ux_ak_gl_close(i32 handle);
@@ -504,7 +505,6 @@ class UXAppKitDriver : Object<UXViewDriver>
         ux_ak_set_field_hooks((pointer)&xgAKFieldChanged);  // NSTextField edits fire onChange
         ux_ak_set_field_submit_hooks((pointer)&xgAKFieldSubmitted); // ...and Return fires onSubmit
         ux_ak_set_scroll_content((pointer)&ux_scroll_draw); // a scroll doc view draws its subtree
-        ux_ak_set_surface_content((pointer)&ux_view_surface_draw); // a self-surface view draws its subtree
         screenW[0] = (i32)1440;
         screenH[0] = (i32)900;
         return true;
@@ -1225,7 +1225,28 @@ class UXAppKitDriver : Object<UXViewDriver>
         }
     // Walk the shadow tree; a custom view calls back into drawRect via the userdraw callback, and a
     // stock widget is drawn by the driver (the AppKit analogue of GEM's native widget art).
+    // A view that asked for its OWN SURFACE draws its subtree into a transparency layer of the one
+    // 2-D surface: it starts empty, a clearRect inside it erases only that view's own ink (never the
+    // map painted beneath it), and the layer is composited over everything below when it ends.
+    // That is what "its own surface" means to a client -- the browser's #ink canvas -- with no native
+    // layer and no second plane.  Headless keeps the plain inline draw.
     void drawOne(AKTree* t, i32 i)
+        {
+        if (i >= (i32)0 && t.nodes[i].hidden == (i16)0 && (i32)t.nodes[i].kind == (i32)UXKindSurface && self.nativeUI() != (i32)0)
+            {
+            i32 ax = (i32)0;
+            i32 ay = (i32)0;
+            i32 w = (i32)0;
+            i32 hh = (i32)0;
+            self.structAbsFrame((pointer)t, i, &ax, &ay, &w, &hh);
+            ux_ak_layer_begin(ax - gAKDrawOX, ay - gAKDrawOY, w, hh);
+            self.drawNode(t, i);
+            ux_ak_layer_end();
+            return;
+            }
+        self.drawNode(t, i);
+        }
+    void drawNode(AKTree* t, i32 i)
         {
         if (i < (i32)0 || t.nodes[i].hidden != (i16)0)
             {
@@ -1244,17 +1265,10 @@ class UXAppKitDriver : Object<UXViewDriver>
             {
             return;
             }
-        // A view painting in its OWN surface (realizeTree) has a real subview that draws its
-        // subtree ABOVE the GL surface, so a plain inline draw here would be the wrong layer (under
-        // the map) -- SKIP it in the MAIN window pass.  But the surface's drawRect draws the SAME
-        // node's subtree, through this very walk with the userdraw pointed at ux_surface_userdraw,
-        // and there the root must draw or the surface is blank.  So the skip is the main pass only:
-        // during a sub-surface draw (gAKUserFn is the shared surface userdraw) it falls through.
-        // Headless has no surface at all, so it always falls through and draws inline like a view.
-        if (k == (i32)UXKindSurface && self.nativeUI() != (i32)0 && gAKUserFn != (pointer)&ux_surface_userdraw)
-            {
-            return;
-            }
+        // A view that asked for its OWN SURFACE (UXKindSurface) is drawn right here, inline, like any
+        // UXKindView: the GL map is painted into this same 2-D pass (the offscreen surface), so a view
+        // after it in the tree already lands over it by draw order and needs no native layer.  This
+        // is AppKit DECLINING the surface, as every backend without a GL plane does.
         // Interactive: check boxes / radios are native NSButtons (realizeTree), so don't also app-draw
         // the diamond under them.  Headless still draws them (the seam below).
         if ((k == (i32)UXKindCheckbox || k == (i32)UXKindRadio) && self.nativeUI() != (i32)0)
@@ -1300,6 +1314,21 @@ class UXAppKitDriver : Object<UXViewDriver>
         // no context, which is every backend without GL and the capture booth.  Once makeGL
         // has bound a context the neutral ux_userdraw declines to enter app code at all, so
         // the surface is the picture and this costs one virtual call.
+        // A GL VIEW is drawn by the DRIVER here: its texture, as an image, in this very 2-D pass --
+        // the map is part of the one surface, not a plane beside it.  Where there is no surface (a
+        // backend with no GL, or a context not made yet), fall through to the software fallback.
+        if (k == (i32)UXKindGLView)
+            {
+            i32 gax = (i32)0;
+            i32 gay = (i32)0;
+            i32 gaw = (i32)0;
+            i32 gah = (i32)0;
+            self.structAbsFrame((pointer)t, i, &gax, &gay, &gaw, &gah);
+            if (ux_ak_gl_draw_view(t.nodes[i].peer, gax, gay, gaw, gah) != (i32)0)
+                {
+                return;
+                }
+            }
         if ((k == (i32)UXKindView || k == (i32)UXKindSurface || k == (i32)UXKindShield || k == (i32)UXKindGLView || k == (i32)UXKindCheckbox || k == (i32)UXKindRadio || k == (i32)UXKindToolbar) && gAKUserFn != (pointer)0)
             {
             UXUserDrawFn* f = (UXUserDrawFn*)gAKUserFn; // checkbox/radio: app-drawn on AppKit (no native art yet)
@@ -1490,43 +1519,6 @@ class UXAppKitDriver : Object<UXViewDriver>
                 i32 hh = (i32)0;
                 self.structAbsFrame(tree, i, &ax, &ay, &w, &hh);
                 ux_ak_gl_place(handle, t.nodes[i].peer, ax, ay, w, hh, self.effectiveHidden(tree, i));
-                }
-            else if (k == (i32)UXKindSurface)
-                {
-                // A view that paints in its OWN surface: a real NSView at the view's frame whose
-                // drawRect draws the view's SUBTREE, through the content callback set at boot
-                // (ux_ak_set_surface_content -> ux_view_surface_draw, which points the neutral
-                // walk at this node and sets the draw offset to its absolute position).  It is
-                // made HERE for the same reason a GL surface is: a surface belongs to the WINDOW,
-                // and realization is where native objects are reconciled with the tree.  Being a
-                // real subview it sits ABOVE the GL surface, which is the whole point -- a view's
-                // own paint is UNDER a GL surface, an added subview is over it.
-                //
-                // Like every control it is made once and then moved: the ink it holds changes
-                // each frame, so a reposition alone is not enough and the surface is marked dirty
-                // on every pass.  A backend that cannot make one never reaches this branch --
-                // headless AppKit returns above on nativeUI(), and GEM/Win32/web draw the view
-                // inline as a UXKindView -- which is the decline, and why one tree is correct
-                // everywhere with only the stacking over GL differing.
-                i32 ax = (i32)0;
-                i32 ay = (i32)0;
-                i32 w = (i32)0;
-                i32 hh = (i32)0;
-                self.structAbsFrame(tree, i, &ax, &ay, &w, &hh);
-                if (ux_ak_has_control(handle, i) == (i32)0)
-                    {
-                    ux_ak_make_surface(handle, i, ax, ay, w, hh, t.nodes[i].peer);
-                    ux_ak_set_control_autoresize(handle, i, (i32)t.nodes[i].autoresize);
-                    }
-                else
-                    {
-                    if ((i32)t.nodes[i].autoresize == (i32)0)
-                        {
-                        ux_ak_set_control_frame(handle, i, ax, ay, w, hh);
-                        }
-                    ux_ak_surface_refresh(handle, i);
-                    }
-                ux_ak_set_control_hidden(handle, i, self.effectiveHidden(tree, i));
                 }
             else if (k == (i32)UXKindCheckbox || k == (i32)UXKindRadio)
                 {
@@ -1869,7 +1861,7 @@ class UXAppKitDriver : Object<UXViewDriver>
         for (i32 i = (i32)0; i < t.count; i = i + (i32)1)
             {
             i32 kk = (i32)t.nodes[i].kind;
-            if (kk == (i32)UXKindScroll || kk == (i32)UXKindTable || kk == (i32)UXKindGLView || kk == (i32)UXKindSurface)
+            if (kk == (i32)UXKindScroll || kk == (i32)UXKindTable || kk == (i32)UXKindGLView)
                 {
                 continue;
                 }
@@ -2147,11 +2139,11 @@ class UXAppKitDriver : Object<UXViewDriver>
         {
         return ux_ak_gl_kind();
         }
-    // The surface is an ordinary NSOpenGLView subview and the window server composites it with
-    // the rest of the window in one step.
+    // No GL plane: the frame is rendered offscreen and the driver paints it into the window's one
+    // 2-D pass, ordered with the 2-D views by tree order.
     bool compositesWithGL(void)
         {
-        return true;
+        return false;
         }
     // On Apple nothing has to be loaded: the framework's symbols are bound at link time when
     // the process starts, so the answer is a lookup in the loaded images.  The renderer still
