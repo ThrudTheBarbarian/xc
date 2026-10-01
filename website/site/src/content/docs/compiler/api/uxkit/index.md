@@ -23,6 +23,7 @@ a platform. The platforms are grouped by realm:
 - [`UXComboBox`](/compiler/api/uxkit/uxcombobox/)
 - [`UXControl`](/compiler/api/uxkit/uxcontrol/)
 - [`UXDatePicker`](/compiler/api/uxkit/uxdatepicker/)
+- [`UXFrameHud`](/compiler/api/uxkit/uxframehud/)
 - [`UXOutlineView`](/compiler/api/uxkit/uxoutlineview/)
 - [`UXPopUpButton`](/compiler/api/uxkit/uxpopupbutton/)
 - [`UXProgress`](/compiler/api/uxkit/uxprogress/)

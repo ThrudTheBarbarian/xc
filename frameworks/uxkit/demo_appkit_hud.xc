@@ -33,8 +33,8 @@ void hudTick(void)
     if (gTicks >= (i32)75)
         {
         gDone = (i32)1;
-        Stdio.printf("frames=%ld prev=%ldus min=%ldus max=%ldus fps=%ld\n",
-                     gTicks, gHud.framePrev(), gHud.frameMin(), gHud.frameMax(), gHud.frameFps());
+        Stdio.printf("frames=%ld fps=%ld min=%ldus avg=%ldus max=%ldus (last frame %ldus)\n",
+                     gTicks, gHud.frameFps(), gHud.frameMin(), gHud.frameAvg(), gHud.frameMax(), gHud.framePrev());
         if (gApp != (UXApplication*)0)
             {
             gApp.stop();
@@ -55,7 +55,8 @@ class Controller : Object<UXApplicationDelegate>
         win.open((u8*)"UXKit frame HUD", UXGeom.make((i16)160, (i16)160, (i16)280, (i16)160), canvas);
         gHud = new UXFrameHud();
         gHud.setEnabled(true);
-        canvas.addSubview(gHud, UXGeom.make((i16)8, (i16)8, (i16)150, (i16)34));
+        canvas.addSubview(gHud, UXGeom.make((i16)8, (i16)8, (i16)gHud.preferredWidth(), (i16)gHud.preferredHeight()));
+        Stdio.printf("hud panel %dx%d\n", gHud.preferredWidth(), gHud.preferredHeight());
         win.displayAll();
         app.everyTurn(&hudTick, 0); // the app's turn drives the HUD; no second clock
         return (i32)0;
@@ -74,7 +75,13 @@ void main(void)
     app.setDelegate(c);
     uxAutoQuit();
     app.run();
-    if (gTicks >= (i32)75 && gHud != (UXFrameHud*)0 && gHud.framePrev() > (i32)0 && gHud.frameFps() > (i32)0)
+    // One window for all four numbers: min <= avg <= max, and the average is the second over its
+    // frames, so it agrees with fps (1,000,000 / fps, to within the second's overrun).
+    bool consistent = gHud != (UXFrameHud*)0 && gHud.frameFps() > (i32)0 &&
+                      gHud.frameMin() <= gHud.frameAvg() && gHud.frameAvg() <= gHud.frameMax() &&
+                      gHud.frameAvg() >= (i32)1000000 / gHud.frameFps() &&
+                      gHud.frameAvg() <= (i32)1000000 / gHud.frameFps() + gHud.frameMax();
+    if (gTicks >= (i32)75 && consistent)
         {
         Stdio.printf("PASS: the frame HUD sampled the live frame clock\n");
         }
