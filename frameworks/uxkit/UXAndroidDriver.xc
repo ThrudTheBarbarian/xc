@@ -1050,8 +1050,16 @@ class UXAndroidDriver : Object<UXViewDriver>
             // userdraw seam — View AND the custom-drawn controls.
             if (gAndUserFn != (pointer)0)
                 {
+                // A view's drawing stays INSIDE ITS FRAME, as an NSView's does.
+                i32 vx = (i32)0;
+                i32 vy = (i32)0;
+                i32 vw = (i32)0;
+                i32 vh = (i32)0;
+                self.structAbsFrame((pointer)t, i, &vx, &vy, &vw, &vh);
+                ux_and_clip(vx, vy, vw, vh);
                 UXAndUserDrawFn* f = (UXAndUserDrawFn*)gAndUserFn;
                 f((pointer)t.nodes, i, gAndUserUd);
+                ux_and_clip_end();
                 }
             }
         bool clips = t.nodes[i].clips != (i16)0;

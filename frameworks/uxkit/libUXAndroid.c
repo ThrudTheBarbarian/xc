@@ -787,6 +787,63 @@ void ux_and_fill(int x, int y, int w, int h, int r, int g, int b, int a) {
     (*env)->CallVoidMethod(env, gDrawCanvas, gCanvasDrawRect,
                            (jfloat)x, (jfloat)y, (jfloat)(x + w), (jfloat)(y + h), gPaint);
 }
+/* drawPixels: the region becomes an int[] of ARGB colours -- Android's ARGB_8888 colour ints are
+ * straight 0xAARRGGBB, which is a UXImage's word exactly -- then a Bitmap, drawn into the destination
+ * RectF with a filtering Paint that carries the overall alpha.  Region only, per call.  The JNI ids
+ * are resolved on first use; a local frame scopes the per-call references, so a panel drawing eighty
+ * icons a frame cannot run the local reference table out. */
+static jmethodID gBmpFromColors, gBmpRecycle, gCanvasDrawBitmap, gRectFInit, gPaintSetAlpha, gPaintSetFilter;
+static jclass gRectFCls;
+static jobject gBmpCfg8888, gPixPaint; /* global refs */
+void ux_and_draw_pixels(const unsigned char* data, int w, int h, int fmt, int sx, int sy, int sw, int sh,
+                        int dx, int dy, int dw, int dh, int alpha) {
+    if (!gDrawCanvas || !data || alpha <= 0 || dw <= 0 || dh <= 0) return;
+    if (sx < 0) sx = 0;
+    if (sy < 0) sy = 0;
+    if (sx + sw > w) sw = w - sx;
+    if (sy + sh > h) sh = h - sy;
+    if (sw <= 0 || sh <= 0) return;
+    JNIEnv *env = envNow();
+    if (!gCanvasDrawBitmap) {
+        gBmpFromColors = (*env)->GetStaticMethodID(env, gBitmapCls, "createBitmap",
+                             "([IIILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;");
+        gBmpRecycle = (*env)->GetMethodID(env, gBitmapCls, "recycle", "()V");
+        gCanvasDrawBitmap = (*env)->GetMethodID(env, gCanvasCls, "drawBitmap",
+                             "(Landroid/graphics/Bitmap;Landroid/graphics/Rect;Landroid/graphics/RectF;Landroid/graphics/Paint;)V");
+        gRectFCls = gref(env, "android/graphics/RectF");
+        gRectFInit = gRectFCls ? (*env)->GetMethodID(env, gRectFCls, "<init>", "(FFFF)V") : 0;
+        gPaintSetAlpha = (*env)->GetMethodID(env, gPaintCls, "setAlpha", "(I)V");
+        gPaintSetFilter = (*env)->GetMethodID(env, gPaintCls, "setFilterBitmap", "(Z)V");
+        jclass cfgCls = (*env)->FindClass(env, "android/graphics/Bitmap$Config");
+        jfieldID f8888 = (*env)->GetStaticFieldID(env, cfgCls, "ARGB_8888", "Landroid/graphics/Bitmap$Config;");
+        gBmpCfg8888 = (*env)->NewGlobalRef(env, (*env)->GetStaticObjectField(env, cfgCls, f8888));
+        gPixPaint = (*env)->NewGlobalRef(env, (*env)->NewObject(env, gPaintCls, gPaintInit));
+        (*env)->CallVoidMethod(env, gPixPaint, gPaintSetFilter, (jboolean)1);
+        if (!check(env, "drawPixels ids") || !gRectFInit) { gCanvasDrawBitmap = 0; return; }
+    }
+    if ((*env)->PushLocalFrame(env, 8) != 0) return;
+    jintArray colors = (*env)->NewIntArray(env, sw * sh);
+    jint* c = colors ? (*env)->GetIntArrayElements(env, colors, NULL) : NULL;
+    if (c) {
+        for (int y = 0; y < sh; y++)
+            for (int x = 0; x < sw; x++) {
+                const unsigned char* q = data + ((size_t)(sy + y) * w + (sx + x)) * 4;
+                unsigned r = fmt == 1 ? q[2] : q[0], g = q[1], b = fmt == 1 ? q[0] : q[2], a = q[3];
+                c[y * sw + x] = (jint)((a << 24) | (r << 16) | (g << 8) | b);
+            }
+        (*env)->ReleaseIntArrayElements(env, colors, c, 0);
+        jobject bmp = (*env)->CallStaticObjectMethod(env, gBitmapCls, gBmpFromColors, colors, sw, sh, gBmpCfg8888);
+        jobject dst = (*env)->NewObject(env, gRectFCls, gRectFInit,
+                                        (jfloat)dx, (jfloat)dy, (jfloat)(dx + dw), (jfloat)(dy + dh));
+        (*env)->CallVoidMethod(env, gPixPaint, gPaintSetAlpha, (jint)(alpha > 255 ? 255 : alpha));
+        if (bmp && dst) {
+            (*env)->CallVoidMethod(env, gDrawCanvas, gCanvasDrawBitmap, bmp, (jobject)NULL, dst, gPixPaint);
+            (*env)->CallVoidMethod(env, bmp, gBmpRecycle);
+        }
+    }
+    check(env, "drawPixels");
+    (*env)->PopLocalFrame(env, NULL);
+}
 /* Canvas has no clearRect: save the clip, clip to the rect, drawColor(0, Mode.CLEAR) to punch it
    back to transparent, restore.  A source-over fill at alpha 0 would paint nothing instead. */
 void ux_and_clear(int x, int y, int w, int h) {
