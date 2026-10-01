@@ -1,0 +1,336 @@
+#!/usr/bin/env python3
+"""Write the website's performance page from benchmark results.
+
+  page.py                       current run v0.64-langs, history v0.62..v0.64
+  page.py --current v0.65 --history v0.62,v0.63,v0.64,v0.65
+
+The current run supplies the four-language comparison; the history runs supply
+how xc's own times moved from release to release (their xc sources are the
+same, so their xc times compare directly). The charts are inline SVG drawn in
+the page's text colour, so they follow the site's light and dark themes.
+"""
+
+import argparse
+import json
+import math
+import os
+
+ROOT = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.dirname(ROOT)
+PAGE = os.path.join(REPO, "website", "site", "src", "content", "docs", "compiler", "performance.md")
+
+LANGS = (("objc", "Objective-C", "#d4a017"), ("cpp", "C++", "#3b82f6"), ("swift", "Swift", "#e5534b"))
+PLATFORMS = (("arm64", ""), ("x86-64", "_x86_64"))
+# Benchmarks whose sources changed in a way that makes their earlier times
+# incomparable, and the release from which their times are comparable again.
+CHANGED_IN = {"arc_alloc": "v0.64-langs", "method_call": "v0.64-langs"}
+
+
+def load(v):
+    with open(os.path.join(ROOT, v, "results.json")) as fh:
+        return json.load(fh)["net"]
+
+
+def gmean(xs):
+    xs = [x for x in xs if x and x > 0]
+    return math.exp(sum(math.log(x) for x in xs) / len(xs)) if xs else None
+
+
+def esc(s):
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def ratio_chart(cur, suffix, title):
+    """One row per benchmark: xc's time over each language's, on a log scale."""
+    rows = []
+    for b, d in cur.items():
+        d = d["O3"]
+        x = d.get("xc" + suffix)
+        rs = {l: x / d[l + suffix] for l, _, _ in LANGS if x and d.get(l + suffix)}
+        best = max(rs.values()) if rs else 0
+        rows.append((best, b, rs))
+    rows.sort(key=lambda r: -r[0])
+    w, left, right, top, rowh = 720, 132, 704, 44, 19
+    lo, hi = -3.0, 3.0                       # log2 range: 1/8 .. 8
+    h = top + rowh * len(rows) + 30
+    def px(r):
+        v = max(lo, min(hi, math.log2(r)))
+        return left + (v - lo) / (hi - lo) * (right - left)
+    o = ['<figure class="xc-chart"><svg viewBox="0 0 %d %d" width="100%%" role="img" '
+         'aria-label="%s" style="max-width:%dpx;height:auto;font:12px system-ui,sans-serif">' % (w, h, esc(title), w)]
+    o.append('<title>%s</title>' % esc(title))
+    # legend
+    lx = left
+    for l, name, col in LANGS:
+        o.append('<circle cx="%d" cy="14" r="5" fill="%s"/>' % (lx, col))
+        o.append('<text x="%d" y="18" fill="currentColor">xc ÷ %s</text>' % (lx + 9, esc(name)))
+        lx += 130
+    # grid and axis
+    for k in range(int(lo), int(hi) + 1):
+        x = px(2.0 ** k)
+        o.append('<line x1="%.1f" y1="%d" x2="%.1f" y2="%d" stroke="currentColor" stroke-opacity="%s"/>'
+                 % (x, top - 8, x, top + rowh * len(rows), "0.55" if k == 0 else "0.15"))
+        lab = "1×" if k == 0 else ("%d×" % (2 ** k) if k > 0 else "1/%d" % (2 ** -k))
+        o.append('<text x="%.1f" y="%d" text-anchor="middle" fill="currentColor" fill-opacity="0.75">%s</text>'
+                 % (x, top + rowh * len(rows) + 16, lab))
+    o.append('<text x="%d" y="%d" fill="currentColor" fill-opacity="0.75">← xc faster</text>'
+             % (left, top + rowh * len(rows) + 28))
+    o.append('<text x="%d" y="%d" text-anchor="end" fill="currentColor" fill-opacity="0.75">xc slower →</text>'
+             % (right, top + rowh * len(rows) + 28))
+    for i, (_, b, rs) in enumerate(rows):
+        y = top + i * rowh + rowh / 2
+        o.append('<text x="%d" y="%.1f" text-anchor="end" fill="currentColor" '
+                 'style="font-family:ui-monospace,monospace">%s</text>' % (left - 8, y + 4, esc(b)))
+        if rs:
+            xs = [px(r) for r in rs.values()]
+            o.append('<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="currentColor" stroke-opacity="0.3"/>'
+                     % (min(xs), y, max(xs), y))
+        for l, name, col in LANGS:
+            if l in rs:
+                o.append('<circle cx="%.1f" cy="%.1f" r="4.5" fill="%s"><title>%s: xc ÷ %s = %.2f</title></circle>'
+                         % (px(rs[l]), y, col, esc(b), esc(name), rs[l]))
+    o.append('</svg><figcaption>%s</figcaption></figure>' % esc(title))
+    return "".join(o)
+
+
+def history_chart(hist, suffix, title, versions):
+    """xc's own time per benchmark, relative to the first release shown."""
+    first = versions[0]
+    series = {}
+    for b in hist[first]:
+        vals = []
+        for v in versions:
+            d = hist[v].get(b, {}).get("O3", {})
+            vals.append(d.get("xc" + suffix))
+        if vals[0]:
+            series[b] = [None if x is None else x / vals[0] for x in vals]
+    geo = [gmean([s[i] for s in series.values() if s[i]]) for i in range(len(versions))]
+    w, h, left, right, top, bottom = 720, 300, 60, 560, 24, 262
+    # The y range fits the data, kept at least 0.8..1.25 so a quiet history
+    # still reads as quiet rather than being stretched into drama.
+    allr = [r for s in series.values() for r in s if r]
+    lo = min(math.log2(0.8), math.log2(min(allr)) - 0.05)
+    hi = max(math.log2(1.25), math.log2(max(allr)) + 0.05)
+    def py(r):
+        v = max(lo, min(hi, math.log2(r)))
+        return bottom - (v - lo) / (hi - lo) * (bottom - top)
+    def px(i):
+        return left + i * (right - left) / max(1, len(versions) - 1)
+    o = ['<figure class="xc-chart"><svg viewBox="0 0 %d %d" width="100%%" role="img" aria-label="%s" '
+         'style="max-width:%dpx;height:auto;font:12px system-ui,sans-serif">' % (w, h, esc(title), w)]
+    o.append('<title>%s</title>' % esc(title))
+    ticks = [t for t in (0.25, 0.33, 0.5, 0.67, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 2.0, 3.0)
+             if lo <= math.log2(t) <= hi]
+    for r in ticks:
+        y = py(r)
+        o.append('<line x1="%d" y1="%.1f" x2="%d" y2="%.1f" stroke="currentColor" stroke-opacity="%s"/>'
+                 % (left, y, right, y, "0.55" if r == 1.0 else "0.15"))
+        o.append('<text x="%d" y="%.1f" text-anchor="end" fill="currentColor" fill-opacity="0.75">%.2f×</text>'
+                 % (left - 6, y + 4, r))
+    for i, v in enumerate(versions):
+        o.append('<text x="%.1f" y="%d" text-anchor="middle" fill="currentColor">%s</text>'
+                 % (px(i), bottom + 20, esc(v.lstrip("v"))))
+    labels = []
+    for b, s in sorted(series.items()):
+        pts = [(px(i), py(r)) for i, r in enumerate(s) if r]
+        o.append('<polyline points="%s" fill="none" stroke="currentColor" stroke-opacity="0.28" '
+                 'stroke-width="1.2"><title>%s: %s</title></polyline>'
+                 % (" ".join("%.1f,%.1f" % p for p in pts), esc(b),
+                    ", ".join("%.2f" % r for r in s if r)))
+        if s[-1] and abs(math.log2(s[-1])) > math.log2(1.12):
+            labels.append((py(s[-1]), b, s[-1]))
+    gpts = [(px(i), py(r)) for i, r in enumerate(geo) if r]
+    o.append('<polyline points="%s" fill="none" stroke="#3b82f6" stroke-width="3"/>'
+             % " ".join("%.1f,%.1f" % p for p in gpts))
+    for (x, y), r in zip(gpts, [g for g in geo if g]):
+        o.append('<circle cx="%.1f" cy="%.1f" r="4" fill="#3b82f6"/>' % (x, y))
+        o.append('<text x="%.1f" y="%.1f" text-anchor="middle" fill="#3b82f6" '
+                 'style="font-weight:600">%.2f</text>' % (x, y - 9, r))
+    labels.sort()
+    last = -99
+    for y, b, r in labels:
+        y = max(y, last + 13)
+        last = y
+        o.append('<text x="%d" y="%.1f" fill="currentColor" fill-opacity="0.8" '
+                 'style="font-family:ui-monospace,monospace">%s %.2f×</text>' % (right + 8, y + 4, esc(b), r))
+    o.append('<text x="%d" y="%d" fill="#3b82f6">geometric mean</text>' % (left + 4, top + 12))
+    o.append('</svg><figcaption>%s</figcaption></figure>' % esc(title))
+    return "".join(o)
+
+
+def table(cur, suffix):
+    rows = []
+    for b, d in cur.items():
+        d = d["O3"]
+        x = d.get("xc" + suffix)
+        others = [d[l + suffix] for l, _, _ in LANGS if d.get(l + suffix)]
+        rows.append((x / min(others) if x and others else 0, b, d))
+    rows.sort(key=lambda r: -r[0])
+    out = ["| benchmark | xc | Objective-C | C++ | Swift | xc ÷ fastest |", "|---|---|---|---|---|---|"]
+    for r, b, d in rows:
+        cells = ["%.2f" % d[k + suffix] if d.get(k + suffix) else "–" for k in ("xc", "objc", "cpp", "swift")]
+        out.append("| `%s` | %s | **%.2f** |" % (b, " | ".join(cells), r))
+    return "\n".join(out)
+
+
+def summary(cur):
+    out = ["| xc's time ÷ | arm64 | x86-64 |", "|---|---|---|"]
+    for l, name, _ in LANGS:
+        vals = []
+        for _, suf in PLATFORMS:
+            vals.append(gmean([d["O3"]["xc" + suf] / d["O3"][l + suf] for d in cur.values()
+                               if d["O3"].get("xc" + suf) and d["O3"].get(l + suf)]))
+        out.append("| %s | **%.2f** | **%.2f** |" % (name, vals[0], vals[1]))
+    return "\n".join(out)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--current", default="v0.64-langs")
+    ap.add_argument("--history", default="v0.62,v0.63,v0.64")
+    ap.add_argument("--release", default="0.64")
+    a = ap.parse_args()
+    cur = load(a.current)
+    versions = a.history.split(",")
+    hist = {v: load(v) for v in versions}
+    for b, since in CHANGED_IN.items():
+        if since not in versions:
+            for v in versions:
+                hist[v].pop(b, None)
+
+    page = PAGE_TEMPLATE.format(
+        release=a.release,
+        summary=summary(cur),
+        chart_arm=ratio_chart(cur, "", "arm64: xc's time divided by each language's, per benchmark"),
+        chart_x86=ratio_chart(cur, "_x86_64", "x86-64: xc's time divided by each language's, per benchmark"),
+        table_arm=table(cur, ""),
+        table_x86=table(cur, "_x86_64"),
+        hist_arm=history_chart(hist, "", "arm64: xc's time relative to %s" % versions[0].lstrip("v"), versions),
+        hist_x86=history_chart(hist, "_x86_64", "x86-64: xc's time relative to %s" % versions[0].lstrip("v"), versions),
+        first=versions[0].lstrip("v"),
+        hist_list=", ".join(v.lstrip("v") for v in versions),
+        changed=", ".join("`%s`" % b for b in sorted(CHANGED_IN)),
+    )
+    with open(PAGE, "w") as fh:
+        fh.write(page)
+    print("wrote", os.path.relpath(PAGE, REPO))
+
+
+PAGE_TEMPLATE = """---
+title: Performance
+description: How xcc-compiled code compares with clang's Objective-C and C++ and with Swift on the same programs, measured on nineteen benchmarks across arm64 and x86-64.
+---
+
+The compiler is measured on nineteen programs, each written four times: in the
+xc language, in Objective-C with ARC, in C++ and in Swift, doing the same work
+with the same algorithm and the same data. All are built with optimisation
+(`-O3` for xc, Objective-C and C++, `-O` for Swift), every version prints a
+checksum, and a run only counts if all four checksums agree.
+
+Each figure is measured with the released {release} `xcc`, on an Apple-silicon
+Mac (arm64) and a Zen 5 Linux machine (x86-64). Times are seconds for the timed
+region, the best of five runs, each run waiting until the machine is otherwise
+idle.
+
+## Summary
+
+Geometric mean, over the nineteen benchmarks, of xc's time divided by the other
+language's. **Below 1 is xc faster.**
+
+{summary}
+
+xc is ahead of Objective-C and Swift on both targets and behind C++, whose
+compiler vectorises loops that xcc does not yet. The arithmetic mean of ratios
+is not given: a benchmark at 2.00× and one at 0.50× are exactly compensating,
+and only the geometric mean says so.
+
+## Per benchmark
+
+Each row is a benchmark, each dot one language: how many times as long xc takes
+as that language. Dots left of the centre line are benchmarks xc wins.
+
+{chart_arm}
+
+{chart_x86}
+
+### arm64
+
+{table_arm}
+
+### x86-64
+
+{table_x86}
+
+The fastest results are where the runtime does the work: `string_scan`,
+`method_call` and `arc_array` are byte scanning, dynamic dispatch and reference
+counting. The slowest show where xcc's code generation has most to gain:
+
+- **Vectorisation.** `matrix_mul`, `float_math`, `array_map` and `mem_copy`
+  have inner loops clang turns into SIMD code and xcc does not. On arm64
+  `matrix_mul` is the largest gap in the suite.
+- **Dispatch and reference counting.** `poly_dispatch` on arm64 and `arc_array`
+  on both targets, where C++ calls through a vtable without reference counting
+  and reads elements without retaining them.
+- **x86-64 loops.** `sieve`, `sort_small` and `int_muldiv`, where the other
+  compilers' loops are faster (Swift's, for `sort_small`).
+- **Allocation.** `arc_alloc` on x86-64, where C++ makes one allocation per
+  object through a faster allocator.
+
+## Release to release
+
+xc's own time for each benchmark, relative to {first}. The thin lines are
+single benchmarks (labelled where they moved by more than twelve percent), the
+thick line the geometric mean. Releases shown: {hist_list}. {changed} changed in
+0.64's benchmark set and are left out of this history.
+
+{hist_arm}
+
+{hist_x86}
+
+## What is being compared, and what is not
+
+**The compiler that ships.** The xc numbers come from the `xcc` in the download.
+
+**The same work in every language.** Every version keeps its data where the xc
+version keeps it (local arrays, not `static` ones, which clang optimises
+differently) and leaves nothing a compiler can remove: an object that could be
+put on the stack outlives its iteration, a call whose target could be resolved
+at compile time takes its class at run time, and results are folded in so no
+loop has a closed form. Where the original's point is reference-counted
+objects, the C++ version uses `std::shared_ptr` and the Swift version a class,
+so they pay for reference counting too.
+
+**Different runtimes on the two targets.** The Objective-C column is Apple's
+Foundation on arm64 and GNUstep with libobjc2 on x86-64, and Swift is 6.2 on the
+Mac and 6.1 on Linux. These are different implementations, so a language's
+times compare within a target and not across one. Swift on Linux is markedly
+slower on `poly_dispatch` and `array_map` than on the Mac; the runs were
+repeated on an idle machine and reproduce.
+
+**Timed regions of about one second.** Each benchmark times its own inner loop
+rather than the process, so start-up and data set-up are excluded.
+
+**Alignment noise on x86-64.** xcc aligns every loop head on x86-64 to a 32-byte
+boundary and the start of `.text` to 64 bytes, so an unrelated change elsewhere
+cannot move a loop across a fetch boundary; see
+[Optimisation](/compiler/usage/optimization/#per-target-settings).
+
+## Reproducing
+
+The sources are in `benchmark/src`, one `.xc`, `.m`, `.cpp` and `.swift` per
+program, and the runner builds and times them all:
+
+```
+python3 benchmark/run.py --opt O3 --repeats 5
+python3 benchmark/page.py
+```
+
+The x86-64 legs cross-build xc here and build the other languages on the
+configured Linux host; without one the runner measures this machine only.
+`--langs` measures some of the languages and adds them to the results already
+there. Results land in `benchmark/<version>/results.json`, and `page.py` turns
+them into this page.
+"""
+
+if __name__ == "__main__":
+    main()
