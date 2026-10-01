@@ -57,6 +57,18 @@
       canvas.addEventListener("mousemove", (e) => push(3, e.offsetX, e.offsetY));
       window.addEventListener("keydown",   (e) => push(4, e.keyCode));
       window.addEventListener("keyup",     (e) => push(5, e.keyCode));
+      // The wheel, as type 8 (7 is a modal's answer): the vertical delta in
+      // PIXELS, so a line scroll is 100 and a page the canvas's height, as
+      // WebKit measures them. Not passive, so the page itself does not scroll.
+      canvas.addEventListener("wheel", (e) => {
+        e.preventDefault();
+        const px = e.deltaMode === 1 ? e.deltaY * 100
+                 : e.deltaMode === 2 ? e.deltaY * canvas.clientHeight : e.deltaY;
+        push(8, e.offsetX, e.offsetY, Math.round(px));
+      }, { passive: false });
+      // The right button arrives as mousedown 2; the browser's own menu must
+      // not open over it.
+      canvas.addEventListener("contextmenu", (e) => e.preventDefault());
     }
     const off = (canvas && canvas.transferControlToOffscreen)
               ? canvas.transferControlToOffscreen() : null;
