@@ -202,7 +202,7 @@ all five.
 
 ## Topics
 
-[fillRect](#fillrect) · [fillRectRGB](#fillrectrgb) · [fillRectRGBA](#fillrectrgba) · [clearRect](#clearrect) · [fillPolygon](#fillpolygon) · [fillPolygonRGB](#fillpolygonrgb) · [fillPolygonRGBA](#fillpolygonrgba) · [fillTriangle](#filltriangle) · [fillCircle](#fillcircle) · [drawLine](#drawline) · [drawText](#drawtext) · [drawTextRGBA](#drawtextrgba) · [drawTextFont](#drawtextfont) · [drawTextFontRGBA](#drawtextfontrgba) · [drawTheme](#drawtheme) · [hasThemeArt](#hasthemeart) · [blendsAlpha](#blendsalpha) · [strokesNatively](#strokesnatively) · [dashesNatively](#dashesnatively) · [strokeNative](#strokenative) · [strokeNativeRGB](#strokenativergb) · [strokeNativeRGBA](#strokenativergba)
+[fillRect](#fillrect) · [fillRectRGB](#fillrectrgb) · [fillRectRGBA](#fillrectrgba) · [clearRect](#clearrect) · [drawPixels](#drawpixels) · [fillPolygon](#fillpolygon) · [fillPolygonRGB](#fillpolygonrgb) · [fillPolygonRGBA](#fillpolygonrgba) · [fillTriangle](#filltriangle) · [fillCircle](#fillcircle) · [drawLine](#drawline) · [drawText](#drawtext) · [drawTextRGBA](#drawtextrgba) · [drawTextFont](#drawtextfont) · [drawTextFontRGBA](#drawtextfontrgba) · [drawTheme](#drawtheme) · [hasThemeArt](#hasthemeart) · [blendsAlpha](#blendsalpha) · [strokesNatively](#strokesnatively) · [dashesNatively](#dashesnatively) · [strokeNative](#strokenative) · [strokeNativeRGB](#strokenativergb) · [strokeNativeRGBA](#strokenativergba)
 
 ### fillRect
 
@@ -237,6 +237,25 @@ void clearRect(UXRect r)
 ```
 
 Make the rect carry nothing. See [Emptying a rect](#emptying-a-rect).
+
+### drawPixels
+
+```c
+void drawPixels(u8* data, i32 w, i32 h, i32 format, UXRect src, UXRect dst, i32 alpha)
+```
+
+A region of a bitmap drawn into the view, scaled smoothly, with an overall
+`alpha` (255 = as stored): the canvas's `drawImage(img, sx, sy, sw, sh, dx, dy,
+dw, dh)`. `data` is `w`×`h` pixels, row-major, top row first; `format` is
+`UXPIX_RGBA` (bytes R,G,B,A — a decoded PNG) or `UXPIX_ARGB32` (`0xAARRGGBB`
+words — a [`UXImage`](/compiler/api/uxkit/uximage/), see its `drawIn`). Both are
+straight (not premultiplied) alpha and sRGB. `src` is in the bitmap's pixels and
+`dst` in view coordinates.
+
+The bitmap is not copied. A backend may keep what it builds from `data` keyed by
+its address — a 28 MB texture atlas is wrapped once, not on every call — so the
+bytes must not change after they are first drawn; draw changed pixels from a new
+buffer. AppKit draws it; the other backends do not draw bitmaps yet.
 
 ### fillPolygon
 

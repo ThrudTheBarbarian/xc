@@ -106,6 +106,10 @@ class UXAndroidGraphics : Object<UXGraphics>
         ux_and_fill((i32)(origin.x + r.x), (i32)(origin.y + r.y), (i32)r.w, (i32)r.h, red, green, blue, alpha);
         }
     // PorterDuff CLEAR: the rect comes back transparent, whatever was under it.
+    // NOT YET on this backend: the bitmap is not drawn.  AppKit draws it; see STATE-OF-UXKIT.
+    void drawPixels(u8* data, i32 w, i32 h, i32 format, UXRect src, UXRect dst, i32 alpha)
+        {
+        }
     void clearRect(UXRect r)
         {
         ux_and_clear((i32)(origin.x + r.x), (i32)(origin.y + r.y), (i32)r.w, (i32)r.h);

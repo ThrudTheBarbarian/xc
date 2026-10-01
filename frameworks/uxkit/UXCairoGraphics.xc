@@ -110,6 +110,10 @@ class UXCairoGraphics : Object<UXGraphics>
         ux_gtk_fill((i32)(origin.x + r.x), (i32)(origin.y + r.y), (i32)r.w, (i32)r.h, red, green, blue, alpha);
         }
     // Cairo's CLEAR operator: the rect comes back transparent, whatever was under it.
+    // NOT YET on this backend: the bitmap is not drawn.  AppKit draws it; see STATE-OF-UXKIT.
+    void drawPixels(u8* data, i32 w, i32 h, i32 format, UXRect src, UXRect dst, i32 alpha)
+        {
+        }
     void clearRect(UXRect r)
         {
         ux_gtk_clear((i32)(origin.x + r.x), (i32)(origin.y + r.y), (i32)r.w, (i32)r.h);

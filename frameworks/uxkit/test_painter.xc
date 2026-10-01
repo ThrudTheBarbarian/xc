@@ -222,6 +222,11 @@ class RecG : Object<UXGraphics>
 
     // The rest of the protocol: a recorder draws none of it.
     i32 clears;
+    i32 pixelCalls;
+    void drawPixels(u8* data, i32 w, i32 h, i32 format, UXRect src, UXRect dst, i32 alpha)
+        {
+        pixelCalls = pixelCalls + (i32)1;
+        }
     void clearRect(UXRect r)
         {
         clears = clears + (i32)1;

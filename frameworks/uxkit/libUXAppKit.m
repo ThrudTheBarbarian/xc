@@ -1601,6 +1601,76 @@ void ux_ak_fill(int x, int y, int w, int h, int r, int g, int b, int a)
      * point of the alpha, and for an opaque colour source-over is the same pixels. */
     NSRectFillUsingOperation(NSMakeRect(x, y, w, h), NSCompositingOperationSourceOver);
     }
+/* A bitmap region drawn into the current 2-D context: drawPixels.  The bitmap is wrapped in a
+ * CGImage ONCE and kept, keyed by its address, size and layout -- the map's atlas is 28 MB and a
+ * panel draws ~80 icons from it every frame, so wrapping it per call would be the whole cost.  The
+ * CGImage reads the caller's memory directly (no copy), which is why the bytes must not change once
+ * drawn.  Eight entries, least recently made replaced: a client draws from a few sheets, not many. */
+#define AK_PIXCACHE 8
+static struct
+    {
+    const void* data;
+    int w, h, format;
+    CGImageRef img;
+    } g_pixCache[AK_PIXCACHE];
+static int g_pixNext = 0;
+static CGImageRef ak_pixels_image(const void* data, int w, int h, int format)
+    {
+    for (int i = 0; i < AK_PIXCACHE; i++)
+        if (g_pixCache[i].img && g_pixCache[i].data == data && g_pixCache[i].w == w
+            && g_pixCache[i].h == h && g_pixCache[i].format == format)
+            return g_pixCache[i].img;
+    /* sRGB, the space a PNG and the browser's canvas are in: tagged "device RGB" the pixels are
+     * converted through the display's profile and a pure red comes out (244,45,26). */
+    CGColorSpaceRef cs = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+    CGDataProviderRef dp = CGDataProviderCreateWithData(NULL, data, (size_t)w * h * 4, NULL);
+    /* Straight alpha in both layouts: R,G,B,A bytes, or 0xAARRGGBB words in native (little-endian)
+     * order, which is B,G,R,A in memory. */
+    CGBitmapInfo bi = format == 1 ? (kCGImageAlphaFirst | kCGBitmapByteOrder32Little)
+                                  : (kCGImageAlphaLast | kCGBitmapByteOrderDefault);
+    CGImageRef img = CGImageCreate(w, h, 8, 32, (size_t)w * 4, cs, bi, dp, NULL, true,
+                                   kCGRenderingIntentDefault);
+    CGDataProviderRelease(dp);
+    CGColorSpaceRelease(cs);
+    if (!img)
+        return NULL;
+    int k = g_pixNext;
+    g_pixNext = (g_pixNext + 1) % AK_PIXCACHE;
+    if (g_pixCache[k].img)
+        CGImageRelease(g_pixCache[k].img);
+    g_pixCache[k].data = data;
+    g_pixCache[k].w = w;
+    g_pixCache[k].h = h;
+    g_pixCache[k].format = format;
+    g_pixCache[k].img = img;
+    return img;
+    }
+void ux_ak_draw_pixels(const void* data, int w, int h, int format, int sx, int sy, int sw, int sh,
+                       int dx, int dy, int dw, int dh, int alpha)
+    {
+    CGContextRef c = [[NSGraphicsContext currentContext] CGContext];
+    if (!c || !data || w <= 0 || h <= 0 || sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0 || alpha <= 0)
+        return;
+    CGImageRef img = ak_pixels_image(data, w, h, format);
+    if (!img)
+        return;
+    /* The region, in the bitmap's own pixels, top row first: CGImageCreateWithImageInRect measures
+     * from the image's first row, which is the bitmap's top. */
+    CGImageRef part = CGImageCreateWithImageInRect(img, CGRectMake(sx, sy, sw, sh));
+    if (!part)
+        return;
+    CGContextSaveGState(c);
+    CGContextSetAlpha(c, alpha >= 255 ? 1.0 : alpha / 255.0);
+    CGContextSetInterpolationQuality(c, kCGInterpolationHigh);
+    /* The toolkit's context is flipped (y down) and an image is drawn y-up, so it is flipped about
+     * its destination or it lands upside down. */
+    CGContextTranslateCTM(c, dx, dy + dh);
+    CGContextScaleCTM(c, 1, -1);
+    CGContextDrawImage(c, CGRectMake(0, 0, dw, dh), part);
+    CGContextRestoreGState(c);
+    CGImageRelease(part);
+    }
+
 /* A transparency layer: everything drawn until the matching end goes into a buffer that starts
  * EMPTY, and is composited over what was already drawn when it ends.  A clear inside it erases the
  * layer's own pixels only.  It is how a view that asked for its own surface keeps that meaning in

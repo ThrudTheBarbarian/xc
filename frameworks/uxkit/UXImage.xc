@@ -6,6 +6,7 @@
 // UXColor for pack/unpack.
 #import "Array.xc"
 #import "UXColor.xc"
+#import "UXGraphics.xc"
 
 class UXImage
     {
@@ -44,6 +45,16 @@ class UXImage
         im.h = height;
         im.px = new u32[(u32)(width * height)];
         return im;
+        }
+    // Draw a region of this image into a view's drawRect: `src` in this image's pixels, `dst` in the
+    // view's coordinates, scaled, with an overall alpha.  Through UXGraphics.drawPixels, so a backend
+    // may cache by this image's pixel buffer -- change the pixels and it may draw the old ones.
+    void drawIn(UXGraphics* g, UXRect src, UXRect dst, i32 alpha)
+        {
+        if (px != (u32*)0)
+            {
+            g.drawPixels((u8*)px, w, h, (i32)UXPIX_ARGB32, src, dst, alpha);
+            }
         }
     i32 width(void)
         {

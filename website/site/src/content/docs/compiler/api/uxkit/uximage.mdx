@@ -32,7 +32,20 @@ no arithmetic from the caller.
 **Making** · [make](#make) · [width / height](#width--height)
 **Pixels** · [setPixel](#setpixel) · [pixelAt](#pixelat) · [setPixelRaw / pixelRaw](#setpixelraw--pixelraw) · [inBounds](#inbounds)
 **Regions** · [fill](#fill) · [fillRect](#fillrect) · [blit](#blit) · [subImage](#subimage)
+**Drawing** · [drawIn](#drawin)
 **Packing** · [pack / unpack](#pack--unpack)
+
+### drawIn
+
+```c
+void drawIn(UXGraphics* g, UXRect src, UXRect dst, i32 alpha)
+```
+
+Draws the region `src` of this image into a view's `drawRect` at `dst`, scaled,
+with an overall alpha. It goes through
+[`UXGraphics.drawPixels`](/compiler/api/uxkit/uxgraphics/#drawpixels), which may
+cache by this image's pixel buffer, so change the pixels and the old ones may be
+drawn.
 
 ### make
 

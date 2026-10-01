@@ -33,6 +33,11 @@
 #define UXWEIGHT_BOLD 700
 #define UXWEIGHT_BLACK 900
 
+// The byte layouts drawPixels reads.  Both are STRAIGHT (not premultiplied) alpha, row-major, top row
+// first, with no padding between rows.
+#define UXPIX_RGBA 0   // bytes R,G,B,A -- a decoded PNG, the map's atlas
+#define UXPIX_ARGB32 1 // u32 words 0xAARRGGBB in native order -- a UXImage
+
 protocol UXGraphics
     {
     void fillRect(UXRect r, i32 pen);                         // a solid rectangle (VDI pen index)
@@ -44,6 +49,12 @@ protocol UXGraphics
     // transparent; where it does not (GEM, GDI — the same two that answer blendsAlpha false) it is the
     // window background, which is the closest a surface with no transparency can come to empty.
     void clearRect(UXRect r);
+    // A region of a bitmap, scaled into a rect, with an extra overall alpha (255 = as stored).  `data`
+    // is w x h pixels in `format` (UXPIX_*); `src` is the region in the bitmap's pixels and `dst` where
+    // it lands, in view coordinates; the scaling is smooth.  The bitmap is NOT copied: a backend may
+    // cache what it builds from `data` by its address, so the bytes must not change once drawn (draw
+    // changed pixels from a new buffer).  The canvas drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh).
+    void drawPixels(u8* data, i32 w, i32 h, i32 format, UXRect src, UXRect dst, i32 alpha);
     void drawTheme(u8 * slice, UXRect r);                     // a themed 9-slice (native widget art)
     void drawText(u8 * s, i16 x, i16 y, i32 pen, i32 size);
     void drawTextRGBA(u8 * s, i16 x, i16 y, i32 red, i32 green, i32 blue, i32 alpha, i32 size);

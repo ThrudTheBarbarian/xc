@@ -150,6 +150,10 @@ mac-vector: ; XCC=$(XCC) sh run_mac_vector.sh
 # Fills a window white, draws the same black at alpha 255/128/64 and translucent shapes, and reads the
 # pixels back: the mid grey has to be mid grey, not black.  It is what the map's ink needs.
 mac-alpha: ; XCC=$(XCC) sh run_mac_alpha.sh
+# ---- mac-pixels — a bitmap region in a drawRect (drawPixels), checked as pixels -----------
+# The right way up, the right region, scaled, alpha honoured, both byte layouts -- each pixel compared
+# with the toolkit's own fill of the same colour, since the capture bitmap is in the display's space.
+mac-pixels: ; XCC=$(XCC) sh run_mac_pixels.sh
 # ---- mac-weight — a family at a numeric WEIGHT, on AppKit, checked as pixels -----
 # The map's labels are `600 10px ui-monospace, Menlo, monospace` in an rgba() colour.  drawTextFont had
 # a family but only a bool `bold`; this renders weight 400 and 600 in one family and compares the ink.

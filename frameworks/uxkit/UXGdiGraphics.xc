@@ -92,6 +92,10 @@ class UXGdiGraphics : Object<UXGraphics>
     // No alpha in a solid brush, so "empty" is the window background: WHITE_BRUSH, the same white the
     // toolkit's own backgrounds use.  See the protocol note; a see-through layer takes the blendsAlpha
     // path instead.
+    // NOT YET on this backend: the bitmap is not drawn.  AppKit draws it; see STATE-OF-UXKIT.
+    void drawPixels(u8* data, i32 w, i32 h, i32 format, UXRect src, UXRect dst, i32 alpha)
+        {
+        }
     void clearRect(UXRect r)
         {
         RECT rc;

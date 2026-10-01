@@ -9,7 +9,9 @@
 // The shim's drawing ops (act on the NSGraphicsContext set by the draw in flight).  The colour is
 // RGBA; alpha is the usual 0..255 straight value.
 void ux_ak_fill(i32 x, i32 y, i32 w, i32 h, i32 r, i32 g, i32 b, i32 a);
-void ux_ak_clear(i32 x, i32 y, i32 w, i32 h); // erase the rect to transparent (compositing Clear)
+void ux_ak_clear(i32 x, i32 y, i32 w, i32 h);
+void ux_ak_draw_pixels(u8* data, i32 w, i32 h, i32 format, i32 sx, i32 sy, i32 sw, i32 sh,
+                       i32 dx, i32 dy, i32 dw, i32 dh, i32 alpha); // a bitmap region, scaled // erase the rect to transparent (compositing Clear)
 void ux_ak_text(u8* s, i32 x, i32 y, i32 r, i32 g, i32 b, i32 a, i32 size);
 void ux_ak_text_font(u8* s, i32 x, i32 y, i32 r, i32 g, i32 b, u8* family, i32 size, i32 bold, i32 italic);
 void ux_ak_text_weight(u8* s, i32 x, i32 y, u8* family, i32 size, i32 weight, i32 italic,
@@ -125,6 +127,11 @@ class UXCocoaGraphics : Object<UXGraphics>
         }
     // A real erase: NSCompositingOperationClear takes the rect back to transparent regardless of what
     // is under it, which is what a layer over a map needs at the top of every frame.
+    void drawPixels(u8* data, i32 w, i32 h, i32 format, UXRect src, UXRect dst, i32 alpha)
+        {
+        ux_ak_draw_pixels(data, w, h, format, (i32)src.x, (i32)src.y, (i32)src.w, (i32)src.h,
+                          (i32)(origin.x + dst.x), (i32)(origin.y + dst.y), (i32)dst.w, (i32)dst.h, alpha);
+        }
     void clearRect(UXRect r)
         {
         ux_ak_clear((i32)(origin.x + r.x), (i32)(origin.y + r.y), (i32)r.w, (i32)r.h);
