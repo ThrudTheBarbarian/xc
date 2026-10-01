@@ -1075,6 +1075,33 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
                         : _options.m68kPlatform     ? @"atarist"
                                                     : (_options.memoryModel.platform ?: nil);
     pp.explicitLibraryPathCount = _options.explicitLibraryPathCount;
+    // macOS and iOS: `#import <F>` may name a system framework.
+    if (_options.useArm64Backend && !_options.androidTarget)
+        {
+        pp.appleFrameworks = YES;
+        NSMutableArray<NSString*>* sdks = [NSMutableArray array];
+        const char* sdkroot = getenv("SDKROOT");
+        if (sdkroot && *sdkroot)
+            [sdks addObject:@(sdkroot)];
+        NSString* plat = _options.applePlatform;
+        if ([plat isEqualToString:@"ios"])
+            [sdks addObject:@"/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk"];
+        else if ([plat isEqualToString:@"ios-sim"])
+            [sdks addObject:@"/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator.sdk"];
+        else
+            [sdks addObjectsFromArray:@[ @"/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk",
+                                         @"/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk" ]];
+        for (NSString* sdk in sdks)
+            {
+            BOOL isDir = NO;
+            if ([[NSFileManager defaultManager] fileExistsAtPath:[sdk stringByAppendingPathComponent:@"usr/lib"]
+                                                     isDirectory:&isDir] && isDir)
+                {
+                pp.appleSdkRoot = sdk;
+                break;
+                }
+            }
+        }
     // Auto-include the platform's system-dependent header so source stays
     // platform-agnostic: Platform.xc resolves from support/<platform>/lib first
     // (the win64 one does `#import <user32>` …), then the empty generic fallback.
@@ -1210,8 +1237,16 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
         win64SysLibDir = [(tc ? @(tc) : @"/opt/clang/win64")
             stringByAppendingPathComponent:@"x86_64-w64-mingw32/lib"];
         }
+    NSMutableArray<NSString*>* frameworkImports = [NSMutableArray array];
     for (NSString* p in pp.metadataImports)
         {
+        // A system framework: linked as -framework, declaring nothing. It
+        // travels to the link in the needs list, still marked.
+        if ([p hasPrefix:@"framework:"])
+            {
+            [frameworkImports addObject:p];
+            continue;
+            }
         NSString* json = [XTInterfaceImporter interfaceJSONFromLibrary:p];
         // Interface format-version gate: one 3p tree serves every installed
         // compiler, so an interface serialised by a NEWER xcc is refused with
@@ -1638,6 +1673,8 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     // An imported xtc library is always DT_NEEDED — the app #imported it to use
     // its classes, and its method bodies resolve against the .so.
     [needed addObjectsFromArray:xtcLibPaths];
+    // `#import`ed system frameworks: the dispatcher links each as -framework.
+    [needed addObjectsFromArray:frameworkImports];
     _neededLibraryPaths = [needed copy];
 
     // ── Semantic analysis ───────────────────────────────────────────────

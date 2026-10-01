@@ -776,11 +776,16 @@ bool objectsWantObjc(DriverOptions* d, Array* extra)
 // The libraries an arm64 LIBRARY `#import`s (bug 440), each once, by its
 // `@rpath/` install name — the reference's xcc-ln-arm64 --dylib rule. A -l
 // library or framework on a library build stays recorded on the client.
-Array* dylibImportDeps(Array* neededLibs)
+Array* dylibImportDeps(DriverOptions* d, Array* neededLibs)
 {
     Array* deps = new Array();
     for (u32 i = (u32)0; neededLibs != (Array*)0 && i < neededLibs.count(); i = i + (u32)1) {
         String* lp = (String*)neededLibs.get(i);
+        if (lp.hasPrefix(String.withCString("framework:"))) {
+            MachODep* fdep = depForFramework(d, lp.substringFromByte((u32)10));
+            if (fdep != (MachODep*)0) deps.add((Object*)fdep);
+            continue;
+        }
         if (!lp.hasSuffix(String.withCString(".dylib"))) continue;
         String* rp = String.withCString("@rpath/");
         rp.append(lp.lastPathComponent());
@@ -864,12 +869,27 @@ Array* arm64LinkDeps(DriverOptions* d, Array* neededLibs, Array* extraObjects)
         MachODep* dep = depForFramework(d, (String*)fw.get(i));
         if (dep != (MachODep*)0) deps.add((Object*)dep);
     }
+    // Frameworks the program `#import`ed by name (`#import <CoreFoundation>`),
+    // after the ones on the line, unless the line named them already.
+    for (u32 i = (u32)0; neededLibs != (Array*)0 && i < neededLibs.count(); i = i + (u32)1) {
+        String* lp = (String*)neededLibs.get(i);
+        if (!lp.hasPrefix(String.withCString("framework:"))) continue;
+        String* nm = lp.substringFromByte((u32)10);
+        bool named = false;
+        for (u32 k = (u32)0; fw != (Array*)0 && k < fw.count(); k = k + (u32)1)
+            if (((String*)fw.get(k)).equals(nm)) named = true;
+        if (named) continue;
+        MachODep* dep = depForFramework(d, nm);
+        if (dep != (MachODep*)0) deps.add((Object*)dep);
+    }
     // iOS: the platform shim (xtios.c) reaches NSURLSession through the ObjC
     // runtime, so every iOS image depends on Foundation and libobjc — added
     // after the user's frameworks unless the user named Foundation already.
     bool wantFoundation = isIos(d);
     for (u32 i = (u32)0; fw != (Array*)0 && i < fw.count(); i = i + (u32)1)
         if (((String*)fw.get(i)).equals(String.withCString("Foundation"))) wantFoundation = false;
+    for (u32 i = (u32)0; neededLibs != (Array*)0 && i < neededLibs.count(); i = i + (u32)1)
+        if (((String*)neededLibs.get(i)).equals(String.withCString("framework:Foundation"))) wantFoundation = false;
     if (wantFoundation) {
         MachODep* dep = depForFramework(d, String.withCString("Foundation"));
         if (dep != (MachODep*)0) deps.add((Object*)dep);
@@ -3965,7 +3985,7 @@ void emitModule(DriverOptions* d, IRModule* mod)
             // The libraries this one `#import`s (bug 440): each an
             // LC_LOAD_DYLIB, so a client that imports only this library still
             // loads them, and the imports each exports bind to it.
-            m.setDeps(dylibImportDeps(d.fe().neededLibs()));
+            m.setDeps(dylibImportDeps(d, d.fe().neededLibs()));
             m.dylib(as.textBytes(), instName, exports, iface,
                     as.symbols(), dataBytes, as.dataSyms(), fixups, miLen, objcSects);
         } else {
@@ -4225,6 +4245,11 @@ bool externalArm64(DriverOptions* d, String* prog)
         Array* rpaths = new Array();
         for (u32 i = (u32)0; nl != (Array*)0 && i < nl.count(); i = i + (u32)1) {
             String* lib = (String*)nl.get(i);
+            if (lib.hasPrefix(String.withCString("framework:"))) {
+                a.add((Object*)String.withCString("-framework"));
+                a.add((Object*)lib.substringFromByte((u32)10));
+                continue;
+            }
             a.add((Object*)lib);
             String* dir = lib.deletingLastPathComponent();
             bool seen = false;

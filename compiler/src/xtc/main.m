@@ -4417,6 +4417,11 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
             for (NSString *ln in [needsBody componentsSeparatedByString:@"\n"]) {
                 NSString *t = [ln stringByTrimmingCharactersInSet:
                                   [NSCharacterSet whitespaceCharacterSet]];
+                // An `#import`ed system framework is linked as -framework.
+                if ([t hasPrefix:@"framework:"]) {
+                    [opts addImportedFramework:[t substringFromIndex:10]];
+                    continue;
+                }
                 if (t.length) [libs addObject:t];
             }
             neededLibs = libs;

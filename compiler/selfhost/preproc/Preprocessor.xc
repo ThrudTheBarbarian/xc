@@ -98,6 +98,8 @@ class IfFrame
     Array* _libraryPaths;    // of String@
     Array* _metadataImports; // of String@ — libraries seen, not text-included
     Array* _thirdPartyRoots; // of String@ — /opt/xcc/3p and $XCC_3P (see addThirdPartyRoot)
+    bool _appleFrameworks;   // macOS/iOS: `#import <F>` may name a system framework
+    String* _appleSdk;       // the SDK root, or 0 (then the frameworks on this machine)
     String* _prelude;        // the target's implicit platform header, if any
     Array* _errors;
     // `#package <ns>` — the host import namespace in force for subsequent
@@ -120,6 +122,8 @@ class IfFrame
         _libraryPaths = new Array();
         _metadataImports = new Array();
         _thirdPartyRoots = new Array();
+        _appleFrameworks = false;
+        _appleSdk = (String*)0;
         _errors = new Array();
         _currentPackage = (String*)0;
         _arch = (String*)0;
@@ -143,6 +147,51 @@ class IfFrame
     void addThirdPartyRoot(String* dir)
         {
         _thirdPartyRoots.add((Object*)dir);
+        }
+
+    // macOS and iOS: a name that is no source file and no library may be a
+    // system FRAMEWORK, and `#import <CoreFoundation>` then links it, as
+    // `-framework CoreFoundation` does. It is recorded as `framework:<F>` among
+    // the library imports; it carries no interface, so what it declares comes
+    // from the program's own bodyless prototypes. `sdk` is the SDK root, or 0,
+    // when the frameworks of the machine itself are what can be checked.
+    void enableAppleFrameworks(String* sdk)
+        {
+        _appleFrameworks = true;
+        _appleSdk = sdk;
+        }
+
+    bool probeAppleFramework(String* target)
+        {
+        if (target.indexOfByte((u8)'.') != String.notFound() || target.indexOfByte((u8)'/') != String.notFound())
+            return false;
+        bool found = false;
+        if (_appleSdk != 0)
+            {
+            String* tbd = String.withString(_appleSdk);
+            tbd.appendCString("/System/Library/Frameworks/");
+            tbd.append(target);
+            tbd.appendCString(".framework/");
+            tbd.append(target);
+            tbd.appendCString(".tbd");
+            found = Files.existsExact(tbd);
+            }
+        if (!found)
+            {
+            String* dir = String.withCString("/System/Library/Frameworks/");
+            dir.append(target);
+            dir.appendCString(".framework");
+            found = Files.existsExact(dir);
+            }
+        if (!found)
+            return false;
+        String* marker = String.withCString("framework:");
+        marker.append(target);
+        for (u32 i = (u32)0; i < _metadataImports.count(); i = i + (u32)1)
+            if (((String*)_metadataImports.get(i)).equals(marker))
+                return true;
+        _metadataImports.add((Object*)marker);
+        return true;
         }
 
     // `<X>` from the third-party tree: `<root>/X/<arch>/lib<X>.<ext>`, or, for
@@ -1466,6 +1515,8 @@ class IfFrame
             if (_arch != 0 && probeThirdParty(target, isSystemForm, exts))
                 return;
             }
+        if (foundPath == 0 && _appleFrameworks && probeAppleFramework(target))
+            return;
 
         if (foundPath == 0)
             {

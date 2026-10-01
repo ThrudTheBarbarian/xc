@@ -31,6 +31,7 @@ none, as a **library**:
 | an xcc shared library (`--emit-lib`) | nothing is pasted in: the library's classes, protocols, structs, enums and functions are read from the interface embedded in the binary, and the program links against it |
 | a separately compiled module's `Name.xtc.iface` | the same, for an object built with `xcc -c` |
 | a C shared library | its functions, types and enum constants are read from its DWARF debug information |
+| a macOS or iOS system framework | the program is linked against it, as `-framework` does; it declares nothing, so its functions are declared in your source without bodies |
 
 So `#import <Xtg>` and `#import <Stdio>` look alike but do different things: the
 first finds `libXtg.dylib` and imports its interface, the second finds
@@ -68,6 +69,19 @@ directory hides the real one.
    When one is found, the vendor's `3p/<vendor>/xc` directory of xc sources is
    added to the **end** of the search path, so its helper files can be
    imported but never hide the standard library's.
+3. **A system framework**, on macOS and iOS only, for a name with no `.` or
+   `/`: `CoreFoundation.framework` in the SDK when one is installed, else in
+   `/System/Library/Frameworks`. `#import <CoreFoundation>` is then the same
+   as `-framework CoreFoundation` on the command line:
+
+   ```c
+   #import <CoreFoundation>
+   pointer CFStringCreateWithCString(pointer alloc, u8* s, u32 encoding);
+   void CFRelease(pointer cf);
+   ```
+
+   A library can carry its own framework dependencies this way, so the
+   programs that use it need no flags.
 
 If nothing matches, the error names every directory searched:
 

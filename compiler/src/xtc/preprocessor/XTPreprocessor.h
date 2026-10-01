@@ -45,6 +45,17 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, nullable) NSString* targetArchName;
 
 /****************************************************************************\
+|* macOS and iOS: a name that is no source file and no library may be a
+|* system FRAMEWORK. `#import <CoreFoundation>` then records
+|* `framework:CoreFoundation` among the metadata imports, which the driver
+|* links as `-framework CoreFoundation`. It carries no interface: what it
+|* declares comes from the program's own bodyless prototypes. The framework is
+|* checked in `appleSdkRoot` (its `.tbd`) when there is one, else on the machine.
+\****************************************************************************/
+@property(nonatomic) BOOL appleFrameworks;
+@property(nonatomic, nullable) NSString* appleSdkRoot;
+
+/****************************************************************************\
 |* How many leading entries of `libraryPaths` are EXPLICIT -L dirs. The
 |* probe runs: explicit -L → third-party roots → the remaining (default)
 |* dirs, so a stale sysroot copy cannot shadow a 3p deployment while an

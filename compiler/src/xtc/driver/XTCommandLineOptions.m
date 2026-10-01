@@ -142,6 +142,16 @@
     {
     return [_mutableLinkerArgs copy];
     }
+
+- (void)addImportedFramework:(NSString*)name
+    {
+    for (NSUInteger i = 0; i + 1 < _mutableLinkerArgs.count; i++)
+        if ([_mutableLinkerArgs[i] isEqualToString:@"-framework"] &&
+            [_mutableLinkerArgs[i + 1] isEqualToString:name])
+            return;
+    [_mutableLinkerArgs addObject:@"-framework"];
+    [_mutableLinkerArgs addObject:name];
+    }
 /****************************************************************************\
 |* Return an immutable copy of the preprocessor defines.
 |* @return  A dictionary mapping define names to their values.

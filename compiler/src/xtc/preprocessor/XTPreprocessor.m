@@ -1469,6 +1469,28 @@ static BOOL fileExistsCaseSensitive(NSFileManager* fm, NSString* path)
             }
         }
 
+    // A system framework, on macOS and iOS: linked as -framework links it.
+    if (!foundPath && _appleFrameworks &&
+        [filename rangeOfString:@"."].location == NSNotFound &&
+        [filename rangeOfString:@"/"].location == NSNotFound)
+        {
+        NSString* tbd = _appleSdkRoot
+                            ? [NSString stringWithFormat:@"%@/System/Library/Frameworks/%@.framework/%@.tbd",
+                                                         _appleSdkRoot, filename, filename]
+                            : nil;
+        NSString* dir = [NSString stringWithFormat:@"/System/Library/Frameworks/%@.framework", filename];
+        if ((tbd && fileExistsCaseSensitive(fm, tbd)) || fileExistsCaseSensitive(fm, dir))
+            {
+            NSString* marker = [@"framework:" stringByAppendingString:filename];
+            if (![_metadataImportSet containsObject:marker])
+                {
+                [_metadataImportSet addObject:marker];
+                [_mutableMetadataImports addObject:marker];
+                }
+            return;
+            }
+        }
+
     if (!foundPath)
         {
         // List every directory that was tried, so the failure is

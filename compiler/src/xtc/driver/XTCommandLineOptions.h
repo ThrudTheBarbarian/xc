@@ -16,6 +16,9 @@ NS_ASSUME_NONNULL_BEGIN
 // ultimate control. private:docs/Design/third-party-libraries.md.
 @property(nonatomic, readonly) NSUInteger explicitLibraryPathCount;
 @property(nonatomic, readonly) NSArray<NSString*>* linkerArgs; // -l/-framework/-Xlinker/-Wl passthrough to the native link (clang)
+// A framework a program `#import`ed by name: appended as `-framework <F>`
+// unless the command line already named it.
+- (void)addImportedFramework:(NSString*)name;
 @property(nonatomic, readonly) NSString* targetName;           // "xl", "xt", "xe", alias name
 @property(nonatomic, readonly) XTMemoryModel* memoryModel;     // parsed form of targetName
 @property(nonatomic, readonly, nullable) NSString* outputPath;

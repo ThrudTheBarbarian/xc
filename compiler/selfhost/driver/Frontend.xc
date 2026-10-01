@@ -413,6 +413,11 @@ class FeOptions
             for (u32 i = (u32)0; i < metas.count(); i = i + (u32)1)
                 {
                 String* mp = (String*)metas.get(i);
+                // A system framework: linked, as -framework links it, and
+                // declaring nothing — its functions are the program's own
+                // bodyless prototypes.
+                if (mp.hasPrefix(String.withCString("framework:")))
+                    continue;
                     // `.wasm` is read directly — its interface lives in the module,
                     // in an `xtc.iface` custom section. Mach-O and ELF libraries
                     // still need their section readers, and until those exist the
@@ -1761,6 +1766,35 @@ String* win64SysLibDir(void)
     return Files.exists(d) ? d : (String*)0;
     }
 
+// The Apple SDK `#import <Framework>` checks against, as the driver finds it
+// for the link: $SDKROOT, else Xcode's, else the Command Line Tools'. 0 when
+// there is none; the frameworks of the machine itself are checked then.
+String* appleSdkFor(FeOptions* o)
+    {
+    Array* roots = new Array();
+    String* env = Platform.env(String.withCString("SDKROOT"));
+    if (env != 0 && env.byteLength() > (u32)0)
+        roots.add((Object*)env);
+    String* t = o.target();
+    if (t.equals(String.withCString("ios")))
+        roots.add((Object*)String.withCString("/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk"));
+    else if (t.equals(String.withCString("ios-sim")))
+        roots.add((Object*)String.withCString("/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator.sdk"));
+    else
+        {
+        roots.add((Object*)String.withCString("/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"));
+        roots.add((Object*)String.withCString("/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk"));
+        }
+    for (u32 i = (u32)0; i < roots.count(); i = i + (u32)1)
+        {
+        String* lib = String.withString((String*)roots.get(i));
+        lib.appendCString("/usr/lib");
+        if (Files.exists(lib))
+            return (String*)roots.get(i);
+        }
+    return (String*)0;
+    }
+
 Preprocessor* buildPP(FeOptions* o)
     {
     Preprocessor* pp = new Preprocessor();
@@ -1771,6 +1805,11 @@ Preprocessor* buildPP(FeOptions* o)
         pp.addIncludePath((String*)o.incs().get(i));
     for (u32 i = (u32)0; i < o.libs().count(); i = i + (u32)1)
         pp.addLibraryPath((String*)o.libs().get(i));
+    // macOS and iOS: `#import <F>` may name a system framework.
+    String* tgt = o.target();
+    if (tgt.equals(String.withCString("arm64")) || tgt.equals(String.withCString("ios"))
+        || tgt.equals(String.withCString("ios-sim")))
+        pp.enableAppleFrameworks(appleSdkFor(o));
     // Third-party libraries: $XCC_3P first, then the SIBLING of the compiler
     // home, /opt/xcc/<version> -> /opt/xcc/3p, so an upgrade keeps them.
     // An install's support root is <home>/lib/xc, an in-tree one <home>/support.
