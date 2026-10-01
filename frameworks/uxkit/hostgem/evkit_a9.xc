@@ -137,7 +137,7 @@ class EvCanvas : UXView
         canvas.addSubview(field, UXGeom.make((i16)100, (i16)26, (i16)200, (i16)24));
 
         table = new UXTableView();
-        canvas.addSubview(table, UXGeom.make((i16)16, (i16)66, (i16)360, (i16)72));
+        canvas.addSubview(table, UXGeom.make((i16)16, (i16)66, (i16)360, (i16)92)); // header + 4 rows
         table.setRowHeight((i16)18);
         table.addColumn((u8 @) "Name", (i16)356);
         table.setAllowsMultipleSelection(true); // so a ctrl-click extends the selection
@@ -170,12 +170,13 @@ class EvCanvas : UXView
         i32 ty = (i32)0;
         gDriver.treeOffset(bar.tree, (i32)2, &tx, &ty);
 
-        // Report the injection script.  Row 1 (the 2nd row) sits at table-local y = 1*rowHeight.
+        // Report the injection script.  Rows start below the column header: row n sits at table-local
+        // y = headerH + n*rowHeight.
         i32 h = win.handle;
         UXRect tf = table.absoluteFrame();
         i32 rh = (i32)table.rowHeightValue();
-        UXRect row1 = UXGeom.make(tf.x, (i16)((i32)tf.y + rh), tf.w, (i16)rh);
-        UXRect row3 = UXGeom.make(tf.x, (i16)((i32)tf.y + rh * (i32)3), tf.w, (i16)rh);
+        UXRect row1 = UXGeom.make(tf.x, (i16)((i32)tf.y + (i32)table.headerH + rh), tf.w, (i16)rh);
+        UXRect row3 = UXGeom.make(tf.x, (i16)((i32)tf.y + (i32)table.headerH + rh * (i32)3), tf.w, (i16)rh);
         i32 r3cx = (i32)row3.x + (i32)row3.w / (i32)2;
         i32 r3cy = (i32)row3.y + (i32)row3.h / (i32)2;
         pointer sf = fopen((u8 @) "/tmp/hostgem_script.txt", (u8 @) "w");

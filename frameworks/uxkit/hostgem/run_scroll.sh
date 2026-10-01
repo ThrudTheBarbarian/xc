@@ -24,7 +24,7 @@ FT_CFLAGS=$(pkg-config --cflags freetype2); FT_LIBS=$(pkg-config --libs freetype
 cc -std=gnu11 -O0 -g -w -DGEM_XTOS -I"$HERE" -I"$UX_GEM_DIR" -I"$UX_GEM_DIR/gemd" $SDL_CFLAGS $FT_CFLAGS \
    -c "$HERE/host_gem_sdl.c" -o "$OUT/host_gem_sdl.o" || { echo "host_gem_sdl.c failed"; exit 1; }
 GEM_OBJS=$(ls "$OUT"/*.o | grep -vE '/(host_gemd|host_gem_sdl).o$')
-cc "$OUT/host_gem_sdl.o" $GEM_OBJS $SDL_LIBS $FT_LIBS -lz -lpthread -o "$OUT/host_gem_sdl" \
+cc "$OUT/host_gem_sdl.o" $GEM_OBJS $SDL_LIBS $FT_LIBS -lz -lsqlite3 -lpthread -o "$OUT/host_gem_sdl" \
    || { echo "SDL harness link failed"; exit 1; }
 echo "linked: $OUT/host_gem_sdl"
 

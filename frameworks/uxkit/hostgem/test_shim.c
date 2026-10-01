@@ -9,6 +9,23 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <stdlib.h>
+
+// xtos_host.c also carries the GEM-side wrappers (xg_evnt_multi, the font_face_open redirect), which
+// call into the GEM tree.  This test is the transport alone and never reaches them, so those two GEM
+// entry points are stubs here, loud if anything ever does call them.
+int evnt_multi(int flags, int bclk, int bmask, int bstate, int m1f, int m1x, int m1y, int m1w, int m1h,
+               int m2f, int m2x, int m2y, int m2w, int m2h, short* mep, int tlc, int thc,
+               int* omx, int* omy, int* omb, int* oks, int* okey, int* onc)
+    {
+    fprintf(stderr, "test_shim: evnt_multi is not part of the transport test\n");
+    abort();
+    }
+void* xg_ffo_real(const char* path)
+    {
+    fprintf(stderr, "test_shim: font_face_open is not part of the transport test\n");
+    abort();
+    }
 
 int main(void)
     {
