@@ -8,7 +8,11 @@ enum UXEventKind = {
     UXEventClose = 8,      // the close box (handle = window)
     UXEventResize = 9,     // window resized (handle = window)
     UXEventMove = 10,      // window moved   (handle = window)
-    UXEventWheel = 11,     // mouse wheel over a client-drawn scroll region (x,y = point, a = notches)
+    // The wheel over a view (x,y = point, handle = window).  b = the DOM's deltaY in PIXELS --
+    // positive scrolls DOWN, a line-wheel click is 100 -- the same number a browser hands a page, so
+    // web code ports unchanged.  a = whole notches, positive scrolls UP (GEM's sense), for readers
+    // that step by lines.  Every backend reports both in this sense whatever its native sign.
+    UXEventWheel = 11,
     // A scroll view came to rest at a new offset (a = its node index, b = the offset).  NOT input:
     // it is the OUTCOME of input, announced because the input itself is unrecordable — dragging a
     // scrollbar happens inside the driver's modal trackDragStep, which emits no events at all, so a

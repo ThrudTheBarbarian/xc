@@ -981,7 +981,8 @@ class UXGemDriver : Object<UXViewDriver>
                 ev.handle = (i32)msg[3];
                 ev.x = (i16)msg[4];
                 ev.y = (i16)msg[5];
-                ev.a = (i32)msg[6];
+                ev.a = (i32)msg[6];                                // notches, positive up
+                ev.b = (i32)0 - (i32)msg[6] * (i32)100;            // the DOM's deltaY: 100 a notch
                 }
             return;
             }

@@ -1054,8 +1054,8 @@ class UXWebDriver : Object<UXViewDriver>
             ev.kind = (u8)UXEventWheel;
             ev.x = (i16)r[1];
             ev.y = (i16)r[2];
-            ev.b = r[3];                // pixels, as the DOM reports them
-            ev.a = r[3] / (i32)100;     // notches, for the readers that count them
+            ev.b = r[3];                     // the DOM's deltaY, as the page reports it
+            ev.a = (i32)0 - r[3] / (i32)100; // notches, positive UP
             }
         else if (t == (i32)4)
             {

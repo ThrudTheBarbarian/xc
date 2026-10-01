@@ -86,6 +86,7 @@ void main(void)
 
     e = slot((i32)8, (i32)50, (i32)40, (i32)-120);
     ck(e.kind == (u8)UXEventWheel && e.b == (i32)-120, "the wheel carries the DOM's deltaY in pixels");
+    ck(e.a == (i32)1, "...and its notches the other way round (-120 px is one notch UP)");
     ck(pad.wheels == (i32)1 && pad.wheelPx == (i32)-120, "...and reaches the view's scrollWheel");
 
     if (gFails == (i32)0)

@@ -3683,7 +3683,8 @@ class UXWin32Driver : Object<UXViewDriver>
             ev.kind = (u8)UXEventWheel;
             ev.x = (i16)pt.x;
             ev.y = (i16)pt.y;
-            ev.a = delta / (i32)WHEEL_DELTA; // notches (a = notches)
+            ev.a = delta / (i32)WHEEL_DELTA;                       // notches, positive up
+            ev.b = (i32)0 - (delta * (i32)100) / (i32)WHEEL_DELTA; // the DOM's deltaY: 100 a click, down +
             ev.handle = self.handleOf(msg.hwnd);
             return;
             }

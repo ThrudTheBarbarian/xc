@@ -263,10 +263,10 @@ void xgAKDispatch(i32 kind, i32 x, i32 y, i32 key)
         {
         gAKEvent.handle = key;
         }
-    // The wheel packs (window, deltaY in PIXELS) into the one dispatch word: window in the high
-    // bits, the signed pixel delta in the low 16 (AK_WHEEL_PACK in libUXAppKit.m).  UXEventWheel's
-    // contract: x,y = point; b = pixels (the browser's deltaY); a = notches, ~px/100, kept for the
-    // readers that still count notches.
+    // The wheel packs (window, AppKit's delta in PIXELS) into the one dispatch word: window in the
+    // high bits, the signed pixel delta in the low 16 (AK_WHEEL_PACK in libUXAppKit.m).  AppKit's
+    // delta is positive scrolling up; UXEventWheel.b is the DOM's deltaY (positive DOWN), so it is
+    // negated, and a = notches, positive up.
     if (kind == (i32)UXEventWheel)
         {
         i32 px = key & (i32)$FFFF;
@@ -275,7 +275,7 @@ void xgAKDispatch(i32 kind, i32 x, i32 y, i32 key)
             px = px - (i32)65536;
             }
         gAKEvent.handle = key >> 16;
-        gAKEvent.b = px;
+        gAKEvent.b = (i32)0 - px;      // AppKit counts scrolling UP as positive; the DOM, DOWN
         gAKEvent.a = px / (i32)100;
         }
     gAKApp.dispatchEvent(gAKEvent);
