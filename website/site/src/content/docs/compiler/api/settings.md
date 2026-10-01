@@ -53,6 +53,12 @@ file is a settings file, not a document.
 
 ### Where `standard` keeps the values
 
+:::caution[Coming in 0.65]
+The platform stores below arrive in 0.65. In 0.64, the release you can
+download today, `standard` always uses the text file
+`$XCC_SETTINGS_DIR/<name>.conf` or `$HOME/.config/xcc/<name>.conf`.
+:::
+
 [`standard`](#standard) uses the first of these that applies:
 
 1. **`$XCC_SETTINGS_DIR`**, when it is set and non-empty: the text file
@@ -80,10 +86,10 @@ a registry `DWORD`) reads back in decimal or as `true`/`false`. A value with
 no text form (an array, binary data) is not read, and [`save`](#save) leaves it
 where it is.
 
-:::note[Before 0.65]
-`standard` used the text file `$HOME/.config/xcc/<name>.conf` on every
-platform. Where that file exists and the new one does not, it is read, and the
-next [`save`](#save) writes to the new location.
+:::note[From 0.64]
+0.64's `standard` used the text file `$HOME/.config/xcc/<name>.conf` on every
+platform. From 0.65, where that file exists and the new one does not, it is
+read, and the next [`save`](#save) writes to the new location.
 :::
 
 :::note[Availability]
