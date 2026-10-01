@@ -761,6 +761,18 @@ void ux_ak_gl_present(void* peer)
         }
     glBindFramebuffer(GL_FRAMEBUFFER, ak_gl_target(i)); // the renderer's again, for the next frame
     glFinish();
+    /* The drawable follows the BACKING SCALE.  A window dragged from a 1x display to a 2x one keeps
+     * its size in points and doubles in pixels, and nothing resizes it, so the frame would go on
+     * rendering at half resolution.  Checked once a frame: the NEXT frame renders at the new size
+     * (this one is already drawn), at the cost of one empty frame when the scale changes. */
+    int pw = 0;
+    int ph = 0;
+    ak_gl_size_px(i, &pw, &ph);
+    if (pw > 0 && ph > 0 && (pw != g_glW[i] || ph != g_glH[i]))
+        {
+        ak_gl_alloc_offscreen(i, pw, ph);
+        ak_gl_viewport(i);
+        }
     NSView* dv = g_glWin[i] > 0 ? g_view[g_glWin[i]] : nil;
     if (dv && ![g_glView[i] isHidden])
         [dv setNeedsDisplayInRect:[g_glView[i] frame]];
@@ -923,6 +935,36 @@ int ux_ak_gl_samples(void* peer)
     else
         [NSOpenGLContext clearCurrentContext];
     return (int)s;
+    }
+
+/* The offscreen surface's size in PIXELS, as it is now -- what the renderer is drawing into.  A test
+ * compares it with ux_ak_gl_backing to see that the drawable followed the backing scale. */
+int ux_ak_gl_surface_size(void* peer, int* out2)
+    {
+    int i = ak_gl_find(peer);
+    if (i < 0 || !g_glFbo[i])
+        return 0;
+    out2[0] = g_glW[i];
+    out2[1] = g_glH[i];
+    return 1;
+    }
+/* Move a window onto the first screen whose backing scale is `scale` (2 = a Retina display), so a
+ * gate can exercise a change of backing scale on a machine that has both.  0 = no such screen. */
+int ux_ak_window_to_scale(int handle, int scale)
+    {
+    NSWindow* w = (handle > 0 && handle < UX_MAXW) ? g_win[handle] : nil;
+    if (!w)
+        return 0;
+    for (NSScreen* sc in [NSScreen screens])
+        {
+        if ((int)[sc backingScaleFactor] == scale)
+            {
+            NSRect vf = [sc visibleFrame];
+            [w setFrameTopLeftPoint:NSMakePoint(vf.origin.x + 40, vf.origin.y + vf.size.height - 40)];
+            return 1;
+            }
+        }
+    return 0;
     }
 
 int ux_ak_gl_backing(void* peer, int* out4)

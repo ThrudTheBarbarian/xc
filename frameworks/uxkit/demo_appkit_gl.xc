@@ -30,6 +30,11 @@
 #import "demo_autoquit.xc"
 
 u8* getenv(u8* name);
+// libUXAppKit.m probes: the offscreen surface's pixel size, the view's backing size, and moving a
+// window onto a screen of a given backing scale.
+i32 ux_ak_gl_surface_size(pointer peer, i32* out2);
+i32 ux_ak_gl_backing(pointer peer, i32* out4);
+i32 ux_ak_window_to_scale(i32 handle, i32 scale);
 
 i32 gFails = 0;
 void ck(bool ok, u8* what)
@@ -104,6 +109,25 @@ class MapView : UXGLView
         // context, so the second one binds to nothing.
         ck(v.makeGL(), "a context can be made again after destroyGL");
         v.presentGL();
+
+        // The drawable follows the BACKING SCALE.  On a machine with a 2x screen, move there: the
+        // view keeps its points, its pixels double, and the next frame must render at that size.
+        i32 sz[2];
+        i32 bk[4];
+        if (ux_ak_window_to_scale(win.handle, (i32)2) != (i32)0)
+            {
+            v.presentGL(); // notices the new scale; the frame after renders at it
+            ux_ak_gl_surface_size((pointer)v, &sz[(i32)0]);
+            ux_ak_gl_backing((pointer)v, &bk[(i32)0]);
+            ck(bk[(i32)2] == bk[(i32)0] * (i32)2, "the view is on a 2x screen");
+            ck(sz[(i32)0] == bk[(i32)2] && sz[(i32)1] == bk[(i32)3], "the drawable followed the backing scale");
+            Stdio.printf("  2x screen: view %dx%d points, surface %dx%d pixels\n",
+                         bk[(i32)0], bk[(i32)1], sz[(i32)0], sz[(i32)1]);
+            }
+        else
+            {
+            Stdio.printf("  no 2x screen here: backing-scale check skipped\n");
+            }
 
         ck(overlay.isHidden() == false, "the 2D sibling over the map is still there");
         Stdio.printf("  painted=%d, glKind=%d\n", v.painted, v.glKind());
