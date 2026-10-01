@@ -618,6 +618,10 @@ static XTIRInsn* buildLike(XTIRInsn* insn, XTIRValue* _Nullable result,
         // exactly ElementAddr(phi, K) with K a literal: anything else keeps the
         // chain. The LAST copy's update still produces the back-edge value, so
         // the loop still advances by U*K once per iteration.
+        // The update of a re-based pointer is re-based too: it is p + K*(j+1)
+        // straight from the phi, not (p + K*j) + K. In the last copy that is
+        // the back-edge value, which was otherwise a chain of two adds.
+        NSMutableDictionary<NSNumber*, NSArray*>* rebasedNext = [NSMutableDictionary dictionary];
         if (j > 0 && c.vectorBody)
             {
             for (NSUInteger i = 0; i < nred; i++)
@@ -648,10 +652,16 @@ static XTIRInsn* buildLike(XTIRInsn* insn, XTIRValue* _Nullable result,
                                                                dbgLoc:rn.dbgLoc]];
                 idx++;
                 map[c.redIds[i]] = @(rid);
+                rebasedNext[@(rn.result.valueId)] = @[ c.redIds[i], rn.operands[1].type, @(stride * (int64_t)(j + 1)) ];
                 }
             }
 
         XTIRValueId cloneIvNext = prevIv;
+        // A re-based pointer update is appended at the END of the copy, after
+        // the last access through the old pointer, so the two never overlap and
+        // the register allocator can give the new value the old one's register
+        // (no copy at the back edge). Only when nothing in the body reads it.
+        NSMutableArray<XTIRInsn*>* deferred = [NSMutableArray array];
         for (XTIRInsn* insn in B.instructions)
             {
             // Invariant iff every Use operand is either defined outside the
@@ -677,8 +687,15 @@ static XTIRInsn* buildLike(XTIRInsn* insn, XTIRValue* _Nullable result,
                 continue; // copies 1..U-1 reuse copy 0's
                 }
             NSMutableArray<XTIROperand*>* ops = [NSMutableArray arrayWithCapacity:insn.operands.count];
-            for (XTIROperand* op in insn.operands)
-                [ops addObject:remapOp(op, map)];
+            NSArray* rb = insn.result ? rebasedNext[@(insn.result.valueId)] : nil;
+            if (rb)
+                {
+                [ops addObject:[XTIROperand useWithValueId:[rb[0] unsignedLongLongValue]]];
+                [ops addObject:[XTIROperand immIWithType:rb[1] value:[rb[2] longLongValue]]];
+                }
+            else
+                for (XTIROperand* op in insn.operands)
+                    [ops addObject:remapOp(op, map)];
             XTIRValue *newRes = nil, *newMem = nil;
             if (insn.result)
                 {
@@ -696,7 +713,17 @@ static XTIRInsn* buildLike(XTIRInsn* insn, XTIRValue* _Nullable result,
                                                     defSite:[[XTIRDefSite alloc] initWithBlock:C insnIndex:idx]];
                 [fn registerValue:newMem];
                 }
-            [C appendInstruction:buildLike(insn, newRes, ops, newMem)];
+            XTIRInsn* built = buildLike(insn, newRes, ops, newMem);
+            BOOL readInBody = NO;
+            if (rb)
+                for (XTIRInsn* u in B.instructions)
+                    for (XTIROperand* o in u.operands)
+                        if (o.kind == XTIROperandKindUse && o.valueId == insn.result.valueId)
+                            readInBody = YES;
+            if (rb && !readInBody)
+                [deferred addObject:built];
+            else
+                [C appendInstruction:built];
             if (insn.result)
                 map[@(insn.result.valueId)] = @(newRes.valueId);
             if (insn.memoryResult)
@@ -708,6 +735,8 @@ static XTIRInsn* buildLike(XTIRInsn* insn, XTIRValue* _Nullable result,
             idx++;
             }
 
+        for (XTIRInsn* d in deferred)
+            [C appendInstruction:d];
         // This copy's clone of each accumulator's update = acc_{j+1}.
         for (NSUInteger i = 0; i < nred; i++)
             {

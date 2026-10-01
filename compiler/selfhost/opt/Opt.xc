@@ -1274,6 +1274,13 @@ class OptProfile
             constHoist(m);
         if (stopHere(String.withCString("const-hoist")))
             return;
+        // Fold each block into its only predecessor first, so an unrolled
+        // body (copies chained by plain branches) is one block when the
+        // rotation below looks at it.
+        if (_level >= (u32)2)
+            blockMerge(m);
+        if (stopHere(String.withCString("block-merge")))
+            return;
         if (_level >= (u32)2)
             loopRotate(m);
         if (stopHere(String.withCString("loop-rotate")))
@@ -4845,6 +4852,158 @@ class OptProfile
     // it to a frame slot and loading it back on every iteration of an O(n^2)
     // loop. It cannot be if-converted — the right arm loads a[j-1] and j may
     // be 0.
+    // ── block-merge ───────────────────────────────────────────────────────
+    // When a block A ends in an unconditional branch to B, and A is the only
+    // way into B, the two are one straight run of code split in two. Folding B
+    // into A removes the branch and the block boundary: an unrolled loop body is
+    // four copies chained by plain branches, which loop rotation and the back
+    // ends treat as four blocks; merged, it is the single-block body they handle
+    // best.
+    void blockMerge(IRModule* m)
+        {
+        for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
+            {
+            IRFunc* fn = (IRFunc*)m.funcs().get(f);
+            bool more = true;
+            while (more)
+                more = blockMergeOnce(fn);
+            }
+        }
+
+    // Every reference to `b` from an instruction or terminator — anything but
+    // a phi's incoming list.
+    u32 bmRefs(IRFunc* fn, IRBlock* b)
+        {
+        u32 n = (u32)0;
+        for (u32 k = (u32)0; k < fn.blocks().count(); k = k + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(k);
+            for (u32 i = (u32)0; i <= bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* x = i < bb.insns().count() ? (IRInsn*)bb.insns().get(i) : bb.term();
+                if (x == (IRInsn*)0)
+                    continue;
+                for (u32 q = (u32)0; q < x.ops().count(); q = q + (u32)1)
+                    {
+                    IROperand* o = (IROperand*)x.ops().get(q);
+                    if (o.kind() == (u8)OPK_BLOCK && o.blk() == b)
+                        n = n + (u32)1;
+                    }
+                }
+            }
+        return n;
+        }
+
+    // Replace every use of `from` with `to` (any operand), outside `skip`.
+    void bmReplaceUses(IRFunc* fn, IRValue* from, IROperand* to, IRInsn* skip)
+        {
+        for (u32 k = (u32)0; k < fn.blocks().count(); k = k + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(k);
+            u32 total = bb.phis().count() + bb.insns().count() + (u32)1;
+            for (u32 i = (u32)0; i < total; i = i + (u32)1)
+                {
+                IRInsn* x = (IRInsn*)0;
+                if (i < bb.phis().count())
+                    x = (IRInsn*)bb.phis().get(i);
+                else if (i < bb.phis().count() + bb.insns().count())
+                    x = (IRInsn*)bb.insns().get(i - bb.phis().count());
+                else
+                    x = bb.term();
+                if (x == (IRInsn*)0 || x == skip)
+                    continue;
+                for (u32 q = (u32)0; q < x.ops().count(); q = q + (u32)1)
+                    {
+                    IROperand* o = (IROperand*)x.ops().get(q);
+                    if (o.kind() == (u8)OPK_USE && o.val() == from)
+                        x.ops().set(q, (Object*)to);
+                    }
+                }
+            }
+        }
+
+    bool blockMergeOnce(IRFunc* fn)
+        {
+        IRBlock* entry = fn.blocks().count() > (u32)0 ? (IRBlock*)fn.blocks().get((u32)0) : (IRBlock*)0;
+        for (u32 a = (u32)0; a < fn.blocks().count(); a = a + (u32)1)
+            {
+            IRBlock* A = (IRBlock*)fn.blocks().get(a);
+            IRInsn* term = A.term();
+            if (term == (IRInsn*)0 || !term.op().equals(String.withCString("Branch")) || term.ops().count() != (u32)1)
+                continue;
+            IRBlock* B = ((IROperand*)term.ops().get((u32)0)).blk();
+            if (B == (IRBlock*)0 || B == A || B == entry || bmRefs(fn, B) != (u32)1)
+                continue;
+            // B's phis each have one incoming, from A: each IS that value.
+            bool ok = true;
+            for (u32 i = (u32)0; i < B.phis().count(); i = i + (u32)1)
+                {
+                IRInsn* phi = (IRInsn*)B.phis().get(i);
+                if (phi.ops().count() != (u32)2 || ((IROperand*)phi.ops().get((u32)0)).blk() != A
+                    || phi.res() == (IRValue*)0)
+                    ok = false;
+                }
+            if (!ok)
+                continue;
+            for (u32 i = (u32)0; i < B.phis().count(); i = i + (u32)1)
+                {
+                IRInsn* phi = (IRInsn*)B.phis().get(i);
+                bmReplaceUses(fn, phi.res(), (IROperand*)phi.ops().get((u32)1), phi);
+                }
+            // B's real successors: the blocks its terminator names.
+            Array* succ = new Array();
+            if (B.term() != (IRInsn*)0)
+                for (u32 q = (u32)0; q < B.term().ops().count(); q = q + (u32)1)
+                    {
+                    IROperand* o = (IROperand*)B.term().ops().get(q);
+                    if (o.kind() == (u8)OPK_BLOCK && o.blk() != (IRBlock*)0)
+                        succ.add((Object*)o.blk());
+                    }
+            for (u32 i = (u32)0; i < B.insns().count(); i = i + (u32)1)
+                A.insns().add(B.insns().get(i));
+            A.setTerm(B.term());
+            // B's successors now have A where they had B. A phi anywhere else
+            // that names B names a block that never branched to it: a stale
+            // entry, left by a pass that deleted the edge but not the incoming.
+            // It is dropped, not re-pointed: moved onto A it would keep its
+            // value live across all of A (poly_dispatch: two spills).
+            for (u32 k = (u32)0; k < fn.blocks().count(); k = k + (u32)1)
+                {
+                IRBlock* S = (IRBlock*)fn.blocks().get(k);
+                bool isSucc = false;
+                for (u32 q = (u32)0; q < succ.count(); q = q + (u32)1)
+                    if ((IRBlock*)succ.get(q) == S)
+                        isSucc = true;
+                for (u32 i = (u32)0; i < S.phis().count(); i = i + (u32)1)
+                    {
+                    IRInsn* phi = (IRInsn*)S.phis().get(i);
+                    u32 q = phi.ops().count() & ~(u32)1;
+                    while (q >= (u32)2)
+                        {
+                        q = q - (u32)2;
+                        if (((IROperand*)phi.ops().get(q)).blk() != B)
+                            continue;
+                        if (isSucc)
+                            phi.ops().set(q, (Object*)IROperand.block(A));
+                        else
+                            {
+                            phi.ops().removeAt(q + (u32)1);
+                            phi.ops().removeAt(q);
+                            }
+                        }
+                    }
+                }
+            for (u32 k = (u32)0; k < fn.blocks().count(); k = k + (u32)1)
+                if ((IRBlock*)fn.blocks().get(k) == B)
+                    {
+                    fn.blocks().removeAt(k);
+                    break;
+                    }
+            return true;
+            }
+        return false;
+        }
+
     void jumpThread(IRModule* m)
         {
         for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
@@ -4906,6 +5065,11 @@ class OptProfile
                 n = n + jtCountOne(bb.term(), v);
             }
         return n;
+        }
+
+    u32 jtUseCountIn(Array* insns, IRValue* v)
+        {
+        return jtCountIn(insns, v);
         }
 
     u32 jtCountIn(Array* insns, IRValue* v)
@@ -10273,6 +10437,10 @@ class OptProfile
         // end folds ElementAddr(base, CONSTANT) into `ldr/str q, [base, #imm]`.
         // mem_copy carries two pointers over four copies — eight adds on a
         // twenty-instruction body.
+        // The update of a re-based pointer is re-based too: p + K*(j+1) straight
+        // from the phi, not (p + K*j) + K. In the last copy that is the
+        // back-edge value, which was otherwise a chain of two adds.
+        Map* rebasedNext = new Map();
         if (j > (u32)0 && c.vectorBody())
             {
             for (u32 i = (u32)0; i < c.redVals().count(); i = i + (u32)1)
@@ -10296,10 +10464,19 @@ class OptProfile
                 ea.add(IROperand.immI((i32)(b1.imm() * (i64)j), b1.ty()));
                 C.add(ea);
                 map.set((Hashable*)rp, (Object*)rv);
+                IRInsn* nx = IRInsn.with(String.withCString("ElementAddr"));
+                nx.add(IROperand.useVal(rp));
+                nx.add(IROperand.immI((i32)(b1.imm() * (i64)(j + (u32)1)), b1.ty()));
+                rebasedNext.set((Hashable*)rn.res(), (Object*)nx);
                 }
             }
 
         IRValue* cloneIvNext = prevIv;
+        // A re-based pointer update goes at the END of the copy, after the last
+        // access through the old pointer, so the two never overlap and the
+        // register allocator can give the new value the old one's register (no
+        // copy at the back edge). Only when nothing in the body reads it.
+        Array* deferred = new Array();
         for (u32 i = (u32)0; i < B.insns().count(); i = i + (u32)1)
             {
             IRInsn* n = (IRInsn*)B.insns().get(i);
@@ -10312,8 +10489,15 @@ class OptProfile
             IRInsn* cl = IRInsn.with(n.op());
             cl.setPred(n.pred());
             cl.setCc(n.cc());
-            for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
-                cl.add(unrollSubstMap(map, (IROperand*)n.ops().get(k)));
+            IRInsn* rbn = n.res() == (IRValue*)0 ? (IRInsn*)0 : (IRInsn*)rebasedNext.get((Hashable*)n.res());
+            if (rbn != (IRInsn*)0)
+                {
+                for (u32 k = (u32)0; k < rbn.ops().count(); k = k + (u32)1)
+                    cl.add((IROperand*)rbn.ops().get(k));
+                }
+            else
+                for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
+                    cl.add(unrollSubstMap(map, (IROperand*)n.ops().get(k)));
             if (n.res() != (IRValue*)0)
                 {
                 cl.setRes(new IRValue(n.res().ty()));
@@ -10324,13 +10508,18 @@ class OptProfile
                 cl.setMemRes(new IRValue(String.withCString("Mem")));
                 map.set((Hashable*)n.memRes(), (Object*)cl.memRes());
                 }
-            C.add(cl);
+            if (rbn != (IRInsn*)0 && jtUseCountIn(B.insns(), n.res()) == (u32)0)
+                deferred.add((Object*)cl);
+            else
+                C.add(cl);
             if (n == c.ivNext())
                 cloneIvNext = cl.res();
             if (shareable)
                 _vtSharedPure.set((Hashable*)n.res(), (Object*)cl.res());
             }
 
+        for (u32 i = (u32)0; i < deferred.count(); i = i + (u32)1)
+            C.add((IRInsn*)deferred.get(i));
         // Each accumulator's update in this copy is its value afterwards.
         for (u32 i = (u32)0; i < c.redVals().count(); i = i + (u32)1)
             {

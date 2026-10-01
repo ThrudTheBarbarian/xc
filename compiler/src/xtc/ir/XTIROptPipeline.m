@@ -23,6 +23,7 @@
 #import "XTIROptMem2Reg.h"
 #import "XTIROptBlockLayout.h"
 #import "XTIROptLoopRotate.h"
+#import "XTIROptBlockMerge.h"
 #import "XTIROptVectorize.h"
 #import "XTIROptPointerIV.h"
 #import "XTIROptLoopReductionCollapse.h"
@@ -201,6 +202,10 @@
         // back-edge is a single conditional branch. Runs after the unrollers
         // (which expect the canonical top-tested shape) and the arithmetic passes
         // (so the guard it duplicates is in final form).
+        // Fold each block into its only predecessor first, so an unrolled
+        // body (copies chained by plain branches) is one block when the
+        // rotation below looks at it.
+        [p addPass:[[XTIROptBlockMerge alloc] init]];
         XTIROptLoopRotate* rotate = [[XTIROptLoopRotate alloc] init];
         rotate.profile = profile;
         [p addPass:rotate];
