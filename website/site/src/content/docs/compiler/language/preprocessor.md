@@ -1,48 +1,147 @@
 ---
 title: Preprocessor
-description: "#include, #import, #define with arguments and varargs, conditional compilation, #warning and #error."
+description: "#import and #include (source files and libraries), #use, #define with arguments and varargs, conditional compilation, #warning and #error."
 ---
 
 The preprocessor runs before the lexer and produces the source the rest of the compiler operates on. It sits alongside the language, not inside it: it handles file inclusion, conditional compilation and simple macro substitution, and has no semantic role.
 
-## File inclusion
+## File inclusion: `#import` and `#include`
 
 ```c
-#include <file.xc>      // search the system / -I paths only
-#include "file.xc"      // search next to the current file first
-
-#import  <Stdio.xc>     // include-once form, same search rules
-#import  "Sprite.xc"
+#import  <Stdio.xc>     // a library file: the -I paths and the standard library
+#import  "Sprite.xc"    // your own file: next to this one first
+#import  <Stdio>        // the extension may be left off
+#import  <Xtg>          // a shared library: libXtg.dylib / .so / .dll on -L
+#include "table.xc"     // as #import, but included every time it appears
 ```
 
-The two quote forms select different search orders, matching C/C++ convention:
+`#import` includes a file **once** per compilation, however many times it is
+named. `#include` pastes the file in every time, as C's does. Library files and
+anything another file might also import should use `#import`. Both directives
+take the same names and look in the same places.
 
-- **`"file.xc"`**: look next to the file doing the include first, then fall through to the system directories and any `-I` paths. Use this for files that live alongside your source.
-- **`<file.xc>`**: skip the current source's directory and go straight to system / `-I` paths. Use this for library headers, so a same-named file in your project cannot silently shadow the real library.
+### What a name can resolve to
 
-Filename matching is **case-sensitive** even on case-insensitive filesystems. `#import <Sort.xc>` never matches a sibling `sort.xc`, even on macOS's HFS+/APFS. This prevents a common collision where a user names their program after a library they import.
+The name in an `#import` is looked up as a **source file** first and, if there is
+none, as a **library**:
 
-`#import` is identical to `#include` except that the named file is included only once across the entire compilation unit. Library headers should use `#import`, so a user can `#import` them freely without two copies of the contents in scope.
+| The name finds | What happens |
+|---|---|
+| a `.xc` source file | its text is compiled as part of this file (once, for `#import`) |
+| an xcc shared library (`--emit-lib`) | nothing is pasted in: the library's classes, protocols, structs, enums and functions are read from the interface embedded in the binary, and the program links against it |
+| a separately compiled module's `Name.xtc.iface` | the same, for an object built with `xcc -c` |
+| a C shared library | its functions, types and enum constants are read from its DWARF debug information |
 
-## Importing and promoting a class: `#use`
+So `#import <Xtg>` and `#import <Stdio>` look alike but do different things: the
+first finds `libXtg.dylib` and imports its interface, the second finds
+`Stdio.xc` and compiles it. See [Modules & shared libraries](/compiler/language/modules/)
+for building and using libraries.
 
-`#use` is sugar for the common case of *"import a library class and let me call its static methods bare."* It expands to `#import "ClassName.xc"` followed by [`use ClassName;`](/compiler/language/classes/#bare-call-promotion-use-classname) (the language-level directive), so one line replaces two.
+### Where it looks
+
+**Source files**, in this order:
+
+1. **The directory of the file doing the import**, for the quoted form only
+   (`"Sprite.xc"`). The angle form (`<Stdio.xc>`) skips it, so a file of yours
+   with a library's name cannot be picked up by mistake.
+2. **Each `-I` directory**, in the order given on the command line.
+3. **The standard library**: the target's own directory (`lib/xc/<target>/lib`
+   in an install), then the shared one (`lib/xc/generic/lib`).
+
+A `-I` directory comes before the standard library, so a file there replaces
+the library's file of the same name. That is deliberate (it is how a project
+carries a patched copy), but it also means a stray `Stdio.xc` in a `-I`
+directory hides the real one.
+
+**Libraries**, when no source file matched:
+
+1. **Each `-L` directory**, trying `lib<Name>` with the target's library
+   extension: `.dylib` then `.so` for arm64; `.so` then `.dylib` for x86-64 and
+   arm9; `.dll`, then the `.dll.a` and `.a` import libraries, for win64; `.wasm`
+   for wasm32. Then the name exactly as written (`libfoo.a`), then
+   `Name.xtc.iface`.
+2. **The third-party tree**: `$XCC_3P` if it is set, then the `3p` directory
+   beside the compiler's own (`/opt/xcc/3p` for an install in
+   `/opt/xcc/<version>`). A library there lives at
+   `3p/<vendor>/<target>/lib<Name>.<ext>`; `<Name>` looks in the vendor
+   directory of the same name, and `<vendor/Name>` names the vendor explicitly.
+   When one is found, the vendor's `3p/<vendor>/xc` directory of xc sources is
+   added to the **end** of the search path, so its helper files can be
+   imported but never hide the standard library's.
+
+If nothing matches, the error names every directory searched:
+
+```
+app.xc:3:1: error: Cannot find include file 'Xtg' (searched: '/opt/xcc/0.64/lib/xc/arm64/lib' '/opt/xcc/0.64/lib/xc/generic/lib' -L 'build')
+```
+
+### Spelling the name
+
+- **The extension is optional.** A name with no `.` also tries `Name.xc`, so
+  `#import <Stdio>` finds `Stdio.xc`. A name with an extension is used exactly.
+- **Matching is case-sensitive**, even on macOS's case-insensitive filesystems:
+  `#import <Sort.xc>` never matches a file called `sort.xc`. This keeps a
+  program named after a library from importing itself.
+- **The old `.xt` extension** is still accepted: a bare name falls back to
+  `Name.xt`, and an explicit `"Name.xt"` that is missing is retried as
+  `Name.xc`.
+- **A library's name has no `lib` prefix and no extension**: `#import <Xtg>`
+  for `libXtg.dylib`. `#import <c>` imports the C library itself, on the arm9
+  target, whose loader provides one.
+
+## Importing and promoting: `#use`
+
+`#use` imports a name and then lets you call its class's static methods without
+the class name. It expands to `#import` of the name followed by the
+language-level [`use Name;`](/compiler/language/classes/#bare-call-promotion-use-classname),
+so one line replaces two:
 
 ```c
-#use Stdio          // == #import "Stdio.xc" + use Stdio;
+#use Stdio          // #import "Stdio" + use Stdio;
 #use Math
-#use <Time>         // angle-bracket and quote forms also accepted
-#use "Sprite"
 
 void main(void) {
-    printf("answer = %u\n", 42);    // resolves to Stdio.printf
-    u8 r = rand((u8)100);           // resolves to Math.rand
+    printf("answer = %u\n", 42);    // Stdio.printf
+    u8 r = rand((u8)100);           // Math.rand
 }
 ```
 
-The class name may be written bare (`#use Stdio`), in angle brackets (`#use <Stdio>`), or in quotes (`#use "Stdio"`). A trailing `.xc` extension is stripped if you include it. The `< >` vs `" "` search-order rule of `#include` / `#import` applies to the underlying file lookup.
+The name may be written bare, in angle brackets or in quotes, and a trailing
+`.xc` is dropped:
 
-After `#use Stdio`, `printf("hi")` resolves the same way as `Stdio.printf("hi")`, with the receiver class implied. This affects bare calls only; explicit `Klass.method(...)` calls, free functions and local variables are unaffected. The resolution rules (overload scoring, ambiguity diagnostics when several `use`'d classes expose a method with the same name, and the file-local scope of the promotion) are documented with the [language-level `use` directive](/compiler/language/classes/#bare-call-promotion-use-classname).
+| Written | Imports as | Looks next to this file first? |
+|---|---|---|
+| `#use Stdio` | `#import "Stdio"` | yes |
+| `#use "Sprite"` | `#import "Sprite"` | yes |
+| `#use <Time>` | `#import <Time>` | no |
+
+The bare form behaves like the quoted one, so a `Stdio.xc` of your own next to
+the source would be found before the library's. Use `#use <Stdio>` when you
+want to be sure of the library's.
+
+Because the import half is an ordinary `#import`, `#use` reaches everything
+`#import` does, and the `use` half then applies to the class of that name, if
+there is one:
+
+```c
+#use Stdio          // a standard library class
+#use "Sprite"       // a class in your own Sprite.xc
+#use <Greet>        // a shared library, libGreet.dylib on -L, with a class Greet
+#use <tls>          // a third-party library from /opt/xcc/3p
+```
+
+With `#use <Greet>`, `hello()` calls `Greet.hello()` from the library. Where the
+library has no class of that name, as with `tls`, the `use` half has nothing to
+promote and the line simply imports the library, so `#use <tls>` and
+`#import <tls>` are the same.
+
+After `#use Stdio`, `printf("hi")` resolves as `Stdio.printf("hi")` would. Only
+bare calls are affected: `Klass.method(...)`, free functions and local
+variables are not. If several `use`d classes have a method of the same name, the
+call is resolved by overload scoring, and a call that matches two equally well
+is an error that names both. The promotion holds for the rest of the file. See
+[`use`](/compiler/language/classes/#bare-call-promotion-use-classname) for the
+full rules.
 
 ## Macros
 

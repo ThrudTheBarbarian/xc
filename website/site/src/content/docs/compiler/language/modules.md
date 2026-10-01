@@ -20,6 +20,11 @@ xcc -L . -o app app.xc
 and enums the library exports, which `#import <Lib>` reads. The 6502 and m68k targets
 have no dynamic loader and remain whole-program.
 
+`#import <Lib>` looks for `libLib` with the target's extension in each `-L` directory, then
+in the third-party tree, and `#use <Lib>` does the same and also promotes the static methods
+of a class named `Lib`. [Preprocessor → Where it looks](/compiler/language/preprocessor/#where-it-looks)
+gives the full search order.
+
 ```c
 #import <Xtg>          // resolves to libXtg.so on the -L search path
 
