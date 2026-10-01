@@ -272,7 +272,7 @@ void uxGtkFireControl(i32 handle, i32 node)
 // same local point would be indistinguishable.
 UXEvent* gGtkMouseEvent;
 i32 gGtkMouseWin;
-void uxGtkDispatch(i32 kind, i32 x, i32 y, i32 handle)
+void uxGtkDispatch(i32 kind, i32 x, i32 y, i32 handle, i32 extra)
     {
     if (gApp == (UXApplication*)0)
         {
@@ -287,6 +287,11 @@ void uxGtkDispatch(i32 kind, i32 x, i32 y, i32 handle)
     gGtkMouseEvent.x = (i16)x;
     gGtkMouseEvent.y = (i16)y;
     gGtkMouseEvent.handle = handle;
+    if (kind == (i32)UXEventWheel)
+        {
+        gGtkMouseEvent.b = extra;                   // the DOM's deltaY in pixels, positive down
+        gGtkMouseEvent.a = (i32)0 - extra / (i32)100; // notches, positive up
+        }
     gGtkMouseWin = handle;
     if (gEventTap != (callback void(UXEvent * e))0)
         {

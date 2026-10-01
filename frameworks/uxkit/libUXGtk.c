@@ -29,7 +29,7 @@ typedef void (*ux_content_fn)(int handle, int wx, int wy, int ww, int wh, void* 
 typedef void (*ux_fire_fn)(int handle, int node);
 typedef void (*ux_value_fn)(int handle, int node, int value);
 typedef void (*ux_field_fn)(int handle, int node);
-typedef void (*ux_mouse_fn)(int kind, int x, int y, int handle);
+typedef void (*ux_mouse_fn)(int kind, int x, int y, int handle, int extra);
 
 static ux_fire_fn gFire;
 static ux_value_fn gValue;
@@ -229,37 +229,79 @@ static void gtk_to_area(int handle, double* x, double* y)
         }
     }
 
-static gboolean event_cb(GtkEventControllerLegacy* c, GdkEvent* ev, gpointer ud)
+/* What a pointer event MEANS to the toolkit, decided once for real events and for a test's injected
+ * ones alike.  what: 1 press, 2 release, 3 motion, 4 scroll (px = the DOM's deltaY, positive down). */
+void ux_gtk_input(int handle, int what, int button, double x, double y, int px)
     {
-    int handle = GPOINTER_TO_INT(ud);
-    GdkEventType t = gdk_event_get_event_type(ev);
-    double x = 0, y = 0;
-    if (t != GDK_BUTTON_PRESS && t != GDK_MOTION_NOTIFY && t != GDK_BUTTON_RELEASE)
-        return FALSE;
-    gdk_event_get_position(ev, &x, &y);
-    gtk_to_area(handle, &x, &y);
-    if (t == GDK_BUTTON_PRESS)
+    if (what == 4)
         {
+        if (px != 0 && gMouse)
+            gMouse(11, (int)x, (int)y, handle, px); /* 11 == UXEventWheel */
+        return;
+        }
+    if (what == 1)
+        {
+        /* The secondary button is the context menu, never a press that starts a drag. */
+        if (button == 3)
+            {
+            if (gMouse)
+                gMouse(16, (int)x, (int)y, handle, 0); /* 16 == UXEventRightMouseDown */
+            return;
+            }
         gPtrX = x;
         gPtrY = y;
         gBtnDown = 1;
         gPtrMoved = 0;
         if (gMouse)
-            gMouse(1, (int)x, (int)y, handle); /* 1 == UXEventMouseDown */
-        return FALSE;                          /* native widgets still get theirs */
+            gMouse(1, (int)x, (int)y, handle, 0); /* 1 == UXEventMouseDown */
+        return;
         }
-    if (t == GDK_MOTION_NOTIFY)
+    if (what == 3)
         {
         if ((int)x != (int)gPtrX || (int)y != (int)gPtrY)
             {
             gPtrX = x;
             gPtrY = y;
             gPtrMoved = 1;
+            /* With no button down a move is a HOVER, delivered to the view under the pointer; with
+             * one down it belongs to the drag (ux_gtk_drag_next). */
+            if (!gBtnDown && gMouse)
+                gMouse(15, (int)x, (int)y, handle, 0); /* 15 == UXEventMouseMoved */
             }
+        return;
+        }
+    if (button != 3)
+        gBtnDown = 0; /* the primary came up */
+    }
+
+static gboolean event_cb(GtkEventControllerLegacy* c, GdkEvent* ev, gpointer ud)
+    {
+    int handle = GPOINTER_TO_INT(ud);
+    GdkEventType t = gdk_event_get_event_type(ev);
+    double x = 0, y = 0;
+    if (t != GDK_BUTTON_PRESS && t != GDK_MOTION_NOTIFY && t != GDK_BUTTON_RELEASE && t != GDK_SCROLL)
+        return FALSE;
+    gdk_event_get_position(ev, &x, &y);
+    gtk_to_area(handle, &x, &y);
+    if (t == GDK_SCROLL)
+        {
+        /* A wheel reports whole clicks (100 px each, as WebKit counts a line), a touchpad its own
+         * surface pixels; GTK's sense is the DOM's, positive down. */
+        double dx = 0, dy = 0;
+        GdkScrollDirection d = gdk_scroll_event_get_direction(ev);
+        if (d == GDK_SCROLL_UP)
+            dy = -1;
+        else if (d == GDK_SCROLL_DOWN)
+            dy = 1;
+        else if (d == GDK_SCROLL_SMOOTH)
+            gdk_scroll_event_get_deltas(ev, &dx, &dy);
+        int px = gdk_scroll_event_get_unit(ev) == GDK_SCROLL_UNIT_SURFACE ? (int)dy : (int)(dy * 100.0);
+        ux_gtk_input(handle, 4, 0, x, y, px);
         return FALSE;
         }
-    gBtnDown = 0; /* GDK_BUTTON_RELEASE */
-    return FALSE;
+    int button = (t == GDK_MOTION_NOTIFY) ? 0 : (int)gdk_button_event_get_button(ev);
+    ux_gtk_input(handle, t == GDK_BUTTON_PRESS ? 1 : t == GDK_MOTION_NOTIFY ? 3 : 2, button, x, y, 0);
+    return FALSE; /* native widgets still get theirs */
     }
 
 /* One modal step of a toolkit-drawn drag: block until the pointer moves or the
@@ -296,7 +338,7 @@ void ux_gtk_post_press(int handle, int x, int y)
     gBtnDown = 1;
     gPtrMoved = 0;
     if (gMouse)
-        gMouse(1, x, y, handle);
+        gMouse(1, x, y, handle, 0);
     }
 void ux_gtk_post_motion(int x, int y)
     {
