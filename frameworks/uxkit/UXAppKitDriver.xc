@@ -116,6 +116,8 @@ void ux_ak_scroll_reload(i32 handle, i32 node, i32 contentH);
 void ux_ak_scroll_set(i32 handle, i32 node, i32 px); // drive it from the toolkit
 i32 ux_ak_scroll_get(i32 handle, i32 node);          // ...and read where it ended up
 void ux_ak_set_scroll_content(pointer fn);
+// A native scroll view's rounding and edge (UXScrollView.setCornerRadius / setBorderRGB); rgb -1 = no edge.
+void ux_ak_scroll_style(i32 handle, i32 node, i32 radius, i32 rgb);
 // A transparency layer over (x,y,w,h) of the current 2-D context, and its end: a self-surface
 // view's own layer inside the one surface (see drawOne).
 void ux_ak_layer_begin(i32 x, i32 y, i32 w, i32 h);
@@ -1761,7 +1763,8 @@ class UXAppKitDriver : Object<UXViewDriver>
                 i32 w = (i32)0;
                 i32 hh = (i32)0;
                 self.structAbsFrame(tree, i, &ax, &ay, &w, &hh);
-                i32 ch = ((UXScrollView*)t.nodes[i].peer).nativeContentHeight();
+                UXScrollView* svp = (UXScrollView*)t.nodes[i].peer;
+                i32 ch = svp.nativeContentHeight();
                 if (ux_ak_has_control(handle, i) == (i32)0)
                     {
                     ux_ak_make_scroll(handle, i, ax, ay, w, hh, ch, t.nodes[i].peer);
@@ -1771,6 +1774,7 @@ class UXAppKitDriver : Object<UXViewDriver>
                     ux_ak_set_control_frame(handle, i, ax, ay, w, hh);
                     ux_ak_scroll_reload(handle, i, ch);
                     }
+                ux_ak_scroll_style(handle, i, svp.nativeCornerRadius(), svp.nativeBorderRGB());
                 ux_ak_set_control_hidden(handle, i, self.effectiveHidden(tree, i));
                 }
             else if ((k == (i32)UXKindButton || k == (i32)UXKindField || k == (i32)UXKindLabel) && self.isUnderTable(t, i) == (i32)0)

@@ -3530,6 +3530,58 @@ int ux_ak_reparent_count(void)
     return g_akReparentN;
     }
 
+/* A rounded panel.  The scroll view becomes layer-backed so its layer can clip to the rounding
+ * (content AND scroller), with an optional 1px edge that follows it; the scroller is inset by the
+ * radius top and bottom so its track runs between the corners rather than into them.  A radius of
+ * 0 with no edge restores the plain bezelled scroll view.  Applied on every realise, so a change of
+ * radius or colour takes effect at the next display. */
+void ux_ak_scroll_style(int handle, int node, int radius, int rgb)
+    {
+    if (node < 0 || node >= 256)
+        return;
+    NSScrollView* nsv = (NSScrollView*)g_ctl[handle][node];
+    if (![nsv isKindOfClass:[NSScrollView class]])
+        return;
+    if (radius <= 0 && rgb < 0)
+        {
+        if ([nsv wantsLayer])
+            {
+            nsv.layer.cornerRadius = 0;
+            nsv.layer.borderWidth = 0;
+            [nsv setScrollerInsets:NSEdgeInsetsMake(0, 0, 0, 0)];
+            [nsv setBorderType:NSBezelBorder];
+            }
+        return;
+        }
+    [nsv setBorderType:NSNoBorder]; /* the bezel is square; the layer draws the edge instead */
+    [nsv setWantsLayer:YES];
+    nsv.layer.cornerRadius = radius;
+    nsv.layer.masksToBounds = YES;
+    if (rgb >= 0)
+        {
+        nsv.layer.borderWidth = 1;
+        nsv.layer.borderColor = [[NSColor colorWithRed:((rgb >> 16) & 255) / 255.0
+                                                 green:((rgb >> 8) & 255) / 255.0
+                                                  blue:(rgb & 255) / 255.0
+                                                 alpha:1.0] CGColor];
+        }
+    else
+        {
+        nsv.layer.borderWidth = 0;
+        }
+    [nsv setScrollerInsets:NSEdgeInsetsMake(radius, 0, radius, 0)];
+    }
+/* For a gate: the radius and edge width a native scroll view actually carries, or -1 for none. */
+int ux_ak_scroll_corner(int handle, int node)
+    {
+    if (node < 0 || node >= 256)
+        return -1;
+    NSScrollView* nsv = (NSScrollView*)g_ctl[handle][node];
+    if (![nsv isKindOfClass:[NSScrollView class]] || ![nsv wantsLayer])
+        return -1;
+    return (int)nsv.layer.cornerRadius * 100 + (int)nsv.layer.borderWidth;
+    }
+
 void ux_ak_scroll_reload(int handle, int node, int contentH)
     {
     if (node < 0 || node >= 256)

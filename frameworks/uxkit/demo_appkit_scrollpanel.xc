@@ -19,6 +19,7 @@
 
 u8* getenv(u8* name);
 i32 ux_ak_reparent_count(void); // libUXAppKit.m: controls the re-parent pass has moved
+i32 ux_ak_scroll_corner(i32 handle, i32 node); // ...and a native scroll view's radius*100 + edge width
 
 i32 gFails = 0;
 void ck(bool ok, u8* what)
@@ -49,6 +50,8 @@ class Controller : Object<UXApplicationDelegate>
         scroll = new UXScrollView();
         canvas.addSubview(scroll, UXGeom.make((i16)10, (i16)10, (i16)260, (i16)200));
         scroll.setDocumentHeight((i32)900); // taller than the scroll: it must scroll
+        scroll.setCornerRadius((i32)12);     // a rounded panel, as every browser panel is
+        scroll.setBorderRGB((i32)60, (i32)60, (i32)60);
 
         // A native button DEEP in the document, below the fold: unreachable unless it scrolls.
         deep = new UXButton();
@@ -66,6 +69,11 @@ class Controller : Object<UXApplicationDelegate>
         else
             {
             ck(ux_ak_reparent_count() > (i32)0, "a native control inside the scroll moved into its document view");
+            ck(ux_ak_scroll_corner(win.handle, (i32)scroll.index) == (i32)1201, "the native scroll view is rounded at 12 with a 1px edge");
+            scroll.setCornerRadius((i32)0);
+            scroll.clearBorder();
+            win.displayAll();
+            ck(ux_ak_scroll_corner(win.handle, (i32)scroll.index) == (i32)0, "...and square again at radius 0");
             Stdio.printf("  reparented=%d\n", ux_ak_reparent_count());
             Stdio.printf("demo up\n");
             }

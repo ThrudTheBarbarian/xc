@@ -174,6 +174,8 @@ class UXScrollbar : UXView
     i16 headerH;               // pinned header height (0 = none)
     i16 lineHeight;            // arrow/wheel step
     i32 docHeight;             // the document's content height
+    i16 cornerRadius;          // a rounded panel's radius (0 = square)
+    i32 borderRGB;             // a 1px edge colour as 0xRRGGBB, or -1 for none
 
     void init(void)
         {
@@ -187,6 +189,8 @@ class UXScrollbar : UXView
         headerH = (i16)0;
         lineHeight = (i16)16;
         docHeight = (i32)0;
+        cornerRadius = (i16)0;
+        borderRGB = (i32)-1;
         }
     // UXKindScroll: GEM draws the custom bar + clips the document itself (falls through to G_USERDEF,
     // like a plain view); win32/AppKit map it to a native scroll container overlaying this subtree.
@@ -228,6 +232,35 @@ class UXScrollbar : UXView
         headerH = h;
         self.relayout();
         }
+    // A rounded panel: the scroll view clips its content, and its scroller, to a rounded rect of
+    // this radius, as a browser panel with `border-radius` and `overflow: auto` does.  The scroller
+    // runs inside the rounding, between the corners.  A model value the native container reads when
+    // the tree next realises; a backend that draws its own scroll view does not round it yet.
+    void setCornerRadius(i32 r)
+        {
+        cornerRadius = (i16)(r < (i32)0 ? (i32)0 : r);
+        self.setNeedsDisplay();
+        }
+    i32 nativeCornerRadius(void)
+        {
+        return (i32)cornerRadius;
+        }
+    // A 1px edge in this colour, following the rounding.  clearBorder() removes it.
+    void setBorderRGB(i32 r, i32 g, i32 b)
+        {
+        borderRGB = ((r & (i32)255) << (i32)16) | ((g & (i32)255) << (i32)8) | (b & (i32)255);
+        self.setNeedsDisplay();
+        }
+    void clearBorder(void)
+        {
+        borderRGB = (i32)-1;
+        self.setNeedsDisplay();
+        }
+    i32 nativeBorderRGB(void)
+        {
+        return borderRGB;
+        }
+
     // Set how tall the scrolling content is.  A MODEL value: the neutral docHeight is what maxScroll()
     // reads and is honest immediately, but a native container (AppKit's clip view, the win32 scrollbar)
     // only picks up the new page when the tree next REALISES, inside a window display.  So set the

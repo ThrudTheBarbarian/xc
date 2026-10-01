@@ -41,6 +41,7 @@ sv.setLineHeight(18);              // the arrow/wheel step
 
 **The document** · [document](#document) · [setDocumentHeight](#setdocumentheight) · [setHeaderView](#setheaderview) · [setLineHeight](#setlineheight)
 **Motion** · [scrollTo](#scrollto) · [scrollByLines](#scrollbylines)
+**Appearance** · [setCornerRadius](#setcornerradius) · [setBorderRGB](#setborderrgb--clearborder) · [clearBorder](#setborderrgb--clearborder)
 **Geometry** · [contentPx](#contentpx) · [viewportPx](#viewportpx) · [scrollPx](#scrollpx) · [maxScroll](#maxscroll) · [needsBar](#needsbar)
 
 ### document
@@ -96,6 +97,29 @@ void scrollByLines(i32 lines)
 
 Relative motion in line-height steps, used by arrows, wheel notches and the
 keyboard.
+
+### setCornerRadius
+
+```c
+void setCornerRadius(i32 r)
+```
+
+A rounded panel: the scroll view clips its content and its scroller to a rounded
+rectangle of radius `r`, as a browser panel with `border-radius` and
+`overflow: auto` does, and the scroller runs between the corners rather than into
+them. `0` is square. It is read when the tree next realises, so display in the
+same turn. On AppKit the native scroll view is clipped by its layer; a backend
+that draws its own scroll view does not round it yet.
+
+### setBorderRGB / clearBorder
+
+```c
+void setBorderRGB(i32 r, i32 g, i32 b)
+void clearBorder(void)
+```
+
+A 1-pixel edge in this colour that follows the rounding, or none. With neither a
+radius nor an edge, AppKit draws its usual bezel.
 
 ### contentPx
 
