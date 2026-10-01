@@ -6,6 +6,10 @@ _root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null)
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 GEM=${GEM:-${GEM_DIR:-}}
+# No GEM tree is fatal, not a warning: with $GEM empty every source path globs to nothing, and the
+# object-naming sed below mangles the shim into a second xtos_host.o that stays in $OUT and breaks
+# every later link of this directory with duplicate sys_* symbols.
+[ -n "$GEM" ] && [ -f "$GEM/gfx_soft.c" ] || { echo "build_gemd.sh: no GEM tree (set GEM_DIR to the GEM source tree)" >&2; exit 1; }
 ROCKS=$GEM/../third_party/Rocks/src
 OUT=${OUT:-/tmp/xg_hostgemd}
 mkdir -p "$OUT"

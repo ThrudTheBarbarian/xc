@@ -29,7 +29,7 @@ struct os_fbinfo
     i32 w;
     i32 h;
     i32 stride;
-    u32 addr;
+    pointer addr;           // pointer-wide, as xtsys.h/xtos_host.h: a u32 here let sys_fb_info write past the struct
     }
 
 #define OF_CLIPCHILDREN $1000

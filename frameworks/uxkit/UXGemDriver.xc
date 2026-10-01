@@ -928,7 +928,8 @@ class UXGemDriver : Object<UXViewDriver>
 #ifdef ARCH_arm64
         // evnt_multi has 23 args; xtc's arm64 backend mis-marshals everything past the 8th, so its
         // output pointers come back garbage on macOS.  Route through the libxtos wrapper, whose 4
-        // register args xtc passes correctly and which makes the wide call C-side.        i32 out[6];
+        // register args xtc passes correctly and which makes the wide call C-side.
+        i32 out[6];
         i32 what = xg_evnt_multi(classes, (pointer)&msg[0], timeoutMs, (pointer)&out[0]);
         mx = out[0];
         my = out[1];
