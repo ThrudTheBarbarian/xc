@@ -3,7 +3,7 @@ title: Downloads
 description: Prebuilt xcc toolchain archives for macOS, Linux and Windows, and the arm9 sysroot.
 ---
 
-The current release line is **xcc 0.63**. One install contains the whole toolchain: the
+The current release line is **xcc 0.64**. One install contains the whole toolchain: the
 compiler (`xcc`, which runs every stage itself, from parsing through code generation
 for all seven targets to assembly and linking), the signing tool (`xcc-sign`), the
 6502 assembler (`xcc-as`), the simulators (`xcc-sim-6502`, `xcc-sim-68k`), the
@@ -12,10 +12,10 @@ cross-build native binaries for every target with **no other toolchain installed
 
 | Platform | Download | Size |
 | --- | --- | --- |
-| macOS (Apple silicon) | [xcc-osx-0.63.tar.bz2](/downloads/xcc-osx-0.63.tar.bz2) | 8.1 MB |
-| Linux (x86_64) | [xcc-linux-0.63.tar.bz2](/downloads/xcc-linux-0.63.tar.bz2) | 6.6 MB |
-| Windows (x64) | [xcc-win64-0.63.zip](/downloads/xcc-win64-0.63.zip) | 7.6 MB |
-| arm9 sysroot (any host) | [xcc-arm9-sysroot-0.63.tar.bz2](/downloads/xcc-arm9-sysroot-0.63.tar.bz2) | 830 KB |
+| macOS (Apple silicon) | [xcc-osx-0.64.tar.bz2](/downloads/xcc-osx-0.64.tar.bz2) | 8.1 MB |
+| Linux (x86_64) | [xcc-linux-0.64.tar.bz2](/downloads/xcc-linux-0.64.tar.bz2) | 6.1 MB |
+| Windows (x64) | [xcc-win64-0.64.zip](/downloads/xcc-win64-0.64.zip) | 6.9 MB |
+| arm9 sysroot (any host) | [xcc-arm9-sysroot-0.64.tar.bz2](/downloads/xcc-arm9-sysroot-0.64.tar.bz2) | 830 KB |
 
 Every archive contains the same compiler. Each host build cross-compiles to **all**
 targets, so the platform you download for decides only where the compiler runs.
@@ -28,23 +28,23 @@ in the host archive.
 ## macOS
 
 ```bash
-tar xjf xcc-osx-0.63.tar.bz2
-export PATH="$PWD/xcc-osx-0.63/bin:$PATH"
+tar xjf xcc-osx-0.64.tar.bz2
+export PATH="$PWD/xcc-osx-0.64/bin:$PATH"
 xcc -v
 ```
 
 The compiler finds its libraries **relative to its own binary**, with no flags,
 environment variables or fixed install path, so you can move the directory anywhere.
 The binaries are not notarised, so the first run on a fresh macOS install may need a
-one-time Gatekeeper override (`xattr -dr com.apple.quarantine xcc-osx-0.63/`).
+one-time Gatekeeper override (`xattr -dr com.apple.quarantine xcc-osx-0.64/`).
 
 ## arm9 sysroot
 
 Needed only for `-A arm9`. Unpack it anywhere and point `-L` at it:
 
 ```bash
-tar xjf xcc-arm9-sysroot-0.63.tar.bz2
-xcc -A arm9 -L path/to/xcc-arm9-sysroot-0.63 -o prog.so prog.xc
+tar xjf xcc-arm9-sysroot-0.64.tar.bz2
+xcc -A arm9 -L path/to/xcc-arm9-sysroot-0.64 -o prog.so prog.xc
 ```
 
 It holds one file: `libc.so`, newlib 4.4.0.20231231 rebuilt as position-independent
@@ -61,8 +61,8 @@ one, and then `-A arm9` needs no `-L` at all.
 ## Linux
 
 ```bash
-tar xjf xcc-linux-0.63.tar.bz2
-export PATH="$PWD/xcc-linux-0.63/bin:$PATH"
+tar xjf xcc-linux-0.64.tar.bz2
+export PATH="$PWD/xcc-linux-0.64/bin:$PATH"
 xcc -v
 ```
 
@@ -71,7 +71,7 @@ library dependencies.
 
 ## Windows
 
-Unzip `xcc-win64-0.63.zip` anywhere and add the folder to `PATH` (or invoke
+Unzip `xcc-win64-0.64.zip` anywhere and add the folder to `PATH` (or invoke
 `xcc.exe` by path). The binaries are self-contained; no runtime installer is
 needed.
 
