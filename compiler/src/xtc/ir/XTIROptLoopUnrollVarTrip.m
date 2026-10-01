@@ -622,7 +622,7 @@ static XTIRInsn* buildLike(XTIRInsn* insn, XTIRValue* _Nullable result,
         // straight from the phi, not (p + K*j) + K. In the last copy that is
         // the back-edge value, which was otherwise a chain of two adds.
         NSMutableDictionary<NSNumber*, NSArray*>* rebasedNext = [NSMutableDictionary dictionary];
-        if (j > 0 && c.vectorBody)
+        if (j > 0)
             {
             for (NSUInteger i = 0; i < nred; i++)
                 {

@@ -1274,12 +1274,23 @@ class OptProfile
             constHoist(m);
         if (stopHere(String.withCString("const-hoist")))
             return;
+        // Value-number again: LICM hoists each unrolled copy's invariant
+        // arithmetic separately, so a preheader can hold several copies of the
+        // same `i * 32`.
+        if (_level >= (u32)2)
+            redundantLoadCSE(m);
+        if (stopHere(String.withCString("redundant-load-cse")))
+            return;
         // Fold each block into its only predecessor first, so an unrolled
         // body (copies chained by plain branches) is one block when the
         // rotation below looks at it.
         if (_level >= (u32)2)
             blockMerge(m);
         if (stopHere(String.withCString("block-merge")))
+            return;
+        if (_level >= (u32)2)
+            reassociate(m);
+        if (stopHere(String.withCString("reassociate")))
             return;
         if (_level >= (u32)2)
             loopRotate(m);
@@ -4864,6 +4875,7 @@ class OptProfile
         for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
             {
             IRFunc* fn = (IRFunc*)m.funcs().get(f);
+            pruneStaleIncomings(fn);
             bool more = true;
             while (more)
                 more = blockMergeOnce(fn);
@@ -4920,6 +4932,109 @@ class OptProfile
                     }
                 }
             }
+        }
+
+    // Drop every phi incoming whose block does not branch to the phi's block
+    // (the reference explains).
+    void pruneStaleIncomings(IRFunc* fn)
+        {
+        for (u32 k = (u32)0; k < fn.blocks().count(); k = k + (u32)1)
+            {
+            IRBlock* S = (IRBlock*)fn.blocks().get(k);
+            if (S.phis().count() == (u32)0)
+                continue;
+            Array* ps = new Array();
+            for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+                {
+                IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+                IRInsn* t = bb.term();
+                if (t == (IRInsn*)0)
+                    continue;
+                for (u32 q = (u32)0; q < t.ops().count(); q = q + (u32)1)
+                    {
+                    IROperand* o = (IROperand*)t.ops().get(q);
+                    if (o.kind() == (u8)OPK_BLOCK && o.blk() == S)
+                        {
+                        ps.add((Object*)bb);
+                        break;
+                        }
+                    }
+                }
+            for (u32 i = (u32)0; i < S.phis().count(); i = i + (u32)1)
+                {
+                IRInsn* phi = (IRInsn*)S.phis().get(i);
+                u32 live = (u32)0;
+                for (u32 q = (u32)0; q + (u32)1 < phi.ops().count(); q = q + (u32)2)
+                    if (bmHas(ps, ((IROperand*)phi.ops().get(q)).blk()))
+                        live = live + (u32)1;
+                if (live == (u32)0)
+                    continue;
+                u32 q = phi.ops().count() & ~(u32)1;
+                while (q >= (u32)2)
+                    {
+                    q = q - (u32)2;
+                    if (!bmHas(ps, ((IROperand*)phi.ops().get(q)).blk()))
+                        {
+                        phi.ops().removeAt(q + (u32)1);
+                        phi.ops().removeAt(q);
+                        }
+                    }
+                }
+            }
+        // A block with ONE predecessor has phis of one incoming each, and each
+        // IS its value: folded away (loop-rotate will not touch a loop whose
+        // exit block already has phis).
+        for (u32 k = (u32)1; k < fn.blocks().count(); k = k + (u32)1)
+            {
+            IRBlock* S = (IRBlock*)fn.blocks().get(k);
+            if (S.phis().count() == (u32)0)
+                continue;
+            Array* ps = new Array();
+            for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+                {
+                IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+                IRInsn* t = bb.term();
+                if (t == (IRInsn*)0)
+                    continue;
+                for (u32 q = (u32)0; q < t.ops().count(); q = q + (u32)1)
+                    {
+                    IROperand* o = (IROperand*)t.ops().get(q);
+                    if (o.kind() == (u8)OPK_BLOCK && o.blk() == S)
+                        {
+                        ps.add((Object*)bb);
+                        break;
+                        }
+                    }
+                }
+            if (ps.count() != (u32)1)
+                continue;
+            IRBlock* P = (IRBlock*)ps.get((u32)0);
+            bool ok = true;
+            for (u32 i = (u32)0; i < S.phis().count(); i = i + (u32)1)
+                {
+                IRInsn* phi = (IRInsn*)S.phis().get(i);
+                if (phi.ops().count() != (u32)2 || ((IROperand*)phi.ops().get((u32)0)).blk() != P
+                    || phi.res() == (IRValue*)0 || phi.memRes() != (IRValue*)0)
+                    ok = false;
+                }
+            if (!ok)
+                continue;
+            for (u32 i = (u32)0; i < S.phis().count(); i = i + (u32)1)
+                {
+                IRInsn* phi = (IRInsn*)S.phis().get(i);
+                bmReplaceUses(fn, phi.res(), (IROperand*)phi.ops().get((u32)1), phi);
+                }
+            while (S.phis().count() > (u32)0)
+                S.phis().removeAt((u32)0);
+            }
+        }
+
+    static bool bmHas(Array* a, IRBlock* b)
+        {
+        for (u32 i = (u32)0; i < a.count(); i = i + (u32)1)
+            if ((IRBlock*)a.get(i) == b)
+                return true;
+        return false;
         }
 
     bool blockMergeOnce(IRFunc* fn)
@@ -5001,6 +5116,217 @@ class OptProfile
                     }
             return true;
             }
+        return false;
+        }
+
+    // ── reassociate ──────────────────────────────────────────────────────
+    //
+    // An unrolled reduction is a chain, `acc + x0 + x1 + x2 + x3`, every link
+    // waiting for the one before: four dependent ops per iteration on the value
+    // the loop carries. For an associative integer op it is rebuilt as
+    // `acc + ((x0 + x1) + (x2 + x3))` — one op on the carried value, the rest
+    // in parallel. 32- and 64-bit integers only (wrapping add, mul and the
+    // bitwise ops reassociate exactly; float does not).
+    void reassociate(IRModule* m)
+        {
+        for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
+            {
+            IRFunc* fn = (IRFunc*)m.funcs().get(f);
+            for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+                {
+                bool more = true;
+                while (more)
+                    more = reassocOnce(fn, (IRBlock*)fn.blocks().get(b));
+                }
+            }
+        }
+
+    static bool raOp(String* op)
+        {
+        return op.equals(String.withCString("Add")) || op.equals(String.withCString("Mul"))
+            || op.equals(String.withCString("And")) || op.equals(String.withCString("Or"))
+            || op.equals(String.withCString("Xor"));
+        }
+
+    static bool raType(String* t)
+        {
+        return t != (String*)0 && (t.equals(String.withCString("I32")) || t.equals(String.withCString("U32"))
+                                || t.equals(String.withCString("I64")) || t.equals(String.withCString("U64")));
+        }
+
+    // The link feeding `cur` through `o`: same op, same type, in `bb`, and read
+    // nowhere else.
+    IRInsn* raLink(IROperand* o, IRInsn* cur, IRBlock* bb, Map* uses)
+        {
+        if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0)
+            return (IRInsn*)0;
+        Object* uc = uses.get((Hashable*)o.val());
+        if (uc == (Object*)0 || ((Number*)uc).asU32() != (u32)1)
+            return (IRInsn*)0;
+        for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+            {
+            IRInsn* p = (IRInsn*)bb.insns().get(i);
+            if (p.res() != o.val())
+                continue;
+            if (!p.op().equals(cur.op()) || p.ops().count() != (u32)2 || p.memRes() != (IRValue*)0)
+                return (IRInsn*)0;
+            if (p.res().ty() == (String*)0 || !p.res().ty().equals(cur.res().ty()))
+                return (IRInsn*)0;
+            return p;
+            }
+        return (IRInsn*)0;
+        }
+
+    bool reassocOnce(IRFunc* fn, IRBlock* bb)
+        {
+        Map* uses = new Map();
+        Array* phiVals = new Array();
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* x = (IRBlock*)fn.blocks().get(b);
+            u32 total = x.phis().count() + x.insns().count() + (u32)1;
+            for (u32 i = (u32)0; i < total; i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)0;
+                if (i < x.phis().count())
+                    n = (IRInsn*)x.phis().get(i);
+                else if (i < x.phis().count() + x.insns().count())
+                    n = (IRInsn*)x.insns().get(i - x.phis().count());
+                else
+                    n = x.term();
+                if (n == (IRInsn*)0)
+                    continue;
+                for (u32 q = (u32)0; q < n.ops().count(); q = q + (u32)1)
+                    {
+                    IROperand* o = (IROperand*)n.ops().get(q);
+                    if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0)
+                        continue;
+                    Object* c = uses.get((Hashable*)o.val());
+                    u32 cnt = c == (Object*)0 ? (u32)0 : ((Number*)c).asU32();
+                    uses.set((Hashable*)o.val(), (Object*)Number.withU32(cnt + (u32)1));
+                    }
+                }
+            for (u32 i = (u32)0; i < x.phis().count(); i = i + (u32)1)
+                {
+                IRInsn* p = (IRInsn*)x.phis().get(i);
+                if (p.res() != (IRValue*)0)
+                    phiVals.add((Object*)p.res());
+                }
+            }
+
+        for (u32 ti = (u32)0; ti < bb.insns().count(); ti = ti + (u32)1)
+            {
+            IRInsn* T = (IRInsn*)bb.insns().get(ti);
+            if (!raOp(T.op()) || T.ops().count() != (u32)2 || T.res() == (IRValue*)0 || T.memRes() != (IRValue*)0
+                || !raType(T.res().ty()))
+                continue;
+            // T must END its chain.
+            bool isLink = false;
+            Object* tc = uses.get((Hashable*)T.res());
+            if (tc != (Object*)0 && ((Number*)tc).asU32() == (u32)1)
+                for (u32 ui = (u32)0; ui < bb.insns().count(); ui = ui + (u32)1)
+                    {
+                    IRInsn* u = (IRInsn*)bb.insns().get(ui);
+                    if (u == T || !u.op().equals(T.op()) || u.ops().count() != (u32)2)
+                        continue;
+                    for (u32 q = (u32)0; q < (u32)2; q = q + (u32)1)
+                        {
+                        IROperand* o = (IROperand*)u.ops().get(q);
+                        if (o.kind() == (u8)OPK_USE && o.val() == T.res() && raLink(o, u, bb, uses) == T)
+                            isLink = true;
+                        }
+                    }
+            if (isLink)
+                continue;
+
+            Array* links = new Array();
+            links.add((Object*)T);
+            Array* leaves = new Array();
+            IRInsn* cur = T;
+            bool walking = true;
+            while (walking)
+                {
+                IRInsn* p0 = raLink((IROperand*)cur.ops().get((u32)0), cur, bb, uses);
+                IRInsn* p1 = p0 != (IRInsn*)0 ? (IRInsn*)0 : raLink((IROperand*)cur.ops().get((u32)1), cur, bb, uses);
+                if (p0 != (IRInsn*)0)
+                    {
+                    leaves.insert((u32)0, cur.ops().get((u32)1));
+                    cur = p0;
+                    links.add((Object*)cur);
+                    }
+                else if (p1 != (IRInsn*)0)
+                    {
+                    leaves.insert((u32)0, cur.ops().get((u32)0));
+                    cur = p1;
+                    links.add((Object*)cur);
+                    }
+                else
+                    {
+                    leaves.insert((u32)0, cur.ops().get((u32)1));
+                    leaves.insert((u32)0, cur.ops().get((u32)0));
+                    walking = false;
+                    }
+                }
+            if (links.count() < (u32)2)
+                continue;
+            IROperand* acc = (IROperand*)0;
+            bool ok = true;
+            for (u32 q = (u32)0; q < leaves.count(); q = q + (u32)1)
+                {
+                IROperand* l = (IROperand*)leaves.get(q);
+                if (l.kind() != (u8)OPK_USE)
+                    ok = false;
+                else if (bmHas2(phiVals, l.val()))
+                    {
+                    if (acc != (IROperand*)0)
+                        ok = false;
+                    acc = l;
+                    }
+                }
+            // Already one op on the carried value (what a rewrite leaves):
+            // nothing to shorten, and rebuilding it would never stop.
+            if (!ok || acc == (IROperand*)0 || (IROperand*)T.ops().get((u32)0) == acc
+                || (IROperand*)T.ops().get((u32)1) == acc)
+                continue;
+            Array* rest = new Array();
+            for (u32 q = (u32)0; q < leaves.count(); q = q + (u32)1)
+                if ((IROperand*)leaves.get(q) != acc)
+                    rest.add(leaves.get(q));
+
+            u32 at = ti;
+            String* ty = T.res().ty();
+            while (rest.count() > (u32)1)
+                {
+                Array* next = new Array();
+                for (u32 q = (u32)0; q + (u32)1 < rest.count(); q = q + (u32)2)
+                    {
+                    IRValue* rv = new IRValue(ty);
+                    IRInsn* ni = IRInsn.with(T.op());
+                    ni.setRes(rv);
+                    ni.add((IROperand*)rest.get(q));
+                    ni.add((IROperand*)rest.get(q + (u32)1));
+                    bb.insns().insert(at, (Object*)ni);
+                    at = at + (u32)1;
+                    next.add((Object*)IROperand.useVal(rv));
+                    }
+                if ((rest.count() & (u32)1) != (u32)0)
+                    next.add(rest.get(rest.count() - (u32)1));
+                rest = next;
+                }
+            T.ops().set((u32)0, (Object*)acc);
+            T.ops().set((u32)1, rest.get((u32)0));
+            for (u32 k = (u32)1; k < links.count(); k = k + (u32)1)
+                removeInsn(bb, (IRInsn*)links.get(k));
+            return true;
+            }
+        return false;
+        }
+
+    static bool bmHas2(Array* a, IRValue* v)
+        {
+        for (u32 i = (u32)0; i < a.count(); i = i + (u32)1)
+            if ((IRValue*)a.get(i) == v)
+                return true;
         return false;
         }
 
@@ -9336,6 +9662,8 @@ class OptProfile
         // hashing. First appearance scanning the body is the stable choice.
         Array* bases = new Array();  // IRValue@
         Array* groups = new Array(); // Array@ of [IRInsn@, offset]
+        Array* shapes = new Array(); // per group: Number s, hasInv, invScale, and the inv (or base)
+        _pivInvs = new Array();
         for (u32 i = (u32)0; i < B.insns().count(); i = i + (u32)1)
             {
             IRInsn* n = (IRInsn*)B.insns().get(i);
@@ -9350,26 +9678,53 @@ class OptProfile
             if (baseOp.val().ty() == (String*)0 || !baseOp.val().ty().hasPrefix(String.withCString("Ptr(")))
                 continue;
             i32 off = (i32)0;
-            if (!pivAffine(idxOp.val(), iv, defOf, &off, (u32)0) || off < (i32)0)
+            i64 af[5];
+            af[0] = (i64)1; af[1] = (i64)0; af[2] = (i64)0; af[3] = (i64)0; af[4] = (i64)0;
+            if (pivAffine(idxOp.val(), iv, defOf, &off, (u32)0))
+                af[1] = (i64)off;
+            else if (!pivAffIdx(idxOp, iv, defOf, defBlk, H, B, af, (u32)0)
+                     || af[0] <= (i64)0 || af[0] * (i64)_pivStep > (i64)65536)
                 continue;
-            u32 gi = bases.count();
-            for (u32 k = (u32)0; k < bases.count(); k = k + (u32)1)
-                if ((IRValue*)bases.get(k) == baseOp.val())
-                    {
-                    gi = k;
-                    break;
-                    }
+            if (af[1] < (i64)0)
+                continue;
+            IRValue* inv = af[2] != (i64)0 ? (IRValue*)_pivInvs.get((u32)af[4]) : (IRValue*)0;
+            u32 gi = pivGroupOf(bases, shapes, baseOp.val(), af, inv);
             if (gi == bases.count())
                 {
                 bases.add((Object*)baseOp.val());
                 groups.add((Object*)new Array());
+                Array* sh = new Array();
+                sh.add((Object*)Number.withI64(af[0]));
+                sh.add((Object*)Number.withI64(af[2]));
+                sh.add((Object*)Number.withI64(af[3]));
+                sh.add(inv != (IRValue*)0 ? (Object*)inv : (Object*)baseOp.val());
+                shapes.add((Object*)sh);
                 }
             Array* g = (Array*)groups.get(gi);
             g.add((Object*)n);
-            g.add((Object*)Number.withI32(off));
+            g.add((Object*)Number.withI32((i32)af[1]));
             }
         if (bases.count() == (u32)0)
             return false;
+        // Over the cap below, keep only the plain stride-1 groups: a strided or
+        // offset access must not cost a loop the pointers it already had.
+        if (bases.count() > (u32)3)
+            {
+            u32 k = bases.count();
+            while (k > (u32)0)
+                {
+                k = k - (u32)1;
+                Array* sh = (Array*)shapes.get(k);
+                if (((Number*)sh.get((u32)0)).asI64() != (i64)1 || ((Number*)sh.get((u32)1)).asI64() != (i64)0)
+                    {
+                    bases.removeAt(k);
+                    groups.removeAt(k);
+                    shapes.removeAt(k);
+                    }
+                }
+            if (bases.count() == (u32)0)
+                return false;
+            }
         // Register-pressure cap. Each base becomes a loop-carried pointer phi
         // that the unroller threads through every copy — roughly two live
         // values apiece, against a nine-register callee-saved home pool.
@@ -9401,7 +9756,140 @@ class OptProfile
             {
             pivInit = (IROperand*)ivPhi.ops().get((u32)1);
             }
-        pivRewrite(fn, H, B, PH, ivPhi.res().ty(), bases, groups, defOf, pivInit);
+        pivRewrite(fn, H, B, PH, ivPhi.res().ty(), bases, groups, shapes, defOf, pivInit);
+        return true;
+        }
+
+    // The invariant terms pivAffIdx found, indexed from its result.
+    Array* _pivInvs;
+
+    u32 pivGroupOf(Array* bases, Array* shapes, IRValue* base, i64* af, IRValue* inv)
+        {
+        for (u32 k = (u32)0; k < bases.count(); k = k + (u32)1)
+            {
+            if ((IRValue*)bases.get(k) != base)
+                continue;
+            Array* sh = (Array*)shapes.get(k);
+            if (((Number*)sh.get((u32)0)).asI64() != af[0] || ((Number*)sh.get((u32)1)).asI64() != af[2]
+                || ((Number*)sh.get((u32)2)).asI64() != af[3])
+                continue;
+            if (af[2] != (i64)0 && (IRValue*)sh.get((u32)3) != inv)
+                continue;
+            return k;
+            }
+        return bases.count();
+        }
+
+    // An immediate, or a Const (seen through one ZExt) that is not negative.
+    bool pivConstZ(Map* defOf, IROperand* o, i64* out)
+        {
+        if (o.kind() == (u8)OPK_IMMI)
+            {
+            out[0] = (i64)o.imm();
+            return true;
+            }
+        if (o.kind() != (u8)OPK_USE)
+            return false;
+        Object* dd = defOf.get((Hashable*)o.val());
+        if (dd == (Object*)0)
+            return false;
+        IRInsn* d = (IRInsn*)dd;
+        if (d.op().equals(String.withCString("ZExt")) && d.ops().count() >= (u32)1
+            && ((IROperand*)d.ops().get((u32)0)).kind() == (u8)OPK_USE)
+            {
+            Object* d2 = defOf.get((Hashable*)((IROperand*)d.ops().get((u32)0)).val());
+            if (d2 == (Object*)0)
+                return false;
+            d = (IRInsn*)d2;
+            }
+        if (!d.op().equals(String.withCString("Const")) || d.ops().count() < (u32)1)
+            return false;
+        IROperand* k = (IROperand*)d.ops().get((u32)0);
+        if (k.kind() != (u8)OPK_IMMI || k.imm() < (i32)0)
+            return false;
+        out[0] = (i64)k.imm();
+        return true;
+        }
+
+    // The index as iv*s + inv*invScale + off (the reference explains):
+    // r = [s, off, hasInv, invScale, index of inv in _pivInvs].
+    bool pivAffIdx(IROperand* o, IRValue* iv, Map* defOf, Map* defBlk, IRBlock* H, IRBlock* B,
+                   i64* r, u32 depth)
+        {
+        r[0] = (i64)0; r[1] = (i64)0; r[2] = (i64)0; r[3] = (i64)0; r[4] = (i64)0;
+        i64 c = (i64)0;
+        if (o.kind() == (u8)OPK_USE && o.val() == iv)
+            {
+            r[0] = (i64)1;
+            return true;
+            }
+        if (pivConstZ(defOf, o, &c))
+            {
+            r[1] = c;
+            return true;
+            }
+        if (o.kind() != (u8)OPK_USE || depth > (u32)16)
+            return false;
+        IRValue* v = o.val();
+        if (v.ty() == (String*)0 || !v.ty().equals(iv.ty()))
+            return false;
+        Object* blk = defBlk.get((Hashable*)v);
+        Object* dd = defOf.get((Hashable*)v);
+        if ((blk == (Object*)0 && dd == (Object*)0)
+            || (blk != (Object*)0 && (IRBlock*)blk != H && (IRBlock*)blk != B))
+            {
+            r[2] = (i64)1;
+            r[3] = (i64)1;
+            r[4] = (i64)_pivInvs.count();
+            _pivInvs.add((Object*)v);
+            return true;
+            }
+        if (dd == (Object*)0)
+            return false;
+        IRInsn* d = (IRInsn*)dd;
+        if (d.ops().count() < (u32)2)
+            return false;
+        i64 a[5];
+        i64 b[5];
+        if (d.op().equals(String.withCString("Add")))
+            {
+            if (!pivAffIdx((IROperand*)d.ops().get((u32)0), iv, defOf, defBlk, H, B, a, depth + (u32)1))
+                return false;
+            if (!pivAffIdx((IROperand*)d.ops().get((u32)1), iv, defOf, defBlk, H, B, b, depth + (u32)1))
+                return false;
+            if (a[2] != (i64)0 && b[2] != (i64)0)
+                return false;
+            r[0] = a[0] + b[0];
+            r[1] = a[1] + b[1];
+            r[2] = (a[2] != (i64)0 || b[2] != (i64)0) ? (i64)1 : (i64)0;
+            r[3] = a[2] != (i64)0 ? a[3] : b[3];
+            r[4] = a[2] != (i64)0 ? a[4] : b[4];
+            return true;
+            }
+        i64 k = (i64)0;
+        IROperand* x = (IROperand*)0;
+        if (d.op().equals(String.withCString("Mul")))
+            {
+            if (pivConstZ(defOf, (IROperand*)d.ops().get((u32)1), &k))
+                x = (IROperand*)d.ops().get((u32)0);
+            else if (pivConstZ(defOf, (IROperand*)d.ops().get((u32)0), &k))
+                x = (IROperand*)d.ops().get((u32)1);
+            }
+        else if (d.op().equals(String.withCString("Shl")) && pivConstZ(defOf, (IROperand*)d.ops().get((u32)1), &k)
+                 && k >= (i64)0 && k < (i64)31)
+            {
+            k = (i64)1 << k;
+            x = (IROperand*)d.ops().get((u32)0);
+            }
+        if (x == (IROperand*)0 || k <= (i64)0 || k > (i64)65536)
+            return false;
+        if (!pivAffIdx(x, iv, defOf, defBlk, H, B, a, depth + (u32)1))
+            return false;
+        r[0] = a[0] * k;
+        r[1] = a[1] * k;
+        r[2] = a[2];
+        r[3] = a[3] * k;
+        r[4] = a[4];
         return true;
         }
 
@@ -9612,8 +10100,70 @@ class OptProfile
         return seed;
         }
 
+    // base + ivInit*s + inv*invScale, built in the preheader.
+    IRValue* pivSeedAffine(IRBlock* PH, IRValue* base, String* ptrTy, String* ivTy,
+                           IROperand* ivInit, i64 initV, bool initZero, Array* shape)
+        {
+        i64 gs = ((Number*)shape.get((u32)0)).asI64();
+        bool hasInv = ((Number*)shape.get((u32)1)).asI64() != (i64)0;
+        i64 invScale = ((Number*)shape.get((u32)2)).asI64();
+        IRValue* idx = (IRValue*)0;
+        if (!initZero)
+            {
+            IROperand* initOp = ivInit.kind() == (u8)OPK_USE ? IROperand.useVal(ivInit.val())
+                                                             : IROperand.immI((i32)initV, ivTy);
+            if (gs == (i64)1 && initOp.kind() == (u8)OPK_USE)
+                idx = ivInit.val();
+            else
+                {
+                IRValue* m = new IRValue(ivTy);
+                IRInsn* mi = IRInsn.with(String.withCString("Mul"));
+                mi.setRes(m);
+                mi.add(initOp);
+                mi.add(IROperand.immI((i32)gs, ivTy));
+                PH.insns().add((Object*)mi);
+                idx = m;
+                }
+            }
+        if (hasInv)
+            {
+            IRValue* t = (IRValue*)shape.get((u32)3);
+            if (invScale != (i64)1)
+                {
+                IRValue* m = new IRValue(ivTy);
+                IRInsn* mi = IRInsn.with(String.withCString("Mul"));
+                mi.setRes(m);
+                mi.add(IROperand.useVal(t));
+                mi.add(IROperand.immI((i32)invScale, ivTy));
+                PH.insns().add((Object*)mi);
+                t = m;
+                }
+            if (idx != (IRValue*)0)
+                {
+                IRValue* a = new IRValue(ivTy);
+                IRInsn* ai = IRInsn.with(String.withCString("Add"));
+                ai.setRes(a);
+                ai.add(IROperand.useVal(idx));
+                ai.add(IROperand.useVal(t));
+                PH.insns().add((Object*)ai);
+                idx = a;
+                }
+            else
+                idx = t;
+            }
+        if (idx == (IRValue*)0)
+            return base;
+        IRValue* seed = new IRValue(ptrTy);
+        IRInsn* si = IRInsn.with(String.withCString("ElementAddr"));
+        si.setRes(seed);
+        si.add(IROperand.useVal(base));
+        si.add(IROperand.useVal(idx));
+        PH.insns().add((Object*)si);
+        return seed;
+        }
+
     void pivRewrite(IRFunc* fn, IRBlock* H, IRBlock* B, IRBlock* PH,
-                    String* ivTy, Array* bases, Array* groups, Map* defOf,
+                    String* ivTy, Array* bases, Array* groups, Array* shapes, Map* defOf,
                     IROperand* ivInit)
         {
         // Seed the pointer phi at `base + ivInit`, not `base`. Seeding with the
@@ -9630,6 +10180,9 @@ class OptProfile
             {
             IRValue* base = (IRValue*)bases.get(gi);
             String* ptrTy = base.ty();
+            Array* shape = (Array*)shapes.get(gi);
+            i64 gs = ((Number*)shape.get((u32)0)).asI64();
+            bool gHasInv = ((Number*)shape.get((u32)1)).asI64() != (i64)0;
 
             // A base that is an `AddrOf @sym` defined INSIDE the loop is a
             // constant address, so it moves to the preheader — otherwise the
@@ -9651,14 +10204,18 @@ class OptProfile
             IRInsn* stepInsn = IRInsn.with(String.withCString("ElementAddr"));
             stepInsn.setRes(pNext);
             stepInsn.add(IROperand.useVal(p));
-            stepInsn.add(IROperand.immI(_pivStep, ivTy));
+            stepInsn.add(IROperand.immI((i32)((i64)_pivStep * gs), ivTy));
             head.add((Object*)stepInsn);
 
             // `base + ivInit`, materialised in the PREHEADER when the loop does
             // not start at zero. In a HELPER, not inline: pivRewrite is already
             // near the 16 KB arm64 frame budget and these locals push it over.
             IRValue* phIn = base;
-            if (!pivInitZero)
+            if (gs != (i64)1 || gHasInv)
+                {
+                phIn = pivSeedAffine(PH, base, ptrTy, ivTy, ivInit, pivInitV, pivInitZero, shape);
+                }
+            else if (!pivInitZero)
                 {
                 phIn = pivSeed(PH, base, ptrTy, ivTy, ivInit, pivInitV);
                 }
@@ -10441,7 +10998,7 @@ class OptProfile
         // from the phi, not (p + K*j) + K. In the last copy that is the
         // back-edge value, which was otherwise a chain of two adds.
         Map* rebasedNext = new Map();
-        if (j > (u32)0 && c.vectorBody())
+        if (j > (u32)0)
             {
             for (u32 i = (u32)0; i < c.redVals().count(); i = i + (u32)1)
                 {

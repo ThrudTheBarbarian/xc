@@ -7,6 +7,8 @@
 #import "XTIROpcode.h"
 #import "XTIRValue.h"
 
+static NSArray<XTIRInsn*>* allInsns(XTIRBlock* b);
+
 @implementation XTIROptBlockMerge
 
 - (NSString*)passName
@@ -23,9 +25,96 @@
     {
     (void)outErrors;
     for (XTIRFunction* fn in mod.functions)
+        {
+        [self pruneStaleIncomings:fn];
         while ([self mergeOne:fn])
             ;
+        }
     return YES;
+    }
+
+// Drop every phi incoming whose block does not branch to the phi's block. A
+// pass that deletes an edge without its incomings leaves them (the var-trip
+// unroller's per-copy exits, once the trip is known to divide), and a stale
+// incoming is not harmless: the allocator keeps its value live to the end of
+// the named block, which in an unrolled loop is the whole body.
+- (void)pruneStaleIncomings:(XTIRFunction*)fn
+    {
+    NSMapTable<XTIRBlock*, NSMutableSet<XTIRBlock*>*>* preds = [NSMapTable strongToStrongObjectsMapTable];
+    for (XTIRBlock* bb in fn.blocks)
+        for (XTIROperand* o in bb.terminator.operands)
+            if (o.kind == XTIROperandKindBlock && o.blockRef)
+                {
+                NSMutableSet<XTIRBlock*>* ps = [preds objectForKey:o.blockRef];
+                if (!ps)
+                    {
+                    ps = [NSMutableSet set];
+                    [preds setObject:ps forKey:o.blockRef];
+                    }
+                [ps addObject:bb];
+                }
+    for (XTIRBlock* S in fn.blocks)
+        {
+        NSSet<XTIRBlock*>* ps = [preds objectForKey:S];
+        for (XTIRInsn* phi in S.phiNodes)
+            {
+            NSMutableArray<XTIROperand*>* ops = [NSMutableArray array];
+            BOOL hit = NO;
+            for (NSUInteger q = 0; q + 1 < phi.operands.count; q += 2)
+                {
+                if (![ps containsObject:phi.operands[q].blockRef])
+                    {
+                    hit = YES;
+                    continue;
+                    }
+                [ops addObject:phi.operands[q]];
+                [ops addObject:phi.operands[q + 1]];
+                }
+            if (hit && ops.count > 0)
+                [phi replaceOperands:ops];
+            }
+        }
+    // A block with ONE predecessor has phis of one incoming each, and each IS
+    // its value. They are folded away: loop-rotate will not touch a loop whose
+    // exit block already has phis, and the copy such a phi leaves in front of
+    // an exit kept matrix_mul's inner loop top-tested.
+    for (XTIRBlock* S in fn.blocks)
+        {
+        if (S == fn.blocks.firstObject || S.phiNodes.count == 0)
+            continue;
+        NSSet<XTIRBlock*>* ps = [preds objectForKey:S];
+        if (ps.count != 1)
+            continue;
+        XTIRBlock* P = ps.anyObject;
+        BOOL ok = YES;
+        for (XTIRInsn* phi in S.phiNodes)
+            if (phi.operands.count != 2 || phi.operands[0].blockRef != P || !phi.result || phi.memoryResult)
+                ok = NO;
+        if (!ok)
+            continue;
+        for (XTIRInsn* phi in S.phiNodes)
+            {
+            XTIRValueId from = phi.result.valueId;
+            XTIROperand* to = phi.operands[1];
+            for (XTIRBlock* bb in fn.blocks)
+                for (XTIRInsn* i in allInsns(bb))
+                    {
+                    if (i == phi)
+                        continue;
+                    NSMutableArray<XTIROperand*>* ops = [i.operands mutableCopy];
+                    BOOL hit = NO;
+                    for (NSUInteger q = 0; q < ops.count; q++)
+                        if (ops[q].kind == XTIROperandKindUse && ops[q].valueId == from)
+                            {
+                            ops[q] = to;
+                            hit = YES;
+                            }
+                    if (hit)
+                        [i replaceOperands:ops];
+                    }
+            }
+        [S.phiNodes removeAllObjects];
+        }
     }
 
 // Every instruction of a block, phis and terminator included.

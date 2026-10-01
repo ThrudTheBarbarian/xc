@@ -24,6 +24,7 @@
 #import "XTIROptBlockLayout.h"
 #import "XTIROptLoopRotate.h"
 #import "XTIROptBlockMerge.h"
+#import "XTIROptReassociate.h"
 #import "XTIROptVectorize.h"
 #import "XTIROptPointerIV.h"
 #import "XTIROptLoopReductionCollapse.h"
@@ -198,6 +199,10 @@
         XTIROptConstHoist* constHoist = [[XTIROptConstHoist alloc] init];
         constHoist.profile = profile; // enables global-addr hoist on arm64
         [p addPass:constHoist];
+        // Value-number again: LICM hoists each unrolled copy's invariant
+        // arithmetic separately, so a preheader can hold several copies of the
+        // same `i * 32` — four registers for one value in matrix_mul.
+        [p addPass:[[XTIROptRedundantLoadCSE alloc] init]];
         // Rotate top-tested loops to bottom-tested (profile-gated), so the
         // back-edge is a single conditional branch. Runs after the unrollers
         // (which expect the canonical top-tested shape) and the arithmetic passes
@@ -206,6 +211,9 @@
         // body (copies chained by plain branches) is one block when the
         // rotation below looks at it.
         [p addPass:[[XTIROptBlockMerge alloc] init]];
+        // With the unrolled body one block, shorten its loop-carried
+        // reduction chains to one op per iteration.
+        [p addPass:[[XTIROptReassociate alloc] init]];
         XTIROptLoopRotate* rotate = [[XTIROptLoopRotate alloc] init];
         rotate.profile = profile;
         [p addPass:rotate];

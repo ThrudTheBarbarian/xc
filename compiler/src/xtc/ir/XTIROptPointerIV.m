@@ -99,6 +99,123 @@ static BOOL affineOffset(XTIRValueId vid, XTIRValueId ivId,
     return NO;
     }
 
+// The general form of an index this pass can turn into a pointer:
+// iv*s + inv*invScale + off, where `inv` is one value defined outside the loop
+// (or none) and s, invScale, off are constants. `affineOffset` above is the
+// s == 1, no-inv case. A row-major 2-D walk is the shape that needs more:
+// matrix_mul reads a[i*32 + k] and b[k*32 + j] inside the k loop, which is
+// stride 1 plus an invariant row offset, and stride 32 plus an invariant
+// column.
+typedef struct
+    {
+    int64_t s, off, invScale;
+    XTIRValueId inv;
+    BOOL hasInv;
+    } XTPivAffine;
+
+static BOOL pivConstOperand(XTIROperand* o, NSDictionary<NSNumber*, XTIRInsn*>* defOf, int64_t* out)
+    {
+    if (o.kind == XTIROperandKindImmI)
+        {
+        *out = o.intValue;
+        return YES;
+        }
+    if (o.kind != XTIROperandKindUse)
+        return NO;
+    XTIRInsn* d = defOf[@(o.valueId)];
+    if (d && d.opcode == XTIROpZExt && d.operands.count >= 1 && d.operands[0].kind == XTIROperandKindUse)
+        d = defOf[@(d.operands[0].valueId)];
+    if (d && d.opcode == XTIROpConst && d.operands.count >= 1 && d.operands[0].kind == XTIROperandKindImmI
+        && d.operands[0].intValue >= 0)
+        {
+        *out = d.operands[0].intValue;
+        return YES;
+        }
+    return NO;
+    }
+
+static BOOL pivSameType(XTIRType* a, XTIRType* b)
+    {
+    return a && b && a.kind == b.kind && a.byteWidth == b.byteWidth;
+    }
+
+static BOOL pivAffineIndex(XTIROperand* o, XTIRValueId ivId, XTIRType* ivTy, XTIRFunction* fn,
+                           NSDictionary<NSNumber*, XTIRInsn*>* defOf,
+                           NSDictionary<NSNumber*, NSNumber*>* defBlkIdx,
+                           NSUInteger hi, NSUInteger biB, XTPivAffine* out, int depth)
+    {
+    XTPivAffine r = { 0, 0, 0, 0, NO };
+    int64_t c = 0;
+    if (o.kind == XTIROperandKindUse && o.valueId == ivId)
+        {
+        r.s = 1;
+        *out = r;
+        return YES;
+        }
+    if (pivConstOperand(o, defOf, &c))
+        {
+        r.off = c;
+        *out = r;
+        return YES;
+        }
+    if (o.kind != XTIROperandKindUse || depth > 16)
+        return NO;
+    XTIRValue* v = [fn valueForId:o.valueId];
+    if (!v || !pivSameType(v.type, ivTy))
+        return NO;
+    NSNumber* blk = defBlkIdx[@(o.valueId)];
+    XTIRInsn* d = defOf[@(o.valueId)];
+    if ((!blk && !d) || (blk && blk.unsignedIntegerValue != hi && blk.unsignedIntegerValue != biB))
+        {
+        r.inv = o.valueId;
+        r.invScale = 1;
+        r.hasInv = YES;
+        *out = r;
+        return YES;
+        }
+    if (!d || d.operands.count < 2)
+        return NO;
+    XTPivAffine a, b;
+    if (d.opcode == XTIROpAdd)
+        {
+        if (!pivAffineIndex(d.operands[0], ivId, ivTy, fn, defOf, defBlkIdx, hi, biB, &a, depth + 1) ||
+            !pivAffineIndex(d.operands[1], ivId, ivTy, fn, defOf, defBlkIdx, hi, biB, &b, depth + 1) ||
+            (a.hasInv && b.hasInv))
+            return NO;
+        r.s = a.s + b.s;
+        r.off = a.off + b.off;
+        r.hasInv = a.hasInv || b.hasInv;
+        r.inv = a.hasInv ? a.inv : b.inv;
+        r.invScale = a.hasInv ? a.invScale : b.invScale;
+        *out = r;
+        return YES;
+        }
+    int64_t k = 0;
+    XTIROperand* x = nil;
+    if (d.opcode == XTIROpMul)
+        {
+        if (pivConstOperand(d.operands[1], defOf, &k))
+            x = d.operands[0];
+        else if (pivConstOperand(d.operands[0], defOf, &k))
+            x = d.operands[1];
+        }
+    else if (d.opcode == XTIROpShl && pivConstOperand(d.operands[1], defOf, &k) && k >= 0 && k < 31)
+        {
+        k = (int64_t)1 << k;
+        x = d.operands[0];
+        }
+    if (!x || k <= 0 || k > 65536 ||
+        !pivAffineIndex(x, ivId, ivTy, fn, defOf, defBlkIdx, hi, biB, &a, depth + 1))
+        return NO;
+    r.s = a.s * k;
+    r.off = a.off * k;
+    r.hasInv = a.hasInv;
+    r.inv = a.inv;
+    r.invScale = a.invScale * k;
+    *out = r;
+    return YES;
+    }
+
 - (BOOL)runOnceForFunction:(XTIRFunction*)fn
     {
     NSMutableDictionary<NSNumber*, XTIRInsn*>* defOf = [NSMutableDictionary dictionary];
@@ -213,8 +330,9 @@ static BOOL affineOffset(XTIRValueId vid, XTIRValueId ivId,
         // dictionary itself would make the printed IR depend on NSNumber hash
         // bucket order — stable for one Foundation, not across two, and not
         // reproducible for anyone diffing against this output.
-        NSMutableDictionary<NSNumber*, NSMutableArray*>* groups = [NSMutableDictionary dictionary];
-        NSMutableArray<NSNumber*>* groupOrder = [NSMutableArray array];
+        NSMutableDictionary<NSString*, NSMutableArray*>* groups = [NSMutableDictionary dictionary];
+        NSMutableDictionary<NSString*, NSArray*>* groupShape = [NSMutableDictionary dictionary];
+        NSMutableArray<NSString*>* groupOrder = [NSMutableArray array];
         for (XTIRInsn* insn in B.instructions)
             {
             if (insn.opcode != XTIROpElementAddr || !insn.result || insn.operands.count < 2)
@@ -238,19 +356,47 @@ static BOOL affineOffset(XTIRValueId vid, XTIRValueId ivId,
             if (!bv || bv.type.kind != XTIRTypeKindPtr || !bv.type.pointeeType)
                 continue;
             int64_t off;
-            if (!affineOffset(idxOp.valueId, ivId, defOf, &off, 0) || off < 0)
+            XTPivAffine af = { 1, 0, 0, 0, NO };
+            if (affineOffset(idxOp.valueId, ivId, defOf, &off, 0))
+                af.off = off;
+            else if (!pivAffineIndex(idxOp, ivId, ivPhi.result.type, fn, defOf, defBlkIdx, hi, biB, &af, 0)
+                     || af.s <= 0 || af.s * step > 65536)
                 continue;
-            NSMutableArray* g = groups[@(baseOp.valueId)];
+            if (af.off < 0)
+                continue;
+            // A group is one pointer: the same base, stride and invariant term.
+            NSString* key = [NSString stringWithFormat:@"%lu:%lld:%d:%lu:%lld",
+                             (unsigned long)baseOp.valueId, (long long)af.s, (int)af.hasInv,
+                             (unsigned long)af.inv, (long long)af.invScale];
+            NSMutableArray* g = groups[key];
             if (!g)
                 {
                 g = [NSMutableArray array];
-                groups[@(baseOp.valueId)] = g;
-                [groupOrder addObject:@(baseOp.valueId)];
+                groups[key] = g;
+                [groupOrder addObject:key];
+                groupShape[key] = @[ @(baseOp.valueId), @(af.s), @(af.hasInv), @(af.inv), @(af.invScale) ];
                 }
-            [g addObject:@[ insn, @(off) ]];
+            [g addObject:@[ insn, @(af.off) ]];
             }
         if (groups.count == 0)
             continue;
+        // Over the cap below, keep only the plain stride-1 groups: a strided or
+        // offset access must not cost a loop the pointers it already had.
+        if (groups.count > 3)
+            {
+            NSMutableArray* plain = [NSMutableArray array];
+            for (NSString* key in groupOrder)
+                {
+                NSArray* sh = groupShape[key];
+                if ([sh[1] longLongValue] == 1 && ![sh[2] boolValue])
+                    [plain addObject:key];
+                else
+                    [groups removeObjectForKey:key];
+                }
+            [groupOrder setArray:plain];
+            if (groups.count == 0)
+                continue;
+            }
         // Register-pressure cap: each base becomes a loop-carried pointer phi,
         // and the unroller threads each through the unrolled copies (~2 live
         // values per pointer). Too many arrays overflow the GP home pool (9
@@ -323,8 +469,14 @@ static BOOL affineOffset(XTIRValueId vid, XTIRValueId ivId,
         NSMutableDictionary<NSNumber*, NSNumber*>* replace = [NSMutableDictionary dictionary]; // old EA result → new value
         NSMutableSet<XTIRInsn*>* removeEAs = [NSMutableSet set];
 
-        for (NSNumber* baseKey in groupOrder)
+        for (NSString* gkey in groupOrder)
             {
+            NSArray* shape = groupShape[gkey];
+            NSNumber* baseKey = shape[0];
+            int64_t gs = [shape[1] longLongValue];
+            BOOL gHasInv = [shape[2] boolValue];
+            XTIRValueId gInv = [shape[3] unsignedIntegerValue];
+            int64_t gInvScale = [shape[4] longLongValue];
             XTIRValue* baseVal = [fn valueForId:baseKey.unsignedIntegerValue];
             XTIRType* ptrTy = baseVal.type;
             // If the base is an `AddrOf @sym` defined inside the loop, hoist it to
@@ -346,7 +498,68 @@ static BOOL affineOffset(XTIRValueId vid, XTIRValueId ivId,
             // it. Appending to `instructions` puts it before the terminator,
             // which is a separate property.
             XTIRValueId phIncoming = baseKey.unsignedIntegerValue;
-            if (!initIsZero)
+            if (gs != 1 || gHasInv)
+                {
+                // base + ivInit*s + inv*invScale, built in the preheader.
+                XTIRValueId idx = 0;
+                BOOL haveIdx = NO;
+                if (!initIsZero)
+                    {
+                    XTIROperand* initOp = (ivInit.kind == XTIROperandKindImmI)
+                                              ? [XTIROperand immIWithType:ivTy value:ivInit.intValue]
+                                              : [XTIROperand useWithValueId:ivInit.valueId];
+                    if (gs == 1 && initOp.kind == XTIROperandKindUse)
+                        idx = initOp.valueId;
+                    else
+                        {
+                        XTIRValue* m = newValIn(ivTy, PH);
+                        [PH.instructions addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpMul
+                                                                             result:m
+                                                                           operands:@[ initOp, [XTIROperand immIWithType:ivTy value:gs] ]
+                                                                             dbgLoc:nil]];
+                        idx = m.valueId;
+                        }
+                    haveIdx = YES;
+                    }
+                if (gHasInv)
+                    {
+                    XTIRValueId t = gInv;
+                    if (gInvScale != 1)
+                        {
+                        XTIRValue* m = newValIn(ivTy, PH);
+                        [PH.instructions addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpMul
+                                                                             result:m
+                                                                           operands:@[ [XTIROperand useWithValueId:gInv],
+                                                                                       [XTIROperand immIWithType:ivTy value:gInvScale] ]
+                                                                             dbgLoc:nil]];
+                        t = m.valueId;
+                        }
+                    if (haveIdx)
+                        {
+                        XTIRValue* a = newValIn(ivTy, PH);
+                        [PH.instructions addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpAdd
+                                                                             result:a
+                                                                           operands:@[ [XTIROperand useWithValueId:idx],
+                                                                                       [XTIROperand useWithValueId:t] ]
+                                                                             dbgLoc:nil]];
+                        idx = a.valueId;
+                        }
+                    else
+                        idx = t;
+                    haveIdx = YES;
+                    }
+                if (haveIdx)
+                    {
+                    XTIRValue* seed = newValIn(ptrTy, PH);
+                    [PH.instructions addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpElementAddr
+                                                                         result:seed
+                                                                       operands:@[ [XTIROperand useWithValueId:baseKey.unsignedIntegerValue],
+                                                                                   [XTIROperand useWithValueId:idx] ]
+                                                                         dbgLoc:nil]];
+                    phIncoming = seed.valueId;
+                    }
+                }
+            else if (!initIsZero)
                 {
                 XTIRValue* seed = newValIn(ptrTy, PH);
                 XTIROperand* idxOp = (ivInit.kind == XTIROperandKindImmI)
@@ -365,7 +578,7 @@ static BOOL affineOffset(XTIRValueId vid, XTIRValueId ivId,
                                                            result:pNext
                                                          operands:@[ [XTIROperand useWithValueId:p.valueId],
                                                                      [XTIROperand immIWithType:ivTy
-                                                                                         value:step] ]
+                                                                                         value:step * gs] ]
                                                            dbgLoc:nil];
             [newBodyHead addObject:stepInsn];
             XTIRInsn* pPhi = [[XTIRInsn alloc] initWithOpcode:XTIROpPhi
@@ -374,7 +587,7 @@ static BOOL affineOffset(XTIRValueId vid, XTIRValueId ivId,
                                                                  [XTIROperand blockWithRef:B], [XTIROperand useWithValueId:pNext.valueId] ]
                                                        dbgLoc:nil];
             [H.phiNodes addObject:pPhi];
-            for (NSArray* acc in groups[baseKey])
+            for (NSArray* acc in groups[gkey])
                 {
                 XTIRInsn* E = acc[0];
                 int64_t off = [acc[1] longLongValue];
