@@ -98,6 +98,14 @@ static BOOL pureHoistable(XTIRInsn* insn)
         return NO;
 
     NSMutableDictionary<NSNumber*, XTIRInsn*>* defOf = [NSMutableDictionary dictionary];
+    // Values that are an incoming of a vector phi (see isHoistable).
+    NSMutableSet<NSNumber*>* vecPhiIns = [NSMutableSet set];
+    for (XTIRBlock* pb in blocks)
+        for (XTIRInsn* p in pb.phiNodes)
+            if (p.result && p.result.type.kind == XTIRTypeKindVec)
+                for (XTIROperand* o in p.operands)
+                    if (o.kind == XTIROperandKindUse)
+                        [vecPhiIns addObject:@(o.valueId)];
     NSMutableDictionary<NSNumber*, NSNumber*>* defBlk = [NSMutableDictionary dictionary];
     NSMutableArray<NSMutableArray<NSNumber*>*>* preds = [NSMutableArray array];
     NSMutableArray<NSMutableArray<NSNumber*>*>* succs = [NSMutableArray array];
@@ -248,6 +256,14 @@ static BOOL pureHoistable(XTIRInsn* insn)
               return [invariant containsObject:@(o.valueId)];
             };
             BOOL (^isHoistable)(XTIRInsn*) = ^BOOL(XTIRInsn* insn) {
+              // A vector feeding a phi is an accumulator's seed. The back ends
+              // give it the accumulator's register, which the loop then
+              // updates in place, so it must be recomputed on every entry —
+              // hoisted out of an enclosing loop, the second entry started
+              // from the first one's final sum.
+              if (insn.result && insn.result.type.kind == XTIRTypeKindVec &&
+                  [vecPhiIns containsObject:@(insn.result.valueId)])
+                  return NO;
               if (insn.opcode == XTIROpLoad)
                   {
                   if (hasMemWrite || insn.operands.count < 1 ||

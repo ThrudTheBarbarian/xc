@@ -321,7 +321,44 @@ static XTIRInsn* rebuiltInsn(XTIRInsn* insn, NSArray<XTIROperand*>* newOps)
             }
         }
 
-    for (XTIRBlock* bb in fn.blocks)
+    // The visit order: declaration order, except (late) that a block waits for
+    // its sole predecessor. A sweep that places nothing takes the first
+    // pending block, so a cycle cannot stall it.
+    NSMutableArray<XTIRBlock*>* order = [NSMutableArray arrayWithArray:fn.blocks];
+    if (self.late)
+        {
+        NSMutableArray<XTIRBlock*>* pending = [NSMutableArray arrayWithArray:fn.blocks];
+        NSMutableSet<NSValue*>* placed = [NSMutableSet set];
+        [order removeAllObjects];
+        while (pending.count)
+            {
+            BOOL progressed = NO;
+            NSUInteger q = 0;
+            while (q < pending.count)
+                {
+                XTIRBlock* b = pending[q];
+                NSArray<XTIRBlock*>* ps = predsOf[[NSValue valueWithNonretainedObject:b]];
+                if (ps.count == 1 && ps[0] != b &&
+                    ![placed containsObject:[NSValue valueWithNonretainedObject:ps[0]]])
+                    {
+                    q++;
+                    continue;
+                    }
+                [order addObject:b];
+                [placed addObject:[NSValue valueWithNonretainedObject:b]];
+                [pending removeObjectAtIndex:q];
+                progressed = YES;
+                }
+            if (!progressed)
+                {
+                [order addObject:pending[0]];
+                [placed addObject:[NSValue valueWithNonretainedObject:pending[0]]];
+                [pending removeObjectAtIndex:0];
+                }
+            }
+        }
+
+    for (XTIRBlock* bb in order)
         {
         NSMutableDictionary<NSString*, NSNumber*>* availPure =
             [NSMutableDictionary dictionary];
@@ -353,8 +390,10 @@ static XTIRInsn* rebuiltInsn(XTIRInsn* insn, NSArray<XTIROperand*>* newOps)
                 NSString* pa = [NSString stringWithFormat:@"o%u|", (unsigned)XTIROpAddrOf];
                 NSString* pe = [NSString stringWithFormat:@"o%u|", (unsigned)XTIROpElementAddr];
                 NSString* pf = [NSString stringWithFormat:@"o%u|", (unsigned)XTIROpFieldAddr];
+                NSString* pc = [NSString stringWithFormat:@"o%u|", (unsigned)XTIROpConst];
+                BOOL late = self.late;
                 [outPure[ik] enumerateKeysAndObjectsUsingBlock:^(NSString* k, id v, BOOL* st) {
-                  if ([k hasPrefix:pa] || [k hasPrefix:pe] || [k hasPrefix:pf])
+                  if ([k hasPrefix:pa] || [k hasPrefix:pe] || [k hasPrefix:pf] || (late && ![k hasPrefix:pc]))
                       availPure[k] = v;
                 }];
                 }

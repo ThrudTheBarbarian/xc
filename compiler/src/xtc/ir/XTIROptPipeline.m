@@ -26,6 +26,7 @@
 #import "XTIROptBlockMerge.h"
 #import "XTIROptReassociate.h"
 #import "XTIROptVectorize.h"
+#import "XTIROptOuterVectorize.h"
 #import "XTIROptPointerIV.h"
 #import "XTIROptLoopReductionCollapse.h"
 #import "XTIROptNarrow.h"
@@ -163,6 +164,12 @@
         // Auto-vectorise elementwise map loops to NEON SIMD (profile-gated),
         // BEFORE the unrollers (which would otherwise replicate the scalar body
         // and defeat recognition). The unrollers skip vector-op bodies.
+        // A loop around a reduction loop: vectorise across the outer loop's
+        // neighbouring iterations (matrix multiply's j), before the ordinary
+        // vectoriser looks at the inner loops.
+        XTIROptOuterVectorize* outerVec = [[XTIROptOuterVectorize alloc] init];
+        outerVec.profile = profile;
+        [p addPass:outerVec];
         XTIROptVectorize* vectorize = [[XTIROptVectorize alloc] init];
         vectorize.profile = profile;
         [p addPass:vectorize];
@@ -202,7 +209,10 @@
         // Value-number again: LICM hoists each unrolled copy's invariant
         // arithmetic separately, so a preheader can hold several copies of the
         // same `i * 32` — four registers for one value in matrix_mul.
-        [p addPass:[[XTIROptRedundantLoadCSE alloc] init]];
+        XTIROptRedundantLoadCSE* lateCSE = [[XTIROptRedundantLoadCSE alloc] init];
+        lateCSE.crossBlock = profile.hoistsLocalAddr;
+        lateCSE.late = YES;
+        [p addPass:lateCSE];
         // Rotate top-tested loops to bottom-tested (profile-gated), so the
         // back-edge is a single conditional branch. Runs after the unrollers
         // (which expect the canonical top-tested shape) and the arithmetic passes

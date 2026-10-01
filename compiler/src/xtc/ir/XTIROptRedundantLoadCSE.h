@@ -33,6 +33,13 @@ NS_ASSUME_NONNULL_BEGIN
 /// it pays: it is what makes a diamond's arms convertible.
 @interface XTIROptRedundantLoadCSE : NSObject <XTIROptPass>
 @property(nonatomic) BOOL crossBlock;
+/// The run after LICM, when the unrollers, the vectoriser and the constant
+/// hoister are done: every pure op but a Const crosses a block boundary (not
+/// only addresses), and a block whose sole predecessor is listed after it waits
+/// for that predecessor. A `&&` condition block is created after the loop body
+/// it guards, so in declaration order the body inherited nothing from it and
+/// insertion sort recomputed `j - 1` and reloaded `a[j-1]` in the body.
+@property(nonatomic) BOOL late;
 @end
 
 NS_ASSUME_NONNULL_END

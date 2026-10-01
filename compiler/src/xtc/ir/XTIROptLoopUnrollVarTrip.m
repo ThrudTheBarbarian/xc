@@ -195,17 +195,15 @@ static XTIRInsn* buildLike(XTIRInsn* insn, XTIRValue* _Nullable result,
             continue;
         if (H.phiNodes.count > 1 && !allowMulti)
             continue;
-        // Skip already-vectorised reduction loops (vector accumulator phi):
-        // unrolling would clone the vector phi, which the backend's in-place
-        // accumulate coalescing can't represent.
-        BOOL hasVecPhi = NO;
+        // Skip the vectoriser's reduction loops: it has already unrolled them
+        // into several vector accumulators. A loop with ONE vector accumulator
+        // is an outer-vectorised one, which nothing else unrolls; the copies
+        // chain it serially like any carried value, so no lane changes order.
+        NSUInteger vecPhis = 0;
         for (XTIRInsn* p in H.phiNodes)
             if (p.result && p.result.type.kind == XTIRTypeKindVec)
-                {
-                hasVecPhi = YES;
-                break;
-                }
-        if (hasVecPhi)
+                vecPhis++;
+        if (vecPhis > 1)
             continue;
 
         // The header must be side-effect free (it runs once per N bodies after
