@@ -868,6 +868,8 @@ pointer gW32WglGetProc;
 pointer gW32WglCreateAttribs; // wglCreateContextAttribsARB, or 0 (the core-profile request)
 pointer gW32WglSwapInterval;  // wglSwapIntervalEXT, or 0
 pointer gW32GlViewport;       // glViewport, resolved with the rest
+pointer gW32GlGetInt;         // glGetIntegerv: the GPU's size limits
+i32 gW32GlTestMax;            // a test's lower limit on the drawable (0 = the GPU's own)
 
 typedef pointer WglCreateFn(pointer hdc);
 typedef pointer WglCreateAttribsFn(pointer hdc, pointer share, i32* attribs);
@@ -876,6 +878,7 @@ typedef i32 WglDeleteCtxFn(pointer ctx);
 typedef pointer WglGetProcFn(u8* name);
 typedef i32 WglSwapIntervalFn(i32 interval);
 typedef void GlViewportFn(i32 x, i32 y, i32 w, i32 h);
+typedef void GlGetIntFn(u32 pname, i32* out);
 
 // ── the offscreen surface (the one-surface model, as on AppKit) ───────────────────────────
 // The GL never draws to the screen.  It renders into a framebuffer object the driver owns -- the
@@ -952,6 +955,7 @@ void w32_gl_load(void)
     gW32WglDeleteCtx = GetProcAddress(gW32GlLib, (u8*)"wglDeleteContext");
     gW32WglGetProc = GetProcAddress(gW32GlLib, (u8*)"wglGetProcAddress");
     gW32GlViewport = GetProcAddress(gW32GlLib, (u8*)"glViewport");
+    gW32GlGetInt = GetProcAddress(gW32GlLib, (u8*)"glGetIntegerv");
     if (gW32WglGetProc != (pointer)0)
         {
         WglGetProcFn* g = (WglGetProcFn*)gW32WglGetProc;
@@ -996,6 +1000,12 @@ void w32_gl_viewport(pointer peer)
     GetClientRect(gW32GlHwnd[i], (pointer)&r);
     i32 w = r.right - r.left;
     i32 hh = r.bottom - r.top;
+    // Offscreen, the drawable is the framebuffer, which may have been clamped below the view's size.
+    if (gW32GlOff[i] != (i32)0 && gW32GlPW[i] > (i32)0)
+        {
+        w = gW32GlPW[i];
+        hh = gW32GlPH[i];
+        }
     if (w < (i32)1)
         {
         w = (i32)1;
@@ -1075,8 +1085,39 @@ void w32_gl_free_offscreen(i32 i)
     gW32GlPW[i] = (i32)0;
     gW32GlPH[i] = (i32)0;
     }
+// The largest drawable the current context can render: a renderbuffer and a viewport must both
+// hold it (GL_MAX_RENDERBUFFER_SIZE, GL_MAX_VIEWPORT_DIMS), and the texture limit is the one an old
+// integrated GPU runs out of first (GL_MAX_TEXTURE_SIZE).  0 = unknown.
+i32 w32_gl_max_px()
+    {
+    i32 m = (i32)0;
+    if (gW32GlGetInt != (pointer)0)
+        {
+        GlGetIntFn* gi = (GlGetIntFn*)gW32GlGetInt;
+        i32 v[2];
+        v[0] = (i32)0;
+        v[1] = (i32)0;
+        gi((u32)$0D33, &v[0]); // GL_MAX_TEXTURE_SIZE
+        m = v[0];
+        v[0] = (i32)0;
+        gi((u32)$84E8, &v[0]); // GL_MAX_RENDERBUFFER_SIZE
+        if (v[0] > (i32)0 && (m <= (i32)0 || v[0] < m)) { m = v[0]; }
+        v[0] = (i32)0;
+        v[1] = (i32)0;
+        gi((u32)$0D3A, &v[0]); // GL_MAX_VIEWPORT_DIMS
+        if (v[0] > (i32)0 && (m <= (i32)0 || v[0] < m)) { m = v[0]; }
+        if (v[1] > (i32)0 && (m <= (i32)0 || v[1] < m)) { m = v[1]; }
+        }
+    if (gW32GlTestMax > (i32)0 && (m <= (i32)0 || gW32GlTestMax < m))
+        {
+        m = gW32GlTestMax;
+        }
+    return m;
+    }
 // Make (or remake at the child window's client size) the framebuffer the renderer draws into, and
-// leave it bound.  1 on success; 0 = no framebuffer objects here, keep the visible plane.
+// leave it bound.  A size beyond the GPU's limit (a maximised window at 150-200% scaling on an old
+// integrated GPU, or one stretched across two monitors) is scaled down by one factor on both sides,
+// keeping the aspect; the paint's StretchDIBits stretches the frame back over the view.  1 on success; 0 = no framebuffer objects here, keep the visible plane.
 i32 w32_gl_offscreen(i32 i)
     {
     w32_gl_fbo_load();
@@ -1088,6 +1129,20 @@ i32 w32_gl_offscreen(i32 i)
     GetClientRect(gW32GlHwnd[i], (pointer)&r);
     i32 w = (i32)(r.right - r.left);
     i32 h = (i32)(r.bottom - r.top);
+    i32 m = w32_gl_max_px();
+    if (m > (i32)0 && (w > m || h > m))
+        {
+        if (w >= h)
+            {
+            h = (h * m) / w;
+            w = m;
+            }
+        else
+            {
+            w = (w * m) / h;
+            h = m;
+            }
+        }
     if (w < (i32)1) { w = (i32)1; }
     if (h < (i32)1) { h = (i32)1; }
     W32GlBindFn* bind = (W32GlBindFn*)gW32BindFb;

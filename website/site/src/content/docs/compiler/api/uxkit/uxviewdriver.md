@@ -152,6 +152,16 @@ Windows clips a parent's painting around its children — nothing the toolkit dr
 could land on the map at all. A GL without framebuffer objects keeps the visible
 child window. GTK and the web still put the GL on a plane of its own.
 
+**The drawable never exceeds what the GPU can hold.** Its size in pixels is the
+view's size at the display's scale, but a maximised window on a 5K display, or
+one stretched across two monitors, can be larger than an older GPU's limit
+(`GL_MAX_TEXTURE_SIZE`, `GL_MAX_RENDERBUFFER_SIZE`, `GL_MAX_VIEWPORT_DIMS`). Then
+AppKit, Win32 and the web shrink the drawable by one factor on both sides, so
+the aspect is kept, and stretch the frame back over the view. The picture gets
+softer but is never cropped. The viewport follows the drawable, so the renderer
+needs no change. On the web the canvas keeps the view's CSS size and the
+browser does the stretching.
+
 **The present cadence is the rule GL rests on: present happens at most once per
 loop turn, after damage is consolidated, and the driver owns the frame clock.**
 A GL view is the bottom of the stack and every other view is above it, so

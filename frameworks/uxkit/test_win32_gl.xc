@@ -181,6 +181,32 @@ class OverView : UXView
         Stdio.printf("over-the-map pixel %d %d %d\n", (i32)(c2 & (u32)255), (i32)((c2 >> (u32)8) & (u32)255), (i32)((c2 >> (u32)16) & (u32)255));
         ck((i32)(c2 & (u32)255) > (i32)200 && (i32)((c2 >> (u32)8) & (u32)255) < (i32)60, "a 2-D view after the map is painted OVER it");
 
+        // The drawable is CLAMPED to what the GPU can hold, keeping the aspect, and the paint stretches
+        // the frame back over the view.  The real limit is far above 640, so the test lowers it to 64:
+        // 640x400 must become 64x40, the viewport must follow, and the window must show the frame all
+        // the way to the view's far corner (stretched, not cropped).
+        gW32GlTestMax = (i32)64;
+        map.presentGL(); // notices the drawable is over the limit and remakes it for the next frame
+        Stdio.printf("clamped drawable %dx%d\n", gW32GlPW[(i32)0], gW32GlPH[(i32)0]);
+        ck(gW32GlPW[(i32)0] == (i32)64 && gW32GlPH[(i32)0] == (i32)40, "the drawable is clamped to 64 with the view's aspect");
+        gi((u32)0x0BA2, &viewport[0]); // GL_VIEWPORT
+        ck(viewport[2] == (i32)64 && viewport[3] == (i32)40, "and the viewport follows the drawable");
+        cc(0.125, 0.75, 0.25, 1.0);
+        cl((u32)0x00004000);
+        map.presentGL();
+        win.displayAll();
+        UpdateWindow(hw);
+        pointer wdc3 = GetDC(hw);
+        u32 cFar = GetPixel(wdc3, (i32)636, (i32)396);
+        u32 cNear = GetPixel(wdc3, (i32)3, (i32)3);
+        ReleaseDC(hw, wdc3);
+        Stdio.printf("clamped frame: near %06x far %06x (COLORREF)\n", cNear, cFar);
+        bool farG = ((cFar >> (u32)8) & (u32)255) > (u32)160 && (cFar & (u32)255) < (u32)60;
+        bool nearG = ((cNear >> (u32)8) & (u32)255) > (u32)160 && (cNear & (u32)255) < (u32)60;
+        ck(farG && nearG, "the clamped frame still fills the whole view");
+        gW32GlTestMax = (i32)0;
+        map.presentGL(); // back to the full size for the rest
+
         // The token is opaque and makeGL is idempotent: a second call is the same context.
         pointer tok = map.glContext();
         ck(map.makeGL() && map.glContext() == tok, "makeGL is idempotent");

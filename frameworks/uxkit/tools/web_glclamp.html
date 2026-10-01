@@ -1,0 +1,29 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>running</title>
+<style>html,body{margin:0}canvas{display:block}</style>
+<canvas id="ux-canvas" width="440" height="300"></canvas>
+<script>
+  // run_web_glclamp.sh's page.  The GPU limit is lowered so the clamp is exercised; each phase the
+  // app reports is checked against the canvases themselves, and the verdict goes in the title.
+  globalThis.uxGlTestMax = 64;
+  const fails = [];
+  const want = (ok, what) => { if (!ok) fails.push(what); };
+  const glCanvases = () => [...document.querySelectorAll('canvas')].filter((c) => c.id !== 'ux-canvas');
+  globalThis.xccImports = { env: {
+    ux_test_phase: (n) => {
+      const cs = glCanvases();
+      want(cs.length === 1, `phase ${n}: ${cs.length} GL canvases, want 1`);
+      const c = cs[0];
+      if (!c) return;
+      const [cw, chh] = n === 3 ? [400, 240] : [300, 180];
+      const ph = Math.floor(cw * (globalThis.devicePixelRatio || 1) * 64 / Math.max(cw, chh) * chh / cw);
+      want(c.style.width === cw + 'px' && c.style.height === chh + 'px', `phase ${n}: css ${c.style.width}x${c.style.height}, want ${cw}x${chh}`);
+      want(c.width === 64, `phase ${n}: pixel width ${c.width}, want 64`);
+      want(Math.abs(c.height - Math.floor(64 * chh / cw)) <= 1, `phase ${n}: pixel height ${c.height}, want ~${Math.floor(64 * chh / cw)}`);
+      if (n === 3) document.title = fails.length ? 'FAIL: ' + fails.join('; ') : 'PASS: one canvas, clamped to 64 with its aspect, stretched over the view, following a resize';
+    },
+  } };
+</script>
+<script src="ux_web_browser.js"></script>
+<script src="test_web_glclamp.js"></script>

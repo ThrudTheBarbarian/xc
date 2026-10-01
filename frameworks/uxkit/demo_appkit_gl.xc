@@ -35,6 +35,10 @@ u8* getenv(u8* name);
 i32 ux_ak_gl_surface_size(pointer peer, i32* out2);
 i32 ux_ak_gl_backing(pointer peer, i32* out4);
 i32 ux_ak_window_to_scale(i32 handle, i32 scale);
+void ux_ak_gl_test_max(i32 px);
+void ux_ak_gl_test_fill(pointer peer, i32 rgb);
+i32 ux_ak_gl_grab_window(pointer peer, u8* path);
+i32 ux_ak_gl_grab_pixel(i32 x, i32 y);
 
 i32 gFails = 0;
 void ck(bool ok, u8* what)
@@ -128,6 +132,31 @@ class MapView : UXGLView
             {
             Stdio.printf("  no 2x screen here: backing-scale check skipped\n");
             }
+
+        // The drawable is CLAMPED to what the GPU can hold, keeping the aspect, and the frame is
+        // stretched to fill the view.  The real limit here is far above any window, so the probe
+        // lowers it: 64 px for a view wider than tall must give 64 across and the same aspect down.
+        ux_ak_gl_test_max((i32)64);
+        v.presentGL(); // notices the drawable is over the limit; the frame after is at the clamp
+        ux_ak_gl_backing((pointer)v, &bk[(i32)0]);
+        ux_ak_gl_surface_size((pointer)v, &sz[(i32)0]);
+        Stdio.printf("  clamped to 64: view %dx%d px, surface %dx%d px\n", bk[(i32)2], bk[(i32)3], sz[(i32)0], sz[(i32)1]);
+        i32 longSide = sz[(i32)0] > sz[(i32)1] ? sz[(i32)0] : sz[(i32)1];
+        ck(longSide == (i32)64, "the drawable's long side is the GPU's limit");
+        i32 expectH = (bk[(i32)3] * (i32)64) / bk[(i32)2];
+        ck(sz[(i32)0] == (i32)64 && (sz[(i32)1] - expectH) * (sz[(i32)1] - expectH) <= (i32)1, "and it keeps the view's aspect");
+        ux_ak_gl_test_fill((pointer)v, (i32)$20B040);
+        v.presentGL();
+        win.displayAll();
+        UXRect vf = v.frame();
+        ux_ak_gl_grab_window((pointer)v, (u8*)"/tmp/gl_clamped.png");
+        i32 nearFar = ux_ak_gl_grab_pixel((i32)vf.x + (i32)vf.w - (i32)3, (i32)vf.y + (i32)vf.h - (i32)3);
+        i32 nearNear = ux_ak_gl_grab_pixel((i32)vf.x + (i32)2, (i32)vf.y + (i32)2);
+        Stdio.printf("  frame in the window: near corner %06x, far corner %06x\n", nearNear, nearFar);
+        bool green1 = ((nearFar >> (i32)8) & (i32)255) > (i32)140 && ((nearFar >> (i32)16) & (i32)255) < (i32)80;
+        bool green2 = ((nearNear >> (i32)8) & (i32)255) > (i32)140 && ((nearNear >> (i32)16) & (i32)255) < (i32)80;
+        ck(green1 && green2, "the clamped frame still fills the whole view (stretched, not cropped)");
+        ux_ak_gl_test_max((i32)0);
 
         ck(overlay.isHidden() == false, "the 2D sibling over the map is still there");
         Stdio.printf("  painted=%d, glKind=%d\n", v.painted, v.glKind());

@@ -280,23 +280,54 @@
   for (const name of glNames)
     env[name] = (...args) => (curGl ? curGl[name](...args) : undefined);
 
+  // The drawable's pixel size: the view's CSS size at the device pixel ratio, scaled down by one
+  // factor on both sides if that is more than this context can hold (a maximised window at 2x on an
+  // old integrated GPU), so the aspect is kept.  The canvas keeps the view's CSS size, so the
+  // browser stretches the frame over it.  uxGlTestMax lowers the limit for a test.
+  const glPixelSize = (gl, w, hh) => {
+    const dpr = globalThis.devicePixelRatio || 1;
+    let pw = Math.max(1, Math.round(w * dpr)), ph = Math.max(1, Math.round(hh * dpr));
+    let m = 0;
+    if (gl) {
+      const vp = gl.getParameter(gl.MAX_VIEWPORT_DIMS) || [0, 0];
+      m = Math.min(gl.getParameter(gl.MAX_TEXTURE_SIZE) || Infinity,
+                   gl.getParameter(gl.MAX_RENDERBUFFER_SIZE) || Infinity, vp[0] || Infinity, vp[1] || Infinity);
+    }
+    if (globalThis.uxGlTestMax > 0) m = m > 0 ? Math.min(m, globalThis.uxGlTestMax) : globalThis.uxGlTestMax;
+    if (m > 0 && m !== Infinity && (pw > m || ph > m)) {
+      const k = m / Math.max(pw, ph);
+      pw = Math.max(1, Math.floor(pw * k));
+      ph = Math.max(1, Math.floor(ph * k));
+    }
+    return [pw, ph];
+  };
+  // Made with the tree, and called again on every realize: a view already given a canvas keeps it and
+  // follows its frame (a second canvas per realize would stack up under the 2-D one).  Setting a
+  // canvas's pixel size clears it, so that happens only when the size changes.
   env.ux_gl_create = (h, node, x, y, w, hh) => {
     const s = wins.get(h);
     if (!s) return;
     let arr = glViews.get(h);
     if (!arr) { arr = []; glViews.set(h, arr); }
-    const dpr = globalThis.devicePixelRatio || 1;
-    const el = document.createElement('canvas');
-    el.style.position = 'absolute';
-    el.style.left = (s.x + x) + 'px';
-    el.style.top = (s.y + y) + 'px';
-    el.style.width = w + 'px';
-    el.style.height = hh + 'px';
-    el.width = Math.round(w * dpr);
-    el.height = Math.round(hh * dpr);
-    canvas.parentNode.insertBefore(el, canvas); // BELOW the 2D canvas: the map first
-    s.hasGl = true;
-    arr.push({ node, el, gl: el.getContext('webgl2', { alpha: true, premultipliedAlpha: true, antialias: false }) });
+    let e = arr.find((v) => v.node === node);
+    if (!e) {
+      const el = document.createElement('canvas');
+      el.style.position = 'absolute';
+      canvas.parentNode.insertBefore(el, canvas); // BELOW the 2D canvas: the map first
+      s.hasGl = true;
+      e = { node, el, gl: el.getContext('webgl2', { alpha: true, premultipliedAlpha: true, antialias: false }) };
+      arr.push(e);
+    }
+    e.el.style.left = (s.x + x) + 'px';
+    e.el.style.top = (s.y + y) + 'px';
+    e.el.style.width = w + 'px';
+    e.el.style.height = hh + 'px';
+    const [pw, ph] = glPixelSize(e.gl, w, hh);
+    if (e.el.width !== pw || e.el.height !== ph) {
+      e.el.width = pw;
+      e.el.height = ph;
+      if (e.gl) e.gl.viewport(0, 0, pw, ph); // the driver's viewport follows the drawable
+    }
   };
   env.ux_gl_make_current = (h, node) => {
     const arr = glViews.get(h);

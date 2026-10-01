@@ -509,17 +509,8 @@ void ux_ak_gl_place(int handle, void* peer, int x, int y, int w, int h, int hidd
  * renderer never has to set it and never has to ask what it is. */
 static void ak_gl_viewport(int i)
     {
-    NSRect b = [g_glView[i] bounds];
-    float scale = [[g_glView[i] window] backingScaleFactor];
-    if (scale <= 0)
-        scale = 1;
-    GLint pw = (GLint)(b.size.width * scale);
-    GLint ph = (GLint)(b.size.height * scale);
-    if (pw < 1)
-        pw = 1;
-    if (ph < 1)
-        ph = 1;
-    glViewport(0, 0, pw, ph);
+    // The drawable's own size: what ak_gl_size_px chose, the GPU's limit applied.
+    glViewport(0, 0, g_glW[i] > 0 ? g_glW[i] : 1, g_glH[i] > 0 ? g_glH[i] : 1);
     }
 
 /* Bind a context to the surface.  The token returned is an opaque handle and NOT
@@ -691,14 +682,70 @@ static int ak_gl_alloc_offscreen(int i, int w, int h)
     glBindFramebuffer(GL_FRAMEBUFFER, ak_gl_target(i));
     return 1;
     }
+/* The largest surface this context can render: a texture (the resolve target), a renderbuffer (the
+ * multisampled one) and a viewport must all hold it.  0 = no context current.  A test can lower it
+ * (ux_ak_gl_test_max) to exercise the clamp on a GPU whose real limit is far above any window. */
+static int g_glTestMax = 0;
+static int ak_gl_max_px(void)
+    {
+    if (!CGLGetCurrentContext())
+        return 0;
+    GLint tex = 0, rb = 0, vp[2] = {0, 0};
+    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &tex);
+    glGetIntegerv(GL_MAX_RENDERBUFFER_SIZE, &rb);
+    glGetIntegerv(GL_MAX_VIEWPORT_DIMS, vp);
+    int m = tex;
+    if (rb > 0 && rb < m)
+        m = rb;
+    if (vp[0] > 0 && vp[0] < m)
+        m = vp[0];
+    if (vp[1] > 0 && vp[1] < m)
+        m = vp[1];
+    if (g_glTestMax > 0 && (m <= 0 || g_glTestMax < m))
+        m = g_glTestMax;
+    return m;
+    }
+void ux_ak_gl_test_max(int px)
+    {
+    g_glTestMax = px;
+    }
+/* Test only: clear a GL view's drawable to one colour (0xRRGGBB), the frame a renderer would draw. */
+void ux_ak_gl_test_fill(void* peer, int rgb)
+    {
+    int i = ak_gl_find(peer);
+    if (i < 0 || !g_glCtx[i])
+        return;
+    [g_glCtx[i] makeCurrentContext];
+    glBindFramebuffer(GL_FRAMEBUFFER, ak_gl_target(i));
+    glClearColor(((rgb >> 16) & 255) / 255.0f, ((rgb >> 8) & 255) / 255.0f, (rgb & 255) / 255.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    }
+/* The drawable's size in PIXELS: the view's points at the backing scale, then -- if that is more than
+ * the GPU can hold (a maximised window on a 5K display is ~5120 wide; an old integrated GPU stops at
+ * 4096) -- scaled down by one factor on both sides, so the aspect is kept.  The 2-D pass draws the
+ * frame into the view's rectangle in points, so a smaller surface is simply stretched to fit: softer,
+ * never cropped, and the renderer is none the wiser (it reads no size; the viewport follows this). */
 static void ak_gl_size_px(int i, int* pw, int* ph)
     {
     NSRect b = [g_glView[i] bounds];
     float scale = [[g_glView[i] window] backingScaleFactor];
     if (scale <= 0)
         scale = 1;
-    *pw = (int)(b.size.width * scale);
-    *ph = (int)(b.size.height * scale);
+    double w = b.size.width * scale;
+    double h = b.size.height * scale;
+    int m = ak_gl_max_px();
+    if (m > 0 && (w > m || h > m))
+        {
+        double k = (w > h ? m / w : m / h);
+        w = w * k;
+        h = h * k;
+        }
+    *pw = (int)w;
+    *ph = (int)h;
+    if (*pw < 1)
+        *pw = 1;
+    if (*ph < 1)
+        *ph = 1;
     }
 
 void* ux_ak_gl_make(void* peer)
