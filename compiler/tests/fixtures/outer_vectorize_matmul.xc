@@ -12,6 +12,7 @@
 //       cells before they are written, so the pass must decline and the scalar
 //       answer must come out
 //   T5  a j bound that does not divide by four — declined, still right
+//xtc-na: xt6502 — main's arrays need a larger frame than the 6502 stack allows
 #import "Stdio.xc"
 
 #define M 8

@@ -66,6 +66,10 @@
 #import "XTPointerType.h"
 #import "XTStructType.h"
 
+// The system frameworks the fixture being built imports (`#import <F>`),
+// recorded by its front end and linked as -framework on macOS.
+static NSMutableArray<NSString *> *sCorpusFrameworks;
+
 static NSString *const kFixtureDir = @"tests/fixtures";
 // NOT const: a SHARDED run gives each shard its own build root. The
 // per-fixture dirs under it never collide (they are named by fixture), but
@@ -1453,6 +1457,9 @@ static XTCorpusOutcome runArm64Pipeline(XTIRModule *mod,
         [[arm64cc arrayByAddingObjectsFromArray:@[stubPath, asmPath]] mutableCopy];
     NSString *libxt = ensureLibxtArchive();
     if (libxt) [clangArgs addObject:libxt];
+    if (!XTArm64NeedsElfDialect())
+        for (NSString *fw in sCorpusFrameworks)
+            [clangArgs addObjectsFromArray:@[@"-framework", fw]];
     [clangArgs addObjectsFromArray:@[@"-o", binPath]];
     BOOL spawnOK = runSubprocess(@"/usr/bin/env", clangArgs,
         nil, stderrPath, 30.0, &rc, &timedOut);
@@ -2302,9 +2309,13 @@ static BOOL corpusFrontend(NSString *rawSource, NSString *xtPath,
                            XTIRModule **outMod, XTIRFunction **outEntry,
                            XTCorpusOutcome *outcome, NSString **msg) {
     *outMod = nil; *outEntry = nil;
+    if (!sCorpusFrameworks) sCorpusFrameworks = [NSMutableArray array];
     XTDiagnosticEngine *diag = [[XTDiagnosticEngine alloc] init];
     XTPreprocessor *pp = [[XTPreprocessor alloc] initWithDiagnostics:diag];
     pp.includePaths = includePaths;
+    // macOS: `#import <F>` may name a system framework, as in the driver —
+    // the arm64 Settings store imports CoreFoundation that way.
+    pp.appleFrameworks = arm64Target;
 
     // Surface the layout's formatter-buffer addresses as preprocessor macros
     // (the old driver's definePrintfBufferMacros). The atari Stdio source +
@@ -2392,6 +2403,13 @@ static BOOL corpusFrontend(NSString *rawSource, NSString *xtPath,
     NSString *source = nil;
     @try {
         source = [pp preprocessSource:rawSource filename:xtPath];
+        // The system frameworks it imported, for the arm64 link. A fixture can
+        // pass through here more than once, so this only ever adds; the list
+        // is cleared when the next fixture starts.
+        for (NSString *imp in pp.metadataImports)
+            if ([imp hasPrefix:@"framework:"] &&
+                ![sCorpusFrameworks containsObject:[imp substringFromIndex:10]])
+                [sCorpusFrameworks addObject:[imp substringFromIndex:10]];
     } @catch (NSException *e) {
         *outcome = XTCorpusFailPreproc;
         *msg = [NSString stringWithFormat:@"preproc exception: %@", e.reason];
@@ -2739,6 +2757,7 @@ static XTCorpusResult *runFixture(NSString *xtPath, NSString *name) {
     r.prefix = [name componentsSeparatedByString:@"_"].firstObject ?: @"misc";
 
     NSString *fixBuildDir = [NSString stringWithFormat:@"%@/%@", kBuildDir, name];
+    [sCorpusFrameworks removeAllObjects];
     ensureDir(fixBuildDir);
     NSString *logPath = [fixBuildDir stringByAppendingPathComponent:@"log.txt"];
 
@@ -3578,6 +3597,11 @@ int main(int argc, const char *argv[]) {
         } else {
             fprintf(stderr, "x86_64: %lu / %lu pass\n",
                     (unsigned long)x86PassN, (unsigned long)(x86PassN + x86FailN));
+            // Name them: a sharded run writes no report, so this line is the
+            // only place a failing x86-64 fixture would otherwise show up.
+            for (XTCorpusResult *r in results)
+                if (r.x86Applicable && r.x86Outcome != XTCorpusNotRun && r.x86Outcome != XTCorpusPass)
+                    fprintf(stderr, "x86_64 FAIL %s\n", r.name.UTF8String);
         }
         if (!filter && shardN == 1) {
             fprintf(stderr, "report written to %s\n", kReportPath.UTF8String);
