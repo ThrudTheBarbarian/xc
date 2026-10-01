@@ -358,12 +358,11 @@ protocol UXViewDriver
     // overlay AND redraw strategy from the answer.
     //
     //   true   the surface is a distinct plane the platform's compositor merges with the rest of
-    //          the window -- a GTK GtkGLArea, a Win32 GL child window, a web canvas stacked under
-    //          the 2-D one.  The app may damage the 2-D layer and present GL and rely on the
+    //          the window -- a GTK GtkGLArea, a web canvas stacked under the 2-D one.  The app may damage the 2-D layer and present GL and rely on the
     //          compositor to put them together.
     //   false  there is no such plane: no GL at all (GEM, iOS, Android), or GL that shares the
-    //          2-D surface and is ordered and paced by the driver (AppKit: the frame is rendered
-    //          offscreen and painted into the window's one 2-D pass).
+    //          2-D surface and is ordered and paced by the driver (AppKit and Win32: the frame is
+    //          rendered offscreen and painted into the window's own 2-D pass).
     //
     // A view that owns no context never cares.
     bool compositesWithGL(void);

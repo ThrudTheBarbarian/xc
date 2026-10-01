@@ -143,8 +143,14 @@ On AppKit the drawable is **offscreen**: the renderer draws into a framebuffer
 the driver owns (it is the renderer's default framebuffer, so the renderer does
 not change), `presentGL` resolves it, and the toolkit paints the frame into the
 window's one 2-D pass. A view after the GL view in the tree is drawn over the map
-by draw order, and there is no GL plane for the window server to order. Win32,
-GTK and the web still put the GL on a plane of its own.
+by draw order, and there is no GL plane for the window server to order.
+
+Win32 does the same: the frame is rendered into a framebuffer object, read back
+into a DIB at the present, and blitted with `StretchDIBits` in the window's own
+paint. It matters more there, because the GL used to be a child window and
+Windows clips a parent's painting around its children — nothing the toolkit drew
+could land on the map at all. A GL without framebuffer objects keeps the visible
+child window. GTK and the web still put the GL on a plane of its own.
 
 **The present cadence is the rule GL rests on: present happens at most once per
 loop turn, after damage is consolidated, and the driver owns the frame clock.**
@@ -159,10 +165,10 @@ platform composites the 2-D layer and the GL present in **one step**, or leaves
 the driver two producers to order and pace. A view drawn over a GL surface
 composites on every backend, because the display server composites; the question
 is who owns that step, and the app picks its overlay and redraw strategy from the
-answer. Win32, GTK and the web answer **true** (the surface is a distinct plane
-the compositor merges — a GL child window, a `GtkGLArea`, a canvas stacked under
-the 2-D one). AppKit answers **false**: its frame is painted into the 2-D pass
-and ordered by the driver. GEM, iOS and Android answer **false** (no GL).
+answer. GTK and the web answer **true** (the surface is a distinct plane the
+compositor merges — a `GtkGLArea`, a canvas stacked under the 2-D one). AppKit
+and Win32 answer **false**: their frame is painted into the 2-D pass and ordered
+by the driver. GEM, iOS and Android answer **false** (no GL).
 
 ### The shadow tree is the platform's, not ours
 

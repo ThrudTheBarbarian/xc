@@ -65,6 +65,17 @@ class MapView : UXGLView
         }
     }
 
+// A 2-D view laid over the map: a solid red block.  Before the one-surface model nothing drawn by the
+// toolkit could land on a Win32 GL view -- the GL was a child window, and Windows clips the parent's
+// paint around its children.
+class OverView : UXView
+    {
+    void drawRect(UXGraphics* g, UXRect dirty)
+        {
+        g.fillRectRGB(self.bounds(), (i32)230, (i32)20, (i32)20);
+        }
+    }
+
     class Delegate : Object<UXApplicationDelegate>
     {
     UXWin32Driver* drv;
@@ -84,6 +95,8 @@ class MapView : UXGLView
 
         MapView* map = new MapView();
         canvas.addSubview(map, UXGeom.make((i16)0, (i16)0, (i16)640, (i16)400));
+        OverView* over = new OverView();
+        canvas.addSubview(over, UXGeom.make((i16)100, (i16)100, (i16)50, (i16)50)); // AFTER the map: over it
         win.displayAll();
         // With no context yet the GL view IS painted, through its software fallback: that is
         // the seam's promise to a backend -- or a moment -- that cannot give it a context.
@@ -144,7 +157,29 @@ class MapView : UXGLView
         ck((i32)px[1] > (i32)115 && (i32)px[1] < (i32)140, "...on the green channel");
         ck(ge() == (u32)0, "no GL error over the frame");
         map.presentGL();
-        ck(ge() == (u32)0, "no GL error over the swap");
+        ck(ge() == (u32)0, "no GL error over the present");
+
+        // ONE SURFACE: the frame was rendered offscreen and is blitted in the window's own paint, so
+        // after a paint the WINDOW's pixel is the map's -- the thing a visible GL child window made
+        // impossible for anything else drawn there.
+        ck(gW32GlOff[(i32)0] != (i32)0, "the GL renders offscreen (framebuffer objects are there)");
+        win.displayAll();
+        pointer hw = gW32Hwnds[win.handle];
+        UpdateWindow(hw);
+        pointer wdc = GetDC(hw);
+        u32 c = GetPixel(wdc, (i32)20, (i32)20);
+        ReleaseDC(hw, wdc);
+        i32 wr = (i32)(c & (u32)255);
+        i32 wg = (i32)((c >> (u32)8) & (u32)255);
+        i32 wb = (i32)((c >> (u32)16) & (u32)255);
+        Stdio.printf("window pixel %d %d %d\n", wr, wg, wb);
+        ck(wr > (i32)50 && wr < (i32)80 && wg > (i32)115 && wg < (i32)140 && wb > (i32)175 && wb < (i32)205,
+           "the frame is in the WINDOW's paint, not on a plane of its own");
+        pointer wdc2 = GetDC(hw);
+        u32 c2 = GetPixel(wdc2, (i32)120, (i32)120);
+        ReleaseDC(hw, wdc2);
+        Stdio.printf("over-the-map pixel %d %d %d\n", (i32)(c2 & (u32)255), (i32)((c2 >> (u32)8) & (u32)255), (i32)((c2 >> (u32)16) & (u32)255));
+        ck((i32)(c2 & (u32)255) > (i32)200 && (i32)((c2 >> (u32)8) & (u32)255) < (i32)60, "a 2-D view after the map is painted OVER it");
 
         // The token is opaque and makeGL is idempotent: a second call is the same context.
         pointer tok = map.glContext();

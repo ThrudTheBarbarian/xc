@@ -830,6 +830,56 @@ typedef pointer WglGetProcFn(u8* name);
 typedef i32 WglSwapIntervalFn(i32 interval);
 typedef void GlViewportFn(i32 x, i32 y, i32 w, i32 h);
 
+// ── the offscreen surface (the one-surface model, as on AppKit) ───────────────────────────
+// The GL never draws to the screen.  It renders into a framebuffer object the driver owns -- the
+// renderer's default framebuffer, so it does not know -- and presentGL reads the frame back into a
+// bottom-up DIB, which the paint pass blits with StretchDIBits where the GL view sits, in tree
+// order.  So a 2-D view after the map in the tree is painted OVER it.  As a visible child window
+// it could not be: Windows clips a parent's painting around its children, so nothing the toolkit
+// draws can land on the map at all.  The child window stays, HIDDEN, because the pixel format and
+// the context belong to a window; a GL with no framebuffer objects keeps it visible and swaps, the
+// old plane, rather than draw nothing.
+u32 gW32GlFbo[8];
+u32 gW32GlRb[8];
+pointer gW32GlPx[8];      // the last presented frame, BGRA, bottom-up
+i32 gW32GlPW[8];          // its size in pixels
+i32 gW32GlPH[8];
+i32 gW32GlOff[8];         // 1 = offscreen (hidden child, blitted); 0 = the visible child plane
+pointer gW32GenFb;        // glGenFramebuffers ... resolved once, core name or the EXT one
+pointer gW32BindFb;
+pointer gW32DelFb;
+pointer gW32GenRb;
+pointer gW32BindRb;
+pointer gW32DelRb;
+pointer gW32RbStorage;
+pointer gW32FbRb;
+pointer gW32FbStatus;
+pointer gW32ReadPx;
+pointer gW32StretchDIBits; // gdi32, by name: it is not in the toolchain's import map
+i32 gW32FboTried;
+typedef void W32GlGenFn(i32 n, u32* out);
+typedef void W32GlBindFn(u32 target, u32 id);
+typedef void W32GlRbStorageFn(u32 target, u32 fmt, i32 w, i32 h);
+typedef void W32GlFbRbFn(u32 target, u32 att, u32 rbtarget, u32 rb);
+typedef u32 W32GlStatusFn(u32 target);
+typedef void W32GlReadPixelsFn(i32 x, i32 y, i32 w, i32 h, u32 fmt, u32 type, pointer px);
+typedef i32 W32StretchDIBitsFn(pointer hdc, i32 xd, i32 yd, i32 wd, i32 hd, i32 xs, i32 ys, i32 ws,
+                               i32 hs, pointer bits, pointer bmi, u32 usage, u32 rop);
+struct W32BmiHeader
+    {
+    u32 biSize;
+    i32 biWidth;
+    i32 biHeight;
+    u16 biPlanes;
+    u16 biBitCount;
+    u32 biCompression;
+    u32 biSizeImage;
+    i32 biXPelsPerMeter;
+    i32 biYPelsPerMeter;
+    u32 biClrUsed;
+    u32 biClrImportant;
+    }
+
 // Open opengl32 and resolve what the DRIVER needs.  wglGetProcAddress is the documented way
 // to reach the extension entry points (the core-profile request, the swap interval); the
 // base ones opengl32 exports by name and GetProcAddress finds them.
@@ -903,6 +953,144 @@ void w32_gl_viewport(pointer peer)
         }
     GlViewportFn* vp = (GlViewportFn*)gW32GlViewport;
     vp((i32)0, (i32)0, w, hh);
+    }
+
+// An extension entry point by its core name, or its EXT name (a 2.1 context has only the latter).
+pointer w32_gl_ext(u8* core, u8* ext)
+    {
+    pointer p = (pointer)0;
+    if (gW32WglGetProc != (pointer)0)
+        {
+        WglGetProcFn* g = (WglGetProcFn*)gW32WglGetProc;
+        p = g(core);
+        if (p == (pointer)0)
+            {
+            p = g(ext);
+            }
+        }
+    return p;
+    }
+// The framebuffer entry points, resolved once with a context current (wglGetProcAddress needs one).
+void w32_gl_fbo_load(void)
+    {
+    if (gW32FboTried != (i32)0)
+        {
+        return;
+        }
+    gW32FboTried = (i32)1;
+    gW32GenFb = w32_gl_ext((u8*)"glGenFramebuffers", (u8*)"glGenFramebuffersEXT");
+    gW32BindFb = w32_gl_ext((u8*)"glBindFramebuffer", (u8*)"glBindFramebufferEXT");
+    gW32DelFb = w32_gl_ext((u8*)"glDeleteFramebuffers", (u8*)"glDeleteFramebuffersEXT");
+    gW32GenRb = w32_gl_ext((u8*)"glGenRenderbuffers", (u8*)"glGenRenderbuffersEXT");
+    gW32BindRb = w32_gl_ext((u8*)"glBindRenderbuffer", (u8*)"glBindRenderbufferEXT");
+    gW32DelRb = w32_gl_ext((u8*)"glDeleteRenderbuffers", (u8*)"glDeleteRenderbuffersEXT");
+    gW32RbStorage = w32_gl_ext((u8*)"glRenderbufferStorage", (u8*)"glRenderbufferStorageEXT");
+    gW32FbRb = w32_gl_ext((u8*)"glFramebufferRenderbuffer", (u8*)"glFramebufferRenderbufferEXT");
+    gW32FbStatus = w32_gl_ext((u8*)"glCheckFramebufferStatus", (u8*)"glCheckFramebufferStatusEXT");
+    gW32ReadPx = GetProcAddress(gW32GlLib, (u8*)"glReadPixels");
+    pointer gdi = LoadLibraryA((pointer)"gdi32.dll");
+    if (gdi != (pointer)0)
+        {
+        gW32StretchDIBits = GetProcAddress(gdi, (u8*)"StretchDIBits");
+        }
+    }
+i32 w32_gl_has_fbo(void)
+    {
+    return gW32GenFb != (pointer)0 && gW32BindFb != (pointer)0 && gW32GenRb != (pointer)0 && gW32BindRb != (pointer)0
+        && gW32RbStorage != (pointer)0 && gW32FbRb != (pointer)0 && gW32FbStatus != (pointer)0
+        && gW32ReadPx != (pointer)0 && gW32StretchDIBits != (pointer)0 ? (i32)1 : (i32)0;
+    }
+void w32_gl_free_offscreen(i32 i)
+    {
+    if (gW32GlFbo[i] != (u32)0 && gW32DelFb != (pointer)0)
+        {
+        W32GlGenFn* d = (W32GlGenFn*)gW32DelFb; // same shape: (n, ids)
+        d((i32)1, &gW32GlFbo[i]);
+        }
+    if (gW32GlRb[i] != (u32)0 && gW32DelRb != (pointer)0)
+        {
+        W32GlGenFn* d = (W32GlGenFn*)gW32DelRb;
+        d((i32)1, &gW32GlRb[i]);
+        }
+    if (gW32GlPx[i] != (pointer)0)
+        {
+        free(gW32GlPx[i]);
+        }
+    gW32GlFbo[i] = (u32)0;
+    gW32GlRb[i] = (u32)0;
+    gW32GlPx[i] = (pointer)0;
+    gW32GlPW[i] = (i32)0;
+    gW32GlPH[i] = (i32)0;
+    }
+// Make (or remake at the child window's client size) the framebuffer the renderer draws into, and
+// leave it bound.  1 on success; 0 = no framebuffer objects here, keep the visible plane.
+i32 w32_gl_offscreen(i32 i)
+    {
+    w32_gl_fbo_load();
+    if (w32_gl_has_fbo() == (i32)0)
+        {
+        return (i32)0;
+        }
+    RECT r;
+    GetClientRect(gW32GlHwnd[i], (pointer)&r);
+    i32 w = (i32)(r.right - r.left);
+    i32 h = (i32)(r.bottom - r.top);
+    if (w < (i32)1) { w = (i32)1; }
+    if (h < (i32)1) { h = (i32)1; }
+    W32GlBindFn* bind = (W32GlBindFn*)gW32BindFb;
+    if (gW32GlFbo[i] != (u32)0 && gW32GlPW[i] == w && gW32GlPH[i] == h)
+        {
+        bind((u32)$8D40, gW32GlFbo[i]); // GL_FRAMEBUFFER
+        return (i32)1;
+        }
+    w32_gl_free_offscreen(i);
+    W32GlGenFn* genRb = (W32GlGenFn*)gW32GenRb;
+    W32GlBindFn* bindRb = (W32GlBindFn*)gW32BindRb;
+    W32GlRbStorageFn* store = (W32GlRbStorageFn*)gW32RbStorage;
+    W32GlGenFn* genFb = (W32GlGenFn*)gW32GenFb;
+    W32GlFbRbFn* attach = (W32GlFbRbFn*)gW32FbRb;
+    W32GlStatusFn* status = (W32GlStatusFn*)gW32FbStatus;
+    genRb((i32)1, &gW32GlRb[i]);
+    bindRb((u32)$8D41, gW32GlRb[i]);                 // GL_RENDERBUFFER
+    store((u32)$8D41, (u32)$8058, w, h);             // GL_RGBA8
+    genFb((i32)1, &gW32GlFbo[i]);
+    bind((u32)$8D40, gW32GlFbo[i]);
+    attach((u32)$8D40, (u32)$8CE0, (u32)$8D41, gW32GlRb[i]); // COLOR_ATTACHMENT0
+    if (status((u32)$8D40) != (u32)$8CD5)                    // FRAMEBUFFER_COMPLETE
+        {
+        bind((u32)$8D40, (u32)0);
+        w32_gl_free_offscreen(i);
+        return (i32)0;
+        }
+    gW32GlPx[i] = malloc((u32)(w * h * (i32)4));
+    gW32GlPW[i] = w;
+    gW32GlPH[i] = h;
+    return (i32)1;
+    }
+// Paint a GL view's last presented frame into the paint in flight, at (x,y,w,h).  1 if it drew.
+i32 w32_gl_blit(pointer peer, i32 x, i32 y, i32 w, i32 h)
+    {
+    i32 i = w32_gl_find(peer);
+    if (i < (i32)0 || gW32GlOff[i] == (i32)0 || gW32GlPx[i] == (pointer)0 || gW32CurHdc == (pointer)0)
+        {
+        return (i32)0;
+        }
+    W32BmiHeader bmi;
+    bmi.biSize = (u32)40;
+    bmi.biWidth = gW32GlPW[i];
+    bmi.biHeight = gW32GlPH[i]; // positive: bottom-up, which is the order glReadPixels returns
+    bmi.biPlanes = (u16)1;
+    bmi.biBitCount = (u16)32;
+    bmi.biCompression = (u32)0; // BI_RGB
+    bmi.biSizeImage = (u32)0;
+    bmi.biXPelsPerMeter = (i32)0;
+    bmi.biYPelsPerMeter = (i32)0;
+    bmi.biClrUsed = (u32)0;
+    bmi.biClrImportant = (u32)0;
+    W32StretchDIBitsFn* sd = (W32StretchDIBitsFn*)gW32StretchDIBits;
+    sd(gW32CurHdc, x, y, w, h, (i32)0, (i32)0, gW32GlPW[i], gW32GlPH[i], gW32GlPx[i], (pointer)&bmi,
+       (u32)0, (u32)$00CC0020); // DIB_RGB_COLORS, SRCCOPY
+    return (i32)1;
     }
 
 // Take the surface: a device context of its own and the pixel format chosen for it.  The
@@ -2458,7 +2646,11 @@ class UXWin32Driver : Object<UXViewDriver>
                     w32_gl_attach(t.nodes[i].peer, t.nodes[i].ctrl);
                     w32_gl_viewport(t.nodes[i].peer);
                     }
-                ShowWindow(t.nodes[i].ctrl, self.effectiveHidden(tree, i) != (i32)0 ? (i32)0 : (i32)SW_SHOW);
+                // An OFFSCREEN surface's child stays hidden: the frame is blitted by the paint, and a
+                // visible child would clip it (and everything drawn over it) away.
+                i32 gi = w32_gl_find(t.nodes[i].peer);
+                bool offscreen = gi >= (i32)0 && gW32GlOff[gi] != (i32)0;
+                ShowWindow(t.nodes[i].ctrl, (self.effectiveHidden(tree, i) != (i32)0 || offscreen) ? (i32)0 : (i32)SW_SHOW);
                 }
             else if (k == (i32)UXKindButton)
                 {
@@ -3018,6 +3210,20 @@ class UXWin32Driver : Object<UXViewDriver>
         if ((k == (i32)UXKindSlider || k == (i32)UXKindPopup || k == (i32)UXKindStepper || k == (i32)UXKindProgress || k == (i32)UXKindSegmented || k == (i32)UXKindToolbar) && t.nodes[i].ctrl != (pointer)0)
             {
             return;
+            }
+        // A GL view with an offscreen surface is PAINTED HERE: its last frame, blitted, in tree order,
+        // so whatever comes after it in the tree is drawn over the map.
+        if (k == (i32)UXKindGLView)
+            {
+            i32 gax = (i32)0;
+            i32 gay = (i32)0;
+            i32 gaw = (i32)0;
+            i32 gah = (i32)0;
+            self.structAbsFrame((pointer)t, i, &gax, &gay, &gaw, &gah);
+            if (w32_gl_blit(t.nodes[i].peer, gax, gay, gaw, gah) != (i32)0)
+                {
+                return;
+                }
             }
         // A SHIELD is app-drawn too: it intercepts input, it is not invisible.  A GL view is
         // here for the same reason: what it draws is its SOFTWARE FALLBACK, and once makeGL
@@ -3615,10 +3821,11 @@ class UXWin32Driver : Object<UXViewDriver>
         {
         return (i32)UX_GL_GL33;
         }
-    // The GL surface is its own child window, composited with the parent's GDI content in one step.
+    // No GL plane: the frame is rendered offscreen and blitted in the window's own paint, ordered with
+    // the 2-D views by tree order.  (A GL with no framebuffer objects falls back to a visible child.)
     bool compositesWithGL(void)
         {
-        return true;
+        return false;
         }
 
     pointer glProc(u8* name)
@@ -3691,6 +3898,11 @@ class UXWin32Driver : Object<UXViewDriver>
             si(gW32GlSwap > (i32)0 ? (i32)1 : (i32)0);
             }
         w32_gl_viewport(view);
+        if (gW32GlOff[i] == (i32)0 && w32_gl_offscreen(i) != (i32)0)
+            {
+            gW32GlOff[i] = (i32)1;
+            ShowWindow(gW32GlHwnd[i], (i32)0); // the paint blits the frame; the child must not clip it
+            }
         return (pointer)(i + (i32)1); // the opaque token, never the context
         }
 
@@ -3712,6 +3924,8 @@ class UXWin32Driver : Object<UXViewDriver>
             d(gW32GlCtx[i]);
             }
         gW32GlCtx[i] = (pointer)0;
+        w32_gl_free_offscreen(i);
+        gW32GlOff[i] = (i32)0;
         }
 
     void resizeGL(pointer view, i32 w, i32 h)
@@ -3721,13 +3935,34 @@ class UXWin32Driver : Object<UXViewDriver>
         w32_gl_viewport(view);
         }
 
+    // The frame is finished.  Offscreen: read it back into the DIB and invalidate the window, so the
+    // next paint blits it in tree order -- and remake the framebuffer if the view changed size, for
+    // the NEXT frame.  On the visible plane (no framebuffer objects): the swap.
     void presentGL(pointer view)
         {
         i32 i = w32_gl_find(view);
-        if (i < (i32)0 && gW32GlCtx[i] != (pointer)0)
+        if (i < (i32)0 || gW32GlCtx[i] == (pointer)0)
             {
-            SwapBuffers(gW32GlDc[i]); // the swap, and the only one
+            return;
             }
+        if (gW32GlOff[i] == (i32)0)
+            {
+            SwapBuffers(gW32GlDc[i]);
+            return;
+            }
+        WglMakeCurFn* mc = (WglMakeCurFn*)gW32WglMakeCur;
+        mc(gW32GlDc[i], gW32GlCtx[i]);
+        W32GlBindFn* bind = (W32GlBindFn*)gW32BindFb;
+        bind((u32)$8D40, gW32GlFbo[i]);
+        W32GlReadPixelsFn* rp = (W32GlReadPixelsFn*)gW32ReadPx;
+        rp((i32)0, (i32)0, gW32GlPW[i], gW32GlPH[i], (u32)$80E1, (u32)$1401, gW32GlPx[i]); // GL_BGRA, UNSIGNED_BYTE
+        pointer parent = GetParent(gW32GlHwnd[i]);
+        if (parent != (pointer)0)
+            {
+            InvalidateRect(parent, (pointer)0, (i32)0);
+            }
+        w32_gl_offscreen(i); // the next frame at the view's current size
+        w32_gl_viewport(view);
         }
 
     void glSetSwapInterval(i32 interval)
