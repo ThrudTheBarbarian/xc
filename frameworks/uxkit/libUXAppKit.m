@@ -1121,19 +1121,22 @@ static void ak_windowWillClose(__unsafe_unretained id self, SEL _cmd, __unsafe_u
 // already the normal loop, so the reflow (which runs auto-layout via NSButton fittingSize, and the
 // toolkit's own retain/weak bookkeeping) never executes inside AppKit's live-resize nested loop —
 // doing so crashes deep in CoreGraphics / CoreAutoLayout.
+static int ak_handle_of_window(NSWindow* w)
+    {
+    if (!w)
+        return 0;
+    for (int i = 1; i < UX_MAXW; i++)
+        {
+        if (g_win[i] == w)
+            return i;
+        }
+    return 0;
+    }
 static void ak_schedule_resize(NSWindow* win)
     {
     if (!g_dispatch || !win)
         return;
-    int handle = 0;
-    for (int h = 1; h < UX_MAXW; h++)
-        {
-        if (g_win[h] == win)
-            {
-            handle = h;
-            break;
-            }
-        }
+    int handle = ak_handle_of_window(win);
     if (!handle)
         return;
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -1143,13 +1146,22 @@ static void ak_schedule_resize(NSWindow* win)
           g_dispatch(9, handle, 0, 0);
     });
     }
-// During a live drag the document view fills via autoresizing (no toolkit work needed); the reflow
-// waits for the drag to END.  A programmatic resize (not live) is handled here directly.
+// A programmatic resize is reflowed on the next run-loop cycle.  A LIVE drag is reflowed as it
+// happens, here, the way a Cocoa app lays out in windowDidResize: the toolkit and the app see the new
+// content size at every step of the drag and the window repaints at that size, rather than showing
+// white until the mouse comes up.  (Deferring it to the end of the drag dated from an old compiler's
+// heap corruption, which crashed in CG and auto-layout here; the live-resize gate runs this path
+// under guard malloc.)  windowDidEndLiveResize still sends the final size.
 static void ak_windowDidResize(__unsafe_unretained id self, SEL _cmd, __unsafe_unretained id note)
     {
     NSWindow* win = [(NSNotification*)note object];
     if ([win inLiveResize])
-        return; // handled in windowDidEndLiveResize
+        {
+        int handle = ak_handle_of_window(win);
+        if (g_dispatch && handle)
+            g_dispatch(9, handle, 0, 0);
+        return;
+        }
     ak_schedule_resize(win);
     }
 static void ak_windowDidEndLiveResize(__unsafe_unretained id self, SEL _cmd, __unsafe_unretained id note)
@@ -1315,15 +1327,54 @@ void ux_ak_set_turn_hook(void* fn, int ms)
         return;
         }
     double secs = ms > 0 ? (double)ms / 1000.0 : (1.0 / 60.0);
-    g_turn_timer = [NSTimer scheduledTimerWithTimeInterval:secs
-                                                   repeats:YES
-                                                     block:^(NSTimer* t) {
-                                                       (void)t;
-                                                       if (g_turn_fn)
-                                                           {
-                                                           g_turn_fn();
-                                                           }
-                                                     }];
+    // In the COMMON modes, not just the default one: a live resize, a scroller drag and a menu
+    // tracking all run the loop in NSEventTrackingRunLoopMode, and a default-mode timer does not fire
+    // there -- the app's turn (its redraw, its geometry check) stopped for the whole drag.
+    g_turn_timer = [NSTimer timerWithTimeInterval:secs
+                                          repeats:YES
+                                            block:^(NSTimer* t) {
+                                              (void)t;
+                                              if (g_turn_fn)
+                                                  {
+                                                  g_turn_fn();
+                                                  }
+                                            }];
+    [[NSRunLoop currentRunLoop] addTimer:g_turn_timer forMode:NSRunLoopCommonModes];
+    }
+
+/* ---- the live-resize probe (test only) ------------------------------------------------------
+ * A real drag needs a hand on the mouse, but an ANIMATED resize is a live resize to AppKit
+ * (inLiveResize is YES at every step, windowDidResize fires per step), and running the loop in
+ * NSEventTrackingRunLoopMode is what the drag's tracking does between steps.  Off the current
+ * callout (so the turn timer is free to fire): resize the content to w x h, animated, then run the
+ * loop in the tracking mode for ms, then set done. */
+static int g_liveProbeDone = 0;
+void ux_ak_test_live_resize(int handle, int w, int h, int ms)
+    {
+    g_liveProbeDone = 0;
+    dispatch_async(dispatch_get_main_queue(), ^{
+      NSWindow* win = g_win[handle];
+      if (win)
+          {
+          NSRect fr = [win frameRectForContentRect:NSMakeRect(0, 0, w, h)];
+          NSRect cur = [win frame];
+          fr.origin = NSMakePoint(cur.origin.x, NSMaxY(cur) - fr.size.height); // keep the top edge
+          [win setFrame:fr display:YES animate:YES];
+          NSDate* end = [NSDate dateWithTimeIntervalSinceNow:ms / 1000.0];
+          while ([end timeIntervalSinceNow] > 0)
+              [[NSRunLoop currentRunLoop] runMode:NSEventTrackingRunLoopMode beforeDate:end];
+          }
+      g_liveProbeDone = 1;
+    });
+    }
+int ux_ak_test_live_done(void)
+    {
+    return g_liveProbeDone;
+    }
+int ux_ak_in_live_resize(int handle)
+    {
+    NSWindow* win = g_win[handle];
+    return win && [win inLiveResize] ? 1 : 0;
     }
 
 void ux_ak_boot(void)
@@ -2077,17 +2128,6 @@ static int g_lastMouseWin = 0;
 int ux_ak_last_mouse_win(void)
     {
     return g_lastMouseWin;
-    }
-static int ak_handle_of_window(NSWindow* w)
-    {
-    if (!w)
-        return 0;
-    for (int i = 1; i < UX_MAXW; i++)
-        {
-        if (g_win[i] == w)
-            return i;
-        }
-    return 0;
     }
 // Headless: drive a resize through the neutral path (nextEvent returns kind 9) without a live drag.
 static int g_pendingResize = 0; // count of pending synthetic resizes

@@ -494,6 +494,22 @@ void xgAKOutlineDidExpand(pointer o, pointer item, i32 on)
     ((UXOutlineView*)o).nativeDidExpand(item, on);
     }
 
+// The app's turn, wrapped as every dispatched event is: a stop() made from the turn must break
+// [NSApp run] too.  Called raw, the stop waited for the next event's dispatch to notice it, and with
+// no event to come the app sat in [NSApp run] with its turn already cancelled.
+turnHook_t* gAKTurnFn;
+void uxAKTurn(void)
+    {
+    if (gAKTurnFn != (turnHook_t*)0)
+        {
+        gAKTurnFn();
+        }
+    if (gAKApp != (UXApplication*)0 && !gAKApp.isRunning())
+        {
+        ux_ak_stop();
+        }
+    }
+
 class UXAppKitDriver : Object<UXViewDriver>
     {
     void init(void)
@@ -2228,7 +2244,8 @@ class UXAppKitDriver : Object<UXViewDriver>
         {
         if (ux_ak_interactive() != (i32)0)
             {
-            ux_ak_set_turn_hook((pointer)fn, ms);
+            gAKTurnFn = fn;
+            ux_ak_set_turn_hook(fn != (turnHook_t*)0 ? (pointer)&uxAKTurn : (pointer)0, ms);
             return true;
             }
         ux_ak_set_turn_hook((pointer)0, (i32)0);

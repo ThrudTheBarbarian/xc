@@ -151,6 +151,13 @@ clock comes from the driver's own timer
 ([`setTurnHook`](/compiler/api/uxkit/uxviewdriver/#a-turn-comes-from-the-driver-or-from-the-loop)
 answers true here, and false in a headless run).
 
+That timer runs in the run loop's common modes, so the turn keeps firing while
+AppKit tracks a live resize, a scroller drag or a menu. A `stop()` made from
+the turn breaks `[NSApp run]` just as one made from an event does. A live
+resize reaches the toolkit at every step of the drag, not only when the mouse
+comes up, so the app lays out and repaints at the size the window has while it
+is being dragged.
+
 For the same reason, an `@autoreleasepool` around window ordering or activation
 causes trouble: the scope ends inside AppKit's own bookkeeping.
 
