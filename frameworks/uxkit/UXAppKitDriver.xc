@@ -38,6 +38,7 @@ void ux_ak_window_set_content(i32 handle, pointer fn, pointer ud);
 void ux_ak_window_open(i32 handle);
 void ux_ak_window_front(i32 handle);
 i32 ux_ak_open_panel(u8* prompt, u8* startDir, u8* out, i32 outCap);
+i32 ux_ak_save_panel(u8* prompt, u8* startDir, u8* defaultName, u8* out, i32 outCap);
 i32 ux_ak_color_panel(i32 r, i32 g, i32 b, i32* outR, i32* outG, i32* outB);
 i32 ux_ak_font_panel(u8* inFamily, i32 inSize, i32 inBold, i32 inItalic, u8* outFamily, i32 outCap, i32* outSize, i32* outBold, i32* outItalic);
 void ux_ak_window_close(i32 handle);
@@ -512,6 +513,12 @@ void uxAKTurn(void)
         }
     }
 
+// the drawn file panel's file operations (ux_posix_fs.h, compiled into the shim)
+i32 ux_posix_listdir(u8* path, u8* out, i32 cap);
+i32 ux_posix_delete(u8* path);
+i32 ux_posix_rename(u8* src, u8* dst);
+i32 ux_posix_copy(u8* src, u8* dst);
+
 class UXAppKitDriver : Object<UXViewDriver>
     {
     void init(void)
@@ -561,6 +568,14 @@ class UXAppKitDriver : Object<UXViewDriver>
     bool hasNativeFileOpen(void)
         {
         return true;
+        }
+    bool hasNativeFileSave(void)
+        {
+        return true;
+        }
+    i32 fileSave(u8* prompt, u8* startDir, u8* defaultName, u8* out, i32 outCap)
+        {
+        return ux_ak_save_panel(prompt, startDir, defaultName, out, outCap);
         }
     i32 fileOpen(u8* prompt, u8* startDir, u8* out, i32 outCap)
         {
@@ -712,20 +727,20 @@ class UXAppKitDriver : Object<UXViewDriver>
     // native panel reads the FS itself
     i32 listDir(u8* path, u8* out, i32 outCap)
         {
-        return (i32)-1;
+        return ux_posix_listdir(path, out, outCap);
         }
-    // (unused — AppKit uses NSOpenPanel)
+    // the drawn panel's operations: AppKit opens natively, but a toolkit panel (and the tests) list here
     i32 fileDelete(u8* path)
         {
-        return (i32)0;
+        return ux_posix_delete(path);
         }
     i32 fileRename(u8* src, u8* dst)
         {
-        return (i32)0;
+        return ux_posix_rename(src, dst);
         }
     i32 fileCopy(u8* src, u8* dst)
         {
-        return (i32)0;
+        return ux_posix_copy(src, dst);
         }
     void windowSetTitle(i32 handle, u8* s)
         {

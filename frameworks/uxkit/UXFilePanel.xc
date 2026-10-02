@@ -265,6 +265,10 @@ class UXFileRow : Object
     bool recentsMode; // the list shows recent files, not curDir
     i32 sortKey;      // FP_SORT_NAME / FP_SORT_SIZE
     bool sortAsc;
+    // SAVE mode (UXSavePanel): the field is the name to save as and is kept across folder changes,
+    // the button reads Save, and an existing file is confirmed before it is replaced.
+    bool saveMode;
+    u8* defName;
 
     void init(void)
         {
@@ -284,6 +288,8 @@ class UXFileRow : Object
         recentsMode = false;
         sortKey = (i32)FP_SORT_NAME;
         sortAsc = true;
+        saveMode = false;
+        defName = (u8*)"";
         }
     i32 sortColumn(void)
         {
@@ -641,7 +647,7 @@ class UXFileRow : Object
         allDirs = new Array();
         allFiles = new Array();
         selName = (u8*)"";
-        if (selField != (UXTextField*)0)
+        if (selField != (UXTextField*)0 && !saveMode)
             {
             selField.setText((u8*)"");
             }
@@ -943,6 +949,11 @@ class UXFileRow : Object
         }
     void onOpen(UXControl* c)
         {
+        if (saveMode)
+            {
+            self.onSave();
+            return;
+            }
         if (recentsMode)
             {
             if (selected >= (i32)0)
@@ -959,6 +970,58 @@ class UXFileRow : Object
             result = (i32)1;
             done = true;
             }
+        }
+    // Save: the typed name.  A folder by that name is entered instead (the name goes back to the
+    // default); an existing file is replaced only once confirmed; anything else is the answer.
+    void onSave(void)
+        {
+        u8* name = self.target();
+        if (name == (u8*)0 || name[(i32)0] == (u8)0)
+            {
+            return;
+            }
+        if (self.isDotDot(name))
+            {
+            self.goUp();
+            selField.setText(defName);
+            return;
+            }
+        for (u16 i = (u16)0; i < allDirs.count(); i = i + (u16)1)
+            {
+            if (self.streq(((UXFileRow* ?)allDirs.get(i)).name, name))
+                {
+                self.enter(name);
+                selField.setText(defName);
+                return;
+                }
+            }
+        // every file, not only the ones the mask shows: a hidden one is replaced just the same
+        for (u16 i = (u16)0; i < allFiles.count(); i = i + (u16)1)
+            {
+            if (self.streq(((UXFileRow* ?)allFiles.get(i)).name, name))
+                {
+                if (!self.confirmReplace(name))
+                    {
+                    return;
+                    }
+                break;
+                }
+            }
+        chosenPath = self.join(curDir, name);
+        result = (i32)1;
+        done = true;
+        }
+    // Ask before a save replaces `name`.  Its own method so a headless test can answer it.
+    bool confirmReplace(u8* name)
+        {
+        UXAlert* a = new UXAlert();
+        a.icon = (i32)2;
+        a.addLine((u8*)"A file with this name already exists.");
+        a.addLine(name);
+        a.addLine((u8*)"Replace it?");
+        a.addButton((u8*)"Replace");
+        a.addButton((u8*)"Cancel");
+        return a.runModal() == (i32)1;
         }
     void onCancel(UXControl* c)
         {
@@ -1079,10 +1142,10 @@ class UXFileRow : Object
         canvas.addSubview(maskField, UXGeom.make((i16)54, (i16)30, (i16)120, (i16)20));
         self.mkBtn(canvas, (u8*)"Find", &self.onFind, (i16)186, (i16)30, (i16)76, (i16)22); // just right of the mask
         UXLabel* sl = new UXLabel();
-        sl.setText((u8*)"Selection:");
+        sl.setText(saveMode ? (u8*)"Save as:" : (u8*)"Selection:");
         canvas.addSubview(sl, UXGeom.make((i16)10, (i16)56, (i16)66, (i16)16));
         selField = new UXTextField();
-        selField.setText((u8*)"");
+        selField.setText(saveMode ? defName : (u8*)"");
         canvas.addSubview(selField, UXGeom.make((i16)80, (i16)54, (i16)246, (i16)20));
 
         // ---- the sortable column-title strip, then the list (".." at the top for going up) ------------
@@ -1098,6 +1161,7 @@ class UXFileRow : Object
         recentBtn.setTitle((u8*)"Recent");
         recentBtn.setAction(&self.onRecent);
         canvas.addSubview(recentBtn, UXGeom.make(colX, ly0, colW, (i16)26));
+        recentBtn.setHidden(saveMode); // recents are files to open, not places to save
         i16 grpY = (i16)(ly0 + (i16)38);
         UXGroupBox* grp = new UXGroupBox();
         grp.setTitle((u8*)"Manage");
@@ -1116,10 +1180,18 @@ class UXFileRow : Object
         hiddenBox.setAction(&self.onToggleHidden);
         canvas.addSubview(hiddenBox, UXGeom.make((i16)10, (i16)(barY + (i16)4), (i16)130, (i16)18));
         self.mkBtn(canvas, (u8*)"Cancel", &self.onCancel, (i16)248, (i16)(barY + (i16)2), (i16)84, (i16)28);
-        self.mkBtn(canvas, (u8*)"Open", &self.onOpen, (i16)344, barY, (i16)90, (i16)30);
+        self.mkBtn(canvas, saveMode ? (u8*)"Save" : (u8*)"Open", &self.onOpen, (i16)344, barY, (i16)90, (i16)30);
         self.reload();
         win.tree.finalise();
         win.displayAll();
+        }
+
+    // The same panel in save mode (UXSavePanel): returns the path to write, or null if cancelled.
+    u8* runSave(u8* prompt, u8* startDir, u8* defaultName)
+        {
+        saveMode = true;
+        defName = defaultName != (u8*)0 ? defaultName : (u8*)"";
+        return self.run(prompt, startDir);
         }
 
     u8* run(u8* prompt, u8* startDir)

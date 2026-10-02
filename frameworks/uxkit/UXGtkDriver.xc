@@ -337,6 +337,12 @@ void uxGtkDispatch(i32 kind, i32 x, i32 y, i32 handle, i32 extra)
     gApp.displayIfNeeded();
     }
 
+// the drawn file panel's file operations (ux_posix_fs.h, compiled into the shim)
+i32 ux_posix_listdir(u8* path, u8* out, i32 cap);
+i32 ux_posix_delete(u8* path);
+i32 ux_posix_rename(u8* src, u8* dst);
+i32 ux_posix_copy(u8* src, u8* dst);
+
 class UXGtkDriver : Object<UXViewDriver>
     {
 
@@ -567,6 +573,15 @@ class UXGtkDriver : Object<UXViewDriver>
         {
         return false;
         }
+    // no native save dialog here: UXSavePanel draws UXKit's own
+    bool hasNativeFileSave(void)
+        {
+        return false;
+        }
+    i32 fileSave(u8* prompt, u8* startDir, u8* defaultName, u8* out, i32 outCap)
+        {
+        return (i32)0;
+        }
     i32 fileOpen(u8* prompt, u8* startDir, u8* out, i32 outCap)
         {
         return (i32)0;
@@ -590,19 +605,19 @@ class UXGtkDriver : Object<UXViewDriver>
         }
     i32 listDir(u8* path, u8* out, i32 outCap)
         {
-        return (i32)-1;
+        return ux_posix_listdir(path, out, outCap);
         }
     i32 fileDelete(u8* path)
         {
-        return (i32)0;
+        return ux_posix_delete(path);
         }
     i32 fileRename(u8* src, u8* dst)
         {
-        return (i32)0;
+        return ux_posix_rename(src, dst);
         }
     i32 fileCopy(u8* src, u8* dst)
         {
-        return (i32)0;
+        return ux_posix_copy(src, dst);
         }
 
     // ---- time / settings / measurement ---------------------------------------

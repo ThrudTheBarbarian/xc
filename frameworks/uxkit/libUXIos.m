@@ -18,6 +18,7 @@
 // (draw view AND native controls) into a bitmap, synchronously;
 // ux_ios_pixel() reads it back — the cacheDisplayInRect analogue.
 #import <UIKit/UIKit.h>
+#include "ux_posix_fs.h" // listDir / delete / rename / copy for the drawn file panel
 
 #define UXIOS_MAXW 64
 

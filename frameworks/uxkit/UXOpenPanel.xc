@@ -18,6 +18,7 @@ class UXOpenPanel
                 {
                 return buf;
                 }
+            free((pointer)buf);
             return (u8*)0; // cancelled
             }
         return UXOpenPanel.runToolkit(prompt, startDir); // GEM: toolkit-drawn panel

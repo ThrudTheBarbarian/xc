@@ -24,6 +24,7 @@
 #include <OpenGL/gl.h>
 #include <OpenGL/OpenGL.h>      // CGL: CGLTexImageIOSurface2D, for the offscreen GL surface
 #include <IOSurface/IOSurface.h> // the texture the GL renders into, drawn by the toolkit
+#include "ux_posix_fs.h" // listDir / delete / rename / copy for the drawn file panel
 #import <objc/runtime.h>
 
 #define UX_MAXW 64
@@ -2516,6 +2517,29 @@ int ux_ak_open_panel(const char* prompt, const char* startDir, char* out, int ou
         [p setPrompt:[NSString stringWithUTF8String:prompt]];
     if (startDir && *startDir)
         [p setDirectoryURL:[NSURL fileURLWithPath:[NSString stringWithUTF8String:startDir]]];
+    if ([p runModal] != NSModalResponseOK)
+        return 0;
+    NSString* path = [[p URL] path];
+    if (!path)
+        return 0;
+    strncpy(out, [path UTF8String], outCap - 1);
+    out[outCap - 1] = 0;
+    return 1;
+    }
+
+// NSSavePanel: the name field starts as defaultName, and the panel itself asks before replacing.
+int ux_ak_save_panel(const char* prompt, const char* startDir, const char* defaultName, char* out, int outCap)
+    {
+    if (!g_interactive)
+        return 0;
+    NSSavePanel* p = [NSSavePanel savePanel];
+    [p setCanCreateDirectories:YES];
+    if (prompt && *prompt)
+        [p setMessage:[NSString stringWithUTF8String:prompt]];
+    if (startDir && *startDir)
+        [p setDirectoryURL:[NSURL fileURLWithPath:[NSString stringWithUTF8String:startDir]]];
+    if (defaultName && *defaultName)
+        [p setNameFieldStringValue:[NSString stringWithUTF8String:defaultName]];
     if ([p runModal] != NSModalResponseOK)
         return 0;
     NSString* path = [[p URL] path];

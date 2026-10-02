@@ -33,6 +33,7 @@
 #include <string.h>
 #include <time.h>
 #include <stdio.h>
+#include "ux_posix_fs.h" // listDir / delete / rename / copy for the drawn file panel
 
 #define LOG(...) __android_log_print(ANDROID_LOG_INFO, "uxkit", __VA_ARGS__)
 #define UXA_MAXW 16

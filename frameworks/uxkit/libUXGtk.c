@@ -23,6 +23,7 @@
 #include <string.h>
 #include <dlfcn.h>
 #include <pthread.h>
+#include "ux_posix_fs.h" // listDir / delete / rename / copy for the drawn file panel
 
 #define UXGTK_MAXW 64
 

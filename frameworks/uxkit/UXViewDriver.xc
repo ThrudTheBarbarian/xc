@@ -142,6 +142,11 @@ protocol UXViewDriver
     // fileOpen writes the chosen path into out (capacity outCap) and returns 1, or returns 0 if cancelled.
     bool hasNativeFileOpen(void);
     i32 fileOpen(u8 * prompt, u8 * startDir, u8 * out, i32 outCap);
+    // A native file-SAVE dialog, the same way round: hasNativeFileSave() where the OS has one (AppKit's
+    // NSSavePanel); fileSave writes the chosen path into out and returns 1, or 0 if cancelled.  It asks
+    // about replacing an existing file itself.  Elsewhere UXSavePanel runs UXFilePanel in save mode.
+    bool hasNativeFileSave(void);
+    i32 fileSave(u8 * prompt, u8 * startDir, u8 * defaultName, u8 * out, i32 outCap);
     // A native colour picker (AppKit NSColorPanel, Win32 ChooseColor).  hasNativeColorPicker() is true
     // where the OS has one; the demo falls back to a toolkit-drawn wheel/sliders where it is false (GEM).
     // pickColor seeds it with r/g/b (0..255), writes the chosen colour into out*, returns 1 or 0 on cancel.

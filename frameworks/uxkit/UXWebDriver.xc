@@ -321,6 +321,15 @@ class UXWebDriver : Object<UXViewDriver>
         {
         return false;
         }
+    // no native save dialog here: UXSavePanel draws UXKit's own
+    bool hasNativeFileSave(void)
+        {
+        return false;
+        }
+    i32 fileSave(u8* prompt, u8* startDir, u8* defaultName, u8* out, i32 outCap)
+        {
+        return (i32)0;
+        }
     i32 fileOpen(u8* prompt, u8* startDir, u8* out, i32 outCap)
         {
         return (i32)0;

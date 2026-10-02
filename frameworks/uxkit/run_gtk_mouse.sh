@@ -31,7 +31,7 @@ echo "== gtk-mouse: emitting x86_64 asm =="
 echo "== gtk-mouse: building the hybrid on $host =="
 rdir=$(ssh "$host" 'mktemp -d')
 ssh "$host" "mkdir -p $rdir/src/xtc/support-src $rdir/support/generic/runtime"
-scp -q "$work/test.s" "$here/libUXGtk.c" "$rtdir/rtgen-linux.s" "$host:$rdir/"
+scp -q "$work/test.s" "$here/libUXGtk.c" "$here/ux_posix_fs.h" "$rtdir/rtgen-linux.s" "$host:$rdir/"
 scp -q "$rtsrc/src/xtc/support-src/rt.c" "$host:$rdir/src/xtc/support-src/"
 scp -q "$rtsrc"/support/generic/runtime/*.c "$host:$rdir/support/generic/runtime/"
 ssh "$host" "cd $rdir && \
