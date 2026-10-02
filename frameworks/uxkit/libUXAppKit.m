@@ -15,6 +15,7 @@
 // retain/release/autorelease right so those don't happen.  Objects that CROSS to xtc as `void*`
 // (the menu tree) use __bridge / __bridge_retained to hand ARC ownership across the boundary.
 #import <Cocoa/Cocoa.h>
+#include <mach/mach.h>
 #include <sys/time.h>
 #include <stdio.h>
 #include <string.h>
@@ -1657,6 +1658,15 @@ void ux_ak_run_for(int ms)
     {
     [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:ms / 1000.0]];
     }
+/* For a gate: the process's physical footprint in KB (what Activity Monitor and time -l report). */
+int ux_ak_test_footprint_kb(void)
+    {
+    task_vm_info_data_t info;
+    mach_msg_type_number_t n = TASK_VM_INFO_COUNT;
+    if (task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&info, &n) != KERN_SUCCESS)
+        return -1;
+    return (int)(info.phys_footprint / 1024);
+    }
 /* For a gate: how many sounds are playing now. */
 int ux_ak_audio_playing(void)
     {
@@ -1752,12 +1762,20 @@ void ux_ak_window_invalidate(int handle)
         [v setNeedsDisplay:YES];
         return;
         }
-    NSRect b = [v bounds];
-    NSBitmapImageRep* rep = [v bitmapImageRepForCachingDisplayInRect:b];
-    if (rep)
+    /* Headless, every invalidate renders the window into a NEW window-sized bitmap, which AppKit
+     * hands back autoreleased.  A headless app never drains an autorelease pool of its own, so
+     * without this one each frame's bitmap stayed alive: one whole frame leaked per present (the
+     * client measured 4.26 MB a frame at 1280x832 and 227 GB over a session).  The one kept for
+     * read-back is held by g_lastRep, a strong reference, and survives the pool. */
+    @autoreleasepool
         {
-        [v cacheDisplayInRect:b toBitmapImageRep:rep];
-        g_lastRep = rep;
+        NSRect b = [v bounds];
+        NSBitmapImageRep* rep = [v bitmapImageRepForCachingDisplayInRect:b];
+        if (rep)
+            {
+            [v cacheDisplayInRect:b toBitmapImageRep:rep];
+            g_lastRep = rep;
+            }
         }
     }
 int ux_ak_native_count(void)
@@ -2337,63 +2355,68 @@ void ux_ak_post_key(int ch)
     }
 int ux_ak_next_event(int timeoutMs, int* kind, int* x, int* y, int* key)
     {
-    *kind = 0;
-    *x = 0;
-    *y = 0;
-    *key = 0;
-    // headless resize
-    if (g_pendingResize > 0)
+    /* The headless pump runs once a turn and nothing else drains a pool here: anything AppKit
+     * autoreleases during the turn is released at the end of this one. */
+    @autoreleasepool
         {
-        g_pendingResize--;
-        *kind = 9;
-        *x = g_pendingResizeHandle;
-        return 9;
-        }
-    // A frame clock turns this poll into the clock's own period: the deadline IS the wait, so a
-    // headless turn comes round when the app asked rather than on the toolkit's default poll.  The
-    // extra run-loop pass below stays with the default poll only -- with a deadline it would put
-    // its own wait in FRONT of the deadline and make a turn cost twice what was asked for.
-    double secs = 0.05;
-    if (timeoutMs > 0)
-        {
-        secs = (double)timeoutMs / 1000.0;
-        }
-    else
-        {
-        [[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode
-                                 beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.02]];
-        }
-    NSEvent* e = [NSApp nextEventMatchingMask:NSEventMaskAny
-                                    untilDate:[NSDate dateWithTimeIntervalSinceNow:secs]
-                                       inMode:NSDefaultRunLoopMode
-                                      dequeue:YES];
-    if (!e)
-        {
-        *kind = g_quit ? 8 : 0;
+        *kind = 0;
+        *x = 0;
+        *y = 0;
+        *key = 0;
+        // headless resize
+        if (g_pendingResize > 0)
+            {
+            g_pendingResize--;
+            *kind = 9;
+            *x = g_pendingResizeHandle;
+            return 9;
+            }
+        // A frame clock turns this poll into the clock's own period: the deadline IS the wait, so a
+        // headless turn comes round when the app asked rather than on the toolkit's default poll.  The
+        // extra run-loop pass below stays with the default poll only -- with a deadline it would put
+        // its own wait in FRONT of the deadline and make a turn cost twice what was asked for.
+        double secs = 0.05;
+        if (timeoutMs > 0)
+            {
+            secs = (double)timeoutMs / 1000.0;
+            }
+        else
+            {
+            [[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode
+                                     beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.02]];
+            }
+        NSEvent* e = [NSApp nextEventMatchingMask:NSEventMaskAny
+                                        untilDate:[NSDate dateWithTimeIntervalSinceNow:secs]
+                                           inMode:NSDefaultRunLoopMode
+                                          dequeue:YES];
+        if (!e)
+            {
+            *kind = g_quit ? 8 : 0;
+            return *kind;
+            }
+        NSEventType t = [e type];
+        if (t == NSEventTypeLeftMouseDown)
+            {
+            NSView* v = [[e window] contentView];
+            NSPoint p = v ? [v convertPoint:[e locationInWindow] fromView:nil] : [e locationInWindow];
+            g_lastMouseWin = ak_handle_of_window([e window]);
+            *kind = 1;
+            *x = (int)p.x;
+            *y = (int)p.y;
+            }
+        else if (t == NSEventTypeKeyDown)
+            {
+            NSString* chars = [e characters];
+            *kind = 4;
+            *key = ([chars length] > 0 ? (int)[chars characterAtIndex:0] : 0);
+            }
+        else
+            {
+            [NSApp sendEvent:e];
+            *kind = 0;
+            }
         return *kind;
         }
-    NSEventType t = [e type];
-    if (t == NSEventTypeLeftMouseDown)
-        {
-        NSView* v = [[e window] contentView];
-        NSPoint p = v ? [v convertPoint:[e locationInWindow] fromView:nil] : [e locationInWindow];
-        g_lastMouseWin = ak_handle_of_window([e window]);
-        *kind = 1;
-        *x = (int)p.x;
-        *y = (int)p.y;
-        }
-    else if (t == NSEventTypeKeyDown)
-        {
-        NSString* chars = [e characters];
-        *kind = 4;
-        *key = ([chars length] > 0 ? (int)[chars characterAtIndex:0] : 0);
-        }
-    else
-        {
-        [NSApp sendEvent:e];
-        *kind = 0;
-        }
-    return *kind;
     }
 
 // ---- menus (NSMenu).  The menu tree crosses to xtc as void*, so ARC ownership is bridged: the
