@@ -172,6 +172,11 @@ class UXWebDriver : Object<UXViewDriver>
     void windowSetInfo(i32 handle, u8* s)
         {
         }
+    // An AudioBuffer per sound; the browser mixes them.
+    bool audioPlay(i16* pcm, i32 frames, i32 rate)
+        {
+        return ux_audio_play(pcm, frames, rate) != (i32)0;
+        }
     // The page's favicon.
     bool appSetIcon(u8* data, i32 w, i32 h, i32 format)
         {

@@ -125,6 +125,21 @@ globalThis.xccImports = { env: {
   },
   // drawPixels: recorded with a COPY of the source region (the memory may move on), and replayed by
   // ux_test_pixel with nearest sampling and the alpha applied -- enough to read the picture back.
+  // Sound, recorded: how many were played and the last one's length and rate.
+  ux_audio_play: (p, frames, rate) => {
+    if (frames <= 0 || rate <= 0) return 0;
+    const s = new Int16Array(globalThis.xcc.memory.buffer, p >>> 0, frames);
+    let peak = 0;
+    for (let i = 0; i < frames; i++) peak = Math.max(peak, Math.abs(s[i]));
+    globalThis.uxAudioLog = (globalThis.uxAudioLog || []).concat([{ frames, rate, peak }]);
+    return 1;
+  },
+  ux_test_audio: (k, what) => {
+    const log = globalThis.uxAudioLog || [];
+    if (k < 0) return log.length;
+    const e = log[k];
+    return !e ? -1 : what === 0 ? e.frames : what === 1 ? e.rate : e.peak;
+  },
   // The favicon, recorded: its size and its pixels as RGBA, for ux_test_app_icon.
   ux_app_set_icon: (p, w, h, fmt) => {
     if (w <= 0 || h <= 0) return 0;
@@ -134,6 +149,7 @@ globalThis.xccImports = { env: {
     return 1;
   },
   ux_test_done: () => {},
+  ux_test_sound_done: () => {},
   // The recorded icon's colour (0xRRGGBB) at (x,y), or -1; with x = -1 its width, y = -1 its height.
   ux_test_app_icon: (x, y) => {
     const ic = globalThis.uxAppIcon;

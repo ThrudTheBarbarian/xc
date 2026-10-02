@@ -42,6 +42,8 @@ extern void ux_clip_round(i32 x, i32 y, i32 w, i32 h, i32 r);
 // A region of a bitmap in wasm memory, scaled into a rect, with an overall alpha: Canvas2D's
 // drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh).  format is UXPIX_*; the host may keep what it builds
 // from `data`, keyed by its address, so the bytes must not change once drawn.
+// A sound: 16-bit mono PCM at rate, played by its own source node (1 = started).
+extern i32 ux_audio_play(i16* pcm, i32 frames, i32 rate);
 // The application's icon: the page's favicon (1 = set).
 extern i32 ux_app_set_icon(u8* data, i32 w, i32 h, i32 format);
 extern void ux_draw_pixels(u8* data, i32 w, i32 h, i32 format, i32 sx, i32 sy, i32 sw, i32 sh,

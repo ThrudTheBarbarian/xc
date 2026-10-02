@@ -46,6 +46,7 @@ void ux_ak_window_set_subtitle(i32 handle, u8* s);  // NSWindow.subtitle (macOS 
 void ux_ak_window_set_modified(i32 handle, i32 on); // the dot in the close button
 void ux_ak_window_set_icon(i32 handle, u8* s);      // NSWindow.representedURL — the proxy icon
 i32 ux_ak_app_set_icon(u8* data, i32 w, i32 h, i32 fmt); // the Dock tile
+i32 ux_ak_audio_play(i16* pcm, i32 frames, i32 rate); // NSSound
 i32 ux_ak_window_modified(i32 handle);              // read-back, for tests
 i32 ux_ak_window_subtitle(i32 handle, u8* out, i32 cap);
 i32 ux_ak_window_icon(i32 handle, u8* out, i32 cap);
@@ -743,6 +744,11 @@ class UXAppKitDriver : Object<UXViewDriver>
     // The title-bar icon: macOS has no window-title image, but it draws the PROXY ICON of the
     // document a window stands for, which is what WF_ICON means ("proxy / document icon").  A path
     // names that document; a bare theme slice name is GEM-only art and clears the icon.
+    // NSSound, from an in-memory WAV.
+    bool audioPlay(i16* pcm, i32 frames, i32 rate)
+        {
+        return ux_ak_audio_play(pcm, frames, rate) != (i32)0;
+        }
     // The Dock tile.
     bool appSetIcon(u8* data, i32 w, i32 h, i32 format)
         {

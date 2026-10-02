@@ -379,6 +379,11 @@ class UXIosDriver : Object<UXViewDriver>
     void windowSetInfo(i32 handle, u8* s)
         {
         }
+    // No sound here: Not wired yet (AVAudioPlayer from an in-memory WAV is the counterpart).
+    bool audioPlay(i16* pcm, i32 frames, i32 rate)
+        {
+        return false;
+        }
     // iOS shows only the icon in the app bundle's asset catalog: packaging, not a call.
     bool appSetIcon(u8* data, i32 w, i32 h, i32 format)
         {

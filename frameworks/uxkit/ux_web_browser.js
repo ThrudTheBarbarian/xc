@@ -121,6 +121,33 @@
     // drawPixels: the bitmap is copied out of wasm memory into a canvas ONCE, keyed by its address,
     // size and layout (UXPIX_ARGB32 words are B,G,R,A in memory and are reordered), then each call is
     // one drawImage of the region.
+    // Sound: 16-bit mono PCM into an AudioBuffer, played by its own source node, so sounds overlap.
+    // A browser only lets audio start after the page has been clicked or typed in: the context is
+    // made on the first sound and resumed on the first such gesture.  Until it runs, a sound
+    // answers 0 (not played) rather than vanishing silently.  uxAudioPlayed counts what started.
+    ux_audio_play: (p, frames, rate) => {
+      if (frames <= 0 || rate <= 0) return 0;
+      const C = globalThis.AudioContext || globalThis.webkitAudioContext;
+      if (!C) return 0;
+      if (!globalThis.uxAudio) {
+        globalThis.uxAudio = new C();
+        const wake = () => { if (globalThis.uxAudio.state === 'suspended') globalThis.uxAudio.resume(); };
+        for (const ev of ['pointerdown', 'keydown']) globalThis.addEventListener(ev, wake, { capture: true });
+      }
+      const ac = globalThis.uxAudio;
+      if (ac.state === 'suspended') ac.resume();
+      if (ac.state !== 'running') return 0;
+      const buf = ac.createBuffer(1, frames, rate);
+      const d = buf.getChannelData(0);
+      const s = new Int16Array(globalThis.xcc.memory.buffer, p >>> 0, frames);
+      for (let i = 0; i < frames; i++) d[i] = s[i] / 32768;
+      const src = ac.createBufferSource();
+      src.buffer = buf;
+      src.connect(ac.destination);
+      src.start();
+      globalThis.uxAudioPlayed = (globalThis.uxAudioPlayed || 0) + 1;
+      return 1;
+    },
     // The application's icon: the page's favicon.  The pixels (fmt 0 RGBA bytes, 1 0xAARRGGBB words)
     // go onto a canvas and the <link rel="icon"> points at it as a PNG; uxAppIcon keeps what was set.
     ux_app_set_icon: (p, w, h, fmt) => {

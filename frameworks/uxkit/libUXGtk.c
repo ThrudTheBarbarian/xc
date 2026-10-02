@@ -22,6 +22,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <dlfcn.h>
+#include <pthread.h>
 
 #define UXGTK_MAXW 64
 
@@ -700,6 +701,82 @@ int ux_gtk_gl_make_current(int handle, int node)
     gl_pixel_size(handle, node, &pw, &ph);
     gl_clamp_bind(handle, node, pw, ph); /* over the GPU's limit: the renderer draws into ours */
     return 1;
+    }
+
+/* ---- sound (UXSound.play) --------------------------------------------------------------------
+ * GTK has no audio, so this is PulseAudio's simple API (PipeWire serves the same protocol), loaded at
+ * run time so the shim needs neither its headers nor the library to link.  Connecting is done here,
+ * synchronously, so with no sound server play() answers 0 honestly; the write and the drain run on a
+ * C thread per sound -- no toolkit code on it -- so sounds overlap and the caller never blocks. */
+typedef struct { int format; unsigned rate; unsigned char channels; } UXPaSpec;
+typedef void* (*pa_new_fn)(const char*, const char*, int, const char*, const char*, const UXPaSpec*,
+                            const void*, const void*, int*);
+typedef int (*pa_io_fn)(void*, const void*, size_t, int*);
+typedef int (*pa_drain_fn)(void*, int*);
+typedef void (*pa_free_fn)(void*);
+static pa_new_fn g_paNew;
+static pa_io_fn g_paWrite;
+static pa_drain_fn g_paDrain;
+static pa_free_fn g_paFree;
+static int g_paTried;
+static volatile int g_paLive; /* sounds still playing, for a gate */
+typedef struct { void* s; short* pcm; int frames; } UXPaJob;
+static void* pa_play_thread(void* arg)
+    {
+    UXPaJob* j = (UXPaJob*)arg;
+    int err = 0;
+    g_paWrite(j->s, j->pcm, (size_t)j->frames * 2, &err);
+    g_paDrain(j->s, &err);
+    g_paFree(j->s);
+    free(j->pcm);
+    free(j);
+    __sync_fetch_and_sub(&g_paLive, 1);
+    return NULL;
+    }
+int ux_gtk_audio_play(const short* pcm, int frames, int rate)
+    {
+    if (!pcm || frames <= 0 || rate <= 0)
+        return 0;
+    if (!g_paTried)
+        {
+        g_paTried = 1;
+        void* lib = dlopen("libpulse-simple.so.0", RTLD_LAZY);
+        if (lib)
+            {
+            g_paNew = (pa_new_fn)dlsym(lib, "pa_simple_new");
+            g_paWrite = (pa_io_fn)dlsym(lib, "pa_simple_write");
+            g_paDrain = (pa_drain_fn)dlsym(lib, "pa_simple_drain");
+            g_paFree = (pa_free_fn)dlsym(lib, "pa_simple_free");
+            }
+        }
+    if (!g_paNew || !g_paWrite || !g_paDrain || !g_paFree)
+        return 0;
+    UXPaSpec spec = {3 /* PA_SAMPLE_S16LE */, (unsigned)rate, 1};
+    int err = 0;
+    void* s = g_paNew(NULL, "UXKit", 1 /* PA_STREAM_PLAYBACK */, NULL, "sound", &spec, NULL, NULL, &err);
+    if (!s)
+        return 0; /* no sound server */
+    UXPaJob* j = (UXPaJob*)malloc(sizeof *j);
+    j->s = s;
+    j->frames = frames;
+    j->pcm = (short*)malloc((size_t)frames * 2);
+    memcpy(j->pcm, pcm, (size_t)frames * 2);
+    __sync_fetch_and_add(&g_paLive, 1);
+    pthread_t t;
+    if (pthread_create(&t, NULL, pa_play_thread, j) != 0)
+        {
+        __sync_fetch_and_sub(&g_paLive, 1);
+        g_paFree(s);
+        free(j->pcm);
+        free(j);
+        return 0;
+        }
+    pthread_detach(t);
+    return 1;
+    }
+int ux_gtk_audio_playing(void)
+    {
+    return g_paLive;
     }
 
 /* A GL entry point by name.  dlsym on the process first (the workspace on

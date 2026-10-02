@@ -1616,6 +1616,56 @@ void ux_ak_window_set_icon(int handle, const char* s)
         }
     [g_win[handle] setRepresentedURL:[NSURL fileURLWithPath:[NSString stringWithUTF8String:s]]];
     }
+/* Sound: signed 16-bit mono PCM wrapped as an in-memory WAV and played by NSSound, which mixes
+ * overlapping sounds itself.  Each NSSound is kept until it has finished (pruned on the next play),
+ * because one released mid-play stops.  1 when it started. */
+static NSMutableArray* g_sounds;
+int ux_ak_audio_play(const short* pcm, int frames, int rate)
+    {
+    if (!pcm || frames <= 0 || rate <= 0)
+        return 0;
+    if (!g_sounds)
+        g_sounds = [NSMutableArray array];
+    for (NSInteger k = (NSInteger)[g_sounds count] - 1; k >= 0; k--)
+        if (![(NSSound*)g_sounds[(NSUInteger)k] isPlaying])
+            [g_sounds removeObjectAtIndex:(NSUInteger)k];
+    uint32_t dataBytes = (uint32_t)frames * 2;
+    NSMutableData* wav = [NSMutableData dataWithLength:44 + dataBytes];
+    unsigned char* h = (unsigned char*)[wav mutableBytes];
+    #define PUT32(o, v) do { uint32_t _v = (uint32_t)(v); h[o] = _v & 255; h[o+1] = (_v >> 8) & 255; h[o+2] = (_v >> 16) & 255; h[o+3] = (_v >> 24) & 255; } while (0)
+    #define PUT16(o, v) do { uint32_t _v = (uint32_t)(v); h[o] = _v & 255; h[o+1] = (_v >> 8) & 255; } while (0)
+    memcpy(h, "RIFF", 4); PUT32(4, 36 + dataBytes); memcpy(h + 8, "WAVEfmt ", 8);
+    PUT32(16, 16); PUT16(20, 1); PUT16(22, 1); PUT32(24, rate); PUT32(28, rate * 2); PUT16(32, 2); PUT16(34, 16);
+    memcpy(h + 36, "data", 4); PUT32(40, dataBytes);
+    #undef PUT32
+    #undef PUT16
+    for (int i = 0; i < frames; i++)
+        {
+        uint16_t v = (uint16_t)pcm[i];
+        h[44 + i * 2] = v & 255;
+        h[45 + i * 2] = (v >> 8) & 255;
+        }
+    NSSound* snd = [[NSSound alloc] initWithData:wav];
+    if (!snd || ![snd play])
+        return 0;
+    [g_sounds addObject:snd];
+    return 1;
+    }
+/* For a gate: run the run loop for ms (NSSound reports its state there, and a headless test has no
+ * loop of its own). */
+void ux_ak_run_for(int ms)
+    {
+    [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:ms / 1000.0]];
+    }
+/* For a gate: how many sounds are playing now. */
+int ux_ak_audio_playing(void)
+    {
+    int n = 0;
+    for (NSSound* s in g_sounds)
+        if ([s isPlaying])
+            n++;
+    return n;
+    }
 /* The APPLICATION's icon while it runs: the Dock tile (and the app switcher).  The pixels (fmt 0 =
  * RGBA bytes, 1 = 0xAARRGGBB words; straight alpha, top-down) are copied into a non-premultiplied
  * bitmap rep, so the caller's buffer may change afterwards.  1 when set. */

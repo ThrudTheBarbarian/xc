@@ -112,6 +112,10 @@ protocol UXViewDriver
     // icon (the macOS Dock, the Windows taskbar and title bars, the web page's favicon); false where only
     // the PACKAGE can give an app its icon (iOS, Android, GTK, GEM) -- see xcc's packaging.
     bool appSetIcon(u8 * data, i32 w, i32 h, i32 format);
+    // Play a sound: `frames` signed 16-bit mono samples at `rate` (UXSound renders them), copied,
+    // fire-and-forget.  Sounds overlap -- each is its own stream and the platform mixes them -- so
+    // nothing of the toolkit runs on an audio thread.  false where this backend has no audio.
+    bool audioPlay(i16 * pcm, i32 frames, i32 rate);
     void windowSetModified(i32 handle, bool m);
 
     // Scrolling: the native frame owns the bar (draw, thumb, wheel, clamp); the toolkit

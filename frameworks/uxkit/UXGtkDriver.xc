@@ -29,6 +29,7 @@ void ux_gtk_wait_event_ms(i32 ms);
 i32 ux_gtk_alert(i32 parent, u8* lines, u8* buttons, i32 defBtn);
 void ux_gtk_clip(i32 x, i32 y, i32 w, i32 h);
 void ux_gtk_clip_round(i32 x, i32 y, i32 w, i32 h, i32 r); // ...with rounded corners; ux_gtk_clip_end pops
+i32 ux_gtk_audio_play(i16* pcm, i32 frames, i32 rate); // PulseAudio, 1 = started
 void ux_gtk_clip_end(void);
 i32 ux_gtk_setting_get(u8* domain, u8* key, u8* out, i32 cap);
 i32 ux_gtk_setting_set(u8* domain, u8* key, u8* value);
@@ -476,6 +477,11 @@ class UXGtkDriver : Object<UXViewDriver>
         {
         }
     // GTK 4 takes a window's icon only by NAME from the installed icon theme, so the app's icon
+    // PulseAudio (or PipeWire's Pulse server), loaded at run time; false with no sound server.
+    bool audioPlay(i16* pcm, i32 frames, i32 rate)
+        {
+        return ux_gtk_audio_play(pcm, frames, rate) != (i32)0;
+        }
     // comes from its .desktop entry and the theme: packaging, not a call.
     bool appSetIcon(u8* data, i32 w, i32 h, i32 format)
         {

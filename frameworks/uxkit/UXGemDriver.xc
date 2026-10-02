@@ -150,6 +150,11 @@ class UXGemDriver : Object<UXViewDriver>
         self.windowSetField(handle, (i32)WF_INFO, s);
         }
     // The desktop draws an application's icon from its resource file; there is no running app icon to
+    // No sound here: XTOS has no audio device for a client.
+    bool audioPlay(i16* pcm, i32 frames, i32 rate)
+        {
+        return false;
+        }
     // set.
     bool appSetIcon(u8* data, i32 w, i32 h, i32 format)
         {

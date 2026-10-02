@@ -92,6 +92,7 @@ i32 UXK_ABI_SYM(void)
 #import "UXSegmentedControl.xc"
 #import "UXShapePath.xc"
 #import "UXSlider.xc"
+#import "UXSound.xc"
 #import "UXSortDescriptor.xc"
 #import "UXSplitView.xc"
 #import "UXStateMachine.xc"

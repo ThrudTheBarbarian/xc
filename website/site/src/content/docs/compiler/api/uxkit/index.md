@@ -105,6 +105,7 @@ a platform. The platforms are grouped by realm:
 - [`UXPng`](/compiler/api/uxkit/uxpng/)
 - [`UXRange`](/compiler/api/uxkit/uxrange/)
 - [`UXShapePath`](/compiler/api/uxkit/uxshapepath/)
+- [`UXSound`](/compiler/api/uxkit/uxsound/)
 - [`UXViewport`](/compiler/api/uxkit/uxviewport/)
 
 ## Nibs & the designer

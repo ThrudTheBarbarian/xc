@@ -1,0 +1,20 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>running</title>
+<canvas id="ux-canvas" width="200" height="100"></canvas>
+<script>
+  // run_web_sound.sh's page.  ?expect=2: autoplay is allowed, so both sounds must start (counted by
+  // the shim's uxAudioPlayed).  ?expect=0: the browser's default policy, no gesture yet, so neither
+  // starts and play() must have said so.
+  const expect = Number(new URLSearchParams(location.search).get('expect'));
+  globalThis.xccImports = { env: {
+    ux_test_audio: () => -1, // not the rig
+    ux_test_sound_done: (played) => {
+      const started = globalThis.uxAudioPlayed || 0;
+      const ok = played === expect && started === expect;
+      document.title = (ok ? 'PASS' : 'FAIL') + `: play() said ${played}, ${started} AudioBuffer sources started (want ${expect})`;
+    },
+  } };
+</script>
+<script src="ux_web_browser.js"></script>
+<script src="test_web_sound.js"></script>

@@ -1292,6 +1292,130 @@ pointer UXGl32Proc(pointer hwnd, u32 msg, pointer wp, pointer lp)
     return DefWindowProcA(hwnd, msg, wp, lp);
     }
 
+// ---- sound (UXSound.play) ------------------------------------------------------------------
+// One waveOut stream per sound: Windows mixes concurrent streams, so sounds overlap.  The samples are
+// copied into the stream's own buffer; a finished stream (WHDR_DONE) is closed and freed on the next
+// play.  winmm's entry points are resolved by name, as the other extras are.
+struct W32WaveFormat
+    {
+    u16 wFormatTag;
+    u16 nChannels;
+    u32 nSamplesPerSec;
+    u32 nAvgBytesPerSec;
+    u16 nBlockAlign;
+    u16 wBitsPerSample;
+    u16 cbSize;
+    }
+struct W32WaveHdr
+    {
+    pointer lpData;
+    u32 dwBufferLength;
+    u32 dwBytesRecorded;
+    pointer dwUser;
+    u32 dwFlags;
+    u32 dwLoops;
+    pointer lpNext;
+    pointer reserved;
+    }
+typedef u32 W32WaveOpenFn(pointer* hwo, u32 dev, pointer fmt, pointer cb, pointer inst, u32 flags);
+typedef u32 W32WaveHdrFn(pointer hwo, pointer hdr, u32 size);
+typedef u32 W32WaveCloseFn(pointer hwo);
+#define W32_MAXSOUNDS 32
+pointer gW32WaveOut[32];      // the open streams (0 = free slot)
+W32WaveHdr* gW32WaveHdr[32];  // their headers (malloc'd, as the samples are)
+pointer gW32WinMM;
+// Close and free every stream that has finished.  Returns how many are still playing.
+i32 w32_sound_prune()
+    {
+    if (gW32WinMM == (pointer)0)
+        {
+        return (i32)0;
+        }
+    W32WaveHdrFn* unprep = (W32WaveHdrFn*)GetProcAddress(gW32WinMM, (u8*)"waveOutUnprepareHeader");
+    W32WaveCloseFn* close = (W32WaveCloseFn*)GetProcAddress(gW32WinMM, (u8*)"waveOutClose");
+    i32 live = (i32)0;
+    for (i32 k = (i32)0; k < (i32)W32_MAXSOUNDS; k = k + (i32)1)
+        {
+        if (gW32WaveOut[k] == (pointer)0)
+            {
+            continue;
+            }
+        W32WaveHdr* hd = gW32WaveHdr[k];
+        if ((hd.dwFlags & (u32)1) == (u32)0) // WHDR_DONE
+            {
+            live = live + (i32)1;
+            continue;
+            }
+        unprep(gW32WaveOut[k], (pointer)hd, (u32)48);
+        close(gW32WaveOut[k]);
+        free(hd.lpData);
+        free((pointer)hd);
+        gW32WaveOut[k] = (pointer)0;
+        gW32WaveHdr[k] = (W32WaveHdr*)0;
+        }
+    return live;
+    }
+bool w32_sound_play(i16* pcm, i32 frames, i32 rate)
+    {
+    if (gW32WinMM == (pointer)0)
+        {
+        gW32WinMM = LoadLibraryA((pointer)"winmm.dll");
+        if (gW32WinMM == (pointer)0)
+            {
+            return false;
+            }
+        }
+    w32_sound_prune();
+    i32 slot = (i32)-1;
+    for (i32 k = (i32)0; k < (i32)W32_MAXSOUNDS && slot < (i32)0; k = k + (i32)1)
+        {
+        if (gW32WaveOut[k] == (pointer)0)
+            {
+            slot = k;
+            }
+        }
+    W32WaveOpenFn* open = (W32WaveOpenFn*)GetProcAddress(gW32WinMM, (u8*)"waveOutOpen");
+    W32WaveHdrFn* prep = (W32WaveHdrFn*)GetProcAddress(gW32WinMM, (u8*)"waveOutPrepareHeader");
+    W32WaveHdrFn* write = (W32WaveHdrFn*)GetProcAddress(gW32WinMM, (u8*)"waveOutWrite");
+    W32WaveCloseFn* close = (W32WaveCloseFn*)GetProcAddress(gW32WinMM, (u8*)"waveOutClose");
+    if (slot < (i32)0 || open == (W32WaveOpenFn*)0 || prep == (W32WaveHdrFn*)0 || write == (W32WaveHdrFn*)0)
+        {
+        return false;
+        }
+    W32WaveFormat fmt;
+    fmt.wFormatTag = (u16)1; // PCM
+    fmt.nChannels = (u16)1;
+    fmt.nSamplesPerSec = (u32)rate;
+    fmt.nAvgBytesPerSec = (u32)(rate * (i32)2);
+    fmt.nBlockAlign = (u16)2;
+    fmt.wBitsPerSample = (u16)16;
+    fmt.cbSize = (u16)0;
+    pointer hwo = (pointer)0;
+    if (open(&hwo, (u32)$FFFFFFFF, (pointer)&fmt, (pointer)0, (pointer)0, (u32)0) != (u32)0) // WAVE_MAPPER, CALLBACK_NULL
+        {
+        return false;
+        }
+    u8* data = (u8*)malloc((u32)(frames * (i32)2));
+    u8* src = (u8*)pcm;
+    for (i32 i = (i32)0; i < frames * (i32)2; i = i + (i32)1)
+        {
+        data[i] = src[i];
+        }
+    W32WaveHdr* hd = (W32WaveHdr*)calloc((u32)1, (u32)48);
+    hd.lpData = (pointer)data;
+    hd.dwBufferLength = (u32)(frames * (i32)2);
+    if (prep(hwo, (pointer)hd, (u32)48) != (u32)0 || write(hwo, (pointer)hd, (u32)48) != (u32)0)
+        {
+        close(hwo);
+        free((pointer)data);
+        free((pointer)hd);
+        return false;
+        }
+    gW32WaveOut[slot] = hwo;
+    gW32WaveHdr[slot] = hd;
+    return true;
+    }
+
 // ---- the application icon (UXApplication.setIcon) -------------------------------------------
 // An HICON from a 32-bit DIB section with its alpha (Windows Vista on draws icon alpha straight), set
 // as both the big icon (taskbar, Alt-Tab) and the small one (title bar) on every window, and kept so a
@@ -1549,6 +1673,11 @@ class UXWin32Driver : Object<UXViewDriver>
         }
     void windowSetInfo(i32 handle, u8* s)
         {
+        }
+    // One waveOut stream per sound; Windows mixes them.
+    bool audioPlay(i16* pcm, i32 frames, i32 rate)
+        {
+        return w32_sound_play(pcm, frames, rate);
         }
     // The taskbar, Alt-Tab and title-bar icon of every window, now and opened later.
     bool appSetIcon(u8* data, i32 w, i32 h, i32 format)

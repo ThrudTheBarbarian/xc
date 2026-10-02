@@ -398,6 +398,11 @@ class UXAndroidDriver : Object<UXViewDriver>
     void windowSetInfo(i32 handle, u8* s)
         {
         }
+    // No sound here: Not wired yet (AudioTrack over JNI is the counterpart).
+    bool audioPlay(i16* pcm, i32 frames, i32 rate)
+        {
+        return false;
+        }
     // Android shows only the APK's launcher icon (android:icon): packaging, not a call.
     bool appSetIcon(u8* data, i32 w, i32 h, i32 format)
         {
