@@ -221,6 +221,21 @@ class UXGemDriver : Object<UXViewDriver>
         return false;
         }
     // no native save dialog here: UXSavePanel draws UXKit's own
+    // no platform navigation stack here: UXNavigationController draws its own bar
+    bool hasNativeNavigation(void)
+        {
+        return false;
+        }
+    pointer navAttach(i32 win, i32 navId, i32 x, i32 y, i32 w, i32 h)
+        {
+        return (pointer)0;
+        }
+    void navPush(pointer nav, u8* title, i32 animated)
+        {
+        }
+    void navPop(pointer nav, i32 animated)
+        {
+        }
     bool hasNativeFileSave(void)
         {
         return false;

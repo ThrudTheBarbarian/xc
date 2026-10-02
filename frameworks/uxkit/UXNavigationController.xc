@@ -6,9 +6,12 @@
 // the STACK is a pure model (push / pop / depth / top, unit-testable with no
 // window), and applyNav() maps it onto a live tree by hiding everything but
 // the top form's content.  The drawn bar (back chevron + titles) is the
-// neutral fallback; on iOS the driver seam later swaps the whole thing for a
-// real UINavigationController with the real edge-swipe, and back-swipe never
-// surfaces as an app event — it is a pop, reported through the same delegate.
+// neutral fallback.  Where the driver has a NATIVE stack (hasNativeNavigation:
+// iOS's UINavigationController) every push and pop is handed to it as well, so
+// the bar, the Back button, the push animation and the edge-swipe are the
+// platform's own; a pop the user makes there (Back, swipe) is not an app event —
+// it comes back through uxNavNativePopped as a pop, reported to the delegate
+// like any other.
 //
 // Lifecycle notifications use §5's names: formWillShow fires for a form about
 // to become the visible top (on its push, and again when a pop re-reveals
@@ -36,17 +39,76 @@ class UXNavItem : Object
     optional void formDidHide(UXNavigationController * n, UXView * content, i32 depth);
     }
 
+// The native stacks' way back: a pop the user made on the platform's own stack (iOS Back or
+// edge-swipe).  Registered controllers, by the id each was attached with.
+Array<UXNavigationController>* gNavRegistry;
+void uxNavNativePopped(i32 navId)
+    {
+    if (gNavRegistry == (Array*)0 || navId < (i32)0 || navId >= (i32)gNavRegistry.count())
+        {
+        return;
+        }
+    UXNavigationController* n = (UXNavigationController* ?)gNavRegistry.get((u32)navId);
+    if (n != (UXNavigationController*)0)
+        {
+        n.popFromNative();
+        }
+    }
+
 // The optional methods' types, takeable as `callback`s.
 class UXNavigationController : UXView
     {
     Array<UXNavItem>* stack;
     weak : UXNavigationDelegate* delegate;
+    pointer nativeNav; // the driver's stack, once attached (0 = drawing our own bar)
+    i32 navId;
 
     void init(void)
         {
         super.init();
         stack = new Array();
         delegate = (UXNavigationDelegate*)0;
+        nativeNav = (pointer)0;
+        navId = (i32)-1;
+        }
+    bool isNative(void)
+        {
+        return nativeNav != (pointer)0;
+        }
+
+    // Hand the stack to the platform's, if it has one and we are in a window.  Called on every push
+    // and at the first draw (a controller is usually filled before its window opens).  Replays the
+    // stack so far, unanimated.  True when it attached just now.
+    bool ensureNative(void)
+        {
+        if (nativeNav != (pointer)0 || gDriver == (UXViewDriver*)0 || !gDriver.hasNativeNavigation())
+            {
+            return false;
+            }
+        if (owner == (UXViewTree*)0 || owner.winHandle == (i32)0)
+            {
+            return false;
+            }
+        if (gNavRegistry == (Array*)0)
+            {
+            gNavRegistry = new Array();
+            }
+        if (navId < (i32)0)
+            {
+            navId = (i32)gNavRegistry.count();
+            gNavRegistry.add(self);
+            }
+        UXRect a = self.absoluteFrame();
+        nativeNav = gDriver.navAttach(owner.winHandle, navId, (i32)a.x, (i32)a.y, (i32)a.w, (i32)a.h);
+        if (nativeNav == (pointer)0)
+            {
+            return false;
+            }
+        for (i32 i = (i32)0; i < self.depth(); i = i + (i32)1)
+            {
+            gDriver.navPush(nativeNav, self.titleAt(i), (i32)0);
+            }
+        return true;
         }
     void setDelegate(UXNavigationDelegate* d)
         {
@@ -123,28 +185,57 @@ class UXNavigationController : UXView
             self.addSubview(content, self.contentFrame());
             }
         self.applyNav();
+        // the platform's stack too (attaching replays everything, this push included)
+        if (!self.ensureNative() && nativeNav != (pointer)0)
+            {
+            gDriver.navPush(nativeNav, title, d > (i32)0 ? (i32)1 : (i32)0);
+            }
         }
 
     void pop(void)
+        {
+        if (self.popModel() && nativeNav != (pointer)0)
+            {
+            gDriver.navPop(nativeNav, (i32)1);
+            }
+        }
+    // The user popped the platform's own stack (Back, edge-swipe): the model follows, and the
+    // platform is NOT told again.
+    void popFromNative(void)
+        {
+        self.popModel();
+        }
+    bool popModel(void)
         {
         i32 d = self.depth();
         // the root never pops
         if (d <= (i32)1)
             {
-            return;
+            return false;
             }
         UXNavItem* top = self.itemAt(d - (i32)1);
         self.notifyHide(top.content, d);
-        stack.removeAt((u16)(d - (i32)1));              // the view stays attached, hidden — repushable
+        // The view stays attached, hidden — repushable.  Hidden HERE: applyNav only walks what is
+        // still on the stack, so a popped form left to it stayed visible over the one revealed.
+        if (top.content != (UXView*)0 && top.content.owner != (UXViewTree*)0)
+            {
+            top.content.setHidden(true);
+            }
+        stack.removeAt((u16)(d - (i32)1));
         self.notifyShow(self.topContent(), d - (i32)1); // the re-revealed form
         self.applyNav();
+        return true;
         }
 
     void popToRoot(void)
         {
         while (self.depth() > (i32)1)
             {
-            self.pop();
+            bool last = self.depth() == (i32)2;
+            if (self.popModel() && nativeNav != (pointer)0)
+                {
+                gDriver.navPop(nativeNav, last ? (i32)1 : (i32)0); // one animation, not a cascade
+                }
             }
         }
 
@@ -189,6 +280,13 @@ class UXNavigationController : UXView
     // ---- the drawn bar (the neutral fallback realization) -------------------
     void drawRect(UXGraphics* g, UXRect dirty)
         {
+        // The first draw is the first moment we are surely in a window: hand over to a native
+        // stack if there is one.  Its bar covers this strip, so there is nothing to draw.
+        self.ensureNative();
+        if (nativeNav != (pointer)0)
+            {
+            return;
+            }
         UXRect b = self.bounds();
         i16 bh = self.barHeight();
         g.fillRect(UXGeom.make((i16)0, (i16)0, b.w, bh), (i32)8);                 // the bar ground
@@ -220,6 +318,10 @@ class UXNavigationController : UXView
     // visible content by ordinary tree hit-testing.
     void mouseDown(UXEvent* e)
         {
+        if (nativeNav != (pointer)0)
+            {
+            return; // the platform's bar takes its own taps
+            }
         if ((i32)e.y < (i32)self.barHeight() && self.canGoBack() && (i32)e.x < (i32)90)
             {
             self.pop();

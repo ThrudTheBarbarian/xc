@@ -7,7 +7,7 @@
 //
 // Regenerate:
 //   javac --release 8 -cp $ANDROID_HOME/platforms/android-35/android.jar UXBridge.java
-//   d8 UXBridge*.class UXRun.class UXDrawView.class --lib .../android.jar --output .
+//   d8 UXBridge*.class UXBack.class UXRun.class UXDrawView.class --lib .../android.jar --output .
 import android.content.Context;
 import android.content.DialogInterface;
 import android.graphics.Canvas;
@@ -72,6 +72,17 @@ public class UXBridge implements View.OnClickListener, SeekBar.OnSeekBarChangeLi
     // cancel (back / outside tap) — the modal alert's whole listener surface
     @Override public void onClick(DialogInterface d, int which) { nativeValue(id, which); }
     @Override public void onCancel(DialogInterface d) { nativeFire(id); }
+}
+
+// Back (gesture or button) while a navigation stack has something to pop -- registered with the
+// window's OnBackInvokedDispatcher only then, so Back at the root still leaves the app.  Its own
+// class because the interface is API 33+: UXBridge has to load on every supported version, and a
+// class implementing a missing interface does not.  Only loaded when SDK_INT >= 33.
+class UXBack implements android.window.OnBackInvokedCallback {
+    private final int id;
+    public UXBack(int id) { this.id = id; }
+    private static native void nativeBack(int id);
+    @Override public void onBackInvoked() { nativeBack(id); }
 }
 
 class UXRun implements Runnable {

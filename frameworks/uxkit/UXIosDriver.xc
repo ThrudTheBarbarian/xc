@@ -29,6 +29,7 @@
 #import "UXPopUpButton.xc"      // native UIButton+UIMenu pull-down
 #import "UXSegmentedControl.xc" // native UISegmentedControl overlay
 #import "UXProgressBar.xc"      // native UIProgressView overlay
+#import "UXNavigationController.xc" // a user's pop on the native stack comes back through uxNavNativePopped
 #import "UXApplication.xc"      // gApp: the driver-owned loop starts the delegate, and stop() quits
 #import "UXLibc.xc"
 
@@ -37,6 +38,10 @@ i32 ux_ios_boot(i32* w, i32* h);
 i32 ux_ios_alert(i32 icon, u8* lines, u8* buttons, i32 defBtn);
 i32 ux_ios_form_factor(void);
 i32 ux_ios_orientation(void); // 1 portrait, 2 landscape
+pointer ux_ios_nav_attach(i32 win, i32 navId, i32 x, i32 y, i32 w, i32 h);
+void ux_ios_nav_push(pointer nav, u8* title, i32 animated);
+void ux_ios_nav_pop(pointer nav, i32 animated);
+void ux_ios_set_nav_popped(pointer fn);
 i32 ux_ios_window_create(i32 x, i32 y, i32 w, i32 h);
 void ux_ios_window_set_content(i32 handle, pointer fn, pointer ud);
 void ux_ios_window_open(i32 handle, i32 x, i32 y, i32 w, i32 h);
@@ -145,6 +150,16 @@ pointer gIosCtlPeer[16384]; // [handle*256 + node] -> the control's neutral widg
 UXEvent* gIosClickEvent;
 // The driver-owned loop's start moment: didFinishLaunching lands here, and the
 // neutral delegate starts exactly where the desktop loop would have started it.
+// The user popped the native navigation stack (Back, edge-swipe): the model pops, and -- as after
+// every native event -- the display pass runs, which is what un-hides the revealed form's controls.
+void uxIosNavPopped(i32 navId)
+    {
+    uxNavNativePopped(navId);
+    if (gApp != (UXApplication*)0)
+        {
+        gApp.displayIfNeeded();
+        }
+    }
 void uxIosShellStart(void)
     {
     if (gApp != (UXApplication*)0)
@@ -299,6 +314,7 @@ class UXIosDriver : Object<UXViewDriver>
             ux_ios_set_value_changed((pointer)&uxIosValueChanged);
             ux_ios_set_field_hooks((pointer)&uxIosFieldChanged);
             ux_ios_set_field_submit_hooks((pointer)&uxIosFieldSubmitted);
+            ux_ios_set_nav_popped((pointer)&uxIosNavPopped);
             }
         return ux_ios_boot(screenW, screenH) != (i32)0;
         }
@@ -445,6 +461,23 @@ class UXIosDriver : Object<UXViewDriver>
         return false;
         }
     // no native save dialog here: UXSavePanel draws UXKit's own
+    // UINavigationController: the real bar, Back button and edge-swipe (libUXIos.m)
+    bool hasNativeNavigation(void)
+        {
+        return true;
+        }
+    pointer navAttach(i32 win, i32 navId, i32 x, i32 y, i32 w, i32 h)
+        {
+        return ux_ios_nav_attach(win, navId, x, y, w, h);
+        }
+    void navPush(pointer nav, u8* title, i32 animated)
+        {
+        ux_ios_nav_push(nav, title, animated);
+        }
+    void navPop(pointer nav, i32 animated)
+        {
+        ux_ios_nav_pop(nav, animated);
+        }
     bool hasNativeFileSave(void)
         {
         return false;

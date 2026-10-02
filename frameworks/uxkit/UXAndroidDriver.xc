@@ -28,6 +28,7 @@
 #import "UXStepper.xc"     // composed -/+ Button pair (Android has no platform stepper)
 #import "UXPopUpButton.xc" // native Spinner overlay
 #import "UXProgressBar.xc" // native horizontal ProgressBar overlay
+#import "UXNavigationController.xc" // Up / Back on the native bar come back through uxNavNativePopped
 #import "UXApplication.xc" // gApp: the driver-owned loop starts the delegate, and stop() quits
 #import "UXLibc.xc"
 
@@ -36,6 +37,10 @@ i32 ux_and_boot(i32* w, i32* h);
 i32 ux_and_alert(i32 icon, u8* lines, u8* buttons, i32 defBtn);
 i32 ux_and_form_factor(void);
 i32 ux_and_orientation(void); // 1 portrait, 2 landscape
+pointer ux_and_nav_attach(i32 win, i32 navId, i32 x, i32 y, i32 w, i32 h);
+void ux_and_nav_push(pointer nav, u8* title, i32 animated);
+void ux_and_nav_pop(pointer nav, i32 animated);
+void ux_and_set_nav_popped(pointer fn);
 i32 ux_and_window_create(i32 x, i32 y, i32 w, i32 h);
 void ux_and_window_set_content(i32 handle, pointer fn, pointer ud);
 void ux_and_window_open(i32 handle, i32 x, i32 y, i32 w, i32 h);
@@ -141,6 +146,16 @@ pointer gAndCtlPeer[16384]; // [handle*256 + node] -> the control's neutral widg
 UXEvent* gAndClickEvent;
 // The driver-owned loop's start moment: the posted UXRun(0) lands here, and
 // the neutral delegate starts exactly where the desktop loop would have.
+// The user pressed Up or Back: the model pops, then the display pass every native event ends with
+// (it is what un-hides the revealed form's widgets).
+void uxAndNavPopped(i32 navId)
+    {
+    uxNavNativePopped(navId);
+    if (gApp != (UXApplication*)0)
+        {
+        gApp.displayIfNeeded();
+        }
+    }
 void uxAndShellStart(void)
     {
     if (gApp != (UXApplication*)0)
@@ -318,6 +333,7 @@ class UXAndroidDriver : Object<UXViewDriver>
             ux_and_set_value_changed((pointer)&uxAndValueChanged);
             ux_and_set_field_hooks((pointer)&uxAndFieldChanged);
             ux_and_set_field_submit_hooks((pointer)&uxAndFieldSubmitted);
+            ux_and_set_nav_popped((pointer)&uxAndNavPopped);
             }
         return ux_and_boot(screenW, screenH) != (i32)0;
         }
@@ -464,6 +480,23 @@ class UXAndroidDriver : Object<UXViewDriver>
         return false;
         }
     // no native save dialog here: UXSavePanel draws UXKit's own
+    // The top app bar (a Toolbar: title, the theme's Up arrow) and the system Back (libUXAndroid.c)
+    bool hasNativeNavigation(void)
+        {
+        return true;
+        }
+    pointer navAttach(i32 win, i32 navId, i32 x, i32 y, i32 w, i32 h)
+        {
+        return ux_and_nav_attach(win, navId, x, y, w, h);
+        }
+    void navPush(pointer nav, u8* title, i32 animated)
+        {
+        ux_and_nav_push(nav, title, animated);
+        }
+    void navPop(pointer nav, i32 animated)
+        {
+        ux_and_nav_pop(nav, animated);
+        }
     bool hasNativeFileSave(void)
         {
         return false;

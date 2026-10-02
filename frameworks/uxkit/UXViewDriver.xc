@@ -145,6 +145,16 @@ protocol UXViewDriver
     // A native file-SAVE dialog, the same way round: hasNativeFileSave() where the OS has one (AppKit's
     // NSSavePanel); fileSave writes the chosen path into out and returns 1, or 0 if cancelled.  It asks
     // about replacing an existing file itself.  Elsewhere UXSavePanel runs UXFilePanel in save mode.
+    // Native NAVIGATION (UXNB-V2 section 5).  Where the platform has its own navigation stack (iOS's
+    // UINavigationController), UXNavigationController hands it each push and pop, and the platform
+    // shows the real bar, the real Back button and the real edge-swipe.  navAttach is given the
+    // controller's rect in its window and an id; a pop the USER makes there (Back, swipe) comes back
+    // as uxNavNativePopped(id), never as an app event.  Elsewhere hasNativeNavigation is false and
+    // the controller draws its own bar.
+    bool hasNativeNavigation(void);
+    pointer navAttach(i32 win, i32 navId, i32 x, i32 y, i32 w, i32 h);
+    void navPush(pointer nav, u8 * title, i32 animated);
+    void navPop(pointer nav, i32 animated);
     bool hasNativeFileSave(void);
     i32 fileSave(u8 * prompt, u8 * startDir, u8 * defaultName, u8 * out, i32 outCap);
     // A native colour picker (AppKit NSColorPanel, Win32 ChooseColor).  hasNativeColorPicker() is true

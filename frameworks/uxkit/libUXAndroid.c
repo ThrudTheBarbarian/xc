@@ -27,6 +27,9 @@
  */
 #include <jni.h>
 #include <android/log.h>
+#include <android/api-level.h>
+#include <stdint.h>
+#include <stdlib.h>
 #include <android/native_activity.h>
 #include <dlfcn.h>
 #include <unistd.h>
@@ -129,9 +132,12 @@ static void alertFinish(JNIEnv *env, int neutralIdx);   /* the modal alert, belo
 static void alertAuto(JNIEnv *env, int shot);
 #define UXA_ALERT_ID 0x7F7F
 static int gAlertCancelIdx;
+static void navUserBack(JNIEnv *env, int navId);       /* the navigation bar, below */
+#define UXA_NAV_ID_BASE 0x7E000                          /* a toolbar's Up: base + navId */
 static void n_fire(JNIEnv *env, jclass c, jint id) {
     (void)c;
     if (id == UXA_ALERT_ID) { alertFinish(env, gAlertCancelIdx); return; }   /* dialog cancelled */
+    if (id >= UXA_NAV_ID_BASE && id < UXA_NAV_ID_BASE + 0x1000) { navUserBack(env, id - UXA_NAV_ID_BASE); return; }
     (void)env;
     if (gFire) gFire(id >> 8, id & 0xFF);
 }
@@ -172,6 +178,7 @@ void ux_and_test_click(int handle, int node);
 /* the frame clock (everyTurn): a self-reposting Handler message on the UI
  * thread.  n_run re-arms it after each call; clearing the hook stops it. */
 static void (*gTurnFn)(void);
+static void (*gLater[16])(void);          /* tests: steps run later through the real loop */
 static int gTurnMs;
 static int gTurnArmed;
 static void uxTurnArm(void);
@@ -182,6 +189,7 @@ static void n_run(JNIEnv *env, jclass c, jint id) {
         if (gTurnFn) { void (*f)(void) = gTurnFn; f(); uxTurnArm(); }
         return;
     }
+    if (id & 0x100000) { void (*f)(void) = gLater[id & 0xF]; if (f) f(); return; } /* a test's step */
     if (id & 0x10000) { ux_and_test_click((id >> 8) & 0xFF, id & 0xFF); return; }
     if (id & 0x40000) { alertAuto(env, id & 1); return; }  /* the alert rig's auto-cancel */
     if (id & 0x20000) {                                    /* the loop gate's watchdog */
@@ -228,6 +236,34 @@ static void postRunDelayed(JNIEnv *env, int id, int ms) {
  * they arrive through the platform's own loop (n_run decodes the ids) */
 void ux_and_test_click_later(int handle, int node, int ms) {
     postRunDelayed(envNow(), 0x10000 | (handle << 8) | node, ms);
+}
+void ux_and_test_call_later(void *fn, int ms) {
+    static int slot;
+    slot = (slot + 1) & 0xF;
+    gLater[slot] = (void (*)(void))fn;
+    postRunDelayed(envNow(), 0x100000 | slot, ms);
+}
+/* Tests: is a native button with this title on screen (attached and shown, ancestors included)? */
+int ux_and_test_control_visible(int handle, const char *title) {
+    JNIEnv *env = envNow();
+    for (int n = 0; n < 256; n++) {
+        jobject c = gCtl[handle][n];
+        if (!c || !(*env)->IsInstanceOf(env, c, gBtnCls)) continue;
+        jclass tvC = (*env)->FindClass(env, "android/widget/TextView");
+        jmethodID getText = (*env)->GetMethodID(env, tvC, "getText", "()Ljava/lang/CharSequence;");
+        jobject cs = (*env)->CallObjectMethod(env, c, getText);
+        jclass oC = (*env)->FindClass(env, "java/lang/Object");
+        jmethodID toS = (*env)->GetMethodID(env, oC, "toString", "()Ljava/lang/String;");
+        jstring js = (jstring)(*env)->CallObjectMethod(env, cs, toS);
+        const char *got = (*env)->GetStringUTFChars(env, js, NULL);
+        int same = strcmp(got, title) == 0;
+        (*env)->ReleaseStringUTFChars(env, js, got);
+        if (!same) continue;
+        jclass vC = (*env)->FindClass(env, "android/view/View");
+        jmethodID shown = (*env)->GetMethodID(env, vC, "isShown", "()Z");
+        return (*env)->CallBooleanMethod(env, c, shown) ? 1 : 0;
+    }
+    return 0;
 }
 void ux_and_test_watchdog(int ms, int rc) {
     postRunDelayed(envNow(), 0x20000 | (rc & 0xFF), ms);
@@ -482,6 +518,202 @@ int ux_and_orientation(void) {
     return gScreenW > gScreenH ? 2 /* UX_ORIENT_LANDSCAPE */ : 1 /* UX_ORIENT_PORTRAIT */;
 }
 
+/* ── native navigation: a Toolbar, and the system Back (UXNB v2 §5) ─────────
+ * UXNavigationController hands its pushes and pops here.  Android's own vocabulary for them is the
+ * top app bar -- an android.widget.Toolbar with the form's title and, when there is somewhere to go
+ * back to, the theme's Up arrow -- and the system Back (button or gesture).  Both Up and Back pop;
+ * that pop is the USER's and is reported to the neutral side through gNavPopped, never as an app
+ * event.  Back is caught with an OnBackInvokedCallback (UXBack, API 33+) registered only while the
+ * stack is deeper than one, so Back at the root still leaves the app.  (API 26-32 is a gap: Back
+ * there leaves the app at any depth.)  The toolbar sits over the nav's bar strip; the forms below
+ * are UXKit's own drawing, as everywhere else on this backend. */
+#define UXA_NAV_MAX 16
+#define UXA_NAV_DEPTH 32
+typedef void (*ux_nav_popped_fn)(int);
+static ux_nav_popped_fn gNavPopped;
+void ux_and_set_nav_popped(void *fn) { gNavPopped = (ux_nav_popped_fn)fn; }
+static struct {
+    int used, handle, navId, depth;
+    jobject toolbar, back;          /* global refs; back = the UXBack, while registered */
+    char *titles[UXA_NAV_DEPTH];
+} gNav[UXA_NAV_MAX];
+static jclass gBackCls;
+static void n_back(JNIEnv *env, jclass c, jint id) { (void)c; navUserBack(env, id); }
+static jclass loadAppClass(JNIEnv *env, const char *name);
+static int apiLevel(void) { return android_get_device_api_level(); }
+
+/* Title, Up arrow and the Back registration, from the depth. */
+static void navSync(JNIEnv *env, int i) {
+    jclass tbC = (*env)->GetObjectClass(env, gNav[i].toolbar);
+    jmethodID setTitle = (*env)->GetMethodID(env, tbC, "setTitle", "(Ljava/lang/CharSequence;)V");
+    const char *t = gNav[i].depth > 0 ? gNav[i].titles[gNav[i].depth - 1] : "";
+    (*env)->CallVoidMethod(env, gNav[i].toolbar, setTitle, (*env)->NewStringUTF(env, t));
+    jmethodID setIcon = (*env)->GetMethodID(env, tbC, "setNavigationIcon", "(Landroid/graphics/drawable/Drawable;)V");
+    jobject icon = NULL;
+    if (gNav[i].depth > 1) {
+        /* the theme's own Up arrow: ?android:attr/homeAsUpIndicator */
+        jclass ctxC = (*env)->GetObjectClass(env, gActivity);
+        jmethodID getTheme = (*env)->GetMethodID(env, ctxC, "getTheme", "()Landroid/content/res/Resources$Theme;");
+        jobject theme = (*env)->CallObjectMethod(env, gActivity, getTheme);
+        jclass thC = (*env)->GetObjectClass(env, theme);
+        jmethodID osa = (*env)->GetMethodID(env, thC, "obtainStyledAttributes", "([I)Landroid/content/res/TypedArray;");
+        jintArray attrs = (*env)->NewIntArray(env, 1);
+        jint up = 0x0101030b; /* android.R.attr.homeAsUpIndicator */
+        (*env)->SetIntArrayRegion(env, attrs, 0, 1, &up);
+        jobject ta = (*env)->CallObjectMethod(env, theme, osa, attrs);
+        jclass taC = (*env)->GetObjectClass(env, ta);
+        jmethodID getD = (*env)->GetMethodID(env, taC, "getDrawable", "(I)Landroid/graphics/drawable/Drawable;");
+        icon = (*env)->CallObjectMethod(env, ta, getD, 0);
+        jmethodID recycle = (*env)->GetMethodID(env, taC, "recycle", "()V");
+        (*env)->CallVoidMethod(env, ta, recycle);
+    }
+    if (icon) {
+        /* the theme's arrow is drawn for ITS bar (white on the dark default); this bar is UXKit's
+         * light one, so tint it to the title's colour */
+        jclass dC = (*env)->FindClass(env, "android/graphics/drawable/Drawable");
+        jmethodID mut = (*env)->GetMethodID(env, dC, "mutate", "()Landroid/graphics/drawable/Drawable;");
+        icon = (*env)->CallObjectMethod(env, icon, mut);
+        (*env)->CallVoidMethod(env, icon, (*env)->GetMethodID(env, dC, "setTint", "(I)V"), (jint)0xFF1C1B1F);
+    }
+    (*env)->CallVoidMethod(env, gNav[i].toolbar, setIcon, icon);
+    if (gNav[i].depth > 1) {
+        jmethodID setNavClick = (*env)->GetMethodID(env, tbC, "setNavigationOnClickListener", "(Landroid/view/View$OnClickListener;)V");
+        jobject br = (*env)->NewObject(env, gBridgeCls, gBridgeInit, UXA_NAV_ID_BASE + gNav[i].navId);
+        (*env)->CallVoidMethod(env, gNav[i].toolbar, setNavClick, br);
+    }
+    /* Back: registered while there is something to pop */
+    if (apiLevel() >= 33 && gBackCls) {
+        jclass actC = (*env)->GetObjectClass(env, gActivity);
+        jmethodID getD = (*env)->GetMethodID(env, actC, "getOnBackInvokedDispatcher", "()Landroid/window/OnBackInvokedDispatcher;");
+        jobject disp = (*env)->CallObjectMethod(env, gActivity, getD);
+        jclass dC = (*env)->FindClass(env, "android/window/OnBackInvokedDispatcher");
+        if (gNav[i].depth > 1 && !gNav[i].back) {
+            jmethodID init = (*env)->GetMethodID(env, gBackCls, "<init>", "(I)V");
+            jobject cb = (*env)->NewObject(env, gBackCls, init, gNav[i].navId);
+            jmethodID reg = (*env)->GetMethodID(env, dC, "registerOnBackInvokedCallback", "(ILandroid/window/OnBackInvokedCallback;)V");
+            (*env)->CallVoidMethod(env, disp, reg, 0 /* PRIORITY_DEFAULT */, cb);
+            gNav[i].back = (*env)->NewGlobalRef(env, cb);
+        } else if (gNav[i].depth <= 1 && gNav[i].back) {
+            jmethodID unreg = (*env)->GetMethodID(env, dC, "unregisterOnBackInvokedCallback", "(Landroid/window/OnBackInvokedCallback;)V");
+            (*env)->CallVoidMethod(env, disp, unreg, gNav[i].back);
+            (*env)->DeleteGlobalRef(env, gNav[i].back);
+            gNav[i].back = NULL;
+        }
+    }
+    check(env, "nav sync");
+}
+static int navIndex(void *token) {
+    int i = (int)(intptr_t)token - 1;
+    return (i >= 0 && i < UXA_NAV_MAX && gNav[i].used) ? i : -1;
+}
+void *ux_and_nav_attach(int win, int navId, int x, int y, int w, int h) {
+    if (win <= 0 || win >= UXA_MAXW || !gWinV[win]) return NULL;
+    JNIEnv *env = envNow();
+    int i = 0;
+    while (i < UXA_NAV_MAX && gNav[i].used) i++;
+    if (i == UXA_NAV_MAX) return NULL;
+    if (!gBackCls && apiLevel() >= 33) {
+        gBackCls = loadAppClass(env, "UXBack");
+        if (gBackCls) {
+            static const JNINativeMethod nbk[] = { { "nativeBack", "(I)V", (void *)n_back } };
+            (*env)->RegisterNatives(env, gBackCls, nbk, 1);
+            check(env, "UXBack natives");
+        }
+    }
+    jclass tbC = (*env)->FindClass(env, "android/widget/Toolbar");
+    jmethodID init = (*env)->GetMethodID(env, tbC, "<init>", "(Landroid/content/Context;)V");
+    jobject tb = (*env)->NewObject(env, tbC, init, gActivity);
+    jmethodID minH = (*env)->GetMethodID(env, tbC, "setMinimumHeight", "(I)V");
+    (*env)->CallVoidMethod(env, tb, minH, 0);
+    jmethodID ttc = (*env)->GetMethodID(env, tbC, "setTitleTextColor", "(I)V");
+    (*env)->CallVoidMethod(env, tb, ttc, (jint)0xFF1C1B1F);
+    jmethodID bg = (*env)->GetMethodID(env, tbC, "setBackgroundColor", "(I)V");
+    (*env)->CallVoidMethod(env, tb, bg, (jint)0xFFF2F2F2);
+    jmethodID elev = (*env)->GetMethodID(env, tbC, "setElevation", "(F)V");
+    (*env)->CallVoidMethod(env, tb, elev, (jfloat)PX(4));
+    (void)h;
+    int bar = 44; /* UXMetrics.navBarHeightFor(a device): the strip the drawn bar would have used */
+    (*env)->CallVoidMethod(env, gWinV[win], gAddView, tb, PX(w), PX(bar));
+    (*env)->CallVoidMethod(env, tb, gSetTransX, (jfloat)PX(x));
+    (*env)->CallVoidMethod(env, tb, gSetTransY, (jfloat)PX(y));
+    memset(&gNav[i], 0, sizeof gNav[i]);
+    gNav[i].used = 1;
+    gNav[i].handle = win;
+    gNav[i].navId = navId;
+    gNav[i].toolbar = (*env)->NewGlobalRef(env, tb);
+    check(env, "nav attach");
+    return (void *)(intptr_t)(i + 1);
+}
+void ux_and_nav_push(void *token, const char *title, int animated) {
+    (void)animated;
+    int i = navIndex(token);
+    if (i < 0 || gNav[i].depth >= UXA_NAV_DEPTH) return;
+    gNav[i].titles[gNav[i].depth++] = strdup(title ? title : "");
+    navSync(envNow(), i);
+}
+static void navDrop(int i) {
+    if (gNav[i].depth <= 1) return;
+    free(gNav[i].titles[--gNav[i].depth]);
+    gNav[i].titles[gNav[i].depth] = NULL;
+}
+void ux_and_nav_pop(void *token, int animated) {
+    (void)animated;
+    int i = navIndex(token);
+    if (i < 0) return;
+    navDrop(i);
+    navSync(envNow(), i);
+}
+/* Up or Back: the user's pop.  The bar follows, then the model is told. */
+static void navUserBack(JNIEnv *env, int navId) {
+    for (int i = 0; i < UXA_NAV_MAX; i++) {
+        if (!gNav[i].used || gNav[i].navId != navId || gNav[i].depth <= 1) continue;
+        navDrop(i);
+        navSync(env, i);
+        if (gNavPopped) gNavPopped(navId);
+        return;
+    }
+}
+/* Tests: the bar's title and Up arrow, and a press of Back / Up. */
+int ux_and_test_nav_title_is(void *token, const char *want) {
+    int i = navIndex(token);
+    if (i < 0) return 0;
+    JNIEnv *env = envNow();
+    jclass tbC = (*env)->GetObjectClass(env, gNav[i].toolbar);
+    jmethodID getT = (*env)->GetMethodID(env, tbC, "getTitle", "()Ljava/lang/CharSequence;");
+    jobject cs = (*env)->CallObjectMethod(env, gNav[i].toolbar, getT);
+    jclass csC = (*env)->FindClass(env, "java/lang/Object");
+    jmethodID toS = (*env)->GetMethodID(env, csC, "toString", "()Ljava/lang/String;");
+    jstring js = cs ? (jstring)(*env)->CallObjectMethod(env, cs, toS) : NULL;
+    const char *got = js ? (*env)->GetStringUTFChars(env, js, NULL) : "";
+    int same = strcmp(got, want) == 0;
+    if (js) (*env)->ReleaseStringUTFChars(env, js, got);
+    return same;
+}
+int ux_and_test_nav_has_up(void *token) {
+    int i = navIndex(token);
+    if (i < 0) return 0;
+    JNIEnv *env = envNow();
+    jclass tbC = (*env)->GetObjectClass(env, gNav[i].toolbar);
+    jmethodID getI = (*env)->GetMethodID(env, tbC, "getNavigationIcon", "()Landroid/graphics/drawable/Drawable;");
+    return (*env)->CallObjectMethod(env, gNav[i].toolbar, getI) != NULL;
+}
+int ux_and_test_nav_back_registered(void *token) {
+    int i = navIndex(token);
+    return i >= 0 && gNav[i].back != NULL;
+}
+void ux_and_test_nav_press_up(void *token) {
+    int i = navIndex(token);
+    if (i >= 0) navUserBack(envNow(), gNav[i].navId);
+}
+/* Tests: the system Back, as the platform delivers it -- the registered callback's onBackInvoked. */
+void ux_and_test_nav_system_back(void *token) {
+    int i = navIndex(token);
+    if (i < 0 || !gNav[i].back) return;
+    JNIEnv *env = envNow();
+    jmethodID ob = (*env)->GetMethodID(env, gBackCls, "onBackInvoked", "()V");
+    (*env)->CallVoidMethod(env, gNav[i].back, ob);
+}
+
 /* ── windows ────────────────────────────────────────────────────────────── */
 static int gRootAttached;
 int ux_and_window_create(int x, int y, int w, int h) {
@@ -493,6 +725,27 @@ int ux_and_window_create(int x, int y, int w, int h) {
         (*env)->CallVoidMethod(env, gRoot, setPad, gInsetL, gInsetT, gInsetR, gInsetB);
         (*env)->CallVoidMethod(env, gActivity, gSetContentView, gRoot);
         if (!check(env, "setContentView(root)")) return 0;
+        /* the theme's action bar: UXKit owns the chrome (a window's title is not an app bar) */
+        jclass aC = (*env)->GetObjectClass(env, gActivity);
+        jmethodID getAB = (*env)->GetMethodID(env, aC, "getActionBar", "()Landroid/app/ActionBar;");
+        jobject ab = (*env)->CallObjectMethod(env, gActivity, getAB);
+        if (ab) {
+            jclass abC = (*env)->GetObjectClass(env, ab);
+            (*env)->CallVoidMethod(env, ab, (*env)->GetMethodID(env, abC, "hide", "()V"));
+        }
+        check(env, "hide action bar");
+        /* UXKit's palette is light, so the status bar's icons must be dark (API 30+) */
+        if (apiLevel() >= 30) {
+            jmethodID getWin = (*env)->GetMethodID(env, aC, "getWindow", "()Landroid/view/Window;");
+            jobject w = (*env)->CallObjectMethod(env, gActivity, getWin);
+            jclass wC = (*env)->GetObjectClass(env, w);
+            jobject ic = (*env)->CallObjectMethod(env, w, (*env)->GetMethodID(env, wC, "getInsetsController", "()Landroid/view/WindowInsetsController;"));
+            if (ic) {
+                jclass icC = (*env)->GetObjectClass(env, ic);
+                (*env)->CallVoidMethod(env, ic, (*env)->GetMethodID(env, icC, "setSystemBarsAppearance", "(II)V"), 8, 8); /* APPEARANCE_LIGHT_STATUS_BARS */
+            }
+            check(env, "light status bar");
+        }
         gRootAttached = 1;
     }
     int hh = gNextH++;
@@ -1438,11 +1691,47 @@ void ux_and_quit(int rc) {
 /* ── onCreate: ours by lib_name; delegates to the app lib's (the glue) ──── */
 typedef void (*onCreate_fn)(ANativeActivity *, void *, size_t);
 
+/* A class from the bridge dex, through the APP's class loader (FindClass from a native thread
+ * only sees the system loader). */
+static jclass loadAppClass(JNIEnv *env, const char *name) {
+    jclass actC = (*env)->GetObjectClass(env, gActivity);
+    jmethodID getCl = (*env)->GetMethodID(env, actC, "getClassLoader", "()Ljava/lang/ClassLoader;");
+    jobject loader = (*env)->CallObjectMethod(env, gActivity, getCl);
+    jclass clCls = (*env)->GetObjectClass(env, loader);
+    jmethodID loadClass = (*env)->GetMethodID(env, clCls, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;");
+    jobject k = (*env)->CallObjectMethod(env, loader, loadClass, (*env)->NewStringUTF(env, name));
+    if (!check(env, "loadAppClass") || !k) return NULL;
+    return (jclass)(*env)->NewGlobalRef(env, k);
+}
+
 JNIEXPORT void ANativeActivity_onCreate(ANativeActivity *activity,
                                         void *saved, size_t savedSize) {
     JNIEnv *env = activity->env;
     gVm = activity->vm;
     gActivity = (*env)->NewGlobalRef(env, activity->clazz);
+
+    /* GIVE THE WINDOW BACK TO THE VIEWS.  NativeActivity.onCreate takes the window's surface
+     * (takeSurface) and its input queue (takeInputQueue) for native code, then calls us.  This
+     * backend draws with real Android views instead -- a UXDrawView per window and native widget
+     * overlays -- so with the surface taken nothing was ever composited (the screen stayed black),
+     * and with the input queue taken every key and touch went to a queue nothing reads: real taps
+     * never reached a widget, and the system Back never reached an OnBackInvokedCallback.  The
+     * gates did not notice because they inject clicks and read state programmatically.  Handing
+     * both back (null) here, still inside onCreate and before the decor is attached, makes it an
+     * ordinary view-based window; the format goes back to RGBA_8888 from NativeActivity's RGB_565. */
+    {
+        jclass aC = (*env)->GetObjectClass(env, gActivity);
+        jmethodID getWin = (*env)->GetMethodID(env, aC, "getWindow", "()Landroid/view/Window;");
+        jobject w = (*env)->CallObjectMethod(env, gActivity, getWin);
+        jclass wC = (*env)->FindClass(env, "android/view/Window");
+        jmethodID takeS = (*env)->GetMethodID(env, wC, "takeSurface", "(Landroid/view/SurfaceHolder$Callback2;)V");
+        jmethodID takeQ = (*env)->GetMethodID(env, wC, "takeInputQueue", "(Landroid/view/InputQueue$Callback;)V");
+        jmethodID fmt = (*env)->GetMethodID(env, wC, "setFormat", "(I)V");
+        (*env)->CallVoidMethod(env, w, takeS, NULL);
+        (*env)->CallVoidMethod(env, w, takeQ, NULL);
+        (*env)->CallVoidMethod(env, w, fmt, 1 /* PixelFormat.RGBA_8888 */);
+        check(env, "untake surface/input");
+    }
 
     /* the bridge dex, via the APP loader (the spike's finding #2) */
     jclass actC = (*env)->GetObjectClass(env, gActivity);

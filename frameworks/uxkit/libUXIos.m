@@ -220,11 +220,13 @@ void ux_ios_window_front(int handle)
     if (v)
         [v.superview bringSubviewToFront:v];
     }
+static void navWindowClosed(int handle);
 void ux_ios_window_close(int handle)
     {
     UIView* v = gWin[handle];
     if (!v)
         return;
+    navWindowClosed(handle);
     [v removeFromSuperview];
     for (int n = 0; n < 256; n++)
         gCtl[handle][n] = nil;
@@ -1098,6 +1100,246 @@ int ux_ios_pixel(int x, int y)
         return -1;
     unsigned char* p = gPix + (y * gPixW + x) * 4;
     return (p[0] << 16) | (p[1] << 8) | p[2];
+    }
+
+// ── native navigation: a real UINavigationController (UXNB v2 §5) ──────────────────────────────
+// UXNavigationController hands its pushes and pops here, and the platform does the rest: the bar,
+// the Back button (titled with the form underneath), the push animation and the interactive
+// edge-swipe.  A pop the USER makes (Back, a completed swipe) is reported back through gNavPopped.
+//
+// HOW ONE DRAWN WINDOW LIVES IN A STACK OF VIEW CONTROLLERS.  UXKit draws a window's whole tree into
+// one container view (gWin), native controls on top.  The navigation controller covers the nav's rect
+// of that window; the LIVE container sits in the TOP view controller's view, offset so that it stays
+// exactly where it was on screen (the view controller's view starts below the bar and clips, so the
+// drawn content's bar strip is hidden under the native bar).  The forms underneath are SNAPSHOTS of
+// the container taken as they were covered -- which is what an edge-swipe reveals, and what a pop
+// slides back to.  When a pop completes, the live container moves into the revealed view controller
+// and its snapshot is dropped once the re-revealed form has redrawn.
+@interface UXNavHost : NSObject <UINavigationControllerDelegate>
+@property(nonatomic, strong) UINavigationController* nav;
+@property(nonatomic) int handle;   // the UXKit window
+@property(nonatomic) int navId;    // the neutral controller's id
+@property(nonatomic) CGRect rect;  // the nav's rect, in the window
+@property(nonatomic) NSInteger known; // the depth the neutral model has
+@end
+typedef void (*ux_nav_popped_fn)(int);
+static ux_nav_popped_fn gNavPopped;
+static NSMutableArray<UXNavHost*>* gNavHosts;
+#define UX_NAV_SNAP_TAG 0x5A95
+void ux_ios_set_nav_popped(void* fn)
+    {
+    gNavPopped = (ux_nav_popped_fn)fn;
+    }
+static CGFloat navBarH(UXNavHost* h)
+    {
+    CGFloat b = h.nav.navigationBar.frame.size.height;
+    return b > 0 ? b : 44;
+    }
+// Put the live window container into `vc`'s view, where it stays put on screen.
+static void navPlaceLive(UXNavHost* h, UIViewController* vc)
+    {
+    UIView* v = gWin[h.handle];
+    if (!v || !vc)
+        return;
+    CGSize ws = v.bounds.size;
+    [vc.view addSubview:v];
+    v.frame = CGRectMake(-h.rect.origin.x, -(h.rect.origin.y + navBarH(h)), ws.width, ws.height);
+    UIView* snap = [vc.view viewWithTag:UX_NAV_SNAP_TAG];
+    if (snap)
+        [vc.view bringSubviewToFront:snap]; // the snapshot stays on top until the live view has redrawn
+    }
+static void navDropSnapLater(UIViewController* vc)
+    {
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 120 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+      [[vc.view viewWithTag:UX_NAV_SNAP_TAG] removeFromSuperview];
+    });
+    }
+static UIView* navSnapshot(UXNavHost* h)
+    {
+    UIView* v = gWin[h.handle];
+    if (!v || !v.window)
+        return nil;
+    UIView* s = [v snapshotViewAfterScreenUpdates:NO];
+    s.tag = UX_NAV_SNAP_TAG;
+    return s;
+    }
+@implementation UXNavHost
+- (void)navigationController:(UINavigationController*)nc
+       didShowViewController:(UIViewController*)vc
+                    animated:(BOOL)animated
+    {
+    NSInteger n = (NSInteger)nc.viewControllers.count;
+    if (n >= self.known)
+        return; // a push, or an interactive swipe the user abandoned: nothing moved
+    // The user popped (Back, or a completed swipe).  Bring the live view to the revealed form, tell
+    // the model (once per level popped), and let it redraw under the snapshot.
+    NSInteger levels = self.known - n;
+    self.known = n;
+    navPlaceLive(self, vc);
+    for (NSInteger i = 0; i < levels; i++)
+        if (gNavPopped)
+            gNavPopped(self.navId);
+    [gDraw[self.handle] setNeedsDisplay];
+    navDropSnapLater(vc);
+    }
+@end
+
+void* ux_ios_nav_attach(int win, int navId, int x, int y, int w, int h)
+    {
+    if (win <= 0 || win >= UXIOS_MAXW || !gWin[win])
+        return NULL;
+    if (!gNavHosts)
+        gNavHosts = [NSMutableArray new];
+    UXNavHost* host = [UXNavHost new];
+    host.handle = win;
+    host.navId = navId;
+    host.rect = CGRectMake(x, y, w, h);
+    host.known = 0;
+    [gNavHosts addObject:host];
+    void* token = (void*)(intptr_t)gNavHosts.count; // 1-based
+    // Attach on the next turn: the neutral side asks from inside a draw, and the window container is
+    // about to be re-parented -- not something to do to a view in the middle of drawing it.  Every
+    // later push and pop is queued the same way, so they stay in order behind this.
+    dispatch_async(dispatch_get_main_queue(), ^{
+      UINavigationController* nav = [UINavigationController new];
+      nav.delegate = host;
+      nav.navigationBar.translucent = NO;
+      host.nav = nav;
+      UIViewController* root = gWindow.rootViewController;
+      UIView* v = gWin[win];
+      [root addChildViewController:nav];
+      CGRect wf = v.frame; // the window, in the safe-area container
+      nav.view.frame = CGRectMake(wf.origin.x + x, wf.origin.y + y, w, h);
+      [v.superview insertSubview:nav.view aboveSubview:v];
+      [nav didMoveToParentViewController:root];
+    });
+    return token;
+    }
+static UXNavHost* navHost(void* token)
+    {
+    NSInteger i = (NSInteger)(intptr_t)token - 1;
+    return (gNavHosts && i >= 0 && i < (NSInteger)gNavHosts.count) ? gNavHosts[i] : nil;
+    }
+void ux_ios_nav_push(void* token, const char* title, int animated)
+    {
+    UXNavHost* h = navHost(token);
+    if (!h)
+        return;
+    // The covered form, as it looks NOW: the model has switched forms but the window has not
+    // redrawn yet (a redraw is only ever scheduled).
+    UIView* snap = (animated && h.nav && h.nav.viewControllers.count > 0) ? navSnapshot(h) : nil;
+    NSString* t = [NSString stringWithUTF8String:title ? title : ""];
+    h.known++;
+    dispatch_async(dispatch_get_main_queue(), ^{
+      UIViewController* prev = h.nav.topViewController;
+      if (prev && snap)
+          {
+          snap.frame = gWin[h.handle].frame;
+          [prev.view addSubview:snap];
+          }
+      UIViewController* vc = [UIViewController new];
+      vc.title = t;
+      vc.edgesForExtendedLayout = UIRectEdgeNone;
+      vc.view.clipsToBounds = YES;
+      vc.view.backgroundColor = UIColor.systemBackgroundColor;
+      [h.nav pushViewController:vc animated:animated && prev != nil];
+      [h.nav.view layoutIfNeeded];
+      navPlaceLive(h, vc);
+    });
+    }
+void ux_ios_nav_pop(void* token, int animated)
+    {
+    UXNavHost* h = navHost(token);
+    if (!h)
+        return;
+    UIView* snap = animated ? navSnapshot(h) : nil; // the departing form, before the model's redraw
+    if (h.known > 1)
+        h.known--; // an app pop: the delegate must not report it back
+    dispatch_async(dispatch_get_main_queue(), ^{
+      NSArray* vcs = h.nav.viewControllers;
+      if (vcs.count < 2)
+          return;
+      UIViewController* top = vcs.lastObject;
+      UIViewController* under = vcs[vcs.count - 2];
+      if (snap)
+          {
+          snap.frame = gWin[h.handle].frame;
+          [top.view addSubview:snap];
+          }
+      [[under.view viewWithTag:UX_NAV_SNAP_TAG] removeFromSuperview];
+      navPlaceLive(h, under);
+      [gDraw[h.handle] setNeedsDisplay];
+      [h.nav popViewControllerAnimated:animated];
+    });
+    }
+// A window closing takes its navigation controllers with it.
+static void navWindowClosed(int handle)
+    {
+    for (UXNavHost* h in gNavHosts)
+        if (h.handle == handle && h.nav)
+            {
+            [h.nav willMoveToParentViewController:nil];
+            [h.nav.view removeFromSuperview];
+            [h.nav removeFromParentViewController];
+            h.nav = nil;
+            }
+    }
+
+// Tests: what the stack shows, and the user's Back.
+int ux_ios_test_nav_depth(void* token)
+    {
+    UXNavHost* h = navHost(token);
+    return h && h.nav ? (int)h.nav.viewControllers.count : -1;
+    }
+int ux_ios_test_nav_title_is(void* token, int fromTop, const char* want)
+    {
+    UXNavHost* h = navHost(token);
+    NSArray* vcs = h.nav.viewControllers;
+    NSInteger i = (NSInteger)vcs.count - 1 - fromTop;
+    if (!h || i < 0)
+        return 0;
+    return [((UIViewController*)vcs[i]).title isEqualToString:[NSString stringWithUTF8String:want]];
+    }
+int ux_ios_test_nav_live_on_top(void* token)
+    {
+    UXNavHost* h = navHost(token);
+    return h && h.nav && gWin[h.handle].superview == h.nav.topViewController.view;
+    }
+int ux_ios_test_nav_swipe_enabled(void* token)
+    {
+    UXNavHost* h = navHost(token);
+    return h && h.nav && h.nav.interactivePopGestureRecognizer != nil;
+    }
+void ux_ios_test_nav_user_back(void* token)
+    {
+    UXNavHost* h = navHost(token);
+    [h.nav popViewControllerAnimated:YES]; // exactly what the bar's Back button does
+    }
+// Tests: is a native button with this title on screen (in the window, not hidden, nor any ancestor)?
+int ux_ios_test_control_visible(int handle, const char* title)
+    {
+    NSString* t = [NSString stringWithUTF8String:title];
+    for (int n = 0; n < 256; n++)
+        {
+        UIView* c = gCtl[handle][n];
+        if (![c isKindOfClass:UIButton.class] || ![[(UIButton*)c titleForState:UIControlStateNormal] isEqualToString:t])
+            continue;
+        if (!c.window)
+            return 0;
+        for (UIView* v = c; v; v = v.superview)
+            if (v.hidden || v.alpha == 0)
+                return 0;
+        return 1;
+        }
+    return 0;
+    }
+typedef void (*ux_later_fn)(void);
+void ux_ios_test_call_later(void* fn, int ms)
+    {
+    ux_later_fn f = (ux_later_fn)fn;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)ms * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+      f();
+    });
     }
 
 // ── the shell (Option B: run()'s iOS inside) ────────────────────────────────
