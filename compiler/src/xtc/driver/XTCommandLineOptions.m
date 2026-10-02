@@ -258,6 +258,10 @@ static NSString* sExecutablePath = nil;
             {
             [candidates addObject:bin];                                        // Windows: xcc.exe + xc/
             [candidates addObject:[bin stringByAppendingPathComponent:@".."]]; // bin/ -> root
+            // compiler/bin/<plat>/ -> compiler/: an in-tree build run from
+            // anywhere but compiler/ otherwise fell through to the INSTALLED
+            // support tree (bug 593). An install still stops one level up.
+            [candidates addObject:[bin stringByAppendingPathComponent:@"../.."]];
             }
         }
     [candidates addObject:@"."];

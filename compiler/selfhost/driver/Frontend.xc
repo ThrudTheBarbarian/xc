@@ -1730,7 +1730,17 @@ String* supportRoot(FeOptions* o)
         bases.add((Object*)bin);
         String* up = dirOf(bin);
         if (up != 0)
+            {
             bases.add((Object*)up);
+            // Two up: an in-tree build lives at compiler/bin/<plat>/, and its
+            // support tree is compiler/support. Without this, the in-tree
+            // compiler run from anywhere but compiler/ fell through to the
+            // INSTALLED tree, libraries and all (bug 593). An install still
+            // stops one level up, at <root>/lib/xc.
+            String* up2 = dirOf(up);
+            if (up2 != 0)
+                bases.add((Object*)up2);
+            }
         }
     bases.add((Object*)String.withCString("."));
     // A per-user tree, after the working directory and before the system ones.
