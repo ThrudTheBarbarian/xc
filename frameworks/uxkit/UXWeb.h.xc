@@ -45,6 +45,9 @@ extern void ux_clip_round(i32 x, i32 y, i32 w, i32 h, i32 r);
 // The menu bar, for the page to build as DOM: JSON [{title, items: [{text, checked?, disabled?} |
 // {sep:1}]}], len bytes.  A pick comes back through the ring as type 9 (a = title, b = item).
 extern void ux_menu_set(u8* json, i32 len);
+// A modal alert shown by the PAGE (a real browser's worker run loop): 1 if it was handed over (the
+// answer comes back through the ring as type 7), 0 where there is no page to show it.
+extern i32 ux_web_alert_show(i32 icon, u8* lines, u8* buttons, i32 defaultBtn);
 // A popup button's list, for the page to show at the button: JSON {token, x, y, w, selected,
 // items: [title...]}.  A pick comes back through the ring as type 10 (a = token, b = item).
 extern void ux_popup_open(u8* json, i32 len);

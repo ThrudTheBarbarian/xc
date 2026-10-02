@@ -135,6 +135,15 @@
       if (globalThis.xccPost) globalThis.xccPost({ uxPopup: json });
       else if (globalThis.uxPage) globalThis.uxPage.popup(json);
     },
+    // A modal alert: in the worker, the page shows it (ux_web_page.js) and the answer comes back
+    // through the ring as type 7.  Lines and buttons are "|"-separated.
+    ux_web_alert_show: (icon, lp, bp, def) => {
+      if (!globalThis.xccPost) return 0;
+      const str = (p) => { const m = U8(); let e = p >>> 0; while (m[e]) e++;
+                           return new TextDecoder().decode(m.slice(p >>> 0, e)); };
+      globalThis.xccPost({ uxAlert: { icon, lines: str(lp).split('|'), buttons: str(bp).split('|'), def } });
+      return 1;
+    },
     ux_menu_state: (t, j, what, on) => {
       const st = { t, j, what, on };
       if (globalThis.xccPost) globalThis.xccPost({ uxMenuState: st });

@@ -1,0 +1,47 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>running</title>
+<canvas id="ux-canvas" width="240" height="140"></canvas>
+<script>
+  // run_web_worker.sh's page: the WORKER run loop (served cross-origin-isolated, so the loader's ring
+  // is a SharedArrayBuffer).  It plays the user: when the alert's dialog appears it is checked and
+  // "Discard" clicked; then File > New is picked from the DOM menu bar.  The app's output arrives
+  // through xccOut; the verdict (its PASS line plus the page's own checks) is POSTed back.
+  globalThis.xccConfig = { runLoop: 'worker', workerScript: 'ux_web_browser.js', canvas: '#ux-canvas' };
+  const fails = [];
+  const want = (ok, what) => { if (!ok) fails.push(what); };
+  const out = [];
+  const report = () => fetch('/result', { method: 'POST',
+    body: (fails.length ? 'PAGE-FAIL: ' + fails.join('; ') + '\n' : '') + out.join('\n') });
+  globalThis.xccOut = (s) => {
+    out.push(s);
+    if (/^(PASS|FAIL)/.test(s)) report();
+  };
+  let alerted = false;
+  new MutationObserver(() => {
+    const box = document.querySelector('.ux-alert');
+    if (box && !alerted) {
+      alerted = true;
+      const lines = [...box.querySelectorAll('.ux-alert-line')].map((p) => p.textContent);
+      const btns = [...box.querySelectorAll('button')];
+      want(lines.length === 2 && lines[0] === 'Discard changes?', 'alert lines: ' + JSON.stringify(lines));
+      want(btns.length === 2 && btns[0].textContent === 'Keep' && btns[1].textContent === 'Discard', 'alert buttons');
+      want(btns[0].classList.contains('default'), 'Keep is not the default');
+      want(document.activeElement === btns[0], 'the default button does not have the focus');
+      setTimeout(() => btns[1].click(), 100);
+      // then the menu, once the alert has gone and the app is in its run loop
+      setTimeout(() => {
+        want(!document.querySelector('.ux-alert'), 'the dialog did not close');
+        const bar = document.querySelector('.ux-menubar');
+        want(bar, 'no DOM menu bar');
+        if (!bar) return report();
+        const title = bar.querySelector('.ux-title');
+        title.click();
+        title.querySelectorAll('.ux-drop > .ux-item')[0].click();
+      }, 600);
+    }
+  }).observe(document.documentElement, { childList: true, subtree: true });
+  setTimeout(() => { fails.push('timed out'); report(); }, 15000);
+</script>
+<script src="ux_web_page.js"></script>
+<script src="test_web_worker.js"></script>

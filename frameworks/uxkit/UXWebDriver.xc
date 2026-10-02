@@ -1192,8 +1192,27 @@ class UXWebDriver : Object<UXViewDriver>
     // block until the answer comes back through the ring as a type-7 event.
     // Outside a worker (the plain recording rig) the shim answers the default
     // synchronously, so headless tests keep their old behaviour.
+    // In a real browser the worker hands the alert's strings to the page (ux_web_page.js shows a
+    // DOM dialog) and blocks on the ring until the answer arrives as type 7; input that arrives
+    // meanwhile is discarded, as a modal does.  Elsewhere (the node rig) the whole request goes up
+    // as one blocking round trip, which the rig decodes and answers.
     i32 alertRun(i32 icon, u8* lines, u8* buttons, i32 defaultBtn)
         {
+        if (ux_web_alert_show(icon, lines, buttons, defaultBtn) != (i32)0)
+            {
+            i32 r[8];
+            for (;;)
+                {
+                _xt_ring_wait((i32)-1);
+                while (_xt_ring_read(&r[0]) >= (i32)0)
+                    {
+                    if (r[0] == (i32)7)
+                        {
+                        return r[1];
+                        }
+                    }
+                }
+            }
         return _xt_req_block((i32)1, (i32)lines, (i32)buttons, (icon << (i32)8) | defaultBtn);
         }
 

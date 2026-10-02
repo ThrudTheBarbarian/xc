@@ -13,6 +13,8 @@
 // menu-select.  Ticked items show a check, greyed ones do not respond.
 //
 // THE POPUP LIST (UXPopUpButton): see popup() below; a pick is ring type 10.
+//
+// THE MODAL ALERT (UXAlert): see alert() below; the answer is ring type 7, the 1-based button.
 (() => {
   const css = `
 .ux-menubar { display: flex; gap: 2px; padding: 2px 4px; font: 13px system-ui, sans-serif;
@@ -164,12 +166,90 @@
   };
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && pop) { closePopup(); e.stopPropagation(); } }, true);
 
+  // THE MODAL ALERT (UXAlert, in the worker run loop): a dialog over a dimmed page.  The worker is
+  // blocked on the ring until the answer: the 1-based button, as ring type 7.  Return presses the
+  // default button and Escape the cancel one (the last), as the native alerts do; nothing behind
+  // the dialog can be clicked while it is up.
+  const alertCss = `
+.ux-alert-back { position: fixed; inset: 0; background: rgba(0,0,0,.28); z-index: 2000;
+  display: flex; align-items: center; justify-content: center; font: 13px system-ui, sans-serif; }
+.ux-alert { background: #fafafa; border-radius: 10px; padding: 18px 20px 14px; min-width: 260px;
+  max-width: 420px; box-shadow: 0 10px 34px rgba(0,0,0,.3); color: #1c1b1f; }
+.ux-alert .ux-alert-line { margin: 0 0 6px; }
+.ux-alert .ux-alert-line:first-child { font-weight: 600; font-size: 14px; }
+.ux-alert .ux-alert-buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+.ux-alert button { font: inherit; padding: 5px 16px; border-radius: 6px; border: 1px solid #c4c4c4;
+  background: #fff; cursor: default; }
+.ux-alert button.default { background: #2a6fdb; border-color: #2a6fdb; color: #fff; }
+@media (prefers-color-scheme: dark) {
+  .ux-alert { background: #323232; color: #e6e6e6; }
+  .ux-alert button { background: #444; border-color: #555; color: #e6e6e6; }
+}`;
+  const alertPicks = [];
+  globalThis.uxAlertPicks = alertPicks;
+  let alertBack = null;
+  const answerAlert = (n) => {
+    if (!alertBack) return;
+    alertBack.remove();
+    alertBack = null;
+    document.removeEventListener('keydown', alertKeys, true);
+    alertPicks.push(n);
+    if (globalThis.xccPushEvent) globalThis.xccPushEvent(7, n);
+    else if (globalThis.uxPage.onAlert) globalThis.uxPage.onAlert(n);
+  };
+  let alertModel = null;
+  const alertKeys = (e) => {
+    if (!alertBack) return;
+    if (e.key === 'Enter' && alertModel.def > 0) { e.preventDefault(); e.stopPropagation(); answerAlert(alertModel.def); }
+    else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); answerAlert(alertModel.buttons.length); }
+  };
+  const alert = (a) => {
+    if (!document.getElementById('ux-alert-style')) {
+      const st = document.createElement('style');
+      st.id = 'ux-alert-style';
+      st.textContent = alertCss;
+      document.head.appendChild(st);
+    }
+    if (alertBack) alertBack.remove();
+    alertModel = { lines: a.lines.filter((l) => l !== ''), buttons: a.buttons.filter((b) => b !== ''), def: a.def | 0 };
+    if (!alertModel.buttons.length) alertModel.buttons = ['OK'];
+    alertBack = document.createElement('div');
+    alertBack.className = 'ux-alert-back';
+    const box = document.createElement('div');
+    box.className = 'ux-alert';
+    box.setAttribute('role', 'alertdialog');
+    box.setAttribute('aria-modal', 'true');
+    alertModel.lines.forEach((l) => {
+      const p = document.createElement('p');
+      p.className = 'ux-alert-line';
+      p.textContent = l;
+      box.appendChild(p);
+    });
+    const row = document.createElement('div');
+    row.className = 'ux-alert-buttons';
+    alertModel.buttons.forEach((b, i) => {
+      const el = document.createElement('button');
+      el.textContent = b;
+      if (i + 1 === alertModel.def) el.className = 'default';
+      el.addEventListener('click', (e) => { e.stopPropagation(); answerAlert(i + 1); });
+      row.appendChild(el);
+    });
+    box.appendChild(row);
+    alertBack.appendChild(box);
+    alertBack.addEventListener('mousedown', (e) => e.stopPropagation()); // nothing behind it
+    document.body.appendChild(alertBack);
+    document.addEventListener('keydown', alertKeys, true);
+    const d = row.children[(alertModel.def || 1) - 1];
+    if (d) d.focus();
+  };
+
   globalThis.uxPage = { menu: build, menuState: state, close, openTitle: show, onPick: null,
-                        popup, closePopup, onPopupPick: null };
+                        popup, closePopup, onPopupPick: null, alert, onAlert: null };
   // The worker's posts (the loader forwards them here).
   const prev = globalThis.xccOnMessage;
   globalThis.xccOnMessage = (p) => {
-    if (p && p.uxPopup !== undefined) popup(p.uxPopup);
+    if (p && p.uxAlert !== undefined) alert(p.uxAlert);
+    else if (p && p.uxPopup !== undefined) popup(p.uxPopup);
     else if (p && p.uxMenu !== undefined) build(p.uxMenu);
     else if (p && p.uxMenuState) state(p.uxMenuState);
     else if (prev) prev(p);

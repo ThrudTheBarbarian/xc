@@ -46,6 +46,7 @@ const inRounds = (o, px, py) => (o.rounds || []).every(({ x, y, w, h, r }) => {
 globalThis.xccImports = { env: {
   // ── boot / windows ──
   ux_boot: (pw, ph) => { wi32(pw, 640); wi32(ph, 400); return 1; },
+  ux_web_alert_show: () => 0, // the rig answers alerts through _xt_req_block instead
   // A GL entry point as the web delivers it: a host import (see UXWeb.h.xc).  The
   // rig has one so the delivery path is exercised; a page shim has the real set.
   ux_host_add: (a, b) => (a + b) | 0,
