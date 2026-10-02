@@ -154,6 +154,9 @@ mac-alpha: ; XCC=$(XCC) sh run_mac_alpha.sh
 # The right way up, the right region, scaled, alpha honoured, both byte layouts -- each pixel compared
 # with the toolkit's own fill of the same colour, since the capture bitmap is in the display's space.
 mac-pixels: ; XCC=$(XCC) sh run_mac_pixels.sh
+# ---- oot-client — an out-of-tree client of the DEPLOYED library (/opt/xcc/3p/uxkit) ---------
+# The only gate that imports the library's interface the way an external app does (bug 038).
+oot-client: ; XCC=$(XCC) sh run_oot_client.sh
 # ---- mac-weight — a family at a numeric WEIGHT, on AppKit, checked as pixels -----
 # The map's labels are `600 10px ui-monospace, Menlo, monospace` in an rgba() colour.  drawTextFont had
 # a family but only a bool `bold`; this renders weight 400 and 600 in one family and compares the ink.
