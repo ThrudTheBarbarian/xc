@@ -983,6 +983,7 @@ int ux_ios_setting_remove(const char* dom, const char* key)
 // ── the headless readback rig (cacheDisplayInRect's iOS analogue) ───────────
 static unsigned char* gPix;
 static int gPixW, gPixH;
+static void navRenderBars(int handle, CGContextRef ctx); // the nav section, below
 void ux_ios_render(int handle)
     {
     UIView* v = gWin[handle];
@@ -1005,6 +1006,7 @@ void ux_ios_render(int handle)
     [gDraw[handle] setNeedsDisplay];
     UIGraphicsPushContext(ctx);
     [v.layer renderInContext:ctx]; // the draw view AND the native controls
+    navRenderBars(handle, ctx);   // and a native navigation bar over it, which lives beside it
     UIGraphicsPopContext();
     CGContextRelease(ctx);
     }
@@ -1303,6 +1305,35 @@ void ux_ios_nav_pop(void* token, int animated)
       [gDraw[h.handle] setNeedsDisplay];
       [h.nav popViewControllerAnimated:animated];
     });
+    }
+// The readback (a portrait, a pixel gate) renders the window's own view; a native navigation bar is
+// not inside it -- it belongs to the navigation controller beside it -- so it is drawn on top here,
+// at the nav's rect.
+static void navRenderBars(int handle, CGContextRef ctx)
+    {
+    // A navigation controller attaches (and takes its pushes) on the next turn of the main loop; a
+    // readback straight after building would beat it.  Let the queued work run first (bounded).
+    for (int spin = 0; spin < 20; spin++)
+        {
+        BOOL pending = NO;
+        for (UXNavHost* h in gNavHosts)
+            if (h.handle == handle && (!h.nav || (NSInteger)h.nav.viewControllers.count < h.known))
+                pending = YES;
+        if (!pending)
+            break;
+        CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, false);
+        }
+    for (UXNavHost* h in gNavHosts)
+        {
+        if (h.handle != handle || !h.nav)
+            continue;
+        UINavigationBar* bar = h.nav.navigationBar;
+        [h.nav.view layoutIfNeeded];
+        CGContextSaveGState(ctx);
+        CGContextTranslateCTM(ctx, h.rect.origin.x, h.rect.origin.y + bar.frame.origin.y);
+        [bar.layer renderInContext:ctx];
+        CGContextRestoreGState(ctx);
+        }
     }
 // A window closing takes its navigation controllers with it.
 static void navWindowClosed(int handle)

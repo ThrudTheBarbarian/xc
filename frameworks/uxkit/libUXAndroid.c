@@ -298,6 +298,18 @@ void ux_and_test_touch(int handle, int phase, int x, int y) {
     (*env)->CallVoidMethod(env, ev, (*env)->GetMethodID(env, meC, "recycle", "()V"));
     check(env, "test touch");
 }
+/* Tests: does the native field at (handle, node) mask its text (a password transformation)? */
+int ux_and_test_field_masked(int handle, int node) {
+    JNIEnv *env = envNow();
+    jobject ed = gCtl[handle][node];
+    if (!ed) return -1;
+    jclass tvC = (*env)->FindClass(env, "android/widget/TextView");
+    jobject tm = (*env)->CallObjectMethod(env, ed, (*env)->GetMethodID(env, tvC, "getTransformationMethod", "()Landroid/text/method/TransformationMethod;"));
+    jclass pwC = (*env)->FindClass(env, "android/text/method/PasswordTransformationMethod");
+    int masked = tm && (*env)->IsInstanceOf(env, tm, pwC);
+    check(env, "field masked");
+    return masked;
+}
 void ux_and_test_watchdog(int ms, int rc) {
     postRunDelayed(envNow(), 0x20000 | (rc & 0xFF), ms);
 }
@@ -976,8 +988,6 @@ void ux_and_make_field(int handle, int node, int x, int y, int w, int h,
     (*env)->CallVoidMethod(env, ed, grav, 16);            /* CENTER_VERTICAL */
     gFieldBuf[handle][node] = buf;
     gFieldCap[handle][node] = cap;
-    if (secure)   /* TYPE_CLASS_TEXT | TYPE_TEXT_VARIATION_PASSWORD */
-        (*env)->CallVoidMethod(env, ed, gEditSetInputType, 0x81);
     gFieldMute = 1;
     (*env)->CallVoidMethod(env, ed, gEditSetText, (*env)->NewStringUTF(env, buf));
     gFieldMute = 0;
@@ -986,6 +996,11 @@ void ux_and_make_field(int handle, int node, int x, int y, int w, int h,
      * in the buffer -- which is also what makes the editor-action listener below fire. */
     jmethodID single = (*env)->GetMethodID(env, gEditCls, "setSingleLine", "(Z)V");
     if (single) (*env)->CallVoidMethod(env, ed, single, (jboolean)1);
+    /* A secure field's input type goes on AFTER setSingleLine: setSingleLine installs its own
+     * transformation and so threw away the password one -- the field showed its text in plain
+     * view.  Password input is single-line by itself, so this order keeps both. */
+    if (secure)   /* TYPE_CLASS_TEXT | TYPE_TEXT_VARIATION_PASSWORD */
+        (*env)->CallVoidMethod(env, ed, gEditSetInputType, 0x81);
     jmethodID onAct = (*env)->GetMethodID(env, gEditCls, "setOnEditorActionListener",
                                           "(Landroid/widget/TextView$OnEditorActionListener;)V");
     if (onAct) (*env)->CallVoidMethod(env, ed, onAct, bridge(env, handle, node));

@@ -43,6 +43,7 @@ extern i32 ux_and_pixel(i32 x, i32 y);
 // glyphs and nothing else.
 #define METRIC_Y 130
 extern void ux_and_test_click(i32 handle, i32 node);
+extern i32 ux_and_test_field_masked(i32 handle, i32 node);
 
 i32 gCanvasDrew;
 i32 gViewClicked;
@@ -164,7 +165,19 @@ void testBody(void)
     win.open((u8*)"UXKit on Android", UXGeom.make((i16)80, (i16)80, (i16)220, (i16)175), canvas);
     canvas.addSubview(button, UXGeom.make((i16)8, (i16)90, (i16)80, (i16)32));
     canvas.addSubview(check, UXGeom.make((i16)100, (i16)90, (i16)110, (i16)32));
-    win.displayAll(); // realizeTree overlays the REAL Button + CheckBox
+    // a password field and a plain one: the native EditText must mask the first (and only it)
+    UXTextField* pw = new UXTextField();
+    pw.setSecure(true);
+    pw.setText((u8*)"secret");
+    canvas.addSubview(pw, UXGeom.make((i16)8, (i16)130, (i16)100, (i16)28));
+    UXTextField* plain = new UXTextField();
+    plain.setText((u8*)"hello");
+    canvas.addSubview(plain, UXGeom.make((i16)112, (i16)130, (i16)100, (i16)28));
+    win.displayAll(); // realizeTree overlays the REAL Button + CheckBox + EditTexts
+    i32 pwMasked = ux_and_test_field_masked((i32)1, (i32)pw.index);
+    i32 plainMasked = ux_and_test_field_masked((i32)1, (i32)plain.index);
+    bool fieldsOk = pwMasked == (i32)1 && plainMasked == (i32)0;
+    Stdio.printf("password field masked=%d, plain field masked=%d\n", pwMasked, plainMasked);
 
     ux_and_render((i32)1);                        // the offscreen Bitmap walk
     i32 pCanvas = ux_and_pixel((i32)30, (i32)20); // inside the canvas box (10..60, 10..40)
@@ -249,7 +262,7 @@ void testBody(void)
                      && firstInk >= METRIC_Y && lastInk >= METRIC_Y + asc - (i32)2
                      && lastInk <= METRIC_Y + asc - (i32)1;
 
-    bool pass = gCanvasDrew >= (i32)1 && isGrey(pCanvas) && gViewClicked >= (i32)1 && gButtonFired == (i32)1 && after == (i32)0 && gCheckFired == (i32)1 && checkAdopted && (ff == (i32)UX_FORM_PHONE || ff == (i32)UX_FORM_TABLET) && dashOk && metricsOk;
+    bool pass = gCanvasDrew >= (i32)1 && isGrey(pCanvas) && gViewClicked >= (i32)1 && gButtonFired == (i32)1 && after == (i32)0 && gCheckFired == (i32)1 && checkAdopted && (ff == (i32)UX_FORM_PHONE || ff == (i32)UX_FORM_TABLET) && dashOk && metricsOk && fieldsOk;
     Stdio.printf(pass ? "PASS: the neutral UXKit layer runs native on Android (paint+pixels+native action+memgate+dash+metrics)\n"
                       : "FAIL: 1\n");
     ux_and_quit(pass ? (i32)0 : (i32)1);
