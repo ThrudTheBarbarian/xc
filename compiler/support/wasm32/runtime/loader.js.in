@@ -88,7 +88,8 @@
       if (d.xccExit) console.warn(`main() returned ${d.xccExit}`);
     };
     worker.postMessage({ ring, canvas: off,
-                         workerScript: cfg.workerScript || null },
+                         workerScript: cfg.workerScript || null,
+                         workerData: cfg.workerData },
                        off ? [off] : []);
     return;
   }
@@ -99,6 +100,10 @@
     const boot = await new Promise((res) => { self.onmessage = (m) => res(m.data); });
     if (boot.ring) ringI32 = new Int32Array(boot.ring);
     globalThis.xccCanvas = boot.canvas || null;   // OffscreenCanvas for the driver
+    // The page's xccConfig.workerData (any structured-cloneable value), set
+    // BEFORE workerScript runs: a worker has no localStorage, so a page can
+    // hand its shim a snapshot of whatever state it keeps there.
+    globalThis.xccWorkerData = boot.workerData;
     if (boot.workerScript) importScripts(boot.workerScript); // may set xccImports HERE
   }
   let line = [];
