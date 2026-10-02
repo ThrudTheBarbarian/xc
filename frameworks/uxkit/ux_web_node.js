@@ -125,6 +125,24 @@ globalThis.xccImports = { env: {
   },
   // drawPixels: recorded with a COPY of the source region (the memory may move on), and replayed by
   // ux_test_pixel with nearest sampling and the alpha applied -- enough to read the picture back.
+  // The favicon, recorded: its size and its pixels as RGBA, for ux_test_app_icon.
+  ux_app_set_icon: (p, w, h, fmt) => {
+    if (w <= 0 || h <= 0) return 0;
+    const src = U8().slice(p >>> 0, (p >>> 0) + w * h * 4);
+    if (fmt === 1) for (let i = 0; i < w * h * 4; i += 4) { const r = src[i + 2]; src[i + 2] = src[i]; src[i] = r; }
+    globalThis.uxAppIcon = { w, h, px: src };
+    return 1;
+  },
+  ux_test_done: () => {},
+  // The recorded icon's colour (0xRRGGBB) at (x,y), or -1; with x = -1 its width, y = -1 its height.
+  ux_test_app_icon: (x, y) => {
+    const ic = globalThis.uxAppIcon;
+    if (!ic) return -1;
+    if (x === -1) return ic.w;
+    if (y === -1) return ic.h;
+    const k = (y * ic.w + x) * 4;
+    return (ic.px[k] << 16) | (ic.px[k + 1] << 8) | ic.px[k + 2];
+  },
   ux_draw_pixels: (p, w, h, fmt, sx, sy, sw, sh, dx, dy, dw, dh, a) => {
     if (w <= 0 || h <= 0 || sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0 || a <= 0) return;
     const m = U8(); const px = new Uint8Array(sw * sh * 4);

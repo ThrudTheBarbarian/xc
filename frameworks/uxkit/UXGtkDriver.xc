@@ -475,6 +475,12 @@ class UXGtkDriver : Object<UXViewDriver>
     void windowSetInfo(i32 handle, u8* s)
         {
         }
+    // GTK 4 takes a window's icon only by NAME from the installed icon theme, so the app's icon
+    // comes from its .desktop entry and the theme: packaging, not a call.
+    bool appSetIcon(u8* data, i32 w, i32 h, i32 format)
+        {
+        return false;
+        }
     void windowSetIcon(i32 handle, u8* slice)
         {
         }

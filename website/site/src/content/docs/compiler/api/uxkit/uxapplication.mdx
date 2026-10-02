@@ -68,7 +68,7 @@ and the repaint has happened. Implement it only if you lay out views by hand.
 
 ## Topics
 
-**Configuring** · [setDriver](#setdriver) · [setDelegate](#setdelegate) · [setMenuBar](#setmenubar)
+**Configuring** · [setDriver](#setdriver) · [setDelegate](#setdelegate) · [setMenuBar](#setmenubar) · [setIcon](#seticon--seticonpixels) · [setIconPixels](#seticon--seticonpixels)
 **The loop** · [run](#run) · [stop](#stop) · [isRunning](#isrunning) · [pump](#pump)
 **Windows** · [addWindow](#addwindow) · [closeWindow](#closewindow) · [closeWindowLater](#closewindowlater)
 **Screen** · [screenWidth](#screenwidth--screenheight) · [screenHeight](#screenwidth--screenheight)
@@ -112,6 +112,28 @@ Boots, starts the delegate, then runs the loop (or the platform's loop on iOS,
 see the overview). Returns `0` after [`stop`](#stop) on the blocking backends,
 `1` if boot failed, `2` with no delegate, or the delegate's own nonzero start
 code.
+
+### setIcon / setIconPixels
+
+```c
+bool setIcon(UXImage* img)
+bool setIconPixels(u8* data, i32 w, i32 h, i32 format)
+```
+
+The application's icon while it runs: the Dock tile on macOS, the taskbar,
+Alt-Tab and title-bar icon of every window on Windows (including windows opened
+later), and the page's favicon on the web. `setIconPixels` takes raw pixels, in
+the formats of [`drawPixels`](/compiler/api/uxkit/uxgraphics/#drawpixels):
+`UXPIX_RGBA` bytes, such as a decoded PNG, or `UXPIX_ARGB32` words. The pixels
+are copied, so the image can change or go away afterwards. To change the icon,
+for a status variant say, set it again.
+
+Both return true when the platform shows the icon. They return false on iOS,
+Android, GTK and GEM, where only the app's **package** gives it an icon: the
+asset catalog, the APK's `android:icon`, the `.desktop` entry and icon theme,
+and the desktop's resource file. That icon is also what every platform shows
+before the app runs (in Finder, Explorer or a launcher), and it comes from the
+packaging step, not from this call.
 
 ### stop
 

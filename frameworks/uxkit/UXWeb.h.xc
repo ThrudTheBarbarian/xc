@@ -42,6 +42,8 @@ extern void ux_clip_round(i32 x, i32 y, i32 w, i32 h, i32 r);
 // A region of a bitmap in wasm memory, scaled into a rect, with an overall alpha: Canvas2D's
 // drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh).  format is UXPIX_*; the host may keep what it builds
 // from `data`, keyed by its address, so the bytes must not change once drawn.
+// The application's icon: the page's favicon (1 = set).
+extern i32 ux_app_set_icon(u8* data, i32 w, i32 h, i32 format);
 extern void ux_draw_pixels(u8* data, i32 w, i32 h, i32 format, i32 sx, i32 sy, i32 sw, i32 sh,
                            i32 dx, i32 dy, i32 dw, i32 dh, i32 alpha);
 extern void ux_fill_circle(i32 cx, i32 cy, i32 rad, i32 r, i32 g, i32 b);

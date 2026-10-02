@@ -7,6 +7,8 @@
 #import "UXEvent.xc"
 #import "UXMenu.xc"
 #import "UXNotificationCenter.xc"
+#import "UXImage.xc"
+#import "UXGraphics.xc" // UXPIX_*
 
 protocol UXApplicationDelegate
     {
@@ -115,6 +117,29 @@ class UXApplication : UXResponder
     void stop(void)
         {
         running = false;
+        }
+
+    // The application's icon while it runs: the Dock tile on macOS, the taskbar, Alt-Tab and title-bar
+    // icon on Windows (every window, including ones opened later), the page's favicon on the web.  The
+    // pixels are copied, so the image may change or go afterwards; set it again to change the icon (a
+    // status variant, say).  true when the platform shows it; false where only the app's PACKAGE gives
+    // it an icon (iOS, Android, GTK, GEM), which is xcc's packaging step and not a call.
+    bool setIcon(UXImage* img)
+        {
+        if (img == (UXImage*)0 || img.px == (u32*)0)
+            {
+            return false;
+            }
+        return gDriver.appSetIcon((u8*)img.px, img.w, img.h, (i32)UXPIX_ARGB32);
+        }
+    // The same from raw pixels: UXPIX_RGBA bytes (a decoded PNG) or UXPIX_ARGB32 words.
+    bool setIconPixels(u8* data, i32 w, i32 h, i32 format)
+        {
+        if (data == (u8*)0 || w <= (i32)0 || h <= (i32)0)
+            {
+            return false;
+            }
+        return gDriver.appSetIcon(data, w, h, format);
         }
 
     // Close ONE window: destroy its native window, drop it from the list, and quit the app only when

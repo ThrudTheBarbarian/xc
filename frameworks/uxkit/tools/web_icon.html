@@ -1,0 +1,45 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>running</title>
+<canvas id="ux-canvas" width="200" height="100"></canvas>
+<script>
+  // run_web_icon.sh's page: once the app has set its icon twice, decode the page's <link rel="icon">
+  // -- what a browser tab shows -- and check the second icon's quadrants (green, red / yellow, blue).
+  const near = (d, r, g, b) => Math.abs(d[0] - r) <= 20 && Math.abs(d[1] - g) <= 20 && Math.abs(d[2] - b) <= 20;
+  // In the browser the app reads its icon back from the favicon the shim recorded.
+  globalThis.xccImports = { env: {
+    ux_test_app_icon: (x, y) => {
+      const ic = globalThis.uxAppIcon;
+      if (!ic) return -1;
+      if (x === -1) return ic.w;
+      if (y === -1) return ic.h;
+      return globalThis.uxIconPx ? globalThis.uxIconPx(x, y) : -1;
+    },
+    ux_test_done: () => {
+      const link = document.querySelector('link[rel~="icon"]');
+      if (!link || !link.href.startsWith('data:image/png')) { document.title = 'FAIL: no PNG favicon link'; return; }
+      const im = new Image();
+      im.onload = () => {
+        const c = document.createElement('canvas'); c.width = 64; c.height = 64;
+        const g = c.getContext('2d'); g.drawImage(im, 0, 0);
+        const p = (x, y) => g.getImageData(x, y, 1, 1).data;
+        const ok = im.width === 64 && near(p(10, 10), 30, 200, 60) && near(p(54, 10), 230, 30, 30) &&
+                   near(p(10, 54), 240, 210, 20) && near(p(54, 54), 30, 60, 220);
+        document.title = ok ? 'PASS: the favicon is the app icon, the right way round' : 'FAIL: favicon pixels ' + [p(10,10), p(54,10), p(10,54), p(54,54)].map((d) => d.slice(0,3).join(',')).join(' / ');
+      };
+      im.src = link.href;
+    },
+  } };
+</script>
+<script src="ux_web_browser.js"></script>
+<script>
+  // The shim keeps the icon as a data URL; decode it once so the app's own read-back works here too.
+  const orig = globalThis.xccImports.env.ux_app_set_icon;
+  globalThis.xccImports.env.ux_app_set_icon = (p, w, h, fmt) => {
+    const r = orig(p, w, h, fmt);
+    const U = new Uint8Array(globalThis.xcc.memory.buffer).slice(p >>> 0, (p >>> 0) + w * h * 4);
+    globalThis.uxIconPx = (x, y) => { const k = (y * w + x) * 4; return fmt === 1 ? (U[k + 2] << 16) | (U[k + 1] << 8) | U[k] : (U[k] << 16) | (U[k + 1] << 8) | U[k + 2]; };
+    return r;
+  };
+</script>
+<script src="test_web_icon.js"></script>

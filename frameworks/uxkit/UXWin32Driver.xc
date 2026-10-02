@@ -1292,6 +1292,87 @@ pointer UXGl32Proc(pointer hwnd, u32 msg, pointer wp, pointer lp)
     return DefWindowProcA(hwnd, msg, wp, lp);
     }
 
+// ---- the application icon (UXApplication.setIcon) -------------------------------------------
+// An HICON from a 32-bit DIB section with its alpha (Windows Vista on draws icon alpha straight), set
+// as both the big icon (taskbar, Alt-Tab) and the small one (title bar) on every window, and kept so a
+// window opened later gets it too.  The entry points are resolved by name, as the paint path does,
+// because they are not in the toolchain's import map.
+struct W32IconInfo
+    {
+    i32 fIcon;
+    u32 xHotspot;
+    u32 yHotspot;
+    pointer hbmMask;
+    pointer hbmColor;
+    }
+typedef pointer W32CreateDIBFn(pointer hdc, pointer bmi, u32 usage, pointer* bits, pointer section, u32 offset);
+typedef pointer W32CreateBitmapFn(i32 w, i32 h, u32 planes, u32 bpp, pointer bits);
+typedef pointer W32CreateIconFn(pointer info);
+typedef i32 W32DestroyIconFn(pointer icon);
+pointer gW32AppIcon;
+pointer w32_app_icon_make(u8* data, i32 w, i32 h, i32 fmt)
+    {
+    pointer gdi = LoadLibraryA((pointer)"gdi32.dll");
+    pointer usr = LoadLibraryA((pointer)"user32.dll");
+    if (gdi == (pointer)0 || usr == (pointer)0)
+        {
+        return (pointer)0;
+        }
+    W32CreateDIBFn* mkDib = (W32CreateDIBFn*)GetProcAddress(gdi, (u8*)"CreateDIBSection");
+    W32CreateBitmapFn* mkBmp = (W32CreateBitmapFn*)GetProcAddress(gdi, (u8*)"CreateBitmap");
+    W32CreateIconFn* mkIcon = (W32CreateIconFn*)GetProcAddress(usr, (u8*)"CreateIconIndirect");
+    if (mkDib == (W32CreateDIBFn*)0 || mkBmp == (W32CreateBitmapFn*)0 || mkIcon == (W32CreateIconFn*)0)
+        {
+        return (pointer)0;
+        }
+    W32BmiHeader bmi;
+    bmi.biSize = (u32)40;
+    bmi.biWidth = w;
+    bmi.biHeight = (i32)0 - h; // negative: top-down, as the pixels are
+    bmi.biPlanes = (u16)1;
+    bmi.biBitCount = (u16)32;
+    bmi.biCompression = (u32)0;
+    bmi.biSizeImage = (u32)0;
+    bmi.biXPelsPerMeter = (i32)0;
+    bmi.biYPelsPerMeter = (i32)0;
+    bmi.biClrUsed = (u32)0;
+    bmi.biClrImportant = (u32)0;
+    pointer bits = (pointer)0;
+    pointer color = mkDib((pointer)0, (pointer)&bmi, (u32)0, &bits, (pointer)0, (u32)0);
+    if (color == (pointer)0 || bits == (pointer)0)
+        {
+        return (pointer)0;
+        }
+    u8* out = (u8*)bits; // B, G, R, A per pixel
+    for (i32 k = (i32)0; k < w * h; k = k + (i32)1)
+        {
+        u8* q = data + k * (i32)4;
+        out[k * (i32)4] = fmt == (i32)1 ? q[0] : q[2];
+        out[k * (i32)4 + (i32)1] = q[1];
+        out[k * (i32)4 + (i32)2] = fmt == (i32)1 ? q[2] : q[0];
+        out[k * (i32)4 + (i32)3] = q[3];
+        }
+    pointer mask = mkBmp(w, h, (u32)1, (u32)1, (pointer)0); // all zero: the alpha does the masking
+    W32IconInfo ii;
+    ii.fIcon = (i32)1;
+    ii.xHotspot = (u32)0;
+    ii.yHotspot = (u32)0;
+    ii.hbmMask = mask;
+    ii.hbmColor = color;
+    pointer icon = mkIcon((pointer)&ii);
+    DeleteObject(color); // the icon holds its own copies
+    DeleteObject(mask);
+    return icon;
+    }
+void w32_app_icon_apply(pointer hwnd)
+    {
+    if (gW32AppIcon != (pointer)0 && hwnd != (pointer)0)
+        {
+        SendMessageA(hwnd, (u32)$0080, (pointer)1, gW32AppIcon); // WM_SETICON, ICON_BIG
+        SendMessageA(hwnd, (u32)$0080, (pointer)0, gW32AppIcon); // ICON_SMALL
+        }
+    }
+
 class UXWin32Driver : Object<UXViewDriver>
     {
     void init(void)
@@ -1404,6 +1485,7 @@ class UXWin32Driver : Object<UXViewDriver>
             gW32NextHandle = gW32NextHandle + (i32)1;
             }
         gW32Hwnds[handle] = hwnd;
+        w32_app_icon_apply(hwnd); // an app icon set before this window opened
         gW32WinH[handle] = h;
         gW32ScrollY[handle] = (i32)0;
         gW32ScrollMax[handle] = (i32)0;
@@ -1467,6 +1549,31 @@ class UXWin32Driver : Object<UXViewDriver>
         }
     void windowSetInfo(i32 handle, u8* s)
         {
+        }
+    // The taskbar, Alt-Tab and title-bar icon of every window, now and opened later.
+    bool appSetIcon(u8* data, i32 w, i32 h, i32 format)
+        {
+        pointer icon = w32_app_icon_make(data, w, h, format);
+        if (icon == (pointer)0)
+            {
+            return false;
+            }
+        pointer old = gW32AppIcon;
+        gW32AppIcon = icon;
+        for (i32 k = (i32)1; k < (i32)64; k = k + (i32)1) // every slot of gW32Hwnds
+            {
+            w32_app_icon_apply(gW32Hwnds[k]);
+            }
+        if (old != (pointer)0)
+            {
+            pointer usr = LoadLibraryA((pointer)"user32.dll");
+            W32DestroyIconFn* d = (W32DestroyIconFn*)GetProcAddress(usr, (u8*)"DestroyIcon");
+            if (d != (W32DestroyIconFn*)0)
+                {
+                d(old); // no window holds it any more
+                }
+            }
+        return true;
         }
     void windowSetIcon(i32 handle, u8* slice)
         {

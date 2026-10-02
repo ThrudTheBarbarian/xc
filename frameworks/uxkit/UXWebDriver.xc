@@ -172,6 +172,11 @@ class UXWebDriver : Object<UXViewDriver>
     void windowSetInfo(i32 handle, u8* s)
         {
         }
+    // The page's favicon.
+    bool appSetIcon(u8* data, i32 w, i32 h, i32 format)
+        {
+        return ux_app_set_icon(data, w, h, format) != (i32)0;
+        }
     void windowSetIcon(i32 handle, u8* slice)
         {
         }

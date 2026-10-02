@@ -121,6 +121,27 @@
     // drawPixels: the bitmap is copied out of wasm memory into a canvas ONCE, keyed by its address,
     // size and layout (UXPIX_ARGB32 words are B,G,R,A in memory and are reordered), then each call is
     // one drawImage of the region.
+    // The application's icon: the page's favicon.  The pixels (fmt 0 RGBA bytes, 1 0xAARRGGBB words)
+    // go onto a canvas and the <link rel="icon"> points at it as a PNG; uxAppIcon keeps what was set.
+    ux_app_set_icon: (p, w, h, fmt) => {
+      if (w <= 0 || h <= 0) return 0;
+      const c = document.createElement('canvas'); c.width = w; c.height = h;
+      const src = U8().subarray(p >>> 0, (p >>> 0) + w * h * 4);
+      const img = new ImageData(w, h);
+      if (fmt === 1) {
+        for (let i = 0; i < w * h * 4; i += 4) {
+          img.data[i] = src[i + 2]; img.data[i + 1] = src[i + 1]; img.data[i + 2] = src[i]; img.data[i + 3] = src[i + 3];
+        }
+      } else img.data.set(src);
+      c.getContext('2d').putImageData(img, 0, 0);
+      const href = c.toDataURL('image/png');
+      let link = document.querySelector('link[rel~="icon"]');
+      if (!link) { link = document.createElement('link'); link.rel = 'icon'; document.head.appendChild(link); }
+      link.type = 'image/png';
+      link.href = href;
+      globalThis.uxAppIcon = { w, h, href };
+      return 1;
+    },
     ux_draw_pixels: (p, w, h, fmt, sx, sy, sw, sh, dx, dy, dw, dh, a) => {
       if (w <= 0 || h <= 0 || sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0 || a <= 0) return;
       const key = (p >>> 0) + ':' + w + 'x' + h + ':' + fmt;

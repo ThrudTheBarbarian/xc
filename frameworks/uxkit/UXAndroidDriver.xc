@@ -398,6 +398,11 @@ class UXAndroidDriver : Object<UXViewDriver>
     void windowSetInfo(i32 handle, u8* s)
         {
         }
+    // Android shows only the APK's launcher icon (android:icon): packaging, not a call.
+    bool appSetIcon(u8* data, i32 w, i32 h, i32 format)
+        {
+        return false;
+        }
     void windowSetIcon(i32 handle, u8* slice)
         {
         }

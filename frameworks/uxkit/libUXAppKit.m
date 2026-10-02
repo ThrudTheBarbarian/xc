@@ -1616,6 +1616,65 @@ void ux_ak_window_set_icon(int handle, const char* s)
         }
     [g_win[handle] setRepresentedURL:[NSURL fileURLWithPath:[NSString stringWithUTF8String:s]]];
     }
+/* The APPLICATION's icon while it runs: the Dock tile (and the app switcher).  The pixels (fmt 0 =
+ * RGBA bytes, 1 = 0xAARRGGBB words; straight alpha, top-down) are copied into a non-premultiplied
+ * bitmap rep, so the caller's buffer may change afterwards.  1 when set. */
+int ux_ak_app_set_icon(const unsigned char* data, int w, int h, int fmt)
+    {
+    if (!data || w <= 0 || h <= 0)
+        return 0;
+    NSBitmapImageRep* rep = [[NSBitmapImageRep alloc]
+        initWithBitmapDataPlanes:NULL pixelsWide:w pixelsHigh:h bitsPerSample:8 samplesPerPixel:4
+        hasAlpha:YES isPlanar:NO colorSpaceName:NSDeviceRGBColorSpace
+        bitmapFormat:NSBitmapFormatAlphaNonpremultiplied bytesPerRow:w * 4 bitsPerPixel:32];
+    if (!rep)
+        return 0;
+    unsigned char* out = [rep bitmapData];
+    for (int i = 0; i < w * h; i++)
+        {
+        const unsigned char* q = data + (size_t)i * 4;
+        out[i * 4 + 0] = fmt == 1 ? q[2] : q[0];
+        out[i * 4 + 1] = q[1];
+        out[i * 4 + 2] = fmt == 1 ? q[0] : q[2];
+        out[i * 4 + 3] = q[3];
+        }
+    NSImage* img = [[NSImage alloc] initWithSize:NSMakeSize(w, h)];
+    [img addRepresentation:rep];
+    [NSApplication sharedApplication]; /* NSApp may not exist yet in a headless run */
+    [NSApp setApplicationIconImage:img];
+    return [NSApp applicationIconImage] != nil ? 1 : 0;
+    }
+/* Read-back for a gate: the running icon's pixel size, and its colour (0xRRGGBB) at (x,y) from the
+ * top-left, out of the image AppKit now holds.  -1 = no icon set. */
+int ux_ak_app_icon_pixel(int x, int y, int* outW, int* outH)
+    {
+    /* Whatever image AppKit now holds, rendered at its own size into a known RGBA bitmap: the read
+     * does not depend on how AppKit stores it. */
+    NSImage* img = [NSApp applicationIconImage];
+    if (!img)
+        return -1;
+    int w = (int)lround([img size].width), h = (int)lround([img size].height);
+    if (outW)
+        *outW = w;
+    if (outH)
+        *outH = h;
+    if (w <= 0 || h <= 0 || x < 0 || y < 0 || x >= w || y >= h)
+        return -1;
+    NSRect r = NSMakeRect(0, 0, w, h);
+    CGImageRef cg = [img CGImageForProposedRect:&r context:nil hints:nil];
+    if (!cg)
+        return -1;
+    unsigned char* px = calloc((size_t)w * h, 4);
+    CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+    CGContextRef c = CGBitmapContextCreate(px, w, h, 8, w * 4, cs, kCGImageAlphaPremultipliedLast);
+    CGContextDrawImage(c, CGRectMake(0, 0, w, h), cg); /* row 0 of px is the TOP row */
+    CGContextRelease(c);
+    CGColorSpaceRelease(cs);
+    unsigned char* q = px + ((size_t)y * w + x) * 4;
+    int rgb = (q[0] << 16) | (q[1] << 8) | q[2];
+    free(px);
+    return rgb;
+    }
 // Read-back, so a test can assert the WINDOW shows it rather than that the call returned.
 int ux_ak_window_icon(int handle, char* out, int cap)
     {

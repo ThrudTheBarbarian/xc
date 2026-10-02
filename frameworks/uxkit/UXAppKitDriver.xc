@@ -45,6 +45,7 @@ void ux_ak_window_set_title(i32 handle, u8* s);
 void ux_ak_window_set_subtitle(i32 handle, u8* s);  // NSWindow.subtitle (macOS 11+)
 void ux_ak_window_set_modified(i32 handle, i32 on); // the dot in the close button
 void ux_ak_window_set_icon(i32 handle, u8* s);      // NSWindow.representedURL — the proxy icon
+i32 ux_ak_app_set_icon(u8* data, i32 w, i32 h, i32 fmt); // the Dock tile
 i32 ux_ak_window_modified(i32 handle);              // read-back, for tests
 i32 ux_ak_window_subtitle(i32 handle, u8* out, i32 cap);
 i32 ux_ak_window_icon(i32 handle, u8* out, i32 cap);
@@ -742,6 +743,11 @@ class UXAppKitDriver : Object<UXViewDriver>
     // The title-bar icon: macOS has no window-title image, but it draws the PROXY ICON of the
     // document a window stands for, which is what WF_ICON means ("proxy / document icon").  A path
     // names that document; a bare theme slice name is GEM-only art and clears the icon.
+    // The Dock tile.
+    bool appSetIcon(u8* data, i32 w, i32 h, i32 format)
+        {
+        return ux_ak_app_set_icon(data, w, h, format) != (i32)0;
+        }
     void windowSetIcon(i32 handle, u8* slice)
         {
         ux_ak_window_set_icon(handle, slice);

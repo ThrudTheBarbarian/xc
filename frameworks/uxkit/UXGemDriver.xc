@@ -149,6 +149,12 @@ class UXGemDriver : Object<UXViewDriver>
         {
         self.windowSetField(handle, (i32)WF_INFO, s);
         }
+    // The desktop draws an application's icon from its resource file; there is no running app icon to
+    // set.
+    bool appSetIcon(u8* data, i32 w, i32 h, i32 format)
+        {
+        return false;
+        }
     void windowSetIcon(i32 handle, u8* slice)
         {
         self.windowSetField(handle, (i32)WF_ICON, slice);
