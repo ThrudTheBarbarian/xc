@@ -25,11 +25,19 @@
 // GTK driver into the Windows binary and the link fails on ux_gtk_fill, a
 // long way from the cause.  Nesting makes the platforms mutually exclusive,
 // which is what they actually are.
+//
+// RK_HOSTGEM (-D RK_HOSTGEM) builds the GEM branch on the Mac instead of AppKit: that is
+// hostgem's GEM, the real desktop and AES running natively on the host (frameworks/uxkit/hostgem),
+// which is how Rocks is run on GEM without the board (run_rocks_gem.sh).  Nested for the same reason.
+#ifdef RK_HOSTGEM
+#import "UXGemDriver.xc"
+#else
 #ifdef ARCH_arm64
 #import "UXAppKitDriver.xc"
 #endif
 #ifdef ARCH_arm9
 #import "UXGemDriver.xc"
+#endif
 #endif
 #ifdef ARCH_win64
 #import "UXWin32Driver.xc"
@@ -48,6 +56,13 @@ class RKDriver : Object
     // treat as a skip rather than a failure.
     static bool start(UXApplication* app)
         {
+#ifdef RK_HOSTGEM
+        UXGemDriver* hg = new UXGemDriver();
+        gDriver = hg;
+        i32 hw = (i32)0;
+        i32 hh = (i32)0;
+        return hg.boot(&hw, &hh);
+#else
 #ifdef ARCH_arm64
         UXAppKitDriver* d = new UXAppKitDriver();
         gDriver = d;
@@ -61,6 +76,7 @@ class RKDriver : Object
         i32 gw = (i32)0;
         i32 gh = (i32)0;
         return gd.boot(&gw, &gh);
+#endif
 #endif
 #ifdef ARCH_win64
         UXWin32Driver* wd = new UXWin32Driver();
@@ -82,11 +98,15 @@ class RKDriver : Object
     // What to call this build, for the window title and the about box.
     static u8* platformName(void)
         {
+#ifdef RK_HOSTGEM
+        return (u8*)"GEM";
+#else
 #ifdef ARCH_arm64
         return (u8*)"macOS";
 #endif
 #ifdef ARCH_arm9
         return (u8*)"GEM";
+#endif
 #endif
 #ifdef ARCH_win64
         return (u8*)"Windows";

@@ -835,6 +835,22 @@ class UXGemDriver : Object<UXViewDriver>
         }
     void treeDraw(pointer tree, i32 start, i32 clx, i32 cly, i32 clw, i32 clh)
         {
+        // The window's own background first, as every other platform's window has one: a plain
+        // view is G_USERDEF and paints nothing, so a pane nobody fills showed whatever the window
+        // surface held (black).  White, GEM's work-area colour; a resource's own root box paints
+        // over it as before.
+        if (start == (i32)0 && clw > (i32)0 && clh > (i32)0)
+            {
+            i16 pxy[4];
+            pxy[0] = (i16)clx;
+            pxy[1] = (i16)cly;
+            pxy[2] = (i16)(clx + clw - (i32)1);
+            pxy[3] = (i16)(cly + clh - (i32)1);
+            vsf_color(aes_handle(), (i32)0);
+            vsf_interior(aes_handle(), (i32)1);
+            vsf_perimeter(aes_handle(), (i32)0);
+            vr_recfl(aes_handle(), (pointer)&pxy[0]);
+            }
         objc_draw(tree, start, (i32)UX_DEPTH, clx, cly, clw, clh);
         }
     // Bind the driver's context to the view at `abs` and hand it back as UXGraphics — this is
