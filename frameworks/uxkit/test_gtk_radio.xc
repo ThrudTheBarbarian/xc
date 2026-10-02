@@ -12,6 +12,7 @@
 #import "UXGeometry.xc"
 
 extern i32 ux_gtk_test_toggle(i32 handle, i32 node);
+extern i32 ux_gtk_test_sensitive(i32 handle, i32 node);
 extern void ux_gtk_test_activate_toggle(i32 handle, i32 node);
 i32 gFails = 0;
 void ck(bool ok, u8* what, i32 v)
@@ -69,6 +70,8 @@ void main(void)
     i32 h = win.handle;
     ck(ux_gtk_test_toggle(h, (i32)r0.index) == (i32)7, "Small is a native check button in a group, on", ux_gtk_test_toggle(h, (i32)r0.index));
     ck(ux_gtk_test_toggle(h, (i32)r1.index) == (i32)6 && ux_gtk_test_toggle(h, (i32)r2.index) == (i32)6, "Medium and Large are too, off", ux_gtk_test_toggle(h, (i32)r1.index));
+    ck(ux_gtk_test_sensitive(h, (i32)r0.index) == (i32)1 && ux_gtk_test_sensitive(h, (i32)r1.index) == (i32)1 && ux_gtk_test_sensitive(h, (i32)r2.index) == (i32)1,
+       "every radio is enabled (an off one is not greyed)", ux_gtk_test_sensitive(h, (i32)r1.index));
     ck((ux_gtk_test_toggle(h, (i32)lone.index) & (i32)6) == (i32)6, "a radio on its own is in a group as well (so it draws round)", ux_gtk_test_toggle(h, (i32)lone.index));
     ux_gtk_test_activate_toggle(h, (i32)r2.index); // as a click does
     ck(r2.isSelected() && !r0.isSelected() && !r1.isSelected(), "switching Large on selects it in the model and clears the others", (i32)0);

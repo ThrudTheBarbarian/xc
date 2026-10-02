@@ -18,6 +18,7 @@
 #import "UXPopUpButton.xc"      // native UIButton+UIMenu pull-down
 #import "UXSegmentedControl.xc" // native UISegmentedControl overlay
 #import "UXProgressBar.xc"      // native UIProgressView overlay
+#import "UXTableView.xc"        // the native GtkColumnView reads its rows from the peer table
 #import "UXApplication.xc"      // gApp: the driver-owned loop starts the delegate, and stop() quits
 #import "UXLibc.xc"
 
@@ -51,6 +52,11 @@ void ux_gtk_content_geometry(i32 handle, i32* w, i32* h);
 i32 ux_gtk_native_count(void);
 i32 ux_gtk_has_control(i32 handle, i32 node);
 void ux_gtk_make_button(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, u8* title);
+// The native table (GtkColumnView), fed by the peer UXTableView through these hooks.
+void ux_gtk_set_table_hooks(pointer rows, pointer cell, pointer cols, pointer title, pointer width, pointer multi, pointer selset);
+void ux_gtk_make_table(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, pointer peer);
+void ux_gtk_table_reload(i32 handle, i32 node);
+void ux_gtk_table_select(i32 handle, i32 node, i32* rows, i32 n);
 void ux_gtk_make_label(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, u8* text);
 void ux_gtk_set_control_frame(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h);
 void ux_gtk_set_control_enabled(i32 handle, i32 node, i32 on);
@@ -347,6 +353,42 @@ i32 ux_posix_delete(u8* path);
 i32 ux_posix_rename(u8* src, u8* dst);
 i32 ux_posix_copy(u8* src, u8* dst);
 
+// Table-data trampolines for the native GtkColumnView: the shim calls these with the peer
+// UXTableView, so the SAME neutral datasource that feeds the drawn table feeds the native one.
+i32 xgGtkTableRows(pointer tbl)
+    {
+    return ((UXTableView* ?)(Object*)tbl).nativeRowCount();
+    }
+u8* xgGtkTableCell(pointer tbl, i32 r, i32 c)
+    {
+    return ((UXTableView* ?)(Object*)tbl).nativeCellText(r, c);
+    }
+i32 xgGtkTableCols(pointer tbl)
+    {
+    return ((UXTableView* ?)(Object*)tbl).numberOfColumns();
+    }
+u8* xgGtkTableColTitle(pointer tbl, i32 c)
+    {
+    return ((UXTableView* ?)(Object*)tbl).columnTitle(c);
+    }
+i32 xgGtkTableColWidth(pointer tbl, i32 c)
+    {
+    return (i32)((UXTableView* ?)(Object*)tbl).columnWidth(c);
+    }
+i32 xgGtkTableMulti(pointer tbl)
+    {
+    return ((UXTableView* ?)(Object*)tbl).nativeAllowsMultiple();
+    }
+// The user's selection, made in the native view: into the model, announced, then a display pass.
+void xgGtkTableSelectSet(pointer tbl, i32* rows, i32 n)
+    {
+    ((UXTableView* ?)(Object*)tbl).applyNativeSelection(rows, n);
+    if (gApp != (UXApplication*)0)
+        {
+        gApp.displayIfNeeded();
+        }
+    }
+
 class UXGtkDriver : Object<UXViewDriver>
     {
 
@@ -365,6 +407,9 @@ class UXGtkDriver : Object<UXViewDriver>
             ux_gtk_set_field_hooks((pointer)&uxGtkFieldChanged);
             ux_gtk_set_field_submit_hooks((pointer)&uxGtkFieldSubmitted);
             ux_gtk_set_mouse((pointer)&uxGtkDispatch);
+            ux_gtk_set_table_hooks((pointer)&xgGtkTableRows, (pointer)&xgGtkTableCell, (pointer)&xgGtkTableCols,
+                                   (pointer)&xgGtkTableColTitle, (pointer)&xgGtkTableColWidth,
+                                   (pointer)&xgGtkTableMulti, (pointer)&xgGtkTableSelectSet);
             }
         return ux_gtk_boot(screenW, screenH) != (i32)0;
         }
@@ -1084,6 +1129,23 @@ class UXGtkDriver : Object<UXViewDriver>
         return (i32)0;
         }
 
+    i32 isUnderTable(GKTree* t, i32 i)
+        {
+        i16 p = t.nodes[i].parent;
+        while (p >= (i16)0)
+            {
+            if ((i32)t.nodes[p].kind == (i32)UXKindTable)
+                {
+                UXTableView* tv = (UXTableView* ?)(Object*)t.nodes[p].peer;
+                if (tv != (UXTableView*)0 && tv.nativeIsOutline() == (i32)0)
+                    {
+                    return (i32)1;
+                    }
+                }
+            p = t.nodes[p].parent;
+            }
+        return (i32)0;
+        }
     void realizeTree(i32 handle, pointer tree)
         {
         GKTree* t = (GKTree*)tree;
@@ -1096,6 +1158,40 @@ class UXGtkDriver : Object<UXViewDriver>
             i32 aw = (i32)0;
             i32 ah = (i32)0;
             self.structAbsFrame(tree, i, &ax, &ay, &aw, &ah);
+            // A native table covers its whole subtree (rows, cells, its own scroller): none of
+            // that becomes a native widget of its own.
+            if (self.isUnderTable(t, i) != (i32)0)
+                {
+                continue;
+                }
+            if ((i32)n.kind == (i32)UXKindTable)
+                {
+                UXTableView* tv = (UXTableView* ?)(Object*)n.peer;
+                if (tv == (UXTableView*)0 || tv.nativeIsOutline() != (i32)0)
+                    {
+                    continue; // an outline stays drawn here for now (GtkTreeListModel: next)
+                    }
+                if (ux_gtk_has_control(handle, i) == (i32)0)
+                    {
+                    ux_gtk_make_table(handle, i, ax, ay, aw, ah, n.peer);
+                    }
+                else
+                    {
+                    ux_gtk_set_control_frame(handle, i, ax, ay, aw, ah);
+                    ux_gtk_table_reload(handle, i);
+                    }
+                // a selection the MODEL made (app code, a replay) goes the other way: the view is the
+                // visible truth and never reads the model back
+                if (tv.nativeSelectionNeedsPush())
+                    {
+                    i32 rows[256];
+                    i32 nsel = tv.selectedRowList(&rows[(i32)0], (i32)256);
+                    ux_gtk_table_select(handle, i, &rows[(i32)0], nsel);
+                    tv.clearNativeSelectionPush();
+                    }
+                ux_gtk_set_control_hidden(handle, i, self.effectiveHidden(tree, i));
+                continue;
+                }
             if ((i32)n.kind == (i32)UXKindShield)
                 {
                 ux_gtk_make_shield(handle, ax, ay, aw, ah, self.effectiveHidden(tree, i));
@@ -1286,6 +1382,11 @@ class UXGtkDriver : Object<UXViewDriver>
         i32 k = t.nodes[i].kind;
         // A node with a native control paints itself — never draw under it.
         bool native = t.win != (i32)0 && ux_gtk_has_control(t.win, i) != (i32)0;
+        // ...and a native table paints its whole subtree: its rows are the GtkColumnView's.
+        if (native && k == (i32)UXKindTable)
+            {
+            return;
+            }
         if (!native)
             {
             // The GEM rule: every non-native node is app-drawn through the

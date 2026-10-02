@@ -297,7 +297,9 @@ list is derived from a tree.
   <TabItem label="Linux">
     <img src="/uxkit/table-linux.png" alt="UXTableView on Linux" width="220" />
 
-    The toolkit-drawn table. This driver does not yet realize a native `GtkColumnView`.
+    A real `GtkColumnView` in a scrolled window. Its rows and cells come from the
+    table's own data source; a selection made in it lands in the model, and one made
+    by the app is shown in it. Native rows are taller, so fewer fit.
   </TabItem>
   <TabItem label="GEM">
     <img src="/uxkit/table-gem.png" alt="UXTableView on GEM" width="220" />

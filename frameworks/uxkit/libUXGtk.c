@@ -1239,6 +1239,12 @@ int ux_gtk_test_toggle(int handle, int node)
             st |= 2;
     return st;
     }
+/* For a gate: is the native control at (handle, node) sensitive (enabled), as GTK sees it? */
+int ux_gtk_test_sensitive(int handle, int node)
+    {
+    GtkWidget* c = gCtl[handle][node];
+    return c ? (gtk_widget_is_sensitive(c) ? 1 : 0) : -1;
+    }
 void ux_gtk_test_activate_toggle(int handle, int node)
     {
     GtkWidget* c = gCtl[handle][node];
@@ -2009,6 +2015,190 @@ int ux_gtk_alert(int parentHandle, const char* lines, const char* buttons, int d
     gAlertAutoMs = 0;
     gAlertAutoShot = 0;
     return gAlertResult + 1; /* the neutral 1-based index */
+    }
+
+/* ── the native table: GtkColumnView ─────────────────────────────────────────
+ * A UXTableView realized as a real GtkColumnView in a GtkScrolledWindow.  Like AppKit's
+ * NSTableView it holds no data of its own: the model is a list of N placeholder items, and each
+ * cell's text is pulled from the peer UXTableView through the hooks (the same datasource that
+ * feeds the drawn table).  The user's selection goes back through the selectset hook; one the
+ * app makes is pushed in with ux_gtk_table_select, muted so it is not echoed back. */
+typedef int (*tbl_rows_fn)(void*);
+typedef const char* (*tbl_cell_fn)(void*, int, int);
+typedef int (*tbl_cols_fn)(void*);
+typedef const char* (*tbl_title_fn)(void*, int);
+typedef int (*tbl_width_fn)(void*, int);
+typedef int (*tbl_multi_fn)(void*);
+typedef void (*tbl_selset_fn)(void*, int*, int);
+static tbl_rows_fn gTblRows;
+static tbl_cell_fn gTblCell;
+static tbl_cols_fn gTblCols;
+static tbl_title_fn gTblTitle;
+static tbl_width_fn gTblWidth;
+static tbl_multi_fn gTblMulti;
+static tbl_selset_fn gTblSelSet;
+static int gTblMute;
+void ux_gtk_set_table_hooks(void* rows, void* cell, void* cols, void* title, void* width, void* multi, void* selset)
+    {
+    gTblRows = (tbl_rows_fn)rows;
+    gTblCell = (tbl_cell_fn)cell;
+    gTblCols = (tbl_cols_fn)cols;
+    gTblTitle = (tbl_title_fn)title;
+    gTblWidth = (tbl_width_fn)width;
+    gTblMulti = (tbl_multi_fn)multi;
+    gTblSelSet = (tbl_selset_fn)selset;
+    }
+static void tbl_setup(GtkSignalListItemFactory* f, GtkListItem* item, gpointer ud)
+    {
+    (void)f; (void)ud;
+    GtkWidget* l = gtk_label_new("");
+    gtk_label_set_xalign(GTK_LABEL(l), 0.0f);
+    gtk_label_set_ellipsize(GTK_LABEL(l), PANGO_ELLIPSIZE_END);
+    gtk_list_item_set_child(item, l);
+    }
+static void tbl_bind(GtkSignalListItemFactory* f, GtkListItem* item, gpointer col)
+    {
+    GtkWidget* cv = g_object_get_data(G_OBJECT(f), "ux-view");
+    void* peer = cv ? g_object_get_data(G_OBJECT(cv), "ux-peer") : NULL;
+    const char* t = (peer && gTblCell) ? gTblCell(peer, (int)gtk_list_item_get_position(item), GPOINTER_TO_INT(col)) : "";
+    gtk_label_set_text(GTK_LABEL(gtk_list_item_get_child(item)), t ? t : "");
+    }
+static void tbl_sel_changed(GtkSelectionModel* m, guint pos, guint n, gpointer cv)
+    {
+    (void)pos; (void)n;
+    if (gTblMute || !gTblSelSet)
+        return;
+    void* peer = g_object_get_data(G_OBJECT(cv), "ux-peer");
+    GtkBitset* bs = gtk_selection_model_get_selection(m);
+    guint64 cnt = gtk_bitset_get_size(bs);
+    int* rows = g_new0(int, cnt > 0 ? cnt : 1);
+    int k = 0;
+    GtkBitsetIter it;
+    guint v;
+    for (gboolean ok = gtk_bitset_iter_init_first(&it, bs, &v); ok; ok = gtk_bitset_iter_next(&it, &v))
+        rows[k++] = (int)v;
+    gtk_bitset_unref(bs);
+    gTblSelSet(peer, rows, k);
+    g_free(rows);
+    }
+static GtkColumnView* tbl_view(int handle, int node)
+    {
+    GtkWidget* sw = gCtl[handle][node];
+    return sw ? GTK_COLUMN_VIEW(g_object_get_data(G_OBJECT(sw), "ux-view")) : NULL;
+    }
+void ux_gtk_table_reload(int handle, int node)
+    {
+    GtkColumnView* cv = tbl_view(handle, node);
+    if (!cv)
+        return;
+    void* peer = g_object_get_data(G_OBJECT(cv), "ux-peer");
+    GListStore* store = g_object_get_data(G_OBJECT(cv), "ux-store");
+    int n = gTblRows ? gTblRows(peer) : 0;
+    guint have = g_list_model_get_n_items(G_LIST_MODEL(store));
+    /* replace every row: a changed count and changed text both rebind */
+    GObject** items = g_new0(GObject*, n > 0 ? n : 1);
+    for (int i = 0; i < n; i++)
+        items[i] = G_OBJECT(gtk_string_object_new(""));
+    gTblMute++;
+    g_list_store_splice(store, 0, have, (gpointer*)items, (guint)n);
+    gTblMute--;
+    for (int i = 0; i < n; i++)
+        g_object_unref(items[i]);
+    g_free(items);
+    }
+void ux_gtk_make_table(int handle, int node, int x, int y, int w, int h, void* peer)
+    {
+    GListStore* store = g_list_store_new(GTK_TYPE_STRING_OBJECT);
+    int multi = gTblMulti ? gTblMulti(peer) : 0;
+    GtkSelectionModel* sel;
+    if (multi)
+        sel = GTK_SELECTION_MODEL(gtk_multi_selection_new(G_LIST_MODEL(store)));
+    else
+        {
+        GtkSingleSelection* ss = gtk_single_selection_new(G_LIST_MODEL(store));
+        gtk_single_selection_set_autoselect(ss, FALSE);
+        gtk_single_selection_set_can_unselect(ss, TRUE);
+        sel = GTK_SELECTION_MODEL(ss);
+        }
+    GtkWidget* cv = gtk_column_view_new(sel);
+    gtk_column_view_set_show_row_separators(GTK_COLUMN_VIEW(cv), FALSE);
+    g_object_set_data(G_OBJECT(cv), "ux-peer", peer);
+    g_object_set_data(G_OBJECT(cv), "ux-store", store);
+    int ncols = gTblCols ? gTblCols(peer) : 1;
+    for (int c = 0; c < ncols; c++)
+        {
+        GtkListItemFactory* f = gtk_signal_list_item_factory_new();
+        g_object_set_data(G_OBJECT(f), "ux-view", cv);
+        g_signal_connect(f, "setup", G_CALLBACK(tbl_setup), NULL);
+        g_signal_connect(f, "bind", G_CALLBACK(tbl_bind), GINT_TO_POINTER(c));
+        GtkColumnViewColumn* col = gtk_column_view_column_new(gTblTitle ? gTblTitle(peer, c) : "", f);
+        int cw = gTblWidth ? gTblWidth(peer, c) : 80;
+        if (cw > 0)
+            gtk_column_view_column_set_fixed_width(col, cw);
+        gtk_column_view_column_set_resizable(col, TRUE);
+        if (c == ncols - 1)
+            gtk_column_view_column_set_expand(col, TRUE);
+        gtk_column_view_append_column(GTK_COLUMN_VIEW(cv), col);
+        g_object_unref(col);
+        }
+    g_signal_connect(sel, "selection-changed", G_CALLBACK(tbl_sel_changed), cv);
+    GtkWidget* sw = gtk_scrolled_window_new();
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(sw), cv);
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(sw), GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
+    g_object_set_data(G_OBJECT(sw), "ux-view", cv);
+    park(handle, node, sw, x, y, w, h);
+    ux_gtk_table_reload(handle, node);
+    }
+/* The app's selection, pushed into the view (muted: it is not the user's, so not echoed back). */
+void ux_gtk_table_select(int handle, int node, int* rows, int n)
+    {
+    GtkColumnView* cv = tbl_view(handle, node);
+    if (!cv)
+        return;
+    GtkSelectionModel* m = gtk_column_view_get_model(cv);
+    gTblMute++;
+    gtk_selection_model_unselect_all(m);
+    for (int i = 0; i < n; i++)
+        gtk_selection_model_select_item(m, (guint)rows[i], FALSE);
+    gTblMute--;
+    }
+/* Tests: the view's row count, a bound cell's text, and a USER's selection of a row. */
+int ux_gtk_test_table_rows(int handle, int node)
+    {
+    GtkColumnView* cv = tbl_view(handle, node);
+    return cv ? (int)g_list_model_get_n_items(G_LIST_MODEL(gtk_column_view_get_model(cv))) : -1;
+    }
+int ux_gtk_test_table_selected(int handle, int node, int row)
+    {
+    GtkColumnView* cv = tbl_view(handle, node);
+    return cv ? gtk_selection_model_is_selected(gtk_column_view_get_model(cv), (guint)row) : -1;
+    }
+void ux_gtk_test_table_user_select(int handle, int node, int row)
+    {
+    GtkColumnView* cv = tbl_view(handle, node);
+    if (cv)
+        gtk_selection_model_select_item(gtk_column_view_get_model(cv), (guint)row, TRUE); /* as a click does */
+    }
+/* The text the view's cells show for (row, col): what the bind handler would put there. */
+int ux_gtk_test_table_cell_is(int handle, int node, int row, int col, const char* want)
+    {
+    GtkColumnView* cv = tbl_view(handle, node);
+    void* peer = cv ? g_object_get_data(G_OBJECT(cv), "ux-peer") : NULL;
+    const char* t = (peer && gTblCell) ? gTblCell(peer, row, col) : NULL;
+    return t && strcmp(t, want) == 0;
+    }
+int ux_gtk_test_table_title_is(int handle, int node, int col, const char* want)
+    {
+    GtkColumnView* cv = tbl_view(handle, node);
+    if (!cv)
+        return 0;
+    GListModel* cols = gtk_column_view_get_columns(cv);
+    GtkColumnViewColumn* c = g_list_model_get_item(cols, (guint)col);
+    if (!c)
+        return 0;
+    int same = strcmp(gtk_column_view_column_get_title(c) ? gtk_column_view_column_get_title(c) : "", want) == 0;
+    g_object_unref(c);
+    return same;
     }
 
 /* ── the native panels: file open / save, colour, font (GTK 4.10+'s dialogs) ──
