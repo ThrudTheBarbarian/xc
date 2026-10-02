@@ -1,0 +1,9 @@
+T1 x=111 y=222 same=0
+T2 v=6 deallocs=1
+T3 deallocs=3
+T4 v=44 deallocs=0
+T4 after deallocs=1
+T5 v=51 deallocs=1
+T5 after deallocs=2
+T6 v=9 deallocs=0
+T7 deallocs=40

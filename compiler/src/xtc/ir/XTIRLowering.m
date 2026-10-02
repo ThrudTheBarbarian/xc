@@ -1108,9 +1108,65 @@ static uint32_t xtProtocolId(NSString* name)
                 return YES;
             if ([self astTypeIsWeakSlot:c.ivarASTType[ivarName]])
                 return YES;
+            // Its elements are released when replaced, so they must start
+            // null (bug 585).
+            if ([self astTypeIsClassPtrArray:c.ivarASTType[ivarName]])
+                return YES;
             }
         }
     return NO;
+    }
+
+// A fixed-size array of strong class pointers (`Part* parts[4]`) — the shape an
+// ivar owns element by element (bug 585).
+- (BOOL)astTypeIsClassPtrArray:(nullable XTType*)t
+    {
+    return [t isKindOfClass:[XTArrayType class]]
+        && ((XTArrayType*)t).elementCount > 0
+        && [self astTypeIsClassPointer:((XTArrayType*)t).elementType];
+    }
+
+// Each element of a class-pointer ARRAY ivar at `slot` of `instance`, the way a
+// strong array local does it: nulled in order when the object is made,
+// released in reverse when it is freed (bug 585).
+- (void)emitIvarArrayARCAt:(XTIRValue*)instance
+                fieldIndex:(NSUInteger)slot
+                      type:(XTArrayType*)at
+                      zero:(BOOL)zero
+    {
+    XTIRType* elemIR = [self irTypeForASTTypeQuiet:at.elementType];
+    if (!elemIR)
+        return;
+    XTIRType* elemPtrIR = [XTIRType ptrToType:elemIR window:XTIRWindowUnbanked];
+    NSUInteger count = at.elementCount;
+    for (NSUInteger k = 0; k < count; k++)
+        {
+        NSUInteger e = zero ? k : count - 1 - k;
+        XTIRValue* base = [self emitFieldAddr:instance fieldIndex:slot resultType:elemPtrIR];
+        XTIRValue* idx = [self emitInsnOpcode:XTIROpConst
+                                       result:[XTIRType u16Type]
+                                     operands:@[ [XTIROperand immIWithType:[XTIRType u16Type]
+                                                                     value:(int64_t)e] ]];
+        XTIRValue* ea = [self emitInsnOpcode:XTIROpElementAddr
+                                      result:elemPtrIR
+                                    operands:@[ [XTIROperand useWithValueId:base.valueId],
+                                                [XTIROperand useWithValueId:idx.valueId] ]];
+        if (zero)
+            {
+            XTIRValue* z = [self emitInsnOpcode:XTIROpConst
+                                         result:[XTIRType u16Type]
+                                       operands:@[ [XTIROperand immIWithType:[XTIRType u16Type]
+                                                                       value:0] ]];
+            XTIRValue* null = [self emitInsnOpcode:XTIROpIntToPtr
+                                            result:elemIR
+                                          operands:@[ [XTIROperand useWithValueId:z.valueId] ]];
+            [self emitStore:ea value:null];
+            }
+        else
+            {
+            [self emitRelease:[self emitLoad:ea pointeeType:elemIR]];
+            }
+        }
     }
 
 // YES if the AST subtree contains an explicit `super.dealloc(...)` call.
@@ -2328,6 +2384,13 @@ static uint32_t xtProtocolId(NSString* name)
         XTType* ivarAST = ci.ivarASTType[ivarName];
         if (!idx || !ivarAST)
             continue;
+        // A class-pointer ARRAY ivar is an Agg, but its elements are released
+        // when replaced, so each one starts null (bug 585).
+        if ([self astTypeIsClassPtrArray:ivarAST])
+            {
+            [self emitIvarArrayARCAt:instance fieldIndex:idx.unsignedIntegerValue type:(XTArrayType*)ivarAST zero:YES];
+            continue;
+            }
         XTIRType* fieldIRType = [self irTypeForASTTypeQuiet:ivarAST];
         // Only scalar / pointer ivars get a single-Store zero. Aggregate
         // ivars (nested struct/array) are left untouched — none of the
@@ -5473,6 +5536,29 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
                 // scope exit, which matches how a strong scalar global behaves.
                 strongBase = YES;
                 }
+            else if (!self.locals[bn] && !self.pinnedLocals[bn] && self.currentClassInfo && self.currentSelf
+                     && elemAST && [self astTypeIsClassPointer:elemAST])
+                {
+                // An ARRAY IVAR of class pointers named bare inside a method —
+                // `parts[i] = p` — owns its elements as a scalar object ivar
+                // owns its one; the class's dealloc releases them (bug 585).
+                for (XTIRClassInfo* ci = self.currentClassInfo; ci != nil; ci = ci.parent)
+                    {
+                    if (ci.ivarFieldIndex[bn])
+                        {
+                        strongBase = [self astTypeIsClassPtrArray:ci.ivarASTType[bn]];
+                        break;
+                        }
+                    }
+                }
+            }
+        else if (sub.base.nodeKind == XTASTNodeKindMemberAccess && elemAST && [self astTypeIsClassPointer:elemAST]
+                 && [self astTypeIsClassPointer:((XTMemberAccessNode*)sub.base).base.resolvedType]
+                 && [self astTypeIsClassPtrArray:sub.base.resolvedType])
+            {
+            // The same array ivar reached as `obj.parts[i]` (bug 585). A STRUCT's
+            // array field is not one: nothing would release it.
+            strongBase = YES;
             }
         if (strongBase)
             {
@@ -12932,6 +13018,11 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
                 [self emitWeakUnregisterSlot:recvAddr];
             continue;
             }
+        if ([self astTypeIsClassPtrArray:ivarAST])
+            {
+            [self emitIvarArrayARCAt:self.currentSelf fieldIndex:slot type:(XTArrayType*)ivarAST zero:NO];
+            continue;
+            }
         if ([self astTypeIsClassPointer:ivarAST])
             {
             XTIRType* fieldIRType = [self irTypeForASTType:ivarAST at:nil];
@@ -18587,7 +18678,7 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
             {
             if (ivar.isStatic)
                 continue; // class-level storage outlives instances
-            if ([self astTypeIsClassPointer:ivar.declaredType])
+            if ([self astTypeIsClassPointer:ivar.declaredType] || [self astTypeIsClassPtrArray:ivar.declaredType])
                 {
                 hasStrongOwnIvar = YES;
                 break;

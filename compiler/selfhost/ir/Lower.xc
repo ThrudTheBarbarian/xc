@@ -807,6 +807,21 @@ class ClassInfo
         return false;
         }
 
+    // A fixed-size array of strong class pointers (`Part*[4]`) — the shape an
+    // ivar owns element by element (bug 585).
+    bool isClassPtrArray(String* t)
+        {
+        if (t == 0 || !isArrayLike(t) || !isClassPointer(elementOf(t)))
+            return false;
+        // One dimension only: `T*[2][3]` is an array of arrays, as the
+        // reference reads it, and its element is not a class pointer.
+        u32 brackets = (u32)0;
+        for (u32 i = (u32)0; i < t.byteLength(); i = i + (u32)1)
+            if (t.byteAt(i) == (u8)'[')
+                brackets = brackets + (u32)1;
+        return brackets == (u32)1 && arrayCount(t) > (u32)0;
+        }
+
     // Everything before the FIRST `[` — which is what the analyser's elementOf
     // does, so a multi-dimensional spelling would disagree with the original's
     // nested array type. Reported rather than mis-lowered.
@@ -4649,6 +4664,22 @@ class ClassInfo
             String* bn = lhs.kid((u32)0).name();
             Object* gt = _globals.get((Hashable*)bn);
             if (gt != (Object*)0 && _locals.get((Hashable*)bn) == (Object*)0 && isArrayLike((String*)gt) && isClassPointer(lhs.ty()))
+                strongElem = true;
+            }
+        // An ARRAY IVAR of class pointers -- `Part* parts[4];` in a class --
+        // owns its elements as a scalar object ivar owns its one, and the
+        // class's dealloc releases them (bug 585). Named bare inside a method
+        // (and not shadowed by a local), or as `obj.parts[i]` on an object.
+        // A STRUCT's array field is not one: nothing would release it.
+        if (!strongElem && lhs.kind() == (u16)nkSubscript && isClassPointer(lhs.ty()))
+            {
+            Node* base = lhs.kid((u32)0);
+            if (base.kind() == (u16)nkIdent && _locals.get((Hashable*)base.name()) == (Object*)0
+             && pinOf(base.name()) == (IRPinned*)0 && ivarIndexOf(base.name()) >= (i32)0
+             && isClassPtrArray((String*)_curClass.ivarType().get((Hashable*)base.name())))
+                strongElem = true;
+            else if (base.kind() == (u16)nkMember && base.kidCount() > (u32)0
+             && isClassPointer(base.kid((u32)0).ty()) && isClassPtrArray(base.ty()))
                 strongElem = true;
             }
         IRValue* oldElem = strongElem ? loadThrough(addr, lhs.ty()) : (IRValue*)0;
@@ -9719,6 +9750,13 @@ class ClassInfo
                 String* nm = (String*)byIndex.get(i);
                 u32 slot = ((Number*)ci.ivarIndex().get((Hashable*)nm)).asU32();
                 String* ty = (String*)ci.ivarType().get((Hashable*)nm);
+                // A class-pointer ARRAY ivar is an Agg, but its elements are
+                // released when replaced, so each one starts null (bug 585).
+                if (isClassPtrArray(ty))
+                    {
+                    ivarArrayARC(addr, slot, ty, true);
+                    continue;
+                    }
                 String* ir = irType(ty);
                 if (ir.hasPrefix(String.withCString("Agg(")))
                     continue;
@@ -10220,6 +10258,10 @@ class ClassInfo
                 if (isClassPointer(t))
                     return true;
                 if (isWeakSlot(t))
+                    return true;
+                // Its elements are released when replaced, so they must
+                // start null (bug 585).
+                if (isClassPtrArray(t))
                     return true;
                 }
             }
@@ -11862,6 +11904,34 @@ class ClassInfo
         releaseStrongIvarsForDealloc();
         }
 
+    // Each element of a class-pointer ARRAY ivar at field `slot` of `obj`,
+    // the way a strong array local does it: nulled in order when the object
+    // is made, released in reverse when it is freed (bug 585).
+    void ivarArrayARC(IRValue* obj, u32 slot, String* ty, bool zero)
+        {
+        String* elem = elementOf(ty);
+        String* elemPtr = ptrTo(irType(elem));
+        u32 count = arrayCount(ty);
+        for (u32 k = (u32)0; k < count; k = k + (u32)1)
+            {
+            u32 e = zero ? k : count - (u32)1 - k;
+            IRValue* ea = byteSlotAddr(fieldAddr(obj, slot, elemPtr), e, elemPtr);
+            if (zero)
+                {
+                Array* zo = new Array();
+                zo.add((Object*)IROperand.immI((i32)0, String.withCString("U16")));
+                IRValue* z = emit(String.withCString("Const"), String.withCString("U16"), zo);
+                Array* io = new Array();
+                io.add((Object*)IROperand.useVal(z));
+                storeThrough(ea, emit(String.withCString("IntToPtr"), irType(elem), io));
+                }
+            else
+                {
+                refOp(String.withCString("Release"), loadThrough(ea, elem));
+                }
+            }
+        }
+
     void releaseStrongIvarsForDealloc(void)
         {
         if (_curClass == 0 || _self == 0 || _fn == 0)
@@ -11912,6 +11982,11 @@ class ClassInfo
                 if (!structHasStrongPointer(ty))
                     continue;
                 structFieldsAt(fieldAddr(_self, slot, ptrTo(irType(ty))), ty, false);
+                continue;
+                }
+            if (isClassPtrArray(ty))
+                {
+                ivarArrayARC(_self, slot, ty, false);
                 continue;
                 }
             if (!isClassPointer(ty))
@@ -12937,7 +13012,7 @@ class ClassInfo
             Node* iv = cls.kid(i);
             if (iv.kind() != (u16)nkVariableDecl || iv.hasFlag((u32)NF_STATIC))
                 continue;
-            if (isClassPointer(iv.op()))
+            if (isClassPointer(iv.op()) || isClassPtrArray(iv.op()))
                 {
                 ownsStrong = true;
                 break;
