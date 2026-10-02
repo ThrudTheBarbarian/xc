@@ -55,6 +55,9 @@
 //   _xt_ring_wait(timeoutMs) -> 0 timed-out / 1 event pending
 //   _xt_ring_read(ptr)       -> event type or -1; copies 8 i32s to ptr
 //   _xt_req_block(kind,a,b,c)-> i32 reply from globalThis.xccOnRequest
+// and, for a host package's worker shim, globalThis.xccRequest(kind, payload)
+// (blocking, structured payload) and globalThis.xccPost(payload) (to the
+// page's globalThis.xccOnMessage).
 static NSString* loaderJS(NSString* baseName, NSArray<NSString*>* deps)
     {
     NSString* t = @""
@@ -137,6 +140,7 @@ static NSString* loaderJS(NSString* baseName, NSArray<NSString*>* deps)
                    "    worker.onmessage = (m) => {\n"
                    "      const d = m.data || {};\n"
                    "      if (d.xccOut !== undefined) { (globalThis.xccOut || console.log)(d.xccOut); return; }\n"
+                   "      if (d.xccMsg !== undefined) { (globalThis.xccOnMessage || (() => {}))(d.xccMsg); return; }\n"
                    "      if (d.xccReq !== undefined) {\n"
                    "        const v = (globalThis.xccOnRequest || (() => 0))(d.xccReq) | 0;\n"
                    "        Atomics.store(i32, 3, v);\n"
@@ -296,6 +300,26 @@ static NSString* loaderJS(NSString* baseName, NSArray<NSString*>* deps)
                    "    const ri = ringI32;\n"
                    "    // The blocking primitives (XG-WEB-BACKEND sec 3): the worker CAN block.\n"
                    "    // memory views are re-derived per call — memory.grow detaches buffers.\n"
+                   "    // One blocking round trip to the page: post the request, then wait for the\n"
+                   "    // page's reply in ring word 3. _xt_req_block sends raw wasm values.\n"
+                   "    const reqBlock = (req) => {\n"
+                   "      const seq = ++reqSeq;\n"
+                   "      self.postMessage({ xccReq: Object.assign({ seq }, req) });\n"
+                   "      for (;;) {\n"
+                   "        const cur = Atomics.load(ri, 2);\n"
+                   "        if (cur === seq) break;\n"
+                   "        Atomics.wait(ri, 2, cur);\n"
+                   "      }\n"
+                   "      return Atomics.load(ri, 3);\n"
+                   "    };\n"
+                   "    // For a host package's worker shim, which reads its own strings out of\n"
+                   "    // module memory: xccRequest blocks like _xt_req_block but carries any\n"
+                   "    // structured-cloneable payload (the page's xccOnRequest gets\n"
+                   "    // {seq, kind, payload}); xccPost hands a payload to the page's\n"
+                   "    // xccOnMessage without waiting. The page answers back through\n"
+                   "    // xccPushEvent.\n"
+                   "    globalThis.xccRequest = (kind, payload) => reqBlock({ kind, payload });\n"
+                   "    globalThis.xccPost = (payload) => self.postMessage({ xccMsg: payload });\n"
                    "    Object.assign(base, {\n"
                    "      _xt_ring_wait: (timeoutMs) => {\n"
                    "        const w = Atomics.load(ri, 0);\n"
@@ -313,16 +337,7 @@ static NSString* loaderJS(NSString* baseName, NSArray<NSString*>* deps)
                    "        Atomics.store(ri, 1, r + 1);\n"
                    "        return ri[s];\n"
                    "      },\n"
-                   "      _xt_req_block: (kind, a, b, c) => {\n"
-                   "        const seq = ++reqSeq;\n"
-                   "        self.postMessage({ xccReq: { seq, kind, a, b, c } });\n"
-                   "        for (;;) {\n"
-                   "          const cur = Atomics.load(ri, 2);\n"
-                   "          if (cur === seq) break;\n"
-                   "          Atomics.wait(ri, 2, cur);\n"
-                   "        }\n"
-                   "        return Atomics.load(ri, 3);\n"
-                   "      },\n"
+                   "      _xt_req_block: (kind, a, b, c) => reqBlock({ kind, a, b, c }),\n"
                    "    });\n"
                    "  }\n"
                    "  // Host-supplied packages (#package <name>): set globalThis.xccImports =\n"

@@ -77,6 +77,7 @@
     worker.onmessage = (m) => {
       const d = m.data || {};
       if (d.xccOut !== undefined) { (globalThis.xccOut || console.log)(d.xccOut); return; }
+      if (d.xccMsg !== undefined) { (globalThis.xccOnMessage || (() => {}))(d.xccMsg); return; }
       if (d.xccReq !== undefined) {
         const v = (globalThis.xccOnRequest || (() => 0))(d.xccReq) | 0;
         Atomics.store(i32, 3, v);
@@ -226,6 +227,26 @@
     const ri = ringI32;
     // The blocking primitives (XG-WEB-BACKEND sec 3): the worker CAN block.
     // memory views are re-derived per call — memory.grow detaches buffers.
+    // One blocking round trip to the page: post the request, then wait for the
+    // page's reply in ring word 3. _xt_req_block sends raw wasm values.
+    const reqBlock = (req) => {
+      const seq = ++reqSeq;
+      self.postMessage({ xccReq: Object.assign({ seq }, req) });
+      for (;;) {
+        const cur = Atomics.load(ri, 2);
+        if (cur === seq) break;
+        Atomics.wait(ri, 2, cur);
+      }
+      return Atomics.load(ri, 3);
+    };
+    // For a host package's worker shim, which reads its own strings out of
+    // module memory: xccRequest blocks like _xt_req_block but carries any
+    // structured-cloneable payload (the page's xccOnRequest gets
+    // {seq, kind, payload}); xccPost hands a payload to the page's
+    // xccOnMessage without waiting. The page answers back through
+    // xccPushEvent.
+    globalThis.xccRequest = (kind, payload) => reqBlock({ kind, payload });
+    globalThis.xccPost = (payload) => self.postMessage({ xccMsg: payload });
     Object.assign(base, {
       _xt_ring_wait: (timeoutMs) => {
         const w = Atomics.load(ri, 0);
@@ -243,16 +264,7 @@
         Atomics.store(ri, 1, r + 1);
         return ri[s];
       },
-      _xt_req_block: (kind, a, b, c) => {
-        const seq = ++reqSeq;
-        self.postMessage({ xccReq: { seq, kind, a, b, c } });
-        for (;;) {
-          const cur = Atomics.load(ri, 2);
-          if (cur === seq) break;
-          Atomics.wait(ri, 2, cur);
-        }
-        return Atomics.load(ri, 3);
-      },
+      _xt_req_block: (kind, a, b, c) => reqBlock({ kind, a, b, c }),
     });
   }
   // Host-supplied packages (#package <name>): set globalThis.xccImports =
