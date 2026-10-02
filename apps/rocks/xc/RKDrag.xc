@@ -426,6 +426,7 @@ class RKDrag : Object
         super.init();
         drag = new RKDrag();
         selection = (RKObject*)0;
+        tracking = (RKObject*)0;
         picked = (callback void(RKObject * o))0;
         changed = (callback void(RKObject * o))0;
         ended = (callback void(RKObject * o))0;
@@ -457,10 +458,12 @@ class RKDrag : Object
 
     // A press: select, then track the pointer until the button comes up.
     //
-    // The loop is MODAL (trackDragStep parks the run loop), which is how every
-    // other toolkit-drawn drag in UXKit works — a slider, a split divider.  The
-    // alternative, a mouseDragged event stream, does not exist on the backends
-    // whose native controls own the pointer once it is down.
+    // With a mouse the loop is MODAL (trackDragStep parks the run loop), which is how every other
+    // toolkit-drawn drag in UXKit works -- a slider, a split divider.  On a touch backend the
+    // platform owns the loop and the drag arrives as events instead (dragTrackingIsModal() is
+    // false): the press only begins the drag here, and mouseDragged / mouseUp carry it on.  The
+    // drag itself -- step, end, the callbacks -- is the same code either way.
+    RKObject* tracking; // the object a touch drag is moving, between its events
     void mouseDown(UXEvent* e)
         {
         i32 cx = (i32)0;
@@ -475,23 +478,54 @@ class RKDrag : Object
             {
             return;
             }
-
+        if (!gDriver.dragTrackingIsModal())
+            {
+            tracking = o; // mouseDragged and mouseUp take it from here
+            return;
+            }
         i32 x = (i32)e.x;
         i32 y = (i32)e.y;
         while (gDriver.trackDragStep(&x, &y) != (i32)0)
             {
-            self.toCanvas(x, y, &cx, &cy);
-            drag.step(cx, cy);
-            if (changed)
-                {
-                changed(o);
-                }
-            self.setNeedsDisplay();
-            if (gApp != (UXApplication*)0)
-                {
-                gApp.displayIfNeeded();
-                }
+            self.stepTo(o, x, y);
             }
+        self.finish(o);
+        }
+    void mouseDragged(UXEvent* e)
+        {
+        if (tracking != (RKObject*)0)
+            {
+            self.stepTo(tracking, (i32)e.x, (i32)e.y);
+            }
+        }
+    void mouseUp(UXEvent* e)
+        {
+        RKObject* o = tracking;
+        tracking = (RKObject*)0;
+        if (o != (RKObject*)0)
+            {
+            self.finish(o);
+            }
+        }
+    // One step of a drag, at a window point.
+    void stepTo(RKObject* o, i32 x, i32 y)
+        {
+        i32 cx = (i32)0;
+        i32 cy = (i32)0;
+        self.toCanvas(x, y, &cx, &cy);
+        drag.step(cx, cy);
+        if (changed)
+            {
+            changed(o);
+            }
+        self.setNeedsDisplay();
+        if (gApp != (UXApplication*)0)
+            {
+            gApp.displayIfNeeded();
+            }
+        }
+    void finish(RKObject* o)
+        {
         drag.end();
         self.setNeedsDisplay();
         if (ended)
