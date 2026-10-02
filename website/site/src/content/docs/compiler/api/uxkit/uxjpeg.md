@@ -33,11 +33,15 @@ and others), interleaved and single-component scans, and restart intervals.
 lossless and arithmetic-coded files, 12-bit samples, four-component (CMYK)
 images, and a file that ends partway through its data.
 
-The output matches libjpeg's `djpeg -dct int -nosmooth` exactly: the same
-integer IDCT, the same YCbCr-to-RGB arithmetic, and chroma replicated rather
-than interpolated. The tests compare every byte with libjpeg's own decode of the
-same files. Decoding a 1024 × 1024 photograph takes about a fifth of a second on
-an Apple silicon Mac.
+The output matches libjpeg's **default** decode, `djpeg -dct int`, exactly: the
+same integer IDCT, the same YCbCr-to-RGB arithmetic, and the same "fancy"
+chroma upsampling (libjpeg's triangle filters for 4:2:2, 4:2:0 and 4:4:0, with
+its rounding). That is also what browsers show: on real 4:2:0 photographs the
+output is byte-identical to headless Chrome's decode. The tests compare every
+byte with libjpeg's own decode of the same files.
+
+Decoding a 1024 × 1024 4:2:0 photograph takes about 7.6 ms on an Apple silicon
+Mac. libjpeg-turbo's hand-written NEON is still about four times faster.
 
 ## Topics
 

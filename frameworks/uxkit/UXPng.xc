@@ -15,11 +15,12 @@
 // tRNS.  Adam7 interlace is REJECTED with a null return rather than mis-decoded, because
 // it is cheap to add later and a decoder that half-works is worse than one that says no.
 //
-// 16-BIT SAMPLES ARE TAKEN TO EIGHT BY THEIR HIGH BYTE.  A 16-bit sample is v in 0..65535
-// and eight bits of it is v >> 8; the alternative, round(v / 257), differs from it by at
-// most one level and on the sheet the game ships it differs on 5,291 of 28,387,584 bytes
-// -- which is the measurement, against a reference 8-bit export of the real atlas, not a
-// preference.  The atlas is 16-bit RGBA non-interlaced, which is why this exists.
+// 16-BIT SAMPLES ARE TAKEN TO EIGHT BY THEIR HIGH BYTE, because that is what browsers do
+// (libpng's png_set_strip_16).  Measured 2026-10-02 on the 16-bit RGBA atlas the client
+// ships: headless Chrome's decode matches v >> 8 on every opaque pixel, 0 bytes different.
+// ImageMagick rounds, (v + 128) / 257, and differs from both by exactly 1 wherever v is not
+// a multiple of 257 -- 5,291 of the atlas's 28,387,584 bytes.  The browser is the reference
+// a native client has to match, so the high byte it is; do not "fix" this to rounding.
 //
 // The inflate is the classic two-table canonical Huffman decode (the shape of Mark
 // Adler's puff, which is the shortest correct statement of it), with the three block

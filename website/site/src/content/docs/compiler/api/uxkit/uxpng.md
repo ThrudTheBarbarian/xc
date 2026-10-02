@@ -28,7 +28,10 @@ Pixels come out as `0xAARRGGBB` with straight (not premultiplied) alpha.
 **Supported:** non-interlaced images at 8 and 16 bits per sample (and the
 sub-byte grey and palette depths), colour types grey, RGB, palette, grey with
 alpha and RGBA, with `tRNS` transparency. A 16-bit sample is taken to 8 bits by
-its high byte.
+its high byte, which is what browsers do (Chrome's decode of a 16-bit RGBA sheet
+matches it byte for byte). ImageMagick rounds instead, `(v + 128) / 257`, so its
+8-bit export of the same file differs by 1 wherever a sample is not a multiple
+of 257.
 
 **Refused**, with a null return rather than a wrong picture: Adam7 interlaced
 images, a bad CRC, and a truncated or empty file.

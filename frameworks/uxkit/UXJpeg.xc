@@ -11,10 +11,11 @@
 // mis-decoded: progressive (SOF2), lossless, arithmetic coding, 12-bit samples, and four-component
 // (CMYK) images -- a decoder that half-works is worse than one that says no.
 //
-// IT MATCHES LIBJPEG BYTE FOR BYTE in the configuration `djpeg -dct int -nosmooth`: the IDCT is
+// IT MATCHES LIBJPEG BYTE FOR BYTE in its DEFAULT configuration, `djpeg -dct int` -- which is also
+// what browsers decode with (checked against headless Chrome on the client's sheets): the IDCT is
 // libjpeg's "islow" (Loeffler-Ligtenberg-Moschytz, 13-bit constants, two passes, its range-limit
-// table), the colour conversion is its fixed-point YCbCr tables, and chroma is replicated, not
-// interpolated.  That is what makes the test exact rather than a tolerance: test_jpeg compares every
+// table), the colour conversion is its fixed-point YCbCr tables, and chroma is upsampled with its
+// "fancy" triangle filters (see fancyPlane).  That is what makes the test exact rather than a tolerance: test_jpeg compares every
 // byte with libjpeg's own output for the same file.
 #import "UXImage.xc"
 
@@ -841,6 +842,96 @@ class UXJpeg
             }
         return (i32)-1;
         }
+    // FANCY UPSAMPLING, libjpeg's default and what every browser does (libjpeg-turbo in Chrome and
+    // WebKit): chroma is not replicated over its block but filtered -- a triangle filter, each output
+    // sample 3/4 the nearer input sample and 1/4 the next -- with libjpeg's exact rounding, so the
+    // result is byte-identical to `djpeg -dct int` (jdsample.c: h2v1, h2v2 and libjpeg-turbo's
+    // h1v2).  The edges follow libjpeg's context rows: the row above the first and below the last
+    // real row (downsampled_height, not the padded plane) is that row again.  Planes narrower than
+    // three samples, and other ratios, are replicated, exactly as libjpeg does.  Returns the plane
+    // upsampled to (dw*fh) x (dh*fv) with that stride in *stride, or null where replication applies.
+    u8* fancyPlane(UXJpegComp* c, i32* stride)
+        {
+        if (hmax % c.h != (i32)0 || vmax % c.v != (i32)0)
+            {
+            return (u8*)0;
+            }
+        i32 fh = hmax / c.h;
+        i32 fv = vmax / c.v;
+        bool h2v1 = fh == (i32)2 && fv == (i32)1;
+        bool h2v2 = fh == (i32)2 && fv == (i32)2;
+        bool h1v2 = fh == (i32)1 && fv == (i32)2;
+        if (!h2v1 && !h2v2 && !h1v2)
+            {
+            return (u8*)0;
+            }
+        i32 dw = (width * c.h + hmax - (i32)1) / hmax; // downsampled_width
+        i32 dh = (height * c.v + vmax - (i32)1) / vmax;
+        if (fh == (i32)2 && dw <= (i32)2)
+            {
+            return (u8*)0; // libjpeg replicates these
+            }
+        i32 is = c.bw * (i32)8; // the input plane's stride
+        i32 ow = dw * fh;
+        u8* out = new u8[(u32)(ow * dh * fv)];
+        stride[0] = ow;
+        for (i32 r = (i32)0; r < dh; r = r + (i32)1)
+            {
+            u8* in0 = c.plane + r * is;
+            if (h2v1)
+                {
+                u8* o = out + r * ow;
+                i32 iv = (i32)in0[0];
+                o[0] = (u8)iv;
+                o[1] = (u8)((iv * (i32)3 + (i32)in0[1] + (i32)2) >> (i32)2);
+                for (i32 k = (i32)1; k < dw - (i32)1; k = k + (i32)1)
+                    {
+                    iv = (i32)in0[k] * (i32)3;
+                    o[k * (i32)2] = (u8)((iv + (i32)in0[k - (i32)1] + (i32)1) >> (i32)2);
+                    o[k * (i32)2 + (i32)1] = (u8)((iv + (i32)in0[k + (i32)1] + (i32)2) >> (i32)2);
+                    }
+                iv = (i32)in0[dw - (i32)1];
+                o[(dw - (i32)1) * (i32)2] = (u8)((iv * (i32)3 + (i32)in0[dw - (i32)2] + (i32)1) >> (i32)2);
+                o[(dw - (i32)1) * (i32)2 + (i32)1] = (u8)iv;
+                continue;
+                }
+            for (i32 v = (i32)0; v < (i32)2; v = v + (i32)1)
+                {
+                // v = 0: the next nearest row is the one above; v = 1: the one below
+                i32 nr = v == (i32)0 ? (r > (i32)0 ? r - (i32)1 : r) : (r < dh - (i32)1 ? r + (i32)1 : r);
+                u8* in1 = c.plane + nr * is;
+                u8* o = out + (r * (i32)2 + v) * ow;
+                if (h1v2)
+                    {
+                    i32 bias = v == (i32)0 ? (i32)1 : (i32)2;
+                    for (i32 k = (i32)0; k < dw; k = k + (i32)1)
+                        {
+                        o[k] = (u8)(((i32)in0[k] * (i32)3 + (i32)in1[k] + bias) >> (i32)2);
+                        }
+                    continue;
+                    }
+                // h2v2
+                i32 thiscs = (i32)in0[0] * (i32)3 + (i32)in1[0];
+                i32 nextcs = (i32)in0[1] * (i32)3 + (i32)in1[1];
+                o[0] = (u8)((thiscs * (i32)4 + (i32)8) >> (i32)4);
+                o[1] = (u8)((thiscs * (i32)3 + nextcs + (i32)7) >> (i32)4);
+                i32 lastcs = thiscs;
+                thiscs = nextcs;
+                for (i32 k = (i32)2; k < dw; k = k + (i32)1)
+                    {
+                    nextcs = (i32)in0[k] * (i32)3 + (i32)in1[k];
+                    o[(k - (i32)1) * (i32)2] = (u8)((thiscs * (i32)3 + lastcs + (i32)8) >> (i32)4);
+                    o[(k - (i32)1) * (i32)2 + (i32)1] = (u8)((thiscs * (i32)3 + nextcs + (i32)7) >> (i32)4);
+                    lastcs = thiscs;
+                    thiscs = nextcs;
+                    }
+                o[(dw - (i32)1) * (i32)2] = (u8)((thiscs * (i32)3 + lastcs + (i32)8) >> (i32)4);
+                o[(dw - (i32)1) * (i32)2 + (i32)1] = (u8)((thiscs * (i32)4 + (i32)7) >> (i32)4);
+                }
+            }
+        return out;
+        }
+
     UXImage* image(void)
         {
         UXImage* im = UXImage.make(width, height);
@@ -869,6 +960,12 @@ class UXJpeg
             {
             s0 = (i32)-1;
             }
+        // chroma, fancy-upsampled where libjpeg would (luma at full resolution is the case it handles)
+        i32 st1 = (i32)0;
+        i32 st2 = (i32)0;
+        bool lumaFull = c0.h == hmax && c0.v == vmax;
+        u8* up1 = ncomp == (i32)3 && lumaFull ? self.fancyPlane(c1, &st1) : (u8*)0;
+        u8* up2 = ncomp == (i32)3 && lumaFull ? self.fancyPlane(c2, &st2) : (u8*)0;
         // each plane's source column for every output column, worked out once
         i32* col0 = new i32[(u32)width];
         i32* col1 = new i32[(u32)width];
@@ -876,15 +973,15 @@ class UXJpeg
         for (i32 x = (i32)0; x < width; x = x + (i32)1)
             {
             col0[x] = s0 >= (i32)0 ? x >> s0 : x * c0.h / hmax;
-            col1[x] = ncomp != (i32)3 ? (i32)0 : (s1 >= (i32)0 ? x >> s1 : x * c1.h / hmax);
-            col2[x] = ncomp != (i32)3 ? (i32)0 : (s2 >= (i32)0 ? x >> s2 : x * c2.h / hmax);
+            col1[x] = ncomp != (i32)3 ? (i32)0 : (up1 != (u8*)0 ? x : (s1 >= (i32)0 ? x >> s1 : x * c1.h / hmax));
+            col2[x] = ncomp != (i32)3 ? (i32)0 : (up2 != (u8*)0 ? x : (s2 >= (i32)0 ? x >> s2 : x * c2.h / hmax));
             }
         u32* dst = im.px;
         for (i32 y = (i32)0; y < height; y = y + (i32)1)
             {
             u8* r0 = c0.plane + (y * c0.v / vmax) * c0.bw * (i32)8;
-            u8* r1 = ncomp == (i32)3 ? c1.plane + (y * c1.v / vmax) * c1.bw * (i32)8 : r0;
-            u8* r2 = ncomp == (i32)3 ? c2.plane + (y * c2.v / vmax) * c2.bw * (i32)8 : r0;
+            u8* r1 = ncomp == (i32)3 ? (up1 != (u8*)0 ? up1 + y * st1 : c1.plane + (y * c1.v / vmax) * c1.bw * (i32)8) : r0;
+            u8* r2 = ncomp == (i32)3 ? (up2 != (u8*)0 ? up2 + y * st2 : c2.plane + (y * c2.v / vmax) * c2.bw * (i32)8) : r0;
             u32* row = dst + y * width;
             for (i32 x = (i32)0; x < width; x = x + (i32)1)
                 {
