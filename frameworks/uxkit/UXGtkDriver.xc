@@ -19,6 +19,7 @@
 #import "UXSegmentedControl.xc" // native UISegmentedControl overlay
 #import "UXProgressBar.xc"      // native UIProgressView overlay
 #import "UXTableView.xc"        // the native GtkColumnView reads its rows from the peer table
+#import "UXOutlineView.xc"      // ...and a native tree reads its items from the peer outline
 #import "UXApplication.xc"      // gApp: the driver-owned loop starts the delegate, and stop() quits
 #import "UXLibc.xc"
 
@@ -57,6 +58,10 @@ void ux_gtk_set_table_hooks(pointer rows, pointer cell, pointer cols, pointer ti
 void ux_gtk_make_table(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, pointer peer);
 void ux_gtk_table_reload(i32 handle, i32 node);
 void ux_gtk_table_select(i32 handle, i32 node, i32* rows, i32 n);
+// ...and the native outline (a GtkTreeListModel), fed by the peer UXOutlineView.
+void ux_gtk_set_outline_hooks(pointer children, pointer child, pointer expandable, pointer value, pointer didexpand, pointer isexpanded);
+void ux_gtk_make_outline(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, pointer peer);
+void ux_gtk_outline_reload(i32 handle, i32 node);
 void ux_gtk_make_label(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, u8* text);
 void ux_gtk_set_control_frame(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h);
 void ux_gtk_set_control_enabled(i32 handle, i32 node, i32 on);
@@ -379,6 +384,31 @@ i32 xgGtkTableMulti(pointer tbl)
     {
     return ((UXTableView* ?)(Object*)tbl).nativeAllowsMultiple();
     }
+// Outline-item trampolines: the shim's tree model asks the peer UXOutlineView for each item.
+i32 xgGtkOutlineChildren(pointer o, pointer item)
+    {
+    return ((UXOutlineView* ?)(Object*)o).nativeChildren(item);
+    }
+pointer xgGtkOutlineChild(pointer o, pointer item, i32 i)
+    {
+    return ((UXOutlineView* ?)(Object*)o).nativeChild(item, i);
+    }
+i32 xgGtkOutlineExpandable(pointer o, pointer item)
+    {
+    return ((UXOutlineView* ?)(Object*)o).nativeExpandable(item);
+    }
+u8* xgGtkOutlineValue(pointer o, pointer item, i32 c)
+    {
+    return ((UXOutlineView* ?)(Object*)o).nativeItemValue(item, c);
+    }
+void xgGtkOutlineDidExpand(pointer o, pointer item, i32 on)
+    {
+    ((UXOutlineView* ?)(Object*)o).nativeDidExpand(item, on);
+    }
+i32 xgGtkOutlineIsExpanded(pointer o, pointer item)
+    {
+    return ((UXOutlineView* ?)(Object*)o).nativeIsItemExpanded(item);
+    }
 // The user's selection, made in the native view: into the model, announced, then a display pass.
 void xgGtkTableSelectSet(pointer tbl, i32* rows, i32 n)
     {
@@ -410,6 +440,9 @@ class UXGtkDriver : Object<UXViewDriver>
             ux_gtk_set_table_hooks((pointer)&xgGtkTableRows, (pointer)&xgGtkTableCell, (pointer)&xgGtkTableCols,
                                    (pointer)&xgGtkTableColTitle, (pointer)&xgGtkTableColWidth,
                                    (pointer)&xgGtkTableMulti, (pointer)&xgGtkTableSelectSet);
+            ux_gtk_set_outline_hooks((pointer)&xgGtkOutlineChildren, (pointer)&xgGtkOutlineChild,
+                                     (pointer)&xgGtkOutlineExpandable, (pointer)&xgGtkOutlineValue,
+                                     (pointer)&xgGtkOutlineDidExpand, (pointer)&xgGtkOutlineIsExpanded);
             }
         return ux_gtk_boot(screenW, screenH) != (i32)0;
         }
@@ -1136,8 +1169,7 @@ class UXGtkDriver : Object<UXViewDriver>
             {
             if ((i32)t.nodes[p].kind == (i32)UXKindTable)
                 {
-                UXTableView* tv = (UXTableView* ?)(Object*)t.nodes[p].peer;
-                if (tv != (UXTableView*)0 && tv.nativeIsOutline() == (i32)0)
+                if ((UXTableView* ?)(Object*)t.nodes[p].peer != (UXTableView*)0)
                     {
                     return (i32)1;
                     }
@@ -1167,18 +1199,33 @@ class UXGtkDriver : Object<UXViewDriver>
             if ((i32)n.kind == (i32)UXKindTable)
                 {
                 UXTableView* tv = (UXTableView* ?)(Object*)n.peer;
-                if (tv == (UXTableView*)0 || tv.nativeIsOutline() != (i32)0)
+                if (tv == (UXTableView*)0)
                     {
-                    continue; // an outline stays drawn here for now (GtkTreeListModel: next)
+                    continue;
                     }
+                bool outline = tv.nativeIsOutline() != (i32)0; // a tree vs a flat list
                 if (ux_gtk_has_control(handle, i) == (i32)0)
                     {
-                    ux_gtk_make_table(handle, i, ax, ay, aw, ah, n.peer);
+                    if (outline)
+                        {
+                        ux_gtk_make_outline(handle, i, ax, ay, aw, ah, n.peer);
+                        }
+                    else
+                        {
+                        ux_gtk_make_table(handle, i, ax, ay, aw, ah, n.peer);
+                        }
                     }
                 else
                     {
                     ux_gtk_set_control_frame(handle, i, ax, ay, aw, ah);
-                    ux_gtk_table_reload(handle, i);
+                    if (outline)
+                        {
+                        ux_gtk_outline_reload(handle, i);
+                        }
+                    else
+                        {
+                        ux_gtk_table_reload(handle, i);
+                        }
                     }
                 // a selection the MODEL made (app code, a replay) goes the other way: the view is the
                 // visible truth and never reads the model back

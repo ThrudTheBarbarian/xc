@@ -159,7 +159,7 @@ native realizations all belong to the table and are unchanged.
   <TabItem label="Linux">
     <img src="/uxkit/outline-linux.png" alt="UXOutlineView on Linux" width="220" />
 
-    The flattened tree as toolkit-drawn rows, with the disclosure triangle in the indent gutter.
+    A real GTK tree: a `GtkColumnView` over a `GtkTreeListModel`, with a `GtkTreeExpander` in the first column. Its items come from the outline's own data source as they are opened, and an item opened or closed in it is opened or closed in the model.
   </TabItem>
   <TabItem label="GEM">
     <img src="/uxkit/outline-gem.png" alt="UXOutlineView on GEM" width="220" />

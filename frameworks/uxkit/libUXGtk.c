@@ -2201,6 +2201,206 @@ int ux_gtk_test_table_title_is(int handle, int node, int col, const char* want)
     return same;
     }
 
+/* ── the native outline: GtkColumnView over a GtkTreeListModel ─────────────────
+ * A UXOutlineView realized as a tree: a GtkTreeListModel whose children are asked for on demand
+ * through the outline hooks (the outline's own datasource, as NSOutlineView does), with a
+ * GtkTreeExpander in the first column.  An expansion the user makes is reported back
+ * (nativeDidExpand), which re-flattens the outline's rows into the native visible order, so the
+ * selection is reported by row exactly as a table's is.  Each item is a plain GObject carrying the
+ * app's own item pointer. */
+typedef int (*ol_children_fn)(void*, void*);
+typedef void* (*ol_child_fn)(void*, void*, int);
+typedef int (*ol_expandable_fn)(void*, void*);
+typedef const char* (*ol_value_fn)(void*, void*, int);
+typedef void (*ol_didexpand_fn)(void*, void*, int);
+typedef int (*ol_isexpanded_fn)(void*, void*);
+static ol_children_fn gOlChildren;
+static ol_child_fn gOlChild;
+static ol_expandable_fn gOlExpandable;
+static ol_value_fn gOlValue;
+static ol_didexpand_fn gOlDidExpand;
+static ol_isexpanded_fn gOlIsExpanded;
+void ux_gtk_set_outline_hooks(void* children, void* child, void* expandable, void* value, void* didexpand, void* isexpanded)
+    {
+    gOlChildren = (ol_children_fn)children;
+    gOlChild = (ol_child_fn)child;
+    gOlExpandable = (ol_expandable_fn)expandable;
+    gOlValue = (ol_value_fn)value;
+    gOlDidExpand = (ol_didexpand_fn)didexpand;
+    gOlIsExpanded = (ol_isexpanded_fn)isexpanded;
+    }
+static GListStore* ol_children_store(void* peer, void* item)
+    {
+    GListStore* st = g_list_store_new(G_TYPE_OBJECT);
+    int n = gOlChildren ? gOlChildren(peer, item) : 0;
+    for (int i = 0; i < n; i++)
+        {
+        GObject* o = g_object_new(G_TYPE_OBJECT, NULL);
+        g_object_set_data(o, "ux-item", gOlChild ? gOlChild(peer, item, i) : NULL);
+        g_list_store_append(st, o);
+        g_object_unref(o);
+        }
+    return st;
+    }
+static GListModel* ol_create(gpointer obj, gpointer peer)
+    {
+    void* item = g_object_get_data(G_OBJECT(obj), "ux-item");
+    if (!gOlExpandable || !gOlExpandable(peer, item))
+        return NULL;
+    return G_LIST_MODEL(ol_children_store(peer, item));
+    }
+static void ol_row_expanded(GtkTreeListRow* row, GParamSpec* ps, gpointer peer)
+    {
+    (void)ps;
+    if (gTblMute || !gOlDidExpand)
+        return;
+    GObject* o = gtk_tree_list_row_get_item(row);
+    gOlDidExpand(peer, g_object_get_data(o, "ux-item"), gtk_tree_list_row_get_expanded(row) ? 1 : 0);
+    g_object_unref(o);
+    }
+static void ol_setup(GtkSignalListItemFactory* f, GtkListItem* li, gpointer col)
+    {
+    (void)f;
+    GtkWidget* l = gtk_label_new("");
+    gtk_label_set_xalign(GTK_LABEL(l), 0.0f);
+    gtk_label_set_ellipsize(GTK_LABEL(l), PANGO_ELLIPSIZE_END);
+    if (GPOINTER_TO_INT(col) == 0)
+        {
+        GtkWidget* ex = gtk_tree_expander_new();
+        gtk_tree_expander_set_child(GTK_TREE_EXPANDER(ex), l);
+        gtk_list_item_set_child(li, ex);
+        }
+    else
+        gtk_list_item_set_child(li, l);
+    }
+static void ol_bind(GtkSignalListItemFactory* f, GtkListItem* li, gpointer col)
+    {
+    GtkWidget* cv = g_object_get_data(G_OBJECT(f), "ux-view");
+    void* peer = g_object_get_data(G_OBJECT(cv), "ux-peer");
+    GtkTreeListRow* row = GTK_TREE_LIST_ROW(gtk_list_item_get_item(li));
+    GObject* o = gtk_tree_list_row_get_item(row);
+    void* item = g_object_get_data(o, "ux-item");
+    g_object_unref(o);
+    GtkWidget* child = gtk_list_item_get_child(li);
+    GtkWidget* label = child;
+    if (GPOINTER_TO_INT(col) == 0)
+        {
+        gtk_tree_expander_set_list_row(GTK_TREE_EXPANDER(child), row);
+        label = gtk_tree_expander_get_child(GTK_TREE_EXPANDER(child));
+        /* (Expansion is NOT applied here: bind runs inside the list's layout, and opening a row
+         * inserts rows mid-measure -- GTK crashes on it.  ol_apply_expansion does it after a reload.) */
+        if (!g_object_get_data(G_OBJECT(row), "ux-watched"))
+            {
+            g_object_set_data(G_OBJECT(row), "ux-watched", GINT_TO_POINTER(1));
+            g_signal_connect(row, "notify::expanded", G_CALLBACK(ol_row_expanded), peer);
+            }
+        }
+    const char* t = gOlValue ? gOlValue(peer, item, GPOINTER_TO_INT(col)) : "";
+    gtk_label_set_text(GTK_LABEL(label), t ? t : "");
+    }
+/* The model's expansion, shown: walk the visible rows and open each item the outline has open.
+ * Opening one inserts its children right after it, so the same walk reaches them in turn. */
+static void ol_apply_expansion(GtkColumnView* cv, void* peer)
+    {
+    GListModel* m = G_LIST_MODEL(gtk_column_view_get_model(cv));
+    gTblMute++;
+    for (guint i = 0; i < g_list_model_get_n_items(m); i++)
+        {
+        GtkTreeListRow* row = g_list_model_get_item(m, i);
+        if (!row)
+            continue;
+        GObject* o = gtk_tree_list_row_get_item(row);
+        void* item = g_object_get_data(o, "ux-item");
+        g_object_unref(o);
+        if (gOlIsExpanded && gOlIsExpanded(peer, item) && gtk_tree_list_row_is_expandable(row)
+            && !gtk_tree_list_row_get_expanded(row))
+            gtk_tree_list_row_set_expanded(row, TRUE);
+        g_object_unref(row);
+        }
+    gTblMute--;
+    }
+void ux_gtk_outline_reload(int handle, int node)
+    {
+    GtkColumnView* cv = tbl_view(handle, node);
+    if (!cv)
+        return;
+    void* peer = g_object_get_data(G_OBJECT(cv), "ux-peer");
+    GListStore* root = g_object_get_data(G_OBJECT(cv), "ux-store");
+    GListStore* fresh = ol_children_store(peer, NULL);
+    guint n = g_list_model_get_n_items(G_LIST_MODEL(fresh));
+    GObject** items = g_new0(GObject*, n > 0 ? n : 1);
+    for (guint i = 0; i < n; i++)
+        items[i] = g_list_model_get_item(G_LIST_MODEL(fresh), i);
+    gTblMute++;
+    g_list_store_splice(root, 0, g_list_model_get_n_items(G_LIST_MODEL(root)), (gpointer*)items, n);
+    gTblMute--;
+    for (guint i = 0; i < n; i++)
+        g_object_unref(items[i]);
+    g_free(items);
+    g_object_unref(fresh);
+    ol_apply_expansion(cv, peer);
+    }
+void ux_gtk_make_outline(int handle, int node, int x, int y, int w, int h, void* peer)
+    {
+    GListStore* root = g_list_store_new(G_TYPE_OBJECT);
+    GtkTreeListModel* tree = gtk_tree_list_model_new(G_LIST_MODEL(root), FALSE, FALSE, ol_create, peer, NULL);
+    int multi = gTblMulti ? gTblMulti(peer) : 0;
+    GtkSelectionModel* sel;
+    if (multi)
+        sel = GTK_SELECTION_MODEL(gtk_multi_selection_new(G_LIST_MODEL(tree)));
+    else
+        {
+        GtkSingleSelection* ss = gtk_single_selection_new(G_LIST_MODEL(tree));
+        gtk_single_selection_set_autoselect(ss, FALSE);
+        gtk_single_selection_set_can_unselect(ss, TRUE);
+        sel = GTK_SELECTION_MODEL(ss);
+        }
+    GtkWidget* cv = gtk_column_view_new(sel);
+    gtk_column_view_set_show_row_separators(GTK_COLUMN_VIEW(cv), FALSE);
+    g_object_set_data(G_OBJECT(cv), "ux-peer", peer);
+    g_object_set_data(G_OBJECT(cv), "ux-store", root);
+    int ncols = gTblCols ? gTblCols(peer) : 1;
+    if (ncols < 1)
+        ncols = 1;
+    for (int c = 0; c < ncols; c++)
+        {
+        GtkListItemFactory* f = gtk_signal_list_item_factory_new();
+        g_object_set_data(G_OBJECT(f), "ux-view", cv);
+        g_signal_connect(f, "setup", G_CALLBACK(ol_setup), GINT_TO_POINTER(c));
+        g_signal_connect(f, "bind", G_CALLBACK(ol_bind), GINT_TO_POINTER(c));
+        GtkColumnViewColumn* col = gtk_column_view_column_new(gTblTitle ? gTblTitle(peer, c) : "", f);
+        int cw = gTblWidth ? gTblWidth(peer, c) : 120;
+        if (cw > 0)
+            gtk_column_view_column_set_fixed_width(col, cw);
+        gtk_column_view_column_set_resizable(col, TRUE);
+        if (c == ncols - 1)
+            gtk_column_view_column_set_expand(col, TRUE);
+        gtk_column_view_append_column(GTK_COLUMN_VIEW(cv), col);
+        g_object_unref(col);
+        }
+    g_signal_connect(sel, "selection-changed", G_CALLBACK(tbl_sel_changed), cv);
+    GtkWidget* sw = gtk_scrolled_window_new();
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(sw), cv);
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(sw), GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
+    g_object_set_data(G_OBJECT(sw), "ux-view", cv);
+    park(handle, node, sw, x, y, w, h);
+    ux_gtk_outline_reload(handle, node);
+    }
+/* Tests: a USER expanding or collapsing the row at a visible position (the expander's own call). */
+void ux_gtk_test_outline_expand(int handle, int node, int row, int on)
+    {
+    GtkColumnView* cv = tbl_view(handle, node);
+    if (!cv)
+        return;
+    GListModel* m = G_LIST_MODEL(gtk_column_view_get_model(cv));
+    GtkTreeListRow* r = g_list_model_get_item(m, (guint)row);
+    if (r)
+        {
+        gtk_tree_list_row_set_expanded(r, on != 0);
+        g_object_unref(r);
+        }
+    }
+
 /* ── the native panels: file open / save, colour, font (GTK 4.10+'s dialogs) ──
  * Each is asynchronous in GTK 4; the seam is synchronous (the toolkit's file panel, alerts and
  * pickers all are), so each runs the alert's shape: start it, spin a nested main loop until its
