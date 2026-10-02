@@ -228,6 +228,33 @@ class Sema
         }
     // A diagnostic with no position carries the word `error:` itself, so the
     // driver can print every message the same way whether or not it is placed.
+    // `(T* ?)x`, the checked cast: it must name a class pointer, and — because
+    // the check reads the operand's class out of its object header — the
+    // operand has to BE an object (bug 588). A raw `pointer` need not be, and
+    // was let through with no check at all, so the cast always "succeeded".
+    // An unchecked `(T*)p` stays legal: it never claimed to check.
+    void checkFailableCast(Node* n)
+        {
+        String* tc = classNameOf(n.name());
+        // A PROTOCOL pointer is a valid target too: `(Pingable* ?)o` asks
+        // whether o conforms, as the reference has always accepted.
+        if (tc == 0 || (_classes.get((Hashable*)tc) == 0 && _protocols.get((Hashable*)tc) == 0))
+            {
+            _errorAt(String.withCString("'?' failable-cast modifier is only valid on class-pointer casts"), n);
+            return;
+            }
+        if (n.kidCount() == (u32)0)
+            return;
+        String* opT = n.kid((u32)0).ty();
+        String* oc = opT == 0 ? (String*)0 : classNameOf(opT);
+        if (oc != 0 && (_classes.get((Hashable*)oc) != 0 || _protocols.get((Hashable*)oc) != 0))
+            return;
+        String* e = String.withCString("a checked cast needs an object, but the operand is '");
+        e.append(opT == 0 ? String.withCString("?") : opT);
+        e.appendCString("' — if it holds one, say so: (T* ?)(Object*)value");
+        _errorAt(e, n);
+        }
+
     void _error(String* msg)
         {
         String* out = String.withCString("error: ");
@@ -1826,6 +1853,8 @@ class Sema
             if (n.kidCount() > (u32)0 && numberAccessorFor(n.name()) != 0)
                 n.setKid((u32)0, unboxCollectionElement(n.kid((u32)0)));
             n.setTy(n.name());
+            if (n.hasFlag((u32)NF_FAILABLE))
+                checkFailableCast(n);
             return;
             }
         if (k == (u16)nkBinary)

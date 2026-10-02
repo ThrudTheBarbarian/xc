@@ -4552,6 +4552,26 @@ static NSInteger XTFmtWrapperIndex(BOOL isVarArgs, NSArray<XTParamNode*>* params
                                  at:node.location];
         return;
         }
+    // A checked cast reads the operand's class out of its object header, so
+    // the operand has to BE an object (bug 588). A raw `pointer` need not be:
+    // it was let through here with no check at all, so `(T* ?)p` always
+    // "succeeded" and the code it guarded read fields of the wrong class. An
+    // unchecked `(T*)p` stays legal: it never claimed to check.
+    if (node.isFailable)
+        {
+        BOOL operandIsObject = opPointee
+            && (opPointee.kind == XTTypeKindClass || self.protocolsByName[opPointee.displayName] != nil);
+        if (!operandIsObject)
+            {
+            [self.diagnostics emitError:
+                                  [NSString stringWithFormat:
+                                                @"a checked cast needs an object, but the operand is '%@' — "
+                                                @"if it holds one, say so: (T* ?)(Object*)value",
+                                                operandT.displayName ?: @"?"]
+                                     at:node.location];
+            return;
+            }
+        }
     if (!opPointee || opPointee.kind != XTTypeKindClass ||
         !tgPointee || tgPointee.kind != XTTypeKindClass)
         {
