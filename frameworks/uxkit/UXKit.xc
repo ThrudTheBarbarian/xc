@@ -70,6 +70,7 @@ i32 UXK_ABI_SYM(void)
 #import "UXImage.xc"
 #import "UXIndexSet.xc"
 #import "UXJSON.xc"
+#import "UXJpeg.xc"   // the image decoders: JPEG (baseline) and PNG
 #import "UXKeyValueStore.xc"
 #import "UXLog.xc"
 #import "UXMarkdown.xc"
@@ -79,6 +80,7 @@ i32 UXK_ABI_SYM(void)
 #import "UXOperationQueue.xc"
 #import "UXPasteboard.xc"
 #import "UXPath.xc"
+#import "UXPng.xc"
 #import "UXPopUpButton.xc"
 #import "UXPredicate.xc"
 #import "UXProgress.xc"
