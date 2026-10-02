@@ -1,0 +1,15 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>running</title>
+<canvas id="ux-canvas" width="80" height="40"></canvas>
+<script>
+  // run_web_settings.sh's page: a plain page (no worker) loaded TWICE in one browser profile.  The
+  // app's output is POSTed back once main has returned.
+  const out = [];
+  globalThis.xccOut = (s) => { out.push(s); };
+  setTimeout(() => fetch('/result', { method: 'POST', body: out.join('\n') + '\n(stored: ' +
+    Object.keys(localStorage).filter((k) => k.startsWith('uxkit:')).length + ' keys)' }), 1500);
+</script>
+<script src="ux_web_page.js"></script>
+<script src="ux_web_browser.js"></script>
+<script src="test_web_settings.js"></script>

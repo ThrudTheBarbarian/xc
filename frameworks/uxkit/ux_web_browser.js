@@ -64,7 +64,23 @@
   };
   const wins = new Map();
   let nextH = 1, target = 0, front = 0;
+  // Settings PERSIST: on a plain page straight to localStorage; in the worker run loop (no
+  // localStorage in a worker) from a snapshot the page hands the worker at start, with every change
+  // posted back for the page to store.  Keys are "uxkit:<domain> <key>"; values are kept as their
+  // bytes (latin1 both ways, so UTF-8 survives untouched).
+  const LS_PREFIX = 'uxkit:';
+  const hasLS = (() => { try { return typeof localStorage !== 'undefined' && localStorage !== null; } catch (e) { return false; } })();
   const settings = new Map();
+  const seed = globalThis.xccWorkerData && globalThis.xccWorkerData.uxSettings;
+  if (seed) for (const k of Object.keys(seed)) settings.set(k, seed[k]);
+  const settingStore = (k, v) => {
+    if (hasLS) { try { v === undefined ? localStorage.removeItem(LS_PREFIX + k) : localStorage.setItem(LS_PREFIX + k, v); } catch (e) {} }
+    else if (globalThis.xccPost) globalThis.xccPost({ uxSetting: { k, v: v === undefined ? null : v } });
+  };
+  const settingLoad = (k) => {
+    if (hasLS) { try { const v = localStorage.getItem(LS_PREFIX + k); return v === null ? undefined : v; } catch (e) { return settings.get(k); } }
+    return settings.get(k);
+  };
 
   const U8 = () => new Uint8Array(globalThis.xcc.memory.buffer);
   const I16 = () => new Int16Array(globalThis.xcc.memory.buffer);
@@ -318,15 +334,25 @@
     },
     ux_tz_offmin: () => -new Date().getTimezoneOffset(),
     ux_setting_get: (dp, kp, out, cap) => {
-      const v = settings.get(cstr(dp) + ' ' + cstr(kp));
+      const v = settingLoad(cstr(dp) + ' ' + cstr(kp));
       if (v === undefined) return 0;
       const m = U8(); let i = 0;
       for (; i < v.length && i < cap - 1; i++) m[(out >>> 0) + i] = v.charCodeAt(i) & 0xFF;
       m[(out >>> 0) + i] = 0;
       return 1;
     },
-    ux_setting_set: (dp, kp, vp) => { settings.set(cstr(dp) + ' ' + cstr(kp), cstr(vp)); return 1; },
-    ux_setting_remove: (dp, kp) => { settings.delete(cstr(dp) + ' ' + cstr(kp)); return 1; },
+    ux_setting_set: (dp, kp, vp) => {
+      const k = cstr(dp) + ' ' + cstr(kp), v = cstr(vp);
+      settings.set(k, v);
+      settingStore(k, v);
+      return 1;
+    },
+    ux_setting_remove: (dp, kp) => {
+      const k = cstr(dp) + ' ' + cstr(kp);
+      settings.delete(k);
+      settingStore(k, undefined);
+      return 1;
+    },
   });
 
   // ── GL (WebGL2) ─────────────────────────────────────────────────────────────

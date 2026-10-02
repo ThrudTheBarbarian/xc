@@ -243,12 +243,32 @@
     if (d) d.focus();
   };
 
+  // The worker's settings snapshot, for xccConfig.workerData: every stored setting, by key.
+  const settingsSnapshot = () => {
+    const out = {};
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith('uxkit:')) out[k.slice(6)] = localStorage.getItem(k);
+      }
+    } catch (e) {}
+    return out;
+  };
+  if (globalThis.xccConfig && globalThis.xccConfig.runLoop === 'worker')
+    globalThis.xccConfig.workerData = Object.assign({}, globalThis.xccConfig.workerData, { uxSettings: settingsSnapshot() });
+
   globalThis.uxPage = { menu: build, menuState: state, close, openTitle: show, onPick: null,
                         popup, closePopup, onPopupPick: null, alert, onAlert: null };
   // The worker's posts (the loader forwards them here).
   const prev = globalThis.xccOnMessage;
   globalThis.xccOnMessage = (p) => {
-    if (p && p.uxAlert !== undefined) alert(p.uxAlert);
+    if (p && p.uxSetting !== undefined) {   // the worker's settings, persisted here (no localStorage there)
+      try {
+        if (p.uxSetting.v === null) localStorage.removeItem('uxkit:' + p.uxSetting.k);
+        else localStorage.setItem('uxkit:' + p.uxSetting.k, p.uxSetting.v);
+      } catch (e) {}
+    }
+    else if (p && p.uxAlert !== undefined) alert(p.uxAlert);
     else if (p && p.uxPopup !== undefined) popup(p.uxPopup);
     else if (p && p.uxMenu !== undefined) build(p.uxMenu);
     else if (p && p.uxMenuState) state(p.uxMenuState);
