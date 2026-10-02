@@ -140,9 +140,11 @@ class UXJpeg
     i32 adobeTransform; // -1 = no Adobe marker
     bool frameSeen;
     u16 quant[256];     // 4 tables of 64, natural order
-    UXJpegHuff* dcTab[4];
-    UXJpegHuff* acTab[4];
-    UXJpegComp* comp[4];
+    // Held in Arrays, which own what they hold: an object stored ONLY in a fixed-size array field is
+    // not retained, and would be freed (and its memory reused) as soon as the code that made it
+    // returned.  tabs: DC tables 0-3 then AC tables 0-3.
+    Array* tabs;
+    Array* comps;
     // the entropy-coded bit reader
     u32 bitBuf;
     i32 bitCnt;
@@ -162,14 +164,30 @@ class UXJpeg
         restartInterval = (i32)0;
         adobeTransform = (i32)-1;
         frameSeen = false;
+        tabs = new Array();
+        comps = new Array();
+        for (i32 i = (i32)0; i < (i32)8; i = i + (i32)1)
+            {
+            tabs.add(new UXJpegHuff());
+            }
         for (i32 i = (i32)0; i < (i32)4; i = i + (i32)1)
             {
-            dcTab[i] = new UXJpegHuff();
-            acTab[i] = new UXJpegHuff();
-            comp[i] = new UXJpegComp();
+            comps.add(new UXJpegComp());
             }
         }
 
+    UXJpegHuff* dcTab(i32 i)
+        {
+        return (UXJpegHuff* ?)tabs.get((u32)i);
+        }
+    UXJpegHuff* acTab(i32 i)
+        {
+        return (UXJpegHuff* ?)tabs.get((u32)(i + (i32)4));
+        }
+    UXJpegComp* comp(i32 i)
+        {
+        return (UXJpegComp* ?)comps.get((u32)i);
+        }
     i32 u16at(i32 p)
         {
         if (p + (i32)1 >= len)
@@ -268,8 +286,8 @@ class UXJpeg
             {
             blk[i] = (i32)0;
             }
-        UXJpegHuff* dc = dcTab[c.td];
-        UXJpegHuff* ac = acTab[c.ta];
+        UXJpegHuff* dc = self.dcTab(c.td);
+        UXJpegHuff* ac = self.acTab(c.ta);
         if (!dc.defined || !ac.defined)
             {
             bad = true;
@@ -492,7 +510,7 @@ class UXJpeg
                 {
                 return false;
                 }
-            UXJpegHuff* t = tc == (i32)0 ? dcTab[th] : acTab[th];
+            UXJpegHuff* t = tc == (i32)0 ? self.dcTab(th) : self.acTab(th);
             if (!t.build(data + p + (i32)1, data + p + (i32)17, n))
                 {
                 return false;
@@ -518,7 +536,7 @@ class UXJpeg
         vmax = (i32)1;
         for (i32 i = (i32)0; i < ncomp; i = i + (i32)1)
             {
-            UXJpegComp* c = comp[i];
+            UXJpegComp* c = self.comp(i);
             c.id = (i32)data[p + (i32)6 + i * (i32)3];
             c.h = (i32)data[p + (i32)7 + i * (i32)3] >> (i32)4;
             c.v = (i32)data[p + (i32)7 + i * (i32)3] & (i32)15;
@@ -534,7 +552,7 @@ class UXJpeg
         mcusY = (height + vmax * (i32)8 - (i32)1) / (vmax * (i32)8);
         for (i32 i = (i32)0; i < ncomp; i = i + (i32)1)
             {
-            UXJpegComp* c = comp[i];
+            UXJpegComp* c = self.comp(i);
             c.bw = mcusX * c.h;
             c.bh = mcusY * c.v;
             c.plane = new u8[(u32)(c.bw * c.bh * (i32)64)];
@@ -563,9 +581,9 @@ class UXJpeg
             UXJpegComp* found = (UXJpegComp*)0;
             for (i32 k = (i32)0; k < ncomp; k = k + (i32)1)
                 {
-                if (comp[k].id == cid)
+                if (self.comp(k).id == cid)
                     {
-                    found = comp[k];
+                    found = self.comp(k);
                     }
                 }
             if (found == (UXJpegComp*)0 || (tables >> (i32)4) > (i32)3 || (tables & (i32)15) > (i32)3)
@@ -746,9 +764,9 @@ class UXJpeg
     UXImage* image(void)
         {
         UXImage* im = UXImage.make(width, height);
-        UXJpegComp* c0 = comp[0];
-        UXJpegComp* c1 = comp[1];
-        UXJpegComp* c2 = comp[2];
+        UXJpegComp* c0 = self.comp(0);
+        UXJpegComp* c1 = self.comp(1);
+        UXJpegComp* c2 = self.comp(2);
         bool rgb = ncomp == (i32)3 && adobeTransform == (i32)0;
         for (i32 y = (i32)0; y < height; y = y + (i32)1)
             {
