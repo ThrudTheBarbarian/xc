@@ -24,7 +24,7 @@ SHIM="$work/libUXAppKit.dylib"
 if [ ! -f "$SHIM" ] || [ "$ux/libUXAppKit.m" -nt "$SHIM" ]; then
   echo "== rocks: building the AppKit shim =="
   cc -fobjc-arc -fno-objc-msgsend-selector-stubs -dynamiclib \
-     -install_name "$SHIM" "$ux/libUXAppKit.m" -framework Cocoa -o "$SHIM"
+     -install_name "$SHIM" "$ux/libUXAppKit.m" -framework Cocoa -framework OpenGL -o "$SHIM"
 fi
 
 NEWEST_SRC=$(newest "$here"/xc/*.xc "$ux"/*.xc)

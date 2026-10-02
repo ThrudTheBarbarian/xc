@@ -129,7 +129,12 @@ void main(void)
     // ...which makes it the thing a handle press hits, so it must pass the
     // press on rather than swallowing it.  Without this, a selected object
     // becomes the one object in the form you cannot drag.
-    checkTrue("and it forwards its presses instead of eating them", c.selFrame.press);
+    bool forwards = false;
+    if (c.selFrame.press)
+        {
+        forwards = true; // a press handler is set: the frame hands presses back
+        }
+    checkTrue("and it forwards its presses instead of eating them", forwards);
 
     // Clicking bare form background deselects.
     c.onPick(RKDrag.hitTest(root0, (i32)280, (i32)190));

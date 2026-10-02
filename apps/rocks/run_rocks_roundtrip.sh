@@ -39,7 +39,12 @@ fi
 case "$ARCH" in
   wasm32) out=$(node "$work/rkrt.js" 2>&1) ;;
   win64)  out=$(cd "$work" && WINEDEBUG=-all wine rkrt.exe 2>&1) ;;
-  *)      out=$("$OUT" 2>&1) ;;
+  *)      # the test reads resources/desktop.rsc: run it from the GEM desktop sources
+          gem=${GEM_DIR:-${UX_GEM_DIR:-}}
+          if [ -z "$gem" ] || [ ! -f "$gem/resources/desktop.rsc" ]; then
+            echo "== rocks-roundtrip ($ARCH): skipped (no GEM desktop sources; set GEM_DIR) =="; exit 0
+          fi
+          out=$(cd "$gem" && "$OUT" 2>&1) ;;
 esac
 echo "$out" | tail -3
 echo "$out" | grep -q "^PASS" || { echo "== rocks-roundtrip ($ARCH): FAILED =="; exit 1; }

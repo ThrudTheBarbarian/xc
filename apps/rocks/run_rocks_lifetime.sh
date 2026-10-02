@@ -20,7 +20,7 @@ case "$(uname)" in Darwin) ;; *) echo "== rocks-lifetime: skipped (not macOS) ==
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
 cc -fobjc-arc -fno-objc-msgsend-selector-stubs -dynamiclib \
    -install_name "$work/libUXAppKit.dylib" "$ux/libUXAppKit.m" \
-   -framework Cocoa -o "$work/libUXAppKit.dylib"
+   -framework Cocoa -framework OpenGL -o "$work/libUXAppKit.dylib"
 "$xcc" -A arm64 -I "$ux" -I "$here/xc" "$here/xc/test_rklifetime.xc" \
     -Xlinker "$work/libUXAppKit.dylib" -framework Cocoa -o "$work/t" -q
 

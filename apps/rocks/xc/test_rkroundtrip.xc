@@ -67,7 +67,7 @@ bool sameStr(u8* a, u8* b)
 
 // Walk two subtrees in lockstep, comparing everything the model carries.
 i32 gDiffs;
-void compare(RKObject* a, RKObject* b, i32 depth)
+void compareTree(RKObject* a, RKObject* b, i32 depth)
     {
     if (a.type != b.type)
         {
@@ -80,9 +80,34 @@ void compare(RKObject* a, RKObject* b, i32 depth)
         gDiffs = gDiffs + (i32)1;
         Stdio.printf("    geom %d,%d %dx%d != %d,%d %dx%d\n", a.x, a.y, a.w, a.h, b.x, b.y, b.w, b.h);
         }
-    if (a.state != b.state)
+    if (a.state != b.state || a.flags != b.flags)
         {
         gDiffs = gDiffs + (i32)1;
+        Stdio.printf("    state/flags %d/%d != %d/%d\n", a.state, a.flags, b.state, b.flags);
+        }
+    // An editable field's TEDINFO: its text, its TEMPLATE (the mask that makes it editable -- the
+    // writer once dropped it, and nothing here noticed), its validation string and its look.
+    if (a.hasTedinfo() && a.ted != (RKTedinfo*)0)
+        {
+        if (b.ted == (RKTedinfo*)0)
+            {
+            gDiffs = gDiffs + (i32)1;
+            Stdio.printf("    a TEDINFO went missing\n");
+            }
+        else
+            {
+            if (!sameStr(a.ted.text, b.ted.text) || !sameStr(a.ted.tmplt, b.ted.tmplt) || !sameStr(a.ted.valid, b.ted.valid))
+                {
+                gDiffs = gDiffs + (i32)1;
+                Stdio.printf("    tedinfo text/template/valid \"%s\"/\"%s\"/\"%s\" != \"%s\"/\"%s\"/\"%s\"\n",
+                             a.ted.text, a.ted.tmplt, a.ted.valid, b.ted.text, b.ted.tmplt, b.ted.valid);
+                }
+            if (a.ted.font != b.ted.font || a.ted.just != b.ted.just || a.ted.fontsize != b.ted.fontsize || a.ted.thickness != b.ted.thickness)
+                {
+                gDiffs = gDiffs + (i32)1;
+                Stdio.printf("    tedinfo font/just/size/thickness differ\n");
+                }
+            }
         }
     if (a.hasStringSpec() && !sameStr(a.text, b.text))
         {
@@ -97,7 +122,7 @@ void compare(RKObject* a, RKObject* b, i32 depth)
         }
     for (i32 i = (i32)0; i < a.childCount(); i = i + (i32)1)
         {
-        compare(a.childAt(i), b.childAt(i), depth + (i32)1);
+        compareTree(a.childAt(i), b.childAt(i), depth + (i32)1);
         }
     }
 
@@ -164,7 +189,7 @@ void main(void)
     i32 n = orig.treeCount() < back.treeCount() ? orig.treeCount() : back.treeCount();
     for (i32 t = (i32)0; t < n; t = t + (i32)1)
         {
-        compare(orig.treeAt(t).root, back.treeAt(t).root, (i32)0);
+        compareTree(orig.treeAt(t).root, back.treeAt(t).root, (i32)0);
         }
     check("model differences after a round trip", gDiffs, (i32)0);
 
@@ -193,6 +218,7 @@ void main(void)
     // A second round trip must be a fixed point: if writing changed anything
     // structural, the third read would differ from the second.
     UXData* bytes2 = RKRscWrite.write(back);
+    Stdio.printf("  first write %d bytes, second write %d bytes\n", bytes.length(), bytes2 != (UXData*)0 ? bytes2.length() : (i32)-1);
     checkTrue("a second write produces the same length",
               bytes2 != (UXData*)0 && bytes2.length() == bytes.length());
 

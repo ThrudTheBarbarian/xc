@@ -136,10 +136,26 @@ class RKRscWrite : Object
             {
             s = (u8*)"";
             }
+        // Compare by LENGTH: a stored string is a UXData of its bytes with no terminator after them,
+        // so reading one up to a NUL ran on past its end into whatever followed, and a string could
+        // fail to match itself.  The template ("____...") did, every time: each TEDINFO interned a
+        // new copy beyond the laid-out table, offOf found no offset for it, and te_ptmplt was
+        // written as 0 -- every editable field lost its template on the next read.
+        i32 n = RKRscWrite.slen(s);
         for (i32 i = (i32)0; i < (i32)strs.count(); i = i + (i32)1)
             {
             UXData* d = (UXData* ?)strs.get((u16)i);
-            if (RKRscWrite.seq(d.bytes(), s))
+            if (d.length() != n)
+                {
+                continue;
+                }
+            u8* b = d.bytes();
+            i32 k = (i32)0;
+            while (k < n && b[k] == s[k])
+                {
+                k = k + (i32)1;
+                }
+            if (k == n)
                 {
                 return i;
                 }
