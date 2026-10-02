@@ -137,6 +137,7 @@ class Arm64Asm
     Array*  _modInitFixups; // Arm64Fixup@
     bool    _failed;
     String* _why;
+    Array*  _byteNums;      // Number@, the 256 byte values, shared (byteNum)
 
     void init(void)
     {
@@ -145,7 +146,15 @@ class Arm64Asm
         _commonSyms = new Map();
         _modInitBytes = new Array(); _modInitFixups = new Array();
         _failed = false;
+        _byteNums = new Array();
+        for (u32 b = (u32)0; b < (u32)256; b = b + (u32)1)
+            _byteNums.add((Object*)Number.withU32(b));
     }
+
+    // One shared Number per byte value. The images are arrays of Number, and
+    // a fresh one per byte cost the self-hosted build some eight million
+    // objects; a Number is never changed, so sharing them is invisible.
+    Object* byteNum(u32 b) { return _byteNums.get(b & (u32)$FF); }
 
     Array*  fixups(void)     { return _fixups; }
     Array*  modInitBytes(void)  { return _modInitBytes; }
@@ -2498,7 +2507,7 @@ class Arm64Asm
                     else if (n == (u8)'0') c = (u8)0;
                     else c = n;
                 }
-                into.add((Object*)Number.withU32((u32)c));
+                into.add(byteNum((u32)c));
                 i = i + (u32)1;
             }
             if (!mn.equals(String.withCString(".ascii"))) into.add((Object*)Number.withU32((u32)0));
@@ -2511,7 +2520,7 @@ class Arm64Asm
             u32 fill = (u32)0;
             if (a.count() > (u32)1) { U64* f = parseImm((String*)a.get((u32)1)); if (_immOk) fill = f.lo(); }
             for (u32 i = (u32)0; i < n.lo(); i = i + (u32)1)
-                into.add((Object*)Number.withU32(fill & (u32)$FF));
+                into.add(byteNum(fill));
             _wasDirective = true;
             return true;
         }
@@ -2522,7 +2531,7 @@ class Arm64Asm
             U64* v = parseImm((String*)toks.get(i));
             if (!_immOk) { fail(String.withCString("bad data value")); return true; }
             for (u32 b = (u32)0; b < width; b = b + (u32)1)
-                into.add((Object*)Number.withU32(v.byteAt(b)));
+                into.add(byteNum((u32)v.byteAt(b)));
         }
         _wasDirective = true;
         return true;
@@ -2734,6 +2743,9 @@ class Arm64Asm
             }
         }
 
+        // The source lines are all consumed: pass 2 reads `insns`.
+        lines = (Array*)0;
+
         // Pass 2. Only TEXT symbols resolve as local: a data symbol reaches
         // code through an adrp/add pair, never a relative branch.
         _resolveSyms = _symbols;
@@ -2750,10 +2762,13 @@ class Arm64Asm
                 _why = m;
                 return;
             }
-            _textBytes.add((Object*)Number.withU32(w & (u32)$FF));
-            _textBytes.add((Object*)Number.withU32((w >> (u32)8) & (u32)$FF));
-            _textBytes.add((Object*)Number.withU32((w >> (u32)16) & (u32)$FF));
-            _textBytes.add((Object*)Number.withU32((w >> (u32)24) & (u32)$FF));
+            _textBytes.add(byteNum(w));
+            _textBytes.add(byteNum(w >> (u32)8));
+            _textBytes.add(byteNum(w >> (u32)16));
+            _textBytes.add(byteNum(w >> (u32)24));
+            // Each line is read once; letting it go now keeps pass 2 from
+            // holding every instruction's text until the image is done.
+            insns.set(i, (Object*)0);
             pc = pc + (u32)4;
         }
     }

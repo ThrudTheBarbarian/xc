@@ -3942,26 +3942,35 @@ class Arm64
     // Parse `<mnem> <reg>, [sp, #<off>]` (or a bare `[sp]`). The offset comes
     // back as its TEXT, which is all the comparisons need. Returns false when
     // the line is not a frame access.
-    static bool parseSpLine(String* line, String** mnem, String** reg, String** off)
+    // `<mnem> <reg>, [sp, #<off>]` (or a bare `[sp]`) as [mnem, reg, off], or
+    // null for anything else. Returned in an array, not through String**
+    // out-parameters: an object stored through a pointer into an
+    // address-taken local is never released, and this ran on every line the
+    // spill peepholes read (some four million leaked strings).
+    static Array* parseSp(String* line)
     {
         String* t = line.trimmed();
         u32 sp = t.byteIndexOf(String.withCString(", [sp"));
-        if (sp == (u32)$FFFF_FFFF) return false;
+        if (sp == (u32)$FFFF_FFFF) return (Array*)0;
         String* head = t.substringBytes((u32)0, sp);
         u32 spc = head.indexOfByte((u8)' ');
-        if (spc == (u32)$FFFF_FFFF) return false;
-        *mnem = head.substringBytes((u32)0, spc);
-        *reg = head.substringFromByte(spc + (u32)1).trimmed();
+        if (spc == (u32)$FFFF_FFFF) return (Array*)0;
         String* tail = t.substringFromByte(sp);
         u32 hash = tail.indexOfByte((u8)'#');
+        String* off = (String*)0;
         if (hash == (u32)$FFFF_FFFF) {
-            if (tail.hasSuffix(String.withCString("[sp]"))) { *off = String.withCString("0"); return true; }
-            return false;
+            if (!tail.hasSuffix(String.withCString("[sp]"))) return (Array*)0;
+            off = String.withCString("0");
+        } else {
+            u32 close = tail.indexOfByte((u8)']');
+            if (close == (u32)$FFFF_FFFF || close < hash) return (Array*)0;
+            off = tail.substringBytes(hash + (u32)1, close - hash - (u32)1).trimmed();
         }
-        u32 close = tail.indexOfByte((u8)']');
-        if (close == (u32)$FFFF_FFFF || close < hash) return false;
-        *off = tail.substringBytes(hash + (u32)1, close - hash - (u32)1).trimmed();
-        return true;
+        Array* parts = new Array();
+        parts.add((Object*)head.substringBytes((u32)0, spc));
+        parts.add((Object*)head.substringFromByte(spc + (u32)1).trimmed());
+        parts.add((Object*)off);
+        return parts;
     }
 
     // A store into a slot nothing ever loads is dead, and a store immediately
@@ -3970,7 +3979,7 @@ class Arm64
     // frame address, because spill memory can then be re-read through a base
     // pointer as [xR, #K], which a literal [sp, #N] scan cannot see.
     // Leading decimal digits of a string, as a number. The peepholes carry slot
-    // offsets around as TEXT (parseSpLine returns the digits), so the one place
+    // offsets around as TEXT (parseSp returns the digits), so the one place
     // that has to compare them numerically converts here.
     static u32 parseDecimal(String* s)
     {
@@ -4013,7 +4022,9 @@ class Arm64
         for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1) {
             String* ln = (String*)lines.get(i);
             String* m = (String*)0; String* r = (String*)0; String* o = (String*)0;
-            if (parseSpLine(ln, &m, &r, &o)
+            Array* spa = parseSp(ln);
+            if (spa != (Array*)0) { m = (String*)spa.get((u32)0); r = (String*)spa.get((u32)1); o = (String*)spa.get((u32)2); }
+            if (spa != (Array*)0
              && (m.equals(String.withCString("ldr")) || m.equals(String.withCString("str")))) {
                 u32 off = parseDecimal(o);
                 u32 max = (r.hasPrefix(String.withCString("w"))
@@ -4150,7 +4161,9 @@ class Arm64
                 continue;
             }
             String* m = (String*)0; String* r = (String*)0; String* o = (String*)0;
-            if (parseSpLine(ln, &m, &r, &o)) {
+            Array* spa = parseSp(ln);
+            if (spa != (Array*)0) { m = (String*)spa.get((u32)0); r = (String*)spa.get((u32)1); o = (String*)spa.get((u32)2); }
+            if (spa != (Array*)0) {
                 if (m.equals(String.withCString("ldr"))) {
                     bool have = false;
                     for (u32 k = (u32)0; k < hOff.count(); k = k + (u32)1)
@@ -4231,7 +4244,9 @@ class Arm64
              && t.byteIndexOf(String.withCString("x29, x30")) == (u32)$FFFF_FFFF)
                 clean = false;
             String* m = (String*)0; String* r = (String*)0; String* o = (String*)0;
-            if (parseSpLine((String*)lines.get(i), &m, &r, &o)
+            Array* spa = parseSp((String*)lines.get(i));
+            if (spa != (Array*)0) { m = (String*)spa.get((u32)0); r = (String*)spa.get((u32)1); o = (String*)spa.get((u32)2); }
+            if (spa != (Array*)0
              && m.hasPrefix(String.withCString("ldr"))) {
                 Object* c = loads.get((Hashable*)o);
                 loads.set((Hashable*)o,
@@ -4243,7 +4258,9 @@ class Arm64
         while (i < lines.count()) {
             String* ln = (String*)lines.get(i);
             String* sm = (String*)0; String* sr = (String*)0; String* so = (String*)0;
-            if (parseSpLine(ln, &sm, &sr, &so) && sm.equals(String.withCString("str"))) {
+            Array* ssa = parseSp(ln);
+            if (ssa != (Array*)0) { sm = (String*)ssa.get((u32)0); sr = (String*)ssa.get((u32)1); so = (String*)ssa.get((u32)2); }
+            if (ssa != (Array*)0 && sm.equals(String.withCString("str"))) {
                 u32 nloads = countIn(loads, so);
                 // Outgoing arguments live at [sp, #0 .. maxOutStack) and are
                 // read by the CALLEE, so no `ldr` HERE ever names them. Scoring
@@ -4254,8 +4271,9 @@ class Arm64
                 bool reachable = spAddrTaken && soff >= _aliasLo && soff < _aliasHi;
                 if (clean && !isArg && !reachable && nloads == (u32)0) { i = i + (u32)1; continue; }
                 String* lm = (String*)0; String* lr = (String*)0; String* lo = (String*)0;
-                if (i + (u32)1 < lines.count()
-                 && parseSpLine((String*)lines.get(i + (u32)1), &lm, &lr, &lo)
+                Array* lsa = i + (u32)1 < lines.count() ? parseSp((String*)lines.get(i + (u32)1)) : (Array*)0;
+                if (lsa != (Array*)0) { lm = (String*)lsa.get((u32)0); lr = (String*)lsa.get((u32)1); lo = (String*)lsa.get((u32)2); }
+                if (lsa != (Array*)0
                  && lm.equals(String.withCString("ldr")) && lo.equals(so)
                  && regClass(lr) == regClass(sr)) {
                     bool dropStore = clean && !isArg && !reachable && nloads == (u32)1;

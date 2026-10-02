@@ -3714,8 +3714,15 @@ void main(void)
     mod = parsed;
     // Stashed for `-c`, which keeps the module's IR beside the object so a
     // later link can re-run the inliner across module boundaries — the thing
-    // per-object compilation otherwise gives up.
-    d.setIrText(irText);
+    // per-object compilation otherwise gives up. Nothing else reads it again,
+    // so otherwise the text and the parser (which holds every line of it) are
+    // let go before code generation, rather than living through it beside
+    // the module they were parsed into.
+    if (d.compileOnly())
+        d.setIrText(irText);
+    irText = (String*)0;
+    irrt = (IrParser*)0;
+    parsed = (IRModule*)0;
     emitModule(d, mod);
 }
 
