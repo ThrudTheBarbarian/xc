@@ -5,9 +5,11 @@ description: Release notes for the xcc toolchain, with bug fixes and new feature
 
 ## Version 0.65 — faster loops, native settings and system frameworks
 
-The optimiser and the arm64 back end close most of the remaining distance to
-clang: across the benchmark suite arm64 code is now 0.98× clang's C++ time
-(geometric mean), from 1.24×, and matrix multiply is four times faster.
+The optimiser and the arm64 back end close the distance to clang: across the
+benchmark suite arm64 code now takes 0.97× clang's C++ time (geometric mean),
+from 1.24×, and is 1.38× faster than 0.64; matrix multiply is 4.7 times
+faster. x86-64 code takes 1.08× C++'s time, from 1.13×. See
+[Performance](/compiler/performance/).
 `Settings.standard()` keeps its values in the platform's own settings store, and
 `#import <Framework>` links a macOS or iOS system framework.
 

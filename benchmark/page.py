@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Write the website's performance page from benchmark results.
 
-  page.py                       current run v0.64-langs, history v0.62..v0.64
+  page.py                       current run v0.65, history v0.62..v0.65
   page.py --current v0.65 --history v0.62,v0.63,v0.64,v0.65
 
 The current run supplies the four-language comparison; the history runs supply
@@ -184,11 +184,32 @@ def summary(cur):
     return "\n".join(out)
 
 
+def standing(cur):
+    """One sentence per target: which languages xc is ahead of and behind, from
+    the same geometric means as the summary table, so it cannot go stale."""
+    def join(names):
+        return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+    parts = []
+    for pname, suf in PLATFORMS:
+        ahead, behind = [], []
+        for l, name, _ in LANGS:
+            g = gmean([d["O3"]["xc" + suf] / d["O3"][l + suf] for d in cur.values()
+                       if d["O3"].get("xc" + suf) and d["O3"].get(l + suf)])
+            (ahead if g < 1.0 else behind).append(name)
+        if not behind:
+            parts.append("On %s xc is ahead of all three." % pname)
+        elif not ahead:
+            parts.append("On %s xc is behind all three." % pname)
+        else:
+            parts.append("On %s xc is ahead of %s and behind %s." % (pname, join(ahead), join(behind)))
+    return " ".join(parts)
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--current", default="v0.64-langs")
-    ap.add_argument("--history", default="v0.62,v0.63,v0.64")
-    ap.add_argument("--release", default="0.64")
+    ap.add_argument("--current", default="v0.65")
+    ap.add_argument("--history", default="v0.62,v0.63,v0.64,v0.65")
+    ap.add_argument("--release", default="0.65")
     a = ap.parse_args()
     cur = load(a.current)
     versions = a.history.split(",")
@@ -201,6 +222,7 @@ def main():
     page = PAGE_TEMPLATE.format(
         release=a.release,
         summary=summary(cur),
+        standing=standing(cur),
         chart_arm=ratio_chart(cur, "", "arm64: xc's time divided by each language's, per benchmark"),
         chart_x86=ratio_chart(cur, "_x86_64", "x86-64: xc's time divided by each language's, per benchmark"),
         table_arm=table(cur, ""),
@@ -239,8 +261,7 @@ language's. **Below 1 is xc faster.**
 
 {summary}
 
-xc is ahead of Objective-C and Swift on both targets and behind C++, whose
-compiler vectorises loops that xcc does not yet. The arithmetic mean of ratios
+{standing} The arithmetic mean of ratios
 is not given: a benchmark at 2.00× and one at 0.50× are exactly compensating,
 and only the geometric mean says so.
 
@@ -262,19 +283,21 @@ as that language. Dots left of the centre line are benchmarks xc wins.
 {table_x86}
 
 The fastest results are where the runtime does the work: `string_scan`,
-`method_call` and `arc_array` are byte scanning, dynamic dispatch and reference
-counting. The slowest show where xcc's code generation has most to gain:
+`method_call` and `struct_copy` are byte scanning, dynamic dispatch and
+aggregate copies. The slowest show where xcc's code generation has most to
+gain:
 
-- **Vectorisation.** `matrix_mul`, `float_math`, `array_map` and `mem_copy`
-  have inner loops clang turns into SIMD code and xcc does not. On arm64
-  `matrix_mul` is the largest gap in the suite.
-- **Dispatch and reference counting.** `poly_dispatch` on arm64 and `arc_array`
-  on both targets, where C++ calls through a vtable without reference counting
-  and reads elements without retaining them.
+- **Vectorisation.** On arm64, `matrix_mul` is vectorised across its outer loop
+  but clang also unrolls the inner one completely and keeps every broadcast in
+  a register; `int_muldiv` and `float_math` are vectorised by both, and clang's
+  loops are tighter.
+- **Reference counting and allocation on x86-64.** `arc_alloc` and `arc_array`,
+  where C++ makes one allocation per object through a faster allocator and
+  reads elements without retaining them.
 - **x86-64 loops.** `sieve`, `sort_small` and `int_muldiv`, where the other
-  compilers' loops are faster (Swift's, for `sort_small`).
-- **Allocation.** `arc_alloc` on x86-64, where C++ makes one allocation per
-  object through a faster allocator.
+  compilers' loops are faster.
+- **Dispatch.** `poly_dispatch` on arm64, where clang's call sequence around the
+  virtual call is shorter.
 
 ## Release to release
 
