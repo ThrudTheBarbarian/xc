@@ -849,6 +849,12 @@ class JsonVal
         if (root == 0 || root.kind() != (u8)5)
             return (IfaceImport*)0;
         IfaceImport* im = new IfaceImport();
+        // Types first: a class field, a method signature or a function may name
+        // an imported struct, enum or alias, and every one of them must exist
+        // before anything that uses it.
+        im.readTypedefs(root.member((u8*)"typedefs"));
+        im.readEnums(root.member((u8*)"enums"));
+        im.readStructs(root.member((u8*)"structs"));
         im.readClasses(root.member((u8*)"classes"));
         im.readProtocols(root.member((u8*)"protocols"));
         im.readFunctions(root.member((u8*)"functions"));
@@ -932,6 +938,85 @@ class JsonVal
                 for (u32 j = (u32)0; j < ms.count(); j = j + (u32)1)
                     cd.add(methodNode(ms.at(j)));
             _decls.add((Object*)cd);
+            }
+        }
+
+    // A library's structs are API as much as its classes: an interface whose
+    // class has a struct field, or whose method returns one, named a type the
+    // client did not have, and lowering gave up ("unsupported: type MRect")
+    // even when the client never mentioned the struct. Rebuilt as the source
+    // declared them; `packed` is carried, since the field offsets depend on it.
+    void readStructs(JsonVal* ss)
+        {
+        if (ss == 0)
+            return;
+        for (u32 i = (u32)0; i < ss.count(); i = i + (u32)1)
+            {
+            JsonVal* sv = ss.at(i);
+            String* nm = sv.memberStr((u8*)"name");
+            if (nm == 0 || nm.byteLength() == (u32)0)
+                continue;
+            Node* st = Node.withName((u16)nkStructDecl, String.withString(nm));
+            if (sv.memberBool((u8*)"packed"))
+                st.addFlag((u32)NF_PACKED);
+            st.addFlag((u32)NF_EXTERNAL);
+            JsonVal* fs = sv.member((u8*)"fields");
+            if (fs != 0)
+                for (u32 j = (u32)0; j < fs.count(); j = j + (u32)1)
+                    {
+                    JsonVal* f = fs.at(j);
+                    Node* fd = Node.withName((u16)nkVariableDecl, String.withString(f.memberStr((u8*)"name")));
+                    fd.setOp(String.withString(f.memberStr((u8*)"type")));
+                    st.add(fd);
+                    }
+            _decls.add((Object*)st);
+            }
+        }
+
+    // Enums, with their members' values as the library resolved them.
+    void readEnums(JsonVal* es)
+        {
+        if (es == 0)
+            return;
+        for (u32 i = (u32)0; i < es.count(); i = i + (u32)1)
+            {
+            JsonVal* ev = es.at(i);
+            String* nm = ev.memberStr((u8*)"name");
+            if (nm == 0 || nm.byteLength() == (u32)0)
+                continue;
+            Node* en = Node.withName((u16)nkEnumDecl, String.withString(nm));
+            en.addFlag((u32)NF_EXTERNAL);
+            JsonVal* ms = ev.member((u8*)"members");
+            if (ms != 0)
+                for (u32 j = (u32)0; j < ms.count(); j = j + (u32)1)
+                    {
+                    JsonVal* mv = ms.at(j);
+                    Node* m = Node.withName((u16)nkEnumMember, String.withString(mv.memberStr((u8*)"name")));
+                    JsonVal* v = mv.member((u8*)"value");
+                    m.setNum(v != 0 ? (i64)v.asNum() : (i64)0);
+                    m.setOp(String.withCString("v"));
+                    en.add(m);
+                    }
+            _decls.add((Object*)en);
+            }
+        }
+
+    // Plain `typedef <type> <alias>;` aliases.
+    void readTypedefs(JsonVal* ts)
+        {
+        if (ts == 0)
+            return;
+        for (u32 i = (u32)0; i < ts.count(); i = i + (u32)1)
+            {
+            JsonVal* tv = ts.at(i);
+            String* nm = tv.memberStr((u8*)"name");
+            String* tg = tv.memberStr((u8*)"target");
+            if (nm == 0 || nm.byteLength() == (u32)0 || tg == 0 || tg.byteLength() == (u32)0)
+                continue;
+            Node* td = Node.withName((u16)nkTypedefDecl, String.withString(nm));
+            td.setOp(String.withString(tg));
+            td.addFlag((u32)NF_EXTERNAL);
+            _decls.add((Object*)td);
             }
         }
 

@@ -519,6 +519,8 @@ class FeOptions
                     u16 k = d.kind();
                     if (k == (u16)nkClassDecl || k == (u16)nkProtocolDecl || k == (u16)nkEnumDecl || k == (u16)nkTypedefDecl)
                         parser.addTypeName(d.name());
+                    if (k == (u16)nkTypedefDecl)
+                        parser.addTypedef(d.name(), d.op());
                     if (k == (u16)nkStructDecl)
                         {
                         parser.addTypeName(d.name());

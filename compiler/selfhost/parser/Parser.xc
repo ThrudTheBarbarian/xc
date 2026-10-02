@@ -798,6 +798,14 @@ class Parser
     // declarations BEFORE the parse, the original's ordering) — task #36.
     void addTypeName(String* w)   { if (w != 0) _typeNames.add((Hashable*)String.withString(w)); }
     void addStructName(String* w) { if (w != 0) _structNames.add((Hashable*)String.withString(w)); }
+    // An imported `typedef <target> <alias>;`: the alias is substituted at
+    // parse time like a source typedef, so it needs its target here too.
+    void addTypedef(String* alias, String* target)
+    {
+        if (alias == 0 || target == 0) return;
+        _typedefs.set((Hashable*)String.withString(alias), (Object*)String.withString(target));
+        _typeNames.add((Hashable*)String.withString(alias));
+    }
 
     Array* errors(void) { return _errors; }
     Array* warnings(void) { return _warnings; }
