@@ -25,7 +25,8 @@ atomically.
 | backend | what runs |
 | --- | --- |
 | AppKit | `NSSavePanel`, which asks about replacing a file itself |
-| GEM, Win32, GTK, iOS, Android | [`UXFilePanel`](/compiler/api/uxkit/uxfilepanel/) in save mode |
+| GTK | `GtkFileDialog`, which does too |
+| GEM, Win32, iOS, Android | [`UXFilePanel`](/compiler/api/uxkit/uxfilepanel/) in save mode |
 | web | the drawn panel, but the web has no file system to list or save into (a download-based save is still to come) |
 
 The driver answers [`hasNativeFileSave`](/compiler/api/uxkit/uxviewdriver/#native-panels);

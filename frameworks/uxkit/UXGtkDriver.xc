@@ -339,6 +339,10 @@ void uxGtkDispatch(i32 kind, i32 x, i32 y, i32 handle, i32 extra)
 
 // the drawn file panel's file operations (ux_posix_fs.h, compiled into the shim)
 i32 ux_posix_listdir(u8* path, u8* out, i32 cap);
+i32 ux_gtk_file_open(u8* prompt, u8* startDir, u8* out, i32 cap);
+i32 ux_gtk_file_save(u8* prompt, u8* startDir, u8* defName, u8* out, i32 cap);
+i32 ux_gtk_pick_color(i32 r, i32 g, i32 b, i32* outR, i32* outG, i32* outB);
+i32 ux_gtk_pick_font(u8* inFamily, i32 inSize, i32 inBold, i32 inItalic, u8* outFamily, i32 cap, i32* outSize, i32* outBold, i32* outItalic);
 i32 ux_posix_delete(u8* path);
 i32 ux_posix_rename(u8* src, u8* dst);
 i32 ux_posix_copy(u8* src, u8* dst);
@@ -569,9 +573,10 @@ class UXGtkDriver : Object<UXViewDriver>
         }
 
     // ---- native panels: none yet — toolkit fallbacks take over ---------------
+    // GTK 4's own dialogs: GtkFileDialog, GtkColorDialog, GtkFontDialog (libUXGtk.c)
     bool hasNativeFileOpen(void)
         {
-        return false;
+        return true;
         }
     // no native save dialog here: UXSavePanel draws UXKit's own
     // no platform navigation stack here: UXNavigationController draws its own bar
@@ -591,32 +596,32 @@ class UXGtkDriver : Object<UXViewDriver>
         }
     bool hasNativeFileSave(void)
         {
-        return false;
+        return true;
         }
     i32 fileSave(u8* prompt, u8* startDir, u8* defaultName, u8* out, i32 outCap)
         {
-        return (i32)0;
+        return ux_gtk_file_save(prompt, startDir, defaultName, out, outCap);
         }
     i32 fileOpen(u8* prompt, u8* startDir, u8* out, i32 outCap)
         {
-        return (i32)0;
+        return ux_gtk_file_open(prompt, startDir, out, outCap);
         }
     bool hasNativeColorPicker(void)
         {
-        return false;
+        return true;
         }
     i32 pickColor(i32 r, i32 g, i32 b, i32* outR, i32* outG, i32* outB)
         {
-        return (i32)0;
+        return ux_gtk_pick_color(r, g, b, outR, outG, outB);
         }
     bool hasNativeFontPicker(void)
         {
-        return false;
+        return true;
         }
     i32 pickFont(u8* inFamily, i32 inSize, i32 inBold, i32 inItalic,
                  u8* outFamily, i32 outCap, i32* outSize, i32* outBold, i32* outItalic)
         {
-        return (i32)0;
+        return ux_gtk_pick_font(inFamily, inSize, inBold, inItalic, outFamily, outCap, outSize, outBold, outItalic);
         }
     i32 listDir(u8* path, u8* out, i32 outCap)
         {

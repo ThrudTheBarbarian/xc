@@ -10,9 +10,9 @@ u8* path = UXOpenPanel.run((u8*)"Open Image", (u8*)"/home/user");
 if (path != (u8*)0) { openDocument(path); }
 ```
 
-Where the backend has a native dialog, the driver runs it; today that is
-AppKit's `NSOpenPanel`. Everywhere else (GEM, Win32, GTK, iOS, Android) the
-call falls back to [`runToolkit`](#runtoolkit), which runs the
+Where the backend has a native dialog, the driver runs it: AppKit's
+`NSOpenPanel`, and GTK's `GtkFileDialog`. Everywhere else (GEM, Win32, iOS,
+Android) the call falls back to [`runToolkit`](#runtoolkit), which runs the
 toolkit-drawn [`UXFilePanel`](/compiler/api/uxkit/uxfilepanel/).
 Application code sees no difference: a prompt and a start directory go in,
 and a chosen path comes out.

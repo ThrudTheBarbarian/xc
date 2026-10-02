@@ -2011,6 +2011,250 @@ int ux_gtk_alert(int parentHandle, const char* lines, const char* buttons, int d
     return gAlertResult + 1; /* the neutral 1-based index */
     }
 
+/* ── the native panels: file open / save, colour, font (GTK 4.10+'s dialogs) ──
+ * Each is asynchronous in GTK 4; the seam is synchronous (the toolkit's file panel, alerts and
+ * pickers all are), so each runs the alert's shape: start it, spin a nested main loop until its
+ * finish callback, return.  Cancel (or an error) answers 0.
+ *
+ * Tests answer them unattended: ux_gtk_dialog_auto(ms, ...) arms a timer that finds the dialog
+ * among the toplevels -- with GDK_DEBUG=no-portals the file dialog runs in-process as a
+ * GtkFileChooserDialog, and the colour and font dialogs always do -- sets the given file, colour
+ * or font on it and presses its OK, so the whole round trip through the real dialog is checked. */
+static GMainLoop* gDlgLoop;
+static int gDlgOk;
+static char* gDlgPath;
+static GdkRGBA gDlgRGBA;
+static PangoFontDescription* gDlgFont;
+static int gDlgAutoMs;
+static char gDlgAutoPath[1024];
+static GdkRGBA gDlgAutoRGBA;
+static char gDlgAutoFont[256];
+static int gDlgAutoCancel;
+static int gDlgAutoSeen;
+void ux_gtk_dialog_auto(int ms, const char* path, int r, int g, int b, const char* font, int cancel)
+    {
+    gDlgAutoMs = ms;
+    g_strlcpy(gDlgAutoPath, path ? path : "", sizeof gDlgAutoPath);
+    gDlgAutoRGBA = (GdkRGBA){ r / 255.0f, g / 255.0f, b / 255.0f, 1.0f };
+    g_strlcpy(gDlgAutoFont, font ? font : "", sizeof gDlgAutoFont);
+    gDlgAutoCancel = cancel;
+    gDlgAutoSeen = 0;
+    }
+int ux_gtk_dialog_auto_seen(void) { return gDlgAutoSeen; }
+G_GNUC_BEGIN_IGNORE_DEPRECATIONS
+static gboolean dlg_auto_cb(gpointer unused)
+    {
+    (void)unused;
+    GListModel* tl = gtk_window_get_toplevels();
+    for (guint i = 0; i < g_list_model_get_n_items(tl); i++)
+        {
+        GtkWindow* w = g_list_model_get_item(tl, i);
+        int handled = 0;
+        if (!GTK_IS_DIALOG(w))
+            {
+            g_object_unref(w);
+            continue; /* the app's own windows */
+            }
+        if (GTK_IS_FILE_CHOOSER(w))
+            {
+            gDlgAutoSeen = 1;
+            if (!gDlgAutoCancel)
+                {
+                GFile* f = g_file_new_for_path(gDlgAutoPath);
+                if (gtk_file_chooser_get_action(GTK_FILE_CHOOSER(w)) == GTK_FILE_CHOOSER_ACTION_SAVE)
+                    {
+                    GFile* dir = g_file_get_parent(f);
+                    char* base = g_file_get_basename(f);
+                    gtk_file_chooser_set_current_folder(GTK_FILE_CHOOSER(w), dir, NULL);
+                    gtk_file_chooser_set_current_name(GTK_FILE_CHOOSER(w), base);
+                    g_free(base);
+                    g_object_unref(dir);
+                    }
+                else
+                    gtk_file_chooser_set_file(GTK_FILE_CHOOSER(w), f, NULL);
+                g_object_unref(f);
+                }
+            handled = 1;
+            }
+        else if (GTK_IS_COLOR_CHOOSER(w))
+            {
+            gDlgAutoSeen = 1;
+            if (!gDlgAutoCancel)
+                gtk_color_chooser_set_rgba(GTK_COLOR_CHOOSER(w), &gDlgAutoRGBA);
+            handled = 1;
+            }
+        else if (GTK_IS_FONT_CHOOSER(w))
+            {
+            gDlgAutoSeen = 1;
+            if (!gDlgAutoCancel)
+                gtk_font_chooser_set_font(GTK_FONT_CHOOSER(w), gDlgAutoFont);
+            handled = 1;
+            }
+        /* ONE response: a file chooser's OK is ACCEPT, the colour and font dialogs' is OK */
+        if (handled && GTK_IS_DIALOG(w))
+            gtk_dialog_response(GTK_DIALOG(w), gDlgAutoCancel ? GTK_RESPONSE_CANCEL
+                                               : GTK_IS_FILE_CHOOSER(w) ? GTK_RESPONSE_ACCEPT : GTK_RESPONSE_OK);
+        g_object_unref(w);
+        if (handled)
+            return G_SOURCE_REMOVE;
+        }
+    return G_SOURCE_CONTINUE; /* not up yet: look again */
+    }
+G_GNUC_END_IGNORE_DEPRECATIONS
+static void dlg_arm(void)
+    {
+    if (gDlgAutoMs > 0)
+        g_timeout_add(gDlgAutoMs, dlg_auto_cb, NULL);
+    gDlgAutoMs = 0;
+    }
+static void dlg_run(void)
+    {
+    gDlgLoop = g_main_loop_new(NULL, FALSE);
+    g_main_loop_run(gDlgLoop);
+    g_main_loop_unref(gDlgLoop);
+    gDlgLoop = NULL;
+    }
+static void dlg_end(void) { if (gDlgLoop) g_main_loop_quit(gDlgLoop); }
+static GtkWindow* dlg_parent(void)
+    {
+    for (int h = 1; h < UXGTK_MAXW; h++)
+        if (gWin[h])
+            return gWin[h];
+    return NULL;
+    }
+static void file_done(GObject* src, GAsyncResult* res, gpointer save)
+    {
+    GError* err = NULL;
+    GFile* f = save ? gtk_file_dialog_save_finish(GTK_FILE_DIALOG(src), res, &err)
+                    : gtk_file_dialog_open_finish(GTK_FILE_DIALOG(src), res, &err);
+    if (f)
+        {
+        gDlgPath = g_file_get_path(f);
+        gDlgOk = gDlgPath != NULL;
+        g_object_unref(f);
+        }
+    if (err)
+        g_error_free(err);
+    dlg_end();
+    }
+static int file_dialog(const char* prompt, const char* startDir, const char* defName, char* out, int cap, int save)
+    {
+    GtkFileDialog* d = gtk_file_dialog_new();
+    if (prompt && *prompt)
+        gtk_file_dialog_set_title(d, prompt);
+    gtk_file_dialog_set_modal(d, TRUE);
+    if (startDir && *startDir)
+        {
+        GFile* dir = g_file_new_for_path(startDir);
+        gtk_file_dialog_set_initial_folder(d, dir);
+        g_object_unref(dir);
+        }
+    if (save && defName && *defName)
+        gtk_file_dialog_set_initial_name(d, defName);
+    gDlgOk = 0;
+    gDlgPath = NULL;
+    dlg_arm();
+    if (save)
+        gtk_file_dialog_save(d, dlg_parent(), NULL, file_done, GINT_TO_POINTER(1));
+    else
+        gtk_file_dialog_open(d, dlg_parent(), NULL, file_done, NULL);
+    dlg_run();
+    g_object_unref(d);
+    int ok = 0;
+    if (gDlgOk && gDlgPath && cap > 0)
+        {
+        g_strlcpy(out, gDlgPath, cap);
+        ok = 1;
+        }
+    g_free(gDlgPath);
+    gDlgPath = NULL;
+    return ok;
+    }
+int ux_gtk_file_open(const char* prompt, const char* startDir, char* out, int cap)
+    {
+    return file_dialog(prompt, startDir, NULL, out, cap, 0);
+    }
+int ux_gtk_file_save(const char* prompt, const char* startDir, const char* defName, char* out, int cap)
+    {
+    return file_dialog(prompt, startDir, defName, out, cap, 1);
+    }
+static void color_done(GObject* src, GAsyncResult* res, gpointer unused)
+    {
+    (void)unused;
+    GError* err = NULL;
+    GdkRGBA* c = gtk_color_dialog_choose_rgba_finish(GTK_COLOR_DIALOG(src), res, &err);
+    if (c)
+        {
+        gDlgRGBA = *c;
+        gDlgOk = 1;
+        gdk_rgba_free(c);
+        }
+    if (err)
+        g_error_free(err);
+    dlg_end();
+    }
+int ux_gtk_pick_color(int r, int g, int b, int* outR, int* outG, int* outB)
+    {
+    GtkColorDialog* d = gtk_color_dialog_new();
+    gtk_color_dialog_set_modal(d, TRUE);
+    gtk_color_dialog_set_with_alpha(d, FALSE);
+    GdkRGBA init = { r / 255.0f, g / 255.0f, b / 255.0f, 1.0f };
+    gDlgOk = 0;
+    dlg_arm();
+    gtk_color_dialog_choose_rgba(d, dlg_parent(), &init, NULL, color_done, NULL);
+    dlg_run();
+    g_object_unref(d);
+    if (!gDlgOk)
+        return 0;
+    *outR = (int)(gDlgRGBA.red * 255.0f + 0.5f);
+    *outG = (int)(gDlgRGBA.green * 255.0f + 0.5f);
+    *outB = (int)(gDlgRGBA.blue * 255.0f + 0.5f);
+    return 1;
+    }
+static void font_done(GObject* src, GAsyncResult* res, gpointer unused)
+    {
+    (void)unused;
+    GError* err = NULL;
+    PangoFontDescription* fd = gtk_font_dialog_choose_font_finish(GTK_FONT_DIALOG(src), res, &err);
+    if (fd)
+        {
+        gDlgFont = fd;
+        gDlgOk = 1;
+        }
+    if (err)
+        g_error_free(err);
+    dlg_end();
+    }
+int ux_gtk_pick_font(const char* inFamily, int inSize, int inBold, int inItalic,
+                     char* outFamily, int cap, int* outSize, int* outBold, int* outItalic)
+    {
+    GtkFontDialog* d = gtk_font_dialog_new();
+    gtk_font_dialog_set_modal(d, TRUE);
+    PangoFontDescription* init = pango_font_description_new();
+    pango_font_description_set_family(init, inFamily && *inFamily ? inFamily : "Sans");
+    pango_font_description_set_size(init, (inSize > 0 ? inSize : 13) * PANGO_SCALE);
+    pango_font_description_set_weight(init, inBold ? PANGO_WEIGHT_BOLD : PANGO_WEIGHT_NORMAL);
+    pango_font_description_set_style(init, inItalic ? PANGO_STYLE_ITALIC : PANGO_STYLE_NORMAL);
+    gDlgOk = 0;
+    gDlgFont = NULL;
+    dlg_arm();
+    gtk_font_dialog_choose_font(d, dlg_parent(), init, NULL, font_done, NULL);
+    dlg_run();
+    pango_font_description_free(init);
+    g_object_unref(d);
+    if (!gDlgOk || !gDlgFont)
+        return 0;
+    const char* fam = pango_font_description_get_family(gDlgFont);
+    g_strlcpy(outFamily, fam ? fam : "", cap);
+    int sz = pango_font_description_get_size(gDlgFont);
+    *outSize = sz > 0 ? (sz + PANGO_SCALE / 2) / PANGO_SCALE : inSize;
+    *outBold = pango_font_description_get_weight(gDlgFont) >= PANGO_WEIGHT_BOLD;
+    *outItalic = pango_font_description_get_style(gDlgFont) != PANGO_STYLE_NORMAL;
+    pango_font_description_free(gDlgFont);
+    gDlgFont = NULL;
+    return 1;
+    }
+
 /* dump the last shot as a P6 PPM (the capture pipeline's sheet) */
 int ux_gtk_dump_ppm(const char* path)
     {
