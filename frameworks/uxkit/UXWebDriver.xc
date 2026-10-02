@@ -1201,17 +1201,19 @@ class UXWebDriver : Object<UXViewDriver>
         if (ux_web_alert_show(icon, lines, buttons, defaultBtn) != (i32)0)
             {
             i32 r[8];
-            for (;;)
+            i32 answer = (i32)-1;
+            while (answer < (i32)0)
                 {
                 _xt_ring_wait((i32)-1);
-                while (_xt_ring_read(&r[0]) >= (i32)0)
+                while (answer < (i32)0 && _xt_ring_read(&r[0]) >= (i32)0)
                     {
                     if (r[0] == (i32)7)
                         {
-                        return r[1];
+                        answer = r[1];
                         }
                     }
                 }
+            return answer;
             }
         return _xt_req_block((i32)1, (i32)lines, (i32)buttons, (icon << (i32)8) | defaultBtn);
         }

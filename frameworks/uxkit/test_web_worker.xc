@@ -31,6 +31,15 @@ class Ctl : Object
         }
     }
 
+// run() needs a delegate; this one has nothing to start
+class Starter : Object<UXApplicationDelegate>
+    {
+    i32 applicationDidStart(UXApplication* a)
+        {
+        return (i32)0;
+        }
+    }
+
 void main(void)
     {
     UXWebDriver* wd = new UXWebDriver();
@@ -62,6 +71,7 @@ void main(void)
     Stdio.printf("alert answered %d\n", answer);
 
     gNew = (i32)0;
+    app.setDelegate(new Starter());
     app.run(); // until the page's pick fires File > New
     bool pass = answer == (i32)2 && gNew == (i32)1;
     Stdio.printf(pass ? "PASS: worker run loop -- a DOM alert answered, a DOM menu pick fired\n" : "FAIL: alert %d, new %d\n", answer, gNew);

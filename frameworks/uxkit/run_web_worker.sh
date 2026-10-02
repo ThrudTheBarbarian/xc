@@ -3,10 +3,10 @@
 # Chrome, cross-origin isolated).  The page builds the DOM menu bar and the DOM alert from what the
 # worker posts (the loader's xccPost, compiler 587), answers the alert through the ring, and a pick
 # in the menu bar fires an item in the running app.  Needs a compiler whose wasm32 loader has
-# xccPost (XCC_WORKER, default the in-tree build); skips cleanly without one or without Chrome.
+# xccPost (XCC_WORKER, default the in-tree bin/osx/xcc); skips cleanly without one or without Chrome.
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
-xcc=${XCC_WORKER:-"$here/../../compiler/bin/osx/xcc-xc"}
+xcc=${XCC_WORKER:-"$here/../../compiler/bin/osx/xcc"}
 CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 [ -x "$CHROME" ] || { echo "== web-worker: skipped (no Chrome) =="; exit 0; }
 [ -x "$xcc" ] || { echo "== web-worker: skipped (no compiler at $xcc) =="; exit 0; }
@@ -19,7 +19,7 @@ port=8963
 pkill -f "coi_server.py $port" 2>/dev/null || true
 ( cd "$work" && exec python3 "$here/tools/coi_server.py" $port ) >/dev/null 2>&1 &
 SRV=$!
-trap 'kill $SRV 2>/dev/null; pkill -f "user-data-dir=$work/chrome" 2>/dev/null; rm -rf "$work"' EXIT
+trap 'kill $SRV 2>/dev/null; pkill -f "user-data-dir=$work/chrome" 2>/dev/null; sleep 1; rm -rf "$work" 2>/dev/null' EXIT
 sleep 1
 echo "== web-worker: headless Chrome =="
 ( "$CHROME" --headless=new --user-data-dir="$work/chrome" "http://localhost:$port/web_worker.html?v=$$" >/dev/null 2>&1 & )

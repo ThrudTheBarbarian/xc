@@ -11,8 +11,18 @@
 // doc's "single most likely source of a baffling first bug").
 'use strict';
 (() => {
-  const canvas = document.getElementById('ux-canvas') || document.querySelector('canvas');
+  // A plain page, or the WORKER of the interactive run loop: there is no DOM in a worker, so it draws
+  // on the OffscreenCanvas the loader hands it (globalThis.xccCanvas) and asks the page
+  // (ux_web_page.js, through xccPost) for what only the page can do -- the title, the favicon.
+  const hasDOM = typeof document !== 'undefined';
+  const canvas = globalThis.xccCanvas ||
+                 (hasDOM ? (document.getElementById('ux-canvas') || document.querySelector('canvas')) : null);
   const ctx = canvas.getContext('2d');
+  // a scratch canvas: a DOM one on a page, an OffscreenCanvas in a worker
+  const mkCanvas = (w, h) => {
+    if (hasDOM) { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; }
+    return new OffscreenCanvas(w, h);
+  };
 
   // ── the theme: the GEM atlas (Aristo/Cappuccino artwork), 3/9-sliced ──
   // aristo2.png is gtex2png's twin of the GTEX atlas; the locations file is
@@ -21,12 +31,10 @@
   let themeImg = null; const themeLoc = new Map();
   globalThis.uxThemeReady = (async () => {
     try {
+      // fetch + createImageBitmap: the same on a page and in a worker (which has no Image)
       const [img, txt] = await Promise.all([
-        new Promise((res, rej) => {
-          const i = new Image();
-          i.onload = () => res(i); i.onerror = rej;
-          i.src = 'aristo2.png';
-        }),
+        fetch('aristo2.png').then((r) => { if (!r.ok) throw new Error('no theme'); return r.blob(); })
+                            .then((b) => createImageBitmap(b)),
         fetch('aristo2-locations.txt').then((r) => r.text()),
       ]);
       themeImg = img;
@@ -109,7 +117,11 @@
     ux_win_create: (x, y, w, h) => { const hh = nextH++; wins.set(hh, { x, y, w, h }); return hh; },
     ux_win_open: (h, x, y, w, hh) => { const s = wins.get(h); if (s) { s.x = x; s.y = y; s.w = w; s.h = hh; front = h; } },
     ux_win_destroy: (h) => { wins.delete(h); },
-    ux_win_set_title: (h, sp) => { document.title = cstr(sp); },
+    ux_win_set_title: (h, sp) => {
+      const t = cstr(sp);
+      if (hasDOM) document.title = t;
+      else if (globalThis.xccPost) globalThis.xccPost({ uxTitle: t });
+    },
     ux_win_order_front: (h) => { front = h; },
     ux_win_geometry: (h, pw, ph) => { const s = wins.get(h); wi32(pw, s ? s.w : 0); wi32(ph, s ? s.h : 0); },
     ux_present: (h) => {},                       // canvas paints are immediate
@@ -196,7 +208,6 @@
     // go onto a canvas and the <link rel="icon"> points at it as a PNG; uxAppIcon keeps what was set.
     ux_app_set_icon: (p, w, h, fmt) => {
       if (w <= 0 || h <= 0) return 0;
-      const c = document.createElement('canvas'); c.width = w; c.height = h;
       const src = U8().subarray(p >>> 0, (p >>> 0) + w * h * 4);
       const img = new ImageData(w, h);
       if (fmt === 1) {
@@ -204,6 +215,13 @@
           img.data[i] = src[i + 2]; img.data[i + 1] = src[i + 1]; img.data[i + 2] = src[i]; img.data[i + 3] = src[i + 3];
         }
       } else img.data.set(src);
+      if (!hasDOM) {
+        // the page sets the favicon (ux_web_page.js): a worker has no <link>
+        if (globalThis.xccPost) globalThis.xccPost({ uxAppIcon: { w, h, data: img.data.slice() } });
+        globalThis.uxAppIcon = { w, h, href: null };
+        return 1;
+      }
+      const c = mkCanvas(w, h);
       c.getContext('2d').putImageData(img, 0, 0);
       const href = c.toDataURL('image/png');
       let link = document.querySelector('link[rel~="icon"]');
@@ -218,7 +236,7 @@
       const key = (p >>> 0) + ':' + w + 'x' + h + ':' + fmt;
       let c = pixCache.get(key);
       if (!c) {
-        c = document.createElement('canvas'); c.width = w; c.height = h;
+        c = mkCanvas(w, h);
         const src = U8().subarray(p >>> 0, (p >>> 0) + w * h * 4);
         const img = new ImageData(w, h);
         if (fmt === 1) {
@@ -369,7 +387,10 @@
   let curGl = null;
   const glViews = new Map(); // handle -> [{node, el, gl}]
 
+  // (In a worker a GL view would need a DOM canvas the page makes and transfers; until that exists
+  // the worker offers no WebGL, and a GL client draws its fallback.)
   const glNames = (() => {
+    if (!hasDOM) return [];
     const c = document.createElement('canvas');
     const g = c.getContext('webgl2');
     if (!g) return [];

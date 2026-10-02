@@ -262,7 +262,17 @@
   // The worker's posts (the loader forwards them here).
   const prev = globalThis.xccOnMessage;
   globalThis.xccOnMessage = (p) => {
-    if (p && p.uxSetting !== undefined) {   // the worker's settings, persisted here (no localStorage there)
+    if (p && p.uxTitle !== undefined) { document.title = p.uxTitle; }
+    else if (p && p.uxAppIcon !== undefined) {   // the worker's app icon, as the page's favicon
+      const a = p.uxAppIcon, c = document.createElement('canvas');
+      c.width = a.w; c.height = a.h;
+      c.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(a.data), a.w, a.h), 0, 0);
+      let link = document.querySelector('link[rel~="icon"]');
+      if (!link) { link = document.createElement('link'); link.rel = 'icon'; document.head.appendChild(link); }
+      link.type = 'image/png';
+      link.href = c.toDataURL('image/png');
+    }
+    else if (p && p.uxSetting !== undefined) {   // the worker's settings, persisted here (no localStorage there)
       try {
         if (p.uxSetting.v === null) localStorage.removeItem('uxkit:' + p.uxSetting.k);
         else localStorage.setItem('uxkit:' + p.uxSetting.k, p.uxSetting.v);
