@@ -3155,10 +3155,13 @@ class X86_64
         return out;
         }
 
-    // A line split into (mnemonic, operands), or null for a label, directive,
-    // comment or blank. Operands split on ", " — this back end never emits a
-    // comma inside a `[base + idx*scale]` operand.
-    static Array* parseLine(String* line, String** mnem)
+    // A line split into its operands with the MNEMONIC appended last
+    // (takeMnem removes it), or null for a label, directive, comment or blank.
+    // Operands split on ", " — this back end never emits a comma inside a
+    // `[base + idx*scale]` operand. The mnemonic used to come back through a
+    // `String**` out-parameter, which leaked it on every line (see Arm64's
+    // parseAsmLine).
+    static Array* parseLine(String* line)
         {
         String* t = line.trimmed();
         if (t.byteLength() == (u32)0 || t.hasSuffix(String.withCString(":")) || t.hasPrefix(String.withCString(".")) || t.hasPrefix(String.withCString("#")))
@@ -3167,17 +3170,27 @@ class X86_64
         u32 tb = t.indexOfByte((u8)'\t');
         if (tb < sp)
             sp = tb;
+        Array* ops = new Array();
         if (sp == (u32)$FFFF_FFFF)
             {
-            *mnem = t;
-            return new Array();
+            ops.add((Object*)t);
+            return ops;
             }
-        *mnem = t.substringBytes((u32)0, sp);
         Array* raw = t.substringFromByte(sp + (u32)1).trimmed().splitOnByte((u8)',');
-        Array* ops = new Array();
         for (u32 i = (u32)0; i < raw.count(); i = i + (u32)1)
             ops.add((Object*)((String*)raw.get(i)).trimmed());
+        ops.add((Object*)t.substringBytes((u32)0, sp));
         return ops;
+        }
+
+    // The mnemonic parseLine appended, removed from the operands.
+    static String* takeMnem(Array* ops)
+        {
+        if (ops == (Array*)0 || ops.count() == (u32)0)
+            return (String*)0;
+        String* m = (String*)ops.get(ops.count() - (u32)1);
+        ops.removeAt(ops.count() - (u32)1);
+        return m;
         }
 
     static bool inWordList(string list, String* m)
@@ -3379,7 +3392,8 @@ class X86_64
             for (u32 i = (u32)0; i + (u32)1 < lines.count() && !again; i = i + (u32)1)
                 {
                 String* mm = (String*)0;
-                Array* mo = parseLine((String*)lines.get(i), &mm);
+                Array* mo = parseLine((String*)lines.get(i));
+                mm = takeMnem(mo);
                 if (mo == (Array*)0 || mo.count() != (u32)2)
                     continue;
                 if (!mm.equals(String.withCString("mov")))
@@ -3400,7 +3414,8 @@ class X86_64
                 if (cons < (i32)0)
                     continue;
                 String* cm = (String*)0;
-                Array* co = parseLine((String*)lines.get((u32)cons), &cm);
+                Array* co = parseLine((String*)lines.get((u32)cons));
+                cm = takeMnem(co);
                 if (co == (Array*)0)
                     continue;
                 if (isShift(cm) && dcanon.equals(String.withCString("rcx")))
@@ -3458,7 +3473,8 @@ class X86_64
         for (u32 j = i + (u32)1; j < lines.count(); j = j + (u32)1)
             {
             String* jm = (String*)0;
-            Array* jo = parseLine((String*)lines.get(j), &jm);
+            Array* jo = parseLine((String*)lines.get(j));
+            jm = takeMnem(jo);
             if (jo == (Array*)0)
                 {
                 if (((String*)lines.get(j)).trimmed().byteLength() == (u32)0)
@@ -3502,7 +3518,8 @@ class X86_64
         for (u32 j = cons + (u32)1; j < lines.count(); j = j + (u32)1)
             {
             String* jm = (String*)0;
-            Array* jo = parseLine((String*)lines.get(j), &jm);
+            Array* jo = parseLine((String*)lines.get(j));
+            jm = takeMnem(jo);
             if (jo == (Array*)0)
                 continue; // a label, directive or blank
             if (implicitClobber(jm))

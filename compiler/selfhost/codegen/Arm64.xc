@@ -4136,7 +4136,8 @@ class Arm64
             String* jm = (String*)0;
             Array* jo = (Array*)0;
             if (!barrier) {
-                jo = parseAsmLine(ln, &jm);
+                jo = parseAsmLine(ln);
+                jm = takeMnem(jo);
                 if (jo == (Array*)0 || jm == (String*)0) barrier = true;
                 else if (isBranchy(jm)) barrier = true;
                 else if (jm.equals(String.withCString("ldp")) || jm.equals(String.withCString("stp")))
@@ -4286,22 +4287,40 @@ class Arm64
     // same class moves losslessly through mov/fmov.
     static u8 regClass(String* r) { return r.byteLength() == (u32)0 ? (u8)0 : r.byteAt((u32)0); }
 
-    // Split a trimmed line into its mnemonic and comma-separated operands.
-    // Null for a label, directive, comment or blank.
-    static Array* parseAsmLine(String* line, String** mnem)
+    // Split a trimmed line into its comma-separated operands, with the
+    // MNEMONIC appended last (takeMnem removes it). Null for a label,
+    // directive, comment or blank.
+    //
+    // The mnemonic used to come back through a `String**` out-parameter, and
+    // an object stored through a pointer into an address-taken local is never
+    // released: every assembly line the peepholes read leaked its mnemonic,
+    // some 70 million strings and most of the 16 GB this compiler took to
+    // compile itself. An array releases what it holds.
+    static Array* parseAsmLine(String* line)
     {
         String* t = line.trimmed();
         if (t.byteLength() == (u32)0 || t.hasSuffix(String.withCString(":"))
          || t.hasPrefix(String.withCString(".")) || t.hasPrefix(String.withCString("//")))
             return (Array*)0;
         u32 sp = t.indexOfByte((u8)' ');
-        if (sp == (u32)$FFFF_FFFF) { *mnem = t; return new Array(); }   // a bare `ret`
-        *mnem = t.substringBytes((u32)0, sp);
-        Array* raw = t.substringFromByte(sp + (u32)1).splitOnByte((u8)',');
         Array* ops = new Array();
+        if (sp == (u32)$FFFF_FFFF) { ops.add((Object*)t); return ops; }   // a bare `ret`
+        Array* raw = t.substringFromByte(sp + (u32)1).splitOnByte((u8)',');
         for (u32 i = (u32)0; i < raw.count(); i = i + (u32)1)
             ops.add((Object*)((String*)raw.get(i)).trimmed());
+        ops.add((Object*)t.substringBytes((u32)0, sp));
         return ops;
+    }
+
+    // The mnemonic parseAsmLine appended, removed from the operands; null for
+    // a null line.
+    static String* takeMnem(Array* ops)
+    {
+        if (ops == (Array*)0 || ops.count() == (u32)0)
+            return (String*)0;
+        String* m = (String*)ops.get(ops.count() - (u32)1);
+        ops.removeAt(ops.count() - (u32)1);
+        return m;
     }
 
     // Mnemonics whose FIRST operand is not a written register — stores,
@@ -4379,7 +4398,8 @@ class Arm64
             again = false;
             for (u32 i = (u32)0; i + (u32)1 < lines.count() && !again; i = i + (u32)1) {
                 String* mm = (String*)0;
-                Array* mo = parseAsmLine((String*)lines.get(i), &mm);
+                Array* mo = parseAsmLine((String*)lines.get(i));
+                mm = takeMnem(mo);
                 if (mo == (Array*)0 || mo.count() != (u32)2) continue;
                 if (!mm.equals(String.withCString("fmov")) && !mm.equals(String.withCString("mov")))
                     continue;
@@ -4392,7 +4412,8 @@ class Arm64
                  || src.indexOfByte((u8)' ') != (u32)$FFFF_FFFF) continue;
 
                 String* cm = (String*)0;
-                Array* co = parseAsmLine((String*)lines.get(i + (u32)1), &cm);
+                Array* co = parseAsmLine((String*)lines.get(i + (u32)1));
+                cm = takeMnem(co);
                 if (co == (Array*)0 || co.count() == (u32)0) continue;
                 // An FP register source (`s27`/`d5`/`v3` — NOT `sp`) may only be
                 // propagated into a reg-reg move, and that move must then be an
@@ -4482,7 +4503,8 @@ class Arm64
             if (t.byteLength() == (u32)0) continue;
             if (t.hasSuffix(String.withCString(":"))) return true;   // block edge: dead out
             String* jm = (String*)0;
-            Array* jo = parseAsmLine(line, &jm);
+            Array* jo = parseAsmLine(line);
+            jm = takeMnem(jo);
             // A comment or directive ends the scan the same way a label does:
             // it cannot read a register, so the scratch is dead out. (Returning
             // "still live" here instead cost every collapse that happened to
