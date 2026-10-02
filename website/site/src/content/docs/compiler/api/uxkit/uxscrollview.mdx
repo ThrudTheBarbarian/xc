@@ -40,7 +40,7 @@ sv.setLineHeight(18);              // the arrow/wheel step
 ## Topics
 
 **The document** · [document](#document) · [setDocumentHeight](#setdocumentheight) · [setHeaderView](#setheaderview) · [setLineHeight](#setlineheight)
-**Motion** · [scrollTo](#scrollto) · [scrollByLines](#scrollbylines)
+**Motion** · [scrollTo](#scrollto) · [scrollByLines](#scrollbylines) · [touch panning](#touch-panning)
 **Appearance** · [setCornerRadius](#setcornerradius) · [setBorderRGB](#setborderrgb--clearborder) · [clearBorder](#setborderrgb--clearborder)
 **Geometry** · [contentPx](#contentpx) · [viewportPx](#viewportpx) · [scrollPx](#scrollpx) · [maxScroll](#maxscroll) · [needsBar](#needsbar)
 
@@ -97,6 +97,15 @@ void scrollByLines(i32 lines)
 
 Relative motion in line-height steps, used by arrows, wheel notches and the
 keyboard.
+
+### Touch panning
+
+On iOS and Android the content follows the finger. A drag that starts
+anywhere in the document scrolls it by the finger's travel, including a drag
+that starts on a row which took the press (the drag climbs the responder
+chain to the scroll view). It is measured from where the finger went down.
+With a mouse, scrolling stays with the bar and the wheel, and a press on the
+scroll view's background climbs on as before.
 
 ### setCornerRadius
 

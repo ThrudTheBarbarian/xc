@@ -16,11 +16,30 @@ selecting pushes the detail, and back pops.
 It follows the same structure as [`UXTabView`](/compiler/api/uxkit/uxtabview/).
 The **stack is a pure model** (push, pop, depth, top), unit-testable with
 no window, and [`applyNav`](#applynav) maps it onto a live tree by hiding
-everything except the top form's content. The drawn bar is the neutral
-fallback realization. A mobile driver can replace it with the native
-machinery (a real `UINavigationController` push with the real edge-swipe).
-A back-swipe never surfaces as an app event; it is a pop, reported through
-the same delegate.
+everything except the top form's content.
+
+## Native where the platform has its own
+
+Where the driver has its own navigation stack, every push and pop is handed
+to it as well. The bar, the Back button, the push animation and the
+gestures are then the platform's own:
+
+| platform | realization |
+| --- | --- |
+| iOS | a real `UINavigationController`: native bar, Back titled with the form underneath, the push animation and the interactive edge-swipe |
+| Android | the top app bar (a `Toolbar` with the theme's Up arrow) and the system Back, button or gesture |
+| everywhere else | the drawn bar (chevron, back title, current title) |
+
+A pop the **user** makes on the native stack (Back, a completed swipe, Up)
+is not an app event. It comes back as a pop, so the model follows and the
+delegate hears `formDidHide` / `formWillShow` exactly as for
+[`pop`](#pop). On Android, Back is caught only while there is somewhere to
+go back to, so Back at the root still leaves the app. (On Android 8–12,
+API 26–32, Back leaves the app at any depth; Up in the bar still pops.)
+
+The controller hands over to the native stack the first time it is in a
+window: on a push, or at its first draw. Code that pushes and pops does
+not change.
 
 A flow is a **horizontal strip of layouts**: forward-swipe targets to the
 right, back to the left. This is the order a user swipes through them, and
@@ -182,15 +201,14 @@ visible Alice form.
   <TabItem label="iOS">
     <img src="/uxkit/nav-ios.png" alt="UXNavigationController on iOS" width="220" />
 
-    The drawn fallback bar. The native `UINavigationController`
-    realization (with the real edge-swipe) is this driver's navigation
-    milestone.
+    A real `UINavigationController`: the native bar and Back button, the
+    push animation, and the edge-swipe to go back.
   </TabItem>
   <TabItem label="Android">
     <img src="/uxkit/nav-android.png" alt="UXNavigationController on Android" width="220" />
 
-    The drawn fallback bar. The native toolbar/back-stack realization is
-    this driver's navigation milestone.
+    The top app bar: a native `Toolbar` with the theme's Up arrow. The
+    system Back (button or gesture) pops.
   </TabItem>
   <TabItem label="macOS">
     <img src="/uxkit/nav-macos.png" alt="UXNavigationController on macOS" width="220" />

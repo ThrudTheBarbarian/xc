@@ -62,7 +62,7 @@ closes as a backstop. From a control's action, prefer
 **Scrolling** · [setContentSize](#setcontentsize) · [scrollTo](#scrollto--scrollx--scrolly) · [scrollX](#scrollto--scrollx--scrolly) · [scrollY](#scrollto--scrollx--scrolly)
 **Painting** · [display](#display) · [displayAll](#displayall)
 **Views** · [viewAt](#viewat) · [layoutFor](#layoutfor)
-**Focus & dispatch** · [makeFirstResponder](#makefirstresponder) · [setDefaultButton](#setdefaultbutton) · [moveFocus](#movefocus) · [dispatchMouse](#dispatchmouse) · [dispatchKey](#dispatchkey) · [dispatchWheel](#dispatchwheel) · [keyDown](#keydown)
+**Focus & dispatch** · [makeFirstResponder](#makefirstresponder) · [setDefaultButton](#setdefaultbutton) · [moveFocus](#movefocus) · [dispatchMouse](#dispatchmouse) · [dispatchMouseDragged](#dispatchmousedragged--dispatchmouseup) · [dispatchMouseUp](#dispatchmousedragged--dispatchmouseup) · [dispatchKey](#dispatchkey) · [dispatchWheel](#dispatchwheel) · [keyDown](#keydown)
 
 ### open
 
@@ -244,6 +244,42 @@ void dispatchMouse(UXEvent* e)
 Takes window-local coordinates. The tree's hit-test finds the deepest visible,
 willing view, and the click walks the responder chain from there. Synthetic
 tests and the platform share this entry.
+
+The view hit becomes the window's **grab** until the press is released (see
+below), and the press point is recorded on the tree (`pressX`, `pressY`).
+
+### dispatchMouseDragged / dispatchMouseUp
+
+```c
+void dispatchMouseDragged(UXEvent* e)
+void dispatchMouseUp(UXEvent* e)
+```
+
+A held press moving, and its release. Both go to the view that took the
+press (the grab), not to whatever is under the pointer now: a drag that
+leaves its view still belongs to it. Unhandled, they climb the responder
+chain, which is how a drag that starts on a list row reaches the
+[`UXScrollView`](/compiler/api/uxkit/uxscrollview/#touch-panning) holding it.
+
+#### Touch
+
+These matter on iOS and Android. There the platform owns the run loop, so a
+view cannot track a drag modally
+([`dragTrackingIsModal`](/compiler/api/uxkit/uxviewdriver/#capability-flags-not-assumptions)
+is false). Native widgets take their own touches. Everything **drawn**
+(tables, custom views, an editor's canvas) receives its touches as these
+events:
+
+| finger | event |
+| --- | --- |
+| down | `dispatchMouse`: a press at that point, which takes the keyboard if the view wants it, as a click does |
+| moving | `dispatchMouseDragged`, to the grab |
+| up, or cancelled by the system | `dispatchMouseUp`, to the grab |
+
+A display pass follows each one, as after any native event. On the desktops
+these are never called: a view that drags loops on `trackDragStep` inside its
+`mouseDown`. A view written for both asks `gDriver.dragTrackingIsModal()`
+and, when it is false, continues its drag from `mouseDragged` and `mouseUp`.
 
 ### dispatchKey
 

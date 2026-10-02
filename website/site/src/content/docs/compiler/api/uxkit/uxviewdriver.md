@@ -52,6 +52,8 @@ two.
 ```c
 bool hasNativeFileOpen(void);
 bool hasNativeFileSave(void);
+bool hasNativeNavigation(void);
+bool dragTrackingIsModal(void);
 bool hasNativeColorPicker(void);
 bool hasNativeFontPicker(void);
 bool scrollsNatively(void);
@@ -62,6 +64,13 @@ Each flag guards a facility the backend may or may not have. Ask, then use the
 native facility or the toolkit's own. This is how
 [`UXFilePanel`](/compiler/api/uxkit/uxfilepanel/) is a real `NSOpenPanel` on
 macOS and a drawn panel on GEM, from one call site.
+
+`dragTrackingIsModal` is about *how* a drag arrives. Where it is true (the
+desktops, GEM, the web's worker), a view that drags may loop on
+`trackDragStep` inside its `mouseDown`. On iOS and Android it is false: the
+platform owns the loop, so a drag arrives as `mouseDragged` and `mouseUp`
+events (see [`UXWindow`](/compiler/api/uxkit/uxwindow/#touch)), and a view
+that drags continues from those instead.
 
 `driverOwnsRunLoop` has the largest effect. iOS and Android return **true**:
 their native loops never return from `runLoop`, so the neutral loop is never
@@ -393,6 +402,10 @@ bool hasNativeFileOpen(void)
 i32 fileOpen(u8* prompt, u8* startDir, u8* out, i32 outCap)
 bool hasNativeFileSave(void)
 i32 fileSave(u8* prompt, u8* startDir, u8* defaultName, u8* out, i32 outCap)
+bool hasNativeNavigation(void)
+pointer navAttach(i32 win, i32 navId, i32 x, i32 y, i32 w, i32 h)
+void navPush(pointer nav, u8* title, i32 animated)
+void navPop(pointer nav, i32 animated)
 bool hasNativeColorPicker(void)
 i32 pickColor(i32 r, i32 g, i32 b, i32* outR, i32* outG, i32* outB)
 bool hasNativeFontPicker(void)
