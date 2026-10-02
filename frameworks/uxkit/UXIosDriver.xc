@@ -160,7 +160,7 @@ void uxIosValueChanged(i32 handle, i32 node, i32 value)
         {
         return;
         }
-    UXControl* ctl = (UXControl* ?)gIosCtlPeer[handle * (i32)256 + node];
+    UXControl* ctl = (UXControl* ?)(Object*)gIosCtlPeer[handle * (i32)256 + node];
     if (ctl == (UXControl*)0)
         {
         return;
@@ -208,7 +208,7 @@ void uxIosFieldChanged(i32 handle, i32 node)
         {
         return;
         }
-    UXTextField* f = (UXTextField* ?)gIosCtlPeer[handle * (i32)256 + node];
+    UXTextField* f = (UXTextField* ?)(Object*)gIosCtlPeer[handle * (i32)256 + node];
     if (f == (UXTextField*)0)
         {
         return;
@@ -227,7 +227,7 @@ void uxIosFieldSubmitted(i32 handle, i32 node)
         {
         return;
         }
-    UXTextField* f = (UXTextField* ?)gIosCtlPeer[handle * (i32)256 + node];
+    UXTextField* f = (UXTextField* ?)(Object*)gIosCtlPeer[handle * (i32)256 + node];
     if (f == (UXTextField*)0)
         {
         return;
@@ -244,7 +244,7 @@ void uxIosFireControl(i32 handle, i32 node)
         {
         return;
         }
-    UXControl* ctl = (UXControl* ?)gIosCtlPeer[handle * (i32)256 + node];
+    UXControl* ctl = (UXControl* ?)(Object*)gIosCtlPeer[handle * (i32)256 + node];
     if (ctl == (UXControl*)0)
         {
         return;
@@ -932,7 +932,7 @@ class UXIosDriver : Object<UXViewDriver>
                 {
                 // The platform's toggle idiom IS the switch — checked state
                 // from the peer, exactly the mac driver's toggleState read.
-                UXCheckbox* cb = (UXCheckbox* ?)n.peer;
+                UXCheckbox* cb = (UXCheckbox* ?)(Object*)n.peer;
                 if (cb != (UXCheckbox*)0)
                     {
                     u8* title = n.spec != (pointer)0 ? (u8*)n.spec : (u8*)"";
@@ -943,7 +943,7 @@ class UXIosDriver : Object<UXViewDriver>
                 }
             else if (n.kind == (i32)UXKindSlider)
                 {
-                UXSlider* sv = (UXSlider* ?)n.peer;
+                UXSlider* sv = (UXSlider* ?)(Object*)n.peer;
                 if (sv != (UXSlider*)0)
                     {
                     ux_ios_make_slider(handle, i, ax, ay, aw, ah,
@@ -953,7 +953,7 @@ class UXIosDriver : Object<UXViewDriver>
                 }
             else if (n.kind == (i32)UXKindStepper)
                 {
-                UXStepper* sv = (UXStepper* ?)n.peer;
+                UXStepper* sv = (UXStepper* ?)(Object*)n.peer;
                 if (sv != (UXStepper*)0)
                     {
                     ux_ios_make_stepper(handle, i, ax, ay, aw, ah,
@@ -964,7 +964,7 @@ class UXIosDriver : Object<UXViewDriver>
                 }
             else if (n.kind == (i32)UXKindProgress)
                 {
-                UXProgressBar* pgv = (UXProgressBar* ?)n.peer;
+                UXProgressBar* pgv = (UXProgressBar* ?)(Object*)n.peer;
                 if (pgv != (UXProgressBar*)0)
                     {
                     ux_ios_make_progress(handle, i, ax, ay, aw, ah, pgv.nativeFractionMille());
@@ -973,7 +973,7 @@ class UXIosDriver : Object<UXViewDriver>
                 }
             else if (n.kind == (i32)UXKindSegmented)
                 {
-                UXSegmentedControl* gv = (UXSegmentedControl* ?)n.peer;
+                UXSegmentedControl* gv = (UXSegmentedControl* ?)(Object*)n.peer;
                 if (gv != (UXSegmentedControl*)0)
                     {
                     ux_ios_make_segmented(handle, i, ax, ay, aw, ah, gv.nativeSegCount());
@@ -987,7 +987,7 @@ class UXIosDriver : Object<UXViewDriver>
                 }
             else if (n.kind == (i32)UXKindPopup)
                 {
-                UXPopUpButton* pv = (UXPopUpButton* ?)n.peer;
+                UXPopUpButton* pv = (UXPopUpButton* ?)(Object*)n.peer;
                 if (pv != (UXPopUpButton*)0)
                     {
                     ux_ios_make_popup(handle, i, ax, ay, aw, ah);

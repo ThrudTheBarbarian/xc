@@ -370,7 +370,7 @@ class UXGemDriver : Object<UXViewDriver>
     //
     i32 runPopupMenu(pointer peer, i32 x, i32 y)
         {
-        UXPopUpButton* p = (UXPopUpButton* ?)peer;
+        UXPopUpButton* p = (UXPopUpButton* ?)(Object*)peer;
         if (p == (UXPopUpButton*)0)
             {
             return (i32)-1;

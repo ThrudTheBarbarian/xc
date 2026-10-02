@@ -156,7 +156,7 @@ void uxAndValueChanged(i32 handle, i32 node, i32 value)
         {
         return;
         }
-    UXControl* ctl = (UXControl* ?)gAndCtlPeer[handle * (i32)256 + node];
+    UXControl* ctl = (UXControl* ?)(Object*)gAndCtlPeer[handle * (i32)256 + node];
     if (ctl == (UXControl*)0)
         {
         return;
@@ -208,7 +208,7 @@ void uxAndFieldChanged(i32 handle, i32 node)
         {
         return;
         }
-    UXTextField* f = (UXTextField* ?)gAndCtlPeer[handle * (i32)256 + node];
+    UXTextField* f = (UXTextField* ?)(Object*)gAndCtlPeer[handle * (i32)256 + node];
     if (f == (UXTextField*)0)
         {
         return;
@@ -227,7 +227,7 @@ void uxAndFieldSubmitted(i32 handle, i32 node)
         {
         return;
         }
-    UXTextField* f = (UXTextField* ?)gAndCtlPeer[handle * (i32)256 + node];
+    UXTextField* f = (UXTextField* ?)(Object*)gAndCtlPeer[handle * (i32)256 + node];
     if (f == (UXTextField*)0)
         {
         return;
@@ -248,7 +248,7 @@ void uxAndFireControl(i32 handle, i32 node)
     // (nodes stop at 63): 0x40 = increment, 0x80 = decrement
     i32 dir = (node >> (i32)6) & (i32)3;
     node = node & (i32)63;
-    UXControl* ctl = (UXControl* ?)gAndCtlPeer[handle * (i32)256 + node];
+    UXControl* ctl = (UXControl* ?)(Object*)gAndCtlPeer[handle * (i32)256 + node];
     if (ctl == (UXControl*)0)
         {
         return;
@@ -932,7 +932,7 @@ class UXAndroidDriver : Object<UXViewDriver>
                 // native on every display (the Win32 BM_SETCHECK discipline)
                 if (n.kind == (i32)UXKindCheckbox)
                     {
-                    UXCheckbox* cbp = (UXCheckbox* ?)n.peer;
+                    UXCheckbox* cbp = (UXCheckbox* ?)(Object*)n.peer;
                     if (cbp != (UXCheckbox*)0)
                         {
                         ux_and_set_checkbox(handle, i, cbp.isChecked() ? (i32)1 : (i32)0);
@@ -940,7 +940,7 @@ class UXAndroidDriver : Object<UXViewDriver>
                     }
                 else if (n.kind == (i32)UXKindRadio)
                     {
-                    UXRadioButton* rbp = (UXRadioButton* ?)n.peer;
+                    UXRadioButton* rbp = (UXRadioButton* ?)(Object*)n.peer;
                     if (rbp != (UXRadioButton*)0)
                         {
                         ux_and_set_checkbox(handle, i, rbp.isSelected() ? (i32)1 : (i32)0);
@@ -960,7 +960,7 @@ class UXAndroidDriver : Object<UXViewDriver>
                 }
             else if (n.kind == (i32)UXKindCheckbox)
                 {
-                UXCheckbox* cb = (UXCheckbox* ?)n.peer;
+                UXCheckbox* cb = (UXCheckbox* ?)(Object*)n.peer;
                 if (cb != (UXCheckbox*)0)
                     {
                     u8* title = n.spec != (pointer)0 ? (u8*)n.spec : (u8*)"";
@@ -971,7 +971,7 @@ class UXAndroidDriver : Object<UXViewDriver>
                 }
             else if (n.kind == (i32)UXKindSlider)
                 {
-                UXSlider* sv = (UXSlider* ?)n.peer;
+                UXSlider* sv = (UXSlider* ?)(Object*)n.peer;
                 if (sv != (UXSlider*)0)
                     {
                     ux_and_make_slider(handle, i, ax, ay, aw, ah,
@@ -981,7 +981,7 @@ class UXAndroidDriver : Object<UXViewDriver>
                 }
             else if (n.kind == (i32)UXKindProgress)
                 {
-                UXProgressBar* pgv = (UXProgressBar* ?)n.peer;
+                UXProgressBar* pgv = (UXProgressBar* ?)(Object*)n.peer;
                 if (pgv != (UXProgressBar*)0)
                     {
                     ux_and_make_progress(handle, i, ax, ay, aw, ah, pgv.nativeFractionMille());
@@ -990,7 +990,7 @@ class UXAndroidDriver : Object<UXViewDriver>
                 }
             else if (n.kind == (i32)UXKindPopup)
                 {
-                UXPopUpButton* pv = (UXPopUpButton* ?)n.peer;
+                UXPopUpButton* pv = (UXPopUpButton* ?)(Object*)n.peer;
                 if (pv != (UXPopUpButton*)0)
                     {
                     ux_and_make_popup(handle, i, ax, ay, aw, ah);
@@ -1004,7 +1004,7 @@ class UXAndroidDriver : Object<UXViewDriver>
                 }
             else if (n.kind == (i32)UXKindRadio)
                 {
-                UXRadioButton* rv = (UXRadioButton* ?)n.peer;
+                UXRadioButton* rv = (UXRadioButton* ?)(Object*)n.peer;
                 if (rv != (UXRadioButton*)0)
                     {
                     u8* title = n.spec != (pointer)0 ? (u8*)n.spec : (u8*)"";
@@ -1015,7 +1015,7 @@ class UXAndroidDriver : Object<UXViewDriver>
                 }
             else if (n.kind == (i32)UXKindStepper)
                 {
-                UXStepper* sv = (UXStepper* ?)n.peer;
+                UXStepper* sv = (UXStepper* ?)(Object*)n.peer;
                 if (sv != (UXStepper*)0)
                     {
                     ux_and_make_stepper(handle, i, ax, ay, aw, ah);

@@ -170,7 +170,7 @@ void uxGtkValueChanged(i32 handle, i32 node, i32 value)
         {
         return;
         }
-    UXControl* ctl = (UXControl* ?)gGtkCtlPeer[handle * (i32)256 + node];
+    UXControl* ctl = (UXControl* ?)(Object*)gGtkCtlPeer[handle * (i32)256 + node];
     if (ctl == (UXControl*)0)
         {
         return;
@@ -232,7 +232,7 @@ void uxGtkFieldChanged(i32 handle, i32 node)
         {
         return;
         }
-    UXTextField* f = (UXTextField* ?)gGtkCtlPeer[handle * (i32)256 + node];
+    UXTextField* f = (UXTextField* ?)(Object*)gGtkCtlPeer[handle * (i32)256 + node];
     if (f == (UXTextField*)0)
         {
         return;
@@ -251,7 +251,7 @@ void uxGtkFieldSubmitted(i32 handle, i32 node)
         {
         return;
         }
-    UXTextField* f = (UXTextField* ?)gGtkCtlPeer[handle * (i32)256 + node];
+    UXTextField* f = (UXTextField* ?)(Object*)gGtkCtlPeer[handle * (i32)256 + node];
     if (f == (UXTextField*)0)
         {
         return;
@@ -268,7 +268,7 @@ void uxGtkFireControl(i32 handle, i32 node)
         {
         return;
         }
-    UXControl* ctl = (UXControl* ?)gGtkCtlPeer[handle * (i32)256 + node];
+    UXControl* ctl = (UXControl* ?)(Object*)gGtkCtlPeer[handle * (i32)256 + node];
     if (ctl == (UXControl*)0)
         {
         return;
@@ -1015,7 +1015,7 @@ class UXGtkDriver : Object<UXViewDriver>
     // toggleState: alignment lives on the control, not in the shadow tree.
     i32 alignOf(pointer peer)
         {
-        UXControl* c = (UXControl* ?)peer;
+        UXControl* c = (UXControl* ?)(Object*)peer;
         if (c == (UXControl*)0)
             {
             return (i32)UX_ALIGN_LEFT;
@@ -1027,7 +1027,7 @@ class UXGtkDriver : Object<UXViewDriver>
         {
         if (k == (i32)UXKindCheckbox)
             {
-            UXCheckbox* cb = (UXCheckbox* ?)peer;
+            UXCheckbox* cb = (UXCheckbox* ?)(Object*)peer;
             if (cb != (UXCheckbox*)0 && cb.isChecked())
                 {
                 return (i32)1;
@@ -1035,7 +1035,7 @@ class UXGtkDriver : Object<UXViewDriver>
             }
         else
             {
-            UXRadioButton* rb = (UXRadioButton* ?)peer;
+            UXRadioButton* rb = (UXRadioButton* ?)(Object*)peer;
             if (rb != (UXRadioButton*)0 && rb.isSelected())
                 {
                 return (i32)1;
@@ -1118,7 +1118,9 @@ class UXGtkDriver : Object<UXViewDriver>
                 {
                 // The platform's toggle idiom IS the switch — checked state
                 // from the peer, exactly the mac driver's toggleState read.
-                UXCheckbox* cb = (UXCheckbox* ?)n.peer;
+                // Cast through Object*: a checked cast from a raw pointer is NOT checked (it always
+                // succeeds), so a check box's peer would pass as a radio and the reverse.
+                UXCheckbox* cb = (UXCheckbox* ?)(Object*)n.peer;
                 if (cb != (UXCheckbox*)0)
                     {
                     u8* title = n.spec != (pointer)0 ? (u8*)n.spec : (u8*)"";
@@ -1129,7 +1131,7 @@ class UXGtkDriver : Object<UXViewDriver>
                 // A radio is a GtkCheckButton in a GROUP, which GTK draws round: grouped with the
                 // first button of its UXRadioGroup in this tree (the group's exclusion stays neutral,
                 // and every display pushes each button's state).
-                UXRadioButton* rbn = (UXRadioButton* ?)n.peer;
+                UXRadioButton* rbn = (UXRadioButton* ?)(Object*)n.peer;
                 if (rbn != (UXRadioButton*)0)
                     {
                     u8* title = n.spec != (pointer)0 ? (u8*)n.spec : (u8*)"";
@@ -1148,7 +1150,7 @@ class UXGtkDriver : Object<UXViewDriver>
                 }
             else if (n.kind == (i32)UXKindSlider)
                 {
-                UXSlider* sv = (UXSlider* ?)n.peer;
+                UXSlider* sv = (UXSlider* ?)(Object*)n.peer;
                 if (sv != (UXSlider*)0)
                     {
                     ux_gtk_make_slider(handle, i, ax, ay, aw, ah,
@@ -1158,7 +1160,7 @@ class UXGtkDriver : Object<UXViewDriver>
                 }
             else if (n.kind == (i32)UXKindStepper)
                 {
-                UXStepper* sv = (UXStepper* ?)n.peer;
+                UXStepper* sv = (UXStepper* ?)(Object*)n.peer;
                 if (sv != (UXStepper*)0)
                     {
                     ux_gtk_make_stepper(handle, i, ax, ay, aw, ah,
@@ -1169,7 +1171,7 @@ class UXGtkDriver : Object<UXViewDriver>
                 }
             else if (n.kind == (i32)UXKindProgress)
                 {
-                UXProgressBar* pgv = (UXProgressBar* ?)n.peer;
+                UXProgressBar* pgv = (UXProgressBar* ?)(Object*)n.peer;
                 if (pgv != (UXProgressBar*)0)
                     {
                     ux_gtk_make_progress(handle, i, ax, ay, aw, ah, pgv.nativeFractionMille());
@@ -1178,7 +1180,7 @@ class UXGtkDriver : Object<UXViewDriver>
                 }
             else if (n.kind == (i32)UXKindPopup)
                 {
-                UXPopUpButton* pv = (UXPopUpButton* ?)n.peer;
+                UXPopUpButton* pv = (UXPopUpButton* ?)(Object*)n.peer;
                 if (pv != (UXPopUpButton*)0)
                     {
                     ux_gtk_make_popup(handle, i, ax, ay, aw, ah);
@@ -1192,7 +1194,7 @@ class UXGtkDriver : Object<UXViewDriver>
                 }
             else if (n.kind == (i32)UXKindSegmented)
                 {
-                UXSegmentedControl* gv = (UXSegmentedControl* ?)n.peer;
+                UXSegmentedControl* gv = (UXSegmentedControl* ?)(Object*)n.peer;
                 if (gv != (UXSegmentedControl*)0)
                     {
                     ux_gtk_make_segmented(handle, i, ax, ay, aw, ah, gv.nativeSegCount());

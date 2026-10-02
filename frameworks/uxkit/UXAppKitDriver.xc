@@ -311,7 +311,7 @@ void xgAKFireControl(i32 handle, i32 node)
         {
         return;
         }
-    UXControl* ctl = (UXControl* ?)gAKCtlPeer[handle * (i32)256 + node];
+    UXControl* ctl = (UXControl* ?)(Object*)gAKCtlPeer[handle * (i32)256 + node];
     if (ctl == (UXControl*)0)
         {
         return;
@@ -353,7 +353,7 @@ void xgAKValueChanged(i32 handle, i32 node, i32 value)
         {
         return;
         }
-    UXControl* ctl = (UXControl* ?)gAKCtlPeer[handle * (i32)256 + node];
+    UXControl* ctl = (UXControl* ?)(Object*)gAKCtlPeer[handle * (i32)256 + node];
     if (ctl == (UXControl*)0)
         {
         return;
@@ -403,7 +403,7 @@ void xgAKFieldChanged(i32 handle, i32 node)
         {
         return;
         }
-    UXTextField* f = (UXTextField* ?)gAKCtlPeer[handle * (i32)256 + node];
+    UXTextField* f = (UXTextField* ?)(Object*)gAKCtlPeer[handle * (i32)256 + node];
     if (f == (UXTextField*)0)
         {
         return;
@@ -424,7 +424,7 @@ void xgAKFieldSubmitted(i32 handle, i32 node)
         {
         return;
         }
-    UXTextField* f = (UXTextField* ?)gAKCtlPeer[handle * (i32)256 + node];
+    UXTextField* f = (UXTextField* ?)(Object*)gAKCtlPeer[handle * (i32)256 + node];
     if (f == (UXTextField*)0)
         {
         return;
@@ -1512,7 +1512,7 @@ class UXAppKitDriver : Object<UXViewDriver>
     // it to the native widget -- the same shape as toggleState below.
     i32 alignOf(pointer peer)
         {
-        UXControl* c = (UXControl* ?)peer;
+        UXControl* c = (UXControl* ?)(Object*)peer;
         if (c == (UXControl*)0)
             {
             return (i32)UX_ALIGN_LEFT;
@@ -1534,7 +1534,7 @@ class UXAppKitDriver : Object<UXViewDriver>
         {
         if (k == (i32)UXKindCheckbox)
             {
-            UXCheckbox* cb = (UXCheckbox* ?)peer;
+            UXCheckbox* cb = (UXCheckbox* ?)(Object*)peer;
             if (cb != (UXCheckbox*)0 && cb.isChecked())
                 {
                 return (i32)1;
@@ -1542,7 +1542,7 @@ class UXAppKitDriver : Object<UXViewDriver>
             }
         else
             {
-            UXRadioButton* rb = (UXRadioButton* ?)peer;
+            UXRadioButton* rb = (UXRadioButton* ?)(Object*)peer;
             if (rb != (UXRadioButton*)0 && rb.isSelected())
                 {
                 return (i32)1;
@@ -1631,7 +1631,7 @@ class UXAppKitDriver : Object<UXViewDriver>
                 i32 w = (i32)0;
                 i32 hh = (i32)0;
                 self.structAbsFrame(tree, i, &ax, &ay, &w, &hh);
-                UXSlider* sv = (UXSlider* ?)t.nodes[i].peer;
+                UXSlider* sv = (UXSlider* ?)(Object*)t.nodes[i].peer;
                 if (sv != (UXSlider*)0)
                     {
                     if (ux_ak_has_control(handle, i) == (i32)0)
@@ -1659,7 +1659,7 @@ class UXAppKitDriver : Object<UXViewDriver>
                 i32 w = (i32)0;
                 i32 hh = (i32)0;
                 self.structAbsFrame(tree, i, &ax, &ay, &w, &hh);
-                UXPopUpButton* pv = (UXPopUpButton* ?)t.nodes[i].peer;
+                UXPopUpButton* pv = (UXPopUpButton* ?)(Object*)t.nodes[i].peer;
                 if (pv != (UXPopUpButton*)0)
                     {
                     if (ux_ak_has_control(handle, i) == (i32)0)
@@ -1691,7 +1691,7 @@ class UXAppKitDriver : Object<UXViewDriver>
                 i32 w = (i32)0;
                 i32 hh = (i32)0;
                 self.structAbsFrame(tree, i, &ax, &ay, &w, &hh);
-                UXStepper* sv = (UXStepper* ?)t.nodes[i].peer;
+                UXStepper* sv = (UXStepper* ?)(Object*)t.nodes[i].peer;
                 if (sv != (UXStepper*)0)
                     {
                     if (ux_ak_has_control(handle, i) == (i32)0)
@@ -1718,7 +1718,7 @@ class UXAppKitDriver : Object<UXViewDriver>
                 i32 w = (i32)0;
                 i32 hh = (i32)0;
                 self.structAbsFrame(tree, i, &ax, &ay, &w, &hh);
-                UXSegmentedControl* gv = (UXSegmentedControl* ?)t.nodes[i].peer;
+                UXSegmentedControl* gv = (UXSegmentedControl* ?)(Object*)t.nodes[i].peer;
                 if (gv != (UXSegmentedControl*)0)
                     {
                     if (ux_ak_has_control(handle, i) == (i32)0)
@@ -1750,7 +1750,7 @@ class UXAppKitDriver : Object<UXViewDriver>
                 i32 w = (i32)0;
                 i32 hh = (i32)0;
                 self.structAbsFrame(tree, i, &ax, &ay, &w, &hh);
-                UXProgressBar* pgv = (UXProgressBar* ?)t.nodes[i].peer;
+                UXProgressBar* pgv = (UXProgressBar* ?)(Object*)t.nodes[i].peer;
                 if (pgv != (UXProgressBar*)0)
                     {
                     if (ux_ak_has_control(handle, i) == (i32)0)
@@ -1770,7 +1770,7 @@ class UXAppKitDriver : Object<UXViewDriver>
             else if (k == (i32)UXKindToolbar && ux_ak_capture() == (i32)0)
                 {
                 // A native NSToolbar (window chrome): built once from the peer's items; no subview.
-                UXToolbar* tv = (UXToolbar* ?)t.nodes[i].peer;
+                UXToolbar* tv = (UXToolbar* ?)(Object*)t.nodes[i].peer;
                 if (tv != (UXToolbar*)0 && gAKCtlPeer[handle * (i32)256 + i] == (pointer)0)
                     {
                     ux_ak_toolbar_begin(handle, i);
@@ -1813,7 +1813,7 @@ class UXAppKitDriver : Object<UXViewDriver>
                         ux_ak_table_reload(handle, i);
                         // A selection the MODEL made (a replay, or app code) has to be sent the other
                         // way: the NSTableView is the visible truth and never reads the model back.
-                        UXTableView* tvp = (UXTableView* ?)t.nodes[i].peer;
+                        UXTableView* tvp = (UXTableView* ?)(Object*)t.nodes[i].peer;
                         if (tvp != (UXTableView*)0 && tvp.nativeSelectionNeedsPush())
                             {
                             i32 rows[256];

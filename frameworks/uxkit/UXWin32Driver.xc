@@ -228,7 +228,7 @@ void w32ScrollersInvalidate(i32 winHandle)
 // re-realizes, so e.g. a progress bar driven by a slider updates).  Win32 twin of xgAKValueChanged.
 void w32ValueChanged(pointer ctrl, i32 value)
     {
-    UXControl* c = (UXControl* ?)GetWindowLongPtrA(ctrl, (i32)GWLP_USERDATA);
+    UXControl* c = (UXControl* ?)(Object*)GetWindowLongPtrA(ctrl, (i32)GWLP_USERDATA);
     if (c == (UXControl*)0)
         {
         return;
@@ -310,7 +310,7 @@ void w32ScrollRange(pointer hwnd, i32 contentH, i32 winH)
 // window's (1,1), hence the -1 offset).  Nothing for a square, unbordered panel.
 void w32ScrollFrame(pointer hwnd, pointer hdc, i32 off)
     {
-    UXScrollView* sv = (UXScrollView* ?)GetWindowLongPtrA(hwnd, (i32)GWLP_USERDATA);
+    UXScrollView* sv = (UXScrollView* ?)(Object*)GetWindowLongPtrA(hwnd, (i32)GWLP_USERDATA);
     if (sv == (UXScrollView*)0)
         {
         return;
@@ -351,7 +351,7 @@ pointer UXScroll32Proc(pointer hwnd, u32 msg, pointer wp, pointer lp)
         RECT rc;
         GetClientRect(hwnd, (pointer)&rc);
         FillRect(hdc, (pointer)&rc, gW32FaceBrush); // clear the exposed area
-        UXScrollView* sv = (UXScrollView* ?)GetWindowLongPtrA(hwnd, (i32)GWLP_USERDATA);
+        UXScrollView* sv = (UXScrollView* ?)(Object*)GetWindowLongPtrA(hwnd, (i32)GWLP_USERDATA);
         if (sv != (UXScrollView*)0)
             {
             i32 pos = GetScrollPos(hwnd, (i32)SB_VERT);
@@ -410,7 +410,7 @@ pointer UXScroll32Proc(pointer hwnd, u32 msg, pointer wp, pointer lp)
     // Posted input outranks WM_PAINT, so invalidating now repaints AFTER the click has been handled.
     if (msg == (u32)WM_LBUTTONDOWN)
         {
-        UXScrollView* sv = (UXScrollView* ?)GetWindowLongPtrA(hwnd, (i32)GWLP_USERDATA);
+        UXScrollView* sv = (UXScrollView* ?)(Object*)GetWindowLongPtrA(hwnd, (i32)GWLP_USERDATA);
         pointer par = GetParent(hwnd);
         if (sv != (UXScrollView*)0 && par != (pointer)0)
             {
@@ -490,7 +490,7 @@ pointer UXWin32Proc(pointer hwnd, u32 msg, pointer wp, pointer lp)
     if (msg == (u32)WM_COMMAND && lp != (pointer)0 && (((u32)wp >> (u32)16) & (u32)$FFFF) == (u32)BN_CLICKED)
         {
         i32 cid = (i32)((u32)wp & (u32)$FFFF);
-        UXControl* pc = (UXControl* ?)GetWindowLongPtrA(lp, (i32)GWLP_USERDATA);
+        UXControl* pc = (UXControl* ?)(Object*)GetWindowLongPtrA(lp, (i32)GWLP_USERDATA);
         UXSegmentedControl* sg = (UXSegmentedControl* ?)pc;
         if (sg != (UXSegmentedControl*)0)
             {
@@ -531,7 +531,7 @@ pointer UXWin32Proc(pointer hwnd, u32 msg, pointer wp, pointer lp)
                 }
             if (note == (i32)BN_CLICKED)
                 {
-                UXControl* ctl = (UXControl* ?)GetWindowLongPtrA(lp, (i32)GWLP_USERDATA);
+                UXControl* ctl = (UXControl* ?)(Object*)GetWindowLongPtrA(lp, (i32)GWLP_USERDATA);
                 if (ctl != (UXControl*)0)
                     {
                     if (gW32ClickEvent == (UXEvent*)0)
@@ -576,7 +576,7 @@ pointer UXWin32Proc(pointer hwnd, u32 msg, pointer wp, pointer lp)
                 {
                 return (pointer)0;
                 }
-            UXTableView* tv = (UXTableView* ?)GetWindowLongPtrA(nh.hwndFrom, (i32)GWLP_USERDATA);
+            UXTableView* tv = (UXTableView* ?)(Object*)GetWindowLongPtrA(nh.hwndFrom, (i32)GWLP_USERDATA);
             if (tv != (UXTableView*)0)
                 {
                 i32 rows[256];
@@ -600,7 +600,7 @@ pointer UXWin32Proc(pointer hwnd, u32 msg, pointer wp, pointer lp)
         // flattened row list in step; the selection changed -> map the item back to a row and fire.
         if (nh.code == (u32)TVN_ITEMEXPANDEDA)
             {
-            UXOutlineView* o = (UXOutlineView* ?)GetWindowLongPtrA(nh.hwndFrom, (i32)GWLP_USERDATA);
+            UXOutlineView* o = (UXOutlineView* ?)(Object*)GetWindowLongPtrA(nh.hwndFrom, (i32)GWLP_USERDATA);
             if (o != (UXOutlineView*)0)
                 {
                 NMTREEVIEW* nt = (NMTREEVIEW*)lp;
@@ -610,7 +610,7 @@ pointer UXWin32Proc(pointer hwnd, u32 msg, pointer wp, pointer lp)
             }
         if (nh.code == (u32)TVN_SELCHANGEDA)
             {
-            UXOutlineView* o = (UXOutlineView* ?)GetWindowLongPtrA(nh.hwndFrom, (i32)GWLP_USERDATA);
+            UXOutlineView* o = (UXOutlineView* ?)(Object*)GetWindowLongPtrA(nh.hwndFrom, (i32)GWLP_USERDATA);
             if (o != (UXOutlineView*)0)
                 {
                 pointer hSel = SendMessageA(nh.hwndFrom, (u32)TVM_GETNEXTITEM, (pointer)TVGN_CARET, (pointer)0);
@@ -636,7 +636,7 @@ pointer UXWin32Proc(pointer hwnd, u32 msg, pointer wp, pointer lp)
     // maybe an UPDOWN (stepper)
     if (msg == (u32)WM_VSCROLL && lp != (pointer)0)
         {
-        UXStepper* stp = (UXStepper* ?)GetWindowLongPtrA(lp, (i32)GWLP_USERDATA);
+        UXStepper* stp = (UXStepper* ?)(Object*)GetWindowLongPtrA(lp, (i32)GWLP_USERDATA);
         if (stp != (UXStepper*)0)
             {
             // The up-down fires WM_VSCROLL on the arrow press AND again (SB_ENDSCROLL) on release, at the
@@ -827,7 +827,7 @@ pointer UXShield32Proc(pointer hwnd, u32 msg, pointer wp, pointer lp)
         }
     if (msg == (u32)WM_LBUTTONDOWN)
         {
-        UXView* sh = (UXView* ?)GetWindowLongPtrA(hwnd, (i32)GWLP_USERDATA);
+        UXView* sh = (UXView* ?)(Object*)GetWindowLongPtrA(hwnd, (i32)GWLP_USERDATA);
         pointer par = GetParent(hwnd);
         if (sh != (UXView*)0 && par != (pointer)0)
             {
@@ -1276,7 +1276,7 @@ pointer UXGl32Proc(pointer hwnd, u32 msg, pointer wp, pointer lp)
         }
     if (msg == (u32)WM_LBUTTONDOWN)
         {
-        UXView* gv = (UXView* ?)GetWindowLongPtrA(hwnd, (i32)GWLP_USERDATA);
+        UXView* gv = (UXView* ?)(Object*)GetWindowLongPtrA(hwnd, (i32)GWLP_USERDATA);
         pointer par = GetParent(hwnd);
         if (gv != (UXView*)0 && par != (pointer)0)
             {
@@ -2918,7 +2918,7 @@ class UXWin32Driver : Object<UXViewDriver>
     // right-aligned labels lines its colons up.
     i32 alignOf(pointer peer)
         {
-        UXControl* c = (UXControl* ?)peer;
+        UXControl* c = (UXControl* ?)(Object*)peer;
         if (c == (UXControl*)0)
             {
             return (i32)UX_ALIGN_LEFT;
@@ -3094,7 +3094,7 @@ class UXWin32Driver : Object<UXViewDriver>
                 }
             else if (k == (i32)UXKindSlider)
                 {
-                UXSlider* sv = (UXSlider* ?)t.nodes[i].peer;
+                UXSlider* sv = (UXSlider* ?)(Object*)t.nodes[i].peer;
                 if (sv != (UXSlider*)0)
                     {
                     if (t.nodes[i].ctrl == (pointer)0)
@@ -3117,7 +3117,7 @@ class UXWin32Driver : Object<UXViewDriver>
                 }
             else if (k == (i32)UXKindPopup)
                 {
-                UXPopUpButton* pv = (UXPopUpButton* ?)t.nodes[i].peer;
+                UXPopUpButton* pv = (UXPopUpButton* ?)(Object*)t.nodes[i].peer;
                 if (pv != (UXPopUpButton*)0)
                     {
                     if (t.nodes[i].ctrl == (pointer)0)
@@ -3144,7 +3144,7 @@ class UXWin32Driver : Object<UXViewDriver>
                 }
             else if (k == (i32)UXKindStepper)
                 {
-                UXStepper* sv = (UXStepper* ?)t.nodes[i].peer;
+                UXStepper* sv = (UXStepper* ?)(Object*)t.nodes[i].peer;
                 if (sv != (UXStepper*)0)
                     {
                     if (t.nodes[i].ctrl == (pointer)0)
@@ -3166,7 +3166,7 @@ class UXWin32Driver : Object<UXViewDriver>
                 }
             else if (k == (i32)UXKindProgress)
                 {
-                UXProgressBar* pgv = (UXProgressBar* ?)t.nodes[i].peer;
+                UXProgressBar* pgv = (UXProgressBar* ?)(Object*)t.nodes[i].peer;
                 if (pgv != (UXProgressBar*)0)
                     {
                     if (t.nodes[i].ctrl == (pointer)0)
@@ -3186,7 +3186,7 @@ class UXWin32Driver : Object<UXViewDriver>
                 }
             else if (k == (i32)UXKindSegmented)
                 {
-                UXSegmentedControl* sg = (UXSegmentedControl* ?)t.nodes[i].peer;
+                UXSegmentedControl* sg = (UXSegmentedControl* ?)(Object*)t.nodes[i].peer;
                 if (sg != (UXSegmentedControl*)0)
                     {
                     if (t.nodes[i].ctrl == (pointer)0)
@@ -3217,7 +3217,7 @@ class UXWin32Driver : Object<UXViewDriver>
                 }
             else if (k == (i32)UXKindToolbar)
                 {
-                UXToolbar* tbw = (UXToolbar* ?)t.nodes[i].peer;
+                UXToolbar* tbw = (UXToolbar* ?)(Object*)t.nodes[i].peer;
                 if (tbw != (UXToolbar*)0)
                     {
                     if (t.nodes[i].ctrl == (pointer)0)
@@ -3251,7 +3251,7 @@ class UXWin32Driver : Object<UXViewDriver>
                 }
             else if (k == (i32)UXKindTable)
                 {
-                UXTableView* tv = (UXTableView* ?)t.nodes[i].peer;
+                UXTableView* tv = (UXTableView* ?)(Object*)t.nodes[i].peer;
                 if (t.nodes[i].ctrl == (pointer)0)
                     {
                     if (tv != (UXTableView*)0 && tv.nativeIsOutline() != (i32)0)
@@ -3309,7 +3309,7 @@ class UXWin32Driver : Object<UXViewDriver>
                 }
             else if (k == (i32)UXKindScroll && self.isUnderTable(t, i) == (i32)0)
                 {
-                UXScrollView* sv = (UXScrollView* ?)t.nodes[i].peer;
+                UXScrollView* sv = (UXScrollView* ?)(Object*)t.nodes[i].peer;
                 i32 ch = sv != (UXScrollView*)0 ? sv.nativeContentHeight() : (i32)0;
                 if (t.nodes[i].ctrl == (pointer)0)
                     {
@@ -3528,7 +3528,7 @@ class UXWin32Driver : Object<UXViewDriver>
         {
         if (k == (i32)UXKindCheckbox)
             {
-            UXCheckbox* cb = (UXCheckbox* ?)peer;
+            UXCheckbox* cb = (UXCheckbox* ?)(Object*)peer;
             if (cb != (UXCheckbox*)0 && cb.isChecked())
                 {
                 return (i32)1;
@@ -3536,7 +3536,7 @@ class UXWin32Driver : Object<UXViewDriver>
             }
         else
             {
-            UXRadioButton* rb = (UXRadioButton* ?)peer;
+            UXRadioButton* rb = (UXRadioButton* ?)(Object*)peer;
             if (rb != (UXRadioButton*)0 && rb.isSelected())
                 {
                 return (i32)1;
