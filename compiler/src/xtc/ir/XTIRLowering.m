@@ -349,6 +349,15 @@
 // Populated by preScanAddressTakenLocalsIn:, drained at the function entry.
 @property(nonatomic) NSMutableDictionary<NSString*, XTIRValue*>* pinnedParamInit;
 
+// Bug 584: a pinned (address-taken) STRONG class-pointer local, name -> its
+// AST type. Its stores retain/release like any strong local's and every scope
+// exit releases whatever the slot holds — a callee's `*out = v` included.
+@property(nonatomic) NSMutableDictionary<NSString*, XTType*>* strongPinnedLocals;
+// The callable being lowered: each parameter's AST type, by name, so the
+// prologue can tell an address-taken class-pointer parameter (bug 584). Set by
+// each _lowerCallable: caller alongside currentFnThrows.
+@property(nonatomic, nullable) NSDictionary<NSString*, XTType*>* currentParamASTTypes;
+
 // Names used as the cursor (first argument) of a va_start / va_arg_<T>
 // intrinsic. Collected by collectAddressTakenIn: and pinned to a frame
 // slot by the pre-scan so the cursor's loop-carried offset flows through
@@ -2800,6 +2809,36 @@ static uint32_t xtProtocolId(NSString* name)
     if (!frame || [frame containsObject:name])
         return;
     [frame addObject:name];
+    }
+
+// Bug 584: an address-taken class-pointer local is a STRONG SLOT, enrolled in
+// the scope it is declared in like any strong local.
+- (void)enrolStrongPinNamed:(NSString*)name astType:(XTType*)astTy
+    {
+    if (!name || ![self astTypeIsClassPointer:astTy])
+        return;
+    self.strongPinnedLocals[name] = astTy;
+    if (!self.strongLocals)
+        self.strongLocals = [NSMutableSet set];
+    [self.strongLocals addObject:name];
+    [self enrollInArcScope:name];
+    }
+
+// The teardown of a strong pinned slot: release whatever it holds NOW — which
+// may be what a callee stored through `&name`, never the name's SSA value. A
+// `return name;` already retained the value it carries out. YES if `name` is
+// one, so the caller's teardown loop moves on.
+- (BOOL)emitStrongPinReleaseNamed:(NSString*)name
+    {
+    XTType* spTy = self.strongPinnedLocals[name];
+    if (!spTy)
+        return NO;
+    XTIRPinnedLocal* spl = self.pinnedLocals[name];
+    XTIRType* spPtr = nil;
+    XTIRValue* sa = spl ? [self pinnedAddr:spl name:name outType:&spPtr] : nil;
+    if (sa)
+        [self emitRelease:[self emitLoad:sa pointeeType:[self irTypeForASTType:spTy at:nil]]];
+    return YES;
     }
 
 - (void)noteWeakPinnedLocal:(NSString*)name
@@ -5738,6 +5777,20 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
                 if (srcAddr)
                     [self emitStructStrongFieldRetainAt:srcAddr structType:copySt];
                 [self emitStructStrongFieldReleaseForLocalNamed:lhs.identName];
+                }
+            // A strong pinned slot: the `*p = v` contract (bug 034) — retain
+            // or adopt the new value, release the old. Without it the slot's
+            // previous occupant leaked, which is what a callee's `*out = v`
+            // leaves there (bug 584).
+            XTType* spTy = self.strongPinnedLocals[lhs.identName];
+            if (spTy)
+                {
+                XTIRValue* oldVal = [self emitLoad:addr pointeeType:[self irTypeForASTType:spTy at:node.location]];
+                if ([self arcRhsIsBorrowed:node.rhs] && [self astTypeIsAnyClassPointer:node.rhs.resolvedType])
+                    [self emitRetain:rhsVal];
+                else
+                    [self consumeOwnedTemp:rhsVal];
+                [self emitRelease:oldVal];
                 }
             [self emitStore:addr value:rhsVal];
             // `b = a;` between structs is the same wholesale copy as `S b = a;`
@@ -12113,6 +12166,8 @@ static const NSUInteger kVarargSlotBytes = 8;
         save[@"pinned"] = self.pinnedLocals[name];
     if (self.pinnedLocalASTType[name])
         save[@"pinnedAST"] = self.pinnedLocalASTType[name];
+    if (self.strongPinnedLocals[name])
+        save[@"strongPin"] = self.strongPinnedLocals[name];
     if (self.heapArrayLengthByLocal[name])
         save[@"heapLen"] = self.heapArrayLengthByLocal[name];
     if (self.arrayLocalElementType[name])
@@ -12170,6 +12225,10 @@ static const NSUInteger kVarargSlotBytes = 8;
             self.pinnedLocalASTType[name] = save[@"pinnedAST"];
         else
             [self.pinnedLocalASTType removeObjectForKey:name];
+        if (save[@"strongPin"])
+            self.strongPinnedLocals[name] = save[@"strongPin"];
+        else
+            [self.strongPinnedLocals removeObjectForKey:name];
         if (save[@"heapLen"])
             self.heapArrayLengthByLocal[name] = save[@"heapLen"];
         else
@@ -12247,6 +12306,8 @@ static const NSUInteger kVarargSlotBytes = 8;
                 [self emitStructArrayARCForLocalNamed:name mode:XTStructARCRelease];
                 continue;
                 }
+            if ([self emitStrongPinReleaseNamed:name])
+                continue;
             XTIRValue* v = self.locals[name];
             if (v)
                 [self emitRelease:v];
@@ -12758,6 +12819,8 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
                     [self emitStructArrayARCForLocalNamed:name mode:XTStructARCRelease];
                     continue;
                     }
+                if ([self emitStrongPinReleaseNamed:name])
+                    continue;
                 XTIRValue* v = self.locals[name];
                 if (!v)
                     continue;
@@ -13501,6 +13564,10 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
     // save that binding first so the scope exit can restore it (finding #16).
     if (node.varName && !(node.isStatic && !node.isGlobal))
         [self saveShadowedBindingsForName:node.varName];
+    // Every declaration starts as no strong pinned slot; a class-pointer one
+    // enrols itself once its slot is written (bug 584).
+    if (node.varName)
+        [self.strongPinnedLocals removeObjectForKey:node.varName];
     // Enrol a weak local in the scope it is DECLARED in — see
     // noteWeakPinnedLocal:. Doing it where it is ASSIGNED enrolled a local
     // declared in an outer scope into an inner one, so its side-table entry was
@@ -13888,7 +13955,16 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
                                                      dbgLoc:nil];
             [self.currentBlock appendInstruction:cz];
             }
+        // A strong pinned slot owns what it holds: a borrowed initialiser is
+        // retained, an owned one adopted (bug 584).
+        BOOL byteListInit = node.initialiser && node.initialiser.nodeKind == XTASTNodeKindBlock;
+        if (node.initialiser && !byteListInit && [self astTypeIsClassPointer:node.declaredType]
+            && [self arcRhsIsBorrowed:node.initialiser]
+            && [self astTypeIsAnyClassPointer:node.initialiser.resolvedType])
+            [self emitRetain:initVal];
         [self emitStore:addr value:initVal];
+        if (!byteListInit)
+            [self enrolStrongPinNamed:node.varName astType:node.declaredType];
         // `S b = a;` copied a whole struct, link words and all, without linking
         // the destination — so the copy tested true after its referent died.
         [self relinkWeakSlotsAfterCopyAt:addr astType:node.declaredType];
@@ -14138,6 +14214,8 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
                     [self emitStructArrayARCForLocalNamed:name mode:XTStructARCRelease];
                     continue;
                     }
+                if ([self emitStrongPinReleaseNamed:name])
+                    continue;
                 XTIRValue* v = self.locals[name];
                 if (!v)
                     continue;
@@ -17300,6 +17378,7 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
     self.loopStack = [NSMutableArray array];
     self.pinnedLocals = [NSMutableDictionary dictionary];
     self.pinnedParamInit = [NSMutableDictionary dictionary];
+    self.strongPinnedLocals = [NSMutableDictionary dictionary];
     self.pinnedLocalASTType = [NSMutableDictionary dictionary];
     self.weakPinnedLocals = [NSMutableSet set];
     self.pinnedLocalsByType = [NSMutableDictionary dictionary];
@@ -17381,6 +17460,7 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
     // not the param value. This is what makes such a function safe to inline
     // (bug 202). Sorted by name for a deterministic prologue order across both
     // compilers.
+    NSMutableArray<NSString*>* strongPinParams = [NSMutableArray array];
     if (self.pinnedParamInit.count)
         {
         NSArray<NSString*>* pnames =
@@ -17391,10 +17471,22 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
             XTIRValue* pv = self.pinnedParamInit[pn];
             if (!pl || !pv)
                 continue;
+            // A class-pointer parameter whose address is taken OWNS its slot
+            // from entry: a callee's `*out = v` releases what was there, and
+            // that was the caller's borrowed argument (bug 584).
+            XTType* pty = self.currentParamASTTypes[pn];
+            BOOL strong = pty && [self astTypeIsClassPointer:pty];
+            if (strong)
+                [self emitRetain:pv];
             XTIRType* ptrTy = nil;
             XTIRValue* addr = [self pinnedAddr:pl name:pn outType:&ptrTy];
             if (addr)
                 [self emitStore:addr value:pv];
+            if (strong)
+                {
+                self.strongPinnedLocals[pn] = pty;
+                [strongPinParams addObject:pn];
+                }
             }
         }
 
@@ -17569,12 +17661,17 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
     // The count balances however many times the parameter is rebound: the
     // first assignment releases this entry retain, each later one releases its
     // predecessor, and the scope exit releases the last.
-    self.pendingStrongParams = [NSMutableArray array];
+    // Strong pinned parameters (retained by the prologue copy) are enrolled
+    // first, in the same frame — the port enrols them as it copies them in.
+    self.pendingStrongParams = [strongPinParams mutableCopy];
     for (NSString* pname in paramNames)
         {
         if (selfName && [pname isEqualToString:selfName])
             continue;
         if (![self.preScanAssignedNames containsObject:pname])
+            continue;
+        // A pinned one already owns its slot (the prologue copy above).
+        if (self.strongPinnedLocals[pname])
             continue;
         XTIRValue* pv = self.locals[pname];
         if (!pv)
@@ -17767,10 +17864,14 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
         }
 
     NSMutableArray<NSString*>* paramNames = [NSMutableArray array];
+    NSMutableDictionary<NSString*, XTType*>* paramAST = [NSMutableDictionary dictionary];
     for (XTParamNode* p in fnDecl.parameters)
         {
         [paramNames addObject:p.paramName];
+        if (p.paramName && p.paramType)
+            paramAST[p.paramName] = p.paramType;
         }
+    self.currentParamASTTypes = paramAST;
     self.currentFnThrows = fnDecl.throwsError;
     [self _lowerCallable:fn
               paramNames:paramNames
@@ -18888,10 +18989,14 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
             NSMutableArray<NSString*>* paramNames = [NSMutableArray array];
             if (!m.isStatic)
                 [paramNames addObject:@"self"];
+            NSMutableDictionary<NSString*, XTType*>* paramAST = [NSMutableDictionary dictionary];
             for (XTParamNode* p in m.parameters)
                 {
                 [paramNames addObject:p.paramName];
+                if (p.paramName && p.paramType)
+                    paramAST[p.paramName] = p.paramType;
                 }
+            self.currentParamASTTypes = paramAST;
             self.staticSelfClassName = m.isStatic ? cls.className : nil;
             self.pendingRetainSelf = m.hasHeapReceiver && !m.hasNonHeapReceiver && !m.isStatic;
             self.currentFnThrows = m.throwsError;
@@ -18913,10 +19018,14 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
         NSMutableArray<NSString*>* paramNames = [NSMutableArray array];
         if (!m.isStatic)
             [paramNames addObject:@"self"];
+        NSMutableDictionary<NSString*, XTType*>* paramAST = [NSMutableDictionary dictionary];
         for (XTParamNode* p in m.parameters)
             {
             [paramNames addObject:p.paramName];
+            if (p.paramName && p.paramType)
+                paramAST[p.paramName] = p.paramType;
             }
+        self.currentParamASTTypes = paramAST;
         // Static methods have no `self` param; their `self` is the
         // address of the class's `__sdata` block, synthesized at
         // function entry by _lowerCallable when staticSelfClassName
@@ -18944,6 +19053,7 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
                                                                     location:cls.location];
             self.staticSelfClassName = nil;
             self.pendingRetainSelf = NO;
+            self.currentParamASTTypes = nil;
             [self _lowerCallable:dsym.function
                       paramNames:@[ @"self" ]
                             body:emptyBody

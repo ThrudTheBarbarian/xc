@@ -16,12 +16,13 @@
 #   //xtc-link: <name>                companion compiled into the same unit.
 # gfx_* fixtures are skipped by design (GEM/SDL3 will be the x86-64 gfx layer).
 #
-# Env: XTC_X86_64_HOST (falls back to XTC_LINUX_HOST), OPT (default 3), TIMEOUT (default 10).
+# Env: XTC_X86_64_HOST (falls back to XTC_LINUX_HOST), XTC (default bin/osx/xcc),
+#      OPT (default 3), TIMEOUT (default 10).
 _root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null)
 [ -f "$_root/tools/build-env.sh" ] && . "$_root/tools/build-env.sh"
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; cd "$ROOT"
-XTC="bin/osx/xcc"
+XTC="${XTC:-bin/osx/xcc}"   # XTC=bin/osx/xcc-xc sweeps the compiler that ships
 INC=(-I support/x86_64/lib -I support/generic/lib)
 HOST="${XTC_X86_64_HOST:-${XTC_LINUX_HOST:-}}"
 OPT="${OPT:-3}"

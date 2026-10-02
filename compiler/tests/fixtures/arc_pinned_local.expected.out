@@ -1,0 +1,14 @@
+T1 deallocs=10
+T2 deallocs=0
+T3 id=7 alive deallocs=0
+T3 after deallocs=1
+T4 deallocs=5
+T5 id=5 deallocs=0
+T5 after deallocs=1
+T6 got=99 mine=1 deallocs=1
+T6 after deallocs=2
+T7 id=2 deallocs=1
+T7 after deallocs=2
+T8 inner=4
+T8 id=8 deallocs=0
+T8 after deallocs=1

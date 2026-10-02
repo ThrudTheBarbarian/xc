@@ -183,6 +183,7 @@ class ClassInfo
     Object* _strongStruct; // _strongStruct entry
     Object* _pins;         // _pins entry
     Object* _pinAst;       // _pinAst entry
+    Object* _strongPin;    // _strongPins entry (bug 584)
     Object* _heapLen;      // _heapArrayLen entry
     Object* _arrElem;      // _arrayElem entry
 
@@ -198,6 +199,7 @@ class ClassInfo
         _strongStruct = (Object*)0;
         _pins = (Object*)0;
         _pinAst = (Object*)0;
+        _strongPin = (Object*)0;
         _heapLen = (Object*)0;
         _arrElem = (Object*)0;
         }
@@ -280,6 +282,14 @@ class ClassInfo
     void setPinAst(Object* v)
         {
         _pinAst = v;
+        }
+    Object* strongPin(void)
+        {
+        return _strongPin;
+        }
+    void setStrongPin(Object* v)
+        {
+        _strongPin = v;
         }
     Object* heapLen(void)
         {
@@ -382,6 +392,7 @@ class ClassInfo
     Map* _gotoLabelBlocks; // goto label name -> IRBlock@ (C-porting aid)
     Map* _gotoLabelDepths; // goto label name -> arc-scope depth at the label
     Map* _pinAst;          // name -> the AST spelling that slot holds
+    Map* _strongPins;      // name -> AST type, for a pinned STRONG class pointer (bug 584)
     // Every declaration's slot, in order, for a name declared more than once —
     // and how many of them the lowering has walked past.
     Map* _pinDeclTys;
@@ -471,6 +482,7 @@ class ClassInfo
         _layoutTick = (u32)0;
         _pins = new Map();
         _pinAst = new Map();
+        _strongPins = new Map();
         _pinDeclTys = new Map();
         _pinSeq = new Map();
         _pinNext = new Map();
@@ -3151,8 +3163,28 @@ class ClassInfo
             IRValue* pv = (IRValue*)_pinnedParamInit.get((Hashable*)pn);
             if (p == (IRPinned*)0 || pv == (IRValue*)0)
                 continue;
+            // A class-pointer parameter whose address is taken OWNS its slot
+            // from entry: a callee's `*out = v` releases what was there, and
+            // that was the caller's borrowed argument (bug 584).
+            String* pty = (String*)_pinAst.get((Hashable*)pn);
+            bool strong = isClassPointer(pty);
+            if (strong)
+                refOp(String.withCString("Retain"), pv);
             storeThrough(pinAddrNamed(p, pn), pv);
+            if (strong)
+                enrolStrongPin(pn, pty);
             }
+        }
+
+    // Bug 584: an address-taken class-pointer local is a STRONG SLOT. Its
+    // stores retain and release like any strong local's, and every scope exit
+    // releases what the slot holds — whoever put it there.
+    void enrolStrongPin(String* name, String* astTy)
+        {
+        if (!isClassPointer(astTy))
+            return;
+        _strongPins.set((Hashable*)name, (Object*)astTy);
+        noteStrongLocal(name);
         }
 
     // A `^` goes falsy the instant its receiver dies, so its RECV word — the
@@ -4996,6 +5028,19 @@ class ClassInfo
             structCopyARC(lhs.name(), n.kid((u32)1));
             if (_failed)
                 return (IRValue*)0;
+            // A strong pinned slot: the same contract as `*p = v` through a
+            // class-pointer slot (bug 034) — retain or adopt the new value,
+            // release the old. Without it the slot's previous occupant leaked,
+            // which is what a callee's `*out = v` leaves there (bug 584).
+            if (_strongPins.get((Hashable*)lhs.name()) != 0)
+                {
+                IRValue* oldSlot = loadThrough(dstAddr, pty);
+                if (rhsIsBorrowed(n.kid((u32)1)) && isAnyClassPointer(n.kid((u32)1).ty()))
+                    refOp(String.withCString("Retain"), pv);
+                else
+                    consumeOwnedTemp(pv);
+                refOp(String.withCString("Release"), oldSlot);
+                }
             storeThrough(dstAddr, pv);
             // `b = a;` between structs is the same wholesale copy as
             // `S b = a;` — link words included, destination linked to nothing.
@@ -8551,6 +8596,9 @@ class ClassInfo
         // declaration. Reaching a declaration moves the name onto the next of
         // them; every mention after it means that one.
         advancePinSlot(n);
+        // Every declaration starts as no strong pinned slot; a class-pointer
+        // one enrols itself once its slot is written (bug 584).
+        _strongPins.remove((Hashable*)n.name());
         // A function-local `static` is backed by a persistent module GLOBAL,
         // not a frame slot: it keeps its value across calls and its
         // initialiser runs once, at load time, because the global's bytes are
@@ -8648,6 +8696,7 @@ class ClassInfo
                 zops.add((Object*)IROperand.immI((i32)0, pin.ty()));
                 IRValue* z = emit(String.withCString("Const"), pin.ty(), zops);
                 storeThrough(a, z);
+                enrolStrongPin(n.name(), n.op());
                 return;
                 }
             bool wasRange = n.kid((u32)0).kind() == (u16)nkRange;
@@ -8693,7 +8742,14 @@ class ClassInfo
                 }
             if (_failed)
                 return;
+            // A strong pinned slot owns what it holds: a borrowed initialiser
+            // is retained, an owned one adopted (storeThrough consumes it).
+            if (isClassPointer(n.op()) && ini.kind() != (u16)nkBlock
+             && rhsIsBorrowed(ini) && isAnyClassPointer(ini.ty()))
+                refOp(String.withCString("Retain"), pv);
             storeThrough(a, pv);
+            if (ini.kind() != (u16)nkBlock)
+                enrolStrongPin(n.name(), n.op());
             // `S b = a;` copied a whole struct, link words and all, without
             // linking the destination — so the copy tested true after its
             // referent died.
@@ -11468,6 +11524,7 @@ class ClassInfo
         sv.setStrongStruct(ss);
         sv.setPins(pn);
         sv.setPinAst(pa);
+        sv.setStrongPin(_strongPins.get((Hashable*)name));
         sv.setHeapLen(hl);
         sv.setArrElem(ae);
         frame.add((Object*)sv);
@@ -11516,6 +11573,10 @@ class ClassInfo
                 _pinAst.set((Hashable*)name, sv.pinAst());
             else
                 _pinAst.remove((Hashable*)name);
+            if (sv.strongPin() != 0)
+                _strongPins.set((Hashable*)name, sv.strongPin());
+            else
+                _strongPins.remove((Hashable*)name);
             if (sv.heapLen() != 0)
                 _heapArrayLen.set((Hashable*)name, sv.heapLen());
             else
@@ -11580,6 +11641,9 @@ class ClassInfo
             if (p.kind() != (u16)nkParam)
                 continue;
             if (!hasName(_assignedNames, p.name()))
+                continue;
+            // A pinned one already owns its slot (emitPinnedParamCopies).
+            if (_strongPins.get((Hashable*)p.name()) != 0)
                 continue;
             Object* pv = _locals.get((Hashable*)p.name());
             if (pv == (Object*)0)
@@ -11940,6 +12004,17 @@ class ClassInfo
             {
             if (_returnExemptStruct == 0 || !_returnExemptStruct.equals(name))
                 structFieldARC(name, false);
+            return;
+            }
+        // A strong pinned slot releases whatever it holds NOW — which may be
+        // what a callee stored through `&name`, never the name's SSA value.
+        // A `return name;` already retained the value it carries out.
+        if (_strongPins.get((Hashable*)name) != 0)
+            {
+            IRPinned* sp = pinOf(name);
+            if (sp != 0)
+                refOp(String.withCString("Release"),
+                      loadThrough(pinAddrNamed(sp, name), (String*)_strongPins.get((Hashable*)name)));
             return;
             }
         // The value being RETURNED is not released: its +1 transfers to the
@@ -14261,6 +14336,7 @@ class ClassInfo
         _pins = new Map();
         _pinnedParamInit = new Map();
         _pinAst = new Map();
+        _strongPins = new Map();
         _pinDeclTys = new Map();
         _pinSeq = new Map();
         _pinNext = new Map();

@@ -1,4 +1,5 @@
 //xtc-flags: target=arm64
+//xtc-na: x86_64,win64 — x86-64 passes variadic arguments through the shared buffer, so this is refused there (variadic_reentrance_refused.xc)
 // A variadic that reads its arguments and calls another variadic while it
 // does, on a target that passes variadic arguments by the C ABI.
 //
