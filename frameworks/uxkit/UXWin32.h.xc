@@ -99,6 +99,25 @@ u32 SetBkColor(pointer hdc, u32 color);
 #define COLOR_BTNFACE 15
 i32 SetWindowTextA(pointer hwnd, pointer s);
 i32 SetWindowTextW(pointer hwnd, pointer ws); // wide title (UTF-16)
+i32 GetWindowTextW(pointer hwnd, pointer ws, i32 cap); // read it back (gates)
+// A document window's icon: the file's own shell icon (SHGetFileInfoW), set with WM_SETICON.
+// SHFILEINFOW, hand-padded to the Win64 layout: hIcon, iIcon, dwAttributes, szDisplayName[260],
+// szTypeName[80] -- 696 bytes.
+struct SHFILEINFOW
+    {
+    pointer hIcon;
+    i32 iIcon;
+    u32 dwAttributes;
+    u16 szDisplayName[260];
+    u16 szTypeName[80];
+    }
+#define SHGFI_ICON $100
+#define SHGFI_SMALLICON $1
+#define SHGFI_LARGEICON $0
+#define WM_SETICON $80
+#define WM_GETICON $7F
+#define ICON_SMALL 0
+#define ICON_BIG 1
 
 // The neutral toolkit's strings are UTF-8; the ...A text APIs treat bytes as the ANSI code page and
 // mangle every multibyte char (an em dash renders as "â€""), so text goes out via the wide (...W) APIs

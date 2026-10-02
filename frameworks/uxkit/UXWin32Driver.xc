@@ -82,6 +82,10 @@ struct W32Node
     // ── driver state ────────────────────────────────────────────────────────────
     i32 gW32Native;     // §10 native-object counter (live windows)
 pointer gW32Hwnds[64];  // i32 handle -> HWND (handles start at 1)
+// The parts a Windows title is composed of (UXKit's title, subtitle and modified flag), by handle.
+u8* gW32Title[64];
+u8* gW32Subtitle[64];
+bool gW32Modified[64];
 i32 gW32WinH[64];       // handle -> window client height (for the scroll range)
 i32 gW32WinW[64];       // handle -> window client width
 i32 gW32ScrollY[64];    // handle -> current vertical scroll offset
@@ -1433,6 +1437,21 @@ typedef pointer W32CreateDIBFn(pointer hdc, pointer bmi, u32 usage, pointer* bit
 typedef pointer W32CreateBitmapFn(i32 w, i32 h, u32 planes, u32 bpp, pointer bits);
 typedef pointer W32CreateIconFn(pointer info);
 typedef i32 W32DestroyIconFn(pointer icon);
+typedef pointer W32SHGetFileInfoWFn(pointer path, u32 attrs, pointer info, u32 cb, u32 flags);
+// shell32's SHGetFileInfoW and user32's DestroyIcon, looked up as appSetIcon does
+pointer w32SHGetFileInfoW(pointer path, u32 attrs, pointer info, u32 cb, u32 flags)
+    {
+    W32SHGetFileInfoWFn* f = (W32SHGetFileInfoWFn*)GetProcAddress(LoadLibraryA((pointer)"shell32.dll"), (u8*)"SHGetFileInfoW");
+    return f != (W32SHGetFileInfoWFn*)0 ? f(path, attrs, info, cb, flags) : (pointer)0;
+    }
+void w32DestroyIcon(pointer icon)
+    {
+    W32DestroyIconFn* d = (W32DestroyIconFn*)GetProcAddress(LoadLibraryA((pointer)"user32.dll"), (u8*)"DestroyIcon");
+    if (d != (W32DestroyIconFn*)0)
+        {
+        d(icon);
+        }
+    }
 pointer gW32AppIcon;
 pointer w32_app_icon_make(u8* data, i32 w, i32 h, i32 fmt)
     {
@@ -1654,10 +1673,32 @@ class UXWin32Driver : Object<UXViewDriver>
             }
         gW32Native = gW32Native - (i32)1;
         }
+    // Windows has one title, so UXKit's title, subtitle and modified flag are COMPOSED into it the
+    // way Windows applications do it: "*Notes - draft" -- a leading "*" for unsaved changes (as
+    // Notepad shows "*Untitled"), and the subtitle after a dash.
     void windowSetTitle(i32 handle, u8* s)
         {
-        u16 wbuf[256]; // UTF-8 -> UTF-16 so a non-ASCII title isn't mangled
-        i32 wch = MultiByteToWideChar((u32)CP_UTF8, (u32)0, (pointer)s, (i32)-1, (pointer)&wbuf[0], (i32)256);
+        if (handle <= (i32)0 || handle >= (i32)64)
+            {
+            return;
+            }
+        if (gW32Title[handle] != (u8*)0)
+            {
+            free((pointer)gW32Title[handle]);
+            }
+        gW32Title[handle] = UXStr.dup(s != (u8*)0 ? s : (u8*)"");
+        self.composeTitle(handle);
+        }
+    void composeTitle(i32 handle)
+        {
+        u8* base = gW32Title[handle] != (u8*)0 ? gW32Title[handle] : (u8*)"";
+        u8* t = gW32Modified[handle] ? UXStr.append((u8*)"*", base) : base;
+        if (gW32Subtitle[handle] != (u8*)0 && gW32Subtitle[handle][(i32)0] != (u8)0)
+            {
+            t = UXStr.append(UXStr.append(t, (u8*)" - "), gW32Subtitle[handle]);
+            }
+        u16 wbuf[512]; // UTF-8 -> UTF-16 so a non-ASCII title isn't mangled
+        i32 wch = MultiByteToWideChar((u32)CP_UTF8, (u32)0, (pointer)t, (i32)-1, (pointer)&wbuf[0], (i32)512);
         if (wch > (i32)0)
             {
             SetWindowTextW(gW32Hwnds[handle], (pointer)&wbuf[0]);
@@ -1665,11 +1706,21 @@ class UXWin32Driver : Object<UXViewDriver>
         // fallback
         else
             {
-            SetWindowTextA(gW32Hwnds[handle], (pointer)s);
+            SetWindowTextA(gW32Hwnds[handle], (pointer)t);
             }
         }
     void windowSetSubtitle(i32 handle, u8* s)
         {
+        if (handle <= (i32)0 || handle >= (i32)64)
+            {
+            return;
+            }
+        if (gW32Subtitle[handle] != (u8*)0)
+            {
+            free((pointer)gW32Subtitle[handle]);
+            }
+        gW32Subtitle[handle] = UXStr.dup(s != (u8*)0 ? s : (u8*)"");
+        self.composeTitle(handle);
         }
     void windowSetInfo(i32 handle, u8* s)
         {
@@ -1704,11 +1755,63 @@ class UXWin32Driver : Object<UXViewDriver>
             }
         return true;
         }
+    // The window's icon is its DOCUMENT's: given a file path, the file's own shell icon (what
+    // Explorer shows for it), set big and small with WM_SETICON -- the counterpart of AppKit's proxy
+    // icon.  Anything that is not a file (a theme slice name, "") goes back to the app's icon.
     void windowSetIcon(i32 handle, u8* slice)
         {
+        if (handle <= (i32)0 || handle >= (i32)64 || gW32Hwnds[handle] == (pointer)0)
+            {
+            return;
+            }
+        pointer big = (pointer)0;
+        pointer small = (pointer)0;
+        if (slice != (u8*)0 && slice[(i32)0] != (u8)0)
+            {
+            u16 wpath[520];
+            if (MultiByteToWideChar((u32)CP_UTF8, (u32)0, (pointer)slice, (i32)-1, (pointer)&wpath[0], (i32)520) > (i32)0)
+                {
+                SHFILEINFOW fi;
+                if (w32SHGetFileInfoW((pointer)&wpath[0], (u32)0, (pointer)&fi, (u32)sizeof(SHFILEINFOW), (u32)(SHGFI_ICON | SHGFI_LARGEICON)) != (pointer)0)
+                    {
+                    big = fi.hIcon;
+                    }
+                if (w32SHGetFileInfoW((pointer)&wpath[0], (u32)0, (pointer)&fi, (u32)sizeof(SHFILEINFOW), (u32)(SHGFI_ICON | SHGFI_SMALLICON)) != (pointer)0)
+                    {
+                    small = fi.hIcon;
+                    }
+                }
+            }
+        // no document: the app's own icon (appSetIcon), or none
+        if (big == (pointer)0)
+            {
+            big = gW32AppIcon;
+            }
+        if (small == (pointer)0)
+            {
+            small = gW32AppIcon;
+            }
+        pointer oldBig = SendMessageA(gW32Hwnds[handle], (u32)WM_SETICON, (pointer)ICON_BIG, big);
+        pointer oldSmall = SendMessageA(gW32Hwnds[handle], (u32)WM_SETICON, (pointer)ICON_SMALL, small);
+        // the document icons this window had before are its own to free -- never the app's icon,
+        // which every window shares
+        if (oldBig != (pointer)0 && oldBig != big && oldBig != gW32AppIcon)
+            {
+            w32DestroyIcon(oldBig);
+            }
+        if (oldSmall != (pointer)0 && oldSmall != small && oldSmall != gW32AppIcon && oldSmall != oldBig)
+            {
+            w32DestroyIcon(oldSmall);
+            }
         }
     void windowSetModified(i32 handle, bool m)
         {
+        if (handle <= (i32)0 || handle >= (i32)64)
+            {
+            return;
+            }
+        gW32Modified[handle] = m;
+        self.composeTitle(handle);
         }
     // Report the content extent: set the scrollbar range to content-minus-visible.  The native
     // bar then owns the thumb/track; the neutral layoutFor subtracts windowScrollY, so the tree
