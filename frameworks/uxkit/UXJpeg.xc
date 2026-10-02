@@ -58,6 +58,16 @@ void jpegBuildRange(void)
         }
     gJpegRangeBuilt = true;
     }
+// clamp(v) for v in -256..511, as a table read: the colour conversion's hot path.
+u8 gJpegClampTab[768];
+void jpegBuildClamp(void)
+    {
+    for (i32 i = (i32)0; i < (i32)768; i = i + (i32)1)
+        {
+        i32 v = i - (i32)256;
+        gJpegClampTab[i] = (u8)(v < (i32)0 ? (i32)0 : (v > (i32)255 ? (i32)255 : v));
+        }
+    }
 u8 jpegClamp(i32 v)
     {
     return (u8)(v < (i32)0 ? (i32)0 : (v > (i32)255 ? (i32)255 : v));
@@ -72,6 +82,9 @@ class UXJpegHuff
     i32 valptr[17];
     u8 vals[256];
     bool defined;
+    // Codes up to 9 bits in one read: indexed by the next 9 input bits (MSB first), each entry is
+    // (symbol << 4) | length, 0 for a longer code (the canonical walk then decides).
+    i32 fast[512];
     void init(void)
         {
         defined = false;
@@ -98,6 +111,23 @@ class UXJpegHuff
             k = k + c;
             maxcode[len] = c > (i32)0 ? code - (i32)1 : (i32)-1;
             code = code << (i32)1;
+            }
+        for (i32 i = (i32)0; i < (i32)512; i = i + (i32)1)
+            {
+            fast[i] = (i32)0;
+            }
+        for (i32 len = (i32)1; len <= (i32)9; len = len + (i32)1)
+            {
+            for (i32 c = mincode[len]; c <= maxcode[len]; c = c + (i32)1)
+                {
+                i32 sym = (i32)vals[valptr[len] + c - mincode[len]];
+                i32 lo = c << ((i32)9 - len);
+                i32 hi = lo + ((i32)1 << ((i32)9 - len));
+                for (i32 k = lo; k < hi; k = k + (i32)1)
+                    {
+                    fast[k] = (sym << (i32)4) | len;
+                    }
+                }
             }
         maxcode[17] = (i32)0x7FFFFFFF;
         defined = true;
@@ -208,9 +238,11 @@ class UXJpeg
         markerHit = false;
         exhausted = false;
         }
-    i32 bit(void)
+    // Top up the accumulator to at least 25 bits, MSB-aligned: whole bytes, a stuffed 0xFF00 read
+    // as 0xFF, and zeros once a marker is reached (as libjpeg feeds them).
+    void refill(void)
         {
-        if (bitCnt == (i32)0)
+        while (bitCnt <= (i32)24)
             {
             i32 b = (i32)0;
             if (!markerHit && pos >= len)
@@ -229,7 +261,7 @@ class UXJpeg
                         }
                     else
                         {
-                        markerHit = true; // leave pos AT the marker
+                        markerHit = true;
                         b = (i32)0;
                         }
                     }
@@ -238,19 +270,34 @@ class UXJpeg
                     pos = pos + (i32)1;
                     }
                 }
-            bitBuf = (u32)b;
-            bitCnt = (i32)8;
+            bitBuf = bitBuf | ((u32)b << (u32)((i32)24 - bitCnt));
+            bitCnt = bitCnt + (i32)8;
             }
+        }
+    i32 bit(void)
+        {
+        if (bitCnt < (i32)1)
+            {
+            self.refill();
+            }
+        i32 v = (i32)(bitBuf >> (u32)31);
+        bitBuf = bitBuf << (u32)1;
         bitCnt = bitCnt - (i32)1;
-        return (i32)((bitBuf >> (u32)bitCnt) & (u32)1);
+        return v;
         }
     i32 receive(i32 s)
         {
-        i32 v = (i32)0;
-        for (i32 i = (i32)0; i < s; i = i + (i32)1)
+        if (s == (i32)0)
             {
-            v = (v << (i32)1) | self.bit();
+            return (i32)0;
             }
+        if (bitCnt < s)
+            {
+            self.refill();
+            }
+        i32 v = (i32)(bitBuf >> (u32)((i32)32 - s));
+        bitBuf = bitBuf << (u32)s;
+        bitCnt = bitCnt - s;
         return v;
         }
     // JPEG's sign extension: an s-bit value below 2^(s-1) is negative.
@@ -264,6 +311,18 @@ class UXJpeg
         }
     i32 decodeHuff(UXJpegHuff* t)
         {
+        if (bitCnt < (i32)9)
+            {
+            self.refill();
+            }
+        i32 e = t.fast[(i32)(bitBuf >> (u32)23)];
+        if (e != (i32)0)
+            {
+            i32 l = e & (i32)15;
+            bitBuf = bitBuf << (u32)l;
+            bitCnt = bitCnt - l;
+            return e >> (i32)4;
+            }
         i32 code = self.bit();
         i32 l = (i32)1;
         while (code > t.maxcode[l])
@@ -327,55 +386,56 @@ class UXJpeg
             }
         }
 
-    // libjpeg's jpeg_idct_islow, on the dequantised block, into 8x8 samples of the plane.
+    // libjpeg's jpeg_idct_islow, on the dequantised block, into 8x8 samples of the plane -- in 32-bit
+    // arithmetic, as libjpeg's INT32 is, which valid data never overflows.
     void idct(UXJpegComp* c, i32 bx, i32 by)
         {
-        i64 ws[64];
+        i32 ws[64];
         for (i32 col = (i32)0; col < (i32)8; col = col + (i32)1)
             {
-            i64 i0 = (i64)blk[col];
-            i64 i1 = (i64)blk[col + (i32)8];
-            i64 i2 = (i64)blk[col + (i32)16];
-            i64 i3 = (i64)blk[col + (i32)24];
-            i64 i4 = (i64)blk[col + (i32)32];
-            i64 i5 = (i64)blk[col + (i32)40];
-            i64 i6 = (i64)blk[col + (i32)48];
-            i64 i7 = (i64)blk[col + (i32)56];
-            if (i1 == (i64)0 && i2 == (i64)0 && i3 == (i64)0 && i4 == (i64)0 && i5 == (i64)0 && i6 == (i64)0 && i7 == (i64)0)
+            i32 i0 = blk[col];
+            i32 i1 = blk[col + (i32)8];
+            i32 i2 = blk[col + (i32)16];
+            i32 i3 = blk[col + (i32)24];
+            i32 i4 = blk[col + (i32)32];
+            i32 i5 = blk[col + (i32)40];
+            i32 i6 = blk[col + (i32)48];
+            i32 i7 = blk[col + (i32)56];
+            if (i1 == (i32)0 && i2 == (i32)0 && i3 == (i32)0 && i4 == (i32)0 && i5 == (i32)0 && i6 == (i32)0 && i7 == (i32)0)
                 {
-                i64 dcv = i0 << (i64)2; // PASS1_BITS
+                i32 dcv = i0 << (i32)2; // PASS1_BITS
                 for (i32 r = (i32)0; r < (i32)8; r = r + (i32)1)
                     {
                     ws[col + r * (i32)8] = dcv;
                     }
                 continue;
                 }
-            i64 z1 = (i2 + i6) * (i64)4433;
-            i64 tmp2 = z1 + i6 * (i64)-15137;
-            i64 tmp3 = z1 + i2 * (i64)6270;
-            i64 tmp0 = (i0 + i4) << (i64)13;
-            i64 tmp1 = (i0 - i4) << (i64)13;
-            i64 tmp10 = tmp0 + tmp3;
-            i64 tmp13 = tmp0 - tmp3;
-            i64 tmp11 = tmp1 + tmp2;
-            i64 tmp12 = tmp1 - tmp2;
+            i32 z1 = (i2 + i6) * (i32)4433;
+            i32 tmp2 = z1 + i6 * (i32)-15137;
+            i32 tmp3 = z1 + i2 * (i32)6270;
+            i32 tmp0 = (i0 + i4) << (i32)13;
+            i32 tmp1 = (i0 - i4) << (i32)13;
+            i32 tmp10 = tmp0 + tmp3;
+            i32 tmp13 = tmp0 - tmp3;
+            i32 tmp11 = tmp1 + tmp2;
+            i32 tmp12 = tmp1 - tmp2;
             tmp0 = i7;
             tmp1 = i5;
             tmp2 = i3;
             tmp3 = i1;
             z1 = tmp0 + tmp3;
-            i64 z2 = tmp1 + tmp2;
-            i64 z3 = tmp0 + tmp2;
-            i64 z4 = tmp1 + tmp3;
-            i64 z5 = (z3 + z4) * (i64)9633;
-            tmp0 = tmp0 * (i64)2446;
-            tmp1 = tmp1 * (i64)16819;
-            tmp2 = tmp2 * (i64)25172;
-            tmp3 = tmp3 * (i64)12299;
-            z1 = z1 * (i64)-7373;
-            z2 = z2 * (i64)-20995;
-            z3 = z3 * (i64)-16069;
-            z4 = z4 * (i64)-3196;
+            i32 z2 = tmp1 + tmp2;
+            i32 z3 = tmp0 + tmp2;
+            i32 z4 = tmp1 + tmp3;
+            i32 z5 = (z3 + z4) * (i32)9633;
+            tmp0 = tmp0 * (i32)2446;
+            tmp1 = tmp1 * (i32)16819;
+            tmp2 = tmp2 * (i32)25172;
+            tmp3 = tmp3 * (i32)12299;
+            z1 = z1 * (i32)-7373;
+            z2 = z2 * (i32)-20995;
+            z3 = z3 * (i32)-16069;
+            z4 = z4 * (i32)-3196;
             z3 = z3 + z5;
             z4 = z4 + z5;
             tmp0 = tmp0 + z1 + z3;
@@ -383,64 +443,64 @@ class UXJpeg
             tmp2 = tmp2 + z2 + z3;
             tmp3 = tmp3 + z1 + z4;
             // DESCALE by CONST_BITS - PASS1_BITS = 11
-            ws[col] = (tmp10 + tmp3 + (i64)1024) >> (i64)11;
-            ws[col + (i32)56] = (tmp10 - tmp3 + (i64)1024) >> (i64)11;
-            ws[col + (i32)8] = (tmp11 + tmp2 + (i64)1024) >> (i64)11;
-            ws[col + (i32)48] = (tmp11 - tmp2 + (i64)1024) >> (i64)11;
-            ws[col + (i32)16] = (tmp12 + tmp1 + (i64)1024) >> (i64)11;
-            ws[col + (i32)40] = (tmp12 - tmp1 + (i64)1024) >> (i64)11;
-            ws[col + (i32)24] = (tmp13 + tmp0 + (i64)1024) >> (i64)11;
-            ws[col + (i32)32] = (tmp13 - tmp0 + (i64)1024) >> (i64)11;
+            ws[col] = (tmp10 + tmp3 + (i32)1024) >> (i32)11;
+            ws[col + (i32)56] = (tmp10 - tmp3 + (i32)1024) >> (i32)11;
+            ws[col + (i32)8] = (tmp11 + tmp2 + (i32)1024) >> (i32)11;
+            ws[col + (i32)48] = (tmp11 - tmp2 + (i32)1024) >> (i32)11;
+            ws[col + (i32)16] = (tmp12 + tmp1 + (i32)1024) >> (i32)11;
+            ws[col + (i32)40] = (tmp12 - tmp1 + (i32)1024) >> (i32)11;
+            ws[col + (i32)24] = (tmp13 + tmp0 + (i32)1024) >> (i32)11;
+            ws[col + (i32)32] = (tmp13 - tmp0 + (i32)1024) >> (i32)11;
             }
         i32 stride = c.bw * (i32)8;
         for (i32 row = (i32)0; row < (i32)8; row = row + (i32)1)
             {
             i32 b = row * (i32)8;
             u8* out = c.plane + (by * (i32)8 + row) * stride + bx * (i32)8;
-            i64 w0 = ws[b];
-            i64 w1 = ws[b + (i32)1];
-            i64 w2 = ws[b + (i32)2];
-            i64 w3 = ws[b + (i32)3];
-            i64 w4 = ws[b + (i32)4];
-            i64 w5 = ws[b + (i32)5];
-            i64 w6 = ws[b + (i32)6];
-            i64 w7 = ws[b + (i32)7];
-            if (w1 == (i64)0 && w2 == (i64)0 && w3 == (i64)0 && w4 == (i64)0 && w5 == (i64)0 && w6 == (i64)0 && w7 == (i64)0)
+            i32 w0 = ws[b];
+            i32 w1 = ws[b + (i32)1];
+            i32 w2 = ws[b + (i32)2];
+            i32 w3 = ws[b + (i32)3];
+            i32 w4 = ws[b + (i32)4];
+            i32 w5 = ws[b + (i32)5];
+            i32 w6 = ws[b + (i32)6];
+            i32 w7 = ws[b + (i32)7];
+            if (w1 == (i32)0 && w2 == (i32)0 && w3 == (i32)0 && w4 == (i32)0 && w5 == (i32)0 && w6 == (i32)0 && w7 == (i32)0)
                 {
                 // DESCALE by PASS1_BITS + 3 = 5
-                u8 dv = gJpegRange[(i32)((w0 + (i64)16) >> (i64)5) & (i32)1023];
+                u8 dv = gJpegRange[(i32)((w0 + (i32)16) >> (i32)5) & (i32)1023];
                 for (i32 x = (i32)0; x < (i32)8; x = x + (i32)1)
                     {
                     out[x] = dv;
                     }
                 continue;
                 }
-            i64 z1 = (w2 + w6) * (i64)4433;
-            i64 tmp2 = z1 + w6 * (i64)-15137;
-            i64 tmp3 = z1 + w2 * (i64)6270;
-            i64 tmp0 = (w0 + w4) << (i64)13;
-            i64 tmp1 = (w0 - w4) << (i64)13;
-            i64 tmp10 = tmp0 + tmp3;
-            i64 tmp13 = tmp0 - tmp3;
-            i64 tmp11 = tmp1 + tmp2;
-            i64 tmp12 = tmp1 - tmp2;
+            i32 z1 = (w2 + w6) * (i32)4433;
+            i32 tmp2 = z1 + w6 * (i32)-15137;
+            i32 tmp3 = z1 + w2 * (i32)6270;
+            i32 tmp0 = (w0 + w4) << (i32)13;
+            i32 tmp1 = (w0 - w4) << (i32)13;
+            i32 tmp10 = tmp0 + tmp3;
+            i32 tmp13 = tmp0 - tmp3;
+            i32 tmp11 = tmp1 + tmp2;
+            i32 tmp12 = tmp1 - tmp2;
             tmp0 = w7;
             tmp1 = w5;
             tmp2 = w3;
             tmp3 = w1;
             z1 = tmp0 + tmp3;
-            i64 z2 = tmp1 + tmp2;
-            i64 z3 = tmp0 + tmp2;
-            i64 z4 = tmp1 + tmp3;
-            i64 z5 = (z3 + z4) * (i64)9633;
-            tmp0 = tmp0 * (i64)2446;
-            tmp1 = tmp1 * (i64)16819;
-            tmp2 = tmp2 * (i64)25172;
-            tmp3 = tmp3 * (i64)12299;
-            z1 = z1 * (i64)-7373;
-            z2 = z2 * (i64)-20995;
-            z3 = z3 * (i64)-16069;
-            z4 = z4 * (i64)-3196;
+            i32 z2 = tmp1 + tmp2;
+            i32 z3 = tmp0 + tmp2;
+            i32 z4 = tmp1 + tmp3;
+            i32 z5 = (z3 + z4) * (i32)9633;
+            tmp0 = tmp0 * (i32)2446;
+            tmp1 = tmp1 * (i32)16819;
+            tmp2 = tmp2 * (i32)25172;
+            tmp3 = tmp3 * (i32)12299;
+            z1 = z1 * (i32)-7373;
+            z2 = z2 * (i32)-20995;
+            z3 = z3 * (i32)-16069;
+            z4 = z4 * (i32)-3196;
             z3 = z3 + z5;
             z4 = z4 + z5;
             tmp0 = tmp0 + z1 + z3;
@@ -448,14 +508,14 @@ class UXJpeg
             tmp2 = tmp2 + z2 + z3;
             tmp3 = tmp3 + z1 + z4;
             // DESCALE by CONST_BITS + PASS1_BITS + 3 = 18
-            out[0] = gJpegRange[(i32)((tmp10 + tmp3 + (i64)131072) >> (i64)18) & (i32)1023];
-            out[7] = gJpegRange[(i32)((tmp10 - tmp3 + (i64)131072) >> (i64)18) & (i32)1023];
-            out[1] = gJpegRange[(i32)((tmp11 + tmp2 + (i64)131072) >> (i64)18) & (i32)1023];
-            out[6] = gJpegRange[(i32)((tmp11 - tmp2 + (i64)131072) >> (i64)18) & (i32)1023];
-            out[2] = gJpegRange[(i32)((tmp12 + tmp1 + (i64)131072) >> (i64)18) & (i32)1023];
-            out[5] = gJpegRange[(i32)((tmp12 - tmp1 + (i64)131072) >> (i64)18) & (i32)1023];
-            out[3] = gJpegRange[(i32)((tmp13 + tmp0 + (i64)131072) >> (i64)18) & (i32)1023];
-            out[4] = gJpegRange[(i32)((tmp13 - tmp0 + (i64)131072) >> (i64)18) & (i32)1023];
+            out[0] = gJpegRange[(i32)((tmp10 + tmp3 + (i32)131072) >> (i32)18) & (i32)1023];
+            out[7] = gJpegRange[(i32)((tmp10 - tmp3 + (i32)131072) >> (i32)18) & (i32)1023];
+            out[1] = gJpegRange[(i32)((tmp11 + tmp2 + (i32)131072) >> (i32)18) & (i32)1023];
+            out[6] = gJpegRange[(i32)((tmp11 - tmp2 + (i32)131072) >> (i32)18) & (i32)1023];
+            out[2] = gJpegRange[(i32)((tmp12 + tmp1 + (i32)131072) >> (i32)18) & (i32)1023];
+            out[5] = gJpegRange[(i32)((tmp12 - tmp1 + (i32)131072) >> (i32)18) & (i32)1023];
+            out[3] = gJpegRange[(i32)((tmp13 + tmp0 + (i32)131072) >> (i32)18) & (i32)1023];
+            out[4] = gJpegRange[(i32)((tmp13 - tmp0 + (i32)131072) >> (i32)18) & (i32)1023];
             }
         }
 
@@ -686,6 +746,7 @@ class UXJpeg
             return false;
             }
         jpegBuildRange();
+        jpegBuildClamp();
         pos = (i32)2;
         bool scanned = false;
         while (pos + (i32)3 < len)
@@ -761,46 +822,91 @@ class UXJpeg
         }
 
     // The planes to pixels: chroma replicated over its block of pixels, then libjpeg's YCbCr to RGB.
+    // Per row, each plane's row is found once; per pixel, its column is a shift when the sampling
+    // ratio is a power of two (it is, in every file a camera or an encoder writes) and a division
+    // only otherwise; the clamp is a table read.
+    i32 shiftFor(i32 ratio)
+        {
+        if (ratio == (i32)1)
+            {
+            return (i32)0;
+            }
+        if (ratio == (i32)2)
+            {
+            return (i32)1;
+            }
+        if (ratio == (i32)4)
+            {
+            return (i32)2;
+            }
+        return (i32)-1;
+        }
     UXImage* image(void)
         {
         UXImage* im = UXImage.make(width, height);
-        UXJpegComp* c0 = self.comp(0);
-        UXJpegComp* c1 = self.comp(1);
-        UXJpegComp* c2 = self.comp(2);
+        UXJpegComp* c0 = self.comp((i32)0);
+        UXJpegComp* c1 = self.comp((i32)1);
+        UXJpegComp* c2 = self.comp((i32)2);
         bool rgb = ncomp == (i32)3 && adobeTransform == (i32)0;
+        // the colour tables, from jdcolor.c's fixed point: FIX(1.40200)=91881, FIX(1.77200)=116130,
+        // FIX(0.71414)=46802, FIX(0.34414)=22554, ONE_HALF = 32768, SCALEBITS 16
+        i32 crR[256];
+        i32 cbB[256];
+        i32 crG[256];
+        i32 cbG[256];
+        for (i32 i = (i32)0; i < (i32)256; i = i + (i32)1)
+            {
+            i32 x = i - (i32)128;
+            crR[i] = ((i32)91881 * x + (i32)32768) >> (i32)16;
+            cbB[i] = ((i32)116130 * x + (i32)32768) >> (i32)16;
+            crG[i] = (i32)-46802 * x;
+            cbG[i] = (i32)-22554 * x + (i32)32768;
+            }
+        i32 s0 = self.shiftFor(hmax / c0.h);
+        i32 s1 = ncomp == (i32)3 && (hmax % c1.h) == (i32)0 ? self.shiftFor(hmax / c1.h) : (i32)-1;
+        i32 s2 = ncomp == (i32)3 && (hmax % c2.h) == (i32)0 ? self.shiftFor(hmax / c2.h) : (i32)-1;
+        if ((hmax % c0.h) != (i32)0)
+            {
+            s0 = (i32)-1;
+            }
+        // each plane's source column for every output column, worked out once
+        i32* col0 = new i32[(u32)width];
+        i32* col1 = new i32[(u32)width];
+        i32* col2 = new i32[(u32)width];
+        for (i32 x = (i32)0; x < width; x = x + (i32)1)
+            {
+            col0[x] = s0 >= (i32)0 ? x >> s0 : x * c0.h / hmax;
+            col1[x] = ncomp != (i32)3 ? (i32)0 : (s1 >= (i32)0 ? x >> s1 : x * c1.h / hmax);
+            col2[x] = ncomp != (i32)3 ? (i32)0 : (s2 >= (i32)0 ? x >> s2 : x * c2.h / hmax);
+            }
+        u32* dst = im.px;
         for (i32 y = (i32)0; y < height; y = y + (i32)1)
             {
+            u8* r0 = c0.plane + (y * c0.v / vmax) * c0.bw * (i32)8;
+            u8* r1 = ncomp == (i32)3 ? c1.plane + (y * c1.v / vmax) * c1.bw * (i32)8 : r0;
+            u8* r2 = ncomp == (i32)3 ? c2.plane + (y * c2.v / vmax) * c2.bw * (i32)8 : r0;
+            u32* row = dst + y * width;
             for (i32 x = (i32)0; x < width; x = x + (i32)1)
                 {
-                i32 yy = (i32)c0.plane[(y * c0.v / vmax) * c0.bw * (i32)8 + x * c0.h / hmax];
-                i32 r = yy;
-                i32 g = yy;
-                i32 b = yy;
-                if (ncomp == (i32)3)
+                i32 yy = (i32)r0[col0[x]];
+                if (ncomp != (i32)3)
                     {
-                    i32 cb = (i32)c1.plane[(y * c1.v / vmax) * c1.bw * (i32)8 + x * c1.h / hmax];
-                    i32 cr = (i32)c2.plane[(y * c2.v / vmax) * c2.bw * (i32)8 + x * c2.h / hmax];
-                    if (rgb)
-                        {
-                        g = cb;
-                        b = cr;
-                        }
-                    else
-                        {
-                        // jdcolor.c: FIX(1.40200)=91881, FIX(1.77200)=116130, FIX(0.71414)=46802,
-                        // FIX(0.34414)=22554, ONE_HALF = 32768, SCALEBITS 16.
-                        i32 crx = cr - (i32)128;
-                        i32 cbx = cb - (i32)128;
-                        i32 crR = ((i32)91881 * crx + (i32)32768) >> (i32)16;
-                        i32 cbB = ((i32)116130 * cbx + (i32)32768) >> (i32)16;
-                        i32 gg = (((i32)-46802 * crx) + ((i32)-22554 * cbx + (i32)32768)) >> (i32)16;
-                        r = yy + crR;
-                        g = yy + gg;
-                        b = yy + cbB;
-                        }
+                    row[x] = (u32)$FF000000 | ((u32)yy << (u32)16) | ((u32)yy << (u32)8) | (u32)yy;
+                    continue;
                     }
-                im.px[y * width + x] = (u32)$FF000000 | ((u32)jpegClamp(r) << (u32)16) |
-                                       ((u32)jpegClamp(g) << (u32)8) | (u32)jpegClamp(b);
+                i32 cb = (i32)r1[col1[x]];
+                i32 cr = (i32)r2[col2[x]];
+                i32 r = yy;
+                i32 g = cb;
+                i32 b = cr;
+                if (!rgb)
+                    {
+                    r = yy + crR[cr];
+                    g = yy + ((cbG[cb] + crG[cr]) >> (i32)16);
+                    b = yy + cbB[cb];
+                    }
+                row[x] = (u32)$FF000000 | ((u32)gJpegClampTab[r + (i32)256] << (u32)16) |
+                         ((u32)gJpegClampTab[g + (i32)256] << (u32)8) | (u32)gJpegClampTab[b + (i32)256];
                 }
             }
         return im;

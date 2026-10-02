@@ -75,6 +75,16 @@ u32 pngCrc32(u8* data, i32 len)
 // ---- inflate ----------------------------------------------------------------
 // One instance per stream, so two decodes never share a state and the decoder can be
 // called from anywhere without a lock.
+// RFC 1951's length and distance tables.  The last length code is 258 with no extra bits.
+i32 gPngLenBase[29] = {3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99,
+                       115, 131, 163, 195, 227, 258};
+i32 gPngLenExtra[29] = {0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0};
+i32 gPngDstBase[30] = {1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537,
+                       2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577};
+i32 gPngDstExtra[30] = {0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12,
+                        12, 13, 13};
+#define PNG_FASTBITS 9
+
 class UXInflate
     {
     u8* src;
@@ -121,6 +131,35 @@ class UXInflate
         return out;
         }
 
+    // Make room for at least n more bytes, growing by doubling.
+    void ensure(i32 n)
+        {
+        if (outLen + n <= outCap)
+            {
+            return;
+            }
+        i32 c = outCap * (i32)2;
+        if (c < outLen + n)
+            {
+            c = outLen + n;
+            }
+        if (c < (i32)65536)
+            {
+            c = (i32)65536;
+            }
+        u8* p = new u8[(u32)c];
+        for (i32 i = (i32)0; i < outLen; i = i + (i32)1)
+            {
+            p[i] = out[i];
+            }
+        out = p;
+        outCap = c;
+        }
+    // The decoded size, when the container knows it (PNG does, from IHDR): one allocation.
+    void reserve(i32 n)
+        {
+        self.ensure(n);
+        }
     void put(u8 b)
         {
         if (outLen >= outCap)
@@ -280,6 +319,7 @@ class UXInflate
             {
             return false;
             }
+        self.buildFast(l, (i32)288, true);
         if (!self.saveLit((i32)288))
             {
             return false;
@@ -292,7 +332,77 @@ class UXInflate
             {
             d[i] = (u8)5;
             }
+        self.buildFast(d, (i32)32, false);
         return self.buildDist(d, (i32)32);
+        }
+
+    // The FAST tables: indexed by the next PNG_FASTBITS bits of input (deflate's codes arrive
+    // least-significant bit first, so a code's bits are reversed into the index), each entry is
+    // (symbol << 4) | code length for every code no longer than PNG_FASTBITS, and 0 for the rest,
+    // which take the bit-at-a-time path below.  One table read per symbol instead of up to 15
+    // single-bit reads, which is where inflate spent its time.
+    i32 fastLit[512];
+    i32 fastDist[512];
+    void buildFast(u8* lens, i32 n, bool lit)
+        {
+        i32 cnt[16];
+        i32 next[16];
+        for (i32 i = (i32)0; i < (i32)16; i = i + (i32)1)
+            {
+            cnt[i] = (i32)0;
+            }
+        for (i32 s2 = (i32)0; s2 < n; s2 = s2 + (i32)1)
+            {
+            cnt[(i32)lens[s2]] = cnt[(i32)lens[s2]] + (i32)1;
+            }
+        cnt[0] = (i32)0;
+        i32 code = (i32)0;
+        for (i32 l = (i32)1; l < (i32)16; l = l + (i32)1)
+            {
+            code = (code + cnt[l - (i32)1]) << (i32)1;
+            next[l] = code;
+            }
+        for (i32 i = (i32)0; i < (i32)512; i = i + (i32)1)
+            {
+            if (lit)
+                {
+                fastLit[i] = (i32)0;
+                }
+            else
+                {
+                fastDist[i] = (i32)0;
+                }
+            }
+        for (i32 s2 = (i32)0; s2 < n; s2 = s2 + (i32)1)
+            {
+            i32 l = (i32)lens[s2];
+            if (l == (i32)0)
+                {
+                continue;
+                }
+            i32 c = next[l];
+            next[l] = c + (i32)1;
+            if (l > (i32)PNG_FASTBITS)
+                {
+                continue;
+                }
+            i32 r = (i32)0;
+            for (i32 k = (i32)0; k < l; k = k + (i32)1)
+                {
+                r = (r << (i32)1) | ((c >> k) & (i32)1);
+                }
+            for (i32 k = r; k < (i32)512; k = k + ((i32)1 << l))
+                {
+                if (lit)
+                    {
+                    fastLit[k] = (s2 << (i32)4) | l;
+                    }
+                else
+                    {
+                    fastDist[k] = (s2 << (i32)4) | l;
+                    }
+                }
+            }
         }
 
     // The literal table has to survive while the distance table is built in the same
@@ -377,6 +487,17 @@ class UXInflate
 
     i32 decodeLit(void)
         {
+        if (bitCnt >= (i32)PNG_FASTBITS || self.fill((i32)PNG_FASTBITS))
+            {
+            i32 e = fastLit[(i32)(bitBuf & (u32)511)];
+            if (e != (i32)0)
+                {
+                i32 l = e & (i32)15;
+                bitBuf = bitBuf >> (u32)l;
+                bitCnt = bitCnt - l;
+                return e >> (i32)4;
+                }
+            }
         i32 code = (i32)0;
         i32 first = (i32)0;
         i32 index = (i32)0;
@@ -399,6 +520,17 @@ class UXInflate
 
     i32 decodeDist(void)
         {
+        if (bitCnt >= (i32)PNG_FASTBITS || self.fill((i32)PNG_FASTBITS))
+            {
+            i32 e = fastDist[(i32)(bitBuf & (u32)511)];
+            if (e != (i32)0)
+                {
+                i32 l = e & (i32)15;
+                bitBuf = bitBuf >> (u32)l;
+                bitCnt = bitCnt - l;
+                return e >> (i32)4;
+                }
+            }
         i32 code = (i32)0;
         i32 first = (i32)0;
         i32 index = (i32)0;
@@ -419,56 +551,6 @@ class UXInflate
         return (i32)-1;
         }
 
-    // The length and distance tables, straight from RFC 1951.  The last length code is
-    // 258 with no extra bits, which is why its extra-bits entry is the odd one out.
-    i32 lenBase(i32 sym)
-        {
-        i32 b[29];
-        i32 e[29];
-        b[0]=(i32)3; b[1]=(i32)4; b[2]=(i32)5; b[3]=(i32)6; b[4]=(i32)7; b[5]=(i32)8; b[6]=(i32)9;
-        b[7]=(i32)10; b[8]=(i32)11; b[9]=(i32)13; b[10]=(i32)15; b[11]=(i32)17; b[12]=(i32)19;
-        b[13]=(i32)23; b[14]=(i32)27; b[15]=(i32)31; b[16]=(i32)35; b[17]=(i32)43; b[18]=(i32)51;
-        b[19]=(i32)59; b[20]=(i32)67; b[21]=(i32)83; b[22]=(i32)99; b[23]=(i32)115; b[24]=(i32)131;
-        b[25]=(i32)163; b[26]=(i32)195; b[27]=(i32)227; b[28]=(i32)258;
-        e[0]=(i32)0; e[1]=(i32)0; e[2]=(i32)0; e[3]=(i32)0; e[4]=(i32)0; e[5]=(i32)0; e[6]=(i32)0;
-        e[7]=(i32)0; e[8]=(i32)1; e[9]=(i32)1; e[10]=(i32)1; e[11]=(i32)1; e[12]=(i32)2; e[13]=(i32)2;
-        e[14]=(i32)2; e[15]=(i32)2; e[16]=(i32)3; e[17]=(i32)3; e[18]=(i32)3; e[19]=(i32)3; e[20]=(i32)4;
-        e[21]=(i32)4; e[22]=(i32)4; e[23]=(i32)4; e[24]=(i32)5; e[25]=(i32)5; e[26]=(i32)5; e[27]=(i32)5;
-        e[28]=(i32)0;
-        return b[sym]; // (the extra-bits column is lengthExtra)
-        }
-    i32 lenExtra(i32 sym)
-        {
-        i32 e[29];
-        e[0]=(i32)0; e[1]=(i32)0; e[2]=(i32)0; e[3]=(i32)0; e[4]=(i32)0; e[5]=(i32)0; e[6]=(i32)0;
-        e[7]=(i32)0; e[8]=(i32)1; e[9]=(i32)1; e[10]=(i32)1; e[11]=(i32)1; e[12]=(i32)2; e[13]=(i32)2;
-        e[14]=(i32)2; e[15]=(i32)2; e[16]=(i32)3; e[17]=(i32)3; e[18]=(i32)3; e[19]=(i32)3; e[20]=(i32)4;
-        e[21]=(i32)4; e[22]=(i32)4; e[23]=(i32)4; e[24]=(i32)5; e[25]=(i32)5; e[26]=(i32)5; e[27]=(i32)5;
-        e[28]=(i32)0;
-        return e[sym];
-        }
-    i32 dstBase(i32 sym)
-        {
-        i32 b[30];
-        b[0]=(i32)1; b[1]=(i32)2; b[2]=(i32)3; b[3]=(i32)4; b[4]=(i32)5; b[5]=(i32)7; b[6]=(i32)9;
-        b[7]=(i32)13; b[8]=(i32)17; b[9]=(i32)25; b[10]=(i32)33; b[11]=(i32)49; b[12]=(i32)65;
-        b[13]=(i32)97; b[14]=(i32)129; b[15]=(i32)193; b[16]=(i32)257; b[17]=(i32)385; b[18]=(i32)513;
-        b[19]=(i32)769; b[20]=(i32)1025; b[21]=(i32)1537; b[22]=(i32)2049; b[23]=(i32)3073;
-        b[24]=(i32)4097; b[25]=(i32)6145; b[26]=(i32)8193; b[27]=(i32)12289; b[28]=(i32)16385;
-        b[29]=(i32)24577;
-        return b[sym];
-        }
-    i32 dstExtra(i32 sym)
-        {
-        i32 e[30];
-        e[0]=(i32)0; e[1]=(i32)0; e[2]=(i32)0; e[3]=(i32)0; e[4]=(i32)1; e[5]=(i32)1; e[6]=(i32)2;
-        e[7]=(i32)2; e[8]=(i32)3; e[9]=(i32)3; e[10]=(i32)4; e[11]=(i32)4; e[12]=(i32)5; e[13]=(i32)5;
-        e[14]=(i32)6; e[15]=(i32)6; e[16]=(i32)7; e[17]=(i32)7; e[18]=(i32)8; e[19]=(i32)8; e[20]=(i32)9;
-        e[21]=(i32)9; e[22]=(i32)10; e[23]=(i32)10; e[24]=(i32)11; e[25]=(i32)11; e[26]=(i32)12;
-        e[27]=(i32)12; e[28]=(i32)13; e[29]=(i32)13;
-        return e[sym];
-        }
-
     // One compressed block: the symbols, with back-references copied a byte at a time so
     // an overlapping run (distance 1, length 258) expands correctly rather than smearing.
     bool codes(void)
@@ -482,7 +564,15 @@ class UXInflate
                 }
             if (sym < (i32)256)
                 {
-                self.put((u8)sym);
+                if (outLen < outCap)
+                    {
+                    out[outLen] = (u8)sym;
+                    outLen = outLen + (i32)1;
+                    }
+                else
+                    {
+                    self.put((u8)sym);
+                    }
                 }
             else if (sym == (i32)256)
                 {
@@ -496,23 +586,28 @@ class UXInflate
                     err = true;
                     return false;
                     }
-                i32 len = self.lenBase(li) + (i32)self.take(self.lenExtra(li));
+                i32 len = gPngLenBase[li] + (i32)self.take(gPngLenExtra[li]);
                 i32 ds = self.decodeDist();
                 if (err || ds < (i32)0 || ds > (i32)29)
                     {
                     err = true;
                     return false;
                     }
-                i32 dist = self.dstBase(ds) + (i32)self.take(self.dstExtra(ds));
+                i32 dist = gPngDstBase[ds] + (i32)self.take(gPngDstExtra[ds]);
                 if (dist > outLen)
                     {
                     err = true;
                     return false; // a reference before the start of the stream
                     }
+                // Forward, a byte at a time, so an overlapping run (distance 1, length 258)
+                // repeats as it must.
+                self.ensure(len);
+                i32 from = outLen - dist;
                 for (i32 i = (i32)0; i < len; i = i + (i32)1)
                     {
-                    self.put(out[outLen - dist]);
+                    out[outLen + i] = out[from + i];
                     }
+                outLen = outLen + len;
                 }
             }
         }
@@ -571,6 +666,7 @@ class UXInflate
             {
             return false;
             }
+        self.buildFast(clens, (i32)19, true); // the code-length alphabet decodes through decodeLit
         // The code-length alphabet is decoded through the generic tables, so the literal
         // table has to be saved first.
         if (!self.saveLit((i32)PNG_MAXSYMS))
@@ -657,6 +753,7 @@ class UXInflate
             {
             return false;
             }
+        self.buildFast(lens, hlit, true);
         if (!self.saveLit(hlit))
             {
             return false;
@@ -666,6 +763,7 @@ class UXInflate
             {
             dlens[d] = (d < hdist) ? lens[hlit + d] : (u8)0;
             }
+        self.buildFast(dlens, (i32)30, false);
         return self.buildDist(dlens, (i32)30);
         }
 
@@ -897,38 +995,76 @@ class UXPng
 
     // One filtered row -> RGBA pixels.  `cur` is the row as it arrived (still filtered);
     // `prev` is the row before it, already reconstructed.
+    // One loop per filter type, the first pixel's bytes (which have no left neighbour) apart, and
+    // Paeth inlined: the per-byte type test and the three neighbour bounds tests were most of the
+    // unfilter's time.  `up` is the previous row, or zeros for the first.
     void unfilterRow(u8* cur, u8* prev, i32 n, i32 bpp)
         {
         i32 f = (i32)cur[0];
-        for (i32 i = (i32)0; i < n; i = i + (i32)1)
+        u8* r = cur + (i32)1;
+        u8* u = prev != (u8*)0 ? prev + (i32)1 : (u8*)0;
+        i32 head = bpp < n ? bpp : n;
+        if (f == (i32)1)
             {
-            i32 raw = (i32)cur[i + (i32)1];
-            i32 left = i >= bpp ? (i32)cur[i + (i32)1 - bpp] : (i32)0;
-            i32 up = prev != (u8*)0 ? (i32)prev[i + (i32)1] : (i32)0;
-            i32 ul = (prev != (u8*)0 && i >= bpp) ? (i32)prev[i + (i32)1 - bpp] : (i32)0;
-            i32 v = raw;
-            if (f == (i32)1)
+            for (i32 i = bpp; i < n; i = i + (i32)1)
                 {
-                v = raw + left;
+                r[i] = (u8)(((i32)r[i] + (i32)r[i - bpp]) & (i32)255);
                 }
-            else if (f == (i32)2)
-                {
-                v = raw + up;
-                }
-            else if (f == (i32)3)
-                {
-                v = raw + ((left + up) / (i32)2);
-                }
-            else if (f == (i32)4)
-                {
-                v = raw + UXPng.paeth(left, up, ul);
-                }
-            else if (f != (i32)0)
-                {
-                v = raw; // an unknown filter is left alone rather than guessed at
-                }
-            cur[i + (i32)1] = (u8)(v & (i32)255);
             }
+        else if (f == (i32)2)
+            {
+            if (u != (u8*)0)
+                {
+                for (i32 i = (i32)0; i < n; i = i + (i32)1)
+                    {
+                    r[i] = (u8)(((i32)r[i] + (i32)u[i]) & (i32)255);
+                    }
+                }
+            }
+        else if (f == (i32)3)
+            {
+            for (i32 i = (i32)0; i < head; i = i + (i32)1)
+                {
+                i32 up = u != (u8*)0 ? (i32)u[i] : (i32)0;
+                r[i] = (u8)(((i32)r[i] + (up >> (i32)1)) & (i32)255);
+                }
+            for (i32 i = head; i < n; i = i + (i32)1)
+                {
+                i32 up = u != (u8*)0 ? (i32)u[i] : (i32)0;
+                r[i] = (u8)(((i32)r[i] + (((i32)r[i - bpp] + up) >> (i32)1)) & (i32)255);
+                }
+            }
+        else if (f == (i32)4)
+            {
+            if (u == (u8*)0)
+                {
+                // no row above: Paeth is the left neighbour
+                for (i32 i = bpp; i < n; i = i + (i32)1)
+                    {
+                    r[i] = (u8)(((i32)r[i] + (i32)r[i - bpp]) & (i32)255);
+                    }
+                return;
+                }
+            for (i32 i = (i32)0; i < head; i = i + (i32)1)
+                {
+                r[i] = (u8)(((i32)r[i] + (i32)u[i]) & (i32)255); // a = c = 0: Paeth picks up
+                }
+            for (i32 i = head; i < n; i = i + (i32)1)
+                {
+                i32 a = (i32)r[i - bpp];
+                i32 b = (i32)u[i];
+                i32 c = (i32)u[i - bpp];
+                i32 pa = b - c;
+                i32 pb = a - c;
+                i32 pc = pa + pb;
+                pa = pa < (i32)0 ? (i32)0 - pa : pa;
+                pb = pb < (i32)0 ? (i32)0 - pb : pb;
+                pc = pc < (i32)0 ? (i32)0 - pc : pc;
+                i32 pr = (pa <= pb && pa <= pc) ? a : (pb <= pc ? b : c);
+                r[i] = (u8)(((i32)r[i] + pr) & (i32)255);
+                }
+            }
+        // 0 is none, and an unknown filter is left alone rather than guessed at
         }
 
     u32 pixelOf(u8* row, i32 x)
@@ -1039,9 +1175,26 @@ class UXPng
             // leaves that byte alone, so the pixels start one past it.
             u8* cur = raw + y * stride;
             self.unfilterRow(cur, prev, rowBytes, bpp);
-            for (i32 x = (i32)0; x < width; x = x + (i32)1)
+            u8* row = cur + (i32)1;
+            u32* outRow = im.px + y * width;
+            if ((colour == PNG_RGBA || (colour == PNG_RGB && trnsLen == (i32)0)) && (depth == (i32)8 || depth == (i32)16))
                 {
-                im.setPixelRaw(x, y, self.pixelOf(cur + (i32)1, x));
+                // the common layouts, straight through: a 16-bit sample is its high byte
+                i32 step = depth == (i32)16 ? (i32)2 : (i32)1;
+                i32 px = channels * step;
+                for (i32 x = (i32)0; x < width; x = x + (i32)1)
+                    {
+                    u8* q = row + x * px;
+                    u32 a = colour == PNG_RGBA ? (u32)q[(i32)3 * step] : (u32)255;
+                    outRow[x] = (a << (u32)24) | ((u32)q[0] << (u32)16) | ((u32)q[step] << (u32)8) | (u32)q[(i32)2 * step];
+                    }
+                }
+            else
+                {
+                for (i32 x = (i32)0; x < width; x = x + (i32)1)
+                    {
+                    outRow[x] = self.pixelOf(row, x);
+                    }
                 }
             prev = cur;
             }
@@ -1195,6 +1348,7 @@ class UXPng
             return (UXImage*)0;
             }
         UXInflate* inf = new UXInflate();
+        inf.reserve(p.height * (p.rowBytes + (i32)1)); // the filtered rows: one byte of filter type each
         if (!inf.run(idat, idatLen))
             {
             return (UXImage*)0;
