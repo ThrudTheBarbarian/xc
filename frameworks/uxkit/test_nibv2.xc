@@ -67,6 +67,57 @@ u32 wStr(u8* blob, u32* blobAt, u8* s)
     return off;
     }
 
+// An ORIENTED document (UXNB-V2 section 10): one form ("Board", id 9) with a desktop layout (no
+// orientation, tree 0), phone portrait (tree 2) and phone landscape (tree 3), and a tablet layout in
+// landscape only (tree 4).  The orientation rides in the top two bits of the variant's class word.
+u32 buildOriented(u8* b)
+    {
+    gAt = (u32)0;
+    for (i32 i = (i32)0; i < (i32)17; i = i + (i32)1)
+        {
+        w16(b, (i32)0);
+        }
+    w16(b, (i32)36);
+    w32(b, (u32)$55584E42); // 'UXNB'
+    w16(b, (i32)2);
+    w16(b, (i32)0);
+    u32 sizeAt = gAt;
+    w32(b, (u32)0);
+    // counts: nClasses nObjects nConns nForms nMaps nPres
+    w16(b, (i32)0);
+    w16(b, (i32)0);
+    w16(b, (i32)0);
+    w16(b, (i32)1);
+    w16(b, (i32)0);
+    w16(b, (i32)0);
+    // forms[1]: {formId 9, name 1, nVar 4, _pad} + variants
+    w16(b, (i32)9);
+    w32(b, (u32)1);
+    w16(b, (i32)4);
+    w16(b, (i32)0);
+    w16(b, (i32)UX_FORM_DESKTOP);
+    w16(b, (i32)0);
+    w16(b, (i32)UX_FORM_PHONE | ((i32)UX_ORIENT_PORTRAIT << (i32)14));
+    w16(b, (i32)2);
+    w16(b, (i32)UX_FORM_PHONE | ((i32)UX_ORIENT_LANDSCAPE << (i32)14));
+    w16(b, (i32)3);
+    w16(b, (i32)UX_FORM_TABLET | ((i32)UX_ORIENT_LANDSCAPE << (i32)14));
+    w16(b, (i32)4);
+    // the blob: "" then "Board"
+    w8(b, (i32)0);
+    u8* nm = (u8*)"Board";
+    for (i32 i = (i32)0; nm[i] != (u8)0; i = i + (i32)1)
+        {
+        w8(b, (i32)nm[i]);
+        }
+    w8(b, (i32)0);
+    u32 end = gAt;
+    gAt = sizeAt;
+    w32(b, end - (u32)36);
+    gAt = end;
+    return end;
+    }
+
 // The §6 document: one form ("Transport", id 7), two variants — desktop tree 0
 // (five buttons as objs 1..5 under the root box) and phone tree 1 (the same five
 // logical buttons as objs 2..6, one level deeper inside a phone-only scroll
@@ -240,6 +291,27 @@ void main(void)
     ck((u8*)"validate phone", nib.validate((i32)7, (i32)UX_FORM_PHONE, &bad[0], (i32)4), (i32)1);
     ck((u8*)"validate phone names conn 1", bad[0], (i32)1);
 
+    // Gate 6: orientation -- the current orientation's tree, then one with none, then the OTHER
+    // orientation's, all before moving down the form-factor chain.
+    u32 no = buildOriented(&img[0]);
+    UXNibV2* on = UXNibV2.open(&img[0], no);
+    if (on == (UXNibV2*)0)
+        {
+        Stdio.printf("FAIL: oriented open\n");
+        return;
+        }
+    i32 orient = (i32)0;
+    ck((u8*)"phone portrait", on.selectTreeOriented((i32)9, (i32)UX_FORM_PHONE, (i32)UX_ORIENT_PORTRAIT, &chosen, &orient), (i32)2);
+    ck((u8*)"phone portrait chose portrait", orient, (i32)UX_ORIENT_PORTRAIT);
+    ck((u8*)"phone landscape", on.selectTreeOriented((i32)9, (i32)UX_FORM_PHONE, (i32)UX_ORIENT_LANDSCAPE, &chosen, &orient), (i32)3);
+    ck((u8*)"phone landscape chose landscape", orient, (i32)UX_ORIENT_LANDSCAPE);
+    ck((u8*)"tablet portrait takes the tablet's landscape tree, not the desktop's",
+       on.selectTreeOriented((i32)9, (i32)UX_FORM_TABLET, (i32)UX_ORIENT_PORTRAIT, &chosen, &orient), (i32)4);
+    ck((u8*)"...and says so", chosen * (i32)10 + orient, (i32)UX_FORM_TABLET * (i32)10 + (i32)UX_ORIENT_LANDSCAPE);
+    ck((u8*)"desktop (no orientation)", on.selectTreeOriented((i32)9, (i32)UX_FORM_DESKTOP, (i32)UX_ORIENT_NONE, &chosen, &orient), (i32)0);
+    ck((u8*)"plain selectTree ignores the orientation bits", on.selectTree((i32)9, (i32)UX_FORM_PHONE, &chosen), (i32)2);
+    ck((u8*)"...and reports the class alone", chosen, (i32)UX_FORM_PHONE);
+
     // Gate 5: a v1 chunk — version 1, single-variant `any`, conns readable.
     u32 n1 = buildV1(&img[0]);
     UXNibV2* v1 = UXNibV2.open(&img[0], n1);
@@ -256,7 +328,7 @@ void main(void)
 
     if (gFails == (i32)0)
         {
-        Stdio.printf("PASS: UXNB v2 — selection, fallback, re-parented binding, drop, v1\n");
+        Stdio.printf("PASS: UXNB v2 — selection, fallback, orientation, re-parented binding, drop, v1\n");
         }
     else
         {

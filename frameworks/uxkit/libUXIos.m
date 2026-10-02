@@ -176,6 +176,11 @@ int ux_ios_form_factor(void)
     // 2 = tablet, 3 = phone — the UX_FORM_* registry's words, decided by idiom.
     return UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad ? 2 : 3;
     }
+int ux_ios_orientation(void)
+    {
+    CGSize s = UIScreen.mainScreen.bounds.size;
+    return s.width > s.height ? 2 /* UX_ORIENT_LANDSCAPE */ : 1 /* UX_ORIENT_PORTRAIT */;
+    }
 int ux_ios_window_create(int x, int y, int w, int h)
     {
     if (gNextH >= UXIOS_MAXW)

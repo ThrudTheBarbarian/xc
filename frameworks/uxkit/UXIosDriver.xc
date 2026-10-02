@@ -36,6 +36,7 @@
 i32 ux_ios_boot(i32* w, i32* h);
 i32 ux_ios_alert(i32 icon, u8* lines, u8* buttons, i32 defBtn);
 i32 ux_ios_form_factor(void);
+i32 ux_ios_orientation(void); // 1 portrait, 2 landscape
 i32 ux_ios_window_create(i32 x, i32 y, i32 w, i32 h);
 void ux_ios_window_set_content(i32 handle, pointer fn, pointer ud);
 void ux_ios_window_open(i32 handle, i32 x, i32 y, i32 w, i32 h);
@@ -341,6 +342,11 @@ class UXIosDriver : Object<UXViewDriver>
     i32 formFactorClass(void)
         {
         return ux_ios_form_factor();
+        }
+    // the screen's current shape (UIScreen's bounds follow the rotation)
+    i32 orientation(void)
+        {
+        return ux_ios_orientation();
         }
     // the sanctioned inversion (B+A)
     bool driverOwnsRunLoop(void)

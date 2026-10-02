@@ -35,6 +35,7 @@
 i32 ux_and_boot(i32* w, i32* h);
 i32 ux_and_alert(i32 icon, u8* lines, u8* buttons, i32 defBtn);
 i32 ux_and_form_factor(void);
+i32 ux_and_orientation(void); // 1 portrait, 2 landscape
 i32 ux_and_window_create(i32 x, i32 y, i32 w, i32 h);
 void ux_and_window_set_content(i32 handle, pointer fn, pointer ud);
 void ux_and_window_open(i32 handle, i32 x, i32 y, i32 w, i32 h);
@@ -360,6 +361,11 @@ class UXAndroidDriver : Object<UXViewDriver>
     i32 formFactorClass(void)
         {
         return ux_and_form_factor();
+        }
+    // the screen's shape (as measured at boot)
+    i32 orientation(void)
+        {
+        return ux_and_orientation();
         }
     // the iOS inversion, Android edition
     bool driverOwnsRunLoop(void)

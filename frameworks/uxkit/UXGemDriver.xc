@@ -1228,6 +1228,11 @@ class UXGemDriver : Object<UXViewDriver>
         {
         return (i32)UX_FORM_DESKTOP;
         }
+    // the desktop has no orientation axis
+    i32 orientation(void)
+        {
+        return (i32)UX_ORIENT_NONE;
+        }
     bool driverOwnsRunLoop(void)
         {
         return false;

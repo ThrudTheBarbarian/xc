@@ -286,6 +286,67 @@ class UXNibV2
             }
         return (i32)UX_FORM_PHONE;
         }
+    // A variant's class word: the form-factor class in the low byte, the ORIENTATION in its top two
+    // bits (UXNB-V2 section 10: 0 none, 1 portrait, 2 landscape) -- allocated so that files from
+    // before orientation, which have 0 there, read unchanged.
+    static i32 classOf(u32 word)
+        {
+        return (i32)(word & (u32)$3FFF);
+        }
+    static i32 orientOf(u32 word)
+        {
+        return (i32)(word >> (u32)14);
+        }
+    // The tree for a form on a device of class `klass` held at orientation `orient`: down the form
+    // factor chain, and within each class the current orientation's tree first, then one with no
+    // orientation, then the OTHER orientation's (geometry adapts worse than nothing at all, but it is
+    // still something).  UX_ORIENT_NONE (the desktop) takes any orientation in the same order.
+    i32 selectTreeOriented(i32 formId, i32 klass, i32 orient, i32* chosenClass, i32* chosenOrient)
+        {
+        chosenOrient[0] = (i32)UX_ORIENT_NONE;
+        if (ver == (i32)1)
+            {
+            chosenClass[0] = (i32)UX_FORM_ANY;
+            return formId;
+            }
+        u32 at = self.formOffById(formId);
+        if (at == (u32)0)
+            {
+            chosenClass[0] = (i32)-1;
+            return (i32)-1;
+            }
+        u32 nv = self.rdU16(at + (u32)6);
+        i32 other = orient == (i32)UX_ORIENT_PORTRAIT ? (i32)UX_ORIENT_LANDSCAPE
+                  : (orient == (i32)UX_ORIENT_LANDSCAPE ? (i32)UX_ORIENT_PORTRAIT : (i32)-1);
+        for (i32 step = (i32)0; step < (i32)4; step = step + (i32)1)
+            {
+            i32 want = self.chainAt(klass, step);
+            // pass 0: this orientation; 1: none; 2: the other one (or, for NONE, anything)
+            for (i32 pass = (i32)0; pass < (i32)3; pass = pass + (i32)1)
+                {
+                for (u32 v = (u32)0; v < nv; v = v + (u32)1)
+                    {
+                    u32 vat = at + (u32)10 + v * (u32)4;
+                    u32 word = self.rdU16(vat);
+                    if (UXNibV2.classOf(word) != want)
+                        {
+                        continue;
+                        }
+                    i32 o = UXNibV2.orientOf(word);
+                    bool take = pass == (i32)0 ? (o == orient)
+                              : (pass == (i32)1 ? (o == (i32)UX_ORIENT_NONE) : (other < (i32)0 || o == other));
+                    if (take)
+                        {
+                        chosenClass[0] = want;
+                        chosenOrient[0] = o;
+                        return (i32)self.rdU16(vat + (u32)2);
+                        }
+                    }
+                }
+            }
+        chosenClass[0] = (i32)-1;
+        return (i32)-1;
+        }
     i32 selectTree(i32 formId, i32 klass, i32* chosenClass)
         {
         if (ver == (i32)1)
@@ -307,7 +368,7 @@ class UXNibV2
             for (u32 v = (u32)0; v < nv; v = v + (u32)1)
                 {
                 u32 vat = at + (u32)10 + v * (u32)4;
-                if ((i32)self.rdU16(vat) == want)
+                if (UXNibV2.classOf(self.rdU16(vat)) == want)
                     {
                     chosenClass[0] = want;
                     return (i32)self.rdU16(vat + (u32)2);

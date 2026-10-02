@@ -477,6 +477,10 @@ int ux_and_form_factor(void) {
     return sw >= 600 ? 2 /* UX_FORM_TABLET */ : 3 /* UX_FORM_PHONE */;
 }
 
+int ux_and_orientation(void) {
+    return gScreenW > gScreenH ? 2 /* UX_ORIENT_LANDSCAPE */ : 1 /* UX_ORIENT_PORTRAIT */;
+}
+
 /* ── windows ────────────────────────────────────────────────────────────── */
 static int gRootAttached;
 int ux_and_window_create(int x, int y, int w, int h) {

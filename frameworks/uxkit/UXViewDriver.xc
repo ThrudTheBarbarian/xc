@@ -490,6 +490,10 @@ protocol UXViewDriver
     // backends.  Selection walks the §1 fallback chain, so a nib with only a
     // desktop layout still runs everywhere.
     i32 formFactorClass(void);
+    // The device's orientation now: UX_ORIENT_PORTRAIT / _LANDSCAPE on a device form, UX_ORIENT_NONE
+    // on the desktop (no orientation axis there).  Selects between a form's portrait and landscape
+    // variants (UXNibV2.selectTreeOriented).
+    i32 orientation(void);
     }
 
 // The form-factor registry (UXNB-V2.md §1).  Values are the on-disk variant-class
@@ -498,6 +502,10 @@ protocol UXViewDriver
 #define UX_FORM_DESKTOP 1
 #define UX_FORM_TABLET 2
 #define UX_FORM_PHONE 3
+// Orientation, the second variant axis (UXNB-V2 section 10): device forms only; desktop has none.
+#define UX_ORIENT_NONE 0
+#define UX_ORIENT_PORTRAIT 1
+#define UX_ORIENT_LANDSCAPE 2
 
 // Which GL a backend offers, the answer to glKind().  Allocated here so the values are ABI.
 // The members are the CALL SETS, not the vendors: GLES3 and GL 3.3 core take the same GLSL
