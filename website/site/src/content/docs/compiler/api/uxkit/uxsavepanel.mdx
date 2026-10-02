@@ -1,0 +1,76 @@
+---
+title: UXSavePanel
+description: "Run a file-save dialog and get the path to write: the platform's own dialog where it has one, UXKit's drawn panel in save mode everywhere else. The call is the same either way."
+---
+
+`UXSavePanel` is the call an app makes to ask where to save, the sibling of
+[`UXOpenPanel`](/compiler/api/uxkit/uxopenpanel/):
+
+```c
+u8* path = UXSavePanel.run((u8*)"Save the drawing", (u8*)".", (u8*)"untitled.png");
+if (path != (u8*)0)
+    {
+    UXFileIO.write(path, bytes);
+    free((pointer)path);
+    }
+```
+
+A prompt, a start folder and a **default name** go in. The path to write
+comes out, or null on Cancel. The panel never writes anything itself; pair it
+with [`UXFileIO.write`](/compiler/api/uxkit/uxfileio/), which saves
+atomically.
+
+## Native where there is one, drawn everywhere else
+
+| backend | what runs |
+| --- | --- |
+| AppKit | `NSSavePanel`, which asks about replacing a file itself |
+| GEM, Win32, GTK, iOS, Android | [`UXFilePanel`](/compiler/api/uxkit/uxfilepanel/) in save mode |
+| web | the drawn panel, but the web has no file system to list or save into (a download-based save is still to come) |
+
+The driver answers [`hasNativeFileSave`](/compiler/api/uxkit/uxviewdriver/#native-panels);
+application code does not ask.
+
+## What save mode does
+
+The drawn panel in save mode differs from the open panel in four ways:
+
+- The line under the mask reads **Save as:** and starts with the default
+  name. Folder changes keep whatever you have typed.
+- The button reads **Save**. It answers with the current folder plus the
+  typed name, without needing a row to be selected.
+- Typing a **folder's** name and pressing Save goes into that folder
+  rather than saving over it, and the name goes back to the default.
+  `..` goes up.
+- A name that already exists is confirmed first ("A file with this name
+  already exists. Replace it?"). Cancel leaves the panel up. The check
+  covers every file in the folder, including ones the mask hides.
+
+The Recent button is hidden: recent files are things to open, not places to
+save.
+
+## Topics
+
+### run
+
+```c
+static u8* run(u8* prompt, u8* startDir, u8* defaultName)
+```
+
+Runs the dialog modally. Returns a malloc'd path **the caller owns** (free
+it), or null on Cancel.
+
+### runToolkit
+
+```c
+static u8* runToolkit(u8* prompt, u8* startDir, u8* defaultName)
+```
+
+The drawn half, callable directly. It runs a fresh `UXFilePanel` through
+[`runSave`](/compiler/api/uxkit/uxfilepanel/#runsave).
+
+## See also
+
+- [`UXOpenPanel`](/compiler/api/uxkit/uxopenpanel/)
+- [`UXFileIO`](/compiler/api/uxkit/uxfileio/)
+- [`UXFilePanel`](/compiler/api/uxkit/uxfilepanel/)

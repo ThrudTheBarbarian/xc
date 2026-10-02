@@ -60,6 +60,33 @@ phone"*.
 
 A form with no usable variant returns `-1` rather than guessing.
 
+## Orientation is a second axis
+
+A phone or tablet layout can also come in **portrait** and **landscape**
+trees. A rotation can re-nest a layout, not just stretch it, so each
+orientation gets a whole tree of its own, exactly as each form factor
+does.
+
+```c
+i32 tree = nib.selectTreeOriented(formId, gDriver.formFactorClass(),
+                                  gDriver.orientation(), &cls, &orient);
+```
+
+Within each class of the fallback chain the order is:
+
+1. a tree for the current orientation;
+2. a tree with no orientation, drawn to work both ways;
+3. the other orientation's tree.
+
+Only then does selection move on to the next class. A tablet held upright
+with only a landscape tablet layout therefore gets that layout, not the
+desktop's.
+
+The orientation rides in the top two bits of a variant's class word (`0`
+none, `1` portrait, `2` landscape). Files written before it existed have
+`0` there and read unchanged. [`selectTree`](#selecttree) masks those bits
+off, so code that ignores orientation keeps working.
+
 ## Logical ids, and why absent is legal
 
 ```c
@@ -102,7 +129,7 @@ another.
 
 ## Topics
 
-[open](#open) · [parse](#parse) · [version](#version) · [formCount](#formcount) · [formAt](#format) · [formOffById](#formoffbyid) · [formName](#formname) · [selectTree](#selecttree) · [objForLogical](#objforlogical) · [resolveView](#resolveview) · [str](#str)
+[open](#open) · [parse](#parse) · [version](#version) · [formCount](#formcount) · [formAt](#format) · [formOffById](#formoffbyid) · [formName](#formname) · [selectTree](#selecttree) · [selectTreeOriented](#selecttreeoriented) · [classOf](#classof) · [orientOf](#orientof) · [objForLogical](#objforlogical) · [resolveView](#resolveview) · [str](#str)
 
 ### open
 
@@ -167,8 +194,34 @@ Borrowed, like every string here.
 i32 selectTree(i32 formId, i32 klass, i32* chosenClass)
 ```
 
-The best variant for a form-factor class. See
+The best variant for a form-factor class, ignoring orientation. See
 [above](#variant-selection-walks-a-chain).
+
+### selectTreeOriented
+
+```c
+i32 selectTreeOriented(i32 formId, i32 klass, i32 orient, i32* chosenClass, i32* chosenOrient)
+```
+
+The best variant for a class held at an orientation (`UX_ORIENT_*`). See
+[Orientation is a second axis](#orientation-is-a-second-axis).
+`chosenOrient` reports the orientation of the tree that won.
+
+### classOf
+
+```c
+static i32 classOf(u32 word)
+```
+
+The form-factor class in a variant's class word: its low 14 bits.
+
+### orientOf
+
+```c
+static i32 orientOf(u32 word)
+```
+
+The orientation in a variant's class word: its top two bits.
 
 ### objForLogical
 

@@ -10,12 +10,18 @@ u8* path = UXOpenPanel.run((u8*)"Open Image", (u8*)"/home/user");
 if (path != (u8*)0) { openDocument(path); }
 ```
 
-Where the backend has a native dialog (`NSOpenPanel`,
-`GetOpenFileName`), the driver runs it. Where it doesn't (GEM), the call
-falls back to [`runToolkit`](#runtoolkit), which runs the toolkit-drawn
-[`UXFilePanel`](/compiler/api/uxkit/uxfilepanel/). Application code sees
-no difference: a prompt and a start directory go in, and a chosen path
-comes out.
+Where the backend has a native dialog, the driver runs it; today that is
+AppKit's `NSOpenPanel`. Everywhere else (GEM, Win32, GTK, iOS, Android) the
+call falls back to [`runToolkit`](#runtoolkit), which runs the
+toolkit-drawn [`UXFilePanel`](/compiler/api/uxkit/uxfilepanel/).
+Application code sees no difference: a prompt and a start directory go in,
+and a chosen path comes out.
+
+Win32 keeps a `GetOpenFileName` implementation but does not use it: the
+common dialog hangs under Wine, and the drawn panel works on both.
+
+To ask where to **save**, use [`UXSavePanel`](/compiler/api/uxkit/uxsavepanel/).
+To read the chosen file, use [`UXFileIO.read`](/compiler/api/uxkit/uxfileio/).
 
 ## Topics
 

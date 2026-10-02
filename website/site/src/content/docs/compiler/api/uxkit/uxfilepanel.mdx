@@ -4,8 +4,8 @@ description: "The toolkit-drawn modal file panel, modelled on the ST's Universal
 ---
 
 `UXFilePanel` is the toolkit-drawn modal file panel for backends with no
-OS dialog (GEM, Win32 under Wine). It is modelled on the Atari ST's
-Universal Item Selector and provides:
+OS dialog: GEM, Win32, GTK, iOS and Android. It is modelled on the Atari
+ST's Universal Item Selector and provides:
 
 - a scrolling, sorted, mask-filtered directory list
 - clickable column headers (name and size, ascending or descending)
@@ -16,10 +16,16 @@ Universal Item Selector and provides:
   [`UXAlert`](/compiler/api/uxkit/uxalert/))
 
 Apps do not construct it.
-[`UXOpenPanel`](/compiler/api/uxkit/uxopenpanel/) chooses per backend: it
-uses the native `NSOpenPanel` or `GetOpenFileName` where the platform has
-one, and calls `runToolkit()` to drive this panel where it does not.
+[`UXOpenPanel`](/compiler/api/uxkit/uxopenpanel/) and
+[`UXSavePanel`](/compiler/api/uxkit/uxsavepanel/) choose per backend: the
+native panel where the platform has one, this panel where it does not.
 Application code asks for a file the same way on every backend.
+
+The listing comes from the driver's
+[`listDir`](/compiler/api/uxkit/uxviewdriver/#native-panels), and Delete,
+Rename, Copy and Move from its file operations. GEM and Win32 have their
+own; the POSIX backends (GTK, AppKit, iOS, Android) share one
+implementation, `ux_posix_fs.h`, compiled into each shim.
 
 All panels the app opens share session memory: the last directory browsed
 (re-opening returns there) and the recently chosen files. Both outlive any
@@ -48,18 +54,36 @@ Runs the modal panel and returns the chosen full path, or null on
 Cancel. `UXOpenPanel.runToolkit` calls it; the driver's modal loop does
 the blocking.
 
+### runSave
+
+```c
+u8* runSave(u8* prompt, u8* startDir, u8* defaultName)
+```
+
+The same panel in **save mode**, which `UXSavePanel.runToolkit` calls. The
+selection line becomes a name field starting at `defaultName`, the button
+reads Save, a folder's name is entered rather than saved over, and an
+existing file is confirmed through `confirmReplace` before the path comes
+back. [`UXSavePanel`](/compiler/api/uxkit/uxsavepanel/#what-save-mode-does)
+describes it from the caller's side.
+
 :::note[`run` is the whole public surface]
 The class has around forty other methods, such as `sortColumn`,
 `scrollTop`, `rowAt` and `inRecents`. **None of them is for a caller.**
 They implement the panel itself: its scroll state, its sort, its button
 handlers and its directory reads.
 
-The only external use of `UXFilePanel` in the toolkit is these two lines:
+The only external uses of `UXFilePanel` in the toolkit are these:
 
 ```c
 UXFilePanel* p = new UXFilePanel();
-return p.run(prompt, startDir);
+return p.run(prompt, startDir);                    // UXOpenPanel
+return p.runSave(prompt, startDir, defaultName);   // UXSavePanel
 ```
+
+The exception is `confirmReplace(u8* name)`, the question save mode asks
+before replacing a file. It is its own method so a test can subclass the
+panel and answer it without a modal alert.
 
 The other methods are listed here as undocumented so that the question of
 which to call has a clear answer: none. You can modify them, but do not

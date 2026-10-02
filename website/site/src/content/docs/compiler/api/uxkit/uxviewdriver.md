@@ -51,6 +51,7 @@ two.
 
 ```c
 bool hasNativeFileOpen(void);
+bool hasNativeFileSave(void);
 bool hasNativeColorPicker(void);
 bool hasNativeFontPicker(void);
 bool scrollsNatively(void);
@@ -390,6 +391,8 @@ i32 fontFamilyName(i32 idx, u8* out, i32 cap)
 ```c
 bool hasNativeFileOpen(void)
 i32 fileOpen(u8* prompt, u8* startDir, u8* out, i32 outCap)
+bool hasNativeFileSave(void)
+i32 fileSave(u8* prompt, u8* startDir, u8* defaultName, u8* out, i32 outCap)
 bool hasNativeColorPicker(void)
 i32 pickColor(i32 r, i32 g, i32 b, i32* outR, i32* outG, i32* outB)
 bool hasNativeFontPicker(void)
@@ -424,7 +427,13 @@ bool settingGet(u8* domain, u8* key, u8* out, i32 cap)
 bool settingSet(u8* domain, u8* key, u8* value)
 bool settingRemove(u8* domain, u8* key)
 i32 formFactorClass(void)
+i32 orientation(void)
 ```
+
+`orientation` is the device's orientation now: `UX_ORIENT_PORTRAIT` or
+`UX_ORIENT_LANDSCAPE` on iOS and Android, and `UX_ORIENT_NONE` on the
+desktop backends, which have no orientation axis. It feeds
+[`UXNibV2.selectTreeOriented`](/compiler/api/uxkit/uxnibv2/#selecttreeoriented).
 
 ### Everything else
 
