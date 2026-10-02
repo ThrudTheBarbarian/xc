@@ -309,6 +309,8 @@ static gboolean event_cb(GtkEventControllerLegacy* c, GdkEvent* ev, gpointer ud)
         return FALSE;
     gdk_event_get_position(ev, &x, &y);
     gtk_to_area(handle, &x, &y);
+    if (y < 0 && t != GDK_MOTION_NOTIFY)
+        return FALSE; /* on the menu bar above the content: the bar's, not the toolkit's */
     if (t == GDK_SCROLL)
         {
         /* A wheel reports whole clicks (100 px each, as WebKit counts a line), a touchpad its own
@@ -875,6 +877,174 @@ static void draw_cb(GtkDrawingArea* a, cairo_t* cr, int w, int h, gpointer ud)
     gContent[handle](handle, 0, 0, w, h, gContentUd[handle]);
     gCr = NULL;
     }
+/* ── the menu bar ────────────────────────────────────────────────────────── */
+/* A real GtkPopoverMenuBar over a GMenu, one bar per window, all sharing one model and one action
+ * group ("ux").  Item (t, j) is the action "ux.m<t>_<j>"; a separator starts a new section, which is
+ * how a GMenu draws a line.  An item starts as a plain action; the first time it is ticked it is
+ * swapped for a stateful (boolean) action of the same name, which GTK's menu tracker notices and
+ * draws as a check item -- so any item can be ticked later, as on GEM and AppKit.  A pick reaches the
+ * toolkit as a menu-select event through the same dispatch as the mouse. */
+typedef struct { GMenu* model; GMenu* sub[32]; GMenu* section[32]; int n; } UXGtkMenu;
+static UXGtkMenu* gMenu;          /* the installed bar, or NULL */
+static GSimpleActionGroup* gMenuActions;
+static GtkWidget* gMenuBar[UXGTK_MAXW];
+static int gMenuBarH[UXGTK_MAXW]; /* its height, which the window grew by */
+static void menu_activate_cb(GSimpleAction* a, GVariant* param, gpointer ud)
+    {
+    (void)param;
+    int tag = GPOINTER_TO_INT(ud);
+    if (!g_action_get_enabled(G_ACTION(a)))
+        return;
+    int win = 0;
+    for (int h = 1; h < UXGTK_MAXW; h++)
+        if (gWin[h] && gtk_window_is_active(gWin[h]))
+            win = h;
+    if (gMouse)
+        gMouse(7, tag / 256, tag % 256, win, 0); /* 7 == UXEventMenuSelect: title, item */
+    }
+void* ux_gtk_menu_new(void)
+    {
+    UXGtkMenu* m = (UXGtkMenu*)calloc(1, sizeof *m);
+    m->model = g_menu_new();
+    if (!gMenuActions)
+        gMenuActions = g_simple_action_group_new();
+    return m;
+    }
+int ux_gtk_menu_add_title(void* bar, const char* title)
+    {
+    UXGtkMenu* m = (UXGtkMenu*)bar;
+    if (!m || m->n >= 32)
+        return -1;
+    int t = m->n++;
+    m->sub[t] = g_menu_new();
+    m->section[t] = g_menu_new();
+    g_menu_append_section(m->sub[t], NULL, G_MENU_MODEL(m->section[t]));
+    g_menu_append_submenu(m->model, title, G_MENU_MODEL(m->sub[t]));
+    return t;
+    }
+void ux_gtk_menu_add_item(void* bar, int t, int j, const char* text, int checked, int disabled, int sep)
+    {
+    UXGtkMenu* m = (UXGtkMenu*)bar;
+    if (!m || t < 0 || t >= m->n)
+        return;
+    if (sep)
+        {
+        m->section[t] = g_menu_new();
+        g_menu_append_section(m->sub[t], NULL, G_MENU_MODEL(m->section[t]));
+        return;
+        }
+    char name[32];
+    snprintf(name, sizeof name, "m%d_%d", t, j);
+    GSimpleAction* a = checked ? g_simple_action_new_stateful(name, NULL, g_variant_new_boolean(TRUE))
+                               : g_simple_action_new(name, NULL);
+    g_signal_connect(a, "activate", G_CALLBACK(menu_activate_cb), GINT_TO_POINTER(t * 256 + j));
+    g_simple_action_set_enabled(a, !disabled);
+    g_action_map_add_action(G_ACTION_MAP(gMenuActions), G_ACTION(a));
+    g_object_unref(a);
+    char detailed[40];
+    snprintf(detailed, sizeof detailed, "ux.%s", name);
+    g_menu_append(m->section[t], text, detailed);
+    }
+/* Put the bar at the top of a window: the window's child becomes a vertical box of the bar and the
+ * content, and the window grows by the bar's height so the content keeps its size. */
+static void menu_attach(int h)
+    {
+    if (!gMenu || !gWin[h] || gMenuBar[h])
+        return;
+    GtkWidget* bar = gtk_popover_menu_bar_new_from_model(G_MENU_MODEL(gMenu->model));
+    GtkWidget* box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    GtkWidget* fix = GTK_WIDGET(gFix[h]);
+    g_object_ref(fix);
+    gtk_window_set_child(gWin[h], NULL);
+    gtk_box_append(GTK_BOX(box), bar);
+    gtk_box_append(GTK_BOX(box), fix);
+    g_object_unref(fix);
+    gtk_window_set_child(gWin[h], box);
+    gtk_widget_insert_action_group(GTK_WIDGET(gWin[h]), "ux", G_ACTION_GROUP(gMenuActions));
+    int bh = 0;
+    gtk_widget_measure(bar, GTK_ORIENTATION_VERTICAL, -1, NULL, &bh, NULL, NULL);
+    int w = 0, hh = 0;
+    gtk_window_get_default_size(gWin[h], &w, &hh);
+    gtk_window_set_default_size(gWin[h], w, hh + bh);
+    gMenuBar[h] = bar;
+    gMenuBarH[h] = bh;
+    }
+void ux_gtk_menu_show(void* bar, int show)
+    {
+    if (!show || !bar)
+        return;
+    gMenu = (UXGtkMenu*)bar;
+    for (int h = 1; h < UXGTK_MAXW; h++)
+        menu_attach(h);
+    }
+static GSimpleAction* menu_action(int t, int j)
+    {
+    char name[32];
+    snprintf(name, sizeof name, "m%d_%d", t, j);
+    return gMenuActions ? G_SIMPLE_ACTION(g_action_map_lookup_action(G_ACTION_MAP(gMenuActions), name)) : NULL;
+    }
+void ux_gtk_menu_check(int t, int j, int on)
+    {
+    GSimpleAction* a = menu_action(t, j);
+    if (!a)
+        return;
+    if (g_action_get_state_type(G_ACTION(a)))
+        {
+        g_simple_action_set_state(a, g_variant_new_boolean(on != 0));
+        return;
+        }
+    if (!on)
+        return; /* never ticked: nothing to clear */
+    /* first tick: swap in a stateful action of the same name */
+    gboolean enabled = g_action_get_enabled(G_ACTION(a));
+    char name[32];
+    snprintf(name, sizeof name, "m%d_%d", t, j);
+    GSimpleAction* b = g_simple_action_new_stateful(name, NULL, g_variant_new_boolean(TRUE));
+    g_signal_connect(b, "activate", G_CALLBACK(menu_activate_cb), GINT_TO_POINTER(t * 256 + j));
+    g_simple_action_set_enabled(b, enabled);
+    g_action_map_remove_action(G_ACTION_MAP(gMenuActions), name);
+    g_action_map_add_action(G_ACTION_MAP(gMenuActions), G_ACTION(b));
+    g_object_unref(b);
+    }
+void ux_gtk_menu_enable(int t, int j, int on)
+    {
+    GSimpleAction* a = menu_action(t, j);
+    if (a)
+        g_simple_action_set_enabled(a, on != 0);
+    }
+/* For a gate: activate an item the way a click on it does (through its action), and read an item's
+ * state back: bit 0 enabled, bit 1 ticked, -1 no such item.  And the bar a window shows: how many
+ * titles its model has (0 = no bar). */
+void ux_gtk_menu_test_activate(int t, int j)
+    {
+    char name[32];
+    snprintf(name, sizeof name, "m%d_%d", t, j);
+    if (gMenuActions)
+        g_action_group_activate_action(G_ACTION_GROUP(gMenuActions), name, NULL);
+    }
+int ux_gtk_menu_test_state(int t, int j)
+    {
+    GSimpleAction* a = menu_action(t, j);
+    if (!a)
+        return -1;
+    int st = g_action_get_enabled(G_ACTION(a)) ? 1 : 0;
+    GVariant* v = g_action_get_state(G_ACTION(a));
+    if (v)
+        {
+        if (g_variant_get_boolean(v))
+            st |= 2;
+        g_variant_unref(v);
+        }
+    return st;
+    }
+int ux_gtk_menu_test_titles(int h)
+    {
+    if (h <= 0 || h >= UXGTK_MAXW || !gMenuBar[h])
+        return 0;
+    GMenuModel* mm = gtk_popover_menu_bar_get_menu_model(GTK_POPOVER_MENU_BAR(gMenuBar[h]));
+    return mm ? g_menu_model_get_n_items(mm) : 0;
+    }
+
 int ux_gtk_window_create(int x, int y, int w, int h)
     {
     if (gNextH >= UXGTK_MAXW)
@@ -896,6 +1066,7 @@ int ux_gtk_window_create(int x, int y, int w, int h)
     g_signal_connect(ec, "event", G_CALLBACK(event_cb), GINT_TO_POINTER(hh));
     gtk_widget_add_controller(GTK_WIDGET(win), ec);
     gLive++;
+    menu_attach(hh); /* a menu bar installed before this window opened */
     return hh;
     }
 void ux_gtk_window_set_content(int handle, void* fn, void* ud)
@@ -927,6 +1098,8 @@ void ux_gtk_window_close(int handle)
         gCtl[handle][n] = NULL;
     ux_gtk_gl_forget(handle);
     gWin[handle] = NULL;
+    gMenuBar[handle] = NULL; /* the bar went with its window */
+    gMenuBarH[handle] = 0;
     gFix[handle] = NULL;
     gArea[handle] = NULL;
     gContent[handle] = NULL;
@@ -941,7 +1114,11 @@ void ux_gtk_window_invalidate(int handle)
 void ux_gtk_content_geometry(int handle, int* w, int* h)
     {
     if (gWin[handle])
+        {
+        /* the window's size tracks a user's resize; the content is that less the menu bar */
         gtk_window_get_default_size(gWin[handle], w, h);
+        *h = *h - gMenuBarH[handle];
+        }
     else
         {
         *w = 0;

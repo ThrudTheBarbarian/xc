@@ -33,6 +33,7 @@ extern void ux_gtk_wait_allocated(i32 handle);
 extern void ux_gtk_gl_test_max(i32 px);
 extern i32 ux_gtk_gl_test_corner(i32 handle, i32 node);
 extern void ux_gtk_pump(void);
+i32 usleep(u32 us);
 
 typedef u8* GetStrFn(u32 which);
 typedef void ClearColorFn(float r, float g, float b, float a);
@@ -157,10 +158,16 @@ void main(void)
     fin();
     map.presentGL();
     i32 corner = (i32)0;
-    for (i32 k = (i32)0; k < (i32)200 && corner == (i32)0; k = k + (i32)1)
+    // Wait for GTK's next render, by the clock: non-blocking iterations alone can all run before a
+    // frame comes, and under load they did.  Up to 3 s, in 10 ms steps.
+    for (i32 k = (i32)0; k < (i32)300 && corner == (i32)0; k = k + (i32)1)
         {
         ux_gtk_pump();
         corner = ux_gtk_gl_test_corner(win.handle, (i32)map.index);
+        if (corner == (i32)0)
+            {
+            usleep((u32)10000);
+            }
         }
     Stdio.printf("clamped corner %06x\n", corner);
     ck(((corner >> (i32)8) & (i32)255) > (i32)160 && ((corner >> (i32)16) & (i32)255) < (i32)60,

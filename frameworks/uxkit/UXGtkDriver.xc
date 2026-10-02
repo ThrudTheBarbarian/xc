@@ -30,6 +30,12 @@ i32 ux_gtk_alert(i32 parent, u8* lines, u8* buttons, i32 defBtn);
 void ux_gtk_clip(i32 x, i32 y, i32 w, i32 h);
 void ux_gtk_clip_round(i32 x, i32 y, i32 w, i32 h, i32 r); // ...with rounded corners; ux_gtk_clip_end pops
 i32 ux_gtk_audio_play(i16* pcm, i32 frames, i32 rate); // PulseAudio, 1 = started
+pointer ux_gtk_menu_new(void);                      // the menu bar (libUXGtk.c)
+i32 ux_gtk_menu_add_title(pointer bar, u8* title);
+void ux_gtk_menu_add_item(pointer bar, i32 t, i32 j, u8* text, i32 checked, i32 disabled, i32 sep);
+void ux_gtk_menu_show(pointer bar, i32 show);
+void ux_gtk_menu_check(i32 t, i32 j, i32 on);
+void ux_gtk_menu_enable(i32 t, i32 j, i32 on);
 void ux_gtk_clip_end(void);
 i32 ux_gtk_setting_get(u8* domain, u8* key, u8* out, i32 cap);
 i32 ux_gtk_setting_set(u8* domain, u8* key, u8* value);
@@ -291,6 +297,11 @@ void uxGtkDispatch(i32 kind, i32 x, i32 y, i32 handle, i32 extra)
     gGtkMouseEvent.x = (i16)x;
     gGtkMouseEvent.y = (i16)y;
     gGtkMouseEvent.handle = handle;
+    if (kind == (i32)UXEventMenuSelect)
+        {
+        gGtkMouseEvent.a = x + (i32)2; // the title's GEM object number, as handleSelection expects
+        gGtkMouseEvent.b = y;          // the item's ordinal
+        }
     if (kind == (i32)UXEventWheel)
         {
         gGtkMouseEvent.b = extra;                   // the DOM's deltaY in pixels, positive down
@@ -1384,22 +1395,54 @@ class UXGtkDriver : Object<UXViewDriver>
         }
 
     // ---- menus / alerts: their milestones (UIMenu, UIAlertController) --------
+    // A real GtkPopoverMenuBar over a GMenu, one action per item (see libUXGtk.c).  Item ids ARE
+    // ordinals, as on AppKit: the shim's pick reports (title, item) directly.
     pointer menuBuild(pointer defs, i32 n, i32 screenW)
         {
-        return (pointer)0;
+        UXMenuDef* d = (UXMenuDef*)defs;
+        pointer bar = ux_gtk_menu_new();
+        for (i32 t = (i32)0; t < n; t = t + (i32)1)
+            {
+            i32 ti = ux_gtk_menu_add_title(bar, d[t].title);
+            u8** items = d[t].items;
+            for (i32 j = (i32)0; j < d[t].nitems; j = j + (i32)1)
+                {
+                u8* s = items[j];
+                if (s[0] == (u8)45 && s[1] == (u8)0) // "-": a separator
+                    {
+                    ux_gtk_menu_add_item(bar, ti, j, (u8*)"", (i32)0, (i32)0, (i32)1);
+                    }
+                else if (s[0] == (u8)1) // pre-ticked
+                    {
+                    ux_gtk_menu_add_item(bar, ti, j, &s[1], (i32)1, (i32)0, (i32)0);
+                    }
+                else if (s[0] == (u8)2) // disabled
+                    {
+                    ux_gtk_menu_add_item(bar, ti, j, &s[1], (i32)0, (i32)1, (i32)0);
+                    }
+                else
+                    {
+                    ux_gtk_menu_add_item(bar, ti, j, s, (i32)0, (i32)0, (i32)0);
+                    }
+                }
+            }
+        return bar;
         }
     void menuShow(pointer menu, i32 show)
         {
+        ux_gtk_menu_show(menu, show);
         }
     i32 menuItemOrd(pointer menu, i32 titleOrd, i32 itemObj)
         {
-        return (i32)-1;
+        return itemObj;
         }
     void menuCheck(pointer menu, i32 titleOrd, i32 itemOrd, i32 on)
         {
+        ux_gtk_menu_check(titleOrd, itemOrd, on);
         }
     void menuEnable(pointer menu, i32 titleOrd, i32 itemOrd, i32 on)
         {
+        ux_gtk_menu_enable(titleOrd, itemOrd, on);
         }
     // Modal for real: GtkAlertDialog behind a nested GMainLoop in the shim —
     // the async choose() made synchronous, the same shape as NSAlert's

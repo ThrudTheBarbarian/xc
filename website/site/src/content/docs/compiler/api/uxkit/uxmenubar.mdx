@@ -6,7 +6,8 @@ description: "The app's menu bar as a model: describe the menus, install once, a
 `UXMenuBar` is the app-level menu model. A menu is **not a widget**: the
 platform assembles it, draws it, tracks the pull-down, highlights the
 hover, and hit-tests the pick. GEM does this inside `evnt_multi`, AppKit
-as a real `NSMenu`, Win32 as a per-window `HMENU`. The model contains no
+as a real `NSMenu`, Win32 as a per-window `HMENU`, GTK as a per-window
+`GtkPopoverMenuBar`. The model contains no
 drawing, no tracking and no hit-testing. It describes the menu, hands
 that description to the driver in [`install`](#install), and turns the
 resulting selection back into a callback call. This follows the same
@@ -88,12 +89,14 @@ Enables or greys the item in the model and the live menu together.
 
 ## Platform notes
 
-One neutral model has three realizations. GEM builds a bar of `G_TITLE`s
+One neutral model has several realizations. GEM builds a bar of `G_TITLE`s
 with dropdown boxes and delivers `MN_SELECTED`. AppKit builds a real
 `NSMenu` on the system bar. Win32 has no screen bar, so it attaches the
 same model as an `HMENU` to **every** window, and a window opened after
-`install` still gets it. The iOS and Android realizations are milestones
-in their drivers' menu work.
+`install` still gets it. GTK does the same with a `GtkPopoverMenuBar` over a
+`GMenu`, one action per item, placed above the content. The window grows by
+the bar's height, so the content keeps the size it was opened at. The iOS and
+Android realizations are milestones in their drivers' menu work.
 
 ## Example
 
