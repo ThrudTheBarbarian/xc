@@ -58,6 +58,9 @@ void ux_gtk_set_control_hidden(i32 handle, i32 node, i32 on);
 void ux_gtk_set_control_fire(pointer fn);
 void ux_gtk_set_value_changed(pointer fn);
 void ux_gtk_make_check(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, u8* title, i32 on);
+// A radio: a GtkCheckButton grouped with the radio at node `leader` (-1: none -- it gets a hidden
+// partner, so it still draws round).
+void ux_gtk_make_radio(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, u8* title, i32 on, i32 leader);
 void ux_gtk_set_check(i32 handle, i32 node, i32 on);
 void ux_gtk_make_slider(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, i32 lo, i32 hi, i32 val);
 void ux_gtk_set_slider_value(i32 handle, i32 node, i32 val);
@@ -176,6 +179,24 @@ void uxGtkValueChanged(i32 handle, i32 node, i32 value)
     if (cb != (UXCheckbox*)0)
         {
         cb.setChecked(value != (i32)0);
+        }
+    // A radio: switched ON selects it through its group (which clears the others, and fires); the
+    // OFF that GTK's own grouping sends to the previous one is the group's business, already done.
+    UXRadioButton* rb = (UXRadioButton* ?)ctl;
+    if (rb != (UXRadioButton*)0)
+        {
+        if (value == (i32)0)
+            {
+            return;
+            }
+        if (rb.group != (UXRadioGroup*)0)
+            {
+            rb.group.select(rb);
+            }
+        else
+            {
+            rb.setSelected(true);
+            }
         }
     UXSlider* sl = (UXSlider* ?)ctl;
     if (sl != (UXSlider*)0)
@@ -1093,7 +1114,7 @@ class UXGtkDriver : Object<UXViewDriver>
                     gGtkCtlPeer[handle * (i32)256 + i] = n.peer;
                     }
                 }
-            else if (n.kind == (i32)UXKindCheckbox)
+            else if (n.kind == (i32)UXKindCheckbox || n.kind == (i32)UXKindRadio)
                 {
                 // The platform's toggle idiom IS the switch — checked state
                 // from the peer, exactly the mac driver's toggleState read.
@@ -1103,6 +1124,25 @@ class UXGtkDriver : Object<UXViewDriver>
                     u8* title = n.spec != (pointer)0 ? (u8*)n.spec : (u8*)"";
                     ux_gtk_make_check(handle, i, ax, ay, aw, ah, title,
                                       cb.isChecked() ? (i32)1 : (i32)0);
+                    gGtkCtlPeer[handle * (i32)256 + i] = n.peer;
+                    }
+                // A radio is a GtkCheckButton in a GROUP, which GTK draws round: grouped with the
+                // first button of its UXRadioGroup in this tree (the group's exclusion stays neutral,
+                // and every display pushes each button's state).
+                UXRadioButton* rbn = (UXRadioButton* ?)n.peer;
+                if (rbn != (UXRadioButton*)0)
+                    {
+                    u8* title = n.spec != (pointer)0 ? (u8*)n.spec : (u8*)"";
+                    i32 leader = (i32)-1;
+                    if (rbn.group != (UXRadioGroup*)0 && rbn.group.buttons.count() > (u16)0)
+                        {
+                        UXRadioButton* first = (UXRadioButton* ?)rbn.group.buttons.get((u16)0);
+                        if (first != (UXRadioButton*)0 && first != rbn && first.owner == rbn.owner)
+                            {
+                            leader = (i32)first.index;
+                            }
+                        }
+                    ux_gtk_make_radio(handle, i, ax, ay, aw, ah, title, rbn.isSelected() ? (i32)1 : (i32)0, leader);
                     gGtkCtlPeer[handle * (i32)256 + i] = n.peer;
                     }
                 }

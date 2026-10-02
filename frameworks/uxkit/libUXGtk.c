@@ -1203,6 +1203,47 @@ void ux_gtk_make_check(int handle, int node, int x, int y, int w, int h,
     g_signal_connect(c, "toggled", G_CALLBACK(toggled_cb), NULL);
     park(handle, node, c, x, y, w, h);
     }
+/* A radio: GTK 4 has no radio widget of its own -- a GtkCheckButton in a group IS one, drawn round.
+ * Grouped with the radio at `leader`; one with no leader gets a hidden partner of its own, so a lone
+ * radio still looks like a radio and not a check box. */
+void ux_gtk_make_radio(int handle, int node, int x, int y, int w, int h, const char* title, int on, int leader)
+    {
+    GtkWidget* c = gtk_check_button_new_with_label(title);
+    GtkWidget* lead = (leader >= 0 && leader < 256) ? gCtl[handle][leader] : NULL;
+    if (lead && GTK_IS_CHECK_BUTTON(lead))
+        gtk_check_button_set_group(GTK_CHECK_BUTTON(c), GTK_CHECK_BUTTON(lead));
+    else
+        {
+        GtkWidget* partner = gtk_check_button_new();
+        g_object_ref_sink(partner); /* never shown: only its group membership matters */
+        gtk_check_button_set_group(GTK_CHECK_BUTTON(c), GTK_CHECK_BUTTON(partner));
+        g_object_set_data_full(G_OBJECT(c), "ux-radio-partner", partner, g_object_unref);
+        }
+    gtk_check_button_set_active(GTK_CHECK_BUTTON(c), on != 0);
+    g_signal_connect(c, "toggled", G_CALLBACK(toggled_cb), NULL);
+    park(handle, node, c, x, y, w, h);
+    }
+/* For a gate: a toggle's native state -- bit 0 active, bit 1 drawn as a radio, bit 2 a check
+ * button at all; and switching one on the way a click does (GTK's own set_active, so the toggled
+ * signal and the group's exclusion run as for a person). */
+int ux_gtk_test_toggle(int handle, int node)
+    {
+    GtkWidget* c = gCtl[handle][node];
+    if (!c || !GTK_IS_CHECK_BUTTON(c))
+        return 0;
+    int st = 4 | (gtk_check_button_get_active(GTK_CHECK_BUTTON(c)) ? 1 : 0);
+    /* what GTK draws: a grouped check button's indicator is the CSS node "radio", a lone one "check" */
+    for (GtkWidget* k = gtk_widget_get_first_child(c); k; k = gtk_widget_get_next_sibling(k))
+        if (strcmp(gtk_widget_get_css_name(k), "radio") == 0)
+            st |= 2;
+    return st;
+    }
+void ux_gtk_test_activate_toggle(int handle, int node)
+    {
+    GtkWidget* c = gCtl[handle][node];
+    if (c && GTK_IS_CHECK_BUTTON(c))
+        gtk_check_button_set_active(GTK_CHECK_BUTTON(c), TRUE);
+    }
 void ux_gtk_set_check(int handle, int node, int on)
     {
     GtkWidget* c = gCtl[handle][node];
