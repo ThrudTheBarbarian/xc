@@ -1,0 +1,47 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>running</title>
+<canvas id="ux-canvas" width="240" height="140"></canvas>
+<script src="ux_web_page.js"></script>
+<script>
+  // run_web_menu.sh's page, a plain page (no worker): the app hands its bar to ux_web_page.js
+  // directly.  When it is done, click through the DOM the way a person would and check it.
+  const fails = [];
+  const want = (ok, what) => { if (!ok) fails.push(what); };
+  globalThis.xccImports = { env: {
+    ux_test_menu: () => -1, ux_test_menu_text: () => 0, // not the rig
+    ux_test_menu_done: () => {
+      const bar = document.querySelector('.ux-menubar');
+      want(bar, 'no menu bar in the page');
+      if (!bar) { document.title = 'FAIL: ' + fails.join('; '); return; }
+      const titles = [...bar.querySelectorAll('.ux-title')];
+      want(titles.length === 2, `${titles.length} titles`);
+      want(bar.nextElementSibling && bar.nextElementSibling.id === 'ux-canvas', 'the bar is not above the canvas');
+      const items = (t) => [...titles[t].querySelectorAll('.ux-drop > *')];
+      want(items(0)[1].className === 'ux-sep', 'File\'s second entry is not a separator');
+      want(items(0)[0].textContent === 'New "draft"', 'File > New text: ' + items(0)[0].textContent);
+      want(items(1)[0].classList.contains('checked'), 'Grid is not ticked');
+      want(items(1)[1].classList.contains('disabled'), 'Rulers is not greyed');
+      const vis = (t) => getComputedStyle(titles[t].querySelector('.ux-drop')).display !== 'none';
+      want(!vis(0) && !vis(1), 'a pull-down is open before any click');
+      titles[0].click();
+      want(vis(0), 'clicking File does not open it');
+      titles[1].dispatchEvent(new MouseEvent('mouseenter'));
+      want(vis(1) && !vis(0), 'moving onto View while File is open does not switch');
+      items(1)[1].click();
+      want(uxMenuPicks.length === 0, 'a greyed item was picked');
+      titles[0].click();
+      items(0)[2].click();
+      want(uxMenuPicks.length === 1 && uxMenuPicks[0][0] === 0 && uxMenuPicks[0][1] === 2, 'File > Quit pick: ' + JSON.stringify(uxMenuPicks));
+      want(!vis(0), 'a pick does not close the pull-down');
+      titles[1].click();
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      want(!vis(1), 'Escape does not close the pull-down');
+      uxPage.menuState({ t: 1, j: 1, what: 1, on: 1 });
+      want(!items(1)[1].classList.contains('disabled'), 'a state change does not ungrey Rulers');
+      document.title = fails.length ? 'FAIL: ' + fails.join('; ') : 'PASS: a DOM menu bar -- opens, follows the pointer, picks, refuses a greyed item, closes on Escape';
+    },
+  } };
+</script>
+<script src="ux_web_browser.js"></script>
+<script src="test_web_menu.js"></script>

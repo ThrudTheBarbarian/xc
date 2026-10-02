@@ -42,6 +42,11 @@ extern void ux_clip_round(i32 x, i32 y, i32 w, i32 h, i32 r);
 // A region of a bitmap in wasm memory, scaled into a rect, with an overall alpha: Canvas2D's
 // drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh).  format is UXPIX_*; the host may keep what it builds
 // from `data`, keyed by its address, so the bytes must not change once drawn.
+// The menu bar, for the page to build as DOM: JSON [{title, items: [{text, checked?, disabled?} |
+// {sep:1}]}], len bytes.  A pick comes back through the ring as type 9 (a = title, b = item).
+extern void ux_menu_set(u8* json, i32 len);
+// One item's state: what 0 = ticked, 1 = enabled; on 0/1.
+extern void ux_menu_state(i32 t, i32 j, i32 what, i32 on);
 // A sound: 16-bit mono PCM at rate, played by its own source node (1 = started).
 extern i32 ux_audio_play(i16* pcm, i32 frames, i32 rate);
 // The application's icon: the page's favicon (1 = set).

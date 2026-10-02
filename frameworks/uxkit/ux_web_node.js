@@ -125,6 +125,36 @@ globalThis.xccImports = { env: {
   },
   // drawPixels: recorded with a COPY of the source region (the memory may move on), and replayed by
   // ux_test_pixel with nearest sampling and the alpha applied -- enough to read the picture back.
+  // The menu bar, recorded as the page would receive it: the parsed JSON, with state changes applied.
+  ux_menu_set: (p, len) => {
+    globalThis.uxMenuModel = JSON.parse(Buffer.from(U8().slice(p >>> 0, (p >>> 0) + len)).toString('utf8'));
+  },
+  ux_menu_state: (t, j, what, on) => {
+    const it = globalThis.uxMenuModel && globalThis.uxMenuModel[t] && globalThis.uxMenuModel[t].items[j];
+    if (it) { if (what === 0) it.checked = on ? 1 : 0; else it.disabled = on ? 0 : 1; }
+  },
+  // titles: t = -1; items of a title: j = -1; else bit 0 enabled, bit 1 ticked, bit 2 separator.
+  ux_test_menu: (t, j) => {
+    const m = globalThis.uxMenuModel;
+    if (!m) return -1;
+    if (t < 0) return m.length;
+    const e = m[t];
+    if (!e) return -1;
+    if (j < 0) return e.items.length;
+    const it = e.items[j];
+    if (!it) return -1;
+    return it.sep ? 4 : ((it.disabled ? 0 : 1) | (it.checked ? 2 : 0));
+  },
+  // The text of a title (j = -1) or item, into a buffer: its length.
+  ux_test_menu_text: (t, j, out, cap) => {
+    const m = globalThis.uxMenuModel;
+    const s = !m || !m[t] ? '' : j < 0 ? m[t].title : (m[t].items[j] && m[t].items[j].text) || '';
+    const b = Buffer.from(s, 'utf8');
+    const n = Math.min(b.length, cap - 1);
+    U8().set(b.subarray(0, n), out >>> 0);
+    U8()[(out >>> 0) + n] = 0;
+    return n;
+  },
   // Sound, recorded: how many were played and the last one's length and rate.
   ux_audio_play: (p, frames, rate) => {
     if (frames <= 0 || rate <= 0) return 0;
@@ -150,6 +180,7 @@ globalThis.xccImports = { env: {
   },
   ux_test_done: () => {},
   ux_test_sound_done: () => {},
+  ux_test_menu_done: () => {},
   // The recorded icon's colour (0xRRGGBB) at (x,y), or -1; with x = -1 its width, y = -1 its height.
   ux_test_app_icon: (x, y) => {
     const ic = globalThis.uxAppIcon;

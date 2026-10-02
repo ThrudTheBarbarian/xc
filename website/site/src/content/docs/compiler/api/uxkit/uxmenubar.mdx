@@ -7,7 +7,7 @@ description: "The app's menu bar as a model: describe the menus, install once, a
 platform assembles it, draws it, tracks the pull-down, highlights the
 hover, and hit-tests the pick. GEM does this inside `evnt_multi`, AppKit
 as a real `NSMenu`, Win32 as a per-window `HMENU`, GTK as a per-window
-`GtkPopoverMenuBar`. The model contains no
+`GtkPopoverMenuBar`, the web as a DOM menu bar on the page. The model contains no
 drawing, no tracking and no hit-testing. It describes the menu, hands
 that description to the driver in [`install`](#install), and turns the
 resulting selection back into a callback call. This follows the same
@@ -95,8 +95,13 @@ with dropdown boxes and delivers `MN_SELECTED`. AppKit builds a real
 same model as an `HMENU` to **every** window, and a window opened after
 `install` still gets it. GTK does the same with a `GtkPopoverMenuBar` over a
 `GMenu`, one action per item, placed above the content. The window grows by
-the bar's height, so the content keeps the size it was opened at. The iOS and
-Android realizations are milestones in their drivers' menu work.
+the bar's height, so the content keeps the size it was opened at. On the web
+the canvas is the widget layer, but a menu is a native service: the driver
+hands the page the whole bar, and `ux_web_page.js` (loaded on the page) builds
+it above the canvas as DOM. A pull-down opens on a click, follows the pointer
+from title to title while open, and closes on a pick, a click elsewhere or
+Escape. The iOS and Android realizations are milestones in their drivers' menu
+work.
 
 ## Example
 

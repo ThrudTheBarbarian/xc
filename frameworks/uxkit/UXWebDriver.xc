@@ -1010,22 +1010,120 @@ class UXWebDriver : Object<UXViewDriver>
         }
 
     // ---- menus / alerts: their milestones come later (§5) --------------------
+    // ---- menus: a DOM menu bar on the page -------------------------------------------------------
+    // The canvas is the widget layer, but a menu is a native service (XG-WEB-BACKEND.md section 5:
+    // web-menu is "a DOM menu").  menuBuild hands the page the whole bar as JSON -- titles, items,
+    // separators, ticks, greying -- and the page builds it; a pick comes back through the ring as
+    // type 9 (a = title, b = item), which decodeRing turns into a menu-select.  Item ids ARE
+    // ordinals, as on AppKit and GTK.
+    u8* gWebMenuBuf;
+    i32 gWebMenuLen;
+    i32 gWebMenuCap;
+    void menuPut(u8 c)
+        {
+        if (gWebMenuLen + (i32)1 >= gWebMenuCap)
+            {
+            i32 n = gWebMenuCap < (i32)256 ? (i32)256 : gWebMenuCap * (i32)2;
+            u8* b = new u8[(u32)n];
+            for (i32 i = (i32)0; i < gWebMenuLen; i = i + (i32)1)
+                {
+                b[i] = gWebMenuBuf[i];
+                }
+            gWebMenuBuf = b;
+            gWebMenuCap = n;
+            }
+        gWebMenuBuf[gWebMenuLen] = c;
+        gWebMenuLen = gWebMenuLen + (i32)1;
+        gWebMenuBuf[gWebMenuLen] = (u8)0;
+        }
+    void menuPutRaw(u8* s)
+        {
+        for (i32 i = (i32)0; s[i] != (u8)0; i = i + (i32)1)
+            {
+            self.menuPut(s[i]);
+            }
+        }
+    // a JSON string: quotes, backslashes and control bytes escaped; UTF-8 passes through
+    void menuPutStr(u8* s)
+        {
+        self.menuPut((u8)34);
+        for (i32 i = (i32)0; s[i] != (u8)0; i = i + (i32)1)
+            {
+            u8 c = s[i];
+            if (c == (u8)34 || c == (u8)92)
+                {
+                self.menuPut((u8)92);
+                self.menuPut(c);
+                }
+            else if (c < (u8)32)
+                {
+                self.menuPutRaw((u8*)" ");
+                }
+            else
+                {
+                self.menuPut(c);
+                }
+            }
+        self.menuPut((u8)34);
+        }
     pointer menuBuild(pointer defs, i32 n, i32 screenW)
         {
-        return (pointer)0;
+        UXMenuDef* d = (UXMenuDef*)defs;
+        gWebMenuLen = (i32)0;
+        self.menuPutRaw((u8*)"[");
+        for (i32 t = (i32)0; t < n; t = t + (i32)1)
+            {
+            if (t > (i32)0)
+                {
+                self.menuPutRaw((u8*)",");
+                }
+            self.menuPutRaw((u8*)"{\"title\":");
+            self.menuPutStr(d[t].title);
+            self.menuPutRaw((u8*)",\"items\":[");
+            u8** items = d[t].items;
+            for (i32 j = (i32)0; j < d[t].nitems; j = j + (i32)1)
+                {
+                if (j > (i32)0)
+                    {
+                    self.menuPutRaw((u8*)",");
+                    }
+                u8* it = items[j];
+                if (it[0] == (u8)45 && it[1] == (u8)0) // "-": a separator
+                    {
+                    self.menuPutRaw((u8*)"{\"sep\":1}");
+                    continue;
+                    }
+                i32 checked = it[0] == (u8)1 ? (i32)1 : (i32)0;
+                i32 disabled = it[0] == (u8)2 ? (i32)1 : (i32)0;
+                self.menuPutRaw((u8*)"{\"text\":");
+                self.menuPutStr(checked + disabled > (i32)0 ? &it[1] : it);
+                self.menuPutRaw(checked != (i32)0 ? (u8*)",\"checked\":1" : (u8*)"");
+                self.menuPutRaw(disabled != (i32)0 ? (u8*)",\"disabled\":1" : (u8*)"");
+                self.menuPutRaw((u8*)"}");
+                }
+            self.menuPutRaw((u8*)"]}");
+            }
+        self.menuPutRaw((u8*)"]");
+        return (pointer)gWebMenuBuf;
         }
     void menuShow(pointer menu, i32 show)
         {
+        if (show != (i32)0 && menu != (pointer)0)
+            {
+            ux_menu_set((u8*)menu, gWebMenuLen);
+            }
         }
     i32 menuItemOrd(pointer menu, i32 titleOrd, i32 itemObj)
         {
-        return (i32)-1;
+        return itemObj;
         }
     void menuCheck(pointer menu, i32 titleOrd, i32 itemOrd, i32 on)
         {
+        ux_menu_state(titleOrd, itemOrd, (i32)0, on);
         }
     void menuEnable(pointer menu, i32 titleOrd, i32 itemOrd, i32 on)
         {
+        ux_menu_state(titleOrd, itemOrd, (i32)1, on);
         }
     // Modal, §3's second blocking primitive: post the request (the worker-side
     // shim reads the strings out of module memory — nothing raw crosses), then
@@ -1041,7 +1139,7 @@ class UXWebDriver : Object<UXViewDriver>
     // The loader's event slots are [type, a, b, ...]: 1/2/3 mouse down/up/move
     // (a=x, b=y, c=button: 0 primary, 2 secondary), 4/5 key down/up (a=keyCode), 6 an animation
     // tick the page pushes for the §3.2 consolidation, 8 the wheel (a=x, b=y, c=deltaY in pixels,
-    // the DOM's own; 7 is a modal's answer).  window coordinates ARE canvas coordinates until
+    // the DOM's own; 7 is a modal's answer), 9 a pick from the page's menu bar (a=title, b=item).  window coordinates ARE canvas coordinates until
     // multi-window compositing lands.
     //
     // A move is a DRAG only while the primary button is down, and a HOVER otherwise: the loader
@@ -1093,6 +1191,13 @@ class UXWebDriver : Object<UXViewDriver>
             {
             ev.kind = (u8)UXEventKeyDown;
             ev.key = (u16)r[1];
+            }
+        else if (t == (i32)9)
+            {
+            // a pick from the page's menu bar: a = title ordinal, b = item ordinal
+            ev.kind = (u8)UXEventMenuSelect;
+            ev.a = r[1] + (i32)2; // the title's GEM object number, as handleSelection expects
+            ev.b = r[2];
             }
         else if (t == (i32)6)
             {

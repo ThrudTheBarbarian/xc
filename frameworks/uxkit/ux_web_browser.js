@@ -121,6 +121,20 @@
     // drawPixels: the bitmap is copied out of wasm memory into a canvas ONCE, keyed by its address,
     // size and layout (UXPIX_ARGB32 words are B,G,R,A in memory and are reordered), then each call is
     // one drawImage of the region.
+    // The menu bar.  In the worker (the interactive run loop), the page owns the DOM: the JSON and
+    // each state change are posted to it (xccPost; ux_web_page.js builds and updates the bar and
+    // pushes a pick into the ring as type 9).  Without a worker -- a plain page -- the bar is built
+    // here directly by the same code, when ux_web_page.js is loaded.
+    ux_menu_set: (p, len) => {
+      const json = new TextDecoder().decode(U8().slice(p >>> 0, (p >>> 0) + len));
+      if (globalThis.xccPost) globalThis.xccPost({ uxMenu: json });
+      else if (globalThis.uxPage) globalThis.uxPage.menu(json);
+    },
+    ux_menu_state: (t, j, what, on) => {
+      const st = { t, j, what, on };
+      if (globalThis.xccPost) globalThis.xccPost({ uxMenuState: st });
+      else if (globalThis.uxPage) globalThis.uxPage.menuState(st);
+    },
     // Sound: 16-bit mono PCM into an AudioBuffer, played by its own source node, so sounds overlap.
     // A browser only lets audio start after the page has been clicked or typed in: the context is
     // made on the first sound and resumed on the first such gesture.  Until it runs, a sound
