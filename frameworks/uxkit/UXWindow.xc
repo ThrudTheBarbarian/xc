@@ -117,6 +117,10 @@ class UXWindow : UXResponder
     // A hand-built content view fills the window.  A tree loaded from a .rsc has
     // its OWN size — the designer chose it — so we position it but never resize it.
     bool resizesContent;
+    // The view that took the last press, while it is held: where drags and the release go.  On the
+    // desktop a view tracks its own drag modally (trackDragStep) and this is never consulted; on a
+    // touch backend the drag arrives as events and is routed here.  Strong, and cleared on release.
+    UXView* mouseGrab;
 
     // The damage rect for the repaint currently in flight, if WE started it.  The
     // AES's content callback is handed the WORK AREA, not the damage — so the window
@@ -146,6 +150,7 @@ class UXWindow : UXResponder
         firstResponder = (UXResponder*)0;
         defaultButton = (UXControl*)0;
         resizesContent = true;
+        mouseGrab = (UXView*)0;
         damage = UXGeom.zero();
         hasDamage = false;
         contentW = (i16)0;
@@ -509,7 +514,29 @@ class UXWindow : UXResponder
             self.makeFirstResponder(v);
             }
 
+        mouseGrab = v;
+        tree.pressX = (i32)e.x;
+        tree.pressY = (i32)e.y;
         v.mouseDown(e); // climbs the chain if unhandled
+        }
+
+    // A held press moving, and its release (touch backends): to the view that took the press, not
+    // to whatever is under the finger now -- a drag that leaves its view still belongs to it.
+    void dispatchMouseDragged(UXEvent* e)
+        {
+        if (mouseGrab != (UXView*)0)
+            {
+            mouseGrab.mouseDragged(e);
+            }
+        }
+    void dispatchMouseUp(UXEvent* e)
+        {
+        UXView* g = mouseGrab;
+        mouseGrab = (UXView*)0;
+        if (g != (UXView*)0)
+            {
+            g.mouseUp(e);
+            }
         }
 
     // A wheel notch over the window: hit-test the point and hand it to that view; it climbs the

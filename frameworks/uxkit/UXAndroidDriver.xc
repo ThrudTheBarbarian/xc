@@ -28,6 +28,7 @@
 #import "UXStepper.xc"     // composed -/+ Button pair (Android has no platform stepper)
 #import "UXPopUpButton.xc" // native Spinner overlay
 #import "UXProgressBar.xc" // native horizontal ProgressBar overlay
+#import "UXTouch.xc"              // drawn content's touches -> mouse events
 #import "UXNavigationController.xc" // Up / Back on the native bar come back through uxNavNativePopped
 #import "UXApplication.xc" // gApp: the driver-owned loop starts the delegate, and stop() quits
 #import "UXLibc.xc"
@@ -41,6 +42,7 @@ pointer ux_and_nav_attach(i32 win, i32 navId, i32 x, i32 y, i32 w, i32 h);
 void ux_and_nav_push(pointer nav, u8* title, i32 animated);
 void ux_and_nav_pop(pointer nav, i32 animated);
 void ux_and_set_nav_popped(pointer fn);
+void ux_and_set_touch(pointer fn);
 i32 ux_and_window_create(i32 x, i32 y, i32 w, i32 h);
 void ux_and_window_set_content(i32 handle, pointer fn, pointer ud);
 void ux_and_window_open(i32 handle, i32 x, i32 y, i32 w, i32 h);
@@ -334,6 +336,7 @@ class UXAndroidDriver : Object<UXViewDriver>
             ux_and_set_field_hooks((pointer)&uxAndFieldChanged);
             ux_and_set_field_submit_hooks((pointer)&uxAndFieldSubmitted);
             ux_and_set_nav_popped((pointer)&uxAndNavPopped);
+            ux_and_set_touch((pointer)&uxTouch);
             }
         return ux_and_boot(screenW, screenH) != (i32)0;
         }
@@ -1347,6 +1350,11 @@ class UXAndroidDriver : Object<UXViewDriver>
         return (i32)0;
         }
     // native controls own drag
+    // the platform owns the loop: a drag arrives as touch events (UXTouch.xc)
+    bool dragTrackingIsModal(void)
+        {
+        return false;
+        }
     i32 trackDragStep(i32* x, i32* y)
         {
         return (i32)0;

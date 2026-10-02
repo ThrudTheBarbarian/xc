@@ -2269,6 +2269,11 @@ class UXWin32Driver : Object<UXViewDriver>
     // A toolkit-drawn drag (a split divider): poll the real-time button + cursor (native controls do
     // their own drag).  While the left button is held, return the cursor in window-local coords; the
     // caller repaints via windowInvalidate, which UpdateWindows a synchronous WM_PAINT, so it's live.
+    // a view may loop on trackDragStep inside its mouseDown
+    bool dragTrackingIsModal(void)
+        {
+        return true;
+        }
     i32 trackDragStep(i32* x, i32* y)
         {
         // see gInputReplay (UXEvent.xc)

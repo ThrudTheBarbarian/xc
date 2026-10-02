@@ -1113,6 +1113,11 @@ class UXGemDriver : Object<UXViewDriver>
     // One modal drag-track step: block until the pointer moves or the button releases (window-local
     // coords).  gemd forwards motion to the focused window while the button is held, so a table can
     // loop this after a press to extend its selection as the pointer sweeps rows.
+    // a view may loop on trackDragStep inside its mouseDown
+    bool dragTrackingIsModal(void)
+        {
+        return true;
+        }
     i32 trackDragStep(i32* x, i32* y)
         {
         // a replayed press must not follow the live pointer

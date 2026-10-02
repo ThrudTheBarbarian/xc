@@ -1322,6 +1322,11 @@ class UXWebDriver : Object<UXViewDriver>
     // release ends the drag with 0.  Ticks present accumulated damage so the
     // drag paints live; a quiet ring ends the drag rather than wedging the
     // worker.  (§5 web-scroll's seam: the scrollbar drag rides this.)
+    // a view may loop on trackDragStep inside its mouseDown
+    bool dragTrackingIsModal(void)
+        {
+        return true;
+        }
     i32 trackDragStep(i32* x, i32* y)
         {
         if (gInputReplay)

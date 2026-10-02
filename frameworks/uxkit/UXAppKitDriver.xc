@@ -842,6 +842,11 @@ class UXAppKitDriver : Object<UXViewDriver>
         }
     // Native tables own their own drag-select, but a toolkit-drawn drag (a split divider) needs a modal
     // step: pull the next NSEvent mouse-dragged/up.  (Tables never call this — they route through AppKit.)
+    // a view may loop on trackDragStep inside its mouseDown
+    bool dragTrackingIsModal(void)
+        {
+        return true;
+        }
     i32 trackDragStep(i32* x, i32* y)
         {
         // see gInputReplay (UXEvent.xc)

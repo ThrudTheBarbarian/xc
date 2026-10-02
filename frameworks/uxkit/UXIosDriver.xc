@@ -29,6 +29,7 @@
 #import "UXPopUpButton.xc"      // native UIButton+UIMenu pull-down
 #import "UXSegmentedControl.xc" // native UISegmentedControl overlay
 #import "UXProgressBar.xc"      // native UIProgressView overlay
+#import "UXTouch.xc"              // drawn content's touches -> mouse events
 #import "UXNavigationController.xc" // a user's pop on the native stack comes back through uxNavNativePopped
 #import "UXApplication.xc"      // gApp: the driver-owned loop starts the delegate, and stop() quits
 #import "UXLibc.xc"
@@ -42,6 +43,7 @@ pointer ux_ios_nav_attach(i32 win, i32 navId, i32 x, i32 y, i32 w, i32 h);
 void ux_ios_nav_push(pointer nav, u8* title, i32 animated);
 void ux_ios_nav_pop(pointer nav, i32 animated);
 void ux_ios_set_nav_popped(pointer fn);
+void ux_ios_set_touch(pointer fn);
 i32 ux_ios_window_create(i32 x, i32 y, i32 w, i32 h);
 void ux_ios_window_set_content(i32 handle, pointer fn, pointer ud);
 void ux_ios_window_open(i32 handle, i32 x, i32 y, i32 w, i32 h);
@@ -315,6 +317,7 @@ class UXIosDriver : Object<UXViewDriver>
             ux_ios_set_field_hooks((pointer)&uxIosFieldChanged);
             ux_ios_set_field_submit_hooks((pointer)&uxIosFieldSubmitted);
             ux_ios_set_nav_popped((pointer)&uxIosNavPopped);
+            ux_ios_set_touch((pointer)&uxTouch);
             }
         return ux_ios_boot(screenW, screenH) != (i32)0;
         }
@@ -1319,6 +1322,11 @@ class UXIosDriver : Object<UXViewDriver>
         return (i32)0;
         }
     // native controls own drag
+    // the platform owns the loop: a drag arrives as touch events (UXTouch.xc)
+    bool dragTrackingIsModal(void)
+        {
+        return false;
+        }
     i32 trackDragStep(i32* x, i32* y)
         {
         return (i32)0;

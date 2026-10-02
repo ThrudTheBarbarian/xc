@@ -178,10 +178,17 @@ class UXScrollbar : UXView
     i32 docHeight;             // the document's content height
     i16 cornerRadius;          // a rounded panel's radius (0 = square)
     i32 borderRGB;             // a 1px edge colour as 0xRRGGBB, or -1 for none
+    // Touch panning (touch backends): where the finger went down, and the offset then.
+    bool panning;
+    i32 panStartY;
+    i32 panStartOff;
 
     void init(void)
         {
         super.init();
+        panning = false;
+        panStartY = (i32)0;
+        panStartOff = (i32)0;
         clip = (UXView*)0;
         doc = (UXView*)0;
         vbar = (UXScrollbar*)0;
@@ -449,6 +456,50 @@ class UXScrollbar : UXView
     void scrollWheel(UXEvent* e)
         {
         self.scrollByLines((i32)0 - (i32)e.a * (i32)3);
+        }
+
+    // TOUCH PANNING, on the touch backends: the content follows the finger.  A press that reached
+    // here (on the background, or climbed from content that did not want it) starts a pan; a drag
+    // that climbed from the view that took the press -- a table row, a label -- moves the content by
+    // how far the finger has gone.  With a mouse (modal drag backends) a press here climbs on as
+    // before, and scrolling is the bar's and the wheel's.
+    void mouseDown(UXEvent* e)
+        {
+        if (gDriver != (UXViewDriver*)0 && !gDriver.dragTrackingIsModal())
+            {
+            self.beginPan((i32)e.y);
+            return;
+            }
+        super.mouseDown(e);
+        }
+    void beginPan(i32 y)
+        {
+        panning = true;
+        panStartY = y;
+        panStartOff = (i32)scrollOffset;
+        }
+    void mouseDragged(UXEvent* e)
+        {
+        if (gDriver == (UXViewDriver*)0 || gDriver.dragTrackingIsModal())
+            {
+            super.mouseDragged(e);
+            return;
+            }
+        if (!panning)
+            {
+            // the press went to content (a row); the drag is ours, measured from where it went down
+            self.beginPan(owner != (UXViewTree*)0 ? owner.pressY : (i32)e.y);
+            }
+        self.scrollTo((i16)(panStartOff - ((i32)e.y - panStartY)));
+        }
+    void mouseUp(UXEvent* e)
+        {
+        if (panning)
+            {
+            panning = false;
+            return;
+            }
+        super.mouseUp(e);
         }
     }
 

@@ -219,6 +219,20 @@ static void n_draw(JNIEnv *env, jclass c, jint id, jobject canvas, jint w, jint 
     gDrawCanvas = NULL;
 }
 
+/* Touches on the drawn content -> UXKit's mouse events (UXTouch.xc): phase 0 down, 1 move, 2 up,
+ * 3 cancelled, in neutral units (dp).  MotionEvent actions: 0 DOWN, 1 UP, 2 MOVE, 3 CANCEL. */
+typedef void (*ux_touch_fn)(void *, int, int, int);
+static ux_touch_fn gTouch;
+void ux_and_set_touch(void *fn) { gTouch = (ux_touch_fn)fn; }
+static void n_touch(JNIEnv *env, jclass c, jint id, jint action, jfloat x, jfloat y) {
+    (void)env; (void)c;
+    int handle = id >> 8;
+    if (handle < 0 || handle >= UXA_MAXW || !gTouch || !gContentUd[handle]) return;
+    int phase = action == 0 ? 0 : action == 2 ? 1 : action == 1 ? 2 : action == 3 ? 3 : -1;
+    if (phase < 0) return;
+    gTouch(gContentUd[handle], phase, (int)(x / gDensity + 0.5f), (int)(y / gDensity + 0.5f)); /* nearest dp */
+}
+
 /* ── UI-thread posting (Handler on the main looper + the dex's UXRun) ───── */
 static jobject gHandler;                  /* global ref */
 static jmethodID gPost, gPostDelayed;
@@ -264,6 +278,25 @@ int ux_and_test_control_visible(int handle, const char *title) {
         return (*env)->CallBooleanMethod(env, c, shown) ? 1 : 0;
     }
     return 0;
+}
+/* Tests: a touch on window `handle` through ANDROID'S OWN dispatch -- a MotionEvent handed to the
+ * window's FrameLayout, which offers it to the native widgets on top first and the UXDrawView last,
+ * exactly as a finger would.  phase 0 down, 1 move, 2 up; x/y in the window's neutral units. */
+static long gTouchDown;
+void ux_and_test_touch(int handle, int phase, int x, int y) {
+    JNIEnv *env = envNow();
+    jclass meC = (*env)->FindClass(env, "android/view/MotionEvent");
+    jmethodID obtain = (*env)->GetStaticMethodID(env, meC, "obtain", "(JJIFFI)Landroid/view/MotionEvent;");
+    jclass sc = (*env)->FindClass(env, "android/os/SystemClock");
+    jlong now = (*env)->CallStaticLongMethod(env, sc, (*env)->GetStaticMethodID(env, sc, "uptimeMillis", "()J"));
+    if (phase == 0) gTouchDown = (long)now;
+    int action = phase == 0 ? 0 : phase == 1 ? 2 : 1;
+    jobject ev = (*env)->CallStaticObjectMethod(env, meC, obtain, (jlong)gTouchDown, now, action,
+                                                (jfloat)PX(x), (jfloat)PX(y), 0);
+    jclass vC = (*env)->FindClass(env, "android/view/View");
+    (*env)->CallBooleanMethod(env, gWinV[handle], (*env)->GetMethodID(env, vC, "dispatchTouchEvent", "(Landroid/view/MotionEvent;)Z"), ev);
+    (*env)->CallVoidMethod(env, ev, (*env)->GetMethodID(env, meC, "recycle", "()V"));
+    check(env, "test touch");
 }
 void ux_and_test_watchdog(int ms, int rc) {
     postRunDelayed(envNow(), 0x20000 | (rc & 0xFF), ms);
@@ -1756,10 +1789,11 @@ JNIEXPORT void ANativeActivity_onCreate(ANativeActivity *activity,
         { "nativeSubmit", "(I)V", (void *)n_submit },
     };
     static const JNINativeMethod nr[] = { { "nativeRun", "(I)V", (void *)n_run } };
-    static const JNINativeMethod nd[] = { { "nativeDraw", "(ILandroid/graphics/Canvas;II)V", (void *)n_draw } };
+    static const JNINativeMethod nd[] = { { "nativeDraw", "(ILandroid/graphics/Canvas;II)V", (void *)n_draw },
+                                          { "nativeTouch", "(IIFF)V", (void *)n_touch } };
     (*env)->RegisterNatives(env, gBridgeCls, nb, 4);
     (*env)->RegisterNatives(env, gRunCls, nr, 1);
-    (*env)->RegisterNatives(env, gDrawCls, nd, 1);
+    (*env)->RegisterNatives(env, gDrawCls, nd, 2);
     gRunInit = (*env)->GetMethodID(env, gRunCls, "<init>", "(I)V");
     if (!check(env, "RegisterNatives")) return;
 

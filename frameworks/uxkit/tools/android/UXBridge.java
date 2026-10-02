@@ -96,7 +96,14 @@ class UXDrawView extends View {
     private final int id;
     public UXDrawView(Context c, int id) { super(c); this.id = id; }
     private static native void nativeDraw(int id, Canvas canvas, int w, int h);
+    private static native void nativeTouch(int id, int action, float x, float y);
     @Override protected void onDraw(Canvas canvas) {
         nativeDraw(id, canvas, getWidth(), getHeight());
+    }
+    // the drawn content's touches -> UXKit's mouse events (UXTouch.xc); native widgets on top
+    // take their own
+    @Override public boolean onTouchEvent(android.view.MotionEvent e) {
+        nativeTouch(id, e.getActionMasked(), e.getX(), e.getY());
+        return true;
     }
 }

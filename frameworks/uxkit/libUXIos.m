@@ -86,7 +86,39 @@ void ux_ios_quit(int rc)
 @interface UXDrawView : UIView
 @property(nonatomic) int handle;
 @end
+// Touches on the drawn content -> UXKit's mouse events (UXTouch.xc): phase 0 down, 1 move, 2 up,
+// 3 cancelled; x/y in the window's content coordinates.  Native controls on top take their own.
+typedef void (*ux_touch_fn)(void*, int, int, int);
+static ux_touch_fn gTouch;
+void ux_ios_set_touch(void* fn)
+    {
+    gTouch = (ux_touch_fn)fn;
+    }
 @implementation UXDrawView
+- (void)touchPhase:(int)phase touches:(NSSet<UITouch*>*)touches
+    {
+    UITouch* t = touches.anyObject;
+    if (!t || !gTouch || !gContentUd[self.handle])
+        return;
+    CGPoint p = [t locationInView:self];
+    gTouch(gContentUd[self.handle], phase, (int)p.x, (int)p.y);
+    }
+- (void)touchesBegan:(NSSet<UITouch*>*)touches withEvent:(UIEvent*)e
+    {
+    [self touchPhase:0 touches:touches];
+    }
+- (void)touchesMoved:(NSSet<UITouch*>*)touches withEvent:(UIEvent*)e
+    {
+    [self touchPhase:1 touches:touches];
+    }
+- (void)touchesEnded:(NSSet<UITouch*>*)touches withEvent:(UIEvent*)e
+    {
+    [self touchPhase:2 touches:touches];
+    }
+- (void)touchesCancelled:(NSSet<UITouch*>*)touches withEvent:(UIEvent*)e
+    {
+    [self touchPhase:3 touches:touches];
+    }
 - (void)drawRect:(CGRect)dirty
     {
     if (!gContent[self.handle])
@@ -1332,6 +1364,13 @@ int ux_ios_test_control_visible(int handle, const char* title)
         return 1;
         }
     return 0;
+    }
+// Tests: a touch on window `handle`'s drawn content, entering where UIKit's touchesBegan/Moved/Ended
+// would (the simulator has no tap injection to come in through UIKit itself).
+void ux_ios_test_touch(int handle, int phase, int x, int y)
+    {
+    if (gTouch && gContentUd[handle])
+        gTouch(gContentUd[handle], phase, x, y);
     }
 typedef void (*ux_later_fn)(void);
 void ux_ios_test_call_later(void* fn, int ms)

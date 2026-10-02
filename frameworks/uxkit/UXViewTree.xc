@@ -39,9 +39,16 @@ class UXViewTree
     // be a cycle), and the two things that need it — realize(), and therefore the GL surface
     // a GL view asks for — are tree-level operations.  0 = not in a window yet.
     i32 winHandle;
+    // Where the current press went down, in window coordinates (UXWindow.dispatchMouse sets it).  A
+    // view that picks up a drag the press did not start with -- a scroll view panning when the press
+    // landed on one of its rows -- measures the drag from here, not from the drag's first event.
+    i32 pressX;
+    i32 pressY;
 
     void init(void)
         {
+        pressX = (i32)0;
+        pressY = (i32)0;
         dirty = UXGeom.zero();
         hasDirty = false;
         structHandle = gDriver.structNew();

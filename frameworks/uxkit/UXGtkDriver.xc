@@ -1557,6 +1557,11 @@ class UXGtkDriver : Object<UXViewDriver>
     // object) block here until the pointer moves or the button releases.  This
     // used to return 0, which meant every such drag on Linux did nothing at
     // all: the loop that calls it exited before its first step.
+    // a view may loop on trackDragStep inside its mouseDown
+    bool dragTrackingIsModal(void)
+        {
+        return true;
+        }
     i32 trackDragStep(i32* x, i32* y)
         {
         // see gInputReplay (UXEvent.xc)
