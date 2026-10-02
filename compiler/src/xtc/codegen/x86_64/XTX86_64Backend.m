@@ -142,7 +142,11 @@ static NSInteger sWin64SretOff = 0;
       NSMutableSet* s = [NSMutableSet setWithArray:@[ @"flags", @"eflags", @"rflags",
                                                       @"ip", @"eip", @"rip", @"cs", @"ds", @"es", @"fs", @"gs", @"ss", @"st",
                                                       @"byte", @"word", @"dword", @"qword", @"xmmword", @"ptr", @"offset",
-                                                      @"short", @"near", @"far" ]];
+                                                      @"short", @"near", @"far", @"flat",
+                                                      // Intel-syntax OPERATORS: `call eq` reads as the
+                                                      // operator, not the symbol (bug 589).
+                                                      @"eq", @"ne", @"lt", @"le", @"gt", @"ge", @"mod",
+                                                      @"shl", @"shr", @"and", @"or", @"xor", @"not" ]];
       for (NSString* x in @[ @"a", @"b", @"c", @"d" ])
           {
           [s addObject:[x stringByAppendingString:@"l"]];

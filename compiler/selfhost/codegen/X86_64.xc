@@ -102,7 +102,10 @@ class X86_64
             return;
         _reservedNames = new Array();
         addWords("flags eflags rflags ip eip rip cs ds es fs gs ss st");
-        addWords("byte word dword qword xmmword ptr offset short near far");
+        addWords("byte word dword qword xmmword ptr offset short near far flat");
+        // Intel-syntax OPERATORS: `call eq` reads as the operator, not the
+        // symbol (bug 589).
+        addWords("eq ne lt le gt ge mod shl shr and or xor not");
         addWords("al ah ax eax rax bl bh bx ebx rbx cl ch cx ecx rcx dl dh dx edx rdx");
         addWords("si esi rsi sil di edi rdi dil sp esp rsp spl bp ebp rbp bpl");
         for (u32 i = (u32)0; i < (u32)16; i = i + (u32)1)
