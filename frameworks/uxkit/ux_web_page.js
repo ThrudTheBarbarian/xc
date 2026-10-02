@@ -11,6 +11,8 @@
 // one is open, moving onto another title opens that one; a pick, a click elsewhere or Escape closes
 // it.  A pick goes into the ring as type 9 (a = title, b = item), which the driver turns into a
 // menu-select.  Ticked items show a check, greyed ones do not respond.
+//
+// THE POPUP LIST (UXPopUpButton): see popup() below; a pick is ring type 10.
 (() => {
   const css = `
 .ux-menubar { display: flex; gap: 2px; padding: 2px 4px; font: 13px system-ui, sans-serif;
@@ -59,14 +61,16 @@
     el.classList.toggle('disabled', !!it.disabled);
   };
 
+  const ensureStyle = () => {
+    if (document.getElementById('ux-menu-style')) return;
+    const st = document.createElement('style');
+    st.id = 'ux-menu-style';
+    st.textContent = css;
+    document.head.appendChild(st);
+  };
   const build = (json) => {
     model = typeof json === 'string' ? JSON.parse(json) : json;
-    if (!document.getElementById('ux-menu-style')) {
-      const st = document.createElement('style');
-      st.id = 'ux-menu-style';
-      st.textContent = css;
-      document.head.appendChild(st);
-    }
+    ensureStyle();
     if (bar) bar.remove();
     bar = document.createElement('div');
     bar.className = 'ux-menubar';
@@ -120,11 +124,53 @@
   document.addEventListener('click', close);
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && open >= 0) { close(); e.stopPropagation(); } }, true);
 
-  globalThis.uxPage = { menu: build, menuState: state, close, openTitle: show, onPick: null };
+  // THE POPUP LIST (UXPopUpButton): a list at the button, the current choice marked.  A pick goes
+  // into the ring as type 10 (a = the token the driver gave, b = the item); a click elsewhere or
+  // Escape closes it without one.
+  let pop = null;
+  const popupPicks = [];
+  globalThis.uxPopupPicks = popupPicks;
+  const closePopup = () => { if (pop) { pop.remove(); pop = null; } };
+  const popup = (json) => {
+    const o = typeof json === 'string' ? JSON.parse(json) : json;
+    closePopup();
+    ensureStyle();
+    const canvas = document.getElementById('ux-canvas') || document.getElementById('xcc-canvas') ||
+                   document.querySelector('canvas');
+    const r = canvas ? canvas.getBoundingClientRect() : { left: 0, top: 0 };
+    pop = document.createElement('div');
+    pop.className = 'ux-menubar ux-popup';
+    pop.setAttribute('role', 'listbox');
+    pop.style.cssText = `position:absolute; display:block; padding:4px 0; border:1px solid #bdbdbd;
+      border-radius:5px; box-shadow:0 4px 14px rgba(0,0,0,.18); background:#fafafa; z-index:1000;
+      left:${r.left + window.scrollX + o.x}px; top:${r.top + window.scrollY + o.y}px; min-width:${o.w}px;`;
+    o.items.forEach((text, i) => {
+      const el = document.createElement('div');
+      el.className = 'ux-item' + (i === o.selected ? ' checked' : '');
+      el.setAttribute('role', 'option');
+      el.textContent = text;
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        closePopup();
+        popupPicks.push([o.token, i]);
+        if (globalThis.xccPushEvent) globalThis.xccPushEvent(10, o.token, i);
+        else if (globalThis.uxPage.onPopupPick) globalThis.uxPage.onPopupPick(o.token, i);
+      });
+      pop.appendChild(el);
+    });
+    document.body.appendChild(pop);
+    // the click that opened it must not close it
+    setTimeout(() => document.addEventListener('click', closePopup, { once: true }), 0);
+  };
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && pop) { closePopup(); e.stopPropagation(); } }, true);
+
+  globalThis.uxPage = { menu: build, menuState: state, close, openTitle: show, onPick: null,
+                        popup, closePopup, onPopupPick: null };
   // The worker's posts (the loader forwards them here).
   const prev = globalThis.xccOnMessage;
   globalThis.xccOnMessage = (p) => {
-    if (p && p.uxMenu !== undefined) build(p.uxMenu);
+    if (p && p.uxPopup !== undefined) popup(p.uxPopup);
+    else if (p && p.uxMenu !== undefined) build(p.uxMenu);
     else if (p && p.uxMenuState) state(p.uxMenuState);
     else if (prev) prev(p);
   };

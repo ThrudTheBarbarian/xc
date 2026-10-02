@@ -129,6 +129,16 @@ globalThis.xccImports = { env: {
   ux_menu_set: (p, len) => {
     globalThis.uxMenuModel = JSON.parse(Buffer.from(U8().slice(p >>> 0, (p >>> 0) + len)).toString('utf8'));
   },
+  ux_popup_open: (p, len) => {
+    globalThis.uxPopupOpen = JSON.parse(Buffer.from(U8().slice(p >>> 0, (p >>> 0) + len)).toString('utf8'));
+  },
+  // The open popup list: what -1 its token, -2 its item count, -3 the selected index; else item
+  // `what`'s title length.  -100 when none is open.
+  ux_test_popup: (what) => {
+    const o = globalThis.uxPopupOpen;
+    if (!o) return -100;
+    return what === -1 ? o.token : what === -2 ? o.items.length : what === -3 ? o.selected : (o.items[what] || '').length;
+  },
   ux_menu_state: (t, j, what, on) => {
     const it = globalThis.uxMenuModel && globalThis.uxMenuModel[t] && globalThis.uxMenuModel[t].items[j];
     if (it) { if (what === 0) it.checked = on ? 1 : 0; else it.disabled = on ? 0 : 1; }
@@ -181,6 +191,7 @@ globalThis.xccImports = { env: {
   ux_test_done: () => {},
   ux_test_sound_done: () => {},
   ux_test_menu_done: () => {},
+  ux_test_popup_done: () => {},
   // The recorded icon's colour (0xRRGGBB) at (x,y), or -1; with x = -1 its width, y = -1 its height.
   ux_test_app_icon: (x, y) => {
     const ic = globalThis.uxAppIcon;

@@ -1,0 +1,34 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>running</title>
+<style>html,body{margin:0}</style>
+<canvas id="ux-canvas" width="240" height="140"></canvas>
+<script src="ux_web_page.js"></script>
+<script>
+  // run_web_popup.sh's page, a plain page: the app clicks its popup button, the page shows the
+  // list; then click an item the way a person would and check what the page reported.
+  globalThis.xccImports = { env: {
+    ux_test_popup: () => -100, // not the rig
+    ux_test_popup_done: () => {
+      setTimeout(() => {
+        const fails = [];
+        const want = (ok, what) => { if (!ok) fails.push(what); };
+        const pop = document.querySelector('.ux-popup');
+        want(pop, 'no popup list in the page');
+        if (!pop) { document.title = 'FAIL: ' + fails.join('; '); return; }
+        const items = [...pop.querySelectorAll('.ux-item')];
+        want(items.length === 3 && items[1].textContent === 'Green', 'items: ' + items.map((e) => e.textContent).join(','));
+        want(items[1].classList.contains('checked'), 'Green is not marked current');
+        const c = document.getElementById('ux-canvas').getBoundingClientRect();
+        const p = pop.getBoundingClientRect();
+        want(Math.abs(p.left - (c.left + 20)) <= 1 && Math.abs(p.top - (c.top + 56)) <= 1, `the list is at ${p.left},${p.top}, not under the button`);
+        items[2].click();
+        want(uxPopupPicks.length === 1 && uxPopupPicks[0][1] === 2, 'the pick: ' + JSON.stringify(uxPopupPicks));
+        want(!document.querySelector('.ux-popup'), 'the list did not close on the pick');
+        document.title = fails.length ? 'FAIL: ' + fails.join('; ') : 'PASS: the popup list shows at the button, marks the current item, and reports a pick';
+      }, 50);
+    },
+  } };
+</script>
+<script src="ux_web_browser.js"></script>
+<script src="test_web_popup.js"></script>

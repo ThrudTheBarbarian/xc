@@ -45,6 +45,9 @@ extern void ux_clip_round(i32 x, i32 y, i32 w, i32 h, i32 r);
 // The menu bar, for the page to build as DOM: JSON [{title, items: [{text, checked?, disabled?} |
 // {sep:1}]}], len bytes.  A pick comes back through the ring as type 9 (a = title, b = item).
 extern void ux_menu_set(u8* json, i32 len);
+// A popup button's list, for the page to show at the button: JSON {token, x, y, w, selected,
+// items: [title...]}.  A pick comes back through the ring as type 10 (a = token, b = item).
+extern void ux_popup_open(u8* json, i32 len);
 // One item's state: what 0 = ticked, 1 = enabled; on 0/1.
 extern void ux_menu_state(i32 t, i32 j, i32 what, i32 on);
 // A sound: 16-bit mono PCM at rate, played by its own source node (1 = started).

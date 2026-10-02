@@ -25,6 +25,7 @@
 #import "UXGeometry.xc"
 #import "UXEvent.xc"
 #import "UXLibc.xc"
+#import "UXPopUpButton.xc" // runPopupMenu reads the peer's items and applies the page's pick
 
 // The draw-seam callbacks (call_indirect through a declared signature — the
 // funcref-table rule in §4: these signatures ARE the ABI, and nothing casts
@@ -413,8 +414,45 @@ class UXWebDriver : Object<UXViewDriver>
         }
 
     // ---- popup / fonts -------------------------------------------------------
+    // The popup's list on the page (ux_web_page.js shows it at the button): the items, the current
+    // choice and where, as JSON.  The answer is asynchronous, as AppKit's and Win32's are: this returns
+    // -1 now, and the pick comes back through the ring as type 10 (a = the token, b = the item), which
+    // applies it to this popup and fires it.  One popup is open at a time; a token from an earlier
+    // one is ignored.
+    UXPopUpButton* gWebPopup;
+    i32 gWebPopupToken;
     i32 runPopupMenu(pointer peer, i32 x, i32 y)
         {
+        UXPopUpButton* p = (UXPopUpButton* ?)(Object*)peer; // through Object*, so the cast is checked
+        if (p == (UXPopUpButton*)0 || p.nativeItemCount() <= (i32)0)
+            {
+            return (i32)-1;
+            }
+        gWebPopup = p;
+        gWebPopupToken = gWebPopupToken + (i32)1;
+        UXRect f = p.absoluteFrame();
+        gWebMenuLen = (i32)0;
+        self.menuPutRaw((u8*)"{\"token\":");
+        self.menuPutRaw(UXStr.fromInt(gWebPopupToken));
+        self.menuPutRaw((u8*)",\"x\":");
+        self.menuPutRaw(UXStr.fromInt(x));
+        self.menuPutRaw((u8*)",\"y\":");
+        self.menuPutRaw(UXStr.fromInt(y));
+        self.menuPutRaw((u8*)",\"w\":");
+        self.menuPutRaw(UXStr.fromInt((i32)f.w));
+        self.menuPutRaw((u8*)",\"selected\":");
+        self.menuPutRaw(UXStr.fromInt(p.nativeSelected()));
+        self.menuPutRaw((u8*)",\"items\":[");
+        for (i32 i = (i32)0; i < p.nativeItemCount(); i = i + (i32)1)
+            {
+            if (i > (i32)0)
+                {
+                self.menuPutRaw((u8*)",");
+                }
+            self.menuPutStr(p.nativeItemTitle(i));
+            }
+        self.menuPutRaw((u8*)"]}");
+        ux_popup_open(gWebMenuBuf, gWebMenuLen);
         return (i32)-1;
         }
     // The curated web-safe set (§2): what drawTextFont is later handed verbatim.
@@ -1139,7 +1177,8 @@ class UXWebDriver : Object<UXViewDriver>
     // The loader's event slots are [type, a, b, ...]: 1/2/3 mouse down/up/move
     // (a=x, b=y, c=button: 0 primary, 2 secondary), 4/5 key down/up (a=keyCode), 6 an animation
     // tick the page pushes for the §3.2 consolidation, 8 the wheel (a=x, b=y, c=deltaY in pixels,
-    // the DOM's own; 7 is a modal's answer), 9 a pick from the page's menu bar (a=title, b=item).  window coordinates ARE canvas coordinates until
+    // the DOM's own; 7 is a modal's answer), 9 a pick from the page's menu bar (a=title, b=item),
+    // 10 a pick from the page's popup list (a=token, b=item).  window coordinates ARE canvas coordinates until
     // multi-window compositing lands.
     //
     // A move is a DRAG only while the primary button is down, and a HOVER otherwise: the loader
@@ -1198,6 +1237,19 @@ class UXWebDriver : Object<UXViewDriver>
             ev.kind = (u8)UXEventMenuSelect;
             ev.a = r[1] + (i32)2; // the title's GEM object number, as handleSelection expects
             ev.b = r[2];
+            }
+        else if (t == (i32)10)
+            {
+            // a pick from the page's popup list: a = its token, b = the item
+            if (r[1] == gWebPopupToken && gWebPopup != (UXPopUpButton*)0 && r[2] >= (i32)0)
+                {
+                UXPopUpButton* p = gWebPopup;
+                gWebPopup = (UXPopUpButton*)0;
+                p.applyNativeSelection(r[2]);
+                p.setNeedsDisplay();
+                p.fire();
+                }
+            ev.kind = (u8)UXEventNone;
             }
         else if (t == (i32)6)
             {

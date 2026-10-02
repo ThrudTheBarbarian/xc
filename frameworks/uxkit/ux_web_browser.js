@@ -130,6 +130,11 @@
       if (globalThis.xccPost) globalThis.xccPost({ uxMenu: json });
       else if (globalThis.uxPage) globalThis.uxPage.menu(json);
     },
+    ux_popup_open: (p, len) => {
+      const json = new TextDecoder().decode(U8().slice(p >>> 0, (p >>> 0) + len));
+      if (globalThis.xccPost) globalThis.xccPost({ uxPopup: json });
+      else if (globalThis.uxPage) globalThis.uxPage.popup(json);
+    },
     ux_menu_state: (t, j, what, on) => {
       const st = { t, j, what, on };
       if (globalThis.xccPost) globalThis.xccPost({ uxMenuState: st });

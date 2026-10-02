@@ -171,10 +171,11 @@ class UXPopUpItem : Object
             if (pick >= (i32)0 && pick < self.count())
                 {
                 self.selectItem(pick);
+                self.setNeedsDisplay();
+                self.fire(); // a choice was made
                 }
+            // -1: cancelled, or a backend that answers later (the web's page list) and fires then
             }
-        self.setNeedsDisplay();
-        self.fire();
         }
 
     void drawRect(UXGraphics* g, UXRect dirty)
