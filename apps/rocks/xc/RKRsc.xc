@@ -303,7 +303,121 @@ class RKRsc : Object
             {
             return (RKResource*)0;
             }
+        if (be && rssize >= (i32)RK_SZ_HDR)
+            {
+            self.readNibV2(res, rssize);
+            }
         return res;
+        }
+
+    // The UXNB v2 chunk at rsh_rssize, if there is one (docs/UXNB-V2.md section 2): the forms with
+    // more than one layout, and each layout tree's logical ids.  Single-variant `any` forms are the
+    // writer's listing of standalone trees and come back as just that.  The chunk is big-endian
+    // whatever the classic part is, and is ignored (not an error) when malformed: the classic trees
+    // are all there either way.
+    void readNibV2(RKResource* res, i32 at)
+        {
+        if (at + (i32)24 > len || self.rd32(at) != (i32)$55584E42 || self.rd16(at + (i32)4) != (i32)2)
+            {
+            return;
+            }
+        i32 end = at + self.rd32(at + (i32)8);
+        if (end > len)
+            {
+            return;
+            }
+        i32 p = at + (i32)12;
+        i32 nForms = self.rd16(p + (i32)6);
+        i32 nMaps = self.rd16(p + (i32)8);
+        p = p + (i32)12;
+        // the blob comes after every section; find it by walking them (classes, objects,
+        // connections and presentations are all zero from Rocks, but a chunk from elsewhere may
+        // carry them -- they are skipped by size, never misread)
+        i32 nClasses = self.rd16(at + (i32)12);
+        i32 nObjects = self.rd16(at + (i32)14);
+        i32 nConns = self.rd16(at + (i32)16);
+        i32 nPres = self.rd16(at + (i32)22);
+        i32 q = p;
+        for (i32 f = (i32)0; f < nForms && q + (i32)10 <= end; f = f + (i32)1)
+            {
+            q = q + (i32)10 + self.rd16(q + (i32)6) * (i32)4;
+            }
+        i32 mapsAt = q;
+        for (i32 m = (i32)0; m < nMaps && q + (i32)4 <= end; m = m + (i32)1)
+            {
+            q = q + (i32)4 + self.rd16(q + (i32)2) * (i32)4;
+            }
+        q = q + nClasses * (i32)10 + nObjects * (i32)6 + nConns * (i32)18;
+        for (i32 i = (i32)0; i < nPres && q + (i32)8 <= end; i = i + (i32)1)
+            {
+            q = q + (i32)8 + self.rd16(q + (i32)2) * (i32)4;
+            }
+        i32 blob = q;
+        if (blob > end)
+            {
+            return;
+            }
+        // forms
+        for (i32 f = (i32)0; f < nForms && p + (i32)10 <= end; f = f + (i32)1)
+            {
+            i32 formId = self.rd16(p);
+            i32 nameOff = self.rd32(p + (i32)2);
+            i32 nVar = self.rd16(p + (i32)6);
+            bool loose = nVar == (i32)1 && self.rd16(p + (i32)10) == (i32)RKV_ANY && self.rd16(p + (i32)12) == formId;
+            if (!loose)
+                {
+                RKForm* fm = new RKForm();
+                fm.formId = formId;
+                fm.name = nameOff > (i32)0 && blob + nameOff < end ? self.cstrAt(blob + nameOff) : (u8*)"";
+                for (i32 v = (i32)0; v < nVar; v = v + (i32)1)
+                    {
+                    i32 word = self.rd16(p + (i32)10 + v * (i32)4);
+                    i32 tree = self.rd16(p + (i32)12 + v * (i32)4);
+                    if (tree < res.treeCount())
+                        {
+                        RKVariant* va = new RKVariant();
+                        va.klass = word & (i32)$3FFF;
+                        va.orient = (word >> (i32)14) & (i32)3;
+                        va.tree = res.treeAt(tree);
+                        if (va.tree.name == (u8*)0 || va.tree.name[0] == (u8)0)
+                            {
+                            // the form's own layout keeps its name; the others are named after it
+                            if (va.klass == (i32)RKV_DESKTOP && va.orient == (i32)RKV_ORIENT_NONE)
+                                {
+                                va.tree.name = fm.name;
+                                }
+                            else
+                                {
+                                va.tree.setNameJoined(fm.name, RKResource.variantSuffix(va.klass, va.orient));
+                                }
+                            }
+                        fm.variants.add(va);
+                        }
+                    }
+                res.forms.add(fm);
+                }
+            p = p + (i32)10 + nVar * (i32)4;
+            }
+        // maps: each tree's logical ids, by pre-order index
+        q = mapsAt;
+        for (i32 m = (i32)0; m < nMaps && q + (i32)4 <= end; m = m + (i32)1)
+            {
+            i32 tree = self.rd16(q);
+            i32 ne = self.rd16(q + (i32)2);
+            if (tree < res.treeCount())
+                {
+                Array<RKObject>* all = res.treeAt(tree).allObjects();
+                for (i32 e = (i32)0; e < ne; e = e + (i32)1)
+                    {
+                    i32 obj = self.rd16(q + (i32)4 + e * (i32)4);
+                    if (obj < (i32)all.count())
+                        {
+                        ((RKObject* ?)all.get((u32)obj)).logicalId = self.rd16(q + (i32)6 + e * (i32)4);
+                        }
+                    }
+                }
+            q = q + (i32)4 + ne * (i32)4;
+            }
         }
 
     // Attach one object's children, then theirs.  `base` is the tree root's

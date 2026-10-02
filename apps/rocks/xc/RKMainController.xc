@@ -23,6 +23,23 @@
 #import "RKSelection.xc"
 #import "RKInspector.xc"
 #import "RKDrag.xc"
+#import "UXToolbar.xc"
+#import "UXData.xc"
+#import "UXFileIO.xc"
+#import "UXOpenPanel.xc"
+#import "UXSavePanel.xc"
+#import "UXMenu.xc"
+#import "RKRsc.xc"
+#import "RKRscWrite.xc"
+
+// The toolbar's items, by tag (RKMainBuilder makes them; onToolbar dispatches them).
+#define RKTB_NEW 1
+#define RKTB_DELETE 2
+#define RKTB_DESKTOP 3
+#define RKTB_TABLET 4
+#define RKTB_PHONE 5
+#define RKTB_ROTATE 6
+#define RKTB_NEWLAYOUT 7
 #import "UXMenu.xc"
 #import "UXTableView.xc"
 
@@ -51,6 +68,8 @@ class RKMainController : Object<UXTableDelegate>
     // application owns the bar, and a controller that owned its menus would be
     // a controller that built views.
     weak : UXMenuBar* menuBar;
+    // The toolbar, weakly for the same reason (and its action already holds this controller).
+    weak : UXToolbar* toolbar;
     i32 viewMenu, snapItem, guideItem; // where the toggles live in that bar
     u8* geomBuf;                       // reused: a drag writes this per step
     // NOTE: `inspector` is the outlet for the PANE (a UXView); this is its
@@ -62,11 +81,23 @@ class RKMainController : Object<UXTableDelegate>
     // views to show it, never the reverse.
     i32 selectedForm;
     bool dirty;
+    // The layout being viewed: a form factor and, on a device, an orientation (UXNB-V2 sections 1
+    // and 10).  Chosen in the toolbar; it says which of a form's layouts the canvas shows, and
+    // which one New Layout creates.
+    i32 viewClass;
+    i32 viewOrient;
+    // Where the document lives on disk, or 0 for one never saved.  Owned (docPathStore holds the bytes).
+    u8* docPath;
+    UXData* docPathStore;
 
     void init(void)
         {
         selectedForm = (i32)-1;
         dirty = false;
+        viewClass = (i32)RKV_DESKTOP;
+        viewOrient = (i32)RKV_ORIENT_NONE;
+        docPath = (u8*)0;
+        docPathStore = (UXData*)0;
         doc = (RKResource*)0;
         shownTree = (i32)0;
         outlineModel = new RKOutline();
@@ -80,12 +111,14 @@ class RKMainController : Object<UXTableDelegate>
         overlay.changed = &self.onDragStep;
         overlay.ended = &self.onDragEnd;
         menuBar = (UXMenuBar*)0;
+        toolbar = (UXToolbar*)0;
         viewMenu = (i32)-1;
         snapItem = (i32)0;
         guideItem = (i32)1;
         geomBuf = (u8*)malloc((u32)64);
         inspectorCtl = new RKInspector();
         inspectorCtl.changed = &self.onInspectorEdit;
+        lastSaid = (UXData*)0;
         formOutline = (UXOutlineView*)0;
         canvas = (UXView*)0;
         inspector = (UXView*)0;
@@ -104,16 +137,250 @@ class RKMainController : Object<UXTableDelegate>
         }
     void onDesktop(UXControl* sender) : action
         {
-        self.say((u8*)"Variant: desktop");
+        self.viewLayout((i32)RKV_DESKTOP, (i32)RKV_ORIENT_NONE);
         }
     void onTablet(UXControl* sender) : action
         {
-        self.say((u8*)"Variant: tablet");
+        self.viewLayout((i32)RKV_TABLET, viewClass == (i32)RKV_DESKTOP ? (i32)RKV_ORIENT_PORTRAIT : viewOrient);
         }
     void onPhone(UXControl* sender) : action
         {
-        self.say((u8*)"Variant: phone");
+        self.viewLayout((i32)RKV_PHONE, viewClass == (i32)RKV_DESKTOP ? (i32)RKV_ORIENT_PORTRAIT : viewOrient);
         }
+    // Turn the device: portrait <-> landscape.  The desktop has no orientation.
+    void onRotate(UXControl* sender) : action
+        {
+        if (viewClass == (i32)RKV_DESKTOP || viewClass == (i32)RKV_ANY)
+            {
+            self.say((u8*)"The desktop has no orientation");
+            return;
+            }
+        self.viewLayout(viewClass, viewOrient == (i32)RKV_ORIENT_LANDSCAPE ? (i32)RKV_ORIENT_PORTRAIT : (i32)RKV_ORIENT_LANDSCAPE);
+        }
+    // A layout for the class and orientation being viewed, seeded as a one-time copy of the tree on
+    // the canvas -- never a link to it (UXNB-V2 section 7).
+    void onNewLayout(UXControl* sender) : action
+        {
+        if (doc == (RKResource*)0 || shownTree < (i32)0 || shownTree >= doc.treeCount())
+            {
+            return;
+            }
+        RKTree* from = doc.treeAt(shownTree);
+        RKTree* t = doc.addVariant(from, viewClass, viewOrient);
+        if (t == (RKTree*)0)
+            {
+            self.sayLayout((u8*)"There is already a ", (u8*)" layout");
+            return;
+            }
+        dirty = true;
+        self.showResource(doc, doc.indexOfTree(t));
+        self.sayLayout((u8*)"New ", (u8*)" layout");
+        }
+    // ---- the document on disk -------------------------------------------------
+    // The file menu's three.  The panels are UXKit's (native where the platform has one), the bytes
+    // go through UXFileIO (every native target), and what is written is a classic .rsc with, when the
+    // document has layout variants, the UXNB v2 chunk after it.
+    void onOpenDocument(UXMenuItem* sender)
+        {
+        u8* path = UXOpenPanel.run((u8*)"Open a resource", (u8*)".");
+        if (path == (u8*)0)
+            {
+            return;
+            }
+        self.openPath(path);
+        free((pointer)path);
+        }
+    void onSaveDocument(UXMenuItem* sender)
+        {
+        if (docPath == (u8*)0)
+            {
+            self.onSaveDocumentAs(sender);
+            return;
+            }
+        self.saveTo(docPath);
+        }
+    void onSaveDocumentAs(UXMenuItem* sender)
+        {
+        u8* path = UXSavePanel.run((u8*)"Save the resource", (u8*)".", docPath != (u8*)0 ? RKMainController.baseName(docPath) : (u8*)"untitled.rsc");
+        if (path == (u8*)0)
+            {
+            return;
+            }
+        self.saveTo(path);
+        free((pointer)path);
+        }
+    // Read `path` and show it.  False (and says why) if it is unreadable or not a resource.
+    bool openPath(u8* path)
+        {
+        UXData* bytes = UXFileIO.read(path);
+        if (bytes == (UXData*)0)
+            {
+            self.say((u8*)"That file cannot be read");
+            return false;
+            }
+        RKResource* r = RKRsc.read(bytes.bytes(), bytes.length());
+        if (r == (RKResource*)0)
+            {
+            self.say((u8*)"That is not a GEM resource file");
+            return false;
+            }
+        // A new document: the old one's panes go with it.
+        for (i32 i = (i32)0; i < (i32)panes.count(); i = i + (i32)1)
+            {
+            ((UXView* ?)panes.get((u32)i)).setHidden(true);
+            }
+        panes = new Array();
+        maps = new Array();
+        self.setDocPath(path);
+        dirty = false;
+        viewClass = (i32)RKV_DESKTOP;
+        viewOrient = (i32)RKV_ORIENT_NONE;
+        self.showResource(r, (i32)0);
+        self.sayAbout((u8*)"Opened ", RKMainController.baseName(path));
+        return true;
+        }
+    // Write the document to `path`; it becomes the document's file.  False (and says so) on failure,
+    // with the file on disk untouched (UXFileIO writes atomically).
+    bool saveTo(u8* path)
+        {
+        if (doc == (RKResource*)0)
+            {
+            return false;
+            }
+        UXData* bytes = RKRscWrite.write(doc);
+        if (bytes == (UXData*)0 || !UXFileIO.write(path, bytes))
+            {
+            self.sayAbout((u8*)"Could not save ", RKMainController.baseName(path));
+            return false;
+            }
+        self.setDocPath(path);
+        dirty = false;
+        self.sayAbout((u8*)"Saved ", RKMainController.baseName(path));
+        return true;
+        }
+    void setDocPath(u8* path)
+        {
+        if (path == docPath)
+            {
+            return;
+            }
+        UXData* d = UXData.fromString(path);
+        d.appendByte((u8)0);
+        docPathStore = d;
+        docPath = d.bytes();
+        }
+    // The last path component (it points into `path`).
+    static u8* baseName(u8* path)
+        {
+        i32 cut = (i32)0;
+        for (i32 i = (i32)0; path[i] != (u8)0; i = i + (i32)1)
+            {
+            if (path[i] == (u8)'/' || path[i] == (u8)'\\')
+                {
+                cut = i + (i32)1;
+                }
+            }
+        return &path[cut];
+        }
+    void sayAbout(u8* what, u8* name)
+        {
+        UXData* d = UXData.fromString(what);
+        d.appendBytes(name, RKTree.len(name));
+        d.appendByte((u8)0);
+        lastSaid = d;
+        self.say(d.bytes());
+        }
+
+    // The toolbar is one control: which item fired is its selection's tag.
+    void onToolbar(UXControl* sender) : action
+        {
+        UXToolbar* tb = (UXToolbar* ?)(Object*)sender;
+        if (tb == (UXToolbar*)0 || tb.selection() < (i32)0)
+            {
+            return;
+            }
+        i32 tag = tb.nativeItemTag(tb.selection());
+        if (tag == (i32)RKTB_NEW)
+            {
+            self.onNewForm(sender);
+            }
+        else if (tag == (i32)RKTB_DELETE)
+            {
+            self.onDelete(sender);
+            }
+        else if (tag == (i32)RKTB_DESKTOP)
+            {
+            self.onDesktop(sender);
+            }
+        else if (tag == (i32)RKTB_TABLET)
+            {
+            self.onTablet(sender);
+            }
+        else if (tag == (i32)RKTB_PHONE)
+            {
+            self.onPhone(sender);
+            }
+        else if (tag == (i32)RKTB_ROTATE)
+            {
+            self.onRotate(sender);
+            }
+        else if (tag == (i32)RKTB_NEWLAYOUT)
+            {
+            self.onNewLayout(sender);
+            }
+        }
+
+    // Show the shown form's layout for `klass` at `orient`, if it has one.  If it has none, the
+    // canvas stays where it is and says so: "no layout -- create one", never "inheriting desktop"
+    // (UXNB-V2 section 1: the fallback chain is a runtime last resort, not a design relationship).
+    // An orientation-less device layout serves both orientations, so it is shown for either.
+    void viewLayout(i32 klass, i32 orient)
+        {
+        viewClass = klass;
+        viewOrient = orient;
+        if (doc == (RKResource*)0 || shownTree < (i32)0 || shownTree >= doc.treeCount())
+            {
+            return;
+            }
+        RKTree* cur = doc.treeAt(shownTree);
+        RKForm* f = doc.formOf(cur);
+        RKVariant* v = (RKVariant*)0;
+        if (f != (RKForm*)0)
+            {
+            v = f.find(klass, orient);
+            if (v == (RKVariant*)0 && orient != (i32)RKV_ORIENT_NONE)
+                {
+                v = f.find(klass, (i32)RKV_ORIENT_NONE);
+                }
+            }
+        else if (klass == (i32)RKV_DESKTOP)
+            {
+            // a form with one layout: that layout is its desktop one
+            self.sayLayout((u8*)"", (u8*)" layout");
+            return;
+            }
+        if (v == (RKVariant*)0)
+            {
+            self.sayLayout((u8*)"No ", (u8*)" layout -- New Layout creates one");
+            return;
+            }
+        self.showResource(doc, doc.indexOfTree(v.tree));
+        self.sayLayout((u8*)"", (u8*)" layout");
+        }
+    // "<prefix>phone portrait<suffix>", for the layout being viewed.
+    void sayLayout(u8* prefix, u8* suffix)
+        {
+        u8* what = viewClass == (i32)RKV_PHONE ? (u8*)"phone" : (viewClass == (i32)RKV_TABLET ? (u8*)"tablet" : (u8*)"desktop");
+        u8* how = viewOrient == (i32)RKV_ORIENT_PORTRAIT ? (u8*)" portrait" : (viewOrient == (i32)RKV_ORIENT_LANDSCAPE ? (u8*)" landscape" : (u8*)"");
+        UXData* d = UXData.fromString(prefix);
+        d.appendBytes(what, RKTree.len(what));
+        d.appendBytes(how, RKTree.len(how));
+        d.appendBytes(suffix, RKTree.len(suffix));
+        d.appendByte((u8)0);
+        lastSaid = d;
+        self.say(d.bytes());
+        }
+    UXData* lastSaid; // keeps the status text's bytes alive while the label shows them
 
     // Show a resource's tree on the canvas as REAL widgets.  Takes a parsed
     // model rather than a path: file I/O is the platform layer's job, and
@@ -332,8 +599,35 @@ class RKMainController : Object<UXTableDelegate>
             {
             return;
             }
+        // A drop can change what contains what: dropped onto a box it goes in, dragged out it comes
+        // out (RKTree.reparentByGeometry).  The widgets nest as the model does, so a changed nesting
+        // means this form's widgets are rebuilt.
+        if (doc != (RKResource*)0 && doc.treeAt(shownTree).reparentByGeometry() > (i32)0)
+            {
+            self.rebuildShownPane();
+            dirty = true;
+            }
         inspectorCtl.show(o); // the X/Y/W/H fields now read where it landed
         self.placeFrame(o);
+        }
+
+    // Realize the shown tree's widgets afresh, in place of its old pane (which is hidden, not
+    // removed: see showResource on why panes are never torn out of the canvas).
+    void rebuildShownPane(void)
+        {
+        if (canvas == (UXView*)0 || shownTree < (i32)0 || shownTree >= (i32)panes.count())
+            {
+            return;
+            }
+        ((UXView* ?)panes.get((u32)shownTree)).setHidden(true);
+        UXView* pane = new UXView();
+        canvas.addSubview(pane, canvas.bounds());
+        RKCanvas* map = new RKCanvas();
+        map.realize(doc.treeAt(shownTree), pane);
+        panes.set((u32)shownTree, pane);
+        maps.set((u32)shownTree, map);
+        canvasMap = map;
+        self.raiseOverlay();
         }
 
     // "20, 40   60 x 20" — the running read-out a designer actually watches

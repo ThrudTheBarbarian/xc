@@ -56,6 +56,17 @@
 #define RKF_SUBMENU $0800
 
 // ---- state -----------------------------------------------------------------
+// Layout variants (UXNB-V2 sections 1 and 10): a variant's form-factor class and orientation.  The
+// registry's own numbers, so they go into the chunk as they are; test_rkforms checks them against
+// UXKit's UX_FORM_* / UX_ORIENT_*, which the loader reads them with.
+#define RKV_ANY 0
+#define RKV_DESKTOP 1
+#define RKV_TABLET 2
+#define RKV_PHONE 3
+#define RKV_ORIENT_NONE 0
+#define RKV_ORIENT_PORTRAIT 1
+#define RKV_ORIENT_LANDSCAPE 2
+
 #define RKS_NORMAL $0000
 #define RKS_SELECTED $0001
 #define RKS_CROSSED $0002
@@ -102,6 +113,10 @@ class RKColor : Object
                      ((replace ? (i32)1 : (i32)0) << (i32)7) |
                      ((pattern & (i32)7) << (i32)4) | (inside & (i32)$F));
         }
+    RKColor* copy(void)
+        {
+        return RKColor.unpack(self.pack());
+        }
     static RKColor* unpack(u16 raw)
         {
         RKColor* c = new RKColor();
@@ -138,6 +153,20 @@ class RKColor : Object
         fontsize = (i32)0;
         thickness = (i32)0;
         }
+    RKTedinfo* copy(void)
+        {
+        RKTedinfo* c = new RKTedinfo();
+        c.text = text;
+        c.tmplt = tmplt;
+        c.valid = valid;
+        c.font = font;
+        c.fontId = fontId;
+        c.just = just;
+        c.color = color != (RKColor*)0 ? color.copy() : new RKColor();
+        c.fontsize = fontsize;
+        c.thickness = thickness;
+        return c;
+        }
     }
 
     class RKBox : Object
@@ -150,6 +179,14 @@ class RKColor : Object
         character = (u8)0;
         thickness = (i32)1;
         color = new RKColor();
+        }
+    RKBox* copy(void)
+        {
+        RKBox* c = new RKBox();
+        c.character = character;
+        c.thickness = thickness;
+        c.color = color != (RKColor*)0 ? color.copy() : new RKColor();
+        return c;
         }
     }
 
@@ -168,6 +205,17 @@ class RKColor : Object
         x = (i32)0;
         y = (i32)0;
         color = (i32)1;
+        }
+    RKBitblk* copy(void)
+        {
+        RKBitblk* c = new RKBitblk();
+        c.data = data;
+        c.wb = wb;
+        c.hl = hl;
+        c.x = x;
+        c.y = y;
+        c.color = color;
+        return c;
         }
     }
 
@@ -206,6 +254,30 @@ class RKColor : Object
         iconW = (i32)0;
         iconH = (i32)0;
         }
+    RKIcon* copy(void)
+        {
+        RKIcon* c = new RKIcon();
+        c.isColor = isColor;
+        c.label = label;
+        c.pam = pam;
+        c.ciconRaw = ciconRaw;
+        c.selPam = selPam;
+        c.externalPath = externalPath;
+        c.monoData = monoData;
+        c.monoMask = monoMask;
+        c.iconChar = iconChar;
+        c.charX = charX;
+        c.charY = charY;
+        c.textX = textX;
+        c.textY = textY;
+        c.textW = textW;
+        c.textH = textH;
+        c.iconX = iconX;
+        c.iconY = iconY;
+        c.iconW = iconW;
+        c.iconH = iconH;
+        return c;
+        }
     }
 
     // ---- the object node -------------------------------------------------------
@@ -225,6 +297,10 @@ class RKColor : Object
     i32 x, y, w, h;
     u8* name; // symbolic name for source export; 0 = derive one
     u8* text; // string spec
+    // The control's identity across a form's variants (UXNB-V2 section 3): the same number on every
+    // variant's copy of it, so a connection made once binds in each layout.  0 = none -- a container
+    // that exists for one layout's benefit needs none.  Unique within a form, never renumbered.
+    i32 logicalId;
 
     RKTedinfo* ted;
     RKBox* box;
@@ -245,6 +321,7 @@ class RKColor : Object
         h = (i32)0;
         name = (u8*)0;
         text = (u8*)0;
+        logicalId = (i32)0;
         ted = (RKTedinfo*)0;
         box = (RKBox*)0;
         icon = (RKIcon*)0;
@@ -374,6 +451,48 @@ class RKColor : Object
             self.childAt(i).collect(out);
             }
         }
+
+    // A deep copy of this subtree, logical ids included -- the seed of a new layout variant (UXNB-V2
+    // section 7: a one-time copy, not a live link, so every payload object is the copy's own and
+    // editing one layout never reaches into another).  Strings and image bytes are shared: they are
+    // replaced when edited, never written through.
+    RKObject* deepCopy(void)
+        {
+        RKObject* c = new RKObject();
+        c.type = type;
+        c.extType = extType;
+        c.legacyExtType = legacyExtType;
+        c.flags = flags;
+        c.state = state;
+        c.x = x;
+        c.y = y;
+        c.w = w;
+        c.h = h;
+        c.name = name;
+        c.text = text;
+        c.logicalId = logicalId;
+        if (ted != (RKTedinfo*)0)
+            {
+            c.ted = ted.copy();
+            }
+        if (box != (RKBox*)0)
+            {
+            c.box = box.copy();
+            }
+        if (icon != (RKIcon*)0)
+            {
+            c.icon = icon.copy();
+            }
+        if (bitblk != (RKBitblk*)0)
+            {
+            c.bitblk = bitblk.copy();
+            }
+        for (i32 i = (i32)0; i < self.childCount(); i = i + (i32)1)
+            {
+            c.addChild(self.childAt(i).deepCopy());
+            }
+        return c;
+        }
     }
 
     // ---- a flattened node: the classic OBJECT array's links --------------------
@@ -396,12 +515,33 @@ class RKColor : Object
     u8* name;
     i32 kind;
     RKObject* root;
+    UXData* nameStore; // owns `name`'s bytes when the name was made here rather than read
 
     void init(void)
         {
         name = (u8*)"";
         kind = (i32)RKK_DIALOG;
         root = (RKObject*)0;
+        nameStore = (UXData*)0;
+        }
+
+    // Name this tree `base` + `suffix` ("MAIN" + "_PHONE_L"), owning the bytes.
+    void setNameJoined(u8* base, u8* suffix)
+        {
+        UXData* d = UXData.fromString(base != (u8*)0 ? base : (u8*)"");
+        d.appendBytes(suffix, RKTree.len(suffix));
+        d.appendByte((u8)0);
+        nameStore = d;
+        name = d.bytes();
+        }
+    static i32 len(u8* s)
+        {
+        i32 n = (i32)0;
+        while (s[n] != (u8)0)
+            {
+            n = n + (i32)1;
+            }
+        return n;
         }
 
     RKObject* parentOf(RKObject* node)
@@ -445,6 +585,187 @@ class RKColor : Object
         {
         return kind == (i32)RKK_MENU;
         }
+
+    // ---- reparent on drop ----------------------------------------------------
+    // Re-derive the tree's nesting from geometry, the rule the original editor used: every object
+    // becomes a child of the SMALLEST container that fully encloses it (edges inclusive), so the tree
+    // always mirrors what is on screen.  Drop a button onto a box and it is in the box; drag it out
+    // and it is not; drop a box over three buttons and it adopts them.  Every object keeps its
+    // ABSOLUTE position -- only its parent, and so its parent-relative x/y, change.
+    //   - Only containers parent (canHaveChildren): a button never swallows what overlaps it.
+    //   - A tie (two containers of the same area enclosing each other, i.e. the same rect) goes to
+    //     the EARLIER one in pre-order, and only an earlier object may parent: no cycles.
+    //   - Sibling order is the old pre-order, so the z-order is kept.
+    // Idempotent: unchanged geometry changes nothing.  Returns how many objects changed parent.
+    i32 reparentByGeometry(void)
+        {
+        if (root == (RKObject*)0)
+            {
+            return (i32)0;
+            }
+        Array<RKObject>* all = self.allObjects(); // pre-order, root first
+        i32 n = (i32)all.count();
+        if (n < (i32)2)
+            {
+            return (i32)0;
+            }
+        i32* ax = new i32[(u32)n];
+        i32* ay = new i32[(u32)n];
+        i32* oldParent = new i32[(u32)n];
+        i32* newParent = new i32[(u32)n];
+        for (i32 i = (i32)0; i < n; i = i + (i32)1)
+            {
+            RKObject* o = (RKObject* ?)all.get((u32)i);
+            i32 x = (i32)0;
+            i32 y = (i32)0;
+            self.absoluteOriginOf(o, &x, &y);
+            ax[i] = x;
+            ay[i] = y;
+            RKObject* p = self.parentOf(o);
+            oldParent[i] = (i32)-1;
+            for (i32 k = (i32)0; k < n; k = k + (i32)1)
+                {
+                if ((RKObject* ?)all.get((u32)k) == p)
+                    {
+                    oldParent[i] = k;
+                    }
+                }
+            }
+        i32 changed = (i32)0;
+        newParent[0] = (i32)-1;
+        for (i32 i = (i32)1; i < n; i = i + (i32)1)
+            {
+            RKObject* o = (RKObject* ?)all.get((u32)i);
+            i32 oArea = o.w * o.h;
+            i32 best = (i32)0;
+            i32 bestArea = root.w * root.h;
+            for (i32 k = (i32)0; k < n; k = k + (i32)1)
+                {
+                RKObject* p = (RKObject* ?)all.get((u32)k);
+                if (k == i || !p.canHaveChildren())
+                    {
+                    continue;
+                    }
+                bool enc = ax[i] >= ax[k] && ay[i] >= ay[k] && ax[i] + o.w <= ax[k] + p.w && ay[i] + o.h <= ay[k] + p.h;
+                if (!enc)
+                    {
+                    continue;
+                    }
+                i32 pArea = p.w * p.h;
+                if (pArea == oArea && k >= i)
+                    {
+                    continue; // a tie: only an earlier object may parent
+                    }
+                if (pArea < bestArea || (pArea == bestArea && k < best))
+                    {
+                    best = k;
+                    bestArea = pArea;
+                    }
+                }
+            newParent[i] = best;
+            if (best != oldParent[i])
+                {
+                changed = changed + (i32)1;
+                }
+            }
+        if (changed == (i32)0)
+            {
+            return (i32)0;
+            }
+        // rebuild every child list in the old pre-order (the z-order), then the relative positions
+        for (i32 i = (i32)0; i < n; i = i + (i32)1)
+            {
+            ((RKObject* ?)all.get((u32)i)).children = new Array();
+            }
+        for (i32 i = (i32)1; i < n; i = i + (i32)1)
+            {
+            RKObject* o = (RKObject* ?)all.get((u32)i);
+            ((RKObject* ?)all.get((u32)newParent[i])).addChild(o);
+            o.x = ax[i] - ax[newParent[i]];
+            o.y = ay[i] - ay[newParent[i]];
+            }
+        return changed;
+        }
+    }
+
+    // ---- forms and their layout variants (UXNB-V2) ------------------------------
+    // One FORM is one piece of UI as the application sees it -- its outlets and actions -- and each
+    // VARIANT is a whole classic tree laid out for one form factor (and, on a device, one orientation).
+    // The trees are separate designs bonded only by their controls' logical ids: a phone layout is
+    // not derived from the desktop one, and nothing here makes it so (section 1).
+    class RKVariant : Object
+    {
+    i32 klass;  // RKV_DESKTOP / _TABLET / _PHONE / _ANY
+    i32 orient; // RKV_ORIENT_*; NONE on the desktop
+    RKTree* tree;
+    void init(void)
+        {
+        klass = (i32)RKV_ANY;
+        orient = (i32)RKV_ORIENT_NONE;
+        tree = (RKTree*)0;
+        }
+    }
+
+    class RKForm : Object
+    {
+    i32 formId; // what the app loads it by: the first tree's index, so a v1 app's constant still works
+    u8* name;
+    Array<RKVariant>* variants;
+    void init(void)
+        {
+        formId = (i32)0;
+        name = (u8*)"";
+        variants = new Array();
+        }
+    i32 variantCount(void)
+        {
+        return (i32)variants.count();
+        }
+    RKVariant* variantAt(i32 i)
+        { return (RKVariant* ?)variants.get((u32)i);
+        }
+    RKVariant* find(i32 klass, i32 orient)
+        {
+        for (i32 i = (i32)0; i < self.variantCount(); i = i + (i32)1)
+            {
+            RKVariant* v = self.variantAt(i);
+            if (v.klass == klass && v.orient == orient)
+                {
+                return v;
+                }
+            }
+        return (RKVariant*)0;
+        }
+    RKVariant* variantFor(RKTree* t)
+        {
+        for (i32 i = (i32)0; i < self.variantCount(); i = i + (i32)1)
+            {
+            RKVariant* v = self.variantAt(i);
+            if (v.tree == t)
+                {
+                return v;
+                }
+            }
+        return (RKVariant*)0;
+        }
+    // The next unused logical id across every variant (ids are never reused within a form).
+    i32 nextLogicalId(void)
+        {
+        i32 hi = (i32)0;
+        for (i32 i = (i32)0; i < self.variantCount(); i = i + (i32)1)
+            {
+            Array<RKObject>* all = self.variantAt(i).tree.allObjects();
+            for (u32 k = (u32)0; k < all.count(); k = k + (u32)1)
+                {
+                i32 id = ((RKObject* ?)all.get(k)).logicalId;
+                if (id > hi)
+                    {
+                    hi = id;
+                    }
+                }
+            }
+        return hi + (i32)1;
+        }
     }
 
     // ---- resource --------------------------------------------------------------
@@ -453,6 +774,7 @@ class RKColor : Object
     Array<RKTree>* trees;
     Array<UXData>* freeStrings;  // rsrc_gaddr(R_STRING, i) — referenced by nothing
     Array<RKBitblk>* freeImages; // rsrc_gaddr(R_IMAGE, i) — likewise
+    Array<RKForm>* forms;        // the multi-variant forms; a tree in none is its own `any` form
     bool bigEndian;              // classic 68000 GEM fidelity
     bool packedCoords;           // char/pixel packing on write
     bool embedIcons;             // embed PAM vs reference an external path
@@ -463,6 +785,7 @@ class RKColor : Object
         trees = new Array();
         freeStrings = new Array();
         freeImages = new Array();
+        forms = new Array();
         bigEndian = true;
         packedCoords = true;
         embedIcons = true;
@@ -483,6 +806,127 @@ class RKColor : Object
             {
             trees.add(t);
             }
+        }
+
+    i32 indexOfTree(RKTree* t)
+        {
+        for (i32 i = (i32)0; i < self.treeCount(); i = i + (i32)1)
+            {
+            if (self.treeAt(i) == t)
+                {
+                return i;
+                }
+            }
+        return (i32)-1;
+        }
+    i32 formCount(void)
+        {
+        return (i32)forms.count();
+        }
+    RKForm* formAt(i32 i)
+        { return (RKForm* ?)forms.get((u32)i);
+        }
+    // The form a tree is a layout of, or 0 for a tree that stands alone.
+    RKForm* formOf(RKTree* t)
+        {
+        for (i32 i = (i32)0; i < self.formCount(); i = i + (i32)1)
+            {
+            RKForm* f = self.formAt(i);
+            if (f.variantFor(t) != (RKVariant*)0)
+                {
+                return f;
+                }
+            }
+        return (RKForm*)0;
+        }
+    RKForm* formById(i32 formId)
+        {
+        for (i32 i = (i32)0; i < self.formCount(); i = i + (i32)1)
+            {
+            RKForm* f = self.formAt(i);
+            if (f.formId == formId)
+                {
+                return f;
+                }
+            }
+        return (RKForm*)0;
+        }
+
+    // A new layout of `from`'s form, for `klass` at `orient`, seeded as a one-time copy of `from`.
+    // The first time a tree gains a sibling layout it becomes a form: it is its desktop layout, and
+    // every object in it gets a logical id, which the copy carries -- that is what lets one set of
+    // connections bind in both (UXNB-V2 sections 3 and 7).  Returns the new tree, or 0 if the form
+    // already has that layout (or the orientation is meaningless: the desktop has none).
+    RKTree* addVariant(RKTree* from, i32 klass, i32 orient)
+        {
+        if (from == (RKTree*)0 || from.root == (RKObject*)0 || self.indexOfTree(from) < (i32)0)
+            {
+            return (RKTree*)0;
+            }
+        if ((klass == (i32)RKV_DESKTOP || klass == (i32)RKV_ANY) && orient != (i32)RKV_ORIENT_NONE)
+            {
+            return (RKTree*)0;
+            }
+        RKForm* f = self.formOf(from);
+        if (f == (RKForm*)0)
+            {
+            f = new RKForm();
+            f.formId = self.indexOfTree(from);
+            f.name = from.name;
+            RKVariant* first = new RKVariant();
+            first.klass = (i32)RKV_DESKTOP;
+            first.tree = from;
+            f.variants.add(first);
+            forms.add(f);
+            }
+        if (f.find(klass, orient) != (RKVariant*)0)
+            {
+            return (RKTree*)0;
+            }
+        // identity for everything the seed has that lacks it
+        i32 next = f.nextLogicalId();
+        Array<RKObject>* all = from.allObjects();
+        for (u32 k = (u32)0; k < all.count(); k = k + (u32)1)
+            {
+            RKObject* o = (RKObject* ?)all.get(k);
+            if (o.logicalId == (i32)0)
+                {
+                o.logicalId = next;
+                next = next + (i32)1;
+                }
+            }
+        RKTree* t = new RKTree();
+        t.setNameJoined(f.name, RKResource.variantSuffix(klass, orient));
+        t.kind = from.kind;
+        t.root = from.root.deepCopy();
+        self.addTree(t);
+        RKVariant* v = new RKVariant();
+        v.klass = klass;
+        v.orient = orient;
+        v.tree = t;
+        f.variants.add(v);
+        return t;
+        }
+
+    // What a variant's tree is called after its form: MAIN_PHONE, MAIN_TABLET_L, ...  The names only
+    // have to be distinct, for source export; the loader finds variants through the chunk.
+    static u8* variantSuffix(i32 klass, i32 orient)
+        {
+        if (klass == (i32)RKV_PHONE)
+            {
+            return orient == (i32)RKV_ORIENT_PORTRAIT ? (u8*)"_PHONE_P"
+                 : (orient == (i32)RKV_ORIENT_LANDSCAPE ? (u8*)"_PHONE_L" : (u8*)"_PHONE");
+            }
+        if (klass == (i32)RKV_TABLET)
+            {
+            return orient == (i32)RKV_ORIENT_PORTRAIT ? (u8*)"_TABLET_P"
+                 : (orient == (i32)RKV_ORIENT_LANDSCAPE ? (u8*)"_TABLET_L" : (u8*)"_TABLET");
+            }
+        if (klass == (i32)RKV_DESKTOP)
+            {
+            return (u8*)"_DESKTOP";
+            }
+        return (u8*)"_ANY";
         }
 
     static RKResource* emptyDialog(void)

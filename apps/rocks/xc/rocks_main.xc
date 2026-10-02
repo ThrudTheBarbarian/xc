@@ -19,13 +19,7 @@
 #import "RKMainController.xc"
 #import "RKMainBuilder.xc"
 #import "RKRsc.xc"
-// Files.xc exists only on the host archs, so opening a document off disk is
-// guarded.  Everything else in Rocks builds everywhere; this is the one place
-// that cannot, until there is a platform file seam.
-#ifdef ARCH_arm64
-#import <Files.xc>
-#import <String.xc>
-#endif
+#import "UXFileIO.xc"
 
 #define RK_W 1000
 #define RK_H 640
@@ -56,26 +50,13 @@ class RocksApp : Object<UXApplicationDelegate>
         RKMainBuilder.buildMenu(app, controller);
 
         // Open a resource if one is to hand, so the canvas has something real
-        // in it — REAL widgets, built from the model by RKCanvas.
-#ifdef ARCH_arm64
+        // in it — REAL widgets, built from the model by RKCanvas.  UXFileIO
+        // reads on every native target, so this is no longer host-only.
         u8* sample = (u8*)"resources/desktop.rsc"; // a GEM desktop's resources, if run from one
-        String* sp = String.withCString(sample);
-        if (Files.exists(sp))
+        if (UXFileIO.read(sample) != (UXData*)0 && controller.openPath(sample))
             {
-            Data* fd = Files.readData(sp);
-            if (fd != (Data*)0)
-                {
-                RKResource* res = RKRsc.read(fd.bytes(), (i32)fd.length());
-                if (res != (RKResource*)0)
-                    {
-                    i32 n = controller.showResource(res, (i32)0);
-                    Stdio.printf("opened %s: %d trees, %d widgets on the canvas\n",
-                                 sample, res.treeCount(), n);
-                    controller.say((u8*)"Opened desktop.rsc");
-                    }
-                }
+            Stdio.printf("opened %s: %d trees\n", sample, controller.doc.treeCount());
             }
-#endif
 
         win.tree.finalise();
         win.displayAll();

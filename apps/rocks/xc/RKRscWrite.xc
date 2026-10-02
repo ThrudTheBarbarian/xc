@@ -357,7 +357,140 @@ class RKRscWrite : Object
             {
             warn = (u8*)"this resource holds payloads this build cannot write (icons / bit forms); they are not in the output";
             }
-        return UXData.fromBytes(out, total);
+        UXData* file = UXData.fromBytes(out, total);
+        if (r.formCount() > (i32)0)
+            {
+            file.appendData(self.nibChunk(r));
+            }
+        return file;
+        }
+
+    // ---- the UXNB v2 chunk (docs/UXNB-V2.md section 2) -------------------------
+    // Written only when the document has layout variants, so a plain resource stays byte-for-byte
+    // classic.  It sits at rsh_rssize, past everything a classic AES reads: there, every variant is
+    // just another tree.  Forms first -- each multi-variant form, then every tree in no form as a
+    // single-variant `any` form under its own index (in a v2 file only the form list finds a tree)
+    // -- then one map per variant tree, object index (pre-order, as the tree is written) to logical
+    // id.  No connections, class overrides or presentations yet: Rocks does not author them.
+    static void be16(UXData* d, i32 v)
+        {
+        d.appendByte((u8)((v >> (i32)8) & (i32)$FF));
+        d.appendByte((u8)(v & (i32)$FF));
+        }
+    static void be32(UXData* d, i32 v)
+        {
+        RKRscWrite.be16(d, (v >> (i32)16) & (i32)$FFFF);
+        RKRscWrite.be16(d, v & (i32)$FFFF);
+        }
+    UXData* nibChunk(RKResource* r)
+        {
+        // the string blob: offset 0 is "", then each form's name
+        UXData* blob = UXData.withCapacity((i32)64);
+        blob.appendByte((u8)0);
+        Array<RKFlatNode>* nameAt = new Array(); // per form, its name's blob offset
+        for (i32 f = (i32)0; f < r.formCount(); f = f + (i32)1)
+            {
+            RKFlatNode* m = new RKFlatNode();
+            m.next = blob.length();
+            nameAt.add(m);
+            u8* nm = r.formAt(f).name;
+            if (nm != (u8*)0)
+                {
+                blob.appendBytes(nm, RKRscWrite.slen(nm));
+                }
+            blob.appendByte((u8)0);
+            }
+        i32 nLoose = (i32)0;
+        for (i32 t = (i32)0; t < r.treeCount(); t = t + (i32)1)
+            {
+            if (r.formOf(r.treeAt(t)) == (RKForm*)0)
+                {
+                nLoose = nLoose + (i32)1;
+                }
+            }
+        // the maps: every variant tree with at least one identified control
+        i32 nMaps = (i32)0;
+        UXData* maps = UXData.withCapacity((i32)64);
+        for (i32 f = (i32)0; f < r.formCount(); f = f + (i32)1)
+            {
+            RKForm* fm = r.formAt(f);
+            for (i32 v = (i32)0; v < fm.variantCount(); v = v + (i32)1)
+                {
+                RKTree* tr = fm.variantAt(v).tree;
+                Array<RKObject>* all = tr.allObjects();
+                i32 ne = (i32)0;
+                for (u32 k = (u32)0; k < all.count(); k = k + (u32)1)
+                    {
+                    if (((RKObject* ?)all.get(k)).logicalId != (i32)0)
+                        {
+                        ne = ne + (i32)1;
+                        }
+                    }
+                if (ne == (i32)0)
+                    {
+                    continue;
+                    }
+                RKRscWrite.be16(maps, r.indexOfTree(tr));
+                RKRscWrite.be16(maps, ne);
+                for (u32 k = (u32)0; k < all.count(); k = k + (u32)1)
+                    {
+                    i32 id = ((RKObject* ?)all.get(k)).logicalId;
+                    if (id != (i32)0)
+                        {
+                        RKRscWrite.be16(maps, (i32)k);
+                        RKRscWrite.be16(maps, id);
+                        }
+                    }
+                nMaps = nMaps + (i32)1;
+                }
+            }
+
+        UXData* c = UXData.withCapacity((i32)256);
+        RKRscWrite.be32(c, (i32)$55584E42); // 'UXNB'
+        RKRscWrite.be16(c, (i32)2);         // version
+        RKRscWrite.be16(c, (i32)0);         // flags
+        RKRscWrite.be32(c, (i32)0);         // size, patched below
+        RKRscWrite.be16(c, (i32)0);         // nClasses
+        RKRscWrite.be16(c, (i32)0);         // nObjects
+        RKRscWrite.be16(c, (i32)0);         // nConns
+        RKRscWrite.be16(c, r.formCount() + nLoose);
+        RKRscWrite.be16(c, nMaps);
+        RKRscWrite.be16(c, (i32)0); // nPres
+        for (i32 f = (i32)0; f < r.formCount(); f = f + (i32)1)
+            {
+            RKForm* fm = r.formAt(f);
+            RKRscWrite.be16(c, fm.formId);
+            RKRscWrite.be32(c, ((RKFlatNode* ?)nameAt.get((u32)f)).next);
+            RKRscWrite.be16(c, fm.variantCount());
+            RKRscWrite.be16(c, (i32)0);
+            for (i32 v = (i32)0; v < fm.variantCount(); v = v + (i32)1)
+                {
+                RKVariant* va = fm.variantAt(v);
+                RKRscWrite.be16(c, (va.klass & (i32)$3FFF) | ((va.orient & (i32)3) << (i32)14));
+                RKRscWrite.be16(c, r.indexOfTree(va.tree));
+                }
+            }
+        for (i32 t = (i32)0; t < r.treeCount(); t = t + (i32)1)
+            {
+            if (r.formOf(r.treeAt(t)) == (RKForm*)0)
+                {
+                RKRscWrite.be16(c, t);
+                RKRscWrite.be32(c, (i32)0); // unnamed
+                RKRscWrite.be16(c, (i32)1);
+                RKRscWrite.be16(c, (i32)0);
+                RKRscWrite.be16(c, (i32)RKV_ANY);
+                RKRscWrite.be16(c, t);
+                }
+            }
+        c.appendData(maps);
+        c.appendData(blob);
+        i32 n = c.length();
+        u8* b = c.bytes();
+        b[8] = (u8)((n >> (i32)24) & (i32)$FF);
+        b[9] = (u8)((n >> (i32)16) & (i32)$FF);
+        b[10] = (u8)((n >> (i32)8) & (i32)$FF);
+        b[11] = (u8)(n & (i32)$FF);
+        return c;
         }
 
     i32 offOf(Array<RKFlatNode>* strOff, i32 idx)

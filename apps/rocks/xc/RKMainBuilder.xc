@@ -59,12 +59,14 @@ class RKMainBuilder : Object
 
         // ---- the toolbar ---------------------------------------------------
         UXToolbar* tb = new UXToolbar();
-        tb.addItem((u8*)"doc.new", (u8*)"New", 1, (i16)44);
-        tb.addItem((u8*)"trash", (u8*)"Delete", 2, (i16)44);
+        tb.addItem((u8*)"doc.new", (u8*)"New", (i32)RKTB_NEW, (i16)44);
+        tb.addItem((u8*)"trash", (u8*)"Delete", (i32)RKTB_DELETE, (i16)44);
         tb.addSeparator();
-        tb.addItem((u8*)"desktop", (u8*)"Desktop", 3, (i16)52);
-        tb.addItem((u8*)"tablet", (u8*)"Tablet", 4, (i16)52);
-        tb.addItem((u8*)"phone", (u8*)"Phone", 5, (i16)52);
+        tb.addItem((u8*)"desktop", (u8*)"Desktop", (i32)RKTB_DESKTOP, (i16)52);
+        tb.addItem((u8*)"tablet", (u8*)"Tablet", (i32)RKTB_TABLET, (i16)52);
+        tb.addItem((u8*)"phone", (u8*)"Phone", (i32)RKTB_PHONE, (i16)52);
+        tb.addItem((u8*)"rotate", (u8*)"Rotate", (i32)RKTB_ROTATE, (i16)52);
+        tb.addItem((u8*)"layout.new", (u8*)"New Layout", (i32)RKTB_NEWLAYOUT, (i16)72);
         content.addSubview(tb, UXGeom.make((i16)0, (i16)0, w, tbH));
 
         // ---- outline | (canvas | inspector) --------------------------------
@@ -134,6 +136,11 @@ class RKMainBuilder : Object
             {
             ok = false;
             }
+        if (!c.wireAction((u8*)"onToolbar", (UXControl*)tb))
+            {
+            ok = false;
+            }
+        c.toolbar = tb;
         return ok;
         }
 
@@ -154,6 +161,11 @@ class RKMainBuilder : Object
         UXMenu* file = bar.addMenu((u8*)"Rocks");
         file.addItem((u8*)"About Rocks", (callback void(UXMenuItem * s))0);
 
+        UXMenu* doc = bar.addMenu((u8*)"File");
+        doc.addItem((u8*)"Open...", &c.onOpenDocument);
+        doc.addItem((u8*)"Save", &c.onSaveDocument);
+        doc.addItem((u8*)"Save As...", &c.onSaveDocumentAs);
+
         UXMenu* view = bar.addMenu((u8*)"View");
         UXMenuItem* snap = view.addItem((u8*)"Snap to Guides", &c.onToggleSnap);
         UXMenuItem* guid = view.addItem((u8*)"Show Guides", &c.onToggleGuides);
@@ -161,7 +173,7 @@ class RKMainBuilder : Object
         guid.checked = c.guidesEnabled();
 
         c.menuBar = bar;
-        c.viewMenu = (i32)1;  // ordinals into the bar, not names: setChecked
+        c.viewMenu = (i32)2;  // ordinals into the bar, not names: setChecked
         c.snapItem = (i32)0;  // addresses items positionally, and these three
         c.guideItem = (i32)1; // numbers are the only place that mapping lives
         app.setMenuBar(bar);

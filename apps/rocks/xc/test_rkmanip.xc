@@ -52,6 +52,19 @@ bool isTopmost(UXView* p, UXView* v)
     return (UXView* ?)p.subviews.get((u16)((i32)p.subviews.count() - (i32)1)) == v;
     }
 
+// index of v among p's subviews, or -1
+i32 indexIn(UXView* p, UXView* v)
+    {
+    for (i32 i = (i32)0; i < (i32)p.subviews.count(); i = i + (i32)1)
+        {
+        if ((UXView* ?)p.subviews.get((u16)i) == v)
+            {
+            return i;
+            }
+        }
+    return (i32)-1;
+    }
+
 void main(void)
     {
     gFails = (i32)0;
@@ -168,6 +181,31 @@ void main(void)
     checkTrue("releasing refreshes the inspector", rx2 != (RKRow*)0);
     check("and it reads the object's new position",
           RKInspector.parseInt(rx2.field.text()), btn.x);
+
+    // ---- a drop into a box puts it IN the box --------------------------------
+    // Model and widgets both: the form's widgets are rebuilt so the button's widget is now a
+    // child of the box's, and the overlay is still on top of the new pane.
+    RKObject* grp = RKObject.make((i32)RKT_BOX, (i32)150, (i32)100, (i32)120, (i32)80);
+    root0.addChild(grp);
+    c.rebuildShownPane();
+    c.onPick(btn);
+    c.overlay.setSelection(btn);
+    c.overlay.drag.snapOn = false;
+    // press in the MIDDLE (near a corner of the selection is a resize), then carry the button's
+    // corner to (160,110), inside the box
+    c.overlay.drag.begin(root0, btn, btn.x + (i32)20, btn.y + (i32)10);
+    c.overlay.drag.step((i32)180, (i32)120);
+    c.onDragStep(btn);
+    c.overlay.drag.end();
+    c.onDragEnd(btn);
+    checkTrue("a button dropped onto a box is in it", t0.parentOf(btn) == grp);
+    check("at the box-relative place it was dropped", btn.x, (i32)10);
+    UXView* gw = c.canvasMap.viewFor(grp);
+    UXView* bw = c.canvasMap.viewFor(btn);
+    checkTrue("and its widget is now inside the box's widget", bw != (UXView*)0 && gw != (UXView*)0 && bw.superview == gw);
+    UXView* pane = (UXView* ?)c.panes.get((u16)0);
+    checkTrue("the rebuilt form's pane is under the overlay", indexIn(c.canvas, pane) >= (i32)0 && indexIn(c.canvas, pane) < indexIn(c.canvas, (UXView*)c.overlay));
+    checkTrue("the drag machine edits the same form", c.overlay.drag.root == root0);
 
     // ---- the toggles --------------------------------------------------------
     c.overlay.drag.snapOn = true; // the drag above turned it off

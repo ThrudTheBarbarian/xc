@@ -34,7 +34,7 @@ echo "== rocks-linux: emitting x86_64 asm =="
 echo "== rocks-linux: hybrid link on $host =="
 R=$(ssh "$host" 'mktemp -d')
 ssh "$host" "mkdir -p $R/src/xtc/support-src $R/support/generic/runtime"
-scp -q "$work/rocks.s" "$rtdir/rtgen-linux.s" "$ux/libUXGtk.c" "$host:$R/"
+scp -q "$work/rocks.s" "$rtdir/rtgen-linux.s" "$ux/libUXGtk.c" "$ux/ux_posix_fs.h" "$host:$R/"
 scp -q "$rtsrc/src/xtc/support-src/rt.c" "$host:$R/src/xtc/support-src/"
 scp -q "$rtsrc"/support/generic/runtime/*.c "$host:$R/support/generic/runtime/"
 ssh "$host" "cd $R && bash -lc '
