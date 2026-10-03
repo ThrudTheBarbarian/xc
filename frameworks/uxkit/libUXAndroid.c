@@ -855,6 +855,10 @@ int ux_and_window_create(int x, int y, int w, int h) {
     }
     int hh = gNextH++;
     jobject win = (*env)->NewObject(env, gFrameCls, gFrameInit, gActivity);
+    /* a window is white, as on iOS (and as UXKit's light palette assumes): left transparent, the
+     * theme's grey showed through every view that does not fill itself */
+    (*env)->CallVoidMethod(env, win, (*env)->GetMethodID(env, gViewCls, "setBackgroundColor", "(I)V"),
+                           (jint)0xFFFFFFFF);
     (*env)->CallVoidMethod(env, gRoot, gAddView, win, PX(w), PX(h));
     (*env)->CallVoidMethod(env, win, gSetTransX, (jfloat)PX(x));
     (*env)->CallVoidMethod(env, win, gSetTransY, (jfloat)PX(y));
