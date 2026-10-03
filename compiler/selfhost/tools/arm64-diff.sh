@@ -54,7 +54,12 @@ declare -a FAILED
 # SHARD_I/SHARD_N: run only every Nth file, so one harness can be split
 # across several parallel slots. all-diff uses it on the long ones; the
 # default 0/1 is every file, which is what a direct run gets.
-FILES=$(find tests support selfhost -name '*.xc' -not -path 'tests/fuzz/findings/*' | sort | awk -v i="${SHARD_I:-0}" -v n="${SHARD_N:-1}" 'NR % n == i')
+# Largest first, then dealt round-robin, so no shard collects several of the
+# biggest files (the compiler's own sources): dealt alphabetically, one x86-diff
+# shard ran 36 minutes while the rest finished in 25.
+FILES=$(find tests support selfhost -name '*.xc' -not -path 'tests/fuzz/findings/*' | xargs wc -c \
+        | grep -v ' total$' | sort -k1,1nr -k2,2 | awk '{print $2}' \
+        | awk -v i="${SHARD_I:-0}" -v n="${SHARD_N:-1}" 'NR % n == i')
 for f in $FILES; do
     [ -n "$PATTERN" ] && [[ "$f" != *"$PATTERN"* ]] && continue
     if ! "$BIN/xcc-fe" -m arm64 -H . "${RUN_INCS[@]}" "$f" -o "$WORK/a.ir" \
