@@ -15,6 +15,7 @@
 // retain/release/autorelease right so those don't happen.  Objects that CROSS to xtc as `void*`
 // (the menu tree) use __bridge / __bridge_retained to hand ARC ownership across the boundary.
 #import <Cocoa/Cocoa.h>
+#import <QuartzCore/QuartzCore.h> // CADisplayLink, for the turn
 #include <mach/mach.h>
 #include <sys/time.h>
 #include <stdio.h>
@@ -1362,6 +1363,70 @@ void ux_ak_quit_after_ms(int ms)
  * clears it.  ms 0 means "every turn the loop has", which for a timer is the display rate. */
 static void (*g_turn_fn)(void) = NULL;
 static NSTimer* g_turn_timer = nil;
+static id g_turn_link = nil; // a CADisplayLink (macOS 14 and later)
+
+/* The turn, paced by the DISPLAY.  An NSTimer fires when the run loop gets round to it, so the app's
+ * frames landed 10-19 ms apart on a 60 Hz screen; a display link fires once per refresh of the
+ * screen the window is on, and follows it to another screen at that one's rate.  It calls back on the
+ * main run loop, and is added in the COMMON modes, so a live resize, a scroller drag and a menu do not
+ * stop it (they run the loop in NSEventTrackingRunLoopMode).  It is used for a turn of 30 a second or
+ * more (ms 0..33, held to at most 1000/ms a second); a slower turn keeps the timer, as does headless
+ * running and a system before macOS 14. */
+@interface UXTurnTarget : NSObject
+@end
+@implementation UXTurnTarget
+- (void)tick:(id)link
+    {
+    (void)link;
+    if (g_turn_fn)
+        g_turn_fn();
+    }
+@end
+static UXTurnTarget* g_turn_target = nil;
+static int ak_turn_link(int ms)
+    {
+    if (ms > 33)
+        return 0;
+    NSView* v = nil;
+    for (int h = 1; h < UX_MAXW && !v; h++)
+        v = g_win[h] ? [g_win[h] contentView] : nil;
+    if (@available(macOS 14.0, *))
+        {
+        if (!g_turn_target)
+            g_turn_target = [UXTurnTarget new];
+        CADisplayLink* l = v ? [v displayLinkWithTarget:g_turn_target selector:@selector(tick:)]
+                             : [[NSScreen mainScreen] displayLinkWithTarget:g_turn_target selector:@selector(tick:)];
+        if (!l)
+            return 0;
+        if (ms > 0)
+            {
+            float most = 1000.0f / (float)ms;
+            CAFrameRateRange r = { 1.0f, most, most };
+            l.preferredFrameRateRange = r;
+            }
+        [l addToRunLoop:[NSRunLoop currentRunLoop] forMode:NSRunLoopCommonModes];
+        g_turn_link = l;
+        return 1;
+        }
+    return 0;
+    }
+/* Test: the refresh rate of the screen the first window is on (60 where it cannot be read). */
+int ux_ak_test_screen_hz(void)
+    {
+    NSScreen* sc = nil;
+    for (int h = 1; h < UX_MAXW && !sc; h++)
+        sc = g_win[h] ? [g_win[h] screen] : nil;
+    if (!sc)
+        sc = [NSScreen mainScreen];
+    if (@available(macOS 12.0, *))
+        return sc ? (int)sc.maximumFramesPerSecond : 60;
+    return 60;
+    }
+/* Test: 1 when the turn is paced by the display link, 0 by the timer, -1 when there is none. */
+int ux_ak_turn_paced_by_display(void)
+    {
+    return g_turn_link ? 1 : (g_turn_timer ? 0 : -1);
+    }
 
 void ux_ak_set_turn_hook(void* fn, int ms)
     {
@@ -1370,11 +1435,18 @@ void ux_ak_set_turn_hook(void* fn, int ms)
         [g_turn_timer invalidate];
         g_turn_timer = nil;
         }
+    if (g_turn_link != nil)
+        {
+        [(CADisplayLink*)g_turn_link invalidate];
+        g_turn_link = nil;
+        }
     g_turn_fn = (void (*)(void))fn;
     if (g_turn_fn == NULL || !g_interactive)
         {
         return;
         }
+    if (ak_turn_link(ms))
+        return;
     double secs = ms > 0 ? (double)ms / 1000.0 : (1.0 / 60.0);
     // In the COMMON modes, not just the default one: a live resize, a scroller drag and a menu
     // tracking all run the loop in NSEventTrackingRunLoopMode, and a default-mode timer does not fire

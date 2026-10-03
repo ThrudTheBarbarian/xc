@@ -95,9 +95,10 @@ this is where the answer comes from. The **return value says who calls `fn`**:
 - **true** — the driver armed its own source and calls `fn`. This is the
   loop-owning case: interactive AppKit blocks in `[NSApp run]` inside
   `nextEvent`, and iOS and Android never return from `runLoop`, so nothing
-  above the driver would get a turn at all. AppKit arms a repeating
-  `NSTimer` on the main queue; Android reposts a `Handler` message; iOS
-  schedules the same timer.
+  above the driver would get a turn at all. AppKit paces a turn of 30 a
+  second or more by the window's display link, once per refresh of its
+  screen (macOS 14 and later), and a slower one by a repeating `NSTimer`;
+  Android reposts a `Handler` message; iOS schedules a timer.
 - **false** — the driver has no turn of its own to offer, and the **neutral
   loop** paces itself instead: `ms` becomes the wait it hands `nextEvent`, so a
   turn comes round even when no input does, and `fn` runs after that turn's

@@ -169,6 +169,10 @@ flag).
 `fn` takes no arguments and must be a plain function, not a bound method: on the
 backends that own their loop the driver holds it as a C function pointer.
 
+On macOS a turn of 30 a second or more (`ms` from 0 to 33) is paced by the
+display: it comes once per refresh of the screen the window is on, steadily,
+at most every `ms`. A slower turn comes from a timer.
+
 **Who calls `fn` is the driver's answer**, and this method remembers it:
 `true` from [`setTurnHook`](/compiler/api/uxkit/uxviewdriver/#a-turn-comes-from-the-driver-or-from-the-loop)
 means the driver armed its own source and calls `fn` (interactive AppKit, iOS,

@@ -72,7 +72,7 @@ void ux_ak_run(void); // interactive: [NSApp run] owns the loop
 i32 ux_ak_quit(void); // nonzero once the close box was hit
 void ux_ak_stop(void);
 void ux_ak_set_dispatch(pointer fn);     // register the toolkit event forwarder
-void ux_ak_set_turn_hook(pointer fn, i32 ms); // the frame clock: interactive AppKit answers with a timer
+void ux_ak_set_turn_hook(pointer fn, i32 ms); // the frame clock: the display link, or a timer for a slow tick
 void ux_ak_set_control_fire(pointer fn); // register the control-click -> action forwarder
 pointer ux_ak_menu_new(void);
 pointer ux_ak_menu_add_title(pointer bar, u8* title);
@@ -2291,8 +2291,9 @@ class UXAppKitDriver : Object<UXViewDriver>
         ux_ak_gl_vsync(interval);
         }
     // The frame clock.  INTERACTIVE AppKit owns the loop -- nextEvent blocks inside [NSApp run]
-    // -- so the driver provides the turns itself and answers true; a repeating main-queue timer
-    // (the shim's) fires fn between run-loop passes.  HEADLESS, nextEvent is the neutral loop's
+    // -- so the driver provides the turns itself and answers true: the shim paces fn by the window's
+    // display link (a turn of 30 a second or more) or a timer (a slower one), in the common run-loop
+    // modes.  HEADLESS, nextEvent is the neutral loop's
     // and it takes the wait, so the driver hands the work back and answers false.
     bool setTurnHook(turnHook_t* fn, i32 ms)
         {
