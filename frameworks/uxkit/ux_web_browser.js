@@ -15,9 +15,21 @@
   // on the OffscreenCanvas the loader hands it (globalThis.xccCanvas) and asks the page
   // (ux_web_page.js, through xccPost) for what only the page can do -- the title, the favicon.
   const hasDOM = typeof document !== 'undefined';
-  const canvas = globalThis.xccCanvas ||
+  // In the WORKER the canvas the loader transferred commits its frames only when the worker returns
+  // to its event loop, and the run loop never does (it blocks on the ring): nothing would ever reach
+  // the screen.  So the worker draws on a canvas of its own and, at each present, hands the page a
+  // bitmap of it (ux_web_page.js paints it over the page's canvas).
+  const pageCanvas = globalThis.xccCanvas ||
                  (hasDOM ? (document.getElementById('ux-canvas') || document.querySelector('canvas')) : null);
+  const canvas = (!hasDOM && pageCanvas && typeof OffscreenCanvas !== 'undefined')
+                 ? new OffscreenCanvas(pageCanvas.width, pageCanvas.height) : pageCanvas;
   const ctx = canvas.getContext('2d');
+  const presentFrame = () => {
+    if (hasDOM || !globalThis.xccPost || canvas === pageCanvas) return;
+    const bmp = canvas.transferToImageBitmap(); // synchronous -- but it empties the canvas,
+    ctx.drawImage(bmp, 0, 0);                   // so put the frame straight back for the next draw
+    globalThis.xccPost({ uxFrame: bmp });
+  };
   // a scratch canvas: a DOM one on a page, an OffscreenCanvas in a worker
   const mkCanvas = (w, h) => {
     if (hasDOM) { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; }
@@ -98,6 +110,15 @@
     while (m[e]) e++;
     return new TextDecoder('latin1').decode(m.subarray(p >>> 0, e));
   };
+  // TEXT is UTF-8: what is drawn, measured and shown as a title.  (cstr above is byte-exact latin1,
+  // which is right for the settings store's round trip and wrong for anything a person reads -- an
+  // em dash drew as three characters.)
+  const utf8 = new TextDecoder('utf-8');
+  const ustr = (p) => {
+    const m = U8(); let e = p >>> 0;
+    while (m[e]) e++;
+    return utf8.decode(m.slice(p >>> 0, e));
+  };
   const wi32 = (p, v) => { I32()[(p >>> 0) >> 2] = v; };
   const rgb = (r, g, b) => `rgb(${r},${g},${b})`;
   // alpha is the straight 0..255 value; a == 255 renders as the opaque rgb() form.
@@ -118,13 +139,13 @@
     ux_win_open: (h, x, y, w, hh) => { const s = wins.get(h); if (s) { s.x = x; s.y = y; s.w = w; s.h = hh; front = h; } },
     ux_win_destroy: (h) => { wins.delete(h); },
     ux_win_set_title: (h, sp) => {
-      const t = cstr(sp);
+      const t = ustr(sp);
       if (hasDOM) document.title = t;
       else if (globalThis.xccPost) globalThis.xccPost({ uxTitle: t });
     },
     ux_win_order_front: (h) => { front = h; },
     ux_win_geometry: (h, pw, ph) => { const s = wins.get(h); wi32(pw, s ? s.w : 0); wi32(ph, s ? s.h : 0); },
-    ux_present: (h) => {},                       // canvas paints are immediate
+    ux_present: (h) => { presentFrame(); },      // a page's canvas paints are immediate; a worker's are posted
 
     ux_gfx_target: (h) => {
       target = h;
@@ -319,13 +340,13 @@
       ctx.fillStyle = rgba(r, g, b, a);
       ctx.font = font(cstr(famp), size, bold, italic);
       ctx.textBaseline = 'top';
-      ctx.fillText(cstr(sp), ox() + x, oy() + y);
+      ctx.fillText(ustr(sp), ox() + x, oy() + y);
     },
     ux_draw_text_weight: (sp, x, y, famp, size, weight, italic, r, g, b, a) => {
       ctx.fillStyle = rgba(r, g, b, a);
       ctx.font = fontW(cstr(famp), size, weight, italic);
       ctx.textBaseline = 'top';
-      ctx.fillText(cstr(sp), ox() + x, oy() + y);
+      ctx.fillText(ustr(sp), ox() + x, oy() + y);
     },
     ux_draw_theme: (slicep, x, y, w, h) => {
       if (!drawSlice(cstr(slicep), ox() + x, oy() + y, w, h)) {
@@ -338,11 +359,11 @@
     },
     ux_text_width: (sp, famp, size, bold, italic) => {
       ctx.font = font(cstr(famp), size, bold, italic);
-      return Math.round(ctx.measureText(cstr(sp)).width);
+      return Math.round(ctx.measureText(ustr(sp)).width);
     },
     ux_text_width_weight: (sp, famp, size, weight, italic) => {
       ctx.font = fontW(cstr(famp), size, weight, italic);
-      return Math.round(ctx.measureText(cstr(sp)).width);
+      return Math.round(ctx.measureText(ustr(sp)).width);
     },
     // The face's ascent, for a caller converting a baseline into the seam's top-of-line y.  The
     // font's own box, NOT actualBoundingBoxAscent: that one follows the string (a line of digits is

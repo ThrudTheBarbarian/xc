@@ -243,6 +243,33 @@
     if (d) d.focus();
   };
 
+  // THE FRAME (the worker run loop): the worker draws on a canvas of its own and posts a bitmap of
+  // it at each present, because a canvas transferred to a blocked worker never commits a frame.  It
+  // is painted on a display canvas laid exactly over the page's canvas; that one takes no pointer
+  // events, so clicks and keys still reach the canvas underneath, where the loader listens.
+  let display = null;
+  const frame = (bmp) => {
+    const under = document.getElementById('ux-canvas') || document.getElementById('xcc-canvas') ||
+                  document.querySelector('canvas:not(.ux-display)');
+    if (!display) {
+      display = document.createElement('canvas');
+      display.className = 'ux-display';
+      display.style.cssText = 'position:absolute; pointer-events:none; z-index:1;';
+      document.body.appendChild(display);
+    }
+    if (under) {
+      const r = under.getBoundingClientRect();
+      display.style.left = (r.left + window.scrollX) + 'px';
+      display.style.top = (r.top + window.scrollY) + 'px';
+      display.style.width = r.width + 'px';
+      display.style.height = r.height + 'px';
+    }
+    if (display.width !== bmp.width || display.height !== bmp.height) { display.width = bmp.width; display.height = bmp.height; }
+    display.getContext('2d').drawImage(bmp, 0, 0);
+    if (bmp.close) bmp.close();
+    globalThis.uxFrames = (globalThis.uxFrames || 0) + 1; // for a gate: frames really painted
+  };
+
   // THE TEXT FIELD (UXTextField, in the worker run loop): while a field has the keyboard, a REAL
   // <input> sits over it, so the browser's own editing works -- IME composition, selection, the
   // clipboard, a phone's keyboard -- none of which a canvas can offer.  Every change goes back as
@@ -312,7 +339,8 @@
   // The worker's posts (the loader forwards them here).
   const prev = globalThis.xccOnMessage;
   globalThis.xccOnMessage = (p) => {
-    if (p && p.uxField !== undefined) fieldShow(p.uxField);
+    if (p && p.uxFrame !== undefined) frame(p.uxFrame);
+    else if (p && p.uxField !== undefined) fieldShow(p.uxField);
     else if (p && p.uxFieldEnd !== undefined) fieldHide(p.uxFieldEnd);
     else if (p && p.uxTitle !== undefined) { document.title = p.uxTitle; }
     else if (p && p.uxAppIcon !== undefined) {   // the worker's app icon, as the page's favicon

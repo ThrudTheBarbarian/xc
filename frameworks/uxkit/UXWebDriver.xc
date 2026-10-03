@@ -1425,6 +1425,10 @@ class UXWebDriver : Object<UXViewDriver>
         {
         i32 r[8];
         ev.init();
+        // Everything the last events changed is drawn now, before the wait: going idle is the
+        // natural end of a frame, and in a real browser nothing else would ever present it (the
+        // page sends no ticks of its own).  Clean windows cost a test each.
+        self.webPresentAll();
         // A deadline waits for the deadline; anything else BLOCKS until an event arrives.  The
         // ring primitive reads 0 as "no wait at all", so a plain 0 here would spin the worker at
         // 100% instead of parking it — which is the one thing the worker exists to avoid.  -1 is
