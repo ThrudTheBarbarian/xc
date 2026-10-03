@@ -16,7 +16,7 @@ _root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null)
 set -u
 cd "$(dirname "$0")/../.." || exit 1
 SYSROOT=${XTC_ARM9_SYSROOT:-}
-KERNEL=$SYSROOT/freertos-hosttest.elf
+KERNEL=${XTC_ARM9_KERNEL:-$SYSROOT/freertos-hosttest.elf}   # override when the kernel lives elsewhere
 W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
 
 command -v qemu-system-arm >/dev/null || { echo "!!! qemu-system-arm absent — nothing was run"; exit 1; }

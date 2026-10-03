@@ -1,6 +1,6 @@
 #import "Runtime.xc"
 
-i32 write(i32 fd, u8* buf, u32 n);
+// write() is the platform's own (Stdio.xc: libc's i32 write(i32, u8*, i32)).
 
 class Counter
     {
@@ -20,5 +20,5 @@ class Counter
     u8* digits = (u8*)"0123456789";
     u8* out = (u8*)"classes and ARC, linked pure: N\n";
     out[30] = digits[c.n];
-    write((i32)1, out, (u32)32);
+    write((i32)1, out, (i32)32);
     }

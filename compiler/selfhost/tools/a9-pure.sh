@@ -25,16 +25,11 @@ OUT=${2:-${SRC%.xc}.so}
 W=$(mktemp -d)
 trap 'rm -rf "$W"' EXIT
 
-"${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -H . -o "$W/xtfe"  selfhost/tools/xtfe.xc -I selfhost/driver \
-    -I support/generic/lib -I support/$XC_HOST_ARCH/lib -I support/xt6502/lib \
-    -I selfhost/lexer -I selfhost/preproc -I selfhost/parser -I selfhost/sema \
-    -I selfhost/ir >/dev/null
-"${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -H . -o "$W/xtcg9" selfhost/tools/xtcg9.xc \
-    -I selfhost/ir -I selfhost/codegen >/dev/null
-"${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -H . -o "$W/xtas9" selfhost/tools/xtas9.xc \
-    -I selfhost/asm >/dev/null
-
-"$W/xtfe"  -m arm9 -H . -I support/arm9/lib -I support/generic/lib "$SRC" -o "$W/a.ir"
-"$W/xtcg9" "$W/a.ir" -o "$W/a.s"
-"$W/xtas9" "$W/a.s" --shared -o "$OUT"
+# Through the xc compiler's own driver: front end, optimiser, back end,
+# assembler and linker, all from selfhost/, with the arm9 runtime linked in
+# (bug 574). This used to chain xtfe -> xtcg9 -> xtas9 by hand with no
+# runtime and no dead-function pass; since 0.63 the class-name table keeps
+# vtables alive, so every program references the runtime (`_xtc_dealloc`) and
+# a runtime-free one-object link cannot load.
+"$BIN/xcc-xc" -q -A arm9 -H . -o "$OUT" "$SRC"
 echo "$OUT — front end, back end, assembler and linker all from selfhost/"

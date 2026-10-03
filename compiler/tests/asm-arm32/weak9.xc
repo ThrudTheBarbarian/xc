@@ -16,7 +16,7 @@
 // and the point here is the runtime, not the start-up path.
 #import "Runtime.xc"
 
-i32 write(i32 fd, u8* buf, u32 n);
+// write() is the platform's own (Stdio.xc: libc's i32 write(i32, u8*, i32)).
 
 u32 deallocRan;
 
@@ -53,5 +53,5 @@ weak:
         line[29] = (u8)'L';
         line[30] = (u8)'L';
         }
-    write((i32)1, line, (u32)32);
+    write((i32)1, line, (i32)32);
     }
