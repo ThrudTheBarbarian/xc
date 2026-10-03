@@ -40,9 +40,8 @@ none does. Two captures of that panel follow:
   <TabItem label="Windows">
     <img src="/uxkit/filechooser-windows.png" alt="The toolkit file panel on Windows" width="300" />
 
-    The same panel through GDI (Wine's comdlg32 dialog hangs on macOS, so
-    the driver prefers the toolkit panel there; real Windows can switch to
-    the native `GetOpenFileName`).
+    The same panel through GDI, as `runToolkit` draws it. `UXOpenPanel`
+    on Windows runs the system's `GetOpenFileName` instead.
   </TabItem>
   <TabItem label="macOS">
     A native `NSOpenPanel`. It is an out-of-process system service, so it

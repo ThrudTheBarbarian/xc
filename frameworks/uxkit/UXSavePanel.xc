@@ -1,5 +1,5 @@
 // UXSavePanel.xc — run a file-save dialog and return the path to write (NSSavePanel / GetSaveFileName in
-// shape).  The sibling of UXOpenPanel: the platform's own dialog where it has one (AppKit), otherwise
+// shape).  The sibling of UXOpenPanel: the platform's own dialog where it has one (AppKit, GTK, Win32), otherwise
 // UXKit's drawn file panel in SAVE mode -- a name field, a Save button, folders to navigate, and an
 // existing file confirmed before it is replaced.
 #import "UXViewDriver.xc"

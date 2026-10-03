@@ -82,8 +82,9 @@ struct W32Node
     // ── driver state ────────────────────────────────────────────────────────────
     i32 gW32Native;     // §10 native-object counter (live windows)
 pointer gW32Hwnds[64];  // i32 handle -> HWND (handles start at 1)
-// Tests only: a hook for the common dialogs (ChooseColor, ChooseFont).  It sees the real dialog's
-// messages first, so a gate can answer the dialog as a user would; 0 in an app.
+// Tests only: a hook for the common dialogs (ChooseColor, ChooseFont, GetOpenFileName,
+// GetSaveFileName).  It sees the real dialog's messages first, so a gate can answer the dialog as a
+// user would; 0 in an app.
 pointer gW32TestDialogHook;
 // The parts a Windows title is composed of (UXKit's title, subtitle and modified flag), by handle.
 u8* gW32Title[64];
@@ -1905,14 +1906,12 @@ class UXWin32Driver : Object<UXViewDriver>
         BringWindowToTop(gW32Hwnds[handle]);
         SetForegroundWindow(gW32Hwnds[handle]);
         }
-    // Wine's comdlg32 file dialog hangs on macOS (it engages but never shows), so use the toolkit panel
-    // there — it draws through GDI and works everywhere.  fileOpen (the native GetOpenFileName) is kept
-    // below for real Windows; flip this to `true` to prefer it.
+    // The common file dialogs, GetOpenFileName and GetSaveFileName.  (They were once thought to hang
+    // under Wine; as with ChooseColor, what hung was a test with nothing to answer the modal dialog.)
     bool hasNativeFileOpen(void)
         {
-        return false;
+        return true;
         }
-    // no native save dialog here: UXSavePanel draws UXKit's own
     // no platform navigation stack here: UXNavigationController draws its own bar
     bool hasNativeNavigation(void)
         {
@@ -1930,13 +1929,12 @@ class UXWin32Driver : Object<UXViewDriver>
         }
     bool hasNativeFileSave(void)
         {
-        return false;
+        return true;
         }
     i32 fileSave(u8* prompt, u8* startDir, u8* defaultName, u8* out, i32 outCap)
         {
-        return (i32)0;
+        return self.w32FileDialog(true, prompt, startDir, defaultName, out, outCap);
         }
-    // toolkit wheel/sliders (native ChooseColor hangs under Wine, like the file dialog)
     // The common colour dialog, ChooseColor, opened full (the custom-colour half with its R/G/B
     // fields) and seeded with the current colour.  (It was once thought to hang under Wine; what
     // hung was a test with nothing to answer the modal dialog.  A gate answers it through the hook.)
@@ -2287,6 +2285,12 @@ class UXWin32Driver : Object<UXViewDriver>
         }
     i32 fileOpen(u8* prompt, u8* startDir, u8* out, i32 outCap)
         {
+        return self.w32FileDialog(false, prompt, startDir, (u8*)0, out, outCap);
+        }
+    // Both file dialogs.  save asks about replacing an existing file itself (OFN_OVERWRITEPROMPT), and
+    // starts with defaultName in the name box.  The chosen path is written into out.
+    i32 w32FileDialog(bool save, u8* prompt, u8* startDir, u8* defaultName, u8* out, i32 outCap)
+        {
         // A non-NULL, double-NUL-terminated filter ("All Files" / *.*): a NULL filter faults some
         // comdlg32 builds, and the modern dialog needs the thread in a COM apartment.
         u8 filt[16];
@@ -2306,7 +2310,13 @@ class UXWin32Driver : Object<UXViewDriver>
             {
             z[i] = (u8)0;
             }
-        out[0] = (u8)0;
+        i32 n = (i32)0;
+        while (save && defaultName != (u8*)0 && defaultName[n] != (u8)0 && n < outCap - (i32)1)
+            {
+            out[n] = defaultName[n];
+            n = n + (i32)1;
+            }
+        out[n] = (u8)0;
         ofn.lStructSize = (u32)152;
         ofn.hwndOwner = gW32Hwnds[(i32)1];
         ofn.lpstrFilter = (u8*)&filt[0];
@@ -2314,11 +2324,22 @@ class UXWin32Driver : Object<UXViewDriver>
         ofn.nMaxFile = (u32)outCap;
         ofn.lpstrInitialDir = startDir;
         ofn.lpstrTitle = prompt;
-        ofn.Flags = (u32)OFN_FILEMUSTEXIST | (u32)OFN_PATHMUSTEXIST | (u32)OFN_HIDEREADONLY;
+        ofn.Flags = (u32)OFN_PATHMUSTEXIST | (u32)OFN_HIDEREADONLY | (u32)OFN_NOCHANGEDIR | (u32)OFN_EXPLORER;
+        ofn.Flags = ofn.Flags | (save ? (u32)OFN_OVERWRITEPROMPT : (u32)OFN_FILEMUSTEXIST);
+        if (gW32TestDialogHook != (pointer)0)
+            {
+            ofn.Flags = ofn.Flags | (u32)OFN_ENABLEHOOK;
+            ofn.lpfnHook = gW32TestDialogHook;
+            }
         OleInitialize((pointer)0);
-        i32 ok = GetOpenFileNameA((pointer)&ofn);
+        i32 ok = save ? GetSaveFileNameA((pointer)&ofn) : GetOpenFileNameA((pointer)&ofn);
         OleUninitialize();
-        return ok != (i32)0 ? (i32)1 : (i32)0;
+        if (ok == (i32)0)
+            {
+            out[0] = (u8)0;
+            return (i32)0;
+            }
+        return (i32)1;
         }
     i32 listDir(u8* path, u8* out, i32 outCap)
         {

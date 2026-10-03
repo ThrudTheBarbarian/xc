@@ -11,7 +11,7 @@ if (path != (u8*)0) { openDocument(path); }
 ```
 
 Where the backend has a native dialog, the driver runs it: AppKit's
-`NSOpenPanel`, GTK's `GtkFileDialog`, and on the phones the system's document
+`NSOpenPanel`, GTK's `GtkFileDialog`, Win32's `GetOpenFileName`, and on the phones the system's document
 picker, `UIDocumentPickerViewController` on iOS and `ACTION_OPEN_DOCUMENT` on
 Android. Those reach every file provider the device has. The picked document
 is copied into the app's own space, so the path that comes back reads with
@@ -20,15 +20,11 @@ loop, the page shows a small dialog whose Choose File… button opens the
 browser's own file picker; a browser opens the picker only from a click,
 which is why there is a dialog first. The picked file is copied into the
 web's file store, and the path that comes back reads with
-[`UXFileIO.read`](/compiler/api/uxkit/uxfileio/). Everywhere else (GEM,
-Win32) the call falls back to [`runToolkit`](#runtoolkit),
+[`UXFileIO.read`](/compiler/api/uxkit/uxfileio/). On GEM the call falls back to [`runToolkit`](#runtoolkit),
 which runs the toolkit-drawn
 [`UXFilePanel`](/compiler/api/uxkit/uxfilepanel/).
 Application code sees no difference: a prompt and a start directory go in,
 and a chosen path comes out.
-
-Win32 keeps a `GetOpenFileName` implementation but does not use it: the
-common dialog hangs under Wine, and the drawn panel works on both.
 
 To ask where to **save**, use [`UXSavePanel`](/compiler/api/uxkit/uxsavepanel/).
 To read the chosen file, use [`UXFileIO.read`](/compiler/api/uxkit/uxfileio/).

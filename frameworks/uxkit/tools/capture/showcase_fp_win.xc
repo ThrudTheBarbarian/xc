@@ -1,6 +1,6 @@
-// showcase_fp_win.xc — the Windows file-chooser portrait.  Wine's comdlg32
-// dialog hangs on macOS, so the driver runs the TOOLKIT panel (UXFilePanel,
-// GDI-drawn) — the honest thing to photograph.  The panel is modal, so a
+// showcase_fp_win.xc — the Windows file-chooser portrait: the TOOLKIT panel
+// (UXFilePanel, GDI-drawn), run directly; UXOpenPanel itself runs the native
+// GetOpenFileName on Windows.  The panel is modal, so a
 // thread timer (TIMERPROC, dispatched by the panel's own message pump) fires
 // mid-modal: dump the panel window (chrome included) and exit — the capture
 // needs no clean return.

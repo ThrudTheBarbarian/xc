@@ -310,6 +310,7 @@ struct OPENFILENAMEA
     u32 dwReserved;
     u32 FlagsEx;
     } i32 GetOpenFileNameA(pointer ofn); // nonzero if the user picked a file
+i32 GetSaveFileNameA(pointer ofn);       // the same struct; nonzero if the user named a file
 // The common colour and font dialogs (comdlg32), hand-padded to the Win64 C layout: CHOOSECOLORA is
 // 72 bytes, CHOOSEFONTA 104, LOGFONTA 60.  A hook (lpfnHook, with CC_/CF_ENABLEHOOK) sees the
 // dialog's messages first; the gates use one to answer the real dialog as a user would.
@@ -374,7 +375,11 @@ struct CHOOSEFONTA
 #define CF_ENABLEHOOK $0008
 #define CF_INITTOLOGFONTSTRUCT $0040
 #define CF_NOVERTFONTS $01000000
+#define OFN_OVERWRITEPROMPT $0002
 #define OFN_HIDEREADONLY $0004
+#define OFN_NOCHANGEDIR $0008
+#define OFN_ENABLEHOOK $0020
+#define OFN_EXPLORER $00080000
 #define OFN_PATHMUSTEXIST $0800
 #define OFN_FILEMUSTEXIST $1000
 // The shell file dialog needs the calling thread in a COM apartment, or it faults on some hosts.
@@ -382,7 +387,7 @@ struct CHOOSEFONTA
 i32 OleInitialize(pointer reserved);
 void OleUninitialize(void);
 
-// ---- directory listing (kernel32) — for the toolkit file panel under Wine, where the native dialog hangs
+// ---- directory listing (kernel32) — for the toolkit file panel
 struct WIN32_FIND_DATAA
     {
     u32 dwFileAttributes;
