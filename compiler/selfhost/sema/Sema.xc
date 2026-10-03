@@ -255,6 +255,48 @@ class Sema
         _errorAt(e, n);
         }
 
+    // The declaration-order reading of an overload clash (bug 557), or 0.
+    String* declOrderClash(Node* ext, Node* fn)
+        {
+        Array* ep = new Array();
+        Array* fp = new Array();
+        for (u32 k = (u32)0; k < ext.kidCount(); k = k + (u32)1)
+            if (ext.kid(k).kind() == (u16)nkParam)
+                ep.add((Object*)ext.kid(k));
+        for (u32 k = (u32)0; k < fn.kidCount(); k = k + (u32)1)
+            if (fn.kid(k).kind() == (u16)nkParam)
+                fp.add((Object*)fn.kid(k));
+        if (ep.count() != fp.count())
+            return (String*)0;
+        for (u32 k = (u32)0; k < ep.count(); k = k + (u32)1)
+            {
+            String* et = ((Node*)ep.get(k)).op();
+            String* ft = ((Node*)fp.get(k)).op();
+            if (et == 0 || ft == 0 || !et.equals(String.withCString("void*")) || !ft.hasSuffix(String.withCString("*")) || ft.equals(et))
+                continue;
+            String* tn = ft.substringBytes((u32)0, ft.byteLength() - (u32)1);
+            if (_structs.get((Hashable*)tn) == 0 && _classes.get((Hashable*)tn) == 0)
+                continue;
+            String* m = String.withCString("'");
+            m.append(fn.name());
+            m.appendCString("' is declared at ");
+            m.append(ext.file() != 0 ? ext.file().lastPathComponent() : String.withCString("?"));
+            m.appendByte((u8)':');
+            m.append(String.withU32(ext.line()));
+            m.appendCString(" taking 'void*' where this takes '");
+            m.append(ft);
+            m.appendCString("': at that line '");
+            m.append(tn);
+            m.appendCString("' was not declared yet, so it was read as an opaque pointer. Declare '");
+            m.append(tn);
+            m.appendCString("' above the first declaration of '");
+            m.append(fn.name());
+            m.appendCString("'");
+            return m;
+            }
+        return (String*)0;
+        }
+
     void _error(String* msg)
         {
         String* out = String.withCString("error: ");
@@ -6555,6 +6597,16 @@ class Sema
                             // was declared, with a way out (c2xc 08). A bare
                             // "cannot overload an external C function" named
                             // neither and pointed nowhere.
+                            // Bug 557: a forward declaration ABOVE its parameter's
+                            // type read `T*` as an opaque `void*`, so it and the
+                            // definition below the type look like two signatures.
+                            // Say so, instead of blaming a stray C symbol.
+                            String* order = declOrderClash(ext, fn);
+                            if (order != (String*)0)
+                                {
+                                _errorAt(order, fn);
+                                continue;
+                                }
                             String* em = String.withCString("Cannot overload '");
                             em.append(fn.name());
                             em.appendCString("' \u2014 it is an external C function (declared without a body at ");

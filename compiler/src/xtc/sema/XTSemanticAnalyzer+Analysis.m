@@ -366,6 +366,35 @@
                         [survivors addObject:fn];
                         continue;
                         }
+                    // Bug 557: a forward declaration ABOVE its parameter's type read
+                    // `T*` as an opaque `void*`, so it and the definition below the
+                    // type look like two signatures. Say so, instead of blaming a
+                    // stray C symbol.
+                    NSString* orderMsg = nil;
+                    if (ext.parameters.count == fn.parameters.count)
+                        {
+                        for (NSUInteger pk = 0; pk < ext.parameters.count && !orderMsg; pk++)
+                            {
+                            NSString* et = ((XTParamNode*)ext.parameters[pk]).paramType.displayName;
+                            NSString* ft = ((XTParamNode*)fn.parameters[pk]).paramType.displayName;
+                            if (![et isEqualToString:@"void*"] || ![ft hasSuffix:@"*"] || [ft isEqualToString:et])
+                                continue;
+                            NSString* tn = [ft substringToIndex:ft.length - 1];
+                            if (![self.typeTable typeForName:tn])
+                                continue;
+                            orderMsg = [NSString stringWithFormat:
+                                                     @"'%@' is declared at %@:%lu taking 'void*' where this takes '%@': "
+                                                     @"at that line '%@' was not declared yet, so it was read as an opaque "
+                                                     @"pointer. Declare '%@' above the first declaration of '%@'",
+                                                     fn.funcName, ext.location.filename.lastPathComponent ?: @"?",
+                                                     (unsigned long)ext.location.line, ft, tn, tn, fn.funcName];
+                            }
+                        }
+                    if (orderMsg)
+                        {
+                        [self.diagnostics emitError:orderMsg at:fn.location];
+                        continue;
+                        }
                     [self.diagnostics emitError:[NSString stringWithFormat:
                                                               @"Cannot overload '%@' — it is an external C function "
                                                               @"(declared without a body at %@:%lu), and a C symbol has "
