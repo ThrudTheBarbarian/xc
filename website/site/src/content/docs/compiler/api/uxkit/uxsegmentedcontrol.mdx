@@ -12,8 +12,9 @@ also serves as the tab picker for a
 pure geometry, unit-tested without a window. Drawing and the click
 conversion go through the [`UXControl`](/compiler/api/uxkit/uxcontrol/) seam.
 Where the platform has native segment art (macOS `NSSegmentedControl`,
-iOS `UISegmentedControl`, GTK's linked toggle group) the driver realizes
-it. Elsewhere the control draws **one** connected bezel with hairline
+iOS `UISegmentedControl`, GTK's linked toggle group, Windows' toolbar
+buttons) the driver realizes it. Android has none, so its driver composes
+the control from native `ToggleButton`s. Elsewhere the control draws **one** connected bezel with hairline
 dividers, because a segmented control is a single control rather than a row of
 separate buttons.
 
@@ -157,7 +158,7 @@ same pure geometry.
   <TabItem label="Android">
     <img src="/uxkit/segmented-android.png" alt="UXSegmentedControl on Android" width="220" />
 
-    App-drawn. Android's material segment idiom is a library widget, not a platform one, so the connected-bezel treatment draws through the same seam as GEM's.
+    A row of native `ToggleButton`s. Android has no platform segmented control, so the driver composes one from the platform's toggle buttons, as it composes the stepper from two `Button`s. A tap selects that segment, or toggles it in a multiple-selection control, and lands through `applyNativeSelection`.
   </TabItem>
   <TabItem label="macOS">
     <img src="/uxkit/segmented-macos.png" alt="Segmentedcontrol on macOS" width="220" />

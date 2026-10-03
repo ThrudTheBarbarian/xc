@@ -26,6 +26,7 @@
 #import "UXControl.xc"
 #import "UXSlider.xc"      // native SeekBar overlay reads/writes this widget's value
 #import "UXStepper.xc"     // composed -/+ Button pair (Android has no platform stepper)
+#import "UXSegmentedControl.xc" // composed of native ToggleButtons (nor a segmented control)
 #import "UXPopUpButton.xc" // native Spinner overlay
 #import "UXProgressBar.xc" // native horizontal ProgressBar overlay
 #import "UXTouch.xc"              // drawn content's touches -> mouse events
@@ -92,6 +93,10 @@ void ux_and_popup_add_item(i32 handle, i32 node, u8* title);
 void ux_and_popup_select(i32 handle, i32 node, i32 i);
 void ux_and_make_field(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, u8* buf, i32 cap, i32 secure);
 void ux_and_make_stepper(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h);
+// the segmented control, composed of native ToggleButtons (Android has no platform one)
+void ux_and_make_segmented(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, i32 nseg, i32 multi);
+void ux_and_seg_set_label(i32 handle, i32 node, i32 seg, u8* label);
+void ux_and_seg_set(i32 handle, i32 node, i32 seg, i32 on);
 void ux_and_update_field(i32 handle, i32 node);
 void ux_and_set_control_frame(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h);
 void ux_and_set_control_enabled(i32 handle, i32 node, i32 on);
@@ -304,6 +309,11 @@ void uxAndValueChanged(i32 handle, i32 node, i32 value)
     if (pu != (UXPopUpButton*)0)
         {
         pu.applyNativeSelection(value);
+        }
+    UXSegmentedControl* sg = (UXSegmentedControl* ?)ctl;
+    if (sg != (UXSegmentedControl*)0)
+        {
+        sg.applyNativeSelection(value);
         }
     ctl.fire();
     if (gApp != (UXApplication*)0)
@@ -1189,6 +1199,17 @@ class UXAndroidDriver : Object<UXViewDriver>
                         ux_and_set_checkbox(handle, i, rbp.isSelected() ? (i32)1 : (i32)0);
                         }
                     }
+                else if (n.kind == (i32)UXKindSegmented)
+                    {
+                    UXSegmentedControl* sgp = (UXSegmentedControl* ?)(Object*)n.peer;
+                    if (sgp != (UXSegmentedControl*)0)
+                        {
+                        for (i32 j = (i32)0; j < sgp.nativeSegCount(); j = j + (i32)1)
+                            {
+                            ux_and_seg_set(handle, i, j, sgp.nativeSegSelected(j));
+                            }
+                        }
+                    }
                 continue;
                 }
             if (n.kind == (i32)UXKindButton)
@@ -1253,6 +1274,20 @@ class UXAndroidDriver : Object<UXViewDriver>
                     u8* title = n.spec != (pointer)0 ? (u8*)n.spec : (u8*)"";
                     ux_and_make_radio(handle, i, ax, ay, aw, ah, title,
                                       rv.isSelected() ? (i32)1 : (i32)0);
+                    gAndCtlPeer[handle * (i32)256 + i] = n.peer;
+                    }
+                }
+            else if (n.kind == (i32)UXKindSegmented)
+                {
+                UXSegmentedControl* gv = (UXSegmentedControl* ?)(Object*)n.peer;
+                if (gv != (UXSegmentedControl*)0)
+                    {
+                    ux_and_make_segmented(handle, i, ax, ay, aw, ah, gv.nativeSegCount(), gv.nativeMultiSelect());
+                    for (i32 j = (i32)0; j < gv.nativeSegCount(); j = j + (i32)1)
+                        {
+                        ux_and_seg_set_label(handle, i, j, gv.nativeSegLabel(j));
+                        ux_and_seg_set(handle, i, j, gv.nativeSegSelected(j));
+                        }
                     gAndCtlPeer[handle * (i32)256 + i] = n.peer;
                     }
                 }

@@ -1361,6 +1361,70 @@ void ux_and_make_stepper(int handle, int node, int x, int y, int w, int h) {
     check(env, "make_stepper");
 }
 
+/* ── the segmented control: native ToggleButtons in a row (UXBridge.segmented) ── */
+void ux_and_make_segmented(int handle, int node, int x, int y, int w, int h, int nseg, int multi) {
+    JNIEnv *env = envNow();
+    jmethodID mk = (*env)->GetStaticMethodID(env, gBridgeCls, "segmented", "(Landroid/app/Activity;IIIIZ)Landroid/view/View;");
+    if (!check(env, "segmented method") || !mk) return;
+    jobject box = (*env)->CallStaticObjectMethod(env, gBridgeCls, mk, gActivity, (handle << 8) | node, nseg, PX(w), PX(h),
+                                                 (jboolean)(multi != 0));
+    if (!check(env, "make_segmented") || !box) return;
+    place(env, handle, node, box, x, y, w, h);
+    check(env, "place segmented");
+}
+void ux_and_seg_set_label(int handle, int node, int seg, const char *label) {
+    JNIEnv *env = envNow();
+    if (!gCtl[handle][node]) return;
+    jmethodID m = (*env)->GetStaticMethodID(env, gBridgeCls, "segLabel", "(Landroid/view/View;ILjava/lang/String;)V");
+    jstring s = (*env)->NewStringUTF(env, label ? label : "");
+    (*env)->CallStaticVoidMethod(env, gBridgeCls, m, gCtl[handle][node], seg, s);
+    (*env)->DeleteLocalRef(env, s);
+    check(env, "seg label");
+}
+/* one segment's state, from the model */
+void ux_and_seg_set(int handle, int node, int seg, int on) {
+    JNIEnv *env = envNow();
+    if (!gCtl[handle][node]) return;
+    jmethodID m = (*env)->GetStaticMethodID(env, gBridgeCls, "segSet", "(Landroid/view/View;IZ)V");
+    (*env)->CallStaticVoidMethod(env, gBridgeCls, m, gCtl[handle][node], seg, (jboolean)(on != 0));
+    check(env, "seg set");
+}
+/* tests: the native control's segments, checked segment, a label, and a segment's screen centre */
+int ux_and_test_seg_count(int handle, int node) {
+    JNIEnv *env = envNow();
+    if (!gCtl[handle][node]) return -1;
+    jmethodID m = (*env)->GetStaticMethodID(env, gBridgeCls, "segCount", "(Landroid/view/View;)I");
+    return (*env)->CallStaticIntMethod(env, gBridgeCls, m, gCtl[handle][node]);
+}
+int ux_and_test_seg_selected(int handle, int node) {
+    JNIEnv *env = envNow();
+    if (!gCtl[handle][node]) return -2;
+    jmethodID m = (*env)->GetStaticMethodID(env, gBridgeCls, "segSelected", "(Landroid/view/View;)I");
+    return (*env)->CallStaticIntMethod(env, gBridgeCls, m, gCtl[handle][node]);
+}
+int ux_and_test_seg_text_is(int handle, int node, int seg, const char *want) {
+    JNIEnv *env = envNow();
+    if (!gCtl[handle][node]) return 0;
+    jmethodID m = (*env)->GetStaticMethodID(env, gBridgeCls, "segText", "(Landroid/view/View;I)Ljava/lang/String;");
+    jstring t = (jstring)(*env)->CallStaticObjectMethod(env, gBridgeCls, m, gCtl[handle][node], seg);
+    const char *u = t ? (*env)->GetStringUTFChars(env, t, NULL) : "";
+    int same = strcmp(u, want ? want : "") == 0;
+    if (t) (*env)->ReleaseStringUTFChars(env, t, u);
+    return same;
+}
+void ux_and_test_seg_centre(int handle, int node, int seg, int *x, int *y) {
+    JNIEnv *env = envNow();
+    *x = *y = -1;
+    if (!gCtl[handle][node]) return;
+    jmethodID m = (*env)->GetStaticMethodID(env, gBridgeCls, "segCentre", "(Landroid/view/View;I)[I");
+    jintArray a = (jintArray)(*env)->CallStaticObjectMethod(env, gBridgeCls, m, gCtl[handle][node], seg);
+    if (!a) return;
+    jint v[2];
+    (*env)->GetIntArrayRegion(env, a, 0, 2, v);
+    *x = v[0];
+    *y = v[1];
+}
+
 /* the rigs' value pokes: set natively AND report as the platform would */
 void ux_and_test_set_slider(int handle, int node, int val) {
     ux_and_set_slider_value(handle, node, val);

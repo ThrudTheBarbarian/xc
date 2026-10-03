@@ -73,6 +73,68 @@ public class UXBridge implements View.OnClickListener, SeekBar.OnSeekBarChangeLi
     @Override public void onClick(DialogInterface d, int which) { nativeValue(id, which); }
     @Override public void onCancel(DialogInterface d) { nativeFire(id); }
 
+    // UXSegmentedControl: Android has no platform segmented control, so it is composed of native
+    // ToggleButtons in a row (Material's segmented button is the same shape).  A tap reports the
+    // segment's index through nativeValue, as a slider reports its value; in a single-selection control
+    // it also checks that one and unchecks the rest, in a multiple-selection one it toggles only itself.
+    public static View segmented(android.app.Activity a, final int id, int n, int w, int h, final boolean multi) {
+        final android.widget.LinearLayout box = new android.widget.LinearLayout(a);
+        box.setOrientation(android.widget.LinearLayout.HORIZONTAL);
+        int each = n > 0 ? w / n : w;
+        for (int i = 0; i < n; i++) {
+            final android.widget.ToggleButton b = new android.widget.ToggleButton(a);
+            final int seg = i;
+            b.setTextOn("");
+            b.setTextOff("");
+            b.setText("");
+            b.setMinHeight(0); b.setMinimumHeight(0); b.setMinWidth(0); b.setMinimumWidth(0);
+            b.setPadding(0, 0, 0, 0);
+            b.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) { if (!multi) segSelect(box, seg); nativeValue(id, seg); }
+            });
+            box.addView(b, i == n - 1 ? w - each * (n - 1) : each, h);
+        }
+        return box;
+    }
+    public static void segLabel(View box, int i, String label) {
+        android.view.ViewGroup g = (android.view.ViewGroup) box;
+        if (i < 0 || i >= g.getChildCount()) return;
+        android.widget.ToggleButton b = (android.widget.ToggleButton) g.getChildAt(i);
+        b.setTextOn(label);
+        b.setTextOff(label);
+        b.setText(label);
+    }
+    public static void segSet(View box, int i, boolean on) {
+        android.view.ViewGroup g = (android.view.ViewGroup) box;
+        if (i >= 0 && i < g.getChildCount()) ((android.widget.ToggleButton) g.getChildAt(i)).setChecked(on);
+    }
+    public static void segSelect(View box, int sel) {
+        android.view.ViewGroup g = (android.view.ViewGroup) box;
+        for (int i = 0; i < g.getChildCount(); i++)
+            ((android.widget.ToggleButton) g.getChildAt(i)).setChecked(i == sel);
+    }
+    // tests: which segment is checked (-1 none), and a segment's centre on the screen
+    public static int segSelected(View box) {
+        android.view.ViewGroup g = (android.view.ViewGroup) box;
+        for (int i = 0; i < g.getChildCount(); i++)
+            if (((android.widget.ToggleButton) g.getChildAt(i)).isChecked()) return i;
+        return -1;
+    }
+    public static int segCount(View box) {
+        return box instanceof android.view.ViewGroup ? ((android.view.ViewGroup) box).getChildCount() : 0;
+    }
+    public static String segText(View box, int i) {
+        android.view.ViewGroup g = (android.view.ViewGroup) box;
+        return i >= 0 && i < g.getChildCount() ? String.valueOf(((android.widget.ToggleButton) g.getChildAt(i)).getText()) : "";
+    }
+    public static int[] segCentre(View box, int i) {
+        android.view.ViewGroup g = (android.view.ViewGroup) box;
+        int[] at = new int[2];
+        View b = g.getChildAt(i);
+        b.getLocationOnScreen(at);
+        return new int[] { at[0] + b.getWidth() / 2, at[1] + b.getHeight() / 2 };
+    }
+
     // UXWindow.snapshot: the window's FrameLayout and every view on it (the draw view, with the GL frame
     // painted into it, and the native widgets) drawn into a bitmap at the toolkit's scale, one pixel a
     // dp, over the window's white: w * h 0xAARRGGBB ints, top row first, for the region (x, y, w, h).
