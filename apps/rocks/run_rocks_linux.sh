@@ -19,6 +19,8 @@ ux="$here/../../frameworks/uxkit"
 xcc=${XCC:-xcc}
 host=${UX_LINUX_HOST:-${XTC_LINUX_HOST:-}}
 rtdir=$(dirname "$(command -v "$xcc")")/../lib/xc/x86_64/runtime
+# an in-tree compiler (XCC_HOME=<repo>/compiler) keeps it in its support tree instead
+[ -f "$rtdir/rtgen-linux.s" ] || { [ -n "${XCC_HOME:-}" ] && rtdir="$XCC_HOME/support/x86_64/runtime"; }
 rtsrc=${XT_RT_SRC:-"$here/../../compiler"}
 
 command -v "$xcc" >/dev/null 2>&1 || { echo "== rocks-linux: no compiler ('$xcc'); set XCC =="; exit 2; }

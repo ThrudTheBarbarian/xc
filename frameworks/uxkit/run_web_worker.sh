@@ -3,10 +3,13 @@
 # Chrome, cross-origin isolated).  The page builds the DOM menu bar and the DOM alert from what the
 # worker posts (the loader's xccPost, compiler 587), answers the alert through the ring, and a pick
 # in the menu bar fires an item in the running app.  Needs a compiler whose wasm32 loader has
-# xccPost (XCC_WORKER, default the in-tree bin/osx/xcc); skips cleanly without one or without Chrome.
+# xccPost (XCC_WORKER, default the in-tree bin/osx/xcc-xc, the compiler that ships); skips cleanly without one or without Chrome.
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
-xcc=${XCC_WORKER:-"$here/../../compiler/bin/osx/xcc"}
+xcc=${XCC_WORKER:-"$here/../../compiler/bin/osx/xcc-xc"}
+# The in-tree compilers find their OWN support tree (loader, libraries) only through XCC_HOME until
+# compiler 593: run from here they would otherwise fall back to the installed one.
+case "$xcc" in "$here/../../compiler/"*) export XCC_HOME=${XCC_HOME:-"$(cd "$here/../../compiler" && pwd)"} ;; esac
 CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 [ -x "$CHROME" ] || { echo "== web-worker: skipped (no Chrome) =="; exit 0; }
 [ -x "$xcc" ] || { echo "== web-worker: skipped (no compiler at $xcc) =="; exit 0; }

@@ -20,6 +20,8 @@ xcc=${XCC:-xcc}
 # (both in build.env).
 host=${UX_LINUX_HOST:-${XTC_LINUX_HOST:-}}
 rtdir=$(dirname "$(command -v "$xcc")")/../lib/xc/x86_64/runtime
+# an in-tree compiler (XCC_HOME=<repo>/compiler) keeps it in its support tree instead
+[ -f "$rtdir/rtgen-linux.s" ] || { [ -n "${XCC_HOME:-}" ] && rtdir="$XCC_HOME/support/x86_64/runtime"; }
 rtsrc=${XT_RT_SRC:-"$here/../../compiler"}
 ssh -o ConnectTimeout=8 -o BatchMode=yes "$host" true 2>/dev/null || { echo "== gtk-mouse: skipped (no $host) =="; exit 0; }
 ssh "$host" 'pkg-config --exists gtk4 && which xvfb-run' >/dev/null 2>&1 || { echo "== gtk-mouse: skipped (no gtk4/xvfb on $host) =="; exit 0; }
