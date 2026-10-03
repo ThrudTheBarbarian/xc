@@ -53,6 +53,11 @@ extern void ux_field_overlay_hide(i32 token);
 // A modal alert shown by the PAGE (a real browser's worker run loop): 1 if it was handed over (the
 // answer comes back through the ring as type 7), 0 where there is no page to show it.
 extern i32 ux_web_alert_show(i32 icon, u8* lines, u8* buttons, i32 defaultBtn);
+// Files: a page to show the open dialog (the worker run loop), the dialog, and a picked file's
+// path once its token has come back through the ring (type 15).
+extern i32 ux_web_has_page(void);
+extern i32 ux_web_file_open_show(u8* prompt);
+extern i32 ux_web_file_take(i32 token, u8* out, i32 cap);
 // A popup button's list, for the page to show at the button: JSON {token, x, y, w, selected,
 // items: [title...]}.  A pick comes back through the ring as type 10 (a = token, b = item).
 extern void ux_popup_open(u8* json, i32 len);

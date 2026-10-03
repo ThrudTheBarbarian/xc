@@ -1,0 +1,47 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>running</title>
+<canvas id="ux-canvas" width="80" height="40"></canvas>
+<script>
+  // run_web_files.sh's page: the worker run loop.  It plays the user at the open dialog: the first
+  // time it "picks" a file for the dialog's real <input type=file> (as the browser does once a user
+  // has chosen one) and checks the dialog first; the second time it clicks Cancel.  It also checks
+  // the save arrived as a download.  The verdict, the app's PASS plus these checks, is POSTed back.
+  globalThis.xccConfig = { runLoop: 'worker', workerScript: 'ux_web_browser.js', canvas: '#ux-canvas' };
+  const fails = [];
+  const want = (ok, what) => { if (!ok) fails.push(what); };
+  const out = [];
+  const report = () => fetch('/result', { method: 'POST',
+    body: (fails.length ? 'PAGE-FAIL: ' + fails.join('; ') + '\n' : '') + out.join('\n') });
+  globalThis.xccOut = (s) => {
+    out.push(s);
+    if (/^(PASS|FAIL)/.test(s)) setTimeout(() => {
+      const dl = globalThis.uxDownloads || [];
+      want(dl.length === 1 && dl[0].name === 'notes.txt' && dl[0].text === 'saved from the worker',
+           'the save did not arrive as a download: ' + JSON.stringify(dl));
+      report();
+    }, 300);
+  };
+  let opens = 0;
+  new MutationObserver(() => {
+    const box = document.querySelector('.ux-open');
+    if (!box || box.dataset.seen) return;
+    box.dataset.seen = '1';
+    opens++;
+    const btns = [...box.querySelectorAll('button')];
+    const input = box.querySelector('input[type=file]');
+    if (opens === 1) {
+      want(box.querySelector('.ux-alert-line').textContent === 'Open a note', 'the dialog does not show the prompt');
+      want(btns.length === 2 && btns[1].textContent.startsWith('Choose'), 'the dialog has no Choose button');
+      want(input, 'the dialog has no file input');
+      const dt = new DataTransfer();
+      dt.items.add(new File(['héllo from the disk, 日本'], 'from disk.txt', { type: 'text/plain' }));
+      setTimeout(() => { input.files = dt.files; input.dispatchEvent(new Event('change')); }, 100);
+    } else {
+      setTimeout(() => btns[0].click(), 100);
+    }
+  }).observe(document.documentElement, { childList: true, subtree: true });
+  setTimeout(() => { fails.push('timed out'); report(); }, 15000);
+</script>
+<script src="ux_web_page.js"></script>
+<script src="test_web_files.js"></script>

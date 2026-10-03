@@ -27,7 +27,7 @@ atomically.
 | AppKit | `NSSavePanel`, which asks about replacing a file itself |
 | GTK | `GtkFileDialog`, which does too |
 | GEM, Win32, iOS, Android | [`UXFilePanel`](/compiler/api/uxkit/uxfilepanel/) in save mode |
-| web | the drawn panel, but the web has no file system to list or save into (a download-based save is still to come) |
+| web | no dialog: saving is the browser's download, so the panel names the file (`/` + the default name) and the write hands it to the browser, which may ask where itself |
 
 The driver answers [`hasNativeFileSave`](/compiler/api/uxkit/uxviewdriver/#native-panels);
 application code does not ask.

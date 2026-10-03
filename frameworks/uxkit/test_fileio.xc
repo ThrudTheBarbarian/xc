@@ -41,10 +41,7 @@ void main(void)
         {
         one.appendByte((u8)((i * (i32)7 + (i32)3) & (i32)$FF));
         }
-#if ARCH_wasm32
-    ck((u8*)"the web has no file system: write fails", !UXFileIO.write((u8*)"x.bin", one));
-    ck((u8*)"...and so does read", UXFileIO.read((u8*)"x.bin") == (UXData*)0);
-#else
+    // (wasm32 too: under node the web shim's files are real files; a page keeps them in a store)
     // The first writable place: the working directory, else a device's scratch area.
     u8* path = (u8*)"uxfileio_test.bin";
     if (!UXFileIO.write(path, one))
@@ -71,6 +68,8 @@ void main(void)
     ck((u8*)"...and reads back empty, not missing", back != (UXData*)0 && back.length() == (i32)0);
     ck((u8*)"a missing file reads as null", UXFileIO.read((u8*)"no_such_dir_uxfileio/none.bin") == (UXData*)0);
     ck((u8*)"saving into a missing folder fails", !UXFileIO.write((u8*)"no_such_dir_uxfileio/x.bin", one));
+#if ARCH_wasm32
+#else
     remove(path);
 #endif
     if (gFails == (i32)0)

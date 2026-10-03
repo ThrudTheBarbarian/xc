@@ -243,6 +243,97 @@
     if (d) d.focus();
   };
 
+  // FILES.  A write is a DOWNLOAD of the file.  An OPEN is a small dialog whose Choose button
+  // opens the real file picker (a picker may only open from a user's click, so it cannot open
+  // straight from the worker's request).  The picked file is kept by a token, pushed through the
+  // ring as type 15 (0: cancelled), and the worker pulls its name and bytes with requests.
+  const download = (d) => {
+    globalThis.uxDownloads = globalThis.uxDownloads || [];
+    globalThis.uxDownloads.push({ name: d.name, length: d.bytes.length, text: new TextDecoder().decode(d.bytes) });
+    const url = URL.createObjectURL(new Blob([d.bytes]));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = d.name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  };
+  const picked = new Map();
+  let nextPick = 1;
+  let openBack = null;
+  const openDone = (token) => {
+    if (openBack) { openBack.remove(); openBack = null; }
+    if (globalThis.xccPushEvent) globalThis.xccPushEvent(15, token);
+  };
+  const openFile = (o) => {
+    if (!document.getElementById('ux-alert-style')) {
+      const st = document.createElement('style');
+      st.id = 'ux-alert-style';
+      st.textContent = alertCss;
+      document.head.appendChild(st);
+    }
+    if (openBack) openBack.remove();
+    openBack = document.createElement('div');
+    openBack.className = 'ux-alert-back';
+    const box = document.createElement('div');
+    box.className = 'ux-alert ux-open';
+    box.setAttribute('role', 'dialog');
+    box.setAttribute('aria-modal', 'true');
+    const p = document.createElement('p');
+    p.className = 'ux-alert-line';
+    p.textContent = o.prompt || 'Open a file';
+    box.appendChild(p);
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.style.display = 'none';
+    input.addEventListener('change', () => {
+      const f = input.files && input.files[0];
+      if (!f) return;
+      f.arrayBuffer().then((buf) => {
+        const token = nextPick++;
+        picked.set(token, { name: f.name, bytes: new Uint8Array(buf) });
+        openDone(token);
+      });
+    });
+    box.appendChild(input);
+    const row = document.createElement('div');
+    row.className = 'ux-alert-buttons';
+    const cancel = document.createElement('button');
+    cancel.textContent = 'Cancel';
+    cancel.addEventListener('click', (e) => { e.stopPropagation(); openDone(0); });
+    const choose = document.createElement('button');
+    choose.textContent = 'Choose File\u2026';
+    choose.className = 'default';
+    choose.addEventListener('click', (e) => { e.stopPropagation(); input.click(); });
+    row.appendChild(cancel);
+    row.appendChild(choose);
+    box.appendChild(row);
+    openBack.appendChild(box);
+    openBack.addEventListener('mousedown', (e) => e.stopPropagation());
+    document.body.appendChild(openBack);
+    choose.focus();
+  };
+  // the worker's pulls of a picked file: its name, its size, its bytes (into the request's buffer)
+  const prevReq = globalThis.xccOnRequest;
+  globalThis.xccOnRequest = (req) => {
+    const f = req && req.payload && picked.get(req.payload.token);
+    if (req && req.kind === 'uxFileName') {
+      if (!f) return -1;
+      const enc = new TextEncoder().encode(f.name).slice(0, req.payload.sab.byteLength);
+      new Uint8Array(req.payload.sab).set(enc);
+      return enc.length;
+    }
+    if (req && req.kind === 'uxFileSize') return f ? f.bytes.length : -1;
+    if (req && req.kind === 'uxFileFill') {
+      if (!f) return -1;
+      new Uint8Array(req.payload.sab).set(f.bytes);
+      picked.delete(req.payload.token);
+      return f.bytes.length;
+    }
+    return prevReq ? prevReq(req) : 0;
+  };
+
   // THE FRAME (the worker run loop): the worker draws on a canvas of its own and posts a bitmap of
   // it at each present, because a canvas transferred to a blocked worker never commits a frame.  It
   // is painted on a display canvas laid exactly over the page's canvas; that one takes no pointer
@@ -335,7 +426,7 @@
     globalThis.xccConfig.workerData = Object.assign({}, globalThis.xccConfig.workerData, { uxSettings: settingsSnapshot() });
 
   globalThis.uxPage = { menu: build, menuState: state, close, openTitle: show, onPick: null,
-                        popup, closePopup, onPopupPick: null, alert, onAlert: null };
+                        popup, closePopup, onPopupPick: null, alert, onAlert: null, download, openFile };
   // The worker's posts (the loader forwards them here).
   const prev = globalThis.xccOnMessage;
   globalThis.xccOnMessage = (p) => {
@@ -359,6 +450,8 @@
       } catch (e) {}
     }
     else if (p && p.uxAlert !== undefined) alert(p.uxAlert);
+    else if (p && p.uxOpen !== undefined) openFile(p.uxOpen);
+    else if (p && p.uxDownload !== undefined) download(p.uxDownload);
     else if (p && p.uxPopup !== undefined) popup(p.uxPopup);
     else if (p && p.uxMenu !== undefined) build(p.uxMenu);
     else if (p && p.uxMenuState) state(p.uxMenuState);

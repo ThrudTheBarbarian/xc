@@ -114,6 +114,10 @@
   // which is right for the settings store's round trip and wrong for anything a person reads -- an
   // em dash drew as three characters.)
   const utf8 = new TextDecoder('utf-8');
+  const files = new Map();               // the file store (UXFileIO): path -> bytes
+  const open = new Map();                // open handles: h -> {path, write, at, chunks}
+  let nextFile = 3;
+  globalThis.uxFiles = files;
   const ustr = (p) => {
     const m = U8(); let e = p >>> 0;
     while (m[e]) e++;
@@ -183,6 +187,78 @@
       const json = new TextDecoder().decode(U8().slice(p >>> 0, (p >>> 0) + len));
       if (globalThis.xccPost) globalThis.xccPost({ uxPopup: json });
       else if (globalThis.uxPage) globalThis.uxPage.popup(json);
+    },
+    // FILES (UXFileIO).  A browser has no file system, so the files an app reads and writes live in
+    // a store here, where the module runs, by path.  A WRITE is also the browser's download of the
+    // file (the page does it: in the worker run loop the bytes are posted to it).  A file the user
+    // OPENS comes from the page's file picker: it shows a small dialog (a picker may only open from
+    // a user's click), keeps the picked file by a token, and pushes the token through the ring as
+    // type 15 (0: cancelled).  The worker then pulls the name and bytes with xccRequest, which
+    // blocks until the page has copied them into a SharedArrayBuffer sent with the request.
+    // The loader's file primitives (UXFileIO and the stdlib's Files.xc use them), answered from
+    // the store: a handle is an open file, a write handle is downloaded when it is closed.
+    _xt_file_size: (pp) => { const f = files.get(ustr(pp)); return f ? f.length : -1; },
+    _xt_file_exists: (pp) => files.has(ustr(pp)) ? 1 : 0,
+    _xt_file_open: (pp, mp) => {
+      const path = ustr(pp), mode = ustr(mp);
+      const write = mode.includes('w') || mode.includes('a');
+      if (!write && !files.has(path)) return -1;
+      const h = nextFile++;
+      open.set(h, { path, write, at: 0, chunks: mode.includes('a') && files.has(path) ? [files.get(path)] : [] });
+      return h;
+    },
+    _xt_file_read: (h, buf, n) => {
+      const o = open.get(h);
+      if (!o || o.write) return -1;
+      const f = files.get(o.path);
+      const k = Math.max(0, Math.min(n, f.length - o.at));
+      U8().set(f.subarray(o.at, o.at + k), buf >>> 0);
+      o.at += k;
+      return k;
+    },
+    _xt_file_write: (h, buf, n) => {
+      const o = open.get(h);
+      if (!o || !o.write) return -1;
+      o.chunks.push(U8().slice(buf >>> 0, (buf >>> 0) + n));
+      return n;
+    },
+    _xt_file_close: (h) => {
+      const o = open.get(h);
+      open.delete(h);
+      if (!o || !o.write) return;
+      const len = o.chunks.reduce((a, c) => a + c.length, 0);
+      const bytes = new Uint8Array(len);
+      let at = 0;
+      for (const c of o.chunks) { bytes.set(c, at); at += c.length; }
+      files.set(o.path, bytes);
+      const name = o.path.split('/').pop() || 'untitled';
+      if (globalThis.xccPost) globalThis.xccPost({ uxDownload: { name, bytes } });
+      else if (globalThis.uxPage && globalThis.uxPage.download) globalThis.uxPage.download({ name, bytes });
+    },
+    ux_web_has_page: () => (globalThis.xccPost && globalThis.xccRequest) ? 1 : 0,
+    ux_web_file_open_show: (pp) => {
+      if (!globalThis.xccPost || !globalThis.xccRequest) return 0;
+      globalThis.xccPost({ uxOpen: { prompt: ustr(pp) } });
+      return 1;
+    },
+    // after a type-15 token: pull the picked file into the store, and its path into out
+    ux_web_file_take: (token, out, cap) => {
+      const nameBuf = new SharedArrayBuffer(1024);
+      const nl = globalThis.xccRequest('uxFileName', { token, sab: nameBuf });
+      if (nl < 0) return 0;
+      const name = new TextDecoder().decode(new Uint8Array(nameBuf).slice(0, nl));
+      const size = globalThis.xccRequest('uxFileSize', { token });
+      if (size < 0) return 0;
+      const sab = new SharedArrayBuffer(Math.max(size, 1));
+      if (globalThis.xccRequest('uxFileFill', { token, sab }) !== size) return 0;
+      const path = '/picked/' + name;
+      files.set(path, new Uint8Array(sab).slice(0, size));
+      const enc = new TextEncoder().encode(path);
+      if (enc.length + 1 > cap) return 0;
+      const m = U8();
+      m.set(enc, out >>> 0);
+      m[(out >>> 0) + enc.length] = 0;
+      return 1;
     },
     // A modal alert: in the worker, the page shows it (ux_web_page.js) and the answer comes back
     // through the ring as type 7.  Lines and buttons are "|"-separated.

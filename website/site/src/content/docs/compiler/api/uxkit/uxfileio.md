@@ -34,9 +34,15 @@ disk.
 
 ## The web
 
-A browser has no file system. On wasm32 both calls fail cleanly, `read`
-returning null and `write` returning false, rather than pretending.
-Saving on the web means a download, which is a separate, later piece.
+A browser has no file system, so on a page UXKit keeps one: a store of
+files by path, held where the app runs. `write` puts the file in the store
+and hands it to the browser as a download, so saving a document downloads
+it. `read` reads from the store, which is where a file the user opens with
+[`UXOpenPanel`](/compiler/api/uxkit/uxopenpanel/) is put. Nothing in the
+store outlives the page.
+
+Under node, which runs the wasm32 tests, the same calls read and write real
+files.
 
 ## Topics
 

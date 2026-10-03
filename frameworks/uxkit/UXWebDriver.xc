@@ -318,9 +318,11 @@ class UXWebDriver : Object<UXViewDriver>
         }
 
     // ---- native panels: none yet — the toolkit-drawn fallbacks take over -----
+    // The page's open dialog and the browser's file picker, where there is a page to show them
+    // (the worker run loop); elsewhere UXOpenPanel draws its own.
     bool hasNativeFileOpen(void)
         {
-        return false;
+        return ux_web_has_page() != (i32)0;
         }
     // no native save dialog here: UXSavePanel draws UXKit's own
     // no platform navigation stack here: UXNavigationController draws its own bar
@@ -338,17 +340,59 @@ class UXWebDriver : Object<UXViewDriver>
     void navPop(pointer nav, i32 animated)
         {
         }
+    // Saving on the web IS the browser's download: there is no place to choose, so the save
+    // "dialog" names the file and the write (UXFileIO) hands it to the browser, which may ask
+    // where itself.  Where there is no page, UXSavePanel draws its own.
     bool hasNativeFileSave(void)
         {
-        return false;
+        return ux_web_has_page() != (i32)0;
         }
     i32 fileSave(u8* prompt, u8* startDir, u8* defaultName, u8* out, i32 outCap)
         {
-        return (i32)0;
+        u8* name = defaultName != (u8*)0 && defaultName[0] != (u8)0 ? defaultName : (u8*)"untitled";
+        i32 n = (i32)0;
+        while (name[n] != (u8)0)
+            {
+            n = n + (i32)1;
+            }
+        if (n + (i32)2 > outCap)
+            {
+            return (i32)0;
+            }
+        out[0] = (u8)47; // "/" + the name: a path in the shim's store
+        for (i32 i = (i32)0; i <= n; i = i + (i32)1)
+            {
+            out[i + (i32)1] = name[i];
+            }
+        return (i32)1;
         }
+    // The page shows its dialog; the picked file's token comes back through the ring as type 15
+    // (0: cancelled), and input meanwhile is discarded, as a modal does.  The shim then pulls the
+    // file into its store and gives its path.
     i32 fileOpen(u8* prompt, u8* startDir, u8* out, i32 outCap)
         {
-        return (i32)0;
+        if (ux_web_file_open_show(prompt != (u8*)0 ? prompt : (u8*)"Open a file") == (i32)0)
+            {
+            return (i32)0;
+            }
+        i32 r[8];
+        i32 token = (i32)-1;
+        while (token < (i32)0)
+            {
+            _xt_ring_wait((i32)-1);
+            while (token < (i32)0 && _xt_ring_read(&r[0]) >= (i32)0)
+                {
+                if (r[0] == (i32)15)
+                    {
+                    token = r[1];
+                    }
+                }
+            }
+        if (token == (i32)0)
+            {
+            return (i32)0;
+            }
+        return ux_web_file_take(token, out, outCap);
         }
     bool hasNativeColorPicker(void)
         {

@@ -63,6 +63,10 @@ globalThis.xccImports = { env: {
   ux_win_order_front: (h) => {},
   ux_win_geometry: (h, pw, ph) => { const s = wins.get(h); wi32(pw, s ? s.w : 0); wi32(ph, s ? s.h : 0); },
   ux_present: (h) => { const s = wins.get(h); if (s) s.presents++; },
+  // no page here: the panels draw their own (files are the loader's real ones under node)
+  ux_web_has_page: () => 0,
+  ux_web_file_open_show: (pp) => 0,
+  ux_web_file_take: (token, out, cap) => 0,
 
   // ── text measurement ──
   // The rig has no font: widths are the same 0.6-per-character estimate its drawn text uses, so a
