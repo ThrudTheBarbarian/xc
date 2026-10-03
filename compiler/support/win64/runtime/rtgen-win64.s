@@ -23,6 +23,8 @@
 
 # Generated from src/xtc/support-src/rt-freestanding.c (-DXT_WIN64), then
 # edited by hand. Regenerating it must re-apply:
+#   * nothing for xt_weak_unreg's back-pointer check (bug 176): it is hand-
+#     applied here (bug 601) and a regeneration from the C produces it.
 #   * the heap. _xt_calloc and _xt_free are HeapAlloc/HeapFree on
 #     GetProcessHeap(), and every place clang inlined the old free-list
 #     allocator (_xtc_dealloc, _xt_thread_create, xt_thread_entry,
@@ -960,6 +962,14 @@ _xtc_weak_unregister:                   # @_xtc_weak_unregister
 	mov	rax, qword ptr [rcx - 16]
 	test	rax, rax
 	je	.LBB22_7
+	# Hand-applied from rt-freestanding.c (bug 176, here bug 601): *pprev must
+	# be this slot. Stale union bytes leave a bogus pprev, and writing through
+	# it faulted (0xC0000005 on Windows). Mismatch: clear the links, no unlink.
+	cmp	qword ptr [rax], rcx
+	je	.LBB22_linked
+	add	rcx, -16
+	jmp	.LBB22_6
+.LBB22_linked:
 # %bb.4:
 	mov	rdx, qword ptr [rcx - 8]
 	add	rcx, -16
@@ -1049,6 +1059,9 @@ _xtc_weak_register:                     # @_xtc_weak_register
 	je	.LBB25_7
 # %bb.4:
 	lea	r8, [rcx - 16]
+	# The same back-pointer check (bug 176 / 601), before register relinks.
+	cmp	qword ptr [rax], rcx
+	jne	.LBB25_6
 	mov	r9, qword ptr [rcx - 8]
 	mov	qword ptr [rax], r9
 	test	r9, r9
