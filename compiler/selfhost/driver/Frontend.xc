@@ -1666,14 +1666,34 @@ String* sanitiseEnvPath(String* raw)
     }
 
 // `a/b/xcc` -> `a/b`, and "" for a bare name.
+#if ARCH_win64
+u32 GetModuleFileNameA(pointer module, u8* buf, u32 size);
+#endif
+
+// The compiler's own path. argv[0] is only what the caller typed: plain `xcc`
+// when it came from PATH, which names no directory. Windows says where the
+// image really is; elsewhere argv[0] stays (and /opt/xcc is a fallback).
+String* selfPath(void)
+    {
+#if ARCH_win64
+    u8 buf[1024];
+    u32 n = GetModuleFileNameA((pointer)0, &buf[0], (u32)1024);
+    if (n > (u32)0 && n < (u32)1024)
+        return String.withBytes(&buf[0], n);
+#endif
+    return Process.argument((u32)0);
+    }
+
 String* dirOf(String* path)
     {
     if (path == 0)
         return (String*)0;
     u32 cut = (u32)0;
     bool sawSlash = false;
+    // `\` too: on Windows argv[0] is C:\...\xcc.exe, and with only `/` it had no
+    // directory, so the compiler never looked beside itself (bug 603).
     for (u32 i = (u32)0; i < path.byteLength(); i = i + (u32)1)
-        if (path.byteAt(i) == (u8)'/')
+        if (path.byteAt(i) == (u8)'/' || path.byteAt(i) == (u8)'\\')
             {
             cut = i;
             sawSlash = true;
@@ -1723,7 +1743,7 @@ String* supportRoot(FeOptions* o)
     if (xtcHome != 0)
         bases.add((Object*)xtcHome);
     // Beside the binary, then one level up — `<bin>/../lib/xc` is the install.
-    String* self = Process.argument((u32)0);
+    String* self = selfPath();
     String* bin = dirOf(self);
     if (bin != 0)
         {

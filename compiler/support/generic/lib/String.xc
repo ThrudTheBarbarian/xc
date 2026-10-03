@@ -1136,9 +1136,11 @@ class String<Comparable, Hashable, Copying>
     // self-contained, and needed by every part of a compiler that touches a
     // filename — which is most of the driver.
     //
-    // The separator is '/' on every target: the xt targets have no filesystem
-    // of their own, and the hosted ones are POSIX. Windows accepts '/' in every
-    // API that takes a path, so win64 needs no second rule here.
+    // The separator written is '/' on every target: the xt targets have no
+    // filesystem of their own, the hosted ones are POSIX, and Windows accepts
+    // '/' in every API that takes a path. On win64 a '\\' is READ as one as
+    // well, because that is what people type there: `xcc src\\main.xc` lost
+    // the source's own directory and could not find its imports (bug 603).
     //
     // Semantics follow Foundation, including its edge cases: trailing
     // separators are ignored when finding the last component, a leading '.' is
@@ -1149,13 +1151,22 @@ class String<Comparable, Hashable, Copying>
         return (u8)'/';
         }
 
+    static bool isPathSeparator(u8 c)
+        {
+#if ARCH_win64
+        return c == (u8)'/' || c == (u8)'\\';
+#else
+        return c == (u8)'/';
+#endif
+        }
+
     // One past the last non-separator byte — i.e. the end of the last
     // component, with any trailing '/' ignored.
     u32 _lastComponentEnd(void)
         {
         u8* b = _bytes;
         u32 end = _length;
-        while (end > (u32)0 && b[end - (u32)1] == String.pathSeparator())
+        while (end > (u32)0 && String.isPathSeparator(b[end - (u32)1]))
             end = end - (u32)1;
         return end;
         }
@@ -1165,7 +1176,7 @@ class String<Comparable, Hashable, Copying>
         {
         u8* b = _bytes;
         u32 start = end;
-        while (start > (u32)0 && b[start - (u32)1] != String.pathSeparator())
+        while (start > (u32)0 && !String.isPathSeparator(b[start - (u32)1]))
             start = start - (u32)1;
         return start;
         }
@@ -1175,7 +1186,12 @@ class String<Comparable, Hashable, Copying>
         if (_length == (u32)0)
             return false;
         u8* b = _bytes;
-        return b[0] == String.pathSeparator();
+#if ARCH_win64
+        // C:\\ or C:/ is absolute on Windows.
+        if (_length >= (u32)3 && b[1] == (u8)':' && String.isPathSeparator(b[2]))
+            return true;
+#endif
+        return String.isPathSeparator(b[0]);
         }
 
     String* lastPathComponent(void)
@@ -1198,7 +1214,7 @@ class String<Comparable, Hashable, Copying>
         // Separators BETWEEN the parent and this component belong to neither.
         u8* b = _bytes;
         u32 cut = start;
-        while (cut > (u32)0 && b[cut - (u32)1] == String.pathSeparator())
+        while (cut > (u32)0 && String.isPathSeparator(b[cut - (u32)1]))
             cut = cut - (u32)1;
 
         if (cut == (u32)0)
@@ -1263,13 +1279,13 @@ class String<Comparable, Hashable, Copying>
         u32 skip = (u32)0;
         if (component != 0)
             {
-            while (skip < component.byteLength() && component.byteAt(skip) == String.pathSeparator())
+            while (skip < component.byteLength() && String.isPathSeparator(component.byteAt(skip)))
                 skip = skip + (u32)1;
             }
         String* tail = (component == 0) ? String.withCString("")
                                         : component.substringFromByte(skip);
         // Its own trailing separators go too, so the result never ends in one.
-        while (tail.byteLength() > (u32)0 && tail.byteAt(tail.byteLength() - (u32)1) == String.pathSeparator())
+        while (tail.byteLength() > (u32)0 && String.isPathSeparator(tail.byteAt(tail.byteLength() - (u32)1)))
             tail.deleteByteRange(tail.byteLength() - (u32)1, (u32)1);
 
         if (tail.isEmpty())
