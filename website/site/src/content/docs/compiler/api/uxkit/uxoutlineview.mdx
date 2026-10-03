@@ -139,12 +139,12 @@ native realizations all belong to the table and are unchanged.
   <TabItem label="iOS">
     <img src="/uxkit/outline-ios.png" alt="UXOutlineView on iOS" width="220" />
 
-    The flattened tree as toolkit-drawn rows, with the disclosure triangle in the indent gutter.
+    A real `UITableView` of the flattened tree, since UIKit's list has no tree of its own: each row is indented by its depth, with a chevron in front of an item that can open. Tapping the chevron opens or shuts the item in the model; tapping the row selects it.
   </TabItem>
   <TabItem label="Android">
     <img src="/uxkit/outline-android.png" alt="UXOutlineView on Android" width="220" />
 
-    The flattened tree as toolkit-drawn rows, with the disclosure triangle in the indent gutter.
+    A real `ListView` of the flattened tree: each row is indented by its depth, with an arrow in front of an item that can open. Tapping the arrow opens or shuts the item in the model; tapping the row selects it.
   </TabItem>
   <TabItem label="macOS">
     <img src="/uxkit/outline-macos.png" alt="UXOutlineView on macOS" width="220" />

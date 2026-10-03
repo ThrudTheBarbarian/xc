@@ -129,6 +129,10 @@ typedef const char *(*tbl_title_fn)(void *, int);
 typedef int (*tbl_width_fn)(void *, int);
 typedef int (*tbl_multi_fn)(void *);
 typedef void (*tbl_selset_fn)(void *, int *, int);
+typedef int (*tbl_rowint_fn)(void *, int);
+typedef void (*tbl_toggle_fn)(void *, int);
+static tbl_rowint_fn gTblLevel, gTblDisclosure;
+static tbl_toggle_fn gTblToggle;
 static tbl_rows_fn gTblRows;
 static tbl_cell_fn gTblCell;
 static tbl_cols_fn gTblCols;
@@ -250,6 +254,21 @@ static jint n_tbl_width(JNIEnv *env, jclass c, jint id, jint col) {
     (void)env; (void)c;
     void *p = tblPeer(id);
     return p && gTblWidth ? gTblWidth(p, col) : 80;
+}
+static jint n_tbl_level(JNIEnv *env, jclass c, jint id, jint r) {
+    (void)env; (void)c;
+    void *p = tblPeer(id);
+    return p && gTblLevel ? gTblLevel(p, r) : 0;
+}
+static jint n_tbl_disclosure(JNIEnv *env, jclass c, jint id, jint r) {
+    (void)env; (void)c;
+    void *p = tblPeer(id);
+    return p && gTblDisclosure ? gTblDisclosure(p, r) : 0;
+}
+static void n_tbl_toggle(JNIEnv *env, jclass c, jint id, jint r) {
+    (void)env; (void)c;
+    void *p = tblPeer(id);
+    if (p && gTblToggle) gTblToggle(p, r);
 }
 static void n_tbl_select(JNIEnv *env, jclass c, jint id, jintArray rows) {
     (void)c;
@@ -960,13 +979,18 @@ void ux_and_set_table_hooks(void *rows, void *cell, void *cols, void *title, voi
     gTblMulti = (tbl_multi_fn)multi;
     gTblSelSet = (tbl_selset_fn)selset;
 }
-void ux_and_make_table(int handle, int node, int x, int y, int w, int h, void *peer) {
+void ux_and_set_outline_hooks(void *level, void *disclosure, void *toggle) {
+    gTblLevel = (tbl_rowint_fn)level;
+    gTblDisclosure = (tbl_rowint_fn)disclosure;
+    gTblToggle = (tbl_toggle_fn)toggle;
+}
+void ux_and_make_table(int handle, int node, int x, int y, int w, int h, void *peer, int outline) {
     if (handle <= 0 || handle >= UXA_MAXW || node < 0 || node >= 64) return;
     JNIEnv *env = envNow();
     gTblPeer[handle][node] = peer;
-    jmethodID init = (*env)->GetMethodID(env, gTableCls, "<init>", "(Landroid/content/Context;IZ)V");
+    jmethodID init = (*env)->GetMethodID(env, gTableCls, "<init>", "(Landroid/content/Context;IZZ)V");
     jobject t = (*env)->NewObject(env, gTableCls, init, gActivity, (handle << 8) | node,
-                                  (jboolean)(gTblMulti && gTblMulti(peer) != 0));
+                                  (jboolean)(gTblMulti && gTblMulti(peer) != 0), (jboolean)(outline != 0));
     if (!check(env, "make_table") || !t) return;
     place(env, handle, node, t, x, y, w, h);
 }
@@ -1029,6 +1053,32 @@ void ux_and_test_table_row_at(int handle, int node, int row, int *x, int *y) {
     *x = (*env)->CallIntMethod(env, t, (*env)->GetMethodID(env, gTableCls, "rowScreenX", "(I)I"), row);
     *y = (*env)->CallIntMethod(env, t, (*env)->GetMethodID(env, gTableCls, "rowScreenY", "(I)I"), row);
     check(env, "table_row_at");
+}
+/* tests: an outline row's arrow (0 none, 1 closed, 2 open), its indent in dp, where its arrow is */
+int ux_and_test_table_chevron(int handle, int node, int row) {
+    jobject t = tableAt(handle, node);
+    if (!t) return -1;
+    JNIEnv *env = envNow();
+    jstring s = (*env)->CallObjectMethod(env, t, (*env)->GetMethodID(env, gTableCls, "arrowText", "(I)Ljava/lang/String;"), row);
+    const char *u = (*env)->GetStringUTFChars(env, s, NULL);
+    int r = u[0] == 0 ? 0 : (strcmp(u, "\xE2\x96\xBE") == 0 ? 2 : 1);
+    (*env)->ReleaseStringUTFChars(env, s, u);
+    return r;
+}
+int ux_and_test_table_indent(int handle, int node, int row) {
+    jobject t = tableAt(handle, node);
+    if (!t) return -1;
+    JNIEnv *env = envNow();
+    return (*env)->CallIntMethod(env, t, (*env)->GetMethodID(env, gTableCls, "indentDp", "(I)I"), row);
+}
+void ux_and_test_table_arrow_at(int handle, int node, int row, int *x, int *y) {
+    jobject t = tableAt(handle, node);
+    *x = *y = -1;
+    if (!t) return;
+    JNIEnv *env = envNow();
+    *x = (*env)->CallIntMethod(env, t, (*env)->GetMethodID(env, gTableCls, "arrowScreenX", "(I)I"), row);
+    *y = (*env)->CallIntMethod(env, t, (*env)->GetMethodID(env, gTableCls, "arrowScreenY", "(I)I"), row);
+    check(env, "table_arrow_at");
 }
 void ux_and_test_table_tap(int handle, int node, int row) {
     jobject t = tableAt(handle, node);
@@ -1983,8 +2033,11 @@ JNIEXPORT void ANativeActivity_onCreate(ANativeActivity *activity,
         { "nativeTitle", "(II)Ljava/lang/String;", (void *)n_tbl_title },
         { "nativeColWidth", "(II)I", (void *)n_tbl_width },
         { "nativeSelect", "(I[I)V", (void *)n_tbl_select },
+        { "nativeLevel", "(II)I", (void *)n_tbl_level },
+        { "nativeDisclosure", "(II)I", (void *)n_tbl_disclosure },
+        { "nativeToggle", "(II)V", (void *)n_tbl_toggle },
     };
-    (*env)->RegisterNatives(env, gTableCls, nt, 6);
+    (*env)->RegisterNatives(env, gTableCls, nt, 9);
     gRunInit = (*env)->GetMethodID(env, gRunCls, "<init>", "(I)V");
     if (!check(env, "RegisterNatives")) return;
 

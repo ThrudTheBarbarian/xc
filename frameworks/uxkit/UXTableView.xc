@@ -319,6 +319,21 @@ class UXTableColumn : Object
         {
         return (i32)0;
         }
+    // The mobile native tables show an outline as its flattened rows, each indented by its depth
+    // with a disclosure control (UITableView / ListView have no tree of their own).  A plain table's
+    // rows are all at depth 0 with nothing to disclose; UXOutlineView answers for real.
+    i32 nativeRowLevel(i32 r)
+        {
+        return (i32)0;
+        }
+    // bit 0: the row can open; bit 1: it is open
+    i32 nativeRowDisclosure(i32 r)
+        {
+        return (i32)0;
+        }
+    void nativeToggleRow(i32 r)
+        {
+        }
 
     void setDataSource(UXTableDataSource* d)
         {

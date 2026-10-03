@@ -46,7 +46,8 @@ void ux_ios_nav_pop(pointer nav, i32 animated);
 void ux_ios_set_nav_popped(pointer fn);
 // The native table (UITableView), fed by the peer UXTableView through these hooks.
 void ux_ios_set_table_hooks(pointer rows, pointer cell, pointer cols, pointer title, pointer width, pointer multi, pointer selset);
-void ux_ios_make_table(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, pointer peer);
+void ux_ios_make_table(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, pointer peer, i32 outline);
+void ux_ios_set_outline_hooks(pointer level, pointer disclosure, pointer toggle);
 void ux_ios_table_reload(i32 handle, i32 node);
 void ux_ios_table_select(i32 handle, i32 node, i32* rows, i32 n);
 void ux_ios_set_touch(pointer fn);
@@ -182,6 +183,23 @@ i32 xgIosTableColWidth(pointer tbl, i32 c)
 i32 xgIosTableMulti(pointer tbl)
     {
     return ((UXTableView* ?)(Object*)tbl).nativeAllowsMultiple();
+    }
+// An outline's rows: depth, disclosure (bit 0 can open, bit 1 open), and a chevron tap.
+i32 xgIosTableLevel(pointer tbl, i32 r)
+    {
+    return ((UXTableView* ?)(Object*)tbl).nativeRowLevel(r);
+    }
+i32 xgIosTableDisclosure(pointer tbl, i32 r)
+    {
+    return ((UXTableView* ?)(Object*)tbl).nativeRowDisclosure(r);
+    }
+void xgIosTableToggle(pointer tbl, i32 r)
+    {
+    ((UXTableView* ?)(Object*)tbl).nativeToggleRow(r);
+    if (gApp != (UXApplication*)0)
+        {
+        gApp.displayIfNeeded();
+        }
     }
 // A tap in the native table: the selection into the model, announced, then a display pass.
 void xgIosTableSelectSet(pointer tbl, i32* rows, i32 n)
@@ -361,6 +379,7 @@ class UXIosDriver : Object<UXViewDriver>
             ux_ios_set_table_hooks((pointer)&xgIosTableRows, (pointer)&xgIosTableCell, (pointer)&xgIosTableCols,
                                    (pointer)&xgIosTableColTitle, (pointer)&xgIosTableColWidth,
                                    (pointer)&xgIosTableMulti, (pointer)&xgIosTableSelectSet);
+            ux_ios_set_outline_hooks((pointer)&xgIosTableLevel, (pointer)&xgIosTableDisclosure, (pointer)&xgIosTableToggle);
             }
         return ux_ios_boot(screenW, screenH) != (i32)0;
         }
@@ -998,7 +1017,7 @@ class UXIosDriver : Object<UXViewDriver>
             if ((i32)t.nodes[p].kind == (i32)UXKindTable)
                 {
                 UXTableView* tv = (UXTableView* ?)(Object*)t.nodes[p].peer;
-                if (tv != (UXTableView*)0 && tv.nativeIsOutline() == (i32)0)
+                if (tv != (UXTableView*)0)
                     {
                     return (i32)1;
                     }
@@ -1027,13 +1046,14 @@ class UXIosDriver : Object<UXViewDriver>
             if (n.kind == (i32)UXKindTable)
                 {
                 UXTableView* tv = (UXTableView* ?)(Object*)n.peer;
-                if (tv == (UXTableView*)0 || tv.nativeIsOutline() != (i32)0)
+                if (tv == (UXTableView*)0)
                     {
-                    continue; // an outline stays drawn (UIKit's tree is a UICollectionView list: later)
+                    continue;
                     }
                 if (ux_ios_has_control(handle, i) == (i32)0)
                     {
-                    ux_ios_make_table(handle, i, ax, ay, aw, ah, n.peer);
+                    // an outline is the same list, its flattened rows indented with chevrons
+                    ux_ios_make_table(handle, i, ax, ay, aw, ah, n.peer, tv.nativeIsOutline());
                     }
                 else
                     {

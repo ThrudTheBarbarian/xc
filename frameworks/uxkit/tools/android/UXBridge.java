@@ -125,10 +125,18 @@ class UXTable extends android.widget.LinearLayout implements AdapterView.OnItemC
     private static native String nativeTitle(int id, int col);
     private static native int nativeColWidth(int id, int col);
     private static native void nativeSelect(int id, int[] rows);
+    // an OUTLINE is the same list: its flattened rows, indented by depth, with a disclosure arrow
+    // in front of an item that can open; tapping the arrow opens or shuts it in the model
+    private static native int nativeLevel(int id, int row);
+    private static native int nativeDisclosure(int id, int row);
+    private static native void nativeToggle(int id, int row);
+    private final boolean outline;
+    static final int INDENT = 16, ARROW = 24;
     static final int ROW_H = 32, HEAD_H = 28;
-    public UXTable(Context c, int id, boolean multi) {
+    public UXTable(Context c, int id, boolean multi, boolean outline) {
         super(c);
         this.id = id;
+        this.outline = outline;
         this.dp = c.getResources().getDisplayMetrics().density;
         setOrientation(VERTICAL);
         setBackgroundColor(0xFFFFFFFF);
@@ -170,8 +178,9 @@ class UXTable extends android.widget.LinearLayout implements AdapterView.OnItemC
     }
     private View row(int r, View old) {
         int n = Math.max(1, nativeCols(id));
+        int first = outline ? 1 : 0; // an outline row's child 0 is its arrow
         android.widget.LinearLayout v = old instanceof android.widget.LinearLayout
-                && ((android.widget.LinearLayout)old).getChildCount() == n ? (android.widget.LinearLayout)old : null;
+                && ((android.widget.LinearLayout)old).getChildCount() == n + first ? (android.widget.LinearLayout)old : null;
         if (v == null) {
             v = new android.widget.LinearLayout(getContext());
             v.setMinimumHeight((int)(ROW_H * dp));
@@ -180,20 +189,40 @@ class UXTable extends android.widget.LinearLayout implements AdapterView.OnItemC
             bg.addState(new int[] { android.R.attr.state_activated },
                         new android.graphics.drawable.ColorDrawable(0xFFD3E3FD));
             v.setBackground(bg);
+            if (outline) {
+                TextView a = new TextView(getContext());
+                a.setTextColor(0xFF49454F);
+                a.setTextSize(18);
+                a.setGravity(android.view.Gravity.CENTER);
+                // the arrow takes its own tap (the row's click is selection); the row it belongs to
+                // is set at each bind, in the tag
+                a.setOnClickListener(new View.OnClickListener() {
+                    public void onClick(View av) { nativeToggle(UXTable.this.id, (Integer)av.getTag()); }
+                });
+                v.addView(a, new LayoutParams((int)(ARROW * dp), (int)(ROW_H * dp)));
+            }
             for (int c = 0; c < n; c++) {
                 TextView l = new TextView(getContext());
                 l.setTextColor(0xFF1C1B1F);
                 l.setTextSize(15);
                 l.setSingleLine(true);
                 l.setGravity(android.view.Gravity.CENTER_VERTICAL);
-                l.setPadding(c == 0 ? (int)(16 * dp) : 0, 0, 0, 0);
-                int w = c == n - 1 ? 0 : colW(c) + (c == 0 ? (int)(16 * dp) : 0);
+                l.setPadding(c == 0 && !outline ? (int)(16 * dp) : 0, 0, 0, 0);
+                int w = c == n - 1 ? 0 : colW(c) + (c == 0 && !outline ? (int)(16 * dp) : 0);
                 v.addView(l, new LayoutParams(w, (int)(ROW_H * dp), c == n - 1 ? 1f : 0f));
             }
         }
+        if (outline) {
+            int disc = nativeDisclosure(id, r);
+            TextView a = (TextView)v.getChildAt(0);
+            a.setTag(r);
+            a.setText((disc & 1) == 0 ? "" : ((disc & 2) != 0 ? "\u25BE" : "\u25B8"));
+            a.setClickable((disc & 1) != 0);
+            v.setPadding((int)((8 + nativeLevel(id, r) * INDENT) * dp), 0, 0, 0);
+        }
         for (int c = 0; c < n; c++) {
             String t = nativeCell(id, r, c);
-            ((TextView)v.getChildAt(c)).setText(t == null ? "" : t);
+            ((TextView)v.getChildAt(c + first)).setText(t == null ? "" : t);
         }
         return v;
     }
@@ -225,8 +254,20 @@ class UXTable extends android.widget.LinearLayout implements AdapterView.OnItemC
     public boolean isSelected(int r) { return list.isItemChecked(r); }
     public String cellText(int r, int c) {
         android.widget.LinearLayout v = (android.widget.LinearLayout)adapter.getView(r, null, list);
-        return ((TextView)v.getChildAt(c)).getText().toString();
+        return ((TextView)v.getChildAt(c + (outline ? 1 : 0))).getText().toString();
     }
+    // tests: an outline row's arrow as shown ("" none, \u25B8 closed, \u25BE open), its indent
+    // (the row's left padding, in dp), and where its arrow is on the screen, for a REAL tap
+    public String arrowText(int r) {
+        android.widget.LinearLayout v = (android.widget.LinearLayout)adapter.getView(r, null, list);
+        return outline ? ((TextView)v.getChildAt(0)).getText().toString() : "";
+    }
+    public int indentDp(int r) {
+        android.widget.LinearLayout v = (android.widget.LinearLayout)adapter.getView(r, null, list);
+        return (int)(v.getPaddingLeft() / dp + 0.5f);
+    }
+    public int arrowScreenX(int r) { int[] p = new int[2]; View a = ((android.widget.LinearLayout)list.getChildAt(r)).getChildAt(0); a.getLocationOnScreen(p); return p[0] + a.getWidth() / 2; }
+    public int arrowScreenY(int r) { int[] p = new int[2]; View a = ((android.widget.LinearLayout)list.getChildAt(r)).getChildAt(0); a.getLocationOnScreen(p); return p[1] + a.getHeight() / 2; }
     public void tap(int r) { list.performItemClick(adapter.getView(r, null, list), r, r); }
     // rows the list has really laid out (an empty data source shows none), and where row r is on
     // the screen in px, for a REAL tap from the gate (adb input tap)

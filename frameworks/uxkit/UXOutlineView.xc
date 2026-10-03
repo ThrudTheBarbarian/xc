@@ -346,6 +346,28 @@ class UXOutlineNode : Object
             }
         }
 
+    // ---- the mobile native list (UITableView / ListView): flattened rows, indented ----
+    i32 nativeRowLevel(i32 r)
+        {
+        UXOutlineNode* n = self.nodeAt(r);
+        return n == (UXOutlineNode*)0 ? (i32)0 : n.level;
+        }
+    i32 nativeRowDisclosure(i32 r)
+        {
+        UXOutlineNode* n = self.nodeAt(r);
+        if (n == (UXOutlineNode*)0 || !n.expandable)
+            {
+            return (i32)0;
+            }
+        return n.expanded ? (i32)3 : (i32)1;
+        }
+    // The disclosure control was tapped: open or shut the item (the selection, by row, is the
+    // table's; it is left alone, as the drawn outline's triangle leaves it).
+    void nativeToggleRow(i32 r)
+        {
+        self.toggleRow(r);
+        }
+
     void toggleRow(i32 r)
         {
         UXOutlineNode* n = self.nodeAt(r);

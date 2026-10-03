@@ -1149,6 +1149,20 @@ typedef const char* (*tbl_title_fn)(void*, int);
 typedef int (*tbl_width_fn)(void*, int);
 typedef int (*tbl_multi_fn)(void*);
 typedef void (*tbl_selset_fn)(void*, int*, int);
+typedef int (*tbl_rowint_fn)(void*, int);
+typedef void (*tbl_toggle_fn)(void*, int);
+static tbl_rowint_fn gTblLevel, gTblDisclosure;
+static tbl_toggle_fn gTblToggle;
+/* An OUTLINE is the same list: its flattened visible rows, each indented by its depth, with a
+ * chevron for an item that can open.  A tap on the chevron opens or shuts it in the model. */
+void ux_ios_set_outline_hooks(void* level, void* disclosure, void* toggle)
+    {
+    gTblLevel = (tbl_rowint_fn)level;
+    gTblDisclosure = (tbl_rowint_fn)disclosure;
+    gTblToggle = (tbl_toggle_fn)toggle;
+    }
+#define UX_TBL_INDENT 16
+#define UX_TBL_CHEVRON 22
 static tbl_rows_fn gTblRows;
 static tbl_cell_fn gTblCell;
 static tbl_cols_fn gTblCols;
@@ -1169,6 +1183,8 @@ void ux_ios_set_table_hooks(void* rows, void* cell, void* cols, void* title, voi
 #define UX_TBL_ROW_H 32
 @interface UXTableHost : NSObject <UITableViewDataSource, UITableViewDelegate>
 @property(nonatomic) void* peer;
+@property(nonatomic) BOOL outline;
+@property(nonatomic, weak) UITableView* table;
 @end
 @implementation UXTableHost
 - (NSInteger)tableView:(UITableView*)tv numberOfRowsInSection:(NSInteger)section
@@ -1183,8 +1199,28 @@ void ux_ios_set_table_hooks(void* rows, void* cell, void* cols, void* title, voi
     int ncols = gTblCols ? gTblCols(self.peer) : 1;
     if (ncols < 1)
         ncols = 1;
-    /* one label per column, kept by tag 100 + column */
+    /* an outline row: indented by its depth, a chevron in front of an item that can open */
     CGFloat x = 16;
+    if (self.outline)
+        {
+        int level = gTblLevel ? gTblLevel(self.peer, (int)ip.row) : 0;
+        int disc = gTblDisclosure ? gTblDisclosure(self.peer, (int)ip.row) : 0;
+        x += level * UX_TBL_INDENT;
+        UIButton* chev = (UIButton*)[cell.contentView viewWithTag:200];
+        if (!chev)
+            {
+            chev = [UIButton buttonWithType:UIButtonTypeSystem];
+            chev.tag = 200;
+            [chev addTarget:self action:@selector(disclose:) forControlEvents:UIControlEventTouchUpInside];
+            [cell.contentView addSubview:chev];
+            }
+        chev.frame = CGRectMake(x - 4, 0, UX_TBL_CHEVRON + 4, UX_TBL_ROW_H);
+        chev.hidden = (disc & 1) == 0;
+        [chev setImage:[UIImage systemImageNamed:(disc & 2) ? @"chevron.down" : @"chevron.right"]
+              forState:UIControlStateNormal];
+        x += UX_TBL_CHEVRON;
+        }
+    /* one label per column, kept by tag 100 + column */
     for (int c = 0; c < ncols; c++)
         {
         UILabel* l = (UILabel*)[cell.contentView viewWithTag:100 + c];
@@ -1204,6 +1240,13 @@ void ux_ios_set_table_hooks(void* rows, void* cell, void* cols, void* title, voi
         x += w;
         }
     return cell;
+    }
+- (void)disclose:(UIButton*)chev
+    {
+    UITableView* tv = self.table;
+    NSIndexPath* ip = [tv indexPathForRowAtPoint:[chev convertPoint:CGPointMake(2, 2) toView:tv]];
+    if (ip && gTblToggle)
+        gTblToggle(self.peer, (int)ip.row); /* the model re-flattens; the display pass reloads */
     }
 - (void)report:(UITableView*)tv
     {
@@ -1251,11 +1294,13 @@ static UIView* tblHeader(void* peer, CGFloat width)
         }
     return h;
     }
-void ux_ios_make_table(int handle, int node, int x, int y, int w, int h, void* peer)
+void ux_ios_make_table(int handle, int node, int x, int y, int w, int h, void* peer, int outline)
     {
     UITableView* tv = [[UITableView alloc] initWithFrame:CGRectMake(x, y, w, h) style:UITableViewStylePlain];
     UXTableHost* host = [UXTableHost new];
     host.peer = peer;
+    host.outline = outline != 0;
+    host.table = tv;
     if (!gTblHosts)
         gTblHosts = [NSMutableArray new];
     [gTblHosts addObject:host];
@@ -1318,6 +1363,31 @@ int ux_ios_test_table_cell_is(int handle, int node, int row, int col, const char
     UITableViewCell* cell = [tv.dataSource tableView:tv cellForRowAtIndexPath:[NSIndexPath indexPathForRow:row inSection:0]];
     UILabel* l = (UILabel*)[cell.contentView viewWithTag:100 + col];
     return l && [l.text isEqualToString:[NSString stringWithUTF8String:want]];
+    }
+/* Tests: an outline row's chevron as shown (0 none, 1 closed, 2 open) and its indent (the first
+ * column's x), and a USER's tap on the chevron (the button's own action, as a touch sends it). */
+int ux_ios_test_table_chevron(int handle, int node, int row)
+    {
+    UITableView* tv = (UITableView*)gCtl[handle][node];
+    UITableViewCell* cell = [tv.dataSource tableView:tv cellForRowAtIndexPath:[NSIndexPath indexPathForRow:row inSection:0]];
+    UIButton* chev = (UIButton*)[cell.contentView viewWithTag:200];
+    if (!chev || chev.hidden)
+        return 0;
+    UIImage* down = [UIImage systemImageNamed:@"chevron.down"];
+    return [[chev imageForState:UIControlStateNormal] isEqual:down] ? 2 : 1;
+    }
+int ux_ios_test_table_indent(int handle, int node, int row)
+    {
+    UITableView* tv = (UITableView*)gCtl[handle][node];
+    UITableViewCell* cell = [tv.dataSource tableView:tv cellForRowAtIndexPath:[NSIndexPath indexPathForRow:row inSection:0]];
+    return (int)[cell.contentView viewWithTag:100].frame.origin.x;
+    }
+void ux_ios_test_table_disclose(int handle, int node, int row)
+    {
+    UITableView* tv = (UITableView*)gCtl[handle][node];
+    [tv layoutIfNeeded];
+    UITableViewCell* cell = [tv cellForRowAtIndexPath:[NSIndexPath indexPathForRow:row inSection:0]];
+    [(UIButton*)[cell.contentView viewWithTag:200] sendActionsForControlEvents:UIControlEventTouchUpInside];
     }
 int ux_ios_test_table_shown(int handle, int node)
     {
