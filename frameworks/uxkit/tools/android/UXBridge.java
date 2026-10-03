@@ -73,6 +73,59 @@ public class UXBridge implements View.OnClickListener, SeekBar.OnSeekBarChangeLi
     @Override public void onClick(DialogInterface d, int which) { nativeValue(id, which); }
     @Override public void onCancel(DialogInterface d) { nativeFire(id); }
 
+    // UXScrollView: a real android.widget.ScrollView, which owns the offset, the fling and the edge
+    // effect.  Its child is a FrameLayout DOCUMENT, the content's height, holding the draw view that
+    // paints the scroll view's document subtree (a UXDrawView whose id names the scroll node) and
+    // any native control inside the scroll view, placed by translation as the window's are.
+    public static View scroller(android.app.Activity a, View draw, int w, int h, int docH) {
+        UXScroller sv = new UXScroller(a);
+        sv.setFillViewport(false);
+        android.widget.FrameLayout doc = new android.widget.FrameLayout(a);
+        doc.addView(draw, w, Math.max(docH, h));
+        sv.addView(doc, new android.widget.FrameLayout.LayoutParams(w, Math.max(docH, h)));
+        return sv;
+    }
+    public static void scrollerReload(View sv, int w, int h, int docH) {
+        android.view.ViewGroup doc = (android.view.ViewGroup) ((android.view.ViewGroup) sv).getChildAt(0);
+        View draw = doc.getChildAt(0);
+        android.view.ViewGroup.LayoutParams lp = doc.getLayoutParams();
+        lp.width = w;
+        lp.height = Math.max(docH, h);
+        doc.setLayoutParams(lp);
+        android.view.ViewGroup.LayoutParams dp = draw.getLayoutParams();
+        dp.width = w;
+        dp.height = Math.max(docH, h);
+        draw.setLayoutParams(dp);
+        draw.invalidate();
+    }
+    public static void scrollerInvalidate(View sv) {
+        ((android.view.ViewGroup) ((android.view.ViewGroup) sv).getChildAt(0)).getChildAt(0).invalidate();
+    }
+    public static void scrollerSet(View sv, int px) { ((android.widget.ScrollView) sv).scrollTo(0, px); }
+    public static int scrollerGet(View sv) { return sv.getScrollY(); }
+    // A rounded panel: the scroller clips its content to the rounded rect and strokes the edge over it
+    // (UXScroller.dispatchDraw), which holds on a software canvas as on the screen's.
+    public static void scrollerStyle(View sv, float radius, int rgb, float border) {
+        UXScroller s = (UXScroller) sv;
+        s.radius = radius;
+        s.edgeRGB = rgb;
+        s.edgeW = Math.max(1f, border);
+        s.invalidate();
+    }
+    // a native control into the document, at (x, y) in it
+    public static void scrollerAdopt(View sv, View child, int x, int y, int w, int h) {
+        android.view.ViewGroup doc = (android.view.ViewGroup) ((android.view.ViewGroup) sv).getChildAt(0);
+        if (child.getParent() != doc) {
+            if (child.getParent() instanceof android.view.ViewGroup) ((android.view.ViewGroup) child.getParent()).removeView(child);
+            doc.addView(child, w, h);
+        }
+        child.setTranslationX(x);
+        child.setTranslationY(y);
+    }
+    public static boolean scrollerHolds(View sv, View child) {
+        return child.getParent() == ((android.view.ViewGroup) sv).getChildAt(0);
+    }
+
     // UXToolbar: a real android.widget.Toolbar.  Its buttons are action items of its menu, shown as
     // room allows, with the rest under the platform's own overflow (UXToolbar's overflow, natively);
     // a tap reports the item's tag through nativeValue.  A Toolbar lays its actions out at the end, so
@@ -538,5 +591,40 @@ class UXMenuButton extends TextView implements View.OnClickListener,
         if (t < 0 || t >= items.size() || j < 0 || j >= items.get(t).size()) return 0;
         String[] it = items.get(t).get(j);
         return it[3].equals("1") ? 0 : 1 | (it[1].equals("1") ? 2 : 0) | (it[2].equals("1") ? 4 : 0);
+    }
+}
+
+// UXScrollView's container (UXBridge.scroller): a ScrollView that clips what it scrolls to a rounded
+// rect, when it has a radius, and strokes its edge OVER the content.  Clipping to the outline would
+// not do: a software canvas (a snapshot, View.draw onto a Bitmap) ignores it, and a background is drawn
+// beneath the children, which would cover the edge.
+class UXScroller extends android.widget.ScrollView {
+    float radius, edgeW = 1f;
+    int edgeRGB = -1;
+    private final android.graphics.Path clip = new android.graphics.Path();
+    private final android.graphics.Paint edge = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+    private final android.graphics.RectF box = new android.graphics.RectF();
+    UXScroller(Context c) { super(c); }
+    @Override protected void dispatchDraw(Canvas canvas) {
+        // the visible rect, in the scrolled coordinates the children draw in
+        box.set(getScrollX(), getScrollY(), getScrollX() + getWidth(), getScrollY() + getHeight());
+        if (radius > 0) {
+            clip.reset();
+            clip.addRoundRect(box, radius, radius, android.graphics.Path.Direction.CW);
+            canvas.save();
+            canvas.clipPath(clip);
+            super.dispatchDraw(canvas);
+            canvas.restore();
+        } else {
+            super.dispatchDraw(canvas);
+        }
+        if (edgeRGB >= 0) {
+            edge.setStyle(android.graphics.Paint.Style.STROKE);
+            edge.setStrokeWidth(edgeW);
+            edge.setColor(0xFF000000 | edgeRGB);
+            float h = edgeW / 2f;
+            box.inset(h, h);
+            canvas.drawRoundRect(box, Math.max(0f, radius - h), Math.max(0f, radius - h), edge);
+        }
     }
 }

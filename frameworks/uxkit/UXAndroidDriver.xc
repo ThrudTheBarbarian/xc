@@ -33,6 +33,7 @@
 #import "UXTouch.xc"              // drawn content's touches -> mouse events
 #import "UXNavigationController.xc" // Up / Back on the native bar come back through uxNavNativePopped
 #import "UXTableView.xc"   // the native table (a ListView) reads its rows from the peer table
+#import "UXScrollView.xc"  // a scroll view is a ScrollView
 #import "UXMenuEncode.xc"  // the app's menus, handed to the overflow button as one string
 #import "UXApplication.xc" // gApp: the driver-owned loop starts the delegate, and stop() quits
 #import "UXLibc.xc"
@@ -48,6 +49,14 @@ void ux_and_nav_push(pointer nav, u8* title, i32 animated);
 void ux_and_nav_pop(pointer nav, i32 animated);
 void ux_and_set_nav_popped(pointer fn);
 void ux_and_set_touch(pointer fn);
+// native scroll containers: a ScrollView whose document draws the scroll view's subtree
+void ux_and_set_scroll_content(pointer fn);
+void ux_and_make_scroll(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, i32 contentH, pointer sv, i32 docX, i32 docY);
+void ux_and_scroll_reload(i32 handle, i32 node, i32 w, i32 h, i32 contentH, i32 docX, i32 docY);
+void ux_and_scroll_set(i32 handle, i32 node, i32 px);
+i32 ux_and_scroll_get(i32 handle, i32 node);
+void ux_and_scroll_style(i32 handle, i32 node, i32 radius, i32 rgb);
+void ux_and_reparent_to_scroll(i32 handle, i32 node, i32 scrollNode, i32 ax, i32 ay, i32 aw, i32 ah);
 // The native table (UXTable: a ListView under a header), fed by the peer UXTableView through hooks.
 void ux_and_set_table_hooks(pointer rows, pointer cell, pointer cols, pointer title, pointer width, pointer multi, pointer selset);
 void ux_and_make_table(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, pointer peer, i32 outline);
@@ -462,6 +471,7 @@ class UXAndroidDriver : Object<UXViewDriver>
             ux_and_set_field_submit_hooks((pointer)&uxAndFieldSubmitted);
             ux_and_set_nav_popped((pointer)&uxAndNavPopped);
             ux_and_set_touch((pointer)&uxTouch);
+            ux_and_set_scroll_content((pointer)&ux_scroll_draw); // a scroll document draws its subtree
             ux_and_set_table_hooks((pointer)&xgAndTableRows, (pointer)&xgAndTableCell, (pointer)&xgAndTableCols,
                                    (pointer)&xgAndTableColTitle, (pointer)&xgAndTableColWidth,
                                    (pointer)&xgAndTableMulti, (pointer)&xgAndTableSelectSet);
@@ -1158,6 +1168,37 @@ class UXAndroidDriver : Object<UXViewDriver>
                 {
                 continue;
                 }
+            if (n.kind == (i32)UXKindScroll)
+                {
+                // A ScrollView over the scroll view; its document draws the scroll view's document
+                // subtree (ux_scroll_draw), at the document's own place in the window.
+                UXScrollView* sv = (UXScrollView* ?)(Object*)n.peer;
+                if (sv == (UXScrollView*)0)
+                    {
+                    continue;
+                    }
+                i32 dn = sv.nativeDocNode();
+                i32 dx = ax;
+                i32 dy = ay;
+                if (dn >= (i32)0)
+                    {
+                    i32 dw = (i32)0;
+                    i32 dh = (i32)0;
+                    self.structAbsFrame(tree, dn, &dx, &dy, &dw, &dh);
+                    }
+                if (ux_and_has_control(handle, i) == (i32)0)
+                    {
+                    ux_and_make_scroll(handle, i, ax, ay, aw, ah, sv.nativeContentHeight(), n.peer, dx, dy);
+                    }
+                else
+                    {
+                    ux_and_set_control_frame(handle, i, ax, ay, aw, ah);
+                    ux_and_scroll_reload(handle, i, aw, ah, sv.nativeContentHeight(), dx, dy);
+                    }
+                ux_and_scroll_style(handle, i, sv.nativeCornerRadius(), sv.nativeBorderRGB());
+                ux_and_set_control_hidden(handle, i, self.effectiveHidden(tree, i));
+                continue;
+                }
             if (n.kind == (i32)UXKindTable)
                 {
                 UXTableView* tv = (UXTableView* ?)(Object*)n.peer;
@@ -1348,6 +1389,31 @@ class UXAndroidDriver : Object<UXViewDriver>
                     }
                 }
             }
+        // A native control inside a scroll view goes into that container's document, so it scrolls
+        // and clips with it.  A scroll, a table or a GL view owns its own surface and stays put.
+        for (i32 i = (i32)0; i < t.count; i = i + (i32)1)
+            {
+            i32 kk = (i32)t.nodes[i].kind;
+            if (kk == (i32)UXKindScroll || kk == (i32)UXKindTable || kk == (i32)UXKindGLView || ux_and_has_control(handle, i) == (i32)0)
+                {
+                continue;
+                }
+            i32 anc = (i32)t.nodes[i].parent;
+            while (anc >= (i32)0)
+                {
+                if ((i32)t.nodes[anc].kind == (i32)UXKindScroll && ux_and_has_control(handle, anc) != (i32)0)
+                    {
+                    i32 cx = (i32)0;
+                    i32 cy = (i32)0;
+                    i32 cw = (i32)0;
+                    i32 chh = (i32)0;
+                    self.structAbsFrame(tree, i, &cx, &cy, &cw, &chh);
+                    ux_and_reparent_to_scroll(handle, i, anc, cx, cy, cw, chh);
+                    break;
+                    }
+                anc = (i32)t.nodes[anc].parent;
+                }
+            }
         }
 
     // ---- painting ------------------------------------------------------------
@@ -1365,9 +1431,9 @@ class UXAndroidDriver : Object<UXViewDriver>
         // A node with a native control paints itself — never draw under it.
         bool native = t.win != (i32)0 && ux_and_has_control(t.win, i) != (i32)0;
         // ...and a native table paints its whole subtree: its rows are the ListView's.
-        if (native && t.nodes[i].kind == (i32)UXKindTable)
+        if (native && (t.nodes[i].kind == (i32)UXKindTable || t.nodes[i].kind == (i32)UXKindScroll))
             {
-            return;
+            return; // ...as a native scroll container's document paints its own (ux_scroll_draw)
             }
         if (!native)
             {
@@ -1381,7 +1447,7 @@ class UXAndroidDriver : Object<UXViewDriver>
                 i32 vw = (i32)0;
                 i32 vh = (i32)0;
                 self.structAbsFrame((pointer)t, i, &vx, &vy, &vw, &vh);
-                ux_and_clip(vx, vy, vw, vh);
+                ux_and_clip(vx - gAndDrawOX, vy - gAndDrawOY, vw, vh); // in the surface's own space
                 // A GL view that owns a context is painted with its last frame, never by
                 // drawRect: the two are alternative renderers.
                 bool gl = t.nodes[i].kind == (i32)UXKindGLView && t.nodes[i].peer != (pointer)0
@@ -1403,7 +1469,7 @@ class UXAndroidDriver : Object<UXViewDriver>
             i32 chh = (i32)0;
             self.structAbsFrame((pointer)t, i, &cx, &cy, &cw, &chh);
             i32 ci = (i32)t.nodes[i].clipIn;
-            ux_and_clip_round(cx + ci, cy + ci, cw - ci * (i32)2, chh - ci * (i32)2, (i32)t.nodes[i].clipR);
+            ux_and_clip_round(cx + ci - gAndDrawOX, cy + ci - gAndDrawOY, cw - ci * (i32)2, chh - ci * (i32)2, (i32)t.nodes[i].clipR);
             }
         i16 c = t.nodes[i].head;
         while (c >= (i16)0)
@@ -1435,17 +1501,18 @@ class UXAndroidDriver : Object<UXViewDriver>
         gAndDrawOX = x;
         gAndDrawOY = y;
         }
-    // ScrollView milestone
+    // A scroll view is a ScrollView, which owns the offset (realizeTree)
     bool scrollsNatively(void)
         {
-        return false;
+        return true;
         }
     void nativeScrollTo(pointer h, i32 node, i32 px)
         {
+        ux_and_scroll_set(((ANTree*)h).win, node, px);
         }
     i32 nativeScrollPx(pointer h, i32 node)
         {
-        return (i32)0;
+        return ux_and_scroll_get(((ANTree*)h).win, node);
         }
 
     // ---- text editing (the shared engine; the EditText overlay is a milestone) ----

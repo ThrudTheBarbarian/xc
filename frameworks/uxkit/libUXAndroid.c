@@ -105,6 +105,15 @@ static int check(JNIEnv *env, const char *what) {
 static jobject gRoot;                     /* global ref */
 static jobject gWinV[UXA_MAXW];           /* global refs, per-window FrameLayout */
 static jobject gCtl[UXA_MAXW][64];        /* global refs, per-node widget */
+/* Native scroll containers (UXScrollView): a ScrollView over a FrameLayout document whose draw view
+ * (a UXDrawView with id (handle << 8) | node) paints the scroll view's document subtree.  docX/docY
+ * are the document's place in the window's content, in dp (the toolkit's coordinates, unscrolled:
+ * the ScrollView owns the offset). */
+typedef struct { jobject draw; void *sv; int docX, docY; } UXAndScrollRec;
+static UXAndScrollRec gScroll[UXA_MAXW][64];
+static unsigned char gInDoc[UXA_MAXW][64]; /* a control moved into scroll node n's document: n + 1 */
+static void (*gScrollContent)(void *sv, int docW, int docH);
+void ux_and_set_scroll_content(void *fn) { gScrollContent = (void (*)(void *, int, int))fn; }
 static ux_content_fn gContent[UXA_MAXW];
 static void         *gContentUd[UXA_MAXW];
 static int gWinW[UXA_MAXW], gWinH[UXA_MAXW];
@@ -308,6 +317,17 @@ static void n_menu_pick(JNIEnv *env, jclass c, jint t, jint j) {
 static void n_draw(JNIEnv *env, jclass c, jint id, jobject canvas, jint w, jint h) {
     (void)c;
     int handle = id >> 8;
+    int node = id & 0xFF;
+    if (node > 0) { /* a scroll container's document: the scroll view's subtree, in dp */
+        if (handle < 0 || handle >= UXA_MAXW || node >= 64 || !gScroll[handle][node].sv || !gScrollContent) return;
+        if (gCanvasScale)
+            (*env)->CallVoidMethod(env, canvas, gCanvasScale, (jfloat)gDensity, (jfloat)gDensity);
+        jobject was = gDrawCanvas;
+        gDrawCanvas = canvas;
+        gScrollContent(gScroll[handle][node].sv, (int)(w / gDensity + 0.5f), (int)(h / gDensity + 0.5f));
+        gDrawCanvas = was;
+        return;
+    }
     if (handle < 0 || handle >= UXA_MAXW || !gContent[handle]) return;
     /* the decor is certainly attached by the first draw: if boot ran too
      * early to see the insets, learn and apply them now */
@@ -332,7 +352,12 @@ static void n_touch(JNIEnv *env, jclass c, jint id, jint action, jfloat x, jfloa
     if (handle < 0 || handle >= UXA_MAXW || !gTouch || !gContentUd[handle]) return;
     int phase = action == 0 ? 0 : action == 2 ? 1 : action == 1 ? 2 : action == 3 ? 3 : -1;
     if (phase < 0) return;
-    gTouch(gContentUd[handle], phase, (int)(x / gDensity + 0.5f), (int)(y / gDensity + 0.5f)); /* nearest dp */
+    int node = id & 0xFF, ox = 0, oy = 0;
+    if (node > 0 && node < 64) { /* on a scroll document: the document's place plus the touch's in it */
+        ox = gScroll[handle][node].docX;
+        oy = gScroll[handle][node].docY;
+    }
+    gTouch(gContentUd[handle], phase, ox + (int)(x / gDensity + 0.5f), oy + (int)(y / gDensity + 0.5f)); /* nearest dp */
 }
 
 /* ── UI-thread posting (Handler on the main looper + the dex's UXRun) ───── */
@@ -952,6 +977,9 @@ void ux_and_window_close(int handle) {
     gWinV[handle] = NULL; gContent[handle] = NULL;
     for (int n = 0; n < 64; n++) {
         if (gCtl[handle][n]) { (*env)->DeleteGlobalRef(env, gCtl[handle][n]); gCtl[handle][n] = NULL; }
+        if (gScroll[handle][n].draw) (*env)->DeleteGlobalRef(env, gScroll[handle][n].draw);
+        gScroll[handle][n] = (UXAndScrollRec){0};
+        gInDoc[handle][n] = 0;
         if (gSpinAdapter[handle][n]) { (*env)->DeleteGlobalRef(env, gSpinAdapter[handle][n]); gSpinAdapter[handle][n] = NULL; }
         gFieldBuf[handle][n] = NULL;
     }
@@ -961,6 +989,8 @@ void ux_and_window_close(int handle) {
 void ux_and_window_invalidate(int handle) {
     JNIEnv *env = envNow();
     if (gWinV[handle]) (*env)->CallVoidMethod(env, gWinV[handle], gInvalidate);
+    for (int n = 1; n < 64; n++) /* the scroll documents are surfaces too */
+        if (gScroll[handle][n].draw) (*env)->CallVoidMethod(env, gScroll[handle][n].draw, gInvalidate);
 }
 void ux_and_content_geometry(int handle, int *w, int *h) { *w = gWinW[handle]; *h = gWinH[handle]; }
 /* The window's content as it is on screen, region (x, y, w, h) in dp, into out as w * h opaque
@@ -1361,6 +1391,89 @@ void ux_and_make_stepper(int handle, int node, int x, int y, int w, int h) {
     check(env, "make_stepper");
 }
 
+/* ── the scroll container: a real ScrollView (UXBridge.scroller) ── */
+static jmethodID bridgeStatic(JNIEnv *env, const char *name, const char *sig) {
+    return (*env)->GetStaticMethodID(env, gBridgeCls, name, sig);
+}
+void ux_and_make_scroll(int handle, int node, int x, int y, int w, int h, int contentH, void *sv, int docX, int docY) {
+    JNIEnv *env = envNow();
+    if (handle <= 0 || handle >= UXA_MAXW || node <= 0 || node >= 64 || gCtl[handle][node] || !gWinV[handle]) return;
+    jobject draw = (*env)->NewObject(env, gDrawCls, gDrawInit, gActivity, (handle << 8) | node);
+    jobject s = (*env)->CallStaticObjectMethod(env, gBridgeCls, bridgeStatic(env, "scroller",
+                    "(Landroid/app/Activity;Landroid/view/View;III)Landroid/view/View;"), gActivity, draw, PX(w), PX(h), PX(contentH));
+    if (!check(env, "make_scroll") || !s) return;
+    UXAndScrollRec *r = &gScroll[handle][node];
+    r->draw = (*env)->NewGlobalRef(env, draw);
+    r->sv = sv;
+    r->docX = docX;
+    r->docY = docY;
+    place(env, handle, node, s, x, y, w, h);
+    check(env, "place scroll");
+}
+void ux_and_scroll_reload(int handle, int node, int w, int h, int contentH, int docX, int docY) {
+    JNIEnv *env = envNow();
+    if (node <= 0 || node >= 64 || !gCtl[handle][node] || !gScroll[handle][node].draw) return;
+    gScroll[handle][node].docX = docX;
+    gScroll[handle][node].docY = docY;
+    (*env)->CallStaticVoidMethod(env, gBridgeCls, bridgeStatic(env, "scrollerReload", "(Landroid/view/View;III)V"),
+                                 gCtl[handle][node], PX(w), PX(h), PX(contentH));
+    check(env, "scroll reload");
+}
+void ux_and_scroll_set(int handle, int node, int px) {
+    JNIEnv *env = envNow();
+    if (node <= 0 || node >= 64 || !gScroll[handle][node].draw) return;
+    (*env)->CallStaticVoidMethod(env, gBridgeCls, bridgeStatic(env, "scrollerSet", "(Landroid/view/View;I)V"), gCtl[handle][node], PX(px));
+    check(env, "scroll set");
+}
+int ux_and_scroll_get(int handle, int node) {
+    JNIEnv *env = envNow();
+    if (node <= 0 || node >= 64 || !gScroll[handle][node].draw) return 0;
+    jint px = (*env)->CallStaticIntMethod(env, gBridgeCls, bridgeStatic(env, "scrollerGet", "(Landroid/view/View;)I"), gCtl[handle][node]);
+    return (int)(px / gDensity + 0.5f);
+}
+void ux_and_scroll_style(int handle, int node, int radius, int rgb) {
+    JNIEnv *env = envNow();
+    if (node <= 0 || node >= 64 || !gScroll[handle][node].draw) return;
+    (*env)->CallStaticVoidMethod(env, gBridgeCls, bridgeStatic(env, "scrollerStyle", "(Landroid/view/View;FIF)V"),
+                                 gCtl[handle][node], (jfloat)(radius * gDensity), rgb, (jfloat)gDensity);
+    check(env, "scroll style");
+}
+/* A native control inside a scroll view goes into its document, so it scrolls and clips with it. */
+void ux_and_reparent_to_scroll(int handle, int node, int scrollNode, int ax, int ay, int aw, int ah) {
+    JNIEnv *env = envNow();
+    if (node >= 64 || scrollNode <= 0 || scrollNode >= 64 || !gCtl[handle][node] || !gScroll[handle][scrollNode].draw) return;
+    UXAndScrollRec *r = &gScroll[handle][scrollNode];
+    (*env)->CallStaticVoidMethod(env, gBridgeCls, bridgeStatic(env, "scrollerAdopt", "(Landroid/view/View;Landroid/view/View;IIII)V"),
+                                 gCtl[handle][scrollNode], gCtl[handle][node], PX(ax - r->docX), PX(ay - r->docY), PX(aw), PX(ah));
+    check(env, "scroll adopt");
+    gInDoc[handle][node] = (unsigned char)(scrollNode + 1);
+}
+/* Tests: the container is a ScrollView; a control is in its document; and where a point of the
+ * document (in the toolkit's coordinates) is on the screen now, in pixels, for a real tap there. */
+int ux_and_test_scroll_native(int handle, int node) {
+    return node > 0 && node < 64 && gScroll[handle][node].draw && gCtl[handle][node] ? 1 : 0;
+}
+int ux_and_test_in_scroll_doc(int handle, int node, int scrollNode) {
+    JNIEnv *env = envNow();
+    if (node >= 64 || scrollNode <= 0 || scrollNode >= 64 || !gCtl[handle][node] || !gScroll[handle][scrollNode].draw) return 0;
+    return (*env)->CallStaticBooleanMethod(env, gBridgeCls, bridgeStatic(env, "scrollerHolds", "(Landroid/view/View;Landroid/view/View;)Z"),
+                                           gCtl[handle][scrollNode], gCtl[handle][node]) ? 1 : 0;
+}
+void ux_and_test_doc_screen(int handle, int node, int x, int y, int *sx, int *sy) {
+    JNIEnv *env = envNow();
+    *sx = *sy = -1;
+    if (node <= 0 || node >= 64 || !gScroll[handle][node].draw) return;
+    jintArray a = (*env)->NewIntArray(env, 2);
+    jclass vc = (*env)->FindClass(env, "android/view/View");
+    (*env)->CallVoidMethod(env, gScroll[handle][node].draw, (*env)->GetMethodID(env, vc, "getLocationOnScreen", "([I)V"), a);
+    jint v[2];
+    (*env)->GetIntArrayRegion(env, a, 0, 2, v);
+    (*env)->DeleteLocalRef(env, a);
+    UXAndScrollRec *r = &gScroll[handle][node];
+    *sx = v[0] + PX(x - r->docX);
+    *sy = v[1] + PX(y - r->docY);
+}
+
 /* ── the toolbar: a real android.widget.Toolbar (UXBridge.toolbar) ── */
 void ux_and_make_toolbar(int handle, int node, int x, int y, int w, int h) {
     JNIEnv *env = envNow();
@@ -1471,6 +1584,8 @@ void ux_and_set_control_frame(int handle, int node, int x, int y, int w, int h) 
     JNIEnv *env = envNow();
     jobject c = gCtl[handle][node];
     if (!c) return;
+    int sn = gInDoc[handle][node] - 1;
+    if (sn >= 0) { x -= gScroll[handle][sn].docX; y -= gScroll[handle][sn].docY; } /* in its document */
     (*env)->CallVoidMethod(env, c, gSetTransX, (jfloat)PX(x));
     (*env)->CallVoidMethod(env, c, gSetTransY, (jfloat)PX(y));
 }

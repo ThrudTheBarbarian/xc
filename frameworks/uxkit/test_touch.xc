@@ -4,8 +4,9 @@
 // widgets on top responded to a finger.  This drives touches through UXTouch: a tap on a drawn view
 // is a press and a release; a drag stays with the view that took the press even when the finger
 // leaves it (the window's grab); a drag on a scroll view's content pans it, finger and content
-// moving together; and (Android, where the touches go through the platform's own view dispatch) a
-// native button still takes its own touch, the drawn content beneath never seeing it.
+// moving together (on Android, where the touches go through the platform's own view dispatch, the
+// native ScrollView pans itself); and on Android a native button still takes its own touch, the
+// drawn content beneath never seeing it.
 #import <Stdio.xc>
 // One test, two backends: run_android_touch.sh builds it with -D TOUCH_ANDROID (Android is plain
 // arm64 to the compiler, so there is no target symbol to test).
@@ -169,11 +170,29 @@ void touches(void)
     touch(h, (i32)1, (i32)100, (i32)30);
     touch(h, (i32)2, (i32)100, (i32)30);
     ck((u8*)"the row took the press", row.downs == (i32)1);
+#if TOUCH_ANDROID
+    // Android's touches go through the platform's own dispatch, so the drag reaches the native
+    // ScrollView, which pans itself: with the finger, less the touch slop its first move spends.
+    i32 moved = sv.scrollPx();
+    Stdio.printf("  (the container panned to %d)\n", moved);
+    ck((u8*)"a drag pans the native container with the finger", moved > (i32)40);
+    // the release may have flung it on: a touch stops a fling, as a finger does, then measure from there
+    touch(h, (i32)0, (i32)100, (i32)300);
+    touch(h, (i32)2, (i32)100, (i32)300);
+    i32 up = sv.scrollPx();
+    touch(h, (i32)0, (i32)100, (i32)200);
+    touch(h, (i32)1, (i32)100, (i32)240);
+    touch(h, (i32)1, (i32)100, (i32)320);
+    touch(h, (i32)2, (i32)100, (i32)320);
+    Stdio.printf("  (from %d, back to %d)\n", up, sv.scrollPx());
+    ck((u8*)"...and back down with it", sv.scrollPx() < up);
+#else
     ck((u8*)"a drag pans the content by the finger's travel (150)", sv.scrollOffset == (i16)150);
     touch(h, (i32)0, (i32)100, (i32)200);
     touch(h, (i32)1, (i32)100, (i32)260);
     touch(h, (i32)2, (i32)100, (i32)260);
     ck((u8*)"...and back down (90)", sv.scrollOffset == (i16)90);
+#endif
 
 #if TOUCH_ANDROID
     // a native widget takes its own touch; the drawn content beneath never sees it
