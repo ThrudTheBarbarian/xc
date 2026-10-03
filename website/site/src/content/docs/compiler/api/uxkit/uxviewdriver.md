@@ -160,9 +160,10 @@ into a DIB at the present, and blitted with `StretchDIBits` in the window's own
 paint. It matters more there, because the GL used to be a child window and
 Windows clips a parent's painting around its children — nothing the toolkit drew
 could land on the map at all. A GL without framebuffer objects keeps the visible
-child window. Android does the same with GLES 3: an EGL context per view renders
-into a framebuffer object, the present reads the frame back into a bitmap, and
-the window's own draw paints it. GTK and the web still put the GL on a plane of
+child window. Android and iOS do the same with OpenGL ES 3 (an EGL context on
+Android, an `EAGLContext` on iOS): each view renders into a framebuffer object,
+the present reads the frame back into an image, and the window's own draw paints
+it. GTK and the web still put the GL on a plane of
 its own.
 
 **The drawable never exceeds what the GPU can hold.** Its size in pixels is the
@@ -192,8 +193,8 @@ composites on every backend, because the display server composites; the question
 is who owns that step, and the app picks its overlay and redraw strategy from the
 answer. GTK and the web answer **true** (the surface is a distinct plane the
 compositor merges — a `GtkGLArea`, a canvas stacked under the 2-D one). AppKit
-Win32 and Android answer **false**: their frame is painted into the 2-D pass and
-ordered by the driver. GEM and iOS answer **false** (no GL).
+Win32, Android and iOS answer **false**: their frame is painted into the 2-D pass
+and ordered by the driver. GEM answers **false** (no GL).
 
 ### The shadow tree is the platform's, not ours
 

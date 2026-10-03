@@ -18,6 +18,8 @@
 // (draw view AND native controls) into a bitmap, synchronously;
 // ux_ios_pixel() reads it back — the cacheDisplayInRect analogue.
 #import <UIKit/UIKit.h>
+#import <objc/message.h>
+#include <dlfcn.h>
 #include "ux_posix_fs.h" // listDir / delete / rename / copy for the drawn file panel
 
 #define UXIOS_MAXW 64
@@ -1110,6 +1112,226 @@ int ux_ios_alert(int icon, const char* lines, const char* buttons, int defBtn)
     while (!gIosAlertDone)
         CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, false);
     return gIosAlertResult;
+    }
+
+// ── GL: OpenGL ES 3, rendered offscreen, painted in the window's own 2-D pass ────────────────
+// The one-surface model AppKit, Win32 and Android use.  Each GL view gets an EAGLContext (ES 3) and
+// a framebuffer object at the view's PIXEL size (its points times the screen scale) with depth and
+// stencil, bound as the renderer's default.  presentGL reads the frame back into a CGImage and
+// has the window redrawn, and the draw walk paints the image where the view sits, in tree order,
+// so a 2-D view after the GL view is drawn over it.  GL's rows run bottom-up and the drawing
+// contexts here are top-down: drawing the image as read flips it once more, the right way up.
+// The OpenGLES framework is opened at run time (no app links it), and EAGLContext is reached
+// through the runtime, so nothing here names the deprecated API at compile time.
+#define UXIOS_GL_MAX 8
+typedef void (*igl_gen_fn)(int, unsigned*);
+typedef void (*igl_bind_fn)(unsigned, unsigned);
+typedef void (*igl_rbstorage_fn)(unsigned, unsigned, int, int);
+typedef void (*igl_fbrb_fn)(unsigned, unsigned, unsigned, unsigned);
+typedef void (*igl_viewport_fn)(int, int, int, int);
+typedef void (*igl_readpixels_fn)(int, int, int, int, unsigned, unsigned, void*);
+typedef void (*igl_del_fn)(int, const unsigned*);
+typedef void (*igl_getint_fn)(unsigned, int*);
+static void* gGlesLib;
+static Class gEAGL;
+static struct
+    {
+    void* view;
+    id ctx;
+    unsigned fbo, rbColor, rbDepth;
+    int pw, ph;        /* the drawable, in pixels */
+    CGImageRef img;    /* the last frame */
+    int win;           /* the window it was last painted in (0: not yet) */
+    } gGl[UXIOS_GL_MAX];
+static int gGlCount;
+static int gGlTestMax; /* tests: a lower GPU limit, to exercise the clamp */
+void ux_ios_test_gl_max(int max)
+    {
+    gGlTestMax = max;
+    }
+static int iglLoad(void)
+    {
+    if (gEAGL)
+        return 1;
+    if (!gGlesLib)
+        gGlesLib = dlopen("/System/Library/Frameworks/OpenGLES.framework/OpenGLES", RTLD_NOW);
+    if (!gGlesLib)
+        return 0;
+    gEAGL = NSClassFromString(@"EAGLContext");
+    return gEAGL != nil;
+    }
+static void iglCur(int i)
+    {
+    ((BOOL(*)(id, SEL, id))objc_msgSend)((id)gEAGL, @selector(setCurrentContext:), gGl[i].ctx);
+    }
+void* ux_ios_gl_proc(const char* name)
+    {
+    if (!iglLoad() || !name)
+        return NULL;
+    return dlsym(gGlesLib, name);
+    }
+/* a slot back to empty, through ARC: the context is an object, so no memset over it */
+static void iglClear(int i, void* view)
+    {
+    gGl[i].ctx = nil;
+    gGl[i].view = view;
+    gGl[i].fbo = gGl[i].rbColor = gGl[i].rbDepth = 0;
+    gGl[i].pw = gGl[i].ph = 0;
+    gGl[i].img = NULL;
+    gGl[i].win = 0;
+    }
+static int iglFind(void* view)
+    {
+    for (int i = 0; i < gGlCount; i++)
+        if (gGl[i].view == view)
+            return i;
+    return -1;
+    }
+/* (re)make the framebuffer at w x h pixels, clamped to the GPU's limits keeping the aspect, and
+ * set the viewport to it */
+static void iglFramebuffer(int i, int w, int h)
+    {
+    igl_getint_fn gi = (igl_getint_fn)dlsym(gGlesLib, "glGetIntegerv");
+    int maxRb = 0, maxVp[2] = {0, 0};
+    gi(0x84E8 /* GL_MAX_RENDERBUFFER_SIZE */, &maxRb);
+    gi(0x0D3A /* GL_MAX_VIEWPORT_DIMS */, maxVp);
+    int lim = maxRb > 0 ? maxRb : 4096;
+    if (maxVp[0] > 0 && maxVp[0] < lim) lim = maxVp[0];
+    if (maxVp[1] > 0 && maxVp[1] < lim) lim = maxVp[1];
+    if (gGlTestMax > 0 && gGlTestMax < lim) lim = gGlTestMax;
+    if (w > lim || h > lim)
+        {
+        if (w >= h) { h = (int)((long)h * lim / w); w = lim; }
+        else { w = (int)((long)w * lim / h); h = lim; }
+        }
+    if (w < 1) w = 1;
+    if (h < 1) h = 1;
+    igl_gen_fn genFb = (igl_gen_fn)dlsym(gGlesLib, "glGenFramebuffers");
+    igl_gen_fn genRb = (igl_gen_fn)dlsym(gGlesLib, "glGenRenderbuffers");
+    igl_bind_fn bindFb = (igl_bind_fn)dlsym(gGlesLib, "glBindFramebuffer");
+    igl_bind_fn bindRb = (igl_bind_fn)dlsym(gGlesLib, "glBindRenderbuffer");
+    igl_rbstorage_fn st = (igl_rbstorage_fn)dlsym(gGlesLib, "glRenderbufferStorage");
+    igl_fbrb_fn att = (igl_fbrb_fn)dlsym(gGlesLib, "glFramebufferRenderbuffer");
+    igl_del_fn delFb = (igl_del_fn)dlsym(gGlesLib, "glDeleteFramebuffers");
+    igl_del_fn delRb = (igl_del_fn)dlsym(gGlesLib, "glDeleteRenderbuffers");
+    igl_viewport_fn vp = (igl_viewport_fn)dlsym(gGlesLib, "glViewport");
+    if (gGl[i].fbo)
+        {
+        delFb(1, &gGl[i].fbo);
+        delRb(1, &gGl[i].rbColor);
+        delRb(1, &gGl[i].rbDepth);
+        }
+    genFb(1, &gGl[i].fbo);
+    genRb(1, &gGl[i].rbColor);
+    genRb(1, &gGl[i].rbDepth);
+    bindRb(0x8D41, gGl[i].rbColor);
+    st(0x8D41, 0x8058 /* GL_RGBA8 */, w, h);
+    bindRb(0x8D41, gGl[i].rbDepth);
+    st(0x8D41, 0x88F0 /* GL_DEPTH24_STENCIL8 */, w, h);
+    bindFb(0x8D40, gGl[i].fbo);
+    att(0x8D40, 0x8CE0, 0x8D41, gGl[i].rbColor);
+    att(0x8D40, 0x821A, 0x8D41, gGl[i].rbDepth);
+    vp(0, 0, w, h);
+    gGl[i].pw = w;
+    gGl[i].ph = h;
+    }
+void* ux_ios_gl_make(void* view, int w, int h)
+    {
+    if (!iglLoad())
+        return NULL;
+    int i = iglFind(view);
+    if (i < 0)
+        {
+        if (gGlCount >= UXIOS_GL_MAX)
+            return NULL;
+        i = gGlCount++;
+        iglClear(i, view);
+        }
+    if (!gGl[i].ctx)
+        {
+        gGl[i].ctx = ((id(*)(id, SEL, NSUInteger))objc_msgSend)([gEAGL alloc], @selector(initWithAPI:), 3);
+        if (!gGl[i].ctx)
+            return NULL;
+        iglCur(i);
+        CGFloat sc = UIScreen.mainScreen.scale;
+        iglFramebuffer(i, (int)(w * sc + 0.5), (int)(h * sc + 0.5));
+        }
+    else
+        iglCur(i);
+    return (void*)(intptr_t)(i + 1); /* the opaque token, never the context */
+    }
+void ux_ios_gl_resize(void* view, int w, int h)
+    {
+    int i = iglFind(view);
+    if (i < 0 || !gGl[i].ctx)
+        return;
+    iglCur(i);
+    CGFloat sc = UIScreen.mainScreen.scale;
+    iglFramebuffer(i, (int)(w * sc + 0.5), (int)(h * sc + 0.5));
+    }
+void ux_ios_gl_destroy(void* view)
+    {
+    int i = iglFind(view);
+    if (i < 0 || !gGl[i].ctx)
+        return;
+    iglCur(i);
+    igl_del_fn delFb = (igl_del_fn)dlsym(gGlesLib, "glDeleteFramebuffers");
+    igl_del_fn delRb = (igl_del_fn)dlsym(gGlesLib, "glDeleteRenderbuffers");
+    if (gGl[i].fbo)
+        {
+        delFb(1, &gGl[i].fbo);
+        delRb(1, &gGl[i].rbColor);
+        delRb(1, &gGl[i].rbDepth);
+        }
+    ((BOOL(*)(id, SEL, id))objc_msgSend)((id)gEAGL, @selector(setCurrentContext:), nil);
+    if (gGl[i].img)
+        CGImageRelease(gGl[i].img);
+    iglClear(i, gGl[i].view); /* ARC releases the context, unbound first; the slot stays the view's */
+    }
+void ux_ios_gl_present(void* view)
+    {
+    int i = iglFind(view);
+    if (i < 0 || !gGl[i].ctx)
+        return;
+    iglCur(i);
+    int w = gGl[i].pw, h = gGl[i].ph;
+    CFMutableDataRef data = CFDataCreateMutable(NULL, (CFIndex)w * h * 4);
+    CFDataSetLength(data, (CFIndex)w * h * 4);
+    ((igl_bind_fn)dlsym(gGlesLib, "glBindFramebuffer"))(0x8D40, gGl[i].fbo);
+    ((igl_readpixels_fn)dlsym(gGlesLib, "glReadPixels"))(0, 0, w, h, 0x1908, 0x1401, CFDataGetMutableBytePtr(data));
+    CGDataProviderRef dp = CGDataProviderCreateWithCFData(data);
+    CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+    CGImageRef img = CGImageCreate(w, h, 8, 32, w * 4, cs, kCGBitmapByteOrderDefault | kCGImageAlphaNoneSkipLast,
+                                   dp, NULL, false, kCGRenderingIntentDefault);
+    CGColorSpaceRelease(cs);
+    CGDataProviderRelease(dp);
+    CFRelease(data);
+    if (gGl[i].img)
+        CGImageRelease(gGl[i].img);
+    gGl[i].img = img;
+    for (int hw = 1; hw < UXIOS_MAXW; hw++)
+        if (gDraw[hw] && (gGl[i].win == 0 || gGl[i].win == hw))
+            [gDraw[hw] setNeedsDisplay];
+    }
+/* Paint a GL view's last frame where it sits, in the draw in flight.  1 if it drew. */
+int ux_ios_gl_paint(void* view, int win, int x, int y, int w, int h)
+    {
+    int i = iglFind(view);
+    if (i < 0 || !gGl[i].ctx || !gGl[i].img || !gCtx)
+        return 0;
+    gGl[i].win = win;
+    CGContextSetInterpolationQuality(gCtx, kCGInterpolationLow);
+    CGContextDrawImage(gCtx, CGRectMake(x, y, w, h), gGl[i].img);
+    return 1;
+    }
+int ux_ios_test_gl_size(void* view, int* w, int* h)
+    {
+    int i = iglFind(view);
+    if (i < 0)
+        return 0;
+    *w = gGl[i].pw;
+    *h = gGl[i].ph;
+    return 1;
     }
 
 // ── the document picker: UIDocumentPickerViewController, modal through a nested run loop ──
