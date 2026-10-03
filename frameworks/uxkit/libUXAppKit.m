@@ -79,11 +79,33 @@ static BOOL ak_acceptsFirstResponder(__unsafe_unretained id self, SEL _cmd)
     {
     return YES;
     }
+/* An event's point for the toolkit: in the content view's coordinates and, when it is over a native
+ * scroll view's document, moved by that scroll view's offset.  The toolkit's tree is not scrolled --
+ * the NSScrollView owns the offset -- so without this a click on scrolled content was hit-tested at
+ * the place it would have been unscrolled.  The window's own scroll view (g_scroll, which holds the
+ * content view itself) is already in the conversion and is not counted again. */
+static double g_pressScrollY; /* the offset the last press was taken with: a drag keeps it */
+static NSPoint ak_tree_point(NSView* content, NSEvent* ev, int handle)
+    {
+    NSPoint p = [content convertPoint:[ev locationInWindow] fromView:nil];
+    NSView* sup = [content superview];
+    NSView* hit = sup ? [content hitTest:[sup convertPoint:[ev locationInWindow] fromView:nil]] : nil;
+    for (NSView* v = hit; v && v != content; v = [v superview])
+        {
+        if ([v isKindOfClass:[NSScrollView class]] && (handle <= 0 || (NSScrollView*)v != g_scroll[handle]))
+            {
+            NSRect b = [[(NSScrollView*)v contentView] bounds];
+            p.x += b.origin.x;
+            p.y += b.origin.y; /* the document is flipped: the clip's origin is the offset from the top */
+            break;
+            }
+        }
+    return p;
+    }
 static void ak_mouseDown(__unsafe_unretained id self, SEL _cmd, __unsafe_unretained id ev)
     {
     if (!g_dispatch)
         return;
-    NSPoint p = [(NSView*)self convertPoint:[(NSEvent*)ev locationInWindow] fromView:nil];
     int h = 0;
     for (int i = 1; i < UX_MAXW; i++)
         {
@@ -93,6 +115,9 @@ static void ak_mouseDown(__unsafe_unretained id self, SEL _cmd, __unsafe_unretai
             break;
             }
         }
+    NSPoint p0 = [(NSView*)self convertPoint:[(NSEvent*)ev locationInWindow] fromView:nil];
+    NSPoint p = ak_tree_point((NSView*)self, (NSEvent*)ev, h);
+    g_pressScrollY = p.y - p0.y;
     // A Control-click is the secondary button on macOS (the browser fires `contextmenu` for it), so
     // deliver it as UXEventRightMouseDown (16) -- a trackpad player has no other way to a menu.
     g_dispatch((([(NSEvent*)ev modifierFlags] & NSEventModifierFlagControl) != 0) ? 16 : 1,
@@ -128,14 +153,14 @@ static void ak_mouseMoved(__unsafe_unretained id self, SEL _cmd, __unsafe_unreta
     {
     if (!g_dispatch)
         return;
-    NSPoint p = [(NSView*)self convertPoint:[(NSEvent*)ev locationInWindow] fromView:nil];
+    NSPoint p = ak_tree_point((NSView*)self, (NSEvent*)ev, ak_win_of((NSView*)self));
     g_dispatch(15, (int)p.x, (int)p.y, ak_win_of((NSView*)self)); // 15 = UXEventMouseMoved
     }
 static void ak_rightMouseDown(__unsafe_unretained id self, SEL _cmd, __unsafe_unretained id ev)
     {
     if (!g_dispatch)
         return;
-    NSPoint p = [(NSView*)self convertPoint:[(NSEvent*)ev locationInWindow] fromView:nil];
+    NSPoint p = ak_tree_point((NSView*)self, (NSEvent*)ev, ak_win_of((NSView*)self));
     g_dispatch(16, (int)p.x, (int)p.y, ak_win_of((NSView*)self)); // 16 = UXEventRightMouseDown
     }
 static void ak_scrollWheel(__unsafe_unretained id self, SEL _cmd, __unsafe_unretained id ev)
@@ -4096,7 +4121,7 @@ int ux_ak_drag_next(int* x, int* y)
     if (x)
         *x = (int)p.x;
     if (y)
-        *y = (int)p.y;
+        *y = (int)(p.y + g_pressScrollY); /* in the press's terms: a drag that began on a scrolled document */
     return 1;
     }
 
