@@ -12,6 +12,7 @@
 //         src/xtc/support-src/rt-freestanding.c
 //   (then re-apply the hand-applied pieces the header of that file lists)
 //   clang -S -O1 -masm=intel -target x86_64-windows-gnu -DXT_WIN64 \
+//         -DXT_NO_WEAK_SEAM=1 \
 //         -fno-stack-protector -fomit-frame-pointer \
 //         -fno-asynchronous-unwind-tables -fno-jump-tables \
 //         -o support/win64/runtime/rtgen-win64.s \
