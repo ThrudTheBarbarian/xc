@@ -557,13 +557,17 @@ static void gl_clamp_free(GlClamp* c)
     c->w = c->h = 0;
     }
 /* With the context current: make sure the renderer's framebuffer is the right one for the area's
- * size now, and bind it.  Returns 1 when the clamp is in force. */
+ * size now, and bind it.  The renderer always draws into OURS, at the area's size or clamped under the
+ * GPU's limit, and the render signal blits it across: GTK's own framebuffer is a texture it swaps
+ * between frames, so a frame drawn straight into it was lost the next time the window repainted
+ * without the app drawing again (a 2-D view's redraw, a snapshot).  Ours keeps the last frame for every
+ * repaint.  Returns 1 when ours is bound; 0 (GTK's own) only without framebuffer objects. */
 static int gl_clamp_bind(int handle, int node, int pw, int ph)
     {
     GlClamp* c = &gClamp[handle][node];
     gl_bindfn bindFb = (gl_bindfn)gl_entry("glBindFramebuffer");
     int m = gl_max_px();
-    if (m <= 0 || (pw <= m && ph <= m) || !bindFb)
+    if (!bindFb || pw <= 0 || ph <= 0)
         {
         if (c->fbo)
             {
@@ -576,7 +580,7 @@ static int gl_clamp_bind(int handle, int node, int pw, int ph)
             }
         return 0;
         }
-    double k = (double)m / (pw > ph ? pw : ph);
+    double k = (m > 0 && (pw > m || ph > m)) ? (double)m / (pw > ph ? pw : ph) : 1.0;
     int cw = (int)(pw * k), ch = (int)(ph * k);
     if (cw < 1)
         cw = 1;
@@ -593,7 +597,10 @@ static int gl_clamp_bind(int handle, int node, int pw, int ph)
         storefn store = (storefn)gl_entry("glRenderbufferStorage");
         attachfn attach = (attachfn)gl_entry("glFramebufferRenderbuffer");
         if (!genFb || !genRb || !bindRb || !store || !attach)
+            {
+            bindFb(0x8D40, c->areaFbo);
             return 0;
+            }
         genRb(1, &c->rb);
         bindRb(0x8D41, c->rb);             /* GL_RENDERBUFFER */
         store(0x8D41, 0x8058, cw, ch);     /* GL_RGBA8 */
@@ -625,7 +632,7 @@ static gboolean gl_render_cb(GtkGLArea* a, GdkGLContext* ctx, gpointer ud)
         c->areaFbo = (unsigned)bound;
     if (c && c->fbo)
         {
-        /* The app's frame is in our clamped framebuffer: stretch it over the area's. */
+        /* The app's frame is in our framebuffer: copy it over the area's (stretched, if clamped). */
         gl_bindfn bindFb = (gl_bindfn)gl_entry("glBindFramebuffer");
         typedef void (*blitfn)(int, int, int, int, int, int, int, int, unsigned, unsigned);
         blitfn blit = (blitfn)gl_entry("glBlitFramebuffer");
@@ -702,7 +709,7 @@ int ux_gtk_gl_make_current(int handle, int node)
         return 0;
     int pw, ph;
     gl_pixel_size(handle, node, &pw, &ph);
-    gl_clamp_bind(handle, node, pw, ph); /* over the GPU's limit: the renderer draws into ours */
+    gl_clamp_bind(handle, node, pw, ph); /* the renderer draws into ours, clamped over the GPU's limit */
     return 1;
     }
 
@@ -819,7 +826,7 @@ void ux_gtk_gl_viewport(int handle, int node)
     GlClamp* c = &gClamp[handle][node];
     if (c->fbo)
         {
-        pw = c->w; /* clamped: the drawable is ours, smaller than the area */
+        pw = c->w; /* the drawable is ours (smaller than the area when clamped) */
         ph = c->h;
         }
     if (pw < 1)
