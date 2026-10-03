@@ -405,6 +405,7 @@ static jobject enumVal(JNIEnv *env, const char *cls, const char *name) {
  * the system-window insets at attach, so a toolkit window at y=0 sits below
  * the cutout and the app never learns the word "inset". */
 static int gInsetL, gInsetT, gInsetR, gInsetB;   /* raw px */
+static int apiLevel(void);
 static void queryInsets(JNIEnv *env) {
     jclass actC = (*env)->GetObjectClass(env, gActivity);
     jmethodID getWin = (*env)->GetMethodID(env, actC, "getWindow", "()Landroid/view/Window;");
@@ -417,6 +418,19 @@ static void queryInsets(JNIEnv *env) {
     jmethodID getIns = (*env)->GetMethodID(env, gViewCls, "getRootWindowInsets",
                                            "()Landroid/view/WindowInsets;");
     jobject ins = (*env)->CallObjectMethod(env, decor, getIns);
+    if (!ins && apiLevel() >= 30) {
+        /* not attached yet: the window manager knows the insets anyway (API 30+) */
+        check(env, "insets");
+        jmethodID getWm = (*env)->GetMethodID(env, actC, "getWindowManager", "()Landroid/view/WindowManager;");
+        jobject wm = (*env)->CallObjectMethod(env, gActivity, getWm);
+        jclass wmC = (*env)->FindClass(env, "android/view/WindowManager");
+        jobject wmx = (*env)->CallObjectMethod(env, wm, (*env)->GetMethodID(env, wmC, "getCurrentWindowMetrics",
+                                               "()Landroid/view/WindowMetrics;"));
+        jclass wmxC = (*env)->FindClass(env, "android/view/WindowMetrics");
+        ins = wmx ? (*env)->CallObjectMethod(env, wmx, (*env)->GetMethodID(env, wmxC, "getWindowInsets",
+                                             "()Landroid/view/WindowInsets;")) : NULL;
+        check(env, "window metrics insets");
+    }
     if (!ins) { check(env, "insets"); return; }      /* pre-attach: try again at first draw */
     gInsetsKnown = 1;
     jclass insC = (*env)->GetObjectClass(env, ins);

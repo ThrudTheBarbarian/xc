@@ -242,6 +242,10 @@ class UXApplication : UXResponder
             {
             return (i32)2;
             }
+        // run() booted before handing over, when the platform's shell did not exist yet; only now
+        // does the driver know the USABLE screen (a safe area, system bars).  Ask again, so an app
+        // sizing its window to the screen in applicationDidStart gets the size it can really use.
+        gDriver.boot(&screenW, &screenH);
         i32 rc = delegate.applicationDidStart(self);
         if (rc == (i32)0)
             {
