@@ -21,8 +21,10 @@
 # identity it fetches must sign byte for byte like the reference. The option
 # and error surface of both is compared message for message.
 set -u
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
+XC_HOST_ARCH=${XC_HOST_ARCH:-$( case "$(uname -m)" in (arm64|aarch64) echo arm64 ;; (*) echo x86_64 ;; esac )}
 cd "$(dirname "$0")/../.." || exit 1
-BIN=bin/osx; [ -x "$BIN/xcc" ] || BIN=bin/linux
+BIN=bin/$XC_PLAT; [ -x "$BIN/xcc" ] || BIN=bin/linux
 WORK=${TMPDIR:-/tmp}/signdiff.$$
 mkdir -p "$WORK"; trap 'rm -rf "$WORK"' EXIT
 INCS=(-I selfhost/asm -I selfhost/link)
@@ -36,8 +38,8 @@ if [ -f build/tls/tlsshim.o ] && [ -f "$MB/libmbedtls.a" ]; then
     TLS=1; HOSTF+=(-DXT_HAVE_TLS=1 -Wl,build/tls/tlsshim.o)
     for l in mbedtls mbedx509 mbedcrypto tfpsacrypto; do HOSTF+=("-Wl,$MB/lib$l.a"); done
 fi
-"$BIN/xcc" -q -O2 -A arm64 -H . "${HOSTF[@]}" -o "$WORK/xtsign" selfhost/tools/xtsign.xc "${INCS[@]}" > "$WORK/b1.log" 2>&1
-"$BIN/xcc" -q -O2 -A arm64 -H . -o "$WORK/mkident" selfhost/tools/mkident.xc "${INCS[@]}" > "$WORK/b2.log" 2>&1
+"${XC_TOOL_XCC:-$BIN/xcc}" -q -O2 -A $XC_HOST_ARCH -H . "${HOSTF[@]}" -o "$WORK/xtsign" selfhost/tools/xtsign.xc "${INCS[@]}" > "$WORK/b1.log" 2>&1
+"${XC_TOOL_XCC:-$BIN/xcc}" -q -O2 -A $XC_HOST_ARCH -H . -o "$WORK/mkident" selfhost/tools/mkident.xc "${INCS[@]}" > "$WORK/b2.log" 2>&1
 [ -x "$WORK/xtsign" ] && [ -x "$WORK/mkident" ] || { grep -a error "$WORK"/b*.log | head -5; exit 1; }
 
 pass=0; fail=0; skipped=0

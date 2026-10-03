@@ -21,8 +21,10 @@
 # select are compared too: e.g. WRAP65_FLAGS="--xtc-stack", "-Fmb 50" or
 # "-Q loop" (any of -Q, --xtc-stack and -Fmb, which both code generators take).
 set -u
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
+XC_HOST_ARCH=${XC_HOST_ARCH:-$( case "$(uname -m)" in (arm64|aarch64) echo arm64 ;; (*) echo x86_64 ;; esac )}
 cd "$(dirname "$0")/../.." || exit 1
-BIN=bin/osx
+BIN=bin/$XC_PLAT
 [ -x "$BIN/xcc" ] || BIN=bin/linux
 PATTERN=${1:-}
 LAYOUT=support/xt6502/layouts/xt.lnk
@@ -31,7 +33,7 @@ mkdir -p "$WORK"
 trap 'rm -rf "$WORK"' EXIT
 
 echo "building xtcg65 (xtc → native arm64)…"
-"$BIN/xcc" -O2 -A arm64 -H . -o "$WORK/xtcg65" selfhost/tools/xtcg65.xc \
+"${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xtcg65" selfhost/tools/xtcg65.xc \
     -I selfhost/ir -I selfhost/opt -I selfhost/codegen -I selfhost/driver \
     2>&1 | grep -E "^[^ ].*error" && exit 1
 [ -x "$WORK/xtcg65" ] || { echo "--- wrap65-diff: BROKEN (xtcg65 did not build)"; exit 1; }

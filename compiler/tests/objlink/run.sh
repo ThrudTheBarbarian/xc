@@ -19,12 +19,13 @@
 #   5. Apple's ld reads our object too — an independent check that the file is
 #      a real object rather than merely one we can read back.
 # A crashing test program must not open the Wine crash dialog.
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
 export WINEDLLOVERRIDES="winedbg.exe=d;${WINEDLLOVERRIDES:-}"
 _root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null)
 [ -f "$_root/tools/build-env.sh" ] && . "$_root/tools/build-env.sh"
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; cd "$ROOT"
-XCC="bin/osx/xcc"
+XCC="bin/$XC_PLAT/xcc"
 W="$(mktemp -d)"; trap 'rm -rf "$W"' EXIT
 fail=0
 ok()   { echo "PASS  $1"; }
@@ -489,7 +490,7 @@ i32 main(void)
     return 0;
 }
 EOF2
-for C in bin/osx/xcc bin/osx/xcc-xc; do
+for C in bin/$XC_PLAT/xcc bin/$XC_PLAT/xcc-xc; do
     n=$(basename "$C")
     if ( cd "$W" && "$ROOT/$C" -q -A arm64 -H "$ROOT" -c -o ltoObj.o ltoObj.xc \
              && "$ROOT/$C" -q -A arm64 -H "$ROOT" -c -L . -o ltoMain.o ltoMain.xc \
@@ -706,7 +707,7 @@ i32 main(void)
 EOF
     "$XCC" -q -A win64 -S -o "$W/mgw.s" "$W/mgw.xc" 2>/dev/null
     SUPW=support/win64/runtime
-    if bin/osx/xcc-ln-win64 "$SUPW/crt-win64.s" "$SUPW/rtgen-win64.s" "$SUPW/rtfiles-win64.s" "$SUPW/libmgen-win64.s" \
+    if bin/$XC_PLAT/xcc-ln-win64 "$SUPW/crt-win64.s" "$SUPW/rtgen-win64.s" "$SUPW/rtfiles-win64.s" "$SUPW/libmgen-win64.s" \
          "$W/mgw.s" "$MGWLIB/libmingwex.a" \
          -importmap support/win64/win32-imports.map \
          -import "kernel32.dll:ExitProcess,GetStdHandle,WriteFile,VirtualAlloc,GetSystemTimeAsFileTime,Sleep" \
@@ -776,7 +777,7 @@ if [ -f "$A9SYS/freertos-hosttest.elf" ] && command -v qemu-system-arm >/dev/nul
           | sed -e '1,/XTOS shell/d' | sed 's/^xtos\$ //' | sed -e '/^bye$/,$d' \
           | grep -v '^\[net\]' | sed 's/\r$//' | sed -e '/^$/d'
     }
-  for A9C in bin/osx/xcc bin/osx/xcc-xc; do
+  for A9C in bin/$XC_PLAT/xcc bin/$XC_PLAT/xcc-xc; do
     t=$(basename "$A9C")          # this compiler's files live in their own dir
     D="$W/a9-$t"; mkdir -p "$D"
     "$A9C" -q -A arm9 -L "$A9SYS" -c "$W/modA.xc"    -o "$D/modA.o"    2>"$D/9a.err"
@@ -1143,12 +1144,12 @@ EOF
     SUP=support/x86_64/runtime
     RT="$SUP/crt-linux.s $SUP/sys-linux.s $SUP/rtgen-linux.s $SUP/rtfiles-linux.s $SUP/libmgen-linux.s"
     # Without the archive it must FAIL: otherwise the check proves nothing.
-    if bin/osx/xcc-ln-x86_64 $RT "$W/ar.s" -o "$W/ar_no" 2>/dev/null; then
+    if bin/$XC_PLAT/xcc-ln-x86_64 $RT "$W/ar.s" -o "$W/ar_no" 2>/dev/null; then
         bad "a call into libc links even WITHOUT the archive (the check is vacuous)"
     else
         ok "an unresolved libc call is refused without the archive"
     fi
-    if bin/osx/xcc-ln-x86_64 $RT "$W/ar.s" "$X86LIBC" -o "$W/ar_yes" 2>"$W/ar.err"; then
+    if bin/$XC_PLAT/xcc-ln-x86_64 $RT "$W/ar.s" "$X86LIBC" -o "$W/ar_yes" 2>"$W/ar.err"; then
         XH="${XTC_X86_HOST:-${XTC_LINUX_HOST:-}}"
         if ssh -o ConnectTimeout=8 -o BatchMode=yes "$XH" true 2>/dev/null; then
             scp -q "$W/ar_yes" "$XH:/tmp/xtc-ar-$$" 2>/dev/null

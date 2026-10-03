@@ -8,6 +8,7 @@
 # PT_PHDR/PT_INTERP (without which ld.so dies before it can even report why).
 #
 # The Linux host is XTC_LINUX_HOST (set in build.env).
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
 _root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null)
 [ -f "$_root/tools/build-env.sh" ] && . "$_root/tools/build-env.sh"
 set -e
@@ -15,7 +16,7 @@ cd "$(dirname "$0")/../.."
 ROOT=$(pwd)
 
 HOST="${XTC_LINUX_HOST:-}"
-[ -x bin/osx/xcc ] || { echo "build first: make"; exit 1; }
+[ -x bin/$XC_PLAT/xcc ] || { echo "build first: make"; exit 1; }
 if ! ssh -o BatchMode=yes -o ConnectTimeout=5 "$HOST" true 2>/dev/null; then
     echo "selfhost-lib: SKIP (no Linux host '$HOST')"; exit 0
 fi
@@ -66,8 +67,8 @@ check() {   # check <name> <expected> <got>
 }
 
 cd "$W"
-libout=$("$ROOT"/bin/osx/xcc -A x86_64 --self-host --emit-lib Greeter.xc -o libGreeter.so 2>&1)
-appout=$("$ROOT"/bin/osx/xcc -A x86_64 --self-host -L. app.xc -o app 2>&1)
+libout=$("$ROOT"/bin/$XC_PLAT/xcc -A x86_64 --self-host --emit-lib Greeter.xc -o libGreeter.so 2>&1)
+appout=$("$ROOT"/bin/$XC_PLAT/xcc -A x86_64 --self-host -L. app.xc -o app 2>&1)
 
 # The driver falls back to clang if the in-house link fails, so "it ran" is not
 # enough — confirm the self-hosted path is what produced each file.
@@ -76,8 +77,8 @@ case "$appout" in *"self-hosted, no clang"*) app_sh=yes;; *) app_sh=no;; esac
 check "library built without clang"  yes "$lib_sh"
 check "app built without clang"      yes "$app_sh"
 
-libout2=$("$ROOT"/bin/osx/xcc -A x86_64 --self-host --emit-lib Counter.xc -o libCounter.so 2>&1)
-appout2=$("$ROOT"/bin/osx/xcc -A x86_64 --self-host -L. app2.xc -o app2 2>&1)
+libout2=$("$ROOT"/bin/$XC_PLAT/xcc -A x86_64 --self-host --emit-lib Counter.xc -o libCounter.so 2>&1)
+appout2=$("$ROOT"/bin/$XC_PLAT/xcc -A x86_64 --self-host -L. app2.xc -o app2 2>&1)
 case "$libout2" in *"self-hosted, no clang"*) lib2_sh=yes;; *) lib2_sh=no;; esac
 case "$appout2" in *"self-hosted, no clang"*) app2_sh=yes;; *) app2_sh=no;; esac
 check "class library built without clang" yes "$lib2_sh"

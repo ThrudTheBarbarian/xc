@@ -21,11 +21,12 @@
 # compared against nothing is not an assembler that agrees with anything.
 #
 #   bash tests/asm-arm32/run.sh [n-fixtures]     (default: all)
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
 _root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null)
 [ -f "$_root/tools/build-env.sh" ] && . "$_root/tools/build-env.sh"
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; cd "$ROOT"
-XCC="bin/osx/xcc"; LN="bin/osx/xcc-ln-arm9"
+XCC="bin/$XC_PLAT/xcc"; LN="bin/$XC_PLAT/xcc-ln-arm9"
 [ -x "$XCC" ] || { XCC="bin/linux/xcc"; LN="bin/linux/xcc-ln-arm9"; }
 SR="${XTC_ARM9_SYSROOT:-}"
 LIMIT="${1:-0}"

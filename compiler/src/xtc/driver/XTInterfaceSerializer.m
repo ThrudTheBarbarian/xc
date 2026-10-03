@@ -58,9 +58,13 @@ static void appendCanonicalJSON(NSMutableString *out, id v) {
     } else if ([v isKindOfClass:[NSString class]]) {
         appendCanonicalString(out, v);
     } else if ([v isKindOfClass:[NSNumber class]]) {
-        // A BOOL boxes as 'c' (or 'B' where BOOL is C99 bool).
+        // A BOOL boxes as 'c' (or 'B' where BOOL is C99 bool), and as 'C' under
+        // GNUstep, whose BOOL is an unsigned char: missing that wrote
+        // "optional":0 on Linux where macOS and the xc compiler write false.
+        // Nothing else this file boxes is a char (the one integer, an enum
+        // member's value, is int64_t).
         const char *t = [(NSNumber *)v objCType];
-        if (t[0] == 'c' || t[0] == 'B')
+        if (t[0] == 'c' || t[0] == 'B' || t[0] == 'C')
             [out appendString:[(NSNumber *)v boolValue] ? @"true" : @"false"];
         else
             [out appendFormat:@"%lld", [(NSNumber *)v longLongValue]];

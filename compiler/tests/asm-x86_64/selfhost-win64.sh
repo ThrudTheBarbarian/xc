@@ -6,13 +6,14 @@
 # Needs Wine on PATH (or set XTC_WINE). Skips cleanly if it is absent.
 # NOT set -e: the exit-status test deliberately runs a program that exits 42.
 # A crashing test program must not open the Wine crash dialog.
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
 export WINEDLLOVERRIDES="winedbg.exe=d;${WINEDLLOVERRIDES:-}"
 cd "$(dirname "$0")/../.."
 ROOT=$(pwd)
 
 WINE="${XTC_WINE:-/opt/homebrew/bin/wine}"
 [ -x "$WINE" ] || WINE="$(command -v wine 2>/dev/null || true)"
-[ -x "$ROOT/bin/osx/xcc" ] || { echo "build first: make"; exit 1; }
+[ -x "$ROOT/bin/$XC_PLAT/xcc" ] || { echo "build first: make"; exit 1; }
 if [ -z "$WINE" ]; then echo "selfhost-win64: SKIP (no wine)"; exit 0; fi
 
 # A Wine prefix runs its first program slowly (it initialises); prime it once so
@@ -37,17 +38,17 @@ check() {   # check <name> <exe> <expected-fixture-or-status>
 cat > "$W/ret42.xc" <<'EOF'
 i32 main() (( return 42; ))
 EOF
-"$ROOT"/bin/osx/xcc -A win64 --self-host "$W/ret42.xc" -o "$W/ret42.exe" >"$W/log" 2>&1
+"$ROOT"/bin/$XC_PLAT/xcc -A win64 --self-host "$W/ret42.xc" -o "$W/ret42.exe" >"$W/log" 2>&1
 grep -q "self-hosted, no mingw" "$W/log" || { echo "  ret42 fell back to mingw"; fail=1; }
 check "exit status via ExitProcess" "$W/ret42.exe" "@status42"
 
 # 2. printf — the runtime's write() through kernel32.
-"$ROOT"/bin/osx/xcc -A win64 --self-host tests/fixtures/hello.xc -o "$W/hello.exe" >"$W/log" 2>&1
+"$ROOT"/bin/$XC_PLAT/xcc -A win64 --self-host tests/fixtures/hello.xc -o "$W/hello.exe" >"$W/log" 2>&1
 grep -q "self-hosted, no mingw" "$W/log" || { echo "  hello fell back to mingw"; fail=1; }
 check "printf output" "$W/hello.exe" tests/fixtures/hello.expected.out
 
 # 3. heap + vtable + ARC — the case that null-called on the first attempt (#757).
-"$ROOT"/bin/osx/xcc -A win64 --self-host tests/fixtures/printf_class.xc -o "$W/pc.exe" >"$W/log" 2>&1
+"$ROOT"/bin/$XC_PLAT/xcc -A win64 --self-host tests/fixtures/printf_class.xc -o "$W/pc.exe" >"$W/log" 2>&1
 grep -q "self-hosted, no mingw" "$W/log" || { echo "  printf_class fell back to mingw"; fail=1; }
 check "heap + vtable + ARC" "$W/pc.exe" tests/fixtures/printf_class.expected.out
 

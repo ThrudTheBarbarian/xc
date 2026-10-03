@@ -4,9 +4,10 @@
 # clang, no codesign, no system assembler — and it runs. macOS/arm64 only; not
 # part of make test (it needs to execute a signed binary on Apple Silicon).
 set -e
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
 cd "$(dirname "$0")/../.."
-XTC=bin/osx/xcc
-[ -x "$XTC" ] && [ -x bin/osx/xcc-ln-arm64 ] || { echo "build first: make"; exit 1; }
+XTC=bin/$XC_PLAT/xcc
+[ -x "$XTC" ] && [ -x bin/$XC_PLAT/xcc-ln-arm64 ] || { echo "build first: make"; exit 1; }
 tmp=$(mktemp -d); fail=0
 "$XTC" -A arm64 --self-host -L support/arm64/lib -o "$tmp/prog" tests/asm-arm64/selfhost-hello.xc >/dev/null 2>&1
 out=$("$tmp/prog"); rc=$?

@@ -21,20 +21,22 @@
 # XCC_DIFF_FLAGS adds options to both drivers' command lines, e.g.
 # XCC_DIFF_ARCHS=xt6502 XCC_DIFF_FLAGS="--xtc-stack -Fmb 50".
 set -u
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
+XC_HOST_ARCH=${XC_HOST_ARCH:-$( case "$(uname -m)" in (arm64|aarch64) echo arm64 ;; (*) echo x86_64 ;; esac )}
 cd "$(dirname "$0")/../.." || exit 1
-BIN=bin/osx; [ -x "$BIN/xcc" ] || BIN=bin/linux
+BIN=bin/$XC_PLAT; [ -x "$BIN/xcc" ] || BIN=bin/linux
 LEVEL=${1:-0}
 PATTERN=${2:-}
 WORK=${TMPDIR:-/tmp}/xccdiff.$$
 mkdir -p "$WORK"; trap 'rm -rf "$WORK"' EXIT
 
-INCS=(-I support/generic/lib -I support/arm64/lib)
+INCS=(-I support/generic/lib -I support/$XC_HOST_ARCH/lib)
 SELF=(-I selfhost/lexer -I selfhost/preproc -I selfhost/parser -I selfhost/sema
       -I selfhost/ir -I selfhost/opt -I selfhost/codegen -I selfhost/asm
       -I selfhost/link -I selfhost/driver)
 
 echo "building xcc.xc (the xtc driver → native arm64)…"
-"$BIN/xcc" -O2 -A arm64 -H . -o "$WORK/xccxc" selfhost/tools/xcc.xc \
+"${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xccxc" selfhost/tools/xcc.xc \
     "${INCS[@]}" "${SELF[@]}" > "$WORK/build.log" 2>&1
 if [ ! -x "$WORK/xccxc" ]; then
     echo "--- xcc-diff: BROKEN (the driver did not build)"

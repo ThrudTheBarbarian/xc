@@ -1,10 +1,10 @@
 #!/bin/bash
 # flag-parity.sh — the shipped driver takes every option the reference driver takes.
 #
-# For each option the reference driver (bin/osx/xcc) lists in its --help, and the
+# For each option the reference driver (bin/$XC_PLAT/xcc) lists in its --help, and the
 # ones it accepts without listing, this runs BOTH drivers on a small program and
 # compares what they did: the exit status, and the kind of each file produced.
-# xcc-xc (bin/osx/xcc-xc) fails the check when it rejects an option the
+# xcc-xc (bin/$XC_PLAT/xcc-xc) fails the check when it rejects an option the
 # reference accepts, or when the two disagree where they should agree.
 #
 # Some options do something in xcc-xc that the reference driver parses and then
@@ -21,10 +21,11 @@
 #   -v    print every check, not just failures
 #   REF=<xcc>  XC=<xcc-xc>  override the two drivers
 set -u
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
 cd "$(dirname "$0")/../.."
 ROOT=$(pwd)
-REF=${REF:-$ROOT/bin/osx/xcc}
-XC=${XC:-$ROOT/bin/osx/xcc-xc}
+REF=${REF:-$ROOT/bin/$XC_PLAT/xcc}
+XC=${XC:-$ROOT/bin/$XC_PLAT/xcc-xc}
 VERBOSE=0
 [ "${1:-}" = "-v" ] && VERBOSE=1
 
@@ -198,7 +199,7 @@ if [ -s pp.xc ] && grep -q "i32 main" pp.xc; then ok "-E writes the preprocessed
 else bad "-E wrote no preprocessed source"; fi
 # The reference's front end honours -E when it is run directly; the text it
 # writes is what xcc-xc's must be.
-"$ROOT/bin/osx/xcc-fe" -H "$ROOT" -q -m arm64 -E fe-pp.xc -o fe.ir ret.xc > /dev/null 2>&1
+"$ROOT/bin/$XC_PLAT/xcc-fe" -H "$ROOT" -q -m arm64 -E fe-pp.xc -o fe.ir ret.xc > /dev/null 2>&1
 if cmp -s fe-pp.xc pp.xc; then ok "-E text matches the reference front end's"
 else bad "-E text differs from the reference front end's"; fi
 rm -f pp.xc
@@ -383,7 +384,7 @@ same "--xtc-stack"          -q -A 6502 --xtc-stack -o @OUT@.xex ret.xc
 # ── the xt6502 options, checked for what they do ────────────────────────
 # Each is built by both drivers, which must write the same bytes, and run on
 # the simulator, whose exit status is main's value.
-SIM="$ROOT/bin/osx/xcc-sim-6502"
+SIM="$ROOT/bin/$XC_PLAT/xcc-sim-6502"
 simrc() { "$SIM" -m xt -d "$1" > /dev/null 2>&1; echo $?; }
 # build6502 <tag> args… — both drivers, .xex and .s; they must agree byte for byte.
 build6502() {

@@ -15,17 +15,19 @@
 # The pass count is the measurement — it is what tells us how much of the
 # language the ported parser covers, and each failure names a construct.
 set -u
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
+XC_HOST_ARCH=${XC_HOST_ARCH:-$( case "$(uname -m)" in (arm64|aarch64) echo arm64 ;; (*) echo x86_64 ;; esac )}
 cd "$(dirname "$0")/../.." || exit 1
 
-XTC=bin/osx/xcc
-FE=bin/osx/xcc-fe
+XTC=bin/$XC_PLAT/xcc
+FE=bin/$XC_PLAT/xcc-fe
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
 # Every platform's lib, not just arm64's: a fixture may import an Atari-only
 # System.xc or a win64 interface, and an unresolved import is now a hard error
 # on both sides rather than a quietly-empty tree.
-INCS=(-I support/generic/lib -I support/arm64/lib -I support/xt6502/lib
+INCS=(-I support/generic/lib -I support/$XC_HOST_ARCH/lib -I support/xt6502/lib
       -I support/arm9/lib -I support/atarist/lib -I support/x86_64/lib
       -I support/win64/lib -I support/win64/selfhost-iface -I support/6502/lib
       -I selfhost/lexer -I selfhost/preproc -I selfhost/parser
@@ -37,7 +39,7 @@ if [ ! -x "$XTC" ] || [ ! -x "$FE" ]; then
 fi
 
 echo "building xtast (xtc → native arm64)…"
-if ! "$XTC" -H . -q -A arm64 -I selfhost/lexer -I selfhost/preproc -I selfhost/parser \
+if ! "${XC_TOOL_XCC:-$XTC}" -H . -q -A $XC_HOST_ARCH -I selfhost/lexer -I selfhost/preproc -I selfhost/parser \
         selfhost/tools/xtast.xc -o "$TMP/xtast" 2>"$TMP/build.err"; then
     echo "ast-diff: xtast failed to build" >&2
     cat "$TMP/build.err" >&2

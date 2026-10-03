@@ -28,11 +28,12 @@
 #           sets, so the executables differ where the code does not.
 #   win64   run under wine; the DLLs and the apps are compared byte for byte
 #   arm9    tests/crossmod/run.sh (needs the loader tree and qemu)
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
 _root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null)
 [ -f "$_root/tools/build-env.sh" ] && . "$_root/tools/build-env.sh"
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-BIN="$ROOT/bin/osx"; [ -d "$BIN" ] || BIN="$ROOT/bin/linux"
+BIN="$ROOT/bin/$XC_PLAT"; [ -d "$BIN" ] || BIN="$ROOT/bin/linux"
 T="$ROOT/tests/crossmod"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT

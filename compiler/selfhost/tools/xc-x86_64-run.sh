@@ -16,12 +16,13 @@
 # A fixture with no .expected.out is NOT a pass: it is counted separately, the
 # way the corpus counts a hollow oracle, because "it ran and printed something"
 # is not a check.
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
 _root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null)
 [ -f "$_root/tools/build-env.sh" ] && . "$_root/tools/build-env.sh"
 set -u
 cd "$(dirname "$0")/../.." || exit 1
 
-BIN=bin/osx
+BIN=bin/$XC_PLAT
 [ -x "$BIN/xcc-xc" ] || BIN=bin/linux
 HOST=${XTC_LINUX_HOST:-}
 PATTERN=${1:-}

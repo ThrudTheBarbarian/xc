@@ -8,6 +8,7 @@
 #
 #   bash tests/http/run.sh
 set -u
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; cd "$ROOT"
 WORK=$(mktemp -d)
 trap 'kill $SRV 2>/dev/null; wait $SRV 2>/dev/null; rm -rf "$WORK"' EXIT
@@ -21,7 +22,7 @@ for i in 1 2 3 4 5 6 7 8 9 10; do
     sleep 0.3
 done
 pass=0; fail=0
-for c in bin/osx/xcc bin/osx/xcc-xc; do
+for c in bin/$XC_PLAT/xcc bin/$XC_PLAT/xcc-xc; do
     [ -x "$c" ] || continue
     out=""
     for t in http_get http_async; do

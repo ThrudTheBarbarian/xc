@@ -10,9 +10,10 @@
 # Not a build test. It has to RUN — the module instantiates fine either way,
 # and the whole point of 091 is that the failure is at the call.
 set -u
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
 cd "$(dirname "$0")" || exit 1
 ROOT=$(cd ../.. && pwd)
-XCC=${XCC:-$ROOT/bin/osx/xcc-xc}
+XCC=${XCC:-$ROOT/bin/$XC_PLAT/xcc-xc}
 # ABSOLUTE before the cd below, or a relative $XCC vanishes the moment we move
 # into the work dir — and the fallback then reports "library did not build",
 # which is a lie about the compiler rather than about the path.

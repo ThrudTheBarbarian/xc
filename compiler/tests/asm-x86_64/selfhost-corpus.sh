@@ -14,6 +14,7 @@
 #   ./tests/asm-x86_64/selfhost-corpus.sh [fixture-glob]
 #
 # The Linux host is XTC_LINUX_HOST (set in build.env).
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
 _root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null)
 [ -f "$_root/tools/build-env.sh" ] && . "$_root/tools/build-env.sh"
 set -e
@@ -23,7 +24,7 @@ HOST="${XTC_LINUX_HOST:-}"
 GLOB="${1:-*}"
 WORK="${XTC_WORK_DIR:-/tmp}/selfhost-corpus"
 
-[ -x bin/osx/xcc-ln-x86_64 ] || { echo "build first: make"; exit 1; }
+[ -x bin/$XC_PLAT/xcc-ln-x86_64 ] || { echo "build first: make"; exit 1; }
 ssh -o BatchMode=yes -o ConnectTimeout=5 "$HOST" true 2>/dev/null || {
     echo "selfhost-corpus: SKIP (no Linux host '$HOST')"; exit 0; }
 
@@ -58,7 +59,7 @@ for f in tests/fixtures/$GLOB.xc; do
     # in-house link fails. That is right for a user, but here it would let a
     # clang-built binary be counted as a self-hosted pass — the number would be
     # measuring the wrong toolchain. A fallback is a failure for this script.
-    if ! ./bin/osx/xcc -A x86_64 --self-host "$f" -o "$WORK/bin/$b" \
+    if ! ./bin/$XC_PLAT/xcc -A x86_64 --self-host "$f" -o "$WORK/bin/$b" \
              2>"$WORK/$b.err"; then
         cat "$WORK/$b.err" >> "$WORK/link-errors.txt"
         linkfail=$((linkfail+1)); echo "$b" >> "$WORK/link-fail.txt"; continue

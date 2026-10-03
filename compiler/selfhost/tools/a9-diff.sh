@@ -15,8 +15,10 @@
 #   bash selfhost/tools/a9-diff.sh [pattern]
 
 set -u
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
+XC_HOST_ARCH=${XC_HOST_ARCH:-$( case "$(uname -m)" in (arm64|aarch64) echo arm64 ;; (*) echo x86_64 ;; esac )}
 cd "$(dirname "$0")/../.." || exit 1
-BIN=bin/osx
+BIN=bin/$XC_PLAT
 [ -x "$BIN/xcc-fe" ] || BIN=bin/linux
 # LEVEL: the IR opt level BOTH sides are fed. It was hardcoded at 0 — the level
 # nobody ships, since `make corpus` and the driver default are both -O3 — so the
@@ -53,7 +55,7 @@ mkdir -p "$WORK"
 trap 'rm -rf "$WORK"' EXIT
 
 echo "building xtcg9 (xtc → native arm64)…"
-"$BIN/xcc" -O2 -A arm64 -H . -o "$WORK/xtcg9" selfhost/tools/xtcg9.xc \
+"${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xtcg9" selfhost/tools/xtcg9.xc \
     -I selfhost/ir -I selfhost/codegen 2>&1 | grep -E "^[^ ].*error" && exit 1
 
 # arm9 resolves `#import <c>` against the device libc.so, so without the

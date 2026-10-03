@@ -9,11 +9,12 @@
 # ELF, its interface was not read, and the client failed far away with
 # "unsupported: assignment target" (bug 583). A compiler MATRIX (xcc, xcc-xc for
 # each half), run here on the macOS arm64 host.
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
 _root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null)
 [ -f "$_root/tools/build-env.sh" ] && . "$_root/tools/build-env.sh"
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-BIN="${XC_BIN:-$ROOT/bin/osx}"
+BIN="${XC_BIN:-$ROOT/bin/$XC_PLAT}"
 T="$ROOT/tests/crossmod"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT

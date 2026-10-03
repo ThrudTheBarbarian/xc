@@ -12,10 +12,11 @@
 #
 #   bash tests/win64/xc-run.sh
 # A crashing test program must not open the Wine crash dialog.
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
 export WINEDLLOVERRIDES="winedbg.exe=d;${WINEDLLOVERRIDES:-}"
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-BIN="$ROOT/bin/osx"; [ -d "$BIN" ] || BIN="$ROOT/bin/linux"
+BIN="$ROOT/bin/$XC_PLAT"; [ -d "$BIN" ] || BIN="$ROOT/bin/linux"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 cd "$TMP"

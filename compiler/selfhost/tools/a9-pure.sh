@@ -15,21 +15,23 @@
 #   bash selfhost/tools/a9-pure.sh [prog.xc] [out.so]
 
 set -eu
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
+XC_HOST_ARCH=${XC_HOST_ARCH:-$( case "$(uname -m)" in (arm64|aarch64) echo arm64 ;; (*) echo x86_64 ;; esac )}
 cd "$(dirname "$0")/../.." || exit 1
-BIN=bin/osx
+BIN=bin/$XC_PLAT
 [ -x "$BIN/xcc" ] || BIN=bin/linux
 SRC=${1:-tests/asm-arm32/bare9.xc}
 OUT=${2:-${SRC%.xc}.so}
 W=$(mktemp -d)
 trap 'rm -rf "$W"' EXIT
 
-"$BIN/xcc" -O2 -A arm64 -H . -o "$W/xtfe"  selfhost/tools/xtfe.xc -I selfhost/driver \
-    -I support/generic/lib -I support/arm64/lib -I support/xt6502/lib \
+"${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -H . -o "$W/xtfe"  selfhost/tools/xtfe.xc -I selfhost/driver \
+    -I support/generic/lib -I support/$XC_HOST_ARCH/lib -I support/xt6502/lib \
     -I selfhost/lexer -I selfhost/preproc -I selfhost/parser -I selfhost/sema \
     -I selfhost/ir >/dev/null
-"$BIN/xcc" -O2 -A arm64 -H . -o "$W/xtcg9" selfhost/tools/xtcg9.xc \
+"${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -H . -o "$W/xtcg9" selfhost/tools/xtcg9.xc \
     -I selfhost/ir -I selfhost/codegen >/dev/null
-"$BIN/xcc" -O2 -A arm64 -H . -o "$W/xtas9" selfhost/tools/xtas9.xc \
+"${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -H . -o "$W/xtas9" selfhost/tools/xtas9.xc \
     -I selfhost/asm >/dev/null
 
 "$W/xtfe"  -m arm9 -H . -I support/arm9/lib -I support/generic/lib "$SRC" -o "$W/a.ir"

@@ -13,10 +13,11 @@
 # Skips CLEANLY (exit 0, and says so) with no xcrun or no booted simulator:
 # a CI host without Xcode has not checked anything, and the line says that.
 # A crashing test program must not open the Wine crash dialog.
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
 export WINEDLLOVERRIDES="winedbg.exe=d;${WINEDLLOVERRIDES:-}"
 set -u
 cd "$(dirname "$0")/../.." || exit 1
-BIN=bin/osx
+BIN=bin/$XC_PLAT
 PATTERN=${1:-}
 XCC=${XCC:-$BIN/xcc-xc}
 [ -x "$XCC" ] || { echo "ios-run: no $XCC (make production)"; exit 1; }

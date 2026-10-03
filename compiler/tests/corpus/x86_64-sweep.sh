@@ -16,13 +16,14 @@
 #   //xtc-link: <name>                companion compiled into the same unit.
 # gfx_* fixtures are skipped by design (GEM/SDL3 will be the x86-64 gfx layer).
 #
-# Env: XTC_X86_64_HOST (falls back to XTC_LINUX_HOST), XTC (default bin/osx/xcc),
+# Env: XTC_X86_64_HOST (falls back to XTC_LINUX_HOST), XTC (default bin/$XC_PLAT/xcc),
 #      OPT (default 3), TIMEOUT (default 10).
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
 _root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null)
 [ -f "$_root/tools/build-env.sh" ] && . "$_root/tools/build-env.sh"
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; cd "$ROOT"
-XTC="${XTC:-bin/osx/xcc}"   # XTC=bin/osx/xcc-xc sweeps the compiler that ships
+XTC="${XTC:-bin/$XC_PLAT/xcc}"   # XTC=bin/$XC_PLAT/xcc-xc sweeps the compiler that ships
 INC=(-I support/x86_64/lib -I support/generic/lib)
 HOST="${XTC_X86_64_HOST:-${XTC_LINUX_HOST:-}}"
 OPT="${OPT:-3}"
@@ -78,13 +79,20 @@ echo "built ${#NAMES[@]}  |  N/A $NA  |  no-oracle $NOORACLE  |  compile-fail $C
 
 [ ${#NAMES[@]} -eq 0 ] && { echo "nothing to run"; exit 1; }
 
-# ---- 2. ship + run on the Linux host (one scp, one ssh) ------------------------
+# ---- 2. run them: here when this IS an x86-64 Linux host, else ship them -------
+# HOST=local (or no host on an x86-64 Linux machine) runs in place, which is
+# what the CI's Linux worker does; anything else is one scp and one ssh.
+if [ "$HOST" = local ] || { [ -z "$HOST" ] && [ "$(uname -s)" = Linux ] && [ "$(uname -m)" = x86_64 ]; }; then
+  ( cd "$BUILD/bin" && for b in *; do timeout "$TIMEOUT" ./"$b" > "$BUILD/out/$b.out" 2>/dev/null; echo $? > "$BUILD/out/$b.rc"; done )
+else
+[ -n "$HOST" ] || { echo "no x86-64 Linux host: set XTC_X86_64_HOST (or run on one)"; exit 1; }
 ssh -o BatchMode=yes "$HOST" "rm -rf $REMOTE && mkdir -p $REMOTE/out" || { echo "ssh $HOST failed"; exit 1; }
 scp -o BatchMode=yes -q "$BUILD/bin/"* "$HOST:$REMOTE/"
 ssh -o BatchMode=yes "$HOST" \
   "cd $REMOTE; for b in *; do timeout $TIMEOUT ./\$b > out/\$b.out 2>/dev/null; echo \$? > out/\$b.rc; done; tar cf - -C out ." \
   | tar xf - -C "$BUILD/out"
 ssh -o BatchMode=yes "$HOST" "rm -rf $REMOTE" 2>/dev/null
+fi
 
 # ---- 3. diff against the oracles -----------------------------------------------
 PASS=0; FAIL=0; FAILS=""

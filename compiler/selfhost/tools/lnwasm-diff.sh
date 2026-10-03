@@ -11,8 +11,10 @@
 #   bash selfhost/tools/lnwasm-diff.sh [pattern]
 
 set -u
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
+XC_HOST_ARCH=${XC_HOST_ARCH:-$( case "$(uname -m)" in (arm64|aarch64) echo arm64 ;; (*) echo x86_64 ;; esac )}
 cd "$(dirname "$0")/../.." || exit 1
-BIN=bin/osx
+BIN=bin/$XC_PLAT
 [ -x "$BIN/xcc-fe" ] || BIN=bin/linux
 PATTERN=${1:-}
 WORK=${TMPDIR:-/tmp}/lnwasmdiff.$$
@@ -20,7 +22,7 @@ mkdir -p "$WORK"
 trap 'rm -rf "$WORK"' EXIT
 
 echo "building xtlnwasm (xtc → native arm64)…"
-"$BIN/xcc" -O2 -A arm64 -H . -o "$WORK/xtlnwasm" selfhost/tools/xtlnwasm.xc \
+"${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xtlnwasm" selfhost/tools/xtlnwasm.xc \
     -I selfhost/asm 2>&1 | grep -E "^[^ ].*error" && exit 1
 
 RUN_INCS=(-I selfhost/lexer -I selfhost/preproc -I selfhost/parser

@@ -2,11 +2,12 @@
 # arm9-quick.sh — fast per-fixture arm9 check (compile -A arm9, run under qemu,
 # diff oracle). Usage: arm9-quick.sh <fixture> [<fixture> ...]
 # Not a replacement for `make corpus`; a bisection aid.
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
 _root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null)
 [ -f "$_root/tools/build-env.sh" ] && . "$_root/tools/build-env.sh"
 cd "$(dirname "$0")/../.." || exit 1
 SYS="${XTC_ARM9_SYSROOT:-}"   # a private build dir, so parallel builds do not race
-XTC=${XTC:-bin/osx/xcc}      # override to compare against another build (baselining a fix)
+XTC=${XTC:-bin/$XC_PLAT/xcc}      # override to compare against another build (baselining a fix)
 # XTC_A9_SELFHOST picks the link path, and BOTH spellings must be explicit:
 #   =1  in-house assembler + ELF writer (xcc-ln-arm9)
 #   =0  arm-none-eabi-gcc

@@ -13,8 +13,9 @@
 # stdlib before reaching a line of user code. A driver flag cannot be tested
 # from a corpus fixture, so it is pinned here.
 set -u
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
 cd "$(dirname "$0")/../.." || exit 1
-BIN=bin/osx; [ -x "$BIN/xcc" ] || BIN=bin/linux
+BIN=bin/$XC_PLAT; [ -x "$BIN/xcc" ] || BIN=bin/linux
 WORK=${TMPDIR:-/tmp}/migrate.$$
 mkdir -p "$WORK"; trap 'rm -rf "$WORK"' EXIT
 fail=0

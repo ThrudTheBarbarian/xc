@@ -18,8 +18,10 @@
 # An ORACLE failure (the reference cannot build it) is counted and NOT a pass.
 # A port REFUSAL is a gap, named separately from a divergence.
 set -u
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
+XC_HOST_ARCH=${XC_HOST_ARCH:-$( case "$(uname -m)" in (arm64|aarch64) echo arm64 ;; (*) echo x86_64 ;; esac )}
 cd "$(dirname "$0")/../.." || exit 1
-BIN=bin/osx; [ -x "$BIN/xcc" ] || BIN=bin/linux
+BIN=bin/$XC_PLAT; [ -x "$BIN/xcc" ] || BIN=bin/linux
 PATTERN=${1:-}
 WORK=${TMPDIR:-/tmp}/libdiff.$$
 mkdir -p "$WORK"; trap 'rm -rf "$WORK"' EXIT
@@ -28,7 +30,7 @@ SELF=(-I selfhost/lexer -I selfhost/preproc -I selfhost/parser -I selfhost/sema
       -I selfhost/ir -I selfhost/opt -I selfhost/codegen -I selfhost/asm
       -I selfhost/link -I selfhost/driver)
 echo "building xcc.xc (the xtc driver → native arm64)…"
-"$BIN/xcc" -O2 -A arm64 -H . -o "$WORK/xccxc" selfhost/tools/xcc.xc \
+"${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xccxc" selfhost/tools/xcc.xc \
     "${SELF[@]}" > "$WORK/build.log" 2>&1
 if [ ! -x "$WORK/xccxc" ]; then grep -a error "$WORK/build.log" | head -5; exit 1; fi
 
@@ -42,7 +44,14 @@ LIBS="tests/arm64/emit-lib/TheLib.xc tests/arm64/emit-lib-overload/OvLib.xc
       tests/fixtures/foundation_comparable.xc
       tests/fixtures/overload_virtual_dispatch.xc
       tests/fixtures/block_calls_use.xc tests/fixtures/class_calls_use.xc"
-SAMPLE=$(ls tests/fixtures/*.xc | sort | awk 'NR % 16 == 0')
+# Every 16th fixture by default, which keeps a local run short. LIB_DIFF_ALL=1
+# takes them all: the sample moves whenever a fixture is added, and two real
+# divergences (590, 591) stayed hidden until it happened to land on them.
+if [ -n "${LIB_DIFF_ALL:-}" ]; then
+    SAMPLE=$(ls tests/fixtures/*.xc | sort)
+else
+    SAMPLE=$(ls tests/fixtures/*.xc | sort | awk 'NR % 16 == 0')
+fi
 FILES=$(printf '%s\n' $LIBS $SAMPLE | awk '!seen[$0]++' \
     | awk -v i="${SHARD_I:-0}" -v n="${SHARD_N:-1}" 'NR % n == i')
 

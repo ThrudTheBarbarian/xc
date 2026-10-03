@@ -3,9 +3,10 @@
 # clang path and `xtc --self-host` — run both, and compare. clang is the oracle
 # (both at the same -O level). Reports MATCH / MISMATCH / self-host-build-fail.
 # macOS/arm64 only; not part of make test (it builds + runs the whole corpus).
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
 cd "$(dirname "$0")/../.."
-XTC=bin/osx/xcc; SR=support/arm64/lib
-[ -x "$XTC" ] && [ -x bin/osx/xcc-ln-arm64 ] || { echo "build first: make"; exit 1; }
+XTC=bin/$XC_PLAT/xcc; SR=support/arm64/lib
+[ -x "$XTC" ] && [ -x bin/$XC_PLAT/xcc-ln-arm64 ] || { echo "build first: make"; exit 1; }
 match=0; mismatch=0; shfail=0; dylib=0; clangskip=0; total=0
 mm=$(mktemp); bf=$(mktemp)
 for f in tests/fixtures/*.xc; do

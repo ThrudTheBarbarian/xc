@@ -26,6 +26,7 @@
 # Env: OPT (default 3 — the production level, as `make corpus` uses),
 #      JOBS (default 8), TIMEOUT (default 10s per fixture).
 set -u
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT" || exit 1
@@ -155,7 +156,7 @@ JOBS="${JOBS:-8}"
 TIMEOUT="${TIMEOUT:-10}"
 BOOT="$XC_BIN/xcc"
 # The simulator resolves the same way the compiler does. This was hardcoded to
-# bin/osx one line below a BOOT that already handled both, so the xt6502 sweep
+# bin/$XC_PLAT one line below a BOOT that already handled both, so the xt6502 sweep
 # would have died on a Linux runner while the arm64 half ran fine.
 SIM="$ROOT/$XC_BIN/xcc-sim-6502"
 if [ ! -x "$BOOT" ]; then echo "xc-sweep: no bootstrap compiler at $BOOT — run make"; exit 1; fi

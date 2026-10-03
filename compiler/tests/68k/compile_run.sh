@@ -7,9 +7,10 @@
 #
 # Programs and their expected exit codes live in the `cases` list below.
 set -e
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
-XTC="$ROOT/bin/osx/xcc"
-XST="$ROOT/bin/osx/xcc-sim-68k"
+XTC="$ROOT/bin/$XC_PLAT/xcc"
+XST="$ROOT/bin/$XC_PLAT/xcc-sim-68k"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 

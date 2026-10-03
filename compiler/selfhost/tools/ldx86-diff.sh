@@ -10,8 +10,10 @@
 #   bash selfhost/tools/ldx86-diff.sh [pattern]
 
 set -u
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
+XC_HOST_ARCH=${XC_HOST_ARCH:-$( case "$(uname -m)" in (arm64|aarch64) echo arm64 ;; (*) echo x86_64 ;; esac )}
 cd "$(dirname "$0")/../.." || exit 1
-BIN=bin/osx
+BIN=bin/$XC_PLAT
 [ -x "$BIN/xcc" ] || BIN=bin/linux
 PATTERN=${1:-}
 WORK=${TMPDIR:-/tmp}/ldx86.$$
@@ -19,7 +21,7 @@ mkdir -p "$WORK"
 trap 'rm -rf "$WORK"' EXIT
 
 echo "building xtldx86 (xtc → native arm64 host binary)…"
-"$BIN/xcc" -O2 -A arm64 -H . -o "$WORK/xtldx86" selfhost/tools/xtldx86.xc \
+"${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xtldx86" selfhost/tools/xtldx86.xc \
     -I selfhost/asm > "$WORK/build.log" 2>&1
 if [ ! -x "$WORK/xtldx86" ]; then grep -a error "$WORK/build.log" | head -5; exit 1; fi
 

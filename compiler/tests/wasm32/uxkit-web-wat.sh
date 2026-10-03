@@ -8,9 +8,10 @@
 # frame and every web driver gate hung (uxkit/037). No fixture reached that
 # shape; this program does.
 set -u
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
 cd "$(dirname "$0")/../.." || exit 1
 ROOT=$(pwd)
-BIN=$ROOT/bin/osx; [ -x "$BIN/xcc" ] || BIN=$ROOT/bin/linux
+BIN=$ROOT/bin/$XC_PLAT; [ -x "$BIN/xcc" ] || BIN=$ROOT/bin/linux
 UX=$ROOT/../frameworks/uxkit
 [ -f "$UX/test_web_loop.xc" ] || { echo "SKIP  no frameworks/uxkit beside the compiler"; exit 0; }
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/uxkit-web-wat.XXXXXX")

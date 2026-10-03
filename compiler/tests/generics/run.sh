@@ -3,8 +3,9 @@
 # that the element type is ENFORCED, not merely applied — the differentials
 # compare the two compilers on it, but neither of them runs it.
 set -u
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
 cd "$(dirname "$0")/../.." || exit 1
-BIN=bin/osx; [ -d "$BIN" ] || BIN=bin/linux
+BIN=bin/$XC_PLAT; [ -d "$BIN" ] || BIN=bin/linux
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 fail=0
 

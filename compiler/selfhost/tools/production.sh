@@ -2,7 +2,7 @@
 # production.sh — build the toolchain with ITSELF, and prove it stops changing.
 # =============================================================================
 #
-# `bin/osx/*` are BOOTSTRAP binaries: the Objective-C tree built them. A
+# `bin/$XC_PLAT/*` are BOOTSTRAP binaries: the Objective-C tree built them. A
 # PRODUCTION binary is one the xc compiler built. This script makes those and
 # checks the property that makes them trustworthy:
 #
@@ -30,9 +30,10 @@
 # bootstraps only the FRONT END with the Objective-C back end — from before the
 # rest of the compiler was ported.
 set -u
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
 cd "$(dirname "$0")/../.." || exit 1
 ROOT=$(pwd)
-BOOT=bin/osx
+BOOT=bin/$XC_PLAT
 [ -x "$BOOT/xcc" ] || BOOT=bin/linux
 
 # The include set each tool needs. Defined ABOVE the worker block because a

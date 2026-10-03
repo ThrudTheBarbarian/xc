@@ -11,8 +11,9 @@
 #
 # Env: OPT (default 3), TIMEOUT (default 15).
 set -u
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; cd "$ROOT"
-XTC="bin/osx/xcc"
+XTC="bin/$XC_PLAT/xcc"
 OPT="${OPT:-3}"
 TIMEOUT="${TIMEOUT:-15}"
 BUILD="$(mktemp -d)"; mkdir -p "$BUILD/bin" "$BUILD/out"

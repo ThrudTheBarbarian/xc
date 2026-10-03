@@ -23,8 +23,10 @@
 #   bash selfhost/tools/as9-diff.sh <dir-of-.s>  # a directory of .s, as before
 
 set -u
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
+XC_HOST_ARCH=${XC_HOST_ARCH:-$( case "$(uname -m)" in (arm64|aarch64) echo arm64 ;; (*) echo x86_64 ;; esac )}
 cd "$(dirname "$0")/../.." || exit 1
-BIN=bin/osx
+BIN=bin/$XC_PLAT
 [ -x "$BIN/xcc" ] || BIN=bin/linux
 SRC=${1:-}
 . "$(dirname "$0")/arm9-sysroot.sh"
@@ -38,7 +40,7 @@ command -v arm-none-eabi-as >/dev/null || {
 }
 
 echo "building xtas9 (xtc → native arm64)…"
-"$BIN/xcc" -O2 -A arm64 -H . -o "$WORK/xtas9" selfhost/tools/xtas9.xc \
+"${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xtas9" selfhost/tools/xtas9.xc \
     -I selfhost/asm 2>&1 | grep -E "^[^ ].*error" && exit 1
 
 pass=0; fail=0; unsup=0; oracle=0

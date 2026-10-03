@@ -627,7 +627,10 @@ static NSDictionary<NSString *, NSNumber *> *sKeywordMap = nil;
     }
 
     if (isFloat) {
-        double dVal = [raw doubleValue];
+        // strtod, not -[NSString doubleValue]: GNUstep's is not correctly
+        // rounded, so on Linux some literals came out one ULP away from the
+        // macOS build and from the xc compiler (ast-diff, double_const.xc).
+        double dVal = strtod(raw.UTF8String, NULL);
         // IEEE bytes, not xtc's 5/8-byte softfloat encoding. Every backend
         // emits IEEE now, so the old format was a lossy detour between two
         // IEEE endpoints: it rounds to a 48-bit mantissa for a `d` literal,

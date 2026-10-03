@@ -15,10 +15,12 @@
 # xtlex.xc. The oracle is `xcc-fe --dump-tokens`, which lexes a RAW file — no
 # preprocessing, no includes, no sema — so the comparison isolates the lexer.
 set -u
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
+XC_HOST_ARCH=${XC_HOST_ARCH:-$( case "$(uname -m)" in (arm64|aarch64) echo arm64 ;; (*) echo x86_64 ;; esac )}
 cd "$(dirname "$0")/../.." || exit 1
 
-XTC=bin/osx/xcc
-FE=bin/osx/xcc-fe
+XTC=bin/$XC_PLAT/xcc
+FE=bin/$XC_PLAT/xcc-fe
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
@@ -28,7 +30,7 @@ if [ ! -x "$XTC" ] || [ ! -x "$FE" ]; then
 fi
 
 echo "building xtlex (xtc → native arm64)…"
-if ! "$XTC" -H . -q -A arm64 -I selfhost/lexer selfhost/tools/xtlex.xc -o "$TMP/xtlex" 2>"$TMP/build.err"; then
+if ! "${XC_TOOL_XCC:-$XTC}" -H . -q -A $XC_HOST_ARCH -I selfhost/lexer selfhost/tools/xtlex.xc -o "$TMP/xtlex" 2>"$TMP/build.err"; then
     echo "lexer-diff: xtlex failed to build" >&2
     cat "$TMP/build.err" >&2
     exit 1

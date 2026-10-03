@@ -21,14 +21,16 @@
 # is worse than no harness.
 
 set -u
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
+XC_HOST_ARCH=${XC_HOST_ARCH:-$( case "$(uname -m)" in (arm64|aarch64) echo arm64 ;; (*) echo x86_64 ;; esac )}
 cd "$(dirname "$0")/../.." || exit 1
-BIN=bin/osx
+BIN=bin/$XC_PLAT
 [ -x "$BIN/xcc-fe" ] || BIN=bin/linux
 WORK=${TMPDIR:-/tmp}/irwide.$$
 mkdir -p "$WORK"
 trap 'rm -rf "$WORK"' EXIT
 
-INCS=(-I support/generic/lib -I support/arm64/lib -I support/xt6502/lib
+INCS=(-I support/generic/lib -I support/$XC_HOST_ARCH/lib -I support/xt6502/lib
       -I support/arm9/lib -I support/atarist/lib -I support/x86_64/lib
       -I support/win64/lib -I support/win64/selfhost-iface -I support/6502/lib
       -I selfhost/lexer -I selfhost/preproc -I selfhost/parser -I selfhost/sema
@@ -41,7 +43,7 @@ INCS=(-I support/generic/lib -I support/arm64/lib -I support/xt6502/lib
 # "divergences" that were purely the wrong file being imported.
 
 echo "building xtir (xtc → native arm64)…"
-"$BIN/xcc" -O2 -A arm64 -o "$WORK/xtir" selfhost/tools/xtir.xc \
+"${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -o "$WORK/xtir" selfhost/tools/xtir.xc \
     "${INCS[@]}" 2>&1 | grep -E "^[^ ].*error" && exit 1
 
 PATTERN=${1:-}

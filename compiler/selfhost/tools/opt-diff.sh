@@ -16,12 +16,14 @@
 # A file whose IR the port cannot read, or which needs a pass that is not
 # ported, exits 3 and says which — it is counted `unsupported` and never as a
 # pass. That list IS the work queue.
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
+XC_HOST_ARCH=${XC_HOST_ARCH:-$( case "$(uname -m)" in (arm64|aarch64) echo arm64 ;; (*) echo x86_64 ;; esac )}
 _root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null)
 [ -f "$_root/tools/build-env.sh" ] && . "$_root/tools/build-env.sh"
 
 set -u
 cd "$(dirname "$0")/../.." || exit 1
-BIN=bin/osx
+BIN=bin/$XC_PLAT
 [ -x "$BIN/xcc-fe" ] || BIN=bin/linux
 TARGET=${1:-arm64}
 LEVEL=${2:-1}
@@ -54,7 +56,7 @@ case "$TARGET" in
 esac
 
 echo "building xtopt (xtc → native arm64)…"
-"$BIN/xcc" -O2 -A arm64 -H . -o "$WORK/xtopt" selfhost/tools/xtopt.xc \
+"${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xtopt" selfhost/tools/xtopt.xc \
     -I selfhost/ir -I selfhost/opt 2>&1 | grep -E "^[^ ].*error" && exit 1
 
 RUN_INCS=(-I selfhost/lexer -I selfhost/preproc -I selfhost/parser

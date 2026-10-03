@@ -15,11 +15,12 @@
 # different offsets, which is a wrong pointer rather than a wrong number.
 #
 #   bash selfhost/tools/dwarf-diff.sh
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
 _root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null)
 [ -f "$_root/tools/build-env.sh" ] && . "$_root/tools/build-env.sh"
 set -u
 cd "$(dirname "$0")/../.." || exit 1
-BIN=bin/osx
+BIN=bin/$XC_PLAT
 [ -x "$BIN/xcc" ] || BIN=bin/linux
 WORK=${TMPDIR:-/tmp}/dwarfdiff.$$
 mkdir -p "$WORK"; trap 'rm -rf "$WORK"' EXIT

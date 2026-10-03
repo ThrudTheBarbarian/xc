@@ -15,12 +15,14 @@
 #
 # A file the parser does not handle exits 3 and says what stopped it; it is
 # counted `unsupported` and never as a pass.
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
+XC_HOST_ARCH=${XC_HOST_ARCH:-$( case "$(uname -m)" in (arm64|aarch64) echo arm64 ;; (*) echo x86_64 ;; esac )}
 _root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null)
 [ -f "$_root/tools/build-env.sh" ] && . "$_root/tools/build-env.sh"
 
 set -u
 cd "$(dirname "$0")/../.." || exit 1
-BIN=bin/osx
+BIN=bin/$XC_PLAT
 [ -x "$BIN/xcc-fe" ] || BIN=bin/linux
 TARGET=${1:-arm64}
 PATTERN=${2:-}
@@ -29,7 +31,7 @@ mkdir -p "$WORK"
 trap 'rm -rf "$WORK"' EXIT
 
 echo "building xtirp (xtc → native arm64)…"
-"$BIN/xcc" -O2 -A arm64 -H . -o "$WORK/xtirp" selfhost/tools/xtirp.xc \
+"${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xtirp" selfhost/tools/xtirp.xc \
     -I selfhost/ir 2>&1 | grep -E "^[^ ].*error" && exit 1
 
 # arm9 resolves `#import <c>` against the device libc.so, so without the

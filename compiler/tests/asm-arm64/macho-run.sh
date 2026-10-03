@@ -4,8 +4,9 @@
 # OWN ad-hoc code signature — Phase 3), run it directly (NO external codesign),
 # and check the exit code / stdout. 100% self-produced. macOS/arm64 only.
 set -e
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
 cd "$(dirname "$0")/../.."
-BIN=bin/osx/macho-smoke
+BIN=bin/$XC_PLAT/macho-smoke
 [ -x "$BIN" ] || { echo "build first: make macho-smoke"; exit 1; }
 fail=0
 run() { # name  src-file  expected-exit  [expected-stdout]

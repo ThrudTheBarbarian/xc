@@ -13,8 +13,10 @@
 # An ORACLE failure (the reference cannot build it) is counted and NOT a pass.
 # A port refusal is a gap, named separately from a divergence.
 set -u
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
+XC_HOST_ARCH=${XC_HOST_ARCH:-$( case "$(uname -m)" in (arm64|aarch64) echo arm64 ;; (*) echo x86_64 ;; esac )}
 cd "$(dirname "$0")/../.." || exit 1
-BIN=bin/osx; [ -x "$BIN/xcc" ] || BIN=bin/linux
+BIN=bin/$XC_PLAT; [ -x "$BIN/xcc" ] || BIN=bin/linux
 PATTERN=${1:-}
 WORK=${TMPDIR:-/tmp}/capsdiff.$$
 mkdir -p "$WORK"; trap 'rm -rf "$WORK"' EXIT
@@ -23,7 +25,7 @@ SELF=(-I selfhost/lexer -I selfhost/preproc -I selfhost/parser -I selfhost/sema
       -I selfhost/ir -I selfhost/opt -I selfhost/codegen -I selfhost/asm
       -I selfhost/link -I selfhost/driver)
 echo "building xcc.xc (the xtc driver → native arm64)…"
-"$BIN/xcc" -O2 -A arm64 -H . -o "$WORK/xccxc" selfhost/tools/xcc.xc \
+"${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xccxc" selfhost/tools/xcc.xc \
     "${SELF[@]}" > "$WORK/build.log" 2>&1
 if [ ! -x "$WORK/xccxc" ]; then grep -a error "$WORK/build.log" | head -5; exit 1; fi
 

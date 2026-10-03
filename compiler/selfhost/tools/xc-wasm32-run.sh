@@ -16,9 +16,10 @@
 #
 #   bash selfhost/tools/xc-wasm32-run.sh [pattern]
 set -u
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
 cd "$(dirname "$0")/../.." || exit 1
 
-BIN=bin/osx
+BIN=bin/$XC_PLAT
 [ -x "$BIN/xcc-xc" ] || BIN=bin/linux
 PATTERN=${1:-}
 FIX=tests/fixtures

@@ -6,9 +6,10 @@
 # dyld resolves the cross-dylib symbol at run time. macOS/arm64 only; not part of
 # make test (it executes signed binaries on Apple Silicon).
 set -e
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
 cd "$(dirname "$0")/../.."
-XTC=bin/osx/xcc
-[ -x "$XTC" ] && [ -x bin/osx/xcc-ln-arm64 ] || { echo "build first: make"; exit 1; }
+XTC=bin/$XC_PLAT/xcc
+[ -x "$XTC" ] && [ -x bin/$XC_PLAT/xcc-ln-arm64 ] || { echo "build first: make"; exit 1; }
 tmp=$(mktemp -d); fail=0
 mkdir -p "$tmp/src" "$tmp/lib"
 

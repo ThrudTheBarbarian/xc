@@ -19,12 +19,13 @@
 # a function taking `__sFILE@` or a function pointer needs the struct
 # declarations too, which this stub does not carry — those names stay a
 # measured gap rather than a wrong signature.
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
 _root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null)
 [ -f "$_root/tools/build-env.sh" ] && . "$_root/tools/build-env.sh"
 
 set -u
 cd "$(dirname "$0")/../.." || exit 1
-BIN=bin/osx
+BIN=bin/$XC_PLAT
 [ -x "$BIN/xcc-fe" ] || BIN=bin/linux
 LIBDIR=${1:-${XTC_ARM9_SYSROOT:-}}
 OUT=support/arm9/selfhost-iface/c.xc

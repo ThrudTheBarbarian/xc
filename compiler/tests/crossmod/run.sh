@@ -35,6 +35,7 @@
 # with `make corpus` in THIS checkout — for the seconds the .elf is missing, every arm9
 # fixture in a running sweep fails with "kernel/libc absent", which reads exactly like a
 # 200-fixture compiler catastrophe and is nothing of the kind.
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
 _root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null)
 [ -f "$_root/tools/build-env.sh" ] && . "$_root/tools/build-env.sh"
 set -e
@@ -56,10 +57,10 @@ if command -v wine >/dev/null 2>&1; then
     for c in xcc xcc-xc; do
       mkdir -p "$W/$c"
       for l in "$@"; do
-        ( cd "$W/$c" && "$WROOT/bin/osx/$c" -A win64 -H "$WROOT" -q --emit-lib \
+        ( cd "$W/$c" && "$WROOT/bin/$XC_PLAT/$c" -A win64 -H "$WROOT" -q --emit-lib \
             -o "lib${l#*:}.dll" "$WROOT/tests/crossmod/${l%%:*}.xc" ) || { echo "FAIL  win64: $c could not build lib${l#*:}.dll"; wfail=1; return; }
       done
-      ( cd "$W/$c" && "$WROOT/bin/osx/$c" -A win64 -H "$WROOT" -q -L . -o "$app" \
+      ( cd "$W/$c" && "$WROOT/bin/$XC_PLAT/$c" -A win64 -H "$WROOT" -q -L . -o "$app" \
           "$WROOT/tests/crossmod/$app.xc" ) || { echo "FAIL  win64: $c could not build $app"; wfail=1; return; }
       got=$(wine_run "$W/$c" "$app")
       [ "$got" = "$want" ] || { echo "FAIL  win64 ($c): $app"; echo "$got" | head -5; wfail=1; }
@@ -82,7 +83,7 @@ fi
 
 SR="${XTC_ARM9_SYSROOT:-}"
 LOADER="$(dirname "$SR")"
-XTC=bin/osx/xcc
+XTC=bin/$XC_PLAT/xcc
 [ -f "$SR/freertos-hosttest.elf" ] || { echo "SKIP: no loader build at $SR (make -C $LOADER hosttest BUILD=$(basename "$SR"))"; exit 0; }
 
 # Run one .so on the loader and return exactly the program's stdout.

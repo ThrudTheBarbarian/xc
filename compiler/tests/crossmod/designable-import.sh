@@ -10,9 +10,10 @@
 # to dplib, and a client that wants them imports dplib. Both compilers build
 # both libraries, and the files must be byte-identical.
 set -u
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
 cd "$(dirname "$0")/../.." || exit 1
 ROOT=$(pwd)
-BIN=$ROOT/bin/osx; [ -x "$BIN/xcc" ] || BIN=$ROOT/bin/linux
+BIN=$ROOT/bin/$XC_PLAT; [ -x "$BIN/xcc" ] || BIN=$ROOT/bin/linux
 T=$ROOT/tests/crossmod
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/designable-import.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT

@@ -13,6 +13,7 @@
 #
 # NOT set -e: a target's runner may legitimately be unavailable.
 # A crashing test program must not open the Wine crash dialog.
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
 export WINEDLLOVERRIDES="winedbg.exe=d;${WINEDLLOVERRIDES:-}"
 _root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null)
 [ -f "$_root/tools/build-env.sh" ] && . "$_root/tools/build-env.sh"
@@ -22,7 +23,7 @@ ROOT=$(pwd)
 HOST="${XTC_LINUX_HOST:-}"
 WINE="${XTC_WINE:-/opt/homebrew/bin/wine}"
 [ -x "$WINE" ] || WINE="$(command -v wine 2>/dev/null || true)"
-[ -x "$ROOT/bin/osx/xcc" ] || { echo "build first: make"; exit 1; }
+[ -x "$ROOT/bin/$XC_PLAT/xcc" ] || { echo "build first: make"; exit 1; }
 
 # A program that exercises the object model, ARC and printf — not just a return
 # code — so "same output" means something.
@@ -53,14 +54,14 @@ report() {   # report <label> <got> [SKIP]
 }
 
 # ── macOS arm64 (native, self-host default) ──
-if "$ROOT"/bin/osx/xcc -A arm64 "$W/prog.xc" -o "$W/prog.macho" >"$W/log" 2>&1; then
+if "$ROOT"/bin/$XC_PLAT/xcc -A arm64 "$W/prog.xc" -o "$W/prog.macho" >"$W/log" 2>&1; then
     report "macOS arm64 (self-host)" "$("$W/prog.macho" 2>/dev/null | tr -d '\r')"
 else
     report "macOS arm64 (self-host)" SKIP "build failed: $(tail -1 "$W/log")"
 fi
 
 # ── Linux x86-64 (self-host ELF) ──
-if "$ROOT"/bin/osx/xcc -A x86_64 --self-host "$W/prog.xc" -o "$W/prog.elf" >"$W/log" 2>&1 \
+if "$ROOT"/bin/$XC_PLAT/xcc -A x86_64 --self-host "$W/prog.xc" -o "$W/prog.elf" >"$W/log" 2>&1 \
    && grep -q "self-hosted, no clang" "$W/log"; then
     if ssh -o BatchMode=yes -o ConnectTimeout=5 "$HOST" true 2>/dev/null; then
         scp -q "$W/prog.elf" "$HOST:/tmp/xtc-cm-$$" 2>/dev/null
@@ -74,7 +75,7 @@ else
 fi
 
 # ── Windows x86-64 (self-host PE) ──
-if "$ROOT"/bin/osx/xcc -A win64 --self-host "$W/prog.xc" -o "$W/prog.exe" >"$W/log" 2>&1 \
+if "$ROOT"/bin/$XC_PLAT/xcc -A win64 --self-host "$W/prog.xc" -o "$W/prog.exe" >"$W/log" 2>&1 \
    && grep -q "self-hosted, no mingw" "$W/log"; then
     if [ -n "$WINE" ]; then
         "$WINE" --version >/dev/null 2>&1 || true

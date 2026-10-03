@@ -12,9 +12,10 @@
 #
 # Skips cleanly when no mingw sysroot is present.
 set -u
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
 cd "$(dirname "$0")/../.." || exit 1
 
-BIN_DIR=${BIN_DIR:-bin/osx}
+BIN_DIR=${BIN_DIR:-bin/$XC_PLAT}
 [ -d "$BIN_DIR" ] || BIN_DIR=bin/linux
 ORACLE="$BIN_DIR/oracle-coffobj"
 PORT="$BIN_DIR/coffobjdump"

@@ -6,13 +6,14 @@
 #
 # Needs an x86-64 Linux host to run the output on; set XTC_LINUX_HOST in
 # build.env. Skips cleanly if it is unset or unreachable.
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
 _root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null)
 [ -f "$_root/tools/build-env.sh" ] && . "$_root/tools/build-env.sh"
 set -e
 cd "$(dirname "$0")/../.."
 
 HOST="${XTC_LINUX_HOST:-}"
-SMOKE=bin/osx/elf-smoke
+SMOKE=bin/$XC_PLAT/elf-smoke
 [ -x "$SMOKE" ] || { echo "elf-run: build it first: make elf-smoke"; exit 1; }
 
 if ! ssh -o BatchMode=yes -o ConnectTimeout=5 "$HOST" true 2>/dev/null; then

@@ -22,16 +22,18 @@
 # something. Both halves matter: exiting non-zero silently is a compiler that
 # cannot be debugged, and printing while exiting 0 is a build that looks clean.
 set -u
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
+XC_HOST_ARCH=${XC_HOST_ARCH:-$( case "$(uname -m)" in (arm64|aarch64) echo arm64 ;; (*) echo x86_64 ;; esac )}
 cd "$(dirname "$0")/../.." || exit 1
 ROOT=$(pwd)
-BIN=bin/osx
+BIN=bin/$XC_PLAT
 [ -x "$BIN/xcc" ] || BIN=bin/linux
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/diagdiff.XXXXXX")
 trap 'rm -rf "$WORK"' EXIT
 
 echo "building the xc driver (selfhost/tools/xcc.xc → native arm64)…"
-"$BIN/xcc" -O2 -A arm64 -H . -o "$WORK/xcc-xc" selfhost/tools/xcc.xc \
-    -I support/generic/lib -I support/arm64/lib \
+"${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xcc-xc" selfhost/tools/xcc.xc \
+    -I support/generic/lib -I support/$XC_HOST_ARCH/lib \
     -I selfhost/lexer -I selfhost/preproc -I selfhost/parser -I selfhost/sema \
     -I selfhost/ir -I selfhost/opt -I selfhost/codegen -I selfhost/asm \
     -I selfhost/link -I selfhost/driver > "$WORK/build.log" 2>&1

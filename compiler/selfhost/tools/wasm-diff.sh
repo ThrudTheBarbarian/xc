@@ -18,8 +18,10 @@
 #   bash selfhost/tools/wasm-diff.sh [pattern]
 
 set -u
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
+XC_HOST_ARCH=${XC_HOST_ARCH:-$( case "$(uname -m)" in (arm64|aarch64) echo arm64 ;; (*) echo x86_64 ;; esac )}
 cd "$(dirname "$0")/../.." || exit 1
-BIN=bin/osx
+BIN=bin/$XC_PLAT
 [ -x "$BIN/xcc-fe" ] || BIN=bin/linux
 # LEVELS: which opt levels to compare, space-separated. The default pair is the
 # historical one; `wasmo3-diff.sh` passes O3, the level everything actually
@@ -48,7 +50,7 @@ echo "building xtcgwasm (xtc → native arm64)…"
 # -O1: at -O2 the arm64 call-body unroller currently tips Wasm32$placeData
 # over the 16 KB frame budget; the tool's own opt level changes nothing
 # about what it EMITS.
-"$BIN/xcc" -O1 -A arm64 -H . -o "$WORK/xtcgwasm" selfhost/tools/xtcgwasm.xc \
+"${XC_TOOL_XCC:-$BIN/xcc}" -O1 -A $XC_HOST_ARCH -H . -o "$WORK/xtcgwasm" selfhost/tools/xtcgwasm.xc \
     -I selfhost/ir -I selfhost/opt -I selfhost/codegen 2>&1 | grep -E "^[^ ].*error" && exit 1
 
 RUN_INCS=(-I selfhost/lexer -I selfhost/preproc -I selfhost/parser

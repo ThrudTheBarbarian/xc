@@ -14,12 +14,14 @@
 #
 # target defaults to arm64 (the host, and the one the stage builds use).
 # A file the ORACLE cannot compile is counted separately and never scored.
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
+XC_HOST_ARCH=${XC_HOST_ARCH:-$( case "$(uname -m)" in (arm64|aarch64) echo arm64 ;; (*) echo x86_64 ;; esac )}
 _root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null)
 [ -f "$_root/tools/build-env.sh" ] && . "$_root/tools/build-env.sh"
 
 set -u
 cd "$(dirname "$0")/../.." || exit 1
-BIN=bin/osx
+BIN=bin/$XC_PLAT
 [ -x "$BIN/xcc-fe" ] || BIN=bin/linux
 TARGET=${1:-arm64}
 # The banked 6502 is `-m xt` to the reference front end and `-m xt6502` to the
@@ -35,12 +37,12 @@ trap 'rm -rf "$WORK"' EXIT
 # The BUILD of xtfe needs -I for the selfhost sources; the RUN does not — the
 # drop-in resolves the platform and generic libs itself from -H, which is the
 # whole point of it.
-BUILD_INCS=(-I support/generic/lib -I support/arm64/lib -I support/xt6502/lib
+BUILD_INCS=(-I support/generic/lib -I support/$XC_HOST_ARCH/lib -I support/xt6502/lib
             -I selfhost/lexer -I selfhost/preproc -I selfhost/parser
             -I selfhost/sema -I selfhost/ir)
 
 echo "building xtfe (xtc → native arm64)…"
-"$BIN/xcc" -O2 -A arm64 -o "$WORK/xtfe" selfhost/tools/xtfe.xc -I selfhost/driver \
+"${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -o "$WORK/xtfe" selfhost/tools/xtfe.xc -I selfhost/driver \
     "${BUILD_INCS[@]}" 2>&1 | grep -E "^[^ ].*error" && exit 1
 
 # The sweep still needs the selfhost dirs on the include path, because the tree

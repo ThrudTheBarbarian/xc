@@ -34,8 +34,9 @@
 #   bash selfhost/tools/bootstrap.sh
 
 set -u
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
 cd "$(dirname "$0")/../.." || exit 1
-BIN=bin/osx
+BIN=bin/$XC_PLAT
 [ -x "$BIN/xcc" ] || BIN=bin/linux
 WORK=${TMPDIR:-/tmp}/bootstrap.$$
 mkdir -p "$WORK"

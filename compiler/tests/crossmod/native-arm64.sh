@@ -21,9 +21,10 @@
 #      retains a value it was handed ownership of, and every returned object
 #      leaks. Identical source in one module leaks nothing.
 set -u
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
 cd "$(dirname "$0")/../.." || exit 1
 ROOT=$PWD
-XTC=bin/osx/xcc
+XTC=bin/$XC_PLAT/xcc
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 

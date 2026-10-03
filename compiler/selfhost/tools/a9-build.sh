@@ -15,12 +15,14 @@
 #
 # The point is not speed, it is that the chain has no hole in it: run the
 # result under the XTOS loader and it prints what the reference build prints.
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
+XC_HOST_ARCH=${XC_HOST_ARCH:-$( case "$(uname -m)" in (arm64|aarch64) echo arm64 ;; (*) echo x86_64 ;; esac )}
 _root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null)
 [ -f "$_root/tools/build-env.sh" ] && . "$_root/tools/build-env.sh"
 
 set -eu
 cd "$(dirname "$0")/../.." || exit 1
-BIN=bin/osx
+BIN=bin/$XC_PLAT
 [ -x "$BIN/xcc" ] || BIN=bin/linux
 SRC=${1:?usage: a9-build.sh <prog.xc> [out.so]}
 OUT=${2:-${SRC%.xc}.so}
@@ -31,13 +33,13 @@ trap 'rm -rf "$W"' EXIT
 INCS=(-I support/generic/lib -I support/arm9/lib)
 
 echo "building the ported tools…"
-"$BIN/xcc" -O2 -A arm64 -H . -o "$W/xtfe"  selfhost/tools/xtfe.xc -I selfhost/driver \
-    -I support/generic/lib -I support/arm64/lib -I support/xt6502/lib \
+"${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -H . -o "$W/xtfe"  selfhost/tools/xtfe.xc -I selfhost/driver \
+    -I support/generic/lib -I support/$XC_HOST_ARCH/lib -I support/xt6502/lib \
     -I selfhost/lexer -I selfhost/preproc -I selfhost/parser -I selfhost/sema \
     -I selfhost/ir >/dev/null
-"$BIN/xcc" -O2 -A arm64 -H . -o "$W/xtcg9" selfhost/tools/xtcg9.xc \
+"${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -H . -o "$W/xtcg9" selfhost/tools/xtcg9.xc \
     -I selfhost/ir -I selfhost/codegen >/dev/null
-"$BIN/xcc" -O2 -A arm64 -H . -o "$W/xtas9" selfhost/tools/xtas9.xc \
+"${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -H . -o "$W/xtas9" selfhost/tools/xtas9.xc \
     -I selfhost/asm >/dev/null
 
 echo "front end  → IR"

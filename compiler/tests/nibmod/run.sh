@@ -13,8 +13,9 @@
 # because the failure it catches is SILENT: nothing errors, the constructor just
 # does not happen.
 set -u
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
 cd "$(dirname "$0")/../.." || exit 1
-BIN=bin/osx; [ -x "$BIN/xcc" ] || BIN=bin/linux
+BIN=bin/$XC_PLAT; [ -x "$BIN/xcc" ] || BIN=bin/linux
 WORK=${TMPDIR:-/tmp}/nibmod.$$
 mkdir -p "$WORK"; trap 'rm -rf "$WORK"' EXIT
 D=tests/nibmod

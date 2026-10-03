@@ -18,8 +18,9 @@
 #
 # Env: OPT (default 3), TIMEOUT (default 10s), NODE (default node).
 set -u
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"; cd "$ROOT"
-XTC="bin/osx/xcc"
+XTC="bin/$XC_PLAT/xcc"
 INC=(-I support/wasm32/lib -I support/generic/lib)
 OPT="${OPT:-3}"
 TIMEOUT="${TIMEOUT:-10}"

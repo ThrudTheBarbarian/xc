@@ -23,11 +23,12 @@
 #   arm9    built by both compilers and compared byte for byte (not run; the
 #           port's client used to carry its own copy of every imported class's
 #           vtable)
+XC_PLAT=${XC_PLAT:-$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )}
 _root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null)
 [ -f "$_root/tools/build-env.sh" ] && . "$_root/tools/build-env.sh"
 set -u
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-BIN="$ROOT/bin/osx"; [ -d "$BIN" ] || BIN="$ROOT/bin/linux"
+BIN="$ROOT/bin/$XC_PLAT"; [ -d "$BIN" ] || BIN="$ROOT/bin/linux"
 T="$ROOT/tests/crossmod"
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
