@@ -35,6 +35,7 @@
 #import "UXMenuEncode.xc"       // the app's menus, handed to the "more" button as one string
 #import "UXApplication.xc"      // gApp: the driver-owned loop starts the delegate, and stop() quits
 #import "UXLibc.xc"
+#import "UXFileIO.xc"         // the save panel's sink: a write to its path is copied on to the chosen document
 
 // The shim (libUXIos.m).  Primitive signatures only — no CGRect crosses into xtc.
 i32 ux_ios_boot(i32* w, i32* h);
@@ -55,6 +56,9 @@ void ux_ios_menu_set(u8* enc);
 void ux_ios_menu_state(i32 t, i32 j, i32 what, i32 on);
 // The system document picker (import mode); the picked document's private copy's path.
 i32 ux_ios_file_open(u8* out, i32 cap);
+// The export picker for the save panel, and the copy on to the chosen document after a write.
+i32 ux_ios_file_save(u8* defaultName, u8* out, i32 cap);
+i32 ux_ios_file_written(u8* path);
 // The system colour and font pickers, modal.
 i32 ux_ios_pick_color(i32 r, i32 g, i32 b, i32* outR, i32* outG, i32* outB);
 i32 ux_ios_pick_font(i32 inSize, u8* outFamily, i32 cap, i32* outSize, i32* outBold, i32* outItalic);
@@ -394,6 +398,15 @@ i32 ux_posix_delete(u8* path);
 i32 ux_posix_rename(u8* src, u8* dst);
 i32 ux_posix_copy(u8* src, u8* dst);
 
+// A write to a save panel's staging path goes on to the document the user chose (libUXIos.m).
+class UXIosFileSink : UXFileSink
+    {
+    bool written(u8* path)
+        {
+        return ux_ios_file_written(path) != (i32)0;
+        }
+    }
+
 class UXIosDriver : Object<UXViewDriver>
     {
 
@@ -570,7 +583,7 @@ class UXIosDriver : Object<UXViewDriver>
         ux_ios_window_invalidate(handle);
         }
 
-    // ---- native panels: the system pickers; save is the drawn panel ----------
+    // ---- native panels: the system's pickers ------------------------------------
     // The system's document picker (UIDocumentPickerViewController, import mode): the device's
     // files and every file provider.  The picked document arrives as the app's own copy, so the
     // path that comes back reads with UXFileIO like any other.
@@ -578,7 +591,6 @@ class UXIosDriver : Object<UXViewDriver>
         {
         return true;
         }
-    // no native save dialog here: UXSavePanel draws UXKit's own
     // UINavigationController: the real bar, Back button and edge-swipe (libUXIos.m)
     bool hasNativeNavigation(void)
         {
@@ -596,13 +608,20 @@ class UXIosDriver : Object<UXViewDriver>
         {
         ux_ios_nav_pop(nav, animated);
         }
+    // The system's export picker, asking where the document goes (the device, any file provider).
+    // The path that comes back is a staging file in the app's tmp space under the default name;
+    // UXFileIO writes it as usual, and the file sink copies each write on to the chosen document.
     bool hasNativeFileSave(void)
         {
-        return false;
+        return true;
         }
     i32 fileSave(u8* prompt, u8* startDir, u8* defaultName, u8* out, i32 outCap)
         {
-        return (i32)0;
+        if (gUXFileSink == (UXFileSink*)0)
+            {
+            gUXFileSink = new UXIosFileSink();
+            }
+        return ux_ios_file_save(defaultName, out, outCap);
         }
     i32 fileOpen(u8* prompt, u8* startDir, u8* out, i32 outCap)
         {

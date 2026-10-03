@@ -144,9 +144,11 @@ protocol UXViewDriver
     bool hasNativeFileOpen(void);
     i32 fileOpen(u8 * prompt, u8 * startDir, u8 * out, i32 outCap);
     // A native file-SAVE dialog, the same way round: hasNativeFileSave() where the OS has one (AppKit's
-    // NSSavePanel, GTK, Win32 GetSaveFileName); fileSave writes the chosen path into out and returns 1,
-    // or 0 if cancelled.  It asks about replacing an existing file itself.  Elsewhere UXSavePanel runs
-    // UXFilePanel in save mode.
+    // NSSavePanel, GTK, Win32 GetSaveFileName, the phones' export and create-document pickers);
+    // fileSave writes the chosen path into out and returns 1, or 0 if cancelled.  It asks about
+    // replacing an existing file itself.  On the phones the path is a staging file in the app's own
+    // space, and the driver's UXFileSink copies each write of it on to the chosen document.
+    // Elsewhere UXSavePanel runs UXFilePanel in save mode.
     // Native NAVIGATION (UXNB-V2 section 5).  Where the platform has its own navigation stack (iOS's
     // UINavigationController), UXNavigationController hands it each push and pop, and the platform
     // shows the real bar, the real Back button and the real edge-swipe.  navAttach is given the

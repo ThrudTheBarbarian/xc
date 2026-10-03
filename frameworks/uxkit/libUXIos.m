@@ -1400,6 +1400,88 @@ void ux_ios_test_picker_answer(const char* path)
         [gPicker.delegate documentPickerWasCancelled:gPicker];
     }
 
+// ── the save panel: the export picker, then the bytes copied on after each write ──
+// UXSavePanel on iOS asks for the destination first: the system's export picker, given a staging file
+// in the app's tmp space under the default name, lets the user choose where it goes (the device, any
+// file provider).  The staging path is what comes back, so UXFileIO writes it as usual; each write that
+// lands is then copied on to the chosen document (ux_ios_file_written, through UXKit's file sink).
+@interface UXExportHost : NSObject <UIDocumentPickerDelegate>
+@end
+static UXExportHost* gExportHost;
+static UIDocumentPickerViewController* gExporter;
+static NSMutableDictionary<NSString*, NSURL*>* gExports; // staging path -> the chosen document
+static NSURL* gExportDest;
+static int gExportDone;
+@implementation UXExportHost
+- (void)documentPicker:(UIDocumentPickerViewController*)c didPickDocumentsAtURLs:(NSArray<NSURL*>*)urls
+    {
+    gExportDest = urls.count ? urls[0] : nil;
+    gExportDone = 1;
+    }
+- (void)documentPickerWasCancelled:(UIDocumentPickerViewController*)c
+    {
+    gExportDest = nil;
+    gExportDone = 1;
+    }
+@end
+static void uxPresentModally(UIViewController* vc, int* done);
+int ux_ios_file_save(const char* defaultName, char* out, int cap)
+    {
+    if (!gExportHost)
+        {
+        gExportHost = [UXExportHost new];
+        gExports = [NSMutableDictionary new];
+        }
+    NSString* name = defaultName && defaultName[0] ? @(defaultName) : @"untitled";
+    name = [name stringByReplacingOccurrencesOfString:@"/" withString:@"_"];
+    NSString* dir = [NSTemporaryDirectory() stringByAppendingPathComponent:@"saved"];
+    [[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+    NSString* staging = [dir stringByAppendingPathComponent:name];
+    if (![[NSFileManager defaultManager] fileExistsAtPath:staging])
+        [[NSData data] writeToFile:staging atomically:NO];
+    gExporter = [[UIDocumentPickerViewController alloc] initForExportingURLs:@[ [NSURL fileURLWithPath:staging] ]
+                                                                      asCopy:YES];
+    gExporter.delegate = gExportHost;
+    gExportDest = nil;
+    uxPresentModally(gExporter, &gExportDone);
+    gExporter = nil;
+    const char* u = staging.fileSystemRepresentation;
+    if (!gExportDest || (int)strlen(u) + 1 > cap)
+        return 0;
+    gExports[staging] = gExportDest;
+    memcpy(out, u, strlen(u) + 1);
+    return 1;
+    }
+/* After a write to a staging path lands: copy it on to the document the user chose.  1 if it got
+ * there (or the path is an ordinary file of the app's), 0 if not. */
+int ux_ios_file_written(const char* path)
+    {
+    NSURL* dest = gExports[@(path)];
+    if (!dest)
+        return 1;
+    BOOL scoped = [dest startAccessingSecurityScopedResource];
+    NSData* d = [NSData dataWithContentsOfFile:@(path)];
+    BOOL ok = d && [d writeToURL:dest options:0 error:nil];
+    if (scoped)
+        [dest stopAccessingSecurityScopedResource];
+    return ok ? 1 : 0;
+    }
+/* Tests: whether the export picker is up, which file it was given, and its delegate's answers as
+ * UIKit sends them -- a destination chosen (a file URL the test names) or a cancel. */
+int ux_ios_test_export_shown(void)
+    {
+    return gExporter && gExporter.presentingViewController && gExporter.view.window ? 1 : 0;
+    }
+void ux_ios_test_export_answer(const char* destPath)
+    {
+    if (!gExporter)
+        return;
+    if (destPath)
+        [gExporter.delegate documentPicker:gExporter didPickDocumentsAtURLs:@[ [NSURL fileURLWithPath:@(destPath)] ]];
+    else
+        [gExporter.delegate documentPickerWasCancelled:gExporter];
+    }
+
 // ── the colour and font pickers: UIColorPickerViewController / UIFontPickerViewController ──
 // Modal through a nested run loop, as the document picker.  The colour picker has no Cancel: closing
 // it is the choice, so pickColor gives back whatever it holds then (the seed, if the user changed

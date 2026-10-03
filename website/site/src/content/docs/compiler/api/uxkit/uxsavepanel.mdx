@@ -27,11 +27,21 @@ atomically.
 | AppKit | `NSSavePanel`, which asks about replacing a file itself |
 | GTK | `GtkFileDialog`, which does too |
 | Win32 | `GetSaveFileName`, which does too |
-| GEM, iOS, Android | [`UXFilePanel`](/compiler/api/uxkit/uxfilepanel/) in save mode |
+| iOS | the system's export picker, which asks where the document goes |
+| Android | `ACTION_CREATE_DOCUMENT`, which asks where it goes and under what name |
+| GEM | [`UXFilePanel`](/compiler/api/uxkit/uxfilepanel/) in save mode |
 | web | no dialog: saving is the browser's download, so the panel names the file (`/` + the default name) and the write hands it to the browser, which may ask where itself |
 
 The driver answers [`hasNativeFileSave`](/compiler/api/uxkit/uxviewdriver/#native-panels);
 application code does not ask.
+
+On iOS and Android the chosen document may belong to another app or a cloud
+provider, where a plain file write cannot reach it. There the path that comes
+back is a staging file in the app's own space, under the default name (on
+Android, the name the user settled on). Write it with
+[`UXFileIO.write`](/compiler/api/uxkit/uxfileio/) as usual: each write that
+lands is copied on to the chosen document, and `write` returns true only once
+it is there. Writing the same path again saves to the same document.
 
 ## What save mode does
 

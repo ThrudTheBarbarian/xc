@@ -90,16 +90,56 @@ public class UXBridge implements View.OnClickListener, SeekBar.OnSeekBarChangeLi
             i.setType("*/*");
             f.startActivityForResult(i, 7);
         }
+        // UXSavePanel: ACTION_CREATE_DOCUMENT asks where the document goes, and under what name, before
+        // anything is written.  The path given back is a staging file in the cache under the name the
+        // provider settled on; export() copies each write of it on to the document.
+        private static final java.util.HashMap<String, android.net.Uri> exports = new java.util.HashMap<>();
+        static void create(android.app.Activity a, String name) {
+            Picker f = new Picker();
+            a.getFragmentManager().beginTransaction().add(f, "uxpick").commitNow();
+            android.content.Intent i = new android.content.Intent(android.content.Intent.ACTION_CREATE_DOCUMENT);
+            i.addCategory(android.content.Intent.CATEGORY_OPENABLE);
+            i.setType("application/octet-stream");
+            i.putExtra(android.content.Intent.EXTRA_TITLE, name);
+            f.startActivityForResult(i, 8);
+        }
+        // after a write of a staging file lands: copy it on to its document (true if there is none)
+        static boolean export(android.app.Activity a, String path) {
+            android.net.Uri uri = exports.get(path);
+            if (uri == null) return true;
+            try (java.io.InputStream in = new java.io.FileInputStream(path);
+                 java.io.OutputStream os = a.getContentResolver().openOutputStream(uri, "wt")) {
+                byte[] buf = new byte[65536];
+                for (int n; (n = in.read(buf)) > 0; ) os.write(buf, 0, n);
+                return true;
+            } catch (Exception e) { return false; }
+        }
+        private static String displayName(android.app.Activity a, android.net.Uri uri, String dflt) {
+            try (android.database.Cursor c = a.getContentResolver().query(uri,
+                    new String[] { android.provider.OpenableColumns.DISPLAY_NAME }, null, null, null)) {
+                if (c != null && c.moveToFirst() && c.getString(0) != null) return c.getString(0);
+            } catch (Exception e) { }
+            return dflt;
+        }
         @Override public void onActivityResult(int req, int res, android.content.Intent data) {
             String path = null;
             android.app.Activity a = getActivity();
+            if (req == 8) {
+                if (res == android.app.Activity.RESULT_OK && data != null && data.getData() != null && a != null) {
+                    android.net.Uri uri = data.getData();
+                    java.io.File dir = new java.io.File(a.getCacheDir(), "saved");
+                    dir.mkdirs();
+                    java.io.File f = new java.io.File(dir, displayName(a, uri, "untitled").replace('/', '_'));
+                    try { f.createNewFile(); path = f.getAbsolutePath(); exports.put(path, uri); }
+                    catch (Exception e) { path = null; }
+                }
+                if (a != null) a.getFragmentManager().beginTransaction().remove(this).commitAllowingStateLoss();
+                nativePicked(path);
+                return;
+            }
             if (res == android.app.Activity.RESULT_OK && data != null && data.getData() != null && a != null) {
                 android.net.Uri uri = data.getData();
-                String name = "picked";
-                try (android.database.Cursor c = a.getContentResolver().query(uri,
-                        new String[] { android.provider.OpenableColumns.DISPLAY_NAME }, null, null, null)) {
-                    if (c != null && c.moveToFirst() && c.getString(0) != null) name = c.getString(0);
-                } catch (Exception e) { }
+                String name = displayName(a, uri, "picked");
                 java.io.File dir = new java.io.File(a.getCacheDir(), "picked");
                 dir.mkdirs();
                 java.io.File out = new java.io.File(dir, name.replace('/', '_'));

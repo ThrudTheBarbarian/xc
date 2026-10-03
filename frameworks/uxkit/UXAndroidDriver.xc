@@ -34,6 +34,7 @@
 #import "UXMenuEncode.xc"  // the app's menus, handed to the overflow button as one string
 #import "UXApplication.xc" // gApp: the driver-owned loop starts the delegate, and stop() quits
 #import "UXLibc.xc"
+#import "UXFileIO.xc"         // the save panel's sink: a write to its path is copied on to the chosen document
 
 // The shim (libUXAndroid.c).  Primitive signatures only — no jobject crosses into xtc.
 i32 ux_and_boot(i32* w, i32* h);
@@ -62,6 +63,9 @@ void ux_and_gl_present(pointer view);
 i32 ux_and_gl_paint(pointer view, i32 win, i32 x, i32 y, i32 w, i32 h);
 // The system document picker; the picked document is copied into the cache and its path given.
 i32 ux_and_file_open(u8* out, i32 cap);
+// ACTION_CREATE_DOCUMENT for the save panel, and the copy on to the document after a write.
+i32 ux_and_file_save(u8* defaultName, u8* out, i32 cap);
+i32 ux_and_file_written(u8* path);
 void ux_and_table_reload(i32 handle, i32 node);
 void ux_and_table_select(i32 handle, i32 node, i32* rows, i32 n);
 i32 ux_and_window_create(i32 x, i32 y, i32 w, i32 h);
@@ -410,6 +414,15 @@ i32 ux_posix_delete(u8* path);
 i32 ux_posix_rename(u8* src, u8* dst);
 i32 ux_posix_copy(u8* src, u8* dst);
 
+// A write to a save panel's staging path goes on to the document the user chose (libUXAndroid.c).
+class UXAndroidFileSink : UXFileSink
+    {
+    bool written(u8* path)
+        {
+        return ux_and_file_written(path) != (i32)0;
+        }
+    }
+
 class UXAndroidDriver : Object<UXViewDriver>
     {
 
@@ -586,7 +599,7 @@ class UXAndroidDriver : Object<UXViewDriver>
         ux_and_window_invalidate(handle);
         }
 
-    // ---- native panels: none — toolkit fallbacks take over -------------------
+    // ---- native panels: the system's pickers ------------------------------------
     // The system's document picker (ACTION_OPEN_DOCUMENT): local files and every document
     // provider the device has.  The picked document is copied into the app's cache, so the path
     // that comes back reads with UXFileIO like any other.
@@ -594,7 +607,6 @@ class UXAndroidDriver : Object<UXViewDriver>
         {
         return true;
         }
-    // no native save dialog here: UXSavePanel draws UXKit's own
     // The top app bar (a Toolbar: title, the theme's Up arrow) and the system Back (libUXAndroid.c)
     bool hasNativeNavigation(void)
         {
@@ -612,13 +624,20 @@ class UXAndroidDriver : Object<UXViewDriver>
         {
         ux_and_nav_pop(nav, animated);
         }
+    // The system's ACTION_CREATE_DOCUMENT, asking where the document goes and under what name.  The
+    // path that comes back is a staging file in the cache under the name the provider settled on;
+    // UXFileIO writes it as usual, and the file sink copies each write on to the document.
     bool hasNativeFileSave(void)
         {
-        return false;
+        return true;
         }
     i32 fileSave(u8* prompt, u8* startDir, u8* defaultName, u8* out, i32 outCap)
         {
-        return (i32)0;
+        if (gUXFileSink == (UXFileSink*)0)
+            {
+            gUXFileSink = new UXAndroidFileSink();
+            }
+        return ux_and_file_save(defaultName, out, outCap);
         }
     i32 fileOpen(u8* prompt, u8* startDir, u8* out, i32 outCap)
         {

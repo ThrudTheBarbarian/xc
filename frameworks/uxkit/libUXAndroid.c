@@ -2283,6 +2283,39 @@ int ux_and_file_open(char *out, int cap) {
     return 1;
 }
 
+/* ── the save panel: ACTION_CREATE_DOCUMENT, then each write copied on (UXPicker.export) ── */
+int ux_and_file_save(const char *defaultName, char *out, int cap) {
+    JNIEnv *env = envNow();
+    gPickDone = 0;
+    gPicked[0] = 0;
+    jstring name = (*env)->NewStringUTF(env, defaultName && defaultName[0] ? defaultName : "untitled");
+    (*env)->CallStaticVoidMethod(env, gPickerCls, (*env)->GetStaticMethodID(env, gPickerCls, "create",
+                                 "(Landroid/app/Activity;Ljava/lang/String;)V"), gActivity, name);
+    (*env)->DeleteLocalRef(env, name);
+    if (!check(env, "picker create")) return 0;
+    jclass looperCls = (*env)->FindClass(env, "android/os/Looper");
+    jmethodID loop = (*env)->GetStaticMethodID(env, looperCls, "loop", "()V");
+    gPickNesting = 1;
+    while (!gPickDone) {
+        (*env)->CallStaticVoidMethod(env, looperCls, loop);
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);   /* the unwind marker */
+    }
+    gPickNesting = 0;
+    if (!gPicked[0] || (int)strlen(gPicked) + 1 > cap) return 0;
+    memcpy(out, gPicked, strlen(gPicked) + 1);
+    return 1;
+}
+/* after a write of a save panel's staging file lands: 1 if it reached its document (or has none) */
+int ux_and_file_written(const char *path) {
+    JNIEnv *env = envNow();
+    jstring p = (*env)->NewStringUTF(env, path);
+    jboolean ok = (*env)->CallStaticBooleanMethod(env, gPickerCls, (*env)->GetStaticMethodID(env, gPickerCls,
+                                 "export", "(Landroid/app/Activity;Ljava/lang/String;)Z"), gActivity, p);
+    (*env)->DeleteLocalRef(env, p);
+    if (!check(env, "picker export")) return 0;
+    return ok ? 1 : 0;
+}
+
 /* ── the shell ──────────────────────────────────────────────────────────── */
 /* runLoop(): post the app's start (UXRun id 0) to the UI thread, then park —
  * the platform owns the loop; xt_main's thread never comes back, by design. */

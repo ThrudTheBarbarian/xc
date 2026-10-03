@@ -44,6 +44,14 @@ store outlives the page.
 Under node, which runs the wasm32 tests, the same calls read and write real
 files.
 
+## The phones
+
+On iOS and Android, [`UXSavePanel`](/compiler/api/uxkit/uxsavepanel/) asks
+where a document goes before anything is written, and hands back a staging
+path in the app's own space. A `write` to that path is written as above, then
+copied on to the chosen document. `write` returns true only if the copy
+arrives too.
+
 ## Topics
 
 ### read

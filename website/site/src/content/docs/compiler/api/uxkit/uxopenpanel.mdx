@@ -11,9 +11,9 @@ if (path != (u8*)0) { openDocument(path); }
 ```
 
 Where the backend has a native dialog, the driver runs it: AppKit's
-`NSOpenPanel`, GTK's `GtkFileDialog`, Win32's `GetOpenFileName`, and on the phones the system's document
-picker, `UIDocumentPickerViewController` on iOS and `ACTION_OPEN_DOCUMENT` on
-Android. Those reach every file provider the device has. The picked document
+`NSOpenPanel`, GTK's `GtkFileDialog`, Win32's `GetOpenFileName`, and on the
+phones the system's document picker, `UIDocumentPickerViewController` on iOS
+and `ACTION_OPEN_DOCUMENT` on Android. Those reach every file provider the device has. The picked document
 is copied into the app's own space, so the path that comes back reads with
 [`UXFileIO.read`](/compiler/api/uxkit/uxfileio/) like any other. On the web, in the worker run
 loop, the page shows a small dialog whose Choose File… button opens the

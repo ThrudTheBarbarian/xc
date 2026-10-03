@@ -31,6 +31,19 @@ i32 rename(u8* from, u8* to);
 i32 remove(u8* path);
 #endif
 
+// WHERE A SAVE REALLY GOES.  On most backends a path is the file.  On a phone, the save panel asks for
+// the destination first (another app's folder, a cloud provider) and hands back a path in the app's
+// own space that stands for it; the driver installs a sink, and every write that lands is given to it
+// to copy the bytes on.  The write succeeds only if that does.  With no sink, nothing more is done.
+class UXFileSink
+    {
+    bool written(u8* path)
+        {
+        return true;
+        }
+    }
+UXFileSink* gUXFileSink;
+
 class UXFileIO
     {
     // The whole file, or null if it cannot be read.
@@ -137,7 +150,7 @@ class UXFileIO
                 return false;
                 }
             }
-        return true;
+        return gUXFileSink == (UXFileSink*)0 || gUXFileSink.written(path);
 #endif
         }
     }
