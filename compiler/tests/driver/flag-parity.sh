@@ -243,11 +243,16 @@ same "--verbose"            $A --verbose -o @OUT@ ret.xc
 same "--quiet"              -A arm64 --quiet -o @OUT@ ret.xc
 
 # ── the support root from the environment ──────────────────────────────
-# Run from a directory with no support tree beside it, and no -H.
-mkdir -p envrun fakehome
+# Run from a directory with no support tree beside it, and no -H. The binary
+# is a COPY with no support tree near it either: the in-tree one finds
+# compiler/support two levels up, which is right, and would never reach the
+# environment fallbacks being tested here.
+mkdir -p envrun fakehome lone/a/bin
+cp "$XC" lone/a/bin/xcc
+LONE="$T/lone/a/bin/xcc"
 envcheck() {
     local label=$1 want=$2; shift 2
-    ( cd envrun && env "$@" "$XC" -q -A arm64 -V -o ../x ../ret.xc > ../e.out 2>&1 ); local rc=$?
+    ( cd envrun && env "$@" "$LONE" -q -A arm64 -V -o ../x ../ret.xc > ../e.out 2>&1 ); local rc=$?
     if [ $rc = 0 ] && grep -q -- "$want" e.out; then ok "$label"
     else bad "$label: status $rc, '$want' not in: $(grep -m1 'support\|lib/xc' e.out)"; fi
 }
