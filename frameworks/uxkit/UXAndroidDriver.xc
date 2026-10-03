@@ -27,6 +27,7 @@
 #import "UXSlider.xc"      // native SeekBar overlay reads/writes this widget's value
 #import "UXStepper.xc"     // composed -/+ Button pair (Android has no platform stepper)
 #import "UXSegmentedControl.xc" // composed of native ToggleButtons (nor a segmented control)
+#import "UXToolbar.xc"          // a real android.widget.Toolbar
 #import "UXPopUpButton.xc" // native Spinner overlay
 #import "UXProgressBar.xc" // native horizontal ProgressBar overlay
 #import "UXTouch.xc"              // drawn content's touches -> mouse events
@@ -97,6 +98,9 @@ void ux_and_make_stepper(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h);
 void ux_and_make_segmented(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, i32 nseg, i32 multi);
 void ux_and_seg_set_label(i32 handle, i32 node, i32 seg, u8* label);
 void ux_and_seg_set(i32 handle, i32 node, i32 seg, i32 on);
+// the toolbar: a real android.widget.Toolbar; type is UXTB_ITEM / SPACE / FLEX / SEP
+void ux_and_make_toolbar(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h);
+void ux_and_toolbar_add(i32 handle, i32 node, i32 type, u8* label, i32 tag);
 void ux_and_update_field(i32 handle, i32 node);
 void ux_and_set_control_frame(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h);
 void ux_and_set_control_enabled(i32 handle, i32 node, i32 on);
@@ -314,6 +318,11 @@ void uxAndValueChanged(i32 handle, i32 node, i32 value)
     if (sg != (UXSegmentedControl*)0)
         {
         sg.applyNativeSelection(value);
+        }
+    UXToolbar* tb = (UXToolbar* ?)ctl;
+    if (tb != (UXToolbar*)0)
+        {
+        tb.applyNativeItemClick(value); // the value is the tapped item's tag
         }
     ctl.fire();
     if (gApp != (UXApplication*)0)
@@ -1274,6 +1283,19 @@ class UXAndroidDriver : Object<UXViewDriver>
                     u8* title = n.spec != (pointer)0 ? (u8*)n.spec : (u8*)"";
                     ux_and_make_radio(handle, i, ax, ay, aw, ah, title,
                                       rv.isSelected() ? (i32)1 : (i32)0);
+                    gAndCtlPeer[handle * (i32)256 + i] = n.peer;
+                    }
+                }
+            else if (n.kind == (i32)UXKindToolbar)
+                {
+                UXToolbar* tv = (UXToolbar* ?)(Object*)n.peer;
+                if (tv != (UXToolbar*)0)
+                    {
+                    ux_and_make_toolbar(handle, i, ax, ay, aw, ah);
+                    for (i32 j = (i32)0; j < tv.nativeItemCount(); j = j + (i32)1)
+                        {
+                        ux_and_toolbar_add(handle, i, tv.nativeItemType(j), tv.nativeItemLabel(j), tv.nativeItemTag(j));
+                        }
                     gAndCtlPeer[handle * (i32)256 + i] = n.peer;
                     }
                 }

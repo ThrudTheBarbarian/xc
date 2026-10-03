@@ -28,6 +28,7 @@
 #import "UXStepper.xc"          // native UIStepper overlay
 #import "UXPopUpButton.xc"      // native UIButton+UIMenu pull-down
 #import "UXSegmentedControl.xc" // native UISegmentedControl overlay
+#import "UXToolbar.xc"          // native UIToolbar
 #import "UXProgressBar.xc"      // native UIProgressView overlay
 #import "UXTouch.xc"              // drawn content's touches -> mouse events
 #import "UXNavigationController.xc" // a user's pop on the native stack comes back through uxNavNativePopped
@@ -100,6 +101,9 @@ void ux_ios_set_progress(i32 handle, i32 node, i32 mille, i32 indeterminate);
 void ux_ios_make_segmented(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, i32 nseg);
 void ux_ios_seg_set_label(i32 handle, i32 node, i32 seg, u8* label);
 void ux_ios_seg_select(i32 handle, i32 node, i32 seg);
+// the toolbar: a real UIToolbar; type is UXTB_ITEM / SPACE / FLEX / SEP
+void ux_ios_make_toolbar(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h);
+void ux_ios_toolbar_add(i32 handle, i32 node, i32 type, u8* label, i32 tag);
 void ux_ios_make_popup(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h);
 void ux_ios_set_field_hooks(pointer fn);
 void ux_ios_set_field_submit_hooks(pointer fn);
@@ -307,6 +311,11 @@ void uxIosValueChanged(i32 handle, i32 node, i32 value)
     if (seg != (UXSegmentedControl*)0)
         {
         seg.applyNativeSelection(value);
+        }
+    UXToolbar* tb = (UXToolbar* ?)ctl;
+    if (tb != (UXToolbar*)0)
+        {
+        tb.applyNativeItemClick(value); // the value is the tapped item's tag
         }
     ctl.fire();
     if (gApp != (UXApplication*)0)
@@ -1217,6 +1226,19 @@ class UXIosDriver : Object<UXViewDriver>
                 if (pgv != (UXProgressBar*)0)
                     {
                     ux_ios_make_progress(handle, i, ax, ay, aw, ah, pgv.nativeFractionMille());
+                    gIosCtlPeer[handle * (i32)256 + i] = n.peer;
+                    }
+                }
+            else if (n.kind == (i32)UXKindToolbar)
+                {
+                UXToolbar* tv = (UXToolbar* ?)(Object*)n.peer;
+                if (tv != (UXToolbar*)0)
+                    {
+                    ux_ios_make_toolbar(handle, i, ax, ay, aw, ah);
+                    for (i32 j = (i32)0; j < tv.nativeItemCount(); j = j + (i32)1)
+                        {
+                        ux_ios_toolbar_add(handle, i, tv.nativeItemType(j), tv.nativeItemLabel(j), tv.nativeItemTag(j));
+                        }
                     gIosCtlPeer[handle * (i32)256 + i] = n.peer;
                     }
                 }

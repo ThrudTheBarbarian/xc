@@ -1361,6 +1361,43 @@ void ux_and_make_stepper(int handle, int node, int x, int y, int w, int h) {
     check(env, "make_stepper");
 }
 
+/* ── the toolbar: a real android.widget.Toolbar (UXBridge.toolbar) ── */
+void ux_and_make_toolbar(int handle, int node, int x, int y, int w, int h) {
+    JNIEnv *env = envNow();
+    jmethodID mk = (*env)->GetStaticMethodID(env, gBridgeCls, "toolbar", "(Landroid/app/Activity;I)Landroid/view/View;");
+    if (!check(env, "toolbar method") || !mk) return;
+    jobject t = (*env)->CallStaticObjectMethod(env, gBridgeCls, mk, gActivity, (handle << 8) | node);
+    if (!check(env, "make_toolbar") || !t) return;
+    place(env, handle, node, t, x, y, w, h);
+    check(env, "place toolbar");
+}
+/* type: UXTB_ITEM (0) is added; spaces, flexible spaces and separators have no counterpart */
+void ux_and_toolbar_add(int handle, int node, int type, const char *label, int tag) {
+    JNIEnv *env = envNow();
+    if (!gCtl[handle][node] || type != 0) return;
+    jmethodID m = (*env)->GetStaticMethodID(env, gBridgeCls, "toolbarAdd", "(Landroid/view/View;Ljava/lang/String;I)V");
+    jstring s = (*env)->NewStringUTF(env, label ? label : "");
+    (*env)->CallStaticVoidMethod(env, gBridgeCls, m, gCtl[handle][node], s, tag);
+    (*env)->DeleteLocalRef(env, s);
+    check(env, "toolbar add");
+}
+int ux_and_test_toolbar_count(int handle, int node) {
+    JNIEnv *env = envNow();
+    if (!gCtl[handle][node]) return -1;
+    jmethodID m = (*env)->GetStaticMethodID(env, gBridgeCls, "toolbarCount", "(Landroid/view/View;)I");
+    return (*env)->CallStaticIntMethod(env, gBridgeCls, m, gCtl[handle][node]);
+}
+int ux_and_test_toolbar_title_is(int handle, int node, int i, const char *want) {
+    JNIEnv *env = envNow();
+    if (!gCtl[handle][node]) return 0;
+    jmethodID m = (*env)->GetStaticMethodID(env, gBridgeCls, "toolbarTitle", "(Landroid/view/View;I)Ljava/lang/String;");
+    jstring t = (jstring)(*env)->CallStaticObjectMethod(env, gBridgeCls, m, gCtl[handle][node], i);
+    const char *u = t ? (*env)->GetStringUTFChars(env, t, NULL) : "";
+    int same = strcmp(u, want ? want : "") == 0;
+    if (t) (*env)->ReleaseStringUTFChars(env, t, u);
+    return same;
+}
+
 /* ── the segmented control: native ToggleButtons in a row (UXBridge.segmented) ── */
 void ux_and_make_segmented(int handle, int node, int x, int y, int w, int h, int nseg, int multi) {
     JNIEnv *env = envNow();

@@ -530,6 +530,91 @@ void ux_ios_seg_select(int handle, int node, int seg)
         ((UISegmentedControl*)c).selectedSegmentIndex = seg;
     }
 
+// The toolbar: a real UIToolbar of UIBarButtonItems.  A UXToolbar's items map one to one: a button
+// (by its label), a fixed space, a FLEXIBLE space (UIKit's own), a separator (a narrow fixed space;
+// a UIToolbar draws no rules).  A tap reports the item's tag through the value callback, which the
+// driver hands to applyNativeItemClick.
+@interface UXBarItem : UIBarButtonItem
+@property(nonatomic) int uxHandle, uxNode, uxTag;
+@end
+@implementation UXBarItem
+@end
+@interface UXBarTarget : NSObject
+@end
+static UXBarTarget* gBarTarget;
+@implementation UXBarTarget
+- (void)tapped:(UXBarItem*)item
+    {
+    if (gValueChanged)
+        gValueChanged(item.uxHandle, item.uxNode, item.uxTag);
+    }
+@end
+void ux_ios_make_toolbar(int handle, int node, int x, int y, int w, int h)
+    {
+    UIToolbar* t = [[UIToolbar alloc] initWithFrame:CGRectMake(x, y, w, h)];
+    t.items = @[];
+    [gWin[handle] addSubview:t];
+    gCtl[handle][node] = t;
+    }
+/* type: 0 an item, 1 a fixed space, 2 a flexible space, 3 a separator (UXTB_*) */
+void ux_ios_toolbar_add(int handle, int node, int type, const char* label, int tag)
+    {
+    UIView* c = gCtl[handle][node];
+    if (![c isKindOfClass:UIToolbar.class])
+        return;
+    if (!gBarTarget)
+        gBarTarget = [UXBarTarget new];
+    UIBarButtonItem* it = nil;
+    if (type == 0)
+        {
+        UXBarItem* b = [[UXBarItem alloc] initWithTitle:@(label ? label : "") style:UIBarButtonItemStylePlain
+                                                 target:gBarTarget action:@selector(tapped:)];
+        b.uxHandle = handle;
+        b.uxNode = node;
+        b.uxTag = tag;
+        it = b;
+        }
+    else if (type == 2)
+        it = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil];
+    else
+        {
+        it = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFixedSpace target:nil action:nil];
+        it.width = type == 1 ? 12 : 4;
+        }
+    UIToolbar* t = (UIToolbar*)c;
+    t.items = [t.items arrayByAddingObject:it];
+    }
+/* tests: the toolbar's items, an item's title, and a tap on it as UIKit sends one */
+int ux_ios_test_toolbar_count(int handle, int node)
+    {
+    UIView* c = gCtl[handle][node];
+    return [c isKindOfClass:UIToolbar.class] ? (int)((UIToolbar*)c).items.count : -1;
+    }
+int ux_ios_test_toolbar_title_is(int handle, int node, int i, const char* want)
+    {
+    UIView* c = gCtl[handle][node];
+    if (![c isKindOfClass:UIToolbar.class] || i < 0 || i >= (int)((UIToolbar*)c).items.count)
+        return 0;
+    NSString* t = ((UIToolbar*)c).items[i].title;
+    return [t ?: @"" isEqualToString:@(want ? want : "")] ? 1 : 0;
+    }
+int ux_ios_test_toolbar_is_flexible(int handle, int node, int i)
+    {
+    UIView* c = gCtl[handle][node];
+    if (![c isKindOfClass:UIToolbar.class] || i < 0 || i >= (int)((UIToolbar*)c).items.count)
+        return 0;
+    UIBarButtonItem* it = ((UIToolbar*)c).items[i];
+    return !it.title && !it.action && it.width == 0 ? 1 : 0;
+    }
+void ux_ios_test_toolbar_tap(int handle, int node, int i)
+    {
+    UIView* c = gCtl[handle][node];
+    if (![c isKindOfClass:UIToolbar.class] || i < 0 || i >= (int)((UIToolbar*)c).items.count)
+        return;
+    UIBarButtonItem* it = ((UIToolbar*)c).items[i];
+    [[UIApplication sharedApplication] sendAction:it.action to:it.target from:it forEvent:nil];
+    }
+
 // The native text field: real UITextField, real keyboard, real selection.
 // Every edit syncs the app's buffer FIRST, then reports through the field
 // hook — so the neutral UXTextField's text() is already truthful when its

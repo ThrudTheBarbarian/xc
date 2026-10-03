@@ -73,6 +73,31 @@ public class UXBridge implements View.OnClickListener, SeekBar.OnSeekBarChangeLi
     @Override public void onClick(DialogInterface d, int which) { nativeValue(id, which); }
     @Override public void onCancel(DialogInterface d) { nativeFire(id); }
 
+    // UXToolbar: a real android.widget.Toolbar.  Its buttons are action items of its menu, shown as
+    // room allows, with the rest under the platform's own overflow (UXToolbar's overflow, natively);
+    // a tap reports the item's tag through nativeValue.  A Toolbar lays its actions out at the end, so
+    // UXToolbar's spaces have no counterpart here and are not added.
+    public static View toolbar(android.app.Activity a, final int id) {
+        android.widget.Toolbar t = new android.widget.Toolbar(a);
+        t.setOnMenuItemClickListener(new android.widget.Toolbar.OnMenuItemClickListener() {
+            @Override public boolean onMenuItemClick(android.view.MenuItem item) { nativeValue(id, item.getItemId()); return true; }
+        });
+        return t;
+    }
+    public static void toolbarAdd(View t, String label, int tag) {
+        android.view.Menu m = ((android.widget.Toolbar) t).getMenu();
+        android.view.MenuItem it = m.add(0, tag, m.size(), label);
+        it.setShowAsAction(android.view.MenuItem.SHOW_AS_ACTION_IF_ROOM | android.view.MenuItem.SHOW_AS_ACTION_WITH_TEXT);
+    }
+    // tests: the menu's items, and an item's title
+    public static int toolbarCount(View t) {
+        return t instanceof android.widget.Toolbar ? ((android.widget.Toolbar) t).getMenu().size() : -1;
+    }
+    public static String toolbarTitle(View t, int i) {
+        android.view.Menu m = ((android.widget.Toolbar) t).getMenu();
+        return i >= 0 && i < m.size() ? String.valueOf(m.getItem(i).getTitle()) : "";
+    }
+
     // UXSegmentedControl: Android has no platform segmented control, so it is composed of native
     // ToggleButtons in a row (Material's segmented button is the same shape).  A tap reports the
     // segment's index through nativeValue, as a slider reports its value; in a single-selection control

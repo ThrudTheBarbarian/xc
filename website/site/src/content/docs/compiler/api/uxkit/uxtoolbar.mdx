@@ -15,7 +15,11 @@ unit-tested without a window.
 
 On macOS it realizes as an `NSToolbar`, which is *window chrome* above the
 content area, so it has its own `kind`. On Win32 it realizes as a native
-toolbar control, and on GEM as the app-drawn row.
+toolbar control, on iOS as a `UIToolbar`, on Android as an
+`android.widget.Toolbar`, and on GEM, GTK and the web as the app-drawn row.
+An Android toolbar puts its actions at its end and moves those that do not
+fit under its own overflow menu, so the spaces in a UXToolbar have no effect
+there.
 
 ```c
 #use <UXKit>
@@ -130,12 +134,12 @@ geometry; the tests call it without a window.
   <TabItem label="iOS">
     <img src="/uxkit/toolbar-ios.png" alt="UXToolbar on iOS" width="220" />
 
-    The app-drawn fallback: bezeled items, separators, and a flexible space pushing the last group right.
+    A real `UIToolbar`. Each item is a `UIBarButtonItem`, and a flexible space is UIKit's own.
   </TabItem>
   <TabItem label="Android">
     <img src="/uxkit/toolbar-android.png" alt="UXToolbar on Android" width="220" />
 
-    The app-drawn fallback: bezeled items, separators, and a flexible space pushing the last group right.
+    A real `android.widget.Toolbar`. Its items are the toolbar's actions, shown as room allows, with the rest under the platform's overflow menu.
   </TabItem>
   <TabItem label="macOS">
     <img src="/uxkit/toolbar-macos.png" alt="UXToolbar on macOS" width="220" />
