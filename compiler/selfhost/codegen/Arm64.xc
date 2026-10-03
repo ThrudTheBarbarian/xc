@@ -5928,7 +5928,22 @@ class Arm64
         }
         i32 e = (i32)exp - (i32)1023 + (i32)127;
         if (e >= (i32)255) return (sign << (u32)31) | (u32)$7F80_0000;
-        if (e <= (i32)0)   return sign << (u32)31;    // underflows to zero
+        // A DENORMAL result (bug 576): the 53-bit significand 1.m shifted right
+        // 30 - e places, rounded to nearest even. It was flushed to zero, so
+        // `float f = 1e-40;` printed 0. Far below the smallest denormal it is 0.
+        if (e <= (i32)0) {
+            u32 sh = (u32)((i32)30 - e);
+            if (sh >= (u32)54)
+                return sign << (u32)31;
+            u64 sig = ((u64)((u32)$10_0000 | mhi) << (u32)32) | (u64)lo;
+            u64 dm = sig >> sh;
+            u64 drest = sig & (((u64)1 << sh) - (u64)1);
+            u64 dhalf = (u64)1 << (sh - (u32)1);
+            if (drest > dhalf || (drest == dhalf && (dm & (u64)1) != (u64)0))
+                dm = dm + (u64)1;
+            // 0x800000 after rounding up is the smallest normal, encoded right.
+            return (sign << (u32)31) | (u32)dm;
+        }
         // 52 mantissa bits down to 23: keep the top 23, round on bit 29.
         u32 m23 = (mhi << (u32)3) | (lo >> (u32)29);
         u32 rest = lo & (u32)$1FFF_FFFF;
