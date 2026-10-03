@@ -1,0 +1,2 @@
+after dropping the local: dealloc 0
+after dropping all 70000: dealloc 1

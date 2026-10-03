@@ -2212,10 +2212,10 @@ static NSString *opPrefix(XTIRType *t) { return wasmValType(t); }
 
 #pragma mark - Generated runtime
 
-// The allocator + ARC runtime, generated as wasm. The 38-byte header is the
+// The allocator + ARC runtime, generated as wasm. The 40-byte header is the
 // SAME contract every hosted backend writes (magic "BOTX"@0, stride u32@4,
-// count u32@12, dealloc TABLE INDEX@20, weak head@28, refcount u16@36,
-// payload@38 — see _xtc_alloc in src/xtc/main.m and rt-freestanding.c), so
+// count u32@12, dealloc TABLE INDEX@20, weak head@28, refcount u32@36,
+// payload@40 — see _xtc_alloc in src/xtc/main.m and rt-freestanding.c), so
 // `.length` header reads and delete[] iteration work unchanged. Bump
 // allocation from kWasmHeapBase upward, growing the memory a MiB at a time;
 // everything below the base is data/stack, which makes the ARC heap guard a
@@ -2244,9 +2244,9 @@ static NSString *opPrefix(XTIRType *t) { return wasmValType(t); }
     "    (local $b i32) (local $p i32) (local $end i32) (local $total i32)\n"
     "    (local $prev i32) (local $cur i32) (local $sz i32) (local $rem i32)\n"
     "    local.get $c\n    local.get $s\n    i32.mul\n    local.set $b\n"
-    "    local.get $b\n    i32.const 256\n    i32.lt_u\n"
-    "    if\n      i32.const 256\n      local.set $b\n    end\n"
-    "    local.get $b\n    i32.const 38\n    i32.add\n"
+    "    local.get $b\n    i32.const 16\n    i32.lt_u\n"
+    "    if\n      i32.const 16\n      local.set $b\n    end\n"
+    "    local.get $b\n    i32.const 40\n    i32.add\n"
     "    i32.const 7\n    i32.add\n    i32.const -8\n    i32.and\n    local.set $total\n"
     "    ;; first-fit over the free list\n"
     "    i32.const 0\n    local.set $prev\n"
@@ -2283,13 +2283,13 @@ static NSString *opPrefix(XTIRType *t) { return wasmValType(t); }
     "      end\n"
     "      local.get $cur\n      local.set $p\n"
     "      ;; ZERO the reused payload (fresh memory arrives zeroed; reused must too)\n"
-    "      local.get $p\n      i32.const 38\n      i32.add\n"
+    "      local.get $p\n      i32.const 40\n      i32.add\n"
     "      i32.const 0\n"
-    "      local.get $total\n      i32.const 38\n      i32.sub\n"
+    "      local.get $total\n      i32.const 40\n      i32.sub\n"
     "      memory.fill\n"
     "      local.get $p\n      local.get $total\n      local.get $c\n      local.get $s\n"
     "      local.get $d\n      call $__xtc_hdr\n"
-    "      local.get $p\n      i32.const 38\n      i32.add\n      return\n"
+    "      local.get $p\n      i32.const 40\n      i32.add\n      return\n"
     "    end\n"
     "    local.get $cur\n    local.set $prev\n"
     "    local.get $cur\n    i32.load offset=4\n    local.set $cur\n"
@@ -2306,7 +2306,7 @@ static NSString *opPrefix(XTIRType *t) { return wasmValType(t); }
     "    local.get $end\n    global.set $__heap\n"
     "    local.get $p\n    local.get $total\n    local.get $c\n    local.get $s\n"
     "    local.get $d\n    call $__xtc_hdr\n"
-    "    local.get $p\n    i32.const 38\n    i32.add\n  )\n"
+    "    local.get $p\n    i32.const 40\n    i32.add\n  )\n"
     "  (func $__xtc_hdr (param $p i32) (param $total i32) (param $c i32)"
     " (param $s i32) (param $d i32)\n"
     "    local.get $p\n    i32.const 1481920322\n    i32.store\n"     // "BOTX"
@@ -2315,7 +2315,7 @@ static NSString *opPrefix(XTIRType *t) { return wasmValType(t); }
     "    local.get $p\n    i32.const 20\n    i32.add\n    local.get $d\n    i32.store\n"
     "    local.get $p\n    i32.const 28\n    i32.add\n    i32.const 0\n    i32.store\n"
     "    local.get $p\n    i32.const 32\n    i32.add\n    local.get $total\n    i32.store\n"
-    "    local.get $p\n    i32.const 36\n    i32.add\n    i32.const 1\n    i32.store16\n  )\n"
+    "    local.get $p\n    i32.const 36\n    i32.add\n    i32.const 1\n    i32.store\n  )\n"
     "  (func $_xtc_free (param $blk i32)\n"
     "    (local $sz i32) (local $prev i32) (local $cur i32)\n"
     "    local.get $blk\n    i32.const 32\n    i32.add\n    i32.load\n    local.set $sz\n"
@@ -2401,21 +2401,22 @@ static NSString *opPrefix(XTIRType *t) { return wasmValType(t); }
         X(@"_xtc_heap_free_bytes"), X(@"_xtc_heap_largest")];
     }
 
-    // The 16-bit count saturates at 65535: retain stops there instead of
-    // wrapping to 0, and release leaves a saturated count alone, so the object
-    // is leaked rather than freed while still referenced (bug 261).
+    // The count is 32-bit at payload-4, the hosts' 40-byte header (rt.c). It
+    // was 16-bit at payload-2 and SATURATED at 65535 (bug 261): an object
+    // referenced that often leaked for good, and the 38-byte header put every
+    // payload at 2 mod 4, so JS views of module memory read the wrong words
+    // (bug 598). 32 bits needs no ceiling, as on the hosts. Aligned at
+    // payload-4, it is also what wasm atomics need when wasm32 gets threads.
     [out appendFormat:@""
     "  (func $__xtc_retain%@ (param $p i32)\n"
     "    (local $rc i32)\n"
     "    local.get $p\n    i32.const %u\n    i32.lt_u\n"
     "    if\n      return\n    end\n"                                  // null / data / stack
-    "    local.get $p\n    i32.const 2\n    i32.sub\n    i32.load16_u\n"
+    "    local.get $p\n    i32.const 4\n    i32.sub\n    i32.load\n"
     "    local.tee $rc\n    i32.eqz\n"
     "    if\n      return\n    end\n"                                  // 0 = dying (bug 038)
-    "    local.get $rc\n    i32.const 65535\n    i32.eq\n"
-    "    if\n      return\n    end\n"                                  // saturated (bug 261)
-    "    local.get $p\n    i32.const 2\n    i32.sub\n"
-    "    local.get $rc\n    i32.const 1\n    i32.add\n    i32.store16\n  )\n",
+    "    local.get $p\n    i32.const 4\n    i32.sub\n"
+    "    local.get $rc\n    i32.const 1\n    i32.add\n    i32.store\n  )\n",
     X(@"__xtc_retain"), kWasmHeapBase];
 
     [out appendFormat:@""
@@ -2423,20 +2424,18 @@ static NSString *opPrefix(XTIRType *t) { return wasmValType(t); }
     "    (local $rc i32)\n"
     "    local.get $p\n    i32.const %u\n    i32.lt_u\n"
     "    if\n      return\n    end\n"
-    "    local.get $p\n    i32.const 2\n    i32.sub\n    i32.load16_u\n"
+    "    local.get $p\n    i32.const 4\n    i32.sub\n    i32.load\n"
     "    local.tee $rc\n    i32.eqz\n"
     "    if\n      return\n    end\n"
-    "    local.get $rc\n    i32.const 65535\n    i32.eq\n"
-    "    if\n      return\n    end\n"                                  // saturated: leaked, never freed
-    "    local.get $p\n    i32.const 2\n    i32.sub\n"
-    "    local.get $rc\n    i32.const 1\n    i32.sub\n    i32.store16\n"
+    "    local.get $p\n    i32.const 4\n    i32.sub\n"
+    "    local.get $rc\n    i32.const 1\n    i32.sub\n    i32.store\n"
     "    local.get $rc\n    i32.const 1\n    i32.eq\n"
     "    if\n"
     "      local.get $p\n      call $_xtc_dealloc\n"
     "    end\n  )\n", X(@"__xtc_release"), kWasmHeapBase];
 
     // Weak references — the intrusive chain (weak-refs-intrusive.md): the
-    // head lives in the header (base+28 = payload−10), a slot's two hidden
+    // head lives in the header (base+28 = payload−12), a slot's two hidden
     // link words sit immediately before its payload (pprev at slot−8, next
     // at slot−4), and pprev points at the FIELD that points at this slot —
     // the head field or the previous slot's next word — so unlink is O(1)
@@ -2463,25 +2462,25 @@ static NSString *opPrefix(XTIRType *t) { return wasmValType(t); }
     "    local.get $s\n    call $_xtc_weak_unregister\n"
     "    local.get $o\n    i32.eqz\n    if\n      return\n    end\n"
     "    local.get $o\n    i32.const %u\n    i32.lt_u\n    if\n      return\n    end\n"
-    "    local.get $o\n    i32.const 38\n    i32.sub\n    i32.load\n"
+    "    local.get $o\n    i32.const 40\n    i32.sub\n    i32.load\n"
     "    i32.const 1481920322\n    i32.ne\n    if\n      return\n    end\n"
-    "    local.get $o\n    i32.const 10\n    i32.sub\n    i32.load\n    local.set $nx\n"
+    "    local.get $o\n    i32.const 12\n    i32.sub\n    i32.load\n    local.set $nx\n"
     "    local.get $s\n    i32.const 8\n    i32.sub\n"
-    "    local.get $o\n    i32.const 10\n    i32.sub\n    i32.store\n"
+    "    local.get $o\n    i32.const 12\n    i32.sub\n    i32.store\n"
     "    local.get $s\n    i32.const 4\n    i32.sub\n    local.get $nx\n    i32.store\n"
     "    local.get $nx\n"
     "    if\n"
     "      local.get $nx\n      i32.const 8\n      i32.sub\n"
     "      local.get $s\n      i32.const 4\n      i32.sub\n      i32.store\n"
     "    end\n"
-    "    local.get $o\n    i32.const 10\n    i32.sub\n    local.get $s\n    i32.store\n  )\n",
+    "    local.get $o\n    i32.const 12\n    i32.sub\n    local.get $s\n    i32.store\n  )\n",
     X(@"_xtc_weak_register"), kWasmHeapBase];
     [out appendString:@""
     "  (func $_xtc_weak_load (param $s i32) (result i32)\n"
     "    local.get $s\n    i32.load\n  )\n"
     "  (func $_xtc_weak_zero_for (param $o i32)\n"
     "    (local $s i32) (local $nx i32)\n"
-    "    local.get $o\n    i32.const 10\n    i32.sub\n    i32.load\n    local.set $s\n"
+    "    local.get $o\n    i32.const 12\n    i32.sub\n    i32.load\n    local.set $s\n"
     "    block $done\n    loop $w\n"
     "    local.get $s\n    i32.eqz\n    br_if $done\n"
     "    local.get $s\n    i32.const 4\n    i32.sub\n    i32.load\n    local.set $nx\n"
@@ -2490,7 +2489,7 @@ static NSString *opPrefix(XTIRType *t) { return wasmValType(t); }
     "    local.get $s\n    i32.const 4\n    i32.sub\n    i32.const 0\n    i32.store\n"
     "    local.get $nx\n    local.set $s\n"
     "    br $w\n    end\n    end\n"
-    "    local.get $o\n    i32.const 10\n    i32.sub\n    i32.const 0\n    i32.store\n  )\n"];
+    "    local.get $o\n    i32.const 12\n    i32.sub\n    i32.const 0\n    i32.store\n  )\n"];
 
     // delete obj[] runs the descriptor across EVERY element (the header's
     // count/stride — docs: array-delete-iteration). The refcount is bumped
@@ -2502,14 +2501,14 @@ static NSString *opPrefix(XTIRType *t) { return wasmValType(t); }
     "    (local $base i32) (local $stride i32) (local $count i32) (local $d i32)\n"
     "    (local $q i32) (local $i i32)\n"
     "    local.get $o\n    call $_xtc_weak_zero_for\n"
-    "    local.get $o\n    i32.const 38\n    i32.sub\n    local.set $base\n"
+    "    local.get $o\n    i32.const 40\n    i32.sub\n    local.set $base\n"
     "    local.get $base\n    i32.const 4\n    i32.add\n    i32.load\n    local.set $stride\n"
     "    local.get $base\n    i32.const 12\n    i32.add\n    i32.load\n    local.set $count\n"
     "    local.get $base\n    i32.const 20\n    i32.add\n    i32.load\n    local.set $d\n"
     "    local.get $d\n"
     "    if\n"
-    "      local.get $o\n      i32.const 2\n      i32.sub\n"
-    "      i32.const 32768\n      i32.store16\n"
+    "      local.get $o\n      i32.const 4\n      i32.sub\n"
+    "      i32.const -2147483648\n      i32.store\n"
     "      local.get $o\n      local.set $q\n"
     "      i32.const 0\n      local.set $i\n"
     "      block $done\n      loop $each\n"
@@ -2531,13 +2530,13 @@ static NSString *opPrefix(XTIRType *t) { return wasmValType(t); }
         @"u32": @4, @"i32": @4, @"float": @4, @"pointer": @4, @"string": @4,
         @"u64": @8, @"i64": @8, @"double": @8 };
     // `.length` — a REAL header read (#1083): the element count at base+12,
-    // i.e. payload−26; 0 for anything that is not a heap block.
+    // i.e. payload−28; 0 for anything that is not a heap block.
     if ([sNewSuffixes containsObject:@"__count__"]) {
         [out appendFormat:@""
         "  (func $_xtc_count%@ (param $p i32) (result i32)\n"
         "    local.get $p\n    i32.const %u\n    i32.lt_u\n"
         "    if\n      i32.const 0\n      return\n    end\n"
-        "    local.get $p\n    i32.const 26\n    i32.sub\n    i32.load\n  )\n",
+        "    local.get $p\n    i32.const 28\n    i32.sub\n    i32.load\n  )\n",
         X(@"_xtc_count"), kWasmHeapBase];
     }
     for (NSString *suffix in

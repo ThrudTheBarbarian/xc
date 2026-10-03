@@ -3188,7 +3188,7 @@ class Wasm32
     }
 
     // ── Generated runtime ────────────────────────────────────────────────
-    // Verbatim from the original: the 38-byte-header allocator (coalescing
+    // Verbatim from the original: the 40-byte-header allocator (coalescing
     // free list over a bump region), ARC, the intrusive weak chain, dealloc
     // iteration, and the _xtc_new_* stubs.
     // link-libs: the app's runtime is the ONE runtime — export the entry
@@ -3214,9 +3214,9 @@ class Wasm32
         "    (local $b i32) (local $p i32) (local $end i32) (local $total i32)\n"
         "    (local $prev i32) (local $cur i32) (local $sz i32) (local $rem i32)\n"
         "    local.get $c\n    local.get $s\n    i32.mul\n    local.set $b\n"
-        "    local.get $b\n    i32.const 256\n    i32.lt_u\n"
-        "    if\n      i32.const 256\n      local.set $b\n    end\n"
-        "    local.get $b\n    i32.const 38\n    i32.add\n"
+        "    local.get $b\n    i32.const 16\n    i32.lt_u\n"
+        "    if\n      i32.const 16\n      local.set $b\n    end\n"
+        "    local.get $b\n    i32.const 40\n    i32.add\n"
         "    i32.const 7\n    i32.add\n    i32.const -8\n    i32.and\n    local.set $total\n"
         "    ;; first-fit over the free list\n"
         "    i32.const 0\n    local.set $prev\n"
@@ -3253,13 +3253,13 @@ class Wasm32
         "      end\n"
         "      local.get $cur\n      local.set $p\n"
         "      ;; ZERO the reused payload (fresh memory arrives zeroed; reused must too)\n"
-        "      local.get $p\n      i32.const 38\n      i32.add\n"
+        "      local.get $p\n      i32.const 40\n      i32.add\n"
         "      i32.const 0\n"
-        "      local.get $total\n      i32.const 38\n      i32.sub\n"
+        "      local.get $total\n      i32.const 40\n      i32.sub\n"
         "      memory.fill\n"
         "      local.get $p\n      local.get $total\n      local.get $c\n      local.get $s\n"
         "      local.get $d\n      call $__xtc_hdr\n"
-        "      local.get $p\n      i32.const 38\n      i32.add\n      return\n"
+        "      local.get $p\n      i32.const 40\n      i32.add\n      return\n"
         "    end\n"
         "    local.get $cur\n    local.set $prev\n"
         "    local.get $cur\n    i32.load offset=4\n    local.set $cur\n"
@@ -3276,7 +3276,7 @@ class Wasm32
         "    local.get $end\n    global.set $__heap\n"
         "    local.get $p\n    local.get $total\n    local.get $c\n    local.get $s\n"
         "    local.get $d\n    call $__xtc_hdr\n"
-        "    local.get $p\n    i32.const 38\n    i32.add\n  )\n"
+        "    local.get $p\n    i32.const 40\n    i32.add\n  )\n"
         "  (func $__xtc_hdr (param $p i32) (param $total i32) (param $c i32)"
         " (param $s i32) (param $d i32)\n"
         "    local.get $p\n    i32.const 1481920322\n    i32.store\n"
@@ -3285,7 +3285,7 @@ class Wasm32
         "    local.get $p\n    i32.const 20\n    i32.add\n    local.get $d\n    i32.store\n"
         "    local.get $p\n    i32.const 28\n    i32.add\n    i32.const 0\n    i32.store\n"
         "    local.get $p\n    i32.const 32\n    i32.add\n    local.get $total\n    i32.store\n"
-        "    local.get $p\n    i32.const 36\n    i32.add\n    i32.const 1\n    i32.store16\n  )\n"
+        "    local.get $p\n    i32.const 36\n    i32.add\n    i32.const 1\n    i32.store\n  )\n"
         "  (func $_xtc_free (param $blk i32)\n"
         "    (local $sz i32) (local $prev i32) (local $cur i32)\n"
         "    local.get $blk\n    i32.const 32\n    i32.add\n    i32.load\n    local.set $sz\n"
@@ -3367,21 +3367,23 @@ class Wasm32
             rtExp(String.withCString("_xtc_heap_largest")).cString());
         }
 
-        // The 16-bit count saturates at 65535: retain stops there instead of
-        // wrapping to 0, and release leaves a saturated count alone, so the
-        // object is leaked rather than freed while still referenced (bug 261).
+        // The count is 32-bit at payload-4, the hosts' 40-byte header (rt.c). It
+        // was 16-bit at payload-2 and SATURATED at 65535 (bug 261): an object
+        // referenced that often leaked for good, and the 38-byte header put
+        // every payload at 2 mod 4, so JS views of module memory read the
+        // wrong words (bug 598). 32 bits needs no ceiling, as on the hosts.
+        // Aligned at payload-4, it is also what wasm atomics need when wasm32
+        // gets threads.
         out.appendFormat(
         "  (func $__xtc_retain%s (param $p i32)\n"
         "    (local $rc i32)\n"
         "    local.get $p\n    i32.const 1048576\n    i32.lt_u\n"
         "    if\n      return\n    end\n"
-        "    local.get $p\n    i32.const 2\n    i32.sub\n    i32.load16_u\n"
+        "    local.get $p\n    i32.const 4\n    i32.sub\n    i32.load\n"
         "    local.tee $rc\n    i32.eqz\n"
         "    if\n      return\n    end\n"
-        "    local.get $rc\n    i32.const 65535\n    i32.eq\n"
-        "    if\n      return\n    end\n"
-        "    local.get $p\n    i32.const 2\n    i32.sub\n"
-        "    local.get $rc\n    i32.const 1\n    i32.add\n    i32.store16\n  )\n",
+        "    local.get $p\n    i32.const 4\n    i32.sub\n"
+        "    local.get $rc\n    i32.const 1\n    i32.add\n    i32.store\n  )\n",
         rtExp(String.withCString("__xtc_retain")).cString());
 
         out.appendFormat(
@@ -3389,13 +3391,11 @@ class Wasm32
         "    (local $rc i32)\n"
         "    local.get $p\n    i32.const 1048576\n    i32.lt_u\n"
         "    if\n      return\n    end\n"
-        "    local.get $p\n    i32.const 2\n    i32.sub\n    i32.load16_u\n"
+        "    local.get $p\n    i32.const 4\n    i32.sub\n    i32.load\n"
         "    local.tee $rc\n    i32.eqz\n"
         "    if\n      return\n    end\n"
-        "    local.get $rc\n    i32.const 65535\n    i32.eq\n"
-        "    if\n      return\n    end\n"
-        "    local.get $p\n    i32.const 2\n    i32.sub\n"
-        "    local.get $rc\n    i32.const 1\n    i32.sub\n    i32.store16\n"
+        "    local.get $p\n    i32.const 4\n    i32.sub\n"
+        "    local.get $rc\n    i32.const 1\n    i32.sub\n    i32.store\n"
         "    local.get $rc\n    i32.const 1\n    i32.eq\n"
         "    if\n"
         "      local.get $p\n      call $_xtc_dealloc\n"
@@ -3422,25 +3422,25 @@ class Wasm32
         "    local.get $s\n    call $_xtc_weak_unregister\n"
         "    local.get $o\n    i32.eqz\n    if\n      return\n    end\n"
         "    local.get $o\n    i32.const 1048576\n    i32.lt_u\n    if\n      return\n    end\n"
-        "    local.get $o\n    i32.const 38\n    i32.sub\n    i32.load\n"
+        "    local.get $o\n    i32.const 40\n    i32.sub\n    i32.load\n"
         "    i32.const 1481920322\n    i32.ne\n    if\n      return\n    end\n"
-        "    local.get $o\n    i32.const 10\n    i32.sub\n    i32.load\n    local.set $nx\n"
+        "    local.get $o\n    i32.const 12\n    i32.sub\n    i32.load\n    local.set $nx\n"
         "    local.get $s\n    i32.const 8\n    i32.sub\n"
-        "    local.get $o\n    i32.const 10\n    i32.sub\n    i32.store\n"
+        "    local.get $o\n    i32.const 12\n    i32.sub\n    i32.store\n"
         "    local.get $s\n    i32.const 4\n    i32.sub\n    local.get $nx\n    i32.store\n"
         "    local.get $nx\n"
         "    if\n"
         "      local.get $nx\n      i32.const 8\n      i32.sub\n"
         "      local.get $s\n      i32.const 4\n      i32.sub\n      i32.store\n"
         "    end\n"
-        "    local.get $o\n    i32.const 10\n    i32.sub\n    local.get $s\n    i32.store\n  )\n",
+        "    local.get $o\n    i32.const 12\n    i32.sub\n    local.get $s\n    i32.store\n  )\n",
         rtExp(String.withCString("_xtc_weak_register")).cString());
         out.appendCString(
         "  (func $_xtc_weak_load (param $s i32) (result i32)\n"
         "    local.get $s\n    i32.load\n  )\n"
         "  (func $_xtc_weak_zero_for (param $o i32)\n"
         "    (local $s i32) (local $nx i32)\n"
-        "    local.get $o\n    i32.const 10\n    i32.sub\n    i32.load\n    local.set $s\n"
+        "    local.get $o\n    i32.const 12\n    i32.sub\n    i32.load\n    local.set $s\n"
         "    block $done\n    loop $w\n"
         "    local.get $s\n    i32.eqz\n    br_if $done\n"
         "    local.get $s\n    i32.const 4\n    i32.sub\n    i32.load\n    local.set $nx\n"
@@ -3449,21 +3449,21 @@ class Wasm32
         "    local.get $s\n    i32.const 4\n    i32.sub\n    i32.const 0\n    i32.store\n"
         "    local.get $nx\n    local.set $s\n"
         "    br $w\n    end\n    end\n"
-        "    local.get $o\n    i32.const 10\n    i32.sub\n    i32.const 0\n    i32.store\n  )\n");
+        "    local.get $o\n    i32.const 12\n    i32.sub\n    i32.const 0\n    i32.store\n  )\n");
 
         out.appendFormat(
         "  (func $_xtc_dealloc%s (param $o i32)\n"
         "    (local $base i32) (local $stride i32) (local $count i32) (local $d i32)\n"
         "    (local $q i32) (local $i i32)\n"
         "    local.get $o\n    call $_xtc_weak_zero_for\n"
-        "    local.get $o\n    i32.const 38\n    i32.sub\n    local.set $base\n"
+        "    local.get $o\n    i32.const 40\n    i32.sub\n    local.set $base\n"
         "    local.get $base\n    i32.const 4\n    i32.add\n    i32.load\n    local.set $stride\n"
         "    local.get $base\n    i32.const 12\n    i32.add\n    i32.load\n    local.set $count\n"
         "    local.get $base\n    i32.const 20\n    i32.add\n    i32.load\n    local.set $d\n"
         "    local.get $d\n"
         "    if\n"
-        "      local.get $o\n      i32.const 2\n      i32.sub\n"
-        "      i32.const 32768\n      i32.store16\n"
+        "      local.get $o\n      i32.const 4\n      i32.sub\n"
+        "      i32.const -2147483648\n      i32.store\n"
         "      local.get $o\n      local.set $q\n"
         "      i32.const 0\n      local.set $i\n"
         "      block $done\n      loop $each\n"
@@ -3484,7 +3484,7 @@ class Wasm32
             "  (func $_xtc_count%s (param $p i32) (result i32)\n"
             "    local.get $p\n    i32.const 1048576\n    i32.lt_u\n"
             "    if\n      i32.const 0\n      return\n    end\n"
-            "    local.get $p\n    i32.const 26\n    i32.sub\n    i32.load\n  )\n",
+            "    local.get $p\n    i32.const 28\n    i32.sub\n    i32.load\n  )\n",
             rtExp(String.withCString("_xtc_count")).cString());
         }
         Array* sfx = Wasm32.sorted(_newSuffixes);
