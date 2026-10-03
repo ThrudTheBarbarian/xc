@@ -82,6 +82,9 @@ struct W32Node
     // ── driver state ────────────────────────────────────────────────────────────
     i32 gW32Native;     // §10 native-object counter (live windows)
 pointer gW32Hwnds[64];  // i32 handle -> HWND (handles start at 1)
+// Tests only: a hook for the common dialogs (ChooseColor, ChooseFont).  It sees the real dialog's
+// messages first, so a gate can answer the dialog as a user would; 0 in an app.
+pointer gW32TestDialogHook;
 // The parts a Windows title is composed of (UXKit's title, subtitle and modified flag), by handle.
 u8* gW32Title[64];
 u8* gW32Subtitle[64];
@@ -1934,22 +1937,99 @@ class UXWin32Driver : Object<UXViewDriver>
         return (i32)0;
         }
     // toolkit wheel/sliders (native ChooseColor hangs under Wine, like the file dialog)
+    // The common colour dialog, ChooseColor, opened full (the custom-colour half with its R/G/B
+    // fields) and seeded with the current colour.  (It was once thought to hang under Wine; what
+    // hung was a test with nothing to answer the modal dialog.  A gate answers it through the hook.)
     bool hasNativeColorPicker(void)
         {
-        return false;
+        return true;
         }
     i32 pickColor(i32 r, i32 g, i32 b, i32* outR, i32* outG, i32* outB)
         {
-        return (i32)0;
+        u32 cust[16];
+        for (i32 i = (i32)0; i < (i32)16; i = i + (i32)1)
+            {
+            cust[i] = (u32)$FFFFFF;
+            }
+        CHOOSECOLORA cc;
+        u8* z = (u8*)&cc;
+        for (i32 i = (i32)0; i < (i32)72; i = i + (i32)1)
+            {
+            z[i] = (u8)0;
+            }
+        cc.lStructSize = (u32)72;
+        cc.hwndOwner = gW32Hwnds[(i32)1];
+        cc.rgbResult = ((u32)b << 16) | ((u32)g << 8) | (u32)r; // a COLORREF is 0x00BBGGRR
+        cc.lpCustColors = (pointer)&cust[0];
+        cc.Flags = (u32)CC_RGBINIT | (u32)CC_FULLOPEN;
+        if (gW32TestDialogHook != (pointer)0)
+            {
+            cc.Flags = cc.Flags | (u32)CC_ENABLEHOOK;
+            cc.lpfnHook = gW32TestDialogHook;
+            }
+        if (ChooseColorA((pointer)&cc) == (i32)0)
+            {
+            return (i32)0;
+            }
+        outR[0] = (i32)(cc.rgbResult & (u32)$FF);
+        outG[0] = (i32)((cc.rgbResult >> 8) & (u32)$FF);
+        outB[0] = (i32)((cc.rgbResult >> 16) & (u32)$FF);
+        return (i32)1;
         }
-    // toolkit chooser (native ChooseFont hangs under Wine, like ChooseColor)
+    // The common font dialog, ChooseFont, seeded with the family, size (points), weight and slant.
     bool hasNativeFontPicker(void)
         {
-        return false;
+        return true;
         }
     i32 pickFont(u8* inF, i32 inS, i32 inB, i32 inI, u8* outF, i32 cap, i32* outS, i32* outB, i32* outI)
         {
-        return (i32)0;
+        LOGFONTA lf;
+        u8* z = (u8*)&lf;
+        for (i32 i = (i32)0; i < (i32)60; i = i + (i32)1)
+            {
+            z[i] = (u8)0;
+            }
+        lf.lfHeight = (i32)0 - (inS * (i32)96 + (i32)36) / (i32)72; // points -> pixels at 96 dpi
+        lf.lfWeight = inB != (i32)0 ? (i32)700 : (i32)400;
+        lf.lfItalic = inI != (i32)0 ? (u8)1 : (u8)0;
+        i32 k = (i32)0;
+        while (inF != (u8*)0 && inF[k] != (u8)0 && k < (i32)31)
+            {
+            lf.lfFaceName[k] = inF[k];
+            k = k + (i32)1;
+            }
+        lf.lfFaceName[k] = (u8)0;
+        CHOOSEFONTA cf;
+        u8* y = (u8*)&cf;
+        for (i32 i = (i32)0; i < (i32)104; i = i + (i32)1)
+            {
+            y[i] = (u8)0;
+            }
+        cf.lStructSize = (u32)104;
+        cf.hwndOwner = gW32Hwnds[(i32)1];
+        cf.lpLogFont = (pointer)&lf;
+        cf.iPointSize = inS * (i32)10;
+        cf.Flags = (u32)CF_SCREENFONTS | (u32)CF_INITTOLOGFONTSTRUCT | (u32)CF_NOVERTFONTS;
+        if (gW32TestDialogHook != (pointer)0)
+            {
+            cf.Flags = cf.Flags | (u32)CF_ENABLEHOOK;
+            cf.lpfnHook = gW32TestDialogHook;
+            }
+        if (ChooseFontA((pointer)&cf) == (i32)0)
+            {
+            return (i32)0;
+            }
+        i32 n = (i32)0;
+        while (lf.lfFaceName[n] != (u8)0 && n < cap - (i32)1 && n < (i32)31)
+            {
+            outF[n] = lf.lfFaceName[n];
+            n = n + (i32)1;
+            }
+        outF[n] = (u8)0;
+        outS[0] = (cf.iPointSize + (i32)5) / (i32)10; // tenths of a point -> points
+        outB[0] = lf.lfWeight >= (i32)600 ? (i32)1 : (i32)0;
+        outI[0] = lf.lfItalic != (u8)0 ? (i32)1 : (i32)0;
+        return (i32)1;
         }
     // Measure in a DC of our own, not gW32CurHdc: line breaking happens during layout, outside any
     // WM_PAINT, when that handle is stale.  One screen-compatible DC, made on first use and kept.

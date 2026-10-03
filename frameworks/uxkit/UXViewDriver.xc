@@ -157,13 +157,15 @@ protocol UXViewDriver
     void navPop(pointer nav, i32 animated);
     bool hasNativeFileSave(void);
     i32 fileSave(u8 * prompt, u8 * startDir, u8 * defaultName, u8 * out, i32 outCap);
-    // A native colour picker (AppKit NSColorPanel, Win32 ChooseColor).  hasNativeColorPicker() is true
-    // where the OS has one; the demo falls back to a toolkit-drawn wheel/sliders where it is false (GEM).
+    // A native colour picker (AppKit NSColorPanel, GTK GtkColorDialog, Win32 ChooseColor).
+    // hasNativeColorPicker() is true where the OS has one; the demo falls back to a toolkit-drawn
+    // wheel/sliders where it is false.
     // pickColor seeds it with r/g/b (0..255), writes the chosen colour into out*, returns 1 or 0 on cancel.
     bool hasNativeColorPicker(void);
     i32 pickColor(i32 r, i32 g, i32 b, i32 * outR, i32 * outG, i32 * outB);
-    // A native font picker (AppKit NSFontPanel).  hasNativeFontPicker() is true where the OS has one; the
-    // demo falls back to a toolkit-drawn chooser where it is false (GEM, Win32).  pickFont seeds it with
+    // A native font picker (AppKit NSFontPanel, GTK GtkFontDialog, Win32 ChooseFont).
+    // hasNativeFontPicker() is true where the OS has one; the demo falls back to a toolkit-drawn
+    // chooser where it is false.  pickFont seeds it with
     // family/size/bold/italic, writes the chosen font out*, and returns 1 or 0 on cancel.
     bool hasNativeFontPicker(void);
     i32 pickFont(u8 * inFamily, i32 inSize, i32 inBold, i32 inItalic,

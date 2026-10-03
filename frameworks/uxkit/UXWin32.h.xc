@@ -310,6 +310,70 @@ struct OPENFILENAMEA
     u32 dwReserved;
     u32 FlagsEx;
     } i32 GetOpenFileNameA(pointer ofn); // nonzero if the user picked a file
+// The common colour and font dialogs (comdlg32), hand-padded to the Win64 C layout: CHOOSECOLORA is
+// 72 bytes, CHOOSEFONTA 104, LOGFONTA 60.  A hook (lpfnHook, with CC_/CF_ENABLEHOOK) sees the
+// dialog's messages first; the gates use one to answer the real dialog as a user would.
+struct CHOOSECOLORA
+    {
+    u32 lStructSize;
+    u32 _p0;
+    pointer hwndOwner;
+    pointer hInstance;
+    u32 rgbResult;
+    u32 _p1;
+    pointer lpCustColors;
+    u32 Flags;
+    u32 _p2;
+    pointer lCustData;
+    pointer lpfnHook;
+    pointer lpTemplateName;
+    } i32 ChooseColorA(pointer cc); // nonzero if the user chose
+struct LOGFONTA
+    {
+    i32 lfHeight;
+    i32 lfWidth;
+    i32 lfEscapement;
+    i32 lfOrientation;
+    i32 lfWeight;
+    u8 lfItalic;
+    u8 lfUnderline;
+    u8 lfStrikeOut;
+    u8 lfCharSet;
+    u8 lfOutPrecision;
+    u8 lfClipPrecision;
+    u8 lfQuality;
+    u8 lfPitchAndFamily;
+    u8 lfFaceName[32];
+    }
+struct CHOOSEFONTA
+    {
+    u32 lStructSize;
+    u32 _p0;
+    pointer hwndOwner;
+    pointer hDC;
+    pointer lpLogFont;
+    i32 iPointSize;
+    u32 Flags;
+    u32 rgbColors;
+    u32 _p1;
+    pointer lCustData;
+    pointer lpfnHook;
+    pointer lpTemplateName;
+    pointer hInstance;
+    pointer lpszStyle;
+    u16 nFontType;
+    u16 _p2;
+    i32 nSizeMin;
+    i32 nSizeMax;
+    u32 _p3;
+    } i32 ChooseFontA(pointer cf); // nonzero if the user chose
+#define CC_RGBINIT $0001
+#define CC_FULLOPEN $0002
+#define CC_ENABLEHOOK $0010
+#define CF_SCREENFONTS $0001
+#define CF_ENABLEHOOK $0008
+#define CF_INITTOLOGFONTSTRUCT $0040
+#define CF_NOVERTFONTS $01000000
 #define OFN_HIDEREADONLY $0004
 #define OFN_PATHMUSTEXIST $0800
 #define OFN_FILEMUSTEXIST $1000
