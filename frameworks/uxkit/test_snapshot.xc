@@ -193,16 +193,21 @@ void snapChecks(void)
     ck((u8*)"the app-drawn backdrop is in it", near(all, (i32)10, (i32)170, (i32)20, (i32)160, (i32)60));
     ck((u8*)"the map is in it", near(all, (i32)30, (i32)30, (i32)64, (i32)128, (i32)191));
     ck((u8*)"the 2-D view after the map is in it, over the map", near(all, (i32)70, (i32)60, (i32)230, (i32)20, (i32)20));
-    // the button: something other than the backdrop is drawn across its frame
-    i32 notBack = (i32)0;
+    // the button: across its frame, pixels that are neither the backdrop nor black (a face where the
+    // platform paints one, the title's ink where it does not, as on iOS); a picture that is merely
+    // not the backdrop -- all black, say -- does not count
+    i32 drawn = (i32)0;
     for (i32 x = (i32)242; x < (i32)338; x = x + (i32)1)
         {
-        if (!near(all, x, (i32)36, (i32)20, (i32)160, (i32)60))
+        u32 v = all.px[(i32)36 * all.w + x];
+        u32 sum = ((v >> (u32)16) & (u32)255) + ((v >> (u32)8) & (u32)255) + (v & (u32)255);
+        if (!near(all, x, (i32)36, (i32)20, (i32)160, (i32)60) && sum > (u32)90)
             {
-            notBack = notBack + (i32)1;
+            drawn = drawn + (i32)1;
             }
         }
-    ck((u8*)"the native button is in it", notBack > (i32)60);
+    Stdio.printf("  (button row: %d of 96 pixels drawn)\n", drawn);
+    ck((u8*)"the native button is in it", drawn > (i32)8);
 
     UXRect r = UXGeom.make((i16)20, (i16)20, (i16)200, (i16)120);
     UXImage* map = gWin.snapshot(&r);

@@ -13,7 +13,7 @@
 
 pointer GetParent(pointer hwnd);
 i32 SetDlgItemTextA(pointer hwnd, i32 id, u8* text);
-i32 GetDlgItemTextA(pointer hwnd, i32 id, u8* buf, i32 n);
+i32 EnumThreadWindows(u32 thread, pointer fn, pointer lp);
 u32 GetCurrentDirectoryA(u32 n, u8* buf);
 pointer SetTimer(pointer hwnd, pointer id, u32 ms, pointer fn);
 i32 KillTimer(pointer hwnd, pointer id);
@@ -81,10 +81,7 @@ pointer userAtDialog(pointer hwnd, u32 msg, pointer wp, pointer lp)
     gSeen = gSeen + (i32)1;
     pointer dlg = GetParent(hwnd); // an Explorer-style hook is a child of the dialog
     gSeenName[0] = (u8)0;
-    if (GetDlgItemTextA(dlg, (i32)$047C, &gSeenName[0], (i32)600) == (i32)0) // cmb13, the name box
-        {
-        GetDlgItemTextA(dlg, (i32)$0480, &gSeenName[0], (i32)600); // edt1 on older templates
-        }
+    SendMessageA(dlg, (u32)$0464, (pointer)(i64)600, (pointer)&gSeenName[0]); // CDM_GETSPEC: the name box's text
     if (gType[0] != (u8)0)
         {
         SetDlgItemTextA(dlg, (i32)$047C, &gType[0]);
@@ -94,16 +91,26 @@ pointer userAtDialog(pointer hwnd, u32 msg, pointer wp, pointer lp)
     return (pointer)0;
     }
 
-// With no hook, as in an app: a timer looks for the dialog on screen by its title, and cancels it.
+// With no hook, as in an app: a timer looks for the dialog among this thread's windows (any dialog
+// window, visible, with the prompt as its title -- the modern dialog Windows shows without a hook is
+// one too), and cancels it.
 i32 gFoundPlain;
-void lookForPlainDialog(pointer hwnd, u32 msg, pointer id, u32 ms)
+i32 lookAtWindow(pointer hwnd, pointer lp)
     {
-    pointer dlg = FindWindowA((u8*)"#32770", (u8*)"Open without a hook");
-    if (dlg != (pointer)0 && IsWindowVisible(dlg) != (i32)0)
+    u8 cls[16];
+    u8 title[64];
+    GetClassNameA(hwnd, (pointer)&cls[0], (i32)16);
+    GetWindowTextA(hwnd, (pointer)&title[0], (i32)64);
+    if (sameBytes(&cls[0], (u8*)"#32770") && sameBytes(&title[0], (u8*)"Open without a hook") && IsWindowVisible(hwnd) != (i32)0)
         {
         gFoundPlain = gFoundPlain + (i32)1;
-        PostMessageA(dlg, (u32)$0111, (pointer)(i32)2, (pointer)0); // IDCANCEL
+        PostMessageA(hwnd, (u32)$0111, (pointer)(i32)2, (pointer)0); // IDCANCEL
         }
+    return (i32)1;
+    }
+void lookForPlainDialog(pointer hwnd, u32 msg, pointer id, u32 ms)
+    {
+    EnumThreadWindows(GetCurrentThreadId(), (pointer)&lookAtWindow, (pointer)0);
     }
 
 void main(void)
@@ -139,6 +146,7 @@ void main(void)
     // save: the name box starts with the default name; the user types a new path and presses Save
     u8 saved[600];
     join(&saved[0], &cwd[0], (u8*)"\\saved.txt");
+    remove(&saved[0]); // a file left by an earlier run would make the dialog ask about replacing it
     join(&gType[0], &saved[0], (u8*)"");
     got = UXSavePanel.run((u8*)"Save the file", &cwd[0], (u8*)"untitled.txt");
     Stdio.printf("  (save: %s, name box was \"%s\")\n", got != (u8*)0 ? got : (u8*)"-", &gSeenName[0]);

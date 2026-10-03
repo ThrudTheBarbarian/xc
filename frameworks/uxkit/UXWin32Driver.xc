@@ -349,31 +349,47 @@ void w32ScrollReframe(pointer hwnd)
 
 // The scroll-child window proc: WS_VSCROLL owns the bar; WM_PAINT draws the peer UXScrollView's
 // DOCUMENT subtree offset by the scroll position, into this child's client (its own 0,0).
+// The scroller's client, painted into hdc: the document subtree at the scroll offset, then its frame.
+// WM_PAINT and WM_PRINTCLIENT (a snapshot printing the window's children) both come here.
+void w32ScrollPaint(pointer hwnd, pointer hdc)
+    {
+    SelectObject(hdc, gW32Font);
+    RECT rc;
+    GetClientRect(hwnd, (pointer)&rc);
+    FillRect(hdc, (pointer)&rc, gW32FaceBrush); // clear the exposed area
+    UXScrollView* sv = (UXScrollView* ?)(Object*)GetWindowLongPtrA(hwnd, (i32)GWLP_USERDATA);
+    if (sv != (UXScrollView*)0)
+        {
+        i32 pos = GetScrollPos(hwnd, (i32)SB_VERT);
+        UXRect svAbs = sv.absoluteFrame(); // the child's position in the parent window
+        pointer was = gW32CurHdc;
+        gW32CurHdc = hdc;
+        // abs -> child-client, scrolled: a view at (vx,vy) draws at (vx-svAbs.x, vy-svAbs.y-pos).
+        gDriver.setDrawOffset((i32)svAbs.x, (i32)svAbs.y + pos);
+        gDriver.treeSetUserDraw((pointer)&ux_surface_userdraw, (pointer)sv.owner);
+        gDriver.treeDraw((pointer)sv.owner.objects(), sv.nativeDocNode(),
+                         (i32)0, (i32)0, (i32)(rc.right - rc.left), (i32)(rc.bottom - rc.top));
+        gDriver.setDrawOffset((i32)0, (i32)0);
+        gW32CurHdc = was;
+        }
+    w32ScrollFrame(hwnd, hdc, (i32)1);
+    }
+
+// The scroll-child window proc: WS_VSCROLL owns the bar; WM_PAINT draws the peer UXScrollView's
+// DOCUMENT subtree offset by the scroll position, into this child's client (its own 0,0).
 pointer UXScroll32Proc(pointer hwnd, u32 msg, pointer wp, pointer lp)
     {
     if (msg == (u32)WM_PAINT)
         {
         PAINTSTRUCT ps;
         pointer hdc = BeginPaint(hwnd, (pointer)&ps);
-        SelectObject(hdc, gW32Font);
-        RECT rc;
-        GetClientRect(hwnd, (pointer)&rc);
-        FillRect(hdc, (pointer)&rc, gW32FaceBrush); // clear the exposed area
-        UXScrollView* sv = (UXScrollView* ?)(Object*)GetWindowLongPtrA(hwnd, (i32)GWLP_USERDATA);
-        if (sv != (UXScrollView*)0)
-            {
-            i32 pos = GetScrollPos(hwnd, (i32)SB_VERT);
-            UXRect svAbs = sv.absoluteFrame(); // the child's position in the parent window
-            gW32CurHdc = hdc;
-            // abs -> child-client, scrolled: a view at (vx,vy) draws at (vx-svAbs.x, vy-svAbs.y-pos).
-            gDriver.setDrawOffset((i32)svAbs.x, (i32)svAbs.y + pos);
-            gDriver.treeSetUserDraw((pointer)&ux_surface_userdraw, (pointer)sv.owner);
-            gDriver.treeDraw((pointer)sv.owner.objects(), sv.nativeDocNode(),
-                             (i32)0, (i32)0, (i32)(rc.right - rc.left), (i32)(rc.bottom - rc.top));
-            gDriver.setDrawOffset((i32)0, (i32)0);
-            }
-        w32ScrollFrame(hwnd, hdc, (i32)1);
+        w32ScrollPaint(hwnd, hdc);
         EndPaint(hwnd, (pointer)&ps);
+        return (pointer)0;
+        }
+    if (msg == (u32)$0318) // WM_PRINTCLIENT
+        {
+        w32ScrollPaint(hwnd, wp);
         return (pointer)0;
         }
     if (msg == (u32)WM_NCPAINT)
@@ -452,7 +468,7 @@ pointer UXScroll32Proc(pointer hwnd, u32 msg, pointer wp, pointer lp)
 // WM_PAINT flows backend -> the neutral content callback -> treeDraw -> drawRect.
 pointer UXWin32Proc(pointer hwnd, u32 msg, pointer wp, pointer lp)
     {
-    // WM_PRINTCLIENT (PrintWindow, for windowSnapshot): the same paint, into the DC it is handed
+    // WM_PRINTCLIENT (anything printing the window into a DC): the same paint, into that DC
     if (msg == (u32)$0318)
         {
         pointer pud = GetWindowLongPtrA(hwnd, (i32)GWLP_USERDATA);
@@ -963,12 +979,16 @@ struct W32BmiHeader
 
 // The window snapshot's GDI and user32 calls, by name like StretchDIBits.
 pointer gW32CreateDIBSection;
-pointer gW32PrintWindow;
 pointer gW32BitBlt;
 i32 gW32SnapLoaded;
-i32 gW32UnderWine; // Wine keeps a surface per window, and its PrintWindow leaves the child controls out
-typedef pointer W32CreateDIBSectionFn(pointer hdc, pointer bmi, u32 usage, pointer* bits, pointer section, u32 offset);
+i32 gW32UnderWine; // Wine keeps a surface per window, and its controls ignore WM_PRINT
+pointer gW32PrintWindow;
+pointer gW32GetWindow;
+pointer gW32IsVisible;
 typedef i32 W32PrintWindowFn(pointer hwnd, pointer hdc, u32 flags);
+typedef pointer W32GetWindowFn(pointer hwnd, u32 cmd);
+typedef i32 W32IsVisibleFn(pointer hwnd);
+typedef pointer W32CreateDIBSectionFn(pointer hdc, pointer bmi, u32 usage, pointer* bits, pointer section, u32 offset);
 typedef i32 W32BitBltFn(pointer hdc, i32 x, i32 y, i32 w, i32 h, pointer src, i32 sx, i32 sy, u32 rop);
 void w32_snap_load(void)
     {
@@ -987,10 +1007,51 @@ void w32_snap_load(void)
     if (usr != (pointer)0)
         {
         gW32PrintWindow = GetProcAddress(usr, (u8*)"PrintWindow");
+        gW32GetWindow = GetProcAddress(usr, (u8*)"GetWindow");
+        gW32IsVisible = GetProcAddress(usr, (u8*)"IsWindowVisible");
         }
     pointer nt = LoadLibraryA((pointer)"ntdll.dll");
     gW32UnderWine = nt != (pointer)0 && GetProcAddress(nt, (u8*)"wine_get_version") != (pointer)0 ? (i32)1 : (i32)0;
     }
+// Copy each visible child window's rectangle from `composed` (the compositor's picture of root's
+// client, cw x ch words) into `out` (the driver's own render): the child controls as they painted
+// themselves.  Windows' controls will not paint into another DC (WM_PRINT), but the compositor holds
+// what they painted.
+void w32SnapChildren(pointer root, u32* composed, u32* out, i32 cw, i32 ch)
+    {
+    if (gW32GetWindow == (pointer)0 || gW32IsVisible == (pointer)0)
+        {
+        return;
+        }
+    W32GetWindowFn* gw = (W32GetWindowFn*)gW32GetWindow;
+    W32IsVisibleFn* vis = (W32IsVisibleFn*)gW32IsVisible;
+    pointer c = gw(root, (u32)5); // GW_CHILD
+    while (c != (pointer)0)
+        {
+        if (vis(c) != (i32)0)
+            {
+            RECT wr;
+            GetWindowRect(c, (pointer)&wr);
+            POINT tl;
+            tl.x = wr.left;
+            tl.y = wr.top;
+            ScreenToClient(root, (pointer)&tl);
+            i32 x0 = tl.x < (i32)0 ? (i32)0 : tl.x;
+            i32 y0 = tl.y < (i32)0 ? (i32)0 : tl.y;
+            i32 x1 = tl.x + (wr.right - wr.left) < cw ? tl.x + (wr.right - wr.left) : cw;
+            i32 y1 = tl.y + (wr.bottom - wr.top) < ch ? tl.y + (wr.bottom - wr.top) : ch;
+            for (i32 y = y0; y < y1; y = y + (i32)1)
+                {
+                for (i32 x = x0; x < x1; x = x + (i32)1)
+                    {
+                    out[y * cw + x] = composed[y * cw + x];
+                    }
+                }
+            }
+        c = gw(c, (u32)2); // GW_HWNDNEXT
+        }
+    }
+
 // Open opengl32 and resolve what the DRIVER needs.  wglGetProcAddress is the documented way
 // to reach the extension entry points (the core-profile request, the swap interval); the
 // base ones opengl32 exports by name and GetProcAddress finds them.
@@ -1942,11 +2003,12 @@ class UXWin32Driver : Object<UXViewDriver>
         w[0] = rc.right - rc.left;
         h[0] = rc.bottom - rc.top;
         }
-    // On Windows, PrintWindow into a 32-bit top-down DIB section: the client area, full content (what
-    // DWM composes: the child controls, and correct when the window is covered).  Under Wine, the
-    // window DC's pixels: Wine keeps a surface for each window, which holds the children and is the
-    // window's own even when it is covered, while its PrintWindow leaves the child controls out.
-    // The window DC is also what is used if PrintWindow declines.
+    // Into a 32-bit top-down DIB section.  On Windows the driver renders the window's own content
+    // itself (the content pass WM_PAINT runs, the GL frame included), which holds whether or not the
+    // window is composited: the compositor's copy of a window on a desktop nobody is looking at may
+    // never get the toolkit's paint.  The child controls come from that copy (PrintWindow, full
+    // content), where they painted themselves; they will not paint into another DC.  Under Wine, the
+    // window DC's pixels: Wine keeps a surface for each window, children included, even when covered.
     i32 windowSnapshot(i32 handle, i32 x, i32 y, i32 w, i32 h, u32* out)
         {
         pointer hwnd = handle > (i32)0 && handle < (i32)64 ? gW32Hwnds[handle] : (pointer)0;
@@ -1984,12 +2046,48 @@ class UXWin32Driver : Object<UXViewDriver>
         pointer mem = CreateCompatibleDC((pointer)0);
         pointer old = SelectObject(mem, dib);
         i32 ok = (i32)0;
-        if (gW32PrintWindow != (pointer)0 && gW32UnderWine == (i32)0)
+        if (gW32UnderWine == (i32)0)
             {
-            W32PrintWindowFn* pw = (W32PrintWindowFn*)gW32PrintWindow;
-            ok = pw(hwnd, mem, (u32)3); // PW_CLIENTONLY | PW_RENDERFULLCONTENT
+            // the window's own paint into the bitmap -- the content pass WM_PAINT runs, the GL frame
+            // blitted in it -- and then each child control printing itself over it
+            RECT all;
+            all.left = (i32)0;
+            all.top = (i32)0;
+            all.right = cw;
+            all.bottom = ch;
+            FillRect(mem, (pointer)&all, gW32FaceBrush); // the class background
+            pointer ud = GetWindowLongPtrA(hwnd, (i32)GWLP_USERDATA);
+            if (ud != (pointer)0 && gW32ContentFn != (pointer)0)
+                {
+                pointer was = gW32CurHdc;
+                gW32CurHdc = mem;
+                SelectObject(mem, gW32Font);
+                UXContentFn* f = (UXContentFn*)gW32ContentFn;
+                f((i32)0, (i32)0, (i32)0, cw, ch, ud);
+                gW32CurHdc = was;
+                }
+            // the children as the compositor holds them, over the render (where it has a picture)
+            pointer cbits = (pointer)0;
+            pointer cdib = mk((pointer)0, (pointer)&bmi, (u32)0, &cbits, (pointer)0, (u32)0);
+            if (cdib != (pointer)0 && cbits != (pointer)0 && gW32PrintWindow != (pointer)0)
+                {
+                pointer cmem = CreateCompatibleDC((pointer)0);
+                pointer cold = SelectObject(cmem, cdib);
+                W32PrintWindowFn* pw = (W32PrintWindowFn*)gW32PrintWindow;
+                if (pw(hwnd, cmem, (u32)3) != (i32)0) // PW_CLIENTONLY | PW_RENDERFULLCONTENT
+                    {
+                    w32SnapChildren(hwnd, (u32*)cbits, (u32*)bits, cw, ch);
+                    }
+                SelectObject(cmem, cold);
+                DeleteDC(cmem);
+                }
+            if (cdib != (pointer)0)
+                {
+                DeleteObject(cdib);
+                }
+            ok = (i32)1;
             }
-        if (ok == (i32)0)
+        else
             {
             pointer wdc = GetDC(hwnd);
             W32BitBltFn* bb = (W32BitBltFn*)gW32BitBlt;
