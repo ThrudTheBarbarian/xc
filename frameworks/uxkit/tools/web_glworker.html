@@ -1,0 +1,37 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>running</title>
+<style>html,body{margin:0}canvas{display:block}</style>
+<canvas id="ux-canvas" width="240" height="160"></canvas>
+<script>
+  // run_web_glworker.sh's page: the worker run loop.  Once the app says its frame is presented, the
+  // page reads the frame where it is shown -- the display canvas over #ux-canvas -- and checks the GL
+  // colour and the 2-D view over it.  The verdict, the app's PASS plus these checks, is POSTed back.
+  globalThis.xccConfig = { runLoop: 'worker', workerScript: 'ux_web_browser.js', canvas: '#ux-canvas' };
+  const fails = [];
+  const want = (ok, what) => { if (!ok) fails.push(what); };
+  const out = [];
+  const report = () => fetch('/result', { method: 'POST',
+    body: (fails.length ? 'PAGE-FAIL: ' + fails.join('; ') + '\n' : '') + out.join('\n') });
+  const px = (x, y) => {
+    const d = document.querySelector('canvas.ux-display');
+    if (!d) return null;
+    const p = d.getContext('2d').getImageData(x, y, 1, 1).data;
+    return [p[0], p[1], p[2]];
+  };
+  const near = (p, r, g, b) => p && Math.abs(p[0] - r) < 12 && Math.abs(p[1] - g) < 12 && Math.abs(p[2] - b) < 12;
+  globalThis.xccOut = (s) => {
+    out.push(s);
+    if (/^(PASS|FAIL)/.test(s)) setTimeout(() => {
+      const map = px(200, 20), drawn = px(20, 20), over = px(120, 80);
+      out.push(`frame: cleared ${map} drawn ${drawn} over ${over}`);
+      want(near(map, 64, 128, 191), 'the GL frame is not on screen where the map shows');
+      want(near(drawn, 32, 191, 64), 'the shader draw is not on screen (the left half should be green)');
+      want(near(over, 230, 20, 20), 'the 2-D view is not over the GL frame');
+      report();
+    }, 600);
+  };
+  setTimeout(() => { fails.push('timed out'); report(); }, 15000);
+</script>
+<script src="ux_web_page.js"></script>
+<script src="test_web_glworker.js"></script>

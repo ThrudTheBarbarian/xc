@@ -24,8 +24,21 @@
   const canvas = (!hasDOM && pageCanvas && typeof OffscreenCanvas !== 'undefined')
                  ? new OffscreenCanvas(pageCanvas.width, pageCanvas.height) : pageCanvas;
   const ctx = canvas.getContext('2d');
+  let comp = null; // the worker's composite: GL views under the 2-D layer
   const presentFrame = () => {
     if (hasDOM || !globalThis.xccPost || canvas === pageCanvas) return;
+    const gls = [];
+    for (const arr of glViews.values()) for (const e of arr) if (e.gl) gls.push(e);
+    if (gls.length) {
+      if (!comp || comp.width !== canvas.width || comp.height !== canvas.height)
+        comp = new OffscreenCanvas(canvas.width, canvas.height);
+      const c2 = comp.getContext('2d');
+      c2.clearRect(0, 0, comp.width, comp.height);
+      for (const e of gls) c2.drawImage(e.el, e.x, e.y, e.w, e.h); // stretched over the view
+      c2.drawImage(canvas, 0, 0);                                    // the 2-D layer over the map
+      globalThis.xccPost({ uxFrame: comp.transferToImageBitmap() });
+      return;
+    }
     const bmp = canvas.transferToImageBitmap(); // synchronous -- but it empties the canvas,
     ctx.drawImage(bmp, 0, 0);                   // so put the frame straight back for the next draw
     globalThis.xccPost({ uxFrame: bmp });
@@ -488,28 +501,214 @@
   // (see ux_gfx_target) so the toolkit's 2D composites over the map.
   //
   // The entry points are HOST IMPORTS the renderer declares -- this backend has no
-  // glProc, because on wasm a pointer to an import traps when called.  The names a
-  // WebGL2 context answers are enumerated once (not hardcoded) and each becomes an
-  // import that forwards to the CURRENT context, so the renderer's declarations
-  // bind the same way Apple's do.
+  // glProc, because on wasm a pointer to an import traps when called.  Each is a GLES3
+  // name (the bindings below) translated onto the CURRENT context, so the renderer's
+  // declarations bind the same way Apple's do.
   let curGl = null;
   const glViews = new Map(); // handle -> [{node, el, gl}]
 
-  // (In a worker a GL view would need a DOM canvas the page makes and transfers; until that exists
-  // the worker offers no WebGL, and a GL client draws its fallback.)
-  const glNames = (() => {
-    if (!hasDOM) return [];
-    const c = document.createElement('canvas');
-    const g = c.getContext('webgl2');
-    if (!g) return [];
-    const out = new Set();
-    for (let o = g; o; o = Object.getPrototypeOf(o))
-      for (const k of Object.getOwnPropertyNames(o))
-        if (k.startsWith('gl') && typeof g[k] === 'function') out.add(k);
-    return [...out];
-  })();
-  for (const name of glNames)
-    env[name] = (...args) => (curGl ? curGl[name](...args) : undefined);
+  // IN THE WORKER a GL view is an OffscreenCanvas of its own (a worker has real WebGL2 there), and
+  // the present COMPOSITES: each GL view's canvas at its place, then the 2-D layer over it, into the
+  // one frame the worker posts to the page (presentFrame).  So the GL is still the bottom of the
+  // stack and the toolkit's 2-D lands over it, as on the page, where the browser does the composite.
+  const newGlCanvas = () => hasDOM ? document.createElement('canvas')
+                                   : (typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(1, 1) : null);
+  // THE GL BINDINGS.  A renderer is written against GLES 3 (renderer.xc: integer object names,
+  // pointers into memory, C strings), and WebGL2 is that API with objects, typed arrays and JS
+  // strings.  So each GLES3 entry point is a host import here that translates, onto the CURRENT
+  // context (curGl): integer names to WebGL objects through per-context tables, pointers to views of
+  // the module's memory, strings both ways.  The same source then runs here as on every other GL
+  // backend.  (Unknown names are simply absent: the loader traps on a call to one.)
+  const T = () => {
+    if (!curGl.__ux) curGl.__ux = { buf: [null], tex: [null], vao: [null], sh: [null], prog: [null], fbo: [null],
+                                    rbo: [null], loc: [null], str: {} };
+    return curGl.__ux;
+  };
+  const F32 = () => new Float32Array(globalThis.xcc.memory.buffer);
+  const U16 = () => new Uint16Array(globalThis.xcc.memory.buffer);
+  const num = (v) => typeof v === 'bigint' ? Number(v) : v;
+  const gen = (tab, make) => (n, out) => {
+    const t = T()[tab], m = I32();
+    for (let i = 0; i < n; i++) { t.push(make()); m[((out >>> 0) >> 2) + i] = t.length - 1; }
+  };
+  const del = (tab, kill) => (n, p) => {
+    const t = T()[tab], m = I32();
+    for (let i = 0; i < n; i++) { const id = m[((p >>> 0) >> 2) + i]; if (t[id]) { kill(t[id]); t[id] = null; } }
+  };
+  const obj = (tab, id) => (id ? T()[tab][id] || null : null);
+  const cstrU = (p) => { const m = U8(); let e = p >>> 0; while (m[e]) e++; return utf8.decode(m.slice(p >>> 0, e)); };
+  const putStr = (s, max, lenP, outP) => {
+    const b = new TextEncoder().encode(s || '');
+    const n = Math.max(0, Math.min(b.length, max - 1));
+    if (outP && max > 0) { U8().set(b.subarray(0, n), outP >>> 0); U8()[(outP >>> 0) + n] = 0; }
+    if (lenP) I32()[(lenP >>> 0) >> 2] = n;
+  };
+  const comps = { 0x1908: 4, 0x1907: 3, 0x1903: 1, 0x8227: 2, 0x1906: 1, 0x1909: 1, 0x190A: 2, 0x8D99: 4, 0x8D98: 3, 0x8D94: 1, 0x8228: 2 };
+  const pixView = (type, fmt, w, h, p) => {
+    if (!p) return null;
+    const n = w * h * (comps[fmt] || 4);
+    if (type === 0x1406) return new Float32Array(globalThis.xcc.memory.buffer, p >>> 0, n);
+    if (type === 0x1403 || type === 0x8363 || type === 0x8033 || type === 0x8034 || type === 0x140B)
+      return new Uint16Array(globalThis.xcc.memory.buffer, p >>> 0, type === 0x1403 || type === 0x140B ? n : w * h);
+    return new Uint8Array(globalThis.xcc.memory.buffer, p >>> 0, n);
+  };
+  const G = (f) => (...a) => (curGl ? f(curGl, ...a) : undefined);
+  const glApi = {
+    glActiveTexture: G((g, u) => g.activeTexture(u)),
+    glAttachShader: G((g, p, s) => g.attachShader(obj('prog', p), obj('sh', s))),
+    glBindAttribLocation: G((g, p, i, n) => g.bindAttribLocation(obj('prog', p), i, cstrU(n))),
+    glBindBuffer: G((g, t, id) => g.bindBuffer(t, obj('buf', id))),
+    glBindFramebuffer: G((g, t, id) => g.bindFramebuffer(t, obj('fbo', id))),
+    glBindRenderbuffer: G((g, t, id) => g.bindRenderbuffer(t, obj('rbo', id))),
+    glBindTexture: G((g, t, id) => g.bindTexture(t, obj('tex', id))),
+    glBindVertexArray: G((g, id) => g.bindVertexArray(obj('vao', id))),
+    glBlendColor: G((g, r, gg, b, a) => g.blendColor(r, gg, b, a)),
+    glBlendEquation: G((g, m) => g.blendEquation(m)),
+    glBlendEquationSeparate: G((g, a, b) => g.blendEquationSeparate(a, b)),
+    glBlendFunc: G((g, s, d) => g.blendFunc(s, d)),
+    glBlendFuncSeparate: G((g, a, b, c, d) => g.blendFuncSeparate(a, b, c, d)),
+    glBufferData: G((g, t, size, p, usage) => {
+      size = num(size);
+      if (p) g.bufferData(t, new Uint8Array(globalThis.xcc.memory.buffer, p >>> 0, size), usage);
+      else g.bufferData(t, size, usage);
+    }),
+    glBufferSubData: G((g, t, off, size, p) => g.bufferSubData(t, num(off), new Uint8Array(globalThis.xcc.memory.buffer, p >>> 0, num(size)))),
+    glCheckFramebufferStatus: G((g, t) => g.checkFramebufferStatus(t)),
+    glClear: G((g, m) => g.clear(m)),
+    glClearColor: G((g, r, gg, b, a) => g.clearColor(r, gg, b, a)),
+    glClearDepthf: G((g, d) => g.clearDepth(d)),
+    glClearStencil: G((g, s) => g.clearStencil(s)),
+    glColorMask: G((g, r, gg, b, a) => g.colorMask(!!r, !!gg, !!b, !!a)),
+    glCompileShader: G((g, s) => g.compileShader(obj('sh', s))),
+    glCreateProgram: G((g) => { const t = T().prog; t.push(g.createProgram()); return t.length - 1; }),
+    glCreateShader: G((g, type) => { const t = T().sh; t.push(g.createShader(type)); return t.length - 1; }),
+    glCullFace: G((g, m) => g.cullFace(m)),
+    glDeleteBuffers: G((g, n, p) => del('buf', (o) => g.deleteBuffer(o))(n, p)),
+    glDeleteFramebuffers: G((g, n, p) => del('fbo', (o) => g.deleteFramebuffer(o))(n, p)),
+    glDeleteRenderbuffers: G((g, n, p) => del('rbo', (o) => g.deleteRenderbuffer(o))(n, p)),
+    glDeleteTextures: G((g, n, p) => del('tex', (o) => g.deleteTexture(o))(n, p)),
+    glDeleteVertexArrays: G((g, n, p) => del('vao', (o) => g.deleteVertexArray(o))(n, p)),
+    glDeleteProgram: G((g, p) => { const t = T().prog; if (t[p]) { g.deleteProgram(t[p]); t[p] = null; } }),
+    glDeleteShader: G((g, s) => { const t = T().sh; if (t[s]) { g.deleteShader(t[s]); t[s] = null; } }),
+    glDepthFunc: G((g, f) => g.depthFunc(f)),
+    glDepthMask: G((g, f) => g.depthMask(!!f)),
+    glDepthRangef: G((g, a, b) => g.depthRange(a, b)),
+    glDetachShader: G((g, p, s) => g.detachShader(obj('prog', p), obj('sh', s))),
+    glDisable: G((g, c) => g.disable(c)),
+    glDisableVertexAttribArray: G((g, i) => g.disableVertexAttribArray(i)),
+    glDrawArrays: G((g, m, f, c) => g.drawArrays(m, f, c)),
+    glDrawArraysInstanced: G((g, m, f, c, n) => g.drawArraysInstanced(m, f, c, n)),
+    glDrawElements: G((g, m, c, t, off) => g.drawElements(m, c, t, off >>> 0)),
+    glDrawElementsInstanced: G((g, m, c, t, off, n) => g.drawElementsInstanced(m, c, t, off >>> 0, n)),
+    glEnable: G((g, c) => g.enable(c)),
+    glEnableVertexAttribArray: G((g, i) => g.enableVertexAttribArray(i)),
+    glFinish: G((g) => g.finish()),
+    glFlush: G((g) => g.flush()),
+    glFramebufferRenderbuffer: G((g, t, a, rt, id) => g.framebufferRenderbuffer(t, a, rt, obj('rbo', id))),
+    glFramebufferTexture2D: G((g, t, a, tt, id, lvl) => g.framebufferTexture2D(t, a, tt, obj('tex', id), lvl)),
+    glFrontFace: G((g, m) => g.frontFace(m)),
+    glGenBuffers: G((g, n, p) => gen('buf', () => g.createBuffer())(n, p)),
+    glGenFramebuffers: G((g, n, p) => gen('fbo', () => g.createFramebuffer())(n, p)),
+    glGenRenderbuffers: G((g, n, p) => gen('rbo', () => g.createRenderbuffer())(n, p)),
+    glGenTextures: G((g, n, p) => gen('tex', () => g.createTexture())(n, p)),
+    glGenVertexArrays: G((g, n, p) => gen('vao', () => g.createVertexArray())(n, p)),
+    glGenerateMipmap: G((g, t) => g.generateMipmap(t)),
+    glGetAttribLocation: G((g, p, n) => g.getAttribLocation(obj('prog', p), cstrU(n))),
+    glGetError: G((g) => g.getError()),
+    glGetIntegerv: G((g, pname, out) => {
+      const v = g.getParameter(pname), m = I32(), at = (out >>> 0) >> 2;
+      if (v && typeof v === 'object' && typeof v.length === 'number') { for (let i = 0; i < v.length; i++) m[at + i] = v[i]; }
+      else if (typeof v === 'boolean') m[at] = v ? 1 : 0;
+      else if (typeof v === 'number') m[at] = v;
+      else m[at] = 0;
+    }),
+    glGetFloatv: G((g, pname, out) => {
+      const v = g.getParameter(pname), m = F32(), at = (out >>> 0) >> 2;
+      if (v && typeof v === 'object' && typeof v.length === 'number') { for (let i = 0; i < v.length; i++) m[at + i] = v[i]; }
+      else m[at] = typeof v === 'number' ? v : (v ? 1 : 0);
+    }),
+    glGetProgramInfoLog: G((g, p, max, lenP, outP) => putStr(g.getProgramInfoLog(obj('prog', p)), max, lenP, outP)),
+    glGetProgramiv: G((g, p, pname, out) => {
+      const pr = obj('prog', p);
+      const v = pname === 0x8B84 ? (g.getProgramInfoLog(pr) || '').length + 1 : g.getProgramParameter(pr, pname);
+      I32()[(out >>> 0) >> 2] = typeof v === 'boolean' ? (v ? 1 : 0) : (v | 0);
+    }),
+    glGetShaderInfoLog: G((g, s, max, lenP, outP) => putStr(g.getShaderInfoLog(obj('sh', s)), max, lenP, outP)),
+    glGetShaderiv: G((g, s, pname, out) => {
+      const sh = obj('sh', s);
+      const v = pname === 0x8B84 ? (g.getShaderInfoLog(sh) || '').length + 1
+              : pname === 0x8B88 ? (g.getShaderSource(sh) || '').length + 1 : g.getShaderParameter(sh, pname);
+      I32()[(out >>> 0) >> 2] = typeof v === 'boolean' ? (v ? 1 : 0) : (v | 0);
+    }),
+    glGetString: G((g, name) => {
+      const t = T();
+      if (t.str[name]) return t.str[name];
+      const s = name === 0x1F03 ? (g.getSupportedExtensions() || []).join(' ') : String(g.getParameter(name) || '');
+      const b = new TextEncoder().encode(s);
+      const p = globalThis.xcc.instance.exports._xt_browser_alloc(b.length + 1);
+      U8().set(b, p >>> 0);
+      U8()[(p >>> 0) + b.length] = 0;
+      t.str[name] = p;
+      return p;
+    }),
+    glGetUniformLocation: G((g, p, n) => {
+      const l = g.getUniformLocation(obj('prog', p), cstrU(n));
+      if (!l) return -1;
+      const t = T().loc;
+      t.push(l);
+      return t.length - 1;
+    }),
+    glIsEnabled: G((g, c) => (g.isEnabled(c) ? 1 : 0)),
+    glLineWidth: G((g, w) => g.lineWidth(w)),
+    glLinkProgram: G((g, p) => g.linkProgram(obj('prog', p))),
+    glPixelStorei: G((g, pn, v) => g.pixelStorei(pn, v)),
+    glReadPixels: G((g, x, y, w, h, fmt, type, p) => g.readPixels(x, y, w, h, fmt, type, pixView(type, fmt, w, h, p))),
+    glRenderbufferStorage: G((g, t, f, w, h) => g.renderbufferStorage(t, f, w, h)),
+    glRenderbufferStorageMultisample: G((g, t, s, f, w, h) => g.renderbufferStorageMultisample(t, s, f, w, h)),
+    glScissor: G((g, x, y, w, h) => g.scissor(x, y, w, h)),
+    glShaderSource: G((g, s, count, strs, lens) => {
+      const m = I32();
+      let src = '';
+      for (let i = 0; i < count; i++) {
+        const p = m[((strs >>> 0) >> 2) + i] >>> 0;
+        const n = lens ? m[((lens >>> 0) >> 2) + i] : -1;
+        src += n >= 0 ? utf8.decode(U8().slice(p, p + n)) : cstrU(p);
+      }
+      g.shaderSource(obj('sh', s), src);
+    }),
+    glStencilFunc: G((g, f, r, m) => g.stencilFunc(f, r, m)),
+    glStencilMask: G((g, m) => g.stencilMask(m)),
+    glStencilOp: G((g, a, b, c) => g.stencilOp(a, b, c)),
+    glTexImage2D: G((g, t, lvl, internal, w, h, border, fmt, type, p) =>
+      g.texImage2D(t, lvl, internal, w, h, border, fmt, type, pixView(type, fmt, w, h, p))),
+    glTexSubImage2D: G((g, t, lvl, x, y, w, h, fmt, type, p) =>
+      g.texSubImage2D(t, lvl, x, y, w, h, fmt, type, pixView(type, fmt, w, h, p))),
+    glTexParameteri: G((g, t, pn, v) => g.texParameteri(t, pn, v)),
+    glTexParameterf: G((g, t, pn, v) => g.texParameterf(t, pn, v)),
+    glUniform1f: G((g, l, a) => g.uniform1f(T().loc[l] || null, a)),
+    glUniform2f: G((g, l, a, b) => g.uniform2f(T().loc[l] || null, a, b)),
+    glUniform3f: G((g, l, a, b, c) => g.uniform3f(T().loc[l] || null, a, b, c)),
+    glUniform4f: G((g, l, a, b, c, d) => g.uniform4f(T().loc[l] || null, a, b, c, d)),
+    glUniform1i: G((g, l, a) => g.uniform1i(T().loc[l] || null, a)),
+    glUniform2i: G((g, l, a, b) => g.uniform2i(T().loc[l] || null, a, b)),
+    glUniform3i: G((g, l, a, b, c) => g.uniform3i(T().loc[l] || null, a, b, c)),
+    glUniform4i: G((g, l, a, b, c, d) => g.uniform4i(T().loc[l] || null, a, b, c, d)),
+    glUseProgram: G((g, p) => g.useProgram(obj('prog', p))),
+    glVertexAttribDivisor: G((g, i, d) => g.vertexAttribDivisor(i, d)),
+    glVertexAttribIPointer: G((g, i, size, type, stride, off) => g.vertexAttribIPointer(i, size, type, stride, off >>> 0)),
+    glVertexAttribPointer: G((g, i, size, type, norm, stride, off) => g.vertexAttribPointer(i, size, type, !!norm, stride, off >>> 0)),
+    glViewport: G((g, x, y, w, h) => g.viewport(x, y, w, h)),
+  };
+  for (const [n, k] of [['1', 1], ['2', 2], ['3', 3], ['4', 4]]) {
+    glApi['glUniform' + n + 'fv'] = G((g, l, count, p) => g['uniform' + n + 'fv'](T().loc[l] || null, new Float32Array(globalThis.xcc.memory.buffer, p >>> 0, count * k)));
+    glApi['glUniform' + n + 'iv'] = G((g, l, count, p) => g['uniform' + n + 'iv'](T().loc[l] || null, new Int32Array(globalThis.xcc.memory.buffer, p >>> 0, count * k)));
+  }
+  for (const [n, k] of [['2', 4], ['3', 9], ['4', 16]])
+    glApi['glUniformMatrix' + n + 'fv'] = G((g, l, count, tr, p) =>
+      g['uniformMatrix' + n + 'fv'](T().loc[l] || null, !!tr, new Float32Array(globalThis.xcc.memory.buffer, p >>> 0, count * k)));
+  // offered only where there is WebGL2 at all (the Node rig has none, and binds nothing here)
+  if ((() => { const c = newGlCanvas(); return !!(c && c.getContext('webgl2')); })())
+    Object.assign(env, glApi);
 
   // The drawable's pixel size: the view's CSS size at the device pixel ratio, scaled down by one
   // factor on both sides if that is more than this context can hold (a maximised window at 2x on an
@@ -542,17 +741,33 @@
     if (!arr) { arr = []; glViews.set(h, arr); }
     let e = arr.find((v) => v.node === node);
     if (!e) {
-      const el = document.createElement('canvas');
-      el.style.position = 'absolute';
-      canvas.parentNode.insertBefore(el, canvas); // BELOW the 2D canvas: the map first
+      const el = newGlCanvas();
+      if (!el) return;
+      if (hasDOM) {
+        el.style.position = 'absolute';
+        canvas.parentNode.insertBefore(el, canvas); // BELOW the 2D canvas: the map first
+        // ...which holds only if the 2-D canvas is POSITIONED too: CSS paints a positioned element
+        // over an unpositioned one whatever the order, and the map would cover the 2-D layer.
+        if (getComputedStyle(canvas).position === 'static') canvas.style.position = 'relative';
+      }
       s.hasGl = true;
-      e = { node, el, gl: el.getContext('webgl2', { alpha: true, premultipliedAlpha: true, antialias: false }) };
+      // a worker's frame is read back by the composite, later than the draw: keep the buffer
+      e = { node, el, gl: el.getContext('webgl2', { alpha: true, premultipliedAlpha: true, antialias: false,
+                                                    preserveDrawingBuffer: !hasDOM }) };
       arr.push(e);
     }
-    e.el.style.left = (s.x + x) + 'px';
-    e.el.style.top = (s.y + y) + 'px';
-    e.el.style.width = w + 'px';
-    e.el.style.height = hh + 'px';
+    e.x = s.x + x;
+    e.y = s.y + y;
+    e.w = w;
+    e.h = hh;
+    if (hasDOM) {
+      // where the 2-D canvas is in its (shared) containing block, plus the view's place in it: the
+      // canvas need not sit at the page's origin (a menu bar above it, a margin)
+      e.el.style.left = (canvas.offsetLeft + s.x + x) + 'px';
+      e.el.style.top = (canvas.offsetTop + s.y + y) + 'px';
+      e.el.style.width = w + 'px';
+      e.el.style.height = hh + 'px';
+    }
     const [pw, ph] = glPixelSize(e.gl, w, hh);
     if (e.el.width !== pw || e.el.height !== ph) {
       e.el.width = pw;
@@ -571,7 +786,9 @@
     if (!arr) return;
     for (const e of arr) if (e.node === node && e.gl) { curGl = e.gl; e.gl.viewport(0, 0, e.el.width, e.el.height); }
   };
-  env.ux_gl_present = (h, node) => {}; // the browser composites: nothing to swap
+  // On a page the browser composites: nothing to swap.  In the worker the frame is composited and
+  // posted now, as the 2-D present does.
+  env.ux_gl_present = (h, node) => { if (!hasDOM) presentFrame(); };
 
   globalThis.xccImports = Object.assign(globalThis.xccImports || {}, { env });
 })();

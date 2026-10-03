@@ -1,0 +1,12 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>running</title>
+<style>html,body{margin:0;background:#fff}canvas{display:block}</style>
+<canvas id="ux-canvas" width="240" height="160"></canvas>
+<script>
+  // run_web_glworker.sh's PAGE leg: the same app on a plain page (no worker), where a GL view is a
+  // DOM canvas under the 2-D one and the browser composites.  The gate checks a screenshot.
+  globalThis.xccOut = (s) => { if (/^(PASS|FAIL)/.test(s)) document.title = s; };
+</script>
+<script src="ux_web_browser.js"></script>
+<script src="test_web_glworker.js"></script>
