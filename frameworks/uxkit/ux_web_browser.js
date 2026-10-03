@@ -172,6 +172,17 @@
       globalThis.xccPost({ uxAlert: { icon, lines: str(lp).split('|'), buttons: str(bp).split('|'), def } });
       return 1;
     },
+    // A focused text field as a real <input> on the page (ux_web_page.js): its rect in CANVAS
+    // coordinates (the window's origin added), its text, whether it is a password.
+    ux_field_overlay_show: (win, token, x, y, w, h, tp, secure, cap) => {
+      if (!globalThis.xccPost) return 0;
+      const s = wins.get(win);
+      const m = U8(); let e = tp >>> 0; while (m[e]) e++;
+      const text = new TextDecoder().decode(m.slice(tp >>> 0, e));
+      globalThis.xccPost({ uxField: { token, x: (s ? s.x : 0) + x, y: (s ? s.y : 0) + y, w, h, text, secure, cap } });
+      return 1;
+    },
+    ux_field_overlay_hide: (token) => { if (globalThis.xccPost) globalThis.xccPost({ uxFieldEnd: token }); },
     ux_menu_state: (t, j, what, on) => {
       const st = { t, j, what, on };
       if (globalThis.xccPost) globalThis.xccPost({ uxMenuState: st });

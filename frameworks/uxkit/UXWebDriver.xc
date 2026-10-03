@@ -62,6 +62,7 @@ struct WebNode
     WebNode* nodes;
     i32 count;
     i32 cap;
+    i32 win; // the window it is realized into (realizeTree), for page overlays
     }
 
     // A field editor: the app's buffer, capacity, optional validation — the same
@@ -445,6 +446,95 @@ class UXWebDriver : Object<UXViewDriver>
     // one is ignored.
     UXPopUpButton* gWebPopup;
     i32 gWebPopupToken;
+    // The text field the page is editing in a real <input> (the worker run loop): its token, and
+    // the UTF-8 text arriving through the ring (types 12, 13) before it is applied.
+    UXTextField* gWebField;
+    i32 gWebFieldToken;
+    u8* gWebFieldIn;
+    i32 gWebFieldInLen;
+    i32 gWebFieldInGot;
+    // A field gains the keyboard: ask the page to put a real <input> over it, for IME, selection and
+    // a mobile keyboard, which a canvas cannot give.  It loses it: take the input away.
+    void fieldOverlay(WebTree* t, i32 obj, WebField* f, bool begin)
+        {
+        UXTextField* tf = (UXTextField* ?)(Object*)t.nodes[obj].peer;
+        if (!begin)
+            {
+            if (gWebField != (UXTextField*)0 && gWebField == tf)
+                {
+                ux_field_overlay_hide(gWebFieldToken);
+                gWebField = (UXTextField*)0;
+                }
+            return;
+            }
+        if (tf == (UXTextField*)0 || t.win == (i32)0)
+            {
+            return;
+            }
+        i32 ax = (i32)0;
+        i32 ay = (i32)0;
+        i32 aw = (i32)0;
+        i32 ah = (i32)0;
+        self.structAbsFrame((pointer)t, obj, &ax, &ay, &aw, &ah);
+        gWebFieldToken = gWebFieldToken + (i32)1;
+        if (ux_field_overlay_show(t.win, gWebFieldToken, ax, ay, aw, ah, f.buf, f.secure, f.cap) != (i32)0)
+            {
+            gWebField = tf;
+            }
+        }
+    // The page's <input> changed: its whole text, as UTF-8 in 20-byte pieces (four bytes to an int).
+    void fieldTextBegin(i32 token, i32 len)
+        {
+        if (token != gWebFieldToken || len < (i32)0)
+            {
+            return;
+            }
+        if (gWebFieldIn != (u8*)0)
+            {
+            free((pointer)gWebFieldIn);
+            }
+        gWebFieldIn = (u8*)malloc((u32)(len + (i32)1));
+        gWebFieldInLen = len;
+        gWebFieldInGot = (i32)0;
+        if (len == (i32)0)
+            {
+            self.fieldTextApply();
+            }
+        }
+    void fieldTextPiece(i32* r)
+        {
+        if (r[1] != gWebFieldToken || gWebFieldIn == (u8*)0)
+            {
+            return;
+            }
+        i32 off = r[2];
+        for (i32 k = (i32)0; k < (i32)20; k = k + (i32)1)
+            {
+            i32 at = off + k;
+            if (at >= gWebFieldInLen)
+                {
+                break;
+                }
+            gWebFieldIn[at] = (u8)((r[(i32)3 + k / (i32)4] >> ((k % (i32)4) * (i32)8)) & (i32)$FF);
+            gWebFieldInGot = gWebFieldInGot + (i32)1;
+            }
+        if (gWebFieldInGot >= gWebFieldInLen)
+            {
+            self.fieldTextApply();
+            }
+        }
+    void fieldTextApply(void)
+        {
+        if (gWebField == (UXTextField*)0 || gWebFieldIn == (u8*)0)
+            {
+            return;
+            }
+        gWebFieldIn[gWebFieldInLen] = (u8)0;
+        gWebField.setText(gWebFieldIn);
+        gWebField.fieldDidChange();
+        free((pointer)gWebFieldIn);
+        gWebFieldIn = (u8*)0;
+        }
     i32 runPopupMenu(pointer peer, i32 x, i32 y)
         {
         UXPopUpButton* p = (UXPopUpButton* ?)(Object*)peer; // through Object*, so the cast is checked
@@ -523,6 +613,7 @@ class UXWebDriver : Object<UXViewDriver>
         WebTree* t = (WebTree*)malloc((u32)sizeof(WebTree));
         t.cap = (i32)16;
         t.count = (i32)0;
+        t.win = (i32)0;
         t.nodes = (WebNode*)calloc((u32)t.cap, (u32)sizeof(WebNode));
         return (pointer)t;
         }
@@ -783,6 +874,7 @@ class UXWebDriver : Object<UXViewDriver>
     void realizeTree(i32 handle, pointer tree)
         {
         WebTree* t = (WebTree*)tree;
+        t.win = handle;
         for (i32 i = (i32)0; i < t.count; i = i + (i32)1)
             {
             if (t.nodes[i].kind != (i32)UXKindGLView)
@@ -1022,6 +1114,7 @@ class UXWebDriver : Object<UXViewDriver>
         if (mode == (i32)UXEditBegin || mode == (i32)UXEditEnd)
             {
             caret[0] = len;
+            self.fieldOverlay((WebTree*)tree, obj, f, mode == (i32)UXEditBegin);
             return (i32)1;
             }
         i32 ch = key & (i32)$FF;
@@ -1299,6 +1392,27 @@ class UXWebDriver : Object<UXViewDriver>
         else if (t == (i32)6)
             {
             self.webPresentAll();
+            ev.kind = (u8)UXEventNone;
+            }
+        else if (t == (i32)12)
+            {
+            // the page's <input> edited: a = token, b = the UTF-8 length that follows
+            self.fieldTextBegin(r[1], r[2]);
+            ev.kind = (u8)UXEventNone;
+            }
+        else if (t == (i32)13)
+            {
+            // ...and a piece of it: a = token, b = offset, c..g = 20 bytes, four to an int
+            self.fieldTextPiece(r);
+            ev.kind = (u8)UXEventNone;
+            }
+        else if (t == (i32)14)
+            {
+            // Return in the page's <input>: a = token
+            if (r[1] == gWebFieldToken && gWebField != (UXTextField*)0)
+                {
+                gWebField.fieldDidSubmit();
+                }
             ev.kind = (u8)UXEventNone;
             }
         else

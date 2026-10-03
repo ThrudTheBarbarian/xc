@@ -243,6 +243,56 @@
     if (d) d.focus();
   };
 
+  // THE TEXT FIELD (UXTextField, in the worker run loop): while a field has the keyboard, a REAL
+  // <input> sits over it, so the browser's own editing works -- IME composition, selection, the
+  // clipboard, a phone's keyboard -- none of which a canvas can offer.  Every change goes back as
+  // the whole text, UTF-8 through the ring (type 12: token + length, then type 13: token + offset +
+  // twenty bytes), and Return as type 14.  Composition is sent once it ends, not stroke by stroke.
+  let field = null;      // { el, token }
+  const fieldPicks = [];
+  globalThis.uxFieldSent = fieldPicks; // what was sent, for a test to read
+  const fieldSend = () => {
+    if (!field || !globalThis.xccPushEvent) return;
+    const bytes = new TextEncoder().encode(field.el.value).slice(0, Math.max(0, field.cap - 1));
+    globalThis.xccPushEvent(12, field.token, bytes.length);
+    for (let off = 0; off < bytes.length; off += 20) {
+      const w = [0, 0, 0, 0, 0];
+      for (let k = 0; k < 20 && off + k < bytes.length; k++) w[k >> 2] |= bytes[off + k] << ((k & 3) * 8);
+      globalThis.xccPushEvent(13, field.token, off, w[0], w[1], w[2], w[3], w[4]);
+    }
+    fieldPicks.push(field.el.value);
+  };
+  const fieldHide = (token) => {
+    if (field && (token === undefined || token === field.token)) { field.el.remove(); field = null; }
+  };
+  const fieldShow = (f) => {
+    fieldHide();
+    const canvas = document.getElementById('ux-canvas') || document.getElementById('xcc-canvas') ||
+                   document.querySelector('canvas');
+    const r = canvas ? canvas.getBoundingClientRect() : { left: 0, top: 0 };
+    const el = document.createElement('input');
+    el.type = f.secure ? 'password' : 'text';
+    el.className = 'ux-field';
+    el.value = f.text;
+    el.style.cssText = `position:absolute; z-index:900; box-sizing:border-box; margin:0;
+      left:${r.left + window.scrollX + f.x}px; top:${r.top + window.scrollY + f.y}px;
+      width:${f.w}px; height:${f.h}px; font:13px system-ui, sans-serif; padding:0 4px;
+      border:1px solid #2a6fdb; border-radius:3px; background:#fff; color:#1c1b1f; outline:none;`;
+    field = { el, token: f.token, cap: f.cap || 256 };
+    el.addEventListener('input', (e) => { if (!e.isComposing) fieldSend(); });
+    el.addEventListener('compositionend', () => fieldSend());
+    el.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.isComposing) {
+        e.preventDefault();
+        fieldSend();
+        if (globalThis.xccPushEvent) globalThis.xccPushEvent(14, field.token);
+      }
+    });
+    document.body.appendChild(el);
+    el.focus();
+    el.setSelectionRange(el.value.length, el.value.length);
+  };
+
   // The worker's settings snapshot, for xccConfig.workerData: every stored setting, by key.
   const settingsSnapshot = () => {
     const out = {};
@@ -262,7 +312,9 @@
   // The worker's posts (the loader forwards them here).
   const prev = globalThis.xccOnMessage;
   globalThis.xccOnMessage = (p) => {
-    if (p && p.uxTitle !== undefined) { document.title = p.uxTitle; }
+    if (p && p.uxField !== undefined) fieldShow(p.uxField);
+    else if (p && p.uxFieldEnd !== undefined) fieldHide(p.uxFieldEnd);
+    else if (p && p.uxTitle !== undefined) { document.title = p.uxTitle; }
     else if (p && p.uxAppIcon !== undefined) {   // the worker's app icon, as the page's favicon
       const a = p.uxAppIcon, c = document.createElement('canvas');
       c.width = a.w; c.height = a.h;

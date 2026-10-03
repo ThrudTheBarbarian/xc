@@ -173,6 +173,9 @@ every keystroke with no extra code.
     <img src="/uxkit/field-web.png" alt="UXTextField on the web backend" width="220" />
 
     The theme's field bezel with the shared edit engine's caret, drawn on canvas with the same Aristo art as GEM.
+    In the interactive (worker) run loop, a field with the keyboard is edited in a real `<input>` the page
+    lays over it, so the browser's own editing works: IME composition, selection, the clipboard and a phone's
+    keyboard. Its text comes back as UTF-8, and Return is the field's submit.
   </TabItem>
   <TabItem label="iOS">
     <img src="/uxkit/field-ios.png" alt="UXTextField on iOS" width="220" />

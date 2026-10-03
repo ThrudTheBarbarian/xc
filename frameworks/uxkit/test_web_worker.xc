@@ -15,8 +15,31 @@
 #import "UXMenu.xc"
 #import "UXAlert.xc"
 #import "UXGeometry.xc"
+#import "UXControl.xc"
 
 i32 gNew;
+i32 gChanges;
+i32 gSubmits;
+u8* gSubmitted;
+bool sameBytes(u8* a, u8* b)
+    {
+    i32 i = (i32)0;
+    while (a[i] != (u8)0 && a[i] == b[i])
+        {
+        i = i + (i32)1;
+        }
+    return a[i] == b[i];
+    }
+void onFieldChange(UXTextField* f)
+    {
+    gChanges = gChanges + (i32)1;
+    }
+void onFieldSubmit(UXTextField* f)
+    {
+    gSubmits = gSubmits + (i32)1;
+    gSubmitted = UXStr.dup(f.text());
+    Stdio.printf("field: submitted \"%s\"\n", f.text());
+    }
 UXApplication* gTheApp;
 class Ctl : Object
     {
@@ -70,9 +93,20 @@ void main(void)
     i32 answer = a.runModal();
     Stdio.printf("alert answered %d\n", answer);
 
+    // a text field with the keyboard: the page puts a real <input> over it
+    UXTextField* field = new UXTextField();
+    win.contentView.addSubview(field, UXGeom.make((i16)10, (i16)40, (i16)200, (i16)24));
+    field.setOnChange(&onFieldChange);
+    field.setOnSubmit(&onFieldSubmit);
+    win.tree.finalise();
+    win.displayAll();
+    win.makeFirstResponder(field);
+
     gNew = (i32)0;
     app.setDelegate(new Starter());
     app.run(); // until the page's pick fires File > New
-    bool pass = answer == (i32)2 && gNew == (i32)1;
-    Stdio.printf(pass ? "PASS: worker run loop -- a DOM alert answered, a DOM menu pick fired\n" : "FAIL: alert %d, new %d\n", answer, gNew);
+    bool typed = gSubmits == (i32)1 && gChanges >= (i32)1 && gSubmitted != (u8*)0 && sameBytes(gSubmitted, (u8*)"héllo 日本");
+    bool pass = answer == (i32)2 && gNew == (i32)1 && typed;
+    Stdio.printf(pass ? "PASS: worker run loop -- a DOM alert answered, text typed in a real <input>, a DOM menu pick fired\n"
+                      : "FAIL: alert %d, new %d, changes %d, submits %d\n", answer, gNew, gChanges, gSubmits);
     }
