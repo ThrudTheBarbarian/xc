@@ -100,6 +100,7 @@ a platform. The platforms are grouped by realm:
 - [`UXGraphics`](/compiler/api/uxkit/uxgraphics/)
 - [`UXImage`](/compiler/api/uxkit/uximage/)
 - [`UXJpeg`](/compiler/api/uxkit/uxjpeg/)
+- [`UXMovie`](/compiler/api/uxkit/uxmovie/)
 - [`UXIndexSet`](/compiler/api/uxkit/uxindexset/)
 - [`UXNull`](/compiler/api/uxkit/uxnull/)
 - [`UXPainter`](/compiler/api/uxkit/uxpainter/)

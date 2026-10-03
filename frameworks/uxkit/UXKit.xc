@@ -71,6 +71,7 @@ i32 UXK_ABI_SYM(void)
 #import "UXIndexSet.xc"
 #import "UXJSON.xc"
 #import "UXJpeg.xc"   // the image decoders: JPEG (baseline) and PNG
+#import "UXMovie.xc"  // frames to a WebM movie (VP8)
 #import "UXKeyValueStore.xc"
 #import "UXLog.xc"
 #import "UXMarkdown.xc"

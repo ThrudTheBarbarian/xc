@@ -1,0 +1,51 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>movie</title>
+<video id="v" muted playsinline src="test_movie.webm"></video>
+<canvas id="c"></canvas>
+<script>
+  // run_movie.sh's page: the browser plays test_movie.webm.  It reports what the browser makes of it
+  // (size, duration), then plays it and samples the picture as it goes.  The frames are told apart
+  // by where the moving box starts (its left edge moves 5 px a frame), so the report says which
+  // frames the browser showed, in order; at the end it reads back pixels of the last frame.  (A
+  // paused video does not repaint after a seek in headless Chrome, so it is played, not seeked.)
+  const v = document.getElementById('v');
+  const c = document.getElementById('c');
+  const out = [];
+  const seen = [];
+  let g = null;
+  const report = () => fetch('/result', { method: 'POST', body: out.join('\n') });
+  const px = (x, y) => g.getImageData(x, y, 1, 1).data;
+  const red = (p) => p[0] > 170 && p[1] < 80 && p[2] < 80;
+  const frameShown = () => {
+    g.drawImage(v, 0, 0);
+    for (let k = 0; k < 5; k++) {
+      const x = 61 + 5 * k;            // the box's first column in frame k
+      if (red(px(x + 2, 50)) && !red(px(x - 3, 50))) return k;
+    }
+    return -1;
+  };
+  v.addEventListener('error', () => { out.push('ERROR ' + (v.error && v.error.code)); report(); });
+  v.addEventListener('loadedmetadata', () => {
+    out.push('size ' + v.videoWidth + 'x' + v.videoHeight);
+    out.push('duration ' + v.duration.toFixed(3));
+    c.width = v.videoWidth; c.height = v.videoHeight;
+    g = c.getContext('2d', { willReadFrequently: true });
+    v.playbackRate = 0.25;               // 1.76 s of playing: every frame is on screen long enough
+    v.play();
+    const sample = () => {
+      const k = frameShown();
+      if (k >= 0 && seen[seen.length - 1] !== k) seen.push(k);
+      if (!v.ended) { setTimeout(sample, 15); return; }
+      frameShown();
+      out.push('frames shown ' + seen.join(','));
+      for (const [x, y] of [[100, 50], [30, 100], [180, 6]]) {
+        const p = px(x, y);
+        out.push('pixel ' + x + ',' + y + ' ' + p[0] + ' ' + p[1] + ' ' + p[2]);
+      }
+      report();
+    };
+    sample();
+  });
+  setTimeout(() => { out.push('TIMEOUT frames shown ' + seen.join(',')); report(); }, 15000);
+</script>
