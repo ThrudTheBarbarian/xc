@@ -252,6 +252,7 @@ class Xt6502
     // through a scratch byte at the call site instead.)
     Map* _spFrameBase;          // value -> its frame offset
     i32 _spDelta;               // how far SP has moved since the frame base
+    i32 _maxSpOffset;           // the largest d,SP offset emitted (bug 577)
 
     String* operandFor(IRValue* v, u32 bi)
     {
@@ -262,6 +263,7 @@ class Xt6502
             // creation and this access shifts it, so the delta is part of the
             // address, not a correction applied later.
             i32 off = ((Number*)sp).asI32() + (i32)bi + _spDelta;
+            if (off > _maxSpOffset) _maxSpOffset = off;
             String* o = String.withCString("+");
             o.appendFormat("%ld,SP", off);
             return o;
@@ -284,6 +286,7 @@ class Xt6502
         Object* sp = _spFrameBase.get((Hashable*)v);
         if (sp != (Object*)0) {
             i32 off = ((Number*)sp).asI32() + _spDelta;
+            if (off > _maxSpOffset) _maxSpOffset = off;
             String* o = String.withCString("(+");
             o.appendFormat("%ld,SP)", off);
             return o;
@@ -1415,9 +1418,18 @@ class Xt6502
         placeAddressableValues(fn, pinned);
         computeKnownAddrs(fn);
         if (!checkFrameBudget(fn)) return;
+        _maxSpOffset = (i32)0;
         emitPrologue(fn);
         for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
             emitBlock(fn, (IRBlock*)fn.blocks().get(b));
+        // Bug 577: the budget counts frame and parameters, but the offsets
+        // also carry call staging, so a frame inside the budget could still
+        // need +128,SP, which no d,SP operand encodes. That failed in the
+        // assembler; it is the budget's refusal instead.
+        if (_maxSpOffset > (i32)127) {
+            unsupported(String.withCString("frame:budget"));
+            return;
+        }
         _out.appendCString("\n");
     }
 

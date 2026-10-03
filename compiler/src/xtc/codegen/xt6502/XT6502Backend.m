@@ -72,6 +72,9 @@ static XTSourceLocation *synthLoc(void) {
 // operand adds spDelta so accesses mid-push stay correct. Updated only
 // through emitPHA/emitPLA/emitAddSP. 0 in settled body code.
 @property (nonatomic) NSInteger spDelta;
+// The largest d,SP offset emitted (frame + byte + spDelta). A d,SP operand
+// is a signed byte, so anything past +127 cannot be encoded (bug 577).
+@property (nonatomic) NSInteger maxSpOffset;
 // valueId → main-RAM spill label, for pinned locals that don't fit ZP
 // (STACK-ABI §11.3). AddrOf of such a value yields the 16-bit label
 // address instead of a ZP byte.
@@ -385,6 +388,7 @@ typedef NS_ENUM(uint8_t, XT6502KnownAddrKind) {
     NSNumber *sp = ctx.spFrameBase[@(vid)];
     if (sp) {
         NSInteger off = sp.integerValue + (NSInteger)bi + ctx.spDelta;
+        if (off > ctx.maxSpOffset) ctx.maxSpOffset = off;
         return [NSString stringWithFormat:@"+%ld,SP", (long)off];
     }
     NSNumber *zp = ctx.zpBase[@(vid)];
@@ -407,6 +411,7 @@ typedef NS_ENUM(uint8_t, XT6502KnownAddrKind) {
     NSNumber *sp = ctx.spFrameBase[@(vid)];
     if (sp) {
         NSInteger off = sp.integerValue + ctx.spDelta;
+        if (off > ctx.maxSpOffset) ctx.maxSpOffset = off;
         return [NSString stringWithFormat:@"(+%ld,SP)", (long)off];
     }
     NSNumber *zp = ctx.zpBase[@(vid)];
@@ -4219,6 +4224,20 @@ static NSString *padLeft(NSString *s, NSUInteger width) {
         if (block.terminator) {
             if (![self emitInsn:block.terminator inBlock:block ctx:ctx diagnostics:diag]) return NO;
         }
+    }
+    // Bug 577: the 119-byte budget counts the frame and the parameters, but
+    // the offsets also carry call staging (spDelta), so a frame inside the
+    // budget could still need +128,SP, which no d,SP operand can encode. That
+    // failed in the assembler; it is the budget's refusal instead.
+    if (ctx.maxSpOffset > 127) {
+        if (diag) {
+            [diag emitError:[NSString stringWithFormat:
+                @"xt6502: function '%@' needs an SP offset of +%ld while staging a call, past "
+                @"the +127 a d,SP operand reaches; automatic frame splitting is a future task "
+                @"(STACK-ABI §7)",
+                fn.name, (long)ctx.maxSpOffset] at:synthLoc()];
+        }
+        return NO;
     }
     [out appendString:@"\n"];
     return YES;
