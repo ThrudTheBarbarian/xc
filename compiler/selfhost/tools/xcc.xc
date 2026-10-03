@@ -700,6 +700,41 @@ String* appleSdkRoot(DriverOptions* d)
 // its install-name and exports (per platform), a real dylib for its export
 // trie. Each claims the imports it exports, so a symbol binds to the library
 // that has it rather than falling through to libSystem.
+// Bug 580: a C function the program calls that no linked library exports
+// used to bind to libSystem and fail only at launch (`Symbol not found`).
+// With an SDK at hand, libSystem's own export list says which imports it
+// really has; any other unclaimed import is a link error naming it. Without
+// an SDK nothing is known, and the old behaviour stands.
+void checkSystemImports(DriverOptions* d, MachO* m)
+{
+    // macOS only for now: the iOS SDKs inline libSystem's sub-libraries as
+    // further documents in the same .tbd, which the reader does not merge yet,
+    // so `write` and the pthread calls would look missing (580 follow-up).
+    if (isIos(d)) return;
+    String* sdk = appleSdkRoot(d);
+    if (sdk == (String*)0) return;
+    String* path = String.withString(sdk);
+    path.appendCString("/usr/lib/libSystem.B.tbd");
+    if (!Files.exists(path)) return;
+    Tbd.setPlatform(isIos(d) ? d.arch() : String.withCString("macos"));
+    TbdInfo* t = Tbd.inspect(path, sdk);
+    if (t == (TbdInfo*)0) return;
+    Map* have = new Map();
+    Array* syms = t.symbols();
+    for (u32 i = (u32)0; i < syms.count(); i = i + (u32)1)
+        have.set((Hashable*)syms.get(i), syms.get(i));
+    Array* bad = m.unexportedSystemImports(have);
+    if (bad.count() == (u32)0) return;
+    for (u32 i = (u32)0; i < bad.count(); i = i + (u32)1) {
+        String* s = (String*)bad.get(i);
+        String* shown = s.hasPrefix(String.withCString("_")) ? s.substringFromByte((u32)1) : s;
+        Stdio.printf("xcc: error: undefined symbol '%s': no linked library exports it, and "
+                     "libSystem does not have it. If it lives in a framework, #import <Framework> "
+                     "or pass -framework <Framework>\n", shown.cString());
+    }
+    Process.exit((i32)1);
+}
+
 MachODep* depForPath(DriverOptions* d, String* lp)
 {
     if (lp.hasSuffix(String.withCString(".tbd"))) {
@@ -3282,6 +3317,7 @@ void linkObjectsArm64(DriverOptions* d)
     m.setRpaths(arm64Rpaths(d, objectNeeds(d.objectInputs())));
     m.executable(as.textBytes(), ((Number*)entry).asU32(), as.symbols(),
                  dataBytes, as.dataSyms(), fixups, miLen, objcSects);
+    checkSystemImports(d, m);
     Array* image = m.bytes();
     Data* out = Data.withCapacity(image.count());
     for (u32 i = (u32)0; i < image.count(); i = i + (u32)1)
@@ -4020,6 +4056,7 @@ void emitModule(DriverOptions* d, IRModule* mod)
             m.setRpaths(arm64Rpaths(d, d.fe().neededLibs()));
             m.executable(as.textBytes(), ((Number*)entry).asU32(), as.symbols(),
                          dataBytes, as.dataSyms(), fixups, miLen, objcSects);
+            checkSystemImports(d, m);
         }
         image = m.bytes();
     }

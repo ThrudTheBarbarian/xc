@@ -648,6 +648,25 @@ class Sha256
         return _flatBind ? (u32)$FE : (u32)1;
         }
 
+    // The imports no linked library claims and that therefore bind to
+    // libSystem (ordinal 1), minus those libSystem really exports (bug 580).
+    // Whatever is left would link and then stop dyld at launch with "Symbol
+    // not found"; the driver makes it a link error instead. Empty for a
+    // flat-bound dylib, which resolves at load by design.
+    Array* unexportedSystemImports(Map* systemSyms)
+        {
+        Array* out = new Array();
+        if (_flatBind || _imports == (Array*)0)
+            return out;
+        for (u32 i = (u32)0; i < _imports.count(); i = i + (u32)1)
+            {
+            String* s = (String*)_imports.get(i);
+            if (ordinalFor(s) == (u32)1 && systemSyms.get((Hashable*)s) == (Object*)0)
+                out.add((Object*)s);
+            }
+        return out;
+        }
+
     // The bind opcode that selects `ord`: SET_DYLIB_SPECIAL_IMM FLAT_LOOKUP
     // for $FE, else SET_DYLIB_ORDINAL_IMM.
     static u32 setDylibOp(u32 ord)

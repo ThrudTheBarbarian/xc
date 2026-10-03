@@ -872,6 +872,18 @@ int main(int argc, const char *argv[]) {
                                                    rpaths:rpaths
                                             modInitLength:miLen
                                              objcSections:objcSects];
+        // Bug 580: a call no linked library exports, and libSystem does not
+        // have, is a link error rather than a launch-time `Symbol not found`.
+        NSArray<NSString *> *unexported = [XTMachOWriter lastUnexportedSystemImports];
+        if (unexported.count) {
+            for (NSString *s in unexported) {
+                NSString *shown = [s hasPrefix:@"_"] ? [s substringFromIndex:1] : s;
+                fprintf(stderr, "xcc: error: undefined symbol '%s': no linked library exports it, and "
+                                "libSystem does not have it. If it lives in a framework, #import <Framework> "
+                                "or pass -framework <Framework>\n", shown.UTF8String);
+            }
+            return 1;
+        }
         if (![macho writeToFile:outPath atomically:YES]) {
             fprintf(stderr, "xcc-ln-arm64: cannot write '%s'\n", argv[2]);
             return 1;

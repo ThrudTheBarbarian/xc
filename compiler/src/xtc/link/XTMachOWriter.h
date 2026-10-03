@@ -23,6 +23,12 @@ NS_ASSUME_NONNULL_BEGIN
 // Exposed so a test can pin the mapping — reading the wrong triples yields an
 // EMPTY export set, which is silent until dyld refuses at launch (bugs/028).
 + (NSArray<NSString*>*)tbdTargets;
+
+// Bug 580: the imports of the last executable built that no linked library
+// claimed, so they bind to libSystem (ordinal 1), minus those libSystem's own
+// `.tbd` in the SDK exports. Each would link and then stop dyld at launch with
+// "Symbol not found". Empty when no SDK is found (nothing is known then).
++ (NSArray<NSString*>*)lastUnexportedSystemImports;
 // Build an executable from assembled __text bytes. `symbols` maps
 // name -> offset-in-text (defined labels). `fixups` are the assembler's
 // unresolved references; Branch26 fixups to names not in `symbols` become

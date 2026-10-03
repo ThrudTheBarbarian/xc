@@ -591,6 +591,44 @@ static NSArray<NSString*>* sTbdTargets = nil;
     return sTbdTargets ?: @[ @"arm64-macos", @"arm64e-macos" ];
     }
 
+static NSArray<NSString*>* sLastUnexportedSystemImports = nil;
+
++ (NSArray<NSString*>*)lastUnexportedSystemImports
+    {
+    return sLastUnexportedSystemImports ?: @[];
+    }
+
+// The SDK's libSystem.B.tbd for the platform being linked: $SDKROOT first, then
+// the version-independent .sdk symlinks under Xcode (and the Command Line Tools
+// for macOS), the same order as the driver's appleSdkRoots. nil if none.
++ (nullable NSString*)systemTbdPath
+    {
+    // macOS only for now: the iOS SDKs inline libSystem's sub-libraries as
+    // further documents in the same .tbd, which inspectTbd does not merge yet,
+    // so `write` and the pthread calls would look missing (580 follow-up).
+    if (sPlatformId != 1)
+        return nil;
+    NSMutableArray<NSString*>* roots = [NSMutableArray array];
+    const char* env = getenv("SDKROOT");
+    if (env && *env)
+        [roots addObject:@(env)];
+    if (sPlatformId == 2)
+        [roots addObject:@"/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk"];
+    else if (sPlatformId == 7)
+        [roots addObject:@"/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator.sdk"];
+    else
+        [roots addObjectsFromArray:@[
+            @"/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk",
+            @"/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk"]];
+    for (NSString* r in roots)
+        {
+        NSString* p = [r stringByAppendingPathComponent:@"usr/lib/libSystem.B.tbd"];
+        if ([[NSFileManager defaultManager] fileExistsAtPath:p])
+            return p;
+        }
+    return nil;
+    }
+
 + (NSData*)executableFromText:(NSData*)textIn
                   entryOffset:(uint64_t)entryOffset
                       symbols:(NSDictionary<NSString*, NSNumber*>*)symbols
@@ -1570,6 +1608,18 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
             }
         [importOrdinal addObject:@(ord)];
         }
+    // Bug 580: an import left at libSystem's ordinal that libSystem does not
+    // export would stop dyld at launch. Record them; the linker refuses.
+    {
+        NSMutableArray<NSString*>* unexported = [NSMutableArray array];
+        NSString* tbd = [self systemTbdPath];
+        NSSet* sys = tbd ? [self inspectTbd:tbd][@"symbols"] : nil;
+        if (sys)
+            for (NSUInteger i = 0; i < imports.count; i++)
+                if (importOrdinal[i].unsignedCharValue == 1 && ![sys containsObject:imports[i]])
+                    [unexported addObject:imports[i]];
+        sLastUnexportedSystemImports = unexported;
+    }
 
     // ── 2. Layout ──  (vmaddr == VMBASE + file offset throughout)
     uint64_t textOffset = PAGE; // header slack for codesign

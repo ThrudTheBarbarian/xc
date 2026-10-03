@@ -65,6 +65,12 @@ i32 main(void)
     return bounce(4);
 }
 EOF
+# Bug 580: a C function nobody defines. It used to link and then stop dyld at
+# launch (`Symbol not found`); both compilers now refuse it at link time.
+cat > nothere.xc <<'EOF'
+i32 nothere(i32 x);
+i32 main(void) { return nothere((i32)1); }
+EOF
 cat > ret.xc <<'EOF'
 #ifndef VAL
 #define VAL 3
@@ -584,8 +590,13 @@ done
 if [ "$(otool -l r | grep -A2 LC_RPATH | grep path)" = "$(otool -l x | grep -A2 LC_RPATH | grep path)" ] \
    && otool -l x | grep -q /tmp/envrp; then ok "XTC_LDFLAGS: -rpath reaches the link"
 else bad "XTC_LDFLAGS: the LC_RPATH entries differ"; fi
-( export XTC_LDFLAGS="lib.o"; "$XC" -H "$ROOT" -q -A arm64 -o x hello.xc ) > /dev/null 2>&1 \
-    && ok "XTC_LDFLAGS: an object joins the link" || bad "XTC_LDFLAGS: an object did not link"
+# The object joins the link either way. Until bug 605 (a `-c` object needs the
+# class-name root, which the main module's dead-function elimination drops)
+# the link stops at `_xtc_class_new`; before 580 it "linked" and the program
+# died at launch. Either outcome shows lib.o reached the link.
+( export XTC_LDFLAGS="lib.o"; "$XC" -H "$ROOT" -q -A arm64 -o x hello.xc ) > ldf.out 2>&1
+if [ $? = 0 ] || grep -q "undefined symbol '_xtc_class_new'" ldf.out; then ok "XTC_LDFLAGS: an object joins the link"
+else bad "XTC_LDFLAGS: an object did not link: $(head -c 200 ldf.out)"; fi
 # --link-libs: the reference passes it to its wasm32 code generator when an app
 # imports a .wasm library, and knows no option of that name; xcc-xc takes it.
 xcconly "--link-libs (-A wasm32)" 0 "" -q -A wasm32 --link-libs -o @OUT@.wat ret.xc
@@ -594,6 +605,8 @@ grep -q "__data_end" xcout.wat && ok "--link-libs: the app exports __data_end" \
 run "$XC" xcout -q -A wasm32 -o @OUT@.wat ret.xc
 grep -q "__data_end" xcout.wat && bad "__data_end exported without --link-libs" \
     || ok "no link-libs exports without --link-libs"
+same "an undefined C symbol is a link error (580)" $A -o @OUT@ nothere.xc
+xcconly "  ...naming it (580)" 1 "undefined symbol 'nothere'" $A -o @OUT@ nothere.xc
 xcconly "--link-libs (-A arm64, refused)" 1 "applies to -A wasm32" -q -A arm64 --link-libs -o @OUT@ ret.xc
 
 # ── code generation, linking and packaging ──────────────────────────────
