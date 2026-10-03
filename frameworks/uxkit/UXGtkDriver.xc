@@ -19,6 +19,7 @@
 #import "UXSegmentedControl.xc" // native UISegmentedControl overlay
 #import "UXProgressBar.xc"      // native UIProgressView overlay
 #import "UXTableView.xc"        // the native GtkColumnView reads its rows from the peer table
+#import "UXScrollView.xc"       // a scroll view is a GtkScrolledWindow
 #import "UXOutlineView.xc"      // ...and a native tree reads its items from the peer outline
 #import "UXApplication.xc"      // gApp: the driver-owned loop starts the delegate, and stop() quits
 #import "UXLibc.xc"
@@ -84,6 +85,14 @@ void ux_gtk_make_popup(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h);
 void ux_gtk_set_field_hooks(pointer fn);
 void ux_gtk_set_field_submit_hooks(pointer fn);
 void ux_gtk_set_mouse(pointer fn); // register the pointer-event forwarder
+// native scroll containers: a GtkScrolledWindow whose document draws the scroll view's subtree
+void ux_gtk_set_scroll_content(pointer fn);
+void ux_gtk_make_scroll(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, i32 contentH, pointer sv, i32 docX, i32 docY);
+void ux_gtk_scroll_reload(i32 handle, i32 node, i32 w, i32 h, i32 contentH, i32 docX, i32 docY);
+void ux_gtk_scroll_set(i32 handle, i32 node, i32 px);
+i32 ux_gtk_scroll_get(i32 handle, i32 node);
+void ux_gtk_reparent_to_scroll(i32 handle, i32 node, i32 scrollNode, i32 ax, i32 ay);
+void ux_gtk_scroll_style(i32 handle, i32 node, i32 radius, i32 rgb);
 // The input shield (UXKindShield): a bare widget above the controls, so a click on a
 // design surface reaches the toolkit instead of operating the widget under it.
 void ux_gtk_make_shield(i32 handle, i32 x, i32 y, i32 w, i32 h, i32 hidden);
@@ -438,6 +447,7 @@ class UXGtkDriver : Object<UXViewDriver>
             ux_gtk_set_field_hooks((pointer)&uxGtkFieldChanged);
             ux_gtk_set_field_submit_hooks((pointer)&uxGtkFieldSubmitted);
             ux_gtk_set_mouse((pointer)&uxGtkDispatch);
+            ux_gtk_set_scroll_content((pointer)&ux_scroll_draw); // a scroll document draws its subtree
             ux_gtk_set_table_hooks((pointer)&xgGtkTableRows, (pointer)&xgGtkTableCell, (pointer)&xgGtkTableCols,
                                    (pointer)&xgGtkTableColTitle, (pointer)&xgGtkTableColWidth,
                                    (pointer)&xgGtkTableMulti, (pointer)&xgGtkTableSelectSet);
@@ -1245,6 +1255,37 @@ class UXGtkDriver : Object<UXViewDriver>
                 ux_gtk_set_control_hidden(handle, i, self.effectiveHidden(tree, i));
                 continue;
                 }
+            if ((i32)n.kind == (i32)UXKindScroll)
+                {
+                // A GtkScrolledWindow over the scroll view; its document draws the scroll view's
+                // document subtree (ux_scroll_draw), at the document's own place in the window.
+                UXScrollView* sv = (UXScrollView* ?)(Object*)n.peer;
+                if (sv == (UXScrollView*)0)
+                    {
+                    continue;
+                    }
+                i32 dn = sv.nativeDocNode();
+                i32 dx = ax;
+                i32 dy = ay;
+                if (dn >= (i32)0)
+                    {
+                    i32 dw = (i32)0;
+                    i32 dh = (i32)0;
+                    self.structAbsFrame(tree, dn, &dx, &dy, &dw, &dh);
+                    }
+                if (ux_gtk_has_control(handle, i) == (i32)0)
+                    {
+                    ux_gtk_make_scroll(handle, i, ax, ay, aw, ah, sv.nativeContentHeight(), n.peer, dx, dy);
+                    }
+                else
+                    {
+                    ux_gtk_set_control_frame(handle, i, ax, ay, aw, ah);
+                    ux_gtk_scroll_reload(handle, i, aw, ah, sv.nativeContentHeight(), dx, dy);
+                    }
+                ux_gtk_scroll_style(handle, i, sv.nativeCornerRadius(), sv.nativeBorderRGB());
+                ux_gtk_set_control_hidden(handle, i, self.effectiveHidden(tree, i));
+                continue;
+                }
             if ((i32)n.kind == (i32)UXKindShield)
                 {
                 ux_gtk_make_shield(handle, ax, ay, aw, ah, self.effectiveHidden(tree, i));
@@ -1412,6 +1453,32 @@ class UXGtkDriver : Object<UXViewDriver>
                     }
                 }
             }
+        // A native control inside a scroll view goes into that container's document, so it scrolls
+        // and clips with it (as AppKit's go into the NSScrollView's document view).  A scroll, a
+        // table or a GL view owns its own surface and stays where it is.
+        for (i32 i = (i32)0; i < t.count; i = i + (i32)1)
+            {
+            i32 kk = (i32)t.nodes[i].kind;
+            if (kk == (i32)UXKindScroll || kk == (i32)UXKindTable || kk == (i32)UXKindGLView || ux_gtk_has_control(handle, i) == (i32)0)
+                {
+                continue;
+                }
+            i32 anc = (i32)t.nodes[i].parent;
+            while (anc >= (i32)0)
+                {
+                if ((i32)t.nodes[anc].kind == (i32)UXKindScroll && ux_gtk_has_control(handle, anc) != (i32)0)
+                    {
+                    i32 cx = (i32)0;
+                    i32 cy = (i32)0;
+                    i32 cw = (i32)0;
+                    i32 chh = (i32)0;
+                    self.structAbsFrame(tree, i, &cx, &cy, &cw, &chh);
+                    ux_gtk_reparent_to_scroll(handle, i, anc, cx, cy);
+                    break;
+                    }
+                anc = (i32)t.nodes[anc].parent;
+                }
+            }
         // Anything realized this pass went in above the shield; put it back on
         // top, or the shield works only until the next widget appears.
         if (ux_gtk_has_shield(handle) != (i32)0)
@@ -1436,9 +1503,9 @@ class UXGtkDriver : Object<UXViewDriver>
         // A node with a native control paints itself — never draw under it.
         bool native = t.win != (i32)0 && ux_gtk_has_control(t.win, i) != (i32)0;
         // ...and a native table paints its whole subtree: its rows are the GtkColumnView's.
-        if (native && k == (i32)UXKindTable)
+        if (native && (k == (i32)UXKindTable || k == (i32)UXKindScroll))
             {
-            return;
+            return; // ...as a native scroll container's document paints its own (ux_scroll_draw)
             }
         if (!native)
             {
@@ -1453,7 +1520,7 @@ class UXGtkDriver : Object<UXViewDriver>
                 i32 vw = (i32)0;
                 i32 vh = (i32)0;
                 self.structAbsFrame((pointer)t, i, &vx, &vy, &vw, &vh);
-                ux_gtk_clip(vx, vy, vw, vh);
+                ux_gtk_clip(vx - gGtkDrawOX, vy - gGtkDrawOY, vw, vh); // in the surface's own space
                 UXGtkUserDrawFn* f = (UXGtkUserDrawFn*)gGtkUserFn;
                 f((pointer)t.nodes, i, gGtkUserUd);
                 ux_gtk_clip_end();
@@ -1468,7 +1535,7 @@ class UXGtkDriver : Object<UXViewDriver>
             i32 chh = (i32)0;
             self.structAbsFrame((pointer)t, i, &cx, &cy, &cw, &chh);
             i32 ci = (i32)t.nodes[i].clipIn;
-            ux_gtk_clip_round(cx + ci, cy + ci, cw - ci * (i32)2, chh - ci * (i32)2, (i32)t.nodes[i].clipR);
+            ux_gtk_clip_round(cx + ci - gGtkDrawOX, cy + ci - gGtkDrawOY, cw - ci * (i32)2, chh - ci * (i32)2, (i32)t.nodes[i].clipR);
             }
         i16 c = t.nodes[i].head;
         while (c >= (i16)0)
@@ -1500,17 +1567,18 @@ class UXGtkDriver : Object<UXViewDriver>
         gGtkDrawOX = x;
         gGtkDrawOY = y;
         }
-    // UIScrollView milestone
+    // A scroll view is a GtkScrolledWindow, which owns the offset (realizeTree)
     bool scrollsNatively(void)
         {
-        return false;
+        return true;
         }
     void nativeScrollTo(pointer h, i32 node, i32 px)
         {
+        ux_gtk_scroll_set(((GKTree*)h).win, node, px);
         }
     i32 nativeScrollPx(pointer h, i32 node)
         {
-        return (i32)0;
+        return ux_gtk_scroll_get(((GKTree*)h).win, node);
         }
 
     // ---- text editing (the shared engine; the UITextField overlay is a milestone) ----

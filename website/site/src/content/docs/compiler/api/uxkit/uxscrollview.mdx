@@ -17,7 +17,7 @@ The document is **moved, not re-laid-out**. Scrolling sets the document view's y
 to `-scrollOffset` and the clip cuts it to the viewport. Your content keeps fixed
 coordinates, and the ordinary hit test finds it where it is drawn.
 
-On backends that scroll natively (Win32, AppKit) a native container
+On backends that scroll natively (Win32, AppKit, GTK) a native container
 overlays this whole subtree and the custom bar never draws. On GEM (and
 headless) this bar is the scrollbar.
 
@@ -120,9 +120,10 @@ them. `0` is square. It is read when the tree next realises, so display in the
 same turn.
 
 Every backend rounds it except GEM, whose clip is a rectangle. On AppKit the
-native scroll view is clipped by its layer, and on Win32 the native scroll
-container is clipped by a window region. GTK, the web, iOS and Android draw the
-scroll view themselves, so they clip the subtree to the rounded shape.
+native scroll view is clipped by its layer, on Win32 the native scroll
+container is clipped by a window region, and on GTK the `GtkScrolledWindow`
+is rounded by its own CSS, with its overflow hidden. The web, iOS and Android
+draw the scroll view themselves, so they clip the subtree to the rounded shape.
 
 ### setBorderRGB / clearBorder
 
@@ -211,7 +212,7 @@ Whether the content overflows the viewport. The bar hides when it does not.
   <TabItem label="Linux">
     <img src="/uxkit/scroll-linux.png" alt="UXScrollView on Linux" width="220" />
 
-    The toolkit's scrollbar. This driver does not yet use the native scroll container with the platform's scrolling physics and indicators.
+    A native `GtkScrolledWindow`: GTK's own scrollbar, kinetic scrolling and overshoot. Native controls inside the scroll view scroll and clip with it.
   </TabItem>
   <TabItem label="GEM">
     <img src="/uxkit/scroll-gem.png" alt="UXScrollView on GEM" width="220" />

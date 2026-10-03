@@ -103,6 +103,20 @@ static GtkWidget* gArea[UXGTK_MAXW];
 static ux_content_fn gContent[UXGTK_MAXW];
 static void* gContentUd[UXGTK_MAXW];
 static GtkWidget* gCtl[UXGTK_MAXW][256];
+/* Native scroll containers (UXScrollView): a GtkScrolledWindow whose child is a GtkFixed DOCUMENT
+ * holding a drawing area the size of the content, which paints the scroll view's document subtree,
+ * and any native control inside the scroll view.  docX/docY are the document's place in the window's
+ * content (the toolkit's absolute coordinates, unscrolled: the container owns the offset). */
+typedef struct
+    {
+    GtkWidget* doc;  /* the GtkFixed in the GtkScrolledWindow */
+    GtkWidget* area; /* its drawing area */
+    void* sv;        /* the UXScrollView */
+    int docX, docY;
+    } GtkScrollRec;
+static GtkScrollRec gScroll[UXGTK_MAXW][256];
+static unsigned char gInDoc[UXGTK_MAXW][256]; /* a control moved into scroll node n's document: n + 1 */
+static int scroll_doc_point(int handle, double wx, double wy, double* x, double* y);
 static char* gFieldBuf[UXGTK_MAXW * 256];
 static int gFieldCap[UXGTK_MAXW * 256];
 static int gNextH = 1, gLive = 0;
@@ -309,7 +323,15 @@ static gboolean event_cb(GtkEventControllerLegacy* c, GdkEvent* ev, gpointer ud)
     if (t != GDK_BUTTON_PRESS && t != GDK_MOTION_NOTIFY && t != GDK_BUTTON_RELEASE && t != GDK_SCROLL)
         return FALSE;
     gdk_event_get_position(ev, &x, &y);
+    double wx = x, wy = y;
     gtk_to_area(handle, &x, &y);
+    if (t == GDK_BUTTON_PRESS || t == GDK_BUTTON_RELEASE || t == GDK_MOTION_NOTIFY)
+        {
+        /* over a native scroll container: its document is scrolled, the toolkit's tree is not */
+        int on = scroll_doc_point(handle, wx, wy, &x, &y);
+        if (on < 0 && t == GDK_BUTTON_PRESS)
+            return FALSE; /* the container's scrollbar or a native control: theirs alone */
+        }
     if (y < 0 && t != GDK_MOTION_NOTIFY)
         return FALSE; /* on the menu bar above the content: the bar's, not the toolkit's */
     if (t == GDK_SCROLL)
@@ -1103,7 +1125,11 @@ void ux_gtk_window_close(int handle)
         return;
     gtk_window_destroy(gWin[handle]);
     for (int n = 0; n < 256; n++)
+        {
         gCtl[handle][n] = NULL;
+        gScroll[handle][n] = (GtkScrollRec){0};
+        gInDoc[handle][n] = 0;
+        }
     ux_gtk_gl_forget(handle);
     gWin[handle] = NULL;
     gMenuBar[handle] = NULL; /* the bar went with its window */
@@ -1118,6 +1144,9 @@ void ux_gtk_window_invalidate(int handle)
     {
     if (gArea[handle])
         gtk_widget_queue_draw(gArea[handle]);
+    for (int n = 0; n < 256; n++)
+        if (gScroll[handle][n].area)
+            gtk_widget_queue_draw(gScroll[handle][n].area); /* the scroll documents are surfaces too */
     }
 void ux_gtk_content_geometry(int handle, int* w, int* h)
     {
@@ -1166,7 +1195,11 @@ void ux_gtk_set_control_frame(int handle, int node, int x, int y, int w, int h)
     if (!c)
         return;
     gtk_widget_set_size_request(c, w, h);
-    gtk_fixed_move(gFix[handle], c, x, y);
+    int sn = gInDoc[handle][node] - 1;
+    if (sn >= 0 && gScroll[handle][sn].doc)
+        gtk_fixed_move(GTK_FIXED(gScroll[handle][sn].doc), c, x - gScroll[handle][sn].docX, y - gScroll[handle][sn].docY);
+    else
+        gtk_fixed_move(gFix[handle], c, x, y);
     }
 void ux_gtk_set_control_enabled(int handle, int node, int on)
     {
@@ -1177,6 +1210,167 @@ void ux_gtk_set_control_hidden(int handle, int node, int on)
     {
     if (gCtl[handle][node])
         gtk_widget_set_visible(gCtl[handle][node], on == 0);
+    }
+
+/* ── native scroll containers ─────────────────────────────────────────────── */
+static void (*gScrollContent)(void* sv, int docW, int docH);
+void ux_gtk_set_scroll_content(void* fn)
+    {
+    gScrollContent = (void (*)(void*, int, int))fn;
+    }
+static void scroll_draw_cb(GtkDrawingArea* a, cairo_t* cr, int w, int h, gpointer ud)
+    {
+    (void)a;
+    GtkScrollRec* r = (GtkScrollRec*)ud;
+    if (!gScrollContent || !r->sv)
+        return;
+    cairo_t* was = gCr;
+    gCr = cr;
+    gScrollContent(r->sv, w, h);
+    gCr = was;
+    }
+void ux_gtk_make_scroll(int handle, int node, int x, int y, int w, int h, int contentH, void* sv, int docX, int docY)
+    {
+    if (!gFix[handle] || node < 0 || node >= 256 || gCtl[handle][node])
+        return;
+    GtkScrollRec* r = &gScroll[handle][node];
+    GtkWidget* sw = gtk_scrolled_window_new();
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(sw), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+    gtk_widget_set_size_request(sw, w, h);
+    r->doc = gtk_fixed_new();
+    r->area = gtk_drawing_area_new();
+    r->sv = sv;
+    r->docX = docX;
+    r->docY = docY;
+    gtk_widget_set_size_request(r->area, w, contentH > h ? contentH : h);
+    gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(r->area), scroll_draw_cb, r, NULL);
+    gtk_fixed_put(GTK_FIXED(r->doc), r->area, 0, 0);
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(sw), r->doc);
+    gtk_fixed_put(gFix[handle], sw, x, y);
+    gCtl[handle][node] = sw;
+    }
+/* the page changed (its height, its place): resize the document and repaint it */
+void ux_gtk_scroll_reload(int handle, int node, int w, int h, int contentH, int docX, int docY)
+    {
+    GtkScrollRec* r = &gScroll[handle][node];
+    if (!r->area)
+        return;
+    r->docX = docX;
+    r->docY = docY;
+    gtk_widget_set_size_request(r->area, w, contentH > h ? contentH : h);
+    gtk_widget_queue_draw(r->area);
+    }
+void ux_gtk_scroll_set(int handle, int node, int px)
+    {
+    GtkWidget* sw = gCtl[handle][node];
+    if (!sw || !GTK_IS_SCROLLED_WINDOW(sw))
+        return;
+    GtkAdjustment* a = gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(sw));
+    double most = gtk_adjustment_get_upper(a) - gtk_adjustment_get_page_size(a);
+    gtk_adjustment_set_value(a, px < 0 ? 0 : (px > most ? (most > 0 ? most : 0) : px));
+    }
+int ux_gtk_scroll_get(int handle, int node)
+    {
+    GtkWidget* sw = gCtl[handle][node];
+    if (!sw || !GTK_IS_SCROLLED_WINDOW(sw))
+        return 0;
+    return (int)(gtk_adjustment_get_value(gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(sw))) + 0.5);
+    }
+/* A rounded panel (UXScrollView.setCornerRadius / setBorderRGB): the container's own CSS, a radius and
+ * a 1px border, and its overflow hidden, so its document and its scrollbar clip to the rounded shape.
+ * radius 0 and rgb < 0 drop both. */
+void ux_gtk_scroll_style(int handle, int node, int radius, int rgb)
+    {
+    GtkWidget* sw = gCtl[handle][node];
+    if (!sw || !GTK_IS_SCROLLED_WINDOW(sw))
+        return;
+    char cls[32], css[200];
+    snprintf(cls, sizeof cls, "uxscroll-%d-%d", handle, node);
+    gtk_widget_add_css_class(sw, cls);
+    if (rgb >= 0)
+        snprintf(css, sizeof css, ".%s { border-radius: %dpx; border: 1px solid #%06x; }", cls, radius, rgb & 0xFFFFFF);
+    else
+        snprintf(css, sizeof css, ".%s { border-radius: %dpx; }", cls, radius);
+    GtkCssProvider* p = g_object_get_data(G_OBJECT(sw), "ux-css");
+    if (!p)
+        {
+        p = gtk_css_provider_new();
+        gtk_style_context_add_provider_for_display(gtk_widget_get_display(sw), GTK_STYLE_PROVIDER(p),
+                                                   GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+        g_object_set_data_full(G_OBJECT(sw), "ux-css", p, g_object_unref);
+        }
+    gtk_css_provider_load_from_string(p, css);
+    gtk_widget_set_overflow(sw, radius > 0 ? GTK_OVERFLOW_HIDDEN : GTK_OVERFLOW_VISIBLE);
+    }
+/* A native control inside a scroll view goes into its document, so it scrolls and clips with it. */
+void ux_gtk_reparent_to_scroll(int handle, int node, int scrollNode, int ax, int ay)
+    {
+    GtkWidget* c = gCtl[handle][node];
+    GtkScrollRec* r = &gScroll[handle][scrollNode];
+    if (!c || !r->doc)
+        return;
+    if (gtk_widget_get_parent(c) != r->doc)
+        {
+        g_object_ref(c);
+        gtk_widget_unparent(c);
+        gtk_fixed_put(GTK_FIXED(r->doc), c, ax - r->docX, ay - r->docY);
+        g_object_unref(c);
+        }
+    else
+        gtk_fixed_move(GTK_FIXED(r->doc), c, ax - r->docX, ay - r->docY);
+    gInDoc[handle][node] = (unsigned char)(scrollNode + 1);
+    }
+/* A press or release over a scroll container's DOCUMENT, in window coordinates: where it lands in
+ * the toolkit's (unscrolled) coordinates.  0 when the point is not on a document -- elsewhere, or on
+ * the container's own scrollbar, which handles it. */
+static int scroll_doc_point(int handle, double wx, double wy, double* x, double* y)
+    {
+    for (int n = 0; n < 256; n++)
+        {
+        GtkScrollRec* r = &gScroll[handle][n];
+        GtkWidget* sw = gCtl[handle][n];
+        if (!r->area || !sw || !gtk_widget_get_mapped(sw))
+            continue;
+        graphene_point_t wp = GRAPHENE_POINT_INIT((float)wx, (float)wy), sp, dp;
+        if (!gtk_widget_compute_point(GTK_WIDGET(gWin[handle]), sw, &wp, &sp))
+            continue;
+        if (sp.x < 0 || sp.y < 0 || sp.x >= gtk_widget_get_width(sw) || sp.y >= gtk_widget_get_height(sw))
+            continue;
+        GtkWidget* hit = gtk_widget_pick(sw, sp.x, sp.y, GTK_PICK_DEFAULT);
+        if (hit != r->area)
+            return -1; /* the scrollbar, or a native control in the document: theirs */
+        if (!gtk_widget_compute_point(GTK_WIDGET(gWin[handle]), r->area, &wp, &dp))
+            return -1;
+        *x = r->docX + dp.x;
+        *y = r->docY + dp.y;
+        return 1;
+        }
+    return 0;
+    }
+/* Test: a click at (x, y) of the window's content as it is on screen, taken the way a real one is:
+ * to window coordinates, then onto a scroll container's document if it is over one. */
+void ux_gtk_test_click_at(int handle, int x, int y)
+    {
+    if (!gWin[handle] || !gArea[handle])
+        return;
+    graphene_point_t ap = GRAPHENE_POINT_INIT((float)x, (float)y), wp;
+    if (!gtk_widget_compute_point(gArea[handle], GTK_WIDGET(gWin[handle]), &ap, &wp))
+        return;
+    double tx = x, ty = y;
+    if (scroll_doc_point(handle, wp.x, wp.y, &tx, &ty) < 0)
+        return; /* on the container's own scrollbar */
+    ux_gtk_input(handle, 1, 1, tx, ty, 0);
+    ux_gtk_input(handle, 2, 1, tx, ty, 0);
+    }
+/* Test: a scroll container's document (its drawing area), to read back what it painted. */
+int ux_gtk_test_scroll_native(int handle, int node)
+    {
+    return gScroll[handle][node].area && gCtl[handle][node] && GTK_IS_SCROLLED_WINDOW(gCtl[handle][node]) ? 1 : 0;
+    }
+int ux_gtk_test_in_scroll_doc(int handle, int node, int scrollNode)
+    {
+    GtkWidget* c = gCtl[handle][node];
+    return c && gScroll[handle][scrollNode].doc && gtk_widget_get_parent(c) == gScroll[handle][scrollNode].doc ? 1 : 0;
     }
 
 static void clicked_cb(GtkButton* b, gpointer ud)
@@ -1891,9 +2085,9 @@ void ux_gtk_render_scene(int handle)
  * bar), into out as w * h opaque 0xAARRGGBB words.  The TOPLEVEL renders through its paintable --
  * its own background, every widget on it, a GtkGLArea's frame as the texture it composited -- into
  * a cairo surface shifted so the region lands at its origin.  A widget paintable shows the frames
- * rendered since it was made, so each window keeps one, and each snapshot asks for a frame and waits
- * (bounded) for the frame clock to paint it: the picture is the window as it is now, at the cost of
- * one frame. */
+ * rendered since it was made, one behind: so each window keeps one, and each snapshot asks for a
+ * frame and waits (bounded) for the frame clock to paint it and one more.  The picture is the window
+ * as it is now, at the cost of two frames. */
 static GdkPaintable* gSnapP[UXGTK_MAXW];
 static int gSnapPainted;
 static void snap_after_paint(GdkFrameClock* fc, gpointer ud)
@@ -1941,9 +2135,14 @@ int ux_gtk_window_snapshot(int handle, int x, int y, int w, int h, uint32_t* out
     guint limit = g_timeout_add(500, snap_give_up, &late);
     while (!node && !late)
         {
+        /* two paints: the paintable answers with the frame BEFORE the one just painted, so the frame
+         * asked for is the paintable's only after the next one */
         int was = gSnapPainted;
         gtk_widget_queue_draw(top);
-        while (gSnapPainted == was && !late)
+        while (gSnapPainted < was + 1 && !late)
+            g_main_context_iteration(NULL, TRUE);
+        gtk_widget_queue_draw(top);
+        while (gSnapPainted < was + 2 && !late)
             g_main_context_iteration(NULL, TRUE);
         GtkSnapshot* snap = gtk_snapshot_new();
         gdk_paintable_snapshot(p, GDK_SNAPSHOT(snap), tw, th);
