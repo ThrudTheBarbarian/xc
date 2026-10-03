@@ -31,6 +31,7 @@
 #import "UXProgressBar.xc"      // native UIProgressView overlay
 #import "UXTouch.xc"              // drawn content's touches -> mouse events
 #import "UXNavigationController.xc" // a user's pop on the native stack comes back through uxNavNativePopped
+#import "UXTableView.xc"        // the native UITableView reads its rows from the peer table
 #import "UXApplication.xc"      // gApp: the driver-owned loop starts the delegate, and stop() quits
 #import "UXLibc.xc"
 
@@ -43,6 +44,11 @@ pointer ux_ios_nav_attach(i32 win, i32 navId, i32 x, i32 y, i32 w, i32 h);
 void ux_ios_nav_push(pointer nav, u8* title, i32 animated);
 void ux_ios_nav_pop(pointer nav, i32 animated);
 void ux_ios_set_nav_popped(pointer fn);
+// The native table (UITableView), fed by the peer UXTableView through these hooks.
+void ux_ios_set_table_hooks(pointer rows, pointer cell, pointer cols, pointer title, pointer width, pointer multi, pointer selset);
+void ux_ios_make_table(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, pointer peer);
+void ux_ios_table_reload(i32 handle, i32 node);
+void ux_ios_table_select(i32 handle, i32 node, i32* rows, i32 n);
 void ux_ios_set_touch(pointer fn);
 i32 ux_ios_window_create(i32 x, i32 y, i32 w, i32 h);
 void ux_ios_window_set_content(i32 handle, pointer fn, pointer ud);
@@ -152,6 +158,40 @@ pointer gIosCtlPeer[16384]; // [handle*256 + node] -> the control's neutral widg
 UXEvent* gIosClickEvent;
 // The driver-owned loop's start moment: didFinishLaunching lands here, and the
 // neutral delegate starts exactly where the desktop loop would have started it.
+// Table-data trampolines for the native UITableView: the shim calls these with the peer UXTableView.
+i32 xgIosTableRows(pointer tbl)
+    {
+    return ((UXTableView* ?)(Object*)tbl).nativeRowCount();
+    }
+u8* xgIosTableCell(pointer tbl, i32 r, i32 c)
+    {
+    return ((UXTableView* ?)(Object*)tbl).nativeCellText(r, c);
+    }
+i32 xgIosTableCols(pointer tbl)
+    {
+    return ((UXTableView* ?)(Object*)tbl).numberOfColumns();
+    }
+u8* xgIosTableColTitle(pointer tbl, i32 c)
+    {
+    return ((UXTableView* ?)(Object*)tbl).columnTitle(c);
+    }
+i32 xgIosTableColWidth(pointer tbl, i32 c)
+    {
+    return (i32)((UXTableView* ?)(Object*)tbl).columnWidth(c);
+    }
+i32 xgIosTableMulti(pointer tbl)
+    {
+    return ((UXTableView* ?)(Object*)tbl).nativeAllowsMultiple();
+    }
+// A tap in the native table: the selection into the model, announced, then a display pass.
+void xgIosTableSelectSet(pointer tbl, i32* rows, i32 n)
+    {
+    ((UXTableView* ?)(Object*)tbl).applyNativeSelection(rows, n);
+    if (gApp != (UXApplication*)0)
+        {
+        gApp.displayIfNeeded();
+        }
+    }
 // The user popped the native navigation stack (Back, edge-swipe): the model pops, and -- as after
 // every native event -- the display pass runs, which is what un-hides the revealed form's controls.
 void uxIosNavPopped(i32 navId)
@@ -318,6 +358,9 @@ class UXIosDriver : Object<UXViewDriver>
             ux_ios_set_field_submit_hooks((pointer)&uxIosFieldSubmitted);
             ux_ios_set_nav_popped((pointer)&uxIosNavPopped);
             ux_ios_set_touch((pointer)&uxTouch);
+            ux_ios_set_table_hooks((pointer)&xgIosTableRows, (pointer)&xgIosTableCell, (pointer)&xgIosTableCols,
+                                   (pointer)&xgIosTableColTitle, (pointer)&xgIosTableColWidth,
+                                   (pointer)&xgIosTableMulti, (pointer)&xgIosTableSelectSet);
             }
         return ux_ios_boot(screenW, screenH) != (i32)0;
         }
@@ -947,6 +990,23 @@ class UXIosDriver : Object<UXViewDriver>
     // that forwards its press to the toolkit in content coordinates, then check
     // it the way appkit-shield does -- with a REAL injected press, because the
     // only question is what the platform does with it.
+    i32 isUnderTable(IOTree* t, i32 i)
+        {
+        i16 p = t.nodes[i].parent;
+        while (p >= (i16)0)
+            {
+            if ((i32)t.nodes[p].kind == (i32)UXKindTable)
+                {
+                UXTableView* tv = (UXTableView* ?)(Object*)t.nodes[p].peer;
+                if (tv != (UXTableView*)0 && tv.nativeIsOutline() == (i32)0)
+                    {
+                    return (i32)1;
+                    }
+                }
+            p = t.nodes[p].parent;
+            }
+        return (i32)0;
+        }
     void realizeTree(i32 handle, pointer tree)
         {
         IOTree* t = (IOTree*)tree;
@@ -959,6 +1019,37 @@ class UXIosDriver : Object<UXViewDriver>
             i32 aw = (i32)0;
             i32 ah = (i32)0;
             self.structAbsFrame(tree, i, &ax, &ay, &aw, &ah);
+            // A native table covers its whole subtree (rows, cells, its scroller).
+            if (self.isUnderTable(t, i) != (i32)0)
+                {
+                continue;
+                }
+            if (n.kind == (i32)UXKindTable)
+                {
+                UXTableView* tv = (UXTableView* ?)(Object*)n.peer;
+                if (tv == (UXTableView*)0 || tv.nativeIsOutline() != (i32)0)
+                    {
+                    continue; // an outline stays drawn (UIKit's tree is a UICollectionView list: later)
+                    }
+                if (ux_ios_has_control(handle, i) == (i32)0)
+                    {
+                    ux_ios_make_table(handle, i, ax, ay, aw, ah, n.peer);
+                    }
+                else
+                    {
+                    ux_ios_set_control_frame(handle, i, ax, ay, aw, ah);
+                    ux_ios_table_reload(handle, i);
+                    }
+                if (tv.nativeSelectionNeedsPush())
+                    {
+                    i32 rows[256];
+                    i32 nsel = tv.selectedRowList(&rows[(i32)0], (i32)256);
+                    ux_ios_table_select(handle, i, &rows[(i32)0], nsel);
+                    tv.clearNativeSelectionPush();
+                    }
+                ux_ios_set_control_hidden(handle, i, self.effectiveHidden(tree, i));
+                continue;
+                }
             if (ux_ios_has_control(handle, i) != (i32)0)
                 {
                 ux_ios_set_control_frame(handle, i, ax, ay, aw, ah);
@@ -1090,6 +1181,11 @@ class UXIosDriver : Object<UXViewDriver>
         i32 k = t.nodes[i].kind;
         // A node with a native control paints itself — never draw under it.
         bool native = t.win != (i32)0 && ux_ios_has_control(t.win, i) != (i32)0;
+        // ...and a native table paints its whole subtree: its rows are the UITableView's.
+        if (native && k == (i32)UXKindTable)
+            {
+            return;
+            }
         if (!native)
             {
             // The GEM rule: every non-native node is app-drawn through the

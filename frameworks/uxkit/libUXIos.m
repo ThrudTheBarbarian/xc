@@ -1136,6 +1136,200 @@ int ux_ios_pixel(int x, int y)
     return (p[0] << 16) | (p[1] << 8) | p[2];
     }
 
+// ── the native table: UITableView ───────────────────────────────────────────────────────────
+// A UXTableView realized as a real UITableView.  Like AppKit's NSTableView it holds no data: the
+// row count and each cell's text come from the peer UXTableView through hooks (the datasource that
+// feeds the drawn table).  A row is one cell with a label per UXKit column, at the columns' widths;
+// the titles, if any, are the table's header view.  A selection the user taps goes back through the
+// selectset hook; one the app makes is pushed in, muted so it does not echo.
+typedef int (*tbl_rows_fn)(void*);
+typedef const char* (*tbl_cell_fn)(void*, int, int);
+typedef int (*tbl_cols_fn)(void*);
+typedef const char* (*tbl_title_fn)(void*, int);
+typedef int (*tbl_width_fn)(void*, int);
+typedef int (*tbl_multi_fn)(void*);
+typedef void (*tbl_selset_fn)(void*, int*, int);
+static tbl_rows_fn gTblRows;
+static tbl_cell_fn gTblCell;
+static tbl_cols_fn gTblCols;
+static tbl_title_fn gTblTitle;
+static tbl_width_fn gTblWidth;
+static tbl_multi_fn gTblMulti;
+static tbl_selset_fn gTblSelSet;
+void ux_ios_set_table_hooks(void* rows, void* cell, void* cols, void* title, void* width, void* multi, void* selset)
+    {
+    gTblRows = (tbl_rows_fn)rows;
+    gTblCell = (tbl_cell_fn)cell;
+    gTblCols = (tbl_cols_fn)cols;
+    gTblTitle = (tbl_title_fn)title;
+    gTblWidth = (tbl_width_fn)width;
+    gTblMulti = (tbl_multi_fn)multi;
+    gTblSelSet = (tbl_selset_fn)selset;
+    }
+#define UX_TBL_ROW_H 32
+@interface UXTableHost : NSObject <UITableViewDataSource, UITableViewDelegate>
+@property(nonatomic) void* peer;
+@end
+@implementation UXTableHost
+- (NSInteger)tableView:(UITableView*)tv numberOfRowsInSection:(NSInteger)section
+    {
+    return gTblRows ? gTblRows(self.peer) : 0;
+    }
+- (UITableViewCell*)tableView:(UITableView*)tv cellForRowAtIndexPath:(NSIndexPath*)ip
+    {
+    UITableViewCell* cell = [tv dequeueReusableCellWithIdentifier:@"ux"];
+    if (!cell)
+        cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:@"ux"];
+    int ncols = gTblCols ? gTblCols(self.peer) : 1;
+    if (ncols < 1)
+        ncols = 1;
+    /* one label per column, kept by tag 100 + column */
+    CGFloat x = 16;
+    for (int c = 0; c < ncols; c++)
+        {
+        UILabel* l = (UILabel*)[cell.contentView viewWithTag:100 + c];
+        if (!l)
+            {
+            l = [UILabel new];
+            l.tag = 100 + c;
+            l.font = [UIFont systemFontOfSize:15];
+            [cell.contentView addSubview:l];
+            }
+        int w = gTblWidth ? gTblWidth(self.peer, c) : 80;
+        if (c == ncols - 1)
+            w = (int)(tv.bounds.size.width - x - 8);
+        l.frame = CGRectMake(x, 0, w > 0 ? w : 40, UX_TBL_ROW_H);
+        const char* t = gTblCell ? gTblCell(self.peer, (int)ip.row, c) : "";
+        l.text = [NSString stringWithUTF8String:t ? t : ""];
+        x += w;
+        }
+    return cell;
+    }
+- (void)report:(UITableView*)tv
+    {
+    if (!gTblSelSet || tv.tag)
+        return; /* tag != 0: an app push in progress, not the user's */
+    NSArray<NSIndexPath*>* sel = tv.indexPathsForSelectedRows;
+    int n = (int)sel.count;
+    int* rows = calloc(n > 0 ? n : 1, sizeof(int));
+    for (int i = 0; i < n; i++)
+        rows[i] = (int)sel[i].row;
+    gTblSelSet(self.peer, rows, n);
+    free(rows);
+    }
+- (void)tableView:(UITableView*)tv didSelectRowAtIndexPath:(NSIndexPath*)ip
+    {
+    [self report:tv];
+    }
+- (void)tableView:(UITableView*)tv didDeselectRowAtIndexPath:(NSIndexPath*)ip
+    {
+    [self report:tv];
+    }
+@end
+static NSMutableArray* gTblHosts; /* the hosts are the tables' (weak) data sources: keep them */
+static UIView* tblHeader(void* peer, CGFloat width)
+    {
+    int ncols = gTblCols ? gTblCols(peer) : 0;
+    BOOL any = NO;
+    for (int c = 0; c < ncols; c++)
+        if (gTblTitle && gTblTitle(peer, c) && gTblTitle(peer, c)[0])
+            any = YES;
+    if (!any)
+        return nil;
+    UIView* h = [[UIView alloc] initWithFrame:CGRectMake(0, 0, width, 28)];
+    h.backgroundColor = UIColor.secondarySystemBackgroundColor;
+    CGFloat x = 16;
+    for (int c = 0; c < ncols; c++)
+        {
+        int w = gTblWidth ? gTblWidth(peer, c) : 80;
+        UILabel* l = [[UILabel alloc] initWithFrame:CGRectMake(x, 0, w, 28)];
+        l.font = [UIFont systemFontOfSize:13 weight:UIFontWeightSemibold];
+        l.textColor = UIColor.secondaryLabelColor;
+        l.text = [NSString stringWithUTF8String:gTblTitle(peer, c) ? gTblTitle(peer, c) : ""];
+        [h addSubview:l];
+        x += w;
+        }
+    return h;
+    }
+void ux_ios_make_table(int handle, int node, int x, int y, int w, int h, void* peer)
+    {
+    UITableView* tv = [[UITableView alloc] initWithFrame:CGRectMake(x, y, w, h) style:UITableViewStylePlain];
+    UXTableHost* host = [UXTableHost new];
+    host.peer = peer;
+    if (!gTblHosts)
+        gTblHosts = [NSMutableArray new];
+    [gTblHosts addObject:host];
+    tv.dataSource = host;
+    tv.delegate = host;
+    tv.rowHeight = UX_TBL_ROW_H;
+    tv.allowsMultipleSelection = gTblMulti ? (gTblMulti(peer) != 0) : NO;
+    tv.tableHeaderView = tblHeader(peer, w);
+    [gWin[handle] addSubview:tv];
+    gCtl[handle][node] = tv;
+    }
+void ux_ios_table_reload(int handle, int node)
+    {
+    UITableView* tv = (UITableView*)gCtl[handle][node];
+    if ([tv isKindOfClass:UITableView.class])
+        {
+        NSArray* keep = tv.indexPathsForSelectedRows;
+        tv.tag = 1;
+        [tv reloadData];
+        for (NSIndexPath* ip in keep)
+            if (ip.row < [tv numberOfRowsInSection:0])
+                [tv selectRowAtIndexPath:ip animated:NO scrollPosition:UITableViewScrollPositionNone];
+        tv.tag = 0;
+        }
+    }
+/* The app's selection, pushed in (programmatic selection never calls the delegate, and the tag
+ * mutes it anyway). */
+void ux_ios_table_select(int handle, int node, int* rows, int n)
+    {
+    UITableView* tv = (UITableView*)gCtl[handle][node];
+    if (![tv isKindOfClass:UITableView.class])
+        return;
+    tv.tag = 1;
+    for (NSIndexPath* ip in tv.indexPathsForSelectedRows)
+        [tv deselectRowAtIndexPath:ip animated:NO];
+    for (int i = 0; i < n; i++)
+        if (rows[i] < [tv numberOfRowsInSection:0])
+            [tv selectRowAtIndexPath:[NSIndexPath indexPathForRow:rows[i] inSection:0] animated:NO
+                      scrollPosition:UITableViewScrollPositionNone];
+    tv.tag = 0;
+    }
+/* Tests: the view's row count, whether a row is selected in it, a cell's text as the cell shows it,
+ * and a USER's tap on a row (select, then the delegate, as UIKit does for a tap). */
+int ux_ios_test_table_rows(int handle, int node)
+    {
+    UITableView* tv = (UITableView*)gCtl[handle][node];
+    return [tv isKindOfClass:UITableView.class] ? (int)[tv numberOfRowsInSection:0] : -1;
+    }
+int ux_ios_test_table_selected(int handle, int node, int row)
+    {
+    UITableView* tv = (UITableView*)gCtl[handle][node];
+    for (NSIndexPath* ip in tv.indexPathsForSelectedRows)
+        if (ip.row == row)
+            return 1;
+    return 0;
+    }
+int ux_ios_test_table_cell_is(int handle, int node, int row, int col, const char* want)
+    {
+    UITableView* tv = (UITableView*)gCtl[handle][node];
+    UITableViewCell* cell = [tv.dataSource tableView:tv cellForRowAtIndexPath:[NSIndexPath indexPathForRow:row inSection:0]];
+    UILabel* l = (UILabel*)[cell.contentView viewWithTag:100 + col];
+    return l && [l.text isEqualToString:[NSString stringWithUTF8String:want]];
+    }
+void ux_ios_test_table_tap(int handle, int node, int row)
+    {
+    UITableView* tv = (UITableView*)gCtl[handle][node];
+    NSIndexPath* ip = [NSIndexPath indexPathForRow:row inSection:0];
+    if (!tv.allowsMultipleSelection)
+        for (NSIndexPath* o in tv.indexPathsForSelectedRows)
+            [tv deselectRowAtIndexPath:o animated:NO];
+    [tv selectRowAtIndexPath:ip animated:NO scrollPosition:UITableViewScrollPositionNone];
+    [tv.delegate tableView:tv didSelectRowAtIndexPath:ip];
+    }
+
 // ── native navigation: a real UINavigationController (UXNB v2 §5) ──────────────────────────────
 // UXNavigationController hands its pushes and pops here, and the platform does the rest: the bar,
 // the Back button (titled with the form underneath), the push animation and the interactive
