@@ -3754,6 +3754,23 @@ class Sema
     // decided by the COLLECTION, not by the context the read appears in, so
     // this needs no target type. Returns `e` unchanged when it does not apply.
     // private:docs/bugs/046.
+    // The type unboxCollectionElement would give `e`, without building the
+    // unboxing: its element type when it is a typed collection's primitive
+    // element, else its own type.
+    String* unboxedTypeOf(Node* e)
+        {
+        if (e == 0)
+            return (String*)0;
+        if (e.kind() != (u16)nkMethodCall || e.ty() == 0 || !_isOp(Vtable.canonical(e.ty()), "Object*"))
+            return e.ty();
+        if (_isOp(e.name(), "copy") || e.kidCount() == (u32)0)
+            return e.ty();
+        String* elem = Node.elemOf(e.kid((u32)0).ty());
+        if (elem == 0 || numberAccessorFor(elem) == 0)
+            return e.ty();
+        return elem;
+        }
+
     Node* unboxCollectionElement(Node* e)
         {
         if (e == 0)
@@ -4214,7 +4231,11 @@ class Sema
             va = va + sp[5];
             if (va >= call.kidCount())
                 return;
-            String* at = call.kid(va).ty();
+            // The type the argument WILL have: a typed collection's element is
+            // unboxed later (applyBoxing), and fitting `%ld` to the box left a
+            // 32-bit element printed through a 64-bit conversion, so -5 came
+            // out as 4294967291 (bug 590).
+            String* at = unboxedTypeOf(call.kid(va));
             va = va + (u32)1;
             // An enum's name is printed by the lowering's `%e` rewrite, so
             // `%@` given an enum is spelled that way.
