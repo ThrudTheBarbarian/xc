@@ -32,7 +32,7 @@ The protocol falls into eight groups:
 
 | group | what it covers |
 | --- | --- |
-| **windows** | create, open, title, icon, invalidate, destroy, scroll offset |
+| **windows** | create, open, title, icon, invalidate, destroy, scroll offset, snapshot |
 | **the shadow tree** | `struct*` — the flat object array the platform walks |
 | **realization** | `realizeTree` — make native controls and push their state |
 | **events** | `nextEvent`, `pumpMessages`, `runLoop`, `trackDragStep` |
@@ -309,6 +309,7 @@ i32 windowScrollX(i32 handle)
 i32 windowScrollY(i32 handle)
 void windowSetScroll(i32 handle, i32 x, i32 y)
 void windowContentGeometry(i32 handle, i32* w, i32* h)
+i32 windowSnapshot(i32 handle, i32 x, i32 y, i32 w, i32 h, u32* out)
 void windowInvalidate(i32 handle)
 void windowInvalidateRect(i32 handle, i32 x, i32 y, i32 w, i32 h)
 void windowOrderFront(i32 handle)

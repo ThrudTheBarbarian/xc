@@ -1887,6 +1887,93 @@ void ux_gtk_render_scene(int handle)
     cairo_surface_flush(gShot);
     g_object_unref(p);
     }
+/* The window's content as it is on screen, region (x, y, w, h) of the content (below any menu
+ * bar), into out as w * h opaque 0xAARRGGBB words.  The TOPLEVEL renders through its paintable --
+ * its own background, every widget on it, a GtkGLArea's frame as the texture it composited -- into
+ * a cairo surface shifted so the region lands at its origin.  A widget paintable shows the frames
+ * rendered since it was made, so each window keeps one, and each snapshot asks for a frame and waits
+ * (bounded) for the frame clock to paint it: the picture is the window as it is now, at the cost of
+ * one frame. */
+static GdkPaintable* gSnapP[UXGTK_MAXW];
+static int gSnapPainted;
+static void snap_after_paint(GdkFrameClock* fc, gpointer ud)
+    {
+    (void)fc;
+    (void)ud;
+    gSnapPainted++;
+    }
+static gboolean snap_give_up(gpointer ud)
+    {
+    *(int*)ud = 1;
+    return G_SOURCE_REMOVE;
+    }
+int ux_gtk_window_snapshot(int handle, int x, int y, int w, int h, uint32_t* out)
+    {
+    if (handle <= 0 || handle >= UXGTK_MAXW || !gWin[handle] || !gFix[handle] || w <= 0 || h <= 0 || !out)
+        return 0;
+    GtkWidget* top = GTK_WIDGET(gWin[handle]);
+    if (gtk_widget_get_width(GTK_WIDGET(gFix[handle])) <= 0)
+        {
+        guint beat = g_timeout_add(5, ux_gtk_heartbeat, NULL);
+        for (int spins = 0; gtk_widget_get_width(GTK_WIDGET(gFix[handle])) <= 0 && spins < 120; spins++)
+            g_main_context_iteration(NULL, TRUE);
+        for (int i = 0; i < 10; i++)
+            g_main_context_iteration(NULL, FALSE);
+        g_source_remove(beat);
+        }
+    int tw = gtk_widget_get_width(top), th = gtk_widget_get_height(top);
+    graphene_point_t o = GRAPHENE_POINT_INIT(0, 0), at;
+    if (tw <= 0 || th <= 0 || !gtk_widget_compute_point(GTK_WIDGET(gFix[handle]), top, &o, &at))
+        return 0;
+    if (!gSnapP[handle])
+        {
+        gSnapP[handle] = gtk_widget_paintable_new(top);
+        GdkFrameClock* fc = gtk_widget_get_frame_clock(top);
+        if (fc)
+            g_signal_connect(fc, "after-paint", G_CALLBACK(snap_after_paint), NULL);
+        }
+    /* a frame, painted now: ask for one and wait for the frame clock to paint it, until the paintable
+     * has a picture (a new one needs a frame or two first) or half a second has gone */
+    GdkPaintable* p = gSnapP[handle];
+    GskRenderNode* node = NULL;
+    int late = 0;
+    guint beat = g_timeout_add(5, ux_gtk_heartbeat, NULL);
+    guint limit = g_timeout_add(500, snap_give_up, &late);
+    while (!node && !late)
+        {
+        int was = gSnapPainted;
+        gtk_widget_queue_draw(top);
+        while (gSnapPainted == was && !late)
+            g_main_context_iteration(NULL, TRUE);
+        GtkSnapshot* snap = gtk_snapshot_new();
+        gdk_paintable_snapshot(p, GDK_SNAPSHOT(snap), tw, th);
+        node = gtk_snapshot_free_to_node(snap);
+        }
+    if (!late)
+        g_source_remove(limit);
+    g_source_remove(beat);
+    if (!node)
+        return 0;
+    cairo_surface_t* cs = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, w, h);
+    cairo_t* cr = cairo_create(cs);
+    cairo_set_source_rgb(cr, 1, 1, 1);
+    cairo_paint(cr);
+    cairo_translate(cr, -(at.x + x), -(at.y + y));
+    gsk_render_node_draw(node, cr);
+    gsk_render_node_unref(node);
+    cairo_destroy(cr);
+    cairo_surface_flush(cs);
+    const unsigned char* d = cairo_image_surface_get_data(cs);
+    int stride = cairo_image_surface_get_stride(cs);
+    for (int j = 0; j < h; j++)
+        {
+        const uint32_t* row = (const uint32_t*)(d + j * stride);
+        for (int i = 0; i < w; i++)
+            out[j * w + i] = 0xFF000000u | (row[i] & 0x00FFFFFFu); /* opaque: painted over white */
+        }
+    cairo_surface_destroy(cs);
+    return 1;
+    }
 /* ── the modal alert: GtkAlertDialog + a nested main loop ────────────────────
  * choose() is async by design; alertRun's contract is synchronous, so the
  * completion quits a nested GMainLoop — the GTK twin of NSAlert's runModal.

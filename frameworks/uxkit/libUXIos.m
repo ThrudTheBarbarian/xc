@@ -287,6 +287,41 @@ void ux_ios_content_geometry(int handle, int* w, int* h)
         *h = 0;
         }
     }
+/* The window's content as it is on screen, region (x, y, w, h) of its container view, into out as
+ * w * h opaque 0xAARRGGBB words: the container and every subview -- the draw view (with the GL frame
+ * painted into it), the native controls -- rendered by UIKit at 1x (the window's point size), over
+ * the window's background colour. */
+int ux_ios_window_snapshot(int handle, int x, int y, int w, int h, uint32_t* out)
+    {
+    UIView* v = (handle > 0 && handle < UXIOS_MAXW) ? gWin[handle] : nil;
+    if (!v || w <= 0 || h <= 0 || !out)
+        return 0;
+    __block int ok = 0;
+    @autoreleasepool
+        {
+        CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+        CGContextRef ctx = CGBitmapContextCreate(out, w, h, 8, w * 4, cs,
+                                                 kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
+        CGColorSpaceRelease(cs);
+        if (ctx)
+            {
+            UIColor* bg = v.window.backgroundColor ?: (v.backgroundColor ?: [UIColor whiteColor]);
+            CGContextSetFillColorWithColor(ctx, bg.CGColor);
+            CGContextFillRect(ctx, CGRectMake(0, 0, w, h));
+            /* UIKit draws y-down: flip the bitmap context, then shift the region to its origin */
+            CGContextTranslateCTM(ctx, 0, h);
+            CGContextScaleCTM(ctx, 1, -1);
+            UIGraphicsPushContext(ctx);
+            ok = [v drawViewHierarchyInRect:CGRectMake(-x, -y, v.bounds.size.width, v.bounds.size.height)
+                         afterScreenUpdates:YES] ? 1 : 0;
+            UIGraphicsPopContext();
+            CGContextRelease(ctx);
+            for (int i = 0; i < w * h; i++)
+                out[i] |= 0xFF000000u; /* opaque: painted over the background */
+            }
+        }
+    return ok;
+    }
 int ux_ios_native_count(void)
     {
     return gLive;

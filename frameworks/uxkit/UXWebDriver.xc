@@ -219,6 +219,13 @@ class UXWebDriver : Object<UXViewDriver>
         {
         ux_win_geometry(handle, w, h);
         }
+    // the window's region of the canvas composed as the page shows it, GL views under the 2-D layer;
+    // a repaint still pending for the window is made first, as the next frame would show it
+    i32 windowSnapshot(i32 handle, i32 x, i32 y, i32 w, i32 h, u32* out)
+        {
+        self.webPresent(handle);
+        return ux_web_snapshot(handle, x, y, w, h, out);
+        }
 
     // ---- invalidation: accumulate, consolidate on present (§3.2) -------------
     // No canvas calls here — a dirty box and a flag.  The paint happens in

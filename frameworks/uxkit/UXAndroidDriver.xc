@@ -63,6 +63,7 @@ void ux_and_gl_present(pointer view);
 i32 ux_and_gl_paint(pointer view, i32 win, i32 x, i32 y, i32 w, i32 h);
 // The system document picker; the picked document is copied into the cache and its path given.
 i32 ux_and_file_open(u8* out, i32 cap);
+i32 ux_and_window_snapshot(i32 handle, i32 x, i32 y, i32 w, i32 h, u32* out);
 // ACTION_CREATE_DOCUMENT for the save panel, and the copy on to the document after a write.
 i32 ux_and_file_save(u8* defaultName, u8* out, i32 cap);
 i32 ux_and_file_written(u8* path);
@@ -589,6 +590,11 @@ class UXAndroidDriver : Object<UXViewDriver>
     void windowContentGeometry(i32 handle, i32* w, i32* h)
         {
         ux_and_content_geometry(handle, w, h);
+        }
+    // the window's FrameLayout and every view on it drawn into a bitmap at a pixel a dp (libUXAndroid.c)
+    i32 windowSnapshot(i32 handle, i32 x, i32 y, i32 w, i32 h, u32* out)
+        {
+        return ux_and_window_snapshot(handle, x, y, w, h, out);
         }
     void windowInvalidate(i32 handle)
         {

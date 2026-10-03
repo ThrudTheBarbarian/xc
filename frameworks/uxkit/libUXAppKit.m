@@ -1736,6 +1736,55 @@ int ux_ak_app_icon_pixel(int x, int y, int* outW, int* outH)
     free(px);
     return rgb;
     }
+/* The window's content as it is on screen, region (x, y, w, h) in the toolkit's (top-left) content
+ * coordinates, into out as w * h opaque 0xAARRGGBB words.  The content view renders itself and every
+ * subview into a bitmap of w x h POINTS (1x: a movie of the window is its point size, whatever the
+ * screen's scale): the draw view's 2-D pass with the GL frame painted into it, the native controls
+ * and scroll views, any overlay.  The window's own background, which the toolkit does not paint, is
+ * filled in first, as it shows on screen.  Headless or interactive alike: both have the views. */
+int ux_ak_window_snapshot(int handle, int x, int y, int w, int h, uint32_t* out)
+    {
+    if (handle <= 0 || handle >= UX_MAXW || !g_view[handle] || w <= 0 || h <= 0 || !out)
+        return 0;
+    NSWindow* win = g_win[handle];
+    NSView* v = win ? [win contentView] : g_view[handle];
+    if (!v)
+        return 0;
+    int ok = 0;
+    @autoreleasepool
+        {
+        NSRect b = [v bounds];
+        /* the region in the view's own coordinates: a non-flipped view counts y from the bottom */
+        NSRect r = NSMakeRect(b.origin.x + x, [v isFlipped] ? b.origin.y + y : b.origin.y + b.size.height - y - h, w, h);
+        NSBitmapImageRep* rep = [[NSBitmapImageRep alloc] initWithBitmapDataPlanes:NULL
+            pixelsWide:w pixelsHigh:h bitsPerSample:8 samplesPerPixel:4 hasAlpha:YES
+            isPlanar:NO colorSpaceName:NSDeviceRGBColorSpace bytesPerRow:w * 4 bitsPerPixel:32];
+        NSGraphicsContext* gctx = rep ? [NSGraphicsContext graphicsContextWithBitmapImageRep:rep] : nil;
+        if (gctx)
+            {
+            [rep setSize:NSMakeSize(w, h)];
+            [NSGraphicsContext saveGraphicsState];
+            [NSGraphicsContext setCurrentContext:gctx];
+            NSColor* bg = win ? [win backgroundColor] : [NSColor windowBackgroundColor];
+            [[bg colorUsingColorSpace:[NSColorSpace deviceRGBColorSpace]] set];
+            NSRectFill(NSMakeRect(0, 0, w, h));
+            /* shift the view so the region lands at the bitmap's origin */
+            CGContextTranslateCTM([gctx CGContext], -(r.origin.x - b.origin.x), -(r.origin.y - b.origin.y));
+            [v displayRectIgnoringOpacity:r inContext:gctx];
+            [NSGraphicsContext restoreGraphicsState];
+            const unsigned char* p = [rep bitmapData];
+            long row = (long)[rep bytesPerRow];
+            for (int j = 0; j < h; j++)
+                for (int i = 0; i < w; i++)
+                    {
+                    const unsigned char* q = p + j * row + i * 4;
+                    out[j * w + i] = 0xFF000000u | ((uint32_t)q[0] << 16) | ((uint32_t)q[1] << 8) | q[2];
+                    }
+            ok = 1;
+            }
+        }
+    return ok;
+    }
 // Read-back, so a test can assert the WINDOW shows it rather than that the call returned.
 int ux_ak_window_icon(int handle, char* out, int cap)
     {

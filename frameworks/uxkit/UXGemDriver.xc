@@ -197,6 +197,37 @@ class UXGemDriver : Object<UXViewDriver>
         w[0] = ww;
         h[0] = hh;
         }
+    // The window's work area as the screen shows it: the composed back buffer every window draws into
+    // through the VDI (device words, 0xRRGGBBAA).  GEM keeps no picture of a window of its own, so a
+    // part another window covers shows that window, as on screen.
+    i32 windowSnapshot(i32 handle, i32 x, i32 y, i32 w, i32 h, u32* out)
+        {
+        i32 wx = (i32)0;
+        i32 wy = (i32)0;
+        i32 ww = (i32)0;
+        i32 wh = (i32)0;
+        wind_get(handle, (i32)WF_WORKXYWH, &wx, &wy, &ww, &wh);
+        u32* px = gGemBackBuffer.px;
+        if (px == (u32*)0 || x + w > ww || y + h > wh)
+            {
+            return (i32)0;
+            }
+        for (i32 j = (i32)0; j < h; j = j + (i32)1)
+            {
+            i32 sy = wy + y + j;
+            for (i32 i = (i32)0; i < w; i = i + (i32)1)
+                {
+                i32 sx = wx + x + i;
+                u32 v = (u32)0;
+                if (sx >= (i32)0 && sy >= (i32)0 && sx < gGemBackBuffer.w && sy < gGemBackBuffer.h)
+                    {
+                    v = px[sy * gGemBackBuffer.stride + sx] >> (u32)8;
+                    }
+                out[j * w + i] = (u32)$FF000000 | v;
+                }
+            }
+        return (i32)1;
+        }
 
     // ---- repaint -------------------------------------------------------------
     void windowInvalidate(i32 handle)

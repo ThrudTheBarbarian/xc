@@ -15,6 +15,7 @@
 #import "UXGraphics.xc"
 #import "UXEvent.xc"
 #import "UXViewDriver.xc"
+#import "UXImage.xc"     // snapshot's picture
 
 // Posted (object = the UXWindow, a/b = the new content width/height) when the user resizes a window,
 // for observers that are not the app delegate.  The app delegate also gets windowDidResize directly.
@@ -194,6 +195,42 @@ class UXWindow : UXResponder
         gDriver.windowSetContent(handle, (pointer)&ux_window_draw, (pointer)self);
         gDriver.windowOpen(handle, (i32)f.x, (i32)f.y, (i32)f.w, (i32)f.h);
         self.displayAll(); // first paint: everything
+        }
+
+    // The window's content as it is on screen, as an image: the views, the native controls and any
+    // GL frame, composited.  r is a region in content coordinates (clipped to the content), or null
+    // for the whole content.  Null if the window is not open, the region is empty, or the backend
+    // cannot read it.
+    UXImage* snapshot(UXRect* r)
+        {
+        if (handle == (i32)0)
+            {
+            return (UXImage*)0;
+            }
+        i32 cw = (i32)0;
+        i32 ch = (i32)0;
+        gDriver.windowContentGeometry(handle, &cw, &ch);
+        i32 x = (i32)0;
+        i32 y = (i32)0;
+        i32 x1 = cw;
+        i32 y1 = ch;
+        if (r != (UXRect*)0)
+            {
+            x = (i32)r.x > (i32)0 ? (i32)r.x : (i32)0;
+            y = (i32)r.y > (i32)0 ? (i32)r.y : (i32)0;
+            x1 = (i32)r.x + (i32)r.w < cw ? (i32)r.x + (i32)r.w : cw;
+            y1 = (i32)r.y + (i32)r.h < ch ? (i32)r.y + (i32)r.h : ch;
+            }
+        if (x1 <= x || y1 <= y)
+            {
+            return (UXImage*)0;
+            }
+        UXImage* im = UXImage.make(x1 - x, y1 - y);
+        if (gDriver.windowSnapshot(handle, x, y, x1 - x, y1 - y, im.px) == (i32)0)
+            {
+            return (UXImage*)0;
+            }
+        return im;
         }
 
     // ---- chrome: DECLARATIVE (§11) ------------------------------------------

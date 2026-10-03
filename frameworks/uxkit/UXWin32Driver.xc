@@ -452,6 +452,23 @@ pointer UXScroll32Proc(pointer hwnd, u32 msg, pointer wp, pointer lp)
 // WM_PAINT flows backend -> the neutral content callback -> treeDraw -> drawRect.
 pointer UXWin32Proc(pointer hwnd, u32 msg, pointer wp, pointer lp)
     {
+    // WM_PRINTCLIENT (PrintWindow, for windowSnapshot): the same paint, into the DC it is handed
+    if (msg == (u32)$0318)
+        {
+        pointer pud = GetWindowLongPtrA(hwnd, (i32)GWLP_USERDATA);
+        pointer was = gW32CurHdc;
+        gW32CurHdc = wp;
+        SelectObject(gW32CurHdc, gW32Font);
+        if (pud != (pointer)0 && gW32ContentFn != (pointer)0)
+            {
+            RECT prc;
+            GetClientRect(hwnd, (pointer)&prc);
+            UXContentFn* pf = (UXContentFn*)gW32ContentFn;
+            pf((i32)0, (i32)0, (i32)0, prc.right, prc.bottom, pud);
+            }
+        gW32CurHdc = was;
+        return (pointer)0;
+        }
     if (msg == (u32)WM_PAINT)
         {
         pointer ud = GetWindowLongPtrA(hwnd, (i32)GWLP_USERDATA); // the UXWindow (reverse map)
@@ -944,6 +961,36 @@ struct W32BmiHeader
     u32 biClrImportant;
     }
 
+// The window snapshot's GDI and user32 calls, by name like StretchDIBits.
+pointer gW32CreateDIBSection;
+pointer gW32PrintWindow;
+pointer gW32BitBlt;
+i32 gW32SnapLoaded;
+i32 gW32UnderWine; // Wine keeps a surface per window, and its PrintWindow leaves the child controls out
+typedef pointer W32CreateDIBSectionFn(pointer hdc, pointer bmi, u32 usage, pointer* bits, pointer section, u32 offset);
+typedef i32 W32PrintWindowFn(pointer hwnd, pointer hdc, u32 flags);
+typedef i32 W32BitBltFn(pointer hdc, i32 x, i32 y, i32 w, i32 h, pointer src, i32 sx, i32 sy, u32 rop);
+void w32_snap_load(void)
+    {
+    if (gW32SnapLoaded != (i32)0)
+        {
+        return;
+        }
+    gW32SnapLoaded = (i32)1;
+    pointer gdi = LoadLibraryA((pointer)"gdi32.dll");
+    pointer usr = LoadLibraryA((pointer)"user32.dll");
+    if (gdi != (pointer)0)
+        {
+        gW32CreateDIBSection = GetProcAddress(gdi, (u8*)"CreateDIBSection");
+        gW32BitBlt = GetProcAddress(gdi, (u8*)"BitBlt");
+        }
+    if (usr != (pointer)0)
+        {
+        gW32PrintWindow = GetProcAddress(usr, (u8*)"PrintWindow");
+        }
+    pointer nt = LoadLibraryA((pointer)"ntdll.dll");
+    gW32UnderWine = nt != (pointer)0 && GetProcAddress(nt, (u8*)"wine_get_version") != (pointer)0 ? (i32)1 : (i32)0;
+    }
 // Open opengl32 and resolve what the DRIVER needs.  wglGetProcAddress is the documented way
 // to reach the extension entry points (the core-profile request, the swap interval); the
 // base ones opengl32 exports by name and GetProcAddress finds them.
@@ -1894,6 +1941,73 @@ class UXWin32Driver : Object<UXViewDriver>
         GetClientRect(gW32Hwnds[handle], (pointer)&rc);
         w[0] = rc.right - rc.left;
         h[0] = rc.bottom - rc.top;
+        }
+    // On Windows, PrintWindow into a 32-bit top-down DIB section: the client area, full content (what
+    // DWM composes: the child controls, and correct when the window is covered).  Under Wine, the
+    // window DC's pixels: Wine keeps a surface for each window, which holds the children and is the
+    // window's own even when it is covered, while its PrintWindow leaves the child controls out.
+    // The window DC is also what is used if PrintWindow declines.
+    i32 windowSnapshot(i32 handle, i32 x, i32 y, i32 w, i32 h, u32* out)
+        {
+        pointer hwnd = handle > (i32)0 && handle < (i32)64 ? gW32Hwnds[handle] : (pointer)0;
+        w32_snap_load();
+        if (hwnd == (pointer)0 || gW32CreateDIBSection == (pointer)0 || gW32BitBlt == (pointer)0)
+            {
+            return (i32)0;
+            }
+        RECT crc;
+        GetClientRect(hwnd, (pointer)&crc);
+        i32 cw = crc.right;
+        i32 ch = crc.bottom;
+        if (cw <= (i32)0 || ch <= (i32)0 || x + w > cw || y + h > ch)
+            {
+            return (i32)0;
+            }
+        W32BmiHeader bmi;
+        u8* z = (u8*)&bmi;
+        for (i32 i = (i32)0; i < (i32)40; i = i + (i32)1)
+            {
+            z[i] = (u8)0;
+            }
+        bmi.biSize = (u32)40;
+        bmi.biWidth = cw;
+        bmi.biHeight = (i32)0 - ch; // top-down
+        bmi.biPlanes = (u16)1;
+        bmi.biBitCount = (u16)32;
+        pointer bits = (pointer)0;
+        W32CreateDIBSectionFn* mk = (W32CreateDIBSectionFn*)gW32CreateDIBSection;
+        pointer dib = mk((pointer)0, (pointer)&bmi, (u32)0, &bits, (pointer)0, (u32)0);
+        if (dib == (pointer)0 || bits == (pointer)0)
+            {
+            return (i32)0;
+            }
+        pointer mem = CreateCompatibleDC((pointer)0);
+        pointer old = SelectObject(mem, dib);
+        i32 ok = (i32)0;
+        if (gW32PrintWindow != (pointer)0 && gW32UnderWine == (i32)0)
+            {
+            W32PrintWindowFn* pw = (W32PrintWindowFn*)gW32PrintWindow;
+            ok = pw(hwnd, mem, (u32)3); // PW_CLIENTONLY | PW_RENDERFULLCONTENT
+            }
+        if (ok == (i32)0)
+            {
+            pointer wdc = GetDC(hwnd);
+            W32BitBltFn* bb = (W32BitBltFn*)gW32BitBlt;
+            ok = bb(mem, (i32)0, (i32)0, cw, ch, wdc, (i32)0, (i32)0, (u32)$00CC0020); // SRCCOPY
+            ReleaseDC(hwnd, wdc);
+            }
+        u32* px = (u32*)bits;
+        for (i32 j = (i32)0; j < h; j = j + (i32)1)
+            {
+            for (i32 i = (i32)0; i < w; i = i + (i32)1)
+                {
+                out[j * w + i] = (u32)$FF000000 | (px[(y + j) * cw + x + i] & (u32)$00FFFFFF);
+                }
+            }
+        SelectObject(mem, old);
+        DeleteDC(mem);
+        DeleteObject(dib);
+        return ok != (i32)0 ? (i32)1 : (i32)0;
         }
     void windowInvalidate(i32 handle)
         {

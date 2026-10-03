@@ -963,6 +963,21 @@ void ux_and_window_invalidate(int handle) {
     if (gWinV[handle]) (*env)->CallVoidMethod(env, gWinV[handle], gInvalidate);
 }
 void ux_and_content_geometry(int handle, int *w, int *h) { *w = gWinW[handle]; *h = gWinH[handle]; }
+/* The window's content as it is on screen, region (x, y, w, h) in dp, into out as w * h opaque
+ * 0xAARRGGBB words: UXBridge.snapshot draws the window's FrameLayout, every view on it, into a bitmap
+ * at one pixel a dp. */
+int ux_and_window_snapshot(int handle, int x, int y, int w, int h, uint32_t *out) {
+    if (handle <= 0 || handle >= UXA_MAXW || !gWinV[handle] || w <= 0 || h <= 0 || !out) return 0;
+    JNIEnv *env = envNow();
+    jmethodID m = (*env)->GetStaticMethodID(env, gBridgeCls, "snapshot", "(Landroid/view/View;IIIIF)[I");
+    if (!check(env, "snapshot method") || !m) return 0;
+    jintArray px = (jintArray)(*env)->CallStaticObjectMethod(env, gBridgeCls, m, gWinV[handle], x, y, w, h, (jfloat)gDensity);
+    if (!check(env, "snapshot") || !px) return 0;
+    (*env)->GetIntArrayRegion(env, px, 0, w * h, (jint *)out);
+    (*env)->DeleteLocalRef(env, px);
+    for (int i = 0; i < w * h; i++) out[i] |= 0xFF000000u;
+    return 1;
+}
 int ux_and_native_count(void) { return gLive; }
 
 /* ── native controls (button + label this slice; the set grows) ─────────── */

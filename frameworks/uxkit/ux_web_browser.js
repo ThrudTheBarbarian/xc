@@ -163,6 +163,29 @@
     ux_win_order_front: (h) => { front = h; },
     ux_win_geometry: (h, pw, ph) => { const s = wins.get(h); wi32(pw, s ? s.w : 0); wi32(ph, s ? s.h : 0); },
     ux_present: (h) => { presentFrame(); },      // a page's canvas paints are immediate; a worker's are posted
+    // The window's content as it is on screen (UXWindow.snapshot): its region of the canvas composed
+    // as the page shows it -- the page's white behind, the window's GL views at their places, the 2-D
+    // layer over them -- then read back into memory as w * h opaque 0xAARRGGBB words.
+    ux_web_snapshot: (h, x, y, w, hh, out) => {
+      const s = wins.get(h);
+      if (!s || w <= 0 || hh <= 0) return 0;
+      const c = mkCanvas(w, hh);
+      const g = c.getContext('2d', { willReadFrequently: true });
+      g.fillStyle = '#ffffff';
+      g.fillRect(0, 0, w, hh);
+      for (const e of (glViews.get(h) || [])) if (e.gl) g.drawImage(e.el, e.x - s.x - x, e.y - s.y - y, e.w, e.h);
+      g.drawImage(canvas, s.x + x, s.y + y, w, hh, 0, 0, w, hh);
+      const d = g.getImageData(0, 0, w, hh).data;
+      // byte by byte (0xAARRGGBB little-endian is B, G, R, A): the words need not be 4-byte aligned
+      const m = U8(), at = out >>> 0;
+      for (let i = 0; i < w * hh; i++) {
+        m[at + i * 4] = d[i * 4 + 2];
+        m[at + i * 4 + 1] = d[i * 4 + 1];
+        m[at + i * 4 + 2] = d[i * 4];
+        m[at + i * 4 + 3] = 255;
+      }
+      return 1;
+    },
 
     ux_gfx_target: (h) => {
       target = h;
@@ -757,9 +780,9 @@
         if (getComputedStyle(canvas).position === 'static') canvas.style.position = 'relative';
       }
       s.hasGl = true;
-      // a worker's frame is read back by the composite, later than the draw: keep the buffer
+      // the frame is read back later than the draw (the worker's composite, a snapshot): keep the buffer
       e = { node, el, gl: el.getContext('webgl2', { alpha: true, premultipliedAlpha: true, antialias: false,
-                                                    preserveDrawingBuffer: !hasDOM }) };
+                                                    preserveDrawingBuffer: true }) };
       arr.push(e);
     }
     e.x = s.x + x;

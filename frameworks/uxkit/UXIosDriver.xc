@@ -56,6 +56,7 @@ void ux_ios_menu_set(u8* enc);
 void ux_ios_menu_state(i32 t, i32 j, i32 what, i32 on);
 // The system document picker (import mode); the picked document's private copy's path.
 i32 ux_ios_file_open(u8* out, i32 cap);
+i32 ux_ios_window_snapshot(i32 handle, i32 x, i32 y, i32 w, i32 h, u32* out);
 // The export picker for the save panel, and the copy on to the chosen document after a write.
 i32 ux_ios_file_save(u8* defaultName, u8* out, i32 cap);
 i32 ux_ios_file_written(u8* path);
@@ -573,6 +574,11 @@ class UXIosDriver : Object<UXViewDriver>
     void windowContentGeometry(i32 handle, i32* w, i32* h)
         {
         ux_ios_content_geometry(handle, w, h);
+        }
+    // the window's container and every subview rendered by UIKit at 1x (libUXIos.m)
+    i32 windowSnapshot(i32 handle, i32 x, i32 y, i32 w, i32 h, u32* out)
+        {
+        return ux_ios_window_snapshot(handle, x, y, w, h, out);
         }
     void windowInvalidate(i32 handle)
         {

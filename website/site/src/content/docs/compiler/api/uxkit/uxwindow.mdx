@@ -60,7 +60,7 @@ closes as a backstop. From a control's action, prefer
 **Opening** · [open](#open) · [openWithTree](#openwithtree) · [close](#close) · [isOpen](#isopen)
 **Chrome** · [setTitle](#settitle--setsubtitle--setmodified--setinfo--seticon) · [setSubtitle](#settitle--setsubtitle--setmodified--setinfo--seticon) · [setModified](#settitle--setsubtitle--setmodified--setinfo--seticon) · [setInfo](#settitle--setsubtitle--setmodified--setinfo--seticon) · [setIcon](#settitle--setsubtitle--setmodified--setinfo--seticon) · [orderFront](#orderfront)
 **Scrolling** · [setContentSize](#setcontentsize) · [scrollTo](#scrollto--scrollx--scrolly) · [scrollX](#scrollto--scrollx--scrolly) · [scrollY](#scrollto--scrollx--scrolly)
-**Painting** · [display](#display) · [displayAll](#displayall)
+**Painting** · [display](#display) · [displayAll](#displayall) · [snapshot](#snapshot)
 **Views** · [viewAt](#viewat) · [layoutFor](#layoutfor)
 **Focus & dispatch** · [makeFirstResponder](#makefirstresponder) · [setDefaultButton](#setdefaultbutton) · [moveFocus](#movefocus) · [dispatchMouse](#dispatchmouse) · [dispatchMouseDragged](#dispatchmousedragged--dispatchmouseup) · [dispatchMouseUp](#dispatchmousedragged--dispatchmouseup) · [dispatchKey](#dispatchkey) · [dispatchWheel](#dispatchwheel) · [keyDown](#keydown)
 
@@ -217,6 +217,38 @@ void displayAll(void)
 Full repaint. On the native-overlay backends this is also where `realizeTree`
 reconciles native controls with the tree, so the examples call it after building
 the view hierarchy.
+
+### snapshot
+
+```c
+UXImage* snapshot(UXRect* r)
+```
+
+The window's content as it is on screen, as a [`UXImage`](/compiler/api/uxkit/uximage/):
+the views, the native controls and any GL view's frame, composited. `r` is a
+region in content coordinates, clipped to the content, or null for the whole
+content. Answers null if the window is not open or the region is empty. The
+image is at the window's own size in points, whatever the screen's scale.
+
+```c
+UXImage* whole = win.snapshot((UXRect*)0);
+UXRect map = UXGeom.make((i16)0, (i16)40, (i16)1280, (i16)792);
+UXImage* part = win.snapshot(&map);
+movie.add(part);                      // UXMovie
+```
+
+| backend | how |
+| --- | --- |
+| macOS | the content view and its subviews rendered into a bitmap |
+| Windows | `PrintWindow`; under Wine, the window's own surface |
+| GTK | the window rendered through its paintable, for the current frame |
+| web | the window's region of the canvas, GL views composed under the 2-D layer |
+| iOS | `drawViewHierarchyInRect:` |
+| Android | the window's layout drawn into a bitmap |
+| GEM | the window's work area from the screen's buffer, so a part another window covers shows that window |
+
+A whole-window snapshot takes a few milliseconds on most backends. On GTK it
+waits for one frame to be painted, about 30 ms.
 
 ### makeFirstResponder
 

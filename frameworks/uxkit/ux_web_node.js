@@ -63,6 +63,18 @@ globalThis.xccImports = { env: {
   ux_win_order_front: (h) => {},
   ux_win_geometry: (h, pw, ph) => { const s = wins.get(h); wi32(pw, s ? s.w : 0); wi32(ph, s ? s.h : 0); },
   ux_present: (h) => { const s = wins.get(h); if (s) s.presents++; },
+  // a snapshot is the replay of what was drawn, point by point, over the page's white (no GPU here)
+  ux_web_snapshot: (h, x, y, w, hh, out) => {
+    const s = wins.get(h);
+    if (!s || w <= 0 || hh <= 0) return 0;
+    const m = new DataView(globalThis.xcc.memory.buffer), at = out >>> 0;
+    for (let j = 0; j < hh; j++)
+      for (let i = 0; i < w; i++) {
+        const v = globalThis.xccImports.env.ux_test_pixel(h, x + i, y + j);
+        m.setUint32(at + (j * w + i) * 4, (0xff000000 | (v < 0 ? 0xffffff : v)) >>> 0, true); // any alignment
+      }
+    return 1;
+  },
   // no page here: the panels draw their own (files are the loader's real ones under node)
   ux_web_has_page: () => 0,
   ux_web_file_open_show: (pp) => 0,

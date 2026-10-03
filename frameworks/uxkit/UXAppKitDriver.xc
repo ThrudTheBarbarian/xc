@@ -34,6 +34,7 @@
 // The shim (libUXAppKit.m).  Primitive signatures only — no NSRect crosses into xtc.
 void ux_ak_boot(void);
 i32 ux_ak_window_create(i32 x, i32 y, i32 w, i32 h);
+i32 ux_ak_window_snapshot(i32 handle, i32 x, i32 y, i32 w, i32 h, u32* out);
 void ux_ak_window_set_content(i32 handle, pointer fn, pointer ud);
 void ux_ak_window_open(i32 handle);
 void ux_ak_window_front(i32 handle);
@@ -816,6 +817,11 @@ class UXAppKitDriver : Object<UXViewDriver>
     void windowContentGeometry(i32 handle, i32* w, i32* h)
         {
         ux_ak_content_geometry(handle, w, h);
+        }
+    // the content view and its subviews rendered at 1x into a bitmap (libUXAppKit.m)
+    i32 windowSnapshot(i32 handle, i32 x, i32 y, i32 w, i32 h, u32* out)
+        {
+        return ux_ak_window_snapshot(handle, x, y, w, h, out);
         }
     void windowInvalidate(i32 handle)
         {

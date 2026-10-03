@@ -50,6 +50,7 @@ void ux_gtk_window_front(i32 handle);
 void ux_gtk_window_close(i32 handle);
 void ux_gtk_window_invalidate(i32 handle);
 void ux_gtk_content_geometry(i32 handle, i32* w, i32* h);
+i32 ux_gtk_window_snapshot(i32 handle, i32 x, i32 y, i32 w, i32 h, u32* out);
 i32 ux_gtk_native_count(void);
 i32 ux_gtk_has_control(i32 handle, i32 node);
 void ux_gtk_make_button(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, u8* title);
@@ -640,6 +641,11 @@ class UXGtkDriver : Object<UXViewDriver>
     void windowContentGeometry(i32 handle, i32* w, i32* h)
         {
         ux_gtk_content_geometry(handle, w, h);
+        }
+    // the toplevel rendered through its paintable, GL area and native widgets included (libUXGtk.c)
+    i32 windowSnapshot(i32 handle, i32 x, i32 y, i32 w, i32 h, u32* out)
+        {
+        return ux_gtk_window_snapshot(handle, x, y, w, h, out);
         }
     void windowInvalidate(i32 handle)
         {

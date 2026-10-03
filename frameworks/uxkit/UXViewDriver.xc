@@ -129,6 +129,11 @@ protocol UXViewDriver
     // resize.  GEM reads WF_WORKXYWH, AppKit the content view bounds, Win32 the client rect.
     void windowContentGeometry(i32 handle, i32 * w, i32 * h);
 
+    // The window's content as it is on screen: every view, native control and GL frame, composited.
+    // The region (x, y, w, h), in content coordinates and already clipped to the content, goes into
+    // out as w * h pixels of 0xAARRGGBB, opaque, top row first.  1 if it was read, 0 if not.
+    i32 windowSnapshot(i32 handle, i32 x, i32 y, i32 w, i32 h, u32 * out);
+
     // Repaint requests (§6 redraw): whole window, or one accumulated dirty rect.
     void windowInvalidate(i32 handle);
     void windowInvalidateRect(i32 handle, i32 x, i32 y, i32 w, i32 h);

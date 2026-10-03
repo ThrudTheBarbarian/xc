@@ -60,6 +60,8 @@ extern i32 ux_web_file_open_show(u8* prompt);
 extern i32 ux_web_file_take(i32 token, u8* out, i32 cap);
 // The colour dialog (the worker run loop): its answer comes back through the ring as type 16.
 extern i32 ux_web_color_show(i32 r, i32 g, i32 b);
+// The window's content as it is on screen: GL views and the 2-D layer, composed (UXWindow.snapshot).
+extern i32 ux_web_snapshot(i32 handle, i32 x, i32 y, i32 w, i32 h, u32* out);
 // A popup button's list, for the page to show at the button: JSON {token, x, y, w, selected,
 // items: [title...]}.  A pick comes back through the ring as type 10 (a = token, b = item).
 extern void ux_popup_open(u8* json, i32 len);

@@ -73,6 +73,22 @@ public class UXBridge implements View.OnClickListener, SeekBar.OnSeekBarChangeLi
     @Override public void onClick(DialogInterface d, int which) { nativeValue(id, which); }
     @Override public void onCancel(DialogInterface d) { nativeFire(id); }
 
+    // UXWindow.snapshot: the window's FrameLayout and every view on it (the draw view, with the GL frame
+    // painted into it, and the native widgets) drawn into a bitmap at the toolkit's scale, one pixel a
+    // dp, over the window's white: w * h 0xAARRGGBB ints, top row first, for the region (x, y, w, h).
+    public static int[] snapshot(View v, int x, int y, int w, int h, float density) {
+        android.graphics.Bitmap b = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888);
+        Canvas c = new Canvas(b);
+        c.drawColor(0xFFFFFFFF);
+        c.translate(-x, -y);
+        c.scale(1f / density, 1f / density);
+        v.draw(c);
+        int[] px = new int[w * h];
+        b.getPixels(px, 0, w, 0, 0, w, h);
+        b.recycle();
+        return px;
+    }
+
     // The system's document picker (ACTION_OPEN_DOCUMENT) for UXOpenPanel.  A NativeActivity cannot be
     // handed an activity result, so a headless Fragment starts the picker and receives it.  The picked
     // document (a content: URI, possibly from a cloud provider) is copied into the app's cache under its
