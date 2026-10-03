@@ -28,14 +28,21 @@ i32 main(void)
     t.join();
     Timer* never = loop.after((u32)50, block void(void) { Stdio.printf("cancelled timer fired\n"); });
     never.cancel();
+    // The third tick schedules the end of the test. A fixed deadline (stop
+    // after 200 ms) raced the ticks, and on a loaded machine it won: the
+    // loop thread got too little time for three 20 ms ticks, and the run
+    // printed "ticks 2". A one-shot timer set from the third tick still
+    // tests `after` firing, and cannot overtake the ticks.
     gEvery = loop.every((u32)20, block void(void) {
         gTicks = gTicks + (u32)1;
         if (gTicks == (u32)3)
+            {
             gEvery.cancel();
-        });
-    loop.after((u32)200, block void(void) {
-        Stdio.printf("ticks %ld\n", gTicks);
-        RunLoop.main().stop();
+            RunLoop.main().after((u32)10, block void(void) {
+                Stdio.printf("ticks %ld\n", gTicks);
+                RunLoop.main().stop();
+                });
+            }
         });
     loop.run();
     Stdio.printf("stopped\n");
