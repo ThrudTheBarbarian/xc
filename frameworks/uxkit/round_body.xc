@@ -1,4 +1,6 @@
-// round_body.xc — the rounded-panel checks, shared by every backend that draws its own scroll view.
+// round_body.xc — the rounded-panel checks, shared by the backends that read a render back (the web,
+// iOS, Android; GTK reads its snapshot instead).  Where the scroll view is native, the bar is the
+// platform's and the check is that none of the toolkit's is drawn.
 // The including file supplies roundPixel(x, y) -> 0xRRGGBB, roundRender(handle), roundEdge(handle) ->
 // the edge's colour along the top (a rig that cannot rasterise a stroke answers from its record) and
 // ROUND_BACKEND, and sets gDriver before calling roundBody().  Returns the number of failed checks.
@@ -61,11 +63,21 @@ i32 roundBody(void)
     rck(isRed(inner), "the content fills the inside", inner);
     i32 below = roundPixel((i32)80, (i32)112);
     rck(isWhite(below), "nothing past the panel's bottom", below);
-    UXRect bf = sv.vbar.frame();
-    rck((i32)bf.y >= (i32)16 && (i32)bf.y + (i32)bf.h <= (i32)90 - (i32)16, "the bar is inset between the corners", (i32)bf.y);
+    if (gDriver.scrollsNatively())
+        {
+        // a native container shows the platform's own bar, so none of the toolkit's is drawn: where
+        // its bar would be (just inside the right edge) is the content
+        i32 barAt = roundPixel((i32)152, (i32)60);
+        rck(isRed(barAt), "the platform's container: no toolkit bar over the content", barAt);
+        }
+    else
+        {
+        UXRect bf = sv.vbar.frame();
+        rck((i32)bf.y >= (i32)16 && (i32)bf.y + (i32)bf.h <= (i32)90 - (i32)16, "the bar is inset between the corners", (i32)bf.y);
+        }
     if (gRoundFails == (i32)0)
         {
-        Stdio.printf("PASS: a rounded panel on %s -- corner cut, edge drawn, content inside, bar inset\n", (u8*)ROUND_BACKEND);
+        Stdio.printf("PASS: a rounded panel on %s -- corner cut, edge drawn, content inside, bar placed\n", (u8*)ROUND_BACKEND);
         }
     else
         {

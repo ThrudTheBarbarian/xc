@@ -33,6 +33,7 @@
 #import "UXTouch.xc"              // drawn content's touches -> mouse events
 #import "UXNavigationController.xc" // a user's pop on the native stack comes back through uxNavNativePopped
 #import "UXTableView.xc"        // the native UITableView reads its rows from the peer table
+#import "UXScrollView.xc"       // a scroll view is a UIScrollView
 #import "UXMenuEncode.xc"       // the app's menus, handed to the "more" button as one string
 #import "UXApplication.xc"      // gApp: the driver-owned loop starts the delegate, and stop() quits
 #import "UXLibc.xc"
@@ -74,6 +75,14 @@ i32 ux_ios_gl_paint(pointer view, i32 win, i32 x, i32 y, i32 w, i32 h);
 void ux_ios_table_reload(i32 handle, i32 node);
 void ux_ios_table_select(i32 handle, i32 node, i32* rows, i32 n);
 void ux_ios_set_touch(pointer fn);
+// native scroll containers: a UIScrollView whose document view draws the scroll view's subtree
+void ux_ios_set_scroll_content(pointer fn);
+void ux_ios_make_scroll(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, i32 contentH, pointer sv, i32 docX, i32 docY);
+void ux_ios_scroll_reload(i32 handle, i32 node, i32 w, i32 h, i32 contentH, i32 docX, i32 docY);
+void ux_ios_scroll_set(i32 handle, i32 node, i32 px);
+i32 ux_ios_scroll_get(i32 handle, i32 node);
+void ux_ios_scroll_style(i32 handle, i32 node, i32 radius, i32 rgb);
+void ux_ios_reparent_to_scroll(i32 handle, i32 node, i32 scrollNode, i32 ax, i32 ay);
 i32 ux_ios_window_create(i32 x, i32 y, i32 w, i32 h);
 void ux_ios_window_set_content(i32 handle, pointer fn, pointer ud);
 void ux_ios_window_open(i32 handle, i32 x, i32 y, i32 w, i32 h);
@@ -436,6 +445,7 @@ class UXIosDriver : Object<UXViewDriver>
             ux_ios_set_field_submit_hooks((pointer)&uxIosFieldSubmitted);
             ux_ios_set_nav_popped((pointer)&uxIosNavPopped);
             ux_ios_set_touch((pointer)&uxTouch);
+            ux_ios_set_scroll_content((pointer)&ux_scroll_draw); // a scroll document draws its subtree
             ux_ios_set_table_hooks((pointer)&xgIosTableRows, (pointer)&xgIosTableCell, (pointer)&xgIosTableCols,
                                    (pointer)&xgIosTableColTitle, (pointer)&xgIosTableColWidth,
                                    (pointer)&xgIosTableMulti, (pointer)&xgIosTableSelectSet);
@@ -1133,6 +1143,37 @@ class UXIosDriver : Object<UXViewDriver>
                 {
                 continue;
                 }
+            if (n.kind == (i32)UXKindScroll)
+                {
+                // A UIScrollView over the scroll view; its document view draws the scroll view's
+                // document subtree (ux_scroll_draw), at the document's own place in the window.
+                UXScrollView* sv = (UXScrollView* ?)(Object*)n.peer;
+                if (sv == (UXScrollView*)0)
+                    {
+                    continue;
+                    }
+                i32 dn = sv.nativeDocNode();
+                i32 dx = ax;
+                i32 dy = ay;
+                if (dn >= (i32)0)
+                    {
+                    i32 dw = (i32)0;
+                    i32 dh = (i32)0;
+                    self.structAbsFrame(tree, dn, &dx, &dy, &dw, &dh);
+                    }
+                if (ux_ios_has_control(handle, i) == (i32)0)
+                    {
+                    ux_ios_make_scroll(handle, i, ax, ay, aw, ah, sv.nativeContentHeight(), n.peer, dx, dy);
+                    }
+                else
+                    {
+                    ux_ios_set_control_frame(handle, i, ax, ay, aw, ah);
+                    ux_ios_scroll_reload(handle, i, aw, ah, sv.nativeContentHeight(), dx, dy);
+                    }
+                ux_ios_scroll_style(handle, i, sv.nativeCornerRadius(), sv.nativeBorderRGB());
+                ux_ios_set_control_hidden(handle, i, self.effectiveHidden(tree, i));
+                continue;
+                }
             if (n.kind == (i32)UXKindTable)
                 {
                 UXTableView* tv = (UXTableView* ?)(Object*)n.peer;
@@ -1287,6 +1328,31 @@ class UXIosDriver : Object<UXViewDriver>
                     }
                 }
             }
+        // A native control inside a scroll view goes into that container's document, so it scrolls
+        // and clips with it.  A scroll, a table or a GL view owns its own surface and stays put.
+        for (i32 i = (i32)0; i < t.count; i = i + (i32)1)
+            {
+            i32 kk = (i32)t.nodes[i].kind;
+            if (kk == (i32)UXKindScroll || kk == (i32)UXKindTable || kk == (i32)UXKindGLView || ux_ios_has_control(handle, i) == (i32)0)
+                {
+                continue;
+                }
+            i32 anc = (i32)t.nodes[i].parent;
+            while (anc >= (i32)0)
+                {
+                if ((i32)t.nodes[anc].kind == (i32)UXKindScroll && ux_ios_has_control(handle, anc) != (i32)0)
+                    {
+                    i32 cx = (i32)0;
+                    i32 cy = (i32)0;
+                    i32 cw = (i32)0;
+                    i32 chh = (i32)0;
+                    self.structAbsFrame(tree, i, &cx, &cy, &cw, &chh);
+                    ux_ios_reparent_to_scroll(handle, i, anc, cx, cy);
+                    break;
+                    }
+                anc = (i32)t.nodes[anc].parent;
+                }
+            }
         }
 
     // ---- painting ------------------------------------------------------------
@@ -1305,9 +1371,9 @@ class UXIosDriver : Object<UXViewDriver>
         // A node with a native control paints itself — never draw under it.
         bool native = t.win != (i32)0 && ux_ios_has_control(t.win, i) != (i32)0;
         // ...and a native table paints its whole subtree: its rows are the UITableView's.
-        if (native && k == (i32)UXKindTable)
+        if (native && (k == (i32)UXKindTable || k == (i32)UXKindScroll))
             {
-            return;
+            return; // ...as a native scroll container's document paints its own (ux_scroll_draw)
             }
         if (!native)
             {
@@ -1322,7 +1388,7 @@ class UXIosDriver : Object<UXViewDriver>
                 i32 vw = (i32)0;
                 i32 vh = (i32)0;
                 self.structAbsFrame((pointer)t, i, &vx, &vy, &vw, &vh);
-                ux_ios_clip(vx, vy, vw, vh);
+                ux_ios_clip(vx - gIosDrawOX, vy - gIosDrawOY, vw, vh); // in the surface's own space
                 // A GL view that owns a context is painted with its last frame, never by
                 // drawRect: the two are alternative renderers.
                 bool gl = t.nodes[i].kind == (i32)UXKindGLView && t.nodes[i].peer != (pointer)0
@@ -1344,7 +1410,7 @@ class UXIosDriver : Object<UXViewDriver>
             i32 chh = (i32)0;
             self.structAbsFrame((pointer)t, i, &cx, &cy, &cw, &chh);
             i32 ci = (i32)t.nodes[i].clipIn;
-            ux_ios_clip_round(cx + ci, cy + ci, cw - ci * (i32)2, chh - ci * (i32)2, (i32)t.nodes[i].clipR);
+            ux_ios_clip_round(cx + ci - gIosDrawOX, cy + ci - gIosDrawOY, cw - ci * (i32)2, chh - ci * (i32)2, (i32)t.nodes[i].clipR);
             }
         i16 c = t.nodes[i].head;
         while (c >= (i16)0)
@@ -1376,17 +1442,18 @@ class UXIosDriver : Object<UXViewDriver>
         gIosDrawOX = x;
         gIosDrawOY = y;
         }
-    // UIScrollView milestone
+    // A scroll view is a UIScrollView, which owns the offset (realizeTree)
     bool scrollsNatively(void)
         {
-        return false;
+        return true;
         }
     void nativeScrollTo(pointer h, i32 node, i32 px)
         {
+        ux_ios_scroll_set(((IOTree*)h).win, node, px);
         }
     i32 nativeScrollPx(pointer h, i32 node)
         {
-        return (i32)0;
+        return ux_ios_scroll_get(((IOTree*)h).win, node);
         }
 
     // ---- text editing (the shared engine; the UITextField overlay is a milestone) ----

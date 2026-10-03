@@ -1,4 +1,4 @@
-// test_ios_round.xc — a rounded panel on iOS, where the toolkit draws the scroll view (round_body.xc).
+// test_ios_round.xc — a rounded panel on iOS, a UIScrollView rounded by its own layer (round_body.xc).
 #import <Stdio.xc>
 #import "UXIosDriver.xc"
 #import "UXWindow.xc"

@@ -37,6 +37,20 @@ static UIView* gDraw[UXIOS_MAXW]; // handle -> its UXDrawView
 static ux_content_fn gContent[UXIOS_MAXW];
 static void* gContentUd[UXIOS_MAXW];
 static UIView* gCtl[UXIOS_MAXW][256]; // [handle][node] -> native control
+/* Native scroll containers (UXScrollView): a UIScrollView whose document view, the content's height,
+ * paints the scroll view's document subtree and holds any native control inside the scroll view.
+ * docX/docY are the document's place in the window's content (the toolkit's coordinates, unscrolled:
+ * the UIScrollView owns the offset). */
+@class UXScrollDocView;
+typedef struct
+    {
+    __unsafe_unretained UXScrollDocView* doc;
+    void* sv;
+    int docX, docY;
+    } UXIosScrollRec;
+static UXIosScrollRec gScroll[UXIOS_MAXW][256];
+static unsigned char gInDoc[UXIOS_MAXW][256]; /* a control moved into scroll node n's document: n + 1 */
+static void (*gScrollContent)(void* sv, int docW, int docH);
 static int gNextH = 1;
 static int gLive = 0;     // the §10 counter (windows)
 static CGContextRef gCtx; // the CGContext of the draw in flight
@@ -263,7 +277,11 @@ void ux_ios_window_close(int handle)
     navWindowClosed(handle);
     [v removeFromSuperview];
     for (int n = 0; n < 256; n++)
+        {
         gCtl[handle][n] = nil;
+        gScroll[handle][n] = (UXIosScrollRec){0};
+        gInDoc[handle][n] = 0;
+        }
     gWin[handle] = nil;
     gDraw[handle] = nil;
     gContent[handle] = NULL;
@@ -272,6 +290,9 @@ void ux_ios_window_close(int handle)
 void ux_ios_window_invalidate(int handle)
     {
     [gDraw[handle] setNeedsDisplay];
+    for (int n = 0; n < 256; n++)
+        if (gScroll[handle][n].doc)
+            [(UIView*)gScroll[handle][n].doc setNeedsDisplay]; /* the scroll documents are surfaces too */
     }
 void ux_ios_content_geometry(int handle, int* w, int* h)
     {
@@ -405,7 +426,11 @@ void ux_ios_make_label(int handle, int node, int x, int y, int w, int h, const c
     }
 void ux_ios_set_control_frame(int handle, int node, int x, int y, int w, int h)
     {
-    gCtl[handle][node].frame = CGRectMake(x, y, w, h);
+    int sn = gInDoc[handle][node] - 1;
+    if (sn >= 0 && gScroll[handle][sn].doc)
+        gCtl[handle][node].frame = CGRectMake(x - gScroll[handle][sn].docX, y - gScroll[handle][sn].docY, w, h);
+    else
+        gCtl[handle][node].frame = CGRectMake(x, y, w, h);
     }
 void ux_ios_set_control_enabled(int handle, int node, int on)
     {
@@ -528,6 +553,154 @@ void ux_ios_seg_select(int handle, int node, int seg)
     UIView* c = gCtl[handle][node];
     if ([c isKindOfClass:UISegmentedControl.class])
         ((UISegmentedControl*)c).selectedSegmentIndex = seg;
+    }
+
+// The scroll container: a real UIScrollView over the scroll view, which owns the offset, the pan, its
+// momentum and its bounce.  Its document view draws the scroll view's document subtree (the shared
+// ux_scroll_draw) and takes the touches on it, handing them to the toolkit in the window's
+// coordinates: the document's place plus the touch's place in it.  UIKit decides between a tap and
+// a pan (a pan cancels the touches, which releases the view that took them).
+@interface UXScrollDocView : UIView
+@property(nonatomic) int handle;
+@property(nonatomic) int node;
+@end
+@implementation UXScrollDocView
+- (void)touchPhase:(int)phase touches:(NSSet<UITouch*>*)touches
+    {
+    UITouch* t = touches.anyObject;
+    UXIosScrollRec* r = &gScroll[self.handle][self.node];
+    if (!t || !gTouch || !gContentUd[self.handle])
+        return;
+    CGPoint p = [t locationInView:self];
+    gTouch(gContentUd[self.handle], phase, r->docX + (int)p.x, r->docY + (int)p.y);
+    }
+- (void)touchesBegan:(NSSet<UITouch*>*)touches withEvent:(UIEvent*)e
+    {
+    [self touchPhase:0 touches:touches];
+    }
+- (void)touchesMoved:(NSSet<UITouch*>*)touches withEvent:(UIEvent*)e
+    {
+    [self touchPhase:1 touches:touches];
+    }
+- (void)touchesEnded:(NSSet<UITouch*>*)touches withEvent:(UIEvent*)e
+    {
+    [self touchPhase:2 touches:touches];
+    }
+- (void)touchesCancelled:(NSSet<UITouch*>*)touches withEvent:(UIEvent*)e
+    {
+    [self touchPhase:3 touches:touches];
+    }
+- (void)drawRect:(CGRect)dirty
+    {
+    UXIosScrollRec* r = &gScroll[self.handle][self.node];
+    if (!gScrollContent || !r->sv)
+        return;
+    CGContextRef was = gCtx;
+    gCtx = UIGraphicsGetCurrentContext();
+    gScrollContent(r->sv, (int)self.bounds.size.width, (int)self.bounds.size.height);
+    gCtx = was;
+    }
+@end
+void ux_ios_set_scroll_content(void* fn)
+    {
+    gScrollContent = (void (*)(void*, int, int))fn;
+    }
+void ux_ios_make_scroll(int handle, int node, int x, int y, int w, int h, int contentH, void* sv, int docX, int docY)
+    {
+    if (!gWin[handle] || node < 0 || node >= 256 || gCtl[handle][node])
+        return;
+    UIScrollView* s = [[UIScrollView alloc] initWithFrame:CGRectMake(x, y, w, h)];
+    s.alwaysBounceVertical = NO;
+    UXScrollDocView* doc = [[UXScrollDocView alloc] initWithFrame:CGRectMake(0, 0, w, contentH > h ? contentH : h)];
+    doc.handle = handle;
+    doc.node = node;
+    doc.backgroundColor = UIColor.clearColor;
+    doc.contentMode = UIViewContentModeRedraw;
+    [s addSubview:doc];
+    s.contentSize = doc.bounds.size;
+    [gWin[handle] addSubview:s];
+    gCtl[handle][node] = s;
+    UXIosScrollRec* r = &gScroll[handle][node];
+    r->doc = doc;
+    r->sv = sv;
+    r->docX = docX;
+    r->docY = docY;
+    }
+void ux_ios_scroll_reload(int handle, int node, int w, int h, int contentH, int docX, int docY)
+    {
+    UXIosScrollRec* r = &gScroll[handle][node];
+    UIScrollView* s = (UIScrollView*)gCtl[handle][node];
+    if (!r->doc || ![s isKindOfClass:UIScrollView.class])
+        return;
+    r->docX = docX;
+    r->docY = docY;
+    ((UIView*)r->doc).frame = CGRectMake(0, 0, w, contentH > h ? contentH : h);
+    s.contentSize = ((UIView*)r->doc).bounds.size;
+    [(UIView*)r->doc setNeedsDisplay];
+    }
+void ux_ios_scroll_set(int handle, int node, int px)
+    {
+    UIScrollView* s = (UIScrollView*)gCtl[handle][node];
+    if (![s isKindOfClass:UIScrollView.class])
+        return;
+    CGFloat most = s.contentSize.height - s.bounds.size.height;
+    CGFloat y = px < 0 ? 0 : (px > most ? (most > 0 ? most : 0) : px);
+    [s setContentOffset:CGPointMake(0, y) animated:NO];
+    }
+int ux_ios_scroll_get(int handle, int node)
+    {
+    UIScrollView* s = (UIScrollView*)gCtl[handle][node];
+    return [s isKindOfClass:UIScrollView.class] ? (int)lround(s.contentOffset.y) : 0;
+    }
+/* A rounded panel: the scroll view's own layer, a radius and a 1px border, clipping its content. */
+void ux_ios_scroll_style(int handle, int node, int radius, int rgb)
+    {
+    UIScrollView* s = (UIScrollView*)gCtl[handle][node];
+    if (![s isKindOfClass:UIScrollView.class])
+        return;
+    s.layer.cornerRadius = radius;
+    s.clipsToBounds = YES;
+    if (rgb >= 0)
+        {
+        s.layer.borderWidth = 1;
+        s.layer.borderColor = [UIColor colorWithRed:((rgb >> 16) & 255) / 255.0 green:((rgb >> 8) & 255) / 255.0
+                                               blue:(rgb & 255) / 255.0 alpha:1].CGColor;
+        }
+    else
+        s.layer.borderWidth = 0;
+    }
+/* A native control inside a scroll view goes into its document, so it scrolls and clips with it. */
+void ux_ios_reparent_to_scroll(int handle, int node, int scrollNode, int ax, int ay)
+    {
+    UIView* c = gCtl[handle][node];
+    UXIosScrollRec* r = &gScroll[handle][scrollNode];
+    if (!c || !r->doc)
+        return;
+    CGRect f = c.frame;
+    if (c.superview != (UIView*)r->doc)
+        [(UIView*)r->doc addSubview:c];
+    c.frame = CGRectMake(ax - r->docX, ay - r->docY, f.size.width, f.size.height);
+    gInDoc[handle][node] = (unsigned char)(scrollNode + 1);
+    }
+/* Tests: the container is a UIScrollView; a control is in its document; a touch on the document at
+ * a point of the window's content as it is on screen, entering where UIKit's touches do. */
+int ux_ios_test_scroll_native(int handle, int node)
+    {
+    return gScroll[handle][node].doc && [gCtl[handle][node] isKindOfClass:UIScrollView.class] ? 1 : 0;
+    }
+int ux_ios_test_in_scroll_doc(int handle, int node, int scrollNode)
+    {
+    UIView* c = gCtl[handle][node];
+    return c && gScroll[handle][scrollNode].doc && c.superview == (UIView*)gScroll[handle][scrollNode].doc ? 1 : 0;
+    }
+void ux_ios_test_tap_doc(int handle, int node, int x, int y)
+    {
+    UXIosScrollRec* r = &gScroll[handle][node];
+    if (!r->doc || !gTouch || !gContentUd[handle])
+        return;
+    CGPoint p = [(UIView*)r->doc convertPoint:CGPointMake(x, y) fromView:gWin[handle]];
+    for (int phase = 0; phase <= 2; phase += 2)
+        gTouch(gContentUd[handle], phase, r->docX + (int)p.x, r->docY + (int)p.y);
     }
 
 // The toolbar: a real UIToolbar of UIBarButtonItems.  A UXToolbar's items map one to one: a button

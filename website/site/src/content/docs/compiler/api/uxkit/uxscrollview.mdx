@@ -17,7 +17,7 @@ The document is **moved, not re-laid-out**. Scrolling sets the document view's y
 to `-scrollOffset` and the clip cuts it to the viewport. Your content keeps fixed
 coordinates, and the ordinary hit test finds it where it is drawn.
 
-On backends that scroll natively (Win32, AppKit, GTK) a native container
+On backends that scroll natively (Win32, AppKit, GTK, iOS) a native container
 overlays this whole subtree and the custom bar never draws. On GEM (and
 headless) this bar is the scrollbar.
 
@@ -122,8 +122,9 @@ same turn.
 Every backend rounds it except GEM, whose clip is a rectangle. On AppKit the
 native scroll view is clipped by its layer, on Win32 the native scroll
 container is clipped by a window region, and on GTK the `GtkScrolledWindow`
-is rounded by its own CSS, with its overflow hidden. The web, iOS and Android
-draw the scroll view themselves, so they clip the subtree to the rounded shape.
+is rounded by its own CSS, with its overflow hidden, and on iOS the
+`UIScrollView` by its layer. The web and Android draw the scroll view
+themselves, so they clip the subtree to the rounded shape.
 
 ### setBorderRGB / clearBorder
 
@@ -192,7 +193,7 @@ Whether the content overflows the viewport. The bar hides when it does not.
   <TabItem label="iOS">
     <img src="/uxkit/scroll-ios.png" alt="UXScrollView on iOS" width="220" />
 
-    The toolkit's scrollbar. This driver does not yet use the native scroll container with the platform's scrolling physics and indicators.
+    A native `UIScrollView`: UIKit's pan, momentum, bounce and scroll indicator. Native controls inside the scroll view scroll and clip with it.
   </TabItem>
   <TabItem label="Android">
     <img src="/uxkit/scroll-android.png" alt="UXScrollView on Android" width="220" />
