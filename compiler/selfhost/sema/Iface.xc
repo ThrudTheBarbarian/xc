@@ -832,17 +832,31 @@ class JsonVal
         {
         // A `.wasm` LIBRARY carries its interface inside itself, so there is no
         // side file to go missing — read the section rather than the file.
+        //
+        // The CONTAINER is told from the file's own magic, not its name, in
+        // the reference's order: an arm64 library written as `libFoo.so` is
+        // a Mach-O file, and keying on the extension sent it to the ELF
+        // reader, which found nothing — so the client compiled with no
+        // interface and failed far away, on the first use of a class, with
+        // "unsupported: assignment target" (bug 583).
         String* text = (String*)0;
-        if (path.hasSuffix(String.withCString(".wasm")))
-            text = IfaceImport.wasmIfaceSection(path);
-        else if (path.hasSuffix(String.withCString(".dylib")))
-            text = IfaceImport.machoIfaceSection(path);
-        else if (path.hasSuffix(String.withCString(".so")))
-            text = IfaceImport.elfIfaceSection(path);
-        else if (path.lowercased().hasSuffix(String.withCString(".dll")))
-            text = IfaceImport.peIfaceSection(path);
-        else
+        String* lower = path.lowercased();
+        if (path.hasSuffix(String.withCString(".xtc.iface")))
             text = Files.readText(path);
+        else
+            {
+            text = IfaceImport.elfIfaceSection(path);
+            if (text == 0)
+                text = IfaceImport.machoIfaceSection(path);
+            if (text == 0)
+                text = IfaceImport.peIfaceSection(path);
+            if (text == 0)
+                text = IfaceImport.wasmIfaceSection(path);
+            bool container = lower.hasSuffix(String.withCString(".so")) || lower.hasSuffix(String.withCString(".dylib"))
+                || lower.hasSuffix(String.withCString(".dll")) || lower.hasSuffix(String.withCString(".wasm"));
+            if (text == 0 && !container)
+                text = Files.readText(path);
+            }
         if (text == 0)
             return (IfaceImport*)0;
         JsonVal* root = JsonParser.parse(text);

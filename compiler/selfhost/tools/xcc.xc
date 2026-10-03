@@ -776,6 +776,15 @@ bool objectsWantObjc(DriverOptions* d, Array* extra)
 // The libraries an arm64 LIBRARY `#import`s (bug 440), each once, by its
 // `@rpath/` install name — the reference's xcc-ln-arm64 --dylib rule. A -l
 // library or framework on a library build stays recorded on the client.
+// A 64-bit Mach-O file, told by its magic rather than its name.
+bool isMachOFile(String* path)
+{
+    Data* b = Files.readData(path);
+    return b != (Data*)0 && b.length() >= (u32)4
+        && b.byteAt((u32)0) == (u8)$CF && b.byteAt((u32)1) == (u8)$FA
+        && b.byteAt((u32)2) == (u8)$ED && b.byteAt((u32)3) == (u8)$FE;
+}
+
 Array* dylibImportDeps(DriverOptions* d, Array* neededLibs)
 {
     Array* deps = new Array();
@@ -786,7 +795,7 @@ Array* dylibImportDeps(DriverOptions* d, Array* neededLibs)
             if (fdep != (MachODep*)0) deps.add((Object*)fdep);
             continue;
         }
-        if (!lp.hasSuffix(String.withCString(".dylib"))) continue;
+        if (!lp.hasSuffix(String.withCString(".dylib")) && !isMachOFile(lp)) continue;
         String* rp = String.withCString("@rpath/");
         rp.append(lp.lastPathComponent());
         bool have = false;
@@ -851,7 +860,10 @@ Array* arm64LinkDeps(DriverOptions* d, Array* neededLibs, Array* extraObjects)
     Array* deps = new Array();
     for (u32 i = (u32)0; neededLibs != (Array*)0 && i < neededLibs.count(); i = i + (u32)1) {
         String* lp = (String*)neededLibs.get(i);
-        if (!lp.hasSuffix(String.withCString(".dylib"))) continue;
+        // A Mach-O library is one whatever it is called: `libFoo.so` built for
+        // arm64 is found by `#use <Foo>`, its interface is read, and it has to
+        // be linked too, or its classes bind to nothing (bug 583).
+        if (!lp.hasSuffix(String.withCString(".dylib")) && !isMachOFile(lp)) continue;
         String* rp = String.withCString("@rpath/");
         rp.append(lp.lastPathComponent());
         deps.add((Object*)MachODep.with(rp, IfaceImport.machoExports(lp)));
