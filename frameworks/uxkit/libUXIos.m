@@ -1319,6 +1319,16 @@ int ux_ios_test_table_cell_is(int handle, int node, int row, int col, const char
     UILabel* l = (UILabel*)[cell.contentView viewWithTag:100 + col];
     return l && [l.text isEqualToString:[NSString stringWithUTF8String:want]];
     }
+int ux_ios_test_table_shown(int handle, int node)
+    {
+    UITableView* tv = (UITableView*)gCtl[handle][node];
+    if (![tv isKindOfClass:UITableView.class])
+        return -1;
+    /* ask the data source afresh (a cached count would hide a source that has gone away) */
+    [tv reloadData];
+    [tv layoutIfNeeded];
+    return (int)tv.visibleCells.count;
+    }
 void ux_ios_test_table_tap(int handle, int node, int row)
     {
     UITableView* tv = (UITableView*)gCtl[handle][node];

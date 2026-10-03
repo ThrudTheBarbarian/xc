@@ -120,6 +120,22 @@ static char *gFieldBuf[UXA_MAXW][64];     /* EditText overlays sync into these *
 static int   gFieldCap[UXA_MAXW][64];
 static int   gFieldMute;                  /* programmatic setText must not re-fire */
 static jobject gSpinAdapter[UXA_MAXW][64];   /* global refs, per-popup adapter */
+static jclass gTableCls;                     /* UXTable (the bridge dex): the native table */
+static void *gTblPeer[UXA_MAXW][64];         /* the peer UXTableView, by the table's id */
+typedef int (*tbl_rows_fn)(void *);
+typedef const char *(*tbl_cell_fn)(void *, int, int);
+typedef int (*tbl_cols_fn)(void *);
+typedef const char *(*tbl_title_fn)(void *, int);
+typedef int (*tbl_width_fn)(void *, int);
+typedef int (*tbl_multi_fn)(void *);
+typedef void (*tbl_selset_fn)(void *, int *, int);
+static tbl_rows_fn gTblRows;
+static tbl_cell_fn gTblCell;
+static tbl_cols_fn gTblCols;
+static tbl_title_fn gTblTitle;
+static tbl_width_fn gTblWidth;
+static tbl_multi_fn gTblMulti;
+static tbl_selset_fn gTblSelSet;
 
 void ux_and_set_entry(void *fn)         { gEntry = (ux_entry_fn)fn; }
 void ux_and_set_control_fire(void *fn)  { gFire = (ux_fire_fn)fn; }
@@ -203,6 +219,50 @@ static jmethodID gCanvasScale, gCanvasSave, gCanvasRestore, gCanvasClipRect, gCa
 static int gInsetsKnown;                  /* shared with queryInsets below */
 static void queryInsets(JNIEnv *env);
 static void applyInsets(JNIEnv *env);
+/* the native table's data, from the peer UXTableView (UXTable's natives) */
+static void *tblPeer(jint id) {
+    int h = id >> 8, n = id & 0xFF;
+    return (h > 0 && h < UXA_MAXW && n >= 0 && n < 64) ? gTblPeer[h][n] : NULL;
+}
+static jint n_tbl_rows(JNIEnv *env, jclass c, jint id) {
+    (void)env; (void)c;
+    void *p = tblPeer(id);
+    return p && gTblRows ? gTblRows(p) : 0;
+}
+static jstring n_tbl_cell(JNIEnv *env, jclass c, jint id, jint r, jint col) {
+    (void)c;
+    void *p = tblPeer(id);
+    const char *t = p && gTblCell ? gTblCell(p, r, col) : "";
+    return (*env)->NewStringUTF(env, t ? t : "");
+}
+static jint n_tbl_cols(JNIEnv *env, jclass c, jint id) {
+    (void)env; (void)c;
+    void *p = tblPeer(id);
+    return p && gTblCols ? gTblCols(p) : 0;
+}
+static jstring n_tbl_title(JNIEnv *env, jclass c, jint id, jint col) {
+    (void)c;
+    void *p = tblPeer(id);
+    const char *t = p && gTblTitle ? gTblTitle(p, col) : "";
+    return (*env)->NewStringUTF(env, t ? t : "");
+}
+static jint n_tbl_width(JNIEnv *env, jclass c, jint id, jint col) {
+    (void)env; (void)c;
+    void *p = tblPeer(id);
+    return p && gTblWidth ? gTblWidth(p, col) : 80;
+}
+static void n_tbl_select(JNIEnv *env, jclass c, jint id, jintArray rows) {
+    (void)c;
+    void *p = tblPeer(id);
+    if (!p || !gTblSelSet) return;
+    jsize n = (*env)->GetArrayLength(env, rows);
+    jint *e = (*env)->GetIntArrayElements(env, rows, NULL);
+    int buf[256];
+    int k = n < 256 ? (int)n : 256;
+    for (int i = 0; i < k; i++) buf[i] = e[i];
+    (*env)->ReleaseIntArrayElements(env, rows, e, JNI_ABORT);
+    gTblSelSet(p, buf, k);
+}
 static void n_draw(JNIEnv *env, jclass c, jint id, jobject canvas, jint w, jint h) {
     (void)c;
     int handle = id >> 8;
@@ -870,6 +930,94 @@ void ux_and_make_button(int handle, int node, int x, int y, int w, int h, const 
     (*env)->CallVoidMethod(env, b, gSetOnClick, br);
     place(env, handle, node, b, x, y, w, h);
     check(env, "make_button");
+}
+/* ── the native table: UXTable (a ListView under a header of titles) ─── */
+void ux_and_set_table_hooks(void *rows, void *cell, void *cols, void *title, void *width,
+                            void *multi, void *selset) {
+    gTblRows = (tbl_rows_fn)rows;
+    gTblCell = (tbl_cell_fn)cell;
+    gTblCols = (tbl_cols_fn)cols;
+    gTblTitle = (tbl_title_fn)title;
+    gTblWidth = (tbl_width_fn)width;
+    gTblMulti = (tbl_multi_fn)multi;
+    gTblSelSet = (tbl_selset_fn)selset;
+}
+void ux_and_make_table(int handle, int node, int x, int y, int w, int h, void *peer) {
+    if (handle <= 0 || handle >= UXA_MAXW || node < 0 || node >= 64) return;
+    JNIEnv *env = envNow();
+    gTblPeer[handle][node] = peer;
+    jmethodID init = (*env)->GetMethodID(env, gTableCls, "<init>", "(Landroid/content/Context;IZ)V");
+    jobject t = (*env)->NewObject(env, gTableCls, init, gActivity, (handle << 8) | node,
+                                  (jboolean)(gTblMulti && gTblMulti(peer) != 0));
+    if (!check(env, "make_table") || !t) return;
+    place(env, handle, node, t, x, y, w, h);
+}
+static jobject tableAt(int handle, int node) {
+    return ux_and_has_control(handle, node) && gTblPeer[handle][node] ? gCtl[handle][node] : NULL;
+}
+void ux_and_table_reload(int handle, int node) {
+    jobject t = tableAt(handle, node);
+    if (!t) return;
+    JNIEnv *env = envNow();
+    (*env)->CallVoidMethod(env, t, (*env)->GetMethodID(env, gTableCls, "reload", "()V"));
+    check(env, "table_reload");
+}
+void ux_and_table_select(int handle, int node, int *rows, int n) {
+    jobject t = tableAt(handle, node);
+    if (!t) return;
+    JNIEnv *env = envNow();
+    jintArray a = (*env)->NewIntArray(env, n);
+    (*env)->SetIntArrayRegion(env, a, 0, n, (const jint *)rows);
+    (*env)->CallVoidMethod(env, t, (*env)->GetMethodID(env, gTableCls, "select", "([I)V"), a);
+    (*env)->DeleteLocalRef(env, a);
+    check(env, "table_select");
+}
+/* tests: the list's row count, a row's checked state, a cell's text as its view shows it, a tap */
+int ux_and_test_table_rows(int handle, int node) {
+    jobject t = tableAt(handle, node);
+    if (!t) return -1;
+    JNIEnv *env = envNow();
+    return (*env)->CallIntMethod(env, t, (*env)->GetMethodID(env, gTableCls, "rowCount", "()I"));
+}
+int ux_and_test_table_selected(int handle, int node, int row) {
+    jobject t = tableAt(handle, node);
+    if (!t) return 0;
+    JNIEnv *env = envNow();
+    return (*env)->CallBooleanMethod(env, t, (*env)->GetMethodID(env, gTableCls, "isSelected", "(I)Z"), row) ? 1 : 0;
+}
+int ux_and_test_table_cell_is(int handle, int node, int row, int col, const char *want) {
+    jobject t = tableAt(handle, node);
+    if (!t) return 0;
+    JNIEnv *env = envNow();
+    jstring s = (*env)->CallObjectMethod(env, t, (*env)->GetMethodID(env, gTableCls, "cellText",
+                                         "(II)Ljava/lang/String;"), row, col);
+    if (!s) return 0;
+    const char *u = (*env)->GetStringUTFChars(env, s, NULL);
+    int ok = strcmp(u, want) == 0;
+    (*env)->ReleaseStringUTFChars(env, s, u);
+    return ok;
+}
+int ux_and_test_table_shown(int handle, int node) {
+    jobject t = tableAt(handle, node);
+    if (!t) return -1;
+    JNIEnv *env = envNow();
+    return (*env)->CallIntMethod(env, t, (*env)->GetMethodID(env, gTableCls, "shownRows", "()I"));
+}
+void ux_and_test_table_row_at(int handle, int node, int row, int *x, int *y) {
+    jobject t = tableAt(handle, node);
+    *x = *y = -1;
+    if (!t) return;
+    JNIEnv *env = envNow();
+    *x = (*env)->CallIntMethod(env, t, (*env)->GetMethodID(env, gTableCls, "rowScreenX", "(I)I"), row);
+    *y = (*env)->CallIntMethod(env, t, (*env)->GetMethodID(env, gTableCls, "rowScreenY", "(I)I"), row);
+    check(env, "table_row_at");
+}
+void ux_and_test_table_tap(int handle, int node, int row) {
+    jobject t = tableAt(handle, node);
+    if (!t) return;
+    JNIEnv *env = envNow();
+    (*env)->CallVoidMethod(env, t, (*env)->GetMethodID(env, gTableCls, "tap", "(I)V"), row);
+    check(env, "table_tap");
 }
 void ux_and_make_label(int handle, int node, int x, int y, int w, int h, const char *text) {
     JNIEnv *env = envNow();
@@ -1796,6 +1944,7 @@ JNIEXPORT void ANativeActivity_onCreate(ANativeActivity *activity,
     LOADC(gBridgeCls, "UXBridge")
     LOADC(gRunCls, "UXRun")
     LOADC(gDrawCls, "UXDrawView")
+    LOADC(gTableCls, "UXTable")
 
     static const JNINativeMethod nb[] = {
         { "nativeFire", "(I)V", (void *)n_fire },
@@ -1809,6 +1958,15 @@ JNIEXPORT void ANativeActivity_onCreate(ANativeActivity *activity,
     (*env)->RegisterNatives(env, gBridgeCls, nb, 4);
     (*env)->RegisterNatives(env, gRunCls, nr, 1);
     (*env)->RegisterNatives(env, gDrawCls, nd, 2);
+    static const JNINativeMethod nt[] = {
+        { "nativeRows", "(I)I", (void *)n_tbl_rows },
+        { "nativeCell", "(III)Ljava/lang/String;", (void *)n_tbl_cell },
+        { "nativeCols", "(I)I", (void *)n_tbl_cols },
+        { "nativeTitle", "(II)Ljava/lang/String;", (void *)n_tbl_title },
+        { "nativeColWidth", "(II)I", (void *)n_tbl_width },
+        { "nativeSelect", "(I[I)V", (void *)n_tbl_select },
+    };
+    (*env)->RegisterNatives(env, gTableCls, nt, 6);
     gRunInit = (*env)->GetMethodID(env, gRunCls, "<init>", "(I)V");
     if (!check(env, "RegisterNatives")) return;
 

@@ -30,6 +30,7 @@
 #import "UXProgressBar.xc" // native horizontal ProgressBar overlay
 #import "UXTouch.xc"              // drawn content's touches -> mouse events
 #import "UXNavigationController.xc" // Up / Back on the native bar come back through uxNavNativePopped
+#import "UXTableView.xc"   // the native table (a ListView) reads its rows from the peer table
 #import "UXApplication.xc" // gApp: the driver-owned loop starts the delegate, and stop() quits
 #import "UXLibc.xc"
 
@@ -43,6 +44,11 @@ void ux_and_nav_push(pointer nav, u8* title, i32 animated);
 void ux_and_nav_pop(pointer nav, i32 animated);
 void ux_and_set_nav_popped(pointer fn);
 void ux_and_set_touch(pointer fn);
+// The native table (UXTable: a ListView under a header), fed by the peer UXTableView through hooks.
+void ux_and_set_table_hooks(pointer rows, pointer cell, pointer cols, pointer title, pointer width, pointer multi, pointer selset);
+void ux_and_make_table(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, pointer peer);
+void ux_and_table_reload(i32 handle, i32 node);
+void ux_and_table_select(i32 handle, i32 node, i32* rows, i32 n);
 i32 ux_and_window_create(i32 x, i32 y, i32 w, i32 h);
 void ux_and_window_set_content(i32 handle, pointer fn, pointer ud);
 void ux_and_window_open(i32 handle, i32 x, i32 y, i32 w, i32 h);
@@ -168,6 +174,40 @@ void uxAndShellStart(void)
 // A native value control moved: adopt the number into the peer, fire its
 // action — the mac/iOS xgValueChanged pattern, Android edition (a CheckBox
 // click reports its new state here rather than through the fire path).
+// Table-data trampolines for the native table: the shim calls these with the peer UXTableView.
+i32 xgAndTableRows(pointer tbl)
+    {
+    return ((UXTableView* ?)(Object*)tbl).nativeRowCount();
+    }
+u8* xgAndTableCell(pointer tbl, i32 r, i32 c)
+    {
+    return ((UXTableView* ?)(Object*)tbl).nativeCellText(r, c);
+    }
+i32 xgAndTableCols(pointer tbl)
+    {
+    return ((UXTableView* ?)(Object*)tbl).numberOfColumns();
+    }
+u8* xgAndTableColTitle(pointer tbl, i32 c)
+    {
+    return ((UXTableView* ?)(Object*)tbl).columnTitle(c);
+    }
+i32 xgAndTableColWidth(pointer tbl, i32 c)
+    {
+    return (i32)((UXTableView* ?)(Object*)tbl).columnWidth(c);
+    }
+i32 xgAndTableMulti(pointer tbl)
+    {
+    return ((UXTableView* ?)(Object*)tbl).nativeAllowsMultiple();
+    }
+// A tap in the native table: the selection into the model, announced, then a display pass.
+void xgAndTableSelectSet(pointer tbl, i32* rows, i32 n)
+    {
+    ((UXTableView* ?)(Object*)tbl).applyNativeSelection(rows, n);
+    if (gApp != (UXApplication*)0)
+        {
+        gApp.displayIfNeeded();
+        }
+    }
 void uxAndValueChanged(i32 handle, i32 node, i32 value)
     {
     if (handle < (i32)0 || handle >= (i32)64 || node < (i32)0 || node >= (i32)256)
@@ -337,6 +377,9 @@ class UXAndroidDriver : Object<UXViewDriver>
             ux_and_set_field_submit_hooks((pointer)&uxAndFieldSubmitted);
             ux_and_set_nav_popped((pointer)&uxAndNavPopped);
             ux_and_set_touch((pointer)&uxTouch);
+            ux_and_set_table_hooks((pointer)&xgAndTableRows, (pointer)&xgAndTableCell, (pointer)&xgAndTableCols,
+                                   (pointer)&xgAndTableColTitle, (pointer)&xgAndTableColWidth,
+                                   (pointer)&xgAndTableMulti, (pointer)&xgAndTableSelectSet);
             }
         return ux_and_boot(screenW, screenH) != (i32)0;
         }
@@ -968,6 +1011,23 @@ class UXAndroidDriver : Object<UXViewDriver>
     // that forwards its press to the toolkit in content coordinates, then check
     // it the way appkit-shield does -- with a REAL injected press, because the
     // only question is what the platform does with it.
+    i32 isUnderTable(ANTree* t, i32 i)
+        {
+        i16 p = t.nodes[i].parent;
+        while (p >= (i16)0)
+            {
+            if ((i32)t.nodes[p].kind == (i32)UXKindTable)
+                {
+                UXTableView* tv = (UXTableView* ?)(Object*)t.nodes[p].peer;
+                if (tv != (UXTableView*)0 && tv.nativeIsOutline() == (i32)0)
+                    {
+                    return (i32)1;
+                    }
+                }
+            p = t.nodes[p].parent;
+            }
+        return (i32)0;
+        }
     void realizeTree(i32 handle, pointer tree)
         {
         ANTree* t = (ANTree*)tree;
@@ -980,6 +1040,37 @@ class UXAndroidDriver : Object<UXViewDriver>
             i32 aw = (i32)0;
             i32 ah = (i32)0;
             self.structAbsFrame(tree, i, &ax, &ay, &aw, &ah);
+            // A native table covers its whole subtree (rows, cells, its scroller).
+            if (self.isUnderTable(t, i) != (i32)0)
+                {
+                continue;
+                }
+            if (n.kind == (i32)UXKindTable)
+                {
+                UXTableView* tv = (UXTableView* ?)(Object*)n.peer;
+                if (tv == (UXTableView*)0 || tv.nativeIsOutline() != (i32)0 || i >= (i32)64)
+                    {
+                    continue; // an outline stays drawn (an expandable list: later)
+                    }
+                if (ux_and_has_control(handle, i) == (i32)0)
+                    {
+                    ux_and_make_table(handle, i, ax, ay, aw, ah, n.peer);
+                    }
+                else
+                    {
+                    ux_and_set_control_frame(handle, i, ax, ay, aw, ah);
+                    ux_and_table_reload(handle, i);
+                    }
+                if (tv.nativeSelectionNeedsPush())
+                    {
+                    i32 rows[256];
+                    i32 nsel = tv.selectedRowList(&rows[(i32)0], (i32)256);
+                    ux_and_table_select(handle, i, &rows[(i32)0], nsel);
+                    tv.clearNativeSelectionPush();
+                    }
+                ux_and_set_control_hidden(handle, i, self.effectiveHidden(tree, i));
+                continue;
+                }
             if (ux_and_has_control(handle, i) != (i32)0)
                 {
                 ux_and_set_control_frame(handle, i, ax, ay, aw, ah);
@@ -1121,6 +1212,11 @@ class UXAndroidDriver : Object<UXViewDriver>
             }
         // A node with a native control paints itself — never draw under it.
         bool native = t.win != (i32)0 && ux_and_has_control(t.win, i) != (i32)0;
+        // ...and a native table paints its whole subtree: its rows are the ListView's.
+        if (native && t.nodes[i].kind == (i32)UXKindTable)
+            {
+            return;
+            }
         if (!native)
             {
             // The GEM rule: every non-native node is app-drawn through the

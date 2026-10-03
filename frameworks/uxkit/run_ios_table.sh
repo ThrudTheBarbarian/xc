@@ -15,7 +15,7 @@ xcrun -sdk iphonesimulator clang -target arm64-apple-ios15.0-simulator -fobjc-ar
 # One in-house link: the ObjC shell object merges in, the frameworks and
 # libobjc bind through the SDK's .tbd stubs. No clang link, no stopgap —
 # compiler bugs 138/140 (uxkit 027/028/029) closed 2026-09-04.
-"$xcc" -A ios-sim -I "$here" "$here/test_ios_table.xc" -Xlinker "$work/libUXIos.o" \
+"$xcc" -A ios-sim -I "$here" "$here/test_table_native.xc" -Xlinker "$work/libUXIos.o" \
     -lobjc -framework UIKit -framework Foundation -framework QuartzCore -framework CoreGraphics \
     -o "$work/UXIosTable" -q
 
