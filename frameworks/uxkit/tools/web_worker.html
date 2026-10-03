@@ -15,7 +15,11 @@
     body: (fails.length ? 'PAGE-FAIL: ' + fails.join('; ') + '\n' : '') + out.join('\n') });
   globalThis.xccOut = (s) => {
     out.push(s);
-    if (/^(PASS|FAIL)/.test(s)) report();
+    // the app's verdict, and that its drawing really reached the screen (a frame painted)
+    if (/^(PASS|FAIL)/.test(s)) setTimeout(() => {
+      want((globalThis.uxFrames || 0) > 0, 'no frame from the worker reached the page');
+      report();
+    }, 500);
   };
   let alerted = false;
   new MutationObserver(() => {
