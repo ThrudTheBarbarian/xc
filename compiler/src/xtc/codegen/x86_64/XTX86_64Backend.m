@@ -1472,10 +1472,17 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
     for (XTIRFunction* fn in mod.functions)
         {
         if (fn.blocks.count == 0)
-            continue;                                     // external proto — linker resolves
-        NSMutableString* fbuf = [NSMutableString string]; // per-function → peephole
-        [self emitFunction:fn module:mod into:fbuf];
-        [out appendString:[self peepholeFallthrough:[self peepholeCopyProp:fbuf]]];
+            continue; // external proto — linker resolves
+        // One pool per function (bug 597). The peepholes parse every line into
+        // autoreleased objects, and with no pool here nothing was freed until
+        // the whole module was done: 16 GB on the Mac and 82 GB on Linux for
+        // the compiler's own sources at -O2. Only the finished text survives.
+        @autoreleasepool
+            {
+            NSMutableString* fbuf = [NSMutableString string]; // per-function → peephole
+            [self emitFunction:fn module:mod into:fbuf];
+            [out appendString:[self peepholeFallthrough:[self peepholeCopyProp:fbuf]]];
+            }
         }
 
     // Read-only data: string literals (+ initialised globals).
