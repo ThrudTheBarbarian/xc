@@ -72,6 +72,48 @@ public class UXBridge implements View.OnClickListener, SeekBar.OnSeekBarChangeLi
     // cancel (back / outside tap) — the modal alert's whole listener surface
     @Override public void onClick(DialogInterface d, int which) { nativeValue(id, which); }
     @Override public void onCancel(DialogInterface d) { nativeFire(id); }
+
+    // The system's document picker (ACTION_OPEN_DOCUMENT) for UXOpenPanel.  A NativeActivity cannot be
+    // handed an activity result, so a headless Fragment starts the picker and receives it.  The picked
+    // document (a content: URI, possibly from a cloud provider) is copied into the app's cache under its
+    // display name, so that UXFileIO's plain fopen reads it; the path, or null if the user backed out,
+    // goes back through nativePicked, which unwinds the shim's nested loop.  It is a PUBLIC static
+    // nested class (UXBridge$Picker) because Android insists a Fragment be public, to recreate it, and a
+    // source file may hold only one public top-level class.
+    public static class Picker extends android.app.Fragment {
+        private static native void nativePicked(String path);
+        static void open(android.app.Activity a) {
+            Picker f = new Picker();
+            a.getFragmentManager().beginTransaction().add(f, "uxpick").commitNow();
+            android.content.Intent i = new android.content.Intent(android.content.Intent.ACTION_OPEN_DOCUMENT);
+            i.addCategory(android.content.Intent.CATEGORY_OPENABLE);
+            i.setType("*/*");
+            f.startActivityForResult(i, 7);
+        }
+        @Override public void onActivityResult(int req, int res, android.content.Intent data) {
+            String path = null;
+            android.app.Activity a = getActivity();
+            if (res == android.app.Activity.RESULT_OK && data != null && data.getData() != null && a != null) {
+                android.net.Uri uri = data.getData();
+                String name = "picked";
+                try (android.database.Cursor c = a.getContentResolver().query(uri,
+                        new String[] { android.provider.OpenableColumns.DISPLAY_NAME }, null, null, null)) {
+                    if (c != null && c.moveToFirst() && c.getString(0) != null) name = c.getString(0);
+                } catch (Exception e) { }
+                java.io.File dir = new java.io.File(a.getCacheDir(), "picked");
+                dir.mkdirs();
+                java.io.File out = new java.io.File(dir, name.replace('/', '_'));
+                try (java.io.InputStream in = a.getContentResolver().openInputStream(uri);
+                     java.io.OutputStream os = new java.io.FileOutputStream(out)) {
+                    byte[] buf = new byte[65536];
+                    for (int n; (n = in.read(buf)) > 0; ) os.write(buf, 0, n);
+                    path = out.getAbsolutePath();
+                } catch (Exception e) { path = null; }
+            }
+            if (a != null) a.getFragmentManager().beginTransaction().remove(this).commitAllowingStateLoss();
+            nativePicked(path);
+        }
+    }
 }
 
 // Back (gesture or button) while a navigation stack has something to pop -- registered with the

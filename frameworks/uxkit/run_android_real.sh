@@ -64,7 +64,7 @@ echo "== android-real: installing + launching =="
     "$ADB" install "$work/uxreal.apk" >/dev/null
 }
 "$ADB" logcat -c
-"$ADB" shell am start -n org.compile_xc.uxreal/android.app.NativeActivity >/dev/null 2>&1
+"$ADB" shell am start -S --activity-clear-task -n org.compile_xc.uxreal/android.app.NativeActivity >/dev/null 2>&1
 sleep 6
 out=$("$ADB" logcat -d -s xcapp uxkit)
 echo "$out" | grep -v '^-' | tail -20

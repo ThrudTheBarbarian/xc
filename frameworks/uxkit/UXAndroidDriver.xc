@@ -53,6 +53,8 @@ void ux_and_set_outline_hooks(pointer level, pointer disclosure, pointer toggle)
 void ux_and_set_menu_pick(pointer fn);
 void ux_and_menu_set(u8* enc);
 void ux_and_menu_state(i32 t, i32 j, i32 what, i32 on);
+// The system document picker; the picked document is copied into the cache and its path given.
+i32 ux_and_file_open(u8* out, i32 cap);
 void ux_and_table_reload(i32 handle, i32 node);
 void ux_and_table_select(i32 handle, i32 node, i32* rows, i32 n);
 i32 ux_and_window_create(i32 x, i32 y, i32 w, i32 h);
@@ -566,9 +568,12 @@ class UXAndroidDriver : Object<UXViewDriver>
         }
 
     // ---- native panels: none — toolkit fallbacks take over -------------------
+    // The system's document picker (ACTION_OPEN_DOCUMENT): local files and every document
+    // provider the device has.  The picked document is copied into the app's cache, so the path
+    // that comes back reads with UXFileIO like any other.
     bool hasNativeFileOpen(void)
         {
-        return false;
+        return true;
         }
     // no native save dialog here: UXSavePanel draws UXKit's own
     // The top app bar (a Toolbar: title, the theme's Up arrow) and the system Back (libUXAndroid.c)
@@ -598,7 +603,7 @@ class UXAndroidDriver : Object<UXViewDriver>
         }
     i32 fileOpen(u8* prompt, u8* startDir, u8* out, i32 outCap)
         {
-        return (i32)0;
+        return ux_and_file_open(out, outCap);
         }
     bool hasNativeColorPicker(void)
         {

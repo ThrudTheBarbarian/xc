@@ -64,7 +64,7 @@ echo "== android-outline: installing + launching =="
     "$ADB" install "$work/uxoutline.apk" >/dev/null
 }
 "$ADB" logcat -c
-"$ADB" shell am start -n org.compile_xc.uxoutline/android.app.NativeActivity >/dev/null 2>&1
+"$ADB" shell am start -S --activity-clear-task -n org.compile_xc.uxoutline/android.app.NativeActivity >/dev/null 2>&1
 # The test logs where its first row is on screen; tap it there for REAL (the OS's own input path,
 # not a call into the list), then wait for the verdict.
 tapped=0

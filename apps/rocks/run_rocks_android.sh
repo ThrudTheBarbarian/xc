@@ -67,7 +67,7 @@ echo "== rocks-android: installing + launching =="
     "$ADB" install "$work/rocks.apk" >/dev/null
 }
 "$ADB" logcat -c
-"$ADB" shell am start -n org.compile_xc.rocks/android.app.NativeActivity >/dev/null 2>&1
+"$ADB" shell am start -S --activity-clear-task -n org.compile_xc.rocks/android.app.NativeActivity >/dev/null 2>&1
 for i in $(seq 1 40); do
   out=$("$ADB" logcat -d -s xcapp uxkit)
   echo "$out" | grep -qE "PASS:|FAIL|SKIP:" && break

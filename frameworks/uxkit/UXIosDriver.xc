@@ -53,6 +53,8 @@ void ux_ios_set_outline_hooks(pointer level, pointer disclosure, pointer toggle)
 void ux_ios_set_menu_pick(pointer fn);
 void ux_ios_menu_set(u8* enc);
 void ux_ios_menu_state(i32 t, i32 j, i32 what, i32 on);
+// The system document picker (import mode); the picked document's private copy's path.
+i32 ux_ios_file_open(u8* out, i32 cap);
 void ux_ios_table_reload(i32 handle, i32 node);
 void ux_ios_table_select(i32 handle, i32 node, i32* rows, i32 n);
 void ux_ios_set_touch(pointer fn);
@@ -547,9 +549,12 @@ class UXIosDriver : Object<UXViewDriver>
         }
 
     // ---- native panels: none yet — toolkit fallbacks take over ---------------
+    // The system's document picker (UIDocumentPickerViewController, import mode): the device's
+    // files and every file provider.  The picked document arrives as the app's own copy, so the
+    // path that comes back reads with UXFileIO like any other.
     bool hasNativeFileOpen(void)
         {
-        return false;
+        return true;
         }
     // no native save dialog here: UXSavePanel draws UXKit's own
     // UINavigationController: the real bar, Back button and edge-swipe (libUXIos.m)
@@ -579,7 +584,7 @@ class UXIosDriver : Object<UXViewDriver>
         }
     i32 fileOpen(u8* prompt, u8* startDir, u8* out, i32 outCap)
         {
-        return (i32)0;
+        return ux_ios_file_open(out, outCap);
         }
     bool hasNativeColorPicker(void)
         {

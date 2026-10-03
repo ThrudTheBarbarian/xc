@@ -651,11 +651,14 @@ void ux_ios_test_tap_later(int handle, int x, int y, int ms)
                    });
     }
 // Tests: a watchdog so a wedged run FAILS rather than hangs.
+/* Off the main thread, so a test wedged ON it (a nested run loop that never ends, a deadlock) is
+ * still ended: a watchdog on the main queue would wait behind the very block that wedged. */
 void ux_ios_test_watchdog(int ms, int rc)
     {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)ms * NSEC_PER_MSEC),
-                   dispatch_get_main_queue(), ^{
-                     exit(rc);
+                   dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
+                     fprintf(stderr, "watchdog: the test did not finish in %d ms\n", ms);
+                     _exit(rc);
                    });
     }
 
@@ -1107,6 +1110,72 @@ int ux_ios_alert(int icon, const char* lines, const char* buttons, int defBtn)
     while (!gIosAlertDone)
         CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, false);
     return gIosAlertResult;
+    }
+
+// ── the document picker: UIDocumentPickerViewController, modal through a nested run loop ──
+// UXOpenPanel on iOS is the system's document picker, in import mode: the picked document (from
+// the device or any file provider) is copied into the app's own tmp space, so the path that comes
+// back reads with UXFileIO's plain fopen.  As with the alert, a nested CFRunLoop gives the async
+// picker UXKit's synchronous contract.  (The string-type initializer, deprecated but current, keeps
+// every app from having to link UniformTypeIdentifiers.)
+@interface UXPickHost : NSObject <UIDocumentPickerDelegate>
+@end
+static UXPickHost* gPickHost;
+static UIDocumentPickerViewController* gPicker;
+static NSString* gPickedPath;
+static int gPickDone;
+@implementation UXPickHost
+- (void)documentPicker:(UIDocumentPickerViewController*)c didPickDocumentsAtURLs:(NSArray<NSURL*>*)urls
+    {
+    gPickedPath = urls.count ? urls[0].path : nil;
+    gPickDone = 1;
+    }
+- (void)documentPickerWasCancelled:(UIDocumentPickerViewController*)c
+    {
+    gPickedPath = nil;
+    gPickDone = 1;
+    }
+@end
+int ux_ios_file_open(char* out, int cap)
+    {
+    if (!gPickHost)
+        gPickHost = [UXPickHost new];
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    gPicker = [[UIDocumentPickerViewController alloc] initWithDocumentTypes:@[ @"public.item" ]
+                                                                     inMode:UIDocumentPickerModeImport];
+#pragma clang diagnostic pop
+    gPicker.delegate = gPickHost;
+    gPicker.allowsMultipleSelection = NO;
+    gPickDone = 0;
+    gPickedPath = nil;
+    [gWindow.rootViewController presentViewController:gPicker animated:NO completion:nil];
+    while (!gPickDone)
+        CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, false);
+    if (gPicker.presentingViewController)
+        [gPicker dismissViewControllerAnimated:NO completion:nil];
+    gPicker = nil;
+    const char* u = gPickedPath.fileSystemRepresentation;
+    if (!u || (int)strlen(u) + 1 > cap)
+        return 0;
+    memcpy(out, u, strlen(u) + 1);
+    return 1;
+    }
+/* Tests (there is no driving another process's UI in the simulator): whether the picker is up,
+ * and the picker's own delegate answers, exactly as UIKit sends them -- a pick of a file the test
+ * made (UIKit hands an import-mode delegate its private copy's URL) or a cancel. */
+int ux_ios_test_picker_shown(void)
+    {
+    return gPicker && gPicker.presentingViewController && gPicker.view.window ? 1 : 0;
+    }
+void ux_ios_test_picker_answer(const char* path)
+    {
+    if (!gPicker)
+        return;
+    if (path)
+        [gPicker.delegate documentPicker:gPicker didPickDocumentsAtURLs:@[ [NSURL fileURLWithPath:@(path)] ]];
+    else
+        [gPicker.delegate documentPickerWasCancelled:gPicker];
     }
 
 // Dump the last render as a PPM (the mac rig's ux_ak_dump_ppm, iOS edition) —
@@ -1831,12 +1900,16 @@ void ux_ios_test_touch(int handle, int phase, int x, int y)
         gTouch(gContentUd[handle], phase, x, y);
     }
 typedef void (*ux_later_fn)(void);
+/* A run-loop timer in the common modes, not a main-queue block: the main queue is serial, so a
+ * step that runs a modal (a nested run loop: the alert, the document picker) from inside a block
+ * would starve every later block -- including the one that answers the modal. */
 void ux_ios_test_call_later(void* fn, int ms)
     {
     ux_later_fn f = (ux_later_fn)fn;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)ms * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
-      f();
-    });
+    CFRunLoopTimerRef t = CFRunLoopTimerCreateWithHandler(kCFAllocatorDefault,
+        CFAbsoluteTimeGetCurrent() + ms / 1000.0, 0, 0, 0, ^(CFRunLoopTimerRef x) { f(); });
+    CFRunLoopAddTimer(CFRunLoopGetMain(), t, kCFRunLoopCommonModes);
+    CFRelease(t);
     }
 
 // ── the shell (Option B: run()'s iOS inside) ────────────────────────────────

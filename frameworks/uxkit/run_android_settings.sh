@@ -59,7 +59,7 @@ KS="$here/tools/android/debug.keystore"
 
 echo "== android-settings: launch 1 (write) =="
 "$ADB" logcat -c
-"$ADB" shell am start -n org.compile_xc.uxset/android.app.NativeActivity >/dev/null 2>&1
+"$ADB" shell am start -S --activity-clear-task -n org.compile_xc.uxset/android.app.NativeActivity >/dev/null 2>&1
 sleep 5
 "$ADB" logcat -d -s xcapp | grep -q "WROTE: first launch complete" || {
     echo "== android-settings: FAILED (write pass) =="; "$ADB" logcat -d -s xcapp uxkit | tail -8; exit 1; }
@@ -67,7 +67,7 @@ sleep 5
 
 echo "== android-settings: launch 2 (a fresh process reads it back) =="
 "$ADB" logcat -c
-"$ADB" shell am start -n org.compile_xc.uxset/android.app.NativeActivity >/dev/null 2>&1
+"$ADB" shell am start -S --activity-clear-task -n org.compile_xc.uxset/android.app.NativeActivity >/dev/null 2>&1
 sleep 5
 out=$("$ADB" logcat -d -s xcapp | grep -v '^-' | sed 's/.*xcapp   ://')
 printf '%s\n' "$out"

@@ -122,6 +122,9 @@ static int   gFieldMute;                  /* programmatic setText must not re-fi
 static jobject gSpinAdapter[UXA_MAXW][64];   /* global refs, per-popup adapter */
 static jclass gTableCls;                     /* UXTable (the bridge dex): the native table */
 static jclass gMenuCls;                      /* UXMenuButton: the app's menus from an overflow button */
+static jclass gPickerCls;                    /* UXBridge$Picker: the system document picker */
+static char gPicked[1024];                   /* the picked document's path, "" if cancelled */
+static int gPickDone, gPickNesting;
 static jobject gMenuBtn;                     /* global ref, made with the first window */
 typedef void (*menu_pick_fn)(int, int);
 static menu_pick_fn gMenuPick;
@@ -285,6 +288,18 @@ static void n_tbl_select(JNIEnv *env, jclass c, jint id, jintArray rows) {
     for (int i = 0; i < k; i++) buf[i] = e[i];
     (*env)->ReleaseIntArrayElements(env, rows, e, JNI_ABORT);
     gTblSelSet(p, buf, k);
+}
+/* the picker's answer: the copied document's path (null if cancelled), then unwind the nested loop */
+static void n_picked(JNIEnv *env, jclass c, jstring path) {
+    (void)c;
+    gPicked[0] = 0;
+    if (path) {
+        const char *u = (*env)->GetStringUTFChars(env, path, NULL);
+        snprintf(gPicked, sizeof gPicked, "%s", u);
+        (*env)->ReleaseStringUTFChars(env, path, u);
+    }
+    gPickDone = 1;
+    if (gPickNesting) (*env)->ThrowNew(env, (*env)->FindClass(env, "java/lang/RuntimeException"), "ux-pick-unwind");
 }
 static void n_menu_pick(JNIEnv *env, jclass c, jint t, jint j) {
     (void)env; (void)c;
@@ -2001,6 +2016,27 @@ int ux_and_alert(int icon, const char *lines, const char *buttons, int defBtn) {
     return gAlertResult;
 }
 
+/* ── the document picker: UXPicker + a nested Looper.loop(), as the alert ── */
+int ux_and_file_open(char *out, int cap) {
+    JNIEnv *env = envNow();
+    gPickDone = 0;
+    gPicked[0] = 0;
+    (*env)->CallStaticVoidMethod(env, gPickerCls, (*env)->GetStaticMethodID(env, gPickerCls, "open",
+                                 "(Landroid/app/Activity;)V"), gActivity);
+    if (!check(env, "picker open")) return 0;
+    jclass looperCls = (*env)->FindClass(env, "android/os/Looper");
+    jmethodID loop = (*env)->GetStaticMethodID(env, looperCls, "loop", "()V");
+    gPickNesting = 1;
+    while (!gPickDone) {
+        (*env)->CallStaticVoidMethod(env, looperCls, loop);
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);   /* the unwind marker */
+    }
+    gPickNesting = 0;
+    if (!gPicked[0] || (int)strlen(gPicked) + 1 > cap) return 0;
+    memcpy(out, gPicked, strlen(gPicked) + 1);
+    return 1;
+}
+
 /* ── the shell ──────────────────────────────────────────────────────────── */
 /* runLoop(): post the app's start (UXRun id 0) to the UI thread, then park —
  * the platform owns the loop; xt_main's thread never comes back, by design. */
@@ -2078,6 +2114,7 @@ JNIEXPORT void ANativeActivity_onCreate(ANativeActivity *activity,
     LOADC(gDrawCls, "UXDrawView")
     LOADC(gTableCls, "UXTable")
     LOADC(gMenuCls, "UXMenuButton")
+    LOADC(gPickerCls, "UXBridge$Picker")
 
     static const JNINativeMethod nb[] = {
         { "nativeFire", "(I)V", (void *)n_fire },
@@ -2105,6 +2142,8 @@ JNIEXPORT void ANativeActivity_onCreate(ANativeActivity *activity,
     (*env)->RegisterNatives(env, gTableCls, nt, 9);
     static const JNINativeMethod nm[] = { { "nativeMenuPick", "(II)V", (void *)n_menu_pick } };
     (*env)->RegisterNatives(env, gMenuCls, nm, 1);
+    static const JNINativeMethod np[] = { { "nativePicked", "(Ljava/lang/String;)V", (void *)n_picked } };
+    (*env)->RegisterNatives(env, gPickerCls, np, 1);
     gRunInit = (*env)->GetMethodID(env, gRunCls, "<init>", "(I)V");
     if (!check(env, "RegisterNatives")) return;
 

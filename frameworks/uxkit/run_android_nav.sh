@@ -64,7 +64,7 @@ echo "== android-nav: installing + launching =="
     "$ADB" install "$work/uxnav.apk" >/dev/null
 }
 "$ADB" logcat -c
-"$ADB" shell am start -n org.compile_xc.uxnav/android.app.NativeActivity >/dev/null 2>&1
+"$ADB" shell am start -S --activity-clear-task -n org.compile_xc.uxnav/android.app.NativeActivity >/dev/null 2>&1
 for i in $(seq 1 30); do
   out=$("$ADB" logcat -d -s xcapp uxkit)
   echo "$out" | grep -qE "PASS:|FAIL:" && break

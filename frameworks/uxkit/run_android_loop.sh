@@ -65,7 +65,7 @@ echo "== android-loop: installing + launching =="
     "$ADB" install "$work/uxloop.apk" >/dev/null
 }
 "$ADB" logcat -c
-"$ADB" shell am start -n org.compile_xc.uxloop/android.app.NativeActivity >/dev/null 2>&1
+"$ADB" shell am start -S --activity-clear-task -n org.compile_xc.uxloop/android.app.NativeActivity >/dev/null 2>&1
 sleep 8
 out=$("$ADB" logcat -d -s xcapp uxkit)
 echo "$out" | grep -v '^-' | tail -20
