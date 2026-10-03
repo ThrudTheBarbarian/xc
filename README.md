@@ -29,7 +29,7 @@ stream stays inside its own tree.
 | Tools | `tools/` — packaging, deployment and the C-to-xc converter. |
 | Benchmarks | `benchmark/` — the benchmark runs and their reports. |
 
-Two rules keep the streams apart:
+Two rules keep the streams' work apart:
 
 * A change is made in one tree. Compiler work stays in `compiler/` and
   framework work stays in `frameworks/`; the compiler's tests and gates read
@@ -38,6 +38,17 @@ Two rules keep the streams apart:
   an external project would, and never against paths inside `compiler/`.
   Something that only builds in a full checkout is a bug, because it cannot
   build for anyone else.
+
+One rule keeps the streams' commits apart, because they share one `main`:
+
+* Push `main` only when every commit it would send is your own stream's.
+  Check `git log origin/main..main` (what the push sends, not
+  `main..origin/main`). A commit from another stream that is still local may
+  not have passed its gates yet, so ask its owner before it goes out. The
+  frameworks and applications streams push only with
+  `private/frameworks/uxkit/tools/safe_push.sh`, which lists those commits and
+  refuses if any of them touches a tree outside `frameworks/`, `apps/rocks/`
+  and the UXKit pages of the website.
 
 `private/` is not part of the repository. It is ignored by git and holds the
 working rules, the notes on open and fixed bugs, and other material that is
