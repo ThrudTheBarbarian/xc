@@ -53,6 +53,13 @@ void ux_and_set_outline_hooks(pointer level, pointer disclosure, pointer toggle)
 void ux_and_set_menu_pick(pointer fn);
 void ux_and_menu_set(u8* enc);
 void ux_and_menu_state(i32 t, i32 j, i32 what, i32 on);
+// GL (GLES 3, offscreen): entry points, a context per view, its resize, present and paint.
+pointer ux_and_gl_proc(u8* name);
+pointer ux_and_gl_make(pointer view, i32 w, i32 h);
+void ux_and_gl_resize(pointer view, i32 w, i32 h);
+void ux_and_gl_destroy(pointer view);
+void ux_and_gl_present(pointer view);
+i32 ux_and_gl_paint(pointer view, i32 win, i32 x, i32 y, i32 w, i32 h);
 // The system document picker; the picked document is copied into the cache and its path given.
 i32 ux_and_file_open(u8* out, i32 cap);
 void ux_and_table_reload(i32 handle, i32 node);
@@ -432,37 +439,49 @@ class UXAndroidDriver : Object<UXViewDriver>
         }
     // phone or tablet, by size
     // ---- GL ------------------------------------------------------------------
-    // No GL on this backend: glKind() is NONE, so the app draws its fallback through
-    // drawRect like any other view.  That is the software path the gates run.
+    // GLES 3, rendered OFFSCREEN (libUXAndroid.c): a framebuffer object at the view's pixel
+    // size is the renderer's default framebuffer, presentGL reads the frame back into a Bitmap,
+    // and the draw walk paints it where the view sits -- the one-surface model AppKit and Win32
+    // use, so a 2-D view after the GL view in the tree is drawn over it.  Where EGL will not give
+    // an ES3 context, makeGLContext returns 0 and the view is drawn by drawRect.
     i32 glKind(void)
         {
-        return (i32)UX_GL_NONE;
+        return (i32)UX_GL_GLES3;
         }
-    // No GL at all, so there is no plane to composite: the answer is moot but stated as false.
+    // No GL plane: the frame is painted in the window's own 2-D pass, ordered by tree order.
     bool compositesWithGL(void)
         {
         return false;
         }
     pointer glProc(u8* name)
         {
-        return (pointer)0; // no GL on this backend: glKind() is NONE, so nothing asks
+        return ux_and_gl_proc(name);
         }
     pointer makeGLContext(pointer view)
         {
-        return (pointer)0;
+        UXView* v = (UXView* ?)(Object*)view;
+        if (v == (UXView*)0)
+            {
+            return (pointer)0;
+            }
+        UXRect f = v.frame();
+        return ux_and_gl_make(view, (i32)f.w, (i32)f.h);
         }
     void destroyGLContext(pointer view)
         {
+        ux_and_gl_destroy(view);
         }
     void resizeGL(pointer view, i32 w, i32 h)
         {
+        ux_and_gl_resize(view, w, h);
         }
     void presentGL(pointer view)
         {
+        ux_and_gl_present(view);
         }
+    // The present is a readback, never a swap: there is nothing to pace.
     void glSetSwapInterval(i32 interval)
         {
-        // No GL, so there is nothing to pace.
         }
 
     // The frame clock.  Android owns the loop, so the driver answers true and arms its own
@@ -1281,8 +1300,15 @@ class UXAndroidDriver : Object<UXViewDriver>
                 i32 vh = (i32)0;
                 self.structAbsFrame((pointer)t, i, &vx, &vy, &vw, &vh);
                 ux_and_clip(vx, vy, vw, vh);
-                UXAndUserDrawFn* f = (UXAndUserDrawFn*)gAndUserFn;
-                f((pointer)t.nodes, i, gAndUserUd);
+                // A GL view that owns a context is painted with its last frame, never by
+                // drawRect: the two are alternative renderers.
+                bool gl = t.nodes[i].kind == (i32)UXKindGLView && t.nodes[i].peer != (pointer)0
+                          && ux_and_gl_paint(t.nodes[i].peer, t.win, vx, vy, vw, vh) != (i32)0;
+                if (!gl)
+                    {
+                    UXAndUserDrawFn* f = (UXAndUserDrawFn*)gAndUserFn;
+                    f((pointer)t.nodes, i, gAndUserUd);
+                    }
                 ux_and_clip_end();
                 }
             }

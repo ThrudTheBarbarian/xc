@@ -2016,6 +2016,252 @@ int ux_and_alert(int icon, const char *lines, const char *buttons, int defBtn) {
     return gAlertResult;
 }
 
+/* ── GL: GLES 3, rendered offscreen, painted in the window's own 2-D pass ──
+ * The one-surface model AppKit and Win32 use.  Each GL view gets an EGL ES3 context (on a 1x1
+ * pbuffer: it never draws to a window) and a framebuffer object at the view's PIXEL size, bound as
+ * the renderer's default, so the renderer does not know.  presentGL reads the frame back into a
+ * Bitmap and invalidates the window; the draw walk paints that bitmap where the view sits, in tree
+ * order, so a 2-D view after the GL view in the tree is drawn OVER it.  EGL and GLES are opened at
+ * run time, so no app's link line changes. */
+#define UXA_GL_MAX 8
+typedef void *(*egl_getdisplay_fn)(void *);
+typedef unsigned (*egl_initialize_fn)(void *, int *, int *);
+typedef unsigned (*egl_chooseconfig_fn)(void *, const int *, void **, int, int *);
+typedef void *(*egl_createpbuffer_fn)(void *, void *, const int *);
+typedef void *(*egl_createcontext_fn)(void *, void *, void *, const int *);
+typedef unsigned (*egl_makecurrent_fn)(void *, void *, void *, void *);
+typedef unsigned (*egl_destroycontext_fn)(void *, void *);
+typedef void *(*egl_getproc_fn)(const char *);
+typedef void (*gl_gen_fn)(int, unsigned *);
+typedef void (*gl_bind_fn)(unsigned, unsigned);
+typedef void (*gl_rbstorage_fn)(unsigned, unsigned, int, int);
+typedef void (*gl_fbrb_fn)(unsigned, unsigned, unsigned, unsigned);
+typedef void (*gl_viewport_fn)(int, int, int, int);
+typedef void (*gl_readpixels_fn)(int, int, int, int, unsigned, unsigned, void *);
+typedef void (*gl_del_fn)(int, const unsigned *);
+typedef void (*gl_finish_fn)(void);
+static void *gEglLib, *gGlesLib, *gEglDpy, *gEglCfg, *gEglPb;
+static egl_makecurrent_fn gEglMakeCur;
+static egl_getproc_fn gEglGetProc;
+static struct {
+    void *view, *ctx;
+    unsigned fbo, rbColor, rbDepth;
+    int pw, ph;             /* the drawable, in pixels */
+    unsigned char *px;      /* the last frame, top-down RGBA */
+    jobject bmp;            /* global ref: that frame as a Bitmap */
+    int win;                /* the window it was last painted in (0: not yet) */
+} gGl[UXA_GL_MAX];
+static int gGlCount;
+static int gGlTestMax;      /* tests: a lower GPU limit, to exercise the clamp */
+void ux_and_test_gl_max(int max) { gGlTestMax = max; }
+static int glLoad(void) {
+    if (gEglDpy) return 1;
+    if (!gEglLib) gEglLib = dlopen("libEGL.so", RTLD_NOW);
+    if (!gGlesLib) gGlesLib = dlopen("libGLESv3.so", RTLD_NOW);
+    if (!gEglLib || !gGlesLib) return 0;
+    egl_getdisplay_fn gd = (egl_getdisplay_fn)dlsym(gEglLib, "eglGetDisplay");
+    egl_initialize_fn in = (egl_initialize_fn)dlsym(gEglLib, "eglInitialize");
+    egl_chooseconfig_fn cc = (egl_chooseconfig_fn)dlsym(gEglLib, "eglChooseConfig");
+    egl_createpbuffer_fn cp = (egl_createpbuffer_fn)dlsym(gEglLib, "eglCreatePbufferSurface");
+    gEglMakeCur = (egl_makecurrent_fn)dlsym(gEglLib, "eglMakeCurrent");
+    gEglGetProc = (egl_getproc_fn)dlsym(gEglLib, "eglGetProcAddress");
+    if (!gd || !in || !cc || !cp || !gEglMakeCur) return 0;
+    void *dpy = gd(0 /* EGL_DEFAULT_DISPLAY */);
+    int maj = 0, min = 0;
+    if (!dpy || !in(dpy, &maj, &min)) return 0;
+    const int attrs[] = { 0x3040 /* EGL_RENDERABLE_TYPE */, 0x40 /* EGL_OPENGL_ES3_BIT */,
+                          0x3033 /* EGL_SURFACE_TYPE */, 0x0001 /* EGL_PBUFFER_BIT */,
+                          0x3024, 8, 0x3023, 8, 0x3022, 8, 0x3021, 8 /* R G B A */,
+                          0x3038 /* EGL_NONE */ };
+    void *cfg = NULL;
+    int n = 0;
+    if (!cc(dpy, attrs, &cfg, 1, &n) || n < 1) return 0;
+    const int pb[] = { 0x3057, 1, 0x3056, 1, 0x3038 }; /* EGL_WIDTH 1, EGL_HEIGHT 1 */
+    gEglPb = cp(dpy, cfg, pb);
+    if (!gEglPb) return 0;
+    gEglCfg = cfg;
+    gEglDpy = dpy;
+    return 1;
+}
+/* An entry point by name: the GLES library's own symbols first.  eglGetProcAddress answers for
+ * extensions only -- for an unknown core-looking name it may hand back a stub, and a renderer
+ * must get 0 for a name that is not there. */
+void *ux_and_gl_proc(const char *name) {
+    if (!glLoad() || !name) return NULL;
+    void *p = dlsym(gGlesLib, name);
+    if (!p) p = dlsym(gEglLib, name);
+    if (!p && gEglGetProc) {
+        size_t n = strlen(name);
+        const char *suf[] = { "EXT", "OES", "KHR", "NV", "ANDROID", "ARM", "QCOM", "IMG" };
+        for (unsigned k = 0; k < sizeof suf / sizeof suf[0]; k++) {
+            size_t m = strlen(suf[k]);
+            if (n > m && strcmp(name + n - m, suf[k]) == 0) { p = gEglGetProc(name); break; }
+        }
+    }
+    return p;
+}
+static int glFind(void *view) {
+    for (int i = 0; i < gGlCount; i++) if (gGl[i].view == view) return i;
+    return -1;
+}
+static void glCur(int i) { gEglMakeCur(gEglDpy, gEglPb, gEglPb, gGl[i].ctx); }
+/* (re)make the framebuffer at w x h pixels and set the viewport to it.  The drawable never exceeds
+ * what the GPU can hold (the renderbuffer and viewport limits): over it, both sides shrink by one
+ * factor, keeping the aspect, and the paint stretches the frame back over the view. */
+static void glFramebuffer(int i, int w, int h) {
+    typedef void (*gl_getint_fn)(unsigned, int *);
+    gl_getint_fn gi = (gl_getint_fn)dlsym(gGlesLib, "glGetIntegerv");
+    int maxRb = 0, maxVp[2] = { 0, 0 };
+    gi(0x84E8 /* GL_MAX_RENDERBUFFER_SIZE */, &maxRb);
+    gi(0x0D3A /* GL_MAX_VIEWPORT_DIMS */, maxVp);
+    int lim = maxRb > 0 ? maxRb : 4096;
+    if (maxVp[0] > 0 && maxVp[0] < lim) lim = maxVp[0];
+    if (maxVp[1] > 0 && maxVp[1] < lim) lim = maxVp[1];
+    if (gGlTestMax > 0 && gGlTestMax < lim) lim = gGlTestMax;
+    if (w > lim || h > lim) {
+        if (w >= h) { h = (int)((long)h * lim / w); w = lim; }
+        else { w = (int)((long)w * lim / h); h = lim; }
+    }
+    if (w < 1) w = 1;
+    if (h < 1) h = 1;
+    gl_gen_fn genFb = (gl_gen_fn)dlsym(gGlesLib, "glGenFramebuffers");
+    gl_gen_fn genRb = (gl_gen_fn)dlsym(gGlesLib, "glGenRenderbuffers");
+    gl_bind_fn bindFb = (gl_bind_fn)dlsym(gGlesLib, "glBindFramebuffer");
+    gl_bind_fn bindRb = (gl_bind_fn)dlsym(gGlesLib, "glBindRenderbuffer");
+    gl_rbstorage_fn st = (gl_rbstorage_fn)dlsym(gGlesLib, "glRenderbufferStorage");
+    gl_fbrb_fn att = (gl_fbrb_fn)dlsym(gGlesLib, "glFramebufferRenderbuffer");
+    gl_del_fn delFb = (gl_del_fn)dlsym(gGlesLib, "glDeleteFramebuffers");
+    gl_del_fn delRb = (gl_del_fn)dlsym(gGlesLib, "glDeleteRenderbuffers");
+    gl_viewport_fn vp = (gl_viewport_fn)dlsym(gGlesLib, "glViewport");
+    if (gGl[i].fbo) {
+        delFb(1, &gGl[i].fbo);
+        delRb(1, &gGl[i].rbColor);
+        delRb(1, &gGl[i].rbDepth);
+    }
+    genFb(1, &gGl[i].fbo);
+    genRb(1, &gGl[i].rbColor);
+    genRb(1, &gGl[i].rbDepth);
+    bindRb(0x8D41 /* GL_RENDERBUFFER */, gGl[i].rbColor);
+    st(0x8D41, 0x8058 /* GL_RGBA8 */, w, h);
+    bindRb(0x8D41, gGl[i].rbDepth);
+    st(0x8D41, 0x88F0 /* GL_DEPTH24_STENCIL8 */, w, h);
+    bindFb(0x8D40 /* GL_FRAMEBUFFER */, gGl[i].fbo);
+    att(0x8D40, 0x8CE0 /* COLOR_ATTACHMENT0 */, 0x8D41, gGl[i].rbColor);
+    att(0x8D40, 0x821A /* DEPTH_STENCIL_ATTACHMENT */, 0x8D41, gGl[i].rbDepth);
+    vp(0, 0, w, h);
+    gGl[i].pw = w;
+    gGl[i].ph = h;
+    free(gGl[i].px);
+    gGl[i].px = calloc((size_t)w * h, 4);
+}
+/* bind a context to a view whose size is w x h (neutral units); 0 if there is no GL */
+void *ux_and_gl_make(void *view, int w, int h) {
+    if (!glLoad()) return NULL;
+    int i = glFind(view);
+    if (i < 0) {
+        if (gGlCount >= UXA_GL_MAX) return NULL;
+        i = gGlCount++;
+        memset(&gGl[i], 0, sizeof gGl[i]);
+        gGl[i].view = view;
+    }
+    if (!gGl[i].ctx) {
+        egl_createcontext_fn cc = (egl_createcontext_fn)dlsym(gEglLib, "eglCreateContext");
+        const int ca[] = { 0x3098 /* EGL_CONTEXT_CLIENT_VERSION */, 3, 0x3038 };
+        gGl[i].ctx = cc ? cc(gEglDpy, gEglCfg, NULL, ca) : NULL;
+        if (!gGl[i].ctx) return NULL;
+        glCur(i);
+        glFramebuffer(i, PX(w), PX(h));
+    } else {
+        glCur(i);
+    }
+    return (void *)(intptr_t)(i + 1); /* the opaque token, never the context */
+}
+void ux_and_gl_resize(void *view, int w, int h) {
+    int i = glFind(view);
+    if (i < 0 || !gGl[i].ctx) return;
+    glCur(i);
+    glFramebuffer(i, PX(w), PX(h)); /* the clamp may change the drawable even at the same size */
+}
+void ux_and_gl_destroy(void *view) {
+    int i = glFind(view);
+    if (i < 0 || !gGl[i].ctx) return;
+    JNIEnv *env = envNow();
+    glCur(i);
+    gl_del_fn delFb = (gl_del_fn)dlsym(gGlesLib, "glDeleteFramebuffers");
+    gl_del_fn delRb = (gl_del_fn)dlsym(gGlesLib, "glDeleteRenderbuffers");
+    if (gGl[i].fbo) { delFb(1, &gGl[i].fbo); delRb(1, &gGl[i].rbColor); delRb(1, &gGl[i].rbDepth); }
+    gEglMakeCur(gEglDpy, NULL, NULL, NULL); /* unbind first: a context deleted while current leaks */
+    egl_destroycontext_fn dc = (egl_destroycontext_fn)dlsym(gEglLib, "eglDestroyContext");
+    if (dc) dc(gEglDpy, gGl[i].ctx);
+    free(gGl[i].px);
+    if (gGl[i].bmp) (*env)->DeleteGlobalRef(env, gGl[i].bmp);
+    memset(&gGl[i], 0, sizeof gGl[i]);
+    gGl[i].view = view; /* the slot stays the view's: a remake reuses it */
+}
+/* The frame is finished: read it back (GL rows are bottom-up), into the view's Bitmap, and have
+ * its window repainted, where the draw walk paints it. */
+void ux_and_gl_present(void *view) {
+    int i = glFind(view);
+    if (i < 0 || !gGl[i].ctx) return;
+    JNIEnv *env = envNow();
+    glCur(i);
+    gl_bind_fn bindFb = (gl_bind_fn)dlsym(gGlesLib, "glBindFramebuffer");
+    gl_readpixels_fn rp = (gl_readpixels_fn)dlsym(gGlesLib, "glReadPixels");
+    int w = gGl[i].pw, h = gGl[i].ph;
+    unsigned char *tmp = malloc((size_t)w * h * 4);
+    if (!tmp) return;
+    bindFb(0x8D40, gGl[i].fbo);
+    rp(0, 0, w, h, 0x1908 /* GL_RGBA */, 0x1401 /* UNSIGNED_BYTE */, tmp);
+    for (int y = 0; y < h; y++)
+        memcpy(gGl[i].px + (size_t)y * w * 4, tmp + (size_t)(h - 1 - y) * w * 4, (size_t)w * 4);
+    free(tmp);
+    /* the Bitmap at the drawable's size; ARGB_8888 is RGBA in memory, as the read gave */
+    jclass bc = gBitmapCls;
+    if (gGl[i].bmp) {
+        int bw = (*env)->CallIntMethod(env, gGl[i].bmp, (*env)->GetMethodID(env, bc, "getWidth", "()I"));
+        int bh = (*env)->CallIntMethod(env, gGl[i].bmp, (*env)->GetMethodID(env, bc, "getHeight", "()I"));
+        if (bw != w || bh != h) { (*env)->DeleteGlobalRef(env, gGl[i].bmp); gGl[i].bmp = NULL; }
+    }
+    if (!gGl[i].bmp) {
+        jclass cfgCls = (*env)->FindClass(env, "android/graphics/Bitmap$Config");
+        jobject cfg = (*env)->GetStaticObjectField(env, cfgCls, (*env)->GetStaticFieldID(env, cfgCls, "ARGB_8888",
+                                                   "Landroid/graphics/Bitmap$Config;"));
+        jobject b = (*env)->CallStaticObjectMethod(env, bc, gBmpCreate, w, h, cfg);
+        gGl[i].bmp = (*env)->NewGlobalRef(env, b);
+        (*env)->DeleteLocalRef(env, b);
+    }
+    jobject buf = (*env)->NewDirectByteBuffer(env, gGl[i].px, (jlong)w * h * 4);
+    (*env)->CallVoidMethod(env, gGl[i].bmp, (*env)->GetMethodID(env, bc, "copyPixelsFromBuffer", "(Ljava/nio/Buffer;)V"), buf);
+    (*env)->DeleteLocalRef(env, buf);
+    check(env, "gl present");
+    if (gGl[i].win > 0) ux_and_window_invalidate(gGl[i].win);
+    else for (int hw = 1; hw < gNextH; hw++) if (gWinV[hw]) ux_and_window_invalidate(hw);
+}
+/* Paint a GL view's last frame where it sits (neutral units, in the draw in flight).  1 if it drew. */
+int ux_and_gl_paint(void *view, int win, int x, int y, int w, int h) {
+    int i = glFind(view);
+    if (i < 0 || !gGl[i].ctx || !gGl[i].bmp || !gDrawCanvas) return 0;
+    JNIEnv *env = envNow();
+    gGl[i].win = win;
+    jclass rc = (*env)->FindClass(env, "android/graphics/RectF");
+    jobject dst = (*env)->NewObject(env, rc, (*env)->GetMethodID(env, rc, "<init>", "(FFFF)V"),
+                                    (jfloat)x, (jfloat)y, (jfloat)(x + w), (jfloat)(y + h));
+    (*env)->CallVoidMethod(env, gDrawCanvas, (*env)->GetMethodID(env, gCanvasCls, "drawBitmap",
+                           "(Landroid/graphics/Bitmap;Landroid/graphics/Rect;Landroid/graphics/RectF;Landroid/graphics/Paint;)V"),
+                           gGl[i].bmp, NULL, dst, NULL);
+    (*env)->DeleteLocalRef(env, dst);
+    check(env, "gl paint");
+    return 1;
+}
+/* tests: the drawable's size in pixels */
+int ux_and_test_gl_size(void *view, int *w, int *h) {
+    int i = glFind(view);
+    if (i < 0) return 0;
+    *w = gGl[i].pw;
+    *h = gGl[i].ph;
+    return 1;
+}
+
 /* ── the document picker: UXPicker + a nested Looper.loop(), as the alert ── */
 int ux_and_file_open(char *out, int cap) {
     JNIEnv *env = envNow();
