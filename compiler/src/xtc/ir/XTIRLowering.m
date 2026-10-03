@@ -839,6 +839,67 @@ static uint32_t xtProtocolId(NSString* name)
 // well-formed; fixtures land at the next pipeline stage (verifier or
 // backend) with a more specific reason — which is exactly what the
 // new-IR progress report wants.
+// A node kind in words, for a diagnostic the user reads: the construct, never
+// the enum's number (bug 556: "unsupported expression kind 12" was a brace
+// initialiser, and nobody could tell).
+static NSString* XTDescribeNodeKind(XTASTNodeKind k)
+    {
+    switch (k)
+        {
+    case XTASTNodeKindProgram: return @"a program";
+    case XTASTNodeKindFunctionDecl: return @"a function declaration";
+    case XTASTNodeKindMethodDecl: return @"a method declaration";
+    case XTASTNodeKindVariableDecl: return @"a variable declaration";
+    case XTASTNodeKindStructDecl: return @"a struct declaration";
+    case XTASTNodeKindTypedefDecl: return @"a typedef";
+    case XTASTNodeKindEnumDecl: return @"an enum declaration";
+    case XTASTNodeKindEnumMember: return @"an enum member";
+    case XTASTNodeKindClassDecl: return @"a class declaration";
+    case XTASTNodeKindProtocolDecl: return @"a protocol declaration";
+    case XTASTNodeKindUseDecl: return @"a `#use`";
+    case XTASTNodeKindParam: return @"a parameter";
+    case XTASTNodeKindBlock: return @"a `{…}` block or initialiser";
+    case XTASTNodeKindIf: return @"`if`";
+    case XTASTNodeKindWhile: return @"`while`";
+    case XTASTNodeKindForCStyle: return @"a `for` loop";
+    case XTASTNodeKindForIn: return @"`for … in`";
+    case XTASTNodeKindReturn: return @"`return`";
+    case XTASTNodeKindBreak: return @"`break`";
+    case XTASTNodeKindContinue: return @"`continue`";
+    case XTASTNodeKindGoto: return @"`goto`";
+    case XTASTNodeKindLabel: return @"a label";
+    case XTASTNodeKindSwitch: return @"`switch`";
+    case XTASTNodeKindAsmBlock: return @"inline `asm`";
+    case XTASTNodeKindExprStatement: return @"an expression statement";
+    case XTASTNodeKindTupleAssign: return @"a tuple assignment `(a, b) = …`";
+    case XTASTNodeKindDelete: return @"`delete`";
+    case XTASTNodeKindBinaryExpr: return @"a binary operator";
+    case XTASTNodeKindUnaryExpr: return @"a unary operator";
+    case XTASTNodeKindPostfixExpr: return @"a postfix operator";
+    case XTASTNodeKindAssignExpr: return @"an assignment";
+    case XTASTNodeKindCallExpr: return @"a call";
+    case XTASTNodeKindMethodCallExpr: return @"a method call";
+    case XTASTNodeKindSubscriptExpr: return @"a subscript";
+    case XTASTNodeKindSliceExpr: return @"a slice `a[i..j]`";
+    case XTASTNodeKindRangeExpr: return @"a range `a..b`";
+    case XTASTNodeKindMemberAccess: return @"a member access";
+    case XTASTNodeKindTernaryExpr: return @"a `?:` expression";
+    case XTASTNodeKindCastExpr: return @"a cast";
+    case XTASTNodeKindIdentifier: return @"a name";
+    case XTASTNodeKindLiteralInt: return @"an integer literal";
+    case XTASTNodeKindLiteralFloat: return @"a float literal";
+    case XTASTNodeKindLiteralString: return @"a string literal";
+    case XTASTNodeKindLiteralChar: return @"a character literal";
+    case XTASTNodeKindLiteralBool: return @"a boolean literal";
+    case XTASTNodeKindNewExpr: return @"`new`";
+    case XTASTNodeKindSizeofExpr: return @"`sizeof`";
+    case XTASTNodeKindDefer: return @"`defer`";
+    case XTASTNodeKindThrow: return @"`throw`";
+    case XTASTNodeKindTry: return @"`try`";
+        }
+    return @"this construct";
+    }
+
 - (void)softFailLoweringAt:(nullable XTSourceLocation*)loc
                withMessage:(NSString*)message
     {
@@ -3687,7 +3748,7 @@ static uint32_t xtProtocolId(NSString* name)
     default:
         [self softFailLoweringAt:node.location
                      withMessage:[NSString stringWithFormat:
-                                               @"lowering: unsupported expression kind %ld", (long)node.nodeKind]];
+                                               @"lowering: %@ in an expression is not supported", XTDescribeNodeKind(node.nodeKind)]];
         return nil;
         }
     }
@@ -9805,7 +9866,7 @@ static const NSUInteger kVarargSlotBytes = 8;
     default:
         [self softFailLoweringAt:node.location
                      withMessage:[NSString stringWithFormat:
-                                               @"lowering: unsupported statement kind %ld", (long)node.nodeKind]];
+                                               @"lowering: %@ as a statement is not supported", XTDescribeNodeKind(node.nodeKind)]];
         }
     }
 

@@ -374,10 +374,14 @@ NSArray<NSString*>* XTWarningCategoryAllNames(void)
             }
 
         // Line 1: filename:line:col: level: message
+        // `ABANDON|` marks a lowering that gave up on a function. The corpus
+        // harness reads it from the diagnostic to tally the remaining gaps;
+        // the user is told what was not supported, not the marker (bug 556).
+        NSString* shown = [d.message hasPrefix:@"ABANDON|"] ? [d.message substringFromIndex:8] : d.message;
         fprintf(stderr, "%s%s:%s %s%s:%s %s\n",
                 bold, d.location.description.UTF8String, reset,
                 levelColor, levelStr.UTF8String, reset,
-                d.message.UTF8String);
+                shown.UTF8String);
 
         // Line 2: the source line (if available)
         NSArray<NSString*>* lines = _sourceLines[d.location.filename];

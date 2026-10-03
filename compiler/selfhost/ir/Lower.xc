@@ -9991,44 +9991,123 @@ class ClassInfo
         return (String*)0;
         }
 
-    // A node kind as text, for the diagnostic. Only the ones a slice is
-    // likely to stop on are named; the rest report their number.
+    // A node kind in words, for the diagnostic the user reads: the construct
+    // and where it stood, never the enum's number (bug 556: "unsupported
+    // expression kind 12" was a brace initialiser, and nobody could tell).
     String* kindName(u16 k, String* what)
         {
-        String* w = String.withString(what);
-        w.appendCString(" ");
-        if (k == (u16)nkMember)
-            w.appendCString("member");
-        else if (k == (u16)nkSubscript)
-            w.appendCString("subscript");
-        else if (k == (u16)nkMethodCall)
-            w.appendCString("methodcall");
-        else if (k == (u16)nkUnary)
-            w.appendCString("unary");
-        else if (k == (u16)nkPostfix)
-            w.appendCString("postfix");
-        else if (k == (u16)nkTernary)
-            w.appendCString("ternary");
-        else if (k == (u16)nkStr)
-            w.appendCString("string literal");
-        else if (k == (u16)nkFloat)
-            w.appendCString("float literal");
-        else if (k == (u16)nkNew)
-            w.appendCString("new");
-        else if (k == (u16)nkAsmBlock)
-            w.appendCString("asm");
+        String* w = String.withCString("");
+        if (k == (u16)nkProgram)
+            w.appendCString("a program");
+        else if (k == (u16)nkFunctionDecl)
+            w.appendCString("a function declaration");
+        else if (k == (u16)nkMethodDecl)
+            w.appendCString("a method declaration");
+        else if (k == (u16)nkVariableDecl)
+            w.appendCString("a variable declaration");
+        else if (k == (u16)nkStructDecl)
+            w.appendCString("a struct declaration");
+        else if (k == (u16)nkTypedefDecl)
+            w.appendCString("a typedef");
+        else if (k == (u16)nkEnumDecl)
+            w.appendCString("an enum declaration");
+        else if (k == (u16)nkEnumMember)
+            w.appendCString("an enum member");
+        else if (k == (u16)nkClassDecl)
+            w.appendCString("a class declaration");
+        else if (k == (u16)nkProtocolDecl)
+            w.appendCString("a protocol declaration");
+        else if (k == (u16)nkUseDecl)
+            w.appendCString("a `#use`");
+        else if (k == (u16)nkParam)
+            w.appendCString("a parameter");
+        else if (k == (u16)nkBlock)
+            w.appendCString("a `{…}` block or initialiser");
+        else if (k == (u16)nkIf)
+            w.appendCString("`if`");
+        else if (k == (u16)nkWhile)
+            w.appendCString("`while`");
+        else if (k == (u16)nkForCStyle)
+            w.appendCString("a `for` loop");
         else if (k == (u16)nkForIn)
-            w.appendCString("for-in");
+            w.appendCString("`for … in`");
+        else if (k == (u16)nkReturn)
+            w.appendCString("`return`");
+        else if (k == (u16)nkBreak)
+            w.appendCString("`break`");
+        else if (k == (u16)nkContinue)
+            w.appendCString("`continue`");
+        else if (k == (u16)nkGoto)
+            w.appendCString("`goto`");
+        else if (k == (u16)nkLabel)
+            w.appendCString("a label");
         else if (k == (u16)nkSwitch)
-            w.appendCString("switch");
-        else if (k == (u16)nkSizeof)
-            w.appendCString("sizeof");
+            w.appendCString("`switch`");
+        else if (k == (u16)nkAsmBlock)
+            w.appendCString("inline `asm`");
+        else if (k == (u16)nkExprStatement)
+            w.appendCString("an expression statement");
         else if (k == (u16)nkTupleAssign)
-            w.appendCString("tuple assign");
+            w.appendCString("a tuple assignment `(a, b) = …`");
         else if (k == (u16)nkDelete)
-            w.appendCString("delete");
+            w.appendCString("`delete`");
+        else if (k == (u16)nkBinary)
+            w.appendCString("a binary operator");
+        else if (k == (u16)nkUnary)
+            w.appendCString("a unary operator");
+        else if (k == (u16)nkPostfix)
+            w.appendCString("a postfix operator");
+        else if (k == (u16)nkAssign)
+            w.appendCString("an assignment");
+        else if (k == (u16)nkCall)
+            w.appendCString("a call");
+        else if (k == (u16)nkMethodCall)
+            w.appendCString("a method call");
+        else if (k == (u16)nkSubscript)
+            w.appendCString("a subscript");
+        else if (k == (u16)nkSlice)
+            w.appendCString("a slice `a[i..j]`");
+        else if (k == (u16)nkRange)
+            w.appendCString("a range `a..b`");
+        else if (k == (u16)nkMember)
+            w.appendCString("a member access");
+        else if (k == (u16)nkTernary)
+            w.appendCString("a `?:` expression");
+        else if (k == (u16)nkCast)
+            w.appendCString("a cast");
+        else if (k == (u16)nkIdent)
+            w.appendCString("a name");
+        else if (k == (u16)nkInt)
+            w.appendCString("an integer literal");
+        else if (k == (u16)nkFloat)
+            w.appendCString("a float literal");
+        else if (k == (u16)nkStr)
+            w.appendCString("a string literal");
+        else if (k == (u16)nkChar)
+            w.appendCString("a character literal");
+        else if (k == (u16)nkBool)
+            w.appendCString("a boolean literal");
+        else if (k == (u16)nkNew)
+            w.appendCString("`new`");
+        else if (k == (u16)nkSizeof)
+            w.appendCString("`sizeof`");
+        else if (k == (u16)nkDefer)
+            w.appendCString("`defer`");
+        else if (k == (u16)nkThrow)
+            w.appendCString("`throw`");
+        else if (k == (u16)nkTry)
+            w.appendCString("`try`");
+        else if (k == (u16)nkGotoLabel)
+            w.appendCString("a `goto` label");
+        else if (k == (u16)nkCase)
+            w.appendCString("a `case`");
+        else if (k == (u16)nkAsmLine)
+            w.appendCString("an `asm` line");
+        else if (k == (u16)nkCatch)
+            w.appendCString("`catch`");
         else
-            w.appendFormat("kind %ld", (i32)k);
+            w.appendCString("this construct");
+        w.appendCString(what.equals(String.withCString("statement")) ? " as a statement" : " in an expression");
         return w;
         }
 
