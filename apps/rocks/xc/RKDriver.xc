@@ -30,8 +30,19 @@
 // RK_HOSTGEM (-D RK_HOSTGEM) builds the GEM branch on the Mac instead of AppKit: that is
 // hostgem's GEM, the real desktop and AES running natively on the host (frameworks/uxkit/hostgem),
 // which is how Rocks is run on GEM without the board (run_rocks_gem.sh).  Nested for the same reason.
+//
+// RK_IOS and RK_ANDROID are the mobile builds.  To the compiler both are plain arm64 (an ios-sim or
+// android build defines nothing of its own), so they are flags like RK_HOSTGEM, set by
+// run_rocks_ios.sh and run_rocks_android.sh, and nested ahead of the arm64 = AppKit branch.  On
+// both the platform owns the loop: app.run() hands over to it and the delegate starts from there.
 #ifdef RK_HOSTGEM
 #import "UXGemDriver.xc"
+#else
+#ifdef RK_IOS
+#import "UXIosDriver.xc"
+#else
+#ifdef RK_ANDROID
+#import "UXAndroidDriver.xc"
 #else
 #ifdef ARCH_arm64
 #import "UXAppKitDriver.xc"
@@ -41,6 +52,8 @@
 #endif
 #ifdef ARCH_wasm32
 #import "UXWebDriver.xc"
+#endif
+#endif
 #endif
 #endif
 #ifdef ARCH_win64
@@ -67,6 +80,14 @@ class RKDriver : Object
         i32 hh = (i32)0;
         return hg.boot(&hw, &hh);
 #else
+#ifdef RK_IOS
+        gDriver = new UXIosDriver(); // app.run() boots it and enters UIApplicationMain
+        return true;
+#else
+#ifdef RK_ANDROID
+        gDriver = new UXAndroidDriver(); // app.run() boots it and hands over to the UI thread
+        return true;
+#else
 #ifdef ARCH_arm64
         UXAppKitDriver* d = new UXAppKitDriver();
         gDriver = d;
@@ -90,6 +111,8 @@ class RKDriver : Object
         return bd.boot(&bw, &bh);
 #endif
 #endif
+#endif
+#endif
 #ifdef ARCH_win64
         UXWin32Driver* wd = new UXWin32Driver();
         gDriver = wd;
@@ -107,11 +130,30 @@ class RKDriver : Object
 #endif
         }
 
+    // Whether the main window is the whole screen: a phone's or a tablet's app has one window,
+    // which fills the display, where a desktop's opens at a size of its own.
+    static bool fillsScreen(void)
+        {
+#ifdef RK_IOS
+        return true;
+#endif
+#ifdef RK_ANDROID
+        return true;
+#endif
+        return false;
+        }
+
     // What to call this build, for the window title and the about box.
     static u8* platformName(void)
         {
 #ifdef RK_HOSTGEM
         return (u8*)"GEM";
+#else
+#ifdef RK_IOS
+        return (u8*)"iOS";
+#else
+#ifdef RK_ANDROID
+        return (u8*)"Android";
 #else
 #ifdef ARCH_arm64
         return (u8*)"macOS";
@@ -121,6 +163,8 @@ class RKDriver : Object
 #endif
 #ifdef ARCH_wasm32
         return (u8*)"the web";
+#endif
+#endif
 #endif
 #endif
 #ifdef ARCH_win64

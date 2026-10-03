@@ -36,12 +36,24 @@ class RocksApp : Object<UXApplicationDelegate>
         UXView* content = new UXView();
         win = new UXWindow();
         app.addWindow(win);
-        win.open((u8*)"Rocks", UXGeom.make((i16)80, (i16)60, (i16)RK_W, (i16)RK_H), content);
+        // a desktop window opens at Rocks' own size; on a tablet the window is the screen
+        i16 wx = (i16)80;
+        i16 wy = (i16)60;
+        i16 ww = (i16)RK_W;
+        i16 wh = (i16)RK_H;
+        if (RKDriver.fillsScreen() && app.screenWidth() > (i32)0)
+            {
+            wx = (i16)0;
+            wy = (i16)0;
+            ww = (i16)app.screenWidth();
+            wh = (i16)app.screenH;
+            }
+        win.open((u8*)"Rocks", UXGeom.make(wx, wy, ww, wh), content);
 
         // A wiring name the controller does not know is a TYPO, and the nib
         // path would hit it too — so it fails here rather than being silently
         // half-built.
-        if (!RKMainBuilder.buildInto(content, controller, (i16)RK_W, (i16)RK_H))
+        if (!RKMainBuilder.buildInto(content, controller, ww, wh))
             {
             Stdio.printf("FAIL: a wiring name was rejected — builder and controller disagree\n");
             return (i32)1;

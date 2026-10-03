@@ -73,23 +73,33 @@ class RKMainBuilder : Object
         i16 bodyY = (i16)((i32)tbH + (i32)gut);
         i16 bodyH = (i16)((i32)h - (i32)bodyY - (i32)stH - (i32)gut);
 
+        // The side panes' widths: the desktop's where the window has room, a share of it where it
+        // has not (a phone held upright), so the canvas always keeps the middle.
+        i32 olW = (i32)200;
+        i32 inW = (i32)260;
+        if ((i32)w < olW + inW + (i32)300)
+            {
+            olW = (i32)w / (i32)4;
+            inW = (i32)w * (i32)3 / (i32)10;
+            }
+        i32 cvW = (i32)w - olW - inW;
+
         UXSplitView* outer = new UXSplitView(); // outline | rest
-        outer.setDividerPos((i16)200);
+        outer.setDividerPos((i16)olW);
         content.addSubview(outer, UXGeom.make((i16)0, bodyY, w, bodyH));
 
         UXOutlineView* outline = new UXOutlineView();
-        outer.firstPane().addSubview(outline, UXGeom.make((i16)0, (i16)0, (i16)200, bodyH));
+        outer.firstPane().addSubview(outline, UXGeom.make((i16)0, (i16)0, (i16)olW, bodyH));
 
         UXSplitView* inner = new UXSplitView(); // canvas | inspector
-        inner.setDividerPos((i16)((i32)w - (i32)200 - (i32)260));
+        inner.setDividerPos((i16)cvW);
         outer.secondPane().addSubview(inner,
-                                      UXGeom.make((i16)0, (i16)0, (i16)((i32)w - (i32)200), bodyH));
+                                      UXGeom.make((i16)0, (i16)0, (i16)((i32)w - olW), bodyH));
 
         UXView* canvas = new UXView();
         UXView* inspector = new UXView();
-        inner.firstPane().addSubview(canvas,
-                                     UXGeom.make((i16)0, (i16)0, (i16)((i32)w - (i32)200 - (i32)260), bodyH));
-        inner.secondPane().addSubview(inspector, UXGeom.make((i16)0, (i16)0, (i16)260, bodyH));
+        inner.firstPane().addSubview(canvas, UXGeom.make((i16)0, (i16)0, (i16)cvW, bodyH));
+        inner.secondPane().addSubview(inspector, UXGeom.make((i16)0, (i16)0, (i16)inW, bodyH));
 
         // ---- the inspector pane ---------------------------------------------
         // Only the CHROME is built here — a heading and the container.  The
@@ -102,11 +112,11 @@ class RKMainBuilder : Object
         inspector.addSubview(tl, UXGeom.make((i16)8, (i16)8, (i16)46, rh));
         UXLabel* tv = new UXLabel();
         tv.setTitle((u8*)"—");
-        inspector.addSubview(tv, UXGeom.make((i16)56, (i16)8, (i16)160, rh));
+        inspector.addSubview(tv, UXGeom.make((i16)56, (i16)8, (i16)(inW - (i32)64 > (i32)160 ? (i32)160 : inW - (i32)64), rh));
 
         UXView* propPane = new UXView();
         inspector.addSubview(propPane, UXGeom.make((i16)0, (i16)((i32)rh + (i32)14),
-                                                   (i16)260, (i16)((i32)bodyH - (i32)rh - (i32)14)));
+                                                   (i16)inW, (i16)((i32)bodyH - (i32)rh - (i32)14)));
         c.inspectorCtl.attach(propPane, tv);
 
         // ---- the status line -----------------------------------------------
