@@ -62,22 +62,27 @@ void join(u8* out, u8* a, u8* b)
     out[n] = (u8)0;
     }
 
-// what the "user" does at the next dialog: type gType into the name box and press OK, or (gType
-// empty) press Cancel.  What the name box held when the dialog came up is kept in gSeenName.
+// what the "user" does at the next dialog, a moment after it is up: type gType into the name box and
+// press OK, or (gType empty) press Cancel.  What the name box held then is kept in gSeenName.
 u8 gType[600];
 u8 gSeenName[600];
 i32 gSeen;
 pointer userAtDialog(pointer hwnd, u32 msg, pointer wp, pointer lp)
     {
-    if (msg != (u32)$004E) // WM_NOTIFY
+    if (msg == (u32)$004E) // WM_NOTIFY
+        {
+        u32* code = (u32*)((u8*)lp + (i64)16); // OFNOTIFY.hdr.code
+        if (code[0] == (u32)$FFFFFDA7) // CDN_INITDONE: the dialog is up; act a moment later, as a person
+            {                          // would (Windows 10 fills the name box after this notification)
+            SetTimer(hwnd, (pointer)(i64)7, (u32)300, (pointer)0);
+            }
+        return (pointer)0;
+        }
+    if (msg != (u32)$0113 || wp != (pointer)(i64)7) // WM_TIMER, ours
         {
         return (pointer)0;
         }
-    u32* code = (u32*)((u8*)lp + (i64)16); // OFNOTIFY.hdr.code
-    if (code[0] != (u32)$FFFFFDA7) // CDN_INITDONE: the dialog is up
-        {
-        return (pointer)0;
-        }
+    KillTimer(hwnd, (pointer)(i64)7);
     gSeen = gSeen + (i32)1;
     pointer dlg = GetParent(hwnd); // an Explorer-style hook is a child of the dialog
     gSeenName[0] = (u8)0;

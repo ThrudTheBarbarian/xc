@@ -38,6 +38,7 @@ void glFinish(void);
 #import "UXControl.xc"
 #import "UXGeometry.xc"
 #import "UXGraphics.xc"
+#import "UXFileIO.xc"
 
 typedef void ClearColorFn(float r, float g, float b, float a);
 typedef void ClearFn(u32 mask);
@@ -186,6 +187,22 @@ void snapChecks(void)
         return;
         }
     Stdio.printf("  (content %dx%d, snapshot %dx%d, GL %s)\n", cw, ch, all.w, all.h, gMap.glContext() != (pointer)0 ? (u8*)"on" : (u8*)"off");
+#if SNAP_APPKIT || SNAP_WIN32 || SNAP_GTK
+    // UX_SNAP_SAVE=<file>: the whole snapshot as a PPM, for a person to look at
+    u8* save = getenv((u8*)"UX_SNAP_SAVE");
+    if (save != (u8*)0)
+        {
+        UXData* ppm = UXData.fromString((u8*)"P6\n360 200\n255\n");
+        for (i32 i = (i32)0; i < all.w * all.h; i = i + (i32)1)
+            {
+            u32 v = all.px[i];
+            ppm.appendByte((u8)((v >> (u32)16) & (u32)255));
+            ppm.appendByte((u8)((v >> (u32)8) & (u32)255));
+            ppm.appendByte((u8)(v & (u32)255));
+            }
+        UXFileIO.write(save, ppm);
+        }
+#endif
     show(all, (i32)10, (i32)170);
     show(all, (i32)30, (i32)30);
     show(all, (i32)70, (i32)60);
