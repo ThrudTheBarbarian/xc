@@ -693,6 +693,18 @@ static BOOL XTIsErasedKeyType(XTType* t)
     XTType* elem = XTCollectionElementOf(mc.receiver.resolvedType);
     if (!elem || !(elem.isInteger || elem.isFloating))
         return e;
+    // A typed collection of primitives holds Number boxes, so reading one
+    // back needs the class. Without it the element silently stayed the box
+    // (bug 595): the program compiled and printed nonsense.
+    if (!self.classesByName[@"Number"])
+        {
+        [self.diagnostics emitError:[NSString stringWithFormat:
+                                                  @"a collection of '%@' keeps its elements as Number: "
+                                                  @"#import \"Number.xc\" (Foundation.xc imports it)",
+                                                  elem.displayName]
+                                 at:e.location];
+        return e;
+        }
     return [self unboxRhs:e toLhsType:elem] ?: e;
     }
 

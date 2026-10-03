@@ -3791,6 +3791,18 @@ class Sema
             return e;
         if (numberAccessorFor(elem) == 0)
             return e;
+        // A typed collection of primitives holds Number boxes, so reading one
+        // back needs the class. Without it this built a call on a class that
+        // was never declared, refused later as "method call on a non-class"
+        // (bug 595).
+        if (_classes.get((Hashable*)String.withCString("Number")) == 0)
+            {
+            String* m = String.withCString("a collection of '");
+            m.append(elem);
+            m.appendCString("' keeps its elements as Number: #import \"Number.xc\" (Foundation.xc imports it)");
+            _errorAt(m, e);
+            return e;
+            }
         Node* u = unboxedNode(e, elem);
         if (u == 0)
             return e;
