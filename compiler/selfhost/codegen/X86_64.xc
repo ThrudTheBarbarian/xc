@@ -473,8 +473,21 @@ class X86_64
             _out.appendFormat("\t.globl\t%s\n\t.type\t%s, @function\n%s:\n",
                               fname.cString(), fname.cString(), fname.cString());
         _out.appendCString("\tpush\trbp\n\tmov\trbp, rsp\n");
-        if (_frame != (u32)0)
-            _out.appendFormat("\tsub\trsp, %lu\n", _frame);
+        // Windows commits a thread's stack one guard page at a time, so a
+        // frame over a page must touch each page in order: one `sub rsp, N`
+        // lands past the guard page and faults (bug 599: 0xC0000005 on real
+        // Windows; Wine commits the whole stack, so it never showed there).
+        // Unrolled, so it needs no labels; r11 is volatile and holds no
+        // argument here.
+        u32 rest = _frame;
+        if (_win64)
+            while (rest > (u32)4096)
+                {
+                _out.appendCString("\tsub\trsp, 4096\n\tmov\tr11, [rsp]\n");
+                rest = rest - (u32)4096;
+                }
+        if (rest != (u32)0)
+            _out.appendFormat("\tsub\trsp, %lu\n", rest);
         for (u32 i = (u32)0; i < _homeSaves.count(); i = i + (u32)1)
             {
             String* r = (String*)_homeSaves.get(i);
@@ -2810,6 +2823,14 @@ class X86_64
                     String* x = String.withCString("xmm");
                     x.appendFormat("%lu", pos);
                     loadF(a, x);
+                    // The Win64 ABI wants a floating argument to a VARIADIC
+                    // callee in the matching integer register too, which is
+                    // where msvcrt's printf reads it (bug 600: doubles printed
+                    // 0.0). Slots are positional, so that register is free and
+                    // a fixed-argument callee ignores it: always copying needs
+                    // no knowledge of the callee.
+                    _out.appendFormat("\tmovq\t%s, xmm%lu\n",
+                                      ((String*)win64ArgRegs().get(pos)).cString(), pos);
                     }
                 else
                     {
@@ -3852,6 +3873,14 @@ class X86_64
                     String* x = String.withCString("xmm");
                     x.appendFormat("%lu", pos);
                     loadF(a, x);
+                    // The Win64 ABI wants a floating argument to a VARIADIC
+                    // callee in the matching integer register too, which is
+                    // where msvcrt's printf reads it (bug 600: doubles printed
+                    // 0.0). Slots are positional, so that register is free and
+                    // a fixed-argument callee ignores it: always copying needs
+                    // no knowledge of the callee.
+                    _out.appendFormat("\tmovq\t%s, xmm%lu\n",
+                                      ((String*)win64ArgRegs().get(pos)).cString(), pos);
                     }
                 else
                     {

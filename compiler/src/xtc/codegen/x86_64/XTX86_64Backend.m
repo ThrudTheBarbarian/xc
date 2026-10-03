@@ -2205,8 +2205,20 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
     NSUInteger frame = (cur + 15) & ~(NSUInteger)15; // keep rsp 16-aligned
 
     [out appendString:@"\tpush\trbp\n\tmov\trbp, rsp\n"];
-    if (frame)
-        [out appendFormat:@"\tsub\trsp, %lu\n", (unsigned long)frame];
+    // Windows commits a thread's stack one guard page at a time, so a frame
+    // over a page must touch each page in order: one `sub rsp, N` lands past
+    // the guard page and faults (bug 599: 0xC0000005 on real Windows; Wine
+    // commits the whole stack, so it never showed there). Unrolled, so it
+    // needs no labels; r11 is volatile and holds no argument here.
+    NSUInteger rest = frame;
+    if (sWin64)
+        while (rest > 4096)
+            {
+            [out appendString:@"\tsub\trsp, 4096\n\tmov\tr11, [rsp]\n"];
+            rest -= 4096;
+            }
+    if (rest)
+        [out appendFormat:@"\tsub\trsp, %lu\n", (unsigned long)rest];
     for (NSString* r in usedSaves) // persist clobbered callee-saved homes
         [out appendFormat:@"\tmov\t[rbp-%@], %@\n", saves[r], r];
     if (hasSret) // rcx/rdi = caller's result buffer
@@ -2698,11 +2710,16 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         else if ([self isFloatVal:v])
             {
             if (pos < 4)
+                {
                 [self loadF:a
                        into:[NSString stringWithFormat:@"xmm%lu", (unsigned long)pos]
                          fn:fn
                        slot:slot
                         out:out];
+                // The integer twin a variadic callee reads (bug 600; see the
+                // direct call path).
+                [out appendFormat:@"\tmovq\t%@, xmm%lu\n", [self argRegs64][pos], (unsigned long)pos];
+                }
             else
                 {
                 [self loadZX:a into:'a' fn:fn slot:slot out:out];
@@ -3228,6 +3245,13 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
                                  fn:fn
                                slot:slot
                                 out:out];
+                        // The Win64 ABI wants a floating argument to a VARIADIC
+                        // callee in the matching integer register too, which is
+                        // where msvcrt's printf reads it (bug 600: doubles
+                        // printed 0.0). Slots are positional, so that register is
+                        // free and a fixed-argument callee ignores it: always
+                        // copying needs no knowledge of the callee.
+                        [out appendFormat:@"\tmovq\t%@, xmm%lu\n", [self argRegs64][pos], (unsigned long)pos];
                         }
                     else
                         {
