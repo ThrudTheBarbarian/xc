@@ -1,0 +1,16 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>running</title>
+<canvas id="ux-canvas" width="80" height="40"></canvas>
+<script>
+  // run_web_settings.sh's WORKER page: the same test in the worker run loop, loaded twice in one
+  // profile.  A worker has no localStorage: its writes are posted to this page, which stores them,
+  // and on the next load the page hands the worker a snapshot through xccConfig.workerData.
+  globalThis.xccConfig = { runLoop: 'worker', workerScript: 'ux_web_browser.js', canvas: '#ux-canvas' };
+  const out = [];
+  globalThis.xccOut = (s) => { out.push(s); };
+  setTimeout(() => fetch('/result', { method: 'POST', body: out.join('\n') + '\n(stored: ' +
+    Object.keys(localStorage).filter((k) => k.startsWith('uxkit:')).length + ' keys)' }), 2500);
+</script>
+<script src="ux_web_page.js"></script>
+<script src="test_web_settings.js"></script>
