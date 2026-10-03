@@ -638,8 +638,10 @@ int main(int argc, const char *argv[]) {
             NSMutableArray<NSString *> *dArchives = [NSMutableArray array];
             // Bug 440: a .dylib is a library this one imports (`#import <X>`).
             // It gets an LC_LOAD_DYLIB here, so a client that imports only
-            // this library still loads it. A .tbd (a -l or framework
-            // dependency) stays recorded on the client.
+            // this library still loads it. A .tbd (a -l or framework the
+            // library uses, CoreFoundation for Settings' native store) is one
+            // too: left to the client, a library whose client did not happen
+            // to link the framework could not bind its symbols (bug 591).
             NSMutableArray<NSDictionary *> *dDylibs = [NSMutableArray array];
             NSMutableSet<NSString *> *dSeen = [NSMutableSet set];
             for (int i = 7; i < argc; i++) {
@@ -648,8 +650,9 @@ int main(int argc, const char *argv[]) {
                 NSString *e = p.pathExtension;
                 if      ([e isEqualToString:@"o"]) [dObjs addObject:p];
                 else if ([e isEqualToString:@"a"]) [dArchives addObject:p];
-                else if ([e isEqualToString:@"dylib"]) {
-                    NSDictionary *info = [XTMachOWriter inspectDylib:p];
+                else if ([e isEqualToString:@"dylib"] || [e isEqualToString:@"tbd"]) {
+                    NSDictionary *info = [e isEqualToString:@"tbd"] ? [XTMachOWriter inspectTbd:p]
+                                                                   : [XTMachOWriter inspectDylib:p];
                     if (!info) {
                         fprintf(stderr, "xcc-ln-arm64: note: skipping unreadable arg '%s'\n", argv[i]);
                         continue;

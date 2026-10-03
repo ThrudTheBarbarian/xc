@@ -2323,6 +2323,14 @@ static int linkArm64Shared(const char *argv0, XTCommandLineOptions *opts,
             // library still loads them.
             for (NSString *p in neededLibs)
                 if ([p.pathExtension isEqualToString:@"dylib"]) [dylibArgs addObject:p];
+            // The libraries and frameworks on the line, and the frameworks the
+            // source `#import`s (Settings' native store imports CoreFoundation):
+            // each is an LC_LOAD_DYLIB of the library, as it is of a program.
+            // Only archives were passed, so a library that needed a framework
+            // was written without it and failed to load (bug 591).
+            for (NSString *p in libDylibs)
+                if ([p.pathExtension isEqualToString:@"dylib"] || [p.pathExtension isEqualToString:@"tbd"])
+                    [dylibArgs addObject:p];
             for (NSString *p in libDylibs)
                 if ([p.pathExtension isEqualToString:@"a"]) [dylibArgs addObject:p];
             for (NSString *p in libRaw) {
