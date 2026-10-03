@@ -17,7 +17,7 @@ port=8964
 pkill -f "coi_server.py $port" 2>/dev/null || true
 ( cd "$work" && exec python3 "$here/tools/coi_server.py" $port ) >/dev/null 2>&1 &
 SRV=$!
-trap 'kill $SRV 2>/dev/null; pkill -f "user-data-dir=$work/chrome" 2>/dev/null; rm -rf "$work"' EXIT
+trap 'kill $SRV 2>/dev/null || true; pkill -f "user-data-dir=$work/chrome" 2>/dev/null || true; rm -rf "$work" 2>/dev/null || true' EXIT
 sleep 1
 page=web_settings.html
 load() {
