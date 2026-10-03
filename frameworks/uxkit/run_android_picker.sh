@@ -23,7 +23,9 @@ PLATJAR=$(ls "$A"/platforms/android-*/android.jar 2>/dev/null | sort -V | tail -
 { [ -n "$BT" ] && [ -n "$NDKBIN" ] && [ -x "$ADB" ]; } || { echo "== android-picker: skipped (no SDK/NDK) =="; exit 0; }
 "$ADB" get-state >/dev/null 2>&1 || { echo "== android-picker: skipped (no device) =="; exit 0; }
 
-work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
+# On the way out, stop the app: a task left behind is what Android goes back to when the next
+# document-picker gate's picker closes, and the relaunched app's log lines land in that gate's.
+work=$(mktemp -d); trap '"$ADB" shell am force-stop org.compile_xc.uxpicker >/dev/null 2>&1; rm -rf "$work"' EXIT
 echo "== android-picker: building the app lib (pure xcc) + the shim (NDK) =="
 "$xcc" -A android --emit-apk -D TABLE_ANDROID -I "$here" "$here/test_picker_android.xc" -o "$work/xtapp.apk" -q 2>/dev/null
 mkdir -p "$work/lib/arm64-v8a"
