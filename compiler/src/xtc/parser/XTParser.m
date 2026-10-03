@@ -2398,11 +2398,18 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
         {
         BOOL isVarDecl = cur.isTypeKeyword || cur.type == XTTokenVolatile || cur.type == XTTokenRegister ||
                          cur.type == XTTokenStatic || cur.type == XTTokenGlobal || [_typeTable isTypeName:cur.value];
-        if (isVarDecl && [_typeTable isTypeName:cur.value] && _pos + 1 < _tokens.count)
+        // A declared type NAME starts a declaration only when what follows
+        // could begin a declarator: another identifier, a pointer sigil, `^`,
+        // or `<` (`Array<String>* a`), exactly as the self-hosted parser
+        // decides. A program may name a field or variable the same as a
+        // type: `font = 5;` with a type `font` in scope is an assignment, and
+        // `Stdio.printf(...)` a static call. Testing only for `.` read the
+        // assignment as a declaration (bug 594).
+        if (isVarDecl && !cur.isTypeKeyword && [_typeTable isTypeName:cur.value] && _pos + 1 < _tokens.count)
             {
-            XTToken* next = _tokens[_pos + 1];
-            if (next.type == XTTokenDot)
-                isVarDecl = NO; // ClassName.method() — not a declaration
+            XTTokenType nx = [_tokens[_pos + 1] type];
+            if (!(nx == XTTokenIdentifier || XTIsPointerSigil(nx) || nx == XTTokenCaret || nx == XTTokenLess))
+                isVarDecl = NO;
             }
         // A qualifier prefix — `main:` / `shadow:` / `banked:` /
         // `weak:` — also starts a variable declaration once followed
