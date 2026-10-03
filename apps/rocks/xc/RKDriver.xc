@@ -15,6 +15,7 @@
 //     arm64   macOS      AppKit      (the development host)
 //     x86_64  Linux      GTK4
 //     win64   Windows    Win32
+//     wasm32  a browser  the web     (the worker run loop; run_rocks_web.sh)
 //     arm9    Atari      GEM/AES     (the board; the editor is desktop-first,
 //                                     but the toolkit builds there so this does
 //                                     too — see UXNB-V2 §7 on xclipo)
@@ -37,6 +38,9 @@
 #endif
 #ifdef ARCH_arm9
 #import "UXGemDriver.xc"
+#endif
+#ifdef ARCH_wasm32
+#import "UXWebDriver.xc"
 #endif
 #endif
 #ifdef ARCH_win64
@@ -77,6 +81,14 @@ class RKDriver : Object
         i32 gh = (i32)0;
         return gd.boot(&gw, &gh);
 #endif
+#ifdef ARCH_wasm32
+        // the browser: the app runs in the loader's worker, drawing on its OffscreenCanvas
+        UXWebDriver* bd = new UXWebDriver();
+        gDriver = bd;
+        i32 bw = (i32)0;
+        i32 bh = (i32)0;
+        return bd.boot(&bw, &bh);
+#endif
 #endif
 #ifdef ARCH_win64
         UXWin32Driver* wd = new UXWin32Driver();
@@ -106,6 +118,9 @@ class RKDriver : Object
 #endif
 #ifdef ARCH_arm9
         return (u8*)"GEM";
+#endif
+#ifdef ARCH_wasm32
+        return (u8*)"the web";
 #endif
 #endif
 #ifdef ARCH_win64
