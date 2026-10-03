@@ -1,0 +1,46 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>running</title>
+<canvas id="ux-canvas" width="80" height="40"></canvas>
+<script>
+  // run_web_color.sh's page: the worker run loop.  It plays the user at the colour dialog: the first
+  // time it checks the control holds the seed, sets a colour in it as the browser does once a user
+  // has chosen one, and presses OK; the second time it presses Cancel.  The verdict, the app's PASS
+  // plus these checks, is POSTed back.
+  globalThis.xccConfig = { runLoop: 'worker', workerScript: 'ux_web_browser.js', canvas: '#ux-canvas' };
+  const fails = [];
+  const want = (ok, what) => { if (!ok) fails.push(what); };
+  const out = [];
+  const report = () => fetch('/result', { method: 'POST',
+    body: (fails.length ? 'PAGE-FAIL: ' + fails.join('; ') + '\n' : '') + out.join('\n') });
+  globalThis.xccOut = (s) => {
+    out.push(s);
+    if (/^(PASS|FAIL)/.test(s)) setTimeout(report, 300);
+  };
+  let opens = 0;
+  new MutationObserver(() => {
+    const box = document.querySelector('.ux-color');
+    if (!box || box.dataset.seen) return;
+    box.dataset.seen = '1';
+    opens++;
+    const btns = [...box.querySelectorAll('button')];
+    const input = box.querySelector('input[type=color]');
+    want(input, 'the dialog has no <input type=color>');
+    if (opens === 1) {
+      want(input && input.value === '#0000ff', 'the control is not seeded with the colour: ' + (input && input.value));
+      want(btns.length === 2 && btns[1].textContent === 'OK', 'the dialog has no OK button');
+      setTimeout(() => {
+        input.value = '#c86432';
+        input.dispatchEvent(new Event('input'));
+        input.dispatchEvent(new Event('change'));
+        btns[1].click();
+      }, 100);
+    } else {
+      want(input && input.value === '#010203', 'the second dialog is not seeded: ' + (input && input.value));
+      setTimeout(() => btns[0].click(), 100);
+    }
+  }).observe(document.documentElement, { childList: true, subtree: true });
+  setTimeout(() => { fails.push('timed out'); report(); }, 15000);
+</script>
+<script src="ux_web_page.js"></script>
+<script src="test_web_color.js"></script>

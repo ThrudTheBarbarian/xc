@@ -77,10 +77,10 @@ for the form a theme file stores.
 ## The panel and the platform picker
 
 A backend uses the toolkit's own panel when it has no native picker. Where a
-platform has a real colour picker
-([`UXAppKitDriver`](/compiler/api/uxkit/uxappkitdriver/) has `NSColorPanel`,
-Win32 has the common dialog), the driver answers `hasNativeColorPanel` and the
-native one is presented instead.
+platform has a real colour picker (`NSColorPanel` on macOS, `GtkColorDialog`
+on GTK, `ChooseColor` on Windows, `UIColorPickerViewController` on iOS, and
+`<input type=color>` on the web in the worker run loop), the driver answers
+`hasNativeColorPicker` and the native one is presented instead.
 
 This class is both the fallback picker's model *and* the neutral representation
 of what a native picker returned. Application code reads it the same way in
@@ -117,7 +117,7 @@ numbers.
   <TabItem label="macOS">
     <img src="/uxkit/colorpanel-macos.png" alt="UXColorPanel on macOS" width="220" />
 
-    Real `NSSlider` overlays. On macOS the driver answers `hasNativeColorPanel`, so a *picker* would be `NSColorPanel`; this is the model behind the neutral one.
+    Real `NSSlider` overlays. On macOS the driver answers `hasNativeColorPicker`, so a *picker* would be `NSColorPanel`; this is the model behind the neutral one.
   </TabItem>
   <TabItem label="Windows">
     <img src="/uxkit/colorpanel-windows.png" alt="UXColorPanel on Windows" width="220" />
@@ -216,5 +216,5 @@ The composed colour packed into a `u32`.
   conversions
 - [`UXColorList`](/compiler/api/uxkit/uxcolorlist/): named colours, once one is
   chosen
-- [`UXViewDriver`](/compiler/api/uxkit/uxviewdriver/): `hasNativeColorPanel`,
+- [`UXViewDriver`](/compiler/api/uxkit/uxviewdriver/): `hasNativeColorPicker`,
   which decides whether this panel is shown at all

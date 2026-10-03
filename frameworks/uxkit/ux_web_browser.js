@@ -254,6 +254,12 @@
       globalThis.xccPost({ uxOpen: { prompt: ustr(pp) } });
       return 1;
     },
+    // the page's colour dialog; the answer is ring type 16 (a = 1 chosen / 0 cancelled, then r g b)
+    ux_web_color_show: (r, g, b) => {
+      if (!globalThis.xccPost || !globalThis.xccRequest) return 0;
+      globalThis.xccPost({ uxColor: { r, g, b } });
+      return 1;
+    },
     // after a type-15 token: pull the picked file into the store, and its path into out
     ux_web_file_take: (token, out, cap) => {
       const nameBuf = new SharedArrayBuffer(1024);

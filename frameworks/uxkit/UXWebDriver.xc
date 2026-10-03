@@ -394,13 +394,37 @@ class UXWebDriver : Object<UXViewDriver>
             }
         return ux_web_file_take(token, out, outCap);
         }
+    // The page's colour dialog, which holds the browser's own <input type=color>, where there is a
+    // page (the worker run loop); the answer comes back through the ring as type 16 (a = 1 chosen,
+    // 0 cancelled; then r, g, b), and input meanwhile is discarded, as a modal does.
     bool hasNativeColorPicker(void)
         {
-        return false;
+        return ux_web_has_page() != (i32)0;
         }
     i32 pickColor(i32 r, i32 g, i32 b, i32* outR, i32* outG, i32* outB)
         {
-        return (i32)0;
+        if (ux_web_color_show(r, g, b) == (i32)0)
+            {
+            return (i32)0;
+            }
+        i32 e[8];
+        bool done = false;
+        while (!done)
+            {
+            _xt_ring_wait((i32)-1);
+            while (!done && _xt_ring_read(&e[0]) >= (i32)0)
+                {
+                done = e[0] == (i32)16;
+                }
+            }
+        if (e[1] == (i32)0)
+            {
+            return (i32)0;
+            }
+        outR[0] = e[2];
+        outG[0] = e[3];
+        outB[0] = e[4];
+        return (i32)1;
         }
     bool hasNativeFontPicker(void)
         {

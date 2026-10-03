@@ -60,7 +60,7 @@ Each missing feature fails in a defined way and does not crash:
 | menus | not present |
 | `alertRun` across the ring | returns the **default button**, which the protocol permits |
 | the `<input>` field overlay | `editText`'s own engine covers ASCII |
-| native panels | `hasNative*` answer **false**, so the toolkit's own panels take over |
+| native panels | in the worker run loop, open, save and the colour picker are the browser's (`<input type=file>`, a download, `<input type=color>`); the font picker, and every panel outside the worker run loop, are the toolkit's own |
 | drag tracking | not present |
 
 The `hasNative*` flags are the general mechanism: a backend that cannot present

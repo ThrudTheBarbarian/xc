@@ -1400,6 +1400,130 @@ void ux_ios_test_picker_answer(const char* path)
         [gPicker.delegate documentPickerWasCancelled:gPicker];
     }
 
+// ── the colour and font pickers: UIColorPickerViewController / UIFontPickerViewController ──
+// Modal through a nested run loop, as the document picker.  The colour picker has no Cancel: closing
+// it is the choice, so pickColor gives back whatever it holds then (the seed, if the user changed
+// nothing).  The font picker chooses a family and, with faces shown, a face; it has no size, so the
+// size is the one passed in.
+@interface UXColorHost : NSObject <UIColorPickerViewControllerDelegate>
+@end
+@interface UXFontHost : NSObject <UIFontPickerViewControllerDelegate>
+@end
+/* A font picker whose selection a test can stand in for: the property is read-only in UIKit, and
+ * the delegate reads it exactly as it does after a user's pick. */
+@interface UXFontPicker : UIFontPickerViewController
+@property(nonatomic, strong) UIFontDescriptor* testPick;
+@end
+@implementation UXFontPicker
+- (UIFontDescriptor*)selectedFontDescriptor
+    {
+    return self.testPick ? self.testPick : [super selectedFontDescriptor];
+    }
+@end
+static UXColorHost* gColorHost;
+static UXFontHost* gFontHost;
+static UIColorPickerViewController* gColorPicker;
+static UXFontPicker* gFontPicker;
+static UIFontDescriptor* gFontPicked;
+static int gColorDone, gFontDone;
+@implementation UXColorHost
+- (void)colorPickerViewControllerDidFinish:(UIColorPickerViewController*)c
+    {
+    gColorDone = 1;
+    }
+@end
+@implementation UXFontHost
+- (void)fontPickerViewControllerDidPickFont:(UIFontPickerViewController*)c
+    {
+    gFontPicked = c.selectedFontDescriptor;
+    gFontDone = 1;
+    }
+- (void)fontPickerViewControllerDidCancel:(UIFontPickerViewController*)c
+    {
+    gFontPicked = nil;
+    gFontDone = 1;
+    }
+@end
+static void uxPresentModally(UIViewController* vc, int* done)
+    {
+    *done = 0;
+    [gWindow.rootViewController presentViewController:vc animated:NO completion:nil];
+    while (!*done)
+        CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, false);
+    if (vc.presentingViewController)
+        [vc dismissViewControllerAnimated:NO completion:nil];
+    }
+int ux_ios_pick_color(int r, int g, int b, int* outR, int* outG, int* outB)
+    {
+    if (!gColorHost)
+        gColorHost = [UXColorHost new];
+    gColorPicker = [UIColorPickerViewController new];
+    gColorPicker.delegate = gColorHost;
+    gColorPicker.supportsAlpha = NO;
+    gColorPicker.selectedColor = [UIColor colorWithRed:r / 255.0 green:g / 255.0 blue:b / 255.0 alpha:1];
+    uxPresentModally(gColorPicker, &gColorDone);
+    CGFloat cr = 0, cg = 0, cb = 0, ca = 0;
+    [gColorPicker.selectedColor getRed:&cr green:&cg blue:&cb alpha:&ca];
+    gColorPicker = nil;
+    *outR = (int)lround(fmin(fmax(cr, 0), 1) * 255);
+    *outG = (int)lround(fmin(fmax(cg, 0), 1) * 255);
+    *outB = (int)lround(fmin(fmax(cb, 0), 1) * 255);
+    return 1;
+    }
+int ux_ios_pick_font(int inSize, char* outFamily, int cap, int* outSize, int* outBold, int* outItalic)
+    {
+    if (!gFontHost)
+        gFontHost = [UXFontHost new];
+    UIFontPickerViewControllerConfiguration* cfg = [UIFontPickerViewControllerConfiguration new];
+    cfg.includeFaces = YES;
+    gFontPicker = [[UXFontPicker alloc] initWithConfiguration:cfg];
+    gFontPicker.delegate = gFontHost;
+    gFontPicked = nil;
+    uxPresentModally(gFontPicker, &gFontDone);
+    gFontPicker = nil;
+    if (!gFontPicked)
+        return 0;
+    UIFont* f = [UIFont fontWithDescriptor:gFontPicked size:inSize > 0 ? inSize : 12];
+    const char* fam = f.familyName.UTF8String;
+    if (!fam || (int)strlen(fam) + 1 > cap)
+        return 0;
+    memcpy(outFamily, fam, strlen(fam) + 1);
+    UIFontDescriptorSymbolicTraits t = f.fontDescriptor.symbolicTraits;
+    *outSize = inSize;
+    *outBold = (t & UIFontDescriptorTraitBold) ? 1 : 0;
+    *outItalic = (t & UIFontDescriptorTraitItalic) ? 1 : 0;
+    return 1;
+    }
+/* Tests: whether each picker is up, and its own delegate's answers as UIKit sends them -- a colour
+ * set in the picker then the picker closed; a font face picked (by PostScript name) or a cancel. */
+int ux_ios_test_color_picker_shown(void)
+    {
+    return gColorPicker && gColorPicker.presentingViewController && gColorPicker.view.window ? 1 : 0;
+    }
+void ux_ios_test_color_picker_answer(int r, int g, int b)
+    {
+    if (!gColorPicker)
+        return;
+    gColorPicker.selectedColor = [UIColor colorWithRed:r / 255.0 green:g / 255.0 blue:b / 255.0 alpha:1];
+    [gColorPicker.delegate colorPickerViewControllerDidFinish:gColorPicker];
+    }
+int ux_ios_test_font_picker_shown(void)
+    {
+    return gFontPicker && gFontPicker.presentingViewController && gFontPicker.view.window ? 1 : 0;
+    }
+void ux_ios_test_font_picker_answer(const char* postscriptName)
+    {
+    if (!gFontPicker)
+        return;
+    if (postscriptName)
+        {
+        gFontPicker.testPick = [UIFontDescriptor fontDescriptorWithName:@(postscriptName) size:0];
+        [gFontPicker.delegate fontPickerViewControllerDidPickFont:gFontPicker];
+        }
+    else
+        [gFontPicker.delegate fontPickerViewControllerDidCancel:gFontPicker];
+    }
+
 // Dump the last render as a PPM (the mac rig's ux_ak_dump_ppm, iOS edition) —
 // the capture pipeline pulls these from the app sandbox.
 int ux_ios_dump_ppm(const char* path)

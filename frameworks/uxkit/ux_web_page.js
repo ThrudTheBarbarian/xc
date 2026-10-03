@@ -314,6 +314,58 @@
     document.body.appendChild(openBack);
     choose.focus();
   };
+  // COLOUR.  A small dialog holding the browser's own colour control, <input type=color>, seeded with
+  // the colour; OK pushes it through the ring as type 16 (1, r, g, b), Cancel as (0).
+  let colorBack = null;
+  const colorDone = (ok, hex) => {
+    if (colorBack) { colorBack.remove(); colorBack = null; }
+    const v = parseInt((hex || '#000000').slice(1), 16);
+    if (globalThis.xccPushEvent) globalThis.xccPushEvent(16, ok ? 1 : 0, (v >> 16) & 255, (v >> 8) & 255, v & 255);
+  };
+  const pickColor = (o) => {
+    if (!document.getElementById('ux-alert-style')) {
+      const st = document.createElement('style');
+      st.id = 'ux-alert-style';
+      st.textContent = alertCss;
+      document.head.appendChild(st);
+    }
+    if (colorBack) colorBack.remove();
+    colorBack = document.createElement('div');
+    colorBack.className = 'ux-alert-back';
+    const box = document.createElement('div');
+    box.className = 'ux-alert ux-color';
+    box.setAttribute('role', 'dialog');
+    box.setAttribute('aria-modal', 'true');
+    const p = document.createElement('p');
+    p.className = 'ux-alert-line';
+    p.textContent = 'Colour';
+    box.appendChild(p);
+    const input = document.createElement('input');
+    input.type = 'color';
+    input.value = '#' + [o.r, o.g, o.b].map((c) => (c & 255).toString(16).padStart(2, '0')).join('');
+    input.style.cssText = 'width: 100%; height: 40px; border: 0; padding: 0; background: none;';
+    box.appendChild(input);
+    const row = document.createElement('div');
+    row.className = 'ux-alert-buttons';
+    const cancel = document.createElement('button');
+    cancel.textContent = 'Cancel';
+    cancel.addEventListener('click', (e) => { e.stopPropagation(); colorDone(false); });
+    const ok = document.createElement('button');
+    ok.textContent = 'OK';
+    ok.className = 'default';
+    ok.addEventListener('click', (e) => { e.stopPropagation(); colorDone(true, input.value); });
+    row.appendChild(cancel);
+    row.appendChild(ok);
+    box.appendChild(row);
+    colorBack.appendChild(box);
+    colorBack.addEventListener('mousedown', (e) => e.stopPropagation());
+    box.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); colorDone(false); }
+      else if (e.key === 'Enter') { e.preventDefault(); colorDone(true, input.value); }
+    });
+    document.body.appendChild(colorBack);
+    ok.focus();
+  };
   // the worker's pulls of a picked file: its name, its size, its bytes (into the request's buffer)
   const prevReq = globalThis.xccOnRequest;
   globalThis.xccOnRequest = (req) => {
@@ -426,7 +478,7 @@
     globalThis.xccConfig.workerData = Object.assign({}, globalThis.xccConfig.workerData, { uxSettings: settingsSnapshot() });
 
   globalThis.uxPage = { menu: build, menuState: state, close, openTitle: show, onPick: null,
-                        popup, closePopup, onPopupPick: null, alert, onAlert: null, download, openFile };
+                        popup, closePopup, onPopupPick: null, alert, onAlert: null, download, openFile, pickColor };
   // The worker's posts (the loader forwards them here).
   const prev = globalThis.xccOnMessage;
   globalThis.xccOnMessage = (p) => {
@@ -451,6 +503,7 @@
     }
     else if (p && p.uxAlert !== undefined) alert(p.uxAlert);
     else if (p && p.uxOpen !== undefined) openFile(p.uxOpen);
+    else if (p && p.uxColor !== undefined) pickColor(p.uxColor);
     else if (p && p.uxDownload !== undefined) download(p.uxDownload);
     else if (p && p.uxPopup !== undefined) popup(p.uxPopup);
     else if (p && p.uxMenu !== undefined) build(p.uxMenu);

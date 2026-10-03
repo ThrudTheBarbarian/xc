@@ -159,7 +159,8 @@ protocol UXViewDriver
     void navPop(pointer nav, i32 animated);
     bool hasNativeFileSave(void);
     i32 fileSave(u8 * prompt, u8 * startDir, u8 * defaultName, u8 * out, i32 outCap);
-    // A native colour picker (AppKit NSColorPanel, GTK GtkColorDialog, Win32 ChooseColor).
+    // A native colour picker (AppKit NSColorPanel, GTK GtkColorDialog, Win32 ChooseColor, iOS
+    // UIColorPickerViewController, the web's <input type=color> in the worker run loop).
     // hasNativeColorPicker() is true where the OS has one; the demo falls back to a toolkit-drawn
     // wheel/sliders where it is false.
     // pickColor seeds it with r/g/b (0..255), writes the chosen colour into out*, returns 1 or 0 on cancel.

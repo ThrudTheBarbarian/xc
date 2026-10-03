@@ -58,6 +58,8 @@ extern i32 ux_web_alert_show(i32 icon, u8* lines, u8* buttons, i32 defaultBtn);
 extern i32 ux_web_has_page(void);
 extern i32 ux_web_file_open_show(u8* prompt);
 extern i32 ux_web_file_take(i32 token, u8* out, i32 cap);
+// The colour dialog (the worker run loop): its answer comes back through the ring as type 16.
+extern i32 ux_web_color_show(i32 r, i32 g, i32 b);
 // A popup button's list, for the page to show at the button: JSON {token, x, y, w, selected,
 // items: [title...]}.  A pick comes back through the ring as type 10 (a = token, b = item).
 extern void ux_popup_open(u8* json, i32 len);
