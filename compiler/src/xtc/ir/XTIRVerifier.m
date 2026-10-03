@@ -502,11 +502,33 @@
                 }
             }
         }
+    // Dead code after a `for (;;)` with no `break` (bug 602): its exit block is
+    // dead by construction, and so is everything reachable only from it, such
+    // as an `if` written after the loop. Those are the program's own dead code,
+    // not a lowering bug.
+    NSMutableSet<XTIRBlock*>* deadCode = [NSMutableSet set];
+    for (XTIRBlock* root in fn.blocks)
+        if (root.deadByConstruction && ![reached containsObject:root] && ![deadCode containsObject:root])
+            {
+            NSMutableArray<XTIRBlock*>* work = [NSMutableArray arrayWithObject:root];
+            [deadCode addObject:root];
+            while (work.count > 0)
+                {
+                XTIRBlock* cur = work.lastObject;
+                [work removeLastObject];
+                for (XTIRBlock* succ in [self successorsOfBlock:cur])
+                    if (![reached containsObject:succ] && ![deadCode containsObject:succ])
+                        {
+                        [deadCode addObject:succ];
+                        [work addObject:succ];
+                        }
+                }
+            }
     for (XTIRBlock* block in fn.blocks)
         {
         if (block == fn.entryBlock)
             continue;
-        if ([reached containsObject:block])
+        if ([reached containsObject:block] || [deadCode containsObject:block])
             continue;
         // A block that TERMINATES IN Unreachable is allowed to be unreachable — it is
         // saying so. This is not a loophole, it is the shape the lowering produces for

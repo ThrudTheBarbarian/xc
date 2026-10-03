@@ -10524,6 +10524,17 @@ static const NSUInteger kVarargSlotBytes = 8;
     // (a bare `for(;;)` branches unconditionally to the body, so its
     // exit is reached solely via breaks).
     self.currentBlock = exitBlock;
+    // No condition and no `break`: nothing reaches the exit, so whatever
+    // follows the loop is dead code. Say so for the verifier (bug 602).
+    if (!node.condition)
+        {
+        BOOL entered = NO;
+        for (XTIRBlock* b in self.currentFunction.blocks)
+            for (XTIROperand* o in b.terminator.operands)
+                if (o.kind == XTIROperandKindBlock && o.blockRef == exitBlock)
+                    entered = YES;
+        exitBlock.deadByConstruction = !entered;
+        }
     [self bindLoopExitLocalsInBlock:exitBlock
                         headerBlock:condExit
                   headerReachesExit:(node.condition != nil)

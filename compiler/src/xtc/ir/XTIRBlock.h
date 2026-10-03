@@ -28,6 +28,12 @@ NS_ASSUME_NONNULL_BEGIN
 /// so the verifier can detect §12.3 violations.
 @property(nonatomic) BOOL hasInstructionAfterTerminator;
 
+// Unreachable BY CONSTRUCTION: the exit of a `for (;;)` that nothing leaves by
+// `break`. Code written after such a loop lands here and is dead, and the
+// verifier accepts it and everything reachable only from it (bug 602).
+// In-memory only, never printed, so the IR text is unchanged.
+@property(nonatomic) BOOL deadByConstruction;
+
 /// Append a regular instruction.  Asserts that no terminator has been set.
 - (void)appendInstruction:(XTIRInsn*)insn;
 
