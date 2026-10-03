@@ -20,7 +20,6 @@
 // This file is distributed in the hope that it will be useful, but WITHOUT
 // ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
 // FITNESS FOR A PARTICULAR PURPOSE.
-
 	.text
 	.intel_syntax noprefix
 	.file	"libm-linux.c"
@@ -685,9 +684,9 @@ log:                                    # @log
 .LCPI7_0:
 	.quad	0x7ff0000000000000              # double +Inf
 .LCPI7_1:
-	.quad	0x40862e3d70a3d70a              # double 709.77999999999997
+	.quad	0x40862e42fefa39ef              # double 709.78271289338397
 .LCPI7_2:
-	.quad	0xc087480000000000              # double -745
+	.quad	0xc0874910d52d3052              # double -745.13321910194122
 .LCPI7_3:
 	.quad	0x3ff71547652b82fe              # double 1.4426950408889634
 .LCPI7_4:
@@ -699,22 +698,32 @@ log:                                    # @log
 .LCPI7_7:
 	.quad	0xbff0000000000000              # double -1
 .LCPI7_8:
-	.quad	0xbfe62e42fefa39ef              # double -0.69314718055994529
+	.quad	0xbfe62e42fee00000              # double -0.69314718036912382
 .LCPI7_9:
-	.quad	0x3ec71de3a556c734              # double 2.7557319223985893E-6
+	.quad	0xbdea39ef35793c76              # double -1.9082149292705877E-10
 .LCPI7_10:
-	.quad	0x3efa01a01a01a01a              # double 2.4801587301587302E-5
+	.quad	0x3de6124613a86d09              # double 1.6059043836821613E-10
 .LCPI7_11:
-	.quad	0x3f2a01a01a01a01a              # double 1.9841269841269841E-4
+	.quad	0x3e21eed8eff8d898              # double 2.08767569878681E-9
 .LCPI7_12:
-	.quad	0x3f56c16c16c16c17              # double 0.0013888888888888889
+	.quad	0x3e5ae64567f544e4              # double 2.505210838544172E-8
 .LCPI7_13:
-	.quad	0x3f81111111111111              # double 0.0083333333333333332
+	.quad	0x3e927e4fb7789f5c              # double 2.7557319223985888E-7
 .LCPI7_14:
-	.quad	0x3fa5555555555555              # double 0.041666666666666664
+	.quad	0x3ec71de3a556c734              # double 2.7557319223985893E-6
 .LCPI7_15:
-	.quad	0x3fc5555555555555              # double 0.16666666666666666
+	.quad	0x3efa01a01a01a01a              # double 2.4801587301587302E-5
 .LCPI7_16:
+	.quad	0x3f2a01a01a01a01a              # double 1.9841269841269841E-4
+.LCPI7_17:
+	.quad	0x3f56c16c16c16c17              # double 0.0013888888888888889
+.LCPI7_18:
+	.quad	0x3f81111111111111              # double 0.0083333333333333332
+.LCPI7_19:
+	.quad	0x3fa5555555555555              # double 0.041666666666666664
+.LCPI7_20:
+	.quad	0x3fc5555555555555              # double 0.16666666666666666
+.LCPI7_21:
 	.quad	0x3ff0000000000000              # double 1
 	.text
 	.globl	exp
@@ -732,7 +741,7 @@ exp:                                    # @exp
 	ret
 .LBB7_5:
 	xorps	xmm1, xmm1
-	movsd	xmm2, qword ptr [rip + .LCPI7_2] # xmm2 = [-7.45E+2,0.0E+0]
+	movsd	xmm2, qword ptr [rip + .LCPI7_2] # xmm2 = [-7.4513321910194122E+2,0.0E+0]
 	ucomisd	xmm2, xmm0
 	jbe	.LBB7_6
 # %bb.2:
@@ -762,34 +771,54 @@ exp:                                    # @exp
 	andnpd	xmm1, xmm2
 	orpd	xmm1, xmm3
 .LBB7_10:
-	movsd	xmm2, qword ptr [rip + .LCPI7_8] # xmm2 = [-6.9314718055994529E-1,0.0E+0]
+	movsd	xmm2, qword ptr [rip + .LCPI7_8] # xmm2 = [-6.9314718036912382E-1,0.0E+0]
 	mulsd	xmm2, xmm1
 	addsd	xmm0, xmm2
-	movsd	xmm2, qword ptr [rip + .LCPI7_9] # xmm2 = [2.7557319223985893E-6,0.0E+0]
-	mulsd	xmm2, xmm0
-	addsd	xmm2, qword ptr [rip + .LCPI7_10]
-	mulsd	xmm2, xmm0
-	addsd	xmm2, qword ptr [rip + .LCPI7_11]
-	mulsd	xmm2, xmm0
-	addsd	xmm2, qword ptr [rip + .LCPI7_12]
-	mulsd	xmm2, xmm0
-	addsd	xmm2, qword ptr [rip + .LCPI7_13]
-	mulsd	xmm2, xmm0
-	addsd	xmm2, qword ptr [rip + .LCPI7_14]
-	mulsd	xmm2, xmm0
-	addsd	xmm2, qword ptr [rip + .LCPI7_15]
-	mulsd	xmm2, xmm0
-	addsd	xmm2, qword ptr [rip + .LCPI7_4]
-	mulsd	xmm2, xmm0
-	movsd	xmm3, qword ptr [rip + .LCPI7_16] # xmm3 = [1.0E+0,0.0E+0]
-	addsd	xmm2, xmm3
-	mulsd	xmm2, xmm0
-	addsd	xmm2, xmm3
+	movsd	xmm2, qword ptr [rip + .LCPI7_9] # xmm2 = [-1.9082149292705877E-10,0.0E+0]
+	mulsd	xmm2, xmm1
+	addsd	xmm2, xmm0
+	movsd	xmm0, qword ptr [rip + .LCPI7_10] # xmm0 = [1.6059043836821613E-10,0.0E+0]
+	mulsd	xmm0, xmm2
+	addsd	xmm0, qword ptr [rip + .LCPI7_11]
+	mulsd	xmm0, xmm2
+	addsd	xmm0, qword ptr [rip + .LCPI7_12]
+	mulsd	xmm0, xmm2
+	addsd	xmm0, qword ptr [rip + .LCPI7_13]
+	mulsd	xmm0, xmm2
+	addsd	xmm0, qword ptr [rip + .LCPI7_14]
+	mulsd	xmm0, xmm2
+	addsd	xmm0, qword ptr [rip + .LCPI7_15]
+	mulsd	xmm0, xmm2
+	addsd	xmm0, qword ptr [rip + .LCPI7_16]
+	mulsd	xmm0, xmm2
+	addsd	xmm0, qword ptr [rip + .LCPI7_17]
+	mulsd	xmm0, xmm2
+	addsd	xmm0, qword ptr [rip + .LCPI7_18]
+	mulsd	xmm0, xmm2
+	addsd	xmm0, qword ptr [rip + .LCPI7_19]
+	mulsd	xmm0, xmm2
+	addsd	xmm0, qword ptr [rip + .LCPI7_20]
+	mulsd	xmm0, xmm2
+	addsd	xmm0, qword ptr [rip + .LCPI7_4]
+	mulsd	xmm0, xmm2
+	movsd	xmm3, qword ptr [rip + .LCPI7_21] # xmm3 = [1.0E+0,0.0E+0]
+	addsd	xmm0, xmm3
+	mulsd	xmm0, xmm2
+	addsd	xmm0, xmm3
 	cvttsd2si	rax, xmm1
-	shl	rax, 52
-	movabs	rcx, 4607182418800017408
+	mov	rcx, rax
+	shr	rcx, 63
 	add	rcx, rax
-	movq	xmm1, rcx
+	sar	rcx
+	sub	eax, ecx
+	shl	rcx, 52
+	movabs	rdx, 4607182418800017408
+	add	rcx, rdx
+	movq	xmm2, rcx
+	mulsd	xmm2, xmm0
+	shl	rax, 52
+	add	rax, rdx
+	movq	xmm1, rax
 	mulsd	xmm1, xmm2
 	movapd	xmm0, xmm1
 	ret
@@ -837,26 +866,36 @@ exp:                                    # @exp
 .LCPI8_17:
 	.quad	0x7ff0000000000000              # double +Inf
 .LCPI8_18:
-	.quad	0x40862e3d70a3d70a              # double 709.77999999999997
+	.quad	0x40862e42fefa39ef              # double 709.78271289338397
 .LCPI8_19:
-	.quad	0xc087480000000000              # double -745
+	.quad	0xc0874910d52d3052              # double -745.13321910194122
 .LCPI8_20:
 	.quad	0x3ff71547652b82fe              # double 1.4426950408889634
 .LCPI8_21:
-	.quad	0xbfe62e42fefa39ef              # double -0.69314718055994529
+	.quad	0xbfe62e42fee00000              # double -0.69314718036912382
 .LCPI8_22:
-	.quad	0x3ec71de3a556c734              # double 2.7557319223985893E-6
+	.quad	0xbdea39ef35793c76              # double -1.9082149292705877E-10
 .LCPI8_23:
-	.quad	0x3efa01a01a01a01a              # double 2.4801587301587302E-5
+	.quad	0x3de6124613a86d09              # double 1.6059043836821613E-10
 .LCPI8_24:
-	.quad	0x3f2a01a01a01a01a              # double 1.9841269841269841E-4
+	.quad	0x3e21eed8eff8d898              # double 2.08767569878681E-9
 .LCPI8_25:
-	.quad	0x3f56c16c16c16c17              # double 0.0013888888888888889
+	.quad	0x3e5ae64567f544e4              # double 2.505210838544172E-8
 .LCPI8_26:
-	.quad	0x3f81111111111111              # double 0.0083333333333333332
+	.quad	0x3e927e4fb7789f5c              # double 2.7557319223985888E-7
 .LCPI8_27:
-	.quad	0x3fa5555555555555              # double 0.041666666666666664
+	.quad	0x3ec71de3a556c734              # double 2.7557319223985893E-6
 .LCPI8_28:
+	.quad	0x3efa01a01a01a01a              # double 2.4801587301587302E-5
+.LCPI8_29:
+	.quad	0x3f2a01a01a01a01a              # double 1.9841269841269841E-4
+.LCPI8_30:
+	.quad	0x3f56c16c16c16c17              # double 0.0013888888888888889
+.LCPI8_31:
+	.quad	0x3f81111111111111              # double 0.0083333333333333332
+.LCPI8_32:
+	.quad	0x3fa5555555555555              # double 0.041666666666666664
+.LCPI8_33:
 	.quad	0x3fc5555555555555              # double 0.16666666666666666
 	.section	.rodata.cst16,"aM",@progbits,16
 	.p2align	4, 0x0
@@ -987,7 +1026,7 @@ pow:                                    # @pow
 	ret
 .LBB8_18:
 	xorpd	xmm0, xmm0
-	movsd	xmm1, qword ptr [rip + .LCPI8_19] # xmm1 = [-7.45E+2,0.0E+0]
+	movsd	xmm1, qword ptr [rip + .LCPI8_19] # xmm1 = [-7.4513321910194122E+2,0.0E+0]
 	ucomisd	xmm1, xmm3
 	ja	.LBB8_4
 # %bb.19:
@@ -1014,33 +1053,53 @@ pow:                                    # @pow
 	andnpd	xmm0, xmm1
 	orpd	xmm0, xmm4
 .LBB8_23:
-	movsd	xmm1, qword ptr [rip + .LCPI8_21] # xmm1 = [-6.9314718055994529E-1,0.0E+0]
+	movsd	xmm1, qword ptr [rip + .LCPI8_21] # xmm1 = [-6.9314718036912382E-1,0.0E+0]
 	mulsd	xmm1, xmm0
 	addsd	xmm3, xmm1
-	movsd	xmm1, qword ptr [rip + .LCPI8_22] # xmm1 = [2.7557319223985893E-6,0.0E+0]
-	mulsd	xmm1, xmm3
-	addsd	xmm1, qword ptr [rip + .LCPI8_23]
-	mulsd	xmm1, xmm3
+	movsd	xmm4, qword ptr [rip + .LCPI8_22] # xmm4 = [-1.9082149292705877E-10,0.0E+0]
+	mulsd	xmm4, xmm0
+	addsd	xmm4, xmm3
+	movsd	xmm1, qword ptr [rip + .LCPI8_23] # xmm1 = [1.6059043836821613E-10,0.0E+0]
+	mulsd	xmm1, xmm4
 	addsd	xmm1, qword ptr [rip + .LCPI8_24]
-	mulsd	xmm1, xmm3
+	mulsd	xmm1, xmm4
 	addsd	xmm1, qword ptr [rip + .LCPI8_25]
-	mulsd	xmm1, xmm3
+	mulsd	xmm1, xmm4
 	addsd	xmm1, qword ptr [rip + .LCPI8_26]
-	mulsd	xmm1, xmm3
+	mulsd	xmm1, xmm4
 	addsd	xmm1, qword ptr [rip + .LCPI8_27]
-	mulsd	xmm1, xmm3
+	mulsd	xmm1, xmm4
 	addsd	xmm1, qword ptr [rip + .LCPI8_28]
-	mulsd	xmm1, xmm3
+	mulsd	xmm1, xmm4
+	addsd	xmm1, qword ptr [rip + .LCPI8_29]
+	mulsd	xmm1, xmm4
+	addsd	xmm1, qword ptr [rip + .LCPI8_30]
+	mulsd	xmm1, xmm4
+	addsd	xmm1, qword ptr [rip + .LCPI8_31]
+	mulsd	xmm1, xmm4
+	addsd	xmm1, qword ptr [rip + .LCPI8_32]
+	mulsd	xmm1, xmm4
+	addsd	xmm1, qword ptr [rip + .LCPI8_33]
+	mulsd	xmm1, xmm4
 	addsd	xmm1, qword ptr [rip + .LCPI8_7]
-	mulsd	xmm1, xmm3
+	mulsd	xmm1, xmm4
 	addsd	xmm1, xmm2
-	mulsd	xmm1, xmm3
+	mulsd	xmm1, xmm4
 	addsd	xmm1, xmm2
 	cvttsd2si	rcx, xmm0
+	mov	rdx, rcx
+	shr	rdx, 63
+	add	rdx, rcx
+	sar	rdx
+	sub	ecx, edx
+	shl	rdx, 52
+	add	rdx, rax
+	movq	xmm2, rdx
+	mulsd	xmm2, xmm1
 	shl	rcx, 52
 	add	rcx, rax
 	movq	xmm0, rcx
-	mulsd	xmm0, xmm1
+	mulsd	xmm0, xmm2
 	ret
 .LBB8_24:
 	movabs	rax, 4607182418800017408
@@ -1116,7 +1175,7 @@ pow:                                    # @pow
 	jmp	.LBB8_37
 .LBB8_31:
 	xorpd	xmm0, xmm0
-	movsd	xmm1, qword ptr [rip + .LCPI8_19] # xmm1 = [-7.45E+2,0.0E+0]
+	movsd	xmm1, qword ptr [rip + .LCPI8_19] # xmm1 = [-7.4513321910194122E+2,0.0E+0]
 	ucomisd	xmm1, xmm4
 	ja	.LBB8_37
 # %bb.32:
@@ -1142,34 +1201,54 @@ pow:                                    # @pow
 	andnpd	xmm0, xmm1
 	orpd	xmm0, xmm3
 .LBB8_36:
-	movsd	xmm1, qword ptr [rip + .LCPI8_21] # xmm1 = [-6.9314718055994529E-1,0.0E+0]
+	movsd	xmm1, qword ptr [rip + .LCPI8_21] # xmm1 = [-6.9314718036912382E-1,0.0E+0]
 	mulsd	xmm1, xmm0
 	addsd	xmm4, xmm1
-	movsd	xmm1, qword ptr [rip + .LCPI8_22] # xmm1 = [2.7557319223985893E-6,0.0E+0]
-	mulsd	xmm1, xmm4
-	addsd	xmm1, qword ptr [rip + .LCPI8_23]
-	mulsd	xmm1, xmm4
+	movsd	xmm3, qword ptr [rip + .LCPI8_22] # xmm3 = [-1.9082149292705877E-10,0.0E+0]
+	mulsd	xmm3, xmm0
+	addsd	xmm3, xmm4
+	movsd	xmm1, qword ptr [rip + .LCPI8_23] # xmm1 = [1.6059043836821613E-10,0.0E+0]
+	mulsd	xmm1, xmm3
 	addsd	xmm1, qword ptr [rip + .LCPI8_24]
-	mulsd	xmm1, xmm4
+	mulsd	xmm1, xmm3
 	addsd	xmm1, qword ptr [rip + .LCPI8_25]
-	mulsd	xmm1, xmm4
+	mulsd	xmm1, xmm3
 	addsd	xmm1, qword ptr [rip + .LCPI8_26]
-	mulsd	xmm1, xmm4
+	mulsd	xmm1, xmm3
 	addsd	xmm1, qword ptr [rip + .LCPI8_27]
-	mulsd	xmm1, xmm4
+	mulsd	xmm1, xmm3
 	addsd	xmm1, qword ptr [rip + .LCPI8_28]
-	mulsd	xmm1, xmm4
+	mulsd	xmm1, xmm3
+	addsd	xmm1, qword ptr [rip + .LCPI8_29]
+	mulsd	xmm1, xmm3
+	addsd	xmm1, qword ptr [rip + .LCPI8_30]
+	mulsd	xmm1, xmm3
+	addsd	xmm1, qword ptr [rip + .LCPI8_31]
+	mulsd	xmm1, xmm3
+	addsd	xmm1, qword ptr [rip + .LCPI8_32]
+	mulsd	xmm1, xmm3
+	addsd	xmm1, qword ptr [rip + .LCPI8_33]
+	mulsd	xmm1, xmm3
 	addsd	xmm1, qword ptr [rip + .LCPI8_7]
-	mulsd	xmm1, xmm4
-	movsd	xmm3, qword ptr [rip + .LCPI8_0] # xmm3 = [1.0E+0,0.0E+0]
-	addsd	xmm1, xmm3
-	mulsd	xmm1, xmm4
-	addsd	xmm1, xmm3
+	mulsd	xmm1, xmm3
+	movsd	xmm4, qword ptr [rip + .LCPI8_0] # xmm4 = [1.0E+0,0.0E+0]
+	addsd	xmm1, xmm4
+	mulsd	xmm1, xmm3
+	addsd	xmm1, xmm4
 	cvttsd2si	rcx, xmm0
+	mov	rdx, rcx
+	shr	rdx, 63
+	add	rdx, rcx
+	sar	rdx
+	sub	ecx, edx
+	shl	rdx, 52
+	add	rdx, rax
+	movq	xmm3, rdx
+	mulsd	xmm3, xmm1
 	shl	rcx, 52
 	add	rcx, rax
 	movq	xmm0, rcx
-	mulsd	xmm0, xmm1
+	mulsd	xmm0, xmm3
 .LBB8_37:
 	cvttsd2si	rax, xmm2
 	test	al, 1
@@ -1390,12 +1469,12 @@ logf:                                   # @logf
 	.p2align	2, 0x0                          # -- Begin function expf
 .LCPI14_0:
 	.long	0x7f800000                      # float +Inf
-.LCPI14_2:
-	.long	0xc43a4000                      # float -745
 	.section	.rodata.cst8,"aM",@progbits,8
 	.p2align	3, 0x0
 .LCPI14_1:
-	.quad	0x40862e3d70a3d70a              # double 709.77999999999997
+	.quad	0x40862e42fefa39ef              # double 709.78271289338397
+.LCPI14_2:
+	.quad	0xc0874910d52d3052              # double -745.13321910194122
 .LCPI14_3:
 	.quad	0x3ff71547652b82fe              # double 1.4426950408889634
 .LCPI14_4:
@@ -1407,22 +1486,32 @@ logf:                                   # @logf
 .LCPI14_7:
 	.quad	0xbff0000000000000              # double -1
 .LCPI14_8:
-	.quad	0xbfe62e42fefa39ef              # double -0.69314718055994529
+	.quad	0xbfe62e42fee00000              # double -0.69314718036912382
 .LCPI14_9:
-	.quad	0x3ec71de3a556c734              # double 2.7557319223985893E-6
+	.quad	0xbdea39ef35793c76              # double -1.9082149292705877E-10
 .LCPI14_10:
-	.quad	0x3efa01a01a01a01a              # double 2.4801587301587302E-5
+	.quad	0x3de6124613a86d09              # double 1.6059043836821613E-10
 .LCPI14_11:
-	.quad	0x3f2a01a01a01a01a              # double 1.9841269841269841E-4
+	.quad	0x3e21eed8eff8d898              # double 2.08767569878681E-9
 .LCPI14_12:
-	.quad	0x3f56c16c16c16c17              # double 0.0013888888888888889
+	.quad	0x3e5ae64567f544e4              # double 2.505210838544172E-8
 .LCPI14_13:
-	.quad	0x3f81111111111111              # double 0.0083333333333333332
+	.quad	0x3e927e4fb7789f5c              # double 2.7557319223985888E-7
 .LCPI14_14:
-	.quad	0x3fa5555555555555              # double 0.041666666666666664
+	.quad	0x3ec71de3a556c734              # double 2.7557319223985893E-6
 .LCPI14_15:
-	.quad	0x3fc5555555555555              # double 0.16666666666666666
+	.quad	0x3efa01a01a01a01a              # double 2.4801587301587302E-5
 .LCPI14_16:
+	.quad	0x3f2a01a01a01a01a              # double 1.9841269841269841E-4
+.LCPI14_17:
+	.quad	0x3f56c16c16c16c17              # double 0.0013888888888888889
+.LCPI14_18:
+	.quad	0x3f81111111111111              # double 0.0083333333333333332
+.LCPI14_19:
+	.quad	0x3fa5555555555555              # double 0.041666666666666664
+.LCPI14_20:
+	.quad	0x3fc5555555555555              # double 0.16666666666666666
+.LCPI14_21:
 	.quad	0x3ff0000000000000              # double 1
 	.text
 	.globl	expf
@@ -1440,9 +1529,9 @@ expf:                                   # @expf
 	movss	xmm0, dword ptr [rip + .LCPI14_0] # xmm0 = [+Inf,0.0E+0,0.0E+0,0.0E+0]
 	ret
 .LBB14_3:
-	movss	xmm2, dword ptr [rip + .LCPI14_2] # xmm2 = [-7.45E+2,0.0E+0,0.0E+0,0.0E+0]
-	ucomiss	xmm2, xmm0
 	xorps	xmm0, xmm0
+	movsd	xmm2, qword ptr [rip + .LCPI14_2] # xmm2 = [-7.4513321910194122E+2,0.0E+0]
+	ucomisd	xmm2, xmm1
 	ja	.LBB14_9
 # %bb.4:
 	movsd	xmm0, qword ptr [rip + .LCPI14_3] # xmm0 = [1.4426950408889634E+0,0.0E+0]
@@ -1468,36 +1557,57 @@ expf:                                   # @expf
 	andnpd	xmm0, xmm2
 	orpd	xmm0, xmm3
 .LBB14_8:
-	movsd	xmm2, qword ptr [rip + .LCPI14_8] # xmm2 = [-6.9314718055994529E-1,0.0E+0]
+	movsd	xmm2, qword ptr [rip + .LCPI14_8] # xmm2 = [-6.9314718036912382E-1,0.0E+0]
 	mulsd	xmm2, xmm0
 	addsd	xmm1, xmm2
-	movsd	xmm2, qword ptr [rip + .LCPI14_9] # xmm2 = [2.7557319223985893E-6,0.0E+0]
-	mulsd	xmm2, xmm1
-	addsd	xmm2, qword ptr [rip + .LCPI14_10]
-	mulsd	xmm2, xmm1
-	addsd	xmm2, qword ptr [rip + .LCPI14_11]
-	mulsd	xmm2, xmm1
-	addsd	xmm2, qword ptr [rip + .LCPI14_12]
-	mulsd	xmm2, xmm1
-	addsd	xmm2, qword ptr [rip + .LCPI14_13]
-	mulsd	xmm2, xmm1
-	addsd	xmm2, qword ptr [rip + .LCPI14_14]
-	mulsd	xmm2, xmm1
-	addsd	xmm2, qword ptr [rip + .LCPI14_15]
-	mulsd	xmm2, xmm1
-	addsd	xmm2, qword ptr [rip + .LCPI14_4]
-	mulsd	xmm2, xmm1
-	movsd	xmm3, qword ptr [rip + .LCPI14_16] # xmm3 = [1.0E+0,0.0E+0]
-	addsd	xmm2, xmm3
-	mulsd	xmm2, xmm1
+	movsd	xmm2, qword ptr [rip + .LCPI14_9] # xmm2 = [-1.9082149292705877E-10,0.0E+0]
+	mulsd	xmm2, xmm0
+	addsd	xmm2, xmm1
+	movsd	xmm1, qword ptr [rip + .LCPI14_10] # xmm1 = [1.6059043836821613E-10,0.0E+0]
+	mulsd	xmm1, xmm2
+	addsd	xmm1, qword ptr [rip + .LCPI14_11]
+	mulsd	xmm1, xmm2
+	addsd	xmm1, qword ptr [rip + .LCPI14_12]
+	mulsd	xmm1, xmm2
+	addsd	xmm1, qword ptr [rip + .LCPI14_13]
+	mulsd	xmm1, xmm2
+	addsd	xmm1, qword ptr [rip + .LCPI14_14]
+	mulsd	xmm1, xmm2
+	addsd	xmm1, qword ptr [rip + .LCPI14_15]
+	mulsd	xmm1, xmm2
+	addsd	xmm1, qword ptr [rip + .LCPI14_16]
+	mulsd	xmm1, xmm2
+	addsd	xmm1, qword ptr [rip + .LCPI14_17]
+	mulsd	xmm1, xmm2
+	addsd	xmm1, qword ptr [rip + .LCPI14_18]
+	mulsd	xmm1, xmm2
+	addsd	xmm1, qword ptr [rip + .LCPI14_19]
+	mulsd	xmm1, xmm2
+	addsd	xmm1, qword ptr [rip + .LCPI14_20]
+	mulsd	xmm1, xmm2
+	addsd	xmm1, qword ptr [rip + .LCPI14_4]
+	mulsd	xmm1, xmm2
+	movsd	xmm3, qword ptr [rip + .LCPI14_21] # xmm3 = [1.0E+0,0.0E+0]
+	addsd	xmm1, xmm3
+	mulsd	xmm1, xmm2
+	addsd	xmm1, xmm3
 	cvttsd2si	rax, xmm0
-	addsd	xmm2, xmm3
-	shl	rax, 52
-	movabs	rcx, 4607182418800017408
+	mov	rcx, rax
+	shr	rcx, 63
 	add	rcx, rax
+	sar	rcx
+	sub	eax, ecx
+	shl	rcx, 52
+	movabs	rdx, 4607182418800017408
+	add	rcx, rdx
 	movq	xmm0, rcx
-	mulsd	xmm0, xmm2
-	cvtsd2ss	xmm0, xmm0
+	mulsd	xmm0, xmm1
+	shl	rax, 52
+	add	rax, rdx
+	movq	xmm1, rax
+	mulsd	xmm1, xmm0
+	xorps	xmm0, xmm0
+	cvtsd2ss	xmm0, xmm1
 .LBB14_9:
 	ret
 .Lfunc_end14:
@@ -1918,12 +2028,12 @@ _xm_ln:                                 # @_xm_ln
 	.p2align	2, 0x0                          # -- Begin function _xm_expf
 .LCPI28_0:
 	.long	0x7f800000                      # float +Inf
-.LCPI28_2:
-	.long	0xc43a4000                      # float -745
 	.section	.rodata.cst8,"aM",@progbits,8
 	.p2align	3, 0x0
 .LCPI28_1:
-	.quad	0x40862e3d70a3d70a              # double 709.77999999999997
+	.quad	0x40862e42fefa39ef              # double 709.78271289338397
+.LCPI28_2:
+	.quad	0xc0874910d52d3052              # double -745.13321910194122
 .LCPI28_3:
 	.quad	0x3ff71547652b82fe              # double 1.4426950408889634
 .LCPI28_4:
@@ -1935,22 +2045,32 @@ _xm_ln:                                 # @_xm_ln
 .LCPI28_7:
 	.quad	0xbff0000000000000              # double -1
 .LCPI28_8:
-	.quad	0xbfe62e42fefa39ef              # double -0.69314718055994529
+	.quad	0xbfe62e42fee00000              # double -0.69314718036912382
 .LCPI28_9:
-	.quad	0x3ec71de3a556c734              # double 2.7557319223985893E-6
+	.quad	0xbdea39ef35793c76              # double -1.9082149292705877E-10
 .LCPI28_10:
-	.quad	0x3efa01a01a01a01a              # double 2.4801587301587302E-5
+	.quad	0x3de6124613a86d09              # double 1.6059043836821613E-10
 .LCPI28_11:
-	.quad	0x3f2a01a01a01a01a              # double 1.9841269841269841E-4
+	.quad	0x3e21eed8eff8d898              # double 2.08767569878681E-9
 .LCPI28_12:
-	.quad	0x3f56c16c16c16c17              # double 0.0013888888888888889
+	.quad	0x3e5ae64567f544e4              # double 2.505210838544172E-8
 .LCPI28_13:
-	.quad	0x3f81111111111111              # double 0.0083333333333333332
+	.quad	0x3e927e4fb7789f5c              # double 2.7557319223985888E-7
 .LCPI28_14:
-	.quad	0x3fa5555555555555              # double 0.041666666666666664
+	.quad	0x3ec71de3a556c734              # double 2.7557319223985893E-6
 .LCPI28_15:
-	.quad	0x3fc5555555555555              # double 0.16666666666666666
+	.quad	0x3efa01a01a01a01a              # double 2.4801587301587302E-5
 .LCPI28_16:
+	.quad	0x3f2a01a01a01a01a              # double 1.9841269841269841E-4
+.LCPI28_17:
+	.quad	0x3f56c16c16c16c17              # double 0.0013888888888888889
+.LCPI28_18:
+	.quad	0x3f81111111111111              # double 0.0083333333333333332
+.LCPI28_19:
+	.quad	0x3fa5555555555555              # double 0.041666666666666664
+.LCPI28_20:
+	.quad	0x3fc5555555555555              # double 0.16666666666666666
+.LCPI28_21:
 	.quad	0x3ff0000000000000              # double 1
 	.text
 	.globl	_xm_expf
@@ -1968,9 +2088,9 @@ _xm_expf:                               # @_xm_expf
 	movss	xmm0, dword ptr [rip + .LCPI28_0] # xmm0 = [+Inf,0.0E+0,0.0E+0,0.0E+0]
 	ret
 .LBB28_3:
-	movss	xmm2, dword ptr [rip + .LCPI28_2] # xmm2 = [-7.45E+2,0.0E+0,0.0E+0,0.0E+0]
-	ucomiss	xmm2, xmm0
 	xorps	xmm0, xmm0
+	movsd	xmm2, qword ptr [rip + .LCPI28_2] # xmm2 = [-7.4513321910194122E+2,0.0E+0]
+	ucomisd	xmm2, xmm1
 	ja	.LBB28_9
 # %bb.4:
 	movsd	xmm0, qword ptr [rip + .LCPI28_3] # xmm0 = [1.4426950408889634E+0,0.0E+0]
@@ -1996,36 +2116,57 @@ _xm_expf:                               # @_xm_expf
 	andnpd	xmm0, xmm2
 	orpd	xmm0, xmm3
 .LBB28_8:
-	movsd	xmm2, qword ptr [rip + .LCPI28_8] # xmm2 = [-6.9314718055994529E-1,0.0E+0]
+	movsd	xmm2, qword ptr [rip + .LCPI28_8] # xmm2 = [-6.9314718036912382E-1,0.0E+0]
 	mulsd	xmm2, xmm0
 	addsd	xmm1, xmm2
-	movsd	xmm2, qword ptr [rip + .LCPI28_9] # xmm2 = [2.7557319223985893E-6,0.0E+0]
-	mulsd	xmm2, xmm1
-	addsd	xmm2, qword ptr [rip + .LCPI28_10]
-	mulsd	xmm2, xmm1
-	addsd	xmm2, qword ptr [rip + .LCPI28_11]
-	mulsd	xmm2, xmm1
-	addsd	xmm2, qword ptr [rip + .LCPI28_12]
-	mulsd	xmm2, xmm1
-	addsd	xmm2, qword ptr [rip + .LCPI28_13]
-	mulsd	xmm2, xmm1
-	addsd	xmm2, qword ptr [rip + .LCPI28_14]
-	mulsd	xmm2, xmm1
-	addsd	xmm2, qword ptr [rip + .LCPI28_15]
-	mulsd	xmm2, xmm1
-	addsd	xmm2, qword ptr [rip + .LCPI28_4]
-	mulsd	xmm2, xmm1
-	movsd	xmm3, qword ptr [rip + .LCPI28_16] # xmm3 = [1.0E+0,0.0E+0]
-	addsd	xmm2, xmm3
-	mulsd	xmm2, xmm1
+	movsd	xmm2, qword ptr [rip + .LCPI28_9] # xmm2 = [-1.9082149292705877E-10,0.0E+0]
+	mulsd	xmm2, xmm0
+	addsd	xmm2, xmm1
+	movsd	xmm1, qword ptr [rip + .LCPI28_10] # xmm1 = [1.6059043836821613E-10,0.0E+0]
+	mulsd	xmm1, xmm2
+	addsd	xmm1, qword ptr [rip + .LCPI28_11]
+	mulsd	xmm1, xmm2
+	addsd	xmm1, qword ptr [rip + .LCPI28_12]
+	mulsd	xmm1, xmm2
+	addsd	xmm1, qword ptr [rip + .LCPI28_13]
+	mulsd	xmm1, xmm2
+	addsd	xmm1, qword ptr [rip + .LCPI28_14]
+	mulsd	xmm1, xmm2
+	addsd	xmm1, qword ptr [rip + .LCPI28_15]
+	mulsd	xmm1, xmm2
+	addsd	xmm1, qword ptr [rip + .LCPI28_16]
+	mulsd	xmm1, xmm2
+	addsd	xmm1, qword ptr [rip + .LCPI28_17]
+	mulsd	xmm1, xmm2
+	addsd	xmm1, qword ptr [rip + .LCPI28_18]
+	mulsd	xmm1, xmm2
+	addsd	xmm1, qword ptr [rip + .LCPI28_19]
+	mulsd	xmm1, xmm2
+	addsd	xmm1, qword ptr [rip + .LCPI28_20]
+	mulsd	xmm1, xmm2
+	addsd	xmm1, qword ptr [rip + .LCPI28_4]
+	mulsd	xmm1, xmm2
+	movsd	xmm3, qword ptr [rip + .LCPI28_21] # xmm3 = [1.0E+0,0.0E+0]
+	addsd	xmm1, xmm3
+	mulsd	xmm1, xmm2
+	addsd	xmm1, xmm3
 	cvttsd2si	rax, xmm0
-	addsd	xmm2, xmm3
-	shl	rax, 52
-	movabs	rcx, 4607182418800017408
+	mov	rcx, rax
+	shr	rcx, 63
 	add	rcx, rax
+	sar	rcx
+	sub	eax, ecx
+	shl	rcx, 52
+	movabs	rdx, 4607182418800017408
+	add	rcx, rdx
 	movq	xmm0, rcx
-	mulsd	xmm0, xmm2
-	cvtsd2ss	xmm0, xmm0
+	mulsd	xmm0, xmm1
+	shl	rax, 52
+	add	rax, rdx
+	movq	xmm1, rax
+	mulsd	xmm1, xmm0
+	xorps	xmm0, xmm0
+	cvtsd2ss	xmm0, xmm1
 .LBB28_9:
 	ret
 .Lfunc_end28:
@@ -2036,9 +2177,9 @@ _xm_expf:                               # @_xm_expf
 .LCPI29_0:
 	.quad	0x7ff0000000000000              # double +Inf
 .LCPI29_1:
-	.quad	0x40862e3d70a3d70a              # double 709.77999999999997
+	.quad	0x40862e42fefa39ef              # double 709.78271289338397
 .LCPI29_2:
-	.quad	0xc087480000000000              # double -745
+	.quad	0xc0874910d52d3052              # double -745.13321910194122
 .LCPI29_3:
 	.quad	0x3ff71547652b82fe              # double 1.4426950408889634
 .LCPI29_4:
@@ -2050,22 +2191,32 @@ _xm_expf:                               # @_xm_expf
 .LCPI29_7:
 	.quad	0xbff0000000000000              # double -1
 .LCPI29_8:
-	.quad	0xbfe62e42fefa39ef              # double -0.69314718055994529
+	.quad	0xbfe62e42fee00000              # double -0.69314718036912382
 .LCPI29_9:
-	.quad	0x3ec71de3a556c734              # double 2.7557319223985893E-6
+	.quad	0xbdea39ef35793c76              # double -1.9082149292705877E-10
 .LCPI29_10:
-	.quad	0x3efa01a01a01a01a              # double 2.4801587301587302E-5
+	.quad	0x3de6124613a86d09              # double 1.6059043836821613E-10
 .LCPI29_11:
-	.quad	0x3f2a01a01a01a01a              # double 1.9841269841269841E-4
+	.quad	0x3e21eed8eff8d898              # double 2.08767569878681E-9
 .LCPI29_12:
-	.quad	0x3f56c16c16c16c17              # double 0.0013888888888888889
+	.quad	0x3e5ae64567f544e4              # double 2.505210838544172E-8
 .LCPI29_13:
-	.quad	0x3f81111111111111              # double 0.0083333333333333332
+	.quad	0x3e927e4fb7789f5c              # double 2.7557319223985888E-7
 .LCPI29_14:
-	.quad	0x3fa5555555555555              # double 0.041666666666666664
+	.quad	0x3ec71de3a556c734              # double 2.7557319223985893E-6
 .LCPI29_15:
-	.quad	0x3fc5555555555555              # double 0.16666666666666666
+	.quad	0x3efa01a01a01a01a              # double 2.4801587301587302E-5
 .LCPI29_16:
+	.quad	0x3f2a01a01a01a01a              # double 1.9841269841269841E-4
+.LCPI29_17:
+	.quad	0x3f56c16c16c16c17              # double 0.0013888888888888889
+.LCPI29_18:
+	.quad	0x3f81111111111111              # double 0.0083333333333333332
+.LCPI29_19:
+	.quad	0x3fa5555555555555              # double 0.041666666666666664
+.LCPI29_20:
+	.quad	0x3fc5555555555555              # double 0.16666666666666666
+.LCPI29_21:
 	.quad	0x3ff0000000000000              # double 1
 	.text
 	.globl	_xm_exp
@@ -2083,7 +2234,7 @@ _xm_exp:                                # @_xm_exp
 	ret
 .LBB29_5:
 	xorps	xmm1, xmm1
-	movsd	xmm2, qword ptr [rip + .LCPI29_2] # xmm2 = [-7.45E+2,0.0E+0]
+	movsd	xmm2, qword ptr [rip + .LCPI29_2] # xmm2 = [-7.4513321910194122E+2,0.0E+0]
 	ucomisd	xmm2, xmm0
 	jbe	.LBB29_6
 # %bb.2:
@@ -2113,34 +2264,54 @@ _xm_exp:                                # @_xm_exp
 	andnpd	xmm1, xmm2
 	orpd	xmm1, xmm3
 .LBB29_10:
-	movsd	xmm2, qword ptr [rip + .LCPI29_8] # xmm2 = [-6.9314718055994529E-1,0.0E+0]
+	movsd	xmm2, qword ptr [rip + .LCPI29_8] # xmm2 = [-6.9314718036912382E-1,0.0E+0]
 	mulsd	xmm2, xmm1
 	addsd	xmm0, xmm2
-	movsd	xmm2, qword ptr [rip + .LCPI29_9] # xmm2 = [2.7557319223985893E-6,0.0E+0]
-	mulsd	xmm2, xmm0
-	addsd	xmm2, qword ptr [rip + .LCPI29_10]
-	mulsd	xmm2, xmm0
-	addsd	xmm2, qword ptr [rip + .LCPI29_11]
-	mulsd	xmm2, xmm0
-	addsd	xmm2, qword ptr [rip + .LCPI29_12]
-	mulsd	xmm2, xmm0
-	addsd	xmm2, qword ptr [rip + .LCPI29_13]
-	mulsd	xmm2, xmm0
-	addsd	xmm2, qword ptr [rip + .LCPI29_14]
-	mulsd	xmm2, xmm0
-	addsd	xmm2, qword ptr [rip + .LCPI29_15]
-	mulsd	xmm2, xmm0
-	addsd	xmm2, qword ptr [rip + .LCPI29_4]
-	mulsd	xmm2, xmm0
-	movsd	xmm3, qword ptr [rip + .LCPI29_16] # xmm3 = [1.0E+0,0.0E+0]
-	addsd	xmm2, xmm3
-	mulsd	xmm2, xmm0
-	addsd	xmm2, xmm3
+	movsd	xmm2, qword ptr [rip + .LCPI29_9] # xmm2 = [-1.9082149292705877E-10,0.0E+0]
+	mulsd	xmm2, xmm1
+	addsd	xmm2, xmm0
+	movsd	xmm0, qword ptr [rip + .LCPI29_10] # xmm0 = [1.6059043836821613E-10,0.0E+0]
+	mulsd	xmm0, xmm2
+	addsd	xmm0, qword ptr [rip + .LCPI29_11]
+	mulsd	xmm0, xmm2
+	addsd	xmm0, qword ptr [rip + .LCPI29_12]
+	mulsd	xmm0, xmm2
+	addsd	xmm0, qword ptr [rip + .LCPI29_13]
+	mulsd	xmm0, xmm2
+	addsd	xmm0, qword ptr [rip + .LCPI29_14]
+	mulsd	xmm0, xmm2
+	addsd	xmm0, qword ptr [rip + .LCPI29_15]
+	mulsd	xmm0, xmm2
+	addsd	xmm0, qword ptr [rip + .LCPI29_16]
+	mulsd	xmm0, xmm2
+	addsd	xmm0, qword ptr [rip + .LCPI29_17]
+	mulsd	xmm0, xmm2
+	addsd	xmm0, qword ptr [rip + .LCPI29_18]
+	mulsd	xmm0, xmm2
+	addsd	xmm0, qword ptr [rip + .LCPI29_19]
+	mulsd	xmm0, xmm2
+	addsd	xmm0, qword ptr [rip + .LCPI29_20]
+	mulsd	xmm0, xmm2
+	addsd	xmm0, qword ptr [rip + .LCPI29_4]
+	mulsd	xmm0, xmm2
+	movsd	xmm3, qword ptr [rip + .LCPI29_21] # xmm3 = [1.0E+0,0.0E+0]
+	addsd	xmm0, xmm3
+	mulsd	xmm0, xmm2
+	addsd	xmm0, xmm3
 	cvttsd2si	rax, xmm1
-	shl	rax, 52
-	movabs	rcx, 4607182418800017408
+	mov	rcx, rax
+	shr	rcx, 63
 	add	rcx, rax
-	movq	xmm1, rcx
+	sar	rcx
+	sub	eax, ecx
+	shl	rcx, 52
+	movabs	rdx, 4607182418800017408
+	add	rcx, rdx
+	movq	xmm2, rcx
+	mulsd	xmm2, xmm0
+	shl	rax, 52
+	add	rax, rdx
+	movq	xmm1, rax
 	mulsd	xmm1, xmm2
 	movapd	xmm0, xmm1
 	ret

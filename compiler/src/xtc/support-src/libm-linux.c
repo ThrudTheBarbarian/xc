@@ -10,7 +10,11 @@
 // Accuracy, measured against the host libm over the ranges the corpus uses
 // (worst relative error, 2001 samples each):
 //   sin 7.7e-14   cos 5.4e-13   tan 8.3e-16   atan 3.4e-11
-//   log 2.0e-16   exp 9.4e-12   pow 9.3e-12   sqrt exact
+//   log 2.0e-16   exp 2.2e-16   pow 1.6e-15   sqrt exact
+// (exp is within one ULP of the host libm over the whole normal range; a
+// subnormal result carries fewer bits, so its relative error is larger.)
+// (exp and pow were 9.4e-12 and 9.3e-12 until bug 586: a series cut at r^9,
+// which every x86-64 Linux program's Math.exp and Math.pow inherited.)
 // Far inside what the corpus checks (a handful of decimal places), but NOT a
 // drop-in for glibc's correctly-rounded libm — the last few ULPs will differ,
 // and sin/cos degrade further for very large arguments because the range
@@ -20,6 +24,17 @@
 //
 // Freestanding: no #include, and sqrt is the hardware instruction rather than a
 // library call.
+//
+// Regenerate BOTH after any edit (these flags reproduce the checked-in files
+// exactly; then put back each file's licence header):
+//   clang -S -O1 -masm=intel -fno-stack-protector -fomit-frame-pointer \
+//         -fno-asynchronous-unwind-tables -fno-jump-tables -ffreestanding \
+//         -fno-pic -target x86_64-unknown-linux-gnu \
+//         -o support/x86_64/runtime/libmgen-linux.s src/xtc/support-src/libm-linux.c
+//   clang -S -O1 -masm=intel -fno-stack-protector -fomit-frame-pointer \
+//         -fno-asynchronous-unwind-tables -fno-jump-tables -ffreestanding \
+//         -target x86_64-windows-gnu \
+//         -o support/win64/runtime/libmgen-win64.s src/xtc/support-src/libm-linux.c
 
 typedef unsigned long long uint64_t; // long is 32-bit under Windows LLP64
 typedef long long int64_t;
@@ -28,6 +43,10 @@ typedef long long int64_t;
 #define TWO_PI 6.28318530717958647693
 #define HALF_PI 1.57079632679489661923
 #define LN2 0.69314718055994530942
+// ln 2 split so that k * LN2_HI is exact for every k exp can reach (the low
+// bits of LN2_HI are zero), and the reduction loses nothing (Cody-Waite).
+#define LN2_HI 6.93147180369123816490e-01 // 0x3FE62E42FEE00000
+#define LN2_LO 1.90821492927058770002e-10 // 0x3DEA39EF35793C76
 #define INV_LN2 1.44269504088896340736
 
 static double asDouble(uint64_t b)
@@ -212,24 +231,33 @@ double log(double x)
     }
 
 // ── exp ────────────────────────────────────────────────────────────────────
-// exp(x) = 2^k * exp(r), k = round(x/ln2), |r| <= ln2/2. 2^k is assembled
-// straight into the exponent field rather than computed.
+// exp(x) = 2^k * exp(r), k = round(x/ln2), |r| <= ln2/2.
+//
+// The series runs to r^13: at |r| = ln2/2 the first term left out, r^14/14!,
+// is 4e-18 of the result. It stopped at r^9, where the term left out is 7e-12,
+// and that was the library's whole error (bug 586).
+//
+// 2^k is built in the exponent field, in two halves: k reaches 1024 just below
+// the overflow threshold and -1075 at the bottom of the subnormals, outside
+// what one exponent field holds, while each half stays a normal number.
 double exp(double x)
     {
     if (x != x)
         return x;
-    if (x > 709.78)
+    if (x > 709.782712893384)
         return asDouble(0x7FF0000000000000ULL); // overflow -> +inf
-    if (x < -745.0)
+    if (x < -745.1332191019412)
         return 0.0; // underflow
     double kd = xfloor(x * INV_LN2 + 0.5);
-    double r = x - kd * LN2;
+    double r = (x - kd * LN2_HI) - kd * LN2_LO;
     double p = 1.0 + r * (1.0 + r * (1.0 / 2.0 + r * (1.0 / 6.0 + r * (1.0 / 24.0 +
-                                                                       r * (1.0 / 120.0 + r * (1.0 / 720.0 + r * (1.0 / 5040.0 +
-                                                                                                                  r * (1.0 / 40320.0 + r * (1.0 / 362880.0)))))))));
+               r * (1.0 / 120.0 + r * (1.0 / 720.0 + r * (1.0 / 5040.0 +
+               r * (1.0 / 40320.0 + r * (1.0 / 362880.0 + r * (1.0 / 3628800.0 +
+               r * (1.0 / 39916800.0 + r * (1.0 / 479001600.0 +
+               r * (1.0 / 6227020800.0)))))))))))));
     int64_t k = (int64_t)kd;
-    double scale = asDouble((uint64_t)(k + 1023) << 52);
-    return p * scale;
+    int64_t k1 = k / 2, k2 = k - k1;
+    return p * asDouble((uint64_t)(k1 + 1023) << 52) * asDouble((uint64_t)(k2 + 1023) << 52);
     }
 
 // ── pow ────────────────────────────────────────────────────────────────────
