@@ -1136,6 +1136,159 @@ int ux_ios_pixel(int x, int y)
     return (p[0] << 16) | (p[1] << 8) | p[2];
     }
 
+// ── the app's menus: a "more" button with a UIMenu ─────────────────────────────────────────────
+// An iPhone or an iPad has no menu bar, so the app's menus (UXMenu) hang from a "⋯" button at the
+// top right of the safe area, above every window: a UIMenu with a submenu per title, shown as the
+// button's primary action.  The driver hands the menus over as one string (UXMenuEncode.xc); a
+// pick comes back as (title, item), which the driver turns into the same UXEventMenuSelect a
+// desktop's menu bar sends.  Checked and disabled states are kept here and the menu rebuilt.
+typedef void (*menu_pick_fn)(int, int);
+static menu_pick_fn gMenuPick;
+static NSMutableArray<NSString*>* gMenuTitles;
+static NSMutableArray<NSMutableArray<NSMutableDictionary*>*>* gMenuItems;
+static UIButton* gMenuBtn;
+void ux_ios_set_menu_pick(void* fn)
+    {
+    gMenuPick = (menu_pick_fn)fn;
+    }
+static void menuRebuild(void)
+    {
+    if (!gSafeRoot)
+        return;
+    if (gMenuTitles.count == 0)
+        {
+        gMenuBtn.hidden = YES;
+        return;
+        }
+    if (!gMenuBtn)
+        {
+        gMenuBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+        [gMenuBtn setImage:[UIImage systemImageNamed:@"ellipsis.circle"] forState:UIControlStateNormal];
+        gMenuBtn.showsMenuAsPrimaryAction = YES;
+        gMenuBtn.accessibilityLabel = @"Menu";
+        gMenuBtn.translatesAutoresizingMaskIntoConstraints = NO;
+        UIView* host = gSafeRoot.superview;
+        [host addSubview:gMenuBtn];
+        [NSLayoutConstraint activateConstraints:@[
+            [gMenuBtn.topAnchor constraintEqualToAnchor:host.safeAreaLayoutGuide.topAnchor constant:2],
+            [gMenuBtn.trailingAnchor constraintEqualToAnchor:host.safeAreaLayoutGuide.trailingAnchor constant:-8],
+            [gMenuBtn.widthAnchor constraintEqualToConstant:40],
+            [gMenuBtn.heightAnchor constraintEqualToConstant:40],
+        ]];
+        }
+    gMenuBtn.hidden = NO;
+    [gMenuBtn.superview bringSubviewToFront:gMenuBtn];
+    NSMutableArray<UIMenuElement*>* tops = [NSMutableArray new];
+    for (NSUInteger t = 0; t < gMenuTitles.count; t++)
+        {
+        /* a separator splits the items into inline groups, which UIKit draws with a divider */
+        NSMutableArray<UIMenuElement*>* groups = [NSMutableArray new];
+        NSMutableArray<UIMenuElement*>* cur = [NSMutableArray new];
+        NSArray* items = gMenuItems[t];
+        for (NSUInteger j = 0; j < items.count; j++)
+            {
+            NSDictionary* it = items[j];
+            if ([it[@"sep"] boolValue])
+                {
+                if (cur.count)
+                    [groups addObject:[UIMenu menuWithTitle:@"" image:nil identifier:nil options:UIMenuOptionsDisplayInline children:cur]];
+                cur = [NSMutableArray new];
+                continue;
+                }
+            int tt = (int)t, jj = (int)j;
+            UIAction* a = [UIAction actionWithTitle:it[@"text"] image:nil identifier:nil handler:^(UIAction* x) {
+                if (gMenuPick) gMenuPick(tt, jj);
+            }];
+            if ([it[@"checked"] boolValue]) a.state = UIMenuElementStateOn;
+            if ([it[@"disabled"] boolValue]) a.attributes = UIMenuElementAttributesDisabled;
+            [cur addObject:a];
+            }
+        if (cur.count)
+            [groups addObject:[UIMenu menuWithTitle:@"" image:nil identifier:nil options:UIMenuOptionsDisplayInline children:cur]];
+        [tops addObject:[UIMenu menuWithTitle:gMenuTitles[t] children:groups]];
+        }
+    gMenuBtn.menu = [UIMenu menuWithTitle:@"" children:tops];
+    }
+void ux_ios_menu_set(const char* enc)
+    {
+    gMenuTitles = [NSMutableArray new];
+    gMenuItems = [NSMutableArray new];
+    NSString* all = [NSString stringWithUTF8String:enc ? enc : ""];
+    for (NSString* group in [all componentsSeparatedByString:@"\x1e"])
+        {
+        if (group.length == 0)
+            continue;
+        NSArray<NSString*>* parts = [group componentsSeparatedByString:@"\x1f"];
+        [gMenuTitles addObject:parts[0]];
+        NSMutableArray* items = [NSMutableArray new];
+        for (NSUInteger k = 1; k < parts.count; k++)
+            {
+            NSString* p = parts[k];
+            NSMutableDictionary* it = [NSMutableDictionary new];
+            if ([p isEqualToString:@"-"])
+                it[@"sep"] = @YES;
+            else if (p.length && [p characterAtIndex:0] == 1)
+                { it[@"checked"] = @YES; it[@"text"] = [p substringFromIndex:1]; }
+            else if (p.length && [p characterAtIndex:0] == 2)
+                { it[@"disabled"] = @YES; it[@"text"] = [p substringFromIndex:1]; }
+            else
+                it[@"text"] = p;
+            [items addObject:it];
+            }
+        [gMenuItems addObject:items];
+        }
+    menuRebuild();
+    }
+/* what: 0 checked, 1 enabled */
+void ux_ios_menu_state(int t, int j, int what, int on)
+    {
+    if (t < 0 || t >= (int)gMenuItems.count || j < 0 || j >= (int)gMenuItems[t].count)
+        return;
+    NSMutableDictionary* it = gMenuItems[t][j];
+    if (what == 0) it[@"checked"] = @(on != 0);
+    else it[@"disabled"] = @(on == 0);
+    menuRebuild();
+    }
+/* Tests: the button is up; the menu's titles; an item as the menu shows it (1 there, 2 checked,
+ * 4 disabled); and a USER's pick (the action's own handler, as UIKit calls it). */
+static UIAction* menuAction(int t, int j)
+    {
+    if (!gMenuBtn.menu || t < 0 || t >= (int)gMenuBtn.menu.children.count)
+        return nil;
+    UIMenu* top = (UIMenu*)gMenuBtn.menu.children[t];
+    int k = 0;
+    for (UIMenuElement* g in top.children)
+        for (UIMenuElement* e in ((UIMenu*)g).children)
+            {
+            /* item ordinals count separators, which are not actions: skip their slots */
+            while (k < (int)gMenuItems[t].count && [gMenuItems[t][k][@"sep"] boolValue]) k++;
+            if (k == j) return (UIAction*)e;
+            k++;
+            }
+    return nil;
+    }
+int ux_ios_test_menu_shown(void)
+    {
+    return gMenuBtn && !gMenuBtn.hidden && gMenuBtn.window ? (int)gMenuBtn.menu.children.count : 0;
+    }
+int ux_ios_test_menu_title_is(int t, const char* want)
+    {
+    if (!gMenuBtn.menu || t >= (int)gMenuBtn.menu.children.count) return 0;
+    return [gMenuBtn.menu.children[t].title isEqualToString:[NSString stringWithUTF8String:want]];
+    }
+int ux_ios_test_menu_item(int t, int j)
+    {
+    UIAction* a = menuAction(t, j);
+    if (!a) return 0;
+    return 1 | (a.state == UIMenuElementStateOn ? 2 : 0) | ((a.attributes & UIMenuElementAttributesDisabled) ? 4 : 0);
+    }
+void ux_ios_test_menu_pick(int t, int j)
+    {
+    UIAction* a = menuAction(t, j);
+    if (a && !(a.attributes & UIMenuElementAttributesDisabled) && gMenuPick)
+        gMenuPick(t, j); /* exactly what the action's handler does */
+    }
+
 // ── the native table: UITableView ───────────────────────────────────────────────────────────
 // A UXTableView realized as a real UITableView.  Like AppKit's NSTableView it holds no data: the
 // row count and each cell's text come from the peer UXTableView through hooks (the datasource that

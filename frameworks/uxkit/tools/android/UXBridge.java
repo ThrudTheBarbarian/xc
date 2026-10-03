@@ -7,7 +7,7 @@
 //
 // Regenerate:
 //   javac --release 8 -cp $ANDROID_HOME/platforms/android-35/android.jar UXBridge.java
-//   d8 UXBridge*.class UXBack.class UXRun.class UXDrawView.class UXTable*.class --lib .../android.jar --output .
+//   d8 UXBridge*.class UXBack.class UXRun.class UXDrawView.class UXTable*.class UXMenuButton*.class --lib .../android.jar --min-api 26 --output .
 import android.content.Context;
 import android.content.DialogInterface;
 import android.graphics.Canvas;
@@ -274,4 +274,84 @@ class UXTable extends android.widget.LinearLayout implements AdapterView.OnItemC
     public int shownRows() { return list.getChildCount(); }
     public int rowScreenX(int r) { int[] p = new int[2]; list.getChildAt(r).getLocationOnScreen(p); return p[0] + list.getChildAt(r).getWidth() / 4; }
     public int rowScreenY(int r) { int[] p = new int[2]; list.getChildAt(r).getLocationOnScreen(p); return p[1] + list.getChildAt(r).getHeight() / 2; }
+}
+
+// The app's menus: a phone has no menu bar, so they hang from an overflow button (the platform's
+// "more options" mark, at the top right) as a PopupMenu with a submenu per title.  The driver hands
+// them over as one string (UXMenuEncode.xc): a title, its items after US (0x1f), RS (0x1e) closing
+// it; an item "-" is a separator, a leading 0x01 checked, a leading 0x02 disabled.  A pick goes
+// back as (title, item) through nativeMenuPick; check and enable changes come in through state().
+class UXMenuButton extends TextView implements View.OnClickListener,
+        android.widget.PopupMenu.OnMenuItemClickListener {
+    private static native void nativeMenuPick(int title, int item);
+    private final java.util.ArrayList<String> titles = new java.util.ArrayList<>();
+    private final java.util.ArrayList<java.util.ArrayList<String[]>> items = new java.util.ArrayList<>(); // {text, checked, disabled, sep}
+    android.widget.PopupMenu shown;
+    public UXMenuButton(Context c) {
+        super(c);
+        setText("\u22EE");
+        setTextSize(24);
+        setTextColor(0xFF1C1B1F);
+        setGravity(android.view.Gravity.CENTER);
+        setContentDescription("Menu");
+        setOnClickListener(this);
+    }
+    public void set(String enc) {
+        titles.clear();
+        items.clear();
+        for (String group : enc.split("\u001e")) {
+            if (group.isEmpty()) continue;
+            String[] parts = group.split("\u001f", -1);
+            titles.add(parts[0]);
+            java.util.ArrayList<String[]> its = new java.util.ArrayList<>();
+            for (int k = 1; k < parts.length; k++) {
+                String p = parts[k];
+                if (p.equals("-")) its.add(new String[] { "", "0", "0", "1" });
+                else if (p.length() > 0 && p.charAt(0) == 1) its.add(new String[] { p.substring(1), "1", "0", "0" });
+                else if (p.length() > 0 && p.charAt(0) == 2) its.add(new String[] { p.substring(1), "0", "1", "0" });
+                else its.add(new String[] { p, "0", "0", "0" });
+            }
+            items.add(its);
+        }
+        setVisibility(titles.isEmpty() ? View.GONE : View.VISIBLE);
+    }
+    // what: 0 checked, 1 enabled
+    public void state(int t, int j, int what, boolean on) {
+        if (t < 0 || t >= items.size() || j < 0 || j >= items.get(t).size()) return;
+        String[] it = items.get(t).get(j);
+        if (what == 0) it[1] = on ? "1" : "0"; else it[2] = on ? "0" : "1";
+    }
+    public void onClick(View v) {
+        android.widget.PopupMenu pm = new android.widget.PopupMenu(getContext(), this);
+        for (int t = 0; t < titles.size(); t++) {
+            android.view.SubMenu sm = pm.getMenu().addSubMenu(0, 0x10000 + t, t, titles.get(t));
+            java.util.ArrayList<String[]> its = items.get(t);
+            int group = 0;
+            for (int j = 0; j < its.size(); j++) {
+                String[] it = its.get(j);
+                if (it[3].equals("1")) { group++; continue; } // a separator starts a new group
+                android.view.MenuItem mi = sm.add(group, (t << 8) | j, j, it[0]);
+                if (it[1].equals("1")) { mi.setCheckable(true); mi.setChecked(true); }
+                mi.setEnabled(!it[2].equals("1"));
+            }
+            if (android.os.Build.VERSION.SDK_INT >= 28) sm.setGroupDividerEnabled(true);
+        }
+        pm.setOnMenuItemClickListener(this);
+        shown = pm;
+        pm.show();
+    }
+    public boolean onMenuItemClick(android.view.MenuItem mi) {
+        int id = mi.getItemId();
+        if (id >= 0x10000) return false; // a title: its submenu opens
+        nativeMenuPick(id >> 8, id & 0xFF);
+        return true;
+    }
+    // tests: the titles shown, an item as the menu would show it (1 there, 2 checked, 4 disabled)
+    public int titleCount() { return getVisibility() == View.VISIBLE ? titles.size() : 0; }
+    public String title(int t) { return t < titles.size() ? titles.get(t) : ""; }
+    public int item(int t, int j) {
+        if (t < 0 || t >= items.size() || j < 0 || j >= items.get(t).size()) return 0;
+        String[] it = items.get(t).get(j);
+        return it[3].equals("1") ? 0 : 1 | (it[1].equals("1") ? 2 : 0) | (it[2].equals("1") ? 4 : 0);
+    }
 }

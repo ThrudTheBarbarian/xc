@@ -32,6 +32,7 @@
 #import "UXTouch.xc"              // drawn content's touches -> mouse events
 #import "UXNavigationController.xc" // a user's pop on the native stack comes back through uxNavNativePopped
 #import "UXTableView.xc"        // the native UITableView reads its rows from the peer table
+#import "UXMenuEncode.xc"       // the app's menus, handed to the "more" button as one string
 #import "UXApplication.xc"      // gApp: the driver-owned loop starts the delegate, and stop() quits
 #import "UXLibc.xc"
 
@@ -48,6 +49,10 @@ void ux_ios_set_nav_popped(pointer fn);
 void ux_ios_set_table_hooks(pointer rows, pointer cell, pointer cols, pointer title, pointer width, pointer multi, pointer selset);
 void ux_ios_make_table(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, pointer peer, i32 outline);
 void ux_ios_set_outline_hooks(pointer level, pointer disclosure, pointer toggle);
+// The app's menus, from a "more" button (UXMenuEncode's string); a pick comes back as (title, item).
+void ux_ios_set_menu_pick(pointer fn);
+void ux_ios_menu_set(u8* enc);
+void ux_ios_menu_state(i32 t, i32 j, i32 what, i32 on);
 void ux_ios_table_reload(i32 handle, i32 node);
 void ux_ios_table_select(i32 handle, i32 node, i32* rows, i32 n);
 void ux_ios_set_touch(pointer fn);
@@ -183,6 +188,26 @@ i32 xgIosTableColWidth(pointer tbl, i32 c)
 i32 xgIosTableMulti(pointer tbl)
     {
     return ((UXTableView* ?)(Object*)tbl).nativeAllowsMultiple();
+    }
+// A pick from the "more" button's menu: the same event a desktop's menu bar sends (a = the title's
+// object number, title + 2, as handleSelection expects; b = the item).
+UXEvent* gIosMenuEvent;
+void xgIosMenuPick(i32 t, i32 j)
+    {
+    if (gApp == (UXApplication*)0)
+        {
+        return;
+        }
+    if (gIosMenuEvent == (UXEvent*)0)
+        {
+        gIosMenuEvent = new UXEvent();
+        }
+    gIosMenuEvent.init();
+    gIosMenuEvent.kind = (u8)UXEventMenuSelect;
+    gIosMenuEvent.a = t + (i32)2;
+    gIosMenuEvent.b = j;
+    gApp.dispatchEvent(gIosMenuEvent);
+    gApp.displayIfNeeded();
     }
 // An outline's rows: depth, disclosure (bit 0 can open, bit 1 open), and a chevron tap.
 i32 xgIosTableLevel(pointer tbl, i32 r)
@@ -380,6 +405,7 @@ class UXIosDriver : Object<UXViewDriver>
                                    (pointer)&xgIosTableColTitle, (pointer)&xgIosTableColWidth,
                                    (pointer)&xgIosTableMulti, (pointer)&xgIosTableSelectSet);
             ux_ios_set_outline_hooks((pointer)&xgIosTableLevel, (pointer)&xgIosTableDisclosure, (pointer)&xgIosTableToggle);
+            ux_ios_set_menu_pick((pointer)&xgIosMenuPick);
             }
         return ux_ios_boot(screenW, screenH) != (i32)0;
         }
@@ -1397,22 +1423,27 @@ class UXIosDriver : Object<UXViewDriver>
         }
 
     // ---- menus / alerts: their milestones (UIMenu, UIAlertController) --------
+    // No menu bar on iOS: the app's menus hang from the "more" button (libUXIos.m), handed over as
+    // one string.  An item's ordinal is its index in its title, as on the web.
     pointer menuBuild(pointer defs, i32 n, i32 screenW)
         {
-        return (pointer)0;
+        return (pointer)UXMenuEncode.encode(defs, n);
         }
     void menuShow(pointer menu, i32 show)
         {
+        ux_ios_menu_set(show != (i32)0 && menu != (pointer)0 ? (u8*)menu : (u8*)"");
         }
     i32 menuItemOrd(pointer menu, i32 titleOrd, i32 itemObj)
         {
-        return (i32)-1;
+        return itemObj;
         }
     void menuCheck(pointer menu, i32 titleOrd, i32 itemOrd, i32 on)
         {
+        ux_ios_menu_state(titleOrd, itemOrd, (i32)0, on);
         }
     void menuEnable(pointer menu, i32 titleOrd, i32 itemOrd, i32 on)
         {
+        ux_ios_menu_state(titleOrd, itemOrd, (i32)1, on);
         }
     // Modal for real: UIAlertController presented un-animated, with a nested
     // CFRunLoop giving async iOS the synchronous contract (the sync-modal

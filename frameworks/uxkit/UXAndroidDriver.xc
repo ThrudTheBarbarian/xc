@@ -31,6 +31,7 @@
 #import "UXTouch.xc"              // drawn content's touches -> mouse events
 #import "UXNavigationController.xc" // Up / Back on the native bar come back through uxNavNativePopped
 #import "UXTableView.xc"   // the native table (a ListView) reads its rows from the peer table
+#import "UXMenuEncode.xc"  // the app's menus, handed to the overflow button as one string
 #import "UXApplication.xc" // gApp: the driver-owned loop starts the delegate, and stop() quits
 #import "UXLibc.xc"
 
@@ -48,6 +49,10 @@ void ux_and_set_touch(pointer fn);
 void ux_and_set_table_hooks(pointer rows, pointer cell, pointer cols, pointer title, pointer width, pointer multi, pointer selset);
 void ux_and_make_table(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, pointer peer, i32 outline);
 void ux_and_set_outline_hooks(pointer level, pointer disclosure, pointer toggle);
+// The app's menus, from an overflow button (UXMenuEncode's string); a pick comes back as (title, item).
+void ux_and_set_menu_pick(pointer fn);
+void ux_and_menu_set(u8* enc);
+void ux_and_menu_state(i32 t, i32 j, i32 what, i32 on);
 void ux_and_table_reload(i32 handle, i32 node);
 void ux_and_table_select(i32 handle, i32 node, i32* rows, i32 n);
 i32 ux_and_window_create(i32 x, i32 y, i32 w, i32 h);
@@ -199,6 +204,26 @@ i32 xgAndTableColWidth(pointer tbl, i32 c)
 i32 xgAndTableMulti(pointer tbl)
     {
     return ((UXTableView* ?)(Object*)tbl).nativeAllowsMultiple();
+    }
+// A pick from the overflow button's menu: the same event a desktop's menu bar sends (a = the
+// title's object number, title + 2, as handleSelection expects; b = the item).
+UXEvent* gAndMenuEvent;
+void xgAndMenuPick(i32 t, i32 j)
+    {
+    if (gApp == (UXApplication*)0)
+        {
+        return;
+        }
+    if (gAndMenuEvent == (UXEvent*)0)
+        {
+        gAndMenuEvent = new UXEvent();
+        }
+    gAndMenuEvent.init();
+    gAndMenuEvent.kind = (u8)UXEventMenuSelect;
+    gAndMenuEvent.a = t + (i32)2;
+    gAndMenuEvent.b = j;
+    gApp.dispatchEvent(gAndMenuEvent);
+    gApp.displayIfNeeded();
     }
 // An outline's rows: depth, disclosure (bit 0 can open, bit 1 open), and an arrow tap.
 i32 xgAndTableLevel(pointer tbl, i32 r)
@@ -399,6 +424,7 @@ class UXAndroidDriver : Object<UXViewDriver>
                                    (pointer)&xgAndTableColTitle, (pointer)&xgAndTableColWidth,
                                    (pointer)&xgAndTableMulti, (pointer)&xgAndTableSelectSet);
             ux_and_set_outline_hooks((pointer)&xgAndTableLevel, (pointer)&xgAndTableDisclosure, (pointer)&xgAndTableToggle);
+            ux_and_set_menu_pick((pointer)&xgAndMenuPick);
             }
         return ux_and_boot(screenW, screenH) != (i32)0;
         }
@@ -1427,22 +1453,27 @@ class UXAndroidDriver : Object<UXViewDriver>
         }
 
     // ---- menus / alerts: their milestones (options menu, AlertDialog) --------
+    // No menu bar on a phone: the app's menus hang from the overflow button (UXMenuButton in the
+    // bridge), handed over as one string.  An item's ordinal is its index in its title.
     pointer menuBuild(pointer defs, i32 n, i32 screenW)
         {
-        return (pointer)0;
+        return (pointer)UXMenuEncode.encode(defs, n);
         }
     void menuShow(pointer menu, i32 show)
         {
+        ux_and_menu_set(show != (i32)0 && menu != (pointer)0 ? (u8*)menu : (u8*)"");
         }
     i32 menuItemOrd(pointer menu, i32 titleOrd, i32 itemObj)
         {
-        return (i32)-1;
+        return itemObj;
         }
     void menuCheck(pointer menu, i32 titleOrd, i32 itemOrd, i32 on)
         {
+        ux_and_menu_state(titleOrd, itemOrd, (i32)0, on);
         }
     void menuEnable(pointer menu, i32 titleOrd, i32 itemOrd, i32 on)
         {
+        ux_and_menu_state(titleOrd, itemOrd, (i32)1, on);
         }
     // Modal for real: AlertDialog behind a nested Looper.loop() in the shim —
     // a listener records the pick and unwinds the nested loop with a marker

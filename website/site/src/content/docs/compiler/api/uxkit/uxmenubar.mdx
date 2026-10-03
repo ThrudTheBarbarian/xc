@@ -100,8 +100,12 @@ the canvas is the widget layer, but a menu is a native service: the driver
 hands the page the whole bar, and `ux_web_page.js` (loaded on the page) builds
 it above the canvas as DOM. A pull-down opens on a click, follows the pointer
 from title to title while open, and closes on a pick, a click elsewhere or
-Escape. The iOS and Android realizations are milestones in their drivers' menu
-work.
+Escape. A phone or a tablet has no menu bar at all, so on iOS and Android the
+bar hangs from a button at the top right of the screen, above every window: a
+"⋯" that opens a `UIMenu` on iOS, and the overflow "⋮" that opens a
+`PopupMenu` on Android. Each title is a submenu, and separators divide the
+items. Checked and disabled states show the way each platform shows them,
+and a pick fires the item's action just as a click in a desktop's bar does.
 
 ## Example
 

@@ -121,6 +121,10 @@ static int   gFieldCap[UXA_MAXW][64];
 static int   gFieldMute;                  /* programmatic setText must not re-fire */
 static jobject gSpinAdapter[UXA_MAXW][64];   /* global refs, per-popup adapter */
 static jclass gTableCls;                     /* UXTable (the bridge dex): the native table */
+static jclass gMenuCls;                      /* UXMenuButton: the app's menus from an overflow button */
+static jobject gMenuBtn;                     /* global ref, made with the first window */
+typedef void (*menu_pick_fn)(int, int);
+static menu_pick_fn gMenuPick;
 static void *gTblPeer[UXA_MAXW][64];         /* the peer UXTableView, by the table's id */
 typedef int (*tbl_rows_fn)(void *);
 typedef const char *(*tbl_cell_fn)(void *, int, int);
@@ -281,6 +285,10 @@ static void n_tbl_select(JNIEnv *env, jclass c, jint id, jintArray rows) {
     for (int i = 0; i < k; i++) buf[i] = e[i];
     (*env)->ReleaseIntArrayElements(env, rows, e, JNI_ABORT);
     gTblSelSet(p, buf, k);
+}
+static void n_menu_pick(JNIEnv *env, jclass c, jint t, jint j) {
+    (void)env; (void)c;
+    if (gMenuPick) gMenuPick(t, j);
 }
 static void n_draw(JNIEnv *env, jclass c, jint id, jobject canvas, jint w, jint h) {
     (void)c;
@@ -893,6 +901,8 @@ int ux_and_window_create(int x, int y, int w, int h) {
     (*env)->CallVoidMethod(env, win, (*env)->GetMethodID(env, gViewCls, "setBackgroundColor", "(I)V"),
                            (jint)0xFFFFFFFF);
     (*env)->CallVoidMethod(env, gRoot, gAddView, win, PX(w), PX(h));
+    /* the menu button stays above every window */
+    if (gMenuBtn) (*env)->CallVoidMethod(env, gMenuBtn, (*env)->GetMethodID(env, gViewCls, "bringToFront", "()V"));
     (*env)->CallVoidMethod(env, win, gSetTransX, (jfloat)PX(x));
     (*env)->CallVoidMethod(env, win, gSetTransY, (jfloat)PX(y));
     gWinV[hh] = (*env)->NewGlobalRef(env, win);
@@ -968,6 +978,60 @@ void ux_and_make_button(int handle, int node, int x, int y, int w, int h, const 
     place(env, handle, node, b, x, y, w, h);
     check(env, "make_button");
 }
+/* ── the app's menus: UXMenuButton, an overflow button at the top right ── */
+void ux_and_set_menu_pick(void *fn) { gMenuPick = (menu_pick_fn)fn; }
+/* the button rides on the root, above every window, at the top right of the safe area */
+static void menuButtonEnsure(JNIEnv *env) {
+    if (gMenuBtn || !gRoot) return;
+    jobject b = (*env)->NewObject(env, gMenuCls, (*env)->GetMethodID(env, gMenuCls, "<init>",
+                                  "(Landroid/content/Context;)V"), gActivity);
+    if (!check(env, "menu button") || !b) return;
+    jclass flpC = (*env)->FindClass(env, "android/widget/FrameLayout$LayoutParams");
+    jobject lp = (*env)->NewObject(env, flpC, (*env)->GetMethodID(env, flpC, "<init>", "(III)V"),
+                                   PX(48), PX(48), 0x30 | 0x05 /* Gravity.TOP | RIGHT */);
+    jmethodID addV = (*env)->GetMethodID(env, (*env)->FindClass(env, "android/view/ViewGroup"),
+                                         "addView", "(Landroid/view/View;Landroid/view/ViewGroup$LayoutParams;)V");
+    (*env)->CallVoidMethod(env, gRoot, addV, b, lp);
+    gMenuBtn = (*env)->NewGlobalRef(env, b);
+    check(env, "menu button add");
+}
+void ux_and_menu_set(const char *enc) {
+    JNIEnv *env = envNow();
+    menuButtonEnsure(env);
+    if (!gMenuBtn) return;
+    (*env)->CallVoidMethod(env, gMenuBtn, (*env)->GetMethodID(env, gMenuCls, "set", "(Ljava/lang/String;)V"),
+                           (*env)->NewStringUTF(env, enc ? enc : ""));
+    jmethodID bring = (*env)->GetMethodID(env, gViewCls, "bringToFront", "()V");
+    (*env)->CallVoidMethod(env, gMenuBtn, bring);
+    check(env, "menu set");
+}
+void ux_and_menu_state(int t, int j, int what, int on) {
+    if (!gMenuBtn) return;
+    JNIEnv *env = envNow();
+    (*env)->CallVoidMethod(env, gMenuBtn, (*env)->GetMethodID(env, gMenuCls, "state", "(IIIZ)V"), t, j, what, (jboolean)(on != 0));
+    check(env, "menu state");
+}
+/* tests: the titles the button carries, a title's text, an item's state (1 there, 2 checked, 4 disabled) */
+int ux_and_test_menu_shown(void) {
+    if (!gMenuBtn) return 0;
+    JNIEnv *env = envNow();
+    return (*env)->CallIntMethod(env, gMenuBtn, (*env)->GetMethodID(env, gMenuCls, "titleCount", "()I"));
+}
+int ux_and_test_menu_title_is(int t, const char *want) {
+    if (!gMenuBtn) return 0;
+    JNIEnv *env = envNow();
+    jstring s = (*env)->CallObjectMethod(env, gMenuBtn, (*env)->GetMethodID(env, gMenuCls, "title", "(I)Ljava/lang/String;"), t);
+    const char *u = (*env)->GetStringUTFChars(env, s, NULL);
+    int ok = strcmp(u, want) == 0;
+    (*env)->ReleaseStringUTFChars(env, s, u);
+    return ok;
+}
+int ux_and_test_menu_item(int t, int j) {
+    if (!gMenuBtn) return 0;
+    JNIEnv *env = envNow();
+    return (*env)->CallIntMethod(env, gMenuBtn, (*env)->GetMethodID(env, gMenuCls, "item", "(II)I"), t, j);
+}
+
 /* ── the native table: UXTable (a ListView under a header of titles) ─── */
 void ux_and_set_table_hooks(void *rows, void *cell, void *cols, void *title, void *width,
                             void *multi, void *selset) {
@@ -2013,6 +2077,7 @@ JNIEXPORT void ANativeActivity_onCreate(ANativeActivity *activity,
     LOADC(gRunCls, "UXRun")
     LOADC(gDrawCls, "UXDrawView")
     LOADC(gTableCls, "UXTable")
+    LOADC(gMenuCls, "UXMenuButton")
 
     static const JNINativeMethod nb[] = {
         { "nativeFire", "(I)V", (void *)n_fire },
@@ -2038,6 +2103,8 @@ JNIEXPORT void ANativeActivity_onCreate(ANativeActivity *activity,
         { "nativeToggle", "(II)V", (void *)n_tbl_toggle },
     };
     (*env)->RegisterNatives(env, gTableCls, nt, 9);
+    static const JNINativeMethod nm[] = { { "nativeMenuPick", "(II)V", (void *)n_menu_pick } };
+    (*env)->RegisterNatives(env, gMenuCls, nm, 1);
     gRunInit = (*env)->GetMethodID(env, gRunCls, "<init>", "(I)V");
     if (!check(env, "RegisterNatives")) return;
 
