@@ -2025,7 +2025,19 @@ class Parser
         if (check((u16)tokFor))      return parseFor();
         if (check((u16)tokSwitch))   return parseSwitch();
         if (check((u16)tokReturn))   return parseReturn();
-        if (check((u16)tokDefer))    { advance(); Node* d = mk((u16)nkDefer); d.add(parseBlockOrStatement()); return d; }
+        // `defer` takes a BLOCK, as the reference requires: braces keep what
+        // is deferred unambiguous, and leave `defer <statement>` free to mean
+        // something later. A bare statement was accepted here (bug 596).
+        if (check((u16)tokDefer)) {
+            advance();
+            if (!check((u16)tokLBrace)) {
+                _error(String.withCString("'defer' wants a block: defer { ... }"));
+                return (Node*)0;
+            }
+            Node* d = mk((u16)nkDefer);
+            d.add(parseBlockOrStatement());
+            return d;
+        }
         if (check((u16)tokThrow))    { advance(); Node* t = mk((u16)nkThrow); t.add(parseExpression()); expect((u16)tokSemicolon); return t; }
         if (check((u16)tokTry))      return parseTry();
         if (check((u16)tokAsm))      return parseAsmBlock();
