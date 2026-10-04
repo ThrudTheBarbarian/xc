@@ -55,6 +55,7 @@ class Parser
     Array*  _blkScopes;     // of Map: name -> Map{"ty": spelling, "params": Array<Node>?}
     Array*  _blkFrames;     // capture frames for literals being parsed
     Array*  _blkClasses;    // synthesised impl ClassDecl nodes, creation order
+    u32     _parCounter;    // ParImpl$N numbering (par blocks)
     Map*    _blkBases;      // mangled -> Map{"ret": spelling, "params": Array<Node nkParam>}
     Map*    _blkImplBase;   // impl name -> base name
     Map*    _blkFnRet;      // function name -> return spelling
@@ -86,6 +87,7 @@ class Parser
         _blkScopes  = new Array();
         _blkFrames  = new Array();
         _blkClasses = new Array();
+        _parCounter = (u32)0;
         _blkBases   = new Map();
         _blkImplBase = new Map();
         _blkFnRet   = new Map();
@@ -2018,8 +2020,363 @@ class Parser
         return stmtNode;
     }
 
+    // `par [name] (:reduce(op var))* [:fast] { body }`, the data-parallel block.
+    Node* parsePar(void)
+    {
+        advance(); // 'par'
+        Node* p = mk((u16)nkPar);
+        if (check((u16)tokIdentifier)) {
+            p.setName(cur().value());
+            advance();
+        }
+        u32 flags = (u32)0;
+        while (check((u16)tokColon)) {
+            advance();
+            if (!check((u16)tokIdentifier)) {
+                _error(String.withCString("expected a decorator name after ':'"));
+                return (Node*)0;
+            }
+            String* dec = cur().value();
+            advance();
+            if (dec.equals(String.withCString("fast"))) {
+                flags = flags | (u32)1;
+                continue;
+            }
+            if (!dec.equals(String.withCString("reduce"))) {
+                String* m = String.withCString("'par' has no decorator ':");
+                m.append(dec);
+                m.appendCString("' (it takes :reduce(op var) and :fast)");
+                _error(m);
+                return (Node*)0;
+            }
+            expect((u16)tokLParen);
+            String* op = (String*)0;
+            if (check((u16)tokPlus)) op = String.withCString("+");
+            else if (check((u16)tokStar)) op = String.withCString("*");
+            else if (check((u16)tokAmpersand)) op = String.withCString("&");
+            else if (check((u16)tokPipe)) op = String.withCString("|");
+            else if (check((u16)tokCaret)) op = String.withCString("^");
+            else if (check((u16)tokIdentifier)
+                     && (cur().value().equals(String.withCString("min"))
+                         || cur().value().equals(String.withCString("max"))))
+                op = cur().value();
+            if (op == (String*)0) {
+                _error(String.withCString("':reduce' wants an operator (+ * & | ^ min max) and a variable: :reduce(+ sum)"));
+                return (Node*)0;
+            }
+            advance();
+            if (!check((u16)tokIdentifier)) {
+                _error(String.withCString("':reduce' wants an operator (+ * & | ^ min max) and a variable: :reduce(+ sum)"));
+                return (Node*)0;
+            }
+            Node* r = mk((u16)nkParReduce);
+            r.setOp(op);
+            r.setName(cur().value());
+            advance();
+            expect((u16)tokRParen);
+            p.add(r);
+        }
+        p.setFlags(flags);
+        if (!check((u16)tokLBrace)) {
+            _error(String.withCString("'par' wants a block: par { ... }"));
+            return (Node*)0;
+        }
+        // The body is parsed inside a capture frame, as a block literal's is;
+        // writes to bare names are recorded too (parNoteWrite). As the reference.
+        Map* frame = new Map();
+        frame.set((Hashable*)String.withCString("depth"), (Object*)Number.with(_blkScopes.count()));
+        frame.set((Hashable*)String.withCString("names"), (Object*)new Array());
+        frame.set((Hashable*)String.withCString("types"), (Object*)new Map());
+        frame.set((Hashable*)String.withCString("wbnames"), (Object*)new Array());
+        frame.set((Hashable*)String.withCString("par"), (Object*)Number.with((u32)1));
+        frame.set((Hashable*)String.withCString("written"), (Object*)new Set());
+        _blkFrames.add((Object*)frame);
+        blkPushScope();
+        Node* body = parseBlock();
+        blkPopScope();
+        _blkFrames.removeAt(_blkFrames.count() - (u32)1);
+        if (body == 0) return (Node*)0;
+        Array* reds = new Array();
+        for (u32 i = (u32)0; i < p.kidCount(); i = i + (u32)1) reds.add((Object*)p.kid(i));
+        return parDesugar(body, frame, p.name(), reds);
+    }
+
+    // A write to a bare name inside a `par` body, recorded on the par frame.
+    void parNoteWrite(Node* t)
+    {
+        if (t == 0 || _blkFrames.count() == (u32)0) return;
+        Map* frame = (Map*)_blkFrames.get(_blkFrames.count() - (u32)1);
+        if (frame.get((Hashable*)String.withCString("par")) == 0) return;
+        if (t.kind() != (u16)nkIdent) return;
+        ((Set*)frame.get((Hashable*)String.withCString("written"))).add((Hashable*)t.name());
+    }
+
+    // ── par → ParChunk subclass + run (the reference's parDesugarBody) ──
+    Node* parIdent(String* n) { return mkNamed((u16)nkIdent, String.withString(n)); }
+    Node* parMember(String* b, String* m)
+    {
+        Node* n = mkNamed((u16)nkMember, String.withString(m));
+        n.add(parIdent(b));
+        return n;
+    }
+    Node* parStmt(Node* e) { Node* s = mk((u16)nkExprStatement); s.add(e); return s; }
+    Node* parAssign(Node* l, Node* r)
+    {
+        Node* a = mk((u16)nkAssign);
+        a.setOp(String.withCString("="));
+        a.add(l); a.add(r);
+        return parStmt(a);
+    }
+    Node* parCast(String* t, Node* e) { Node* c = mkNamed((u16)nkCast, String.withString(t)); c.add(e); return c; }
+    Node* parInt(i64 v) { Node* n = mk((u16)nkInt); n.setNum(v); return n; }
+    Node* parBin(string op, Node* l, Node* r)
+    {
+        Node* b = mk((u16)nkBinary);
+        b.setOp(String.withCString(op));
+        b.add(l); b.add(r);
+        return b;
+    }
+    bool parIdem(String* op)
+    {
+        return Parser._same(op, "&") || Parser._same(op, "|") || Parser._same(op, "min") || Parser._same(op, "max");
+    }
+    // A reduction's starting value: the identity for + * ^, else the
+    // variable's current value (the idempotent & | min max).
+    Node* parStart(String* op, String* ty, String* var)
+    {
+        if (Parser._same(op, "+") || Parser._same(op, "^")) return parCast(ty, parInt((i64)0));
+        if (Parser._same(op, "*")) return parCast(ty, parInt((i64)1));
+        return parIdent(var);
+    }
+    // `dst = dst OP src`, or for min / max `if (src < dst) dst = src`.
+    Node* parFold(String* op, Node* dst, Node* dst2, Node* src)
+    {
+        if (Parser._same(op, "min") || Parser._same(op, "max")) {
+            Node* n = mk((u16)nkIf);
+            n.add(parBin(Parser._same(op, "min") ? "<" : ">", src, dst2));
+            Node* then = mk((u16)nkBlock);
+            then.add(parAssign(dst, src));
+            n.add(then);
+            return n;
+        }
+        Node* b = mk((u16)nkBinary);
+        b.setOp(String.withString(op));
+        b.add(dst2); b.add(src);
+        return parAssign(dst, b);
+    }
+
+    Node* parDesugar(Node* body, Map* frame, String* parName, Array* reds)
+    {
+        String* label = String.withCString("par");
+        if (parName != 0) { label.appendCString(" "); label.append(parName); }
+        // The loop form: exactly one ascending `for (T i in a..b)`.
+        Node* loop = (body.kidCount() == (u32)1 && body.kid((u32)0).kind() == (u16)nkForCStyle) ? body.kid((u32)0) : (Node*)0;
+        Node* iv = (Node*)0;
+        Node* cond = (Node*)0;
+        Node* step = (Node*)0;
+        if (loop != 0 && loop.kidCount() == (u32)4) {
+            if (loop.kid((u32)0).kidCount() > (u32)0) iv = loop.kid((u32)0).kid((u32)0);
+            if (loop.kid((u32)1).kidCount() > (u32)0) cond = loop.kid((u32)1).kid((u32)0);
+            if (loop.kid((u32)2).kidCount() > (u32)0) step = loop.kid((u32)2).kid((u32)0);
+        }
+        bool ok = iv != 0 && iv.kind() == (u16)nkVariableDecl && iv.kidCount() > (u32)0 && iv.op() != 0
+            && cond != 0 && cond.kind() == (u16)nkBinary
+            && (Parser._same(cond.op(), "<") || Parser._same(cond.op(), "<="))
+            && cond.kid((u32)0).kind() == (u16)nkIdent && cond.kid((u32)0).name().equals(iv.name())
+            && step != 0 && step.kind() == (u16)nkAssign && Parser._same(step.op(), "+=")
+            && step.kid((u32)1).kind() == (u16)nkInt && step.kid((u32)1).num() == (i64)1;
+        if (!ok) {
+            _error(String.withFormat("a '%s' block's body is one ascending loop: par { for (T i in a..b) { ... } }", label.cString()));
+            return (Node*)0;
+        }
+        if (!isTypeName(String.withCString("ParChunk"))) {
+            _error(String.withCString("a 'par' block needs its runtime: #import \"Par.xc\""));
+            return (Node*)0;
+        }
+        String* ivT = iv.op();
+        Array* frameNames = (Array*)frame.get((Hashable*)String.withCString("names"));
+        Map* frameTypes = (Map*)frame.get((Hashable*)String.withCString("types"));
+        Set* written = (Set*)frame.get((Hashable*)String.withCString("written"));
+        Map* redTypes = new Map();
+        for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1) {
+            Node* r = (Node*)reds.get(i);
+            Object* t = frameTypes.get((Hashable*)r.name());
+            if (t == 0) t = (Object*)blkTyOf(blkLookup(r.name(), (u32*)0));
+            if (t == 0) {
+                _error(String.withFormat("':reduce(%s %s)': '%s' is not a local declared before the '%s' block",
+                                         r.op().cString(), r.name().cString(), r.name().cString(), label.cString()));
+                return (Node*)0;
+            }
+            redTypes.set((Hashable*)r.name(), t);
+        }
+        Array* caps = new Array();
+        for (u32 i = (u32)0; i < frameNames.count(); i = i + (u32)1) {
+            String* cn = (String*)frameNames.get(i);
+            if (redTypes.get((Hashable*)cn) == 0) caps.add((Object*)cn);
+        }
+        for (u32 i = (u32)0; i < caps.count(); i = i + (u32)1) {
+            String* cn = (String*)caps.get(i);
+            String* t = (String*)frameTypes.get((Hashable*)cn);
+            if (written.contains((Hashable*)cn) && t.indexOfByte((u8)'[') == (u32)$FFFFFFFF) {
+                _error(String.withFormat("a '%s' block cannot assign to '%s': every work item has its own copy of it. Make it a reduction (:reduce(+ %s)) or write into an array",
+                                         label.cString(), cn.cString(), cn.cString()));
+                return (Node*)0;
+            }
+        }
+
+        u32 counter = _parCounter;
+        _parCounter = _parCounter + (u32)1;
+        String* implName = String.withCString("ParImpl$");
+        implName.append(String.withU32(counter));
+        _typeNames.add((Hashable*)String.withString(implName));
+        String* implPtr = String.withString(implName); implPtr.appendByte((u8)'*');
+
+        Node* cls = mkNamed((u16)nkClassDecl, implName);
+        cls.setOp(String.withCString("ParChunk"));
+        for (u32 i = (u32)0; i < caps.count(); i = i + (u32)1) {
+            String* cn = (String*)caps.get(i);
+            String* t = String.withString((String*)frameTypes.get((Hashable*)cn));
+            u32 lb = t.indexOfByte((u8)'[');
+            if (lb != (u32)$FFFFFFFF) { t = t.substringBytes((u32)0, lb); t.appendByte((u8)'*'); }
+            Node* ivn = mkNamed((u16)nkVariableDecl, cn);
+            ivn.setOp(t);
+            cls.add(ivn);
+        }
+        for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1) {
+            Node* r = (Node*)reds.get(i);
+            Node* ivn = mkNamed((u16)nkVariableDecl, r.name());
+            ivn.setOp((String*)redTypes.get((Hashable*)r.name()));
+            cls.add(ivn);
+        }
+        // run(): the loop over [lo, hi), the body verbatim.
+        {
+            Node* m = mkNamed((u16)nkMethodDecl, String.withCString("run"));
+            m.setOp(String.withCString("void"));
+            Node* f = mk((u16)nkForCStyle);
+            Node* im = mk((u16)nkMarkerInit);
+            Node* decl = mkNamed((u16)nkVariableDecl, iv.name());
+            decl.setOp(ivT);
+            decl.add(parCast(ivT, parIdent(String.withCString("lo"))));
+            im.add(decl);
+            f.add(im);
+            Node* cm = mk((u16)nkMarkerCond);
+            cm.add(parBin("<", parIdent(iv.name()), parCast(ivT, parIdent(String.withCString("hi")))));
+            f.add(cm);
+            f.add(loop.kid((u32)2));
+            f.add(loop.kid((u32)3));
+            Node* rb = mk((u16)nkBlock);
+            rb.add(f);
+            m.add(rb);
+            cls.add(m);
+        }
+        // copyChunk(): a fresh chunk with the same captures, reductions at their start.
+        {
+            Node* m = mkNamed((u16)nkMethodDecl, String.withCString("copyChunk"));
+            m.setOp(String.withCString("ParChunk*"));
+            Node* b = mk((u16)nkBlock);
+            Node* t = mkNamed((u16)nkVariableDecl, String.withCString("t"));
+            t.setOp(implPtr);
+            Node* nw = mkNamed((u16)nkNew, implName);
+            nw.setNum((i64)0);
+            t.add(nw);
+            b.add(t);
+            for (u32 i = (u32)0; i < caps.count(); i = i + (u32)1) {
+                String* cn = (String*)caps.get(i);
+                b.add(parAssign(parMember(String.withCString("t"), cn), parIdent(cn)));
+            }
+            for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1) {
+                Node* r = (Node*)reds.get(i);
+                b.add(parAssign(parMember(String.withCString("t"), r.name()),
+                                parStart(r.op(), (String*)redTypes.get((Hashable*)r.name()), r.name())));
+            }
+            Node* ret = mk((u16)nkReturn);
+            ret.add(parIdent(String.withCString("t")));
+            b.add(ret);
+            m.add(b);
+            cls.add(m);
+        }
+        // merge(other): fold another chunk's reductions into this one's.
+        {
+            Node* m = mkNamed((u16)nkMethodDecl, String.withCString("merge"));
+            m.setOp(String.withCString("void"));
+            Node* p = mkNamed((u16)nkParam, String.withCString("other"));
+            p.setOp(String.withCString("ParChunk*"));
+            m.add(p);
+            Node* b = mk((u16)nkBlock);
+            Node* o = mkNamed((u16)nkVariableDecl, String.withCString("o"));
+            o.setOp(implPtr);
+            o.add(parCast(implPtr, parIdent(String.withCString("other"))));
+            b.add(o);
+            for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1) {
+                Node* r = (Node*)reds.get(i);
+                b.add(parFold(r.op(), parIdent(r.name()), parIdent(r.name()),
+                              parMember(String.withCString("o"), r.name())));
+            }
+            m.add(b);
+            cls.add(m);
+        }
+        _blkClasses.add((Object*)cls);
+
+        // The site.
+        String* pv = String.withCString("$par");
+        pv.append(String.withU32(counter));
+        Node* site = mk((u16)nkBlock);
+        Node* pd = mkNamed((u16)nkVariableDecl, pv);
+        pd.setOp(implPtr);
+        Node* nw = mkNamed((u16)nkNew, implName);
+        nw.setNum((i64)0);
+        pd.add(nw);
+        site.add(pd);
+        for (u32 i = (u32)0; i < caps.count(); i = i + (u32)1) {
+            String* cn = (String*)caps.get(i);
+            String* t = (String*)frameTypes.get((Hashable*)cn);
+            Node* v = parIdent(cn);
+            if (t.indexOfByte((u8)'[') != (u32)$FFFFFFFF) {
+                Node* sub = mk((u16)nkSubscript);
+                sub.add(parIdent(cn));
+                sub.add(parInt((i64)0));
+                Node* addr = mkNamed((u16)nkUnary, String.withCString("&"));
+                addr.setOp(String.withCString("&"));
+                addr.add(sub);
+                v = addr;
+            }
+            site.add(parAssign(parMember(pv, cn), v));
+            blkNoteUse(cn);
+        }
+        for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1) {
+            Node* r = (Node*)reds.get(i);
+            site.add(parAssign(parMember(pv, r.name()),
+                               parStart(r.op(), (String*)redTypes.get((Hashable*)r.name()), r.name())));
+            blkNoteUse(r.name());
+        }
+        Node* hi = cond.kid((u32)1);
+        if (Parser._same(cond.op(), "<=")) hi = parBin("+", parCast(String.withCString("i64"), hi), parInt((i64)1));
+        Node* call = mkNamed((u16)nkMethodCall, String.withCString("run"));
+        call.add(parIdent(String.withCString("Par")));
+        call.add(parIdent(pv));
+        call.add(parCast(String.withCString("i64"), iv.kid((u32)0)));
+        call.add(parCast(String.withCString("i64"), hi));
+        call.setNum((i64)3);
+        site.add(parStmt(call));
+        for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1) {
+            Node* r = (Node*)reds.get(i);
+            if (parIdem(r.op())) site.add(parAssign(parIdent(r.name()), parMember(pv, r.name())));
+            else site.add(parFold(r.op(), parIdent(r.name()), parIdent(r.name()), parMember(pv, r.name())));
+        }
+        return site;
+    }
+
     Node* parseStatementInner(void)
     {
+        // `par` is a CONTEXTUAL keyword — library code uses it as a name
+        // (`u32* par = …; par[i] = …`) — so it starts a block only when what
+        // follows can only be one: `{`, a decorator `:`, or a name and then
+        // either. As the reference.
+        if (check((u16)tokIdentifier) && cur().value().equals(String.withCString("par"))
+            && (checkAt((u32)1, (u16)tokLBrace) || checkAt((u32)1, (u16)tokColon)
+                || (checkAt((u32)1, (u16)tokIdentifier)
+                    && (checkAt((u32)2, (u16)tokLBrace) || checkAt((u32)2, (u16)tokColon)))))
+            return parsePar();
         if (check((u16)tokIf))       return parseIf();
         if (check((u16)tokWhile))    return parseWhile();
         if (check((u16)tokFor))      return parseFor();
@@ -2802,6 +3159,7 @@ class Parser
                     if (lhs.kind() == (u16)nkIdent) blkMarkHoldsWb(lhs.name(), rhs);
                     else _error(String.withCString("a block with `block:` captures cannot be stored beyond its frame — its write-back targets a local slot. Write results into an object instead"));
                 }
+                parNoteWrite(lhs);
                 a.add(lhs); a.add(rhs);
                 lhs = a;
                 continue;
@@ -2858,7 +3216,9 @@ class Parser
             // in the dump, not in the parse.
             if (isPointerSigil(op.type())) n.setOp(String.withCString("*"));
             else                           n.setOp(op.value());
-            n.add(parseUnary());
+            Node* opnd = parseUnary();
+            if (op.type() == (u16)tokPlusPlus || op.type() == (u16)tokMinusMinus) parNoteWrite(opnd);
+            n.add(opnd);
             return n;
         }
         return parsePostfixFrom(parsePrimary());
@@ -2882,6 +3242,7 @@ class Parser
                 Token* op = advance();
                 Node* n = mk((u16)nkPostfix);
                 n.setOp(op.value());
+                parNoteWrite(node);
                 n.add(node);
                 node = n;
             } else if (t == (u16)tokLBracket) {

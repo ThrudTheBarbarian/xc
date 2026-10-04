@@ -61,6 +61,8 @@ enum NodeKind = {
     nkThrow,
     nkTry,
     nkCatch,
+    nkPar,        // parse-time holder for a par header (name, reductions); never reaches the AST
+    nkParReduce,  // one :reduce in it — op() the operator, name() the variable
 
     nkBinary,
     nkUnary,

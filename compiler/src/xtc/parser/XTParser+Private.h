@@ -77,6 +77,12 @@ NS_ASSUME_NONNULL_BEGIN
 - (BOOL)blkIsWbValue:(nullable XTASTNode*)e;
 - (void)blkMarkHoldsWb:(NSString*)name fromInit:(nullable XTASTNode*)init;
 - (NSMutableArray*)blkFrames;
+- (void)parNoteWriteTarget:(nullable XTASTNode*)target;
+- (nullable XTASTNode*)parDesugarBody:(XTBlockNode*)body
+                                 frame:(NSDictionary*)frame
+                                  name:(nullable NSString*)name
+                            reductions:(NSArray<NSArray<NSString*>*>*)reductions
+                                    at:(XTSourceLocation*)loc;
 - (NSMutableArray*)blkScopes;
 - (void)blkBindAuto:(NSString*)name fromInit:(nullable XTASTNode*)init;
 - (NSMutableDictionary*)blkState;

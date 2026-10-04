@@ -2315,6 +2315,18 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
     {
     XTToken* cur = [self currentToken];
 
+    // `par` is a CONTEXTUAL keyword — library code uses it as a name
+    // (`u32* par = …; par[i] = …`) — so it starts a block only when what
+    // follows can only be one: `{`, a decorator `:`, or a name and then either.
+    if (cur.type == XTTokenIdentifier && [cur.value isEqualToString:@"par"])
+        {
+        XTToken* t1 = [self peekToken:1];
+        XTToken* t2 = [self peekToken:2];
+        if (t1.type == XTTokenLBrace || t1.type == XTTokenColon
+            || (t1.type == XTTokenIdentifier && (t2.type == XTTokenLBrace || t2.type == XTTokenColon)))
+            return [self parsePar];
+        }
+
     switch (cur.type)
         {
     case XTTokenIf:
@@ -2863,6 +2875,100 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
 |* `defer` followed by a bare statement free to mean something later.
 |* @return  An XTDeferNode.
 \****************************************************************************/
+/****************************************************************************\
+|* Parse `par [name] (:reduce(op var))* [:fast] { body }`, the data-parallel
+|* block. The reduction operator is one of + * & | ^ min max.
+\****************************************************************************/
+- (nullable XTASTNode*)parsePar
+    {
+    XTSourceLocation* loc = [self currentLocation];
+    [self advance]; // consume 'par'
+    NSString* name = nil;
+    if ([self check:XTTokenIdentifier])
+        {
+        name = [self currentToken].value;
+        [self advance];
+        }
+    NSMutableArray<NSArray<NSString*>*>* reductions = [NSMutableArray array];
+    BOOL fast = NO;
+    while ([self check:XTTokenColon])
+        {
+        [self advance];
+        XTToken* dec = [self expect:XTTokenIdentifier];
+        if (!dec)
+            return nil;
+        if ([dec.value isEqualToString:@"fast"])
+            {
+            fast = YES;
+            continue;
+            }
+        if (![dec.value isEqualToString:@"reduce"])
+            {
+            [_diagnostics emitError:[NSString stringWithFormat:@"'par' has no decorator ':%@' "
+                                                                 "(it takes :reduce(op var) and :fast)",
+                                                               dec.value]
+                                 at:dec.location];
+            return nil;
+            }
+        [self expect:XTTokenLParen];
+        XTToken* opTok = [self currentToken];
+        NSString* op = nil;
+        switch (opTok.type)
+            {
+        case XTTokenPlus: op = @"+"; break;
+        case XTTokenStar: op = @"*"; break;
+        case XTTokenAmpersand: op = @"&"; break;
+        case XTTokenPipe: op = @"|"; break;
+        case XTTokenCaret: op = @"^"; break;
+        case XTTokenIdentifier:
+            if ([opTok.value isEqualToString:@"min"] || [opTok.value isEqualToString:@"max"])
+                op = opTok.value;
+            break;
+        default:
+            break;
+            }
+        if (!op)
+            {
+            [_diagnostics emitError:@"':reduce' wants an operator (+ * & | ^ min max) and a "
+                                     "variable: :reduce(+ sum)"
+                                 at:opTok.location];
+            return nil;
+            }
+        [self advance];
+        XTToken* var = [self expect:XTTokenIdentifier];
+        [self expect:XTTokenRParen];
+        if (!var)
+            return nil;
+        [reductions addObject:@[ op, var.value ]];
+        }
+    if (![self checkBlockOpen])
+        {
+        [_diagnostics emitError:@"'par' wants a block: par { ... }" at:[self currentLocation]];
+        return nil;
+        }
+    // The body is parsed inside a capture frame, as a block literal's is, so
+    // the names it uses from outside are known; writes to bare names are
+    // recorded too (parNoteWriteTarget).
+    NSMutableDictionary* frame = [NSMutableDictionary dictionary];
+    frame[@"depth"] = @([self blkScopes].count);
+    frame[@"names"] = [NSMutableArray array];
+    frame[@"types"] = [NSMutableDictionary dictionary];
+    frame[@"bases"] = [NSMutableDictionary dictionary];
+    frame[@"wb"] = [NSMutableSet set];
+    frame[@"selfName"] = [NSNull null];
+    frame[@"par"] = @YES;
+    frame[@"written"] = [NSMutableSet set];
+    [[self blkFrames] addObject:frame];
+    [self blkPushScope];
+    XTBlockNode* body = (XTBlockNode*)[self parseBlock];
+    [self blkPopScope];
+    [[self blkFrames] removeLastObject];
+    if (!body)
+        return nil;
+    (void)fast; // :fast relaxes GPU maths (phase 2); the CPU path is unchanged
+    return [self parDesugarBody:body frame:frame name:name reductions:reductions at:loc];
+    }
+
 - (nullable XTASTNode*)parseDefer
     {
     XTSourceLocation* loc = [self currentLocation];

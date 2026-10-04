@@ -182,6 +182,7 @@ static XTOpInfo operatorInfo(XTTokenType type)
                                              at:op.location];
                     }
                 }
+            [self parNoteWriteTarget:lhs];
             lhs = [[XTAssignExprNode alloc] initWithOp:aop lhs:lhs rhs:rhs location:op.location];
             continue;
             }
@@ -354,12 +355,16 @@ static XTOpInfo operatorInfo(XTTokenType type)
     if (cur.type == XTTokenPlusPlus)
         {
         [self advance];
-        return [[XTUnaryExprNode alloc] initWithOp:XTUnaryOpPreInc operand:[self parseUnary] location:cur.location];
+        XTASTNode* opnd = [self parseUnary];
+        [self parNoteWriteTarget:opnd];
+        return [[XTUnaryExprNode alloc] initWithOp:XTUnaryOpPreInc operand:opnd location:cur.location];
         }
     if (cur.type == XTTokenMinusMinus)
         {
         [self advance];
-        return [[XTUnaryExprNode alloc] initWithOp:XTUnaryOpPreDec operand:[self parseUnary] location:cur.location];
+        XTASTNode* opnd = [self parseUnary];
+        [self parNoteWriteTarget:opnd];
+        return [[XTUnaryExprNode alloc] initWithOp:XTUnaryOpPreDec operand:opnd location:cur.location];
         }
     // Byte-extraction (primarily for asm context but allowed in expressions)
     if (cur.type == XTTokenLess)
@@ -410,11 +415,13 @@ static XTOpInfo operatorInfo(XTTokenType type)
         if (cur.type == XTTokenPlusPlus)
             {
             [self advance];
+            [self parNoteWriteTarget:base];
             base = [[XTPostfixExprNode alloc] initWithOp:XTPostfixOpInc operand:base location:cur.location];
             }
         else if (cur.type == XTTokenMinusMinus)
             {
             [self advance];
+            [self parNoteWriteTarget:base];
             base = [[XTPostfixExprNode alloc] initWithOp:XTPostfixOpDec operand:base location:cur.location];
             }
         else if (cur.type == XTTokenLBracket)

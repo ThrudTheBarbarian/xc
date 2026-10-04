@@ -877,6 +877,281 @@ static NSString* blkMangleFragment(XTType* ty)
                                           at:loc];
     }
 
-@end
+
 
 NS_ASSUME_NONNULL_END
+
+#pragma mark - par blocks (CPU path)
+
+/****************************************************************************\
+|* A write to a bare name inside a `par` body: recorded on the par frame, so a
+|* captured scalar the body assigns can be refused — each work item has its
+|* own copy, and the write would vanish.
+\****************************************************************************/
+- (void)parNoteWriteTarget:(nullable XTASTNode*)target
+    {
+    NSMutableDictionary* frame = [self blkFrames].lastObject;
+    if (!frame[@"par"] || ![target isKindOfClass:[XTIdentifierNode class]])
+        return;
+    [frame[@"written"] addObject:((XTIdentifierNode*)target).identName];
+    }
+
+/****************************************************************************\
+|* `par [name] (:reduce(op var))* { for (T i in a..b) { … } }` → a ParChunk
+|* subclass and its run, the way a block literal becomes a class
+|* (private: docs/Design/par-phase1-plan.md, P3). The class's ivars are the
+|* captures (a fixed array as a pointer to its first element: `a[i]` reads the
+|* same through it) and the reduction variables; run() is the loop over
+|* [lo, hi); copyChunk() and merge() serve Par.run (support/generic/lib/Par.xc).
+|* The site becomes: make the chunk, Par.run it, fold the reductions back.
+\****************************************************************************/
+- (nullable XTASTNode*)parDesugarBody:(XTBlockNode*)body
+                                 frame:(NSDictionary*)frame
+                                  name:(nullable NSString*)parName
+                            reductions:(NSArray<NSArray<NSString*>*>*)reductions
+                                    at:(XTSourceLocation*)loc
+    {
+    NSString* label = parName ? [NSString stringWithFormat:@"par %@", parName] : @"par";
+    // ── the loop form: exactly one ascending `for (T i in a..b)` ──
+    XTForCStyleNode* loop = body.statements.count == 1 && [body.statements[0] isKindOfClass:[XTForCStyleNode class]]
+                                ? (XTForCStyleNode*)body.statements[0] : nil;
+    XTVariableDeclNode* iv = [loop.loopInit isKindOfClass:[XTVariableDeclNode class]]
+                                 ? (XTVariableDeclNode*)loop.loopInit : nil;
+    XTBinaryExprNode* cond = [loop.condition isKindOfClass:[XTBinaryExprNode class]]
+                                 ? (XTBinaryExprNode*)loop.condition : nil;
+    XTAssignExprNode* step = [loop.increment isKindOfClass:[XTAssignExprNode class]]
+                                 ? (XTAssignExprNode*)loop.increment : nil;
+    BOOL ok = loop && iv && iv.initialiser && iv.declaredType && cond
+              && (cond.op == XTBinaryOpLt || cond.op == XTBinaryOpLe)
+              && [cond.left isKindOfClass:[XTIdentifierNode class]]
+              && [((XTIdentifierNode*)cond.left).identName isEqualToString:iv.varName]
+              && step && step.assignOp == XTAssignOpAdd
+              && [step.rhs isKindOfClass:[XTLiteralIntNode class]] && ((XTLiteralIntNode*)step.rhs).intValue == 1;
+    if (!ok)
+        {
+        [self.diagnostics emitError:[NSString stringWithFormat:@"a '%@' block's body is one ascending loop: "
+                                                                 "par { for (T i in a..b) { ... } }",
+                                                               label]
+                                 at:loc];
+        return nil;
+        }
+    if (![self.typeTable typeForName:@"ParChunk"])
+        {
+        [self.diagnostics emitError:@"a 'par' block needs its runtime: #import \"Par.xc\"" at:loc];
+        return nil;
+        }
+    XTType* ivT = iv.declaredType;
+
+    // ── captures, reductions, writes ──
+    NSArray<NSString*>* frameNames = frame[@"names"];
+    NSDictionary* frameTypes = frame[@"types"];
+    NSSet* written = frame[@"written"];
+    NSMutableDictionary<NSString*, NSArray<NSString*>*>* redByVar = [NSMutableDictionary dictionary];
+    NSMutableDictionary<NSString*, XTType*>* redTypes = [NSMutableDictionary dictionary];
+    for (NSArray<NSString*>* r in reductions)
+        {
+        NSUInteger d = 0;
+        NSDictionary* info = [self blkLookup:r[1] depth:&d];
+        XTType* t = frameTypes[r[1]] ?: (info ? info[@"type"] : nil);
+        if (![t isKindOfClass:[XTType class]])
+            {
+            [self.diagnostics emitError:[NSString stringWithFormat:@"':reduce(%@ %@)': '%@' is not a local "
+                                                                     "declared before the '%@' block",
+                                                                   r[0], r[1], r[1], label]
+                                     at:loc];
+            return nil;
+            }
+        redByVar[r[1]] = r;
+        redTypes[r[1]] = t;
+        }
+    NSMutableArray<NSString*>* caps = [NSMutableArray array];
+    for (NSString* cn in frameNames)
+        if (!redByVar[cn])
+            [caps addObject:cn];
+    for (NSString* cn in caps)
+        {
+        XTType* t = frameTypes[cn];
+        if ([written containsObject:cn] && ![t isKindOfClass:[XTArrayType class]])
+            {
+            [self.diagnostics emitError:[NSString stringWithFormat:@"a '%@' block cannot assign to '%@': every work "
+                                                                     "item has its own copy of it. Make it a reduction "
+                                                                     "(:reduce(+ %@)) or write into an array",
+                                                                   label, cn, cn]
+                                     at:loc];
+            return nil;
+            }
+        }
+
+    // ── the class ──
+    NSUInteger counter = [self.blkState[@"parCounter"] unsignedIntegerValue];
+    self.blkState[@"parCounter"] = @(counter + 1);
+    NSString* implName = [NSString stringWithFormat:@"ParImpl$%lu", (unsigned long)counter];
+    XTType* implMarker = [[XTType alloc] initWithKind:XTTypeKindClass displayName:implName];
+    [self.typeTable registerType:implMarker forName:implName];
+    XTType* implPtr = [XTPointerType pointerToType:implMarker];
+    XTType* chunkPtr = [XTPointerType pointerToType:[self.typeTable typeForName:@"ParChunk"]];
+    XTType* i64T = [self.typeTable typeForName:@"i64"];
+
+    XTASTNode* (^ident)(NSString*) = ^XTASTNode*(NSString* n) {
+      return [[XTIdentifierNode alloc] initWithName:n location:loc];
+    };
+    XTASTNode* (^member)(NSString*, NSString*) = ^XTASTNode*(NSString* b, NSString* m) {
+      return [[XTMemberAccessNode alloc] initWithBase:ident(b) memberName:m isArrow:NO location:loc];
+    };
+    XTASTNode* (^stmt)(XTASTNode*) = ^XTASTNode*(XTASTNode* e) {
+      return [[XTExpressionStatementNode alloc] initWithExpression:e location:loc];
+    };
+    XTASTNode* (^assign)(XTASTNode*, XTASTNode*) = ^XTASTNode*(XTASTNode* l, XTASTNode* r) {
+      return stmt([[XTAssignExprNode alloc] initWithOp:XTAssignOpAssign lhs:l rhs:r location:loc]);
+    };
+    XTASTNode* (^cast)(XTType*, XTASTNode*) = ^XTASTNode*(XTType* t, XTASTNode* e) {
+      return [[XTCastExprNode alloc] initWithType:t operand:e location:loc];
+    };
+    // A reduction's starting value: the identity for + * ^, and for the
+    // idempotent & | min max the variable's current value (min(x, x) == x).
+    XTASTNode* (^startOf)(NSArray<NSString*>*, XTASTNode*) = ^XTASTNode*(NSArray<NSString*>* r, XTASTNode* cur) {
+      NSString* op = r[0];
+      XTType* t = redTypes[r[1]];
+      if ([op isEqualToString:@"+"] || [op isEqualToString:@"^"])
+          return cast(t, [[XTLiteralIntNode alloc] initWithValue:0 location:loc]);
+      if ([op isEqualToString:@"*"])
+          return cast(t, [[XTLiteralIntNode alloc] initWithValue:1 location:loc]);
+      return cur;
+    };
+    // `dst = dst OP src` for + * & | ^; for min / max `if (src < dst) dst = src`.
+    XTASTNode* (^fold)(NSString*, XTASTNode*, XTASTNode*, XTASTNode*) =
+        ^XTASTNode*(NSString* op, XTASTNode* dst, XTASTNode* dst2, XTASTNode* src) {
+          if ([op isEqualToString:@"min"] || [op isEqualToString:@"max"])
+              {
+              XTASTNode* c = [[XTBinaryExprNode alloc] initWithOp:([op isEqualToString:@"min"] ? XTBinaryOpLt : XTBinaryOpGt)
+                                                             left:src
+                                                            right:dst2
+                                                         location:loc];
+              XTBlockNode* then = [[XTBlockNode alloc] initWithStatements:@[ assign(dst, src) ] location:loc];
+              return [[XTIfNode alloc] initWithCondition:c thenBlock:then elseBlock:nil location:loc];
+              }
+          XTBinaryOp bop = [op isEqualToString:@"+"] ? XTBinaryOpAdd
+                           : [op isEqualToString:@"*"] ? XTBinaryOpMul
+                           : [op isEqualToString:@"&"] ? XTBinaryOpBitAnd
+                           : [op isEqualToString:@"|"] ? XTBinaryOpBitOr
+                                                       : XTBinaryOpBitXor;
+          return assign(dst, [[XTBinaryExprNode alloc] initWithOp:bop left:dst2 right:src location:loc]);
+        };
+
+    NSMutableArray<XTVariableDeclNode*>* ivars = [NSMutableArray array];
+    for (NSString* cn in caps)
+        {
+        XTType* t = frameTypes[cn];
+        if ([t isKindOfClass:[XTArrayType class]])
+            t = [XTPointerType pointerToType:((XTArrayType*)t).elementType];
+        [ivars addObject:[[XTVariableDeclNode alloc] initWithName:cn type:t initialiser:nil location:loc]];
+        }
+    for (NSArray<NSString*>* r in reductions)
+        [ivars addObject:[[XTVariableDeclNode alloc] initWithName:r[1] type:redTypes[r[1]] initialiser:nil location:loc]];
+
+    NSMutableArray<XTMethodDeclNode*>* methods = [NSMutableArray array];
+    // run(): the loop over [lo, hi), the body verbatim.
+        {
+        XTVariableDeclNode* init = [[XTVariableDeclNode alloc] initWithName:iv.varName
+                                                                       type:ivT
+                                                                initialiser:cast(ivT, ident(@"lo"))
+                                                                   location:loc];
+        XTASTNode* c = [[XTBinaryExprNode alloc] initWithOp:XTBinaryOpLt
+                                                       left:ident(iv.varName)
+                                                      right:cast(ivT, ident(@"hi"))
+                                                   location:loc];
+        XTForCStyleNode* f = [[XTForCStyleNode alloc] initWithLoopInit:init
+                                                             condition:c
+                                                             increment:loop.increment
+                                                                  body:loop.body
+                                                              location:loc];
+        XTBlockNode* rb = [[XTBlockNode alloc] initWithStatements:@[ f ] location:loc];
+        [methods addObject:[[XTMethodDeclNode alloc] initWithName:@"run" returnTypes:@[ [XTType voidType] ]
+                                                       parameters:@[] isStatic:NO isVarArgs:NO body:rb location:loc]];
+        }
+    // copyChunk(): a fresh chunk with the same captures, reductions at their start.
+        {
+        NSMutableArray<XTASTNode*>* st = [NSMutableArray array];
+        [st addObject:[[XTVariableDeclNode alloc] initWithName:@"t" type:implPtr
+                                                   initialiser:[[XTNewExprNode alloc] initWithClassName:implName
+                                                                                              arguments:@[]
+                                                                                               location:loc]
+                                                      location:loc]];
+        for (NSString* cn in caps)
+            [st addObject:assign(member(@"t", cn), ident(cn))];
+        for (NSArray<NSString*>* r in reductions)
+            [st addObject:assign(member(@"t", r[1]), startOf(r, ident(r[1])))];
+        [st addObject:[[XTReturnNode alloc] initWithValues:@[ ident(@"t") ] location:loc]];
+        [methods addObject:[[XTMethodDeclNode alloc] initWithName:@"copyChunk" returnTypes:@[ chunkPtr ]
+                                                       parameters:@[] isStatic:NO isVarArgs:NO
+                                                             body:[[XTBlockNode alloc] initWithStatements:st location:loc]
+                                                         location:loc]];
+        }
+    // merge(other): fold another chunk's reductions into this one's.
+        {
+        NSMutableArray<XTASTNode*>* st = [NSMutableArray array];
+        [st addObject:[[XTVariableDeclNode alloc] initWithName:@"o" type:implPtr
+                                                   initialiser:cast(implPtr, ident(@"other"))
+                                                      location:loc]];
+        for (NSArray<NSString*>* r in reductions)
+            [st addObject:fold(r[0], ident(r[1]), ident(r[1]), member(@"o", r[1]))];
+        XTParamNode* p = [[XTParamNode alloc] initWithType:chunkPtr name:@"other" location:loc];
+        [methods addObject:[[XTMethodDeclNode alloc] initWithName:@"merge" returnTypes:@[ [XTType voidType] ]
+                                                       parameters:@[ p ] isStatic:NO isVarArgs:NO
+                                                             body:[[XTBlockNode alloc] initWithStatements:st location:loc]
+                                                         location:loc]];
+        }
+    XTClassDeclNode* impl = [[XTClassDeclNode alloc] initWithName:implName
+                                                       parentName:@"ParChunk"
+                                                    protocolNames:@[]
+                                                            ivars:ivars
+                                                          methods:methods
+                                                         location:loc];
+    [[self blkClasses] addObject:impl];
+
+    // ── the site ──
+    NSString* pv = [NSString stringWithFormat:@"$par%lu", (unsigned long)counter];
+    NSMutableArray<XTASTNode*>* site = [NSMutableArray array];
+    [site addObject:[[XTVariableDeclNode alloc] initWithName:pv type:implPtr
+                                                 initialiser:[[XTNewExprNode alloc] initWithClassName:implName
+                                                                                            arguments:@[]
+                                                                                             location:loc]
+                                                    location:loc]];
+    for (NSString* cn in caps)
+        {
+        XTASTNode* v = ident(cn);
+        if ([frameTypes[cn] isKindOfClass:[XTArrayType class]])
+            v = [[XTUnaryExprNode alloc] initWithOp:XTUnaryOpAddrOf
+                                            operand:[[XTSubscriptExprNode alloc] initWithBase:ident(cn)
+                                                                                         index:[[XTLiteralIntNode alloc] initWithValue:0 location:loc]
+                                                                                      location:loc]
+                                           location:loc];
+        [site addObject:assign(member(pv, cn), v)];
+        [self blkNoteIdentifierUse:cn at:loc];
+        }
+    for (NSArray<NSString*>* r in reductions)
+        {
+        [site addObject:assign(member(pv, r[1]), startOf(r, ident(r[1])))];
+        [self blkNoteIdentifierUse:r[1] at:loc];
+        }
+    XTASTNode* hi = cond.right;
+    if (cond.op == XTBinaryOpLe)
+        hi = [[XTBinaryExprNode alloc] initWithOp:XTBinaryOpAdd left:cast(i64T, hi)
+                                            right:[[XTLiteralIntNode alloc] initWithValue:1 location:loc] location:loc];
+    XTASTNode* run = [[XTMethodCallExprNode alloc] initWithReceiver:ident(@"Par")
+                                                         methodName:@"run"
+                                                          arguments:@[ ident(pv), cast(i64T, iv.initialiser), cast(i64T, hi) ]
+                                                           location:loc];
+    [site addObject:stmt(run)];
+    for (NSArray<NSString*>* r in reductions)
+        {
+        NSString* op = r[0];
+        BOOL idem = [op isEqualToString:@"&"] || [op isEqualToString:@"|"] || [op isEqualToString:@"min"]
+                    || [op isEqualToString:@"max"];
+        [site addObject:idem ? assign(ident(r[1]), member(pv, r[1]))
+                             : fold(op, ident(r[1]), ident(r[1]), member(pv, r[1]))];
+        }
+    return [[XTBlockNode alloc] initWithStatements:site location:loc];
+    }
+
+@end
