@@ -101,6 +101,8 @@ void ux_ios_set_control_fire(pointer fn);
 void ux_ios_set_value_changed(pointer fn);
 void ux_ios_make_switch(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, u8* title, i32 on);
 void ux_ios_set_switch(i32 handle, i32 node, i32 on);
+void ux_ios_make_radio(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, u8* title, i32 on);
+void ux_ios_set_radio(i32 handle, i32 node, i32 on);
 void ux_ios_make_slider(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, i32 lo, i32 hi, i32 val);
 void ux_ios_set_slider_value(i32 handle, i32 node, i32 val);
 void ux_ios_make_stepper(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, i32 lo, i32 hi, i32 step, i32 wraps, i32 val);
@@ -285,6 +287,8 @@ void uxIosShellStart(void)
 // A native value control moved: adopt the number into the peer, fire its
 // action — the mac driver's xgAKValueChanged, iOS edition (the UISwitch case
 // is new: its 0/1 lands in the peer UXCheckbox before the fire).
+// the selection each native popup shows, plus one (0: not pushed yet)
+i32 gIosPopupShown[16384];
 void uxIosValueChanged(i32 handle, i32 node, i32 value)
     {
     if (handle < (i32)0 || handle >= (i32)64 || node < (i32)0 || node >= (i32)256)
@@ -300,6 +304,20 @@ void uxIosValueChanged(i32 handle, i32 node, i32 value)
     if (cb != (UXCheckbox*)0)
         {
         cb.setChecked(value != (i32)0);
+        }
+    UXRadioButton* rb = (UXRadioButton* ?)ctl;
+    if (rb != (UXRadioButton*)0 && value != (i32)0)
+        {
+        // exclusivity is neutral: the group clears the others, and the next display pushes that
+        // back into every native radio
+        if (rb.group != (UXRadioGroup*)0)
+            {
+            rb.group.select(rb);
+            }
+        else
+            {
+            rb.setSelected(true);
+            }
         }
     UXSlider* sl = (UXSlider* ?)ctl;
     if (sl != (UXSlider*)0)
@@ -1109,6 +1127,75 @@ class UXIosDriver : Object<UXViewDriver>
     // that forwards its press to the toolkit in content coordinates, then check
     // it the way appkit-shield does -- with a REAL injected press, because the
     // only question is what the platform does with it.
+    // The model is the truth: on every display an existing native control is set to its model's
+    // value, so a change the app makes (a box checked, a radio's group moving, progress advancing)
+    // shows.  Each setter leaves a control that already holds the value alone.
+    void pushValue(i32 handle, i32 i, i32 kind, pointer peer)
+        {
+        Object* o = (Object*)peer;
+        if (o == (Object*)0)
+            {
+            return;
+            }
+        if (kind == (i32)UXKindCheckbox)
+            {
+            UXCheckbox* cb = (UXCheckbox* ?)o;
+            if (cb != (UXCheckbox*)0)
+                {
+                ux_ios_set_switch(handle, i, cb.isChecked() ? (i32)1 : (i32)0);
+                }
+            }
+        else if (kind == (i32)UXKindRadio)
+            {
+            UXRadioButton* rb = (UXRadioButton* ?)o;
+            if (rb != (UXRadioButton*)0)
+                {
+                ux_ios_set_radio(handle, i, rb.isSelected() ? (i32)1 : (i32)0);
+                }
+            }
+        else if (kind == (i32)UXKindSlider)
+            {
+            UXSlider* sl = (UXSlider* ?)o;
+            if (sl != (UXSlider*)0)
+                {
+                ux_ios_set_slider_value(handle, i, sl.nativeValue());
+                }
+            }
+        else if (kind == (i32)UXKindStepper)
+            {
+            UXStepper* st = (UXStepper* ?)o;
+            if (st != (UXStepper*)0)
+                {
+                ux_ios_set_stepper_value(handle, i, st.nativeValue());
+                }
+            }
+        else if (kind == (i32)UXKindProgress)
+            {
+            UXProgressBar* pg = (UXProgressBar* ?)o;
+            if (pg != (UXProgressBar*)0)
+                {
+                ux_ios_set_progress(handle, i, pg.nativeFractionMille(), pg.nativeIndeterminate());
+                }
+            }
+        else if (kind == (i32)UXKindSegmented)
+            {
+            UXSegmentedControl* sg = (UXSegmentedControl* ?)o;
+            if (sg != (UXSegmentedControl*)0)
+                {
+                ux_ios_seg_select(handle, i, sg.nativeSelectedSeg());
+                }
+            }
+        else if (kind == (i32)UXKindPopup)
+            {
+            UXPopUpButton* pb = (UXPopUpButton* ?)o;
+            // only when it moved: selecting rebuilds the button's menu
+            if (pb != (UXPopUpButton*)0 && gIosPopupShown[handle * (i32)256 + i] != pb.nativeSelected() + (i32)1)
+                {
+                ux_ios_popup_select(handle, i, pb.nativeSelected());
+                gIosPopupShown[handle * (i32)256 + i] = pb.nativeSelected() + (i32)1;
+                }
+            }
+        }
     i32 isUnderTable(IOTree* t, i32 i)
         {
         i16 p = t.nodes[i].parent;
@@ -1206,6 +1293,7 @@ class UXIosDriver : Object<UXViewDriver>
                 ux_ios_set_control_frame(handle, i, ax, ay, aw, ah);
                 ux_ios_set_control_hidden(handle, i, self.effectiveHidden(tree, i));
                 ux_ios_set_control_enabled(handle, i, (i32)n.enabled);
+                self.pushValue(handle, i, (i32)n.kind, n.peer);
                 continue;
                 }
             if (n.kind == (i32)UXKindButton)
@@ -1237,6 +1325,16 @@ class UXIosDriver : Object<UXViewDriver>
                     u8* title = n.spec != (pointer)0 ? (u8*)n.spec : (u8*)"";
                     ux_ios_make_switch(handle, i, ax, ay, aw, ah, title,
                                        cb.isChecked() ? (i32)1 : (i32)0);
+                    gIosCtlPeer[handle * (i32)256 + i] = n.peer;
+                    }
+                }
+            else if (n.kind == (i32)UXKindRadio)
+                {
+                UXRadioButton* rv = (UXRadioButton* ?)(Object*)n.peer;
+                if (rv != (UXRadioButton*)0)
+                    {
+                    u8* title = n.spec != (pointer)0 ? (u8*)n.spec : (u8*)"";
+                    ux_ios_make_radio(handle, i, ax, ay, aw, ah, title, rv.isSelected() ? (i32)1 : (i32)0);
                     gIosCtlPeer[handle * (i32)256 + i] = n.peer;
                     }
                 }

@@ -10,9 +10,9 @@ its **group** is selected at a time. The mutual exclusion is neutral logic in
 [`UXRadioGroup`](#uxradiogroup). Clicking a button asks the group to select it,
 and the group clears the others. That is all of radio behaviour, so it lives in
 the toolkit rather than in seven drivers. The button draws itself from the
-theme's `radio` / `radio.selected` sprites on backends without a native radio
-idiom, including iOS, because UIKit has none. On GEM it is a `G_RADIO` the AES
-draws from the button's state.
+theme's `radio` / `radio.selected` sprites on backends without a native radio.
+On GEM it is a `G_RADIO` the AES draws from the button's state, and on iOS, which
+has no radio control, a `UIButton` showing the system's circle symbols.
 
 ```c
 #use <UXKit>
@@ -95,7 +95,7 @@ back-reference is weak.
   <TabItem label="iOS">
     <img src="/uxkit/radio-ios.png" alt="UXRadioButton on iOS" width="220" />
 
-    App-drawn, because UIKit has no native radio. The themed sprite draws through the same seam as GEM's.
+    A real `UIButton` showing the system's circle symbols, empty and filled. UIKit has no radio control, and this is its idiom for one; the selection is also its accessibility trait.
   </TabItem>
   <TabItem label="Android">
     <img src="/uxkit/radio-android.png" alt="UXRadioButton on Android" width="220" />

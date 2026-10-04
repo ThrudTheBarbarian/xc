@@ -381,6 +381,12 @@ static UXValueTarget* valueTarget(void)
         v = (int)((UISegmentedControl*)c).selectedSegmentIndex;
     gValueChanged((int)(c.tag >> 8), (int)(c.tag & 0xFF), v);
     }
+/* a radio button tapped: it asks to be the selected one (1); the toolkit's group clears the others */
+- (void)tapped:(UIControl*)c
+    {
+    if (gValueChanged)
+        gValueChanged((int)(c.tag >> 8), (int)(c.tag & 0xFF), 1);
+    }
 @end
 static void wireValue(UIControl* c, int handle, int node)
     {
@@ -472,6 +478,86 @@ void ux_ios_set_switch(int handle, int node, int on)
             ((UISwitch*)sub).on = on != 0;
             return;
             }
+    }
+
+// A radio button.  UIKit has no radio control; its idiom is a button showing the system's own
+// circle symbols, empty and filled, with the title beside it (a plain-configuration UIButton).
+// A tap asks the toolkit to select it; the selection is pushed back by ux_ios_set_radio.
+static void radioLook(UIButton* b, int on)
+    {
+    /* not b.selected: a selected UIButton draws a highlighted background, which a radio has not.
+     * The state is the accessibility trait VoiceOver reads, and the filled symbol in the accent. */
+    UIImage* img = [UIImage systemImageNamed:on ? @"largecircle.fill.circle" : @"circle"];
+    img = [img imageWithTintColor:on ? UIColor.systemBlueColor : UIColor.secondaryLabelColor
+                    renderingMode:UIImageRenderingModeAlwaysOriginal];
+    if (@available(iOS 15.0, *))
+        {
+        UIButtonConfiguration* cfg = b.configuration ?: [UIButtonConfiguration plainButtonConfiguration];
+        cfg.image = img;
+        b.configuration = cfg;
+        }
+    else
+        [b setImage:img forState:UIControlStateNormal];
+    b.accessibilityTraits = on ? (UIAccessibilityTraitButton | UIAccessibilityTraitSelected) : UIAccessibilityTraitButton;
+    }
+static int radioOn(UIButton* b)
+    {
+    return (b.accessibilityTraits & UIAccessibilityTraitSelected) ? 1 : 0;
+    }
+void ux_ios_make_radio(int handle, int node, int x, int y, int w, int h, const char* title, int on)
+    {
+    UIButton* b = [UIButton buttonWithType:UIButtonTypeSystem];
+    if (@available(iOS 15.0, *))
+        {
+        UIButtonConfiguration* cfg = [UIButtonConfiguration plainButtonConfiguration];
+        cfg.title = [NSString stringWithUTF8String:title];
+        cfg.imagePadding = 8;
+        cfg.contentInsets = NSDirectionalEdgeInsetsMake(0, 0, 0, 0);
+        cfg.baseForegroundColor = UIColor.labelColor;
+        b.configuration = cfg;
+        }
+    else
+        [b setTitle:[NSString stringWithUTF8String:title] forState:UIControlStateNormal];
+    b.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeading;
+    b.tintColor = nil;
+    b.frame = CGRectMake(x, y, w, h);
+    b.tag = (handle << 8) | node;
+    radioLook(b, on);
+    [b addTarget:valueTarget() action:@selector(tapped:) forControlEvents:UIControlEventTouchUpInside];
+    [gWin[handle] addSubview:b];
+    gCtl[handle][node] = b;
+    }
+void ux_ios_set_radio(int handle, int node, int on)
+    {
+    UIView* c = gCtl[handle][node];
+    if ([c isKindOfClass:UIButton.class] && radioOn((UIButton*)c) != (on != 0))
+        radioLook((UIButton*)c, on);
+    }
+// Tests: whether a node is a native radio button, and whether it shows as selected (-1: not one)
+int ux_ios_test_radio_state(int handle, int node)
+    {
+    UIView* c = gCtl[handle][node];
+    if (![c isKindOfClass:UIButton.class] || [(UIButton*)c actionsForTarget:valueTarget() forControlEvent:UIControlEventTouchUpInside].count == 0)
+        return -1;
+    return radioOn((UIButton*)c);
+    }
+// Tests: a native control's value as UIKit holds it -- a switch 0/1, a slider's or stepper's value,
+// a progress view in permille, a segmented control's selected index (-9999: none)
+int ux_ios_test_native_value(int handle, int node)
+    {
+    UIView* c = gCtl[handle][node];
+    for (UIView* sub in c.subviews)
+        if ([sub isKindOfClass:UISwitch.class])
+            return ((UISwitch*)sub).on ? 1 : 0;
+    if ([c isKindOfClass:UISlider.class])
+        return (int)lroundf(((UISlider*)c).value);
+    if ([c isKindOfClass:UIStepper.class])
+        return (int)lround(((UIStepper*)c).value);
+    if ([c isKindOfClass:UIProgressView.class])
+        return (int)lroundf(((UIProgressView*)c).progress * 1000.0f);
+    if ([c isKindOfClass:UISegmentedControl.class])
+        return (int)((UISegmentedControl*)c).selectedSegmentIndex;
+    return -9999;
     }
 
 void ux_ios_make_slider(int handle, int node, int x, int y, int w, int h,
