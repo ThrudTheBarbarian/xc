@@ -79,6 +79,18 @@ NS_ASSUME_NONNULL_BEGIN
 /// phis, vector phis, loop shape) exactly where it was.
 @property(nonatomic, readonly) NSMutableSet<NSString*>* forcedUnrollHeaders;
 
+/// Runtime SIMD dispatch (x86-64). A clone made for a wider vector level has
+/// its own lane width (0 = the target profile's), its level name ("avx2") and
+/// the name of the function it is a variant of. The function it was cloned
+/// from is marked `simdDispatch`: the back end emits its name as a stub that
+/// jumps through a slot the runtime fills at load, and its body as `<name>$base`.
+@property(nonatomic) uint32_t simdLaneBytes;
+@property(nonatomic, copy, nullable) NSString* simdLevel;
+@property(nonatomic, copy, nullable) NSString* simdBaseName;
+@property(nonatomic) BOOL simdDispatch;
+/// Rename, for a clone taken from a parsed copy of the module.
+- (void)renameTo:(NSString*)name;
+
 /// All values defined in this function, keyed by valueId.
 @property(nonatomic, readonly) NSMutableDictionary<NSNumber*, XTIRValue*>* values;
 

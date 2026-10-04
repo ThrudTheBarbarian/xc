@@ -17,6 +17,7 @@
 
 #import "Foundation.xc"
 #import "Ir.xc"
+#import "IrParse.xc"
 
 // The one host call this file makes: the pipeline's stop-after hook, which has
 // to be readable from an installed compiler and not only from the harness.
@@ -72,6 +73,7 @@ class OptProfile
     // simd128) or 32 (AVX2, -mavx2). The lane count, remainder loop and unroll
     // factor key off it (SIMD step 1, S2); set from the driver's vector level.
     u32 _vectorLaneBytes;
+    bool _simdDispatch;
     bool _loopRotate;      // top-tested loops become bottom-tested
     u32 _inlineMax;        // the largest callee (IR instructions) the inliner splices
     bool _dceTrace;        // name each function dead-function elimination removes
@@ -79,6 +81,7 @@ class OptProfile
     void init(void)
         {
         _vectorLaneBytes = (u32)16;
+        _simdDispatch = false;
         _inlineMax = (u32)64;
         _dceTrace = false;
         _nativeVarargs = false;
@@ -115,6 +118,10 @@ class OptProfile
 
     u32 vectorLaneBytes(void) { return _vectorLaneBytes; }
     void setVectorLaneBytes(u32 n) { _vectorLaneBytes = n; }
+    // Runtime SIMD dispatch (-msimd=auto): base code at vectorLaneBytes, plus
+    // `<name>$avx2` clones at 32 that the runtime picks between at load.
+    bool simdDispatch(void) { return _simdDispatch; }
+    void setSimdDispatch(bool d) { _simdDispatch = d; }
 
     static OptProfile* forTarget(String* t)
         {
@@ -1011,6 +1018,7 @@ class OptProfile
     class Opt
     {
     u32 _level;
+    u32 _vecFnBytes; // the vectorised function's own width (a dispatch clone), else 0
     OptProfile* _profile;
     bool _failed;
     String* _why;
@@ -1027,6 +1035,7 @@ class OptProfile
 
     void init(void)
         {
+        _vecFnBytes = (u32)0;
         _level = (u32)0;
         _failed = false;
         }
@@ -1242,12 +1251,20 @@ class OptProfile
         if (stopHere(String.withCString("redundant-load-cse")))
             return;
         if (_level >= (u32)2)
+            simdClone(m);
+        if (stopHere(String.withCString("simd-clone")))
+            return;
+        if (_level >= (u32)2)
             outerVectorize(m);
         if (stopHere(String.withCString("outer-vectorize")))
             return;
         if (_level >= (u32)2)
             vectorize(m);
         if (stopHere(String.withCString("vectorize")))
+            return;
+        if (_level >= (u32)2)
+            simdPrune(m);
+        if (stopHere(String.withCString("simd-prune")))
             return;
         if (_level >= (u32)2)
             loopUnroll(m);
@@ -12134,6 +12151,8 @@ class OptProfile
         for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
             {
             IRFunc* fn = (IRFunc*)m.funcs().get(f);
+            // A dispatch clone carries its own vector width.
+            _vecFnBytes = fn.simdLaneBytes();
             u32 iter = (u32)0;
             while (iter < (u32)256)
                 {
@@ -16349,9 +16368,109 @@ class OptProfile
     // widening forms stay at 16 until the back ends can emit 256-bit shapes.
     u32 vectorBytes(void)
         {
+        if (_vecFnBytes != (u32)0)
+            return _vecFnBytes == (u32)32 ? (u32)32 : (u32)16;
         if (_profile != (OptProfile*)0 && _profile.vectorLaneBytes() == (u32)32)
             return (u32)32;
         return (u32)16;
+        }
+
+    // ── runtime SIMD dispatch: the per-level clones (the reference's
+    // XTIROptSimdClone). CLONE, before the vectorisers, copies each function
+    // with a loop (a phi) as `<name>$avx2` at 32 bytes; PRUNE, after them, drops
+    // the clones that did not vectorise at 32 and marks their bases dispatched.
+    // The copy is a printed and re-parsed module, taken only when it prints back
+    // exactly — a lossy round trip clones nothing.
+    static bool simdHasPhi(IRFunc* fn)
+        {
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            if (((IRBlock*)fn.blocks().get(b)).phis().count() > (u32)0)
+                return true;
+        return false;
+        }
+
+    static bool simdHasWide(IRFunc* fn)
+        {
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bl = (IRBlock*)fn.blocks().get(b);
+            for (u32 k = (u32)0; k < bl.phis().count() + bl.insns().count(); k = k + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)(k < bl.phis().count() ? bl.phis().get(k)
+                                                            : bl.insns().get(k - bl.phis().count()));
+                if (n.res() != (IRValue*)0 && n.res().ty() != (String*)0
+                    && n.res().ty().hasPrefix(String.withCString("Vec("))
+                    && n.res().ty().hasSuffix(String.withCString(", 32)")))
+                    return true;
+                }
+            }
+        return false;
+        }
+
+    void simdClone(IRModule* m)
+        {
+        if (!_profile.simdDispatch() || !_profile.vectorize())
+            return;
+        Array* names = new Array();
+        for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
+            {
+            IRFunc* fn = (IRFunc*)m.funcs().get(f);
+            if (fn.simdLevel() == (String*)0 && simdHasPhi(fn))
+                names.add((Object*)fn.name());
+            }
+        if (names.count() == (u32)0)
+            return;
+        String* printed = m.text();
+        IRModule* copy = IrParser.parseText(printed, new IrParser());
+        if (copy == (IRModule*)0 || !copy.text().equals(printed))
+            return;
+        for (u32 i = (u32)0; i < names.count(); i = i + (u32)1)
+            {
+            String* n = (String*)names.get(i);
+            for (u32 f = (u32)0; f < copy.funcs().count(); f = f + (u32)1)
+                {
+                IRFunc* c = (IRFunc*)copy.funcs().get(f);
+                if (!c.name().equals(n))
+                    continue;
+                String* cn = String.withString(n);
+                cn.appendCString("$avx2");
+                c.setName(cn);
+                c.setSimdLaneBytes((u32)32);
+                c.setSimdLevel(String.withCString("avx2"));
+                c.setSimdBaseName(n);
+                m.addFunc(c);
+                break;
+                }
+            }
+        }
+
+    void simdPrune(IRModule* m)
+        {
+        if (!_profile.simdDispatch() || !_profile.vectorize())
+            return;
+        Array* keep = new Array();
+        for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
+            {
+            IRFunc* fn = (IRFunc*)m.funcs().get(f);
+            if (fn.simdLevel() == (String*)0)
+                {
+                keep.add((Object*)fn);
+                continue;
+                }
+            IRFunc* base = (IRFunc*)0;
+            for (u32 g = (u32)0; g < m.funcs().count(); g = g + (u32)1)
+                if (((IRFunc*)m.funcs().get(g)).name().equals(fn.simdBaseName()))
+                    base = (IRFunc*)m.funcs().get(g);
+            if (base != (IRFunc*)0 && simdHasWide(fn))
+                {
+                base.setSimdDispatch(true);
+                keep.add((Object*)fn);
+                }
+            }
+        while (m.funcs().count() > (u32)0)
+            m.funcs().removeAt(m.funcs().count() - (u32)1);
+        for (u32 f = (u32)0; f < keep.count(); f = f + (u32)1)
+            m.funcs().add(keep.get(f));
         }
 
     // A vector type's text: `Vec(I32)` at 16 bytes (every existing dump is

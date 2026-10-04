@@ -26,6 +26,8 @@
 # -DXT_SINIT_C_INCLUDED=1 -DXT_NO_WEAK_SEAM=1), plus two hand-applied pieces:
 #   * _xt_main_tls_pad — 240 reserved bytes below the main tcb (static TLS)
 #   * the _xtc_sinit_run tail, appended per the convention documented there
+#   * the _xt_simd_select tail (runtime SIMD dispatch), compiled from the same
+#     source with the recipe and appended with its data, labels prefixed .Lsimd
 	.intel_syntax noprefix
 	.file	"rt-freestanding.c"
 	.text
@@ -3624,3 +3626,150 @@ _xtc_sinit_run:                         # @_xtc_sinit_run
 	.ident	"Apple clang version 17.0.0 (clang-1700.3.19.1)"
 	.section	".note.GNU-stack","",@progbits
 	.addrsig
+
+# ── runtime SIMD dispatch: _xt_simd_select (appended; see the header) ──
+	.text
+	.globl	_xt_simd_select
+	.type	_xt_simd_select,@function
+_xt_simd_select:
+# %bb.0:
+	push	rbp
+	push	r14
+	push	rbx
+	mov	ebp, esi
+	mov	r14, rdi
+	mov	eax, 1
+	xor	ecx, ecx
+
+
+	.byte	0x0f, 0xa2
+	xor	ebx, ebx
+	not	ecx
+	test	ecx, 402653184
+	jne	.Lsimd_bb_3
+# %bb.1:
+	xor	ebx, ebx
+	xor	ecx, ecx
+
+
+	.byte	0x0f, 0x01, 0xd0
+	not	eax
+	test	al, 6
+	jne	.Lsimd_bb_3
+# %bb.2:
+	mov	eax, 7
+	xor	ecx, ecx
+
+
+	.byte	0x0f, 0xa2
+	shr	ebx, 5
+	and	ebx, 1
+.Lsimd_bb_3:
+	lea	rdi, [rip + .Lsimd_str]
+	call	getenv@PLT
+	test	rax, rax
+	je	.Lsimd_bb_19
+# %bb.4:
+	movzx	ecx, byte ptr [rax]
+	test	cl, cl
+	je	.Lsimd_bb_9
+# %bb.5:
+	lea	rdi, [rax + 1]
+	lea	rdx, [rip + .Lsimd_str_1]
+	mov	esi, ecx
+	.p2align	4, 0x90
+.Lsimd_bb_6:
+	cmp	sil, byte ptr [rdx]
+	jne	.Lsimd_bb_10
+# %bb.7:
+	inc	rdx
+	movzx	esi, byte ptr [rdi]
+	inc	rdi
+	test	sil, sil
+	jne	.Lsimd_bb_6
+	jmp	.Lsimd_bb_10
+.Lsimd_bb_9:
+	lea	rdx, [rip + .Lsimd_str_1]
+	mov	esi, ecx
+.Lsimd_bb_10:
+	xor	edi, edi
+	cmp	sil, byte ptr [rdx]
+	cmovne	edi, ebx
+	je	.Lsimd_bb_20
+# %bb.11:
+	test	cl, cl
+	je	.Lsimd_bb_18
+# %bb.12:
+	inc	rax
+	lea	rdx, [rip + .Lsimd_str_2]
+	.p2align	4, 0x90
+.Lsimd_bb_13:
+	cmp	cl, byte ptr [rdx]
+	jne	.Lsimd_bb_15
+# %bb.14:
+	inc	rdx
+	movzx	ecx, byte ptr [rax]
+	inc	rax
+	test	cl, cl
+	jne	.Lsimd_bb_13
+.Lsimd_bb_15:
+	cmp	cl, byte ptr [rdx]
+	jne	.Lsimd_bb_19
+.Lsimd_bb_16:
+	mov	edi, ebx
+	test	ebx, ebx
+	jne	.Lsimd_bb_20
+# %bb.17:
+	lea	rsi, [rip + .Lsimd_msg]
+	mov	edx, 66
+	mov	edi, 2
+	call	write@PLT
+	xor	edi, edi
+	jmp	.Lsimd_bb_20
+.Lsimd_bb_18:
+	lea	rdx, [rip + .Lsimd_str_2]
+	cmp	cl, byte ptr [rdx]
+	je	.Lsimd_bb_16
+.Lsimd_bb_19:
+	mov	edi, ebx
+.Lsimd_bb_20:
+	mov	dword ptr [rip + _xt_simd_level], edi
+	test	ebp, ebp
+	je	.Lsimd_bb_23
+# %bb.21:
+	mov	ecx, ebp
+	mov	eax, edi
+	inc	rax
+	lea	rcx, [rcx + 2*rcx]
+	xor	edx, edx
+	.p2align	4, 0x90
+.Lsimd_bb_22:
+	mov	esi, edx
+	mov	rsi, qword ptr [r14 + 8*rsi]
+	lea	edi, [rax + rdx]
+	mov	rdi, qword ptr [r14 + 8*rdi]
+	mov	qword ptr [rsi], rdi
+	add	rdx, 3
+	cmp	rcx, rdx
+	jne	.Lsimd_bb_22
+.Lsimd_bb_23:
+	pop	rbx
+	pop	r14
+	pop	rbp
+	ret
+.Lsimd_func_end:
+	.size	_xt_simd_select, .Lsimd_func_end-_xt_simd_select
+	.data
+	.p2align 3
+	.globl	_xt_simd_level
+_xt_simd_level:
+	.long	-1
+.Lsimd_str:
+	.asciz	"XC_SIMD"
+.Lsimd_str_1:
+	.asciz	"base"
+.Lsimd_str_2:
+	.asciz	"avx2"
+.Lsimd_msg:
+	.asciz	"xc: XC_SIMD=avx2, but this machine has no usable AVX2; using base\n"
+

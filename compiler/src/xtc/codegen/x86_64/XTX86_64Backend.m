@@ -1495,10 +1495,27 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
                             : [mod referencesSymbolNamed:@"_xt_thread_create"];
     NSMutableString* out = [NSMutableString string];
     [out appendString:@"\t.intel_syntax noprefix\n\t.text\n"];
+    // Runtime SIMD dispatch (-msimd=auto): a dispatched function's NAME is a
+    // stub that jumps through its slot, and its body is `<name>$base`; the
+    // `<name>$avx2` clone is an ordinary function. The slots start at the
+    // base bodies, so the program is correct before _xt_simd_select runs.
+    NSMutableArray<NSString*>* simdNames = [NSMutableArray array];
     for (XTIRFunction* fn in mod.functions)
         {
         if (fn.blocks.count == 0)
             continue; // external proto — linker resolves
+        if (fn.simdDispatch)
+            {
+            NSString* nm = fn.name;
+            NSString* sn = [self safeSym:nm];
+            if (sWin64)
+                [out appendFormat:@"\t.globl\t%@\n%@:\n", sn, sn];
+            else
+                [out appendFormat:@"\t.globl\t%@\n\t.type\t%@, @function\n%@:\n", sn, sn, sn];
+            [out appendFormat:@"\tjmp\tqword ptr [rip + __simd_%@]\n", nm];
+            [simdNames addObject:nm];
+            [fn renameTo:[nm stringByAppendingString:@"$base"]];
+            }
         // One pool per function (bug 597). The peepholes parse every line into
         // autoreleased objects, and with no pool here nothing was freed until
         // the whole module was done: 16 GB on the Mac and 82 GB on Linux for
@@ -1509,6 +1526,23 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
             [self emitFunction:fn module:mod into:fbuf];
             [out appendString:[self withVzeroupper:[self peepholeFallthrough:[self peepholeCopyProp:fbuf]]]];
             }
+        }
+    // The selection: one table of {slot, base, avx2} and a load-time
+    // constructor that hands it to the runtime, which fills each slot for the
+    // level this machine (or XC_SIMD) picks. First in the constructor list, so
+    // no other initialiser can call a function before its slot is set.
+    if (simdNames.count)
+        {
+        [out appendFormat:@"\t.text\n__xt_simd_init:\n\tlea\t%@, [rip + __xt_simd_table]\n"
+                          @"\tmov\t%@, %lu\n\tjmp\t_xt_simd_select\n",
+                          sWin64 ? @"rcx" : @"rdi", sWin64 ? @"edx" : @"esi",
+                          (unsigned long)simdNames.count];
+        [out appendString:@"\t.data\n\t.p2align 3\n"];
+        for (NSString* nm in simdNames)
+            [out appendFormat:@"__simd_%@:\n\t.quad\t%@$base\n", nm, nm];
+        [out appendString:@"__xt_simd_table:\n"];
+        for (NSString* nm in simdNames)
+            [out appendFormat:@"\t.quad\t__simd_%@, %@$base, %@$avx2\n", nm, nm, nm];
         }
 
     // Read-only data: string literals (+ initialised globals).
@@ -1685,9 +1719,11 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
             hasMain = YES;
             break;
             }
-    if (mod.moduleInitFunctionNames.count > 0 || hasMain)
+    if (mod.moduleInitFunctionNames.count > 0 || hasMain || simdNames.count)
         {
         [out appendString:@"\t.data\n\t.p2align 3\n\t.globl\t__xt_ctors_start\n__xt_ctors_start:\n"];
+        if (simdNames.count)
+            [out appendString:@"\t.quad\t__xt_simd_init\n"];
         for (NSString* initName in mod.moduleInitFunctionNames)
             [out appendFormat:@"\t.quad\t%@\n", [self safeSym:initName]];
         [out appendString:@"\t.globl\t__xt_ctors_end\n__xt_ctors_end:\n"];

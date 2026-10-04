@@ -49,6 +49,11 @@
 
 @implementation XTIRFunction
 
+- (void)renameTo:(NSString*)name
+    {
+    _name = [name copy];
+    }
+
 - (instancetype)initWithName:(NSString*)name
                   returnType:(XTIRType*)returnType
                   paramTypes:(NSArray<XTIRType*>*)paramTypes

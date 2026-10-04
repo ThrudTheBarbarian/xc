@@ -210,7 +210,8 @@ is reported and ignored.
 | `--with-dex <path>` | With `--emit-apk`, package this `classes.dex` and mark the manifest `hasCode="true"`. |
 | `--emit-iface` | Write the module interface (the `.xtc.iface` description) to the `-o` path, or to standard output with no `-o`, and stop. `-c` and `--emit-lib` produce the interface as part of their output without this flag. |
 | `-mavx2`, `-msimd=avx2` | **From 0.66.** On `-A x86_64` and `-A win64`, vectorise with 256-bit AVX2 instead of the 128-bit SSE2 baseline. The program then needs an AVX2 CPU (Intel Haswell, AMD Zen and later). |
-| `-msimd=base` | The SSE2 baseline, which is also the default. |
+| `-msimd=auto` | **From 0.66, the default** on `-A x86_64` and `-A win64`. Each function the vectoriser widens is built twice, for SSE2 and for AVX2, and the program picks one at load from what the CPU and OS support, so one binary runs the widest unit the machine has and still runs everywhere. Setting `XC_SIMD=base` or `XC_SIMD=avx2` in the environment forces a level for one run; forcing one the machine lacks falls back with a note on stderr. |
+| `-msimd=base` | SSE2 only, one version of every function: the smallest binary. |
 | `-mnative` | The vector level of the machine running `xcc`: `avx2` where the CPU and OS support it, otherwise the baseline. Refused when `xcc` is not running on x86-64, where there is no host level to read. |
 | `-fmalloc=system\|mimalloc` | Choose the C heap behind the runtime. `mimalloc` is `-A x86_64` only: the mimalloc object is linked ahead of libc, so its `malloc` family replaces musl's. |
 | `-g` | Accepted. No debug information is emitted yet, and `xcc` says so. |

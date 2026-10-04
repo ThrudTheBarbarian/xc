@@ -612,7 +612,8 @@ same "-mavx2 (-A x86_64)"           -q -A x86_64 -mavx2 -o @OUT@ ret.xc
 same "-msimd=base (-A x86_64)"      -q -A x86_64 -msimd=base -o @OUT@ ret.xc
 same "-msimd=avx2 (-A win64)"       -q -A win64 -msimd=avx2 -o @OUT@ ret.xc
 same "-msimd=<bad> refused"        -q -A x86_64 -msimd=sse9 -o @OUT@ ret.xc
-xcconly "  ...naming the choices"   1 "expects 'base' or 'avx2'" -q -A x86_64 -msimd=sse9 -o @OUT@ ret.xc
+xcconly "  ...naming the choices"   1 "expects 'base', 'avx2' or 'auto'" -q -A x86_64 -msimd=sse9 -o @OUT@ ret.xc
+same "-msimd=auto (-A x86_64)"      -q -A x86_64 -msimd=auto -o @OUT@ ret.xc
 same "-mavx2 (-A arm64) refused"    -q -A arm64 -mavx2 -o @OUT@ ret.xc
 xcconly "  ...naming the targets"   1 "applies to -A x86_64 and -A win64 only" -q -A arm64 -mavx2 -o @OUT@ ret.xc
 same "-mavx512f refused"            -q -A x86_64 -mavx512f -o @OUT@ ret.xc

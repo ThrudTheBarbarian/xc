@@ -1007,9 +1007,10 @@ static NSString* sExecutablePath = nil;
         else if ([arg hasPrefix:@"-msimd="])
             {
             NSString* val = [arg substringFromIndex:7];
-            if (![val isEqualToString:@"base"] && ![val isEqualToString:@"avx2"])
+            if (![val isEqualToString:@"base"] && ![val isEqualToString:@"avx2"]
+                && ![val isEqualToString:@"auto"])
                 {
-                fprintf(stderr, "xcc: -msimd= expects 'base' or 'avx2', got '%s'\n", val.UTF8String);
+                fprintf(stderr, "xcc: -msimd= expects 'base', 'avx2' or 'auto', got '%s'\n", val.UTF8String);
                 return nil;
                 }
             opts.simdLevel = val;

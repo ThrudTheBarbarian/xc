@@ -4723,8 +4723,18 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
         // NDK assembler refusing them is the only signal.
         [cgArgs addObject:@"--no-lse-atomics"];
     }
-    if (opts.simdLevel && (opts.useX86_64Backend || opts.useWin64Backend))
-        [cgArgs addObject:[@"--simd=" stringByAppendingString:opts.simdLevel]];
+    // The x86-64 vector level. With no -m flag it is `auto`: runtime SIMD
+    // dispatch, base code plus AVX2 clones picked at load, so one binary runs
+    // the widest unit the machine has and still runs everywhere.
+    // Only for an executable built in one invocation: a `-c` object or a
+    // library carries its own constructor table, and two of those in one
+    // link collide, so they default to the single base version.
+    if (opts.useX86_64Backend || opts.useWin64Backend)
+        {
+        NSString* lvl = opts.simdLevel ?: ((opts.compileOnly || opts.emitLib) ? nil : @"auto");
+        if (lvl)
+            [cgArgs addObject:[@"--simd=" stringByAppendingString:lvl]];
+        }
     if (opts.threadSafeARC == 1)      [cgArgs addObject:@"--thread-safe-arc"];
     else if (opts.threadSafeARC == 0) [cgArgs addObject:@"--no-thread-safe-arc"];
     // Every arm9 output is position-independent, so `-S` shows the PIC asm the

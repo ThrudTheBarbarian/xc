@@ -26,6 +26,7 @@
 #import "XTIROptBlockMerge.h"
 #import "XTIROptReassociate.h"
 #import "XTIROptVectorize.h"
+#import "XTIROptSimdClone.h"
 #import "XTIROptOuterVectorize.h"
 #import "XTIROptPointerIV.h"
 #import "XTIROptLoopReductionCollapse.h"
@@ -167,12 +168,21 @@
         // A loop around a reduction loop: vectorise across the outer loop's
         // neighbouring iterations (matrix multiply's j), before the ordinary
         // vectoriser looks at the inner loops.
+        // Runtime SIMD dispatch (-msimd=auto): clone the functions with loops at
+        // the wider level here, and keep only the clones that vectorised.
+        XTIROptSimdClone* simdClone = [[XTIROptSimdClone alloc] init];
+        simdClone.profile = profile;
+        [p addPass:simdClone];
         XTIROptOuterVectorize* outerVec = [[XTIROptOuterVectorize alloc] init];
         outerVec.profile = profile;
         [p addPass:outerVec];
         XTIROptVectorize* vectorize = [[XTIROptVectorize alloc] init];
         vectorize.profile = profile;
         [p addPass:vectorize];
+        XTIROptSimdClone* simdPrune = [[XTIROptSimdClone alloc] init];
+        simdPrune.profile = profile;
+        simdPrune.prune = YES;
+        [p addPass:simdPrune];
         XTIROptLoopUnroll* unroll = [[XTIROptLoopUnroll alloc] init];
         unroll.profile = profile; // target-tuned caps / capabilities
         [p addPass:unroll];

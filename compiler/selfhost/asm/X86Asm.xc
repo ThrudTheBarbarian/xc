@@ -1323,6 +1323,22 @@ class X86Fixup
             _hit = true;
             return;
             }
+        // The CPU-feature reads behind runtime SIMD dispatch (_xt_simd_select).
+        if (mn.equals(String.withCString("cpuid")))
+            {
+            e8((u32)$0F);
+            e8((u32)$A2);
+            _hit = true;
+            return;
+            }
+        if (mn.equals(String.withCString("xgetbv")))
+            {
+            e8((u32)$0F);
+            e8((u32)$01);
+            e8((u32)$D0);
+            _hit = true;
+            return;
+            }
             // bt / bts / btr / btc — r/m is the destination, the register or the
             // immediate selects the bit.
             {

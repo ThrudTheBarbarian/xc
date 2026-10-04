@@ -659,6 +659,10 @@
                       fn.name,
                       [paramStrs componentsJoinedByString:@", "],
                       retStr];
+    if (fn.simdLevel)
+        [out appendFormat:@"    simd: %@ of %@\n", fn.simdLevel, fn.simdBaseName];
+    if (fn.simdDispatch)
+        [out appendString:@"    simd: dispatch\n"];
 
     // Frame info.
     if (fn.frameInfo.pinnedLocals.count > 0 || fn.frameInfo.pinnedLocalSize > 0)

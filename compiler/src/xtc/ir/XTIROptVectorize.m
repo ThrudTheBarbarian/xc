@@ -118,6 +118,10 @@
 @implementation XTVecCand
 @end
 
+// The vector width of the function being vectorised, when it is a dispatch
+// clone with its own (0: the profile's).
+static NSUInteger sVecFnBytes = 0;
+
 @implementation XTIROptVectorize
 
 - (NSString*)passName
@@ -254,7 +258,12 @@ static BOOL resolveConstInt(XTIROperand* op, NSDictionary<NSNumber*, XTIRInsn*>*
         return YES; // A/B measurement escape hatch
     sVecModule = mod;
     for (XTIRFunction* fn in mod.functions)
+        {
+        // A dispatch clone carries its own vector width (runtime SIMD dispatch).
+        sVecFnBytes = fn.simdLaneBytes;
         [self runOnFunction:fn];
+        }
+    sVecFnBytes = 0;
     sVecModule = nil;
     return YES;
     }
@@ -1476,7 +1485,8 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
 // can emit their 256-bit shapes.
 - (NSUInteger)vectorBytes
     {
-    NSUInteger b = (self.profile ?: [XTIROptTargetProfile conservativeProfile]).vectorLaneBytes;
+    NSUInteger b = sVecFnBytes ? sVecFnBytes
+                               : (self.profile ?: [XTIROptTargetProfile conservativeProfile]).vectorLaneBytes;
     return b == 32 ? 32 : 16;
     }
 

@@ -44,6 +44,7 @@ int main(int argc, const char* argv[])
     @autoreleasepool
         {
         NSUInteger simdLaneBytes = 16; // --simd: the profile's vector width
+        BOOL simdDispatch = NO;         // --simd=auto: base + avx2 clones, picked at load
         // Record argv[0] so the support tree is found relative to THIS binary.
         // An installed tool must not depend on the current directory to find
         // its own libraries.
@@ -112,6 +113,7 @@ int main(int argc, const char* argv[])
                 // the profile's lane width. Read by the vectoriser from S2 on.
                 NSString* lvl = [arg substringFromIndex:7];
                 simdLaneBytes = [lvl isEqualToString:@"avx2"] ? 32 : 16;
+                simdDispatch = [lvl isEqualToString:@"auto"];
             }
             else if ([arg isEqualToString:@"--thread-safe-arc"])
                 {
@@ -172,6 +174,7 @@ int main(int argc, const char* argv[])
             {
             XTIRX86_64TargetProfile* x86Profile = [XTIRX86_64TargetProfile new];
             x86Profile.vectorLaneBytes = simdLaneBytes; // 32 under -mavx2: the back end emits ymm
+            x86Profile.simdDispatch = simdDispatch;
             // The x86-64 profile applies — same ISA, same opt passes. Only the
             // backend ABI/object-format differs, selected below.
             XTIROptPipeline* pipe =

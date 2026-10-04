@@ -224,6 +224,10 @@ NS_ASSUME_NONNULL_BEGIN
 // loop and the unroll factor key off it (SIMD step 1, S2); set by the x86-64
 // code generators from `--simd`.
 @property(nonatomic) NSUInteger vectorLaneBytes;
+// Runtime SIMD dispatch (`-msimd=auto`): the vectorised functions are built
+// twice, at 16 bytes and as `<name>$avx2` clones at 32, and the runtime picks
+// one per function at load. vectorLaneBytes stays 16 for the base code.
+@property(nonatomic) BOOL simdDispatch;
 
 + (instancetype)conservativeProfile;
 

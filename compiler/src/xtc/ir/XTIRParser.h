@@ -21,6 +21,14 @@ extern NSString* const XTIRParserErrorDomain;
 + (nullable XTIRModule*)moduleFromString:(NSString*)text
                                    error:(NSError* _Nullable* _Nullable)error;
 
+/// The same, reusing `orig`'s layout objects (by index) rather than creating
+/// new ones, so the parsed module's Agg types ARE `orig`'s and a function taken
+/// from it can join `orig` (runtime SIMD dispatch clones one that way). The
+/// text must have been printed from `orig`.
++ (nullable XTIRModule*)moduleFromString:(NSString*)text
+                        sharingLayoutsOf:(nullable XTIRModule*)orig
+                                   error:(NSError* _Nullable* _Nullable)error;
+
 @end
 
 NS_ASSUME_NONNULL_END

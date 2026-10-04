@@ -66,6 +66,9 @@ typedef NS_ENUM(NSUInteger, XTIRTokKind) {
 @property(nonatomic) NSUInteger lineNumber;
 @property(nonatomic) XTIRModule* module;
 @property(nonatomic) NSMutableArray<NSString*>* errors;
+// moduleFromString:sharingLayoutsOf: — the layout objects to use, by index,
+// instead of creating new ones.
+@property(nonatomic, nullable) NSArray<XTIRLayout*>* sharedLayouts;
 
 // Per-function state, set up at start of each function.
 @property(nonatomic, nullable) XTIRFunction* currentFunction;
@@ -933,11 +936,11 @@ typedef NS_ENUM(NSUInteger, XTIRTokKind) {
         }
     case XTIRTokWord:
         {
-        // Could be a block name (starts with bb_) or "CallConv"
-        // (handled by caller) or just a misuse. Treat any bb_-
-        // prefixed word as a block reference for terminator
-        // operands.
-        if ([t.text hasPrefix:@"bb_"])
+        // A bare word in operand position is a block reference (a
+        // terminator's target); "CallConv" is handled by the caller. The
+        // front end names blocks bb_N, but passes name the blocks they add
+        // (`__sinit_X_hoist_chk`), and a module printed mid-pipeline — the
+        // SIMD dispatch clone round-trips one — has to read those back.
             {
             *posPtr += 1;
             XTIRBlock* b = [self blockForName:t.text state:state];
@@ -1316,6 +1319,8 @@ typedef NS_ENUM(NSUInteger, XTIRTokKind) {
         if (!state.module)
             {
             state.module = [[XTIRModule alloc] initWithName:name];
+            if (state.sharedLayouts)
+                [state.module.layoutTable addObjectsFromArray:state.sharedLayouts];
             }
         return YES;
         }
@@ -1590,7 +1595,10 @@ typedef NS_ENUM(NSUInteger, XTIRTokKind) {
             XTIRLayout* layout = [[XTIRLayout alloc] initWithSize:size
                                                         alignment:align
                                                            fields:fields];
-            state.module.layoutTable[idx] = layout;
+            // A shared table already holds this layout's object; keep it, so
+            // types in the parsed module are the original module's types.
+            if (!state.sharedLayouts || idx >= state.sharedLayouts.count)
+                state.module.layoutTable[idx] = layout;
             }
         return YES;
         }
@@ -2167,7 +2175,11 @@ typedef NS_ENUM(NSUInteger, XTIRTokKind) {
             }
 
         // bb_name:
-        if ([kw hasPrefix:@"bb_"] && [self tok:tokens at:1].kind == XTIRTokColon)
+        // A block label: any `name:` other than the two keyword lines a
+        // function body holds (frame:, preds:). Not only bb_N — see the
+        // block-reference note in the operand parser.
+        if ([self tok:tokens at:1].kind == XTIRTokColon && ![kw isEqualToString:@"preds"]
+            && ![kw isEqualToString:@"frame"])
             {
             XTIRFunction* fn = state.currentFunction;
             XTIRBlock* block = state.blocksByName[kw];
@@ -2349,7 +2361,15 @@ typedef NS_ENUM(NSUInteger, XTIRTokKind) {
 + (nullable XTIRModule*)moduleFromString:(NSString*)text
                                    error:(NSError* _Nullable* _Nullable)error
     {
+    return [self moduleFromString:text sharingLayoutsOf:nil error:error];
+    }
+
++ (nullable XTIRModule*)moduleFromString:(NSString*)text
+                        sharingLayoutsOf:(nullable XTIRModule*)orig
+                                   error:(NSError* _Nullable* _Nullable)error
+    {
     XTIRParserState* state = [[XTIRParserState alloc] init];
+    state.sharedLayouts = orig ? [orig.layoutTable copy] : nil;
 
     NSArray<NSString*>* lines = [self preprocessLines:text];
     for (NSUInteger i = 0; i < lines.count; i++)

@@ -542,6 +542,13 @@ class IRValue
     // is assigned to every value in id order, pinned locals included, and those
     // are never an instruction result.
     Array* _byId;
+    // Runtime SIMD dispatch (-msimd=auto), as the reference's XTIRFunction: a
+    // clone's own vector width (0 = the profile's), level and base function,
+    // and on the base, that it is reached through a dispatch slot.
+    u32 _simdLaneBytes;
+    String* _simdLevel;
+    String* _simdBaseName;
+    bool _simdDispatch;
 
     void init(void)
         {
@@ -550,9 +557,22 @@ class IRValue
         _pinned = new Array();
         _unrollHeaders = new Array();
         _byId = new Array();
+        _simdLaneBytes = (u32)0;
+        _simdLevel = (String*)0;
+        _simdBaseName = (String*)0;
+        _simdDispatch = false;
         _ret = String.withCString("Void");
         _pinnedSize = (u32)0;
         }
+
+    u32 simdLaneBytes(void)            { return _simdLaneBytes; }
+    void setSimdLaneBytes(u32 b)       { _simdLaneBytes = b; }
+    String* simdLevel(void)            { return _simdLevel; }
+    void setSimdLevel(String* l)       { _simdLevel = l; }
+    String* simdBaseName(void)         { return _simdBaseName; }
+    void setSimdBaseName(String* n)    { _simdBaseName = n; }
+    bool simdDispatch(void)            { return _simdDispatch; }
+    void setSimdDispatch(bool d)       { _simdDispatch = d; }
 
     String* name(void)
         {
@@ -864,6 +884,10 @@ class IRValue
         else
             out.appendFormat("(%s, Mem)", _ret.cString());
         out.appendCString(" {\n");
+        if (_simdLevel != (String*)0)
+            out.appendFormat("    simd: %s of %s\n", _simdLevel.cString(), _simdBaseName.cString());
+        if (_simdDispatch)
+            out.appendCString("    simd: dispatch\n");
 
         if (_pinned.count() > (u32)0 || _pinnedSize > (u32)0)
             {

@@ -4817,7 +4817,10 @@ void capabilityUsage(void)
     Stdio.printf("                             m68k. arm64, android and arm9 are always PIC\n");
     Stdio.printf("  -mavx2, -msimd=avx2        x86-64/win64: 256-bit AVX2 vectors (the\n");
     Stdio.printf("                             binary then needs an AVX2 CPU)\n");
-    Stdio.printf("  -msimd=base                x86-64/win64: SSE2 only (the default)\n");
+    Stdio.printf("  -msimd=base                x86-64/win64: SSE2 only, one version\n");
+    Stdio.printf("  -msimd=auto                x86-64/win64: SSE2 and AVX2 versions of each\n");
+    Stdio.printf("                             vectorised function, picked at load (the\n");
+    Stdio.printf("                             default; XC_SIMD=base|avx2 overrides it)\n");
     Stdio.printf("  -mnative                   x86-64/win64: the level of this machine\n");
     Stdio.printf("  -fthread-safe-arc          Atomic ARC refcounts. Default: on when the\n");
     Stdio.printf("                             program spawns a thread\n");
@@ -5133,8 +5136,19 @@ void applyOptFlags(DriverOptions* d, OptProfile* p)
     // refuses it elsewhere): avx2 gives the vectoriser 32-byte vectors, which
     // the back end emits as ymm.
     String* simd = d.caps().simd();
+    // With no -m flag the level is `auto` (runtime SIMD dispatch), as the
+    // reference's driver forwards it.
+    // Only for an executable built in one invocation: a -c object or a library
+    // carries its own constructor table, and two in one link collide.
+    if (simd == (String*)0 && (isX86_64(d) || d.arch().equals(String.withCString("win64")))
+        && !d.compileOnly() && !d.emitLib())
+        simd = String.withCString("auto");
     if (simd != (String*)0)
+    {
         p.setVectorLaneBytes(simd.equals(String.withCString("avx2")) ? (u32)32 : (u32)16);
+        // -msimd=auto: base code plus avx2 clones, picked at load.
+        p.setSimdDispatch(simd.equals(String.withCString("auto")));
+    }
 }
 
 #if ARCH_win64
@@ -5230,8 +5244,9 @@ bool parseCapabilityFlag(DriverOptions* d, u32* ip, u32 argc)
     }
     if (a.hasPrefix(String.withCString("-msimd="))) {
         String* v = a.substringFromByte((u32)7);
-        if (!v.equals(String.withCString("base")) && !v.equals(String.withCString("avx2"))) {
-            Stdio.printf("xcc: -msimd= expects 'base' or 'avx2', got '%s'\n", v.cString());
+        if (!v.equals(String.withCString("base")) && !v.equals(String.withCString("avx2"))
+            && !v.equals(String.withCString("auto"))) {
+            Stdio.printf("xcc: -msimd= expects 'base', 'avx2' or 'auto', got '%s'\n", v.cString());
             Process.exit((i32)1); return true;
         }
         c.setSimd(v, a);

@@ -76,7 +76,10 @@ for arch in ${XCC_DIFF_ARCHS:-arm64 android xt6502}; do
             # each x86_64 fixture compile against the arm64 library on a Mac.
             la=$arch; [ "$arch" = android ] && la=arm64
             [ -d "support/$la/lib" ] || la=$XC_HOST_ARCH
-            REFSEL=(-A "$arch"); PORTINC=(-I support/generic/lib -I "support/$la/lib")
+            # Platform first, then generic: the order the driver searches, so
+            # a platform's own file (win64's SettingsStore.xc) wins as it does
+            # for the reference.
+            REFSEL=(-A "$arch"); PORTINC=(-I "support/$la/lib" -I support/generic/lib)
         fi
         if ! "$BIN/xcc" "${REFSEL[@]}" -H . -q "-O$LEVEL" ${EXTRA[@]+"${EXTRA[@]}"} -S -o "$WORK/ref.s" "$f" \
                 >/dev/null 2>&1 || [ ! -s "$WORK/ref.s" ]; then

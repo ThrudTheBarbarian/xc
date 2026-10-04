@@ -1800,6 +1800,83 @@ int32_t _xt_atomic_cas_ptr(void* p, void* expected, void* desired)
 // several hundred lines of register allocation that nothing has validated
 // against the in-house assemblers. Prefer appending a single function, as the
 // getpid tail in rtgen-win64.s does, over a wholesale regeneration.
+// ───────────────────────── runtime SIMD dispatch ─────────────────────────
+// A program built -msimd=auto carries each vectorised function twice: the
+// SSE2 base and an AVX2 clone. Its load-time constructor hands this function a
+// table of {slot, base, avx2} entries, and each slot (pointing at the base
+// until now) is set to the variant this machine runs best. XC_SIMD=base|avx2
+// forces a level for one run; one the machine lacks falls back, with a line
+// on stderr, and never faults.
+#ifdef XT_WIN64
+extern uint32_t GetEnvironmentVariableA(const char* name, char* buf, uint32_t size);
+static const char* xt_env(const char* name)
+    {
+    static char buf[32];
+    uint32_t n = GetEnvironmentVariableA(name, buf, (uint32_t)sizeof buf);
+    return (n > 0 && n < sizeof buf) ? buf : 0;
+    }
+#else
+extern char* getenv(const char* name);
+static const char* xt_env(const char* name)
+    {
+    return getenv(name);
+    }
+#endif
+
+// AVX2 is usable only when the CPU has it AND the OS saves the ymm registers
+// across context switches: cpuid.1:ECX OSXSAVE and AVX, then XCR0 bits 1-2,
+// then cpuid.7:EBX AVX2.
+// The two instructions are spelled as bytes (cpuid = 0F A2, xgetbv = 0F 01 D0):
+// the runtime is assembled by whichever compiler builds the next one, and an
+// older assembler knows `.byte` but not these mnemonics.
+static int xt_cpu_has_avx2(void)
+    {
+    uint32_t a, b, c, d;
+    __asm__ volatile(".byte 0x0f, 0xa2" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(1), "c"(0));
+    if (!(c & (1u << 27)) || !(c & (1u << 28)))
+        return 0;
+    uint32_t lo, hi;
+    __asm__ volatile(".byte 0x0f, 0x01, 0xd0" : "=a"(lo), "=d"(hi) : "c"(0));
+    if ((lo & 6u) != 6u)
+        return 0;
+    __asm__ volatile(".byte 0x0f, 0xa2" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(7), "c"(0));
+    return (b & (1u << 5)) != 0;
+    }
+
+static int xt_streq(const char* a, const char* b)
+    {
+    while (*a && *a == *b)
+        {
+        a++;
+        b++;
+        }
+    return *a == *b;
+    }
+
+// The level the dispatched functions run at: 0 base, 1 avx2. Read by
+// diagnostics; -1 until a dispatched program's constructor has run.
+int32_t _xt_simd_level = -1;
+
+void _xt_simd_select(void** table, uint32_t n)
+    {
+    int has = xt_cpu_has_avx2();
+    int lvl = has;
+    const char* want = xt_env("XC_SIMD");
+    if (want && xt_streq(want, "base"))
+        lvl = 0;
+    else if (want && xt_streq(want, "avx2") && !has)
+        {
+        static const char msg[] = "xc: XC_SIMD=avx2, but this machine has no usable AVX2; using base\n";
+        write(2, msg, sizeof msg - 1);
+        }
+    _xt_simd_level = lvl;
+    for (uint32_t i = 0; i < n; i++)
+        {
+        void** slot = (void**)table[3 * i];
+        *slot = table[3 * i + 1 + (lvl ? 1 : 0)];
+        }
+    }
+
 #include "../../../support/generic/runtime/xt-sinit.c"
 
 // The per-thread teardown seam — see xt-thread-exit.c. This is the ONLY

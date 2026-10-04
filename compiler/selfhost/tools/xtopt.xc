@@ -23,6 +23,7 @@ void main(void)
     String* stopAfter = (String*)0;
     u32 level = (u32)0;
     u32 simdBytes = (u32)16;
+    bool simdDispatch = false; // --simd=auto: runtime SIMD dispatch clones
     u32 argc = Process.argumentCount();
     u32 i = (u32)1;
     while (i < argc)
@@ -75,6 +76,7 @@ void main(void)
         if (a.hasPrefix(String.withCString("--simd=")))
             {
             simdBytes = a.substringFromByte((u32)7).equals(String.withCString("avx2")) ? (u32)32 : (u32)16;
+            simdDispatch = a.substringFromByte((u32)7).equals(String.withCString("auto"));
             i = i + (u32)1;
             continue;
             }
@@ -108,6 +110,7 @@ void main(void)
 
     OptProfile* prof = OptProfile.forTarget(target);
     prof.setVectorLaneBytes(simdBytes);
+    prof.setSimdDispatch(simdDispatch);
     Opt* o = Opt.atLevel(level, prof);
     if (stopAfter != 0)
         o.setStopAfter(stopAfter);

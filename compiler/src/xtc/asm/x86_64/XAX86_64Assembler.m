@@ -486,6 +486,9 @@ static void emitModRM(NSMutableData *d, int reg, const XOperand *rm) {
     if ([mn isEqualToString:@"lfence"]) { emit8(out,0x0F); emit8(out,0xAE); emit8(out,0xE8); return out; }
     if ([mn isEqualToString:@"sfence"]) { emit8(out,0x0F); emit8(out,0xAE); emit8(out,0xF8); return out; }
     if ([mn isEqualToString:@"pause"])  { emit8(out,0xF3); emit8(out,0x90); return out; }
+    // The CPU-feature reads behind runtime SIMD dispatch (_xt_simd_select).
+    if ([mn isEqualToString:@"cpuid"])  { emit8(out,0x0F); emit8(out,0xA2); return out; }
+    if ([mn isEqualToString:@"xgetbv"]) { emit8(out,0x0F); emit8(out,0x01); emit8(out,0xD0); return out; }
     // bt / bts / btr / btc — bit test (+set/reset/complement). clang reaches for
     // `bt` on a "is bit N of this mask set?" loop, which is how the threading
     // runtime's CPU-count popcount arrives here.

@@ -41,6 +41,7 @@ class X86_64
     IRFunc* _fn;
     String* _out;
     bool _win64; // the Win64 ABI rather than System V
+    Array* _simdNames; // dispatched functions (-msimd=auto), in emission order
     bool _failed;
     String* _why;
     Array* _missing;
@@ -52,6 +53,7 @@ class X86_64
         _failed = false;
         _arcOverride = (i32)-1;
         _win64 = false;
+        _simdNames = new Array();
         }
 
     void setWin64(bool v)
@@ -424,11 +426,30 @@ class X86_64
         _atomicArc = _arcOverride >= (i32)0 ? _arcOverride != (i32)0 : spawnsThreads(m);
         _out = new String();
         _out.appendCString("\t.intel_syntax noprefix\n\t.text\n");
+        // Runtime SIMD dispatch (-msimd=auto), as the reference: a dispatched
+        // function's NAME is a stub that jumps through its slot and its body is
+        // `<name>$base`; the slots start at the base bodies.
+        _simdNames = new Array();
         for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
             {
             IRFunc* fn = (IRFunc*)m.funcs().get(f);
             if (fn.blocks().count() == (u32)0)
                 continue; // an external prototype
+            if (fn.simdDispatch())
+                {
+                String* nm = fn.name();
+                String* sn = safeSym(nm);
+                if (_win64)
+                    _out.appendFormat("\t.globl\t%s\n%s:\n", sn.cString(), sn.cString());
+                else
+                    _out.appendFormat("\t.globl\t%s\n\t.type\t%s, @function\n%s:\n",
+                                      sn.cString(), sn.cString(), sn.cString());
+                _out.appendFormat("\tjmp\tqword ptr [rip + __simd_%s]\n", nm.cString());
+                _simdNames.add((Object*)nm);
+                String* bn = String.withString(nm);
+                bn.appendCString("$base");
+                fn.setName(bn);
+                }
             // Each function is peepholed in ISOLATION: slot offsets are
             // per-function, and the scan reasons about a straight-line region.
             String* module = _out;
@@ -436,6 +457,28 @@ class X86_64
             emitFunction(fn);
             module.append(withVzeroupper(peepholeFallthrough(peepholeCopyProp(_out))));
             _out = module;
+            }
+        // The selection: a table of {slot, base, avx2} and a load-time
+        // constructor handing it to _xt_simd_select, first in the list.
+        if (_simdNames.count() > (u32)0)
+            {
+            _out.appendFormat("\t.text\n__xt_simd_init:\n\tlea\t%s, [rip + __xt_simd_table]\n"
+                              "\tmov\t%s, %lu\n\tjmp\t_xt_simd_select\n",
+                              _win64 ? "rcx" : "rdi", _win64 ? "edx" : "esi",
+                              _simdNames.count());
+            _out.appendCString("\t.data\n\t.p2align 3\n");
+            for (u32 i = (u32)0; i < _simdNames.count(); i = i + (u32)1)
+                {
+                String* nm = (String*)_simdNames.get(i);
+                _out.appendFormat("__simd_%s:\n\t.quad\t%s$base\n", nm.cString(), nm.cString());
+                }
+            _out.appendCString("__xt_simd_table:\n");
+            for (u32 i = (u32)0; i < _simdNames.count(); i = i + (u32)1)
+                {
+                String* nm = (String*)_simdNames.get(i);
+                _out.appendFormat("\t.quad\t__simd_%s, %s$base, %s$avx2\n",
+                                  nm.cString(), nm.cString(), nm.cString());
+                }
             }
         emitModuleData(m);
         return _out;
@@ -6259,9 +6302,11 @@ class X86_64
         for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
             if (((IRFunc*)m.funcs().get(f)).name().equals(String.withCString("main")))
                 hasMain = true;
-        if (m.modinits().count() > (u32)0 || hasMain)
+        if (m.modinits().count() > (u32)0 || hasMain || _simdNames.count() > (u32)0)
             {
             _out.appendCString("\t.data\n\t.p2align 3\n\t.globl\t__xt_ctors_start\n__xt_ctors_start:\n");
+            if (_simdNames.count() > (u32)0)
+                _out.appendCString("\t.quad\t__xt_simd_init\n");
             for (u32 i = (u32)0; i < m.modinits().count(); i = i + (u32)1)
                 _out.appendFormat("\t.quad\t%s\n", safeSym((String*)m.modinits().get(i)).cString());
             _out.appendCString("\t.globl\t__xt_ctors_end\n__xt_ctors_end:\n");

@@ -46,6 +46,8 @@ applies() {
   fi
   return 0
 }
+# RUN_ENV is set for every run, e.g. RUN_ENV=XC_SIMD=base to run a -msimd=auto
+# corpus on its base variants on a machine that would pick AVX2.
 # SWEEP_FLAGS is added to every compile, e.g. SWEEP_FLAGS=-mavx2 to run the
 # whole corpus at the 256-bit vector level.
 flags_for() {
@@ -89,13 +91,13 @@ echo "built ${#NAMES[@]}  |  N/A $NA  |  no-oracle $NOORACLE  |  compile-fail $C
 # HOST=local (or no host on an x86-64 Linux machine) runs in place, which is
 # what the CI's Linux worker does; anything else is one scp and one ssh.
 if [ "$HOST" = local ] || { [ -z "$HOST" ] && [ "$(uname -s)" = Linux ] && [ "$(uname -m)" = x86_64 ]; }; then
-  ( cd "$BUILD/bin" && for b in *; do timeout "$TIMEOUT" ./"$b" > "$BUILD/out/$b.out" 2>/dev/null; echo $? > "$BUILD/out/$b.rc"; done )
+  ( cd "$BUILD/bin" && for b in *; do env ${RUN_ENV:-} timeout "$TIMEOUT" ./"$b" > "$BUILD/out/$b.out" 2>/dev/null; echo $? > "$BUILD/out/$b.rc"; done )
 else
 [ -n "$HOST" ] || { echo "no x86-64 Linux host: set XTC_X86_64_HOST (or run on one)"; exit 1; }
 ssh -o BatchMode=yes "$HOST" "rm -rf $REMOTE && mkdir -p $REMOTE/out" || { echo "ssh $HOST failed"; exit 1; }
 scp -o BatchMode=yes -q "$BUILD/bin/"* "$HOST:$REMOTE/"
 ssh -o BatchMode=yes "$HOST" \
-  "cd $REMOTE; for b in *; do timeout $TIMEOUT ./\$b > out/\$b.out 2>/dev/null; echo \$? > out/\$b.rc; done; tar cf - -C out ." \
+  "cd $REMOTE; for b in *; do env ${RUN_ENV:-} timeout $TIMEOUT ./\$b > out/\$b.out 2>/dev/null; echo \$? > out/\$b.rc; done; tar cf - -C out ." \
   | tar xf - -C "$BUILD/out"
 ssh -o BatchMode=yes "$HOST" "rm -rf $REMOTE" 2>/dev/null
 fi
