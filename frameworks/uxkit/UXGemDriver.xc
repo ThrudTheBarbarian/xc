@@ -54,6 +54,14 @@ struct UXGemTree
     // reached the content callback.  Module globals keep them alive for the process.
     theme gGemTheme;
 gfx_surface gGemBackBuffer;
+// A snapshot in flight (windowSnapshot): where on the drawn surface, and into what.
+i32 gGemSnapHandle;
+i32 gGemSnapX;
+i32 gGemSnapY;
+i32 gGemSnapW;
+i32 gGemSnapH;
+u32* gGemSnapOut;
+i32 gGemSnapDone;
 
 // The one drawing context the driver reuses per paint — bound to the view being drawn and
 // handed back through the UXGraphics protocol, so the draw seam never names the GEM type.
@@ -197,9 +205,11 @@ class UXGemDriver : Object<UXViewDriver>
         w[0] = ww;
         h[0] = hh;
         }
-    // The window's work area as the screen shows it: the composed back buffer every window draws into
-    // through the VDI (device words, 0xRRGGBBAA).  GEM keeps no picture of a window of its own, so a
-    // part another window covers shows that window, as on screen.
+    // The window's content as it is on screen, read from the window's own surface: a client's window
+    // draws into a surface of its own, which only its draw has bound, so the window is repainted
+    // (synchronously, wind_redraw_win) and treeDraw copies the region out of the surface it has just
+    // drawn (vro_cpyfm, device words 0xRRGGBBAA).  Its work area is (0, 0) for a client, and where the
+    // window is on the screen for a local application, whose surface is the screen.
     i32 windowSnapshot(i32 handle, i32 x, i32 y, i32 w, i32 h, u32* out)
         {
         i32 wx = (i32)0;
@@ -207,24 +217,26 @@ class UXGemDriver : Object<UXViewDriver>
         i32 ww = (i32)0;
         i32 wh = (i32)0;
         wind_get(handle, (i32)WF_WORKXYWH, &wx, &wy, &ww, &wh);
-        u32* px = gGemBackBuffer.px;
-        if (px == (u32*)0 || x + w > ww || y + h > wh)
+        if (x + w > ww || y + h > wh)
             {
             return (i32)0;
             }
-        for (i32 j = (i32)0; j < h; j = j + (i32)1)
+        gGemSnapHandle = handle;
+        gGemSnapX = wx + x;
+        gGemSnapY = wy + y;
+        gGemSnapW = w;
+        gGemSnapH = h;
+        gGemSnapOut = out;
+        gGemSnapDone = (i32)0;
+        wind_redraw_win(handle);
+        gGemSnapOut = (u32*)0;
+        if (gGemSnapDone == (i32)0)
             {
-            i32 sy = wy + y + j;
-            for (i32 i = (i32)0; i < w; i = i + (i32)1)
-                {
-                i32 sx = wx + x + i;
-                u32 v = (u32)0;
-                if (sx >= (i32)0 && sy >= (i32)0 && sx < gGemBackBuffer.w && sy < gGemBackBuffer.h)
-                    {
-                    v = px[sy * gGemBackBuffer.stride + sx] >> (u32)8;
-                    }
-                out[j * w + i] = (u32)$FF000000 | v;
-                }
+            return (i32)0;
+            }
+        for (i32 i = (i32)0; i < w * h; i = i + (i32)1)
+            {
+            out[i] = (u32)$FF000000 | (out[i] >> (u32)8);
             }
         return (i32)1;
         }
@@ -883,6 +895,31 @@ class UXGemDriver : Object<UXViewDriver>
             vr_recfl(aes_handle(), (pointer)&pxy[0]);
             }
         objc_draw(tree, start, (i32)UX_DEPTH, clx, cly, clw, clh);
+        // a snapshot asked for this repaint (windowSnapshot): the surface just drawn, copied out.  Each
+        // window drawn overwrites it, so on a screen several windows share the last copy is what shows.
+        if (gGemSnapOut != (u32*)0 && start == (i32)0)
+            {
+            MFDB screen;
+            screen.addr = (u32*)0;
+            MFDB mem;
+            mem.addr = gGemSnapOut;
+            mem.w = (i16)gGemSnapW;
+            mem.h = (i16)gGemSnapH;
+            mem.stride = (i16)gGemSnapW;
+            mem.nplanes = (i16)32;
+            mem.stand = (i16)0;
+            i16 sp[8];
+            sp[0] = (i16)gGemSnapX;
+            sp[1] = (i16)gGemSnapY;
+            sp[2] = (i16)(gGemSnapX + gGemSnapW - (i32)1);
+            sp[3] = (i16)(gGemSnapY + gGemSnapH - (i32)1);
+            sp[4] = (i16)0;
+            sp[5] = (i16)0;
+            sp[6] = (i16)(gGemSnapW - (i32)1);
+            sp[7] = (i16)(gGemSnapH - (i32)1);
+            vro_cpyfm(aes_handle(), (i32)VRO_COPY, (pointer)&sp[0], (pointer)&screen, (pointer)&mem);
+            gGemSnapDone = (i32)1;
+            }
         }
     // Bind the driver's context to the view at `abs` and hand it back as UXGraphics — this is
     // what the draw seam calls per custom view, so it never touches the VDI handle or theme.

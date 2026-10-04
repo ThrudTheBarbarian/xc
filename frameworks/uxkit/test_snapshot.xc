@@ -1,5 +1,5 @@
 // test_snapshot.xc — UXWindow.snapshot: the window's content as on screen, as an image (the
-// *-snapshot gates, one per backend; built with -D SNAP_<BACKEND>).
+// *-snapshot gates, one per backend; built with -D SNAP_<BACKEND>; GEM's is hostgem/run_snapshot.sh).
 //
 // The window holds what a client's does: an app-drawn backdrop (green), a GL view cleared to a
 // colour only this test uses (blue), a 2-D view after it in the tree and so drawn over it (red),
@@ -31,6 +31,10 @@ void glFinish(void);
 #endif
 #if SNAP_ANDROID
 #import "UXAndroidDriver.xc"
+#endif
+#if SNAP_GEM
+#import "UXGemDriver.xc"
+#import "UXBoot.xc"
 #endif
 #import "UXApplication.xc"
 #import "UXWindow.xc"
@@ -187,7 +191,7 @@ void snapChecks(void)
         return;
         }
     Stdio.printf("  (content %dx%d, snapshot %dx%d, GL %s)\n", cw, ch, all.w, all.h, gMap.glContext() != (pointer)0 ? (u8*)"on" : (u8*)"off");
-#if SNAP_APPKIT || SNAP_WIN32 || SNAP_GTK
+#if SNAP_APPKIT || SNAP_WIN32 || SNAP_GTK || SNAP_GEM
     // UX_SNAP_SAVE=<file>: the whole snapshot as a PPM, for a person to look at
     u8* save = getenv((u8*)"UX_SNAP_SAVE");
     if (save != (u8*)0)
@@ -328,6 +332,14 @@ class Delegate : Object<UXApplicationDelegate>
 void main(void)
     {
     gFails = (i32)0;
+#if SNAP_GEM
+    if (!UXBoot.ensureWindowServer())
+        {
+        Stdio.printf("FAIL: no gemd\n");
+        return;
+        }
+    UXGemDriver* d = new UXGemDriver();
+#endif
 #if SNAP_APPKIT
     UXAppKitDriver* d = new UXAppKitDriver();
     d.setInteractive(getenv((u8*)"UX_SNAP_HEADLESS") == (u8*)0);

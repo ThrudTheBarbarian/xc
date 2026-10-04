@@ -245,7 +245,7 @@ movie.add(part);                      // UXMovie
 | web | the window's region of the canvas, GL views composed under the 2-D layer |
 | iOS | `drawViewHierarchyInRect:` |
 | Android | the window's layout drawn into a bitmap |
-| GEM | the window's work area from the screen's buffer, so a part another window covers shows that window |
+| GEM | the window repainted, and its work area read back from the surface it drew into: its own backing store under `gemd` |
 
 A whole-window snapshot takes a few milliseconds on most backends. On GTK it
 waits for two frames to be painted, about 33 ms at 60 Hz.
