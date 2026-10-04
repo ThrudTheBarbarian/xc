@@ -1395,6 +1395,12 @@ void ux_ak_quit_after_ms(int ms)
 static void (*g_turn_fn)(void) = NULL;
 static NSTimer* g_turn_timer = nil;
 static id g_turn_link = nil; // a CADisplayLink (macOS 14 and later)
+/* A display link stops while the display sleeps, or while the window is wholly covered, and the turn
+ * is the app's whole clock -- its network polling and its logic, not only its frames.  So a timer at
+ * the turn's own rate runs beside the link and calls the turn itself whenever the link has been quiet
+ * for three of those intervals; while the link ticks it does nothing. */
+static NSTimer* g_turn_backup = nil;
+static CFAbsoluteTime g_link_last = 0;
 
 /* The turn, paced by the DISPLAY.  An NSTimer fires when the run loop gets round to it, so the app's
  * frames landed 10-19 ms apart on a 60 Hz screen; a display link fires once per refresh of the
@@ -1409,6 +1415,7 @@ static id g_turn_link = nil; // a CADisplayLink (macOS 14 and later)
 - (void)tick:(id)link
     {
     (void)link;
+    g_link_last = CFAbsoluteTimeGetCurrent();
     if (g_turn_fn)
         g_turn_fn();
     }
@@ -1453,6 +1460,13 @@ int ux_ak_test_screen_hz(void)
         return sc ? (int)sc.maximumFramesPerSecond : 60;
     return 60;
     }
+/* Test: pause (1) or resume (0) the turn's display link, as a sleeping display or a covered window
+ * stops it. */
+void ux_ak_test_pause_turn_link(int on)
+    {
+    if (g_turn_link)
+        ((CADisplayLink*)g_turn_link).paused = on ? YES : NO;
+    }
 /* Test: 1 when the turn is paced by the display link, 0 by the timer, -1 when there is none. */
 int ux_ak_turn_paced_by_display(void)
     {
@@ -1471,14 +1485,30 @@ void ux_ak_set_turn_hook(void* fn, int ms)
         [(CADisplayLink*)g_turn_link invalidate];
         g_turn_link = nil;
         }
+    if (g_turn_backup != nil)
+        {
+        [g_turn_backup invalidate];
+        g_turn_backup = nil;
+        }
     g_turn_fn = (void (*)(void))fn;
     if (g_turn_fn == NULL || !g_interactive)
         {
         return;
         }
-    if (ak_turn_link(ms))
-        return;
     double secs = ms > 0 ? (double)ms / 1000.0 : (1.0 / 60.0);
+    if (ak_turn_link(ms))
+        {
+        g_link_last = CFAbsoluteTimeGetCurrent();
+        g_turn_backup = [NSTimer timerWithTimeInterval:secs
+                                               repeats:YES
+                                                 block:^(NSTimer* t) {
+                                                   (void)t;
+                                                   if (g_turn_fn && CFAbsoluteTimeGetCurrent() - g_link_last > 3.0 * secs)
+                                                       g_turn_fn();
+                                                 }];
+        [[NSRunLoop currentRunLoop] addTimer:g_turn_backup forMode:NSRunLoopCommonModes];
+        return;
+        }
     // In the COMMON modes, not just the default one: a live resize, a scroller drag and a menu
     // tracking all run the loop in NSEventTrackingRunLoopMode, and a default-mode timer does not fire
     // there -- the app's turn (its redraw, its geometry check) stopped for the whole drag.
