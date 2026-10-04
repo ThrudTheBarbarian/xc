@@ -3,6 +3,73 @@ title: ChangeLog
 description: Release notes for the xcc toolchain, with bug fixes and new features per version.
 ---
 
+## Version 0.66 — AVX2 wherever it runs, and Linux GUI programs
+
+x86-64 and Windows programs now use AVX2 on machines that have it and SSE2 on
+machines that don't, from one binary, picked when the program starts: on a
+Zen 5 machine an elementwise map and a sum take about half the time they did.
+`-A x86_64 -dynamic` links against glibc, so a Linux program can load GTK 4,
+libGL and other shared system libraries, still with xcc's own linker.
+
+### New
+
+- **Runtime SIMD dispatch** on `-A x86_64` and `-A win64`, the default
+  (`-msimd=auto`): each function the vectoriser widens is built for SSE2 and
+  for AVX2, and the program picks one per function at startup from what the
+  CPU and the operating system support. `XC_SIMD=base` or `XC_SIMD=avx2`
+  forces a level for one run; forcing one the machine lacks falls back, with a
+  note on stderr. `-c` objects and libraries keep one version.
+- `-mavx2` (or `-msimd=avx2`) builds AVX2 code only, `-msimd=base` SSE2 only,
+  and `-mnative` the level of the machine running `xcc`.
+- `-dynamic` on `-A x86_64`: a dynamically linked glibc executable that can
+  load shared system libraries. `-l<name>` takes `lib<name>.so` from `-L` and
+  the system library directories; a Mac can link for Linux with `-L` to copies
+  of the libraries. A symbol that neither glibc nor an `-l` library defines is
+  a link error.
+- `libUXGtk.so`, UXKit's GTK 4 back end as a shared library, is a separate
+  download for Linux GUI programs linked with `-dynamic`.
+- A library's structs, enums and typedefs import into its clients.
+- `defer` takes a block.
+- `Bundle.main()` finds the program's executable through `PATH` when it was
+  started by name.
+
+### Faster
+
+- AVX2 code (dispatched, or with `-mavx2`): 256-bit vector loops, with
+  `vzeroupper` around calls. On a Zen 5 machine `array_map` takes 0.49× and
+  `array_sum` 0.53× the SSE2 time.
+- The compiler holds less memory while it builds a large program.
+
+### Wrong code fixed
+
+- arm64, in a program that starts a thread: a `dealloc` that called a method on
+  `self` could run again from inside itself until the stack overflowed.
+- An array ivar of class pointers, and an object local whose address is taken,
+  now own what they hold.
+- x86-64 and Windows: `exp` and `pow` are accurate to the last bit.
+- A single-precision denormal constant keeps its value.
+- `printf` of a typed collection's element prints its value.
+- Windows: a frame larger than a page is probed one page at a time; a `float`
+  passed through `...` reaches the callee; a weak reference is unlinked only
+  through a valid back-pointer.
+- wasm32: objects use the 40-byte header and 32-bit reference count the other
+  targets use.
+- `Files` reads `/proc` and `/sys` files, which report no size.
+
+### Errors that used to be silent
+
+- macOS: calling a C function that no linked library exports is a link error.
+- A static `-A x86_64` link refuses an `-l` it cannot use (only a shared
+  library, or nothing) instead of dropping it.
+- A typed collection of primitives without `Number` is an error, and so is a
+  checked cast from a raw pointer.
+- A construct the lowering cannot handle is named, not numbered.
+
+### Install
+
+- `make install PREFIX=<dir>` keeps the third-party tree beside the prefix
+  instead of writing `/opt/xcc/3p`.
+
 ## Version 0.65 — faster loops, native settings and system frameworks
 
 The optimiser and the arm64 back end close the distance to clang: across the
