@@ -71,7 +71,12 @@ for arch in ${XCC_DIFF_ARCHS:-arm64 android xt6502}; do
         if [ "$arch" = xt6502 ]; then
             REFSEL=(-m xt); PORTINC=(-I support/xt6502/lib -I support/generic/lib)
         else
-            REFSEL=(-A "$arch"); PORTINC=("${INCS[@]}")
+            # The TARGET's library, as the reference driver picks it: android
+            # shares arm64's. Handing every target the host's support tree made
+            # each x86_64 fixture compile against the arm64 library on a Mac.
+            la=$arch; [ "$arch" = android ] && la=arm64
+            [ -d "support/$la/lib" ] || la=$XC_HOST_ARCH
+            REFSEL=(-A "$arch"); PORTINC=(-I support/generic/lib -I "support/$la/lib")
         fi
         if ! "$BIN/xcc" "${REFSEL[@]}" -H . -q "-O$LEVEL" ${EXTRA[@]+"${EXTRA[@]}"} -S -o "$WORK/ref.s" "$f" \
                 >/dev/null 2>&1 || [ ! -s "$WORK/ref.s" ]; then

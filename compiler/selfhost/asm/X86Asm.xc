@@ -418,6 +418,15 @@ class X86Fixup
             _regSize = (u32)16;
             return v;
             }
+        // ymmN: the same registers at 32 bytes; a ymm operand sets VEX.L.
+        if (s.hasPrefix(String.withCString("ymm")))
+            {
+            i32 v = smallNumber(s, (u32)3);
+            if (v < (i32)0 || v > (i32)15)
+                return (i32)-1;
+            _regSize = (u32)32;
+            return v;
+            }
         if (s.byteAt((u32)0) != (u8)'r')
             return (i32)-1;
         u32 end = s.byteLength();
@@ -741,6 +750,8 @@ class X86Fixup
             return (u32)8;
         if (s.hasPrefix(String.withCString("xmmword ptr")))
             return (u32)16;
+        if (s.hasPrefix(String.withCString("ymmword ptr")))
+            return (u32)32;
         return (u32)0;
         }
 
@@ -748,6 +759,8 @@ class X86Fixup
         {
         String* s = s0.lowercased();
         if (s.hasPrefix(String.withCString("xmmword ptr")))
+            return (u32)11;
+        if (s.hasPrefix(String.withCString("ymmword ptr")))
             return (u32)11;
         if (s.hasPrefix(String.withCString("dword ptr")))
             return (u32)9;
@@ -1823,6 +1836,13 @@ class X86Fixup
             return false;
         String* base = mn.substringFromByte((u32)1);
         u32 rr = sseRR(base);
+        u32 map = (u32)1;
+        // The 0F38 map: the SSE4.1 lane min/max and the 32-bit multiply.
+        if (rr == (u32)$FFFF_FFFF)
+            {
+            rr = vex38(base);
+            map = (u32)2;
+            }
         if (rr == (u32)$FFFF_FFFF)
             return false;
         XOperand* s1 = (XOperand*)_ops.get((u32)1);
@@ -1851,22 +1871,196 @@ class X86Fixup
         if (xx < (i32)0) xx = (i32)0;
         u32 vvvv = (~s1.reg()) & (u32)$0F;
         u32 rhi = (a.reg() & (u32)8) != (u32)0 ? (u32)0 : (u32)$80;
-        if ((xx & (i32)8) == (i32)0 && (bb & (i32)8) == (i32)0)
+        // VEX.L: 256-bit when the operands are ymm.
+        u32 L = (a.size() == (u32)32 || s1.size() == (u32)32 || s2.size() == (u32)32) ? (u32)4 : (u32)0;
+        if (map == (u32)1 && (xx & (i32)8) == (i32)0 && (bb & (i32)8) == (i32)0)
             {
             e8((u32)$C5);
-            e8(rhi | (vvvv << (u32)3) | pp);
+            e8(rhi | (vvvv << (u32)3) | L | pp);
             }
         else
             {
             e8((u32)$C4);
             e8(rhi | ((xx & (i32)8) != (i32)0 ? (u32)0 : (u32)$40)
-                   | ((bb & (i32)8) != (i32)0 ? (u32)0 : (u32)$20) | (u32)1);
-            e8((vvvv << (u32)3) | pp);
+                   | ((bb & (i32)8) != (i32)0 ? (u32)0 : (u32)$20) | map);
+            e8((vvvv << (u32)3) | L | pp);
             }
         e8(rr & (u32)$FF);
         eModRM(a.reg(), s2);
         _hit = true;
         return true;
+        }
+
+    // The 0F38-map VEX forms, as (prefix << 8) | opcode like sseRR.
+    static u32 vex38(String* m)
+        {
+        if (m.equals(String.withCString("pmaxsd"))) return (u32)$663D;
+        if (m.equals(String.withCString("pminsd"))) return (u32)$6639;
+        if (m.equals(String.withCString("pmaxud"))) return (u32)$663F;
+        if (m.equals(String.withCString("pminud"))) return (u32)$663B;
+        if (m.equals(String.withCString("pmaxsb"))) return (u32)$663C;
+        if (m.equals(String.withCString("pminsb"))) return (u32)$6638;
+        if (m.equals(String.withCString("pmaxuw"))) return (u32)$663E;
+        if (m.equals(String.withCString("pminuw"))) return (u32)$663A;
+        if (m.equals(String.withCString("pmulld"))) return (u32)$6640;
+        return (u32)$FFFF_FFFF;
+        }
+
+    // A VEX prefix for a form with no first source (vvvv = the given value,
+    // 1111 for "none"): the two-byte form when it can hold it.
+    void eVex(u32 rr, i32 xx, i32 bb, u32 map, u32 vvvv, u32 L, u32 pp)
+        {
+        u32 rhi = (rr & (u32)8) != (u32)0 ? (u32)0 : (u32)$80;
+        if (map == (u32)1 && (xx & (i32)8) == (i32)0 && (bb & (i32)8) == (i32)0)
+            {
+            e8((u32)$C5);
+            e8(rhi | (vvvv << (u32)3) | L | pp);
+            }
+        else
+            {
+            e8((u32)$C4);
+            e8(rhi | ((xx & (i32)8) != (i32)0 ? (u32)0 : (u32)$40)
+                   | ((bb & (i32)8) != (i32)0 ? (u32)0 : (u32)$20) | map);
+            e8((vvvv << (u32)3) | L | pp);
+            }
+        }
+
+    // ── AVX/AVX2 forms that are not a three-operand SSE op ──
+    // vzeroupper; two-operand moves and broadcasts; vextract{i,f}128 (the
+    // source in reg, the destination in r/m); the immediate shifts (the
+    // DESTINATION in vvvv, the source in r/m). As the reference encodes them.
+    bool encAvx(String* mn, XOperand* a, XOperand* b)
+        {
+        if (mn.byteLength() < (u32)2 || mn.byteAt((u32)0) != (u8)'v')
+            return false;
+        if (mn.equals(String.withCString("vzeroupper")) && _ops.count() == (u32)0)
+            {
+            e8((u32)$C5); e8((u32)$F8); e8((u32)$77);
+            _hit = true;
+            return true;
+            }
+        // pp, map, load opcode, store opcode (0 = none)
+        u32 pp = (u32)0; u32 map = (u32)0; u32 ld = (u32)0; u32 st = (u32)0;
+        bool bcast = false;
+        if (mn.equals(String.withCString("vmovdqu")))      { pp = (u32)2; map = (u32)1; ld = (u32)$6F; st = (u32)$7F; }
+        else if (mn.equals(String.withCString("vmovdqa"))) { pp = (u32)1; map = (u32)1; ld = (u32)$6F; st = (u32)$7F; }
+        else if (mn.equals(String.withCString("vmovups"))) { pp = (u32)0; map = (u32)1; ld = (u32)$10; st = (u32)$11; }
+        else if (mn.equals(String.withCString("vmovaps"))) { pp = (u32)0; map = (u32)1; ld = (u32)$28; st = (u32)$29; }
+        else if (mn.equals(String.withCString("vpbroadcastb"))) { pp = (u32)1; map = (u32)2; ld = (u32)$78; bcast = true; }
+        else if (mn.equals(String.withCString("vpbroadcastw"))) { pp = (u32)1; map = (u32)2; ld = (u32)$79; bcast = true; }
+        else if (mn.equals(String.withCString("vpbroadcastd"))) { pp = (u32)1; map = (u32)2; ld = (u32)$58; bcast = true; }
+        else if (mn.equals(String.withCString("vpbroadcastq"))) { pp = (u32)1; map = (u32)2; ld = (u32)$59; bcast = true; }
+        else if (mn.equals(String.withCString("vbroadcastss"))) { pp = (u32)1; map = (u32)2; ld = (u32)$18; bcast = true; }
+        else if (mn.equals(String.withCString("vbroadcastsd"))) { pp = (u32)1; map = (u32)2; ld = (u32)$19; bcast = true; }
+        else if (mn.equals(String.withCString("vpabsb"))) { pp = (u32)1; map = (u32)2; ld = (u32)$1C; }
+        else if (mn.equals(String.withCString("vpabsw"))) { pp = (u32)1; map = (u32)2; ld = (u32)$1D; }
+        else if (mn.equals(String.withCString("vpabsd"))) { pp = (u32)1; map = (u32)2; ld = (u32)$1E; }
+        if (map != (u32)0 && _ops.count() == (u32)2 && a != (XOperand*)0 && b != (XOperand*)0)
+            {
+            bool store = a.kind() == (u32)OP_MEM && st != (u32)0;
+            // Register to register from a high source into a low destination:
+            // the store opcode puts the source in ModRM.reg, where VEX.R reaches
+            // it, so the two-byte prefix still fits. clang picks the same form.
+            if (!store && st != (u32)0 && a.kind() == (u32)OP_REG && b.kind() == (u32)OP_REG
+                && (b.reg() & (u32)8) != (u32)0 && (a.reg() & (u32)8) == (u32)0)
+                store = true;
+            XOperand* regop = store ? b : a;
+            XOperand* rmop = store ? a : b;
+            u32 L = (a.size() == (u32)32 || b.size() == (u32)32) ? (u32)4 : (u32)0;
+            if (bcast)
+                L = a.size() == (u32)32 ? (u32)4 : (u32)0;
+            i32 bb = rmop.kind() == (u32)OP_REG ? (i32)rmop.reg() : rmop.rmReg();
+            i32 xx = rmop.kind() == (u32)OP_REG ? (i32)0 : rmop.index();
+            if (bb < (i32)0) bb = (i32)0;
+            if (xx < (i32)0) xx = (i32)0;
+            eVex(regop.reg(), xx, bb, map, (u32)$0F, L, pp);
+            e8(store ? st : ld);
+            eModRM(regop.reg(), rmop);
+            _hit = true;
+            return true;
+            }
+        bool exti = mn.equals(String.withCString("vextracti128"));
+        bool extf = mn.equals(String.withCString("vextractf128"));
+        if ((exti || extf) && _ops.count() == (u32)3 && a != (XOperand*)0 && b != (XOperand*)0)
+            {
+            XOperand* im = (XOperand*)_ops.get((u32)2);
+            if (im.kind() == (u32)OP_IMM)
+                {
+                i32 bb = a.kind() == (u32)OP_REG ? (i32)a.reg() : a.rmReg();
+                i32 xx = a.kind() == (u32)OP_REG ? (i32)0 : a.index();
+                if (bb < (i32)0) bb = (i32)0;
+                if (xx < (i32)0) xx = (i32)0;
+                eVex(b.reg(), xx, bb, (u32)3, (u32)$0F, (u32)4, (u32)1);
+                e8(exti ? (u32)$39 : (u32)$19);
+                eModRM(b.reg(), a);
+                e8((u32)im.disp() & (u32)$FF);
+                _hit = true;
+                return true;
+                }
+            }
+        if (mn.equals(String.withCString("vpshufd")) && _ops.count() == (u32)3 && a != (XOperand*)0 && b != (XOperand*)0)
+            {
+            XOperand* im = (XOperand*)_ops.get((u32)2);
+            if (im.kind() == (u32)OP_IMM)
+                {
+                u32 L = a.size() == (u32)32 ? (u32)4 : (u32)0;
+                i32 bb = b.kind() == (u32)OP_REG ? (i32)b.reg() : b.rmReg();
+                i32 xx = b.kind() == (u32)OP_REG ? (i32)0 : b.index();
+                if (bb < (i32)0) bb = (i32)0;
+                if (xx < (i32)0) xx = (i32)0;
+                eVex(a.reg(), xx, bb, (u32)1, (u32)$0F, L, (u32)1);
+                e8((u32)$70);
+                eModRM(a.reg(), b);
+                e8((u32)im.disp() & (u32)$FF);
+                _hit = true;
+                return true;
+                }
+            }
+        if (mn.equals(String.withCString("vshufps")) && _ops.count() == (u32)4 && a != (XOperand*)0 && b != (XOperand*)0)
+            {
+            XOperand* s2 = (XOperand*)_ops.get((u32)2);
+            XOperand* im = (XOperand*)_ops.get((u32)3);
+            if (s2.kind() != (u32)OP_IMM && im.kind() == (u32)OP_IMM)
+                {
+                u32 L = (a.size() == (u32)32 || b.size() == (u32)32) ? (u32)4 : (u32)0;
+                i32 bb = s2.kind() == (u32)OP_REG ? (i32)s2.reg() : s2.rmReg();
+                i32 xx = s2.kind() == (u32)OP_REG ? (i32)0 : s2.index();
+                if (bb < (i32)0) bb = (i32)0;
+                if (xx < (i32)0) xx = (i32)0;
+                eVex(a.reg(), xx, bb, (u32)1, (~b.reg()) & (u32)$0F, L, (u32)0);
+                e8((u32)$C6);
+                eModRM(a.reg(), s2);
+                e8((u32)im.disp() & (u32)$FF);
+                _hit = true;
+                return true;
+                }
+            }
+        // vpsrl/vpsra/vpsll by an immediate: opcode and /ext
+        u32 sop = (u32)0; u32 sext = (u32)0;
+        if (mn.equals(String.withCString("vpsrlw"))) { sop = (u32)$71; sext = (u32)2; }
+        else if (mn.equals(String.withCString("vpsraw"))) { sop = (u32)$71; sext = (u32)4; }
+        else if (mn.equals(String.withCString("vpsllw"))) { sop = (u32)$71; sext = (u32)6; }
+        else if (mn.equals(String.withCString("vpsrld"))) { sop = (u32)$72; sext = (u32)2; }
+        else if (mn.equals(String.withCString("vpsrad"))) { sop = (u32)$72; sext = (u32)4; }
+        else if (mn.equals(String.withCString("vpslld"))) { sop = (u32)$72; sext = (u32)6; }
+        else if (mn.equals(String.withCString("vpsrlq"))) { sop = (u32)$73; sext = (u32)2; }
+        else if (mn.equals(String.withCString("vpsllq"))) { sop = (u32)$73; sext = (u32)6; }
+        if (sop != (u32)0 && _ops.count() == (u32)3 && a != (XOperand*)0 && b != (XOperand*)0
+            && b.kind() == (u32)OP_REG)
+            {
+            XOperand* im = (XOperand*)_ops.get((u32)2);
+            if (im.kind() == (u32)OP_IMM)
+                {
+                u32 L = a.size() == (u32)32 ? (u32)4 : (u32)0;
+                eVex((u32)0, (i32)0, (i32)b.reg(), (u32)1, (~a.reg()) & (u32)$0F, L, (u32)1);
+                e8(sop);
+                e8((u32)$C0 | (sext << (u32)3) | (b.reg() & (u32)7));
+                e8((u32)im.disp() & (u32)$FF);
+                _hit = true;
+                return true;
+                }
+            }
+        return false;
         }
 
     static bool vexCommutes(String* m)
@@ -1881,11 +2075,22 @@ class X86Fixup
             || m.equals(String.withCString("pand"))  || m.equals(String.withCString("por"))
             || m.equals(String.withCString("pxor"))  || m.equals(String.withCString("paddb"))
             || m.equals(String.withCString("paddw")) || m.equals(String.withCString("paddd"))
-            || m.equals(String.withCString("paddq"));
+            || m.equals(String.withCString("paddq"))
+            || m.equals(String.withCString("pmuludq"))
+            || m.equals(String.withCString("pmullw"))
+            || m.equals(String.withCString("pcmpeqb"))
+            || m.equals(String.withCString("pcmpeqw"))
+            || m.equals(String.withCString("pcmpeqd"))
+            || m.equals(String.withCString("pmaxsw"))
+            || m.equals(String.withCString("pminsw"))
+            || m.equals(String.withCString("pmaxub"))
+            || m.equals(String.withCString("pminub"));
         }
 
     void encGroupD(String* mn, XOperand* a, XOperand* b)
         {
+        if (encAvx(mn, a, b))
+            return;
         if (encVex128(mn, a))
             return;
         u32 rr = sseRR(mn);
@@ -2200,6 +2405,16 @@ class X86Fixup
         // vectorize_widen_tail).
         if (m.equals(String.withCString("pmullw")))
             return (u32)$66D5;
+        // The SSE2 word / byte lane min and max (16-bit signed, 8-bit
+        // unsigned); the other widths and signs are SSE4.1, in VEX's 0F38 map.
+        if (m.equals(String.withCString("pmaxsw")))
+            return (u32)$66EE;
+        if (m.equals(String.withCString("pminsw")))
+            return (u32)$66EA;
+        if (m.equals(String.withCString("pmaxub")))
+            return (u32)$66DE;
+        if (m.equals(String.withCString("pminub")))
+            return (u32)$66DA;
         // The unsigned 32x32 -> 64 lane product over lanes 0 and 2. SSE2 has no
         // other widening integer multiply, and it is what the VMulHi sequence
         // is built from.

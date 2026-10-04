@@ -178,6 +178,25 @@ class X86_64
         return t != (String*)0 && t.hasPrefix(String.withCString("Vec("));
         }
 
+    // A 32-byte vector type: Vec(T, 32).
+    static bool isWideVecTy(String* t)
+        {
+        return isVecTy(t) && t.hasSuffix(String.withCString(", 32)"));
+        }
+
+    static bool isYmm(String* r)
+        {
+        return r != (String*)0 && r.hasPrefix(String.withCString("ymm"));
+        }
+
+    // The xmm name of a ymm register: its low 128 bits.
+    static String* lowHalf(String* r)
+        {
+        String* x = String.withCString("x");
+        x.append(r.substringFromByte((u32)1));
+        return x;
+        }
+
     static bool isFloatTy(String* t)
         {
         return t != (String*)0 && (t.equals(String.withCString("F32")) || t.equals(String.withCString("F64")));
@@ -209,9 +228,10 @@ class X86_64
         // after it in a vectorised function sat 8 bytes higher than the
         // reference's: 153 files at -O3, all differing by 134 lines, all one
         // `Data$withBytes` (bug 090). A 16-byte value in an 8-byte slot is
-        // also a corruption waiting for the first spill.
+        // also a corruption waiting for the first spill. Under -mavx2 a
+        // Vec(T, 32) is one ymm register, 32 bytes, and its slot follows.
         if (t.hasPrefix(String.withCString("Vec(")))
-            return (u32)16;
+            return isWideVecTy(t) ? (u32)32 : (u32)16;
         return (u32)0;
         }
 
@@ -414,7 +434,7 @@ class X86_64
             String* module = _out;
             _out = new String();
             emitFunction(fn);
-            module.append(peepholeFallthrough(peepholeCopyProp(_out)));
+            module.append(withVzeroupper(peepholeFallthrough(peepholeCopyProp(_out))));
             _out = module;
             }
         emitModuleData(m);
@@ -1498,7 +1518,9 @@ class X86_64
             return;
         loadZX((IROperand*)n.ops().get((u32)0), (u8)'a');
         bool flt = isFloatTy(laneOf(n.res().ty()));
-        _out.appendFormat("\t%s\t%s, [rax]\n", flt ? "movups" : "movdqu", d.cString());
+        bool W = isYmm(d);
+        _out.appendFormat("\t%s%s\t%s, %s[rax]\n", W ? "v" : "", flt ? "movups" : "movdqu",
+                          d.cString(), W ? "ymmword ptr " : "");
         }
 
     void emitVStore(IRInsn* n)
@@ -1513,7 +1535,9 @@ class X86_64
             return;
         bool flt = isFloatTy(laneOf(v.val().ty()));
         loadZX((IROperand*)n.ops().get((u32)0), (u8)'a');
-        _out.appendFormat("\t%s\t[rax], %s\n", flt ? "movups" : "movdqu", sv.cString());
+        bool W = isYmm(sv);
+        _out.appendFormat("\t%s%s\t%s[rax], %s\n", W ? "v" : "", flt ? "movups" : "movdqu",
+                          W ? "ymmword ptr " : "", sv.cString());
         }
 
     void emitVSplat(IRInsn* n)
@@ -1525,6 +1549,30 @@ class X86_64
             return;
         String* lane = laneOf(n.res().ty());
         IROperand* src = (IROperand*)n.ops().get((u32)0);
+        // 256-bit: the scalar into the register's low half, then broadcast.
+        if (isYmm(d))
+            {
+            String* x = lowHalf(d);
+            if (lane != (String*)0 && lane.equals(String.withCString("F64")))
+                {
+                loadF(src, x);
+                _out.appendFormat("\tvbroadcastsd\t%s, %s\n", d.cString(), x.cString());
+                return;
+                }
+            if (lane != (String*)0 && lane.equals(String.withCString("F32")))
+                {
+                loadF(src, x);
+                _out.appendFormat("\tvbroadcastss\t%s, %s\n", d.cString(), x.cString());
+                return;
+                }
+            loadZX(src, (u8)'a');
+            _out.appendFormat("\tmovd\t%s, eax\n", x.cString());
+            u32 bw = lane == (String*)0 ? (u32)4 : irWidth(lane);
+            String* bc = String.withCString(bw == (u32)1 ? "vpbroadcastb" : (bw == (u32)2 ? "vpbroadcastw"
+                                            : (bw == (u32)8 ? "vpbroadcastq" : "vpbroadcastd")));
+            _out.appendFormat("\t%s\t%s, %s\n", bc.cString(), d.cString(), x.cString());
+            return;
+            }
         if (lane != (String*)0 && lane.equals(String.withCString("F64")))
             {
             loadF(src, d);
@@ -1580,6 +1628,12 @@ class X86_64
             return;
             }
         bool flt = isFloatTy(lane);
+        // 256-bit: the VEX three-operand form, which keeps both sources.
+        if (isYmm(d))
+            {
+            _out.appendFormat("\tv%s\t%s, %s, %s\n", mn.cString(), d.cString(), a.cString(), b.cString());
+            return;
+            }
         String* mov = String.withCString(flt ? "movaps" : "movdqa");
         bool commut = !n.op().equals(String.withCString("VSub"));
         // The two-address destructive form: compute in d, keeping whichever
@@ -1693,6 +1747,20 @@ class X86_64
         String* b = vecOf(o1.val());
         if (d == (String*)0 || a == (String*)0 || b == (String*)0)
             return;
+        if (isYmm(d))
+            {
+            // The same sequence in VEX.256: pmuludq / pshufd / shufps all work
+            // within each 128-bit half, which is exactly the per-pair shape.
+            _out.appendFormat("\tvpmuludq\tymm0, %s, %s\n", a.cString(), b.cString());
+            _out.appendCString("\tvpsrlq\tymm0, ymm0, 32\n");
+            _out.appendFormat("\tvpshufd\tymm1, %s, 0xB1\n", a.cString());
+            _out.appendFormat("\tvpshufd\t%s, %s, 0xB1\n", d.cString(), b.cString());
+            _out.appendFormat("\tvpmuludq\tymm1, ymm1, %s\n", d.cString());
+            _out.appendCString("\tvpsrlq\tymm1, ymm1, 32\n");
+            _out.appendFormat("\tvshufps\t%s, ymm0, ymm1, 0x88\n", d.cString());
+            _out.appendFormat("\tvpshufd\t%s, %s, 0xD8\n", d.cString(), d.cString());
+            return;
+            }
         _out.appendFormat("\tmovdqa\txmm0, %s\n", a.cString());
         _out.appendFormat("\tpmuludq\txmm0, %s\n", b.cString());
         _out.appendCString("\tpsrlq\txmm0, 32\n");
@@ -1725,6 +1793,12 @@ class X86_64
         if (lw != (u32)2 && lw != (u32)4 && lw != (u32)8)
             return; // no byte-lane shift in SSE
         String* mn = String.withCString(lw == (u32)2 ? "psrlw" : (lw == (u32)8 ? "psrlq" : "psrld"));
+        if (isYmm(d))
+            {
+            _out.appendFormat("\tv%s\t%s, %s, %d\n", mn.cString(), d.cString(), a.cString(),
+                              ((IROperand*)n.ops().get((u32)1)).imm());
+            return;
+            }
         if (!d.equals(a))
             _out.appendFormat("\tmovdqa\t%s, %s\n", d.cString(), a.cString());
         _out.appendFormat("\t%s\t%s, %d\n", mn.cString(), d.cString(),
@@ -1741,6 +1815,14 @@ class X86_64
         String* v = vecOf(o.val());
         if (v == (String*)0)
             return;
+        if (isYmm(v))
+            {
+            // Fold the high 128 bits onto the low, then the 4-lane fold below.
+            String* x = lowHalf(v);
+            _out.appendFormat("\tvextracti128\txmm0, %s, 1\n\tvpaddd\t%s, %s, xmm0\n",
+                              v.cString(), x.cString(), x.cString());
+            v = x;
+            }
         _out.appendFormat("\tphaddd\t%s, %s\n\tphaddd\t%s, %s\n",
                           v.cString(), v.cString(), v.cString(), v.cString());
         _out.appendFormat("\tmovd\teax, %s\n", v.cString());
@@ -1762,6 +1844,13 @@ class X86_64
         String* mn = n.op().equals(String.withCString("VReduceMax"))
                          ? String.withCString(sgn ? "pmaxsd" : "pmaxud")
                          : String.withCString(sgn ? "pminsd" : "pminud");
+        if (isYmm(v))
+            {
+            String* x = lowHalf(v);
+            _out.appendFormat("\tvextracti128\txmm0, %s, 1\n\tv%s\t%s, %s, xmm0\n",
+                              v.cString(), mn.cString(), x.cString(), x.cString());
+            v = x;
+            }
         _out.appendFormat("\tpshufd\txmm0, %s, 0x4E\n\t%s\t%s, xmm0\n",
                           v.cString(), mn.cString(), v.cString());
         _out.appendFormat("\tpshufd\txmm0, %s, 0xB1\n\t%s\t%s, xmm0\n",
@@ -1848,6 +1937,29 @@ class X86_64
         if (lw != (u32)1 && lw != (u32)2 && lw != (u32)4)
             return;         // 64-bit lanes need SSE4.2 pcmpgtq; not emitted today
         String* sfx = String.withCString(lw == (u32)1 ? "b" : (lw == (u32)2 ? "w" : "d"));
+        if (isYmm(d))
+            {
+            // VEX.256: three-operand, so no copies; ymm0/ymm1 are the scratch.
+            if (uns && !useEq)
+                {
+                if (lw == (u32)1)
+                    _out.appendCString("\tvpcmpeqd\tymm1, ymm1, ymm1\n\tvpabsb\tymm1, ymm1\n\tvpsllw\tymm1, ymm1, 7\n");
+                else if (lw == (u32)2)
+                    _out.appendCString("\tvpcmpeqd\tymm1, ymm1, ymm1\n\tvpsllw\tymm1, ymm1, 15\n");
+                else
+                    _out.appendCString("\tvpcmpeqd\tymm1, ymm1, ymm1\n\tvpslld\tymm1, ymm1, 31\n");
+                _out.appendFormat("\tvpxor\tymm0, %s, ymm1\n\tvpxor\tymm1, %s, ymm1\n",
+                                  rhs.cString(), lhs.cString());
+                _out.appendFormat("\tvpcmpgt%s\t%s, ymm1, ymm0\n", sfx.cString(), d.cString());
+                }
+            else
+                _out.appendFormat("\tv%s%s\t%s, %s, %s\n", useEq ? "pcmpeq" : "pcmpgt", sfx.cString(),
+                                  d.cString(), lhs.cString(), rhs.cString());
+            if (invert)
+                _out.appendFormat("\tvpcmpeqd\tymm0, ymm0, ymm0\n\tvpxor\t%s, %s, ymm0\n",
+                                  d.cString(), d.cString());
+            return;
+            }
         if (uns && !useEq)
             {
             // There is no unsigned packed compare, so both sides are biased by
@@ -2101,7 +2213,9 @@ class X86_64
             Object* r = regOf.get((Hashable*)classOfVec(v));
             if (r == (Object*)0)
                 continue;
-            String* name = String.withCString("xmm");
+            // A 32-byte vector (-mavx2) lives in the same register
+            // under its 256-bit name; every emitter keys its VEX form off "ymm".
+            String* name = String.withCString(isWideVecTy(v.ty()) ? "ymm" : "xmm");
             name.appendFormat("%lu", ((Number*)r).asU32());
             _vec.set((Hashable*)v, (Object*)name);
             }
@@ -3328,6 +3442,35 @@ class X86_64
         if (c != (u8)'\t' && c != (u8)' ')
             return (String*)0;
         return t.substringFromByte((u32)4).trimmed();
+        }
+
+    // A function that used ymm leaves the upper halves dirty, and SSE code after
+    // it (any callee, any caller) pays a state transition on every Intel part
+    // before Skylake and a false dependency on later ones. `vzeroupper` before
+    // each way out (a call, a return, a jump to another function) is the rule
+    // every compiler follows; done as a pass over the finished text so no call
+    // site has to remember it. Functions with no ymm are returned unchanged.
+    String* withVzeroupper(String* text)
+        {
+        if (!text.contains(String.withCString("ymm")))
+            return text;
+        Array* lines = text.splitOnByte((u8)'\n');
+        String* out = String.withCString("");
+        for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1)
+            {
+            String* line = (String*)lines.get(i);
+            String* t = line.trimmed();
+            bool exitInsn = t.hasPrefix(String.withCString("call\t")) || t.hasPrefix(String.withCString("call "))
+                            || t.equals(String.withCString("ret"))
+                            || (t.hasPrefix(String.withCString("jmp\t")) && !t.hasPrefix(String.withCString("jmp\t.")));
+            if (exitInsn)
+                out.appendCString("\tvzeroupper\n");
+            out.append(line);
+            out.appendCString("\n");
+            }
+        if (out.hasSuffix(String.withCString("\n\n")))
+            out = out.substringBytes((u32)0, out.byteLength() - (u32)1);
+        return out;
         }
 
     String* peepholeFallthrough(String* text)
@@ -4742,7 +4885,8 @@ class X86_64
                 String* dv = vecOf(phi.res());
                 String* sv = inc.kind() == (u8)OPK_USE ? vecOf(inc.val()) : (String*)0;
                 if (dv != (String*)0 && sv != (String*)0 && !dv.equals(sv))
-                    _out.appendFormat("\tmovdqa\t%s, %s\n", dv.cString(), sv.cString());
+                    _out.appendFormat("\t%s\t%s, %s\n", isYmm(dv) ? "vmovdqa" : "movdqa",
+                                      dv.cString(), sv.cString());
                 continue;
                 }
             dests.add((Object*)phi.res());

@@ -57,6 +57,9 @@ static BOOL parseReg(NSString *s, int *num, int *size, BOOL *needRex) {
             m[[NSString stringWithFormat:@"r%db", i]] = @[@(i), @1, @0];
         }
         for (int i=0;i<16;i++) m[[NSString stringWithFormat:@"xmm%d", i]] = @[@(i), @16, @0];
+        // ymm: the same 16 registers at 32 bytes. A ymm operand is what sets
+        // VEX.L; nothing else distinguishes the encodings.
+        for (int i=0;i<16;i++) m[[NSString stringWithFormat:@"ymm%d", i]] = @[@(i), @32, @0];
         T = m;
     });
     NSArray<NSNumber *> *e = T[[s lowercaseString]];
@@ -94,8 +97,8 @@ static BOOL parseOperand(NSString *tok, XOperand *o, NSError **err) {
 
     // size-override prefixes: "qword ptr [..]", "byte ptr [..]" &c.
     int forced = 0;
-    NSArray *pfx = @[@"byte",@"word",@"dword",@"qword",@"xmmword"];
-    NSArray *psz = @[@1,@2,@4,@8,@16];
+    NSArray *pfx = @[@"byte",@"word",@"dword",@"qword",@"xmmword",@"ymmword"];
+    NSArray *psz = @[@1,@2,@4,@8,@16,@32];
     for (NSUInteger i=0;i<pfx.count;i++) {
         NSString *p = [pfx[i] stringByAppendingString:@" ptr"];
         if ([[s lowercaseString] hasPrefix:p]) {
@@ -809,6 +812,11 @@ static void emitModRM(NSMutableData *d, int reg, const XOperand *rm) {
                   // The i16 multiply the vectoriser emits for a widening
                   // product (vectorize_dot, vectorize_widen_tail).
                   @"pmullw":@[@0x66,@0xD5],
+                  // The SSE2 word / byte lane min and max (16-bit signed, 8-bit
+                  // unsigned); the other widths and signs are SSE4.1, in VEX's
+                  // 0F38 map.
+                  @"pmaxsw":@[@0x66,@0xEE], @"pminsw":@[@0x66,@0xEA],
+                  @"pmaxub":@[@0x66,@0xDE], @"pminub":@[@0x66,@0xDA],
                   // The unsigned 32x32 -> 64 lane product over lanes 0
                   // and 2. SSE2 has no other widening integer multiply,
                   // and it is what the VMulHi sequence is built from.
@@ -833,6 +841,139 @@ static void emitModRM(NSMutableData *d, int reg, const XOperand *rm) {
     //
     // pp encodes the mandatory prefix the SSE form carries (66/F3/F2), and
     // mmmmm the opcode map (0F, 0F38). vvvv holds the first source INVERTED.
+    // ── AVX/AVX2 forms that are not a three-operand SSE op ──
+    // vzeroupper; two-operand moves and broadcasts (VEX.vvvv = 1111);
+    // vextract{i,f}128 (the source in reg, the destination in r/m); and the
+    // immediate shifts (the DESTINATION in vvvv, the source in r/m).
+    if ([mn isEqualToString:@"vzeroupper"] && opCount == 0) {
+        emit8(out, 0xC5); emit8(out, 0xF8); emit8(out, 0x77); CLEANUP(); return out;
+    }
+    {
+        // mnemonic -> @[pp, map, load-opcode, store-opcode (0 = none)]
+        static NSDictionary *vex2; static dispatch_once_t v2once;
+        dispatch_once(&v2once, ^{
+            vex2 = @{@"vmovdqu":@[@2,@1,@0x6F,@0x7F], @"vmovdqa":@[@1,@1,@0x6F,@0x7F],
+                     @"vmovups":@[@0,@1,@0x10,@0x11], @"vmovaps":@[@0,@1,@0x28,@0x29],
+                     @"vpbroadcastb":@[@1,@2,@0x78,@0], @"vpbroadcastw":@[@1,@2,@0x79,@0],
+                     @"vpbroadcastd":@[@1,@2,@0x58,@0], @"vpbroadcastq":@[@1,@2,@0x59,@0],
+                     @"vbroadcastss":@[@1,@2,@0x18,@0], @"vbroadcastsd":@[@1,@2,@0x19,@0],
+                     @"vpabsb":@[@1,@2,@0x1C,@0], @"vpabsw":@[@1,@2,@0x1D,@0],
+                     @"vpabsd":@[@1,@2,@0x1E,@0]};
+        });
+        NSArray *v2 = vex2[mn];
+        if (v2 && opCount == 2 && a && b) {
+            BOOL store = (a->kind == OpMem) && [v2[3] intValue] != 0;
+            // Register to register from a high source into a low destination:
+            // the store opcode puts the source in ModRM.reg, where VEX.R reaches
+            // it, so the two-byte prefix still fits. clang picks the same form.
+            if (!store && [v2[3] intValue] != 0 && a->kind == OpReg && b->kind == OpReg
+                && (b->reg & 8) && !(a->reg & 8))
+                store = YES;
+            XOperand *regop = store ? b : a, *rmop = store ? a : b;
+            int pp = [v2[0] intValue], map = [v2[1] intValue];
+            int op = store ? [v2[3] intValue] : [v2[2] intValue];
+            int L = (a->size == 32 || b->size == 32) ? 0x04 : 0;
+            // A broadcast's L follows its DESTINATION (the source is always xmm/m).
+            if ([mn hasPrefix:@"vpbroadcast"] || [mn hasPrefix:@"vbroadcasts"])
+                L = a->size == 32 ? 0x04 : 0;
+            int rr = regop->reg < 0 ? 0 : regop->reg;
+            int bb = rmop->kind == OpReg ? rmop->reg : rmop->base;
+            int xx = rmop->kind == OpReg ? 0 : rmop->index;
+            bb = bb < 0 ? 0 : bb; xx = xx < 0 ? 0 : xx;
+            if (map == 1 && !(xx & 8) && !(bb & 8)) {
+                emit8(out, 0xC5);
+                emit8(out, (uint8_t)(((rr & 8) ? 0 : 0x80) | (0x0F << 3) | L | pp));
+            } else {
+                emit8(out, 0xC4);
+                emit8(out, (uint8_t)(((rr & 8) ? 0 : 0x80) | ((xx & 8) ? 0 : 0x40)
+                                     | ((bb & 8) ? 0 : 0x20) | map));
+                emit8(out, (uint8_t)((0x0F << 3) | L | pp));
+            }
+            emit8(out, (uint8_t)op);
+            emitModRM(out, regop->reg, rmop);
+            CLEANUP(); return out;
+        }
+        if (([mn isEqualToString:@"vextracti128"] || [mn isEqualToString:@"vextractf128"])
+            && opCount == 3 && a && b && opv[2].kind == OpImm) {
+            // VEX.256.66.0F3A 39 (19) /r ib: reg = the ymm source, r/m = the xmm dest.
+            int rr = b->reg, bb = a->kind == OpReg ? a->reg : a->base;
+            int xx = a->kind == OpReg ? 0 : a->index;
+            bb = bb < 0 ? 0 : bb; xx = xx < 0 ? 0 : xx;
+            emit8(out, 0xC4);
+            emit8(out, (uint8_t)(((rr & 8) ? 0 : 0x80) | ((xx & 8) ? 0 : 0x40) | ((bb & 8) ? 0 : 0x20) | 3));
+            emit8(out, (uint8_t)((0x0F << 3) | 0x04 | 1));
+            emit8(out, [mn isEqualToString:@"vextracti128"] ? 0x39 : 0x19);
+            emitModRM(out, rr, a);
+            emit8(out, (uint8_t)opv[2].imm);
+            CLEANUP(); return out;
+        }
+        if ([mn isEqualToString:@"vpshufd"] && opCount == 3 && a && b && opv[2].kind == OpImm) {
+            // VEX.66.0F 70 /r ib, no first source.
+            int L = a->size == 32 ? 0x04 : 0;
+            int rr = a->reg, bb = b->kind == OpReg ? b->reg : b->base;
+            int xx = b->kind == OpReg ? 0 : b->index;
+            bb = bb < 0 ? 0 : bb; xx = xx < 0 ? 0 : xx;
+            if (!(xx & 8) && !(bb & 8)) {
+                emit8(out, 0xC5);
+                emit8(out, (uint8_t)(((rr & 8) ? 0 : 0x80) | (0x0F << 3) | L | 1));
+            } else {
+                emit8(out, 0xC4);
+                emit8(out, (uint8_t)(((rr & 8) ? 0 : 0x80) | ((xx & 8) ? 0 : 0x40) | ((bb & 8) ? 0 : 0x20) | 1));
+                emit8(out, (uint8_t)((0x0F << 3) | L | 1));
+            }
+            emit8(out, 0x70);
+            emitModRM(out, rr, b);
+            emit8(out, (uint8_t)opv[2].imm);
+            CLEANUP(); return out;
+        }
+        if ([mn isEqualToString:@"vshufps"] && opCount == 4 && a && b && opv[2].kind != OpImm && opv[3].kind == OpImm) {
+            // VEX.NDS.0F C6 /r ib.
+            XOperand *s2 = &opv[2];
+            int L = (a->size == 32 || b->size == 32) ? 0x04 : 0;
+            int rr = a->reg, vvvv = (~b->reg) & 0x0F;
+            int bb = s2->kind == OpReg ? s2->reg : s2->base;
+            int xx = s2->kind == OpReg ? 0 : s2->index;
+            bb = bb < 0 ? 0 : bb; xx = xx < 0 ? 0 : xx;
+            if (!(xx & 8) && !(bb & 8)) {
+                emit8(out, 0xC5);
+                emit8(out, (uint8_t)(((rr & 8) ? 0 : 0x80) | (vvvv << 3) | L | 0));
+            } else {
+                emit8(out, 0xC4);
+                emit8(out, (uint8_t)(((rr & 8) ? 0 : 0x80) | ((xx & 8) ? 0 : 0x40) | ((bb & 8) ? 0 : 0x20) | 1));
+                emit8(out, (uint8_t)((vvvv << 3) | L | 0));
+            }
+            emit8(out, 0xC6);
+            emitModRM(out, rr, s2);
+            emit8(out, (uint8_t)opv[3].imm);
+            CLEANUP(); return out;
+        }
+        // mnemonic -> @[opcode, /ext]
+        static NSDictionary *vexShiftI; static dispatch_once_t vsonce;
+        dispatch_once(&vsonce, ^{
+            vexShiftI = @{@"vpsrlw":@[@0x71,@2], @"vpsraw":@[@0x71,@4], @"vpsllw":@[@0x71,@6],
+                          @"vpsrld":@[@0x72,@2], @"vpsrad":@[@0x72,@4], @"vpslld":@[@0x72,@6],
+                          @"vpsrlq":@[@0x73,@2], @"vpsllq":@[@0x73,@6]};
+        });
+        NSArray *vs = vexShiftI[mn];
+        if (vs && opCount == 3 && a && b && opv[2].kind == OpImm && b->kind == OpReg) {
+            // VEX.NDD.66.0F <op> /ext ib: vvvv = the destination, r/m = the source.
+            int L = a->size == 32 ? 0x04 : 0;
+            int vvvv = (~a->reg) & 0x0F;
+            int bb = b->reg;
+            if (!(bb & 8)) {
+                emit8(out, 0xC5);
+                emit8(out, (uint8_t)(0x80 | (vvvv << 3) | L | 1));
+            } else {
+                emit8(out, 0xC4);
+                emit8(out, (uint8_t)(0x80 | 0x40 | 0 | 1));
+                emit8(out, (uint8_t)((vvvv << 3) | L | 1));
+            }
+            emit8(out, (uint8_t)[vs[0] intValue]);
+            emit8(out, (uint8_t)(0xC0 | ([vs[1] intValue] << 3) | (bb & 7)));
+            emit8(out, (uint8_t)opv[2].imm);
+            CLEANUP(); return out;
+        }
+    }
     if ([mn hasPrefix:@"v"] && opCount == 3 && a && b) {
         NSString *base = [mn substringFromIndex:1];
         // The 0F map only, for now: the 0F38 table below is declared after this
@@ -841,6 +982,17 @@ static void emitModRM(NSMutableData *d, int reg, const XOperand *rm) {
         // register in the r/m or index field needs it whatever the map is.
         NSArray *vr = sseRR[base];
         int map = 1;
+        // The 0F38 map: the SSE4.1 lane min/max and the 32-bit multiply, which
+        // the 256-bit max/min reductions and i32 maps need.
+        static NSDictionary *vex38; static dispatch_once_t v38once;
+        dispatch_once(&v38once, ^{
+            vex38 = @{@"pmaxsd":@[@0x66,@0x3D], @"pminsd":@[@0x66,@0x39],
+                      @"pmaxud":@[@0x66,@0x3F], @"pminud":@[@0x66,@0x3B],
+                      @"pmaxsb":@[@0x66,@0x3C], @"pminsb":@[@0x66,@0x38],
+                      @"pmaxuw":@[@0x66,@0x3E], @"pminuw":@[@0x66,@0x3A],
+                      @"pmulld":@[@0x66,@0x40]};
+        });
+        if (!vr && vex38[base]) { vr = vex38[base]; map = 2; }
         XOperand *src1 = &opv[1];
         XOperand *src2 = &opv[2];
         // COMMUTE, when the operation allows it and it buys a byte. The
@@ -862,7 +1014,7 @@ static void emitModRM(NSMutableData *d, int reg, const XOperand *rm) {
                                                 @"andps", @"andpd", @"orps",  @"orpd",
                                                 @"xorps", @"xorpd", @"pand",  @"por",
                                                 @"pxor",  @"paddb", @"paddw", @"paddd",
-                                                @"paddq"]];
+                                                @"paddq", @"pmuludq", @"pmullw", @"pcmpeqb", @"pcmpeqw", @"pcmpeqd", @"pmaxsw", @"pminsw", @"pmaxub", @"pminub"]];
         });
         if (vr && [vexCommutes containsObject:base]
             && src1->kind == OpReg && src2->kind == OpReg
@@ -878,15 +1030,17 @@ static void emitModRM(NSMutableData *d, int reg, const XOperand *rm) {
             bb = bb < 0 ? 0 : bb;
             xx = xx < 0 ? 0 : xx;
             int vvvv = (~src1->reg) & 0x0F;
+            // VEX.L: 256-bit when the operands are ymm.
+            int L = (a->size == 32 || src1->size == 32 || src2->size == 32) ? 0x04 : 0;
             if (map == 1 && !(xx & 8) && !(bb & 8)) {
                 emit8(out, 0xC5);
-                emit8(out, (uint8_t)(((rr & 8) ? 0 : 0x80) | (vvvv << 3) | pp));
+                emit8(out, (uint8_t)(((rr & 8) ? 0 : 0x80) | (vvvv << 3) | L | pp));
             }
             else {
                 emit8(out, 0xC4);
                 emit8(out, (uint8_t)(((rr & 8) ? 0 : 0x80) | ((xx & 8) ? 0 : 0x40)
                                      | ((bb & 8) ? 0 : 0x20) | map));
-                emit8(out, (uint8_t)((vvvv << 3) | pp));
+                emit8(out, (uint8_t)((vvvv << 3) | L | pp));
             }
             emit8(out, (uint8_t)[vr[1] intValue]);
             emitModRM(out, a->reg, src2);
