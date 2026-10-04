@@ -85,43 +85,55 @@ class Files
         {
         if (path == 0)
             return (String*)0;
-        i32 size = _xt_file_size(path.cString());
-        if (size < (i32)0)
+        Data* d = Files.readData(path);
+        if (d == (Data*)0)
             return (String*)0;
-
-        i32 h = _xt_file_open(path.cString(), (u8*)"rb");
-        if (h < (i32)0)
-            return (String*)0;
-
-        u8* buf = new u8[(u32)size + (u32)1];
-        i32 got = (size > (i32)0) ? _xt_file_read(h, buf, (u32)size) : (i32)0;
-        _xt_file_close(h);
-        if (got < (i32)0)
-            return (String*)0;
-
         // withBytes copies and adds the NUL that a byte count does not imply —
         // the file's own bytes may contain one.
-        return String.withBytes(buf, (u32)got);
+        return String.withBytes(d.bytes(), d.length());
         }
 
     static Data* readData(String* path)
         {
         if (path == 0)
             return (Data*)0;
-        i32 size = _xt_file_size(path.cString());
-        if (size < (i32)0)
-            return (Data*)0;
-
         i32 h = _xt_file_open(path.cString(), (u8*)"rb");
         if (h < (i32)0)
             return (Data*)0;
 
-        u8* buf = new u8[(u32)size + (u32)1];
-        i32 got = (size > (i32)0) ? _xt_file_read(h, buf, (u32)size) : (i32)0;
+        // Read to END OF FILE, not to the size the file reports: /proc and /sys
+        // files (and pipes) report no size at all (-1) or 0 and still have
+        // content, and this returned null or empty for them (/proc/cpuinfo, for
+        // -mnative). The size is only the first guess; a regular file is still
+        // one read. Only a file that cannot be OPENED is unreadable.
+        i32 size = _xt_file_size(path.cString());
+        u32 cap = size > (i32)0 ? (u32)size + (u32)1 : (u32)4096;
+        u8* buf = new u8[cap];
+        u32 len = (u32)0;
+        while (true)
+            {
+            if (len == cap)
+                {
+                u32 ncap = cap * (u32)2;
+                u8* nbuf = new u8[ncap];
+                for (u32 i = (u32)0; i < len; i = i + (u32)1)
+                    nbuf[i] = buf[i];
+                delete buf;
+                buf = nbuf;
+                cap = ncap;
+                }
+            i32 got = _xt_file_read(h, &buf[len], cap - len);
+            if (got < (i32)0)
+                {
+                _xt_file_close(h);
+                return (Data*)0;
+                }
+            if (got == (i32)0)
+                break;
+            len = len + (u32)got;
+            }
         _xt_file_close(h);
-        if (got < (i32)0)
-            return (Data*)0;
-        return Data.withBytes(buf, (u32)got);
+        return Data.withBytes(buf, len);
         }
 
     // ── Whole-file writes ────────────────────────────────────────
