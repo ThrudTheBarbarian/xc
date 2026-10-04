@@ -26,6 +26,7 @@
 // Adler's puff, which is the shortest correct statement of it), with the three block
 // types: stored, fixed and dynamic.
 #import "UXImage.xc"
+#import "UXPngEncode.xc" // encode, the writing half
 
 #define PNG_MAXBITS 15
 #define PNG_MAXSYMS 288
@@ -1333,6 +1334,11 @@ class UXPng
         }
 
     // The only entry point an app needs.
+    // The image as a PNG file's bytes (UXPngEncode): 8-bit RGB when it is opaque, RGBA otherwise.
+    static UXData* encode(UXImage* img)
+        {
+        return UXPngEncode.encode(img);
+        }
     static UXImage* decode(u8* bytes, i32 n)
         {
         UXPng* p = new UXPng();
