@@ -772,8 +772,27 @@ static void gl_pixel_size(int handle, int node, int* pw, int* ph)
 
 /* The context is the area's and outlives the token the driver hands the app, so
  * "release" only forgets the widget; GTK frees it with the window. */
+/* Before a context is handed out: let GTK lay the GL area out, so its drawable has its size from the
+ * first call -- as on the other backends, where the size is known when the context is.  GTK sizes a
+ * widget only when its main loop turns, and an app that sets up (or draws headless frames) before
+ * the run loop has turned would otherwise see 0x0 and draw into nothing.  Bounded: about a second. */
+static gboolean ux_gtk_gl_beat(gpointer ud) { (void)ud; return G_SOURCE_CONTINUE; }
+static void gl_wait_allocated(int handle, int node)
+    {
+    GtkWidget* a = gGlA[handle][node];
+    if (!a || !gtk_widget_get_visible(a))
+        return;
+    if (gtk_widget_get_width(a) > 0 && gtk_widget_get_realized(a))
+        return;
+    guint beat = g_timeout_add(5, ux_gtk_gl_beat, NULL);
+    for (int spins = 0; spins < 200 && (gtk_widget_get_width(a) <= 0 || !gtk_widget_get_realized(a)); spins++)
+        g_main_context_iteration(NULL, TRUE);
+    g_source_remove(beat);
+    }
 int ux_gtk_gl_make_current(int handle, int node)
     {
+    if (handle >= 0 && handle < UXGTK_MAXW && node >= 0 && node < 256)
+        gl_wait_allocated(handle, node);
     if (handle < 0 || handle >= UXGTK_MAXW || node < 0 || node >= 256 || !gGlA[handle][node])
         return 0;
     if (!gtk_widget_get_realized(gGlA[handle][node]))
