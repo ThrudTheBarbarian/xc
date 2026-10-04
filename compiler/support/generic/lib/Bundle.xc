@@ -59,6 +59,14 @@
 #import "Process.xc"
 #endif
 
+// The running image's own path, from the OS where it says (argv[0] is only
+// what the caller typed: plain `myapp` from PATH names no directory).
+#if ARCH_win64
+u32 GetModuleFileNameA(pointer module, u8* buf, u32 size);
+#elif ARCH_arm64 && !PLATFORM_android
+i32 _NSGetExecutablePath(u8* buf, u32* size);
+#endif
+
 class Bundle
     {
     String* _root;
@@ -89,7 +97,7 @@ class Bundle
 #if ARCH_6502
         return Bundle.withRoot(String.withCString("."));
 #else
-        String* exe = Process.argument((u32)0);
+        String* exe = Bundle.executablePath();
         if (exe == 0 || exe.byteLength() == (u32)0)
             return Bundle.withRoot(String.withCString("."));
         String* dir = Bundle.directoryOf(exe);
@@ -108,6 +116,56 @@ class Bundle
         if (over != 0 && over.byteLength() > (u32)0)
             return Bundle.withRoot(over);
         return Bundle.main();
+        }
+
+    // Where the running executable is. The OS says on Windows
+    // (GetModuleFileNameA) and on Apple platforms (_NSGetExecutablePath).
+    // Elsewhere argv[0] is the answer when it names a directory, and when it
+    // does not (`myapp`, started from PATH) the PATH is searched as the shell
+    // did. It used to be argv[0] alone, so a program started from PATH looked
+    // for its resources in whatever directory it was started from.
+    since("0.66") static String* executablePath(void)
+        {
+#if ARCH_6502
+        return (String*)0;
+#else
+#if ARCH_win64
+        u8 wbuf[1024];
+        u32 wn = GetModuleFileNameA((pointer)0, &wbuf[0], (u32)1024);
+        if (wn > (u32)0 && wn < (u32)1024)
+            return String.withBytes(&wbuf[0], wn);
+#elif ARCH_arm64 && !PLATFORM_android
+        u8 mbuf[1024];
+        u32 msize = (u32)1024;
+        if (_NSGetExecutablePath(&mbuf[0], &msize) == (i32)0)
+            return String.withCString(&mbuf[0]);
+#endif
+        String* a0 = Process.argument((u32)0);
+        if (a0 == 0 || a0.byteLength() == (u32)0)
+            return (String*)0;
+        for (u32 i = (u32)0; i < a0.byteLength(); i = i + (u32)1)
+            if (a0.byteAt(i) == (u8)'/' || a0.byteAt(i) == (u8)'\\')
+                return a0;
+        String* path = Platform.env(String.withCString("PATH"));
+        if (path == 0)
+            return a0;
+#if ARCH_win64
+        u8 sep = (u8)';';
+#else
+        u8 sep = (u8)':';
+#endif
+        Array* dirs = path.splitOnByte(sep);
+        for (u32 i = (u32)0; i < dirs.count(); i = i + (u32)1)
+            {
+            String* d = (String*)dirs.get(i);
+            if (d.byteLength() == (u32)0)
+                continue;
+            String* cand = d.appendingPathComponent(a0);
+            if (Files.exists(cand))
+                return cand;
+            }
+        return a0;
+#endif
         }
 
     // ── paths ────────────────────────────────────────────────────────────
