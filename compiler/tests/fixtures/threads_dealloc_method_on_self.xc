@@ -15,9 +15,11 @@
 
 u32 gClosed = (u32)0;
 
-// A C call with an ivar for its argument keeps this out of line, and that is
-// what makes the method retain self: the shape UXKit's sockets had (they
-// called close(); abs() is in every C library, Windows' included).
+// The bug needs the method to retain and release self, and the compiler emits
+// that only when the method passes an ivar to a call it cannot see into. Any
+// external C function does; WHICH one does not matter, and abs() is called for
+// its shape, not its meaning. UXKit's sockets called close(), which msvcrt.dll
+// exports only as _close, so on Windows the fixture failed to load (bug 609).
 i32 abs(i32 v);
 
 void closeFd(i32 fd)
