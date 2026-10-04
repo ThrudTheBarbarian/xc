@@ -1,9 +1,9 @@
 ---
 title: Downloads
-description: Prebuilt xcc toolchain archives for macOS, Linux and Windows, and the arm9 sysroot.
+description: Prebuilt xcc toolchain archives for macOS, Linux and Windows, the arm9 sysroot, and UXKit's GTK 4 library.
 ---
 
-The current release line is **xcc 0.65**. One install contains the whole toolchain: the
+The current release line is **xcc 0.66**. One install contains the whole toolchain: the
 compiler (`xcc`, which runs every stage itself, from parsing through code generation
 for all seven targets to assembly and linking), the signing tool (`xcc-sign`), the
 6502 assembler (`xcc-as`), the simulators (`xcc-sim-6502`, `xcc-sim-68k`), the
@@ -12,10 +12,11 @@ cross-build native binaries for every target with **no other toolchain installed
 
 | Platform | Download | Size |
 | --- | --- | --- |
-| macOS (Apple silicon) | [xcc-osx-0.65.tar.bz2](/downloads/xcc-osx-0.65.tar.bz2) | 8.2 MB |
-| Linux (x86_64) | [xcc-linux-0.65.tar.bz2](/downloads/xcc-linux-0.65.tar.bz2) | 6.1 MB |
-| Windows (x64) | [xcc-win64-0.65.zip](/downloads/xcc-win64-0.65.zip) | 7.0 MB |
-| arm9 sysroot (any host) | [xcc-arm9-sysroot-0.65.tar.bz2](/downloads/xcc-arm9-sysroot-0.65.tar.bz2) | 830 KB |
+| macOS (Apple silicon) | [xcc-osx-0.66.tar.bz2](/downloads/xcc-osx-0.66.tar.bz2) | 8.2 MB |
+| Linux (x86_64) | [xcc-linux-0.66.tar.bz2](/downloads/xcc-linux-0.66.tar.bz2) | 6.1 MB |
+| Windows (x64) | [xcc-win64-0.66.zip](/downloads/xcc-win64-0.66.zip) | 7.1 MB |
+| arm9 sysroot (any host) | [xcc-arm9-sysroot-0.66.tar.bz2](/downloads/xcc-arm9-sysroot-0.66.tar.bz2) | 830 KB |
+| UXKit GTK 4 library (Linux x86_64) | [xcc-uxgtk-linux-0.66.tar.bz2](/downloads/xcc-uxgtk-linux-0.66.tar.bz2) | 87 KB |
 
 Every archive contains the same compiler. Each host build cross-compiles to **all**
 targets, so the platform you download for decides only where the compiler runs.
@@ -28,23 +29,23 @@ in the host archive.
 ## macOS
 
 ```bash
-tar xjf xcc-osx-0.65.tar.bz2
-export PATH="$PWD/xcc-osx-0.65/bin:$PATH"
+tar xjf xcc-osx-0.66.tar.bz2
+export PATH="$PWD/xcc-osx-0.66/bin:$PATH"
 xcc -v
 ```
 
 The compiler finds its libraries **relative to its own binary**, with no flags,
 environment variables or fixed install path, so you can move the directory anywhere.
 The binaries are not notarised, so the first run on a fresh macOS install may need a
-one-time Gatekeeper override (`xattr -dr com.apple.quarantine xcc-osx-0.65/`).
+one-time Gatekeeper override (`xattr -dr com.apple.quarantine xcc-osx-0.66/`).
 
 ## arm9 sysroot
 
 Needed only for `-A arm9`. Unpack it anywhere and point `-L` at it:
 
 ```bash
-tar xjf xcc-arm9-sysroot-0.65.tar.bz2
-xcc -A arm9 -L path/to/xcc-arm9-sysroot-0.65 -o prog.so prog.xc
+tar xjf xcc-arm9-sysroot-0.66.tar.bz2
+xcc -A arm9 -L path/to/xcc-arm9-sysroot-0.66 -o prog.so prog.xc
 ```
 
 It holds one file: `libc.so`, newlib 4.4.0.20231231 rebuilt as position-independent
@@ -58,11 +59,28 @@ kernel to host it, which is not distributed here.
 `make install` also vendors a sysroot into `lib/xc/arm9-sysroot/` when it can find
 one, and then `-A arm9` needs no `-L` at all.
 
+## UXKit GTK 4 library
+
+Needed only for a Linux GUI program built with UXKit's GTK back end. The
+program is linked with `-dynamic`, which builds a glibc executable that can load
+GTK 4:
+
+```bash
+tar xjf xcc-uxgtk-linux-0.66.tar.bz2
+xcc -A x86_64 -dynamic app.xc -L xcc-uxgtk-linux-0.66 -lUXGtk -lgtk-4 -o app
+```
+
+The machine that runs the program needs glibc 2.34 or later and GTK 4; this
+build is against GTK 4.22, and an older GTK 4 may lack a symbol it uses. Linking
+from a Mac also needs a copy of the target's `libgtk-4.so` on the `-L` path.
+UXKit is LGPLv3: the archive carries the library's source and a script that
+rebuilds it against any machine's GTK 4.
+
 ## Linux
 
 ```bash
-tar xjf xcc-linux-0.65.tar.bz2
-export PATH="$PWD/xcc-linux-0.65/bin:$PATH"
+tar xjf xcc-linux-0.66.tar.bz2
+export PATH="$PWD/xcc-linux-0.66/bin:$PATH"
 xcc -v
 ```
 
@@ -71,7 +89,7 @@ library dependencies.
 
 ## Windows
 
-Unzip `xcc-win64-0.65.zip` anywhere and add the folder to `PATH` (or invoke
+Unzip `xcc-win64-0.66.zip` anywhere and add the folder to `PATH` (or invoke
 `xcc.exe` by path). The binaries are self-contained; no runtime installer is
 needed.
 

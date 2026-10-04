@@ -5,9 +5,45 @@ description: Previous xcc and xtc toolchain releases, kept for archival referenc
 
 These archives are kept so that an existing build can be reproduced byte-for-byte with the version it was compiled with. For new work, use the [most recent release](/compiler/downloads/). The [ChangeLog](/compiler/downloads/changelog/) lists what has changed since.
 
-## xcc 0.61
+## xcc 0.65
 
 The previous release line.
+
+| Platform | Download | Size |
+| --- | --- | --- |
+| macOS (Apple silicon) | [xcc-osx-0.65.tar.bz2](/downloads/xcc-osx-0.65.tar.bz2) | 8.2 MB |
+| Linux (x86_64) | [xcc-linux-0.65.tar.bz2](/downloads/xcc-linux-0.65.tar.bz2) | 6.1 MB |
+| Windows (x64) | [xcc-win64-0.65.zip](/downloads/xcc-win64-0.65.zip) | 7.0 MB |
+| arm9 sysroot (any host) | [xcc-arm9-sysroot-0.65.tar.bz2](/downloads/xcc-arm9-sysroot-0.65.tar.bz2) | 830 KB |
+
+## xcc 0.64
+
+| Platform | Download | Size |
+| --- | --- | --- |
+| macOS (Apple silicon) | [xcc-osx-0.64.tar.bz2](/downloads/xcc-osx-0.64.tar.bz2) | 8.1 MB |
+| Linux (x86_64) | [xcc-linux-0.64.tar.bz2](/downloads/xcc-linux-0.64.tar.bz2) | 6.1 MB |
+| Windows (x64) | [xcc-win64-0.64.zip](/downloads/xcc-win64-0.64.zip) | 6.9 MB |
+| arm9 sysroot (any host) | [xcc-arm9-sysroot-0.64.tar.bz2](/downloads/xcc-arm9-sysroot-0.64.tar.bz2) | 830 KB |
+
+## xcc 0.63
+
+| Platform | Download | Size |
+| --- | --- | --- |
+| macOS (Apple silicon) | [xcc-osx-0.63.tar.bz2](/downloads/xcc-osx-0.63.tar.bz2) | 8.1 MB |
+| Linux (x86_64) | [xcc-linux-0.63.tar.bz2](/downloads/xcc-linux-0.63.tar.bz2) | 6.6 MB |
+| Windows (x64) | [xcc-win64-0.63.zip](/downloads/xcc-win64-0.63.zip) | 7.6 MB |
+| arm9 sysroot (any host) | [xcc-arm9-sysroot-0.63.tar.bz2](/downloads/xcc-arm9-sysroot-0.63.tar.bz2) | 830 KB |
+
+## xcc 0.62
+
+| Platform | Download | Size |
+| --- | --- | --- |
+| macOS (Apple silicon) | [xcc-osx-0.62.tar.bz2](/downloads/xcc-osx-0.62.tar.bz2) | 8.0 MB |
+| Linux (x86_64) | [xcc-linux-0.62.tar.bz2](/downloads/xcc-linux-0.62.tar.bz2) | 6.5 MB |
+| Windows (x64) | [xcc-win64-0.62.zip](/downloads/xcc-win64-0.62.zip) | 7.5 MB |
+| arm9 sysroot (any host) | [xcc-arm9-sysroot-0.62.tar.bz2](/downloads/xcc-arm9-sysroot-0.62.tar.bz2) | 830 KB |
+
+## xcc 0.61
 
 | Platform | Download | Size |
 | --- | --- | --- |
