@@ -77,7 +77,10 @@
 #ifndef XT_SINIT_C_INCLUDED
 #define XT_SINIT_C_INCLUDED
 
+// rt-freestanding.c includes no headers and defines these types itself.
+#ifndef XT_RT_OWN_TYPES
 #include <stdint.h>
+#endif
 
 // From the threading runtime that includes this file.
 void _xt_rt_lock(void);

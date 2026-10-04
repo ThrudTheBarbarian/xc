@@ -22,11 +22,18 @@ class X86Link
     {
     bool _failed;
     String* _why;
+    // -dynamic (glibc), set by linkGlibc: which library defines each import.
+    bool _glibc;
+    Map* _glibcMap; // symbol -> glibc library, from glibc-imports.map
+    Map* _soDefs;   // symbol -> SONAME, from the .so inputs
 
     void init(void)
         {
         _failed = false;
         _why = new String();
+        _glibc = false;
+        _glibcMap = new Map();
+        _soDefs = new Map();
         }
     bool failed(void)
         {
@@ -215,7 +222,9 @@ class X86Link
         // `.o` commons are resolved by the merge below.
         a.demoteCommonsToLocalData();
         Array* pub = new Array();
-        for (u32 k = (u32)0; k < a.globalSyms().count(); k = k + (u32)1)
+        // Under -dynamic nothing is exported: the runtime's own memset/random/
+        // sqrt must not interpose on a C library's calls.
+        for (u32 k = (u32)0; !_glibc && k < a.globalSyms().count(); k = k + (u32)1)
             pub.add(a.globalSyms().get(k));
         for (u32 k = (u32)0; alsoExport != (Array*)0 && k < alsoExport.count();
              k = k + (u32)1)
@@ -223,6 +232,12 @@ class X86Link
         Elf64* e = new Elf64();
         if (objs.count() == (u32)0 && ars.count() == (u32)0)
             {
+            if (_glibc)
+                {
+                needed = glibcNeeded(a.symbols(), a.fixups(), needed);
+                if (needed == (Array*)0)
+                    return (Data*)0;
+                }
             e.sharedObject(X86Link.bytesToData(a.text()), X86Link.bytesToData(a.data()),
                            a.symbols(), a.dataSyms(),
                            pub, a.fixups(), (String*)0, needed,
@@ -270,6 +285,12 @@ class X86Link
             // the static path synthesises them: musl's start/exit code walks
             // those arrays, and a dynamic image needs them just as much.
             Array* absSyms = synthesizeLinkerSymbols(im);
+            if (_glibc)
+                {
+                needed = glibcNeeded(im.syms(), im.fixups(), needed);
+                if (needed == (Array*)0)
+                    return (Data*)0;
+                }
             e.sharedObject(im.text(),
                            im.data(),
                            im.syms(), im.dataSyms(), pub, im.fixups(),
@@ -282,6 +303,96 @@ class X86Link
             return (Data*)0;
             }
         return e.bytes();
+        }
+
+    // `xcc -dynamic`: an executable linked dynamically against glibc and the
+    // .so libraries in `sos`. The import map (glibc-imports.map's text) says
+    // which glibc library defines each name; each .so answers for itself. An
+    // import nothing defines fails the link here, not in ld.so at load.
+    Data* linkGlibc(Array* srcs, Array* objs, Array* ars, String* entry,
+                    Array* sos, String* mapText, String* runpath)
+        {
+        _glibc = true;
+        Array* lines = mapText.splitOnByte((u8)'\n');
+        for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1)
+            {
+            String* line = (String*)lines.get(i);
+            if (line.byteLength() == (u32)0 || line.byteAt((u32)0) == (u8)'#')
+                continue;
+            Array* kv = line.splitOnByte((u8)'\t');
+            if (kv.count() == (u32)2 && _glibcMap.get((Hashable*)kv.get((u32)0)) == (Object*)0)
+                _glibcMap.set((Hashable*)kv.get((u32)0), kv.get((u32)1));
+            }
+        Array* needed = new Array();
+        for (u32 i = (u32)0; i < sos.count(); i = i + (u32)1)
+            {
+            String* path = (String*)sos.get(i);
+            ElfSharedInfo* info = Elf64.sharedInfo(path);
+            if (info == (ElfSharedInfo*)0)
+                {
+                fail(String.withCString("error: '").appending(path)
+                         .appending(String.withCString("' is not a readable x86-64 shared object")));
+                return (Data*)0;
+                }
+            if (info.soname().byteLength() > (u32)0 && !Elf64.hasName(needed, info.soname()))
+                needed.add((Object*)info.soname());
+            for (u32 k = (u32)0; k < info.exported().count(); k = k + (u32)1)
+                {
+                Hashable* n = (Hashable*)info.exported().get(k);
+                if (_soDefs.get(n) == (Object*)0)
+                    _soDefs.set(n, (Object*)info.soname());
+                }
+            }
+        return linkDynamic(srcs, objs, ars, entry, needed, runpath, (Array*)0);
+        }
+
+    // The DT_NEEDED list for a -dynamic image, or 0 after failing: the glibc
+    // libraries the program actually uses (sorted), then the .so libraries in
+    // the order they were given. Exactly the reference linker's --glibc order.
+    Array* glibcNeeded(Map* syms, Array* fixups, Array* sos)
+        {
+        Array* mapLibs = new Array();
+        Array* missing = new Array();
+        for (u32 i = (u32)0; i < fixups.count(); i = i + (u32)1)
+            {
+            X86Fixup* f = (X86Fixup*)fixups.get(i);
+            if (f.symbol() == (String*)0 || f.symbol().byteLength() == (u32)0)
+                continue;
+            if (syms.get((Hashable*)f.symbol()) != (Object*)0)
+                continue;
+            if (_soDefs.get((Hashable*)f.symbol()) != (Object*)0)
+                continue;
+            Object* lib = _glibcMap.get((Hashable*)f.symbol());
+            if (lib != (Object*)0)
+                {
+                if (!Elf64.hasName(mapLibs, (String*)lib))
+                    mapLibs.add(lib);
+                }
+            else if (!Elf64.hasName(missing, f.symbol()))
+                missing.add((Object*)f.symbol());
+            }
+        if (missing.count() > (u32)0)
+            {
+            Elf64.sortStrings(missing);
+            String* w = String.withCString(missing.count() == (u32)1 ? "error: undefined symbol: "
+                                                                      : "error: undefined symbols: ");
+            for (u32 i = (u32)0; i < missing.count(); i = i + (u32)1)
+                {
+                if (i > (u32)0)
+                    w.appendCString(", ");
+                w.append((String*)missing.get(i));
+                }
+            w.appendCString(missing.count() == (u32)1
+                                ? " — no library on the link defines it (glibc, or a -l library)"
+                                : " — no library on the link defines them (glibc, or a -l library)");
+            fail(w);
+            return (Array*)0;
+            }
+        Elf64.sortStrings(mapLibs);
+        for (u32 i = (u32)0; i < sos.count(); i = i + (u32)1)
+            if (!Elf64.hasName(mapLibs, (String*)sos.get(i)))
+                mapLibs.add(sos.get(i));
+        return mapLibs;
         }
 
     Data* link(Array* srcs, Array* objs, Array* ars, String* entry)

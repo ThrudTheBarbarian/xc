@@ -362,7 +362,8 @@ int main(int argc, const char* argv[])
         NSMutableArray<NSString*>* needed = [NSMutableArray array];
         NSMutableArray<NSString*>* rpaths = [NSMutableArray array];
         NSString* ifacePath = nil;
-        BOOL dump = NO, shared = NO, pie = NO;
+        NSString* importMapPath = nil;
+        BOOL dump = NO, shared = NO, pie = NO, glibc = NO;
         for (int i = 1; i < argc; i++)
             {
             NSString* a = @(argv[i]);
@@ -376,6 +377,13 @@ int main(int argc, const char* argv[])
                 shared = YES;
             else if ([a isEqualToString:@"-pie"] || [a isEqualToString:@"--pie"])
                 pie = YES;
+            // A dynamically linked glibc executable (`xcc -dynamic`): -pie, with
+            // glibc and every .so input imported, nothing exported, and an
+            // import no library defines refused here rather than by ld.so.
+            else if ([a isEqualToString:@"--glibc"])
+                glibc = pie = YES;
+            else if ([a isEqualToString:@"-importmap"] && i + 1 < argc)
+                importMapPath = @(argv[++i]);
             else if ([a isEqualToString:@"-soname"] && i + 1 < argc)
                 soname = @(argv[++i]);
             else if ([a isEqualToString:@"-rpath"] && i + 1 < argc)
@@ -520,6 +528,7 @@ int main(int argc, const char* argv[])
         // loader binds the .so's imports to the exe. Without this the .so loads a
         // second, uninitialised libc and faults on the first call (__vdsosym).
         NSMutableSet<NSString*>* soNeeds = [NSMutableSet set];
+        NSMutableDictionary<NSString*, NSString*>* soDefs = [NSMutableDictionary dictionary];
         for (NSString* dep in sharedDeps)
             {
             NSDictionary* info = [XTElfWriter sharedInfoAtPath:dep];
@@ -532,6 +541,15 @@ int main(int argc, const char* argv[])
             NSString* sn = info[@"soname"];
             if (sn.length && ![needed containsObject:sn])
                 [needed addObject:sn];
+            // Under glibc a library has its own libc (the process's one), so it
+            // needs nothing from us; what matters is what it DEFINES.
+            if (glibc)
+                {
+                for (NSString* n in info[@"defined"])
+                    if (!soDefs[n])
+                        soDefs[n] = sn;
+                continue;
+                }
             for (NSString* u in info[@"undefined"])
                 [soNeeds addObject:u];
             }
@@ -792,6 +810,66 @@ int main(int argc, const char* argv[])
                 [mglobals addObject:u];
                 [mexport addObject:u];
                 }
+
+        // ── -dynamic (glibc): every import named by a library, nothing exported ──
+        // The map says which glibc library defines each name (libc.so.6 and
+        // libm.so.6 become DT_NEEDED only when used, ahead of the -l libraries);
+        // a .so input answers for itself. Exporting nothing keeps the runtime's
+        // own memset/random/sqrt from interposing on a C library's calls.
+        if (glibc)
+            {
+            NSMutableDictionary<NSString*, NSString*>* map = [NSMutableDictionary dictionary];
+            if (importMapPath)
+                {
+                NSString* txt = [NSString stringWithContentsOfFile:importMapPath
+                                                          encoding:NSUTF8StringEncoding
+                                                             error:NULL];
+                if (!txt)
+                    {
+                    fprintf(stderr, "xcc-ln-x86_64: error: cannot read the import map '%s'\n",
+                            importMapPath.UTF8String);
+                    return 1;
+                    }
+                for (NSString* line in [txt componentsSeparatedByString:@"\n"])
+                    {
+                    if (!line.length || [line hasPrefix:@"#"])
+                        continue;
+                    NSArray<NSString*>* kv = [line componentsSeparatedByString:@"\t"];
+                    if (kv.count == 2 && !map[kv[0]])
+                        map[kv[0]] = kv[1];
+                    }
+                }
+            NSMutableSet<NSString*>* mapLibs = [NSMutableSet set];
+            NSMutableSet<NSString*>* missing = [NSMutableSet set];
+            for (XAX86_64Fixup* f in mfix)
+                {
+                if (!f.symbol.length || msyms[f.symbol])
+                    continue;
+                if (soDefs[f.symbol])
+                    continue;
+                NSString* lib = map[f.symbol];
+                if (lib)
+                    [mapLibs addObject:lib];
+                else
+                    [missing addObject:f.symbol];
+                }
+            if (missing.count)
+                {
+                NSArray<NSString*>* m = [missing.allObjects sortedArrayUsingSelector:@selector(compare:)];
+                fprintf(stderr, "xcc-ln-x86_64: error: undefined symbol%s: %s — no library "
+                                "on the link defines %s (glibc, or a -l library)\n",
+                        m.count == 1 ? "" : "s", [m componentsJoinedByString:@", "].UTF8String,
+                        m.count == 1 ? "it" : "them");
+                return 1;
+                }
+            NSMutableArray<NSString*>* ordered =
+                [[mapLibs.allObjects sortedArrayUsingSelector:@selector(compare:)] mutableCopy];
+            for (NSString* n in needed)
+                if (![ordered containsObject:n])
+                    [ordered addObject:n];
+            [needed setArray:ordered];
+            [mexport removeAllObjects];
+            }
 
         // -pie: the dynamically-linked executable form. Same ET_DYN machinery as a
         // library, plus an entry point and a PT_INTERP — that is what lets a

@@ -78,7 +78,7 @@ Output containers on the non-native targets:
 | `arm64` | macOS / Linux on 64-bit ARM | Mach-O / ELF; run it |
 | `ios` / `ios-sim` | iOS device / simulator (arm64) | Mach-O; sign with `xcc-sign`, install on device/simulator |
 | `android` | Android (arm64) | with `--emit-apk`, a signed `.apk` |
-| `x86_64` | Linux (musl) | ELF; run it |
+| `x86_64` | Linux (musl) | static ELF; run it. With `-dynamic` (from 0.66), a dynamically linked glibc ELF that can load GTK 4, libGL and other system libraries |
 | `win64` | Windows | PE/COFF `.exe`, or a DLL (see `--emit-lib`) |
 | `arm9` | AArch32 / **XTOS** | ELF, or a `.so` (see `--emit-lib`) |
 | `m68k` | Motorola 68000 | GEMDOS `.prg`/`.tos`; run under `xcc-sim-68k`. `-A 68000` is the same target, and `-A 68030` builds for the 68030 (run with `xcc-sim-68k --cpu 68030`). |
@@ -96,7 +96,8 @@ linker or `clang`.
 
 | Flag | Effect |
 |------|--------|
-| `-l<name>` | Link a system library, forwarded to the linker, for example `-lobjc`. |
+| `-l<name>` | Link a system library, for example `-lobjc`. On `-A x86_64` a static link takes `lib<name>.a` from the `-L` path; with `-dynamic` it takes `lib<name>.so` (or `.a`) from the `-L` path and the standard system library directories. `-lc`, `-lm`, `-lpthread`, `-ldl` and `-lrt` name the C library itself and need no file. |
+| `-dynamic` | **From 0.66.** On `-A x86_64`, link the executable dynamically against glibc instead of statically over musl: what a program needs to load GTK 4, libGL or any other shared system library. Still linked in-house: `xcc` knows glibc's exports from a table in its support tree, so a Mac can link for Linux, and an `-l` library is read for its exports. A symbol that neither glibc nor an `-l` library defines is a link error. Cross-linking names a copy of the libraries with `-L`. Executables only for now (not with `--emit-lib`). |
 | `-framework <F>` | Link a macOS framework, for example `-framework AppKit`. |
 | `-Xlinker <file>` | Link a library or object file named by path. |
 | `-Wl,<arg>[,<arg>…]` | The same, in the form clang users write. `xcc` links in-house: a file is linked, `-rpath <dir>` adds a run-path entry on arm64 and iOS, and any other linker flag is ignored with a note. `-Xlinker` takes the same arguments. |
@@ -208,6 +209,9 @@ is reported and ignored.
 | `--lib-name <name>` | With `--emit-apk`, the library the system loads first (`android.app.lib_name`). Default: the payload. |
 | `--with-dex <path>` | With `--emit-apk`, package this `classes.dex` and mark the manifest `hasCode="true"`. |
 | `--emit-iface` | Write the module interface (the `.xtc.iface` description) to the `-o` path, or to standard output with no `-o`, and stop. `-c` and `--emit-lib` produce the interface as part of their output without this flag. |
+| `-mavx2`, `-msimd=avx2` | **From 0.66.** On `-A x86_64` and `-A win64`, vectorise with 256-bit AVX2 instead of the 128-bit SSE2 baseline. The program then needs an AVX2 CPU (Intel Haswell, AMD Zen and later). |
+| `-msimd=base` | The SSE2 baseline, which is also the default. |
+| `-mnative` | The vector level of the machine running `xcc`: `avx2` where the CPU and OS support it, otherwise the baseline. Refused when `xcc` is not running on x86-64, where there is no host level to read. |
 | `-fmalloc=system\|mimalloc` | Choose the C heap behind the runtime. `mimalloc` is `-A x86_64` only: the mimalloc object is linked ahead of libc, so its `malloc` family replaces musl's. |
 | `-g` | Accepted. No debug information is emitted yet, and `xcc` says so. |
 

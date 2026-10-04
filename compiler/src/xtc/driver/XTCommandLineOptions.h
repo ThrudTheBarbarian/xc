@@ -154,6 +154,12 @@ NS_ASSUME_NONNULL_BEGIN
 \****************************************************************************/
 @property(nonatomic, readonly, nullable) NSString* simdLevel;
 /****************************************************************************\
+|* `-dynamic`: link an x86-64 executable dynamically against glibc (and the
+|* -l libraries, e.g. GTK 4 and libGL) instead of statically over musl. The
+|* in-house linker writes it; x86_64 only.
+\****************************************************************************/
+@property(nonatomic, readonly) BOOL dynamicGlibc;
+/****************************************************************************\
 |* Automatic Reference Counting gate (`-farc` / `-farc=off|no|0`).
 |* When enabled (the default), the `retain` and `release` statements are
 |* accepted by the front end and lower to the refcount helpers in

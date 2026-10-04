@@ -579,19 +579,28 @@ static uint32_t elfHash(const char* name)
     };
 
     NSMutableArray<NSString*>* undef = [NSMutableArray array];
+    // What the library DEFINES too: a -dynamic link checks every import against
+    // the libraries it names, so a symbol none of them has is a link error, not
+    // a "symbol lookup error" from ld.so at load. STB_GNU_UNIQUE (10) is a global.
+    NSMutableArray<NSString*>* defd = [NSMutableArray array];
     for (uint64_t o = dynsymOff; o + 24 <= dynsymOff + dynsymSz && o + 24 <= d.length; o += 24)
         {
         uint32_t stName = rd32(o);
         uint8_t stInfo = b[o + 4];
         uint16_t stShndx = rd16(o + 6);
         uint8_t bind = stInfo >> 4;
-        if (stShndx == 0 /*SHN_UNDEF*/ && stName &&
-            (bind == STB_GLOBAL || bind == STB_WEAK))
+        if (!stName || !(bind == STB_GLOBAL || bind == STB_WEAK || bind == 10))
+            continue;
+        NSString* n = str(stName);
+        if (!n.length)
+            continue;
+        if (stShndx == 0 /*SHN_UNDEF*/)
             {
-            NSString* n = str(stName);
-            if (n.length)
+            if (bind != 10)
                 [undef addObject:n];
             }
+        else
+            [defd addObject:n];
         }
 
     NSString* soname = path.lastPathComponent;
@@ -607,7 +616,7 @@ static uint32_t elfHash(const char* name)
                 soname = n;
             }
         }
-    return @{@"soname" : soname, @"undefined" : undef};
+    return @{@"soname" : soname, @"undefined" : undef, @"defined" : defd};
     }
 
 + (nullable NSDictionary*)objectFromData:(NSData*)dIn

@@ -525,7 +525,8 @@ class ElfSharedInfo
             u32 shndx = Elf64.rd16(d, o + (u32)6);
             if (shndx == (u32)0 || stName == (u32)0)
                 continue;
-            if (bind != (u32)1 && bind != (u32)2)
+            // STB_GNU_UNIQUE (10) is a global too.
+            if (bind != (u32)1 && bind != (u32)2 && bind != (u32)10)
                 continue;
             String* n = Elf64.strAt(d, strOff, strSz, stName);
             if (n.byteLength() > (u32)0)

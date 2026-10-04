@@ -644,6 +644,17 @@ same "-mfpu (m68k)"         -q -A 68030 -mfpu -o @OUT@.prg ret.xc
 same "-msoft-float (m68k)"  -q -A m68k -msoft-float -o @OUT@.prg ret.xc
 same "-g"                   -q -g -o @OUT@ ret.xc
 same "--no-self-host"       -q --no-self-host -o @OUT@ ret.xc
+# -dynamic: an x86-64 executable linked against glibc (ldx86dyn-diff compares
+# the bytes over the corpus; here, acceptance and the refusals).
+cover -dynamic
+same "-dynamic (-A x86_64)"            -q -A x86_64 -dynamic -o @OUT@ ret.xc
+same "-dynamic (-A arm64) refused"     -q -A arm64 -dynamic -o @OUT@ ret.xc
+xcconly "  ...naming the target"      1 "for -A x86_64 only" -q -A arm64 -dynamic -o @OUT@ ret.xc
+same "-dynamic --emit-lib refused"     -q -A x86_64 -dynamic --emit-lib -o @OUT@.so ret.xc
+same "-dynamic -l<missing> refused"    -q -A x86_64 -dynamic -lnosuchlib -o @OUT@ ret.xc
+xcconly "  ...naming the library"     1 "no libnosuchlib.so or libnosuchlib.a" -q -A x86_64 -dynamic -lnosuchlib -o @OUT@ ret.xc
+same "-dynamic: undefined C symbol is a link error" -q -A x86_64 -dynamic -o @OUT@ nothere.xc
+xcconly "  ...naming it"              1 "undefined symbol: nothere" -q -A x86_64 -dynamic -o @OUT@ nothere.xc
 same "--needed"             -q -A android --needed libfoo.so -o @OUT@ ret.xc
 "$XC" -H "$ROOT" -q -A android --emit-lib -o libextra.so ret.xc >/dev/null 2>&1
 printf 'dex\n035\0' > classes.dex

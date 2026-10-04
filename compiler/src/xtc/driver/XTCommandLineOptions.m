@@ -51,6 +51,7 @@
 @property(nonatomic, readwrite) NSString* hostMalloc;
 @property(nonatomic, readwrite, nullable) NSString* simdLevel;
 @property(nonatomic, readwrite, nullable) NSString* simdFlag;
+@property(nonatomic, readwrite) BOOL dynamicGlibc;
 @property(nonatomic, readwrite) BOOL allocatorExplicit;
 @property(nonatomic, readwrite) BOOL dceTrace;
 @property(nonatomic, readwrite) NSInteger threadSafeARC;
@@ -996,6 +997,8 @@ static NSString* sExecutablePath = nil;
             opts.allocator = val;
             opts.allocatorExplicit = YES;
             }
+        else if ([arg isEqualToString:@"-dynamic"])
+            opts.dynamicGlibc = YES;
         else if ([arg isEqualToString:@"-mavx2"])
             {
             opts.simdLevel = @"avx2";
@@ -1282,6 +1285,20 @@ static NSString* sExecutablePath = nil;
         {
         fprintf(stderr, "xcc: %s: the vector level applies to -A x86_64 and -A win64 only\n",
                 opts.simdFlag.UTF8String);
+        return nil;
+        }
+
+    // -dynamic is an x86-64 Linux link mode; anywhere else it would be ignored.
+    if (opts.dynamicGlibc && !opts.useX86_64Backend)
+        {
+        fprintf(stderr, "xcc: -dynamic: a dynamically linked glibc executable is "
+                        "for -A x86_64 only\n");
+        return nil;
+        }
+    if (opts.dynamicGlibc && opts.emitLib)
+        {
+        fprintf(stderr, "xcc: -dynamic builds an executable; a glibc shared "
+                        "library (--emit-lib -dynamic) is not supported yet\n");
         return nil;
         }
 

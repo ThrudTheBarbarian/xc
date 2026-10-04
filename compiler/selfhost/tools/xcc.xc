@@ -84,6 +84,7 @@ class CapOptions
     bool    _threadFlag;   // -f[no-]thread-safe-arc was given
     String* _simd;         // the x86-64 vector level: 0 (default), "base", "avx2"
     String* _simdFlag;     // the flag that chose it, for the target check
+    bool _dynamic;         // -dynamic: an x86-64 executable linked against glibc
 
     void init(void)
     {
@@ -102,6 +103,7 @@ class CapOptions
         _threadFlag = false;
         _simd = (String*)0;
         _simdFlag = (String*)0;
+        _dynamic = false;
     }
 
     String* alloc(void)     { return _alloc; }
@@ -119,6 +121,8 @@ class CapOptions
     bool threadFlag(void)   { return _threadFlag; }
     String* simd(void)      { return _simd; }
     String* simdFlag(void)  { return _simdFlag; }
+    bool dynamic(void)      { return _dynamic; }
+    void setDynamic(void)   { _dynamic = true; }
 
     void setAlloc(String* v)     { _alloc = v; }
     void setHostMalloc(String* v) { _malloc = v; }
@@ -2034,12 +2038,130 @@ void emitX86_64(DriverOptions* d, IRModule* mod)
         return;
     }
 
+    if (d.caps().dynamic()) { linkX86_64Glibc(d, prog); return; }
     linkX86_64(d, prog);
 }
 
 // The x86-64 link, from program asm (or none — an object-only link) to the
 // ELF on disk. Split out of emitX86_64 so `xcc a.o b.o -o prog` can reach it
 // without a module (bug 138).
+// `-dynamic`: an x86-64 executable linked dynamically against glibc — what a
+// program needs to load GTK 4 or libGL, which a static musl image cannot. All
+// in-house: the glibc runtime (crt-glibc.s, rtgen-glibc.s) is in the support
+// tree, glibc's exports come from glibc-imports.map, and each -l library is
+// read for its SONAME and what it defines. Same inputs, in the same order, as
+// the reference driver's linkX86_64Glibc.
+bool isGlibcOwnLib(String* base)
+{
+    return base.equals(String.withCString("c")) || base.equals(String.withCString("m"))
+        || base.equals(String.withCString("pthread")) || base.equals(String.withCString("dl"))
+        || base.equals(String.withCString("rt"));
+}
+
+void linkX86_64Glibc(DriverOptions* d, String* prog)
+{
+    Array* srcs = new Array();
+    Array* rtNames = new Array();
+    rtNames.add((Object*)String.withCString("crt-glibc.s"));
+    rtNames.add((Object*)String.withCString("rtgen-glibc.s"));
+    rtNames.add((Object*)String.withCString("rtfiles-linux.s"));
+    rtNames.add((Object*)String.withCString("libmgen-linux.s"));
+    for (u32 k = (u32)0; k < rtNames.count(); k = k + (u32)1) {
+        String* t = readRuntimeIn(d.fe(), "x86_64/runtime", (String*)rtNames.get(k));
+        if (t == 0) {
+            Stdio.printf("xcc: error: -dynamic: cannot read %s from the support tree\n",
+                         ((String*)rtNames.get(k)).cString());
+            Process.exit((i32)1); return;
+        }
+        srcs.add((Object*)t);
+    }
+    srcs.add((Object*)x86ClassAllocStubs(prog, false));
+    srcs.add((Object*)prog);
+    String* mapText = readRuntimeIn(d.fe(), "x86_64", String.withCString("glibc-imports.map"));
+    if (mapText == 0) {
+        Stdio.printf("xcc: error: -dynamic: cannot read x86_64/glibc-imports.map from the support tree\n");
+        Process.exit((i32)1); return;
+    }
+
+    Array* objs = new Array();
+    Array* ars = new Array();
+    Array* sos = new Array();
+    for (u32 i = (u32)0; i < d.objectInputs().count(); i = i + (u32)1) {
+        String* op = (String*)d.objectInputs().get(i);
+        if (op.hasSuffix(String.withCString(".a"))) ars.add((Object*)op); else objs.add((Object*)op);
+    }
+    // -L dirs, then the standard multiarch directories, so `-lgtk-4` works on
+    // the Linux host as it stands; a cross-link names a copy with -L.
+    Array* dirs = new Array();
+    for (u32 i = (u32)0; i < d.fe().libs().count(); i = i + (u32)1) dirs.add(d.fe().libs().get(i));
+    for (u32 i = (u32)0; i < d.ldDirs().count(); i = i + (u32)1) dirs.add(d.ldDirs().get(i));
+    dirs.add((Object*)String.withCString("/usr/lib/x86_64-linux-gnu"));
+    dirs.add((Object*)String.withCString("/lib/x86_64-linux-gnu"));
+    dirs.add((Object*)String.withCString("/usr/lib64"));
+    dirs.add((Object*)String.withCString("/usr/lib"));
+    Array* li = d.linkInputs();
+    for (u32 i = (u32)0; li != (Array*)0 && i < li.count(); i = i + (u32)1) {
+        String* t = (String*)li.get(i);
+        if (t.hasPrefix(String.withCString("-l")) && t.byteLength() > (u32)2) {
+            String* base = t.substringFromByte((u32)2);
+            if (isGlibcOwnLib(base)) continue;          // glibc itself: the import map
+            String* found = (String*)0;
+            for (u32 e = (u32)0; e < (u32)2 && found == (String*)0; e = e + (u32)1) {
+                for (u32 k = (u32)0; k < dirs.count() && found == (String*)0; k = k + (u32)1) {
+                    String* p = String.withString((String*)dirs.get(k));
+                    p.appendCString("/lib"); p.append(base);
+                    p.appendCString(e == (u32)0 ? ".so" : ".a");
+                    if (Files.exists(p)) found = p;
+                }
+            }
+            if (found == (String*)0) {
+                Stdio.printf("xcc: error: -l%s: no lib%s.so or lib%s.a on the -L path "
+                             "or in the system library directories (cross-linking: "
+                             "-L a copy of the libraries)\n",
+                             base.cString(), base.cString(), base.cString());
+                Process.exit((i32)1); return;
+            }
+            if (found.hasSuffix(String.withCString(".so"))) sos.add((Object*)found);
+            else ars.add((Object*)found);
+            continue;
+        }
+        if (!Files.exists(t)) {
+            Stdio.printf("xcc: error: '%s': no such file\n", t.cString());
+            Process.exit((i32)1); return;
+        }
+        if (t.hasSuffix(String.withCString(".so"))) sos.add((Object*)t);
+        else if (t.hasSuffix(String.withCString(".a"))) ars.add((Object*)t);
+        else if (t.hasSuffix(String.withCString(".o"))) objs.add((Object*)t);
+        else {
+            Stdio.printf("xcc: error: -dynamic: linker input '%s': this driver links "
+                         "in-house and takes -l, -L, .o, .a and .so only\n", t.cString());
+            Process.exit((i32)1); return;
+        }
+    }
+    // Libraries the program #imported (xc-built .so files).
+    Array* nl = d.fe().neededLibs();
+    bool haveDeps = false;
+    for (u32 i = (u32)0; nl != (Array*)0 && i < nl.count(); i = i + (u32)1) {
+        String* lp = (String*)nl.get(i);
+        if (!lp.hasSuffix(String.withCString(".so"))) continue;
+        sos.add((Object*)lp);
+        haveDeps = true;
+    }
+    X86Link* ln = new X86Link();
+    Data* img = ln.linkGlibc(srcs, objs, ars, String.withCString("_start"), sos, mapText,
+                             haveDeps ? String.withCString("$ORIGIN") : (String*)0);
+    if (ln.failed()) {
+        noteUndefinedCall(d, ln.why());
+        Stdio.printf("xcc: %s\n", ln.why().cString());
+        Process.exit((i32)1); return;
+    }
+    if (!Files.writeData(d.fe().output(), img)) {
+        Stdio.printf("xcc: error: cannot write '%s'\n", d.fe().output().cString());
+        Process.exit((i32)1); return;
+    }
+    Files.setExecutable(d.fe().output());
+}
+
 void linkX86_64(DriverOptions* d, String* prog)
 {
     String* libdir = muslLibDir(d.fe());
@@ -2119,7 +2241,44 @@ void linkX86_64(DriverOptions* d, String* prog)
     {
         Array* li = d.linkInputs();
         for (u32 i = (u32)0; li != (Array*)0 && i < li.count(); i = i + (u32)1) {
-            String* lp = resolveLinkInput(d, (String*)li.get(i));
+            String* tok = (String*)li.get(i);
+            // A static image takes an ARCHIVE for -l<name>, as the reference
+            // does. It used to accept whatever resolveLinkInput found — a
+            // `.so` first — and then drop it ("handled as a dep below", which
+            // only covered #import), or drop a name it found nothing for: a
+            // `-lgtk-4` vanished without a word and its symbols resolved
+            // nowhere. musl's libc.a is libc, libm and libpthread at once, so
+            // those names are already satisfied.
+            if (!d.emitLib() && tok.hasPrefix(String.withCString("-l")) && tok.byteLength() > (u32)2) {
+                String* base = tok.substringFromByte((u32)2);
+                if (isGlibcOwnLib(base)) continue;
+                Array* dirs = new Array();
+                for (u32 k = (u32)0; k < d.fe().libs().count(); k = k + (u32)1) dirs.add(d.fe().libs().get(k));
+                for (u32 k = (u32)0; k < d.ldDirs().count(); k = k + (u32)1) dirs.add(d.ldDirs().get(k));
+                String* found = (String*)0;
+                bool soOnly = false;
+                for (u32 k = (u32)0; k < dirs.count() && found == (String*)0; k = k + (u32)1) {
+                    String* p = String.withString((String*)dirs.get(k));
+                    p.appendCString("/lib"); p.append(base);
+                    String* so = String.withString(p); so.appendCString(".so");
+                    p.appendCString(".a");
+                    if (Files.exists(p)) found = p;
+                    else if (Files.exists(so)) soOnly = true;
+                }
+                if (found == (String*)0) {
+                    if (soOnly)
+                        Stdio.printf("xcc: error: -l%s: only a shared lib%s.so was found, and a "
+                                     "static x86-64 link cannot load one; link with -dynamic\n",
+                                     base.cString(), base.cString());
+                    else
+                        Stdio.printf("xcc: error: -l%s: no lib%s.a on the -L path\n",
+                                     base.cString(), base.cString());
+                    Process.exit((i32)1); return;
+                }
+                ars.add((Object*)found);
+                continue;
+            }
+            String* lp = resolveLinkInput(d, tok);
             if (lp == (String*)0) continue;            // a system library: dyld/ld finds it
             if (lp.hasSuffix(String.withCString(".a"))) { ars.add((Object*)lp); continue; }
             if (lp.hasSuffix(String.withCString(".o"))) { objs.add((Object*)lp); continue; }
@@ -3604,6 +3763,7 @@ void linkObjects(DriverOptions* d)
         return;
     }
     if (d.arch().equals(String.withCString("arm64")) || isIos(d)) { linkObjectsArm64(d); return; }
+    if (isX86_64(d) && d.caps().dynamic()) { linkX86_64Glibc(d, String.withCString("")); return; }
     if (isX86_64(d)) { linkX86_64(d, String.withCString("")); return; }
     if (isArm9(d)) { linkObjectsArm9(d); return; }
     if (d.arch().equals(String.withCString("win64"))) {
@@ -4495,6 +4655,9 @@ void usage(void)
     Stdio.printf("                             stdout with no -o, and stop\n");
     Stdio.printf("  --emit-lib                 Build a shared library, with its interface\n");
     Stdio.printf("                             embedded (arm64, x86_64, arm9, wasm32)\n");
+    Stdio.printf("  -dynamic                   (-A x86_64) Link against glibc and the -l\n");
+    Stdio.printf("                             libraries (GTK 4, libGL, ...) instead of\n");
+    Stdio.printf("                             statically over musl\n");
     Stdio.printf("  --emit-apk                 (-A android) Package an installable APK\n");
     Stdio.printf("  --sign-key <path>          Signing key for --emit-apk\n");
     Stdio.printf("  --sign <identity.pem>      Developer-sign the Mach-O (macOS / iOS)\n");
@@ -5057,6 +5220,10 @@ bool parseCapabilityFlag(DriverOptions* d, u32* ip, u32 argc)
     // told as well, and the back ends read it from there.
     // The x86-64 vector level (SIMD step 1, S1). Checked against the target in
     // checkCapabilities, once the whole line is read.
+    if (a.equals(String.withCString("-dynamic"))) {
+        c.setDynamic();
+        *ip = i + (u32)1; return true;
+    }
     if (a.equals(String.withCString("-mavx2"))) {
         c.setSimd(String.withCString("avx2"), a);
         *ip = i + (u32)1; return true;
@@ -5145,6 +5312,16 @@ void checkCapabilities(DriverOptions* d)
     if (c.simdFlag() != (String*)0 && !isX86_64(d) && !arch.equals(String.withCString("win64"))) {
         Stdio.printf("xcc: %s: the vector level applies to -A x86_64 and -A win64 only\n",
                      c.simdFlag().cString());
+        Process.exit((i32)1); return;
+    }
+    if (c.dynamic() && !isX86_64(d)) {
+        Stdio.printf("xcc: -dynamic: a dynamically linked glibc executable is "
+                     "for -A x86_64 only\n");
+        Process.exit((i32)1); return;
+    }
+    if (c.dynamic() && d.emitLib()) {
+        Stdio.printf("xcc: -dynamic builds an executable; a glibc shared "
+                     "library (--emit-lib -dynamic) is not supported yet\n");
         Process.exit((i32)1); return;
     }
     if (c.threadFlag() && (isM68k(d) || isXt6502(d))) {

@@ -2425,6 +2425,120 @@ static NSString *_Nullable x86_64GuiClang(NSString *_Nonnull *_Nullable sysrootO
 // shared object, so the whole link moves to glibc. crt/libc come from the clang
 // driver; the stub defines the ARC/heap runtime; each needed .so is linked with an
 // $ORIGIN rpath so it resolves beside the binary at run time.
+// `-dynamic`: an x86-64 executable linked dynamically against glibc — the form
+// a program needs to load GTK 4 or libGL, which a static musl image cannot.
+// In-house throughout: the glibc runtime (crt-glibc.s, rtgen-glibc.s) is
+// checked in, glibc's own exports come from glibc-imports.map, and each -l
+// library is read for its SONAME and what it defines. No clang, no ld.
+static const char *const kGlibcOwnLibs[] = {"c", "m", "pthread", "dl", "rt", NULL};
+static int linkX86_64Glibc(const char *argv0, XTCommandLineOptions *opts, NSString *asmPath,
+                           NSString *outPath, NSArray<NSString *> *neededLibs) {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *support = resolveSupportRoot(argv0, opts);
+    NSString *ln = resolveSiblingTool(argv0, @"xcc-ln-x86_64");
+    if (!support || !ln) {
+        fprintf(stderr, "xcc: error: -dynamic: the x86-64 linker or support tree is missing\n");
+        return 1;
+    }
+    NSMutableArray<NSString *> *args = [NSMutableArray arrayWithObjects:@"--glibc", @"-importmap",
+        [support stringByAppendingPathComponent:@"x86_64/glibc-imports.map"], nil];
+    for (NSString *n in @[@"crt-glibc.s", @"rtgen-glibc.s", @"rtfiles-linux.s", @"libmgen-linux.s"]) {
+        NSString *pth = [support stringByAppendingPathComponent:
+                         [@"x86_64/runtime/" stringByAppendingString:n]];
+        if (![fm fileExistsAtPath:pth]) {
+            fprintf(stderr, "xcc: error: -dynamic: missing runtime file '%s'\n", pth.UTF8String);
+            return 1;
+        }
+        [args addObject:pth];
+    }
+    NSString *prog = [NSString stringWithContentsOfFile:asmPath encoding:NSUTF8StringEncoding error:NULL];
+    NSString *stubPath = [xtcTempDir() stringByAppendingPathComponent:@"xtc-x86_64-glibc-newstubs.s"];
+    [x86_64ClassAllocStubs(prog, NO) writeToFile:stubPath atomically:YES
+                                        encoding:NSUTF8StringEncoding error:NULL];
+    [args addObject:stubPath];
+    [args addObject:asmPath];
+    // The link line: -L dirs, then -l libraries (a .so, or a .a pool), objects
+    // and archives named directly. The standard multiarch directories are
+    // searched after -L, so `-lgtk-4` works on the Linux host as it stands; a
+    // cross-link names a copy of the libraries with -L.
+    NSArray<NSString *> *lflags = appendLinkerFlags(opts, NO);
+    NSMutableArray<NSString *> *dirs = [opts.libraryPaths mutableCopy] ?: [NSMutableArray array];
+    for (NSString *f in lflags)
+        if ([f hasPrefix:@"-L"] && f.length > 2) [dirs addObject:[f substringFromIndex:2]];
+    [dirs addObjectsFromArray:@[@"/usr/lib/x86_64-linux-gnu", @"/lib/x86_64-linux-gnu",
+                                @"/usr/lib64", @"/usr/lib"]];
+    for (NSUInteger fi = 0; fi < lflags.count; fi++) {
+        NSString *fl = lflags[fi];
+        NSMutableArray<NSString *> *pieces = [NSMutableArray array];
+        if ([fl hasPrefix:@"-Wl,"]) {
+            for (NSString *p in [[fl substringFromIndex:4] componentsSeparatedByString:@","])
+                if (p.length) [pieces addObject:p];
+        } else if ([fl isEqualToString:@"-Xlinker"] && fi + 1 < lflags.count) {
+            [pieces addObject:lflags[++fi]];
+        } else {
+            [pieces addObject:fl];
+        }
+        for (NSString *t in pieces) {
+            if ([t hasPrefix:@"-L"]) continue;
+            if ([t hasPrefix:@"-l"] && t.length > 2) {
+                NSString *base = [t substringFromIndex:2];
+                BOOL own = NO;
+                for (int k = 0; kGlibcOwnLibs[k]; k++)
+                    if ([base isEqualToString:@(kGlibcOwnLibs[k])]) own = YES;
+                if (own) continue;                 // glibc itself: the import map
+                NSString *found = nil;
+                for (NSString *ext in @[@".so", @".a"]) {
+                    for (NSString *dir in dirs) {
+                        NSString *p = [dir stringByAppendingPathComponent:
+                                       [NSString stringWithFormat:@"lib%@%@", base, ext]];
+                        if ([fm fileExistsAtPath:p]) { found = p; break; }
+                    }
+                    if (found) break;
+                }
+                if (!found) {
+                    fprintf(stderr, "xcc: error: -l%s: no lib%s.so or lib%s.a on the -L path "
+                                    "or in the system library directories (cross-linking: "
+                                    "-L a copy of the libraries)\n",
+                            base.UTF8String, base.UTF8String, base.UTF8String);
+                    return 1;
+                }
+                [args addObject:found];
+                continue;
+            }
+            if (x86LinkTokenIsFileInput(t) || [t.pathExtension isEqualToString:@"so"]) {
+                if (![fm fileExistsAtPath:t]) {
+                    fprintf(stderr, "xcc: error: '%s': no such file\n", t.UTF8String);
+                    return 1;
+                }
+                [args addObject:t];
+                continue;
+            }
+            fprintf(stderr, "xcc: error: -dynamic: linker flag '%s': this driver links "
+                            "in-house and takes -l, -L, .o, .a and .so only\n", t.UTF8String);
+            return 1;
+        }
+    }
+    // Libraries the program #imported (xc-built .so files): DT_NEEDED, found
+    // beside the program or where they were linked from.
+    NSMutableArray<NSString *> *depDirs = [NSMutableArray array];
+    for (NSString *lib in neededLibs) {
+        [args addObject:lib];
+        NSString *dir = [lib stringByDeletingLastPathComponent];
+        if (dir.length && ![depDirs containsObject:dir]) [depDirs addObject:dir];
+    }
+    [args addObjectsFromArray:@[@"-e", @"_start", @"-o", outPath]];
+    if (neededLibs.count) {
+        [args addObjectsFromArray:@[@"-rpath", @"$ORIGIN"]];
+        for (NSString *dir in depDirs) { [args addObject:@"-rpath"]; [args addObject:dir]; }
+    }
+    int rc = runChild(ln, args);
+    if (!opts.verbose) [fm removeItemAtPath:stubPath error:NULL];
+    if (rc != 0) return 1;
+    if (!opts.quiet)
+        fprintf(stderr, "xcc: x86-64 dynamic ELF (glibc) -> '%s'\n", outPath.UTF8String);
+    return 0;
+}
+
 static int linkX86_64Dynamic(const char *argv0, XTCommandLineOptions *opts, NSString *asmPath,
                              NSString *outPath, NSArray<NSString *> *neededLibs) {
     NSFileManager *fm = [NSFileManager defaultManager];
@@ -4681,6 +4795,8 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
             // path lives — the -shared and dynamic-exe variants are LINKS, and
             // a compile that imported a library was being routed into one of
             // them and handed the `.xtc.iface` to ld.lld ("unknown file type").
+            : (x86Exe && opts.dynamicGlibc && !opts.compileOnly)
+            ? linkX86_64Glibc(argv0, opts, tmpAsm, opts.outputPath, neededLibs)
             : (x86Exe && opts.emitLib && !opts.compileOnly)
             ? linkX86_64Shared(argv0, opts, tmpAsm, opts.outputPath, ifaceJson, neededLibs)
             : (x86Exe && neededLibs.count > 0 && !opts.compileOnly)

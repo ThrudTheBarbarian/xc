@@ -17,11 +17,20 @@
 //         -fno-asynchronous-unwind-tables -fno-jump-tables \
 //         -o support/win64/runtime/rtgen-win64.s \
 //         src/xtc/support-src/rt-freestanding.c
+//   clang -S -O1 -masm=intel -target x86_64-unknown-linux-gnu -DXT_GLIBC=1 \
+//         -DXT_NO_WEAK_SEAM=1 -fPIC -Wno-incompatible-library-redeclaration \
+//         -fno-stack-protector -fomit-frame-pointer \
+//         -fno-asynchronous-unwind-tables -fno-jump-tables \
+//         -o support/x86_64/runtime/rtgen-glibc.s \
+//         src/xtc/support-src/rt-freestanding.c
+//   (the glibc build for -dynamic: no hand-applied pieces — xt-sinit.c is
+//   compiled in, not appended — so a regeneration is the whole procedure;
+//   prepend the header the file carries)
 //
-// One source, two ABIs: the object runtime, allocator, PRNG and clock are
+// One source, three builds: the object runtime, allocator, PRNG and clock are
 // identical logic, and clang emits System V or Microsoft x64 register usage from
-// the target triple. Only the four OS primitives differ, and they are the only
-// thing #ifdef'd — everything below that line is shared.
+// the target triple. Only the OS primitives and the thread layer differ, and
+// they are the only things #ifdef'd — everything else is shared.
 //
 // FREESTANDING: no #include at all, because there is no target libc on the build
 // host to include from and none in the output. Linux reaches the kernel through
@@ -48,6 +57,7 @@ typedef unsigned int uint32_t;
 typedef unsigned long long uint64_t; // long is 32-bit under Windows LLP64
 typedef long long int64_t;
 typedef int int32_t; // the threading primitives' i32 contract
+#define XT_RT_OWN_TYPES 1 // xt-sinit.c: the fixed-width types are defined here
 
 // ─────────────────── the OS primitives, and only these ───────────────────
 #ifdef XT_WIN64
@@ -95,6 +105,74 @@ static double xt_now_secs(void)
 static void xt_os_sleep_ns(uint64_t ns)
     {
     Sleep((uint32_t)(ns / 1000000ULL));
+    }
+#elif defined(XT_GLIBC)
+// ── glibc, dynamically linked (-dynamic) ──
+// The OS primitives come from libc.so.6 like everything else. glibc owns %fs
+// and the TLS block (ld.so set them up before _start), so nothing here may
+// touch them — which is why this is a third configuration rather than the musl
+// one with a different libc behind it. Still no #include: the typedefs above
+// would clash with glibc's own, and libc's ABI is all this needs.
+extern void* mmap(void* addr, uint64_t len, int prot, int flags, int fd, long off);
+extern int munmap(void* addr, uint64_t len);
+extern int clock_gettime(int clockid, void* ts);
+extern int nanosleep(const void* req, void* rem);
+extern long write(int fd, const void* buf, uint64_t count);
+extern long read(int fd, void* buf, uint64_t count);
+extern int open(const char* path, int flags, ...);
+extern int close(int fd);
+extern long lseek(int fd, long off, int whence);
+extern int mkdir(const char* path, uint32_t mode);
+extern int chmod(const char* path, uint32_t mode);
+extern void exit(int code);
+extern char* getenv(const char* name);
+extern int* __errno_location(void);
+
+static void* xt_os_alloc(uint64_t bytes)
+    {
+    // PROT_READ|PROT_WRITE = 3, MAP_PRIVATE|MAP_ANONYMOUS = 0x22
+    void* p = mmap(0, bytes, 3, 0x22, -1, 0);
+    return p == (void*)-1 ? 0 : p;
+    }
+static double xt_now_secs(void)
+    {
+    long ts[2];
+    clock_gettime(1 /* CLOCK_MONOTONIC */, ts);
+    return (double)ts[0] + (double)ts[1] * 1e-9;
+    }
+static void xt_os_sleep_ns(uint64_t ns)
+    {
+    long req[2];
+    req[0] = (long)(ns / 1000000000ULL);
+    req[1] = (long)(ns % 1000000000ULL);
+    nanosleep(req, 0);
+    }
+
+// The raw-syscall contract rtfiles-linux.s is written against (sys-linux.s):
+// a result, or -errno. Over libc, so the file runtime is shared unchanged.
+static long xt_sys_ret(long r)
+    {
+    return r < 0 ? -(long)*__errno_location() : r;
+    }
+long _sys_read(long fd, void* buf, uint64_t n)    { return xt_sys_ret(read((int)fd, buf, n)); }
+long _sys_open(const char* path, long flags, long mode)
+    {
+    return xt_sys_ret(open(path, (int)flags, (uint32_t)mode));
+    }
+long _sys_close(long fd)                          { return xt_sys_ret(close((int)fd)); }
+long _sys_lseek(long fd, long off, long whence)   { return xt_sys_ret(lseek((int)fd, off, (int)whence)); }
+long _sys_mkdir(const char* path, long mode)      { return xt_sys_ret(mkdir(path, (uint32_t)mode)); }
+long _sys_chmod(const char* path, long mode)      { return xt_sys_ret(chmod(path, (uint32_t)mode)); }
+// exit, not _exit: a C library in the same process (GTK, libGL) may have
+// buffered stdio or atexit work that a raw exit_group would drop.
+void _sys_exit(long code)                         { exit((int)code); }
+
+// PlatformCore's environment read (sys-linux.s defines it on musl).
+static const char xt_empty[1] = {0};
+const char* _xt_getenv(const char* name)
+    {
+    const char* v = name ? getenv(name) : 0;
+    return v ? v : xt_empty;
     }
 #else
 // ── from sys-linux.s ──
@@ -879,6 +957,245 @@ void _xt_tls_set(uint32_t k, void* v)
 void* _xt_tls_get(uint32_t k)
     {
     return TlsGetValue(k);
+    }
+
+#elif defined(XT_GLIBC)
+// ── glibc: pthreads, as support/generic/runtime/xt-threads.c does on macOS ──
+// glibc's own threads, so its malloc, stdio and every C library in the process
+// (GTK's included) see a thread they know about. The objects are opaque blocks
+// of glibc's x86-64 sizes (pthread_mutex_t 40, pthread_cond_t 48, pthread_t 8),
+// 8-aligned, because this file includes no headers.
+typedef struct { uint64_t w[5]; } xt_pmutex_t;
+typedef struct { uint64_t w[6]; } xt_pcond_t;
+extern int pthread_create(uint64_t* t, const void* attr, void* (*fn)(void*), void* arg);
+extern int pthread_join(uint64_t t, void** ret);
+extern int pthread_detach(uint64_t t);
+extern uint64_t pthread_self(void);
+extern int pthread_mutex_init(xt_pmutex_t* m, const void* attr);
+extern int pthread_mutex_destroy(xt_pmutex_t* m);
+extern int pthread_mutex_lock(xt_pmutex_t* m);
+extern int pthread_mutex_unlock(xt_pmutex_t* m);
+extern int pthread_mutex_trylock(xt_pmutex_t* m);
+extern int pthread_cond_init(xt_pcond_t* c, const void* attr);
+extern int pthread_cond_destroy(xt_pcond_t* c);
+extern int pthread_cond_wait(xt_pcond_t* c, xt_pmutex_t* m);
+extern int pthread_cond_signal(xt_pcond_t* c);
+extern int pthread_cond_broadcast(xt_pcond_t* c);
+extern int pthread_key_create(uint32_t* k, void (*dtor)(void*));
+extern int pthread_setspecific(uint32_t k, const void* v);
+extern void* pthread_getspecific(uint32_t k);
+extern int sched_yield(void);
+extern long sysconf(int name);
+
+typedef struct { void* code; void* recv; } xt_gstart_t;
+
+void _xt_thread_exiting(void);
+static void* xt_gthread_entry(void* p)
+    {
+    xt_gstart_t s = *(xt_gstart_t*)p;
+    free(p);
+    if (s.code)
+        ((void (*)(void*))s.code)(s.recv);
+    _xt_thread_exiting();
+    return 0;
+    }
+
+void* _xt_thread_create(void* code, void* recv)
+    {
+    if (!code)
+        return 0;
+    // The runtime's spin locks switch on here, before a second thread exists.
+    _xt_threads_active = 1;
+    xt_gstart_t* s = (xt_gstart_t*)malloc(sizeof *s);
+    uint64_t* h = (uint64_t*)malloc(sizeof *h);
+    if (!s || !h)
+        {
+        free(s);
+        free(h);
+        return 0;
+        }
+    s->code = code;
+    s->recv = recv;
+    if (pthread_create(h, 0, xt_gthread_entry, s) != 0)
+        {
+        free(s);
+        free(h);
+        return 0;
+        }
+    return h;
+    }
+// Join frees the handle; the library class clears it, so a second join is -1.
+int32_t _xt_thread_join(void* h)
+    {
+    if (!h)
+        return -1;
+    void* ret = 0;
+    int rc = pthread_join(*(uint64_t*)h, &ret);
+    free(h);
+    return rc == 0 ? 0 : -1;
+    }
+void _xt_thread_detach(void* h)
+    {
+    if (!h)
+        return;
+    pthread_detach(*(uint64_t*)h);
+    free(h);
+    }
+void _xt_thread_yield(void)
+    {
+    sched_yield();
+    }
+void _xt_thread_sleep_ms(uint32_t ms)
+    {
+    xt_os_sleep_ns((uint64_t)ms * 1000000ULL);
+    }
+uint32_t _xt_thread_self_id(void)
+    {
+    uint64_t t = pthread_self();
+    return (uint32_t)((t >> 4) ^ (t >> 32));
+    }
+int32_t _xt_thread_cpu_count(void)
+    {
+    long n = sysconf(84 /* _SC_NPROCESSORS_ONLN */);
+    return n > 0 ? (int32_t)n : 1;
+    }
+
+void* _xt_mutex_new(void)
+    {
+    xt_pmutex_t* m = (xt_pmutex_t*)malloc(sizeof *m);
+    if (m && pthread_mutex_init(m, 0) != 0)
+        {
+        free(m);
+        return 0;
+        }
+    return m;
+    }
+void _xt_mutex_free(void* m)
+    {
+    if (!m)
+        return;
+    pthread_mutex_destroy((xt_pmutex_t*)m);
+    free(m);
+    }
+void _xt_mutex_lock(void* m)
+    {
+    if (m)
+        pthread_mutex_lock((xt_pmutex_t*)m);
+    }
+void _xt_mutex_unlock(void* m)
+    {
+    if (m)
+        pthread_mutex_unlock((xt_pmutex_t*)m);
+    }
+int32_t _xt_mutex_trylock(void* m)
+    {
+    return m && pthread_mutex_trylock((xt_pmutex_t*)m) == 0 ? 1 : 0;
+    }
+
+void* _xt_cond_new(void)
+    {
+    xt_pcond_t* c = (xt_pcond_t*)malloc(sizeof *c);
+    if (c && pthread_cond_init(c, 0) != 0)
+        {
+        free(c);
+        return 0;
+        }
+    return c;
+    }
+void _xt_cond_free(void* c)
+    {
+    if (!c)
+        return;
+    pthread_cond_destroy((xt_pcond_t*)c);
+    free(c);
+    }
+void _xt_cond_wait(void* c, void* m)
+    {
+    if (c && m)
+        pthread_cond_wait((xt_pcond_t*)c, (xt_pmutex_t*)m);
+    }
+void _xt_cond_signal(void* c)
+    {
+    if (c)
+        pthread_cond_signal((xt_pcond_t*)c);
+    }
+void _xt_cond_broadcast(void* c)
+    {
+    if (c)
+        pthread_cond_broadcast((xt_pcond_t*)c);
+    }
+
+// A counting semaphore over mutex + cond, the same as xt-threads.c.
+typedef struct { xt_pmutex_t m; xt_pcond_t c; int32_t count; } xt_gsem_t;
+void* _xt_sem_new(int32_t initial)
+    {
+    xt_gsem_t* s = (xt_gsem_t*)malloc(sizeof *s);
+    if (!s)
+        return 0;
+    pthread_mutex_init(&s->m, 0);
+    pthread_cond_init(&s->c, 0);
+    s->count = initial < 0 ? 0 : initial;
+    return s;
+    }
+void _xt_sem_free(void* p)
+    {
+    if (!p)
+        return;
+    xt_gsem_t* s = (xt_gsem_t*)p;
+    pthread_cond_destroy(&s->c);
+    pthread_mutex_destroy(&s->m);
+    free(s);
+    }
+void _xt_sem_wait(void* p)
+    {
+    if (!p)
+        return;
+    xt_gsem_t* s = (xt_gsem_t*)p;
+    pthread_mutex_lock(&s->m);
+    while (s->count <= 0)
+        pthread_cond_wait(&s->c, &s->m);
+    s->count--;
+    pthread_mutex_unlock(&s->m);
+    }
+int32_t _xt_sem_trywait(void* p)
+    {
+    if (!p)
+        return 0;
+    xt_gsem_t* s = (xt_gsem_t*)p;
+    int32_t got = 0;
+    pthread_mutex_lock(&s->m);
+    if (s->count > 0)
+        {
+        s->count--;
+        got = 1;
+        }
+    pthread_mutex_unlock(&s->m);
+    return got;
+    }
+void _xt_sem_post(void* p)
+    {
+    if (!p)
+        return;
+    xt_gsem_t* s = (xt_gsem_t*)p;
+    pthread_mutex_lock(&s->m);
+    s->count++;
+    pthread_cond_signal(&s->c);
+    pthread_mutex_unlock(&s->m);
+    }
+
+uint32_t _xt_tls_new(void)
+    {
+    uint32_t k;
+    return pthread_key_create(&k, 0) == 0 ? k : 0xFFFFFFFFu;
+    }
+void _xt_tls_set(uint32_t key, void* v)
+    {
+    if (key != 0xFFFFFFFFu)
+        pthread_setspecific(key, v);
+    }
+void* _xt_tls_get(uint32_t key)
+    {
+    return key == 0xFFFFFFFFu ? 0 : pthread_getspecific(key);
     }
 
 #else
