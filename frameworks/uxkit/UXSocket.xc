@@ -281,8 +281,20 @@ class UXSocket
         fd = (i64)-1;
         }
 
+    // The descriptor is closed here directly, not through self.close(): a method called on self
+    // from dealloc re-entered dealloc (a stack overflow on every freed socket, reported to the
+    // compiler), so nothing here calls back into the object.
     void dealloc(void)
         {
-        self.close();
+#if !_UX_NO_TCP
+        if (open)
+            {
+#if ARCH_win64
+            closesocket((u64)fd);
+#else
+            _uxSocketCloseFd((i32)fd);
+#endif
+            }
+#endif
         }
     }

@@ -66,6 +66,12 @@ void main(void)
         }
     ck((u8*)"when the peer closes, read answers -1 and the socket is closed", last == (i32)-1 && !s.isOpen());
     ck((u8*)"...and a write after that fails", !s.write((u8*)"x", (i32)1));
+    // the last reference to a closed socket going, and to one still open: both freed cleanly
+    s = (UXSocket*)0;
+    UXSocket* again = UXSocket.connectTo((u8*)"localhost", port);
+    ck((u8*)"a second connection", again != (UXSocket*)0);
+    again = (UXSocket*)0;
+    ck((u8*)"freeing a closed socket and an open one returns", true);
     UXSocket* none = UXSocket.connectTo((u8*)"localhost", port + (i32)1);
     ck((u8*)"a refused port gives null, with a reason", none == (UXSocket*)0 && UXSocket.lastError()[0] != (u8)0);
     Stdio.printf(gFails == (i32)0 ? "PASS: UXSocket -- connect by name, whole writes, reads that never block, a closed peer seen\n" : "FAIL: %d\n", gFails);
