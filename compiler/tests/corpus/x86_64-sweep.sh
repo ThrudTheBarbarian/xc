@@ -46,7 +46,13 @@ applies() {
   fi
   return 0
 }
-flags_for() { grep -qiE '//[ ]*xtc-flags:.*farc=off' "$1" && echo "-farc=off"; }
+# SWEEP_FLAGS is added to every compile, e.g. SWEEP_FLAGS=-mavx2 to run the
+# whole corpus at the 256-bit vector level.
+flags_for() {
+  local fl=""
+  grep -qiE '//[ ]*xtc-flags:.*farc=off' "$1" && fl="-farc=off"
+  echo $fl ${SWEEP_FLAGS:-}
+}
 companion_for() { grep -hoE '//[ ]*xtc-link:[ ]*[A-Za-z0-9_]+' "$1" | head -1 | grep -oE '[A-Za-z0-9_]+$'; }
 # Drop function-prototype lines (`type name(...);`, trailing comment allowed) so the
 # caller's forward decls don't collide with the companion's definitions when merged.
