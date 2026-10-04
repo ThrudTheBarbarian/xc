@@ -5,7 +5,7 @@
 #import <Stdio.xc>
 #import "UXSocket.xc"
 #import "UXString.xc"
-u8* _xt_getenv(u8* name);
+#import <PlatformCore.xc>
 
 i32 gFails;
 void ck(u8* what, bool ok)
@@ -23,7 +23,7 @@ void ck(u8* what, bool ok)
 void main(void)
     {
     gFails = (i32)0;
-    i32 port = UXStr.toInt(_xt_getenv((u8*)"UX_SOCKET_PORT"));
+    i32 port = UXStr.toInt(Platform.env(String.withCString((u8*)"UX_SOCKET_PORT")).cString());
     if (port <= (i32)0)
         {
         Stdio.printf("SKIP: no UX_SOCKET_PORT\n");

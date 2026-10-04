@@ -10,9 +10,7 @@
 #import "UXImage.xc"
 #import "UXGraphics.xc" // UXPIX_*
 #import "UXString.xc"   // UXStr.toInt, for UX_AUTOQUIT
-#if !ARCH_wasm32 && !ARCH_arm9
-u8* _xt_getenv(u8* name); // the runtime's; wasm32 and the XTOS loader have no environment
-#endif
+#import <PlatformCore.xc> // Platform.env: "" where there is no environment (wasm32, XTOS)
 
 protocol UXApplicationDelegate
     {
@@ -315,11 +313,7 @@ class UXApplication : UXResponder
         // app that would otherwise wait for a person; a killed one reports nothing and, under Wine,
         // leaves its devices running).  The platform keeps the time where it owns the wait.
         i32 quitAt = (i32)0;
-#if ARCH_wasm32 || ARCH_arm9
-        i32 aq = (i32)0; // no environment: a page, or an XTOS program
-#else
-        i32 aq = UXStr.toInt(_xt_getenv((u8*)"UX_AUTOQUIT"));
-#endif
+        i32 aq = UXStr.toInt(Platform.env(String.withCString((u8*)"UX_AUTOQUIT")).cString());
         if (aq > (i32)0 && !gDriver.stopAfterMs(aq))
             {
             quitAt = gDriver.nowMs() + aq;
