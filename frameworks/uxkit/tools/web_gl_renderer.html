@@ -1,0 +1,15 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>running</title>
+<canvas id="ux-canvas" width="480" height="320"></canvas>
+<script>
+  // run_web_snapshot.sh's page: the worker run loop, with WebGL2 in the worker.  The app checks its
+  // own snapshots; its output is POSTed back.
+  globalThis.xccConfig = { runLoop: 'worker', workerScript: 'ux_web_browser.js', canvas: '#ux-canvas' };
+  const out = [];
+  const report = () => fetch('/result', { method: 'POST', body: out.join('\n') });
+  globalThis.xccOut = (s) => { out.push(s); if (/^(PASS|FAIL)/.test(s)) setTimeout(report, 300); };
+  setTimeout(() => { out.push('timed out'); report(); }, 20000);
+</script>
+<script src="ux_web_page.js"></script>
+<script src="test_gl_renderer.js"></script>

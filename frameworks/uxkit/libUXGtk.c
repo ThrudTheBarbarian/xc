@@ -737,6 +737,11 @@ void ux_gtk_make_gl(int handle, int node, int x, int y, int w, int h, int hidden
     if (!gGlA[handle][node])
         {
         GtkWidget* gl = gtk_gl_area_new();
+        /* Desktop GL, 3.2 or later: what glKind promises (UX_GL_GL33).  Left to choose, GTK takes
+         * OpenGL ES where it prefers it (Mesa under Xvfb did), and a renderer told GL 3.3 then
+         * compiles "#version 150" against a GLES context and fails. */
+        gtk_gl_area_set_allowed_apis(GTK_GL_AREA(gl), GDK_GL_API_GL);
+        gtk_gl_area_set_required_version(GTK_GL_AREA(gl), 3, 2);
         g_signal_connect(gl, "render", G_CALLBACK(gl_render_cb), GINT_TO_POINTER((handle << 8) | node));
         /* BELOW the cairo drawing area, so the toolkit's 2D lands over the map. */
         gtk_widget_insert_before(gl, GTK_WIDGET(gFix[handle]), gArea[handle]);

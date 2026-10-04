@@ -43,6 +43,7 @@ a platform. The platforms are grouped by realm:
 - [`UXToolbar`](/compiler/api/uxkit/uxtoolbar/)
 - [`UXView`](/compiler/api/uxkit/uxview/)
 - [`UXGLView`](/compiler/api/uxkit/uxglview/)
+- [`UXGL`](/compiler/api/uxkit/uxgl/)
 - [`UXViewTree`](/compiler/api/uxkit/uxviewtree/)
 
 ## Application & windows

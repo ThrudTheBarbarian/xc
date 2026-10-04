@@ -5,10 +5,10 @@ description: "A view that owns a GL context: the driver keeps the surface and th
 
 `UXGLView` is a [`UXView`](/compiler/api/uxkit/uxview/) that can own a GL
 context instead of being painted by `drawRect`. The driver owns the surface,
-its size, its order and its swap. The app owns the renderer and finds its entry
-points through [`UXViewDriver.glProc`](/compiler/api/uxkit/uxviewdriver/#gl-the-driver-owns-the-surface-and-the-frame),
-or as plain C functions linked against the platform's GL library (`-framework
-OpenGL` on macOS, `-lGL` on Linux).
+its size, its order and its swap. The app owns the renderer, which makes its GL
+calls through [`UXGL.xc`](/compiler/api/uxkit/uxgl/), the same source on every
+backend, or finds an entry point itself with
+[`UXViewDriver.glProc`](/compiler/api/uxkit/uxviewdriver/#gl-the-driver-owns-the-surface-and-the-frame).
 
 ```c
 #import "UXView.xc"
