@@ -12,11 +12,45 @@
 // that went away.  The address comes from getaddrinfo, IPv4 or IPv6, so nothing builds a sockaddr by
 // hand.  read never blocks, so a client polls it from its frame clock and the run loop keeps turning.
 //
-// The C declarations are the standard library's (Http.xc), which already carries the per-host
-// signatures: a C symbol has one signature, so this file uses those and adds only poll.  No TCP in a
-// browser (wasm32) or on XTOS here: connect answers null with the reason.
-#import <Http.xc>
+// The C declarations are the same, word for word, as the standard library's Http.xc, so a program
+// may import both (a C symbol has one signature, and an identical declaration is accepted), but this
+// file does not import Http: with it in the program, a method called on self from a dealloc
+// re-entered the dealloc (a compiler bug, reported), and UXWindow's and UXGLView's deallocs do that.
+// No TCP in a browser (wasm32) or on XTOS here: connectTo answers null with the reason.
 #import "UXData.xc"
+#import "UXString.xc" // UXStr.fromInt, the port as a service name
+
+#if !ARCH_wasm32 && !ARCH_arm9
+#if ARCH_win64
+struct _HttpAddr { i32 flags; i32 family; i32 socktype; i32 proto; u32 addrlen; u32 _pad; u8* canon; u8* addr; _HttpAddr* next; }
+i32 WSAStartup(u16 version, u8* data);
+u64 socket(i32 domain, i32 type, i32 proto);
+i32 connect(u64 s, u8* addr, i32 len);
+i32 send(u64 s, u8* buf, i32 len, i32 flags);
+i32 recv(u64 s, u8* buf, i32 len, i32 flags);
+i32 setsockopt(u64 s, i32 level, i32 name, u8* value, i32 len);
+i32 closesocket(u64 s);
+#elif ARCH_x86_64
+struct _HttpAddr { i32 flags; i32 family; i32 socktype; i32 proto; u32 addrlen; u32 _pad; u8* addr; u8* canon; _HttpAddr* next; }
+i32 socket(i32 domain, i32 type, i32 proto);
+i32 connect(i32 fd, u8* addr, u32 len);
+i64 send(i32 fd, u8* buf, u64 len, i32 flags);
+i64 recv(i32 fd, u8* buf, u64 len, i32 flags);
+i32 setsockopt(i32 fd, i32 level, i32 name, u8* value, u32 len);
+i32 close(i32 fd);
+#else
+struct _HttpAddr { i32 flags; i32 family; i32 socktype; i32 proto; u32 addrlen; u32 _pad; u8* canon; u8* addr; _HttpAddr* next; }
+i32 socket(i32 domain, i32 type, i32 proto);
+i32 connect(i32 fd, u8* addr, u32 len);
+i64 send(i32 fd, u8* buf, u64 len, i32 flags);
+i64 recv(i32 fd, u8* buf, u64 len, i32 flags);
+i32 setsockopt(i32 fd, i32 level, i32 name, u8* value, u32 len);
+i32 close(i32 fd);
+#endif
+
+i32 getaddrinfo(u8* node, u8* service, _HttpAddr* hints, _HttpAddr** res);
+void freeaddrinfo(_HttpAddr* res);
+#endif
 
 #if ARCH_win64
 struct _UXPollFd { u64 fd; i16 events; i16 revents; i32 _pad; }
@@ -38,6 +72,7 @@ i32 poll(pointer fds, u32 n, i32 timeout);
 #endif
 
 u8* gUXSocketError;
+bool gUXWinsockReady; // WSAStartup has run (win64)
 #if !_UX_NO_TCP && !ARCH_win64
 // C's close, by another name: inside UXSocket the bare name is its own close()
 void _uxSocketCloseFd(i32 fd)
@@ -73,7 +108,7 @@ class UXSocket
         return (UXSocket*)0;
 #else
 #if ARCH_win64
-        if (!_http_winsock_ready)
+        if (!gUXWinsockReady)
             {
             u8 wsa[512];
             if (WSAStartup((u16)$0202, &wsa[0]) != (i32)0)
@@ -81,7 +116,7 @@ class UXSocket
                 gUXSocketError = (u8*)"Winsock would not start";
                 return (UXSocket*)0;
                 }
-            _http_winsock_ready = true;
+            gUXWinsockReady = true;
             }
 #endif
         _HttpAddr hints;
@@ -95,8 +130,7 @@ class UXSocket
         hints.addr = (u8*)0;
         hints.next = (_HttpAddr*)0;
         _HttpAddr* res = (_HttpAddr*)0;
-        String* service = String.withFormat("%d", port);
-        if (getaddrinfo(host, service.cString(), &hints, &res) != (i32)0 || res == (_HttpAddr*)0)
+        if (getaddrinfo(host, UXStr.fromInt(port), &hints, &res) != (i32)0 || res == (_HttpAddr*)0)
             {
             gUXSocketError = (u8*)"cannot resolve the host";
             return (UXSocket*)0;
