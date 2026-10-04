@@ -5185,8 +5185,11 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
                 // Threading: atomic decrement, and the dealloc decision is made
                 // from the value THIS thread took the count down from, not from
                 // a re-read (two threads re-reading would both see 0 and both
-                // free). LDADDALH returns the OLD halfword, so "I was the last
-                // reference" is old == 1.
+                // free). LDADDAL returns the OLD count, so "I was the last
+                // reference" is old == 1. It is the whole 32-bit count: a
+                // halfword decrement saw the teardown marker 0x80000000,
+                // retained to 0x80000001, as old == 1 and ran dealloc again
+                // from inside dealloc (bug 608).
                 //
                 // The acquire half is what makes the dealloc safe: it orders
                 // every other thread's writes to the object — made before ITS
@@ -5194,17 +5197,15 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
                 // publishes this thread's own writes to whoever frees it.
                 [ctx.out appendString:@"    sub x16, x0, #4\n"];
                 if (sArm64LseAtomics) {
-                    [ctx.out appendString:@"    mov w17, #0xffff\n"];   // -1, mod 2^16
-                    [ctx.out appendString:@"    ldaddalh w17, w17, [x16]\n"];
+                    [ctx.out appendString:@"    movn w17, #0\n"];   // -1
+                    [ctx.out appendString:@"    ldaddal w17, w17, [x16]\n"];
                     [ctx.out appendString:@"    cmp w17, #1\n"];
                     [ctx.out appendFormat:@"    b.ne .L%@_release_done_%lu\n", fnl, (unsigned long)lbl];
                 } else {
                     // No LSE: an exclusive load/store loop. It keeps the NEW
                     // count rather than the old one and tests it against zero —
                     // "I was the last reference" is old == 1, which is new == 0,
-                    // and that needs one register fewer than holding both. The
-                    // wrap on an already-zero count is the same 0xffff the
-                    // non-atomic path produces, so the two agree exactly.
+                    // and that needs one register fewer than holding both.
                     [ctx.out appendFormat:@".L%@_rcas_%lu:\n", fnl, (unsigned long)lbl];
                     [ctx.out appendString:@"    ldaxr w17, [x16]\n"];
                     [ctx.out appendString:@"    sub w17, w17, #1\n"];

@@ -47,7 +47,7 @@ class Arm64
     // slot rather than being packed to its natural size. Set for `-A android`.
     bool       _aapcs64Abi;
     // Whether ARMv8.1 LSE is guaranteed. Apple Silicon is ARMv8.5; Android's
-    // minSdk floor is plain armv8-a, where `ldaddlh`/`ldaddalh` do not exist —
+    // minSdk floor is plain armv8-a, where `ldaddl`/`ldaddal` do not exist —
     // the NDK assembler refuses them and a device without them takes SIGILL.
     bool       _lseAtomics;
     IRFunc*   _fn;
@@ -1285,23 +1285,24 @@ class Arm64
         _out.appendFormat("    b.lo %s\n", done.cString());
         if (_atomicArc) {
             // Atomic decrement, and the dealloc decision comes from the value
-            // THIS thread took the count down from — LDADDALH returns the OLD
-            // halfword, so "I was the last reference" is old == 1. Two threads
+            // THIS thread took the count down from — LDADDAL returns the OLD
+            // count, so "I was the last reference" is old == 1. Two threads
             // re-reading a zero would both free it. The acquire half orders
             // every other thread's writes ahead of the destructor's reads.
+            // The whole 32-bit count: a halfword decrement saw the teardown
+            // marker 0x80000000, retained to 0x80000001, as old == 1 and ran
+            // dealloc again from inside dealloc (bug 608).
             _out.appendCString("    sub x16, x0, #4\n");
             if (_lseAtomics) {
-                _out.appendCString("    mov w17, #0xffff\n");
-                _out.appendCString("    ldaddalh w17, w17, [x16]\n");
+                _out.appendCString("    movn w17, #0\n");
+                _out.appendCString("    ldaddal w17, w17, [x16]\n");
                 _out.appendCString("    cmp w17, #1\n");
                 _out.appendFormat("    b.ne %s\n", done.cString());
             } else {
                 // No LSE: an exclusive load/store loop. It keeps the NEW count
                 // and tests it against zero rather than holding the old one —
                 // "I was the last reference" is old == 1, which is new == 0,
-                // and that needs one register fewer. The wrap on an already
-                // zero count is the same 0xffff the non-atomic path produces,
-                // so the two agree exactly.
+                // and that needs one register fewer.
                 String* again = labelFor(String.withCString("rcas"), lbl);
                 _out.appendFormat("%s:\n", again.cString());
                 _out.appendCString("    ldaxr w17, [x16]\n");
