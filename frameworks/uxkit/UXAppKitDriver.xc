@@ -68,6 +68,10 @@ void ux_ak_set_interactive(i32 on);                // GUI mode: show windows, bl
 i32 ux_ak_interactive(void);
 i32 ux_ak_capture(void); // capture booth: native controls realized, no window shown
 void ux_ak_set_capture(i32 on);
+void ux_ak_close_after_ms(i32 ms);
+i32 ux_ak_gl_backing(pointer peer, i32* out4);
+i32 ux_ak_gl_read(pointer peer, u32* out, i32 pw, i32 ph);
+bool gAKHeadless; // UXApplication.setHeadless(true) was asked for
 void ux_ak_run(void); // interactive: [NSApp run] owns the loop
 i32 ux_ak_quit(void); // nonzero once the close box was hit
 void ux_ak_stop(void);
@@ -2293,6 +2297,23 @@ class UXAppKitDriver : Object<UXViewDriver>
         {
         ux_ak_gl_vsync(interval);
         }
+    // a GL view's drawable (bounds times the backing scale) and its last frame (the IOSurface the
+    // view renders into, which keeps it)
+    i32 glDrawableSize(pointer view, i32* pw, i32* ph)
+        {
+        i32 b[4];
+        if (ux_ak_gl_backing(view, &b[(i32)0]) == (i32)0)
+            {
+            return (i32)0;
+            }
+        pw[0] = b[(i32)2];
+        ph[0] = b[(i32)3];
+        return (i32)1;
+        }
+    i32 glReadFrame(pointer view, u32* out, i32 pw, i32 ph)
+        {
+        return ux_ak_gl_read(view, out, pw, ph);
+        }
     // The frame clock.  INTERACTIVE AppKit owns the loop -- nextEvent blocks inside [NSApp run]
     // -- so the driver provides the turns itself and answers true: the shim paces fn by the window's
     // display link (a turn of 30 a second or more) or a timer (a slower one), in the common run-loop
@@ -2322,6 +2343,41 @@ class UXAppKitDriver : Object<UXViewDriver>
     bool driverOwnsRunLoop(void)
         {
         return false;
+        }
+
+    // the application's lifecycle (UXViewDriver).  Through UXApplication.setDriver a Mac app shows
+    // its windows and [NSApp run] owns the loop, as on every other backend, unless it asks for
+    // headless; the AppKit-only setInteractive / attachApp below stay for code that calls them.
+    void appAttached(pointer app)
+        {
+        self.attachApp((UXApplication*)(Object*)app);
+        if (!gAKHeadless)
+            {
+            ux_ak_set_interactive((i32)1);
+            }
+        }
+    void requestStop(void)
+        {
+        if (ux_ak_interactive() != (i32)0)
+            {
+            ux_ak_stop(); // [NSApp run] does not look at `running` until an event comes
+            }
+        }
+    // headless: no window shown, painted offscreen, and a GL view still gets its context
+    void setHeadless(bool on)
+        {
+        gAKHeadless = on;
+        ux_ak_set_interactive(on ? (i32)0 : (i32)1);
+        ux_ak_set_capture(on ? (i32)1 : (i32)0);
+        }
+    bool stopAfterMs(i32 ms)
+        {
+        if (ux_ak_interactive() == (i32)0)
+            {
+            return false; // headless: the neutral loop runs, and keeps the time itself
+            }
+        ux_ak_close_after_ms(ms);
+        return true;
         }
     void runLoop(void)
         {

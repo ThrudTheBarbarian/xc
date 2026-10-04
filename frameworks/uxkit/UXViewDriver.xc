@@ -396,6 +396,13 @@ protocol UXViewDriver
     // comes round sets 0, because with a blocking swap the number is the refresh rate and says
     // nothing about the map.  Applies to the next present.
     void glSetSwapInterval(i32 interval);
+    // The GL view's drawable in PIXELS: what its renderer draws into (the bounds times the backing
+    // scale, or the driver's clamped framebuffer where the GPU cannot take the full size).  1 when
+    // the view has a surface, 0 before it has one or where the backend has no GL.
+    i32 glDrawableSize(pointer view, i32* pw, i32* ph);
+    // The GL view's last frame alone (no 2-D views over it), top row first, as 0xAARRGGBB words,
+    // into out: pw*ph words, the size glDrawableSize gave.  1 when read, 0 where it cannot be.
+    i32 glReadFrame(pointer view, u32* out, i32 pw, i32 ph);
     // Whether the platform composites the 2-D layer and the GL present in ONE step, or leaves the
     // driver two producers to order and pace itself.  It is a question about ORDERING and PACING,
     // not occlusion: a view drawn over a GL surface composites on every backend, because the
@@ -513,6 +520,20 @@ protocol UXViewDriver
     // decision); the desktop and web backends all answer false and runLoop()
     // is a no-op there.
     bool driverOwnsRunLoop(void);
+    // The application this driver serves, from UXApplication.setDriver: a driver whose platform
+    // loop calls back into the app (AppKit's [NSApp run]) wires those callbacks here, and shows
+    // windows unless setHeadless asks otherwise.  The others need nothing.
+    void appAttached(pointer app);
+    // UXApplication.stop: end the platform's own loop too, where it has one (AppKit); a driver
+    // under the neutral loop needs nothing, since the loop sees `running` go false.
+    void requestStop(void);
+    // UXApplication.setHeadless, before run: realize and paint without showing windows where the
+    // platform has such a mode (AppKit; GL contexts included).  Elsewhere windows show as usual,
+    // which is headless enough under Xvfb or an emulator.
+    void setHeadless(bool on);
+    // UX_AUTOQUIT: stop the app after ms where the platform owns the wait (AppKit); false when the
+    // neutral loop should do it.
+    bool stopAfterMs(i32 ms);
     void runLoop(void);
 
     // Which form-factor class this backend presents (UXNB-V2.md §1) — the input to

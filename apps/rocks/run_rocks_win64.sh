@@ -9,10 +9,12 @@ command -v wine >/dev/null 2>&1 || { echo "== rocks-win64: skipped (no wine) =="
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
 echo "== rocks-win64: building =="
 "$xcc" -A win64 -I "$ux" -I "$here/xc" "$here/xc/rocks_main.xc" -o "$work/rocks.exe" -q
-echo "== rocks-win64: running under Wine (the app runs until stopped) =="
+echo "== rocks-win64: running under Wine (the app quits itself after 8 s) =="
 # To a FILE, not a pipe: Wine's helper processes inherit the pipe and keep it open after the app is
 # stopped, so a reader waiting for its end would wait forever.
-(cd "$work" && WINEDEBUG=-all timeout 25 wine rocks.exe >"$work/out.txt" 2>&1) || true
+# UX_AUTOQUIT ends the app by the path its own quit takes: a Wine process killed from outside leaves
+# its winedevice helpers running for good.  The timeout is only a backstop.
+(cd "$work" && WINEDEBUG=-all WINEDLLOVERRIDES="winedbg.exe=d" UX_AUTOQUIT=8000 timeout 60 wine rocks.exe >"$work/out.txt" 2>&1) || true
 pkill -f 'rocks.exe' 2>/dev/null || true
 out=$(grep -aE '^(PASS|FAIL|SKIP)' "$work/out.txt" | head -1)
 echo "$out"

@@ -21,6 +21,7 @@
 //
 //   Build+run:  sh run_gtk_gl.sh
 #import <Stdio.xc>
+#import "UXImage.xc"
 #import "UXGtkDriver.xc"
 #import "UXWindow.xc"
 #import "UXView.xc"
@@ -144,6 +145,16 @@ void main(void)
     ck(ge() == (u32)0, "no GL error over the frame");
     map.presentGL();
     ck(ge() == (u32)0, "no GL error over the swap");
+
+    // the drawable's size and the frame alone, through the neutral calls
+    i32 dw = (i32)0;
+    i32 dh = (i32)0;
+    ck(map.drawableSize(&dw, &dh) && dw == viewport[2] && dh == viewport[3], "drawableSize is the drawable's pixels (the viewport)");
+    UXImage* frame = map.snapshot();
+    u32 mid = frame != (UXImage*)0 ? frame.px[(dh / (i32)2) * dw + dw / (i32)2] : (u32)0;
+    Stdio.printf("snapshot %dx%d, middle %08x\n", frame != (UXImage*)0 ? frame.w : (i32)0, frame != (UXImage*)0 ? frame.h : (i32)0, mid);
+    ck(frame != (UXImage*)0 && frame.w == dw && frame.h == dh, "the GL view's snapshot is its frame, at the drawable's size");
+    ck(((mid >> (u32)16) & (u32)255) > (u32)50 && ((mid >> (u32)16) & (u32)255) < (u32)80 && ((mid >> (u32)8) & (u32)255) > (u32)115 && ((mid >> (u32)8) & (u32)255) < (u32)140, "...in the colour the frame was cleared to");
 
     // The drawable is CLAMPED to what the GPU can hold.  GtkGLArea sizes its own framebuffer, so over
     // the limit the renderer draws into the driver's (the clamped size, the aspect kept) and the area's

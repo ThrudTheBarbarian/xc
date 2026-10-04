@@ -677,6 +677,53 @@ static gboolean gl_render_cb(GtkGLArea* a, GdkGLContext* ctx, gpointer ud)
         }
     return TRUE; /* the app's frame is already in the FBO: no default clear */
     }
+static void gl_pixel_size(int handle, int node, int* pw, int* ph);
+int ux_gtk_gl_make_current(int handle, int node);
+/* The drawable the renderer draws into, in pixels: our framebuffer's size (clamped under the GPU's
+ * limit), or the area's when it has none yet.  1 when the area exists. */
+int ux_gtk_gl_drawable(int handle, int node, int* pw, int* ph)
+    {
+    if (handle < 0 || handle >= UXGTK_MAXW || node < 0 || node >= 256 || !gGlA[handle][node])
+        return 0;
+    GlClamp* c = &gClamp[handle][node];
+    if (c->fbo)
+        {
+        *pw = c->w;
+        *ph = c->h;
+        }
+    else
+        gl_pixel_size(handle, node, pw, ph);
+    return *pw > 0 && *ph > 0 ? 1 : 0;
+    }
+/* The last frame, read out of our framebuffer (which keeps it), top row first, as 0xAARRGGBB. */
+int ux_gtk_gl_read(int handle, int node, unsigned* out, int pw, int ph)
+    {
+    if (!ux_gtk_gl_make_current(handle, node))
+        return 0;
+    GlClamp* c = &gClamp[handle][node];
+    if (!c->fbo || c->w != pw || c->h != ph)
+        return 0;
+    gl_bindfn bindFb = (gl_bindfn)gl_entry("glBindFramebuffer");
+    typedef void (*rpfn)(int, int, int, int, unsigned, unsigned, void*);
+    rpfn rp = (rpfn)gl_entry("glReadPixels");
+    if (!bindFb || !rp)
+        return 0;
+    unsigned char* buf = (unsigned char*)malloc((size_t)pw * ph * 4);
+    if (!buf)
+        return 0;
+    bindFb(0x8CA8, c->fbo);                       /* READ */
+    rp(0, 0, pw, ph, 0x1908, 0x1401, buf);        /* RGBA, UNSIGNED_BYTE, bottom row first */
+    bindFb(0x8D40, c->fbo);
+    for (int y = 0; y < ph; y++)
+        {
+        const unsigned char* r = buf + (size_t)(ph - 1 - y) * pw * 4;
+        for (int x = 0; x < pw; x++)
+            out[(size_t)y * pw + x] = ((unsigned)r[x * 4 + 3] << 24) | ((unsigned)r[x * 4] << 16) |
+                                       ((unsigned)r[x * 4 + 1] << 8) | r[x * 4 + 2];
+        }
+    free(buf);
+    return 1;
+    }
 /* Test only: the far corner of the area's framebuffer after the last clamped blit (0xRRGGBB). */
 int ux_gtk_gl_test_corner(int handle, int node)
     {

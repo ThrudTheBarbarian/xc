@@ -233,6 +233,20 @@ void snapChecks(void)
     ck((u8*)"...the whole content, at its size", all.w == cw && all.h == ch);
     ck((u8*)"the app-drawn backdrop is in it", near(all, d((i32)10), d((i32)170), (i32)20, (i32)160, (i32)60));
     ck((u8*)"the map is in it", near(all, d((i32)30), d((i32)30), (i32)64, (i32)128, (i32)191));
+#if SNAP_APPKIT || SNAP_GTK || SNAP_WIN32
+    // the GL view's own frame, without the 2-D views over it (UXGLView.snapshot), at its drawable size
+    if (gMap.glContext() != (pointer)0)
+        {
+        i32 dw = (i32)0;
+        i32 dh = (i32)0;
+        bool sized = gMap.drawableSize(&dw, &dh);
+        UXImage* f = gMap.snapshot();
+        Stdio.printf("  (GL drawable %dx%d)\n", dw, dh);
+        ck((u8*)"the GL view's own snapshot is its frame, at its drawable size", sized && f != (UXImage*)0 && f.w == dw && f.h == dh && dw >= d((i32)200));
+        ck((u8*)"...the cleared blue, with no 2-D view over it", f != (UXImage*)0 && near(f, dw / (i32)2, dh / (i32)2, (i32)64, (i32)128, (i32)191) &&
+           near(f, dw * (i32)50 / (i32)200, dh * (i32)40 / (i32)120, (i32)64, (i32)128, (i32)191));
+        }
+#endif
     ck((u8*)"the 2-D view after the map is in it, over the map", near(all, d((i32)70), d((i32)60), (i32)230, (i32)20, (i32)20));
     // the button: across its frame, pixels that are neither the backdrop nor black (a face where the
     // platform paints one, the title's ink where it does not, as on iOS); a picture that is merely

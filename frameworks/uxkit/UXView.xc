@@ -15,6 +15,7 @@
 #import "UXResponder.xc"
 #import "UXViewTree.xc"
 #import "UXGraphics.xc"
+#import "UXImage.xc"   // UXGLView.snapshot
 
 // Raised by setNeedsDisplay, lowered by the run loop after it repaints.
 bool gNeedsDisplay;
@@ -455,6 +456,33 @@ class UXGLView : UXView
     bool ownsGL(void)
         {
         return glCtx != (pointer)0;
+        }
+    // The drawable's size in PIXELS, the size the renderer draws at: the bounds times the backing
+    // scale (or the driver's clamped framebuffer).  false before the view has a GL surface, or where
+    // the backend gives no GL (then the view is drawn by drawRect, at its bounds).
+    bool drawableSize(i32* pw, i32* ph)
+        {
+        pw[0] = (i32)0;
+        ph[0] = (i32)0;
+        return gDriver != (UXViewDriver*)0 && gDriver.glDrawableSize((pointer)self, pw, ph) != (i32)0;
+        }
+    // The view's last GL frame alone, without the 2-D views over it, at the drawable's size; null
+    // where it cannot be read (no surface yet, or a backend that does not offer it).  For the whole
+    // window as it shows, UXWindow.snapshot.
+    UXImage* snapshot(void)
+        {
+        i32 pw = (i32)0;
+        i32 ph = (i32)0;
+        if (!self.drawableSize(&pw, &ph) || pw <= (i32)0 || ph <= (i32)0)
+            {
+            return (UXImage*)0;
+            }
+        UXImage* im = UXImage.make(pw, ph);
+        if (gDriver.glReadFrame((pointer)self, im.px, pw, ph) == (i32)0)
+            {
+            return (UXImage*)0;
+            }
+        return im;
         }
 
     // What the RENDERER is handed.  Opaque: GL.xc passes it back to the driver and never

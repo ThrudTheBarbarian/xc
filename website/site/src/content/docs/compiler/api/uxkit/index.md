@@ -42,6 +42,7 @@ a platform. The platforms are grouped by realm:
 - [`UXTextField`](/compiler/api/uxkit/uxtextfield/)
 - [`UXToolbar`](/compiler/api/uxkit/uxtoolbar/)
 - [`UXView`](/compiler/api/uxkit/uxview/)
+- [`UXGLView`](/compiler/api/uxkit/uxglview/)
 - [`UXViewTree`](/compiler/api/uxkit/uxviewtree/)
 
 ## Application & windows
@@ -106,6 +107,7 @@ a platform. The platforms are grouped by realm:
 - [`UXPainter`](/compiler/api/uxkit/uxpainter/)
 - [`UXPath`](/compiler/api/uxkit/uxpath/)
 - [`UXPng`](/compiler/api/uxkit/uxpng/)
+- [`UXSocket`](/compiler/api/uxkit/uxsocket/)
 - [`UXRange`](/compiler/api/uxkit/uxrange/)
 - [`UXShapePath`](/compiler/api/uxkit/uxshapepath/)
 - [`UXSound`](/compiler/api/uxkit/uxsound/)
@@ -120,6 +122,7 @@ a platform. The platforms are grouped by realm:
 ## Drivers & backends
 
 - [`UXAppKitDriver`](/compiler/api/uxkit/uxappkitdriver/)
+- [`UXPlatform`](/compiler/api/uxkit/uxplatform/)
 - [`UXCanvasGraphics`](/compiler/api/uxkit/uxcanvasgraphics/)
 - [`UXCocoaGraphics`](/compiler/api/uxkit/uxcocoagraphics/)
 - [`UXGdiGraphics`](/compiler/api/uxkit/uxgdigraphics/)

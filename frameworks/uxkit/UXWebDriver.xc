@@ -1684,6 +1684,15 @@ class UXWebDriver : Object<UXViewDriver>
         // The browser paces the frame against the display and gives no interval
         // seam; there is nothing here to set.
         }
+    // a GL view's drawable and its last frame (UXViewDriver): not available on this backend yet
+    i32 glDrawableSize(pointer view, i32* pw, i32* ph)
+        {
+        return (i32)0;
+        }
+    i32 glReadFrame(pointer view, u32* out, i32 pw, i32 ph)
+        {
+        return (i32)0;
+        }
 
     // The frame clock: the neutral loop calls fn (its nextEvent takes the wait, so a turn
     // comes round with no input).  This driver has no turn of its own to offer -- it does
@@ -1703,6 +1712,21 @@ class UXWebDriver : Object<UXViewDriver>
         return (i32)UX_ORIENT_NONE;
         }
     bool driverOwnsRunLoop(void)
+        {
+        return false;
+        }
+
+    // the application's lifecycle (UXViewDriver): nothing to wire, stop or hide here
+    void appAttached(pointer app)
+        {
+        }
+    void requestStop(void)
+        {
+        }
+    void setHeadless(bool on)
+        {
+        }
+    bool stopAfterMs(i32 ms)
         {
         return false;
         }

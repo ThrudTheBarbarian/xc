@@ -528,6 +528,15 @@ class UXIosDriver : Object<UXViewDriver>
         ux_ios_set_turn_hook((pointer)fn, ms);
         return true;
         }
+    // a GL view's drawable and its last frame (UXViewDriver): not available on this backend yet
+    i32 glDrawableSize(pointer view, i32* pw, i32* ph)
+        {
+        return (i32)0;
+        }
+    i32 glReadFrame(pointer view, u32* out, i32 pw, i32 ph)
+        {
+        return (i32)0;
+        }
 
     i32 formFactorClass(void)
         {
@@ -542,6 +551,21 @@ class UXIosDriver : Object<UXViewDriver>
     bool driverOwnsRunLoop(void)
         {
         return true;
+        }
+
+    // the application's lifecycle (UXViewDriver): nothing to wire, stop or hide here
+    void appAttached(pointer app)
+        {
+        }
+    void requestStop(void)
+        {
+        }
+    void setHeadless(bool on)
+        {
+        }
+    bool stopAfterMs(i32 ms)
+        {
+        return false;
         }
     void runLoop(void)
         {

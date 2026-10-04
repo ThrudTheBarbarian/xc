@@ -5,13 +5,14 @@ description: "Boot, the run loop, and the top of the responder chain. A program'
 
 `UXApplication` is the program. It boots the backend, owns the window list
 and the menu bar, runs the event loop, and sits at the top of the responder
-chain. An application's `main()` is the same four lines on all six targets,
-and the only platform-aware line is the driver choice:
+chain. An application's `main()` is the same lines on every target.
+[`UXPlatform`](/compiler/api/uxkit/uxplatform/) supplies the driver for the
+backend the build links:
 
 ```c
 void main(void) {
     UXApplication* app = new UXApplication();
-    app.setDriver(new UXWebDriver());        // the ONE platform-aware line
+    app.setDriver(UXPlatform.driver());
     Controller* c = new Controller();
     app.setDelegate(c);
     app.run();
@@ -68,7 +69,7 @@ and the repaint has happened. Implement it only if you lay out views by hand.
 
 ## Topics
 
-**Configuring** · [setDriver](#setdriver) · [setDelegate](#setdelegate) · [setMenuBar](#setmenubar) · [setIcon](#seticon--seticonpixels) · [setIconPixels](#seticon--seticonpixels)
+**Configuring** · [setDriver](#setdriver) · [setHeadless](#setheadless) · [setDelegate](#setdelegate) · [setMenuBar](#setmenubar) · [setIcon](#seticon--seticonpixels) · [setIconPixels](#seticon--seticonpixels)
 **The loop** · [run](#run) · [stop](#stop) · [isRunning](#isrunning) · [pump](#pump)
 **Windows** · [addWindow](#addwindow) · [closeWindow](#closewindow) · [closeWindowLater](#closewindowlater)
 **Screen** · [screenWidth](#screenwidth--screenheight) · [screenHeight](#screenwidth--screenheight)
@@ -80,9 +81,22 @@ and the repaint has happened. Implement it only if you lay out views by hand.
 void setDriver(UXViewDriver* d)
 ```
 
-Selects the backend. The parameter is the neutral protocol type, so a
-library client (`#use <UXKit>`) can pass a driver without naming any backend
-global.
+Selects the backend and tells the driver its application, the same call on
+every backend. The parameter is the neutral protocol type, so a library client
+(`#use <UXKit>`) can pass a driver without naming any backend global. Windows
+are shown unless [`setHeadless`](#setheadless) asks otherwise.
+
+### setHeadless
+
+```c
+void setHeadless(bool on)
+```
+
+Call before [`run`](#run). Realizes and paints windows without showing them,
+where the platform has that mode. On macOS the views are painted offscreen and
+a GL view still gets its context. The other backends show their windows as
+usual, which is headless enough under Xvfb or an emulator. It is for an app's
+own test runs, so the source stays the same.
 
 ### setDelegate
 
@@ -141,8 +155,16 @@ packaging step, not from this call.
 void stop(void)
 ```
 
-Ends the loop after the current iteration. On iOS a stopped test app exits. A
-real iOS app does not stop, because the platform owns the process lifetime.
+Ends the loop after the current iteration, on every backend. Where the
+platform owns the loop (AppKit's `[NSApp run]`), the driver ends that too, so
+`stop` works from a turn hook, a timer or an event handler alike. On iOS a
+stopped test app exits. A real iOS app does not stop, because the platform owns
+the process lifetime.
+
+With `UX_AUTOQUIT=<ms>` in the environment, the loop stops by itself after that
+long, by the same path. Use it for an unattended run of an app that would wait
+for a person. On Windows under Wine, a process killed from outside leaves its
+helper processes running.
 
 ### isRunning
 

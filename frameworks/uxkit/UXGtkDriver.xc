@@ -77,6 +77,8 @@ void ux_gtk_make_radio(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, u8* tit
 void ux_gtk_set_check(i32 handle, i32 node, i32 on);
 void ux_gtk_make_slider(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, i32 lo, i32 hi, i32 val);
 void ux_gtk_set_slider_value(i32 handle, i32 node, i32 val);
+i32 ux_gtk_gl_drawable(i32 handle, i32 node, i32* pw, i32* ph);
+i32 ux_gtk_gl_read(i32 handle, i32 node, u32* out, i32 pw, i32 ph);
 void ux_gtk_make_stepper(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, i32 lo, i32 hi, i32 step, i32 wraps, i32 val);
 void ux_gtk_set_stepper_value(i32 handle, i32 node, i32 val);
 void ux_gtk_make_progress(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, i32 mille);
@@ -559,6 +561,17 @@ class UXGtkDriver : Object<UXViewDriver>
         // GTK paces the frame against the compositor and gives no interval seam; the VSync
         // the harness turns off is not something this backend can turn off either.
         }
+    // a GL view's drawable and its last frame: the driver's own framebuffer, which keeps the frame
+    i32 glDrawableSize(pointer view, i32* pw, i32* ph)
+        {
+        i32 k = self.glSlot(view);
+        return k >= (i32)0 ? ux_gtk_gl_drawable(self.gGtkGlHandle[k], self.gGtkGlNode[k], pw, ph) : (i32)0;
+        }
+    i32 glReadFrame(pointer view, u32* out, i32 pw, i32 ph)
+        {
+        i32 k = self.glSlot(view);
+        return k >= (i32)0 ? ux_gtk_gl_read(self.gGtkGlHandle[k], self.gGtkGlNode[k], out, pw, ph) : (i32)0;
+        }
 
     // The frame clock: the neutral loop calls fn (its nextEvent takes the wait, so a turn
     // comes round with no input).  This driver has no turn of its own to offer -- it does
@@ -579,6 +592,21 @@ class UXGtkDriver : Object<UXViewDriver>
         }
     // desktop: the neutral loop pumps GTK
     bool driverOwnsRunLoop(void)
+        {
+        return false;
+        }
+
+    // the application's lifecycle (UXViewDriver): nothing to wire, stop or hide here
+    void appAttached(pointer app)
+        {
+        }
+    void requestStop(void)
+        {
+        }
+    void setHeadless(bool on)
+        {
+        }
+    bool stopAfterMs(i32 ms)
         {
         return false;
         }

@@ -25,6 +25,8 @@ if [ "$UX_KS_WAIT" = 0 ]; then
     (cd "$work" && WINEDEBUG=-all WINEDLLOVERRIDES="winedbg.exe=d;" wine ks_win32.exe 2>/dev/null)
 else
     echo "== win32: launching under Wine — up for ${UX_KS_WAIT}s (--stay to close it yourself) =="
-    (cd "$work" && WINEDEBUG=-all WINEDLLOVERRIDES="winedbg.exe=d;" timeout "$UX_KS_WAIT" wine ks_win32.exe 2>/dev/null) || true
+    # UX_AUTOQUIT closes it as its own quit would: killed from outside, a Wine process leaves its
+    # winedevice helpers running for good.  The timeout is only a backstop.
+    (cd "$work" && WINEDEBUG=-all WINEDLLOVERRIDES="winedbg.exe=d;" UX_AUTOQUIT=$((UX_KS_WAIT * 1000)) timeout $((UX_KS_WAIT + 30)) wine ks_win32.exe 2>/dev/null) || true
 fi
 echo "== win32: done =="

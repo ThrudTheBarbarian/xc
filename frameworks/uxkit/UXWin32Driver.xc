@@ -4821,6 +4821,49 @@ class UXWin32Driver : Object<UXViewDriver>
                 }
             }
         }
+    // a GL view's drawable and its last frame: the frame each present reads back (gW32GlPx, BGRA,
+    // bottom-up) for the paint pass
+    i32 w32GlFind(pointer view)
+        {
+        for (i32 k = (i32)0; k < gW32GlCount; k = k + (i32)1)
+            {
+            if (gW32GlPeer[k] == view)
+                {
+                return k;
+                }
+            }
+        return (i32)-1;
+        }
+    i32 glDrawableSize(pointer view, i32* pw, i32* ph)
+        {
+        i32 k = self.w32GlFind(view);
+        if (k < (i32)0 || gW32GlPW[k] <= (i32)0 || gW32GlPH[k] <= (i32)0)
+            {
+            return (i32)0;
+            }
+        pw[0] = gW32GlPW[k];
+        ph[0] = gW32GlPH[k];
+        return (i32)1;
+        }
+    i32 glReadFrame(pointer view, u32* out, i32 pw, i32 ph)
+        {
+        i32 k = self.w32GlFind(view);
+        if (k < (i32)0 || gW32GlPx[k] == (pointer)0 || gW32GlPW[k] != pw || gW32GlPH[k] != ph)
+            {
+            return (i32)0;
+            }
+        u8* src = (u8*)gW32GlPx[k];
+        for (i32 y = (i32)0; y < ph; y = y + (i32)1)
+            {
+            u8* r = src + (ph - (i32)1 - y) * pw * (i32)4; // bottom-up -> top-down
+            for (i32 x = (i32)0; x < pw; x = x + (i32)1)
+                {
+                u8* q = r + x * (i32)4; // B G R A
+                out[y * pw + x] = ((u32)q[3] << (u32)24) | ((u32)q[2] << (u32)16) | ((u32)q[1] << (u32)8) | (u32)q[0];
+                }
+            }
+        return (i32)1;
+        }
 
     // The frame clock: the neutral loop calls fn, and its wait is honoured by nextEvent (a
     // timed wait on the message queue).  The driver does not own the loop, so it answers
@@ -4840,6 +4883,21 @@ class UXWin32Driver : Object<UXViewDriver>
         return (i32)UX_ORIENT_NONE;
         }
     bool driverOwnsRunLoop(void)
+        {
+        return false;
+        }
+
+    // the application's lifecycle (UXViewDriver): nothing to wire, stop or hide here
+    void appAttached(pointer app)
+        {
+        }
+    void requestStop(void)
+        {
+        }
+    void setHeadless(bool on)
+        {
+        }
+    bool stopAfterMs(i32 ms)
         {
         return false;
         }

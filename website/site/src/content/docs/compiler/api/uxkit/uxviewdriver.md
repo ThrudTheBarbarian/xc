@@ -135,6 +135,8 @@ void    destroyGLContext(pointer view);
 void    resizeGL(pointer view, i32 w, i32 h);
 void    presentGL(pointer view);
 void    glSetSwapInterval(i32 interval);
+i32     glDrawableSize(pointer view, i32* pw, i32* ph);
+i32     glReadFrame(pointer view, u32* out, i32 pw, i32 ph);
 ```
 
 A view may own a GL context instead of being painted by `drawRect`. This is the
@@ -149,6 +151,11 @@ by `drawRect` like any other. `makeGLContext` binds a context to a view and
 `presentGL` ends the frame. The driver sets the viewport from the drawable's own
 pixels, resizes both in the same turn as the resize, and skips `drawRect` for a
 view that owns a context — the two are alternative renderers, never both.
+`glDrawableSize` answers those pixels, and `glReadFrame` copies the last frame
+out as `0xAARRGGBB`, top row first, for `UXGLView.drawableSize` and
+`UXGLView.snapshot`. AppKit reads the IOSurface the view renders into, GTK the
+driver's framebuffer, and Win32 the copy each present makes. The web, iOS,
+Android and GEM answer 0 so far.
 
 On AppKit the drawable is **offscreen**: the renderer draws into a framebuffer
 the driver owns (it is the renderer's default framebuffer, so the renderer does
@@ -373,7 +380,18 @@ i32 trackDragStep(i32* x, i32* y)
 bool driverOwnsRunLoop(void)
 void runLoop(void)
 bool setTurnHook(turnHook_t* fn, i32 ms)
+void appAttached(pointer app)
+void requestStop(void)
+void setHeadless(bool on)
+bool stopAfterMs(i32 ms)
 ```
+
+`appAttached` is `UXApplication.setDriver` telling the driver its application.
+AppKit wires its callbacks there and shows windows. `requestStop` is
+`UXApplication.stop`, for a driver whose platform owns the wait (AppKit's
+`[NSApp run]`). `setHeadless` is `UXApplication.setHeadless`. `stopAfterMs` is
+`UX_AUTOQUIT` for such a driver, and answering false leaves the neutral loop to
+keep the time. A driver under the neutral loop implements all four as no-ops.
 
 ### Drawing
 

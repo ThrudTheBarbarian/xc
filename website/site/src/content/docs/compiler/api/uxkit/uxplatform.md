@@ -1,0 +1,56 @@
+---
+title: UXPlatform
+description: "The driver for the backend a build links, so an application's main() is the same on every platform."
+---
+
+`UXPlatform` hands an application the driver for the backend its build links.
+With it, `main()` has no platform-aware line:
+
+```c
+#import "UXPlatform.xc"
+
+void main(void) {
+    UXApplication* app = new UXApplication();
+    app.setDriver(UXPlatform.driver());
+    app.setDelegate(new Controller());
+    app.run();
+}
+```
+
+## Overview
+
+The backend follows the target where the target decides it: win64 is Win32,
+wasm32 the web, arm9 GEM, `ios-sim` and `ios` iOS, `android` Android. Otherwise
+the build names it with `-D UX_GTK` or `-D UX_GEM` (GEM on a host). With
+neither, an arm64 build is the Mac's AppKit and an x86_64 build is GTK on Linux.
+Only the driver the build uses is imported.
+
+A build script may differ per platform, in its link flags, its shims and these
+defines. The `.xc` source does not.
+
+## Topics
+
+**The backend** · [driver](#driver) · [name](#name)
+
+### driver
+
+```c
+static UXViewDriver* driver(void)
+```
+
+A new driver for the backend this build links, for
+[`UXApplication.setDriver`](/compiler/api/uxkit/uxapplication/#setdriver).
+
+### name
+
+```c
+static u8* name(void)
+```
+
+The backend's name for a log line: `"appkit"`, `"gtk"`, `"win32"`, `"web"`,
+`"ios"`, `"android"` or `"gem"`.
+
+## See also
+
+- [`UXApplication`](/compiler/api/uxkit/uxapplication/): `setDriver`, `setHeadless`, `run`, `stop`
+- [`UXViewDriver`](/compiler/api/uxkit/uxviewdriver/): the protocol every driver implements

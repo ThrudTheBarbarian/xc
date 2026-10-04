@@ -9,6 +9,10 @@
 #import "UXNotificationCenter.xc"
 #import "UXImage.xc"
 #import "UXGraphics.xc" // UXPIX_*
+#import "UXString.xc"   // UXStr.toInt, for UX_AUTOQUIT
+#if !ARCH_wasm32 && !ARCH_arm9
+u8* _xt_getenv(u8* name); // the runtime's; wasm32 and the XTOS loader have no environment
+#endif
 
 protocol UXApplicationDelegate
     {
@@ -65,9 +69,24 @@ class UXApplication : UXResponder
     // Select the backend.  Source clients can assign the `gDriver` global directly; clients
     // linking libUXKit.so through `<UXKit>` cannot name that global, so they hand the driver here
     // (the driver is the neutral protocol type — this adds no GEM coupling to UXApplication).
+    // The one driver setup, the same on every backend: the app takes the platform's driver and the
+    // driver learns its app (UXViewDriver.appAttached).  Windows show unless setHeadless(true).
     void setDriver(UXViewDriver* d)
         {
         gDriver = d;
+        if (d != (UXViewDriver*)0)
+            {
+            d.appAttached((pointer)self);
+            }
+        }
+    // Before run: realize and paint without showing windows, where the platform has that mode (macOS;
+    // GL views keep their contexts).  For an app's own headless test runs; the source is the same.
+    void setHeadless(bool on)
+        {
+        if (gDriver != (UXViewDriver*)0)
+            {
+            gDriver.setHeadless(on);
+            }
         }
     i32 screenWidth(void)
         {
@@ -114,9 +133,15 @@ class UXApplication : UXResponder
             }
         }
 
+    // End the run loop, on every backend: the neutral loop sees `running` go false, and a platform
+    // loop (AppKit's) is told to end too.
     void stop(void)
         {
         running = false;
+        if (gDriver != (UXViewDriver*)0)
+            {
+            gDriver.requestStop();
+            }
         }
 
     // The application's icon while it runs: the Dock tile on macOS, the taskbar, Alt-Tab and title-bar
@@ -286,6 +311,20 @@ class UXApplication : UXResponder
             return rc;
             }
 
+        // UX_AUTOQUIT=<ms>: stop after that long, by the same path as stop() (an unattended run of an
+        // app that would otherwise wait for a person; a killed one reports nothing and, under Wine,
+        // leaves its devices running).  The platform keeps the time where it owns the wait.
+        i32 quitAt = (i32)0;
+#if ARCH_wasm32 || ARCH_arm9
+        i32 aq = (i32)0; // no environment: a page, or an XTOS program
+#else
+        i32 aq = UXStr.toInt(_xt_getenv((u8*)"UX_AUTOQUIT"));
+#endif
+        if (aq > (i32)0 && !gDriver.stopAfterMs(aq))
+            {
+            quitAt = gDriver.nowMs() + aq;
+            }
+
         // One event object, reused: allocating inside the loop churns the heap.
         UXEvent* ev = new UXEvent();
         while (running)
@@ -295,6 +334,16 @@ class UXApplication : UXResponder
             // block-until-there-is-one behaviour).  A driver that armed its own source answers
             // nextEvent exactly as before and fires fn itself.
             i32 wait = (turnFn != (turnHook_t*)0 && !driverCallsTurn) ? turnMs : (i32)0;
+            if (quitAt != (i32)0)
+                {
+                i32 left = quitAt - gDriver.nowMs();
+                if (left <= (i32)0)
+                    {
+                    self.stop();
+                    break;
+                    }
+                wait = wait > (i32)0 && wait < left ? wait : left;
+                }
             gDriver.nextEvent(wait, ev); // block for the next input or window message
             self.dispatchEvent(ev);
             if (gNeedsDisplay)

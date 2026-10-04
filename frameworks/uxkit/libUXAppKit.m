@@ -1025,6 +1025,29 @@ int ux_ak_window_to_scale(int handle, int scale)
     return 0;
     }
 
+/* The last frame, out of the IOSurface the view renders into (which keeps it), top row first, as
+ * 0xAARRGGBB -- ux_ak_gl_grab's read, into memory instead of a PNG file. */
+int ux_ak_gl_read(void* peer, unsigned* out, int pw, int ph)
+    {
+    int i = ak_gl_find(peer);
+    if (i < 0 || !g_glSurf[i])
+        return 0;
+    IOSurfaceRef s = g_glSurf[i];
+    if ((int)g_ios.width(s) != pw || (int)g_ios.height(s) != ph)
+        return 0;
+    size_t stride = g_ios.rowBytes(s);
+    g_ios.lock(s, 1u /* kIOSurfaceLockReadOnly */, NULL);
+    const unsigned char* src = (const unsigned char*)g_ios.base(s);
+    for (int y = 0; y < ph; y++)
+        {
+        const unsigned char* r = src + (size_t)(ph - 1 - y) * stride; /* bottom-up -> top-down */
+        for (int x = 0; x < pw; x++)
+            out[(size_t)y * pw + x] = ((unsigned)r[x * 4 + 3] << 24) | ((unsigned)r[x * 4 + 2] << 16) |
+                                       ((unsigned)r[x * 4 + 1] << 8) | r[x * 4 + 0]; /* BGRA */
+        }
+    g_ios.unlock(s, 1u, NULL);
+    return 1;
+    }
 int ux_ak_gl_backing(void* peer, int* out4)
     {
     int i = ak_gl_find(peer);
