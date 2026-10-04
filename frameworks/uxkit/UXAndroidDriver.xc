@@ -283,6 +283,8 @@ void xgAndTableSelectSet(pointer tbl, i32* rows, i32 n)
         gApp.displayIfNeeded();
         }
     }
+// the selection each native popup shows, plus one (0: not pushed yet)
+i32 gAndPopupShown[16384];
 void uxAndValueChanged(i32 handle, i32 node, i32 value)
     {
     if (handle < (i32)0 || handle >= (i32)64 || node < (i32)0 || node >= (i32)256)
@@ -319,6 +321,10 @@ void uxAndValueChanged(i32 handle, i32 node, i32 value)
         sl.applyNativeValue(value);
         }
     UXPopUpButton* pu = (UXPopUpButton* ?)ctl;
+    if (pu != (UXPopUpButton*)0 && value == pu.nativeSelected())
+        {
+        return; // a Spinner reporting the selection the model already has (a programmatic one): no pick
+        }
     if (pu != (UXPopUpButton*)0)
         {
         pu.applyNativeSelection(value);
@@ -1260,6 +1266,33 @@ class UXAndroidDriver : Object<UXViewDriver>
                             }
                         }
                     }
+                // and the values: an app's setValue, advancing progress or a new selection shows
+                else if (n.kind == (i32)UXKindSlider)
+                    {
+                    UXSlider* slp = (UXSlider* ?)(Object*)n.peer;
+                    if (slp != (UXSlider*)0)
+                        {
+                        ux_and_set_slider_value(handle, i, slp.nativeValue());
+                        }
+                    }
+                else if (n.kind == (i32)UXKindProgress)
+                    {
+                    UXProgressBar* pgp = (UXProgressBar* ?)(Object*)n.peer;
+                    if (pgp != (UXProgressBar*)0)
+                        {
+                        ux_and_set_progress(handle, i, pgp.nativeFractionMille(), pgp.nativeIndeterminate());
+                        }
+                    }
+                else if (n.kind == (i32)UXKindPopup)
+                    {
+                    UXPopUpButton* pup = (UXPopUpButton* ?)(Object*)n.peer;
+                    // only when it moved: a Spinner reports even a programmatic selection back
+                    if (pup != (UXPopUpButton*)0 && gAndPopupShown[handle * (i32)256 + i] != pup.nativeSelected() + (i32)1)
+                        {
+                        ux_and_popup_select(handle, i, pup.nativeSelected());
+                        gAndPopupShown[handle * (i32)256 + i] = pup.nativeSelected() + (i32)1;
+                        }
+                    }
                 continue;
                 }
             if (n.kind == (i32)UXKindButton)
@@ -1313,6 +1346,7 @@ class UXAndroidDriver : Object<UXViewDriver>
                         ux_and_popup_add_item(handle, i, pv.nativeItemTitle(j));
                         }
                     ux_and_popup_select(handle, i, pv.nativeSelected());
+                    gAndPopupShown[handle * (i32)256 + i] = pv.nativeSelected() + (i32)1;
                     gAndCtlPeer[handle * (i32)256 + i] = n.peer;
                     }
                 }

@@ -1551,6 +1551,25 @@ int ux_and_test_seg_count(int handle, int node) {
     jmethodID m = (*env)->GetStaticMethodID(env, gBridgeCls, "segCount", "(Landroid/view/View;)I");
     return (*env)->CallStaticIntMethod(env, gBridgeCls, m, gCtl[handle][node]);
 }
+/* Test: a native control's value as Android holds it -- a toggle 0/1, a SeekBar's or ProgressBar's
+ * progress, a Spinner's selected position (-9999: none).  A SeekBar is a ProgressBar, so it is
+ * asked first only for clarity. */
+int ux_and_test_native_value(int handle, int node) {
+    JNIEnv *env = envNow();
+    jobject c = gCtl[handle][node];
+    if (!c) return -9999;
+    if ((*env)->IsInstanceOf(env, c, gCompoundCls))
+        return (*env)->CallBooleanMethod(env, c, (*env)->GetMethodID(env, gCompoundCls, "isChecked", "()Z")) ? 1 : 0;
+    if ((*env)->IsInstanceOf(env, c, gProgCls))
+        return (*env)->CallIntMethod(env, c, (*env)->GetMethodID(env, gProgCls, "getProgress", "()I"));
+    if ((*env)->IsInstanceOf(env, c, gSpinCls)) {
+        jclass av = (*env)->FindClass(env, "android/widget/AdapterView");
+        int pos = (*env)->CallIntMethod(env, c, (*env)->GetMethodID(env, av, "getSelectedItemPosition", "()I"));
+        (*env)->DeleteLocalRef(env, av);
+        return pos;
+    }
+    return -9999;
+}
 int ux_and_test_seg_selected(int handle, int node) {
     JNIEnv *env = envNow();
     if (!gCtl[handle][node]) return -2;
