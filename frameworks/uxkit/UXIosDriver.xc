@@ -101,6 +101,8 @@ void ux_ios_set_control_fire(pointer fn);
 void ux_ios_set_value_changed(pointer fn);
 void ux_ios_make_switch(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, u8* title, i32 on);
 void ux_ios_set_switch(i32 handle, i32 node, i32 on);
+void ux_ios_make_shield(i32 handle, i32 x, i32 y, i32 w, i32 h, i32 hidden);
+void ux_ios_raise_shield(i32 handle);
 void ux_ios_make_radio(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, u8* title, i32 on);
 void ux_ios_set_radio(i32 handle, i32 node, i32 on);
 void ux_ios_make_slider(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, i32 lo, i32 hi, i32 val);
@@ -1119,14 +1121,9 @@ class UXIosDriver : Object<UXViewDriver>
     // Real UIKit controls overlay the shadow tree: a UIButton per XGKindButton,
     // a UILabel per Label — created once, repositioned thereafter, peers parked
     // for the fire path.  The custom-view kinds stay app-drawn through drawRect.
-    // UXKindShield is NOT realized here: this backend puts native widgets on
-    // screen, so a press on one is consumed before the toolkit sees it, and a
-    // design surface (an editor canvas whose clicks select rather than operate)
-    // would not yet work.  Nothing in-tree needs it on this backend today.  To
-    // close it, mirror the AppKit driver: a bare native view above the controls
-    // that forwards its press to the toolkit in content coordinates, then check
-    // it the way appkit-shield does -- with a REAL injected press, because the
-    // only question is what the platform does with it.
+    // UXKindShield is a clear UIView above every control (ux_ios_make_shield), so UIKit's hit test
+    // finds it first and a touch on a design surface reaches the toolkit instead of operating the
+    // control under it.  It is raised again at the end of each realize.
     // The model is the truth: on every display an existing native control is set to its model's
     // value, so a change the app makes (a box checked, a radio's group moving, progress advancing)
     // shows.  Each setter leaves a control that already holds the value alone.
@@ -1228,6 +1225,11 @@ class UXIosDriver : Object<UXViewDriver>
             // A native table covers its whole subtree (rows, cells, its scroller).
             if (self.isUnderTable(t, i) != (i32)0)
                 {
+                continue;
+                }
+            if (n.kind == (i32)UXKindShield)
+                {
+                ux_ios_make_shield(handle, ax, ay, aw, ah, self.effectiveHidden(tree, i));
                 continue;
                 }
             if (n.kind == (i32)UXKindScroll)
@@ -1451,6 +1453,7 @@ class UXIosDriver : Object<UXViewDriver>
                 anc = (i32)t.nodes[anc].parent;
                 }
             }
+        ux_ios_raise_shield(handle); // above anything this pass created
         }
 
     // ---- painting ------------------------------------------------------------

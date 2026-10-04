@@ -345,6 +345,11 @@ static void n_draw(JNIEnv *env, jclass c, jint id, jobject canvas, jint w, jint 
  * 3 cancelled, in neutral units (dp).  MotionEvent actions: 0 DOWN, 1 UP, 2 MOVE, 3 CANCEL. */
 typedef void (*ux_touch_fn)(void *, int, int, int);
 static ux_touch_fn gTouch;
+/* The input shield: a UXDrawView (id (handle << 8) | UXA_SHIELD, which draws nothing) placed above
+ * every control, so Android delivers a touch on a design surface to it -- and so to the toolkit, in
+ * the window's content coordinates -- rather than to the control under it. */
+#define UXA_SHIELD 0xFF
+static int gShieldX[UXA_MAXW], gShieldY[UXA_MAXW], gShieldNode[UXA_MAXW];
 void ux_and_set_touch(void *fn) { gTouch = (ux_touch_fn)fn; }
 static void n_touch(JNIEnv *env, jclass c, jint id, jint action, jfloat x, jfloat y) {
     (void)c;
@@ -353,7 +358,10 @@ static void n_touch(JNIEnv *env, jclass c, jint id, jint action, jfloat x, jfloa
     int phase = action == 0 ? 0 : action == 2 ? 1 : action == 1 ? 2 : action == 3 ? 3 : -1;
     if (phase < 0) return;
     int node = id & 0xFF, ox = 0, oy = 0;
-    if (node > 0 && node < 64 && gCtl[handle][node]) {
+    if (node == UXA_SHIELD) { /* the input shield: its own place in the window */
+        ox = gShieldX[handle];
+        oy = gShieldY[handle];
+    } else if (node > 0 && node < 64 && gCtl[handle][node]) {
         /* on a scroll document: the window's content as it shows -- the document's place, less how
          * far the ScrollView has scrolled it; the toolkit adds the offset in its own hit test */
         jclass vc = (*env)->FindClass(env, "android/view/View");
@@ -988,6 +996,7 @@ void ux_and_window_close(int handle) {
         if (gSpinAdapter[handle][n]) { (*env)->DeleteGlobalRef(env, gSpinAdapter[handle][n]); gSpinAdapter[handle][n] = NULL; }
         gFieldBuf[handle][n] = NULL;
     }
+    gShieldNode[handle] = 0;
     gLive--;
     check(env, "window_close");
 }
@@ -1603,6 +1612,57 @@ void ux_and_test_seg_centre(int handle, int node, int seg, int *x, int *y) {
 void ux_and_test_set_slider(int handle, int node, int val) {
     ux_and_set_slider_value(handle, node, val);
     if (gValueChanged) gValueChanged(handle, node, val);
+}
+void ux_and_set_control_frame(int handle, int node, int x, int y, int w, int h);
+void ux_and_set_control_hidden(int handle, int node, int on);
+void ux_and_make_shield(int handle, int node, int x, int y, int w, int h, int hidden) {
+    JNIEnv *env = envNow();
+    if (!gWinV[handle] || node < 0 || node >= 64) return;
+    if (!gCtl[handle][node]) {
+        jobject v = (*env)->NewObject(env, gDrawCls, gDrawInit, gActivity, (handle << 8) | UXA_SHIELD);
+        place(env, handle, node, v, x, y, w, h);
+        /* Above every control in Z, not only in child order: Android dispatches a touch to the
+         * highest-Z child first, and a Material Button carries elevation, so a later sibling at Z 0
+         * would still lose the touch to it. */
+        (*env)->CallVoidMethod(env, v, (*env)->GetMethodID(env, gViewCls, "setTranslationZ", "(F)V"), (jfloat)PX(1000));
+        gShieldNode[handle] = node + 1;
+        check(env, "make_shield");
+    } else {
+        ux_and_set_control_frame(handle, node, x, y, w, h);
+        jobject lp = (*env)->CallObjectMethod(env, gCtl[handle][node],
+            (*env)->GetMethodID(env, gViewCls, "getLayoutParams", "()Landroid/view/ViewGroup$LayoutParams;"));
+        if (lp) {
+            jclass lc = (*env)->GetObjectClass(env, lp);
+            (*env)->SetIntField(env, lp, (*env)->GetFieldID(env, lc, "width", "I"), PX(w));
+            (*env)->SetIntField(env, lp, (*env)->GetFieldID(env, lc, "height", "I"), PX(h));
+            (*env)->CallVoidMethod(env, gCtl[handle][node], (*env)->GetMethodID(env, gViewCls, "requestLayout", "()V"));
+        }
+    }
+    gShieldX[handle] = x;
+    gShieldY[handle] = y;
+    /* hidden, it must stop shielding (GONE takes no touches) */
+    ux_and_set_control_hidden(handle, node, hidden);
+}
+/* controls realized after the shield would be above it: raised at the end of each realize */
+void ux_and_raise_shield(int handle) {
+    JNIEnv *env = envNow();
+    int node = gShieldNode[handle] - 1;
+    if (node >= 0 && gCtl[handle][node])
+        (*env)->CallVoidMethod(env, gCtl[handle][node], (*env)->GetMethodID(env, gViewCls, "bringToFront", "()V"));
+}
+/* Test: the screen point at the centre of a node's native view (for an adb input tap) */
+void ux_and_test_node_centre(int handle, int node, int *x, int *y) {
+    JNIEnv *env = envNow();
+    *x = *y = -1;
+    jobject c = gCtl[handle][node];
+    if (!c) return;
+    jintArray a = (*env)->NewIntArray(env, 2);
+    (*env)->CallVoidMethod(env, c, (*env)->GetMethodID(env, gViewCls, "getLocationOnScreen", "([I)V"), a);
+    jint v[2];
+    (*env)->GetIntArrayRegion(env, a, 0, 2, v);
+    *x = v[0] + (*env)->CallIntMethod(env, c, (*env)->GetMethodID(env, gViewCls, "getWidth", "()I")) / 2;
+    *y = v[1] + (*env)->CallIntMethod(env, c, (*env)->GetMethodID(env, gViewCls, "getHeight", "()I")) / 2;
+    (*env)->DeleteLocalRef(env, a);
 }
 void ux_and_set_control_frame(int handle, int node, int x, int y, int w, int h) {
     JNIEnv *env = envNow();

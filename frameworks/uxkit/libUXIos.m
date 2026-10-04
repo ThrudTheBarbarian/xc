@@ -34,6 +34,8 @@ static UIWindow* gWindow;         // the one real UIWindow
 static UIView* gSafeRoot;         // pinned to the safe area — windows live HERE
 static UIView* gWin[UXIOS_MAXW];  // handle -> container view
 static UIView* gDraw[UXIOS_MAXW]; // handle -> its UXDrawView
+@class UXShieldView;
+static UXShieldView* gShield[UXIOS_MAXW]; // handle -> its input shield, if it has one
 static ux_content_fn gContent[UXIOS_MAXW];
 static void* gContentUd[UXIOS_MAXW];
 static UIView* gCtl[UXIOS_MAXW][256]; // [handle][node] -> native control
@@ -284,9 +286,92 @@ void ux_ios_window_close(int handle)
         }
     gWin[handle] = nil;
     gDraw[handle] = nil;
+    gShield[handle] = nil;
     gContent[handle] = NULL;
     gLive--;
     }
+// ── the input shield ────────────────────────────────────────────────────────
+// A clear UIView above every control, so UIKit's hit test finds it first and a touch on a design
+// surface reaches the toolkit (in the window's content coordinates, as the draw view's do) rather
+// than operating the control under it.  What shows through is the real controls.
+@interface UXShieldView : UIView
+@property(nonatomic) int handle;
+@end
+static void shieldTouch(int handle, int phase, CGPoint inWindow)
+    {
+    if (!gTouch || !gContentUd[handle] || !gDraw[handle])
+        return;
+    CGPoint p = [gDraw[handle] convertPoint:inWindow fromView:gWin[handle]];
+    gTouch(gContentUd[handle], phase, (int)p.x, (int)p.y);
+    }
+@implementation UXShieldView
+- (void)phase:(int)ph touches:(NSSet<UITouch*>*)touches
+    {
+    UITouch* t = touches.anyObject;
+    if (t)
+        shieldTouch(self.handle, ph, [t locationInView:gWin[self.handle]]);
+    }
+- (void)touchesBegan:(NSSet<UITouch*>*)touches withEvent:(UIEvent*)e { [self phase:0 touches:touches]; }
+- (void)touchesMoved:(NSSet<UITouch*>*)touches withEvent:(UIEvent*)e { [self phase:1 touches:touches]; }
+- (void)touchesEnded:(NSSet<UITouch*>*)touches withEvent:(UIEvent*)e { [self phase:2 touches:touches]; }
+- (void)touchesCancelled:(NSSet<UITouch*>*)touches withEvent:(UIEvent*)e { [self phase:3 touches:touches]; }
+@end
+void ux_ios_make_shield(int handle, int x, int y, int w, int h, int hidden)
+    {
+    if (!gWin[handle])
+        return;
+    if (!gShield[handle])
+        {
+        UXShieldView* s = [[UXShieldView alloc] initWithFrame:CGRectMake(x, y, w, h)];
+        s.handle = handle;
+        s.backgroundColor = UIColor.clearColor;
+        s.opaque = NO;
+        s.multipleTouchEnabled = NO;
+        gShield[handle] = s;
+        [gWin[handle] addSubview:s];
+        }
+    else
+        gShield[handle].frame = CGRectMake(x, y, w, h);
+    // hidden, it must stop shielding: an editor that puts its canvas away leaves nothing eating touches
+    gShield[handle].hidden = hidden != 0;
+    }
+// Controls realized after the shield would sit above it, so it is raised at the end of each realize.
+void ux_ios_raise_shield(int handle)
+    {
+    if (gShield[handle] && gShield[handle].superview)
+        [gShield[handle].superview bringSubviewToFront:gShield[handle]];
+    }
+// Tests: whether UIKit's own hit test sends a touch at (x, y) of the window to the shield -- the
+// routing step the shield exists for (the simulator has no touch injection) -- and, if it does,
+// that touch delivered as the shield delivers it (down then up).
+int ux_ios_test_shield_tap(int handle, int x, int y)
+    {
+    UIView* root = gWin[handle];
+    if (!root || !root.window)
+        return -1;
+    CGPoint wp = [root convertPoint:CGPointMake(x, y) toView:root.window];
+    UIView* hit = [root.window hitTest:wp withEvent:nil];
+    if (hit != gShield[handle])
+        return 0;
+    shieldTouch(handle, 0, CGPointMake(x, y));
+    shieldTouch(handle, 2, CGPointMake(x, y));
+    return 1;
+    }
+// Tests: what UIKit's hit test finds at (x, y): 1 a UIControl, 2 the shield, 0 anything else
+int ux_ios_test_hit_kind(int handle, int x, int y)
+    {
+    UIView* root = gWin[handle];
+    if (!root || !root.window)
+        return -1;
+    UIView* hit = [root.window hitTest:[root convertPoint:CGPointMake(x, y) toView:root.window] withEvent:nil];
+    if (hit && hit == gShield[handle])
+        return 2;
+    for (UIView* v = hit; v; v = v.superview)
+        if ([v isKindOfClass:UIControl.class])
+            return 1;
+    return 0;
+    }
+
 void ux_ios_window_invalidate(int handle)
     {
     [gDraw[handle] setNeedsDisplay];

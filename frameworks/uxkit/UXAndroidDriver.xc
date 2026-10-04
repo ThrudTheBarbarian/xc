@@ -96,6 +96,8 @@ void ux_and_make_radio(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, u8* tit
 void ux_and_set_checkbox(i32 handle, i32 node, i32 on);
 void ux_and_make_slider(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, i32 lo, i32 hi, i32 val);
 void ux_and_set_slider_value(i32 handle, i32 node, i32 val);
+void ux_and_make_shield(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, i32 hidden);
+void ux_and_raise_shield(i32 handle);
 void ux_and_make_progress(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, i32 mille);
 void ux_and_set_progress(i32 handle, i32 node, i32 mille, i32 indeterminate);
 void ux_and_make_popup(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h);
@@ -1132,14 +1134,9 @@ class UXAndroidDriver : Object<UXViewDriver>
     // thereafter, peers parked for the fire path.  Everything else stays
     // app-drawn through drawRect this slice; the overlay set grows exactly
     // as iOS's did.
-    // UXKindShield is NOT realized here: this backend puts native widgets on
-    // screen, so a press on one is consumed before the toolkit sees it, and a
-    // design surface (an editor canvas whose clicks select rather than operate)
-    // would not yet work.  Nothing in-tree needs it on this backend today.  To
-    // close it, mirror the AppKit driver: a bare native view above the controls
-    // that forwards its press to the toolkit in content coordinates, then check
-    // it the way appkit-shield does -- with a REAL injected press, because the
-    // only question is what the platform does with it.
+    // UXKindShield is a bare view above every control (ux_and_make_shield), so Android delivers a
+    // touch on a design surface to it, and so to the toolkit, instead of to the control under it.
+    // It is raised again at the end of each realize, and never moves into a scroll document.
     i32 isUnderTable(ANTree* t, i32 i)
         {
         i16 p = t.nodes[i].parent;
@@ -1172,6 +1169,11 @@ class UXAndroidDriver : Object<UXViewDriver>
             // A native table covers its whole subtree (rows, cells, its scroller).
             if (self.isUnderTable(t, i) != (i32)0)
                 {
+                continue;
+                }
+            if (n.kind == (i32)UXKindShield)
+                {
+                ux_and_make_shield(handle, i, ax, ay, aw, ah, self.effectiveHidden(tree, i));
                 continue;
                 }
             if (n.kind == (i32)UXKindScroll)
@@ -1428,7 +1430,7 @@ class UXAndroidDriver : Object<UXViewDriver>
         for (i32 i = (i32)0; i < t.count; i = i + (i32)1)
             {
             i32 kk = (i32)t.nodes[i].kind;
-            if (kk == (i32)UXKindScroll || kk == (i32)UXKindTable || kk == (i32)UXKindGLView || ux_and_has_control(handle, i) == (i32)0)
+            if (kk == (i32)UXKindScroll || kk == (i32)UXKindTable || kk == (i32)UXKindGLView || kk == (i32)UXKindShield || ux_and_has_control(handle, i) == (i32)0)
                 {
                 continue;
                 }
@@ -1448,6 +1450,7 @@ class UXAndroidDriver : Object<UXViewDriver>
                 anc = (i32)t.nodes[anc].parent;
                 }
             }
+        ux_and_raise_shield(handle); // above anything this pass created
         }
 
     // ---- painting ------------------------------------------------------------
