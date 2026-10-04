@@ -21,20 +21,61 @@
 class UXScrollbar : UXView
     {
     weak : UXScrollView* scroll;
+    // Where the backend draws the bar itself (GEM's G_SCROLL), its geometry: the arrow caps' heights
+    // and the shortest thumb, with the thumb sized and placed in permille as the backend does, so a
+    // press acts on the part drawn under it.  -1: the toolkit's own square caps and 20px thumb.
+    i32 capTop;
+    i32 capBottom;
+    i32 minThumb;
     void init(void)
         {
         super.init();
         scroll = (UXScrollView*)0;
+        capTop = (i32)-1;
+        capBottom = (i32)-1;
+        minThumb = (i32)20;
         }
     UXKind kind(void)
         {
         return UXKindView;
         }
+    // the driver reads the bar's state off its peer (GEM draws it from that)
+    void attachTo(UXViewTree* t, UXRect frame)
+        {
+        super.attachTo(t, frame);
+        t.setPeerOf(index, (pointer)self);
+        }
+    void setNativeGeometry(i32 top, i32 bottom, i32 shortest)
+        {
+        capTop = top;
+        capBottom = bottom;
+        minThumb = shortest;
+        }
+    bool drawnNatively(void)
+        {
+        return capTop >= (i32)0;
+        }
+    // how much of the document shows, and how far it is scrolled, in permille (1..1000, 0..1000)
+    i32 pagePermille(void)
+        {
+        i32 content = scroll.contentPx();
+        i32 p = content > (i32)0 ? (i32)self.bounds().h * (i32)1000 / content : (i32)1000;
+        return p < (i32)1 ? (i32)1 : (p > (i32)1000 ? (i32)1000 : p);
+        }
+    i32 valuePermille(void)
+        {
+        i32 mo = scroll.maxScroll();
+        return mo > (i32)0 ? scroll.scrollPx() * (i32)1000 / mo : (i32)0;
+        }
 
-    // Square arrow boxes at each end; the thumb rides the track between them.
+    // Arrow boxes at each end (square, or the backend's caps); the thumb rides the track between them.
     i16 arrowH(void)
         {
-        return self.bounds().w;
+        return capTop >= (i32)0 ? (i16)capTop : self.bounds().w;
+        }
+    i16 arrowBottomH(void)
+        {
+        return capBottom >= (i32)0 ? (i16)capBottom : self.bounds().w;
         }
     i32 trackTop(void)
         {
@@ -42,7 +83,7 @@ class UXScrollbar : UXView
         }
     i32 trackH(void)
         {
-        return (i32)self.bounds().h - (i32)2 * (i32)self.arrowH();
+        return (i32)self.bounds().h - (i32)self.arrowH() - (i32)self.arrowBottomH();
         }
     i32 thumbH(void)
         {
@@ -53,10 +94,10 @@ class UXScrollbar : UXView
             {
             return tr;
             }
-        i32 th = tr * view / content;
-        if (th < (i32)20)
+        i32 th = self.drawnNatively() ? tr * self.pagePermille() / (i32)1000 : tr * view / content;
+        if (th < minThumb)
             {
-            th = (i32)20;
+            th = minThumb;
             }
         if (th > tr)
             {
@@ -68,6 +109,10 @@ class UXScrollbar : UXView
         {
         i32 mo = scroll.maxScroll();
         i32 span = self.trackH() - self.thumbH();
+        if (self.drawnNatively())
+            {
+            return self.trackTop() + span * self.valuePermille() / (i32)1000;
+            }
         return self.trackTop() + (mo > (i32)0 ? span * scroll.scrollPx() / mo : (i32)0);
         }
 
@@ -120,7 +165,7 @@ class UXScrollbar : UXView
             return;
             }
         // down arrow
-        if (localY >= (i32)b.h - (i32)aw)
+        if (localY >= (i32)b.h - (i32)self.arrowBottomH())
             {
             scroll.scrollByLines((i32)1);
             return;
@@ -387,6 +432,20 @@ class UXScrollbar : UXView
     i32 nativeContentHeight(void)
         {
         return docHeight;
+        }
+    // the window's hit test (UXView): a native container's offset, its document, and whether a point is
+    // over its viewport
+    i32 hitScrollOffset(void)
+        {
+        return gDriver != (UXViewDriver*)0 && gDriver.scrollsNatively() ? self.scrollPx() : (i32)0;
+        }
+    i32 hitScrollDoc(void)
+        {
+        return doc != (UXView*)0 ? (i32)doc.index : (i32)-1;
+        }
+    bool hitScrollContains(i16 x, i16 y)
+        {
+        return UXGeom.contains(clip != (UXView*)0 ? clip.absoluteFrame() : self.absoluteFrame(), x, y);
         }
     i32 nativeDocNode(void)
         {

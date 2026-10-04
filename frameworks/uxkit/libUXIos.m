@@ -557,8 +557,8 @@ void ux_ios_seg_select(int handle, int node, int seg)
 
 // The scroll container: a real UIScrollView over the scroll view, which owns the offset, the pan, its
 // momentum and its bounce.  Its document view draws the scroll view's document subtree (the shared
-// ux_scroll_draw) and takes the touches on it, handing them to the toolkit in the window's
-// coordinates: the document's place plus the touch's place in it.  UIKit decides between a tap and
+// ux_scroll_draw) and takes the touches on it, handing them to the toolkit in the window's content
+// coordinates as they show; the toolkit adds the scroll offset in its own hit test.  UIKit decides between a tap and
 // a pan (a pan cancels the touches, which releases the view that took them).
 @interface UXScrollDocView : UIView
 @property(nonatomic) int handle;
@@ -568,11 +568,11 @@ void ux_ios_seg_select(int handle, int node, int seg)
 - (void)touchPhase:(int)phase touches:(NSSet<UITouch*>*)touches
     {
     UITouch* t = touches.anyObject;
-    UXIosScrollRec* r = &gScroll[self.handle][self.node];
     if (!t || !gTouch || !gContentUd[self.handle])
         return;
-    CGPoint p = [t locationInView:self];
-    gTouch(gContentUd[self.handle], phase, r->docX + (int)p.x, r->docY + (int)p.y);
+    /* the window's content, as it shows: the toolkit adds the scroll offset (UXWindow.hitScrolled) */
+    CGPoint p = [t locationInView:gDraw[self.handle]];
+    gTouch(gContentUd[self.handle], phase, (int)p.x, (int)p.y);
     }
 - (void)touchesBegan:(NSSet<UITouch*>*)touches withEvent:(UIEvent*)e
     {
@@ -698,9 +698,10 @@ void ux_ios_test_tap_doc(int handle, int node, int x, int y)
     UXIosScrollRec* r = &gScroll[handle][node];
     if (!r->doc || !gTouch || !gContentUd[handle])
         return;
-    CGPoint p = [(UIView*)r->doc convertPoint:CGPointMake(x, y) fromView:gWin[handle]];
+    CGPoint d = [(UIView*)r->doc convertPoint:CGPointMake(x, y) fromView:gWin[handle]];
+    CGPoint p = [(UIView*)r->doc convertPoint:d toView:gDraw[handle]]; /* as the document's touch does */
     for (int phase = 0; phase <= 2; phase += 2)
-        gTouch(gContentUd[handle], phase, r->docX + (int)p.x, r->docY + (int)p.y);
+        gTouch(gContentUd[handle], phase, (int)p.x, (int)p.y);
     }
 
 // The toolbar: a real UIToolbar of UIBarButtonItems.  A UXToolbar's items map one to one: a button

@@ -560,3 +560,8 @@ protocol UXViewDriver
 // gGraphics/gTheme — the neutral layer reaches it without threading it through every call.
 // GEM is the only backend today, so there is exactly one; a host build sets its own here.
 UXViewDriver* gDriver;
+// Added to every point trackDragStep reports, for the drag in progress: the scroll offset of the
+// natively scrolled document the press landed in (UXWindow.dispatchMouse), so a drag is measured in
+// the same coordinates as its press.  0 outside a drag, and for a press on anything unscrolled.
+i32 gUXDragDX;
+i32 gUXDragDY;

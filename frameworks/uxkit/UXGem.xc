@@ -27,12 +27,14 @@
 #define G_FBOXTEXT 30
 #define G_ICON 31
 #define G_TITLE 32
-#define G_CICON 33
 // XT GEM themed extensions
 #define G_CHECKBOX 40
 #define G_RADIO 41
 #define G_POPUP 42
 #define G_FIELD 43
+#define G_CICON 44
+#define G_SCROLL 45
+#define G_SLIDER 46
 
 // ob_flags
 #define OF_NONE $0000

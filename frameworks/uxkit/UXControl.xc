@@ -153,11 +153,10 @@ class UXControl : UXView
         }
     }
 
-    // A checkbox.  Unlike UXButton (a native G_BUTTON) this is CUSTOM-DRAWN: GEM has no native
-    // checkbox object and neither does a bare Win32 window class, so the control paints itself with
-    // the neutral UXGraphics primitives and is therefore identical on every backend — kind() is
-    // View (a G_USERDEF on GEM), so the driver just calls drawRect.  State lives here; a click
-    // toggles it and fires target/action, exactly like a button that remembers.
+    // A checkbox.  kind() is Checkbox: each backend realizes its own (a G_CHECKBOX the AES draws on
+    // GEM, a real check box elsewhere), and drawRect below is for a backend with none (headless).
+    // State lives here; a click toggles it and fires target/action, exactly like a button that
+    // remembers.
     class UXCheckbox : UXControl
     {
     bool checked;
@@ -172,8 +171,8 @@ class UXControl : UXView
         {
         return UXKindCheckbox;
         }
-    // Expose the label + self to the driver: a native backend (Win32) builds a real check box from
-    // them; GEM/AppKit ignore both (setPeerOf is a no-op there) and app-draw via drawRect below.
+    // Expose the label + self to the driver: a native backend builds its check box from them (GEM
+    // draws the label from the spec and reads the state off the peer).
     void attachTo(UXViewTree* t, UXRect frame)
         {
         super.attachTo(t, frame);
@@ -191,14 +190,13 @@ class UXControl : UXView
         self.setNeedsDisplay();
         }
 
-    // A square box (black frame, white interior) with a checkmark when checked — the GEM/desktop look
-    // (Win32/AppKit realize a NATIVE check box, so this drawRect only runs on GEM + headless).
+    // The themed box with a checkmark when checked, for a backend that realizes no check box.
     void drawRect(UXGraphics* g, UXRect dirty)
         {
         UXRect b = self.bounds();
         i32 ink = self.isEnabled() ? (i32)1 : (i32)8; // grey the label when disabled
         // The themed check box sprite at its NATIVE 21x21 (theme_blit stretches, so any other size blurs
-        // the art).  Aristo2 on GEM; the other backends realize a NATIVE check box and skip this drawRect.
+        // the art).
         i16 sy = (i16)(((i32)b.h - (i32)21) / (i32)2);
         if (sy < (i16)0)
             {
@@ -225,10 +223,10 @@ class UXControl : UXView
         }
     }
 
-    // A radio button: like a checkbox, but exactly one in its GROUP is selected at a time.  Also
-    // custom-drawn (kind View) — neither backend has a native radio — so it runs identically on
-    // GEM and Win32.  The mutual exclusion is pure neutral logic in UXRadioGroup: clicking a button
-    // asks the group to select it, and the group clears the others.
+    // A radio button: like a checkbox, but exactly one in its GROUP is selected at a time.  kind() is
+    // Radio, realized natively where the backend has one (a G_RADIO the AES draws on GEM).  The
+    // mutual exclusion is pure neutral logic in UXRadioGroup: clicking a button asks the group to
+    // select it, and the group clears the others.
     class UXRadioButton : UXControl
     {
     bool selected;
@@ -261,8 +259,7 @@ class UXControl : UXView
         self.setNeedsDisplay();
         }
 
-    // A round button (black ring, white interior) with a central dot when selected — the GEM look
-    // (Win32/AppKit realize a NATIVE radio, so this only runs on GEM + headless).
+    // A round button with a central dot when selected, for a backend that realizes no radio button.
     void drawRect(UXGraphics* g, UXRect dirty)
         {
         UXRect b = self.bounds();

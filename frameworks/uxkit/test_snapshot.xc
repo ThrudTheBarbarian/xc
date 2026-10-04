@@ -43,6 +43,7 @@ void glFinish(void);
 #import "UXGeometry.xc"
 #import "UXGraphics.xc"
 #import "UXFileIO.xc"
+#import "UXString.xc" // UXStr, the PPM header
 
 typedef void ClearColorFn(float r, float g, float b, float a);
 typedef void ClearFn(u32 mask);
@@ -63,6 +64,21 @@ void ck(u8* what, bool ok)
         }
     }
 
+// The layout's lengths, through d(): halved with -D SNAP_HALF, for a screen too small for the window
+// (XTOS under qemu has a 200x120 plane, and gemd gives no window a surface larger than its screen).
+i32 d(i32 n)
+    {
+#if SNAP_HALF
+    return n / (i32)2;
+#else
+    return n;
+#endif
+    }
+i16 d16(i32 n)
+    {
+    return (i16)d(n);
+    }
+
 // The backdrop leaves the map's rectangle unpainted: where GL is a plane of its own under the 2-D
 // views (GTK, the web), a parent painted across it would hide it on screen as well.
 class Backdrop : UXView
@@ -70,10 +86,10 @@ class Backdrop : UXView
     void drawRect(UXGraphics* g, UXRect dirty)
         {
         UXRect b = self.bounds();
-        g.fillRectRGB(UXGeom.make((i16)0, (i16)0, b.w, (i16)20), (i32)20, (i32)160, (i32)60);
-        g.fillRectRGB(UXGeom.make((i16)0, (i16)140, b.w, (i16)(b.h - (i16)140)), (i32)20, (i32)160, (i32)60);
-        g.fillRectRGB(UXGeom.make((i16)0, (i16)20, (i16)20, (i16)120), (i32)20, (i32)160, (i32)60);
-        g.fillRectRGB(UXGeom.make((i16)220, (i16)20, (i16)(b.w - (i16)220), (i16)120), (i32)20, (i32)160, (i32)60);
+        g.fillRectRGB(UXGeom.make((i16)0, (i16)0, b.w, d16((i32)20)), (i32)20, (i32)160, (i32)60);
+        g.fillRectRGB(UXGeom.make((i16)0, d16((i32)140), b.w, (i16)((i32)b.h - d((i32)140))), (i32)20, (i32)160, (i32)60);
+        g.fillRectRGB(UXGeom.make((i16)0, d16((i32)20), d16((i32)20), d16((i32)120)), (i32)20, (i32)160, (i32)60);
+        g.fillRectRGB(UXGeom.make(d16((i32)220), d16((i32)20), (i16)((i32)b.w - d((i32)220)), d16((i32)120)), (i32)20, (i32)160, (i32)60);
         }
     }
 // The GL view's software fallback, for a backend with no GL: the same blue the GL frame is cleared
@@ -102,17 +118,17 @@ void buildWindow(i32 x, i32 y)
     {
     UXView* back = new Backdrop();
     gWin = new UXWindow();
-    gWin.open((u8*)"snapshot", UXGeom.make((i16)x, (i16)y, (i16)360, (i16)200), back);
+    gWin.open((u8*)"snapshot", UXGeom.make((i16)x, (i16)y, d16((i32)360), d16((i32)200)), back);
     if (gApp != (UXApplication*)0)
         {
         gApp.addWindow(gWin);
         }
     gMap = new MapView();
-    back.addSubview(gMap, UXGeom.make((i16)20, (i16)20, (i16)200, (i16)120));
-    back.addSubview(new OverView(), UXGeom.make((i16)60, (i16)50, (i16)40, (i16)30)); // after the map: over it
+    back.addSubview(gMap, UXGeom.make(d16((i32)20), d16((i32)20), d16((i32)200), d16((i32)120)));
+    back.addSubview(new OverView(), UXGeom.make(d16((i32)60), d16((i32)50), d16((i32)40), d16((i32)30))); // after the map: over it
     gButton = new UXButton();
     gButton.setTitle((u8*)"Record");
-    back.addSubview(gButton, UXGeom.make((i16)240, (i16)20, (i16)100, (i16)32));
+    back.addSubview(gButton, UXGeom.make(d16((i32)240), d16((i32)20), d16((i32)100), d16((i32)32)));
     gWin.displayAll();
 #if SNAP_GTK
     ux_gtk_wait_allocated(gWin.handle); // the frame clock: a headless gate has no window manager
@@ -196,7 +212,11 @@ void snapChecks(void)
     u8* save = getenv((u8*)"UX_SNAP_SAVE");
     if (save != (u8*)0)
         {
-        UXData* ppm = UXData.fromString((u8*)"P6\n360 200\n255\n");
+        UXData* ppm = UXData.fromString((u8*)"P6\n");
+        ppm.appendData(UXData.fromString(UXStr.fromInt(all.w)));
+        ppm.appendByte((u8)32);
+        ppm.appendData(UXData.fromString(UXStr.fromInt(all.h)));
+        ppm.appendData(UXData.fromString((u8*)"\n255\n"));
         for (i32 i = (i32)0; i < all.w * all.h; i = i + (i32)1)
             {
             u32 v = all.px[i];
@@ -207,32 +227,33 @@ void snapChecks(void)
         UXFileIO.write(save, ppm);
         }
 #endif
-    show(all, (i32)10, (i32)170);
-    show(all, (i32)30, (i32)30);
-    show(all, (i32)70, (i32)60);
+    show(all, d((i32)10), d((i32)170));
+    show(all, d((i32)30), d((i32)30));
+    show(all, d((i32)70), d((i32)60));
     ck((u8*)"...the whole content, at its size", all.w == cw && all.h == ch);
-    ck((u8*)"the app-drawn backdrop is in it", near(all, (i32)10, (i32)170, (i32)20, (i32)160, (i32)60));
-    ck((u8*)"the map is in it", near(all, (i32)30, (i32)30, (i32)64, (i32)128, (i32)191));
-    ck((u8*)"the 2-D view after the map is in it, over the map", near(all, (i32)70, (i32)60, (i32)230, (i32)20, (i32)20));
+    ck((u8*)"the app-drawn backdrop is in it", near(all, d((i32)10), d((i32)170), (i32)20, (i32)160, (i32)60));
+    ck((u8*)"the map is in it", near(all, d((i32)30), d((i32)30), (i32)64, (i32)128, (i32)191));
+    ck((u8*)"the 2-D view after the map is in it, over the map", near(all, d((i32)70), d((i32)60), (i32)230, (i32)20, (i32)20));
     // the button: across its frame, pixels that are neither the backdrop nor black (a face where the
     // platform paints one, the title's ink where it does not, as on iOS); a picture that is merely
     // not the backdrop -- all black, say -- does not count
     i32 drawn = (i32)0;
-    for (i32 x = (i32)242; x < (i32)338; x = x + (i32)1)
+    i32 row = d((i32)36);
+    for (i32 x = d((i32)242); x < d((i32)338); x = x + (i32)1)
         {
-        u32 v = all.px[(i32)36 * all.w + x];
+        u32 v = all.px[row * all.w + x];
         u32 sum = ((v >> (u32)16) & (u32)255) + ((v >> (u32)8) & (u32)255) + (v & (u32)255);
-        if (!near(all, x, (i32)36, (i32)20, (i32)160, (i32)60) && sum > (u32)90)
+        if (!near(all, x, row, (i32)20, (i32)160, (i32)60) && sum > (u32)90)
             {
             drawn = drawn + (i32)1;
             }
         }
-    Stdio.printf("  (button row: %d of 96 pixels drawn)\n", drawn);
+    Stdio.printf("  (button row: %d of %d pixels drawn)\n", drawn, d((i32)338) - d((i32)242));
     ck((u8*)"the native button is in it", drawn > (i32)8);
 
-    UXRect r = UXGeom.make((i16)20, (i16)20, (i16)200, (i16)120);
+    UXRect r = UXGeom.make(d16((i32)20), d16((i32)20), d16((i32)200), d16((i32)120));
     UXImage* map = gWin.snapshot(&r);
-    ck((u8*)"a region is that part of the window, pixel for pixel", map != (UXImage*)0 && map.w == (i32)200 && map.h == (i32)120 && sameAs(all, map, (i32)20, (i32)20));
+    ck((u8*)"a region is that part of the window, pixel for pixel", map != (UXImage*)0 && map.w == d((i32)200) && map.h == d((i32)120) && sameAs(all, map, d((i32)20), d((i32)20)));
     UXRect off = UXGeom.make((i16)-10, (i16)-10, (i16)30, (i16)30);
     UXImage* corner = gWin.snapshot(&off);
     ck((u8*)"a region off the edge is clipped to the content", corner != (UXImage*)0 && corner.w == (i32)20 && corner.h == (i32)20 && sameAs(all, corner, (i32)0, (i32)0));

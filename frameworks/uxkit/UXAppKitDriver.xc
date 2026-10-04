@@ -860,7 +860,10 @@ class UXAppKitDriver : Object<UXViewDriver>
             {
             return (i32)0;
             }
-        return ux_ak_drag_next(x, y);
+        i32 r = ux_ak_drag_next(x, y);
+        x[0] = x[0] + gUXDragDX; // in the press's terms: a drag that began on a scrolled document
+        y[0] = y[0] + gUXDragDY;
+        return r;
         }
 
     // ---- the shadow tree (pure data structure — shared shape with UXWin32Driver) --------------

@@ -14,6 +14,7 @@ void vdi_init(pointer surface);
 void vdi_set_face(pointer face);
 pointer font_face_open(u8* path);
 i32 theme_load(pointer th, u8* dir);
+pointer theme_find(pointer th, u8* name); // a theme_slice*, its size the art's (a G_SLIDER's knob)
 i32 xg_now_ms(void); // ms since a fixed point (gemclient.c) — the toolkit's clock
 void xg_now_utc(i32* out7);
 i32 xg_local_offset_minutes(void);          // host UTC offset, DST applied (0 on the board)                  // wall clock, UTC civil components (gemclient.c)

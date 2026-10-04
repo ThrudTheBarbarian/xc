@@ -16,6 +16,8 @@
 #import "UXEvent.xc"       // nextEvent decodes the native message into a neutral UXEvent
 #import "UXString.xc"      // building form_alert's "[icon][lines][buttons]" string
 #import "UXPopUpButton.xc" // runPopupMenu reads the peer's items — this driver runs the menu itself
+#import "UXSlider.xc"      // a G_SLIDER's value and knob, from its peer
+#import "UXScrollView.xc"  // a scroll view's bar, a G_SCROLL from its peer
 
 // The §10 native-object counter, driver-module global (it counts natives of THIS backend,
 // not per-view state).  liveNativeCount() exposes it; the memory gate asserts it balances.
@@ -31,7 +33,20 @@ struct UXGemTree
     i32 count;
     i32 cap;
     i32 owns;
+    pointer* peers;  // each object's control, for the objects GEM draws from its state (gemSyncNative)
+    pointer* own;    // an ob_spec the driver allocated for an object (a slider's SCROLLBAR), freed with it
+    i32 peerCap;
     }
+// A SCROLLBAR (aes.h): a G_SLIDER's ob_spec, its value in permille.
+struct UXGemBar
+    {
+    i16 vert;
+    i16 value;
+    i16 page;
+    i16 arrows;
+    }
+// The live trees, so the draw (which is handed the bare OBJECT array) finds a tree's peers.
+UXGemTree* gGemTrees[64];
 
     // The C-ABI shape of libGEM's menu_def {const char*, const char**, int}.  xtc PACKS the neutral
     // UXMenuDef (20 bytes on 64-bit — no trailing pad), but C PADS menu_def to 24 (three pointer slots),
@@ -556,6 +571,17 @@ class UXGemDriver : Object<UXViewDriver>
         s.count = (i32)0;
         s.owns = (i32)1;
         s.tree = (OBJECT*)malloc((u32)s.cap * (u32)sizeof(OBJECT));
+        s.peers = (pointer*)0;
+        s.own = (pointer*)0;
+        s.peerCap = (i32)0;
+        for (i32 i = (i32)0; i < (i32)64; i = i + (i32)1)
+            {
+            if (gGemTrees[i] == (UXGemTree*)0)
+                {
+                gGemTrees[i] = s;
+                break;
+                }
+            }
         return (pointer)s;
         }
     void structFree(pointer h)
@@ -568,6 +594,25 @@ class UXGemDriver : Object<UXViewDriver>
         if (s.owns != (i32)0 && s.tree != (OBJECT*)0)
             {
             free((pointer)s.tree);
+            }
+        for (i32 i = (i32)0; i < s.peerCap; i = i + (i32)1)
+            {
+            if (s.own[i] != (pointer)0)
+                {
+                free(s.own[i]);
+                }
+            }
+        if (s.peerCap > (i32)0)
+            {
+            free((pointer)s.peers);
+            free((pointer)s.own);
+            }
+        for (i32 i = (i32)0; i < (i32)64; i = i + (i32)1)
+            {
+            if (gGemTrees[i] == s)
+                {
+                gGemTrees[i] = (UXGemTree*)0;
+                }
             }
         free(h);
         }
@@ -634,7 +679,25 @@ class UXGemDriver : Object<UXViewDriver>
             {
             return (i32)G_STRING;
             }
-        // UXKindView and UXKindShield: app-drawn.  A shield needs nothing more on
+        // GEM's own themed controls, drawn by the AES from the state gemSyncNative copies in
+        if (kind == (i32)UXKindCheckbox)
+            {
+            return (i32)G_CHECKBOX;
+            }
+        if (kind == (i32)UXKindRadio)
+            {
+            return (i32)G_RADIO;
+            }
+        if (kind == (i32)UXKindSlider)
+            {
+            return (i32)G_SLIDER;
+            }
+        if (kind == (i32)UXKindPopup)
+            {
+            return (i32)G_POPUP;
+            }
+        // UXKindView, UXKindShield and the controls GEM has no object for (a stepper, a progress
+        // bar, a segmented control, a toolbar): app-drawn.  A shield needs nothing more on
         // GEM -- nothing here is a native widget that could swallow a press, so
         // the toolkit's own hit-test already reaches whatever is on top, which is
         // the behaviour the shield exists to restore on the other backends.
@@ -827,9 +890,145 @@ class UXGemDriver : Object<UXViewDriver>
         {
         ((UXGemTree*)h).tree[i].ob_spec = spec;
         }
-    // GEM renders the table from its subtree
+    // A control's peer: the objects GEM draws itself read their state from it (gemSyncNative).
     void structSetPeer(pointer h, i32 i, pointer peer)
         {
+        UXGemTree* s = (UXGemTree*)h;
+        if (i >= s.peerCap)
+            {
+            i32 cap = s.peerCap > (i32)0 ? s.peerCap : (i32)16;
+            while (cap <= i)
+                {
+                cap = cap * (i32)2;
+                }
+            pointer* np = (pointer*)malloc((u32)cap * (u32)sizeof(pointer));
+            pointer* no = (pointer*)malloc((u32)cap * (u32)sizeof(pointer));
+            for (i32 k = (i32)0; k < cap; k = k + (i32)1)
+                {
+                np[k] = k < s.peerCap ? s.peers[k] : (pointer)0;
+                no[k] = k < s.peerCap ? s.own[k] : (pointer)0;
+                }
+            if (s.peerCap > (i32)0)
+                {
+                free((pointer)s.peers);
+                free((pointer)s.own);
+                }
+            s.peers = np;
+            s.own = no;
+            s.peerCap = cap;
+            }
+        s.peers[i] = peer;
+        }
+    // Copy each GEM-drawn control's state into its object before the AES draws it: a check box's
+    // or radio button's selection, a slider's value (a SCROLLBAR, in permille), a popup's title, and
+    // a scroll view's bar, which becomes a G_SCROLL (its position and page, its arrows).
+    // The slider is told the theme's knob width, so a press maps to a value as the AES places the
+    // knob (objc_draw: its left edge at (w - knob) * value / 1000).
+    void gemSyncNative(OBJECT* tree)
+        {
+        UXGemTree* s = (UXGemTree*)0;
+        for (i32 k = (i32)0; k < (i32)64; k = k + (i32)1)
+            {
+            if (gGemTrees[k] != (UXGemTree*)0 && gGemTrees[k].tree == tree)
+                {
+                s = gGemTrees[k];
+                break;
+                }
+            }
+        if (s == (UXGemTree*)0)
+            {
+            return;
+            }
+        i32 n = s.count < s.peerCap ? s.count : s.peerCap;
+        for (i32 i = (i32)0; i < n; i = i + (i32)1)
+            {
+            Object* peer = (Object*)s.peers[i];
+            if (peer == (Object*)0)
+                {
+                continue;
+                }
+            i32 ty = (i32)tree[i].ob_type;
+            i32 on = (i32)-1;
+            if (ty == (i32)G_CHECKBOX)
+                {
+                UXCheckbox* cb = (UXCheckbox* ?)peer;
+                if (cb != (UXCheckbox*)0)
+                    {
+                    on = cb.isChecked() ? (i32)1 : (i32)0;
+                    }
+                }
+            else if (ty == (i32)G_RADIO)
+                {
+                UXRadioButton* rb = (UXRadioButton* ?)peer;
+                if (rb != (UXRadioButton*)0)
+                    {
+                    on = rb.isSelected() ? (i32)1 : (i32)0;
+                    }
+                }
+            else if (ty == (i32)G_SLIDER)
+                {
+                UXSlider* sl = (UXSlider* ?)peer;
+                if (sl != (UXSlider*)0)
+                    {
+                    if (s.own[i] == (pointer)0)
+                        {
+                        UXGemBar* nb = (UXGemBar*)malloc((u32)sizeof(UXGemBar));
+                        nb.vert = (i16)0;
+                        nb.page = (i16)0;
+                        nb.arrows = (i16)0;
+                        s.own[i] = (pointer)nb;
+                        theme_slice* k = (theme_slice*)theme_find((pointer)&gGemTheme, (u8*)"slider.knob");
+                        if (k != (theme_slice*)0)
+                            {
+                            sl.setKnobWidth((i16)k.sw);
+                            }
+                        }
+                    UXGemBar* b = (UXGemBar*)s.own[i];
+                    i32 range = sl.nativeMax() - sl.nativeMin();
+                    b.value = (i16)(range > (i32)0 ? (sl.nativeValue() - sl.nativeMin()) * (i32)1000 / range : (i32)0);
+                    tree[i].ob_spec = s.own[i];
+                    }
+                }
+            else if (ty == (i32)G_USERDEF || ty == (i32)G_SCROLL)
+                {
+                UXScrollbar* bar = (UXScrollbar* ?)peer;
+                if (bar != (UXScrollbar*)0 && bar.scroll != (UXScrollView*)0)
+                    {
+                    if (s.own[i] == (pointer)0)
+                        {
+                        UXGemBar* nb = (UXGemBar*)malloc((u32)sizeof(UXGemBar));
+                        nb.vert = (i16)1;
+                        nb.arrows = (i16)1;
+                        s.own[i] = (pointer)nb;
+                        theme_slice* up = (theme_slice*)theme_find((pointer)&gGemTheme, (u8*)"vscroll.up");
+                        theme_slice* dn = (theme_slice*)theme_find((pointer)&gGemTheme, (u8*)"vscroll.down");
+                        bar.setNativeGeometry(up != (theme_slice*)0 ? (i32)up.sh : (i32)0,
+                                              dn != (theme_slice*)0 ? (i32)dn.sh : (i32)0, (i32)12);
+                        }
+                    UXGemBar* b = (UXGemBar*)s.own[i];
+                    b.value = (i16)bar.valuePermille();
+                    b.page = (i16)bar.pagePermille();
+                    tree[i].ob_type = (u16)G_SCROLL;
+                    tree[i].ob_spec = s.own[i];
+                    }
+                }
+            else if (ty == (i32)G_POPUP)
+                {
+                UXPopUpButton* pb = (UXPopUpButton* ?)peer;
+                if (pb != (UXPopUpButton*)0)
+                    {
+                    tree[i].ob_spec = (pointer)pb.selectedTitle();
+                    }
+                }
+            if (on == (i32)1)
+                {
+                tree[i].ob_state = tree[i].ob_state | (u16)OS_SELECTED;
+                }
+            else if (on == (i32)0)
+                {
+                tree[i].ob_state = tree[i].ob_state & (u16)$FFFE;
+                }
+            }
         }
     // GEM forms are fixed layouts
     void structSetAutoresize(pointer h, i32 i, i32 mask)
@@ -894,6 +1093,7 @@ class UXGemDriver : Object<UXViewDriver>
             vsf_perimeter(aes_handle(), (i32)0);
             vr_recfl(aes_handle(), (pointer)&pxy[0]);
             }
+        self.gemSyncNative((OBJECT*)tree);
         objc_draw(tree, start, (i32)UX_DEPTH, clx, cly, clw, clh);
         // a snapshot asked for this repaint (windowSnapshot): the surface just drawn, copied out.  Each
         // window drawn overwrites it, so on a screen several windows share the last copy is what shows.

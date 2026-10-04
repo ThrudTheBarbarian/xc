@@ -327,7 +327,7 @@ static gboolean event_cb(GtkEventControllerLegacy* c, GdkEvent* ev, gpointer ud)
     gtk_to_area(handle, &x, &y);
     if (t == GDK_BUTTON_PRESS || t == GDK_BUTTON_RELEASE || t == GDK_MOTION_NOTIFY)
         {
-        /* over a native scroll container: its document is scrolled, the toolkit's tree is not */
+        /* over a native scroll container: its scrollbar and native controls handle their own */
         int on = scroll_doc_point(handle, wx, wy, &x, &y);
         if (on < 0 && t == GDK_BUTTON_PRESS)
             return FALSE; /* the container's scrollbar or a native control: theirs alone */
@@ -1320,9 +1320,10 @@ void ux_gtk_reparent_to_scroll(int handle, int node, int scrollNode, int ax, int
         gtk_fixed_move(GTK_FIXED(r->doc), c, ax - r->docX, ay - r->docY);
     gInDoc[handle][node] = (unsigned char)(scrollNode + 1);
     }
-/* A press or release over a scroll container's DOCUMENT, in window coordinates: where it lands in
- * the toolkit's (unscrolled) coordinates.  0 when the point is not on a document -- elsewhere, or on
- * the container's own scrollbar, which handles it. */
+/* Whether a point (window coordinates) is over a scroll container's DOCUMENT (1), elsewhere (0), or
+ * on the container's own scrollbar or a native control in it (-1), which handle it themselves.  The
+ * point is not changed: it goes on as it shows on screen, and the toolkit adds the scroll offset in
+ * its own hit test (UXWindow.hitScrolled), so a real click and a synthetic one agree. */
 static int scroll_doc_point(int handle, double wx, double wy, double* x, double* y)
     {
     for (int n = 0; n < 256; n++)
@@ -1339,16 +1340,13 @@ static int scroll_doc_point(int handle, double wx, double wy, double* x, double*
         GtkWidget* hit = gtk_widget_pick(sw, sp.x, sp.y, GTK_PICK_DEFAULT);
         if (hit != r->area)
             return -1; /* the scrollbar, or a native control in the document: theirs */
-        if (!gtk_widget_compute_point(GTK_WIDGET(gWin[handle]), r->area, &wp, &dp))
-            return -1;
-        *x = r->docX + dp.x;
-        *y = r->docY + dp.y;
-        return 1;
+        (void)dp;
+        return 1; /* on the document: the point stays as it shows, the toolkit adds the offset */
         }
     return 0;
     }
-/* Test: a click at (x, y) of the window's content as it is on screen, taken the way a real one is:
- * to window coordinates, then onto a scroll container's document if it is over one. */
+/* Test: a click at (x, y) of the window's content as it is on screen, taken the way a real one is
+ * (to window coordinates and back, the scrollbar and native controls left to themselves). */
 void ux_gtk_test_click_at(int handle, int x, int y)
     {
     if (!gWin[handle] || !gArea[handle])

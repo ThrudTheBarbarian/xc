@@ -18,8 +18,16 @@ to `-scrollOffset` and the clip cuts it to the viewport. Your content keeps fixe
 coordinates, and the ordinary hit test finds it where it is drawn.
 
 On backends that scroll natively (Win32, AppKit, GTK, iOS, Android) a native container
-overlays this whole subtree and the custom bar never draws. On GEM (and
-headless) this bar is the scrollbar.
+overlays this whole subtree and owns the offset, and the custom bar never draws. On
+GEM the bar is a `G_SCROLL` the AES draws (its arrows, track and thumb from the
+theme), with the toolkit handling the press where GEM drew each part. Headless, the
+toolkit draws the bar itself.
+
+A click or a hover over the document reaches the view under it in the document's
+coordinates on every backend, whether the toolkit or a native container scrolled it,
+and whether the event is real or passed to
+[`UXWindow.dispatchMouse`](/compiler/api/uxkit/uxwindow/#dispatchmouse) by your own
+code. A view does not add `scrollPx()` itself.
 
 ```c
 #use <UXKit>

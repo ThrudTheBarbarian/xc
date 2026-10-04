@@ -347,15 +347,20 @@ typedef void (*ux_touch_fn)(void *, int, int, int);
 static ux_touch_fn gTouch;
 void ux_and_set_touch(void *fn) { gTouch = (ux_touch_fn)fn; }
 static void n_touch(JNIEnv *env, jclass c, jint id, jint action, jfloat x, jfloat y) {
-    (void)env; (void)c;
+    (void)c;
     int handle = id >> 8;
     if (handle < 0 || handle >= UXA_MAXW || !gTouch || !gContentUd[handle]) return;
     int phase = action == 0 ? 0 : action == 2 ? 1 : action == 1 ? 2 : action == 3 ? 3 : -1;
     if (phase < 0) return;
     int node = id & 0xFF, ox = 0, oy = 0;
-    if (node > 0 && node < 64) { /* on a scroll document: the document's place plus the touch's in it */
+    if (node > 0 && node < 64 && gCtl[handle][node]) {
+        /* on a scroll document: the window's content as it shows -- the document's place, less how
+         * far the ScrollView has scrolled it; the toolkit adds the offset in its own hit test */
+        jclass vc = (*env)->FindClass(env, "android/view/View");
+        jint sy = (*env)->CallIntMethod(env, gCtl[handle][node], (*env)->GetMethodID(env, vc, "getScrollY", "()I"));
+        (*env)->DeleteLocalRef(env, vc);
         ox = gScroll[handle][node].docX;
-        oy = gScroll[handle][node].docY;
+        oy = gScroll[handle][node].docY - (int)(sy / gDensity + 0.5f);
     }
     gTouch(gContentUd[handle], phase, ox + (int)(x / gDensity + 0.5f), oy + (int)(y / gDensity + 0.5f)); /* nearest dp */
 }

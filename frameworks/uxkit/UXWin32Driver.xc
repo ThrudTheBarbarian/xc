@@ -428,9 +428,10 @@ pointer UXScroll32Proc(pointer hwnd, u32 msg, pointer wp, pointer lp)
         return (pointer)0;
         }
     // A click lands on THIS child, not the canvas, so nextEvent never sees it and the subtree the
-    // container paints (a self-drawn list) could not be clicked.  Undo the paint transform — child
-    // client -> the parent's client, the space the shadow tree's absolute frames live in — and post
-    // it to the parent, where the toolkit's normal dispatchMouse hit-tests it like any other click.
+    // container paints (a self-drawn list) could not be clicked.  Map it to the parent's client, as it
+    // shows on screen, and post it to the parent, where the toolkit's dispatchMouse hit-tests it like
+    // any other click; the toolkit adds the scroll position itself (UXWindow.hitScrolled), so a real
+    // click and a synthetic one agree.
     // Posted input outranks WM_PAINT, so invalidating now repaints AFTER the click has been handled.
     if (msg == (u32)WM_LBUTTONDOWN)
         {
@@ -441,7 +442,7 @@ pointer UXScroll32Proc(pointer hwnd, u32 msg, pointer wp, pointer lp)
             u32 lpw = (u32)lp;
             UXRect svAbs = sv.absoluteFrame();
             i32 x = (i32)(i16)lpw + (i32)svAbs.x;
-            i32 y = (i32)(i16)(lpw >> (u32)16) + (i32)svAbs.y + GetScrollPos(hwnd, (i32)SB_VERT);
+            i32 y = (i32)(i16)(lpw >> (u32)16) + (i32)svAbs.y;
             PostMessageA(par, (u32)WM_LBUTTONDOWN, wp,
                          (pointer)(((u32)y << (u32)16) | ((u32)x & (u32)$FFFF)));
             InvalidateRect(hwnd, (pointer)0, (i32)1);
@@ -2705,8 +2706,8 @@ class UXWin32Driver : Object<UXViewDriver>
         POINT p;
         GetCursorPos((pointer)&p);
         ScreenToClient(GetActiveWindow(), (pointer)&p); // screen -> window-local (matches mouseDown)
-        x[0] = p.x;
-        y[0] = p.y;
+        x[0] = p.x + gUXDragDX; // in the press's terms: a drag that began on a scrolled document
+        y[0] = p.y + gUXDragDY;
         Sleep((u32)8); // ~120 Hz, don't spin the CPU
         return (i32)1;
         }

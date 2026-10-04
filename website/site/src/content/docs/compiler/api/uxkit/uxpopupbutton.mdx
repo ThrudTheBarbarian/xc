@@ -11,7 +11,8 @@ tag, or title) are the pure, testable model. Drawing the closed button and
 *running the menu* are the backend's job. Where the popup is native (macOS
 `NSPopUpButton`, Win32 `COMBOBOX`, iOS `UIButton`+`UIMenu`, Android `Spinner`,
 GTK `GtkDropDown`), the OS drops the list and reports the pick back. On GEM the
-driver runs a menu at the button's bottom-left.
+closed button is a `G_POPUP` the AES draws with the selected title, and the
+driver runs a menu at its bottom-left.
 
 ```c
 #use <UXKit>

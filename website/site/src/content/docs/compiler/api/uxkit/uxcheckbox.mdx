@@ -8,9 +8,9 @@ import { Tabs, TabItem } from '@astrojs/starlight/components';
 `UXCheckbox` is a toggle that remembers. Click it and it flips
 [`isChecked`](#ischecked), repaints, and fires its action, like a button that
 remembers its state. Where the platform has a native check box (Win32, macOS,
-iOS once the overlay lands) the driver realizes one. Where it does not (GEM,
-web), the control paints **itself** from the theme's `check` /
-`check.selected` sprites, through the same
+GTK, Android, and GEM's `G_CHECKBOX`, which the AES draws from the control's
+state) the driver realizes one. Where it does not (the web), the control paints
+**itself** from the theme's `check` / `check.selected` sprites, through the same
 [`drawRect`](/compiler/api/uxkit/uxview/#drawrect) seam as any custom view.
 State lives in the neutral object in both cases, so a test can toggle and read
 it identically on every backend.

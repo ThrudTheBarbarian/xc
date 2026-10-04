@@ -11,9 +11,11 @@ value↔position arithmetic is pure and unit-testable without a window. Drawing
 and click conversion go through the
 [`UXControl`](/compiler/api/uxkit/uxcontrol/) seam. On backends with a native
 slider (macOS `NSSlider`, Win32 trackbar, iOS `UISlider`, Android `SeekBar`,
-GTK `GtkScale`) the driver realizes one and this object holds its state. On GEM
-and the web the control draws itself from the theme's `slider.htrack` and
-`slider.knob` sprites.
+GTK `GtkScale`, GEM's `G_SLIDER`) the driver realizes one and this object holds
+its state. GEM's AES only draws its slider, so the press and the drag stay the
+toolkit's, measured with the theme knob's width so the value is the one that
+puts GEM's knob under the pointer. On the web the control draws itself from the
+theme's `slider.htrack` and `slider.knob` sprites.
 
 ```c
 #use <UXKit>

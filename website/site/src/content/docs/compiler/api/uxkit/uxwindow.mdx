@@ -273,9 +273,15 @@ The control that Return fires when no more specific view has focus.
 void dispatchMouse(UXEvent* e)
 ```
 
-Takes window-local coordinates. The tree's hit-test finds the deepest visible,
-willing view, and the click walks the responder chain from there. Synthetic
-tests and the platform share this entry.
+Takes window-local coordinates, as the window shows on screen. The tree's
+hit-test finds the deepest visible, willing view, and the click walks the
+responder chain from there. Synthetic tests and the platform share this entry.
+
+Over a scroll view whose native container owns the offset, the window adds that
+offset itself and hit-tests the document again, so the view gets the point in the
+document's coordinates, as it would after a toolkit scroll. The press's drags and
+release get the same offset. `dispatchMouseMoved`, `dispatchWheel` and
+`dispatchRightMouse` do the same.
 
 The view hit becomes the window's **grab** until the press is released (see
 below), and the press point is recorded on the tree (`pressX`, `pressY`).

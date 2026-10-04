@@ -11,7 +11,8 @@ its **group** is selected at a time. The mutual exclusion is neutral logic in
 and the group clears the others. That is all of radio behaviour, so it lives in
 the toolkit rather than in seven drivers. The button draws itself from the
 theme's `radio` / `radio.selected` sprites on backends without a native radio
-idiom, including iOS, because UIKit has none.
+idiom, including iOS, because UIKit has none. On GEM it is a `G_RADIO` the AES
+draws from the button's state.
 
 ```c
 #use <UXKit>

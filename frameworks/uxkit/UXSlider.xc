@@ -38,6 +38,12 @@ class UXSlider : UXControl
         }
 
     // ---- native-control bridge (the driver reads these to build/sync the native control) ------
+    // Where the backend draws the knob itself (GEM's G_SLIDER), its knob's width: a press then maps
+    // to the value that puts the knob's centre under it, as the backend draws it.
+    void setKnobWidth(i16 w)
+        {
+        knobW = w;
+        }
     i32 nativeMin(void)
         {
         return minVal;
@@ -111,7 +117,7 @@ class UXSlider : UXControl
             {
             p = span;
             }
-        return minVal + p * (maxVal - minVal) / span;
+        return minVal + (p * (maxVal - minVal) + span / (i32)2) / span; // the nearest value, not the one below
         }
 
     void mouseDown(UXEvent* e)
@@ -124,8 +130,9 @@ class UXSlider : UXControl
         self.setValue(self.valueForX((i16)((i32)e.x - abs.x), (i16)abs.w));
         self.setNeedsDisplay();
         self.fire();
-        // Track the drag so the knob follows the pointer and the value updates live.  Only reached on the
-        // self-drawn (GEM) path — native NSSlider/trackbar intercept the mouse and never call mouseDown.
+        // Track the drag so the knob follows the pointer and the value updates live.  Reached where the
+        // toolkit has the press (GEM, whose G_SLIDER the AES only draws); a native slider elsewhere takes
+        // the mouse itself and never calls mouseDown.
         i32 x = (i32)0;
         i32 y = (i32)0;
         while (gDriver.trackDragStep(&x, &y) != (i32)0)
@@ -144,7 +151,7 @@ class UXSlider : UXControl
         {
         UXRect b = self.bounds();
         i16 midY = (i16)(b.h / (i16)2);
-        // Themed groove + round knob (Aristo2 on GEM; native NSSlider/trackbar elsewhere skip this).
+        // Themed groove + round knob, for a backend that realizes no slider (GEM's AES draws its own).
         g.drawTheme((u8*)"slider.htrack", UXGeom.make((i16)0, (i16)(midY - (i16)2), b.w, (i16)5));
         i16 kx = (i16)self.knobX(b.w);
         g.drawTheme((u8*)"slider.knob", UXGeom.make((i16)(kx - (i16)4), (i16)(midY - (i16)10), (i16)21, (i16)21));

@@ -144,6 +144,24 @@ class UXView : UXResponder
         return owner.absoluteFrame(index);
         }
 
+    // ---- a scrolled document, for the window's hit test (UXScrollView overrides) ----
+    // Where a NATIVE container owns a view's scroll offset, its document does not move in the tree, so
+    // the window hit-tests the document again at the point plus that offset.  These say how far it
+    // is scrolled (0: not, or the toolkit moves the document itself), the document's node, and whether
+    // a point (window content) is over its viewport.  A plain view scrolls nothing.
+    i32 hitScrollOffset(void)
+        {
+        return (i32)0;
+        }
+    i32 hitScrollDoc(void)
+        {
+        return (i32)-1;
+        }
+    bool hitScrollContains(i16 x, i16 y)
+        {
+        return UXGeom.contains(self.absoluteFrame(), x, y);
+        }
+
     // ---- hierarchy ----------------------------------------------------------
 
     // The frame is passed in: a view has no tree — and so no frame — until it is

@@ -54,6 +54,8 @@ class Marker : UXView
     i32 g;
     i32 b;
     i32 clicks;
+    i32 hovers;
+    i32 localY; // where in the marker the last press landed
     void drawRect(UXGraphics* gr, UXRect dirty)
         {
         gr.fillRectRGB(self.bounds(), r, g, b);
@@ -61,7 +63,41 @@ class Marker : UXView
     void mouseDown(UXEvent* e)
         {
         clicks = clicks + (i32)1;
+        localY = (i32)e.y - (i32)self.absoluteFrame().y;
         }
+    void mouseMoved(UXEvent* e)
+        {
+        hovers = hovers + (i32)1;
+        }
+    }
+// an event as an app's own code (or a headless gate) hands it to the window: content coordinates
+void synth(UXWindow* w, i32 kind, i32 x, i32 y)
+    {
+    UXEvent* e = new UXEvent();
+    e.kind = (u8)kind;
+    e.x = (i16)x;
+    e.y = (i16)y;
+    e.handle = w.handle;
+    if (kind == (i32)UXEventMouseDown)
+        {
+        w.dispatchMouse(e);
+        }
+    else
+        {
+        w.dispatchMouseMoved(e);
+        }
+    }
+// the synthetic checks, once the view is scrolled 380: B (document 400..430) shows at 40..70
+void synthChecks(UXWindow* w, Marker* a, Marker* b)
+    {
+    i32 bc = b.clicks;
+    i32 ac = a.clicks;
+    synth(w, (i32)UXEventMouseDown, (i32)100, (i32)55);
+    ck((u8*)"a synthetic press through UXWindow.dispatchMouse where B shows reaches B", b.clicks == bc + (i32)1 && a.clicks == ac);
+    ck((u8*)"...at the same place in B as a real one (15 down)", b.localY == (i32)15);
+    i32 bh = b.hovers;
+    synth(w, (i32)UXEventMouseMoved, (i32)100, (i32)55);
+    ck((u8*)"a synthetic move there hovers B", b.hovers == bh + (i32)1);
     }
 Marker* marker(i32 r, i32 g, i32 b)
     {
@@ -104,6 +140,8 @@ void step(void)
         {
         Stdio.printf("  (clicks: A %d, B %d)\n", gA.clicks, gB.clicks);
         ck((u8*)"after the scroll, a click where B shows reaches B", gB.clicks == (i32)1 && gA.clicks == (i32)1);
+        ck((u8*)"...at 15 down in B", gB.localY == (i32)15);
+        synthChecks(gWin, gA, gB);
         Stdio.printf(gFails == (i32)0 ? "PASS: clicks inside a scrolled NSScrollView land on what shows there\n" : "FAIL: %d\n", gFails);
         gApp.everyTurn((turnHook_t*)0, (i32)0);
         gApp.stop();

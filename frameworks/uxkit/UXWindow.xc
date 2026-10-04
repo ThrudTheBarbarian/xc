@@ -122,6 +122,9 @@ class UXWindow : UXResponder
     // desktop a view tracks its own drag modally (trackDragStep) and this is never consulted; on a
     // touch backend the drag arrives as events and is routed here.  Strong, and cleared on release.
     UXView* mouseGrab;
+    // The offset the grabbed press was taken with (hitScrolled): its drags and release get it too.
+    i32 grabDX;
+    i32 grabDY;
 
     // The damage rect for the repaint currently in flight, if WE started it.  The
     // AES's content callback is handed the WORK AREA, not the damage — so the window
@@ -530,9 +533,63 @@ class UXWindow : UXResponder
 
     // A click landed in this window: let the AES find what was hit, then send it
     // into the responder chain.
+    // The view under the event's point, which is in the window's content as it shows on screen.
+    // Where the point is over a scroll view whose NATIVE container owns the offset (hitScrollOffset),
+    // the document under it has not moved in the tree, so the document is hit-tested again at the
+    // point plus the offset, and the event is given those coordinates -- for each such scroll view
+    // the point is in, outermost first.  So a view in a scrolled document sees the same point on
+    // every backend, drawn or native, from a real event or a synthetic one.
+    i32 hitScrolled(UXEvent* e)
+        {
+        i32 start = (i32)0;
+        i32 hit = tree.hitTest(e.x, e.y);
+        for (i32 depth = (i32)0; depth < (i32)8 && hit >= (i32)0; depth = depth + (i32)1)
+            {
+            // the outermost scroll view between the hit and where this pass started
+            UXView* outer = (UXView*)0;
+            UXView* v = (UXView* ?)tree.viewAt((u16)hit);
+            while (v != (UXView*)0 && (i32)v.index != start)
+                {
+                if (v.hitScrollDoc() >= (i32)0)
+                    {
+                    outer = v;
+                    }
+                v = v.superview;
+                }
+            if (outer == (UXView*)0)
+                {
+                return hit;
+                }
+            i32 off = outer.hitScrollOffset();
+            if (!outer.hitScrollContains(e.x, e.y))
+                {
+                return hit; // on the scroll view but not its document (its bar, its header)
+                }
+            if (off == (i32)0)
+                {
+                start = outer.hitScrollDoc(); // not scrolled: look further in, from its document
+                continue;
+                }
+            // treeHitTest measures from the start node's parent, as if that sat at the origin
+            UXView* dv = (UXView* ?)tree.viewAt((u16)outer.hitScrollDoc());
+            UXRect pa = dv != (UXView*)0 && dv.superview != (UXView*)0 ? dv.superview.absoluteFrame() : UXGeom.zero();
+            i32 again = gDriver.treeHitTest(tree.objects(), outer.hitScrollDoc(), (i32)e.x - (i32)pa.x, (i32)e.y + off - (i32)pa.y);
+            e.y = (i16)((i32)e.y + off);
+            start = outer.hitScrollDoc();
+            if (again < (i32)0)
+                {
+                return hit;
+                }
+            hit = again;
+            }
+        return hit;
+        }
+
     void dispatchMouse(UXEvent* e)
         {
-        i32 hit = tree.hitTest(e.x, e.y);
+        i32 y0 = (i32)e.y;
+        i32 x0 = (i32)e.x;
+        i32 hit = self.hitScrolled(e);
         if (hit < (i32)0)
             {
             return;
@@ -552,9 +609,15 @@ class UXWindow : UXResponder
             }
 
         mouseGrab = v;
+        grabDX = (i32)e.x - x0;
+        grabDY = (i32)e.y - y0;
         tree.pressX = (i32)e.x;
         tree.pressY = (i32)e.y;
+        gUXDragDX = grabDX; // a modal drag (trackDragStep) inside mouseDown is measured the same way
+        gUXDragDY = grabDY;
         v.mouseDown(e); // climbs the chain if unhandled
+        gUXDragDX = (i32)0;
+        gUXDragDY = (i32)0;
         }
 
     // A held press moving, and its release (touch backends): to the view that took the press, not
@@ -563,6 +626,8 @@ class UXWindow : UXResponder
         {
         if (mouseGrab != (UXView*)0)
             {
+            e.x = (i16)((i32)e.x + grabDX);
+            e.y = (i16)((i32)e.y + grabDY);
             mouseGrab.mouseDragged(e);
             }
         }
@@ -572,8 +637,12 @@ class UXWindow : UXResponder
         mouseGrab = (UXView*)0;
         if (g != (UXView*)0)
             {
+            e.x = (i16)((i32)e.x + grabDX);
+            e.y = (i16)((i32)e.y + grabDY);
             g.mouseUp(e);
             }
+        grabDX = (i32)0;
+        grabDY = (i32)0;
         }
 
     // A wheel notch over the window: hit-test the point and hand it to that view; it climbs the
@@ -581,7 +650,7 @@ class UXWindow : UXResponder
     // on what the pointer is over, which is exactly what gemd forwarded (the window under the cursor).
     void dispatchWheel(UXEvent* e)
         {
-        i32 hit = tree.hitTest(e.x, e.y);
+        i32 hit = self.hitScrolled(e);
         if (hit < (i32)0)
             {
             return;
@@ -597,7 +666,7 @@ class UXWindow : UXResponder
     // hover acts on what the pointer is OVER, and no focus changes.
     void dispatchMouseMoved(UXEvent* e)
         {
-        i32 hit = tree.hitTest(e.x, e.y);
+        i32 hit = self.hitScrolled(e);
         if (hit < (i32)0)
             {
             return;
@@ -613,7 +682,7 @@ class UXWindow : UXResponder
     // under the pointer.
     void dispatchRightMouse(UXEvent* e)
         {
-        i32 hit = tree.hitTest(e.x, e.y);
+        i32 hit = self.hitScrolled(e);
         if (hit < (i32)0)
             {
             return;

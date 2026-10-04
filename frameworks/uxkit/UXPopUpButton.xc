@@ -31,7 +31,7 @@ class UXPopUpItem : Object
         items = new Array();
         selected = (i32)-1;
         }
-    // native NSPopUpButton; drawRect is the GEM fallback
+    // realized natively (an NSPopUpButton, a G_POPUP the AES draws on GEM); drawRect is for a backend with none
     UXKind kind(void)
         {
         return UXKindPopup;
@@ -181,8 +181,8 @@ class UXPopUpItem : Object
     void drawRect(UXGraphics* g, UXRect dirty)
         {
         UXRect b = self.bounds();
-        // The themed popup bezel (its right end carries the disclosure chevron); Aristo2 on GEM, native
-        // NSPopUpButton/combobox elsewhere skip this.  Just lay the current title over it.
+        // The themed popup bezel (its right end carries the disclosure chevron), for a backend that
+        // realizes no popup.  Just lay the current title over it.
         g.drawTheme((u8*)"popup", UXGeom.make((i16)0, (i16)0, b.w, b.h));
         g.drawText(self.selectedTitle(), (i16)8, (i16)((b.h - (i16)12) / (i16)2), (i32)1, (i32)0);
         }
