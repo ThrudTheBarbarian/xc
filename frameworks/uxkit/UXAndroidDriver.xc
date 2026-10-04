@@ -97,6 +97,8 @@ void ux_and_set_checkbox(i32 handle, i32 node, i32 on);
 void ux_and_make_slider(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, i32 lo, i32 hi, i32 val);
 void ux_and_set_slider_value(i32 handle, i32 node, i32 val);
 void ux_and_make_shield(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, i32 hidden);
+i32 ux_and_gl_drawable(pointer view, i32* pw, i32* ph);
+i32 ux_and_gl_read(pointer view, u32* out, i32 pw, i32 ph);
 void ux_and_raise_shield(i32 handle);
 void ux_and_make_progress(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, i32 mille);
 void ux_and_set_progress(i32 handle, i32 node, i32 mille, i32 indeterminate);
@@ -542,14 +544,14 @@ class UXAndroidDriver : Object<UXViewDriver>
         ux_and_set_turn_hook((pointer)fn, ms);
         return true;
         }
-    // a GL view's drawable and its last frame (UXViewDriver): not available on this backend yet
+    // a GL view's drawable and its last frame: the copy each present reads back for the Bitmap
     i32 glDrawableSize(pointer view, i32* pw, i32* ph)
         {
-        return (i32)0;
+        return ux_and_gl_drawable(view, pw, ph);
         }
     i32 glReadFrame(pointer view, u32* out, i32 pw, i32 ph)
         {
-        return (i32)0;
+        return ux_and_gl_read(view, out, pw, ph);
         }
 
     i32 formFactorClass(void)

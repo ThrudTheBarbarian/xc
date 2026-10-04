@@ -1684,14 +1684,16 @@ class UXWebDriver : Object<UXViewDriver>
         // The browser paces the frame against the display and gives no interval
         // seam; there is nothing here to set.
         }
-    // a GL view's drawable and its last frame (UXViewDriver): not available on this backend yet
+    // a GL view's drawable and its last frame: the view's WebGL canvas, which keeps its frame
     i32 glDrawableSize(pointer view, i32* pw, i32* ph)
         {
-        return (i32)0;
+        i32 k = self.glSlot(view);
+        return k >= (i32)0 ? ux_gl_drawable(self.gWebGlHandle[k], self.gWebGlNode[k], pw, ph) : (i32)0;
         }
     i32 glReadFrame(pointer view, u32* out, i32 pw, i32 ph)
         {
-        return (i32)0;
+        i32 k = self.glSlot(view);
+        return k >= (i32)0 ? ux_gl_read(self.gWebGlHandle[k], self.gWebGlNode[k], out, pw, ph) : (i32)0;
         }
 
     // The frame clock: the neutral loop calls fn (its nextEvent takes the wait, so a turn

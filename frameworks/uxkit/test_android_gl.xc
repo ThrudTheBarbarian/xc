@@ -6,6 +6,7 @@
 // cleared to a colour only this run uses, read back from the drawable AND from the window after the
 // paint; a 2-D view after the GL view in the tree painted OVER it; destroy then remake.
 #import <Stdio.xc>
+#import "UXImage.xc"
 #import "UXAndroidDriver.xc"
 #import "UXWindow.xc"
 #import "UXView.xc"
@@ -142,6 +143,16 @@ void testBody(void)
        "the drawn colour reached the drawable");
     ck(ge() == (u32)0, "no GL error over the frame");
     map.presentGL();
+    {
+    // the drawable's size and the frame alone, through the neutral calls
+    i32 nw = (i32)0;
+    i32 nh = (i32)0;
+    ck(map.drawableSize(&nw, &nh) && nw == dw && nh == dh, "drawableSize is the drawable's pixels");
+    UXImage* frame = map.snapshot();
+    ck(frame != (UXImage*)0 && frame.w == dw && frame.h == dh, "the GL view's snapshot is its frame, at the drawable's size");
+    u32 mid = frame != (UXImage*)0 ? frame.px[(dh / (i32)2) * dw + dw / (i32)2] : (u32)0;
+    ck(near((i32)(mid & (u32)$FFFFFF), (i32)64, (i32)128, (i32)191), "...in the colour the frame was cleared to");
+    }
     ck(ge() == (u32)0, "no GL error over the present");
 
     win.displayAll();

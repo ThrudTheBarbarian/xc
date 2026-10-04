@@ -233,7 +233,7 @@ void snapChecks(void)
     ck((u8*)"...the whole content, at its size", all.w == cw && all.h == ch);
     ck((u8*)"the app-drawn backdrop is in it", near(all, d((i32)10), d((i32)170), (i32)20, (i32)160, (i32)60));
     ck((u8*)"the map is in it", near(all, d((i32)30), d((i32)30), (i32)64, (i32)128, (i32)191));
-#if SNAP_APPKIT || SNAP_GTK || SNAP_WIN32
+#if SNAP_APPKIT || SNAP_GTK || SNAP_WIN32 || SNAP_WEB
     // the GL view's own frame, without the 2-D views over it (UXGLView.snapshot), at its drawable size
     if (gMap.glContext() != (pointer)0)
         {

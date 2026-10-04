@@ -120,6 +120,8 @@ extern i32 ux_text_ascent(u8* family, i32 size, i32 weight, i32 italic);
 // out and the renderer must not ask it to.  See UXWebDriver.glProc.
 extern void ux_gl_create(i32 h, i32 node, i32 x, i32 y, i32 w, i32 hh);
 extern i32  ux_gl_make_current(i32 h, i32 node);
+extern i32  ux_gl_drawable(i32 h, i32 node, i32* pw, i32* ph);       // a GL view's canvas size in pixels
+extern i32  ux_gl_read(i32 h, i32 node, u32* out, i32 pw, i32 ph);  // its last frame, top-down 0xAARRGGBB
 extern void ux_gl_viewport(i32 h, i32 node);
 extern void ux_gl_present(i32 h, i32 node);
 

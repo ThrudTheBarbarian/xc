@@ -2553,6 +2553,24 @@ void ux_and_gl_present(void *view) {
     else for (int hw = 1; hw < gNextH; hw++) if (gWinV[hw]) ux_and_window_invalidate(hw);
 }
 /* Paint a GL view's last frame where it sits (neutral units, in the draw in flight).  1 if it drew. */
+/* The drawable in pixels, and the last presented frame (px, top-down RGBA) as 0xAARRGGBB words.
+ * The frame is there once a present has made the Bitmap. */
+int ux_and_gl_drawable(void *view, int *pw, int *ph) {
+    int i = glFind(view);
+    if (i < 0 || !gGl[i].ctx || gGl[i].pw <= 0 || gGl[i].ph <= 0) return 0;
+    *pw = gGl[i].pw;
+    *ph = gGl[i].ph;
+    return 1;
+}
+int ux_and_gl_read(void *view, unsigned *out, int pw, int ph) {
+    int i = glFind(view);
+    if (i < 0 || !gGl[i].px || !gGl[i].bmp || gGl[i].pw != pw || gGl[i].ph != ph) return 0;
+    for (int k = 0; k < pw * ph; k++) {
+        const unsigned char *q = gGl[i].px + (size_t)k * 4;
+        out[k] = ((unsigned)q[3] << 24) | ((unsigned)q[0] << 16) | ((unsigned)q[1] << 8) | q[2];
+    }
+    return 1;
+}
 int ux_and_gl_paint(void *view, int win, int x, int y, int w, int h) {
     int i = glFind(view);
     if (i < 0 || !gGl[i].ctx || !gGl[i].bmp || !gDrawCanvas) return 0;

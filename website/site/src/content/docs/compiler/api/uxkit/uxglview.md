@@ -92,5 +92,5 @@ UXImage* snapshot(void)
 ```
 
 The view's last GL frame alone, without the 2-D views over it, at the drawable's
-size. AppKit, GTK and Win32 read it. Elsewhere, and before the view has a
-surface, it is null. For the window as it shows, use [`UXWindow.snapshot`](/compiler/api/uxkit/uxwindow/).
+size. Every backend with GL reads it. It is null before the view has a surface,
+and where there is no GL (GEM). For the window as it shows, use [`UXWindow.snapshot`](/compiler/api/uxkit/uxwindow/).

@@ -154,8 +154,8 @@ view that owns a context — the two are alternative renderers, never both.
 `glDrawableSize` answers those pixels, and `glReadFrame` copies the last frame
 out as `0xAARRGGBB`, top row first, for `UXGLView.drawableSize` and
 `UXGLView.snapshot`. AppKit reads the IOSurface the view renders into, GTK the
-driver's framebuffer, and Win32 the copy each present makes. The web, iOS,
-Android and GEM answer 0 so far.
+driver's framebuffer, the web the view's WebGL canvas, and Win32, iOS and
+Android the copy each present makes. GEM has no GL and answers 0.
 
 On AppKit the drawable is **offscreen**: the renderer draws into a framebuffer
 the driver owns (it is the renderer's default framebuffer, so the renderer does

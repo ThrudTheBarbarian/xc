@@ -1789,6 +1789,36 @@ int ux_ios_gl_paint(void* view, int win, int x, int y, int w, int h)
     CGContextDrawImage(gCtx, CGRectMake(x, y, w, h), gGl[i].img);
     return 1;
     }
+/* The drawable in pixels, and the last presented frame (its image, rows as GL read them: bottom
+ * row first, RGBX), top row first as 0xAARRGGBB.  1 when there is one. */
+int ux_ios_gl_drawable(void* view, int* pw, int* ph)
+    {
+    int i = iglFind(view);
+    if (i < 0 || !gGl[i].ctx || gGl[i].pw <= 0 || gGl[i].ph <= 0)
+        return 0;
+    *pw = gGl[i].pw;
+    *ph = gGl[i].ph;
+    return 1;
+    }
+int ux_ios_gl_read(void* view, unsigned* out, int pw, int ph)
+    {
+    int i = iglFind(view);
+    if (i < 0 || !gGl[i].img || (int)CGImageGetWidth(gGl[i].img) != pw || (int)CGImageGetHeight(gGl[i].img) != ph)
+        return 0;
+    CFDataRef d = CGDataProviderCopyData(CGImageGetDataProvider(gGl[i].img));
+    if (!d)
+        return 0;
+    const unsigned char* src = CFDataGetBytePtr(d);
+    size_t stride = CGImageGetBytesPerRow(gGl[i].img);
+    for (int y = 0; y < ph; y++)
+        {
+        const unsigned char* r = src + (size_t)(ph - 1 - y) * stride;
+        for (int x = 0; x < pw; x++)
+            out[(size_t)y * pw + x] = 0xFF000000u | ((unsigned)r[x * 4] << 16) | ((unsigned)r[x * 4 + 1] << 8) | r[x * 4 + 2];
+        }
+    CFRelease(d);
+    return 1;
+    }
 int ux_ios_test_gl_size(void* view, int* w, int* h)
     {
     int i = iglFind(view);

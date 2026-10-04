@@ -102,6 +102,8 @@ void ux_ios_set_value_changed(pointer fn);
 void ux_ios_make_switch(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, u8* title, i32 on);
 void ux_ios_set_switch(i32 handle, i32 node, i32 on);
 void ux_ios_make_shield(i32 handle, i32 x, i32 y, i32 w, i32 h, i32 hidden);
+i32 ux_ios_gl_drawable(pointer view, i32* pw, i32* ph);
+i32 ux_ios_gl_read(pointer view, u32* out, i32 pw, i32 ph);
 void ux_ios_raise_shield(i32 handle);
 void ux_ios_make_radio(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, u8* title, i32 on);
 void ux_ios_set_radio(i32 handle, i32 node, i32 on);
@@ -528,14 +530,14 @@ class UXIosDriver : Object<UXViewDriver>
         ux_ios_set_turn_hook((pointer)fn, ms);
         return true;
         }
-    // a GL view's drawable and its last frame (UXViewDriver): not available on this backend yet
+    // a GL view's drawable and its last frame: the image each present reads back for the draw walk
     i32 glDrawableSize(pointer view, i32* pw, i32* ph)
         {
-        return (i32)0;
+        return ux_ios_gl_drawable(view, pw, ph);
         }
     i32 glReadFrame(pointer view, u32* out, i32 pw, i32 ph)
         {
-        return (i32)0;
+        return ux_ios_gl_read(view, out, pw, ph);
         }
 
     i32 formFactorClass(void)

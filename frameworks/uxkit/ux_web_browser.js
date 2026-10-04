@@ -818,6 +818,32 @@
   // On a page the browser composites: nothing to swap.  In the worker the frame is composited and
   // posted now, as the 2-D present does.
   env.ux_gl_present = (h, node) => { if (!hasDOM) presentFrame(); };
+  // UXGLView.drawableSize / snapshot: the GL canvas's pixel size, and its last frame (kept by
+  // preserveDrawingBuffer) read back as top-down 0xAARRGGBB words, byte by byte (wasm32 words need
+  // not be 4-byte aligned).
+  env.ux_gl_drawable = (h, node, pw, ph) => {
+    const e = (glViews.get(h) || []).find((v) => v.node === node && v.gl);
+    if (!e || !e.el.width || !e.el.height) return 0;
+    wi32(pw, e.el.width);
+    wi32(ph, e.el.height);
+    return 1;
+  };
+  env.ux_gl_read = (h, node, out, pw, ph) => {
+    const e = (glViews.get(h) || []).find((v) => v.node === node && v.gl);
+    if (!e || e.el.width !== pw || e.el.height !== ph) return 0;
+    const g = e.gl, px = new Uint8Array(pw * ph * 4);
+    g.bindFramebuffer(g.FRAMEBUFFER, null);
+    g.readPixels(0, 0, pw, ph, g.RGBA, g.UNSIGNED_BYTE, px);
+    const m = U8(), at = out >>> 0;
+    for (let y = 0; y < ph; y++) {
+      const r = (ph - 1 - y) * pw * 4; // GL rows run bottom-up
+      for (let x = 0; x < pw; x++) {
+        const o = at + (y * pw + x) * 4, i = r + x * 4;
+        m[o] = px[i + 2]; m[o + 1] = px[i + 1]; m[o + 2] = px[i]; m[o + 3] = px[i + 3];
+      }
+    }
+    return 1;
+  };
 
   globalThis.xccImports = Object.assign(globalThis.xccImports || {}, { env });
 })();

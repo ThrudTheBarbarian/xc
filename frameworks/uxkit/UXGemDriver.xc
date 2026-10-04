@@ -1528,7 +1528,7 @@ class UXGemDriver : Object<UXViewDriver>
         {
         // No GL, so there is nothing to pace.
         }
-    // a GL view's drawable and its last frame (UXViewDriver): not available on this backend yet
+    // a GL view's drawable and its last frame (UXViewDriver): GEM has no GL (glKind is NONE)
     i32 glDrawableSize(pointer view, i32* pw, i32* ph)
         {
         return (i32)0;
