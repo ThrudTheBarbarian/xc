@@ -1389,9 +1389,13 @@ void ux_gtk_make_label(int handle, int node, int x, int y, int w, int h, const c
     park(handle, node, l, x, y, w, h);
     }
 
+/* Set while the driver pushes a model's value into a widget: GTK emits toggled, value-changed and
+ * notify::selected for a programmatic change too, which must not come back as the user's (it would
+ * fire the control's action every time the app set it). */
+static int gValueMute;
 static void toggled_cb(GtkCheckButton* c, gpointer ud)
     {
-    if (gValue)
+    if (gValue && !gValueMute)
         gValue(hOf(GTK_WIDGET(c)), nOf(GTK_WIDGET(c)),
                gtk_check_button_get_active(c) ? 1 : 0);
     }
@@ -1453,13 +1457,15 @@ void ux_gtk_test_activate_toggle(int handle, int node)
 void ux_gtk_set_check(int handle, int node, int on)
     {
     GtkWidget* c = gCtl[handle][node];
-    if (GTK_IS_CHECK_BUTTON(c))
+    gValueMute = 1;
+    if (GTK_IS_CHECK_BUTTON(c) && gtk_check_button_get_active(GTK_CHECK_BUTTON(c)) != (on != 0))
         gtk_check_button_set_active(GTK_CHECK_BUTTON(c), on != 0);
+    gValueMute = 0;
     }
 
 static void range_cb(GtkRange* r, gpointer ud)
     {
-    if (gValue)
+    if (gValue && !gValueMute)
         gValue(hOf(GTK_WIDGET(r)), nOf(GTK_WIDGET(r)),
                (int)(gtk_range_get_value(r) + 0.5));
     }
@@ -1475,13 +1481,15 @@ void ux_gtk_make_slider(int handle, int node, int x, int y, int w, int h,
 void ux_gtk_set_slider_value(int handle, int node, int val)
     {
     GtkWidget* c = gCtl[handle][node];
-    if (GTK_IS_RANGE(c))
+    gValueMute = 1;
+    if (GTK_IS_RANGE(c) && (int)(gtk_range_get_value(GTK_RANGE(c)) + 0.5) != val)
         gtk_range_set_value(GTK_RANGE(c), val);
+    gValueMute = 0;
     }
 
 static void spin_cb(GtkSpinButton* s, gpointer ud)
     {
-    if (gValue)
+    if (gValue && !gValueMute)
         gValue(hOf(GTK_WIDGET(s)), nOf(GTK_WIDGET(s)),
                gtk_spin_button_get_value_as_int(s));
     }
@@ -1498,7 +1506,12 @@ void ux_gtk_set_stepper_value(int handle, int node, int val)
     {
     GtkWidget* c = gCtl[handle][node];
     if (GTK_IS_SPIN_BUTTON(c))
-        gtk_spin_button_set_value(GTK_SPIN_BUTTON(c), val);
+        {
+        gValueMute = 1;
+        if (gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(c)) != val)
+            gtk_spin_button_set_value(GTK_SPIN_BUTTON(c), val);
+        gValueMute = 0;
+        }
     }
 
 void ux_gtk_make_progress(int handle, int node, int x, int y, int w, int h, int mille)
@@ -1516,7 +1529,7 @@ void ux_gtk_set_progress(int handle, int node, int mille, int indeterminate)
 
 static void dropdown_cb(GObject* d, GParamSpec* ps, gpointer ud)
     {
-    if (gValue)
+    if (gValue && !gValueMute)
         gValue(hOf(GTK_WIDGET(d)), nOf(GTK_WIDGET(d)),
                (int)gtk_drop_down_get_selected(GTK_DROP_DOWN(d)));
     }
@@ -1536,8 +1549,10 @@ void ux_gtk_popup_add_item(int handle, int node, const char* title)
 void ux_gtk_popup_select(int handle, int node, int i)
     {
     GtkWidget* c = gCtl[handle][node];
-    if (GTK_IS_DROP_DOWN(c) && i >= 0)
+    gValueMute = 1;
+    if (GTK_IS_DROP_DOWN(c) && i >= 0 && (int)gtk_drop_down_get_selected(GTK_DROP_DOWN(c)) != i)
         gtk_drop_down_set_selected(GTK_DROP_DOWN(c), i);
+    gValueMute = 0;
     }
 
 /* segmented: linked GtkToggleButtons in one group — the GTK idiom for a
@@ -1594,6 +1609,23 @@ void ux_gtk_seg_select(int handle, int node, int seg)
     if (t)
         gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(t), TRUE);
     gSegMute = 0;
+    }
+/* Test: a native control's value as GTK holds it -- a check 0/1, a range's or spin button's value,
+ * a progress bar in permille, a drop-down's selection (-9999: none) */
+int ux_gtk_test_native_value(int handle, int node)
+    {
+    GtkWidget* c = gCtl[handle][node];
+    if (GTK_IS_CHECK_BUTTON(c))
+        return gtk_check_button_get_active(GTK_CHECK_BUTTON(c)) ? 1 : 0;
+    if (GTK_IS_SPIN_BUTTON(c))
+        return gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(c));
+    if (GTK_IS_RANGE(c))
+        return (int)(gtk_range_get_value(GTK_RANGE(c)) + 0.5);
+    if (GTK_IS_PROGRESS_BAR(c))
+        return (int)(gtk_progress_bar_get_fraction(GTK_PROGRESS_BAR(c)) * 1000.0 + 0.5);
+    if (GTK_IS_DROP_DOWN(c))
+        return (int)gtk_drop_down_get_selected(GTK_DROP_DOWN(c));
+    return -9999;
     }
 /* the tests' segment tap: the real toggled path, exactly a user's click */
 void ux_gtk_test_seg_click(int handle, int node, int seg)

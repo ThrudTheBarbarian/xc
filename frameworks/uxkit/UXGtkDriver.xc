@@ -1147,6 +1147,54 @@ class UXGtkDriver : Object<UXViewDriver>
     // the shadow node only mirrors it.  Same read as the AppKit driver's.
     // A control's text alignment, read from its PEER -- the same shape as
     // toggleState: alignment lives on the control, not in the shadow tree.
+    void pushValue(i32 handle, i32 i, i32 kind, pointer peer)
+        {
+        Object* o = (Object*)peer;
+        if (o == (Object*)0)
+            {
+            return;
+            }
+        if (kind == (i32)UXKindSlider)
+            {
+            UXSlider* sl = (UXSlider* ?)o;
+            if (sl != (UXSlider*)0)
+                {
+                ux_gtk_set_slider_value(handle, i, sl.nativeValue());
+                }
+            }
+        else if (kind == (i32)UXKindStepper)
+            {
+            UXStepper* st = (UXStepper* ?)o;
+            if (st != (UXStepper*)0)
+                {
+                ux_gtk_set_stepper_value(handle, i, st.nativeValue());
+                }
+            }
+        else if (kind == (i32)UXKindProgress)
+            {
+            UXProgressBar* pg = (UXProgressBar* ?)o;
+            if (pg != (UXProgressBar*)0)
+                {
+                ux_gtk_set_progress(handle, i, pg.nativeFractionMille(), pg.nativeIndeterminate());
+                }
+            }
+        else if (kind == (i32)UXKindSegmented)
+            {
+            UXSegmentedControl* sg = (UXSegmentedControl* ?)o;
+            if (sg != (UXSegmentedControl*)0 && sg.nativeMultiSelect() == (i32)0)
+                {
+                ux_gtk_seg_select(handle, i, sg.nativeSelectedSeg());
+                }
+            }
+        else if (kind == (i32)UXKindPopup)
+            {
+            UXPopUpButton* pb = (UXPopUpButton* ?)o;
+            if (pb != (UXPopUpButton*)0)
+                {
+                ux_gtk_popup_select(handle, i, pb.nativeSelected());
+                }
+            }
+        }
     i32 alignOf(pointer peer)
         {
         UXControl* c = (UXControl* ?)(Object*)peer;
@@ -1317,6 +1365,10 @@ class UXGtkDriver : Object<UXViewDriver>
                     {
                     ux_gtk_set_check(handle, i, self.toggleState(n.peer, (i32)n.kind));
                     }
+                // ...and the other values, for the same reason (a slider the app moves, progress
+                // advancing, a selection the app makes); each setter leaves an equal value alone
+                // and does not report its own change back
+                self.pushValue(handle, i, (i32)n.kind, n.peer);
                 // ...and alignment, every pass for the same reason: it changes
                 // after realize when an editor's inspector sets it.
                 if ((i32)n.kind == (i32)UXKindLabel || (i32)n.kind == (i32)UXKindField)
