@@ -147,6 +147,13 @@ NS_ASSUME_NONNULL_BEGIN
 \****************************************************************************/
 @property(nonatomic, readonly) NSString* hostMalloc;
 /****************************************************************************\
+|* The x86-64 vector level (`-mavx2`, `-msimd=base|avx2`, `-mnative`): nil for
+|* the default (SSE2, the x86-64 baseline), else "base" or "avx2". Only x86_64
+|* and win64 take it. `-mavx512f` is reserved and refused until the encoder
+|* exists. SIMD step 1 (private: docs/Design/simd-step1-plan.md, slice S1).
+\****************************************************************************/
+@property(nonatomic, readonly, nullable) NSString* simdLevel;
+/****************************************************************************\
 |* Automatic Reference Counting gate (`-farc` / `-farc=off|no|0`).
 |* When enabled (the default), the `retain` and `release` statements are
 |* accepted by the front end and lower to the refcount helpers in

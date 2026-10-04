@@ -1,4 +1,7 @@
 #import "XTCommandLineOptions.h"
+#if defined(__APPLE__)
+#include <sys/sysctl.h>
+#endif
 #import "XTDiagnosticEngine.h"
 #import "XTLinkerScriptParser.h"
 
@@ -46,6 +49,8 @@
 @property(nonatomic, readwrite) BOOL quitLoop;
 @property(nonatomic, readwrite) NSString* allocator;
 @property(nonatomic, readwrite) NSString* hostMalloc;
+@property(nonatomic, readwrite, nullable) NSString* simdLevel;
+@property(nonatomic, readwrite, nullable) NSString* simdFlag;
 @property(nonatomic, readwrite) BOOL allocatorExplicit;
 @property(nonatomic, readwrite) BOOL dceTrace;
 @property(nonatomic, readwrite) NSInteger threadSafeARC;
@@ -73,6 +78,32 @@
 @end
 
 @implementation XTCommandLineOptions
+
+// The vector level of the machine running the compiler, for -mnative: "avx2"
+// when the CPU has it AND the OS saves the ymm state, "base" otherwise, nil when
+// this machine is not x86-64 (an arm64 Mac has no AVX to read). Linux's
+// /proc/cpuinfo lists avx2 only when the kernel supports it; macOS says through
+// hw.optional.avx2_0.
++ (nullable NSString*)hostSimdLevel
+    {
+#if defined(__x86_64__)
+#if defined(__APPLE__)
+    int v = 0;
+    size_t n = sizeof v;
+    if (sysctlbyname("hw.optional.avx2_0", &v, &n, NULL, 0) == 0 && v)
+        return @"avx2";
+    return @"base";
+#else
+    NSString* info = [NSString stringWithContentsOfFile:@"/proc/cpuinfo" encoding:NSUTF8StringEncoding error:NULL];
+    for (NSString* line in [info componentsSeparatedByString:@"\n"])
+        if ([line hasPrefix:@"flags"])
+            return [[line componentsSeparatedByString:@" "] containsObject:@"avx2"] ? @"avx2" : @"base";
+    return @"base";
+#endif
+#else
+    return nil;
+#endif
+    }
 
 /****************************************************************************\
 |* Initialise with default option values (xl target, no output path, etc.).
@@ -965,6 +996,40 @@ static NSString* sExecutablePath = nil;
             opts.allocator = val;
             opts.allocatorExplicit = YES;
             }
+        else if ([arg isEqualToString:@"-mavx2"])
+            {
+            opts.simdLevel = @"avx2";
+            opts.simdFlag = arg;
+            }
+        else if ([arg hasPrefix:@"-msimd="])
+            {
+            NSString* val = [arg substringFromIndex:7];
+            if (![val isEqualToString:@"base"] && ![val isEqualToString:@"avx2"])
+                {
+                fprintf(stderr, "xcc: -msimd= expects 'base' or 'avx2', got '%s'\n", val.UTF8String);
+                return nil;
+                }
+            opts.simdLevel = val;
+            opts.simdFlag = arg;
+            }
+        else if ([arg isEqualToString:@"-mnative"])
+            {
+            NSString* lvl = [XTCommandLineOptions hostSimdLevel];
+            if (!lvl)
+                {
+                fprintf(stderr, "xcc: -mnative: this machine is not x86-64, so it has no vector "
+                                "level to read; name one (-mavx2, -msimd=base)\n");
+                return nil;
+                }
+            opts.simdLevel = lvl;
+            opts.simdFlag = arg;
+            }
+        else if ([arg isEqualToString:@"-mavx512f"])
+            {
+            fprintf(stderr, "xcc: -mavx512f is not supported yet: the 512-bit (EVEX) encoding "
+                            "is not implemented; use -mavx2\n");
+            return nil;
+            }
         else if ([arg isEqualToString:@"-fthread-safe-arc"])
             {
             opts.threadSafeARC = 1;
@@ -1211,6 +1276,15 @@ static NSString* sExecutablePath = nil;
         opts.loopUnrollMax = 5;
         }
 
+    // The vector level belongs to the x86-64 back ends; anywhere else it would
+    // be silently meaningless, so it is refused, naming the flag.
+    if (opts.simdFlag && !opts.useX86_64Backend && !opts.useWin64Backend)
+        {
+        fprintf(stderr, "xcc: %s: the vector level applies to -A x86_64 and -A win64 only\n",
+                opts.simdFlag.UTF8String);
+        return nil;
+        }
+
     // -fmalloc=mimalloc needs a linker that can consume a foreign OBJECT file.
     // Only the x86-64 path has one today: it links with ld.lld directly. The
     // arm64 self-host linker ASSEMBLES our own `.s` and has no object reader,
@@ -1350,6 +1424,10 @@ static NSString* sExecutablePath = nil;
             "                             every live target: it applied to the\n"
             "                             retired xe/xl Atari models, and no current\n"
             "                             layout has a cloaked region.\n"
+            "  -mavx2, -msimd=avx2        x86-64/win64: 256-bit AVX2 vectors (the\n"
+            "                             binary then needs an AVX2 CPU)\n"
+            "  -msimd=base                x86-64/win64: SSE2 only (the default)\n"
+            "  -mnative                   x86-64/win64: the level of this machine\n"
             "  -fthread-safe-arc          Atomic ARC refcounts, so two threads can\n"
             "                             share an object. Default: on exactly when\n"
             "                             the program spawns a thread.\n"

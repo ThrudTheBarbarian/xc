@@ -2,6 +2,13 @@
 
 @implementation XTIROptTargetProfile
 
+- (instancetype)init
+    {
+    if ((self = [super init]))
+        _vectorLaneBytes = 16;
+    return self;
+    }
+
 // Off by default: measured on arm64, and it produces wrong answers on xt6502.
 - (BOOL)hoistsLocalAddr
     {

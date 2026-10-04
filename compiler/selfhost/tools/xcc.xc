@@ -82,6 +82,8 @@ class CapOptions
     String* _withDex;      // --with-dex <path>
     bool    _noSelfHost;   // --no-self-host
     bool    _threadFlag;   // -f[no-]thread-safe-arc was given
+    String* _simd;         // the x86-64 vector level: 0 (default), "base", "avx2"
+    String* _simdFlag;     // the flag that chose it, for the target check
 
     void init(void)
     {
@@ -98,6 +100,8 @@ class CapOptions
         _withDex = (String*)0;
         _noSelfHost = false;
         _threadFlag = false;
+        _simd = (String*)0;
+        _simdFlag = (String*)0;
     }
 
     String* alloc(void)     { return _alloc; }
@@ -113,6 +117,8 @@ class CapOptions
     String* withDex(void)   { return _withDex; }
     bool noSelfHost(void)   { return _noSelfHost; }
     bool threadFlag(void)   { return _threadFlag; }
+    String* simd(void)      { return _simd; }
+    String* simdFlag(void)  { return _simdFlag; }
 
     void setAlloc(String* v)     { _alloc = v; }
     void setHostMalloc(String* v) { _malloc = v; }
@@ -125,6 +131,7 @@ class CapOptions
     void setWithDex(String* p)   { _withDex = p; }
     void setNoSelfHost(bool b)   { _noSelfHost = b; }
     void setThreadFlag(bool b)   { _threadFlag = b; }
+    void setSimd(String* level, String* flag) { _simd = level; _simdFlag = flag; }
 }
 
 // ── options ──────────────────────────────────────────────────────────────
@@ -4645,6 +4652,10 @@ void capabilityUsage(void)
     Stdio.printf("  -msoft-float               (m68k) Floating point in software, the default\n");
     Stdio.printf("  -fpic, -fPIC, -mpic        Position-independent code: the GOT/a5 model on\n");
     Stdio.printf("                             m68k. arm64, android and arm9 are always PIC\n");
+    Stdio.printf("  -mavx2, -msimd=avx2        x86-64/win64: 256-bit AVX2 vectors (the\n");
+    Stdio.printf("                             binary then needs an AVX2 CPU)\n");
+    Stdio.printf("  -msimd=base                x86-64/win64: SSE2 only (the default)\n");
+    Stdio.printf("  -mnative                   x86-64/win64: the level of this machine\n");
     Stdio.printf("  -fthread-safe-arc          Atomic ARC refcounts. Default: on when the\n");
     Stdio.printf("                             program spawns a thread\n");
     Stdio.printf("  -fno-thread-safe-arc       Plain, non-atomic refcounts\n");
@@ -4955,6 +4966,44 @@ void applyOptFlags(DriverOptions* d, OptProfile* p)
 {
     Opt.setInlineOverride(p, d.inlineMax());
     Opt.setDceTrace(p, d.dceTrace());
+    // The vector level only ever reaches an x86-64 profile (checkCapabilities
+    // refuses it elsewhere); read by the vectoriser from S2 on.
+    String* simd = d.caps().simd();
+    if (simd != (String*)0)
+        p.setVectorLaneBytes(simd.equals(String.withCString("avx2")) ? (u32)32 : (u32)16);
+}
+
+#if ARCH_win64
+i32 IsProcessorFeaturePresent(u32 feature);
+#endif
+
+// The vector level of the machine running the compiler, for -mnative: "avx2"
+// when the CPU has it AND the OS saves the ymm state, "base" otherwise, 0 when
+// this compiler is not running on x86-64 (an arm64 Mac has no AVX to read).
+// Windows answers both halves in IsProcessorFeaturePresent (40 =
+// PF_AVX2_INSTRUCTIONS_AVAILABLE); Linux lists avx2 in /proc/cpuinfo only when
+// the kernel supports it. Matches the reference's hostSimdLevel.
+String* hostSimdLevel(void)
+{
+#if ARCH_win64
+    return IsProcessorFeaturePresent((u32)40) != (i32)0 ? String.withCString("avx2") : String.withCString("base");
+#elif ARCH_x86_64
+    String* info = Files.readText(String.withCString("/proc/cpuinfo"));
+    if (info == (String*)0) return String.withCString("base");
+    Array* lines = info.splitOnByte((u8)'\n');
+    for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1) {
+        String* ln = (String*)lines.get(i);
+        if (!ln.hasPrefix(String.withCString("flags"))) continue;
+        Array* w = ln.splitOnByte((u8)' ');
+        for (u32 k = (u32)0; k < w.count(); k = k + (u32)1)
+            if (((String*)w.get(k)).equals(String.withCString("avx2")))
+                return String.withCString("avx2");
+        return String.withCString("base");
+    }
+    return String.withCString("base");
+#else
+    return (String*)0;
+#endif
 }
 
 // One capability flag at argv[*i], or false when it is not one. Advances *i
@@ -5005,6 +5054,36 @@ bool parseCapabilityFlag(DriverOptions* d, u32* ip, u32 argc)
     // Atomic ARC is a back-end decision, but the race-free static-init once
     // that rides the same switch is decided in LOWERING — so the front end is
     // told as well, and the back ends read it from there.
+    // The x86-64 vector level (SIMD step 1, S1). Checked against the target in
+    // checkCapabilities, once the whole line is read.
+    if (a.equals(String.withCString("-mavx2"))) {
+        c.setSimd(String.withCString("avx2"), a);
+        *ip = i + (u32)1; return true;
+    }
+    if (a.hasPrefix(String.withCString("-msimd="))) {
+        String* v = a.substringFromByte((u32)7);
+        if (!v.equals(String.withCString("base")) && !v.equals(String.withCString("avx2"))) {
+            Stdio.printf("xcc: -msimd= expects 'base' or 'avx2', got '%s'\n", v.cString());
+            Process.exit((i32)1); return true;
+        }
+        c.setSimd(v, a);
+        *ip = i + (u32)1; return true;
+    }
+    if (a.equals(String.withCString("-mnative"))) {
+        String* lvl = hostSimdLevel();
+        if (lvl == (String*)0) {
+            Stdio.printf("xcc: -mnative: this machine is not x86-64, so it has no vector "
+                         "level to read; name one (-mavx2, -msimd=base)\n");
+            Process.exit((i32)1); return true;
+        }
+        c.setSimd(lvl, a);
+        *ip = i + (u32)1; return true;
+    }
+    if (a.equals(String.withCString("-mavx512f"))) {
+        Stdio.printf("xcc: -mavx512f is not supported yet: the 512-bit (EVEX) encoding "
+                     "is not implemented; use -mavx2\n");
+        Process.exit((i32)1); return true;
+    }
     if (a.equals(String.withCString("-fthread-safe-arc"))) {
         d.fe().setThreadSafeArc((i32)1); c.setThreadFlag(true);
         *ip = i + (u32)1; return true;
@@ -5062,6 +5141,11 @@ void checkCapabilities(DriverOptions* d)
 {
     CapOptions* c = d.caps();
     String* arch = d.arch();
+    if (c.simdFlag() != (String*)0 && !isX86_64(d) && !arch.equals(String.withCString("win64"))) {
+        Stdio.printf("xcc: %s: the vector level applies to -A x86_64 and -A win64 only\n",
+                     c.simdFlag().cString());
+        Process.exit((i32)1); return;
+    }
     if (c.threadFlag() && (isM68k(d) || isXt6502(d))) {
         Stdio.printf("xcc: error: -f[no-]thread-safe-arc: '%s' has no threads, so there "
                      "is no atomic reference count to choose\n", arch.cString());

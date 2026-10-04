@@ -44,6 +44,7 @@ int main(int argc, const char* argv[])
     {
     @autoreleasepool
         {
+        NSUInteger simdLaneBytes = 16; // --simd: the profile's vector width
         // Record argv[0] so the support tree is found relative to THIS binary.
         // An installed tool must not depend on the current directory to find
         // its own libraries.
@@ -107,6 +108,13 @@ int main(int argc, const char* argv[])
                 {
                 [XTIROptDeadFunctionElim setKeepAllFunctions:YES]; // keep it all
                 }
+            else if ([arg hasPrefix:@"--simd="])
+            {
+                // The vector level the driver chose (-mavx2 / -msimd / -mnative):
+                // the profile's lane width. Read by the vectoriser from S2 on.
+                NSString* lvl = [arg substringFromIndex:7];
+                simdLaneBytes = [lvl isEqualToString:@"avx2"] ? 32 : 16;
+            }
             else if ([arg isEqualToString:@"--thread-safe-arc"])
                 {
                 threadSafeARC = 1;
@@ -164,12 +172,14 @@ int main(int argc, const char* argv[])
             }
 
             {
+            XTIRX86_64TargetProfile* x86Profile = [XTIRX86_64TargetProfile new];
+            x86Profile.vectorLaneBytes = simdLaneBytes;
             // Always run the pipeline (even -O0): the VaArgExpand pass lowers the
             // abstract VaStart/VaArg → __xtc_va_buf and runs unconditionally; the
             // backend has no case for the abstract ops. The level gates the rest.
             XTIROptPipeline* pipe =
                 [XTIROptPipeline standardPipelineAtLevel:optLevel
-                                                 profile:[XTIRX86_64TargetProfile new]];
+                                                 profile:x86Profile];
             pipe.traceToStderr = !quiet;
             NSMutableArray<NSString*>* poErrs = nil;
             if (![pipe runOnModule:mod errors:&poErrs])

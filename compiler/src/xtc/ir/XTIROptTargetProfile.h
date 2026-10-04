@@ -219,6 +219,12 @@ NS_ASSUME_NONNULL_BEGIN
 
 // The conservative profile (the base defaults). Used by the 6502 / generic
 // pipeline and anywhere a target hasn't been specified.
+// Bytes in one vector register the vectoriser may use: 16 (SSE2 / NEON /
+// simd128, the default) or 32 (AVX2, `-mavx2`). The lane count, the remainder
+// loop and the unroll factor key off it (SIMD step 1, S2); set by the x86-64
+// code generators from `--simd`.
+@property(nonatomic) NSUInteger vectorLaneBytes;
+
 + (instancetype)conservativeProfile;
 
 @end

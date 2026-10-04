@@ -4609,6 +4609,8 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
         // NDK assembler refusing them is the only signal.
         [cgArgs addObject:@"--no-lse-atomics"];
     }
+    if (opts.simdLevel && (opts.useX86_64Backend || opts.useWin64Backend))
+        [cgArgs addObject:[@"--simd=" stringByAppendingString:opts.simdLevel]];
     if (opts.threadSafeARC == 1)      [cgArgs addObject:@"--thread-safe-arc"];
     else if (opts.threadSafeARC == 0) [cgArgs addObject:@"--no-thread-safe-arc"];
     // Every arm9 output is position-independent, so `-S` shows the PIC asm the

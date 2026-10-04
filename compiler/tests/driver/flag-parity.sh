@@ -605,6 +605,21 @@ grep -q "__data_end" xcout.wat && ok "--link-libs: the app exports __data_end" \
 run "$XC" xcout -q -A wasm32 -o @OUT@.wat ret.xc
 grep -q "__data_end" xcout.wat && bad "__data_end exported without --link-libs" \
     || ok "no link-libs exports without --link-libs"
+# SIMD step 1, S1: the x86-64 vector level. Both drivers take the same
+# spellings, refuse the same misuses with the same words, and (until S2 reads
+# it) build the same bytes as without it.
+same "-mavx2 (-A x86_64)"           -q -A x86_64 -mavx2 -o @OUT@ ret.xc
+same "-msimd=base (-A x86_64)"      -q -A x86_64 -msimd=base -o @OUT@ ret.xc
+same "-msimd=avx2 (-A win64)"       -q -A win64 -msimd=avx2 -o @OUT@ ret.xc
+same "-msimd=<bad> refused"        -q -A x86_64 -msimd=sse9 -o @OUT@ ret.xc
+xcconly "  ...naming the choices"   1 "expects 'base' or 'avx2'" -q -A x86_64 -msimd=sse9 -o @OUT@ ret.xc
+same "-mavx2 (-A arm64) refused"    -q -A arm64 -mavx2 -o @OUT@ ret.xc
+xcconly "  ...naming the targets"   1 "applies to -A x86_64 and -A win64 only" -q -A arm64 -mavx2 -o @OUT@ ret.xc
+same "-mavx512f refused"            -q -A x86_64 -mavx512f -o @OUT@ ret.xc
+# -mnative reads THIS machine: on x86-64 it picks a level and builds, elsewhere
+# both refuse; either way the two must agree.
+same "-mnative (-A x86_64)"         -q -A x86_64 -mnative -o @OUT@ ret.xc
+cover -mavx2 -msimd= -mnative -mavx512f
 same "an undefined C symbol is a link error (580)" $A -o @OUT@ nothere.xc
 xcconly "  ...naming it (580)" 1 "undefined symbol 'nothere'" $A -o @OUT@ nothere.xc
 xcconly "--link-libs (-A arm64, refused)" 1 "applies to -A wasm32" -q -A arm64 --link-libs -o @OUT@ ret.xc

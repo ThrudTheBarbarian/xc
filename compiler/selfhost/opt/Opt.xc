@@ -68,12 +68,17 @@ class OptProfile
     bool _hoistLocalAddr;  // …and a repeated AddrOf of a pinned LOCAL (arm64)
     bool _layoutHotPath;   // blocks ordered so the expected branch falls through
     bool _narrowIV;        // a counted IV is recomputed at its smallest width
+    // Bytes in one vector register the vectoriser may use: 16 (SSE2 / NEON /
+    // simd128) or 32 (AVX2, -mavx2). The lane count, remainder loop and unroll
+    // factor key off it (SIMD step 1, S2); set from the driver's vector level.
+    u32 _vectorLaneBytes;
     bool _loopRotate;      // top-tested loops become bottom-tested
     u32 _inlineMax;        // the largest callee (IR instructions) the inliner splices
     bool _dceTrace;        // name each function dead-function elimination removes
 
     void init(void)
         {
+        _vectorLaneBytes = (u32)16;
         _inlineMax = (u32)64;
         _dceTrace = false;
         _nativeVarargs = false;
@@ -107,6 +112,9 @@ class OptProfile
         _narrowIV = false;
         _loopRotate = false;
         }
+
+    u32 vectorLaneBytes(void) { return _vectorLaneBytes; }
+    void setVectorLaneBytes(u32 n) { _vectorLaneBytes = n; }
 
     static OptProfile* forTarget(String* t)
         {
