@@ -22,6 +22,7 @@ void main(void)
     String* target = String.withCString("arm64");
     String* stopAfter = (String*)0;
     u32 level = (u32)0;
+    u32 simdBytes = (u32)16;
     u32 argc = Process.argumentCount();
     u32 i = (u32)1;
     while (i < argc)
@@ -69,6 +70,14 @@ void main(void)
             i = i + (u32)1;
             continue;
             }
+        // --simd=avx2: the 32-byte vector width the x86-64 profile takes under
+        // -mavx2, as the reference's --simd does (opt-diff's OPT_SIMD).
+        if (a.hasPrefix(String.withCString("--simd=")))
+            {
+            simdBytes = a.substringFromByte((u32)7).equals(String.withCString("avx2")) ? (u32)32 : (u32)16;
+            i = i + (u32)1;
+            continue;
+            }
         if (!a.hasPrefix(String.withCString("-")))
             input = a;
         i = i + (u32)1;
@@ -97,7 +106,9 @@ void main(void)
         return;
         }
 
-    Opt* o = Opt.atLevel(level, OptProfile.forTarget(target));
+    OptProfile* prof = OptProfile.forTarget(target);
+    prof.setVectorLaneBytes(simdBytes);
+    Opt* o = Opt.atLevel(level, prof);
     if (stopAfter != 0)
         o.setStopAfter(stopAfter);
     o.run(m);

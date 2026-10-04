@@ -171,7 +171,10 @@ int main(int argc, const char* argv[])
 
             {
             XTIRX86_64TargetProfile* x86Profile = [XTIRX86_64TargetProfile new];
-            x86Profile.vectorLaneBytes = simdLaneBytes;
+            // Until the back end emits ymm (SIMD step 1, S3), 256-bit vectors go
+            // only to --dump-opt-ir, where opt-diff compares the two compilers'
+            // vectorised IR; code generation stays at 128 bits.
+            x86Profile.vectorLaneBytes = dumpOptIR ? simdLaneBytes : 16;
             // The x86-64 profile applies — same ISA, same opt passes. Only the
             // backend ABI/object-format differs, selected below.
             XTIROptPipeline* pipe =

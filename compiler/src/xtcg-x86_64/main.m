@@ -173,7 +173,10 @@ int main(int argc, const char* argv[])
 
             {
             XTIRX86_64TargetProfile* x86Profile = [XTIRX86_64TargetProfile new];
-            x86Profile.vectorLaneBytes = simdLaneBytes;
+            // Until the back end emits ymm (SIMD step 1, S3), 256-bit vectors go
+            // only to --dump-opt-ir, where opt-diff compares the two compilers'
+            // vectorised IR; code generation stays at 128 bits.
+            x86Profile.vectorLaneBytes = dumpOptIR ? simdLaneBytes : 16;
             // Always run the pipeline (even -O0): the VaArgExpand pass lowers the
             // abstract VaStart/VaArg → __xtc_va_buf and runs unconditionally; the
             // backend has no case for the abstract ops. The level gates the rest.

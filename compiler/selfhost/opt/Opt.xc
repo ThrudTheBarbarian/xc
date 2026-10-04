@@ -594,6 +594,7 @@ class OptProfile
     IRValue* _iv;
     String* _laneTy;
     u32 _vw; // lanes per vector — 4 for a 32-bit lane
+    u32 _vecBytes; // vector width: 16, or 32 under -mavx2 (SIMD step 1, S2)
     // IOTA: the per-lane value is derived from the INDUCTION VARIABLE rather
     // than from a load, so the applier maps the iv to <i, i+1, i+2, i+3>
     // instead of splatting it. `acc += f(i)` with no array anywhere.
@@ -606,6 +607,7 @@ class OptProfile
     void init(void)
         {
         _vw = (u32)0;
+        _vecBytes = (u32)16;
         _needEpi = false;
         _epiM = (i32)0;
         _rtTrip = false;
@@ -645,6 +647,8 @@ class OptProfile
         {
         return _laneTy;
         }
+    u32 vecBytes(void) { return _vecBytes; }
+    void setVecBytes(u32 b) { _vecBytes = b; }
     u32 vw(void)
         {
         return _vw;
@@ -12897,7 +12901,8 @@ class OptProfile
         u32 lw = irWidth(laneTy);
         if (lw == (u32)0)
             return (VecCand*)0;
-        u32 vw = (u32)16 / lw;
+        u32 vb = vectorBytes();
+        u32 vw = vb / lw;
         // A partial final vector would need a scalar tail, which this does not
         // emit — so the trip count has to divide evenly.
         // Trailing test: the non-zero-start refusal, folded in to avoid a
@@ -12930,6 +12935,7 @@ class OptProfile
         c.setLoop(H, B, E);
         c.setIv(ivPhi, ivNext, guard, iv);
         c.setLane(laneTy, vw);
+        c.setVecBytes(vb);
         c.setPre(PH);
         c.setEpi(_vrMapRT || epiM != n, epiM);
         c.setRuntime(_vrMapRT, (IROperand*)guard.ops().get((u32)1));
@@ -13208,7 +13214,8 @@ class OptProfile
         u32 lw = irWidth(laneTy);
         if (lw == (u32)0)
             return (VecCand*)0;
-        u32 vw = (u32)16 / lw;
+        u32 vb = vectorBytes();
+        u32 vw = vb / lw;
         // The trailing test is the non-zero-start refusal (see
         // vecIvStartsAtZero); folded into this condition rather than written as
         // its own statement, because a separate branch costs frame slots and
@@ -13258,6 +13265,7 @@ class OptProfile
         c.setLoop(H, B, E);
         c.setIv(ivPhi, ivNext, guard, iv);
         c.setLane(laneTy, vw);
+        c.setVecBytes(vb);
         c.setReduction(accPhi, accNext, acc, elemOp.val(), initOp, PH);
         c.setDivMagic(_vrDivMagic);
         c.setIota(_profile.iota() && _vrUsesIv);
@@ -13842,7 +13850,7 @@ class OptProfile
             vecMapSetBound(c);
             }
         _vecTy = new String();
-        _vecTy.appendFormat("Vec(%s)", c.laneTy().cString());
+        _vecTy = vecTyOf(c.laneTy(), c.vecBytes());
         _vecMap = new Map();
         _vecSplat = new Map();
         _vecEntryCache = new Map();
@@ -15358,7 +15366,8 @@ class OptProfile
         u32 lw = irWidth(laneTy);
         if (lw == (u32)0)
             return (VecCand*)0;
-        u32 vw = (u32)16 / lw;
+        u32 vb = vectorBytes();
+        u32 vw = vb / lw;
         if (vw < (u32)2 || (_mmN % (i32)vw) != (i32)0)
             return (VecCand*)0;
 
@@ -15366,6 +15375,7 @@ class OptProfile
         c.setLoop(H, B, _mmE);
         c.setIv(_mmIvPhi, ivNext, _mmGuard, iv);
         c.setLane(laneTy, vw);
+        c.setVecBytes(vb);
         c.setReduction(_mmAccPhi, (IRInsn*)0, acc, elem, seedOp, _mmPH);
         c.setMaxMin(isMax, TH, L);
         return c;
@@ -16102,7 +16112,7 @@ class OptProfile
         IRBlock* PH = c.pre();
         IRBlock* L = c.mmLatch();
         String* vecTy = new String();
-        vecTy.appendFormat("Vec(%s)", c.laneTy().cString());
+        vecTy = vecTyOf(c.laneTy(), c.vecBytes());
 
         // Creation order matters: fresh values take ids in creation (seq)
         // order, and the original allocates vacc, vload, vnext, ivNext.
@@ -16308,20 +16318,23 @@ class OptProfile
     // Named per FUNCTION. An initialised data global is emitted with .globl, so
     // one fixed name would put the same label in every object that vectorises
     // an iota loop and the link would refuse the second.
-    String* vecIotaSymbol(String* laneTy, IRFunc* fn)
+    String* vecIotaSymbol(String* laneTy, u32 vecBytes, IRFunc* fn)
         {
         u32 lw = vecLaneWidth(laneTy);
         String* nm = new String();
         nm.appendFormat("__xtv_iota_%s_%u", fn.name().cString(), lw);
+        // A 32-byte table gets its own name, so it never collides with the
+        // 16-byte one; the 16-byte name is unchanged.
+        if (vecBytes != (u32)16)
+            nm.appendCString("_w32");
         if (symNamed(_vecModule, nm) != (IRSymbol*)0)
             return nm;
-        u32 lanes = (u32)16 / lw;
+        u32 lanes = vecBytes / lw;
         Array* bytes = new Array();
         for (u32 l = (u32)0; l < lanes; l = l + (u32)1)
             for (u32 k = (u32)0; k < lw; k = k + (u32)1)
                 bytes.add((Object*)Number.with((l >> ((u32)8 * k)) & (u32)0xFF)); // LE
-        String* vt = new String();
-        vt.appendFormat("Vec(%s)", laneTy.cString());
+        String* vt = vecTyOf(laneTy, vecBytes);
         IRSymbol* sym = IRSymbol.dataGlobal(nm, vt);
         // Read-only, compiler-made, never address-taken beyond the VLoad here.
         sym.clearEscapes();
@@ -16329,6 +16342,28 @@ class OptProfile
         sym.setBytes(bytes);
         _vecModule.addSym(sym);
         return nm;
+        }
+
+    // The vector width this target's profile allows: 16 bytes, or 32 under
+    // -mavx2 (SIMD step 1, S2). Map, reduce and min/max loops take it; the
+    // widening forms stay at 16 until the back ends can emit 256-bit shapes.
+    u32 vectorBytes(void)
+        {
+        if (_profile != (OptProfile*)0 && _profile.vectorLaneBytes() == (u32)32)
+            return (u32)32;
+        return (u32)16;
+        }
+
+    // A vector type's text: `Vec(I32)` at 16 bytes (every existing dump is
+    // unchanged), `Vec(I32, 32)` when wider, as the reference prints it.
+    String* vecTyOf(String* lane, u32 bytes)
+        {
+        String* t = new String();
+        if (bytes == (u32)16)
+            t.appendFormat("Vec(%s)", lane.cString());
+        else
+            t.appendFormat("Vec(%s, %u)", lane.cString(), bytes);
+        return t;
         }
 
     u32 vecLaneWidth(String* laneTy)
@@ -16350,7 +16385,7 @@ class OptProfile
         IRBlock* E = c.e();
         IRBlock* PH = c.pre();
         _vecTy = new String();
-        _vecTy.appendFormat("Vec(%s)", c.laneTy().cString());
+        _vecTy = vecTyOf(c.laneTy(), c.vecBytes());
         _vecMap = new Map();
         _vecSplat = new Map();
         _vecBody = new Array();
@@ -16589,7 +16624,7 @@ class OptProfile
         // arithmetic on a loaded element does.
         if (c.isIota() && c.pre() != (IRBlock*)0)
             {
-            String* nm = vecIotaSymbol(c.laneTy(), _vecFn);
+            String* nm = vecIotaSymbol(c.laneTy(), c.vecBytes(), _vecFn);
             String* pty = new String();
             pty.appendFormat("Ptr(%s, unbanked)", c.laneTy().cString());
             IRValue* iotaPtr = new IRValue(pty);

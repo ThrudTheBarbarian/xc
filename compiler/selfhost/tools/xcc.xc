@@ -4968,9 +4968,12 @@ void applyOptFlags(DriverOptions* d, OptProfile* p)
     Opt.setDceTrace(p, d.dceTrace());
     // The vector level only ever reaches an x86-64 profile (checkCapabilities
     // refuses it elsewhere); read by the vectoriser from S2 on.
+    // Not yet: until the back end emits ymm (SIMD step 1, S3), code generation
+    // stays at 128 bits whatever the level, as the reference's cg does; the
+    // 256-bit IR is compared through opt-diff (OPT_SIMD=avx2) meanwhile.
     String* simd = d.caps().simd();
     if (simd != (String*)0)
-        p.setVectorLaneBytes(simd.equals(String.withCString("avx2")) ? (u32)32 : (u32)16);
+        p.setVectorLaneBytes((u32)16);
 }
 
 #if ARCH_win64

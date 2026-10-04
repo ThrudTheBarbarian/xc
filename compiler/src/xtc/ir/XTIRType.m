@@ -121,6 +121,7 @@ BOOL XTIRTypeKindIsFloating(XTIRTypeKind kind)
         _kind = XTIRTypeKindVec;
         _pointeeType = lane; // reuse pointeeType to carry the lane type
         _windowId = XTIRWindowUnbanked;
+        _vecBytes = 16;
         }
     return self;
     }
@@ -132,7 +133,7 @@ BOOL XTIRTypeKindIsFloating(XTIRTypeKind kind)
         return self.layout ? self.layout.size : 0;
         }
     if (self.kind == XTIRTypeKindVec)
-        return 16; // 128-bit
+        return _vecBytes ? _vecBytes : 16; // 128-bit, or 256 under -mavx2
     return XTIRTypeKindByteWidth(self.kind);
     }
 
@@ -145,7 +146,7 @@ BOOL XTIRTypeKindIsFloating(XTIRTypeKind kind)
     case XTIRTypeKindAgg:
         return [[XTIRType alloc] initWithAggLayout:self.layout];
     case XTIRTypeKindVec:
-        return [XTIRType vecWithLane:self.pointeeType];
+        return [XTIRType vecWithLane:self.pointeeType bytes:self.byteWidth];
     default:
         return [[XTIRType alloc] initWithKind:self.kind];
         }
@@ -166,6 +167,9 @@ BOOL XTIRTypeKindIsFloating(XTIRTypeKind kind)
         {
         return self.layout == other.layout || [self.layout isEqual:other.layout];
         }
+    if (self.kind == XTIRTypeKindVec)
+        return self.byteWidth == other.byteWidth
+               && (self.pointeeType == other.pointeeType || [self.pointeeType isEqual:other.pointeeType]);
     return YES;
     }
 
@@ -243,6 +247,13 @@ BOOL XTIRTypeKindIsFloating(XTIRTypeKind kind)
     {
     XTIRType* t = [super alloc];
     return [t initVecWithLane:lane];
+    }
+
++ (instancetype)vecWithLane:(XTIRType*)lane bytes:(uint32_t)bytes
+    {
+    XTIRType* t = [[super alloc] initVecWithLane:lane];
+    t->_vecBytes = bytes ? bytes : 16;
+    return t;
     }
 
 @end

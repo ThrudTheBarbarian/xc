@@ -70,6 +70,10 @@ LIBARGS=()
 # Per-pass comparison: the oracle stops after the named pass, and so does the
 # port. Same name on both sides — the pipeline's own pass names.
 STOP=${XTC_OPT_STOP_AFTER:-}
+# OPT_SIMD=avx2: compare the 256-bit vectorised IR (x86-64's -mavx2), which
+# both compilers produce on --dump-opt-ir before the back ends can emit it.
+SIMDARGS=()
+[ -n "${OPT_SIMD:-}" ] && SIMDARGS=(--simd="$OPT_SIMD")
 STOPARGS=()
 [ -n "$STOP" ] && STOPARGS=(--stop-after "$STOP")
 
@@ -92,12 +96,12 @@ for f in $FILES; do
          "$f" -o "$WORK/pre.ir" >/dev/null 2>&1 || [ ! -s "$WORK/pre.ir" ]; then
         oracle=$((oracle+1)); continue
     fi
-    if ! XTIR_OPT_STOP_AFTER="$STOP" "$CG" "-O$LEVEL" --dump-opt-ir -q "$WORK/pre.ir" \
+    if ! XTIR_OPT_STOP_AFTER="$STOP" "$CG" "-O$LEVEL" ${SIMDARGS[@]+"${SIMDARGS[@]}"} --dump-opt-ir -q "$WORK/pre.ir" \
          -o "$WORK/oracle.ir" >/dev/null 2>&1 \
        || [ ! -s "$WORK/oracle.ir" ]; then
         oracle=$((oracle+1)); continue
     fi
-    "$WORK/xtopt" "$WORK/pre.ir" -m "$TARGET" "-O$LEVEL" ${STOPARGS[@]+"${STOPARGS[@]}"} \
+    "$WORK/xtopt" "$WORK/pre.ir" -m "$TARGET" "-O$LEVEL" ${STOPARGS[@]+"${STOPARGS[@]}"} ${SIMDARGS[@]+"${SIMDARGS[@]}"} \
         -o "$WORK/port.ir" >/dev/null 2>&1
     rc=$?
     if [ $rc -eq 3 ]; then

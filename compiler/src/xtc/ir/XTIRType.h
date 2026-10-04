@@ -77,6 +77,12 @@ BOOL XTIRTypeKindIsFloating(XTIRTypeKind kind);
 
 /// A 128-bit SIMD vector whose lanes are `lane` (stored in pointeeType).
 + (instancetype)vecWithLane:(XTIRType*)lane;
+// A vector of `bytes` total (16 = 128-bit, 32 = 256-bit AVX2). vecWithLane: is
+// 16. Only the vectoriser makes wider ones, when the target profile allows it
+// (SIMD step 1, S2), and only an x86-64 back end with -mavx2 receives them.
++ (instancetype)vecWithLane:(XTIRType*)lane bytes:(uint32_t)bytes;
+// The total width of a Vec type in bytes (16 or 32); 0 for any other kind.
+@property(nonatomic, readonly) uint32_t vecBytes;
 
 @end
 

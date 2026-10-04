@@ -106,6 +106,12 @@
         return [NSString stringWithFormat:@"Agg(%lu)", (unsigned long)idx];
         }
     case XTIRTypeKindVec:
+        // A 128-bit vector keeps its old spelling, so every existing dump is
+        // unchanged; a wider one names its width (`Vec(I32, 32)`).
+        if (t.byteWidth != 16)
+            return [NSString stringWithFormat:@"Vec(%@, %u)",
+                                              t.pointeeType ? [self stringFromType:t.pointeeType module:mod] : @"?",
+                                              t.byteWidth];
         return [NSString stringWithFormat:@"Vec(%@)",
                                           t.pointeeType ? [self stringFromType:t.pointeeType module:mod] : @"?"];
         }

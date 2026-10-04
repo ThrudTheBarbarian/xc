@@ -50,6 +50,7 @@
 @property(nonatomic) XTIRValueId ivId;
 @property(nonatomic) XTIRType* laneType; // i32/u32
 @property(nonatomic) NSUInteger vw;      // lanes per vector (4 for i32)
+@property(nonatomic) NSUInteger vecBytes; // vector width: 16, or 32 under -mavx2 (S2)
 // Reduction candidates only (isReduction = YES). The loop carries a second
 // (accumulator) phi whose back-edge value is `accNext = Add(acc, elem)`, where
 // `elem` is an elementwise (iv-indexed) value. The map fields above still
@@ -267,19 +268,21 @@ static BOOL resolveConstInt(XTIROperand* op, NSDictionary<NSNumber*, XTIRInsn*>*
 // two definitions of one label is a hard error in the in-house assemblers.
 static XTIRModule* sVecModule = nil;
 
-static XTIRSymbolId xtvIotaSymbol(XTIRType* laneType, XTIRFunction* fn)
+static XTIRSymbolId xtvIotaSymbol(XTIRType* laneType, NSUInteger vecBytes, XTIRFunction* fn)
     {
     // Named per FUNCTION, not per module. An initialised data global is emitted
     // with .globl, so one fixed name would put the same label in every object
     // that vectorises an iota loop and the link would refuse the second. A
     // function name is already unique across the link, so this is too.
-    NSString* nm = [NSString stringWithFormat:@"__xtv_iota_%@_%lu", fn.name,
-                             (unsigned long)laneType.byteWidth];
+    // A 32-byte vector's table gets its own name (suffix `_w32`), so a 16- and a
+    // 32-byte one never collide; the 16-byte name is unchanged.
+    NSString* nm = [NSString stringWithFormat:@"__xtv_iota_%@_%lu%@", fn.name,
+                             (unsigned long)laneType.byteWidth, vecBytes == 16 ? @"" : @"_w32"];
     for (NSUInteger i = 0; i < sVecModule.symbols.count; i++)
         if ([sVecModule.symbols[i].name isEqualToString:nm])
             return (XTIRSymbolId)i;
-    NSUInteger lanes = 16 / laneType.byteWidth;
-    NSMutableData* bytes = [NSMutableData dataWithLength:16];
+    NSUInteger lanes = vecBytes / laneType.byteWidth;
+    NSMutableData* bytes = [NSMutableData dataWithLength:vecBytes];
     uint8_t* b = (uint8_t*)bytes.mutableBytes;
     for (NSUInteger l = 0; l < lanes; l++)
         for (NSUInteger k = 0; k < laneType.byteWidth; k++)
@@ -287,7 +290,7 @@ static XTIRSymbolId xtvIotaSymbol(XTIRType* laneType, XTIRFunction* fn)
     // A Vec type: exactly 16 bytes, not an Agg (which would go through the
     // aggregate-initialiser relay) and not a float (which would be re-encoded).
     XTIRSymbol* sym = [XTIRSymbol dataGlobalWithName:nm
-                                                type:[XTIRType vecWithLane:laneType]
+                                                type:[XTIRType vecWithLane:laneType bytes:(uint32_t)vecBytes]
                                             volatile:NO
                                              escapes:NO
                                            taskLocal:NO];
@@ -1150,7 +1153,8 @@ static BOOL xtvIvStartConst(XTIRInsn* ivPhi, XTIRBlock* latch,
         if (!ok || !sawLoad || !sawStore || !laneType)
             continue;
 
-        NSUInteger vw = 16 / laneType.byteWidth; // 4 for i32
+        NSUInteger vb = [self vectorBytes];
+        NSUInteger vw = vb / laneType.byteWidth; // 4 for i32 at 16 bytes
         if (vw < 2)
             continue;
         // A non-zero start is VECTORISED, not refused: the epilogue below works
@@ -1212,6 +1216,7 @@ static BOOL xtvIvStartConst(XTIRInsn* ivPhi, XTIRBlock* latch,
         c.ivId = ivId;
         c.laneType = laneType;
         c.vw = vw;
+        c.vecBytes = vb;
         c.preheader = preheader;
         c.epiN = N;
         c.epiM = epiM_;
@@ -1465,10 +1470,20 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
     return m.valueId;
     }
 
+// The vector width this target's profile allows: 16 bytes, or 32 under
+// -mavx2 (SIMD step 1, S2). Map, reduce and min/max loops take it; the
+// widening forms (u8/u16 sums and products) stay at 16 until the back ends
+// can emit their 256-bit shapes.
+- (NSUInteger)vectorBytes
+    {
+    NSUInteger b = (self.profile ?: [XTIROptTargetProfile conservativeProfile]).vectorLaneBytes;
+    return b == 32 ? 32 : 16;
+    }
+
 - (void)apply:(XTVecCand*)c inFunction:(XTIRFunction*)fn
     {
     XTIRBlock* B = c.B;
-    XTIRType* vecTy = [XTIRType vecWithLane:c.laneType];
+    XTIRType* vecTy = [XTIRType vecWithLane:c.laneType bytes:(uint32_t)c.vecBytes];
 
     // ── Epilogue, part 1: clone the scalar loop BEFORE anything below mutates
     // it. The vector transform overwrites B's instructions in place, so the
@@ -2172,7 +2187,8 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
         if (accNext.result.type.kind != laneType.kind)
             continue;
 
-        NSUInteger vw = 16 / laneType.byteWidth; // 4 for i32
+        NSUInteger vb = [self vectorBytes];
+        NSUInteger vw = vb / laneType.byteWidth; // 4 for i32 at 16 bytes
         if (vw < 2)
             continue;
 
@@ -2241,6 +2257,7 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
         c.ivId = ivId;
         c.laneType = laneType;
         c.vw = vw;
+        c.vecBytes = vb;
         c.isReduction = YES;
         c.isIota = (wantIota && usesIv);
         c.divMagic = divMagic;
@@ -2298,7 +2315,7 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
             }
         [c.guard replaceOperands:gops];
         }
-    XTIRType* vecTy = [XTIRType vecWithLane:c.laneType];
+    XTIRType* vecTy = [XTIRType vecWithLane:c.laneType bytes:(uint32_t)c.vecBytes];
 
     XTIRValue* (^newVal)(XTIRType*) = ^XTIRValue*(XTIRType* ty) {
       XTIRValueId rid = [fn allocateValueId];
@@ -2389,7 +2406,7 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
     // the lane-index vector needs no lane-insert sequence and no literal pool.
     if (c.isIota && PH)
         {
-        XTIRSymbolId iotaSym = xtvIotaSymbol(c.laneType, fn);
+        XTIRSymbolId iotaSym = xtvIotaSymbol(c.laneType, c.vecBytes, fn);
         XTIRValue* iotaPtr = newVal([XTIRType ptrToType:c.laneType window:0]);
         [PH.instructions addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpAddrOf
                                                              result:iotaPtr
@@ -2973,7 +2990,8 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
 
         XTIROperand* seedOp = (accPhi.operands[0].blockRef == L) ? accPhi.operands[3] : accPhi.operands[1];
 
-        NSUInteger vw = 16 / laneType.byteWidth;
+        NSUInteger vb = [self vectorBytes];
+        NSUInteger vw = vb / laneType.byteWidth;
         // The iteration space is [ivStart, N), so it is the trip LENGTH that must
         // be a whole number of vectors — not the bound. Gating on `N % vw` was
         // right only for a zero start, and silently wrong for any other: with
@@ -2999,6 +3017,7 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
         c.ivId = ivId;
         c.laneType = laneType;
         c.vw = vw;
+        c.vecBytes = vb;
         c.accPhi = accPhi;
         c.accId = accId;
         c.elemId = elemId;
@@ -3016,7 +3035,7 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
 - (void)applyMaxMin:(XTVecCand*)c inFunction:(XTIRFunction*)fn
     {
     XTIRBlock *B = c.B, *H = c.H, *E = c.E, *PH = c.preheader, *L = c.mmLatch;
-    XTIRType* vecTy = [XTIRType vecWithLane:c.laneType];
+    XTIRType* vecTy = [XTIRType vecWithLane:c.laneType bytes:(uint32_t)c.vecBytes];
     XTIRValue* (^newVal)(XTIRType*) = ^XTIRValue*(XTIRType* ty) {
       XTIRValueId rid = [fn allocateValueId];
       XTIRValue* v = [[XTIRValue alloc] initWithValueId:rid
