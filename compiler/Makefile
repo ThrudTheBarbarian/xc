@@ -780,6 +780,11 @@ build/tls/tlsshim.o: $(TLS_SRC)/tlsshim.c | build/tls
 build/tls:
 	@mkdir -p $@
 
+# The third-party tree is the SIBLING of the install root, which is where the
+# compiler looks for it (/opt/xcc/<version> -> /opt/xcc/3p). It used to be
+# /opt/xcc/3p whatever PREFIX said, so a `make install PREFIX=<scratch>` from a
+# clone replaced the shared tls libraries the installed compilers use.
+THIRDPARTY ?= $(abspath $(PREFIX)/..)/3p
 # install-tls — the compiler INSTALLS the tls 3p lib to /opt/xcc/3p (decision A):
 # the host-linkable shim (for xcc-sign and other host tools) plus the xtc
 # libtls (for `#use <tls>` in xtc programs, built by install.sh via xcc).
@@ -789,10 +794,10 @@ build/tls:
 install-tls: $(XTC_BIN) $(XTC_FE_BIN) $(XTCG_ARM64_BIN) $(XTCLN_ARM64_BIN)
 	@if [ ! -f "$(TLS_SRC)/tlsshim.c" ]; then \
 	  echo "install-tls: no tls source at $(TLS_SRC) — skipped"; exit 0; fi
-	@mkdir -p /opt/xcc/3p/tls/host
-	$(CC) -O2 -I$(MBEDTLS_PREFIX)/include -I$(TLS_SRC) -c $(TLS_SRC)/tlsshim.c -o /opt/xcc/3p/tls/host/tlsshim.o
-	$(CP) $(TLS_SRC)/tlsshim.h /opt/xcc/3p/tls/host/
-	@echo "  3p   tls host shim -> /opt/xcc/3p/tls/host"
+	@mkdir -p $(THIRDPARTY)/tls/host
+	$(CC) -O2 -I$(MBEDTLS_PREFIX)/include -I$(TLS_SRC) -c $(TLS_SRC)/tlsshim.c -o $(THIRDPARTY)/tls/host/tlsshim.o
+	$(CP) $(TLS_SRC)/tlsshim.h $(THIRDPARTY)/tls/host/
+	@echo "  3p   tls host shim -> $(THIRDPARTY)/tls/host"
 	@# install.sh runs from $(TLS_SRC), whose cwd holds an `xc/` subdir — the
 	@# xtc SOURCE, not a support tree. An in-tree xcc, having no support beside
 	@# its own binary, would fall through to the cwd probe, match `./xc`, and
@@ -802,7 +807,7 @@ install-tls: $(XTC_BIN) $(XTC_FE_BIN) $(XTCG_ARM64_BIN) $(XTCLN_ARM64_BIN)
 	@# compiler, and `--emit-lib` for arm64 and x86_64 is all this step needs.
 	@if [ -x "$(BINDIR)/xcc" ]; then TLSXCC="$(BINDIR)/xcc"; TLSHOME="$(PREFIX)"; \
 	 else echo "install-tls: no installed xcc at $(BINDIR) — run make install first"; exit 1; fi; \
-	 XCC="$$TLSXCC" XCC_HOME="$$TLSHOME" sh $(TLS_SRC)/install.sh || \
+	 XCC="$$TLSXCC" XCC_HOME="$$TLSHOME" DEST="$(THIRDPARTY)/tls" sh $(TLS_SRC)/install.sh || \
 	  echo "  NOTE tls xtc-lib install reported an issue (host shim installed)"
 
 
