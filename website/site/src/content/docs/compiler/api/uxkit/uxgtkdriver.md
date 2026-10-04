@@ -84,6 +84,23 @@ No `GdkRectangle` or `cairo_t*` crosses into portable code. For the same
 reason, the clip stack is `ux_gtk_clip` / `ux_gtk_clip_end` instead of a
 context object.
 
+## Linking an app for Linux
+
+The shim is C, so for an app linked by `xcc` itself it is a shared library,
+`libUXGtk.so`. `frameworks/uxkit/tools/build_libuxgtk.sh` builds it with the
+machine's C compiler against its GTK 4, on a Linux machine or, from a Mac, on the
+`UX_LINUX_HOST` named in `build.env`. Then:
+
+```sh
+xcc -A x86_64 -dynamic app.xc -L <dir> -lUXGtk -lgtk-4 -lGL
+```
+
+`-dynamic` writes a glibc executable that loads GTK 4 and the other libraries at
+run time, and `-l` finds each `lib<name>.so` on the `-L` path or in the system's
+library directories. To link on a Mac, `--with-link-inputs` also copies the Linux
+machine's `libgtk-4.so` and `libGL.so` into the output directory. The app needs
+`libUXGtk.so` beside it, or on its library path, when it runs.
+
 ## Testing
 
 The gates are `run_gtk_real.sh`, `run_gtk_loop.sh`, `run_gtk_mouse.sh`,
