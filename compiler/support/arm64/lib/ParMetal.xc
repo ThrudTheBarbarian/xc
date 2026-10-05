@@ -32,6 +32,18 @@ struct ParMTLSize
     u64 d;
     }
 
+// Darwin's monotonic clock, in nanoseconds.
+u64 clock_gettime_nsec_np(i32 clock);
+
+// Each block seen so far, by its name (the parName() string): the device it
+// was set to (0 auto, 1 CPU, 2 GPU) and, for auto, what each device took.
+u8* gParBlock[64];
+i32 gParSet[64];
+i64 gParGpuUs[64];
+i64 gParCpuUs[64];
+u32 gParBlocks;
+i32 gParAll;            // Par.device("par", …): every block without its own
+
 // The kernels compiled so far: each gpuSource() pointer and its pipeline.
 pointer gParSrc[64];
 pointer gParPso[64];
@@ -58,17 +70,99 @@ class ParMetal
     static parObjcName_t* _sel;
     static pointer _dev;
     static pointer _queue;
-    static i32 _mode;            // 0 unread, 1 CPU, 2 GPU (statics start at 0)
+    static i32 _mode;            // XC_PAR: 0 unread, 1 cpu, 2 gpu, 3 auto, 4 unset
+    static i64 _lastUs;          // the last GPU run, without building its pipeline
 
-    // XC_PAR=gpu sends every block that has a kernel to the GPU.
-    static bool wanted(void)
+    static i64 nowUs(void)
+        {
+        return (i64)(clock_gettime_nsec_np((i32)6) / (u64)1000); // CLOCK_MONOTONIC
+        }
+
+    static i32 parseDevice(u8* c)
+        {
+        if (parSameName(c, "cpu"))
+            return (i32)1;
+        if (parSameName(c, "gpu"))
+            return (i32)2;
+        return (i32)0; // "auto", or anything else
+        }
+
+    // The record for a block, by its name string (made on first sight).
+    static u32 slot(u8* name)
+        {
+        for (u32 i = (u32)0; i < gParBlocks; i = i + (u32)1)
+            if (gParBlock[i] == name || parSameName(gParBlock[i], name))
+                return i;
+        if (gParBlocks >= (u32)64)
+            return (u32)63;
+        u32 i = gParBlocks;
+        gParBlock[i] = name;
+        gParSet[i] = (i32)-1;
+        gParGpuUs[i] = (i64)-1;
+        gParCpuUs[i] = (i64)-1;
+        gParBlocks = gParBlocks + (u32)1;
+        return i;
+        }
+
+    static void setDevice(u8* block, u8* choice)
+        {
+        if (parSameName(block, "par"))
+            {
+            gParAll = parseDevice(choice) + (i32)1; // 0 = not set
+            return;
+            }
+        gParSet[slot(block)] = parseDevice(choice);
+        }
+
+    static bool reporting(void)
+        {
+        return Platform.env(String.withCString("XC_PAR_REPORT")).byteLength() > (u32)0;
+        }
+
+    // 1 CPU, 2 GPU. XC_PAR first, then the block's own setting, then the one
+    // for every block, then auto: no GPU version or a small range stays on
+    // the CPU; otherwise run each device once and keep the faster.
+    static i32 choose(ParChunk* proto, i64 n)
         {
         if (_mode == (i32)0)
             {
             String* v = Platform.env(String.withCString("XC_PAR"));
-            _mode = v.equals(String.withCString("gpu")) ? (i32)2 : (i32)1;
+            _mode = v.equals(String.withCString("cpu")) ? (i32)1
+                  : v.equals(String.withCString("gpu")) ? (i32)2
+                  : v.equals(String.withCString("auto")) ? (i32)3 : (i32)4;
             }
-        return _mode == (i32)2;
+        if (_mode == (i32)1 || _mode == (i32)2)
+            return _mode;
+        u32 i = slot(proto.parName());
+        i32 dev = gParSet[i];
+        if (_mode == (i32)4 && dev < (i32)0 && gParAll > (i32)0)
+            dev = gParAll - (i32)1;
+        if (_mode == (i32)4 && dev > (i32)0)
+            return dev;
+        u8* src = proto.gpuSource();
+        if (src == (u8*)0 || src[0] == (u8)0 || n < (i64)65536)
+            return (i32)1;
+        if (gParGpuUs[i] < (i64)0)
+            return (i32)2;
+        if (gParCpuUs[i] < (i64)0)
+            return (i32)1;
+        return gParGpuUs[i] <= gParCpuUs[i] ? (i32)2 : (i32)1;
+        }
+
+    // What a run took, for auto's comparison (the first of each is kept).
+    static void ranOnCpu(ParChunk* proto, i64 us)
+        {
+        u32 i = slot(proto.parName());
+        bool decided = gParGpuUs[i] >= (i64)0 && gParCpuUs[i] < (i64)0;
+        if (gParCpuUs[i] < (i64)0)
+            gParCpuUs[i] = us;
+        if (reporting())
+            {
+            Log.info("par: %s: %ld us on the CPU", gParBlock[i], us);
+            if (decided)
+                Log.info("par: %s: auto picks the %s (GPU %ld us, CPU %ld us)", gParBlock[i],
+                         gParGpuUs[i] <= gParCpuUs[i] ? "GPU" : "CPU", gParGpuUs[i], gParCpuUs[i]);
+            }
         }
 
     // XC_PAR_REPORT=1: why a block stays on the CPU. False, for `return`.
@@ -166,6 +260,7 @@ class ParMetal
         pointer pso = pipeline(src);
         if (pso == (pointer)0)
             return cpu("its GPU version did not compile");
+        i64 started = nowUs();
 
         // The header line.
         u8* obj = (u8*)(pointer)proto;
@@ -234,7 +329,10 @@ class ParMetal
 
         i64 n = hi - lo;
         i64 per = (i64)1;
-        i64 most = (i64)1 << (i64)22;
+        // One item per thread, unless the range is huge — or the block has
+        // reductions, whose per-thread partials the host folds: then at most
+        // 65536 threads, each taking a run of items.
+        i64 most = nred > (u32)0 ? (i64)65536 : (i64)1 << (i64)22;
         if (n > most)
             per = (n + most - (i64)1) / most;
         i64 threads = (n + per - (i64)1) / per;
@@ -312,15 +410,17 @@ class ParMetal
             }
         if (nred > (u32)0)
             {
+            // One chunk to carry each thread's partials into merge(), which
+            // only reads them: no allocation per thread.
+            ParChunk* c = proto.copyChunk();
+            u8* cb2 = (u8*)(pointer)c;
+            u8* parts[16];
+            for (u32 i = (u32)0; i < nred; i = i + (u32)1)
+                parts[i] = (u8*)send0(reds[i], sel("contents"));
             for (i64 t = (i64)0; t < threads; t = t + (i64)1)
                 {
-                ParChunk* c = proto.copyChunk();
-                u8* cb2 = (u8*)(pointer)c;
                 for (u32 i = (u32)0; i < nred; i = i + (u32)1)
-                    {
-                    u8* part = (u8*)send0(reds[i], sel("contents"));
-                    memcpy((pointer)(cb2 + redOff[i]), (pointer)(part + t * redSize[i]), (u64)redSize[i]);
-                    }
+                    memcpy((pointer)(cb2 + redOff[i]), (pointer)(parts[i] + t * redSize[i]), (u64)redSize[i]);
                 proto.merge(c);
                 }
             }
@@ -328,14 +428,21 @@ class ParMetal
             send0(reds[i], sel("release"));
         send0(args, sel("release"));
         send0(spanB, sel("release"));
+        // For auto: the whole run (copies in and out included), without the
+        // one-off pipeline build.
+        u32 bi = slot(proto.parName());
+        i64 took = nowUs() - started;
+        if (gParGpuUs[bi] < (i64)0)
+            gParGpuUs[bi] = took;
         // XC_PAR_REPORT=1: say where each block ran (par-blocks.md §8), and
         // how long the GPU itself spent on it.
-        if (Platform.env(String.withCString("XC_PAR_REPORT")).byteLength() > (u32)0)
+        if (reporting())
             {
             double t0 = ((parMsgD_t*)_send)(cb, sel("GPUStartTime"));
             double t1 = ((parMsgD_t*)_send)(cb, sel("GPUEndTime"));
             i64 us = (i64)((t1 - t0) * 1000000.0);
-            Log.info("par: %ld items on the GPU, %ld threads, %ld us of GPU time", n, threads, us);
+            Log.info("par: %s: %ld items on the GPU, %ld threads, %ld us of GPU time (%ld us in all)",
+                     gParBlock[bi], n, threads, us, took);
             }
         return true;
         }

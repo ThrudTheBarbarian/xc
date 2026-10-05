@@ -74,8 +74,8 @@ the calling thread.
 
 ## Running on the GPU
 
-**From 0.67, macOS on Apple silicon.** `XC_PAR=gpu` in the environment runs every
-block that can go there on the GPU through Metal. The compiler gives each block a
+**From 0.67, macOS on Apple silicon.** A block that can run on the GPU through
+Metal does so when that is faster. The compiler gives each block a
 GPU version of its loop, and a program needs no extra flags or libraries.
 Results are the same as on the CPU: integer reductions match exactly, because
 the GPU's partial results are combined in the same order the CPU combines its
@@ -89,7 +89,28 @@ floating point), or calls a helper that takes a pointer or an array or uses a
 global itself, runs on the CPU. `XC_PAR_REPORT=1` also says why a block stayed
 on the CPU. `XC_PAR_REPORT=1` prints one line for each block that ran on the GPU.
 
-Choosing the device automatically, and NVIDIA GPUs, come later.
+### Which device
+
+By default each block's device is chosen automatically. A block without a GPU
+version, or over fewer than 65536 items, runs on the CPU. Otherwise the block runs once on
+each device, and from then on wherever it was faster, so a block that does little
+work per item (where copying its arrays to the GPU costs more than the work)
+settles on the CPU, and a heavy one on the GPU. The comparison leaves out building
+the block's GPU version, which happens once.
+
+To choose instead:
+
+- `XC_PAR=cpu`, `XC_PAR=gpu` or `XC_PAR=auto` in the environment, for every
+  block in one run;
+- `Par.device("name", "gpu")` in the program, for one block by its name (`par
+  name { … }`, or `file:line` for an unnamed block), or `Par.device("par", …)`
+  for every block without its own choice. An app that keeps this in its Settings
+  passes the value on to `Par.device`.
+
+`XC_PAR_REPORT=1` prints where each block ran, what it took, why a block stayed
+on the CPU, and what `auto` decided.
+
+NVIDIA GPUs come later.
 
 ## What a body may contain
 

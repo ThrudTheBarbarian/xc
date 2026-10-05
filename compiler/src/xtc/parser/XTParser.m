@@ -3231,7 +3231,13 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
                 stepExplicit = YES;
                 }
             [self expect:XTTokenRParen];
+            // The loop variable is a local of the body: a block literal or a
+            // `par` inside it captures it like any other.
+            [self blkPushScope];
+            if (loopVarName)
+                [self blkBind:loopVarName.value type:loopType];
             XTASTNode* body = [self checkBlockOpen] ? [self parseBlock] : [self parseStatement];
+            [self blkPopScope];
 
             // Direction decision. Resolve the four cases:
             //   stepExplicit          → direction = sign(stepValue)
@@ -3353,7 +3359,13 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
             }
 
         [self expect:XTTokenRParen];
+        // The loop variable is a local of the body: a block literal or a
+        // `par` inside it captures it like any other.
+        [self blkPushScope];
+        if (loopVarName)
+            [self blkBind:loopVarName.value type:loopType];
         XTASTNode* body = [self checkBlockOpen] ? [self parseBlock] : [self parseStatement];
+        [self blkPopScope];
 
         XTVariableDeclNode* loopVar = [[XTVariableDeclNode alloc] initWithName:loopVarName ? loopVarName.value : @"_"
                                                                           type:loopType
@@ -3409,7 +3421,13 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
             }
         }
 
+    // The loop variable is a local of the body: a block literal or a
+    // `par` inside it captures it like any other.
+    [self blkPushScope];
+    if ([init isKindOfClass:[XTVariableDeclNode class]])
+        [self blkBind:((XTVariableDeclNode*)init).varName type:((XTVariableDeclNode*)init).declaredType];
     XTASTNode* body = [self checkBlockOpen] ? [self parseBlock] : [self parseStatement];
+    [self blkPopScope];
 
     XTForCStyleNode* node = [[XTForCStyleNode alloc] initWithLoopInit:init condition:cond increment:incr body:body location:loc];
     node.forceUnroll = forceUnroll;

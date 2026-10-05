@@ -1204,6 +1204,20 @@ NS_ASSUME_NONNULL_END
                                                              body:[[XTBlockNode alloc] initWithStatements:sizeSt location:loc]
                                                          location:loc]];
         }
+    // parName(): what the block is called at run time (its device setting,
+    // reports): its source name, or file:line for an unnamed block.
+        {
+        NSString* nm = parName ?: [NSString stringWithFormat:@"%@:%lu", loc.filename.lastPathComponent ?: @"?",
+                                                             (unsigned long)loc.line];
+        XTBlockNode* b = [[XTBlockNode alloc]
+            initWithStatements:@[ [[XTReturnNode alloc]
+                                     initWithValues:@[ [[XTLiteralStringNode alloc] initWithString:nm location:loc] ]
+                                           location:loc] ]
+                      location:loc];
+        [methods addObject:[[XTMethodDeclNode alloc] initWithName:@"parName"
+                                                      returnTypes:@[ [XTPointerType pointerToType:[self.typeTable typeForName:@"u8"]] ]
+                                                       parameters:@[] isStatic:NO isVarArgs:NO body:b location:loc]];
+        }
     // gpuSource(): the kernel's Metal source. A placeholder string, unique per
     // block, that the lowering replaces with the printed kernel (or with ""
     // when the block cannot run on Metal).

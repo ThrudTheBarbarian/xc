@@ -59,6 +59,11 @@ class ParChunk : Object
         {
         return (i64)0 - (i64)1;
         }
+    // Generated too: the block's name (its source name, or file:line).
+    u8* parName(void)
+        {
+        return "par";
+        }
     // Generated too: where the global called `name` lives, and its size in
     // bytes; null and -1 for a name the block does not use.
     pointer gpuGlobal(u8* name)
@@ -80,14 +85,37 @@ class ParChunk : Object
 
 class Par
     {
+    // Run a block over [lo, hi), on the device chosen for it: the GPU or the
+    // CPU, by XC_PAR, Par.device, or (auto) by measuring both (ParMetal.xc).
     static void run(ParChunk* proto, i64 lo, i64 hi)
         {
         if (hi <= lo)
             return;
 #if ARCH_arm64 && !PLATFORM_ios && !PLATFORM_android
-        if (ParMetal.wanted() && ParMetal.run(proto, proto.gpuSource(), lo, hi))
+        if (ParMetal.choose(proto, hi - lo) == (i32)2 && ParMetal.run(proto, proto.gpuSource(), lo, hi))
             return;
+        i64 t0 = ParMetal.nowUs();
+        Par.runCpu(proto, lo, hi);
+        ParMetal.ranOnCpu(proto, ParMetal.nowUs() - t0);
+#else
+        Par.runCpu(proto, lo, hi);
 #endif
+        }
+
+    // Which device a block runs on: "cpu", "gpu" or "auto" (measure both
+    // and keep the faster), by the block's name — its source name, or
+    // file:line — or "par" for every block without its own. An app that keeps
+    // the choice in its Settings passes it on here; XC_PAR overrides all.
+    static void device(u8* block, u8* choice)
+        {
+#if ARCH_arm64 && !PLATFORM_ios && !PLATFORM_android
+        ParMetal.setDevice(block, choice);
+#endif
+        }
+
+    // The CPU path: one chunk per thread.
+    static void runCpu(ParChunk* proto, i64 lo, i64 hi)
+        {
 #if ARCH_6502 || ARCH_m68k || ARCH_wasm32
         proto.lo = lo;
         proto.hi = hi;

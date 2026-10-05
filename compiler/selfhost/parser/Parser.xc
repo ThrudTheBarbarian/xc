@@ -2455,6 +2455,30 @@ class Parser
             mb.add(bb);
             cls.add(mb);
         }
+        // parName(): what the block is called at run time (its device
+        // setting, reports): its source name, or file:line when unnamed.
+        {
+            Node* m = mkNamed((u16)nkMethodDecl, String.withCString("parName"));
+            m.setOp(String.withCString("u8*"));
+            Node* b = mk((u16)nkBlock);
+            String* nm = (String*)0;
+            if (parName != (String*)0)
+                nm = String.withString(parName);
+            else {
+                String* file = (_parTok != (Token*)0 && _parTok.file() != (String*)0) ? _parTok.file() : String.withCString("?");
+                u32 cut = (u32)0;
+                for (u32 q = (u32)0; q < file.byteLength(); q = q + (u32)1)
+                    if (file.byteAt(q) == (u8)'/') cut = q + (u32)1;
+                nm = file.substringBytes(cut, file.byteLength() - cut);
+                nm.appendByte((u8)':');
+                nm.append(String.withU32(_parTok != (Token*)0 ? _parTok.line() : (u32)0));
+            }
+            Node* ret = mk((u16)nkReturn);
+            ret.add(mkNamed((u16)nkStr, nm));
+            b.add(ret);
+            m.add(b);
+            cls.add(m);
+        }
         // gpuSource(): the kernel's Metal source. A placeholder string, unique
         // per block, that the lowering replaces with the printed kernel (or
         // with "" when the block cannot run on Metal).
@@ -2973,7 +2997,12 @@ class Parser
                 if (Parser._same(ty, "-")) ty = String.withCString("u8");
 
                 expect((u16)tokRParen);
+                // The loop variable is a local of the body: a block literal or
+                // a `par` inside it captures it like any other.
+                blkPushScope();
+                blkBind(vname, ty.equals(String.withCString("-")) ? (String*)0 : ty, (Array*)0);
                 Node* body = parseBlockOrStatement();
+                blkPopScope();
 
                 Node* n = mk((u16)nkForCStyle);
                 Node* initMark = mk((u16)nkMarkerInit);
@@ -3014,7 +3043,10 @@ class Parser
             n.add(loopVar);
             n.add(collection);
             expect((u16)tokRParen);
+            blkPushScope();
+            blkBind(vname, ty.equals(String.withCString("-")) ? (String*)0 : ty, (Array*)0);
             n.add(parseBlockOrStatement());
+            blkPopScope();
             return n;
         }
 
