@@ -265,6 +265,8 @@ Suppress a category with `-Wno-<category>`. All are on by default.
 | `unknown-pragma` | an unrecognised `#` directive |
 | `toolchain-fallback` | the build fell back from the in-house assembler/linker to an external tool |
 | `return-type` | a non-`void` function that can reach its closing brace without returning — its body traps at run time, so the missing `return` is named at compile time |
+| `par-scatter` | (from 0.67) a `par` block writes a buffer at an index that is not `k*i + c` in the item's index, so two items might write the same element |
+| `range-init-count` | a range initialiser (`u8 a[10] = 0..9;`) that supplies fewer or more values than the array holds |
 
 `xcc --help` prints the full category list, including any checks added after this
 page.

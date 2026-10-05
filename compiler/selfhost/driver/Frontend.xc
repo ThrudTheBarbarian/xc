@@ -787,6 +787,20 @@ class FeOptions
         lower.setVtable(sema.vtable());
         IRModule* mod = lower.run(program, moduleNameOf(o.input()));
         o.setCallSites(lower.callSites());
+        // Lowering warnings, "<category>\t<text>" as the parser's are, and
+        // printed even when the lowering then fails.
+        for (u32 w = (u32)0; w < lower.warnings().count(); w = w + (u32)1)
+            {
+            String* raw = (String*)lower.warnings().get(w);
+            u32 tab = (u32)0;
+            while (tab < raw.byteLength() && raw.byteAt(tab) != (u8)9)
+                tab = tab + (u32)1;
+            if (o.warningSuppressed(raw.substringBytes((u32)0, tab)))
+                continue;
+            String* line = raw.substringBytes(tab + (u32)1, raw.byteLength() - tab - (u32)1);
+            line.appendByte((u8)'\n');
+            Stdio.error(line);
+            }
         if (mod == 0 || lower.failed())
             {
             Stdio.printf("xc-fe: %s: unsupported: %s\n", o.input().cString(),

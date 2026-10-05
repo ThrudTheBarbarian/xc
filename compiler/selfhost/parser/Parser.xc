@@ -2309,10 +2309,14 @@ class Parser
             p.setOp(String.withCString("ParChunk*"));
             m.add(p);
             Node* b = mk((u16)nkBlock);
-            Node* o = mkNamed((u16)nkVariableDecl, String.withCString("o"));
-            o.setOp(implPtr);
-            o.add(parCast(implPtr, parIdent(String.withCString("other"))));
-            b.add(o);
+            // The downcast only when there is something to fold: an unused
+            // `o` reads as a never-used local to the analyser (-Wanalyze).
+            if (reds.count() > (u32)0) {
+                Node* o = mkNamed((u16)nkVariableDecl, String.withCString("o"));
+                o.setOp(implPtr);
+                o.add(parCast(implPtr, parIdent(String.withCString("other"))));
+                b.add(o);
+            }
             for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1) {
                 Node* r = (Node*)reds.get(i);
                 b.add(parFold(r.op(), parIdent(r.name()), parIdent(r.name()),

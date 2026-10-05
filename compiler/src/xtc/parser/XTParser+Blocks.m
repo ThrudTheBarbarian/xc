@@ -1090,9 +1090,12 @@ NS_ASSUME_NONNULL_END
     // merge(other): fold another chunk's reductions into this one's.
         {
         NSMutableArray<XTASTNode*>* st = [NSMutableArray array];
-        [st addObject:[[XTVariableDeclNode alloc] initWithName:@"o" type:implPtr
-                                                   initialiser:cast(implPtr, ident(@"other"))
-                                                      location:loc]];
+        // The downcast only when there is something to fold: an unused `o`
+        // reads as a never-used local to the analyser (-Wanalyze).
+        if (reductions.count)
+            [st addObject:[[XTVariableDeclNode alloc] initWithName:@"o" type:implPtr
+                                                       initialiser:cast(implPtr, ident(@"other"))
+                                                          location:loc]];
         for (NSArray<NSString*>* r in reductions)
             [st addObject:fold(r[0], ident(r[1]), ident(r[1]), member(@"o", r[1]))];
         XTParamNode* p = [[XTParamNode alloc] initWithType:chunkPtr name:@"other" location:loc];

@@ -643,6 +643,35 @@ class ClassInfo
         giveUp(out);
         }
 
+    // Warnings from the lowering, each "<category>\t<file:line:col: warning: text>",
+    // the parser's shape, so the front end prints and filters them alike
+    // (-Wno-<category>). The reference's lowering warns through its
+    // diagnostic engine; without this list the port had no way to (bug 612).
+    Array* _warnings;
+    Array* warnings(void)
+        {
+        if (_warnings == (Array*)0)
+            _warnings = new Array();
+        return _warnings;
+        }
+    void warnAtNode(String* cat, String* msg, Node* n)
+        {
+        String* out = String.withString(cat);
+        out.appendByte((u8)9);
+        if (n != (Node*)0 && n.line() != (u32)0)
+            {
+            out.append(n.file() != 0 ? n.file() : String.withCString("?"));
+            out.appendByte((u8)':');
+            out.append(String.withU32(n.line()));
+            out.appendByte((u8)':');
+            out.append(String.withU32(n.col()));
+            out.appendCString(": ");
+            }
+        out.appendCString("warning: ");
+        out.append(msg);
+        warnings().add((Object*)out);
+        }
+
     // A phi's incomings must ALL have the phi's own type. When they do not the
     // IR is malformed on every target — but a machine with untyped registers
     // runs it anyway, so the mismatch survives codegen and surfaces as a wasm
@@ -8751,6 +8780,27 @@ class ClassInfo
             Node* ini = expandRange(n.kid((u32)0), n.op());
             if (_failed)
                 return;
+            // A range that does not fill its array: the tail zero-fills as a
+            // short `{ … }` does, but `u8 a[10] = 0..9;` looks exact and is
+            // not (`..` excludes its end). The reference's warning, at the
+            // declaration (bug 612).
+            if (wasRange && isArrayLike(n.op()) && ini.kind() == (u16)nkBlock)
+                {
+                u32 count = ini.kidCount();
+                u32 declared = arrayCount(n.op());
+                if (declared > (u32)0 && count != declared)
+                    {
+                    String* w = String.withCString("range initialiser supplies ");
+                    w.append(String.withU32(count));
+                    w.appendCString(count == (u32)1 ? " value" : " values");
+                    w.appendCString(" for an array of ");
+                    w.append(String.withU32(declared));
+                    w.appendCString(" — the rest zero-fill");
+                    if (count > declared)
+                        w.appendCString(" (and the extras are dropped)");
+                    warnAtNode(String.withCString("range-init-count"), w, n);
+                    }
+                }
             // An AGGREGATE's byte-list writes elements or fields; a scalar's
             // with a runtime entry writes bytes. Both form their own address,
             // so neither goes through the scalar store below.
@@ -13812,6 +13862,7 @@ class ClassInfo
     Map* _parSyms;     // symbol name -> IRSymbol
     Map* _parVerdict;  // function name -> reason ("" = clean)
     Map* _parOnStack;  // function names being scanned
+    String* _parScatter; // the first unprovable write of the block being checked
 
     void parCheck(void)
         {
@@ -13852,9 +13903,19 @@ class ClassInfo
             if (why == (String*)0)
                 {
                 // §4: the work items must not touch each other's data.
+                _parScatter = (String*)0;
                 String* dep = parDependence(f, parIvarNames(cls));
                 if (dep == (String*)0)
+                    {
+                    if (_parScatter != (String*)0)
+                        {
+                        String* w = String.withCString("a 'par' block writes ");
+                        w.append(_parScatter);
+                        w.appendCString(", so the compiler cannot prove two work items never write the same element; if they can, the result depends on which runs last");
+                        warnAtNode(String.withCString("par-scatter"), w, (Node*)_classDecls.get((Hashable*)cls));
+                        }
                     continue;
+                    }
                 String* m2 = String.withCString("a 'par' block's work items must be independent, but this one ");
                 m2.append(dep);
                 giveUpAt(m2, (Node*)_classDecls.get((Hashable*)cls));
@@ -14066,6 +14127,22 @@ class ClassInfo
                 form.appendCString(" ");
                 form.append(String.withI64(af ? c : (i64)0));
                 String* shown = parShownIndex(af, k, c);
+                // §4: a write the shapes above do not cover (a scatter, or
+                // every item writing one element) is legal but unprovable: a
+                // warning, the first one per block.
+                if (isStore && _parScatter == (String*)0 && (!af || k == (i64)0))
+                    {
+                    String* sc = String.withCString("'");
+                    sc.append(parShown(buf));
+                    if (af)
+                        {
+                        sc.append(shown);
+                        sc.appendCString("' from every work item");
+                        }
+                    else
+                        sc.appendCString("' at an index computed from data");
+                    _parScatter = sc;
+                    }
                 if (isStore)
                     {
                     Array* ws = (Array*)writes.get((Hashable*)buf);

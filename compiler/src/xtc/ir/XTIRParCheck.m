@@ -103,9 +103,19 @@ static NSString* shownName(NSString* irName)
         if (!why)
             {
             // §4: the work items must not touch each other's data.
-            NSString* dep = [c dependenceIn:f ivarNames:[c ivarNamesOf:decl in:classDecls]];
+            NSString* scatter = nil;
+            NSString* dep = [c dependenceIn:f ivarNames:[c ivarNamesOf:decl in:classDecls] scatter:&scatter];
             if (!dep)
+                {
+                if (scatter)
+                    [diag emitWarning:[NSString stringWithFormat:@"a 'par' block writes %@, so the compiler "
+                                                                 @"cannot prove two work items never write the "
+                                                                 @"same element; if they can, the result depends "
+                                                                 @"on which runs last", scatter]
+                             category:XTWarnParScatter
+                                   at:decl.location];
                 continue;
+                }
             ok = NO;
             [diag emitError:[NSString stringWithFormat:@"a 'par' block's work items must be independent, "
                                                        @"but this one %@", dep]
@@ -237,7 +247,9 @@ static NSString* shownIndex(XTParIndex x)
 // §4: a read of a buffer the block also writes must be at the element this
 // work item writes. `b[i] = b[i - 1] + …` reads another item's result: that
 // is a scan, not a par. Returns the complaint, or nil.
-- (nullable NSString*)dependenceIn:(XTIRFunction*)f ivarNames:(NSArray<NSString*>*)ivars
+- (nullable NSString*)dependenceIn:(XTIRFunction*)f
+                          ivarNames:(NSArray<NSString*>*)ivars
+                            scatter:(NSString* _Nullable* _Nonnull)scatter
     {
     NSMutableDictionary<NSNumber*, XTIRInsn*>* def = [NSMutableDictionary dictionary];
     XTIRValueId iv = 0;
@@ -280,6 +292,13 @@ static NSString* shownIndex(XTParIndex x)
                 continue;
             XTParIndex x = [self indexOf:ea.operands[1] iv:iv defs:def depth:0];
             NSValue* xv = [NSValue valueWithBytes:&x objCType:@encode(XTParIndex)];
+            // §4: a write the shapes above do not cover (a scatter, or every
+            // item writing one element) is legal but unprovable: a warning,
+            // the first one per block.
+            if (isStore && !*scatter && (!x.affine || x.k == 0))
+                *scatter = x.affine
+                               ? [NSString stringWithFormat:@"'%@%@' from every work item", shownName(buf), shownIndex(x)]
+                               : [NSString stringWithFormat:@"'%@' at an index computed from data", shownName(buf)];
             if (isStore)
                 {
                 if (!writes[buf])

@@ -4848,7 +4848,8 @@ String* warningCategoryNames(void)
         "escape, class-init, asm-clobbers, unknown-annotation, "
         "unknown-pragma, printf-format, unowned-bound, cloaked-transitive, "
         "unreachable-catch, comment, packed-align, range-init-count, "
-        "covariant-return, unguarded-action, toolchain-fallback");
+        "covariant-return, unguarded-action, toolchain-fallback, return-type, "
+        "par-scatter");
 }
 
 bool isWarningCategory(String* c)

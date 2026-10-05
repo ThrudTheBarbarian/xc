@@ -218,7 +218,7 @@ Warning categories for `-Wno-`: `escape`, `class-init`, `asm-clobbers`,
 `unknown-annotation`, `unknown-pragma`, `printf-format`, `unowned-bound`,
 `cloaked-transitive`, `unreachable-catch`, `comment`, `packed-align`,
 `range-init-count`, `covariant-return`, `unguarded-action`,
-`toolchain-fallback`. An unknown category is itself a warning, never an error,
+`toolchain-fallback`, `return-type`, `par-scatter`. An unknown category is itself a warning, never an error,
 so a mistyped suppression does not stop a compile. Both compilers accept these.
 
 `xcc --help` lists the full set, including the function-placement annotations

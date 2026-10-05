@@ -81,6 +81,12 @@ typedef NS_ENUM(NSInteger, XTWarningCategory) {
                              // this names the function at compile time instead.
                              // The missing `return` is the author's slip, and
                              // it reads as a memory fault at run time.
+    XTWarnParScatter,        // -Wno-par-scatter — a `par` block writes a buffer
+                             // at an index that is not k*i + c in the work
+                             // item's index (a scatter, `b[idx[i]] = …`), so
+                             // the compiler cannot prove two items never write
+                             // the same element. If they can, the result
+                             // depends on which item runs last.
 };
 
 /****************************************************************************\
