@@ -93,9 +93,9 @@ class ParMetal
             if (gParSrc[i] == (pointer)src)
                 return gParPso[i];
         pointer opts = ((parMsg0_t*)_send)(_cls("MTLCompileOptions"), sel("new"));
-        // Precise maths unless the block says otherwise (par-blocks.md §7):
-        // MTLMathModeSafe.
-        ((parMsgSetU_t*)_send)(opts, sel("setMathMode:"), (u64)0);
+        // Precise maths unless the block says otherwise: MTLMathModeSafe, or
+        // MTLMathModeFast for a block whose goal is speed (the default).
+        ((parMsgSetU_t*)_send)(opts, sel("setMathMode:"), ParDevice.isFast(src) ? (u64)2 : (u64)0);
         pointer err = (pointer)0;
         pointer lib = ((parMsgPPP_t*)_send)(_dev, sel("newLibraryWithSource:options:error:"),
                                             nsString(src), opts, (pointer)&err);

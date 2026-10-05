@@ -13,8 +13,9 @@
 //
 // Precise maths only: PTX has no precise sin, cos, exp, log or pow, so a block
 // that calls one stays on the CPU (nil). 8- and 16-bit values live in 32-bit
-// registers, normalised where they are made; arithmetic on them is not
-// printed (nil) in this first cut.
+// registers in one form: a signed one sign-extended, an unsigned one
+// zero-extended, so a 32-bit compare of two of them is exact. Arithmetic on
+// them is not printed (nil) in this first cut.
 
 static NSString* ptxRegType(XTIRType* t)
     {
@@ -81,6 +82,34 @@ static NSString* ptxMem(XTIRType* t)
         }
     }
 
+// A constant of type t in its register form: a narrow one extended by its own
+// signedness.
+static long long ptxNarrowValue(XTIRType* t, long long v)
+    {
+    if (t.kind == XTIRTypeKindI8)
+        return (long long)(int8_t)v;
+    if (t.kind == XTIRTypeKindU8)
+        return (long long)(uint8_t)v;
+    if (t.kind == XTIRTypeKindI16)
+        return (long long)(int16_t)v;
+    if (t.kind == XTIRTypeKindU16)
+        return (long long)(uint16_t)v;
+    return v;
+    }
+
+// The line that puts a narrow result in r back in its register form.
+static NSString* ptxNarrowFix(XTIRType* t, NSString* r)
+    {
+    switch (t.kind)
+        {
+        case XTIRTypeKindU8: return [NSString stringWithFormat:@"\tand.b32 %@, %@, 255;\n", r, r];
+        case XTIRTypeKindU16: return [NSString stringWithFormat:@"\tand.b32 %@, %@, 65535;\n", r, r];
+        case XTIRTypeKindI8: return [NSString stringWithFormat:@"\tbfe.s32 %@, %@, 0, 8;\n", r, r];
+        case XTIRTypeKindI16: return [NSString stringWithFormat:@"\tbfe.s32 %@, %@, 0, 16;\n", r, r];
+        default: return @"";
+        }
+    }
+
 @interface XTIRParPTXState : NSObject
 @property(nonatomic) NSMutableString* out;
 @property(nonatomic) NSUInteger edgeLabels;
@@ -90,11 +119,12 @@ static NSString* ptxMem(XTIRType* t)
 
 @implementation XTIRParMSL (PTX)
 
-+ (nullable NSString*)ptxForKernel:(XTIRFunction*)run module:(XTIRModule*)module
++ (nullable NSString*)ptxForKernel:(XTIRFunction*)run module:(XTIRModule*)module fast:(BOOL)fast
     {
     XTIRParMSL* p = [XTIRParMSL new];
     p.module = module;
     p.fn = run;
+    p.fast = fast;
     p.helperText = [NSMutableArray array];
     p.helperNames = [NSMutableSet set];
     return [p ptxKernel];
@@ -113,7 +143,9 @@ static NSString* ptxMem(XTIRType* t)
     if (op.kind == XTIROperandKindUse)
         return [self ptxReg:op.valueId];
     if (op.kind == XTIROperandKindImmI)
-        return [NSString stringWithFormat:@"%lld", (long long)op.intValue];
+        {
+        return [NSString stringWithFormat:@"%lld", ptxNarrowValue(t, (long long)op.intValue)];
+        }
     if (op.kind == XTIROperandKindImmF)
         {
         uint64_t raw = op.floatRawBytes;
@@ -263,13 +295,25 @@ static NSString* ptxMem(XTIRType* t)
             if (rt.kind == XTIRTypeKindBool)
                 return [NSString stringWithFormat:@"\tnot.pred %@, %@;\n", r, a];
             if (ptxNarrow(rt))
-                return nil;
+                {
+                // In 32 bits, then back in the register form.
+                if (o[0].kind == XTIROperandKindImmI)
+                    return [NSString stringWithFormat:@"\tmov.b32 %@, %lld;\n", r, ptxNarrowValue(rt, ~(long long)o[0].intValue)];
+                return [[NSString stringWithFormat:@"\tnot.b32 %@, %@;\n", r, a] stringByAppendingString:ptxNarrowFix(rt, r)];
+                }
             return [NSString stringWithFormat:@"\tnot.%@ %@, %@;\n", ptxWide(rt) ? @"b64" : @"b32", r, a];
             }
         case XTIROpNeg:
         case XTIROpFNeg:
             {
             NSString* a = [self ptxOp:o[0] type:rt];
+            if (a && ptxNarrow(rt))
+                {
+                // In 32 bits, then back in the register form.
+                if (o[0].kind == XTIROperandKindImmI)
+                    return [NSString stringWithFormat:@"\tmov.b32 %@, %lld;\n", r, ptxNarrowValue(rt, -(long long)o[0].intValue)];
+                return [[NSString stringWithFormat:@"\tneg.s32 %@, %@;\n", r, a] stringByAppendingString:ptxNarrowFix(rt, r)];
+                }
             NSString* sfx = ptxArith(rt);
             if (!a || !sfx)
                 return nil;
@@ -289,7 +333,9 @@ static NSString* ptxMem(XTIRType* t)
             {
             XTIRType* t = o[0].kind == XTIROperandKindUse ? [self typeOf:o[0].valueId]
                                                           : [self typeOf:o[1].valueId];
-            if (!t || ptxNarrow(t) || t.kind == XTIRTypeKindBool)
+            // An 8- or 16-bit value sits in its 32-bit register extended by its
+            // own signedness, so it compares as a 32-bit one.
+            if (!t || t.kind == XTIRTypeKindBool)
                 return nil;
             NSString* a = [self ptxOp:o[0] type:t];
             NSString* b = [self ptxOp:o[1] type:t];
@@ -340,10 +386,14 @@ static NSString* ptxMem(XTIRType* t)
                                   : [NSString stringWithFormat:@"\tmov.b32 %@, %@;\n", r, a];
                 if (rw)
                     return [NSString stringWithFormat:@"\tmov.b64 %@, %@;\n", r, a];
-                if (rt.kind == XTIRTypeKindU8 || rt.kind == XTIRTypeKindI8)
+                if (rt.kind == XTIRTypeKindU8)
                     return [lo stringByAppendingFormat:@"\tand.b32 %@, %@, 255;\n", r, r];
-                if (rt.kind == XTIRTypeKindU16 || rt.kind == XTIRTypeKindI16)
+                if (rt.kind == XTIRTypeKindU16)
                     return [lo stringByAppendingFormat:@"\tand.b32 %@, %@, 65535;\n", r, r];
+                if (rt.kind == XTIRTypeKindI8)
+                    return [lo stringByAppendingFormat:@"\tbfe.s32 %@, %@, 0, 8;\n", r, r];
+                if (rt.kind == XTIRTypeKindI16)
+                    return [lo stringByAppendingFormat:@"\tbfe.s32 %@, %@, 0, 16;\n", r, r];
                 return lo;
                 }
             if (i.opcode == XTIROpSExt && ptxNarrow(st))
@@ -354,11 +404,33 @@ static NSString* ptxMem(XTIRType* t)
                     return [x stringByAppendingFormat:@"\tcvt.s64.s32 %@, %%k;\n", r];
                 return [x stringByAppendingFormat:@"\tmov.b32 %@, %%k;\n", r];
                 }
+            if (i.opcode == XTIROpZExt && (st.kind == XTIRTypeKindI8 || st.kind == XTIRTypeKindI16))
+                {
+                // A signed narrow value is sign-extended in its register:
+                // zero-extending it clears those bits first.
+                NSString* x = [NSString stringWithFormat:@"\tand.b32 %%k, %@, %@;\n", a,
+                                                         st.kind == XTIRTypeKindI8 ? @"255" : @"65535"];
+                if (rw)
+                    return [x stringByAppendingFormat:@"\tcvt.u64.u32 %@, %%k;\n", r];
+                return [x stringByAppendingFormat:@"\tmov.b32 %@, %%k;\n", r];
+                }
             if (!sw && rw)
                 return [NSString stringWithFormat:@"\tcvt.%@64.%@32 %@, %@;\n",
                                                   i.opcode == XTIROpSExt ? @"s" : @"u",
                                                   i.opcode == XTIROpSExt ? @"s" : @"u", r, a];
             return [NSString stringWithFormat:@"\tmov.%@ %@, %@;\n", rw ? @"b64" : @"b32", r, a];
+            }
+        case XTIROpBitcast:
+            {
+            // The same bits under another type: a move, and a narrow result
+            // put back in its register form (an i8 read as a u8).
+            XTIRType* st = o[0].kind == XTIROperandKindUse ? [self typeOf:o[0].valueId] : rt;
+            NSString* a = [self ptxOp:o[0] type:st];
+            if (!a || !st || rt.kind == XTIRTypeKindBool || st.kind == XTIRTypeKindBool)
+                return nil;
+            BOOL w = ptxWide(rt) || rt.kind == XTIRTypeKindF64;
+            NSString* mv = [NSString stringWithFormat:@"\tmov.b%@ %@, %@;\n", w ? @"64" : @"32", r, a];
+            return [mv stringByAppendingString:ptxNarrowFix(rt, r)];
             }
         case XTIROpSIToFp:
         case XTIROpUIToFp:
@@ -432,6 +504,8 @@ static NSString* ptxMem(XTIRType* t)
             }
         case XTIROpAddrOf:
             {
+            if (self.sinitOf[@(i.result.valueId)])
+                return @"";
             NSString* g = self.globalOf[@(i.result.valueId)];
             if (!g)
                 return nil;
@@ -446,6 +520,8 @@ static NSString* ptxMem(XTIRType* t)
             NSString* m = ptxMem(rt);
             if (!m)
                 return nil;
+            if ([self.sinitOf[@(o[0].valueId)] boolValue]) // a static-init flag: done
+                return [NSString stringWithFormat:@"\tmov.b32 %@, 2;\n", r];
             NSString* sp = [self ptxSpaceOf:o[0]];
             NSString* a = [self ptxReg:o[0].valueId];
             if (rt.kind == XTIRTypeKindBool)
@@ -519,7 +595,27 @@ static NSString* ptxMem(XTIRType* t)
             if (!isVoid && ([m isEqualToString:@"min"] || [m isEqualToString:@"max"]) && args.count == 2 && ptxArith(rt))
                 return [NSString stringWithFormat:@"\t%@.%@ %@, %@, %@;\n", m, ptxArith(rt), r, args[0], args[1]];
             if ([@[ @"sin", @"cos", @"exp", @"ln", @"log", @"pow" ] containsObject:m])
-                return nil; // no precise PTX instruction: the CPU runs this block
+                {
+                // No precise PTX instruction: the CPU runs this block, unless
+                // its goal is speed and it is single precision, where the
+                // GPU's own approximations will do (exp through ex2, ln
+                // through lg2).
+                if (!self.fast || isVoid || rt.kind != XTIRTypeKindF32)
+                    return nil;
+                if (([m isEqualToString:@"sin"] || [m isEqualToString:@"cos"]) && args.count == 1)
+                    return [NSString stringWithFormat:@"\t%@.approx.f32 %@, %@;\n", m, r, args[0]];
+                if ([m isEqualToString:@"exp"] && args.count == 1)
+                    return [NSString stringWithFormat:@"\tmul.f32 %%fk, %@, 0f3FB8AA3B;\n\tex2.approx.f32 %@, %%fk;\n",
+                                                      args[0], r];
+                if (([m isEqualToString:@"ln"] || [m isEqualToString:@"log"]) && args.count == 1)
+                    return [NSString stringWithFormat:@"\tlg2.approx.f32 %%fk, %@;\n\tmul.f32 %@, %%fk, 0f3F317218;\n",
+                                                      args[0], r];
+                if ([m isEqualToString:@"pow"] && args.count == 2)
+                    return [NSString stringWithFormat:@"\tlg2.approx.f32 %%fk, %@;\n\tmul.f32 %%fk, %%fk, %@;\n"
+                                                      @"\tex2.approx.f32 %@, %%fk;\n",
+                                                      args[0], args[1], r];
+                return nil;
+                }
             // A function of the program: printed once, before the kernel.
             XTIRFunction* target = nil;
             for (XTIRFunction* g in self.module.functions)
@@ -535,6 +631,7 @@ static NSString* ptxMem(XTIRType* t)
                 h.module = self.module;
                 h.fn = target;
                 h.helperMode = YES;
+                h.fast = self.fast;
                 h.helperText = self.helperText;
                 h.helperNames = self.helperNames;
                 NSString* text = [h ptxHelper:fn];
@@ -770,6 +867,8 @@ static NSString* ptxMem(XTIRType* t)
         return nil;
 
     NSMutableString* out = [NSMutableString string];
+    if (self.fast)
+        [meta appendString:@" fast"];
     [out appendFormat:@"%@\n.version 7.0\n.target sm_52\n.address_size 64\n", meta];
     for (NSString* h in self.helperText)
         [out appendString:h];

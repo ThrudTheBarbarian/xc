@@ -92,9 +92,20 @@ static BOOL gEmitsPTX = NO;
         if (![f.name hasPrefix:@"ParImpl$"] || ![f.name hasSuffix:@"$run"])
             continue;
         NSString* n = [f.name substringWithRange:NSMakeRange(8, f.name.length - 12)];
-        NSData* tag = [[NSString stringWithFormat:@"__XC_PAR_MSL_%@__", n] dataUsingEncoding:NSUTF8StringEncoding];
-        NSString* msl = gEmitsMetal ? ([XTIRParMSL sourceForKernel:f module:module] ?: @"")
-                      : gEmitsPTX   ? ([XTIRParMSL ptxForKernel:f module:module] ?: @"")
+        NSData* plain = [[NSString stringWithFormat:@"__XC_PAR_MSL_%@__", n] dataUsingEncoding:NSUTF8StringEncoding];
+        NSData* fastTag = [[NSString stringWithFormat:@"__XC_PAR_FAST_%@__", n] dataUsingEncoding:NSUTF8StringEncoding];
+        // Which placeholder the block has says whether its goal is speed.
+        NSData* tag = plain;
+        for (XTIRSymbol* sym in module.symbols)
+            {
+            NSData* b = sym.stringBytes;
+            if (sym.kind == XTIRSymbolKindStringLit && b.length >= fastTag.length &&
+                memcmp(b.bytes, fastTag.bytes, fastTag.length) == 0)
+                tag = fastTag;
+            }
+        BOOL fast = tag == fastTag;
+        NSString* msl = gEmitsMetal ? ([XTIRParMSL sourceForKernel:f module:module fast:fast] ?: @"")
+                      : gEmitsPTX   ? ([XTIRParMSL ptxForKernel:f module:module fast:fast] ?: @"")
                                     : @"";
         for (XTIRSymbol* sym in module.symbols)
             {

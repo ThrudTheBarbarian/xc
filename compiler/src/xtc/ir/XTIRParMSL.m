@@ -58,12 +58,22 @@ static NSString* unsignedName(XTIRType* t)
 
 @implementation XTIRParMSL
 
-+ (nullable NSString*)sourceForKernel:(XTIRFunction*)run module:(XTIRModule*)module
++ (nullable NSString*)sourceForKernel:(XTIRFunction*)run module:(XTIRModule*)module fast:(BOOL)fast
     {
     XTIRParMSL* p = [XTIRParMSL new];
     p.module = module;
     p.fn = run;
+    p.fast = fast;
     return [p print];
+    }
+
+@synthesize sinitOf = _sinitOf;
+
+- (NSMutableDictionary<NSNumber*, NSNumber*>*)sinitOf
+    {
+    if (!_sinitOf)
+        _sinitOf = [NSMutableDictionary dictionary];
+    return _sinitOf;
     }
 
 - (nullable XTIRType*)typeOf:(XTIRValueId)v
@@ -198,11 +208,20 @@ static NSString* unsignedName(XTIRType* t)
                     }
                 case XTIROpAddrOf:
                     {
+                    // A static-init guard's parts (see sinitOf).
+                    XTIRSymbol* g = (i.operands.count && i.operands[0].kind == XTIROperandKindSym)
+                                        ? [self.module symbolForId:i.operands[0].symbolId]
+                                        : nil;
+                    if ([g.name hasPrefix:@"__sinit_"] || [g.name hasPrefix:@"__sdata_"] || [g.name hasSuffix:@"$init"])
+                        {
+                        self.sinitOf[@(r)] = @([g.name hasPrefix:@"__sinit_"]);
+                        self.space[@(r)] = @(XTParSpaceThread);
+                        break;
+                        }
                     // A data global of scalars (an array, or one value): a
                     // device buffer. Anything else stays on the CPU.
-                    if (self.helperMode || !i.operands.count || i.operands[0].kind != XTIROperandKindSym)
+                    if (self.helperMode || !g)
                         return NO;
-                    XTIRSymbol* g = [self.module symbolForId:i.operands[0].symbolId];
                     if (g.kind != XTIRSymbolKindDataGlobal || i.result.type.kind != XTIRTypeKindPtr ||
                         !scalarName(i.result.type.pointeeType))
                         return NO;
@@ -762,7 +781,7 @@ static NSString* intrinsicFor(NSString* callee)
         case XTIROpFSqrt:
             {
             NSString* a = [self expr:i.operands[0] type:rt];
-            return a ? [NSString stringWithFormat:@"%@ = precise::sqrt(%@);", r, a] : nil;
+            return a ? [NSString stringWithFormat:@"%@ = %@::sqrt(%@);", r, self.fast ? @"fast" : @"precise", a] : nil;
             }
         case XTIROpICmp:
         case XTIROpFCmp:
@@ -840,6 +859,8 @@ static NSString* intrinsicFor(NSString* callee)
                 return [NSString stringWithFormat:@"%@ = buf_%@;", r, buf];
             if (!scalarName(rt))
                 return nil;
+            if ([self.sinitOf[@(i.operands[0].valueId)] boolValue])
+                return [NSString stringWithFormat:@"%@ = %@(2);", r, scalarName(rt)];
             return [NSString stringWithFormat:@"%@ = *%@;", r, [self name:i.operands[0].valueId]];
             }
         case XTIROpStore:
@@ -858,6 +879,9 @@ static NSString* intrinsicFor(NSString* callee)
             if ([callee isEqualToString:@"_xtc_sinit_run"] || [callee hasSuffix:@"$init"])
                 return @"";
             NSString* fn = intrinsicFor(callee);
+            // The speed goal: Metal's fast versions, in place of the precise ones.
+            if (self.fast && [fn hasPrefix:@"precise::"])
+                fn = [@"fast::" stringByAppendingString:[fn substringFromIndex:9]];
             BOOL isVoid = !rt || rt.kind == XTIRTypeKindMemory;
             if (!fn)
                 {
@@ -877,6 +901,7 @@ static NSString* intrinsicFor(NSString* callee)
                     h.module = self.module;
                     h.fn = target;
                     h.helperMode = YES;
+                    h.fast = self.fast;
                     h.helperText = self.helperText;
                     h.helperNames = self.helperNames;
                     NSString* text = [h printHelper:fn];
@@ -904,6 +929,8 @@ static NSString* intrinsicFor(NSString* callee)
             }
         case XTIROpAddrOf:
             {
+            if (self.sinitOf[@(i.result.valueId)])
+                return @"";
             NSString* g = self.globalOf[@(i.result.valueId)];
             if (!g)
                 return nil;
@@ -1130,6 +1157,9 @@ static NSString* intrinsicFor(NSString* callee)
         return nil;
 
     NSMutableString* out = [NSMutableString string];
+    // A speed-goal block's runtime compiles it with fast maths (MTLMathModeFast).
+    if (self.fast)
+        [meta appendString:@" fast"];
     [out appendFormat:@"%@\n", meta];
     [out appendString:@"#include <metal_stdlib>\nusing namespace metal;\n"];
     for (NSString* h in self.helperText)

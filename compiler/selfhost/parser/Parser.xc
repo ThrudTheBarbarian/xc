@@ -2041,7 +2041,7 @@ class Parser
         return stmtNode;
     }
 
-    // `par [name] (:reduce(op var))* [:fast] { body }`, the data-parallel block.
+    // `par [name] (:reduce(op var))* [:goal(speed|accuracy)] { body }`, the data-parallel block.
     Node* parsePar(void)
     {
         _parTok = cur();
@@ -2060,14 +2060,31 @@ class Parser
             }
             String* dec = cur().value();
             advance();
-            if (dec.equals(String.withCString("fast"))) {
-                flags = flags | (u32)1;
+            // :goal(speed) (the default) or :goal(accuracy): what the
+            // block's GPU version favours.
+            if (dec.equals(String.withCString("goal"))) {
+                expect((u16)tokLParen);
+                if (!check((u16)tokIdentifier)) {
+                    _error(String.withCString("':goal' takes speed or accuracy"));
+                    return (Node*)0;
+                }
+                String* g = cur().value();
+                if (!g.equals(String.withCString("speed")) && !g.equals(String.withCString("accuracy"))) {
+                    String* m = String.withCString("':goal' takes speed or accuracy, not '");
+                    m.append(g);
+                    m.appendCString("'");
+                    _error(m);
+                    return (Node*)0;
+                }
+                advance();
+                if (g.equals(String.withCString("accuracy"))) flags = flags | (u32)1;
+                expect((u16)tokRParen);
                 continue;
             }
             if (!dec.equals(String.withCString("reduce"))) {
                 String* m = String.withCString("'par' has no decorator ':");
                 m.append(dec);
-                m.appendCString("' (it takes :reduce(op var) and :fast)");
+                m.appendCString("' (it takes :reduce(op var) and :goal(speed|accuracy))");
                 _error(m);
                 return (Node*)0;
             }
@@ -2112,6 +2129,10 @@ class Parser
         frame.set((Hashable*)String.withCString("wbnames"), (Object*)new Array());
         frame.set((Hashable*)String.withCString("par"), (Object*)Number.with((u32)1));
         frame.set((Hashable*)String.withCString("written"), (Object*)new Set());
+        // The speed goal lets the GPU use its fast maths; the desugaring
+        // marks the block's GPU placeholder with it.
+        if ((flags & (u32)1) == (u32)0)
+            frame.set((Hashable*)String.withCString("fast"), (Object*)Number.with((u32)1));
         _blkFrames.add((Object*)frame);
         blkPushScope();
         Node* body = parseBlock();
@@ -2479,14 +2500,16 @@ class Parser
             m.add(b);
             cls.add(m);
         }
-        // gpuSource(): the kernel's Metal source. A placeholder string, unique
+        // gpuSource(): the kernel's GPU source. A placeholder string, unique
         // per block, that the lowering replaces with the printed kernel (or
-        // with "" when the block cannot run on Metal).
+        // with "" when the block cannot run on the GPU); `__XC_PAR_FAST_<n>__`
+        // for a block whose goal is speed (the default), whose kernel may use
+        // fast maths.
         {
             Node* m = mkNamed((u16)nkMethodDecl, String.withCString("gpuSource"));
             m.setOp(String.withCString("u8*"));
             Node* b = mk((u16)nkBlock);
-            String* tag = String.withCString("__XC_PAR_MSL_");
+            String* tag = String.withCString(frame.get((Hashable*)String.withCString("fast")) != 0 ? "__XC_PAR_FAST_" : "__XC_PAR_MSL_");
             tag.append(String.withU32(counter));
             tag.appendCString("__");
             Node* ret = mk((u16)nkReturn);

@@ -204,6 +204,17 @@ class ParDevice
         return false;
         }
 
+    // Whether a kernel's header line ends in ` fast`: a block whose goal is
+    // speed, which may use approximate maths.
+    static bool isFast(u8* src)
+        {
+        u32 n = (u32)0;
+        while (src[n] != (u8)0 && src[n] != (u8)10)
+            n = n + (u32)1;
+        return n >= (u32)5 && src[n - (u32)5] == (u8)' ' && src[n - (u32)4] == (u8)'f' &&
+               src[n - (u32)3] == (u8)'a' && src[n - (u32)2] == (u8)'s' && src[n - (u32)1] == (u8)'t';
+        }
+
     // The decimal number at p, and where it ends.
     static i64 num(u8* p, u32* at)
         {

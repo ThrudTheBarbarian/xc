@@ -14220,6 +14220,12 @@ class ClassInfo
     // The printer's state is per function, so printing a helper from inside
     // its caller saves and restores it (the reference uses a new printer).
     bool _mHelper;
+    bool _mFast;            // the block's goal is speed: fast maths, approximate sin, cos, exp, ln and pow
+    // The static-init guard of a class the kernel calls (Math, say): value seq
+    // of the AddrOf naming its flag ("1"), its init function or its static
+    // data ("0"). The host ran every init before the block started, so the
+    // flag reads as done (2) and the rest prints nothing.
+    Map* _mSinit;
     Map* _mParams;          // a helper's parameter value seq -> its index
     Array* _mHelperText;
     Map* _mHelperNames;
@@ -14451,6 +14457,17 @@ class ClassInfo
                     }
                 else if (op.equals(String.withCString("AddrOf")))
                     {
+                    // A static-init guard's parts (see _mSinit).
+                    if (ip.ops().count() > (u32)0 && ((IROperand*)ip.ops().get((u32)0)).kind() == (u8)OPK_SYM && r != (IRValue*)0)
+                        {
+                        String* sn = ((IROperand*)ip.ops().get((u32)0)).name();
+                        if (sn.hasPrefix(String.withCString("__sinit_")) || sn.hasPrefix(String.withCString("__sdata_")) || sn.hasSuffix(String.withCString("$init")))
+                            {
+                            _mSinit.set((Hashable*)mslKey(r), (Object*)String.withCString(sn.hasPrefix(String.withCString("__sinit_")) ? "1" : "0"));
+                            _mSpace.set((Hashable*)mslKey(r), (Object*)String.withCString("thread"));
+                            continue;
+                            }
+                        }
                     // A data global of scalars (an array, or one value): a
                     // device buffer. Anything else stays on the CPU.
                     if (_mHelper || ip.ops().count() == (u32)0 || ((IROperand*)ip.ops().get((u32)0)).kind() != (u8)OPK_SYM)
@@ -14994,7 +15011,7 @@ class ClassInfo
             {
             String* a = mslExpr(o0, rt);
             if (a == (String*)0) return (String*)0;
-            String* e = String.withCString("precise::sqrt("); e.append(a); e.appendCString(")");
+            String* e = String.withCString(_mFast ? "fast::sqrt(" : "precise::sqrt("); e.append(a); e.appendCString(")");
             return mslAssign(r, e);
             }
         if (op.equals(String.withCString("ICmp")) || op.equals(String.withCString("FCmp")))
@@ -15061,6 +15078,7 @@ class ClassInfo
             String* buf = (String*)_mBufOf.get((Hashable*)mslKey(r));
             if (buf != (String*)0) return mslAssign(r, mslCat3(String.withCString("buf_"), "", buf));
             if (mslScalar(rt) == (String*)0) return (String*)0;
+            if (parSinitFlag(o0)) return mslAssign(r, mslCat3(mslScalar(rt), "", String.withCString("(2)")));
             return mslAssign(r, mslCat3(String.withCString("*"), "", mslName(o0.val())));
             }
         if (op.equals(String.withCString("Store")))
@@ -15078,6 +15096,9 @@ class ClassInfo
             if (callee.equals(String.withCString("_xtc_sinit_run")) || callee.hasSuffix(String.withCString("$init")))
                 return String.withCString("");
             String* fn = mslIntrinsic(callee);
+            // The speed goal: Metal's fast versions, in place of the precise ones.
+            if (_mFast && fn != (String*)0 && fn.hasPrefix(String.withCString("precise::")))
+                fn = ptxCat("fast::", fn.substringFromByte((u32)9));
             bool isVoid = rt == (String*)0 || rt.equals(String.withCString("Mem"));
             if (fn == (String*)0)
                 {
@@ -15120,6 +15141,7 @@ class ClassInfo
             }
         if (op.equals(String.withCString("AddrOf")))
             {
+            if (_mSinit.get((Hashable*)mslKey(r)) != (Object*)0) return String.withCString("");
             String* g = (String*)_mGlobalOf.get((Hashable*)mslKey(r));
             if (g == (String*)0) return (String*)0;
             u32 gi = (u32)0;
@@ -15230,20 +15252,20 @@ class ClassInfo
         // The caller's state, back afterwards.
         Map* sDef = _mDef; Map* sSpace = _mSpace; Map* sBufOf = _mBufOf; Map* sOrd = _mOrd;
         Map* sBlk = _mBlk; Map* sBufs = _mBufs; Map* sReds = _mReds; IRLayout* sObj = _mObj;
-        bool sFailed = _mFailed; bool sHelper = _mHelper; Map* sParams = _mParams;
+        bool sFailed = _mFailed; bool sHelper = _mHelper; Map* sParams = _mParams; Map* sSinit = _mSinit;
         Array* sSucc = _sSucc; Array* sRpo = _sRpo; Array* sFwd = _sFwd; Map* sLoop = _sLoop; Map* sExit = _sExit;
         Array* sIpdom = _sIpdom; IRFunc* sFn = _sFn;
         String* out = mslHelperText(g, name);
         _mDef = sDef; _mSpace = sSpace; _mBufOf = sBufOf; _mOrd = sOrd;
         _mBlk = sBlk; _mBufs = sBufs; _mReds = sReds; _mObj = sObj;
-        _mFailed = sFailed; _mHelper = sHelper; _mParams = sParams;
+        _mFailed = sFailed; _mHelper = sHelper; _mParams = sParams; _mSinit = sSinit;
         _sSucc = sSucc; _sRpo = sRpo; _sFwd = sFwd; _sLoop = sLoop; _sExit = sExit; _sIpdom = sIpdom; _sFn = sFn;
         return out;
         }
     String* mslHelperText(IRFunc* g, String* name)
         {
         _mDef = new Map(); _mSpace = new Map(); _mBufOf = new Map(); _mOrd = new Map();
-        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false;
+        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false; _mSinit = new Map();
         _mHelper = true;
         _mParams = new Map();
         if (!mslAnalyse(g)) return (String*)0;
@@ -15285,7 +15307,7 @@ class ClassInfo
     String* parMsl(IRFunc* f)
         {
         _mDef = new Map(); _mSpace = new Map(); _mBufOf = new Map(); _mOrd = new Map();
-        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false;
+        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false; _mSinit = new Map();
         _mHelper = false;
         _mParams = (Map*)0;
         _mGlobals = new Array();
@@ -15350,6 +15372,8 @@ class ClassInfo
             tail.appendCString("    red_"); tail.append(String.withU32(k)); tail.appendCString("[tid] = *(thread "); tail.append(et);
             tail.appendCString("*)(st + "); tail.append(String.withU32(_mObj.offsetAt(k))); tail.appendCString(");\n");
             }
+        // A speed-goal block's runtime compiles it with fast maths (MTLMathModeFast).
+        if (_mFast) meta.appendCString(" fast");
         String* out = String.withString(meta);
         out.appendCString("\n#include <metal_stdlib>\nusing namespace metal;\n");
         for (u32 i = (u32)0; i < _mHelperText.count(); i = i + (u32)1)
@@ -15468,13 +15492,35 @@ class ClassInfo
             }
         return s;
         }
+    // A constant of type t in its register form: a narrow one extended by
+    // its own signedness.
+    i64 ptxNarrowValue(String* t, i64 v)
+        {
+        if (ptxIs(t, "I8")) return (i64)(i8)v;
+        if (ptxIs(t, "U8")) return (i64)(u8)v;
+        if (ptxIs(t, "I16")) return (i64)(i16)v;
+        if (ptxIs(t, "U16")) return (i64)(u16)v;
+        return v;
+        }
+    // The line that puts a narrow result in r back in its register form.
+    String* ptxNarrowFix(String* t, String* r)
+        {
+        if (ptxIs(t, "U8")) return ptx3(ptxS("and.b32"), r, r, ptxS("255"));
+        if (ptxIs(t, "U16")) return ptx3(ptxS("and.b32"), r, r, ptxS("65535"));
+        if (ptxIs(t, "I8")) return ptxBfe(r, "8");
+        if (ptxIs(t, "I16")) return ptxBfe(r, "16");
+        return ptxS("");
+        }
+
     // An operand as a register or an immediate in t's PTX spelling.
     String* ptxOp(IROperand* op, String* t)
         {
         if (op.kind() == (u8)OPK_USE)
             return ptxReg(op.val());
         if (op.kind() == (u8)OPK_IMMI)
-            return String.withI64(op.imm());
+            {
+            return String.withI64(ptxNarrowValue(t, op.imm()));
+            }
         if (op.kind() == (u8)OPK_IMMF)
             {
             u64 raw = (u64)0;
@@ -15638,7 +15684,9 @@ class ClassInfo
         IROperand* o0 = (IROperand*)ip.ops().get((u32)0);
         IROperand* o1 = (IROperand*)ip.ops().get((u32)1);
         String* t = o0.kind() == (u8)OPK_USE ? mslTypeOf(o0) : mslTypeOf(o1);
-        if (t == (String*)0 || ptxNarrow(t) || ptxIs(t, "Bool")) return (String*)0;
+        // An 8- or 16-bit value sits in its 32-bit register extended by its
+        // own signedness, so it compares as a 32-bit one.
+        if (t == (String*)0 || ptxIs(t, "Bool")) return (String*)0;
         String* a = ptxOp(o0, t);
         String* b = ptxOp(o1, t);
         if (a == (String*)0 || b == (String*)0) return (String*)0;
@@ -15742,7 +15790,38 @@ class ClassInfo
             return ptx3(op, r, (String*)args.get((u32)0), (String*)args.get((u32)1));
             }
         if (m.equals(ptxS("sin")) || m.equals(ptxS("cos")) || m.equals(ptxS("exp")) || m.equals(ptxS("ln")) || m.equals(ptxS("log")) || m.equals(ptxS("pow")))
-            return (String*)0; // no precise PTX instruction: the CPU runs this block
+            {
+            // No precise PTX instruction: the CPU runs this block, unless its
+            // goal is speed and it is single precision, where the GPU's own
+            // approximations will do (exp through ex2, ln through lg2).
+            if (!_mFast || isVoid || !ptxIs(rt, "F32")) return (String*)0;
+            if ((m.equals(ptxS("sin")) || m.equals(ptxS("cos"))) && n == (u32)1)
+                {
+                String* op = String.withString(m);
+                op.appendCString(".approx.f32");
+                return ptx2(op, r, (String*)args.get((u32)0));
+                }
+            if (m.equals(ptxS("exp")) && n == (u32)1)
+                {
+                String* s = ptx3(ptxS("mul.f32"), ptxS("%fk"), (String*)args.get((u32)0), ptxS("0f3FB8AA3B"));
+                s.append(ptx2(ptxS("ex2.approx.f32"), r, ptxS("%fk")));
+                return s;
+                }
+            if ((m.equals(ptxS("ln")) || m.equals(ptxS("log"))) && n == (u32)1)
+                {
+                String* s = ptx2(ptxS("lg2.approx.f32"), ptxS("%fk"), (String*)args.get((u32)0));
+                s.append(ptx3(ptxS("mul.f32"), r, ptxS("%fk"), ptxS("0f3F317218")));
+                return s;
+                }
+            if (m.equals(ptxS("pow")) && n == (u32)2)
+                {
+                String* s = ptx2(ptxS("lg2.approx.f32"), ptxS("%fk"), (String*)args.get((u32)0));
+                s.append(ptx3(ptxS("mul.f32"), ptxS("%fk"), ptxS("%fk"), (String*)args.get((u32)1)));
+                s.append(ptx2(ptxS("ex2.approx.f32"), r, ptxS("%fk")));
+                return s;
+                }
+            return (String*)0;
+            }
         // A function of the program: printed once, before the kernel.
         IRFunc* target = (IRFunc*)0;
         for (u32 q = (u32)0; q < _m.funcs().count(); q = q + (u32)1)
@@ -15789,6 +15868,14 @@ class ClassInfo
         return s;
         }
 
+    // "\tbfe.s32 r, r, 0, bits;\n": the low bits of r, sign-extended.
+    String* ptxBfe(String* r, string bits)
+        {
+        String* s = ptxS("\tbfe.s32 ");
+        s.append(r); s.appendCString(", "); s.append(r); s.appendCString(", 0, "); s.appendCString(bits); s.appendCString(";\n");
+        return s;
+        }
+
     String* ptxConvert(IRInsn* ip, String* r, String* rt)
         {
         IROperand* o0 = (IROperand*)ip.ops().get((u32)0);
@@ -15815,8 +15902,10 @@ class ClassInfo
             {
             String* lo = sw ? ptx2(ptxS("cvt.u32.u64"), r, a) : ptx2(ptxS("mov.b32"), r, a);
             if (rw) return ptx2(ptxS("mov.b64"), r, a);
-            if (ptxIs(rt, "U8") || ptxIs(rt, "I8")) { lo.append(ptx3(ptxS("and.b32"), r, r, ptxS("255"))); return lo; }
-            if (ptxIs(rt, "U16") || ptxIs(rt, "I16")) { lo.append(ptx3(ptxS("and.b32"), r, r, ptxS("65535"))); return lo; }
+            if (ptxIs(rt, "U8")) { lo.append(ptx3(ptxS("and.b32"), r, r, ptxS("255"))); return lo; }
+            if (ptxIs(rt, "U16")) { lo.append(ptx3(ptxS("and.b32"), r, r, ptxS("65535"))); return lo; }
+            if (ptxIs(rt, "I8")) { lo.append(ptxBfe(r, "8")); return lo; }
+            if (ptxIs(rt, "I16")) { lo.append(ptxBfe(r, "16")); return lo; }
             return lo;
             }
         if (op.equals(ptxS("SExt")) && ptxNarrow(st))
@@ -15825,6 +15914,15 @@ class ClassInfo
             String* x = ptxS("\tbfe.s32 %k, ");
             x.append(a); x.appendCString(", 0, "); x.append(bits); x.appendCString(";\n");
             if (rw) x.append(ptx2(ptxS("cvt.s64.s32"), r, ptxS("%k")));
+            else x.append(ptx2(ptxS("mov.b32"), r, ptxS("%k")));
+            return x;
+            }
+        if (op.equals(ptxS("ZExt")) && (ptxIs(st, "I8") || ptxIs(st, "I16")))
+            {
+            // A signed narrow value is sign-extended in its register:
+            // zero-extending it clears those bits first.
+            String* x = ptx3(ptxS("and.b32"), ptxS("%k"), a, ptxS(ptxIs(st, "I8") ? "255" : "65535"));
+            if (rw) x.append(ptx2(ptxS("cvt.u64.u32"), r, ptxS("%k")));
             else x.append(ptx2(ptxS("mov.b32"), r, ptxS("%k")));
             return x;
             }
@@ -15881,12 +15979,27 @@ class ClassInfo
             String* a = ptxOp(o0, rt);
             if (a == (String*)0) return (String*)0;
             if (ptxIs(rt, "Bool")) return ptx2(ptxS("not.pred"), r, a);
-            if (ptxNarrow(rt)) return (String*)0;
+            if (ptxNarrow(rt))
+                {
+                // In 32 bits, then back in the register form.
+                if (o0.kind() == (u8)OPK_IMMI) return ptx2(ptxS("mov.b32"), r, String.withI64(ptxNarrowValue(rt, ~o0.imm())));
+                String* s = ptx2(ptxS("not.b32"), r, a);
+                s.append(ptxNarrowFix(rt, r));
+                return s;
+                }
             return ptx2(ptxS(ptxWide(rt) ? "not.b64" : "not.b32"), r, a);
             }
         if (op.equals(ptxS("Neg")) || op.equals(ptxS("FNeg")))
             {
             String* a = ptxOp(o0, rt);
+            if (a != (String*)0 && ptxNarrow(rt))
+                {
+                // In 32 bits, then back in the register form.
+                if (o0.kind() == (u8)OPK_IMMI) return ptx2(ptxS("mov.b32"), r, String.withI64(ptxNarrowValue(rt, (i64)0 - o0.imm())));
+                String* s = ptx2(ptxS("neg.s32"), r, a);
+                s.append(ptxNarrowFix(rt, r));
+                return s;
+                }
             String* sfx = ptxArith(rt);
             if (a == (String*)0 || sfx == (String*)0) return (String*)0;
             if (ptxIs(rt, "U32")) sfx = ptxS("s32");
@@ -15905,6 +16018,18 @@ class ClassInfo
             return ptxConvert(ip, r, rt);
         if (op.equals(ptxS("SIToFp")) || op.equals(ptxS("UIToFp")) || op.equals(ptxS("FpToSI")) || op.equals(ptxS("FpToUI")) || op.equals(ptxS("FpExt")) || op.equals(ptxS("FpTrunc")))
             return ptxFpConvert(ip, r, rt);
+        if (op.equals(ptxS("Bitcast")))
+            {
+            // The same bits under another type: a move, and a narrow result
+            // put back in its register form (an i8 read as a u8).
+            String* st = o0.kind() == (u8)OPK_USE ? mslTypeOf(o0) : rt;
+            String* a = ptxOp(o0, st);
+            if (a == (String*)0 || st == (String*)0 || ptxIs(rt, "Bool") || ptxIs(st, "Bool")) return (String*)0;
+            bool w = ptxWide(rt) || ptxIs(rt, "F64");
+            String* s = ptx2(ptxS(w ? "mov.b64" : "mov.b32"), r, a);
+            s.append(ptxNarrowFix(rt, r));
+            return s;
+            }
         if (op.equals(ptxS("Select")))
             {
             if (ptxIs(rt, "Bool")) return (String*)0;
@@ -15952,6 +16077,7 @@ class ClassInfo
             }
         if (op.equals(ptxS("AddrOf")))
             {
+            if (_mSinit.get((Hashable*)mslKey(rv)) != (Object*)0) return ptxS("");
             String* g = (String*)_mGlobalOf.get((Hashable*)mslKey(rv));
             if (g == (String*)0) return (String*)0;
             u32 gi = (u32)0;
@@ -15974,6 +16100,7 @@ class ClassInfo
                 }
             String* m = ptxMem(rt);
             if (m == (String*)0) return (String*)0;
+            if (parSinitFlag(o0)) return ptx2(ptxS("mov.b32"), r, ptxS("2")); // a static-init flag: done
             String* sp = ptxSpaceOf(o0);
             String* a = ptxReg(o0.val());
             String* ld = ptxS("ld.");
@@ -16122,19 +16249,19 @@ class ClassInfo
         {
         Map* sDef = _mDef; Map* sSpace = _mSpace; Map* sBufOf = _mBufOf; Map* sOrd = _mOrd;
         Map* sBlk = _mBlk; Map* sBufs = _mBufs; Map* sReds = _mReds; IRLayout* sObj = _mObj;
-        bool sFailed = _mFailed; bool sHelper = _mHelper; Map* sParams = _mParams;
+        bool sFailed = _mFailed; bool sHelper = _mHelper; Map* sParams = _mParams; Map* sSinit = _mSinit;
         u32 sEdge = _pEdge;
         String* out = ptxHelperText(g, name);
         _mDef = sDef; _mSpace = sSpace; _mBufOf = sBufOf; _mOrd = sOrd;
         _mBlk = sBlk; _mBufs = sBufs; _mReds = sReds; _mObj = sObj;
-        _mFailed = sFailed; _mHelper = sHelper; _mParams = sParams;
+        _mFailed = sFailed; _mHelper = sHelper; _mParams = sParams; _mSinit = sSinit;
         _pEdge = sEdge;
         return out;
         }
     String* ptxHelperText(IRFunc* g, String* name)
         {
         _mDef = new Map(); _mSpace = new Map(); _mBufOf = new Map(); _mOrd = new Map();
-        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false;
+        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false; _mSinit = new Map();
         _mHelper = true;
         _mParams = new Map();
         _mObj = (IRLayout*)0;
@@ -16176,7 +16303,7 @@ class ClassInfo
     String* parPtx(IRFunc* f)
         {
         _mDef = new Map(); _mSpace = new Map(); _mBufOf = new Map(); _mOrd = new Map();
-        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false;
+        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false; _mSinit = new Map();
         _mHelper = false;
         _mParams = (Map*)0;
         _mGlobals = new Array();
@@ -16239,6 +16366,7 @@ class ClassInfo
             tail.appendCString(", %x;\n\tst.global."); tail.append(m); tail.appendCString(" [%x], "); tail.append(tmp); tail.appendCString(";\n");
             }
 
+        if (_mFast) meta.appendCString(" fast");
         String* out = String.withString(meta);
         out.appendCString("\n.version 7.0\n.target sm_52\n.address_size 64\n");
         for (u32 i = (u32)0; i < _mHelperText.count(); i = i + (u32)1)
@@ -16284,6 +16412,15 @@ class ClassInfo
             String* tag = String.withCString("__XC_PAR_MSL_");
             tag.append(n);
             tag.appendCString("__");
+            // Which placeholder the block has says whether its goal is speed.
+            String* fastTag = String.withCString("__XC_PAR_FAST_");
+            fastTag.append(n);
+            fastTag.appendCString("__");
+            _mFast = false;
+            for (u32 j = (u32)0; j < _m.syms().count(); j = j + (u32)1)
+                if (parSymHasPrefix((IRSymbol*)_m.syms().get(j), fastTag))
+                    _mFast = true;
+            if (_mFast) tag = fastTag;
             String* msl = (String*)0;
             if (_parMetal)
                 msl = parMsl(f);
@@ -16310,6 +16447,25 @@ class ClassInfo
                 sym.setBytes(nb);
                 }
             }
+        }
+
+    // Whether an address is a static-init flag (see _mSinit).
+    bool parSinitFlag(IROperand* op)
+        {
+        if (op.kind() != (u8)OPK_USE || op.val() == (IRValue*)0) return false;
+        String* k = (String*)_mSinit.get((Hashable*)mslKey(op.val()));
+        return k != (String*)0 && k.equals(String.withCString("1"));
+        }
+
+    // Whether a string literal's bytes start with tag.
+    bool parSymHasPrefix(IRSymbol* sym, String* tag)
+        {
+        if (sym.kind() != (u8)SYM_STRINGLIT || sym.bytes() == (Array*)0 || sym.bytes().count() < tag.byteLength())
+            return false;
+        for (u32 q = (u32)0; q < tag.byteLength(); q = q + (u32)1)
+            if (((Number*)sym.bytes().get(q)).asU32() != (u32)tag.byteAt(q))
+                return false;
+        return true;
         }
 
     bool parReleases(IRFunc* f)

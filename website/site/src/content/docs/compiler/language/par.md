@@ -89,11 +89,34 @@ In this first version a block runs on the GPU when it works on arrays (captured
 locals or globals), scalars, reductions, and helper functions that take and
 return plain values. On an Apple GPU, which has no 64-bit floating point, a
 block that uses `double` runs on the CPU. On an NVIDIA GPU, `double` values are
-fine, but an array of them still keeps the block on the CPU, and so does a call
-to `sin`, `cos`, `exp`, `ln` or `pow`, which NVIDIA GPUs have only in
-approximate forms. Anywhere, a block that calls a helper that takes a pointer or
+fine, but an array of them still keeps the block on the CPU. Anywhere, a block that calls a helper that takes a pointer or
 an array, or that uses a global itself, runs on the CPU. `XC_PAR_REPORT=1` says
 why a block stayed on the CPU.
+
+### Speed or accuracy
+
+A block's goal says what its GPU version favours: `:goal(speed)`, the default,
+or `:goal(accuracy)`.
+
+```c
+par waves :reduce(+ high)                       // the goal is speed
+    { … }
+par measure :reduce(+ total) :goal(accuracy)    // precise maths
+    { … }
+```
+
+With speed, the GPU uses its fast maths. On a Mac that is Metal's fast mode,
+which also lets the GPU reorder float arithmetic and assume there are no NaNs
+or infinities. On an NVIDIA GPU, `sin`, `cos`, `exp`, `ln` and `pow` of `float`
+values use the hardware's approximations. Float results can then differ from
+the CPU's in the last few bits; integer results are the same either way.
+
+With accuracy, the maths is precise and float results land within about one
+ULP of the CPU's. NVIDIA GPUs have no precise `sin`, `cos`, `exp`, `ln` or
+`pow`, so there a block that calls them runs on the CPU. Choose accuracy for a
+block that depends on NaN or infinity, or on exact float results.
+
+On the CPU, both goals run the same code.
 
 ### Which device
 

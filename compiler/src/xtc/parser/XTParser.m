@@ -2885,7 +2885,7 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
 |* @return  An XTDeferNode.
 \****************************************************************************/
 /****************************************************************************\
-|* Parse `par [name] (:reduce(op var))* [:fast] { body }`, the data-parallel
+|* Parse `par [name] (:reduce(op var))* [:goal(speed|accuracy)] { body }`, the data-parallel
 |* block. The reduction operator is one of + * & | ^ min max.
 \****************************************************************************/
 - (nullable XTASTNode*)parsePar
@@ -2899,22 +2899,37 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
         [self advance];
         }
     NSMutableArray<NSArray<NSString*>*>* reductions = [NSMutableArray array];
-    BOOL fast = NO;
+    // :goal(speed) (the default) or :goal(accuracy): what the block's GPU
+    // version favours.
+    BOOL accuracy = NO;
     while ([self check:XTTokenColon])
         {
         [self advance];
         XTToken* dec = [self expect:XTTokenIdentifier];
         if (!dec)
             return nil;
-        if ([dec.value isEqualToString:@"fast"])
+        if ([dec.value isEqualToString:@"goal"])
             {
-            fast = YES;
+            if (![self expect:XTTokenLParen])
+                return nil;
+            XTToken* g = [self expect:XTTokenIdentifier];
+            if (!g)
+                return nil;
+            if (![g.value isEqualToString:@"speed"] && ![g.value isEqualToString:@"accuracy"])
+                {
+                [_diagnostics emitError:[NSString stringWithFormat:@"':goal' takes speed or accuracy, not '%@'", g.value]
+                                     at:g.location];
+                return nil;
+                }
+            accuracy = [g.value isEqualToString:@"accuracy"];
+            if (![self expect:XTTokenRParen])
+                return nil;
             continue;
             }
         if (![dec.value isEqualToString:@"reduce"])
             {
             [_diagnostics emitError:[NSString stringWithFormat:@"'par' has no decorator ':%@' "
-                                                                 "(it takes :reduce(op var) and :fast)",
+                                                                 "(it takes :reduce(op var) and :goal(speed|accuracy))",
                                                                dec.value]
                                  at:dec.location];
             return nil;
@@ -2974,7 +2989,11 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
     [[self blkFrames] removeLastObject];
     if (!body)
         return nil;
-    (void)fast; // :fast relaxes GPU maths (phase 2); the CPU path is unchanged
+    // The speed goal lets the GPU use its fast maths (approximate sin, cos,
+    // exp, ln and pow); the CPU path is the same for both goals. The
+    // desugaring marks the block's GPU placeholder with it.
+    if (!accuracy)
+        frame[@"fast"] = @YES;
     return [self parDesugarBody:body frame:frame name:name reductions:reductions at:loc];
     }
 

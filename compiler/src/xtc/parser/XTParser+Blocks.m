@@ -1218,12 +1218,14 @@ NS_ASSUME_NONNULL_END
                                                       returnTypes:@[ [XTPointerType pointerToType:[self.typeTable typeForName:@"u8"]] ]
                                                        parameters:@[] isStatic:NO isVarArgs:NO body:b location:loc]];
         }
-    // gpuSource(): the kernel's Metal source. A placeholder string, unique per
+    // gpuSource(): the kernel's GPU source. A placeholder string, unique per
     // block, that the lowering replaces with the printed kernel (or with ""
-    // when the block cannot run on Metal).
+    // when the block cannot run on the GPU); `__XC_PAR_FAST_<n>__` for a
+    // block whose goal is speed (the default), whose kernel may use fast maths.
         {
         XTASTNode* lit = [[XTLiteralStringNode alloc]
-            initWithString:[NSString stringWithFormat:@"__XC_PAR_MSL_%lu__", (unsigned long)counter]
+            initWithString:[NSString stringWithFormat:frame[@"fast"] ? @"__XC_PAR_FAST_%lu__" : @"__XC_PAR_MSL_%lu__",
+                                                      (unsigned long)counter]
                   location:loc];
         XTBlockNode* b = [[XTBlockNode alloc]
             initWithStatements:@[ [[XTReturnNode alloc] initWithValues:@[ lit ] location:loc] ]

@@ -48,6 +48,14 @@ typedef NS_ENUM(uint8_t, XTParSpace) {
 // Helpers (functions the kernel calls, transitively): printed once each, in
 // the order they finish, so a callee is always defined before its caller.
 @property(nonatomic) BOOL helperMode;
+// The block's goal is speed: fast maths, and approximate sin, cos, exp, ln
+// and pow, are allowed.
+@property(nonatomic) BOOL fast;
+// The static-init guard of a class the kernel calls (Math, say): its flag,
+// its init function and its static data, by the AddrOf value naming each
+// (YES for the flag). The host ran every init before the block started, so
+// the flag reads as done (2) and the rest prints nothing.
+@property(nonatomic, readonly) NSMutableDictionary<NSNumber*, NSNumber*>* sinitOf;
 @property(nonatomic) NSMutableArray<NSString*>* helperText;
 @property(nonatomic) NSMutableSet<NSString*>* helperNames;
 @end
