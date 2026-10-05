@@ -17,6 +17,8 @@ class RKLibraryItem : Object
     i32 w;
     i32 h;
     u8* text;  // the new control's text, or 0
+    u8* cls;   // a UXKit class for a control GEM has no type for (a G_USERDEF of it), or 0
+    u8* attrs; // its starting attributes, "key=value;key=value", or 0
 
     static RKLibraryItem* make(u8* name, i32 type, i32 w, i32 h, u8* text, u8* blurb)
         {
@@ -27,6 +29,15 @@ class RKLibraryItem : Object
         it.h = h;
         it.text = text;
         it.blurb = blurb;
+        it.cls = (u8*)0;
+        it.attrs = (u8*)0;
+        return it;
+        }
+    static RKLibraryItem* uxkit(u8* name, u8* cls, i32 w, i32 h, u8* attrs, u8* blurb)
+        {
+        RKLibraryItem* it = RKLibraryItem.make(name, (i32)UXR_T_USERDEF, w, h, (u8*)0, blurb);
+        it.cls = cls;
+        it.attrs = attrs;
         return it;
         }
     }
@@ -48,6 +59,11 @@ class RKLibrary : Object<UXTableDataSource>
         all.add(RKLibraryItem.make((u8*)"Checkbox", (i32)UXR_T_CHECKBOX, (i32)120, (i32)20, (u8*)"Checkbox", (u8*)"On or off"));
         all.add(RKLibraryItem.make((u8*)"Radio Button", (i32)UXR_T_RADIO, (i32)120, (i32)20, (u8*)"Radio", (u8*)"One of a group"));
         all.add(RKLibraryItem.make((u8*)"Pop-up Button", (i32)UXR_T_POPUP, (i32)120, (i32)24, (u8*)"Item", (u8*)"One of a list"));
+        all.add(RKLibraryItem.uxkit((u8*)"Slider", (u8*)"UXSlider", (i32)160, (i32)24, (u8*)"min=0;max=100;value=50", (u8*)"A value along a range"));
+        all.add(RKLibraryItem.uxkit((u8*)"Stepper", (u8*)"UXStepper", (i32)100, (i32)24, (u8*)"min=0;max=10;step=1;value=0", (u8*)"A value, a step at a time"));
+        all.add(RKLibraryItem.uxkit((u8*)"Progress Bar", (u8*)"UXProgressBar", (i32)160, (i32)16, (u8*)"total=100;completed=40", (u8*)"How far something has got"));
+        all.add(RKLibraryItem.uxkit((u8*)"Segmented Control", (u8*)"UXSegmentedControl", (i32)200, (i32)24, (u8*)"segments=One|Two|Three;selected=0", (u8*)"One of a few, side by side"));
+        all.add(RKLibraryItem.uxkit((u8*)"Combo Box", (u8*)"UXComboBox", (i32)160, (i32)24, (u8*)"items=Red|Green|Blue;text=Red", (u8*)"A line of text, or one of a list"));
         all.add(RKLibraryItem.make((u8*)"Box", (i32)UXR_T_BOX, (i32)200, (i32)120, (u8*)0, (u8*)"Groups controls under a frame"));
         all.add(RKLibraryItem.make((u8*)"View", (i32)UXR_T_IBOX, (i32)200, (i32)120, (u8*)0, (u8*)"Groups controls, unseen"));
         all.add(RKLibraryItem.make((u8*)"Custom View", (i32)UXR_T_USERDEF, (i32)200, (i32)120, (u8*)0, (u8*)"A view of a class you name"));

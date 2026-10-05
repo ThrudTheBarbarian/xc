@@ -423,11 +423,24 @@ class RKDrag : Object
     // Asked first, with the press point on the canvas: true takes the press (the editor is placing
     // an object from the library), and nothing is selected or dragged.
     callback placeAt bool(i32 cx, i32 cy);
+    // A control-drag (the secondary button) starting on a control: the editor draws a connection.
+    callback wireFrom void(UXRscObject* o, i32 wx, i32 wy);
+    // The line being drawn, in canvas coordinates, while `wiring`; and the rect of the control the
+    // pointer is over, highlighted as the drop target (w = 0: none).
+    bool wiring;
+    i32 lineX0;
+    i32 lineY0;
+    i32 lineX1;
+    i32 lineY1;
+    UXRect hot;
 
     void init(void)
         {
         super.init();
         placeAt = (callback bool(i32 cx, i32 cy))0;
+        wireFrom = (callback void(UXRscObject * o, i32 wx, i32 wy))0;
+        wiring = false;
+        hot = UXGeom.make((i16)0, (i16)0, (i16)0, (i16)0);
         drag = new RKDrag();
         selection = (UXRscObject*)0;
         tracking = (UXRscObject*)0;
@@ -441,6 +454,15 @@ class RKDrag : Object
     // moved without repainting this one.
     void drawRect(UXGraphics* g, UXRect dirty)
         {
+        if (wiring)
+            {
+            if (hot.w > (i16)0)
+                {
+                RKEditOverlay.outline(g, hot);
+                }
+            RKEditOverlay.line(g, lineX0, lineY0, lineX1, lineY1);
+            return;
+            }
         if (!drag.guidesOn)
             {
             return;
@@ -499,6 +521,63 @@ class RKDrag : Object
             }
         self.finish(o);
         }
+    // The secondary button (on a Mac, a control-click) on a control starts a connection from it.
+    void rightMouseDown(UXEvent* e)
+        {
+        i32 cx = (i32)0;
+        i32 cy = (i32)0;
+        self.toCanvas((i32)e.x, (i32)e.y, &cx, &cy);
+        UXRscObject* o = RKDrag.hitTest(drag.root, cx, cy);
+        if (o != (UXRscObject*)0 && wireFrom)
+            {
+            wireFrom(o, (i32)e.x, (i32)e.y);
+            }
+        }
+    // Show the line from (x0, y0) to (x1, y1), canvas coordinates, with `target` highlighted.
+    void showLine(i32 x0, i32 y0, i32 x1, i32 y1, UXRect target)
+        {
+        wiring = true;
+        lineX0 = x0;
+        lineY0 = y0;
+        lineX1 = x1;
+        lineY1 = y1;
+        hot = target;
+        self.setNeedsDisplay();
+        }
+    void hideLine(void)
+        {
+        wiring = false;
+        hot = UXGeom.make((i16)0, (i16)0, (i16)0, (i16)0);
+        self.setNeedsDisplay();
+        }
+    // Interface Builder's blue, two points wide: a run of small squares, as the graphics seam has
+    // no line of its own.
+    static void line(UXGraphics* g, i32 x0, i32 y0, i32 x1, i32 y1)
+        {
+        i32 dx = x1 - x0;
+        i32 dy = y1 - y0;
+        i32 ax = dx < (i32)0 ? (i32)0 - dx : dx;
+        i32 ay = dy < (i32)0 ? (i32)0 - dy : dy;
+        i32 n = ax > ay ? ax : ay;
+        if (n == (i32)0)
+            {
+            n = (i32)1;
+            }
+        for (i32 i = (i32)0; i <= n; i = i + (i32)2)
+            {
+            i32 x = x0 + dx * i / n;
+            i32 y = y0 + dy * i / n;
+            g.fillRectRGB(UXGeom.make((i16)(x - (i32)1), (i16)(y - (i32)1), (i16)3, (i16)3), (i32)30, (i32)120, (i32)255);
+            }
+        }
+    static void outline(UXGraphics* g, UXRect r)
+        {
+        g.fillRectRGB(UXGeom.make(r.x, r.y, r.w, (i16)2), (i32)30, (i32)120, (i32)255);
+        g.fillRectRGB(UXGeom.make(r.x, (i16)((i32)r.y + (i32)r.h - (i32)2), r.w, (i16)2), (i32)30, (i32)120, (i32)255);
+        g.fillRectRGB(UXGeom.make(r.x, r.y, (i16)2, r.h), (i32)30, (i32)120, (i32)255);
+        g.fillRectRGB(UXGeom.make((i16)((i32)r.x + (i32)r.w - (i32)2), r.y, (i16)2, r.h), (i32)30, (i32)120, (i32)255);
+        }
+
     void mouseDragged(UXEvent* e)
         {
         if (tracking != (UXRscObject*)0)

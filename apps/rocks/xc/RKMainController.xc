@@ -34,6 +34,11 @@
 #import "RKUndo.xc"
 #import "RKIdentity.xc"
 #import "RKLibrary.xc"
+#import "RKClasses.xc"
+#import "RKWiring.xc"
+#import "RKConnect.xc"
+#import "RKDock.xc"
+#import "RKVariants.xc"
 #import "UXSegmentedControl.xc"
 
 // The toolbar's items, by tag (RKMainBuilder makes them; onToolbar dispatches them).
@@ -58,6 +63,8 @@ class RKMainController : Object<UXTableDelegate>
     outlet UXSegmentedControl* inspectorTabs; // Identity / Attributes / Size / Connections
     outlet UXTableView* libraryTable;         // what can be added
     outlet UXTextField* librarySearch;        // its filter
+    outlet RKDock* dock;                      // File's Owner, First Responder, the objects
+    outlet UXPopUpButton* newScope;           // Connect for: the layouts a new connection binds in
 
     // The document.  The controller owns the MODEL; the canvas outlet shows it.
     UXRscDoc* doc;
@@ -87,6 +94,11 @@ class RKMainController : Object<UXTableDelegate>
     RKIdentity* identityCtl;        // the Identity tab
     Array<UXView>* tabPanes;        // the four tabs' panes, in order (the builder fills it)
     RKLibrary* library;
+    RKClassBook* classBook;         // what is known about classes: UXKit's, the app's, declared
+    RKConnectionsPane* connectionsCtl; // the Connections tab
+    RKWireChooser* chooser;         // the list a connection line ended in, while it is up
+    i32 newScopePreset;             // RKSC_*: the scope a new connection gets
+    RKVariants* variants;           // which properties each layout varies; the rest are shared
     RKLibraryItem* placing;         // armed by a library pick: the next canvas press places it
     // What is selected, by outline row kind (RKON_*): a control (`selected`), a placeholder, or one
     // of the document's objects (selTop); 0 = nothing.
@@ -152,6 +164,19 @@ class RKMainController : Object<UXTableDelegate>
         identityCtl.changed = &self.onIdentityEdit;
         tabPanes = new Array();
         library = new RKLibrary();
+        classBook = new RKClassBook();
+        identityCtl.book = classBook;
+        connectionsCtl = new RKConnectionsPane();
+        connectionsCtl.willChange = &self.onConnectionWillChange;
+        connectionsCtl.changed = &self.onConnectionEdit;
+        chooser = (RKWireChooser*)0;
+        newScopePreset = (i32)RKSC_ALL;
+        variants = new RKVariants();
+        inspectorCtl.varyState = &self.varyStateOf;
+        inspectorCtl.varyToggle = &self.onVaryToggle;
+        overlay.wireFrom = &self.onWireFromView;
+        dock = (RKDock*)0;
+        newScope = (UXPopUpButton*)0;
         placing = (RKLibraryItem*)0;
         selKind = (i32)0;
         selTop = (i32)0;
@@ -391,6 +416,11 @@ class RKMainController : Object<UXTableDelegate>
         t.root.addChild(o);
         t.reparentByGeometry();
         doc.ensureLogicalId(t, o);
+        if (it.cls != (u8*)0)
+            {
+            doc.setClassOf(t, o, it.cls);
+            RKMainController.setAttrs(doc, t, o, it.attrs);
+            }
         dirty = true;
         self.rebuildShownPane();
         self.showResource(doc, shownTree);
@@ -398,6 +428,385 @@ class RKMainController : Object<UXTableDelegate>
         overlay.setSelection(o);
         self.sayAbout((u8*)"Added a ", it.name);
         return true;
+        }
+
+    // ---- layouts: shared and varied properties -------------------------------------------------
+    i32 varyStateOf(UXRscObject* o, RKProperty* p)
+        {
+        UXRscTree* t = self.shownTreeOrNull();
+        if (t == (UXRscTree*)0 || RKVariants.copiesOf(doc, t, o).count() == (u32)0)
+            {
+            return (i32)-1; // in this layout only: nothing to share or vary
+            }
+        return variants.varies(doc, t, o, p.label) ? (i32)1 : (i32)0;
+        }
+    void onVaryToggle(UXRscObject* o, RKProperty* p)
+        {
+        UXRscTree* t = self.shownTreeOrNull();
+        if (t == (UXRscTree*)0)
+            {
+            return;
+            }
+        self.willEdit((u8*)"Vary", (Object*)0);
+        if (variants.varies(doc, t, o, p.label))
+            {
+            variants.unvary(doc, t, o, p);
+            self.sayAbout((u8*)"Shared again: ", p.label);
+            UXView* w = canvasMap.viewFor(o);
+            if (w != (UXView*)0)
+                {
+                UXNib.applyState(w, o);
+                UXNib.applyText(w, o);
+                }
+            }
+        else
+            {
+            variants.vary(doc, t, o, p.label);
+            self.sayAbout((u8*)"This layout varies ", p.label);
+            }
+        dirty = true;
+        inspectorCtl.show(o); // the toggle reads the new state
+        }
+    // The other layouts of `t`'s form have changed under their panes: rebuild those panes, so
+    // switching to one shows what it now says.
+    void staleOtherLayouts(UXRscTree* t)
+        {
+        UXRscForm* f = doc.formOf(t);
+        if (f == (UXRscForm*)0 || canvas == (UXView*)0)
+            {
+            return;
+            }
+        for (i32 v = (i32)0; v < f.variantCount(); v = v + (i32)1)
+            {
+            i32 ti = doc.indexOfTree(f.variantAt(v).tree);
+            if (ti == shownTree || ti >= (i32)panes.count())
+                {
+                continue;
+                }
+            ((UXView* ?)panes.get((u32)ti)).setHidden(true);
+            UXView* pane = new UXView();
+            canvas.addSubview(pane, canvas.bounds());
+            pane.setHidden(true);
+            RKCanvas* map = new RKCanvas();
+            map.realizeIn(doc, doc.treeAt(ti), (i32)RKWiring.themeOf(doc, doc.treeAt(ti)), pane);
+            panes.set((u32)ti, pane);
+            maps.set((u32)ti, map);
+            }
+        self.raiseOverlay();
+        }
+
+    // ---- connections ------------------------------------------------------------------------
+    // The selection as a connection end, or 0.
+    RKEnd* selectedEnd(void)
+        {
+        if (selKind == (i32)RKON_VIEW && selected != (UXRscObject*)0)
+            {
+            return RKEnd.view(selected);
+            }
+        if (selKind == (i32)RKON_OWNER || selKind == (i32)RKON_FIRSTR || selKind == (i32)RKON_OBJECT)
+            {
+            return RKEnd.placeholder(selKind, selTop);
+            }
+        return (RKEnd*)0;
+        }
+    UXRscTree* shownTreeOrNull(void)
+        {
+        return doc != (UXRscDoc*)0 && shownTree >= (i32)0 && shownTree < doc.treeCount() ? doc.treeAt(shownTree) : (UXRscTree*)0;
+        }
+    void showConnections(void)
+        {
+        UXRscTree* t = self.shownTreeOrNull();
+        connectionsCtl.show(doc, t, classBook, t != (UXRscTree*)0 ? self.selectedEnd() : (RKEnd*)0);
+        }
+    void onConnectionWillChange(void)
+        {
+        self.willEdit((u8*)"Connection", (Object*)0);
+        }
+    void onConnectionEdit(void)
+        {
+        dirty = true;
+        self.showConnections();
+        }
+    void onNewScope(UXControl* sender) : action
+        {
+        if (newScope != (UXPopUpButton*)0)
+            {
+            newScopePreset = newScope.selectedIndex();
+            }
+        }
+    // A click on a dock item selects it, as its outline row does.
+    void onDockPick(RKEnd* e)
+        {
+        self.selectPlaceholder(e.kind, e.topId);
+        }
+    void onWireFromDock(RKEnd* e, i32 wx, i32 wy)
+        {
+        self.trackWire(e, wx, wy);
+        }
+    void onWireFromView(UXRscObject* o, i32 wx, i32 wy)
+        {
+        self.trackWire(RKEnd.view(o), wx, wy);
+        }
+    // Draw a line from `src` while the button is held, then offer what fits where it was let go.
+    void trackWire(RKEnd* src, i32 wx, i32 wy)
+        {
+        if (doc == (UXRscDoc*)0 || canvas == (UXView*)0 || !gDriver.dragTrackingIsModal())
+            {
+            return;
+            }
+        UXRect oa = overlay.absoluteFrame();
+        i32 x0 = (i32)0;
+        i32 y0 = (i32)0;
+        self.endCentre(src, &x0, &y0);
+        x0 = x0 - (i32)oa.x;
+        y0 = y0 - (i32)oa.y;
+        i32 x = wx;
+        i32 y = wy;
+        while (gDriver.trackDragStep(&x, &y) != (i32)0)
+            {
+            RKEnd* over = self.endAtWindow(x, y);
+            UXRect hot = UXGeom.make((i16)0, (i16)0, (i16)0, (i16)0);
+            if (over != (RKEnd*)0 && over.isView())
+                {
+                hot = overlay.drag.canvasRect(over.obj);
+                }
+            if (dock != (RKDock*)0)
+                {
+                dock.highlighted = over != (RKEnd*)0 && !over.isView() ? over : (RKEnd*)0;
+                dock.setNeedsDisplay();
+                }
+            overlay.showLine(x0, y0, x - (i32)oa.x, y - (i32)oa.y, hot);
+            if (gApp != (UXApplication*)0)
+                {
+                gApp.displayIfNeeded();
+                }
+            }
+        overlay.hideLine();
+        if (dock != (RKDock*)0)
+            {
+            dock.highlighted = (RKEnd*)0;
+            dock.setNeedsDisplay();
+            }
+        RKEnd* dst = self.endAtWindow(x, y);
+        if (dst == (RKEnd*)0)
+            {
+            self.say((u8*)"No connection: let go over a control or an object");
+            return;
+            }
+        self.offerWire(src, dst, x, y);
+        }
+    // The end under a window point: a dock item, or a control on the canvas.
+    RKEnd* endAtWindow(i32 wx, i32 wy)
+        {
+        if (dock != (RKDock*)0)
+            {
+            RKEnd* e = dock.endAtWindow(wx, wy);
+            if (e != (RKEnd*)0)
+                {
+                return e;
+                }
+            }
+        UXRect oa = overlay.absoluteFrame();
+        i32 cx = wx - (i32)oa.x;
+        i32 cy = wy - (i32)oa.y;
+        if (cx < (i32)0 || cy < (i32)0 || cx >= (i32)oa.w || cy >= (i32)oa.h)
+            {
+            return (RKEnd*)0;
+            }
+        UXRscObject* o = RKDrag.hitTest(overlay.drag.root, cx, cy);
+        return o != (UXRscObject*)0 ? RKEnd.view(o) : (RKEnd*)0;
+        }
+    // Where a line attaches to an end, in window coordinates.
+    void endCentre(RKEnd* e, i32* wx, i32* wy)
+        {
+        if (e.isView())
+            {
+            UXRect r = overlay.drag.canvasRect(e.obj);
+            UXRect oa = overlay.absoluteFrame();
+            wx[0] = (i32)oa.x + (i32)r.x + (i32)r.w / (i32)2;
+            wy[0] = (i32)oa.y + (i32)r.y + (i32)r.h / (i32)2;
+            return;
+            }
+        if (dock != (RKDock*)0)
+            {
+            dock.centreOf(e, wx, wy);
+            }
+        }
+    // Offer what fits a line from `src` to `dst`, at window point (wx, wy).
+    void offerWire(RKEnd* src, RKEnd* dst, i32 wx, i32 wy)
+        {
+        self.closeChooser();
+        UXRscTree* t = self.shownTreeOrNull();
+        if (t == (UXRscTree*)0)
+            {
+            return;
+            }
+        if (src.kind == dst.kind && src.obj == dst.obj && src.topId == dst.topId)
+            {
+            self.say((u8*)"No connection: a line needs two ends");
+            return;
+            }
+        Array<RKChoice2>* cs = RKWiring.wireChoices(doc, t, classBook, src, dst);
+        if (cs.count() == (u32)0)
+            {
+            self.say((u8*)"Nothing fits: give the object a class with outlets or actions (Identity)");
+            return;
+            }
+        RKWireChooser* ch = new RKWireChooser();
+        ch.choices = cs;
+        ch.src = src;
+        ch.dst = dst;
+        i16 rh = (i16)UXMetrics.stdHeightFor((i32)UXKindField, (i32)UX_FORM_DESKTOP);
+        // the title, the list (its header, then a row a choice, at least two), Cancel
+        i32 rows = (i32)cs.count() > (i32)2 ? (i32)cs.count() : (i32)2;
+        i32 listH = (i32)24 + rows * (i32)24;
+        i32 h = (i32)rh + (i32)10 + listH + (i32)rh + (i32)14;
+        if (h > (i32)300)
+            {
+            listH = listH - (h - (i32)300);
+            h = (i32)300;
+            }
+        // Beside the drop point, where it covers no control: native controls draw above the
+        // toolkit's own views, so a list laid over one would be hidden behind it.
+        UXRect ca = canvas.absoluteFrame();
+        i32 px = wx - (i32)ca.x;
+        i32 py = wy - (i32)ca.y;
+        i32 bx = (i32)-1;
+        i32 by = (i32)-1;
+        for (i32 k = (i32)0; k < (i32)4 && bx < (i32)0; k = k + (i32)1)
+            {
+            i32 x = (k & (i32)1) == (i32)0 ? px + (i32)12 : px - (i32)232;
+            i32 y = (k & (i32)2) == (i32)0 ? py + (i32)12 : py - h - (i32)12;
+            x = x < (i32)0 ? (i32)0 : (x + (i32)220 > (i32)ca.w ? (i32)ca.w - (i32)220 : x);
+            y = y < (i32)0 ? (i32)0 : (y + h > (i32)ca.h ? (i32)ca.h - h : y);
+            if (!self.coversControl(t, x, y, (i32)220, h))
+                {
+                bx = x;
+                by = y;
+                }
+            }
+        if (bx < (i32)0)
+            {
+            bx = px + (i32)12 + (i32)220 > (i32)ca.w ? (i32)ca.w - (i32)220 : px + (i32)12;
+            by = py + (i32)12 + h > (i32)ca.h ? (i32)ca.h - h : py + (i32)12;
+            }
+        canvas.addSubview(ch, UXGeom.make((i16)(bx > (i32)0 ? bx : (i32)0), (i16)(by > (i32)0 ? by : (i32)0), (i16)220, (i16)h));
+        UXLabel* title = new UXLabel();
+        title.setTitle(RKConnectionsPane.joined3(RKConnectionsPane.describe(doc, t, RKWiring.refOf(doc, t, src)), (u8*)" -> ",
+                                                 RKConnectionsPane.describe(doc, t, RKWiring.refOf(doc, t, dst))));
+        ch.addSubview(title, UXGeom.make((i16)8, (i16)6, (i16)204, rh));
+        UXTableView* tb = new UXTableView();
+        tb.addColumn((u8*)"", (i16)56);
+        tb.addColumn((u8*)"", (i16)140);
+        tb.setDataSource((UXTableDataSource*)ch);
+        tb.setDelegate((UXTableDelegate*)self);
+        ch.addSubview(tb, UXGeom.make((i16)4, (i16)((i32)rh + (i32)10), (i16)212, (i16)listH));
+        UXButton* cancel = new UXButton();
+        cancel.setTitle((u8*)"Cancel");
+        cancel.setAction(&self.onChooserCancel);
+        ch.addSubview(cancel, UXGeom.make((i16)140, (i16)(h - (i32)rh - (i32)6), (i16)72, rh));
+        ch.table = tb;
+        ch.title = title;
+        chooser = ch;
+        self.say((u8*)"Choose what to connect");
+        }
+    // Whether a canvas rect overlaps any control of the layout `t` (its containers excepted).
+    bool coversControl(UXRscTree* t, i32 x, i32 y, i32 w, i32 h)
+        {
+        Array<UXRscObject>* all = t.allObjects();
+        for (u32 i = (u32)1; i < all.count(); i = i + (u32)1)
+            {
+            UXRscObject* o = (UXRscObject* ?)all.get(i);
+            if (o.canHaveChildren())
+                {
+                continue;
+                }
+            UXRect r = overlay.drag.canvasRect(o);
+            if (x < (i32)r.x + (i32)r.w && (i32)r.x < x + w && y < (i32)r.y + (i32)r.h && (i32)r.y < y + h)
+                {
+                return true;
+                }
+            }
+        return false;
+        }
+    void onChooserCancel(UXControl* sender)
+        {
+        self.closeChooser();
+        self.say((u8*)"Not connected");
+        }
+    void closeChooser(void)
+        {
+        if (chooser != (RKWireChooser*)0)
+            {
+            chooser.setHidden(true);
+            chooser.removeFromSuperview();
+            chooser = (RKWireChooser*)0;
+            }
+        }
+    // A pick in the chooser: make the connection, in the scope chosen under the canvas.
+    void choose(i32 row)
+        {
+        RKWireChooser* ch = chooser;
+        UXRscTree* t = self.shownTreeOrNull();
+        if (ch == (RKWireChooser*)0 || t == (UXRscTree*)0)
+            {
+            return;
+            }
+        RKChoice2* c = ch.choiceAt(row);
+        if (c == (RKChoice2*)0)
+            {
+            return;
+            }
+        self.willEdit((u8*)"Connect", (Object*)0);
+        u32 scope = RKWiring.scopeOf(newScopePreset, RKWiring.themeOf(doc, t));
+        RKWiring.connect(doc, t, ch.src, ch.dst, c, scope);
+        self.closeChooser();
+        dirty = true;
+        self.showConnections();
+        self.sayAbout(c.kind == (i32)UXR_CONN_ACTION ? (u8*)"Connected the action " : (u8*)"Connected the outlet ", c.member);
+        }
+
+    // "key=value;key=value" into the control's attributes.
+    static void setAttrs(UXRscDoc* d, UXRscTree* t, UXRscObject* o, u8* list)
+        {
+        if (list == (u8*)0)
+            {
+            return;
+            }
+        i32 i = (i32)0;
+        while (list[i] != (u8)0)
+            {
+            i32 ks = i;
+            while (list[i] != (u8)0 && list[i] != (u8)'=')
+                {
+                i = i + (i32)1;
+                }
+            i32 ke = i;
+            if (list[i] == (u8)'=')
+                {
+                i = i + (i32)1;
+                }
+            i32 vs = i;
+            while (list[i] != (u8)0 && list[i] != (u8)';')
+                {
+                i = i + (i32)1;
+                }
+            d.setAttrOf(t, o, RKMainController.part(list, ks, ke), RKMainController.part(list, vs, i));
+            if (list[i] == (u8)';')
+                {
+                i = i + (i32)1;
+                }
+            }
+        }
+    static u8* part(u8* s, i32 a, i32 b)
+        {
+        u8* p = new u8[(u32)(b - a + (i32)1)];
+        for (i32 k = a; k < b; k = k + (i32)1)
+            {
+            p[k - a] = s[k];
+            }
+        p[b - a] = (u8)0;
+        return p;
         }
 
     // ---- the Identity tab ------------------------------------------------------------------
@@ -409,6 +818,11 @@ class RKMainController : Object<UXTableDelegate>
     void onIdentityEdit()
         {
         dirty = true;
+        if (dock != (RKDock*)0)
+            {
+            dock.rebuild(doc);
+            }
+        self.showConnections();
         if (identityCtl.classField != (UXTextField*)0)
             {
             self.titleInspector(identityCtl.classField.text(), selKind == (i32)RKON_VIEW && selected != (UXRscObject*)0 ? UXNib.defaultClassFor(selected.type) : (u8*)"Object");
@@ -462,6 +876,7 @@ class RKMainController : Object<UXTableDelegate>
             {
             self.showTab((i32)0); // a placeholder has nothing else to inspect
             }
+        self.showConnections();
         }
 
     void onDesktop(UXControl* sender) : action
@@ -565,6 +980,14 @@ class RKMainController : Object<UXTableDelegate>
         self.setDocPath(path);
         dirty = false;
         history.clear();
+        // the app's classes, from its source: every .xc under the document's folder; then the
+        // document's own declarations
+        classBook = new RKClassBook();
+        u8* dir = RKMainController.dirOf(path);
+        i32 sources = classBook.loadTree(dir, (i32)4);
+        classBook.loadFrom(r);
+        identityCtl.book = classBook;
+        variants.loadFrom(r);
         viewClass = (i32)UXR_V_DESKTOP;
         viewOrient = (i32)UXR_V_ORIENT_NONE;
         self.showResource(r, (i32)0);
@@ -600,6 +1023,77 @@ class RKMainController : Object<UXTableDelegate>
         d.appendByte((u8)0);
         docPathStore = d;
         docPath = d.bytes();
+        }
+    // Everything before the last path component ("." when there is none).
+    static u8* dirOf(u8* path)
+        {
+        i32 cut = (i32)-1;
+        for (i32 i = (i32)0; path[i] != (u8)0; i = i + (i32)1)
+            {
+            if (path[i] == (u8)'/' || path[i] == (u8)'\\')
+                {
+                cut = i;
+                }
+            }
+        if (cut < (i32)0)
+            {
+            return (u8*)".";
+            }
+        u8* d = new u8[(u32)(cut + (i32)1)];
+        for (i32 i = (i32)0; i < cut; i = i + (i32)1)
+            {
+            d[i] = path[i];
+            }
+        d[cut] = (u8)0;
+        return cut == (i32)0 ? (u8*)"/" : d;
+        }
+    // File > Add Class Source or Library: an .xc file, or a library whose built-in interface lists
+    // its classes (a library dropped on the window comes here too).
+    void onAddClasses(UXMenuItem* sender)
+        {
+        u8* path = UXOpenPanel.run((u8*)"Add a class source (.xc) or a library", (u8*)".");
+        if (path == (u8*)0)
+            {
+            return;
+            }
+        self.addClasses(RKIdentity.dup(path));
+        free((pointer)path);
+        }
+    // A file dropped on the window: a resource opens; a library or an .xc source adds its classes.
+    void onFileDrop(u8* path, i32 window, i32 x, i32 y)
+        {
+        u8* p = RKIdentity.dup(path);
+        i32 l = UXRscTree.len(p);
+        if (l > (i32)4 && p[l - (i32)4] == (u8)'.' && (p[l - (i32)3] | (u8)32) == (u8)'r' &&
+            (p[l - (i32)2] | (u8)32) == (u8)'s' && (p[l - (i32)1] | (u8)32) == (u8)'c')
+            {
+            self.openPath(p);
+            return;
+            }
+        self.addClasses(p);
+        }
+    bool addClasses(u8* path)
+        {
+        i32 n = (i32)-1;
+        i32 l = UXRscTree.len(path);
+        bool source = l > (i32)3 && path[l - (i32)3] == (u8)'.' && path[l - (i32)2] == (u8)'x' && path[l - (i32)1] == (u8)'c';
+        if (source)
+            {
+            n = classBook.loadSource(path);
+            }
+        else
+            {
+            n = classBook.loadLibrary(path);
+            }
+        if (n < (i32)0)
+            {
+            self.say(source ? (u8*)"That source cannot be read" : (u8*)"That is not a library with an interface");
+            return false;
+            }
+        self.sayAbout((u8*)"Read classes from ", RKMainController.baseName(path));
+        identityCtl.reshow();
+        self.showConnections();
+        return true;
         }
     // The last path component (it points into `path`).
     static u8* baseName(u8* path)
@@ -756,7 +1250,8 @@ class RKMainController : Object<UXTableDelegate>
             UXView* pane = new UXView();
             canvas.addSubview(pane, canvas.bounds());
             RKCanvas* map = new RKCanvas();
-            i32 built = map.realize(r.treeAt((i32)panes.count()), pane);
+            UXRscTree* rt = r.treeAt((i32)panes.count());
+            i32 built = map.realizeIn(r, rt, (i32)RKWiring.themeOf(r, rt), pane);
             panes.add(pane);
             maps.add(map);
             }
@@ -774,6 +1269,10 @@ class RKMainController : Object<UXTableDelegate>
         if (formOutline != (UXOutlineView*)0)
             {
             outlineModel.build(r, viewClass, viewOrient);
+            if (dock != (RKDock*)0)
+                {
+                dock.rebuild(r);
+                }
             formOutline.setOutlineSource(outlineModel);
             formOutline.reloadData();
             }
@@ -789,6 +1288,11 @@ class RKMainController : Object<UXTableDelegate>
         if (libraryTable != (UXTableView*)0 && t == libraryTable)
             {
             self.libraryPick(library.itemAt(row));
+            return;
+            }
+        if (chooser != (RKWireChooser*)0 && t == chooser.table)
+            {
+            self.choose(row);
             return;
             }
         if (formOutline == (UXOutlineView*)0)
@@ -833,6 +1337,8 @@ class RKMainController : Object<UXTableDelegate>
         history.breakRun(); // typing into another object is another step
         selected = o;
         selKind = o != (UXRscObject*)0 ? (i32)RKON_VIEW : (i32)0;
+        inspectorCtl.doc = doc;
+        inspectorCtl.tree = self.shownTreeOrNull();
         inspectorCtl.show(o); // a NEW selection re-renders the pane
         sizeCtl.show(o);
         if (o != (UXRscObject*)0 && doc != (UXRscDoc*)0 && shownTree >= (i32)0 && shownTree < doc.treeCount())
@@ -844,6 +1350,7 @@ class RKMainController : Object<UXTableDelegate>
             {
             identityCtl.showNothing();
             }
+        self.showConnections();
         self.placeFrame(o);
         }
 
@@ -999,7 +1506,7 @@ class RKMainController : Object<UXTableDelegate>
         UXView* pane = new UXView();
         canvas.addSubview(pane, canvas.bounds());
         RKCanvas* map = new RKCanvas();
-        map.realize(doc.treeAt(shownTree), pane);
+        map.realizeIn(doc, doc.treeAt(shownTree), (i32)RKWiring.themeOf(doc, doc.treeAt(shownTree)), pane);
         panes.set((u32)shownTree, pane);
         maps.set((u32)shownTree, map);
         canvasMap = map;
@@ -1141,6 +1648,8 @@ class RKMainController : Object<UXTableDelegate>
             {
             t = (i32)0;
             }
+        classBook.loadFrom(s.doc); // a declaration undone goes with its step
+        variants.loadFrom(s.doc);
         self.showResource(s.doc, t);
         if (s.selection >= (i32)0)
             {
@@ -1165,6 +1674,22 @@ class RKMainController : Object<UXTableDelegate>
             return;
             }
         dirty = true;
+        // a UXKit control's settings: its widget is made again with them
+        if (inspectorCtl.lastWasAttr)
+            {
+            inspectorCtl.lastWasAttr = false;
+            self.rebuildShownPane();
+            self.placeFrame(o);
+            return;
+            }
+        // what the control says is shared by the form's layouts, unless this one varies it
+        RKProperty* p = inspectorCtl.lastProp;
+        inspectorCtl.lastProp = (RKProperty*)0;
+        UXRscTree* t = self.shownTreeOrNull();
+        if (p != (RKProperty*)0 && t != (UXRscTree*)0 && variants.share(doc, t, o, p) > (i32)0)
+            {
+            self.staleOtherLayouts(t);
+            }
         UXView* w = canvasMap.viewFor(o);
         if (w != (UXView*)0)
             {

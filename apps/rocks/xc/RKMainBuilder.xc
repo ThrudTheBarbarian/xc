@@ -28,6 +28,8 @@
 #import "UXScrollView.xc"
 #import "UXToolbar.xc"
 #import "UXSegmentedControl.xc"
+#import "UXPopUpButton.xc"
+#import "RKDock.xc"
 #import "UXMetrics.xc"
 #import "UXGeometry.xc"
 #import "RKMainController.xc"
@@ -102,13 +104,16 @@ class RKMainBuilder : Object
         outer.secondPane().addSubview(inner,
                                       UXGeom.make((i16)0, (i16)0, (i16)((i32)w - olW), bodyH));
 
-        // ---- the centre: the canvas, and the device bar under it ----------------
+        // ---- the centre: the dock, the canvas, and the device bar under it -------
+        i16 dkH = (i16)28;
         i16 dbH = (i16)((i32)rh + (i32)8);
-        i16 cvH = (i16)((i32)bodyH - (i32)dbH);
+        i16 cvH = (i16)((i32)bodyH - (i32)dbH - (i32)dkH);
+        RKDock* dock = new RKDock();
+        inner.firstPane().addSubview(dock, UXGeom.make((i16)0, (i16)0, (i16)cvW, dkH));
         UXView* canvas = new UXView();
-        inner.firstPane().addSubview(canvas, UXGeom.make((i16)0, (i16)0, (i16)cvW, cvH));
+        inner.firstPane().addSubview(canvas, UXGeom.make((i16)0, dkH, (i16)cvW, cvH));
         UXView* bar = new UXView();
-        inner.firstPane().addSubview(bar, UXGeom.make((i16)0, cvH, (i16)cvW, dbH));
+        inner.firstPane().addSubview(bar, UXGeom.make((i16)0, (i16)((i32)dkH + (i32)cvH), (i16)cvW, dbH));
         UXLabel* viewAs = new UXLabel();
         viewAs.setTitle((u8*)"View as:");
         bar.addSubview(viewAs, UXGeom.make((i16)8, (i16)4, (i16)60, rh));
@@ -117,13 +122,24 @@ class RKMainBuilder : Object
         device.addSegment((u8*)"Tablet", (i32)UXR_V_TABLET);
         device.addSegment((u8*)"Phone", (i32)UXR_V_PHONE);
         device.applyNativeSelection((i32)0);
-        bar.addSubview(device, UXGeom.make((i16)70, (i16)4, (i16)210, rh));
+        bar.addSubview(device, UXGeom.make((i16)68, (i16)4, (i16)196, rh));
         UXButton* rotate = new UXButton();
         rotate.setTitle((u8*)"Rotate");
-        bar.addSubview(rotate, UXGeom.make((i16)290, (i16)4, (i16)70, rh));
+        bar.addSubview(rotate, UXGeom.make((i16)270, (i16)4, (i16)62, rh));
         UXButton* newLayout = new UXButton();
         newLayout.setTitle((u8*)"New Layout");
-        bar.addSubview(newLayout, UXGeom.make((i16)366, (i16)4, (i16)100, rh));
+        bar.addSubview(newLayout, UXGeom.make((i16)336, (i16)4, (i16)92, rh));
+        // the layouts a new connection binds in (decision: all, unless narrowed here)
+        UXLabel* cf = new UXLabel();
+        cf.setTitle((u8*)"Connect:");
+        bar.addSubview(cf, UXGeom.make((i16)436, (i16)4, (i16)66, rh));
+        UXPopUpButton* scope = new UXPopUpButton();
+        for (i32 p = (i32)RKSC_ALL; p <= (i32)RKSC_THIS; p = p + (i32)1)
+            {
+            scope.addItem(RKWiring.presetName(p), p);
+            }
+        scope.selectItem((i32)RKSC_ALL);
+        bar.addSubview(scope, UXGeom.make((i16)502, (i16)4, (i16)112, rh));
 
         // ---- the right: the inspector over the library -------------------------
         UXView* right = inner.secondPane();
@@ -155,9 +171,7 @@ class RKMainBuilder : Object
         c.identityCtl.attach((UXView* ?)c.tabPanes.get((u32)0));
         c.inspectorCtl.attach((UXView* ?)c.tabPanes.get((u32)1), tv);
         c.sizeCtl.attach((UXView* ?)c.tabPanes.get((u32)2), (UXLabel*)0);
-        UXLabel* cl = new UXLabel();
-        cl.setTitle((u8*)"Outlets and actions: control-drag between objects.");
-        ((UXView* ?)c.tabPanes.get((u32)3)).addSubview(cl, UXGeom.make((i16)8, (i16)8, (i16)((i32)inW - (i32)16), rh));
+        c.connectionsCtl.attach((UXView* ?)c.tabPanes.get((u32)3));
 
         i16 libY = (i16)((i32)insH + (i32)gut);
         UXLabel* ll = new UXLabel();
@@ -193,6 +207,11 @@ class RKMainBuilder : Object
         ok = c.setOutlet((u8*)"inspectorTabs", (Object*)tabs) && ok;
         ok = c.setOutlet((u8*)"libraryTable", (Object*)lib) && ok;
         ok = c.setOutlet((u8*)"librarySearch", (Object*)search) && ok;
+        ok = c.setOutlet((u8*)"dock", (Object*)dock) && ok;
+        ok = c.setOutlet((u8*)"newScope", (Object*)scope) && ok;
+        ok = c.wireAction((u8*)"onNewScope", (UXControl*)scope) && ok;
+        dock.picked = &c.onDockPick;
+        dock.wireFrom = &c.onWireFromDock;
         ok = c.wireAction((u8*)"onToolbar", (UXControl*)tb) && ok;
         ok = c.wireAction((u8*)"onDeviceBar", (UXControl*)device) && ok;
         ok = c.wireAction((u8*)"onRotate", (UXControl*)rotate) && ok;
@@ -224,6 +243,8 @@ class RKMainBuilder : Object
         doc.addItem((u8*)"Open...", &c.onOpenDocument).setShortcut((u8)'O', false);
         doc.addItem((u8*)"Save", &c.onSaveDocument).setShortcut((u8)'S', false);
         doc.addItem((u8*)"Save As...", &c.onSaveDocumentAs).setShortcut((u8)'S', true);
+        doc.addSeparator();
+        doc.addItem((u8*)"Add Class Source or Library...", &c.onAddClasses);
 
         UXMenu* edit = bar.addMenu((u8*)"Edit");
         edit.addItem((u8*)"Undo", &c.onUndo).setShortcut((u8)'Z', false);

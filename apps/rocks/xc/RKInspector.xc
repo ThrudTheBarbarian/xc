@@ -33,8 +33,12 @@ class RKRow : Object
     UXTextField* field; // for INT / TEXT
     UXCheckbox* box;    // for FLAG / STATE
     UXPopUpButton* pop; // for ENUM
+    UXButton* vary;     // Vary / Varies: this layout's own value, or the one the layouts share
+    u8* attrKey;        // for an attribute row: the setting's key
     void init(void)
         {
+        attrKey = (u8*)0;
+        vary = (UXButton*)0;
         prop = (RKProperty*)0;
         field = (UXTextField*)0;
         box = (UXCheckbox*)0;
@@ -63,6 +67,15 @@ class RKRow : Object
     // is the row being typed into, the same for every keystroke of one field (so they make one
     // undo step), or 0 for a one-shot edit (a toggle, a pop-up choice).
     callback willChange void(UXRscObject* o, Object* key);
+    // Layout variations: -1 = the control is in one layout only (no toggle), 0 = the property is
+    // shared by its layouts, 1 = this layout varies it; and the toggle itself.
+    callback varyState i32(UXRscObject* o, RKProperty* p);
+    callback varyToggle void(UXRscObject* o, RKProperty* p);
+    RKProperty* lastProp; // what the last edit changed, for the controller to share it
+    bool lastWasAttr;     // the last edit was to a UXKit control's setting
+    // The document and layout the target is in: a UXKit control's settings are its attributes.
+    UXRscDoc* doc;
+    UXRscTree* tree;
 
     // Populating a field fires its change hook, which would write a
     // half-written value straight back into the model.
@@ -77,6 +90,12 @@ class RKRow : Object
         target = (UXRscObject*)0;
         changed = (callback void(UXRscObject * o))0;
         willChange = (callback void(UXRscObject * o, Object * key))0;
+        varyState = (callback i32(UXRscObject * o, RKProperty * p))0;
+        varyToggle = (callback void(UXRscObject * o, RKProperty * p))0;
+        lastProp = (RKProperty*)0;
+        lastWasAttr = false;
+        doc = (UXRscDoc*)0;
+        tree = (UXRscTree*)0;
         loading = false;
         }
 
@@ -213,6 +232,13 @@ class RKRow : Object
                 }
             RKRow* r = new RKRow();
             r.prop = p;
+            i32 vst = (i32)-1; // the Vary toggle's state, -1 for none; the fields leave it room
+            callback vs i32(UXRscObject * o, RKProperty * p) = varyState;
+            if (vs && !frame)
+                {
+                vst = vs(o, p);
+                }
+            i32 rw = vst >= (i32)0 ? (i32)64 : (i32)0;
             if (p.kind == (i32)RKP_ENUM)
                 {
                 // A pop-up whose item ORDER is the model's numbering, so the
@@ -229,7 +255,7 @@ class RKRow : Object
                 pu.selectItem(RKProps.intOf(o, p));
                 pu.setAction(&self.onEnum);
                 pane.addSubview(pu, UXGeom.make((i16)((i32)8 + (i32)lw), y,
-                                                (i16)((i32)w - (i32)lw - (i32)16), rh));
+                                                (i16)((i32)w - (i32)lw - (i32)16 - rw), rh));
                 r.pop = pu;
                 }
             else if (p.kind == (i32)RKP_FLAG || p.kind == (i32)RKP_STATE)
@@ -238,7 +264,7 @@ class RKRow : Object
                 cb.setTitle(p.label);
                 cb.setChecked(RKProps.boolOf(o, p));
                 cb.setAction(&self.onToggle);
-                pane.addSubview(cb, UXGeom.make((i16)8, y, (i16)((i32)w - (i32)16), rh));
+                pane.addSubview(cb, UXGeom.make((i16)8, y, (i16)((i32)w - (i32)16 - rw), rh));
                 r.box = cb;
                 }
             else
@@ -257,13 +283,84 @@ class RKRow : Object
                     }
                 f.setOnChange(&self.onField);
                 pane.addSubview(f, UXGeom.make((i16)((i32)8 + (i32)lw), y,
-                                               (i16)((i32)w - (i32)lw - (i32)16), rh));
+                                               (i16)((i32)w - (i32)lw - (i32)16 - rw), rh));
                 r.field = f;
+                }
+            // the Vary toggle, beside a property that can differ between layouts
+            if (vst >= (i32)0)
+                {
+                UXButton* vb = new UXButton();
+                vb.setTitle(vst == (i32)1 ? (u8*)"Varies" : (u8*)"Vary");
+                vb.setAction(&self.onVary);
+                pane.addSubview(vb, UXGeom.make((i16)((i32)w - (i32)62), y, (i16)56, rh));
+                r.vary = vb;
                 }
             rows.add(r);
             y = (i16)((i32)y + (i32)rh + (i32)gap);
             }
+        // a UXKit control's settings, which live in the document's attributes
+        if (section != (i32)RKIS_SIZE && doc != (UXRscDoc*)0 && tree != (UXRscTree*)0)
+            {
+            u8* cls = doc.classOf(tree, o);
+            Array<RKChoice>* keys = RKInspector.attrKeys(cls);
+            for (u32 k = (u32)0; k < keys.count(); k = k + (u32)1)
+                {
+                u8* key = ((RKChoice* ?)keys.get(k)).s;
+                RKRow* r = new RKRow();
+                r.prop = RKProperty.make(key, (i32)RKP_TEXT, (i32)0, (u8*)0);
+                r.attrKey = key;
+                UXLabel* l = new UXLabel();
+                l.setTitle(key);
+                pane.addSubview(l, UXGeom.make((i16)8, y, lw, rh));
+                UXTextField* f = new UXTextField();
+                u8* v = doc.attrOf(tree, o, key);
+                f.setText(v != (u8*)0 ? v : (u8*)"");
+                f.setOnChange(&self.onField);
+                pane.addSubview(f, UXGeom.make((i16)((i32)8 + (i32)lw), y, (i16)((i32)w - (i32)lw - (i32)16), rh));
+                r.field = f;
+                rows.add(r);
+                y = (i16)((i32)y + (i32)rh + (i32)gap);
+                }
+            }
         loading = false;
+        }
+    // The settings a UXKit control keeps in attributes, by class (lists are written "A|B|C").
+    static Array<RKChoice>* attrKeys(u8* cls)
+        {
+        Array<RKChoice>* ks = new Array();
+        if (cls == (u8*)0)
+            {
+            return ks;
+            }
+        if (UXRscDoc.seq(cls, (u8*)"UXSlider"))
+            {
+            ks.add(RKChoice.of((u8*)"min"));
+            ks.add(RKChoice.of((u8*)"max"));
+            ks.add(RKChoice.of((u8*)"value"));
+            }
+        else if (UXRscDoc.seq(cls, (u8*)"UXStepper"))
+            {
+            ks.add(RKChoice.of((u8*)"min"));
+            ks.add(RKChoice.of((u8*)"max"));
+            ks.add(RKChoice.of((u8*)"step"));
+            ks.add(RKChoice.of((u8*)"value"));
+            }
+        else if (UXRscDoc.seq(cls, (u8*)"UXProgressBar"))
+            {
+            ks.add(RKChoice.of((u8*)"total"));
+            ks.add(RKChoice.of((u8*)"completed"));
+            }
+        else if (UXRscDoc.seq(cls, (u8*)"UXSegmentedControl"))
+            {
+            ks.add(RKChoice.of((u8*)"segments"));
+            ks.add(RKChoice.of((u8*)"selected"));
+            }
+        else if (UXRscDoc.seq(cls, (u8*)"UXComboBox"))
+            {
+            ks.add(RKChoice.of((u8*)"items"));
+            ks.add(RKChoice.of((u8*)"text"));
+            }
+        return ks;
         }
 
     // ---- edits, back to the MODEL ------------------------------------------
@@ -283,6 +380,14 @@ class RKRow : Object
                 continue;
                 }
             self.warn((Object*)r);
+            if (r.attrKey != (u8*)0)
+                {
+                doc.setAttrOf(tree, target, r.attrKey, RKInspector.dup(sender.text()));
+                lastWasAttr = true;
+                self.announce();
+                return;
+                }
+            lastProp = r.prop;
             if (r.prop.kind == (i32)RKP_TEXT)
                 {
                 // Copied: the field's buffer belongs to the driver and is
@@ -318,6 +423,7 @@ class RKRow : Object
                 {
                 i32 wasType = target.type;
                 self.warn((Object*)0);
+                lastProp = r.prop;
                 RKProps.setInt(target, r.prop, r.pop.selectedIndex());
                 self.announce();
                 // Aligning a G_STRING promotes it to G_TEXT, so the pane is now
@@ -346,6 +452,7 @@ class RKRow : Object
             if (r.box != (UXCheckbox*)0 && (UXControl*)r.box == sender)
                 {
                 self.warn((Object*)0);
+                lastProp = r.prop;
                 RKProps.setBool(target, r.prop, r.box.isChecked());
                 self.announce();
                 return;
@@ -353,6 +460,22 @@ class RKRow : Object
             }
         }
 
+    void onVary(UXControl* sender) : action
+        {
+        for (i32 i = (i32)0; i < (i32)rows.count(); i = i + (i32)1)
+            {
+            RKRow* r = (RKRow* ?)rows.get((u16)i);
+            if (r.vary != (UXButton*)0 && (UXControl*)r.vary == sender)
+                {
+                callback t void(UXRscObject * o, RKProperty * p) = varyToggle;
+                if (t)
+                    {
+                    t(target, r.prop);
+                    }
+                return;
+                }
+            }
+        }
     void warn(Object* key)
         {
         callback f void(UXRscObject * o, Object * key) = willChange;

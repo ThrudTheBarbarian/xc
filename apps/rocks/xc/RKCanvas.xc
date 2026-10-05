@@ -30,11 +30,27 @@ class RKCanvas : Object
     // every click something realize() already knew for free.
     Array<UXRscObject>* objs;
     Array<UXView>* views;
+    // The document and the layout being realized, so a control is the class the document gives it
+    // and has the settings its attributes hold; 0 = types only.
+    UXRscDoc* doc;
+    UXRscTree* tree;
+    i32 theme;
 
     void init(void)
         {
         objs = new Array();
         views = new Array();
+        doc = (UXRscDoc*)0;
+        tree = (UXRscTree*)0;
+        theme = (i32)UXR_ATTR_SHARED;
+        }
+    // Realize `t` of `d`, with classes and attributes: what UXNib would load.
+    i32 realizeIn(UXRscDoc* d, UXRscTree* t, i32 th, UXView* into)
+        {
+        doc = d;
+        tree = t;
+        theme = th;
+        return self.realize(t, into);
         }
 
     // The widget realized for an object, or 0 if it was not realized (the
@@ -74,7 +90,15 @@ class RKCanvas : Object
 
     i32 realizeInto(UXRscObject* o, UXView* parent)
         {
-        UXView* v = RKCanvas.widgetFor(o);
+        UXView* v = (UXView*)0;
+        if (doc != (UXRscDoc*)0 && tree != (UXRscTree*)0)
+            {
+            v = UXNib.viewFor(o, doc.classOf(tree, o));
+            }
+        else
+            {
+            v = RKCanvas.widgetFor(o);
+            }
         if (v == (UXView*)0)
             {
             return (i32)0;
@@ -87,6 +111,10 @@ class RKCanvas : Object
         // be selected and un-hidden there.  That escape hatch is what makes
         // honouring it safe rather than a trap.
         UXNib.applyState(v, o);
+        if (doc != (UXRscDoc*)0 && tree != (UXRscTree*)0)
+            {
+            UXNib.applyAttrs(v, doc, doc.formIdOf(tree), o.logicalId, theme);
+            }
         objs.add(o);
         views.add(v);
         i32 n = (i32)1;
