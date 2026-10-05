@@ -1528,7 +1528,7 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
             [out appendString:[self withVzeroupper:[self peepholeFallthrough:[self peepholeCopyProp:fbuf]]]];
             }
         }
-    // The selection: one table of {slot, base, avx2} and a load-time
+    // The selection: one table of {slot, base, avx2, avx512} and a load-time
     // constructor that hands it to the runtime, which fills each slot for the
     // level this machine (or XC_SIMD) picks. First in the constructor list, so
     // no other initialiser can call a function before its slot is set.
@@ -1542,8 +1542,18 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
         for (NSString* nm in simdNames)
             [out appendFormat:@"__simd_%@:\n\t.quad\t%@$base\n", nm, nm];
         [out appendString:@"__xt_simd_table:\n"];
+        // A level whose clone the prune dropped (it gained no wider vectors)
+        // takes the next one down: avx512 -> avx2 -> base.
+        NSMutableSet<NSString*>* have = [NSMutableSet set];
+        for (XTIRFunction* fn in mod.functions)
+            [have addObject:fn.name];
         for (NSString* nm in simdNames)
-            [out appendFormat:@"\t.quad\t__simd_%@, %@$base, %@$avx2\n", nm, nm, nm];
+            {
+            NSString* b = [nm stringByAppendingString:@"$base"];
+            NSString* a2 = [have containsObject:[nm stringByAppendingString:@"$avx2"]] ? [nm stringByAppendingString:@"$avx2"] : b;
+            NSString* a5 = [have containsObject:[nm stringByAppendingString:@"$avx512"]] ? [nm stringByAppendingString:@"$avx512"] : a2;
+            [out appendFormat:@"\t.quad\t__simd_%@, %@, %@, %@\n", nm, b, a2, a5];
+            }
         }
 
     // Read-only data: string literals (+ initialised globals).

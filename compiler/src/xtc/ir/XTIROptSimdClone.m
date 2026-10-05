@@ -29,12 +29,14 @@ static BOOL hasPhi(XTIRFunction* fn)
     return NO;
     }
 
-static BOOL hasWideVector(XTIRFunction* fn)
+// Does the clone use vectors of its own level's width (32 bytes for avx2, 64
+// for avx512)? One that does not gained nothing over the base, and goes.
+static BOOL hasWideVector(XTIRFunction* fn, uint32_t bytes)
     {
     for (NSNumber* k in fn.values)
         {
         XTIRValue* v = fn.values[k];
-        if (v.type.kind == XTIRTypeKindVec && v.type.byteWidth == 32)
+        if (v.type.kind == XTIRTypeKindVec && v.type.byteWidth == bytes)
             return YES;
         }
     return NO;
@@ -57,7 +59,7 @@ static BOOL hasWideVector(XTIRFunction* fn)
             if (!fn.simdLevel)
                 continue;
             XTIRFunction* base = byName[fn.simdBaseName];
-            if (base && hasWideVector(fn))
+            if (base && hasWideVector(fn, (uint32_t)fn.simdLaneBytes))
                 base.simdDispatch = YES;
             else
                 [drop addObject:fn];
@@ -77,26 +79,38 @@ static BOOL hasWideVector(XTIRFunction* fn)
     if (!names.count)
         return YES;
     NSString* printed = [XTIRPrinter stringFromModule:mod];
-    XTIRModule* copy = [XTIRParser moduleFromString:printed sharingLayoutsOf:mod error:NULL];
-    // The copy must print back exactly as the original did: a round trip
-    // that loses anything (a construct the parser does not read) would make
-    // the clone a different program. Then nothing is cloned, and every
-    // function keeps its one base version — slower on AVX2, never wrong.
-    if (!copy || ![[XTIRPrinter stringFromModule:copy] isEqualToString:printed])
-        return YES;
-    NSMutableDictionary<NSString*, XTIRFunction*>* copies = [NSMutableDictionary dictionary];
-    for (XTIRFunction* fn in copy.functions)
-        copies[fn.name] = fn;
-    for (NSString* n in names)
+    // One copy per level, each from its own parse: the avx2 clones join the
+    // module before the avx512 copy is taken, so it is taken from the text.
+    NSMutableArray<XTIRModule*>* copies = [NSMutableArray array];
+    for (int k = 0; k < 2; k++)
         {
-        XTIRFunction* c = copies[n];
-        if (!c)
-            continue;
-        [c renameTo:[n stringByAppendingString:@"$avx2"]];
-        c.simdLaneBytes = 32;
-        c.simdLevel = @"avx2";
-        c.simdBaseName = n;
-        [mod addFunction:c];
+        XTIRModule* copy = [XTIRParser moduleFromString:printed sharingLayoutsOf:mod error:NULL];
+        // The copy must print back exactly as the original did: a round
+        // trip that loses anything (a construct the parser does not read)
+        // would make the clone a different program. Then nothing is cloned,
+        // and every function keeps its one base version — slower, never wrong.
+        if (!copy || ![[XTIRPrinter stringFromModule:copy] isEqualToString:printed])
+            return YES;
+        [copies addObject:copy];
+        }
+    NSArray* levels = @[@"avx2", @"avx512"];
+    NSArray* widths = @[@32, @64];
+    for (NSUInteger k = 0; k < levels.count; k++)
+        {
+        NSMutableDictionary<NSString*, XTIRFunction*>* byName = [NSMutableDictionary dictionary];
+        for (XTIRFunction* fn in copies[k].functions)
+            byName[fn.name] = fn;
+        for (NSString* n in names)
+            {
+            XTIRFunction* c = byName[n];
+            if (!c)
+                continue;
+            [c renameTo:[NSString stringWithFormat:@"%@$%@", n, levels[k]]];
+            c.simdLaneBytes = [widths[k] unsignedIntValue];
+            c.simdLevel = levels[k];
+            c.simdBaseName = n;
+            [mod addFunction:c];
+            }
         }
     return YES;
     }

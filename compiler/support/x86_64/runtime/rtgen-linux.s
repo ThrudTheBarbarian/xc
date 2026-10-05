@@ -3634,127 +3634,183 @@ _xtc_sinit_run:                         # @_xtc_sinit_run
 _xt_simd_select:
 # %bb.0:
 	push	rbp
+	push	r15
 	push	r14
 	push	rbx
+	push	rax
 	mov	ebp, esi
 	mov	r14, rdi
 	mov	eax, 1
 	xor	ecx, ecx
+	#APP
 
+	.byte	15
+	.byte	162
 
-	.byte	0x0f, 0xa2
-	xor	ebx, ebx
+	#NO_APP
+	xor	r15d, r15d
 	not	ecx
 	test	ecx, 402653184
-	jne	.Lsimd_bb_3
+	jne	.Lsimd_bb_4
 # %bb.1:
-	xor	ebx, ebx
+	xor	r15d, r15d
 	xor	ecx, ecx
+	#APP
 
+	.byte	15
+	.byte	1
+	.byte	208
 
-	.byte	0x0f, 0x01, 0xd0
-	not	eax
-	test	al, 6
-	jne	.Lsimd_bb_3
+	#NO_APP
+	mov	esi, eax
+	not	esi
+	test	sil, 6
+	jne	.Lsimd_bb_4
 # %bb.2:
+	xor	r15d, r15d
 	mov	eax, 7
 	xor	ecx, ecx
+	#APP
 
+	.byte	15
+	.byte	162
 
-	.byte	0x0f, 0xa2
-	shr	ebx, 5
-	and	ebx, 1
-.Lsimd_bb_3:
+	#NO_APP
+	test	bl, 32
+	je	.Lsimd_bb_4
+# %bb.3:
+	not	ebx
+	and	ebx, -1073545216
+	and	esi, 224
+	xor	r15d, r15d
+	or	esi, ebx
+	sete	r15b
+	inc	r15d
+.Lsimd_bb_4:
 	lea	rdi, [rip + .Lsimd_str]
 	call	getenv@PLT
 	test	rax, rax
-	je	.Lsimd_bb_19
-# %bb.4:
+	je	.Lsimd_bb_27
+# %bb.5:
 	movzx	ecx, byte ptr [rax]
 	test	cl, cl
-	je	.Lsimd_bb_9
-# %bb.5:
-	lea	rdi, [rax + 1]
+	je	.Lsimd_bb_6
+# %bb.7:
+	lea	rsi, [rax + 1]
 	lea	rdx, [rip + .Lsimd_str_1]
+	mov	edi, ecx
+	.p2align	4, 0x90
+.Lsimd_bb_8:                               # =>This Inner Loop Header: Depth=1
+	cmp	dil, byte ptr [rdx]
+	jne	.Lsimd_bb_10
+# %bb.9:                                #   in Loop: Header=BB74_8 Depth=1
+	inc	rdx
+	movzx	edi, byte ptr [rsi]
+	inc	rsi
+	test	dil, dil
+	jne	.Lsimd_bb_8
+	jmp	.Lsimd_bb_10
+.Lsimd_bb_6:
+	lea	rdx, [rip + .Lsimd_str_1]
+	mov	edi, ecx
+.Lsimd_bb_10:
+	xor	esi, esi
+	cmp	dil, byte ptr [rdx]
+	cmovne	esi, r15d
+	je	.Lsimd_bb_28
+# %bb.11:
+	test	cl, cl
+	je	.Lsimd_bb_12
+# %bb.13:
+	lea	rdi, [rax + 1]
+	lea	rdx, [rip + .Lsimd_str_2]
 	mov	esi, ecx
 	.p2align	4, 0x90
-.Lsimd_bb_6:
+.Lsimd_bb_14:                              # =>This Inner Loop Header: Depth=1
 	cmp	sil, byte ptr [rdx]
-	jne	.Lsimd_bb_10
-# %bb.7:
+	jne	.Lsimd_bb_16
+# %bb.15:                               #   in Loop: Header=BB74_14 Depth=1
 	inc	rdx
 	movzx	esi, byte ptr [rdi]
 	inc	rdi
 	test	sil, sil
-	jne	.Lsimd_bb_6
-	jmp	.Lsimd_bb_10
-.Lsimd_bb_9:
-	lea	rdx, [rip + .Lsimd_str_1]
-	mov	esi, ecx
-.Lsimd_bb_10:
-	xor	edi, edi
-	cmp	sil, byte ptr [rdx]
-	cmovne	edi, ebx
-	je	.Lsimd_bb_20
-# %bb.11:
-	test	cl, cl
-	je	.Lsimd_bb_18
-# %bb.12:
-	inc	rax
-	lea	rdx, [rip + .Lsimd_str_2]
-	.p2align	4, 0x90
-.Lsimd_bb_13:
-	cmp	cl, byte ptr [rdx]
-	jne	.Lsimd_bb_15
-# %bb.14:
-	inc	rdx
-	movzx	ecx, byte ptr [rax]
-	inc	rax
-	test	cl, cl
-	jne	.Lsimd_bb_13
-.Lsimd_bb_15:
-	cmp	cl, byte ptr [rdx]
-	jne	.Lsimd_bb_19
+	jne	.Lsimd_bb_14
 .Lsimd_bb_16:
-	mov	edi, ebx
-	test	ebx, ebx
-	jne	.Lsimd_bb_20
-# %bb.17:
+	cmp	sil, byte ptr [rdx]
+	jne	.Lsimd_bb_19
+.Lsimd_bb_17:
+	mov	esi, 1
+	test	r15d, r15d
+	jne	.Lsimd_bb_28
+# %bb.18:
 	lea	rsi, [rip + .Lsimd_msg]
 	mov	edx, 66
 	mov	edi, 2
 	call	write@PLT
-	xor	edi, edi
-	jmp	.Lsimd_bb_20
-.Lsimd_bb_18:
+	xor	esi, esi
+	jmp	.Lsimd_bb_28
+.Lsimd_bb_12:
 	lea	rdx, [rip + .Lsimd_str_2]
-	cmp	cl, byte ptr [rdx]
-	je	.Lsimd_bb_16
+	mov	esi, ecx
+	cmp	sil, byte ptr [rdx]
+	je	.Lsimd_bb_17
 .Lsimd_bb_19:
-	mov	edi, ebx
-.Lsimd_bb_20:
-	mov	dword ptr [rip + _xt_simd_level], edi
-	test	ebp, ebp
-	je	.Lsimd_bb_23
+	test	cl, cl
+	je	.Lsimd_bb_20
 # %bb.21:
-	mov	ecx, ebp
-	mov	eax, edi
 	inc	rax
-	lea	rcx, [rcx + 2*rcx]
+	lea	rdx, [rip + .Lsimd_str_3]
+	.p2align	4, 0x90
+.Lsimd_bb_22:                              # =>This Inner Loop Header: Depth=1
+	cmp	cl, byte ptr [rdx]
+	jne	.Lsimd_bb_24
+# %bb.23:                               #   in Loop: Header=BB74_22 Depth=1
+	inc	rdx
+	movzx	ecx, byte ptr [rax]
+	inc	rax
+	test	cl, cl
+	jne	.Lsimd_bb_22
+	jmp	.Lsimd_bb_24
+.Lsimd_bb_20:
+	lea	rdx, [rip + .Lsimd_str_3]
+.Lsimd_bb_24:
+	cmp	r15d, 1
+	ja	.Lsimd_bb_27
+# %bb.25:
+	cmp	cl, byte ptr [rdx]
+	jne	.Lsimd_bb_27
+# %bb.26:
+	lea	rsi, [rip + .Lsimd_msg_2]
+	mov	edx, 82
+	mov	edi, 2
+	call	write@PLT
+.Lsimd_bb_27:
+	mov	esi, r15d
+.Lsimd_bb_28:
+	mov	dword ptr [rip + _xt_simd_level], esi
+	test	ebp, ebp
+	je	.Lsimd_bb_31
+# %bb.29:
+	mov	eax, ebp
+	mov	ecx, esi
+	inc	rcx
+	shl	rax, 2
 	xor	edx, edx
 	.p2align	4, 0x90
-.Lsimd_bb_22:
+.Lsimd_bb_30:                              # =>This Inner Loop Header: Depth=1
 	mov	esi, edx
 	mov	rsi, qword ptr [r14 + 8*rsi]
-	lea	edi, [rax + rdx]
+	lea	edi, [rcx + rdx]
 	mov	rdi, qword ptr [r14 + 8*rdi]
 	mov	qword ptr [rsi], rdi
-	add	rdx, 3
-	cmp	rcx, rdx
-	jne	.Lsimd_bb_22
-.Lsimd_bb_23:
+	add	rdx, 4
+	cmp	rax, rdx
+	jne	.Lsimd_bb_30
+.Lsimd_bb_31:
+	add	rsp, 8
 	pop	rbx
 	pop	r14
+	pop	r15
 	pop	rbp
 	ret
 .Lsimd_func_end:
@@ -3770,6 +3826,10 @@ _xt_simd_level:
 	.asciz	"base"
 .Lsimd_str_2:
 	.asciz	"avx2"
+.Lsimd_str_3:
+	.asciz	"avx512"
 .Lsimd_msg:
 	.asciz	"xc: XC_SIMD=avx2, but this machine has no usable AVX2; using base\n"
+.Lsimd_msg_2:
+	.asciz	"xc: XC_SIMD=avx512, but this machine has no usable AVX-512; using the best it has\n"
 

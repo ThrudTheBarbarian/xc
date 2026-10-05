@@ -2356,8 +2356,10 @@ _xt_atomic_cas_ptr:                     # @_xt_atomic_cas_ptr
 _xt_simd_select:                        # @_xt_simd_select
 # %bb.0:
 	push	rbp
+	push	r15
 	push	r14
 	push	rbx
+	push	rax
 	mov	ebp, esi
 	mov	r14, rdi
 	mov	eax, 1
@@ -2368,12 +2370,12 @@ _xt_simd_select:                        # @_xt_simd_select
 	.byte	162
 
 	#NO_APP
-	xor	ebx, ebx
+	xor	r15d, r15d
 	not	ecx
 	test	ecx, 402653184
-	jne	.LBB81_3
+	jne	.LBB81_4
 # %bb.1:
-	xor	ebx, ebx
+	xor	r15d, r15d
 	xor	ecx, ecx
 	#APP
 
@@ -2382,10 +2384,12 @@ _xt_simd_select:                        # @_xt_simd_select
 	.byte	208
 
 	#NO_APP
-	not	eax
-	test	al, 6
-	jne	.LBB81_3
+	mov	esi, eax
+	not	esi
+	test	sil, 6
+	jne	.LBB81_4
 # %bb.2:
+	xor	r15d, r15d
 	mov	eax, 7
 	xor	ecx, ecx
 	#APP
@@ -2394,100 +2398,142 @@ _xt_simd_select:                        # @_xt_simd_select
 	.byte	162
 
 	#NO_APP
-	shr	ebx, 5
-	and	ebx, 1
-.LBB81_3:
+	test	bl, 32
+	je	.LBB81_4
+# %bb.3:
+	not	ebx
+	and	ebx, -1073545216
+	and	esi, 224
+	xor	r15d, r15d
+	or	esi, ebx
+	sete	r15b
+	inc	r15d
+.LBB81_4:
 	lea	rdi, [rip + .L.str]
 	call	getenv@PLT
 	test	rax, rax
-	je	.LBB81_19
-# %bb.4:
+	je	.LBB81_27
+# %bb.5:
 	movzx	ecx, byte ptr [rax]
 	test	cl, cl
-	je	.LBB81_9
-# %bb.5:
-	lea	rdi, [rax + 1]
+	je	.LBB81_6
+# %bb.7:
+	lea	rsi, [rax + 1]
 	lea	rdx, [rip + .L.str.1]
+	mov	edi, ecx
+	.p2align	4, 0x90
+.LBB81_8:                               # =>This Inner Loop Header: Depth=1
+	cmp	dil, byte ptr [rdx]
+	jne	.LBB81_10
+# %bb.9:                                #   in Loop: Header=BB81_8 Depth=1
+	inc	rdx
+	movzx	edi, byte ptr [rsi]
+	inc	rsi
+	test	dil, dil
+	jne	.LBB81_8
+	jmp	.LBB81_10
+.LBB81_6:
+	lea	rdx, [rip + .L.str.1]
+	mov	edi, ecx
+.LBB81_10:
+	xor	esi, esi
+	cmp	dil, byte ptr [rdx]
+	cmovne	esi, r15d
+	je	.LBB81_28
+# %bb.11:
+	test	cl, cl
+	je	.LBB81_12
+# %bb.13:
+	lea	rdi, [rax + 1]
+	lea	rdx, [rip + .L.str.2]
 	mov	esi, ecx
 	.p2align	4, 0x90
-.LBB81_6:                               # =>This Inner Loop Header: Depth=1
+.LBB81_14:                              # =>This Inner Loop Header: Depth=1
 	cmp	sil, byte ptr [rdx]
-	jne	.LBB81_10
-# %bb.7:                                #   in Loop: Header=BB81_6 Depth=1
+	jne	.LBB81_16
+# %bb.15:                               #   in Loop: Header=BB81_14 Depth=1
 	inc	rdx
 	movzx	esi, byte ptr [rdi]
 	inc	rdi
 	test	sil, sil
-	jne	.LBB81_6
-	jmp	.LBB81_10
-.LBB81_9:
-	lea	rdx, [rip + .L.str.1]
-	mov	esi, ecx
-.LBB81_10:
-	xor	edi, edi
-	cmp	sil, byte ptr [rdx]
-	cmovne	edi, ebx
-	je	.LBB81_20
-# %bb.11:
-	test	cl, cl
-	je	.LBB81_18
-# %bb.12:
-	inc	rax
-	lea	rdx, [rip + .L.str.2]
-	.p2align	4, 0x90
-.LBB81_13:                              # =>This Inner Loop Header: Depth=1
-	cmp	cl, byte ptr [rdx]
-	jne	.LBB81_15
-# %bb.14:                               #   in Loop: Header=BB81_13 Depth=1
-	inc	rdx
-	movzx	ecx, byte ptr [rax]
-	inc	rax
-	test	cl, cl
-	jne	.LBB81_13
-.LBB81_15:
-	cmp	cl, byte ptr [rdx]
-	jne	.LBB81_19
+	jne	.LBB81_14
 .LBB81_16:
-	mov	edi, ebx
-	test	ebx, ebx
-	jne	.LBB81_20
-# %bb.17:
+	cmp	sil, byte ptr [rdx]
+	jne	.LBB81_19
+.LBB81_17:
+	mov	esi, 1
+	test	r15d, r15d
+	jne	.LBB81_28
+# %bb.18:
 	lea	rsi, [rip + _xt_simd_select.msg]
 	mov	edx, 66
 	mov	edi, 2
 	call	write@PLT
-	xor	edi, edi
-	jmp	.LBB81_20
-.LBB81_18:
+	xor	esi, esi
+	jmp	.LBB81_28
+.LBB81_12:
 	lea	rdx, [rip + .L.str.2]
-	cmp	cl, byte ptr [rdx]
-	je	.LBB81_16
+	mov	esi, ecx
+	cmp	sil, byte ptr [rdx]
+	je	.LBB81_17
 .LBB81_19:
-	mov	edi, ebx
-.LBB81_20:
-	mov	rax, qword ptr [rip + _xt_simd_level@GOTPCREL]
-	mov	dword ptr [rax], edi
-	test	ebp, ebp
-	je	.LBB81_23
+	test	cl, cl
+	je	.LBB81_20
 # %bb.21:
-	mov	ecx, ebp
-	mov	eax, edi
 	inc	rax
-	lea	rcx, [rcx + 2*rcx]
-	xor	edx, edx
+	lea	rdx, [rip + .L.str.3]
 	.p2align	4, 0x90
 .LBB81_22:                              # =>This Inner Loop Header: Depth=1
+	cmp	cl, byte ptr [rdx]
+	jne	.LBB81_24
+# %bb.23:                               #   in Loop: Header=BB81_22 Depth=1
+	inc	rdx
+	movzx	ecx, byte ptr [rax]
+	inc	rax
+	test	cl, cl
+	jne	.LBB81_22
+	jmp	.LBB81_24
+.LBB81_20:
+	lea	rdx, [rip + .L.str.3]
+.LBB81_24:
+	cmp	r15d, 1
+	ja	.LBB81_27
+# %bb.25:
+	cmp	cl, byte ptr [rdx]
+	jne	.LBB81_27
+# %bb.26:
+	lea	rsi, [rip + _xt_simd_select.msg.4]
+	mov	edx, 82
+	mov	edi, 2
+	call	write@PLT
+.LBB81_27:
+	mov	esi, r15d
+.LBB81_28:
+	mov	rax, qword ptr [rip + _xt_simd_level@GOTPCREL]
+	mov	dword ptr [rax], esi
+	test	ebp, ebp
+	je	.LBB81_31
+# %bb.29:
+	mov	eax, ebp
+	mov	ecx, esi
+	inc	rcx
+	shl	rax, 2
+	xor	edx, edx
+	.p2align	4, 0x90
+.LBB81_30:                              # =>This Inner Loop Header: Depth=1
 	mov	esi, edx
 	mov	rsi, qword ptr [r14 + 8*rsi]
-	lea	edi, [rax + rdx]
+	lea	edi, [rcx + rdx]
 	mov	rdi, qword ptr [r14 + 8*rdi]
 	mov	qword ptr [rsi], rdi
-	add	rdx, 3
-	cmp	rcx, rdx
-	jne	.LBB81_22
-.LBB81_23:
+	add	rdx, 4
+	cmp	rax, rdx
+	jne	.LBB81_30
+.LBB81_31:
+	add	rsp, 8
 	pop	rbx
 	pop	r14
+	pop	r15
 	pop	rbp
 	ret
 .Lfunc_end81:
@@ -2767,6 +2813,19 @@ _xt_simd_select.msg:
 	.asciz	"xc: XC_SIMD=avx2, but this machine has no usable AVX2; using base\n"
 	.size	_xt_simd_select.msg, 67
 
+	.type	.L.str.3,@object                # @.str.3
+	.section	.rodata.str1.1,"aMS",@progbits,1
+.L.str.3:
+	.asciz	"avx512"
+	.size	.L.str.3, 7
+
+	.type	_xt_simd_select.msg.4,@object   # @_xt_simd_select.msg.4
+	.section	.rodata,"a",@progbits
+	.p2align	4, 0x0
+_xt_simd_select.msg.4:
+	.asciz	"xc: XC_SIMD=avx512, but this machine has no usable AVX-512; using the best it has\n"
+	.size	_xt_simd_select.msg.4, 83
+
 	.type	xt_sinit_n,@object              # @xt_sinit_n
 	.local	xt_sinit_n
 	.comm	xt_sinit_n,4,4
@@ -2784,3 +2843,4 @@ _xt_simd_select.msg:
 	.addrsig_sym xt_rt_spin
 	.addrsig_sym xt_alloc_spin
 	.addrsig_sym _xt_simd_select.msg
+	.addrsig_sym _xt_simd_select.msg.4

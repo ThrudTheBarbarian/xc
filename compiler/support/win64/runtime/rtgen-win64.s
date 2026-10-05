@@ -2175,9 +2175,9 @@ _xt_atomic_cas_ptr:                     # @_xt_atomic_cas_ptr
 	.p2align	4, 0x90
 _xt_simd_select:                        # @_xt_simd_select
 # %bb.0:
-	push	r14
 	push	rsi
 	push	rdi
+	push	rbp
 	push	rbx
 	sub	rsp, 56
 	mov	edi, edx
@@ -2190,12 +2190,12 @@ _xt_simd_select:                        # @_xt_simd_select
 	.byte	162
 
 	#NO_APP
-	xor	ebx, ebx
+	xor	ebp, ebp
 	not	ecx
 	test	ecx, 402653184
-	jne	.LBB75_3
+	jne	.LBB75_4
 # %bb.1:
-	xor	ebx, ebx
+	xor	ebp, ebp
 	xor	ecx, ecx
 	#APP
 
@@ -2204,10 +2204,12 @@ _xt_simd_select:                        # @_xt_simd_select
 	.byte	208
 
 	#NO_APP
-	not	eax
-	test	al, 6
-	jne	.LBB75_3
+	mov	r8d, eax
+	not	r8d
+	test	r8b, 6
+	jne	.LBB75_4
 # %bb.2:
+	xor	ebp, ebp
 	mov	eax, 7
 	xor	ecx, ecx
 	#APP
@@ -2216,115 +2218,160 @@ _xt_simd_select:                        # @_xt_simd_select
 	.byte	162
 
 	#NO_APP
-	shr	ebx, 5
-	and	ebx, 1
-.LBB75_3:
+	test	bl, 32
+	je	.LBB75_4
+# %bb.3:
+	not	ebx
+	and	ebx, -1073545216
+	and	r8d, 224
+	xor	ebp, ebp
+	or	r8d, ebx
+	sete	bpl
+	inc	ebp
+.LBB75_4:
 	lea	rcx, [rip + .L.str]
-	lea	r14, [rip + xt_env.buf]
-	mov	rdx, r14
+	lea	rbx, [rip + xt_env.buf]
+	mov	rdx, rbx
 	mov	r8d, 32
 	call	GetEnvironmentVariableA
 	add	eax, -32
 	xor	ecx, ecx
 	cmp	eax, -31
-	cmovae	rcx, r14
+	cmovae	rcx, rbx
 	jae	.LBB75_5
-.LBB75_19:
-	mov	r9d, ebx
-	jmp	.LBB75_20
+.LBB75_27:
+	mov	r8d, ebp
+	jmp	.LBB75_28
 .LBB75_5:
 	movzx	eax, byte ptr [rcx]
 	test	al, al
-	je	.LBB75_9
-# %bb.6:
-	lea	r9, [rcx + 1]
+	je	.LBB75_6
+# %bb.7:
+	lea	r8, [rcx + 1]
 	lea	rdx, [rip + .L.str.1]
+	mov	r9d, eax
+	.p2align	4, 0x90
+.LBB75_8:                               # =>This Inner Loop Header: Depth=1
+	cmp	r9b, byte ptr [rdx]
+	jne	.LBB75_10
+# %bb.9:                                #   in Loop: Header=BB75_8 Depth=1
+	inc	rdx
+	movzx	r9d, byte ptr [r8]
+	inc	r8
+	test	r9b, r9b
+	jne	.LBB75_8
+	jmp	.LBB75_10
+.LBB75_6:
+	lea	rdx, [rip + .L.str.1]
+	mov	r9d, eax
+.LBB75_10:
+	xor	r8d, r8d
+	cmp	r9b, byte ptr [rdx]
+	cmovne	r8d, ebp
+	je	.LBB75_28
+# %bb.11:
+	test	al, al
+	je	.LBB75_12
+# %bb.13:
+	lea	r9, [rcx + 1]
+	lea	rdx, [rip + .L.str.2]
 	mov	r8d, eax
 	.p2align	4, 0x90
-.LBB75_7:                               # =>This Inner Loop Header: Depth=1
+.LBB75_14:                              # =>This Inner Loop Header: Depth=1
 	cmp	r8b, byte ptr [rdx]
-	jne	.LBB75_10
-# %bb.8:                                #   in Loop: Header=BB75_7 Depth=1
+	jne	.LBB75_16
+# %bb.15:                               #   in Loop: Header=BB75_14 Depth=1
 	inc	rdx
 	movzx	r8d, byte ptr [r9]
 	inc	r9
 	test	r8b, r8b
-	jne	.LBB75_7
-	jmp	.LBB75_10
-.LBB75_9:
-	lea	rdx, [rip + .L.str.1]
-	mov	r8d, eax
-.LBB75_10:
-	xor	r9d, r9d
-	cmp	r8b, byte ptr [rdx]
-	cmovne	r9d, ebx
-	je	.LBB75_20
-# %bb.11:
-	test	al, al
-	je	.LBB75_18
-# %bb.12:
-	inc	rcx
-	lea	rdx, [rip + .L.str.2]
-	.p2align	4, 0x90
-.LBB75_13:                              # =>This Inner Loop Header: Depth=1
-	cmp	al, byte ptr [rdx]
-	jne	.LBB75_15
-# %bb.14:                               #   in Loop: Header=BB75_13 Depth=1
-	inc	rdx
-	movzx	eax, byte ptr [rcx]
-	inc	rcx
-	test	al, al
-	jne	.LBB75_13
-.LBB75_15:
-	cmp	al, byte ptr [rdx]
-	je	.LBB75_16
-	jmp	.LBB75_19
-.LBB75_18:
-	lea	rdx, [rip + .L.str.2]
-	cmp	al, byte ptr [rdx]
-	jne	.LBB75_19
+	jne	.LBB75_14
 .LBB75_16:
-	mov	r9d, ebx
-	test	ebx, ebx
-	jne	.LBB75_20
-# %bb.17:
-	mov	dword ptr [rsp + 52], 0
+	cmp	r8b, byte ptr [rdx]
+	jne	.LBB75_19
+.LBB75_17:
+	mov	r8d, 1
+	test	ebp, ebp
+	jne	.LBB75_28
+# %bb.18:
+	mov	dword ptr [rsp + 48], 0
 	mov	ecx, -12
 	call	GetStdHandle
 	mov	qword ptr [rsp + 32], 0
 	lea	rdx, [rip + _xt_simd_select.msg]
-	lea	r9, [rsp + 52]
+	lea	r9, [rsp + 48]
 	mov	rcx, rax
 	mov	r8d, 66
 	call	WriteFile
-	xor	r9d, r9d
-.LBB75_20:
-	mov	dword ptr [rip + _xt_simd_level], r9d
+	xor	r8d, r8d
+.LBB75_28:
+	mov	dword ptr [rip + _xt_simd_level], r8d
 	test	edi, edi
-	je	.LBB75_23
-# %bb.21:
-	mov	ecx, edi
-	mov	eax, r9d
-	inc	rax
-	lea	rcx, [rcx + 2*rcx]
+	je	.LBB75_31
+# %bb.29:
+	mov	eax, edi
+	mov	ecx, r8d
+	inc	rcx
+	shl	rax, 2
 	xor	edx, edx
 	.p2align	4, 0x90
-.LBB75_22:                              # =>This Inner Loop Header: Depth=1
+.LBB75_30:                              # =>This Inner Loop Header: Depth=1
 	mov	r8d, edx
 	mov	r8, qword ptr [rsi + 8*r8]
-	lea	r9d, [rax + rdx]
+	lea	r9d, [rcx + rdx]
 	mov	r9, qword ptr [rsi + 8*r9]
 	mov	qword ptr [r8], r9
-	add	rdx, 3
-	cmp	rcx, rdx
-	jne	.LBB75_22
-.LBB75_23:
+	add	rdx, 4
+	cmp	rax, rdx
+	jne	.LBB75_30
+.LBB75_31:
 	add	rsp, 56
 	pop	rbx
+	pop	rbp
 	pop	rdi
 	pop	rsi
-	pop	r14
 	ret
+.LBB75_12:
+	lea	rdx, [rip + .L.str.2]
+	mov	r8d, eax
+	cmp	r8b, byte ptr [rdx]
+	je	.LBB75_17
+.LBB75_19:
+	test	al, al
+	je	.LBB75_20
+# %bb.21:
+	inc	rcx
+	lea	rdx, [rip + .L.str.3]
+	.p2align	4, 0x90
+.LBB75_22:                              # =>This Inner Loop Header: Depth=1
+	cmp	al, byte ptr [rdx]
+	jne	.LBB75_24
+# %bb.23:                               #   in Loop: Header=BB75_22 Depth=1
+	inc	rdx
+	movzx	eax, byte ptr [rcx]
+	inc	rcx
+	test	al, al
+	jne	.LBB75_22
+	jmp	.LBB75_24
+.LBB75_20:
+	lea	rdx, [rip + .L.str.3]
+.LBB75_24:
+	cmp	ebp, 1
+	ja	.LBB75_27
+# %bb.25:
+	cmp	al, byte ptr [rdx]
+	jne	.LBB75_27
+# %bb.26:
+	mov	dword ptr [rsp + 52], 0
+	mov	ecx, -12
+	call	GetStdHandle
+	mov	qword ptr [rsp + 32], 0
+	lea	rdx, [rip + _xt_simd_select.msg.4]
+	lea	r9, [rsp + 52]
+	mov	rcx, rax
+	mov	r8d, 82
+	call	WriteFile
+	jmp	.LBB75_27
                                         # -- End function
 	.def	_xtc_sinit_run;
 	.scl	2;
@@ -2555,6 +2602,13 @@ _xt_simd_level:
 _xt_simd_select.msg:
 	.asciz	"xc: XC_SIMD=avx2, but this machine has no usable AVX2; using base\n"
 
+.L.str.3:                               # @.str.3
+	.asciz	"avx512"
+
+	.p2align	4, 0x0                          # @_xt_simd_select.msg.4
+_xt_simd_select.msg.4:
+	.asciz	"xc: XC_SIMD=avx512, but this machine has no usable AVX-512; using the best it has\n"
+
 	.lcomm	xt_sinit_n,4,4                  # @xt_sinit_n
 	.lcomm	xt_sinit_flag,256,16            # @xt_sinit_flag
 	.lcomm	xt_sinit_owner,128,16           # @xt_sinit_owner
@@ -2564,4 +2618,5 @@ _xt_simd_select.msg:
 	.addrsig_sym xt_rt_spin
 	.addrsig_sym xt_alloc_spin
 	.addrsig_sym _xt_simd_select.msg
+	.addrsig_sym _xt_simd_select.msg.4
 	.addrsig_sym xt_env.buf

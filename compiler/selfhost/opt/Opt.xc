@@ -16392,8 +16392,9 @@ class OptProfile
 
     // ── runtime SIMD dispatch: the per-level clones (the reference's
     // XTIROptSimdClone). CLONE, before the vectorisers, copies each function
-    // with a loop (a phi) as `<name>$avx2` at 32 bytes; PRUNE, after them, drops
-    // the clones that did not vectorise at 32 and marks their bases dispatched.
+    // with a loop (a phi) as `<name>$avx2` at 32 bytes and `<name>$avx512` at
+    // 64; PRUNE, after them, drops the clones that did not vectorise at their
+    // own width and marks the bases of the rest dispatched.
     // The copy is a printed and re-parsed module, taken only when it prints back
     // exactly — a lossy round trip clones nothing.
     static bool simdHasPhi(IRFunc* fn)
@@ -16404,8 +16405,10 @@ class OptProfile
         return false;
         }
 
-    static bool simdHasWide(IRFunc* fn)
+    static bool simdHasWide(IRFunc* fn, u32 bytes)
         {
+        String* sfx = new String();
+        sfx.appendFormat(", %u)", bytes);
         for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
             {
             IRBlock* bl = (IRBlock*)fn.blocks().get(b);
@@ -16415,7 +16418,7 @@ class OptProfile
                                                             : bl.insns().get(k - bl.phis().count()));
                 if (n.res() != (IRValue*)0 && n.res().ty() != (String*)0
                     && n.res().ty().hasPrefix(String.withCString("Vec("))
-                    && n.res().ty().hasSuffix(String.withCString(", 32)")))
+                    && n.res().ty().hasSuffix(sfx))
                     return true;
                 }
             }
@@ -16436,9 +16439,20 @@ class OptProfile
         if (names.count() == (u32)0)
             return;
         String* printed = m.text();
-        IRModule* copy = IrParser.parseText(printed, new IrParser());
-        if (copy == (IRModule*)0 || !copy.text().equals(printed))
+        // One copy per level, each from its own parse, as the reference takes
+        // them: the avx2 clones join the module before the avx512 ones.
+        IRModule* copy2 = IrParser.parseText(printed, new IrParser());
+        if (copy2 == (IRModule*)0 || !copy2.text().equals(printed))
             return;
+        IRModule* copy5 = IrParser.parseText(printed, new IrParser());
+        if (copy5 == (IRModule*)0 || !copy5.text().equals(printed))
+            return;
+        simdAddClones(m, copy2, names, String.withCString("avx2"), (u32)32);
+        simdAddClones(m, copy5, names, String.withCString("avx512"), (u32)64);
+        }
+
+    void simdAddClones(IRModule* m, IRModule* copy, Array* names, String* level, u32 bytes)
+        {
         for (u32 i = (u32)0; i < names.count(); i = i + (u32)1)
             {
             String* n = (String*)names.get(i);
@@ -16448,10 +16462,11 @@ class OptProfile
                 if (!c.name().equals(n))
                     continue;
                 String* cn = String.withString(n);
-                cn.appendCString("$avx2");
+                cn.appendByte((u8)'$');
+                cn.append(level);
                 c.setName(cn);
-                c.setSimdLaneBytes((u32)32);
-                c.setSimdLevel(String.withCString("avx2"));
+                c.setSimdLaneBytes(bytes);
+                c.setSimdLevel(level);
                 c.setSimdBaseName(n);
                 m.addFunc(c);
                 break;
@@ -16476,7 +16491,7 @@ class OptProfile
             for (u32 g = (u32)0; g < m.funcs().count(); g = g + (u32)1)
                 if (((IRFunc*)m.funcs().get(g)).name().equals(fn.simdBaseName()))
                     base = (IRFunc*)m.funcs().get(g);
-            if (base != (IRFunc*)0 && simdHasWide(fn))
+            if (base != (IRFunc*)0 && simdHasWide(fn, fn.simdLaneBytes()))
                 {
                 base.setSimdDispatch(true);
                 keep.add((Object*)fn);

@@ -477,7 +477,7 @@ class X86_64
             module.append(withVzeroupper(peepholeFallthrough(peepholeCopyProp(_out))));
             _out = module;
             }
-        // The selection: a table of {slot, base, avx2} and a load-time
+        // The selection: a table of {slot, base, avx2, avx512} and a load-time
         // constructor handing it to _xt_simd_select, first in the list.
         if (_simdNames.count() > (u32)0)
             {
@@ -492,11 +492,23 @@ class X86_64
                 _out.appendFormat("__simd_%s:\n\t.quad\t%s$base\n", nm.cString(), nm.cString());
                 }
             _out.appendCString("__xt_simd_table:\n");
+            // A level whose clone the prune dropped (it gained no wider
+            // vectors) takes the next one down: avx512 -> avx2 -> base.
             for (u32 i = (u32)0; i < _simdNames.count(); i = i + (u32)1)
                 {
                 String* nm = (String*)_simdNames.get(i);
-                _out.appendFormat("\t.quad\t__simd_%s, %s$base, %s$avx2\n",
-                                  nm.cString(), nm.cString(), nm.cString());
+                String* b = String.withString(nm);
+                b.appendCString("$base");
+                String* a2 = String.withString(nm);
+                a2.appendCString("$avx2");
+                if (!simdHas(m, a2))
+                    a2 = b;
+                String* a5 = String.withString(nm);
+                a5.appendCString("$avx512");
+                if (!simdHas(m, a5))
+                    a5 = a2;
+                _out.appendFormat("\t.quad\t__simd_%s, %s, %s, %s\n",
+                                  nm.cString(), b.cString(), a2.cString(), a5.cString());
                 }
             }
         emitModuleData(m);
@@ -2532,6 +2544,15 @@ class X86_64
     // Does anything in this module call the runtime's thread-create primitive?
     // The instruction stream is the question, not the symbol table — a symbol
     // outlives the calls to it.
+    // Does the module have a function of this name (a clone the prune kept)?
+    static bool simdHas(IRModule* m, String* name)
+        {
+        for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
+            if (((IRFunc*)m.funcs().get(f)).name().equals(name))
+                return true;
+        return false;
+        }
+
     bool spawnsThreads(IRModule* m)
         {
         String* want = String.withCString("_xt_thread_create");
