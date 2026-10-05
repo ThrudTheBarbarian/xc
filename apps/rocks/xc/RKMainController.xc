@@ -94,6 +94,7 @@ class RKMainController : Object<UXTableDelegate>
     RKInspector* sizeCtl;           // the Size tab: the same rows' frame share
     RKIdentity* identityCtl;        // the Identity tab
     Array<UXView>* tabPanes;        // the four tabs' panes, in order (the builder fills it)
+    UXScrollView* inspectorScroll;  // what they scroll in
     RKLibrary* library;
     RKClassBook* classBook;         // what is known about classes: UXKit's, the app's, declared
     RKConnectionsPane* connectionsCtl; // the Connections tab
@@ -165,6 +166,7 @@ class RKMainController : Object<UXTableDelegate>
         identityCtl.willChange = &self.onIdentityWillChange;
         identityCtl.changed = &self.onIdentityEdit;
         tabPanes = new Array();
+        inspectorScroll = (UXScrollView*)0;
         library = new RKLibrary();
         classBook = new RKClassBook();
         identityCtl.book = classBook;
@@ -357,6 +359,44 @@ class RKMainController : Object<UXTableDelegate>
             {
             inspectorTabs.applyNativeSelection(i);
             }
+        self.fitInspector();
+        }
+    // The scroller follows the tab shown: as tall as its rows, so a long one scrolls.
+    void fitInspector(void)
+        {
+        if (inspectorScroll == (UXScrollView*)0)
+            {
+            return;
+            }
+        i32 t = self.shownTab();
+        if (t < (i32)0 || t >= (i32)tabPanes.count())
+            {
+            return;
+            }
+        UXView* p = (UXView* ?)tabPanes.get((u32)t);
+        i32 bottom = (i32)0;
+        UXRect f = UXGeom.zero(); // a struct local lives at function scope, not in the loop
+        for (Object* o in p.subviews)
+            {
+            UXView* v = (UXView* ?)o;
+            if (v != (UXView*)0)
+                {
+                f = v.frame();
+                if ((i32)f.y + (i32)f.h > bottom)
+                    {
+                    bottom = (i32)f.y + (i32)f.h;
+                    }
+                }
+            }
+        i32 h = bottom + (i32)8;
+        i32 seen = (i32)inspectorScroll.frame().h;
+        if (h < seen)
+            {
+            h = seen;
+            }
+        UXRect pf = p.frame();
+        p.setFrame(UXGeom.make(pf.x, pf.y, pf.w, (i16)h));
+        inspectorScroll.setDocumentHeight(h);
         }
     i32 shownTab(void)
         {
@@ -576,6 +616,7 @@ class RKMainController : Object<UXTableDelegate>
         {
         UXRscTree* t = self.shownTreeOrNull();
         connectionsCtl.show(doc, t, classBook, t != (UXRscTree*)0 ? self.selectedEnd() : (RKEnd*)0);
+        self.fitInspector(); // every selection change ends here
         }
     void onConnectionWillChange(void)
         {

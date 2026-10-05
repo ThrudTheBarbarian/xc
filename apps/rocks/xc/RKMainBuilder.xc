@@ -66,7 +66,8 @@ class RKMainBuilder : Object
         {
         bool ok = true;
         i16 gut = (i16)UXMetrics.gutter();
-        i16 tbH = (i16)48; // icon-above-text bar
+        // icon-above-text bar -- or none, where the toolbar is in the window's own chrome (AppKit)
+        i16 tbH = UXWindow.toolbarInChrome() ? (i16)0 : (i16)48;
         i16 stH = (i16)UXMetrics.stdHeightFor((i32)UXKindLabel, (i32)UX_FORM_DESKTOP);
         i16 rh = (i16)UXMetrics.stdHeightFor((i32)UXKindField, (i32)UX_FORM_DESKTOP);
 
@@ -81,8 +82,8 @@ class RKMainBuilder : Object
         tb.setAutoresizeMask((i32)UX_FLEX_WIDTH);
 
         // ---- outline | (centre | right) --------------------------------------
-        i16 bodyY = (i16)((i32)tbH + (i32)gut);
-        i16 bodyH = (i16)((i32)h - (i32)bodyY - (i32)stH - (i32)gut);
+        i16 bodyY = (i16)((i32)tbH + (tbH > (i16)0 ? (i32)gut : (i32)0));
+        i16 bodyH = (i16)((i32)h - (i32)bodyY - (i32)stH - (i32)4);
 
         // The side panes' widths: the desktop's where the window has room, a share of it where it
         // has not (a phone held upright), so the canvas always keeps the middle.
@@ -153,13 +154,19 @@ class RKMainBuilder : Object
         bar.addSubview(scope, UXGeom.make((i16)502, (i16)4, (i16)112, rh));
 
         // ---- the right: the inspector over the library -------------------------
-        UXView* right = inner.secondPane();
+        // inspector over library, a divider between them to drag, the inspector scrolling when what
+        // it shows is taller than its pane
+        UXSplitView* column = new UXSplitView();
+        column.setVertical(true);
         i16 insH = (i16)((i32)bodyH * (i32)3 / (i32)5);
-        UXView* inspector = new UXView();
-        right.addSubview(inspector, UXGeom.make((i16)0, (i16)0, (i16)inW, insH));
-        UXLabel* tv = new UXLabel(); // what is selected: "button (UXButton)"
+        column.setDividerPos(insH);
+        inner.secondPane().addSubview(column, UXGeom.make((i16)0, (i16)0, (i16)inW, bodyH));
+        column.setAutoresizeMask((i32)(UX_FLEX_WIDTH | UX_FLEX_HEIGHT));
+        UXView* inspector = column.firstPane();
+        UXLabel* tv = new UXLabel(); // what is selected: its class
         tv.setTitle((u8*)"—");
         inspector.addSubview(tv, UXGeom.make((i16)8, (i16)4, (i16)((i32)inW - (i32)16), rh));
+        tv.setAutoresizeMask((i32)UX_FLEX_WIDTH);
         UXSegmentedControl* tabs = new UXSegmentedControl();
         tabs.addSegment((u8*)"Identity", (i32)0);
         tabs.addSegment((u8*)"Attributes", (i32)1);
@@ -169,11 +176,15 @@ class RKMainBuilder : Object
         i16 tabY = (i16)((i32)rh + (i32)8);
         inspector.addSubview(tabs, UXGeom.make((i16)4, tabY, (i16)((i32)inW - (i32)8), rh));
         i16 paneY = (i16)((i32)tabY + (i32)rh + (i32)6);
-        UXRect paneR = UXGeom.make((i16)0, paneY, (i16)inW, (i16)((i32)insH - (i32)paneY));
+        UXScrollView* insScroll = new UXScrollView();
+        inspector.addSubview(insScroll, UXGeom.make((i16)0, paneY, (i16)inW, (i16)((i32)insH - (i32)paneY)));
+        insScroll.setAutoresizeMask((i32)(UX_FLEX_WIDTH | UX_FLEX_HEIGHT));
+        c.inspectorScroll = insScroll;
+        UXRect paneR = UXGeom.make((i16)0, (i16)0, (i16)((i32)inW - (i32)16), (i16)((i32)insH - (i32)paneY));
         for (i32 i = (i32)0; i < (i32)4; i = i + (i32)1)
             {
             UXView* p = new UXView();
-            inspector.addSubview(p, paneR);
+            insScroll.document().addSubview(p, paneR);
             p.setHidden(i != (i32)1);
             c.tabPanes.add(p);
             }
@@ -184,26 +195,28 @@ class RKMainBuilder : Object
         c.sizeCtl.attach((UXView* ?)c.tabPanes.get((u32)2), (UXLabel*)0);
         c.connectionsCtl.attach((UXView* ?)c.tabPanes.get((u32)3));
 
-        i16 libY = (i16)((i32)insH + (i32)gut);
+        UXView* libPane = column.secondPane();
+        i16 libH = (i16)((i32)bodyH - (i32)insH);
         UXLabel* ll = new UXLabel();
         ll.setTitle((u8*)"Library");
-        right.addSubview(ll, UXGeom.make((i16)8, libY, (i16)80, rh));
+        libPane.addSubview(ll, UXGeom.make((i16)8, (i16)6, (i16)80, rh));
         UXTextField* search = new UXTextField();
         search.setPlaceholder((u8*)"Filter");
-        right.addSubview(search, UXGeom.make((i16)8, (i16)((i32)libY + (i32)rh + (i32)4), (i16)((i32)inW - (i32)16), rh));
-        i16 tY = (i16)((i32)libY + (i32)2 * (i32)rh + (i32)10);
+        libPane.addSubview(search, UXGeom.make((i16)8, (i16)((i32)rh + (i32)10), (i16)((i32)inW - (i32)16), rh));
+        search.setAutoresizeMask((i32)UX_FLEX_WIDTH);
+        i16 tY = (i16)((i32)2 * (i32)rh + (i32)16);
         UXTableView* lib = new UXTableView();
         lib.addColumn((u8*)"Object", (i16)110);
         lib.addColumn((u8*)"", (i16)((i32)inW - (i32)130));
         lib.setDataSource((UXTableDataSource*)c.library);
-        right.addSubview(lib, UXGeom.make((i16)4, tY, (i16)((i32)inW - (i32)8), (i16)((i32)bodyH - (i32)tY - (i32)4)));
+        libPane.addSubview(lib, UXGeom.make((i16)4, tY, (i16)((i32)inW - (i32)8), (i16)((i32)libH - (i32)tY - (i32)4)));
         lib.setAutoresizeMask((i32)(UX_FLEX_WIDTH | UX_FLEX_HEIGHT)); // the library takes the height
 
         // ---- the status line -----------------------------------------------
         UXLabel* status = new UXLabel();
         status.setTitle((u8*)"Ready");
         content.addSubview(status,
-                           UXGeom.make(gut, (i16)((i32)h - (i32)stH), (i16)((i32)w - (i32)2 * (i32)gut), stH));
+                           UXGeom.make(gut, (i16)((i32)h - (i32)stH - (i32)2), (i16)((i32)w - (i32)2 * (i32)gut), stH));
         status.setAutoresizeMask((i32)(UX_FLEX_WIDTH | UX_ANCHOR_BOTTOM));
 
         // The outline and the library report selection through the table delegate they inherit;

@@ -22,8 +22,8 @@
 #import "UXRscRead.xc"
 #import "UXFileIO.xc"
 
-#define RK_W 1000
-#define RK_H 640
+#define RK_W 1200
+#define RK_H 800
 
 class RocksApp : Object<UXApplicationDelegate>
     {
@@ -49,7 +49,17 @@ class RocksApp : Object<UXApplicationDelegate>
             ww = (i16)app.screenWidth();
             wh = (i16)app.screenH;
             }
+        // no larger than the screen it opens on (a 1280 x 720 GEM screen, say)
+        if (app.screenWidth() > (i32)0 && (i32)wx + (i32)ww > app.screenWidth())
+            {
+            ww = (i16)(app.screenWidth() - (i32)wx);
+            }
+        if (app.screenH > (i32)0 && (i32)wy + (i32)wh > app.screenH)
+            {
+            wh = (i16)(app.screenH - (i32)wy);
+            }
         win.open((u8*)"Rocks", UXGeom.make(wx, wy, ww, wh), content);
+        win.setMinimumSize((i32)RK_W, (i32)RK_H); // below this the panes overlap
 
         // A wiring name the controller does not know is a TYPO, and the nib
         // path would hit it too — so it fails here rather than being silently
