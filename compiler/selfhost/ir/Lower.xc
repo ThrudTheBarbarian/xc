@@ -14095,8 +14095,6 @@ class ClassInfo
         if (iv == (IRValue*)0 || f.params().count() == (u32)0)
             return (String*)0;
         IRValue* selfVal = (IRValue*)f.params().get((u32)0);
-        Stdio.error(String.withU32(ivars.count()));
-        Stdio.error(String.withCString("\n"));
         Map* writes = new Map();        // buffer -> Array of "affine k c" strings
         Map* wShown = new Map();        // buffer -> its first write's index, as shown
         Array* reads = new Array();     // [buffer, form, shown]
