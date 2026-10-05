@@ -3764,10 +3764,14 @@ class Parser
             match((u16)tokLParen);              // splits a merged `((`
             // A cast: `(T)expr` / `(T@ ?)expr`.
             if (looksLikeCast()) {
+                // The cast sits at its `(`, as in the reference, not at the
+                // `)` mkNamed would give it: a cast's errors point there.
+                Token* lp = (Token*)_tokens.get(_pos - (u32)1);
                 String* ty = parseTypeSpelling();
                 bool failable = match((u16)tokQuestion);
                 expect((u16)tokRParen);
                 Node* n = mkNamed((u16)nkCast, ty);
+                n.setPos(lp.fileId(), lp.line(), lp.col());
                 if (failable) n.addFlag((u32)NF_FAILABLE);
                 n.add(parseUnary());
                 return n;

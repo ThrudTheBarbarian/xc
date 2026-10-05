@@ -255,6 +255,38 @@ class Sema
         _errorAt(e, n);
         }
 
+    // A cast from a class pointer to a PROTOCOL pointer. Where the vtable
+    // carries the conformance list (the chain-capable targets) the object's
+    // dynamic class is checked at run time. The 6502 and m68k carry no such
+    // list, so there the class must declare the protocol, as the reference
+    // requires; letting it through lowered a check nothing could make.
+    void checkProtocolCast(Node* n)
+        {
+        if (_chainCapable || n.kidCount() == (u32)0)
+            return;
+        String* tc = classNameOf(n.name());
+        if (tc == 0 || _protocols.get((Hashable*)tc) == 0)
+            return;
+        String* opT = n.kid((u32)0).ty();
+        String* oc = opT == 0 ? (String*)0 : classNameOf(opT);
+        if (oc == 0 || oc.equals(tc))
+            return;
+        if (_classes.get((Hashable*)oc) == 0 && _protocols.get((Hashable*)oc) == 0)
+            return;
+        if (Overload.declaresConformance(oc, tc))
+            return;
+        String* e = String.withCString("Class '");
+        e.append(oc);
+        e.appendCString("' does not conform to protocol '");
+        e.append(tc);
+        e.appendCString("' — declare it as `class ");
+        e.append(oc);
+        e.appendCString(" <");
+        e.append(tc);
+        e.appendCString(">`");
+        _errorAt(e, n);
+        }
+
     // The declaration-order reading of an overload clash (bug 557), or 0.
     String* declOrderClash(Node* ext, Node* fn)
         {
@@ -1897,6 +1929,7 @@ class Sema
             n.setTy(n.name());
             if (n.hasFlag((u32)NF_FAILABLE))
                 checkFailableCast(n);
+            checkProtocolCast(n);
             return;
             }
         if (k == (u16)nkBinary)

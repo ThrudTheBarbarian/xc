@@ -1,3 +1,4 @@
+//xtc-na: xt6502,m68k — no conformance list at run time there, so the cast is refused unless the class declares the protocol
 // checked_cast_protocol.xc — a checked cast to a PROTOCOL pointer.
 //
 // `(Pingable* ?)o` asks whether o conforms to Pingable: the conforming object

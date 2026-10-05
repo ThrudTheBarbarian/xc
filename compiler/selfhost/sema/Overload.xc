@@ -59,6 +59,23 @@ class Overload
         return false;
         }
 
+    // Does cls, or a class it descends from, DECLARE conformance to proto?
+    static bool declaresConformance(String* cls, String* proto)
+        {
+        String* c = cls;
+        u32 guard = (u32)0;
+        while (c != 0 && guard < (u32)64)
+            {
+            if (conformsTo(c, proto))
+                return true;
+            if (_parents == 0)
+                return false;
+            c = (String*)_parents.get((Hashable*)c);
+            guard = guard + (u32)1;
+            }
+        return false;
+        }
+
     static bool descendsFrom(String* sub, String* sup)
         {
         if (sub == 0 || sup == 0)
