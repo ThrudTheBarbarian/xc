@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Write the website's performance page from benchmark results.
 
-  page.py                       current run v0.65, history v0.62..v0.65
-  page.py --current v0.65 --history v0.62,v0.63,v0.64,v0.65
+  page.py                       current run v0.66, history v0.62..v0.66
+  page.py --current v0.66 --history v0.62,v0.63,v0.64,v0.65,v0.66
 
 The current run supplies the four-language comparison; the history runs supply
 how xc's own times moved from release to release (their xc sources are the
@@ -207,9 +207,9 @@ def standing(cur):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--current", default="v0.65")
-    ap.add_argument("--history", default="v0.62,v0.63,v0.64,v0.65")
-    ap.add_argument("--release", default="0.65")
+    ap.add_argument("--current", default="v0.66")
+    ap.add_argument("--history", default="v0.62,v0.63,v0.64,v0.65,v0.66")
+    ap.add_argument("--release", default="0.66")
     a = ap.parse_args()
     cur = load(a.current)
     versions = a.history.split(",")
@@ -294,8 +294,12 @@ gain:
 - **Reference counting and allocation on x86-64.** `arc_alloc` and `arc_array`,
   where C++ makes one allocation per object through a faster allocator and
   reads elements without retaining them.
-- **x86-64 loops.** `sieve`, `sort_small` and `int_muldiv`, where the other
-  compilers' loops are faster.
+- **x86-64 loops.** `sieve` and `sort_small`, where the other compilers' loops
+  are faster.
+- **AVX2 that loses.** `call_depth` on x86-64 is slower in 0.66 than in 0.65.
+  Its hot loop is vectorised, and the 256-bit AVX2 version that 0.66 picks on
+  this machine runs slower than the 128-bit one; `XC_SIMD=base` restores the
+  0.65 time.
 - **Dispatch.** `poly_dispatch` on arm64, where clang's call sequence around the
   virtual call is shorter.
 
