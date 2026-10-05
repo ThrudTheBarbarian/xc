@@ -425,6 +425,7 @@ class Pe
         _iatSlot = new Map();
         _stubSym = new Array();
         _nImports = (u32)0;
+        _exportAs = new Map();
         for (u32 i = (u32)0; i < fixups.count(); i = i + (u32)1)
             {
             X86Fixup* f = (X86Fixup*)fixups.get(i);
@@ -458,6 +459,9 @@ class Pe
                 return;
                 }
             String* dll = (String*)importDlls.get((u32)owner);
+            String* ent = entryFor((Array*)importSyms.get((u32)owner), want);
+            if (ent != (String*)0 && ent.byteLength() > want.byteLength())
+                _exportAs.set((Hashable*)want, (Object*)ent.substringFromByte(want.byteLength() + (u32)1));
             // One descriptor per DLL, matched case-INSENSITIVELY: Windows loads
             // a library once however it is spelled, and two descriptors for
             // `kernel32.dll` and `KERNEL32.dll` (which an imports map and a
@@ -516,12 +520,34 @@ class Pe
         {
         return n != (String*)0 && n.hasPrefix(String.withCString("__imp_")) ? n.substringFromByte((u32)6) : (String*)0;
         }
+    // The import entry naming `name`: the name itself, or `name=export`
+    // when the symbol binds to a DLL export of another name (an import
+    // library's alias, close -> _close). Nil when the list has neither.
+    static String* entryFor(Array* a, String* name)
+        {
+        for (u32 i = (u32)0; i < a.count(); i = i + (u32)1)
+            {
+            String* e = (String*)a.get(i);
+            if (e.equals(name))
+                return e;
+            if (e.byteLength() > name.byteLength() && e.byteAt(name.byteLength()) == (u8)'=' && e.hasPrefix(name))
+                return e;
+            }
+        return (String*)0;
+        }
     static i32 ownerOf(Array* dlls, Array* syms, String* name)
         {
         for (u32 i = (u32)0; i < dlls.count(); i = i + (u32)1)
-            if (inArray((Array*)syms.get(i), name))
+            if (entryFor((Array*)syms.get(i), name) != (String*)0)
                 return (i32)i;
         return (i32)-1;
+        }
+
+    // The name an import is looked up by in its DLL.
+    String* exportName(String* sym)
+        {
+        String* e = _exportAs != (Map*)0 ? (String*)_exportAs.get((Hashable*)sym) : (String*)0;
+        return e != (String*)0 ? e : sym;
         }
 
     static i32 indexOfString(Array* a, String* s)
@@ -575,6 +601,7 @@ class Pe
     u32 _thunkRVA;
     u32 _dataFileSz;
     Map* _nameRVA; // imported symbol -> the RVA of its hint/name entry
+    Map* _exportAs; // imported symbol -> the DLL export it binds to, when the names differ
     Map* _dllNameRVA;
     // The pseudo-relocation stub, the export directory, and the DLL-only
     // sections after .data.
@@ -673,7 +700,7 @@ class Pe
                 {
                 String* sym = (String*)syms.get(k);
                 _nameRVA.set((Hashable*)sym, (Object*)Number.withU32(cur));
-                cur = alignUp(cur + (u32)2 + sym.byteLength() + (u32)1, (u32)2);
+                cur = alignUp(cur + (u32)2 + exportName(sym).byteLength() + (u32)1, (u32)2);
                 }
             }
         _dllNameRVA = new Map();
@@ -1226,7 +1253,7 @@ class Pe
             Array* syms = (Array*)_usedSyms.get(i);
             for (u32 k = (u32)0; k < syms.count(); k = k + (u32)1)
                 {
-                String* sym = (String*)syms.get(k);
+                String* sym = exportName((String*)syms.get(k));
                 p16((u32)0); // hint 0 means "search by name"
                 for (u32 c = (u32)0; c < sym.byteLength(); c = c + (u32)1)
                     p8((u32)sym.byteAt(c));

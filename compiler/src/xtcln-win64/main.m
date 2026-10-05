@@ -145,12 +145,18 @@ int main(int argc, const char* argv[])
                     if (tab.location == NSNotFound)
                         continue;
                     NSString* sym = [ln substringToIndex:tab.location];
-                    NSString* dll = [[ln substringFromIndex:tab.location + 1]
-                        stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+                    NSArray<NSString*>* rest = [[[ln substringFromIndex:tab.location + 1]
+                        stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]]
+                        componentsSeparatedByString:@"\t"];
+                    NSString* dll = rest[0];
                     if (!sym.length || !dll.length)
                         continue;
+                    // A third column is the export the symbol binds to
+                    // (close -> _close): passed on as `close=_close`.
                     if (!mapOwner[sym])
-                        mapOwner[sym] = dll;
+                        mapOwner[sym] = rest.count > 1 && rest[1].length
+                                            ? [NSString stringWithFormat:@"%@\t%@", dll, rest[1]]
+                                            : dll;
                     }
                 }
             else if ([a hasPrefix:@"-"])
@@ -214,12 +220,14 @@ int main(int argc, const char* argv[])
             NSMutableSet<NSString*>* explicit = [NSMutableSet set];
             for (NSString* dll in imports)
                 [explicit addObjectsFromArray:imports[dll]];
-            [mapOwner enumerateKeysAndObjectsUsingBlock:^(NSString* sym, NSString* dll, BOOL* stop) {
+            [mapOwner enumerateKeysAndObjectsUsingBlock:^(NSString* sym, NSString* owner, BOOL* stop) {
               if ([explicit containsObject:sym])
                   return;
+              NSArray<NSString*>* parts = [owner componentsSeparatedByString:@"\t"];
+              NSString* dll = parts[0];
               if (!imports[dll])
                   imports[dll] = [NSMutableArray array];
-              [imports[dll] addObject:sym];
+              [imports[dll] addObject:parts.count > 1 ? [NSString stringWithFormat:@"%@=%@", sym, parts[1]] : sym];
             }];
             }
 

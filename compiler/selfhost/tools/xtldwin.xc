@@ -192,11 +192,22 @@ void main(void)
                 continue;
             String* sym = ln.substringBytes((u32)0, tab);
             String* dll = ln.substringFromByte(tab + (u32)1).trimmed();
+            // A third column is the export the symbol binds to (close ->
+            // _close): passed on to the writer as `close=_close`.
+            String* entry = sym;
+            u32 tab2 = dll.byteIndexOf(String.withCString("\t"));
+            if (tab2 != (u32)$FFFF_FFFF)
+                {
+                entry = String.withString(sym);
+                entry.appendCString("=");
+                entry.append(dll.substringFromByte(tab2 + (u32)1).trimmed());
+                dll = dll.substringBytes((u32)0, tab2);
+                }
             if (sym.byteLength() == (u32)0 || dll.byteLength() == (u32)0)
                 continue;
             if (alreadyListed(sym))
                 continue;
-            ((Array*)gSyms.get(dllSlot(dll))).add((Object*)sym);
+            ((Array*)gSyms.get(dllSlot(dll))).add((Object*)entry);
             }
         }
 

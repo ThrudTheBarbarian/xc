@@ -1854,6 +1854,16 @@ void linkWin64(DriverOptions* d, String* prog)
                 if (tab == (u32)$FFFF_FFFF) continue;
                 String* sym = ln.substringBytes((u32)0, tab);
                 String* dll = ln.substringFromByte(tab + (u32)1).trimmed();
+                // A third column is the export the symbol binds to (close ->
+                // _close): passed on to the writer as `close=_close`.
+                String* entry = sym;
+                u32 tab2 = dll.byteIndexOf(String.withCString("\t"));
+                if (tab2 != (u32)$FFFF_FFFF) {
+                    entry = String.withString(sym);
+                    entry.appendCString("=");
+                    entry.append(dll.substringFromByte(tab2 + (u32)1).trimmed());
+                    dll = dll.substringBytes((u32)0, tab2);
+                }
                 if (sym.byteLength() == (u32)0 || dll.byteLength() == (u32)0) continue;
                 // An explicit entry wins: the floor above is what the runtime
                 // itself calls, and the map is a wider catalogue that may name
@@ -1868,7 +1878,7 @@ void linkWin64(DriverOptions* d, String* prog)
                     syms.add((Object*)new Array());
                     at = (i32)(dlls.count() - (u32)1);
                 }
-                ((Array*)syms.get((u32)at)).add((Object*)sym);
+                ((Array*)syms.get((u32)at)).add((Object*)entry);
             }
         }
     }

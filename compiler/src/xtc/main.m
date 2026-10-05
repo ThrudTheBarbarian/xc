@@ -3002,8 +3002,9 @@ static NSSet<NSString *> *win64SelfHostCoveredLibs(const char *argv0,
         if (ln.length == 0 || [ln hasPrefix:@"#"]) continue;
         NSRange tab = [ln rangeOfString:@"\t"];
         if (tab.location == NSNotFound) continue;
-        NSString *dll = [[ln substringFromIndex:tab.location+1]
-            stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+        NSString *dll = [[[ln substringFromIndex:tab.location+1]
+            stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]]
+            componentsSeparatedByString:@"\t"].firstObject;
         NSString *stem = [dll stringByDeletingPathExtension].lowercaseString;
         if (stem.length) [out addObject:[NSString stringWithFormat:@"lib%@.a", stem]];
     }

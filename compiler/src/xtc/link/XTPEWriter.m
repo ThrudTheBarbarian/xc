@@ -616,10 +616,19 @@ static NSInteger byteOrder(id x, id y, void* ctx)
     // ── 1. which imports does this program actually use? ──
     // Only emit descriptors for what is referenced: an unused DLL in the import
     // table is a load-time dependency the program does not need.
+    // An entry `close=_close` binds the program's `close` to the DLL's export
+    // `_close` (an import library's alias, from the map's third column): the
+    // program refers to the first name, the import table names the second.
     NSMutableDictionary<NSString*, NSString*>* ownerOf = [NSMutableDictionary dictionary];
+    NSMutableDictionary<NSString*, NSString*>* exportAs = [NSMutableDictionary dictionary];
     for (NSString* dll in imports)
-        for (NSString* sym in imports[dll])
+        for (NSString* entry in imports[dll])
+            {
+            NSRange eq = [entry rangeOfString:@"="];
+            NSString* sym = eq.location == NSNotFound ? entry : [entry substringToIndex:eq.location];
             ownerOf[sym] = dll;
+            exportAs[sym] = eq.location == NSNotFound ? nil : [entry substringFromIndex:eq.location + 1];
+            }
 
     NSMutableArray<NSString*>* dllOrder = [NSMutableArray array];
     NSMutableDictionary<NSString*, NSMutableArray<NSString*>*>* used = [NSMutableDictionary dictionary];
@@ -771,7 +780,8 @@ static NSInteger byteOrder(id x, id y, void* ctx)
         for (NSString* sym in used[dll])
             {
             nameRVA[sym] = @(cur);
-            cur = alignUp(cur + 2 + [sym lengthOfBytesUsingEncoding:NSUTF8StringEncoding] + 1, 2);
+            NSString* name = exportAs[sym] ?: sym;
+            cur = alignUp(cur + 2 + [name lengthOfBytesUsingEncoding:NSUTF8StringEncoding] + 1, 2);
             }
     NSMutableDictionary<NSString*, NSNumber*>* dllNameRVA = [NSMutableDictionary dictionary];
     for (NSString* dll in dllOrder)
@@ -1140,7 +1150,7 @@ static NSInteger byteOrder(id x, id y, void* ctx)
         for (NSString* sym in used[dll])
             {
             p16(out, 0); // hint — 0 means "search by name"
-            [out appendData:[sym dataUsingEncoding:NSUTF8StringEncoding]];
+            [out appendData:[(exportAs[sym] ?: sym) dataUsingEncoding:NSUTF8StringEncoding]];
             p8(out, 0);
             if (out.length & 1)
                 p8(out, 0); // entries are 2-byte aligned
