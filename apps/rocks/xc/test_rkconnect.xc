@@ -23,6 +23,8 @@
 u8* getenv(u8* name);
 i32 ux_ak_test_drop_file(i32 handle, u8* path, i32 x, i32 y);
 i32 ux_ak_test_hit(i32 handle, i32 x, i32 y);
+i32 ux_ak_test_drop_item(i32 handle, u8* text, i32 x, i32 y);
+i32 ux_ak_test_row_drag(i32 handle, i32 node, i32 row, u8* buf, i32 n);
 
 i32 gFails;
 void check(u8* what, i32 got, i32 want)
@@ -171,6 +173,7 @@ void main(void)
     Stdio.printf("-- the class, from a library dropped on the window\n");
     UXApplication* app = new UXApplication();
     app.setFileDropHandler(&c.onFileDrop);
+    app.setItemDropHandler(&c.onItemDrop);
     d.attachApp(app);
     check("the window takes the drop", ux_ak_test_drop_file(win.handle, libPath, (i32)400, (i32)300), (i32)1);
     RKClass* fromLib = c.classBook.find((u8*)"PlayerController");
@@ -287,6 +290,38 @@ void main(void)
     wire(c, ctl, RKEnd.view(named(c, (u8*)"stop")), (u8*)"playButton");
     check("still four: playButton now holds Stop", (i32)c.doc.connections.count(), (i32)4);
     c.onUndo((UXMenuItem*)0);
+
+    Stdio.printf("-- a library row dragged onto the form\n");
+    i32 sliderRow = (i32)-1;
+    for (i32 i = (i32)0; i < (i32)c.library.shown.count(); i = i + (i32)1)
+        {
+        if (streq(c.library.itemAt(i).name, (u8*)"Slider"))
+            {
+            sliderRow = i;
+            }
+        }
+    u8 carried[64];
+    check("the library's row drags out, and the window takes it",
+          ux_ak_test_row_drag(win.handle, (i32)c.libraryTable.index, sliderRow, &carried[(i32)0], (i32)64), (i32)1);
+    checkTrue("carrying the item's name", streq(&carried[(i32)0], (u8*)"Slider"));
+    UXRscTree* dt = c.doc.treeAt(c.shownTree);
+    i32 before = dt.root.childCount();
+    UXRect oa = c.overlay.absoluteFrame();
+    i32 dx = (i32)oa.x + (i32)RK_FORM_X + (i32)200;
+    i32 dy = (i32)oa.y + (i32)RK_FORM_Y + (i32)120;
+    check("the drop is delivered", ux_ak_test_drop_item(win.handle, &carried[(i32)0], dx, dy), (i32)1);
+    check("it adds one control", dt.root.childCount(), before + (i32)1);
+    UXRscObject* placed = dt.root.childAt(before);
+    RKLibraryItem* sl = c.library.named((u8*)"Slider");
+    checkTrue("centred where it was dropped", placed != (UXRscObject*)0 &&
+              placed.x == (i32)200 - sl.w / (i32)2 && placed.y == (i32)120 - sl.h / (i32)2);
+    i32 nconn = (i32)c.doc.connections.count();
+    c.onItemDrop((u8*)"Slider", win.handle, (i32)oa.x - (i32)10, (i32)oa.y + (i32)10);
+    check("a drop outside the canvas adds nothing", dt.root.childCount(), before + (i32)1);
+    c.placing = (RKLibraryItem*)0;
+    c.onUndo((UXMenuItem*)0);
+    check("and Undo takes the drop back", c.doc.treeAt(c.shownTree).root.childCount(), before);
+    check("leaving the connections", (i32)c.doc.connections.count(), nconn);
 
     Stdio.printf("-- the app: each layout fires what was wired for it\n");
     UXData* bytes = UXRscWriter.write(c.doc);

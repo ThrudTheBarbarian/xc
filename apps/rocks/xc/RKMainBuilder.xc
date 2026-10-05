@@ -16,7 +16,7 @@
 // as data.
 //
 // Layout is Interface Builder's: outline | canvas | inspector and library, with
-// a toolbar above and a status line below.  The panes are real UXKit widgets,
+// a toolbar above and a status line at the foot of the outline.  The panes are real UXKit widgets,
 // which is the point of writing Rocks in XC: the canvas hosts the same widget
 // objects the edited app will run, so WYSIWYG is structural rather than a
 // second renderer kept in sync by hand.
@@ -60,8 +60,7 @@ class RKMainBuilder : Object
     //   outline | canvas                         | Identity Attributes Size Connections
     //           |                                | (the selected thing's pane)
     //           |                                |-------------------------------------
-    //           | View as: Desktop Tablet Phone  | Library: search, then what can be added
-    //   status
+    //   status  | View as: Desktop Tablet Phone  | Library: search, then what can be added
     static bool buildInto(UXView* content, RKMainController* c, i16 w, i16 h)
         {
         bool ok = true;
@@ -76,14 +75,14 @@ class RKMainBuilder : Object
         tb.addItem((u8*)"doc.new", (u8*)"New", (i32)RKTB_NEW, (i16)44);
         tb.addItem((u8*)"trash", (u8*)"Delete", (i32)RKTB_DELETE, (i16)44);
         content.addSubview(tb, UXGeom.make((i16)0, (i16)0, w, tbH));
-        // How each part follows the window when it is resized (springs and struts): the toolbar and
-        // status line stretch across, the outline keeps its width, the canvas takes what is left,
-        // and the inspector column keeps its width on the right.
+        // How each part follows the window when it is resized (springs and struts): the toolbar
+        // stretches across, the outline keeps its width, the canvas takes what is left, and the
+        // inspector column keeps its width on the right.
         tb.setAutoresizeMask((i32)UX_FLEX_WIDTH);
 
         // ---- outline | (centre | right) --------------------------------------
         i16 bodyY = (i16)((i32)tbH + (tbH > (i16)0 ? (i32)gut : (i32)0));
-        i16 bodyH = (i16)((i32)h - (i32)bodyY - (i32)stH - (i32)4);
+        i16 bodyH = (i16)((i32)h - (i32)bodyY); // to the window's foot: the status line is in the outline column
 
         // The side panes' widths: the desktop's where the window has room, a share of it where it
         // has not (a phone held upright), so the canvas always keeps the middle.
@@ -103,7 +102,7 @@ class RKMainBuilder : Object
 
         UXOutlineView* outline = new UXOutlineView();
         outline.addColumn((u8*)"", (i16)(olW - (i32)24)); // one column, the pane's width
-        outer.firstPane().addSubview(outline, UXGeom.make((i16)0, (i16)0, (i16)olW, bodyH));
+        outer.firstPane().addSubview(outline, UXGeom.make((i16)0, (i16)0, (i16)olW, (i16)((i32)bodyH - (i32)stH - (i32)8)));
         outline.setAutoresizeMask((i32)(UX_FLEX_WIDTH | UX_FLEX_HEIGHT));
 
         UXSplitView* inner = new UXSplitView(); // centre | right
@@ -209,14 +208,14 @@ class RKMainBuilder : Object
         lib.addColumn((u8*)"Object", (i16)110);
         lib.addColumn((u8*)"", (i16)((i32)inW - (i32)130));
         lib.setDataSource((UXTableDataSource*)c.library);
+        lib.setDragsRows(true); // a row dragged onto the form is placed where it is dropped
         libPane.addSubview(lib, UXGeom.make((i16)4, tY, (i16)((i32)inW - (i32)8), (i16)((i32)libH - (i32)tY - (i32)4)));
         lib.setAutoresizeMask((i32)(UX_FLEX_WIDTH | UX_FLEX_HEIGHT)); // the library takes the height
 
         // ---- the status line -----------------------------------------------
         UXLabel* status = new UXLabel();
         status.setTitle((u8*)"Ready");
-        content.addSubview(status,
-                           UXGeom.make(gut, (i16)((i32)h - (i32)stH - (i32)2), (i16)((i32)w - (i32)2 * (i32)gut), stH));
+        outer.firstPane().addSubview(status, UXGeom.make((i16)8, (i16)((i32)bodyH - (i32)stH - (i32)4), (i16)((i32)olW - (i32)12), stH));
         status.setAutoresizeMask((i32)(UX_FLEX_WIDTH | UX_ANCHOR_BOTTOM));
 
         // The outline and the library report selection through the table delegate they inherit;

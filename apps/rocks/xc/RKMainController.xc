@@ -1171,6 +1171,35 @@ class RKMainController : Object<UXTableDelegate>
         free((pointer)path);
         }
     // A file dropped on the window: a resource opens; a library or an .xc source adds its classes.
+    // A library row dragged onto the form: placed centred where it is dropped.  A drop outside the form, or of an Object, is a pick.
+    void onItemDrop(u8* item, i32 window, i32 x, i32 y)
+        {
+        RKLibraryItem* it = library.named(item);
+        if (it == (RKLibraryItem*)0)
+            {
+            return;
+            }
+        if (it.type == (i32)RKLIB_OBJECT || overlay == (RKEditOverlay*)0)
+            {
+            self.libraryPick(it);
+            return;
+            }
+        UXRect a = overlay.absoluteFrame();
+        if (x < (i32)a.x || y < (i32)a.y || x >= (i32)a.x + (i32)a.w || y >= (i32)a.y + (i32)a.h)
+            {
+            self.libraryPick(it);
+            return;
+            }
+        i32 cx = (i32)0;
+        i32 cy = (i32)0;
+        overlay.toCanvas(x, y, &cx, &cy);
+        placing = it;
+        self.placeAt(cx - it.w / (i32)2, cy - it.h / (i32)2); // centred under the pointer
+        if (gApp != (UXApplication*)0)
+            {
+            gApp.displayIfNeeded();
+            }
+        }
     void onFileDrop(u8* path, i32 window, i32 x, i32 y)
         {
         u8* p = RKIdentity.dup(path);

@@ -64,6 +64,17 @@ class RocksApp : Object<UXApplicationDelegate>
         // A wiring name the controller does not know is a TYPO, and the nib
         // path would hit it too — so it fails here rather than being silently
         // half-built.
+        // Build for the content area the window really has: the chrome (a title bar holding the
+        // toolbar) can make it differ from what was asked for, and a first layout built for the
+        // wrong size is never corrected, since nothing reflows until the window is resized.
+        i32 cw0 = (i32)0;
+        i32 ch0 = (i32)0;
+        gDriver.windowContentGeometry(win.handle, &cw0, &ch0);
+        if (cw0 > (i32)0 && ch0 > (i32)0)
+            {
+            ww = (i16)cw0;
+            wh = (i16)ch0;
+            }
         if (!RKMainBuilder.buildInto(content, controller, ww, wh))
             {
             Stdio.printf("FAIL: a wiring name was rejected — builder and controller disagree\n");
@@ -72,6 +83,7 @@ class RocksApp : Object<UXApplicationDelegate>
 
         RKMainBuilder.buildMenu(app, controller);
         app.setFileDropHandler(&controller.onFileDrop); // a library or a source adds its classes
+        app.setItemDropHandler(&controller.onItemDrop); // a library row dragged onto the form
 
         // Open a resource if one is to hand, so the canvas has something real
         // in it — REAL widgets, built from the model by RKCanvas.  UXFileIO
