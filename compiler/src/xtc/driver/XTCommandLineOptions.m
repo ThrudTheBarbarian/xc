@@ -81,8 +81,10 @@
 
 @implementation XTCommandLineOptions
 
-// The vector level of the machine running the compiler, for -mnative: "avx2"
-// when the CPU has it AND the OS saves the ymm state, "base" otherwise, nil when
+// The vector level of the machine running the compiler, for -mnative:
+// "avx512" when the CPU has AVX-512 F, DQ, BW and VL and the OS saves the zmm
+// state, "avx2" when it has AVX2 and the OS saves the ymm state, "base"
+// otherwise, nil when
 // this machine is not x86-64 (an arm64 Mac has no AVX to read). Linux's
 // /proc/cpuinfo lists avx2 only when the kernel supports it; macOS says through
 // hw.optional.avx2_0.
@@ -92,6 +94,19 @@
 #if defined(__APPLE__)
     int v = 0;
     size_t n = sizeof v;
+    BOOL v4 = YES;
+    for (const char* k in (const char*[]){"hw.optional.avx512f", "hw.optional.avx512dq",
+                                          "hw.optional.avx512bw", "hw.optional.avx512vl"})
+        {
+        v = 0;
+        n = sizeof v;
+        if (sysctlbyname(k, &v, &n, NULL, 0) != 0 || !v)
+            v4 = NO;
+        }
+    if (v4)
+        return @"avx512";
+    v = 0;
+    n = sizeof v;
     if (sysctlbyname("hw.optional.avx2_0", &v, &n, NULL, 0) == 0 && v)
         return @"avx2";
     return @"base";
@@ -99,7 +114,13 @@
     NSString* info = [NSString stringWithContentsOfFile:@"/proc/cpuinfo" encoding:NSUTF8StringEncoding error:NULL];
     for (NSString* line in [info componentsSeparatedByString:@"\n"])
         if ([line hasPrefix:@"flags"])
-            return [[line componentsSeparatedByString:@" "] containsObject:@"avx2"] ? @"avx2" : @"base";
+            {
+            NSArray* f = [line componentsSeparatedByString:@" "];
+            if ([f containsObject:@"avx512f"] && [f containsObject:@"avx512dq"]
+                && [f containsObject:@"avx512bw"] && [f containsObject:@"avx512vl"])
+                return @"avx512";
+            return [f containsObject:@"avx2"] ? @"avx2" : @"base";
+            }
     return @"base";
 #endif
 #else
@@ -1011,13 +1032,19 @@ static NSString* sExecutablePath = nil;
             opts.simdLevel = @"avx2";
             opts.simdFlag = arg;
             }
+        // AVX-512 F + DQ + BW + VL, the level xcc's 512-bit code needs.
+        else if ([arg isEqualToString:@"-mavx512"] || [arg isEqualToString:@"-mavx512f"])
+            {
+            opts.simdLevel = @"avx512";
+            opts.simdFlag = arg;
+            }
         else if ([arg hasPrefix:@"-msimd="])
             {
             NSString* val = [arg substringFromIndex:7];
             if (![val isEqualToString:@"base"] && ![val isEqualToString:@"avx2"]
-                && ![val isEqualToString:@"auto"])
+                && ![val isEqualToString:@"avx512"] && ![val isEqualToString:@"auto"])
                 {
-                fprintf(stderr, "xcc: -msimd= expects 'base', 'avx2' or 'auto', got '%s'\n", val.UTF8String);
+                fprintf(stderr, "xcc: -msimd= expects 'base', 'avx2', 'avx512' or 'auto', got '%s'\n", val.UTF8String);
                 return nil;
                 }
             opts.simdLevel = val;
@@ -1034,12 +1061,6 @@ static NSString* sExecutablePath = nil;
                 }
             opts.simdLevel = lvl;
             opts.simdFlag = arg;
-            }
-        else if ([arg isEqualToString:@"-mavx512f"])
-            {
-            fprintf(stderr, "xcc: -mavx512f is not supported yet: the 512-bit (EVEX) encoding "
-                            "is not implemented; use -mavx2\n");
-            return nil;
             }
         else if ([arg isEqualToString:@"-fthread-safe-arc"])
             {
@@ -1451,6 +1472,8 @@ static NSString* sExecutablePath = nil;
             "                             layout has a cloaked region.\n"
             "  -mavx2, -msimd=avx2        x86-64/win64: 256-bit AVX2 vectors (the\n"
             "                             binary then needs an AVX2 CPU)\n"
+            "  -mavx512, -msimd=avx512    x86-64/win64: 512-bit AVX-512 vectors (F, DQ,\n"
+            "                             BW and VL; the binary then needs such a CPU)\n"
             "  -msimd=base                x86-64/win64: SSE2 only (the default)\n"
             "  -mnative                   x86-64/win64: the level of this machine\n"
             "  -fthread-safe-arc          Atomic ARC refcounts, so two threads can\n"

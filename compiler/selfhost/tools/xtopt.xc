@@ -75,7 +75,8 @@ void main(void)
         // -mavx2, as the reference's --simd does (opt-diff's OPT_SIMD).
         if (a.hasPrefix(String.withCString("--simd=")))
             {
-            simdBytes = a.substringFromByte((u32)7).equals(String.withCString("avx2")) ? (u32)32 : (u32)16;
+            simdBytes = a.substringFromByte((u32)7).equals(String.withCString("avx512")) ? (u32)64
+                      : a.substringFromByte((u32)7).equals(String.withCString("avx2")) ? (u32)32 : (u32)16;
             simdDispatch = a.substringFromByte((u32)7).equals(String.withCString("auto"));
             i = i + (u32)1;
             continue;

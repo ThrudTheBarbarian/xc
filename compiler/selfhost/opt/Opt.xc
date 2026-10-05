@@ -16355,7 +16355,9 @@ class OptProfile
         nm.appendFormat("__xtv_iota_%s_%u", fn.name().cString(), lw);
         // A 32-byte table gets its own name, so it never collides with the
         // 16-byte one; the 16-byte name is unchanged.
-        if (vecBytes != (u32)16)
+        if (vecBytes == (u32)64)
+            nm.appendCString("_w64");
+        else if (vecBytes != (u32)16)
             nm.appendCString("_w32");
         if (symNamed(_vecModule, nm) != (IRSymbol*)0)
             return nm;
@@ -16374,13 +16376,15 @@ class OptProfile
         return nm;
         }
 
-    // The vector width this target's profile allows: 16 bytes, or 32 under
-    // -mavx2 (SIMD step 1, S2). Map, reduce and min/max loops take it; the
-    // widening forms stay at 16 until the back ends can emit 256-bit shapes.
+    // The vector width this target's profile allows: 16 bytes, 32 under
+    // -mavx2 (SIMD step 1, S2), or 64 under -mavx512. Map, reduce and min/max
+    // loops take it; the widening forms stay at 16.
     u32 vectorBytes(void)
         {
         if (_vecFnBytes != (u32)0)
-            return _vecFnBytes == (u32)32 ? (u32)32 : (u32)16;
+            return _vecFnBytes == (u32)64 ? (u32)64 : _vecFnBytes == (u32)32 ? (u32)32 : (u32)16;
+        if (_profile != (OptProfile*)0 && _profile.vectorLaneBytes() == (u32)64)
+            return (u32)64;
         if (_profile != (OptProfile*)0 && _profile.vectorLaneBytes() == (u32)32)
             return (u32)32;
         return (u32)16;

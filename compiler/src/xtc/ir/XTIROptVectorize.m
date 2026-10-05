@@ -286,7 +286,7 @@ static XTIRSymbolId xtvIotaSymbol(XTIRType* laneType, NSUInteger vecBytes, XTIRF
     // A 32-byte vector's table gets its own name (suffix `_w32`), so a 16- and a
     // 32-byte one never collide; the 16-byte name is unchanged.
     NSString* nm = [NSString stringWithFormat:@"__xtv_iota_%@_%lu%@", fn.name,
-                             (unsigned long)laneType.byteWidth, vecBytes == 16 ? @"" : @"_w32"];
+                             (unsigned long)laneType.byteWidth, vecBytes == 16 ? @"" : vecBytes == 64 ? @"_w64" : @"_w32"];
     for (NSUInteger i = 0; i < sVecModule.symbols.count; i++)
         if ([sVecModule.symbols[i].name isEqualToString:nm])
             return (XTIRSymbolId)i;
@@ -1479,15 +1479,15 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
     return m.valueId;
     }
 
-// The vector width this target's profile allows: 16 bytes, or 32 under
-// -mavx2 (SIMD step 1, S2). Map, reduce and min/max loops take it; the
+// The vector width this target's profile allows: 16 bytes, 32 under -mavx2
+// (SIMD step 1, S2), or 64 under -mavx512. Map, reduce and min/max loops take it; the
 // widening forms (u8/u16 sums and products) stay at 16 until the back ends
 // can emit their 256-bit shapes.
 - (NSUInteger)vectorBytes
     {
     NSUInteger b = sVecFnBytes ? sVecFnBytes
                                : (self.profile ?: [XTIROptTargetProfile conservativeProfile]).vectorLaneBytes;
-    return b == 32 ? 32 : 16;
+    return b == 64 ? 64 : b == 32 ? 32 : 16;
     }
 
 - (void)apply:(XTVecCand*)c inFunction:(XTIRFunction*)fn

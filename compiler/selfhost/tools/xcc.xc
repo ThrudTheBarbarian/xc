@@ -4857,6 +4857,8 @@ void capabilityUsage(void)
     Stdio.printf("                             m68k. arm64, android and arm9 are always PIC\n");
     Stdio.printf("  -mavx2, -msimd=avx2        x86-64/win64: 256-bit AVX2 vectors (the\n");
     Stdio.printf("                             binary then needs an AVX2 CPU)\n");
+    Stdio.printf("  -mavx512, -msimd=avx512    x86-64/win64: 512-bit AVX-512 vectors (F, DQ,\n");
+    Stdio.printf("                             BW and VL; the binary then needs such a CPU)\n");
     Stdio.printf("  -msimd=base                x86-64/win64: SSE2 only, one version\n");
     Stdio.printf("  -msimd=auto                x86-64/win64: SSE2 and AVX2 versions of each\n");
     Stdio.printf("                             vectorised function, picked at load (the\n");
@@ -5187,7 +5189,8 @@ void applyOptFlags(DriverOptions* d, OptProfile* p)
         simd = String.withCString("auto");
     if (simd != (String*)0)
     {
-        p.setVectorLaneBytes(simd.equals(String.withCString("avx2")) ? (u32)32 : (u32)16);
+        p.setVectorLaneBytes(simd.equals(String.withCString("avx512")) ? (u32)64
+                             : (simd.equals(String.withCString("avx2")) ? (u32)32 : (u32)16));
         // -msimd=auto: base code plus avx2 clones, picked at load.
         p.setSimdDispatch(simd.equals(String.withCString("auto")));
     }
@@ -5197,8 +5200,10 @@ void applyOptFlags(DriverOptions* d, OptProfile* p)
 i32 IsProcessorFeaturePresent(u32 feature);
 #endif
 
-// The vector level of the machine running the compiler, for -mnative: "avx2"
-// when the CPU has it AND the OS saves the ymm state, "base" otherwise, 0 when
+// The vector level of the machine running the compiler, for -mnative:
+// "avx512" when the CPU has AVX-512 F, DQ, BW and VL and the OS saves the zmm
+// state, "avx2" when it has AVX2 and the OS saves the ymm state, "base"
+// otherwise, 0 when
 // this compiler is not running on x86-64 (an arm64 Mac has no AVX to read).
 // Windows answers both halves in IsProcessorFeaturePresent (40 =
 // PF_AVX2_INSTRUCTIONS_AVAILABLE); Linux lists avx2 in /proc/cpuinfo only when
@@ -5206,6 +5211,10 @@ i32 IsProcessorFeaturePresent(u32 feature);
 String* hostSimdLevel(void)
 {
 #if ARCH_win64
+    // 41 = PF_AVX512F_INSTRUCTIONS_AVAILABLE. Windows has no flag for DQ, BW
+    // and VL, but every part with AVX-512F that Windows runs on has all three.
+    if (IsProcessorFeaturePresent((u32)41) != (i32)0)
+        return String.withCString("avx512");
     return IsProcessorFeaturePresent((u32)40) != (i32)0 ? String.withCString("avx2") : String.withCString("base");
 #elif ARCH_x86_64
     String* info = Files.readText(String.withCString("/proc/cpuinfo"));
@@ -5215,10 +5224,19 @@ String* hostSimdLevel(void)
         String* ln = (String*)lines.get(i);
         if (!ln.hasPrefix(String.withCString("flags"))) continue;
         Array* w = ln.splitOnByte((u8)' ');
-        for (u32 k = (u32)0; k < w.count(); k = k + (u32)1)
-            if (((String*)w.get(k)).equals(String.withCString("avx2")))
-                return String.withCString("avx2");
-        return String.withCString("base");
+        u32 v4 = (u32)0;
+        bool avx2 = false;
+        for (u32 k = (u32)0; k < w.count(); k = k + (u32)1) {
+            String* f = (String*)w.get(k);
+            if (f.equals(String.withCString("avx512f")) || f.equals(String.withCString("avx512dq"))
+                || f.equals(String.withCString("avx512bw")) || f.equals(String.withCString("avx512vl")))
+                v4 = v4 + (u32)1;
+            if (f.equals(String.withCString("avx2")))
+                avx2 = true;
+        }
+        if (v4 == (u32)4)
+            return String.withCString("avx512");
+        return String.withCString(avx2 ? "avx2" : "base");
     }
     return String.withCString("base");
 #else
@@ -5284,11 +5302,16 @@ bool parseCapabilityFlag(DriverOptions* d, u32* ip, u32 argc)
         c.setSimd(String.withCString("avx2"), a);
         *ip = i + (u32)1; return true;
     }
+    // AVX-512 F + DQ + BW + VL, the level xcc's 512-bit code needs.
+    if (a.equals(String.withCString("-mavx512")) || a.equals(String.withCString("-mavx512f"))) {
+        c.setSimd(String.withCString("avx512"), a);
+        *ip = i + (u32)1; return true;
+    }
     if (a.hasPrefix(String.withCString("-msimd="))) {
         String* v = a.substringFromByte((u32)7);
         if (!v.equals(String.withCString("base")) && !v.equals(String.withCString("avx2"))
-            && !v.equals(String.withCString("auto"))) {
-            Stdio.printf("xcc: -msimd= expects 'base', 'avx2' or 'auto', got '%s'\n", v.cString());
+            && !v.equals(String.withCString("avx512")) && !v.equals(String.withCString("auto"))) {
+            Stdio.printf("xcc: -msimd= expects 'base', 'avx2', 'avx512' or 'auto', got '%s'\n", v.cString());
             Process.exit((i32)1); return true;
         }
         c.setSimd(v, a);
@@ -5303,11 +5326,6 @@ bool parseCapabilityFlag(DriverOptions* d, u32* ip, u32 argc)
         }
         c.setSimd(lvl, a);
         *ip = i + (u32)1; return true;
-    }
-    if (a.equals(String.withCString("-mavx512f"))) {
-        Stdio.printf("xcc: -mavx512f is not supported yet: the 512-bit (EVEX) encoding "
-                     "is not implemented; use -mavx2\n");
-        Process.exit((i32)1); return true;
     }
     if (a.equals(String.withCString("-fthread-safe-arc"))) {
         d.fe().setThreadSafeArc((i32)1); c.setThreadFlag(true);

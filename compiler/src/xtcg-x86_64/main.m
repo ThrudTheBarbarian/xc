@@ -117,10 +117,10 @@ int main(int argc, const char* argv[])
                 }
             else if ([arg hasPrefix:@"--simd="])
             {
-                // The vector level the driver chose (-mavx2 / -msimd / -mnative):
+                // The vector level the driver chose (-mavx2 / -mavx512 / -msimd / -mnative):
                 // the profile's lane width. Read by the vectoriser from S2 on.
                 NSString* lvl = [arg substringFromIndex:7];
-                simdLaneBytes = [lvl isEqualToString:@"avx2"] ? 32 : 16;
+                simdLaneBytes = [lvl isEqualToString:@"avx512"] ? 64 : [lvl isEqualToString:@"avx2"] ? 32 : 16;
                 simdDispatch = [lvl isEqualToString:@"auto"];
             }
             else if ([arg isEqualToString:@"--thread-safe-arc"])

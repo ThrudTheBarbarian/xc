@@ -615,15 +615,19 @@ same "-mavx2 (-A x86_64)"           -q -A x86_64 -mavx2 -o @OUT@ ret.xc
 same "-msimd=base (-A x86_64)"      -q -A x86_64 -msimd=base -o @OUT@ ret.xc
 same "-msimd=avx2 (-A win64)"       -q -A win64 -msimd=avx2 -o @OUT@ ret.xc
 same "-msimd=<bad> refused"        -q -A x86_64 -msimd=sse9 -o @OUT@ ret.xc
-xcconly "  ...naming the choices"   1 "expects 'base', 'avx2' or 'auto'" -q -A x86_64 -msimd=sse9 -o @OUT@ ret.xc
+xcconly "  ...naming the choices"   1 "expects 'base', 'avx2', 'avx512' or 'auto'" -q -A x86_64 -msimd=sse9 -o @OUT@ ret.xc
 same "-msimd=auto (-A x86_64)"      -q -A x86_64 -msimd=auto -o @OUT@ ret.xc
 same "-mavx2 (-A arm64) refused"    -q -A arm64 -mavx2 -o @OUT@ ret.xc
 xcconly "  ...naming the targets"   1 "applies to -A x86_64 and -A win64 only" -q -A arm64 -mavx2 -o @OUT@ ret.xc
-same "-mavx512f refused"            -q -A x86_64 -mavx512f -o @OUT@ ret.xc
+# AVX-512 (step 1b): the same three spellings, and the same refusal off x86.
+same "-mavx512 (-A x86_64)"         -q -A x86_64 -mavx512 -o @OUT@ ret.xc
+same "-mavx512f (-A x86_64)"        -q -A x86_64 -mavx512f -o @OUT@ ret.xc
+same "-msimd=avx512 (-A win64)"     -q -A win64 -msimd=avx512 -o @OUT@ ret.xc
+same "-mavx512 (-A arm64) refused"  -q -A arm64 -mavx512 -o @OUT@ ret.xc
 # -mnative reads THIS machine: on x86-64 it picks a level and builds, elsewhere
 # both refuse; either way the two must agree.
 same "-mnative (-A x86_64)"         -q -A x86_64 -mnative -o @OUT@ ret.xc
-cover -mavx2 -msimd= -mnative -mavx512f
+cover -mavx2 -msimd= -mnative -mavx512 -mavx512f
 same "an undefined C symbol is a link error (580)" $A -o @OUT@ nothere.xc
 xcconly "  ...naming it (580)" 1 "undefined symbol 'nothere'" $A -o @OUT@ nothere.xc
 xcconly "--link-libs (-A arm64, refused)" 1 "applies to -A wasm32" -q -A arm64 --link-libs -o @OUT@ ret.xc

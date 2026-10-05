@@ -8,6 +8,10 @@
 // ───────────────────────────── operand model ─────────────────────────────
 // An operand is a register, an immediate, or a memory reference
 // [base + index*scale + disp] (Intel syntax, no % prefixes).
+// The size an opmask register (k0-k7) parses to: no real operand is this wide,
+// so it cannot be mistaken for a GPR or a vector register.
+#define XK_SIZE 99
+
 typedef struct {
     enum { OpNone, OpReg, OpImm, OpMem } kind;
     int reg;            // 0-15
@@ -60,6 +64,11 @@ static BOOL parseReg(NSString *s, int *num, int *size, BOOL *needRex) {
         // ymm: the same 16 registers at 32 bytes. A ymm operand is what sets
         // VEX.L; nothing else distinguishes the encodings.
         for (int i=0;i<16;i++) m[[NSString stringWithFormat:@"ymm%d", i]] = @[@(i), @32, @0];
+        // zmm: the same 16 registers at 64 bytes; a zmm operand is what selects
+        // the EVEX encoding. Only zmm0-15: nothing here allocates zmm16-31.
+        for (int i=0;i<16;i++) m[[NSString stringWithFormat:@"zmm%d", i]] = @[@(i), @64, @0];
+        // k0-k7, the AVX-512 opmask registers, at a size no other operand has.
+        for (int i=0;i<8;i++) m[[NSString stringWithFormat:@"k%d", i]] = @[@(i), @(XK_SIZE), @0];
         T = m;
     });
     NSArray<NSNumber *> *e = T[[s lowercaseString]];
@@ -97,8 +106,8 @@ static BOOL parseOperand(NSString *tok, XOperand *o, NSError **err) {
 
     // size-override prefixes: "qword ptr [..]", "byte ptr [..]" &c.
     int forced = 0;
-    NSArray *pfx = @[@"byte",@"word",@"dword",@"qword",@"xmmword",@"ymmword"];
-    NSArray *psz = @[@1,@2,@4,@8,@16,@32];
+    NSArray *pfx = @[@"byte",@"word",@"dword",@"qword",@"xmmword",@"ymmword",@"zmmword"];
+    NSArray *psz = @[@1,@2,@4,@8,@16,@32,@64];
     for (NSUInteger i=0;i<pfx.count;i++) {
         NSString *p = [pfx[i] stringByAppendingString:@" ptr"];
         if ([[s lowercaseString] hasPrefix:p]) {
@@ -292,6 +301,47 @@ static void emitModRM(NSMutableData *d, int reg, const XOperand *rm) {
     }
     if (mod == 1) emit8(d, (uint8_t)(int8_t)rm->disp);
     else if (mod == 2) emit32(d, (uint32_t)(int32_t)rm->disp);
+}
+
+// ModRM for an EVEX instruction. The same as emitModRM except for the 8-bit
+// displacement, which EVEX scales by N, the size of the memory operand
+// ("disp8*N"): a displacement that is a multiple of N and fits in 8 bits after
+// dividing takes the short form, holding disp/N; any other non-zero
+// displacement takes disp32, even one that would fit in 8 bits unscaled. The
+// forms with no base register carry a disp32 already and are emitModRM's.
+static void emitModRMN(NSMutableData *d, int reg, const XOperand *rm, int N) {
+    if (rm->kind == OpReg || rm->base < 0 || rm->ripRel || rm->seg) { emitModRM(d, reg, rm); return; }
+    int base = rm->base, index = rm->index;
+    BOOL needSib = (index >= 0) || ((base&7) == 4);
+    int mod;
+    int64_t q = 0;
+    if (rm->disp == 0 && (base&7) != 5) mod = 0;
+    else if (N > 0 && rm->disp % N == 0 && rm->disp / N >= -128 && rm->disp / N <= 127) { mod = 1; q = rm->disp / N; }
+    else mod = 2;
+    emit8(d, (uint8_t)((mod<<6) | ((reg&7)<<3) | (needSib ? 4 : (base&7))));
+    if (needSib) {
+        int ss = rm->scale==8?3 : rm->scale==4?2 : rm->scale==2?1 : 0;
+        emit8(d, (uint8_t)((ss<<6) | ((index>=0?(index&7):4)<<3) | (base&7)));
+    }
+    if (mod == 1) emit8(d, (uint8_t)(int8_t)q);
+    else if (mod == 2) emit32(d, (uint32_t)(int32_t)rm->disp);
+}
+
+// The 4-byte EVEX prefix: 62, then
+//   P0  R X B R' 0 m m m     R, X, B, R' inverted; mmm the opcode map (1 0F, 2 0F38, 3 0F3A)
+//   P1  W v v v v 1 p p      vvvv the first source inverted (1111 when none); pp 66/F3/F2
+//   P2  z L'L b V' a a a     L'L the vector length (2 = 512); V' inverted; aaa the opmask
+// Registers here are 0-15, so R' and V' are always 1. For a register r/m, X
+// holds bit 4 of that register (1, inverted); for memory it is the index's bit 3.
+static void emitEvex(NSMutableData *d, int map, int pp, int W, int reg, int vreg, const XOperand *rm, int LL) {
+    int rr = reg < 0 ? 0 : reg;
+    int bb = rm->kind == OpReg ? rm->reg : (rm->base < 0 ? 0 : rm->base);
+    int xx = rm->kind == OpReg ? 0 : (rm->index < 0 ? 0 : rm->index);
+    int vvvv = vreg < 0 ? 0x0F : ((~vreg) & 0x0F);
+    emit8(d, 0x62);
+    emit8(d, (uint8_t)(((rr & 8) ? 0 : 0x80) | ((xx & 8) ? 0 : 0x40) | ((bb & 8) ? 0 : 0x20) | 0x10 | (map & 7)));
+    emit8(d, (uint8_t)((W ? 0x80 : 0) | (vvvv << 3) | 0x04 | (pp & 3)));
+    emit8(d, (uint8_t)((LL << 5) | 0x08));
 }
 
 @implementation XAX86_64Assembler {
@@ -848,6 +898,184 @@ static void emitModRM(NSMutableData *d, int reg, const XOperand *rm) {
     // vzeroupper; two-operand moves and broadcasts (VEX.vvvv = 1111);
     // vextract{i,f}128 (the source in reg, the destination in r/m); and the
     // immediate shifts (the DESTINATION in vvvv, the source in r/m).
+    // ── EVEX.512: AVX-512 forms (F, DQ, BW, VL) ──
+    //
+    // Any instruction with a zmm operand. Each entry: @[form, map, pp, W,
+    // opcode, N], with pp 0 none / 1 66 / 2 F3 / 3 F2, map 1 0F / 2 0F38 /
+    // 3 0F3A, and N the memory operand's size for disp8*N (0 = by form). The
+    // forms, by where each operand goes:
+    //   1 dst, src1, src2        reg = dst, vvvv = src1, r/m = src2
+    //   2 move                   load: reg = dst, r/m = src; store: the reverse
+    //   3 broadcast              reg = dst, r/m = the xmm or element in memory
+    //   4 compare into k         reg = k, vvvv = src1, r/m = src2   (5: + imm)
+    //   6 k to vector            reg = dst, r/m = k
+    //   7 shift by immediate     vvvv = dst, r/m = src, reg = the /ext in N
+    //   8 extract                reg = the zmm source, r/m = the dest, imm
+    //   9 shuffle by immediate   reg = dst, r/m = src, imm
+    //  10 dst, src1, src2, imm   reg = dst, vvvv = src1, r/m = src2, imm
+    //  11 shift by xmm count     as 1, the count an xmm (N 16)
+    //  12 unary                  reg = dst, r/m = src
+    {
+        BOOL zmm = NO;
+        for (NSUInteger i = 0; i < opCount; i++)
+            if (opv[i].kind == OpReg && opv[i].size == 64) zmm = YES;
+        if (zmm) {
+            static NSDictionary *E; static dispatch_once_t eonce;
+            dispatch_once(&eonce, ^{
+                E = @{
+                // 1: three-operand arithmetic and logic
+                @"vaddps":@[@1,@1,@0,@0,@0x58,@64], @"vaddpd":@[@1,@1,@1,@1,@0x58,@64],
+                @"vsubps":@[@1,@1,@0,@0,@0x5C,@64], @"vsubpd":@[@1,@1,@1,@1,@0x5C,@64],
+                @"vmulps":@[@1,@1,@0,@0,@0x59,@64], @"vmulpd":@[@1,@1,@1,@1,@0x59,@64],
+                @"vdivps":@[@1,@1,@0,@0,@0x5E,@64], @"vdivpd":@[@1,@1,@1,@1,@0x5E,@64],
+                @"vmaxps":@[@1,@1,@0,@0,@0x5F,@64], @"vmaxpd":@[@1,@1,@1,@1,@0x5F,@64],
+                @"vminps":@[@1,@1,@0,@0,@0x5D,@64], @"vminpd":@[@1,@1,@1,@1,@0x5D,@64],
+                @"vandps":@[@1,@1,@0,@0,@0x54,@64], @"vandpd":@[@1,@1,@1,@1,@0x54,@64],
+                @"vandnps":@[@1,@1,@0,@0,@0x55,@64], @"vandnpd":@[@1,@1,@1,@1,@0x55,@64],
+                @"vorps":@[@1,@1,@0,@0,@0x56,@64], @"vorpd":@[@1,@1,@1,@1,@0x56,@64],
+                @"vxorps":@[@1,@1,@0,@0,@0x57,@64], @"vxorpd":@[@1,@1,@1,@1,@0x57,@64],
+                @"vunpcklps":@[@1,@1,@0,@0,@0x14,@64], @"vunpcklpd":@[@1,@1,@1,@1,@0x14,@64],
+                @"vunpckhps":@[@1,@1,@0,@0,@0x15,@64], @"vunpckhpd":@[@1,@1,@1,@1,@0x15,@64],
+                @"vpaddb":@[@1,@1,@1,@0,@0xFC,@64], @"vpaddw":@[@1,@1,@1,@0,@0xFD,@64],
+                @"vpaddd":@[@1,@1,@1,@0,@0xFE,@64], @"vpaddq":@[@1,@1,@1,@1,@0xD4,@64],
+                @"vpsubb":@[@1,@1,@1,@0,@0xF8,@64], @"vpsubw":@[@1,@1,@1,@0,@0xF9,@64],
+                @"vpsubd":@[@1,@1,@1,@0,@0xFA,@64], @"vpsubq":@[@1,@1,@1,@1,@0xFB,@64],
+                @"vpandd":@[@1,@1,@1,@0,@0xDB,@64], @"vpandq":@[@1,@1,@1,@1,@0xDB,@64],
+                @"vpandnd":@[@1,@1,@1,@0,@0xDF,@64], @"vpandnq":@[@1,@1,@1,@1,@0xDF,@64],
+                @"vpord":@[@1,@1,@1,@0,@0xEB,@64], @"vporq":@[@1,@1,@1,@1,@0xEB,@64],
+                @"vpxord":@[@1,@1,@1,@0,@0xEF,@64], @"vpxorq":@[@1,@1,@1,@1,@0xEF,@64],
+                @"vpmullw":@[@1,@1,@1,@0,@0xD5,@64], @"vpmuludq":@[@1,@1,@1,@1,@0xF4,@64],
+                @"vpmaddwd":@[@1,@1,@1,@0,@0xF5,@64],
+                @"vpunpcklbw":@[@1,@1,@1,@0,@0x60,@64], @"vpunpcklwd":@[@1,@1,@1,@0,@0x61,@64],
+                @"vpunpckldq":@[@1,@1,@1,@0,@0x62,@64], @"vpunpcklqdq":@[@1,@1,@1,@1,@0x6C,@64],
+                @"vpmaxsw":@[@1,@1,@1,@0,@0xEE,@64], @"vpminsw":@[@1,@1,@1,@0,@0xEA,@64],
+                @"vpmaxub":@[@1,@1,@1,@0,@0xDE,@64], @"vpminub":@[@1,@1,@1,@0,@0xDA,@64],
+                @"vpmulld":@[@1,@2,@1,@0,@0x40,@64], @"vpmullq":@[@1,@2,@1,@1,@0x40,@64],
+                @"vpmaxsd":@[@1,@2,@1,@0,@0x3D,@64], @"vpminsd":@[@1,@2,@1,@0,@0x39,@64],
+                @"vpmaxud":@[@1,@2,@1,@0,@0x3F,@64], @"vpminud":@[@1,@2,@1,@0,@0x3B,@64],
+                @"vpmaxsq":@[@1,@2,@1,@1,@0x3D,@64], @"vpminsq":@[@1,@2,@1,@1,@0x39,@64],
+                @"vpmaxuq":@[@1,@2,@1,@1,@0x3F,@64], @"vpminuq":@[@1,@2,@1,@1,@0x3B,@64],
+                @"vpmaxsb":@[@1,@2,@1,@0,@0x3C,@64], @"vpminsb":@[@1,@2,@1,@0,@0x38,@64],
+                @"vpmaxuw":@[@1,@2,@1,@0,@0x3E,@64], @"vpminuw":@[@1,@2,@1,@0,@0x3A,@64],
+                @"vpmaddubsw":@[@1,@2,@1,@0,@0x04,@64],
+                // 2: moves (the load opcode; the store is 7F for 6F, otherwise load + 1)
+                @"vmovdqu32":@[@2,@1,@2,@0,@0x6F,@64], @"vmovdqu64":@[@2,@1,@2,@1,@0x6F,@64],
+                @"vmovdqu8":@[@2,@1,@3,@0,@0x6F,@64], @"vmovdqu16":@[@2,@1,@3,@1,@0x6F,@64],
+                @"vmovdqa32":@[@2,@1,@1,@0,@0x6F,@64], @"vmovdqa64":@[@2,@1,@1,@1,@0x6F,@64],
+                @"vmovups":@[@2,@1,@0,@0,@0x10,@64], @"vmovupd":@[@2,@1,@1,@1,@0x10,@64],
+                @"vmovaps":@[@2,@1,@0,@0,@0x28,@64], @"vmovapd":@[@2,@1,@1,@1,@0x28,@64],
+                // 3: broadcasts (N = the element)
+                @"vpbroadcastb":@[@3,@2,@1,@0,@0x78,@1], @"vpbroadcastw":@[@3,@2,@1,@0,@0x79,@2],
+                @"vpbroadcastd":@[@3,@2,@1,@0,@0x58,@4], @"vpbroadcastq":@[@3,@2,@1,@1,@0x59,@8],
+                @"vbroadcastss":@[@3,@2,@1,@0,@0x18,@4], @"vbroadcastsd":@[@3,@2,@1,@1,@0x19,@8],
+                // 4: compares into an opmask
+                @"vpcmpeqb":@[@4,@1,@1,@0,@0x74,@64], @"vpcmpgtb":@[@4,@1,@1,@0,@0x64,@64],
+                @"vpcmpeqw":@[@4,@1,@1,@0,@0x75,@64], @"vpcmpgtw":@[@4,@1,@1,@0,@0x65,@64],
+                @"vpcmpeqd":@[@4,@1,@1,@0,@0x76,@64], @"vpcmpgtd":@[@4,@1,@1,@0,@0x66,@64],
+                @"vpcmpeqq":@[@4,@2,@1,@1,@0x29,@64], @"vpcmpgtq":@[@4,@2,@1,@1,@0x37,@64],
+                // 5: compares with a predicate immediate
+                @"vcmpps":@[@5,@1,@0,@0,@0xC2,@64], @"vcmppd":@[@5,@1,@1,@1,@0xC2,@64],
+                @"vpcmpd":@[@5,@3,@1,@0,@0x1F,@64], @"vpcmpud":@[@5,@3,@1,@0,@0x1E,@64],
+                @"vpcmpq":@[@5,@3,@1,@1,@0x1F,@64], @"vpcmpuq":@[@5,@3,@1,@1,@0x1E,@64],
+                @"vpcmpb":@[@5,@3,@1,@0,@0x3F,@64], @"vpcmpub":@[@5,@3,@1,@0,@0x3E,@64],
+                @"vpcmpw":@[@5,@3,@1,@1,@0x3F,@64], @"vpcmpuw":@[@5,@3,@1,@1,@0x3E,@64],
+                // 6: opmask to vector
+                @"vpmovm2b":@[@6,@2,@2,@0,@0x28,@0], @"vpmovm2w":@[@6,@2,@2,@1,@0x28,@0],
+                @"vpmovm2d":@[@6,@2,@2,@0,@0x38,@0], @"vpmovm2q":@[@6,@2,@2,@1,@0x38,@0],
+                // 7: shifts by an immediate (N holds the /ext)
+                @"vpsrlw":@[@7,@1,@1,@0,@0x71,@2], @"vpsraw":@[@7,@1,@1,@0,@0x71,@4], @"vpsllw":@[@7,@1,@1,@0,@0x71,@6],
+                @"vpsrld":@[@7,@1,@1,@0,@0x72,@2], @"vpsrad":@[@7,@1,@1,@0,@0x72,@4], @"vpslld":@[@7,@1,@1,@0,@0x72,@6],
+                @"vpsrlq":@[@7,@1,@1,@1,@0x73,@2], @"vpsraq":@[@7,@1,@1,@1,@0x72,@4], @"vpsllq":@[@7,@1,@1,@1,@0x73,@6],
+                // 8: extracts
+                @"vextracti64x4":@[@8,@3,@1,@1,@0x3B,@32], @"vextractf64x4":@[@8,@3,@1,@1,@0x1B,@32],
+                @"vextracti32x4":@[@8,@3,@1,@0,@0x39,@16], @"vextractf32x4":@[@8,@3,@1,@0,@0x19,@16],
+                // 9: shuffles by an immediate
+                @"vpshufd":@[@9,@1,@1,@0,@0x70,@64], @"vpshufhw":@[@9,@1,@2,@0,@0x70,@64],
+                @"vpshuflw":@[@9,@1,@3,@0,@0x70,@64],
+                // 10: three operands and an immediate
+                @"vshufps":@[@10,@1,@0,@0,@0xC6,@64], @"vshufpd":@[@10,@1,@1,@1,@0xC6,@64],
+                @"vpternlogd":@[@10,@3,@1,@0,@0x25,@64], @"vpternlogq":@[@10,@3,@1,@1,@0x25,@64],
+                @"vinserti64x4":@[@10,@3,@1,@1,@0x3A,@32], @"vinsertf64x4":@[@10,@3,@1,@1,@0x1A,@32],
+                // 12: unary
+                @"vpabsb":@[@12,@2,@1,@0,@0x1C,@64], @"vpabsw":@[@12,@2,@1,@0,@0x1D,@64],
+                @"vpabsd":@[@12,@2,@1,@0,@0x1E,@64], @"vpabsq":@[@12,@2,@1,@1,@0x1F,@64],
+                @"vsqrtps":@[@12,@1,@0,@0,@0x51,@64], @"vsqrtpd":@[@12,@1,@1,@1,@0x51,@64],
+                @"vcvtdq2ps":@[@12,@1,@0,@0,@0x5B,@64], @"vcvttps2dq":@[@12,@1,@2,@0,@0x5B,@64],
+                @"vcvtps2dq":@[@12,@1,@1,@0,@0x5B,@64],
+                @"vcvtps2pd":@[@12,@1,@0,@0,@0x5A,@32], @"vcvtpd2ps":@[@12,@1,@1,@1,@0x5A,@64],
+                @"vcvttpd2dq":@[@12,@1,@1,@1,@0xE6,@64], @"vcvtdq2pd":@[@12,@1,@2,@0,@0xE6,@32],
+                };
+            });
+            // A shift whose count is an xmm register, not an immediate: form 11.
+            static NSDictionary *EX; static dispatch_once_t exonce;
+            dispatch_once(&exonce, ^{
+                EX = @{@"vpsrlw":@[@11,@1,@1,@0,@0xD1,@16], @"vpsraw":@[@11,@1,@1,@0,@0xE1,@16],
+                       @"vpsllw":@[@11,@1,@1,@0,@0xF1,@16], @"vpsrld":@[@11,@1,@1,@0,@0xD2,@16],
+                       @"vpsrad":@[@11,@1,@1,@0,@0xE2,@16], @"vpslld":@[@11,@1,@1,@0,@0xF2,@16],
+                       @"vpsrlq":@[@11,@1,@1,@1,@0xD3,@16], @"vpsllq":@[@11,@1,@1,@1,@0xF3,@16]};
+            });
+            NSArray *e = E[mn];
+            if (e && [e[0] intValue] == 7 && opCount == 3 && opv[2].kind != OpImm) e = EX[mn];
+            if (!e) {
+                if (error) *error = xerr(@"x86-64: no EVEX (zmm) form of '%@'", mn);
+                CLEANUP(); return nil;
+            }
+            int form = [e[0] intValue], map = [e[1] intValue], pp = [e[2] intValue];
+            int W = [e[3] intValue], op = [e[4] intValue], N = [e[5] intValue];
+            XOperand *c = opCount > 2 ? &opv[2] : NULL;
+            XOperand *dd = opCount > 3 ? &opv[3] : NULL;
+            switch (form) {
+            case 1: case 11:
+                if (opCount != 3 || a->kind != OpReg || b->kind != OpReg || c->kind == OpImm) break;
+                emitEvex(out, map, pp, W, a->reg, b->reg, c, 2); emit8(out, (uint8_t)op);
+                emitModRMN(out, a->reg, c, N); CLEANUP(); return out;
+            case 2: {
+                if (opCount != 2) break;
+                BOOL store = a->kind == OpMem;
+                XOperand *regop = store ? b : a, *rmop = store ? a : b;
+                if (regop->kind != OpReg) break;
+                int sop = op == 0x6F ? 0x7F : op + 1;   // 6F/7F, 10/11, 28/29
+                emitEvex(out, map, pp, W, regop->reg, -1, rmop, 2);
+                emit8(out, (uint8_t)(store ? sop : op));
+                emitModRMN(out, regop->reg, rmop, N); CLEANUP(); return out;
+            }
+            case 3: case 12:
+                if (opCount != 2 || a->kind != OpReg) break;
+                emitEvex(out, map, pp, W, a->reg, -1, b, 2); emit8(out, (uint8_t)op);
+                emitModRMN(out, a->reg, b, N); CLEANUP(); return out;
+            case 4:
+                if (opCount != 3 || a->size != XK_SIZE || b->kind != OpReg || c->kind == OpImm) break;
+                emitEvex(out, map, pp, W, a->reg, b->reg, c, 2); emit8(out, (uint8_t)op);
+                emitModRMN(out, a->reg, c, N); CLEANUP(); return out;
+            case 5:
+                if (opCount != 4 || a->size != XK_SIZE || b->kind != OpReg || dd->kind != OpImm) break;
+                emitEvex(out, map, pp, W, a->reg, b->reg, c, 2); emit8(out, (uint8_t)op);
+                emitModRMN(out, a->reg, c, N); emit8(out, (uint8_t)dd->imm); CLEANUP(); return out;
+            case 6:
+                if (opCount != 2 || a->kind != OpReg || b->size != XK_SIZE) break;
+                emitEvex(out, map, pp, W, a->reg, -1, b, 2); emit8(out, (uint8_t)op);
+                emitModRM(out, a->reg, b); CLEANUP(); return out;
+            case 7:
+                if (opCount != 3 || a->kind != OpReg || c->kind != OpImm) break;
+                emitEvex(out, map, pp, W, N, a->reg, b, 2); emit8(out, (uint8_t)op);
+                emitModRMN(out, N, b, 64); emit8(out, (uint8_t)c->imm); CLEANUP(); return out;
+            case 8:
+                if (opCount != 3 || b->kind != OpReg || c->kind != OpImm) break;
+                emitEvex(out, map, pp, W, b->reg, -1, a, 2); emit8(out, (uint8_t)op);
+                emitModRMN(out, b->reg, a, N); emit8(out, (uint8_t)c->imm); CLEANUP(); return out;
+            case 9:
+                if (opCount != 3 || a->kind != OpReg || c->kind != OpImm) break;
+                emitEvex(out, map, pp, W, a->reg, -1, b, 2); emit8(out, (uint8_t)op);
+                emitModRMN(out, a->reg, b, N); emit8(out, (uint8_t)c->imm); CLEANUP(); return out;
+            case 10:
+                if (opCount != 4 || a->kind != OpReg || b->kind != OpReg || dd->kind != OpImm) break;
+                emitEvex(out, map, pp, W, a->reg, b->reg, c, 2); emit8(out, (uint8_t)op);
+                emitModRMN(out, a->reg, c, N); emit8(out, (uint8_t)dd->imm); CLEANUP(); return out;
+            }
+            if (error) *error = xerr(@"x86-64: '%@' with these operands has no EVEX (zmm) form", mn);
+            CLEANUP(); return nil;
+        }
+    }
     if ([mn isEqualToString:@"vzeroupper"] && opCount == 0) {
         emit8(out, 0xC5); emit8(out, 0xF8); emit8(out, 0x77); CLEANUP(); return out;
     }

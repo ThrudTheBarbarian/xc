@@ -1013,10 +1013,11 @@ static NSInteger sWin64SretOff = 0;
 // before Skylake and a false dependency on later ones. `vzeroupper` before
 // each way out (a call, a return, a jump to another function) is the rule
 // every compiler follows; done as a pass over the finished text so no call
-// site has to remember it. Functions with no ymm are returned unchanged.
+// site has to remember it. Functions with no ymm or zmm are returned unchanged.
 + (NSString*)withVzeroupper:(NSString*)text
     {
-    if ([text rangeOfString:@"ymm"].location == NSNotFound)
+    // zmm too: a 512-bit register dirties the same upper state.
+    if ([text rangeOfString:@"ymm"].location == NSNotFound && [text rangeOfString:@"zmm"].location == NSNotFound)
         return text;
     NSMutableString* out = [NSMutableString stringWithCapacity:text.length + 256];
     for (NSString* line in [text componentsSeparatedByString:@"\n"])
@@ -2009,8 +2010,10 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
         // A 32-byte vector (-mavx2) lives in the same register
         // under its 256-bit name; every emitter keys its VEX form off "ymm".
         XTIRValue* vv = fn.values[v];
+        // A 64-byte vector (-mavx512) is the same register again as zmm.
         BOOL wide = vv && vv.type.kind == XTIRTypeKindVec && vv.type.byteWidth == 32;
-        out[v] = [NSString stringWithFormat:@"%@%@", wide ? @"ymm" : @"xmm",
+        BOOL wide512 = vv && vv.type.kind == XTIRTypeKindVec && vv.type.byteWidth == 64;
+        out[v] = [NSString stringWithFormat:@"%@%@", wide512 ? @"zmm" : wide ? @"ymm" : @"xmm",
                                             regOfClass[@(classOf(v.unsignedIntegerValue))]];
         }
     return out;
@@ -4523,6 +4526,13 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         [self loadZX:ops[0] into:'a' fn:fn slot:slot out:out]; // rax = pointer
         BOOL flt = res.type.pointeeType && [self isFloatKind:res.type.pointeeType.kind];
         BOOL W = [sVec[@(res.valueId)] hasPrefix:@"ymm"];
+        if ([sVec[@(res.valueId)] hasPrefix:@"zmm"])
+            {
+            // EVEX moves name their element size; an unmasked one ignores it.
+            [out appendFormat:@"\t%@\t%@, zmmword ptr [rax]\n", flt ? @"vmovups" : @"vmovdqu32",
+                              sVec[@(res.valueId)]];
+            return;
+            }
         [out appendFormat:@"\t%@%@\t%@, %@[rax]\n", W ? @"v" : @"", flt ? @"movups" : @"movdqu",
                           sVec[@(res.valueId)], W ? @"ymmword ptr " : @""];
         return;
@@ -4536,6 +4546,12 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         BOOL flt = vv.type.pointeeType && [self isFloatKind:vv.type.pointeeType.kind];
         [self loadZX:ops[0] into:'a' fn:fn slot:slot out:out]; // rax = pointer
         BOOL W = [sVec[@(ops[1].valueId)] hasPrefix:@"ymm"];
+        if ([sVec[@(ops[1].valueId)] hasPrefix:@"zmm"])
+            {
+            [out appendFormat:@"\t%@\tzmmword ptr [rax], %@\n", flt ? @"vmovups" : @"vmovdqu32",
+                              sVec[@(ops[1].valueId)]];
+            return;
+            }
         [out appendFormat:@"\t%@%@\t%@[rax], %@\n", W ? @"v" : @"", flt ? @"movups" : @"movdqu",
                           W ? @"ymmword ptr " : @"", sVec[@(ops[1].valueId)]];
         return;
@@ -4547,8 +4563,9 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
             return;
         NSString* d = sVec[@(res.valueId)];
         XTIRType* lane = res.type.pointeeType;
-        // 256-bit: the scalar into the register's low half, then broadcast.
-        if ([d hasPrefix:@"ymm"])
+        // 256- and 512-bit: the scalar into the register's low lane, then a
+        // broadcast to the whole of it.
+        if ([d hasPrefix:@"ymm"] || [d hasPrefix:@"zmm"])
             {
             NSString* x = [@"x" stringByAppendingString:[d substringFromIndex:1]];
             if (lane && lane.kind == XTIRTypeKindF64)
@@ -4642,6 +4659,15 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
             [out appendFormat:@"\tv%@\t%@, %@, %@\n", mn, d, a, b];
             return;
             }
+        // 512-bit: EVEX, the same three operands. The integer logic ops name
+        // their element size there (vpandd), and have no other spelling.
+        if ([d hasPrefix:@"zmm"])
+            {
+            if ([mn isEqualToString:@"pand"] || [mn isEqualToString:@"por"] || [mn isEqualToString:@"pxor"])
+                mn = [mn stringByAppendingString:@"d"];
+            [out appendFormat:@"\tv%@\t%@, %@, %@\n", mn, d, a, b];
+            return;
+            }
         NSString* mov = flt ? @"movaps" : @"movdqa";
         BOOL commut = (op != XTIROpVSub);
         // Two-address destructive form: compute in d. Keep whichever source is
@@ -4676,17 +4702,19 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         NSString *d = sVec[@(res.valueId)], *a = sVec[@(ops[0].valueId)], *b = sVec[@(ops[1].valueId)];
         if (!d || !a || !b)
             return;
-        if ([d hasPrefix:@"ymm"])
+        if ([d hasPrefix:@"ymm"] || [d hasPrefix:@"zmm"])
             {
-            // The same sequence in VEX.256: pmuludq / pshufd / shufps all work
-            // within each 128-bit half, which is exactly the per-pair shape.
-            [out appendFormat:@"\tvpmuludq\tymm0, %@, %@\n", a, b];
-            [out appendString:@"\tvpsrlq\tymm0, ymm0, 32\n"];
-            [out appendFormat:@"\tvpshufd\tymm1, %@, 0xB1\n", a];
+            // The same sequence in VEX.256 or EVEX.512: pmuludq / pshufd /
+            // shufps all work within each 128-bit lane, which is exactly the
+            // per-pair shape. Register 0 and 1 at the same width are scratch.
+            NSString* w = [d substringToIndex:1];
+            [out appendFormat:@"\tvpmuludq\t%@mm0, %@, %@\n", w, a, b];
+            [out appendFormat:@"\tvpsrlq\t%@mm0, %@mm0, 32\n", w, w];
+            [out appendFormat:@"\tvpshufd\t%@mm1, %@, 0xB1\n", w, a];
             [out appendFormat:@"\tvpshufd\t%@, %@, 0xB1\n", d, b];
-            [out appendFormat:@"\tvpmuludq\tymm1, ymm1, %@\n", d];
-            [out appendString:@"\tvpsrlq\tymm1, ymm1, 32\n"];
-            [out appendFormat:@"\tvshufps\t%@, ymm0, ymm1, 0x88\n", d];
+            [out appendFormat:@"\tvpmuludq\t%@mm1, %@mm1, %@\n", w, w, d];
+            [out appendFormat:@"\tvpsrlq\t%@mm1, %@mm1, 32\n", w, w];
+            [out appendFormat:@"\tvshufps\t%@, %@mm0, %@mm1, 0x88\n", d, w, w];
             [out appendFormat:@"\tvpshufd\t%@, %@, 0xD8\n", d, d];
             return;
             }
@@ -4718,7 +4746,7 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         NSString* mn = lw == 2 ? @"psrlw" : lw == 8 ? @"psrlq" : @"psrld";
         if (lw != 2 && lw != 4 && lw != 8)
             return; // no byte-lane shift in SSE
-        if ([d hasPrefix:@"ymm"])
+        if ([d hasPrefix:@"ymm"] || [d hasPrefix:@"zmm"])
             {
             [out appendFormat:@"\tv%@\t%@, %@, %lld\n", mn, d, a, (long long)ops[1].intValue];
             return;
@@ -4734,6 +4762,13 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         if (!res || ops.count < 1 || ops[0].kind != XTIROperandKindUse || !sVec[@(ops[0].valueId)])
             return;
         NSString* v = sVec[@(ops[0].valueId)];
+        if ([v hasPrefix:@"zmm"])
+            {
+            // Fold the high 256 bits onto the low, then the 256-bit fold below.
+            NSString* y = [@"y" stringByAppendingString:[v substringFromIndex:1]];
+            [out appendFormat:@"\tvextracti64x4\tymm0, %@, 1\n\tvpaddd\t%@, %@, ymm0\n", v, y, y];
+            v = y;
+            }
         if ([v hasPrefix:@"ymm"])
             {
             // Fold the high 128 bits onto the low, then the 4-lane fold below.
@@ -4755,6 +4790,12 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         NSString* v = sVec[@(ops[0].valueId)];
         BOOL sgn = XTIRTypeKindIsSigned(res.type.kind);
         NSString* mn = (op == XTIROpVReduceMax) ? (sgn ? @"pmaxsd" : @"pmaxud") : (sgn ? @"pminsd" : @"pminud");
+        if ([v hasPrefix:@"zmm"])
+            {
+            NSString* y = [@"y" stringByAppendingString:[v substringFromIndex:1]];
+            [out appendFormat:@"\tvextracti64x4\tymm0, %@, 1\n\tv%@\t%@, %@, ymm0\n", v, mn, y, y];
+            v = y;
+            }
         if ([v hasPrefix:@"ymm"])
             {
             NSString* x = [@"x" stringByAppendingString:[v substringFromIndex:1]];
@@ -4829,6 +4870,32 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         if (lw != 1 && lw != 2 && lw != 4)
             return;         // 64-bit lanes need SSE4.2 pcmpgtq; not emitted today
         NSString* sfx = lw == 1 ? @"b" : lw == 2 ? @"w" : @"d";
+        if ([d hasPrefix:@"zmm"])
+            {
+            // EVEX compares take the predicate and the signedness directly and
+            // write an opmask; vpmovm2* turns it back into the 0/-1 lanes the
+            // rest of the code expects. Predicates: 0 eq, 1 lt, 2 le, 4 ne,
+            // 5 nlt (ge), 6 nle (gt).
+            int pr = 0;
+            BOOL un = NO;
+            switch (in.predicate)
+                {
+            case XTIRICmpEQ: pr = 0; break;
+            case XTIRICmpNE: pr = 4; break;
+            case XTIRICmpSLT: pr = 1; break;
+            case XTIRICmpSLE: pr = 2; break;
+            case XTIRICmpSGE: pr = 5; break;
+            case XTIRICmpSGT: pr = 6; break;
+            case XTIRICmpULT: pr = 1; un = YES; break;
+            case XTIRICmpULE: pr = 2; un = YES; break;
+            case XTIRICmpUGE: pr = 5; un = YES; break;
+            case XTIRICmpUGT: pr = 6; un = YES; break;
+            default: return;
+                }
+            [out appendFormat:@"\tvpcmp%@%@\tk1, %@, %@, %d\n\tvpmovm2%@\t%@, k1\n",
+                              un ? @"u" : @"", sfx, a, b, pr, sfx, d];
+            return;
+            }
         if ([d hasPrefix:@"ymm"])
             {
             // VEX.256: three-operand, so no copies; ymm0/ymm1 are the scratch.
@@ -5122,7 +5189,7 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
                     NSString* dst = sVec[@(phi.result.valueId)];
                     NSString* src = inc.kind == XTIROperandKindUse ? sVec[@(inc.valueId)] : nil;
                     if (dst && src && ![dst isEqualToString:src]) // coalesced ⇒ no-op
-                        [out appendFormat:@"\t%@\t%@, %@\n", [dst hasPrefix:@"ymm"] ? @"vmovdqa" : @"movdqa", dst, src];
+                        [out appendFormat:@"\t%@\t%@, %@\n", [dst hasPrefix:@"zmm"] ? @"vmovdqa64" : [dst hasPrefix:@"ymm"] ? @"vmovdqa" : @"movdqa", dst, src];
                     break;
                     }
                 [dests addObject:phi.result];

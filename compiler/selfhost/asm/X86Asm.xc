@@ -43,6 +43,9 @@
 #define OP_REG 1
 #define OP_MEM 2
 #define OP_IMM 3
+// The size an opmask register (k0-k7) parses to: no real operand is this wide,
+// so it cannot be mistaken for a GPR or a vector register.
+#define XK_SIZE 99
 
 class X86Fixup
     {
@@ -242,6 +245,8 @@ class X86Fixup
     bool _failed;
     String* _why;
     bool _skipSect; // inside a CodeView .debug$ section — emit nothing
+    Map* _evex;     // EVEX forms: mnemonic -> packed form/map/pp/W/opcode/N
+    Map* _evexX;    // the shifts whose count is an xmm register
 
     u32 _insnBase;      // offset in .text of the instruction being encoded
     i32 _ripDispOffset; // -1 when this instruction has no rip operand
@@ -425,6 +430,24 @@ class X86Fixup
             if (v < (i32)0 || v > (i32)15)
                 return (i32)-1;
             _regSize = (u32)32;
+            return v;
+            }
+        // zmmN: the same registers at 64 bytes; a zmm operand selects EVEX.
+        if (s.hasPrefix(String.withCString("zmm")))
+            {
+            i32 v = smallNumber(s, (u32)3);
+            if (v < (i32)0 || v > (i32)15)
+                return (i32)-1;
+            _regSize = (u32)64;
+            return v;
+            }
+        // k0-k7, the AVX-512 opmask registers, at a size no other operand has.
+        if (s.byteLength() == (u32)2 && s.byteAt((u32)0) == (u8)'k')
+            {
+            i32 v = smallNumber(s, (u32)1);
+            if (v < (i32)0 || v > (i32)7)
+                return (i32)-1;
+            _regSize = (u32)XK_SIZE;
             return v;
             }
         if (s.byteAt((u32)0) != (u8)'r')
@@ -752,6 +775,8 @@ class X86Fixup
             return (u32)16;
         if (s.hasPrefix(String.withCString("ymmword ptr")))
             return (u32)32;
+        if (s.hasPrefix(String.withCString("zmmword ptr")))
+            return (u32)64;
         return (u32)0;
         }
 
@@ -761,6 +786,8 @@ class X86Fixup
         if (s.hasPrefix(String.withCString("xmmword ptr")))
             return (u32)11;
         if (s.hasPrefix(String.withCString("ymmword ptr")))
+            return (u32)11;
+        if (s.hasPrefix(String.withCString("zmmword ptr")))
             return (u32)11;
         if (s.hasPrefix(String.withCString("dword ptr")))
             return (u32)9;
@@ -1941,6 +1968,400 @@ class X86Fixup
             }
         }
 
+    // ModRM for an EVEX instruction: eModRM, except that an 8-bit
+    // displacement is scaled by N, the memory operand's size ("disp8*N"). A
+    // multiple of N that fits after dividing takes the short form, holding
+    // disp/N; any other non-zero displacement takes disp32. The forms with no
+    // base register carry a disp32 already, and are eModRM's.
+    void eModRMN(u32 reg, XOperand* rm, u32 n)
+        {
+        if (rm.kind() == (u32)OP_REG || rm.base() < (i32)0 || rm.ripRel() || rm.seg() != (u32)0)
+            {
+            eModRM(reg, rm);
+            return;
+            }
+        i32 base = rm.base();
+        i32 index = rm.index();
+        bool needSib = index >= (i32)0 || ((u32)base & (u32)7) == (u32)4;
+        i32 d = rm.disp();
+        i32 q = (i32)0;
+        u32 mod;
+        if (d == (i32)0 && ((u32)base & (u32)7) != (u32)5)
+            mod = (u32)0;
+        else if (n > (u32)0 && d % (i32)n == (i32)0 && d / (i32)n >= (i32)-128 && d / (i32)n <= (i32)127)
+            {
+            mod = (u32)1;
+            q = d / (i32)n;
+            }
+        else
+            mod = (u32)2;
+        e8((mod << (u32)6) | ((reg & (u32)7) << (u32)3) | (needSib ? (u32)4 : ((u32)base & (u32)7)));
+        if (needSib)
+            {
+            u32 ss = rm.scale() == (u32)8 ? (u32)3 : rm.scale() == (u32)4 ? (u32)2
+                                                 : rm.scale() == (u32)2   ? (u32)1
+                                                                          : (u32)0;
+            u32 idx = index >= (i32)0 ? ((u32)index & (u32)7) : (u32)4;
+            e8((ss << (u32)6) | (idx << (u32)3) | ((u32)base & (u32)7));
+            }
+        if (mod == (u32)1)
+            e8((u32)q);
+        else if (mod == (u32)2)
+            e32((u32)d);
+        }
+
+    // The 4-byte EVEX prefix: 62, then
+    //   P0  R X B R' 0 m m m    R, X, B, R' inverted; mmm the map (1 0F, 2 0F38, 3 0F3A)
+    //   P1  W v v v v 1 p p     vvvv the first source inverted (1111 when none)
+    //   P2  z L'L b V' a a a    L'L the length (2 = 512); V' inverted; aaa the opmask
+    // Registers are 0-15, so R' and V' are always 1. For a register r/m, X holds
+    // bit 4 of that register (1, inverted); for memory, the index's bit 3.
+    void eEvex(u32 map, u32 pp, u32 w, u32 reg, i32 vreg, XOperand* rm, u32 ll)
+        {
+        i32 bb = rm.kind() == (u32)OP_REG ? (i32)rm.reg() : rm.base();
+        i32 xx = rm.kind() == (u32)OP_REG ? (i32)0 : rm.index();
+        if (bb < (i32)0) bb = (i32)0;
+        if (xx < (i32)0) xx = (i32)0;
+        u32 vvvv = vreg < (i32)0 ? (u32)$0F : ((~(u32)vreg) & (u32)$0F);
+        e8((u32)$62);
+        e8(((reg & (u32)8) != (u32)0 ? (u32)0 : (u32)$80) | (((u32)xx & (u32)8) != (u32)0 ? (u32)0 : (u32)$40)
+           | (((u32)bb & (u32)8) != (u32)0 ? (u32)0 : (u32)$20) | (u32)$10 | (map & (u32)7));
+        e8((w != (u32)0 ? (u32)$80 : (u32)0) | (vvvv << (u32)3) | (u32)4 | (pp & (u32)3));
+        e8((ll << (u32)5) | (u32)8);
+        }
+
+    static void evAdd(Map* m, String* name, u32 form, u32 map, u32 pp, u32 w, u32 op, u32 n)
+        {
+        u32 v = (form << (u32)28) | (map << (u32)24) | (pp << (u32)20) | (w << (u32)16) | (op << (u32)8) | n;
+        m.set((Hashable*)name, (Object*)Number.withU32(v));
+        }
+
+    // The EVEX table, as the reference's: form, map, pp, W, opcode, N (the
+    // memory operand's size for disp8*N; for form 7 the /ext).
+    void evexTables(void)
+        {
+        Map* m = new Map();
+        evAdd(m, String.withCString("vaddps"), (u32)1, (u32)1, (u32)0, (u32)0, (u32)$58, (u32)64);
+        evAdd(m, String.withCString("vaddpd"), (u32)1, (u32)1, (u32)1, (u32)1, (u32)$58, (u32)64);
+        evAdd(m, String.withCString("vsubps"), (u32)1, (u32)1, (u32)0, (u32)0, (u32)$5C, (u32)64);
+        evAdd(m, String.withCString("vsubpd"), (u32)1, (u32)1, (u32)1, (u32)1, (u32)$5C, (u32)64);
+        evAdd(m, String.withCString("vmulps"), (u32)1, (u32)1, (u32)0, (u32)0, (u32)$59, (u32)64);
+        evAdd(m, String.withCString("vmulpd"), (u32)1, (u32)1, (u32)1, (u32)1, (u32)$59, (u32)64);
+        evAdd(m, String.withCString("vdivps"), (u32)1, (u32)1, (u32)0, (u32)0, (u32)$5E, (u32)64);
+        evAdd(m, String.withCString("vdivpd"), (u32)1, (u32)1, (u32)1, (u32)1, (u32)$5E, (u32)64);
+        evAdd(m, String.withCString("vmaxps"), (u32)1, (u32)1, (u32)0, (u32)0, (u32)$5F, (u32)64);
+        evAdd(m, String.withCString("vmaxpd"), (u32)1, (u32)1, (u32)1, (u32)1, (u32)$5F, (u32)64);
+        evAdd(m, String.withCString("vminps"), (u32)1, (u32)1, (u32)0, (u32)0, (u32)$5D, (u32)64);
+        evAdd(m, String.withCString("vminpd"), (u32)1, (u32)1, (u32)1, (u32)1, (u32)$5D, (u32)64);
+        evAdd(m, String.withCString("vandps"), (u32)1, (u32)1, (u32)0, (u32)0, (u32)$54, (u32)64);
+        evAdd(m, String.withCString("vandpd"), (u32)1, (u32)1, (u32)1, (u32)1, (u32)$54, (u32)64);
+        evAdd(m, String.withCString("vandnps"), (u32)1, (u32)1, (u32)0, (u32)0, (u32)$55, (u32)64);
+        evAdd(m, String.withCString("vandnpd"), (u32)1, (u32)1, (u32)1, (u32)1, (u32)$55, (u32)64);
+        evAdd(m, String.withCString("vorps"), (u32)1, (u32)1, (u32)0, (u32)0, (u32)$56, (u32)64);
+        evAdd(m, String.withCString("vorpd"), (u32)1, (u32)1, (u32)1, (u32)1, (u32)$56, (u32)64);
+        evAdd(m, String.withCString("vxorps"), (u32)1, (u32)1, (u32)0, (u32)0, (u32)$57, (u32)64);
+        evAdd(m, String.withCString("vxorpd"), (u32)1, (u32)1, (u32)1, (u32)1, (u32)$57, (u32)64);
+        evAdd(m, String.withCString("vunpcklps"), (u32)1, (u32)1, (u32)0, (u32)0, (u32)$14, (u32)64);
+        evAdd(m, String.withCString("vunpcklpd"), (u32)1, (u32)1, (u32)1, (u32)1, (u32)$14, (u32)64);
+        evAdd(m, String.withCString("vunpckhps"), (u32)1, (u32)1, (u32)0, (u32)0, (u32)$15, (u32)64);
+        evAdd(m, String.withCString("vunpckhpd"), (u32)1, (u32)1, (u32)1, (u32)1, (u32)$15, (u32)64);
+        evAdd(m, String.withCString("vpaddb"), (u32)1, (u32)1, (u32)1, (u32)0, (u32)$FC, (u32)64);
+        evAdd(m, String.withCString("vpaddw"), (u32)1, (u32)1, (u32)1, (u32)0, (u32)$FD, (u32)64);
+        evAdd(m, String.withCString("vpaddd"), (u32)1, (u32)1, (u32)1, (u32)0, (u32)$FE, (u32)64);
+        evAdd(m, String.withCString("vpaddq"), (u32)1, (u32)1, (u32)1, (u32)1, (u32)$D4, (u32)64);
+        evAdd(m, String.withCString("vpsubb"), (u32)1, (u32)1, (u32)1, (u32)0, (u32)$F8, (u32)64);
+        evAdd(m, String.withCString("vpsubw"), (u32)1, (u32)1, (u32)1, (u32)0, (u32)$F9, (u32)64);
+        evAdd(m, String.withCString("vpsubd"), (u32)1, (u32)1, (u32)1, (u32)0, (u32)$FA, (u32)64);
+        evAdd(m, String.withCString("vpsubq"), (u32)1, (u32)1, (u32)1, (u32)1, (u32)$FB, (u32)64);
+        evAdd(m, String.withCString("vpandd"), (u32)1, (u32)1, (u32)1, (u32)0, (u32)$DB, (u32)64);
+        evAdd(m, String.withCString("vpandq"), (u32)1, (u32)1, (u32)1, (u32)1, (u32)$DB, (u32)64);
+        evAdd(m, String.withCString("vpandnd"), (u32)1, (u32)1, (u32)1, (u32)0, (u32)$DF, (u32)64);
+        evAdd(m, String.withCString("vpandnq"), (u32)1, (u32)1, (u32)1, (u32)1, (u32)$DF, (u32)64);
+        evAdd(m, String.withCString("vpord"), (u32)1, (u32)1, (u32)1, (u32)0, (u32)$EB, (u32)64);
+        evAdd(m, String.withCString("vporq"), (u32)1, (u32)1, (u32)1, (u32)1, (u32)$EB, (u32)64);
+        evAdd(m, String.withCString("vpxord"), (u32)1, (u32)1, (u32)1, (u32)0, (u32)$EF, (u32)64);
+        evAdd(m, String.withCString("vpxorq"), (u32)1, (u32)1, (u32)1, (u32)1, (u32)$EF, (u32)64);
+        evAdd(m, String.withCString("vpmullw"), (u32)1, (u32)1, (u32)1, (u32)0, (u32)$D5, (u32)64);
+        evAdd(m, String.withCString("vpmuludq"), (u32)1, (u32)1, (u32)1, (u32)1, (u32)$F4, (u32)64);
+        evAdd(m, String.withCString("vpmaddwd"), (u32)1, (u32)1, (u32)1, (u32)0, (u32)$F5, (u32)64);
+        evAdd(m, String.withCString("vpunpcklbw"), (u32)1, (u32)1, (u32)1, (u32)0, (u32)$60, (u32)64);
+        evAdd(m, String.withCString("vpunpcklwd"), (u32)1, (u32)1, (u32)1, (u32)0, (u32)$61, (u32)64);
+        evAdd(m, String.withCString("vpunpckldq"), (u32)1, (u32)1, (u32)1, (u32)0, (u32)$62, (u32)64);
+        evAdd(m, String.withCString("vpunpcklqdq"), (u32)1, (u32)1, (u32)1, (u32)1, (u32)$6C, (u32)64);
+        evAdd(m, String.withCString("vpmaxsw"), (u32)1, (u32)1, (u32)1, (u32)0, (u32)$EE, (u32)64);
+        evAdd(m, String.withCString("vpminsw"), (u32)1, (u32)1, (u32)1, (u32)0, (u32)$EA, (u32)64);
+        evAdd(m, String.withCString("vpmaxub"), (u32)1, (u32)1, (u32)1, (u32)0, (u32)$DE, (u32)64);
+        evAdd(m, String.withCString("vpminub"), (u32)1, (u32)1, (u32)1, (u32)0, (u32)$DA, (u32)64);
+        evAdd(m, String.withCString("vpmulld"), (u32)1, (u32)2, (u32)1, (u32)0, (u32)$40, (u32)64);
+        evAdd(m, String.withCString("vpmullq"), (u32)1, (u32)2, (u32)1, (u32)1, (u32)$40, (u32)64);
+        evAdd(m, String.withCString("vpmaxsd"), (u32)1, (u32)2, (u32)1, (u32)0, (u32)$3D, (u32)64);
+        evAdd(m, String.withCString("vpminsd"), (u32)1, (u32)2, (u32)1, (u32)0, (u32)$39, (u32)64);
+        evAdd(m, String.withCString("vpmaxud"), (u32)1, (u32)2, (u32)1, (u32)0, (u32)$3F, (u32)64);
+        evAdd(m, String.withCString("vpminud"), (u32)1, (u32)2, (u32)1, (u32)0, (u32)$3B, (u32)64);
+        evAdd(m, String.withCString("vpmaxsq"), (u32)1, (u32)2, (u32)1, (u32)1, (u32)$3D, (u32)64);
+        evAdd(m, String.withCString("vpminsq"), (u32)1, (u32)2, (u32)1, (u32)1, (u32)$39, (u32)64);
+        evAdd(m, String.withCString("vpmaxuq"), (u32)1, (u32)2, (u32)1, (u32)1, (u32)$3F, (u32)64);
+        evAdd(m, String.withCString("vpminuq"), (u32)1, (u32)2, (u32)1, (u32)1, (u32)$3B, (u32)64);
+        evAdd(m, String.withCString("vpmaxsb"), (u32)1, (u32)2, (u32)1, (u32)0, (u32)$3C, (u32)64);
+        evAdd(m, String.withCString("vpminsb"), (u32)1, (u32)2, (u32)1, (u32)0, (u32)$38, (u32)64);
+        evAdd(m, String.withCString("vpmaxuw"), (u32)1, (u32)2, (u32)1, (u32)0, (u32)$3E, (u32)64);
+        evAdd(m, String.withCString("vpminuw"), (u32)1, (u32)2, (u32)1, (u32)0, (u32)$3A, (u32)64);
+        evAdd(m, String.withCString("vpmaddubsw"), (u32)1, (u32)2, (u32)1, (u32)0, (u32)$04, (u32)64);
+        evAdd(m, String.withCString("vmovdqu32"), (u32)2, (u32)1, (u32)2, (u32)0, (u32)$6F, (u32)64);
+        evAdd(m, String.withCString("vmovdqu64"), (u32)2, (u32)1, (u32)2, (u32)1, (u32)$6F, (u32)64);
+        evAdd(m, String.withCString("vmovdqu8"), (u32)2, (u32)1, (u32)3, (u32)0, (u32)$6F, (u32)64);
+        evAdd(m, String.withCString("vmovdqu16"), (u32)2, (u32)1, (u32)3, (u32)1, (u32)$6F, (u32)64);
+        evAdd(m, String.withCString("vmovdqa32"), (u32)2, (u32)1, (u32)1, (u32)0, (u32)$6F, (u32)64);
+        evAdd(m, String.withCString("vmovdqa64"), (u32)2, (u32)1, (u32)1, (u32)1, (u32)$6F, (u32)64);
+        evAdd(m, String.withCString("vmovups"), (u32)2, (u32)1, (u32)0, (u32)0, (u32)$10, (u32)64);
+        evAdd(m, String.withCString("vmovupd"), (u32)2, (u32)1, (u32)1, (u32)1, (u32)$10, (u32)64);
+        evAdd(m, String.withCString("vmovaps"), (u32)2, (u32)1, (u32)0, (u32)0, (u32)$28, (u32)64);
+        evAdd(m, String.withCString("vmovapd"), (u32)2, (u32)1, (u32)1, (u32)1, (u32)$28, (u32)64);
+        evAdd(m, String.withCString("vpbroadcastb"), (u32)3, (u32)2, (u32)1, (u32)0, (u32)$78, (u32)1);
+        evAdd(m, String.withCString("vpbroadcastw"), (u32)3, (u32)2, (u32)1, (u32)0, (u32)$79, (u32)2);
+        evAdd(m, String.withCString("vpbroadcastd"), (u32)3, (u32)2, (u32)1, (u32)0, (u32)$58, (u32)4);
+        evAdd(m, String.withCString("vpbroadcastq"), (u32)3, (u32)2, (u32)1, (u32)1, (u32)$59, (u32)8);
+        evAdd(m, String.withCString("vbroadcastss"), (u32)3, (u32)2, (u32)1, (u32)0, (u32)$18, (u32)4);
+        evAdd(m, String.withCString("vbroadcastsd"), (u32)3, (u32)2, (u32)1, (u32)1, (u32)$19, (u32)8);
+        evAdd(m, String.withCString("vpcmpeqb"), (u32)4, (u32)1, (u32)1, (u32)0, (u32)$74, (u32)64);
+        evAdd(m, String.withCString("vpcmpgtb"), (u32)4, (u32)1, (u32)1, (u32)0, (u32)$64, (u32)64);
+        evAdd(m, String.withCString("vpcmpeqw"), (u32)4, (u32)1, (u32)1, (u32)0, (u32)$75, (u32)64);
+        evAdd(m, String.withCString("vpcmpgtw"), (u32)4, (u32)1, (u32)1, (u32)0, (u32)$65, (u32)64);
+        evAdd(m, String.withCString("vpcmpeqd"), (u32)4, (u32)1, (u32)1, (u32)0, (u32)$76, (u32)64);
+        evAdd(m, String.withCString("vpcmpgtd"), (u32)4, (u32)1, (u32)1, (u32)0, (u32)$66, (u32)64);
+        evAdd(m, String.withCString("vpcmpeqq"), (u32)4, (u32)2, (u32)1, (u32)1, (u32)$29, (u32)64);
+        evAdd(m, String.withCString("vpcmpgtq"), (u32)4, (u32)2, (u32)1, (u32)1, (u32)$37, (u32)64);
+        evAdd(m, String.withCString("vcmpps"), (u32)5, (u32)1, (u32)0, (u32)0, (u32)$C2, (u32)64);
+        evAdd(m, String.withCString("vcmppd"), (u32)5, (u32)1, (u32)1, (u32)1, (u32)$C2, (u32)64);
+        evAdd(m, String.withCString("vpcmpd"), (u32)5, (u32)3, (u32)1, (u32)0, (u32)$1F, (u32)64);
+        evAdd(m, String.withCString("vpcmpud"), (u32)5, (u32)3, (u32)1, (u32)0, (u32)$1E, (u32)64);
+        evAdd(m, String.withCString("vpcmpq"), (u32)5, (u32)3, (u32)1, (u32)1, (u32)$1F, (u32)64);
+        evAdd(m, String.withCString("vpcmpuq"), (u32)5, (u32)3, (u32)1, (u32)1, (u32)$1E, (u32)64);
+        evAdd(m, String.withCString("vpcmpb"), (u32)5, (u32)3, (u32)1, (u32)0, (u32)$3F, (u32)64);
+        evAdd(m, String.withCString("vpcmpub"), (u32)5, (u32)3, (u32)1, (u32)0, (u32)$3E, (u32)64);
+        evAdd(m, String.withCString("vpcmpw"), (u32)5, (u32)3, (u32)1, (u32)1, (u32)$3F, (u32)64);
+        evAdd(m, String.withCString("vpcmpuw"), (u32)5, (u32)3, (u32)1, (u32)1, (u32)$3E, (u32)64);
+        evAdd(m, String.withCString("vpmovm2b"), (u32)6, (u32)2, (u32)2, (u32)0, (u32)$28, (u32)0);
+        evAdd(m, String.withCString("vpmovm2w"), (u32)6, (u32)2, (u32)2, (u32)1, (u32)$28, (u32)0);
+        evAdd(m, String.withCString("vpmovm2d"), (u32)6, (u32)2, (u32)2, (u32)0, (u32)$38, (u32)0);
+        evAdd(m, String.withCString("vpmovm2q"), (u32)6, (u32)2, (u32)2, (u32)1, (u32)$38, (u32)0);
+        evAdd(m, String.withCString("vpsrlw"), (u32)7, (u32)1, (u32)1, (u32)0, (u32)$71, (u32)2);
+        evAdd(m, String.withCString("vpsraw"), (u32)7, (u32)1, (u32)1, (u32)0, (u32)$71, (u32)4);
+        evAdd(m, String.withCString("vpsllw"), (u32)7, (u32)1, (u32)1, (u32)0, (u32)$71, (u32)6);
+        evAdd(m, String.withCString("vpsrld"), (u32)7, (u32)1, (u32)1, (u32)0, (u32)$72, (u32)2);
+        evAdd(m, String.withCString("vpsrad"), (u32)7, (u32)1, (u32)1, (u32)0, (u32)$72, (u32)4);
+        evAdd(m, String.withCString("vpslld"), (u32)7, (u32)1, (u32)1, (u32)0, (u32)$72, (u32)6);
+        evAdd(m, String.withCString("vpsrlq"), (u32)7, (u32)1, (u32)1, (u32)1, (u32)$73, (u32)2);
+        evAdd(m, String.withCString("vpsraq"), (u32)7, (u32)1, (u32)1, (u32)1, (u32)$72, (u32)4);
+        evAdd(m, String.withCString("vpsllq"), (u32)7, (u32)1, (u32)1, (u32)1, (u32)$73, (u32)6);
+        evAdd(m, String.withCString("vextracti64x4"), (u32)8, (u32)3, (u32)1, (u32)1, (u32)$3B, (u32)32);
+        evAdd(m, String.withCString("vextractf64x4"), (u32)8, (u32)3, (u32)1, (u32)1, (u32)$1B, (u32)32);
+        evAdd(m, String.withCString("vextracti32x4"), (u32)8, (u32)3, (u32)1, (u32)0, (u32)$39, (u32)16);
+        evAdd(m, String.withCString("vextractf32x4"), (u32)8, (u32)3, (u32)1, (u32)0, (u32)$19, (u32)16);
+        evAdd(m, String.withCString("vpshufd"), (u32)9, (u32)1, (u32)1, (u32)0, (u32)$70, (u32)64);
+        evAdd(m, String.withCString("vpshufhw"), (u32)9, (u32)1, (u32)2, (u32)0, (u32)$70, (u32)64);
+        evAdd(m, String.withCString("vpshuflw"), (u32)9, (u32)1, (u32)3, (u32)0, (u32)$70, (u32)64);
+        evAdd(m, String.withCString("vshufps"), (u32)10, (u32)1, (u32)0, (u32)0, (u32)$C6, (u32)64);
+        evAdd(m, String.withCString("vshufpd"), (u32)10, (u32)1, (u32)1, (u32)1, (u32)$C6, (u32)64);
+        evAdd(m, String.withCString("vpternlogd"), (u32)10, (u32)3, (u32)1, (u32)0, (u32)$25, (u32)64);
+        evAdd(m, String.withCString("vpternlogq"), (u32)10, (u32)3, (u32)1, (u32)1, (u32)$25, (u32)64);
+        evAdd(m, String.withCString("vinserti64x4"), (u32)10, (u32)3, (u32)1, (u32)1, (u32)$3A, (u32)32);
+        evAdd(m, String.withCString("vinsertf64x4"), (u32)10, (u32)3, (u32)1, (u32)1, (u32)$1A, (u32)32);
+        evAdd(m, String.withCString("vpabsb"), (u32)12, (u32)2, (u32)1, (u32)0, (u32)$1C, (u32)64);
+        evAdd(m, String.withCString("vpabsw"), (u32)12, (u32)2, (u32)1, (u32)0, (u32)$1D, (u32)64);
+        evAdd(m, String.withCString("vpabsd"), (u32)12, (u32)2, (u32)1, (u32)0, (u32)$1E, (u32)64);
+        evAdd(m, String.withCString("vpabsq"), (u32)12, (u32)2, (u32)1, (u32)1, (u32)$1F, (u32)64);
+        evAdd(m, String.withCString("vsqrtps"), (u32)12, (u32)1, (u32)0, (u32)0, (u32)$51, (u32)64);
+        evAdd(m, String.withCString("vsqrtpd"), (u32)12, (u32)1, (u32)1, (u32)1, (u32)$51, (u32)64);
+        evAdd(m, String.withCString("vcvtdq2ps"), (u32)12, (u32)1, (u32)0, (u32)0, (u32)$5B, (u32)64);
+        evAdd(m, String.withCString("vcvttps2dq"), (u32)12, (u32)1, (u32)2, (u32)0, (u32)$5B, (u32)64);
+        evAdd(m, String.withCString("vcvtps2dq"), (u32)12, (u32)1, (u32)1, (u32)0, (u32)$5B, (u32)64);
+        evAdd(m, String.withCString("vcvtps2pd"), (u32)12, (u32)1, (u32)0, (u32)0, (u32)$5A, (u32)32);
+        evAdd(m, String.withCString("vcvtpd2ps"), (u32)12, (u32)1, (u32)1, (u32)1, (u32)$5A, (u32)64);
+        evAdd(m, String.withCString("vcvttpd2dq"), (u32)12, (u32)1, (u32)1, (u32)1, (u32)$E6, (u32)64);
+        evAdd(m, String.withCString("vcvtdq2pd"), (u32)12, (u32)1, (u32)2, (u32)0, (u32)$E6, (u32)32);
+        _evex = m;
+        Map* x = new Map();
+        evAdd(x, String.withCString("vpsrlw"), (u32)11, (u32)1, (u32)1, (u32)0, (u32)$D1, (u32)16);
+        evAdd(x, String.withCString("vpsraw"), (u32)11, (u32)1, (u32)1, (u32)0, (u32)$E1, (u32)16);
+        evAdd(x, String.withCString("vpsllw"), (u32)11, (u32)1, (u32)1, (u32)0, (u32)$F1, (u32)16);
+        evAdd(x, String.withCString("vpsrld"), (u32)11, (u32)1, (u32)1, (u32)0, (u32)$D2, (u32)16);
+        evAdd(x, String.withCString("vpsrad"), (u32)11, (u32)1, (u32)1, (u32)0, (u32)$E2, (u32)16);
+        evAdd(x, String.withCString("vpslld"), (u32)11, (u32)1, (u32)1, (u32)0, (u32)$F2, (u32)16);
+        evAdd(x, String.withCString("vpsrlq"), (u32)11, (u32)1, (u32)1, (u32)1, (u32)$D3, (u32)16);
+        evAdd(x, String.withCString("vpsllq"), (u32)11, (u32)1, (u32)1, (u32)1, (u32)$F3, (u32)16);
+        _evexX = x;
+        }
+
+    // ── EVEX.512: AVX-512 forms (F, DQ, BW, VL) ──
+    // Any instruction with a zmm operand, encoded from the table above. The
+    // forms, by where each operand goes, are the reference's:
+    //   1 dst, src1, src2       reg = dst, vvvv = src1, r/m = src2
+    //   2 move                  load: reg = dst, r/m = src; store: the reverse
+    //   3 broadcast             reg = dst, r/m = the xmm or element in memory
+    //   4 compare into k        reg = k, vvvv = src1, r/m = src2   (5: + imm)
+    //   6 k to vector           reg = dst, r/m = k
+    //   7 shift by immediate    vvvv = dst, r/m = src, reg = the /ext
+    //   8 extract               reg = the zmm source, r/m = the dest, imm
+    //   9 shuffle by immediate  reg = dst, r/m = src, imm
+    //  10 dst, src1, src2, imm  reg = dst, vvvv = src1, r/m = src2, imm
+    //  11 shift by xmm count    as 1, the count an xmm (N 16)
+    //  12 unary                 reg = dst, r/m = src
+    bool encEvex(String* mn, XOperand* a, XOperand* b)
+        {
+        bool zmm = false;
+        for (u32 i = (u32)0; i < _ops.count(); i = i + (u32)1)
+            {
+            XOperand* o = (XOperand*)_ops.get(i);
+            if (o.kind() == (u32)OP_REG && o.size() == (u32)64)
+                zmm = true;
+            }
+        if (!zmm)
+            return false;
+        if (_evex == (Map*)0)
+            evexTables();
+        u32 n0 = _ops.count();
+        Number* ent = (Number*)_evex.get((Hashable*)mn);
+        if (ent != (Number*)0 && (ent.asU32() >> (u32)28) == (u32)7 && n0 == (u32)3
+            && ((XOperand*)_ops.get((u32)2)).kind() != (u32)OP_IMM)
+            ent = (Number*)_evexX.get((Hashable*)mn);
+        _hit = true;
+        if (ent == (Number*)0)
+            {
+            String* m = String.withCString("x86-64: no EVEX (zmm) form of '");
+            m.append(mn);
+            m.appendByte((u8)$27);
+            fail(m);
+            return true;
+            }
+        u32 v = ent.asU32();
+        u32 form = v >> (u32)28;
+        u32 map = (v >> (u32)24) & (u32)$0F;
+        u32 pp = (v >> (u32)20) & (u32)$0F;
+        u32 w = (v >> (u32)16) & (u32)$0F;
+        u32 op = (v >> (u32)8) & (u32)$FF;
+        u32 n = v & (u32)$FF;
+        XOperand* c = n0 > (u32)2 ? (XOperand*)_ops.get((u32)2) : (XOperand*)0;
+        XOperand* dd = n0 > (u32)3 ? (XOperand*)_ops.get((u32)3) : (XOperand*)0;
+        if (form == (u32)1 || form == (u32)11)
+            {
+            if (n0 == (u32)3 && a.kind() == (u32)OP_REG && b.kind() == (u32)OP_REG && c.kind() != (u32)OP_IMM)
+                {
+                eEvex(map, pp, w, a.reg(), (i32)b.reg(), c, (u32)2);
+                e8(op);
+                eModRMN(a.reg(), c, n);
+                return true;
+                }
+            }
+        else if (form == (u32)2)
+            {
+            if (n0 == (u32)2)
+                {
+                bool store = a.kind() == (u32)OP_MEM;
+                XOperand* regop = store ? b : a;
+                XOperand* rmop = store ? a : b;
+                if (regop.kind() == (u32)OP_REG)
+                    {
+                    u32 sop = op == (u32)$6F ? (u32)$7F : op + (u32)1;
+                    eEvex(map, pp, w, regop.reg(), (i32)-1, rmop, (u32)2);
+                    e8(store ? sop : op);
+                    eModRMN(regop.reg(), rmop, n);
+                    return true;
+                    }
+                }
+            }
+        else if (form == (u32)3 || form == (u32)12)
+            {
+            if (n0 == (u32)2 && a.kind() == (u32)OP_REG)
+                {
+                eEvex(map, pp, w, a.reg(), (i32)-1, b, (u32)2);
+                e8(op);
+                eModRMN(a.reg(), b, n);
+                return true;
+                }
+            }
+        else if (form == (u32)4)
+            {
+            if (n0 == (u32)3 && a.size() == (u32)XK_SIZE && b.kind() == (u32)OP_REG && c.kind() != (u32)OP_IMM)
+                {
+                eEvex(map, pp, w, a.reg(), (i32)b.reg(), c, (u32)2);
+                e8(op);
+                eModRMN(a.reg(), c, n);
+                return true;
+                }
+            }
+        else if (form == (u32)5)
+            {
+            if (n0 == (u32)4 && a.size() == (u32)XK_SIZE && b.kind() == (u32)OP_REG && dd.kind() == (u32)OP_IMM)
+                {
+                eEvex(map, pp, w, a.reg(), (i32)b.reg(), c, (u32)2);
+                e8(op);
+                eModRMN(a.reg(), c, n);
+                e8((u32)dd.imm());
+                return true;
+                }
+            }
+        else if (form == (u32)6)
+            {
+            if (n0 == (u32)2 && a.kind() == (u32)OP_REG && b.size() == (u32)XK_SIZE)
+                {
+                eEvex(map, pp, w, a.reg(), (i32)-1, b, (u32)2);
+                e8(op);
+                eModRM(a.reg(), b);
+                return true;
+                }
+            }
+        else if (form == (u32)7)
+            {
+            if (n0 == (u32)3 && a.kind() == (u32)OP_REG && c.kind() == (u32)OP_IMM)
+                {
+                eEvex(map, pp, w, n, (i32)a.reg(), b, (u32)2);
+                e8(op);
+                eModRMN(n, b, (u32)64);
+                e8((u32)c.imm());
+                return true;
+                }
+            }
+        else if (form == (u32)8)
+            {
+            if (n0 == (u32)3 && b.kind() == (u32)OP_REG && c.kind() == (u32)OP_IMM)
+                {
+                eEvex(map, pp, w, b.reg(), (i32)-1, a, (u32)2);
+                e8(op);
+                eModRMN(b.reg(), a, n);
+                e8((u32)c.imm());
+                return true;
+                }
+            }
+        else if (form == (u32)9)
+            {
+            if (n0 == (u32)3 && a.kind() == (u32)OP_REG && c.kind() == (u32)OP_IMM)
+                {
+                eEvex(map, pp, w, a.reg(), (i32)-1, b, (u32)2);
+                e8(op);
+                eModRMN(a.reg(), b, n);
+                e8((u32)c.imm());
+                return true;
+                }
+            }
+        else if (form == (u32)10)
+            {
+            if (n0 == (u32)4 && a.kind() == (u32)OP_REG && b.kind() == (u32)OP_REG && dd.kind() == (u32)OP_IMM)
+                {
+                eEvex(map, pp, w, a.reg(), (i32)b.reg(), c, (u32)2);
+                e8(op);
+                eModRMN(a.reg(), c, n);
+                e8((u32)dd.imm());
+                return true;
+                }
+            }
+        String* m = String.withCString("x86-64: '");
+        m.append(mn);
+        m.appendCString("' with these operands has no EVEX (zmm) form");
+        fail(m);
+        return true;
+        }
+
     // ── AVX/AVX2 forms that are not a three-operand SSE op ──
     // vzeroupper; two-operand moves and broadcasts; vextract{i,f}128 (the
     // source in reg, the destination in r/m); the immediate shifts (the
@@ -2105,6 +2526,8 @@ class X86Fixup
 
     void encGroupD(String* mn, XOperand* a, XOperand* b)
         {
+        if (encEvex(mn, a, b))
+            return;
         if (encAvx(mn, a, b))
             return;
         if (encVex128(mn, a))
