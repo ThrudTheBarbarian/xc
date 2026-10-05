@@ -49,6 +49,7 @@ typedef void parMsgSetBuf_t(pointer obj, pointer sel, pointer buf, u64 offset, u
 typedef void parMsgSetU_t(pointer obj, pointer sel, u64 v);
 typedef void parMsgDispatch_t(pointer obj, pointer sel, ParMTLSize* grid, ParMTLSize* group);
 typedef u8* parMsgStr_t(pointer obj, pointer sel);
+typedef double parMsgD_t(pointer obj, pointer sel);
 
 class ParMetal
     {
@@ -327,9 +328,15 @@ class ParMetal
             send0(reds[i], sel("release"));
         send0(args, sel("release"));
         send0(spanB, sel("release"));
-        // XC_PAR_REPORT=1: say where each block ran (par-blocks.md §8).
+        // XC_PAR_REPORT=1: say where each block ran (par-blocks.md §8), and
+        // how long the GPU itself spent on it.
         if (Platform.env(String.withCString("XC_PAR_REPORT")).byteLength() > (u32)0)
-            Log.info("par: %ld items on the GPU, %ld threads", n, threads);
+            {
+            double t0 = ((parMsgD_t*)_send)(cb, sel("GPUStartTime"));
+            double t1 = ((parMsgD_t*)_send)(cb, sel("GPUEndTime"));
+            i64 us = (i64)((t1 - t0) * 1000000.0);
+            Log.info("par: %ld items on the GPU, %ld threads, %ld us of GPU time", n, threads, us);
+            }
         return true;
         }
     }

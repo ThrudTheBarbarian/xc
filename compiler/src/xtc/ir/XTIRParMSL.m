@@ -36,6 +36,13 @@ typedef NS_ENUM(uint8_t, XTParSpace) {
 @property(nonatomic) NSMutableDictionary<NSString*, NSNumber*>* blockIndex;
 @property(nonatomic) NSMutableDictionary<NSNumber*, NSNumber*>* ordinal; // value -> its name's number
 @property(nonatomic) BOOL failed;
+// Structured control flow (planStructure).
+@property(nonatomic) NSArray<NSArray<NSNumber*>*>* succ;
+@property(nonatomic) NSArray<NSNumber*>* rpoIndex;
+@property(nonatomic) NSArray<NSNumber*>* fwdPreds;
+@property(nonatomic) NSMutableDictionary<NSNumber*, NSMutableIndexSet*>* loopOf;
+@property(nonatomic) NSMutableDictionary<NSNumber*, NSNumber*>* loopExit;
+@property(nonatomic) NSArray<NSNumber*>* ipdom;
 // Helpers (functions the kernel calls, transitively): printed once each, in
 // the order they finish, so a callee is always defined before its caller.
 @property(nonatomic) BOOL helperMode;
@@ -280,6 +287,17 @@ static NSString* unsignedName(XTIRType* t)
 // Assign the phis of `target` for the edge from `from`, as a parallel copy.
 - (NSString*)edgeFrom:(XTIRBlock*)from to:(XTIRBlock*)target indent:(NSString*)ind
     {
+    NSMutableString* s = [NSMutableString stringWithString:[self copiesFrom:from to:target indent:ind]];
+    [s appendFormat:@"%@pc = %lu; continue;\n", ind,
+                    (unsigned long)[self.blockIndex[target.name] unsignedIntegerValue]];
+    return s;
+    }
+
+// The phi copies for the edge from -> target, as a parallel copy in its own
+// braces (so two edges' temporaries never share a scope); "" when target has
+// no phis.
+- (NSString*)copiesFrom:(XTIRBlock*)from to:(XTIRBlock*)target indent:(NSString*)ind
+    {
     NSMutableString* s = [NSMutableString string];
     NSMutableArray<NSString*>* tmps = [NSMutableArray array];
     NSUInteger n = 0;
@@ -313,9 +331,357 @@ static NSString* unsignedName(XTIRType* t)
         }
     for (NSString* t in tmps)
         [s appendString:t];
-    [s appendFormat:@"%@pc = %lu; continue;\n", ind,
-                    (unsigned long)[self.blockIndex[target.name] unsignedIntegerValue]];
-    return s;
+    if (n == 0)
+        return @"";
+    return [NSString stringWithFormat:@"%@{\n%@%@}\n", ind, s, ind];
+    }
+
+
+// ── structured control flow ─────────────────────────────────────────────────
+// The dispatch loop is correct for any CFG, but on a GPU the threads of a
+// SIMD group that take different arms never reconverge inside it, and the
+// cases run one after another. So a kernel whose CFG is structured — loops
+// with one exit, ifs that rejoin — is printed as while/if/else instead:
+// a back edge is `continue`, the loop's exit `break`, the join of an if the
+// fall-through after it, and any other target is printed in place when this
+// edge is its only way in. A CFG that does not fit returns nil and keeps the
+// dispatch loop. Every walk here is over arrays in block order, so the port
+// reproduces it.
+
+- (NSUInteger)indexOf:(XTIRBlock*)b
+    {
+    return [self.blockIndex[b.name] unsignedIntegerValue];
+    }
+
+- (NSArray<NSNumber*>*)succsOf:(NSUInteger)u
+    {
+    XTIRInsn* t = self.fn.blocks[u].terminator;
+    NSMutableArray<NSNumber*>* out = [NSMutableArray array];
+    if (t.opcode == XTIROpBranch)
+        [out addObject:@([self indexOf:t.operands[0].blockRef])];
+    else if (t.opcode == XTIROpCondBranch)
+        {
+        [out addObject:@([self indexOf:t.operands[1].blockRef])];
+        [out addObject:@([self indexOf:t.operands[2].blockRef])];
+        }
+    return out;
+    }
+
+// Reverse postorder, loops (header -> its blocks, and its single exit),
+// forward-predecessor counts and immediate post-dominators. NO when the CFG
+// is not one this printer structures.
+- (BOOL)planStructure
+    {
+    NSUInteger n = self.fn.blocks.count;
+    NSMutableArray<NSArray<NSNumber*>*>* succ = [NSMutableArray array];
+    for (NSUInteger u = 0; u < n; u++)
+        {
+        XTIRInsn* t = self.fn.blocks[u].terminator;
+        if (t.opcode != XTIROpBranch && t.opcode != XTIROpCondBranch && t.opcode != XTIROpReturn)
+            return NO;
+        [succ addObject:[self succsOf:u]];
+        }
+    self.succ = succ;
+    // RPO by an explicit DFS in successor order.
+    NSMutableArray<NSNumber*>* rpo = [NSMutableArray array];
+    NSMutableArray<NSNumber*>* state = [NSMutableArray array]; // 0 new, 1 on stack, 2 done
+    for (NSUInteger u = 0; u < n; u++)
+        [state addObject:@0];
+    NSMutableArray<NSArray<NSNumber*>*>* stack = [NSMutableArray arrayWithObject:@[ @0, @0 ]];
+    state[0] = @1;
+    while (stack.count)
+        {
+        NSUInteger u = [stack.lastObject[0] unsignedIntegerValue];
+        NSUInteger k = [stack.lastObject[1] unsignedIntegerValue];
+        if (k < succ[u].count)
+            {
+            stack[stack.count - 1] = @[ @(u), @(k + 1) ];
+            NSUInteger v = [succ[u][k] unsignedIntegerValue];
+            if ([state[v] integerValue] == 0)
+                {
+                state[v] = @1;
+                [stack addObject:@[ @(v), @0 ]];
+                }
+            continue;
+            }
+        state[u] = @2;
+        [rpo insertObject:@(u) atIndex:0];
+        [stack removeLastObject];
+        }
+    NSMutableArray<NSNumber*>* rpoIndex = [NSMutableArray array];
+    for (NSUInteger u = 0; u < n; u++)
+        [rpoIndex addObject:@(-1)];
+    for (NSUInteger i = 0; i < rpo.count; i++)
+        rpoIndex[[rpo[i] unsignedIntegerValue]] = @(i);
+    self.rpoIndex = rpoIndex;
+    // Back edges (u -> v with v no later in RPO) name the loop headers; a
+    // header's loop is every block that reaches a back-edge source without
+    // passing the header.
+    NSMutableArray<NSNumber*>* fwdPreds = [NSMutableArray array];
+    for (NSUInteger u = 0; u < n; u++)
+        [fwdPreds addObject:@0];
+    self.loopOf = [NSMutableDictionary dictionary];
+    self.loopExit = [NSMutableDictionary dictionary];
+    for (NSUInteger u = 0; u < n; u++)
+        {
+        if ([rpoIndex[u] integerValue] < 0)
+            continue;
+        for (NSNumber* vn in succ[u])
+            {
+            NSUInteger v = vn.unsignedIntegerValue;
+            if ([rpoIndex[v] integerValue] > [rpoIndex[u] integerValue])
+                {
+                fwdPreds[v] = @([fwdPreds[v] unsignedIntegerValue] + 1);
+                continue;
+                }
+            // a back edge u -> v
+            NSMutableIndexSet* body = self.loopOf[@(v)];
+            if (!body)
+                self.loopOf[@(v)] = body = [NSMutableIndexSet indexSetWithIndex:v];
+            NSMutableArray<NSNumber*>* work = [NSMutableArray arrayWithObject:@(u)];
+            while (work.count)
+                {
+                NSUInteger w = [work.lastObject unsignedIntegerValue];
+                [work removeLastObject];
+                if ([body containsIndex:w])
+                    continue;
+                [body addIndex:w];
+                for (NSUInteger p = 0; p < n; p++)
+                    for (NSNumber* q in succ[p])
+                        if (q.unsignedIntegerValue == w && [rpoIndex[p] integerValue] >= 0)
+                            [work addObject:@(p)];
+                }
+            }
+        }
+    self.fwdPreds = fwdPreds;
+    // Each loop leaves to exactly one block.
+    for (NSNumber* h in [self.loopOf.allKeys sortedArrayUsingSelector:@selector(compare:)])
+        {
+        NSIndexSet* body = self.loopOf[h];
+        __block NSInteger exitTo = -1;
+        __block BOOL bad = NO;
+        [body enumerateIndexesUsingBlock:^(NSUInteger w, BOOL* stop) {
+            for (NSNumber* q in succ[w])
+                if (![body containsIndex:q.unsignedIntegerValue])
+                    {
+                    if (exitTo >= 0 && exitTo != (NSInteger)q.unsignedIntegerValue)
+                        bad = YES;
+                    exitTo = (NSInteger)q.unsignedIntegerValue;
+                    }
+        }];
+        if (bad || exitTo < 0)
+            return NO;
+        self.loopExit[h] = @(exitTo);
+        }
+    // Immediate post-dominators over the CFG, to a virtual exit after every
+    // Return (Cooper-Harvey-Kennedy on the reverse graph, in postorder of
+    // the reverse graph = the order blocks' RPO indices fall).
+    NSMutableArray<NSNumber*>* ipdom = [NSMutableArray array];
+    for (NSUInteger u = 0; u <= n; u++)
+        [ipdom addObject:@(-1)];
+    ipdom[n] = @(n);
+    // Process in reverse RPO (a good order for a post-dominator problem).
+    BOOL changed = YES;
+    while (changed)
+        {
+        changed = NO;
+        for (NSInteger i = (NSInteger)rpo.count - 1; i >= 0; i--)
+            {
+            NSUInteger u = [rpo[(NSUInteger)i] unsignedIntegerValue];
+            NSArray<NSNumber*>* ss = succ[u].count ? succ[u] : @[ @(n) ];
+            NSInteger best = -1;
+            for (NSNumber* sn in ss)
+                {
+                NSUInteger sv = sn.unsignedIntegerValue;
+                if ([ipdom[sv] integerValue] < 0)
+                    continue;
+                if (best < 0)
+                    best = (NSInteger)sv;
+                else
+                    best = [self pdomMeet:(NSUInteger)best with:sv ipdom:ipdom count:n];
+                }
+            if (best >= 0 && [ipdom[u] integerValue] != best)
+                {
+                ipdom[u] = @(best);
+                changed = YES;
+                }
+            }
+        }
+    self.ipdom = ipdom;
+    return YES;
+    }
+
+// The nearest common post-dominator of a and b (n is the virtual exit),
+// walking up by "post-order rank": the exit ranks highest.
+- (NSUInteger)pdomMeet:(NSUInteger)a with:(NSUInteger)b ipdom:(NSArray<NSNumber*>*)ipdom count:(NSUInteger)n
+    {
+    NSMutableIndexSet* up = [NSMutableIndexSet indexSet];
+    NSUInteger x = a;
+    for (NSUInteger guard = 0; guard <= n + 1; guard++)
+        {
+        [up addIndex:x];
+        if (x == n || [ipdom[x] integerValue] < 0)
+            break;
+        x = [ipdom[x] unsignedIntegerValue];
+        }
+    x = b;
+    for (NSUInteger guard = 0; guard <= n + 1; guard++)
+        {
+        if ([up containsIndex:x])
+            return x;
+        if (x == n || [ipdom[x] integerValue] < 0)
+            break;
+        x = [ipdom[x] unsignedIntegerValue];
+        }
+    return n;
+    }
+
+// One edge, structured: the phi copies, then continue / break / nothing /
+// the target in place. NO when the target cannot be reached this way.
+- (BOOL)jumpFrom:(NSUInteger)u to:(NSUInteger)v loop:(NSInteger)h exit:(NSInteger)e follow:(NSInteger)f
+          indent:(NSString*)ind out:(NSMutableString*)out
+    {
+    [out appendString:[self copiesFrom:self.fn.blocks[u] to:self.fn.blocks[v] indent:ind]];
+    if ((NSInteger)v == h)
+        {
+        [out appendFormat:@"%@continue;\n", ind];
+        return YES;
+        }
+    if ((NSInteger)v == e)
+        {
+        [out appendFormat:@"%@break;\n", ind];
+        return YES;
+        }
+    if ((NSInteger)v == f)
+        return YES;
+    if (self.loopOf[@(v)])
+        return [self emitLoop:v exit:e follow:f outerLoop:h indent:ind out:out];
+    if ([self.fwdPreds[v] unsignedIntegerValue] != 1)
+        return NO; // a join this edge does not own
+    return [self emitBlock:v loop:h exit:e follow:f indent:ind out:out];
+    }
+
+- (BOOL)emitLoop:(NSUInteger)x exit:(NSInteger)oe follow:(NSInteger)of outerLoop:(NSInteger)oh
+          indent:(NSString*)ind out:(NSMutableString*)out
+    {
+    if ([self.fwdPreds[x] unsignedIntegerValue] != 1)
+        return NO;
+    NSUInteger ex = [self.loopExit[@(x)] unsignedIntegerValue];
+    // The loop's exit must stay inside the enclosing loop (or be its exit or
+    // the follow), or leaving it would need a multi-level break.
+    if (oh >= 0 && ![self.loopOf[@(oh)] containsIndex:ex] && (NSInteger)ex != oe && (NSInteger)ex != of)
+        return NO;
+    [out appendFormat:@"%@while (true) {\n", ind];
+    if (![self emitBlock:x loop:(NSInteger)x exit:(NSInteger)ex follow:-1
+                  indent:[ind stringByAppendingString:@"    "] out:out])
+        return NO;
+    [out appendFormat:@"%@}\n", ind];
+    // After the loop: its exit, reached by `break`.
+    if ((NSInteger)ex == of)
+        return YES;
+    if ((NSInteger)ex == oh)
+        {
+        [out appendFormat:@"%@continue;\n", ind];
+        return YES;
+        }
+    if ((NSInteger)ex == oe)
+        {
+        [out appendFormat:@"%@break;\n", ind];
+        return YES;
+        }
+    if (self.loopOf[@(ex)])
+        return NO;
+    return [self emitBlock:ex loop:oh exit:oe follow:of indent:ind out:out];
+    }
+
+- (BOOL)emitBlock:(NSUInteger)x loop:(NSInteger)h exit:(NSInteger)e follow:(NSInteger)f
+           indent:(NSString*)ind out:(NSMutableString*)out
+    {
+    XTIRBlock* b = self.fn.blocks[x];
+    for (XTIRInsn* i in b.instructions)
+        {
+        NSString* st = [self statement:i];
+        if (!st)
+            return NO;
+        if (st.length)
+            [out appendFormat:@"%@%@\n", ind, st];
+        }
+    XTIRInsn* t = b.terminator;
+    if (t.opcode == XTIROpReturn)
+        {
+        if (self.helperMode)
+            {
+            XTIROperand* rv = t.operands.count ? t.operands[0] : nil;
+            XTIRType* rvt = (rv && rv.kind == XTIROperandKindUse) ? [self typeOf:rv.valueId] : nil;
+            if (rvt && rvt.kind != XTIRTypeKindMemory)
+                {
+                NSString* ex = [self expr:rv type:rvt];
+                if (!ex)
+                    return NO;
+                [out appendFormat:@"%@return %@;\n", ind, ex];
+                }
+            else
+                [out appendFormat:@"%@return;\n", ind];
+            return YES;
+            }
+        // The kernel's work ends: leave the do/while(false) around the body,
+        // which only works from outside any loop.
+        if (h >= 0)
+            return NO;
+        [out appendFormat:@"%@break;\n", ind];
+        return YES;
+        }
+    if (t.opcode == XTIROpBranch)
+        return [self jumpFrom:x to:[self indexOf:t.operands[0].blockRef] loop:h exit:e follow:f indent:ind out:out];
+    // CondBranch: if/else that rejoin at x's immediate post-dominator.
+    NSUInteger n = self.fn.blocks.count;
+    NSInteger j = [self.ipdom[x] integerValue];
+    if (j < 0)
+        return NO;
+    NSInteger join = (j == (NSInteger)n) ? f : j; // the virtual exit: nothing after
+    if (join >= 0 && join != h && join != e && join != f)
+        {
+        // The join is printed after the if: it must lie in this loop.
+        if (h >= 0 && ![self.loopOf[@(h)] containsIndex:(NSUInteger)join])
+            return NO;
+        }
+    NSString* c = [self expr:t.operands[0] type:nil];
+    if (!c)
+        return NO;
+    NSString* in2 = [ind stringByAppendingString:@"    "];
+    [out appendFormat:@"%@if (%@) {\n", ind, c];
+    if (![self jumpFrom:x to:[self indexOf:t.operands[1].blockRef] loop:h exit:e follow:join indent:in2 out:out])
+        return NO;
+    [out appendFormat:@"%@} else {\n", ind];
+    if (![self jumpFrom:x to:[self indexOf:t.operands[2].blockRef] loop:h exit:e follow:join indent:in2 out:out])
+        return NO;
+    [out appendFormat:@"%@}\n", ind];
+    if (join < 0 || join == f)
+        return YES;
+    if (join == h)
+        {
+        [out appendFormat:@"%@continue;\n", ind];
+        return YES;
+        }
+    if (join == e)
+        {
+        [out appendFormat:@"%@break;\n", ind];
+        return YES;
+        }
+    if (self.loopOf[@(join)])
+        return [self emitLoop:(NSUInteger)join exit:e follow:f outerLoop:h indent:ind out:out];
+    return [self emitBlock:(NSUInteger)join loop:h exit:e follow:f indent:ind out:out];
+    }
+
+// The structured body, or nil (then the dispatch loop prints it).
+- (nullable NSString*)structuredBodyIndent:(NSString*)ind
+    {
+    if (![self planStructure])
+        return nil;
+    NSMutableString* out = [NSMutableString string];
+    BOOL ok = self.loopOf[@0] ? [self emitLoop:0 exit:-1 follow:-1 outerLoop:-1 indent:ind out:out]
+                              : [self emitBlock:0 loop:-1 exit:-1 follow:-1 indent:ind out:out];
+    return (ok && !self.failed) ? out : nil;
     }
 
 - (nullable NSString*)binary:(XTIRInsn*)i
@@ -709,9 +1075,15 @@ static NSString* intrinsicFor(NSString* callee)
     NSMutableString* out = [NSMutableString string];
     [out appendFormat:@"static %@ %@(%@)\n{\n", ret, name, [params componentsJoinedByString:@", "]];
     [out appendString:decls];
-    [out appendString:@"    uint pc = 0;\n    while (pc != 0xffffffffu) {\n        switch (pc) {\n"];
-    [out appendString:body];
-    [out appendString:@"        default: pc = 0xffffffffu; continue;\n        }\n    }\n"];
+    NSString* structured = [self structuredBodyIndent:@"    "];
+    if (structured)
+        [out appendString:structured];
+    else
+        {
+        [out appendString:@"    uint pc = 0;\n    while (pc != 0xffffffffu) {\n        switch (pc) {\n"];
+        [out appendString:body];
+        [out appendString:@"        default: pc = 0xffffffffu; continue;\n        }\n    }\n"];
+        }
     if (![ret isEqualToString:@"void"])
         [out appendFormat:@"    return %@(0);\n", ret];
     [out appendString:@"}\n"];
@@ -806,9 +1178,19 @@ static NSString* intrinsicFor(NSString* callee)
     [out appendFormat:@"    *(thread long*)(st + %u) = lo;\n    *(thread long*)(st + %u) = hi;\n",
                       fl[1].byteOffset, fl[2].byteOffset];
     [out appendString:decls];
-    [out appendString:@"    uint pc = 0;\n    while (lo < hi && pc != 0xffffffffu) {\n        switch (pc) {\n"];
-    [out appendString:body];
-    [out appendString:@"        default: pc = 0xffffffffu; continue;\n        }\n    }\n"];
+    NSString* structured = [self structuredBodyIndent:@"        "];
+    if (structured)
+        {
+        [out appendString:@"    if (lo < hi) do {\n"];
+        [out appendString:structured];
+        [out appendString:@"    } while (false);\n"];
+        }
+    else
+        {
+        [out appendString:@"    uint pc = 0;\n    while (lo < hi && pc != 0xffffffffu) {\n        switch (pc) {\n"];
+        [out appendString:body];
+        [out appendString:@"        default: pc = 0xffffffffu; continue;\n        }\n    }\n"];
+        }
     [out appendString:@"    if (lo >= span[1]) return;\n"];
     [out appendString:tail];
     [out appendString:@"}\n"];

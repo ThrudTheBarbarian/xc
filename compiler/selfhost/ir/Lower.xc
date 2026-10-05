@@ -14511,6 +14511,17 @@ class ClassInfo
     // Assign the phis of `target` for the edge from `from`, as a parallel copy.
     String* mslEdge(IRBlock* from, IRBlock* target, string ind)
         {
+        String* s = mslCopies(from, target, ind);
+        s.appendCString(ind); s.appendCString("pc = ");
+        String* ci = (String*)_mBlk.get((Hashable*)target.name());
+        s.append(ci != (String*)0 ? ci : String.withCString("0"));
+        s.appendCString("; continue;\n");
+        return s;
+        }
+    // The phi copies for the edge from -> target, in their own braces (so two
+    // edges' temporaries never share a scope); "" when target has no phis.
+    String* mslCopies(IRBlock* from, IRBlock* target, string ind)
+        {
         String* s = String.withCString("");
         Array* tmps = new Array();
         u32 n = (u32)0;
@@ -14534,12 +14545,308 @@ class ClassInfo
             }
         for (u32 i = (u32)0; i < tmps.count(); i = i + (u32)1)
             s.append((String*)tmps.get(i));
-        s.appendCString(ind); s.appendCString("pc = ");
-        String* ci = (String*)_mBlk.get((Hashable*)target.name());
-        s.append(ci != (String*)0 ? ci : String.withCString("0"));
-        s.appendCString("; continue;\n");
+        if (n == (u32)0) return String.withCString("");
+        String* w = String.withCString(ind);
+        w.appendCString("{\n"); w.append(s); w.appendCString(ind); w.appendCString("}\n");
+        return w;
+        }
+
+    // ── structured control flow ─────────────────────────────────────────────
+    // The port of XTIRParMSL's: loops as while (true) with continue/break,
+    // ifs that rejoin at the immediate post-dominator; anything else keeps
+    // the dispatch loop. Same walks, same text.
+    Array* _sSucc;    // per block: Array of Number (block index)
+    Array* _sRpo;     // per block: Number i64, -1 unreachable
+    Array* _sFwd;     // per block: Number u32, forward predecessors
+    Map* _sLoop;      // header index -> Map of member indices
+    Map* _sExit;      // header index -> Number (exit block)
+    Array* _sIpdom;   // per block (+ virtual exit at n): Number i64
+    IRFunc* _sFn;
+    String* sKey(u32 x) { return String.withU32(x); }
+    u32 sIndexOf(IRBlock* b)
+        {
+        String* ci = (String*)_mBlk.get((Hashable*)b.name());
+        u32 v = (u32)0;
+        if (ci != (String*)0)
+            for (u32 i = (u32)0; i < ci.byteLength(); i = i + (u32)1)
+                v = v * (u32)10 + (u32)(ci.byteAt(i) - (u8)'0');
+        return v;
+        }
+    bool sInLoop(i64 h, u32 w)
+        {
+        if (h < (i64)0) return false;
+        Map* body = (Map*)_sLoop.get((Hashable*)sKey((u32)h));
+        return body != (Map*)0 && body.get((Hashable*)sKey(w)) != (Object*)0;
+        }
+    bool sIsHeader(u32 x) { return _sLoop.get((Hashable*)sKey(x)) != (Object*)0; }
+    i64 sRpo(u32 x) { return ((Number*)_sRpo.get(x)).asI64(); }
+    bool sPlan(IRFunc* f)
+        {
+        _sFn = f;
+        u32 n = f.blocks().count();
+        _sSucc = new Array();
+        for (u32 u = (u32)0; u < n; u = u + (u32)1)
+            {
+            IRInsn* t = ((IRBlock*)f.blocks().get(u)).term();
+            if (t == (IRInsn*)0) return false;
+            String* op = t.op();
+            Array* ss = new Array();
+            if (op.equals(String.withCString("Branch")))
+                ss.add((Object*)Number.with(sIndexOf(((IROperand*)t.ops().get((u32)0)).blk())));
+            else if (op.equals(String.withCString("CondBranch")))
+                {
+                ss.add((Object*)Number.with(sIndexOf(((IROperand*)t.ops().get((u32)1)).blk())));
+                ss.add((Object*)Number.with(sIndexOf(((IROperand*)t.ops().get((u32)2)).blk())));
+                }
+            else if (!op.equals(String.withCString("Return")))
+                return false;
+            _sSucc.add((Object*)ss);
+            }
+        // Reverse postorder by an explicit DFS in successor order.
+        Array* rpo = new Array();
+        Array* state = new Array();
+        for (u32 u = (u32)0; u < n; u = u + (u32)1) state.add((Object*)Number.with((u32)0));
+        Array* stU = new Array();
+        Array* stK = new Array();
+        stU.add((Object*)Number.with((u32)0)); stK.add((Object*)Number.with((u32)0));
+        state.set((u32)0, (Object*)Number.with((u32)1));
+        while (stU.count() > (u32)0)
+            {
+            u32 top = stU.count() - (u32)1;
+            u32 u = ((Number*)stU.get(top)).asU32();
+            u32 k = ((Number*)stK.get(top)).asU32();
+            Array* su = (Array*)_sSucc.get(u);
+            if (k < su.count())
+                {
+                stK.set(top, (Object*)Number.with(k + (u32)1));
+                u32 v = ((Number*)su.get(k)).asU32();
+                if (((Number*)state.get(v)).asU32() == (u32)0)
+                    {
+                    state.set(v, (Object*)Number.with((u32)1));
+                    stU.add((Object*)Number.with(v)); stK.add((Object*)Number.with((u32)0));
+                    }
+                continue;
+                }
+            state.set(u, (Object*)Number.with((u32)2));
+            rpo.insert((u32)0, (Object*)Number.with(u));
+            stU.removeAt(top); stK.removeAt(top);
+            }
+        _sRpo = new Array();
+        for (u32 u = (u32)0; u < n; u = u + (u32)1) _sRpo.add((Object*)Number.with((i64)-1));
+        for (u32 i = (u32)0; i < rpo.count(); i = i + (u32)1)
+            _sRpo.set(((Number*)rpo.get(i)).asU32(), (Object*)Number.with((i64)i));
+        // Back edges name the loop headers; a header's loop is every block that
+        // reaches a back-edge source without passing the header.
+        _sFwd = new Array();
+        for (u32 u = (u32)0; u < n; u = u + (u32)1) _sFwd.add((Object*)Number.with((u32)0));
+        _sLoop = new Map();
+        _sExit = new Map();
+        for (u32 u = (u32)0; u < n; u = u + (u32)1)
+            {
+            if (sRpo(u) < (i64)0) continue;
+            Array* su = (Array*)_sSucc.get(u);
+            for (u32 q = (u32)0; q < su.count(); q = q + (u32)1)
+                {
+                u32 v = ((Number*)su.get(q)).asU32();
+                if (sRpo(v) > sRpo(u))
+                    {
+                    _sFwd.set(v, (Object*)Number.with(((Number*)_sFwd.get(v)).asU32() + (u32)1));
+                    continue;
+                    }
+                Map* body = (Map*)_sLoop.get((Hashable*)sKey(v));
+                if (body == (Map*)0)
+                    {
+                    body = new Map();
+                    body.set((Hashable*)sKey(v), (Object*)sKey(v));
+                    _sLoop.set((Hashable*)sKey(v), (Object*)body);
+                    }
+                Array* work = new Array();
+                work.add((Object*)Number.with(u));
+                while (work.count() > (u32)0)
+                    {
+                    u32 w = ((Number*)work.get(work.count() - (u32)1)).asU32();
+                    work.removeAt(work.count() - (u32)1);
+                    if (body.get((Hashable*)sKey(w)) != (Object*)0) continue;
+                    body.set((Hashable*)sKey(w), (Object*)sKey(w));
+                    for (u32 p = (u32)0; p < n; p = p + (u32)1)
+                        {
+                        Array* sp = (Array*)_sSucc.get(p);
+                        for (u32 r = (u32)0; r < sp.count(); r = r + (u32)1)
+                            if (((Number*)sp.get(r)).asU32() == w && sRpo(p) >= (i64)0)
+                                work.add((Object*)Number.with(p));
+                        }
+                    }
+                }
+            }
+        // Each loop leaves to exactly one block.
+        for (u32 h = (u32)0; h < n; h = h + (u32)1)
+            {
+            if (!sIsHeader(h)) continue;
+            i64 exitTo = (i64)-1;
+            for (u32 w = (u32)0; w < n; w = w + (u32)1)
+                {
+                if (!sInLoop((i64)h, w)) continue;
+                Array* sw = (Array*)_sSucc.get(w);
+                for (u32 q = (u32)0; q < sw.count(); q = q + (u32)1)
+                    {
+                    u32 v = ((Number*)sw.get(q)).asU32();
+                    if (sInLoop((i64)h, v)) continue;
+                    if (exitTo >= (i64)0 && exitTo != (i64)v) return false;
+                    exitTo = (i64)v;
+                    }
+                }
+            if (exitTo < (i64)0) return false;
+            _sExit.set((Hashable*)sKey(h), (Object*)Number.with(exitTo));
+            }
+        // Immediate post-dominators, to a virtual exit (n) after every Return.
+        _sIpdom = new Array();
+        for (u32 u = (u32)0; u <= n; u = u + (u32)1) _sIpdom.add((Object*)Number.with((i64)-1));
+        _sIpdom.set(n, (Object*)Number.with((i64)n));
+        bool changed = true;
+        while (changed)
+            {
+            changed = false;
+            for (i64 i = (i64)rpo.count() - (i64)1; i >= (i64)0; i = i - (i64)1)
+                {
+                u32 u = ((Number*)rpo.get((u32)i)).asU32();
+                Array* su = (Array*)_sSucc.get(u);
+                Array* ss = su;
+                if (su.count() == (u32)0) { ss = new Array(); ss.add((Object*)Number.with(n)); }
+                i64 best = (i64)-1;
+                for (u32 q = (u32)0; q < ss.count(); q = q + (u32)1)
+                    {
+                    u32 sv = ((Number*)ss.get(q)).asU32();
+                    if (((Number*)_sIpdom.get(sv)).asI64() < (i64)0) continue;
+                    if (best < (i64)0) best = (i64)sv;
+                    else best = (i64)sPdomMeet((u32)best, sv, n);
+                    }
+                if (best >= (i64)0 && ((Number*)_sIpdom.get(u)).asI64() != best)
+                    {
+                    _sIpdom.set(u, (Object*)Number.with(best));
+                    changed = true;
+                    }
+                }
+            }
+        return true;
+        }
+    u32 sPdomMeet(u32 a, u32 b, u32 n)
+        {
+        Map* up = new Map();
+        u32 x = a;
+        for (u32 g = (u32)0; g <= n + (u32)1; g = g + (u32)1)
+            {
+            up.set((Hashable*)sKey(x), (Object*)sKey(x));
+            i64 nx = ((Number*)_sIpdom.get(x)).asI64();
+            if (x == n || nx < (i64)0) break;
+            x = (u32)nx;
+            }
+        x = b;
+        for (u32 g = (u32)0; g <= n + (u32)1; g = g + (u32)1)
+            {
+            if (up.get((Hashable*)sKey(x)) != (Object*)0) return x;
+            i64 nx = ((Number*)_sIpdom.get(x)).asI64();
+            if (x == n || nx < (i64)0) break;
+            x = (u32)nx;
+            }
+        return n;
+        }
+    String* sIndent(String* ind)
+        {
+        String* s = String.withString(ind);
+        s.appendCString("    ");
         return s;
         }
+    bool sJump(u32 u, u32 v, i64 h, i64 e, i64 f, String* ind, String* out)
+        {
+        out.append(mslCopies((IRBlock*)_sFn.blocks().get(u), (IRBlock*)_sFn.blocks().get(v), ind.cString()));
+        if ((i64)v == h) { out.append(ind); out.appendCString("continue;\n"); return true; }
+        if ((i64)v == e) { out.append(ind); out.appendCString("break;\n"); return true; }
+        if ((i64)v == f) return true;
+        if (sIsHeader(v)) return sEmitLoop(v, e, f, h, ind, out);
+        if (((Number*)_sFwd.get(v)).asU32() != (u32)1) return false;
+        return sEmitBlock(v, h, e, f, ind, out);
+        }
+    bool sEmitLoop(u32 x, i64 oe, i64 of, i64 oh, String* ind, String* out)
+        {
+        if (((Number*)_sFwd.get(x)).asU32() != (u32)1) return false;
+        u32 ex = (u32)((Number*)_sExit.get((Hashable*)sKey(x))).asI64();
+        if (oh >= (i64)0 && !sInLoop(oh, ex) && (i64)ex != oe && (i64)ex != of) return false;
+        out.append(ind); out.appendCString("while (true) {\n");
+        if (!sEmitBlock(x, (i64)x, (i64)ex, (i64)-1, sIndent(ind), out)) return false;
+        out.append(ind); out.appendCString("}\n");
+        if ((i64)ex == of) return true;
+        if ((i64)ex == oh) { out.append(ind); out.appendCString("continue;\n"); return true; }
+        if ((i64)ex == oe) { out.append(ind); out.appendCString("break;\n"); return true; }
+        if (sIsHeader(ex)) return false;
+        return sEmitBlock(ex, oh, oe, of, ind, out);
+        }
+    bool sEmitBlock(u32 x, i64 h, i64 e, i64 f, String* ind, String* out)
+        {
+        IRBlock* b = (IRBlock*)_sFn.blocks().get(x);
+        for (u32 i = (u32)0; i < b.insns().count(); i = i + (u32)1)
+            {
+            String* st = mslStatement((IRInsn*)b.insns().get(i));
+            if (st == (String*)0) return false;
+            if (st.byteLength() > (u32)0) { out.append(ind); out.append(st); out.appendCString("\n"); }
+            }
+        IRInsn* t = b.term();
+        if (t.op().equals(String.withCString("Return")))
+            {
+            if (_mHelper)
+                {
+                IROperand* rv = t.ops().count() > (u32)0 ? (IROperand*)t.ops().get((u32)0) : (IROperand*)0;
+                String* rvt = rv != (IROperand*)0 ? mslTypeOf(rv) : (String*)0;
+                if (rvt != (String*)0 && !rvt.equals(String.withCString("Mem")))
+                    {
+                    String* ex = mslExpr(rv, rvt);
+                    if (ex == (String*)0) return false;
+                    out.append(ind); out.appendCString("return "); out.append(ex); out.appendCString(";\n");
+                    }
+                else
+                    { out.append(ind); out.appendCString("return;\n"); }
+                return true;
+                }
+            // The kernel's work ends: leave the do/while(false) around the
+            // body, which only works from outside any loop.
+            if (h >= (i64)0) return false;
+            out.append(ind); out.appendCString("break;\n");
+            return true;
+            }
+        if (t.op().equals(String.withCString("Branch")))
+            return sJump(x, sIndexOf(((IROperand*)t.ops().get((u32)0)).blk()), h, e, f, ind, out);
+        // CondBranch: if/else that rejoin at x's immediate post-dominator.
+        u32 n = _sFn.blocks().count();
+        i64 j = ((Number*)_sIpdom.get(x)).asI64();
+        if (j < (i64)0) return false;
+        i64 join = j == (i64)n ? f : j;
+        if (join >= (i64)0 && join != h && join != e && join != f)
+            if (h >= (i64)0 && !sInLoop(h, (u32)join)) return false;
+        String* c = mslExpr((IROperand*)t.ops().get((u32)0), (String*)0);
+        if (c == (String*)0) return false;
+        String* in2 = sIndent(ind);
+        out.append(ind); out.appendCString("if ("); out.append(c); out.appendCString(") {\n");
+        if (!sJump(x, sIndexOf(((IROperand*)t.ops().get((u32)1)).blk()), h, e, join, in2, out)) return false;
+        out.append(ind); out.appendCString("} else {\n");
+        if (!sJump(x, sIndexOf(((IROperand*)t.ops().get((u32)2)).blk()), h, e, join, in2, out)) return false;
+        out.append(ind); out.appendCString("}\n");
+        if (join < (i64)0 || join == f) return true;
+        if (join == h) { out.append(ind); out.appendCString("continue;\n"); return true; }
+        if (join == e) { out.append(ind); out.appendCString("break;\n"); return true; }
+        if (sIsHeader((u32)join)) return sEmitLoop((u32)join, e, f, h, ind, out);
+        return sEmitBlock((u32)join, h, e, f, ind, out);
+        }
+    // The structured body, or 0 (then the dispatch loop prints it).
+    String* sStructured(IRFunc* f, string ind)
+        {
+        if (!sPlan(f)) return (String*)0;
+        String* out = String.withCString("");
+        String* in0 = String.withCString(ind);
+        bool ok = sIsHeader((u32)0) ? sEmitLoop((u32)0, (i64)-1, (i64)-1, (i64)-1, in0, out)
+                                    : sEmitBlock((u32)0, (i64)-1, (i64)-1, (i64)-1, in0, out);
+        if (!ok || _mFailed) return (String*)0;
+        return out;
+        }
+
     String* mslCat3(String* a, string op, String* b)
         {
         String* s = String.withString(a); s.appendCString(op); s.append(b); return s;
@@ -14924,10 +15231,13 @@ class ClassInfo
         Map* sDef = _mDef; Map* sSpace = _mSpace; Map* sBufOf = _mBufOf; Map* sOrd = _mOrd;
         Map* sBlk = _mBlk; Map* sBufs = _mBufs; Map* sReds = _mReds; IRLayout* sObj = _mObj;
         bool sFailed = _mFailed; bool sHelper = _mHelper; Map* sParams = _mParams;
+        Array* sSucc = _sSucc; Array* sRpo = _sRpo; Array* sFwd = _sFwd; Map* sLoop = _sLoop; Map* sExit = _sExit;
+        Array* sIpdom = _sIpdom; IRFunc* sFn = _sFn;
         String* out = mslHelperText(g, name);
         _mDef = sDef; _mSpace = sSpace; _mBufOf = sBufOf; _mOrd = sOrd;
         _mBlk = sBlk; _mBufs = sBufs; _mReds = sReds; _mObj = sObj;
         _mFailed = sFailed; _mHelper = sHelper; _mParams = sParams;
+        _sSucc = sSucc; _sRpo = sRpo; _sFwd = sFwd; _sLoop = sLoop; _sExit = sExit; _sIpdom = sIpdom; _sFn = sFn;
         return out;
         }
     String* mslHelperText(IRFunc* g, String* name)
@@ -14957,9 +15267,15 @@ class ClassInfo
         String* out = String.withCString("static ");
         out.append(ret); out.appendCString(" "); out.append(name); out.appendCString("("); out.append(params); out.appendCString(")\n{\n");
         out.append(decls);
-        out.appendCString("    uint pc = 0;\n    while (pc != 0xffffffffu) {\n        switch (pc) {\n");
-        out.append(body);
-        out.appendCString("        default: pc = 0xffffffffu; continue;\n        }\n    }\n");
+        String* structured = sStructured(g, "    ");
+        if (structured != (String*)0)
+            out.append(structured);
+        else
+            {
+            out.appendCString("    uint pc = 0;\n    while (pc != 0xffffffffu) {\n        switch (pc) {\n");
+            out.append(body);
+            out.appendCString("        default: pc = 0xffffffffu; continue;\n        }\n    }\n");
+            }
         if (!ret.equals(String.withCString("void")))
             { out.appendCString("    return "); out.append(ret); out.appendCString("(0);\n"); }
         out.appendCString("}\n");
@@ -15046,9 +15362,19 @@ class ClassInfo
         out.appendCString("    *(thread long*)(st + "); out.append(String.withU32(_mObj.offsetAt((u32)1))); out.appendCString(") = lo;\n");
         out.appendCString("    *(thread long*)(st + "); out.append(String.withU32(_mObj.offsetAt((u32)2))); out.appendCString(") = hi;\n");
         out.append(decls);
-        out.appendCString("    uint pc = 0;\n    while (lo < hi && pc != 0xffffffffu) {\n        switch (pc) {\n");
-        out.append(body);
-        out.appendCString("        default: pc = 0xffffffffu; continue;\n        }\n    }\n");
+        String* structured = sStructured(f, "        ");
+        if (structured != (String*)0)
+            {
+            out.appendCString("    if (lo < hi) do {\n");
+            out.append(structured);
+            out.appendCString("    } while (false);\n");
+            }
+        else
+            {
+            out.appendCString("    uint pc = 0;\n    while (lo < hi && pc != 0xffffffffu) {\n        switch (pc) {\n");
+            out.append(body);
+            out.appendCString("        default: pc = 0xffffffffu; continue;\n        }\n    }\n");
+            }
         out.appendCString("    if (lo >= span[1]) return;\n");
         out.append(tail);
         out.appendCString("}\n");
