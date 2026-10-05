@@ -309,6 +309,23 @@ class ClassInfo
         }
     }
 
+    // A `par` buffer index as k*i + c in the work item's index i (affine), or
+    // not one (an index computed from data).
+    class ParIdx
+    {
+    bool affine;
+    i64 k;
+    i64 c;
+    static ParIdx* of(bool a, i64 k0, i64 c0)
+        {
+        ParIdx* x = new ParIdx();
+        x.affine = a;
+        x.k = k0;
+        x.c = c0;
+        return x;
+        }
+    }
+
     class Lower
     {
     // The target's pointer width, as the FRONT END sees it — 3 on the banked
@@ -13833,12 +13850,269 @@ class ClassInfo
                     why = r;
                 }
             if (why == (String*)0)
-                continue;
+                {
+                // §4: the work items must not touch each other's data.
+                String* dep = parDependence(f, parIvarNames(cls));
+                if (dep == (String*)0)
+                    continue;
+                String* m2 = String.withCString("a 'par' block's work items must be independent, but this one ");
+                m2.append(dep);
+                giveUpAt(m2, (Node*)_classDecls.get((Hashable*)cls));
+                return;
+                }
             String* msg = String.withCString("a 'par' block must be able to run on a GPU, but this one ");
             msg.append(why);
             giveUpAt(msg, (Node*)_classDecls.get((Hashable*)cls));
             return;
             }
+        }
+
+    // The block class's ivars in field order (its parents' first), so field #k
+    // of the object is name k-1: field 0 is the object header.
+    Array* parIvarNames(String* cls)
+        {
+        Array* chain = new Array();
+        Node* d = (Node*)_classDecls.get((Hashable*)cls);
+        for (u32 depth = (u32)0; d != (Node*)0 && depth < (u32)16; depth = depth + (u32)1)
+            {
+            chain.insert((u32)0, (Object*)d);
+            String* pn = d.op();
+            if (pn == (String*)0 || pn.byteLength() == (u32)0 || pn.equals(d.name()))
+                break;
+            d = (Node*)_classDecls.get((Hashable*)pn);
+            }
+        Array* names = new Array();
+        for (u32 i = (u32)0; i < chain.count(); i = i + (u32)1)
+            {
+            Node* c = (Node*)chain.get(i);
+            for (u32 j = (u32)0; j < c.kids().count(); j = j + (u32)1)
+                {
+                Node* v = c.kid(j);
+                if (v.kind() == (u16)nkVariableDecl)
+                    names.add((Object*)v.name());
+                }
+            }
+        return names;
+        }
+
+    // An index as k*i + c in the work item's index i, when it is one.
+    ParIdx* parIndex(IROperand* op, IRValue* iv, Map* def, u32 depth)
+        {
+        if (depth > (u32)32)
+            return ParIdx.of(false, (i64)0, (i64)0);
+        if (op.kind() == (u8)OPK_IMMI)
+            return ParIdx.of(true, (i64)0, op.imm());
+        if (op.kind() != (u8)OPK_USE)
+            return ParIdx.of(false, (i64)0, (i64)0);
+        if (op.val() != (IRValue*)0 && op.val().seq() == iv.seq())
+            return ParIdx.of(true, (i64)1, (i64)0);
+        IRInsn* d = (IRInsn*)def.get((Hashable*)String.withU32(op.val().seq()));
+        if (d == (IRInsn*)0 || d.ops().count() == (u32)0)
+            return ParIdx.of(false, (i64)0, (i64)0);
+        String* o = d.op();
+        IROperand* o0 = (IROperand*)d.ops().get((u32)0);
+        if (o.equals(String.withCString("Const")))
+            {
+            if (o0.kind() == (u8)OPK_IMMI)
+                return ParIdx.of(true, (i64)0, o0.imm());
+            return ParIdx.of(false, (i64)0, (i64)0);
+            }
+        if (o.equals(String.withCString("ZExt")) || o.equals(String.withCString("SExt")) || o.equals(String.withCString("Trunc")) || o.equals(String.withCString("Copy")))
+            return parIndex(o0, iv, def, depth + (u32)1);
+        bool isAdd = o.equals(String.withCString("Add"));
+        bool isSub = o.equals(String.withCString("Sub"));
+        bool isMul = o.equals(String.withCString("Mul"));
+        if ((!isAdd && !isSub && !isMul) || d.ops().count() < (u32)2)
+            return ParIdx.of(false, (i64)0, (i64)0);
+        ParIdx* x = parIndex(o0, iv, def, depth + (u32)1);
+        ParIdx* y = parIndex((IROperand*)d.ops().get((u32)1), iv, def, depth + (u32)1);
+        bool aa = x.affine; i64 ak = x.k; i64 ac = x.c;
+        bool ba = y.affine; i64 bk = y.k; i64 bc = y.c;
+        if (!aa || !ba)
+            return ParIdx.of(false, (i64)0, (i64)0);
+        if (isAdd)
+            return ParIdx.of(true, ak + bk, ac + bc);
+        if (isSub)
+            return ParIdx.of(true, ak - bk, ac - bc);
+        if (ak == (i64)0)
+            return ParIdx.of(true, ac * bk, ac * bc);
+        if (bk == (i64)0)
+            return ParIdx.of(true, bc * ak, bc * ac);
+        return ParIdx.of(false, (i64)0, (i64)0);
+        }
+
+    String* parShownIndex(bool affine, i64 k, i64 c)
+        {
+        if (!affine)
+            return String.withCString("an index computed from data");
+        String* s = String.withCString("[");
+        if (k == (i64)1)
+            s.appendCString("i");
+        else if (k != (i64)0)
+            {
+            s.append(String.withI64(k));
+            s.appendCString("*i");
+            }
+        if (k == (i64)0)
+            s.append(String.withI64(c));
+        else if (c > (i64)0)
+            {
+            s.appendCString(" + ");
+            s.append(String.withI64(c));
+            }
+        else if (c < (i64)0)
+            {
+            s.appendCString(" - ");
+            s.append(String.withI64((i64)0 - c));
+            }
+        s.appendCString("]");
+        return s;
+        }
+
+    // The buffer an address indexes into, by name, or 0 when it is not one: a
+    // captured array is a pointer ivar of the block's object, a global array
+    // its symbol.
+    String* parBufferOf(IROperand* base, IRValue* selfVal, Array* ivars, Map* def)
+        {
+        if (base.kind() != (u8)OPK_USE)
+            return (String*)0;
+        IRInsn* d = (IRInsn*)def.get((Hashable*)String.withU32(base.val().seq()));
+        if (d == (IRInsn*)0 || d.ops().count() == (u32)0)
+            return (String*)0;
+        IROperand* o0 = (IROperand*)d.ops().get((u32)0);
+        if (d.op().equals(String.withCString("AddrOf")) && o0.kind() == (u8)OPK_SYM)
+            {
+            IRSymbol* s = (IRSymbol*)_parSyms.get((Hashable*)o0.name());
+            if (s != (IRSymbol*)0 && s.kind() == (u8)SYM_DATAGLOBAL)
+                return o0.name();
+            return (String*)0;
+            }
+        if (!d.op().equals(String.withCString("Load")) || o0.kind() != (u8)OPK_USE)
+            return (String*)0;
+        IRInsn* fa = (IRInsn*)def.get((Hashable*)String.withU32(o0.val().seq()));
+        if (fa == (IRInsn*)0 || !fa.op().equals(String.withCString("FieldAddr")) || fa.ops().count() < (u32)2)
+            return (String*)0;
+        IROperand* f0 = (IROperand*)fa.ops().get((u32)0);
+        IROperand* f1 = (IROperand*)fa.ops().get((u32)1);
+        // `self`: the body refers to its first parameter through a value it
+        // does not define (the parameters are made again for the body, so
+        // params()[0] is not the same object).
+        if (f0.kind() != (u8)OPK_USE || f0.val() == (IRValue*)0 || def.get((Hashable*)String.withU32(f0.val().seq())) != (Object*)0 || f1.kind() != (u8)OPK_IMMI)
+            return (String*)0;
+        i64 k = f1.imm();
+        if (k < (i64)1 || k > (i64)ivars.count())
+            return (String*)0;
+        return (String*)ivars.get((u32)(k - (i64)1));
+        }
+
+    // §4: a read of a buffer the block also writes must be at the element
+    // this work item writes. `b[i] = b[i - 1] + …` reads another item's
+    // result: that is a scan, not a par. Returns the complaint, or 0.
+    String* parDependence(IRFunc* f, Array* ivars)
+        {
+        Map* def = new Map();
+        IRValue* iv = (IRValue*)0;
+        for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)f.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.phis().count(); i = i + (u32)1)
+                {
+                IRInsn* ph = (IRInsn*)bb.phis().get(i);
+                if (ph.res() == (IRValue*)0)
+                    continue;
+                def.set((Hashable*)String.withU32(ph.res().seq()), (Object*)ph);
+                if (iv == (IRValue*)0)
+                    iv = ph.res(); // the outer loop's counter: the first phi
+                }
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* ip = (IRInsn*)bb.insns().get(i);
+                if (ip.res() != (IRValue*)0)
+                    def.set((Hashable*)String.withU32(ip.res().seq()), (Object*)ip);
+                }
+            }
+        if (iv == (IRValue*)0 || f.params().count() == (u32)0)
+            return (String*)0;
+        IRValue* selfVal = (IRValue*)f.params().get((u32)0);
+        Stdio.error(String.withU32(ivars.count()));
+        Stdio.error(String.withCString("\n"));
+        Map* writes = new Map();        // buffer -> Array of "affine k c" strings
+        Map* wShown = new Map();        // buffer -> its first write's index, as shown
+        Array* reads = new Array();     // [buffer, form, shown]
+        for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)f.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* ip = (IRInsn*)bb.insns().get(i);
+                String* op = ip.op();
+                bool isStore = op.equals(String.withCString("Store")) || op.equals(String.withCString("StoreVolatile"));
+                bool isLoad = op.equals(String.withCString("Load")) || op.equals(String.withCString("LoadVolatile"));
+                if ((!isStore && !isLoad) || ip.ops().count() == (u32)0)
+                    continue;
+                IROperand* a0 = (IROperand*)ip.ops().get((u32)0);
+                if (a0.kind() != (u8)OPK_USE)
+                    continue;
+                IRInsn* ea = (IRInsn*)def.get((Hashable*)String.withU32(a0.val().seq()));
+                if (ea == (IRInsn*)0 || !ea.op().equals(String.withCString("ElementAddr")) || ea.ops().count() < (u32)2)
+                    continue;
+                String* buf = parBufferOf((IROperand*)ea.ops().get((u32)0), selfVal, ivars, def);
+                if (buf == (String*)0)
+                    continue;
+                ParIdx* px = parIndex((IROperand*)ea.ops().get((u32)1), iv, def, (u32)0);
+                bool af = px.affine; i64 k = px.k; i64 c = px.c;
+                String* form = String.withCString(af ? "1 " : "0 ");
+                form.append(String.withI64(af ? k : (i64)0));
+                form.appendCString(" ");
+                form.append(String.withI64(af ? c : (i64)0));
+                String* shown = parShownIndex(af, k, c);
+                if (isStore)
+                    {
+                    Array* ws = (Array*)writes.get((Hashable*)buf);
+                    if (ws == (Array*)0)
+                        {
+                        ws = new Array();
+                        writes.set((Hashable*)buf, (Object*)ws);
+                        wShown.set((Hashable*)buf, (Object*)shown);
+                        }
+                    ws.add((Object*)form);
+                    }
+                else
+                    {
+                    Array* r = new Array();
+                    r.add((Object*)buf);
+                    r.add((Object*)form);
+                    r.add((Object*)shown);
+                    reads.add((Object*)r);
+                    }
+                }
+            }
+        for (u32 i = (u32)0; i < reads.count(); i = i + (u32)1)
+            {
+            Array* r = (Array*)reads.get(i);
+            String* buf = (String*)r.get((u32)0);
+            String* form = (String*)r.get((u32)1);
+            Array* ws = (Array*)writes.get((Hashable*)buf);
+            if (ws == (Array*)0 || ws.count() == (u32)0)
+                continue;
+            bool same = false;
+            if (form.hasPrefix(String.withCString("1 ")))
+                for (u32 j = (u32)0; j < ws.count(); j = j + (u32)1)
+                    if (((String*)ws.get(j)).equals(form))
+                        same = true;
+            if (same)
+                continue;
+            String* name = parShown(buf);
+            String* out = String.withCString("reads ");
+            out.append(name);
+            out.append((String*)r.get((u32)2));
+            out.appendCString(" while writing ");
+            out.append(name);
+            out.append((String*)wShown.get((Hashable*)buf));
+            out.appendCString(", so an item would read another item's result; that is a scan, not a par");
+            return out;
+            }
+        return (String*)0;
         }
 
     bool parReleases(IRFunc* f)

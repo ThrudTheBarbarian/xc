@@ -97,6 +97,23 @@ follow the same rules; and the maths that GPUs have natively, such as
 | writing a global scalar | every work item would race on it; use a reduction, or write an array |
 | inline assembly | it is for one CPU |
 
+## Independent work items
+
+Work items may run in any order and at the same time, so none may read what
+another writes. A body may read and rewrite its own element of a buffer
+(`b[i] = b[i] + a[i]`), use a fixed offset consistently (`b[i + 1]`, written
+and read back), and read freely from buffers it does not write, including
+through an index table (`a[i] = g[idx[i]]`).
+
+Reading a buffer the block also writes, at another item's element, is refused:
+
+```c
+par { for (u32 i in 1..n) { b[i] = a[i] + b[i - 1]; } }   // error: a scan, not a par
+```
+
+Each `b[i - 1]` is another item's result, which may not have been computed yet.
+That loop is a scan (a running sum); write it as an ordinary `for` loop.
+
 ## Errors in the shape
 
 | The compiler refuses | Because |

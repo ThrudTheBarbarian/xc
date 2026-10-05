@@ -99,15 +99,221 @@ static NSString* shownName(NSString* irName)
             if (r.length)
                 why = r;
             }
-        if (!why)
-            continue;
-        ok = NO;
         XTClassDeclNode* decl = classDecls[cls];
+        if (!why)
+            {
+            // §4: the work items must not touch each other's data.
+            NSString* dep = [c dependenceIn:f ivarNames:[c ivarNamesOf:decl in:classDecls]];
+            if (!dep)
+                continue;
+            ok = NO;
+            [diag emitError:[NSString stringWithFormat:@"a 'par' block's work items must be independent, "
+                                                       @"but this one %@", dep]
+                         at:decl.location];
+            continue;
+            }
+        ok = NO;
         NSString* msg = [NSString stringWithFormat:@"a 'par' block must be able to run on a GPU, "
                                                    @"but this one %@", why];
         [diag emitError:msg at:decl.location];
         }
     return ok;
+    }
+
+// The block class's ivars in field order (its parents' first), so field #k of
+// the object is name k-1: field 0 is the object header.
+- (NSArray<NSString*>*)ivarNamesOf:(XTClassDeclNode*)decl
+                                in:(NSDictionary<NSString*, XTClassDeclNode*>*)classDecls
+    {
+    NSMutableArray<XTClassDeclNode*>* chain = [NSMutableArray array];
+    for (XTClassDeclNode* d = decl; d; d = d.parentName ? classDecls[d.parentName] : nil)
+        [chain insertObject:d atIndex:0];
+    NSMutableArray<NSString*>* names = [NSMutableArray array];
+    for (XTClassDeclNode* d in chain)
+        for (XTVariableDeclNode* v in d.ivars)
+            [names addObject:v.varName];
+    return names;
+    }
+
+// A buffer access's address, `ElementAddr base, index`, split into the buffer
+// (a captured array is a pointer ivar of the block's object; a global array is
+// its symbol) and the index as k*i + c in the work item's index i.
+typedef struct
+    {
+    BOOL affine;
+    int64_t k, c;
+    } XTParIndex;
+
+- (XTParIndex)indexOf:(XTIROperand*)op iv:(XTIRValueId)iv defs:(NSDictionary<NSNumber*, XTIRInsn*>*)def depth:(int)depth
+    {
+    XTParIndex no = { NO, 0, 0 };
+    if (depth > 32)
+        return no;
+    if (op.kind == XTIROperandKindImmI)
+        return (XTParIndex){ YES, 0, op.intValue };
+    if (op.kind != XTIROperandKindUse)
+        return no;
+    if (op.valueId == iv)
+        return (XTParIndex){ YES, 1, 0 };
+    XTIRInsn* d = def[@(op.valueId)];
+    if (!d)
+        return no;
+    switch (d.opcode)
+        {
+        case XTIROpConst:
+            return d.operands.count && d.operands[0].kind == XTIROperandKindImmI
+                       ? (XTParIndex){ YES, 0, d.operands[0].intValue }
+                       : no;
+        case XTIROpZExt:
+        case XTIROpSExt:
+        case XTIROpTrunc:
+        case XTIROpCopy:
+            return d.operands.count ? [self indexOf:d.operands[0] iv:iv defs:def depth:depth + 1] : no;
+        case XTIROpAdd:
+        case XTIROpSub:
+        case XTIROpMul:
+            {
+            if (d.operands.count < 2)
+                return no;
+            XTParIndex a = [self indexOf:d.operands[0] iv:iv defs:def depth:depth + 1];
+            XTParIndex b = [self indexOf:d.operands[1] iv:iv defs:def depth:depth + 1];
+            if (!a.affine || !b.affine)
+                return no;
+            if (d.opcode == XTIROpAdd)
+                return (XTParIndex){ YES, a.k + b.k, a.c + b.c };
+            if (d.opcode == XTIROpSub)
+                return (XTParIndex){ YES, a.k - b.k, a.c - b.c };
+            if (a.k == 0)
+                return (XTParIndex){ YES, a.c * b.k, a.c * b.c };
+            if (b.k == 0)
+                return (XTParIndex){ YES, b.c * a.k, b.c * a.c };
+            return no;
+            }
+        default:
+            return no;
+        }
+    }
+
+static NSString* shownIndex(XTParIndex x)
+    {
+    if (!x.affine)
+        return @"an index computed from data";
+    NSMutableString* s = [NSMutableString string];
+    if (x.k == 1)
+        [s appendString:@"i"];
+    else if (x.k != 0)
+        [s appendFormat:@"%lld*i", (long long)x.k];
+    if (x.k == 0)
+        [s appendFormat:@"%lld", (long long)x.c];
+    else if (x.c > 0)
+        [s appendFormat:@" + %lld", (long long)x.c];
+    else if (x.c < 0)
+        [s appendFormat:@" - %lld", (long long)-x.c];
+    return [NSString stringWithFormat:@"[%@]", s];
+    }
+
+// The buffer an address indexes into, by name, or nil when it is not one.
+- (nullable NSString*)bufferOf:(XTIROperand*)base self:(XTIRValueId)selfId ivars:(NSArray<NSString*>*)ivars
+                          defs:(NSDictionary<NSNumber*, XTIRInsn*>*)def
+    {
+    if (base.kind != XTIROperandKindUse)
+        return nil;
+    XTIRInsn* d = def[@(base.valueId)];
+    if (d.opcode == XTIROpAddrOf && d.operands.count && d.operands[0].kind == XTIROperandKindSym)
+        {
+        XTIRSymbol* s = [self.module symbolForId:d.operands[0].symbolId];
+        return s.kind == XTIRSymbolKindDataGlobal ? s.name : nil;
+        }
+    if (d.opcode != XTIROpLoad || !d.operands.count || d.operands[0].kind != XTIROperandKindUse)
+        return nil;
+    XTIRInsn* fa = def[@(d.operands[0].valueId)];
+    if (fa.opcode != XTIROpFieldAddr || fa.operands.count < 2 || fa.operands[0].kind != XTIROperandKindUse ||
+        fa.operands[0].valueId != selfId || fa.operands[1].kind != XTIROperandKindImmI)
+        return nil;
+    int64_t k = fa.operands[1].intValue;
+    return (k >= 1 && (NSUInteger)k <= ivars.count) ? ivars[(NSUInteger)k - 1] : nil;
+    }
+
+// §4: a read of a buffer the block also writes must be at the element this
+// work item writes. `b[i] = b[i - 1] + …` reads another item's result: that
+// is a scan, not a par. Returns the complaint, or nil.
+- (nullable NSString*)dependenceIn:(XTIRFunction*)f ivarNames:(NSArray<NSString*>*)ivars
+    {
+    NSMutableDictionary<NSNumber*, XTIRInsn*>* def = [NSMutableDictionary dictionary];
+    XTIRValueId iv = 0;
+    BOOL haveIV = NO;
+    for (XTIRBlock* b in f.blocks)
+        {
+        for (XTIRInsn* i in b.phiNodes)
+            {
+            if (!i.result)
+                continue;
+            def[@(i.result.valueId)] = i;
+            if (!haveIV)
+                {
+                iv = i.result.valueId; // the outer loop's counter: the first phi
+                haveIV = YES;
+                }
+            }
+        for (XTIRInsn* i in b.instructions)
+            if (i.result)
+                def[@(i.result.valueId)] = i;
+        }
+    if (!haveIV || f.paramTypes.count == 0)
+        return nil;
+    XTIRValueId selfId = (XTIRValueId)0; // parameter n is value n; self is the first
+    NSMutableDictionary<NSString*, NSMutableArray<NSValue*>*>* writes = [NSMutableDictionary dictionary];
+    NSMutableArray<NSArray*>* reads = [NSMutableArray array]; // [buffer, NSValue(index)]
+    for (XTIRBlock* b in f.blocks)
+        {
+        for (XTIRInsn* i in b.instructions)
+            {
+            BOOL isStore = (i.opcode == XTIROpStore || i.opcode == XTIROpStoreVolatile);
+            BOOL isLoad = (i.opcode == XTIROpLoad || i.opcode == XTIROpLoadVolatile);
+            if ((!isStore && !isLoad) || !i.operands.count || i.operands[0].kind != XTIROperandKindUse)
+                continue;
+            XTIRInsn* ea = def[@(i.operands[0].valueId)];
+            if (ea.opcode != XTIROpElementAddr || ea.operands.count < 2)
+                continue;
+            NSString* buf = [self bufferOf:ea.operands[0] self:selfId ivars:ivars defs:def];
+            if (!buf)
+                continue;
+            XTParIndex x = [self indexOf:ea.operands[1] iv:iv defs:def depth:0];
+            NSValue* xv = [NSValue valueWithBytes:&x objCType:@encode(XTParIndex)];
+            if (isStore)
+                {
+                if (!writes[buf])
+                    writes[buf] = [NSMutableArray array];
+                [writes[buf] addObject:xv];
+                }
+            else
+                [reads addObject:@[ buf, xv ]];
+            }
+        }
+    for (NSArray* r in reads)
+        {
+        NSArray<NSValue*>* ws = writes[r[0]];
+        if (!ws.count)
+            continue;
+        XTParIndex rx;
+        [(NSValue*)r[1] getValue:&rx];
+        XTParIndex wx = { NO, 0, 0 };
+        BOOL same = NO;
+        for (NSValue* wv in ws)
+            {
+            [wv getValue:&wx];
+            if (rx.affine && wx.affine && rx.k == wx.k && rx.c == wx.c)
+                same = YES;
+            }
+        if (same)
+            continue;
+        [ws[0] getValue:&wx];
+        NSString* name = shownName(r[0]);
+        return [NSString stringWithFormat:@"reads %@%@ while writing %@%@, so an item would read another "
+                                          @"item's result; that is a scan, not a par",
+                                          name, shownIndex(rx), name, shownIndex(wx)];
+        }
+    return nil;
     }
 
 - (BOOL)releasesSomething:(XTIRFunction*)f
