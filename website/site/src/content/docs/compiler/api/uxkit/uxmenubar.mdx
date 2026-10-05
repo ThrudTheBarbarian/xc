@@ -38,7 +38,7 @@ void onOpen(UXMenuItem* sender) { ... }
 ## Topics
 
 **Building** · [addMenu](#addmenu) · [install](#install)
-**Selections** · [handleSelection](#handleselection)
+**Selections** · [handleSelection](#handleselection) · [performShortcut](#performshortcut)
 **Live state** · [setChecked](#setchecked) · [setEnabled](#setenabled)
 
 ### addMenu
@@ -69,6 +69,18 @@ The selection decoder the run loop calls with the platform's message
 (GEM's `MN_SELECTED` shape). It resolves the ordinals and fires the
 item's action. Separators never fire, and stale indices fire nothing.
 App code never calls this directly.
+
+### performShortcut
+
+```c
+bool performShortcut(UXEvent* ev)
+```
+
+Offers a key press to the menus. If it is an enabled item's
+[shortcut](/compiler/api/uxkit/uxmenuitem/#keyboard-shortcuts), the item
+fires and the result is true. [`UXApplication`](/compiler/api/uxkit/uxapplication/)
+calls it for every key before the key window gets the key, on the backends
+whose menus do not handle their own shortcuts (Win32 and GEM). From 0.67.
 
 ### setChecked
 

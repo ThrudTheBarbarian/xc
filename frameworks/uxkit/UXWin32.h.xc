@@ -83,6 +83,7 @@ u32 MsgWaitForMultipleObjects(u32 count, pointer handles, i32 waitAll, u32 ms, u
 #define WAIT_TIMEOUT $102
 #define QS_ALLINPUT $04FF
 i32 TranslateMessage(pointer msg);
+i16 GetKeyState(i32 vk); // high bit: the key is down
 pointer DispatchMessageA(pointer msg);
 pointer SetWindowLongPtrA(pointer hwnd, i32 idx, pointer v);
 pointer GetWindowLongPtrA(pointer hwnd, i32 idx);

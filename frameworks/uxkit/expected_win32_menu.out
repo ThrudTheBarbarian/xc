@@ -1,5 +1,7 @@
 menu installed: yes
+cut shows its shortcut: 1
 action: Open
 action: Cut
-last-fired=4
-PASS: WM_COMMAND -> neutral MenuSelect -> bound method
+action: Cut
+last-fired=4 cuts=2
+PASS: WM_COMMAND -> neutral MenuSelect -> bound method; Ctrl+X fires its item

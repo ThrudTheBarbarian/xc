@@ -16,6 +16,8 @@ extern void ux_gtk_menu_test_activate(i32 t, i32 j);
 extern i32 ux_gtk_menu_test_state(i32 t, i32 j);
 extern i32 ux_gtk_menu_test_titles(i32 h);
 extern void ux_gtk_wait_allocated(i32 handle);
+extern i32 ux_gtk_menu_test_accel(i32 t, i32 j, u8* buf, i32 cap);
+extern i32 ux_gtk_menu_test_shortcuts(i32 h, i32 fire);
 
 i32 gFails = 0;
 void ck(bool ok, u8* what, i32 v)
@@ -29,11 +31,24 @@ void ck(bool ok, u8* what, i32 v)
 i32 gNew;
 i32 gQuit;
 i32 gGrid;
+i32 gUndo;
+i32 gRedo;
+bool streq(u8* a, u8* b)
+    {
+    i32 i = (i32)0;
+    while (a[i] != (u8)0 && a[i] == b[i])
+        {
+        i = i + (i32)1;
+        }
+    return a[i] == b[i];
+    }
 class Ctl : Object
     {
     void onNew(UXMenuItem* s) { gNew = gNew + (i32)1; }
     void onQuit(UXMenuItem* s) { gQuit = gQuit + (i32)1; }
     void onGrid(UXMenuItem* s) { gGrid = gGrid + (i32)1; }
+    void onUndo(UXMenuItem* s) { gUndo = gUndo + (i32)1; }
+    void onRedo(UXMenuItem* s) { gRedo = gRedo + (i32)1; }
     }
 
 void main(void)
@@ -62,11 +77,23 @@ void main(void)
     UXMenuItem* grid = view.addItem((u8*)"Grid", &c.onGrid);
     grid.checked = true;
     view.addItem((u8*)"Rulers", &c.onGrid);
+    UXMenu* edit = bar.addMenu((u8*)"Edit");
+    edit.addItem((u8*)"Undo", &c.onUndo).setShortcut((u8)'Z', false);
+    edit.addItem((u8*)"Redo", &c.onRedo).setShortcut((u8)'Z', true);
     app.setMenuBar(bar);
     win.displayAll();
     ux_gtk_wait_allocated(win.handle);
 
-    ck(ux_gtk_menu_test_titles(win.handle) == (i32)2, "the window shows a menu bar with the two titles", ux_gtk_menu_test_titles(win.handle));
+    ck(ux_gtk_menu_test_titles(win.handle) == (i32)3, "the window shows a menu bar with the three titles", ux_gtk_menu_test_titles(win.handle));
+    u8 acc[32];
+    ck(ux_gtk_menu_test_accel((i32)2, (i32)0, &acc[(i32)0], (i32)32) == (i32)1 && streq(&acc[(i32)0], (u8*)"<Control>z"),
+       "Edit > Undo shows <Control>z", (i32)acc[(i32)0]);
+    ck(ux_gtk_menu_test_accel((i32)2, (i32)1, &acc[(i32)0], (i32)32) == (i32)1 && streq(&acc[(i32)0], (u8*)"<Control><Shift>z"),
+       "Edit > Redo shows <Control><Shift>z", (i32)acc[(i32)0]);
+    ck(ux_gtk_menu_test_accel((i32)0, (i32)0, &acc[(i32)0], (i32)32) == (i32)0, "File > New has none", (i32)0);
+    ck(ux_gtk_menu_test_shortcuts(win.handle, (i32)-1) == (i32)2, "the window holds both shortcuts", ux_gtk_menu_test_shortcuts(win.handle, (i32)-1));
+    ux_gtk_menu_test_shortcuts(win.handle, (i32)1);
+    ck(gRedo == (i32)1 && gUndo == (i32)0, "the Redo shortcut fires Redo", gRedo * (i32)10 + gUndo);
     ux_gtk_menu_test_activate((i32)0, (i32)0);
     ck(gNew == (i32)1, "picking File > New fires its action", gNew);
     ux_gtk_menu_test_activate((i32)0, (i32)2);
@@ -89,7 +116,7 @@ void main(void)
     late.open((u8*)"Later", UXGeom.make((i16)360, (i16)80, (i16)200, (i16)100), new UXView());
     app.addWindow(late);
     late.displayAll();
-    ck(ux_gtk_menu_test_titles(late.handle) == (i32)2, "a window opened afterwards has the bar too", ux_gtk_menu_test_titles(late.handle));
+    ck(ux_gtk_menu_test_titles(late.handle) == (i32)3, "a window opened afterwards has the bar too", ux_gtk_menu_test_titles(late.handle));
     if (gFails == (i32)0)
         {
         Stdio.printf("PASS: GTK menus -- a native menu bar, picks, ticks, greying, every window\n");

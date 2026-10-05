@@ -1,6 +1,6 @@
 ---
 title: UXMenuItem
-description: "One entry of a UXMenu: title, enabled/checked state, and the weak bound-method action a selection fires."
+description: "One entry of a UXMenu: title, enabled/checked state, a keyboard shortcut, and the weak bound-method action a selection fires."
 ---
 
 `UXMenuItem` is one entry of a [`UXMenu`](/compiler/api/uxkit/uxmenu/):
@@ -9,6 +9,28 @@ the `title`, the `enabled` and `checked` state, `isSeparator`, and the
 Change live state through the bar's `setChecked` / `setEnabled` so the
 platform menu stays in step; the fields only describe the state at install
 time.
+
+## Keyboard shortcuts
+
+From 0.67 an item can have a shortcut:
+
+```c
+edit.addItem((u8*)"Undo", &self.onUndo).setShortcut((u8)'Z', false);
+edit.addItem((u8*)"Redo", &self.onRedo).setShortcut((u8)'Z', true);   // with Shift
+```
+
+The key is pressed with the platform's command key: Command on macOS and iOS,
+Control elsewhere. Each backend shows the shortcut the way its own menus do and
+fires the item when it is pressed:
+
+| backend | shown as | handled by |
+| --- | --- | --- |
+| AppKit | ⌘Z, ⇧⌘Z | the menu's key equivalent |
+| GTK | Ctrl+Z | a shortcut controller on each window |
+| Win32 | Ctrl+Z, right-aligned | [`UXMenuBar.performShortcut`](/compiler/api/uxkit/uxmenubar/#performshortcut) |
+| web | ⌘Z on a Mac, Ctrl+Z elsewhere | the page |
+| GEM | `^Z` in the item's text | `UXMenuBar.performShortcut` |
+| iOS, Android | not shown | not handled |
 
 ## Topics
 
@@ -21,6 +43,16 @@ void setAction(callback a void(UXMenuItem* sender))
 The callback a selection fires. A callback never owns its
 controller. The handler receives the item, so one method can serve
 several entries.
+
+### setShortcut
+
+```c
+UXMenuItem* setShortcut(u8 k, bool shift)
+```
+
+Gives the item a shortcut: the command key with `k`, and Shift as well when
+`shift`. A letter is stored in upper case. Returns the item, so it can follow
+`addItem` on the same line. Set it before the bar is installed.
 
 ### fire
 
@@ -37,6 +69,7 @@ app code rarely does.
 u8* encoded(void)
 ```
 
-The GEM wire form: `"-"` for a separator, a marker byte for pre-ticked or
-greyed items, the plain title otherwise. Driver plumbing, public for the
-GEM realization.
+The driver form: `"-"` for a separator, a marker byte for pre-ticked or
+greyed items, then the title and, after a tab, the shortcut (`"Undo\tZ"`,
+`"Redo\t+Z"`). [`UXMenuKey`](/compiler/api/uxkit/uxmenukey/) reads it back.
+Driver plumbing.

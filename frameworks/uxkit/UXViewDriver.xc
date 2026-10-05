@@ -73,6 +73,93 @@ enum UXKind = {UXKindBox = 0, UXKindView = 1, UXKindButton = 2, UXKindField = 3,
 // separator, \x01/\x02 a check/disable prefix), and how many.  menuBuild takes an array of
 // these.  Layout matches GEM's menu_def (const char*, const char**, int) so the GEM driver
 // reads the same bytes; a Win32/AppKit driver walks the same array to build its native menu.
+// A menu item's shortcut, as UXMenuItem.encoded writes it after the title: a tab, "+" when it
+// needs Shift, then the key ("Undo\tZ", "Redo\t+Z").  The command key is implied: Command on
+// macOS and iOS, Control elsewhere.  Each driver shows it its own way and strips it from the
+// title.
+class UXMenuKey
+    {
+    // where the shortcut starts (the tab), or -1
+    static i32 tabAt(u8* s)
+        {
+        for (i32 i = (i32)0; s[i] != (u8)0; i = i + (i32)1)
+            {
+            if (s[i] == (u8)9)
+                {
+                return i;
+                }
+            }
+        return (i32)-1;
+        }
+    // the key, or 0 when there is no shortcut
+    static u8 key(u8* s)
+        {
+        i32 t = UXMenuKey.tabAt(s);
+        if (t < (i32)0)
+            {
+            return (u8)0;
+            }
+        return s[t + (i32)1] == (u8)'+' ? s[t + (i32)2] : s[t + (i32)1];
+        }
+    static bool shift(u8* s)
+        {
+        i32 t = UXMenuKey.tabAt(s);
+        return t >= (i32)0 && s[t + (i32)1] == (u8)'+';
+        }
+    // the text without its shortcut: `s` itself when it has none, otherwise a copy
+    static u8* title(u8* s)
+        {
+        i32 t = UXMenuKey.tabAt(s);
+        if (t < (i32)0)
+            {
+            return s;
+            }
+        u8* b = new u8[(u32)t + (u32)1];
+        for (i32 i = (i32)0; i < t; i = i + (i32)1)
+            {
+            b[i] = s[i];
+            }
+        b[t] = (u8)0;
+        return b;
+        }
+    // The text with the shortcut spelled out after `sep`: "Undo\tCtrl+Z" for Win32 (whose menus
+    // right-align what follows a tab), "Undo  ^Z" for GEM.  `ctrl` and `shiftWord` are the
+    // spellings ("Ctrl+", "Shift+", or "^", "\x01").  `s` itself when there is no shortcut.
+    static u8* labelled(u8* s, u8* sep, u8* ctrl, u8* shiftWord)
+        {
+        i32 t = UXMenuKey.tabAt(s);
+        if (t < (i32)0)
+            {
+            return s;
+            }
+        u8* b = new u8[(u32)t + (u32)32];
+        i32 at = (i32)0;
+        for (i32 i = (i32)0; i < t; i = i + (i32)1)
+            {
+            b[at] = s[i];
+            at = at + (i32)1;
+            }
+        at = UXMenuKey.append(b, at, sep);
+        if (UXMenuKey.shift(s))
+            {
+            at = UXMenuKey.append(b, at, shiftWord);
+            }
+        at = UXMenuKey.append(b, at, ctrl);
+        b[at] = UXMenuKey.key(s);
+        b[at + (i32)1] = (u8)0;
+        return b;
+        }
+    static i32 append(u8* b, i32 at, u8* w)
+        {
+        for (i32 i = (i32)0; w[i] != (u8)0 && i < (i32)12; i = i + (i32)1)
+            {
+            b[at] = w[i];
+            at = at + (i32)1;
+            }
+        return at;
+        }
+    }
+
 struct UXMenuDef
     {
     u8* title;

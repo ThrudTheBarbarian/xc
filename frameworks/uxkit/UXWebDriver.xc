@@ -1325,8 +1325,20 @@ class UXWebDriver : Object<UXViewDriver>
                     }
                 i32 checked = it[0] == (u8)1 ? (i32)1 : (i32)0;
                 i32 disabled = it[0] == (u8)2 ? (i32)1 : (i32)0;
+                u8* body = checked + disabled > (i32)0 ? &it[1] : it;
                 self.menuPutRaw((u8*)"{\"text\":");
-                self.menuPutStr(checked + disabled > (i32)0 ? &it[1] : it);
+                self.menuPutStr(UXMenuKey.title(body));
+                // a shortcut: the page shows it and handles the key (Command on a Mac, Control elsewhere)
+                u8 key = UXMenuKey.key(body);
+                if (key != (u8)0)
+                    {
+                    u8 ks[2];
+                    ks[(i32)0] = key;
+                    ks[(i32)1] = (u8)0;
+                    self.menuPutRaw((u8*)",\"key\":");
+                    self.menuPutStr(&ks[(i32)0]);
+                    self.menuPutRaw(UXMenuKey.shift(body) ? (u8*)",\"shift\":1" : (u8*)"");
+                    }
                 self.menuPutRaw(checked != (i32)0 ? (u8*)",\"checked\":1" : (u8*)"");
                 self.menuPutRaw(disabled != (i32)0 ? (u8*)",\"disabled\":1" : (u8*)"");
                 self.menuPutRaw((u8*)"}");

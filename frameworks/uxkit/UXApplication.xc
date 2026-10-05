@@ -433,8 +433,12 @@ class UXApplication : UXResponder
             }
         else if (k == (u8)UXEventKeyDown)
             {
-            // The KEY WINDOW routes it — not "the first window", which is only ever right by accident.
-            if (keyWindow != (UXWindow*)0)
+            // A menu shortcut first, then the KEY WINDOW routes it — not "the first window", which is
+            // only ever right by accident.
+            if (menuBar != (UXMenuBar*)0 && menuBar.performShortcut(ev))
+                {
+                }
+            else if (keyWindow != (UXWindow*)0)
                 {
                 keyWindow.dispatchKey(ev);
                 }

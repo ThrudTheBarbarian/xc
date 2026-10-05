@@ -29,6 +29,7 @@
 .ux-menubar .ux-item:hover:not(.disabled) { background: #2a6fdb; color: #fff; }
 .ux-menubar .ux-item.disabled { color: #a0a0a0; }
 .ux-menubar .ux-item.checked::before { content: "\\2713"; position: absolute; left: 8px; }
+.ux-menubar .ux-key { float: right; margin-left: 24px; opacity: 0.6; }
 .ux-menubar .ux-sep { height: 1px; background: #d6d6d6; margin: 4px 0; }
 @media (prefers-color-scheme: dark) {
   .ux-menubar { background: #2b2b2b; border-color: #444; color: #e6e6e6; }
@@ -63,6 +64,28 @@
     el.classList.toggle('disabled', !!it.disabled);
   };
 
+  // A shortcut: Command on a Mac, Control elsewhere, as the platform's own menus spell it.
+  const isMac = /Mac|iPhone|iPad/.test((globalThis.navigator && navigator.platform) || '');
+  const keyLabel = (it) => isMac ? (it.shift ? '\u21e7' : '') + '\u2318' + it.key
+                                 : 'Ctrl+' + (it.shift ? 'Shift+' : '') + it.key;
+  document.addEventListener('keydown', (e) => {
+    if (!(isMac ? e.metaKey : e.ctrlKey) || e.altKey || !e.key) return;
+    const want = e.key.length === 1 ? e.key.toUpperCase() : '';
+    for (let t = 0; t < model.length; t++) {
+      const items = model[t].items;
+      for (let j = 0; j < items.length; j++) {
+        const it = items[j];
+        if (it.key && it.key === want && !!it.shift === e.shiftKey && !it.disabled) {
+          e.preventDefault();
+          e.stopPropagation();
+          close();
+          pick(t, j);
+          return;
+        }
+      }
+    }
+  }, true);
+
   const ensureStyle = () => {
     if (document.getElementById('ux-menu-style')) return;
     const st = document.createElement('style');
@@ -93,6 +116,12 @@
           el.className = 'ux-item';
           el.setAttribute('role', 'menuitem');
           el.textContent = it.text;
+          if (it.key) {
+            const k = document.createElement('span');
+            k.className = 'ux-key';
+            k.textContent = keyLabel(it);
+            el.appendChild(k);
+          }
           paint(el, it);
           el.addEventListener('click', (e) => {
             e.stopPropagation();

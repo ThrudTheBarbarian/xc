@@ -75,6 +75,7 @@ bool gAKHeadless; // UXApplication.setHeadless(true) was asked for
 void ux_ak_run(void); // interactive: [NSApp run] owns the loop
 i32 ux_ak_quit(void); // nonzero once the close box was hit
 void ux_ak_stop(void);
+void ux_ak_menu_item_key(pointer sub, i32 tag, i32 key, i32 shift);
 void ux_ak_set_dispatch(pointer fn);     // register the toolkit event forwarder
 void ux_ak_set_turn_hook(pointer fn, i32 ms); // the frame clock: the display link, or a timer for a slow tick
 void ux_ak_set_control_fire(pointer fn); // register the control-click -> action forwarder
@@ -2175,7 +2176,12 @@ class UXAppKitDriver : Object<UXViewDriver>
                         disabled = (i32)1;
                         text = &s[1];
                         }
-                    ux_ak_menu_add_item(sub, text, tag, checked, disabled, (i32)0);
+                    ux_ak_menu_add_item(sub, UXMenuKey.title(text), tag, checked, disabled, (i32)0);
+                    // AppKit fires a key equivalent itself, before the window sees the key
+                    if (UXMenuKey.key(text) != (u8)0)
+                        {
+                        ux_ak_menu_item_key(sub, tag, (i32)UXMenuKey.key(text), UXMenuKey.shift(text) ? (i32)1 : (i32)0);
+                        }
                     }
                 }
             }

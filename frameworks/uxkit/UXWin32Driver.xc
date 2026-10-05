@@ -4374,7 +4374,8 @@ class UXWin32Driver : Object<UXViewDriver>
                         flags = flags | (u32)MF_GRAYED;
                         text = &s[1];
                         }
-                    AppendMenuA(sub, flags, (pointer)self.menuId(t, j), (pointer)text);
+                    // a shortcut is spelled out after a tab, which Windows right-aligns
+                    AppendMenuA(sub, flags, (pointer)self.menuId(t, j), (pointer)UXMenuKey.labelled(text, (u8*)"\t", (u8*)"Ctrl+", (u8*)"Shift+"));
                     }
                 }
             AppendMenuA(bar, (u32)MF_POPUP, sub, (pointer)d[t].title);
@@ -4530,6 +4531,17 @@ class UXWin32Driver : Object<UXViewDriver>
             {
             ev.kind = (u8)UXEventKeyDown;
             ev.key = (u16)((u32)msg.wParam & (u32)$FF); // ASCII byte
+            // Control and Shift, as GEM's kstate has them, so a menu shortcut can be matched
+            u16 mods = (u16)0;
+            if ((i32)GetKeyState((i32)$11) < (i32)0) // VK_CONTROL
+                {
+                mods = mods | (u16)UX_MOD_CTRL;
+                }
+            if ((i32)GetKeyState((i32)$10) < (i32)0) // VK_SHIFT
+                {
+                mods = mods | (u16)1;
+                }
+            ev.modifiers = mods;
             return;
             }
         // Return aimed at a native EDIT child: a single-line EDIT DISCARDS the key (and beeps),

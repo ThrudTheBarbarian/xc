@@ -2637,6 +2637,33 @@ void ux_ak_menu_add_item(void* sub, const char* text, int tag, int checked, int 
     [it setEnabled:(disabled ? NO : YES)];
     [s addItem:it];
     }
+/* A menu item's shortcut: Command (and Shift) with `key`, an uppercase letter or a mark.  AppKit
+ * matches it before the window's keyDown:, so the toolkit never sees the key as typing. */
+void ux_ak_menu_item_key(void* sub, int tag, int key, int shift)
+    {
+    NSMenuItem* it = [(__bridge NSMenu*)sub itemWithTag:tag];
+    if (!it || key <= 0)
+        return;
+    /* lower case for Command alone; with Shift, the upper-case letter, which is what the event's
+     * charactersIgnoringModifiers holds (it keeps Shift) */
+    unichar c = (unichar)((!shift && key >= 'A' && key <= 'Z') ? key + 32 : key);
+    [it setKeyEquivalent:[NSString stringWithCharacters:&c length:1]];
+    [it setKeyEquivalentModifierMask:NSEventModifierFlagCommand | (shift ? NSEventModifierFlagShift : 0)];
+    }
+/* For tests: a key press offered to the main menu the way AppKit offers one before keyDown:
+ * (performKeyEquivalent:).  1 if a menu item took it. */
+int ux_ak_test_menu_press(int key, int cmd, int shift)
+    {
+    unichar lower = (unichar)((key >= 'A' && key <= 'Z') ? key + 32 : key);
+    unichar typed = shift ? (unichar)key : lower;
+    NSEventModifierFlags f = (cmd ? NSEventModifierFlagCommand : 0) | (shift ? NSEventModifierFlagShift : 0);
+    NSEvent* e = [NSEvent keyEventWithType:NSEventTypeKeyDown location:NSZeroPoint modifierFlags:f
+                                 timestamp:0 windowNumber:0 context:nil
+                                characters:[NSString stringWithCharacters:&typed length:1]
+               charactersIgnoringModifiers:[NSString stringWithCharacters:&typed length:1] /* keeps Shift, as a real one does */
+                                 isARepeat:NO keyCode:0];
+    return [[NSApp mainMenu] performKeyEquivalent:e] ? 1 : 0;
+    }
 void ux_ak_menu_set_main(void* bar)
     {
     [NSApp setMainMenu:(__bridge NSMenu*)bar];

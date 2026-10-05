@@ -49,7 +49,7 @@ class Controller : Object<UXApplicationDelegate>
         file.addSeparator();
         file.addItem("Quit", &self.onQuit);
         UXMenu* edit = bar.addMenu("Edit");
-        edit.addItem("Cut", &self.onCut);
+        edit.addItem("Cut", &self.onCut).setShortcut((u8)'X', false);
 
         a.setMenuBar(bar); // menu_build + menu_bar(show)
         Stdio.printf("1. menu installed: tree=%s\n",
@@ -117,7 +117,25 @@ class Controller : Object<UXApplicationDelegate>
         a.dispatchEvent(ev);
         Stdio.printf("6. MenuSelect(Edit, Cut) -> fired = %d (expect 4)\n", fired);
 
-        bool ok = bar.tree != (pointer)0 && hit >= (i32)0 && fired == (i32)4;
+        // ---- 6. a shortcut: drawn in the item's text, fired by its key ----
+        OBJECT* mt = (OBJECT*)bar.tree;
+        u8* cutText = (u8*)mt[cutObj].ob_spec;
+        i32 cl = (i32)0;
+        while (cutText[cl] != (u8)0)
+            {
+            cl = cl + (i32)1;
+            }
+        bool drawn = cl >= (i32)2 && cutText[cl - (i32)2] == (u8)'^' && cutText[cl - (i32)1] == (u8)'X';
+        Stdio.printf("7. Edit>Cut reads \"%s\": ends in ^X? %d\n", cutText, drawn ? (i32)1 : (i32)0);
+        fired = (i32)0;
+        UXEvent* kev = new UXEvent();
+        kev.kind = (u8)UXEventKeyDown;
+        kev.key = (u16)$2D18; // scancode | ascii: Control-X
+        kev.modifiers = (u16)UX_MOD_CTRL;
+        a.dispatchEvent(kev);
+        Stdio.printf("8. Control-X -> fired = %d (expect 4)\n", fired);
+
+        bool ok = bar.tree != (pointer)0 && hit >= (i32)0 && fired == (i32)4 && drawn;
         if (ok)
             {
             Stdio.printf("PASS: model -> menu_build -> GEM draws it -> MN_SELECTED -> bound method.\n");

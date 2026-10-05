@@ -16,10 +16,15 @@
 #import "UXMenu.xc"
 #import "UXGeometry.xc"
 
+pointer GetMenu(pointer hwnd);
+i32 GetMenuStringA(pointer menu, u32 id, u8* buf, i32 cap, u32 flags);
+i32 SetKeyboardState(u8* keys);
+
 class Controller : Object<UXApplicationDelegate>
     {
     UXWin32Driver* drv;
     i32 fired; // last item fired (1=New 2=Open 3=Quit 4=Cut), 0 none
+    i32 cuts;
     void setDriver(UXWin32Driver* d)
         {
         drv = d;
@@ -43,6 +48,7 @@ class Controller : Object<UXApplicationDelegate>
     void onCut(UXMenuItem* s)
         {
         fired = (i32)4;
+        cuts = cuts + (i32)1;
         Stdio.printf("action: Cut\n");
         }
 
@@ -60,15 +66,29 @@ class Controller : Object<UXApplicationDelegate>
         file.addSeparator();
         file.addItem((u8*)"Quit", &self.onQuit);
         UXMenu* edit = bar.addMenu((u8*)"Edit");
-        edit.addItem((u8*)"Cut", &self.onCut);
+        edit.addItem((u8*)"Cut", &self.onCut).setShortcut((u8)'X', false);
         app.setMenuBar(bar); // menuBuild + menuShow -> a per-window HMENU
         Stdio.printf("menu installed: %s\n", bar.tree != (pointer)0 ? "yes" : "no");
 
         // The OS delivers two menu picks, then a quit.  ids encode (title,item)+1:
         // File>Open = (0,1) -> 2 ; Edit>Cut = (1,0) -> 257.  They travel the real queue.
         pointer hwnd = drv.windowNative(win.handle);
+        // the shortcut is spelled out after a tab, which Windows right-aligns
+        u8 txt[64];
+        GetMenuStringA(GetMenu(hwnd), (u32)257, &txt[(i32)0], (i32)64, (u32)0);
+        bool shows = txt[0] == (u8)'C' && txt[3] == (u8)9 && txt[4] == (u8)'C' && txt[8] == (u8)'+' && txt[9] == (u8)'X' && txt[10] == (u8)0;
+        Stdio.printf("cut shows its shortcut: %d\n", shows ? (i32)1 : (i32)0);
         PostMessageA(hwnd, (u32)WM_COMMAND, (pointer)2, (pointer)0);   // File > Open
         PostMessageA(hwnd, (u32)WM_COMMAND, (pointer)257, (pointer)0); // Edit > Cut
+        // Ctrl+X typed: Control held, and the control code $18 the keyboard makes of it
+        u8 keys[256];
+        for (i32 k = (i32)0; k < (i32)256; k = k + (i32)1)
+            {
+            keys[k] = (u8)0;
+            }
+        keys[(i32)$11] = (u8)$80; // VK_CONTROL down
+        SetKeyboardState(&keys[(i32)0]);
+        PostMessageA(hwnd, (u32)WM_CHAR, (pointer)$18, (pointer)0);
         PostQuitMessage((i32)0);
         return (i32)0;
         }
@@ -84,10 +104,10 @@ class Controller : Object<UXApplicationDelegate>
     UXApplication* app = new UXApplication();
     app.setDelegate(c);
     app.run();
-    Stdio.printf("last-fired=%d\n", c.fired); // expect 4 (Cut, the last pick)
-    if (c.fired == (i32)4)
+    Stdio.printf("last-fired=%d cuts=%d\n", c.fired, c.cuts); // expect 4 (Cut, the last pick), twice
+    if (c.fired == (i32)4 && c.cuts == (i32)2)
         {
-        Stdio.printf("PASS: WM_COMMAND -> neutral MenuSelect -> bound method\n");
+        Stdio.printf("PASS: WM_COMMAND -> neutral MenuSelect -> bound method; Ctrl+X fires its item\n");
         }
     else
         {

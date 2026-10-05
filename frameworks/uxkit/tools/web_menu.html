@@ -15,7 +15,7 @@
       want(bar, 'no menu bar in the page');
       if (!bar) { document.title = 'FAIL: ' + fails.join('; '); return; }
       const titles = [...bar.querySelectorAll('.ux-title')];
-      want(titles.length === 2, `${titles.length} titles`);
+      want(titles.length === 3, `${titles.length} titles`);
       want(bar.nextElementSibling && bar.nextElementSibling.id === 'ux-canvas', 'the bar is not above the canvas');
       const items = (t) => [...titles[t].querySelectorAll('.ux-drop > *')];
       want(items(0)[1].className === 'ux-sep', 'File\'s second entry is not a separator');
@@ -37,9 +37,23 @@
       titles[1].click();
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
       want(!vis(1), 'Escape does not close the pull-down');
+      // shortcuts: shown in the item, and the key picks it (Command on a Mac, Control elsewhere)
+      const mac = /Mac|iPhone|iPad/.test(navigator.platform);
+      const undo = items(2)[0];
+      want(undo.querySelector('.ux-key') && undo.querySelector('.ux-key').textContent === (mac ? '\u2318Z' : 'Ctrl+Z'),
+           'Undo shows no shortcut: ' + undo.textContent);
+      const press = (key, shift) => document.dispatchEvent(new KeyboardEvent('keydown',
+          { key, shiftKey: shift, metaKey: mac, ctrlKey: !mac, bubbles: true, cancelable: true }));
+      const before = uxMenuPicks.length;
+      press('z', false);
+      press('Z', true);
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', bubbles: true }));
+      const got = uxMenuPicks.slice(before);
+      want(got.length === 2 && got[0][0] === 2 && got[0][1] === 0 && got[1][0] === 2 && got[1][1] === 1,
+           'the shortcuts picked ' + JSON.stringify(got));
       uxPage.menuState({ t: 1, j: 1, what: 1, on: 1 });
       want(!items(1)[1].classList.contains('disabled'), 'a state change does not ungrey Rulers');
-      document.title = fails.length ? 'FAIL: ' + fails.join('; ') : 'PASS: a DOM menu bar -- opens, follows the pointer, picks, refuses a greyed item, closes on Escape';
+      document.title = fails.length ? 'FAIL: ' + fails.join('; ') : 'PASS: a DOM menu bar -- opens, follows the pointer, picks, refuses a greyed item, closes on Escape, takes its shortcuts';
     },
   } };
 </script>

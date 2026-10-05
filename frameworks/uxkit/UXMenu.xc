@@ -20,6 +20,8 @@ class UXMenuItem : Object
     bool isSeparator;
     bool enabled;
     bool checked;
+    u8 key;        // the shortcut's key, an uppercase letter or a punctuation mark; 0 = none
+    bool keyShift; // the shortcut also needs Shift
     callback action void(UXMenuItem* sender); // a menu never owns its controller
 
     void init(void)
@@ -28,7 +30,19 @@ class UXMenuItem : Object
         isSeparator = false;
         enabled = true;
         checked = false;
+        key = (u8)0;
+        keyShift = false;
         action = (callback void(UXMenuItem * sender))0;
+        }
+
+    // A keyboard shortcut: the platform's command key (Command on macOS and iOS, Control
+    // elsewhere) with `k`, and Shift as well when `shift`.  A letter is given in upper case.
+    // Returns the item, so a menu can be written item.setShortcut(...) in one line.
+    UXMenuItem* setShortcut(u8 k, bool shift)
+        {
+        key = k >= (u8)'a' && k <= (u8)'z' ? (u8)(k - (u8)32) : k;
+        keyShift = shift;
+        return self;
         }
 
     void setAction(callback a void(UXMenuItem* sender))
@@ -47,29 +61,49 @@ class UXMenuItem : Object
     //   "-"        a separator
     //   \x01 s     pre-ticked
     //   \x02 s     greyed + non-selectable
+    //   s \t [+] k  a shortcut, after the title (see setShortcut)
     u8* encoded(void)
         {
         if (isSeparator)
             {
             return "-";
             }
+        if (enabled && !checked && key == (u8)0)
+            {
+            return title;
+            }
+        u16 n = (u16)0;
+        while (title[n] != (u8)0)
+            {
+            n = n + (u16)1;
+            }
+        u8* b = (u8*)malloc((u32)n + (u32)6);
+        u16 at = (u16)0;
         if (!enabled || checked)
             {
-            u16 n = (u16)0;
-            while (title[n] != (u8)0)
-                {
-                n = n + (u16)1;
-                }
-            u8* b = (u8*)malloc((u32)n + (u32)2);
             b[0] = checked ? (u8)1 : (u8)2; // MENU_CHECK / MENU_DISABLE
-            for (u16 i = (u16)0; i < n; i++)
-                {
-                b[i + (u16)1] = title[i];
-                }
-            b[n + (u16)1] = (u8)0;
-            return b;
+            at = (u16)1;
             }
-        return title;
+        for (u16 i = (u16)0; i < n; i++)
+            {
+            b[at] = title[i];
+            at = at + (u16)1;
+            }
+        // the shortcut: a tab, "+" for Shift, then the key (UXMenuKey reads it back)
+        if (key != (u8)0)
+            {
+            b[at] = (u8)9;
+            at = at + (u16)1;
+            if (keyShift)
+                {
+                b[at] = (u8)'+';
+                at = at + (u16)1;
+                }
+            b[at] = key;
+            at = at + (u16)1;
+            }
+        b[at] = (u8)0;
+        return b;
         }
     }
 
@@ -178,6 +212,42 @@ class UXMenuItem : Object
             }
         UXMenuItem* it = (UXMenuItem* ?)m.items.get((u16)i);
         it.fire();
+        }
+
+    // A key press, offered to the menus before the key window gets it: true if it was an item's
+    // shortcut, which then fired.  The command key arrives as Control in ev.modifiers, or as a
+    // control code (Control-Z is $1A); Shift is in ev.modifiers.  A backend whose native menus
+    // handle their shortcuts (AppKit, GTK, the web page) consumes the key before it gets here.
+    bool performShortcut(UXEvent* ev)
+        {
+        u8 c = (u8)((i32)ev.key & (i32)UX_KEY_ASCII);
+        if (((i32)ev.modifiers & (i32)UX_MOD_CTRL) == (i32)0)
+            {
+            return false;
+            }
+        if (c >= (u8)1 && c <= (u8)26)
+            {
+            c = (u8)(c + (u8)64);
+            }
+        else if (c >= (u8)'a' && c <= (u8)'z')
+            {
+            c = (u8)(c - (u8)32);
+            }
+        bool shift = ((i32)ev.modifiers & (i32)UX_MOD_SHIFT) != (i32)0;
+        for (u16 m = (u16)0; m < menus.count(); m++)
+            {
+            UXMenu* mn = (UXMenu* ?)menus.get(m);
+            for (u16 i = (u16)0; i < mn.items.count(); i++)
+                {
+                UXMenuItem* it = (UXMenuItem* ?)mn.items.get(i);
+                if (it.key != (u8)0 && it.key == c && it.keyShift == shift && it.enabled && !it.isSeparator)
+                    {
+                    it.fire();
+                    return true;
+                    }
+                }
+            }
+        return false;
         }
 
     // Reflect model state back into the live menu.  GEM redraws.

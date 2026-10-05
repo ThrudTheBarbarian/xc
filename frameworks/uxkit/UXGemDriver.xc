@@ -86,6 +86,10 @@ UXGemGraphics* gGemGraphics;
 // The toolkit font chooser reads this to list the families; drawTextFont selects one with vst_font.
 i32 gGemFontCount;
 
+// "\x01" as bytes (a literal does not take hex escapes): the system font's up arrow, which an
+// Atari menu shows for Shift.
+u8 gGemShiftGlyph[2];
+
 class UXGemDriver : Object<UXViewDriver>
     {
     void init(void)
@@ -1206,10 +1210,20 @@ class UXGemDriver : Object<UXViewDriver>
         {
         UXMenuDef* src = (UXMenuDef*)defs;                                     // neutral, 20-byte stride on 64-bit
         GemMenuDef* c = (GemMenuDef*)malloc((u32)n * (u32)sizeof(GemMenuDef)); // C stride
+        gGemShiftGlyph[(i32)0] = (u8)1;
+        gGemShiftGlyph[(i32)1] = (u8)0;
         for (i32 i = (i32)0; i < n; i = i + (i32)1)
             {
             c[i].title = (pointer)src[i].title;
-            c[i].items = (pointer)src[i].items;
+            // A shortcut is drawn in the item's text, the Atari way: "Undo  ^Z", with the
+            // system font's up arrow (character 1) before it for Shift.  GEM itself never sees
+            // the key; the neutral menu matcher fires the item.
+            u8** its = (u8**)malloc((u32)src[i].nitems * (u32)sizeof(pointer));
+            for (i32 j = (i32)0; j < src[i].nitems; j = j + (i32)1)
+                {
+                its[j] = UXMenuKey.labelled(src[i].items[j], (u8*)"  ", (u8*)"^", &gGemShiftGlyph[(i32)0]);
+                }
+            c[i].items = (pointer)its;
             c[i].nitems = (pointer)src[i].nitems; // int in the low bytes; C reads int*2*ptr
             }
         return menu_build((pointer)c, n, screenW);

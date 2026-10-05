@@ -46,7 +46,7 @@ class UXMenuEncode
             for (i32 j = (i32)0; j < d[t].nitems; j = j + (i32)1)
                 {
                 at = UXMenuEncode.putByte(at, (u8)$1F);
-                at = UXMenuEncode.put(at, items[j]);
+                at = UXMenuEncode.put(at, UXMenuKey.title(items[j])); // no shortcuts on a device
                 }
             at = UXMenuEncode.putByte(at, (u8)$1E);
             }

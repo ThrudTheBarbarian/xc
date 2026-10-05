@@ -986,6 +986,15 @@ static void draw_cb(GtkDrawingArea* a, cairo_t* cr, int w, int h, gpointer ud)
  * draws as a check item -- so any item can be ticked later, as on GEM and AppKit.  A pick reaches the
  * toolkit as a menu-select event through the same dispatch as the mouse. */
 typedef struct { GMenu* model; GMenu* sub[32]; GMenu* section[32]; int n; } UXGtkMenu;
+/* Menu shortcuts: the item's text ends in a tab, "+" for Shift and the key ("Undo\tZ").  The menu
+ * shows it (the item's "accel" attribute, display only), and a global-scope shortcut controller on
+ * each window that carries the bar handles it.  (The window gathers global controllers into one
+ * of its own, so the shortcuts appear twice among its controllers but fire once.) */
+#define UX_GTK_MAXKEYS 128
+static char gKeyTrigger[UX_GTK_MAXKEYS][32];
+static char gKeyAction[UX_GTK_MAXKEYS][40];
+static int gKeyN = 0;
+static GtkEventController* gKeyCtl[UXGTK_MAXW];
 static UXGtkMenu* gMenu;          /* the installed bar, or NULL */
 static GSimpleActionGroup* gMenuActions;
 static GtkWidget* gMenuBar[UXGTK_MAXW];
@@ -1007,6 +1016,8 @@ void* ux_gtk_menu_new(void)
     {
     UXGtkMenu* m = (UXGtkMenu*)calloc(1, sizeof *m);
     m->model = g_menu_new();
+    gKeyN = 0; /* a new bar: its own shortcuts */
+
     if (!gMenuActions)
         gMenuActions = g_simple_action_group_new();
     return m;
@@ -1044,7 +1055,31 @@ void ux_gtk_menu_add_item(void* bar, int t, int j, const char* text, int checked
     g_object_unref(a);
     char detailed[40];
     snprintf(detailed, sizeof detailed, "ux.%s", name);
-    g_menu_append(m->section[t], text, detailed);
+    const char* tab = strchr(text, '\t');
+    if (!tab)
+        {
+        g_menu_append(m->section[t], text, detailed);
+        return;
+        }
+    char label[256];
+    size_t n = (size_t)(tab - text) < sizeof label - 1 ? (size_t)(tab - text) : sizeof label - 1;
+    memcpy(label, text, n);
+    label[n] = 0;
+    int shift = tab[1] == '+';
+    int key = shift ? tab[2] : tab[1];
+    char accel[32];
+    snprintf(accel, sizeof accel, "<Control>%s%c", shift ? "<Shift>" : "",
+             (key >= 'A' && key <= 'Z') ? key + 32 : key);
+    GMenuItem* mi = g_menu_item_new(label, detailed);
+    g_menu_item_set_attribute(mi, "accel", "s", accel);
+    g_menu_append_item(m->section[t], mi);
+    g_object_unref(mi);
+    if (gKeyN < UX_GTK_MAXKEYS)
+        {
+        snprintf(gKeyTrigger[gKeyN], sizeof gKeyTrigger[0], "%s", accel);
+        snprintf(gKeyAction[gKeyN], sizeof gKeyAction[0], "%s", detailed);
+        gKeyN++;
+        }
     }
 /* Put the bar at the top of a window: the window's child becomes a vertical box of the bar and the
  * content, and the window grows by the bar's height so the content keeps its size. */
@@ -1062,6 +1097,18 @@ static void menu_attach(int h)
     g_object_unref(fix);
     gtk_window_set_child(gWin[h], box);
     gtk_widget_insert_action_group(GTK_WIDGET(gWin[h]), "ux", G_ACTION_GROUP(gMenuActions));
+    if (gKeyN > 0)
+        {
+        GtkEventController* keys = gtk_shortcut_controller_new();
+        gtk_shortcut_controller_set_scope(GTK_SHORTCUT_CONTROLLER(keys), GTK_SHORTCUT_SCOPE_GLOBAL);
+        for (int k = 0; k < gKeyN; k++)
+            gtk_shortcut_controller_add_shortcut(GTK_SHORTCUT_CONTROLLER(keys),
+                gtk_shortcut_new(gtk_shortcut_trigger_parse_string(gKeyTrigger[k]),
+                                 gtk_named_action_new(gKeyAction[k])));
+        gtk_widget_add_controller(GTK_WIDGET(gWin[h]), keys);
+        gKeyCtl[h] = keys;
+        }
+
     int bh = 0;
     gtk_widget_measure(bar, GTK_ORIENTATION_VERTICAL, -1, NULL, &bh, NULL, NULL);
     int w = 0, hh = 0;
@@ -1144,6 +1191,58 @@ int ux_gtk_menu_test_titles(int h)
         return 0;
     GMenuModel* mm = gtk_popover_menu_bar_get_menu_model(GTK_POPOVER_MENU_BAR(gMenuBar[h]));
     return mm ? g_menu_model_get_n_items(mm) : 0;
+    }
+
+/* For tests: the accelerator item (t, j) shows in the menu (its GMenu "accel" attribute), copied
+ * into buf; 1 if it has one. */
+int ux_gtk_menu_test_accel(int t, int j, char* buf, int cap)
+    {
+    buf[0] = 0;
+    if (!gMenu || t < 0 || t >= gMenu->n)
+        return 0;
+    char want[40];
+    snprintf(want, sizeof want, "ux.m%d_%d", t, j);
+    GMenuModel* sub = G_MENU_MODEL(gMenu->sub[t]);
+    for (int s = 0; s < g_menu_model_get_n_items(sub); s++)
+        {
+        GMenuModel* sec = g_menu_model_get_item_link(sub, s, G_MENU_LINK_SECTION);
+        if (!sec)
+            continue;
+        for (int i = 0; i < g_menu_model_get_n_items(sec); i++)
+            {
+            char* act = NULL;
+            char* acc = NULL;
+            if (g_menu_model_get_item_attribute(sec, i, G_MENU_ATTRIBUTE_ACTION, "s", &act) && strcmp(act, want) == 0)
+                {
+                int has = g_menu_model_get_item_attribute(sec, i, "accel", "s", &acc);
+                if (has)
+                    snprintf(buf, cap, "%s", acc);
+                g_free(act);
+                g_free(acc);
+                g_object_unref(sec);
+                return has ? 1 : 0;
+                }
+            g_free(act);
+            }
+        g_object_unref(sec);
+        }
+    return 0;
+    }
+/* For tests: how many shortcuts window h's menu controller holds; with fire >= 0, activate that
+ * one's action the way GTK does when its trigger is pressed. */
+int ux_gtk_menu_test_shortcuts(int h, int fire)
+    {
+    if (h <= 0 || h >= UXGTK_MAXW || !gKeyCtl[h])
+        return 0;
+    GListModel* sc = G_LIST_MODEL(gKeyCtl[h]);
+    int n = (int)g_list_model_get_n_items(sc);
+    if (fire >= 0 && fire < n)
+        {
+        GtkShortcut* cut = GTK_SHORTCUT(g_list_model_get_item(sc, (guint)fire));
+        gtk_shortcut_action_activate(gtk_shortcut_get_action(cut), 0, GTK_WIDGET(gWin[h]), NULL);
+        g_object_unref(cut);
+        }
+    return n;
     }
 
 int ux_gtk_window_create(int x, int y, int w, int h)

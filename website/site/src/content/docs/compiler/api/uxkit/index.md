@@ -179,6 +179,7 @@ a platform. The platforms are grouped by realm:
 - [`UXLabel`](/compiler/api/uxkit/uxlabel/)
 - [`UXLogMonitor`](/compiler/api/uxkit/uxlogmonitor/)
 - [`UXMenuItem`](/compiler/api/uxkit/uxmenuitem/)
+- [`UXMenuKey`](/compiler/api/uxkit/uxmenukey/)
 - [`UXMetrics`](/compiler/api/uxkit/uxmetrics/)
 - [`UXNavItem`](/compiler/api/uxkit/uxnavitem/)
 - [`UXNavigationController`](/compiler/api/uxkit/uxnavigationcontroller/)

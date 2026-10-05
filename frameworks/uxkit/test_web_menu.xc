@@ -64,11 +64,15 @@ void main(void)
     grid.checked = true;
     UXMenuItem* off = view.addItem((u8*)"Rulers", &c.onOther);
     off.enabled = false;
+    UXMenu* edit = bar.addMenu((u8*)"Edit");
+    edit.addItem((u8*)"Undo", &c.onOther).setShortcut((u8)'Z', false);
+    edit.addItem((u8*)"Redo", &c.onOther).setShortcut((u8)'Z', true);
     app.setMenuBar(bar);
     if (ux_test_menu((i32)-1, (i32)0) >= (i32)0)
         {
         // the node rig: what the page was handed
-        ck(ux_test_menu((i32)-1, (i32)0) == (i32)2, "the page gets two titles", ux_test_menu((i32)-1, (i32)0));
+        ck(ux_test_menu((i32)-1, (i32)0) == (i32)3, "the page gets three titles", ux_test_menu((i32)-1, (i32)0));
+        ck(sameText((i32)2, (i32)0, (u8*)"Undo"), "a shortcut is not part of the item's text", (i32)0);
         ck(sameText((i32)0, (i32)-1, (u8*)"File") && sameText((i32)1, (i32)-1, (u8*)"View"), "titled File and View", (i32)0);
         ck(ux_test_menu((i32)0, (i32)-1) == (i32)3, "File has three entries", ux_test_menu((i32)0, (i32)-1));
         ck(sameText((i32)0, (i32)0, (u8*)"New \"draft\""), "an item's text survives JSON (quotes escaped)", (i32)0);
