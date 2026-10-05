@@ -1,3 +1,4 @@
+//xtc-na: xt6502 — written for 32-byte vectors; main's 527-byte frame is past the 6502's 119-byte SP-frame budget
 // vectorize_wide_tails.xc — every vectorised loop shape at trip counts around
 // a 32-byte vector, for every lane width, with a sentinel past the bound.
 //

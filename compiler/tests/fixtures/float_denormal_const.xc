@@ -4,7 +4,8 @@
 // 9.9999461e-41, the smallest denormal is 1.40129846e-45, and the largest one
 // sits just below the smallest normal. Each back end narrows a double constant
 // to float bits itself, and that step flushed every denormal to zero. Far
-// below the smallest denormal the value is zero.
+// below the smallest denormal the value is zero. Printed as bits: 116c2 is
+// 1e-40, 1 and 7fffff the smallest and largest denormals.
 
 #import "Stdio.xc"
 
@@ -15,6 +16,8 @@ i32 main(void)
     float c = 1.1754942e-38;
     float z = 1e-50;
     float n = -1e-40;
-    Stdio.printf("%.9g %.9g %.9g %.9g %.9g\n", (double)a, (double)b, (double)c, (double)z, (double)n);
+    // The bits, not %g: the 6502's printf formats %g as %f, and the bits are
+    // the exact answer on every target.
+    Stdio.printf("%lx %lx %lx %lx %lx\n", *(u32*)&a, *(u32*)&b, *(u32*)&c, *(u32*)&z, *(u32*)&n);
     return 0;
 }
