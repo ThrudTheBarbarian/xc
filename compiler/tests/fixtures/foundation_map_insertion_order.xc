@@ -32,7 +32,10 @@ class Key <Hashable, Comparable>
     u32 ident(void)  { return id; }
 }
 
-void main(void)
+// The cases are three functions rather than one main: inlined into main, the
+// whole program sat in the 6502's unbanked main RAM (bug 618), where it no
+// longer fits; as functions they go to banks.
+void plainAndRemove(void)
 {
     // 1. Plain insertion order — deliberately NOT alphabetical or sorted.
     Map* m = new Map();
@@ -53,7 +56,10 @@ void main(void)
     for (u32 i = (u32)0; i < ks2.count(); i = i + (u32)1)
         Stdio.printf(" %s", ((String*)ks2.get(i)).cString());
     Stdio.printf("\n");
+}
 
+void resizeAndReuse(void)
+{
     // 2. Resize: 40 entries drives several doublings from the initial 16.
     Map* big = new Map();
     for (u32 i = (u32)0; i < (u32)40; i = i + (u32)1)
@@ -75,7 +81,10 @@ void main(void)
     for (u32 i = (u32)0; i < tk.count(); i = i + (u32)1)
         Stdio.printf(" %d", ((Number*)tk.get(i)).asU32());
     Stdio.printf(" count=%d\n", t.count());
+}
 
+void userKeysAndSet(void)
+{
     // 5. Address-hashed user keys — the determinism case.
     Map* u = new Map();
     for (u32 i = (u32)0; i < (u32)12; i = i + (u32)1)
@@ -95,4 +104,11 @@ void main(void)
     for (u32 i = (u32)0; i < so.count(); i = i + (u32)1)
         if (((Number*)so.get(i)).asU32() != (u32)39 - i) sOrdered = false;
     Stdio.printf("set-order=%d count=%d\n", sOrdered, s.count());
+}
+
+void main(void)
+{
+    plainAndRemove();
+    resizeAndReuse();
+    userKeysAndSet();
 }

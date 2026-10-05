@@ -17295,14 +17295,11 @@ class ClassInfo
     // margin). As the reference.
     void emitStaticInitGuard(ClassInfo* ci)
         {
+        // A class that is also `new`ed gets no guard, on any target: its init
+        // is an instance initialiser, and running it on the class's static
+        // block is a phantom instance (OperationQueue registered one).
         if (ci.decl() != 0 && ci.decl().usedByNew())
-            {
-            if (_ptrW >= (u32)4)
-                return;
-            for (ClassInfo* c = ci; c != 0; c = c.parent())
-                if (hasStaticIvar(c))
-                    return;
-            }
+            return;
         String* initSym = (String*)0;
         for (ClassInfo* c = ci; c != 0 && initSym == 0; c = c.parent())
             {
@@ -17392,20 +17389,6 @@ class ClassInfo
         br.add(IROperand.block(contB));
         _blk.setTerm(br);
         _blk = contB;
-        }
-
-    bool hasStaticIvar(ClassInfo* c)
-        {
-        Node* d = c.decl();
-        if (d == 0)
-            return false;
-        for (u32 i = (u32)0; i < d.kidCount(); i = i + (u32)1)
-            {
-            Node* iv = d.kid(i);
-            if (iv.kind() == (u16)nkVariableDecl && iv.hasFlag((u32)NF_STATIC))
-                return true;
-            }
-        return false;
         }
 
     // The threaded slow path of the static-init guard, split out because the
