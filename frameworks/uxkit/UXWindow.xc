@@ -170,6 +170,11 @@ class UXWindow : UXResponder
         contentView = content;
         content.attachTo(tree, UXGeom.make((i16)0, (i16)0, f.w, f.h));
         content.setNextResponder(self); // the chain ends at the window
+        // The size the content is laid out for.  The first draw reflows it if the window's work
+        // area turns out different -- AppKit's grows by the toolbar it moves into the title bar --
+        // which it would not do if the first draw were taken as the starting size.
+        prevW = f.w;
+        prevH = f.h;
 
         handle = gDriver.windowCreate((i32)f.x, (i32)f.y, (i32)f.w, (i32)f.h);
         tree.winHandle = handle; // so the tree can realize native objects on its own

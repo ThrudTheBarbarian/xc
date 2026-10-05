@@ -31,6 +31,9 @@ class UXApplication : UXResponder
     // Files dropped on one of the app's windows (dragged from the Finder, the desktop, a file
     // manager): each one's path, the window, and the point in its content.  0 = drops refused.
     callback fileDropped void(u8* path, i32 window, i32 x, i32 y);
+    // A row dragged out of one of the app's tables (UXTableView.setDragsRows) and dropped on a
+    // window: the row's first column, the window, the point.
+    callback itemDropped void(u8* item, i32 window, i32 x, i32 y);
     bool running;
     i32 screenW;
     i32 screenH;
@@ -49,6 +52,7 @@ class UXApplication : UXResponder
         screenH = (i32)0;
         menuBar = (UXMenuBar*)0;
         fileDropped = (callback void(u8 * path, i32 window, i32 x, i32 y))0;
+        itemDropped = (callback void(u8 * item, i32 window, i32 x, i32 y))0;
         pendingCloses = new Array();
         turnFn = (turnHook_t*)0;
         turnMs = (i32)0;
@@ -70,6 +74,20 @@ class UXApplication : UXResponder
         if (h)
             {
             h(path, window, x, y);
+            }
+        }
+
+    // Take rows dragged out of the app's own tables and dropped on its windows.
+    void setItemDropHandler(callback h void(u8* item, i32 window, i32 x, i32 y))
+        {
+        itemDropped = h;
+        }
+    void deliverItemDrop(u8* item, i32 window, i32 x, i32 y)
+        {
+        callback h void(u8 * item, i32 window, i32 x, i32 y) = itemDropped;
+        if (h)
+            {
+            h(item, window, x, y);
             }
         }
 

@@ -71,6 +71,14 @@ static ux_dispatch_fn g_dispatch = 0;
 /* A file dropped on a window: its path, the window, and the point in the window's content. */
 typedef void (*ux_file_drop_fn)(const char* path, int win, int x, int y);
 static ux_file_drop_fn g_fileDrop = 0;
+/* A row dragged out of one of the app's tables, dropped on a window: its text, the window, the point. */
+static ux_file_drop_fn g_itemDrop = 0;
+/* The pasteboard type a table row travels as: private to the app. */
+#define AK_ROW_TYPE @"org.xc.uxkit.row"
+void ux_ak_set_item_drop(void* fn)
+    {
+    g_itemDrop = (ux_file_drop_fn)fn;
+    }
 
 void ux_ak_stop(void); // fwd
 
@@ -201,8 +209,14 @@ static NSArray* ak_drop_urls(id info)
     return [pb readObjectsForClasses:@[ [NSURL class] ]
                              options:@{ NSPasteboardURLReadingFileURLsOnlyKey : @YES }];
     }
+static NSString* ak_drop_row(id info)
+    {
+    return [[info draggingPasteboard] stringForType:AK_ROW_TYPE];
+    }
 static NSUInteger ak_draggingEntered(__unsafe_unretained id self, SEL _cmd, __unsafe_unretained id info)
     {
+    if (g_itemDrop && ak_drop_row(info))
+        return NSDragOperationCopy;
     return (g_fileDrop && [ak_drop_urls(info) count] > 0) ? NSDragOperationCopy : NSDragOperationNone;
     }
 static int ak_win_of(NSView* v);
@@ -220,6 +234,12 @@ static int ak_deliver_files(NSView* v, NSArray* urls, NSPoint p)
 static BOOL ak_performDragOperation(__unsafe_unretained id self, SEL _cmd, __unsafe_unretained id info)
     {
     NSPoint p = [(NSView*)self convertPoint:[info draggingLocation] fromView:nil];
+    NSString* row = ak_drop_row(info);
+    if (row && g_itemDrop)
+        {
+        g_itemDrop([row UTF8String], ak_win_of((NSView*)self), (int)p.x, (int)p.y);
+        return YES;
+        }
     return ak_deliver_files((NSView*)self, ak_drop_urls(info), p) ? YES : NO;
     }
 void ux_ak_set_file_drop(void* fn)
@@ -1650,7 +1670,7 @@ int ux_ak_window_create(int x, int y, int w, int h)
                       defer:NO];
     [win setReleasedWhenClosed:NO]; // ARC (g_win) owns the lifetime, not the close machinery
     NSView* v = [[ak_view_class() alloc] initWithFrame:NSMakeRect(0, 0, w, h)];
-    [v registerForDraggedTypes:@[ NSPasteboardTypeFileURL ]];
+    [v registerForDraggedTypes:@[ NSPasteboardTypeFileURL, AK_ROW_TYPE ]];
     // wrap in a real NSScrollView for native scrolling
     if (g_interactive)
         {
@@ -3601,6 +3621,11 @@ static ux_tbl_cols_fn g_tbl_cols = 0;
 static ux_tbl_title_fn g_tbl_title = 0;
 static ux_tbl_width_fn g_tbl_width = 0;
 static ux_tbl_multi_fn g_tbl_multi = 0;
+static ux_tbl_multi_fn g_tbl_drags = 0; /* whether a table's rows can be dragged out */
+void ux_ak_set_table_drag_hook(void* fn)
+    {
+    g_tbl_drags = (ux_tbl_multi_fn)fn;
+    }
 static ux_tbl_selset_fn g_tbl_selset = 0;
 void ux_ak_set_table_hooks(void* rows, void* cell, void* cols, void* title, void* width,
                            void* multi, void* selset)
@@ -3623,6 +3648,15 @@ static int g_tbl_reloading = 0; // guard: a reload's selection-restore must not 
 - (NSInteger)numberOfRowsInTableView:(NSTableView*)tv
     {
     return (self.peer && g_tbl_rows) ? g_tbl_rows(self.peer) : 0;
+    }
+/* A row dragged out: its first column, as the app's private row type. */
+- (id<NSPasteboardWriting>)tableView:(NSTableView*)tv pasteboardWriterForRow:(NSInteger)row
+    {
+    if (!self.peer || !g_tbl_drags || !g_tbl_drags(self.peer) || !g_tbl_cell)
+        return nil;
+    NSPasteboardItem* it = [[NSPasteboardItem alloc] init];
+    [it setString:ak_ns(g_tbl_cell(self.peer, (int)row, 0)) forType:AK_ROW_TYPE];
+    return it;
     }
 - (NSView*)tableView:(NSTableView*)tv viewForTableColumn:(NSTableColumn*)col row:(NSInteger)row
     {
@@ -3708,6 +3742,8 @@ void ux_ak_make_table(int handle, int node, int x, int y, int w, int h, void* pe
         }
     UXTableSource* src = [[UXTableSource alloc] init];
     src.peer = peer;
+    [tv setDraggingSourceOperationMask:NSDragOperationCopy forLocal:YES];
+    [tv setDraggingSourceOperationMask:NSDragOperationNone forLocal:NO];
     [tv setDataSource:src];
     [tv setDelegate:src];
     [sv setDocumentView:tv];
@@ -4427,4 +4463,34 @@ void ux_ak_window_set_min_size(int handle, int w, int h)
     if (handle <= 0 || handle >= UX_MAXW || !g_win[handle])
         return;
     [g_win[handle] setContentMinSize:NSMakeSize(w, h)];
+    }
+
+/* For tests: a table row dropped on window `handle` at (x, y), delivered as a real drop is. */
+int ux_ak_test_drop_item(int handle, const char* text, int x, int y)
+    {
+    if (handle <= 0 || handle >= UX_MAXW || !g_view[handle] || !g_itemDrop)
+        return 0;
+    g_itemDrop(text, handle, x, y);
+    return 1;
+    }
+
+/* For tests: what a drag of `row` out of the table at `node` carries, into buf (empty if the table
+   does not drag its rows), and whether window `handle` takes that as a drop.  1 = both. */
+int ux_ak_test_row_drag(int handle, int node, int row, char* buf, int n)
+    {
+    if (n > 0)
+        buf[0] = 0;
+    if (handle <= 0 || handle >= UX_MAXW || node < 0 || node >= UX_MAXN)
+        return 0;
+    NSScrollView* sv = (NSScrollView*)g_ctl[handle][node];
+    if (![sv isKindOfClass:[NSScrollView class]])
+        return 0;
+    NSTableView* tv = (NSTableView*)[sv documentView];
+    id<NSPasteboardWriting> w = [[tv dataSource] tableView:tv pasteboardWriterForRow:row];
+    if (!w)
+        return 0;
+    NSString* t = [(NSPasteboardItem*)w stringForType:AK_ROW_TYPE];
+    if (t && n > 0)
+        snprintf(buf, (size_t)n, "%s", [t UTF8String]);
+    return (t && [[g_view[handle] registeredDraggedTypes] containsObject:AK_ROW_TYPE]) ? 1 : 0;
     }

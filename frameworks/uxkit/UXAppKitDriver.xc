@@ -78,6 +78,8 @@ void ux_ak_stop(void);
 void ux_ak_menu_item_key(pointer sub, i32 tag, i32 key, i32 shift);
 void ux_ak_set_dispatch(pointer fn);
 void ux_ak_set_file_drop(pointer fn); // files dropped on a window: xgAKFileDrop
+void ux_ak_set_item_drop(pointer fn); // a table row dropped on a window: xgAKItemDrop
+void ux_ak_set_table_drag_hook(pointer fn);
 void ux_ak_window_set_min_size(i32 handle, i32 w, i32 h);     // register the toolkit event forwarder
 void ux_ak_set_turn_hook(pointer fn, i32 ms); // the frame clock: the display link, or a timer for a slow tick
 void ux_ak_set_control_fire(pointer fn); // register the control-click -> action forwarder
@@ -480,6 +482,18 @@ i32 xgAKTableMulti(pointer tbl)
     {
     return ((UXTableView*)tbl).nativeAllowsMultiple();
     }
+i32 xgAKTableDrags(pointer tbl)
+    {
+    return ((UXTableView*)tbl).nativeDragsRows();
+    }
+// A row of one of the app's tables dropped on a window, from the shim: to the app's handler.
+void xgAKItemDrop(u8* item, i32 win, i32 x, i32 y)
+    {
+    if (gAKApp != (UXApplication*)0)
+        {
+        gAKApp.deliverItemDrop(item, win, x, y);
+        }
+    }
 // The NSTableView owns the click UX (ctrl/shift), so it hands us the whole selected set at once.
 void xgAKTableSelectSet(pointer tbl, i32* rows, i32 n)
     {
@@ -549,6 +563,7 @@ class UXAppKitDriver : Object<UXViewDriver>
         ux_ak_set_table_hooks((pointer)&xgAKTableRows, (pointer)&xgAKTableCell, (pointer)&xgAKTableCols,
                               (pointer)&xgAKTableColTitle, (pointer)&xgAKTableColWidth,
                               (pointer)&xgAKTableMulti, (pointer)&xgAKTableSelectSet);
+        ux_ak_set_table_drag_hook((pointer)&xgAKTableDrags);
         ux_ak_set_outline_hooks((pointer)&xgAKOutlineChildren, (pointer)&xgAKOutlineChild,
                                 (pointer)&xgAKOutlineExpandable, (pointer)&xgAKOutlineValue,
                                 (pointer)&xgAKOutlineDidExpand);
@@ -2426,6 +2441,7 @@ class UXAppKitDriver : Object<UXViewDriver>
         gAKApp = app;
         ux_ak_set_dispatch((pointer)&xgAKDispatch);
         ux_ak_set_file_drop((pointer)&xgAKFileDrop);
+        ux_ak_set_item_drop((pointer)&xgAKItemDrop);
         ux_ak_set_control_fire((pointer)&xgAKFireControl);
         ux_ak_set_value_changed((pointer)&xgAKValueChanged); // slider/stepper/... value changes
         }

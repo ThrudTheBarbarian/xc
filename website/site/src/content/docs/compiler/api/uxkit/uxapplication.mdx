@@ -72,7 +72,7 @@ and the repaint has happened. Implement it only if you lay out views by hand.
 **Configuring** · [setDriver](#setdriver) · [setHeadless](#setheadless) · [setDelegate](#setdelegate) · [setMenuBar](#setmenubar) · [setIcon](#seticon--seticonpixels) · [setIconPixels](#seticon--seticonpixels)
 **The loop** · [run](#run) · [stop](#stop) · [isRunning](#isrunning) · [pump](#pump)
 **Windows** · [addWindow](#addwindow) · [closeWindow](#closewindow) · [closeWindowLater](#closewindowlater)
-**Files dropped on a window** · [setFileDropHandler](#setfiledrophandler) · [deliverFileDrop](#deliverfiledrop)
+**Files dropped on a window** · [setFileDropHandler](#setfiledrophandler) · [deliverFileDrop](#deliverfiledrop) · [setItemDropHandler](#setitemdrophandler) · [deliverItemDrop](#deliveritemdrop)
 **Screen** · [screenWidth](#screenwidth--screenheight) · [screenHeight](#screenwidth--screenheight)
 **Painting** · [displayIfNeeded](#displayifneeded)
 
@@ -125,6 +125,26 @@ void deliverFileDrop(u8* path, i32 window, i32 x, i32 y)
 ```
 
 What a driver calls for each dropped file; it passes the file to the handler.
+
+### setItemDropHandler
+
+```c
+void setItemDropHandler(callback h void(u8* item, i32 window, i32 x, i32 y))
+```
+
+Takes rows dragged out of the app's own tables (see
+[`setDragsRows`](/compiler/api/uxkit/uxtableview/#setdragsrows)) and dropped
+on its windows. The handler gets the row's first column, the window's handle
+and the point in its content. The text belongs to the driver, so copy it to
+keep it. From 0.7, on AppKit.
+
+### deliverItemDrop
+
+```c
+void deliverItemDrop(u8* item, i32 window, i32 x, i32 y)
+```
+
+What a driver calls for a dropped row; it passes the row to the handler.
 
 ### setMenuBar
 

@@ -224,6 +224,7 @@ class UXTableColumn : Object
     i16 rowHeight;
     i32 selectedRow;     // the anchor row: -1 = none, else the last row clicked (shift extends from it)
     bool allowsMultiple; // off: one row at a time; on: ctrl toggles, shift extends a range
+    bool dragsRows;      // a row can be dragged out, onto a window of the app (UXApplication.setItemDropHandler)
     i32 nrows;
 
     // How many rows the AES actually called back into.  This is the scaling number: a row
@@ -250,6 +251,7 @@ class UXTableColumn : Object
         rowHeight = (i16)16;
         selectedRow = (i32)-1;
         allowsMultiple = false;
+        dragsRows = false;
         nrows = (i32)0;
         drawCount = (i32)0;
         builtRows = (i32)0;
@@ -308,6 +310,17 @@ class UXTableColumn : Object
             return (i16)80;
             }
         return ((UXTableColumn* ?)columns.get((u16)c)).width;
+        }
+    // Let a row be dragged out of the table and dropped on one of the app's windows: the drop
+    // hands the app the row's first column (UXApplication.setItemDropHandler).  Where the backend
+    // supports it (AppKit).
+    void setDragsRows(bool on)
+        {
+        dragsRows = on;
+        }
+    i32 nativeDragsRows(void)
+        {
+        return dragsRows ? (i32)1 : (i32)0;
         }
     i32 nativeAllowsMultiple(void)
         {

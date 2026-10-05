@@ -63,7 +63,7 @@ controller field). A temporary is released as soon as `setDataSource` returns.
 
 **Data** · [setDataSource](#setdatasource) · [reloadData](#reloaddata) · [rowCount](#rowcount)
 **Columns** · [addColumn](#addcolumn) · [numberOfColumns](#numberofcolumns)
-**Selection** · [selection](#selection) · [selectRow](#selectrow) · [deselectAllRows](#deselectallrows) · [isRowSelected](#isrowselected) · [selectedCount](#selectedcount) · [selectedRows](#selectedrows--selectedrowlist) · [selectedRowList](#selectedrows--selectedrowlist) · [setRowSelected](#setrowselected) · [setAllowsMultipleSelection](#setallowsmultipleselection--allowsmultipleselection) · [allowsMultipleSelection](#setallowsmultipleselection--allowsmultipleselection)
+**Selection** · [selection](#selection) · [selectRow](#selectrow) · [deselectAllRows](#deselectallrows) · [isRowSelected](#isrowselected) · [selectedCount](#selectedcount) · [selectedRows](#selectedrows--selectedrowlist) · [selectedRowList](#selectedrows--selectedrowlist) · [setRowSelected](#setrowselected) · [setAllowsMultipleSelection](#setallowsmultipleselection--allowsmultipleselection) · [allowsMultipleSelection](#setallowsmultipleselection--allowsmultipleselection) · [setDragsRows](#setdragsrows)
 **Delegate** · [setDelegate](#setdelegate)
 **Geometry** · [setRowHeight](#setrowheight) · [contentHeight](#contentheight) · [countRows](#countrows--columntitle--columnwidth--rowheightvalue) · [columnTitle](#countrows--columntitle--columnwidth--rowheightvalue) · [columnWidth](#countrows--columntitle--columnwidth--rowheightvalue) · [rowHeightValue](#countrows--columntitle--columnwidth--rowheightvalue)
 
@@ -198,6 +198,16 @@ bool allowsMultipleSelection(void)
 
 Off (default): one row at a time. On: ctrl toggles a row and shift extends a
 range from the anchor, following the platform conventions on every backend.
+
+### setDragsRows
+
+```c
+void setDragsRows(bool on)
+```
+
+Lets a row be dragged out of the table onto one of the app's windows, where
+[`UXApplication.setItemDropHandler`](/compiler/api/uxkit/uxapplication/#setitemdrophandler)
+receives the row's first column. Off by default. From 0.7, on AppKit.
 
 ### countRows / columnTitle / columnWidth / rowHeightValue
 
