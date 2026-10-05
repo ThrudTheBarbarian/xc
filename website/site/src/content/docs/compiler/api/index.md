@@ -127,7 +127,7 @@ and every method grouped by task with a jump-list at the top.
 **[6502 (8-bit)](/compiler/api/6502/)**: the utilities the 8-bit target provides in place of an OS: [`Time`](/compiler/api/time/), [`Heap`](/compiler/api/heap/), [`Vbi`](/compiler/api/vbi/), [`System`](/compiler/api/system/). On the native targets these are thin wrappers over the host. On the 6502 they are target-specific implementations.
 
 
-Also documented: the graphics classes ([`Gfx`](/compiler/api/gfx/), [`GfxFactory`](/compiler/api/gfxfactory/)), [`FILE`](/compiler/api/file/) (a `stdio`-shaped file layer), [`CharacterSet`](/compiler/api/characterset/), [`string-xt6502`](/compiler/api/string-xt6502/), and the [`symbols`](/compiler/api/symbols/) / [`mapData`](/compiler/api/mapdata/) helpers.
+Also documented: the 6502's graphics classes ([`Gfx`](/compiler/api/gfx/), [`GfxFactory`](/compiler/api/gfxfactory/)), [`FILE`](/compiler/api/file/) (a `stdio`-shaped file layer), [`CharacterSet`](/compiler/api/characterset/), [`string-xt6502`](/compiler/api/string-xt6502/), and the [`symbols`](/compiler/api/symbols/) / [`mapData`](/compiler/api/mapdata/) helpers.
 
 :::note[Not every class exists on every target]
 A class present only under `xt6502/lib/` is a compile error on the native backends: `#import <System.xc>` does not resolve at all under `-A arm64`. A class present in both may still expose a narrower API on one of them. The per-class pages state where the two diverge.

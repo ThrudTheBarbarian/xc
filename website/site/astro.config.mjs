@@ -98,13 +98,6 @@ export default defineConfig({
 									],
 								},
 								{
-									label: 'Graphics',
-									items: [
-										{ label: 'Gfx', slug: 'compiler/api/gfx' },
-										{ label: 'GfxFactory', slug: 'compiler/api/gfxfactory' },
-									],
-								},
-								{
 									label: '6502 (8-bit)',
 									items: [
 										{ label: 'Overview', slug: 'compiler/api/6502' },
@@ -112,6 +105,8 @@ export default defineConfig({
 										{ label: 'Heap', slug: 'compiler/api/heap' },
 										{ label: 'Vbi', slug: 'compiler/api/vbi' },
 										{ label: 'System', slug: 'compiler/api/system' },
+										{ label: 'Gfx', slug: 'compiler/api/gfx' },
+										{ label: 'GfxFactory', slug: 'compiler/api/gfxfactory' },
 										{ label: 'Bank switching', slug: 'compiler/api/mapdata' },
 										{ label: 'Platform symbols', slug: 'compiler/api/symbols' },
 									],
