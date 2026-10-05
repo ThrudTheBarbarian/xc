@@ -103,7 +103,8 @@ class RKMainController : Object<UXTableDelegate>
     RKLibraryItem* placing;         // armed by a library pick: the next canvas press places it
     UXView* preview;                // the control a library drag shows over the form, or 0
     bool wireIn;                    // an outline row's drag is over the canvas
-    i32 wireInY;                    // where it came on, the start of its line
+    i32 wireInX;                    // where it began, the start of its line
+    i32 wireInY;
     RKLibraryItem* previewItem;     // what it previews
     // What is selected, by outline row kind (RKON_*): a control (`selected`), a placeholder, or one
     // of the document's objects (selTop); 0 = nothing.
@@ -188,6 +189,7 @@ class RKMainController : Object<UXTableDelegate>
         placing = (RKLibraryItem*)0;
         preview = (UXView*)0;
         wireIn = false;
+        wireInX = (i32)0;
         wireInY = (i32)0;
         previewItem = (RKLibraryItem*)0;
         selKind = (i32)0;
@@ -639,12 +641,9 @@ class RKMainController : Object<UXTableDelegate>
             {
             return;
             }
-        UXRect oa = overlay.absoluteFrame();
         i32 x0 = (i32)0;
         i32 y0 = (i32)0;
         self.endCentre(src, &x0, &y0);
-        x0 = x0 - (i32)oa.x;
-        y0 = y0 - (i32)oa.y;
         i32 x = wx;
         i32 y = wy;
         while (gDriver.trackDragStep(&x, &y) != (i32)0)
@@ -656,13 +655,13 @@ class RKMainController : Object<UXTableDelegate>
                 hot = overlay.onCanvas(overlay.drag.canvasRect(over.obj));
                 }
             self.sayOver(over);
-            overlay.showLine(x0, y0, x - (i32)oa.x, y - (i32)oa.y, hot);
+            self.drawLine(x0, y0, x, y, hot);
             if (gApp != (UXApplication*)0)
                 {
                 gApp.displayIfNeeded();
                 }
             }
-        overlay.hideLine();
+        self.eraseLine();
         RKEnd* dst = self.endAtWindow(x, y);
         i32 moved = (x - wx) * (x - wx) + (y - wy) * (y - wy);
         if (moved <= (i32)16)
@@ -754,7 +753,7 @@ class RKMainController : Object<UXTableDelegate>
             wy[0] = (i32)oa.y + (i32)r.y + (i32)r.h / (i32)2;
             return;
             }
-        wx[0] = (i32)0; // an outline row: the line is drawn from where its drag came onto the canvas
+        wx[0] = (i32)0; // an outline row: its own drag draws its line (wireHover)
         wy[0] = (i32)0;
         }
     // The end of a connection a row stands for, or 0 (a form's row).
@@ -1304,8 +1303,43 @@ class RKMainController : Object<UXTableDelegate>
             gApp.displayIfNeeded();
             }
         }
-    // An outline row dragged over the canvas: a line from where it came on, to the pointer, with
-    // the control under the pointer marked.  (-1, -1): the drag has left, or landed.
+    // A connection's line, window points, with `hot` (on the canvas) framed: drawn above everything
+    // where the backend can, so it crosses the outline and the inspector, and on the canvas where not.
+    void drawLine(i32 wx0, i32 wy0, i32 wx1, i32 wy1, UXRect hot)
+        {
+        UXRect oa = overlay.absoluteFrame();
+        UXWindow* w = self.window();
+        UXRect wh = hot;
+        if ((i32)hot.w > (i32)0)
+            {
+            wh = UXGeom.make((i16)((i32)hot.x + (i32)oa.x), (i16)((i32)hot.y + (i32)oa.y), hot.w, hot.h);
+            }
+        if (w != (UXWindow*)0 && w.showLine(wx0, wy0, wx1, wy1, wh))
+            {
+            return;
+            }
+        overlay.showLine(wx0 - (i32)oa.x, wy0 - (i32)oa.y, wx1 - (i32)oa.x, wy1 - (i32)oa.y, hot);
+        }
+    void eraseLine(void)
+        {
+        UXWindow* w = self.window();
+        if (w != (UXWindow*)0)
+            {
+            w.hideLine();
+            }
+        overlay.hideLine();
+        }
+    // The window the editor is in, or 0.
+    UXWindow* window(void)
+        {
+        if (gApp == (UXApplication*)0 || overlay == (RKEditOverlay*)0 || overlay.owner == (UXViewTree*)0)
+            {
+            return (UXWindow*)0;
+            }
+        return gApp.windowWithHandle(overlay.owner.winHandle);
+        }
+    // An outline row dragged out: a line from where its drag began, on the row, to the pointer, with
+    // the control under the pointer marked.  (-1, -1): the drag has ended.
     void wireHover(i32 x, i32 y)
         {
         if (overlay == (RKEditOverlay*)0)
@@ -1314,24 +1348,25 @@ class RKMainController : Object<UXTableDelegate>
             }
         if (x < (i32)0)
             {
-            overlay.hideLine();
+            self.eraseLine();
             wireIn = false;
+            }
+        else if (!wireIn)
+            {
+            wireIn = true; // the first report is where the drag began, on its row
+            wireInX = x;
+            wireInY = y;
             }
         else
             {
-            UXRect oa = overlay.absoluteFrame();
-            if (!wireIn)
-                {
-                wireIn = true;
-                wireInY = y - (i32)oa.y;
-                }
             RKEnd* over = self.endAtWindow(x, y);
             UXRect hot = UXGeom.make((i16)0, (i16)0, (i16)0, (i16)0);
             if (over != (RKEnd*)0 && over.isView())
                 {
                 hot = overlay.onCanvas(overlay.drag.canvasRect(over.obj));
                 }
-            overlay.showLine((i32)0, wireInY, x - (i32)oa.x, y - (i32)oa.y, hot);
+            self.sayOver(over);
+            self.drawLine(wireInX, wireInY, x, y, hot);
             }
         if (gApp != (UXApplication*)0)
             {

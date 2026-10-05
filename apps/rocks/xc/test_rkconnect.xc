@@ -28,6 +28,7 @@ u8* ux_ak_test_menu_titles(void);
 i32 ux_ak_test_drop_item(i32 handle, u8* text, i32 x, i32 y);
 i32 ux_ak_test_hover_item(i32 handle, u8* text, i32 x, i32 y);
 i32 ux_ak_test_outline_drag(i32 handle, i32 node, pointer item, u8* buf, i32 n);
+i32 ux_ak_test_line(i32 handle, i32* x1, i32* y1);
 i32 ux_ak_test_row_drag(i32 handle, i32 node, i32 row, u8* buf, i32 n);
 
 i32 gFails;
@@ -180,6 +181,8 @@ void main(void)
     app.setItemDropHandler(&c.onItemDrop);
     app.setItemHoverHandler(&c.onItemHover);
     d.attachApp(app);
+    app.addWindow(win);
+    gApp = app; // as run() sets it: the editor finds its window through it
     check("the window takes the drop", ux_ak_test_drop_file(win.handle, libPath, (i32)400, (i32)300), (i32)1);
     RKClass* fromLib = c.classBook.find((u8*)"PlayerController");
     checkTrue("the library's interface has the class", fromLib != (RKClass*)0 && fromLib.origin == (i32)RKC_REFLECTED);
@@ -388,14 +391,18 @@ void main(void)
     UXRect pv = c.canvasMap.viewFor(named(c, (u8*)"stop")).absoluteFrame();
     i32 px = (i32)pv.x + (i32)pv.w / (i32)2;
     i32 py = (i32)pv.y + (i32)pv.h / (i32)2;
-    UXRect ova = c.overlay.absoluteFrame();
-    ux_ak_test_hover_item(win.handle, &rowText[(i32)0], (i32)ova.x + (i32)5, py);
+    UXRect olf = c.formOutline.absoluteFrame();
+    ux_ak_test_hover_item(win.handle, &rowText[(i32)0], (i32)olf.x + (i32)30, (i32)olf.y + (i32)50); // the drag begins, on the row
+    checkTrue("the drag begins its line at the row", c.wireIn && c.wireInX == (i32)olf.x + (i32)30);
     ux_ak_test_hover_item(win.handle, &rowText[(i32)0], px, py);
-    checkTrue("over the canvas, a line follows it", c.overlay.wiring && c.overlay.lineX1 == px - (i32)ova.x && c.overlay.lineX0 == (i32)0);
+    i32 lx = (i32)0;
+    i32 ly = (i32)0;
+    check("a line above everything follows it", ux_ak_test_line(win.handle, &lx, &ly), (i32)1);
+    checkTrue("to the pointer", lx == px && ly == py);
     checkTrue("and no control is previewed", c.preview == (UXView*)0);
     i32 nk = (i32)c.doc.connections.count();
     ux_ak_test_drop_item(win.handle, &rowText[(i32)0], px, py);
-    checkTrue("the line goes when it lands", !c.overlay.wiring);
+    checkTrue("the line goes when it lands", ux_ak_test_line(win.handle, &lx, &ly) == (i32)0 && !c.overlay.wiring);
     checkTrue("dropped on Stop: the controller's members for it are offered", c.chooser != (RKWireChooser*)0 && rowOf(c, (u8*)"playButton") >= (i32)0);
     c.tableSelectionDidChange(c.chooser.table, rowOf(c, (u8*)"playButton"));
     UXRscRef* stopRef = c.doc.refFor(c.doc.treeAt(c.shownTree), named(c, (u8*)"stop"));
