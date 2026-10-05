@@ -1695,6 +1695,17 @@ class DwCur
         return cache(die, String.withCString("pointer"));
         }
 
+    // How many DW_TAG_formal_parameter children a subprogram DIE has.
+    u32 dwParamCount(DwDIE* die)
+        {
+        u32 n = (u32)0;
+        Array* kids = die.children();
+        for (u32 k = (u32)0; k < kids.count(); k = k + (u32)1)
+            if (((DwDIE*)kids.get(k)).tag() == (u32)DW_TAG_formal_parameter)
+                n = n + (u32)1;
+        return n;
+        }
+
     // ── declaration emission ─────────────────────────────────────────────
     bool alreadyEmitted(String* name)
         {
@@ -1804,7 +1815,14 @@ class DwCur
             typeForDIE(die);
             }
 
-        Map* seenFn = new Map();
+        // One DIE per exported name. GCC emits a parameterless
+        // DW_TAG_subprogram with DW_AT_declaration in every unit that CALLS a
+        // function, before the definition, so the first DIE with a name is
+        // often not the one that knows the parameters: prefer a DIE that
+        // carries them, as the reference does (bug 607). Names keep the order
+        // they first appear in.
+        Map* bestFn = new Map();
+        Array* fnOrder = new Array();
         for (u32 i = (u32)0; i < _dieOrder.count(); i = i + (u32)1)
             {
             DwDIE* die = dieAt(((Number*)_dieOrder.get(i)).asU32());
@@ -1817,9 +1835,19 @@ class DwCur
                 continue;
             if (_exports.get((Hashable*)nm) == (Object*)0)
                 continue;
-            if (seenFn.get((Hashable*)nm) != (Object*)0)
-                continue;
-            seenFn.set((Hashable*)nm, (Object*)Number.withU32((u32)1));
+            DwDIE* prev = (DwDIE*)bestFn.get((Hashable*)nm);
+            if (prev == (DwDIE*)0)
+                {
+                bestFn.set((Hashable*)nm, (Object*)die);
+                fnOrder.add((Object*)nm);
+                }
+            else if (dwParamCount(prev) == (u32)0 && dwParamCount(die) > (u32)0)
+                bestFn.set((Hashable*)nm, (Object*)die);
+            }
+        for (u32 i = (u32)0; i < fnOrder.count(); i = i + (u32)1)
+            {
+            String* nm = (String*)fnOrder.get(i);
+            DwDIE* die = (DwDIE*)bestFn.get((Hashable*)nm);
 
             String* ret = die.hasType() ? typeForRef(die.typeRef()) : String.withCString("void");
             if (ret == (String*)0)
