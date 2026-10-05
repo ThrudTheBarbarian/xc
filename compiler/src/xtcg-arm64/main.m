@@ -109,6 +109,12 @@ int main(int argc, const char* argv[])
                 // reason: the module boundary is not the program boundary.
                 [XTIROptDeadFunctionElim setKeepAllFunctions:YES];
                 }
+            else if ([arg isEqualToString:@"--keep-class-root"])
+                {
+                // The link takes objects as well: keep the class-name root
+                // they call (bug 605).
+                [XTIROptDeadFunctionElim setKeepClassRoot:YES];
+                }
             else if ([arg isEqualToString:@"--emit-lib"])
                 {
                 // Library build: this module IS a shared library, so its public

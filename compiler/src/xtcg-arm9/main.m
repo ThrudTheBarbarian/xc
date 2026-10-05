@@ -111,6 +111,12 @@ int main(int argc, const char* argv[])
                 [XTArm9Backend setEmitLib:YES];
                 [XTIROptDeadFunctionElim setKeepAllFunctions:YES];
                 }
+            else if ([arg isEqualToString:@"--keep-class-root"])
+                {
+                // The link takes objects as well: keep the class-name root
+                // they call (bug 605).
+                [XTIROptDeadFunctionElim setKeepClassRoot:YES];
+                }
             else if ([arg isEqualToString:@"--emit-lib"])
                 {
                 [XTArm9Backend setEmitLib:YES];                    // export the public class API

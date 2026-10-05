@@ -590,13 +590,16 @@ done
 if [ "$(otool -l r | grep -A2 LC_RPATH | grep path)" = "$(otool -l x | grep -A2 LC_RPATH | grep path)" ] \
    && otool -l x | grep -q /tmp/envrp; then ok "XTC_LDFLAGS: -rpath reaches the link"
 else bad "XTC_LDFLAGS: the LC_RPATH entries differ"; fi
-# The object joins the link either way. Until bug 605 (a `-c` object needs the
-# class-name root, which the main module's dead-function elimination drops)
-# the link stops at `_xtc_class_new`; before 580 it "linked" and the program
-# died at launch. Either outcome shows lib.o reached the link.
-( export XTC_LDFLAGS="lib.o"; "$XC" -H "$ROOT" -q -A arm64 -o x hello.xc ) > ldf.out 2>&1
-if [ $? = 0 ] || grep -q "undefined symbol '_xtc_class_new'" ldf.out; then ok "XTC_LDFLAGS: an object joins the link"
-else bad "XTC_LDFLAGS: an object did not link: $(head -c 200 ldf.out)"; fi
+# An object joins the link, and the program runs. A `-c` object calls the
+# class-name root `_xtc_class_new`, which nothing in the main module calls:
+# its dead-function elimination dropped it until bug 605, and the link
+# stopped there (before 580 it "linked" and the program died at launch).
+for c in "$REF" "$XC"; do
+    rm -f x
+    ( export XTC_LDFLAGS="lib.o"; "$c" -H "$ROOT" -q -A arm64 -o x hello.xc ) > ldf.out 2>&1
+    if [ $? = 0 ] && [ "$(./x 2>&1)" = "hello 42" ]; then ok "XTC_LDFLAGS: an object joins the link ($(basename "$c"))"
+    else bad "XTC_LDFLAGS: an object did not link and run ($(basename "$c")): $(head -c 200 ldf.out)"; fi
+done
 # --link-libs: the reference passes it to its wasm32 code generator when an app
 # imports a .wasm library, and knows no option of that name; xcc-xc takes it.
 xcconly "--link-libs (-A wasm32)" 0 "" -q -A wasm32 --link-libs -o @OUT@.wat ret.xc

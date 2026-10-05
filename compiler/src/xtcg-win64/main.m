@@ -103,6 +103,12 @@ int main(int argc, const char* argv[])
                 // with no symbols at all.
                 [XTIROptDeadFunctionElim setKeepAllFunctions:YES];
                 }
+            else if ([arg isEqualToString:@"--keep-class-root"])
+                {
+                // The link takes objects as well: keep the class-name root
+                // they call (bug 605).
+                [XTIROptDeadFunctionElim setKeepClassRoot:YES];
+                }
             else if ([arg isEqualToString:@"--emit-lib"])
                 {
                 [XTIROptDeadFunctionElim setKeepAllFunctions:YES]; // keep it all

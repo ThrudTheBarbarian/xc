@@ -89,6 +89,12 @@ int main(int argc, const char* argv[])
                 {
                 optLevel = 3;
                 }
+            else if ([arg isEqualToString:@"--keep-class-root"])
+                {
+                // The link takes objects as well: keep the class-name root
+                // they call (bug 605).
+                [XTIROptDeadFunctionElim setKeepClassRoot:YES];
+                }
             else if ([arg isEqualToString:@"--emit-lib"])
                 {
                 // Library build: keep every function (the export set is the

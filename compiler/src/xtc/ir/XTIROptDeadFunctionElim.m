@@ -12,12 +12,18 @@
 // here calls it. Keep every function — the linker/visibility decides what's
 // actually exported.
 static BOOL sKeepAllFunctions = NO;
+static BOOL sKeepClassRoot = NO;
 
 @implementation XTIROptDeadFunctionElim
 
 + (void)setKeepAllFunctions:(BOOL)keep
     {
     sKeepAllFunctions = keep;
+    }
+
++ (void)setKeepClassRoot:(BOOL)keep
+    {
+    sKeepClassRoot = keep;
     }
 
 - (NSString*)passName
@@ -57,6 +63,8 @@ static BOOL sKeepAllFunctions = NO;
 
     // 1. main is the canonical entry point.
     seed(@"main");
+    if (sKeepClassRoot)
+        seed(@"_xtc_class_new");
 
     // 1b. Load-time constructors are roots: nothing in the program CALLS them
     // (the backend references each only from the target constructor list, which

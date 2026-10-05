@@ -23,6 +23,10 @@ NS_ASSUME_NONNULL_BEGIN
 // from outside, even though nothing in this unit calls it). Set by xtcg-<arch>
 // when --emit-lib is passed.
 + (void)setKeepAllFunctions:(BOOL)keep;
+// A program whose link takes objects as well (-Wl,foo.o, $XTC_LDFLAGS): keep
+// the class-name root `_xtc_class_new`, which those objects call though
+// nothing in this module does (bug 605).
++ (void)setKeepClassRoot:(BOOL)keep;
 @end
 
 NS_ASSUME_NONNULL_END

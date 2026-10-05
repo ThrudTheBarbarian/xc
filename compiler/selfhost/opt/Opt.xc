@@ -1032,6 +1032,11 @@ class OptProfile
     // dead-function-elim seeds EVERY function (the twin of the oracle's
     // +[XTIROptDeadFunctionElim setKeepAllFunctions:]).
     bool _keepAllFunctions;
+    // A program whose link takes objects as well (-Wl,foo.o, $XTC_LDFLAGS):
+    // keep the class-name root `_xtc_class_new`, which those objects call
+    // though nothing in this module does (bug 605). The twin of the oracle's
+    // +[XTIROptDeadFunctionElim setKeepClassRoot:].
+    bool _keepClassRoot;
 
     void init(void)
         {
@@ -1043,6 +1048,10 @@ class OptProfile
     void setStopAfter(String* n)
         {
         _stopAfter = n;
+        }
+    void setKeepClassRoot(bool on)
+        {
+        _keepClassRoot = on;
         }
     void setKeepAllFunctions(bool on)
         {
@@ -1445,6 +1454,8 @@ class OptProfile
         // even though nothing calls it: the backend emits the constructor list
         // after this pass, so the reference does not exist yet.
         seed(m, reachable, work, String.withCString("main"));
+        if (_keepClassRoot)
+            seed(m, reachable, work, String.withCString("_xtc_class_new"));
         for (u32 i = (u32)0; i < m.modinits().count(); i = i + (u32)1)
             seed(m, reachable, work, (String*)m.modinits().get(i));
 

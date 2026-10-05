@@ -347,6 +347,21 @@ class DriverOptions
     }
 }
 
+// Whether a program's link takes objects or archives besides its own module
+// (-Wl,foo.o, -Xlinker libbar.a, a path in $XTC_LDFLAGS). Their code may call
+// the class-name root `_xtc_class_new`, which then has to survive dead-function
+// elimination although nothing in this module calls it (bug 605).
+bool linkJoinsObjects(DriverOptions* d)
+{
+    Array* li = d.linkInputs();
+    for (u32 i = (u32)0; i < li.count(); i = i + (u32)1) {
+        String* t = (String*)li.get(i);
+        if (t.hasPrefix(String.withCString("-"))) continue;
+        if (t.hasSuffix(String.withCString(".o")) || t.hasSuffix(String.withCString(".a"))) return true;
+    }
+    return false;
+}
+
 bool isAndroid(DriverOptions* d) { return d.arch().equals(String.withCString("android")); }
 bool isWasm(DriverOptions* d)
 {
@@ -1338,6 +1353,7 @@ void emitWasm(DriverOptions* d, IRModule* mod)
     // constructor no internal code calls — and the app that did call it failed
     // at instantiation with `depExports[d][n] is not a function`.
     if (d.emitLib()) opt.setKeepAllFunctions(true);
+    else if (linkJoinsObjects(d)) opt.setKeepClassRoot(true);
     opt.run(mod);
     dumpOptIR(d, mod);
 
@@ -1608,6 +1624,7 @@ void emitWin64(DriverOptions* d, IRModule* mod)
     // An OBJECT's functions are all potentially called from ANOTHER object, so
     // cross-function DCE must not read "nothing here calls it" as dead.
     if (d.emitLib() || d.compileOnly()) prof.setKeepAllFunctions(true);
+    else if (linkJoinsObjects(d)) prof.setKeepClassRoot(true);
     prof.run(mod);
     dumpOptIR(d, mod);
 
@@ -1995,6 +2012,7 @@ void emitX86_64(DriverOptions* d, IRModule* mod)
     // An OBJECT's functions are all potentially called from ANOTHER object, so
     // cross-function DCE must not read "nothing here calls it" as dead.
     if (d.emitLib() || d.compileOnly()) prof.setKeepAllFunctions(true);
+    else if (linkJoinsObjects(d)) prof.setKeepClassRoot(true);
     prof.run(mod);
     dumpOptIR(d, mod);
 
@@ -2495,6 +2513,7 @@ void emitArm9(DriverOptions* d, IRModule* mod)
     // A LIBRARY keeps every function it defines — the client is what calls
     // them, and dead-function elimination cannot see the client.
     if (d.emitLib() || d.compileOnly()) prof.setKeepAllFunctions(true);
+    else if (linkJoinsObjects(d)) prof.setKeepClassRoot(true);
     prof.run(mod);
     dumpOptIR(d, mod);
 
@@ -3989,6 +4008,7 @@ void emitModule(DriverOptions* d, IRModule* mod)
     // An OBJECT's functions are all potentially called from ANOTHER object,
     // for the same reason.
     if (d.emitLib() || d.compileOnly()) opt.setKeepAllFunctions(true);
+    else if (linkJoinsObjects(d)) opt.setKeepClassRoot(true);
     opt.run(mod);
     dumpOptIR(d, mod);
 

@@ -887,6 +887,26 @@ static BOOL x86LinkTokenIsFileInput(NSString *tok) {
     return [e isEqualToString:@"o"] || [e isEqualToString:@"a"];
 }
 
+// Whether a program's link takes objects or archives besides its own module
+// (-Wl,foo.o, -Xlinker libbar.a, a path in $XTC_LDFLAGS). Their code may call
+// the class-name root `_xtc_class_new`, which then has to survive dead-function
+// elimination although nothing in this module calls it (bug 605).
+static BOOL linkJoinsObjects(XTCommandLineOptions *opts) {
+    NSMutableArray<NSString *> *toks = [NSMutableArray array];
+    for (NSString *arg in opts.linkerArgs) {
+        if ([arg hasPrefix:@"-Wl,"])
+            [toks addObjectsFromArray:[[arg substringFromIndex:4] componentsSeparatedByString:@","]];
+        else [toks addObject:arg];
+    }
+    const char *ld = getenv("XTC_LDFLAGS");
+    if (ld && *ld)
+        [toks addObjectsFromArray:[@(ld) componentsSeparatedByCharactersInSet:
+                                   [NSCharacterSet whitespaceCharacterSet]]];
+    for (NSString *t in toks)
+        if (t.length && ![t hasPrefix:@"-"] && x86LinkTokenIsFileInput(t)) return YES;
+    return NO;
+}
+
 // Resolve every `-l<name>` on the command line into a static archive the
 // in-house x86-64 linker can pull from (finding #15). The old behaviour sent
 // ANY -l to the clang fallback — which links the C library but NOT the
@@ -4745,6 +4765,8 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
     // -c: an object's functions are all potentially called from another object,
     // so cross-function DCE must not treat "nothing here calls it" as dead.
     if (opts.compileOnly) [cgArgs addObject:@"--object"];
+    // A program whose link takes other objects keeps the class-name root.
+    else if (!opts.emitLib && linkJoinsObjects(opts)) [cgArgs addObject:@"--keep-class-root"];
     // wasm32 app that #imports .wasm libraries: the code generator must
     // export the runtime/memory/table surface the loader wires each library
     // to (and resolve library symbols through package imports). The
