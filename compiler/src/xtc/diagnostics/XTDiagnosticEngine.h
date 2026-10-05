@@ -87,6 +87,11 @@ typedef NS_ENUM(NSInteger, XTWarningCategory) {
                              // the compiler cannot prove two items never write
                              // the same element. If they can, the result
                              // depends on which item runs last.
+    XTWarnParGpu,            // -Wno-par-gpu — on a target with a GPU, a `par`
+                             // block that cannot run there, and why: it runs
+                             // on the CPU's threads instead, which a reader
+                             // expecting the GPU would otherwise only find by
+                             // timing it.
 };
 
 /****************************************************************************\

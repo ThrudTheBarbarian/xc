@@ -56,6 +56,9 @@ typedef NS_ENUM(uint8_t, XTParSpace) {
 // (YES for the flag). The host ran every init before the block started, so
 // the flag reads as done (2) and the rest prints nothing.
 @property(nonatomic, readonly) NSMutableDictionary<NSNumber*, NSNumber*>* sinitOf;
+// Why the kernel could not be printed, for the par-gpu warning: the first
+// reason met, phrased to follow "because" ("it calls Math.sin, which …").
+@property(nonatomic, nullable) NSString* why;
 @property(nonatomic) NSMutableArray<NSString*>* helperText;
 @property(nonatomic) NSMutableSet<NSString*>* helperNames;
 @end
@@ -64,6 +67,9 @@ typedef NS_ENUM(uint8_t, XTParSpace) {
 - (nullable XTIRType*)typeOf:(XTIRValueId)v;
 - (NSInteger)selfFieldOf:(XTIROperand*)op;
 - (BOOL)analyse;
+- (void)because:(NSString*)why;
+- (NSString*)whyFor:(XTIRInsn*)i ptx:(BOOL)ptx;
+- (NSString*)callFailed:(NSString*)callee helper:(nullable XTIRParMSL*)h;
 @end
 
 NS_ASSUME_NONNULL_END

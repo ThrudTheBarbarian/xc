@@ -86,6 +86,8 @@ static BOOL gEmitsPTX = NO;
 // give it the kernel's source for the target's GPU (Metal on macOS, PTX for
 // NVIDIA on Windows), or "" when the block stays on the CPU.
 + (void)fillSourcesIn:(XTIRModule*)module
+              classDecls:(NSDictionary<NSString*, XTClassDeclNode*>*)classDecls
+             diagnostics:(XTDiagnosticEngine*)diag
     {
     for (XTIRFunction* f in module.functions)
         {
@@ -104,9 +106,20 @@ static BOOL gEmitsPTX = NO;
                 tag = fastTag;
             }
         BOOL fast = tag == fastTag;
-        NSString* msl = gEmitsMetal ? ([XTIRParMSL sourceForKernel:f module:module fast:fast] ?: @"")
-                      : gEmitsPTX   ? ([XTIRParMSL ptxForKernel:f module:module fast:fast] ?: @"")
+        NSString* why = nil;
+        NSString* msl = gEmitsMetal ? [XTIRParMSL sourceForKernel:f module:module fast:fast why:&why]
+                      : gEmitsPTX   ? [XTIRParMSL ptxForKernel:f module:module fast:fast why:&why]
                                     : @"";
+        if (!msl)
+            {
+            // On a target with a GPU, say why this block stays on the CPU.
+            NSString* cls = [f.name substringToIndex:f.name.length - 4];
+            [diag emitWarning:[NSString stringWithFormat:@"this 'par' block runs on the CPU only, because %@",
+                                                         why ?: @"its GPU version cannot express something it uses yet"]
+                     category:XTWarnParGpu
+                           at:classDecls[cls].location];
+            msl = @"";
+            }
         for (XTIRSymbol* sym in module.symbols)
             {
             NSData* b = sym.stringBytes;
@@ -181,7 +194,7 @@ static BOOL gEmitsPTX = NO;
         [diag emitError:msg at:decl.location];
         }
     if (ok)
-        [self fillSourcesIn:module];
+        [self fillSourcesIn:module classDecls:classDecls diagnostics:diag];
     return ok;
     }
 

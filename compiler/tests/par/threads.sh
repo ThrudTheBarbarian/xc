@@ -33,7 +33,14 @@ for src in tests/fixtures/par_*.xc; do
         fail=$((fail + 1)); continue
     fi
     # A clean fixture compiles in silence: anything printed is a warning it
-    # should not have, or a stray print left in the compiler.
+    # should not have, or a stray print left in the compiler. A fixture that
+    # expects a warning (a block kept on the CPU on purpose) names it in an
+    # `//xtc-warn: <text>` line, and only that line is let through.
+    sed -n 's|^//xtc-warn: *||p' "$src" > "$WORK/$name.want"
+    if [ -s "$WORK/$name.want" ]; then
+        grep -v -F -f "$WORK/$name.want" "$WORK/$name.err" > "$WORK/$name.rest" || true
+        mv "$WORK/$name.rest" "$WORK/$name.err"
+    fi
     if [ -s "$WORK/$name.err" ]; then
         echo "FAIL $name: the compiler printed:"; sed 's/^/    /' "$WORK/$name.err" | head -5
         fail=$((fail + 1)); continue

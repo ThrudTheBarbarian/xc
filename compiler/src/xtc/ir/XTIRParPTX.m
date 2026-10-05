@@ -120,6 +120,7 @@ static NSString* ptxNarrowFix(XTIRType* t, NSString* r)
 @implementation XTIRParMSL (PTX)
 
 + (nullable NSString*)ptxForKernel:(XTIRFunction*)run module:(XTIRModule*)module fast:(BOOL)fast
+                                why:(NSString* _Nullable* _Nullable)why
     {
     XTIRParMSL* p = [XTIRParMSL new];
     p.module = module;
@@ -127,7 +128,10 @@ static NSString* ptxNarrowFix(XTIRType* t, NSString* r)
     p.fast = fast;
     p.helperText = [NSMutableArray array];
     p.helperNames = [NSMutableSet set];
-    return [p ptxKernel];
+    NSString* out = [p ptxKernel];
+    if (!out && why)
+        *why = p.why;
+    return out;
     }
 
 - (NSString*)ptxReg:(XTIRValueId)v
@@ -636,7 +640,10 @@ static NSString* ptxNarrowFix(XTIRType* t, NSString* r)
                 h.helperNames = self.helperNames;
                 NSString* text = [h ptxHelper:fn];
                 if (!text)
+                    {
+                    [self because:[self callFailed:callee helper:h]];
                     return nil;
+                    }
                 [self.helperText addObject:text];
                 }
             NSMutableString* s = [NSMutableString stringWithString:@"\t{\n"];
@@ -683,7 +690,10 @@ static NSString* ptxNarrowFix(XTIRType* t, NSString* r)
             {
             NSString* st = [self ptxStatement:i];
             if (!st)
+                {
+                [self because:[self whyFor:i ptx:YES]];
                 return nil;
+                }
             [s appendString:st];
             }
         XTIRInsn* t = b.terminator;

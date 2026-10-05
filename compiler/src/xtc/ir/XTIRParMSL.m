@@ -59,12 +59,74 @@ static NSString* unsignedName(XTIRType* t)
 @implementation XTIRParMSL
 
 + (nullable NSString*)sourceForKernel:(XTIRFunction*)run module:(XTIRModule*)module fast:(BOOL)fast
+                                   why:(NSString* _Nullable* _Nullable)why
     {
     XTIRParMSL* p = [XTIRParMSL new];
     p.module = module;
     p.fn = run;
     p.fast = fast;
-    return [p print];
+    NSString* out = [p print];
+    if (!out && why)
+        *why = p.why;
+    return out;
+    }
+
+// `Stdio$printf` reads as `Stdio.printf`, and an overload's `__double` tail goes.
+static NSString* shownName(NSString* irName)
+    {
+    NSRange r = [irName rangeOfString:@"__"];
+    NSString* s = (r.location != NSNotFound && r.location > 0) ? [irName substringToIndex:r.location] : irName;
+    return [s stringByReplacingOccurrencesOfString:@"$" withString:@"."];
+    }
+
+// The maths a GPU has only approximately (NVIDIA), by its bare name.
+static BOOL isTranscendental(NSString* callee)
+    {
+    NSString* m = callee;
+    if ([m hasPrefix:@"Math$"])
+        m = [m substringFromIndex:5];
+    NSRange r = [m rangeOfString:@"__"];
+    if (r.location != NSNotFound)
+        m = [m substringToIndex:r.location];
+    if ([m hasPrefix:@"_xm_"])
+        m = [m substringFromIndex:4];
+    if ([m hasSuffix:@"f"] && m.length > 3)
+        m = [m substringToIndex:m.length - 1];
+    return [@[ @"sin", @"cos", @"exp", @"ln", @"log", @"pow" ] containsObject:m];
+    }
+
+- (void)because:(NSString*)why
+    {
+    if (!self.why)
+        self.why = why;
+    }
+
+// The reason an instruction could not be printed.
+- (NSString*)whyFor:(XTIRInsn*)i ptx:(BOOL)ptx
+    {
+    if (i.opcode == XTIROpCall && i.operands.count && i.operands[0].kind == XTIROperandKindSym)
+        {
+        NSString* callee = [self.module symbolForId:i.operands[0].symbolId].name;
+        if (ptx && isTranscendental(callee))
+            return self.fast
+                ? [NSString stringWithFormat:@"it calls %@ on a double, which this GPU has in a fast form only for float",
+                                             shownName(callee)]
+                : [NSString stringWithFormat:@"it calls %@, which this GPU has only in an approximate form, and the "
+                                             @"block's goal is accuracy",
+                                             shownName(callee)];
+        return [self callFailed:callee helper:nil];
+        }
+    if (!ptx && i.result.type.kind == XTIRTypeKindF64)
+        return @"it uses double, which Apple GPUs do not have";
+    return @"it uses an operation its GPU version cannot express yet";
+    }
+
+// A call that could not be printed: the helper's own reason, when there is one.
+- (NSString*)callFailed:(NSString*)callee helper:(nullable XTIRParMSL*)h
+    {
+    if (h.why)
+        return [NSString stringWithFormat:@"it calls %@, which cannot run on the GPU (%@)", shownName(callee), h.why];
+    return [NSString stringWithFormat:@"it calls %@, which cannot run on the GPU", shownName(callee)];
     }
 
 @synthesize sinitOf = _sinitOf;
@@ -173,7 +235,10 @@ static NSString* unsignedName(XTIRType* t)
                     if (k >= 0)
                         {
                         if ((NSUInteger)k >= fields.count)
+                            {
+                            [self because:@"it uses an operation its GPU version cannot express yet"];
                             return NO;
+                            }
                         self.space[@(r)] = @(XTParSpaceThread);
                         }
                     else if (i.operands.count && i.operands[0].kind == XTIROperandKindUse)
@@ -187,7 +252,11 @@ static NSString* unsignedName(XTIRType* t)
                     // A pointer ivar of the block object: a captured array.
                     NSInteger k = [self selfFieldOf:i.operands[0]];
                     if (k <= 0)
-                        return NO; // a pointer read from anywhere else
+                        {
+                        // a pointer read from anywhere else
+                        [self because:@"it reads a pointer from memory, which its GPU version cannot follow"];
+                        return NO;
+                        }
                     [self.bufferFields addIndex:(NSUInteger)k];
                     self.space[@(r)] = @(XTParSpaceDevice);
                     self.bufferOf[@(r)] = @(k);
@@ -220,11 +289,26 @@ static NSString* unsignedName(XTIRType* t)
                         }
                     // A data global of scalars (an array, or one value): a
                     // device buffer. Anything else stays on the CPU.
-                    if (self.helperMode || !g)
+                    if (!g)
+                        {
+                        [self because:@"it uses an operation its GPU version cannot express yet"];
                         return NO;
+                        }
+                    if (self.helperMode)
+                        {
+                        [self because:[NSString stringWithFormat:@"it uses the global %@", shownName(g.name)]];
+                        return NO;
+                        }
                     if (g.kind != XTIRSymbolKindDataGlobal || i.result.type.kind != XTIRTypeKindPtr ||
                         !scalarName(i.result.type.pointeeType))
+                        {
+                        XTIRType* pt = i.result.type.kind == XTIRTypeKindPtr ? i.result.type.pointeeType : nil;
+                        [self because:[NSString stringWithFormat:pt.kind == XTIRTypeKindF64
+                                           ? @"it uses %@, an array of double; the GPU holds arrays of float and integers"
+                                           : @"it uses %@, which is not a global array of numbers",
+                                           shownName(g.name)]];
                         return NO;
+                        }
                     if (![self.globals containsObject:g.name])
                         [self.globals addObject:g.name];
                     self.space[@(r)] = @(XTParSpaceDevice);
@@ -242,7 +326,10 @@ static NSString* unsignedName(XTIRType* t)
         XTIRInsn* d = self.def[v];
         if (d.result.type.kind == XTIRTypeKindPtr && d.opcode != XTIROpPhi &&
             [self.space[v] unsignedIntegerValue] == XTParSpaceNone)
+            {
+            [self because:@"it uses a pointer its GPU version cannot place"];
             return NO;
+            }
         }
     return YES;
     }
@@ -261,6 +348,8 @@ static NSString* unsignedName(XTIRType* t)
     NSString* n = scalarName(t);
     if (!n)
         {
+        [self because:t.kind == XTIRTypeKindF64 ? @"it uses double, which Apple GPUs do not have"
+                                                : @"it uses a value its GPU version cannot hold yet"];
         self.failed = YES;
         return @"";
         }
@@ -585,7 +674,10 @@ static NSString* unsignedName(XTIRType* t)
         {
         NSString* st = [self statement:i];
         if (!st)
+            {
+            [self because:[self whyFor:i ptx:NO]];
             return NO;
+            }
         if (st.length)
             [out appendFormat:@"%@%@\n", ind, st];
         }
@@ -906,7 +998,10 @@ static NSString* intrinsicFor(NSString* callee)
                     h.helperNames = self.helperNames;
                     NSString* text = [h printHelper:fn];
                     if (!text)
+                        {
+                        [self because:[self callFailed:callee helper:h]];
                         return nil;
+                        }
                     [self.helperText addObject:text];
                     }
                 }
@@ -988,7 +1083,10 @@ static NSString* intrinsicFor(NSString* callee)
             {
             NSString* s = [self statement:i];
             if (!s)
+                {
+                [self because:[self whyFor:i ptx:NO]];
                 return NO;
+                }
             if (s.length)
                 [body appendFormat:@"            %@\n", s];
             }

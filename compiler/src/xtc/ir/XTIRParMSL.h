@@ -24,14 +24,16 @@ NS_ASSUME_NONNULL_BEGIN
 // The kernel's MSL, or nil when this block cannot run on Metal: it uses f64
 // (§7), a global, a call other than the maths intrinsics, or IR the printer
 // does not know. A nil block runs on the CPU.
-+ (nullable NSString*)sourceForKernel:(XTIRFunction*)run module:(XTIRModule*)module fast:(BOOL)fast;
++ (nullable NSString*)sourceForKernel:(XTIRFunction*)run module:(XTIRModule*)module fast:(BOOL)fast
+                                   why:(NSString* _Nullable* _Nullable)why;
 
 @end
 
 // The same kernel as PTX for NVIDIA GPUs (XTIRParPTX.m); nil keeps the block
 // on the CPU.
 @interface XTIRParMSL (PTX)
-+ (nullable NSString*)ptxForKernel:(XTIRFunction*)run module:(XTIRModule*)module fast:(BOOL)fast;
++ (nullable NSString*)ptxForKernel:(XTIRFunction*)run module:(XTIRModule*)module fast:(BOOL)fast
+                                why:(NSString* _Nullable* _Nullable)why;
 @end
 
 NS_ASSUME_NONNULL_END

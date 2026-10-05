@@ -14226,6 +14226,11 @@ class ClassInfo
     // data ("0"). The host ran every init before the block started, so the
     // flag reads as done (2) and the rest prints nothing.
     Map* _mSinit;
+    // Why the kernel could not be printed, for the par-gpu warning: the first
+    // reason met, phrased to follow "because" ("it calls Math.sin, which …").
+    // A helper's own reason comes back to its caller in _mHelperWhy.
+    String* _mWhy;
+    String* _mHelperWhy;
     Map* _mParams;          // a helper's parameter value seq -> its index
     Array* _mHelperText;
     Map* _mHelperNames;
@@ -14424,7 +14429,7 @@ class ClassInfo
                     i64 k = mslSelfField(ip);
                     if (k >= (i64)0)
                         {
-                        if (k >= (i64)_mObj.fieldCount()) return false;
+                        if (k >= (i64)_mObj.fieldCount()) { parBecause(String.withCString("it uses an operation its GPU version cannot express yet")); return false; }
                         _mSpace.set((Hashable*)mslKey(r), (Object*)String.withCString("thread"));
                         }
                     else if (ip.ops().count() > (u32)0)
@@ -14437,7 +14442,7 @@ class ClassInfo
                     {
                     if (r == (IRValue*)0 || !mslIsPtr(r.ty())) continue;
                     i64 k = mslSelfField(mslDefOf((IROperand*)ip.ops().get((u32)0)));
-                    if (k <= (i64)0) return false;
+                    if (k <= (i64)0) { parBecause(String.withCString("it reads a pointer from memory, which its GPU version cannot follow")); return false; }
                     _mBufs.set((Hashable*)String.withI64(k), (Object*)String.withCString("1"));
                     _mSpace.set((Hashable*)mslKey(r), (Object*)String.withCString("device"));
                     _mBufOf.set((Hashable*)mslKey(r), (Object*)String.withI64(k));
@@ -14470,15 +14475,29 @@ class ClassInfo
                         }
                     // A data global of scalars (an array, or one value): a
                     // device buffer. Anything else stays on the CPU.
-                    if (_mHelper || ip.ops().count() == (u32)0 || ((IROperand*)ip.ops().get((u32)0)).kind() != (u8)OPK_SYM)
-                        return false;
+                    if (ip.ops().count() == (u32)0 || ((IROperand*)ip.ops().get((u32)0)).kind() != (u8)OPK_SYM)
+                        { parBecause(String.withCString("it uses an operation its GPU version cannot express yet")); return false; }
                     String* gn = ((IROperand*)ip.ops().get((u32)0)).name();
+                    if (_mHelper)
+                        {
+                        String* w = String.withCString("it uses the global ");
+                        w.append(parShown(gn));
+                        parBecause(w);
+                        return false;
+                        }
                     IRSymbol* gs = (IRSymbol*)0;
                     for (u32 q = (u32)0; q < _m.syms().count(); q = q + (u32)1)
                         if (((IRSymbol*)_m.syms().get(q)).name().equals(gn))
                             gs = (IRSymbol*)_m.syms().get(q);
                     if (gs == (IRSymbol*)0 || gs.kind() != (u8)SYM_DATAGLOBAL || r == (IRValue*)0 || !mslIsPtr(r.ty()) || mslScalar(mslPointee(r.ty())) == (String*)0)
+                        {
+                        String* w = String.withCString("it uses ");
+                        w.append(parShown(gn));
+                        bool dbl = r != (IRValue*)0 && mslIsPtr(r.ty()) && ptxIs(mslPointee(r.ty()), "F64");
+                        w.appendCString(dbl ? ", an array of double; the GPU holds arrays of float and integers" : ", which is not a global array of numbers");
+                        parBecause(w);
                         return false;
+                        }
                     bool have = false;
                     for (u32 q = (u32)0; q < _mGlobals.count(); q = q + (u32)1)
                         if (((String*)_mGlobals.get(q)).equals(gn)) have = true;
@@ -14496,7 +14515,7 @@ class ClassInfo
                 {
                 IRInsn* ip = (IRInsn*)bb.insns().get(i);
                 if (ip.res() != (IRValue*)0 && mslIsPtr(ip.res().ty()) && _mSpace.get((Hashable*)mslKey(ip.res())) == (Object*)0)
-                    return false;
+                    { parBecause(String.withCString("it uses a pointer its GPU version cannot place")); return false; }
                 }
             }
         return true;
@@ -14514,7 +14533,12 @@ class ClassInfo
             return s;
             }
         String* n = mslScalar(t);
-        if (n == (String*)0) { _mFailed = true; return String.withCString(""); }
+        if (n == (String*)0)
+            {
+            parBecause(String.withCString(t.equals(String.withCString("F64")) ? "it uses double, which Apple GPUs do not have" : "it uses a value its GPU version cannot hold yet"));
+            _mFailed = true;
+            return String.withCString("");
+            }
         String* s = String.withCString("    ");
         s.append(n); s.appendCString(" "); s.append(mslName(v)); s.appendCString(" = "); s.append(n); s.appendCString("(0);\n");
         return s;
@@ -14803,7 +14827,7 @@ class ClassInfo
         for (u32 i = (u32)0; i < b.insns().count(); i = i + (u32)1)
             {
             String* st = mslStatement((IRInsn*)b.insns().get(i));
-            if (st == (String*)0) return false;
+            if (st == (String*)0) { parBecause(parWhyFor((IRInsn*)b.insns().get(i), false)); return false; }
             if (st.byteLength() > (u32)0) { out.append(ind); out.append(st); out.appendCString("\n"); }
             }
         IRInsn* t = b.term();
@@ -15116,7 +15140,7 @@ class ClassInfo
                     {
                     _mHelperNames.set((Hashable*)callee, (Object*)callee);
                     String* text = mslHelper(target, fn);
-                    if (text == (String*)0) return (String*)0;
+                    if (text == (String*)0) { parBecause(parCallFailed(callee, _mHelperWhy)); return (String*)0; }
                     _mHelperText.add((Object*)text);
                     }
                 }
@@ -15206,7 +15230,7 @@ class ClassInfo
             for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
                 {
                 String* st = mslStatement((IRInsn*)bb.insns().get(i));
-                if (st == (String*)0) return false;
+                if (st == (String*)0) { parBecause(parWhyFor((IRInsn*)bb.insns().get(i), false)); return false; }
                 if (st.byteLength() > (u32)0) { body.appendCString("            "); body.append(st); body.appendCString("\n"); }
                 }
             IRInsn* t = bb.term();
@@ -15252,20 +15276,21 @@ class ClassInfo
         // The caller's state, back afterwards.
         Map* sDef = _mDef; Map* sSpace = _mSpace; Map* sBufOf = _mBufOf; Map* sOrd = _mOrd;
         Map* sBlk = _mBlk; Map* sBufs = _mBufs; Map* sReds = _mReds; IRLayout* sObj = _mObj;
-        bool sFailed = _mFailed; bool sHelper = _mHelper; Map* sParams = _mParams; Map* sSinit = _mSinit;
+        bool sFailed = _mFailed; bool sHelper = _mHelper; Map* sParams = _mParams; Map* sSinit = _mSinit; String* sWhy = _mWhy;
         Array* sSucc = _sSucc; Array* sRpo = _sRpo; Array* sFwd = _sFwd; Map* sLoop = _sLoop; Map* sExit = _sExit;
         Array* sIpdom = _sIpdom; IRFunc* sFn = _sFn;
         String* out = mslHelperText(g, name);
+        _mHelperWhy = _mWhy;
         _mDef = sDef; _mSpace = sSpace; _mBufOf = sBufOf; _mOrd = sOrd;
         _mBlk = sBlk; _mBufs = sBufs; _mReds = sReds; _mObj = sObj;
-        _mFailed = sFailed; _mHelper = sHelper; _mParams = sParams; _mSinit = sSinit;
+        _mFailed = sFailed; _mHelper = sHelper; _mParams = sParams; _mSinit = sSinit; _mWhy = sWhy;
         _sSucc = sSucc; _sRpo = sRpo; _sFwd = sFwd; _sLoop = sLoop; _sExit = sExit; _sIpdom = sIpdom; _sFn = sFn;
         return out;
         }
     String* mslHelperText(IRFunc* g, String* name)
         {
         _mDef = new Map(); _mSpace = new Map(); _mBufOf = new Map(); _mOrd = new Map();
-        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false; _mSinit = new Map();
+        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false; _mSinit = new Map(); _mWhy = (String*)0;
         _mHelper = true;
         _mParams = new Map();
         if (!mslAnalyse(g)) return (String*)0;
@@ -15307,7 +15332,7 @@ class ClassInfo
     String* parMsl(IRFunc* f)
         {
         _mDef = new Map(); _mSpace = new Map(); _mBufOf = new Map(); _mOrd = new Map();
-        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false; _mSinit = new Map();
+        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false; _mSinit = new Map(); _mWhy = (String*)0;
         _mHelper = false;
         _mParams = (Map*)0;
         _mGlobals = new Array();
@@ -15835,7 +15860,7 @@ class ClassInfo
             {
             _mHelperNames.set((Hashable*)callee, (Object*)callee);
             String* text = ptxHelper(target, fn);
-            if (text == (String*)0) return (String*)0;
+            if (text == (String*)0) { parBecause(parCallFailed(callee, _mHelperWhy)); return (String*)0; }
             _mHelperText.add((Object*)text);
             }
         String* s = ptxS("\t{\n");
@@ -16170,7 +16195,7 @@ class ClassInfo
             for (u32 i = (u32)0; i < b.insns().count(); i = i + (u32)1)
                 {
                 String* st = ptxStatement((IRInsn*)b.insns().get(i));
-                if (st == (String*)0) return (String*)0;
+                if (st == (String*)0) { parBecause(parWhyFor((IRInsn*)b.insns().get(i), true)); return (String*)0; }
                 s.append(st);
                 }
             IRInsn* t = b.term();
@@ -16249,19 +16274,20 @@ class ClassInfo
         {
         Map* sDef = _mDef; Map* sSpace = _mSpace; Map* sBufOf = _mBufOf; Map* sOrd = _mOrd;
         Map* sBlk = _mBlk; Map* sBufs = _mBufs; Map* sReds = _mReds; IRLayout* sObj = _mObj;
-        bool sFailed = _mFailed; bool sHelper = _mHelper; Map* sParams = _mParams; Map* sSinit = _mSinit;
+        bool sFailed = _mFailed; bool sHelper = _mHelper; Map* sParams = _mParams; Map* sSinit = _mSinit; String* sWhy = _mWhy;
         u32 sEdge = _pEdge;
         String* out = ptxHelperText(g, name);
+        _mHelperWhy = _mWhy;
         _mDef = sDef; _mSpace = sSpace; _mBufOf = sBufOf; _mOrd = sOrd;
         _mBlk = sBlk; _mBufs = sBufs; _mReds = sReds; _mObj = sObj;
-        _mFailed = sFailed; _mHelper = sHelper; _mParams = sParams; _mSinit = sSinit;
+        _mFailed = sFailed; _mHelper = sHelper; _mParams = sParams; _mSinit = sSinit; _mWhy = sWhy;
         _pEdge = sEdge;
         return out;
         }
     String* ptxHelperText(IRFunc* g, String* name)
         {
         _mDef = new Map(); _mSpace = new Map(); _mBufOf = new Map(); _mOrd = new Map();
-        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false; _mSinit = new Map();
+        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false; _mSinit = new Map(); _mWhy = (String*)0;
         _mHelper = true;
         _mParams = new Map();
         _mObj = (IRLayout*)0;
@@ -16303,7 +16329,7 @@ class ClassInfo
     String* parPtx(IRFunc* f)
         {
         _mDef = new Map(); _mSpace = new Map(); _mBufOf = new Map(); _mOrd = new Map();
-        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false; _mSinit = new Map();
+        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false; _mSinit = new Map(); _mWhy = (String*)0;
         _mHelper = false;
         _mParams = (Map*)0;
         _mGlobals = new Array();
@@ -16426,6 +16452,14 @@ class ClassInfo
                 msl = parMsl(f);
             else if (_parPTX)
                 msl = parPtx(f);
+            if (msl == (String*)0 && (_parMetal || _parPTX))
+                {
+                // On a target with a GPU, say why this block stays on the CPU.
+                String* w = String.withCString("this 'par' block runs on the CPU only, because ");
+                w.append(_mWhy != (String*)0 ? _mWhy : String.withCString("its GPU version cannot express something it uses yet"));
+                String* cls = f.name().substringBytes((u32)0, f.name().byteLength() - (u32)4);
+                warnAtNode(String.withCString("par-gpu"), w, (Node*)_classDecls.get((Hashable*)cls));
+                }
             if (msl == (String*)0)
                 msl = String.withCString("");
             for (u32 j = (u32)0; j < _m.syms().count(); j = j + (u32)1)
@@ -16447,6 +16481,49 @@ class ClassInfo
                 sym.setBytes(nb);
                 }
             }
+        }
+
+    void parBecause(String* why)
+        {
+        if (_mWhy == (String*)0)
+            _mWhy = why;
+        }
+
+    // The reason an instruction could not be printed.
+    String* parWhyFor(IRInsn* ip, bool ptx)
+        {
+        if (ip.op().equals(String.withCString("Call")) && ip.ops().count() > (u32)0 && ((IROperand*)ip.ops().get((u32)0)).kind() == (u8)OPK_SYM)
+            {
+            String* callee = ((IROperand*)ip.ops().get((u32)0)).name();
+            String* m = ptxMathName(callee);
+            bool tr = m.equals(ptxS("sin")) || m.equals(ptxS("cos")) || m.equals(ptxS("exp")) || m.equals(ptxS("ln")) || m.equals(ptxS("log")) || m.equals(ptxS("pow"));
+            if (ptx && tr)
+                {
+                String* w = String.withCString("it calls ");
+                w.append(parShown(callee));
+                w.appendCString(_mFast ? " on a double, which this GPU has in a fast form only for float" : ", which this GPU has only in an approximate form, and the block's goal is accuracy");
+                return w;
+                }
+            return parCallFailed(callee, (String*)0);
+            }
+        if (!ptx && ip.res() != (IRValue*)0 && ip.res().ty().equals(String.withCString("F64")))
+            return String.withCString("it uses double, which Apple GPUs do not have");
+        return String.withCString("it uses an operation its GPU version cannot express yet");
+        }
+
+    // A call that could not be printed: the helper's own reason, when there is one.
+    String* parCallFailed(String* callee, String* helperWhy)
+        {
+        String* w = String.withCString("it calls ");
+        w.append(parShown(callee));
+        w.appendCString(", which cannot run on the GPU");
+        if (helperWhy != (String*)0)
+            {
+            w.appendCString(" (");
+            w.append(helperWhy);
+            w.appendCString(")");
+            }
+        return w;
         }
 
     // Whether an address is a static-init flag (see _mSinit).

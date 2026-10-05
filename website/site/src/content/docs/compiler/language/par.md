@@ -90,8 +90,18 @@ locals or globals), scalars, reductions, and helper functions that take and
 return plain values. On an Apple GPU, which has no 64-bit floating point, a
 block that uses `double` runs on the CPU. On an NVIDIA GPU, `double` values are
 fine, but an array of them still keeps the block on the CPU. Anywhere, a block that calls a helper that takes a pointer or
-an array, or that uses a global itself, runs on the CPU. `XC_PAR_REPORT=1` says
-why a block stayed on the CPU.
+an array, or that uses a global itself, runs on the CPU.
+
+When you compile for a target with a GPU, the compiler warns at each block that
+cannot run there and says why, for example:
+
+```
+blur.xc:12:5: warning: this 'par' block runs on the CPU only, because it uses
+double, which Apple GPUs do not have
+```
+
+`-Wno-par-gpu` turns the warning off, for a program that keeps some blocks on
+the CPU on purpose.
 
 ### Speed or accuracy
 
