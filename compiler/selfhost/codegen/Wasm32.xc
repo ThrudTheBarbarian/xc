@@ -2597,8 +2597,7 @@ class Wasm32
                 pushOperand(a, out);
             }
             pushOperand((IROperand*)ops.get((u32)0), out);
-            String* ty = indirectTypeFor(argTys, sretCall ? (String*)0
-                                        : (res == 0 ? (String*)0 : res.ty()));
+            String* ty = indirectTypeFor(argTys, res == 0 ? (String*)0 : res.ty()); // Agg → the leading sret param this call pushed (bug 606)
             out.appendFormat("    call_indirect (type $%s)\n", ty.cString());
             if (res != 0 && !sretCall && !Wasm32.memOrVoid(res.ty()))
                 setResult(res, false, out);
@@ -2626,8 +2625,7 @@ class Wasm32
                 out.appendFormat("    i32.const %s\n    i32.add\n",
                                  String.withI64(slot * (i64)4).cString());
             out.appendCString("    i32.load\n");
-            String* ty = indirectTypeFor(argTys, sretCall ? (String*)0
-                                        : (res == 0 ? (String*)0 : res.ty()));
+            String* ty = indirectTypeFor(argTys, res == 0 ? (String*)0 : res.ty()); // Agg → the leading sret param this call pushed (bug 606)
             out.appendFormat("    call_indirect (type $%s)\n", ty.cString());
             if (res != 0 && !sretCall && !Wasm32.memOrVoid(res.ty()))
                 setResult(res, false, out);
@@ -2713,8 +2711,7 @@ class Wasm32
             }
             pushOperand(recv, out);
             emitItabLookup(ops, out);
-            String* ty = indirectTypeFor(argTys, sretCall ? (String*)0
-                                        : (res == 0 ? (String*)0 : res.ty()));
+            String* ty = indirectTypeFor(argTys, res == 0 ? (String*)0 : res.ty()); // Agg → the leading sret param this call pushed (bug 606)
             out.appendFormat("    call_indirect (type $%s)\n", ty.cString());
             if (res != 0 && !sretCall && !Wasm32.memOrVoid(res.ty()))
                 setResult(res, false, out);

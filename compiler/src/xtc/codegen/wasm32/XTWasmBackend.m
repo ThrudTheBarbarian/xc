@@ -1909,7 +1909,7 @@ static NSString *opPrefix(XTIRType *t) { return wasmValType(t); }
         }
         [self pushOperand:ops[0] fn:fn out:out];
         NSString *ty = [self indirectTypeForArgs:argTys
-                                          result:sretCall ? nil : res.type];
+                                          result:res.type] /* Agg → the leading sret param this call pushed (bug 606) */;
         [out appendFormat:@"    call_indirect (type $%@)\n", ty];
         if (res && !sretCall && !isMemOrVoid(res.type))
             [self setResult:res canon:NO out:out];
@@ -1941,7 +1941,7 @@ static NSString *opPrefix(XTIRType *t) { return wasmValType(t); }
         if (slot) [out appendFormat:@"    i32.const %lld\n    i32.add\n", slot * 4];
         [out appendString:@"    i32.load\n"];                 // table index
         NSString *ty = [self indirectTypeForArgs:argTys
-                                          result:sretCall ? nil : res.type];
+                                          result:res.type] /* Agg → the leading sret param this call pushed (bug 606) */;
         [out appendFormat:@"    call_indirect (type $%@)\n", ty];
         if (res && !sretCall && !isMemOrVoid(res.type))
             [self setResult:res canon:NO out:out];
@@ -1988,7 +1988,7 @@ static NSString *opPrefix(XTIRType *t) { return wasmValType(t); }
         [self pushOperand:recv fn:fn out:out];
         [self emitItabLookup:ops out:out];
         NSString *ty = [self indirectTypeForArgs:argTys
-                                          result:sretCall ? nil : res.type];
+                                          result:res.type] /* Agg → the leading sret param this call pushed (bug 606) */;
         [out appendFormat:@"    call_indirect (type $%@)\n", ty];
         if (res && !sretCall && !isMemOrVoid(res.type))
             [self setResult:res canon:NO out:out];
