@@ -323,6 +323,15 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
         XTASTNode* decl = [self parseTopLevelDeclaration];
         if (decl)
             [decls addObject:decl];
+        // The program's globals so far, by name: a `par` body that uses one
+        // gets it on the GPU as a buffer (gpuGlobal, XTParser+Blocks.m).
+        if ([decl isKindOfClass:[XTVariableDeclNode class]] && ((XTVariableDeclNode*)decl).declaredType)
+            {
+            NSMutableDictionary* tv = self.blkState[@"topVars"];
+            if (!tv)
+                self.blkState[@"topVars"] = tv = [NSMutableDictionary dictionary];
+            tv[((XTVariableDeclNode*)decl).varName] = ((XTVariableDeclNode*)decl).declaredType;
+            }
         }
 
     // Blocks (task #26): the per-signature base classes (sorted by name)

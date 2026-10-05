@@ -21,6 +21,16 @@
 #import "ParMetal.xc"
 #endif
 
+// Two C strings equal: how a block's generated gpuGlobal() finds a global by
+// the name its Metal kernel gives it.
+bool parSameName(u8* a, u8* b)
+    {
+    u32 i = (u32)0;
+    while (a[i] != (u8)0 && a[i] == b[i])
+        i = i + (u32)1;
+    return a[i] == b[i];
+    }
+
 class ParChunk : Object
     {
     i64 lo;
@@ -46,6 +56,16 @@ class ParChunk : Object
         return "";
         }
     i64 gpuLength(i32 k)
+        {
+        return (i64)0 - (i64)1;
+        }
+    // Generated too: where the global called `name` lives, and its size in
+    // bytes; null and -1 for a name the block does not use.
+    pointer gpuGlobal(u8* name)
+        {
+        return (pointer)0;
+        }
+    i64 gpuGlobalBytes(u8* name)
         {
         return (i64)0 - (i64)1;
         }

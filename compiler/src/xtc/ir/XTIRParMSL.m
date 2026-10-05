@@ -28,6 +28,11 @@ typedef NS_ENUM(uint8_t, XTParSpace) {
 @property(nonatomic) NSMutableDictionary<NSNumber*, NSNumber*>* bufferOf;  // value -> field index
 @property(nonatomic) NSMutableIndexSet* bufferFields;
 @property(nonatomic) NSMutableIndexSet* reductionFields;
+// Globals the kernel uses (each an AddrOf of a data global), in the order
+// first seen: each is a device buffer, named in the header line so the
+// runtime can ask the block for its address and size (gpuGlobal).
+@property(nonatomic) NSMutableArray<NSString*>* globals;
+@property(nonatomic) NSMutableDictionary<NSNumber*, NSString*>* globalOf; // value -> global name
 @property(nonatomic) NSMutableDictionary<NSString*, NSNumber*>* blockIndex;
 @property(nonatomic) NSMutableDictionary<NSNumber*, NSNumber*>* ordinal; // value -> its name's number
 @property(nonatomic) BOOL failed;
@@ -221,7 +226,21 @@ static NSString* unsignedName(XTIRType* t)
                     break;
                     }
                 case XTIROpAddrOf:
-                    return NO; // a global (or a function's address): not in this cut
+                    {
+                    // A data global of scalars (an array, or one value): a
+                    // device buffer. Anything else stays on the CPU.
+                    if (self.helperMode || !i.operands.count || i.operands[0].kind != XTIROperandKindSym)
+                        return NO;
+                    XTIRSymbol* g = [self.module symbolForId:i.operands[0].symbolId];
+                    if (g.kind != XTIRSymbolKindDataGlobal || i.result.type.kind != XTIRTypeKindPtr ||
+                        !scalarName(i.result.type.pointeeType))
+                        return NO;
+                    if (![self.globals containsObject:g.name])
+                        [self.globals addObject:g.name];
+                    self.space[@(r)] = @(XTParSpaceDevice);
+                    self.globalOf[@(r)] = g.name;
+                    break;
+                    }
                 default:
                     break;
                 }
@@ -553,6 +572,13 @@ static NSString* intrinsicFor(NSString* callee)
                 return [NSString stringWithFormat:@"%@(%@);", fn, [args componentsJoinedByString:@", "]];
             return [NSString stringWithFormat:@"%@ = %@(%@);", r, fn, [args componentsJoinedByString:@", "]];
             }
+        case XTIROpAddrOf:
+            {
+            NSString* g = self.globalOf[@(i.result.valueId)];
+            if (!g)
+                return nil;
+            return [NSString stringWithFormat:@"%@ = glob_%lu;", r, (unsigned long)[self.globals indexOfObject:g]];
+            }
         case XTIROpDbgValue:
             return @"";
         default:
@@ -704,6 +730,8 @@ static NSString* intrinsicFor(NSString* callee)
     XTIRType* selfT = self.fn.paramTypes.count ? self.fn.paramTypes[0] : nil;
     self.objLayout = selfT.kind == XTIRTypeKindPtr ? selfT.pointeeType.layout : nil;
     // lo and hi are ParChunk's two i64 ivars, fields 1 and 2 (field 0 is the vtable).
+    self.globals = [NSMutableArray array];
+    self.globalOf = [NSMutableDictionary dictionary];
     if (!self.objLayout || self.objLayout.fields.count < 3 ||
         self.objLayout.fields[1].type.kind != XTIRTypeKindI64 || self.objLayout.fields[2].type.kind != XTIRTypeKindI64)
         return nil;
@@ -738,6 +766,17 @@ static NSString* intrinsicFor(NSString* callee)
         [meta appendFormat:@" buf=%u:%lu:%u", fl[k].byteOffset, (unsigned long)(k - 3), fl[k].type.pointeeType.byteWidth];
         [params appendFormat:@", device %@* buf_%lu [[buffer(%lu)]]", et, (unsigned long)k, (unsigned long)slot++];
     }];
+    for (NSUInteger gi = 0; gi < self.globals.count; gi++)
+        {
+        XTIRSymbol* g = [self.module symbolForName:self.globals[gi]];
+        XTIRType* gt = g.globalType;
+        XTIRType* et = gt.kind == XTIRTypeKindAgg ? gt.layout.fields.firstObject.type : gt;
+        NSString* en = scalarName(et);
+        if (!en)
+            return nil;
+        [meta appendFormat:@" glob=%@:%u", self.globals[gi], et.byteWidth];
+        [params appendFormat:@", device %@* glob_%lu [[buffer(%lu)]]", en, (unsigned long)gi, (unsigned long)slot++];
+        }
     NSMutableString* tail = [NSMutableString string];
     [self.reductionFields enumerateIndexesUsingBlock:^(NSUInteger k, BOOL* stop) {
         NSString* et = scalarName(fl[k].type);

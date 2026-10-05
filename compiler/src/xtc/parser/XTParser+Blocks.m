@@ -226,6 +226,16 @@ NS_ASSUME_NONNULL_BEGIN
     NSUInteger literalDepth = [frame[@"depth"] unsignedIntegerValue];
     NSUInteger foundDepth = 0;
     NSDictionary* info = [self blkLookup:name depth:&foundDepth];
+    if (!info && [frame[@"par"] boolValue])
+        {
+        // A `par` body's use of a name from outside every scope: a global,
+        // if the program declared one by that name (parDesugarBody filters).
+        NSMutableArray* outer = frame[@"outer"];
+        if (!outer)
+            frame[@"outer"] = outer = [NSMutableArray array];
+        if (![outer containsObject:name])
+            [outer addObject:name];
+        }
     if (!info)
         {
         // Not a visible local. `self` (and the enclosing class's ivars)
@@ -1126,6 +1136,72 @@ NS_ASSUME_NONNULL_END
         [methods addObject:[[XTMethodDeclNode alloc] initWithName:@"gpuLength" returnTypes:@[ i64T ]
                                                        parameters:@[ p ] isStatic:NO isVarArgs:NO
                                                              body:[[XTBlockNode alloc] initWithStatements:st location:loc]
+                                                         location:loc]];
+        }
+    // gpuGlobal(name) / gpuGlobalBytes(name): where each global the body
+    // uses lives and how big it is, by the name the Metal kernel's header
+    // gives it. The runtime copies each one in and back, as a buffer.
+        {
+        NSDictionary* topVars = self.blkState[@"topVars"];
+        NSMutableArray<NSString*>* globs = [NSMutableArray array];
+        for (NSString* n in frame[@"outer"])
+            if (topVars[n])
+                [globs addObject:n];
+        XTType* u8p = [XTPointerType pointerToType:[self.typeTable typeForName:@"u8"]];
+        XTType* ptrT = [self.typeTable typeForName:@"pointer"];
+        NSMutableArray<XTASTNode*>* addrSt = [NSMutableArray array];
+        NSMutableArray<XTASTNode*>* sizeSt = [NSMutableArray array];
+        for (NSString* g in globs)
+            {
+            XTASTNode* (^isName)(void) = ^XTASTNode*(void) {
+                return [[XTCallExprNode alloc] initWithCallee:@"parSameName"
+                                                    arguments:@[ ident(@"name"),
+                                                                 [[XTLiteralStringNode alloc] initWithString:g location:loc] ]
+                                                     location:loc];
+            };
+            XTASTNode* target = ident(g);
+            if ([topVars[g] isKindOfClass:[XTArrayType class]])
+                target = [[XTSubscriptExprNode alloc] initWithBase:ident(g)
+                                                             index:[[XTLiteralIntNode alloc] initWithValue:0 location:loc]
+                                                          location:loc];
+            XTASTNode* addr = cast(ptrT, [[XTUnaryExprNode alloc] initWithOp:XTUnaryOpAddrOf operand:target location:loc]);
+            XTBlockNode* thenA = [[XTBlockNode alloc]
+                initWithStatements:@[ [[XTReturnNode alloc] initWithValues:@[ addr ] location:loc] ] location:loc];
+            [addrSt addObject:[[XTIfNode alloc] initWithCondition:isName() thenBlock:thenA elseBlock:nil location:loc]];
+            // count * sizeof(element), not sizeof(g): sizeof is a u16, so a
+            // global over 64 KB would come out wrapped (bug 615).
+            XTASTNode* bytes = cast(i64T, [[XTSizeofExprNode alloc] initWithOperand:ident(g) location:loc]);
+            if ([topVars[g] isKindOfClass:[XTArrayType class]] && ((XTArrayType*)topVars[g]).elementCount > 0)
+                bytes = [[XTBinaryExprNode alloc]
+                    initWithOp:XTBinaryOpMul
+                          left:cast(i64T, [[XTLiteralIntNode alloc] initWithValue:(int64_t)((XTArrayType*)topVars[g]).elementCount
+                                                                         location:loc])
+                         right:cast(i64T, [[XTSizeofExprNode alloc] initWithOperand:((XTArrayType*)topVars[g]).elementType
+                                                                           location:loc])
+                      location:loc];
+            XTBlockNode* thenS = [[XTBlockNode alloc]
+                initWithStatements:@[ [[XTReturnNode alloc] initWithValues:@[ bytes ] location:loc] ] location:loc];
+            [sizeSt addObject:[[XTIfNode alloc] initWithCondition:isName() thenBlock:thenS elseBlock:nil location:loc]];
+            }
+        [addrSt addObject:[[XTReturnNode alloc]
+                              initWithValues:@[ cast(ptrT, [[XTLiteralIntNode alloc] initWithValue:0 location:loc]) ]
+                                    location:loc]];
+        [sizeSt addObject:[[XTReturnNode alloc]
+                              initWithValues:@[ [[XTBinaryExprNode alloc]
+                                                   initWithOp:XTBinaryOpSub
+                                                         left:cast(i64T, [[XTLiteralIntNode alloc] initWithValue:0 location:loc])
+                                                        right:cast(i64T, [[XTLiteralIntNode alloc] initWithValue:1 location:loc])
+                                                     location:loc] ]
+                                    location:loc]];
+        XTParamNode* pa = [[XTParamNode alloc] initWithType:u8p name:@"name" location:loc];
+        [methods addObject:[[XTMethodDeclNode alloc] initWithName:@"gpuGlobal" returnTypes:@[ ptrT ]
+                                                       parameters:@[ pa ] isStatic:NO isVarArgs:NO
+                                                             body:[[XTBlockNode alloc] initWithStatements:addrSt location:loc]
+                                                         location:loc]];
+        XTParamNode* pb = [[XTParamNode alloc] initWithType:u8p name:@"name" location:loc];
+        [methods addObject:[[XTMethodDeclNode alloc] initWithName:@"gpuGlobalBytes" returnTypes:@[ i64T ]
+                                                       parameters:@[ pb ] isStatic:NO isVarArgs:NO
+                                                             body:[[XTBlockNode alloc] initWithStatements:sizeSt location:loc]
                                                          location:loc]];
         }
     // gpuSource(): the kernel's Metal source. A placeholder string, unique per

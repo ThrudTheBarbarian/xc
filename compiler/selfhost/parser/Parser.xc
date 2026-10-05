@@ -57,6 +57,7 @@ class Parser
     Array*  _blkClasses;    // synthesised impl ClassDecl nodes, creation order
     u32     _parCounter;    // ParImpl$N numbering (par blocks)
     Token*  _parTok;        // the `par` being desugared: where its errors point
+    Map*    _parTopVars;    // the program's globals so far: name -> type spelling
     Map*    _blkBases;      // mangled -> Map{"ret": spelling, "params": Array<Node nkParam>}
     Map*    _blkImplBase;   // impl name -> base name
     Map*    _blkFnRet;      // function name -> return spelling
@@ -196,6 +197,19 @@ class Parser
         u32 literalDepth = ((Number*)frame.get((Hashable*)String.withCString("depth"))).asU32();
         u32 foundDepth = (u32)0;
         Map* info = blkLookup(name, &foundDepth);
+        if (info == 0 && frame.get((Hashable*)String.withCString("par")) != (Object*)0) {
+            // A `par` body's use of a name from outside every scope: a global,
+            // if the program declared one by that name (parDesugar filters).
+            Array* outer = (Array*)frame.get((Hashable*)String.withCString("outer"));
+            if (outer == (Array*)0) {
+                outer = new Array();
+                frame.set((Hashable*)String.withCString("outer"), (Object*)outer);
+            }
+            bool seen = false;
+            for (u32 i = (u32)0; i < outer.count(); i = i + (u32)1)
+                if (((String*)outer.get(i)).equals(name)) seen = true;
+            if (!seen) outer.add((Object*)String.withString(name));
+        }
         if (info == 0) {
             if (Parser._same(name, "self") || _blkIvarNames.contains((Hashable*)name)) {
                 _error(String.withFormat("a block cannot capture '%s' (v1 captures locals and parameters only) — copy it into a local first, e.g. `auto me = self;` outside the block", name.cString()));
@@ -1067,6 +1081,12 @@ class Parser
             u32 before = _pos;
             Node* decl = parseTopLevel();
             if (decl != 0) program.add(decl);
+            // The program's globals so far, by name: a `par` body that uses
+            // one gets it on the GPU as a buffer (gpuGlobal, parDesugar).
+            if (decl != 0 && decl.kind() == (u16)nkVariableDecl && decl.op() != 0 && decl.name() != 0) {
+                if (_parTopVars == (Map*)0) _parTopVars = new Map();
+                _parTopVars.set((Hashable*)decl.name(), (Object*)decl.op());
+            }
             // Never spin: if a production consumed nothing, step over the
             // token so a malformed file still terminates.
             if (_pos == before) advance();
@@ -2131,6 +2151,15 @@ class Parser
     }
     Node* parCast(String* t, Node* e) { Node* c = mkNamed((u16)nkCast, String.withString(t)); c.add(e); return c; }
     Node* parInt(i64 v) { Node* n = mk((u16)nkInt); n.setNum(v); return n; }
+    // `parSameName(name, "<g>")`: the test gpuGlobal() makes per global.
+    Node* parSameNameCall(String* g)
+    {
+        Node* c = mkNamed((u16)nkCall, String.withCString("parSameName"));
+        c.add(parIdent(String.withCString("name")));
+        c.add(mkNamed((u16)nkStr, String.withString(g)));
+        c.setNum((i64)2);
+        return c;
+    }
     Node* parBin(string op, Node* l, Node* r)
     {
         Node* b = mk((u16)nkBinary);
@@ -2343,6 +2372,88 @@ class Parser
             b.add(none);
             m.add(b);
             cls.add(m);
+        }
+        // gpuGlobal(name) / gpuGlobalBytes(name): where each global the body
+        // uses lives and how big it is, by the name the Metal kernel's header
+        // gives it. The runtime copies each one in and back, as a buffer.
+        {
+            Array* globs = new Array();
+            Array* outer = (Array*)frame.get((Hashable*)String.withCString("outer"));
+            if (outer != (Array*)0 && _parTopVars != (Map*)0)
+                for (u32 i = (u32)0; i < outer.count(); i = i + (u32)1)
+                    if (_parTopVars.get((Hashable*)outer.get(i)) != (Object*)0)
+                        globs.add(outer.get(i));
+            Node* ma = mkNamed((u16)nkMethodDecl, String.withCString("gpuGlobal"));
+            ma.setOp(String.withCString("pointer"));
+            Node* pa = mkNamed((u16)nkParam, String.withCString("name"));
+            pa.setOp(String.withCString("u8*"));
+            ma.add(pa);
+            Node* ba = mk((u16)nkBlock);
+            Node* mb = mkNamed((u16)nkMethodDecl, String.withCString("gpuGlobalBytes"));
+            mb.setOp(String.withCString("i64"));
+            Node* pb = mkNamed((u16)nkParam, String.withCString("name"));
+            pb.setOp(String.withCString("u8*"));
+            mb.add(pb);
+            Node* bb = mk((u16)nkBlock);
+            for (u32 i = (u32)0; i < globs.count(); i = i + (u32)1) {
+                String* g = (String*)globs.get(i);
+                String* gt = (String*)_parTopVars.get((Hashable*)g);
+                Node* target = parIdent(g);
+                if (gt.indexOfByte((u8)'[') != (u32)$FFFFFFFF) {
+                    Node* sub = mk((u16)nkSubscript);
+                    sub.add(parIdent(g));
+                    sub.add(parInt((i64)0));
+                    target = sub;
+                }
+                Node* addr = mkNamed((u16)nkUnary, String.withCString("&"));
+                addr.setOp(String.withCString("&"));
+                addr.add(target);
+                Node* ifA = mk((u16)nkIf);
+                ifA.add(parSameNameCall(g));
+                Node* thenA = mk((u16)nkBlock);
+                Node* retA = mk((u16)nkReturn);
+                retA.add(parCast(String.withCString("pointer"), addr));
+                thenA.add(retA);
+                ifA.add(thenA);
+                ba.add(ifA);
+                // count * sizeof(element), not sizeof(g): sizeof is a u16, so
+                // a global over 64 KB would come out wrapped (bug 615).
+                Node* sz = mk((u16)nkSizeof);
+                sz.setName(String.withCString("-"));
+                sz.add(parIdent(g));
+                Node* bytes = parCast(String.withCString("i64"), sz);
+                u32 lb = gt.indexOfByte((u8)'[');
+                if (lb != (u32)$FFFFFFFF) {
+                    i64 count = (i64)0;
+                    for (u32 q = lb + (u32)1; q < gt.byteLength() && gt.byteAt(q) >= (u8)'0' && gt.byteAt(q) <= (u8)'9'; q = q + (u32)1)
+                        count = count * (i64)10 + (i64)(gt.byteAt(q) - (u8)'0');
+                    if (count > (i64)0) {
+                        Node* esz = mk((u16)nkSizeof);
+                        esz.setName(gt.substringBytes((u32)0, lb));
+                        bytes = parBin("*", parCast(String.withCString("i64"), parInt(count)),
+                                       parCast(String.withCString("i64"), esz));
+                    }
+                }
+                Node* ifB = mk((u16)nkIf);
+                ifB.add(parSameNameCall(g));
+                Node* thenB = mk((u16)nkBlock);
+                Node* retB = mk((u16)nkReturn);
+                retB.add(bytes);
+                thenB.add(retB);
+                ifB.add(thenB);
+                bb.add(ifB);
+            }
+            Node* noneA = mk((u16)nkReturn);
+            noneA.add(parCast(String.withCString("pointer"), parInt((i64)0)));
+            ba.add(noneA);
+            ma.add(ba);
+            cls.add(ma);
+            Node* noneB = mk((u16)nkReturn);
+            noneB.add(parBin("-", parCast(String.withCString("i64"), parInt((i64)0)),
+                             parCast(String.withCString("i64"), parInt((i64)1))));
+            bb.add(noneB);
+            mb.add(bb);
+            cls.add(mb);
         }
         // gpuSource(): the kernel's Metal source. A placeholder string, unique
         // per block, that the lowering replaces with the printed kernel (or

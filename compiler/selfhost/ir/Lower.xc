@@ -14210,6 +14210,11 @@ class ClassInfo
     Map* _mReds;      // field index -> 1 (reductions)
     IRLayout* _mObj;  // the block object's layout
     bool _mFailed;
+    // Globals the kernel uses (each an AddrOf of a data global), in the order
+    // first seen: each a device buffer, named in the header line so the
+    // runtime can ask the block for its address and size (gpuGlobal).
+    Array* _mGlobals;
+    Map* _mGlobalOf;  // value seq -> global name
     // Helpers (functions the kernel calls, transitively): printed once each,
     // in the order they finish, so a callee is defined before its caller.
     // The printer's state is per function, so printing a helper from inside
@@ -14445,7 +14450,25 @@ class ClassInfo
                     if (k > (i64)2) _mReds.set((Hashable*)String.withI64(k), (Object*)String.withCString("1"));
                     }
                 else if (op.equals(String.withCString("AddrOf")))
-                    return false; // a global (or a function's address): not in this cut
+                    {
+                    // A data global of scalars (an array, or one value): a
+                    // device buffer. Anything else stays on the CPU.
+                    if (_mHelper || ip.ops().count() == (u32)0 || ((IROperand*)ip.ops().get((u32)0)).kind() != (u8)OPK_SYM)
+                        return false;
+                    String* gn = ((IROperand*)ip.ops().get((u32)0)).name();
+                    IRSymbol* gs = (IRSymbol*)0;
+                    for (u32 q = (u32)0; q < _m.syms().count(); q = q + (u32)1)
+                        if (((IRSymbol*)_m.syms().get(q)).name().equals(gn))
+                            gs = (IRSymbol*)_m.syms().get(q);
+                    if (gs == (IRSymbol*)0 || gs.kind() != (u8)SYM_DATAGLOBAL || r == (IRValue*)0 || !mslIsPtr(r.ty()) || mslScalar(mslPointee(r.ty())) == (String*)0)
+                        return false;
+                    bool have = false;
+                    for (u32 q = (u32)0; q < _mGlobals.count(); q = q + (u32)1)
+                        if (((String*)_mGlobals.get(q)).equals(gn)) have = true;
+                    if (!have) _mGlobals.add((Object*)gn);
+                    _mSpace.set((Hashable*)mslKey(r), (Object*)String.withCString("device"));
+                    _mGlobalOf.set((Hashable*)mslKey(r), (Object*)gn);
+                    }
                 }
             }
         // Every pointer value but a phi needs a known space.
@@ -14788,6 +14811,15 @@ class ClassInfo
             if (isVoid) { e.appendCString(";"); return e; }
             return mslAssign(r, e);
             }
+        if (op.equals(String.withCString("AddrOf")))
+            {
+            String* g = (String*)_mGlobalOf.get((Hashable*)mslKey(r));
+            if (g == (String*)0) return (String*)0;
+            u32 gi = (u32)0;
+            for (u32 q = (u32)0; q < _mGlobals.count(); q = q + (u32)1)
+                if (((String*)_mGlobals.get(q)).equals(g)) gi = q;
+            return mslAssign(r, mslCat3(String.withCString("glob_"), "", String.withU32(gi)));
+            }
         if (op.equals(String.withCString("DbgValue")))
             return String.withCString("");
         return (String*)0;
@@ -14940,6 +14972,8 @@ class ClassInfo
         _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false;
         _mHelper = false;
         _mParams = (Map*)0;
+        _mGlobals = new Array();
+        _mGlobalOf = new Map();
         if (f.params().count() == (u32)0) return (String*)0;
         _mObj = mslLayoutOf(mslPointee(((IRValue*)f.params().get((u32)0)).ty()));
         // lo and hi are ParChunk's two i64 ivars, fields 1 and 2 (0 is the vtable).
@@ -14968,6 +15002,23 @@ class ClassInfo
             meta.appendCString(" buf="); meta.append(String.withU32(_mObj.offsetAt(k))); meta.appendCString(":");
             meta.append(String.withU32(k - (u32)3)); meta.appendCString(":"); meta.append(String.withU32(mslWidth(pe)));
             params.appendCString(", device "); params.append(et); params.appendCString("* buf_"); params.append(String.withU32(k));
+            params.appendCString(" [[buffer("); params.append(String.withU32(slot)); params.appendCString(")]]");
+            slot = slot + (u32)1;
+            }
+        for (u32 gi = (u32)0; gi < _mGlobals.count(); gi = gi + (u32)1)
+            {
+            String* gn = (String*)_mGlobals.get(gi);
+            IRSymbol* gs = (IRSymbol*)0;
+            for (u32 q = (u32)0; q < _m.syms().count(); q = q + (u32)1)
+                if (((IRSymbol*)_m.syms().get(q)).name().equals(gn))
+                    gs = (IRSymbol*)_m.syms().get(q);
+            String* gt = gs != (IRSymbol*)0 ? gs.dataType() : (String*)0;
+            IRLayout* gl = mslLayoutOf(gt);
+            String* et = gl != (IRLayout*)0 ? gl.typeAt((u32)0) : gt;
+            String* en = mslScalar(et);
+            if (en == (String*)0) return (String*)0;
+            meta.appendCString(" glob="); meta.append(gn); meta.appendCString(":"); meta.append(String.withU32(mslWidth(et)));
+            params.appendCString(", device "); params.append(en); params.appendCString("* glob_"); params.append(String.withU32(gi));
             params.appendCString(" [[buffer("); params.append(String.withU32(slot)); params.appendCString(")]]");
             slot = slot + (u32)1;
             }

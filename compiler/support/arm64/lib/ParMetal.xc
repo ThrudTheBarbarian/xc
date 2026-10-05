@@ -70,6 +70,14 @@ class ParMetal
         return _mode == (i32)2;
         }
 
+    // XC_PAR_REPORT=1: why a block stays on the CPU. False, for `return`.
+    static bool cpu(u8* why)
+        {
+        if (Platform.env(String.withCString("XC_PAR_REPORT")).byteLength() > (u32)0)
+            Log.info("par: a block stays on the CPU: %s", why);
+        return false;
+        }
+
     static pointer sel(u8* n)
         {
         return _sel(n);
@@ -150,17 +158,21 @@ class ParMetal
     // runs it on the CPU, which gives the same answer.
     static bool run(ParChunk* proto, u8* src, i64 lo, i64 hi)
         {
-        if (src == (u8*)0 || src[0] != (u8)'/' || !start())
-            return false;
+        if (src == (u8*)0 || src[0] != (u8)'/')
+            return cpu("it has no GPU version");
+        if (!start())
+            return cpu("there is no Metal device");
         pointer pso = pipeline(src);
         if (pso == (pointer)0)
-            return false;
+            return cpu("its GPU version did not compile");
 
         // The header line.
         u8* obj = (u8*)(pointer)proto;
         i64 size = (i64)0;
         i64 bufOff[16]; i64 bufIvar[16]; i64 bufLen[16]; u32 nbuf = (u32)0;
         i64 redOff[16]; i64 redSize[16]; u32 nred = (u32)0;
+        pointer globPtr[16]; i64 globLen[16]; u32 nglob = (u32)0;
+        u8 gname[128];
         u32 at = (u32)0;
         while (src[at] != (u8)0 && src[at] != (u8)10)
             {
@@ -180,8 +192,29 @@ class ParMetal
                 num(src, &at);
                 bufLen[nbuf] = proto.gpuLength((i32)bufIvar[nbuf]);
                 if (bufLen[nbuf] < (i64)0)
-                    return false; // not a sized array: the CPU takes it
+                    return cpu("it uses an array whose size is not known");
                 nbuf = nbuf + (u32)1;
+                continue;
+                }
+            if (src[at] == (u8)'g' && src[at + (u32)1] == (u8)'l' && src[at + (u32)4] == (u8)'=' && nglob < (u32)16)
+                {
+                // glob=<name>:<elem-bytes>: the block knows where it lives.
+                at = at + (u32)5;
+                u32 n = (u32)0;
+                while (src[at] != (u8)':' && src[at] != (u8)0 && n < (u32)127)
+                    {
+                    gname[n] = src[at];
+                    n = n + (u32)1;
+                    at = at + (u32)1;
+                    }
+                gname[n] = (u8)0;
+                at = at + (u32)1;
+                num(src, &at);
+                globPtr[nglob] = proto.gpuGlobal(&gname[0]);
+                globLen[nglob] = proto.gpuGlobalBytes(&gname[0]);
+                if (globPtr[nglob] == (pointer)0 || globLen[nglob] <= (i64)0)
+                    return cpu("it uses a global the block cannot locate");
+                nglob = nglob + (u32)1;
                 continue;
                 }
             if (src[at] == (u8)'r' && src[at + (u32)1] == (u8)'e' && src[at + (u32)3] == (u8)'=' && nred < (u32)16)
@@ -196,7 +229,7 @@ class ParMetal
             at = at + (u32)1;
             }
         if (size <= (i64)0)
-            return false;
+            return cpu("its GPU version has no header");
 
         i64 n = hi - lo;
         i64 per = (i64)1;
@@ -223,6 +256,9 @@ class ParMetal
             pointer host = *(pointer*)(obj + bufOff[i]);
             bufs[i] = withBytes(_dev, sel("newBufferWithBytes:length:options:"), host, (u64)bufLen[i], (u64)0);
             }
+        pointer globs[16];
+        for (u32 i = (u32)0; i < nglob; i = i + (u32)1)
+            globs[i] = withBytes(_dev, sel("newBufferWithBytes:length:options:"), globPtr[i], (u64)globLen[i], (u64)0);
         for (u32 i = (u32)0; i < nred; i = i + (u32)1)
             reds[i] = withLen(_dev, sel("newBufferWithLength:options:"), (u64)(threads * redSize[i]), (u64)0);
 
@@ -235,6 +271,11 @@ class ParMetal
         for (u32 i = (u32)0; i < nbuf; i = i + (u32)1)
             {
             setBuf(enc, sel("setBuffer:offset:atIndex:"), bufs[i], (u64)0, slot);
+            slot = slot + (u64)1;
+            }
+        for (u32 i = (u32)0; i < nglob; i = i + (u32)1)
+            {
+            setBuf(enc, sel("setBuffer:offset:atIndex:"), globs[i], (u64)0, slot);
             slot = slot + (u64)1;
             }
         for (u32 i = (u32)0; i < nred; i = i + (u32)1)
@@ -262,6 +303,11 @@ class ParMetal
             pointer host = *(pointer*)(obj + bufOff[i]);
             memcpy(host, send0(bufs[i], sel("contents")), (u64)bufLen[i]);
             send0(bufs[i], sel("release"));
+            }
+        for (u32 i = (u32)0; i < nglob; i = i + (u32)1)
+            {
+            memcpy(globPtr[i], send0(globs[i], sel("contents")), (u64)globLen[i]);
+            send0(globs[i], sel("release"));
             }
         if (nred > (u32)0)
             {
