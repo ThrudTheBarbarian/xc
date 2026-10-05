@@ -27,6 +27,7 @@ void ux_ak_test_menu_pick(i32 i);
 u8* ux_ak_test_menu_titles(void);
 i32 ux_ak_test_drop_item(i32 handle, u8* text, i32 x, i32 y);
 i32 ux_ak_test_hover_item(i32 handle, u8* text, i32 x, i32 y);
+i32 ux_ak_test_outline_drag(i32 handle, i32 node, pointer item, u8* buf, i32 n);
 i32 ux_ak_test_row_drag(i32 handle, i32 node, i32 row, u8* buf, i32 n);
 
 i32 gFails;
@@ -196,7 +197,7 @@ void main(void)
     RKClassBook* tree = new RKClassBook();
     i32 files = tree.loadTree(RKMainController.dirOf(srcPath), (i32)1);
     checkTrue("a whole source folder parses, finding it among the rest", files > (i32)10 && tree.find((u8*)"PlayerController") != (RKClass*)0);
-    checkTrue("and the editor's own classes, parents and all", tree.isKindOf((u8*)"RKDock", (u8*)"UXView"));
+    checkTrue("and the editor's own classes, parents and all", tree.isKindOf((u8*)"RKBackdrop", (u8*)"UXView"));
 
     Stdio.printf("-- the controller\n");
     c.libraryPick(c.library.named((u8*)"Object"));
@@ -206,7 +207,16 @@ void main(void)
     c.identityCtl.reshow();
     checkTrue("Identity says where the class comes from", c.identityCtl.classInfo != (UXLabel*)0 &&
               streq(c.identityCtl.classInfo.text(), (u8*)"From fixture_player.xc"));
-    check("the dock shows it", (i32)c.dock.items.count(), (i32)3);
+    RKOutlineNode* ctlRow = (RKOutlineNode*)0;
+    for (u32 i = (u32)0; i < c.outlineModel.roots.count(); i = i + (u32)1)
+        {
+        RKOutlineNode* n = (RKOutlineNode* ?)c.outlineModel.roots.get(i);
+        if (n.kind == (i32)RKON_OBJECT)
+            {
+            ctlRow = n;
+            }
+        }
+    checkTrue("the outline lists it", ctlRow != (RKOutlineNode*)0 && streq(ctlRow.label, (u8*)"PlayerController"));
 
     Stdio.printf("-- an action, for every layout\n");
     c.offerWire(RKEnd.view(named(c, (u8*)"play")), ctl, (i32)300, (i32)200);
@@ -365,6 +375,67 @@ void main(void)
     check("deletes the selection", c.doc.treeAt(c.shownTree).root.childCount(), kids - (i32)1);
     c.onUndo((UXMenuItem*)0);
     check("and undoes", c.doc.treeAt(c.shownTree).root.childCount(), kids);
+
+    Stdio.printf("-- connections drawn from and to the outline's rows\n");
+    u8 rowText[32];
+    check("the controller's row drags out, and the outline takes rows dropped on it",
+          ux_ak_test_outline_drag(win.handle, (i32)c.formOutline.index, (pointer)ctlRow, &rowText[(i32)0], (i32)32), (i32)1);
+    checkTrue("it stands for the controller", c.outlineModel.draggedRow(&rowText[(i32)0]) == ctlRow);
+    RKOutlineNode* formRow = c.outlineModel.formRow(c.shownTree);
+    u8 formText[32];
+    check("a form's row does not drag",
+          ux_ak_test_outline_drag(win.handle, (i32)c.formOutline.index, (pointer)formRow, &formText[(i32)0], (i32)32), (i32)0);
+    UXRect pv = c.canvasMap.viewFor(named(c, (u8*)"stop")).absoluteFrame();
+    i32 px = (i32)pv.x + (i32)pv.w / (i32)2;
+    i32 py = (i32)pv.y + (i32)pv.h / (i32)2;
+    UXRect ova = c.overlay.absoluteFrame();
+    ux_ak_test_hover_item(win.handle, &rowText[(i32)0], (i32)ova.x + (i32)5, py);
+    ux_ak_test_hover_item(win.handle, &rowText[(i32)0], px, py);
+    checkTrue("over the canvas, a line follows it", c.overlay.wiring && c.overlay.lineX1 == px - (i32)ova.x && c.overlay.lineX0 == (i32)0);
+    checkTrue("and no control is previewed", c.preview == (UXView*)0);
+    i32 nk = (i32)c.doc.connections.count();
+    ux_ak_test_drop_item(win.handle, &rowText[(i32)0], px, py);
+    checkTrue("the line goes when it lands", !c.overlay.wiring);
+    checkTrue("dropped on Stop: the controller's members for it are offered", c.chooser != (RKWireChooser*)0 && rowOf(c, (u8*)"playButton") >= (i32)0);
+    c.tableSelectionDidChange(c.chooser.table, rowOf(c, (u8*)"playButton"));
+    UXRscRef* stopRef = c.doc.refFor(c.doc.treeAt(c.shownTree), named(c, (u8*)"stop"));
+    bool moved = false;
+    for (u32 i = (u32)0; i < c.doc.connections.count(); i = i + (u32)1)
+        {
+        UXRscConnection* k2 = (UXRscConnection* ?)c.doc.connections.get(i);
+        if (k2.kind == (i32)UXR_CONN_OUTLET && streq(k2.member, (u8*)"playButton") && k2.dst.same(stopRef))
+            {
+            moved = true;
+            }
+        }
+    checkTrue("a pick there connects it: playButton now holds Stop", moved);
+    c.onUndo((UXMenuItem*)0);
+    check("Undo takes it back", (i32)c.doc.connections.count(), nk);
+    UXRect ol = c.formOutline.absoluteFrame();
+    RKEnd* ownerEnd = (RKEnd*)0;
+    i32 oy = (i32)ol.y;
+    while (oy < (i32)ol.y + (i32)120 && ownerEnd == (RKEnd*)0)
+        {
+        RKEnd* e = c.endAtWindow((i32)ol.x + (i32)40, oy);
+        if (e != (RKEnd*)0 && e.kind == (i32)RKON_OWNER)
+            {
+            ownerEnd = e;
+            }
+        oy = oy + (i32)2;
+        }
+    checkTrue("a line let go on File's Owner's row ends there", ownerEnd != (RKEnd*)0);
+    RKEnd* formEnd = (RKEnd*)0;
+    bool sawForm = false;
+    for (i32 fy = (i32)ol.y; fy < (i32)ol.y + (i32)200; fy = fy + (i32)2)
+        {
+        RKOutlineNode* n = (RKOutlineNode* ?)c.formOutline.itemAtWindowPoint((i32)ol.x + (i32)40, fy);
+        if (n != (RKOutlineNode*)0 && n.kind == (i32)RKON_FORM && !sawForm)
+            {
+            sawForm = true;
+            formEnd = c.endAtWindow((i32)ol.x + (i32)40, fy);
+            }
+        }
+    checkTrue("and on a form's row, nowhere", sawForm && formEnd == (RKEnd*)0);
 
     Stdio.printf("-- the app: each layout fires what was wired for it\n");
     UXData* bytes = UXRscWriter.write(c.doc);

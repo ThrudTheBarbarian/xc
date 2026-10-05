@@ -29,7 +29,6 @@
 #import "UXToolbar.xc"
 #import "UXSegmentedControl.xc"
 #import "UXPopUpButton.xc"
-#import "RKDock.xc"
 #import "UXMetrics.xc"
 #import "UXGeometry.xc"
 #import "RKMainController.xc"
@@ -112,18 +111,14 @@ class RKMainBuilder : Object
         inner.setAutoresizeMask((i32)(UX_FLEX_WIDTH | UX_FLEX_HEIGHT));
         inner.setHoldsLast(true); // the inspector keeps its width; the canvas grows
 
-        // ---- the centre: the dock, the canvas, and the device bar under it -------
-        i16 dkH = (i16)28;
+        // ---- the centre: the canvas, and the device bar under it ----------------
         i16 dbH = (i16)((i32)rh + (i32)8);
-        i16 cvH = (i16)((i32)bodyH - (i32)dbH - (i32)dkH);
-        RKDock* dock = new RKDock();
-        inner.firstPane().addSubview(dock, UXGeom.make((i16)0, (i16)0, (i16)cvW, dkH));
-        dock.setAutoresizeMask((i32)UX_FLEX_WIDTH);
+        i16 cvH = (i16)((i32)bodyH - (i32)dbH);
         UXView* canvas = new UXView();
-        inner.firstPane().addSubview(canvas, UXGeom.make((i16)0, dkH, (i16)cvW, cvH));
+        inner.firstPane().addSubview(canvas, UXGeom.make((i16)0, (i16)0, (i16)cvW, cvH));
         canvas.setAutoresizeMask((i32)(UX_FLEX_WIDTH | UX_FLEX_HEIGHT));
         UXView* bar = new UXView();
-        inner.firstPane().addSubview(bar, UXGeom.make((i16)0, (i16)((i32)dkH + (i32)cvH), (i16)cvW, dbH));
+        inner.firstPane().addSubview(bar, UXGeom.make((i16)0, cvH, (i16)cvW, dbH));
         bar.setAutoresizeMask((i32)(UX_FLEX_WIDTH | UX_ANCHOR_BOTTOM));
         UXLabel* viewAs = new UXLabel();
         viewAs.setTitle((u8*)"View as:");
@@ -232,11 +227,8 @@ class RKMainBuilder : Object
         ok = c.setOutlet((u8*)"inspectorTabs", (Object*)tabs) && ok;
         ok = c.setOutlet((u8*)"libraryTable", (Object*)lib) && ok;
         ok = c.setOutlet((u8*)"librarySearch", (Object*)search) && ok;
-        ok = c.setOutlet((u8*)"dock", (Object*)dock) && ok;
         ok = c.setOutlet((u8*)"newScope", (Object*)scope) && ok;
         ok = c.wireAction((u8*)"onNewScope", (UXControl*)scope) && ok;
-        dock.picked = &c.onDockPick;
-        dock.wireFrom = &c.onWireFromDock;
         ok = c.wireAction((u8*)"onToolbar", (UXControl*)tb) && ok;
         ok = c.wireAction((u8*)"onDeviceBar", (UXControl*)device) && ok;
         ok = c.wireAction((u8*)"onRotate", (UXControl*)rotate) && ok;

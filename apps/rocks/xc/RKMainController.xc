@@ -37,7 +37,6 @@
 #import "RKClasses.xc"
 #import "RKWiring.xc"
 #import "RKConnect.xc"
-#import "RKDock.xc"
 #import "RKVariants.xc"
 #import "RKBackdrop.xc"
 #import "UXSegmentedControl.xc"
@@ -64,7 +63,6 @@ class RKMainController : Object<UXTableDelegate>
     outlet UXSegmentedControl* inspectorTabs; // Identity / Attributes / Size / Connections
     outlet UXTableView* libraryTable;         // what can be added
     outlet UXTextField* librarySearch;        // its filter
-    outlet RKDock* dock;                      // File's Owner, First Responder, the objects
     outlet UXPopUpButton* newScope;           // Connect for: the layouts a new connection binds in
 
     // The document.  The controller owns the MODEL; the canvas outlet shows it.
@@ -104,6 +102,8 @@ class RKMainController : Object<UXTableDelegate>
     RKBackdrop* backdrop;           // the grid under the canvas, and the form's panel on it
     RKLibraryItem* placing;         // armed by a library pick: the next canvas press places it
     UXView* preview;                // the control a library drag shows over the form, or 0
+    bool wireIn;                    // an outline row's drag is over the canvas
+    i32 wireInY;                    // where it came on, the start of its line
     RKLibraryItem* previewItem;     // what it previews
     // What is selected, by outline row kind (RKON_*): a control (`selected`), a placeholder, or one
     // of the document's objects (selTop); 0 = nothing.
@@ -184,10 +184,11 @@ class RKMainController : Object<UXTableDelegate>
         inspectorCtl.varyState = &self.varyStateOf;
         inspectorCtl.varyToggle = &self.onVaryToggle;
         overlay.wireFrom = &self.onWireFromView;
-        dock = (RKDock*)0;
         newScope = (UXPopUpButton*)0;
         placing = (RKLibraryItem*)0;
         preview = (UXView*)0;
+        wireIn = false;
+        wireInY = (i32)0;
         previewItem = (RKLibraryItem*)0;
         selKind = (i32)0;
         selTop = (i32)0;
@@ -627,15 +628,6 @@ class RKMainController : Object<UXTableDelegate>
             newScopePreset = newScope.selectedIndex();
             }
         }
-    // A click on a dock item selects it, as its outline row does.
-    void onDockPick(RKEnd* e)
-        {
-        self.selectPlaceholder(e.kind, e.topId);
-        }
-    void onWireFromDock(RKEnd* e, i32 wx, i32 wy)
-        {
-        self.trackWire(e, wx, wy);
-        }
     void onWireFromView(UXRscObject* o, i32 wx, i32 wy)
         {
         self.trackWire(RKEnd.view(o), wx, wy);
@@ -663,11 +655,7 @@ class RKMainController : Object<UXTableDelegate>
                 {
                 hot = overlay.onCanvas(overlay.drag.canvasRect(over.obj));
                 }
-            if (dock != (RKDock*)0)
-                {
-                dock.highlighted = over != (RKEnd*)0 && !over.isView() ? over : (RKEnd*)0;
-                dock.setNeedsDisplay();
-                }
+            self.sayOver(over);
             overlay.showLine(x0, y0, x - (i32)oa.x, y - (i32)oa.y, hot);
             if (gApp != (UXApplication*)0)
                 {
@@ -675,11 +663,6 @@ class RKMainController : Object<UXTableDelegate>
                 }
             }
         overlay.hideLine();
-        if (dock != (RKDock*)0)
-            {
-            dock.highlighted = (RKEnd*)0;
-            dock.setNeedsDisplay();
-            }
         RKEnd* dst = self.endAtWindow(x, y);
         i32 moved = (x - wx) * (x - wx) + (y - wy) * (y - wy);
         if (moved <= (i32)16)
@@ -739,12 +722,12 @@ class RKMainController : Object<UXTableDelegate>
             }
         return doc.treeAt(shownTree).parentOf(selected) != (UXRscObject*)0;
         }
-    // The end under a window point: a dock item, or a control on the canvas.
+    // The end under a window point: a row of the outline, or a control on the canvas.
     RKEnd* endAtWindow(i32 wx, i32 wy)
         {
-        if (dock != (RKDock*)0)
+        if (formOutline != (UXOutlineView*)0)
             {
-            RKEnd* e = dock.endAtWindow(wx, wy);
+            RKEnd* e = RKMainController.endOf((RKOutlineNode* ?)formOutline.itemAtWindowPoint(wx, wy));
             if (e != (RKEnd*)0)
                 {
                 return e;
@@ -771,9 +754,42 @@ class RKMainController : Object<UXTableDelegate>
             wy[0] = (i32)oa.y + (i32)r.y + (i32)r.h / (i32)2;
             return;
             }
-        if (dock != (RKDock*)0)
+        wx[0] = (i32)0; // an outline row: the line is drawn from where its drag came onto the canvas
+        wy[0] = (i32)0;
+        }
+    // The end of a connection a row stands for, or 0 (a form's row).
+    static RKEnd* endOf(RKOutlineNode* n)
+        {
+        if (n == (RKOutlineNode*)0 || n.kind == (i32)RKON_FORM)
             {
-            dock.centreOf(e, wx, wy);
+            return (RKEnd*)0;
+            }
+        if (n.kind == (i32)RKON_VIEW)
+            {
+            return n.obj != (UXRscObject*)0 ? RKEnd.view(n.obj) : (RKEnd*)0;
+            }
+        return RKEnd.placeholder(n.kind, n.topId);
+        }
+    // While a line is drawn, the status line names what it is over, an outline row above all,
+    // since nothing on the canvas shows it.
+    void sayOver(RKEnd* e)
+        {
+        if (e == (RKEnd*)0 || e.isView())
+            {
+            return;
+            }
+        if (e.kind == (i32)RKON_OWNER)
+            {
+            self.say((u8*)"To File's Owner");
+            }
+        else if (e.kind == (i32)RKON_FIRSTR)
+            {
+            self.say((u8*)"To First Responder");
+            }
+        else
+            {
+            UXRscTopObject* to = doc.topObjectById(e.topId);
+            self.sayAbout((u8*)"To ", to != (UXRscTopObject*)0 ? RKOutline.topLabel(to) : (u8*)"an object");
             }
         }
     // Offer what fits a line from `src` to `dst`, at window point (wx, wy).
@@ -972,10 +988,6 @@ class RKMainController : Object<UXTableDelegate>
     void onIdentityEdit()
         {
         dirty = true;
-        if (dock != (RKDock*)0)
-            {
-            dock.rebuild(doc);
-            }
         self.showConnections();
         if (identityCtl.classField != (UXTextField*)0)
             {
@@ -1238,6 +1250,11 @@ class RKMainController : Object<UXTableDelegate>
     // document; the drop places the real one (onItemDrop).
     void onItemHover(u8* item, i32 window, i32 x, i32 y)
         {
+        if (outlineModel.draggedRow(item) != (RKOutlineNode*)0)
+            {
+            self.wireHover(x, y);
+            return;
+            }
         RKLibraryItem* it = x >= (i32)0 ? library.named(item) : (RKLibraryItem*)0;
         UXView* form = (UXView*)0; // the shown form's pane: its controls are realized straight into it
         if (doc != (UXRscDoc*)0 && shownTree >= (i32)0 && shownTree < (i32)panes.count())
@@ -1287,10 +1304,57 @@ class RKMainController : Object<UXTableDelegate>
             gApp.displayIfNeeded();
             }
         }
+    // An outline row dragged over the canvas: a line from where it came on, to the pointer, with
+    // the control under the pointer marked.  (-1, -1): the drag has left, or landed.
+    void wireHover(i32 x, i32 y)
+        {
+        if (overlay == (RKEditOverlay*)0)
+            {
+            return;
+            }
+        if (x < (i32)0)
+            {
+            overlay.hideLine();
+            wireIn = false;
+            }
+        else
+            {
+            UXRect oa = overlay.absoluteFrame();
+            if (!wireIn)
+                {
+                wireIn = true;
+                wireInY = y - (i32)oa.y;
+                }
+            RKEnd* over = self.endAtWindow(x, y);
+            UXRect hot = UXGeom.make((i16)0, (i16)0, (i16)0, (i16)0);
+            if (over != (RKEnd*)0 && over.isView())
+                {
+                hot = overlay.onCanvas(overlay.drag.canvasRect(over.obj));
+                }
+            overlay.showLine((i32)0, wireInY, x - (i32)oa.x, y - (i32)oa.y, hot);
+            }
+        if (gApp != (UXApplication*)0)
+            {
+            gApp.displayIfNeeded();
+            }
+        }
     // A library row dragged onto the form: placed centred where it is dropped.  A drop outside the form, or of an Object, is a pick.
     void onItemDrop(u8* item, i32 window, i32 x, i32 y)
         {
         self.onItemHover(item, window, (i32)-1, (i32)-1); // the preview goes: the real one is placed
+        RKEnd* from = RKMainController.endOf(outlineModel.draggedRow(item));
+        if (from != (RKEnd*)0)
+            {
+            // an outline row dragged onto a control, or onto another row: a connection
+            RKEnd* to = self.endAtWindow(x, y);
+            if (to == (RKEnd*)0)
+                {
+                self.say((u8*)"No connection: let go over a control or an object");
+                return;
+                }
+            self.offerWire(from, to, x, y);
+            return;
+            }
         RKLibraryItem* it = library.named(item);
         if (it == (RKLibraryItem*)0)
             {
@@ -1529,10 +1593,6 @@ class RKMainController : Object<UXTableDelegate>
         if (formOutline != (UXOutlineView*)0)
             {
             outlineModel.build(r, viewClass, viewOrient);
-            if (dock != (RKDock*)0)
-                {
-                dock.rebuild(r);
-                }
             formOutline.setOutlineSource(outlineModel);
             formOutline.reloadData();
             }

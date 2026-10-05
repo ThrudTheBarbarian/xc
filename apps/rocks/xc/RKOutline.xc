@@ -56,17 +56,74 @@ class RKOutlineNode : Object
     class RKOutline : Object<UXOutlineDataSource>
     {
     Array<RKOutlineNode>* roots;
+    Array<RKOutlineNode>* dragged; // rows dragged out: a drag carries its row's place here
 
     void init(void)
         {
         roots = new Array();
+        dragged = new Array();
         }
+
+    // A row that can be one end of a connection drags out as "rk-end:<n>", n its place in
+    // `dragged`; a form's row does not drag.
+    u8* dragTextForItem(UXOutlineView* o, Object* item)
+        {
+        RKOutlineNode* n = (RKOutlineNode* ?)item;
+        if (n == (RKOutlineNode*)0 || n.kind == (i32)RKON_FORM)
+            {
+            return (u8*)0;
+            }
+        i32 at = (i32)dragged.count();
+        dragged.add(n);
+        u8* t = new u8[(u32)20];
+        u8* pre = (u8*)"rk-end:";
+        for (i32 i = (i32)0; i < (i32)7; i = i + (i32)1)
+            {
+            t[i] = pre[i];
+            }
+        i32 digits = (i32)1;
+        for (i32 v = at; v >= (i32)10; v = v / (i32)10)
+            {
+            digits = digits + (i32)1;
+            }
+        for (i32 i = digits - (i32)1; i >= (i32)0; i = i - (i32)1)
+            {
+            t[(i32)7 + i] = (u8)((i32)'0' + at % (i32)10);
+            at = at / (i32)10;
+            }
+        t[(i32)7 + digits] = (u8)0;
+        return t;
+        }
+    // The row a drag's text stands for, or 0 if it is not one of ours.
+    RKOutlineNode* draggedRow(u8* text)
+        {
+        u8* pre = (u8*)"rk-end:";
+        for (i32 i = (i32)0; i < (i32)7; i = i + (i32)1)
+            {
+            if (text[i] != pre[i])
+                {
+                return (RKOutlineNode*)0;
+                }
+            }
+        i32 v = (i32)0;
+        for (i32 i = (i32)7; text[i] >= (u8)'0' && text[i] <= (u8)'9'; i = i + (i32)1)
+            {
+            v = v * (i32)10 + (i32)(text[i] - (u8)'0');
+            }
+        if (v >= (i32)dragged.count())
+            {
+            return (RKOutlineNode*)0;
+            }
+        return (RKOutlineNode* ?)dragged.get((u32)v);
+        }
+
 
     // Rebuild from the document, for the layout theme being viewed: each form is one row, showing
     // that theme's layout if it has one and otherwise its first.
     void build(UXRscDoc* r, i32 klass, i32 orient)
         {
         roots = new Array();
+        dragged = new Array(); // the rows it stood for are gone
         if (r == (UXRscDoc*)0)
             {
             return;
