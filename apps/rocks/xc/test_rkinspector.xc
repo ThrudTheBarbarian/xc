@@ -127,17 +127,18 @@ void main(void)
     // The whole point of the schema: a button gets the properties a button
     // has, and a field is never offered one it cannot hold.
     c.selectObject(btn);
-    eq("type is shown", ins.typeLabel.text(), (u8*)"button");
+    eq("the heading names the class", ins.typeLabel.text(), (u8*)"UXButton");
     checkTrue("a button offers Default", ins.rowNamed((u8*)"Default") != (RKRow*)0);
     checkTrue("a button offers Cancel", ins.rowNamed((u8*)"Cancel") != (RKRow*)0);
     checkTrue("a button offers Exit", ins.rowNamed((u8*)"Exit") != (RKRow*)0);
     checkTrue("a button is NOT offered Checked", ins.rowNamed((u8*)"Checked") == (RKRow*)0);
     checkTrue("a button is NOT offered Editable", ins.rowNamed((u8*)"Editable") == (RKRow*)0);
-    checkTrue("geometry is universal", ins.rowNamed((u8*)"X") != (RKRow*)0);
+    checkTrue("the frame is on the Size tab", c.sizeCtl.rowNamed((u8*)"X") != (RKRow*)0);
+    checkTrue("...and not on Attributes", ins.rowNamed((u8*)"X") == (RKRow*)0);
     checkTrue("and Text, which a button has", ins.rowNamed((u8*)"Text") != (RKRow*)0);
 
     c.selectObject(fld);
-    eq("switching selection re-renders", ins.typeLabel.text(), (u8*)"field");
+    eq("switching selection re-renders", ins.typeLabel.text(), (u8*)"UXTextField");
     checkTrue("a field offers Editable", ins.rowNamed((u8*)"Editable") != (RKRow*)0);
     checkTrue("a field is NOT offered Checked", ins.rowNamed((u8*)"Checked") == (RKRow*)0);
     checkTrue("a field is NOT offered Default", ins.rowNamed((u8*)"Default") == (RKRow*)0);
@@ -151,9 +152,9 @@ void main(void)
 
     // ---- editing writes back to the MODEL ----------------------------------
     c.selectObject(btn);
-    RKRow* rx = ins.rowNamed((u8*)"X");
+    RKRow* rx = c.sizeCtl.rowNamed((u8*)"X");
     rx.field.setText((u8*)"120");
-    ins.onField(rx.field);
+    c.sizeCtl.onField(rx.field);
     check("editing X moves the OBJECT", btn.x, (i32)120);
 
     RKRow* rt = ins.rowNamed((u8*)"Text");
@@ -166,7 +167,7 @@ void main(void)
     // typed into and takes the keyboard focus with it.  Holding a row across
     // an edit is exactly what a designer's cursor does.
     checkTrue("the row survives an edit (the pane was not rebuilt)",
-              ins.rowNamed((u8*)"X") == rx);
+              c.sizeCtl.rowNamed((u8*)"X") == rx);
 
     // ---- a type-specific FLAG round-trips ----------------------------------
     RKRow* rd = ins.rowNamed((u8*)"Default");

@@ -466,6 +466,16 @@ class UXRscReader : Object
                 {
                 self.readNames(res, q + (i32)8, q + (i32)8 + size);
                 }
+            else if (self.rd32(q) == (i32)$4F574E52) // 'OWNR': File's Owner's class, the bytes
+                {
+                u8* oc = new u8[(u32)(size + (i32)1)];
+                for (i32 k = (i32)0; k < size; k = k + (i32)1)
+                    {
+                    oc[k] = buf[q + (i32)8 + k];
+                    }
+                oc[size] = (u8)0;
+                res.ownerClass = oc;
+                }
             else
                 {
                 UXRscExtSection* x = new UXRscExtSection();

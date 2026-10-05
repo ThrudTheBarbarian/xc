@@ -1,7 +1,7 @@
 // test_rklayouts.xc — the layout selector: Desktop / Tablet / Phone, Rotate and New Layout.
 //
-// Driven through the TOOLBAR, as a click arrives: the item's tag is recorded as the toolbar's
-// selection and the one action fires.  What it pins down is UXNB-V2's editor contract: a form
+// Driven through the DEVICE BAR under the canvas, as a click arrives: a segment is selected and
+// the bar's action fires, or a button's action fires.  What it pins down is UXNB-V2's editor contract: a form
 // factor with no layout reads "no layout -- create one" and the canvas does NOT fall back to
 // another form factor's tree; New Layout seeds from what is on the canvas; Rotate moves between a
 // device's portrait and landscape layouts; the desktop has no orientation.
@@ -54,10 +54,22 @@ bool says(RKMainController* c, u8* want)
         }
     return true;
     }
+// The bar's controls, by the toolbar tags these used to be.
 void click(RKMainController* c, i32 tag)
     {
-    c.toolbar.applyNativeItemClick(tag);
-    c.onToolbar((UXControl*)c.toolbar);
+    if (tag == (i32)RKTB_ROTATE)
+        {
+        c.onRotate((UXControl*)0);
+        return;
+        }
+    if (tag == (i32)RKTB_NEWLAYOUT)
+        {
+        c.onNewLayout((UXControl*)0);
+        return;
+        }
+    i32 seg = tag == (i32)RKTB_PHONE ? (i32)2 : (tag == (i32)RKTB_TABLET ? (i32)1 : (i32)0);
+    c.deviceBar.applyNativeSelection(seg);
+    c.onDeviceBar((UXControl*)c.deviceBar);
     }
 
 void main(void)

@@ -1,0 +1,140 @@
+// RKLibrary.xc — the object library: what can be added to a form, searchable by name.
+//
+// Interface Builder's library.  Picking a control arms the canvas: the next press there places
+// it, inside whatever box it lands in.  Picking Object adds one of the document's objects (IB's
+// Object, given a class in the Identity inspector), which has no place on the canvas.
+#import "Array.xc"
+#import "UXTableView.xc"
+#import "UXRscModel.xc"
+
+#define RKLIB_OBJECT -1 // the `type` of the Object entry: not a control
+
+class RKLibraryItem : Object
+    {
+    u8* name;
+    u8* blurb; // one line: what it is for
+    i32 type;  // a UXR_T_* type, or RKLIB_OBJECT
+    i32 w;
+    i32 h;
+    u8* text;  // the new control's text, or 0
+
+    static RKLibraryItem* make(u8* name, i32 type, i32 w, i32 h, u8* text, u8* blurb)
+        {
+        RKLibraryItem* it = new RKLibraryItem();
+        it.name = name;
+        it.type = type;
+        it.w = w;
+        it.h = h;
+        it.text = text;
+        it.blurb = blurb;
+        return it;
+        }
+    }
+
+class RKLibrary : Object<UXTableDataSource>
+    {
+    Array<RKLibraryItem>* all;
+    Array<RKLibraryItem>* shown; // after the search filter
+    u8* filter;
+
+    void init(void)
+        {
+        all = new Array();
+        shown = new Array();
+        filter = (u8*)"";
+        all.add(RKLibraryItem.make((u8*)"Button", (i32)UXR_T_BUTTON, (i32)80, (i32)24, (u8*)"Button", (u8*)"Fires an action when clicked"));
+        all.add(RKLibraryItem.make((u8*)"Label", (i32)UXR_T_STRING, (i32)120, (i32)20, (u8*)"Label", (u8*)"A line of text"));
+        all.add(RKLibraryItem.make((u8*)"Text Field", (i32)UXR_T_FIELD, (i32)160, (i32)24, (u8*)"", (u8*)"A line of text to edit"));
+        all.add(RKLibraryItem.make((u8*)"Checkbox", (i32)UXR_T_CHECKBOX, (i32)120, (i32)20, (u8*)"Checkbox", (u8*)"On or off"));
+        all.add(RKLibraryItem.make((u8*)"Radio Button", (i32)UXR_T_RADIO, (i32)120, (i32)20, (u8*)"Radio", (u8*)"One of a group"));
+        all.add(RKLibraryItem.make((u8*)"Pop-up Button", (i32)UXR_T_POPUP, (i32)120, (i32)24, (u8*)"Item", (u8*)"One of a list"));
+        all.add(RKLibraryItem.make((u8*)"Box", (i32)UXR_T_BOX, (i32)200, (i32)120, (u8*)0, (u8*)"Groups controls under a frame"));
+        all.add(RKLibraryItem.make((u8*)"View", (i32)UXR_T_IBOX, (i32)200, (i32)120, (u8*)0, (u8*)"Groups controls, unseen"));
+        all.add(RKLibraryItem.make((u8*)"Custom View", (i32)UXR_T_USERDEF, (i32)200, (i32)120, (u8*)0, (u8*)"A view of a class you name"));
+        all.add(RKLibraryItem.make((u8*)"Object", (i32)RKLIB_OBJECT, (i32)0, (i32)0, (u8*)0, (u8*)"An object of a class you name: a controller"));
+        self.refilter();
+        }
+
+    // Show only the items whose name contains `s`, ignoring case.
+    void setFilter(u8* s)
+        {
+        filter = s != (u8*)0 ? s : (u8*)"";
+        self.refilter();
+        }
+    void refilter(void)
+        {
+        shown = new Array();
+        for (u32 i = (u32)0; i < all.count(); i = i + (u32)1)
+            {
+            RKLibraryItem* it = (RKLibraryItem* ?)all.get(i);
+            if (RKLibrary.contains(it.name, filter))
+                {
+                shown.add(it);
+                }
+            }
+        }
+    i32 count(void)
+        {
+        return (i32)shown.count();
+        }
+    RKLibraryItem* itemAt(i32 row)
+        {
+        if (row < (i32)0 || row >= (i32)shown.count())
+            {
+            return (RKLibraryItem*)0;
+            }
+        return (RKLibraryItem* ?)shown.get((u32)row);
+        }
+    RKLibraryItem* named(u8* name)
+        {
+        for (u32 i = (u32)0; i < all.count(); i = i + (u32)1)
+            {
+            RKLibraryItem* it = (RKLibraryItem* ?)all.get(i);
+            if (RKLibrary.contains(it.name, name) && UXRscTree.len(it.name) == UXRscTree.len(name))
+                {
+                return it;
+                }
+            }
+        return (RKLibraryItem*)0;
+        }
+
+    // ---- UXTableDataSource -------------------------------------------------------------------
+    i32 numberOfRows(UXTableView* t)
+        {
+        return (i32)shown.count();
+        }
+    u8* valueForCell(UXTableView* t, i32 row, i32 col)
+        {
+        RKLibraryItem* it = self.itemAt(row);
+        if (it == (RKLibraryItem*)0)
+            {
+            return (u8*)"";
+            }
+        return col == (i32)0 ? it.name : it.blurb;
+        }
+
+    static u8 lower(u8 c)
+        {
+        return c >= (u8)'A' && c <= (u8)'Z' ? (u8)(c + (u8)32) : c;
+        }
+    static bool contains(u8* hay, u8* needle)
+        {
+        if (needle[0] == (u8)0)
+            {
+            return true;
+            }
+        for (i32 i = (i32)0; hay[i] != (u8)0; i = i + (i32)1)
+            {
+            i32 j = (i32)0;
+            while (needle[j] != (u8)0 && hay[i + j] != (u8)0 && RKLibrary.lower(hay[i + j]) == RKLibrary.lower(needle[j]))
+                {
+                j = j + (i32)1;
+                }
+            if (needle[j] == (u8)0)
+                {
+                return true;
+                }
+            }
+        return false;
+        }
+    }

@@ -359,7 +359,8 @@ class UXRscWriter : Object
             }
         UXData* file = UXData.fromBytes(out, total);
         if (r.formCount() > (i32)0 || r.classOverrides.count() > (u32)0 || r.topObjects.count() > (u32)0 ||
-            r.connections.count() > (u32)0 || r.extSections.count() > (u32)0 || UXRscWriter.namesSection(r) != (UXData*)0)
+            r.connections.count() > (u32)0 || r.extSections.count() > (u32)0 || UXRscWriter.namesSection(r) != (UXData*)0 ||
+            (r.ownerClass != (u8*)0 && r.ownerClass[0] != (u8)0))
             {
             file.appendData(self.nibChunk(r));
             }
@@ -472,41 +473,38 @@ class UXRscWriter : Object
                 nLoose = nLoose + (i32)1;
                 }
             }
-        // the maps: every variant tree with at least one identified control
+        // the maps: every tree with at least one identified control (a form's layouts, and a tree in
+        // no form whose controls are wired or classed by logical id)
         i32 nMaps = (i32)0;
         UXData* maps = UXData.withCapacity((i32)64);
-        for (i32 f = (i32)0; f < r.formCount(); f = f + (i32)1)
+        for (i32 f = (i32)0; f < r.treeCount(); f = f + (i32)1)
             {
-            UXRscForm* fm = r.formAt(f);
-            for (i32 v = (i32)0; v < fm.variantCount(); v = v + (i32)1)
+            UXRscTree* tr = r.treeAt(f);
+            Array<UXRscObject>* all = tr.allObjects();
+            i32 ne = (i32)0;
+            for (u32 k = (u32)0; k < all.count(); k = k + (u32)1)
                 {
-                UXRscTree* tr = fm.variantAt(v).tree;
-                Array<UXRscObject>* all = tr.allObjects();
-                i32 ne = (i32)0;
-                for (u32 k = (u32)0; k < all.count(); k = k + (u32)1)
+                if (((UXRscObject* ?)all.get(k)).logicalId != (i32)0)
                     {
-                    if (((UXRscObject* ?)all.get(k)).logicalId != (i32)0)
-                        {
-                        ne = ne + (i32)1;
-                        }
+                    ne = ne + (i32)1;
                     }
-                if (ne == (i32)0)
-                    {
-                    continue;
-                    }
-                UXRscWriter.be16(maps, r.indexOfTree(tr));
-                UXRscWriter.be16(maps, ne);
-                for (u32 k = (u32)0; k < all.count(); k = k + (u32)1)
-                    {
-                    i32 id = ((UXRscObject* ?)all.get(k)).logicalId;
-                    if (id != (i32)0)
-                        {
-                        UXRscWriter.be16(maps, (i32)k);
-                        UXRscWriter.be16(maps, id);
-                        }
-                    }
-                nMaps = nMaps + (i32)1;
                 }
+            if (ne == (i32)0)
+                {
+                continue;
+                }
+            UXRscWriter.be16(maps, r.indexOfTree(tr));
+            UXRscWriter.be16(maps, ne);
+            for (u32 k = (u32)0; k < all.count(); k = k + (u32)1)
+                {
+                i32 id = ((UXRscObject* ?)all.get(k)).logicalId;
+                if (id != (i32)0)
+                    {
+                    UXRscWriter.be16(maps, (i32)k);
+                    UXRscWriter.be16(maps, id);
+                    }
+                }
+            nMaps = nMaps + (i32)1;
             }
 
         // the graph, strings into the same blob
@@ -542,6 +540,18 @@ class UXRscWriter : Object
             UXRscWriter.be32(graph, names.length());
             graph.appendBytes(names.bytes(), names.length());
             if ((names.length() & (i32)1) != (i32)0)
+                {
+                graph.appendByte((u8)0);
+                }
+            nExt = nExt + (i32)1;
+            }
+        if (r.ownerClass != (u8*)0 && r.ownerClass[0] != (u8)0)
+            {
+            i32 ol = UXRscWriter.slen(r.ownerClass);
+            UXRscWriter.be32(graph, (i32)$4F574E52); // 'OWNR'
+            UXRscWriter.be32(graph, ol);
+            graph.appendBytes(r.ownerClass, ol);
+            if ((ol & (i32)1) != (i32)0)
                 {
                 graph.appendByte((u8)0);
                 }

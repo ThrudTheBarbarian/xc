@@ -32,13 +32,14 @@ Beside the trees is the **nib graph**:
 | `topObjects` | [`UXRscTopObject`](#uxrsctopobject): the non-view objects a form loads with |
 | `connections` | [`UXRscConnection`](/compiler/api/uxkit/uxrscconnection/): outlets and actions, each scoped to layout themes |
 | `extSections` | [`UXRscExtSection`](#uxrscextsection): chunk sections this build does not interpret, kept for re-saving |
+| `ownerClass` | File's Owner's class, so a designer can list its outlets and actions; "" when unset |
 
 On disk the trees are a classic `.rsc`, readable by any GEM AES, and the graph
 is the nib chunk after them.
 
 ## Topics
 
-[treeCount](#treecount) · [treeAt](#treeat) · [deepCopy](#deepcopy) · [addTree](#addtree) · [indexOfTree](#indexoftree) · [formCount](#formcount) · [formAt](#format) · [formOf](#formof) · [formById](#formbyid) · [addVariant](#addvariant) · [variantSuffix](#variantsuffix) · [emptyDialog](#emptydialog) · [flatten](#flatten)
+[treeCount](#treecount) · [treeAt](#treeat) · [deepCopy](#deepcopy) · [formIdOf](#formidof) · [ensureLogicalId](#ensurelogicalid) · [refFor](#reffor) · [classOf](#classof) · [setClassOf](#setclassof) · [addTopObject](#addtopobject) · [topObjectById](#topobjectbyid) · [removeTopObject](#removetopobject) · [removeConnectionsTo](#removeconnectionsto) · [refHits](#refhits) · [addTree](#addtree) · [indexOfTree](#indexoftree) · [formCount](#formcount) · [formAt](#format) · [formOf](#formof) · [formById](#formbyid) · [addVariant](#addvariant) · [variantSuffix](#variantsuffix) · [emptyDialog](#emptydialog) · [flatten](#flatten)
 
 ### deepCopy
 
@@ -49,6 +50,88 @@ UXRscDoc* deepCopy(void)
 A copy that can be edited without touching the original: every tree, form and
 nib-graph record is new. Strings and image bytes are shared, because an edit
 replaces them instead of writing into them. An editor keeps these for undo.
+
+### formIdOf
+
+```c
+i32 formIdOf(UXRscTree* t)
+```
+
+The id a tree's form is loaded by: its form's, or for a tree in no form the
+tree's own index.
+
+### ensureLogicalId
+
+```c
+i32 ensureLogicalId(UXRscTree* t, UXRscObject* o)
+```
+
+The control's logical id, giving it one first if it has none. A new id is
+unused in every layout of the form.
+
+### refFor
+
+```c
+UXRscRef* refFor(UXRscTree* t, UXRscObject* o)
+```
+
+A reference to a control by logical id, which holds in every layout of its
+form. A connection or a class override names a control this way.
+
+### classOf
+
+```c
+u8* classOf(UXRscTree* t, UXRscObject* o)
+```
+
+The class the document gives a control, or null for the one its type implies
+([`UXNib.defaultClassFor`](/compiler/api/uxkit/uxnib/#defaultclassfor)).
+
+### setClassOf
+
+```c
+void setClassOf(UXRscTree* t, UXRscObject* o, u8* cls)
+```
+
+Gives a control a class. Null or "" removes the override.
+
+### addTopObject
+
+```c
+UXRscTopObject* addTopObject(u8* cls, u8* label)
+```
+
+Adds one of the document's objects, with the next free id.
+
+### topObjectById
+
+```c
+UXRscTopObject* topObjectById(i32 id)
+```
+
+### removeTopObject
+
+```c
+void removeTopObject(i32 id)
+```
+
+Removes the object and every connection to or from it.
+
+### removeConnectionsTo
+
+```c
+void removeConnectionsTo(UXRscRef* r)
+```
+
+Removes every connection with `r` at either end.
+
+### refHits
+
+```c
+static bool refHits(UXRscRef* a, UXRscRef* r)
+```
+
+Whether `a` names what `r` names.
 
 ### treeCount
 

@@ -107,7 +107,7 @@ void main(void)
     stage((u8*)"RKCanvas.realize (tree 0)");
 
     RKOutline* ol = new RKOutline();
-    ol.build(gRes);
+    ol.build(gRes, (i32)UXR_V_DESKTOP, (i32)UXR_V_ORIENT_NONE);
     stage((u8*)"RKOutline.build");
 
     c.showResource(gRes, (i32)0);

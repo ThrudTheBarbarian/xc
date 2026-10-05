@@ -67,7 +67,7 @@ instance.
 
 ## Topics
 
-[load](#load) · [loadDoc](#loaddoc) · [loadDocAs](#loaddocas) · [selectTree](#selecttree) · [viewFor](#viewfor) · [classFor](#classfor) · [applyState](#applystate) · [applyText](#applytext) · [textOf](#textof) · [typeName](#typename) · [make](#make) · [registerObjectFactory](#registerobjectfactory) · [registerViewFactory](#registerviewfactory)
+[load](#load) · [loadDoc](#loaddoc) · [loadDocAs](#loaddocas) · [selectTree](#selecttree) · [viewFor](#viewfor) · [defaultClassFor](#defaultclassfor) · [classFor](#classfor) · [applyState](#applystate) · [applyText](#applytext) · [textOf](#textof) · [typeName](#typename) · [make](#make) · [registerObjectFactory](#registerobjectfactory) · [registerViewFactory](#registerviewfactory)
 
 ### load
 
@@ -120,6 +120,15 @@ The view for one object. If `cls` names a class a registered factory can make,
 that class; otherwise the control for the object's GEM type. A type with no
 UXKit equivalent becomes a visible placeholder titled with its class or type,
 so a form never has a silent gap.
+
+### defaultClassFor
+
+```c
+static u8* defaultClassFor(i32 t)
+```
+
+The UXKit class `viewFor` makes for a GEM type when nothing overrides it:
+`"UXButton"` for `G_BUTTON`, `"UXView"` for a type with no control of its own.
 
 ### classFor
 

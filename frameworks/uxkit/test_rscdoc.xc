@@ -97,9 +97,55 @@ void main(void)
     check("the original keeps its phone layout", d.formAt((i32)0).variantCount(), (i32)2);
     checkTrue("and its phone tree", d.formAt((i32)0).find((i32)UXR_V_PHONE, (i32)UXR_V_ORIENT_PORTRAIT).tree == phone);
 
+    Stdio.printf("-- classes and objects, as an editor sets them\n");
+    UXRscDoc* e = UXRscDoc.emptyDialog();
+    UXRscTree* et = e.treeAt((i32)0);
+    UXRscObject* wave = UXRscObject.make((i32)UXR_T_USERDEF, (i32)8, (i32)8, (i32)100, (i32)40);
+    et.root.addChild(wave);
+    UXRscObject* go = UXRscObject.make((i32)UXR_T_BUTTON, (i32)8, (i32)60, (i32)60, (i32)20);
+    et.root.addChild(go);
+    checkTrue("no class to begin with", e.classOf(et, wave) == (u8*)0);
+    e.setClassOf(et, wave, (u8*)"WaveformView");
+    checkTrue("a class", UXRscWriter.seq(e.classOf(et, wave), (u8*)"WaveformView"));
+    check("it gave the control a logical id", wave.logicalId, (i32)1);
+    check("the next control gets the next id", e.ensureLogicalId(et, go), (i32)2);
+    e.setClassOf(et, wave, (u8*)"Oscilloscope");
+    check("setting it again replaces it", (i32)e.classOverrides.count(), (i32)1);
+    UXRscTopObject* ctl = e.addTopObject((u8*)"PlayerController", (u8*)"Player");
+    UXRscTopObject* fmt = e.addTopObject((u8*)"TimeFormatter", (u8*)"");
+    check("top objects number from 1", ctl.id * (i32)10 + fmt.id, (i32)12);
+    UXRscConnection* cn = new UXRscConnection();
+    cn.kind = (i32)UXR_CONN_ACTION;
+    cn.src = e.refFor(et, go);
+    cn.dst = UXRscRef.make((i32)UXR_REF_TOP, ctl.id, (i32)0);
+    cn.member = (u8*)"onGo";
+    e.connections.add(cn);
+    UXRscConnection* cn2 = new UXRscConnection();
+    cn2.kind = (i32)UXR_CONN_OUTLET;
+    cn2.src = UXRscRef.make((i32)UXR_REF_TOP, fmt.id, (i32)0);
+    cn2.dst = e.refFor(et, wave);
+    cn2.member = (u8*)"scope";
+    e.connections.add(cn2);
+    UXData* eb = UXRscWriter.write(e);
+    UXRscDoc* er = UXRscReader.read(eb.bytes(), eb.length());
+    UXRscTree* ert = er.treeAt((i32)0);
+    checkTrue("a tree in no form keeps its controls' ids", ert.root.childAt((i32)0).logicalId == (i32)1);
+    checkTrue("and so their class", UXRscWriter.seq(er.classOf(ert, ert.root.childAt((i32)0)), (u8*)"Oscilloscope"));
+    checkTrue("a top object by id", UXRscWriter.seq(er.topObjectById((i32)1).cls, (u8*)"PlayerController"));
+    er.removeTopObject((i32)1);
+    check("removing it takes its connection", (i32)er.connections.count(), (i32)1);
+    checkTrue("and leaves the others", UXRscWriter.seq(((UXRscConnection* ?)er.connections.get((u32)0)).member, (u8*)"scope"));
+    checkTrue("no owner class yet", er.ownerClass[0] == (u8)0);
+    er.ownerClass = (u8*)"DocumentController";
+    UXData* ob = UXRscWriter.write(er);
+    checkTrue("File's Owner's class survives a save", UXRscWriter.seq(UXRscReader.read(ob.bytes(), ob.length()).ownerClass, (u8*)"DocumentController"));
+    checkTrue("and a copy", UXRscWriter.seq(er.deepCopy().ownerClass, (u8*)"DocumentController"));
+    er.setClassOf(ert, ert.root.childAt((i32)0), (u8*)"");
+    check("an empty class removes the override", (i32)er.classOverrides.count(), (i32)0);
+
     if (gFails == (i32)0)
         {
-        Stdio.printf("PASS: rsc document -- names, deep copy, plain files stay classic\n");
+        Stdio.printf("PASS: rsc document -- names, deep copy, plain files stay classic, classes and objects\n");
         }
     else
         {

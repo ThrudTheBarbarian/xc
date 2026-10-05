@@ -420,10 +420,14 @@ class RKDrag : Object
     callback picked void(UXRscObject* o);  // press landed on this (0 = background)
     callback changed void(UXRscObject* o); // the model's rect moved this step
     callback ended void(UXRscObject* o);   // the drag finished
+    // Asked first, with the press point on the canvas: true takes the press (the editor is placing
+    // an object from the library), and nothing is selected or dragged.
+    callback placeAt bool(i32 cx, i32 cy);
 
     void init(void)
         {
         super.init();
+        placeAt = (callback bool(i32 cx, i32 cy))0;
         drag = new RKDrag();
         selection = (UXRscObject*)0;
         tracking = (UXRscObject*)0;
@@ -469,6 +473,10 @@ class RKDrag : Object
         i32 cx = (i32)0;
         i32 cy = (i32)0;
         self.toCanvas((i32)e.x, (i32)e.y, &cx, &cy);
+        if (placeAt && placeAt(cx, cy))
+            {
+            return;
+            }
         UXRscObject* o = drag.begin(drag.root, self.currentSelection(), cx, cy);
         if (picked)
             {

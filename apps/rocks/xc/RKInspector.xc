@@ -42,9 +42,16 @@ class RKRow : Object
         }
     }
 
+// Which of an object's properties a pane shows: every one, or one inspector tab's share (the
+// Size tab has the frame, the Attributes tab the rest).
+#define RKIS_ALL 0
+#define RKIS_ATTRIBUTES 1
+#define RKIS_SIZE 2
+
     class RKInspector : Object
     {
     UXView* pane; // where rows are built; supplied, not constructed
+    i32 section;  // RKIS_*
     UXLabel* typeLabel;
     Array<RKRow>* rows;
 
@@ -64,6 +71,7 @@ class RKRow : Object
     void init(void)
         {
         pane = (UXView*)0;
+        section = (i32)RKIS_ALL;
         typeLabel = (UXLabel*)0;
         rows = new Array();
         target = (UXRscObject*)0;
@@ -198,6 +206,11 @@ class RKRow : Object
         for (i32 i = (i32)0; i < (i32)ps.count(); i = i + (i32)1)
             {
             RKProperty* p = (RKProperty* ?)ps.get((u16)i);
+            bool frame = p.kind == (i32)RKP_INT && p.sel >= (i32)RKV_X && p.sel <= (i32)RKV_H;
+            if ((section == (i32)RKIS_ATTRIBUTES && frame) || (section == (i32)RKIS_SIZE && !frame))
+                {
+                continue;
+                }
             RKRow* r = new RKRow();
             r.prop = p;
             if (p.kind == (i32)RKP_ENUM)

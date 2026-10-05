@@ -33,7 +33,10 @@ class UXGroupBox : UXView
         g.fillRect(UXGeom.make((i16)(b.w - (i16)1), top, (i16)1, (i16)(b.h - top)), (i32)9); // right
         g.fillRect(UXGeom.make((i16)0, (i16)(b.h - (i16)1), b.w, (i16)1), (i32)9);           // bottom
         g.fillRect(UXGeom.make((i16)0, top, b.w, (i16)1), (i32)9);                           // top
-        g.fillRect(UXGeom.make((i16)6, (i16)1, (i16)60, (i16)14), (i32)8);                   // gap for the title
-        g.drawText(title, (i16)10, (i16)1, (i32)1, (i32)0);
+        if (title != (u8*)0 && title[0] != (u8)0) // an untitled box is an unbroken frame
+            {
+            g.fillRect(UXGeom.make((i16)6, (i16)1, (i16)60, (i16)14), (i32)8); // gap for the title
+            g.drawText(title, (i16)10, (i16)1, (i32)1, (i32)0);
+            }
         }
     }

@@ -854,6 +854,7 @@ class UXRscColor : Object
     Array<UXRscTopObject>* topObjects;
     Array<UXRscConnection>* connections;
     Array<UXRscExtSection>* extSections;
+    u8* ownerClass; // File's Owner's class, for the designer to list its outlets and actions; "" = unset
     bool bigEndian;              // classic 68000 GEM fidelity
     bool packedCoords;           // char/pixel packing on write
     bool embedIcons;             // embed PAM vs reference an external path
@@ -869,6 +870,7 @@ class UXRscColor : Object
         topObjects = new Array();
         connections = new Array();
         extSections = new Array();
+        ownerClass = (u8*)"";
         bigEndian = true;
         packedCoords = true;
         embedIcons = true;
@@ -1012,6 +1014,174 @@ class UXRscColor : Object
         return (u8*)"_ANY";
         }
 
+    // ---- the nib graph, for an editor ---------------------------------------------------------
+    // The id a form is loaded by: its form's, or for a tree in no form the tree's own index.
+    i32 formIdOf(UXRscTree* t)
+        {
+        UXRscForm* f = self.formOf(t);
+        return f != (UXRscForm*)0 ? f.formId : self.indexOfTree(t);
+        }
+    // Give `o` (in `t`) a logical id if it has none, unique across every layout of its form.
+    i32 ensureLogicalId(UXRscTree* t, UXRscObject* o)
+        {
+        if (o.logicalId != (i32)0)
+            {
+            return o.logicalId;
+            }
+        UXRscForm* f = self.formOf(t);
+        i32 next = (i32)1;
+        if (f != (UXRscForm*)0)
+            {
+            next = f.nextLogicalId();
+            }
+        else
+            {
+            Array<UXRscObject>* all = t.allObjects();
+            for (u32 k = (u32)0; k < all.count(); k = k + (u32)1)
+                {
+                i32 id = ((UXRscObject* ?)all.get(k)).logicalId;
+                if (id >= next)
+                    {
+                    next = id + (i32)1;
+                    }
+                }
+            }
+        o.logicalId = next;
+        return next;
+        }
+    // A ref to a control that holds in every layout of its form: by logical id (assigned if need be).
+    UXRscRef* refFor(UXRscTree* t, UXRscObject* o)
+        {
+        i32 id = self.ensureLogicalId(t, o);
+        return UXRscRef.make((i32)UXR_REF_LOGICAL, self.formIdOf(t), id);
+        }
+    // The class a control is overridden to, or 0.
+    u8* classOf(UXRscTree* t, UXRscObject* o)
+        {
+        if (o.logicalId == (i32)0)
+            {
+            return (u8*)0;
+            }
+        UXRscRef* r = UXRscRef.make((i32)UXR_REF_LOGICAL, self.formIdOf(t), o.logicalId);
+        for (u32 i = (u32)0; i < classOverrides.count(); i = i + (u32)1)
+            {
+            UXRscClassOverride* co = (UXRscClassOverride* ?)classOverrides.get(i);
+            if (co.view.same(r))
+                {
+                return co.cls;
+                }
+            }
+        return (u8*)0;
+        }
+    // Set a control's class; null or "" goes back to the one its type implies.
+    void setClassOf(UXRscTree* t, UXRscObject* o, u8* cls)
+        {
+        UXRscRef* r = self.refFor(t, o);
+        for (u32 i = (u32)0; i < classOverrides.count(); i = i + (u32)1)
+            {
+            UXRscClassOverride* co = (UXRscClassOverride* ?)classOverrides.get(i);
+            if (co.view.same(r))
+                {
+                if (cls == (u8*)0 || cls[0] == (u8)0)
+                    {
+                    classOverrides.removeAt(i);
+                    }
+                else
+                    {
+                    co.cls = cls;
+                    }
+                return;
+                }
+            }
+        if (cls != (u8*)0 && cls[0] != (u8)0)
+            {
+            UXRscClassOverride* co = new UXRscClassOverride();
+            co.view = r;
+            co.cls = cls;
+            classOverrides.add(co);
+            }
+        }
+    // A new top-level object (IB's "Object"), with the next free id.
+    UXRscTopObject* addTopObject(u8* cls, u8* label)
+        {
+        i32 id = (i32)1;
+        for (u32 i = (u32)0; i < topObjects.count(); i = i + (u32)1)
+            {
+            i32 k = ((UXRscTopObject* ?)topObjects.get(i)).id;
+            if (k >= id)
+                {
+                id = k + (i32)1;
+                }
+            }
+        UXRscTopObject* to = new UXRscTopObject();
+        to.id = id;
+        to.cls = cls;
+        to.label = label;
+        topObjects.add(to);
+        return to;
+        }
+    UXRscTopObject* topObjectById(i32 id)
+        {
+        for (u32 i = (u32)0; i < topObjects.count(); i = i + (u32)1)
+            {
+            UXRscTopObject* to = (UXRscTopObject* ?)topObjects.get(i);
+            if (to.id == id)
+                {
+                return to;
+                }
+            }
+        return (UXRscTopObject*)0;
+        }
+    // Remove a top-level object and every connection to or from it.
+    void removeTopObject(i32 id)
+        {
+        for (u32 i = (u32)0; i < topObjects.count(); i = i + (u32)1)
+            {
+            if (((UXRscTopObject* ?)topObjects.get(i)).id == id)
+                {
+                topObjects.removeAt(i);
+                break;
+                }
+            }
+        UXRscRef* r = UXRscRef.make((i32)UXR_REF_TOP, id, (i32)0);
+        self.removeConnectionsTo(r);
+        }
+    // Remove every connection with `r` at either end (a deleted control or object).  Refs compare
+    // by space and a; for a top object b is unused.
+    void removeConnectionsTo(UXRscRef* r)
+        {
+        u32 i = (u32)0;
+        while (i < connections.count())
+            {
+            UXRscConnection* c = (UXRscConnection* ?)connections.get(i);
+            bool hit = UXRscDoc.refHits(c.src, r) || UXRscDoc.refHits(c.dst, r);
+            if (hit)
+                {
+                connections.removeAt(i);
+                }
+            else
+                {
+                i = i + (u32)1;
+                }
+            }
+        }
+    static bool refHits(UXRscRef* a, UXRscRef* r)
+        {
+        if (a.space != r.space)
+            {
+            return false;
+            }
+        if (r.space == (i32)UXR_REF_TOP)
+            {
+            return a.a == r.a;
+            }
+        if (r.space == (i32)UXR_REF_OWNER || r.space == (i32)UXR_REF_FIRSTR)
+            {
+            return true;
+            }
+        return a.a == r.a && a.b == r.b;
+        }
+
     // A copy deep enough to edit independently: every tree, form and graph record is new; strings
     // and image bytes are shared, because an edit replaces them rather than writing into them.  An
     // editor's undo keeps these.
@@ -1025,6 +1195,7 @@ class UXRscColor : Object
         c.charHeight = charHeight;
         c.freeStrings = freeStrings;
         c.freeImages = freeImages;
+        c.ownerClass = ownerClass;
         for (i32 i = (i32)0; i < self.treeCount(); i = i + (i32)1)
             {
             UXRscTree* t = self.treeAt(i);

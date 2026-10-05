@@ -169,15 +169,15 @@ void main(void)
 
     // Mid-drag the inspector must NOT be rebuilt — the pane the designer is
     // about to read would be destroyed and rebuilt on every pointer step.
-    RKRow* rx = c.inspectorCtl.rowNamed((u8*)"X");
+    RKRow* rx = c.sizeCtl.rowNamed((u8*)"X");
     c.overlay.drag.step((i32)140, (i32)85);
     c.onDragStep(btn);
-    checkTrue("the inspector survives a drag step", c.inspectorCtl.rowNamed((u8*)"X") == rx);
+    checkTrue("the inspector survives a drag step", c.sizeCtl.rowNamed((u8*)"X") == rx);
 
     // On release it catches up, because the numbers it shows are now stale.
     c.overlay.drag.end();
     c.onDragEnd(btn);
-    RKRow* rx2 = c.inspectorCtl.rowNamed((u8*)"X");
+    RKRow* rx2 = c.sizeCtl.rowNamed((u8*)"X");
     checkTrue("releasing refreshes the inspector", rx2 != (RKRow*)0);
     check("and it reads the object's new position",
           RKInspector.parseInt(rx2.field.text()), btn.x);

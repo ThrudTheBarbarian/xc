@@ -32,6 +32,9 @@
 #import "UXRscRead.xc"
 #import "UXRscWrite.xc"
 #import "RKUndo.xc"
+#import "RKIdentity.xc"
+#import "RKLibrary.xc"
+#import "UXSegmentedControl.xc"
 
 // The toolbar's items, by tag (RKMainBuilder makes them; onToolbar dispatches them).
 #define RKTB_NEW 1
@@ -51,6 +54,10 @@ class RKMainController : Object<UXTableDelegate>
     outlet UXView* canvas;             // the drawing area (real UXKit widgets)
     outlet UXView* inspector;          // the property pane
     outlet UXLabel* statusLabel;       // one line of feedback, bottom left
+    outlet UXSegmentedControl* deviceBar;     // View as: Desktop / Tablet / Phone
+    outlet UXSegmentedControl* inspectorTabs; // Identity / Attributes / Size / Connections
+    outlet UXTableView* libraryTable;         // what can be added
+    outlet UXTextField* librarySearch;        // its filter
 
     // The document.  The controller owns the MODEL; the canvas outlet shows it.
     UXRscDoc* doc;
@@ -75,7 +82,16 @@ class RKMainController : Object<UXTableDelegate>
     u8* geomBuf;                       // reused: a drag writes this per step
     // NOTE: `inspector` is the outlet for the PANE (a UXView); this is its
     // controller.  Two different things, so two different names.
-    RKInspector* inspectorCtl;
+    RKInspector* inspectorCtl;      // the Attributes tab
+    RKInspector* sizeCtl;           // the Size tab: the same rows' frame share
+    RKIdentity* identityCtl;        // the Identity tab
+    Array<UXView>* tabPanes;        // the four tabs' panes, in order (the builder fills it)
+    RKLibrary* library;
+    RKLibraryItem* placing;         // armed by a library pick: the next canvas press places it
+    // What is selected, by outline row kind (RKON_*): a control (`selected`), a placeholder, or one
+    // of the document's objects (selTop); 0 = nothing.
+    i32 selKind;
+    i32 selTop;
     // Undo and redo (RKUndo.xc).  A press copies the document into pressCopy; the copy becomes an
     // undo step only if the press turns into a drag.
     RKUndoStack* history;
@@ -124,8 +140,26 @@ class RKMainController : Object<UXTableDelegate>
         guideItem = (i32)1;
         geomBuf = (u8*)malloc((u32)64);
         inspectorCtl = new RKInspector();
+        inspectorCtl.section = (i32)RKIS_ATTRIBUTES;
         inspectorCtl.changed = &self.onInspectorEdit;
         inspectorCtl.willChange = &self.onInspectorWillChange;
+        sizeCtl = new RKInspector();
+        sizeCtl.section = (i32)RKIS_SIZE;
+        sizeCtl.changed = &self.onInspectorEdit;
+        sizeCtl.willChange = &self.onInspectorWillChange;
+        identityCtl = new RKIdentity();
+        identityCtl.willChange = &self.onIdentityWillChange;
+        identityCtl.changed = &self.onIdentityEdit;
+        tabPanes = new Array();
+        library = new RKLibrary();
+        placing = (RKLibraryItem*)0;
+        selKind = (i32)0;
+        selTop = (i32)0;
+        overlay.placeAt = &self.placeAt;
+        deviceBar = (UXSegmentedControl*)0;
+        inspectorTabs = (UXSegmentedControl*)0;
+        libraryTable = (UXTableView*)0;
+        librarySearch = (UXTextField*)0;
         history = new RKUndoStack();
         pressCopy = (UXRscDoc*)0;
         pressSel = (i32)-1;
@@ -139,14 +173,297 @@ class RKMainController : Object<UXTableDelegate>
 
     // ---- actions: what the UI can ask for ----------------------------------
     // Each is wired by NAME, so the builder and a nib reach them identically.
+    // A new, empty dialog: its own form, shown on the canvas.
     void onNewForm(UXControl* sender) : action
         {
-        self.say((u8*)"New form");
+        if (doc == (UXRscDoc*)0)
+            {
+            doc = new UXRscDoc();
+            }
+        self.willEdit((u8*)"New Form", (Object*)0);
+        UXRscTree* t = new UXRscTree();
+        t.setNameJoined((u8*)"FORM", RKIdentity.num(doc.treeCount() + (i32)1));
+        t.root = UXRscObject.make((i32)UXR_T_BOX, (i32)0, (i32)0, (i32)320, (i32)200);
+        doc.addTree(t);
+        dirty = true;
+        self.showResource(doc, doc.indexOfTree(t));
+        self.sayAbout((u8*)"New form ", t.name);
         }
     void onDelete(UXControl* sender) : action
         {
-        self.say((u8*)"Delete");
+        self.deleteSelection();
         }
+    void onDeleteItem(UXMenuItem* sender)
+        {
+        self.deleteSelection();
+        }
+    // Delete what is selected: a control (and, when no other layout has it, its class and its
+    // connections), or one of the document's objects and its connections.
+    void deleteSelection(void)
+        {
+        if (doc == (UXRscDoc*)0)
+            {
+            return;
+            }
+        if (selKind == (i32)RKON_OBJECT)
+            {
+            self.willEdit((u8*)"Delete", (Object*)0);
+            doc.removeTopObject(selTop);
+            dirty = true;
+            self.showResource(doc, shownTree);
+            self.say((u8*)"Deleted");
+            return;
+            }
+        UXRscObject* o = selected;
+        if (o == (UXRscObject*)0 || shownTree < (i32)0 || shownTree >= doc.treeCount())
+            {
+            self.say((u8*)"Nothing to delete");
+            return;
+            }
+        UXRscTree* t = doc.treeAt(shownTree);
+        UXRscObject* parent = t.parentOf(o);
+        if (parent == (UXRscObject*)0)
+            {
+            self.say((u8*)"A form's own box cannot be deleted");
+            return;
+            }
+        self.willEdit((u8*)"Delete", (Object*)0);
+        if (o.logicalId != (i32)0 && !self.inOtherLayout(t, o.logicalId))
+            {
+            UXRscRef* r = UXRscRef.make((i32)UXR_REF_LOGICAL, doc.formIdOf(t), o.logicalId);
+            doc.removeConnectionsTo(r);
+            doc.setClassOf(t, o, (u8*)"");
+            }
+        for (i32 i = (i32)0; i < parent.childCount(); i = i + (i32)1)
+            {
+            if (parent.childAt(i) == o)
+                {
+                parent.children.removeAt((u32)i);
+                break;
+                }
+            }
+        dirty = true;
+        self.rebuildShownPane();
+        self.showResource(doc, shownTree);
+        self.say((u8*)"Deleted");
+        }
+    // Whether another layout of `t`'s form has the control with this logical id.
+    bool inOtherLayout(UXRscTree* t, i32 id)
+        {
+        UXRscForm* f = doc.formOf(t);
+        if (f == (UXRscForm*)0)
+            {
+            return false;
+            }
+        for (i32 v = (i32)0; v < f.variantCount(); v = v + (i32)1)
+            {
+            UXRscTree* o = f.variantAt(v).tree;
+            if (o == t)
+                {
+                continue;
+                }
+            Array<UXRscObject>* all = o.allObjects();
+            for (u32 k = (u32)0; k < all.count(); k = k + (u32)1)
+                {
+                if (((UXRscObject* ?)all.get(k)).logicalId == id)
+                    {
+                    return true;
+                    }
+                }
+            }
+        return false;
+        }
+
+    // ---- the device bar: View as ---------------------------------------------------
+    void onDeviceBar(UXControl* sender) : action
+        {
+        if (deviceBar == (UXSegmentedControl*)0)
+            {
+            return;
+            }
+        i32 seg = deviceBar.selectedSegment();
+        if (seg == (i32)0)
+            {
+            self.onDesktop(sender);
+            }
+        else if (seg == (i32)1)
+            {
+            self.onTablet(sender);
+            }
+        else if (seg == (i32)2)
+            {
+            self.onPhone(sender);
+            }
+        }
+    // The bar shows the form factor being viewed, however it was chosen.
+    void reflectDevice(void)
+        {
+        if (deviceBar == (UXSegmentedControl*)0)
+            {
+            return;
+            }
+        i32 seg = viewClass == (i32)UXR_V_PHONE ? (i32)2 : (viewClass == (i32)UXR_V_TABLET ? (i32)1 : (i32)0);
+        if (deviceBar.selectedSegment() != seg)
+            {
+            deviceBar.applyNativeSelection(seg);
+            }
+        }
+
+    // ---- the inspector's tabs ----------------------------------------------------------
+    void onInspectorTab(UXControl* sender) : action
+        {
+        if (inspectorTabs != (UXSegmentedControl*)0)
+            {
+            self.showTab(inspectorTabs.selectedSegment());
+            }
+        }
+    void showTab(i32 i)
+        {
+        for (u32 k = (u32)0; k < tabPanes.count(); k = k + (u32)1)
+            {
+            ((UXView* ?)tabPanes.get(k)).setHidden((i32)k != i);
+            }
+        if (inspectorTabs != (UXSegmentedControl*)0 && inspectorTabs.selectedSegment() != i)
+            {
+            inspectorTabs.applyNativeSelection(i);
+            }
+        }
+    i32 shownTab(void)
+        {
+        return inspectorTabs != (UXSegmentedControl*)0 ? inspectorTabs.selectedSegment() : (i32)1;
+        }
+
+    // ---- the library ----------------------------------------------------------------------
+    void onLibrarySearch(UXTextField* sender)
+        {
+        library.setFilter(RKIdentity.dup(sender.text()));
+        if (libraryTable != (UXTableView*)0)
+            {
+            libraryTable.reloadData();
+            }
+        }
+    // A library pick: Object is added at once; a control arms the canvas.
+    void libraryPick(RKLibraryItem* it)
+        {
+        if (it == (RKLibraryItem*)0 || doc == (UXRscDoc*)0)
+            {
+            return;
+            }
+        if (it.type == (i32)RKLIB_OBJECT)
+            {
+            self.willEdit((u8*)"Add Object", (Object*)0);
+            UXRscTopObject* to = doc.addTopObject((u8*)"", (u8*)"");
+            dirty = true;
+            self.showResource(doc, shownTree);
+            self.selectPlaceholder((i32)RKON_OBJECT, to.id);
+            self.showTab((i32)0); // the next thing to do is give it a class
+            self.say((u8*)"Added an object: give it a class");
+            return;
+            }
+        placing = it;
+        self.sayAbout((u8*)"Click in the form to place a ", it.name);
+        }
+    // The press that places an armed library item: it goes where the press landed, inside the
+    // innermost box there, and is selected.
+    bool placeAt(i32 cx, i32 cy)
+        {
+        RKLibraryItem* it = placing;
+        if (it == (RKLibraryItem*)0 || doc == (UXRscDoc*)0 || shownTree < (i32)0 || shownTree >= doc.treeCount())
+            {
+            return false;
+            }
+        placing = (RKLibraryItem*)0;
+        self.willEdit((u8*)"Add", (Object*)0);
+        UXRscTree* t = doc.treeAt(shownTree);
+        UXRscObject* o = UXRscObject.make(it.type, cx > (i32)0 ? cx : (i32)0, cy > (i32)0 ? cy : (i32)0, it.w, it.h);
+        if (it.text != (u8*)0)
+            {
+            o.text = it.text;
+            if (o.ted != (UXRscTedinfo*)0)
+                {
+                o.ted.text = it.text;
+                }
+            }
+        if (it.type == (i32)UXR_T_FIELD)
+            {
+            o.flags = o.flags | (i32)UXR_F_EDITABLE;
+            }
+        t.root.addChild(o);
+        t.reparentByGeometry();
+        doc.ensureLogicalId(t, o);
+        dirty = true;
+        self.rebuildShownPane();
+        self.showResource(doc, shownTree);
+        self.selectObject(o);
+        overlay.setSelection(o);
+        self.sayAbout((u8*)"Added a ", it.name);
+        return true;
+        }
+
+    // ---- the Identity tab ------------------------------------------------------------------
+    void onIdentityWillChange(Object* key)
+        {
+        self.willEdit((u8*)"Typing", key);
+        }
+    // A class or a name changed: the outline's labels follow (without losing the selection).
+    void onIdentityEdit()
+        {
+        dirty = true;
+        if (identityCtl.classField != (UXTextField*)0)
+            {
+            self.titleInspector(identityCtl.classField.text(), selKind == (i32)RKON_VIEW && selected != (UXRscObject*)0 ? UXNib.defaultClassFor(selected.type) : (u8*)"Object");
+            }
+        if (formOutline != (UXOutlineView*)0 && doc != (UXRscDoc*)0)
+            {
+            outlineModel.build(doc, viewClass, viewOrient);
+            formOutline.reloadData();
+            }
+        }
+    // The inspector's heading: the selection's class, as Interface Builder's shows it.
+    void titleInspector(u8* cls, u8* fallback)
+        {
+        if (inspectorCtl.typeLabel != (UXLabel*)0)
+            {
+            inspectorCtl.typeLabel.setText(cls != (u8*)0 && cls[0] != (u8)0 ? cls : fallback);
+            }
+        }
+    // Select a placeholder or one of the document's objects: nothing on the canvas, the Identity
+    // tab shows it.
+    void selectPlaceholder(i32 kind, i32 topId)
+        {
+        history.breakRun();
+        selected = (UXRscObject*)0;
+        overlay.setSelection((UXRscObject*)0);
+        if (selFrame != (RKSelectionFrame*)0)
+            {
+            selFrame.setHidden(true);
+            }
+        selKind = kind;
+        selTop = topId;
+        inspectorCtl.show((UXRscObject*)0);
+        sizeCtl.show((UXRscObject*)0);
+        if (kind == (i32)RKON_OWNER)
+            {
+            identityCtl.showOwner(doc);
+            self.titleInspector(doc.ownerClass, (u8*)"File's Owner");
+            }
+        else if (kind == (i32)RKON_FIRSTR)
+            {
+            identityCtl.showFirstResponder(doc);
+            self.titleInspector((u8*)0, (u8*)"First Responder");
+            }
+        else
+            {
+            identityCtl.showObject(doc, topId);
+            UXRscTopObject* to = doc.topObjectById(topId);
+            self.titleInspector(to != (UXRscTopObject*)0 ? to.cls : (u8*)0, (u8*)"Object");
+            }
+        if (self.shownTab() == (i32)1 || self.shownTab() == (i32)2)
+            {
+            self.showTab((i32)0); // a placeholder has nothing else to inspect
+            }
+        }
+
     void onDesktop(UXControl* sender) : action
         {
         self.viewLayout((i32)UXR_V_DESKTOP, (i32)UXR_V_ORIENT_NONE);
@@ -353,6 +670,7 @@ class RKMainController : Object<UXTableDelegate>
         {
         viewClass = klass;
         viewOrient = orient;
+        self.reflectDevice();
         if (doc == (UXRscDoc*)0 || shownTree < (i32)0 || shownTree >= doc.treeCount())
             {
             return;
@@ -424,7 +742,10 @@ class RKMainController : Object<UXTableDelegate>
         // a switch — better to drop it than to leave a frame over the wrong
         // form.
         selected = (UXRscObject*)0;
+        selKind = (i32)0;
         inspectorCtl.show((UXRscObject*)0);
+        sizeCtl.show((UXRscObject*)0);
+        identityCtl.showNothing();
         if (selFrame != (RKSelectionFrame*)0)
             {
             selFrame.setHidden(true);
@@ -452,7 +773,7 @@ class RKMainController : Object<UXTableDelegate>
 
         if (formOutline != (UXOutlineView*)0)
             {
-            outlineModel.build(r);
+            outlineModel.build(r, viewClass, viewOrient);
             formOutline.setOutlineSource(outlineModel);
             formOutline.reloadData();
             }
@@ -465,6 +786,11 @@ class RKMainController : Object<UXTableDelegate>
     // two panes one editor rather than two independent views.
     void tableSelectionDidChange(UXTableView* t, i32 row)
         {
+        if (libraryTable != (UXTableView*)0 && t == libraryTable)
+            {
+            self.libraryPick(library.itemAt(row));
+            return;
+            }
         if (formOutline == (UXOutlineView*)0)
             {
             return;
@@ -480,14 +806,22 @@ class RKMainController : Object<UXTableDelegate>
             return;
             }
 
-        // A TREE row switches the canvas; an OBJECT row selects within it.
-        if (n.treeIndex >= (i32)0)
+        // A FORM row switches the canvas; a VIEW row selects within it; the rest are not on the
+        // canvas at all, and the Identity tab shows them.
+        if (n.kind == (i32)RKON_FORM)
             {
             i32 count = self.showResource(doc, n.treeIndex);
             self.say(n.label);
             return;
             }
-        self.selectObject(n.obj);
+        if (n.kind == (i32)RKON_VIEW)
+            {
+            self.selectObject(n.obj);
+            overlay.setSelection(n.obj);
+            self.say(n.label);
+            return;
+            }
+        self.selectPlaceholder(n.kind, n.topId);
         self.say(n.label);
         }
 
@@ -498,7 +832,18 @@ class RKMainController : Object<UXTableDelegate>
         {
         history.breakRun(); // typing into another object is another step
         selected = o;
+        selKind = o != (UXRscObject*)0 ? (i32)RKON_VIEW : (i32)0;
         inspectorCtl.show(o); // a NEW selection re-renders the pane
+        sizeCtl.show(o);
+        if (o != (UXRscObject*)0 && doc != (UXRscDoc*)0 && shownTree >= (i32)0 && shownTree < doc.treeCount())
+            {
+            identityCtl.showView(doc, doc.treeAt(shownTree), o);
+            self.titleInspector(doc.classOf(doc.treeAt(shownTree), o), UXNib.defaultClassFor(o.type));
+            }
+        else
+            {
+            identityCtl.showNothing();
+            }
         self.placeFrame(o);
         }
 
@@ -581,8 +926,11 @@ class RKMainController : Object<UXTableDelegate>
         if (o == (UXRscObject*)0)
             {
             selected = (UXRscObject*)0;
+            selKind = (i32)0;
             overlay.setSelection((UXRscObject*)0);
             inspectorCtl.show((UXRscObject*)0);
+            sizeCtl.show((UXRscObject*)0);
+            identityCtl.showNothing();
             if (selFrame != (RKSelectionFrame*)0)
                 {
                 selFrame.setHidden(true);
@@ -635,7 +983,7 @@ class RKMainController : Object<UXTableDelegate>
             self.rebuildShownPane();
             dirty = true;
             }
-        inspectorCtl.show(o); // the X/Y/W/H fields now read where it landed
+        sizeCtl.show(o); // the X/Y/W/H fields now read where it landed
         self.placeFrame(o);
         }
 

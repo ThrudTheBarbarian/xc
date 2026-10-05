@@ -521,6 +521,40 @@ class UXNib
         return (UXView*)unknown;
         }
 
+    // The UXKit class viewFor makes for a GEM type: what a control is when nothing overrides it.
+    static u8* defaultClassFor(i32 t)
+        {
+        if (t == (i32)UXR_T_BUTTON)
+            {
+            return (u8*)"UXButton";
+            }
+        if (t == (i32)UXR_T_CHECKBOX)
+            {
+            return (u8*)"UXCheckbox";
+            }
+        if (t == (i32)UXR_T_RADIO)
+            {
+            return (u8*)"UXRadioButton";
+            }
+        if (t == (i32)UXR_T_STRING || t == (i32)UXR_T_TEXT || t == (i32)UXR_T_TITLE)
+            {
+            return (u8*)"UXLabel";
+            }
+        if (t == (i32)UXR_T_FIELD || t == (i32)UXR_T_FTEXT || t == (i32)UXR_T_BOXTEXT || t == (i32)UXR_T_FBOXTEXT)
+            {
+            return (u8*)"UXTextField";
+            }
+        if (t == (i32)UXR_T_POPUP)
+            {
+            return (u8*)"UXPopUpButton";
+            }
+        if (t == (i32)UXR_T_BOX || t == (i32)UXR_T_BOXCHAR)
+            {
+            return (u8*)"UXGroupBox";
+            }
+        return (u8*)"UXView";
+        }
+
     // A short name for a type, for placeholders and the designer's outline.
     static u8* typeName(i32 t)
         {

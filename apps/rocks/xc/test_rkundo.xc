@@ -43,9 +43,10 @@ UXRscObject* button(RKMainController* c)
     }
 void type(RKMainController* c, u8* row, u8* text)
     {
-    RKRow* r = c.inspectorCtl.rowNamed(row);
+    RKInspector* ins = c.inspectorCtl.rowNamed(row) != (RKRow*)0 ? c.inspectorCtl : c.sizeCtl; // the frame is on Size
+    RKRow* r = ins.rowNamed(row);
     r.field.setText(text);
-    c.inspectorCtl.onField(r.field);
+    ins.onField(r.field);
     }
 
 void main(void)
