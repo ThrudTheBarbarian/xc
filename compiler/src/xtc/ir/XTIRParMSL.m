@@ -327,7 +327,7 @@ static NSString* unsignedName(XTIRType* t)
         }
     }
 
-- (nullable NSString*)compare:(XTIRInsn*)i
+- (nullable NSString*)comparisonOf:(XTIRInsn*)i
     {
     XTIRType* t = [self typeOf:i.operands[0].kind == XTIROperandKindUse ? i.operands[0].valueId
                                                                         : i.operands[1].valueId];
@@ -418,7 +418,7 @@ static NSString* intrinsicFor(NSString* callee)
         case XTIROpICmp:
         case XTIROpFCmp:
             {
-            NSString* e = [self compare:i];
+            NSString* e = [self comparisonOf:i];
             return e ? [NSString stringWithFormat:@"%@ = %@;", r, e] : nil;
             }
         case XTIROpZExt:
