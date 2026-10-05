@@ -14,6 +14,9 @@ The API is small: `Thread`, `Mutex` (+ `Guard`), `Cond`, `Sem`, `Atomic`,
 For a loop whose iterations are independent, a [`par` block](/compiler/language/par/)
 is simpler: it splits the loop over every thread, or runs it on the GPU, with no
 threads to manage.
+For units of work that depend on one another, an
+[`OperationQueue`](/compiler/api/operationqueue/) runs them on worker threads in
+dependency order, from 0.7.
 
 ## The part that is not in the library
 

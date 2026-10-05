@@ -74,6 +74,7 @@ export default defineConfig({
 										{ label: 'Set', slug: 'compiler/api/set' },
 										{ label: 'CharacterSet', slug: 'compiler/api/characterset' },
 										{ label: 'Coder', slug: 'compiler/api/coder' },
+										{ label: 'OperationQueue', slug: 'compiler/api/operationqueue' },
 									],
 								},
 								{
