@@ -58,7 +58,7 @@ closes as a backstop. From a control's action, prefer
 ## Topics
 
 **Opening** · [open](#open) · [openWithTree](#openwithtree) · [close](#close) · [isOpen](#isopen)
-**Chrome** · [setTitle](#settitle--setsubtitle--setmodified--setinfo--seticon) · [setSubtitle](#settitle--setsubtitle--setmodified--setinfo--seticon) · [setModified](#settitle--setsubtitle--setmodified--setinfo--seticon) · [setInfo](#settitle--setsubtitle--setmodified--setinfo--seticon) · [setIcon](#settitle--setsubtitle--setmodified--setinfo--seticon) · [orderFront](#orderfront)
+**Chrome** · [setTitle](#settitle--setsubtitle--setmodified--setinfo--seticon) · [setSubtitle](#settitle--setsubtitle--setmodified--setinfo--seticon) · [setModified](#settitle--setsubtitle--setmodified--setinfo--seticon) · [setInfo](#settitle--setsubtitle--setmodified--setinfo--seticon) · [setIcon](#settitle--setsubtitle--setmodified--setinfo--seticon) · [orderFront](#orderfront) · [setMinimumSize](#setminimumsize) · [toolbarInChrome](#toolbarinchrome)
 **Scrolling** · [setContentSize](#setcontentsize) · [scrollTo](#scrollto--scrollx--scrolly) · [scrollX](#scrollto--scrollx--scrolly) · [scrollY](#scrollto--scrollx--scrolly)
 **Painting** · [display](#display) · [displayAll](#displayall) · [snapshot](#snapshot)
 **Views** · [viewAt](#viewat) · [layoutFor](#layoutfor)
@@ -135,6 +135,26 @@ void orderFront(void)
 
 Raises and focuses the window, for example on a Windows-menu pick or when
 re-selecting an open document.
+
+### setMinimumSize
+
+```c
+void setMinimumSize(i32 w, i32 h)
+```
+
+The smallest the window's content may be made by hand. AppKit and GTK keep to
+it; on a backend whose windows are not resized by hand it does nothing. From
+0.7.
+
+### toolbarInChrome
+
+```c
+static bool toolbarInChrome(void)
+```
+
+Whether a [`UXToolbar`](/compiler/api/uxkit/uxtoolbar/) is drawn in the
+window's own chrome, as AppKit draws it in the title bar, so the content need
+leave no room for it. From 0.7.
 
 ### setContentSize
 

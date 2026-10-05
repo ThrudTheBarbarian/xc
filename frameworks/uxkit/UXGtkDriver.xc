@@ -431,6 +431,7 @@ void xgGtkTableSelectSet(pointer tbl, i32* rows, i32 n)
         }
     }
 
+void ux_gtk_window_set_min_size(i32 handle, i32 w, i32 h);
 class UXGtkDriver : Object<UXViewDriver>
     {
 
@@ -1104,6 +1105,10 @@ class UXGtkDriver : Object<UXViewDriver>
     // UIKit autoresizing masks later
     void structSetAutoresize(pointer h, i32 i, i32 mask)
         {
+        }
+    void windowSetMinSize(i32 handle, i32 w, i32 h)
+        {
+        ux_gtk_window_set_min_size(handle, w, h);
         }
     bool driverAutoresizes(void)
         {

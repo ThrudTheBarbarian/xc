@@ -3228,3 +3228,11 @@ void ux_gtk_test_watchdog(int ms, int rc)
     {
     g_timeout_add(ms, dog_cb, (gpointer)(long)rc);
     }
+
+/* The smallest the window's content may be dragged to. */
+void ux_gtk_window_set_min_size(int handle, int w, int h)
+    {
+    if (handle <= 0 || handle >= UXGTK_MAXW || !gWin[handle])
+        return;
+    gtk_widget_set_size_request(GTK_WIDGET(gWin[handle]), w, h);
+    }

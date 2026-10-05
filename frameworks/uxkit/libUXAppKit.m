@@ -4420,3 +4420,11 @@ int ux_ak_test_hit(int handle, int x, int y)
                 return n;
     return -1;
     }
+
+/* The smallest the window's content may be dragged to. */
+void ux_ak_window_set_min_size(int handle, int w, int h)
+    {
+    if (handle <= 0 || handle >= UX_MAXW || !g_win[handle])
+        return;
+    [g_win[handle] setContentMinSize:NSMakeSize(w, h)];
+    }

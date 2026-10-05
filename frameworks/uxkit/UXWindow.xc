@@ -328,6 +328,22 @@ class UXWindow : UXResponder
     //
     // Sent ONLY on change: apps report their size from inside the draw callback, and an
     // unconditional send would put a wire message on every single paint.
+    // The smallest its user may make the window's content, where the backend lets one be set.
+    void setMinimumSize(i32 w, i32 h)
+        {
+        callback f void(i32 handle, i32 w, i32 h) = &gDriver.windowSetMinSize;
+        if (f)
+            {
+            f(handle, w, h);
+            }
+        }
+    // Whether a toolbar is drawn in the window's chrome, so the content need leave it no room.
+    static bool toolbarInChrome(void)
+        {
+        callback f bool(void) = &gDriver.toolbarInChrome;
+        return f ? f() : false;
+        }
+
     void setContentSize(i16 w, i16 h)
         {
         if (w == contentW && h == contentH)

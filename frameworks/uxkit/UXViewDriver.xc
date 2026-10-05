@@ -228,6 +228,12 @@ protocol UXViewDriver
     // Raise a window to the front of the z-order and give it focus (a Windows-menu pick, or
     // re-selecting an already-open window).  Each backend has its own primitive.
     void windowOrderFront(i32 handle);
+    // The smallest a window's content may be made by its user (0 x 0: no limit).  Optional: a
+    // backend whose windows are not resized by hand (GEM's, a device's) leaves it out.
+    optional void windowSetMinSize(i32 handle, i32 w, i32 h);
+    // Whether a UXToolbar is drawn in the window's own chrome (AppKit's title bar) rather than in
+    // the content, where an app leaves room for it.  Optional: no answer means in the content.
+    optional bool toolbarInChrome(void);
 
     // A native file-open dialog.  hasNativeFileOpen() is true where the OS has one (AppKit NSOpenPanel,
     // GTK, Win32 GetOpenFileName, the phones' document pickers); UXOpenPanel falls back to a

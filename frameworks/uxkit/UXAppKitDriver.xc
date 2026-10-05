@@ -77,7 +77,8 @@ i32 ux_ak_quit(void); // nonzero once the close box was hit
 void ux_ak_stop(void);
 void ux_ak_menu_item_key(pointer sub, i32 tag, i32 key, i32 shift);
 void ux_ak_set_dispatch(pointer fn);
-void ux_ak_set_file_drop(pointer fn); // files dropped on a window: xgAKFileDrop     // register the toolkit event forwarder
+void ux_ak_set_file_drop(pointer fn); // files dropped on a window: xgAKFileDrop
+void ux_ak_window_set_min_size(i32 handle, i32 w, i32 h);     // register the toolkit event forwarder
 void ux_ak_set_turn_hook(pointer fn, i32 ms); // the frame clock: the display link, or a timer for a slow tick
 void ux_ak_set_control_fire(pointer fn); // register the control-click -> action forwarder
 pointer ux_ak_menu_new(void);
@@ -1248,6 +1249,15 @@ class UXAppKitDriver : Object<UXViewDriver>
     // mask measures against the window, not the pane a control sits in -- a table in a right-hand
     // column stretched by the whole window's growth instead of moving with its column.  The
     // resize reflows the tree and realizeTree puts each native control at its new frame.
+    void windowSetMinSize(i32 handle, i32 w, i32 h)
+        {
+        ux_ak_window_set_min_size(handle, w, h);
+        }
+    // NSToolbar: the window's title bar holds it
+    bool toolbarInChrome(void)
+        {
+        return true;
+        }
     bool driverAutoresizes(void)
         {
         return false;
