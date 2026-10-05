@@ -1609,7 +1609,12 @@ class X86_64
                 return;
                 }
             loadZX(src, (u8)'a');
-            _out.appendFormat("\tmovd\t%s, eax\n", x.cString());
+            // Zero the register first (a VEX zeroing idiom, which the CPU
+            // resolves at rename): a legacy-SSE movd keeps the upper 128 bits,
+            // so on its own it waits for whatever last wrote the whole ymm
+            // register, and in an unrolled loop that chains every iteration to
+            // the one before (bug 613).
+            _out.appendFormat("\tvpxor\t%s, %s, %s\n\tmovd\t%s, eax\n", x.cString(), x.cString(), x.cString(), x.cString());
             u32 bw = lane == (String*)0 ? (u32)4 : irWidth(lane);
             String* bc = String.withCString(bw == (u32)1 ? "vpbroadcastb" : (bw == (u32)2 ? "vpbroadcastw"
                                             : (bw == (u32)8 ? "vpbroadcastq" : "vpbroadcastd")));

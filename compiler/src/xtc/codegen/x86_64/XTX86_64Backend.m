@@ -4564,7 +4564,12 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
             else
                 {
                 [self loadZX:ops[0] into:'a' fn:fn slot:slot out:out];
-                [out appendFormat:@"\tmovd\t%@, eax\n", x];
+                // Zero the register first (a VEX zeroing idiom, which the CPU
+                // resolves at rename): a legacy-SSE movd keeps the upper 128
+                // bits, so on its own it waits for whatever last wrote the
+                // whole ymm register, and in an unrolled loop that chains
+                // every iteration to the one before (bug 613).
+                [out appendFormat:@"\tvpxor\t%@, %@, %@\n\tmovd\t%@, eax\n", x, x, x, x];
                 NSUInteger lw = lane ? lane.byteWidth : 4;
                 NSString* bc = lw == 1 ? @"vpbroadcastb" : lw == 2 ? @"vpbroadcastw"
                              : lw == 8 ? @"vpbroadcastq" : @"vpbroadcastd";
