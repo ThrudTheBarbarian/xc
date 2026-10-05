@@ -234,6 +234,9 @@ protocol UXViewDriver
     // Whether a UXToolbar is drawn in the window's own chrome (AppKit's title bar) rather than in
     // the content, where an app leaves room for it.  Optional: no answer means in the content.
     optional bool toolbarInChrome(void);
+    // Show a menu at window point (x, y) and wait for a pick: n items, titles[i] each with flags[i]
+    // (1 a separator, 2 disabled).  Returns the index picked, or -1 if the menu was dismissed.
+    optional i32 menuPopUp(i32 handle, pointer titles, pointer flags, i32 n, i32 x, i32 y);
 
     // A native file-open dialog.  hasNativeFileOpen() is true where the OS has one (AppKit NSOpenPanel,
     // GTK, Win32 GetOpenFileName, the phones' document pickers); UXOpenPanel falls back to a

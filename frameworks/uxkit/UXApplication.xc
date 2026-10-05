@@ -34,6 +34,9 @@ class UXApplication : UXResponder
     // A row dragged out of one of the app's tables (UXTableView.setDragsRows) and dropped on a
     // window: the row's first column, the window, the point.
     callback itemDropped void(u8* item, i32 window, i32 x, i32 y);
+    // The same row while it is dragged over a window, before it is dropped: (-1, -1) once it
+    // has left the window, or is dropped.
+    callback itemHovered void(u8* item, i32 window, i32 x, i32 y);
     bool running;
     i32 screenW;
     i32 screenH;
@@ -53,6 +56,7 @@ class UXApplication : UXResponder
         menuBar = (UXMenuBar*)0;
         fileDropped = (callback void(u8 * path, i32 window, i32 x, i32 y))0;
         itemDropped = (callback void(u8 * item, i32 window, i32 x, i32 y))0;
+        itemHovered = (callback void(u8 * item, i32 window, i32 x, i32 y))0;
         pendingCloses = new Array();
         turnFn = (turnHook_t*)0;
         turnMs = (i32)0;
@@ -81,6 +85,19 @@ class UXApplication : UXResponder
     void setItemDropHandler(callback h void(u8* item, i32 window, i32 x, i32 y))
         {
         itemDropped = h;
+        }
+    // Follow such a row while it is dragged over the app's windows: a preview of the drop.
+    void setItemHoverHandler(callback h void(u8* item, i32 window, i32 x, i32 y))
+        {
+        itemHovered = h;
+        }
+    void deliverItemHover(u8* item, i32 window, i32 x, i32 y)
+        {
+        callback h void(u8 * item, i32 window, i32 x, i32 y) = itemHovered;
+        if (h)
+            {
+            h(item, window, x, y);
+            }
         }
     void deliverItemDrop(u8* item, i32 window, i32 x, i32 y)
         {

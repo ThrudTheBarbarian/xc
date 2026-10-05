@@ -79,7 +79,9 @@ void ux_ak_menu_item_key(pointer sub, i32 tag, i32 key, i32 shift);
 void ux_ak_set_dispatch(pointer fn);
 void ux_ak_set_file_drop(pointer fn); // files dropped on a window: xgAKFileDrop
 void ux_ak_set_item_drop(pointer fn); // a table row dropped on a window: xgAKItemDrop
+void ux_ak_set_item_hover(pointer fn); // a table row dragged over a window: xgAKItemHover
 void ux_ak_set_table_drag_hook(pointer fn);
+i32 ux_ak_menu_popup(i32 handle, pointer titles, pointer flags, i32 n, i32 x, i32 y);
 void ux_ak_window_set_min_size(i32 handle, i32 w, i32 h);     // register the toolkit event forwarder
 void ux_ak_set_turn_hook(pointer fn, i32 ms); // the frame clock: the display link, or a timer for a slow tick
 void ux_ak_set_control_fire(pointer fn); // register the control-click -> action forwarder
@@ -485,6 +487,14 @@ i32 xgAKTableMulti(pointer tbl)
 i32 xgAKTableDrags(pointer tbl)
     {
     return ((UXTableView*)tbl).nativeDragsRows();
+    }
+// A row of one of the app's tables dragged over a window, from the shim: to the app's handler.
+void xgAKItemHover(u8* item, i32 win, i32 x, i32 y)
+    {
+    if (gAKApp != (UXApplication*)0)
+        {
+        gAKApp.deliverItemHover(item, win, x, y);
+        }
     }
 // A row of one of the app's tables dropped on a window, from the shim: to the app's handler.
 void xgAKItemDrop(u8* item, i32 win, i32 x, i32 y)
@@ -1267,6 +1277,11 @@ class UXAppKitDriver : Object<UXViewDriver>
     void windowSetMinSize(i32 handle, i32 w, i32 h)
         {
         ux_ak_window_set_min_size(handle, w, h);
+        }
+    // NSMenu, popped up where the click was
+    i32 menuPopUp(i32 handle, pointer titles, pointer flags, i32 n, i32 x, i32 y)
+        {
+        return ux_ak_menu_popup(handle, titles, flags, n, x, y);
         }
     // NSToolbar: the window's title bar holds it
     bool toolbarInChrome(void)
@@ -2442,6 +2457,7 @@ class UXAppKitDriver : Object<UXViewDriver>
         ux_ak_set_dispatch((pointer)&xgAKDispatch);
         ux_ak_set_file_drop((pointer)&xgAKFileDrop);
         ux_ak_set_item_drop((pointer)&xgAKItemDrop);
+        ux_ak_set_item_hover((pointer)&xgAKItemHover);
         ux_ak_set_control_fire((pointer)&xgAKFireControl);
         ux_ak_set_value_changed((pointer)&xgAKValueChanged); // slider/stepper/... value changes
         }

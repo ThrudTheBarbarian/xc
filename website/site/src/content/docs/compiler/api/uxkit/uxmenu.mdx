@@ -36,3 +36,13 @@ void addSeparator(void)
 ```
 
 Appends a separator rule. Separators never fire.
+
+### popUp
+
+```c
+bool popUp(i32 window, i32 x, i32 y)
+```
+
+Shows the menu as a context menu at point (x, y) of the window's content and
+fires the item picked. Returns false when the menu is dismissed, or when the
+backend has no pop-up menus. From 0.7, on AppKit.

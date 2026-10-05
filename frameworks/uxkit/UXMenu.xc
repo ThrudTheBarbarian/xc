@@ -132,6 +132,40 @@ class UXMenuItem : Object
         it.isSeparator = true;
         items.add(it);
         }
+
+    // Show the menu at point (x, y) of window `window`'s content, as a context menu, and fire the
+    // item picked.  Returns false if nothing was picked, or the backend has no pop-up menus.
+    bool popUp(i32 window, i32 x, i32 y)
+        {
+        callback f i32(i32 handle, pointer titles, pointer flags, i32 n, i32 x, i32 y) = &gDriver.menuPopUp;
+        i32 n = (i32)items.count();
+        if (!f || n == (i32)0)
+            {
+            return false;
+            }
+        pointer tbuf = malloc((u32)n * (u32)sizeof(pointer)); // char*[]: pointer-width
+        u8** titles = (u8**)tbuf;
+        i32* flags = new i32[(u32)n];
+        for (i32 i = (i32)0; i < n; i = i + (i32)1)
+            {
+            UXMenuItem* it = (UXMenuItem* ?)items.get((u32)i);
+            titles[i] = it.title;
+            flags[i] = (it.isSeparator ? (i32)1 : (i32)0) | (it.enabled ? (i32)0 : (i32)2);
+            }
+        i32 pick = f(window, tbuf, (pointer)flags, n, x, y);
+        free(tbuf);
+        if (pick < (i32)0 || pick >= n)
+            {
+            return false;
+            }
+        UXMenuItem* chosen = (UXMenuItem* ?)items.get((u32)pick);
+        if (chosen.isSeparator || !chosen.enabled)
+            {
+            return false;
+            }
+        chosen.fire();
+        return true;
+        }
     }
 
     class UXMenuBar : Object

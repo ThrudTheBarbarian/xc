@@ -72,7 +72,7 @@ and the repaint has happened. Implement it only if you lay out views by hand.
 **Configuring** · [setDriver](#setdriver) · [setHeadless](#setheadless) · [setDelegate](#setdelegate) · [setMenuBar](#setmenubar) · [setIcon](#seticon--seticonpixels) · [setIconPixels](#seticon--seticonpixels)
 **The loop** · [run](#run) · [stop](#stop) · [isRunning](#isrunning) · [pump](#pump)
 **Windows** · [addWindow](#addwindow) · [closeWindow](#closewindow) · [closeWindowLater](#closewindowlater)
-**Files dropped on a window** · [setFileDropHandler](#setfiledrophandler) · [deliverFileDrop](#deliverfiledrop) · [setItemDropHandler](#setitemdrophandler) · [deliverItemDrop](#deliveritemdrop)
+**Files dropped on a window** · [setFileDropHandler](#setfiledrophandler) · [deliverFileDrop](#deliverfiledrop) · [setItemDropHandler](#setitemdrophandler) · [deliverItemDrop](#deliveritemdrop) · [setItemHoverHandler](#setitemhoverhandler) · [deliverItemHover](#deliveritemhover)
 **Screen** · [screenWidth](#screenwidth--screenheight) · [screenHeight](#screenwidth--screenheight)
 **Painting** · [displayIfNeeded](#displayifneeded)
 
@@ -145,6 +145,24 @@ void deliverItemDrop(u8* item, i32 window, i32 x, i32 y)
 ```
 
 What a driver calls for a dropped row; it passes the row to the handler.
+
+### setItemHoverHandler
+
+```c
+void setItemHoverHandler(callback h void(u8* item, i32 window, i32 x, i32 y))
+```
+
+Follows such a row while it is dragged over the app's windows, so the app can
+show what a drop would do. The point is (-1, -1) once the row has left the
+window or been dropped. From 0.7, on AppKit.
+
+### deliverItemHover
+
+```c
+void deliverItemHover(u8* item, i32 window, i32 x, i32 y)
+```
+
+What a driver calls as a row is dragged; it passes the row to the handler.
 
 ### setMenuBar
 

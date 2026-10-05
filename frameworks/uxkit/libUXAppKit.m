@@ -213,10 +213,41 @@ static NSString* ak_drop_row(id info)
     {
     return [[info draggingPasteboard] stringForType:AK_ROW_TYPE];
     }
+/* A row being dragged over a window: where it is now, or (-1, -1) once it has left. */
+static ux_file_drop_fn g_itemHover = 0;
+void ux_ak_set_item_hover(void* fn)
+    {
+    g_itemHover = (ux_file_drop_fn)fn;
+    }
+static void ak_hover(id self, id info, BOOL gone)
+    {
+    NSString* row = ak_drop_row(info);
+    if (!row || !g_itemHover)
+        return;
+    NSPoint p = [(NSView*)self convertPoint:[info draggingLocation] fromView:nil];
+    g_itemHover([row UTF8String], ak_win_of((NSView*)self), gone ? -1 : (int)p.x, gone ? -1 : (int)p.y);
+    }
+static NSUInteger ak_draggingUpdated(__unsafe_unretained id self, SEL _cmd, __unsafe_unretained id info)
+    {
+    if (g_itemDrop && ak_drop_row(info))
+        {
+        ak_hover(self, info, NO);
+        return NSDragOperationCopy;
+        }
+    return (g_fileDrop && [ak_drop_urls(info) count] > 0) ? NSDragOperationCopy : NSDragOperationNone;
+    }
+static void ak_draggingExited(__unsafe_unretained id self, SEL _cmd, __unsafe_unretained id info)
+    {
+    if (info)
+        ak_hover(self, info, YES);
+    }
 static NSUInteger ak_draggingEntered(__unsafe_unretained id self, SEL _cmd, __unsafe_unretained id info)
     {
     if (g_itemDrop && ak_drop_row(info))
+        {
+        ak_hover(self, info, NO);
         return NSDragOperationCopy;
+        }
     return (g_fileDrop && [ak_drop_urls(info) count] > 0) ? NSDragOperationCopy : NSDragOperationNone;
     }
 static int ak_win_of(NSView* v);
@@ -237,6 +268,7 @@ static BOOL ak_performDragOperation(__unsafe_unretained id self, SEL _cmd, __uns
     NSString* row = ak_drop_row(info);
     if (row && g_itemDrop)
         {
+        ak_hover(self, info, YES); /* the preview goes: the drop places the real thing */
         g_itemDrop([row UTF8String], ak_win_of((NSView*)self), (int)p.x, (int)p.y);
         return YES;
         }
@@ -264,6 +296,8 @@ static Class ak_view_class(void)
     class_addMethod(c, sel_registerName("updateTrackingAreas"), (IMP)ak_updateTrackingAreas, "v@:");
     class_addMethod(c, sel_registerName("draggingEntered:"), (IMP)ak_draggingEntered, "Q@:@");
     class_addMethod(c, sel_registerName("performDragOperation:"), (IMP)ak_performDragOperation, "B@:@");
+    class_addMethod(c, sel_registerName("draggingUpdated:"), (IMP)ak_draggingUpdated, "Q@:@");
+    class_addMethod(c, sel_registerName("draggingExited:"), (IMP)ak_draggingExited, "v@:@");
     objc_registerClassPair(c);
     g_drawViewClass = c;
     return c;
@@ -4493,4 +4527,73 @@ int ux_ak_test_row_drag(int handle, int node, int row, char* buf, int n)
     if (t && n > 0)
         snprintf(buf, (size_t)n, "%s", [t UTF8String]);
     return (t && [[g_view[handle] registeredDraggedTypes] containsObject:AK_ROW_TYPE]) ? 1 : 0;
+    }
+
+/* ---- context menus ------------------------------------------------------------------------- */
+/* A pop-up NSMenu, modal: popUpMenuPositioningItem returns once the menu closes, and the item's
+   action has recorded which it was.  For tests, ux_ak_test_menu_pick makes the next pop-up answer
+   that index at once (and keep its titles to read back) instead of showing anything. */
+@interface UXPopTarget : NSObject
+@property(assign, nonatomic) int picked;
+- (void)pick:(id)sender;
+@end
+@implementation UXPopTarget
+- (void)pick:(id)sender
+    {
+    self.picked = (int)[(NSMenuItem*)sender tag];
+    }
+@end
+static int g_menuTestPick = -2; /* -2: show the menu; otherwise the answer */
+static char g_menuTestTitles[512];
+void ux_ak_test_menu_pick(int i)
+    {
+    g_menuTestPick = i;
+    }
+const char* ux_ak_test_menu_titles(void)
+    {
+    return g_menuTestTitles;
+    }
+int ux_ak_menu_popup(int handle, const char** titles, const int* flags, int n, int x, int y)
+    {
+    if (handle <= 0 || handle >= UX_MAXW || !g_view[handle] || n <= 0)
+        return -1;
+    if (g_menuTestPick != -2)
+        {
+        int at = 0;
+        g_menuTestTitles[0] = 0;
+        for (int i = 0; i < n && at < (int)sizeof(g_menuTestTitles) - 2; i++)
+            at += snprintf(g_menuTestTitles + at, sizeof(g_menuTestTitles) - (size_t)at, "%s%s",
+                           i ? "|" : "", (flags[i] & 1) ? "-" : titles[i]);
+        int p = g_menuTestPick;
+        g_menuTestPick = -2;
+        return p;
+        }
+    NSMenu* m = [[NSMenu alloc] initWithTitle:@""];
+    [m setAutoenablesItems:NO];
+    UXPopTarget* t = [[UXPopTarget alloc] init];
+    t.picked = -1;
+    for (int i = 0; i < n; i++)
+        {
+        if (flags[i] & 1)
+            {
+            [m addItem:[NSMenuItem separatorItem]];
+            continue;
+            }
+        NSMenuItem* it = [[NSMenuItem alloc] initWithTitle:ak_ns(titles[i]) action:@selector(pick:) keyEquivalent:@""];
+        [it setTarget:t];
+        [it setTag:i];
+        [it setEnabled:(flags[i] & 2) ? NO : YES];
+        [m addItem:it];
+        }
+    [m popUpMenuPositioningItem:nil atLocation:NSMakePoint(x, y) inView:g_view[handle]];
+    return t.picked;
+    }
+
+/* For tests: a row dragged over window `handle` at (x, y), or gone with (-1, -1). */
+int ux_ak_test_hover_item(int handle, const char* text, int x, int y)
+    {
+    if (handle <= 0 || handle >= UX_MAXW || !g_view[handle] || !g_itemHover)
+        return 0;
+    g_itemHover(text, handle, x, y);
+    return 1;
     }
