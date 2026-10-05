@@ -1,7 +1,7 @@
-// test_rkdrop.xc — reparent on drop (RKTree.reparentByGeometry): what contains what follows what is
+// test_rkdrop.xc — reparent on drop (UXRscTree.reparentByGeometry): what contains what follows what is
 // on screen.  Model only, so it runs on every target.
 #import <Stdio.xc>
-#import "RKModel.xc"
+#import "UXRscModel.xc"
 
 i32 gFails;
 void check(u8* what, i32 got, i32 want)
@@ -33,10 +33,10 @@ void main(void)
     {
     gFails = (i32)0;
     // a 300x200 form: a box at (100,50) 120x100, and a button outside it
-    RKTree* t = new RKTree();
-    t.root = RKObject.make((i32)RKT_BOX, (i32)0, (i32)0, (i32)300, (i32)200);
-    RKObject* box = RKObject.make((i32)RKT_BOX, (i32)100, (i32)50, (i32)120, (i32)100);
-    RKObject* btn = RKObject.make((i32)RKT_BUTTON, (i32)10, (i32)10, (i32)40, (i32)20);
+    UXRscTree* t = new UXRscTree();
+    t.root = UXRscObject.make((i32)UXR_T_BOX, (i32)0, (i32)0, (i32)300, (i32)200);
+    UXRscObject* box = UXRscObject.make((i32)UXR_T_BOX, (i32)100, (i32)50, (i32)120, (i32)100);
+    UXRscObject* btn = UXRscObject.make((i32)UXR_T_BUTTON, (i32)10, (i32)10, (i32)40, (i32)20);
     t.root.addChild(box);
     t.root.addChild(btn);
     check((u8*)"an arrangement that already matches changes nothing", t.reparentByGeometry(), (i32)0);
@@ -71,7 +71,7 @@ void main(void)
     btn.x = (i32)160;
     btn.y = (i32)60;
     t.reparentByGeometry();
-    RKObject* inner = RKObject.make((i32)RKT_IBOX, (i32)155, (i32)55, (i32)60, (i32)40);
+    UXRscObject* inner = UXRscObject.make((i32)UXR_T_IBOX, (i32)155, (i32)55, (i32)60, (i32)40);
     t.root.addChild(inner); // drawn on top, at the form's level
     check((u8*)"a box dropped over a button adopts it and is itself adopted", t.reparentByGeometry(), (i32)2);
     checkTrue("the button is in the SMALLEST box around it", t.parentOf(btn) == inner);
@@ -80,16 +80,16 @@ void main(void)
     checkTrue("nothing moved on screen", bx == (i32)160 && by == (i32)60);
 
     // only containers parent: a button over a button does not swallow it
-    RKObject* b2 = RKObject.make((i32)RKT_BUTTON, (i32)0, (i32)0, (i32)80, (i32)60);
+    UXRscObject* b2 = UXRscObject.make((i32)UXR_T_BUTTON, (i32)0, (i32)0, (i32)80, (i32)60);
     t.root.addChild(b2);
-    RKObject* b3 = RKObject.make((i32)RKT_STRING, (i32)10, (i32)10, (i32)20, (i32)10);
+    UXRscObject* b3 = UXRscObject.make((i32)UXR_T_STRING, (i32)10, (i32)10, (i32)20, (i32)10);
     t.root.addChild(b3);
     t.reparentByGeometry();
     checkTrue("a button never contains a label", t.parentOf(b3) == t.root);
 
     // two boxes with the same rect: the earlier one parents, never both ways
-    RKObject* twinA = RKObject.make((i32)RKT_BOX, (i32)0, (i32)120, (i32)50, (i32)50);
-    RKObject* twinB = RKObject.make((i32)RKT_BOX, (i32)0, (i32)120, (i32)50, (i32)50);
+    UXRscObject* twinA = UXRscObject.make((i32)UXR_T_BOX, (i32)0, (i32)120, (i32)50, (i32)50);
+    UXRscObject* twinB = UXRscObject.make((i32)UXR_T_BOX, (i32)0, (i32)120, (i32)50, (i32)50);
     t.root.addChild(twinA);
     t.root.addChild(twinB);
     t.reparentByGeometry();
@@ -97,11 +97,11 @@ void main(void)
     check((u8*)"...and stays put", t.reparentByGeometry(), (i32)0);
 
     // z-order: siblings keep their order
-    RKTree* z = new RKTree();
-    z.root = RKObject.make((i32)RKT_BOX, (i32)0, (i32)0, (i32)300, (i32)200);
-    RKObject* first = RKObject.make((i32)RKT_BUTTON, (i32)110, (i32)10, (i32)20, (i32)20);
-    RKObject* frame = RKObject.make((i32)RKT_BOX, (i32)100, (i32)0, (i32)100, (i32)100);
-    RKObject* second = RKObject.make((i32)RKT_BUTTON, (i32)140, (i32)10, (i32)20, (i32)20);
+    UXRscTree* z = new UXRscTree();
+    z.root = UXRscObject.make((i32)UXR_T_BOX, (i32)0, (i32)0, (i32)300, (i32)200);
+    UXRscObject* first = UXRscObject.make((i32)UXR_T_BUTTON, (i32)110, (i32)10, (i32)20, (i32)20);
+    UXRscObject* frame = UXRscObject.make((i32)UXR_T_BOX, (i32)100, (i32)0, (i32)100, (i32)100);
+    UXRscObject* second = UXRscObject.make((i32)UXR_T_BUTTON, (i32)140, (i32)10, (i32)20, (i32)20);
     z.root.addChild(first);
     z.root.addChild(frame);
     z.root.addChild(second);

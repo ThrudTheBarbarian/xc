@@ -1,18 +1,9 @@
-// RKRsc.xc — the classic GEM .rsc reader, in XC.
+// UXRscRead.xc — UXRscReader, the classic GEM .rsc reader, in XC, and the nib chunk after it.
 //
-// Ported from src/rsc.c (portable C, shared with the XT GEM desktop).  Why a
-// port rather than binding that C: xcc compiles .xc, and Rocks has to build
-// for every target UXKit runs on — a C dependency would pin the editor to
-// whatever platforms happen to have a C toolchain, which defeats the point of
-// writing it in XC at all.
-//
-// That does mean a second implementation of the format, which is exactly the
-// thing this project keeps trying to avoid.  Two mitigations: it is the ONLY
-// XC one, and it deliberately has no dependency on anything else in Rocks, so
-// it can be PROMOTED INTO UXKit later.  UXKit wants it — UXNibV2 already parses
-// the RSHDR and the chunk in XC, while v1 nib loading still leans on libGEM's C
-// rscload and is GEM-only for exactly that reason.  Moving this file up would
-// close that gap and stop a third implementation ever being written.
+// Ported from src/rsc.c (portable C, shared with the XT GEM desktop) for Rocks, and moved into
+// UXKit so the nib loader and the designer read a file the same way, on every backend: xcc
+// compiles .xc, and a C dependency (libGEM's rscload, which the v1 loader used) pinned nib
+// loading to GEM.
 //
 // AN IMPORT MUST NEVER BE SILENTLY LOSSY.  Payloads this slice does not yet
 // preserve (icons, bit forms, palettes) are counted and reported through
@@ -20,13 +11,13 @@
 // rather than quietly dropping it on the way back out.
 #import "Array.xc"
 #import "UXData.xc"
-#import "RKModel.xc"
+#import "UXRscModel.xc"
 
-#define RK_SZ_HDR 36 // 18 words
-#define RK_SZ_OBJ 24
-#define RK_SZ_TED 28
+#define UXR_SZ_HDR 36 // 18 words
+#define UXR_SZ_OBJ 24
+#define UXR_SZ_TED 28
 
-class RKRsc : Object
+class UXRscReader : Object
     {
     u8* buf;
     i32 len;
@@ -34,7 +25,7 @@ class RKRsc : Object
     i32 cellW, cellH;
     i32 unhandled; // payloads seen but not yet preserved
     u8* warn;
-    RKResource* result; // what reader() parsed — a field, see reader()
+    UXRscDoc* result; // what reader() parsed — a field, see reader()
     i32 nobjects;       // the header's object count, for cross-checking
 
     void init(void)
@@ -46,7 +37,7 @@ class RKRsc : Object
         cellH = (i32)16;
         unhandled = (i32)0;
         warn = (u8*)0;
-        result = (RKResource*)0;
+        result = (UXRscDoc*)0;
         nobjects = (i32)0;
         }
 
@@ -132,11 +123,11 @@ class RKRsc : Object
     // ---- the parse ---------------------------------------------------------
     // Tries big-endian first (the classic Atari order), then little-endian,
     // because real files in the wild are both.
-    static RKResource* read(u8* bytes, i32 n)
+    static UXRscDoc* read(u8* bytes, i32 n)
         {
-        RKRsc* r = new RKRsc();
-        RKResource* out = r.tryParse(bytes, n, true);
-        if (out == (RKResource*)0)
+        UXRscReader* r = new UXRscReader();
+        UXRscDoc* out = r.tryParse(bytes, n, true);
+        if (out == (UXRscDoc*)0)
             {
             out = r.tryParse(bytes, n, false);
             }
@@ -149,11 +140,11 @@ class RKRsc : Object
     // until the next allocation reuses it.  A field is an ordinary strong
     // reference and ARC tracks it.  (Primitive out-params — `boot(&w,&h)` —
     // are fine; it is object ones that bite.)
-    static RKRsc* reader(u8* bytes, i32 n)
+    static UXRscReader* reader(u8* bytes, i32 n)
         {
-        RKRsc* r = new RKRsc();
-        RKResource* res = r.tryParse(bytes, n, true);
-        if (res == (RKResource*)0)
+        UXRscReader* r = new UXRscReader();
+        UXRscDoc* res = r.tryParse(bytes, n, true);
+        if (res == (UXRscDoc*)0)
             {
             res = r.tryParse(bytes, n, false);
             }
@@ -161,16 +152,16 @@ class RKRsc : Object
         return r;
         }
 
-    RKResource* tryParse(u8* bytes, i32 n, bool bigEndian)
+    UXRscDoc* tryParse(u8* bytes, i32 n, bool bigEndian)
         {
         buf = bytes;
         len = n;
         be = bigEndian;
         unhandled = (i32)0;
         warn = (u8*)0;
-        if (n < (i32)RK_SZ_HDR)
+        if (n < (i32)UXR_SZ_HDR)
             {
-            return (RKResource*)0;
+            return (UXRscDoc*)0;
             }
 
         i32 objBase = self.rd16((i32)1 * (i32)2);
@@ -186,48 +177,48 @@ class RKRsc : Object
         // the file carries something.
         if (nobs < (i32)0 || nobs > (i32)8000)
             {
-            return (RKResource*)0;
+            return (UXRscDoc*)0;
             }
         if (ntree < (i32)0 || ntree > (i32)2000)
             {
-            return (RKResource*)0;
+            return (UXRscDoc*)0;
             }
         if (ntree == (i32)0 && nstr <= (i32)0 && nimg <= (i32)0)
             {
-            return (RKResource*)0;
+            return (UXRscDoc*)0;
             }
         if (nobs > (i32)0)
             {
-            if (objBase < (i32)RK_SZ_HDR || objBase >= n)
+            if (objBase < (i32)UXR_SZ_HDR || objBase >= n)
                 {
-                return (RKResource*)0;
+                return (UXRscDoc*)0;
                 }
-            if (objBase + nobs * (i32)RK_SZ_OBJ > n)
+            if (objBase + nobs * (i32)UXR_SZ_OBJ > n)
                 {
-                return (RKResource*)0;
+                return (UXRscDoc*)0;
                 }
             }
         if (ntree > (i32)0 && trindex + ntree * (i32)4 > n)
             {
-            return (RKResource*)0;
+            return (UXRscDoc*)0;
             }
         if (rssize != (i32)0 && rssize != n && rssize < objBase)
             {
-            return (RKResource*)0;
+            return (UXRscDoc*)0;
             }
 
-        RKResource* res = new RKResource();
+        UXRscDoc* res = new UXRscDoc();
         res.bigEndian = bigEndian;
         nobjects = nobs;
 
         // ---- the flat OBJECT array ----------------------------------------
-        Array<RKObject>* flat = new Array();
-        Array<RKFlatNode>* links = new Array();
+        Array<UXRscObject>* flat = new Array();
+        Array<UXRscFlatNode>* links = new Array();
         for (i32 i = (i32)0; i < nobs; i = i + (i32)1)
             {
-            i32 o = objBase + i * (i32)RK_SZ_OBJ;
-            RKObject* g = new RKObject();
-            RKFlatNode* fl = new RKFlatNode();
+            i32 o = objBase + i * (i32)UXR_SZ_OBJ;
+            UXRscObject* g = new UXRscObject();
+            UXRscFlatNode* fl = new UXRscFlatNode();
             fl.next = self.rd16s(o + (i32)0);
             fl.head = self.rd16s(o + (i32)2);
             fl.tail = self.rd16s(o + (i32)4);
@@ -241,7 +232,7 @@ class RKRsc : Object
             g.w = self.unpackCoord(self.rd16(o + (i32)20), cellW);
             g.h = self.unpackCoord(self.rd16(o + (i32)22), cellH);
             // The ob_type high byte is someone else's extended type unless the
-            // file said it was ours — see RKObject's two fields for why that
+            // file said it was ours — see UXRscObject's two fields for why that
             // distinction has to be kept.
             g.legacyExtType = (u8)((rawType >> (i32)8) & (i32)$FF);
             self.readSpec(g, spec);
@@ -262,18 +253,18 @@ class RKRsc : Object
         for (i32 t = (i32)0; t < ntree; t = t + (i32)1)
             {
             i32 rootOff = self.rd32(trindex + t * (i32)4);
-            i32 idx = (rootOff - objBase) / (i32)RK_SZ_OBJ;
+            i32 idx = (rootOff - objBase) / (i32)UXR_SZ_OBJ;
             if (idx < (i32)0 || idx >= nobs)
                 {
                 continue;
                 }
             self.attachChildren(flat, links, idx, idx, nobs);
-            RKTree* tr = new RKTree();
-            tr.root = (RKObject* ?)flat.get((u16)idx);
+            UXRscTree* tr = new UXRscTree();
+            tr.root = (UXRscObject* ?)flat.get((u16)idx);
             tr.name = (u8*)"";
-            tr.kind = tr.root.type == (i32)RKT_BOX && self.looksLikeMenu(tr.root)
-                          ? (i32)RKK_MENU
-                          : (i32)RKK_DIALOG;
+            tr.kind = tr.root.type == (i32)UXR_T_BOX && self.looksLikeMenu(tr.root)
+                          ? (i32)UXR_K_MENU
+                          : (i32)UXR_K_DIALOG;
             res.addTree(tr);
             }
 
@@ -301,9 +292,9 @@ class RKRsc : Object
         // Reject only if nothing worth having came out.
         if (res.treeCount() == (i32)0 && res.freeStrings.count() == (u16)0)
             {
-            return (RKResource*)0;
+            return (UXRscDoc*)0;
             }
-        if (be && rssize >= (i32)RK_SZ_HDR)
+        if (be && rssize >= (i32)UXR_SZ_HDR)
             {
             self.readNibV2(res, rssize);
             }
@@ -315,7 +306,7 @@ class RKRsc : Object
     // writer's listing of standalone trees and come back as just that.  The chunk is big-endian
     // whatever the classic part is, and is ignored (not an error) when malformed: the classic trees
     // are all there either way.
-    void readNibV2(RKResource* res, i32 at)
+    void readNibV2(UXRscDoc* res, i32 at)
         {
         if (at + (i32)24 > len || self.rd32(at) != (i32)$55584E42 || self.rd16(at + (i32)4) != (i32)2)
             {
@@ -331,7 +322,7 @@ class RKRsc : Object
         i32 nMaps = self.rd16(p + (i32)8);
         p = p + (i32)12;
         // the blob comes after every section; find it by walking them (classes, objects,
-        // connections and presentations are all zero from Rocks, but a chunk from elsewhere may
+        // connections and presentations may be zero, but a chunk from elsewhere may
         // carry them -- they are skipped by size, never misread)
         i32 nClasses = self.rd16(at + (i32)12);
         i32 nObjects = self.rd16(at + (i32)14);
@@ -363,10 +354,10 @@ class RKRsc : Object
             i32 formId = self.rd16(p);
             i32 nameOff = self.rd32(p + (i32)2);
             i32 nVar = self.rd16(p + (i32)6);
-            bool loose = nVar == (i32)1 && self.rd16(p + (i32)10) == (i32)RKV_ANY && self.rd16(p + (i32)12) == formId;
+            bool loose = nVar == (i32)1 && self.rd16(p + (i32)10) == (i32)UXR_V_ANY && self.rd16(p + (i32)12) == formId;
             if (!loose)
                 {
-                RKForm* fm = new RKForm();
+                UXRscForm* fm = new UXRscForm();
                 fm.formId = formId;
                 fm.name = nameOff > (i32)0 && blob + nameOff < end ? self.cstrAt(blob + nameOff) : (u8*)"";
                 for (i32 v = (i32)0; v < nVar; v = v + (i32)1)
@@ -375,20 +366,20 @@ class RKRsc : Object
                     i32 tree = self.rd16(p + (i32)12 + v * (i32)4);
                     if (tree < res.treeCount())
                         {
-                        RKVariant* va = new RKVariant();
+                        UXRscVariant* va = new UXRscVariant();
                         va.klass = word & (i32)$3FFF;
                         va.orient = (word >> (i32)14) & (i32)3;
                         va.tree = res.treeAt(tree);
                         if (va.tree.name == (u8*)0 || va.tree.name[0] == (u8)0)
                             {
                             // the form's own layout keeps its name; the others are named after it
-                            if (va.klass == (i32)RKV_DESKTOP && va.orient == (i32)RKV_ORIENT_NONE)
+                            if (va.klass == (i32)UXR_V_DESKTOP && va.orient == (i32)UXR_V_ORIENT_NONE)
                                 {
                                 va.tree.name = fm.name;
                                 }
                             else
                                 {
-                                va.tree.setNameJoined(fm.name, RKResource.variantSuffix(va.klass, va.orient));
+                                va.tree.setNameJoined(fm.name, UXRscDoc.variantSuffix(va.klass, va.orient));
                                 }
                             }
                         fm.variants.add(va);
@@ -406,13 +397,13 @@ class RKRsc : Object
             i32 ne = self.rd16(q + (i32)2);
             if (tree < res.treeCount())
                 {
-                Array<RKObject>* all = res.treeAt(tree).allObjects();
+                Array<UXRscObject>* all = res.treeAt(tree).allObjects();
                 for (i32 e = (i32)0; e < ne; e = e + (i32)1)
                     {
                     i32 obj = self.rd16(q + (i32)4 + e * (i32)4);
                     if (obj < (i32)all.count())
                         {
-                        ((RKObject* ?)all.get((u32)obj)).logicalId = self.rd16(q + (i32)6 + e * (i32)4);
+                        ((UXRscObject* ?)all.get((u32)obj)).logicalId = self.rd16(q + (i32)6 + e * (i32)4);
                         }
                     }
                 }
@@ -424,15 +415,15 @@ class RKRsc : Object
     // index in the flat array: every link is added to it to reach the real
     // object.  Guarded against a malformed file looping forever — an editor
     // that hangs on a bad resource is worse than one that reads it partially.
-    void attachChildren(Array<RKObject>* flat, Array<RKFlatNode>* links,
+    void attachChildren(Array<UXRscObject>* flat, Array<UXRscFlatNode>* links,
                         i32 base, i32 absIdx, i32 nobs)
         {
-        RKFlatNode* fl = (RKFlatNode* ?)links.get((u16)absIdx);
+        UXRscFlatNode* fl = (UXRscFlatNode* ?)links.get((u16)absIdx);
         if (fl.head < (i32)0)
             {
             return;
             }
-        RKObject* parent = (RKObject* ?)flat.get((u16)absIdx);
+        UXRscObject* parent = (UXRscObject* ?)flat.get((u16)absIdx);
         i32 c = fl.head;
         i32 guard = (i32)0;
         while (c >= (i32)0 && guard <= nobs)
@@ -442,30 +433,30 @@ class RKRsc : Object
                 {
                 return;
                 }
-            parent.addChild((RKObject* ?)flat.get((u16)childAbs));
+            parent.addChild((UXRscObject* ?)flat.get((u16)childAbs));
             self.attachChildren(flat, links, base, childAbs, nobs);
             if (c == fl.tail)
                 {
                 c = (i32)-1;
                 }
             else
-                { c = ((RKFlatNode* ?)links.get((u16)childAbs)).next;
+                { c = ((UXRscFlatNode* ?)links.get((u16)childAbs)).next;
                 }
             guard = guard + (i32)1;
             }
         }
 
     // A menu tree's root box holds a bar of G_TITLEs.
-    bool looksLikeMenu(RKObject* root)
+    bool looksLikeMenu(UXRscObject* root)
         {
         if (root.childCount() < (i32)1)
             {
             return false;
             }
-        RKObject* bar = root.childAt((i32)0);
+        UXRscObject* bar = root.childAt((i32)0);
         for (i32 i = (i32)0; i < bar.childCount(); i = i + (i32)1)
             {
-            if (bar.childAt(i).type == (i32)RKT_TITLE)
+            if (bar.childAt(i).type == (i32)UXR_T_TITLE)
                 {
                 return true;
                 }
@@ -476,33 +467,33 @@ class RKRsc : Object
     // ob_spec means something different per type: an inline colour word for a
     // box, a string offset for the string-ish types, a TEDINFO for the
     // editable ones.  Anything else is counted rather than guessed at.
-    void readSpec(RKObject* g, i32 spec)
+    void readSpec(UXRscObject* g, i32 spec)
         {
         i32 t = g.type;
-        if (t == (i32)RKT_BOX || t == (i32)RKT_IBOX || t == (i32)RKT_BOXCHAR)
+        if (t == (i32)UXR_T_BOX || t == (i32)UXR_T_IBOX || t == (i32)UXR_T_BOXCHAR)
             {
-            RKBox* b = new RKBox();
+            UXRscBox* b = new UXRscBox();
             b.character = (u8)((spec >> (i32)24) & (i32)$FF);
             b.thickness = (spec >> (i32)16) & (i32)$FF;
             if (b.thickness >= (i32)128)
                 {
                 b.thickness = b.thickness - (i32)256;
                 }
-            b.color = RKColor.unpack((u16)(spec & (i32)$FFFF));
+            b.color = UXRscColor.unpack((u16)(spec & (i32)$FFFF));
             g.box = b;
             return;
             }
-        if (t == (i32)RKT_STRING || t == (i32)RKT_BUTTON || t == (i32)RKT_TITLE ||
-            t == (i32)RKT_CHECKBOX || t == (i32)RKT_RADIO || t == (i32)RKT_POPUP)
+        if (t == (i32)UXR_T_STRING || t == (i32)UXR_T_BUTTON || t == (i32)UXR_T_TITLE ||
+            t == (i32)UXR_T_CHECKBOX || t == (i32)UXR_T_RADIO || t == (i32)UXR_T_POPUP)
             {
             g.text = self.cstrAt(spec);
             return;
             }
-        if (t == (i32)RKT_TEXT || t == (i32)RKT_BOXTEXT ||
-            t == (i32)RKT_FTEXT || t == (i32)RKT_FBOXTEXT || t == (i32)RKT_FIELD)
+        if (t == (i32)UXR_T_TEXT || t == (i32)UXR_T_BOXTEXT ||
+            t == (i32)UXR_T_FTEXT || t == (i32)UXR_T_FBOXTEXT || t == (i32)UXR_T_FIELD)
             {
-            RKTedinfo* ti = new RKTedinfo();
-            if (spec > (i32)0 && spec + (i32)RK_SZ_TED <= len)
+            UXRscTedinfo* ti = new UXRscTedinfo();
+            if (spec > (i32)0 && spec + (i32)UXR_SZ_TED <= len)
                 {
                 ti.text = self.cstrAt(self.rd32(spec + (i32)0));
                 ti.tmplt = self.cstrAt(self.rd32(spec + (i32)4));
@@ -510,15 +501,15 @@ class RKRsc : Object
                 ti.font = self.rd16s(spec + (i32)12);
                 ti.fontId = self.rd16s(spec + (i32)14);
                 ti.just = self.rd16s(spec + (i32)16);
-                ti.color = RKColor.unpack((u16)self.rd16(spec + (i32)18));
+                ti.color = UXRscColor.unpack((u16)self.rd16(spec + (i32)18));
                 ti.fontsize = self.rd16s(spec + (i32)20);
                 ti.thickness = self.rd16s(spec + (i32)22);
                 }
             g.ted = ti;
             return;
             }
-        if (t == (i32)RKT_ICON || t == (i32)RKT_CICON || t == (i32)RKT_CICONBLK ||
-            t == (i32)RKT_IMAGE)
+        if (t == (i32)UXR_T_ICON || t == (i32)UXR_T_CICON || t == (i32)UXR_T_CICONBLK ||
+            t == (i32)UXR_T_IMAGE)
             {
             unhandled = unhandled + (i32)1; // counted, never silently dropped
             }

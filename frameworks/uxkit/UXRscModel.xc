@@ -1,4 +1,9 @@
-// RKModel.xc — the in-memory GEM resource model, ported from GModel.[hm].
+// UXRscModel.xc — the in-memory GEM resource model: what a .rsc document holds.
+//
+// Shared by the nib loader (UXNibLoad, which builds UXKit views from it) and by Rocks, the
+// designer (which edits it).  One model and one reader/writer pair (UXRscRead, UXRscWrite), so
+// what the designer shows and what an app loads cannot disagree about the file.  Ported from
+// Rocks' GModel.[hm] by way of its RKModel.xc.
 //
 // A resource is a list of named trees; each tree is a root object with nested
 // children.  The classic OBJECT fields are kept, plus the XT GEM extended
@@ -7,90 +12,89 @@
 // layout — next/head/tail — is rebuilt only at write time, by flatten().
 //
 // Ported deliberately, not mechanically.  Two kinds of thing were dropped:
-// the NSImage caches (rendering is UXKit's job now — that is the whole reason
-// Rocks is being rewritten in XC), and Foundation container types, which
+// the NSImage caches (rendering is UXKit's job), and Foundation container types, which
 // become Array and plain byte buffers.  Everything that affects FILE FIDELITY
-// is kept, including the fields Rocks does not itself interpret: a foreign
+// is kept, including the fields nothing here interprets: a foreign
 // editor's extended-type byte, an imported CICONBLK's original bytes, the
 // classic mono icon data.  Those exist so that reading someone else's resource
 // and writing it back does not quietly destroy what we did not understand.
 //
-// See RSC-FORMAT.md (beside this tree) for the on-disk layout.
+// See apps/rocks/RSC-FORMAT.md for the on-disk layout.
 #import "Array.xc"
 #import "UXData.xc"
 
 // ---- object types: classic, then the XT GEM themed extensions ---------
-#define RKT_BOX 20
-#define RKT_TEXT 21
-#define RKT_BOXTEXT 22
-#define RKT_IMAGE 23
-#define RKT_USERDEF 24
-#define RKT_IBOX 25
-#define RKT_BUTTON 26
-#define RKT_BOXCHAR 27
-#define RKT_STRING 28
-#define RKT_FTEXT 29
-#define RKT_FBOXTEXT 30
-#define RKT_ICON 31
-#define RKT_TITLE 32
-#define RKT_CICONBLK 33 // the standard Atari colour icon (a CICONBLK)
-#define RKT_CHECKBOX 40 // XT GEM extensions from here down
-#define RKT_RADIO 41
-#define RKT_POPUP 42
-#define RKT_FIELD 43
-#define RKT_CICON 44 // Rocks' own RGBA PAM icon
+#define UXR_T_BOX 20
+#define UXR_T_TEXT 21
+#define UXR_T_BOXTEXT 22
+#define UXR_T_IMAGE 23
+#define UXR_T_USERDEF 24
+#define UXR_T_IBOX 25
+#define UXR_T_BUTTON 26
+#define UXR_T_BOXCHAR 27
+#define UXR_T_STRING 28
+#define UXR_T_FTEXT 29
+#define UXR_T_FBOXTEXT 30
+#define UXR_T_ICON 31
+#define UXR_T_TITLE 32
+#define UXR_T_CICONBLK 33 // the standard Atari colour icon (a CICONBLK)
+#define UXR_T_CHECKBOX 40 // XT GEM extensions from here down
+#define UXR_T_RADIO 41
+#define UXR_T_POPUP 42
+#define UXR_T_FIELD 43
+#define UXR_T_CICON 44 // the XT colour icon: an RGBA PAM
 
 // ---- flags -----------------------------------------------------------------
-#define RKF_NONE $0000
-#define RKF_SELECTABLE $0001
-#define RKF_DEFAULT $0002
-#define RKF_EXIT $0004
-#define RKF_EDITABLE $0008
-#define RKF_RBUTTON $0010
-#define RKF_LASTOB $0020
-#define RKF_TOUCHEXIT $0040
-#define RKF_HIDETREE $0080
-#define RKF_INDIRECT $0100
-#define RKF_CANCEL $0200   // Esc fires this object
-#define RKF_MOVEABLE $0400 // on the ROOT: the dialog is movable
-#define RKF_SUBMENU $0800
+#define UXR_F_NONE $0000
+#define UXR_F_SELECTABLE $0001
+#define UXR_F_DEFAULT $0002
+#define UXR_F_EXIT $0004
+#define UXR_F_EDITABLE $0008
+#define UXR_F_RBUTTON $0010
+#define UXR_F_LASTOB $0020
+#define UXR_F_TOUCHEXIT $0040
+#define UXR_F_HIDETREE $0080
+#define UXR_F_INDIRECT $0100
+#define UXR_F_CANCEL $0200   // Esc fires this object
+#define UXR_F_MOVEABLE $0400 // on the ROOT: the dialog is movable
+#define UXR_F_SUBMENU $0800
 
 // ---- state -----------------------------------------------------------------
 // Layout variants (UXNB-V2 sections 1 and 10): a variant's form-factor class and orientation.  The
 // registry's own numbers, so they go into the chunk as they are; test_rkforms checks them against
 // UXKit's UX_FORM_* / UX_ORIENT_*, which the loader reads them with.
-#define RKV_ANY 0
-#define RKV_DESKTOP 1
-#define RKV_TABLET 2
-#define RKV_PHONE 3
-#define RKV_ORIENT_NONE 0
-#define RKV_ORIENT_PORTRAIT 1
-#define RKV_ORIENT_LANDSCAPE 2
+#define UXR_V_ANY 0
+#define UXR_V_DESKTOP 1
+#define UXR_V_TABLET 2
+#define UXR_V_PHONE 3
+#define UXR_V_ORIENT_NONE 0
+#define UXR_V_ORIENT_PORTRAIT 1
+#define UXR_V_ORIENT_LANDSCAPE 2
 
-#define RKS_NORMAL $0000
-#define RKS_SELECTED $0001
-#define RKS_CROSSED $0002
-#define RKS_CHECKED $0004
-#define RKS_DISABLED $0008
-#define RKS_OUTLINED $0010
-#define RKS_SHADOWED $0020
-#define RKS_WHITEBAK $0040 // bits 8-14 then hold the shortcut char index
+#define UXR_S_NORMAL $0000
+#define UXR_S_SELECTED $0001
+#define UXR_S_CROSSED $0002
+#define UXR_S_CHECKED $0004
+#define UXR_S_DISABLED $0008
+#define UXR_S_OUTLINED $0010
+#define UXR_S_SHADOWED $0020
+#define UXR_S_WHITEBAK $0040 // bits 8-14 then hold the shortcut char index
 
 // ---- tree kinds ------------------------------------------------------------
-#define RKK_DIALOG 0
-#define RKK_MENU 1
-#define RKK_FREE 2
+#define UXR_K_DIALOG 0
+#define UXR_K_MENU 1
+#define UXR_K_FREE 2
 
 // ---- box corner rounding: ob_type high byte, bits 4-7, one bit per corner --
-#define RK_ROUND_TL $10
-#define RK_ROUND_TR $20
-#define RK_ROUND_BR $40
-#define RK_ROUND_BL $80
-#define RK_ROUND_ALL $F0
+#define UXR_ROUND_TL $10
+#define UXR_ROUND_TR $20
+#define UXR_ROUND_BR $40
+#define UXR_ROUND_BL $80
+#define UXR_ROUND_ALL $F0
 
 // ---- the GEM 16-bit colour word -------------------------------------------
 // border(15-12) text(11-8) textMode(7: 1=replace, 0=transparent) fill(6-4) inside(3-0)
-class RKColor : Object
+class UXRscColor : Object
     {
     i32 border; // VDI pen index; 1 = black, 0 = white
     i32 text;
@@ -113,13 +117,13 @@ class RKColor : Object
                      ((replace ? (i32)1 : (i32)0) << (i32)7) |
                      ((pattern & (i32)7) << (i32)4) | (inside & (i32)$F));
         }
-    RKColor* copy(void)
+    UXRscColor* copy(void)
         {
-        return RKColor.unpack(self.pack());
+        return UXRscColor.unpack(self.pack());
         }
-    static RKColor* unpack(u16 raw)
+    static UXRscColor* unpack(u16 raw)
         {
-        RKColor* c = new RKColor();
+        UXRscColor* c = new UXRscColor();
         c.border = ((i32)raw >> (i32)12) & (i32)$F;
         c.text = ((i32)raw >> (i32)8) & (i32)$F;
         c.replace = ((i32)raw & (i32)$80) != (i32)0;
@@ -130,7 +134,7 @@ class RKColor : Object
     }
 
     // ---- payloads --------------------------------------------------------------
-    class RKTedinfo : Object
+    class UXRscTedinfo : Object
     {
     u8* text;  // te_ptext
     u8* tmplt; // te_ptmplt
@@ -138,7 +142,7 @@ class RKColor : Object
     i32 font;  // 3 = large, 5 = small
     i32 fontId;
     i32 just; // 0 left, 1 right, 2 centre
-    RKColor* color;
+    UXRscColor* color;
     i32 fontsize;
     i32 thickness;
     void init(void)
@@ -149,43 +153,43 @@ class RKColor : Object
         font = (i32)5;
         fontId = (i32)0;
         just = (i32)0;
-        color = new RKColor();
+        color = new UXRscColor();
         fontsize = (i32)0;
         thickness = (i32)0;
         }
-    RKTedinfo* copy(void)
+    UXRscTedinfo* copy(void)
         {
-        RKTedinfo* c = new RKTedinfo();
+        UXRscTedinfo* c = new UXRscTedinfo();
         c.text = text;
         c.tmplt = tmplt;
         c.valid = valid;
         c.font = font;
         c.fontId = fontId;
         c.just = just;
-        c.color = color != (RKColor*)0 ? color.copy() : new RKColor();
+        c.color = color != (UXRscColor*)0 ? color.copy() : new UXRscColor();
         c.fontsize = fontsize;
         c.thickness = thickness;
         return c;
         }
     }
 
-    class RKBox : Object
+    class UXRscBox : Object
     {
     u8 character;  // a G_BOXCHAR's char (0 = none)
     i32 thickness; // border thickness; negative = drawn inside
-    RKColor* color;
+    UXRscColor* color;
     void init(void)
         {
         character = (u8)0;
         thickness = (i32)1;
-        color = new RKColor();
+        color = new UXRscColor();
         }
-    RKBox* copy(void)
+    UXRscBox* copy(void)
         {
-        RKBox* c = new RKBox();
+        UXRscBox* c = new UXRscBox();
         c.character = character;
         c.thickness = thickness;
-        c.color = color != (RKColor*)0 ? color.copy() : new RKColor();
+        c.color = color != (UXRscColor*)0 ? color.copy() : new UXRscColor();
         return c;
         }
     }
@@ -193,7 +197,7 @@ class RKColor : Object
     // A classic monochrome bit form (BITBLK): 1bpp, wb bytes per row, hl rows.
     // Set bits draw in VDI pen `color`; clear bits are transparent — a BITBLK has
     // no mask.  Carried by G_IMAGE objects and by the free-image table.
-    class RKBitblk : Object
+    class UXRscBitblk : Object
     {
     UXData* data; // wb * hl bytes
     i32 wb, hl, x, y, color;
@@ -206,9 +210,9 @@ class RKColor : Object
         y = (i32)0;
         color = (i32)1;
         }
-    RKBitblk* copy(void)
+    UXRscBitblk* copy(void)
         {
-        RKBitblk* c = new RKBitblk();
+        UXRscBitblk* c = new UXRscBitblk();
         c.data = data;
         c.wb = wb;
         c.hl = hl;
@@ -219,7 +223,7 @@ class RKColor : Object
         }
     }
 
-    class RKIcon : Object
+    class UXRscIcon : Object
     {
     bool isColor;
     u8* label;
@@ -254,9 +258,9 @@ class RKColor : Object
         iconW = (i32)0;
         iconH = (i32)0;
         }
-    RKIcon* copy(void)
+    UXRscIcon* copy(void)
         {
-        RKIcon* c = new RKIcon();
+        UXRscIcon* c = new UXRscIcon();
         c.isColor = isColor;
         c.label = label;
         c.pam = pam;
@@ -281,7 +285,7 @@ class RKColor : Object
     }
 
     // ---- the object node -------------------------------------------------------
-    class RKObject : Object
+    class UXRscObject : Object
     {
     i32 type;
     // The ob_type high byte when it carries ROCKS' meaning: corner rounding
@@ -302,19 +306,19 @@ class RKColor : Object
     // that exists for one layout's benefit needs none.  Unique within a form, never renumbered.
     i32 logicalId;
 
-    RKTedinfo* ted;
-    RKBox* box;
-    RKIcon* icon;
-    RKBitblk* bitblk;
-    Array<RKObject>* children;
+    UXRscTedinfo* ted;
+    UXRscBox* box;
+    UXRscIcon* icon;
+    UXRscBitblk* bitblk;
+    Array<UXRscObject>* children;
 
     void init(void)
         {
-        type = (i32)RKT_BOX;
+        type = (i32)UXR_T_BOX;
         extType = (u8)0;
         legacyExtType = (u8)0;
-        flags = (i32)RKF_NONE;
-        state = (i32)RKS_NORMAL;
+        flags = (i32)UXR_F_NONE;
+        state = (i32)UXR_S_NORMAL;
         x = (i32)0;
         y = (i32)0;
         w = (i32)0;
@@ -322,16 +326,16 @@ class RKColor : Object
         name = (u8*)0;
         text = (u8*)0;
         logicalId = (i32)0;
-        ted = (RKTedinfo*)0;
-        box = (RKBox*)0;
-        icon = (RKIcon*)0;
-        bitblk = (RKBitblk*)0;
+        ted = (UXRscTedinfo*)0;
+        box = (UXRscBox*)0;
+        icon = (UXRscIcon*)0;
+        bitblk = (UXRscBitblk*)0;
         children = new Array();
         }
 
-    static RKObject* make(i32 type, i32 x, i32 y, i32 w, i32 h)
+    static UXRscObject* make(i32 type, i32 x, i32 y, i32 w, i32 h)
         {
-        RKObject* o = new RKObject();
+        UXRscObject* o = new UXRscObject();
         o.type = type;
         o.x = x;
         o.y = y;
@@ -344,63 +348,63 @@ class RKColor : Object
     // ---- type capability queries -------------------------------------------
     bool hasStringSpec(void)
         {
-        return type == (i32)RKT_STRING || type == (i32)RKT_BUTTON ||
-               type == (i32)RKT_TITLE || type == (i32)RKT_TEXT ||
-               type == (i32)RKT_CHECKBOX || type == (i32)RKT_RADIO;
+        return type == (i32)UXR_T_STRING || type == (i32)UXR_T_BUTTON ||
+               type == (i32)UXR_T_TITLE || type == (i32)UXR_T_TEXT ||
+               type == (i32)UXR_T_CHECKBOX || type == (i32)UXR_T_RADIO;
         }
     bool hasTedinfo(void)
         {
-        return RKObject.typeHasTedinfo(type);
+        return UXRscObject.typeHasTedinfo(type);
         }
     // The same question about a bare type, so the schema can ask it without an
-    // object.  ONE list: a second copy of this in RKProps drifted immediately —
+    // object.  ONE list: a second copy of this in Rocks' property schema drifted immediately —
     // it omitted G_FIELD, so text fields, the one type the feature was asked
     // for, were never offered alignment.
     static bool typeHasTedinfo(i32 t)
         {
-        return t == (i32)RKT_TEXT || t == (i32)RKT_BOXTEXT ||
-               t == (i32)RKT_FTEXT || t == (i32)RKT_FBOXTEXT ||
-               t == (i32)RKT_FIELD;
+        return t == (i32)UXR_T_TEXT || t == (i32)UXR_T_BOXTEXT ||
+               t == (i32)UXR_T_FTEXT || t == (i32)UXR_T_FBOXTEXT ||
+               t == (i32)UXR_T_FIELD;
         }
     bool hasBox(void)
         {
-        return type == (i32)RKT_BOX || type == (i32)RKT_IBOX ||
-               type == (i32)RKT_BOXCHAR || type == (i32)RKT_BOXTEXT ||
-               type == (i32)RKT_FBOXTEXT;
+        return type == (i32)UXR_T_BOX || type == (i32)UXR_T_IBOX ||
+               type == (i32)UXR_T_BOXCHAR || type == (i32)UXR_T_BOXTEXT ||
+               type == (i32)UXR_T_FBOXTEXT;
         }
     bool hasIcon(void)
         {
-        return type == (i32)RKT_ICON || type == (i32)RKT_CICON || type == (i32)RKT_CICONBLK;
+        return type == (i32)UXR_T_ICON || type == (i32)UXR_T_CICON || type == (i32)UXR_T_CICONBLK;
         }
     bool hasBitblk(void)
         {
-        return type == (i32)RKT_IMAGE;
+        return type == (i32)UXR_T_IMAGE;
         }
     bool canHaveChildren(void)
         {
-        return type == (i32)RKT_BOX || type == (i32)RKT_IBOX ||
-               type == (i32)RKT_BOXCHAR || type == (i32)RKT_TITLE;
+        return type == (i32)UXR_T_BOX || type == (i32)UXR_T_IBOX ||
+               type == (i32)UXR_T_BOXCHAR || type == (i32)UXR_T_TITLE;
         }
 
     // Give a freshly made object the payload its type needs, so nothing
     // downstream has to null-check what the type guarantees.
     void seedPayload(void)
         {
-        if (self.hasTedinfo() && ted == (RKTedinfo*)0)
+        if (self.hasTedinfo() && ted == (UXRscTedinfo*)0)
             {
-            ted = new RKTedinfo();
+            ted = new UXRscTedinfo();
             }
-        if (self.hasBox() && box == (RKBox*)0)
+        if (self.hasBox() && box == (UXRscBox*)0)
             {
-            box = new RKBox();
+            box = new UXRscBox();
             }
-        if (self.hasIcon() && icon == (RKIcon*)0)
+        if (self.hasIcon() && icon == (UXRscIcon*)0)
             {
-            icon = new RKIcon();
+            icon = new UXRscIcon();
             }
-        if (self.hasBitblk() && bitblk == (RKBitblk*)0)
+        if (self.hasBitblk() && bitblk == (UXRscBitblk*)0)
             {
-            bitblk = new RKBitblk();
+            bitblk = new UXRscBitblk();
             }
         if (self.hasStringSpec() && text == (u8*)0)
             {
@@ -412,38 +416,38 @@ class RKColor : Object
         {
         return (i32)children.count();
         }
-    RKObject* childAt(i32 i)
-        { return (RKObject* ?)children.get((u16)i);
+    UXRscObject* childAt(i32 i)
+        { return (UXRscObject* ?)children.get((u16)i);
         }
-    void addChild(RKObject* c)
+    void addChild(UXRscObject* c)
         {
-        if (c != (RKObject*)0)
+        if (c != (UXRscObject*)0)
             {
             children.add(c);
             }
         }
 
     // The direct parent of `target` within this subtree, or 0.
-    RKObject* parentOf(RKObject* target)
+    UXRscObject* parentOf(UXRscObject* target)
         {
         for (i32 i = (i32)0; i < self.childCount(); i = i + (i32)1)
             {
-            RKObject* c = self.childAt(i);
+            UXRscObject* c = self.childAt(i);
             if (c == target)
                 {
                 return self;
                 }
-            RKObject* deeper = c.parentOf(target);
-            if (deeper != (RKObject*)0)
+            UXRscObject* deeper = c.parentOf(target);
+            if (deeper != (UXRscObject*)0)
                 {
                 return deeper;
                 }
             }
-        return (RKObject*)0;
+        return (UXRscObject*)0;
         }
 
     // Pre-order walk, appending every node in this subtree to `out`.
-    void collect(Array<RKObject>* out)
+    void collect(Array<UXRscObject>* out)
         {
         out.add(self);
         for (i32 i = (i32)0; i < self.childCount(); i = i + (i32)1)
@@ -456,9 +460,9 @@ class RKColor : Object
     // section 7: a one-time copy, not a live link, so every payload object is the copy's own and
     // editing one layout never reaches into another).  Strings and image bytes are shared: they are
     // replaced when edited, never written through.
-    RKObject* deepCopy(void)
+    UXRscObject* deepCopy(void)
         {
-        RKObject* c = new RKObject();
+        UXRscObject* c = new UXRscObject();
         c.type = type;
         c.extType = extType;
         c.legacyExtType = legacyExtType;
@@ -471,19 +475,19 @@ class RKColor : Object
         c.name = name;
         c.text = text;
         c.logicalId = logicalId;
-        if (ted != (RKTedinfo*)0)
+        if (ted != (UXRscTedinfo*)0)
             {
             c.ted = ted.copy();
             }
-        if (box != (RKBox*)0)
+        if (box != (UXRscBox*)0)
             {
             c.box = box.copy();
             }
-        if (icon != (RKIcon*)0)
+        if (icon != (UXRscIcon*)0)
             {
             c.icon = icon.copy();
             }
-        if (bitblk != (RKBitblk*)0)
+        if (bitblk != (UXRscBitblk*)0)
             {
             c.bitblk = bitblk.copy();
             }
@@ -496,13 +500,13 @@ class RKColor : Object
     }
 
     // ---- a flattened node: the classic OBJECT array's links --------------------
-    class RKFlatNode : Object
+    class UXRscFlatNode : Object
     {
-    RKObject* obj;
+    UXRscObject* obj;
     i32 next, head, tail;
     void init(void)
         {
-        obj = (RKObject*)0;
+        obj = (UXRscObject*)0;
         next = (i32)-1;
         head = (i32)-1;
         tail = (i32)-1;
@@ -510,18 +514,18 @@ class RKColor : Object
     }
 
     // ---- tree ------------------------------------------------------------------
-    class RKTree : Object
+    class UXRscTree : Object
     {
     u8* name;
     i32 kind;
-    RKObject* root;
+    UXRscObject* root;
     UXData* nameStore; // owns `name`'s bytes when the name was made here rather than read
 
     void init(void)
         {
         name = (u8*)"";
-        kind = (i32)RKK_DIALOG;
-        root = (RKObject*)0;
+        kind = (i32)UXR_K_DIALOG;
+        root = (UXRscObject*)0;
         nameStore = (UXData*)0;
         }
 
@@ -529,7 +533,7 @@ class RKColor : Object
     void setNameJoined(u8* base, u8* suffix)
         {
         UXData* d = UXData.fromString(base != (u8*)0 ? base : (u8*)"");
-        d.appendBytes(suffix, RKTree.len(suffix));
+        d.appendBytes(suffix, UXRscTree.len(suffix));
         d.appendByte((u8)0);
         nameStore = d;
         name = d.bytes();
@@ -544,30 +548,30 @@ class RKColor : Object
         return n;
         }
 
-    RKObject* parentOf(RKObject* node)
+    UXRscObject* parentOf(UXRscObject* node)
         {
-        if (root == (RKObject*)0 || node == root)
+        if (root == (UXRscObject*)0 || node == root)
             {
-            return (RKObject*)0;
+            return (UXRscObject*)0;
             }
         return root.parentOf(node);
         }
-    Array<RKObject>* allObjects(void)
+    Array<UXRscObject>* allObjects(void)
         {
-        Array<RKObject>* out = new Array();
-        if (root != (RKObject*)0)
+        Array<UXRscObject>* out = new Array();
+        if (root != (UXRscObject*)0)
             {
             root.collect(out);
             }
         return out;
         }
     // Screen coordinates: a child's x/y are relative to its parent.
-    bool absoluteOriginOf(RKObject* node, i32* ox, i32* oy)
+    bool absoluteOriginOf(UXRscObject* node, i32* ox, i32* oy)
         {
         i32 ax = (i32)0;
         i32 ay = (i32)0;
-        RKObject* cur = node;
-        while (cur != (RKObject*)0)
+        UXRscObject* cur = node;
+        while (cur != (UXRscObject*)0)
             {
             ax = ax + cur.x;
             ay = ay + cur.y;
@@ -583,7 +587,7 @@ class RKColor : Object
         }
     bool isMenu(void)
         {
-        return kind == (i32)RKK_MENU;
+        return kind == (i32)UXR_K_MENU;
         }
 
     // ---- reparent on drop ----------------------------------------------------
@@ -599,11 +603,11 @@ class RKColor : Object
     // Idempotent: unchanged geometry changes nothing.  Returns how many objects changed parent.
     i32 reparentByGeometry(void)
         {
-        if (root == (RKObject*)0)
+        if (root == (UXRscObject*)0)
             {
             return (i32)0;
             }
-        Array<RKObject>* all = self.allObjects(); // pre-order, root first
+        Array<UXRscObject>* all = self.allObjects(); // pre-order, root first
         i32 n = (i32)all.count();
         if (n < (i32)2)
             {
@@ -615,17 +619,17 @@ class RKColor : Object
         i32* newParent = new i32[(u32)n];
         for (i32 i = (i32)0; i < n; i = i + (i32)1)
             {
-            RKObject* o = (RKObject* ?)all.get((u32)i);
+            UXRscObject* o = (UXRscObject* ?)all.get((u32)i);
             i32 x = (i32)0;
             i32 y = (i32)0;
             self.absoluteOriginOf(o, &x, &y);
             ax[i] = x;
             ay[i] = y;
-            RKObject* p = self.parentOf(o);
+            UXRscObject* p = self.parentOf(o);
             oldParent[i] = (i32)-1;
             for (i32 k = (i32)0; k < n; k = k + (i32)1)
                 {
-                if ((RKObject* ?)all.get((u32)k) == p)
+                if ((UXRscObject* ?)all.get((u32)k) == p)
                     {
                     oldParent[i] = k;
                     }
@@ -635,13 +639,13 @@ class RKColor : Object
         newParent[0] = (i32)-1;
         for (i32 i = (i32)1; i < n; i = i + (i32)1)
             {
-            RKObject* o = (RKObject* ?)all.get((u32)i);
+            UXRscObject* o = (UXRscObject* ?)all.get((u32)i);
             i32 oArea = o.w * o.h;
             i32 best = (i32)0;
             i32 bestArea = root.w * root.h;
             for (i32 k = (i32)0; k < n; k = k + (i32)1)
                 {
-                RKObject* p = (RKObject* ?)all.get((u32)k);
+                UXRscObject* p = (UXRscObject* ?)all.get((u32)k);
                 if (k == i || !p.canHaveChildren())
                     {
                     continue;
@@ -675,12 +679,12 @@ class RKColor : Object
         // rebuild every child list in the old pre-order (the z-order), then the relative positions
         for (i32 i = (i32)0; i < n; i = i + (i32)1)
             {
-            ((RKObject* ?)all.get((u32)i)).children = new Array();
+            ((UXRscObject* ?)all.get((u32)i)).children = new Array();
             }
         for (i32 i = (i32)1; i < n; i = i + (i32)1)
             {
-            RKObject* o = (RKObject* ?)all.get((u32)i);
-            ((RKObject* ?)all.get((u32)newParent[i])).addChild(o);
+            UXRscObject* o = (UXRscObject* ?)all.get((u32)i);
+            ((UXRscObject* ?)all.get((u32)newParent[i])).addChild(o);
             o.x = ax[i] - ax[newParent[i]];
             o.y = ay[i] - ay[newParent[i]];
             }
@@ -693,24 +697,24 @@ class RKColor : Object
     // VARIANT is a whole classic tree laid out for one form factor (and, on a device, one orientation).
     // The trees are separate designs bonded only by their controls' logical ids: a phone layout is
     // not derived from the desktop one, and nothing here makes it so (section 1).
-    class RKVariant : Object
+    class UXRscVariant : Object
     {
-    i32 klass;  // RKV_DESKTOP / _TABLET / _PHONE / _ANY
-    i32 orient; // RKV_ORIENT_*; NONE on the desktop
-    RKTree* tree;
+    i32 klass;  // UXR_V_DESKTOP / _TABLET / _PHONE / _ANY
+    i32 orient; // UXR_V_ORIENT_*; NONE on the desktop
+    UXRscTree* tree;
     void init(void)
         {
-        klass = (i32)RKV_ANY;
-        orient = (i32)RKV_ORIENT_NONE;
-        tree = (RKTree*)0;
+        klass = (i32)UXR_V_ANY;
+        orient = (i32)UXR_V_ORIENT_NONE;
+        tree = (UXRscTree*)0;
         }
     }
 
-    class RKForm : Object
+    class UXRscForm : Object
     {
     i32 formId; // what the app loads it by: the first tree's index, so a v1 app's constant still works
     u8* name;
-    Array<RKVariant>* variants;
+    Array<UXRscVariant>* variants;
     void init(void)
         {
         formId = (i32)0;
@@ -721,32 +725,32 @@ class RKColor : Object
         {
         return (i32)variants.count();
         }
-    RKVariant* variantAt(i32 i)
-        { return (RKVariant* ?)variants.get((u32)i);
+    UXRscVariant* variantAt(i32 i)
+        { return (UXRscVariant* ?)variants.get((u32)i);
         }
-    RKVariant* find(i32 klass, i32 orient)
+    UXRscVariant* find(i32 klass, i32 orient)
         {
         for (i32 i = (i32)0; i < self.variantCount(); i = i + (i32)1)
             {
-            RKVariant* v = self.variantAt(i);
+            UXRscVariant* v = self.variantAt(i);
             if (v.klass == klass && v.orient == orient)
                 {
                 return v;
                 }
             }
-        return (RKVariant*)0;
+        return (UXRscVariant*)0;
         }
-    RKVariant* variantFor(RKTree* t)
+    UXRscVariant* variantFor(UXRscTree* t)
         {
         for (i32 i = (i32)0; i < self.variantCount(); i = i + (i32)1)
             {
-            RKVariant* v = self.variantAt(i);
+            UXRscVariant* v = self.variantAt(i);
             if (v.tree == t)
                 {
                 return v;
                 }
             }
-        return (RKVariant*)0;
+        return (UXRscVariant*)0;
         }
     // The next unused logical id across every variant (ids are never reused within a form).
     i32 nextLogicalId(void)
@@ -754,10 +758,10 @@ class RKColor : Object
         i32 hi = (i32)0;
         for (i32 i = (i32)0; i < self.variantCount(); i = i + (i32)1)
             {
-            Array<RKObject>* all = self.variantAt(i).tree.allObjects();
+            Array<UXRscObject>* all = self.variantAt(i).tree.allObjects();
             for (u32 k = (u32)0; k < all.count(); k = k + (u32)1)
                 {
-                i32 id = ((RKObject* ?)all.get(k)).logicalId;
+                i32 id = ((UXRscObject* ?)all.get(k)).logicalId;
                 if (id > hi)
                     {
                     hi = id;
@@ -769,12 +773,12 @@ class RKColor : Object
     }
 
     // ---- resource --------------------------------------------------------------
-    class RKResource : Object
+    class UXRscDoc : Object
     {
-    Array<RKTree>* trees;
+    Array<UXRscTree>* trees;
     Array<UXData>* freeStrings;  // rsrc_gaddr(R_STRING, i) — referenced by nothing
-    Array<RKBitblk>* freeImages; // rsrc_gaddr(R_IMAGE, i) — likewise
-    Array<RKForm>* forms;        // the multi-variant forms; a tree in none is its own `any` form
+    Array<UXRscBitblk>* freeImages; // rsrc_gaddr(R_IMAGE, i) — likewise
+    Array<UXRscForm>* forms;        // the multi-variant forms; a tree in none is its own `any` form
     bool bigEndian;              // classic 68000 GEM fidelity
     bool packedCoords;           // char/pixel packing on write
     bool embedIcons;             // embed PAM vs reference an external path
@@ -797,18 +801,18 @@ class RKColor : Object
         {
         return (i32)trees.count();
         }
-    RKTree* treeAt(i32 i)
-        { return (RKTree* ?)trees.get((u16)i);
+    UXRscTree* treeAt(i32 i)
+        { return (UXRscTree* ?)trees.get((u16)i);
         }
-    void addTree(RKTree* t)
+    void addTree(UXRscTree* t)
         {
-        if (t != (RKTree*)0)
+        if (t != (UXRscTree*)0)
             {
             trees.add(t);
             }
         }
 
-    i32 indexOfTree(RKTree* t)
+    i32 indexOfTree(UXRscTree* t)
         {
         for (i32 i = (i32)0; i < self.treeCount(); i = i + (i32)1)
             {
@@ -823,33 +827,33 @@ class RKColor : Object
         {
         return (i32)forms.count();
         }
-    RKForm* formAt(i32 i)
-        { return (RKForm* ?)forms.get((u32)i);
+    UXRscForm* formAt(i32 i)
+        { return (UXRscForm* ?)forms.get((u32)i);
         }
     // The form a tree is a layout of, or 0 for a tree that stands alone.
-    RKForm* formOf(RKTree* t)
+    UXRscForm* formOf(UXRscTree* t)
         {
         for (i32 i = (i32)0; i < self.formCount(); i = i + (i32)1)
             {
-            RKForm* f = self.formAt(i);
-            if (f.variantFor(t) != (RKVariant*)0)
+            UXRscForm* f = self.formAt(i);
+            if (f.variantFor(t) != (UXRscVariant*)0)
                 {
                 return f;
                 }
             }
-        return (RKForm*)0;
+        return (UXRscForm*)0;
         }
-    RKForm* formById(i32 formId)
+    UXRscForm* formById(i32 formId)
         {
         for (i32 i = (i32)0; i < self.formCount(); i = i + (i32)1)
             {
-            RKForm* f = self.formAt(i);
+            UXRscForm* f = self.formAt(i);
             if (f.formId == formId)
                 {
                 return f;
                 }
             }
-        return (RKForm*)0;
+        return (UXRscForm*)0;
         }
 
     // A new layout of `from`'s form, for `klass` at `orient`, seeded as a one-time copy of `from`.
@@ -857,50 +861,50 @@ class RKColor : Object
     // every object in it gets a logical id, which the copy carries -- that is what lets one set of
     // connections bind in both (UXNB-V2 sections 3 and 7).  Returns the new tree, or 0 if the form
     // already has that layout (or the orientation is meaningless: the desktop has none).
-    RKTree* addVariant(RKTree* from, i32 klass, i32 orient)
+    UXRscTree* addVariant(UXRscTree* from, i32 klass, i32 orient)
         {
-        if (from == (RKTree*)0 || from.root == (RKObject*)0 || self.indexOfTree(from) < (i32)0)
+        if (from == (UXRscTree*)0 || from.root == (UXRscObject*)0 || self.indexOfTree(from) < (i32)0)
             {
-            return (RKTree*)0;
+            return (UXRscTree*)0;
             }
-        if ((klass == (i32)RKV_DESKTOP || klass == (i32)RKV_ANY) && orient != (i32)RKV_ORIENT_NONE)
+        if ((klass == (i32)UXR_V_DESKTOP || klass == (i32)UXR_V_ANY) && orient != (i32)UXR_V_ORIENT_NONE)
             {
-            return (RKTree*)0;
+            return (UXRscTree*)0;
             }
-        RKForm* f = self.formOf(from);
-        if (f == (RKForm*)0)
+        UXRscForm* f = self.formOf(from);
+        if (f == (UXRscForm*)0)
             {
-            f = new RKForm();
+            f = new UXRscForm();
             f.formId = self.indexOfTree(from);
             f.name = from.name;
-            RKVariant* first = new RKVariant();
-            first.klass = (i32)RKV_DESKTOP;
+            UXRscVariant* first = new UXRscVariant();
+            first.klass = (i32)UXR_V_DESKTOP;
             first.tree = from;
             f.variants.add(first);
             forms.add(f);
             }
-        if (f.find(klass, orient) != (RKVariant*)0)
+        if (f.find(klass, orient) != (UXRscVariant*)0)
             {
-            return (RKTree*)0;
+            return (UXRscTree*)0;
             }
         // identity for everything the seed has that lacks it
         i32 next = f.nextLogicalId();
-        Array<RKObject>* all = from.allObjects();
+        Array<UXRscObject>* all = from.allObjects();
         for (u32 k = (u32)0; k < all.count(); k = k + (u32)1)
             {
-            RKObject* o = (RKObject* ?)all.get(k);
+            UXRscObject* o = (UXRscObject* ?)all.get(k);
             if (o.logicalId == (i32)0)
                 {
                 o.logicalId = next;
                 next = next + (i32)1;
                 }
             }
-        RKTree* t = new RKTree();
-        t.setNameJoined(f.name, RKResource.variantSuffix(klass, orient));
+        UXRscTree* t = new UXRscTree();
+        t.setNameJoined(f.name, UXRscDoc.variantSuffix(klass, orient));
         t.kind = from.kind;
         t.root = from.root.deepCopy();
         self.addTree(t);
-        RKVariant* v = new RKVariant();
+        UXRscVariant* v = new UXRscVariant();
         v.klass = klass;
         v.orient = orient;
         v.tree = t;
@@ -912,30 +916,30 @@ class RKColor : Object
     // have to be distinct, for source export; the loader finds variants through the chunk.
     static u8* variantSuffix(i32 klass, i32 orient)
         {
-        if (klass == (i32)RKV_PHONE)
+        if (klass == (i32)UXR_V_PHONE)
             {
-            return orient == (i32)RKV_ORIENT_PORTRAIT ? (u8*)"_PHONE_P"
-                 : (orient == (i32)RKV_ORIENT_LANDSCAPE ? (u8*)"_PHONE_L" : (u8*)"_PHONE");
+            return orient == (i32)UXR_V_ORIENT_PORTRAIT ? (u8*)"_PHONE_P"
+                 : (orient == (i32)UXR_V_ORIENT_LANDSCAPE ? (u8*)"_PHONE_L" : (u8*)"_PHONE");
             }
-        if (klass == (i32)RKV_TABLET)
+        if (klass == (i32)UXR_V_TABLET)
             {
-            return orient == (i32)RKV_ORIENT_PORTRAIT ? (u8*)"_TABLET_P"
-                 : (orient == (i32)RKV_ORIENT_LANDSCAPE ? (u8*)"_TABLET_L" : (u8*)"_TABLET");
+            return orient == (i32)UXR_V_ORIENT_PORTRAIT ? (u8*)"_TABLET_P"
+                 : (orient == (i32)UXR_V_ORIENT_LANDSCAPE ? (u8*)"_TABLET_L" : (u8*)"_TABLET");
             }
-        if (klass == (i32)RKV_DESKTOP)
+        if (klass == (i32)UXR_V_DESKTOP)
             {
             return (u8*)"_DESKTOP";
             }
         return (u8*)"_ANY";
         }
 
-    static RKResource* emptyDialog(void)
+    static UXRscDoc* emptyDialog(void)
         {
-        RKResource* r = new RKResource();
-        RKTree* t = new RKTree();
+        UXRscDoc* r = new UXRscDoc();
+        UXRscTree* t = new UXRscTree();
         t.name = (u8*)"DIALOG";
-        t.kind = (i32)RKK_DIALOG;
-        t.root = RKObject.make((i32)RKT_BOX, (i32)0, (i32)0, (i32)320, (i32)200);
+        t.kind = (i32)UXR_K_DIALOG;
+        t.root = UXRscObject.make((i32)UXR_T_BOX, (i32)0, (i32)0, (i32)320, (i32)200);
         r.addTree(t);
         return r;
         }
@@ -944,25 +948,25 @@ class RKColor : Object
     // This is the ONLY place the linked layout exists: the editor works on the
     // nested form and the flat one is rebuilt at write time, so the two can
     // never disagree.
-    Array<RKFlatNode>* flatten(RKTree* t)
+    Array<UXRscFlatNode>* flatten(UXRscTree* t)
         {
-        Array<RKFlatNode>* out = new Array();
-        if (t == (RKTree*)0 || t.root == (RKObject*)0)
+        Array<UXRscFlatNode>* out = new Array();
+        if (t == (UXRscTree*)0 || t.root == (UXRscObject*)0)
             {
             return out;
             }
-        Array<RKObject>* order = t.allObjects();
+        Array<UXRscObject>* order = t.allObjects();
         for (u16 i = (u16)0; i < order.count(); i = i + (u16)1)
             {
-            RKFlatNode* n = new RKFlatNode();
-            n.obj = (RKObject* ?)order.get(i);
+            UXRscFlatNode* n = new UXRscFlatNode();
+            n.obj = (UXRscObject* ?)order.get(i);
             out.add(n);
             }
         // index of an object within the pre-order
         for (i32 i = (i32)0; i < (i32)out.count(); i = i + (i32)1)
             {
-            RKFlatNode* n = (RKFlatNode* ?)out.get((u16)i);
-            RKObject* o = n.obj;
+            UXRscFlatNode* n = (UXRscFlatNode* ?)out.get((u16)i);
+            UXRscObject* o = n.obj;
             i32 kids = o.childCount();
             if (kids > (i32)0)
                 {
@@ -970,9 +974,9 @@ class RKColor : Object
                 n.tail = self.indexOf(out, o.childAt(kids - (i32)1));
                 }
             // next = the following sibling, or the parent when last
-            RKObject* p = t.parentOf(o);
+            UXRscObject* p = t.parentOf(o);
             // the root
-            if (p == (RKObject*)0)
+            if (p == (UXRscObject*)0)
                 {
                 n.next = (i32)-1;
                 }
@@ -999,17 +1003,17 @@ class RKColor : Object
         // the last object in the tree carries LASTOB
         if (out.count() > (u16)0)
             {
-            RKFlatNode* last = (RKFlatNode* ?)out.get((u16)((i32)out.count() - (i32)1));
-            last.obj.flags = last.obj.flags | (i32)RKF_LASTOB;
+            UXRscFlatNode* last = (UXRscFlatNode* ?)out.get((u16)((i32)out.count() - (i32)1));
+            last.obj.flags = last.obj.flags | (i32)UXR_F_LASTOB;
             }
         return out;
         }
 
-    i32 indexOf(Array<RKFlatNode>* flat, RKObject* o)
+    i32 indexOf(Array<UXRscFlatNode>* flat, UXRscObject* o)
         {
         for (i32 i = (i32)0; i < (i32)flat.count(); i = i + (i32)1)
             {
-            if (((RKFlatNode* ?)flat.get((u16)i)).obj == o)
+            if (((UXRscFlatNode* ?)flat.get((u16)i)).obj == o)
                 {
                 return i;
                 }

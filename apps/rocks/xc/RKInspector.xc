@@ -21,7 +21,7 @@
 #import "UXGeometry.xc"
 #import "UXMetrics.xc"
 #import "Array.xc"
-#import "RKModel.xc"
+#import "UXRscModel.xc"
 #import "RKProps.xc"
 #import "UXPopUpButton.xc"
 #import "RKCanvas.xc"
@@ -50,8 +50,8 @@ class RKRow : Object
 
     // STRONG: the same reasoning as RKDrag.root -- no cycle exists to break, and a
     // weak reference to a model object is what caused the lifetime crash.
-    RKObject* target;
-    callback changed void(RKObject* o);
+    UXRscObject* target;
+    callback changed void(UXRscObject* o);
 
     // Populating a field fires its change hook, which would write a
     // half-written value straight back into the model.
@@ -62,8 +62,8 @@ class RKRow : Object
         pane = (UXView*)0;
         typeLabel = (UXLabel*)0;
         rows = new Array();
-        target = (RKObject*)0;
-        changed = (callback void(RKObject * o))0;
+        target = (UXRscObject*)0;
+        changed = (callback void(UXRscObject * o))0;
         loading = false;
         }
 
@@ -148,7 +148,7 @@ class RKRow : Object
         }
 
     // ---- render the schema --------------------------------------------------
-    void show(RKObject* o)
+    void show(UXRscObject* o)
         {
         loading = true;
         target = o;
@@ -158,7 +158,7 @@ class RKRow : Object
             pane.removeAllSubviews();
             }
 
-        if (o == (RKObject*)0)
+        if (o == (UXRscObject*)0)
             {
             // Blank, not stale: an inspector still showing the last object's
             // numbers invites editing something that is not selected.
@@ -253,7 +253,7 @@ class RKRow : Object
     // the rows are generated and cannot each have their own method.
     void onField(UXTextField* sender) : action
         {
-        if (loading || target == (RKObject*)0)
+        if (loading || target == (UXRscObject*)0)
             {
             return;
             }
@@ -270,7 +270,7 @@ class RKRow : Object
                 // reused, so aliasing it would leave every object edited here
                 // sharing one string.
                 target.text = RKInspector.dup(sender.text());
-                if (target.ted != (RKTedinfo*)0)
+                if (target.ted != (UXRscTedinfo*)0)
                     {
                     target.ted.text = target.text;
                     }
@@ -288,7 +288,7 @@ class RKRow : Object
     // the rows are generated, so none of them can have a method of its own.
     void onEnum(UXControl* sender) : action
         {
-        if (loading || target == (RKObject*)0)
+        if (loading || target == (UXRscObject*)0)
             {
             return;
             }
@@ -316,7 +316,7 @@ class RKRow : Object
 
     void onToggle(UXControl* sender) : action
         {
-        if (loading || target == (RKObject*)0)
+        if (loading || target == (UXRscObject*)0)
             {
             return;
             }
@@ -334,7 +334,7 @@ class RKRow : Object
 
     void announce(void)
         {
-        callback f void(RKObject * o) = changed;
+        callback f void(UXRscObject * o) = changed;
         if (f)
             {
             f(target);

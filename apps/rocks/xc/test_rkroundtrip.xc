@@ -14,9 +14,9 @@
 #import <Stdio.xc>
 #import <Files.xc>
 #import <String.xc>
-#import "RKRsc.xc"
-#import "RKRscWrite.xc"
-#import "RKModel.xc"
+#import "UXRscRead.xc"
+#import "UXRscWrite.xc"
+#import "UXRscModel.xc"
 
 i32 gFails;
 void check(u8* what, i32 got, i32 want)
@@ -67,7 +67,7 @@ bool sameStr(u8* a, u8* b)
 
 // Walk two subtrees in lockstep, comparing everything the model carries.
 i32 gDiffs;
-void compareTree(RKObject* a, RKObject* b, i32 depth)
+void compareTree(UXRscObject* a, UXRscObject* b, i32 depth)
     {
     if (a.type != b.type)
         {
@@ -87,9 +87,9 @@ void compareTree(RKObject* a, RKObject* b, i32 depth)
         }
     // An editable field's TEDINFO: its text, its TEMPLATE (the mask that makes it editable -- the
     // writer once dropped it, and nothing here noticed), its validation string and its look.
-    if (a.hasTedinfo() && a.ted != (RKTedinfo*)0)
+    if (a.hasTedinfo() && a.ted != (UXRscTedinfo*)0)
         {
-        if (b.ted == (RKTedinfo*)0)
+        if (b.ted == (UXRscTedinfo*)0)
             {
             gDiffs = gDiffs + (i32)1;
             Stdio.printf("    a TEDINFO went missing\n");
@@ -145,10 +145,10 @@ void main(void)
         }
 
     // ---- in ----------------------------------------------------------------
-    RKRsc* r1 = RKRsc.reader(d.bytes(), (i32)d.length());
-    RKResource* orig = r1.result;
-    checkTrue("the original parses", orig != (RKResource*)0);
-    if (orig == (RKResource*)0)
+    UXRscReader* r1 = UXRscReader.reader(d.bytes(), (i32)d.length());
+    UXRscDoc* orig = r1.result;
+    checkTrue("the original parses", orig != (UXRscDoc*)0);
+    if (orig == (UXRscDoc*)0)
         {
         Stdio.printf("FAIL: 1\n");
         return;
@@ -157,7 +157,7 @@ void main(void)
                  (i32)d.length(), orig.treeCount(), r1.nobjects);
 
     // ---- out ---------------------------------------------------------------
-    RKRscWrite* w = RKRscWrite.writer(orig);
+    UXRscWriter* w = UXRscWriter.writer(orig);
     UXData* bytes = w.result;
     checkTrue("something was written", bytes != (UXData*)0 && bytes.length() > (i32)36);
     if (bytes == (UXData*)0)
@@ -173,10 +173,10 @@ void main(void)
         }
 
     // ---- and back ----------------------------------------------------------
-    RKRsc* r2 = RKRsc.reader(bytes.bytes(), bytes.length());
-    RKResource* back = r2.result;
-    checkTrue("what we wrote parses again", back != (RKResource*)0);
-    if (back == (RKResource*)0)
+    UXRscReader* r2 = UXRscReader.reader(bytes.bytes(), bytes.length());
+    UXRscDoc* back = r2.result;
+    checkTrue("what we wrote parses again", back != (UXRscDoc*)0);
+    if (back == (UXRscDoc*)0)
         {
         Stdio.printf("FAIL: 1\n");
         return;
@@ -217,7 +217,7 @@ void main(void)
 
     // A second round trip must be a fixed point: if writing changed anything
     // structural, the third read would differ from the second.
-    UXData* bytes2 = RKRscWrite.write(back);
+    UXData* bytes2 = UXRscWriter.write(back);
     Stdio.printf("  first write %d bytes, second write %d bytes\n", bytes.length(), bytes2 != (UXData*)0 ? bytes2.length() : (i32)-1);
     checkTrue("a second write produces the same length",
               bytes2 != (UXData*)0 && bytes2.length() == bytes.length());

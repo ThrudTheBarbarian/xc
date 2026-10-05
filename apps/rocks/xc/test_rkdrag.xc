@@ -7,7 +7,7 @@
 // control picks the control and not its box, and that an abandoned drag leaves
 // the model untouched.
 #import <Stdio.xc>
-#import "RKModel.xc"
+#import "UXRscModel.xc"
 #import "RKDrag.xc"
 
 i32 gFails;
@@ -43,12 +43,12 @@ void main(void)
     // A form with a nested box, which is where hit-testing and coordinates get
     // interesting: `kid` lives at (10,10) inside a box at (50,40), so its
     // canvas position is (60,50) and NEITHER number appears in the model.
-    RKObject* root = RKObject.make((i32)RKT_BOX, (i32)0, (i32)0, (i32)300, (i32)200);
-    RKObject* btn = RKObject.make((i32)RKT_BUTTON, (i32)20, (i32)20, (i32)60, (i32)20);
-    RKObject* box = RKObject.make((i32)RKT_BOX, (i32)50, (i32)40, (i32)200, (i32)120);
-    RKObject* kid = RKObject.make((i32)RKT_BUTTON, (i32)10, (i32)10, (i32)40, (i32)20);
-    RKObject* ghost = RKObject.make((i32)RKT_BUTTON, (i32)20, (i32)60, (i32)60, (i32)20);
-    ghost.flags = ghost.flags | (i32)RKF_HIDETREE;
+    UXRscObject* root = UXRscObject.make((i32)UXR_T_BOX, (i32)0, (i32)0, (i32)300, (i32)200);
+    UXRscObject* btn = UXRscObject.make((i32)UXR_T_BUTTON, (i32)20, (i32)20, (i32)60, (i32)20);
+    UXRscObject* box = UXRscObject.make((i32)UXR_T_BOX, (i32)50, (i32)40, (i32)200, (i32)120);
+    UXRscObject* kid = UXRscObject.make((i32)UXR_T_BUTTON, (i32)10, (i32)10, (i32)40, (i32)20);
+    UXRscObject* ghost = UXRscObject.make((i32)UXR_T_BUTTON, (i32)20, (i32)60, (i32)60, (i32)20);
+    ghost.flags = ghost.flags | (i32)UXR_F_HIDETREE;
     box.addChild(kid);
     root.addChild(btn);
     root.addChild(box);
@@ -57,7 +57,7 @@ void main(void)
     // ---- the tree, read geometrically ---------------------------------------
     checkTrue("parentOf finds a top-level object's parent", RKDrag.parentOf(root, btn) == root);
     checkTrue("and a nested one's", RKDrag.parentOf(root, kid) == box);
-    checkTrue("the root has no parent", RKDrag.parentOf(root, root) == (RKObject*)0);
+    checkTrue("the root has no parent", RKDrag.parentOf(root, root) == (UXRscObject*)0);
 
     i32 ax = (i32)0;
     i32 ay = (i32)0;
@@ -74,11 +74,11 @@ void main(void)
     checkTrue("a click on box background picks the box",
               RKDrag.hitTest(root, (i32)200, (i32)140) == box);
     checkTrue("a click on bare form is nothing (so it deselects)",
-              RKDrag.hitTest(root, (i32)280, (i32)10) == (RKObject*)0);
+              RKDrag.hitTest(root, (i32)280, (i32)10) == (UXRscObject*)0);
     // A hidden object is not on screen; letting it take the press would mean
     // clicking empty space and selecting something invisible.
     checkTrue("a hidden object cannot be clicked",
-              RKDrag.hitTest(root, (i32)30, (i32)65) == (RKObject*)0);
+              RKDrag.hitTest(root, (i32)30, (i32)65) == (UXRscObject*)0);
 
     // ---- handles -------------------------------------------------------------
     UXRect r = UXGeom.make((i16)20, (i16)20, (i16)60, (i16)20);
@@ -95,7 +95,7 @@ void main(void)
     checkTrue("and so are guides", (new RKDrag()).guidesOn);
 
     // Press 10px into the button, drag 100 right and 50 down.
-    RKObject* got = d.begin(root, (RKObject*)0, (i32)30, (i32)25);
+    UXRscObject* got = d.begin(root, (UXRscObject*)0, (i32)30, (i32)25);
     checkTrue("the press picks the button", got == btn);
     checkTrue("and the drag is live", d.isDragging());
     d.step((i32)130, (i32)75);
@@ -121,7 +121,7 @@ void main(void)
     // ---- moving a NESTED object works in its parent's space ------------------
     RKDrag* dn = new RKDrag();
     dn.snapOn = false;
-    dn.begin(root, (RKObject*)0, (i32)70, (i32)60); // on `kid`
+    dn.begin(root, (UXRscObject*)0, (i32)70, (i32)60); // on `kid`
     dn.step((i32)100, (i32)90);
     // Canvas (100,90) with a 10/10 grab, inside a box at (50,40): the model
     // must hold PARENT-relative coordinates, not canvas ones.
@@ -133,7 +133,7 @@ void main(void)
     kid.x = (i32)40;
     kid.y = (i32)40;
     RKDrag* ds = new RKDrag();                                          // snapping left ON
-    ds.begin(root, (RKObject*)0, (i32)60 + (i32)40, (i32)50 + (i32)40); // grab 0,0 corner
+    ds.begin(root, (UXRscObject*)0, (i32)60 + (i32)40, (i32)50 + (i32)40); // grab 0,0 corner
     // Aim so the OBJECT's origin lands at parent-relative (2,2) -- close enough
     // that the box's own top-left should catch it.  The pointer goes 10 further
     // than the target, because that is where it was grabbed; forgetting the
@@ -162,7 +162,7 @@ void main(void)
     kid.y = (i32)40;
     RKDrag* dq = new RKDrag();
     dq.snapOn = false;
-    dq.begin(root, (RKObject*)0, (i32)100, (i32)90);
+    dq.begin(root, (UXRscObject*)0, (i32)100, (i32)90);
     dq.step((i32)62, (i32)52);
     check("with snapping off the object goes exactly where asked", kid.x, (i32)2);
     check("and reports no guides", (i32)dq.guides.count(), (i32)0);
@@ -178,7 +178,7 @@ void main(void)
     // Press the button's bottom-right handle WITH the button selected.  The
     // point is on the handle, which is drawn on top, so it must resize even
     // though a plain hit-test at that point would also find the button.
-    RKObject* rt = dr.begin(root, btn, (i32)80, (i32)40);
+    UXRscObject* rt = dr.begin(root, btn, (i32)80, (i32)40);
     checkTrue("a press on a handle targets the selection", rt == btn);
     dr.step((i32)150, (i32)70);
     check("the origin is FIXED while resizing, x", btn.x, (i32)20);
@@ -198,7 +198,7 @@ void main(void)
     btn.y = (i32)20;
     btn.w = (i32)60;
     btn.h = (i32)20;
-    RKObject* nbr = RKObject.make((i32)RKT_BUTTON, (i32)78, (i32)38, (i32)40, (i32)20);
+    UXRscObject* nbr = UXRscObject.make((i32)UXR_T_BUTTON, (i32)78, (i32)38, (i32)40, (i32)20);
     root.addChild(nbr);
     RKDrag* dh = new RKDrag();
     checkTrue("with nothing selected, that point picks the neighbour",
@@ -214,7 +214,7 @@ void main(void)
     btn.h = (i32)20;
     RKDrag* dc = new RKDrag();
     dc.snapOn = false;
-    dc.begin(root, (RKObject*)0, (i32)30, (i32)25);
+    dc.begin(root, (UXRscObject*)0, (i32)30, (i32)25);
     dc.step((i32)200, (i32)150);
     checkTrue("a moved drag reports that it moved", dc.didMove());
     dc.cancel();
@@ -227,7 +227,7 @@ void main(void)
     // happened to be dragged last.
     RKDrag* db = new RKDrag();
     checkTrue("a press on background targets nothing",
-              db.begin(root, (RKObject*)0, (i32)285, (i32)8) == (RKObject*)0);
+              db.begin(root, (UXRscObject*)0, (i32)285, (i32)8) == (UXRscObject*)0);
     checkTrue("and no drag is in progress", !db.isDragging());
     db.step((i32)10, (i32)10); // must be harmless
     check("stepping a dead drag moves nothing", btn.x, (i32)20);

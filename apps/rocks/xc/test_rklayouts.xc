@@ -9,7 +9,7 @@
 #import "UXAppKitDriver.xc"
 #import "UXWindow.xc"
 #import "UXGeometry.xc"
-#import "RKModel.xc"
+#import "UXRscModel.xc"
 #import "RKMainController.xc"
 #import "RKMainBuilder.xc"
 
@@ -80,11 +80,11 @@ void main(void)
     checkTrue("the window wires, toolbar included", RKMainBuilder.buildInto(content, c, (i16)900, (i16)600));
     checkTrue("the controller has its toolbar", c.toolbar != (UXToolbar*)0);
 
-    RKResource* r = new RKResource();
-    RKTree* main = new RKTree();
+    UXRscDoc* r = new UXRscDoc();
+    UXRscTree* main = new UXRscTree();
     main.name = (u8*)"MAIN";
-    main.root = RKObject.make((i32)RKT_BOX, (i32)0, (i32)0, (i32)300, (i32)200);
-    RKObject* ok = RKObject.make((i32)RKT_BUTTON, (i32)20, (i32)30, (i32)60, (i32)20);
+    main.root = UXRscObject.make((i32)UXR_T_BOX, (i32)0, (i32)0, (i32)300, (i32)200);
+    UXRscObject* ok = UXRscObject.make((i32)UXR_T_BUTTON, (i32)20, (i32)30, (i32)60, (i32)20);
     ok.text = (u8*)"OK";
     main.root.addChild(ok);
     r.addTree(main);
@@ -104,8 +104,8 @@ void main(void)
     check((u8*)"New Layout adds a tree", r.treeCount(), (i32)2);
     check((u8*)"...and shows it", c.shownTree, (i32)1);
     checkTrue("...saying what it made", says(c, (u8*)"New phone portrait layout"));
-    RKVariant* pv = r.formOf(main).variantFor(r.treeAt((i32)1));
-    checkTrue("it is MAIN's phone-portrait layout", pv != (RKVariant*)0 && pv.klass == (i32)RKV_PHONE && pv.orient == (i32)RKV_ORIENT_PORTRAIT);
+    UXRscVariant* pv = r.formOf(main).variantFor(r.treeAt((i32)1));
+    checkTrue("it is MAIN's phone-portrait layout", pv != (UXRscVariant*)0 && pv.klass == (i32)UXR_V_PHONE && pv.orient == (i32)UXR_V_ORIENT_PORTRAIT);
     check((u8*)"its widget is on the canvas", (i32)c.canvasMap.objs.count(), (i32)1);
     checkTrue("the document is dirty", c.dirty);
     click(c, (i32)RKTB_NEWLAYOUT);

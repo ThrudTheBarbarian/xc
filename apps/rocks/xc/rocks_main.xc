@@ -18,7 +18,7 @@
 #import "UXGeometry.xc"
 #import "RKMainController.xc"
 #import "RKMainBuilder.xc"
-#import "RKRsc.xc"
+#import "UXRscRead.xc"
 #import "UXFileIO.xc"
 
 #define RK_W 1000

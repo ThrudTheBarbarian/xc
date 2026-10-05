@@ -10,8 +10,8 @@
 #import <Stdio.xc>
 #import <Files.xc>
 #import <String.xc>
-#import "RKRsc.xc"
-#import "RKModel.xc"
+#import "UXRscRead.xc"
+#import "UXRscModel.xc"
 
 i32 gFails;
 void check(u8* what, i32 got, i32 want)
@@ -41,7 +41,7 @@ void checkTrue(u8* what, bool got)
 
 // Every object in the tree, counted by walking the NESTED form — which is only
 // correct if the reader rebuilt the nesting from head/tail properly.
-i32 countNested(RKObject* o)
+i32 countNested(UXRscObject* o)
     {
     i32 n = (i32)1;
     for (i32 i = (i32)0; i < o.childCount(); i = i + (i32)1)
@@ -70,10 +70,10 @@ void main(void)
     i32 n = (i32)d.length();
     Stdio.printf("read %d bytes from %s\n", n, path);
 
-    RKRsc* rd = RKRsc.reader(d.bytes(), n);
-    RKResource* res = rd.result;
-    checkTrue("the file parses at all", res != (RKResource*)0);
-    if (res == (RKResource*)0)
+    UXRscReader* rd = UXRscReader.reader(d.bytes(), n);
+    UXRscDoc* res = rd.result;
+    checkTrue("the file parses at all", res != (UXRscDoc*)0);
+    if (res == (UXRscDoc*)0)
         {
         Stdio.printf("FAIL: 1\n");
         return;
@@ -91,8 +91,8 @@ void main(void)
     bool someTreeHasChildren = false;
     for (i32 i = (i32)0; i < res.treeCount(); i = i + (i32)1)
         {
-        RKTree* t = res.treeAt(i);
-        if (t.root == (RKObject*)0)
+        UXRscTree* t = res.treeAt(i);
+        if (t.root == (UXRscObject*)0)
             {
             everyTreeHasRoot = false;
             }
@@ -119,7 +119,7 @@ void main(void)
 
     // Coordinates unpack to sensible pixels: a root box should have real extent,
     // not the raw packed word.
-    RKTree* t0 = res.treeAt((i32)0);
+    UXRscTree* t0 = res.treeAt((i32)0);
     checkTrue("the first tree's root has a positive width", t0.root.w > (i32)0);
     checkTrue("the first tree's root has a positive height", t0.root.h > (i32)0);
     checkTrue("and a plausible one (< 2000px)", t0.root.w < (i32)2000 && t0.root.h < (i32)2000);
@@ -138,9 +138,9 @@ void main(void)
         }
 
     // The parse must be stable: reading the same bytes twice gives the same shape.
-    RKResource* again = RKRsc.read(d.bytes(), n);
+    UXRscDoc* again = UXRscReader.read(d.bytes(), n);
     checkTrue("a second parse agrees on the tree count",
-              again != (RKResource*)0 && again.treeCount() == res.treeCount());
+              again != (UXRscDoc*)0 && again.treeCount() == res.treeCount());
 
     if (gFails == (i32)0)
         {

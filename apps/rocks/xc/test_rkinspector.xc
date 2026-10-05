@@ -5,7 +5,7 @@
 //   editing    -> the MODEL changes, and the canvas widget follows
 //
 // The second is the one that makes this an editor, and the one worth being
-// strict about: it asserts the change landed in the RKObject, not merely that
+// strict about: it asserts the change landed in the UXRscObject, not merely that
 // the field holds new text.  A pane that owned its own values would pass a
 // weaker test and drift from the resource the moment anything else moved an
 // object — which is exactly what canvas dragging will do next.
@@ -13,7 +13,7 @@
 #import "UXAppKitDriver.xc"
 #import "UXWindow.xc"
 #import "UXGeometry.xc"
-#import "RKModel.xc"
+#import "UXRscModel.xc"
 #import "RKMainController.xc"
 #import "RKMainBuilder.xc"
 
@@ -104,13 +104,13 @@ void main(void)
     win.open((u8*)"insp", UXGeom.make((i16)0, (i16)0, (i16)900, (i16)600), content);
     checkTrue("the window wires", RKMainBuilder.buildInto(content, c, (i16)900, (i16)600));
 
-    RKResource* r = new RKResource();
-    RKTree* t = new RKTree();
-    RKObject* root = RKObject.make((i32)RKT_BOX, (i32)0, (i32)0, (i32)300, (i32)200);
-    RKObject* btn = RKObject.make((i32)RKT_BUTTON, (i32)20, (i32)30, (i32)60, (i32)20);
-    RKObject* fld = RKObject.make((i32)RKT_FIELD, (i32)20, (i32)60, (i32)120, (i32)22);
-    RKObject* chk = RKObject.make((i32)RKT_CHECKBOX, (i32)20, (i32)90, (i32)120, (i32)20);
-    RKObject* rad = RKObject.make((i32)RKT_RADIO, (i32)20, (i32)120, (i32)120, (i32)20);
+    UXRscDoc* r = new UXRscDoc();
+    UXRscTree* t = new UXRscTree();
+    UXRscObject* root = UXRscObject.make((i32)UXR_T_BOX, (i32)0, (i32)0, (i32)300, (i32)200);
+    UXRscObject* btn = UXRscObject.make((i32)UXR_T_BUTTON, (i32)20, (i32)30, (i32)60, (i32)20);
+    UXRscObject* fld = UXRscObject.make((i32)UXR_T_FIELD, (i32)20, (i32)60, (i32)120, (i32)22);
+    UXRscObject* chk = UXRscObject.make((i32)UXR_T_CHECKBOX, (i32)20, (i32)90, (i32)120, (i32)20);
+    UXRscObject* rad = UXRscObject.make((i32)UXR_T_RADIO, (i32)20, (i32)120, (i32)120, (i32)20);
     btn.text = (u8*)"OK";
     root.addChild(btn);
     root.addChild(fld);
@@ -173,18 +173,18 @@ void main(void)
     rd.box.setChecked(true);
     ins.onToggle((UXControl*)rd.box);
     checkTrue("ticking Default sets the flag BIT",
-              (btn.flags & (i32)RKF_DEFAULT) != (i32)0);
+              (btn.flags & (i32)UXR_F_DEFAULT) != (i32)0);
     rd.box.setChecked(false);
     ins.onToggle((UXControl*)rd.box);
-    checkTrue("and unticking clears it", (btn.flags & (i32)RKF_DEFAULT) == (i32)0);
+    checkTrue("and unticking clears it", (btn.flags & (i32)UXR_F_DEFAULT) == (i32)0);
 
     // state and flags are DIFFERENT words — a schema bug that confused them
     // would be invisible until the file round-tripped
     RKRow* rdis = ins.rowNamed((u8*)"Disabled");
     rdis.box.setChecked(true);
     ins.onToggle((UXControl*)rdis.box);
-    checkTrue("Disabled lands in ob_state", (btn.state & (i32)RKS_DISABLED) != (i32)0);
-    checkTrue("and NOT in ob_flags", (btn.flags & (i32)RKS_DISABLED) == (i32)0 || (i32)RKS_DISABLED != (i32)RKF_EDITABLE);
+    checkTrue("Disabled lands in ob_state", (btn.state & (i32)UXR_S_DISABLED) != (i32)0);
+    checkTrue("and NOT in ob_flags", (btn.flags & (i32)UXR_S_DISABLED) == (i32)0 || (i32)UXR_S_DISABLED != (i32)UXR_F_EDITABLE);
 
     // ---- Hidden actually hides ----------------------------------------------
     // The flag was being written to the model and then ignored: the canvas
@@ -196,7 +196,7 @@ void main(void)
     checkTrue("Hidden is offered", rh != (RKRow*)0);
     rh.box.setChecked(true);
     ins.onToggle((UXControl*)rh.box);
-    checkTrue("the flag reaches the model", (btn.flags & (i32)RKF_HIDETREE) != (i32)0);
+    checkTrue("the flag reaches the model", (btn.flags & (i32)UXR_F_HIDETREE) != (i32)0);
     checkTrue("AND the widget is hidden on the canvas", bw.isHidden());
     rh.box.setChecked(false);
     ins.onToggle((UXControl*)rh.box);
@@ -209,7 +209,7 @@ void main(void)
     // (That caching means an externally-changed model does not refresh the
     // canvas; not a problem while every edit goes through the inspector, and
     // worth revisiting when loading a second document lands.)
-    btn.flags = btn.flags | (i32)RKF_HIDETREE;
+    btn.flags = btn.flags | (i32)UXR_F_HIDETREE;
     UXView* fresh = new UXView();
     content.addSubview(fresh, UXGeom.make((i16)0, (i16)0, (i16)300, (i16)200));
     RKCanvas* cv2 = new RKCanvas();
@@ -217,7 +217,7 @@ void main(void)
     checkTrue("a form realized from scratch honours HIDETREE",
               cv2.viewFor(btn).isHidden());
     checkTrue("and its unhidden siblings are not", !cv2.viewFor(fld).isHidden());
-    btn.flags = btn.flags & ~(i32)RKF_HIDETREE;
+    btn.flags = btn.flags & ~(i32)UXR_F_HIDETREE;
 
     // ---- a TOGGLE state reaches the real control ----------------------------
     // "Selected" on a radio wrote the model and stopped there: the code that
@@ -234,7 +234,7 @@ void main(void)
     checkTrue("a radio offers Selected", rsel != (RKRow*)0);
     rsel.box.setChecked(true);
     ins.onToggle((UXControl*)rsel.box);
-    checkTrue("the state bit reaches the model", (rad.state & (i32)RKS_SELECTED) != (i32)0);
+    checkTrue("the state bit reaches the model", (rad.state & (i32)UXR_S_SELECTED) != (i32)0);
     checkTrue("the widget agrees", ((UXRadioButton* ?)rw).isSelected());
     win.displayAll();
     check("and the NATIVE radio is on",
@@ -242,7 +242,7 @@ void main(void)
     rsel.box.setChecked(false);
     ins.onToggle((UXControl*)rsel.box);
     win.displayAll();
-    checkTrue("unticking clears the model", (rad.state & (i32)RKS_SELECTED) == (i32)0);
+    checkTrue("unticking clears the model", (rad.state & (i32)UXR_S_SELECTED) == (i32)0);
     check("and turns the NATIVE radio off",
           d.controlChecked(win.tree.structHandle, (i32)rw.index), (i32)0);
 
@@ -254,19 +254,19 @@ void main(void)
     rchk.box.setChecked(true);
     ins.onToggle((UXControl*)rchk.box);
     win.displayAll();
-    checkTrue("Checked reaches the model", (chk.state & (i32)RKS_CHECKED) != (i32)0);
+    checkTrue("Checked reaches the model", (chk.state & (i32)UXR_S_CHECKED) != (i32)0);
     check("and the NATIVE check box is on",
           d.controlChecked(win.tree.structHandle, (i32)cw.index), (i32)1);
 
     // A form opened from disk must show it too, not only one that was edited.
-    rad.state = rad.state | (i32)RKS_SELECTED;
+    rad.state = rad.state | (i32)UXR_S_SELECTED;
     UXView* fresh2 = new UXView();
     content.addSubview(fresh2, UXGeom.make((i16)0, (i16)220, (i16)300, (i16)200));
     RKCanvas* cv3 = new RKCanvas();
     cv3.realize(t, fresh2);
     checkTrue("a form realized from scratch shows a selected radio",
               ((UXRadioButton* ?)cv3.viewFor(rad)).isSelected());
-    rad.state = rad.state & ~(i32)RKS_SELECTED;
+    rad.state = rad.state & ~(i32)UXR_S_SELECTED;
 
     // TWO radios, both selected in the model.  AppKit auto-groups radio buttons
     // that share a superview and action -- and every control the driver
@@ -274,10 +274,10 @@ void main(void)
     // risks becoming a single radio group regardless of what the resource says.
     // On a design surface that would mean ticking Selected on one radio
     // silently un-ticking an unrelated one somewhere else in the form.
-    RKObject* rad2 = RKObject.make((i32)RKT_RADIO, (i32)20, (i32)150, (i32)120, (i32)20);
+    UXRscObject* rad2 = UXRscObject.make((i32)UXR_T_RADIO, (i32)20, (i32)150, (i32)120, (i32)20);
     root.addChild(rad2);
-    rad.state = rad.state | (i32)RKS_SELECTED;
-    rad2.state = rad2.state | (i32)RKS_SELECTED;
+    rad.state = rad.state | (i32)UXR_S_SELECTED;
+    rad2.state = rad2.state | (i32)UXR_S_SELECTED;
     UXView* two = new UXView();
     content.addSubview(two, UXGeom.make((i16)320, (i16)0, (i16)300, (i16)200));
     RKCanvas* cv4 = new RKCanvas();
@@ -288,16 +288,16 @@ void main(void)
           d.controlChecked(win.tree.structHandle, (i32)cv4.viewFor(rad).index), (i32)1);
     check("and so does the second",
           d.controlChecked(win.tree.structHandle, (i32)cv4.viewFor(rad2).index), (i32)1);
-    rad.state = rad.state & ~(i32)RKS_SELECTED;
-    rad2.state = rad2.state & ~(i32)RKS_SELECTED;
+    rad.state = rad.state & ~(i32)UXR_S_SELECTED;
+    rad2.state = rad2.state & ~(i32)UXR_S_SELECTED;
 
     // ---- text alignment ------------------------------------------------------
     // What makes a column of "Name:" "Size:" "Kind:" line its colons up: right
     // align the text, then align the boxes' right edges with the snap guides.
     // Left-aligned text cannot be lined up however carefully the boxes are
     // placed, because the colon lands wherever the word before it ends.
-    RKObject* txt = RKObject.make((i32)RKT_TEXT, (i32)20, (i32)150, (i32)120, (i32)20);
-    txt.ted = new RKTedinfo();
+    UXRscObject* txt = UXRscObject.make((i32)UXR_T_TEXT, (i32)20, (i32)150, (i32)120, (i32)20);
+    txt.ted = new UXRscTedinfo();
     txt.ted.text = (u8*)"Name:";
     root.addChild(txt);
     UXView* tpane = new UXView();
@@ -327,19 +327,19 @@ void main(void)
     // alignment is wanted most -- and it has no TEDINFO to put it in.  Choosing
     // a non-left alignment promotes it to G_TEXT, which is the format's own
     // answer and round-trips through a plain .rsc.
-    RKObject* str = RKObject.make((i32)RKT_STRING, (i32)20, (i32)180, (i32)90, (i32)20);
+    UXRscObject* str = UXRscObject.make((i32)UXR_T_STRING, (i32)20, (i32)180, (i32)90, (i32)20);
     str.text = (u8*)"Name:";
     root.addChild(str);
     c.selectObject(str);
     RKRow* rs = ins.rowNamed((u8*)"Alignment");
     checkTrue("a string IS offered Alignment", rs != (RKRow*)0);
     check("and it starts left", rs.pop.selectedIndex(), (i32)0);
-    checkTrue("while it is still a plain string", str.ted == (RKTedinfo*)0);
+    checkTrue("while it is still a plain string", str.ted == (UXRscTedinfo*)0);
     rs.pop.selectItem((i32)1); // Right
     ins.onEnum((UXControl*)rs.pop);
-    check("aligning it promotes it to G_TEXT", str.type, (i32)RKT_TEXT);
+    check("aligning it promotes it to G_TEXT", str.type, (i32)UXR_T_TEXT);
     checkTrue("which gives it the TEDINFO the format keeps te_just in",
-              str.ted != (RKTedinfo*)0);
+              str.ted != (UXRscTedinfo*)0);
     check("carrying the alignment", str.ted.just, (i32)1);
     eq("and keeping its text", str.ted.text, (u8*)"Name:");
     eq("the pane re-rendered for the new type", ins.typeLabel.text(), (u8*)"text");
@@ -394,7 +394,7 @@ void main(void)
     check("show() does not write back through its own hooks", btn.x, (i32)7);
 
     // ---- nothing selected ---------------------------------------------------
-    ins.show((RKObject*)0);
+    ins.show((UXRscObject*)0);
     eq("clearing blanks the type", ins.typeLabel.text(), (u8*)"—");
     check("and removes every row", ins.rowCount(), (i32)0);
 

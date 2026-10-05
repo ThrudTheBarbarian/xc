@@ -1,6 +1,6 @@
-// RKRscWrite.xc — the classic GEM .rsc writer, in XC.
+// UXRscWrite.xc — UXRscWriter, the classic GEM .rsc writer, in XC.
 //
-// The other half of RKRsc.  Emits a big-endian file with packed coordinates,
+// The other half of UXRscReader.  Emits a big-endian file with packed coordinates,
 // so the tools that wrote the resources we read (Interface, ORCS, WERCS, RCS)
 // can read ours back.
 //
@@ -11,7 +11,7 @@
 //
 // TREE-RELATIVE LINKS, again.  Each tree's objects are written contiguously
 // starting with its root, and ob_next/ob_head/ob_tail are indices within that
-// run — which is exactly what RKResource.flatten already produces, since it
+// run — which is exactly what UXRscDoc.flatten already produces, since it
 // numbers from each tree's own root.  The tree index then points at the root's
 // absolute byte offset.  Getting this wrong is invisible in a one-tree file
 // and corrupts every later tree, which is the bug the reader hit from the
@@ -22,13 +22,13 @@
 // through warning() rather than dropped quietly.
 #import "Array.xc"
 #import "UXData.xc"
-#import "RKModel.xc"
+#import "UXRscModel.xc"
 
-#define RKW_SZ_HDR 36
-#define RKW_SZ_OBJ 24
-#define RKW_SZ_TED 28
+#define UXRW_SZ_HDR 36
+#define UXRW_SZ_OBJ 24
+#define UXRW_SZ_TED 28
 
-class RKRscWrite : Object
+class UXRscWriter : Object
     {
     u8* out;
     i32 total;
@@ -37,9 +37,9 @@ class RKRscWrite : Object
 
     // the string pool: interned once, each with the offset it will live at
     Array<UXData>* strs;
-    Array<RKObject>* allObjs;    // every object, in file order
-    Array<RKFlatNode>* allLinks; // its links, tree-relative
-    Array<RKTedinfo>* teds;
+    Array<UXRscObject>* allObjs;    // every object, in file order
+    Array<UXRscFlatNode>* allLinks; // its links, tree-relative
+    Array<UXRscTedinfo>* teds;
 
     void init(void)
         {
@@ -141,7 +141,7 @@ class RKRscWrite : Object
         // fail to match itself.  The template ("____...") did, every time: each TEDINFO interned a
         // new copy beyond the laid-out table, offOf found no offset for it, and te_ptmplt was
         // written as 0 -- every editable field lost its template on the next read.
-        i32 n = RKRscWrite.slen(s);
+        i32 n = UXRscWriter.slen(s);
         for (i32 i = (i32)0; i < (i32)strs.count(); i = i + (i32)1)
             {
             UXData* d = (UXData* ?)strs.get((u16)i);
@@ -165,22 +165,22 @@ class RKRscWrite : Object
         }
 
     // ---- the write ---------------------------------------------------------
-    static UXData* write(RKResource* r)
+    static UXData* write(UXRscDoc* r)
         {
-        RKRscWrite* w = new RKRscWrite();
+        UXRscWriter* w = new UXRscWriter();
         return w.emit(r);
         }
-    static RKRscWrite* writer(RKResource* r)
+    static UXRscWriter* writer(UXRscDoc* r)
         {
-        RKRscWrite* w = new RKRscWrite();
+        UXRscWriter* w = new UXRscWriter();
         w.result = w.emit(r);
         return w;
         }
     UXData* result;
 
-    UXData* emit(RKResource* r)
+    UXData* emit(UXRscDoc* r)
         {
-        if (r == (RKResource*)0)
+        if (r == (UXRscDoc*)0)
             {
             return (UXData*)0;
             }
@@ -190,19 +190,19 @@ class RKRscWrite : Object
         // ---- pass 1: flatten every tree, in file order --------------------
         // Each tree contributes a contiguous run starting at its root, so the
         // run's own indices ARE the tree-relative links the format wants.
-        Array<RKTree>* treeList = r.trees;
+        Array<UXRscTree>* treeList = r.trees;
         i32 nobs = (i32)0;
-        Array<RKFlatNode>* rootAt = new Array(); // one entry per tree: its first object index
+        Array<UXRscFlatNode>* rootAt = new Array(); // one entry per tree: its first object index
         for (i32 t = (i32)0; t < r.treeCount(); t = t + (i32)1)
             {
-            RKTree* tr = r.treeAt(t);
-            Array<RKFlatNode>* fl = r.flatten(tr);
-            RKFlatNode* mark = new RKFlatNode();
+            UXRscTree* tr = r.treeAt(t);
+            Array<UXRscFlatNode>* fl = r.flatten(tr);
+            UXRscFlatNode* mark = new UXRscFlatNode();
             mark.next = nobs; // where this tree starts
             rootAt.add(mark);
             for (i32 i = (i32)0; i < (i32)fl.count(); i = i + (i32)1)
                 {
-                RKFlatNode* n = (RKFlatNode* ?)fl.get((u16)i);
+                UXRscFlatNode* n = (UXRscFlatNode* ?)fl.get((u16)i);
                 allObjs.add(n.obj);
                 allLinks.add(n);
                 nobs = nobs + (i32)1;
@@ -218,12 +218,12 @@ class RKRscWrite : Object
             }
         for (i32 i = (i32)0; i < nobs; i = i + (i32)1)
             {
-            RKObject* o = (RKObject* ?)allObjs.get((u16)i);
+            UXRscObject* o = (UXRscObject* ?)allObjs.get((u16)i);
             if (o.hasStringSpec())
                 {
                 self.intern(o.text);
                 }
-            else if (o.hasTedinfo() && o.ted != (RKTedinfo*)0)
+            else if (o.hasTedinfo() && o.ted != (UXRscTedinfo*)0)
                 {
                 self.intern(o.ted.text);
                 self.intern(o.ted.tmplt);
@@ -240,9 +240,9 @@ class RKRscWrite : Object
         i32 nted = (i32)teds.count();
         i32 nstring = (i32)r.freeStrings.count();
         i32 ntree = r.treeCount();
-        i32 objBase = (i32)RKW_SZ_HDR;
-        i32 tedBase = objBase + nobs * (i32)RKW_SZ_OBJ;
-        i32 ibBase = tedBase + nted * (i32)RKW_SZ_TED;
+        i32 objBase = (i32)UXRW_SZ_HDR;
+        i32 tedBase = objBase + nobs * (i32)UXRW_SZ_OBJ;
+        i32 ibBase = tedBase + nted * (i32)UXRW_SZ_TED;
         i32 bbBase = ibBase; // no iconblks in this slice
         i32 frstr = bbBase;  // no bitblks either
         i32 frimg = frstr + nstring * (i32)4;
@@ -284,12 +284,12 @@ class RKRscWrite : Object
         self.wr16((i32)34, total);  // rsh_rssize
 
         // ---- string data, and the offset each one landed at ----------------
-        Array<RKFlatNode>* strOff = new Array();
+        Array<UXRscFlatNode>* strOff = new Array();
         i32 cur = strBase;
         for (i32 i = (i32)0; i < (i32)strs.count(); i = i + (i32)1)
             {
             UXData* d = (UXData* ?)strs.get((u16)i);
-            RKFlatNode* mark = new RKFlatNode();
+            UXRscFlatNode* mark = new UXRscFlatNode();
             mark.next = cur;
             strOff.add(mark);
             for (i32 k = (i32)0; k < d.length(); k = k + (i32)1)
@@ -303,9 +303,9 @@ class RKRscWrite : Object
         // ---- objects -------------------------------------------------------
         for (i32 i = (i32)0; i < nobs; i = i + (i32)1)
             {
-            RKObject* o = (RKObject* ?)allObjs.get((u16)i);
-            RKFlatNode* fl = (RKFlatNode* ?)allLinks.get((u16)i);
-            i32 d = objBase + i * (i32)RKW_SZ_OBJ;
+            UXRscObject* o = (UXRscObject* ?)allObjs.get((u16)i);
+            UXRscFlatNode* fl = (UXRscFlatNode* ?)allLinks.get((u16)i);
+            i32 d = objBase + i * (i32)UXRW_SZ_OBJ;
             self.wr16(d + (i32)0, fl.next & (i32)$FFFF);
             self.wr16(d + (i32)2, fl.head & (i32)$FFFF);
             self.wr16(d + (i32)4, fl.tail & (i32)$FFFF);
@@ -324,8 +324,8 @@ class RKRscWrite : Object
         // ---- tedinfo -------------------------------------------------------
         for (i32 i = (i32)0; i < nted; i = i + (i32)1)
             {
-            RKTedinfo* ti = (RKTedinfo* ?)teds.get((u16)i);
-            i32 d = tedBase + i * (i32)RKW_SZ_TED;
+            UXRscTedinfo* ti = (UXRscTedinfo* ?)teds.get((u16)i);
+            i32 d = tedBase + i * (i32)UXRW_SZ_TED;
             self.wr32(d + (i32)0, self.offOf(strOff, self.intern(ti.text)));
             self.wr32(d + (i32)4, self.offOf(strOff, self.intern(ti.tmplt)));
             self.wr32(d + (i32)8, self.offOf(strOff, self.intern(ti.valid)));
@@ -335,8 +335,8 @@ class RKRscWrite : Object
             self.wr16(d + (i32)18, (i32)ti.color.pack());
             self.wr16(d + (i32)20, ti.fontsize);
             self.wr16(d + (i32)22, ti.thickness);
-            self.wr16(d + (i32)24, RKRscWrite.slen(ti.text) + (i32)1);
-            self.wr16(d + (i32)26, RKRscWrite.slen(ti.tmplt) + (i32)1);
+            self.wr16(d + (i32)24, UXRscWriter.slen(ti.text) + (i32)1);
+            self.wr16(d + (i32)26, UXRscWriter.slen(ti.tmplt) + (i32)1);
             }
 
         // ---- free string table ---------------------------------------------
@@ -349,8 +349,8 @@ class RKRscWrite : Object
         // ---- tree index: each root's absolute byte offset -------------------
         for (i32 t = (i32)0; t < ntree; t = t + (i32)1)
             {
-            i32 first = ((RKFlatNode* ?)rootAt.get((u16)t)).next;
-            self.wr32(trindex + t * (i32)4, objBase + first * (i32)RKW_SZ_OBJ);
+            i32 first = ((UXRscFlatNode* ?)rootAt.get((u16)t)).next;
+            self.wr32(trindex + t * (i32)4, objBase + first * (i32)UXRW_SZ_OBJ);
             }
 
         if (unhandled > (i32)0)
@@ -371,7 +371,7 @@ class RKRscWrite : Object
     // just another tree.  Forms first -- each multi-variant form, then every tree in no form as a
     // single-variant `any` form under its own index (in a v2 file only the form list finds a tree)
     // -- then one map per variant tree, object index (pre-order, as the tree is written) to logical
-    // id.  No connections, class overrides or presentations yet: Rocks does not author them.
+    // id.  No connections, class overrides or presentations yet: nothing authors them.
     static void be16(UXData* d, i32 v)
         {
         d.appendByte((u8)((v >> (i32)8) & (i32)$FF));
@@ -379,31 +379,31 @@ class RKRscWrite : Object
         }
     static void be32(UXData* d, i32 v)
         {
-        RKRscWrite.be16(d, (v >> (i32)16) & (i32)$FFFF);
-        RKRscWrite.be16(d, v & (i32)$FFFF);
+        UXRscWriter.be16(d, (v >> (i32)16) & (i32)$FFFF);
+        UXRscWriter.be16(d, v & (i32)$FFFF);
         }
-    UXData* nibChunk(RKResource* r)
+    UXData* nibChunk(UXRscDoc* r)
         {
         // the string blob: offset 0 is "", then each form's name
         UXData* blob = UXData.withCapacity((i32)64);
         blob.appendByte((u8)0);
-        Array<RKFlatNode>* nameAt = new Array(); // per form, its name's blob offset
+        Array<UXRscFlatNode>* nameAt = new Array(); // per form, its name's blob offset
         for (i32 f = (i32)0; f < r.formCount(); f = f + (i32)1)
             {
-            RKFlatNode* m = new RKFlatNode();
+            UXRscFlatNode* m = new UXRscFlatNode();
             m.next = blob.length();
             nameAt.add(m);
             u8* nm = r.formAt(f).name;
             if (nm != (u8*)0)
                 {
-                blob.appendBytes(nm, RKRscWrite.slen(nm));
+                blob.appendBytes(nm, UXRscWriter.slen(nm));
                 }
             blob.appendByte((u8)0);
             }
         i32 nLoose = (i32)0;
         for (i32 t = (i32)0; t < r.treeCount(); t = t + (i32)1)
             {
-            if (r.formOf(r.treeAt(t)) == (RKForm*)0)
+            if (r.formOf(r.treeAt(t)) == (UXRscForm*)0)
                 {
                 nLoose = nLoose + (i32)1;
                 }
@@ -413,15 +413,15 @@ class RKRscWrite : Object
         UXData* maps = UXData.withCapacity((i32)64);
         for (i32 f = (i32)0; f < r.formCount(); f = f + (i32)1)
             {
-            RKForm* fm = r.formAt(f);
+            UXRscForm* fm = r.formAt(f);
             for (i32 v = (i32)0; v < fm.variantCount(); v = v + (i32)1)
                 {
-                RKTree* tr = fm.variantAt(v).tree;
-                Array<RKObject>* all = tr.allObjects();
+                UXRscTree* tr = fm.variantAt(v).tree;
+                Array<UXRscObject>* all = tr.allObjects();
                 i32 ne = (i32)0;
                 for (u32 k = (u32)0; k < all.count(); k = k + (u32)1)
                     {
-                    if (((RKObject* ?)all.get(k)).logicalId != (i32)0)
+                    if (((UXRscObject* ?)all.get(k)).logicalId != (i32)0)
                         {
                         ne = ne + (i32)1;
                         }
@@ -430,15 +430,15 @@ class RKRscWrite : Object
                     {
                     continue;
                     }
-                RKRscWrite.be16(maps, r.indexOfTree(tr));
-                RKRscWrite.be16(maps, ne);
+                UXRscWriter.be16(maps, r.indexOfTree(tr));
+                UXRscWriter.be16(maps, ne);
                 for (u32 k = (u32)0; k < all.count(); k = k + (u32)1)
                     {
-                    i32 id = ((RKObject* ?)all.get(k)).logicalId;
+                    i32 id = ((UXRscObject* ?)all.get(k)).logicalId;
                     if (id != (i32)0)
                         {
-                        RKRscWrite.be16(maps, (i32)k);
-                        RKRscWrite.be16(maps, id);
+                        UXRscWriter.be16(maps, (i32)k);
+                        UXRscWriter.be16(maps, id);
                         }
                     }
                 nMaps = nMaps + (i32)1;
@@ -446,40 +446,40 @@ class RKRscWrite : Object
             }
 
         UXData* c = UXData.withCapacity((i32)256);
-        RKRscWrite.be32(c, (i32)$55584E42); // 'UXNB'
-        RKRscWrite.be16(c, (i32)2);         // version
-        RKRscWrite.be16(c, (i32)0);         // flags
-        RKRscWrite.be32(c, (i32)0);         // size, patched below
-        RKRscWrite.be16(c, (i32)0);         // nClasses
-        RKRscWrite.be16(c, (i32)0);         // nObjects
-        RKRscWrite.be16(c, (i32)0);         // nConns
-        RKRscWrite.be16(c, r.formCount() + nLoose);
-        RKRscWrite.be16(c, nMaps);
-        RKRscWrite.be16(c, (i32)0); // nPres
+        UXRscWriter.be32(c, (i32)$55584E42); // 'UXNB'
+        UXRscWriter.be16(c, (i32)2);         // version
+        UXRscWriter.be16(c, (i32)0);         // flags
+        UXRscWriter.be32(c, (i32)0);         // size, patched below
+        UXRscWriter.be16(c, (i32)0);         // nClasses
+        UXRscWriter.be16(c, (i32)0);         // nObjects
+        UXRscWriter.be16(c, (i32)0);         // nConns
+        UXRscWriter.be16(c, r.formCount() + nLoose);
+        UXRscWriter.be16(c, nMaps);
+        UXRscWriter.be16(c, (i32)0); // nPres
         for (i32 f = (i32)0; f < r.formCount(); f = f + (i32)1)
             {
-            RKForm* fm = r.formAt(f);
-            RKRscWrite.be16(c, fm.formId);
-            RKRscWrite.be32(c, ((RKFlatNode* ?)nameAt.get((u32)f)).next);
-            RKRscWrite.be16(c, fm.variantCount());
-            RKRscWrite.be16(c, (i32)0);
+            UXRscForm* fm = r.formAt(f);
+            UXRscWriter.be16(c, fm.formId);
+            UXRscWriter.be32(c, ((UXRscFlatNode* ?)nameAt.get((u32)f)).next);
+            UXRscWriter.be16(c, fm.variantCount());
+            UXRscWriter.be16(c, (i32)0);
             for (i32 v = (i32)0; v < fm.variantCount(); v = v + (i32)1)
                 {
-                RKVariant* va = fm.variantAt(v);
-                RKRscWrite.be16(c, (va.klass & (i32)$3FFF) | ((va.orient & (i32)3) << (i32)14));
-                RKRscWrite.be16(c, r.indexOfTree(va.tree));
+                UXRscVariant* va = fm.variantAt(v);
+                UXRscWriter.be16(c, (va.klass & (i32)$3FFF) | ((va.orient & (i32)3) << (i32)14));
+                UXRscWriter.be16(c, r.indexOfTree(va.tree));
                 }
             }
         for (i32 t = (i32)0; t < r.treeCount(); t = t + (i32)1)
             {
-            if (r.formOf(r.treeAt(t)) == (RKForm*)0)
+            if (r.formOf(r.treeAt(t)) == (UXRscForm*)0)
                 {
-                RKRscWrite.be16(c, t);
-                RKRscWrite.be32(c, (i32)0); // unnamed
-                RKRscWrite.be16(c, (i32)1);
-                RKRscWrite.be16(c, (i32)0);
-                RKRscWrite.be16(c, (i32)RKV_ANY);
-                RKRscWrite.be16(c, t);
+                UXRscWriter.be16(c, t);
+                UXRscWriter.be32(c, (i32)0); // unnamed
+                UXRscWriter.be16(c, (i32)1);
+                UXRscWriter.be16(c, (i32)0);
+                UXRscWriter.be16(c, (i32)UXR_V_ANY);
+                UXRscWriter.be16(c, t);
                 }
             }
         c.appendData(maps);
@@ -493,22 +493,22 @@ class RKRscWrite : Object
         return c;
         }
 
-    i32 offOf(Array<RKFlatNode>* strOff, i32 idx)
+    i32 offOf(Array<UXRscFlatNode>* strOff, i32 idx)
         {
         if (idx < (i32)0 || idx >= (i32)strOff.count())
             {
             return (i32)0;
             }
-        return ((RKFlatNode* ?)strOff.get((u16)idx)).next;
+        return ((UXRscFlatNode* ?)strOff.get((u16)idx)).next;
         }
 
     // ob_spec, per type — the mirror of the reader's readSpec.
-    i32 specFor(RKObject* o, Array<RKFlatNode>* strOff, i32 tedBase)
+    i32 specFor(UXRscObject* o, Array<UXRscFlatNode>* strOff, i32 tedBase)
         {
         if (o.hasBox())
             {
-            RKBox* b = o.box;
-            if (b == (RKBox*)0)
+            UXRscBox* b = o.box;
+            if (b == (UXRscBox*)0)
                 {
                 return (i32)0;
                 }
@@ -528,9 +528,9 @@ class RKRscWrite : Object
             {
             for (i32 i = (i32)0; i < (i32)teds.count(); i = i + (i32)1)
                 {
-                if ((RKTedinfo* ?)teds.get((u16)i) == o.ted)
+                if ((UXRscTedinfo* ?)teds.get((u16)i) == o.ted)
                     {
-                    return tedBase + i * (i32)RKW_SZ_TED;
+                    return tedBase + i * (i32)UXRW_SZ_TED;
                     }
                 }
             }

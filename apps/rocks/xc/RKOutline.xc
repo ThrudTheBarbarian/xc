@@ -6,7 +6,7 @@
 // level, each object's nesting beneath, which is also the tree the designer
 // re-parents things in.
 //
-// The rows are a MATERIALIZED model rather than the RKObject graph itself.
+// The rows are a MATERIALIZED model rather than the UXRscObject graph itself.
 // UXOutlineDataSource hands items back as `Object*`, and answering
 // "is this a tree or an object?" on the way back in would need runtime type
 // information that would have to be faked with a tag field anyway.  One node
@@ -15,19 +15,19 @@
 // resource one.
 #import "Array.xc"
 #import "UXOutlineView.xc"
-#import "RKModel.xc"
+#import "UXRscModel.xc"
 #import "RKCanvas.xc"
 
 class RKOutlineNode : Object
     {
     u8* label;
-    RKObject* obj; // the object this row stands for, or 0 for a tree row
+    UXRscObject* obj; // the object this row stands for, or 0 for a tree row
     i32 treeIndex; // which tree; -1 when the row is inside one
     Array<RKOutlineNode>* kids;
     void init(void)
         {
         label = (u8*)"";
-        obj = (RKObject*)0;
+        obj = (UXRscObject*)0;
         treeIndex = (i32)-1;
         kids = new Array();
         }
@@ -45,20 +45,20 @@ class RKOutlineNode : Object
     // Build the whole outline from a resource.  Cheap enough to redo on any
     // structural edit, which keeps it honest: there is no incremental update
     // path to fall out of step with the model.
-    void build(RKResource* r)
+    void build(UXRscDoc* r)
         {
         roots = new Array();
-        if (r == (RKResource*)0)
+        if (r == (UXRscDoc*)0)
             {
             return;
             }
         for (i32 t = (i32)0; t < r.treeCount(); t = t + (i32)1)
             {
-            RKTree* tr = r.treeAt(t);
+            UXRscTree* tr = r.treeAt(t);
             RKOutlineNode* n = new RKOutlineNode();
             n.treeIndex = t;
             n.label = RKOutline.treeLabel(tr, t);
-            if (tr.root != (RKObject*)0)
+            if (tr.root != (UXRscObject*)0)
                 {
                 // The root box IS the form, so its children hang directly off
                 // the tree row rather than under a redundant "box" row — the
@@ -72,7 +72,7 @@ class RKOutlineNode : Object
             }
         }
 
-    static RKOutlineNode* nodeFor(RKObject* o)
+    static RKOutlineNode* nodeFor(UXRscObject* o)
         {
         RKOutlineNode* n = new RKOutlineNode();
         n.obj = o;
@@ -87,7 +87,7 @@ class RKOutlineNode : Object
     // "dialog 0" / "menu 1" — a tree's name is usually empty in a real file
     // (the names live in the app's header, not the resource), so the kind and
     // index are what actually identify it.
-    static u8* treeLabel(RKTree* t, i32 i)
+    static u8* treeLabel(UXRscTree* t, i32 i)
         {
         u8* kind = t.isMenu() ? (u8*)"menu" : (u8*)"dialog";
         u8* buf = new u8[(u32)32];
@@ -112,7 +112,7 @@ class RKOutlineNode : Object
 
     // The object's text if it has any, else its type — so a row reads
     // "OK" rather than "button", but an untitled box still says what it is.
-    static u8* objectLabel(RKObject* o)
+    static u8* objectLabel(UXRscObject* o)
         {
         u8* t = RKCanvas.textOf(o);
         if (t != (u8*)0 && t[0] != (u8)0)

@@ -29,7 +29,7 @@
 #import "UXEvent.xc"
 #import "UXViewDriver.xc"
 #import "UXApplication.xc"
-#import "RKModel.xc"
+#import "UXRscModel.xc"
 #import "RKGuides.xc"
 
 #define RK_MODE_NONE 0
@@ -44,7 +44,7 @@ class RKDrag : Object
     //
     // These were `weak:` on the reasoning that the document owns the model and
     // outlives any drag -- true, but weak buys nothing here and cost a crash:
-    // there is no cycle to break, because an RKObject never references the
+    // there is no cycle to break, because an UXRscObject never references the
     // editor.  Weak is for breaking ownership loops, and reaching for it where
     // no loop exists is all risk and no benefit.
     //
@@ -57,9 +57,9 @@ class RKDrag : Object
     // (probe_weak2/3/4).  Filed as a compiler bug; see
     // private:docs/bugs/036-weak-field-write-frees-assignee.md.  The gate that pins it
     // is rocks-lifetime.
-    RKObject* root;
-    RKObject* target;
-    RKObject* parentObj;
+    UXRscObject* root;
+    UXRscObject* target;
+    UXRscObject* parentObj;
 
     i32 mode;
     i32 parentAX, parentAY; // the parent's origin, in canvas coordinates
@@ -76,9 +76,9 @@ class RKDrag : Object
 
     void init(void)
         {
-        root = (RKObject*)0;
-        target = (RKObject*)0;
-        parentObj = (RKObject*)0;
+        root = (UXRscObject*)0;
+        target = (UXRscObject*)0;
+        parentObj = (UXRscObject*)0;
         mode = (i32)RK_MODE_NONE;
         parentAX = (i32)0;
         parentAY = (i32)0;
@@ -96,37 +96,37 @@ class RKDrag : Object
     // ---- pure geometry over the model --------------------------------------
 
     // The object whose children include `o`, or 0 if `o` is the root or absent.
-    // A linear search rather than a parent pointer in RKObject: the model is
+    // A linear search rather than a parent pointer in UXRscObject: the model is
     // also what gets WRITTEN back to a .rsc, and a back-pointer is one more
     // thing the reader, the writer and every edit must keep consistent.  Forms
     // are tens of objects, so the search costs nothing a drag can feel.
-    static RKObject* parentOf(RKObject* root, RKObject* o)
+    static UXRscObject* parentOf(UXRscObject* root, UXRscObject* o)
         {
-        if (root == (RKObject*)0 || o == (RKObject*)0)
+        if (root == (UXRscObject*)0 || o == (UXRscObject*)0)
             {
-            return (RKObject*)0;
+            return (UXRscObject*)0;
             }
         for (i32 i = (i32)0; i < root.childCount(); i = i + (i32)1)
             {
-            RKObject* c = root.childAt(i);
+            UXRscObject* c = root.childAt(i);
             if (c == o)
                 {
                 return root;
                 }
-            RKObject* deep = RKDrag.parentOf(c, o);
-            if (deep != (RKObject*)0)
+            UXRscObject* deep = RKDrag.parentOf(c, o);
+            if (deep != (UXRscObject*)0)
                 {
                 return deep;
                 }
             }
-        return (RKObject*)0;
+        return (UXRscObject*)0;
         }
 
     // `o`'s origin in CANVAS coordinates: every ancestor's x/y summed, and the
     // ROOT's own x/y deliberately excluded — RKCanvas realizes the root's
     // children straight into the pane, so the root is the canvas, not a box
     // inside it.  Returns false if `o` is not in this tree at all.
-    static bool absOrigin(RKObject* root, RKObject* o, i32* ax, i32* ay)
+    static bool absOrigin(UXRscObject* root, UXRscObject* o, i32* ax, i32* ay)
         {
         ax[0] = (i32)0;
         ay[0] = (i32)0;
@@ -134,8 +134,8 @@ class RKDrag : Object
             {
             return true;
             }
-        RKObject* p = RKDrag.parentOf(root, o);
-        if (p == (RKObject*)0)
+        UXRscObject* p = RKDrag.parentOf(root, o);
+        if (p == (UXRscObject*)0)
             {
             return false;
             }
@@ -154,23 +154,23 @@ class RKDrag : Object
     // inside a group box picks the control and not the box.  The root is never
     // returned — clicking bare form background means "nothing", which is what
     // makes clicking away a deselect rather than a selection of the form.
-    static RKObject* hitTest(RKObject* root, i32 px, i32 py)
+    static UXRscObject* hitTest(UXRscObject* root, i32 px, i32 py)
         {
-        if (root == (RKObject*)0)
+        if (root == (UXRscObject*)0)
             {
-            return (RKObject*)0;
+            return (UXRscObject*)0;
             }
         return RKDrag.deepestAt(root, (i32)0, (i32)0, px, py);
         }
-    static RKObject* deepestAt(RKObject* o, i32 ox, i32 oy, i32 px, i32 py)
+    static UXRscObject* deepestAt(UXRscObject* o, i32 ox, i32 oy, i32 px, i32 py)
         {
-        RKObject* best = (RKObject*)0;
+        UXRscObject* best = (UXRscObject*)0;
         for (i32 i = (i32)0; i < o.childCount(); i = i + (i32)1)
             {
-            RKObject* c = o.childAt(i);
+            UXRscObject* c = o.childAt(i);
             // A hidden subtree is not on screen, so it cannot be clicked —
             // otherwise an invisible object would silently steal the press.
-            if ((c.flags & (i32)RKF_HIDETREE) != (i32)0)
+            if ((c.flags & (i32)UXR_F_HIDETREE) != (i32)0)
                 {
                 continue;
                 }
@@ -180,8 +180,8 @@ class RKDrag : Object
                 {
                 best = c;
                 }
-            RKObject* deeper = RKDrag.deepestAt(c, cx, cy, px, py);
-            if (deeper != (RKObject*)0)
+            UXRscObject* deeper = RKDrag.deepestAt(c, cx, cy, px, py);
+            if (deeper != (UXRscObject*)0)
                 {
                 best = deeper;
                 }
@@ -223,7 +223,7 @@ class RKDrag : Object
         }
 
     // The object's rect in canvas coordinates.
-    UXRect canvasRect(RKObject* o)
+    UXRect canvasRect(UXRscObject* o)
         {
         i32 ax = (i32)0;
         i32 ay = (i32)0;
@@ -243,20 +243,20 @@ class RKDrag : Object
     //
     // Returns the object now being dragged, or 0 for a press on bare
     // background — which the caller should treat as a deselect.
-    RKObject* begin(RKObject* r, RKObject* sel, i32 px, i32 py)
+    UXRscObject* begin(UXRscObject* r, UXRscObject* sel, i32 px, i32 py)
         {
         root = r;
         guides.removeAll();
         mode = (i32)RK_MODE_NONE;
-        target = (RKObject*)0;
-        if (r == (RKObject*)0)
+        target = (UXRscObject*)0;
+        if (r == (UXRscObject*)0)
             {
-            return (RKObject*)0;
+            return (UXRscObject*)0;
             }
 
         i32 wantMode = (i32)RK_MODE_MOVE;
-        RKObject* o = (RKObject*)0;
-        if (sel != (RKObject*)0 && RKDrag.handleAt(self.canvasRect(sel), px, py) >= (i32)0)
+        UXRscObject* o = (UXRscObject*)0;
+        if (sel != (UXRscObject*)0 && RKDrag.handleAt(self.canvasRect(sel), px, py) >= (i32)0)
             {
             o = sel;
             wantMode = (i32)RK_MODE_SIZE;
@@ -265,21 +265,21 @@ class RKDrag : Object
             {
             o = RKDrag.hitTest(r, px, py);
             }
-        if (o == (RKObject*)0)
+        if (o == (UXRscObject*)0)
             {
-            return (RKObject*)0;
+            return (UXRscObject*)0;
             }
 
         parentObj = RKDrag.parentOf(r, o);
-        if (parentObj == (RKObject*)0)
+        if (parentObj == (UXRscObject*)0)
             {
-            return (RKObject*)0;
+            return (UXRscObject*)0;
             }
         i32 ax = (i32)0;
         i32 ay = (i32)0;
         if (!RKDrag.absOrigin(r, parentObj, &ax, &ay))
             {
-            return (RKObject*)0;
+            return (UXRscObject*)0;
             }
 
         target = o;
@@ -306,7 +306,7 @@ class RKDrag : Object
     // away from the pointer for as long as the drag lasts.
     void step(i32 px, i32 py)
         {
-        if (mode == (i32)RK_MODE_NONE || target == (RKObject*)0)
+        if (mode == (i32)RK_MODE_NONE || target == (UXRscObject*)0)
             {
             return;
             }
@@ -316,7 +316,7 @@ class RKDrag : Object
         Array<RKRectBox>* sibs = new Array();
         for (i32 i = (i32)0; i < parentObj.childCount(); i = i + (i32)1)
             {
-            RKObject* c = parentObj.childAt(i);
+            UXRscObject* c = parentObj.childAt(i);
             // never align a thing to itself
             if (c == target)
                 {
@@ -378,7 +378,7 @@ class RKDrag : Object
         }
     bool didMove(void)
         {
-        if (target == (RKObject*)0)
+        if (target == (UXRscObject*)0)
             {
             return false;
             }
@@ -390,7 +390,7 @@ class RKDrag : Object
     // one-pixel edits nobody asked for.
     void cancel(void)
         {
-        if (target != (RKObject*)0)
+        if (target != (UXRscObject*)0)
             {
             target.x = startX;
             target.y = startY;
@@ -413,23 +413,23 @@ class RKDrag : Object
     // Set by the controller before each press; the overlay itself has no
     // opinion about what is selected.  STRONG -- see the note on RKDrag.root:
     // this exact field, declared weak, was what freed the model.
-    RKObject* selection;
+    UXRscObject* selection;
 
     // What the editor is told.  Callbacks rather than a controller pointer, so
     // the overlay can be driven by a test with no controller at all.
-    callback picked void(RKObject* o);  // press landed on this (0 = background)
-    callback changed void(RKObject* o); // the model's rect moved this step
-    callback ended void(RKObject* o);   // the drag finished
+    callback picked void(UXRscObject* o);  // press landed on this (0 = background)
+    callback changed void(UXRscObject* o); // the model's rect moved this step
+    callback ended void(UXRscObject* o);   // the drag finished
 
     void init(void)
         {
         super.init();
         drag = new RKDrag();
-        selection = (RKObject*)0;
-        tracking = (RKObject*)0;
-        picked = (callback void(RKObject * o))0;
-        changed = (callback void(RKObject * o))0;
-        ended = (callback void(RKObject * o))0;
+        selection = (UXRscObject*)0;
+        tracking = (UXRscObject*)0;
+        picked = (callback void(UXRscObject * o))0;
+        changed = (callback void(UXRscObject * o))0;
+        ended = (callback void(UXRscObject * o))0;
         }
 
     // Only the guides.  Anything else drawn here would sit on top of the whole
@@ -463,18 +463,18 @@ class RKDrag : Object
     // platform owns the loop and the drag arrives as events instead (dragTrackingIsModal() is
     // false): the press only begins the drag here, and mouseDragged / mouseUp carry it on.  The
     // drag itself -- step, end, the callbacks -- is the same code either way.
-    RKObject* tracking; // the object a touch drag is moving, between its events
+    UXRscObject* tracking; // the object a touch drag is moving, between its events
     void mouseDown(UXEvent* e)
         {
         i32 cx = (i32)0;
         i32 cy = (i32)0;
         self.toCanvas((i32)e.x, (i32)e.y, &cx, &cy);
-        RKObject* o = drag.begin(drag.root, self.currentSelection(), cx, cy);
+        UXRscObject* o = drag.begin(drag.root, self.currentSelection(), cx, cy);
         if (picked)
             {
             picked(o);
             }
-        if (o == (RKObject*)0)
+        if (o == (UXRscObject*)0)
             {
             return;
             }
@@ -493,22 +493,22 @@ class RKDrag : Object
         }
     void mouseDragged(UXEvent* e)
         {
-        if (tracking != (RKObject*)0)
+        if (tracking != (UXRscObject*)0)
             {
             self.stepTo(tracking, (i32)e.x, (i32)e.y);
             }
         }
     void mouseUp(UXEvent* e)
         {
-        RKObject* o = tracking;
-        tracking = (RKObject*)0;
-        if (o != (RKObject*)0)
+        UXRscObject* o = tracking;
+        tracking = (UXRscObject*)0;
+        if (o != (UXRscObject*)0)
             {
             self.finish(o);
             }
         }
     // One step of a drag, at a window point.
-    void stepTo(RKObject* o, i32 x, i32 y)
+    void stepTo(UXRscObject* o, i32 x, i32 y)
         {
         i32 cx = (i32)0;
         i32 cy = (i32)0;
@@ -524,7 +524,7 @@ class RKDrag : Object
             gApp.displayIfNeeded();
             }
         }
-    void finish(RKObject* o)
+    void finish(UXRscObject* o)
         {
         drag.end();
         self.setNeedsDisplay();
@@ -547,15 +547,15 @@ class RKDrag : Object
         cy[0] = wy - (i32)a.y;
         }
 
-    RKObject* currentSelection(void)
+    UXRscObject* currentSelection(void)
         {
         return selection;
         }
-    void setSelection(RKObject* o)
+    void setSelection(UXRscObject* o)
         {
         selection = o;
         }
-    void setRoot(RKObject* r)
+    void setRoot(UXRscObject* r)
         {
         drag.root = r;
         }

@@ -24,15 +24,15 @@
 #import "UXAppKitDriver.xc"
 #import "UXWindow.xc"
 #import "UXGeometry.xc"
-#import "RKModel.xc"
-#import "RKRsc.xc"
+#import "UXRscModel.xc"
+#import "UXRscRead.xc"
 #import "RKMainController.xc"
 #import "RKMainBuilder.xc"
 
-RKResource* gRes;
+UXRscDoc* gRes;
 
 // Walk without childCount(), and check for scribble as well as null.
-bool ok(RKObject* o, i32 depth)
+bool ok(UXRscObject* o, i32 depth)
     {
     if ((pointer)o == (pointer)0)
         {
@@ -46,7 +46,7 @@ bool ok(RKObject* o, i32 depth)
         }
     for (i32 i = (i32)0; i < (i32)o.children.count(); i = i + (i32)1)
         {
-        if (!ok((RKObject* ?)o.children.get((u16)i), depth + (i32)1))
+        if (!ok((UXRscObject* ?)o.children.get((u16)i), depth + (i32)1))
             {
             return false;
             }
@@ -87,8 +87,8 @@ void main(void)
         return;
         }
     Data* fd = Files.readData(sp);
-    gRes = RKRsc.read(fd.bytes(), (i32)fd.length());
-    stage((u8*)"RKRsc.read");
+    gRes = UXRscReader.read(fd.bytes(), (i32)fd.length());
+    stage((u8*)"UXRscReader.read");
 
     RKMainController* c = new RKMainController();
     UXView* content = new UXView();

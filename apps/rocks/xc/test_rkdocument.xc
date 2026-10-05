@@ -6,7 +6,7 @@
 #import "UXAppKitDriver.xc"
 #import "UXWindow.xc"
 #import "UXGeometry.xc"
-#import "RKModel.xc"
+#import "UXRscModel.xc"
 #import "RKMainController.xc"
 #import "RKMainBuilder.xc"
 
@@ -71,11 +71,11 @@ void main(void)
     win.open((u8*)"doc", UXGeom.make((i16)0, (i16)0, (i16)900, (i16)600), content);
     checkTrue("the window wires", RKMainBuilder.buildInto(content, c, (i16)900, (i16)600));
 
-    RKResource* r = new RKResource();
-    RKTree* main = new RKTree();
+    UXRscDoc* r = new UXRscDoc();
+    UXRscTree* main = new UXRscTree();
     main.name = (u8*)"MAIN";
-    main.root = RKObject.make((i32)RKT_BOX, (i32)0, (i32)0, (i32)300, (i32)200);
-    RKObject* ok = RKObject.make((i32)RKT_BUTTON, (i32)20, (i32)30, (i32)60, (i32)20);
+    main.root = UXRscObject.make((i32)UXR_T_BOX, (i32)0, (i32)0, (i32)300, (i32)200);
+    UXRscObject* ok = UXRscObject.make((i32)UXR_T_BUTTON, (i32)20, (i32)30, (i32)60, (i32)20);
     ok.text = (u8*)"OK";
     main.root.addChild(ok);
     r.addTree(main);
@@ -84,7 +84,7 @@ void main(void)
     checkTrue("a new document has no file", c.docPath == (u8*)0);
 
     // a phone layout, so the chunk is part of what is saved
-    c.viewLayout((i32)RKV_PHONE, (i32)RKV_ORIENT_PORTRAIT);
+    c.viewLayout((i32)UXR_V_PHONE, (i32)UXR_V_ORIENT_PORTRAIT);
     c.onNewLayout((UXControl*)0);
     r.treeAt((i32)1).root.childAt((i32)0).x = (i32)7;
     checkTrue("the document is dirty", c.dirty);
@@ -98,20 +98,20 @@ void main(void)
     c.dirty = true;
     checkTrue("a save into a missing folder fails", !c.saveTo((u8*)"/tmp/no_such_rocks_dir/x.rsc"));
     checkTrue("...says so", says(c, (u8*)"Could not save x.rsc"));
-    checkTrue("...and stays dirty, keeping its old file", c.dirty && RKRscWrite.seq(c.docPath, path));
+    checkTrue("...and stays dirty, keeping its old file", c.dirty && UXRscWriter.seq(c.docPath, path));
 
     // a different document, then the saved one opened again
-    c.showResource(RKResource.emptyDialog(), (i32)0);
+    c.showResource(UXRscDoc.emptyDialog(), (i32)0);
     checkTrue("Open reads it back", c.openPath(path));
     checkTrue("...says so", says(c, (u8*)"Opened rocks_document_test.rsc"));
     check((u8*)"both trees are there", c.doc.treeCount(), (i32)2);
     check((u8*)"MAIN is a form with two layouts", c.doc.formCount() == (i32)1 ? c.doc.formAt((i32)0).variantCount() : (i32)0, (i32)2);
-    RKVariant* pv = c.doc.formAt((i32)0).find((i32)RKV_PHONE, (i32)RKV_ORIENT_PORTRAIT);
-    checkTrue("the phone layout came back", pv != (RKVariant*)0);
-    check((u8*)"...as it was left", pv != (RKVariant*)0 ? pv.tree.root.childAt((i32)0).x : (i32)-1, (i32)7);
+    UXRscVariant* pv = c.doc.formAt((i32)0).find((i32)UXR_V_PHONE, (i32)UXR_V_ORIENT_PORTRAIT);
+    checkTrue("the phone layout came back", pv != (UXRscVariant*)0);
+    check((u8*)"...as it was left", pv != (UXRscVariant*)0 ? pv.tree.root.childAt((i32)0).x : (i32)-1, (i32)7);
     check((u8*)"the canvas shows the first tree", c.shownTree, (i32)0);
     checkTrue("an opened document is clean", !c.dirty);
-    c.viewLayout((i32)RKV_PHONE, (i32)RKV_ORIENT_PORTRAIT);
+    c.viewLayout((i32)UXR_V_PHONE, (i32)UXR_V_ORIENT_PORTRAIT);
     check((u8*)"and its phone layout is one click away", c.shownTree, (i32)1);
 
     // not a resource

@@ -1,7 +1,7 @@
 // probe_weak5.xc — bug 036, with a FAT target class.
 //
 // The one variable probe_weak2/3/4 never changed: they all pointed the weak
-// field at a small object.  RKObject, the thing Rocks actually loses, is large
+// field at a small object.  UXRscObject, the thing Rocks actually loses, is large
 // — many scalars, several object fields, an Array — and is reached through a
 // checked cast out of an Array that is its only owner.
 #import <Stdio.xc>
@@ -26,7 +26,7 @@ class Payload : Object
         }
     }
 
-    // Shaped like RKObject: scalars, several optional object payloads, a children
+    // Shaped like UXRscObject: scalars, several optional object payloads, a children
     // array, and a self-referential element type.
     class Fat : Object
     {

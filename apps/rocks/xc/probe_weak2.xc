@@ -2,8 +2,8 @@
 // with a DIFFERENT object each time.
 //
 // This is the exact shape of RKEditOverlay.setSelection:
-//     weak: RKObject* selection;
-//     void setSelection(RKObject* o) { selection = o; }
+//     weak: UXRscObject* selection;
+//     void setSelection(UXRscObject* o) { selection = o; }
 // called once per click with whatever the pointer is over.
 //
 // Run under MallocScribble=1 so a freed object is obvious at once.

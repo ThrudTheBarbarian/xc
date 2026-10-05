@@ -12,7 +12,7 @@
 #import "UXAppKitDriver.xc"
 #import "UXWindow.xc"
 #import "UXGeometry.xc"
-#import "RKModel.xc"
+#import "UXRscModel.xc"
 #import "RKMainController.xc"
 #import "RKMainBuilder.xc"
 
@@ -43,23 +43,23 @@ void checkTrue(u8* what, bool got)
     }
 
 // Two trees, so switching between them is testable at all.
-RKResource* sample(void)
+UXRscDoc* sample(void)
     {
-    RKResource* r = new RKResource();
+    UXRscDoc* r = new UXRscDoc();
 
-    RKTree* t0 = new RKTree();
-    RKObject* r0 = RKObject.make((i32)RKT_BOX, (i32)0, (i32)0, (i32)300, (i32)200);
-    RKObject* ok = RKObject.make((i32)RKT_BUTTON, (i32)20, (i32)30, (i32)60, (i32)20);
+    UXRscTree* t0 = new UXRscTree();
+    UXRscObject* r0 = UXRscObject.make((i32)UXR_T_BOX, (i32)0, (i32)0, (i32)300, (i32)200);
+    UXRscObject* ok = UXRscObject.make((i32)UXR_T_BUTTON, (i32)20, (i32)30, (i32)60, (i32)20);
     ok.text = (u8*)"OK";
-    RKObject* nm = RKObject.make((i32)RKT_FIELD, (i32)20, (i32)60, (i32)120, (i32)22);
+    UXRscObject* nm = UXRscObject.make((i32)UXR_T_FIELD, (i32)20, (i32)60, (i32)120, (i32)22);
     r0.addChild(ok);
     r0.addChild(nm);
     t0.root = r0;
     r.addTree(t0);
 
-    RKTree* t1 = new RKTree();
-    RKObject* r1 = RKObject.make((i32)RKT_BOX, (i32)0, (i32)0, (i32)300, (i32)200);
-    RKObject* go = RKObject.make((i32)RKT_BUTTON, (i32)10, (i32)10, (i32)50, (i32)20);
+    UXRscTree* t1 = new UXRscTree();
+    UXRscObject* r1 = UXRscObject.make((i32)UXR_T_BOX, (i32)0, (i32)0, (i32)300, (i32)200);
+    UXRscObject* go = UXRscObject.make((i32)UXR_T_BUTTON, (i32)10, (i32)10, (i32)50, (i32)20);
     go.text = (u8*)"Go";
     r1.addChild(go);
     t1.root = r1;
@@ -87,7 +87,7 @@ void main(void)
     win.open((u8*)"sel", UXGeom.make((i16)0, (i16)0, (i16)900, (i16)600), content);
     checkTrue("the window wires", RKMainBuilder.buildInto(content, c, (i16)900, (i16)600));
 
-    RKResource* r = sample();
+    UXRscDoc* r = sample();
     check("tree 0 realizes two widgets", c.showResource(r, (i32)0), (i32)2);
     win.tree.finalise();
 
@@ -99,7 +99,7 @@ void main(void)
     c.tableSelectionDidChange((UXTableView*)c.formOutline, (i32)1);
     check("selecting tree 1 switches the shown tree", c.shownTree, (i32)1);
     checkTrue("and drops the selection, which pointed into the old form",
-              c.selectedObject() == (RKObject*)0);
+              c.selectedObject() == (UXRscObject*)0);
 
     // Back to tree 0, then open it so its objects get rows.
     c.tableSelectionDidChange((UXTableView*)c.formOutline, (i32)0);
@@ -109,9 +109,9 @@ void main(void)
     c.formOutline.toggleRow((i32)0);
     check("expanding shows the tree's two objects", (i32)c.formOutline.rowCount(), (i32)4);
     c.tableSelectionDidChange((UXTableView*)c.formOutline, (i32)1);
-    checkTrue("an object row selects an object", c.selectedObject() != (RKObject*)0);
+    checkTrue("an object row selects an object", c.selectedObject() != (UXRscObject*)0);
     check("and it is the one the row stood for",
-          c.selectedObject().type, (i32)RKT_BUTTON);
+          c.selectedObject().type, (i32)UXR_T_BUTTON);
     check("selecting an object does NOT switch trees", c.shownTree, (i32)0);
 
     // The overlay is placed over the widget, in canvas coordinates.
@@ -123,7 +123,7 @@ void main(void)
     // Selecting the OTHER object moves the same frame rather than making a second
     c.tableSelectionDidChange((UXTableView*)c.formOutline, (i32)2);
     check("the frame moved to the field", (i32)c.selFrame.frame().y, (i32)60);
-    check("and the field is selected", c.selectedObject().type, (i32)RKT_FIELD);
+    check("and the field is selected", c.selectedObject().type, (i32)UXR_T_FIELD);
 
     win.close();
     if (gFails == (i32)0)

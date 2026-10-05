@@ -19,7 +19,7 @@
 #import "UXGroupBox.xc"
 #import "UXPopUpButton.xc"
 #import "UXGeometry.xc"
-#import "RKModel.xc"
+#import "UXRscModel.xc"
 
 class RKCanvas : Object
     {
@@ -27,7 +27,7 @@ class RKCanvas : Object
     // it: clicking an outline row has to find the widget that row stands for,
     // and rediscovering it by walking two trees in step would re-derive at
     // every click something realize() already knew for free.
-    Array<RKObject>* objs;
+    Array<UXRscObject>* objs;
     Array<UXView>* views;
 
     void init(void)
@@ -38,11 +38,11 @@ class RKCanvas : Object
 
     // The widget realized for an object, or 0 if it was not realized (the
     // form's root, or a tree that is not the one on screen).
-    UXView* viewFor(RKObject* o)
+    UXView* viewFor(UXRscObject* o)
         {
         for (i32 i = (i32)0; i < (i32)objs.count(); i = i + (i32)1)
             {
-            if ((RKObject* ?)objs.get((u16)i) == o)
+            if ((UXRscObject* ?)objs.get((u16)i) == o)
                 { return (UXView* ?)views.get((u16)i);
                 }
             }
@@ -52,9 +52,9 @@ class RKCanvas : Object
     // Build `tree` into `into`, which is normally the canvas outlet.  Returns
     // the number of widgets realized, so a caller can report "12 objects" and
     // a test can assert the whole tree arrived rather than most of it.
-    i32 realize(RKTree* tree, UXView* into)
+    i32 realize(UXRscTree* tree, UXView* into)
         {
-        if (tree == (RKTree*)0 || tree.root == (RKObject*)0 || into == (UXView*)0)
+        if (tree == (UXRscTree*)0 || tree.root == (UXRscObject*)0 || into == (UXView*)0)
             {
             return (i32)0;
             }
@@ -71,7 +71,7 @@ class RKCanvas : Object
         return n;
         }
 
-    i32 realizeInto(RKObject* o, UXView* parent)
+    i32 realizeInto(UXRscObject* o, UXView* parent)
         {
         UXView* v = RKCanvas.widgetFor(o);
         if (v == (UXView*)0)
@@ -100,47 +100,47 @@ class RKCanvas : Object
     // the object becomes a plain view rather than nothing: an unknown type
     // still occupies its rectangle, so a form with something exotic in it lays
     // out correctly instead of collapsing.
-    static UXView* widgetFor(RKObject* o)
+    static UXView* widgetFor(UXRscObject* o)
         {
         i32 t = o.type;
 
-        if (t == (i32)RKT_BUTTON)
+        if (t == (i32)UXR_T_BUTTON)
             {
             UXButton* b = new UXButton();
             b.setTitle(RKCanvas.textOf(o));
             return (UXView*)b;
             }
-        if (t == (i32)RKT_CHECKBOX)
+        if (t == (i32)UXR_T_CHECKBOX)
             {
             UXCheckbox* c = new UXCheckbox();
             c.setTitle(RKCanvas.textOf(o));
-            c.setChecked((o.state & (i32)RKS_CHECKED) != (i32)0);
+            c.setChecked((o.state & (i32)UXR_S_CHECKED) != (i32)0);
             return (UXView*)c;
             }
-        if (t == (i32)RKT_RADIO)
+        if (t == (i32)UXR_T_RADIO)
             {
             UXRadioButton* r = new UXRadioButton();
             r.setTitle(RKCanvas.textOf(o));
-            r.setSelected((o.state & (i32)RKS_SELECTED) != (i32)0);
+            r.setSelected((o.state & (i32)UXR_S_SELECTED) != (i32)0);
             return (UXView*)r;
             }
-        if (t == (i32)RKT_STRING || t == (i32)RKT_TEXT || t == (i32)RKT_TITLE)
+        if (t == (i32)UXR_T_STRING || t == (i32)UXR_T_TEXT || t == (i32)UXR_T_TITLE)
             {
             UXLabel* l = new UXLabel();
             l.setTitle(RKCanvas.textOf(o));
             return (UXView*)l;
             }
-        if (t == (i32)RKT_FIELD || t == (i32)RKT_FTEXT ||
-            t == (i32)RKT_BOXTEXT || t == (i32)RKT_FBOXTEXT)
+        if (t == (i32)UXR_T_FIELD || t == (i32)UXR_T_FTEXT ||
+            t == (i32)UXR_T_BOXTEXT || t == (i32)UXR_T_FBOXTEXT)
             {
             UXTextField* f = new UXTextField();
-            if (o.ted != (RKTedinfo*)0)
+            if (o.ted != (UXRscTedinfo*)0)
                 {
                 f.setText(o.ted.text);
                 }
             return (UXView*)f;
             }
-        if (t == (i32)RKT_POPUP)
+        if (t == (i32)UXR_T_POPUP)
             {
             // A GEM popup's spec is its label; the menu behind it lives in a
             // linked tree, which the editor will follow once tree navigation
@@ -153,7 +153,7 @@ class RKCanvas : Object
             p.selectItem((i32)0);
             return (UXView*)p;
             }
-        if (t == (i32)RKT_BOX || t == (i32)RKT_BOXCHAR)
+        if (t == (i32)UXR_T_BOX || t == (i32)UXR_T_BOXCHAR)
             {
             // A visible box with children reads as a group; an empty one is
             // just a panel.  Either way it is a real container.
@@ -163,7 +163,7 @@ class RKCanvas : Object
             }
         // IBOX is an INVISIBLE box — a grouping rectangle with no chrome — so
         // a plain view is exactly right, not a group box.
-        if (t == (i32)RKT_IBOX)
+        if (t == (i32)UXR_T_IBOX)
             {
             return new UXView();
             }
@@ -181,79 +181,79 @@ class RKCanvas : Object
     // A short name for a type, for placeholders and the outline.
     static u8* typeName(i32 t)
         {
-        if (t == (i32)RKT_BOX)
+        if (t == (i32)UXR_T_BOX)
             {
             return (u8*)"box";
             }
-        if (t == (i32)RKT_TEXT)
+        if (t == (i32)UXR_T_TEXT)
             {
             return (u8*)"text";
             }
-        if (t == (i32)RKT_BOXTEXT)
+        if (t == (i32)UXR_T_BOXTEXT)
             {
             return (u8*)"boxtext";
             }
-        if (t == (i32)RKT_IMAGE)
+        if (t == (i32)UXR_T_IMAGE)
             {
             return (u8*)"image";
             }
-        if (t == (i32)RKT_USERDEF)
+        if (t == (i32)UXR_T_USERDEF)
             {
             return (u8*)"userdef";
             }
-        if (t == (i32)RKT_IBOX)
+        if (t == (i32)UXR_T_IBOX)
             {
             return (u8*)"ibox";
             }
-        if (t == (i32)RKT_BUTTON)
+        if (t == (i32)UXR_T_BUTTON)
             {
             return (u8*)"button";
             }
-        if (t == (i32)RKT_BOXCHAR)
+        if (t == (i32)UXR_T_BOXCHAR)
             {
             return (u8*)"boxchar";
             }
-        if (t == (i32)RKT_STRING)
+        if (t == (i32)UXR_T_STRING)
             {
             return (u8*)"string";
             }
-        if (t == (i32)RKT_FTEXT)
+        if (t == (i32)UXR_T_FTEXT)
             {
             return (u8*)"ftext";
             }
-        if (t == (i32)RKT_FBOXTEXT)
+        if (t == (i32)UXR_T_FBOXTEXT)
             {
             return (u8*)"fboxtext";
             }
-        if (t == (i32)RKT_ICON)
+        if (t == (i32)UXR_T_ICON)
             {
             return (u8*)"icon";
             }
-        if (t == (i32)RKT_TITLE)
+        if (t == (i32)UXR_T_TITLE)
             {
             return (u8*)"title";
             }
-        if (t == (i32)RKT_CICONBLK)
+        if (t == (i32)UXR_T_CICONBLK)
             {
             return (u8*)"ciconblk";
             }
-        if (t == (i32)RKT_CHECKBOX)
+        if (t == (i32)UXR_T_CHECKBOX)
             {
             return (u8*)"checkbox";
             }
-        if (t == (i32)RKT_RADIO)
+        if (t == (i32)UXR_T_RADIO)
             {
             return (u8*)"radio";
             }
-        if (t == (i32)RKT_POPUP)
+        if (t == (i32)UXR_T_POPUP)
             {
             return (u8*)"popup";
             }
-        if (t == (i32)RKT_FIELD)
+        if (t == (i32)UXR_T_FIELD)
             {
             return (u8*)"field";
             }
-        if (t == (i32)RKT_CICON)
+        if (t == (i32)UXR_T_CICON)
             {
             return (u8*)"cicon";
             }
@@ -271,37 +271,37 @@ class RKCanvas : Object
     // built a form knew about it and the code that edited one did not.
     //
     // Adding a property now means adding it HERE, and both paths get it.
-    static void applyState(UXView* w, RKObject* o)
+    static void applyState(UXView* w, UXRscObject* o)
         {
-        if (w == (UXView*)0 || o == (RKObject*)0)
+        if (w == (UXView*)0 || o == (UXRscObject*)0)
             {
             return;
             }
-        w.setEnabled((o.state & (i32)RKS_DISABLED) == (i32)0);
-        w.setHidden((o.flags & (i32)RKF_HIDETREE) != (i32)0);
+        w.setEnabled((o.state & (i32)UXR_S_DISABLED) == (i32)0);
+        w.setHidden((o.flags & (i32)UXR_F_HIDETREE) != (i32)0);
         // Text alignment, straight through: UX_ALIGN_* is numbered to match
         // GEM's te_just, so there is nothing to convert.  It used to need a
         // three-way map, which is one more thing that can be got backwards --
         // and getting it backwards swaps RIGHT and CENTRE, which looks nearly
         // correct and would write the wrong value into every .rsc Rocks saved.
-        if (o.ted != (RKTedinfo*)0)
+        if (o.ted != (UXRscTedinfo*)0)
             { ((UXControl* ?)w).setAlignment(o.ted.just);
             }
         i32 k = (i32)w.kind();
         if (k == (i32)UXKindCheckbox)
             {
-            ((UXCheckbox* ?)w).setChecked((o.state & (i32)RKS_CHECKED) != (i32)0);
+            ((UXCheckbox* ?)w).setChecked((o.state & (i32)UXR_S_CHECKED) != (i32)0);
             }
         else if (k == (i32)UXKindRadio)
             {
-            ((UXRadioButton* ?)w).setSelected((o.state & (i32)RKS_SELECTED) != (i32)0);
+            ((UXRadioButton* ?)w).setSelected((o.state & (i32)UXR_S_SELECTED) != (i32)0);
             }
         }
 
     // Push an object's text into the widget already realized for it.  The
     // alternative — rebuild the widget — would destroy the control the
     // designer is typing into, along with the keyboard focus.
-    static void applyText(UXView* w, RKObject* o)
+    static void applyText(UXView* w, UXRscObject* o)
         {
         u8* t = RKCanvas.textOf(o);
         i32 k = (i32)w.kind();
@@ -316,13 +316,13 @@ class RKCanvas : Object
             }
         }
 
-    static u8* textOf(RKObject* o)
+    static u8* textOf(UXRscObject* o)
         {
         if (o.text != (u8*)0)
             {
             return o.text;
             }
-        if (o.ted != (RKTedinfo*)0 && o.ted.text != (u8*)0)
+        if (o.ted != (UXRscTedinfo*)0 && o.ted.text != (u8*)0)
             {
             return o.ted.text;
             }

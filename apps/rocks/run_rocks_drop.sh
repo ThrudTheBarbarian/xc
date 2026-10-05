@@ -1,5 +1,5 @@
 #!/bin/sh
-# run_rocks_drop.sh — the `rocks-drop` gate: reparent on drop (RKTree.reparentByGeometry), the
+# run_rocks_drop.sh — the `rocks-drop` gate: reparent on drop (UXRscTree.reparentByGeometry), the
 # nesting following what is on screen.  Neutral, no driver, so it runs on every target.
 _root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null)
 [ -f "$_root/tools/build-env.sh" ] && . "$_root/tools/build-env.sh"

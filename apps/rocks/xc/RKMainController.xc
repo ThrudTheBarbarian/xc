@@ -17,7 +17,7 @@
 #import "UXControl.xc"
 #import "UXOutlineView.xc"
 #import "UXView.xc"
-#import "RKModel.xc"
+#import "UXRscModel.xc"
 #import "RKCanvas.xc"
 #import "RKOutline.xc"
 #import "RKSelection.xc"
@@ -29,8 +29,8 @@
 #import "UXOpenPanel.xc"
 #import "UXSavePanel.xc"
 #import "UXMenu.xc"
-#import "RKRsc.xc"
-#import "RKRscWrite.xc"
+#import "UXRscRead.xc"
+#import "UXRscWrite.xc"
 
 // The toolbar's items, by tag (RKMainBuilder makes them; onToolbar dispatches them).
 #define RKTB_NEW 1
@@ -52,13 +52,13 @@ class RKMainController : Object<UXTableDelegate>
     outlet UXLabel* statusLabel;       // one line of feedback, bottom left
 
     // The document.  The controller owns the MODEL; the canvas outlet shows it.
-    RKResource* doc;
+    UXRscDoc* doc;
     i32 shownTree;
     RKOutline* outlineModel;    // strong: the outline view holds its source weakly
     RKCanvas* canvasMap;        // the map for the tree currently shown
     Array<UXView>* panes;       // one container per tree, built on first view
     Array<RKCanvas>* maps;      // its object -> widget map
-    RKObject* selected;         // what the designer has picked, or 0
+    UXRscObject* selected;         // what the designer has picked, or 0
     RKSelectionFrame* selFrame; // the selection art; created once, moved around
     // The input surface that makes the canvas a DESIGN surface rather than a
     // live one.  It sits over every pane, so a click selects a button instead
@@ -94,17 +94,17 @@ class RKMainController : Object<UXTableDelegate>
         {
         selectedForm = (i32)-1;
         dirty = false;
-        viewClass = (i32)RKV_DESKTOP;
-        viewOrient = (i32)RKV_ORIENT_NONE;
+        viewClass = (i32)UXR_V_DESKTOP;
+        viewOrient = (i32)UXR_V_ORIENT_NONE;
         docPath = (u8*)0;
         docPathStore = (UXData*)0;
-        doc = (RKResource*)0;
+        doc = (UXRscDoc*)0;
         shownTree = (i32)0;
         outlineModel = new RKOutline();
         canvasMap = new RKCanvas();
         panes = new Array();
         maps = new Array();
-        selected = (RKObject*)0;
+        selected = (UXRscObject*)0;
         selFrame = (RKSelectionFrame*)0;
         overlay = new RKEditOverlay();
         overlay.picked = &self.onPick;
@@ -137,37 +137,37 @@ class RKMainController : Object<UXTableDelegate>
         }
     void onDesktop(UXControl* sender) : action
         {
-        self.viewLayout((i32)RKV_DESKTOP, (i32)RKV_ORIENT_NONE);
+        self.viewLayout((i32)UXR_V_DESKTOP, (i32)UXR_V_ORIENT_NONE);
         }
     void onTablet(UXControl* sender) : action
         {
-        self.viewLayout((i32)RKV_TABLET, viewClass == (i32)RKV_DESKTOP ? (i32)RKV_ORIENT_PORTRAIT : viewOrient);
+        self.viewLayout((i32)UXR_V_TABLET, viewClass == (i32)UXR_V_DESKTOP ? (i32)UXR_V_ORIENT_PORTRAIT : viewOrient);
         }
     void onPhone(UXControl* sender) : action
         {
-        self.viewLayout((i32)RKV_PHONE, viewClass == (i32)RKV_DESKTOP ? (i32)RKV_ORIENT_PORTRAIT : viewOrient);
+        self.viewLayout((i32)UXR_V_PHONE, viewClass == (i32)UXR_V_DESKTOP ? (i32)UXR_V_ORIENT_PORTRAIT : viewOrient);
         }
     // Turn the device: portrait <-> landscape.  The desktop has no orientation.
     void onRotate(UXControl* sender) : action
         {
-        if (viewClass == (i32)RKV_DESKTOP || viewClass == (i32)RKV_ANY)
+        if (viewClass == (i32)UXR_V_DESKTOP || viewClass == (i32)UXR_V_ANY)
             {
             self.say((u8*)"The desktop has no orientation");
             return;
             }
-        self.viewLayout(viewClass, viewOrient == (i32)RKV_ORIENT_LANDSCAPE ? (i32)RKV_ORIENT_PORTRAIT : (i32)RKV_ORIENT_LANDSCAPE);
+        self.viewLayout(viewClass, viewOrient == (i32)UXR_V_ORIENT_LANDSCAPE ? (i32)UXR_V_ORIENT_PORTRAIT : (i32)UXR_V_ORIENT_LANDSCAPE);
         }
     // A layout for the class and orientation being viewed, seeded as a one-time copy of the tree on
     // the canvas -- never a link to it (UXNB-V2 section 7).
     void onNewLayout(UXControl* sender) : action
         {
-        if (doc == (RKResource*)0 || shownTree < (i32)0 || shownTree >= doc.treeCount())
+        if (doc == (UXRscDoc*)0 || shownTree < (i32)0 || shownTree >= doc.treeCount())
             {
             return;
             }
-        RKTree* from = doc.treeAt(shownTree);
-        RKTree* t = doc.addVariant(from, viewClass, viewOrient);
-        if (t == (RKTree*)0)
+        UXRscTree* from = doc.treeAt(shownTree);
+        UXRscTree* t = doc.addVariant(from, viewClass, viewOrient);
+        if (t == (UXRscTree*)0)
             {
             self.sayLayout((u8*)"There is already a ", (u8*)" layout");
             return;
@@ -218,8 +218,8 @@ class RKMainController : Object<UXTableDelegate>
             self.say((u8*)"That file cannot be read");
             return false;
             }
-        RKResource* r = RKRsc.read(bytes.bytes(), bytes.length());
-        if (r == (RKResource*)0)
+        UXRscDoc* r = UXRscReader.read(bytes.bytes(), bytes.length());
+        if (r == (UXRscDoc*)0)
             {
             self.say((u8*)"That is not a GEM resource file");
             return false;
@@ -233,8 +233,8 @@ class RKMainController : Object<UXTableDelegate>
         maps = new Array();
         self.setDocPath(path);
         dirty = false;
-        viewClass = (i32)RKV_DESKTOP;
-        viewOrient = (i32)RKV_ORIENT_NONE;
+        viewClass = (i32)UXR_V_DESKTOP;
+        viewOrient = (i32)UXR_V_ORIENT_NONE;
         self.showResource(r, (i32)0);
         self.sayAbout((u8*)"Opened ", RKMainController.baseName(path));
         return true;
@@ -243,11 +243,11 @@ class RKMainController : Object<UXTableDelegate>
     // with the file on disk untouched (UXFileIO writes atomically).
     bool saveTo(u8* path)
         {
-        if (doc == (RKResource*)0)
+        if (doc == (UXRscDoc*)0)
             {
             return false;
             }
-        UXData* bytes = RKRscWrite.write(doc);
+        UXData* bytes = UXRscWriter.write(doc);
         if (bytes == (UXData*)0 || !UXFileIO.write(path, bytes))
             {
             self.sayAbout((u8*)"Could not save ", RKMainController.baseName(path));
@@ -285,7 +285,7 @@ class RKMainController : Object<UXTableDelegate>
     void sayAbout(u8* what, u8* name)
         {
         UXData* d = UXData.fromString(what);
-        d.appendBytes(name, RKTree.len(name));
+        d.appendBytes(name, UXRscTree.len(name));
         d.appendByte((u8)0);
         lastSaid = d;
         self.say(d.bytes());
@@ -338,28 +338,28 @@ class RKMainController : Object<UXTableDelegate>
         {
         viewClass = klass;
         viewOrient = orient;
-        if (doc == (RKResource*)0 || shownTree < (i32)0 || shownTree >= doc.treeCount())
+        if (doc == (UXRscDoc*)0 || shownTree < (i32)0 || shownTree >= doc.treeCount())
             {
             return;
             }
-        RKTree* cur = doc.treeAt(shownTree);
-        RKForm* f = doc.formOf(cur);
-        RKVariant* v = (RKVariant*)0;
-        if (f != (RKForm*)0)
+        UXRscTree* cur = doc.treeAt(shownTree);
+        UXRscForm* f = doc.formOf(cur);
+        UXRscVariant* v = (UXRscVariant*)0;
+        if (f != (UXRscForm*)0)
             {
             v = f.find(klass, orient);
-            if (v == (RKVariant*)0 && orient != (i32)RKV_ORIENT_NONE)
+            if (v == (UXRscVariant*)0 && orient != (i32)UXR_V_ORIENT_NONE)
                 {
-                v = f.find(klass, (i32)RKV_ORIENT_NONE);
+                v = f.find(klass, (i32)UXR_V_ORIENT_NONE);
                 }
             }
-        else if (klass == (i32)RKV_DESKTOP)
+        else if (klass == (i32)UXR_V_DESKTOP)
             {
             // a form with one layout: that layout is its desktop one
             self.sayLayout((u8*)"", (u8*)" layout");
             return;
             }
-        if (v == (RKVariant*)0)
+        if (v == (UXRscVariant*)0)
             {
             self.sayLayout((u8*)"No ", (u8*)" layout -- New Layout creates one");
             return;
@@ -370,12 +370,12 @@ class RKMainController : Object<UXTableDelegate>
     // "<prefix>phone portrait<suffix>", for the layout being viewed.
     void sayLayout(u8* prefix, u8* suffix)
         {
-        u8* what = viewClass == (i32)RKV_PHONE ? (u8*)"phone" : (viewClass == (i32)RKV_TABLET ? (u8*)"tablet" : (u8*)"desktop");
-        u8* how = viewOrient == (i32)RKV_ORIENT_PORTRAIT ? (u8*)" portrait" : (viewOrient == (i32)RKV_ORIENT_LANDSCAPE ? (u8*)" landscape" : (u8*)"");
+        u8* what = viewClass == (i32)UXR_V_PHONE ? (u8*)"phone" : (viewClass == (i32)UXR_V_TABLET ? (u8*)"tablet" : (u8*)"desktop");
+        u8* how = viewOrient == (i32)UXR_V_ORIENT_PORTRAIT ? (u8*)" portrait" : (viewOrient == (i32)UXR_V_ORIENT_LANDSCAPE ? (u8*)" landscape" : (u8*)"");
         UXData* d = UXData.fromString(prefix);
-        d.appendBytes(what, RKTree.len(what));
-        d.appendBytes(how, RKTree.len(how));
-        d.appendBytes(suffix, RKTree.len(suffix));
+        d.appendBytes(what, UXRscTree.len(what));
+        d.appendBytes(how, UXRscTree.len(how));
+        d.appendBytes(suffix, UXRscTree.len(suffix));
         d.appendByte((u8)0);
         lastSaid = d;
         self.say(d.bytes());
@@ -392,10 +392,10 @@ class RKMainController : Object<UXTableDelegate>
     // indices are shifting underneath, and removeFromSuperview does not even
     // clear the parent's subview array; hiding is both safer and cheaper, and
     // it keeps a tree's selection state alive when the designer flips back.
-    i32 showResource(RKResource* r, i32 treeIndex)
+    i32 showResource(UXRscDoc* r, i32 treeIndex)
         {
         doc = r;
-        if (r == (RKResource*)0 || canvas == (UXView*)0)
+        if (r == (UXRscDoc*)0 || canvas == (UXView*)0)
             {
             return (i32)0;
             }
@@ -408,8 +408,8 @@ class RKMainController : Object<UXTableDelegate>
         // A selection points into ONE tree's widgets, so it does not survive
         // a switch — better to drop it than to leave a frame over the wrong
         // form.
-        selected = (RKObject*)0;
-        inspectorCtl.show((RKObject*)0);
+        selected = (UXRscObject*)0;
+        inspectorCtl.show((UXRscObject*)0);
         if (selFrame != (RKSelectionFrame*)0)
             {
             selFrame.setHidden(true);
@@ -432,7 +432,7 @@ class RKMainController : Object<UXTableDelegate>
 
         // The overlay edits ONE form at a time, so it follows the shown tree.
         overlay.setRoot(r.treeAt(treeIndex).root);
-        overlay.setSelection((RKObject*)0);
+        overlay.setSelection((UXRscObject*)0);
         self.raiseOverlay();
 
         if (formOutline != (UXOutlineView*)0)
@@ -479,7 +479,7 @@ class RKMainController : Object<UXTableDelegate>
     // Put the overlay over the object's widget.  Frames are parent-relative,
     // so the overlay's position is the widget's absolute frame less the
     // canvas's — the one place in Rocks that needs absolute coordinates.
-    void selectObject(RKObject* o)
+    void selectObject(UXRscObject* o)
         {
         selected = o;
         inspectorCtl.show(o); // a NEW selection re-renders the pane
@@ -487,7 +487,7 @@ class RKMainController : Object<UXTableDelegate>
         }
 
     // Position the overlay over an object's widget, without touching the pane.
-    void placeFrame(RKObject* o)
+    void placeFrame(UXRscObject* o)
         {
         if (canvas == (UXView*)0)
             {
@@ -523,7 +523,7 @@ class RKMainController : Object<UXTableDelegate>
         selFrame.setNeedsDisplay();
         }
 
-    RKObject* selectedObject(void)
+    UXRscObject* selectedObject(void)
         {
         return selected;
         }
@@ -556,13 +556,13 @@ class RKMainController : Object<UXTableDelegate>
 
     // A press landed.  Nothing (bare form background) is a DESELECT, which is
     // what makes clicking away from a control feel right rather than sticky.
-    void onPick(RKObject* o)
+    void onPick(UXRscObject* o)
         {
-        if (o == (RKObject*)0)
+        if (o == (UXRscObject*)0)
             {
-            selected = (RKObject*)0;
-            overlay.setSelection((RKObject*)0);
-            inspectorCtl.show((RKObject*)0);
+            selected = (UXRscObject*)0;
+            overlay.setSelection((UXRscObject*)0);
+            inspectorCtl.show((UXRscObject*)0);
             if (selFrame != (RKSelectionFrame*)0)
                 {
                 selFrame.setHidden(true);
@@ -577,9 +577,9 @@ class RKMainController : Object<UXTableDelegate>
     // One step of a live drag.  The widget and the frame move; the INSPECTOR
     // does not, because rebuilding its rows mid-drag would throw away the very
     // fields the designer is about to read.  It catches up on release.
-    void onDragStep(RKObject* o)
+    void onDragStep(UXRscObject* o)
         {
-        if (o == (RKObject*)0)
+        if (o == (UXRscObject*)0)
             {
             return;
             }
@@ -593,16 +593,16 @@ class RKMainController : Object<UXTableDelegate>
         self.say(RKMainController.geomText(geomBuf, o));
         }
 
-    void onDragEnd(RKObject* o)
+    void onDragEnd(UXRscObject* o)
         {
-        if (o == (RKObject*)0)
+        if (o == (UXRscObject*)0)
             {
             return;
             }
         // A drop can change what contains what: dropped onto a box it goes in, dragged out it comes
-        // out (RKTree.reparentByGeometry).  The widgets nest as the model does, so a changed nesting
+        // out (UXRscTree.reparentByGeometry).  The widgets nest as the model does, so a changed nesting
         // means this form's widgets are rebuilt.
-        if (doc != (RKResource*)0 && doc.treeAt(shownTree).reparentByGeometry() > (i32)0)
+        if (doc != (UXRscDoc*)0 && doc.treeAt(shownTree).reparentByGeometry() > (i32)0)
             {
             self.rebuildShownPane();
             dirty = true;
@@ -634,7 +634,7 @@ class RKMainController : Object<UXTableDelegate>
     // while dragging.  Written into a buffer the controller owns and reuses:
     // this runs once per pointer step, and a fresh allocation each time would
     // make a drag allocate hundreds of strings for no reason.
-    static u8* geomText(u8* b, RKObject* o)
+    static u8* geomText(u8* b, UXRscObject* o)
         {
         i32 n = (i32)0;
         n = RKMainController.put(b, n, RKInspector.fmtInt(o.x));
@@ -701,9 +701,9 @@ class RKMainController : Object<UXTableDelegate>
     // the one widget is touched rather than rebuilding the form: a rebuild
     // would destroy the very widget the designer is typing into, and take the
     // keyboard focus with it.
-    void onInspectorEdit(RKObject* o)
+    void onInspectorEdit(UXRscObject* o)
         {
-        if (o == (RKObject*)0 || canvas == (UXView*)0)
+        if (o == (UXRscObject*)0 || canvas == (UXView*)0)
             {
             return;
             }

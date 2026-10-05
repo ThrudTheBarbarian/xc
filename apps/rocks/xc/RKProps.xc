@@ -16,7 +16,7 @@
 // Deliberately neutral: no widgets, no driver, no view code.  Descriptors are
 // data about the model, and the pane is a separate concern.
 #import "Array.xc"
-#import "RKModel.xc"
+#import "UXRscModel.xc"
 
 // How a property is edited.  COLOUR is named but not yet built — the box colour
 // word wants it.
@@ -58,7 +58,7 @@ class RKChoice : Object
     {
     u8* label; // what the designer reads
     i32 kind;  // RKP_*
-    i32 sel;   // RKV_* for INT/TEXT/ENUM; the bit mask for FLAG/STATE
+    i32 sel;   // UXR_V_* for INT/TEXT/ENUM; the bit mask for FLAG/STATE
     u8* help;  // one line of why it matters; 0 for the obvious ones
     // For RKP_ENUM: the choices, in the order the model numbers them, so the
     // pop-up's index IS the stored value and no mapping table can drift.
@@ -116,35 +116,35 @@ class RKChoice : Object
             }
 
         // Every object can be disabled and hidden — those are AES-wide.
-        ps.add(RKProperty.make((u8*)"Disabled", (i32)RKP_STATE, (i32)RKS_DISABLED, (u8*)0));
-        ps.add(RKProperty.make((u8*)"Hidden", (i32)RKP_FLAG, (i32)RKF_HIDETREE,
+        ps.add(RKProperty.make((u8*)"Disabled", (i32)RKP_STATE, (i32)UXR_S_DISABLED, (u8*)0));
+        ps.add(RKProperty.make((u8*)"Hidden", (i32)RKP_FLAG, (i32)UXR_F_HIDETREE,
                                (u8*)"hides this object AND its children"));
 
-        if (t == (i32)RKT_BUTTON)
+        if (t == (i32)UXR_T_BUTTON)
             {
             // The three that make a dialog behave: Return fires the default,
             // Esc fires the cancel, and an exit button closes the form.
-            ps.add(RKProperty.make((u8*)"Default", (i32)RKP_FLAG, (i32)RKF_DEFAULT,
+            ps.add(RKProperty.make((u8*)"Default", (i32)RKP_FLAG, (i32)UXR_F_DEFAULT,
                                    (u8*)"Return fires this button"));
-            ps.add(RKProperty.make((u8*)"Cancel", (i32)RKP_FLAG, (i32)RKF_CANCEL,
+            ps.add(RKProperty.make((u8*)"Cancel", (i32)RKP_FLAG, (i32)UXR_F_CANCEL,
                                    (u8*)"Esc fires this button"));
-            ps.add(RKProperty.make((u8*)"Exit", (i32)RKP_FLAG, (i32)RKF_EXIT, (u8*)0));
-            ps.add(RKProperty.make((u8*)"Selectable", (i32)RKP_FLAG, (i32)RKF_SELECTABLE, (u8*)0));
-            ps.add(RKProperty.make((u8*)"Selected", (i32)RKP_STATE, (i32)RKS_SELECTED, (u8*)0));
+            ps.add(RKProperty.make((u8*)"Exit", (i32)RKP_FLAG, (i32)UXR_F_EXIT, (u8*)0));
+            ps.add(RKProperty.make((u8*)"Selectable", (i32)RKP_FLAG, (i32)UXR_F_SELECTABLE, (u8*)0));
+            ps.add(RKProperty.make((u8*)"Selected", (i32)RKP_STATE, (i32)UXR_S_SELECTED, (u8*)0));
             }
-        if (t == (i32)RKT_CHECKBOX)
+        if (t == (i32)UXR_T_CHECKBOX)
             {
-            ps.add(RKProperty.make((u8*)"Checked", (i32)RKP_STATE, (i32)RKS_CHECKED, (u8*)0));
-            ps.add(RKProperty.make((u8*)"Selectable", (i32)RKP_FLAG, (i32)RKF_SELECTABLE, (u8*)0));
+            ps.add(RKProperty.make((u8*)"Checked", (i32)RKP_STATE, (i32)UXR_S_CHECKED, (u8*)0));
+            ps.add(RKProperty.make((u8*)"Selectable", (i32)RKP_FLAG, (i32)UXR_F_SELECTABLE, (u8*)0));
             }
-        if (t == (i32)RKT_RADIO)
+        if (t == (i32)UXR_T_RADIO)
             {
             // RBUTTON is what makes the AES enforce one-of-a-group, so it is
             // the property that actually matters on a radio.
-            ps.add(RKProperty.make((u8*)"Selected", (i32)RKP_STATE, (i32)RKS_SELECTED, (u8*)0));
-            ps.add(RKProperty.make((u8*)"Radio group", (i32)RKP_FLAG, (i32)RKF_RBUTTON,
+            ps.add(RKProperty.make((u8*)"Selected", (i32)RKP_STATE, (i32)UXR_S_SELECTED, (u8*)0));
+            ps.add(RKProperty.make((u8*)"Radio group", (i32)RKP_FLAG, (i32)UXR_F_RBUTTON,
                                    (u8*)"the AES clears the siblings when this is picked"));
-            ps.add(RKProperty.make((u8*)"Selectable", (i32)RKP_FLAG, (i32)RKF_SELECTABLE, (u8*)0));
+            ps.add(RKProperty.make((u8*)"Selectable", (i32)RKP_FLAG, (i32)UXR_F_SELECTABLE, (u8*)0));
             }
         // Text alignment, on the types that carry a TEDINFO -- which is where
         // GEM keeps te_just.  A plain G_STRING has no TEDINFO and therefore no
@@ -165,24 +165,24 @@ class RKChoice : Object
             }
         if (RKProps.isEditable(t))
             {
-            ps.add(RKProperty.make((u8*)"Editable", (i32)RKP_FLAG, (i32)RKF_EDITABLE, (u8*)0));
+            ps.add(RKProperty.make((u8*)"Editable", (i32)RKP_FLAG, (i32)UXR_F_EDITABLE, (u8*)0));
             }
-        if (t == (i32)RKT_BOX || t == (i32)RKT_IBOX || t == (i32)RKT_BOXCHAR)
+        if (t == (i32)UXR_T_BOX || t == (i32)UXR_T_IBOX || t == (i32)UXR_T_BOXCHAR)
             {
-            ps.add(RKProperty.make((u8*)"Outlined", (i32)RKP_STATE, (i32)RKS_OUTLINED, (u8*)0));
-            ps.add(RKProperty.make((u8*)"Shadowed", (i32)RKP_STATE, (i32)RKS_SHADOWED, (u8*)0));
-            ps.add(RKProperty.make((u8*)"Movable", (i32)RKP_FLAG, (i32)RKF_MOVEABLE,
+            ps.add(RKProperty.make((u8*)"Outlined", (i32)RKP_STATE, (i32)UXR_S_OUTLINED, (u8*)0));
+            ps.add(RKProperty.make((u8*)"Shadowed", (i32)RKP_STATE, (i32)UXR_S_SHADOWED, (u8*)0));
+            ps.add(RKProperty.make((u8*)"Movable", (i32)RKP_FLAG, (i32)UXR_F_MOVEABLE,
                                    (u8*)"on a tree ROOT: the dialog can be dragged"));
             }
-        if (t == (i32)RKT_TITLE)
+        if (t == (i32)UXR_T_TITLE)
             {
-            ps.add(RKProperty.make((u8*)"Submenu", (i32)RKP_FLAG, (i32)RKF_SUBMENU, (u8*)0));
+            ps.add(RKProperty.make((u8*)"Submenu", (i32)RKP_FLAG, (i32)UXR_F_SUBMENU, (u8*)0));
             }
         // Touch-exit fires on press rather than release; meaningful anywhere
         // the object is clickable at all.
         if (RKProps.isClickable(t))
             {
-            ps.add(RKProperty.make((u8*)"Touch exit", (i32)RKP_FLAG, (i32)RKF_TOUCHEXIT,
+            ps.add(RKProperty.make((u8*)"Touch exit", (i32)RKP_FLAG, (i32)UXR_F_TOUCHEXIT,
                                    (u8*)"fires on press, not release"));
             }
         return ps;
@@ -190,25 +190,25 @@ class RKChoice : Object
 
     static bool hasText(i32 t)
         {
-        return t == (i32)RKT_STRING || t == (i32)RKT_BUTTON || t == (i32)RKT_TITLE ||
-               t == (i32)RKT_TEXT || t == (i32)RKT_CHECKBOX || t == (i32)RKT_RADIO ||
-               t == (i32)RKT_POPUP || t == (i32)RKT_FIELD || t == (i32)RKT_FTEXT ||
-               t == (i32)RKT_BOXTEXT || t == (i32)RKT_FBOXTEXT;
+        return t == (i32)UXR_T_STRING || t == (i32)UXR_T_BUTTON || t == (i32)UXR_T_TITLE ||
+               t == (i32)UXR_T_TEXT || t == (i32)UXR_T_CHECKBOX || t == (i32)UXR_T_RADIO ||
+               t == (i32)UXR_T_POPUP || t == (i32)UXR_T_FIELD || t == (i32)UXR_T_FTEXT ||
+               t == (i32)UXR_T_BOXTEXT || t == (i32)UXR_T_FBOXTEXT;
         }
     static bool isEditable(i32 t)
         {
-        return t == (i32)RKT_FIELD || t == (i32)RKT_FTEXT || t == (i32)RKT_FBOXTEXT;
+        return t == (i32)UXR_T_FIELD || t == (i32)UXR_T_FTEXT || t == (i32)UXR_T_FBOXTEXT;
         }
     static bool isClickable(i32 t)
         {
-        return t == (i32)RKT_BUTTON || t == (i32)RKT_CHECKBOX || t == (i32)RKT_RADIO ||
-               t == (i32)RKT_POPUP || t == (i32)RKT_TITLE;
+        return t == (i32)UXR_T_BUTTON || t == (i32)UXR_T_CHECKBOX || t == (i32)UXR_T_RADIO ||
+               t == (i32)UXR_T_POPUP || t == (i32)UXR_T_TITLE;
         }
 
     // ---- reading and writing, BY DESCRIPTOR --------------------------------
     // Nothing above these two functions knows a property's storage, which is
     // what lets a descriptor eventually come from a user's own class.
-    static i32 intOf(RKObject* o, RKProperty* p)
+    static i32 intOf(UXRscObject* o, RKProperty* p)
         {
         if (p.sel == (i32)RKV_X)
             {
@@ -228,7 +228,7 @@ class RKChoice : Object
             }
         if (p.sel == (i32)RKV_JUST)
             {
-            return o.ted != (RKTedinfo*)0 ? o.ted.just : (i32)0;
+            return o.ted != (UXRscTedinfo*)0 ? o.ted.just : (i32)0;
             }
         return (i32)0;
         }
@@ -245,9 +245,9 @@ class RKChoice : Object
     // here: the copy drifted the moment it existed, omitting G_FIELD.
     static bool canAlign(i32 t)
         {
-        return RKObject.typeHasTedinfo(t) || t == (i32)RKT_STRING;
+        return UXRscObject.typeHasTedinfo(t) || t == (i32)UXR_T_STRING;
         }
-    static void setInt(RKObject* o, RKProperty* p, i32 v)
+    static void setInt(UXRscObject* o, RKProperty* p, i32 v)
         {
         if (p.sel == (i32)RKV_X)
             {
@@ -281,23 +281,23 @@ class RKChoice : Object
             // G_TEXT.  It round-trips through a plain .rsc, renders on any AES,
             // and needs no extension to the format.  Only on a non-left choice,
             // so merely inspecting a string never rewrites it.
-            if (o.ted == (RKTedinfo*)0 && v != (i32)0)
+            if (o.ted == (UXRscTedinfo*)0 && v != (i32)0)
                 {
-                o.type = (i32)RKT_TEXT;
+                o.type = (i32)UXR_T_TEXT;
                 o.seedPayload(); // gives it the TEDINFO
-                if (o.ted != (RKTedinfo*)0 && o.text != (u8*)0)
+                if (o.ted != (UXRscTedinfo*)0 && o.text != (u8*)0)
                     {
                     o.ted.text = o.text;
                     }
                 }
-            if (o.ted != (RKTedinfo*)0)
+            if (o.ted != (UXRscTedinfo*)0)
                 {
                 o.ted.just = v;
                 }
             return;
             }
         }
-    static bool boolOf(RKObject* o, RKProperty* p)
+    static bool boolOf(UXRscObject* o, RKProperty* p)
         {
         if (p.kind == (i32)RKP_FLAG)
             {
@@ -309,7 +309,7 @@ class RKChoice : Object
             }
         return false;
         }
-    static void setBool(RKObject* o, RKProperty* p, bool on)
+    static void setBool(UXRscObject* o, RKProperty* p, bool on)
         {
         if (p.kind == (i32)RKP_FLAG)
             {

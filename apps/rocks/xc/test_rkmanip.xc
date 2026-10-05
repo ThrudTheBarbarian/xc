@@ -11,7 +11,7 @@
 #import "UXAppKitDriver.xc"
 #import "UXWindow.xc"
 #import "UXGeometry.xc"
-#import "RKModel.xc"
+#import "UXRscModel.xc"
 #import "RKMainController.xc"
 #import "RKMainBuilder.xc"
 
@@ -86,20 +86,20 @@ void main(void)
     checkTrue("the window wires", RKMainBuilder.buildInto(content, c, (i16)900, (i16)600));
 
     // Two forms, so the lazily-created SECOND pane can try to bury the overlay.
-    RKResource* r = new RKResource();
-    RKTree* t0 = new RKTree();
-    RKObject* root0 = RKObject.make((i32)RKT_BOX, (i32)0, (i32)0, (i32)300, (i32)200);
-    RKObject* btn = RKObject.make((i32)RKT_BUTTON, (i32)20, (i32)20, (i32)60, (i32)20);
-    RKObject* fld = RKObject.make((i32)RKT_FIELD, (i32)20, (i32)80, (i32)120, (i32)22);
+    UXRscDoc* r = new UXRscDoc();
+    UXRscTree* t0 = new UXRscTree();
+    UXRscObject* root0 = UXRscObject.make((i32)UXR_T_BOX, (i32)0, (i32)0, (i32)300, (i32)200);
+    UXRscObject* btn = UXRscObject.make((i32)UXR_T_BUTTON, (i32)20, (i32)20, (i32)60, (i32)20);
+    UXRscObject* fld = UXRscObject.make((i32)UXR_T_FIELD, (i32)20, (i32)80, (i32)120, (i32)22);
     btn.text = (u8*)"OK";
     root0.addChild(btn);
     root0.addChild(fld);
     t0.root = root0;
     r.addTree(t0);
 
-    RKTree* t1 = new RKTree();
-    RKObject* root1 = RKObject.make((i32)RKT_BOX, (i32)0, (i32)0, (i32)300, (i32)200);
-    RKObject* other = RKObject.make((i32)RKT_BUTTON, (i32)10, (i32)10, (i32)50, (i32)20);
+    UXRscTree* t1 = new UXRscTree();
+    UXRscObject* root1 = UXRscObject.make((i32)UXR_T_BOX, (i32)0, (i32)0, (i32)300, (i32)200);
+    UXRscObject* other = UXRscObject.make((i32)UXR_T_BUTTON, (i32)10, (i32)10, (i32)50, (i32)20);
     root1.addChild(other);
     t1.root = root1;
     r.addTree(t1);
@@ -151,7 +151,7 @@ void main(void)
 
     // Clicking bare form background deselects.
     c.onPick(RKDrag.hitTest(root0, (i32)280, (i32)190));
-    checkTrue("clicking the background deselects", c.selectedObject() == (RKObject*)0);
+    checkTrue("clicking the background deselects", c.selectedObject() == (UXRscObject*)0);
     checkTrue("and hides the frame", c.selFrame.isHidden());
 
     // ---- a drag moves the MODEL and the WIDGET together ---------------------
@@ -185,7 +185,7 @@ void main(void)
     // ---- a drop into a box puts it IN the box --------------------------------
     // Model and widgets both: the form's widgets are rebuilt so the button's widget is now a
     // child of the box's, and the overlay is still on top of the new pane.
-    RKObject* grp = RKObject.make((i32)RKT_BOX, (i32)150, (i32)100, (i32)120, (i32)80);
+    UXRscObject* grp = UXRscObject.make((i32)UXR_T_BOX, (i32)150, (i32)100, (i32)120, (i32)80);
     root0.addChild(grp);
     c.rebuildShownPane();
     c.onPick(btn);
