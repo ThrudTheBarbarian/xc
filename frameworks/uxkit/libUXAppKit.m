@@ -3879,11 +3879,98 @@ void ux_ak_set_outline_hooks(void* children, void* child, void* expandable, void
     g_ol_didexpand = (ux_ol_didexpand_fn)didexpand;
     }
 
-@interface UXOutlineSource : NSObject <NSOutlineViewDataSource, NSOutlineViewDelegate>
+@interface UXOutlineSource : NSObject <NSOutlineViewDataSource, NSOutlineViewDelegate, NSDraggingSource>
 @property(assign, nonatomic) void* peer;
 @property(assign, nonatomic) int handle; // the window, for drop points in its content's terms
+@property(strong, nonatomic) NSString* dragText; // what the row being dragged carries
+@end
+/* An NSOutlineView that also starts a row's drag on the secondary button, as the primary one does:
+   a right-drag (or control-drag) is how a connection is drawn from a row.  A right-click that does
+   not move is the ordinary one. */
+@interface UXNativeOutline : NSOutlineView
+@end
+@implementation UXNativeOutline
+- (void)rightMouseDown:(NSEvent*)e
+    {
+    NSPoint p = [self convertPoint:[e locationInWindow] fromView:nil];
+    NSInteger row = [self rowAtPoint:p];
+    id item = row >= 0 ? [self itemAtRow:row] : nil;
+    UXOutlineSource* src = (UXOutlineSource*)[self dataSource];
+    id<NSPasteboardWriting> w = item ? [src outlineView:self pasteboardWriterForItem:item] : nil;
+    if (!w)
+        {
+        [super rightMouseDown:e];
+        return;
+        }
+    for (;;)
+        {
+        NSEvent* n = [[self window] nextEventMatchingMask:(NSEventMaskRightMouseDragged | NSEventMaskRightMouseUp)];
+        if ([n type] == NSEventTypeRightMouseUp)
+            {
+            [super rightMouseDown:e];
+            return;
+            }
+        NSPoint q = [self convertPoint:[n locationInWindow] fromView:nil];
+        if ((q.x - p.x) * (q.x - p.x) + (q.y - p.y) * (q.y - p.y) > 9)
+            {
+            NSRect r = [self rectOfRow:row];
+            NSDraggingItem* di = [[NSDraggingItem alloc] initWithPasteboardWriter:w];
+            NSBitmapImageRep* rep = [self bitmapImageRepForCachingDisplayInRect:r];
+            [self cacheDisplayInRect:r toBitmapImageRep:rep];
+            NSImage* im = [[NSImage alloc] initWithSize:r.size];
+            [im addRepresentation:rep];
+            [di setDraggingFrame:r contents:im];
+            [self beginDraggingSessionWithItems:@[ di ] event:n source:src];
+            return;
+            }
+        }
+    }
 @end
 @implementation UXOutlineSource
+/* The window content's point for a screen point. */
+- (NSPoint)contentPoint:(NSPoint)screen
+    {
+    NSView* content = (self.handle > 0 && self.handle < UX_MAXW) ? g_view[self.handle] : nil;
+    if (!content)
+        return NSMakePoint(-1, -1);
+    NSPoint wp = [[content window] convertPointFromScreen:screen];
+    return [content convertPoint:wp fromView:nil];
+    }
+/* A row's drag begins: the app hears where, so a line can start at the row. */
+- (void)began:(NSPoint)screen
+    {
+    if (!self.dragText || !g_itemHover)
+        return;
+    NSPoint p = [self contentPoint:screen];
+    g_itemHover([self.dragText UTF8String], self.handle, (int)p.x, (int)p.y);
+    }
+- (void)ended
+    {
+    if (self.dragText && g_itemHover)
+        g_itemHover([self.dragText UTF8String], self.handle, -1, -1);
+    self.dragText = nil;
+    }
+- (void)outlineView:(NSOutlineView*)ov draggingSession:(NSDraggingSession*)s willBeginAtPoint:(NSPoint)p forItems:(NSArray*)items
+    {
+    [self began:p];
+    }
+- (void)outlineView:(NSOutlineView*)ov draggingSession:(NSDraggingSession*)s endedAtPoint:(NSPoint)p operation:(NSDragOperation)op
+    {
+    [self ended];
+    }
+/* As the source of a right-drag's session (UXNativeOutline). */
+- (NSDragOperation)draggingSession:(NSDraggingSession*)s sourceOperationMaskForDraggingContext:(NSDraggingContext)c
+    {
+    return c == NSDraggingContextWithinApplication ? NSDragOperationCopy : NSDragOperationNone;
+    }
+- (void)draggingSession:(NSDraggingSession*)s willBeginAtPoint:(NSPoint)p
+    {
+    [self began:p];
+    }
+- (void)draggingSession:(NSDraggingSession*)s endedAtPoint:(NSPoint)p operation:(NSDragOperation)op
+    {
+    [self ended];
+    }
 /* A row dragged out: what the app says it carries, as the app's private row type. */
 - (id<NSPasteboardWriting>)outlineView:(NSOutlineView*)ov pasteboardWriterForItem:(id)item
     {
@@ -3892,7 +3979,8 @@ void ux_ak_set_outline_hooks(void* children, void* child, void* expandable, void
     if (!t)
         return nil;
     NSPasteboardItem* pb = [[NSPasteboardItem alloc] init];
-    [pb setString:ak_ns(t) forType:AK_ROW_TYPE];
+    self.dragText = ak_ns(t);
+    [pb setString:self.dragText forType:AK_ROW_TYPE];
     return pb;
     }
 /* A row dragged over another: it is dropped ON that row (the row is highlighted), not between rows.
@@ -3907,6 +3995,11 @@ void ux_ak_set_outline_hooks(void* children, void* child, void* expandable, void
     if (!target)
         return NSDragOperationNone;
     [ov setDropItem:target dropChildIndex:NSOutlineViewDropOnItemIndex];
+    if (g_itemHover)
+        {
+        NSPoint p = [self contentPoint:[[ov window] convertPointToScreen:[info draggingLocation]]];
+        g_itemHover([[[info draggingPasteboard] stringForType:AK_ROW_TYPE] UTF8String], self.handle, (int)p.x, (int)p.y);
+        }
     return NSDragOperationCopy;
     }
 - (BOOL)outlineView:(NSOutlineView*)ov acceptDrop:(id<NSDraggingInfo>)info item:(id)item childIndex:(NSInteger)index
@@ -4109,7 +4202,7 @@ void ux_ak_make_outline(int handle, int node, int x, int y, int w, int h, void* 
     NSScrollView* sv = [[NSScrollView alloc] initWithFrame:NSMakeRect(x, y, w, h)];
     [sv setHasVerticalScroller:YES];
     [sv setBorderType:NSBezelBorder];
-    NSOutlineView* ov = [[NSOutlineView alloc] initWithFrame:[[sv contentView] bounds]];
+    NSOutlineView* ov = [[UXNativeOutline alloc] initWithFrame:[[sv contentView] bounds]];
     [ov setAllowsMultipleSelection:((peer && g_tbl_multi && g_tbl_multi(peer)) ? YES : NO)];
     int ncols = (peer && g_tbl_cols) ? g_tbl_cols(peer) : 0;
     if (ncols <= 0)
@@ -4697,4 +4790,98 @@ int ux_ak_test_outline_drag(int handle, int node, void* item, char* buf, int n)
     if (t && n > 0)
         snprintf(buf, (size_t)n, "%s", [t UTF8String]);
     return (t && [[ov registeredDraggedTypes] containsObject:AK_ROW_TYPE]) ? 1 : 0;
+    }
+
+/* ---- a connection's line above everything in a window -------------------------------------- */
+/* Native controls sit above whatever a window's content draws, so a line drawn there passes under
+   them.  This one is drawn in a clear child window laid over the content, which takes no clicks. */
+@interface UXLineView : NSView
+@property(assign, nonatomic) NSPoint a;
+@property(assign, nonatomic) NSPoint b;
+@property(assign, nonatomic) NSRect hot;
+@end
+@implementation UXLineView
+- (BOOL)isFlipped
+    {
+    return YES;
+    }
+- (void)drawRect:(NSRect)dirty
+    {
+    [[NSColor clearColor] set];
+    NSRectFill(dirty);
+    NSColor* c = [NSColor colorWithCalibratedRed:0.15 green:0.45 blue:0.95 alpha:1.0];
+    [c set];
+    if (self.hot.size.width > 0 && self.hot.size.height > 0)
+        {
+        NSBezierPath* f = [NSBezierPath bezierPathWithRect:NSInsetRect(self.hot, -1, -1)];
+        [f setLineWidth:2];
+        [f stroke];
+        }
+    /* the S-curve a connection is drawn with: it leaves one end and meets the other level, the
+       control points pulled out sideways by half the distance across (and at least 30 points) */
+    CGFloat dx = self.b.x - self.a.x;
+    CGFloat k = fabs(dx) / 2 > 30 ? fabs(dx) / 2 : 30;
+    CGFloat dir = dx < 0 ? -1 : 1;
+    NSBezierPath* l = [NSBezierPath bezierPath];
+    [l moveToPoint:self.a];
+    [l curveToPoint:self.b controlPoint1:NSMakePoint(self.a.x + dir * k, self.a.y)
+                         controlPoint2:NSMakePoint(self.b.x - dir * k, self.b.y)];
+    [l setLineWidth:2];
+    [l stroke];
+    NSRect dot = NSMakeRect(self.b.x - 3, self.b.y - 3, 6, 6);
+    [[NSBezierPath bezierPathWithOvalInRect:dot] fill];
+    }
+@end
+static NSWindow* g_lineWin[UX_MAXW];
+void ux_ak_window_line(int handle, int on, int x0, int y0, int x1, int y1, int hx, int hy, int hw, int hh)
+    {
+    if (handle <= 0 || handle >= UX_MAXW || !g_view[handle])
+        return;
+    NSView* content = g_view[handle];
+    NSWindow* parent = [content window];
+    if (!on)
+        {
+        if (g_lineWin[handle])
+            {
+            [parent removeChildWindow:g_lineWin[handle]];
+            [g_lineWin[handle] orderOut:nil];
+            }
+        return;
+        }
+    NSRect sr = [parent convertRectToScreen:[content convertRect:[content bounds] toView:nil]];
+    if (!g_lineWin[handle])
+        {
+        NSWindow* w = [[NSWindow alloc] initWithContentRect:sr styleMask:NSWindowStyleMaskBorderless
+                                                     backing:NSBackingStoreBuffered defer:NO];
+        [w setOpaque:NO];
+        [w setBackgroundColor:[NSColor clearColor]];
+        [w setIgnoresMouseEvents:YES];
+        [w setHasShadow:NO];
+        [w setReleasedWhenClosed:NO];
+        [w setContentView:[[UXLineView alloc] initWithFrame:NSMakeRect(0, 0, sr.size.width, sr.size.height)]];
+        g_lineWin[handle] = w;
+        }
+    NSWindow* w = g_lineWin[handle];
+    if (!NSEqualRects([w frame], sr))
+        [w setFrame:sr display:NO];
+    if ([w parentWindow] != parent)
+        [parent addChildWindow:w ordered:NSWindowAbove];
+    UXLineView* lv = (UXLineView*)[w contentView];
+    [lv setFrame:NSMakeRect(0, 0, sr.size.width, sr.size.height)];
+    lv.a = NSMakePoint(x0, y0);
+    lv.b = NSMakePoint(x1, y1);
+    lv.hot = NSMakeRect(hx, hy, hw, hh);
+    [lv setNeedsDisplay:YES];
+    [w orderFront:nil];
+    [lv displayIfNeeded];
+    }
+/* For tests: whether window `handle`'s line is up, and its far end. */
+int ux_ak_test_line(int handle, int* x1, int* y1)
+    {
+    if (handle <= 0 || handle >= UX_MAXW || !g_lineWin[handle] || ![g_lineWin[handle] isVisible])
+        return 0;
+    UXLineView* lv = (UXLineView*)[g_lineWin[handle] contentView];
+    *x1 = (int)lv.b.x;
+    *y1 = (int)lv.b.y;
+    return 1;
     }

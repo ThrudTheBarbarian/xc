@@ -84,6 +84,7 @@ void ux_ak_set_table_drag_hook(pointer fn);
 i32 ux_ak_menu_popup(i32 handle, pointer titles, pointer flags, i32 n, i32 x, i32 y);
 void ux_ak_set_outline_drag_hook(pointer fn);
 pointer ux_ak_outline_item_at(i32 handle, i32 node, i32 x, i32 y);
+void ux_ak_window_line(i32 handle, i32 on, i32 x0, i32 y0, i32 x1, i32 y1, i32 hx, i32 hy, i32 hw, i32 hh);
 void ux_ak_window_set_min_size(i32 handle, i32 w, i32 h);     // register the toolkit event forwarder
 void ux_ak_set_turn_hook(pointer fn, i32 ms); // the frame clock: the display link, or a timer for a slow tick
 void ux_ak_set_control_fire(pointer fn); // register the control-click -> action forwarder
@@ -1284,6 +1285,11 @@ class UXAppKitDriver : Object<UXViewDriver>
     void windowSetMinSize(i32 handle, i32 w, i32 h)
         {
         ux_ak_window_set_min_size(handle, w, h);
+        }
+    // a clear child window over the content
+    void windowLine(i32 handle, i32 on, i32 x0, i32 y0, i32 x1, i32 y1, i32 hx, i32 hy, i32 hw, i32 hh)
+        {
+        ux_ak_window_line(handle, on, x0, y0, x1, y1, hx, hy, hw, hh);
         }
     pointer outlineItemAt(i32 handle, i32 node, i32 x, i32 y)
         {

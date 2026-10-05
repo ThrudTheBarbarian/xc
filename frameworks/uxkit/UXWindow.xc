@@ -342,6 +342,27 @@ class UXWindow : UXResponder
             f(handle, w, h);
             }
         }
+    // A line from (x0, y0) to (x1, y1) of the content, drawn above everything in the window, native
+    // controls included, with `hot` framed: a drag's guide, such as a connection being drawn.
+    // Returns false where the backend cannot (the app then draws its own, under native controls).
+    bool showLine(i32 x0, i32 y0, i32 x1, i32 y1, UXRect hot)
+        {
+        callback f void(i32 handle, i32 on, i32 x0, i32 y0, i32 x1, i32 y1, i32 hx, i32 hy, i32 hw, i32 hh) = &gDriver.windowLine;
+        if (!f)
+            {
+            return false;
+            }
+        f(handle, (i32)1, x0, y0, x1, y1, (i32)hot.x, (i32)hot.y, (i32)hot.w, (i32)hot.h);
+        return true;
+        }
+    void hideLine(void)
+        {
+        callback f void(i32 handle, i32 on, i32 x0, i32 y0, i32 x1, i32 y1, i32 hx, i32 hy, i32 hw, i32 hh) = &gDriver.windowLine;
+        if (f)
+            {
+            f(handle, (i32)0, (i32)0, (i32)0, (i32)0, (i32)0, (i32)0, (i32)0, (i32)0, (i32)0);
+            }
+        }
     // Whether a toolbar is drawn in the window's chrome, so the content need leave it no room.
     static bool toolbarInChrome(void)
         {

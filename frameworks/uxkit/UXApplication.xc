@@ -79,6 +79,7 @@ class UXApplication : UXResponder
             {
             h(path, window, x, y);
             }
+        self.displayIfNeeded(); // it came from outside the run loop: draw what it changed now
         }
 
     // Take rows dragged out of the app's own tables and dropped on its windows.
@@ -98,6 +99,7 @@ class UXApplication : UXResponder
             {
             h(item, window, x, y);
             }
+        self.displayIfNeeded(); // it came from outside the run loop: draw what it changed now
         }
     void deliverItemDrop(u8* item, i32 window, i32 x, i32 y)
         {
@@ -106,6 +108,7 @@ class UXApplication : UXResponder
             {
             h(item, window, x, y);
             }
+        self.displayIfNeeded(); // it came from outside the run loop: draw what it changed now
         }
 
     void setMenuBar(UXMenuBar* mb)

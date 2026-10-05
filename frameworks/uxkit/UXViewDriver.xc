@@ -237,6 +237,9 @@ protocol UXViewDriver
     // Show a menu at window point (x, y) and wait for a pick: n items, titles[i] each with flags[i]
     // (1 a separator, 2 disabled).  Returns the index picked, or -1 if the menu was dismissed.
     // The item of the native outline at `node` under window point (x, y), or 0.
+    // A line from (x0, y0) to (x1, y1) of the window's content, drawn above everything in it, native
+    // controls too, with the rect (hx, hy, hw, hh) framed if it is not empty; on = 0 takes it down.
+    optional void windowLine(i32 handle, i32 on, i32 x0, i32 y0, i32 x1, i32 y1, i32 hx, i32 hy, i32 hw, i32 hh);
     optional pointer outlineItemAt(i32 handle, i32 node, i32 x, i32 y);
     optional i32 menuPopUp(i32 handle, pointer titles, pointer flags, i32 n, i32 x, i32 y);
 
