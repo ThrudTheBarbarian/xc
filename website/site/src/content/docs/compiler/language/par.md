@@ -72,7 +72,32 @@ one run; `XC_PAR_THREADS=1` runs the block on the calling thread alone. On
 targets without threads (`xt6502`, `m68k` and `wasm32`) the whole range runs on
 the calling thread.
 
-## Errors
+## What a body may contain
+
+A block runs on the CPU today, but the compiler holds every block to what a GPU
+can run, on every target. A block that builds now will then build for a GPU
+later without changes. The rule covers the body and every function it calls,
+however deep the calls go.
+
+**Allowed:** integer, floating-point and `bool` arithmetic; structs; arrays
+local to the work item; captured scalars and structs (read-only); captured
+arrays and global arrays (read and written element by element); reading
+globals; `if`, nested loops, `break` and `continue`; calls to functions that
+follow the same rules; and the maths that GPUs have natively, such as
+`Math.sqrt`, `sin`, `cos`, `exp`, `ln` and `pow`.
+
+**Refused**, each with an error at the block that names what it found:
+
+| The compiler refuses | Because |
+| --- | --- |
+| `new`, and any class instance, `String`, `Array`, `Map` or block, used or captured | a GPU has no heap and no reference counting |
+| a virtual or protocol call, a function pointer or a callback | a GPU kernel's calls must all be known when it is built |
+| recursion, even through a helper | a GPU has no general call stack |
+| varargs, `printf` and any other I/O, and calls to code outside the program | a GPU cannot run them |
+| writing a global scalar | every work item would race on it; use a reduction, or write an array |
+| inline assembly | it is for one CPU |
+
+## Errors in the shape
 
 | The compiler refuses | Because |
 | --- | --- |

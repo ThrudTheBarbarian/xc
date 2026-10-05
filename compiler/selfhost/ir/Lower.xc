@@ -13786,6 +13786,251 @@ class ClassInfo
         }
 
     // ── functions and the module ─────────────────────────────────────────
+    // ── the `par` subset (par-blocks.md §2) ─────────────────────────────────
+    // Every `par` block's kernel — `run` of the parser's `ParImpl$<n>` — and
+    // every function it calls, transitively, must be something a GPU can run.
+    // The rule holds on every target, the CPU included. One error per block, at
+    // the block, naming the construct.
+    Map* _parFns;      // function name -> IRFunc
+    Map* _parSyms;     // symbol name -> IRSymbol
+    Map* _parVerdict;  // function name -> reason ("" = clean)
+    Map* _parOnStack;  // function names being scanned
+
+    void parCheck(void)
+        {
+        _parFns = new Map();
+        _parSyms = new Map();
+        _parVerdict = new Map();
+        _parOnStack = new Map();
+        for (u32 i = (u32)0; i < _m.funcs().count(); i = i + (u32)1)
+            {
+            IRFunc* f = (IRFunc*)_m.funcs().get(i);
+            _parFns.set((Hashable*)f.name(), (Object*)f);
+            }
+        for (u32 i = (u32)0; i < _m.syms().count(); i = i + (u32)1)
+            {
+            IRSymbol* sym = (IRSymbol*)_m.syms().get(i);
+            _parSyms.set((Hashable*)sym.name(), (Object*)sym);
+            }
+        for (u32 i = (u32)0; i < _m.funcs().count(); i = i + (u32)1)
+            {
+            IRFunc* f = (IRFunc*)_m.funcs().get(i);
+            if (!f.name().hasPrefix(String.withCString("ParImpl$")) || !f.name().hasSuffix(String.withCString("$run")))
+                continue;
+            String* cls = f.name().substringBytes((u32)0, f.name().byteLength() - (u32)4);
+            String* why = (String*)0;
+            // A captured class instance, String, Array, Map or block is an owned
+            // ivar of the block's class, so its dealloc releases it.
+            String* dn = String.withString(cls);
+            dn.appendCString("$dealloc");
+            IRFunc* dealloc = (IRFunc*)_parFns.get((Hashable*)dn);
+            if (dealloc != (IRFunc*)0 && parReleases(dealloc))
+                why = String.withCString("captures an ARC'd value (a class instance, String, Array, Map or block); capture plain values, structs and sized arrays");
+            if (why == (String*)0)
+                {
+                String* r = parReason(f);
+                if (r.byteLength() > (u32)0)
+                    why = r;
+                }
+            if (why == (String*)0)
+                continue;
+            String* msg = String.withCString("a 'par' block must be able to run on a GPU, but this one ");
+            msg.append(why);
+            giveUpAt(msg, (Node*)_classDecls.get((Hashable*)cls));
+            return;
+            }
+        }
+
+    bool parReleases(IRFunc* f)
+        {
+        for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
+            {
+            Array* ins = ((IRBlock*)f.blocks().get(b)).insns();
+            for (u32 i = (u32)0; i < ins.count(); i = i + (u32)1)
+                if (((IRInsn*)ins.get(i)).op().equals(String.withCString("Release")))
+                    return true;
+            }
+        return false;
+        }
+
+    // `Stdio$printf` reads as `Stdio.printf`, and an overload's `__double` tail goes.
+    String* parShown(String* n)
+        {
+        String* out = String.withCString("");
+        for (u32 i = (u32)0; i < n.byteLength(); i = i + (u32)1)
+            {
+            u8 c = n.byteAt(i);
+            if (i > (u32)0 && c == (u8)'_' && i + (u32)1 < n.byteLength() && n.byteAt(i + (u32)1) == (u8)'_')
+                break;
+            out.appendByte(c == (u8)'$' ? (u8)'.' : c);
+            }
+        return out;
+        }
+
+    // What a kernel may call outside the program: the static-init once (the
+    // host has run it before any block starts), the bounds checks of a
+    // -fbounds-check build, block copies, and the maths every GPU has natively.
+    bool parAllowedExternal(String* n)
+        {
+        String* ok = String.withCString(" _xtc_sinit_run _xt_check_bounds _xt_check_bounds_n memcpy memmove memset sqrt sqrtf sin sinf cos cosf exp expf log logf pow powf floor floorf fma fmaf fabs fabsf abs _xm_sqrt _xm_sqrtf _xm_sin _xm_sinf _xm_cos _xm_cosf _xm_exp _xm_expf _xm_ln _xm_lnf _xm_pow _xm_powf ");
+        String* key = String.withCString(" ");
+        key.append(n);
+        key.appendCString(" ");
+        return ok.contains(key);
+        }
+
+    // The maths intrinsics (par-blocks.md §2), as Math's methods: allowed by
+    // name without looking inside, because each target implements them its own
+    // way (in assembly on the 6502 and the 68000) and a GPU has every one.
+    bool parMathIntrinsic(String* n)
+        {
+        if (!n.hasPrefix(String.withCString("Math$")))
+            return false;
+        String* m = String.withCString(" ");
+        for (u32 i = (u32)5; i < n.byteLength(); i = i + (u32)1)
+            {
+            if (n.byteAt(i) == (u8)'_' && i + (u32)1 < n.byteLength() && n.byteAt(i + (u32)1) == (u8)'_')
+                break;
+            m.appendByte(n.byteAt(i));
+            }
+        m.appendCString(" ");
+        return String.withCString(" sqrt sin cos exp ln pow min max abs floor fma ").contains(m);
+        }
+
+    String* parReason(IRFunc* f)
+        {
+        String* known = (String*)_parVerdict.get((Hashable*)f.name());
+        if (known != (String*)0)
+            return known;
+        _parOnStack.set((Hashable*)f.name(), (Object*)f);
+        String* why = parScan(f);
+        _parOnStack.remove((Hashable*)f.name());
+        _parVerdict.set((Hashable*)f.name(), (Object*)why);
+        return why;
+        }
+
+    String* parScan(IRFunc* f)
+        {
+        Map* def = new Map();
+        for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)f.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* ip = (IRInsn*)bb.insns().get(i);
+                if (ip.res() != (IRValue*)0)
+                    def.set((Hashable*)String.withU32(ip.res().seq()), (Object*)ip);
+                }
+            }
+        for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)f.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* ip = (IRInsn*)bb.insns().get(i);
+                String* op = ip.op();
+                if (op.equals(String.withCString("Retain")) || op.equals(String.withCString("Release")) || op.equals(String.withCString("Autorelease")) || op.equals(String.withCString("WeakLoad")) || op.equals(String.withCString("WeakRegister")) || op.equals(String.withCString("WeakUnregister")))
+                    return String.withCString("uses an ARC'd value (a class instance, String, Array, Map or block)");
+                if (op.equals(String.withCString("CallIndirect")) || op.equals(String.withCString("CallBankedIndirect")) || op.equals(String.withCString("VTblDispatch")) || op.equals(String.withCString("VTblLoad")) || op.equals(String.withCString("ProtoDispatch")) || op.equals(String.withCString("ProtoLoad")))
+                    return String.withCString("makes a dynamic call (a virtual or protocol call, a function pointer or a callback)");
+                if (op.equals(String.withCString("VaStart")) || op.equals(String.withCString("VaArg")))
+                    return String.withCString("uses varargs");
+                if (op.equals(String.withCString("Asm")))
+                    return String.withCString("contains inline assembly");
+                if (op.equals(String.withCString("Store")) || op.equals(String.withCString("StoreVolatile")) || op.equals(String.withCString("AggStore")))
+                    {
+                    String* g = parGlobalWritten(ip, def);
+                    // A class's static-init guard (inlined where there are no
+                    // threads) is the host's business: it has run before any
+                    // block starts.
+                    if (g != (String*)0 && !g.hasPrefix(String.withCString("__sinit_")))
+                        {
+                        String* r = String.withCString("writes the global '");
+                        r.append(parShown(g));
+                        r.appendCString("' (a global can be read, and a global array written element by element)");
+                        return r;
+                        }
+                    continue;
+                    }
+                if (op.equals(String.withCString("Call")) || op.equals(String.withCString("CallBanked")) || op.equals(String.withCString("CallCloaked")))
+                    {
+                    if (ip.ops().count() == (u32)0 || ((IROperand*)ip.ops().get((u32)0)).kind() != (u8)OPK_SYM)
+                        return String.withCString("makes a dynamic call (a virtual or protocol call, a function pointer or a callback)");
+                    String* name = ((IROperand*)ip.ops().get((u32)0)).name();
+                    if (name.equals(String.withCString("_xtc_alloc")) || name.hasPrefix(String.withCString("_xtc_new")))
+                        return String.withCString("allocates on the heap ('new')");
+                    if (parMathIntrinsic(name))
+                        continue;
+                    // A class's static initialiser, behind its `__sinit_` guard:
+                    // the host has run it before any block starts.
+                    if (name.hasSuffix(String.withCString("$init")))
+                        {
+                        String* gn = String.withCString("__sinit_");
+                        gn.append(name.substringBytes((u32)0, name.byteLength() - (u32)5));
+                        if (_parSyms.get((Hashable*)gn) != (Object*)0)
+                            continue;
+                        }
+                    IRFunc* callee = (IRFunc*)_parFns.get((Hashable*)name);
+                    if (callee == (IRFunc*)0)
+                        {
+                        if (parAllowedExternal(name))
+                            continue;
+                        String* r = String.withCString("calls '");
+                        r.append(parShown(name));
+                        r.appendCString("', which is outside the program and cannot run on a GPU");
+                        return r;
+                        }
+                    if (_parOnStack.get((Hashable*)name) != (Object*)0)
+                        {
+                        String* r = String.withCString("calls '");
+                        r.append(parShown(name));
+                        r.appendCString("' recursively; a GPU has no call stack for recursion");
+                        return r;
+                        }
+                    String* inner = parReason(callee);
+                    if (inner.byteLength() > (u32)0)
+                        {
+                        String* r = String.withCString("calls '");
+                        r.append(parShown(name));
+                        r.appendCString("', which ");
+                        r.append(inner);
+                        return r;
+                        }
+                    }
+                }
+            }
+        return String.withCString("");
+        }
+
+    // The global a store writes, when its address is the global itself or a
+    // field of it. An element of a global ARRAY is a buffer write: allowed.
+    String* parGlobalWritten(IRInsn* st, Map* def)
+        {
+        if (st.ops().count() == (u32)0 || ((IROperand*)st.ops().get((u32)0)).kind() != (u8)OPK_USE)
+            return (String*)0;
+        IRInsn* d = (IRInsn*)def.get((Hashable*)String.withU32(((IROperand*)st.ops().get((u32)0)).val().seq()));
+        for (u32 hops = (u32)0; d != (IRInsn*)0 && hops < (u32)64; hops = hops + (u32)1)
+            {
+            if (d.op().equals(String.withCString("AddrOf")))
+                {
+                if (d.ops().count() > (u32)0 && ((IROperand*)d.ops().get((u32)0)).kind() == (u8)OPK_SYM)
+                    {
+                    String* n = ((IROperand*)d.ops().get((u32)0)).name();
+                    IRSymbol* s = (IRSymbol*)_parSyms.get((Hashable*)n);
+                    if (s != (IRSymbol*)0 && s.kind() == (u8)SYM_DATAGLOBAL)
+                        return n;
+                    }
+                return (String*)0;
+                }
+            if (!d.op().equals(String.withCString("FieldAddr")) && !d.op().equals(String.withCString("Bitcast")))
+                return (String*)0;
+            if (d.ops().count() == (u32)0 || ((IROperand*)d.ops().get((u32)0)).kind() != (u8)OPK_USE)
+                return (String*)0;
+            d = (IRInsn*)def.get((Hashable*)String.withU32(((IROperand*)d.ops().get((u32)0)).val().seq()));
+            }
+        return (String*)0;
+        }
+
     IRModule* run(Node* program, String* moduleName)
         {
         _pendingGlobalInits = new Array();
@@ -14090,6 +14335,11 @@ class ClassInfo
             if (sym.kind() == (u8)SYM_FUNCTION && sym.name().hasSuffix(String.withCString("$dealloc")))
                 sym.setEscapes();
             }
+        // `par` blocks must stay within the GPU subset on every target
+        // (par-blocks.md §2).
+        parCheck();
+        if (_failed)
+            return (IRModule*)0;
         return _m;
         }
 

@@ -56,6 +56,7 @@ class Parser
     Array*  _blkFrames;     // capture frames for literals being parsed
     Array*  _blkClasses;    // synthesised impl ClassDecl nodes, creation order
     u32     _parCounter;    // ParImpl$N numbering (par blocks)
+    Token*  _parTok;        // the `par` being desugared: where its errors point
     Map*    _blkBases;      // mangled -> Map{"ret": spelling, "params": Array<Node nkParam>}
     Map*    _blkImplBase;   // impl name -> base name
     Map*    _blkFnRet;      // function name -> return spelling
@@ -2023,6 +2024,7 @@ class Parser
     // `par [name] (:reduce(op var))* [:fast] { body }`, the data-parallel block.
     Node* parsePar(void)
     {
+        _parTok = cur();
         advance(); // 'par'
         Node* p = mk((u16)nkPar);
         if (check((u16)tokIdentifier)) {
@@ -2232,6 +2234,10 @@ class Parser
         String* implPtr = String.withString(implName); implPtr.appendByte((u8)'*');
 
         Node* cls = mkNamed((u16)nkClassDecl, implName);
+        // At the `par`, as the reference has it, so an error about the block
+        // (the subset check after lowering) points at the block, not past it.
+        if (_parTok != (Token*)0)
+            cls.setPos(_parTok.fileId(), _parTok.line(), _parTok.col());
         cls.setOp(String.withCString("ParChunk"));
         for (u32 i = (u32)0; i < caps.count(); i = i + (u32)1) {
             String* cn = (String*)caps.get(i);

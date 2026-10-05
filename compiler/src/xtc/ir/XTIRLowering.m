@@ -20,6 +20,7 @@
 #import "XTEnumType.h"
 #import "XTFloatEncoding.h"
 #import "XTDiagnosticEngine.h"
+#import "XTIRParCheck.h"
 #import "XTSourceLocation.h"
 
 #pragma mark - Class lowering metadata
@@ -19612,6 +19613,12 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
                                           g.varName]
                          at:g.location];
         }
+
+    // `par` blocks must stay within the GPU subset on every target
+    // (par-blocks.md §2): checked here, on the lowered kernels, so every
+    // caller of the lowering gets the same answer.
+    if (![XTIRParCheck checkModule:L.module classDecls:L.classDeclsByName diagnostics:diag])
+        return nil;
     return L.module;
     }
 
