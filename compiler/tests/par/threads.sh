@@ -6,7 +6,8 @@
 # depend on how many threads the range was split across. Each fixture with an
 # .expected.out is built once and run with XC_PAR_THREADS = 1 (no threads at
 # all), 2, 3 (a split that does not divide the range) and 16 (more threads than
-# most chunks), and every run must print the expected output.
+# most chunks), and every run must print the expected output. The compile
+# itself must print nothing.
 #
 #   bash tests/par/threads.sh                 # this machine, with bin/<plat>/xcc-xc
 #   XCC=path/to/xcc ARCH=x86_64 bash tests/par/threads.sh
@@ -28,6 +29,12 @@ for src in tests/fixtures/par_*.xc; do
     [ -f "$exp" ] || continue
     if ! "$XCC" -q -H . ${ARCH:+-A "$ARCH"} -o "$WORK/$name" "$src" > "$WORK/$name.err" 2>&1; then
         echo "FAIL $name: does not build"; sed 's/^/    /' "$WORK/$name.err" | head -5
+        fail=$((fail + 1)); continue
+    fi
+    # A clean fixture compiles in silence: anything printed is a warning it
+    # should not have, or a stray print left in the compiler.
+    if [ -s "$WORK/$name.err" ]; then
+        echo "FAIL $name: the compiler printed:"; sed 's/^/    /' "$WORK/$name.err" | head -5
         fail=$((fail + 1)); continue
     fi
     ok=1
