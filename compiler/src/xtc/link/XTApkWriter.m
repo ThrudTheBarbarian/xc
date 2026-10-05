@@ -56,21 +56,47 @@ static NSArray<NSNumber*>* attrIds(void)
               @0x0101020c, @0x01010270, @0x010104ea ];
     }
 
+// The <application> attributes --manifest-attr may set: name, framework
+// resource id (from the SDK's android.jar), and whether the value is a
+// boolean (otherwise a string). Each takes a plain value; theme and icon,
+// which name resources, are not here.
+static NSArray<NSArray*>* settableAttrs(void)
+    {
+    return @[ @[ @"label", @0x01010001, @NO ],
+              @[ @"debuggable", @0x0101000f, @YES ],
+              @[ @"allowBackup", @0x01010280, @YES ],
+              @[ @"hardwareAccelerated", @0x010102d3, @YES ],
+              @[ @"largeHeap", @0x0101035a, @YES ],
+              @[ @"usesCleartextTraffic", @0x010104ec, @YES ],
+              @[ @"resizeableActivity", @0x010104f6, @YES ],
+              @[ @"requestLegacyExternalStorage", @0x01010603, @YES ],
+              @[ @"enableOnBackInvokedCallback", @0x0101066c, @YES ] ];
+    }
+
+static NSArray* settableAttr(NSString* name)
+    {
+    for (NSArray* a in settableAttrs())
+        if ([a[0] isEqualToString:name])
+            return a;
+    return nil;
+    }
+
 // A string pool being built: the attribute names occupy the low indices, and
 // everything else is interned behind them in first-use order.
 @interface XTApkPool : NSObject
 @property(nonatomic) NSMutableArray<NSString*>* strings;
 @property(nonatomic) NSMutableDictionary<NSString*, NSNumber*>* index;
+- (instancetype)initWithAttrNames:(NSArray<NSString*>*)names;
 @end
 
 @implementation XTApkPool
-- (instancetype)init
+- (instancetype)initWithAttrNames:(NSArray<NSString*>*)names
     {
     if ((self = [super init]))
         {
         _strings = [NSMutableArray array];
         _index = [NSMutableDictionary dictionary];
-        for (NSString* a in attrNames())
+        for (NSString* a in names)
             [self intern:a];
         }
     return self;
@@ -187,14 +213,76 @@ static void writeEndElem(NSMutableData* out, uint32_t nsIdx, uint32_t nameIdx)
     return c ^ 0xFFFFFFFFu;
     }
 
++ (nullable NSString*)manifestAttrError:(NSString*)spec
+    {
+    NSRange eq = [spec rangeOfString:@"="];
+    if (eq.location == NSNotFound || eq.location == 0)
+        return [NSString stringWithFormat:@"--manifest-attr wants name=value, not '%@'", spec];
+    NSString* k = [spec substringToIndex:eq.location];
+    NSString* v = [spec substringFromIndex:eq.location + 1];
+    NSArray* a = settableAttr(k);
+    if (!a)
+        {
+        NSMutableArray<NSString*>* names = [NSMutableArray array];
+        for (NSArray* x in settableAttrs())
+            [names addObject:x[0]];
+        return [NSString stringWithFormat:@"--manifest-attr: <application> has no attribute '%@' it can set; "
+                                          @"it takes %@",
+                                          k, [names componentsJoinedByString:@", "]];
+        }
+    if ([a[2] boolValue] && ![v isEqualToString:@"true"] && ![v isEqualToString:@"false"])
+        return [NSString stringWithFormat:@"--manifest-attr: %@ takes true or false, not '%@'", k, v];
+    return nil;
+    }
+
 + (NSData*)binaryManifestForPackage:(NSString*)pkg
                             libName:(NSString*)libName
                               label:(NSString*)label
                              minSdk:(int)minSdk
                           targetSdk:(int)targetSdk
                             hasCode:(BOOL)hasCode
+                             extras:(NSArray<NSString*>*)extras
     {
-    XTApkPool* p = [[XTApkPool alloc] init];
+    // --manifest-attr name=value, checked by manifestAttrError: (a later one
+    // wins). `label` replaces the default label, on the activity too, which
+    // is the name the launcher shows; every other one joins <application>.
+    NSMutableDictionary<NSString*, NSString*>* set = [NSMutableDictionary dictionary];
+    NSMutableArray<NSString*>* setOrder = [NSMutableArray array];
+    for (NSString* e in extras)
+        {
+        NSRange eq = [e rangeOfString:@"="];
+        NSString* k = [e substringToIndex:eq.location];
+        if (!set[k])
+            [setOrder addObject:k];
+        set[k] = [e substringFromIndex:eq.location + 1];
+        }
+    if (set[@"label"])
+        label = set[@"label"];
+    // The attribute table: the eight this manifest always uses, and the
+    // extras, in ascending resource-id order (the resource map is positional).
+    NSMutableArray<NSArray*>* table = [NSMutableArray array];
+    for (NSUInteger i = 0; i < attrNames().count; i++)
+        [table addObject:@[ attrNames()[i], attrIds()[i] ]];
+    NSMutableArray<NSArray*>* appExtras = [NSMutableArray array];
+    for (NSString* k in setOrder)
+        {
+        if ([k isEqualToString:@"label"])
+            continue;
+        NSArray* a = settableAttr(k);
+        [table addObject:@[ a[0], a[1] ]];
+        [appExtras addObject:a];
+        }
+    [table sortUsingComparator:^NSComparisonResult(NSArray* x, NSArray* y) {
+      return [(NSNumber*)x[1] compare:(NSNumber*)y[1]];
+    }];
+    NSMutableArray<NSString*>* tableNames = [NSMutableArray array];
+    NSMutableArray<NSNumber*>* tableIds = [NSMutableArray array];
+    for (NSArray* t in table)
+        {
+        [tableNames addObject:t[0]];
+        [tableIds addObject:t[1]];
+        }
+    XTApkPool* p = [[XTApkPool alloc] initWithAttrNames:tableNames];
     // Interned up front so the pool reads in a stable order regardless of the
     // order the elements below happen to need them.
     uint32_t sManifest = [p intern:@"manifest"];
@@ -255,11 +343,32 @@ static void writeEndElem(NSMutableData* out, uint32_t nsIdx, uint32_t nameIdx)
         }
         {
         NSMutableData* a = [NSMutableData data];
-        writeAttr(a, sNsUri, aLabel, sLabel, TYPE_STRING, sLabel);
-        writeAttr(a, sNsUri, aHasCode, NO_ENTRY, TYPE_INT_BOOLEAN,
-                  hasCode ? 0xFFFFFFFFu : 0);
-        writeAttr(a, sNsUri, aExtract, NO_ENTRY, TYPE_INT_BOOLEAN, 0xFFFFFFFFu);
-        writeStartElem(body, NO_ENTRY, sApp, a, 3);
+        // Every attribute in ascending resource-id order: label, hasCode,
+        // extractNativeLibs and the extras.
+        NSMutableArray<NSArray*>* attrs = [NSMutableArray array];
+        [attrs addObject:@[ @0x01010001, @(aLabel), @(sLabel), @(TYPE_STRING), @(sLabel) ]];
+        [attrs addObject:@[ @0x0101000c, @(aHasCode), @(NO_ENTRY), @(TYPE_INT_BOOLEAN),
+                            @(hasCode ? 0xFFFFFFFFu : 0) ]];
+        [attrs addObject:@[ @0x010104ea, @(aExtract), @(NO_ENTRY), @(TYPE_INT_BOOLEAN), @0xFFFFFFFFu ]];
+        for (NSArray* x in appExtras)
+            {
+            uint32_t nameIdx = A[x[0]].unsignedIntValue;
+            if ([x[2] boolValue])
+                [attrs addObject:@[ x[1], @(nameIdx), @(NO_ENTRY), @(TYPE_INT_BOOLEAN),
+                                    @([set[x[0]] isEqualToString:@"true"] ? 0xFFFFFFFFu : 0) ]];
+            else
+                {
+                uint32_t sv = [p intern:set[x[0]]];
+                [attrs addObject:@[ x[1], @(nameIdx), @(sv), @(TYPE_STRING), @(sv) ]];
+                }
+            }
+        [attrs sortUsingComparator:^NSComparisonResult(NSArray* x, NSArray* y) {
+          return [(NSNumber*)x[0] compare:(NSNumber*)y[0]];
+        }];
+        for (NSArray* x in attrs)
+            writeAttr(a, sNsUri, [x[1] unsignedIntValue], [x[2] unsignedIntValue],
+                      (uint8_t)[x[3] unsignedIntValue], [x[4] unsignedIntValue]);
+        writeStartElem(body, NO_ENTRY, sApp, a, (uint16_t)attrs.count);
         // <activity android:label … name=NativeActivity exported=true>
         }
         {
@@ -307,8 +416,8 @@ static void writeEndElem(NSMutableData* out, uint32_t nsIdx, uint32_t nameIdx)
     NSMutableData* map = [NSMutableData data];
     w16(map, RES_XML_RESOURCE_MAP);
     w16(map, 8);
-    w32(map, (uint32_t)(8 + attrIds().count * 4));
-    for (NSNumber* n in attrIds())
+    w32(map, (uint32_t)(8 + tableIds.count * 4));
+    for (NSNumber* n in tableIds)
         w32(map, n.unsignedIntValue);
 
     NSMutableData* out = [NSMutableData data];

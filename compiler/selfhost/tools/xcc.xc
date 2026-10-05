@@ -79,6 +79,7 @@ class CapOptions
     Array*  _needed;       // --needed <soname>, repeatable
     String* _withLib;      // --with-lib <path>
     String* _libName;      // --lib-name <name>
+    Array*  _manifestAttrs; // --manifest-attr name=value, repeatable (bug 616)
     String* _withDex;      // --with-dex <path>
     bool    _noSelfHost;   // --no-self-host
     bool    _threadFlag;   // -f[no-]thread-safe-arc was given
@@ -98,6 +99,7 @@ class CapOptions
         _needed = new Array();
         _withLib = (String*)0;
         _libName = (String*)0;
+        _manifestAttrs = new Array();
         _withDex = (String*)0;
         _noSelfHost = false;
         _threadFlag = false;
@@ -116,6 +118,7 @@ class CapOptions
     Array* needed(void)     { return _needed; }
     String* withLib(void)   { return _withLib; }
     String* libName(void)   { return _libName; }
+    Array* manifestAttrs(void) { return _manifestAttrs; }
     String* withDex(void)   { return _withDex; }
     bool noSelfHost(void)   { return _noSelfHost; }
     bool threadFlag(void)   { return _threadFlag; }
@@ -1154,7 +1157,14 @@ void packageApk(DriverOptions* d, String* name, String* soname, Array* soBytes)
 
     String* pkg = String.withCString("org.compile_xc.");
     pkg.append(name);
-    Array* manifest = ApkXml.manifest(pkg, manifestLib, name, (u32)24, (u32)35, dex != (Array*)0);
+    for (u32 k = (u32)0; k < c.manifestAttrs().count(); k = k + (u32)1) {
+        String* err = ApkXml.manifestAttrError((String*)c.manifestAttrs().get(k));
+        if (err != (String*)0) {
+            Stdio.printf("xcc: error: %s\n", err.cString());
+            Process.exit((i32)1); return;
+        }
+    }
+    Array* manifest = ApkXml.manifest(pkg, manifestLib, name, (u32)24, (u32)35, dex != (Array*)0, c.manifestAttrs());
 
     Array* entries = new Array();
     entries.add((Object*)ApkEntry.with(String.withCString("AndroidManifest.xml"), manifest));
@@ -4864,6 +4874,7 @@ void capabilityUsage(void)
     Stdio.printf("  --needed <soname>          Add a DT_NEEDED entry; repeatable\n");
     Stdio.printf("  --with-lib <path>          (--emit-apk) Package a prebuilt lib<name>.so too\n");
     Stdio.printf("  --lib-name <name>          (--emit-apk) The library Android loads first\n");
+    Stdio.printf("  --manifest-attr <n>=<v>    (--emit-apk) An attribute on <application>; repeatable\n");
     Stdio.printf("  --with-dex <path>          (--emit-apk) Package a classes.dex\n");
 }
 
@@ -5337,6 +5348,9 @@ bool parseCapabilityFlag(DriverOptions* d, u32* ip, u32 argc)
     if (a.equals(String.withCString("--lib-name")) && hasVal) {
         c.setLibName(Process.argument(i + (u32)1)); *ip = i + (u32)2; return true;
     }
+    if (a.equals(String.withCString("--manifest-attr")) && hasVal) {
+        c.manifestAttrs().add((Object*)Process.argument(i + (u32)1)); *ip = i + (u32)2; return true;
+    }
     if (a.equals(String.withCString("--with-dex")) && hasVal) {
         c.setWithDex(Process.argument(i + (u32)1)); *ip = i + (u32)2; return true;
     }
@@ -5435,9 +5449,10 @@ void checkCapabilities(DriverOptions* d)
         Stdio.printf("xcc: error: --needed names an Android DT_NEEDED entry and needs -A android\n");
         Process.exit((i32)1); return;
     }
-    if ((c.withLib() != (String*)0 || c.libName() != (String*)0 || c.withDex() != (String*)0)
+    if ((c.withLib() != (String*)0 || c.libName() != (String*)0 || c.withDex() != (String*)0
+         || c.manifestAttrs().count() > (u32)0)
         && !(isAndroid(d) && d.emitApk())) {
-        Stdio.printf("xcc: error: --with-lib, --lib-name and --with-dex package an APK "
+        Stdio.printf("xcc: error: --with-lib, --lib-name, --with-dex and --manifest-attr package an APK "
                      "and need -A android --emit-apk\n");
         Process.exit((i32)1); return;
     }

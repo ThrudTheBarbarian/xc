@@ -633,7 +633,7 @@ xcconly "--link-libs (-A arm64, refused)" 1 "applies to -A wasm32" -q -A arm64 -
 # checked for acceptance, status and output kind on both drivers.
 cover -fthread-safe-arc -fno-thread-safe-arc -fmalloc= -falloc= -fpic -fPIC -mpic \
       -mhard-float -mfpu -msoft-float -g --no-self-host --needed --with-lib --lib-name \
-      --with-dex
+      --with-dex --manifest-attr
 same "-fthread-safe-arc"    -q -fthread-safe-arc -o @OUT@ ret.xc
 same "-fno-thread-safe-arc" -q -fno-thread-safe-arc -o @OUT@ ret.xc
 same "-fmalloc=system"      -q -A x86_64 -fmalloc=system -o @OUT@ ret.xc
@@ -665,6 +665,9 @@ printf 'dex\n035\0' > classes.dex
 same "--with-lib"           -q -A android --emit-apk --with-lib libextra.so -o @OUT@.apk ret.xc
 same "--lib-name"           -q -A android --emit-apk --lib-name main -o @OUT@.apk ret.xc
 same "--with-dex"           -q -A android --emit-apk --with-dex classes.dex -o @OUT@.apk ret.xc
+same "--manifest-attr"      -q -A android --emit-apk --manifest-attr label=Rocks \
+                             --manifest-attr enableOnBackInvokedCallback=true -o @OUT@.apk ret.xc
+same "--manifest-attr (unknown, refused)" -q -A android --emit-apk --manifest-attr theme=x -o @OUT@.apk ret.xc
 same "--emit-lib (android)" -q -A android --emit-lib -o @OUT@.so ret.xc
 xcconly "--emit-lib (m68k, refused)" 1 "has no shared-library format" -q -A m68k --emit-lib -o @OUT@ ret.xc
 xcconly "--emit-lib (6502, refused)" 1 "has no shared-library format" -q -A 6502 --emit-lib -o @OUT@ ret.xc

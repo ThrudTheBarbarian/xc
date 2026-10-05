@@ -28,6 +28,7 @@
 @property(nonatomic, readwrite) BOOL emitIface;
 @property(nonatomic, readwrite, nullable) NSString* withLib;
 @property(nonatomic, readwrite, nullable) NSString* libName;
+@property(nonatomic, readwrite, nullable) NSArray<NSString*>* manifestAttrs;
 @property(nonatomic, readwrite) NSArray<NSString*>* neededSonames;
 @property(nonatomic, readwrite) BOOL emitApk;
 @property(nonatomic, readwrite, copy, nullable) NSString* withDex;
@@ -927,6 +928,12 @@ static NSString* sExecutablePath = nil;
             {
             opts.libName = [NSString stringWithUTF8String:argv[++i]];
             }
+        else if ([arg isEqualToString:@"--manifest-attr"] && i + 1 < argc)
+            {
+            // Repeatable: name=value for the APK manifest's <application>.
+            NSString* m = [NSString stringWithUTF8String:argv[++i]];
+            opts.manifestAttrs = [(opts.manifestAttrs ?: @[]) arrayByAddingObject:m];
+            }
         else if ([arg isEqualToString:@"--needed"] && i + 1 < argc)
             {
             // Repeatable: each -needed names one more DT_NEEDED soname.
@@ -1535,6 +1542,10 @@ static NSString* sExecutablePath = nil;
             "                             android.app.lib_name — WHICH packaged\n"
             "                             library the system loads (default: the\n"
             "                             payload).\n"
+            "  --manifest-attr <n>=<v>    -A android --emit-apk: set an attribute\n"
+            "                             on the manifest's <application> (label,\n"
+            "                             debuggable, enableOnBackInvokedCallback,\n"
+            "                             ...); repeatable.\n"
             "  --emit-iface               Write the module INTERFACE (JSON: classes,\n"
             "                             members, vtable slots, and each class's\n"
             "                             `outlet` fields and `:action` methods) to\n"

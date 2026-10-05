@@ -66,7 +66,7 @@ void main(void)
             }
         bool hasCode = Process.argument((u32)5).equals(String.withCString("1"));
         Array* m = ApkXml.manifest(Process.argument((u32)2), Process.argument((u32)3),
-                                   Process.argument((u32)4), (u32)24, (u32)35, hasCode);
+                                   Process.argument((u32)4), (u32)24, (u32)35, hasCode, new Array());
         writeBytes(out, m);
         return;
         }

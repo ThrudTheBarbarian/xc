@@ -34,7 +34,13 @@ NS_ASSUME_NONNULL_BEGIN
                               label:(NSString*)label
                              minSdk:(int)minSdk
                           targetSdk:(int)targetSdk
-                            hasCode:(BOOL)hasCode;
+                            hasCode:(BOOL)hasCode
+                             extras:(NSArray<NSString*>*)extras;
+
+// `--manifest-attr name=value`: nil when the writer can set it on
+// <application>, else the error to report (the name it does not know, with
+// the ones it does, or a boolean given something else).
++ (nullable NSString*)manifestAttrError:(NSString*)spec;
 
 // A ZIP with every entry STORED. `entries` is an ordered array of
 // @{@"name": NSString, @"data": NSData}.

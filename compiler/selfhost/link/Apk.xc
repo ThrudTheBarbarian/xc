@@ -160,6 +160,87 @@ class Crc32
         return a;
         }
 
+    // The <application> attributes --manifest-attr may set: name, framework
+    // resource id (from the SDK's android.jar), and whether the value is a
+    // boolean (otherwise a string). Each takes a plain value; theme and icon,
+    // which name resources, are not here. As the reference's settableAttrs.
+    static Array* settableNames(void)
+        {
+        Array* a = new Array();
+        a.add((Object*)String.withCString("label"));
+        a.add((Object*)String.withCString("debuggable"));
+        a.add((Object*)String.withCString("allowBackup"));
+        a.add((Object*)String.withCString("hardwareAccelerated"));
+        a.add((Object*)String.withCString("largeHeap"));
+        a.add((Object*)String.withCString("usesCleartextTraffic"));
+        a.add((Object*)String.withCString("resizeableActivity"));
+        a.add((Object*)String.withCString("requestLegacyExternalStorage"));
+        a.add((Object*)String.withCString("enableOnBackInvokedCallback"));
+        return a;
+        }
+    static Array* settableIds(void)
+        {
+        Array* a = new Array();
+        a.add((Object*)Number.withU32((u32)$01010001)); // label
+        a.add((Object*)Number.withU32((u32)$0101000F)); // debuggable
+        a.add((Object*)Number.withU32((u32)$01010280)); // allowBackup
+        a.add((Object*)Number.withU32((u32)$010102D3)); // hardwareAccelerated
+        a.add((Object*)Number.withU32((u32)$0101035A)); // largeHeap
+        a.add((Object*)Number.withU32((u32)$010104EC)); // usesCleartextTraffic
+        a.add((Object*)Number.withU32((u32)$010104F6)); // resizeableActivity
+        a.add((Object*)Number.withU32((u32)$01010603)); // requestLegacyExternalStorage
+        a.add((Object*)Number.withU32((u32)$0101066C)); // enableOnBackInvokedCallback
+        return a;
+        }
+    static i32 settableIndex(String* name)
+        {
+        Array* n = settableNames();
+        for (u32 i = (u32)0; i < n.count(); i = i + (u32)1)
+            if (((String*)n.get(i)).equals(name))
+                return (i32)i;
+        return (i32)-1;
+        }
+
+    // `--manifest-attr name=value`: 0 when the writer can set it on
+    // <application>, else the error to report.
+    static String* manifestAttrError(String* spec)
+        {
+        u32 eq = spec.byteIndexOf(String.withCString("="));
+        if (eq == (u32)$FFFFFFFF || eq == (u32)0)
+            {
+            String* m = String.withCString("--manifest-attr wants name=value, not '");
+            m.append(spec);
+            m.appendCString("'");
+            return m;
+            }
+        String* k = spec.substringBytes((u32)0, eq);
+        String* v = spec.substringFromByte(eq + (u32)1);
+        i32 at = settableIndex(k);
+        if (at < (i32)0)
+            {
+            String* m = String.withCString("--manifest-attr: <application> has no attribute '");
+            m.append(k);
+            m.appendCString("' it can set; it takes ");
+            Array* n = settableNames();
+            for (u32 i = (u32)0; i < n.count(); i = i + (u32)1)
+                {
+                if (i > (u32)0) m.appendCString(", ");
+                m.append((String*)n.get(i));
+                }
+            return m;
+            }
+        if (at > (i32)0 && !v.equals(String.withCString("true")) && !v.equals(String.withCString("false")))
+            {
+            String* m = String.withCString("--manifest-attr: ");
+            m.append(k);
+            m.appendCString(" takes true or false, not '");
+            m.append(v);
+            m.appendCString("'");
+            return m;
+            }
+        return (String*)0;
+        }
+
     static void attr(Array* d, u32 ns, u32 name, u32 raw, u32 ty, u32 data)
         {
         apkW32(d, ns);
@@ -169,6 +250,17 @@ class Crc32
         apkW8(d, (u32)0);
         apkW8(d, ty);
         apkW32(d, data);
+        }
+
+    static Array* apkRow(u32 id, u32 name, u32 raw, u32 ty, u32 data)
+        {
+        Array* r = new Array();
+        r.add((Object*)Number.withU32(id));
+        r.add((Object*)Number.withU32(name));
+        r.add((Object*)Number.withU32(raw));
+        r.add((Object*)Number.withU32(ty));
+        r.add((Object*)Number.withU32(data));
+        return r;
         }
 
     static void startElem(Array* out, u32 nsIdx, u32 nameIdx, Array* attrs, u32 n)
@@ -204,12 +296,48 @@ class Crc32
     // entirely when the manifest says false, which is indistinguishable from a
     // dex that failed to load (uxkit/031).
     static Array* manifest(String* pkg, String* libName, String* label,
-                           u32 minSdk, u32 targetSdk, bool hasCode)
+                           u32 minSdk, u32 targetSdk, bool hasCode, Array* extras)
         {
+        // --manifest-attr name=value, checked by manifestAttrError (a later
+        // one wins). `label` replaces the default label, on the activity too,
+        // which is the name the launcher shows; every other one joins
+        // <application>.
+        Map* set = new Map();
+        Array* order = new Array();
+        for (u32 i = (u32)0; i < extras.count(); i = i + (u32)1)
+            {
+            String* e = (String*)extras.get(i);
+            u32 eq = e.byteIndexOf(String.withCString("="));
+            String* k = e.substringBytes((u32)0, eq);
+            if (set.get((Hashable*)k) == (Object*)0) order.add((Object*)k);
+            set.set((Hashable*)k, (Object*)e.substringFromByte(eq + (u32)1));
+            }
+        if (set.get((Hashable*)String.withCString("label")) != (Object*)0)
+            label = (String*)set.get((Hashable*)String.withCString("label"));
+        // The attribute table: the eight this manifest always uses, and the
+        // extras, in ascending resource-id order (the resource map is
+        // positional).
+        Array* tNames = attrNames();
+        Array* tIds = attrIds();
+        Array* appExtras = new Array(); // indices into the settable table
+        for (u32 i = (u32)0; i < order.count(); i = i + (u32)1)
+            {
+            String* k = (String*)order.get(i);
+            if (k.equals(String.withCString("label"))) continue;
+            i32 at = settableIndex(k);
+            tNames.add((Object*)k);
+            tIds.add(settableIds().get((u32)at));
+            appExtras.add((Object*)Number.withU32((u32)at));
+            }
+        for (u32 i = (u32)1; i < tIds.count(); i = i + (u32)1)
+            for (u32 j = i; j > (u32)0 && ((Number*)tIds.get(j - (u32)1)).asU32() > ((Number*)tIds.get(j)).asU32(); j = j - (u32)1)
+                {
+                Object* x = tIds.get(j); tIds.set(j, tIds.get(j - (u32)1)); tIds.set(j - (u32)1, x);
+                Object* y = tNames.get(j); tNames.set(j, tNames.get(j - (u32)1)); tNames.set(j - (u32)1, y);
+                }
         ApkPool* p = new ApkPool();
-        Array* an = attrNames();
-        for (u32 i = (u32)0; i < an.count(); i = i + (u32)1)
-            p.intern((String*)an.get(i)); // indices 0..n-1, in order
+        for (u32 i = (u32)0; i < tNames.count(); i = i + (u32)1)
+            p.intern((String*)tNames.get(i)); // indices 0..n-1, in order
 
         String* NS = String.withCString("http://schemas.android.com/apk/res/android");
         u32 sManifest = p.intern(String.withCString("manifest"));
@@ -235,14 +363,14 @@ class Crc32
         u32 T_STR = (u32)$03;
         u32 T_DEC = (u32)$10;
         u32 T_BOOL = (u32)$12;
-        u32 aLabel = (u32)0;
-        u32 aName = (u32)1;
-        u32 aHasCode = (u32)2;
-        u32 aExported = (u32)3;
-        u32 aValue = (u32)4;
-        u32 aMinSdk = (u32)5;
-        u32 aTgtSdk = (u32)6;
-        u32 aExtract = (u32)7;
+        u32 aLabel = p.intern(String.withCString("label"));
+        u32 aName = p.intern(String.withCString("name"));
+        u32 aHasCode = p.intern(String.withCString("hasCode"));
+        u32 aExported = p.intern(String.withCString("exported"));
+        u32 aValue = p.intern(String.withCString("value"));
+        u32 aMinSdk = p.intern(String.withCString("minSdkVersion"));
+        u32 aTgtSdk = p.intern(String.withCString("targetSdkVersion"));
+        u32 aExtract = p.intern(String.withCString("extractNativeLibs"));
 
         Array* body = new Array();
         // namespace open
@@ -264,11 +392,40 @@ class Crc32
         startElem(body, NONE, sUsesSdk, a, (u32)2);
         endElem(body, NONE, sUsesSdk);
 
+        // Every attribute in ascending resource-id order: label, hasCode,
+        // extractNativeLibs and the extras. Each row: id, name, raw, type, data.
+        Array* rows = new Array();
+        rows.add((Object*)apkRow((u32)$01010001, aLabel, sLabel, T_STR, sLabel));
+        rows.add((Object*)apkRow((u32)$0101000C, aHasCode, NONE, T_BOOL, hasCode ? (u32)$FFFFFFFF : (u32)0));
+        rows.add((Object*)apkRow((u32)$010104EA, aExtract, NONE, T_BOOL, (u32)$FFFFFFFF));
+        for (u32 i = (u32)0; i < appExtras.count(); i = i + (u32)1)
+            {
+            u32 at = ((Number*)appExtras.get(i)).asU32();
+            String* k = (String*)settableNames().get(at);
+            u32 id = ((Number*)settableIds().get(at)).asU32();
+            String* v = (String*)set.get((Hashable*)k);
+            u32 nameIdx = p.intern(k);
+            if (at > (u32)0)
+                rows.add((Object*)apkRow(id, nameIdx, NONE, T_BOOL, v.equals(String.withCString("true")) ? (u32)$FFFFFFFF : (u32)0));
+            else
+                {
+                u32 sv = p.intern(v);
+                rows.add((Object*)apkRow(id, nameIdx, sv, T_STR, sv));
+                }
+            }
+        for (u32 i = (u32)1; i < rows.count(); i = i + (u32)1)
+            for (u32 j = i; j > (u32)0 && ((Number*)((Array*)rows.get(j - (u32)1)).get((u32)0)).asU32() > ((Number*)((Array*)rows.get(j)).get((u32)0)).asU32(); j = j - (u32)1)
+                {
+                Object* x = rows.get(j); rows.set(j, rows.get(j - (u32)1)); rows.set(j - (u32)1, x);
+                }
         a = new Array();
-        attr(a, sNsUri, aLabel, sLabel, T_STR, sLabel);
-        attr(a, sNsUri, aHasCode, NONE, T_BOOL, hasCode ? (u32)$FFFFFFFF : (u32)0);
-        attr(a, sNsUri, aExtract, NONE, T_BOOL, (u32)$FFFFFFFF);
-        startElem(body, NONE, sApp, a, (u32)3);
+        for (u32 i = (u32)0; i < rows.count(); i = i + (u32)1)
+            {
+            Array* r = (Array*)rows.get(i);
+            attr(a, sNsUri, ((Number*)r.get((u32)1)).asU32(), ((Number*)r.get((u32)2)).asU32(),
+                 ((Number*)r.get((u32)3)).asU32(), ((Number*)r.get((u32)4)).asU32());
+            }
+        startElem(body, NONE, sApp, a, rows.count());
 
         a = new Array();
         attr(a, sNsUri, aLabel, sLabel, T_STR, sLabel);
@@ -306,7 +463,7 @@ class Crc32
         apkW32(body, sNsUri);
 
         Array* pool = p.chunk();
-        Array* ids = attrIds();
+        Array* ids = tIds;
         Array* map = new Array();
         apkW16(map, (u32)$0180); // RES_XML_RESOURCE_MAP
         apkW16(map, (u32)8);

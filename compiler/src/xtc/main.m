@@ -1997,9 +1997,17 @@ static int linkAndroidApk(const char *argv0, XTCommandLineOptions *opts,
         extraLibEntry = [NSString stringWithFormat:@"lib/arm64-v8a/%@", bn];
     }
     NSString *manifestLib = opts.libName.length ? opts.libName : name;
+    for (NSString *m in opts.manifestAttrs) {
+        NSString *err = [XTApkWriter manifestAttrError:m];
+        if (err) {
+            fprintf(stderr, "xcc: error: %s\n", err.UTF8String);
+            return 1;
+        }
+    }
     NSData *axml = [XTApkWriter binaryManifestForPackage:pkg libName:manifestLib
                                                    label:base minSdk:24 targetSdk:35
-                                                 hasCode:(dexData != nil)];
+                                                 hasCode:(dexData != nil)
+                                                  extras:opts.manifestAttrs ?: @[]];
     // The native library is aligned to 4 KB so the loader can map it straight
     // out of the package; the manifest is read, not mapped, so it needs none.
     NSMutableArray<NSDictionary *> *entries = [@[

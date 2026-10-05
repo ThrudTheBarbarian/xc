@@ -50,6 +50,10 @@ NS_ASSUME_NONNULL_BEGIN
 // libraries the system loads. Defaults to the payload, which is right for a
 // single-lib package and wrong for the driver's.
 @property(nonatomic, readonly, nullable) NSString* libName;
+// --manifest-attr name=value (repeatable): an attribute for the APK manifest's
+// <application> (label, debuggable, enableOnBackInvokedCallback, …), checked
+// and written by XTApkWriter (bug 616).
+@property(nonatomic, readonly, nullable) NSArray<NSString*>* manifestAttrs;
 // --needed: extra DT_NEEDED sonames for the emitted android ELF. bionic
 // resolves a library's imports against its own local group plus the global
 // group, and does NOT honour RTLD_GLOBAL promotion of an already-loaded
