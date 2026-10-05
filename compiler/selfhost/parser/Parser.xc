@@ -3678,8 +3678,10 @@ class Parser
             return n;
         }
         if (t == (u16)tokSizeof) {
-            advance();
+            // At the keyword, as the reference places it: an error about the
+            // size points there.
             Node* n = mk((u16)nkSizeof);
+            advance();
             bool paren = match((u16)tokLParen);
             // `sizeof(T)` where T names a type is a size query; `sizeof(x)`
             // where x is a variable is a size-of-an-expression. Same test as a

@@ -65,6 +65,9 @@ These are class-pointer-only; `(u16 ?)x` is a compile-time error. Details on [In
 
 `sizeof(T)` evaluates to a compile-time `u16` byte count. Works on any type, including `struct` and `class`.
 
+A size over 65535 bytes does not fit a `u16`, so `sizeof` of it is an error that
+names the size. For a large array, multiply its count by `sizeof` of one element.
+
 ### Byte-extract prefixes (asm context)
 
 These operators apply only inside an `asm { ... }` block. They select individual bytes of a constant or symbol that the assembler would otherwise treat as a 16- or 32-bit address:

@@ -643,6 +643,35 @@ class ClassInfo
         giveUp(out);
         }
 
+    // Errors in the program the lowering finds (an oversized sizeof, a par
+    // block that breaks its rules): "file:line:col: error: text", which the
+    // front end prints as the reference's diagnostic engine does. Unlike
+    // giveUp, which reports something the compiler cannot do yet.
+    Array* _errors;
+    Array* errors(void)
+        {
+        if (_errors == (Array*)0)
+            _errors = new Array();
+        return _errors;
+        }
+    void errorAtNode(String* msg, Node* n)
+        {
+        String* out = String.withCString("");
+        if (n != (Node*)0 && n.line() != (u32)0)
+            {
+            out.append(n.file() != 0 ? n.file() : String.withCString("?"));
+            out.appendByte((u8)':');
+            out.append(String.withU32(n.line()));
+            out.appendByte((u8)':');
+            out.append(String.withU32(n.col()));
+            out.appendCString(": ");
+            }
+        out.appendCString("error: ");
+        out.append(msg);
+        errors().add((Object*)out);
+        giveUp(msg);
+        }
+
     // Warnings from the lowering, each "<category>\t<file:line:col: warning: text>",
     // the parser's shape, so the front end prints and filters them alike
     // (-Wno-<category>). The reference's lowering warns through its
@@ -4386,6 +4415,17 @@ class ClassInfo
         // layout after it.
         String* what = isName(n.name(), "-") ? n.kid((u32)0).ty() : n.name();
         u32 w = sizeOf(what);
+        // sizeof is a u16 (language/operators.md): a size that does not fit
+        // would wrap silently (`u8 img[1048576]; sizeof(img)` was 0). Refuse
+        // it (bug 615).
+        if (w > (u32)65535)
+            {
+            String* m = String.withCString("sizeof is ");
+            m.append(String.withU32(w));
+            m.appendCString(" bytes here, more than its type, u16, can hold; for an array, multiply its count by sizeof of one element");
+            errorAtNode(m, n);
+            return (IRValue*)0;
+            }
         Array* zops = new Array();
         zops.add((Object*)IROperand.immI((i32)w, String.withCString("U16")));
         return emit(String.withCString("Const"), String.withCString("U16"), zops);
@@ -13918,12 +13958,12 @@ class ClassInfo
                     }
                 String* m2 = String.withCString("a 'par' block's work items must be independent, but this one ");
                 m2.append(dep);
-                giveUpAt(m2, (Node*)_classDecls.get((Hashable*)cls));
+                errorAtNode(m2, (Node*)_classDecls.get((Hashable*)cls));
                 return;
                 }
             String* msg = String.withCString("a 'par' block must be able to run on a GPU, but this one ");
             msg.append(why);
-            giveUpAt(msg, (Node*)_classDecls.get((Hashable*)cls));
+            errorAtNode(msg, (Node*)_classDecls.get((Hashable*)cls));
             return;
             }
         }

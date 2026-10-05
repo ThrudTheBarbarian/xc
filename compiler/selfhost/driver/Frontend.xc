@@ -810,6 +810,15 @@ class FeOptions
             line.appendByte((u8)'\n');
             Stdio.error(line);
             }
+        if (lower.errors().count() > (u32)0)
+            {
+            for (u32 e = (u32)0; e < lower.errors().count(); e = e + (u32)1)
+                Frontend.printDiagnostic((String*)lower.errors().get(e));
+            // As the reference's driver ends a failed lowering.
+            Stdio.error(String.withCString("xcc: IR lowering failed\n"));
+            Process.exit((i32)1);
+            return (IRModule*)0;
+            }
         if (mod == 0 || lower.failed())
             {
             Stdio.printf("xc-fe: %s: unsupported: %s\n", o.input().cString(),
