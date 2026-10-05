@@ -23,6 +23,8 @@ u8* gParBlock[64];
 i32 gParSet[64];
 i64 gParGpuUs[64];
 i64 gParCpuUs[64];
+u32 gParGpuRuns[64];    // runs so far on each device: the first is a warm-up
+u32 gParCpuRuns[64];
 u32 gParBlocks;
 i32 gParAll;            // Par.device("par", …): every block without its own
 
@@ -114,6 +116,8 @@ class ParDevice
         gParSet[i] = (i32)-1;
         gParGpuUs[i] = (i64)-1;
         gParCpuUs[i] = (i64)-1;
+        gParGpuRuns[i] = (u32)0;
+        gParCpuRuns[i] = (u32)0;
         gParBlocks = gParBlocks + (u32)1;
         return i;
         }
@@ -134,8 +138,11 @@ class ParDevice
         }
 
     // 1 CPU, 2 GPU. XC_PAR first, then the block's own setting, then the one
-    // for every block, then auto: no GPU version or a small range stays on
-    // the CPU; otherwise run each device once and keep the faster.
+    // for every block, then auto, by time rather than by size (a few thousand
+    // items can each be heavy): the CPU is measured first; a block it runs in
+    // under a millisecond stays there, since the GPU's fixed costs alone are
+    // more; otherwise the GPU is measured too, and the faster kept. Each
+    // device's first run is a warm-up, not counted.
     static i32 choose(ParChunk* proto, i64 n)
         {
         if (_mode == (i32)0)
@@ -154,28 +161,32 @@ class ParDevice
         if (_mode == (i32)4 && dev > (i32)0)
             return dev;
         u8* src = proto.gpuSource();
-        if (src == (u8*)0 || src[0] == (u8)0 || n < (i64)65536)
+        if (src == (u8*)0 || src[0] == (u8)0)
+            return (i32)1;
+        if (gParCpuUs[i] < (i64)0 || gParCpuUs[i] < (i64)1000)
             return (i32)1;
         if (gParGpuUs[i] < (i64)0)
             return (i32)2;
-        if (gParCpuUs[i] < (i64)0)
-            return (i32)1;
         return gParGpuUs[i] <= gParCpuUs[i] ? (i32)2 : (i32)1;
         }
 
-    // What a run took, for auto's comparison (the first of each is kept).
+    // What a run took, for auto's comparison. Each device's first run of a
+    // block is a warm-up and is not counted: it pays one-off costs a later run
+    // does not (a GPU's first buffers and dispatch, the CPU's first threads),
+    // and judging by it kept a block the GPU runs three times as fast on the
+    // CPU. The second run of each is the one compared.
     static void ranOnCpu(ParChunk* proto, i64 us)
         {
         u32 i = slot(proto.parName());
-        bool decided = gParGpuUs[i] >= (i64)0 && gParCpuUs[i] < (i64)0;
-        if (gParCpuUs[i] < (i64)0)
+        gParCpuRuns[i] = gParCpuRuns[i] + (u32)1;
+        bool measured = gParCpuUs[i] < (i64)0 && gParCpuRuns[i] >= (u32)2;
+        if (measured)
             gParCpuUs[i] = us;
         if (reporting())
             {
             Log.info("par: %s: %ld us on the CPU", gParBlock[i], us);
-            if (decided)
-                Log.info("par: %s: auto picks the %s (GPU %ld us, CPU %ld us)", gParBlock[i],
-                         gParGpuUs[i] <= gParCpuUs[i] ? "GPU" : "CPU", gParGpuUs[i], gParCpuUs[i]);
+            if (measured && us < (i64)1000 && proto.gpuSource() != (u8*)0 && proto.gpuSource()[0] != (u8)0)
+                Log.info("par: %s: auto keeps it on the CPU (%ld us, too short for a GPU to win)", gParBlock[i], us);
             }
         }
 
@@ -184,10 +195,15 @@ class ParDevice
     static void ranOnGpu(ParChunk* proto, ParLayout* l, i64 took, i64 gpuUs)
         {
         u32 bi = slot(proto.parName());
-        if (gParGpuUs[bi] < (i64)0)
+        gParGpuRuns[bi] = gParGpuRuns[bi] + (u32)1;
+        bool decided = gParGpuUs[bi] < (i64)0 && gParGpuRuns[bi] >= (u32)2;
+        if (decided)
             gParGpuUs[bi] = took;
         if (!reporting())
             return;
+        if (decided && gParCpuUs[bi] >= (i64)0)
+            Log.info("par: %s: auto picks the %s (GPU %ld us, CPU %ld us)", gParBlock[bi],
+                     gParGpuUs[bi] <= gParCpuUs[bi] ? "GPU" : "CPU", gParGpuUs[bi], gParCpuUs[bi]);
         if (gpuUs >= (i64)0)
             Log.info("par: %s: %ld items on the GPU, %ld threads, %ld us of GPU time (%ld us in all)",
                      gParBlock[bi], l.n, l.threads, gpuUs, took);

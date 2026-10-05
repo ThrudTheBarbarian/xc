@@ -130,12 +130,15 @@ On the CPU, both goals run the same code.
 
 ### Which device
 
-By default each block's device is chosen automatically. A block without a GPU
-version, or over fewer than 65536 items, runs on the CPU. Otherwise the block runs once on
-each device, and from then on wherever it was faster, so a block that does little
-work per item (where copying its arrays to the GPU costs more than the work)
-settles on the CPU, and a heavy one on the GPU. The comparison leaves out building
-the block's GPU version, which happens once.
+By default each block's device is chosen automatically, by measuring it. A block
+without a GPU version runs on the CPU. Otherwise it runs on the CPU first, and a
+block the CPU finishes in under a millisecond stays there: the GPU's fixed costs
+alone are more. A longer block then runs on the GPU too, and from then on wherever
+it was faster. So a block that does little work per item, where copying its
+arrays to the GPU costs more than the work, settles on the CPU, and a heavy one on
+the GPU, however few items it has. Each device's first run of a block is a
+warm-up and is not counted: it pays one-off costs, such as building the GPU
+version and starting threads, that later runs do not.
 
 To choose instead:
 
