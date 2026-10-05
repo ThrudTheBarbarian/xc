@@ -428,6 +428,12 @@ class RKDrag : Object
     // The line being drawn, in canvas coordinates, while `wiring`; and the rect of the control the
     // pointer is over, highlighted as the drop target (w = 0: none).
     bool wiring;
+    // Where the form sits on the canvas (RKBackdrop's panel): the drag works in the form's
+    // coordinates, the overlay covers the whole canvas.  And the last press, in form coordinates.
+    i32 offX;
+    i32 offY;
+    i32 pressX;
+    i32 pressY;
     i32 lineX0;
     i32 lineY0;
     i32 lineX1;
@@ -440,6 +446,10 @@ class RKDrag : Object
         placeAt = (callback bool(i32 cx, i32 cy))0;
         wireFrom = (callback void(UXRscObject * o, i32 wx, i32 wy))0;
         wiring = false;
+        offX = (i32)0;
+        offY = (i32)0;
+        pressX = (i32)-1;
+        pressY = (i32)-1;
         hot = UXGeom.make((i16)0, (i16)0, (i16)0, (i16)0);
         drag = new RKDrag();
         selection = (UXRscObject*)0;
@@ -473,11 +483,11 @@ class RKDrag : Object
             RKGuide* gd = (RKGuide* ?)drag.guides.get((u16)i);
             if (gd.vertical)
                 {
-                g.fillRect(UXGeom.make((i16)gd.pos, (i16)0, (i16)1, b.h), (i32)1);
+                g.fillRect(UXGeom.make((i16)(gd.pos + offX), (i16)0, (i16)1, b.h), (i32)1);
                 }
             else
                 {
-                g.fillRect(UXGeom.make((i16)0, (i16)gd.pos, b.w, (i16)1), (i32)1);
+                g.fillRect(UXGeom.make((i16)0, (i16)(gd.pos + offY), b.w, (i16)1), (i32)1);
                 }
             }
         }
@@ -495,6 +505,8 @@ class RKDrag : Object
         i32 cx = (i32)0;
         i32 cy = (i32)0;
         self.toCanvas((i32)e.x, (i32)e.y, &cx, &cy);
+        pressX = cx;
+        pressY = cy;
         if (placeAt && placeAt(cx, cy))
             {
             return;
@@ -625,13 +637,18 @@ class RKDrag : Object
             }
         }
 
-    // Window coordinates to canvas ones.  The overlay covers the canvas, so its
-    // own absolute frame IS the canvas origin — no need to ask the canvas.
+    // Window coordinates to the form's.  The overlay covers the canvas, so its own absolute frame
+    // IS the canvas origin; the form sits at (offX, offY) on it.
     void toCanvas(i32 wx, i32 wy, i32* cx, i32* cy)
         {
         UXRect a = self.absoluteFrame();
-        cx[0] = wx - (i32)a.x;
-        cy[0] = wy - (i32)a.y;
+        cx[0] = wx - (i32)a.x - offX;
+        cy[0] = wy - (i32)a.y - offY;
+        }
+    // A rect in the form's coordinates, on the canvas.
+    UXRect onCanvas(UXRect r)
+        {
+        return UXGeom.make((i16)((i32)r.x + offX), (i16)((i32)r.y + offY), r.w, r.h);
         }
 
     UXRscObject* currentSelection(void)

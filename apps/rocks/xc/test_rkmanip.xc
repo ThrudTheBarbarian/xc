@@ -134,7 +134,7 @@ void main(void)
     checkTrue("clicking a button SELECTS it", c.selectedObject() == btn);
     checkTrue("the inspector followed", c.inspectorCtl.rowNamed((u8*)"Default") != (RKRow*)0);
     checkTrue("the selection frame is showing", !c.selFrame.isHidden());
-    check("and sits over the widget, x", (i32)c.selFrame.frame().x, (i32)20);
+    check("and sits over the widget, x", (i32)c.selFrame.frame().x, (i32)RK_FORM_X + (i32)20);
 
     // The frame is drawn above the overlay so its handles are visible...
     checkTrue("the selection frame draws above the overlay",
@@ -164,7 +164,7 @@ void main(void)
     check("the model moved", btn.x, (i32)120);
     UXView* w = c.canvasMap.viewFor(btn);
     check("and the real widget moved with it", (i32)w.frame().x, (i32)120);
-    check("as did the selection frame", (i32)c.selFrame.frame().x, (i32)120);
+    check("as did the selection frame", (i32)c.selFrame.frame().x, (i32)RK_FORM_X + (i32)120);
     checkTrue("the document is dirty", c.dirty);
 
     // Mid-drag the inspector must NOT be rebuilt — the pane the designer is

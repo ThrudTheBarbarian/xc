@@ -128,13 +128,13 @@ void main(void)
 
     // The overlay is placed over the widget, in canvas coordinates.
     checkTrue("a selection frame exists", c.selFrame != (RKSelectionFrame*)0);
-    check("frame x tracks the widget", (i32)c.selFrame.frame().x, (i32)20);
-    check("frame y tracks the widget", (i32)c.selFrame.frame().y, (i32)30);
+    check("frame x tracks the widget", (i32)c.selFrame.frame().x, (i32)RK_FORM_X + (i32)20);
+    check("frame y tracks the widget", (i32)c.selFrame.frame().y, (i32)RK_FORM_Y + (i32)30);
     check("frame w tracks the widget", (i32)c.selFrame.frame().w, (i32)60);
 
     // Selecting the OTHER object moves the same frame rather than making a second
     c.tableSelectionDidChange((UXTableView*)c.formOutline, (i32)4);
-    check("the frame moved to the field", (i32)c.selFrame.frame().y, (i32)60);
+    check("the frame moved to the field", (i32)c.selFrame.frame().y, (i32)RK_FORM_Y + (i32)60);
     check("and the field is selected", c.selectedObject().type, (i32)UXR_T_FIELD);
 
     win.close();

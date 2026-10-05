@@ -1,5 +1,9 @@
 // RKWiring.xc — outlets and actions, as the designer makes them.
 //
+// A line may be drawn either way: from an object to a control offers the object's outlets that can
+// hold the control AND its actions the control could fire, so no-one has to remember which end
+// Interface Builder wants a line started from.
+//
 // An END is what a connection line is drawn from or to: a control in the form, File's Owner,
 // First Responder, or one of the document's objects.  Dropping one end on another offers the
 // members that fit (wireChoices), and choosing one makes the connection (connect), in the scope
@@ -51,6 +55,7 @@ class RKChoice2 : Object
     i32 kind;   // UXR_CONN_OUTLET or UXR_CONN_ACTION
     u8* member;
     u8* type;   // the outlet's type, or the action's sender type
+    bool swap;  // an action offered on a line drawn from its target to the control that fires it
     }
 
 // Scope presets, in the order the Connections tab offers them.
@@ -146,6 +151,29 @@ class RKWiring : Object
                     }
                 }
             }
+        // an action drawn the other way: from the target to the control
+        if (dst.isView() && !src.isView())
+            {
+            if (src.kind == (i32)RKON_FIRSTR)
+                {
+                Array<RKChoice2>* all = new Array();
+                RKWiring.allActions(book, all);
+                for (u32 i = (u32)0; i < all.count(); i = i + (u32)1)
+                    {
+                    RKChoice2* c = (RKChoice2* ?)all.get(i);
+                    RKWiring.offerSwapped(out, c.member, c.type);
+                    }
+                }
+            else
+                {
+                Array<RKMember>* as = book.actionsOf(sc);
+                for (u32 i = (u32)0; i < as.count(); i = i + (u32)1)
+                    {
+                    RKMember* m = (RKMember* ?)as.get(i);
+                    RKWiring.offerSwapped(out, m.name, m.type);
+                    }
+                }
+            }
         // an outlet: the source holds the target
         if (src.kind != (i32)RKON_FIRSTR && dst.kind != (i32)RKON_FIRSTR)
             {
@@ -173,6 +201,23 @@ class RKWiring : Object
                 }
             }
         }
+    static void offerSwapped(Array<RKChoice2>* out, u8* member, u8* type)
+        {
+        for (u32 i = (u32)0; i < out.count(); i = i + (u32)1)
+            {
+            RKChoice2* c = (RKChoice2* ?)out.get(i);
+            if (c.kind == (i32)UXR_CONN_ACTION && RKClassBook.seq(c.member, member))
+                {
+                return;
+                }
+            }
+        RKChoice2* c = new RKChoice2();
+        c.kind = (i32)UXR_CONN_ACTION;
+        c.member = member;
+        c.type = type;
+        c.swap = true;
+        out.add(c);
+        }
     static void offer(Array<RKChoice2>* out, i32 kind, u8* member, u8* type)
         {
         for (u32 i = (u32)0; i < out.count(); i = i + (u32)1)
@@ -187,6 +232,7 @@ class RKWiring : Object
         c.kind = kind;
         c.member = member;
         c.type = type;
+        c.swap = false;
         out.add(c);
         }
 
@@ -202,8 +248,10 @@ class RKWiring : Object
         c.scope = scope;
         if (ch.kind == (i32)UXR_CONN_ACTION)
             {
-            c.src = RKWiring.refOf(d, t, src);  // the control
-            c.dst = RKWiring.refOf(d, t, dst);  // the target
+            RKEnd* control = ch.swap ? dst : src;
+            RKEnd* target = ch.swap ? src : dst;
+            c.src = RKWiring.refOf(d, t, control);
+            c.dst = RKWiring.refOf(d, t, target);
             // a control sends one action per layout, likewise
             RKWiring.yieldTo(d, c, true);
             }

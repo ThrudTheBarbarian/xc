@@ -202,18 +202,20 @@ class RKConnectionsPane : Object
         u8* text = (u8*)0;
         if (c.kind == (i32)UXR_CONN_OUTLET)
             {
-            text = fromHere ? RKConnectionsPane.joined3(c.member, (u8*)" -> ", other)
-                            : RKConnectionsPane.joined3(other, (u8*)" . ", c.member);
+            // an outlet: "playButton → play" from its holder, "Player.playButton" from what it holds
+            text = fromHere ? RKConnectionsPane.joined3(c.member, (u8*)" → ", other)
+                            : RKConnectionsPane.joined3(other, (u8*)".", c.member);
             }
         else
             {
-            text = fromHere ? RKConnectionsPane.joined3(c.member, (u8*)" -> ", other)
-                            : RKConnectionsPane.joined3(other, (u8*)" sends ", c.member);
+            // an action: "play → onPlay" from either end
+            text = fromHere ? RKConnectionsPane.joined3(c.member, (u8*)" → ", other)
+                            : RKConnectionsPane.joined3(other, (u8*)" → ", c.member);
             }
         // one line: what it is, the layouts it binds in, and x to break it
         UXLabel* l = new UXLabel();
         l.setTitle(text);
-        pane.addSubview(l, UXGeom.make((i16)8, y[0], (i16)((i32)w - (i32)182), rh));
+        pane.addSubview(l, UXGeom.make((i16)8, y[0], (i16)((i32)w - (i32)198), rh));
         RKConnRow* r = new RKConnRow();
         r.conn = c;
         UXPopUpButton* pu = new UXPopUpButton();
@@ -228,12 +230,12 @@ class RKConnectionsPane : Object
             }
         pu.selectItem(now);
         pu.setAction(&self.onScope);
-        pane.addSubview(pu, UXGeom.make((i16)((i32)w - (i32)172), y[0], (i16)104, rh));
+        pane.addSubview(pu, UXGeom.make((i16)((i32)w - (i32)190), y[0], (i16)104, rh));
         r.scope = pu;
         UXButton* b = new UXButton();
         b.setTitle((u8*)"Remove"); // breaks the connection
         b.setAction(&self.onBreak);
-        pane.addSubview(b, UXGeom.make((i16)((i32)w - (i32)66), y[0], (i16)62, rh));
+        pane.addSubview(b, UXGeom.make((i16)((i32)w - (i32)82), y[0], (i16)78, rh));
         r.breaker = b;
         rows.add(r);
         y[0] = (i16)((i32)y[0] + (i32)rh + (i32)4);

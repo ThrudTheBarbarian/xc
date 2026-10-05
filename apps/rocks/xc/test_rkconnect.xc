@@ -228,8 +228,17 @@ void main(void)
     c.offerWire(ctl, RKEnd.view(named(c, (u8*)"play")), (i32)300, (i32)200);
     checkTrue("playButton is offered", rowOf(c, (u8*)"playButton") >= (i32)0);
     checkTrue("titleField (a UXTextField*) is not", rowOf(c, (u8*)"titleField") < (i32)0);
+    checkTrue("and, drawn from the controller, its actions too", rowOf(c, (u8*)"onPlay") >= (i32)0);
     c.tableSelectionDidChange(c.chooser.table, rowOf(c, (u8*)"playButton"));
     check("two connections", (i32)c.doc.connections.count(), (i32)2);
+
+    Stdio.printf("-- an action drawn from its target to the control\n");
+    c.offerWire(ctl, RKEnd.view(named(c, (u8*)"play")), (i32)300, (i32)200);
+    c.tableSelectionDidChange(c.chooser.table, rowOf(c, (u8*)"onPlay"));
+    check("it takes the place of Play's onPlay (one action per control)", (i32)c.doc.connections.count(), (i32)2);
+    UXRscConnection* kr = (UXRscConnection* ?)c.doc.connections.get((u32)1);
+    checkTrue("stored from the control to the controller", kr.kind == (i32)UXR_CONN_ACTION &&
+              kr.src.space == (i32)UXR_REF_LOGICAL && kr.dst.space == (i32)UXR_REF_TOP && streq(kr.member, (u8*)"onPlay"));
 
     Stdio.printf("-- Stop on the desktop, Done on the phone, each for its own layout\n");
     c.newScope.selectItem((i32)RKSC_THIS);

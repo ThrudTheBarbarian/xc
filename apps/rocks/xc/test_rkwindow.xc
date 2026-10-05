@@ -224,6 +224,28 @@ void main(void)
     c.onDelete((UXControl*)0);
     checkTrue("with nothing selected, says so", streq(c.statusLabel.text(), (u8*)"Nothing to delete"));
 
+    Stdio.printf("-- the form's panel\n");
+    check("the panel is the form's size", c.backdrop.formW * (i32)1000 + c.backdrop.formH, (i32)400300);
+    c.overlay.pressX = (i32)390;
+    c.overlay.pressY = (i32)290;
+    c.onPick((UXRscObject*)0);
+    checkTrue("a click on its background selects the form", c.selectedObject() == shown(c).root);
+    RKRow* fw = c.sizeCtl.rowNamed((u8*)"W");
+    fw.field.setText((u8*)"500");
+    c.sizeCtl.onField(fw.field);
+    check("Size makes it wider", shown(c).root.w, (i32)500);
+    check("and the panel follows", c.backdrop.formW, (i32)500);
+    c.overlay.pressX = (i32)900;
+    c.onPick((UXRscObject*)0);
+    checkTrue("a click off the panel selects nothing", c.selectedObject() == (UXRscObject*)0);
+    c.viewLayout((i32)UXR_V_PHONE, (i32)UXR_V_ORIENT_PORTRAIT);
+    c.onNewLayout((UXControl*)0);
+    checkTrue("switching layout leaves no selection frame behind", c.selFrame == (RKSelectionFrame*)0 || c.selFrame.isHidden());
+    check("a new phone layout is a phone's size", shown(c).root.w * (i32)1000 + shown(c).root.h, (i32)360640);
+    checkTrue("and says so", streq(c.backdrop.label, (u8*)"phone portrait · 360 × 640"));
+    c.onUndo((UXMenuItem*)0);
+    c.viewLayout((i32)UXR_V_DESKTOP, (i32)UXR_V_ORIENT_NONE);
+
     Stdio.printf("-- New Form\n");
     i32 t0 = c.doc.treeCount();
     c.onNewForm((UXControl*)0);

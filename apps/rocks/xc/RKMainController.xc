@@ -39,6 +39,7 @@
 #import "RKConnect.xc"
 #import "RKDock.xc"
 #import "RKVariants.xc"
+#import "RKBackdrop.xc"
 #import "UXSegmentedControl.xc"
 
 // The toolbar's items, by tag (RKMainBuilder makes them; onToolbar dispatches them).
@@ -99,6 +100,7 @@ class RKMainController : Object<UXTableDelegate>
     RKWireChooser* chooser;         // the list a connection line ended in, while it is up
     i32 newScopePreset;             // RKSC_*: the scope a new connection gets
     RKVariants* variants;           // which properties each layout varies; the rest are shared
+    RKBackdrop* backdrop;           // the grid under the canvas, and the form's panel on it
     RKLibraryItem* placing;         // armed by a library pick: the next canvas press places it
     // What is selected, by outline row kind (RKON_*): a control (`selected`), a placeholder, or one
     // of the document's objects (selTop); 0 = nothing.
@@ -172,6 +174,9 @@ class RKMainController : Object<UXTableDelegate>
         chooser = (RKWireChooser*)0;
         newScopePreset = (i32)RKSC_ALL;
         variants = new RKVariants();
+        backdrop = (RKBackdrop*)0;
+        overlay.offX = (i32)RK_FORM_X;
+        overlay.offY = (i32)RK_FORM_Y;
         inspectorCtl.varyState = &self.varyStateOf;
         inspectorCtl.varyToggle = &self.onVaryToggle;
         overlay.wireFrom = &self.onWireFromView;
@@ -430,6 +435,59 @@ class RKMainController : Object<UXTableDelegate>
         return true;
         }
 
+    // ---- the backdrop and the form's panel -------------------------------------------------------
+    // Where a form's controls are realized on the canvas: from the panel's corner, to the canvas's.
+    UXRect formArea(void)
+        {
+        UXRect b = canvas.bounds();
+        return UXGeom.make((i16)RK_FORM_X, (i16)RK_FORM_Y, (i16)((i32)b.w - (i32)RK_FORM_X), (i16)((i32)b.h - (i32)RK_FORM_Y));
+        }
+    void ensureBackdrop(void)
+        {
+        if (backdrop != (RKBackdrop*)0 || canvas == (UXView*)0)
+            {
+            return;
+            }
+        backdrop = new RKBackdrop();
+        canvas.addSubview(backdrop, canvas.bounds()); // first, so everything is drawn on it
+        backdrop.setAutoresizeMask((i32)(UX_FLEX_WIDTH | UX_FLEX_HEIGHT));
+        }
+    // The panel shows the form's size, and which layout it is.
+    void updatePanel(void)
+        {
+        UXRscTree* t = self.shownTreeOrNull();
+        if (backdrop == (RKBackdrop*)0 || t == (UXRscTree*)0 || t.root == (UXRscObject*)0)
+            {
+            return;
+            }
+        UXRscForm* f = doc.formOf(t);
+        UXRscVariant* v = f != (UXRscForm*)0 ? f.variantFor(t) : (UXRscVariant*)0;
+        u8* what = v != (UXRscVariant*)0 ? RKIdentity.themeName(v.klass, v.orient) : (u8*)"every layout";
+        UXData* l = UXData.fromString(what);
+        l.appendBytes((u8*)" · ", UXRscTree.len((u8*)" · "));
+        u8* ws = RKIdentity.num(t.root.w);
+        u8* hs = RKIdentity.num(t.root.h);
+        l.appendBytes(ws, UXRscTree.len(ws));
+        l.appendBytes((u8*)" × ", UXRscTree.len((u8*)" × "));
+        l.appendBytes(hs, UXRscTree.len(hs));
+        l.appendByte((u8)0);
+        backdrop.showForm(t.root.w, t.root.h, l.bytes());
+        }
+    // A device layout's panel starts the size of a typical one of its kind, not the desktop's.
+    static void deviceSize(UXRscTree* t, i32 klass, i32 orient)
+        {
+        if (klass == (i32)UXR_V_PHONE)
+            {
+            t.root.w = orient == (i32)UXR_V_ORIENT_LANDSCAPE ? (i32)640 : (i32)360;
+            t.root.h = orient == (i32)UXR_V_ORIENT_LANDSCAPE ? (i32)360 : (i32)640;
+            }
+        else if (klass == (i32)UXR_V_TABLET)
+            {
+            t.root.w = orient == (i32)UXR_V_ORIENT_LANDSCAPE ? (i32)1024 : (i32)768;
+            t.root.h = orient == (i32)UXR_V_ORIENT_LANDSCAPE ? (i32)768 : (i32)1024;
+            }
+        }
+
     // ---- layouts: shared and varied properties -------------------------------------------------
     i32 varyStateOf(UXRscObject* o, RKProperty* p)
         {
@@ -485,7 +543,7 @@ class RKMainController : Object<UXTableDelegate>
                 }
             ((UXView* ?)panes.get((u32)ti)).setHidden(true);
             UXView* pane = new UXView();
-            canvas.addSubview(pane, canvas.bounds());
+            canvas.addSubview(pane, self.formArea());
             pane.setAutoresizeMask((i32)(UX_FLEX_WIDTH | UX_FLEX_HEIGHT));
             pane.setHidden(true);
             RKCanvas* map = new RKCanvas();
@@ -569,7 +627,7 @@ class RKMainController : Object<UXTableDelegate>
             UXRect hot = UXGeom.make((i16)0, (i16)0, (i16)0, (i16)0);
             if (over != (RKEnd*)0 && over.isView())
                 {
-                hot = overlay.drag.canvasRect(over.obj);
+                hot = overlay.onCanvas(overlay.drag.canvasRect(over.obj));
                 }
             if (dock != (RKDock*)0)
                 {
@@ -608,12 +666,12 @@ class RKMainController : Object<UXTableDelegate>
                 }
             }
         UXRect oa = overlay.absoluteFrame();
-        i32 cx = wx - (i32)oa.x;
-        i32 cy = wy - (i32)oa.y;
-        if (cx < (i32)0 || cy < (i32)0 || cx >= (i32)oa.w || cy >= (i32)oa.h)
+        if (wx < (i32)oa.x || wy < (i32)oa.y || wx >= (i32)oa.x + (i32)oa.w || wy >= (i32)oa.y + (i32)oa.h)
             {
             return (RKEnd*)0;
             }
+        i32 cx = wx - (i32)oa.x - overlay.offX; // the form's coordinates
+        i32 cy = wy - (i32)oa.y - overlay.offY;
         UXRscObject* o = RKDrag.hitTest(overlay.drag.root, cx, cy);
         return o != (UXRscObject*)0 ? RKEnd.view(o) : (RKEnd*)0;
         }
@@ -622,7 +680,7 @@ class RKMainController : Object<UXTableDelegate>
         {
         if (e.isView())
             {
-            UXRect r = overlay.drag.canvasRect(e.obj);
+            UXRect r = overlay.onCanvas(overlay.drag.canvasRect(e.obj));
             UXRect oa = overlay.absoluteFrame();
             wx[0] = (i32)oa.x + (i32)r.x + (i32)r.w / (i32)2;
             wy[0] = (i32)oa.y + (i32)r.y + (i32)r.h / (i32)2;
@@ -731,7 +789,7 @@ class RKMainController : Object<UXTableDelegate>
                 {
                 continue;
                 }
-            UXRect r = overlay.drag.canvasRect(o);
+            UXRect r = overlay.onCanvas(overlay.drag.canvasRect(o));
             if (x < (i32)r.x + (i32)r.w && (i32)r.x < x + w && y < (i32)r.y + (i32)r.h && (i32)r.y < y + h)
                 {
                 return true;
@@ -930,6 +988,7 @@ class RKMainController : Object<UXTableDelegate>
             return;
             }
         dirty = true;
+        RKMainController.deviceSize(t, viewClass, viewOrient);
         self.showResource(doc, doc.indexOfTree(t));
         self.sayLayout((u8*)"New ", (u8*)" layout");
         }
@@ -1256,10 +1315,11 @@ class RKMainController : Object<UXTableDelegate>
             selFrame.setHidden(true);
             }
 
+        self.ensureBackdrop();
         while ((i32)panes.count() <= treeIndex)
             {
             UXView* pane = new UXView();
-            canvas.addSubview(pane, canvas.bounds());
+            canvas.addSubview(pane, self.formArea());
             pane.setAutoresizeMask((i32)(UX_FLEX_WIDTH | UX_FLEX_HEIGHT));
             RKCanvas* map = new RKCanvas();
             UXRscTree* rt = r.treeAt((i32)panes.count());
@@ -1272,6 +1332,7 @@ class RKMainController : Object<UXTableDelegate>
             ((UXView* ?)panes.get((u16)i)).setHidden(i != treeIndex);
             }
         canvasMap = (RKCanvas* ?)maps.get((u16)treeIndex);
+        self.updatePanel();
 
         // The overlay edits ONE form at a time, so it follows the shown tree.
         overlay.setRoot(r.treeAt(treeIndex).root);
@@ -1430,8 +1491,10 @@ class RKMainController : Object<UXTableDelegate>
         if (selFrame != (RKSelectionFrame*)0)
             {
             UXRect f = selFrame.frame();
+            bool hidden = selFrame.isHidden(); // re-adding a view shows it: keep a hidden frame hidden
             selFrame.removeFromSuperview();
             canvas.addSubview(selFrame, f);
+            selFrame.setHidden(hidden);
             }
         }
 
@@ -1443,6 +1506,19 @@ class RKMainController : Object<UXTableDelegate>
         pressCopy = doc != (UXRscDoc*)0 && o != (UXRscObject*)0 ? doc.deepCopy() : (UXRscDoc*)0;
         pressSel = self.indexInShown(o);
         dragging = false;
+        if (o == (UXRscObject*)0 && backdrop != (RKBackdrop*)0 && backdrop.onPanel(overlay.pressX, overlay.pressY) &&
+            doc != (UXRscDoc*)0 && shownTree >= (i32)0 && shownTree < doc.treeCount())
+            {
+            // the panel's background: the form itself, so the Size tab can change how big it is
+            if (selFrame != (RKSelectionFrame*)0)
+                {
+                selFrame.setHidden(true);
+                }
+            overlay.setSelection((UXRscObject*)0);
+            self.selectObject(doc.treeAt(shownTree).root);
+            self.say((u8*)"The form: its size is on the Size tab");
+            return;
+            }
         if (o == (UXRscObject*)0)
             {
             selected = (UXRscObject*)0;
@@ -1517,7 +1593,7 @@ class RKMainController : Object<UXTableDelegate>
             }
         ((UXView* ?)panes.get((u32)shownTree)).setHidden(true);
         UXView* pane = new UXView();
-        canvas.addSubview(pane, canvas.bounds());
+        canvas.addSubview(pane, self.formArea());
         pane.setAutoresizeMask((i32)(UX_FLEX_WIDTH | UX_FLEX_HEIGHT));
         RKCanvas* map = new RKCanvas();
         map.realizeIn(doc, doc.treeAt(shownTree), (i32)RKWiring.themeOf(doc, doc.treeAt(shownTree)), pane);
@@ -1688,6 +1764,12 @@ class RKMainController : Object<UXTableDelegate>
             return;
             }
         dirty = true;
+        UXRscTree* ft = self.shownTreeOrNull();
+        if (ft != (UXRscTree*)0 && o == ft.root)
+            {
+            self.updatePanel(); // the form's own size
+            return;
+            }
         // a UXKit control's settings: its widget is made again with them
         if (inspectorCtl.lastWasAttr)
             {

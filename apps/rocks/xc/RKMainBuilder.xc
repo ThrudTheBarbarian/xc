@@ -87,7 +87,7 @@ class RKMainBuilder : Object
         // The side panes' widths: the desktop's where the window has room, a share of it where it
         // has not (a phone held upright), so the canvas always keeps the middle.
         i32 olW = (i32)200;
-        i32 inW = (i32)280;
+        i32 inW = (i32)330;
         if ((i32)w < olW + inW + (i32)300)
             {
             olW = (i32)w / (i32)4;
