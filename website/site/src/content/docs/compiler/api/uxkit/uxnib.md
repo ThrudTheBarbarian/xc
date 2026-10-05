@@ -4,7 +4,7 @@ description: "Load a form from a .rsc document as UXKit views on every backend: 
 ---
 
 `UXNib` loads a form designed in Rocks and gives you its views, already wired
-to your code. It runs on every backend. From 0.67.
+to your code. It runs on every backend. From 0.7.
 
 ```c
 #import "UXNib.xc"
@@ -192,7 +192,7 @@ UXKit's controls that GEM has no type for, by class name: `UXSlider`,
 `UXStepper`, `UXProgressBar`, `UXSegmentedControl` and `UXComboBox`. A
 document holds one as a `G_USERDEF` of that class, with its settings in
 [attributes](/compiler/api/uxkit/uxrscdoc/#uxrscattr). `make` falls back to
-this when no registered factory knows the name. From 0.67.
+this when no registered factory knows the name. From 0.7.
 
 ### applyAttrs
 

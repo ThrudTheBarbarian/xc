@@ -3,7 +3,7 @@ title: UXNibAwaking
 description: "awakeFromNib: called on each object a nib load made, and on File's Owner, once every outlet is connected."
 ---
 
-A protocol for objects that finish setting up after a nib load. From 0.67.
+A protocol for objects that finish setting up after a nib load. From 0.7.
 
 ```c
 #import "UXNib.xc"

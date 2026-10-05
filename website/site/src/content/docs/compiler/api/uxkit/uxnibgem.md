@@ -4,7 +4,7 @@ description: "On GEM, a .rsc file is the nib, and it is live: there is no inflat
 ---
 
 `UXNibGem` loads an interface from a `.rsc` file on GEM. The rest of the design
-follows from one property: **there is no inflation step**. Until 0.67 this
+follows from one property: **there is no inflation step**. Until 0.7 this
 class was `UXNib`; [`UXNib`](/compiler/api/uxkit/uxnib/) is now the loader for
 every backend, GEM included, and reads layout themes and scoped connections,
 which this one does not.

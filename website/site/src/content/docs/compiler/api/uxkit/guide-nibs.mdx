@@ -27,7 +27,7 @@ There are two loaders:
 
 | | |
 | --- | --- |
-| [`UXNib`](/compiler/api/uxkit/uxnib/) | every backend, from 0.67. Builds UXKit views from the document, for this device's layout |
+| [`UXNib`](/compiler/api/uxkit/uxnib/) | every backend, from 0.7. Builds UXKit views from the document, for this device's layout |
 | [`UXNibGem`](/compiler/api/uxkit/uxnibgem/) | GEM only. Binds views onto libGEM's own `OBJECT` array, so the AES walks the resource in place; one layout, unscoped connections |
 
 Rocks draws its canvas with `UXNib`'s own view mapping, so what you drag is
@@ -154,7 +154,7 @@ This has two consequences:
 | --- | --- |
 | **v1** (`XGNB`) | class overrides, top-level objects, connections |
 | **v2** (`UXNB`) | adds forms with a layout per form factor, and logical ids |
-| **v3** (`UXNB`) | adds a scope to each connection, labels for top-level objects, and extension sections. From 0.67 |
+| **v3** (`UXNB`) | adds a scope to each connection, labels for top-level objects, and extension sections. From 0.7 |
 
 `UXNib` reads all three, in portable code, on every backend. A v1 file reads
 under the compatibility rule: every tree is its own form, with one layout for
@@ -195,7 +195,7 @@ handles geometry.
 
 ### Connections can differ per layout
 
-From 0.67 each connection has a **scope**: the layout themes it binds in. The
+From 0.7 each connection has a **scope**: the layout themes it binds in. The
 default is all of them. A phone that fires `showDetail` from a toolbar button
 and a desktop that fires it from a list's selection have two connections to
 the same action, one scoped to the phone and one to the desktop and tablet.

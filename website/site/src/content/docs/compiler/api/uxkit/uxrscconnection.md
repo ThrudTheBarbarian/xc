@@ -4,7 +4,7 @@ description: "One outlet or action in a nib, and the layout themes it binds in."
 ---
 
 A connection from a [`UXRscDoc`](/compiler/api/uxkit/uxrscdoc/)'s nib graph.
-From 0.67.
+From 0.7.
 
 ```c
 #import "UXRscModel.xc"

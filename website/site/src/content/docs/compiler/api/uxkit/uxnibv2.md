@@ -3,7 +3,7 @@ title: UXNibV2
 description: "The UXNB nib chunk (v2 and v3), parsed in xc rather than in the host, so variant selection and logical-id resolution work on every backend."
 ---
 
-`UXNibV2` reads the **UXNB** chunk (v2, and from 0.67 v3) out of a `.rsc` file,
+`UXNibV2` reads the **UXNB** chunk (v2, and from 0.7 v3) out of a `.rsc` file,
 entirely in portable code. It reads the bytes in place; to load a form, use
 [`UXNib`](/compiler/api/uxkit/uxnib/).
 
@@ -42,7 +42,7 @@ variants, and the same code path consumes both.
 
 ## v3: scoped connections
 
-From 0.67 the chunk can be version 3. Three things change:
+From 0.7 the chunk can be version 3. Three things change:
 
 - A connection carries a **scope**, the layout themes it binds in.
   [`connScope`](#connscope) reads it, and every v2 connection reads as 0, all

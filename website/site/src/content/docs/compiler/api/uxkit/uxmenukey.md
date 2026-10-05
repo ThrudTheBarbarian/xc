@@ -5,7 +5,7 @@ description: "Reads a menu item's shortcut back out of its driver form, for a dr
 
 `UXMenuKey` is for drivers. It reads the shortcut that
 [`UXMenuItem.encoded`](/compiler/api/uxkit/uxmenuitem/#encoded) writes after
-an item's title: a tab, `+` when Shift is needed, then the key. From 0.67.
+an item's title: a tab, `+` when Shift is needed, then the key. From 0.7.
 
 ```c
 #import "UXViewDriver.xc"

@@ -4,7 +4,7 @@ description: "One loaded form: its root view, its views by logical id, its top-l
 ---
 
 A `UXNibInstance` is what [`UXNib.load`](/compiler/api/uxkit/uxnib/#load)
-returns. From 0.67.
+returns. From 0.7.
 
 ```c
 #import "UXNib.xc"
