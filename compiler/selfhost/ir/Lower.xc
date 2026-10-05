@@ -14210,6 +14210,14 @@ class ClassInfo
     Map* _mReds;      // field index -> 1 (reductions)
     IRLayout* _mObj;  // the block object's layout
     bool _mFailed;
+    // Helpers (functions the kernel calls, transitively): printed once each,
+    // in the order they finish, so a callee is defined before its caller.
+    // The printer's state is per function, so printing a helper from inside
+    // its caller saves and restores it (the reference uses a new printer).
+    bool _mHelper;
+    Map* _mParams;          // a helper's parameter value seq -> its index
+    Array* _mHelperText;
+    Map* _mHelperNames;
 
     String* mslScalar(String* t)
         {
@@ -14285,6 +14293,16 @@ class ClassInfo
         }
     String* mslName(IRValue* v)
         {
+        if (_mHelper && _mParams != (Map*)0)
+            {
+            String* pk = (String*)_mParams.get((Hashable*)mslKey(v));
+            if (pk != (String*)0)
+                {
+                String* ps = String.withCString("p");
+                ps.append(pk);
+                return ps;
+                }
+            }
         String* s = String.withCString("v");
         String* o = (String*)_mOrd.get((Hashable*)mslKey(v));
         s.append(o != (String*)0 ? o : String.withCString("0"));
@@ -14352,6 +14370,8 @@ class ClassInfo
     // without defining it.
     i64 mslSelfField(IRInsn* d)
         {
+        if (_mHelper)
+            return (i64)-1;
         if (d == (IRInsn*)0 || !d.op().equals(String.withCString("FieldAddr")) || d.ops().count() < (u32)2) return (i64)-1;
         IROperand* b = (IROperand*)d.ops().get((u32)0);
         IROperand* k = (IROperand*)d.ops().get((u32)1);
@@ -14728,7 +14748,29 @@ class ClassInfo
             if (callee.equals(String.withCString("_xtc_sinit_run")) || callee.hasSuffix(String.withCString("$init")))
                 return String.withCString("");
             String* fn = mslIntrinsic(callee);
-            if (fn == (String*)0 || rt == (String*)0 || rt.equals(String.withCString("Mem"))) return (String*)0;
+            bool isVoid = rt == (String*)0 || rt.equals(String.withCString("Mem"));
+            if (fn == (String*)0)
+                {
+                // A function of the program (the subset check has walked it):
+                // printed once, before the kernel.
+                IRFunc* target = (IRFunc*)0;
+                for (u32 q = (u32)0; q < _m.funcs().count(); q = q + (u32)1)
+                    if (((IRFunc*)_m.funcs().get(q)).name().equals(callee))
+                        target = (IRFunc*)_m.funcs().get(q);
+                if (target == (IRFunc*)0) return (String*)0;
+                fn = String.withCString("h_");
+                for (u32 q = (u32)0; q < callee.byteLength(); q = q + (u32)1)
+                    fn.appendByte(callee.byteAt(q) == (u8)'$' ? (u8)'_' : callee.byteAt(q));
+                if (_mHelperNames.get((Hashable*)callee) == (Object*)0)
+                    {
+                    _mHelperNames.set((Hashable*)callee, (Object*)callee);
+                    String* text = mslHelper(target, fn);
+                    if (text == (String*)0) return (String*)0;
+                    _mHelperText.add((Object*)text);
+                    }
+                }
+            else if (isVoid)
+                return (String*)0;
             String* e = String.withString(fn); e.appendCString("(");
             bool first = true;
             for (u32 k = (u32)1; k < ip.ops().count(); k = k + (u32)1)
@@ -14736,29 +14778,24 @@ class ClassInfo
                 IROperand* o = (IROperand*)ip.ops().get(k);
                 String* ot = mslTypeOf(o);
                 if (ot != (String*)0 && ot.equals(String.withCString("Mem"))) continue;
-                String* a = mslExpr(o, rt);
+                String* a = mslExpr(o, ot != (String*)0 ? ot : rt);
                 if (a == (String*)0) return (String*)0;
                 if (!first) e.appendCString(", ");
                 e.append(a);
                 first = false;
                 }
             e.appendCString(")");
+            if (isVoid) { e.appendCString(";"); return e; }
             return mslAssign(r, e);
             }
         if (op.equals(String.withCString("DbgValue")))
             return String.withCString("");
         return (String*)0;
         }
-    String* parMsl(IRFunc* f)
+    // The declarations and the dispatch-loop body of f (a kernel or a
+    // helper): true when every instruction printed.
+    bool mslBody(IRFunc* f, String* decls, String* body)
         {
-        _mDef = new Map(); _mSpace = new Map(); _mBufOf = new Map(); _mOrd = new Map();
-        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false;
-        if (f.params().count() == (u32)0) return (String*)0;
-        _mObj = mslLayoutOf(mslPointee(((IRValue*)f.params().get((u32)0)).ty()));
-        // lo and hi are ParChunk's two i64 ivars, fields 1 and 2 (0 is the vtable).
-        if (_mObj == (IRLayout*)0 || _mObj.fieldCount() < (u32)3 || !_mObj.typeAt((u32)1).equals(String.withCString("I64")) || !_mObj.typeAt((u32)2).equals(String.withCString("I64")))
-            return (String*)0;
-        if (!mslAnalyse(f)) return (String*)0;
         u32 ord = (u32)0;
         for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
             {
@@ -14777,7 +14814,6 @@ class ClassInfo
                     { _mOrd.set((Hashable*)mslKey(ip.res()), (Object*)String.withU32(ord)); ord = ord + (u32)1; }
                 }
             }
-        String* decls = String.withCString("");
         for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
             {
             IRBlock* bb = (IRBlock*)f.blocks().get(b);
@@ -14801,8 +14837,7 @@ class ClassInfo
                     decls.append(mslDecl(ip.res()));
                 }
             }
-        if (_mFailed) return (String*)0;
-        String* body = String.withCString("");
+        if (_mFailed) return false;
         for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
             {
             IRBlock* bb = (IRBlock*)f.blocks().get(b);
@@ -14810,28 +14845,112 @@ class ClassInfo
             for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
                 {
                 String* st = mslStatement((IRInsn*)bb.insns().get(i));
-                if (st == (String*)0) return (String*)0;
+                if (st == (String*)0) return false;
                 if (st.byteLength() > (u32)0) { body.appendCString("            "); body.append(st); body.appendCString("\n"); }
                 }
             IRInsn* t = bb.term();
-            if (t == (IRInsn*)0) return (String*)0;
+            if (t == (IRInsn*)0) return false;
             if (t.op().equals(String.withCString("Branch")))
                 body.append(mslEdge(bb, ((IROperand*)t.ops().get((u32)0)).blk(), "            "));
             else if (t.op().equals(String.withCString("CondBranch")))
                 {
                 String* c = mslExpr((IROperand*)t.ops().get((u32)0), (String*)0);
-                if (c == (String*)0) return (String*)0;
+                if (c == (String*)0) return false;
                 body.appendCString("            if ("); body.append(c); body.appendCString(") {\n");
                 body.append(mslEdge(bb, ((IROperand*)t.ops().get((u32)1)).blk(), "                "));
                 body.appendCString("            }\n");
                 body.append(mslEdge(bb, ((IROperand*)t.ops().get((u32)2)).blk(), "            "));
                 }
             else if (t.op().equals(String.withCString("Return")))
-                body.appendCString("            pc = 0xffffffffu; continue;\n");
+                {
+                // A helper returns its value; the kernel just stops.
+                IROperand* rv = t.ops().count() > (u32)0 ? (IROperand*)t.ops().get((u32)0) : (IROperand*)0;
+                String* rvt = rv != (IROperand*)0 ? mslTypeOf(rv) : (String*)0;
+                if (_mHelper && rvt != (String*)0 && !rvt.equals(String.withCString("Mem")))
+                    {
+                    String* e = mslExpr(rv, rvt);
+                    if (e == (String*)0) return false;
+                    body.appendCString("            return "); body.append(e); body.appendCString(";\n");
+                    }
+                else if (_mHelper)
+                    body.appendCString("            return;\n");
+                else
+                    body.appendCString("            pc = 0xffffffffu; continue;\n");
+                }
             else
-                return (String*)0;
+                return false;
             body.appendCString("        }\n");
             }
+        return !_mFailed;
+        }
+
+    // A helper the kernel calls: `static <ret> <name>(<params>)`, its body the
+    // same dispatch loop. Scalars only, in and out.
+    String* mslHelper(IRFunc* g, String* name)
+        {
+        // The caller's state, back afterwards.
+        Map* sDef = _mDef; Map* sSpace = _mSpace; Map* sBufOf = _mBufOf; Map* sOrd = _mOrd;
+        Map* sBlk = _mBlk; Map* sBufs = _mBufs; Map* sReds = _mReds; IRLayout* sObj = _mObj;
+        bool sFailed = _mFailed; bool sHelper = _mHelper; Map* sParams = _mParams;
+        String* out = mslHelperText(g, name);
+        _mDef = sDef; _mSpace = sSpace; _mBufOf = sBufOf; _mOrd = sOrd;
+        _mBlk = sBlk; _mBufs = sBufs; _mReds = sReds; _mObj = sObj;
+        _mFailed = sFailed; _mHelper = sHelper; _mParams = sParams;
+        return out;
+        }
+    String* mslHelperText(IRFunc* g, String* name)
+        {
+        _mDef = new Map(); _mSpace = new Map(); _mBufOf = new Map(); _mOrd = new Map();
+        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false;
+        _mHelper = true;
+        _mParams = new Map();
+        if (!mslAnalyse(g)) return (String*)0;
+        String* params = String.withCString("");
+        for (u32 k = (u32)0; k + (u32)1 < g.params().count(); k = k + (u32)1)
+            {
+            IRValue* pv = (IRValue*)g.params().get(k);
+            String* t = mslScalar(pv.ty());
+            if (t == (String*)0) return (String*)0;
+            _mParams.set((Hashable*)mslKey(pv), (Object*)String.withU32(k));
+            if (k > (u32)0) params.appendCString(", ");
+            params.append(t); params.appendCString(" p"); params.append(String.withU32(k));
+            }
+        String* rt = g.ret();
+        String* ret = (rt == (String*)0 || rt.equals(String.withCString("Void")) || rt.equals(String.withCString("Mem")))
+                          ? String.withCString("void") : mslScalar(rt);
+        if (ret == (String*)0) return (String*)0;
+        String* decls = String.withCString("");
+        String* body = String.withCString("");
+        if (!mslBody(g, decls, body)) return (String*)0;
+        String* out = String.withCString("static ");
+        out.append(ret); out.appendCString(" "); out.append(name); out.appendCString("("); out.append(params); out.appendCString(")\n{\n");
+        out.append(decls);
+        out.appendCString("    uint pc = 0;\n    while (pc != 0xffffffffu) {\n        switch (pc) {\n");
+        out.append(body);
+        out.appendCString("        default: pc = 0xffffffffu; continue;\n        }\n    }\n");
+        if (!ret.equals(String.withCString("void")))
+            { out.appendCString("    return "); out.append(ret); out.appendCString("(0);\n"); }
+        out.appendCString("}\n");
+        return out;
+        }
+
+    String* parMsl(IRFunc* f)
+        {
+        _mDef = new Map(); _mSpace = new Map(); _mBufOf = new Map(); _mOrd = new Map();
+        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false;
+        _mHelper = false;
+        _mParams = (Map*)0;
+        if (f.params().count() == (u32)0) return (String*)0;
+        _mObj = mslLayoutOf(mslPointee(((IRValue*)f.params().get((u32)0)).ty()));
+        // lo and hi are ParChunk's two i64 ivars, fields 1 and 2 (0 is the vtable).
+        if (_mObj == (IRLayout*)0 || _mObj.fieldCount() < (u32)3 || !_mObj.typeAt((u32)1).equals(String.withCString("I64")) || !_mObj.typeAt((u32)2).equals(String.withCString("I64")))
+            return (String*)0;
+        if (!mslAnalyse(f)) return (String*)0;
+        String* decls = String.withCString("");
+        String* body = String.withCString("");
+        _mHelperText = new Array();
+        _mHelperNames = new Map();
+        if (!mslBody(f, decls, body)) return (String*)0;
         if (_mFailed) return (String*)0;
         // The header line the runtime reads, and the kernel's parameters.
         String* meta = String.withCString("// xcpar size=");
@@ -14866,6 +14985,8 @@ class ClassInfo
             }
         String* out = String.withString(meta);
         out.appendCString("\n#include <metal_stdlib>\nusing namespace metal;\n");
+        for (u32 i = (u32)0; i < _mHelperText.count(); i = i + (u32)1)
+            out.append((String*)_mHelperText.get(i));
         out.appendCString("kernel void par_kernel("); out.append(params); out.appendCString(", uint tid [[thread_position_in_grid]])\n{\n");
         out.appendCString("    thread uchar st["); out.append(String.withU32(_mObj.size())); out.appendCString("];\n");
         out.appendCString("    for (uint q = 0; q < "); out.append(String.withU32(_mObj.size())); out.appendCString("u; q++) st[q] = args[q];\n");

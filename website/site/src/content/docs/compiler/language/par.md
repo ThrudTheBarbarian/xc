@@ -83,8 +83,9 @@ chunks. A block that cannot run on the GPU stays on the CPU, as do all blocks
 when there is no Metal device.
 
 In this first version a block runs on the GPU when it works on local arrays it
-captured, scalars and reductions. A block that uses `double` (Apple GPUs have
-no 64-bit floating point), touches a global, or calls a helper function runs on
+captured, scalars, reductions, and helper functions that take and return plain
+values. A block that uses `double` (Apple GPUs have no 64-bit floating point),
+touches a global, or calls a helper that takes a pointer or an array runs on
 the CPU. `XC_PAR_REPORT=1` prints one line for each block that ran on the GPU.
 
 Choosing the device automatically, and NVIDIA GPUs, come later.

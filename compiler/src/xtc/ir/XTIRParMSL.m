@@ -31,6 +31,11 @@ typedef NS_ENUM(uint8_t, XTParSpace) {
 @property(nonatomic) NSMutableDictionary<NSString*, NSNumber*>* blockIndex;
 @property(nonatomic) NSMutableDictionary<NSNumber*, NSNumber*>* ordinal; // value -> its name's number
 @property(nonatomic) BOOL failed;
+// Helpers (functions the kernel calls, transitively): printed once each, in
+// the order they finish, so a callee is always defined before its caller.
+@property(nonatomic) BOOL helperMode;
+@property(nonatomic) NSMutableArray<NSString*>* helperText;
+@property(nonatomic) NSMutableSet<NSString*>* helperNames;
 @end
 
 static NSString* scalarName(XTIRType* t)
@@ -95,6 +100,9 @@ static NSString* unsignedName(XTIRType* t)
 // compilers must print the same kernel.
 - (NSString*)name:(XTIRValueId)v
     {
+    // A helper's parameters: parameter n is value n (the memory token last).
+    if (self.helperMode && v + 1 < self.fn.paramTypes.count)
+        return [NSString stringWithFormat:@"p%llu", (unsigned long long)v];
     return [NSString stringWithFormat:@"v%lu", (unsigned long)[self.ordinal[@(v)] unsignedIntegerValue]];
     }
 
@@ -144,7 +152,7 @@ static NSString* unsignedName(XTIRType* t)
 // The field of the block object an address names, when it is `FieldAddr self, #k`.
 - (NSInteger)selfFieldOf:(XTIROperand*)op
     {
-    if (op.kind != XTIROperandKindUse)
+    if (self.helperMode || op.kind != XTIROperandKindUse)
         return -1;
     XTIRInsn* d = self.def[@(op.valueId)];
     if (d.opcode != XTIROpFieldAddr || d.operands.count < 2 || d.operands[0].kind != XTIROperandKindUse ||
@@ -501,7 +509,34 @@ static NSString* intrinsicFor(NSString* callee)
             if ([callee isEqualToString:@"_xtc_sinit_run"] || [callee hasSuffix:@"$init"])
                 return @"";
             NSString* fn = intrinsicFor(callee);
-            if (!fn || !rt || rt.kind == XTIRTypeKindMemory)
+            BOOL isVoid = !rt || rt.kind == XTIRTypeKindMemory;
+            if (!fn)
+                {
+                // A function of the program (the subset check has walked it):
+                // printed once, before the kernel.
+                XTIRFunction* target = nil;
+                for (XTIRFunction* g in self.module.functions)
+                    if ([g.name isEqualToString:callee])
+                        target = g;
+                if (!target)
+                    return nil;
+                fn = [@"h_" stringByAppendingString:[callee stringByReplacingOccurrencesOfString:@"$" withString:@"_"]];
+                if (![self.helperNames containsObject:callee])
+                    {
+                    [self.helperNames addObject:callee];
+                    XTIRParMSL* h = [XTIRParMSL new];
+                    h.module = self.module;
+                    h.fn = target;
+                    h.helperMode = YES;
+                    h.helperText = self.helperText;
+                    h.helperNames = self.helperNames;
+                    NSString* text = [h printHelper:fn];
+                    if (!text)
+                        return nil;
+                    [self.helperText addObject:text];
+                    }
+                }
+            else if (isVoid)
                 return nil;
             NSMutableArray<NSString*>* args = [NSMutableArray array];
             for (NSUInteger k = 1; k < i.operands.count; k++)
@@ -509,11 +544,13 @@ static NSString* intrinsicFor(NSString* callee)
                 XTIROperand* o = i.operands[k];
                 if (o.kind == XTIROperandKindUse && [self typeOf:o.valueId].kind == XTIRTypeKindMemory)
                     continue;
-                NSString* e = [self expr:o type:rt];
+                NSString* e = [self expr:o type:(o.kind == XTIROperandKindUse ? [self typeOf:o.valueId] : rt)];
                 if (!e)
                     return nil;
                 [args addObject:e];
                 }
+            if (isVoid)
+                return [NSString stringWithFormat:@"%@(%@);", fn, [args componentsJoinedByString:@", "]];
             return [NSString stringWithFormat:@"%@ = %@(%@);", r, fn, [args componentsJoinedByString:@", "]];
             }
         case XTIROpDbgValue:
@@ -521,6 +558,138 @@ static NSString* intrinsicFor(NSString* callee)
         default:
             return nil;
         }
+    }
+
+// The declarations and the dispatch-loop body of self.fn (a kernel or a
+// helper): YES when every instruction printed.
+- (BOOL)declarations:(NSMutableString*)decls body:(NSMutableString*)body
+    {
+    NSUInteger bi = 0;
+    for (XTIRBlock* b in self.fn.blocks)
+        self.blockIndex[b.name] = @(bi++);
+    self.ordinal = [NSMutableDictionary dictionary];
+    NSUInteger ord = 0;
+    for (XTIRBlock* b in self.fn.blocks)
+        {
+        for (XTIRInsn* i in b.phiNodes)
+            if (i.result && i.result.type.kind != XTIRTypeKindMemory)
+                self.ordinal[@(i.result.valueId)] = @(ord++);
+        for (XTIRInsn* i in b.instructions)
+            if (i.result && i.result.type.kind != XTIRTypeKindMemory)
+                self.ordinal[@(i.result.valueId)] = @(ord++);
+        }
+
+    for (XTIRBlock* b in self.fn.blocks)
+        {
+        for (XTIRInsn* phi in b.phiNodes)
+            if (phi.result && phi.result.type.kind != XTIRTypeKindMemory)
+                {
+                // A phi of pointers takes its incomings' space.
+                if (phi.result.type.kind == XTIRTypeKindPtr)
+                    for (NSUInteger k = 1; k < phi.operands.count; k += 2)
+                        if (phi.operands[k].kind == XTIROperandKindUse && self.space[@(phi.operands[k].valueId)])
+                            self.space[@(phi.result.valueId)] = self.space[@(phi.operands[k].valueId)];
+                [decls appendString:[self declOf:phi.result]];
+                }
+        for (XTIRInsn* i in b.instructions)
+            if (i.result && i.result.type.kind != XTIRTypeKindMemory)
+                [decls appendString:[self declOf:i.result]];
+        }
+    if (self.failed)
+        return NO;
+
+    for (XTIRBlock* b in self.fn.blocks)
+        {
+        [body appendFormat:@"        case %lu: {\n", (unsigned long)[self.blockIndex[b.name] unsignedIntegerValue]];
+        for (XTIRInsn* i in b.instructions)
+            {
+            NSString* s = [self statement:i];
+            if (!s)
+                return NO;
+            if (s.length)
+                [body appendFormat:@"            %@\n", s];
+            }
+        XTIRInsn* t = b.terminator;
+        switch (t.opcode)
+            {
+            case XTIROpBranch:
+                [body appendString:[self edgeFrom:b to:t.operands[0].blockRef indent:@"            "]];
+                break;
+            case XTIROpCondBranch:
+                {
+                NSString* c = [self expr:t.operands[0] type:nil];
+                if (!c)
+                    return NO;
+                [body appendFormat:@"            if (%@) {\n", c];
+                [body appendString:[self edgeFrom:b to:t.operands[1].blockRef indent:@"                "]];
+                [body appendString:@"            }\n"];
+                [body appendString:[self edgeFrom:b to:t.operands[2].blockRef indent:@"            "]];
+                break;
+                }
+            case XTIROpReturn:
+                {
+                // A helper returns its value; the kernel just stops.
+                XTIROperand* rv = t.operands.count ? t.operands[0] : nil;
+                XTIRType* rvt = (rv && rv.kind == XTIROperandKindUse) ? [self typeOf:rv.valueId] : nil;
+                if (self.helperMode && rvt && rvt.kind != XTIRTypeKindMemory)
+                    {
+                    NSString* e = [self expr:rv type:rvt];
+                    if (!e)
+                        return NO;
+                    [body appendFormat:@"            return %@;\n", e];
+                    }
+                else if (self.helperMode)
+                    [body appendString:@"            return;\n"];
+                else
+                    [body appendString:@"            pc = 0xffffffffu; continue;\n"];
+                break;
+                }
+            default:
+                return NO;
+            }
+        [body appendString:@"        }\n"];
+        }
+    return !self.failed;
+    }
+
+// A helper the kernel calls: `static <ret> <name>(<params>)`, its body the
+// same dispatch loop. Scalars only, in and out.
+- (nullable NSString*)printHelper:(NSString*)name
+    {
+    self.def = [NSMutableDictionary dictionary];
+    self.space = [NSMutableDictionary dictionary];
+    self.bufferOf = [NSMutableDictionary dictionary];
+    self.bufferFields = [NSMutableIndexSet indexSet];
+    self.reductionFields = [NSMutableIndexSet indexSet];
+    self.blockIndex = [NSMutableDictionary dictionary];
+    if (![self analyse])
+        return nil;
+    NSMutableArray<NSString*>* params = [NSMutableArray array];
+    for (NSUInteger k = 0; k + 1 < self.fn.paramTypes.count; k++)
+        {
+        NSString* t = scalarName(self.fn.paramTypes[k]);
+        if (!t)
+            return nil;
+        [params addObject:[NSString stringWithFormat:@"%@ p%lu", t, (unsigned long)k]];
+        }
+    XTIRType* rt = self.fn.returnType;
+    NSString* ret = (!rt || rt.kind == XTIRTypeKindVoid || rt.kind == XTIRTypeKindMemory) ? @"void" : scalarName(rt);
+    if (!ret)
+        return nil;
+    NSMutableString* decls = [NSMutableString string];
+    NSMutableString* body = [NSMutableString string];
+    if (![self declarations:decls body:body])
+        return nil;
+    NSMutableString* out = [NSMutableString string];
+    [out appendFormat:@"static %@ %@(%@)\n{\n", ret, name, [params componentsJoinedByString:@", "]];
+    [out appendString:decls];
+    [out appendString:@"    uint pc = 0;\n    while (pc != 0xffffffffu) {\n        switch (pc) {\n"];
+    [out appendString:body];
+    [out appendString:@"        default: pc = 0xffffffffu; continue;\n        }\n    }\n"];
+    if (![ret isEqualToString:@"void"])
+        [out appendFormat:@"    return %@(0);\n", ret];
+    [out appendString:@"}\n"];
+    return out;
     }
 
 - (nullable NSString*)print
@@ -541,78 +710,12 @@ static NSString* intrinsicFor(NSString* callee)
     if (![self analyse])
         return nil;
 
-    NSUInteger bi = 0;
-    for (XTIRBlock* b in self.fn.blocks)
-        self.blockIndex[b.name] = @(bi++);
-    self.ordinal = [NSMutableDictionary dictionary];
-    NSUInteger ord = 0;
-    for (XTIRBlock* b in self.fn.blocks)
-        {
-        for (XTIRInsn* i in b.phiNodes)
-            if (i.result && i.result.type.kind != XTIRTypeKindMemory)
-                self.ordinal[@(i.result.valueId)] = @(ord++);
-        for (XTIRInsn* i in b.instructions)
-            if (i.result && i.result.type.kind != XTIRTypeKindMemory)
-                self.ordinal[@(i.result.valueId)] = @(ord++);
-        }
-
     NSMutableString* decls = [NSMutableString string];
     NSMutableString* body = [NSMutableString string];
-    for (XTIRBlock* b in self.fn.blocks)
-        {
-        for (XTIRInsn* phi in b.phiNodes)
-            if (phi.result && phi.result.type.kind != XTIRTypeKindMemory)
-                {
-                // A phi of pointers takes its incomings' space.
-                if (phi.result.type.kind == XTIRTypeKindPtr)
-                    for (NSUInteger k = 1; k < phi.operands.count; k += 2)
-                        if (phi.operands[k].kind == XTIROperandKindUse && self.space[@(phi.operands[k].valueId)])
-                            self.space[@(phi.result.valueId)] = self.space[@(phi.operands[k].valueId)];
-                [decls appendString:[self declOf:phi.result]];
-                }
-        for (XTIRInsn* i in b.instructions)
-            if (i.result && i.result.type.kind != XTIRTypeKindMemory)
-                [decls appendString:[self declOf:i.result]];
-        }
-    if (self.failed)
+    self.helperText = [NSMutableArray array];
+    self.helperNames = [NSMutableSet set];
+    if (![self declarations:decls body:body])
         return nil;
-
-    for (XTIRBlock* b in self.fn.blocks)
-        {
-        [body appendFormat:@"        case %lu: {\n", (unsigned long)[self.blockIndex[b.name] unsignedIntegerValue]];
-        for (XTIRInsn* i in b.instructions)
-            {
-            NSString* s = [self statement:i];
-            if (!s)
-                return nil;
-            if (s.length)
-                [body appendFormat:@"            %@\n", s];
-            }
-        XTIRInsn* t = b.terminator;
-        switch (t.opcode)
-            {
-            case XTIROpBranch:
-                [body appendString:[self edgeFrom:b to:t.operands[0].blockRef indent:@"            "]];
-                break;
-            case XTIROpCondBranch:
-                {
-                NSString* c = [self expr:t.operands[0] type:nil];
-                if (!c)
-                    return nil;
-                [body appendFormat:@"            if (%@) {\n", c];
-                [body appendString:[self edgeFrom:b to:t.operands[1].blockRef indent:@"                "]];
-                [body appendString:@"            }\n"];
-                [body appendString:[self edgeFrom:b to:t.operands[2].blockRef indent:@"            "]];
-                break;
-                }
-            case XTIROpReturn:
-                [body appendString:@"            pc = 0xffffffffu; continue;\n"];
-                break;
-            default:
-                return nil;
-            }
-        [body appendString:@"        }\n"];
-        }
     if (self.failed)
         return nil;
 
@@ -654,6 +757,8 @@ static NSString* intrinsicFor(NSString* callee)
     NSMutableString* out = [NSMutableString string];
     [out appendFormat:@"%@\n", meta];
     [out appendString:@"#include <metal_stdlib>\nusing namespace metal;\n"];
+    for (NSString* h in self.helperText)
+        [out appendString:h];
     [out appendFormat:@"kernel void par_kernel(%@, uint tid [[thread_position_in_grid]])\n{\n", params];
     [out appendFormat:@"    thread uchar st[%u];\n", self.objLayout.size];
     [out appendFormat:@"    for (uint q = 0; q < %uu; q++) st[q] = args[q];\n", self.objLayout.size];
