@@ -3,6 +3,76 @@ title: ChangeLog
 description: Release notes for the xcc toolchain, with bug fixes and new features per version.
 ---
 
+## Version 0.7 — parallel blocks, on every CPU thread and on the GPU
+
+A `par` block runs a loop's iterations at once: over every CPU thread, or on
+the GPU — Metal on Apple silicon, and NVIDIA GPUs under Windows through the
+driver alone, with no CUDA toolkit. The compiler holds every block to what a GPU
+can run, on every target, so the same source runs anywhere; by default each
+block measures the CPU and the GPU and keeps the faster. Foundation gains
+`Operation` and `OperationQueue`. See [Parallel blocks](/compiler/language/par/)
+and the new GPU section of [Performance](/compiler/performance/).
+
+### New
+
+- **`par` blocks**: `par name { for (T i in a..b) { … } }` runs independent
+  iterations across every CPU thread; `:reduce(op var)` folds results, and an
+  integer reduction matches a serial run exactly.
+- **On the GPU**: Metal on Apple silicon (macOS), and NVIDIA on Windows, where
+  the program hands the driver PTX and needs no toolkit. Global and captured
+  arrays become GPU buffers; helper functions of plain values run there too.
+- **The device is chosen per block** (`auto`, the default): the CPU is timed
+  first, a block under 1 ms stays there, otherwise the GPU is timed too and the
+  faster kept, each after a warm-up run. `XC_PAR=cpu|gpu|auto`,
+  `Par.device(name, choice)` and `XC_PAR_REPORT=1` override and report it.
+- `:goal(speed)` (the default) lets the GPU use its fast maths;
+  `:goal(accuracy)` keeps precise `sin`, `exp` and friends.
+- The `par-gpu` warning says why a block cannot run on the target's GPU, and
+  what to change; a block whose items read each other's results is an error.
+- **`Operation` and `OperationQueue`**: units of work with dependencies across
+  queues, priorities, cancellation and completion blocks, run on worker
+  threads, serially, or on the main run loop; on targets without threads a
+  queue runs its operations when the program waits for them.
+- `--manifest-attr name=value` sets an attribute on an APK's `<application>`.
+- `sizeof` is the target's size type: `u64` on 64-bit targets, `u32` on 32-bit
+  ones, `u16` on the 6502, so `sizeof` of a 1 MB buffer is 1048576.
+- A loop variable can be captured by a block or a `par` block inside the loop.
+
+### Faster
+
+- A `par` block on the GPU: `mandelbrot` over 2048×2048 pixels takes 2.0 ms on
+  Apple silicon's GPU against 99 ms on every CPU thread and 482 ms on one, and
+  1.9 ms on an RTX 3090. A memory-bound block such as `saxpy` stays on the CPU,
+  where `auto` finds it is faster.
+- x86-64 and Windows: an unrolled AVX2 loop no longer chains its iterations
+  through the integer splats, so `call_depth` takes 0.35× its 0.66 time and
+  the x86-64 benchmark suite 0.93×. xc's code on x86-64 now takes 0.90× C++'s
+  time (geometric mean), and on arm64 0.96×.
+
+### Wrong code fixed
+
+- A static method called on a class that also has instances no longer runs
+  the class's `init` on its static storage (it crashed Windows programs and
+  broke `OperationQueue` on the 6502).
+- x86-64 and Windows, at `-O3`: a checked downcast past an object's own class
+  could return null after loop rotation.
+- AVX2: an unrolled loop's integer splats no longer chain one iteration into
+  the next.
+- wasm32: an indirect call that returns a struct declares its return slot.
+- arm9: a DWARF import takes the declaration that has the parameters.
+
+### Errors that used to be silent
+
+- A protocol cast the 6502 or m68k cannot check at run time is an error unless
+  the class declares the protocol.
+- `sizeof` a value too large for the target's size type is an error.
+
+### Linking
+
+- A program links with `-c` objects passed through `-Wl,` or `XTC_LDFLAGS`.
+- Windows: a program calling POSIX names such as `close` or `chdir` loads,
+  through the C runtime's own exports.
+
 ## Version 0.66 — AVX2 wherever it runs, and Linux GUI programs
 
 x86-64 and Windows programs now use AVX2 on machines that have it and SSE2 on

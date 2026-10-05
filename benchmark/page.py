@@ -205,11 +205,52 @@ def standing(cur):
     return " ".join(parts)
 
 
+PAR_MACHINES = (("mac", "Apple silicon, Metal"), ("linux", "Zen 5 Linux, CPU only"),
+                ("windows", "Windows, NVIDIA RTX 3090"))
+
+
+def ms(us):
+    return "%.1f" % (us / 1000.0) if us < 100000 else "%.0f" % (us / 1000.0)
+
+
+def par_tables(version):
+    """The par benchmarks (benchmark/par/run.py): milliseconds for the best of
+    eight runs of each block, per machine and device, and the first run's."""
+    path = os.path.join(ROOT, "par", version, "results.json")
+    if not os.path.exists(path):
+        return "*(not measured for this release)*"
+    with open(path) as fh:
+        res = json.load(fh)
+    out = []
+    for m, name in PAR_MACHINES:
+        rows = [(b, r[m]) for b, r in sorted(res.items()) if m in r]
+        if not rows:
+            continue
+        gpu = any("gpu" in r for _, r in rows)
+        out.append("**%s** (ms; best of eight runs)\n" % name)
+        if gpu:
+            out.append("| benchmark | one thread | all threads | GPU | `auto` | GPU's first run |")
+            out.append("|---|---|---|---|---|---|")
+        else:
+            out.append("| benchmark | one thread | all threads | `auto` |")
+            out.append("|---|---|---|---|")
+        for b, r in rows:
+            cells = ["`%s`" % b, ms(r["serial"]["best_us"]), ms(r["cpu"]["best_us"])]
+            if gpu:
+                cells.append(ms(r["gpu"]["best_us"]) if "gpu" in r else "–")
+            cells.append(ms(r["auto"]["best_us"]))
+            if gpu:
+                cells.append(ms(r["gpu"]["first_us"]) if "gpu" in r else "–")
+            out.append("| " + " | ".join(cells) + " |")
+        out.append("")
+    return "\n".join(out)
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--current", default="v0.66")
-    ap.add_argument("--history", default="v0.62,v0.63,v0.64,v0.65,v0.66")
-    ap.add_argument("--release", default="0.66")
+    ap.add_argument("--current", default="v0.7")
+    ap.add_argument("--history", default="v0.62,v0.63,v0.64,v0.65,v0.66,v0.7")
+    ap.add_argument("--release", default="0.7")
     a = ap.parse_args()
     cur = load(a.current)
     versions = a.history.split(",")
@@ -232,6 +273,7 @@ def main():
         first=versions[0].lstrip("v"),
         hist_list=", ".join(v.lstrip("v") for v in versions),
         changed=", ".join("`%s`" % b for b in sorted(CHANGED_IN)),
+        par=par_tables(a.current),
     )
     with open(PAGE, "w") as fh:
         fh.write(page)
@@ -296,12 +338,30 @@ gain:
   reads elements without retaining them.
 - **x86-64 loops.** `sieve` and `sort_small`, where the other compilers' loops
   are faster.
-- **AVX2 that loses.** `call_depth` on x86-64 is slower in 0.66 than in 0.65.
-  Its hot loop is vectorised, and the 256-bit AVX2 version that 0.66 picks on
-  this machine runs slower than the 128-bit one; `XC_SIMD=base` restores the
-  0.65 time.
 - **Dispatch.** `poly_dispatch` on arm64, where clang's call sequence around the
   virtual call is shorter.
+
+## Parallel blocks and the GPU
+
+From 0.7 a [`par` block](/compiler/language/par/) runs a loop's iterations at
+once, across every CPU thread or on the GPU. Four programs in `benchmark/par`
+measure it: `mandelbrot` (a 2048×2048 escape-time image, at most 256 iterations
+a pixel), `perlin` (2048×2048 improved noise, four octaves), `nbody` (the force
+on each of 8192 bodies from all the others) and `saxpy` (`y = a·x + y` over 16
+million integers, with a sum). Each runs its block
+eight times and reports the best run; *one thread* is `XC_PAR=cpu
+XC_PAR_THREADS=1`, *all threads* `XC_PAR=cpu`, *GPU* `XC_PAR=gpu`, and `auto` the
+default, which times the CPU and the GPU and keeps the faster. Every mode's
+checksum must agree.
+
+{par}
+
+The GPU's first run carries one-off costs — building the kernel, and on NVIDIA
+creating the driver context and compiling the PTX — so it is shown apart: a few
+tens of milliseconds on Metal, a few hundred on NVIDIA. `auto` pays it once,
+while it measures. `saxpy` does one multiply-add for every eight bytes it moves, so the
+copy to and from the GPU outweighs the arithmetic and `auto` keeps it on the CPU;
+the other three do enough work per element that the GPU wins by a wide margin.
 
 ## Release to release
 
