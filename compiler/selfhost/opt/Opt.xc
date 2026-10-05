@@ -17600,6 +17600,27 @@ class OptProfile
         //    since it is entered only from the preheader — the back edge is B→B.
         H.setPhis(new Array());
 
+        // 7b. L's back-edge test exits to E too, so every phi E already has
+        //     needs an L incoming: the value it took from H, which was defined
+        //     outside the loop and so is the same on the new edge. Without it a
+        //     checked downcast's join lost its hit value whenever the walk
+        //     matched past the first parent.
+        IRBlock* E = _rotE;
+        for (u32 i = (u32)0; i < E.phis().count(); i = i + (u32)1)
+            {
+            IRInsn* phi = (IRInsn*)E.phis().get(i);
+            for (u32 k = (u32)0; k + (u32)1 < phi.ops().count(); k = k + (u32)2)
+                {
+                IROperand* bo = (IROperand*)phi.ops().get(k);
+                if (bo.blk() == H)
+                    {
+                    phi.add(IROperand.block(L));
+                    phi.add((IROperand*)phi.ops().get(k + (u32)1));
+                    break;
+                    }
+                }
+            }
+
         // 8. Exit phis for the carried values read after the loop.
         rotExitPhis(fn, phis, initOp, nextMapped);
         }

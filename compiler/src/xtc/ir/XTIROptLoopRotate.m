@@ -615,6 +615,27 @@ static NSArray<XTIRBlock*>* predsOf(XTIRBlock* target, XTIRFunction* fn)
     //    entered only from the preheader now — the back-edge is B→B).
     [H.phiNodes removeAllObjects];
 
+    // 7b. L's back-edge test exits to E too, so every phi E already has needs
+    //     an L incoming. The value it took from H was defined outside the loop
+    //     (a header phi read after the loop goes the exit-phi route below, which
+    //     wants E phi-free, and the guard's results are used only in H), so it
+    //     is the same on the new edge. Without this a checked downcast's join
+    //     lost its hit value whenever the walk matched past the first parent.
+    for (XTIRInsn* phi in E.phiNodes)
+        {
+        for (NSUInteger k = 0; k + 1 < phi.operands.count; k += 2)
+            {
+            if (phi.operands[k].kind == XTIROperandKindBlock && phi.operands[k].blockRef == H)
+                {
+                NSMutableArray<XTIROperand*>* ops = [phi.operands mutableCopy];
+                [ops addObject:[XTIROperand blockWithRef:L]];
+                [ops addObject:phi.operands[k + 1]];
+                [phi replaceOperands:ops];
+                break;
+                }
+            }
+        }
+
     // 8. Exit phis for escaping carried values + rewrite post-loop uses.
     NSMutableArray<XTIRInsn*>* exitPhis = [NSMutableArray array];
     NSMutableDictionary<NSNumber*, NSNumber*>* exitMap = [NSMutableDictionary dictionary];
