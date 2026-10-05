@@ -18879,16 +18879,20 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
     //
     // sema's usedByNew (propagated up the parent chain) is the distinction.
     //
-    // Narrowed to classes that actually DECLARE a static ivar. The general
-    // case — an instantiated class with no static ivar — keeps the phantom
-    // init, deliberately: dropping the guard there removes calls from the
-    // graph and reshuffles the xt6502 bank packer, which pushed
-    // foundation_map_insertion_order ten bytes past the end of the unbanked
-    // region. That is a packing-margin problem, not a correctness one, and it
-    // is not worth spending on a case no program can currently observe (with
-    // no static ivar there is no shared name to see the phantom's writes).
+    // This once spared every instantiated class with no static ivar, on the
+    // ground that nothing could observe the phantom init. OperationQueue
+    // does: its init registers the queue in a global list, so the phantom
+    // registered the class's static block as a queue, and on win64 the
+    // phantom Operation init crashed outright. So no instantiated class gets
+    // the guard — except on the banked 6502 (3-byte pointers), where dropping
+    // it reshuffles the bank packer and pushes foundation_map_insertion_order
+    // past the end of main RAM; the phantom there writes only into the
+    // class's own (instance-sized, zeroed) static block. Bug 618 is the
+    // packer's missing main-RAM margin, which this exception waits on.
     if (recvCi.usedByNew)
         {
+        if ([XTPointerType heapPointerWidth] >= 4)
+            return;
         for (XTIRClassInfo* c = recvCi; c != nil; c = c.parent)
             if (c.staticIvarSymbol.count > 0)
                 return;

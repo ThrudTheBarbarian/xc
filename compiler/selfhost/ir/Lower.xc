@@ -17284,14 +17284,21 @@ class ClassInfo
     // prints nothing at all). The guard is a byte: test it, and on the way
     // through set it and run the init.
     //
-    // Not for a class that is also instantiated AND declares static ivars:
-    // running an INSTANCE initialiser against the class's static block is the
-    // static-class idiom, but for a `new`-able class it is a category error
-    // whose writes are visible through the shared static name.
+    // Not for a class that is also instantiated: running an INSTANCE
+    // initialiser against the class's static block is the static-class idiom,
+    // but for a `new`-able class it is a category error. It once spared one
+    // with no static ivar, as unobservable; OperationQueue's init registers
+    // the queue in a global list, so the phantom registered the static block
+    // as a queue, and on win64 the phantom Operation init crashed. Except on
+    // the banked 6502 (3-byte pointers), where dropping it overflows main RAM
+    // in foundation_map_insertion_order (bug 618, the packer's missing
+    // margin). As the reference.
     void emitStaticInitGuard(ClassInfo* ci)
         {
         if (ci.decl() != 0 && ci.decl().usedByNew())
             {
+            if (_ptrW >= (u32)4)
+                return;
             for (ClassInfo* c = ci; c != 0; c = c.parent())
                 if (hasStaticIvar(c))
                     return;
