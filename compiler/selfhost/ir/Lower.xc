@@ -4415,20 +4415,24 @@ class ClassInfo
         // layout after it.
         String* what = isName(n.name(), "-") ? n.kid((u32)0).ty() : n.name();
         u32 w = sizeOf(what);
-        // sizeof is a u16 (language/operators.md): a size that does not fit
-        // would wrap silently (`u8 img[1048576]; sizeof(img)` was 0). Refuse
-        // it (bug 615).
-        if (w > (u32)65535)
+        // sizeof's type is the target's size type (u16 on the 6502, from
+        // sema): a size that does not fit it would wrap silently. Refuse it
+        // (bug 615).
+        String* st = n.ty() != 0 ? n.ty() : String.withCString("u16");
+        if (st.equals(String.withCString("u16")) && w > (u32)65535)
             {
             String* m = String.withCString("sizeof is ");
             m.append(String.withU32(w));
-            m.appendCString(" bytes here, more than its type, u16, can hold; for an array, multiply its count by sizeof of one element");
+            m.appendCString(" bytes here, more than its type, ");
+            m.append(st);
+            m.appendCString(", can hold; for an array, multiply its count by sizeof of one element");
             errorAtNode(m, n);
             return (IRValue*)0;
             }
+        String* it = irType(st);
         Array* zops = new Array();
-        zops.add((Object*)IROperand.immI((i32)w, String.withCString("U16")));
-        return emit(String.withCString("Const"), String.withCString("U16"), zops);
+        zops.add((Object*)IROperand.immI((i32)w, it));
+        return emit(String.withCString("Const"), it, zops);
         }
 
     IRValue* lowerBinary(Node* n)

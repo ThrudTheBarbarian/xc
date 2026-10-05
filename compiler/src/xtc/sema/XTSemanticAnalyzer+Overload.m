@@ -4500,8 +4500,10 @@ static NSInteger XTFmtWrapperIndex(BOOL isVarArgs, NSArray<XTParamNode*>* params
     }
 
 /****************************************************************************\
-|* Visit a sizeof expression: analyse the operand and resolve to u16 (the
-|* result type of sizeof on a 6502 target).
+|* Visit a sizeof expression: analyse the operand and resolve to the target's
+|* size type, C's size_t: u64 where pointers are 8 bytes, u32 where they are
+|* 4, u16 on the banked 6502 (whose 3-byte pointer is a 16-bit address and a
+|* bank). Always u16 once, which made a buffer's size over 64 KB wrap.
 |* @param node  The sizeof expression node.
 \****************************************************************************/
 - (void)visitSizeofExpr:(XTSizeofExprNode*)node
@@ -4510,7 +4512,10 @@ static NSInteger XTFmtWrapperIndex(BOOL isVarArgs, NSArray<XTParamNode*>* params
         {
         [self analyzeNode:(XTASTNode*)node.operand];
         }
-    node.resolvedType = [XTType u16Type];
+    NSUInteger pw = [XTPointerType heapPointerWidth];
+    node.resolvedType = pw >= 8   ? [XTType u64Type]
+                        : pw >= 4 ? [XTType u32Type]
+                                  : [XTType u16Type];
     }
 
 /****************************************************************************\

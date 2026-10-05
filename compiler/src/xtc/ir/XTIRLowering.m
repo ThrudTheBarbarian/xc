@@ -4003,13 +4003,13 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
         return nil;
         }
 
-    // sizeof is a u16 (language/operators.md): a size that does not fit would
-    // wrap silently (`u8 img[1048576]; sizeof(img)` was 0). Refuse it (bug 615).
-    if (measured.byteWidth > 0xFFFF)
+    // sizeof's type is the target's size type (u16 on the 6502): a size that
+    // does not fit it would wrap silently. Refuse it (bug 615).
+    if (resolved.byteWidth < 8 && measured.byteWidth > ((1ull << (8 * resolved.byteWidth)) - 1))
         {
-        [self.diag emitError:[NSString stringWithFormat:@"sizeof is %lu bytes here, more than its type, u16, can hold; "
+        [self.diag emitError:[NSString stringWithFormat:@"sizeof is %lu bytes here, more than its type, %@, can hold; "
                                                         @"for an array, multiply its count by sizeof of one element",
-                                                        (unsigned long)measured.byteWidth]
+                                                        (unsigned long)measured.byteWidth, resolved.displayName]
                           at:node.location];
         self.aborted = YES;
         return nil;

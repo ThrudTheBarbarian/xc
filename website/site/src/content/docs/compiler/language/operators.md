@@ -63,10 +63,12 @@ These are class-pointer-only; `(u16 ?)x` is a compile-time error. Details on [In
 
 ### `sizeof`
 
-`sizeof(T)` evaluates to a compile-time `u16` byte count. Works on any type, including `struct` and `class`.
+`sizeof(T)` evaluates to a compile-time byte count. Works on any type, including `struct` and `class`.
 
-A size over 65535 bytes does not fit a `u16`, so `sizeof` of it is an error that
-names the size. For a large array, multiply its count by `sizeof` of one element.
+Its type is the target's size type, like C's `size_t`: `u64` on the 64-bit
+targets (arm64, x86-64, Windows, Android, iOS), `u32` on the 32-bit ones (arm9,
+m68k, wasm32) and `u16` on the 6502. On the 6502 a size over 65535 bytes does not
+fit, so `sizeof` of it is an error that names the size.
 
 ### Byte-extract prefixes (asm context)
 

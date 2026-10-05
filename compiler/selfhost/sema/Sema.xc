@@ -1944,7 +1944,11 @@ class Sema
             }
         if (k == (u16)nkSizeof)
             {
-            n.setTy(String.withCString("u16"));
+            // The target's size type, C's size_t, as the reference: u64
+            // where pointers are 8 bytes, u32 where 4, u16 on the banked 6502.
+            n.setTy(_ptrW >= (u32)8   ? String.withCString("u64")
+                    : _ptrW >= (u32)4 ? String.withCString("u32")
+                                      : String.withCString("u16"));
             return;
             }
         if (k == (u16)nkSubscript || k == (u16)nkSlice)
