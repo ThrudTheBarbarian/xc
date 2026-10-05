@@ -836,6 +836,19 @@ class UXRscColor : Object
         }
     }
 
+    // One setting of a control that has no OBJECT field for it: a UXKit view's (a slider's range, a
+    // segmented control's segments), kept in the ATTR section (docs/UXNB-V2.md section 11.3).  The
+    // value is text; `theme` is a theme bit for a value one layout varies, or UXR_ATTR_SHARED.
+    #define UXR_ATTR_SHARED $FFFF
+    class UXRscAttr : Object
+    {
+    i32 formId;
+    i32 logicalId;
+    i32 theme;
+    u8* key;
+    u8* value;
+    }
+
     // A v3 extension section kept verbatim: a tag this build does not interpret still goes back out.
     class UXRscExtSection : Object
     {
@@ -854,6 +867,7 @@ class UXRscColor : Object
     Array<UXRscTopObject>* topObjects;
     Array<UXRscConnection>* connections;
     Array<UXRscExtSection>* extSections;
+    Array<UXRscAttr>* attrs;
     u8* ownerClass; // File's Owner's class, for the designer to list its outlets and actions; "" = unset
     bool bigEndian;              // classic 68000 GEM fidelity
     bool packedCoords;           // char/pixel packing on write
@@ -870,6 +884,7 @@ class UXRscColor : Object
         topObjects = new Array();
         connections = new Array();
         extSections = new Array();
+        attrs = new Array();
         ownerClass = (u8*)"";
         bigEndian = true;
         packedCoords = true;
@@ -1012,6 +1027,84 @@ class UXRscColor : Object
             return (u8*)"_DESKTOP";
             }
         return (u8*)"_ANY";
+        }
+
+    // ---- attributes ------------------------------------------------------------------------------
+    // A control's attribute for a theme: that theme's own value if it varies it, else the shared
+    // one, else 0.  `theme` is a theme bit (UXRscConnection.themeBit), or UXR_ATTR_SHARED.
+    u8* attrIn(i32 formId, i32 logicalId, i32 theme, u8* key)
+        {
+        u8* shared = (u8*)0;
+        for (u32 i = (u32)0; i < attrs.count(); i = i + (u32)1)
+            {
+            UXRscAttr* a = (UXRscAttr* ?)attrs.get(i);
+            if (a.formId != formId || a.logicalId != logicalId || !UXRscDoc.seq(a.key, key))
+                {
+                continue;
+                }
+            if (a.theme == theme && theme != (i32)UXR_ATTR_SHARED)
+                {
+                return a.value;
+                }
+            if (a.theme == (i32)UXR_ATTR_SHARED)
+                {
+                shared = a.value;
+                }
+            }
+        return shared;
+        }
+    // Set it (0 removes it).
+    void setAttrIn(i32 formId, i32 logicalId, i32 theme, u8* key, u8* value)
+        {
+        for (u32 i = (u32)0; i < attrs.count(); i = i + (u32)1)
+            {
+            UXRscAttr* a = (UXRscAttr* ?)attrs.get(i);
+            if (a.formId == formId && a.logicalId == logicalId && a.theme == theme && UXRscDoc.seq(a.key, key))
+                {
+                if (value == (u8*)0)
+                    {
+                    attrs.removeAt(i);
+                    }
+                else
+                    {
+                    a.value = value;
+                    }
+                return;
+                }
+            }
+        if (value == (u8*)0)
+            {
+            return;
+            }
+        UXRscAttr* a = new UXRscAttr();
+        a.formId = formId;
+        a.logicalId = logicalId;
+        a.theme = theme;
+        a.key = key;
+        a.value = value;
+        attrs.add(a);
+        }
+    // For a control in a tree: the shared value (the control gets a logical id when set).
+    u8* attrOf(UXRscTree* t, UXRscObject* o, u8* key)
+        {
+        return o.logicalId != (i32)0 ? self.attrIn(self.formIdOf(t), o.logicalId, (i32)UXR_ATTR_SHARED, key) : (u8*)0;
+        }
+    void setAttrOf(UXRscTree* t, UXRscObject* o, u8* key, u8* value)
+        {
+        self.setAttrIn(self.formIdOf(t), self.ensureLogicalId(t, o), (i32)UXR_ATTR_SHARED, key, value);
+        }
+    static bool seq(u8* a, u8* b)
+        {
+        if (a == (u8*)0 || b == (u8*)0)
+            {
+            return a == b;
+            }
+        i32 i = (i32)0;
+        while (a[i] != (u8)0 && a[i] == b[i])
+            {
+            i = i + (i32)1;
+            }
+        return a[i] == b[i];
         }
 
     // ---- the nib graph, for an editor ---------------------------------------------------------
@@ -1254,6 +1347,11 @@ class UXRscColor : Object
         for (u32 i = (u32)0; i < extSections.count(); i = i + (u32)1)
             {
             c.extSections.add(extSections.get(i));
+            }
+        for (u32 i = (u32)0; i < attrs.count(); i = i + (u32)1)
+            {
+            UXRscAttr* a = (UXRscAttr* ?)attrs.get(i);
+            c.setAttrIn(a.formId, a.logicalId, a.theme, a.key, a.value);
             }
         return c;
         }

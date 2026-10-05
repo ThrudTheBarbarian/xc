@@ -17,6 +17,11 @@
 #import "UXControl.xc"
 #import "UXGroupBox.xc"
 #import "UXPopUpButton.xc"
+#import "UXSlider.xc"
+#import "UXStepper.xc"
+#import "UXProgressBar.xc"
+#import "UXSegmentedControl.xc"
+#import "UXComboBox.xc"
 #import "UXGeometry.xc"
 #import "UXDesignable.xc"
 #import "UXViewDriver.xc"
@@ -139,7 +144,8 @@ class UXNib
         UXNib.registerObjectFactory(fn);
         }
 
-    // Instantiate a designable class by name, trying each registered factory (Object* per #9).
+    // Instantiate a designable class by name, trying each registered factory (Object* per #9),
+    // then UXKit's own view classes.
     static Object* make(u8* cls)
         {
         for (i32 i = (i32)0; i < gUXNibNFn; i = i + (i32)1)
@@ -151,7 +157,147 @@ class UXNib
                 return o;
                 }
             }
+        return UXNib.makeUXKit(cls);
+        }
+    // UXKit's controls that GEM has no type for, which a document holds as a G_USERDEF of that
+    // class, with their settings in its attributes.
+    static Object* makeUXKit(u8* cls)
+        {
+        if (UXRscDoc.seq(cls, (u8*)"UXSlider"))
+            {
+            return (Object*)new UXSlider();
+            }
+        if (UXRscDoc.seq(cls, (u8*)"UXStepper"))
+            {
+            return (Object*)new UXStepper();
+            }
+        if (UXRscDoc.seq(cls, (u8*)"UXProgressBar"))
+            {
+            return (Object*)new UXProgressBar();
+            }
+        if (UXRscDoc.seq(cls, (u8*)"UXSegmentedControl"))
+            {
+            return (Object*)new UXSegmentedControl();
+            }
+        if (UXRscDoc.seq(cls, (u8*)"UXComboBox"))
+            {
+            return (Object*)new UXComboBox();
+            }
         return (Object*)0;
+        }
+
+    // ---- attributes: the settings a control has no OBJECT field for -----------------------------
+    // Apply a control's attributes to the view made for it: the theme's own values where it varies
+    // them, else the shared ones.  Lists are written "One|Two|Three".
+    static void applyAttrs(UXView* v, UXRscDoc* doc, i32 formId, i32 logicalId, i32 theme)
+        {
+        if (v == (UXView*)0 || doc == (UXRscDoc*)0 || logicalId == (i32)0 || doc.attrs.count() == (u32)0)
+            {
+            return;
+            }
+        UXSlider* sl = (UXSlider* ?)(Object*)v;
+        if (sl != (UXSlider*)0)
+            {
+            sl.setRange(UXNib.attrInt(doc, formId, logicalId, theme, (u8*)"min", (i32)0), UXNib.attrInt(doc, formId, logicalId, theme, (u8*)"max", (i32)100));
+            sl.setValue(UXNib.attrInt(doc, formId, logicalId, theme, (u8*)"value", (i32)0));
+            return;
+            }
+        UXStepper* st = (UXStepper* ?)(Object*)v;
+        if (st != (UXStepper*)0)
+            {
+            st.setRange(UXNib.attrInt(doc, formId, logicalId, theme, (u8*)"min", (i32)0), UXNib.attrInt(doc, formId, logicalId, theme, (u8*)"max", (i32)100));
+            st.setStep(UXNib.attrInt(doc, formId, logicalId, theme, (u8*)"step", (i32)1));
+            st.setValue(UXNib.attrInt(doc, formId, logicalId, theme, (u8*)"value", (i32)0));
+            return;
+            }
+        UXProgressBar* pb = (UXProgressBar* ?)(Object*)v;
+        if (pb != (UXProgressBar*)0)
+            {
+            UXProgress* pr = new UXProgress();
+            pr.setTotal(UXNib.attrInt(doc, formId, logicalId, theme, (u8*)"total", (i32)100));
+            pr.setCompleted(UXNib.attrInt(doc, formId, logicalId, theme, (u8*)"completed", (i32)0));
+            pb.setProgress(pr);
+            return;
+            }
+        UXSegmentedControl* sg = (UXSegmentedControl* ?)(Object*)v;
+        if (sg != (UXSegmentedControl*)0)
+            {
+            u8* segs = doc.attrIn(formId, logicalId, theme, (u8*)"segments");
+            i32 n = UXNib.eachPart(segs, (pointer)sg, (i32)0);
+            if (n > (i32)0)
+                {
+                sg.applyNativeSelection(UXNib.attrInt(doc, formId, logicalId, theme, (u8*)"selected", (i32)0));
+                }
+            return;
+            }
+        UXComboBox* cb = (UXComboBox* ?)(Object*)v;
+        if (cb != (UXComboBox*)0)
+            {
+            UXNib.eachPart(doc.attrIn(formId, logicalId, theme, (u8*)"items"), (pointer)cb, (i32)1);
+            u8* t = doc.attrIn(formId, logicalId, theme, (u8*)"text");
+            if (t != (u8*)0)
+                {
+                cb.setText(t);
+                }
+            }
+        }
+    static i32 attrInt(UXRscDoc* doc, i32 formId, i32 logicalId, i32 theme, u8* key, i32 dflt)
+        {
+        u8* v = doc.attrIn(formId, logicalId, theme, key);
+        if (v == (u8*)0 || v[0] == (u8)0)
+            {
+            return dflt;
+            }
+        i32 n = (i32)0;
+        i32 i = (i32)0;
+        bool neg = v[0] == (u8)'-';
+        if (neg)
+            {
+            i = (i32)1;
+            }
+        while (v[i] >= (u8)'0' && v[i] <= (u8)'9')
+            {
+            n = n * (i32)10 + (i32)(v[i] - (u8)'0');
+            i = i + (i32)1;
+            }
+        return neg ? (i32)0 - n : n;
+        }
+    // Add each part of "A|B|C" to a segmented control (to = 0) or a combo box (to = 1); how many.
+    static i32 eachPart(u8* list, pointer target, i32 to)
+        {
+        if (list == (u8*)0)
+            {
+            return (i32)0;
+            }
+        i32 n = (i32)0;
+        i32 start = (i32)0;
+        i32 i = (i32)0;
+        while (true)
+            {
+            if (list[i] == (u8)'|' || list[i] == (u8)0)
+                {
+                u8* part = new u8[(u32)(i - start + (i32)1)];
+                for (i32 k = start; k < i; k = k + (i32)1)
+                    {
+                    part[k - start] = list[k];
+                    }
+                part[i - start] = (u8)0;
+                if (to == (i32)0)
+                    { ((UXSegmentedControl*)(Object*)target).addSegment(part, n);
+                    }
+                else
+                    { ((UXComboBox*)(Object*)target).addItem(part);
+                    }
+                n = n + (i32)1;
+                if (list[i] == (u8)0)
+                    {
+                    break;
+                    }
+                start = i + (i32)1;
+                }
+            i = i + (i32)1;
+            }
+        return n;
         }
 
     // ---- loading -------------------------------------------------------------------------------
@@ -311,6 +457,7 @@ class UXNib
         UXView* v = UXNib.viewFor(o, UXNib.classFor(doc, ni.formId, treeIndex, o, UXNib.indexIn(order, o)));
         parent.addSubview(v, UXGeom.make((i16)o.x, (i16)o.y, (i16)o.w, (i16)o.h));
         UXNib.applyState(v, o);
+        UXNib.applyAttrs(v, doc, ni.formId, o.logicalId, (i32)UXRscConnection.themeBit(ni.klass, ni.orient));
         ni.objs.add(o);
         ni.views.add(v);
         for (i32 i = (i32)0; i < o.childCount(); i = i + (i32)1)

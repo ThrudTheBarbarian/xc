@@ -360,7 +360,7 @@ class UXRscWriter : Object
         UXData* file = UXData.fromBytes(out, total);
         if (r.formCount() > (i32)0 || r.classOverrides.count() > (u32)0 || r.topObjects.count() > (u32)0 ||
             r.connections.count() > (u32)0 || r.extSections.count() > (u32)0 || UXRscWriter.namesSection(r) != (UXData*)0 ||
-            (r.ownerClass != (u8*)0 && r.ownerClass[0] != (u8)0))
+            (r.ownerClass != (u8*)0 && r.ownerClass[0] != (u8)0) || r.attrs.count() > (u32)0)
             {
             file.appendData(self.nibChunk(r));
             }
@@ -438,6 +438,12 @@ class UXRscWriter : Object
         b[0] = (u8)((n >> (i32)8) & (i32)$FF);
         b[1] = (u8)(n & (i32)$FF);
         return d;
+        }
+    static void lenStr(UXData* d, u8* s)
+        {
+        i32 n = UXRscWriter.slen(s);
+        UXRscWriter.be16(d, n);
+        d.appendBytes(s, n);
         }
     static void nameEntry(UXData* d, i32 tree, i32 obj, u8* nm)
         {
@@ -540,6 +546,28 @@ class UXRscWriter : Object
             UXRscWriter.be32(graph, names.length());
             graph.appendBytes(names.bytes(), names.length());
             if ((names.length() & (i32)1) != (i32)0)
+                {
+                graph.appendByte((u8)0);
+                }
+            nExt = nExt + (i32)1;
+            }
+        if (r.attrs.count() > (u32)0)
+            {
+            UXData* at = UXData.withCapacity((i32)64);
+            UXRscWriter.be16(at, (i32)r.attrs.count());
+            for (u32 i = (u32)0; i < r.attrs.count(); i = i + (u32)1)
+                {
+                UXRscAttr* a = (UXRscAttr* ?)r.attrs.get(i);
+                UXRscWriter.be16(at, a.formId);
+                UXRscWriter.be16(at, a.logicalId);
+                UXRscWriter.be16(at, a.theme);
+                UXRscWriter.lenStr(at, a.key);
+                UXRscWriter.lenStr(at, a.value);
+                }
+            UXRscWriter.be32(graph, (i32)$41545452); // 'ATTR'
+            UXRscWriter.be32(graph, at.length());
+            graph.appendBytes(at.bytes(), at.length());
+            if ((at.length() & (i32)1) != (i32)0)
                 {
                 graph.appendByte((u8)0);
                 }

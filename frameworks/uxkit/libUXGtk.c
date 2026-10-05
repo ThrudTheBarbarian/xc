@@ -26,6 +26,9 @@
 #include "ux_posix_fs.h" // listDir / delete / rename / copy for the drawn file panel
 
 #define UXGTK_MAXW 64
+/* The nodes of one window's tree a native widget can be made for (a designer's window runs to
+ * several hundred). */
+#define UXGTK_MAXN 4096
 
 typedef void (*ux_content_fn)(int handle, int wx, int wy, int ww, int wh, void* ud);
 typedef void (*ux_fire_fn)(int handle, int node);
@@ -102,7 +105,7 @@ static GtkFixed* gFix[UXGTK_MAXW];
 static GtkWidget* gArea[UXGTK_MAXW];
 static ux_content_fn gContent[UXGTK_MAXW];
 static void* gContentUd[UXGTK_MAXW];
-static GtkWidget* gCtl[UXGTK_MAXW][256];
+static GtkWidget* gCtl[UXGTK_MAXW][UXGTK_MAXN];
 /* Native scroll containers (UXScrollView): a GtkScrolledWindow whose child is a GtkFixed DOCUMENT
  * holding a drawing area the size of the content, which paints the scroll view's document subtree,
  * and any native control inside the scroll view.  docX/docY are the document's place in the window's
@@ -114,11 +117,11 @@ typedef struct
     void* sv;        /* the UXScrollView */
     int docX, docY;
     } GtkScrollRec;
-static GtkScrollRec gScroll[UXGTK_MAXW][256];
-static unsigned char gInDoc[UXGTK_MAXW][256]; /* a control moved into scroll node n's document: n + 1 */
+static GtkScrollRec gScroll[UXGTK_MAXW][UXGTK_MAXN];
+static unsigned short gInDoc[UXGTK_MAXW][UXGTK_MAXN]; /* a control moved into scroll node n's document: n + 1 */
 static int scroll_doc_point(int handle, double wx, double wy, double* x, double* y);
-static char* gFieldBuf[UXGTK_MAXW * 256];
-static int gFieldCap[UXGTK_MAXW * 256];
+static char* gFieldBuf[UXGTK_MAXW * UXGTK_MAXN];
+static int gFieldCap[UXGTK_MAXW * UXGTK_MAXN];
 static int gNextH = 1, gLive = 0;
 static cairo_t* gCr; /* the cairo of the draw in flight */
 
@@ -453,7 +456,7 @@ void ux_gtk_raise_shield(int handle)
  * right aligned in boxes whose right edges agree. */
 void ux_gtk_set_align(int handle, int node, int a)
     {
-    GtkWidget* c = (handle >= 0 && handle < UXGTK_MAXW && node >= 0 && node < 256)
+    GtkWidget* c = (handle >= 0 && handle < UXGTK_MAXW && node >= 0 && node < UXGTK_MAXN)
                        ? gCtl[handle][node]
                        : NULL;
     if (!c)
@@ -469,7 +472,7 @@ void ux_gtk_set_align(int handle, int node, int a)
 /* Read it back, so a gate can tell "we set it" from "the text moved". */
 int ux_gtk_get_align(int handle, int node)
     {
-    GtkWidget* c = (handle >= 0 && handle < UXGTK_MAXW && node >= 0 && node < 256)
+    GtkWidget* c = (handle >= 0 && handle < UXGTK_MAXW && node >= 0 && node < UXGTK_MAXN)
                        ? gCtl[handle][node]
                        : NULL;
     if (!c)
@@ -484,7 +487,7 @@ int ux_gtk_get_align(int handle, int node)
     }
 int ux_gtk_get_check(int handle, int node)
     {
-    GtkWidget* c = (handle >= 0 && handle < UXGTK_MAXW && node >= 0 && node < 256)
+    GtkWidget* c = (handle >= 0 && handle < UXGTK_MAXW && node >= 0 && node < UXGTK_MAXN)
                        ? gCtl[handle][node]
                        : NULL;
     if (!c || !GTK_IS_CHECK_BUTTON(c))
@@ -523,7 +526,7 @@ int ux_gtk_shield_on_top(int handle)
  * fallback), never linked: the renderer reaches them through ux_gtk_gl_proc and
  * this shim needs only glViewport for itself.
  */
-static GtkWidget* gGlA[UXGTK_MAXW][256];
+static GtkWidget* gGlA[UXGTK_MAXW][UXGTK_MAXN];
 static void* gl_entry(const char* name);
 
 /* THE CLAMP.  The area's framebuffer is GTK's, sized at the allocation times the scale factor, and
@@ -534,7 +537,7 @@ static void* gl_entry(const char* name);
  * has bound its own framebuffer, the frame is blitted across, stretched with linear filtering.  Under
  * the limit nothing changes.  ux_gtk_gl_test_max lowers the limit for a gate. */
 typedef struct { unsigned fbo, rb; int w, h; unsigned areaFbo; int cornerRGB; } GlClamp;
-static GlClamp gClamp[UXGTK_MAXW][256];
+static GlClamp gClamp[UXGTK_MAXW][UXGTK_MAXN];
 static int gGlTestMax = 0;
 void ux_gtk_gl_test_max(int px)
     {
@@ -683,7 +686,7 @@ int ux_gtk_gl_make_current(int handle, int node);
  * limit), or the area's when it has none yet.  1 when the area exists. */
 int ux_gtk_gl_drawable(int handle, int node, int* pw, int* ph)
     {
-    if (handle < 0 || handle >= UXGTK_MAXW || node < 0 || node >= 256 || !gGlA[handle][node])
+    if (handle < 0 || handle >= UXGTK_MAXW || node < 0 || node >= UXGTK_MAXN || !gGlA[handle][node])
         return 0;
     GlClamp* c = &gClamp[handle][node];
     if (c->fbo)
@@ -727,12 +730,12 @@ int ux_gtk_gl_read(int handle, int node, unsigned* out, int pw, int ph)
 /* Test only: the far corner of the area's framebuffer after the last clamped blit (0xRRGGBB). */
 int ux_gtk_gl_test_corner(int handle, int node)
     {
-    return (handle >= 0 && handle < UXGTK_MAXW && node >= 0 && node < 256) ? gClamp[handle][node].cornerRGB : -1;
+    return (handle >= 0 && handle < UXGTK_MAXW && node >= 0 && node < UXGTK_MAXN) ? gClamp[handle][node].cornerRGB : -1;
     }
 
 void ux_gtk_make_gl(int handle, int node, int x, int y, int w, int h, int hidden)
     {
-    if (!gFix[handle] || node < 0 || node >= 256)
+    if (!gFix[handle] || node < 0 || node >= UXGTK_MAXN)
         return;
     if (!gGlA[handle][node])
         {
@@ -791,9 +794,9 @@ static void gl_wait_allocated(int handle, int node)
     }
 int ux_gtk_gl_make_current(int handle, int node)
     {
-    if (handle >= 0 && handle < UXGTK_MAXW && node >= 0 && node < 256)
+    if (handle >= 0 && handle < UXGTK_MAXW && node >= 0 && node < UXGTK_MAXN)
         gl_wait_allocated(handle, node);
-    if (handle < 0 || handle >= UXGTK_MAXW || node < 0 || node >= 256 || !gGlA[handle][node])
+    if (handle < 0 || handle >= UXGTK_MAXW || node < 0 || node >= UXGTK_MAXN || !gGlA[handle][node])
         return 0;
     if (!gtk_widget_get_realized(gGlA[handle][node]))
         return 0;
@@ -934,7 +937,7 @@ void ux_gtk_gl_viewport(int handle, int node)
  * NEXT app turn has it, which is the promise the seam makes. */
 void ux_gtk_gl_present(int handle, int node)
     {
-    if (handle < 0 || handle >= UXGTK_MAXW || node < 0 || node >= 256 || !gGlA[handle][node])
+    if (handle < 0 || handle >= UXGTK_MAXW || node < 0 || node >= UXGTK_MAXN || !gGlA[handle][node])
         return;
     gtk_gl_area_queue_render(GTK_GL_AREA(gGlA[handle][node]));
     ux_gtk_gl_make_current(handle, node);
@@ -945,7 +948,7 @@ void ux_gtk_gl_present(int handle, int node)
  * not care, but the gate does. */
 int ux_gtk_gl_error(int handle, int node)
     {
-    if (handle < 0 || handle >= UXGTK_MAXW || node < 0 || node >= 256 || !gGlA[handle][node])
+    if (handle < 0 || handle >= UXGTK_MAXW || node < 0 || node >= UXGTK_MAXN || !gGlA[handle][node])
         return -1;
     return gtk_gl_area_get_error(GTK_GL_AREA(gGlA[handle][node])) ? 1 : 0;
     }
@@ -961,7 +964,7 @@ void ux_gtk_gl_forget(int handle)
     {
     if (handle < 0 || handle >= UXGTK_MAXW)
         return;
-    for (int n = 0; n < 256; n++)
+    for (int n = 0; n < UXGTK_MAXN; n++)
         {
         gGlA[handle][n] = NULL;
         gClamp[handle][n].fbo = gClamp[handle][n].rb = 0; /* freed with the window's context */
@@ -1294,7 +1297,7 @@ void ux_gtk_window_close(int handle)
     if (!gWin[handle])
         return;
     gtk_window_destroy(gWin[handle]);
-    for (int n = 0; n < 256; n++)
+    for (int n = 0; n < UXGTK_MAXN; n++)
         {
         gCtl[handle][n] = NULL;
         gScroll[handle][n] = (GtkScrollRec){0};
@@ -1314,7 +1317,7 @@ void ux_gtk_window_invalidate(int handle)
     {
     if (gArea[handle])
         gtk_widget_queue_draw(gArea[handle]);
-    for (int n = 0; n < 256; n++)
+    for (int n = 0; n < UXGTK_MAXN; n++)
         if (gScroll[handle][n].area)
             gtk_widget_queue_draw(gScroll[handle][n].area); /* the scroll documents are surfaces too */
     }
@@ -1401,7 +1404,7 @@ static void scroll_draw_cb(GtkDrawingArea* a, cairo_t* cr, int w, int h, gpointe
     }
 void ux_gtk_make_scroll(int handle, int node, int x, int y, int w, int h, int contentH, void* sv, int docX, int docY)
     {
-    if (!gFix[handle] || node < 0 || node >= 256 || gCtl[handle][node])
+    if (!gFix[handle] || node < 0 || node >= UXGTK_MAXN || gCtl[handle][node])
         return;
     GtkScrollRec* r = &gScroll[handle][node];
     GtkWidget* sw = gtk_scrolled_window_new();
@@ -1488,7 +1491,7 @@ void ux_gtk_reparent_to_scroll(int handle, int node, int scrollNode, int ax, int
         }
     else
         gtk_fixed_move(GTK_FIXED(r->doc), c, ax - r->docX, ay - r->docY);
-    gInDoc[handle][node] = (unsigned char)(scrollNode + 1);
+    gInDoc[handle][node] = (unsigned short)(scrollNode + 1);
     }
 /* Whether a point (window coordinates) is over a scroll container's DOCUMENT (1), elsewhere (0), or
  * on the container's own scrollbar or a native control in it (-1), which handle it themselves.  The
@@ -1496,7 +1499,7 @@ void ux_gtk_reparent_to_scroll(int handle, int node, int scrollNode, int ax, int
  * its own hit test (UXWindow.hitScrolled), so a real click and a synthetic one agree. */
 static int scroll_doc_point(int handle, double wx, double wy, double* x, double* y)
     {
-    for (int n = 0; n < 256; n++)
+    for (int n = 0; n < UXGTK_MAXN; n++)
         {
         GtkScrollRec* r = &gScroll[handle][n];
         GtkWidget* sw = gCtl[handle][n];
@@ -1583,7 +1586,7 @@ void ux_gtk_make_check(int handle, int node, int x, int y, int w, int h,
 void ux_gtk_make_radio(int handle, int node, int x, int y, int w, int h, const char* title, int on, int leader)
     {
     GtkWidget* c = gtk_check_button_new_with_label(title);
-    GtkWidget* lead = (leader >= 0 && leader < 256) ? gCtl[handle][leader] : NULL;
+    GtkWidget* lead = (leader >= 0 && leader < UXGTK_MAXN) ? gCtl[handle][leader] : NULL;
     if (lead && GTK_IS_CHECK_BUTTON(lead))
         gtk_check_button_set_group(GTK_CHECK_BUTTON(c), GTK_CHECK_BUTTON(lead));
     else
@@ -1703,18 +1706,18 @@ static void dropdown_cb(GObject* d, GParamSpec* ps, gpointer ud)
         gValue(hOf(GTK_WIDGET(d)), nOf(GTK_WIDGET(d)),
                (int)gtk_drop_down_get_selected(GTK_DROP_DOWN(d)));
     }
-static GtkStringList* gPopupItems[UXGTK_MAXW * 256];
+static GtkStringList* gPopupItems[UXGTK_MAXW * UXGTK_MAXN];
 void ux_gtk_make_popup(int handle, int node, int x, int y, int w, int h)
     {
     GtkStringList* sl = gtk_string_list_new(NULL);
-    gPopupItems[handle * 256 + node] = sl;
+    gPopupItems[handle * UXGTK_MAXN + node] = sl;
     GtkWidget* d = gtk_drop_down_new(G_LIST_MODEL(sl), NULL);
     g_signal_connect(d, "notify::selected", G_CALLBACK(dropdown_cb), NULL);
     park(handle, node, d, x, y, w, h);
     }
 void ux_gtk_popup_add_item(int handle, int node, const char* title)
     {
-    gtk_string_list_append(gPopupItems[handle * 256 + node], title);
+    gtk_string_list_append(gPopupItems[handle * UXGTK_MAXN + node], title);
     }
 void ux_gtk_popup_select(int handle, int node, int i)
     {
@@ -1809,8 +1812,8 @@ static void entry_cb(GtkEditable* e, gpointer ud)
     {
     GtkWidget* w = GTK_WIDGET(e);
     int handle = hOf(w), node = nOf(w);
-    char* buf = gFieldBuf[handle * 256 + node];
-    int cap = gFieldCap[handle * 256 + node];
+    char* buf = gFieldBuf[handle * UXGTK_MAXN + node];
+    int cap = gFieldCap[handle * UXGTK_MAXN + node];
     if (buf && cap > 0)
         {
         const char* t = gtk_editable_get_text(e);
@@ -1833,8 +1836,8 @@ void ux_gtk_make_field(int handle, int node, int x, int y, int w, int h,
     GtkWidget* e = secure ? gtk_password_entry_new() : gtk_entry_new();
     if (buf && buf[0])
         gtk_editable_set_text(GTK_EDITABLE(e), buf);
-    gFieldBuf[handle * 256 + node] = buf;
-    gFieldCap[handle * 256 + node] = cap;
+    gFieldBuf[handle * UXGTK_MAXN + node] = buf;
+    gFieldCap[handle * UXGTK_MAXN + node] = cap;
     g_signal_connect(e, "changed", G_CALLBACK(entry_cb), NULL);
     g_signal_connect(e, "activate", G_CALLBACK(entry_activate_cb), NULL);
     park(handle, node, e, x, y, w, h);
@@ -1842,7 +1845,7 @@ void ux_gtk_make_field(int handle, int node, int x, int y, int w, int h,
 void ux_gtk_update_field(int handle, int node)
     {
     GtkWidget* c = gCtl[handle][node];
-    char* buf = gFieldBuf[handle * 256 + node];
+    char* buf = gFieldBuf[handle * UXGTK_MAXN + node];
     if (c && GTK_IS_EDITABLE(c) && buf)
         gtk_editable_set_text(GTK_EDITABLE(c), buf);
     }

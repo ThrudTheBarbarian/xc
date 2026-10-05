@@ -192,6 +192,7 @@ i32 gStop;
 i32 gName;
 i32 gGauge;
 i32 gPhoneTree;
+i32 gSlider;
 
 UXRscDoc* sample(void)
     {
@@ -202,6 +203,7 @@ UXRscDoc* sample(void)
     UXRscObject* stop = add(desk.root, (i32)UXR_T_BUTTON, (i32)80, (i32)8, (i32)64, (i32)24, (u8*)"Stop");
     UXRscObject* name = add(desk.root, (i32)UXR_T_FIELD, (i32)8, (i32)40, (i32)200, (i32)24, (u8*)"Untitled");
     UXRscObject* gauge = add(desk.root, (i32)UXR_T_USERDEF, (i32)8, (i32)72, (i32)200, (i32)48, (u8*)0);
+    UXRscObject* volume = add(desk.root, (i32)UXR_T_USERDEF, (i32)8, (i32)130, (i32)200, (i32)24, (u8*)0);
     // the phone layout: seeded from the desktop (which gives every control its logical id), then
     // re-nested -- Play and Stop inside a phone-only container, the name field and gauge dropped
     UXRscTree* phone = d.addVariant(desk, (i32)UXR_V_PHONE, (i32)UXR_V_ORIENT_PORTRAIT);
@@ -210,6 +212,7 @@ UXRscDoc* sample(void)
     gStop = stop.logicalId;
     gName = name.logicalId;
     gGauge = gauge.logicalId;
+    gSlider = volume.logicalId;
     UXRscObject* root = UXRscObject.make((i32)UXR_T_BOX, (i32)0, (i32)0, (i32)180, (i32)320);
     root.logicalId = desk.root.logicalId;
     UXRscObject* scroll = add(root, (i32)UXR_T_IBOX, (i32)0, (i32)0, (i32)180, (i32)320, (u8*)0);
@@ -217,6 +220,9 @@ UXRscDoc* sample(void)
     p2.x = (i32)8;
     p2.y = (i32)8;
     scroll.addChild(p2);
+    UXRscObject* v2 = volume.deepCopy();
+    v2.y = (i32)80;
+    scroll.addChild(v2);
     UXRscObject* s2 = stop.deepCopy();
     s2.x = (i32)8;
     s2.y = (i32)40;
@@ -227,6 +233,13 @@ UXRscDoc* sample(void)
     co.view = UXRscRef.make((i32)UXR_REF_LOGICAL, (i32)0, gGauge);
     co.cls = (u8*)"Gauge";
     d.classOverrides.add(co);
+    // a UXKit control GEM has no type for: a G_USERDEF of class UXSlider, its range in attributes,
+    // and the phone varying its value
+    d.setClassOf(desk, volume, (u8*)"UXSlider");
+    d.setAttrOf(desk, volume, (u8*)"min", (u8*)"0");
+    d.setAttrOf(desk, volume, (u8*)"max", (u8*)"10");
+    d.setAttrOf(desk, volume, (u8*)"value", (u8*)"3");
+    d.setAttrIn((i32)0, gSlider, (i32)UXRscConnection.themeBit((i32)UXR_V_PHONE, (i32)UXR_V_ORIENT_PORTRAIT), (u8*)"value", (u8*)"7");
     UXRscTopObject* to = new UXRscTopObject();
     to.id = (i32)1;
     to.cls = (u8*)"LibController";
@@ -253,7 +266,7 @@ UXRscDoc* sample(void)
 
     // an extension section this build does not interpret, odd-sized, kept verbatim
     UXRscExtSection* x = new UXRscExtSection();
-    x.tag = (u32)$41545452; // 'ATTR'
+    x.tag = (u32)$58545241; // 'XTRA', a tag no build interprets
     x.body = UXData.fromBytes((u8*)"abc", (i32)3);
     d.extSections.add(x);
     return d;
@@ -314,12 +327,13 @@ void main(void)
     check("top objects", nib.topObjectCount(), (i32)1);
     checkTrue("top object class", streq(nib.topObjectName((i32)0), (u8*)"LibController"));
     checkTrue("top object label", streq(nib.topObjectLabel((i32)0), (u8*)"Library Controller"));
-    check("class overrides", nib.classOverrideCount(), (i32)1);
+    check("class overrides: the gauge and the slider", nib.classOverrideCount(), (i32)2);
     checkTrue("class override name", streq(nib.classOverrideName((i32)0), (u8*)"Gauge"));
-    check("extension sections: the names and ATTR", nib.extCount(), (i32)2);
+    check("extension sections: the names, the attributes and XTRA", nib.extCount(), (i32)3);
     check("the names come first", (i32)nib.extTag((i32)0), (i32)$4E414D45);
-    check("ATTR is kept", (i32)nib.extTag((i32)1), (i32)$41545452);
-    check("at its size", (i32)nib.extSize((i32)1), (i32)3);
+    check("then the attributes", (i32)nib.extTag((i32)1), (i32)$41545452);
+    check("XTRA is kept", (i32)nib.extTag((i32)2), (i32)$58545241);
+    check("at its size", (i32)nib.extSize((i32)2), (i32)3);
     i32 chosen = (i32)0;
     check("the byte parser picks the phone tree for a phone", nib.selectTree((i32)0, (i32)UXR_V_PHONE, &chosen), gPhoneTree);
 
@@ -341,6 +355,7 @@ void main(void)
     checkTrue("loads", ni != (UXNibInstance*)0);
     check("the desktop layout", ni.klass, (i32)UXR_V_DESKTOP);
     check("bound", ni.bound, (i32)5);
+    checkTrue("the attributes survived the save", r.attrs.count() == (u32)4);
     check("out of scope", ni.outOfScope, (i32)1);
     check("skipped", ni.skipped, (i32)0);
     LibController* lc = own.controller;
@@ -361,6 +376,9 @@ void main(void)
         }
     check("File's Owner awoke once", own.awoke, (i32)1);
     check("the root is the form's size", (i32)ni.root.frame().w, (i32)320);
+    UXSlider* vol = (UXSlider* ?)ni.viewForLogical(gSlider);
+    checkTrue("a G_USERDEF of class UXSlider is a slider", vol != (UXSlider*)0);
+    check("with its range and value from the attributes", vol != (UXSlider*)0 ? vol.nativeMax() * (i32)100 + vol.intValue() : (i32)-1, (i32)1003);
 
     Stdio.printf("-- phone, portrait\n");
     Owner* own2 = new Owner();
@@ -368,6 +386,8 @@ void main(void)
     checkTrue("loads", np != (UXNibInstance*)0);
     check("the phone layout", np.klass, (i32)UXR_V_PHONE);
     check("the phone tree", r.indexOfTree(np.tree), gPhoneTree);
+    UXSlider* pvol = (UXSlider* ?)np.viewForLogical(gSlider);
+    check("the phone's slider has the value the phone varies", pvol != (UXSlider*)0 ? pvol.intValue() : (i32)-1, (i32)7);
     check("bound", np.bound, (i32)3);
     check("skipped (the dropped field and gauge)", np.skipped, (i32)2);
     check("out of scope", np.outOfScope, (i32)1);

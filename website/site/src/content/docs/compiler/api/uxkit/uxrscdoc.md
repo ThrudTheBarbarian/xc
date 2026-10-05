@@ -33,13 +33,14 @@ Beside the trees is the **nib graph**:
 | `connections` | [`UXRscConnection`](/compiler/api/uxkit/uxrscconnection/): outlets and actions, each scoped to layout themes |
 | `extSections` | [`UXRscExtSection`](#uxrscextsection): chunk sections this build does not interpret, kept for re-saving |
 | `ownerClass` | File's Owner's class, so a designer can list its outlets and actions; "" when unset |
+| `attrs` | [`UXRscAttr`](#uxrscattr): settings a control has no `OBJECT` field for, such as a slider's range |
 
 On disk the trees are a classic `.rsc`, readable by any GEM AES, and the graph
 is the nib chunk after them.
 
 ## Topics
 
-[treeCount](#treecount) · [treeAt](#treeat) · [deepCopy](#deepcopy) · [formIdOf](#formidof) · [ensureLogicalId](#ensurelogicalid) · [refFor](#reffor) · [classOf](#classof) · [setClassOf](#setclassof) · [addTopObject](#addtopobject) · [topObjectById](#topobjectbyid) · [removeTopObject](#removetopobject) · [removeConnectionsTo](#removeconnectionsto) · [refHits](#refhits) · [addTree](#addtree) · [indexOfTree](#indexoftree) · [formCount](#formcount) · [formAt](#format) · [formOf](#formof) · [formById](#formbyid) · [addVariant](#addvariant) · [variantSuffix](#variantsuffix) · [emptyDialog](#emptydialog) · [flatten](#flatten)
+[treeCount](#treecount) · [treeAt](#treeat) · [deepCopy](#deepcopy) · [formIdOf](#formidof) · [ensureLogicalId](#ensurelogicalid) · [refFor](#reffor) · [classOf](#classof) · [setClassOf](#setclassof) · [addTopObject](#addtopobject) · [topObjectById](#topobjectbyid) · [removeTopObject](#removetopobject) · [removeConnectionsTo](#removeconnectionsto) · [refHits](#refhits) · [attrIn](#attrin) · [setAttrIn](#setattrin) · [attrOf](#attrof) · [setAttrOf](#setattrof) · [seq](#seq) · [addTree](#addtree) · [indexOfTree](#indexoftree) · [formCount](#formcount) · [formAt](#format) · [formOf](#formof) · [formById](#formbyid) · [addVariant](#addvariant) · [variantSuffix](#variantsuffix) · [emptyDialog](#emptydialog) · [flatten](#flatten)
 
 ### deepCopy
 
@@ -132,6 +133,47 @@ static bool refHits(UXRscRef* a, UXRscRef* r)
 ```
 
 Whether `a` names what `r` names.
+
+### attrIn
+
+```c
+u8* attrIn(i32 formId, i32 logicalId, i32 theme, u8* key)
+```
+
+A control's attribute in a theme: the theme's own value if it varies it, else
+the shared one, else null. `theme` is a theme bit, or `UXR_ATTR_SHARED`.
+
+### setAttrIn
+
+```c
+void setAttrIn(i32 formId, i32 logicalId, i32 theme, u8* key, u8* value)
+```
+
+Sets it; null removes it.
+
+### attrOf
+
+```c
+u8* attrOf(UXRscTree* t, UXRscObject* o, u8* key)
+```
+
+The shared value, for a control in a tree.
+
+### setAttrOf
+
+```c
+void setAttrOf(UXRscTree* t, UXRscObject* o, u8* key, u8* value)
+```
+
+Sets the shared value, giving the control a logical id if it has none.
+
+### seq
+
+```c
+static bool seq(u8* a, u8* b)
+```
+
+Whether two C strings are equal.
 
 ### treeCount
 
@@ -411,6 +453,12 @@ bool same(UXRscRef* o)
 ## UXRscTopObject
 
 `id`, `cls`, and `label`, the name the designer shows for it.
+
+## UXRscAttr
+
+`formId`, `logicalId`, `theme`, `key` and `value`: one setting of a control,
+kept in the chunk's `ATTR` section. Values are text. A record whose `theme` is
+a theme bit is that layout's variation of the setting.
 
 ## UXRscExtSection
 

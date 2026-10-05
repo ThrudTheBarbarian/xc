@@ -182,18 +182,18 @@ GKTree* gGtkDrawTree;
 
 // A native control was tapped: fire its neutral widget's action directly, by
 // (handle, node) — the mac driver's fire-by-peer pattern, verbatim.
-pointer gGtkCtlPeer[16384]; // [handle*256 + node] -> the control's neutral widget
+pointer gGtkCtlPeer[262144]; // [handle*4096 + node] (UX_MAXN in the shim) -> the control's neutral widget
 UXEvent* gGtkClickEvent;
 // A native value control moved: adopt the number into the peer, fire its
 // action — the mac driver's xgAKValueChanged, iOS edition (the UISwitch case
 // is new: its 0/1 lands in the peer UXCheckbox before the fire).
 void uxGtkValueChanged(i32 handle, i32 node, i32 value)
     {
-    if (handle < (i32)0 || handle >= (i32)64 || node < (i32)0 || node >= (i32)256)
+    if (handle < (i32)0 || handle >= (i32)64 || node < (i32)0 || node >= (i32)4096)
         {
         return;
         }
-    UXControl* ctl = (UXControl* ?)(Object*)gGtkCtlPeer[handle * (i32)256 + node];
+    UXControl* ctl = (UXControl* ?)(Object*)gGtkCtlPeer[handle * (i32)4096 + node];
     if (ctl == (UXControl*)0)
         {
         return;
@@ -251,11 +251,11 @@ void uxGtkValueChanged(i32 handle, i32 node, i32 value)
 // tell the neutral field so its onChange fires with the truth (mac pattern).
 void uxGtkFieldChanged(i32 handle, i32 node)
     {
-    if (handle < (i32)0 || handle >= (i32)64 || node < (i32)0 || node >= (i32)256)
+    if (handle < (i32)0 || handle >= (i32)64 || node < (i32)0 || node >= (i32)4096)
         {
         return;
         }
-    UXTextField* f = (UXTextField* ?)(Object*)gGtkCtlPeer[handle * (i32)256 + node];
+    UXTextField* f = (UXTextField* ?)(Object*)gGtkCtlPeer[handle * (i32)4096 + node];
     if (f == (UXTextField*)0)
         {
         return;
@@ -270,11 +270,11 @@ void uxGtkFieldChanged(i32 handle, i32 node)
 // per keystroke), so this announces and nothing else.
 void uxGtkFieldSubmitted(i32 handle, i32 node)
     {
-    if (handle < (i32)0 || handle >= (i32)64 || node < (i32)0 || node >= (i32)256)
+    if (handle < (i32)0 || handle >= (i32)64 || node < (i32)0 || node >= (i32)4096)
         {
         return;
         }
-    UXTextField* f = (UXTextField* ?)(Object*)gGtkCtlPeer[handle * (i32)256 + node];
+    UXTextField* f = (UXTextField* ?)(Object*)gGtkCtlPeer[handle * (i32)4096 + node];
     if (f == (UXTextField*)0)
         {
         return;
@@ -287,11 +287,11 @@ void uxGtkFieldSubmitted(i32 handle, i32 node)
     }
 void uxGtkFireControl(i32 handle, i32 node)
     {
-    if (handle < (i32)0 || handle >= (i32)64 || node < (i32)0 || node >= (i32)256)
+    if (handle < (i32)0 || handle >= (i32)64 || node < (i32)0 || node >= (i32)4096)
         {
         return;
         }
-    UXControl* ctl = (UXControl* ?)(Object*)gGtkCtlPeer[handle * (i32)256 + node];
+    UXControl* ctl = (UXControl* ?)(Object*)gGtkCtlPeer[handle * (i32)4096 + node];
     if (ctl == (UXControl*)0)
         {
         return;
@@ -995,7 +995,7 @@ class UXGtkDriver : Object<UXViewDriver>
         GKNode* t = ((GKTree*)h).nodes;
         i32 cur = i;
         i32 guard = (i32)0;
-        while (guard <= (i32)256)
+        while (guard <= (i32)4096)
             {
             // reached the root
             if (cur == (i32)0)
@@ -1026,7 +1026,7 @@ class UXGtkDriver : Object<UXViewDriver>
             }
         i32 cur = i;
         i32 guard = (i32)0;
-        while (cur >= (i32)0 && guard <= (i32)256)
+        while (cur >= (i32)0 && guard <= (i32)4096)
             {
             if (t[cur].hidden != (i16)0)
                 {
@@ -1409,7 +1409,7 @@ class UXGtkDriver : Object<UXViewDriver>
                 {
                 u8* title = n.spec != (pointer)0 ? (u8*)n.spec : (u8*)"";
                 ux_gtk_make_button(handle, i, ax, ay, aw, ah, title);
-                gGtkCtlPeer[handle * (i32)256 + i] = n.peer;
+                gGtkCtlPeer[handle * (i32)4096 + i] = n.peer;
                 }
             else if (n.kind == (i32)UXKindLabel && n.spec != (pointer)0)
                 {
@@ -1421,7 +1421,7 @@ class UXGtkDriver : Object<UXViewDriver>
                 if (f != (GKField*)0)
                     {
                     ux_gtk_make_field(handle, i, ax, ay, aw, ah, f.buf, f.cap, f.secure);
-                    gGtkCtlPeer[handle * (i32)256 + i] = n.peer;
+                    gGtkCtlPeer[handle * (i32)4096 + i] = n.peer;
                     }
                 }
             else if (n.kind == (i32)UXKindCheckbox || n.kind == (i32)UXKindRadio)
@@ -1436,7 +1436,7 @@ class UXGtkDriver : Object<UXViewDriver>
                     u8* title = n.spec != (pointer)0 ? (u8*)n.spec : (u8*)"";
                     ux_gtk_make_check(handle, i, ax, ay, aw, ah, title,
                                       cb.isChecked() ? (i32)1 : (i32)0);
-                    gGtkCtlPeer[handle * (i32)256 + i] = n.peer;
+                    gGtkCtlPeer[handle * (i32)4096 + i] = n.peer;
                     }
                 // A radio is a GtkCheckButton in a GROUP, which GTK draws round: grouped with the
                 // first button of its UXRadioGroup in this tree (the group's exclusion stays neutral,
@@ -1455,7 +1455,7 @@ class UXGtkDriver : Object<UXViewDriver>
                             }
                         }
                     ux_gtk_make_radio(handle, i, ax, ay, aw, ah, title, rbn.isSelected() ? (i32)1 : (i32)0, leader);
-                    gGtkCtlPeer[handle * (i32)256 + i] = n.peer;
+                    gGtkCtlPeer[handle * (i32)4096 + i] = n.peer;
                     }
                 }
             else if (n.kind == (i32)UXKindSlider)
@@ -1465,7 +1465,7 @@ class UXGtkDriver : Object<UXViewDriver>
                     {
                     ux_gtk_make_slider(handle, i, ax, ay, aw, ah,
                                        sv.nativeMin(), sv.nativeMax(), sv.nativeValue());
-                    gGtkCtlPeer[handle * (i32)256 + i] = n.peer;
+                    gGtkCtlPeer[handle * (i32)4096 + i] = n.peer;
                     }
                 }
             else if (n.kind == (i32)UXKindStepper)
@@ -1476,7 +1476,7 @@ class UXGtkDriver : Object<UXViewDriver>
                     ux_gtk_make_stepper(handle, i, ax, ay, aw, ah,
                                         sv.nativeMin(), sv.nativeMax(), sv.nativeStep(),
                                         sv.nativeWraps() ? (i32)1 : (i32)0, sv.nativeValue());
-                    gGtkCtlPeer[handle * (i32)256 + i] = n.peer;
+                    gGtkCtlPeer[handle * (i32)4096 + i] = n.peer;
                     }
                 }
             else if (n.kind == (i32)UXKindProgress)
@@ -1485,7 +1485,7 @@ class UXGtkDriver : Object<UXViewDriver>
                 if (pgv != (UXProgressBar*)0)
                     {
                     ux_gtk_make_progress(handle, i, ax, ay, aw, ah, pgv.nativeFractionMille());
-                    gGtkCtlPeer[handle * (i32)256 + i] = n.peer;
+                    gGtkCtlPeer[handle * (i32)4096 + i] = n.peer;
                     }
                 }
             else if (n.kind == (i32)UXKindPopup)
@@ -1499,7 +1499,7 @@ class UXGtkDriver : Object<UXViewDriver>
                         ux_gtk_popup_add_item(handle, i, pv.nativeItemTitle(j));
                         }
                     ux_gtk_popup_select(handle, i, pv.nativeSelected());
-                    gGtkCtlPeer[handle * (i32)256 + i] = n.peer;
+                    gGtkCtlPeer[handle * (i32)4096 + i] = n.peer;
                     }
                 }
             else if (n.kind == (i32)UXKindSegmented)
@@ -1513,7 +1513,7 @@ class UXGtkDriver : Object<UXViewDriver>
                         ux_gtk_seg_set_label(handle, i, j, gv.nativeSegLabel(j));
                         }
                     ux_gtk_seg_select(handle, i, gv.nativeSelectedSeg());
-                    gGtkCtlPeer[handle * (i32)256 + i] = n.peer;
+                    gGtkCtlPeer[handle * (i32)4096 + i] = n.peer;
                     }
                 }
             // apply the node's INITIAL state to a control created THIS pass —

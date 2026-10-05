@@ -466,6 +466,10 @@ class UXRscReader : Object
                 {
                 self.readNames(res, q + (i32)8, q + (i32)8 + size);
                 }
+            else if (self.rd32(q) == (i32)$41545452) // 'ATTR': controls' settings
+                {
+                self.readAttrs(res, q + (i32)8, q + (i32)8 + size);
+                }
             else if (self.rd32(q) == (i32)$4F574E52) // 'OWNR': File's Owner's class, the bytes
                 {
                 u8* oc = new u8[(u32)(size + (i32)1)];
@@ -527,6 +531,49 @@ class UXRscReader : Object
                     }
                 }
             }
+        }
+
+    // The ATTR section: { count u16, then per entry: formId u16, logicalId u16, theme u16, key and
+    // value, each a u16 length and its bytes }.
+    void readAttrs(UXRscDoc* res, i32 p, i32 end)
+        {
+        i32 n = self.rd16(p);
+        p = p + (i32)2;
+        for (i32 i = (i32)0; i < n && p + (i32)8 <= end; i = i + (i32)1)
+            {
+            i32 form = self.rd16(p);
+            i32 id = self.rd16(p + (i32)2);
+            i32 theme = self.rd16(p + (i32)4);
+            p = p + (i32)6;
+            u8* key = self.lenStr(&p, end);
+            u8* value = self.lenStr(&p, end);
+            if (key == (u8*)0 || value == (u8*)0)
+                {
+                return;
+                }
+            res.setAttrIn(form, id, theme, key, value);
+            }
+        }
+    u8* lenStr(i32* p, i32 end)
+        {
+        if (p[0] + (i32)2 > end)
+            {
+            return (u8*)0;
+            }
+        i32 n = self.rd16(p[0]);
+        p[0] = p[0] + (i32)2;
+        if (p[0] + n > end)
+            {
+            return (u8*)0;
+            }
+        u8* s = new u8[(u32)(n + (i32)1)];
+        for (i32 k = (i32)0; k < n; k = k + (i32)1)
+            {
+            s[k] = buf[p[0] + k];
+            }
+        s[n] = (u8)0;
+        p[0] = p[0] + n;
+        return s;
         }
 
     // A 6-byte Ref {space u8, a u16, b u16, _pad u8}.

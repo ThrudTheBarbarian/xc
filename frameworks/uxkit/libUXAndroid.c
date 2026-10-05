@@ -40,6 +40,8 @@
 
 #define LOG(...) __android_log_print(ANDROID_LOG_INFO, "uxkit", __VA_ARGS__)
 #define UXA_MAXW 16
+/* The nodes of one window's tree a native widget can be made for. */
+#define UXA_MAXN 1024
 
 typedef void (*ux_entry_fn)(void);
 typedef void (*ux_content_fn)(int handle, int wx, int wy, int ww, int wh, void *ud);
@@ -104,14 +106,14 @@ static int check(JNIEnv *env, const char *what) {
 /* windows: child FrameLayouts inside one root FrameLayout (content view) */
 static jobject gRoot;                     /* global ref */
 static jobject gWinV[UXA_MAXW];           /* global refs, per-window FrameLayout */
-static jobject gCtl[UXA_MAXW][64];        /* global refs, per-node widget */
+static jobject gCtl[UXA_MAXW][UXA_MAXN];        /* global refs, per-node widget */
 /* Native scroll containers (UXScrollView): a ScrollView over a FrameLayout document whose draw view
  * (a UXDrawView with id (handle << 8) | node) paints the scroll view's document subtree.  docX/docY
  * are the document's place in the window's content, in dp (the toolkit's coordinates, unscrolled:
  * the ScrollView owns the offset). */
 typedef struct { jobject draw; void *sv; int docX, docY; } UXAndScrollRec;
-static UXAndScrollRec gScroll[UXA_MAXW][64];
-static unsigned char gInDoc[UXA_MAXW][64]; /* a control moved into scroll node n's document: n + 1 */
+static UXAndScrollRec gScroll[UXA_MAXW][UXA_MAXN];
+static unsigned short gInDoc[UXA_MAXW][UXA_MAXN]; /* a control moved into scroll node n's document: n + 1 */
 static void (*gScrollContent)(void *sv, int docW, int docH);
 void ux_and_set_scroll_content(void *fn) { gScrollContent = (void (*)(void *, int, int))fn; }
 static ux_content_fn gContent[UXA_MAXW];
@@ -125,10 +127,10 @@ static int gScreenW, gScreenH;          /* in NEUTRAL units (px / density) */
  * Canvas so app-drawn art rides along.  PX() is that boundary. */
 static float gDensity = 1.0f;
 #define PX(v) ((int)((v) * gDensity + 0.5f))
-static char *gFieldBuf[UXA_MAXW][64];     /* EditText overlays sync into these */
-static int   gFieldCap[UXA_MAXW][64];
+static char *gFieldBuf[UXA_MAXW][UXA_MAXN];     /* EditText overlays sync into these */
+static int   gFieldCap[UXA_MAXW][UXA_MAXN];
 static int   gFieldMute;                  /* programmatic setText must not re-fire */
-static jobject gSpinAdapter[UXA_MAXW][64];   /* global refs, per-popup adapter */
+static jobject gSpinAdapter[UXA_MAXW][UXA_MAXN];   /* global refs, per-popup adapter */
 static jclass gTableCls;                     /* UXTable (the bridge dex): the native table */
 static jclass gMenuCls;                      /* UXMenuButton: the app's menus from an overflow button */
 static jclass gPickerCls;                    /* UXBridge$Picker: the system document picker */
@@ -137,7 +139,7 @@ static int gPickDone, gPickNesting;
 static jobject gMenuBtn;                     /* global ref, made with the first window */
 typedef void (*menu_pick_fn)(int, int);
 static menu_pick_fn gMenuPick;
-static void *gTblPeer[UXA_MAXW][64];         /* the peer UXTableView, by the table's id */
+static void *gTblPeer[UXA_MAXW][UXA_MAXN];         /* the peer UXTableView, by the table's id */
 typedef int (*tbl_rows_fn)(void *);
 typedef const char *(*tbl_cell_fn)(void *, int, int);
 typedef int (*tbl_cols_fn)(void *);
@@ -198,7 +200,7 @@ static void n_submit(JNIEnv *env, jclass c, jint id) {
 static void n_text(JNIEnv *env, jclass c, jint id, jstring s) {
     (void)c;
     int handle = id >> 8, node = id & 0xFF;
-    if (gFieldMute || handle < 0 || handle >= UXA_MAXW || node < 0 || node >= 64) return;
+    if (gFieldMute || handle < 0 || handle >= UXA_MAXW || node < 0 || node >= UXA_MAXN) return;
     char *buf = gFieldBuf[handle][node];
     if (!buf) return;
     /* the shared field rule: the buffer is synced shim-side FIRST, then the
@@ -242,7 +244,7 @@ static void applyInsets(JNIEnv *env);
 /* the native table's data, from the peer UXTableView (UXTable's natives) */
 static void *tblPeer(jint id) {
     int h = id >> 8, n = id & 0xFF;
-    return (h > 0 && h < UXA_MAXW && n >= 0 && n < 64) ? gTblPeer[h][n] : NULL;
+    return (h > 0 && h < UXA_MAXW && n >= 0 && n < UXA_MAXN) ? gTblPeer[h][n] : NULL;
 }
 static jint n_tbl_rows(JNIEnv *env, jclass c, jint id) {
     (void)env; (void)c;
@@ -319,7 +321,7 @@ static void n_draw(JNIEnv *env, jclass c, jint id, jobject canvas, jint w, jint 
     int handle = id >> 8;
     int node = id & 0xFF;
     if (node > 0) { /* a scroll container's document: the scroll view's subtree, in dp */
-        if (handle < 0 || handle >= UXA_MAXW || node >= 64 || !gScroll[handle][node].sv || !gScrollContent) return;
+        if (handle < 0 || handle >= UXA_MAXW || node >= UXA_MAXN || !gScroll[handle][node].sv || !gScrollContent) return;
         if (gCanvasScale)
             (*env)->CallVoidMethod(env, canvas, gCanvasScale, (jfloat)gDensity, (jfloat)gDensity);
         jobject was = gDrawCanvas;
@@ -361,7 +363,7 @@ static void n_touch(JNIEnv *env, jclass c, jint id, jint action, jfloat x, jfloa
     if (node == UXA_SHIELD) { /* the input shield: its own place in the window */
         ox = gShieldX[handle];
         oy = gShieldY[handle];
-    } else if (node > 0 && node < 64 && gCtl[handle][node]) {
+    } else if (node > 0 && node < UXA_MAXN && gCtl[handle][node]) {
         /* on a scroll document: the window's content as it shows -- the document's place, less how
          * far the ScrollView has scrolled it; the toolkit adds the offset in its own hit test */
         jclass vc = (*env)->FindClass(env, "android/view/View");
@@ -400,7 +402,7 @@ void ux_and_test_call_later(void *fn, int ms) {
 /* Tests: is a native button with this title on screen (attached and shown, ancestors included)? */
 int ux_and_test_control_visible(int handle, const char *title) {
     JNIEnv *env = envNow();
-    for (int n = 0; n < 256; n++) {
+    for (int n = 0; n < UXA_MAXN; n++) {
         jobject c = gCtl[handle][n];
         if (!c || !(*env)->IsInstanceOf(env, c, gBtnCls)) continue;
         jclass tvC = (*env)->FindClass(env, "android/widget/TextView");
@@ -988,7 +990,7 @@ void ux_and_window_close(int handle) {
     (*env)->CallVoidMethod(env, gRoot, gRemoveView, gWinV[handle]);
     (*env)->DeleteGlobalRef(env, gWinV[handle]);
     gWinV[handle] = NULL; gContent[handle] = NULL;
-    for (int n = 0; n < 64; n++) {
+    for (int n = 0; n < UXA_MAXN; n++) {
         if (gCtl[handle][n]) { (*env)->DeleteGlobalRef(env, gCtl[handle][n]); gCtl[handle][n] = NULL; }
         if (gScroll[handle][n].draw) (*env)->DeleteGlobalRef(env, gScroll[handle][n].draw);
         gScroll[handle][n] = (UXAndScrollRec){0};
@@ -1003,7 +1005,7 @@ void ux_and_window_close(int handle) {
 void ux_and_window_invalidate(int handle) {
     JNIEnv *env = envNow();
     if (gWinV[handle]) (*env)->CallVoidMethod(env, gWinV[handle], gInvalidate);
-    for (int n = 1; n < 64; n++) /* the scroll documents are surfaces too */
+    for (int n = 1; n < UXA_MAXN; n++) /* the scroll documents are surfaces too */
         if (gScroll[handle][n].draw) (*env)->CallVoidMethod(env, gScroll[handle][n].draw, gInvalidate);
 }
 void ux_and_content_geometry(int handle, int *w, int *h) { *w = gWinW[handle]; *h = gWinH[handle]; }
@@ -1026,7 +1028,7 @@ int ux_and_native_count(void) { return gLive; }
 
 /* ── native controls (button + label this slice; the set grows) ─────────── */
 int ux_and_has_control(int handle, int node) {
-    return handle > 0 && handle < UXA_MAXW && node >= 0 && node < 64
+    return handle > 0 && handle < UXA_MAXW && node >= 0 && node < UXA_MAXN
         && gCtl[handle][node] != NULL;
 }
 static void place(JNIEnv *env, int handle, int node, jobject v, int x, int y, int w, int h) {
@@ -1123,7 +1125,7 @@ void ux_and_set_outline_hooks(void *level, void *disclosure, void *toggle) {
     gTblToggle = (tbl_toggle_fn)toggle;
 }
 void ux_and_make_table(int handle, int node, int x, int y, int w, int h, void *peer, int outline) {
-    if (handle <= 0 || handle >= UXA_MAXW || node < 0 || node >= 64) return;
+    if (handle <= 0 || handle >= UXA_MAXW || node < 0 || node >= UXA_MAXN) return;
     JNIEnv *env = envNow();
     gTblPeer[handle][node] = peer;
     jmethodID init = (*env)->GetMethodID(env, gTableCls, "<init>", "(Landroid/content/Context;IZZ)V");
@@ -1411,7 +1413,7 @@ static jmethodID bridgeStatic(JNIEnv *env, const char *name, const char *sig) {
 }
 void ux_and_make_scroll(int handle, int node, int x, int y, int w, int h, int contentH, void *sv, int docX, int docY) {
     JNIEnv *env = envNow();
-    if (handle <= 0 || handle >= UXA_MAXW || node <= 0 || node >= 64 || gCtl[handle][node] || !gWinV[handle]) return;
+    if (handle <= 0 || handle >= UXA_MAXW || node <= 0 || node >= UXA_MAXN || gCtl[handle][node] || !gWinV[handle]) return;
     jobject draw = (*env)->NewObject(env, gDrawCls, gDrawInit, gActivity, (handle << 8) | node);
     jobject s = (*env)->CallStaticObjectMethod(env, gBridgeCls, bridgeStatic(env, "scroller",
                     "(Landroid/app/Activity;Landroid/view/View;III)Landroid/view/View;"), gActivity, draw, PX(w), PX(h), PX(contentH));
@@ -1426,7 +1428,7 @@ void ux_and_make_scroll(int handle, int node, int x, int y, int w, int h, int co
 }
 void ux_and_scroll_reload(int handle, int node, int w, int h, int contentH, int docX, int docY) {
     JNIEnv *env = envNow();
-    if (node <= 0 || node >= 64 || !gCtl[handle][node] || !gScroll[handle][node].draw) return;
+    if (node <= 0 || node >= UXA_MAXN || !gCtl[handle][node] || !gScroll[handle][node].draw) return;
     gScroll[handle][node].docX = docX;
     gScroll[handle][node].docY = docY;
     (*env)->CallStaticVoidMethod(env, gBridgeCls, bridgeStatic(env, "scrollerReload", "(Landroid/view/View;III)V"),
@@ -1435,19 +1437,19 @@ void ux_and_scroll_reload(int handle, int node, int w, int h, int contentH, int 
 }
 void ux_and_scroll_set(int handle, int node, int px) {
     JNIEnv *env = envNow();
-    if (node <= 0 || node >= 64 || !gScroll[handle][node].draw) return;
+    if (node <= 0 || node >= UXA_MAXN || !gScroll[handle][node].draw) return;
     (*env)->CallStaticVoidMethod(env, gBridgeCls, bridgeStatic(env, "scrollerSet", "(Landroid/view/View;I)V"), gCtl[handle][node], PX(px));
     check(env, "scroll set");
 }
 int ux_and_scroll_get(int handle, int node) {
     JNIEnv *env = envNow();
-    if (node <= 0 || node >= 64 || !gScroll[handle][node].draw) return 0;
+    if (node <= 0 || node >= UXA_MAXN || !gScroll[handle][node].draw) return 0;
     jint px = (*env)->CallStaticIntMethod(env, gBridgeCls, bridgeStatic(env, "scrollerGet", "(Landroid/view/View;)I"), gCtl[handle][node]);
     return (int)(px / gDensity + 0.5f);
 }
 void ux_and_scroll_style(int handle, int node, int radius, int rgb) {
     JNIEnv *env = envNow();
-    if (node <= 0 || node >= 64 || !gScroll[handle][node].draw) return;
+    if (node <= 0 || node >= UXA_MAXN || !gScroll[handle][node].draw) return;
     (*env)->CallStaticVoidMethod(env, gBridgeCls, bridgeStatic(env, "scrollerStyle", "(Landroid/view/View;FIF)V"),
                                  gCtl[handle][node], (jfloat)(radius * gDensity), rgb, (jfloat)gDensity);
     check(env, "scroll style");
@@ -1455,28 +1457,28 @@ void ux_and_scroll_style(int handle, int node, int radius, int rgb) {
 /* A native control inside a scroll view goes into its document, so it scrolls and clips with it. */
 void ux_and_reparent_to_scroll(int handle, int node, int scrollNode, int ax, int ay, int aw, int ah) {
     JNIEnv *env = envNow();
-    if (node >= 64 || scrollNode <= 0 || scrollNode >= 64 || !gCtl[handle][node] || !gScroll[handle][scrollNode].draw) return;
+    if (node >= UXA_MAXN || scrollNode <= 0 || scrollNode >= UXA_MAXN || !gCtl[handle][node] || !gScroll[handle][scrollNode].draw) return;
     UXAndScrollRec *r = &gScroll[handle][scrollNode];
     (*env)->CallStaticVoidMethod(env, gBridgeCls, bridgeStatic(env, "scrollerAdopt", "(Landroid/view/View;Landroid/view/View;IIII)V"),
                                  gCtl[handle][scrollNode], gCtl[handle][node], PX(ax - r->docX), PX(ay - r->docY), PX(aw), PX(ah));
     check(env, "scroll adopt");
-    gInDoc[handle][node] = (unsigned char)(scrollNode + 1);
+    gInDoc[handle][node] = (unsigned short)(scrollNode + 1);
 }
 /* Tests: the container is a ScrollView; a control is in its document; and where a point of the
  * document (in the toolkit's coordinates) is on the screen now, in pixels, for a real tap there. */
 int ux_and_test_scroll_native(int handle, int node) {
-    return node > 0 && node < 64 && gScroll[handle][node].draw && gCtl[handle][node] ? 1 : 0;
+    return node > 0 && node < UXA_MAXN && gScroll[handle][node].draw && gCtl[handle][node] ? 1 : 0;
 }
 int ux_and_test_in_scroll_doc(int handle, int node, int scrollNode) {
     JNIEnv *env = envNow();
-    if (node >= 64 || scrollNode <= 0 || scrollNode >= 64 || !gCtl[handle][node] || !gScroll[handle][scrollNode].draw) return 0;
+    if (node >= UXA_MAXN || scrollNode <= 0 || scrollNode >= UXA_MAXN || !gCtl[handle][node] || !gScroll[handle][scrollNode].draw) return 0;
     return (*env)->CallStaticBooleanMethod(env, gBridgeCls, bridgeStatic(env, "scrollerHolds", "(Landroid/view/View;Landroid/view/View;)Z"),
                                            gCtl[handle][scrollNode], gCtl[handle][node]) ? 1 : 0;
 }
 void ux_and_test_doc_screen(int handle, int node, int x, int y, int *sx, int *sy) {
     JNIEnv *env = envNow();
     *sx = *sy = -1;
-    if (node <= 0 || node >= 64 || !gScroll[handle][node].draw) return;
+    if (node <= 0 || node >= UXA_MAXN || !gScroll[handle][node].draw) return;
     jintArray a = (*env)->NewIntArray(env, 2);
     jclass vc = (*env)->FindClass(env, "android/view/View");
     (*env)->CallVoidMethod(env, gScroll[handle][node].draw, (*env)->GetMethodID(env, vc, "getLocationOnScreen", "([I)V"), a);
@@ -1617,7 +1619,7 @@ void ux_and_set_control_frame(int handle, int node, int x, int y, int w, int h);
 void ux_and_set_control_hidden(int handle, int node, int on);
 void ux_and_make_shield(int handle, int node, int x, int y, int w, int h, int hidden) {
     JNIEnv *env = envNow();
-    if (!gWinV[handle] || node < 0 || node >= 64) return;
+    if (!gWinV[handle] || node < 0 || node >= UXA_MAXN) return;
     if (!gCtl[handle][node]) {
         jobject v = (*env)->NewObject(env, gDrawCls, gDrawInit, gActivity, (handle << 8) | UXA_SHIELD);
         place(env, handle, node, v, x, y, w, h);

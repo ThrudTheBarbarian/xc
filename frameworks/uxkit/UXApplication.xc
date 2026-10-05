@@ -28,6 +28,9 @@ class UXApplication : UXResponder
     Array<UXWindow>* windows;
     weak : UXWindow* keyWindow; // the window the keyboard is talking to
     UXMenuBar* menuBar;
+    // Files dropped on one of the app's windows (dragged from the Finder, the desktop, a file
+    // manager): each one's path, the window, and the point in its content.  0 = drops refused.
+    callback fileDropped void(u8* path, i32 window, i32 x, i32 y);
     bool running;
     i32 screenW;
     i32 screenH;
@@ -45,6 +48,7 @@ class UXApplication : UXResponder
         screenW = (i32)0;
         screenH = (i32)0;
         menuBar = (UXMenuBar*)0;
+        fileDropped = (callback void(u8 * path, i32 window, i32 x, i32 y))0;
         pendingCloses = new Array();
         turnFn = (turnHook_t*)0;
         turnMs = (i32)0;
@@ -53,6 +57,22 @@ class UXApplication : UXResponder
 
     // Install a menu bar.  From here on GEM owns the bar: it draws it, tracks the
     // pull-down, intercepts the click inside evnt_multi, and posts MN_SELECTED.
+    // Take files dropped on the app's windows.  The driver accepts a drag of files only while a
+    // handler is set.
+    void setFileDropHandler(callback h void(u8* path, i32 window, i32 x, i32 y))
+        {
+        fileDropped = h;
+        }
+    // A driver's report of a dropped file.  The path is the driver's; copy it to keep it.
+    void deliverFileDrop(u8* path, i32 window, i32 x, i32 y)
+        {
+        callback h void(u8 * path, i32 window, i32 x, i32 y) = fileDropped;
+        if (h)
+            {
+            h(path, window, x, y);
+            }
+        }
+
     void setMenuBar(UXMenuBar* mb)
         {
         menuBar = mb;

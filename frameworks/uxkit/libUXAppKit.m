@@ -29,6 +29,9 @@
 #import <objc/runtime.h>
 
 #define UX_MAXW 64
+/* The nodes of one window's tree a native control can be made for.  A designer's window (Rocks:
+ * outline, canvas, inspector, library) runs to several hundred. */
+#define UX_MAXN 4096
 
 typedef void (*ux_content_fn)(int handle, int wx, int wy, int ww, int wh, void* ud);
 typedef void (*ux_dispatch_fn)(int kind, int x, int y, int key);
@@ -52,6 +55,9 @@ static int g_quit = 0;
 static id g_winDelegate = 0;
 static id g_menuTarget = 0;
 static ux_dispatch_fn g_dispatch = 0;
+/* A file dropped on a window: its path, the window, and the point in the window's content. */
+typedef void (*ux_file_drop_fn)(const char* path, int win, int x, int y);
+static ux_file_drop_fn g_fileDrop = 0;
 
 void ux_ak_stop(void); // fwd
 
@@ -173,6 +179,41 @@ static void ak_updateTrackingAreas(__unsafe_unretained id self, SEL _cmd)
     [(NSView*)self addTrackingArea:ta];
     }
 
+/* Files dragged from the Finder: a window's content view takes them, and each dropped file's path
+ * goes to the toolkit (ux_ak_set_file_drop).  Controls in the window are its subviews and do not
+ * register, so a drop over one reaches the content view. */
+static NSArray* ak_drop_urls(id info)
+    {
+    NSPasteboard* pb = [info draggingPasteboard];
+    return [pb readObjectsForClasses:@[ [NSURL class] ]
+                             options:@{ NSPasteboardURLReadingFileURLsOnlyKey : @YES }];
+    }
+static NSUInteger ak_draggingEntered(__unsafe_unretained id self, SEL _cmd, __unsafe_unretained id info)
+    {
+    return (g_fileDrop && [ak_drop_urls(info) count] > 0) ? NSDragOperationCopy : NSDragOperationNone;
+    }
+static int ak_win_of(NSView* v);
+/* Deliver dropped files to the toolkit: what performDragOperation: does, and what a test calls. */
+static int ak_deliver_files(NSView* v, NSArray* urls, NSPoint p)
+    {
+    if (!g_fileDrop || [urls count] == 0)
+        return 0;
+    int h = ak_win_of(v);
+    for (NSURL* u in urls)
+        if ([u isFileURL])
+            g_fileDrop([[u path] fileSystemRepresentation], h, (int)p.x, (int)p.y);
+    return 1;
+    }
+static BOOL ak_performDragOperation(__unsafe_unretained id self, SEL _cmd, __unsafe_unretained id info)
+    {
+    NSPoint p = [(NSView*)self convertPoint:[info draggingLocation] fromView:nil];
+    return ak_deliver_files((NSView*)self, ak_drop_urls(info), p) ? YES : NO;
+    }
+void ux_ak_set_file_drop(void* fn)
+    {
+    g_fileDrop = (ux_file_drop_fn)fn;
+    }
+
 static Class ak_view_class(void)
     {
     if (g_drawViewClass)
@@ -188,6 +229,8 @@ static Class ak_view_class(void)
     class_addMethod(c, sel_registerName("rightMouseDown:"), (IMP)ak_rightMouseDown, "v@:@");
     class_addMethod(c, sel_registerName("scrollWheel:"), (IMP)ak_scrollWheel, "v@:@");
     class_addMethod(c, sel_registerName("updateTrackingAreas"), (IMP)ak_updateTrackingAreas, "v@:");
+    class_addMethod(c, sel_registerName("draggingEntered:"), (IMP)ak_draggingEntered, "Q@:@");
+    class_addMethod(c, sel_registerName("performDragOperation:"), (IMP)ak_performDragOperation, "B@:@");
     objc_registerClassPair(c);
     g_drawViewClass = c;
     return c;
@@ -1594,6 +1637,7 @@ int ux_ak_window_create(int x, int y, int w, int h)
                       defer:NO];
     [win setReleasedWhenClosed:NO]; // ARC (g_win) owns the lifetime, not the close machinery
     NSView* v = [[ak_view_class() alloc] initWithFrame:NSMakeRect(0, 0, w, h)];
+    [v registerForDraggedTypes:@[ NSPasteboardTypeFileURL ]];
     // wrap in a real NSScrollView for native scrolling
     if (g_interactive)
         {
@@ -2650,6 +2694,14 @@ void ux_ak_menu_item_key(void* sub, int tag, int key, int shift)
     [it setKeyEquivalent:[NSString stringWithCharacters:&c length:1]];
     [it setKeyEquivalentModifierMask:NSEventModifierFlagCommand | (shift ? NSEventModifierFlagShift : 0)];
     }
+/* For tests: files dropped on window `handle` at (x, y), delivered as a real drop is. */
+int ux_ak_test_drop_file(int handle, const char* path, int x, int y)
+    {
+    if (handle <= 0 || handle >= UX_MAXW || !g_view[handle])
+        return 0;
+    NSURL* u = [NSURL fileURLWithPath:[NSString stringWithUTF8String:path]];
+    return ak_deliver_files(g_view[handle], @[ u ], NSMakePoint(x, y));
+    }
 /* For tests: a key press offered to the main menu the way AppKit offers one before keyDown:
  * (performKeyEquivalent:).  1 if a menu item took it. */
 int ux_ak_test_menu_press(int key, int cmd, int shift)
@@ -2909,7 +2961,7 @@ int ux_ak_font_panel(const char* inFamily, int inSize, int inBold, int inItalic,
 // for genuine native look + feel.  A control's click/edit routes back into the toolkit (a button
 // forwards a synthetic click at its centre, so the shadow node's UXControl fires unchanged), so app
 // source is untouched.  Keyed by (window handle, tree node index).
-static NSView* g_ctl[UX_MAXW][256]; // ARC-strong; [handle][node] -> native control (or nil)
+static NSView* g_ctl[UX_MAXW][UX_MAXN]; // ARC-strong; [handle][node] -> native control (or nil)
 static id g_button_target = 0;
 typedef void (*ux_ctlfire_fn)(int handle, int node);
 static ux_ctlfire_fn g_control_fire = 0;
@@ -2954,7 +3006,7 @@ static id ak_value_target(void)
 void ux_ak_make_slider(int handle, int node, int x, int y, int w, int h, int lo, int hi, int val)
     {
     NSView* content = g_view[handle];
-    if (!content || node < 0 || node >= 256)
+    if (!content || node < 0 || node >= UX_MAXN)
         return;
     NSSlider* s = [[NSSlider alloc] initWithFrame:NSMakeRect(x, y, w, h)];
     [s setMinValue:lo];
@@ -2969,7 +3021,7 @@ void ux_ak_make_slider(int handle, int node, int x, int y, int w, int h, int lo,
     }
 void ux_ak_set_slider_value(int handle, int node, int val)
     {
-    if (handle < 0 || handle >= UX_MAXW || node < 0 || node >= 256)
+    if (handle < 0 || handle >= UX_MAXW || node < 0 || node >= UX_MAXN)
         return;
     id c = g_ctl[handle][node];
     if ([c isKindOfClass:[NSSlider class]])
@@ -2981,7 +3033,7 @@ void ux_ak_set_slider_value(int handle, int node, int val)
 void ux_ak_make_popup(int handle, int node, int x, int y, int w, int h)
     {
     NSView* content = g_view[handle];
-    if (!content || node < 0 || node >= 256)
+    if (!content || node < 0 || node >= UX_MAXN)
         return;
     NSPopUpButton* p = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(x, y, w, h) pullsDown:NO];
     [p setTag:(handle * 1000 + node)];
@@ -2992,7 +3044,7 @@ void ux_ak_make_popup(int handle, int node, int x, int y, int w, int h)
     }
 void ux_ak_popup_add_item(int handle, int node, const char* title)
     {
-    if (handle < 0 || handle >= UX_MAXW || node < 0 || node >= 256)
+    if (handle < 0 || handle >= UX_MAXW || node < 0 || node >= UX_MAXN)
         return;
     id c = g_ctl[handle][node];
     if ([c isKindOfClass:[NSPopUpButton class]])
@@ -3002,7 +3054,7 @@ void ux_ak_popup_add_item(int handle, int node, const char* title)
     }
 void ux_ak_popup_select(int handle, int node, int i)
     {
-    if (handle < 0 || handle >= UX_MAXW || node < 0 || node >= 256)
+    if (handle < 0 || handle >= UX_MAXW || node < 0 || node >= UX_MAXN)
         return;
     id c = g_ctl[handle][node];
     if ([c isKindOfClass:[NSPopUpButton class]] && i >= 0)
@@ -3014,7 +3066,7 @@ void ux_ak_popup_select(int handle, int node, int i)
 void ux_ak_make_stepper(int handle, int node, int x, int y, int w, int h, int lo, int hi, int step, int wraps, int val)
     {
     NSView* content = g_view[handle];
-    if (!content || node < 0 || node >= 256)
+    if (!content || node < 0 || node >= UX_MAXN)
         return;
     NSStepper* s = [[NSStepper alloc] initWithFrame:NSMakeRect(x, y, w, h)];
     [s setMinValue:lo];
@@ -3030,7 +3082,7 @@ void ux_ak_make_stepper(int handle, int node, int x, int y, int w, int h, int lo
     }
 void ux_ak_set_stepper_value(int handle, int node, int val)
     {
-    if (handle < 0 || handle >= UX_MAXW || node < 0 || node >= 256)
+    if (handle < 0 || handle >= UX_MAXW || node < 0 || node >= UX_MAXN)
         return;
     id c = g_ctl[handle][node];
     if ([c isKindOfClass:[NSStepper class]])
@@ -3042,7 +3094,7 @@ void ux_ak_set_stepper_value(int handle, int node, int val)
 void ux_ak_make_segmented(int handle, int node, int x, int y, int w, int h, int nseg)
     {
     NSView* content = g_view[handle];
-    if (!content || node < 0 || node >= 256)
+    if (!content || node < 0 || node >= UX_MAXN)
         return;
     NSSegmentedControl* sc = [[NSSegmentedControl alloc] initWithFrame:NSMakeRect(x, y, w, h)];
     [sc setSegmentCount:nseg];
@@ -3054,7 +3106,7 @@ void ux_ak_make_segmented(int handle, int node, int x, int y, int w, int h, int 
     }
 void ux_ak_seg_set_label(int handle, int node, int seg, const char* label)
     {
-    if (handle < 0 || handle >= UX_MAXW || node < 0 || node >= 256)
+    if (handle < 0 || handle >= UX_MAXW || node < 0 || node >= UX_MAXN)
         return;
     id c = g_ctl[handle][node];
     if ([c isKindOfClass:[NSSegmentedControl class]] && seg >= 0)
@@ -3064,7 +3116,7 @@ void ux_ak_seg_set_label(int handle, int node, int seg, const char* label)
     }
 void ux_ak_seg_select(int handle, int node, int seg)
     {
-    if (handle < 0 || handle >= UX_MAXW || node < 0 || node >= 256)
+    if (handle < 0 || handle >= UX_MAXW || node < 0 || node >= UX_MAXN)
         return;
     id c = g_ctl[handle][node];
     if ([c isKindOfClass:[NSSegmentedControl class]] && seg >= 0)
@@ -3076,7 +3128,7 @@ void ux_ak_seg_select(int handle, int node, int seg)
 void ux_ak_make_progress(int handle, int node, int x, int y, int w, int h)
     {
     NSView* content = g_view[handle];
-    if (!content || node < 0 || node >= 256)
+    if (!content || node < 0 || node >= UX_MAXN)
         return;
     NSProgressIndicator* p = [[NSProgressIndicator alloc] initWithFrame:NSMakeRect(x, y, w, h)];
     [p setStyle:NSProgressIndicatorStyleBar];
@@ -3088,7 +3140,7 @@ void ux_ak_make_progress(int handle, int node, int x, int y, int w, int h)
     }
 void ux_ak_set_progress(int handle, int node, int mille, int indeterminate)
     {
-    if (handle < 0 || handle >= UX_MAXW || node < 0 || node >= 256)
+    if (handle < 0 || handle >= UX_MAXW || node < 0 || node >= UX_MAXN)
         return;
     id c = g_ctl[handle][node];
     if (![c isKindOfClass:[NSProgressIndicator class]])
@@ -3137,7 +3189,7 @@ static id ak_button_target(void)
 
 int ux_ak_has_control(int handle, int node)
     {
-    return (node >= 0 && node < 256 && g_ctl[handle][node] != nil) ? 1 : 0;
+    return (node >= 0 && node < UX_MAXN && g_ctl[handle][node] != nil) ? 1 : 0;
     }
 // How many native subview controls exist for a window (g_ctl slots) — for verifying realization.
 int ux_ak_control_count(int handle)
@@ -3145,7 +3197,7 @@ int ux_ak_control_count(int handle)
     if (handle < 0 || handle >= UX_MAXW)
         return 0;
     int n = 0;
-    for (int i = 0; i < 256; i++)
+    for (int i = 0; i < UX_MAXN; i++)
         {
         if (g_ctl[handle][i])
             n++;
@@ -3156,8 +3208,8 @@ int ux_ak_control_count(int handle)
 // A native NSTextField syncs with the toolkit's field buffer: native edits are written back (so
 // field.text() works), and setText from the app is pushed to the field (so e.g. Clear Field shows).
 static id g_field_delegate = 0;
-static char* g_field_buf[UX_MAXW][256]; // raw ptr to the toolkit's field buffer (not ObjC)
-static int g_field_cap[UX_MAXW][256];
+static char* g_field_buf[UX_MAXW][UX_MAXN]; // raw ptr to the toolkit's field buffer (not ObjC)
+static int g_field_cap[UX_MAXW][UX_MAXN];
 static void (*g_field_changed)(int, int) = 0; // -> the neutral field's onChange (handle, node)
 void ux_ak_set_field_hooks(void* changed)
     {
@@ -3213,7 +3265,7 @@ static void ak_field_end_editing(__unsafe_unretained id self, SEL _cmd, __unsafe
  * NSTextMovementReturn (0x10) is a submit, NSTextMovementTab (0x11) and the rest are not. */
 void ux_ak_test_end_editing(int handle, int node, int movement)
     {
-    if (node < 0 || node >= 256)
+    if (node < 0 || node >= UX_MAXN)
         return;
     NSTextField* tf = (NSTextField*)g_ctl[handle][node];
     if (!tf)
@@ -3237,7 +3289,7 @@ static id ak_field_delegate(void)
 void ux_ak_make_field(int handle, int node, int x, int y, int w, int h, char* buf, int cap, int secure)
     {
     NSView* content = g_view[handle];
-    if (!content || node < 0 || node >= 256)
+    if (!content || node < 0 || node >= UX_MAXN)
         return;
     NSTextField* tf = secure ? [[NSSecureTextField alloc] initWithFrame:NSMakeRect(x, y, w, h)]
                              : [[NSTextField alloc] initWithFrame:NSMakeRect(x, y, w, h)];
@@ -3256,7 +3308,7 @@ void ux_ak_make_field(int handle, int node, int x, int y, int w, int h, char* bu
 
 void ux_ak_set_field_placeholder(int handle, int node, char* text)
     {
-    if (node < 0 || node >= 256)
+    if (node < 0 || node >= UX_MAXN)
         return;
     NSView* v = g_ctl[handle][node];
     if (!v || ![v isKindOfClass:[NSTextField class]])
@@ -3267,7 +3319,7 @@ void ux_ak_set_field_placeholder(int handle, int node, char* text)
 // during editing — where buffer == field — leaves the caret alone).
 void ux_ak_update_field(int handle, int node)
     {
-    if (node < 0 || node >= 256)
+    if (node < 0 || node >= UX_MAXN)
         return;
     NSTextField* tf = (NSTextField*)g_ctl[handle][node];
     char* buf = g_field_buf[handle][node];
@@ -3281,7 +3333,7 @@ void ux_ak_update_field(int handle, int node)
 void ux_ak_make_label(int handle, int node, int x, int y, int w, int h, const char* text)
     {
     NSView* content = g_view[handle];
-    if (!content || node < 0 || node >= 256)
+    if (!content || node < 0 || node >= UX_MAXN)
         return;
     NSTextField* tf = [NSTextField labelWithString:[NSString stringWithUTF8String:text]];
     [tf setFrame:NSMakeRect(x, y, w, h)];
@@ -3291,7 +3343,7 @@ void ux_ak_make_label(int handle, int node, int x, int y, int w, int h, const ch
     }
 void ux_ak_set_label_text(int handle, int node, const char* text)
     {
-    if (node < 0 || node >= 256)
+    if (node < 0 || node >= UX_MAXN)
         return;
     NSTextField* tf = (NSTextField*)g_ctl[handle][node];
     if (!tf)
@@ -3312,7 +3364,7 @@ static void ak_place_button(NSButton* b, int x, int y, int w, int h)
 void ux_ak_make_button(int handle, int node, int x, int y, int w, int h, const char* title)
     {
     NSView* content = g_view[handle];
-    if (!content || node < 0 || node >= 256)
+    if (!content || node < 0 || node >= UX_MAXN)
         return;
     NSButton* b = [[NSButton alloc] initWithFrame:NSMakeRect(x, y, w, h)];
     [b setTitle:[NSString stringWithUTF8String:title]];
@@ -3336,7 +3388,7 @@ void ux_ak_make_check(int handle, int node, int x, int y, int w, int h,
     {
     int checked = flags & 1, isRadio = (flags >> 1) & 1;
     NSView* content = g_view[handle];
-    if (!content || node < 0 || node >= 256)
+    if (!content || node < 0 || node >= UX_MAXN)
         return;
     NSString* t = [NSString stringWithUTF8String:(title ? title : "")];
     id tgt = ak_button_target();
@@ -3355,7 +3407,7 @@ void ux_ak_make_check(int handle, int node, int x, int y, int w, int h,
 // aligned in boxes whose right edges agree.
 void ux_ak_set_control_align(int handle, int node, int a)
     {
-    if (handle < 0 || handle >= UX_MAXW || node < 0 || node >= 256)
+    if (handle < 0 || handle >= UX_MAXW || node < 0 || node >= UX_MAXN)
         return;
     NSView* v = g_ctl[handle][node];
     if (![v respondsToSelector:@selector(setAlignment:)])
@@ -3369,7 +3421,7 @@ void ux_ak_set_control_align(int handle, int node, int a)
 // Read it back, so a gate can tell "the flag was set" from "the text moved".
 int ux_ak_control_align(int handle, int node)
     {
-    if (handle < 0 || handle >= UX_MAXW || node < 0 || node >= 256)
+    if (handle < 0 || handle >= UX_MAXW || node < 0 || node >= UX_MAXN)
         return -1;
     NSView* v = g_ctl[handle][node];
     if (![v respondsToSelector:@selector(alignment)])
@@ -3380,7 +3432,7 @@ int ux_ak_control_align(int handle, int node)
     }
 void ux_ak_set_control_check(int handle, int node, int on)
     {
-    if (node < 0 || node >= 256)
+    if (node < 0 || node >= UX_MAXN)
         return;
     NSButton* b = (NSButton*)g_ctl[handle][node];
     if ([b isKindOfClass:[NSButton class]])
@@ -3388,7 +3440,7 @@ void ux_ak_set_control_check(int handle, int node, int on)
     }
 void ux_ak_set_control_frame(int handle, int node, int x, int y, int w, int h)
     {
-    if (node < 0 || node >= 256)
+    if (node < 0 || node >= UX_MAXN)
         return;
     NSView* v = g_ctl[handle][node];
     if (!v)
@@ -3400,7 +3452,7 @@ void ux_ak_set_control_frame(int handle, int node, int x, int y, int w, int h)
     }
 void ux_ak_set_control_enabled(int handle, int node, int on)
     {
-    if (node < 0 || node >= 256)
+    if (node < 0 || node >= UX_MAXN)
         return;
     NSView* v = g_ctl[handle][node];
     if ([v isKindOfClass:[NSControl class]])
@@ -3411,7 +3463,7 @@ void ux_ak_set_control_enabled(int handle, int node, int on)
 // changed" — which is exactly the bug this exists to catch.  -1 = no control.
 int ux_ak_control_enabled(int handle, int node)
     {
-    if (handle < 0 || handle >= UX_MAXW || node < 0 || node >= 256)
+    if (handle < 0 || handle >= UX_MAXW || node < 0 || node >= UX_MAXN)
         return -1;
     NSView* v = g_ctl[handle][node];
     if (!v)
@@ -3426,7 +3478,7 @@ int ux_ak_control_enabled(int handle, int node)
 // -1 = no control, or one that does not have a state.
 int ux_ak_control_check(int handle, int node)
     {
-    if (handle < 0 || handle >= UX_MAXW || node < 0 || node >= 256)
+    if (handle < 0 || handle >= UX_MAXW || node < 0 || node >= UX_MAXN)
         return -1;
     NSView* v = g_ctl[handle][node];
     if (![v isKindOfClass:[NSButton class]])
@@ -3439,7 +3491,7 @@ int ux_ak_control_check(int handle, int node)
 // own (top-left origin), matching what set_control_frame was handed.
 int ux_ak_control_frame(int handle, int node, int* x, int* y, int* w, int* h)
     {
-    if (handle < 0 || handle >= UX_MAXW || node < 0 || node >= 256)
+    if (handle < 0 || handle >= UX_MAXW || node < 0 || node >= UX_MAXN)
         return 0;
     NSView* v = g_ctl[handle][node];
     if (!v)
@@ -3459,7 +3511,7 @@ int ux_ak_control_frame(int handle, int node, int* x, int* y, int* w, int* h)
     }
 void ux_ak_set_control_hidden(int handle, int node, int on)
     {
-    if (node < 0 || node >= 256)
+    if (node < 0 || node >= UX_MAXN)
         return;
     NSView* v = g_ctl[handle][node];
     if (v)
@@ -3497,7 +3549,7 @@ enum
     };
 void ux_ak_set_control_autoresize(int handle, int node, int mask)
     {
-    if (node < 0 || node >= 256)
+    if (node < 0 || node >= UX_MAXN)
         return;
     NSView* v = g_ctl[handle][node];
     if (!v)
@@ -3615,12 +3667,12 @@ static int g_tbl_reloading = 0; // guard: a reload's selection-restore must not 
     }
 @end
 
-static UXTableSource* g_tbl_src[UX_MAXW][256]; // ARC-strong: one datasource per table node
+static UXTableSource* g_tbl_src[UX_MAXW][UX_MAXN]; // ARC-strong: one datasource per table node
 
 void ux_ak_make_table(int handle, int node, int x, int y, int w, int h, void* peer)
     {
     NSView* content = g_view[handle];
-    if (!content || node < 0 || node >= 256)
+    if (!content || node < 0 || node >= UX_MAXN)
         return;
     NSScrollView* sv = [[NSScrollView alloc] initWithFrame:NSMakeRect(x, y, w, h)];
     [sv setHasVerticalScroller:YES];
@@ -3653,7 +3705,7 @@ void ux_ak_make_table(int handle, int node, int x, int y, int w, int h, void* pe
     }
 void ux_ak_table_reload(int handle, int node)
     {
-    if (node < 0 || node >= 256)
+    if (node < 0 || node >= UX_MAXN)
         return;
     NSScrollView* sv = (NSScrollView*)g_ctl[handle][node];
     if (![sv isKindOfClass:[NSScrollView class]])
@@ -3682,7 +3734,7 @@ void ux_ak_table_reload(int handle, int node)
 // underneath us mid-push.
 void ux_ak_table_select(int handle, int node, int* rows, int n)
     {
-    if (node < 0 || node >= 256)
+    if (node < 0 || node >= UX_MAXN)
         return;
     NSScrollView* sv = (NSScrollView*)g_ctl[handle][node]; // the table rides in a scroll view
     if (![sv isKindOfClass:[NSScrollView class]])
@@ -3788,7 +3840,7 @@ void ux_ak_set_outline_hooks(void* children, void* child, void* expandable, void
     }
 @end
 
-static UXOutlineSource* g_ol_src[UX_MAXW][256];
+static UXOutlineSource* g_ol_src[UX_MAXW][UX_MAXN];
 
 // ---- native NSToolbar (window chrome, with the customization sheet + icon/text modes) ----------
 @interface UXToolbarDelegate : NSObject <NSToolbarDelegate>
@@ -3897,7 +3949,7 @@ int ux_ak_dbg_expand_row0(int handle)
     {
     if (handle < 0 || handle >= UX_MAXW)
         return -1;
-    for (int n = 0; n < 256; n++)
+    for (int n = 0; n < UX_MAXN; n++)
         {
         id ctl = g_ctl[handle][n];
         if ([ctl isKindOfClass:[NSScrollView class]] && [[(NSScrollView*)ctl documentView] isKindOfClass:[NSOutlineView class]])
@@ -3913,7 +3965,7 @@ int ux_ak_dbg_expand_row0(int handle)
 void ux_ak_make_outline(int handle, int node, int x, int y, int w, int h, void* peer)
     {
     NSView* content = g_view[handle];
-    if (!content || node < 0 || node >= 256)
+    if (!content || node < 0 || node >= UX_MAXN)
         return;
     NSScrollView* sv = [[NSScrollView alloc] initWithFrame:NSMakeRect(x, y, w, h)];
     [sv setHasVerticalScroller:YES];
@@ -3948,7 +4000,7 @@ void ux_ak_make_outline(int handle, int node, int x, int y, int w, int h, void* 
     }
 void ux_ak_outline_reload(int handle, int node)
     {
-    if (node < 0 || node >= 256)
+    if (node < 0 || node >= UX_MAXN)
         return;
     NSScrollView* sv = (NSScrollView*)g_ctl[handle][node];
     if (![sv isKindOfClass:[NSScrollView class]])
@@ -4003,7 +4055,7 @@ static Class ak_scrolldoc_class(void)
 void ux_ak_make_scroll(int handle, int node, int x, int y, int w, int h, int contentH, void* sv)
     {
     NSView* content = g_view[handle];
-    if (!content || node < 0 || node >= 256)
+    if (!content || node < 0 || node >= UX_MAXN)
         return;
     NSScrollView* nsv = [[NSScrollView alloc] initWithFrame:NSMakeRect(x, y, w, h)];
     [nsv setHasVerticalScroller:YES];
@@ -4031,7 +4083,7 @@ void ux_ak_make_scroll(int handle, int node, int x, int y, int w, int h, int con
 // scrollToPoint: will happily leave the view showing blank space past the end.
 void ux_ak_scroll_set(int handle, int node, int px)
     {
-    if (node < 0 || node >= 256)
+    if (node < 0 || node >= UX_MAXN)
         return;
     NSScrollView* nsv = (NSScrollView*)g_ctl[handle][node];
     if (![nsv isKindOfClass:[NSScrollView class]])
@@ -4046,7 +4098,7 @@ void ux_ak_scroll_set(int handle, int node, int px)
     }
 int ux_ak_scroll_get(int handle, int node)
     {
-    if (node < 0 || node >= 256)
+    if (node < 0 || node >= UX_MAXN)
         return 0;
     NSScrollView* nsv = (NSScrollView*)g_ctl[handle][node];
     if (![nsv isKindOfClass:[NSScrollView class]])
@@ -4098,7 +4150,7 @@ int ux_ak_reparent_count(void)
  * radius or colour takes effect at the next display. */
 void ux_ak_scroll_style(int handle, int node, int radius, int rgb)
     {
-    if (node < 0 || node >= 256)
+    if (node < 0 || node >= UX_MAXN)
         return;
     NSScrollView* nsv = (NSScrollView*)g_ctl[handle][node];
     if (![nsv isKindOfClass:[NSScrollView class]])
@@ -4135,7 +4187,7 @@ void ux_ak_scroll_style(int handle, int node, int radius, int rgb)
 /* For a gate: the radius and edge width a native scroll view actually carries, or -1 for none. */
 int ux_ak_scroll_corner(int handle, int node)
     {
-    if (node < 0 || node >= 256)
+    if (node < 0 || node >= UX_MAXN)
         return -1;
     NSScrollView* nsv = (NSScrollView*)g_ctl[handle][node];
     if (![nsv isKindOfClass:[NSScrollView class]] || ![nsv wantsLayer])
@@ -4145,7 +4197,7 @@ int ux_ak_scroll_corner(int handle, int node)
 
 void ux_ak_scroll_reload(int handle, int node, int contentH)
     {
-    if (node < 0 || node >= 256)
+    if (node < 0 || node >= UX_MAXN)
         return;
     NSScrollView* nsv = (NSScrollView*)g_ctl[handle][node];
     if (![nsv isKindOfClass:[NSScrollView class]])
@@ -4163,11 +4215,15 @@ void ux_ak_scroll_reload(int handle, int node, int contentH)
 // Returns window-local (g_view) coords + 1 while dragging, 0 once released.
 int ux_ak_drag_next(int* x, int* y)
     {
-    NSEvent* e = [NSApp nextEventMatchingMask:(NSEventMaskLeftMouseDragged | NSEventMaskLeftMouseUp)
+    /* any button: a drag that began with the secondary one (a connection drawn by right-drag)
+     * is followed the same way, and its release ends it */
+    NSEvent* e = [NSApp nextEventMatchingMask:(NSEventMaskLeftMouseDragged | NSEventMaskLeftMouseUp |
+                                               NSEventMaskRightMouseDragged | NSEventMaskRightMouseUp |
+                                               NSEventMaskOtherMouseDragged | NSEventMaskOtherMouseUp)
                                     untilDate:[NSDate distantFuture]
                                        inMode:NSEventTrackingRunLoopMode
                                       dequeue:YES];
-    if (!e || [e type] == NSEventTypeLeftMouseUp)
+    if (!e || [e type] == NSEventTypeLeftMouseUp || [e type] == NSEventTypeRightMouseUp || [e type] == NSEventTypeOtherMouseUp)
         return 0;
     NSWindow* w = [e window];
     int h = 0;

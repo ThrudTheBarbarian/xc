@@ -76,7 +76,8 @@ void ux_ak_run(void); // interactive: [NSApp run] owns the loop
 i32 ux_ak_quit(void); // nonzero once the close box was hit
 void ux_ak_stop(void);
 void ux_ak_menu_item_key(pointer sub, i32 tag, i32 key, i32 shift);
-void ux_ak_set_dispatch(pointer fn);     // register the toolkit event forwarder
+void ux_ak_set_dispatch(pointer fn);
+void ux_ak_set_file_drop(pointer fn); // files dropped on a window: xgAKFileDrop     // register the toolkit event forwarder
 void ux_ak_set_turn_hook(pointer fn, i32 ms); // the frame clock: the display link, or a timer for a slow tick
 void ux_ak_set_control_fire(pointer fn); // register the control-click -> action forwarder
 pointer ux_ak_menu_new(void);
@@ -242,6 +243,14 @@ pointer gAKUserUd;
 UXApplication* gAKApp;
 UXEvent* gAKEvent;
 i32 gAKMouseWin; // handle of the window that received the current mouse-down (ak_mouseDown)
+// A file dropped on a window, from the shim: to the app's handler.
+void xgAKFileDrop(u8* path, i32 win, i32 x, i32 y)
+    {
+    if (gAKApp != (UXApplication*)0)
+        {
+        gAKApp.deliverFileDrop(path, win, x, y);
+        }
+    }
 void xgAKDispatch(i32 kind, i32 x, i32 y, i32 key)
     {
     if (gAKApp == (UXApplication*)0)
@@ -310,15 +319,15 @@ void xgAKDispatch(i32 kind, i32 x, i32 y, i32 key)
 
 // A native button/check/radio was clicked: fire its neutral widget's action DIRECTLY (by handle+node),
 // no synthetic-click hit-test.  The widget rides gAKCtlPeer, populated in realizeTree.
-pointer gAKCtlPeer[16384]; // [handle*256 + node] -> the control's neutral widget
+pointer gAKCtlPeer[262144]; // [handle*4096 + node] (UX_MAXN in the shim) -> the control's neutral widget
 UXEvent* gAKClickEvent;
 void xgAKFireControl(i32 handle, i32 node)
     {
-    if (handle < (i32)0 || handle >= (i32)64 || node < (i32)0 || node >= (i32)256)
+    if (handle < (i32)0 || handle >= (i32)64 || node < (i32)0 || node >= (i32)4096)
         {
         return;
         }
-    UXControl* ctl = (UXControl* ?)(Object*)gAKCtlPeer[handle * (i32)256 + node];
+    UXControl* ctl = (UXControl* ?)(Object*)gAKCtlPeer[handle * (i32)4096 + node];
     if (ctl == (UXControl*)0)
         {
         return;
@@ -356,11 +365,11 @@ void xgAKFireControl(i32 handle, i32 node)
 // A native value control (slider/…) moved: adopt the number into the peer widget, then fire its action.
 void xgAKValueChanged(i32 handle, i32 node, i32 value)
     {
-    if (handle < (i32)0 || handle >= (i32)64 || node < (i32)0 || node >= (i32)256)
+    if (handle < (i32)0 || handle >= (i32)64 || node < (i32)0 || node >= (i32)4096)
         {
         return;
         }
-    UXControl* ctl = (UXControl* ?)(Object*)gAKCtlPeer[handle * (i32)256 + node];
+    UXControl* ctl = (UXControl* ?)(Object*)gAKCtlPeer[handle * (i32)4096 + node];
     if (ctl == (UXControl*)0)
         {
         return;
@@ -406,11 +415,11 @@ void xgAKValueChanged(i32 handle, i32 node, i32 value)
 // exactly like a button) and fire its onChange.  buf is already synced shim-side.
 void xgAKFieldChanged(i32 handle, i32 node)
     {
-    if (handle < (i32)0 || handle >= (i32)64 || node < (i32)0 || node >= (i32)256)
+    if (handle < (i32)0 || handle >= (i32)64 || node < (i32)0 || node >= (i32)4096)
         {
         return;
         }
-    UXTextField* f = (UXTextField* ?)(Object*)gAKCtlPeer[handle * (i32)256 + node];
+    UXTextField* f = (UXTextField* ?)(Object*)gAKCtlPeer[handle * (i32)4096 + node];
     if (f == (UXTextField*)0)
         {
         return;
@@ -427,11 +436,11 @@ void xgAKFieldChanged(i32 handle, i32 node)
 // happened (controlTextDidChange fires per keystroke), so this is the announcement and nothing else.
 void xgAKFieldSubmitted(i32 handle, i32 node)
     {
-    if (handle < (i32)0 || handle >= (i32)64 || node < (i32)0 || node >= (i32)256)
+    if (handle < (i32)0 || handle >= (i32)64 || node < (i32)0 || node >= (i32)4096)
         {
         return;
         }
-    UXTextField* f = (UXTextField* ?)(Object*)gAKCtlPeer[handle * (i32)256 + node];
+    UXTextField* f = (UXTextField* ?)(Object*)gAKCtlPeer[handle * (i32)4096 + node];
     if (f == (UXTextField*)0)
         {
         return;
@@ -1096,7 +1105,7 @@ class UXAppKitDriver : Object<UXViewDriver>
         AKNode* t = ((AKTree*)h).nodes;
         i32 cur = i;
         i32 guard = (i32)0;
-        while (guard <= (i32)256)
+        while (guard <= (i32)4096)
             {
             // reached the root
             if (cur == (i32)0)
@@ -1127,7 +1136,7 @@ class UXAppKitDriver : Object<UXViewDriver>
             }
         i32 cur = i;
         i32 guard = (i32)0;
-        while (cur >= (i32)0 && guard <= (i32)256)
+        while (cur >= (i32)0 && guard <= (i32)4096)
             {
             if (t[cur].hidden != (i16)0)
                 {
@@ -1659,7 +1668,7 @@ class UXAppKitDriver : Object<UXViewDriver>
                     u8* title = t.nodes[i].spec != (pointer)0 ? (u8*)t.nodes[i].spec : (u8*)"";
                     i32 flags = on | (k == (i32)UXKindRadio ? (i32)2 : (i32)0);
                     ux_ak_make_check(handle, i, ax, ay, w, hh, title, flags);
-                    gAKCtlPeer[handle * (i32)256 + i] = t.nodes[i].peer;
+                    gAKCtlPeer[handle * (i32)4096 + i] = t.nodes[i].peer;
                     ux_ak_set_control_autoresize(handle, i, (i32)t.nodes[i].autoresize);
                     }
                 else
@@ -1686,7 +1695,7 @@ class UXAppKitDriver : Object<UXViewDriver>
                     if (ux_ak_has_control(handle, i) == (i32)0)
                         {
                         ux_ak_make_slider(handle, i, ax, ay, w, hh, sv.nativeMin(), sv.nativeMax(), sv.nativeValue());
-                        gAKCtlPeer[handle * (i32)256 + i] = t.nodes[i].peer;
+                        gAKCtlPeer[handle * (i32)4096 + i] = t.nodes[i].peer;
                         ux_ak_set_control_autoresize(handle, i, (i32)t.nodes[i].autoresize);
                         }
                     else
@@ -1719,7 +1728,7 @@ class UXAppKitDriver : Object<UXViewDriver>
                             ux_ak_popup_add_item(handle, i, pv.nativeItemTitle(j));
                             }
                         ux_ak_popup_select(handle, i, pv.nativeSelected());
-                        gAKCtlPeer[handle * (i32)256 + i] = t.nodes[i].peer;
+                        gAKCtlPeer[handle * (i32)4096 + i] = t.nodes[i].peer;
                         ux_ak_set_control_autoresize(handle, i, (i32)t.nodes[i].autoresize);
                         }
                     else
@@ -1746,7 +1755,7 @@ class UXAppKitDriver : Object<UXViewDriver>
                     if (ux_ak_has_control(handle, i) == (i32)0)
                         {
                         ux_ak_make_stepper(handle, i, ax, ay, w, hh, sv.nativeMin(), sv.nativeMax(), sv.nativeStep(), sv.nativeWraps() ? (i32)1 : (i32)0, sv.nativeValue());
-                        gAKCtlPeer[handle * (i32)256 + i] = t.nodes[i].peer;
+                        gAKCtlPeer[handle * (i32)4096 + i] = t.nodes[i].peer;
                         ux_ak_set_control_autoresize(handle, i, (i32)t.nodes[i].autoresize);
                         }
                     else
@@ -1778,7 +1787,7 @@ class UXAppKitDriver : Object<UXViewDriver>
                             ux_ak_seg_set_label(handle, i, j, gv.nativeSegLabel(j));
                             }
                         ux_ak_seg_select(handle, i, gv.nativeSelectedSeg());
-                        gAKCtlPeer[handle * (i32)256 + i] = t.nodes[i].peer;
+                        gAKCtlPeer[handle * (i32)4096 + i] = t.nodes[i].peer;
                         ux_ak_set_control_autoresize(handle, i, (i32)t.nodes[i].autoresize);
                         }
                     else
@@ -1805,7 +1814,7 @@ class UXAppKitDriver : Object<UXViewDriver>
                     if (ux_ak_has_control(handle, i) == (i32)0)
                         {
                         ux_ak_make_progress(handle, i, ax, ay, w, hh);
-                        gAKCtlPeer[handle * (i32)256 + i] = t.nodes[i].peer;
+                        gAKCtlPeer[handle * (i32)4096 + i] = t.nodes[i].peer;
                         ux_ak_set_control_autoresize(handle, i, (i32)t.nodes[i].autoresize);
                         }
                     else if ((i32)t.nodes[i].autoresize == (i32)0)
@@ -1820,7 +1829,7 @@ class UXAppKitDriver : Object<UXViewDriver>
                 {
                 // A native NSToolbar (window chrome): built once from the peer's items; no subview.
                 UXToolbar* tv = (UXToolbar* ?)(Object*)t.nodes[i].peer;
-                if (tv != (UXToolbar*)0 && gAKCtlPeer[handle * (i32)256 + i] == (pointer)0)
+                if (tv != (UXToolbar*)0 && gAKCtlPeer[handle * (i32)4096 + i] == (pointer)0)
                     {
                     ux_ak_toolbar_begin(handle, i);
                     for (i32 j = (i32)0; j < tv.nativeItemCount(); j = j + (i32)1)
@@ -1828,7 +1837,7 @@ class UXAppKitDriver : Object<UXViewDriver>
                         ux_ak_toolbar_add(handle, i, tv.nativeItemTag(j), tv.nativeItemLabel(j), tv.nativeItemType(j));
                         }
                     ux_ak_toolbar_install(handle, i);
-                    gAKCtlPeer[handle * (i32)256 + i] = t.nodes[i].peer; // realized-flag + click-routing peer
+                    gAKCtlPeer[handle * (i32)4096 + i] = t.nodes[i].peer; // realized-flag + click-routing peer
                     }
                 }
             else if (k == (i32)UXKindTable)
@@ -1913,7 +1922,7 @@ class UXAppKitDriver : Object<UXViewDriver>
                         {
                         u8* title = t.nodes[i].spec != (pointer)0 ? (u8*)t.nodes[i].spec : (u8*)"";
                         ux_ak_make_button(handle, i, ax, ay, w, hh, title);
-                        gAKCtlPeer[handle * (i32)256 + i] = t.nodes[i].peer;
+                        gAKCtlPeer[handle * (i32)4096 + i] = t.nodes[i].peer;
                         }
                     else if (k == (i32)UXKindField)
                         {
@@ -1922,7 +1931,7 @@ class UXAppKitDriver : Object<UXViewDriver>
                         i32 cap = f != (AKField*)0 ? f.cap : (i32)0;
                         i32 sec = f != (AKField*)0 ? f.secure : (i32)0;
                         ux_ak_make_field(handle, i, ax, ay, w, hh, buf, cap, sec);
-                        gAKCtlPeer[handle * (i32)256 + i] = t.nodes[i].peer; // so onChange can find the field
+                        gAKCtlPeer[handle * (i32)4096 + i] = t.nodes[i].peer; // so onChange can find the field
                         if (f != (AKField*)0 && f.place != (u8*)0)
                             {
                             ux_ak_set_field_placeholder(handle, i, f.place);
@@ -2401,6 +2410,7 @@ class UXAppKitDriver : Object<UXViewDriver>
         {
         gAKApp = app;
         ux_ak_set_dispatch((pointer)&xgAKDispatch);
+        ux_ak_set_file_drop((pointer)&xgAKFileDrop);
         ux_ak_set_control_fire((pointer)&xgAKFireControl);
         ux_ak_set_value_changed((pointer)&xgAKValueChanged); // slider/stepper/... value changes
         }

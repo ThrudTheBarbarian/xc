@@ -72,6 +72,7 @@ and the repaint has happened. Implement it only if you lay out views by hand.
 **Configuring** · [setDriver](#setdriver) · [setHeadless](#setheadless) · [setDelegate](#setdelegate) · [setMenuBar](#setmenubar) · [setIcon](#seticon--seticonpixels) · [setIconPixels](#seticon--seticonpixels)
 **The loop** · [run](#run) · [stop](#stop) · [isRunning](#isrunning) · [pump](#pump)
 **Windows** · [addWindow](#addwindow) · [closeWindow](#closewindow) · [closeWindowLater](#closewindowlater)
+**Files dropped on a window** · [setFileDropHandler](#setfiledrophandler) · [deliverFileDrop](#deliverfiledrop)
 **Screen** · [screenWidth](#screenwidth--screenheight) · [screenHeight](#screenwidth--screenheight)
 **Painting** · [displayIfNeeded](#displayifneeded)
 
@@ -105,6 +106,25 @@ void setDelegate(UXApplicationDelegate* d)
 ```
 
 Sets the app's owner. `run()` refuses to start without one.
+
+### setFileDropHandler
+
+```c
+void setFileDropHandler(callback h void(u8* path, i32 window, i32 x, i32 y))
+```
+
+Takes files dragged onto the app's windows from the Finder or a file manager.
+The handler gets each file's path, the window's handle and the point in its
+content. The path belongs to the driver, so copy it to keep it. From 0.67, on
+AppKit.
+
+### deliverFileDrop
+
+```c
+void deliverFileDrop(u8* path, i32 window, i32 x, i32 y)
+```
+
+What a driver calls for each dropped file; it passes the file to the handler.
 
 ### setMenuBar
 

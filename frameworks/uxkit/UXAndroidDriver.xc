@@ -192,7 +192,7 @@ ANTree* gAndDrawTree;
 
 // A native control was tapped: fire its neutral widget's action directly, by
 // (handle, node) — the fire-by-peer pattern, verbatim.
-pointer gAndCtlPeer[16384]; // [handle*256 + node] -> the control's neutral widget
+pointer gAndCtlPeer[65536]; // [handle*1024 + node] -> the control's neutral widget
 UXEvent* gAndClickEvent;
 // The driver-owned loop's start moment: the posted UXRun(0) lands here, and
 // the neutral delegate starts exactly where the desktop loop would have.
@@ -288,14 +288,14 @@ void xgAndTableSelectSet(pointer tbl, i32* rows, i32 n)
         }
     }
 // the selection each native popup shows, plus one (0: not pushed yet)
-i32 gAndPopupShown[16384];
+i32 gAndPopupShown[65536];
 void uxAndValueChanged(i32 handle, i32 node, i32 value)
     {
-    if (handle < (i32)0 || handle >= (i32)64 || node < (i32)0 || node >= (i32)256)
+    if (handle < (i32)0 || handle >= (i32)64 || node < (i32)0 || node >= (i32)1024)
         {
         return;
         }
-    UXControl* ctl = (UXControl* ?)(Object*)gAndCtlPeer[handle * (i32)256 + node];
+    UXControl* ctl = (UXControl* ?)(Object*)gAndCtlPeer[handle * (i32)1024 + node];
     if (ctl == (UXControl*)0)
         {
         return;
@@ -357,11 +357,11 @@ void uxAndValueChanged(i32 handle, i32 node, i32 value)
 // tell the neutral field so its onChange fires with the truth.
 void uxAndFieldChanged(i32 handle, i32 node)
     {
-    if (handle < (i32)0 || handle >= (i32)64 || node < (i32)0 || node >= (i32)256)
+    if (handle < (i32)0 || handle >= (i32)64 || node < (i32)0 || node >= (i32)1024)
         {
         return;
         }
-    UXTextField* f = (UXTextField* ?)(Object*)gAndCtlPeer[handle * (i32)256 + node];
+    UXTextField* f = (UXTextField* ?)(Object*)gAndCtlPeer[handle * (i32)1024 + node];
     if (f == (UXTextField*)0)
         {
         return;
@@ -376,11 +376,11 @@ void uxAndFieldChanged(i32 handle, i32 node)
 // already synced (afterTextChanged runs per keystroke), so this announces and nothing else.
 void uxAndFieldSubmitted(i32 handle, i32 node)
     {
-    if (handle < (i32)0 || handle >= (i32)64 || node < (i32)0 || node >= (i32)256)
+    if (handle < (i32)0 || handle >= (i32)64 || node < (i32)0 || node >= (i32)1024)
         {
         return;
         }
-    UXTextField* f = (UXTextField* ?)(Object*)gAndCtlPeer[handle * (i32)256 + node];
+    UXTextField* f = (UXTextField* ?)(Object*)gAndCtlPeer[handle * (i32)1024 + node];
     if (f == (UXTextField*)0)
         {
         return;
@@ -393,7 +393,7 @@ void uxAndFieldSubmitted(i32 handle, i32 node)
     }
 void uxAndFireControl(i32 handle, i32 node)
     {
-    if (handle < (i32)0 || handle >= (i32)64 || node < (i32)0 || node >= (i32)256)
+    if (handle < (i32)0 || handle >= (i32)64 || node < (i32)0 || node >= (i32)1024)
         {
         return;
         }
@@ -401,7 +401,7 @@ void uxAndFireControl(i32 handle, i32 node)
     // (nodes stop at 63): 0x40 = increment, 0x80 = decrement
     i32 dir = (node >> (i32)6) & (i32)3;
     node = node & (i32)63;
-    UXControl* ctl = (UXControl* ?)(Object*)gAndCtlPeer[handle * (i32)256 + node];
+    UXControl* ctl = (UXControl* ?)(Object*)gAndCtlPeer[handle * (i32)1024 + node];
     if (ctl == (UXControl*)0)
         {
         return;
@@ -1236,7 +1236,7 @@ class UXAndroidDriver : Object<UXViewDriver>
             if (n.kind == (i32)UXKindTable)
                 {
                 UXTableView* tv = (UXTableView* ?)(Object*)n.peer;
-                if (tv == (UXTableView*)0 || i >= (i32)64)
+                if (tv == (UXTableView*)0 || i >= (i32)1024)
                     {
                     continue;
                     }
@@ -1315,10 +1315,10 @@ class UXAndroidDriver : Object<UXViewDriver>
                     {
                     UXPopUpButton* pup = (UXPopUpButton* ?)(Object*)n.peer;
                     // only when it moved: a Spinner reports even a programmatic selection back
-                    if (pup != (UXPopUpButton*)0 && gAndPopupShown[handle * (i32)256 + i] != pup.nativeSelected() + (i32)1)
+                    if (pup != (UXPopUpButton*)0 && gAndPopupShown[handle * (i32)1024 + i] != pup.nativeSelected() + (i32)1)
                         {
                         ux_and_popup_select(handle, i, pup.nativeSelected());
-                        gAndPopupShown[handle * (i32)256 + i] = pup.nativeSelected() + (i32)1;
+                        gAndPopupShown[handle * (i32)1024 + i] = pup.nativeSelected() + (i32)1;
                         }
                     }
                 continue;
@@ -1327,7 +1327,7 @@ class UXAndroidDriver : Object<UXViewDriver>
                 {
                 u8* title = n.spec != (pointer)0 ? (u8*)n.spec : (u8*)"";
                 ux_and_make_button(handle, i, ax, ay, aw, ah, title);
-                gAndCtlPeer[handle * (i32)256 + i] = n.peer;
+                gAndCtlPeer[handle * (i32)1024 + i] = n.peer;
                 }
             else if (n.kind == (i32)UXKindLabel && n.spec != (pointer)0)
                 {
@@ -1341,7 +1341,7 @@ class UXAndroidDriver : Object<UXViewDriver>
                     u8* title = n.spec != (pointer)0 ? (u8*)n.spec : (u8*)"";
                     ux_and_make_checkbox(handle, i, ax, ay, aw, ah, title,
                                          cb.isChecked() ? (i32)1 : (i32)0);
-                    gAndCtlPeer[handle * (i32)256 + i] = n.peer;
+                    gAndCtlPeer[handle * (i32)1024 + i] = n.peer;
                     }
                 }
             else if (n.kind == (i32)UXKindSlider)
@@ -1351,7 +1351,7 @@ class UXAndroidDriver : Object<UXViewDriver>
                     {
                     ux_and_make_slider(handle, i, ax, ay, aw, ah,
                                        sv.nativeMin(), sv.nativeMax(), sv.nativeValue());
-                    gAndCtlPeer[handle * (i32)256 + i] = n.peer;
+                    gAndCtlPeer[handle * (i32)1024 + i] = n.peer;
                     }
                 }
             else if (n.kind == (i32)UXKindProgress)
@@ -1360,7 +1360,7 @@ class UXAndroidDriver : Object<UXViewDriver>
                 if (pgv != (UXProgressBar*)0)
                     {
                     ux_and_make_progress(handle, i, ax, ay, aw, ah, pgv.nativeFractionMille());
-                    gAndCtlPeer[handle * (i32)256 + i] = n.peer;
+                    gAndCtlPeer[handle * (i32)1024 + i] = n.peer;
                     }
                 }
             else if (n.kind == (i32)UXKindPopup)
@@ -1374,8 +1374,8 @@ class UXAndroidDriver : Object<UXViewDriver>
                         ux_and_popup_add_item(handle, i, pv.nativeItemTitle(j));
                         }
                     ux_and_popup_select(handle, i, pv.nativeSelected());
-                    gAndPopupShown[handle * (i32)256 + i] = pv.nativeSelected() + (i32)1;
-                    gAndCtlPeer[handle * (i32)256 + i] = n.peer;
+                    gAndPopupShown[handle * (i32)1024 + i] = pv.nativeSelected() + (i32)1;
+                    gAndCtlPeer[handle * (i32)1024 + i] = n.peer;
                     }
                 }
             else if (n.kind == (i32)UXKindRadio)
@@ -1386,7 +1386,7 @@ class UXAndroidDriver : Object<UXViewDriver>
                     u8* title = n.spec != (pointer)0 ? (u8*)n.spec : (u8*)"";
                     ux_and_make_radio(handle, i, ax, ay, aw, ah, title,
                                       rv.isSelected() ? (i32)1 : (i32)0);
-                    gAndCtlPeer[handle * (i32)256 + i] = n.peer;
+                    gAndCtlPeer[handle * (i32)1024 + i] = n.peer;
                     }
                 }
             else if (n.kind == (i32)UXKindToolbar)
@@ -1399,7 +1399,7 @@ class UXAndroidDriver : Object<UXViewDriver>
                         {
                         ux_and_toolbar_add(handle, i, tv.nativeItemType(j), tv.nativeItemLabel(j), tv.nativeItemTag(j));
                         }
-                    gAndCtlPeer[handle * (i32)256 + i] = n.peer;
+                    gAndCtlPeer[handle * (i32)1024 + i] = n.peer;
                     }
                 }
             else if (n.kind == (i32)UXKindSegmented)
@@ -1413,7 +1413,7 @@ class UXAndroidDriver : Object<UXViewDriver>
                         ux_and_seg_set_label(handle, i, j, gv.nativeSegLabel(j));
                         ux_and_seg_set(handle, i, j, gv.nativeSegSelected(j));
                         }
-                    gAndCtlPeer[handle * (i32)256 + i] = n.peer;
+                    gAndCtlPeer[handle * (i32)1024 + i] = n.peer;
                     }
                 }
             else if (n.kind == (i32)UXKindStepper)
@@ -1422,7 +1422,7 @@ class UXAndroidDriver : Object<UXViewDriver>
                 if (sv != (UXStepper*)0)
                     {
                     ux_and_make_stepper(handle, i, ax, ay, aw, ah);
-                    gAndCtlPeer[handle * (i32)256 + i] = n.peer;
+                    gAndCtlPeer[handle * (i32)1024 + i] = n.peer;
                     }
                 }
             else if (n.kind == (i32)UXKindField)
@@ -1431,7 +1431,7 @@ class UXAndroidDriver : Object<UXViewDriver>
                 if (f != (ANField*)0)
                     {
                     ux_and_make_field(handle, i, ax, ay, aw, ah, f.buf, f.cap, f.secure);
-                    gAndCtlPeer[handle * (i32)256 + i] = n.peer;
+                    gAndCtlPeer[handle * (i32)1024 + i] = n.peer;
                     }
                 }
             // apply the node's INITIAL state to a control created THIS pass —

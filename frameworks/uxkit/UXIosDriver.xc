@@ -196,7 +196,7 @@ IOTree* gIosDrawTree;
 
 // A native control was tapped: fire its neutral widget's action directly, by
 // (handle, node) — the mac driver's fire-by-peer pattern, verbatim.
-pointer gIosCtlPeer[16384]; // [handle*256 + node] -> the control's neutral widget
+pointer gIosCtlPeer[65536]; // [handle*1024 + node] -> the control's neutral widget
 UXEvent* gIosClickEvent;
 // The driver-owned loop's start moment: didFinishLaunching lands here, and the
 // neutral delegate starts exactly where the desktop loop would have started it.
@@ -292,14 +292,14 @@ void uxIosShellStart(void)
 // action — the mac driver's xgAKValueChanged, iOS edition (the UISwitch case
 // is new: its 0/1 lands in the peer UXCheckbox before the fire).
 // the selection each native popup shows, plus one (0: not pushed yet)
-i32 gIosPopupShown[16384];
+i32 gIosPopupShown[65536];
 void uxIosValueChanged(i32 handle, i32 node, i32 value)
     {
-    if (handle < (i32)0 || handle >= (i32)64 || node < (i32)0 || node >= (i32)256)
+    if (handle < (i32)0 || handle >= (i32)64 || node < (i32)0 || node >= (i32)1024)
         {
         return;
         }
-    UXControl* ctl = (UXControl* ?)(Object*)gIosCtlPeer[handle * (i32)256 + node];
+    UXControl* ctl = (UXControl* ?)(Object*)gIosCtlPeer[handle * (i32)1024 + node];
     if (ctl == (UXControl*)0)
         {
         return;
@@ -362,11 +362,11 @@ void uxIosValueChanged(i32 handle, i32 node, i32 value)
 // tell the neutral field so its onChange fires with the truth (mac pattern).
 void uxIosFieldChanged(i32 handle, i32 node)
     {
-    if (handle < (i32)0 || handle >= (i32)64 || node < (i32)0 || node >= (i32)256)
+    if (handle < (i32)0 || handle >= (i32)64 || node < (i32)0 || node >= (i32)1024)
         {
         return;
         }
-    UXTextField* f = (UXTextField* ?)(Object*)gIosCtlPeer[handle * (i32)256 + node];
+    UXTextField* f = (UXTextField* ?)(Object*)gIosCtlPeer[handle * (i32)1024 + node];
     if (f == (UXTextField*)0)
         {
         return;
@@ -381,11 +381,11 @@ void uxIosFieldChanged(i32 handle, i32 node)
 // editing-changed path runs per keystroke), so this announces and nothing else.
 void uxIosFieldSubmitted(i32 handle, i32 node)
     {
-    if (handle < (i32)0 || handle >= (i32)64 || node < (i32)0 || node >= (i32)256)
+    if (handle < (i32)0 || handle >= (i32)64 || node < (i32)0 || node >= (i32)1024)
         {
         return;
         }
-    UXTextField* f = (UXTextField* ?)(Object*)gIosCtlPeer[handle * (i32)256 + node];
+    UXTextField* f = (UXTextField* ?)(Object*)gIosCtlPeer[handle * (i32)1024 + node];
     if (f == (UXTextField*)0)
         {
         return;
@@ -398,11 +398,11 @@ void uxIosFieldSubmitted(i32 handle, i32 node)
     }
 void uxIosFireControl(i32 handle, i32 node)
     {
-    if (handle < (i32)0 || handle >= (i32)64 || node < (i32)0 || node >= (i32)256)
+    if (handle < (i32)0 || handle >= (i32)64 || node < (i32)0 || node >= (i32)1024)
         {
         return;
         }
-    UXControl* ctl = (UXControl* ?)(Object*)gIosCtlPeer[handle * (i32)256 + node];
+    UXControl* ctl = (UXControl* ?)(Object*)gIosCtlPeer[handle * (i32)1024 + node];
     if (ctl == (UXControl*)0)
         {
         return;
@@ -1212,10 +1212,10 @@ class UXIosDriver : Object<UXViewDriver>
             {
             UXPopUpButton* pb = (UXPopUpButton* ?)o;
             // only when it moved: selecting rebuilds the button's menu
-            if (pb != (UXPopUpButton*)0 && gIosPopupShown[handle * (i32)256 + i] != pb.nativeSelected() + (i32)1)
+            if (pb != (UXPopUpButton*)0 && gIosPopupShown[handle * (i32)1024 + i] != pb.nativeSelected() + (i32)1)
                 {
                 ux_ios_popup_select(handle, i, pb.nativeSelected());
-                gIosPopupShown[handle * (i32)256 + i] = pb.nativeSelected() + (i32)1;
+                gIosPopupShown[handle * (i32)1024 + i] = pb.nativeSelected() + (i32)1;
                 }
             }
         }
@@ -1328,7 +1328,7 @@ class UXIosDriver : Object<UXViewDriver>
                 {
                 u8* title = n.spec != (pointer)0 ? (u8*)n.spec : (u8*)"";
                 ux_ios_make_button(handle, i, ax, ay, aw, ah, title);
-                gIosCtlPeer[handle * (i32)256 + i] = n.peer;
+                gIosCtlPeer[handle * (i32)1024 + i] = n.peer;
                 }
             else if (n.kind == (i32)UXKindLabel && n.spec != (pointer)0)
                 {
@@ -1340,7 +1340,7 @@ class UXIosDriver : Object<UXViewDriver>
                 if (f != (IOField*)0)
                     {
                     ux_ios_make_field(handle, i, ax, ay, aw, ah, f.buf, f.cap, f.secure);
-                    gIosCtlPeer[handle * (i32)256 + i] = n.peer;
+                    gIosCtlPeer[handle * (i32)1024 + i] = n.peer;
                     }
                 }
             else if (n.kind == (i32)UXKindCheckbox)
@@ -1353,7 +1353,7 @@ class UXIosDriver : Object<UXViewDriver>
                     u8* title = n.spec != (pointer)0 ? (u8*)n.spec : (u8*)"";
                     ux_ios_make_switch(handle, i, ax, ay, aw, ah, title,
                                        cb.isChecked() ? (i32)1 : (i32)0);
-                    gIosCtlPeer[handle * (i32)256 + i] = n.peer;
+                    gIosCtlPeer[handle * (i32)1024 + i] = n.peer;
                     }
                 }
             else if (n.kind == (i32)UXKindRadio)
@@ -1363,7 +1363,7 @@ class UXIosDriver : Object<UXViewDriver>
                     {
                     u8* title = n.spec != (pointer)0 ? (u8*)n.spec : (u8*)"";
                     ux_ios_make_radio(handle, i, ax, ay, aw, ah, title, rv.isSelected() ? (i32)1 : (i32)0);
-                    gIosCtlPeer[handle * (i32)256 + i] = n.peer;
+                    gIosCtlPeer[handle * (i32)1024 + i] = n.peer;
                     }
                 }
             else if (n.kind == (i32)UXKindSlider)
@@ -1373,7 +1373,7 @@ class UXIosDriver : Object<UXViewDriver>
                     {
                     ux_ios_make_slider(handle, i, ax, ay, aw, ah,
                                        sv.nativeMin(), sv.nativeMax(), sv.nativeValue());
-                    gIosCtlPeer[handle * (i32)256 + i] = n.peer;
+                    gIosCtlPeer[handle * (i32)1024 + i] = n.peer;
                     }
                 }
             else if (n.kind == (i32)UXKindStepper)
@@ -1384,7 +1384,7 @@ class UXIosDriver : Object<UXViewDriver>
                     ux_ios_make_stepper(handle, i, ax, ay, aw, ah,
                                         sv.nativeMin(), sv.nativeMax(), sv.nativeStep(),
                                         sv.nativeWraps() ? (i32)1 : (i32)0, sv.nativeValue());
-                    gIosCtlPeer[handle * (i32)256 + i] = n.peer;
+                    gIosCtlPeer[handle * (i32)1024 + i] = n.peer;
                     }
                 }
             else if (n.kind == (i32)UXKindProgress)
@@ -1393,7 +1393,7 @@ class UXIosDriver : Object<UXViewDriver>
                 if (pgv != (UXProgressBar*)0)
                     {
                     ux_ios_make_progress(handle, i, ax, ay, aw, ah, pgv.nativeFractionMille());
-                    gIosCtlPeer[handle * (i32)256 + i] = n.peer;
+                    gIosCtlPeer[handle * (i32)1024 + i] = n.peer;
                     }
                 }
             else if (n.kind == (i32)UXKindToolbar)
@@ -1406,7 +1406,7 @@ class UXIosDriver : Object<UXViewDriver>
                         {
                         ux_ios_toolbar_add(handle, i, tv.nativeItemType(j), tv.nativeItemLabel(j), tv.nativeItemTag(j));
                         }
-                    gIosCtlPeer[handle * (i32)256 + i] = n.peer;
+                    gIosCtlPeer[handle * (i32)1024 + i] = n.peer;
                     }
                 }
             else if (n.kind == (i32)UXKindSegmented)
@@ -1420,7 +1420,7 @@ class UXIosDriver : Object<UXViewDriver>
                         ux_ios_seg_set_label(handle, i, j, gv.nativeSegLabel(j));
                         }
                     ux_ios_seg_select(handle, i, gv.nativeSelectedSeg());
-                    gIosCtlPeer[handle * (i32)256 + i] = n.peer;
+                    gIosCtlPeer[handle * (i32)1024 + i] = n.peer;
                     }
                 }
             else if (n.kind == (i32)UXKindPopup)
@@ -1434,7 +1434,7 @@ class UXIosDriver : Object<UXViewDriver>
                         ux_ios_popup_add_item(handle, i, pv.nativeItemTitle(j));
                         }
                     ux_ios_popup_select(handle, i, pv.nativeSelected());
-                    gIosCtlPeer[handle * (i32)256 + i] = n.peer;
+                    gIosCtlPeer[handle * (i32)1024 + i] = n.peer;
                     }
                 }
             // apply the node's INITIAL state to a control created THIS pass —

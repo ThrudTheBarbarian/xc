@@ -23,6 +23,8 @@
 #include "ux_posix_fs.h" // listDir / delete / rename / copy for the drawn file panel
 
 #define UXIOS_MAXW 64
+/* The nodes of one window's tree a native control can be made for. */
+#define UXIOS_MAXN 1024
 
 typedef void (*ux_entry_fn)(void);
 typedef void (*ux_content_fn)(int handle, int wx, int wy, int ww, int wh, void* ud);
@@ -38,7 +40,7 @@ static UIView* gDraw[UXIOS_MAXW]; // handle -> its UXDrawView
 static UXShieldView* gShield[UXIOS_MAXW]; // handle -> its input shield, if it has one
 static ux_content_fn gContent[UXIOS_MAXW];
 static void* gContentUd[UXIOS_MAXW];
-static UIView* gCtl[UXIOS_MAXW][256]; // [handle][node] -> native control
+static UIView* gCtl[UXIOS_MAXW][UXIOS_MAXN]; // [handle][node] -> native control
 /* Native scroll containers (UXScrollView): a UIScrollView whose document view, the content's height,
  * paints the scroll view's document subtree and holds any native control inside the scroll view.
  * docX/docY are the document's place in the window's content (the toolkit's coordinates, unscrolled:
@@ -50,8 +52,8 @@ typedef struct
     void* sv;
     int docX, docY;
     } UXIosScrollRec;
-static UXIosScrollRec gScroll[UXIOS_MAXW][256];
-static unsigned char gInDoc[UXIOS_MAXW][256]; /* a control moved into scroll node n's document: n + 1 */
+static UXIosScrollRec gScroll[UXIOS_MAXW][UXIOS_MAXN];
+static unsigned short gInDoc[UXIOS_MAXW][UXIOS_MAXN]; /* a control moved into scroll node n's document: n + 1 */
 static void (*gScrollContent)(void* sv, int docW, int docH);
 static int gNextH = 1;
 static int gLive = 0;     // the §10 counter (windows)
@@ -278,7 +280,7 @@ void ux_ios_window_close(int handle)
         return;
     navWindowClosed(handle);
     [v removeFromSuperview];
-    for (int n = 0; n < 256; n++)
+    for (int n = 0; n < UXIOS_MAXN; n++)
         {
         gCtl[handle][n] = nil;
         gScroll[handle][n] = (UXIosScrollRec){0};
@@ -375,7 +377,7 @@ int ux_ios_test_hit_kind(int handle, int x, int y)
 void ux_ios_window_invalidate(int handle)
     {
     [gDraw[handle] setNeedsDisplay];
-    for (int n = 0; n < 256; n++)
+    for (int n = 0; n < UXIOS_MAXN; n++)
         if (gScroll[handle][n].doc)
             [(UIView*)gScroll[handle][n].doc setNeedsDisplay]; /* the scroll documents are surfaces too */
     }
@@ -778,7 +780,7 @@ void ux_ios_set_scroll_content(void* fn)
     }
 void ux_ios_make_scroll(int handle, int node, int x, int y, int w, int h, int contentH, void* sv, int docX, int docY)
     {
-    if (!gWin[handle] || node < 0 || node >= 256 || gCtl[handle][node])
+    if (!gWin[handle] || node < 0 || node >= UXIOS_MAXN || gCtl[handle][node])
         return;
     UIScrollView* s = [[UIScrollView alloc] initWithFrame:CGRectMake(x, y, w, h)];
     s.alwaysBounceVertical = NO;
@@ -851,7 +853,7 @@ void ux_ios_reparent_to_scroll(int handle, int node, int scrollNode, int ax, int
     if (c.superview != (UIView*)r->doc)
         [(UIView*)r->doc addSubview:c];
     c.frame = CGRectMake(ax - r->docX, ay - r->docY, f.size.width, f.size.height);
-    gInDoc[handle][node] = (unsigned char)(scrollNode + 1);
+    gInDoc[handle][node] = (unsigned short)(scrollNode + 1);
     }
 /* Tests: the container is a UIScrollView; a control is in its document; a touch on the document at
  * a point of the window's content as it is on screen, entering where UIKit's touches do. */
@@ -977,8 +979,8 @@ void ux_ios_set_field_submit_hooks(void* fn)
     {
     gFieldSubmit = (ux_field_fn)fn;
     }
-static char* gFieldBuf[UXIOS_MAXW * 256];
-static int gFieldCap[UXIOS_MAXW * 256];
+static char* gFieldBuf[UXIOS_MAXW * UXIOS_MAXN];
+static int gFieldCap[UXIOS_MAXW * UXIOS_MAXN];
 
 @interface UXFieldTarget : NSObject
 @end
@@ -987,8 +989,8 @@ static UXFieldTarget* gFieldTarget;
 - (void)edited:(UITextField*)tf
     {
     int handle = (int)(tf.tag >> 8), node = (int)(tf.tag & 0xFF);
-    char* buf = gFieldBuf[handle * 256 + node];
-    int cap = gFieldCap[handle * 256 + node];
+    char* buf = gFieldBuf[handle * UXIOS_MAXN + node];
+    int cap = gFieldCap[handle * UXIOS_MAXN + node];
     if (buf && cap > 0)
         {
         const char* t = tf.text.UTF8String ?: "";
@@ -1015,8 +1017,8 @@ void ux_ios_make_field(int handle, int node, int x, int y, int w, int h,
     if (buf)
         tf.text = [NSString stringWithUTF8String:buf];
     tf.tag = (handle << 8) | node;
-    gFieldBuf[handle * 256 + node] = buf;
-    gFieldCap[handle * 256 + node] = cap;
+    gFieldBuf[handle * UXIOS_MAXN + node] = buf;
+    gFieldCap[handle * UXIOS_MAXN + node] = cap;
     if (!gFieldTarget)
         gFieldTarget = [UXFieldTarget new];
     [tf addTarget:gFieldTarget
@@ -1031,17 +1033,17 @@ void ux_ios_make_field(int handle, int node, int x, int y, int w, int h,
 void ux_ios_update_field(int handle, int node)
     {
     UIView* c = gCtl[handle][node];
-    char* buf = gFieldBuf[handle * 256 + node];
+    char* buf = gFieldBuf[handle * UXIOS_MAXN + node];
     if ([c isKindOfClass:UITextField.class] && buf)
         ((UITextField*)c).text = [NSString stringWithUTF8String:buf];
     }
 
 // The popup: a UIButton whose UIMenu is the item list (the iOS pull-down
 // idiom, 14+).  Each pick reports through the value seam with its index.
-static NSMutableArray* gPopupItems[UXIOS_MAXW * 256];
+static NSMutableArray* gPopupItems[UXIOS_MAXW * UXIOS_MAXN];
 static void popupRebuild(UIButton* b, int handle, int node, int selected)
     {
-    NSMutableArray* items = gPopupItems[handle * 256 + node];
+    NSMutableArray* items = gPopupItems[handle * UXIOS_MAXN + node];
     NSMutableArray* actions = [NSMutableArray array];
     for (int i = 0; i < (int)items.count; i++)
         {
@@ -1075,13 +1077,13 @@ void ux_ios_make_popup(int handle, int node, int x, int y, int w, int h)
         }
     b.frame = CGRectMake(x, y, w, h);
     b.tag = (handle << 8) | node;
-    gPopupItems[handle * 256 + node] = [NSMutableArray array];
+    gPopupItems[handle * UXIOS_MAXN + node] = [NSMutableArray array];
     [gWin[handle] addSubview:b];
     gCtl[handle][node] = b;
     }
 void ux_ios_popup_add_item(int handle, int node, const char* title)
     {
-    [gPopupItems[handle * 256 + node] addObject:[NSString stringWithUTF8String:title]];
+    [gPopupItems[handle * UXIOS_MAXN + node] addObject:[NSString stringWithUTF8String:title]];
     popupRebuild((UIButton*)gCtl[handle][node], handle, node, -1);
     }
 void ux_ios_popup_select(int handle, int node, int i)
@@ -1096,7 +1098,7 @@ void ux_ios_post_click(int handle, int x, int y)
     UIView* v = gWin[handle];
     if (!v)
         return;
-    for (int n = 0; n < 256; n++)
+    for (int n = 0; n < UXIOS_MAXN; n++)
         {
         UIView* c = gCtl[handle][n];
         if (c && !c.hidden && CGRectContainsPoint(c.frame, CGPointMake(x, y)))
@@ -2801,7 +2803,7 @@ void ux_ios_test_nav_user_back(void* token)
 int ux_ios_test_control_visible(int handle, const char* title)
     {
     NSString* t = [NSString stringWithUTF8String:title];
-    for (int n = 0; n < 256; n++)
+    for (int n = 0; n < UXIOS_MAXN; n++)
         {
         UIView* c = gCtl[handle][n];
         if (![c isKindOfClass:UIButton.class] || ![[(UIButton*)c titleForState:UIControlStateNormal] isEqualToString:t])

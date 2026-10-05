@@ -67,7 +67,7 @@ instance.
 
 ## Topics
 
-[load](#load) · [loadDoc](#loaddoc) · [loadDocAs](#loaddocas) · [selectTree](#selecttree) · [viewFor](#viewfor) · [defaultClassFor](#defaultclassfor) · [classFor](#classfor) · [applyState](#applystate) · [applyText](#applytext) · [textOf](#textof) · [typeName](#typename) · [make](#make) · [registerObjectFactory](#registerobjectfactory) · [registerViewFactory](#registerviewfactory)
+[load](#load) · [loadDoc](#loaddoc) · [loadDocAs](#loaddocas) · [selectTree](#selecttree) · [viewFor](#viewfor) · [defaultClassFor](#defaultclassfor) · [classFor](#classfor) · [applyState](#applystate) · [applyText](#applytext) · [textOf](#textof) · [typeName](#typename) · [make](#make) · [makeUXKit](#makeuxkit) · [applyAttrs](#applyattrs) · [attrInt](#attrint) · [eachPart](#eachpart) · [registerObjectFactory](#registerobjectfactory) · [registerViewFactory](#registerviewfactory)
 
 ### load
 
@@ -181,6 +181,47 @@ static Object* make(u8* cls)
 
 Makes an object by class name through the registered factories, or returns
 null when none knows the name.
+
+### makeUXKit
+
+```c
+static Object* makeUXKit(u8* cls)
+```
+
+UXKit's controls that GEM has no type for, by class name: `UXSlider`,
+`UXStepper`, `UXProgressBar`, `UXSegmentedControl` and `UXComboBox`. A
+document holds one as a `G_USERDEF` of that class, with its settings in
+[attributes](/compiler/api/uxkit/uxrscdoc/#uxrscattr). `make` falls back to
+this when no registered factory knows the name. From 0.67.
+
+### applyAttrs
+
+```c
+static void applyAttrs(UXView* v, UXRscDoc* doc, i32 formId, i32 logicalId, i32 theme)
+```
+
+Gives a control its settings from the document's attributes: a slider's
+`min`, `max` and `value`; a stepper's and its `step`; a progress bar's `total`
+and `completed`; a segmented control's `segments` (`"One|Two|Three"`) and
+`selected`; a combo box's `items` and `text`. A value the theme varies wins
+over the shared one. The loader calls it for every control.
+
+### attrInt
+
+```c
+static i32 attrInt(UXRscDoc* doc, i32 formId, i32 logicalId, i32 theme, u8* key, i32 dflt)
+```
+
+An attribute read as a number, or `dflt`.
+
+### eachPart
+
+```c
+static i32 eachPart(u8* list, pointer target, i32 to)
+```
+
+Adds each part of `"A|B|C"` to a segmented control (`to` 0) or a combo box
+(`to` 1); returns how many.
 
 ### registerObjectFactory
 
