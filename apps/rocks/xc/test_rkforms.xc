@@ -96,10 +96,15 @@ void main(void)
     alert.root = UXRscObject.make((i32)UXR_T_BOX, (i32)0, (i32)0, (i32)200, (i32)80);
     r.addTree(alert);
 
-    // A plain document writes plain classic: no chunk at all.
+    // A plain document writes plain classic: no chunk at all.  (Names need the chunk: the classic
+    // file has nowhere for them, so they are taken off for this check and put back after it.)
+    main.name = (u8*)"";
+    alert.name = (u8*)"";
     UXData* plain = UXRscWriter.write(r);
     i32 rs = ((i32)plain.byteAt((i32)34) << (i32)8) | (i32)plain.byteAt((i32)35);
-    check((u8*)"no variants: the file ends at rsh_rssize", plain.length(), rs);
+    check((u8*)"no variants or names: the file ends at rsh_rssize", plain.length(), rs);
+    main.name = (u8*)"MAIN";
+    alert.name = (u8*)"ALERT";
     check((u8*)"no forms yet", r.formCount(), (i32)0);
 
     // ---- adding layouts -------------------------------------------------------

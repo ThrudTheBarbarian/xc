@@ -31,6 +31,7 @@
 #import "UXMenu.xc"
 #import "UXRscRead.xc"
 #import "UXRscWrite.xc"
+#import "RKUndo.xc"
 
 // The toolbar's items, by tag (RKMainBuilder makes them; onToolbar dispatches them).
 #define RKTB_NEW 1
@@ -75,6 +76,12 @@ class RKMainController : Object<UXTableDelegate>
     // NOTE: `inspector` is the outlet for the PANE (a UXView); this is its
     // controller.  Two different things, so two different names.
     RKInspector* inspectorCtl;
+    // Undo and redo (RKUndo.xc).  A press copies the document into pressCopy; the copy becomes an
+    // undo step only if the press turns into a drag.
+    RKUndoStack* history;
+    UXRscDoc* pressCopy;
+    i32 pressSel;
+    bool dragging;
 
     // ---- state -------------------------------------------------------------
     // Deliberately not a view: the controller owns MODEL state and asks the
@@ -118,6 +125,11 @@ class RKMainController : Object<UXTableDelegate>
         geomBuf = (u8*)malloc((u32)64);
         inspectorCtl = new RKInspector();
         inspectorCtl.changed = &self.onInspectorEdit;
+        inspectorCtl.willChange = &self.onInspectorWillChange;
+        history = new RKUndoStack();
+        pressCopy = (UXRscDoc*)0;
+        pressSel = (i32)-1;
+        dragging = false;
         lastSaid = (UXData*)0;
         formOutline = (UXOutlineView*)0;
         canvas = (UXView*)0;
@@ -166,9 +178,11 @@ class RKMainController : Object<UXTableDelegate>
             return;
             }
         UXRscTree* from = doc.treeAt(shownTree);
+        self.willEdit((u8*)"New Layout", (Object*)0);
         UXRscTree* t = doc.addVariant(from, viewClass, viewOrient);
         if (t == (UXRscTree*)0)
             {
+            history.discardLast();
             self.sayLayout((u8*)"There is already a ", (u8*)" layout");
             return;
             }
@@ -233,6 +247,7 @@ class RKMainController : Object<UXTableDelegate>
         maps = new Array();
         self.setDocPath(path);
         dirty = false;
+        history.clear();
         viewClass = (i32)UXR_V_DESKTOP;
         viewOrient = (i32)UXR_V_ORIENT_NONE;
         self.showResource(r, (i32)0);
@@ -481,6 +496,7 @@ class RKMainController : Object<UXTableDelegate>
     // canvas's — the one place in Rocks that needs absolute coordinates.
     void selectObject(UXRscObject* o)
         {
+        history.breakRun(); // typing into another object is another step
         selected = o;
         inspectorCtl.show(o); // a NEW selection re-renders the pane
         self.placeFrame(o);
@@ -558,6 +574,10 @@ class RKMainController : Object<UXTableDelegate>
     // what makes clicking away from a control feel right rather than sticky.
     void onPick(UXRscObject* o)
         {
+        // the state before a drag, should this press become one
+        pressCopy = doc != (UXRscDoc*)0 && o != (UXRscObject*)0 ? doc.deepCopy() : (UXRscDoc*)0;
+        pressSel = self.indexInShown(o);
+        dragging = false;
         if (o == (UXRscObject*)0)
             {
             selected = (UXRscObject*)0;
@@ -584,6 +604,12 @@ class RKMainController : Object<UXTableDelegate>
             return;
             }
         dirty = true;
+        if (!dragging && pressCopy != (UXRscDoc*)0)
+            {
+            history.push(pressCopy, (u8*)"Move", shownTree, pressSel);
+            pressCopy = (UXRscDoc*)0;
+            }
+        dragging = true;
         UXView* w = canvasMap.viewFor(o);
         if (w != (UXView*)0)
             {
@@ -595,6 +621,8 @@ class RKMainController : Object<UXTableDelegate>
 
     void onDragEnd(UXRscObject* o)
         {
+        dragging = false;
+        pressCopy = (UXRscDoc*)0;
         if (o == (UXRscObject*)0)
             {
             return;
@@ -695,6 +723,87 @@ class RKMainController : Object<UXTableDelegate>
     bool guidesEnabled(void)
         {
         return overlay.drag.guidesOn;
+        }
+
+    // ---- undo ------------------------------------------------------------------
+    // Snapshot the document before an edit (RKUndoStack.record; a repeat of `key` is the same step).
+    void willEdit(u8* label, Object* key)
+        {
+        history.record(doc, label, shownTree, self.indexInShown(selected), key);
+        }
+    void onInspectorWillChange(UXRscObject* o, Object* key)
+        {
+        self.willEdit(key != (Object*)0 ? (u8*)"Typing" : (u8*)"Change", key);
+        }
+    // An object's pre-order index in the shown tree, or -1: how a selection outlives a snapshot,
+    // whose objects are copies.
+    i32 indexInShown(UXRscObject* o)
+        {
+        if (o == (UXRscObject*)0 || doc == (UXRscDoc*)0 || shownTree < (i32)0 || shownTree >= doc.treeCount())
+            {
+            return (i32)-1;
+            }
+        Array<UXRscObject>* all = doc.treeAt(shownTree).allObjects();
+        for (u32 i = (u32)0; i < all.count(); i = i + (u32)1)
+            {
+            if ((UXRscObject* ?)all.get(i) == o)
+                {
+                return (i32)i;
+                }
+            }
+        return (i32)-1;
+        }
+    void onUndo(UXMenuItem* sender)
+        {
+        u8* what = history.undoLabel();
+        RKUndoStep* s = history.undo(doc, shownTree, self.indexInShown(selected));
+        if (s == (RKUndoStep*)0)
+            {
+            self.say((u8*)"Nothing to undo");
+            return;
+            }
+        self.restore(s);
+        self.sayAbout((u8*)"Undo ", what);
+        }
+    void onRedo(UXMenuItem* sender)
+        {
+        u8* what = history.redoLabel();
+        RKUndoStep* s = history.redo(doc, shownTree, self.indexInShown(selected));
+        if (s == (RKUndoStep*)0)
+            {
+            self.say((u8*)"Nothing to redo");
+            return;
+            }
+        self.restore(s);
+        self.sayAbout((u8*)"Redo ", what);
+        }
+    // Show a step's document, its tree and its selection.  Every pane is rebuilt: the step's objects
+    // are not the ones the old widgets were built from.
+    void restore(RKUndoStep* s)
+        {
+        for (i32 i = (i32)0; i < (i32)panes.count(); i = i + (i32)1)
+            {
+            ((UXView* ?)panes.get((u32)i)).setHidden(true);
+            }
+        panes = new Array();
+        maps = new Array();
+        dirty = true;
+        i32 t = s.tree;
+        if (t < (i32)0 || t >= s.doc.treeCount())
+            {
+            t = (i32)0;
+            }
+        self.showResource(s.doc, t);
+        if (s.selection >= (i32)0)
+            {
+            Array<UXRscObject>* all = s.doc.treeAt(t).allObjects();
+            if (s.selection < (i32)all.count())
+                {
+                UXRscObject* o = (UXRscObject* ?)all.get((u32)s.selection);
+                self.selectObject(o);
+                overlay.setSelection(o);
+                }
+            }
         }
 
     // An inspector edit changed the MODEL; the canvas has to catch up.  Only

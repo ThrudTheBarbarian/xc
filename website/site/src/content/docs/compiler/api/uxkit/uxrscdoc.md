@@ -38,7 +38,17 @@ is the nib chunk after them.
 
 ## Topics
 
-[treeCount](#treecount) · [treeAt](#treeat) · [addTree](#addtree) · [indexOfTree](#indexoftree) · [formCount](#formcount) · [formAt](#format) · [formOf](#formof) · [formById](#formbyid) · [addVariant](#addvariant) · [variantSuffix](#variantsuffix) · [emptyDialog](#emptydialog) · [flatten](#flatten)
+[treeCount](#treecount) · [treeAt](#treeat) · [deepCopy](#deepcopy) · [addTree](#addtree) · [indexOfTree](#indexoftree) · [formCount](#formcount) · [formAt](#format) · [formOf](#formof) · [formById](#formbyid) · [addVariant](#addvariant) · [variantSuffix](#variantsuffix) · [emptyDialog](#emptydialog) · [flatten](#flatten)
+
+### deepCopy
+
+```c
+UXRscDoc* deepCopy(void)
+```
+
+A copy that can be edited without touching the original: every tree, form and
+nib-graph record is new. Strings and image bytes are shared, because an edit
+replaces them instead of writing into them. An editor keeps these for undo.
 
 ### treeCount
 

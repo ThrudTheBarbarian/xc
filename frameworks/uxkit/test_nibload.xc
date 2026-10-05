@@ -316,8 +316,10 @@ void main(void)
     checkTrue("top object label", streq(nib.topObjectLabel((i32)0), (u8*)"Library Controller"));
     check("class overrides", nib.classOverrideCount(), (i32)1);
     checkTrue("class override name", streq(nib.classOverrideName((i32)0), (u8*)"Gauge"));
-    check("extension sections", nib.extCount(), (i32)1);
-    check("extension size", (i32)nib.extSize((i32)0), (i32)3);
+    check("extension sections: the names and ATTR", nib.extCount(), (i32)2);
+    check("the names come first", (i32)nib.extTag((i32)0), (i32)$4E414D45);
+    check("ATTR is kept", (i32)nib.extTag((i32)1), (i32)$41545452);
+    check("at its size", (i32)nib.extSize((i32)1), (i32)3);
     i32 chosen = (i32)0;
     check("the byte parser picks the phone tree for a phone", nib.selectTree((i32)0, (i32)UXR_V_PHONE, &chosen), gPhoneTree);
 

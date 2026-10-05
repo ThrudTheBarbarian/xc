@@ -172,9 +172,13 @@ class RKMainBuilder : Object
         file.addItem((u8*)"About Rocks", (callback void(UXMenuItem * s))0);
 
         UXMenu* doc = bar.addMenu((u8*)"File");
-        doc.addItem((u8*)"Open...", &c.onOpenDocument);
-        doc.addItem((u8*)"Save", &c.onSaveDocument);
-        doc.addItem((u8*)"Save As...", &c.onSaveDocumentAs);
+        doc.addItem((u8*)"Open...", &c.onOpenDocument).setShortcut((u8)'O', false);
+        doc.addItem((u8*)"Save", &c.onSaveDocument).setShortcut((u8)'S', false);
+        doc.addItem((u8*)"Save As...", &c.onSaveDocumentAs).setShortcut((u8)'S', true);
+
+        UXMenu* edit = bar.addMenu((u8*)"Edit");
+        edit.addItem((u8*)"Undo", &c.onUndo).setShortcut((u8)'Z', false);
+        edit.addItem((u8*)"Redo", &c.onRedo).setShortcut((u8)'Z', true);
 
         UXMenu* view = bar.addMenu((u8*)"View");
         UXMenuItem* snap = view.addItem((u8*)"Snap to Guides", &c.onToggleSnap);
@@ -183,7 +187,7 @@ class RKMainBuilder : Object
         guid.checked = c.guidesEnabled();
 
         c.menuBar = bar;
-        c.viewMenu = (i32)2;  // ordinals into the bar, not names: setChecked
+        c.viewMenu = (i32)3;  // ordinals into the bar, not names: setChecked
         c.snapItem = (i32)0;  // addresses items positionally, and these three
         c.guideItem = (i32)1; // numbers are the only place that mapping lives
         app.setMenuBar(bar);

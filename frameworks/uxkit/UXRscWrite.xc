@@ -359,7 +359,7 @@ class UXRscWriter : Object
             }
         UXData* file = UXData.fromBytes(out, total);
         if (r.formCount() > (i32)0 || r.classOverrides.count() > (u32)0 || r.topObjects.count() > (u32)0 ||
-            r.connections.count() > (u32)0 || r.extSections.count() > (u32)0)
+            r.connections.count() > (u32)0 || r.extSections.count() > (u32)0 || UXRscWriter.namesSection(r) != (UXData*)0)
             {
             file.appendData(self.nibChunk(r));
             }
@@ -402,6 +402,49 @@ class UXRscWriter : Object
         UXRscWriter.be16(d, r != (UXRscRef*)0 ? r.a : (i32)0);
         UXRscWriter.be16(d, r != (UXRscRef*)0 ? r.b : (i32)0);
         d.appendByte((u8)0);
+        }
+    // The NAME section (see UXRscReader.readNames), or 0 when nothing has a name.  The classic file
+    // stores no names, so without it a tree's or a control's name would not survive a save.
+    static UXData* namesSection(UXRscDoc* r)
+        {
+        UXData* d = UXData.withCapacity((i32)64);
+        UXRscWriter.be16(d, (i32)0); // count, patched below
+        i32 n = (i32)0;
+        for (i32 t = (i32)0; t < r.treeCount(); t = t + (i32)1)
+            {
+            UXRscTree* tr = r.treeAt(t);
+            if (tr.name != (u8*)0 && tr.name[0] != (u8)0)
+                {
+                UXRscWriter.nameEntry(d, t, (i32)$FFFF, tr.name);
+                n = n + (i32)1;
+                }
+            Array<UXRscObject>* all = tr.allObjects();
+            for (u32 k = (u32)0; k < all.count(); k = k + (u32)1)
+                {
+                u8* nm = ((UXRscObject* ?)all.get(k)).name;
+                if (nm != (u8*)0 && nm[0] != (u8)0)
+                    {
+                    UXRscWriter.nameEntry(d, t, (i32)k, nm);
+                    n = n + (i32)1;
+                    }
+                }
+            }
+        if (n == (i32)0)
+            {
+            return (UXData*)0;
+            }
+        u8* b = d.bytes();
+        b[0] = (u8)((n >> (i32)8) & (i32)$FF);
+        b[1] = (u8)(n & (i32)$FF);
+        return d;
+        }
+    static void nameEntry(UXData* d, i32 tree, i32 obj, u8* nm)
+        {
+        i32 nl = UXRscWriter.slen(nm);
+        UXRscWriter.be16(d, tree);
+        UXRscWriter.be16(d, obj);
+        UXRscWriter.be16(d, nl);
+        d.appendBytes(nm, nl);
         }
     UXData* nibChunk(UXRscDoc* r)
         {
@@ -491,6 +534,19 @@ class UXRscWriter : Object
             UXRscWriter.be32(graph, UXRscWriter.blobAdd(blob, cn.member));
             UXRscWriter.be32(graph, (i32)cn.scope);
             }
+        UXData* names = UXRscWriter.namesSection(r);
+        i32 nExt = (i32)r.extSections.count();
+        if (names != (UXData*)0)
+            {
+            UXRscWriter.be32(graph, (i32)$4E414D45); // 'NAME'
+            UXRscWriter.be32(graph, names.length());
+            graph.appendBytes(names.bytes(), names.length());
+            if ((names.length() & (i32)1) != (i32)0)
+                {
+                graph.appendByte((u8)0);
+                }
+            nExt = nExt + (i32)1;
+            }
         for (u32 i = (u32)0; i < r.extSections.count(); i = i + (u32)1)
             {
             UXRscExtSection* x = (UXRscExtSection* ?)r.extSections.get(i);
@@ -514,7 +570,7 @@ class UXRscWriter : Object
         UXRscWriter.be16(c, r.formCount() + nLoose);
         UXRscWriter.be16(c, nMaps);
         UXRscWriter.be16(c, (i32)0); // nPres
-        UXRscWriter.be16(c, (i32)r.extSections.count());
+        UXRscWriter.be16(c, nExt);
         UXRscWriter.be16(c, (i32)0); // _pad
         for (i32 f = (i32)0; f < r.formCount(); f = f + (i32)1)
             {

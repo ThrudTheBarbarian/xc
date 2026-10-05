@@ -1012,6 +1012,81 @@ class UXRscColor : Object
         return (u8*)"_ANY";
         }
 
+    // A copy deep enough to edit independently: every tree, form and graph record is new; strings
+    // and image bytes are shared, because an edit replaces them rather than writing into them.  An
+    // editor's undo keeps these.
+    UXRscDoc* deepCopy(void)
+        {
+        UXRscDoc* c = new UXRscDoc();
+        c.bigEndian = bigEndian;
+        c.packedCoords = packedCoords;
+        c.embedIcons = embedIcons;
+        c.charWidth = charWidth;
+        c.charHeight = charHeight;
+        c.freeStrings = freeStrings;
+        c.freeImages = freeImages;
+        for (i32 i = (i32)0; i < self.treeCount(); i = i + (i32)1)
+            {
+            UXRscTree* t = self.treeAt(i);
+            UXRscTree* u = new UXRscTree();
+            u.name = t.name;
+            u.nameStore = t.nameStore;
+            u.kind = t.kind;
+            u.root = t.root != (UXRscObject*)0 ? t.root.deepCopy() : (UXRscObject*)0;
+            c.trees.add(u);
+            }
+        for (i32 i = (i32)0; i < self.formCount(); i = i + (i32)1)
+            {
+            UXRscForm* f = self.formAt(i);
+            UXRscForm* g = new UXRscForm();
+            g.formId = f.formId;
+            g.name = f.name;
+            for (i32 v = (i32)0; v < f.variantCount(); v = v + (i32)1)
+                {
+                UXRscVariant* va = f.variantAt(v);
+                UXRscVariant* vb = new UXRscVariant();
+                vb.klass = va.klass;
+                vb.orient = va.orient;
+                vb.tree = c.treeAt(self.indexOfTree(va.tree));
+                g.variants.add(vb);
+                }
+            c.forms.add(g);
+            }
+        for (u32 i = (u32)0; i < classOverrides.count(); i = i + (u32)1)
+            {
+            UXRscClassOverride* a = (UXRscClassOverride* ?)classOverrides.get(i);
+            UXRscClassOverride* b = new UXRscClassOverride();
+            b.view = UXRscRef.make(a.view.space, a.view.a, a.view.b);
+            b.cls = a.cls;
+            c.classOverrides.add(b);
+            }
+        for (u32 i = (u32)0; i < topObjects.count(); i = i + (u32)1)
+            {
+            UXRscTopObject* a = (UXRscTopObject* ?)topObjects.get(i);
+            UXRscTopObject* b = new UXRscTopObject();
+            b.id = a.id;
+            b.cls = a.cls;
+            b.label = a.label;
+            c.topObjects.add(b);
+            }
+        for (u32 i = (u32)0; i < connections.count(); i = i + (u32)1)
+            {
+            UXRscConnection* a = (UXRscConnection* ?)connections.get(i);
+            UXRscConnection* b = new UXRscConnection();
+            b.kind = a.kind;
+            b.src = UXRscRef.make(a.src.space, a.src.a, a.src.b);
+            b.dst = UXRscRef.make(a.dst.space, a.dst.a, a.dst.b);
+            b.member = a.member;
+            b.scope = a.scope;
+            c.connections.add(b);
+            }
+        for (u32 i = (u32)0; i < extSections.count(); i = i + (u32)1)
+            {
+            c.extSections.add(extSections.get(i));
+            }
+        return c;
+        }
+
     static UXRscDoc* emptyDialog(void)
         {
         UXRscDoc* r = new UXRscDoc();

@@ -462,11 +462,60 @@ class UXRscReader : Object
                 {
                 break;
                 }
-            UXRscExtSection* x = new UXRscExtSection();
-            x.tag = (u32)self.rd32(q);
-            x.body = UXData.fromBytes(&buf[q + (i32)8], size);
-            res.extSections.add(x);
+            if (self.rd32(q) == (i32)$4E414D45) // 'NAME': the trees' and objects' names
+                {
+                self.readNames(res, q + (i32)8, q + (i32)8 + size);
+                }
+            else
+                {
+                UXRscExtSection* x = new UXRscExtSection();
+                x.tag = (u32)self.rd32(q);
+                x.body = UXData.fromBytes(&buf[q + (i32)8], size);
+                res.extSections.add(x);
+                }
             q = q + (i32)8 + ((size + (i32)1) & (i32)-2);
+            }
+        }
+
+    // The NAME section: { count u16, then count x { tree u16, obj u16, len u16, bytes[len] } },
+    // obj $FFFF naming the tree itself and otherwise an object's pre-order index.
+    void readNames(UXRscDoc* res, i32 p, i32 end)
+        {
+        i32 n = self.rd16(p);
+        p = p + (i32)2;
+        for (i32 i = (i32)0; i < n && p + (i32)6 <= end; i = i + (i32)1)
+            {
+            i32 tree = self.rd16(p);
+            i32 obj = self.rd16(p + (i32)2);
+            i32 nl = self.rd16(p + (i32)4);
+            p = p + (i32)6;
+            if (p + nl > end)
+                {
+                return;
+                }
+            u8* nm = new u8[(u32)(nl + (i32)1)];
+            for (i32 k = (i32)0; k < nl; k = k + (i32)1)
+                {
+                nm[k] = buf[p + k];
+                }
+            nm[nl] = (u8)0;
+            p = p + nl;
+            if (tree >= res.treeCount())
+                {
+                continue;
+                }
+            UXRscTree* t = res.treeAt(tree);
+            if (obj == (i32)$FFFF)
+                {
+                t.name = nm;
+                }
+            else
+                {
+                Array<UXRscObject>* all = t.allObjects();
+                if (obj < (i32)all.count())
+                    { ((UXRscObject* ?)all.get((u32)obj)).name = nm;
+                    }
+                }
             }
         }
 

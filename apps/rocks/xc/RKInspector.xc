@@ -52,6 +52,10 @@ class RKRow : Object
     // weak reference to a model object is what caused the lifetime crash.
     UXRscObject* target;
     callback changed void(UXRscObject* o);
+    // Called BEFORE an edit reaches the model, so the controller can snapshot it for undo.  `key`
+    // is the row being typed into, the same for every keystroke of one field (so they make one
+    // undo step), or 0 for a one-shot edit (a toggle, a pop-up choice).
+    callback willChange void(UXRscObject* o, Object* key);
 
     // Populating a field fires its change hook, which would write a
     // half-written value straight back into the model.
@@ -64,6 +68,7 @@ class RKRow : Object
         rows = new Array();
         target = (UXRscObject*)0;
         changed = (callback void(UXRscObject * o))0;
+        willChange = (callback void(UXRscObject * o, Object * key))0;
         loading = false;
         }
 
@@ -264,6 +269,7 @@ class RKRow : Object
                 {
                 continue;
                 }
+            self.warn((Object*)r);
             if (r.prop.kind == (i32)RKP_TEXT)
                 {
                 // Copied: the field's buffer belongs to the driver and is
@@ -298,6 +304,7 @@ class RKRow : Object
             if (r.pop != (UXPopUpButton*)0 && (UXControl*)r.pop == sender)
                 {
                 i32 wasType = target.type;
+                self.warn((Object*)0);
                 RKProps.setInt(target, r.prop, r.pop.selectedIndex());
                 self.announce();
                 // Aligning a G_STRING promotes it to G_TEXT, so the pane is now
@@ -325,10 +332,20 @@ class RKRow : Object
             RKRow* r = (RKRow* ?)rows.get((u16)i);
             if (r.box != (UXCheckbox*)0 && (UXControl*)r.box == sender)
                 {
+                self.warn((Object*)0);
                 RKProps.setBool(target, r.prop, r.box.isChecked());
                 self.announce();
                 return;
                 }
+            }
+        }
+
+    void warn(Object* key)
+        {
+        callback f void(UXRscObject * o, Object * key) = willChange;
+        if (f)
+            {
+            f(target, key);
             }
         }
 
