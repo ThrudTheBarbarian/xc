@@ -1,12 +1,13 @@
 ---
 title: Parallel blocks
-description: par blocks — a loop whose iterations run in parallel, with reductions — on the CPU's threads today, and on GPUs later.
+description: par blocks — a loop whose iterations run in parallel, with reductions — on the CPU's threads, and from 0.67 on the GPU.
 ---
 
 **From 0.67.** A `par` block marks a loop whose iterations are independent, so
-the compiler may run them in parallel. Today a block runs on the CPU's threads;
-the same source is meant to run on a GPU in a later release, which is why the
-rules about what a block may contain are stricter than for an ordinary loop.
+the compiler may run them in parallel: on the CPU's threads, or on the GPU
+where there is one (see below). The same source has to run on both, which is
+why the rules about what a block may contain are stricter than for an ordinary
+loop.
 
 ```c
 #import "Par.xc"
@@ -74,20 +75,25 @@ the calling thread.
 
 ## Running on the GPU
 
-**From 0.67, macOS on Apple silicon.** A block that can run on the GPU through
-Metal does so when that is faster. The compiler gives each block a
-GPU version of its loop, and a program needs no extra flags or libraries.
-Results are the same as on the CPU: integer reductions match exactly, because
-the GPU's partial results are combined in the same order the CPU combines its
-chunks. A block that cannot run on the GPU stays on the CPU, as do all blocks
-when there is no Metal device.
+**From 0.67: macOS on Apple silicon, and Windows with an NVIDIA GPU.** A block
+that can run on the GPU does so when that is faster: through Metal on a Mac, and
+through NVIDIA's driver on Windows. The compiler gives each block a GPU version
+of its loop, and a program needs no extra flags or libraries. On Windows it
+needs no CUDA toolkit either, only the driver that comes with the card. Results
+are the same as on the CPU: integer reductions match exactly, because the GPU's
+partial results are combined in the same order the CPU combines its chunks. A
+block that cannot run on the GPU stays on the CPU, as do all blocks when there
+is no GPU.
 
 In this first version a block runs on the GPU when it works on arrays (captured
 locals or globals), scalars, reductions, and helper functions that take and
-return plain values. A block that uses `double` (Apple GPUs have no 64-bit
-floating point), or calls a helper that takes a pointer or an array or uses a
-global itself, runs on the CPU. `XC_PAR_REPORT=1` also says why a block stayed
-on the CPU. `XC_PAR_REPORT=1` prints one line for each block that ran on the GPU.
+return plain values. On an Apple GPU, which has no 64-bit floating point, a
+block that uses `double` runs on the CPU. On an NVIDIA GPU, `double` values are
+fine, but an array of them still keeps the block on the CPU, and so does a call
+to `sin`, `cos`, `exp`, `ln` or `pow`, which NVIDIA GPUs have only in
+approximate forms. Anywhere, a block that calls a helper that takes a pointer or
+an array, or that uses a global itself, runs on the CPU. `XC_PAR_REPORT=1` says
+why a block stayed on the CPU.
 
 ### Which device
 
@@ -110,14 +116,12 @@ To choose instead:
 `XC_PAR_REPORT=1` prints where each block ran, what it took, why a block stayed
 on the CPU, and what `auto` decided.
 
-NVIDIA GPUs come later.
-
 ## What a body may contain
 
-A block runs on the CPU today, but the compiler holds every block to what a GPU
-can run, on every target. A block that builds now will then build for a GPU
-later without changes. The rule covers the body and every function it calls,
-however deep the calls go.
+The compiler holds every block to what a GPU can run, on every target, even
+one with no GPU, so a block that builds anywhere builds for a GPU without
+changes. The rule covers the body and every function it calls, however deep
+the calls go.
 
 **Allowed:** integer, floating-point and `bool` arithmetic; structs; arrays
 local to the work item; captured scalars and structs (read-only); captured

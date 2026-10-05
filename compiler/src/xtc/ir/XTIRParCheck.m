@@ -70,14 +70,21 @@ static NSString* shownName(NSString* irName)
 @implementation XTIRParCheck
 
 static BOOL gEmitsMetal = NO;
+static BOOL gEmitsPTX = NO;
 
 + (void)setEmitsMetal:(BOOL)on
     {
     gEmitsMetal = on;
     }
 
++ (void)setEmitsPTX:(BOOL)on
+    {
+    gEmitsPTX = on;
+    }
+
 // Each block's gpuSource() returns a placeholder literal, `__XC_PAR_MSL_<n>__`;
-// give it the kernel's Metal source, or "" when the block stays on the CPU.
+// give it the kernel's source for the target's GPU (Metal on macOS, PTX for
+// NVIDIA on Windows), or "" when the block stays on the CPU.
 + (void)fillSourcesIn:(XTIRModule*)module
     {
     for (XTIRFunction* f in module.functions)
@@ -86,7 +93,9 @@ static BOOL gEmitsMetal = NO;
             continue;
         NSString* n = [f.name substringWithRange:NSMakeRange(8, f.name.length - 12)];
         NSData* tag = [[NSString stringWithFormat:@"__XC_PAR_MSL_%@__", n] dataUsingEncoding:NSUTF8StringEncoding];
-        NSString* msl = gEmitsMetal ? ([XTIRParMSL sourceForKernel:f module:module] ?: @"") : @"";
+        NSString* msl = gEmitsMetal ? ([XTIRParMSL sourceForKernel:f module:module] ?: @"")
+                      : gEmitsPTX   ? ([XTIRParMSL ptxForKernel:f module:module] ?: @"")
+                                    : @"";
         for (XTIRSymbol* sym in module.symbols)
             {
             NSData* b = sym.stringBytes;

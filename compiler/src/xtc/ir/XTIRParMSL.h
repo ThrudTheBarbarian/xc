@@ -28,4 +28,10 @@ NS_ASSUME_NONNULL_BEGIN
 
 @end
 
+// The same kernel as PTX for NVIDIA GPUs (XTIRParPTX.m); nil keeps the block
+// on the CPU.
+@interface XTIRParMSL (PTX)
++ (nullable NSString*)ptxForKernel:(XTIRFunction*)run module:(XTIRModule*)module;
+@end
+
 NS_ASSUME_NONNULL_END

@@ -1,0 +1,303 @@
+// ParDevice.xc — where each `par` block runs, for the targets with a GPU
+// runtime (ParMetal.xc on macOS, ParCuda.xc on Windows): the choice between
+// the CPU and the GPU, the record auto keeps, XC_PAR_REPORT, and the reading
+// of a kernel's header line,
+//   // xcpar size=<bytes> lo=<off> hi=<off> buf=<off>:<own-ivar>:<elem-bytes>…
+//            glob=<name>:<elem-bytes>… red=<off>:<bytes>…
+// which says where the block object keeps lo, hi, each captured array, each
+// global it uses and each reduction. Both GPU runtimes share all of it, and
+// differ only in how they compile a kernel, move the data and launch.
+pointer memcpy(pointer dst, pointer src, u64 n);
+
+#if ARCH_win64
+i32 QueryPerformanceCounter(i64* count);
+i32 QueryPerformanceFrequency(i64* perSecond);
+#else
+// Darwin's monotonic clock, in nanoseconds.
+u64 clock_gettime_nsec_np(i32 clock);
+#endif
+
+// Each block seen so far, by its name (the parName() string): the device it
+// was set to (0 auto, 1 CPU, 2 GPU) and, for auto, what each device took.
+u8* gParBlock[64];
+i32 gParSet[64];
+i64 gParGpuUs[64];
+i64 gParCpuUs[64];
+u32 gParBlocks;
+i32 gParAll;            // Par.device("par", …): every block without its own
+
+// A kernel's header line, read, and the run planned over [lo, hi): one item
+// per thread, unless the range is huge — or the block has reductions, whose
+// per-thread partials the host folds: then at most 65536 threads, each
+// taking a run of items.
+class ParLayout : Object
+    {
+    i64 size;
+    i64 bufOff[16];
+    i64 bufLen[16];
+    u32 nbuf;
+    pointer globPtr[16];
+    i64 globLen[16];
+    u32 nglob;
+    i64 redOff[16];
+    i64 redSize[16];
+    u32 nred;
+    i64 n;
+    i64 per;
+    i64 threads;
+
+    void plan(i64 lo, i64 hi)
+        {
+        n = hi - lo;
+        per = (i64)1;
+        i64 most = nred > (u32)0 ? (i64)65536 : (i64)1 << (i64)22;
+        if (n > most)
+            per = (n + most - (i64)1) / most;
+        threads = (n + per - (i64)1) / per;
+        }
+
+    // Each thread's partials, at parts[i] + thread * redSize[i], folded into
+    // the block in thread order with its own merge(), so an integer result is
+    // the CPU's exactly. One chunk carries them into merge(), which only
+    // reads them: no allocation per thread.
+    void fold(ParChunk* proto, u8** parts)
+        {
+        if (nred == (u32)0)
+            return;
+        ParChunk* c = proto.copyChunk();
+        u8* cb = (u8*)(pointer)c;
+        for (i64 t = (i64)0; t < threads; t = t + (i64)1)
+            {
+            for (u32 i = (u32)0; i < nred; i = i + (u32)1)
+                memcpy((pointer)(cb + redOff[i]), (pointer)(parts[i] + t * redSize[i]), (u64)redSize[i]);
+            proto.merge(c);
+            }
+        }
+    }
+
+class ParDevice
+    {
+    static i32 _mode;            // XC_PAR: 0 unread, 1 cpu, 2 gpu, 3 auto, 4 unset
+
+    static i64 nowUs(void)
+        {
+#if ARCH_win64
+        i64 c = (i64)0;
+        i64 f = (i64)1;
+        QueryPerformanceCounter(&c);
+        QueryPerformanceFrequency(&f);
+        return (c / f) * (i64)1000000 + (c % f) * (i64)1000000 / f;
+#else
+        return (i64)(clock_gettime_nsec_np((i32)6) / (u64)1000); // CLOCK_MONOTONIC
+#endif
+        }
+
+    static i32 parseDevice(u8* c)
+        {
+        if (parSameName(c, "cpu"))
+            return (i32)1;
+        if (parSameName(c, "gpu"))
+            return (i32)2;
+        return (i32)0; // "auto", or anything else
+        }
+
+    // The record for a block, by its name string (made on first sight).
+    static u32 slot(u8* name)
+        {
+        for (u32 i = (u32)0; i < gParBlocks; i = i + (u32)1)
+            if (gParBlock[i] == name || parSameName(gParBlock[i], name))
+                return i;
+        if (gParBlocks >= (u32)64)
+            return (u32)63;
+        u32 i = gParBlocks;
+        gParBlock[i] = name;
+        gParSet[i] = (i32)-1;
+        gParGpuUs[i] = (i64)-1;
+        gParCpuUs[i] = (i64)-1;
+        gParBlocks = gParBlocks + (u32)1;
+        return i;
+        }
+
+    static void setDevice(u8* block, u8* choice)
+        {
+        if (parSameName(block, "par"))
+            {
+            gParAll = parseDevice(choice) + (i32)1; // 0 = not set
+            return;
+            }
+        gParSet[slot(block)] = parseDevice(choice);
+        }
+
+    static bool reporting(void)
+        {
+        return Platform.env(String.withCString("XC_PAR_REPORT")).byteLength() > (u32)0;
+        }
+
+    // 1 CPU, 2 GPU. XC_PAR first, then the block's own setting, then the one
+    // for every block, then auto: no GPU version or a small range stays on
+    // the CPU; otherwise run each device once and keep the faster.
+    static i32 choose(ParChunk* proto, i64 n)
+        {
+        if (_mode == (i32)0)
+            {
+            String* v = Platform.env(String.withCString("XC_PAR"));
+            _mode = v.equals(String.withCString("cpu")) ? (i32)1
+                  : v.equals(String.withCString("gpu")) ? (i32)2
+                  : v.equals(String.withCString("auto")) ? (i32)3 : (i32)4;
+            }
+        if (_mode == (i32)1 || _mode == (i32)2)
+            return _mode;
+        u32 i = slot(proto.parName());
+        i32 dev = gParSet[i];
+        if (_mode == (i32)4 && dev < (i32)0 && gParAll > (i32)0)
+            dev = gParAll - (i32)1;
+        if (_mode == (i32)4 && dev > (i32)0)
+            return dev;
+        u8* src = proto.gpuSource();
+        if (src == (u8*)0 || src[0] == (u8)0 || n < (i64)65536)
+            return (i32)1;
+        if (gParGpuUs[i] < (i64)0)
+            return (i32)2;
+        if (gParCpuUs[i] < (i64)0)
+            return (i32)1;
+        return gParGpuUs[i] <= gParCpuUs[i] ? (i32)2 : (i32)1;
+        }
+
+    // What a run took, for auto's comparison (the first of each is kept).
+    static void ranOnCpu(ParChunk* proto, i64 us)
+        {
+        u32 i = slot(proto.parName());
+        bool decided = gParGpuUs[i] >= (i64)0 && gParCpuUs[i] < (i64)0;
+        if (gParCpuUs[i] < (i64)0)
+            gParCpuUs[i] = us;
+        if (reporting())
+            {
+            Log.info("par: %s: %ld us on the CPU", gParBlock[i], us);
+            if (decided)
+                Log.info("par: %s: auto picks the %s (GPU %ld us, CPU %ld us)", gParBlock[i],
+                         gParGpuUs[i] <= gParCpuUs[i] ? "GPU" : "CPU", gParGpuUs[i], gParCpuUs[i]);
+            }
+        }
+
+    // A GPU run: took is the whole run (copies in and out included, the
+    // one-off kernel build left out), gpuUs the GPU's own time (-1: not known).
+    static void ranOnGpu(ParChunk* proto, ParLayout* l, i64 took, i64 gpuUs)
+        {
+        u32 bi = slot(proto.parName());
+        if (gParGpuUs[bi] < (i64)0)
+            gParGpuUs[bi] = took;
+        if (!reporting())
+            return;
+        if (gpuUs >= (i64)0)
+            Log.info("par: %s: %ld items on the GPU, %ld threads, %ld us of GPU time (%ld us in all)",
+                     gParBlock[bi], l.n, l.threads, gpuUs, took);
+        else
+            Log.info("par: %s: %ld items on the GPU, %ld threads, %ld us in all", gParBlock[bi], l.n, l.threads,
+                     took);
+        }
+
+    // XC_PAR_REPORT=1: why a block stays on the CPU. False, for `return`.
+    static bool cpu(u8* why)
+        {
+        if (reporting())
+            Log.info("par: a block stays on the CPU: %s", why);
+        return false;
+        }
+
+    // The decimal number at p, and where it ends.
+    static i64 num(u8* p, u32* at)
+        {
+        i64 v = (i64)0;
+        u32 i = *at;
+        while (p[i] >= (u8)'0' && p[i] <= (u8)'9')
+            {
+            v = v * (i64)10 + (i64)(p[i] - (u8)'0');
+            i = i + (u32)1;
+            }
+        *at = i;
+        return v;
+        }
+
+    // The header line of src, read against the block (the arrays' lengths and
+    // the globals' places come from it), planned over [lo, hi). Nil, with the
+    // reason reported, when the block cannot go to the GPU.
+    static ParLayout* layout(ParChunk* proto, u8* src, i64 lo, i64 hi)
+        {
+        ParLayout* l = new ParLayout();
+        u8 gname[128];
+        u32 at = (u32)0;
+        while (src[at] != (u8)0 && src[at] != (u8)10)
+            {
+            if (src[at] == (u8)'s' && src[at + (u32)1] == (u8)'i' && src[at + (u32)4] == (u8)'=')
+                {
+                at = at + (u32)5;
+                l.size = num(src, &at);
+                continue;
+                }
+            if (src[at] == (u8)'b' && src[at + (u32)1] == (u8)'u' && src[at + (u32)3] == (u8)'=' &&
+                l.nbuf < (u32)16)
+                {
+                at = at + (u32)4;
+                u32 k = l.nbuf;
+                l.bufOff[k] = num(src, &at);
+                at = at + (u32)1;
+                i64 ivar = num(src, &at);
+                at = at + (u32)1;
+                num(src, &at);
+                l.bufLen[k] = proto.gpuLength((i32)ivar);
+                if (l.bufLen[k] < (i64)0)
+                    {
+                    cpu("it uses an array whose size is not known");
+                    return (ParLayout*)0;
+                    }
+                l.nbuf = k + (u32)1;
+                continue;
+                }
+            if (src[at] == (u8)'g' && src[at + (u32)1] == (u8)'l' && src[at + (u32)4] == (u8)'=' &&
+                l.nglob < (u32)16)
+                {
+                // glob=<name>:<elem-bytes>: the block knows where it lives.
+                at = at + (u32)5;
+                u32 n = (u32)0;
+                while (src[at] != (u8)':' && src[at] != (u8)0 && n < (u32)127)
+                    {
+                    gname[n] = src[at];
+                    n = n + (u32)1;
+                    at = at + (u32)1;
+                    }
+                gname[n] = (u8)0;
+                at = at + (u32)1;
+                num(src, &at);
+                u32 k = l.nglob;
+                l.globPtr[k] = proto.gpuGlobal(&gname[0]);
+                l.globLen[k] = proto.gpuGlobalBytes(&gname[0]);
+                if (l.globPtr[k] == (pointer)0 || l.globLen[k] <= (i64)0)
+                    {
+                    cpu("it uses a global the block cannot locate");
+                    return (ParLayout*)0;
+                    }
+                l.nglob = k + (u32)1;
+                continue;
+                }
+            if (src[at] == (u8)'r' && src[at + (u32)1] == (u8)'e' && src[at + (u32)3] == (u8)'=' &&
+                l.nred < (u32)16)
+                {
+                at = at + (u32)4;
+                u32 k = l.nred;
+                l.redOff[k] = num(src, &at);
+                at = at + (u32)1;
+                l.redSize[k] = num(src, &at);
+                l.nred = k + (u32)1;
+                continue;
+                }
+            at = at + (u32)1;
+            }
+        if (l.size <= (i64)0)
+            {
+            cpu("its GPU version has no header");
+            return (ParLayout*)0;
+            }
+        l.plan(lo, hi);
+        return l;
+        }
+    }

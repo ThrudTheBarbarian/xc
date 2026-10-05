@@ -16,9 +16,13 @@
 #import "Thread.xc"
 #import "PlatformCore.xc"
 #endif
-// macOS on Apple silicon: XC_PAR=gpu runs blocks on the GPU (ParMetal.xc).
+// A GPU runtime: Metal on macOS (Apple silicon), CUDA's driver on Windows
+// (NVIDIA). Either one runs a block on the GPU when ParDevice chooses it.
 #if ARCH_arm64 && !PLATFORM_ios && !PLATFORM_android
 #import "ParMetal.xc"
+#endif
+#if ARCH_win64
+#import "ParCuda.xc"
 #endif
 
 // Two C strings equal: how a block's generated gpuGlobal() finds a global by
@@ -86,17 +90,25 @@ class ParChunk : Object
 class Par
     {
     // Run a block over [lo, hi), on the device chosen for it: the GPU or the
-    // CPU, by XC_PAR, Par.device, or (auto) by measuring both (ParMetal.xc).
+    // CPU, by XC_PAR, Par.device, or (auto) by measuring both (ParDevice.xc).
     static void run(ParChunk* proto, i64 lo, i64 hi)
         {
         if (hi <= lo)
             return;
-#if ARCH_arm64 && !PLATFORM_ios && !PLATFORM_android
-        if (ParMetal.choose(proto, hi - lo) == (i32)2 && ParMetal.run(proto, proto.gpuSource(), lo, hi))
-            return;
-        i64 t0 = ParMetal.nowUs();
+#if (ARCH_arm64 && !PLATFORM_ios && !PLATFORM_android) || ARCH_win64
+        if (ParDevice.choose(proto, hi - lo) == (i32)2)
+            {
+#if ARCH_win64
+            if (ParCuda.run(proto, proto.gpuSource(), lo, hi))
+                return;
+#else
+            if (ParMetal.run(proto, proto.gpuSource(), lo, hi))
+                return;
+#endif
+            }
+        i64 t0 = ParDevice.nowUs();
         Par.runCpu(proto, lo, hi);
-        ParMetal.ranOnCpu(proto, ParMetal.nowUs() - t0);
+        ParDevice.ranOnCpu(proto, ParDevice.nowUs() - t0);
 #else
         Par.runCpu(proto, lo, hi);
 #endif
@@ -108,8 +120,8 @@ class Par
     // the choice in its Settings passes it on here; XC_PAR overrides all.
     static void device(u8* block, u8* choice)
         {
-#if ARCH_arm64 && !PLATFORM_ios && !PLATFORM_android
-        ParMetal.setDevice(block, choice);
+#if (ARCH_arm64 && !PLATFORM_ios && !PLATFORM_android) || ARCH_win64
+        ParDevice.setDevice(block, choice);
 #endif
         }
 

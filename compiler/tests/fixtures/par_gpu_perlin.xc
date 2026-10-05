@@ -2,20 +2,24 @@
 //xtc-na: wasm32 — no wasm threads (see threads_cond_sem.xc)
 // par_gpu_perlin.xc — Perlin noise (Ken Perlin's improved noise, 2D, four
 // octaves) for a 1024x1024 image in one `par` block: on the GPU with
-// XC_PAR=gpu on Apple silicon, on every CPU thread otherwise.
+// XC_PAR=gpu on Apple silicon or an NVIDIA GPU under Windows, on every CPU
+// thread otherwise.
 //
 // The permutation table is a global array the block reads, and the image a
 // global array it writes, one pixel per work item; fade, lerp and grad are
 // helpers taking and returning plain values. The maths is single precision
 // (Apple GPUs have no f64), so a pixel on the GPU can round differently from
 // the CPU's in the last place: the summary printed is coarse enough to be the
-// same either way. Give a file name to also write the image as a PPM.
+// same either way. Give a file name to also write the image as a greyscale
+// PGM (P5).
 #import "Stdio.xc"
 #import "Files.xc"
 #import "Par.xc"
 
+#define SIZE (1024 * 1024)
+
 u32 perm[512];
-u8 img[1048576];
+u8 img[SIZE];
 
 float fade(float t)
     {
@@ -60,7 +64,7 @@ i32 main(i32 argc, u8** argv)
     u32 highest = (u32)0;
     par perlin :reduce(+ total) :reduce(min lowest) :reduce(max highest)
         {
-        for (u32 i in 0..1048576)
+        for (u32 i in 0..SIZE)
             {
             float x = (float)(i % (u32)1024) / 128.0f;
             float y = (float)(i / (u32)1024) / 128.0f;
@@ -106,21 +110,16 @@ i32 main(i32 argc, u8** argv)
 
     // Coarse on purpose (see the top): the mean to a tenth, the range in
     // bands of 8.
-    u32 tenths = (total * (u32)10 + (u32)524288) / (u32)1048576;
+    u32 tenths = (total * (u32)10 + (u32)(SIZE / 2)) / (u32)SIZE;
     Stdio.printf("perlin 1024x1024: mean %u.%u, low band %u, high band %u\n",
                  tenths / (u32)10, tenths % (u32)10, lowest / (u32)8, highest / (u32)8);
 
     if (argc > 1)
         {
-        Data* ppm = Data.withString(String.withCString("P6\n1024 1024\n255\n"));
-        for (u32 i in 0..1048576)
-            {
-            ppm.appendByte(img[i]);
-            ppm.appendByte(img[i]);
-            ppm.appendByte(img[i]);
-            }
+        Data* pgm = Data.withString(String.withCString("P5\n1024 1024\n255\n"));
+        pgm.appendBytes(&img[0], (u32)SIZE);
         String* path = String.withCString(argv[1]);
-        if (!Files.writeData(path, ppm))
+        if (!Files.writeData(path, pgm))
             {
             Stdio.printf("could not write %s\n", argv[1]);
             return 1;

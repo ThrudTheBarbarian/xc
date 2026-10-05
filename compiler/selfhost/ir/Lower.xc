@@ -15381,9 +15381,898 @@ class ClassInfo
         return out;
         }
 
+    // ── PTX (NVIDIA) ────────────────────────────────────────────────────────
+    // The port of XTIRParPTX: the same kernel as PTX, byte for byte, from the
+    // same analysis. Every block a label, every phi a parallel move on each
+    // edge into it; SSA values are virtual registers, the block object's copy
+    // a .local array. 0 when the block cannot run there.
+    bool _parPTX;     // win64: blocks get their PTX source
+    void setParPTX(bool b) { _parPTX = b; }
+    u32 _pEdge;       // the next edge label
+
+    String* ptxS(string c) { return String.withCString(c); }
+    bool ptxIs(String* t, string c) { return t != (String*)0 && t.equals(String.withCString(c)); }
+    bool ptxNarrow(String* t) { return ptxIs(t, "I8") || ptxIs(t, "U8") || ptxIs(t, "I16") || ptxIs(t, "U16"); }
+    bool ptxSigned(String* t) { return ptxIs(t, "I8") || ptxIs(t, "I16") || ptxIs(t, "I32") || ptxIs(t, "I64"); }
+    bool ptxWide(String* t) { return ptxIs(t, "I64") || ptxIs(t, "U64") || mslIsPtr(t); }
+    bool ptxFloat(String* t) { return ptxIs(t, "F32") || ptxIs(t, "F64"); }
+    String* ptxRegType(String* t)
+        {
+        if (t == (String*)0) return (String*)0;
+        if (ptxNarrow(t) || ptxIs(t, "I32") || ptxIs(t, "U32")) return ptxS(".b32");
+        if (ptxWide(t)) return ptxS(".b64");
+        if (ptxIs(t, "F32")) return ptxS(".f32");
+        if (ptxIs(t, "F64")) return ptxS(".f64");
+        if (ptxIs(t, "Bool")) return ptxS(".pred");
+        return (String*)0;
+        }
+    String* ptxArith(String* t)
+        {
+        if (ptxIs(t, "I32")) return ptxS("s32");
+        if (ptxIs(t, "U32")) return ptxS("u32");
+        if (ptxIs(t, "I64")) return ptxS("s64");
+        if (ptxIs(t, "U64") || mslIsPtr(t)) return ptxS("u64");
+        if (ptxIs(t, "F32")) return ptxS("f32");
+        if (ptxIs(t, "F64")) return ptxS("f64");
+        return (String*)0;
+        }
+    String* ptxMem(String* t)
+        {
+        if (ptxIs(t, "I8")) return ptxS("s8");
+        if (ptxIs(t, "U8") || ptxIs(t, "Bool")) return ptxS("u8");
+        if (ptxIs(t, "I16")) return ptxS("s16");
+        if (ptxIs(t, "U16")) return ptxS("u16");
+        if (ptxIs(t, "I32") || ptxIs(t, "U32")) return ptxS("u32");
+        if (ptxIs(t, "I64") || ptxIs(t, "U64") || mslIsPtr(t)) return ptxS("u64");
+        if (ptxIs(t, "F32")) return ptxS("f32");
+        if (ptxIs(t, "F64")) return ptxS("f64");
+        return (String*)0;
+        }
+    // A type's size in bytes (an aggregate's is its layout's).
+    u32 ptxSize(String* t)
+        {
+        IRLayout* l = mslLayoutOf(t);
+        if (l != (IRLayout*)0) return l.size();
+        if (mslIsPtr(t)) return (u32)8;
+        return mslWidth(t);
+        }
+    String* ptxReg(IRValue* v)
+        {
+        if (_mHelper && _mParams != (Map*)0)
+            {
+            String* pk = (String*)_mParams.get((Hashable*)mslKey(v));
+            if (pk != (String*)0)
+                {
+                String* ps = ptxS("%a");
+                ps.append(pk);
+                return ps;
+                }
+            }
+        String* s = ptxS("%v");
+        String* o = (String*)_mOrd.get((Hashable*)mslKey(v));
+        s.append(o != (String*)0 ? o : ptxS("0"));
+        return s;
+        }
+    String* ptxOrdOf(IRValue* v)
+        {
+        String* o = (String*)_mOrd.get((Hashable*)mslKey(v));
+        return o != (String*)0 ? o : ptxS("0");
+        }
+    String* ptxHex(u64 v, i32 digits)
+        {
+        String* s = ptxS("");
+        for (i32 sh = (digits - (i32)1) * (i32)4; sh >= (i32)0; sh = sh - (i32)4)
+            {
+            u64 d = (v >> (u64)sh) & (u64)15;
+            s.appendByte(d < (u64)10 ? (u8)((u64)'0' + d) : (u8)((u64)'A' + d - (u64)10));
+            }
+        return s;
+        }
+    // An operand as a register or an immediate in t's PTX spelling.
+    String* ptxOp(IROperand* op, String* t)
+        {
+        if (op.kind() == (u8)OPK_USE)
+            return ptxReg(op.val());
+        if (op.kind() == (u8)OPK_IMMI)
+            return String.withI64(op.imm());
+        if (op.kind() == (u8)OPK_IMMF)
+            {
+            u64 raw = (u64)0;
+            String* h = op.fpHex();
+            for (u32 i = (u32)0; i < h.byteLength(); i = i + (u32)1)
+                {
+                u8 c = h.byteAt(i);
+                u64 d = c >= (u8)'a' ? (u64)(c - (u8)'a' + (u8)10) : c >= (u8)'A' ? (u64)(c - (u8)'A' + (u8)10) : (u64)(c - (u8)'0');
+                raw = (raw << (u64)4) | d;
+                }
+            if (ptxIs(t, "F64"))
+                {
+                String* s = ptxS("0d");
+                s.append(ptxHex(raw, (i32)16));
+                return s;
+                }
+            double dv = *(double*)(pointer)&raw;
+            float fv = (float)dv;
+            u32 bits = *(u32*)(pointer)&fv;
+            String* s = ptxS("0f");
+            s.append(ptxHex((u64)bits, (i32)8));
+            return s;
+            }
+        return (String*)0;
+        }
+    // Joins: a list of pieces into one string.
+    String* ptxJoin(Array* parts)
+        {
+        String* s = ptxS("");
+        for (u32 i = (u32)0; i < parts.count(); i = i + (u32)1)
+            s.append((String*)parts.get(i));
+        return s;
+        }
+    Array* ptxL(void) { return new Array(); }
+    void ptxA(Array* a, String* s) { a.add((Object*)s); }
+    void ptxC(Array* a, string s) { a.add((Object*)String.withCString(s)); }
+
+    // Declare every value's register (and a copy register per phi).
+    String* ptxDecls(IRFunc* f)
+        {
+        String* d = ptxS("");
+        for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)f.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.phis().count(); i = i + (u32)1)
+                {
+                IRInsn* ip = (IRInsn*)bb.phis().get(i);
+                if (ip.res() == (IRValue*)0 || ip.res().ty().equals(ptxS("Mem"))) continue;
+                String* rt = ptxRegType(ip.res().ty());
+                if (rt == (String*)0) return (String*)0;
+                String* o = ptxOrdOf(ip.res());
+                d.appendCString("\t.reg "); d.append(rt); d.appendCString(" %v"); d.append(o); d.appendCString(", %c"); d.append(o); d.appendCString(";\n");
+                }
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* ip = (IRInsn*)bb.insns().get(i);
+                if (ip.res() == (IRValue*)0 || ip.res().ty().equals(ptxS("Mem"))) continue;
+                String* rt = ptxRegType(ip.res().ty());
+                if (rt == (String*)0) return (String*)0;
+                d.appendCString("\t.reg "); d.append(rt); d.appendCString(" "); d.append(ptxReg(ip.res())); d.appendCString(";\n");
+                }
+            }
+        return d;
+        }
+
+    // The moves for the edge from -> target, through the copy registers.
+    String* ptxCopies(IRBlock* from, IRBlock* target)
+        {
+        String* a = ptxS("");
+        String* b = ptxS("");
+        for (u32 i = (u32)0; i < target.phis().count(); i = i + (u32)1)
+            {
+            IRInsn* ph = (IRInsn*)target.phis().get(i);
+            if (ph.res() == (IRValue*)0 || ph.res().ty().equals(ptxS("Mem"))) continue;
+            IROperand* inc = (IROperand*)0;
+            for (u32 k = (u32)0; k + (u32)1 < ph.ops().count(); k = k + (u32)2)
+                if (((IROperand*)ph.ops().get(k)).blk() == from)
+                    inc = (IROperand*)ph.ops().get(k + (u32)1);
+            String* src = inc != (IROperand*)0 ? ptxOp(inc, ph.res().ty()) : (String*)0;
+            String* rt = ptxRegType(ph.res().ty());
+            if (src == (String*)0 || rt == (String*)0) return (String*)0;
+            String* o = ptxOrdOf(ph.res());
+            a.appendCString("\tmov"); a.append(rt); a.appendCString(" %c"); a.append(o); a.appendCString(", "); a.append(src); a.appendCString(";\n");
+            b.appendCString("\tmov"); b.append(rt); b.appendCString(" %v"); b.append(o); b.appendCString(", %c"); b.append(o); b.appendCString(";\n");
+            }
+        a.append(b);
+        return a;
+        }
+
+    String* ptxSpaceOf(IROperand* addr)
+        {
+        String* sp = mslSpaceOfOp(addr);
+        return sp != (String*)0 && sp.equals(ptxS("device")) ? ptxS("global") : ptxS("local");
+        }
+
+    // "\t<op> <r>, <a>, <b>;\n"
+    String* ptx3(String* op, String* r, String* a, String* b)
+        {
+        Array* l = ptxL();
+        ptxC(l, "\t"); ptxA(l, op); ptxC(l, " "); ptxA(l, r); ptxC(l, ", "); ptxA(l, a); ptxC(l, ", "); ptxA(l, b); ptxC(l, ";\n");
+        return ptxJoin(l);
+        }
+    String* ptx2(String* op, String* r, String* a)
+        {
+        Array* l = ptxL();
+        ptxC(l, "\t"); ptxA(l, op); ptxC(l, " "); ptxA(l, r); ptxC(l, ", "); ptxA(l, a); ptxC(l, ";\n");
+        return ptxJoin(l);
+        }
+    String* ptxCat(string a, String* b)
+        {
+        String* s = ptxS(a);
+        s.append(b);
+        return s;
+        }
+
+    String* ptxBinary(IRInsn* ip, String* r, String* rt)
+        {
+        if (ptxNarrow(rt) || ptxIs(rt, "Bool")) return (String*)0; // first cut: no 8/16-bit or bool arithmetic
+        String* a = ptxOp((IROperand*)ip.ops().get((u32)0), rt);
+        String* b = ptxOp((IROperand*)ip.ops().get((u32)1), rt);
+        String* sfx = ptxArith(rt);
+        if (a == (String*)0 || b == (String*)0 || sfx == (String*)0) return (String*)0;
+        bool w = ptxWide(rt);
+        String* bits = ptxS(w ? "b64" : "b32");
+        String* us = ptxS(w ? "u64" : "u32");
+        String* ss = ptxS(w ? "s64" : "s32");
+        String* op = ip.op();
+        String* line = (String*)0;
+        if (op.equals(ptxS("Add"))) line = ptxCat("add.", sfx);
+        else if (op.equals(ptxS("Sub"))) line = ptxCat("sub.", sfx);
+        else if (op.equals(ptxS("Mul"))) line = ptxCat("mul.lo.", sfx);
+        else if (op.equals(ptxS("UDiv"))) line = ptxCat("div.", us);
+        else if (op.equals(ptxS("SDiv"))) line = ptxCat("div.", ss);
+        else if (op.equals(ptxS("URem"))) line = ptxCat("rem.", us);
+        else if (op.equals(ptxS("SRem"))) line = ptxCat("rem.", ss);
+        else if (op.equals(ptxS("And"))) line = ptxCat("and.", bits);
+        else if (op.equals(ptxS("Or"))) line = ptxCat("or.", bits);
+        else if (op.equals(ptxS("Xor"))) line = ptxCat("xor.", bits);
+        else if (op.equals(ptxS("FAdd"))) line = ptxCat("add.rn.", sfx);
+        else if (op.equals(ptxS("FSub"))) line = ptxCat("sub.rn.", sfx);
+        else if (op.equals(ptxS("FMul"))) line = ptxCat("mul.rn.", sfx);
+        else if (op.equals(ptxS("FDiv"))) line = ptxCat("div.rn.", sfx);
+        else if (op.equals(ptxS("Shl")) || op.equals(ptxS("LShr")) || op.equals(ptxS("AShr")))
+            {
+            // The shift count is a u32 operand.
+            String* sop = op.equals(ptxS("Shl")) ? ptxCat("shl.", bits) : op.equals(ptxS("LShr")) ? ptxCat("shr.", us) : ptxCat("shr.", ss);
+            if (w && ((IROperand*)ip.ops().get((u32)1)).kind() == (u8)OPK_USE)
+                {
+                String* s = ptx2(ptxS("cvt.u32.u64"), ptxS("%k"), b);
+                s.append(ptx3(sop, r, a, ptxS("%k")));
+                return s;
+                }
+            return ptx3(sop, r, a, b);
+            }
+        if (line == (String*)0) return (String*)0;
+        return ptx3(line, r, a, b);
+        }
+
+    String* ptxCompare(IRInsn* ip, String* r)
+        {
+        IROperand* o0 = (IROperand*)ip.ops().get((u32)0);
+        IROperand* o1 = (IROperand*)ip.ops().get((u32)1);
+        String* t = o0.kind() == (u8)OPK_USE ? mslTypeOf(o0) : mslTypeOf(o1);
+        if (t == (String*)0 || ptxNarrow(t) || ptxIs(t, "Bool")) return (String*)0;
+        String* a = ptxOp(o0, t);
+        String* b = ptxOp(o1, t);
+        if (a == (String*)0 || b == (String*)0) return (String*)0;
+        String* p = ip.pred();
+        String* cmp = (String*)0;
+        String* ty = (String*)0;
+        if (ip.op().equals(ptxS("FCmp")))
+            {
+            if (p.equals(ptxS("OEQ"))) cmp = ptxS("eq");
+            else if (p.equals(ptxS("ONE"))) cmp = ptxS("ne");
+            else if (p.equals(ptxS("OLT"))) cmp = ptxS("lt");
+            else if (p.equals(ptxS("OGT"))) cmp = ptxS("gt");
+            else if (p.equals(ptxS("OLE"))) cmp = ptxS("le");
+            else if (p.equals(ptxS("OGE"))) cmp = ptxS("ge");
+            ty = ptxArith(t);
+            }
+        else
+            {
+            bool sg = false;
+            if (p.equals(ptxS("EQ"))) cmp = ptxS("eq");
+            else if (p.equals(ptxS("NE"))) cmp = ptxS("ne");
+            else if (p.equals(ptxS("SLT"))) { cmp = ptxS("lt"); sg = true; }
+            else if (p.equals(ptxS("SGT"))) { cmp = ptxS("gt"); sg = true; }
+            else if (p.equals(ptxS("SLE"))) { cmp = ptxS("le"); sg = true; }
+            else if (p.equals(ptxS("SGE"))) { cmp = ptxS("ge"); sg = true; }
+            else if (p.equals(ptxS("ULT"))) cmp = ptxS("lt");
+            else if (p.equals(ptxS("UGT"))) cmp = ptxS("gt");
+            else if (p.equals(ptxS("ULE"))) cmp = ptxS("le");
+            else if (p.equals(ptxS("UGE"))) cmp = ptxS("ge");
+            ty = ptxWide(t) ? ptxS(sg ? "s64" : "u64") : ptxS(sg ? "s32" : "u32");
+            }
+        if (cmp == (String*)0 || ty == (String*)0) return (String*)0;
+        String* op = ptxS("setp.");
+        op.append(cmp); op.appendCString("."); op.append(ty);
+        return ptx3(op, r, a, b);
+        }
+
+    // The callee's maths name, as mslIntrinsic reads it: Math$ and _xm_ off,
+    // an overload's __ tail off, a trailing f off.
+    String* ptxMathName(String* callee)
+        {
+        String* m = callee;
+        if (m.hasPrefix(ptxS("Math$"))) m = m.substringBytes((u32)5, m.byteLength() - (u32)5);
+        String* cut = ptxS("");
+        for (u32 i = (u32)0; i < m.byteLength(); i = i + (u32)1)
+            {
+            if (m.byteAt(i) == (u8)'_' && i + (u32)1 < m.byteLength() && m.byteAt(i + (u32)1) == (u8)'_') break;
+            cut.appendByte(m.byteAt(i));
+            }
+        m = cut;
+        if (m.hasPrefix(ptxS("_xm_"))) m = m.substringBytes((u32)4, m.byteLength() - (u32)4);
+        if (m.hasSuffix(ptxS("f")) && m.byteLength() > (u32)3) m = m.substringBytes((u32)0, m.byteLength() - (u32)1);
+        return m;
+        }
+
+    String* ptxCall(IRInsn* ip, String* r, String* rt)
+        {
+        IROperand* o0 = (IROperand*)ip.ops().get((u32)0);
+        String* callee = o0.name();
+        if (callee.equals(ptxS("_xtc_sinit_run")) || callee.hasSuffix(ptxS("$init")))
+            return ptxS("");
+        bool isVoid = rt == (String*)0 || rt.equals(ptxS("Mem"));
+        Array* args = new Array();
+        Array* argTypes = new Array();
+        for (u32 k = (u32)1; k < ip.ops().count(); k = k + (u32)1)
+            {
+            IROperand* o = (IROperand*)ip.ops().get(k);
+            String* at = o.kind() == (u8)OPK_USE ? mslTypeOf(o) : rt;
+            if (ptxIs(at, "Mem")) continue;
+            String* e = ptxOp(o, at);
+            if (e == (String*)0) return (String*)0;
+            args.add((Object*)e);
+            argTypes.add((Object*)at);
+            }
+        // The precise maths PTX has as instructions.
+        String* m = ptxMathName(callee);
+        bool fl = ptxFloat(rt);
+        u32 n = args.count();
+        if (!isVoid && fl && m.equals(ptxS("sqrt")) && n == (u32)1)
+            return ptx2(ptxCat("sqrt.rn.", ptxArith(rt)), r, (String*)args.get((u32)0));
+        if (!isVoid && fl && m.equals(ptxS("fma")) && n == (u32)3)
+            {
+            String* s = ptx3(ptxCat("fma.rn.", ptxArith(rt)), r, (String*)args.get((u32)0), (String*)args.get((u32)1));
+            // ptx3 ends "b;\n": put the third operand in.
+            String* t = s.substringBytes((u32)0, s.byteLength() - (u32)2);
+            t.appendCString(", "); t.append((String*)args.get((u32)2)); t.appendCString(";\n");
+            return t;
+            }
+        if (!isVoid && fl && m.equals(ptxS("floor")) && n == (u32)1)
+            {
+            String* op = ptxCat("cvt.rmi.", ptxArith(rt));
+            op.appendCString("."); op.append(ptxArith(rt));
+            return ptx2(op, r, (String*)args.get((u32)0));
+            }
+        if (!isVoid && (m.equals(ptxS("abs")) || m.equals(ptxS("fabs"))) && n == (u32)1 && ptxArith(rt) != (String*)0)
+            return ptx2(ptxCat("abs.", fl ? ptxArith(rt) : ptxS(ptxWide(rt) ? "s64" : "s32")), r, (String*)args.get((u32)0));
+        if (!isVoid && (m.equals(ptxS("min")) || m.equals(ptxS("max"))) && n == (u32)2 && ptxArith(rt) != (String*)0)
+            {
+            String* op = String.withString(m);
+            op.appendCString("."); op.append(ptxArith(rt));
+            return ptx3(op, r, (String*)args.get((u32)0), (String*)args.get((u32)1));
+            }
+        if (m.equals(ptxS("sin")) || m.equals(ptxS("cos")) || m.equals(ptxS("exp")) || m.equals(ptxS("ln")) || m.equals(ptxS("log")) || m.equals(ptxS("pow")))
+            return (String*)0; // no precise PTX instruction: the CPU runs this block
+        // A function of the program: printed once, before the kernel.
+        IRFunc* target = (IRFunc*)0;
+        for (u32 q = (u32)0; q < _m.funcs().count(); q = q + (u32)1)
+            if (((IRFunc*)_m.funcs().get(q)).name().equals(callee))
+                target = (IRFunc*)_m.funcs().get(q);
+        if (target == (IRFunc*)0) return (String*)0;
+        String* fn = ptxS("h_");
+        for (u32 q = (u32)0; q < callee.byteLength(); q = q + (u32)1)
+            fn.appendByte(callee.byteAt(q) == (u8)'$' ? (u8)'_' : callee.byteAt(q));
+        if (_mHelperNames.get((Hashable*)callee) == (Object*)0)
+            {
+            _mHelperNames.set((Hashable*)callee, (Object*)callee);
+            String* text = ptxHelper(target, fn);
+            if (text == (String*)0) return (String*)0;
+            _mHelperText.add((Object*)text);
+            }
+        String* s = ptxS("\t{\n");
+        String* pnames = ptxS("");
+        for (u32 k = (u32)0; k < n; k = k + (u32)1)
+            {
+            String* pt = ptxRegType((String*)argTypes.get(k));
+            if (pt == (String*)0 || pt.equals(ptxS(".pred"))) return (String*)0;
+            String* q = ptxS("q");
+            q.append(String.withU32(k));
+            s.appendCString("\t.param "); s.append(pt); s.appendCString(" "); s.append(q); s.appendCString(";\n");
+            s.appendCString("\tst.param"); s.append(pt); s.appendCString(" ["); s.append(q); s.appendCString("], ");
+            s.append((String*)args.get(k)); s.appendCString(";\n");
+            if (k > (u32)0) pnames.appendCString(", ");
+            pnames.append(q);
+            }
+        if (isVoid)
+            {
+            s.appendCString("\tcall.uni "); s.append(fn); s.appendCString(", ("); s.append(pnames); s.appendCString(");\n");
+            }
+        else
+            {
+            String* pt = ptxRegType(rt);
+            if (pt == (String*)0 || pt.equals(ptxS(".pred"))) return (String*)0;
+            s.appendCString("\t.param "); s.append(pt); s.appendCString(" rq;\n\tcall.uni (rq), "); s.append(fn);
+            s.appendCString(", ("); s.append(pnames); s.appendCString(");\n\tld.param"); s.append(pt); s.appendCString(" ");
+            s.append(r); s.appendCString(", [rq];\n");
+            }
+        s.appendCString("\t}\n");
+        return s;
+        }
+
+    String* ptxConvert(IRInsn* ip, String* r, String* rt)
+        {
+        IROperand* o0 = (IROperand*)ip.ops().get((u32)0);
+        String* op = ip.op();
+        String* st = o0.kind() == (u8)OPK_USE ? mslTypeOf(o0) : rt;
+        String* a = ptxOp(o0, st);
+        if (a == (String*)0 || st == (String*)0) return (String*)0;
+        if (ptxIs(st, "Bool"))
+            {
+            if (ptxIs(rt, "Bool")) return ptx2(ptxS("mov.pred"), r, a);
+            String* s = ptxS("\tselp.");
+            s.appendCString(ptxWide(rt) ? "b64 " : "b32 "); s.append(r); s.appendCString(", 1, 0, "); s.append(a); s.appendCString(";\n");
+            return s;
+            }
+        if (ptxIs(rt, "Bool"))
+            {
+            String* s = ptxS("\tsetp.ne.");
+            s.appendCString(ptxWide(st) ? "u64 " : "u32 "); s.append(r); s.appendCString(", "); s.append(a); s.appendCString(", 0;\n");
+            return s;
+            }
+        bool sw = ptxWide(st);
+        bool rw = ptxWide(rt);
+        if (op.equals(ptxS("Trunc")))
+            {
+            String* lo = sw ? ptx2(ptxS("cvt.u32.u64"), r, a) : ptx2(ptxS("mov.b32"), r, a);
+            if (rw) return ptx2(ptxS("mov.b64"), r, a);
+            if (ptxIs(rt, "U8") || ptxIs(rt, "I8")) { lo.append(ptx3(ptxS("and.b32"), r, r, ptxS("255"))); return lo; }
+            if (ptxIs(rt, "U16") || ptxIs(rt, "I16")) { lo.append(ptx3(ptxS("and.b32"), r, r, ptxS("65535"))); return lo; }
+            return lo;
+            }
+        if (op.equals(ptxS("SExt")) && ptxNarrow(st))
+            {
+            String* bits = ptxS((ptxIs(st, "I8") || ptxIs(st, "U8")) ? "8" : "16");
+            String* x = ptxS("\tbfe.s32 %k, ");
+            x.append(a); x.appendCString(", 0, "); x.append(bits); x.appendCString(";\n");
+            if (rw) x.append(ptx2(ptxS("cvt.s64.s32"), r, ptxS("%k")));
+            else x.append(ptx2(ptxS("mov.b32"), r, ptxS("%k")));
+            return x;
+            }
+        if (!sw && rw)
+            return ptx2(ptxS(op.equals(ptxS("SExt")) ? "cvt.s64.s32" : "cvt.u64.u32"), r, a);
+        return ptx2(ptxS(rw ? "mov.b64" : "mov.b32"), r, a);
+        }
+
+    String* ptxFpConvert(IRInsn* ip, String* r, String* rt)
+        {
+        IROperand* o0 = (IROperand*)ip.ops().get((u32)0);
+        String* op = ip.op();
+        String* st = o0.kind() == (u8)OPK_USE ? mslTypeOf(o0) : rt;
+        String* a = ptxOp(o0, st);
+        if (a == (String*)0 || ptxNarrow(st) || ptxNarrow(rt)) return (String*)0;
+        String* d = ptxArith(rt);
+        String* s = ptxArith(st);
+        if (op.equals(ptxS("UIToFp"))) s = ptxS(ptxWide(st) ? "u64" : "u32");
+        if (op.equals(ptxS("FpToUI"))) d = ptxS(ptxWide(rt) ? "u64" : "u32");
+        if (op.equals(ptxS("SIToFp"))) s = ptxS(ptxWide(st) ? "s64" : "s32");
+        if (op.equals(ptxS("FpToSI"))) d = ptxS(ptxWide(rt) ? "s64" : "s32");
+        if (d == (String*)0 || s == (String*)0) return (String*)0;
+        String* c = ptxS("cvt");
+        if (op.equals(ptxS("FpToSI")) || op.equals(ptxS("FpToUI"))) c.appendCString(".rzi");
+        else if (!op.equals(ptxS("FpExt"))) c.appendCString(".rn");
+        c.appendCString("."); c.append(d); c.appendCString("."); c.append(s);
+        return ptx2(c, r, a);
+        }
+
+    String* ptxStatement(IRInsn* ip)
+        {
+        String* op = ip.op();
+        IRValue* rv = ip.res();
+        String* rt = rv != (IRValue*)0 ? rv.ty() : (String*)0;
+        String* r = rv != (IRValue*)0 ? ptxReg(rv) : (String*)0;
+        IROperand* o0 = ip.ops().count() > (u32)0 ? (IROperand*)ip.ops().get((u32)0) : (IROperand*)0;
+        if (op.equals(ptxS("Const")))
+            {
+            if (ptxIs(rt, "Bool"))
+                {
+                String* s = ptxS("\tmov.b32 %k, ");
+                s.append(String.withI64(o0.imm())); s.appendCString(";\n\tsetp.ne.s32 "); s.append(r); s.appendCString(", %k, 0;\n");
+                return s;
+                }
+            String* v = ptxOp(o0, rt);
+            String* t = ptxRegType(rt);
+            if (v == (String*)0 || t == (String*)0) return (String*)0;
+            return ptx2(ptxCat("mov", t), r, v);
+            }
+        if (op.equals(ptxS("Add")) || op.equals(ptxS("Sub")) || op.equals(ptxS("Mul")) || op.equals(ptxS("UDiv")) || op.equals(ptxS("SDiv")) || op.equals(ptxS("URem")) || op.equals(ptxS("SRem")) || op.equals(ptxS("And")) || op.equals(ptxS("Or")) || op.equals(ptxS("Xor")) || op.equals(ptxS("Shl")) || op.equals(ptxS("LShr")) || op.equals(ptxS("AShr")) || op.equals(ptxS("FAdd")) || op.equals(ptxS("FSub")) || op.equals(ptxS("FMul")) || op.equals(ptxS("FDiv")))
+            return ptxBinary(ip, r, rt);
+        if (op.equals(ptxS("Not")))
+            {
+            String* a = ptxOp(o0, rt);
+            if (a == (String*)0) return (String*)0;
+            if (ptxIs(rt, "Bool")) return ptx2(ptxS("not.pred"), r, a);
+            if (ptxNarrow(rt)) return (String*)0;
+            return ptx2(ptxS(ptxWide(rt) ? "not.b64" : "not.b32"), r, a);
+            }
+        if (op.equals(ptxS("Neg")) || op.equals(ptxS("FNeg")))
+            {
+            String* a = ptxOp(o0, rt);
+            String* sfx = ptxArith(rt);
+            if (a == (String*)0 || sfx == (String*)0) return (String*)0;
+            if (ptxIs(rt, "U32")) sfx = ptxS("s32");
+            if (ptxIs(rt, "U64")) sfx = ptxS("s64");
+            return ptx2(ptxCat("neg.", sfx), r, a);
+            }
+        if (op.equals(ptxS("FSqrt")))
+            {
+            String* a = ptxOp(o0, rt);
+            if (a == (String*)0 || ptxArith(rt) == (String*)0) return (String*)0;
+            return ptx2(ptxCat("sqrt.rn.", ptxArith(rt)), r, a);
+            }
+        if (op.equals(ptxS("ICmp")) || op.equals(ptxS("FCmp")))
+            return ptxCompare(ip, r);
+        if (op.equals(ptxS("ZExt")) || op.equals(ptxS("SExt")) || op.equals(ptxS("Trunc")) || op.equals(ptxS("Copy")))
+            return ptxConvert(ip, r, rt);
+        if (op.equals(ptxS("SIToFp")) || op.equals(ptxS("UIToFp")) || op.equals(ptxS("FpToSI")) || op.equals(ptxS("FpToUI")) || op.equals(ptxS("FpExt")) || op.equals(ptxS("FpTrunc")))
+            return ptxFpConvert(ip, r, rt);
+        if (op.equals(ptxS("Select")))
+            {
+            if (ptxIs(rt, "Bool")) return (String*)0;
+            String* c = ptxOp(o0, (String*)0);
+            String* a = ptxOp((IROperand*)ip.ops().get((u32)1), rt);
+            String* b = ptxOp((IROperand*)ip.ops().get((u32)2), rt);
+            String* t = ptxNarrow(rt) ? ptxS("b32") : ptxWide(rt) ? ptxS("b64") : ptxArith(rt);
+            if (c == (String*)0 || a == (String*)0 || b == (String*)0 || t == (String*)0) return (String*)0;
+            String* s = ptx3(ptxCat("selp.", t), r, a, b);
+            String* u = s.substringBytes((u32)0, s.byteLength() - (u32)2);
+            u.appendCString(", "); u.append(c); u.appendCString(";\n");
+            return u;
+            }
+        if (op.equals(ptxS("FieldAddr")))
+            {
+            i64 k = mslSelfField(ip);
+            if (k >= (i64)0 && mslIsPtr(_mObj.typeAt((u32)k)))
+                return ptxS(""); // a captured array's slot: only ever loaded, as the buffer
+            if (k >= (i64)0)
+                return ptx3(ptxS("add.u64"), r, ptxS("%stp"), String.withU32(_mObj.offsetAt((u32)k)));
+            IRLayout* l = mslLayoutOf(mslPointee(mslTypeOf(o0)));
+            IROperand* fo = (IROperand*)ip.ops().get((u32)1);
+            if (l == (IRLayout*)0 || fo.kind() != (u8)OPK_IMMI || fo.imm() < (i64)0 || fo.imm() >= (i64)l.fieldCount()) return (String*)0;
+            return ptx3(ptxS("add.u64"), r, ptxReg(o0.val()), String.withU32(l.offsetAt((u32)fo.imm())));
+            }
+        if (op.equals(ptxS("ElementAddr")))
+            {
+            u32 size = ptxSize(mslPointee(mslTypeOf(o0)));
+            String* base = ptxReg(o0.val());
+            IROperand* io = (IROperand*)ip.ops().get((u32)1);
+            if (io.kind() == (u8)OPK_IMMI)
+                return ptx3(ptxS("add.u64"), r, base, String.withI64(io.imm() * (i64)size));
+            String* it = mslTypeOf(io);
+            String* idx = ptxReg(io.val());
+            String* s = ptxS("");
+            if (ptxWide(it))
+                s.append(ptx2(ptxS("mov.b64"), ptxS("%x"), idx));
+            else
+                s.append(ptx2(ptxS(ptxSigned(it) ? "cvt.s64.s32" : "cvt.u64.u32"), ptxS("%x"), idx));
+            String* m = ptx3(ptxS("mad.lo.u64"), r, ptxS("%x"), String.withU32(size));
+            String* u = m.substringBytes((u32)0, m.byteLength() - (u32)2);
+            u.appendCString(", "); u.append(base); u.appendCString(";\n");
+            s.append(u);
+            return s;
+            }
+        if (op.equals(ptxS("AddrOf")))
+            {
+            String* g = (String*)_mGlobalOf.get((Hashable*)mslKey(rv));
+            if (g == (String*)0) return (String*)0;
+            u32 gi = (u32)0;
+            for (u32 q = (u32)0; q < _mGlobals.count(); q = q + (u32)1)
+                if (((String*)_mGlobals.get(q)).equals(g)) { gi = q; break; }
+            String* s = ptxS("\tld.param.u64 ");
+            s.append(r); s.appendCString(", [glob_"); s.append(String.withU32(gi)); s.appendCString("];\n");
+            s.append(ptx2(ptxS("cvta.to.global.u64"), r, r));
+            return s;
+            }
+        if (op.equals(ptxS("Load")))
+            {
+            String* buf = (String*)_mBufOf.get((Hashable*)mslKey(rv));
+            if (buf != (String*)0)
+                {
+                String* s = ptxS("\tld.param.u64 ");
+                s.append(r); s.appendCString(", [buf_"); s.append(buf); s.appendCString("];\n");
+                s.append(ptx2(ptxS("cvta.to.global.u64"), r, r));
+                return s;
+                }
+            String* m = ptxMem(rt);
+            if (m == (String*)0) return (String*)0;
+            String* sp = ptxSpaceOf(o0);
+            String* a = ptxReg(o0.val());
+            String* ld = ptxS("ld.");
+            ld.append(sp); ld.appendCString(".");
+            if (ptxIs(rt, "Bool"))
+                {
+                ld.appendCString("u8");
+                String* s = ptx2(ld, ptxS("%k"), ptxCat("[", ptxCat("", a)));
+                // ptx2 printed "%k, [a;": close the bracket.
+                String* u = s.substringBytes((u32)0, s.byteLength() - (u32)2);
+                u.appendCString("];\n");
+                u.append(ptx3(ptxS("setp.ne.u32"), r, ptxS("%k"), ptxS("0")));
+                return u;
+                }
+            ld.append(m);
+            String* s = ptxS("\t");
+            s.append(ld); s.appendCString(" "); s.append(r); s.appendCString(", ["); s.append(a); s.appendCString("];\n");
+            return s;
+            }
+        if (op.equals(ptxS("Store")))
+            {
+            if (o0.kind() != (u8)OPK_USE) return (String*)0;
+            String* pt = mslPointee(mslTypeOf(o0));
+            IROperand* vo = (IROperand*)ip.ops().get((u32)1);
+            String* m = ptxMem(pt);
+            String* v = ptxOp(vo, pt);
+            if (m == (String*)0 || v == (String*)0) return (String*)0;
+            String* sp = ptxSpaceOf(o0);
+            String* a = ptxReg(o0.val());
+            String* st = ptxS("\tst.");
+            st.append(sp); st.appendCString(".");
+            if (ptxIs(pt, "Bool"))
+                {
+                String* s = ptxS("");
+                if (vo.kind() != (u8)OPK_USE) s.append(ptx2(ptxS("mov.b32"), ptxS("%k"), v));
+                else { s.appendCString("\tselp.b32 %k, 1, 0, "); s.append(v); s.appendCString(";\n"); }
+                s.append(st); s.appendCString("u8 ["); s.append(a); s.appendCString("], %k;\n");
+                return s;
+                }
+            if (vo.kind() != (u8)OPK_USE)
+                {
+                String* t = ptxRegType(pt);
+                String* tmp = ptxS(t.equals(ptxS(".b64")) ? "%x" : t.equals(ptxS(".f32")) ? "%fk" : t.equals(ptxS(".f64")) ? "%dk" : "%k");
+                String* s = ptx2(ptxCat("mov", t), tmp, v);
+                s.append(st); s.append(m); s.appendCString(" ["); s.append(a); s.appendCString("], "); s.append(tmp); s.appendCString(";\n");
+                return s;
+                }
+            String* s = String.withString(st);
+            s.append(m); s.appendCString(" ["); s.append(a); s.appendCString("], "); s.append(v); s.appendCString(";\n");
+            return s;
+            }
+        if (op.equals(ptxS("Call")))
+            return ptxCall(ip, r, rt);
+        if (op.equals(ptxS("DbgValue")))
+            return ptxS("");
+        return (String*)0;
+        }
+
+    // The blocks as labels: statements, then the edge moves and the branch.
+    String* ptxBody(IRFunc* f, string endLabel)
+        {
+        String* s = ptxS("");
+        for (u32 bi = (u32)0; bi < f.blocks().count(); bi = bi + (u32)1)
+            {
+            IRBlock* b = (IRBlock*)f.blocks().get(bi);
+            s.appendCString("BB"); s.append(String.withU32(bi)); s.appendCString(":\n");
+            for (u32 i = (u32)0; i < b.insns().count(); i = i + (u32)1)
+                {
+                String* st = ptxStatement((IRInsn*)b.insns().get(i));
+                if (st == (String*)0) return (String*)0;
+                s.append(st);
+                }
+            IRInsn* t = b.term();
+            if (t == (IRInsn*)0) return (String*)0;
+            if (t.op().equals(ptxS("Branch")))
+                {
+                IRBlock* to = ((IROperand*)t.ops().get((u32)0)).blk();
+                String* c = ptxCopies(b, to);
+                if (c == (String*)0) return (String*)0;
+                s.append(c); s.appendCString("\tbra.uni BB"); s.append((String*)_mBlk.get((Hashable*)to.name())); s.appendCString(";\n");
+                }
+            else if (t.op().equals(ptxS("CondBranch")))
+                {
+                IRBlock* tt = ((IROperand*)t.ops().get((u32)1)).blk();
+                IRBlock* ff = ((IROperand*)t.ops().get((u32)2)).blk();
+                String* c = ptxOp((IROperand*)t.ops().get((u32)0), (String*)0);
+                String* ct = ptxCopies(b, tt);
+                String* cf = ptxCopies(b, ff);
+                if (c == (String*)0 || ct == (String*)0 || cf == (String*)0) return (String*)0;
+                String* e = String.withU32(_pEdge);
+                _pEdge = _pEdge + (u32)1;
+                s.appendCString("\t@"); s.append(c); s.appendCString(" bra E"); s.append(e); s.appendCString(";\n");
+                s.append(cf); s.appendCString("\tbra.uni BB"); s.append((String*)_mBlk.get((Hashable*)ff.name())); s.appendCString(";\n");
+                s.appendCString("E"); s.append(e); s.appendCString(":\n");
+                s.append(ct); s.appendCString("\tbra.uni BB"); s.append((String*)_mBlk.get((Hashable*)tt.name())); s.appendCString(";\n");
+                }
+            else if (t.op().equals(ptxS("Return")))
+                {
+                if (_mHelper)
+                    {
+                    IROperand* rv = t.ops().count() > (u32)0 ? (IROperand*)t.ops().get((u32)0) : (IROperand*)0;
+                    String* rvt = rv == (IROperand*)0 ? (String*)0 : rv.kind() == (u8)OPK_USE ? mslTypeOf(rv) : f.ret();
+                    if (rvt != (String*)0 && !rvt.equals(ptxS("Mem")) && !rvt.equals(ptxS("Void")))
+                        {
+                        String* v = ptxOp(rv, rvt);
+                        String* pt = ptxRegType(rvt);
+                        if (v == (String*)0 || pt == (String*)0) return (String*)0;
+                        s.appendCString("\tst.param"); s.append(pt); s.appendCString(" [rv], "); s.append(v); s.appendCString(";\n");
+                        }
+                    s.appendCString("\tret;\n");
+                    }
+                else
+                    { s.appendCString("\tbra.uni "); s.appendCString(endLabel); s.appendCString(";\n"); }
+                }
+            else
+                return (String*)0;
+            }
+        return s;
+        }
+
+    void ptxOrdinals(IRFunc* f)
+        {
+        u32 ord = (u32)0;
+        for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)f.blocks().get(b);
+            _mBlk.set((Hashable*)bb.name(), (Object*)String.withU32(b));
+            for (u32 i = (u32)0; i < bb.phis().count(); i = i + (u32)1)
+                {
+                IRInsn* ip = (IRInsn*)bb.phis().get(i);
+                if (ip.res() != (IRValue*)0 && !ip.res().ty().equals(ptxS("Mem")))
+                    { _mOrd.set((Hashable*)mslKey(ip.res()), (Object*)String.withU32(ord)); ord = ord + (u32)1; }
+                }
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* ip = (IRInsn*)bb.insns().get(i);
+                if (ip.res() != (IRValue*)0 && !ip.res().ty().equals(ptxS("Mem")))
+                    { _mOrd.set((Hashable*)mslKey(ip.res()), (Object*)String.withU32(ord)); ord = ord + (u32)1; }
+                }
+            }
+        }
+
+    // A helper as a .func: scalars in and out, as .param values. The
+    // caller's state comes back afterwards.
+    String* ptxHelper(IRFunc* g, String* name)
+        {
+        Map* sDef = _mDef; Map* sSpace = _mSpace; Map* sBufOf = _mBufOf; Map* sOrd = _mOrd;
+        Map* sBlk = _mBlk; Map* sBufs = _mBufs; Map* sReds = _mReds; IRLayout* sObj = _mObj;
+        bool sFailed = _mFailed; bool sHelper = _mHelper; Map* sParams = _mParams;
+        u32 sEdge = _pEdge;
+        String* out = ptxHelperText(g, name);
+        _mDef = sDef; _mSpace = sSpace; _mBufOf = sBufOf; _mOrd = sOrd;
+        _mBlk = sBlk; _mBufs = sBufs; _mReds = sReds; _mObj = sObj;
+        _mFailed = sFailed; _mHelper = sHelper; _mParams = sParams;
+        _pEdge = sEdge;
+        return out;
+        }
+    String* ptxHelperText(IRFunc* g, String* name)
+        {
+        _mDef = new Map(); _mSpace = new Map(); _mBufOf = new Map(); _mOrd = new Map();
+        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false;
+        _mHelper = true;
+        _mParams = new Map();
+        _mObj = (IRLayout*)0;
+        _pEdge = (u32)0;
+        if (!mslAnalyse(g)) return (String*)0;
+        ptxOrdinals(g);
+        String* params = ptxS("");
+        String* loads = ptxS("");
+        for (u32 k = (u32)0; k + (u32)1 < g.params().count(); k = k + (u32)1)
+            {
+            IRValue* pv = (IRValue*)g.params().get(k);
+            String* t = ptxRegType(pv.ty());
+            if (t == (String*)0 || t.equals(ptxS(".pred"))) return (String*)0;
+            _mParams.set((Hashable*)mslKey(pv), (Object*)String.withU32(k));
+            String* kk = String.withU32(k);
+            if (k > (u32)0) params.appendCString(", ");
+            params.appendCString(".param "); params.append(t); params.appendCString(" p"); params.append(kk);
+            loads.appendCString("\t.reg "); loads.append(t); loads.appendCString(" %a"); loads.append(kk); loads.appendCString(";\n");
+            loads.appendCString("\tld.param"); loads.append(t); loads.appendCString(" %a"); loads.append(kk); loads.appendCString(", [p"); loads.append(kk); loads.appendCString("];\n");
+            }
+        String* rt = g.ret();
+        bool isVoid = rt == (String*)0 || rt.equals(ptxS("Void")) || rt.equals(ptxS("Mem"));
+        String* rtt = isVoid ? (String*)0 : ptxRegType(rt);
+        if (!isVoid && (rtt == (String*)0 || rtt.equals(ptxS(".pred")))) return (String*)0;
+        String* decls = ptxDecls(g);
+        String* body = ptxBody(g, "");
+        if (decls == (String*)0 || body == (String*)0 || _mFailed) return (String*)0;
+        String* out = ptxS(".func ");
+        if (!isVoid) { out.appendCString("(.param "); out.append(rtt); out.appendCString(" rv) "); }
+        out.append(name); out.appendCString("("); out.append(params); out.appendCString(")\n{\n");
+        out.appendCString("\t.reg .b32 %k;\n\t.reg .b64 %x;\n\t.reg .f32 %fk;\n\t.reg .f64 %dk;\n");
+        out.append(loads);
+        out.append(decls);
+        out.append(body);
+        out.appendCString("}\n");
+        return out;
+        }
+
+    String* parPtx(IRFunc* f)
+        {
+        _mDef = new Map(); _mSpace = new Map(); _mBufOf = new Map(); _mOrd = new Map();
+        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false;
+        _mHelper = false;
+        _mParams = (Map*)0;
+        _mGlobals = new Array();
+        _mGlobalOf = new Map();
+        _pEdge = (u32)0;
+        if (f.params().count() == (u32)0) return (String*)0;
+        _mObj = mslLayoutOf(mslPointee(((IRValue*)f.params().get((u32)0)).ty()));
+        if (_mObj == (IRLayout*)0 || _mObj.fieldCount() < (u32)3 || !_mObj.typeAt((u32)1).equals(ptxS("I64")) || !_mObj.typeAt((u32)2).equals(ptxS("I64")))
+            return (String*)0;
+        if (!mslAnalyse(f)) return (String*)0;
+        _mHelperText = new Array();
+        _mHelperNames = new Map();
+        ptxOrdinals(f);
+        String* decls = ptxDecls(f);
+        String* body = ptxBody(f, "BODY_END");
+        if (decls == (String*)0 || body == (String*)0 || _mFailed) return (String*)0;
+
+        String* meta = ptxS("// xcpar size=");
+        meta.append(String.withU32(_mObj.size())); meta.appendCString(" lo="); meta.append(String.withU32(_mObj.offsetAt((u32)1)));
+        meta.appendCString(" hi="); meta.append(String.withU32(_mObj.offsetAt((u32)2)));
+        String* params = ptxS(".param .u64 args, .param .u64 span");
+        for (u32 k = (u32)0; k < _mObj.fieldCount(); k = k + (u32)1)
+            {
+            if (_mBufs.get((Hashable*)String.withI64((i64)k)) == (Object*)0) continue;
+            String* et = mslPointee(_mObj.typeAt(k));
+            if (ptxMem(et) == (String*)0) return (String*)0;
+            meta.appendCString(" buf="); meta.append(String.withU32(_mObj.offsetAt(k))); meta.appendCString(":");
+            meta.append(String.withU32(k - (u32)3)); meta.appendCString(":"); meta.append(String.withU32(ptxSize(et)));
+            params.appendCString(", .param .u64 buf_"); params.append(String.withU32(k));
+            }
+        for (u32 gi = (u32)0; gi < _mGlobals.count(); gi = gi + (u32)1)
+            {
+            String* gn = (String*)_mGlobals.get(gi);
+            IRSymbol* gs = (IRSymbol*)0;
+            for (u32 q = (u32)0; q < _m.syms().count(); q = q + (u32)1)
+                if (((IRSymbol*)_m.syms().get(q)).name().equals(gn))
+                    gs = (IRSymbol*)_m.syms().get(q);
+            String* gt = gs != (IRSymbol*)0 ? gs.dataType() : (String*)0;
+            IRLayout* gl = mslLayoutOf(gt);
+            String* et = gl != (IRLayout*)0 ? gl.typeAt((u32)0) : gt;
+            if (ptxMem(et) == (String*)0) return (String*)0;
+            meta.appendCString(" glob="); meta.append(gn); meta.appendCString(":"); meta.append(String.withU32(ptxSize(et)));
+            params.appendCString(", .param .u64 glob_"); params.append(String.withU32(gi));
+            }
+        String* tail = ptxS("");
+        for (u32 k = (u32)0; k < _mObj.fieldCount(); k = k + (u32)1)
+            {
+            if (_mReds.get((Hashable*)String.withI64((i64)k)) == (Object*)0) continue;
+            String* t = _mObj.typeAt(k);
+            String* m = ptxMem(t);
+            String* rt = ptxRegType(t);
+            if (m == (String*)0 || rt == (String*)0 || rt.equals(ptxS(".pred"))) return (String*)0;
+            String* kk = String.withU32(k);
+            meta.appendCString(" red="); meta.append(String.withU32(_mObj.offsetAt(k))); meta.appendCString(":"); meta.append(String.withU32(ptxSize(t)));
+            params.appendCString(", .param .u64 red_"); params.append(kk);
+            String* tmp = ptxS(rt.equals(ptxS(".b64")) ? "%y" : rt.equals(ptxS(".f32")) ? "%fk" : rt.equals(ptxS(".f64")) ? "%dk" : "%k");
+            tail.appendCString("\tld.local."); tail.append(m); tail.appendCString(" "); tail.append(tmp); tail.appendCString(", [%stp+");
+            tail.append(String.withU32(_mObj.offsetAt(k))); tail.appendCString("];\n\tld.param.u64 %x, [red_"); tail.append(kk);
+            tail.appendCString("];\n\tcvta.to.global.u64 %x, %x;\n\tmad.lo.u64 %x, %tid64, "); tail.append(String.withU32(ptxSize(t)));
+            tail.appendCString(", %x;\n\tst.global."); tail.append(m); tail.appendCString(" [%x], "); tail.append(tmp); tail.appendCString(";\n");
+            }
+
+        String* out = String.withString(meta);
+        out.appendCString("\n.version 7.0\n.target sm_52\n.address_size 64\n");
+        for (u32 i = (u32)0; i < _mHelperText.count(); i = i + (u32)1)
+            out.append((String*)_mHelperText.get(i));
+        out.appendCString(".visible .entry par_kernel("); out.append(params); out.appendCString(")\n{\n");
+        out.appendCString("\t.local .align 8 .b8 st["); out.append(String.withU32(_mObj.size())); out.appendCString("];\n");
+        out.appendCString("\t.reg .b64 %stp, %ga, %gs, %lo, %hi, %end, %per, %tid64, %x, %y;\n");
+        out.appendCString("\t.reg .b32 %gid, %k, %nt, %ct, %tx;\n\t.reg .f32 %fk;\n\t.reg .f64 %dk;\n\t.reg .pred %pz;\n");
+        out.append(decls);
+        out.appendCString("\tmov.u64 %stp, st;\n\tld.param.u64 %ga, [args];\n\tcvta.to.global.u64 %ga, %ga;\n");
+        for (u32 q = (u32)0; q < _mObj.size(); q = q + (u32)1)
+            {
+            String* qs = String.withU32(q);
+            out.appendCString("\tld.global.u8 %k, [%ga+"); out.append(qs); out.appendCString("];\n\tst.local.u8 [%stp+"); out.append(qs); out.appendCString("], %k;\n");
+            }
+        out.appendCString("\tld.param.u64 %gs, [span];\n\tcvta.to.global.u64 %gs, %gs;\n");
+        out.appendCString("\tmov.u32 %ct, %ctaid.x;\n\tmov.u32 %nt, %ntid.x;\n\tmov.u32 %tx, %tid.x;\n");
+        out.appendCString("\tmad.lo.u32 %gid, %ct, %nt, %tx;\n\tcvt.u64.u32 %tid64, %gid;\n");
+        out.appendCString("\tld.global.u64 %lo, [%gs];\n\tld.global.u64 %end, [%gs+8];\n\tld.global.u64 %per, [%gs+16];\n");
+        out.appendCString("\tmad.lo.u64 %lo, %tid64, %per, %lo;\n\tadd.s64 %hi, %lo, %per;\n\tmin.s64 %hi, %hi, %end;\n");
+        out.appendCString("\tst.local.u64 [%stp+"); out.append(String.withU32(_mObj.offsetAt((u32)1))); out.appendCString("], %lo;\n");
+        out.appendCString("\tst.local.u64 [%stp+"); out.append(String.withU32(_mObj.offsetAt((u32)2))); out.appendCString("], %hi;\n");
+        out.appendCString("\tsetp.ge.s64 %pz, %lo, %hi;\n\t@%pz bra BODY_END;\n");
+        out.append(body);
+        out.appendCString("BODY_END:\n\tsetp.ge.s64 %pz, %lo, %end;\n\t@%pz bra DONE;\n");
+        out.append(tail);
+        out.appendCString("DONE:\n\tret;\n}\n");
+        return out;
+        }
+
     // Each block's gpuSource() returns a placeholder literal,
-    // `__XC_PAR_MSL_<n>__`; give it the kernel's Metal source, or "" when the
-    // block stays on the CPU.
+    // `__XC_PAR_MSL_<n>__`; give it the kernel's source for the target's GPU
+    // (Metal on macOS, PTX for NVIDIA on Windows), or "" when the block
+    // stays on the CPU.
     void parFillSources()
         {
         for (u32 i = (u32)0; i < _m.funcs().count(); i = i + (u32)1)
@@ -15398,6 +16287,8 @@ class ClassInfo
             String* msl = (String*)0;
             if (_parMetal)
                 msl = parMsl(f);
+            else if (_parPTX)
+                msl = parPtx(f);
             if (msl == (String*)0)
                 msl = String.withCString("");
             for (u32 j = (u32)0; j < _m.syms().count(); j = j + (u32)1)
