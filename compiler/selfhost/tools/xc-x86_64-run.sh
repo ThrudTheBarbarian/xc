@@ -9,6 +9,9 @@
 #
 #   bash selfhost/tools/xc-x86_64-run.sh [pattern]
 #
+# XC_X86_FLAGS adds options to every compile, e.g. XC_X86_FLAGS=-mavx512 to run
+# the corpus at a fixed vector level instead of the default dispatch.
+#
 # The host is $XTC_LINUX_HOST (set in build.env), reached over ssh. Binaries
 # are built locally, copied ONCE as a batch, and run in one remote session —
 # per-fixture ssh would dominate the runtime and tell us nothing extra.
@@ -45,6 +48,7 @@ fi
 
 built=0; buildfail=0; noexp=0; skipped=0; multi=0
 declare -a BUILDFAIL
+read -r -a XFLAGS <<< "${XC_X86_FLAGS:-}"
 for f in tests/fixtures/*.xc; do
     b=$(basename "$f" .xc)
     [ -n "$PATTERN" ] && [[ "$b" != *"$PATTERN"* ]] && continue
@@ -74,7 +78,7 @@ for f in tests/fixtures/*.xc; do
         skipped=$((skipped+1)); continue
     fi
     if [ ! -f "tests/fixtures/$b.expected.out" ]; then noexp=$((noexp+1)); continue; fi
-    if "$BIN/xcc-xc" -A x86_64 -H . -o "$WORK/bin/$b" "$f" >"$WORK/$b.log" 2>&1; then
+    if "$BIN/xcc-xc" -A x86_64 -H . ${XFLAGS[@]+"${XFLAGS[@]}"} -o "$WORK/bin/$b" "$f" >"$WORK/$b.log" 2>&1; then
         built=$((built+1))
     else
         buildfail=$((buildfail+1))
