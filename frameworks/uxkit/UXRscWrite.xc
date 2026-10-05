@@ -358,20 +358,22 @@ class UXRscWriter : Object
             warn = (u8*)"this resource holds payloads this build cannot write (icons / bit forms); they are not in the output";
             }
         UXData* file = UXData.fromBytes(out, total);
-        if (r.formCount() > (i32)0)
+        if (r.formCount() > (i32)0 || r.classOverrides.count() > (u32)0 || r.topObjects.count() > (u32)0 ||
+            r.connections.count() > (u32)0 || r.extSections.count() > (u32)0)
             {
             file.appendData(self.nibChunk(r));
             }
         return file;
         }
 
-    // ---- the UXNB v2 chunk (docs/UXNB-V2.md section 2) -------------------------
-    // Written only when the document has layout variants, so a plain resource stays byte-for-byte
-    // classic.  It sits at rsh_rssize, past everything a classic AES reads: there, every variant is
+    // ---- the UXNB v3 chunk (docs/UXNB-V2.md sections 2 and 11) -----------------
+    // Written only when the document has layout variants or a nib graph, so a plain resource stays
+    // byte-for-byte classic.  It sits at rsh_rssize, past everything a classic AES reads: there, every variant is
     // just another tree.  Forms first -- each multi-variant form, then every tree in no form as a
     // single-variant `any` form under its own index (in a v2 file only the form list finds a tree)
     // -- then one map per variant tree, object index (pre-order, as the tree is written) to logical
-    // id.  No connections, class overrides or presentations yet: nothing authors them.
+    // id.  Then the graph: class overrides, top objects, scoped connections, the extension sections
+    // as they were read.  No presentations yet: nothing authors them.
     static void be16(UXData* d, i32 v)
         {
         d.appendByte((u8)((v >> (i32)8) & (i32)$FF));
@@ -381,6 +383,25 @@ class UXRscWriter : Object
         {
         UXRscWriter.be16(d, (v >> (i32)16) & (i32)$FFFF);
         UXRscWriter.be16(d, v & (i32)$FFFF);
+        }
+    // A string into the blob; "" (and null) is offset 0, which the blob starts with.
+    static i32 blobAdd(UXData* blob, u8* s)
+        {
+        if (s == (u8*)0 || s[0] == (u8)0)
+            {
+            return (i32)0;
+            }
+        i32 at = blob.length();
+        blob.appendBytes(s, UXRscWriter.slen(s));
+        blob.appendByte((u8)0);
+        return at;
+        }
+    static void ref(UXData* d, UXRscRef* r)
+        {
+        d.appendByte((u8)(r != (UXRscRef*)0 ? r.space : (i32)UXR_REF_OWNER));
+        UXRscWriter.be16(d, r != (UXRscRef*)0 ? r.a : (i32)0);
+        UXRscWriter.be16(d, r != (UXRscRef*)0 ? r.b : (i32)0);
+        d.appendByte((u8)0);
         }
     UXData* nibChunk(UXRscDoc* r)
         {
@@ -445,17 +466,56 @@ class UXRscWriter : Object
                 }
             }
 
+        // the graph, strings into the same blob
+        UXData* graph = UXData.withCapacity((i32)128);
+        for (u32 i = (u32)0; i < r.classOverrides.count(); i = i + (u32)1)
+            {
+            UXRscClassOverride* co = (UXRscClassOverride* ?)r.classOverrides.get(i);
+            UXRscWriter.ref(graph, co.view);
+            UXRscWriter.be32(graph, UXRscWriter.blobAdd(blob, co.cls));
+            }
+        for (u32 i = (u32)0; i < r.topObjects.count(); i = i + (u32)1)
+            {
+            UXRscTopObject* to = (UXRscTopObject* ?)r.topObjects.get(i);
+            UXRscWriter.be16(graph, to.id);
+            UXRscWriter.be32(graph, UXRscWriter.blobAdd(blob, to.cls));
+            UXRscWriter.be32(graph, UXRscWriter.blobAdd(blob, to.label));
+            }
+        for (u32 i = (u32)0; i < r.connections.count(); i = i + (u32)1)
+            {
+            UXRscConnection* cn = (UXRscConnection* ?)r.connections.get(i);
+            graph.appendByte((u8)cn.kind);
+            graph.appendByte((u8)0);
+            UXRscWriter.ref(graph, cn.src);
+            UXRscWriter.ref(graph, cn.dst);
+            UXRscWriter.be32(graph, UXRscWriter.blobAdd(blob, cn.member));
+            UXRscWriter.be32(graph, (i32)cn.scope);
+            }
+        for (u32 i = (u32)0; i < r.extSections.count(); i = i + (u32)1)
+            {
+            UXRscExtSection* x = (UXRscExtSection* ?)r.extSections.get(i);
+            UXRscWriter.be32(graph, (i32)x.tag);
+            UXRscWriter.be32(graph, x.body.length());
+            graph.appendBytes(x.body.bytes(), x.body.length());
+            if ((x.body.length() & (i32)1) != (i32)0)
+                {
+                graph.appendByte((u8)0);
+                }
+            }
+
         UXData* c = UXData.withCapacity((i32)256);
         UXRscWriter.be32(c, (i32)$55584E42); // 'UXNB'
-        UXRscWriter.be16(c, (i32)2);         // version
+        UXRscWriter.be16(c, (i32)3);         // version
         UXRscWriter.be16(c, (i32)0);         // flags
         UXRscWriter.be32(c, (i32)0);         // size, patched below
-        UXRscWriter.be16(c, (i32)0);         // nClasses
-        UXRscWriter.be16(c, (i32)0);         // nObjects
-        UXRscWriter.be16(c, (i32)0);         // nConns
+        UXRscWriter.be16(c, (i32)r.classOverrides.count());
+        UXRscWriter.be16(c, (i32)r.topObjects.count());
+        UXRscWriter.be16(c, (i32)r.connections.count());
         UXRscWriter.be16(c, r.formCount() + nLoose);
         UXRscWriter.be16(c, nMaps);
         UXRscWriter.be16(c, (i32)0); // nPres
+        UXRscWriter.be16(c, (i32)r.extSections.count());
+        UXRscWriter.be16(c, (i32)0); // _pad
         for (i32 f = (i32)0; f < r.formCount(); f = f + (i32)1)
             {
             UXRscForm* fm = r.formAt(f);
@@ -483,6 +543,7 @@ class UXRscWriter : Object
                 }
             }
         c.appendData(maps);
+        c.appendData(graph);
         c.appendData(blob);
         i32 n = c.length();
         u8* b = c.bytes();

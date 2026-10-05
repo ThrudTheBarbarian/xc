@@ -118,7 +118,14 @@ a platform. The platforms are grouped by realm:
 
 - [`UXDesignable`](/compiler/api/uxkit/uxdesignable/)
 - [`UXNib`](/compiler/api/uxkit/uxnib/)
+- [`UXNibInstance`](/compiler/api/uxkit/uxnibinstance/)
+- [`UXNibAwaking`](/compiler/api/uxkit/uxnibawaking/)
+- [`UXNibGem`](/compiler/api/uxkit/uxnibgem/)
 - [`UXNibV2`](/compiler/api/uxkit/uxnibv2/)
+- [`UXRscDoc`](/compiler/api/uxkit/uxrscdoc/)
+- [`UXRscConnection`](/compiler/api/uxkit/uxrscconnection/)
+- [`UXRscReader`](/compiler/api/uxkit/uxrscreader/)
+- [`UXRscWriter`](/compiler/api/uxkit/uxrscwriter/)
 
 ## Drivers & backends
 

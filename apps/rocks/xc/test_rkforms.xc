@@ -152,7 +152,7 @@ void main(void)
         Stdio.printf("FAIL: %d check(s)\n", (i16)(gFails));
         return;
         }
-    check((u8*)"as version 2", nib.version(), (i32)2);
+    check((u8*)"as version 3", nib.version(), (i32)3);
     check((u8*)"two forms: MAIN and the standalone ALERT", nib.formCount(), (i32)2);
     checkTrue("MAIN's name is in it", UXRscWriter.seq(nib.formName((i32)0), (u8*)"MAIN"));
     i32 cls = (i32)0;

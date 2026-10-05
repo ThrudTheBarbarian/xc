@@ -114,12 +114,12 @@ class RKOutlineNode : Object
     // "OK" rather than "button", but an untitled box still says what it is.
     static u8* objectLabel(UXRscObject* o)
         {
-        u8* t = RKCanvas.textOf(o);
+        u8* t = UXNib.textOf(o);
         if (t != (u8*)0 && t[0] != (u8)0)
             {
             return t;
             }
-        return RKCanvas.typeName(o.type);
+        return UXNib.typeName(o.type);
         }
 
     // ---- UXOutlineDataSource ----------------------------------------------

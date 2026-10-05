@@ -1,6 +1,6 @@
 // test_nib.xc — the nib pipeline end to end, on GEM, exercising the post-#9 loader.
 //
-// Builds a .rsc WITH an UXNB chunk in-process, loads it through UXNib.loadWiredMem against a
+// Builds a .rsc WITH an UXNB chunk in-process, loads it through UXNibGem.loadWiredMem against a
 // File's-Owner controller, and checks the whole graph landed — including the two cases #9 unlocks:
 //   * a designable VIEW (Gauge, a G_USERDEF adopting UXDesignable) as an ACTION target — the loader
 //     downcasts (UXDesignable* ?)view CROSS-MODULE (client class, library protocol);
@@ -10,7 +10,7 @@
 #import "UXApplication.xc"
 #import "UXGemDriver.xc"
 #import "UXWindow.xc"
-#import "UXNib.xc"
+#import "UXNibGem.xc"
 #import "UXControl.xc"
 #import "UXDesignable.xc"
 #import "UXBoot.xc"
@@ -217,7 +217,7 @@ class Ctl : Object<UXApplicationDelegate>
         pointer bytes = buildRsc(&len);
         Stdio.printf("built .rsc: %d bytes\n", len);
         Controller* ctl = new Controller();
-        UXViewTree* vt = UXNib.loadWiredMem((u8*)bytes, len, (i32)0, (UXDesignable*)ctl);
+        UXViewTree* vt = UXNibGem.loadWiredMem((u8*)bytes, len, (i32)0, (UXDesignable*)ctl);
         Stdio.printf("loaded vt=%s\n", vt != (UXViewTree*)0 ? "ok" : "NULL");
         Object* v1 = vt != (UXViewTree*)0 ? vt.viewAt((u16)1) : (Object*)0;
         i32 outGauge = (ctl.gauge != (UXView*)0 && (Object*)ctl.gauge == v1) ? (i32)1 : (i32)0;

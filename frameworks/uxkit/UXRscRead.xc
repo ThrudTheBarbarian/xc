@@ -301,14 +301,22 @@ class UXRscReader : Object
         return res;
         }
 
-    // The UXNB v2 chunk at rsh_rssize, if there is one (docs/UXNB-V2.md section 2): the forms with
-    // more than one layout, and each layout tree's logical ids.  Single-variant `any` forms are the
-    // writer's listing of standalone trees and come back as just that.  The chunk is big-endian
-    // whatever the classic part is, and is ignored (not an error) when malformed: the classic trees
-    // are all there either way.
+    // The nib chunk at rsh_rssize, if there is one (docs/UXNB-V2.md): v1 ('XGNB'), v2 or v3
+    // ('UXNB').  It carries the forms with more than one layout, each layout tree's logical ids,
+    // and the nib graph: class overrides, top objects, connections (v3: scoped), v3's extension
+    // sections.  Single-variant `any` forms are the writer's listing of standalone trees and come
+    // back as just that.  The chunk is big-endian whatever the classic part is, and is ignored
+    // (not an error) when malformed: the classic trees are all there either way.
     void readNibV2(UXRscDoc* res, i32 at)
         {
-        if (at + (i32)24 > len || self.rd32(at) != (i32)$55584E42 || self.rd16(at + (i32)4) != (i32)2)
+        if (at + (i32)20 > len)
+            {
+            return;
+            }
+        i32 magic = self.rd32(at);
+        i32 ver = self.rd16(at + (i32)4);
+        bool v1 = magic == (i32)$58474E42 && ver == (i32)1;
+        if (!v1 && !(magic == (i32)$55584E42 && (ver == (i32)2 || ver == (i32)3)))
             {
             return;
             }
@@ -317,17 +325,17 @@ class UXRscReader : Object
             {
             return;
             }
-        i32 p = at + (i32)12;
-        i32 nForms = self.rd16(p + (i32)6);
-        i32 nMaps = self.rd16(p + (i32)8);
-        p = p + (i32)12;
-        // the blob comes after every section; find it by walking them (classes, objects,
-        // connections and presentations may be zero, but a chunk from elsewhere may
-        // carry them -- they are skipped by size, never misread)
         i32 nClasses = self.rd16(at + (i32)12);
         i32 nObjects = self.rd16(at + (i32)14);
         i32 nConns = self.rd16(at + (i32)16);
-        i32 nPres = self.rd16(at + (i32)22);
+        i32 nForms = v1 ? (i32)0 : self.rd16(at + (i32)18);
+        i32 nMaps = v1 ? (i32)0 : self.rd16(at + (i32)20);
+        i32 nPres = v1 ? (i32)0 : self.rd16(at + (i32)22);
+        i32 nExt = ver >= (i32)3 ? self.rd16(at + (i32)24) : (i32)0;
+        i32 topStride = ver >= (i32)3 ? (i32)10 : (i32)6;
+        i32 connStride = ver >= (i32)3 ? (i32)22 : (i32)18;
+        i32 p = at + (v1 ? (i32)20 : ver >= (i32)3 ? (i32)28 : (i32)24);
+        // the blob comes after every section; find it by walking them
         i32 q = p;
         for (i32 f = (i32)0; f < nForms && q + (i32)10 <= end; f = f + (i32)1)
             {
@@ -338,10 +346,18 @@ class UXRscReader : Object
             {
             q = q + (i32)4 + self.rd16(q + (i32)2) * (i32)4;
             }
-        q = q + nClasses * (i32)10 + nObjects * (i32)6 + nConns * (i32)18;
+        i32 classAt = q;
+        i32 topAt = classAt + nClasses * (i32)10;
+        i32 connAt = topAt + nObjects * topStride;
+        q = connAt + nConns * connStride;
         for (i32 i = (i32)0; i < nPres && q + (i32)8 <= end; i = i + (i32)1)
             {
             q = q + (i32)8 + self.rd16(q + (i32)2) * (i32)4;
+            }
+        i32 extAt = q;
+        for (i32 e = (i32)0; e < nExt && q + (i32)8 <= end; e = e + (i32)1)
+            {
+            q = q + (i32)8 + ((self.rd32(q + (i32)4) + (i32)1) & (i32)-2);
             }
         i32 blob = q;
         if (blob > end)
@@ -409,6 +425,59 @@ class UXRscReader : Object
                 }
             q = q + (i32)4 + ne * (i32)4;
             }
+        // the nib graph
+        for (i32 i = (i32)0; i < nClasses; i = i + (i32)1)
+            {
+            i32 r = classAt + i * (i32)10;
+            UXRscClassOverride* co = new UXRscClassOverride();
+            co.view = self.refAt(r);
+            co.cls = self.blobStr(blob, end, self.rd32(r + (i32)6));
+            res.classOverrides.add(co);
+            }
+        for (i32 i = (i32)0; i < nObjects; i = i + (i32)1)
+            {
+            i32 r = topAt + i * topStride;
+            UXRscTopObject* to = new UXRscTopObject();
+            to.id = self.rd16(r);
+            to.cls = self.blobStr(blob, end, self.rd32(r + (i32)2));
+            to.label = ver >= (i32)3 ? self.blobStr(blob, end, self.rd32(r + (i32)6)) : (u8*)"";
+            res.topObjects.add(to);
+            }
+        for (i32 i = (i32)0; i < nConns; i = i + (i32)1)
+            {
+            i32 r = connAt + i * connStride;
+            UXRscConnection* c = new UXRscConnection();
+            c.kind = (i32)buf[r];
+            c.src = self.refAt(r + (i32)2);
+            c.dst = self.refAt(r + (i32)8);
+            c.member = self.blobStr(blob, end, self.rd32(r + (i32)14));
+            c.scope = ver >= (i32)3 ? (u32)self.rd32(r + (i32)18) : (u32)0;
+            res.connections.add(c);
+            }
+        q = extAt;
+        for (i32 e = (i32)0; e < nExt && q + (i32)8 <= end; e = e + (i32)1)
+            {
+            i32 size = self.rd32(q + (i32)4);
+            if (size < (i32)0 || q + (i32)8 + size > end)
+                {
+                break;
+                }
+            UXRscExtSection* x = new UXRscExtSection();
+            x.tag = (u32)self.rd32(q);
+            x.body = UXData.fromBytes(&buf[q + (i32)8], size);
+            res.extSections.add(x);
+            q = q + (i32)8 + ((size + (i32)1) & (i32)-2);
+            }
+        }
+
+    // A 6-byte Ref {space u8, a u16, b u16, _pad u8}.
+    UXRscRef* refAt(i32 r)
+        {
+        return UXRscRef.make((i32)buf[r], self.rd16(r + (i32)1), self.rd16(r + (i32)3));
+        }
+    u8* blobStr(i32 blob, i32 end, i32 off)
+        {
+        return off > (i32)0 && blob + off < end ? self.cstrAt(blob + off) : (u8*)"";
         }
 
     // Attach one object's children, then theirs.  `base` is the tree root's

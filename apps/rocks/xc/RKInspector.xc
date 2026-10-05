@@ -171,7 +171,7 @@ class RKRow : Object
             }
         if (typeLabel != (UXLabel*)0)
             {
-            typeLabel.setText(RKCanvas.typeName(o.type));
+            typeLabel.setText(UXNib.typeName(o.type));
             }
         if (pane == (UXView*)0)
             {
@@ -231,7 +231,7 @@ class RKRow : Object
                 UXTextField* f = new UXTextField();
                 if (p.kind == (i32)RKP_TEXT)
                     {
-                    f.setText(RKCanvas.textOf(o));
+                    f.setText(UXNib.textOf(o));
                     }
                 else
                     {

@@ -1,157 +1,168 @@
 ---
 title: UXNib
-description: "A .rsc file is the nib, and it is live: there is no inflation step. Load a tree, bind views onto it, and wire outlets and actions by name."
+description: "Load a form from a .rsc document as UXKit views on every backend: the layout for this device, the connections in its scope, the top-level objects, and awakeFromNib."
 ---
 
-`UXNib` loads an interface from a `.rsc` file. The rest of the design follows
-from one property: **there is no inflation step**.
+`UXNib` loads a form designed in Rocks and gives you its views, already wired
+to your code. It runs on every backend. From 0.67.
 
 ```c
-#use <UXKit>            // or #import "UXNib.xc"
+#import "UXNib.xc"
 ```
 
 ## Overview
 
-A GEM resource already contains an `OBJECT` tree, and a
-[`UXView`](/compiler/api/uxkit/uxview/) is *backed by* an `OBJECT`. Loading a
-nib means loading that tree and binding a view onto each entry. Nothing is
-copied or rebuilt, and on GEM the AES walks the resource's own array
-directly.
-
-```
-Rocks (macOS)  --writes-->  app.rsc  --load-->  OBJECT[]  --bind-->  UXViewTree
-```
-
-The resource editor **is** the interface builder. A dialog designed there
-becomes a live view hierarchy with no conversion, rather than a description
-that a loader reconstructs.
-
 ```c
-UXViewTree* tree = UXNib.load((u8*)"app.rsc", 0);      // tree 0 of the file
+UXNibInstance* ni = UXNib.load(bytes, len, FORM_TRANSPORT, (UXDesignable*)self, window.contentView);
 ```
 
-Views are chosen by `ob_type`. The resource supplies the **type, frame, flags
-and state**; your code supplies the **behaviour**.
+One call does five things:
 
-## Wiring by name
+1. **Picks the layout.** A form can have a layout per form factor (desktop,
+   tablet, phone) and, on a device, per orientation. The loader asks the driver
+   which this device is and walks the fallback chain described on
+   [`UXNibV2`](/compiler/api/uxkit/uxnibv2/#variant-selection-walks-a-chain).
+2. **Builds the views.** Each object in that layout becomes a UXKit control:
+   `G_BUTTON` a [`UXButton`](/compiler/api/uxkit/uxbutton/), `G_FTEXT` a
+   [`UXTextField`](/compiler/api/uxkit/uxtextfield/), and so on. A control the
+   document gives a class of its own (a `G_USERDEF` that is a `WaveformView`)
+   becomes that class.
+3. **Makes the top-level objects**: the controllers and other non-view objects
+   the document lists.
+4. **Binds the connections in scope.** Each outlet or action names the layout
+   themes it applies to. Only those whose scope includes the loaded theme are
+   bound, and only when both ends exist in that layout.
+5. **Sends `awakeFromNib`** to every object it made that conforms to
+   [`UXNibAwaking`](/compiler/api/uxkit/uxnibawaking/), then to File's Owner.
 
-Loading gives you a hierarchy. Connecting it to a controller is the other half,
-and it needs no per-application code:
+The result is a [`UXNibInstance`](/compiler/api/uxkit/uxnibinstance/): the root
+view, the views by logical id, the top-level objects, and counts of what bound.
 
-```c
-UXViewTree* tree = UXNib.loadWired((u8*)"app.rsc", 0, (UXDesignable*)controller);
-```
+Rocks builds its canvas with the same [`viewFor`](#viewfor), so what the
+designer shows is what an app loads.
 
-`loadWired` reaches your controller through
-[`UXDesignable`](/compiler/api/uxkit/uxdesignable/) and connects the nib's
-outlets and actions **by name**.
+## Connections per layout theme
 
-### Your controller declares, the compiler generates
+The same outlet or action can be connected differently in different layouts.
+On a desktop, `showDetail` might be fired by a list's selection; on a phone,
+by a toolbar button. Both are connections to `showDetail`, each scoped to its
+own themes:
 
-```c
-class MainController : Object
-{
-    outlet UXLabel*  statusLabel;
-    outlet UXView*   canvas;
+| connection | scope | binds on |
+| --- | --- | --- |
+| list selection → `showDetail` | desktop, tablet | desktop, tablet |
+| toolbar button → `showDetail` | phone | phone |
+| `nameField` outlet | all | every layout that has the field |
 
-    void onSave(UXControl* sender) :action { … }
-    void onQuit(UXControl* sender) :action { … }
-}
-```
+A connection with scope "all" binds in every layout. A connection whose control
+a layout leaves out is skipped there, which is how a phone layout drops a
+control.
 
-Declaring any `outlet` field or `:action` method **auto-conforms** the class to
-`UXDesignable`, and the compiler generates both method bodies from the
-decorations:
+## Where the views go
 
-- `setOutlet(name, value)`: a checked assignment per outlet, returning false on
-  an unknown name or a type mismatch
-- `wireAction(name, control)`: `control.setAction(&self.<method>)` per action
-
-There is no reflection beyond what the decorations declare, and the
-compiler checks every connection. A nib naming an outlet your controller does
-not have fails at load with a false return, instead of leaving a null
-field that crashes later.
-
-:::tip[Build the same wiring in code and the nib path stays honest]
-A hand-written builder that assigns `c.canvas = view;` directly and a nib both
-produce a working window, but only the builder is exercised until a nib
-ships. Drive the **same two protocol methods** from your code path:
-
-```c
-c.setOutlet((u8*)"canvas", (Object*)view);
-c.wireAction((u8*)"onSave", saveButton);
-```
-
-The code path is then a hand-written nib. Every wiring name is one a nib will
-later carry as data, and a typo fails in both.
-:::
+Pass a container, usually a window's content view, and the form's root view is
+added to it at its origin. Pass null and the form gets a
+[`UXViewTree`](/compiler/api/uxkit/uxviewtree/) of its own, held by the
+instance.
 
 ## Topics
 
-[load](#load) · [loadWired](#loadwired) · [loadWiredMem](#loadwiredmem) · [loadDoc](#loaddoc) · [viewForType](#viewfortype) · [make](#make) · [registerViewFactory](#registerviewfactory) · [registerObjectFactory](#registerobjectfactory) · [classOverride](#classoverride)
+[load](#load) · [loadDoc](#loaddoc) · [loadDocAs](#loaddocas) · [selectTree](#selecttree) · [viewFor](#viewfor) · [classFor](#classfor) · [applyState](#applystate) · [applyText](#applytext) · [textOf](#textof) · [typeName](#typename) · [make](#make) · [registerObjectFactory](#registerobjectfactory) · [registerViewFactory](#registerviewfactory)
 
 ### load
 
 ```c
-static UXViewTree* load(u8* path, i32 treeIndex)
+static UXNibInstance* load(u8* bytes, i32 n, i32 formId, UXDesignable* owner, UXView* into)
 ```
 
-Loads one tree from a `.rsc` file and binds views onto it. A resource holds
-several trees (a dialog, a menu, an about box), addressed by index.
+Reads a `.rsc` image and loads form `formId` for this device. `owner` is File's
+Owner. Returns null when the bytes are not a resource or there is no such form.
 
-### loadWired
-
-```c
-static UXViewTree* loadWired(u8* path, i32 treeIndex, UXDesignable* owner)
-```
-
-`load`, then connect outlets and actions on `owner` by name.
-
-### loadWiredMem
-
-```c
-static UXViewTree* loadWiredMem(u8* data, i32 len, i32 treeIndex, UXDesignable* owner)
-```
-
-The same from bytes already in memory: a resource compiled into the binary, or
-fetched rather than read from disk.
+A form's id is the index of its first tree, so a form designed before layout
+variants keeps the id it had.
 
 ### loadDoc
 
 ```c
-static UXViewTree* loadDoc(pointer doc, i32 treeIndex, UXDesignable* owner)
+static UXNibInstance* loadDoc(UXRscDoc* doc, i32 formId, UXDesignable* owner, UXView* into)
 ```
 
-From an already-parsed document, when you load several trees out of one
-file and do not want to re-read it per tree.
+The same from a document already read with
+[`UXRscReader`](/compiler/api/uxkit/uxrscreader/), to load several forms from one
+file without reading it again.
 
-### viewForType
+### loadDocAs
 
 ```c
-static UXView* viewForType(u16 gtype)
+static UXNibInstance* loadDocAs(UXRscDoc* doc, i32 formId, i32 klass, i32 orient, UXDesignable* owner, UXView* into)
 ```
 
-The default type-to-view mapping: `G_BUTTON` becomes a
-[`UXButton`](/compiler/api/uxkit/uxbutton/), `G_FTEXT` a
-[`UXTextField`](/compiler/api/uxkit/uxtextfield/), and so on.
+Loads for a given theme instead of the device's: `klass` is a `UX_FORM_*` form
+factor and `orient` a `UX_ORIENT_*`. Use it in tests and previews.
 
-### registerViewFactory
+### selectTree
 
 ```c
-static void registerViewFactory(pointer fn)
+static UXRscTree* selectTree(UXRscDoc* doc, i32 formId, i32 klass, i32 orient, i32* gotClass, i32* gotOrient)
 ```
 
-Overrides the mapping, so a resource object can become **your** view subclass
-instead of the stock one. A custom widget designed in the editor comes back
-this way as the class that implements it.
+The layout a form loads with for a theme, and the theme that layout was drawn
+for. A tablet with only a desktop layout gets the desktop's, and `gotClass`
+says so.
 
-### registerObjectFactory
+### viewFor
 
 ```c
-static void registerObjectFactory(pointer fn)
+static UXView* viewFor(UXRscObject* o, u8* cls)
 ```
 
-The same for non-view objects named by the nib.
+The view for one object. If `cls` names a class a registered factory can make,
+that class; otherwise the control for the object's GEM type. A type with no
+UXKit equivalent becomes a visible placeholder titled with its class or type,
+so a form never has a silent gap.
+
+### classFor
+
+```c
+static u8* classFor(UXRscDoc* doc, i32 formId, i32 treeIndex, UXRscObject* o, i32 objIndex)
+```
+
+The class the document gives an object, or null. It is looked up by logical
+id, so a control is the same class in every layout.
+
+### applyState
+
+```c
+static void applyState(UXView* w, UXRscObject* o)
+```
+
+Copies an object's state into its view: enabled, hidden, checked, selected and
+text alignment.
+
+### applyText
+
+```c
+static void applyText(UXView* w, UXRscObject* o)
+```
+
+Copies an object's text into the view already built for it, without replacing
+the view.
+
+### textOf
+
+```c
+static u8* textOf(UXRscObject* o)
+```
+
+An object's text: its string, or its `TEDINFO` text, or "".
+
+### typeName
+
+```c
+static u8* typeName(i32 t)
+```
+
+A short name for a GEM type ("button", "ftext"), for placeholders and outlines.
 
 ### make
 
@@ -159,35 +170,36 @@ The same for non-view objects named by the nib.
 static Object* make(u8* cls)
 ```
 
-Instantiates by class name, through the registered factory.
+Makes an object by class name through the registered factories, or returns
+null when none knows the name.
 
-### classOverride
+### registerObjectFactory
 
 ```c
-static u8* classOverride(pointer doc, i32 ncl, i32 tree, i32 obj)
+static void registerObjectFactory(pointer fn)
 ```
 
-The class name a resource records for a particular object, when it wants
-something other than the default for that type. This is the stored form of
-"this button is a `FancyButton`".
+Adds a factory, a function from a class name to a new object or null. The
+compiler generates one for each module that has designable classes and
+registers it at load time, so you only call this for a factory you write
+yourself. Up to eight are tried in turn, so classes can come from several
+libraries.
 
-## Two things to know before you rely on it
+### registerViewFactory
 
-**The resource owns the layout; you own the behaviour.** Frames, flags and
-initial state come from the file, so moving a control is an edit in the editor
-instead of a recompile. Anything you set in code after load is overwritten
-on the next load, because the file is the source of truth for those fields.
+```c
+static void registerViewFactory(pointer fn)
+```
 
-**A tree index is positional.** Trees are addressed by number, not name, because
-`.rsc` does not store tree names. If you delete a tree in the editor, every index
-after it shifts. Rocks renumbers the links it owns, but you must keep any index
-hard-coded in your source correct.
+The older name for `registerObjectFactory`.
 
 ## See also
 
-- [`UXDesignable`](/compiler/api/uxkit/uxdesignable/): the two generated
-  methods, and the `outlet` / `:action` decorations
-- [`UXNibV2`](/compiler/api/uxkit/uxnibv2/): the newer format, with variants
-  per form factor
-- [`UXViewTree`](/compiler/api/uxkit/uxviewtree/): what a load produces
-- [`UXView`](/compiler/api/uxkit/uxview/): `adoptObject`, the binding step
+- [`UXNibInstance`](/compiler/api/uxkit/uxnibinstance/): what a load returns
+- [`UXNibAwaking`](/compiler/api/uxkit/uxnibawaking/): finishing setup after
+  the outlets are connected
+- [`UXDesignable`](/compiler/api/uxkit/uxdesignable/): the `outlet` and
+  `:action` decorations the connections bind to
+- [`UXRscDoc`](/compiler/api/uxkit/uxrscdoc/): the document model
+- [`UXNibGem`](/compiler/api/uxkit/uxnibgem/): the GEM-only loader that binds
+  views onto libGEM's own object array

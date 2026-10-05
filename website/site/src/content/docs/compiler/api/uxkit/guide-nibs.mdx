@@ -1,34 +1,37 @@
 ---
 title: "Guide: nibs, or designing a window instead of writing one"
-description: "A .rsc is the nib, and it is live. How outlets and actions wire themselves, why there is no inflation step, and what v2's variants provide."
+description: "A .rsc is the nib. How outlets and actions wire themselves, how one form carries a layout per form factor, and how connections can differ between them."
 ---
 
 The other guides build windows in code. This guide loads them from a designed
 resource.
 
 ```c
-UXViewTree* t = UXNib.loadWired((u8*)"app.rsc", 0, (UXDesignable*)self);
+UXNibInstance* ni = UXNib.load(bytes, len, FORM_PREFS, (UXDesignable*)self, window.contentView);
 ```
 
 After this one call, a designed dialog is on screen with its outlets assigned
 and its buttons wired to your methods. There is no layout code, no `setAction`
 call and no per-control setup.
 
-## A .rsc *is* the nib, and it is live
+## A .rsc *is* the nib
 
-There is no inflation step. A GEM resource already contains an `OBJECT` tree,
-and a [`UXView`](/compiler/api/uxkit/uxview/) is backed by an `OBJECT`, so
-loading a nib means loading the tree and **binding** a view onto each entry.
+A GEM resource already contains an `OBJECT` tree for each dialog, so the
+resource file is the nib. **Rocks**, the resource editor, is the Interface
+Builder for this toolkit, and what it writes is still a classic `.rsc` that any
+GEM AES reads. What GEM does not know about (layouts per form factor, custom
+classes, controllers and connections) is in a chunk after the classic data,
+where a GEM AES does not look.
 
-```
-Rocks (macOS) --writes--> app.rsc --rscload--> OBJECT[] --UXNib--> UXViewTree
-```
+There are two loaders:
 
-Nothing is copied or rebuilt. The AES walks the resource's own array.
+| | |
+| --- | --- |
+| [`UXNib`](/compiler/api/uxkit/uxnib/) | every backend, from 0.67. Builds UXKit views from the document, for this device's layout |
+| [`UXNibGem`](/compiler/api/uxkit/uxnibgem/) | GEM only. Binds views onto libGEM's own `OBJECT` array, so the AES walks the resource in place; one layout, unscoped connections |
 
-**Rocks**, the resource editor, is therefore the Interface Builder for this
-toolkit. A dialog designed there is a live view hierarchy here, with no
-conversion in between. What you dragged is what runs.
+Rocks draws its canvas with `UXNib`'s own view mapping, so what you drag is
+what loads.
 
 :::tip[The resource supplies the *what*; you supply the *behaviour*]
 Views are chosen by `ob_type`. The resource says what each object **is** (its
@@ -64,7 +67,7 @@ generates both of its methods from the decorations:
 | `setOutlet(name, value)` | a checked assignment per `outlet` |
 | `wireAction(name, control)` | `control.setAction(&self.<method>)` per `:action` |
 
-`UXNib` reaches a loaded object through that protocol and wires the nib's
+The loader reaches a loaded object through that protocol and wires the nib's
 connections **by name**. There is no per-application code, and no reflection
 beyond what the decorations declare and the compiler has checked.
 
@@ -99,27 +102,29 @@ mean "nothing happened", so do not use it as a safe probe on an outlet that
 already holds something.
 :::
 
-## Loading, in three shapes
+## Loading
 
 ```c
-UXNib.load(path, treeIndex);                        // just the views
-UXNib.loadWired(path, treeIndex, owner);            // + connections
-UXNib.loadWiredMem(bytes, len, treeIndex, owner);   // from memory
+UXNib.load(bytes, len, formId, owner, into);            // this device's layout
+UXNib.loadDoc(doc, formId, owner, into);                // from a document already read
+UXNib.loadDocAs(doc, formId, klass, orient, owner, into); // a given layout theme
 ```
 
-[`load`](/compiler/api/uxkit/uxnib/) gives you the view tree and nothing else.
-Use it for a purely visual resource with no behaviour.
+The `owner` is **File's Owner**: the object whose outlets get filled and whose
+actions get bound. It is your window controller. `into` is the view the form is
+added to, usually a window's content view.
 
-`loadWired` is the usual choice. The `owner` is **File's Owner**: the object
-whose outlets get filled and whose actions get bound. It is your window
-controller, and it is the only thing you hand the loader.
+Each returns **null**, never a partial form, when the bytes do not parse or
+there is no such form.
 
-`loadWiredMem` takes bytes instead of a path. Use it for a resource embedded in
-the executable, downloaded, or built in a test.
+Besides File's Owner, a form can list **top-level objects**: controllers and
+other non-view objects, each of a class you name in Rocks. The loader makes
+them, connects their outlets and actions like the owner's, and returns them in
+the [`UXNibInstance`](/compiler/api/uxkit/uxnibinstance/).
 
-All three return **null**, never a partial tree, when the file is missing, the
-tree index is out of range, or the resource does not parse. One check covers
-all three cases.
+When every connection is made, each object the load made that conforms to
+[`UXNibAwaking`](/compiler/api/uxkit/uxnibawaking/), and then File's Owner, is
+sent `awakeFromNib`. That is where code that needs its outlets goes.
 
 ## Classes come from a compiler-generated factory
 
@@ -143,43 +148,30 @@ This has two consequences:
   refers to a deleted class loads with that object missing, and the connections
   to it fail quietly.
 
-## v1 and v2: why there are two
-
-The two versions differ in capability. v2 does not replace v1.
+## The chunk's versions
 
 | | |
 | --- | --- |
-| **v1** (`XGNB`) | read by `libGEM`'s C `rscload` — **GEM-only** |
-| **v2** (`UXNB`) | parsed by [`UXNibV2`](/compiler/api/uxkit/uxnibv2/) in portable code — **every backend** |
+| **v1** (`XGNB`) | class overrides, top-level objects, connections |
+| **v2** (`UXNB`) | adds forms with a layout per form factor, and logical ids |
+| **v3** (`UXNB`) | adds a scope to each connection, labels for top-level objects, and extension sections. From 0.67 |
 
-The other six backends cannot use a format that only one platform's C library
-reads. v2 is therefore parsed in xc, from the raw bytes, with no host
-dependency. Variant selection, logical-id resolution and validation can then
-run, and be **gated**, on wasm32 as well as on the board.
-
-The two coexist because their magic numbers differ. The C reader does not see a
-v2 file. The new parser reports a v1 file as version 1 and presents it under
-the compatibility rule: every tree is its own single-variant form of class
-`any`.
-
-Existing resources keep working without any conversion.
+`UXNib` reads all three, in portable code, on every backend. A v1 file reads
+under the compatibility rule: every tree is its own form, with one layout for
+every form factor. Existing resources keep working without any conversion.
 
 ## Variants: one nib, several form factors
 
-Variants are the main reason v2 exists.
-
-```c
-i32 chosen;
-i32 tree = nib.selectTree(formId, gDriver.formFactorClass(), &chosen);
-```
-
 A form can carry several **variants** (a phone layout, a tablet layout, a
-desktop layout), and `selectTree` picks the best available one by walking a
+desktop layout), and the loader picks the best available one by walking a
 fallback chain. A nib that ships only a desktop variant still loads on a phone,
 by falling back.
 
-`chosen` reports which variant was used. This distinguishes "a phone layout
-exists" from "the desktop layout is in use on a phone".
+The instance's `klass` reports which variant was used. This distinguishes "a
+phone layout exists" from "the desktop layout is in use on a phone".
+
+Each variant is a whole tree of its own, so a phone layout can nest controls in
+containers the desktop layout does not have.
 
 ### Logical ids are how the code stays the same
 
@@ -201,9 +193,18 @@ control, variants would differ only in geometry, and a layout system already
 handles geometry.
 :::
 
+### Connections can differ per layout
+
+From 0.67 each connection has a **scope**: the layout themes it binds in. The
+default is all of them. A phone that fires `showDetail` from a toolbar button
+and a desktop that fires it from a list's selection have two connections to
+the same action, one scoped to the phone and one to the desktop and tablet.
+The loader binds only the connections whose scope includes the layout it
+loaded. See [`UXNib`](/compiler/api/uxkit/uxnib/#connections-per-layout-theme).
+
 ## The mistake that costs an afternoon
 
-:::danger[The v2 parser borrows your buffer]
+:::danger[The byte parser borrows your buffer]
 Every `u8*` it returns (class names, member names, form names) points **into
 the bytes you passed to `open`**. They are valid only while you keep that
 buffer alive and unmodified.
@@ -225,18 +226,22 @@ you own their lifetime.
 
 ## Testing a nib without a designer
 
-`loadWiredMem` takes bytes, and a `.rsc` can be built in-process. The nib
-pipeline is gated this way: construct a resource with a `UXNB` chunk, load it
-against a controller, and assert that the whole graph landed (outlets assigned,
-actions bound, a designable view working as an action target).
+A document can be built in-process with
+[`UXRscDoc`](/compiler/api/uxkit/uxrscdoc/), written with
+[`UXRscWriter`](/compiler/api/uxkit/uxrscwriter/), and loaded with
+`loadDocAs` for each theme. The nib pipeline is gated this way: a form with a
+desktop and a phone layout, a custom view class, a controller and scoped
+connections is loaded for the desktop, the phone and a tablet, and each load
+must bind the connections in its scope and no others.
 
 A nib change is therefore testable like any other change, without someone
 clicking through a window.
 
 ## Where to go next
 
-- [`UXNib`](/compiler/api/uxkit/uxnib/): loading, and the v1 surface
-- [`UXNibV2`](/compiler/api/uxkit/uxnibv2/): variants, logical ids, refs
+- [`UXNib`](/compiler/api/uxkit/uxnib/): loading a form
+- [`UXRscDoc`](/compiler/api/uxkit/uxrscdoc/): the document model
+- [`UXNibV2`](/compiler/api/uxkit/uxnibv2/): the chunk read in place
 - [`UXDesignable`](/compiler/api/uxkit/uxdesignable/): the two generated
   methods, and what the decorations mean
 - [`UXViewTree`](/compiler/api/uxkit/uxviewtree/): what a loaded nib becomes

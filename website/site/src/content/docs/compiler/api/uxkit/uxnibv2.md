@@ -1,10 +1,11 @@
 ---
 title: UXNibV2
-description: "The UXNB v2 nib chunk, parsed in xc rather than in the host, so variant selection and logical-id resolution work on every backend."
+description: "The UXNB nib chunk (v2 and v3), parsed in xc rather than in the host, so variant selection and logical-id resolution work on every backend."
 ---
 
-`UXNibV2` reads the **UXNB v2** chunk out of a `.rsc` file, entirely in portable
-code.
+`UXNibV2` reads the **UXNB** chunk (v2, and from 0.67 v3) out of a `.rsc` file,
+entirely in portable code. It reads the bytes in place; to load a form, use
+[`UXNib`](/compiler/api/uxkit/uxnib/).
 
 ```c
 #use <UXKit>            // or #import "UXNibV2.xc"
@@ -13,7 +14,7 @@ code.
 ## Why v2 is parsed here and v1 is not
 
 v1's chunk is read by `libGEM`'s C `rscload`, whose surface
-[`UXNib`](/compiler/api/uxkit/uxnib/) declares. That makes
+[`UXNibGem`](/compiler/api/uxkit/uxnibgem/) declares. That makes
 **v1 nib loading GEM-only**.
 
 v2 is parsed here, from the raw bytes, with no host dependency. Variant
@@ -29,7 +30,7 @@ The **magics differ**:
 
 | magic | |
 | --- | --- |
-| `UXNB` | v2 — invisible to the C v1 reader |
+| `UXNB` | v2 and v3 — invisible to the C v1 reader |
 | `XGNB` | v1 — this parser reports it as version 1 |
 
 A v2 file cannot confuse the old reader. A v1 file handed to this parser is
@@ -38,6 +39,20 @@ form of class `any`**.
 
 There is no migration step. Old resources keep working, new ones gain
 variants, and the same code path consumes both.
+
+## v3: scoped connections
+
+From 0.67 the chunk can be version 3. Three things change:
+
+- A connection carries a **scope**, the layout themes it binds in.
+  [`connScope`](#connscope) reads it, and every v2 connection reads as 0, all
+  themes.
+- A top-level object carries a **label**, the name the designer shows.
+- The chunk can carry **extension sections**, `{tag, size, body}`, which a
+  reader skips by size when it does not know the tag.
+
+The classic body is unchanged, so a v3 file is still a plain `.rsc` to a GEM
+AES.
 
 ## Variant selection walks a chain
 
@@ -129,7 +144,7 @@ another.
 
 ## Topics
 
-[open](#open) · [parse](#parse) · [version](#version) · [formCount](#formcount) · [formAt](#format) · [formOffById](#formoffbyid) · [formName](#formname) · [selectTree](#selecttree) · [selectTreeOriented](#selecttreeoriented) · [classOf](#classof) · [orientOf](#orientof) · [objForLogical](#objforlogical) · [resolveView](#resolveview) · [str](#str)
+[open](#open) · [parse](#parse) · [version](#version) · [formCount](#formcount) · [formAt](#format) · [formOffById](#formoffbyid) · [formName](#formname) · [selectTree](#selecttree) · [selectTreeOriented](#selecttreeoriented) · [chainAt / chain](#chainat--chain) · [classOf](#classof) · [orientOf](#orientof) · [objForLogical](#objforlogical) · [resolveView](#resolveview) · [connScope](#connscope) · [connInScope](#conninscope) · [themeBit](#themebit) · [topObjectLabel](#topobjectlabel) · [extCount](#extcount) · [extTag / extSize / extBody](#exttag--extsize--extbody) · [str](#str)
 
 ### open
 
@@ -155,8 +170,8 @@ Check this before trusting anything else.
 i32 version(void)
 ```
 
-`1` for a v1 file presented through the compatibility rule, `2` for a real v2
-chunk.
+`1` for a v1 file presented through the compatibility rule, otherwise the
+chunk's own version, `2` or `3`.
 
 ### formCount
 
@@ -207,6 +222,15 @@ The best variant for a class held at an orientation (`UX_ORIENT_*`). See
 [Orientation is a second axis](#orientation-is-a-second-axis).
 `chosenOrient` reports the orientation of the tree that won.
 
+### chainAt / chain
+
+```c
+i32 chainAt(i32 klass, i32 step)
+static i32 chain(i32 klass, i32 step)
+```
+
+The form-factor class at `step` (0 to 3) of `klass`'s fallback chain.
+
 ### classOf
 
 ```c
@@ -242,6 +266,53 @@ what they point at: a view by coordinate, a top-level object, the owner, or a
 view by logical id. This lets a connection survive a variant that moved
 things around.
 
+### connScope
+
+```c
+u32 connScope(i32 i)
+```
+
+Connection `i`'s scope: bit `class * 3 + orientation` per theme, 0 for all.
+
+### connInScope
+
+```c
+bool connInScope(i32 i, i32 klass, i32 orient)
+```
+
+Whether connection `i` binds in a theme.
+
+### themeBit
+
+```c
+static u32 themeBit(i32 klass, i32 orient)
+```
+
+### topObjectLabel
+
+```c
+u8* topObjectLabel(i32 i)
+```
+
+The designer's name for top-level object `i`; "" before v3.
+
+### extCount
+
+```c
+i32 extCount(void)
+```
+
+### extTag / extSize / extBody
+
+```c
+u32 extTag(i32 i)
+u32 extSize(i32 i)
+u32 extBody(i32 i)
+```
+
+Extension section `i`: its tag, its size, and the offset of its body in the
+buffer.
+
 ### str
 
 ```c
@@ -252,8 +323,9 @@ A string from the chunk's table, borrowed.
 
 ## See also
 
-- [`UXNib`](/compiler/api/uxkit/uxnib/): v1, and the host surface that makes it
-  GEM-only
+- [`UXNib`](/compiler/api/uxkit/uxnib/): loading a form on every backend
+- [`UXNibGem`](/compiler/api/uxkit/uxnibgem/): v1, and the host surface that
+  makes it GEM-only
 - [`UXViewDriver`](/compiler/api/uxkit/uxviewdriver/): `formFactorClass`, which
   supplies the class `selectTree` is asked for
 - [`UXViewTree`](/compiler/api/uxkit/uxviewtree/): what a loaded nib becomes

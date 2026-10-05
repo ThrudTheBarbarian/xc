@@ -1,4 +1,4 @@
-// UXNibV2.xc — the UXNB v2 chunk, parsed in xtc (docs/UXNB-V2.md).
+// UXNibV2.xc — the UXNB v2 and v3 chunk, parsed in xc (docs/UXNB-V2.md; v3 is its §11).
 //
 // v1's chunk is read by libGEM's C rscload (UXNib.xc declares that surface), which
 // makes v1 nib loading GEM-only.  v2 is parsed HERE, from the raw .rsc bytes, with
@@ -31,7 +31,7 @@ class UXNibV2
     {
     u8* buf; // the whole .rsc image (borrowed)
     u32 len;
-    i32 ver;   // 1 or 2
+    i32 ver;   // 1, 2 or 3
     u32 chunk; // offset of the shell (at rsh_rssize)
     u32 body;  // offset of the first count word
     // section counts
@@ -41,6 +41,7 @@ class UXNibV2
     i32 nForms;
     i32 nMaps;
     i32 nPres;
+    i32 nExt; // v3 extension sections
     // section offsets (absolute into buf)
     u32 offForms;
     u32 offMaps;
@@ -48,6 +49,7 @@ class UXNibV2
     u32 offTopobj;
     u32 offConns;
     u32 offPres;
+    u32 offExt;
     u32 offBlob;
 
     void init(void)
@@ -90,11 +92,11 @@ class UXNibV2
         if (magic == (u32)$55584E42)
             {
             // "serialised by a newer" -> refuse loudly
-            if (v != (i32)2)
+            if (v != (i32)2 && v != (i32)3)
                 {
                 return (UXNibV2*)0;
                 }
-            n.ver = (i32)2;
+            n.ver = v;
             }
         // 'XGNB' — the v1 magic, read as v1
         else if (magic == (u32)$58474E42)
@@ -129,6 +131,7 @@ class UXNibV2
             nForms = (i32)0;
             nMaps = (i32)0;
             nPres = (i32)0;
+            nExt = (i32)0;
             offForms = at;
             offMaps = at;
             }
@@ -140,6 +143,12 @@ class UXNibV2
             at = at + (u32)2;
             nPres = (i32)self.rdU16(at);
             at = at + (u32)2;
+            nExt = (i32)0;
+            if (ver >= (i32)3)
+                {
+                nExt = (i32)self.rdU16(at);
+                at = at + (u32)4; // nExt, _pad
+                }
             // forms are variable-length: {formId, name, nVar, _pad} + nVar*(class, tree)
             offForms = at;
             for (i32 f = (i32)0; f < nForms; f = f + (i32)1)
@@ -158,17 +167,22 @@ class UXNibV2
         offClassov = at;
         at = at + (u32)nClasses * (u32)10;
         offTopobj = at;
-        at = at + (u32)nObjects * (u32)6;
+        at = at + (u32)nObjects * self.topStride();
         offConns = at;
-        at = at + (u32)nConns * (u32)18;
+        at = at + (u32)nConns * self.connStride();
         offPres = at;
-        if (ver == (i32)2)
+        if (ver >= (i32)2)
             {
             for (i32 p = (i32)0; p < nPres; p = p + (i32)1)
                 {
                 u32 nr = self.rdU16(at + (u32)2);
                 at = at + (u32)8 + nr * (u32)4;
                 }
+            }
+        offExt = at;
+        for (i32 e = (i32)0; e < nExt && at + (u32)8 <= len; e = e + (i32)1)
+            {
+            at = at + (u32)8 + ((self.rdU32(at + (u32)4) + (u32)1) & (u32)$FFFFFFFE);
             }
         offBlob = at;
         return at <= len;
@@ -177,6 +191,15 @@ class UXNibV2
     i32 version(void)
         {
         return ver;
+        }
+    // v3 widened two records: a top object gained its label, a connection its scope.
+    u32 topStride(void)
+        {
+        return ver >= (i32)3 ? (u32)10 : (u32)6;
+        }
+    u32 connStride(void)
+        {
+        return ver >= (i32)3 ? (u32)22 : (u32)18;
         }
     // 0 = "" by construction
     u8* str(u32 off)
@@ -223,6 +246,10 @@ class UXNibV2
     // nearest-smaller, `any` last.  Writes the class that actually won into
     // chosenClass (the nibVariantClass answer); returns the tree index or -1.
     i32 chainAt(i32 klass, i32 step)
+        {
+        return UXNibV2.chain(klass, step);
+        }
+    static i32 chain(i32 klass, i32 step)
         {
         if (klass == (i32)UX_FORM_PHONE)
             {
@@ -456,11 +483,16 @@ class UXNibV2
         }
     i32 topObjectId(i32 i)
         {
-        return (i32)self.rdU16(offTopobj + (u32)i * (u32)6);
+        return (i32)self.rdU16(offTopobj + (u32)i * self.topStride());
         }
     u8* topObjectName(i32 i)
         {
-        return self.str(self.rdU32(offTopobj + (u32)i * (u32)6 + (u32)2));
+        return self.str(self.rdU32(offTopobj + (u32)i * self.topStride() + (u32)2));
+        }
+    // The designer's name for it ("Library Controller"); "" before v3 or when unnamed.
+    u8* topObjectLabel(i32 i)
+        {
+        return ver >= (i32)3 ? self.str(self.rdU32(offTopobj + (u32)i * (u32)10 + (u32)6)) : (u8*)"";
         }
 
     i32 connCount(void)
@@ -469,7 +501,7 @@ class UXNibV2
         }
     u32 connAt(i32 i)
         {
-        return offConns + (u32)i * (u32)18;
+        return offConns + (u32)i * self.connStride();
         }
     i32 connKind(i32 i)
         {
@@ -487,6 +519,49 @@ class UXNibV2
     u8* connMember(i32 i)
         {
         return self.str(self.rdU32(self.connAt(i) + (u32)14));
+        }
+    // The themes a connection applies to: bit class*3+orient; 0 = every theme (all of v2).
+    u32 connScope(i32 i)
+        {
+        return ver >= (i32)3 ? self.rdU32(self.connAt(i) + (u32)18) : (u32)0;
+        }
+    static u32 themeBit(i32 klass, i32 orient)
+        {
+        return (u32)1 << (u32)(klass * (i32)3 + orient);
+        }
+    // Whether connection i binds in the theme (klass, orient).
+    bool connInScope(i32 i, i32 klass, i32 orient)
+        {
+        u32 sc = self.connScope(i);
+        return sc == (u32)0 || (sc & UXNibV2.themeBit(klass, orient)) != (u32)0;
+        }
+
+    // ---- v3 extension sections: {tag u32, size u32, body} ---------------------
+    i32 extCount(void)
+        {
+        return nExt;
+        }
+    u32 extAt(i32 i)
+        {
+        u32 at = offExt;
+        for (i32 e = (i32)0; e < i; e = e + (i32)1)
+            {
+            at = at + (u32)8 + ((self.rdU32(at + (u32)4) + (u32)1) & (u32)$FFFFFFFE);
+            }
+        return at;
+        }
+    u32 extTag(i32 i)
+        {
+        return self.rdU32(self.extAt(i));
+        }
+    u32 extSize(i32 i)
+        {
+        return self.rdU32(self.extAt(i) + (u32)4);
+        }
+    // offset of the body, into the buffer
+    u32 extBody(i32 i)
+        {
+        return self.extAt(i) + (u32)8;
         }
 
     // ---- validation (§4: nibValidate) ---------------------------------------

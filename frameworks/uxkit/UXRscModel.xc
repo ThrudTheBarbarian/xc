@@ -772,6 +772,77 @@ class UXRscColor : Object
         }
     }
 
+    // ---- the nib graph (UXNB v3, docs/UXNB-V2.md section 11) ---------------------
+    // What the trees do not say: which class a control really is, the non-view objects a form
+    // loads with (controllers), and the outlet/action wiring between them.  Kept beside the trees,
+    // not in them, because a form's controls exist once per layout theme and the graph does not.
+    #define UXR_REF_VIEW 0     // a = tree, b = obj: single-variant forms only
+    #define UXR_REF_TOP 1      // a = the top object's id
+    #define UXR_REF_OWNER 2    // File's Owner
+    #define UXR_REF_FIRSTR 3   // First Responder
+    #define UXR_REF_LOGICAL 4  // a = formId, b = logicalId
+    #define UXR_CONN_OUTLET 0  // src.member = dst
+    #define UXR_CONN_ACTION 1  // src (a control) fires dst.member
+    class UXRscRef : Object
+    {
+    i32 space;
+    i32 a;
+    i32 b;
+    static UXRscRef* make(i32 space, i32 a, i32 b)
+        {
+        UXRscRef* r = new UXRscRef();
+        r.space = space;
+        r.a = a;
+        r.b = b;
+        return r;
+        }
+    bool same(UXRscRef* o)
+        {
+        return o != (UXRscRef*)0 && o.space == space && o.a == a && o.b == b;
+        }
+    }
+
+    // A control whose class is not the one its GEM type implies (a G_USERDEF that is a WaveformView).
+    class UXRscClassOverride : Object
+    {
+    UXRscRef* view;
+    u8* cls;
+    }
+
+    // A non-view object the form instantiates: IB's "Object" with a custom class.
+    class UXRscTopObject : Object
+    {
+    i32 id;
+    u8* cls;
+    u8* label; // the designer's name for it; "" = none
+    }
+
+    // One outlet or action.  `scope` is the set of layout themes it binds in: bit klass*3+orient,
+    // 0 = every theme.  One member may carry several connections with disjoint scopes.
+    class UXRscConnection : Object
+    {
+    i32 kind; // UXR_CONN_*
+    UXRscRef* src;
+    UXRscRef* dst;
+    u8* member;
+    u32 scope;
+    static u32 themeBit(i32 klass, i32 orient)
+        {
+        return (u32)1 << (u32)(klass * (i32)3 + orient);
+        }
+    bool inScope(i32 klass, i32 orient)
+        {
+        return scope == (u32)0 || (scope & UXRscConnection.themeBit(klass, orient)) != (u32)0;
+        }
+    }
+
+    // A v3 extension section kept verbatim: a tag this build does not interpret still goes back out.
+    class UXRscExtSection : Object
+    {
+    u32 tag;
+    UXData* body;
+    }
+
     // ---- resource --------------------------------------------------------------
     class UXRscDoc : Object
     {
@@ -779,6 +850,10 @@ class UXRscColor : Object
     Array<UXData>* freeStrings;  // rsrc_gaddr(R_STRING, i) — referenced by nothing
     Array<UXRscBitblk>* freeImages; // rsrc_gaddr(R_IMAGE, i) — likewise
     Array<UXRscForm>* forms;        // the multi-variant forms; a tree in none is its own `any` form
+    Array<UXRscClassOverride>* classOverrides;
+    Array<UXRscTopObject>* topObjects;
+    Array<UXRscConnection>* connections;
+    Array<UXRscExtSection>* extSections;
     bool bigEndian;              // classic 68000 GEM fidelity
     bool packedCoords;           // char/pixel packing on write
     bool embedIcons;             // embed PAM vs reference an external path
@@ -790,6 +865,10 @@ class UXRscColor : Object
         freeStrings = new Array();
         freeImages = new Array();
         forms = new Array();
+        classOverrides = new Array();
+        topObjects = new Array();
+        connections = new Array();
+        extSections = new Array();
         bigEndian = true;
         packedCoords = true;
         embedIcons = true;

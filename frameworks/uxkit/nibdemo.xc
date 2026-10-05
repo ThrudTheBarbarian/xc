@@ -6,7 +6,7 @@
 #import <Stdio.xc>
 #import "UXApplication.xc"
 #import "UXGemDriver.xc"
-#import "UXNib.xc"
+#import "UXNibGem.xc"
 #import "UXBoot.xc"
 
 class Controller : Object<UXApplicationDelegate>
@@ -25,7 +25,7 @@ class Controller : Object<UXApplicationDelegate>
         i32 sh = a.screenHeight();
 
         // The desktop's own resource — the very file Rocks reads and writes.
-        UXViewTree* vt = UXNib.load("/System/OS/Apps/Desktop/desktop.rsc", (i32)0);
+        UXViewTree* vt = UXNibGem.load("/System/OS/Apps/Desktop/desktop.rsc", (i32)0);
         if (vt == (UXViewTree*)0)
             {
             Stdio.printf("could not load the .rsc\n");

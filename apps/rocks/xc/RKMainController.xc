@@ -712,8 +712,8 @@ class RKMainController : Object<UXTableDelegate>
         if (w != (UXView*)0)
             {
             w.setFrame(UXGeom.make((i16)o.x, (i16)o.y, (i16)o.w, (i16)o.h));
-            RKCanvas.applyState(w, o); // enabled, hidden, checked, selected
-            RKCanvas.applyText(w, o);
+            UXNib.applyState(w, o); // enabled, hidden, checked, selected
+            UXNib.applyText(w, o);
             w.setNeedsDisplay();
             }
         // Move the frame, but do NOT re-show the inspector: the edit came FROM
