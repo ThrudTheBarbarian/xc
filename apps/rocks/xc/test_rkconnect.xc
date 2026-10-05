@@ -23,7 +23,10 @@
 u8* getenv(u8* name);
 i32 ux_ak_test_drop_file(i32 handle, u8* path, i32 x, i32 y);
 i32 ux_ak_test_hit(i32 handle, i32 x, i32 y);
+void ux_ak_test_menu_pick(i32 i);
+u8* ux_ak_test_menu_titles(void);
 i32 ux_ak_test_drop_item(i32 handle, u8* text, i32 x, i32 y);
+i32 ux_ak_test_hover_item(i32 handle, u8* text, i32 x, i32 y);
 i32 ux_ak_test_row_drag(i32 handle, i32 node, i32 row, u8* buf, i32 n);
 
 i32 gFails;
@@ -174,6 +177,7 @@ void main(void)
     UXApplication* app = new UXApplication();
     app.setFileDropHandler(&c.onFileDrop);
     app.setItemDropHandler(&c.onItemDrop);
+    app.setItemHoverHandler(&c.onItemHover);
     d.attachApp(app);
     check("the window takes the drop", ux_ak_test_drop_file(win.handle, libPath, (i32)400, (i32)300), (i32)1);
     RKClass* fromLib = c.classBook.find((u8*)"PlayerController");
@@ -309,8 +313,17 @@ void main(void)
     UXRect oa = c.overlay.absoluteFrame();
     i32 dx = (i32)oa.x + (i32)RK_FORM_X + (i32)200;
     i32 dy = (i32)oa.y + (i32)RK_FORM_Y + (i32)120;
+    check("a drag over the form is reported", ux_ak_test_hover_item(win.handle, &carried[(i32)0], dx, dy), (i32)1);
+    checkTrue("and shows the control there", c.preview != (UXView*)0 && (i32)c.preview.frame().x == (i32)200 - c.library.named((u8*)"Slider").w / (i32)2);
+    check("in no document", dt.root.childCount(), before);
+    ux_ak_test_hover_item(win.handle, &carried[(i32)0], dx + (i32)30, dy);
+    checkTrue("following the pointer", c.preview != (UXView*)0 && (i32)c.preview.frame().x == (i32)230 - c.library.named((u8*)"Slider").w / (i32)2);
+    ux_ak_test_hover_item(win.handle, &carried[(i32)0], (i32)-1, (i32)-1);
+    checkTrue("gone when the drag leaves", c.preview == (UXView*)0);
+    ux_ak_test_hover_item(win.handle, &carried[(i32)0], dx, dy);
     check("the drop is delivered", ux_ak_test_drop_item(win.handle, &carried[(i32)0], dx, dy), (i32)1);
     check("it adds one control", dt.root.childCount(), before + (i32)1);
+    checkTrue("in place of the preview", c.preview == (UXView*)0);
     UXRscObject* placed = dt.root.childAt(before);
     RKLibraryItem* sl = c.library.named((u8*)"Slider");
     checkTrue("centred where it was dropped", placed != (UXRscObject*)0 &&
@@ -322,6 +335,36 @@ void main(void)
     c.onUndo((UXMenuItem*)0);
     check("and Undo takes the drop back", c.doc.treeAt(c.shownTree).root.childCount(), before);
     check("leaving the connections", (i32)c.doc.connections.count(), nconn);
+
+    Stdio.printf("-- a right-click on a control: its menu\n");
+    i32 kids = c.doc.treeAt(c.shownTree).root.childCount();
+    i32 conns = (i32)c.doc.connections.count();
+    UXRect sa = c.canvasMap.viewFor(named(c, (u8*)"stop")).absoluteFrame();
+    gInputReplay = true; // a press with no drag after it: the button is let go where it went down
+    ux_ak_test_menu_pick((i32)0);
+    c.onWireFromView(named(c, (u8*)"stop"), (i32)sa.x + (i32)4, (i32)sa.y + (i32)4);
+    checkTrue("Delete, then Connections", streq(ux_ak_test_menu_titles(), (u8*)"Delete|-|Connections"));
+    check("Delete deletes the control", c.doc.treeAt(c.shownTree).root.childCount(), kids - (i32)1);
+    checkTrue("and what was wired to it", (i32)c.doc.connections.count() < conns);
+    c.onUndo((UXMenuItem*)0);
+    check("Undo brings both back", c.doc.treeAt(c.shownTree).root.childCount() * (i32)100 + (i32)c.doc.connections.count(), kids * (i32)100 + conns);
+    ux_ak_test_menu_pick((i32)2);
+    c.onWireFromView(named(c, (u8*)"play"), (i32)sa.x + (i32)4, (i32)sa.y + (i32)4);
+    check("Connections shows the Connections tab", c.inspectorTabs.selectedSegment(), (i32)3);
+    gInputReplay = false;
+    c.selectObject(c.doc.treeAt(c.shownTree).root);
+    checkTrue("a form's own box cannot be deleted", !c.canDelete());
+
+    Stdio.printf("-- the Delete key on the canvas\n");
+    checkTrue("the canvas takes the keyboard", c.overlay.acceptsFirstResponder());
+    c.selectObject(named(c, (u8*)"stop"));
+    UXEvent* ke = new UXEvent();
+    ke.kind = (u8)UXEventKeyDown;
+    ke.key = (u16)$7F; // Backspace, as a Mac keyboard's delete key sends it
+    c.overlay.keyDown(ke);
+    check("deletes the selection", c.doc.treeAt(c.shownTree).root.childCount(), kids - (i32)1);
+    c.onUndo((UXMenuItem*)0);
+    check("and undoes", c.doc.treeAt(c.shownTree).root.childCount(), kids);
 
     Stdio.printf("-- the app: each layout fires what was wired for it\n");
     UXData* bytes = UXRscWriter.write(c.doc);

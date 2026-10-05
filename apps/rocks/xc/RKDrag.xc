@@ -423,6 +423,7 @@ class RKDrag : Object
     // Asked first, with the press point on the canvas: true takes the press (the editor is placing
     // an object from the library), and nothing is selected or dragged.
     callback placeAt bool(i32 cx, i32 cy);
+    callback deleteKey void(void); // Delete or Backspace while the canvas has the keyboard
     // A control-drag (the secondary button) starting on a control: the editor draws a connection.
     callback wireFrom void(UXRscObject* o, i32 wx, i32 wy);
     // The line being drawn, in canvas coordinates, while `wiring`; and the rect of the control the
@@ -444,6 +445,7 @@ class RKDrag : Object
         {
         super.init();
         placeAt = (callback bool(i32 cx, i32 cy))0;
+        deleteKey = (callback void(void))0;
         wireFrom = (callback void(UXRscObject * o, i32 wx, i32 wy))0;
         wiring = false;
         offX = (i32)0;
@@ -533,7 +535,25 @@ class RKDrag : Object
             }
         self.finish(o);
         }
-    // The secondary button (on a Mac, a control-click) on a control starts a connection from it.
+    // A click on the canvas gives it the keyboard, so Delete and Backspace delete what is selected;
+    // a text field keeps them while it is being typed in.
+    bool acceptsFirstResponder(void)
+        {
+        return true;
+        }
+    void keyDown(UXEvent* e)
+        {
+        u16 ch = e.key & (u16)UX_KEY_ASCII;
+        bool del = e.key == (u16)$F728 || (e.key < (u16)$100 && (ch == (u16)$7F || ch == (u16)$08));
+        if (del && deleteKey)
+            {
+            deleteKey();
+            return;
+            }
+        super.keyDown(e);
+        }
+    // The secondary button (on a Mac, a control-click) on a control starts a connection from it;
+    // let go where it was pressed, it opens the control's menu.
     void rightMouseDown(UXEvent* e)
         {
         i32 cx = (i32)0;

@@ -103,6 +103,8 @@ class RKMainController : Object<UXTableDelegate>
     RKVariants* variants;           // which properties each layout varies; the rest are shared
     RKBackdrop* backdrop;           // the grid under the canvas, and the form's panel on it
     RKLibraryItem* placing;         // armed by a library pick: the next canvas press places it
+    UXView* preview;                // the control a library drag shows over the form, or 0
+    RKLibraryItem* previewItem;     // what it previews
     // What is selected, by outline row kind (RKON_*): a control (`selected`), a placeholder, or one
     // of the document's objects (selTop); 0 = nothing.
     i32 selKind;
@@ -185,9 +187,12 @@ class RKMainController : Object<UXTableDelegate>
         dock = (RKDock*)0;
         newScope = (UXPopUpButton*)0;
         placing = (RKLibraryItem*)0;
+        preview = (UXView*)0;
+        previewItem = (RKLibraryItem*)0;
         selKind = (i32)0;
         selTop = (i32)0;
         overlay.placeAt = &self.placeAt;
+        overlay.deleteKey = &self.deleteSelection;
         deviceBar = (UXSegmentedControl*)0;
         inspectorTabs = (UXSegmentedControl*)0;
         libraryTable = (UXTableView*)0;
@@ -445,19 +450,7 @@ class RKMainController : Object<UXTableDelegate>
         placing = (RKLibraryItem*)0;
         self.willEdit((u8*)"Add", (Object*)0);
         UXRscTree* t = doc.treeAt(shownTree);
-        UXRscObject* o = UXRscObject.make(it.type, cx > (i32)0 ? cx : (i32)0, cy > (i32)0 ? cy : (i32)0, it.w, it.h);
-        if (it.text != (u8*)0)
-            {
-            o.text = it.text;
-            if (o.ted != (UXRscTedinfo*)0)
-                {
-                o.ted.text = it.text;
-                }
-            }
-        if (it.type == (i32)UXR_T_FIELD)
-            {
-            o.flags = o.flags | (i32)UXR_F_EDITABLE;
-            }
+        UXRscObject* o = RKMainController.objectFor(it, cx, cy);
         t.root.addChild(o);
         t.reparentByGeometry();
         doc.ensureLogicalId(t, o);
@@ -688,12 +681,63 @@ class RKMainController : Object<UXTableDelegate>
             dock.setNeedsDisplay();
             }
         RKEnd* dst = self.endAtWindow(x, y);
+        i32 moved = (x - wx) * (x - wx) + (y - wy) * (y - wy);
+        if (moved <= (i32)16)
+            {
+            self.contextMenu(src, x, y); // a right-click let go where it was pressed: its menu
+            return;
+            }
         if (dst == (RKEnd*)0)
             {
             self.say((u8*)"No connection: let go over a control or an object");
             return;
             }
         self.offerWire(src, dst, x, y);
+        }
+    // The right-click menu of a control or an object: it is selected first, so what the menu does
+    // is done to it.
+    void contextMenu(RKEnd* e, i32 wx, i32 wy)
+        {
+        if (e.isView())
+            {
+            self.selectObject(e.obj);
+            overlay.setSelection(e.obj);
+            }
+        else
+            {
+            self.selectPlaceholder(e.kind, e.topId);
+            }
+        if (gApp != (UXApplication*)0)
+            {
+            gApp.displayIfNeeded();
+            }
+        UXMenu* m = new UXMenu();
+        UXMenuItem* del = m.addItem((u8*)"Delete", &self.onDeleteItem);
+        del.enabled = self.canDelete();
+        m.addSeparator();
+        m.addItem((u8*)"Connections", &self.onShowConnections);
+        m.popUp(overlay.owner != (UXViewTree*)0 ? overlay.owner.winHandle : (i32)0, wx, wy);
+        }
+    void onShowConnections(UXMenuItem* sender)
+        {
+        self.showTab((i32)3);
+        }
+    // Whether Delete has something to delete: an Object, or a control that is not a form's own box.
+    bool canDelete(void)
+        {
+        if (doc == (UXRscDoc*)0)
+            {
+            return false;
+            }
+        if (selKind == (i32)RKON_OBJECT)
+            {
+            return true;
+            }
+        if (selected == (UXRscObject*)0 || shownTree < (i32)0 || shownTree >= doc.treeCount())
+            {
+            return false;
+            }
+        return doc.treeAt(shownTree).parentOf(selected) != (UXRscObject*)0;
         }
     // The end under a window point: a dock item, or a control on the canvas.
     RKEnd* endAtWindow(i32 wx, i32 wy)
@@ -1171,9 +1215,82 @@ class RKMainController : Object<UXTableDelegate>
         free((pointer)path);
         }
     // A file dropped on the window: a resource opens; a library or an .xc source adds its classes.
+    // What a library item adds, at (cx, cy) on the form.
+    static UXRscObject* objectFor(RKLibraryItem* it, i32 cx, i32 cy)
+        {
+        UXRscObject* o = UXRscObject.make(it.type, cx > (i32)0 ? cx : (i32)0, cy > (i32)0 ? cy : (i32)0, it.w, it.h);
+        if (it.text != (u8*)0)
+            {
+            o.text = it.text;
+            if (o.ted != (UXRscTedinfo*)0)
+                {
+                o.ted.text = it.text;
+                }
+            }
+        if (it.type == (i32)UXR_T_FIELD)
+            {
+            o.flags = o.flags | (i32)UXR_F_EDITABLE;
+            }
+        return o;
+        }
+    // A library row dragged over the window: while it is over the form, the control itself
+    // follows the pointer, centred where a drop would put it.  It is a preview only, in no
+    // document; the drop places the real one (onItemDrop).
+    void onItemHover(u8* item, i32 window, i32 x, i32 y)
+        {
+        RKLibraryItem* it = x >= (i32)0 ? library.named(item) : (RKLibraryItem*)0;
+        UXView* form = (UXView*)0; // the shown form's pane: its controls are realized straight into it
+        if (doc != (UXRscDoc*)0 && shownTree >= (i32)0 && shownTree < (i32)panes.count())
+            {
+            form = (UXView* ?)panes.get((u32)shownTree);
+            }
+        bool over = false;
+        if (it != (RKLibraryItem*)0 && it.type != (i32)RKLIB_OBJECT && form != (UXView*)0 && overlay != (RKEditOverlay*)0)
+            {
+            UXRect a = overlay.absoluteFrame();
+            over = x >= (i32)a.x && y >= (i32)a.y && x < (i32)a.x + (i32)a.w && y < (i32)a.y + (i32)a.h;
+            }
+        if (!over || it != previewItem)
+            {
+            if (preview != (UXView*)0)
+                {
+                preview.removeFromSuperview();
+                preview = (UXView*)0;
+                }
+            previewItem = (RKLibraryItem*)0;
+            }
+        if (over)
+            {
+            i32 cx = (i32)0;
+            i32 cy = (i32)0;
+            overlay.toCanvas(x, y, &cx, &cy);
+            UXRect f = UXGeom.make((i16)(cx - it.w / (i32)2), (i16)(cy - it.h / (i32)2), (i16)it.w, (i16)it.h);
+            if (preview == (UXView*)0)
+                {
+                UXRscObject* o = RKMainController.objectFor(it, (i32)0, (i32)0);
+                preview = UXNib.viewFor(o, it.cls);
+                if (preview != (UXView*)0)
+                    {
+                    form.addSubview(preview, f);
+                    UXNib.applyState(preview, o);
+                    previewItem = it;
+                    self.raiseOverlay();
+                    }
+                }
+            else
+                {
+                preview.setFrame(f);
+                }
+            }
+        if (gApp != (UXApplication*)0)
+            {
+            gApp.displayIfNeeded();
+            }
+        }
     // A library row dragged onto the form: placed centred where it is dropped.  A drop outside the form, or of an Object, is a pick.
     void onItemDrop(u8* item, i32 window, i32 x, i32 y)
         {
+        self.onItemHover(item, window, (i32)-1, (i32)-1); // the preview goes: the real one is placed
         RKLibraryItem* it = library.named(item);
         if (it == (RKLibraryItem*)0)
             {

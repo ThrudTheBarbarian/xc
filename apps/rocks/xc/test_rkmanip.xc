@@ -109,7 +109,7 @@ void main(void)
 
     // ---- the overlay is on top ----------------------------------------------
     checkTrue("the overlay is the canvas's topmost child", isTopmost(c.canvas, (UXView*)c.overlay));
-    checkTrue("and it does not take the keyboard", !c.overlay.acceptsFirstResponder());
+    checkTrue("and a click on it takes the keyboard, for Delete", c.overlay.acceptsFirstResponder());
     checkTrue("it knows which form it is editing", c.overlay.drag.root == root0);
     // Asserted HERE, before anything in this test touches them: an editor
     // whose snapping has to be switched on is an editor whose first form is

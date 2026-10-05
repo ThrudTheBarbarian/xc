@@ -84,6 +84,7 @@ class RocksApp : Object<UXApplicationDelegate>
         RKMainBuilder.buildMenu(app, controller);
         app.setFileDropHandler(&controller.onFileDrop); // a library or a source adds its classes
         app.setItemDropHandler(&controller.onItemDrop); // a library row dragged onto the form
+        app.setItemHoverHandler(&controller.onItemHover); // and, before the drop, what it would add
 
         // Open a resource if one is to hand, so the canvas has something real
         // in it — REAL widgets, built from the model by RKCanvas.  UXFileIO
