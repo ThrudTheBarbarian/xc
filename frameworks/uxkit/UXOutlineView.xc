@@ -30,6 +30,10 @@ protocol UXOutlineDataSource
     Object* childOfItem(UXOutlineView * o, Object * item, i32 i);
     bool isExpandable(UXOutlineView * o, Object * item);
     u8* valueForItem(UXOutlineView * o, Object * item, i32 col);
+    // What a row carries when it is dragged out, onto one of the app's windows or another row
+    // (UXApplication.setItemDropHandler); 0 for a row that is not dragged.  Where the backend
+    // supports it (AppKit).
+    optional u8* dragTextForItem(UXOutlineView * o, Object * item);
     }
 
 #define UX_INDENT 12 // px per level
@@ -207,6 +211,29 @@ class UXOutlineNode : Object
             {
             self.flatten((Object*)0, (i32)0);
             }
+        }
+    u8* nativeDragText(pointer item)
+        {
+        if (outlineSource == (UXOutlineDataSource*)0)
+            {
+            return (u8*)0;
+            }
+        callback f u8*(UXOutlineView * o, Object * item) = &outlineSource.dragTextForItem;
+        if (!f)
+            {
+            return (u8*)0;
+            }
+        return f(self, (Object*)item);
+        }
+    // The item under point (x, y) of the window's content, or 0: what a drag let go there is over.
+    Object* itemAtWindowPoint(i32 x, i32 y)
+        {
+        callback f pointer(i32 handle, i32 node, i32 x, i32 y) = &gDriver.outlineItemAt;
+        if (!f || owner == (UXViewTree*)0)
+            {
+            return (Object*)0;
+            }
+        return (Object*)f(owner.winHandle, (i32)index, x, y);
         }
     i32 nativeIsItemExpanded(pointer item)
         {

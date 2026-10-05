@@ -82,6 +82,8 @@ void ux_ak_set_item_drop(pointer fn); // a table row dropped on a window: xgAKIt
 void ux_ak_set_item_hover(pointer fn); // a table row dragged over a window: xgAKItemHover
 void ux_ak_set_table_drag_hook(pointer fn);
 i32 ux_ak_menu_popup(i32 handle, pointer titles, pointer flags, i32 n, i32 x, i32 y);
+void ux_ak_set_outline_drag_hook(pointer fn);
+pointer ux_ak_outline_item_at(i32 handle, i32 node, i32 x, i32 y);
 void ux_ak_window_set_min_size(i32 handle, i32 w, i32 h);     // register the toolkit event forwarder
 void ux_ak_set_turn_hook(pointer fn, i32 ms); // the frame clock: the display link, or a timer for a slow tick
 void ux_ak_set_control_fire(pointer fn); // register the control-click -> action forwarder
@@ -532,6 +534,10 @@ u8* xgAKOutlineValue(pointer o, pointer item, i32 c)
     {
     return ((UXOutlineView*)o).nativeItemValue(item, c);
     }
+u8* xgAKOutlineDragText(pointer o, pointer item, i32 unused)
+    {
+    return ((UXOutlineView*)o).nativeDragText(item);
+    }
 void xgAKOutlineDidExpand(pointer o, pointer item, i32 on)
     {
     ((UXOutlineView*)o).nativeDidExpand(item, on);
@@ -577,6 +583,7 @@ class UXAppKitDriver : Object<UXViewDriver>
         ux_ak_set_outline_hooks((pointer)&xgAKOutlineChildren, (pointer)&xgAKOutlineChild,
                                 (pointer)&xgAKOutlineExpandable, (pointer)&xgAKOutlineValue,
                                 (pointer)&xgAKOutlineDidExpand);
+        ux_ak_set_outline_drag_hook((pointer)&xgAKOutlineDragText);
         ux_ak_set_field_hooks((pointer)&xgAKFieldChanged);  // NSTextField edits fire onChange
         ux_ak_set_field_submit_hooks((pointer)&xgAKFieldSubmitted); // ...and Return fires onSubmit
         ux_ak_set_scroll_content((pointer)&ux_scroll_draw); // a scroll doc view draws its subtree
@@ -1277,6 +1284,10 @@ class UXAppKitDriver : Object<UXViewDriver>
     void windowSetMinSize(i32 handle, i32 w, i32 h)
         {
         ux_ak_window_set_min_size(handle, w, h);
+        }
+    pointer outlineItemAt(i32 handle, i32 node, i32 x, i32 y)
+        {
+        return ux_ak_outline_item_at(handle, node, x, y);
         }
     // NSMenu, popped up where the click was
     i32 menuPopUp(i32 handle, pointer titles, pointer flags, i32 n, i32 x, i32 y)

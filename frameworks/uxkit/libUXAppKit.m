@@ -3750,6 +3750,17 @@ static int g_tbl_reloading = 0; // guard: a reload's selection-restore must not 
 
 static UXTableSource* g_tbl_src[UX_MAXW][UX_MAXN]; // ARC-strong: one datasource per table node
 
+/* Whether every column of a table has an empty title: such a table shows no header row. */
+static int ak_untitled(void* peer, int ncols)
+    {
+    for (int c = 0; c < ncols; c++)
+        {
+        const char* ti = (peer && g_tbl_title) ? g_tbl_title(peer, c) : "";
+        if (ti && ti[0])
+            return 0;
+        }
+    return 1;
+    }
 void ux_ak_make_table(int handle, int node, int x, int y, int w, int h, void* peer)
     {
     NSView* content = g_view[handle];
@@ -3774,6 +3785,8 @@ void ux_ak_make_table(int handle, int node, int x, int y, int w, int h, void* pe
         [tc setWidth:(cw > 0 ? cw : 80)];
         [tv addTableColumn:tc];
         }
+    if (ak_untitled(peer, ncols))
+        [tv setHeaderView:nil]; /* no titles: no header row */
     UXTableSource* src = [[UXTableSource alloc] init];
     src.peer = peer;
     [tv setDraggingSourceOperationMask:NSDragOperationCopy forLocal:YES];
@@ -3852,6 +3865,11 @@ static ux_ol_child_fn g_ol_child = 0;
 static ux_ol_expandable_fn g_ol_expandable = 0;
 static ux_ol_value_fn g_ol_value = 0;
 static ux_ol_didexpand_fn g_ol_didexpand = 0;
+static ux_ol_value_fn g_ol_dragtext = 0; /* what a dragged row carries, or NULL: it does not drag */
+void ux_ak_set_outline_drag_hook(void* fn)
+    {
+    g_ol_dragtext = (ux_ol_value_fn)fn;
+    }
 void ux_ak_set_outline_hooks(void* children, void* child, void* expandable, void* value, void* didexpand)
     {
     g_ol_children = (ux_ol_children_fn)children;
@@ -3863,8 +3881,46 @@ void ux_ak_set_outline_hooks(void* children, void* child, void* expandable, void
 
 @interface UXOutlineSource : NSObject <NSOutlineViewDataSource, NSOutlineViewDelegate>
 @property(assign, nonatomic) void* peer;
+@property(assign, nonatomic) int handle; // the window, for drop points in its content's terms
 @end
 @implementation UXOutlineSource
+/* A row dragged out: what the app says it carries, as the app's private row type. */
+- (id<NSPasteboardWriting>)outlineView:(NSOutlineView*)ov pasteboardWriterForItem:(id)item
+    {
+    void* it = item ? [(NSValue*)item pointerValue] : NULL;
+    const char* t = (self.peer && g_ol_dragtext && it) ? g_ol_dragtext(self.peer, it, 0) : NULL;
+    if (!t)
+        return nil;
+    NSPasteboardItem* pb = [[NSPasteboardItem alloc] init];
+    [pb setString:ak_ns(t) forType:AK_ROW_TYPE];
+    return pb;
+    }
+/* A row dragged over another: it is dropped ON that row (the row is highlighted), not between rows.
+   The app hears it as a drop on the window at the row's point. */
+- (NSDragOperation)outlineView:(NSOutlineView*)ov validateDrop:(id<NSDraggingInfo>)info
+                  proposedItem:(id)item proposedChildIndex:(NSInteger)index
+    {
+    if (![[info draggingPasteboard] stringForType:AK_ROW_TYPE] || !g_itemDrop)
+        return NSDragOperationNone;
+    NSInteger row = [ov rowAtPoint:[ov convertPoint:[info draggingLocation] fromView:nil]];
+    id target = row >= 0 ? [ov itemAtRow:row] : nil;
+    if (!target)
+        return NSDragOperationNone;
+    [ov setDropItem:target dropChildIndex:NSOutlineViewDropOnItemIndex];
+    return NSDragOperationCopy;
+    }
+- (BOOL)outlineView:(NSOutlineView*)ov acceptDrop:(id<NSDraggingInfo>)info item:(id)item childIndex:(NSInteger)index
+    {
+    NSString* t = [[info draggingPasteboard] stringForType:AK_ROW_TYPE];
+    NSView* content = (self.handle > 0 && self.handle < UX_MAXW) ? g_view[self.handle] : nil;
+    if (!t || !g_itemDrop || !content)
+        return NO;
+    NSPoint p = [content convertPoint:[info draggingLocation] fromView:nil];
+    if (g_itemHover)
+        g_itemHover([t UTF8String], self.handle, -1, -1);
+    g_itemDrop([t UTF8String], self.handle, (int)p.x, (int)p.y);
+    return YES;
+    }
 - (NSInteger)outlineView:(NSOutlineView*)ov numberOfChildrenOfItem:(id)item
     {
     void* it = item ? [(NSValue*)item pointerValue] : NULL;
@@ -4071,8 +4127,14 @@ void ux_ak_make_outline(int handle, int node, int x, int y, int w, int h, void* 
             first = tc;
         }
     [ov setOutlineTableColumn:first]; // the column that carries the disclosure triangles + indent
+    if (ak_untitled(peer, ncols))
+        [ov setHeaderView:nil]; /* no titles: no header row */
     UXOutlineSource* src = [[UXOutlineSource alloc] init];
     src.peer = peer;
+    src.handle = handle;
+    [ov setDraggingSourceOperationMask:NSDragOperationCopy forLocal:YES];
+    [ov setDraggingSourceOperationMask:NSDragOperationNone forLocal:NO];
+    [ov registerForDraggedTypes:@[ AK_ROW_TYPE ]];
     [ov setDataSource:src];
     [ov setDelegate:src];
     [sv setDocumentView:ov];
@@ -4596,4 +4658,43 @@ int ux_ak_test_hover_item(int handle, const char* text, int x, int y)
         return 0;
     g_itemHover(text, handle, x, y);
     return 1;
+    }
+
+/* The item of the outline at `node` under window point (x, y) of window `handle`, or NULL. */
+void* ux_ak_outline_item_at(int handle, int node, int x, int y)
+    {
+    if (handle <= 0 || handle >= UX_MAXW || node < 0 || node >= UX_MAXN || !g_view[handle])
+        return NULL;
+    NSScrollView* sv = (NSScrollView*)g_ctl[handle][node];
+    if (![sv isKindOfClass:[NSScrollView class]] || [sv isHidden])
+        return NULL;
+    NSOutlineView* ov = (NSOutlineView*)[sv documentView];
+    if (![ov isKindOfClass:[NSOutlineView class]])
+        return NULL;
+    NSPoint p = [ov convertPoint:NSMakePoint(x, y) fromView:g_view[handle]];
+    if (!NSPointInRect(p, [ov bounds]) || !NSPointInRect([sv convertPoint:NSMakePoint(x, y) fromView:g_view[handle]], [sv bounds]))
+        return NULL;
+    NSInteger row = [ov rowAtPoint:p];
+    id it = row >= 0 ? [ov itemAtRow:row] : nil;
+    return it ? [(NSValue*)it pointerValue] : NULL;
+    }
+/* For tests: what a drag of `item` out of the outline at `node` carries, into buf; 1 if it drags and
+   the outline takes such a row as a drop. */
+int ux_ak_test_outline_drag(int handle, int node, void* item, char* buf, int n)
+    {
+    if (n > 0)
+        buf[0] = 0;
+    if (handle <= 0 || handle >= UX_MAXW || node < 0 || node >= UX_MAXN)
+        return 0;
+    NSScrollView* sv = (NSScrollView*)g_ctl[handle][node];
+    if (![sv isKindOfClass:[NSScrollView class]])
+        return 0;
+    NSOutlineView* ov = (NSOutlineView*)[sv documentView];
+    id<NSPasteboardWriting> w = [(UXOutlineSource*)[ov dataSource] outlineView:ov pasteboardWriterForItem:[NSValue valueWithPointer:item]];
+    if (!w)
+        return 0;
+    NSString* t = [(NSPasteboardItem*)w stringForType:AK_ROW_TYPE];
+    if (t && n > 0)
+        snprintf(buf, (size_t)n, "%s", [t UTF8String]);
+    return (t && [[ov registeredDraggedTypes] containsObject:AK_ROW_TYPE]) ? 1 : 0;
     }

@@ -31,11 +31,18 @@ protocol UXOutlineDataSource {
     Object* childOfItem(UXOutlineView* o, Object* item, i32 i);
     bool    isExpandable(UXOutlineView* o, Object* item);
     u8*     valueForItem(UXOutlineView* o, Object* item, i32 col);
+    optional u8* dragTextForItem(UXOutlineView* o, Object* item);
 }
 ```
 
 `item` is nil for the root, so one method answers both "what are the
 top-level rows?" and "what are this node's children?".
+
+`dragTextForItem` lets a row be dragged out. A drop on one of the app's
+windows, or on another row of the outline, hands its text to
+[`UXApplication.setItemDropHandler`](/compiler/api/uxkit/uxapplication/#setitemdrophandler);
+a drop on a row reports that row's point. Return 0 for a row that does not
+drag. From 0.7, on AppKit.
 
 **Lifetime rule (inherited from the table):** `valueForItem`'s string
 goes straight into the realized cell and is *not copied*. It must
@@ -61,7 +68,7 @@ tree.addColumn((u8*)"Name", 200);
 ## Topics
 
 **Source** · [setOutlineSource](#setoutlinesource)
-**The visible list** · [visibleCount](#visiblecount) · [nodeAt](#nodeat) · [rowForItem](#rowforitem)
+**The visible list** · [visibleCount](#visiblecount) · [nodeAt](#nodeat) · [rowForItem](#rowforitem) · [itemAtWindowPoint](#itematwindowpoint)
 **Expansion** · [isExpanded](#isexpanded) · [setExpanded](#setexpanded)
 
 ### setOutlineSource
@@ -97,6 +104,15 @@ i32 rowForItem(pointer item)
 ```
 
 The row currently showing an item, or `-1` when it is folded away.
+
+### itemAtWindowPoint
+
+```c
+Object* itemAtWindowPoint(i32 x, i32 y)
+```
+
+The item whose row is under point (x, y) of the window's content, or 0, such
+as where a drag was let go. From 0.7, on AppKit.
 
 ### isExpanded
 
