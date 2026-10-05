@@ -789,9 +789,14 @@ class FeOptions
         // for NVIDIA's driver.
         bool android = false;
         for (u32 i = (u32)0; i < o.defs().count(); i = i + (u32)1)
+            {
             if (((String*)o.defs().get(i)).hasPrefix(String.withCString("PLATFORM_android")))
                 android = true;
-        lower.setParMetal(o.target().equals(String.withCString("arm64")) && !android);
+            }
+        // iOS is arm64 with the iOS platform layer (see PLATFORM_ios below):
+        // its par runtime has no Metal path yet.
+        bool ios = o.libPlatform() != (String*)0 && o.libPlatform().hasPrefix(String.withCString("ios"));
+        lower.setParMetal(o.target().equals(String.withCString("arm64")) && !android && !ios);
         lower.setParPTX(o.target().equals(String.withCString("win64")));
         lower.setVtable(sema.vtable());
         IRModule* mod = lower.run(program, moduleNameOf(o.input()));

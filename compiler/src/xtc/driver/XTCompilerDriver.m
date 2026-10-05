@@ -1824,7 +1824,12 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     XTIRModule* mod = nil;
     // `par` blocks get their Metal source only where Metal exists: macOS on
     // Apple silicon (not iOS for now, not Android).
-    [XTIRParCheck setEmitsMetal:(_options.useArm64Backend && !_options.applePlatform && !_options.androidTarget)];
+    // Metal only where it exists: macOS on Apple silicon. The driver runs the
+    // front end for Android as arm64 with -DPLATFORM_android, so androidTarget
+    // alone is not enough to tell (an Android build carried Metal kernels the
+    // shipped compiler, keyed on the define, rightly left out).
+    BOOL androidBuild = _options.androidTarget || _options.defines[@"PLATFORM_android"] != nil;
+    [XTIRParCheck setEmitsMetal:(_options.useArm64Backend && !_options.applePlatform && !androidBuild)];
     [XTIRParCheck setEmitsPTX:_options.useWin64Backend];
     mod = [XTIRLowering lowerProgram:ast
                           moduleName:modName
