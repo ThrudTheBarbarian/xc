@@ -14190,6 +14190,739 @@ class ClassInfo
         return (String*)0;
         }
 
+    // ── the `par` kernel as Metal source (par-blocks.md §6) ─────────────────
+    // The port of XTIRParMSL: the same kernel, byte for byte. Each GPU thread
+    // runs the block's chunk method over its own slice: a private copy of the
+    // block object's bytes (`st`), lo/hi from its thread index and the span,
+    // the captured arrays through `device` buffers, and each reduction's
+    // partial written to red_<k>[tid]. Control flow is a `pc` dispatch loop,
+    // correct for any CFG (MSL has no goto). 0 when the block cannot run on
+    // Metal: f64, a global, a call other than the maths intrinsics, or IR the
+    // printer does not know.
+    bool _parMetal;   // Apple arm64 (macOS): blocks get their Metal source
+    void setParMetal(bool b) { _parMetal = b; }
+    Map* _mDef;       // value seq -> defining insn
+    Map* _mSpace;     // value seq -> "thread" / "device"
+    Map* _mBufOf;     // value seq -> field index (a loaded captured array)
+    Map* _mOrd;       // value seq -> the ordinal its name carries
+    Map* _mBlk;       // block name -> case number
+    Map* _mBufs;      // field index -> 1 (captured arrays)
+    Map* _mReds;      // field index -> 1 (reductions)
+    IRLayout* _mObj;  // the block object's layout
+    bool _mFailed;
+
+    String* mslScalar(String* t)
+        {
+        if (t == (String*)0) return (String*)0;
+        if (t.equals(String.withCString("I8"))) return String.withCString("char");
+        if (t.equals(String.withCString("U8"))) return String.withCString("uchar");
+        if (t.equals(String.withCString("I16"))) return String.withCString("short");
+        if (t.equals(String.withCString("U16"))) return String.withCString("ushort");
+        if (t.equals(String.withCString("I32"))) return String.withCString("int");
+        if (t.equals(String.withCString("U32"))) return String.withCString("uint");
+        if (t.equals(String.withCString("I64"))) return String.withCString("long");
+        if (t.equals(String.withCString("U64"))) return String.withCString("ulong");
+        if (t.equals(String.withCString("F32"))) return String.withCString("float");
+        if (t.equals(String.withCString("Bool"))) return String.withCString("bool");
+        return (String*)0; // f64 (refused on Metal, §7), aggregates, vectors
+        }
+    String* mslSigned(String* t)
+        {
+        if (t.equals(String.withCString("I8")) || t.equals(String.withCString("U8"))) return String.withCString("char");
+        if (t.equals(String.withCString("I16")) || t.equals(String.withCString("U16"))) return String.withCString("short");
+        if (t.equals(String.withCString("I32")) || t.equals(String.withCString("U32"))) return String.withCString("int");
+        if (t.equals(String.withCString("I64")) || t.equals(String.withCString("U64"))) return String.withCString("long");
+        return mslScalar(t);
+        }
+    String* mslUnsigned(String* t)
+        {
+        if (t.equals(String.withCString("I8")) || t.equals(String.withCString("U8"))) return String.withCString("uchar");
+        if (t.equals(String.withCString("I16")) || t.equals(String.withCString("U16"))) return String.withCString("ushort");
+        if (t.equals(String.withCString("I32")) || t.equals(String.withCString("U32"))) return String.withCString("uint");
+        if (t.equals(String.withCString("I64")) || t.equals(String.withCString("U64"))) return String.withCString("ulong");
+        return mslScalar(t);
+        }
+    u32 mslWidth(String* t)
+        {
+        if (t.equals(String.withCString("I8")) || t.equals(String.withCString("U8")) || t.equals(String.withCString("Bool"))) return (u32)1;
+        if (t.equals(String.withCString("I16")) || t.equals(String.withCString("U16"))) return (u32)2;
+        if (t.equals(String.withCString("I32")) || t.equals(String.withCString("U32")) || t.equals(String.withCString("F32"))) return (u32)4;
+        return (u32)8;
+        }
+    bool mslIsPtr(String* t)
+        {
+        return t != (String*)0 && t.hasPrefix(String.withCString("Ptr("));
+        }
+    // `Ptr(X, window)` -> X (X may hold its own parentheses).
+    String* mslPointee(String* t)
+        {
+        if (!mslIsPtr(t)) return (String*)0;
+        u32 depth = (u32)0;
+        for (u32 i = (u32)4; i < t.byteLength(); i = i + (u32)1)
+            {
+            u8 c = t.byteAt(i);
+            if (c == (u8)'(') depth = depth + (u32)1;
+            else if (c == (u8)')') { if (depth == (u32)0) return t.substringBytes((u32)4, i - (u32)4); depth = depth - (u32)1; }
+            else if (c == (u8)',' && depth == (u32)0) return t.substringBytes((u32)4, i - (u32)4);
+            }
+        return (String*)0;
+        }
+    // `Agg(n)` -> layout n.
+    IRLayout* mslLayoutOf(String* t)
+        {
+        if (t == (String*)0 || !t.hasPrefix(String.withCString("Agg("))) return (IRLayout*)0;
+        u32 n = (u32)0;
+        for (u32 i = (u32)4; i < t.byteLength() && t.byteAt(i) >= (u8)'0' && t.byteAt(i) <= (u8)'9'; i = i + (u32)1)
+            n = n * (u32)10 + (u32)(t.byteAt(i) - (u8)'0');
+        if (n >= _m.layouts().count()) return (IRLayout*)0;
+        return (IRLayout*)_m.layouts().get(n);
+        }
+    String* mslKey(IRValue* v) { return String.withU32(v.seq()); }
+    IRInsn* mslDefOf(IROperand* op)
+        {
+        if (op.kind() != (u8)OPK_USE || op.val() == (IRValue*)0) return (IRInsn*)0;
+        return (IRInsn*)_mDef.get((Hashable*)mslKey(op.val()));
+        }
+    String* mslName(IRValue* v)
+        {
+        String* s = String.withCString("v");
+        String* o = (String*)_mOrd.get((Hashable*)mslKey(v));
+        s.append(o != (String*)0 ? o : String.withCString("0"));
+        return s;
+        }
+    String* mslTypeOf(IROperand* op)
+        {
+        if (op.kind() == (u8)OPK_USE && op.val() != (IRValue*)0) return op.val().ty();
+        return (String*)0;
+        }
+    // An operand as an MSL expression.
+    String* mslExpr(IROperand* op, String* want)
+        {
+        if (op.kind() == (u8)OPK_USE)
+            return mslName(op.val());
+        if (op.kind() == (u8)OPK_IMMI)
+            {
+            String* t = want != (String*)0 ? mslScalar(want) : String.withCString("long");
+            if (t == (String*)0) return (String*)0;
+            if (want != (String*)0 && want.equals(String.withCString("Bool")))
+                return String.withCString(op.imm() != (i64)0 ? "true" : "false");
+            String* s = String.withString(t);
+            s.appendCString("(");
+            s.append(String.withI64(op.imm()));
+            s.appendCString("L)");
+            return s;
+            }
+        if (op.kind() == (u8)OPK_IMMF)
+            {
+            if (want == (String*)0 || !want.equals(String.withCString("F32"))) return (String*)0;
+            u64 raw = (u64)0;
+            String* h = op.fpHex();
+            for (u32 i = (u32)0; i < h.byteLength(); i = i + (u32)1)
+                {
+                u8 c = h.byteAt(i);
+                u64 d = c >= (u8)'a' ? (u64)(c - (u8)'a' + (u8)10) : c >= (u8)'A' ? (u64)(c - (u8)'A' + (u8)10) : (u64)(c - (u8)'0');
+                raw = (raw << (u64)4) | d;
+                }
+            double dv = *(double*)(pointer)&raw;
+            float fv = (float)dv;
+            u32 bits = *(u32*)(pointer)&fv;
+            String* s = String.withCString("as_type<float>(0x");
+            for (i32 sh = (i32)28; sh >= (i32)0; sh = sh - (i32)4)
+                {
+                u32 d = (bits >> (u32)sh) & (u32)15;
+                s.appendByte(d < (u32)10 ? (u8)((u32)'0' + d) : (u8)((u32)'a' + d - (u32)10));
+                }
+            s.appendCString("u)");
+            return s;
+            }
+        return (String*)0;
+        }
+    String* mslPtrType(String* t, String* space)
+        {
+        if (!mslIsPtr(t)) return (String*)0;
+        String* inner = mslScalar(mslPointee(t));
+        if (inner == (String*)0) return (String*)0;
+        String* s = String.withString(space != (String*)0 && space.equals(String.withCString("device")) ? String.withCString("device") : String.withCString("thread"));
+        s.appendCString(" ");
+        s.append(inner);
+        s.appendCString("*");
+        return s;
+        }
+    // `FieldAddr self, #k` -> k, else -1. `self` is the value the body uses
+    // without defining it.
+    i64 mslSelfField(IRInsn* d)
+        {
+        if (d == (IRInsn*)0 || !d.op().equals(String.withCString("FieldAddr")) || d.ops().count() < (u32)2) return (i64)-1;
+        IROperand* b = (IROperand*)d.ops().get((u32)0);
+        IROperand* k = (IROperand*)d.ops().get((u32)1);
+        if (b.kind() != (u8)OPK_USE || b.val() == (IRValue*)0 || _mDef.get((Hashable*)mslKey(b.val())) != (Object*)0 || k.kind() != (u8)OPK_IMMI)
+            return (i64)-1;
+        return k.imm();
+        }
+    String* mslSpaceOfOp(IROperand* op)
+        {
+        if (op.kind() != (u8)OPK_USE || op.val() == (IRValue*)0) return (String*)0;
+        return (String*)_mSpace.get((Hashable*)mslKey(op.val()));
+        }
+    bool mslAnalyse(IRFunc* f)
+        {
+        for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)f.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.phis().count(); i = i + (u32)1)
+                {
+                IRInsn* ip = (IRInsn*)bb.phis().get(i);
+                if (ip.res() != (IRValue*)0) _mDef.set((Hashable*)mslKey(ip.res()), (Object*)ip);
+                }
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* ip = (IRInsn*)bb.insns().get(i);
+                if (ip.res() != (IRValue*)0) _mDef.set((Hashable*)mslKey(ip.res()), (Object*)ip);
+                }
+            }
+        for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)f.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* ip = (IRInsn*)bb.insns().get(i);
+                String* op = ip.op();
+                IRValue* r = ip.res();
+                if (op.equals(String.withCString("FieldAddr")))
+                    {
+                    i64 k = mslSelfField(ip);
+                    if (k >= (i64)0)
+                        {
+                        if (k >= (i64)_mObj.fieldCount()) return false;
+                        _mSpace.set((Hashable*)mslKey(r), (Object*)String.withCString("thread"));
+                        }
+                    else if (ip.ops().count() > (u32)0)
+                        {
+                        String* sp = mslSpaceOfOp((IROperand*)ip.ops().get((u32)0));
+                        if (sp != (String*)0) _mSpace.set((Hashable*)mslKey(r), (Object*)sp);
+                        }
+                    }
+                else if (op.equals(String.withCString("Load")))
+                    {
+                    if (r == (IRValue*)0 || !mslIsPtr(r.ty())) continue;
+                    i64 k = mslSelfField(mslDefOf((IROperand*)ip.ops().get((u32)0)));
+                    if (k <= (i64)0) return false;
+                    _mBufs.set((Hashable*)String.withI64(k), (Object*)String.withCString("1"));
+                    _mSpace.set((Hashable*)mslKey(r), (Object*)String.withCString("device"));
+                    _mBufOf.set((Hashable*)mslKey(r), (Object*)String.withI64(k));
+                    }
+                else if (op.equals(String.withCString("ElementAddr")) || op.equals(String.withCString("Bitcast")))
+                    {
+                    if (r != (IRValue*)0 && mslIsPtr(r.ty()) && ip.ops().count() > (u32)0)
+                        {
+                        String* sp = mslSpaceOfOp((IROperand*)ip.ops().get((u32)0));
+                        if (sp != (String*)0) _mSpace.set((Hashable*)mslKey(r), (Object*)sp);
+                        }
+                    }
+                else if (op.equals(String.withCString("Store")))
+                    {
+                    i64 k = mslSelfField(mslDefOf((IROperand*)ip.ops().get((u32)0)));
+                    if (k > (i64)2) _mReds.set((Hashable*)String.withI64(k), (Object*)String.withCString("1"));
+                    }
+                else if (op.equals(String.withCString("AddrOf")))
+                    return false; // a global (or a function's address): not in this cut
+                }
+            }
+        // Every pointer value but a phi needs a known space.
+        for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)f.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* ip = (IRInsn*)bb.insns().get(i);
+                if (ip.res() != (IRValue*)0 && mslIsPtr(ip.res().ty()) && _mSpace.get((Hashable*)mslKey(ip.res())) == (Object*)0)
+                    return false;
+                }
+            }
+        return true;
+        }
+    String* mslDecl(IRValue* v)
+        {
+        String* t = v.ty();
+        if (t.equals(String.withCString("Mem"))) return String.withCString("");
+        if (mslIsPtr(t))
+            {
+            String* pt = mslPtrType(t, (String*)_mSpace.get((Hashable*)mslKey(v)));
+            if (pt == (String*)0) return String.withCString("");
+            String* s = String.withCString("    ");
+            s.append(pt); s.appendCString(" "); s.append(mslName(v)); s.appendCString(" = 0;\n");
+            return s;
+            }
+        String* n = mslScalar(t);
+        if (n == (String*)0) { _mFailed = true; return String.withCString(""); }
+        String* s = String.withCString("    ");
+        s.append(n); s.appendCString(" "); s.append(mslName(v)); s.appendCString(" = "); s.append(n); s.appendCString("(0);\n");
+        return s;
+        }
+    // The MSL type a value is declared with ("uint", "device uint*").
+    String* mslDeclType(IRValue* v)
+        {
+        if (mslIsPtr(v.ty())) return mslPtrType(v.ty(), (String*)_mSpace.get((Hashable*)mslKey(v)));
+        return mslScalar(v.ty());
+        }
+    // Assign the phis of `target` for the edge from `from`, as a parallel copy.
+    String* mslEdge(IRBlock* from, IRBlock* target, string ind)
+        {
+        String* s = String.withCString("");
+        Array* tmps = new Array();
+        u32 n = (u32)0;
+        for (u32 i = (u32)0; i < target.phis().count(); i = i + (u32)1)
+            {
+            IRInsn* ph = (IRInsn*)target.phis().get(i);
+            if (ph.res() == (IRValue*)0 || ph.res().ty().equals(String.withCString("Mem"))) continue;
+            IROperand* inc = (IROperand*)0;
+            for (u32 k = (u32)0; k + (u32)1 < ph.ops().count(); k = k + (u32)2)
+                if (((IROperand*)ph.ops().get(k)).blk() == from)
+                    inc = (IROperand*)ph.ops().get(k + (u32)1);
+            if (inc == (IROperand*)0) { _mFailed = true; return String.withCString(""); }
+            String* e = mslExpr(inc, ph.res().ty());
+            String* ty = mslDeclType(ph.res());
+            if (e == (String*)0 || ty == (String*)0) { _mFailed = true; return String.withCString(""); }
+            s.appendCString(ind); s.append(ty); s.appendCString(" t"); s.append(String.withU32(n)); s.appendCString(" = "); s.append(e); s.appendCString(";\n");
+            String* a = String.withCString(ind);
+            a.append(mslName(ph.res())); a.appendCString(" = t"); a.append(String.withU32(n)); a.appendCString(";\n");
+            tmps.add((Object*)a);
+            n = n + (u32)1;
+            }
+        for (u32 i = (u32)0; i < tmps.count(); i = i + (u32)1)
+            s.append((String*)tmps.get(i));
+        s.appendCString(ind); s.appendCString("pc = ");
+        String* ci = (String*)_mBlk.get((Hashable*)target.name());
+        s.append(ci != (String*)0 ? ci : String.withCString("0"));
+        s.appendCString("; continue;\n");
+        return s;
+        }
+    String* mslCat3(String* a, string op, String* b)
+        {
+        String* s = String.withString(a); s.appendCString(op); s.append(b); return s;
+        }
+    String* mslBinary(IRInsn* ip)
+        {
+        String* t = ip.res().ty();
+        String* a = mslExpr((IROperand*)ip.ops().get((u32)0), t);
+        String* b = mslExpr((IROperand*)ip.ops().get((u32)1), t);
+        if (a == (String*)0 || b == (String*)0) return (String*)0;
+        String* n = mslScalar(t);
+        String* op = ip.op();
+        String* sym = (String*)0;
+        String* ca = (String*)0;   // the cast both operands take, if any
+        bool castLeftOnly = false;
+        if (op.equals(String.withCString("Add")) || op.equals(String.withCString("FAdd"))) sym = String.withCString(" + ");
+        else if (op.equals(String.withCString("Sub")) || op.equals(String.withCString("FSub"))) sym = String.withCString(" - ");
+        else if (op.equals(String.withCString("Mul")) || op.equals(String.withCString("FMul"))) sym = String.withCString(" * ");
+        else if (op.equals(String.withCString("FDiv"))) sym = String.withCString(" / ");
+        else if (op.equals(String.withCString("UDiv"))) { sym = String.withCString(" / "); ca = mslUnsigned(t); }
+        else if (op.equals(String.withCString("URem"))) { sym = String.withCString(" % "); ca = mslUnsigned(t); }
+        else if (op.equals(String.withCString("SDiv"))) { sym = String.withCString(" / "); ca = mslSigned(t); }
+        else if (op.equals(String.withCString("SRem"))) { sym = String.withCString(" % "); ca = mslSigned(t); }
+        else if (op.equals(String.withCString("And"))) sym = String.withCString(" & ");
+        else if (op.equals(String.withCString("Or"))) sym = String.withCString(" | ");
+        else if (op.equals(String.withCString("Xor"))) sym = String.withCString(" ^ ");
+        else if (op.equals(String.withCString("Shl"))) sym = String.withCString(" << ");
+        else if (op.equals(String.withCString("LShr"))) { sym = String.withCString(" >> "); ca = mslUnsigned(t); castLeftOnly = true; }
+        else if (op.equals(String.withCString("AShr"))) { sym = String.withCString(" >> "); ca = mslSigned(t); castLeftOnly = true; }
+        if (sym == (String*)0) return (String*)0;
+        String* s = String.withString(n);
+        s.appendCString("(");
+        if (ca != (String*)0) { s.append(ca); s.appendCString("("); s.append(a); s.appendCString(")"); }
+        else s.append(a);
+        s.append(sym);
+        if (ca != (String*)0 && !castLeftOnly) { s.append(ca); s.appendCString("("); s.append(b); s.appendCString(")"); }
+        else s.append(b);
+        s.appendCString(")");
+        return s;
+        }
+    String* mslCompare(IRInsn* ip)
+        {
+        IROperand* o0 = (IROperand*)ip.ops().get((u32)0);
+        IROperand* o1 = (IROperand*)ip.ops().get((u32)1);
+        String* t = mslTypeOf(o0) != (String*)0 ? mslTypeOf(o0) : mslTypeOf(o1);
+        if (t == (String*)0) return (String*)0;
+        String* a = mslExpr(o0, t);
+        String* b = mslExpr(o1, t);
+        if (a == (String*)0 || b == (String*)0) return (String*)0;
+        String* p = ip.pred();
+        String* sym = (String*)0;
+        String* cast = (String*)0;
+        if (ip.op().equals(String.withCString("FCmp")))
+            {
+            if (p.equals(String.withCString("OEQ"))) sym = String.withCString(" == ");
+            else if (p.equals(String.withCString("ONE"))) sym = String.withCString(" != ");
+            else if (p.equals(String.withCString("OLT"))) sym = String.withCString(" < ");
+            else if (p.equals(String.withCString("OGT"))) sym = String.withCString(" > ");
+            else if (p.equals(String.withCString("OLE"))) sym = String.withCString(" <= ");
+            else if (p.equals(String.withCString("OGE"))) sym = String.withCString(" >= ");
+            }
+        else
+            {
+            if (p.equals(String.withCString("EQ"))) sym = String.withCString(" == ");
+            else if (p.equals(String.withCString("NE"))) sym = String.withCString(" != ");
+            else if (p.equals(String.withCString("SLT"))) { sym = String.withCString(" < "); cast = mslSigned(t); }
+            else if (p.equals(String.withCString("SGT"))) { sym = String.withCString(" > "); cast = mslSigned(t); }
+            else if (p.equals(String.withCString("SLE"))) { sym = String.withCString(" <= "); cast = mslSigned(t); }
+            else if (p.equals(String.withCString("SGE"))) { sym = String.withCString(" >= "); cast = mslSigned(t); }
+            else if (p.equals(String.withCString("ULT"))) { sym = String.withCString(" < "); cast = mslUnsigned(t); }
+            else if (p.equals(String.withCString("UGT"))) { sym = String.withCString(" > "); cast = mslUnsigned(t); }
+            else if (p.equals(String.withCString("ULE"))) { sym = String.withCString(" <= "); cast = mslUnsigned(t); }
+            else if (p.equals(String.withCString("UGE"))) { sym = String.withCString(" >= "); cast = mslUnsigned(t); }
+            }
+        if (sym == (String*)0) return (String*)0;
+        String* s = String.withCString("(");
+        if (cast != (String*)0 && !t.equals(String.withCString("Bool")))
+            {
+            s.append(cast); s.appendCString("("); s.append(a); s.appendCString(")"); s.append(sym);
+            s.append(cast); s.appendCString("("); s.append(b); s.appendCString(")");
+            }
+        else
+            { s.append(a); s.append(sym); s.append(b); }
+        s.appendCString(")");
+        return s;
+        }
+    // The maths intrinsics, by the callee's name, as precise Metal functions (§7).
+    String* mslIntrinsic(String* callee)
+        {
+        String* m = callee;
+        if (m.hasPrefix(String.withCString("Math$"))) m = m.substringBytes((u32)5, m.byteLength() - (u32)5);
+        String* cut = String.withCString("");
+        for (u32 i = (u32)0; i < m.byteLength(); i = i + (u32)1)
+            {
+            if (m.byteAt(i) == (u8)'_' && i + (u32)1 < m.byteLength() && m.byteAt(i + (u32)1) == (u8)'_') break;
+            cut.appendByte(m.byteAt(i));
+            }
+        m = cut;
+        if (m.hasPrefix(String.withCString("_xm_"))) m = m.substringBytes((u32)4, m.byteLength() - (u32)4);
+        if (m.hasSuffix(String.withCString("f")) && m.byteLength() > (u32)3) m = m.substringBytes((u32)0, m.byteLength() - (u32)1);
+        if (m.equals(String.withCString("sqrt"))) return String.withCString("precise::sqrt");
+        if (m.equals(String.withCString("sin"))) return String.withCString("precise::sin");
+        if (m.equals(String.withCString("cos"))) return String.withCString("precise::cos");
+        if (m.equals(String.withCString("exp"))) return String.withCString("precise::exp");
+        if (m.equals(String.withCString("ln")) || m.equals(String.withCString("log"))) return String.withCString("precise::log");
+        if (m.equals(String.withCString("pow"))) return String.withCString("precise::pow");
+        if (m.equals(String.withCString("floor"))) return String.withCString("floor");
+        if (m.equals(String.withCString("fma"))) return String.withCString("fma");
+        if (m.equals(String.withCString("abs")) || m.equals(String.withCString("fabs"))) return String.withCString("abs");
+        if (m.equals(String.withCString("min"))) return String.withCString("min");
+        if (m.equals(String.withCString("max"))) return String.withCString("max");
+        return (String*)0;
+        }
+    String* mslAssign(IRValue* r, String* e)
+        {
+        if (e == (String*)0) return (String*)0;
+        String* s = mslName(r); s.appendCString(" = "); s.append(e); s.appendCString(";"); return s;
+        }
+    String* mslStatement(IRInsn* ip)
+        {
+        String* op = ip.op();
+        IRValue* r = ip.res();
+        String* rt = r != (IRValue*)0 ? r.ty() : (String*)0;
+        IROperand* o0 = ip.ops().count() > (u32)0 ? (IROperand*)ip.ops().get((u32)0) : (IROperand*)0;
+        if (op.equals(String.withCString("Const")))
+            return mslAssign(r, mslExpr(o0, rt));
+        if (op.equals(String.withCString("Add")) || op.equals(String.withCString("Sub")) || op.equals(String.withCString("Mul")) || op.equals(String.withCString("UDiv")) || op.equals(String.withCString("SDiv")) || op.equals(String.withCString("URem")) || op.equals(String.withCString("SRem")) || op.equals(String.withCString("And")) || op.equals(String.withCString("Or")) || op.equals(String.withCString("Xor")) || op.equals(String.withCString("Shl")) || op.equals(String.withCString("LShr")) || op.equals(String.withCString("AShr")) || op.equals(String.withCString("FAdd")) || op.equals(String.withCString("FSub")) || op.equals(String.withCString("FMul")) || op.equals(String.withCString("FDiv")))
+            return mslAssign(r, mslBinary(ip));
+        if (op.equals(String.withCString("Not")))
+            {
+            String* a = mslExpr(o0, rt);
+            if (a == (String*)0) return (String*)0;
+            if (rt.equals(String.withCString("Bool"))) return mslAssign(r, mslCat3(String.withCString(""), "!", a));
+            String* e = String.withString(mslScalar(rt)); e.appendCString("(~"); e.append(a); e.appendCString(")");
+            return mslAssign(r, e);
+            }
+        if (op.equals(String.withCString("Neg")) || op.equals(String.withCString("FNeg")))
+            {
+            String* a = mslExpr(o0, rt);
+            if (a == (String*)0) return (String*)0;
+            String* e = String.withString(mslScalar(rt)); e.appendCString("(-"); e.append(a); e.appendCString(")");
+            return mslAssign(r, e);
+            }
+        if (op.equals(String.withCString("FSqrt")))
+            {
+            String* a = mslExpr(o0, rt);
+            if (a == (String*)0) return (String*)0;
+            String* e = String.withCString("precise::sqrt("); e.append(a); e.appendCString(")");
+            return mslAssign(r, e);
+            }
+        if (op.equals(String.withCString("ICmp")) || op.equals(String.withCString("FCmp")))
+            return mslAssign(r, mslCompare(ip));
+        if (op.equals(String.withCString("ZExt")) || op.equals(String.withCString("SExt")) || op.equals(String.withCString("Trunc")) || op.equals(String.withCString("SIToFp")) || op.equals(String.withCString("UIToFp")) || op.equals(String.withCString("FpToSI")) || op.equals(String.withCString("FpToUI")) || op.equals(String.withCString("Copy")))
+            {
+            String* st = mslTypeOf(o0) != (String*)0 ? mslTypeOf(o0) : rt;
+            String* a = mslExpr(o0, st);
+            if (a == (String*)0 || mslScalar(rt) == (String*)0) return (String*)0;
+            // Widen through the source's own signedness, as the CPU does.
+            if (op.equals(String.withCString("ZExt"))) { String* w = String.withString(mslUnsigned(st)); w.appendCString("("); w.append(a); w.appendCString(")"); a = w; }
+            else if (op.equals(String.withCString("SExt"))) { String* w = String.withString(mslSigned(st)); w.appendCString("("); w.append(a); w.appendCString(")"); a = w; }
+            String* e = String.withString(mslScalar(rt)); e.appendCString("("); e.append(a); e.appendCString(")");
+            return mslAssign(r, e);
+            }
+        if (op.equals(String.withCString("Select")))
+            {
+            String* c = mslExpr(o0, (String*)0);
+            String* a = mslExpr((IROperand*)ip.ops().get((u32)1), rt);
+            String* b = mslExpr((IROperand*)ip.ops().get((u32)2), rt);
+            if (c == (String*)0 || a == (String*)0 || b == (String*)0) return (String*)0;
+            String* e = String.withString(c); e.appendCString(" ? "); e.append(a); e.appendCString(" : "); e.append(b);
+            return mslAssign(r, e);
+            }
+        if (op.equals(String.withCString("FieldAddr")))
+            {
+            i64 k = mslSelfField(ip);
+            // The slot of a captured array: only ever loaded, and that load is
+            // the buffer itself, so the slot's address needs no code.
+            if (k >= (i64)0 && mslIsPtr(_mObj.typeAt((u32)k)))
+                return String.withCString("");
+            String* sp = (String*)_mSpace.get((Hashable*)mslKey(r));
+            String* pt = mslPtrType(rt, sp);
+            if (pt == (String*)0) return (String*)0;
+            if (k >= (i64)0)
+                {
+                String* e = String.withCString("("); e.append(pt); e.appendCString(")(st + "); e.append(String.withU32(_mObj.offsetAt((u32)k))); e.appendCString(")");
+                return mslAssign(r, e);
+                }
+            // A field of a struct element in a buffer: by its byte offset.
+            IRLayout* l = mslLayoutOf(mslPointee(mslTypeOf(o0)));
+            IROperand* fo = (IROperand*)ip.ops().get((u32)1);
+            if (l == (IRLayout*)0 || fo.kind() != (u8)OPK_IMMI || fo.imm() < (i64)0 || fo.imm() >= (i64)l.fieldCount()) return (String*)0;
+            String* e = String.withCString("("); e.append(pt); e.appendCString(")((");
+            e.appendCString(sp != (String*)0 && sp.equals(String.withCString("device")) ? "device" : "thread");
+            e.appendCString(" uchar*)"); e.append(mslName(o0.val())); e.appendCString(" + "); e.append(String.withU32(l.offsetAt((u32)fo.imm()))); e.appendCString(")");
+            return mslAssign(r, e);
+            }
+        if (op.equals(String.withCString("ElementAddr")))
+            {
+            String* idx = mslExpr((IROperand*)ip.ops().get((u32)1), (String*)0);
+            if (idx == (String*)0) return (String*)0;
+            return mslAssign(r, mslCat3(mslName(o0.val()), " + ", idx));
+            }
+        if (op.equals(String.withCString("Bitcast")))
+            {
+            String* pt = mslIsPtr(rt) ? mslPtrType(rt, (String*)_mSpace.get((Hashable*)mslKey(r))) : mslScalar(rt);
+            if (pt == (String*)0) return (String*)0;
+            String* e = String.withCString("as_type<"); e.append(pt); e.appendCString(">("); e.append(mslExpr(o0, (String*)0)); e.appendCString(")");
+            return mslAssign(r, e);
+            }
+        if (op.equals(String.withCString("Load")))
+            {
+            String* buf = (String*)_mBufOf.get((Hashable*)mslKey(r));
+            if (buf != (String*)0) return mslAssign(r, mslCat3(String.withCString("buf_"), "", buf));
+            if (mslScalar(rt) == (String*)0) return (String*)0;
+            return mslAssign(r, mslCat3(String.withCString("*"), "", mslName(o0.val())));
+            }
+        if (op.equals(String.withCString("Store")))
+            {
+            if (o0.kind() != (u8)OPK_USE) return (String*)0;
+            String* v = mslExpr((IROperand*)ip.ops().get((u32)1), mslPointee(mslTypeOf(o0)));
+            if (v == (String*)0) return (String*)0;
+            String* s = String.withCString("*"); s.append(mslName(o0.val())); s.appendCString(" = "); s.append(v); s.appendCString(";");
+            return s;
+            }
+        if (op.equals(String.withCString("Call")))
+            {
+            String* callee = o0.name();
+            // The static-init machinery: the host has run it.
+            if (callee.equals(String.withCString("_xtc_sinit_run")) || callee.hasSuffix(String.withCString("$init")))
+                return String.withCString("");
+            String* fn = mslIntrinsic(callee);
+            if (fn == (String*)0 || rt == (String*)0 || rt.equals(String.withCString("Mem"))) return (String*)0;
+            String* e = String.withString(fn); e.appendCString("(");
+            bool first = true;
+            for (u32 k = (u32)1; k < ip.ops().count(); k = k + (u32)1)
+                {
+                IROperand* o = (IROperand*)ip.ops().get(k);
+                String* ot = mslTypeOf(o);
+                if (ot != (String*)0 && ot.equals(String.withCString("Mem"))) continue;
+                String* a = mslExpr(o, rt);
+                if (a == (String*)0) return (String*)0;
+                if (!first) e.appendCString(", ");
+                e.append(a);
+                first = false;
+                }
+            e.appendCString(")");
+            return mslAssign(r, e);
+            }
+        if (op.equals(String.withCString("DbgValue")))
+            return String.withCString("");
+        return (String*)0;
+        }
+    String* parMsl(IRFunc* f)
+        {
+        _mDef = new Map(); _mSpace = new Map(); _mBufOf = new Map(); _mOrd = new Map();
+        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false;
+        if (f.params().count() == (u32)0) return (String*)0;
+        _mObj = mslLayoutOf(mslPointee(((IRValue*)f.params().get((u32)0)).ty()));
+        // lo and hi are ParChunk's two i64 ivars, fields 1 and 2 (0 is the vtable).
+        if (_mObj == (IRLayout*)0 || _mObj.fieldCount() < (u32)3 || !_mObj.typeAt((u32)1).equals(String.withCString("I64")) || !_mObj.typeAt((u32)2).equals(String.withCString("I64")))
+            return (String*)0;
+        if (!mslAnalyse(f)) return (String*)0;
+        u32 ord = (u32)0;
+        for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)f.blocks().get(b);
+            _mBlk.set((Hashable*)bb.name(), (Object*)String.withU32(b));
+            for (u32 i = (u32)0; i < bb.phis().count(); i = i + (u32)1)
+                {
+                IRInsn* ip = (IRInsn*)bb.phis().get(i);
+                if (ip.res() != (IRValue*)0 && !ip.res().ty().equals(String.withCString("Mem")))
+                    { _mOrd.set((Hashable*)mslKey(ip.res()), (Object*)String.withU32(ord)); ord = ord + (u32)1; }
+                }
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* ip = (IRInsn*)bb.insns().get(i);
+                if (ip.res() != (IRValue*)0 && !ip.res().ty().equals(String.withCString("Mem")))
+                    { _mOrd.set((Hashable*)mslKey(ip.res()), (Object*)String.withU32(ord)); ord = ord + (u32)1; }
+                }
+            }
+        String* decls = String.withCString("");
+        for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)f.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.phis().count(); i = i + (u32)1)
+                {
+                IRInsn* ph = (IRInsn*)bb.phis().get(i);
+                if (ph.res() == (IRValue*)0 || ph.res().ty().equals(String.withCString("Mem"))) continue;
+                // A phi of pointers takes its incomings' space.
+                if (mslIsPtr(ph.res().ty()))
+                    for (u32 k = (u32)1; k < ph.ops().count(); k = k + (u32)2)
+                        {
+                        String* sp = mslSpaceOfOp((IROperand*)ph.ops().get(k));
+                        if (sp != (String*)0) _mSpace.set((Hashable*)mslKey(ph.res()), (Object*)sp);
+                        }
+                decls.append(mslDecl(ph.res()));
+                }
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* ip = (IRInsn*)bb.insns().get(i);
+                if (ip.res() != (IRValue*)0 && !ip.res().ty().equals(String.withCString("Mem")))
+                    decls.append(mslDecl(ip.res()));
+                }
+            }
+        if (_mFailed) return (String*)0;
+        String* body = String.withCString("");
+        for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)f.blocks().get(b);
+            body.appendCString("        case "); body.append(String.withU32(b)); body.appendCString(": {\n");
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                String* st = mslStatement((IRInsn*)bb.insns().get(i));
+                if (st == (String*)0) return (String*)0;
+                if (st.byteLength() > (u32)0) { body.appendCString("            "); body.append(st); body.appendCString("\n"); }
+                }
+            IRInsn* t = bb.term();
+            if (t == (IRInsn*)0) return (String*)0;
+            if (t.op().equals(String.withCString("Branch")))
+                body.append(mslEdge(bb, ((IROperand*)t.ops().get((u32)0)).blk(), "            "));
+            else if (t.op().equals(String.withCString("CondBranch")))
+                {
+                String* c = mslExpr((IROperand*)t.ops().get((u32)0), (String*)0);
+                if (c == (String*)0) return (String*)0;
+                body.appendCString("            if ("); body.append(c); body.appendCString(") {\n");
+                body.append(mslEdge(bb, ((IROperand*)t.ops().get((u32)1)).blk(), "                "));
+                body.appendCString("            }\n");
+                body.append(mslEdge(bb, ((IROperand*)t.ops().get((u32)2)).blk(), "            "));
+                }
+            else if (t.op().equals(String.withCString("Return")))
+                body.appendCString("            pc = 0xffffffffu; continue;\n");
+            else
+                return (String*)0;
+            body.appendCString("        }\n");
+            }
+        if (_mFailed) return (String*)0;
+        // The header line the runtime reads, and the kernel's parameters.
+        String* meta = String.withCString("// xcpar size=");
+        meta.append(String.withU32(_mObj.size())); meta.appendCString(" lo="); meta.append(String.withU32(_mObj.offsetAt((u32)1)));
+        meta.appendCString(" hi="); meta.append(String.withU32(_mObj.offsetAt((u32)2)));
+        String* params = String.withCString("constant uchar* args [[buffer(0)]], constant long* span [[buffer(1)]]");
+        String* tail = String.withCString("");
+        u32 slot = (u32)2;
+        for (u32 k = (u32)0; k < _mObj.fieldCount(); k = k + (u32)1)
+            {
+            if (_mBufs.get((Hashable*)String.withI64((i64)k)) == (Object*)0) continue;
+            String* pe = mslPointee(_mObj.typeAt(k));
+            String* et = mslScalar(pe);
+            if (et == (String*)0) return (String*)0;
+            meta.appendCString(" buf="); meta.append(String.withU32(_mObj.offsetAt(k))); meta.appendCString(":");
+            meta.append(String.withU32(k - (u32)3)); meta.appendCString(":"); meta.append(String.withU32(mslWidth(pe)));
+            params.appendCString(", device "); params.append(et); params.appendCString("* buf_"); params.append(String.withU32(k));
+            params.appendCString(" [[buffer("); params.append(String.withU32(slot)); params.appendCString(")]]");
+            slot = slot + (u32)1;
+            }
+        for (u32 k = (u32)0; k < _mObj.fieldCount(); k = k + (u32)1)
+            {
+            if (_mReds.get((Hashable*)String.withI64((i64)k)) == (Object*)0) continue;
+            String* et = mslScalar(_mObj.typeAt(k));
+            if (et == (String*)0) return (String*)0;
+            meta.appendCString(" red="); meta.append(String.withU32(_mObj.offsetAt(k))); meta.appendCString(":"); meta.append(String.withU32(mslWidth(_mObj.typeAt(k))));
+            params.appendCString(", device "); params.append(et); params.appendCString("* red_"); params.append(String.withU32(k));
+            params.appendCString(" [[buffer("); params.append(String.withU32(slot)); params.appendCString(")]]");
+            slot = slot + (u32)1;
+            tail.appendCString("    red_"); tail.append(String.withU32(k)); tail.appendCString("[tid] = *(thread "); tail.append(et);
+            tail.appendCString("*)(st + "); tail.append(String.withU32(_mObj.offsetAt(k))); tail.appendCString(");\n");
+            }
+        String* out = String.withString(meta);
+        out.appendCString("\n#include <metal_stdlib>\nusing namespace metal;\n");
+        out.appendCString("kernel void par_kernel("); out.append(params); out.appendCString(", uint tid [[thread_position_in_grid]])\n{\n");
+        out.appendCString("    thread uchar st["); out.append(String.withU32(_mObj.size())); out.appendCString("];\n");
+        out.appendCString("    for (uint q = 0; q < "); out.append(String.withU32(_mObj.size())); out.appendCString("u; q++) st[q] = args[q];\n");
+        out.appendCString("    long lo = span[0] + long(tid) * span[2];\n");
+        out.appendCString("    long hi = min(lo + span[2], span[1]);\n");
+        out.appendCString("    *(thread long*)(st + "); out.append(String.withU32(_mObj.offsetAt((u32)1))); out.appendCString(") = lo;\n");
+        out.appendCString("    *(thread long*)(st + "); out.append(String.withU32(_mObj.offsetAt((u32)2))); out.appendCString(") = hi;\n");
+        out.append(decls);
+        out.appendCString("    uint pc = 0;\n    while (lo < hi && pc != 0xffffffffu) {\n        switch (pc) {\n");
+        out.append(body);
+        out.appendCString("        default: pc = 0xffffffffu; continue;\n        }\n    }\n");
+        out.appendCString("    if (lo >= span[1]) return;\n");
+        out.append(tail);
+        out.appendCString("}\n");
+        return out;
+        }
+
+    // Each block's gpuSource() returns a placeholder literal,
+    // `__XC_PAR_MSL_<n>__`; give it the kernel's Metal source, or "" when the
+    // block stays on the CPU.
+    void parFillSources()
+        {
+        for (u32 i = (u32)0; i < _m.funcs().count(); i = i + (u32)1)
+            {
+            IRFunc* f = (IRFunc*)_m.funcs().get(i);
+            if (!f.name().hasPrefix(String.withCString("ParImpl$")) || !f.name().hasSuffix(String.withCString("$run")))
+                continue;
+            String* n = f.name().substringBytes((u32)8, f.name().byteLength() - (u32)12);
+            String* tag = String.withCString("__XC_PAR_MSL_");
+            tag.append(n);
+            tag.appendCString("__");
+            String* msl = (String*)0;
+            if (_parMetal)
+                msl = parMsl(f);
+            if (msl == (String*)0)
+                msl = String.withCString("");
+            for (u32 j = (u32)0; j < _m.syms().count(); j = j + (u32)1)
+                {
+                IRSymbol* sym = (IRSymbol*)_m.syms().get(j);
+                if (sym.kind() != (u8)SYM_STRINGLIT || sym.bytes() == (Array*)0 || sym.bytes().count() < tag.byteLength())
+                    continue;
+                bool same = true;
+                for (u32 q = (u32)0; q < tag.byteLength() && same; q = q + (u32)1)
+                    if (((Number*)sym.bytes().get(q)).asU32() != (u32)tag.byteAt(q))
+                        same = false;
+                if (!same)
+                    continue;
+                Array* nb = new Array();
+                for (u32 q = (u32)0; q < msl.byteLength(); q = q + (u32)1)
+                    nb.add((Object*)Number.withU8(msl.byteAt(q)));
+                for (u32 q = tag.byteLength(); q < sym.bytes().count(); q = q + (u32)1)
+                    nb.add(sym.bytes().get(q)); // keep the terminator the literal had
+                sym.setBytes(nb);
+                }
+            }
+        }
+
     bool parReleases(IRFunc* f)
         {
         for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
@@ -14689,6 +15422,7 @@ class ClassInfo
         parCheck();
         if (_failed)
             return (IRModule*)0;
+        parFillSources();
         return _m;
         }
 

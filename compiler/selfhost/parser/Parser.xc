@@ -2301,6 +2301,65 @@ class Parser
             m.add(b);
             cls.add(m);
         }
+        // gpuLength(k): the byte length of own ivar k when it is a captured
+        // array (a GPU buffer), else -1. The GPU runtime sizes its buffers
+        // from this.
+        {
+            Node* m = mkNamed((u16)nkMethodDecl, String.withCString("gpuLength"));
+            m.setOp(String.withCString("i64"));
+            Node* p = mkNamed((u16)nkParam, String.withCString("k"));
+            p.setOp(String.withCString("i32"));
+            m.add(p);
+            Node* b = mk((u16)nkBlock);
+            for (u32 i = (u32)0; i < caps.count(); i = i + (u32)1) {
+                String* cn = (String*)caps.get(i);
+                String* t = (String*)frameTypes.get((Hashable*)cn);
+                u32 lb = t.indexOfByte((u8)'[');
+                if (lb == (u32)$FFFFFFFF)
+                    continue;
+                String* elem = t.substringBytes((u32)0, lb);
+                i64 count = (i64)0;
+                for (u32 q = lb + (u32)1; q < t.byteLength() && t.byteAt(q) >= (u8)'0' && t.byteAt(q) <= (u8)'9'; q = q + (u32)1)
+                    count = count * (i64)10 + (i64)(t.byteAt(q) - (u8)'0');
+                if (count <= (i64)0)
+                    continue;
+                Node* sz = mk((u16)nkSizeof);
+                sz.setName(elem);
+                Node* bytes = parBin("*", parCast(String.withCString("i64"), parInt(count)),
+                                     parCast(String.withCString("i64"), sz));
+                Node* n = mk((u16)nkIf);
+                n.add(parBin("==", parIdent(String.withCString("k")),
+                             parCast(String.withCString("i32"), parInt((i64)i))));
+                Node* then = mk((u16)nkBlock);
+                Node* ret = mk((u16)nkReturn);
+                ret.add(bytes);
+                then.add(ret);
+                n.add(then);
+                b.add(n);
+            }
+            Node* none = mk((u16)nkReturn);
+            none.add(parBin("-", parCast(String.withCString("i64"), parInt((i64)0)),
+                            parCast(String.withCString("i64"), parInt((i64)1))));
+            b.add(none);
+            m.add(b);
+            cls.add(m);
+        }
+        // gpuSource(): the kernel's Metal source. A placeholder string, unique
+        // per block, that the lowering replaces with the printed kernel (or
+        // with "" when the block cannot run on Metal).
+        {
+            Node* m = mkNamed((u16)nkMethodDecl, String.withCString("gpuSource"));
+            m.setOp(String.withCString("u8*"));
+            Node* b = mk((u16)nkBlock);
+            String* tag = String.withCString("__XC_PAR_MSL_");
+            tag.append(String.withU32(counter));
+            tag.appendCString("__");
+            Node* ret = mk((u16)nkReturn);
+            ret.add(mkNamed((u16)nkStr, tag));
+            b.add(ret);
+            m.add(b);
+            cls.add(m);
+        }
         // merge(other): fold another chunk's reductions into this one's.
         {
             Node* m = mkNamed((u16)nkMethodDecl, String.withCString("merge"));

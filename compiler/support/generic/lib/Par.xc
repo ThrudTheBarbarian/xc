@@ -16,6 +16,10 @@
 #import "Thread.xc"
 #import "PlatformCore.xc"
 #endif
+// macOS on Apple silicon: XC_PAR=gpu runs blocks on the GPU (ParMetal.xc).
+#if ARCH_arm64 && !PLATFORM_ios && !PLATFORM_android
+#import "ParMetal.xc"
+#endif
 
 class ParChunk : Object
     {
@@ -34,6 +38,18 @@ class ParChunk : Object
         {
         }
 
+    // For the GPU (generated per block): the kernel's Metal source, or "" when
+    // the block cannot run there, and the byte length of own ivar k when it is
+    // a captured array, else -1.
+    u8* gpuSource(void)
+        {
+        return "";
+        }
+    i64 gpuLength(i32 k)
+        {
+        return (i64)0 - (i64)1;
+        }
+
     // What a thread runs: a bound method that is never overridden, so the
     // binding is unambiguous, and whose call to run() dispatches to the block.
     void go(void)
@@ -48,6 +64,10 @@ class Par
         {
         if (hi <= lo)
             return;
+#if ARCH_arm64 && !PLATFORM_ios && !PLATFORM_android
+        if (ParMetal.wanted() && ParMetal.run(proto, proto.gpuSource(), lo, hi))
+            return;
+#endif
 #if ARCH_6502 || ARCH_m68k || ARCH_wasm32
         proto.lo = lo;
         proto.hi = hi;

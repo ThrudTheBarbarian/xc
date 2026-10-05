@@ -6,8 +6,9 @@
 # depend on how many threads the range was split across. Each fixture with an
 # .expected.out is built once and run with XC_PAR_THREADS = 1 (no threads at
 # all), 2, 3 (a split that does not divide the range) and 16 (more threads than
-# most chunks), and every run must print the expected output. The compile
-# itself must print nothing.
+# most chunks), and every run must print the expected output. On a Mac with
+# Apple silicon it also runs with XC_PAR=gpu, which must agree too. The
+# compile itself must print nothing.
 #
 #   bash tests/par/threads.sh                 # this machine, with bin/<plat>/xcc-xc
 #   XCC=path/to/xcc ARCH=x86_64 bash tests/par/threads.sh
@@ -45,6 +46,16 @@ for src in tests/fixtures/par_*.xc; do
             ok=0
         fi
     done
+    # On a Mac with Apple silicon, the same answer from the GPU (XC_PAR=gpu
+    # sends every block that has a Metal kernel there; the rest stay on the
+    # CPU, which is the fallback and must still agree).
+    if [ -z "$ARCH" ] && [ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = arm64 ]; then
+        if ! XC_PAR=gpu timeout 60 "$WORK/$name" > "$WORK/$name.out" 2>&1 ||
+           ! cmp -s "$WORK/$name.out" "$exp"; then
+            echo "FAIL $name with XC_PAR=gpu:"; sed 's/^/    /' "$WORK/$name.out" | head -5
+            ok=0
+        fi
+    fi
     if [ $ok = 1 ]; then pass=$((pass + 1)); else fail=$((fail + 1)); fi
 done
 echo "--- par threads${ARCH:+ ($ARCH)}: pass=$pass fail=$fail ---"

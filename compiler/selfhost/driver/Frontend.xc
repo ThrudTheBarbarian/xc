@@ -784,6 +784,13 @@ class FeOptions
         // once ride the same switch and a program that asks for one gets both.
         lower.setThreadSafeStatics(o.threadSafeArc());
         lower.setBoundsCheck(o.boundsCheck());
+        // `par` blocks get their Metal source only where Metal exists: macOS
+        // on Apple silicon (not iOS for now, not Android).
+        bool android = false;
+        for (u32 i = (u32)0; i < o.defs().count(); i = i + (u32)1)
+            if (((String*)o.defs().get(i)).hasPrefix(String.withCString("PLATFORM_android")))
+                android = true;
+        lower.setParMetal(o.target().equals(String.withCString("arm64")) && !android);
         lower.setVtable(sema.vtable());
         IRModule* mod = lower.run(program, moduleNameOf(o.input()));
         o.setCallSites(lower.callSites());

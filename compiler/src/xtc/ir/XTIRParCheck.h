@@ -16,6 +16,10 @@ NS_ASSUME_NONNULL_BEGIN
 // GPU later. One error per block, at the block, naming the construct.
 @interface XTIRParCheck : NSObject
 
+// Whether blocks also get their Metal source (§6): set by the driver for an
+// Apple arm64 target. Elsewhere each block's gpuSource() is "".
++ (void)setEmitsMetal:(BOOL)on;
+
 // NO when a block broke a rule; each such block has an error in `diag`.
 + (BOOL)checkModule:(XTIRModule*)module
          classDecls:(NSDictionary<NSString*, XTClassDeclNode*>*)classDecls

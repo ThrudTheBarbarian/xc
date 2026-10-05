@@ -1087,6 +1087,61 @@ NS_ASSUME_NONNULL_END
                                                              body:[[XTBlockNode alloc] initWithStatements:st location:loc]
                                                          location:loc]];
         }
+    // gpuLength(k): the byte length of own ivar k when it is a captured array
+    // (a GPU buffer), else -1. The GPU runtime sizes its buffers from this.
+        {
+        NSMutableArray<XTASTNode*>* st = [NSMutableArray array];
+        XTType* i32T = [self.typeTable typeForName:@"i32"];
+        NSUInteger j = 0;
+        for (NSString* cn in caps)
+            {
+            XTType* t = frameTypes[cn];
+            if ([t isKindOfClass:[XTArrayType class]] && ((XTArrayType*)t).elementCount > 0)
+                {
+                XTArrayType* at = (XTArrayType*)t;
+                XTASTNode* bytes = [[XTBinaryExprNode alloc]
+                    initWithOp:XTBinaryOpMul
+                          left:cast(i64T, [[XTLiteralIntNode alloc] initWithValue:(int64_t)at.elementCount location:loc])
+                         right:cast(i64T, [[XTSizeofExprNode alloc] initWithOperand:at.elementType location:loc])
+                      location:loc];
+                XTASTNode* test = [[XTBinaryExprNode alloc]
+                    initWithOp:XTBinaryOpEq
+                          left:ident(@"k")
+                         right:cast(i32T, [[XTLiteralIntNode alloc] initWithValue:(int64_t)j location:loc])
+                      location:loc];
+                XTBlockNode* then = [[XTBlockNode alloc]
+                    initWithStatements:@[ [[XTReturnNode alloc] initWithValues:@[ bytes ] location:loc] ]
+                              location:loc];
+                [st addObject:[[XTIfNode alloc] initWithCondition:test thenBlock:then elseBlock:nil location:loc]];
+                }
+            j++;
+            }
+        XTASTNode* none = [[XTBinaryExprNode alloc]
+            initWithOp:XTBinaryOpSub
+                  left:cast(i64T, [[XTLiteralIntNode alloc] initWithValue:0 location:loc])
+                 right:cast(i64T, [[XTLiteralIntNode alloc] initWithValue:1 location:loc])
+              location:loc];
+        [st addObject:[[XTReturnNode alloc] initWithValues:@[ none ] location:loc]];
+        XTParamNode* p = [[XTParamNode alloc] initWithType:i32T name:@"k" location:loc];
+        [methods addObject:[[XTMethodDeclNode alloc] initWithName:@"gpuLength" returnTypes:@[ i64T ]
+                                                       parameters:@[ p ] isStatic:NO isVarArgs:NO
+                                                             body:[[XTBlockNode alloc] initWithStatements:st location:loc]
+                                                         location:loc]];
+        }
+    // gpuSource(): the kernel's Metal source. A placeholder string, unique per
+    // block, that the lowering replaces with the printed kernel (or with ""
+    // when the block cannot run on Metal).
+        {
+        XTASTNode* lit = [[XTLiteralStringNode alloc]
+            initWithString:[NSString stringWithFormat:@"__XC_PAR_MSL_%lu__", (unsigned long)counter]
+                  location:loc];
+        XTBlockNode* b = [[XTBlockNode alloc]
+            initWithStatements:@[ [[XTReturnNode alloc] initWithValues:@[ lit ] location:loc] ]
+                      location:loc];
+        [methods addObject:[[XTMethodDeclNode alloc] initWithName:@"gpuSource"
+                                                      returnTypes:@[ [XTPointerType pointerToType:[self.typeTable typeForName:@"u8"]] ]
+                                                       parameters:@[] isStatic:NO isVarArgs:NO body:b location:loc]];
+        }
     // merge(other): fold another chunk's reductions into this one's.
         {
         NSMutableArray<XTASTNode*>* st = [NSMutableArray array];

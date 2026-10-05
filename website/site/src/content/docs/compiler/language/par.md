@@ -72,6 +72,23 @@ one run; `XC_PAR_THREADS=1` runs the block on the calling thread alone. On
 targets without threads (`xt6502`, `m68k` and `wasm32`) the whole range runs on
 the calling thread.
 
+## Running on the GPU
+
+**From 0.67, macOS on Apple silicon.** `XC_PAR=gpu` in the environment runs every
+block that can go there on the GPU through Metal. The compiler gives each block a
+GPU version of its loop, and a program needs no extra flags or libraries.
+Results are the same as on the CPU: integer reductions match exactly, because
+the GPU's partial results are combined in the same order the CPU combines its
+chunks. A block that cannot run on the GPU stays on the CPU, as do all blocks
+when there is no Metal device.
+
+In this first version a block runs on the GPU when it works on local arrays it
+captured, scalars and reductions. A block that uses `double` (Apple GPUs have
+no 64-bit floating point), touches a global, or calls a helper function runs on
+the CPU. `XC_PAR_REPORT=1` prints one line for each block that ran on the GPU.
+
+Choosing the device automatically, and NVIDIA GPUs, come later.
+
 ## What a body may contain
 
 A block runs on the CPU today, but the compiler holds every block to what a GPU

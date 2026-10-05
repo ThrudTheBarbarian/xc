@@ -9,6 +9,7 @@
 #import "XTIRSymbol.h"
 #import "XTDeclNodes.h"
 #import "XTDiagnosticEngine.h"
+#import "XTIRParMSL.h"
 
 // What a kernel may call outside the program: the static-init once (the host
 // has run it before any block starts), the bounds checks of a -fbounds-check
@@ -67,6 +68,38 @@ static NSString* shownName(NSString* irName)
 @end
 
 @implementation XTIRParCheck
+
+static BOOL gEmitsMetal = NO;
+
++ (void)setEmitsMetal:(BOOL)on
+    {
+    gEmitsMetal = on;
+    }
+
+// Each block's gpuSource() returns a placeholder literal, `__XC_PAR_MSL_<n>__`;
+// give it the kernel's Metal source, or "" when the block stays on the CPU.
++ (void)fillSourcesIn:(XTIRModule*)module
+    {
+    for (XTIRFunction* f in module.functions)
+        {
+        if (![f.name hasPrefix:@"ParImpl$"] || ![f.name hasSuffix:@"$run"])
+            continue;
+        NSString* n = [f.name substringWithRange:NSMakeRange(8, f.name.length - 12)];
+        NSData* tag = [[NSString stringWithFormat:@"__XC_PAR_MSL_%@__", n] dataUsingEncoding:NSUTF8StringEncoding];
+        NSString* msl = gEmitsMetal ? ([XTIRParMSL sourceForKernel:f module:module] ?: @"") : @"";
+        for (XTIRSymbol* sym in module.symbols)
+            {
+            NSData* b = sym.stringBytes;
+            if (sym.kind != XTIRSymbolKindStringLit || b.length < tag.length ||
+                memcmp(b.bytes, tag.bytes, tag.length) != 0)
+                continue;
+            NSMutableData* nb = [[msl dataUsingEncoding:NSUTF8StringEncoding] mutableCopy];
+            if (b.length > tag.length) // keep the terminator the literal had
+                [nb appendBytes:(const uint8_t*)b.bytes + tag.length length:b.length - tag.length];
+            [sym setValue:nb forKey:@"stringBytes"];
+            }
+        }
+    }
 
 + (BOOL)checkModule:(XTIRModule*)module
          classDecls:(NSDictionary<NSString*, XTClassDeclNode*>*)classDecls
@@ -127,6 +160,8 @@ static NSString* shownName(NSString* irName)
                                                    @"but this one %@", why];
         [diag emitError:msg at:decl.location];
         }
+    if (ok)
+        [self fillSourcesIn:module];
     return ok;
     }
 

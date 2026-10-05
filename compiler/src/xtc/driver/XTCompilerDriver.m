@@ -10,6 +10,7 @@
 #import "XTSemanticAnalyzer.h"
 #import "XTIR.h"
 #import "XTIRLowering.h"
+#import "XTIRParCheck.h"
 #import "XTIRVerifier.h"
 #import "XTIRModule.h"
 #import "XTIRSymbol.h"
@@ -1821,6 +1822,9 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     // ── IR lowering ──────────────────────────────────────────────────────
     NSString* modName = [inputFile.lastPathComponent stringByDeletingPathExtension];
     XTIRModule* mod = nil;
+    // `par` blocks get their Metal source only where Metal exists: macOS on
+    // Apple silicon (not iOS for now, not Android).
+    [XTIRParCheck setEmitsMetal:(_options.useArm64Backend && !_options.applePlatform && !_options.androidTarget)];
     mod = [XTIRLowering lowerProgram:ast
                           moduleName:modName
                          diagnostics:_diagnostics
