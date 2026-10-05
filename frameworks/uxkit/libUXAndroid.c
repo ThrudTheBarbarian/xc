@@ -2776,10 +2776,23 @@ JNIEXPORT void ANativeActivity_onCreate(ANativeActivity *activity,
      * ux_and_* imports can bind against it, then load + delegate */
     if (!dlopen("libUXAndroid.so", RTLD_NOW | RTLD_GLOBAL))
         LOG("self-promote failed: %s", dlerror());
-    void *app = dlopen("libxtapp.so", RTLD_NOW);
-    if (!app) { LOG("FAIL: dlopen libxtapp.so: %s", dlerror()); return; }
+    /* The app lib: libxtapp.so where a script packed it under that name, else the one xcc's
+     * --emit-apk packs, lib<name>.so for the package org.compile_xc.<name> (the -o file's stem). */
+    char appLib[160] = "libxtapp.so";
+    void *app = dlopen(appLib, RTLD_NOW);
+    if (!app) {
+        jclass ac = (*env)->GetObjectClass(env, activity->clazz);
+        jstring pk = (jstring)(*env)->CallObjectMethod(env, activity->clazz,
+            (*env)->GetMethodID(env, ac, "getPackageName", "()Ljava/lang/String;"));
+        const char *pkg = pk ? (*env)->GetStringUTFChars(env, pk, NULL) : NULL;
+        const char *stem = pkg ? strrchr(pkg, '.') : NULL;
+        snprintf(appLib, sizeof appLib, "lib%s.so", stem ? stem + 1 : (pkg ? pkg : "xtapp"));
+        if (pkg) (*env)->ReleaseStringUTFChars(env, pk, pkg);
+        app = dlopen(appLib, RTLD_NOW);
+    }
+    if (!app) { LOG("FAIL: dlopen %s: %s", appLib, dlerror()); return; }
     onCreate_fn glue = (onCreate_fn)dlsym(app, "ANativeActivity_onCreate");
-    if (!glue) { LOG("FAIL: no glue onCreate in libxtapp.so"); return; }
+    if (!glue) { LOG("FAIL: no glue onCreate in %s", appLib); return; }
     LOG("uxkit: shell up; delegating to the app lib's glue");
     glue(activity, saved, savedSize);     /* the glue spawns xt_main, pipes logcat */
 }

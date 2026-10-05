@@ -7,47 +7,17 @@ here=$(cd "$(dirname "$0")" && pwd)
 xcc=${XCC:-xcc}
 A="${ANDROID_HOME:-$HOME/Library/Android/sdk}"
 ADB="$A/platform-tools/adb"
-BT=$(ls -d "$A"/build-tools/* 2>/dev/null | sort -V | tail -1)
 NDKBIN=$(ls -d "$A"/ndk/*/toolchains/llvm/prebuilt/*/bin 2>/dev/null | sort -V | tail -1)
-PLATJAR=$(ls "$A"/platforms/android-*/android.jar 2>/dev/null | sort -V | tail -1)
-{ [ -n "$BT" ] && [ -n "$NDKBIN" ] && [ -x "$ADB" ]; } || { echo "== android-settings: skipped (no SDK/NDK) =="; exit 0; }
+{ [ -n "$NDKBIN" ] && [ -x "$ADB" ]; } || { echo "== android-settings: skipped (no SDK/NDK) =="; exit 0; }
 "$ADB" get-state >/dev/null 2>&1 || { echo "== android-settings: skipped (no device) =="; exit 0; }
 
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
-echo "== android-settings: building the two-lib APK =="
-"$xcc" -A android --emit-apk -I "$here" "$here/test_android_settings.xc" -o "$work/xtapp.apk" -q 2>/dev/null
-mkdir -p "$work/lib/arm64-v8a"
-unzip -p "$work/xtapp.apk" "lib/arm64-v8a/*.so" > "$work/lib/arm64-v8a/libxtapp.so"
-python3 "$here/tools/android/addneeded.py" "$work/lib/arm64-v8a/libxtapp.so" libUXAndroid.so >/dev/null
+echo "== android-settings: the shim (NDK), then the APK in one xcc line =="
 "$NDKBIN/aarch64-linux-android26-clang" -shared -fPIC -Wl,-soname,libUXAndroid.so \
-    "$here/libUXAndroid.c" -llog -landroid -o "$work/lib/arm64-v8a/libUXAndroid.so"
-cat > "$work/AndroidManifest.xml" <<'EOF'
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-          package="org.compile_xc.uxset">
-  <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="35"/>
-  <application android:hasCode="true" android:label="uxset">
-    <activity android:name="android.app.NativeActivity" android:exported="true">
-      <meta-data android:name="android.app.lib_name" android:value="UXAndroid"/>
-      <intent-filter>
-        <action android:name="android.intent.action.MAIN"/>
-        <category android:name="android.intent.category.LAUNCHER"/>
-      </intent-filter>
-    </activity>
-  </application>
-</manifest>
-EOF
-"$BT/aapt2" link -I "$PLATJAR" --manifest "$work/AndroidManifest.xml" -o "$work/unaligned.apk"
-cp "$here/tools/android/classes.dex" "$work/"
-( cd "$work" && zip -q unaligned.apk classes.dex lib/arm64-v8a/libUXAndroid.so lib/arm64-v8a/libxtapp.so )
-"$BT/zipalign" -f 4 "$work/unaligned.apk" "$work/aligned.apk"
-# Self-signed throwaway for local APK signing, generated on demand. It is NOT
-# in the repo: a private key does not belong in version control, even a
-# disposable one. Every script that signs makes it the same way.
-KS="$here/tools/android/debug.keystore"
-[ -f "$KS" ] || keytool -genkeypair -keystore "$KS" -storepass uxkit1 -alias ux \
-    -dname "CN=uxkit" -keyalg RSA -validity 10000 2>/dev/null
-"$BT/apksigner" sign --ks "$KS" --ks-pass pass:uxkit1 \
-    --out "$work/uxset.apk" "$work/aligned.apk" 2>/dev/null
+    "$here/libUXAndroid.c" -llog -landroid -o "$work/libUXAndroid.so"
+"$xcc" -A android --emit-apk -I "$here" "$here/test_android_settings.xc" \
+    --needed libUXAndroid.so --with-lib "$work/libUXAndroid.so" --lib-name UXAndroid \
+    --with-dex "$here/tools/android/classes.dex" -o "$work/uxset.apk" -q 2>/dev/null
 
 # A regenerated keystore signs with a new key, which Android refuses as an
 # update of a package signed by the old one. Replace it rather than fail.

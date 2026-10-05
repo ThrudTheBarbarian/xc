@@ -65,8 +65,22 @@ work to where Android requires it.
 
 ## Two libraries, one APK
 
-The APK carries two native libraries, and `addneeded.py` patches the
-`DT_NEEDED` entry so the loader finds the second one.
+The APK carries two native libraries: the app, compiled by `xcc`, and
+`libUXAndroid.so`, the C shim, built with the NDK. Android loads the shim first,
+and the shim loads the app. `xcc` packages both in one command:
+
+```sh
+$NDK/aarch64-linux-android26-clang -shared -fPIC -Wl,-soname,libUXAndroid.so \
+    libUXAndroid.c -llog -landroid -o libUXAndroid.so
+xcc -A android --emit-apk app.xc --needed libUXAndroid.so \
+    --with-lib libUXAndroid.so --lib-name UXAndroid \
+    --with-dex tools/android/classes.dex -o app.apk
+```
+
+`--needed` adds the `DT_NEEDED` entry that binds the app's `ux_and_*` imports to
+the shim, and `--lib-name` makes the shim the library Android starts. The
+package is `org.compile_xc.<name>`, from the `-o` file's name, and the shim
+loads `lib<name>.so` from it.
 
 :::caution[Assembling `.s` through the NDK does not work]
 The compiler emits Mach-O-dialect assembly, which the NDK's assembler does not
