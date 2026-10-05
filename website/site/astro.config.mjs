@@ -49,6 +49,7 @@ export default defineConfig({
 								{ label: 'Heap, ARC & weak refs', slug: 'compiler/language/memory' },
 								{ label: 'Collections & strings', slug: 'compiler/language/collections' },
 								{ label: 'Threading', slug: 'compiler/language/threading' },
+								{ label: 'Parallel blocks (par)', slug: 'compiler/language/par' },
 								{ label: 'Modules & shared libraries', slug: 'compiler/language/modules' },
 								{ label: 'Inline assembly', slug: 'compiler/language/inline-asm' },
 								{ label: 'Grammar', slug: 'compiler/language/grammar' },

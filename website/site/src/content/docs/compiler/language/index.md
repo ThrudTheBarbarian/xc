@@ -27,7 +27,7 @@ To read the reference in order:
 12. [**Heap, ARC & weak refs**](/compiler/language/memory/): `new` / `delete`, automatic reference counting, `weak:` references.
 13. [**Collections & strings**](/compiler/language/collections/): `Array<T>`, `Map<V>`, `Set<T>`, `String`, and how element types are checked then erased.
 14. [**Threading**](/compiler/language/threading/): `Thread`, `Mutex`, `Atomic`, `Pool`, and the automatic atomic-refcount decision. Native targets only.
-15. [**Parallel blocks**](/compiler/language/par/): `par` loops whose iterations run on every CPU thread, with reductions. From 0.67.
+15. [**Parallel blocks**](/compiler/language/par/): `par` loops whose iterations run on every CPU thread or on the GPU, with reductions. From 0.67.
 16. [**Modules & shared libraries**](/compiler/language/modules/): `--emit-lib`, `#import <Lib>`, what crosses a library boundary, and `extern` globals.
 17. [**Inline assembly**](/compiler/language/inline-asm/): `asm { … }` blocks, byte-extract operators, reaching xcc variables, the `clobbers` annotation.
 

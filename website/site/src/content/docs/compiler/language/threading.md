@@ -11,6 +11,10 @@ single-threaded.
 The API is small: `Thread`, `Mutex` (+ `Guard`), `Cond`, `Sem`, `Atomic`,
 `ThreadLocal`, and `Pool.forRange`.
 
+For a loop whose iterations are independent, a [`par` block](/compiler/language/par/)
+is simpler: it splits the loop over every thread, or runs it on the GPU, with no
+threads to manage.
+
 ## The part that is not in the library
 
 Two threads that use one object race on its **ARC refcount**. A non-atomic
