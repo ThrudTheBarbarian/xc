@@ -2200,6 +2200,16 @@ class Parser
         if (Parser._same(op, "*")) return parCast(ty, parInt((i64)1));
         return parIdent(var);
     }
+    // A node at the `par` keyword, for an error about the whole block: the
+    // reference reports those there, not where parsing had got to (bug 617).
+    Node* parKeywordNode(void)
+    {
+        Node* n = mk((u16)nkPar);
+        if (_parTok != (Token*)0)
+            n.setPos(_parTok.fileId(), _parTok.line(), _parTok.col());
+        return n;
+    }
+
     // `dst = dst OP src`, or for min / max `if (src < dst) dst = src`.
     Node* parFold(String* op, Node* dst, Node* dst2, Node* src)
     {
@@ -2238,11 +2248,11 @@ class Parser
             && step != 0 && step.kind() == (u16)nkAssign && Parser._same(step.op(), "+=")
             && step.kid((u32)1).kind() == (u16)nkInt && step.kid((u32)1).num() == (i64)1;
         if (!ok) {
-            _error(String.withFormat("a '%s' block's body is one ascending loop: par { for (T i in a..b) { ... } }", label.cString()));
+            _errorAt(String.withFormat("a '%s' block's body is one ascending loop: par { for (T i in a..b) { ... } }", label.cString()), parKeywordNode());
             return (Node*)0;
         }
         if (!isTypeName(String.withCString("ParChunk"))) {
-            _error(String.withCString("a 'par' block needs its runtime: #import \"Par.xc\""));
+            _errorAt(String.withCString("a 'par' block needs its runtime: #import \"Par.xc\""), parKeywordNode());
             return (Node*)0;
         }
         String* ivT = iv.op();
@@ -2255,8 +2265,8 @@ class Parser
             Object* t = frameTypes.get((Hashable*)r.name());
             if (t == 0) t = (Object*)blkTyOf(blkLookup(r.name(), (u32*)0));
             if (t == 0) {
-                _error(String.withFormat("':reduce(%s %s)': '%s' is not a local declared before the '%s' block",
-                                         r.op().cString(), r.name().cString(), r.name().cString(), label.cString()));
+                _errorAt(String.withFormat("':reduce(%s %s)': '%s' is not a local declared before the '%s' block",
+                                           r.op().cString(), r.name().cString(), r.name().cString(), label.cString()), parKeywordNode());
                 return (Node*)0;
             }
             redTypes.set((Hashable*)r.name(), t);
@@ -2270,8 +2280,8 @@ class Parser
             String* cn = (String*)caps.get(i);
             String* t = (String*)frameTypes.get((Hashable*)cn);
             if (written.contains((Hashable*)cn) && t.indexOfByte((u8)'[') == (u32)$FFFFFFFF) {
-                _error(String.withFormat("a '%s' block cannot assign to '%s': every work item has its own copy of it. Make it a reduction (:reduce(+ %s)) or write into an array",
-                                         label.cString(), cn.cString(), cn.cString()));
+                _errorAt(String.withFormat("a '%s' block cannot assign to '%s': every work item has its own copy of it. Make it a reduction (:reduce(+ %s)) or write into an array",
+                                           label.cString(), cn.cString(), cn.cString()), parKeywordNode());
                 return (Node*)0;
             }
         }
