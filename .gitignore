@@ -37,3 +37,4 @@ __pycache__/
 
 # Benchmark: compiled binaries from run.py; results and reports are tracked
 benchmark/build/
+benchmark/par/build/
