@@ -29,6 +29,19 @@
 #import <objc/runtime.h>
 
 #define UX_MAXW 64
+/* The toolkit's bytes as an NSString: UTF-8, or Latin-1 when they are not UTF-8 (a GEM resource's
+ * strings are Latin-1), or "" for none.  AppKit raises on a nil string, so no conversion may
+ * return one. */
+static NSString* ak_ns(const char* s)
+    {
+    if (!s)
+        return @"";
+    NSString* u = [NSString stringWithUTF8String:s];
+    if (u)
+        return u;
+    u = [NSString stringWithCString:s encoding:NSISOLatin1StringEncoding];
+    return u ? u : @"";
+    }
 /* The nodes of one window's tree a native control can be made for.  A designer's window (Rocks:
  * outline, canvas, inspector, library) runs to several hundred. */
 #define UX_MAXN 4096
@@ -962,7 +975,7 @@ int ux_ak_gl_grab(void* peer, const char* path)
         }
     g_ios.unlock(s, 1u /* kIOSurfaceLockReadOnly */, NULL);
     NSData* png = [rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
-    int ok = png && [png writeToFile:[NSString stringWithUTF8String:path] atomically:YES];
+    int ok = png && [png writeToFile:ak_ns(path) atomically:YES];
     if (ok)
         g_lastGrab = rep;
     return ok ? 1 : 0;
@@ -1159,7 +1172,7 @@ int ux_ak_gl_grab_window(void* peer, const char* path)
     [NSGraphicsContext restoreGraphicsState];
     g_lastGrab = rep;
     NSData* png = [rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
-    return (png && [png writeToFile:[NSString stringWithUTF8String:path] atomically:YES]) ? 1 : 0;
+    return (png && [png writeToFile:ak_ns(path) atomically:YES]) ? 1 : 0;
     }
 
 /* The environment, for a harness that takes an input path (the real atlas) without a
@@ -1740,7 +1753,7 @@ void ux_ak_window_set_title(int handle, const char* s)
     {
     if (!g_win[handle])
         return;
-    [g_win[handle] setTitle:[NSString stringWithUTF8String:s]];
+    [g_win[handle] setTitle:ak_ns(s)];
     }
 // Window chrome the toolkit has had since the GEM backend and AppKit never implemented.  A window
 // that reports itself modified draws a dot in its close button here, exactly as GEM draws WT_MODIFIED
@@ -1751,7 +1764,7 @@ void ux_ak_window_set_subtitle(int handle, const char* s)
     if (!g_win[handle])
         return;
     if ([g_win[handle] respondsToSelector:@selector(setSubtitle:)])
-        [g_win[handle] setSubtitle:[NSString stringWithUTF8String:s ? s : ""]];
+        [g_win[handle] setSubtitle:ak_ns(s ? s : "")];
     }
 void ux_ak_window_set_modified(int handle, int on)
     {
@@ -1793,7 +1806,7 @@ void ux_ak_window_set_icon(int handle, const char* s)
         [g_win[handle] setRepresentedURL:nil];
         return;
         }
-    [g_win[handle] setRepresentedURL:[NSURL fileURLWithPath:[NSString stringWithUTF8String:s]]];
+    [g_win[handle] setRepresentedURL:[NSURL fileURLWithPath:ak_ns(s)]];
     }
 /* Sound: signed 16-bit mono PCM wrapped as an in-memory WAV and played by NSSound, which mixes
  * overlapping sounds itself.  Each NSSound is kept until it has finished (pruned on the next play),
@@ -2198,7 +2211,7 @@ void ux_ak_text(const char* s, int x, int y, int r, int g, int b, int a, int siz
                                              blue:b / 255.0
                                             alpha:a / 255.0],
                         NSFontAttributeName : f};
-    [[NSString stringWithUTF8String:s] drawAtPoint:NSMakePoint(x, y) withAttributes:attr];
+    [ak_ns(s) drawAtPoint:NSMakePoint(x, y) withAttributes:attr];
     }
 // How wide a string renders in the UI font — what the toolkit breaks lines with.  Rounded UP: a
 // fractional width that rounds down puts a line one pixel over the measure and it wraps short.
@@ -2206,7 +2219,7 @@ int ux_ak_text_width(const char* s, int size)
     {
     NSFont* f = [NSFont systemFontOfSize:(size > 0 ? size : 12)];
     NSDictionary* a = @{NSFontAttributeName : f};
-    NSSize sz = [[NSString stringWithUTF8String:s] sizeWithAttributes:a];
+    NSSize sz = [ak_ns(s) sizeWithAttributes:a];
     return (int)ceil(sz.width);
     }
 // The offset in force right now, in minutes east of UTC — tm_gmtoff has DST already applied.
@@ -2300,7 +2313,7 @@ int ux_ak_now_us(void)
 int ux_ak_text_width_font(const char* s, const char* family, int size, int bold, int italic)
     {
     CGFloat sz = size > 0 ? size : 12;
-    NSFont* f = family && *family ? [NSFont fontWithName:[NSString stringWithUTF8String:family] size:sz] : nil;
+    NSFont* f = family && *family ? [NSFont fontWithName:ak_ns(family) size:sz] : nil;
     if (!f)
         f = [NSFont systemFontOfSize:sz];
     NSFontManager* fm = [NSFontManager sharedFontManager];
@@ -2308,7 +2321,7 @@ int ux_ak_text_width_font(const char* s, const char* family, int size, int bold,
         f = [fm convertFont:f toHaveTrait:NSBoldFontMask];
     if (italic)
         f = [fm convertFont:f toHaveTrait:NSItalicFontMask];
-    NSSize z = [[NSString stringWithUTF8String:s] sizeWithAttributes:@{NSFontAttributeName : f}];
+    NSSize z = [ak_ns(s) sizeWithAttributes:@{NSFontAttributeName : f}];
     return (int)ceil(z.width);
     }
 // Styled text: a named family + bold/italic (the toolkit font-chooser preview).
@@ -2316,7 +2329,7 @@ void ux_ak_text_font(const char* s, int x, int y, int r, int g, int b,
                      const char* family, int size, int bold, int italic)
     {
     CGFloat sz = size > 0 ? size : 12;
-    NSFont* f = [NSFont fontWithName:[NSString stringWithUTF8String:family] size:sz];
+    NSFont* f = [NSFont fontWithName:ak_ns(family) size:sz];
     if (!f)
         f = [NSFont systemFontOfSize:sz];
     NSFontManager* fm = [NSFontManager sharedFontManager];
@@ -2330,7 +2343,7 @@ void ux_ak_text_font(const char* s, int x, int y, int r, int g, int b,
                                              blue:b / 255.0
                                             alpha:1.0],
                         NSFontAttributeName : f};
-    [[NSString stringWithUTF8String:s] drawAtPoint:NSMakePoint(x, y) withAttributes:a];
+    [ak_ns(s) drawAtPoint:NSMakePoint(x, y) withAttributes:a];
     }
 
 /* A font at a WEIGHT, not just bold: the CSS 100..900 scale mapped onto AppKit's NSFontWeight*,
@@ -2350,7 +2363,7 @@ static NSFont* ak_weighted_font(const char* family, CGFloat sz, int weight, int 
     else                    w = 0.62;   /* black */
     NSDictionary* traits = @{NSFontWeightTrait : @(w)};
     NSDictionary* attrs = (family && *family)
-        ? @{NSFontFamilyAttribute : [NSString stringWithUTF8String:family], NSFontTraitsAttribute : traits}
+        ? @{NSFontFamilyAttribute : ak_ns(family), NSFontTraitsAttribute : traits}
         : @{NSFontTraitsAttribute : traits};
     NSFont* f = [NSFont fontWithDescriptor:[NSFontDescriptor fontDescriptorWithFontAttributes:attrs] size:sz];
     if (!f)
@@ -2365,7 +2378,7 @@ static NSFont* ak_weighted_font(const char* family, CGFloat sz, int weight, int 
 int ux_ak_text_width_weight(const char* s, const char* family, int size, int weight, int italic)
     {
     NSFont* f = ak_weighted_font(family, (CGFloat)(size > 0 ? size : 12), weight, italic);
-    NSSize z = [[NSString stringWithUTF8String:s] sizeWithAttributes:@{NSFontAttributeName : f}];
+    NSSize z = [ak_ns(s) sizeWithAttributes:@{NSFontAttributeName : f}];
     return (int)ceil(z.width);
     }
 // The FACE's ascent: the distance from the top of the line to the baseline, which is where
@@ -2387,7 +2400,7 @@ void ux_ak_text_weight(const char* s, int x, int y, const char* family, int size
                                               blue:b / 255.0
                                              alpha:a / 255.0],
                          NSFontAttributeName : f};
-    [[NSString stringWithUTF8String:s] drawAtPoint:NSMakePoint(x, y) withAttributes:at];
+    [ak_ns(s) drawAtPoint:NSMakePoint(x, y) withAttributes:at];
     }
 // A filled polygon from a flat x,y,x,y... array — the general form of ux_ak_tri, and what the
 // neutral painter hands down for stroke quads, joins, caps and gradient bands alike.
@@ -2655,7 +2668,7 @@ void* ux_ak_menu_new(void)
 void* ux_ak_menu_add_title(void* bar, const char* title)
     {
     NSMenu* b = (__bridge NSMenu*)bar;
-    NSString* t = [NSString stringWithUTF8String:title];
+    NSString* t = ak_ns(title);
     NSMenuItem* it = [[NSMenuItem alloc] initWithTitle:t action:NULL keyEquivalent:@""];
     NSMenu* sub = [[NSMenu alloc] initWithTitle:t];
     [sub setAutoenablesItems:NO];
@@ -2672,7 +2685,7 @@ void ux_ak_menu_add_item(void* sub, const char* text, int tag, int checked, int 
         return;
         }
     NSMenuItem* it = [[NSMenuItem alloc]
-        initWithTitle:[NSString stringWithUTF8String:text]
+        initWithTitle:ak_ns(text)
                action:sel_registerName("xgMenu:")
         keyEquivalent:@""];
     [it setTag:tag];
@@ -2699,7 +2712,7 @@ int ux_ak_test_drop_file(int handle, const char* path, int x, int y)
     {
     if (handle <= 0 || handle >= UX_MAXW || !g_view[handle])
         return 0;
-    NSURL* u = [NSURL fileURLWithPath:[NSString stringWithUTF8String:path]];
+    NSURL* u = [NSURL fileURLWithPath:ak_ns(path)];
     return ak_deliver_files(g_view[handle], @[ u ], NSMakePoint(x, y));
     }
 /* For tests: a key press offered to the main menu the way AppKit offers one before keyDown:
@@ -2752,14 +2765,14 @@ int ux_ak_alert(int icon, const char* lines, const char* buttons, int defaultBtn
     {
     NSAlert* a = [[NSAlert alloc] init];
     [a setAlertStyle:(icon >= 3 ? NSAlertStyleCritical : NSAlertStyleInformational)];
-    NSArray* ls = [[NSString stringWithUTF8String:lines] componentsSeparatedByString:@"|"];
+    NSArray* ls = [ak_ns(lines) componentsSeparatedByString:@"|"];
     [a setMessageText:[ls count] > 0 ? ls[0] : @""];
     if ([ls count] > 1)
         {
         NSRange r = NSMakeRange(1, [ls count] - 1);
         [a setInformativeText:[[ls subarrayWithRange:r] componentsJoinedByString:@"\n"]];
         }
-    NSArray* bs = [[NSString stringWithUTF8String:buttons] componentsSeparatedByString:@"|"];
+    NSArray* bs = [ak_ns(buttons) componentsSeparatedByString:@"|"];
     for (NSString* b in bs)
         [a addButtonWithTitle:b];
     return (int)([a runModal] - NSAlertFirstButtonReturn) + 1;
@@ -2775,9 +2788,9 @@ int ux_ak_open_panel(const char* prompt, const char* startDir, char* out, int ou
     [p setCanChooseDirectories:NO];
     [p setAllowsMultipleSelection:NO];
     if (prompt && *prompt)
-        [p setPrompt:[NSString stringWithUTF8String:prompt]];
+        [p setPrompt:ak_ns(prompt)];
     if (startDir && *startDir)
-        [p setDirectoryURL:[NSURL fileURLWithPath:[NSString stringWithUTF8String:startDir]]];
+        [p setDirectoryURL:[NSURL fileURLWithPath:ak_ns(startDir)]];
     if ([p runModal] != NSModalResponseOK)
         return 0;
     NSString* path = [[p URL] path];
@@ -2796,11 +2809,11 @@ int ux_ak_save_panel(const char* prompt, const char* startDir, const char* defau
     NSSavePanel* p = [NSSavePanel savePanel];
     [p setCanCreateDirectories:YES];
     if (prompt && *prompt)
-        [p setMessage:[NSString stringWithUTF8String:prompt]];
+        [p setMessage:ak_ns(prompt)];
     if (startDir && *startDir)
-        [p setDirectoryURL:[NSURL fileURLWithPath:[NSString stringWithUTF8String:startDir]]];
+        [p setDirectoryURL:[NSURL fileURLWithPath:ak_ns(startDir)]];
     if (defaultName && *defaultName)
-        [p setNameFieldStringValue:[NSString stringWithUTF8String:defaultName]];
+        [p setNameFieldStringValue:ak_ns(defaultName)];
     if ([p runModal] != NSModalResponseOK)
         return 0;
     NSString* path = [[p URL] path];
@@ -2902,7 +2915,7 @@ int ux_ak_font_panel(const char* inFamily, int inSize, int inBold, int inItalic,
         return 0;
     NSFontManager* fm = [NSFontManager sharedFontManager];
     CGFloat sz = inSize > 0 ? inSize : 12;
-    NSFont* init = [NSFont fontWithName:[NSString stringWithUTF8String:inFamily] size:sz];
+    NSFont* init = [NSFont fontWithName:ak_ns(inFamily) size:sz];
     if (!init)
         init = [NSFont systemFontOfSize:sz];
     NSFontTraitMask tr = 0;
@@ -3049,7 +3062,7 @@ void ux_ak_popup_add_item(int handle, int node, const char* title)
     id c = g_ctl[handle][node];
     if ([c isKindOfClass:[NSPopUpButton class]])
         {
-        [(NSPopUpButton*)c addItemWithTitle:[NSString stringWithUTF8String:(title ? title : "")]];
+        [(NSPopUpButton*)c addItemWithTitle:ak_ns((title ? title : ""))];
         }
     }
 void ux_ak_popup_select(int handle, int node, int i)
@@ -3111,7 +3124,7 @@ void ux_ak_seg_set_label(int handle, int node, int seg, const char* label)
     id c = g_ctl[handle][node];
     if ([c isKindOfClass:[NSSegmentedControl class]] && seg >= 0)
         {
-        [(NSSegmentedControl*)c setLabel:[NSString stringWithUTF8String:(label ? label : "")] forSegment:seg];
+        [(NSSegmentedControl*)c setLabel:ak_ns((label ? label : "")) forSegment:seg];
         }
     }
 void ux_ak_seg_select(int handle, int node, int seg)
@@ -3293,7 +3306,7 @@ void ux_ak_make_field(int handle, int node, int x, int y, int w, int h, char* bu
         return;
     NSTextField* tf = secure ? [[NSSecureTextField alloc] initWithFrame:NSMakeRect(x, y, w, h)]
                              : [[NSTextField alloc] initWithFrame:NSMakeRect(x, y, w, h)];
-    [tf setStringValue:(buf ? [NSString stringWithUTF8String:buf] : @"")];
+    [tf setStringValue:(buf ? ak_ns(buf) : @"")];
     [tf setEditable:YES];
     [tf setSelectable:YES];
     [tf setBezeled:YES];
@@ -3313,7 +3326,7 @@ void ux_ak_set_field_placeholder(int handle, int node, char* text)
     NSView* v = g_ctl[handle][node];
     if (!v || ![v isKindOfClass:[NSTextField class]])
         return;
-    [(NSTextField*)v setPlaceholderString:(text ? [NSString stringWithUTF8String:text] : @"")];
+    [(NSTextField*)v setPlaceholderString:(text ? ak_ns(text) : @"")];
     }
 // Push the buffer into the field IF it differs (so app setText propagates, but a normal repaint
 // during editing — where buffer == field — leaves the caret alone).
@@ -3325,7 +3338,7 @@ void ux_ak_update_field(int handle, int node)
     char* buf = g_field_buf[handle][node];
     if (!tf || !buf)
         return;
-    NSString* want = [NSString stringWithUTF8String:buf];
+    NSString* want = ak_ns(buf);
     if (![[tf stringValue] isEqualToString:want])
         [tf setStringValue:want];
     }
@@ -3335,7 +3348,7 @@ void ux_ak_make_label(int handle, int node, int x, int y, int w, int h, const ch
     NSView* content = g_view[handle];
     if (!content || node < 0 || node >= UX_MAXN)
         return;
-    NSTextField* tf = [NSTextField labelWithString:[NSString stringWithUTF8String:text]];
+    NSTextField* tf = [NSTextField labelWithString:ak_ns(text)];
     [tf setFrame:NSMakeRect(x, y, w, h)];
     [tf setLineBreakMode:NSLineBreakByTruncatingTail]; // too narrow -> "…", not a hard clip
     [content addSubview:tf];
@@ -3348,7 +3361,7 @@ void ux_ak_set_label_text(int handle, int node, const char* text)
     NSTextField* tf = (NSTextField*)g_ctl[handle][node];
     if (!tf)
         return;
-    NSString* want = [NSString stringWithUTF8String:text];
+    NSString* want = ak_ns(text);
     if (![[tf stringValue] isEqualToString:want])
         [tf setStringValue:want];
     }
@@ -3367,7 +3380,7 @@ void ux_ak_make_button(int handle, int node, int x, int y, int w, int h, const c
     if (!content || node < 0 || node >= UX_MAXN)
         return;
     NSButton* b = [[NSButton alloc] initWithFrame:NSMakeRect(x, y, w, h)];
-    [b setTitle:[NSString stringWithUTF8String:title]];
+    [b setTitle:ak_ns(title)];
     [b setBezelStyle:NSBezelStyleRounded]; // the standard rounded push button
     [b setTag:(handle * 1000 + node)];     // so ak_button_action fires the right node
     [b setTarget:ak_button_target()];
@@ -3390,7 +3403,7 @@ void ux_ak_make_check(int handle, int node, int x, int y, int w, int h,
     NSView* content = g_view[handle];
     if (!content || node < 0 || node >= UX_MAXN)
         return;
-    NSString* t = [NSString stringWithUTF8String:(title ? title : "")];
+    NSString* t = ak_ns((title ? title : ""));
     id tgt = ak_button_target();
     SEL sel = sel_registerName("xgBtn:");
     // The factory methods set the right button type + bezel (a square check box / a round radio).
@@ -3643,7 +3656,7 @@ static int g_tbl_reloading = 0; // guard: a reload's selection-restore must not 
         }
     int c = col.identifier ? [col.identifier intValue] : 0;
     const char* s = (self.peer && g_tbl_cell) ? g_tbl_cell(self.peer, (int)row, c) : "";
-    cv.textField.stringValue = s ? [NSString stringWithUTF8String:s] : @"";
+    cv.textField.stringValue = s ? ak_ns(s) : @"";
     return cv;
     }
 - (void)tableViewSelectionDidChange:(NSNotification*)note
@@ -3688,7 +3701,7 @@ void ux_ak_make_table(int handle, int node, int x, int y, int w, int h, void* pe
         {
         NSTableColumn* tc = [[NSTableColumn alloc] initWithIdentifier:[NSString stringWithFormat:@"%d", c]];
         const char* ti = (peer && g_tbl_title) ? g_tbl_title(peer, c) : "";
-        [[tc headerCell] setStringValue:(ti ? [NSString stringWithUTF8String:ti] : @"")];
+        [[tc headerCell] setStringValue:(ti ? ak_ns(ti) : @"")];
         int cw = (peer && g_tbl_width) ? g_tbl_width(peer, c) : 80;
         [tc setWidth:(cw > 0 ? cw : 80)];
         [tv addTableColumn:tc];
@@ -3803,7 +3816,7 @@ void ux_ak_set_outline_hooks(void* children, void* child, void* expandable, void
     void* it = item ? [(NSValue*)item pointerValue] : NULL;
     int c = col.identifier ? [col.identifier intValue] : 0;
     const char* s = (self.peer && g_ol_value && it) ? g_ol_value(self.peer, it, c) : "";
-    return s ? [NSString stringWithUTF8String:s] : @"";
+    return s ? ak_ns(s) : @"";
     }
 // The native control owns the expand/collapse UX; mirror it into the neutral outline so its flattened
 // row list (which native selection is reported against) stays in step.
@@ -3916,7 +3929,7 @@ void ux_ak_toolbar_add(int handle, int node, int tag, const char* label, int typ
     else
         {
         ident = [NSString stringWithFormat:@"xgtb_%d", tag];
-        g_tb_build_labels[ident] = [NSString stringWithUTF8String:(label ? label : "")];
+        g_tb_build_labels[ident] = ak_ns((label ? label : ""));
         g_tb_build_tags[ident] = @(tag);
         }
     [g_tb_build_order addObject:ident];
@@ -3980,7 +3993,7 @@ void ux_ak_make_outline(int handle, int node, int x, int y, int w, int h, void* 
         {
         NSTableColumn* tc = [[NSTableColumn alloc] initWithIdentifier:[NSString stringWithFormat:@"%d", c]];
         const char* ti = (peer && g_tbl_title) ? g_tbl_title(peer, c) : "";
-        [[tc headerCell] setStringValue:(ti ? [NSString stringWithUTF8String:ti] : @"")];
+        [[tc headerCell] setStringValue:(ti ? ak_ns(ti) : @"")];
         int cw = (peer && g_tbl_width) ? g_tbl_width(peer, c) : 120;
         [tc setWidth:(cw > 0 ? cw : 120)];
         [ov addTableColumn:tc];
@@ -4286,14 +4299,14 @@ int ux_ak_alert_dump(int icon, const char* lines, const char* buttons, const cha
     {
     NSAlert* a = [[NSAlert alloc] init];
     [a setAlertStyle:(icon >= 3 ? NSAlertStyleCritical : NSAlertStyleInformational)];
-    NSArray* ls = [[NSString stringWithUTF8String:lines] componentsSeparatedByString:@"|"];
+    NSArray* ls = [ak_ns(lines) componentsSeparatedByString:@"|"];
     [a setMessageText:[ls count] > 0 ? ls[0] : @""];
     if ([ls count] > 1)
         {
         NSRange r = NSMakeRange(1, [ls count] - 1);
         [a setInformativeText:[[ls subarrayWithRange:r] componentsJoinedByString:@"\n"]];
         }
-    NSArray* bs = [[NSString stringWithUTF8String:buttons] componentsSeparatedByString:@"|"];
+    NSArray* bs = [ak_ns(buttons) componentsSeparatedByString:@"|"];
     for (NSString* b in bs)
         [a addButtonWithTitle:b];
     [a layout];
@@ -4390,4 +4403,20 @@ int ux_ak_pixel_alpha(int handle, int x, int y)
         return -1;
     NSColor* c = [g_lastRep colorAtX:x y:y];
     return (int)([c alphaComponent] * 255 + 0.5);
+    }
+
+/* For tests: the node whose native control a click at (x, y) in window `handle` reaches, by AppKit's
+ * own hit test, or -1 (none: the content view, a shield, or nothing). */
+int ux_ak_test_hit(int handle, int x, int y)
+    {
+    if (handle <= 0 || handle >= UX_MAXW || !g_view[handle])
+        return -1;
+    NSView* content = [g_win[handle] contentView];
+    NSPoint p = [g_view[handle] convertPoint:NSMakePoint(x, y) toView:content];
+    NSView* hit = [content hitTest:[content convertPoint:p toView:[content superview]]];
+    for (NSView* v = hit; v; v = [v superview])
+        for (int n = 0; n < UX_MAXN; n++)
+            if (g_ctl[handle][n] == v)
+                return n;
+    return -1;
     }

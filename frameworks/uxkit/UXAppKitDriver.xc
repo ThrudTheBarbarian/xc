@@ -1243,9 +1243,14 @@ class UXAppKitDriver : Object<UXViewDriver>
         ((AKTree*)h).nodes[i].autoresize = mask;
         }
     // NSView autoresizing tracks it live
+    // The neutral springs and struts lay every view out, native controls included.  AppKit's own
+    // masks cannot do it: the native controls are flat children of the window's content view, so a
+    // mask measures against the window, not the pane a control sits in -- a table in a right-hand
+    // column stretched by the whole window's growth instead of moving with its column.  The
+    // resize reflows the tree and realizeTree puts each native control at its new frame.
     bool driverAutoresizes(void)
         {
-        return true;
+        return false;
         }
     void structSetSelectable(pointer h, i32 i, i32 on)
         {

@@ -58,6 +58,7 @@ class UXSplitDivider : UXView
     UXView* pane1; // the flexible side (fills the rest)
     UXSplitDivider* divider;
     bool vertical;  // false: side by side (vertical divider); true: stacked (horizontal divider)
+    bool holdLast;  // on a resize the second pane keeps its extent and the first flexes (an inspector)
     i16 dividerPos; // x (horizontal) or y (vertical) of the divider's near edge
 
     void init(void)
@@ -67,6 +68,7 @@ class UXSplitDivider : UXView
         pane1 = (UXView*)0;
         divider = (UXSplitDivider*)0;
         vertical = false;
+        holdLast = false;
         dividerPos = (i16)120;
         }
     UXKind kind(void)
@@ -157,10 +159,24 @@ class UXSplitDivider : UXView
         pane1.resizeSubviews((i32)p1o.w, (i32)p1o.h, (i32)p1n.w, (i32)p1n.h); // to fill the resized pane
         }
 
+    // Which pane keeps its extent when the split view resizes: the first (the default), or, held
+    // here, the second (a side pane on the right, as an inspector is).
+    void setHoldsLast(bool on)
+        {
+        holdLast = on;
+        }
+
     // Reflow the panes when the split view itself resizes (window grew): pane0 keeps its extent, pane1
-    // flexes.  The neutral springs & struts call this via resizeSubviews; we clamp + re-lay.
+    // flexes (or the other way about, holdLast).  The neutral springs & struts call this via
+    // resizeSubviews; we clamp + re-lay.
     void resizeSubviews(i32 oldW, i32 oldH, i32 newW, i32 newH)
         {
+        if (holdLast)
+            {
+            i32 grown = !vertical ? newW - oldW : newH - oldH;
+            i32 p = (i32)dividerPos + grown;
+            dividerPos = (i16)(p < (i32)UX_SPLIT_MIN ? (i32)UX_SPLIT_MIN : p);
+            }
         i16 mx = (i16)((!vertical ? newW : newH) - (i32)UX_SPLIT_MIN); // panes abut — no divider width to subtract
         if (dividerPos > mx)
             {
