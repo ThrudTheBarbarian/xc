@@ -75,6 +75,10 @@ class RKMainBuilder : Object
         tb.addItem((u8*)"doc.new", (u8*)"New", (i32)RKTB_NEW, (i16)44);
         tb.addItem((u8*)"trash", (u8*)"Delete", (i32)RKTB_DELETE, (i16)44);
         content.addSubview(tb, UXGeom.make((i16)0, (i16)0, w, tbH));
+        // How each part follows the window when it is resized (springs and struts): the toolbar and
+        // status line stretch across, the outline keeps its width, the canvas takes what is left,
+        // and the inspector column keeps its width on the right.
+        tb.setAutoresizeMask((i32)UX_FLEX_WIDTH);
 
         // ---- outline | (centre | right) --------------------------------------
         i16 bodyY = (i16)((i32)tbH + (i32)gut);
@@ -94,15 +98,19 @@ class RKMainBuilder : Object
         UXSplitView* outer = new UXSplitView(); // outline | rest
         outer.setDividerPos((i16)olW);
         content.addSubview(outer, UXGeom.make((i16)0, bodyY, w, bodyH));
+        outer.setAutoresizeMask((i32)(UX_FLEX_WIDTH | UX_FLEX_HEIGHT));
 
         UXOutlineView* outline = new UXOutlineView();
         outline.addColumn((u8*)"", (i16)(olW - (i32)24)); // one column, the pane's width
         outer.firstPane().addSubview(outline, UXGeom.make((i16)0, (i16)0, (i16)olW, bodyH));
+        outline.setAutoresizeMask((i32)(UX_FLEX_WIDTH | UX_FLEX_HEIGHT));
 
         UXSplitView* inner = new UXSplitView(); // centre | right
         inner.setDividerPos((i16)cvW);
         outer.secondPane().addSubview(inner,
                                       UXGeom.make((i16)0, (i16)0, (i16)((i32)w - olW), bodyH));
+        inner.setAutoresizeMask((i32)(UX_FLEX_WIDTH | UX_FLEX_HEIGHT));
+        inner.setHoldsLast(true); // the inspector keeps its width; the canvas grows
 
         // ---- the centre: the dock, the canvas, and the device bar under it -------
         i16 dkH = (i16)28;
@@ -110,10 +118,13 @@ class RKMainBuilder : Object
         i16 cvH = (i16)((i32)bodyH - (i32)dbH - (i32)dkH);
         RKDock* dock = new RKDock();
         inner.firstPane().addSubview(dock, UXGeom.make((i16)0, (i16)0, (i16)cvW, dkH));
+        dock.setAutoresizeMask((i32)UX_FLEX_WIDTH);
         UXView* canvas = new UXView();
         inner.firstPane().addSubview(canvas, UXGeom.make((i16)0, dkH, (i16)cvW, cvH));
+        canvas.setAutoresizeMask((i32)(UX_FLEX_WIDTH | UX_FLEX_HEIGHT));
         UXView* bar = new UXView();
         inner.firstPane().addSubview(bar, UXGeom.make((i16)0, (i16)((i32)dkH + (i32)cvH), (i16)cvW, dbH));
+        bar.setAutoresizeMask((i32)(UX_FLEX_WIDTH | UX_ANCHOR_BOTTOM));
         UXLabel* viewAs = new UXLabel();
         viewAs.setTitle((u8*)"View as:");
         bar.addSubview(viewAs, UXGeom.make((i16)8, (i16)4, (i16)60, rh));
@@ -186,12 +197,14 @@ class RKMainBuilder : Object
         lib.addColumn((u8*)"", (i16)((i32)inW - (i32)130));
         lib.setDataSource((UXTableDataSource*)c.library);
         right.addSubview(lib, UXGeom.make((i16)4, tY, (i16)((i32)inW - (i32)8), (i16)((i32)bodyH - (i32)tY - (i32)4)));
+        lib.setAutoresizeMask((i32)(UX_FLEX_WIDTH | UX_FLEX_HEIGHT)); // the library takes the height
 
         // ---- the status line -----------------------------------------------
         UXLabel* status = new UXLabel();
         status.setTitle((u8*)"Ready");
         content.addSubview(status,
                            UXGeom.make(gut, (i16)((i32)h - (i32)stH), (i16)((i32)w - (i32)2 * (i32)gut), stH));
+        status.setAutoresizeMask((i32)(UX_FLEX_WIDTH | UX_ANCHOR_BOTTOM));
 
         // The outline and the library report selection through the table delegate they inherit;
         // that one line is what makes the panes a single editor.

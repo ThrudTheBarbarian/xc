@@ -11,6 +11,7 @@
 // (RKMainController).  Replacing the builder with a nib-loading one is the
 // bootstrap plan; nothing here changes when that happens.
 #import <Stdio.xc>
+#import <Process.xc>
 #import "RKDriver.xc"
 #import "UXApplication.xc"
 #import "UXWindow.xc"
@@ -66,6 +67,12 @@ class RocksApp : Object<UXApplicationDelegate>
         // in it — REAL widgets, built from the model by RKCanvas.  UXFileIO
         // reads on every native target, so this is no longer host-only.
         u8* sample = (u8*)"resources/desktop.rsc"; // a GEM desktop's resources, if run from one
+        if (Process.argumentCount() > (u32)1)
+            {
+            // or the file named on the command line: copied, as the String's bytes go with it
+            String* arg = Process.argument((u32)1);
+            sample = RKIdentity.dup(arg.cString());
+            }
         if (UXFileIO.read(sample) != (UXData*)0 && controller.openPath(sample))
             {
             Stdio.printf("opened %s: %d trees\n", sample, controller.doc.treeCount());

@@ -22,6 +22,7 @@
 
 u8* getenv(u8* name);
 i32 ux_ak_test_drop_file(i32 handle, u8* path, i32 x, i32 y);
+i32 ux_ak_test_hit(i32 handle, i32 x, i32 y);
 
 i32 gFails;
 void check(u8* what, i32 got, i32 want)
@@ -205,8 +206,19 @@ void main(void)
     checkTrue("Play -> the controller offers a list", c.chooser != (RKWireChooser*)0);
     check("its two actions, and no outlets", c.chooser.count(), (i32)2);
     checkTrue("onPlay among them", rowOf(c, (u8*)"onPlay") >= (i32)0);
+    win.displayAll();
+    UXRect ca = c.chooser.cancel.absoluteFrame();
+    check("a click on Cancel reaches Cancel, not the canvas's overlay",
+          ux_ak_test_hit(win.handle, (i32)ca.x + (i32)ca.w / (i32)2, (i32)ca.y + (i32)ca.h / (i32)2), (i32)c.chooser.cancel.index);
+    UXRect ta = c.chooser.table.absoluteFrame();
+    checkTrue("and a click on the list reaches the list",
+              ux_ak_test_hit(win.handle, (i32)ta.x + (i32)ta.w / (i32)2, (i32)ta.y + (i32)ta.h - (i32)8) >= (i32)0);
     c.tableSelectionDidChange(c.chooser.table, rowOf(c, (u8*)"onPlay"));
     checkTrue("choosing closes the list", c.chooser == (RKWireChooser*)0);
+    win.displayAll();
+    UXRect pa = c.canvasMap.viewFor(named(c, (u8*)"play")).absoluteFrame();
+    check("then the overlay takes clicks on the canvas again",
+          ux_ak_test_hit(win.handle, (i32)pa.x + (i32)pa.w / (i32)2, (i32)pa.y + (i32)pa.h / (i32)2), (i32)-1);
     check("one connection", (i32)c.doc.connections.count(), (i32)1);
     UXRscConnection* k = (UXRscConnection* ?)c.doc.connections.get((u32)0);
     checkTrue("an action named onPlay", k.kind == (i32)UXR_CONN_ACTION && streq(k.member, (u8*)"onPlay"));

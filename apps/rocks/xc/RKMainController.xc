@@ -486,6 +486,7 @@ class RKMainController : Object<UXTableDelegate>
             ((UXView* ?)panes.get((u32)ti)).setHidden(true);
             UXView* pane = new UXView();
             canvas.addSubview(pane, canvas.bounds());
+            pane.setAutoresizeMask((i32)(UX_FLEX_WIDTH | UX_FLEX_HEIGHT));
             pane.setHidden(true);
             RKCanvas* map = new RKCanvas();
             map.realizeIn(doc, doc.treeAt(ti), (i32)RKWiring.themeOf(doc, doc.treeAt(ti)), pane);
@@ -671,18 +672,23 @@ class RKMainController : Object<UXTableDelegate>
         UXRect ca = canvas.absoluteFrame();
         i32 px = wx - (i32)ca.x;
         i32 py = wy - (i32)ca.y;
+        // the free place nearest the drop point, on a 12-point grid
         i32 bx = (i32)-1;
         i32 by = (i32)-1;
-        for (i32 k = (i32)0; k < (i32)4 && bx < (i32)0; k = k + (i32)1)
+        i32 best = (i32)2147483647;
+        for (i32 y = (i32)0; y + h <= (i32)ca.h; y = y + (i32)12)
             {
-            i32 x = (k & (i32)1) == (i32)0 ? px + (i32)12 : px - (i32)232;
-            i32 y = (k & (i32)2) == (i32)0 ? py + (i32)12 : py - h - (i32)12;
-            x = x < (i32)0 ? (i32)0 : (x + (i32)220 > (i32)ca.w ? (i32)ca.w - (i32)220 : x);
-            y = y < (i32)0 ? (i32)0 : (y + h > (i32)ca.h ? (i32)ca.h - h : y);
-            if (!self.coversControl(t, x, y, (i32)220, h))
+            for (i32 x = (i32)0; x + (i32)220 <= (i32)ca.w; x = x + (i32)12)
                 {
-                bx = x;
-                by = y;
+                i32 dx = x - (px + (i32)12);
+                i32 dy = y - (py + (i32)12);
+                i32 dist = dx * dx + dy * dy;
+                if (dist < best && !self.coversControl(t, x, y, (i32)220, h))
+                    {
+                    best = dist;
+                    bx = x;
+                    by = y;
+                    }
                 }
             }
         if (bx < (i32)0)
@@ -707,7 +713,11 @@ class RKMainController : Object<UXTableDelegate>
         ch.addSubview(cancel, UXGeom.make((i16)140, (i16)(h - (i32)rh - (i32)6), (i16)72, rh));
         ch.table = tb;
         ch.title = title;
+        ch.cancel = cancel;
         chooser = ch;
+        // the edit overlay takes every press on the canvas: while the list is up it stands aside,
+        // so the list's rows and Cancel can be clicked
+        overlay.setHidden(true);
         self.say((u8*)"Choose what to connect");
         }
     // Whether a canvas rect overlaps any control of the layout `t` (its containers excepted).
@@ -729,7 +739,7 @@ class RKMainController : Object<UXTableDelegate>
             }
         return false;
         }
-    void onChooserCancel(UXControl* sender)
+    void onChooserCancel(UXControl* sender) : action
         {
         self.closeChooser();
         self.say((u8*)"Not connected");
@@ -741,6 +751,7 @@ class RKMainController : Object<UXTableDelegate>
             chooser.setHidden(true);
             chooser.removeFromSuperview();
             chooser = (RKWireChooser*)0;
+            overlay.setHidden(false);
             }
         }
     // A pick in the chooser: make the connection, in the scope chosen under the canvas.
@@ -1249,6 +1260,7 @@ class RKMainController : Object<UXTableDelegate>
             {
             UXView* pane = new UXView();
             canvas.addSubview(pane, canvas.bounds());
+            pane.setAutoresizeMask((i32)(UX_FLEX_WIDTH | UX_FLEX_HEIGHT));
             RKCanvas* map = new RKCanvas();
             UXRscTree* rt = r.treeAt((i32)panes.count());
             i32 built = map.realizeIn(r, rt, (i32)RKWiring.themeOf(r, rt), pane);
@@ -1414,6 +1426,7 @@ class RKMainController : Object<UXTableDelegate>
             }
         overlay.removeFromSuperview();
         canvas.addSubview(overlay, canvas.bounds());
+        overlay.setAutoresizeMask((i32)(UX_FLEX_WIDTH | UX_FLEX_HEIGHT));
         if (selFrame != (RKSelectionFrame*)0)
             {
             UXRect f = selFrame.frame();
@@ -1505,6 +1518,7 @@ class RKMainController : Object<UXTableDelegate>
         ((UXView* ?)panes.get((u32)shownTree)).setHidden(true);
         UXView* pane = new UXView();
         canvas.addSubview(pane, canvas.bounds());
+        pane.setAutoresizeMask((i32)(UX_FLEX_WIDTH | UX_FLEX_HEIGHT));
         RKCanvas* map = new RKCanvas();
         map.realizeIn(doc, doc.treeAt(shownTree), (i32)RKWiring.themeOf(doc, doc.treeAt(shownTree)), pane);
         panes.set((u32)shownTree, pane);

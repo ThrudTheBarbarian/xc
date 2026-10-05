@@ -26,6 +26,7 @@ class RKWireChooser : UXView<UXTableDataSource>
     RKEnd* dst;
     UXTableView* table;
     UXLabel* title;
+    UXButton* cancel;
 
     void init(void)
         {
@@ -141,19 +142,19 @@ class RKConnectionsPane : Object
             UXRscConnection* c = (UXRscConnection* ?)cs.get(i);
             self.connectionRow(d, t, c, e, here, &y);
             }
-        // the class's members with nothing connected to them in this layout
+        // the class's members with nothing connected to them in this layout, on one line
         u8* cls = RKWiring.classOf(d, t, e);
         if (book != (RKClassBook*)0 && cls[0] != (u8)0)
             {
+            UXData* idle = UXData.withCapacity((i32)64);
             Array<RKMember>* os = book.outletsOf(cls);
             Array<RKMember>* as = book.actionsOf(cls);
-            bool header = false;
             for (u32 i = (u32)0; i < os.count(); i = i + (u32)1)
                 {
                 RKMember* m = (RKMember* ?)os.get(i);
                 if (!RKConnectionsPane.connected(d, t, e, (i32)UXR_CONN_OUTLET, m.name))
                     {
-                    header = self.unconnected(header, RKConnectionsPane.joined((u8*)"outlet ", m.name), &y);
+                    RKConnectionsPane.listAdd(idle, m.name);
                     }
                 }
             for (u32 i = (u32)0; i < as.count(); i = i + (u32)1)
@@ -161,8 +162,14 @@ class RKConnectionsPane : Object
                 RKMember* m = (RKMember* ?)as.get(i);
                 if (!RKConnectionsPane.connected(d, t, e, (i32)UXR_CONN_ACTION, m.name))
                     {
-                    header = self.unconnected(header, RKConnectionsPane.joined((u8*)"action ", m.name), &y);
+                    RKConnectionsPane.listAdd(idle, m.name);
                     }
+                }
+            if (idle.length() > (i32)0)
+                {
+                idle.appendByte((u8)0);
+                y = (i16)((i32)y + (i32)6);
+                self.note(RKConnectionsPane.joined((u8*)"Not connected here: ", idle.bytes()), &y);
                 }
             }
         loading = false;
@@ -203,11 +210,10 @@ class RKConnectionsPane : Object
             text = fromHere ? RKConnectionsPane.joined3(c.member, (u8*)" -> ", other)
                             : RKConnectionsPane.joined3(other, (u8*)" sends ", c.member);
             }
-        bool live = RKWiring.inScopeHere(d, t, c);
+        // one line: what it is, the layouts it binds in, and x to break it
         UXLabel* l = new UXLabel();
-        l.setTitle(live ? text : RKConnectionsPane.joined(text, (u8*)"  (not in this layout)"));
-        pane.addSubview(l, UXGeom.make((i16)8, y[0], (i16)((i32)w - (i32)16), rh));
-        y[0] = (i16)((i32)y[0] + (i32)rh + (i32)2);
+        l.setTitle(text);
+        pane.addSubview(l, UXGeom.make((i16)8, y[0], (i16)((i32)w - (i32)182), rh));
         RKConnRow* r = new RKConnRow();
         r.conn = c;
         UXPopUpButton* pu = new UXPopUpButton();
@@ -222,15 +228,15 @@ class RKConnectionsPane : Object
             }
         pu.selectItem(now);
         pu.setAction(&self.onScope);
-        pane.addSubview(pu, UXGeom.make((i16)16, y[0], (i16)140, rh));
+        pane.addSubview(pu, UXGeom.make((i16)((i32)w - (i32)172), y[0], (i16)104, rh));
         r.scope = pu;
         UXButton* b = new UXButton();
-        b.setTitle((u8*)"Disconnect");
+        b.setTitle((u8*)"Remove"); // breaks the connection
         b.setAction(&self.onBreak);
-        pane.addSubview(b, UXGeom.make((i16)162, y[0], (i16)((i32)w - (i32)170), rh));
+        pane.addSubview(b, UXGeom.make((i16)((i32)w - (i32)66), y[0], (i16)62, rh));
         r.breaker = b;
         rows.add(r);
-        y[0] = (i16)((i32)y[0] + (i32)rh + (i32)8);
+        y[0] = (i16)((i32)y[0] + (i32)rh + (i32)4);
         }
     bool unconnected(bool header, u8* what, i16* y)
         {
@@ -336,7 +342,25 @@ class RKConnectionsPane : Object
                     return RKOutline.objectLabel(o);
                     }
                 }
-            return (u8*)"a control this layout leaves out";
+            // in another layout of the form only: its name there
+            for (i32 k = (i32)0; k < d.treeCount(); k = k + (i32)1)
+                {
+                UXRscTree* ot = d.treeAt(k);
+                if (ot == t || d.formIdOf(ot) != r.a)
+                    {
+                    continue;
+                    }
+                Array<UXRscObject>* oall = ot.allObjects();
+                for (u32 i = (u32)0; i < oall.count(); i = i + (u32)1)
+                    {
+                    UXRscObject* o = (UXRscObject* ?)oall.get(i);
+                    if (o.logicalId == r.b)
+                        {
+                        return RKConnectionsPane.joined(RKOutline.objectLabel(o), (u8*)" (another layout's)");
+                        }
+                    }
+                }
+            return (u8*)"a deleted control";
             }
         return (u8*)"?";
         }
@@ -352,6 +376,14 @@ class RKConnectionsPane : Object
     static u8* joined(u8* a, u8* b)
         {
         return RKConnectionsPane.joined3(a, (u8*)"", b);
+        }
+    static void listAdd(UXData* d, u8* w)
+        {
+        if (d.length() > (i32)0)
+            {
+            d.appendBytes((u8*)", ", (i32)2);
+            }
+        d.appendBytes(w, UXRscTree.len(w));
         }
     static u8* joined3(u8* a, u8* b, u8* c)
         {

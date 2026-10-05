@@ -41,5 +41,5 @@ case "${1:-}" in
 esac
 
 echo "== rocks: launching — close the window to exit =="
-"$work/rocks"
+"$work/rocks" "$@"
 echo "== rocks: done =="
