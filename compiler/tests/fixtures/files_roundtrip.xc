@@ -19,8 +19,10 @@
 
 i32 main(void)
 {
-    String* p = String.withCString("files_roundtrip.tmp");
-    String* none = String.withCString("files_roundtrip_missing.tmp");
+    // Scratch files go in tmp/ (ignored by git).
+    Files.createDirectory(String.withCString("tmp"));
+    String* p = String.withCString("tmp/files_roundtrip.tmp");
+    String* none = String.withCString("tmp/files_roundtrip_missing.tmp");
 
     bool w = Files.writeText(p, String.withCString("hello, files\n"));
     Stdio.printf("write %d\n", (i16)(w ? 1 : 0));

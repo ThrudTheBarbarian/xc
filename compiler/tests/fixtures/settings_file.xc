@@ -16,7 +16,9 @@
 
 i32 main(void)
 {
-    String* p = String.withCString("settings_file.tmp");
+    // Scratch files go in tmp/ (ignored by git).
+    Files.createDirectory(String.withCString("tmp"));
+    String* p = String.withCString("tmp/settings_file.tmp");
 
     // A file that is not there is an EMPTY STORE, not an error: the first
     // save() creates it.
@@ -45,8 +47,8 @@ i32 main(void)
                  s.get(String.withCString("alpha")).cString());
 
     // A file that has gone leaves the store EMPTY, not stale.
-    Files.writeText(String.withCString("settings_file_gone.tmp"), String.withCString("q = r\n"));
-    Settings* gone = Settings.open(String.withCString("settings_file_gone.tmp"));
+    Files.writeText(String.withCString("tmp/settings_file_gone.tmp"), String.withCString("q = r\n"));
+    Settings* gone = Settings.open(String.withCString("tmp/settings_file_gone.tmp"));
     Stdio.printf("before %lu\n", gone.count());
     gone.set(String.withCString("z"), String.withCString("w"));
     Stdio.printf("after %lu reload %d now %lu\n", gone.count(), (i16)(gone.reload() ? 1 : 0), gone.count());

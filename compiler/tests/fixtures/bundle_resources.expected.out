@@ -1,5 +1,5 @@
-root bundle_resources.tmp
-res bundle_resources.tmp/Resources
+root tmp/bundle_resources.tmp
+res tmp/bundle_resources.tmp/Resources
 greeting [hello bundle]
 inner [inner]
 noext [no extension]
@@ -7,8 +7,8 @@ exists 1 1 0
 data 13
 missing NULL
 missing data NULL
-path bundle_resources.tmp/Resources/nope.txt
-flatres bundle_flat.tmp
+path tmp/bundle_resources.tmp/Resources/nope.txt
+flatres tmp/bundle_flat.tmp
 flat [flat]
 dira a/b
 dirb .

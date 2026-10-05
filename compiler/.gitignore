@@ -90,5 +90,3 @@ keys/
 # Vendored Mbed TLS static archives (large, reproducible) — not tracked
 3p/tls/mbedtls-linux/*.a
 
-# tests/fixtures/files_roundtrip.xc writes this in the working directory
-files_roundtrip.tmp

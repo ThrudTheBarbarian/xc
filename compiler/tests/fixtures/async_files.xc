@@ -10,7 +10,9 @@ u32 gLen = (u32)0;
 
 i32 main(void)
     {
-    String* p = String.withCString("async_files_fixture.tmp");
+    // Scratch files go in tmp/ (ignored by git).
+    Files.createDirectory(String.withCString("tmp"));
+    String* p = String.withCString("tmp/async_files_fixture.tmp");
     AsyncFiles.writeText(p, String.withCString("one\n"), block void(bool ok) { Stdio.printf("write %ld\n", (i32)(ok ? 1 : 0)); });
     AsyncFiles.appendText(p, String.withCString("two\n"), (block void(bool))0);
     AsyncFiles.readText(p, block void(String* t) { gLen = t.byteLength(); Stdio.printf("read [%s]\n", t.cString()); });

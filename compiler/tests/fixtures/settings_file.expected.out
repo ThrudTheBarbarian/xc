@@ -1,7 +1,7 @@
 fresh 0 save 1
 created size 0
 count 2 alpha one beta two
-path settings_file.tmp
+path tmp/settings_file.tmp
 save 1
 text [alpha = one
 beta = two

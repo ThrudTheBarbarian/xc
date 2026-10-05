@@ -18,18 +18,20 @@
 
 i32 main(void)
 {
-    Files.createDirectory(String.withCString("bundle_resources.tmp"));
-    Files.createDirectory(String.withCString("bundle_resources.tmp/Resources"));
-    Files.createDirectory(String.withCString("bundle_resources.tmp/Resources/sub"));
-    Files.writeText(String.withCString("bundle_resources.tmp/Resources/greeting.txt"),
+    // Scratch files go in tmp/ (ignored by git).
+    Files.createDirectory(String.withCString("tmp"));
+    Files.createDirectory(String.withCString("tmp/bundle_resources.tmp"));
+    Files.createDirectory(String.withCString("tmp/bundle_resources.tmp/Resources"));
+    Files.createDirectory(String.withCString("tmp/bundle_resources.tmp/Resources/sub"));
+    Files.writeText(String.withCString("tmp/bundle_resources.tmp/Resources/greeting.txt"),
                     String.withCString("hello bundle\n"));
-    Files.writeText(String.withCString("bundle_resources.tmp/Resources/sub/inner.txt"),
+    Files.writeText(String.withCString("tmp/bundle_resources.tmp/Resources/sub/inner.txt"),
                     String.withCString("inner\n"));
-    Files.writeText(String.withCString("bundle_resources.tmp/Resources/log"),
+    Files.writeText(String.withCString("tmp/bundle_resources.tmp/Resources/log"),
                     String.withCString("no extension\n"));
 
     // A root WITH a Resources directory: that is where the resources are.
-    Bundle* b = Bundle.withRoot(String.withCString("bundle_resources.tmp"));
+    Bundle* b = Bundle.withRoot(String.withCString("tmp/bundle_resources.tmp"));
     Stdio.printf("root %s\n", b.root().cString());
     Stdio.printf("res %s\n", b.resourcePath().cString());
     Stdio.printf("greeting [%s]\n", b.textForResource(String.withCString("greeting"), String.withCString("txt")).trimmed().cString());
@@ -53,9 +55,9 @@ i32 main(void)
 
     // A root with NO Resources directory uses the root itself: the same source
     // works for an app that keeps everything flat.
-    Files.createDirectory(String.withCString("bundle_flat.tmp"));
-    Files.writeText(String.withCString("bundle_flat.tmp/flat.txt"), String.withCString("flat\n"));
-    Bundle* flat = Bundle.withRoot(String.withCString("bundle_flat.tmp"));
+    Files.createDirectory(String.withCString("tmp/bundle_flat.tmp"));
+    Files.writeText(String.withCString("tmp/bundle_flat.tmp/flat.txt"), String.withCString("flat\n"));
+    Bundle* flat = Bundle.withRoot(String.withCString("tmp/bundle_flat.tmp"));
     Stdio.printf("flatres %s\n", flat.resourcePath().cString());
     Stdio.printf("flat [%s]\n", flat.textForResource(String.withCString("flat"), String.withCString("txt")).trimmed().cString());
 
