@@ -208,6 +208,7 @@ is reported and ignored.
 | `--with-lib <path>` | With `--emit-apk`, store a prebuilt `lib<name>.so` in `lib/arm64-v8a/` beside the payload. |
 | `--lib-name <name>` | With `--emit-apk`, the library the system loads first (`android.app.lib_name`). Default: the payload. |
 | `--with-dex <path>` | With `--emit-apk`, package this `classes.dex` and mark the manifest `hasCode="true"`. |
+| `--manifest-attr <name>=<value>` | (from 0.7) With `--emit-apk`, set an attribute on the manifest's `<application>`; repeatable. `label` (which also names the activity the launcher shows), and the booleans `debuggable`, `allowBackup`, `hardwareAccelerated`, `largeHeap`, `usesCleartextTraffic`, `resizeableActivity`, `requestLegacyExternalStorage` and `enableOnBackInvokedCallback`. |
 | `--emit-iface` | Write the module interface (the `.xtc.iface` description) to the `-o` path, or to standard output with no `-o`, and stop. `-c` and `--emit-lib` produce the interface as part of their output without this flag. |
 | `-mavx2`, `-msimd=avx2` | **From 0.66.** On `-A x86_64` and `-A win64`, vectorise with 256-bit AVX2 instead of the 128-bit SSE2 baseline. The program then needs an AVX2 CPU (Intel Haswell, AMD Zen and later). |
 | `-msimd=auto` | **From 0.66, the default** on `-A x86_64` and `-A win64`. Each function the vectoriser widens is built twice, for SSE2 and for AVX2, and the program picks one at load from what the CPU and OS support, so one binary runs the widest unit the machine has and still runs everywhere. Setting `XC_SIMD=base` or `XC_SIMD=avx2` in the environment forces a level for one run; forcing one the machine lacks falls back with a note on stderr. |
@@ -265,7 +266,8 @@ Suppress a category with `-Wno-<category>`. All are on by default.
 | `unknown-pragma` | an unrecognised `#` directive |
 | `toolchain-fallback` | the build fell back from the in-house assembler/linker to an external tool |
 | `return-type` | a non-`void` function that can reach its closing brace without returning — its body traps at run time, so the missing `return` is named at compile time |
-| `par-scatter` | (from 0.67) a `par` block writes a buffer at an index that is not `k*i + c` in the item's index, so two items might write the same element |
+| `par-scatter` | (from 0.7) a `par` block writes a buffer at an index that is not `k*i + c` in the item's index, so two items might write the same element |
+| `par-gpu` | (from 0.7) compiling for a target with a GPU, a `par` block that cannot run there, and why: it runs on the CPU's threads instead |
 | `range-init-count` | a range initialiser (`u8 a[10] = 0..9;`) that supplies fewer or more values than the array holds |
 
 `xcc --help` prints the full category list, including any checks added after this

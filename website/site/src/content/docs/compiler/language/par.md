@@ -1,9 +1,9 @@
 ---
 title: Parallel blocks
-description: par blocks — a loop whose iterations run in parallel, with reductions — on the CPU's threads, and from 0.67 on the GPU.
+description: par blocks — a loop whose iterations run in parallel, with reductions — on the CPU's threads, and from 0.7 on the GPU.
 ---
 
-**From 0.67.** A `par` block marks a loop whose iterations are independent, so
+**From 0.7.** A `par` block marks a loop whose iterations are independent, so
 the compiler may run them in parallel: on the CPU's threads, or on the GPU
 where there is one (see below). The same source has to run on both, which is
 why the rules about what a block may contain are stricter than for an ordinary
@@ -36,8 +36,9 @@ A program that uses `par` imports `Par.xc`, its runtime.
 - The body is **one ascending loop** over a range: `a..b` (up to but not
   including `b`) or `a...b` (including `b`), stepping by one. Each iteration is
   a work item.
-- The **name** is optional (`par fill`). It is how a block will be chosen per
-  device later; today it only labels error messages.
+- The **name** is optional (`par fill`). It names the block in messages, in
+  `XC_PAR_REPORT=1`, and to [`Par.device`](#which-device), which sets one block's
+  device; an unnamed block goes by `file:line`.
 - `par` is not a reserved word: it starts a block only where a block can start,
   so a variable called `par` still works.
 
@@ -75,7 +76,7 @@ the calling thread.
 
 ## Running on the GPU
 
-**From 0.67: macOS on Apple silicon, and Windows with an NVIDIA GPU.** A block
+**From 0.7: macOS on Apple silicon, and Windows with an NVIDIA GPU.** A block
 that can run on the GPU does so when that is faster: through Metal on a Mac, and
 through NVIDIA's driver on Windows. The compiler gives each block a GPU version
 of its loop, and a program needs no extra flags or libraries. On Windows it
