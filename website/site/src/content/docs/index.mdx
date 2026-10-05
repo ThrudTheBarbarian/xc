@@ -47,7 +47,7 @@ written in the xc language is byte-identical through every stage.
 The toolchain drives several back ends from one language and one IR:
 
 - **arm64**: native Mach-O executables for Apple silicon (and the default host).
-- **x86-64**: native Linux executables over musl.
+- **x86-64**: native Linux executables: static over musl, so they run on any distribution, or with `-dynamic` linked against glibc, to load GTK 4, libGL and other system libraries.
 - **arm9 (AArch32)**: position-independent ELF.
 - **win64**: native PE executables with full C interop.
 - **m68k**: Motorola 68000/68030 (`-A m68k` for the 68000, `-A 68030` for
