@@ -24,6 +24,14 @@ PLATFORMS = (("arm64", ""), ("x86-64", "_x86_64"))
 # Benchmarks whose sources changed in a way that makes their earlier times
 # incomparable, and the release from which their times are comparable again.
 CHANGED_IN = {"arc_alloc": "v0.64-langs", "method_call": "v0.64-langs"}
+# Benchmarks quoted on their own, outside the geometric means: one kernel the
+# compiler recognises and replaces would otherwise swing a mean that stands
+# for general code.
+SEPARATE = ("matrix_mul_f32",)
+
+
+def general(cur):
+    return {b: d for b, d in cur.items() if b not in SEPARATE}
 
 
 def load(v):
@@ -40,8 +48,8 @@ def esc(s):
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-def ratio_chart(cur, suffix, title):
-    """One row per benchmark: xc's time over each language's, on a log scale."""
+def ratio_rows(cur, suffix):
+    """(worst ratio, benchmark, {language: xc's time over its}) per benchmark."""
     rows = []
     for b, d in cur.items():
         d = d["O3"]
@@ -49,7 +57,19 @@ def ratio_chart(cur, suffix, title):
         rs = {l: x / d[l + suffix] for l, _, _ in LANGS if x and d.get(l + suffix)}
         best = max(rs.values()) if rs else 0
         rows.append((best, b, rs))
-    rows.sort(key=lambda r: -r[0])
+    return rows
+
+
+def ratio_chart(cur, suffix, title, order=None):
+    """One row per benchmark: xc's time over each language's, on a log scale.
+    `order` fixes the rows (the latest release's), so a release's chart has
+    its dots, not its rows, in different places."""
+    rows = ratio_rows(cur, suffix)
+    if order:
+        byname = {r[1]: r for r in rows}
+        rows = [byname.get(b, (0, b, {})) for b in order]
+    else:
+        rows.sort(key=lambda r: -r[0])
     w, left, right, top, rowh = 720, 132, 704, 44, 19
     lo, hi = -3.0, 3.0                       # log2 range: 1/8 .. 8
     h = top + rowh * len(rows) + 30
@@ -93,6 +113,37 @@ def ratio_chart(cur, suffix, title):
     return "".join(o)
 
 
+def version_switch(hist, suffix, title, versions, key):
+    """The per-benchmark chart for each release, one shown at a time, chosen
+    by a row of release labels (the latest at first). CSS only: each label is
+    a radio button's, and the checked one's chart is displayed."""
+    latest = versions[-1]
+    order = [r[1] for r in sorted(ratio_rows(hist[latest], suffix), key=lambda r: -r[0])]
+    tag = lambda v: "%s-%s" % (key, v.lstrip("v").replace(".", "-"))
+    o = ['<div class="xc-versions">']
+    for v in versions:
+        o.append('<input type="radio" name="%s" id="%s"%s>' % (key, tag(v), " checked" if v == latest else ""))
+    o.append('<div class="xc-version-labels" role="group" aria-label="Release">Release:')
+    for v in versions:
+        o.append('<label for="%s">%s</label>' % (tag(v), v.lstrip("v")))
+    o.append('</div>')
+    for v in versions:
+        o.append('<div class="xc-version %s">%s</div>'
+                 % (tag(v), ratio_chart(hist[v], suffix, "%s (%s)" % (title, v.lstrip("v")), order)))
+    o.append('</div>')
+    css = [".xc-versions>input{position:absolute;opacity:0;width:1px;height:1px}",
+           ".xc-versions .xc-version{display:none}",
+           ".xc-version-labels{display:flex;flex-wrap:wrap;gap:.35rem;align-items:center;margin:.25rem 0 .5rem;font-size:.9em}",
+           ".xc-version-labels label{margin:0;cursor:pointer;padding:.1rem .55rem;border:1px solid currentColor;border-radius:999px;opacity:.6}"]
+    for v in versions:
+        t = tag(v)
+        css.append("#%s:checked~.%s{display:block}" % (t, t))
+        css.append("#%s:checked~.xc-version-labels label[for=%s]{opacity:1;font-weight:600}" % (t, t))
+        css.append("#%s:focus-visible~.xc-version-labels label[for=%s]{outline:2px solid currentColor;outline-offset:2px}" % (t, t))
+    o.append('<style>%s</style>' % "".join(css))
+    return "".join(o)
+
+
 def history_chart(hist, suffix, title, versions):
     """xc's own time per benchmark, relative to the first release shown."""
     first = versions[0]
@@ -104,7 +155,7 @@ def history_chart(hist, suffix, title, versions):
             vals.append(d.get("xc" + suffix))
         if vals[0]:
             series[b] = [None if x is None else x / vals[0] for x in vals]
-    geo = [gmean([s[i] for s in series.values() if s[i]]) for i in range(len(versions))]
+    geo = [gmean([s[i] for b, s in series.items() if s[i] and b not in SEPARATE]) for i in range(len(versions))]
     w, h, left, right, top, bottom = 720, 300, 60, 560, 24, 262
     # The y range fits the data, kept at least 0.8..1.25 so a quiet history
     # still reads as quiet rather than being stretched into drama.
@@ -178,10 +229,29 @@ def summary(cur):
     for l, name, _ in LANGS:
         vals = []
         for _, suf in PLATFORMS:
-            vals.append(gmean([d["O3"]["xc" + suf] / d["O3"][l + suf] for d in cur.values()
+            vals.append(gmean([d["O3"]["xc" + suf] / d["O3"][l + suf] for d in general(cur).values()
                                if d["O3"].get("xc" + suf) and d["O3"].get(l + suf)]))
         out.append("| %s | **%.2f** | **%.2f** |" % (name, vals[0], vals[1]))
     return "\n".join(out)
+
+
+def separate(cur):
+    """The benchmarks kept out of the means, each with its own ratios."""
+    out = []
+    for b in SEPARATE:
+        d = cur.get(b, {}).get("O3", {})
+        parts = []
+        for pname, suf in PLATFORMS:
+            rs = []
+            for l, name, _ in LANGS:
+                if d.get("xc" + suf) and d.get(l + suf):
+                    r = d["xc" + suf] / d[l + suf]
+                    rs.append("%s %s" % (name, ("1/%d" % round(1 / r)) if r < 0.5 else ("%.2f" % r)))
+            if rs:
+                parts.append("on %s, %s" % (pname, ", ".join(rs)))
+        if parts:
+            out.append("There xc's time divided by each language's is, %s." % "; ".join(parts))
+    return " ".join(out)
 
 
 def standing(cur):
@@ -193,7 +263,7 @@ def standing(cur):
     for pname, suf in PLATFORMS:
         ahead, behind = [], []
         for l, name, _ in LANGS:
-            g = gmean([d["O3"]["xc" + suf] / d["O3"][l + suf] for d in cur.values()
+            g = gmean([d["O3"]["xc" + suf] / d["O3"][l + suf] for d in general(cur).values()
                        if d["O3"].get("xc" + suf) and d["O3"].get(l + suf)])
             (ahead if g < 1.0 else behind).append(name)
         if not behind:
@@ -264,8 +334,9 @@ def main():
         release=a.release,
         summary=summary(cur),
         standing=standing(cur),
-        chart_arm=ratio_chart(cur, "", "arm64: xc's time divided by each language's, per benchmark"),
-        chart_x86=ratio_chart(cur, "_x86_64", "x86-64: xc's time divided by each language's, per benchmark"),
+        separate=separate(cur),
+        chart_arm=version_switch(hist, "", "arm64: xc's time divided by each language's, per benchmark", versions, "vs-arm"),
+        chart_x86=version_switch(hist, "_x86_64", "x86-64: xc's time divided by each language's, per benchmark", versions, "vs-x86"),
         table_arm=table(cur, ""),
         table_x86=table(cur, "_x86_64"),
         hist_arm=history_chart(hist, "", "arm64: xc's time relative to %s" % versions[0].lstrip("v"), versions),
@@ -298,10 +369,15 @@ idle.
 
 ## Summary
 
-Geometric mean, over the twenty benchmarks, of xc's time divided by the other
-language's. **Below 1 is xc faster.**
+Geometric mean, over nineteen of the benchmarks, of xc's time divided by the
+other language's. **Below 1 is xc faster.**
 
 {summary}
+
+`matrix_mul_f32` is left out of the means and quoted on its own: xcc recognises
+its loop nest and replaces it with a matrix kernel (SME on Apple silicon, SSE
+or AVX on x86-64), which says much about that one operation and little about
+code in general. {separate}
 
 {standing} The arithmetic mean of ratios
 is not given: a benchmark at 2.00× and one at 0.50× are exactly compensating,
@@ -310,7 +386,10 @@ and only the geometric mean says so.
 ## Per benchmark
 
 Each row is a benchmark, each dot one language: how many times as long xc takes
-as that language. Dots left of the centre line are benchmarks xc wins.
+as that language. Dots left of the centre line are benchmarks xc wins. Choose a
+release above a chart to see how it stood then; the rows stay in {release}'s
+order. Releases before 0.65 were measured against Objective-C alone, apart
+from `matrix_mul_f32`, which was added later and measured against all three.
 
 {chart_arm}
 
@@ -381,7 +460,7 @@ the other three do enough work per element that the GPU wins by a wide margin.
 
 xc's own time for each benchmark, relative to {first}. The thin lines are
 single benchmarks (labelled where they moved by more than twelve percent), the
-thick line the geometric mean. Releases shown: {hist_list}. {changed} changed in
+thick line the geometric mean (without `matrix_mul_f32`). Releases shown: {hist_list}. {changed} changed in
 0.64's benchmark set and are left out of this history.
 
 {hist_arm}
