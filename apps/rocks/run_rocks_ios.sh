@@ -2,7 +2,7 @@
 # run_rocks_ios.sh — the `rocks-ios` gate: Rocks, unchanged but for RKDriver's RK_IOS branch, on an
 # iPad simulator.  Builds the iOS shim and Rocks for ios-sim (one in-house link, as the UXKit iOS
 # gates do), launches it, waits for its window-up line, and checks the window is really on screen:
-# the simulator's screenshot must hold the editor's white canvas pane, not a blank launch screen.
+# the simulator's screenshot must hold the editor's canvas, its blue grid, not a blank launch screen.
 # ROCKS_IOS_SHOT=<png> keeps the screenshot.  Skips cleanly without the simulator toolchain.
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
@@ -55,8 +55,10 @@ xcrun simctl io "$UDID" screenshot "$shot" >/dev/null 2>&1 || true
 xcrun simctl terminate "$UDID" com.compile-xc.rocks >/dev/null 2>&1 || true
 grep -E "^(PASS|FAIL|SKIP)" "$work/out.txt" | head -2
 grep -q "^PASS" "$work/out.txt" || { cat "$work/out.txt" | tail -15; echo "== rocks-ios: FAILED =="; exit 1; }
-# on screen: the canvas pane (the middle of the editor) is white, as the editor draws it
+# on screen: the canvas pane (the middle of the editor) shows the editor's blue grid -- blue well
+# above red, which a blank white or black launch screen is not
 px=$(magick "$shot" -gravity center -crop 1x1+0+0 -format '%[fx:int(255*r)],%[fx:int(255*g)],%[fx:int(255*b)]' info: 2>/dev/null || echo "?")
 echo "screen centre pixel: $px"
-[ "$px" = "255,255,255" ] || { echo "== rocks-ios: FAILED (the editor is not on screen) =="; exit 1; }
+r=${px%%,*}; b=${px##*,}
+{ [ "$px" != "?" ] && [ $((b - r)) -ge 15 ] && [ "$b" -ge 200 ]; } || { echo "== rocks-ios: FAILED (the editor is not on screen) =="; exit 1; }
 echo "== rocks-ios: OK — Rocks runs on an iPad =="

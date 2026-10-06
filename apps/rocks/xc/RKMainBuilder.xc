@@ -221,6 +221,7 @@ class RKMainBuilder : Object
         // ---- wiring, through the protocol a nib would use ------------------
         ok = c.setOutlet((u8*)"formOutline", (Object*)outline) && ok;
         ok = c.setOutlet((u8*)"canvas", (Object*)canvas) && ok;
+        c.ensureBackdrop(); // the grid from the start, before there is a form on it
         ok = c.setOutlet((u8*)"inspector", (Object*)inspector) && ok;
         ok = c.setOutlet((u8*)"statusLabel", (Object*)status) && ok;
         ok = c.setOutlet((u8*)"deviceBar", (Object*)device) && ok;

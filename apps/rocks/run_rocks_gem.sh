@@ -27,8 +27,8 @@ grep -q '^PASS' /tmp/hostgem_rocks.log || { echo "== rocks-gem: FAILED (the app 
 python3 - <<'PY' || { echo "== rocks-gem: FAILED =="; exit 1; }
 d=open('/tmp/hostgem_fb.ppm','rb').read(); i=d.index(b'255\n')+4; px=d[i:]; W=1280
 p=lambda x,y: tuple(px[(y*W+x)*3:(y*W+x)*3+3])
-canvas=p(540,400)   # the middle of the (empty) canvas pane
+canvas=p(540,400)   # the middle of the (empty) canvas pane: the editor's blue grid
 print(f"canvas pixel {canvas}")
-assert canvas == (255,255,255), "the window's work area is not painted"
+assert canvas[2] - canvas[0] >= 15 and canvas[2] >= 200, "the window's work area is not painted"
 PY
 echo "== rocks-gem: OK — Rocks runs on GEM =="

@@ -17,7 +17,10 @@ cc -fobjc-arc -fno-objc-msgsend-selector-stubs -dynamiclib \
 "$xcc" -A arm64 -I "$ux" -I "$here/xc" "$here/xc/test_rkconnect.xc" \
     -Xlinker "$work/libUXAppKit.dylib" -framework Cocoa -o "$work/rkconnect" -q
 
-out=$(RK_SRC="$here/xc/fixture_player.xc" RK_LIB="$work/libplayer.dylib" "$work/rkconnect" 2>&1 | grep -v Warning) || true
+# an app folder the document is first saved into: its class must be read then
+mkdir -p "$work/app"
+printf 'class SavedHere : Object\n    {\n    outlet UXButton* go;\n    }\n' > "$work/app/SavedHere.xc"
+out=$(RK_SRC="$here/xc/fixture_player.xc" RK_LIB="$work/libplayer.dylib" RK_APP="$work/app" "$work/rkconnect" 2>&1 | grep -v Warning) || true
 echo "$out"
 echo "$out" | grep -q "^PASS\|^SKIP" || { echo "== rocks-connect: FAILED =="; exit 1; }
 echo "== rocks-connect: OK =="

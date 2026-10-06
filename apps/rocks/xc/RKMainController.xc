@@ -1174,8 +1174,16 @@ class RKMainController : Object<UXTableDelegate>
             self.sayAbout((u8*)"Could not save ", RKMainController.baseName(path));
             return false;
             }
+        // Saved into another folder (a first save, say): the classes of the app there, as opening
+        // the file from that folder would read them.
+        u8* dir = RKMainController.dirOf(path);
+        bool moved = docPath == (u8*)0 || !RKClassBook.seq(RKMainController.dirOf(docPath), dir);
         self.setDocPath(path);
         dirty = false;
+        if (moved && classBook.loadTree(dir, (i32)4) > (i32)0 && identityCtl != (RKIdentity*)0)
+            {
+            identityCtl.reshow();
+            }
         self.sayAbout((u8*)"Saved ", RKMainController.baseName(path));
         return true;
         }

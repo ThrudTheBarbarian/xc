@@ -2,7 +2,7 @@
 # run_rocks_android.sh — the `rocks-android` gate: Rocks, unchanged but for RKDriver's RK_ANDROID
 # branch, on the emulator.  Builds the two-lib APK the UXKit Android gates build (libxtapp.so from
 # xcc, the NDK-built shim, the bridge dex), launches it, waits for its window-up line, and checks the
-# window is really on screen: a screencap must hold the editor's white canvas pane.
+# window is really on screen: a screencap must hold the editor's canvas, its blue grid.
 # ROCKS_ANDROID_SHOT=<png> keeps the screencap.  Skips cleanly without an emulator.
 #
 # The two-lib APK (see libUXAndroid.c's header), in one xcc line: the app lib is the pure xcc
@@ -50,8 +50,10 @@ shot=${ROCKS_ANDROID_SHOT:-$work/shot.png}
 "$ADB" shell am force-stop org.compile_xc.rocks
 echo "$out" | grep -E "PASS:|FAIL|SKIP:" | sed 's/.*xcapp *: //' | head -2
 echo "$out" | grep -q "PASS:" || { echo "$out" | tail -15; echo "== rocks-android: FAILED =="; exit 1; }
-# on screen: the canvas pane (the middle of the editor) is white, as the editor draws it
+# on screen: the canvas pane (the middle of the editor) shows the editor's blue grid -- blue well
+# above red, which a blank white or black launch screen is not
 px=$(magick "$shot" -gravity center -crop 1x1+0+0 -format '%[fx:int(255*r)],%[fx:int(255*g)],%[fx:int(255*b)]' info: 2>/dev/null || echo "?")
 echo "screen centre pixel: $px"
-[ "$px" = "255,255,255" ] || { echo "== rocks-android: FAILED (the editor is not on screen) =="; exit 1; }
+r=${px%%,*}; b=${px##*,}
+{ [ "$px" != "?" ] && [ $((b - r)) -ge 15 ] && [ "$b" -ge 200 ]; } || { echo "== rocks-android: FAILED (the editor is not on screen) =="; exit 1; }
 echo "== rocks-android: OK — Rocks runs on Android =="

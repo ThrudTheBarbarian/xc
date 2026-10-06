@@ -9,14 +9,15 @@
   globalThis.xccConfig = { runLoop: 'worker', workerScript: 'ux_web_browser.js', canvas: '#ux-canvas' };
   const out = [];
   // Once the app is up, check that its frames really reach the screen: a frame painted, and the
-  // window's canvas pane white on it (the worker's drawing, not the page's background).
+  // window's canvas pane on it shows the editor's blue grid (the worker's drawing, not the page's
+  // background): blue well above red, which white and a blank page are not.
   const report = () => fetch('/result', { method: 'POST', body: out.join('\n') });
   const checkFrames = (tries) => {
     const d = document.querySelector('canvas.ux-display');
     if (d && (globalThis.uxFrames || 0) > 0) {
       const p = d.getContext('2d').getImageData(600, 400, 1, 1).data;
       out.push(`FRAMES: ${globalThis.uxFrames} painted; canvas pane pixel ${p[0]},${p[1]},${p[2]},${p[3]}`);
-      if (!(p[0] === 255 && p[1] === 255 && p[2] === 255 && p[3] === 255)) out.unshift('FAIL: the window is not on screen');
+      if (!(p[2] - p[0] >= 15 && p[2] >= 200 && p[3] === 255)) out.unshift('FAIL: the window is not on screen');
       return report();
     }
     if (tries <= 0) { out.unshift('FAIL: no frame reached the page'); return report(); }
