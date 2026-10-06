@@ -612,16 +612,11 @@ class RKClassBook : Object
     i32 loadJson(u8* json, u8* source)
         {
         Object* root = (Object*)0;
-        bool bad = false;
         try
             {
             root = JSON.parse(String.withCString(json));
             }
         catch (e)
-            {
-            bad = true; // not a return here: a catch that returns loses the try's assignment (compiler bug)
-            }
-        if (bad)
             {
             return (i32)-1;
             }
