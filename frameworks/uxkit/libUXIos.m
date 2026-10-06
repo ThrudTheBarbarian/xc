@@ -2882,3 +2882,352 @@ void ux_ios_shell_run(void)
 
 // (_putc, the console primitive, comes from the arm64 rt objects that ride in
 // every link — the future support/ios layer owns it; the shim never defines it.)
+
+// ---- native text view (UXTextView): a UITextView ---------------------------------------------------
+// The text crosses as UTF-8 and style runs of five ints (byte start, byte length, flags, colour,
+// size; flags 1 bold, 2 italic, 4 underline, 8 monospace, the paragraph's alignment in bits 4-5),
+// converted to NSString's UTF-16 here.  The view's undo is the toolkit's: the text view is given an
+// undo manager that records nothing and hands undo and redo (the hardware keyboard's, a shake, the
+// three-finger swipe) to UXTextView, whose undo also covers the styles it sets.
+#define UX_TV_RUN 5
+#define UX_TV_FONT 14.0
+static UITextView* gTv[UXIOS_MAXW][UXIOS_MAXN];
+// the text's length when the selection was last reported: a selection change with the length changed
+// is the caret moving with an edit, not the user moving it (so a run of typing stays one undo step)
+static NSUInteger gTvLen[UXIOS_MAXW][UXIOS_MAXN];
+typedef void (*ux_tv_fn)(int handle, int node);
+typedef void (*ux_tv_undo_fn)(int handle, int node, int what);
+typedef int (*ux_tv_can_fn)(int handle, int node, int redo);
+static ux_tv_fn gTvChanged, gTvSelected;
+static ux_tv_undo_fn gTvUndo;
+static ux_tv_can_fn gTvCan;
+static int gTvQuiet;
+void ux_ios_textview_set_hooks(void* changed, void* selected, void* undo, void* can)
+    {
+    gTvChanged = (ux_tv_fn)changed;
+    gTvSelected = (ux_tv_fn)selected;
+    gTvUndo = (ux_tv_undo_fn)undo;
+    gTvCan = (ux_tv_can_fn)can;
+    }
+@interface UXTvUndo : NSUndoManager
+@property (nonatomic) int uxHandle;
+@property (nonatomic) int uxNode;
+@end
+@implementation UXTvUndo
+- (instancetype)init
+    {
+    self = [super init];
+    [self disableUndoRegistration]; // the text view's own records go nowhere
+    return self;
+    }
+- (BOOL)canUndo { return gTvCan ? gTvCan(self.uxHandle, self.uxNode, 0) != 0 : NO; }
+- (BOOL)canRedo { return gTvCan ? gTvCan(self.uxHandle, self.uxNode, 1) != 0 : NO; }
+- (void)undo { if (gTvUndo) gTvUndo(self.uxHandle, self.uxNode, 0); }
+- (void)redo { if (gTvUndo) gTvUndo(self.uxHandle, self.uxNode, 1); }
+@end
+@interface UXNativeTextView : UITextView
+@property (nonatomic, strong) UXTvUndo* uxUndo;
+@end
+@implementation UXNativeTextView
+- (NSUndoManager*)undoManager { return self.uxUndo; }
+@end
+@interface UXTvDelegate : NSObject <UITextViewDelegate>
+@end
+static UXTvDelegate* gTvDelegate;
+@implementation UXTvDelegate
+- (void)textViewDidChange:(UITextView*)tv
+    {
+    if (!gTvQuiet && gTvChanged)
+        gTvChanged((int)(tv.tag / 4096), (int)(tv.tag % 4096));
+    }
+- (void)textViewDidChangeSelection:(UITextView*)tv
+    {
+    int h = (int)(tv.tag / 4096), n = (int)(tv.tag % 4096);
+    NSUInteger len = tv.textStorage.length;
+    if (len != gTvLen[h][n])
+        {
+        gTvLen[h][n] = len;
+        return;
+        }
+    if (!gTvQuiet && gTvSelected)
+        gTvSelected(h, n);
+    }
+@end
+static UITextView* ios_tv(int handle, int node)
+    {
+    if (handle < 0 || handle >= UXIOS_MAXW || node < 0 || node >= UXIOS_MAXN)
+        return nil;
+    return gTv[handle][node];
+    }
+static NSUInteger ios_u16_of(NSString* s, int bytes)
+    {
+    const char* u = s.UTF8String;
+    int n = (int)strlen(u);
+    if (bytes <= 0)
+        return 0;
+    if (bytes >= n)
+        return s.length;
+    while (bytes > 0 && ((unsigned char)u[bytes] & 0xC0) == 0x80)
+        bytes--;
+    NSString* head = [[NSString alloc] initWithBytes:u length:(NSUInteger)bytes encoding:NSUTF8StringEncoding];
+    return head ? head.length : 0;
+    }
+static int ios_u8_of(NSString* s, NSUInteger i)
+    {
+    if (i == 0)
+        return 0;
+    if (i >= s.length)
+        return (int)[s lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
+    NSRange cr = [s rangeOfComposedCharacterSequenceAtIndex:i];
+    if (cr.location < i)
+        i = cr.location;
+    return (int)[[s substringToIndex:i] lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
+    }
+static NSDictionary* ios_tv_attrs(int flags, int colour, int size)
+    {
+    CGFloat pt = size > 0 ? (CGFloat)size : UX_TV_FONT;
+    UIFont* f = (flags & 8) ? [UIFont monospacedSystemFontOfSize:pt weight:UIFontWeightRegular] : [UIFont systemFontOfSize:pt];
+    UIFontDescriptorSymbolicTraits tr = 0;
+    if (flags & 1)
+        tr |= UIFontDescriptorTraitBold;
+    if (flags & 2)
+        tr |= UIFontDescriptorTraitItalic;
+    if (tr)
+        {
+        UIFontDescriptor* d = [f.fontDescriptor fontDescriptorWithSymbolicTraits:(f.fontDescriptor.symbolicTraits | tr)];
+        if (d)
+            f = [UIFont fontWithDescriptor:d size:pt];
+        }
+    NSMutableDictionary* d = [NSMutableDictionary dictionary];
+    d[NSFontAttributeName] = f;
+    if (flags & 4)
+        d[NSUnderlineStyleAttributeName] = @(NSUnderlineStyleSingle);
+    d[NSForegroundColorAttributeName] = colour ? [UIColor colorWithRed:((colour >> 16) & 255) / 255.0
+                                                                 green:((colour >> 8) & 255) / 255.0
+                                                                  blue:(colour & 255) / 255.0
+                                                                 alpha:1.0]
+                                               : UIColor.labelColor;
+    NSMutableParagraphStyle* ps = [[NSMutableParagraphStyle alloc] init];
+    int al = (flags >> 4) & 3;
+    ps.alignment = al == 1 ? NSTextAlignmentRight : al == 2 ? NSTextAlignmentCenter : al == 3 ? NSTextAlignmentJustified : NSTextAlignmentLeft;
+    d[NSParagraphStyleAttributeName] = ps;
+    return d;
+    }
+static NSAttributedString* ios_tv_build(const char* text, int nbytes, const int* runs, int nruns)
+    {
+    NSMutableAttributedString* out = [[NSMutableAttributedString alloc] init];
+    int at = 0;
+    for (int k = 0; k <= nruns; k++)
+        {
+        int s = k < nruns ? runs[k * UX_TV_RUN] : nbytes;
+        int l = k < nruns ? runs[k * UX_TV_RUN + 1] : 0;
+        if (s > at)
+            {
+            NSString* g = [[NSString alloc] initWithBytes:text + at length:(NSUInteger)(s - at) encoding:NSUTF8StringEncoding];
+            if (g)
+                [out appendAttributedString:[[NSAttributedString alloc] initWithString:g attributes:ios_tv_attrs(0, 0, 0)]];
+            at = s;
+            }
+        if (k == nruns || l <= 0 || s < at || s + l > nbytes)
+            continue;
+        NSString* p = [[NSString alloc] initWithBytes:text + s length:(NSUInteger)l encoding:NSUTF8StringEncoding];
+        if (p)
+            [out appendAttributedString:[[NSAttributedString alloc] initWithString:p
+                                                                       attributes:ios_tv_attrs(runs[k * UX_TV_RUN + 2],
+                                                                                               runs[k * UX_TV_RUN + 3],
+                                                                                               runs[k * UX_TV_RUN + 4])]];
+        at = s + l;
+        }
+    return out;
+    }
+void ux_ios_make_textview(int handle, int node, int x, int y, int w, int h)
+    {
+    if (!gWin[handle] || node < 0 || node >= UXIOS_MAXN)
+        return;
+    UXNativeTextView* tv = [[UXNativeTextView alloc] initWithFrame:CGRectMake(x, y, w, h)];
+    tv.uxUndo = [UXTvUndo new];
+    tv.uxUndo.uxHandle = handle;
+    tv.uxUndo.uxNode = node;
+    tv.tag = handle * 4096 + node;
+    tv.editable = YES;
+    tv.selectable = YES;
+    tv.font = [UIFont systemFontOfSize:UX_TV_FONT];
+    tv.layer.borderWidth = 1.0;
+    tv.layer.borderColor = UIColor.separatorColor.CGColor;
+    tv.layer.cornerRadius = 5.0;
+    tv.typingAttributes = ios_tv_attrs(0, 0, 0);
+    if (!gTvDelegate)
+        gTvDelegate = [UXTvDelegate new];
+    tv.delegate = gTvDelegate;
+    [gWin[handle] addSubview:tv];
+    gCtl[handle][node] = tv;
+    gTv[handle][node] = tv;
+    }
+void ux_ios_textview_set_all(int handle, int node, const char* text, int nbytes, const int* runs, int nruns)
+    {
+    UITextView* tv = ios_tv(handle, node);
+    if (!tv)
+        return;
+    gTvQuiet++;
+    tv.attributedText = ios_tv_build(text ? text : "", nbytes, runs, nruns);
+    gTvLen[handle][node] = tv.textStorage.length;
+    gTvQuiet--;
+    }
+void ux_ios_textview_replace(int handle, int node, int start, int len, const char* text, int nbytes,
+                             const int* runs, int nruns, int attrsOnly)
+    {
+    UITextView* tv = ios_tv(handle, node);
+    if (!tv)
+        return;
+    NSTextStorage* ts = tv.textStorage;
+    NSString* s = ts.string;
+    NSUInteger a = ios_u16_of(s, start), b = ios_u16_of(s, start + len);
+    NSRange r = NSMakeRange(a, b - a);
+    NSAttributedString* rep = ios_tv_build(text ? text : "", nbytes, runs, nruns);
+    if (attrsOnly && rep.length != r.length)
+        return;
+    NSRange keep = tv.selectedRange;
+    gTvQuiet++;
+    [ts beginEditing];
+    if (attrsOnly)
+        [rep enumerateAttributesInRange:NSMakeRange(0, rep.length) options:0
+                             usingBlock:^(NSDictionary* at, NSRange rr, BOOL* stop) {
+                               [ts setAttributes:at range:NSMakeRange(r.location + rr.location, rr.length)];
+                             }];
+    else
+        [ts replaceCharactersInRange:r withAttributedString:rep];
+    [ts endEditing];
+    if (attrsOnly)
+        tv.selectedRange = keep;
+    gTvLen[handle][node] = ts.length;
+    gTvQuiet--;
+    }
+void ux_ios_textview_size(int handle, int node, int* nbytes, int* nruns)
+    {
+    UITextView* tv = ios_tv(handle, node);
+    *nbytes = 0;
+    *nruns = 0;
+    if (!tv)
+        return;
+    NSTextStorage* ts = tv.textStorage;
+    *nbytes = (int)[ts.string lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
+    __block int n = 0;
+    [ts enumerateAttributesInRange:NSMakeRange(0, ts.length) options:0
+                        usingBlock:^(NSDictionary* at, NSRange rr, BOOL* stop) { n++; }];
+    *nruns = n;
+    }
+int ux_ios_textview_read(int handle, int node, char* buf, int cap, int* runs, int maxRuns)
+    {
+    UITextView* tv = ios_tv(handle, node);
+    if (!tv || cap <= 0)
+        return 0;
+    NSTextStorage* ts = tv.textStorage;
+    NSString* s = ts.string;
+    const char* u = s.UTF8String;
+    int n = (int)strlen(u);
+    if (n > cap - 1)
+        n = cap - 1;
+    memcpy(buf, u, (size_t)n);
+    buf[n] = 0;
+    __block int k = 0;
+    [ts enumerateAttributesInRange:NSMakeRange(0, ts.length) options:0
+                        usingBlock:^(NSDictionary* at, NSRange rr, BOOL* stop) {
+                          if (k >= maxRuns)
+                              {
+                              *stop = YES;
+                              return;
+                              }
+                          int fl = 0, col = 0, sz = 0;
+                          UIFont* f = at[NSFontAttributeName];
+                          if (f)
+                              {
+                              UIFontDescriptorSymbolicTraits tr = f.fontDescriptor.symbolicTraits;
+                              if (tr & UIFontDescriptorTraitBold)
+                                  fl |= 1;
+                              if (tr & UIFontDescriptorTraitItalic)
+                                  fl |= 2;
+                              if (tr & UIFontDescriptorTraitMonoSpace)
+                                  fl |= 8;
+                              if ((int)(f.pointSize + 0.5) != (int)UX_TV_FONT)
+                                  sz = (int)(f.pointSize + 0.5);
+                              }
+                          NSNumber* ul = at[NSUnderlineStyleAttributeName];
+                          if (ul && ul.integerValue != 0)
+                              fl |= 4;
+                          NSParagraphStyle* ps = at[NSParagraphStyleAttributeName];
+                          if (ps)
+                              {
+                              NSTextAlignment a = ps.alignment;
+                              fl |= (a == NSTextAlignmentRight ? 1 : a == NSTextAlignmentCenter ? 2
+                                                                 : a == NSTextAlignmentJustified ? 3 : 0) << 4;
+                              }
+                          UIColor* c = at[NSForegroundColorAttributeName];
+                          CGFloat r = 0, g = 0, b = 0, al = 0;
+                          if (c && ![c isEqual:UIColor.labelColor] && [c getRed:&r green:&g blue:&b alpha:&al])
+                              col = 0x01000000 | ((int)(r * 255 + 0.5) << 16) | ((int)(g * 255 + 0.5) << 8) | (int)(b * 255 + 0.5);
+                          int b0 = ios_u8_of(s, rr.location), b1 = ios_u8_of(s, rr.location + rr.length);
+                          runs[k * UX_TV_RUN] = b0;
+                          runs[k * UX_TV_RUN + 1] = b1 - b0;
+                          runs[k * UX_TV_RUN + 2] = fl;
+                          runs[k * UX_TV_RUN + 3] = col;
+                          runs[k * UX_TV_RUN + 4] = sz;
+                          k++;
+                        }];
+    return k;
+    }
+void ux_ios_textview_selection(int handle, int node, int* start, int* len)
+    {
+    UITextView* tv = ios_tv(handle, node);
+    *start = 0;
+    *len = 0;
+    if (!tv)
+        return;
+    NSString* s = tv.textStorage.string;
+    NSRange r = tv.selectedRange;
+    int b0 = ios_u8_of(s, r.location), b1 = ios_u8_of(s, r.location + r.length);
+    *start = b0;
+    *len = b1 - b0;
+    }
+void ux_ios_textview_set_selection(int handle, int node, int start, int len)
+    {
+    UITextView* tv = ios_tv(handle, node);
+    if (!tv)
+        return;
+    NSString* s = tv.textStorage.string;
+    NSUInteger a = ios_u16_of(s, start), b = ios_u16_of(s, start + len);
+    gTvQuiet++;
+    tv.selectedRange = NSMakeRange(a, b - a);
+    [tv scrollRangeToVisible:NSMakeRange(a, b - a)];
+    gTvQuiet--;
+    }
+void ux_ios_textview_set_typing(int handle, int node, int flags, int colour, int size)
+    {
+    UITextView* tv = ios_tv(handle, node);
+    if (tv)
+        tv.typingAttributes = ios_tv_attrs(flags, colour, size);
+    }
+void ux_ios_textview_focus(int handle, int node)
+    {
+    UITextView* tv = ios_tv(handle, node);
+    if (tv)
+        [tv becomeFirstResponder];
+    }
+/* the rigs': text inserted at the selection as the keyboard inserts it (the view reports it) */
+void ux_ios_test_textview_type(int handle, int node, const char* text)
+    {
+    UITextView* tv = ios_tv(handle, node);
+    if (tv)
+        [tv insertText:[NSString stringWithUTF8String:text]];
+    }
+/* ...and the undo the system's gestures and keys reach: the text view's undo manager */
+int ux_ios_test_textview_undo(int handle, int node, int redo)
+    {
+    UITextView* tv = ios_tv(handle, node);
+    NSUndoManager* um = tv.undoManager;
+    if (!um)
+        return 0;
+    if (redo ? !um.canRedo : !um.canUndo)
+        return 0;
+    redo ? [um redo] : [um undo];
+    return 1;
+    }

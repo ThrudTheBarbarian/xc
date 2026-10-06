@@ -34,6 +34,7 @@
 #import "UXNavigationController.xc" // a user's pop on the native stack comes back through uxNavNativePopped
 #import "UXTableView.xc"        // the native UITableView reads its rows from the peer table
 #import "UXScrollView.xc"       // a scroll view is a UIScrollView
+#import "UXTextView.xc"         // a UITextView edits it
 #import "UXMenuEncode.xc"       // the app's menus, handed to the "more" button as one string
 #import "UXApplication.xc"      // gApp: the driver-owned loop starts the delegate, and stop() quits
 #import "UXLibc.xc"
@@ -123,6 +124,18 @@ void ux_ios_make_popup(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h);
 void ux_ios_set_field_hooks(pointer fn);
 void ux_ios_set_field_submit_hooks(pointer fn);
 void ux_ios_make_field(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, u8* buf, i32 cap, i32 secure);
+// The native text view (UXTextView): a UITextView.
+void ux_ios_make_textview(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h);
+void ux_ios_textview_set_hooks(pointer changed, pointer selected, pointer undo, pointer can);
+void ux_ios_textview_set_all(i32 handle, i32 node, u8* text, i32 nbytes, i32* runs, i32 nruns);
+void ux_ios_textview_replace(i32 handle, i32 node, i32 start, i32 len, u8* text, i32 nbytes, i32* runs, i32 nruns,
+                             i32 attrsOnly);
+void ux_ios_textview_size(i32 handle, i32 node, i32* nbytes, i32* nruns);
+i32 ux_ios_textview_read(i32 handle, i32 node, u8* buf, i32 cap, i32* runs, i32 maxRuns);
+void ux_ios_textview_selection(i32 handle, i32 node, i32* start, i32* len);
+void ux_ios_textview_set_selection(i32 handle, i32 node, i32 start, i32 len);
+void ux_ios_textview_set_typing(i32 handle, i32 node, i32 flags, i32 colour, i32 size);
+void ux_ios_textview_focus(i32 handle, i32 node);
 void ux_ios_update_field(i32 handle, i32 node);
 void ux_ios_popup_add_item(i32 handle, i32 node, u8* title);
 void ux_ios_popup_select(i32 handle, i32 node, i32 i);
@@ -358,6 +371,66 @@ void uxIosValueChanged(i32 handle, i32 node, i32 value)
             }
         }
     }
+// A UITextView: the user edited it or moved its selection, or the system asked its undo manager
+// (a key, a shake, a swipe) to undo, redo or say whether it can.  All go to its UXTextView.
+UXTextView* uxIosTextViewAt(i32 handle, i32 node)
+    {
+    if (handle < (i32)0 || handle >= (i32)64 || node < (i32)0 || node >= (i32)1024)
+        {
+        return (UXTextView*)0;
+        }
+    return (UXTextView* ?)(Object*)gIosCtlPeer[handle * (i32)1024 + node];
+    }
+void uxIosTextViewChanged(i32 handle, i32 node)
+    {
+    UXTextView* tv = uxIosTextViewAt(handle, node);
+    if (tv != (UXTextView*)0)
+        {
+        tv.nativeDidChange();
+        }
+    if (gApp != (UXApplication*)0)
+        {
+        gApp.displayIfNeeded();
+        }
+    }
+void uxIosTextViewSelected(i32 handle, i32 node)
+    {
+    UXTextView* tv = uxIosTextViewAt(handle, node);
+    if (tv != (UXTextView*)0)
+        {
+        tv.nativeDidSelect();
+        }
+    }
+void uxIosTextViewUndo(i32 handle, i32 node, i32 redo)
+    {
+    UXTextView* tv = uxIosTextViewAt(handle, node);
+    if (tv != (UXTextView*)0)
+        {
+        if (redo != (i32)0)
+            {
+            tv.redo();
+            }
+        else
+            {
+            tv.undo();
+            }
+        }
+    if (gApp != (UXApplication*)0)
+        {
+        gApp.displayIfNeeded();
+        }
+    }
+i32 uxIosTextViewCan(i32 handle, i32 node, i32 redo)
+    {
+    UXTextView* tv = uxIosTextViewAt(handle, node);
+    if (tv == (UXTextView*)0)
+        {
+        return (i32)0;
+        }
+    bool can = redo != (i32)0 ? tv.canRedo() : tv.canUndo();
+    return can ? (i32)1 : (i32)0;
+    }
+
 // A native UITextField's text changed: the buffer is already synced shim-side;
 // tell the neutral field so its onChange fires with the truth (mac pattern).
 void uxIosFieldChanged(i32 handle, i32 node)
@@ -464,6 +537,8 @@ class UXIosDriver : Object<UXViewDriver>
             ux_ios_set_control_fire((pointer)&uxIosFireControl);
             ux_ios_set_value_changed((pointer)&uxIosValueChanged);
             ux_ios_set_field_hooks((pointer)&uxIosFieldChanged);
+            ux_ios_textview_set_hooks((pointer)&uxIosTextViewChanged, (pointer)&uxIosTextViewSelected,
+                                      (pointer)&uxIosTextViewUndo, (pointer)&uxIosTextViewCan);
             ux_ios_set_field_submit_hooks((pointer)&uxIosFieldSubmitted);
             ux_ios_set_nav_popped((pointer)&uxIosNavPopped);
             ux_ios_set_touch((pointer)&uxTouch);
@@ -1081,6 +1156,41 @@ class UXIosDriver : Object<UXViewDriver>
     void structSetAutoresize(pointer h, i32 i, i32 mask)
         {
         }
+    // ---- the native text view (UXTextView); the undo is the view's own --------------------------
+    void textViewSetAll(i32 handle, i32 node, u8* text, i32 nbytes, i32* runs, i32 nruns)
+        {
+        ux_ios_textview_set_all(handle, node, text, nbytes, runs, nruns);
+        }
+    void textViewReplace(i32 handle, i32 node, i32 start, i32 len, u8* text, i32 nbytes, i32* runs, i32 nruns,
+                         i32 attrsOnly)
+        {
+        ux_ios_textview_replace(handle, node, start, len, text, nbytes, runs, nruns, attrsOnly);
+        }
+    void textViewSize(i32 handle, i32 node, i32* nbytes, i32* nruns)
+        {
+        ux_ios_textview_size(handle, node, nbytes, nruns);
+        }
+    i32 textViewRead(i32 handle, i32 node, u8* buf, i32 cap, i32* runs, i32 maxRuns)
+        {
+        return ux_ios_textview_read(handle, node, buf, cap, runs, maxRuns);
+        }
+    void textViewSelection(i32 handle, i32 node, i32* start, i32* len)
+        {
+        ux_ios_textview_selection(handle, node, start, len);
+        }
+    void textViewSetSelection(i32 handle, i32 node, i32 start, i32 len)
+        {
+        ux_ios_textview_set_selection(handle, node, start, len);
+        }
+    void textViewSetTyping(i32 handle, i32 node, i32 flags, i32 colour, i32 size)
+        {
+        ux_ios_textview_set_typing(handle, node, flags, colour, size);
+        }
+    void textViewFocus(i32 handle, i32 node)
+        {
+        ux_ios_textview_focus(handle, node);
+        }
+
     bool driverAutoresizes(void)
         {
         return false;
@@ -1333,6 +1443,16 @@ class UXIosDriver : Object<UXViewDriver>
             else if (n.kind == (i32)UXKindLabel && n.spec != (pointer)0)
                 {
                 ux_ios_make_label(handle, i, ax, ay, aw, ah, (u8*)n.spec);
+                }
+            else if (n.kind == (i32)UXKindTextView)
+                {
+                UXTextView* tvp = (UXTextView* ?)(Object*)n.peer;
+                if (tvp != (UXTextView*)0)
+                    {
+                    ux_ios_make_textview(handle, i, ax, ay, aw, ah);
+                    gIosCtlPeer[handle * (i32)1024 + i] = n.peer;
+                    tvp.nativeAttach(handle, i);
+                    }
                 }
             else if (n.kind == (i32)UXKindField)
                 {
