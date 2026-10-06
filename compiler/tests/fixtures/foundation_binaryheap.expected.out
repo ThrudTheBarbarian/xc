@@ -1,0 +1,19 @@
+  ok   empty = 1
+  ok   count 5 = 5
+  ok   minimum is 10 = 10
+  ok   minimumPriority is 10 = 10
+  ok   drained all 5 = 5
+  ok   out[0] = 10
+  ok   out[1] = 20
+  ok   out[2] = 30
+  ok   out[3] = 50
+  ok   out[4] = 80
+  ok   empty after drain = 1
+  ok   removeMinimum on empty is null = 1
+  ok   min is 1 among dups = 1
+  ok   next min is 5 = 5
+  ok   new smaller min surfaces = 3
+  ok   count now 3 = 3
+  ok   stress drained 100 = 100
+  ok   stress drained in non-decreasing order = 1
+PASS: BinaryHeap - min-heap order, drain, dups, interleave, 100-item stress.

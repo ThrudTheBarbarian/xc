@@ -1,0 +1,18 @@
+  ok   count 3 = 3
+  ok   get a = 1
+  ok   still 3 after eviction = 3
+  ok   b evicted (LRU) = 0
+  ok   a survived (was touched) = 1
+  ok   c survived = 1
+  ok   d present = 1
+  ok   update keeps count 3 = 3
+  ok   updated value = 33
+  ok   a is now the LRU victim = 0
+  ok   e present = 1
+  ok   count still 3 = 3
+  ok   missing key null = 1
+  ok   removed c = 0
+  ok   count 2 after remove = 2
+  ok   count 3 again = 3
+  ok   shrunk to 1 = 1
+PASS: Cache - LRU eviction, recency on get/set, update-in-place, remove, shrink.

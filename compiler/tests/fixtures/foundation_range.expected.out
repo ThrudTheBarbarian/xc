@@ -1,0 +1,20 @@
+  ok   end = 7
+  ok   contains loc = 1
+  ok   not end = 0
+  ok   not before = 0
+  ok   empty = 1
+  ok   touching do not overlap = 0
+  ok   crossing overlap = 1
+  ok   empty inside overlaps nothing = 0
+  ok   null overlaps nothing = 0
+  ok   intersection loc = 3
+  ok   intersection len = 2
+  ok   disjoint intersection empty = 1
+  ok   union loc = 0
+  ok   union len = 7
+  ok   union with empty = 4
+  ok   equal by value = 1
+  ok   unequal len = 0
+  ok   set holds two distinct = 2
+  ok   set finds by value = 1
+PASS

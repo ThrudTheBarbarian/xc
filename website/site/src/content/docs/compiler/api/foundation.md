@@ -14,7 +14,7 @@ are built on.
 ```
 
 The umbrella pulls in `Object`, `Comparable`, `Hashable`, `Enumerable`, `Copying`, `CharacterSet`,
-`Number`, `String`, `Data`, `Array`, `Map` and `Set`, and `Codable` through `Object`.
+`Number`, `String`, `Data`, `Array`, `Map`, `Set`, `Bag`, `Range`, `BinaryHeap` and `Cache`, and `Codable` through `Object`.
 That is everything below except [`Coder`](/compiler/api/coder/) and the
 [`Error`](/compiler/api/error/) protocol, which you import by name
 (`#import <Coder.xc>`, `#import <Error.xc>`).
@@ -33,6 +33,10 @@ All of it needs a real heap (**`-falloc=heap`**), which is the default on the
 | [`Array`](/compiler/api/array/) | An ordered, resizable list of `Object*` with sorting and the callback-based functional methods (`filtered`, `mapped`, …). |
 | [`Map`](/compiler/api/map/) | A hash map keyed by anything `Hashable` + `Comparable`; iterates in insertion order. |
 | [`Set`](/compiler/api/set/) | A hash set with set algebra (`unionWith`, `intersect`, `subtract`, …). |
+| [`Bag`](/compiler/api/bag/) | A counted set: each member carries a count. From the release after 0.71. |
+| [`Range`](/compiler/api/range/) | A half-open index range `[loc, loc + len)`, equal by value. From the release after 0.71. |
+| [`BinaryHeap`](/compiler/api/binaryheap/) | A priority queue, smallest priority first. From the release after 0.71. |
+| [`Cache`](/compiler/api/cache/) | A bounded least-recently-used cache under string keys. From the release after 0.71. |
 | [`Coder`](/compiler/api/coder/) | Keyed archiving of an object graph to JSON, optionally gzipped. **Not** in the umbrella — import by name. |
 
 ### Protocols

@@ -49,3 +49,7 @@
 #import "Array.xc"
 #import "Map.xc"
 #import "Set.xc"
+#import "Bag.xc"
+#import "Range.xc"
+#import "BinaryHeap.xc"
+#import "Cache.xc"

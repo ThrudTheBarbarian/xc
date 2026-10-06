@@ -19,31 +19,31 @@
 #import "Copying.xc"
 #import "Stdio.xc"
 
-class Bag : Object <Copying>
+class Satchel : Object <Copying>
 {
     Object* one;
     void init(void) { one = (Object*)0; }
     void put(Object* o) { one = o; }
     // NOT flagged: this really does return "some object", and the body says so.
     Object* get(void) { return one; }
-    // Flagged: every return is a Bag, so it could declare `Bag*`.
-    Object* copy(void) { Bag* b = new Bag(); b.one = one; return (Object*)b; }
+    // Flagged: every return is a Satchel, so it could declare `Satchel*`.
+    Object* copy(void) { Satchel* b = new Satchel(); b.one = one; return (Object*)b; }
 }
 
 i32 main(void)
 {
     // The ANNOTATED use is what arms the warning — the class is being used with
     // a type argument, which is where an inherited `Object*` return misleads.
-    Bag<String>* b = new Bag();
+    Satchel<String>* b = new Satchel();
     b.put(String.withCString("x"));
     String* got = b.get();          // `get` really does return "some object"
     Stdio.printf("got=%s\n", got.cString());
 
-    // copy() is called through a PLAIN Bag*, because on the annotated one it
+    // copy() is called through a PLAIN Satchel*, because on the annotated one it
     // would substitute to `String*` — which is the mistyping the warning is
-    // telling the author to prevent by declaring `Bag* copy(void)`.
-    Bag* plain = new Bag();
-    Bag* c = (Bag*)plain.copy();
+    // telling the author to prevent by declaring `Satchel* copy(void)`.
+    Satchel* plain = new Satchel();
+    Satchel* c = (Satchel*)plain.copy();
     Stdio.printf("copied=%d\n", (u16)(c != 0 ? 1 : 0));
     return 0;
 }

@@ -65,6 +65,9 @@ export default defineConfig({
 									items: [
 										{ label: 'Overview', slug: 'compiler/api/foundation' },
 										{ label: 'Array', slug: 'compiler/api/array' },
+										{ label: 'Bag', slug: 'compiler/api/bag' },
+										{ label: 'BinaryHeap', slug: 'compiler/api/binaryheap' },
+										{ label: 'Cache', slug: 'compiler/api/cache' },
 										{ label: 'CharacterSet', slug: 'compiler/api/characterset' },
 										{ label: 'Coder', slug: 'compiler/api/coder' },
 										{ label: 'Data', slug: 'compiler/api/data' },
@@ -72,6 +75,7 @@ export default defineConfig({
 										{ label: 'Number', slug: 'compiler/api/number' },
 										{ label: 'Object', slug: 'compiler/api/object' },
 										{ label: 'OperationQueue', slug: 'compiler/api/operationqueue' },
+										{ label: 'Range', slug: 'compiler/api/range' },
 										{ label: 'RunLoop', slug: 'compiler/api/runloop' },
 										{ label: 'Set', slug: 'compiler/api/set' },
 										{ label: 'String', slug: 'compiler/api/string' },

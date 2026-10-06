@@ -11,8 +11,10 @@ The xcc standard library is a set of `.xc` classes that ship with the compiler. 
 support/
   generic/lib/        ← portable classes: work on every target
     Foundation.xc       ← umbrella: Object + Number + String + Data + Array + Map + Set
+                          + Bag + Range + BinaryHeap + Cache
     Object.xc           ← the runtime's root class
     Number.xc  String.xc  Data.xc  Array.xc  Map.xc  Set.xc  CharacterSet.xc
+    Bag.xc  Range.xc  BinaryHeap.xc  Cache.xc
     Comparable.xc  Hashable.xc  Enumerable.xc  Copying.xc  Codable.xc  Error.xc   ← protocols
     Coder.xc            ← keyed archiving to JSON, with gzip
     Thread.xc  Mutex.xc  Cond.xc  Sem.xc  Atomic.xc  ThreadLocal.xc  Pool.xc
@@ -35,6 +37,7 @@ support/
   xt6502/lib/         ← the banked 6502
     Stdio.xc  Math.xc  Time.xc  Heap.xc  System.xc  Vbi.xc  FILE.xc  Memory.xc
     Array.xc  Map.xc  Set.xc  String.xc  Data.xc  Number.xc   ← 6502 Foundation build
+    Bag.xc                                                   ← 6502 Bag (u16 indexes)
     Enumerable.xc  Hashable.xc                                ← 6502-width protocols
     Gfx*.xc  GfxFactory.xc  mapData.xc  symbols.xc  Platform.xc
   xt6502/asm/         ← 6502 assembly runtime (mul/div, heap, float) — not .xc classes
@@ -104,6 +107,10 @@ and every method grouped by task with a jump-list at the top.
 | [`Array`](/compiler/api/array/) | an ordered, growable list with map / filter / reduce and sort |
 | [`Map`](/compiler/api/map/) | an insertion-ordered hash map |
 | [`Set`](/compiler/api/set/) | a hash set with union / intersection / difference |
+| [`Bag`](/compiler/api/bag/) | a counted set (from the release after 0.71) |
+| [`Range`](/compiler/api/range/) | a half-open index range (from the release after 0.71) |
+| [`BinaryHeap`](/compiler/api/binaryheap/) | a priority queue (from the release after 0.71) |
+| [`Cache`](/compiler/api/cache/) | a bounded LRU cache (from the release after 0.71) |
 | [`Coder`](/compiler/api/coder/) | keyed archiving of an object graph to JSON, optionally gzipped |
 
 **Protocols**: [`Comparable`](/compiler/api/comparable/), [`Hashable`](/compiler/api/hashable/), [`Enumerable`](/compiler/api/enumerable/), [`Copying`](/compiler/api/copying/), [`Codable`](/compiler/api/codable/) and [`Error`](/compiler/api/error/), the small interfaces the classes conform to.
