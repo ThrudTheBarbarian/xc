@@ -435,6 +435,42 @@ i32 CopyFileA(pointer src, pointer dst, i32 failIfExists);
 #define BM_GETCHECK $00F0
 #define DEFAULT_GUI_FONT 17
 #define EN_CHANGE $0300 // HIWORD(wParam) on WM_COMMAND from an EDIT
+// RichEdit (MSFTEDIT_CLASS, "RICHEDIT50W"), for UXTextView.  CHARFORMAT2W (116 bytes) and
+// PARAFORMAT2 (188) are built as bytes at their documented offsets.
+pointer SetFocus(pointer hwnd);
+i32 WideCharToMultiByte(u32 cp, u32 flags, pointer wc, i32 cch, pointer mb, i32 cb, pointer defc, pointer used);
+#define WM_SETREDRAW $000B
+#define ES_MULTILINE $0004
+#define ES_AUTOVSCROLL $0040
+#define ES_WANTRETURN $1000
+#define WS_EX_CLIENTEDGE $00000200
+#define EM_SCROLLCARET $00B7
+#define EM_EXGETSEL $0434
+#define EM_EXSETSEL $0437
+#define EM_GETCHARFORMAT $043A
+#define EM_GETPARAFORMAT $043D
+#define EM_SETCHARFORMAT $0444
+#define EM_SETEVENTMASK $0445
+#define EM_SETPARAFORMAT $0447
+#define EM_SETUNDOLIMIT $0452
+#define EM_GETTEXTEX $045E
+#define EM_GETTEXTLENGTHEX $045F
+#define EM_SETTEXTEX $0461
+#define EN_SELCHANGE $0702
+#define ENM_CHANGE $00000001
+#define ENM_SELCHANGE $00080000
+#define SCF_DEFAULT 0
+#define SCF_SELECTION 1
+#define CFM_BOLD $00000001
+#define CFM_ITALIC $00000002
+#define CFM_UNDERLINE $00000004
+#define CFM_FACE $20000000
+#define CFM_COLOR $40000000
+#define CFM_SIZE $80000000
+#define CFE_AUTOCOLOR $40000000
+#define PFM_ALIGNMENT $00000008
+#define ST_SELECTION 2
+#define CP_UTF16 1200
 #define BN_CLICKED 0
 #define EM_SETCUEBANNER $1501 // grey placeholder prompt on an EDIT (wParam=drawWhenFocused, lParam=LPCWSTR)
 

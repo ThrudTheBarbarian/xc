@@ -21,6 +21,8 @@
 #import "UXProgressBar.xc"      // native progress bar (msctls_progress32)
 #import "UXSegmentedControl.xc" // native ToolbarWindow32 check-group (connected buttons, one/many selected)
 #import "UXToolbar.xc"          // native ToolbarWindow32 button row
+#import "UXTextView.xc"         // native RichEdit
+#import "Array.xc"
 #import "UXWin32.h.xc"
 #import "UXDate.xc" // localOffsetMinutes compares civil days
 #import "UXGdiGraphics.xc"
@@ -661,6 +663,579 @@ pointer UXScroll32Proc(pointer hwnd, u32 msg, pointer wp, pointer lp)
 
 // ── the window proc: the driver ─────────────────────────────────────────────
 // WM_PAINT flows backend -> the neutral content callback -> treeDraw -> drawRect.
+// ---- the native text view (UXTextView): a RichEdit -------------------------------------------------
+// The RichEdit holds UTF-16 with a CR at each paragraph's end; the toolkit's side is UTF-8 with LF, so
+// text is converted here, one CR for one LF (the offsets stay in step).  A style is set over a range by
+// selecting it; reading the runs back asks for the format of growing ranges, which the RichEdit reports
+// as mixed (a bit cleared in the mask) once a range covers two.  The RichEdit's own undo is off, because
+// the view keeps one that covers its styles as well (as on GTK and the web).
+Array* gW32TextViews;
+pointer gW32RichLib;
+class W32TextView : Object
+    {
+    pointer hwnd;
+    UXTextView* tv;
+    i32 handle;
+    i32 node;
+    i32 quiet;      // a change the toolkit is making is not reported back to it
+    bool userMoved; // the next selection change is the user's (a click, a drag, a moving key)
+    i32 defHeight;  // the default font's height, in twips
+    u16 defFace[32];
+
+    static W32TextView* of(pointer h)
+        {
+        if (gW32TextViews == (Array*)0 || h == (pointer)0)
+            {
+            return (W32TextView*)0;
+            }
+        for (u32 k = (u32)0; k < gW32TextViews.count(); k = k + (u32)1)
+            {
+            W32TextView* r = (W32TextView* ?)gW32TextViews.get(k);
+            if (r != (W32TextView*)0 && r.hwnd == h)
+                {
+                return r;
+                }
+            }
+        return (W32TextView*)0;
+        }
+    static W32TextView* at(i32 handle, i32 node)
+        {
+        if (gW32TextViews == (Array*)0)
+            {
+            return (W32TextView*)0;
+            }
+        for (u32 k = (u32)0; k < gW32TextViews.count(); k = k + (u32)1)
+            {
+            W32TextView* r = (W32TextView* ?)gW32TextViews.get(k);
+            if (r != (W32TextView*)0 && r.handle == handle && r.node == node)
+                {
+                return r;
+                }
+            }
+        return (W32TextView*)0;
+        }
+    static W32TextView* make(i32 handle, i32 node, pointer parent, i32 x, i32 y, i32 w, i32 h, UXTextView* tv)
+        {
+        if (gW32RichLib == (pointer)0)
+            {
+            gW32RichLib = LoadLibraryA((pointer)"Msftedit.dll");
+            }
+        u32 st = (u32)WS_CHILD | (u32)WS_VISIBLE | (u32)WS_VSCROLL | (u32)WS_TABSTOP | (u32)ES_MULTILINE |
+                 (u32)ES_AUTOVSCROLL | (u32)ES_WANTRETURN;
+        pointer c = CreateWindowExA((u32)WS_EX_CLIENTEDGE, (pointer) "RICHEDIT50W", (pointer) "", st, x, y, w, h, parent,
+                                    (pointer)(W32_CTRL_ID_BASE + node), gW32Inst, (pointer)0);
+        if (c == (pointer)0)
+            {
+            return (W32TextView*)0;
+            }
+        W32TextView* r = new W32TextView();
+        r.hwnd = c;
+        r.tv = tv;
+        r.handle = handle;
+        r.node = node;
+        r.quiet = (i32)0;
+        r.userMoved = false;
+        SendMessageA(c, (u32)WM_SETFONT, gW32Font, (pointer)1);
+        SendMessageA(c, (u32)EM_SETUNDOLIMIT, (pointer)0, (pointer)0);
+        SendMessageA(c, (u32)EM_SETEVENTMASK, (pointer)0, (pointer)((u32)ENM_CHANGE | (u32)ENM_SELCHANGE));
+        u8 cf[116];
+        r.zero(&cf[0], (i32)116);
+        ((u32*)&cf[0])[0] = (u32)116;
+        SendMessageA(c, (u32)EM_GETCHARFORMAT, (pointer)SCF_DEFAULT, (pointer)&cf[0]);
+        r.defHeight = ((i32*)&cf[12])[0];
+        u16* face = (u16*)&cf[26];
+        for (i32 k = (i32)0; k < (i32)32; k = k + (i32)1)
+            {
+            r.defFace[k] = face[k];
+            }
+        if (gW32TextViews == (Array*)0)
+            {
+            gW32TextViews = new Array();
+            }
+        gW32TextViews.add(r);
+        return r;
+        }
+
+    void zero(u8* p, i32 n)
+        {
+        for (i32 k = (i32)0; k < n; k = k + (i32)1)
+            {
+            p[k] = (u8)0;
+            }
+        }
+
+    // ---- the text: UTF-16 with CRs, the caller frees it ----
+    u16* wide(i32* n)
+        {
+        u8 gl[8];
+        ((u32*)&gl[0])[0] = (u32)10; // GTL_NUMCHARS | GTL_PRECISE
+        ((u32*)&gl[0])[1] = (u32)CP_UTF16;
+        i32 len = (i32)SendMessageA(hwnd, (u32)EM_GETTEXTLENGTHEX, (pointer)&gl[0], (pointer)0);
+        if (len < (i32)0)
+            {
+            len = (i32)0;
+            }
+        u16* buf = (u16*)malloc((u32)(len + (i32)1) * (u32)2);
+        u8 gt[32];
+        self.zero(&gt[0], (i32)32);
+        ((u32*)&gt[0])[0] = (u32)(len + (i32)1) * (u32)2;
+        ((u32*)&gt[0])[2] = (u32)CP_UTF16;
+        i32 got = (i32)SendMessageA(hwnd, (u32)EM_GETTEXTEX, (pointer)&gt[0], (pointer)buf);
+        if (got < (i32)0 || got > len)
+            {
+            got = (i32)0;
+            }
+        buf[got] = (u16)0;
+        n[0] = got;
+        return buf;
+        }
+    // UTF-16 (CR) to UTF-8 (LF); the caller frees it
+    static u8* utf8Of(u16* w, i32 n, i32* nb)
+        {
+        for (i32 k = (i32)0; k < n; k = k + (i32)1)
+            {
+            if (w[k] == (u16)13)
+                {
+                w[k] = (u16)10;
+                }
+            }
+        i32 len = WideCharToMultiByte((u32)CP_UTF8, (u32)0, (pointer)w, n, (pointer)0, (i32)0, (pointer)0, (pointer)0);
+        u8* out = (u8*)malloc((u32)len + (u32)1);
+        WideCharToMultiByte((u32)CP_UTF8, (u32)0, (pointer)w, n, (pointer)out, len, (pointer)0, (pointer)0);
+        out[len] = (u8)0;
+        nb[0] = len;
+        return out;
+        }
+    // UTF-8 (LF) to UTF-16 (CR); the caller frees it
+    static u16* wideOf(u8* t, i32 nb, i32* n)
+        {
+        i32 len = nb > (i32)0 ? MultiByteToWideChar((u32)CP_UTF8, (u32)0, (pointer)t, nb, (pointer)0, (i32)0) : (i32)0;
+        u16* out = (u16*)malloc((u32)(len + (i32)1) * (u32)2);
+        if (len > (i32)0)
+            {
+            MultiByteToWideChar((u32)CP_UTF8, (u32)0, (pointer)t, nb, (pointer)out, len);
+            }
+        for (i32 k = (i32)0; k < len; k = k + (i32)1)
+            {
+            if (out[k] == (u16)10)
+                {
+                out[k] = (u16)13;
+                }
+            }
+        out[len] = (u16)0;
+        n[0] = len;
+        return out;
+        }
+    // a byte offset into UTF-8 t as a UTF-16 index (backed off to a character's start)
+    static i32 u16At(u8* t, i32 nb, i32 bytes)
+        {
+        i32 b = bytes > nb ? nb : bytes;
+        if (b <= (i32)0)
+            {
+            return (i32)0;
+            }
+        while (b > (i32)0 && b < nb && (t[b] & (u8)$C0) == (u8)$80)
+            {
+            b = b - (i32)1;
+            }
+        return MultiByteToWideChar((u32)CP_UTF8, (u32)0, (pointer)t, b, (pointer)0, (i32)0);
+        }
+    // a UTF-16 index into w as a byte offset (an index inside a surrogate pair counts its start)
+    static i32 u8At(u16* w, i32 n, i32 i)
+        {
+        i32 k = i > n ? n : i;
+        if (k <= (i32)0)
+            {
+            return (i32)0;
+            }
+        if (k < n && w[k] >= (u16)$DC00 && w[k] < (u16)$E000)
+            {
+            k = k - (i32)1;
+            }
+        return WideCharToMultiByte((u32)CP_UTF8, (u32)0, (pointer)w, k, (pointer)0, (i32)0, (pointer)0, (pointer)0);
+        }
+
+    // ---- the selection and the styles, in UTF-16 indices ----
+    void select(i32 a, i32 b)
+        {
+        i32 cr[2];
+        cr[0] = a;
+        cr[1] = b;
+        SendMessageA(hwnd, (u32)EM_EXSETSEL, (pointer)0, (pointer)&cr[0]);
+        }
+    void selection(i32* a, i32* b)
+        {
+        i32 cr[2];
+        cr[0] = (i32)0;
+        cr[1] = (i32)0;
+        SendMessageA(hwnd, (u32)EM_EXGETSEL, (pointer)0, (pointer)&cr[0]);
+        a[0] = cr[0];
+        b[0] = cr[1];
+        }
+    // the selection's character style
+    void setFormat(i32 flags, i32 colour, i32 size)
+        {
+        u8 cf[116];
+        self.zero(&cf[0], (i32)116);
+        ((u32*)&cf[0])[0] = (u32)116;
+        ((u32*)&cf[0])[1] = (u32)CFM_BOLD | (u32)CFM_ITALIC | (u32)CFM_UNDERLINE | (u32)CFM_COLOR | (u32)CFM_SIZE | (u32)CFM_FACE;
+        u32 fx = (u32)(flags & (i32)7); // CFE_BOLD 1, CFE_ITALIC 2, CFE_UNDERLINE 4: the same bits
+        if ((colour & (i32)$1000000) != (i32)0)
+            {
+            i32 rgb = colour & (i32)$FFFFFF;
+            ((u32*)&cf[0])[5] = (u32)(((rgb >> (i32)16) & (i32)255) | (rgb & (i32)$FF00) | ((rgb & (i32)255) << (i32)16));
+            }
+        else
+            {
+            fx = fx | (u32)CFE_AUTOCOLOR;
+            }
+        ((u32*)&cf[0])[2] = fx;
+        ((i32*)&cf[0])[3] = size > (i32)0 ? size * (i32)15 : defHeight; // a pixel is 15 twips at 96 dpi
+        u16* face = (u16*)&cf[26];
+        if ((flags & (i32)8) != (i32)0)
+            {
+            u8* mono = (u8*)"Consolas";
+            for (i32 k = (i32)0; k < (i32)9; k = k + (i32)1)
+                {
+                face[k] = (u16)mono[k];
+                }
+            }
+        else
+            {
+            for (i32 k = (i32)0; k < (i32)32; k = k + (i32)1)
+                {
+                face[k] = defFace[k];
+                }
+            }
+        SendMessageA(hwnd, (u32)EM_SETCHARFORMAT, (pointer)SCF_SELECTION, (pointer)&cf[0]);
+        }
+    // the alignment of the paragraphs the selection touches (UX_ALIGN_*)
+    void setAlignment(i32 al)
+        {
+        u8 pf[188];
+        self.zero(&pf[0], (i32)188);
+        ((u32*)&pf[0])[0] = (u32)188;
+        ((u32*)&pf[0])[1] = (u32)PFM_ALIGNMENT;
+        ((u16*)&pf[24])[0] = (u16)(al == (i32)1 ? (i32)2 : (al == (i32)2 ? (i32)3 : (al == (i32)3 ? (i32)4 : (i32)1)));
+        SendMessageA(hwnd, (u32)EM_SETPARAFORMAT, (pointer)0, (pointer)&pf[0]);
+        }
+    // the style of [a, b): flags, colour and size, and whether it is the same all through
+    bool formatOf(i32 a, i32 b, i32* flags, i32* colour, i32* size)
+        {
+        self.select(a, b);
+        u8 cf[116];
+        self.zero(&cf[0], (i32)116);
+        ((u32*)&cf[0])[0] = (u32)116;
+        SendMessageA(hwnd, (u32)EM_GETCHARFORMAT, (pointer)SCF_SELECTION, (pointer)&cf[0]);
+        u32 mask = ((u32*)&cf[0])[1]; // a bit is clear where the range is mixed
+        u32 need = (u32)CFM_BOLD | (u32)CFM_ITALIC | (u32)CFM_UNDERLINE | (u32)CFM_COLOR | (u32)CFM_SIZE | (u32)CFM_FACE;
+        u32 fx = ((u32*)&cf[0])[2];
+        i32 f = (i32)(fx & (u32)7);
+        u16* face = (u16*)&cf[26];
+        if (face[0] == (u16)'C' && face[1] == (u16)'o' && face[2] == (u16)'n' && face[3] == (u16)'s')
+            {
+            f = f | (i32)8;
+            }
+        i32 c = (i32)0;
+        if ((fx & (u32)CFE_AUTOCOLOR) == (u32)0)
+            {
+            i32 bgr = (i32)((u32*)&cf[0])[5];
+            c = (i32)$1000000 | ((bgr & (i32)255) << (i32)16) | (bgr & (i32)$FF00) | ((bgr >> (i32)16) & (i32)255);
+            }
+        i32 yh = ((i32*)&cf[0])[3];
+        i32 z = (yh == defHeight) ? (i32)0 : (yh + (i32)7) / (i32)15;
+        flags[0] = f;
+        colour[0] = c;
+        size[0] = z;
+        return (mask & need) == need;
+        }
+    i32 alignmentAt(i32 a)
+        {
+        self.select(a, a);
+        u8 pf[188];
+        self.zero(&pf[0], (i32)188);
+        ((u32*)&pf[0])[0] = (u32)188;
+        SendMessageA(hwnd, (u32)EM_GETPARAFORMAT, (pointer)0, (pointer)&pf[0]);
+        i32 wa = (i32)((u16*)&pf[24])[0];
+        return wa == (i32)2 ? (i32)1 : (wa == (i32)3 ? (i32)2 : (wa == (i32)4 ? (i32)3 : (i32)0));
+        }
+    // runs over UTF-8 t applied to the UTF-16 range starting at base (runs are relative to t)
+    void applyRuns(u8* t, i32 nb, i32 base, i32* runs, i32 nruns)
+        {
+        for (i32 k = (i32)0; k < nruns; k = k + (i32)1)
+            {
+            i32 o = k * (i32)5;
+            i32 a = base + W32TextView.u16At(t, nb, runs[o]);
+            i32 b = base + W32TextView.u16At(t, nb, runs[o] + runs[o + (i32)1]);
+            self.select(a, b);
+            self.setFormat(runs[o + (i32)2], runs[o + (i32)3], runs[o + (i32)4]);
+            i32 al = (runs[o + (i32)2] >> (i32)4) & (i32)3;
+            if (al != (i32)0)
+                {
+                self.setAlignment(al);
+                }
+            }
+        }
+
+    // ---- the seam ----
+    void setAll(u8* text, i32 nb, i32* runs, i32 nruns)
+        {
+        quiet = quiet + (i32)1;
+        SendMessageA(hwnd, (u32)WM_SETREDRAW, (pointer)0, (pointer)0);
+        i32 n = (i32)0;
+        u16* w = W32TextView.wideOf(text, nb, &n);
+        u8 st[8];
+        ((u32*)&st[0])[0] = (u32)0; // ST_DEFAULT: the whole content
+        ((u32*)&st[0])[1] = (u32)CP_UTF16;
+        SendMessageA(hwnd, (u32)EM_SETTEXTEX, (pointer)&st[0], (pointer)w);
+        free((pointer)w);
+        self.select((i32)0, (i32)-1);
+        self.setFormat((i32)0, (i32)0, (i32)0);
+        self.setAlignment((i32)0);
+        self.applyRuns(text, nb, (i32)0, runs, nruns);
+        self.select((i32)0, (i32)0);
+        SendMessageA(hwnd, (u32)WM_SETREDRAW, (pointer)1, (pointer)0);
+        InvalidateRect(hwnd, (pointer)0, (i32)1);
+        quiet = quiet - (i32)1;
+        }
+    void replace(i32 start, i32 len, u8* text, i32 nb, i32* runs, i32 nruns, i32 attrsOnly)
+        {
+        quiet = quiet + (i32)1;
+        SendMessageA(hwnd, (u32)WM_SETREDRAW, (pointer)0, (pointer)0);
+        i32 s0 = (i32)0;
+        i32 s1 = (i32)0;
+        self.selection(&s0, &s1);
+        i32 n = (i32)0;
+        u16* w = self.wide(&n);
+        i32 cb = (i32)0;
+        u8* cur = W32TextView.utf8Of(w, n, &cb);
+        i32 a = W32TextView.u16At(cur, cb, start);
+        i32 b = W32TextView.u16At(cur, cb, start + len);
+        free((pointer)w);
+        free((pointer)cur);
+        self.select(a, b);
+        if (attrsOnly == (i32)0)
+            {
+            i32 pn = (i32)0;
+            u16* pw = W32TextView.wideOf(text, nb, &pn);
+            u8 st[8];
+            ((u32*)&st[0])[0] = (u32)ST_SELECTION;
+            ((u32*)&st[0])[1] = (u32)CP_UTF16;
+            SendMessageA(hwnd, (u32)EM_SETTEXTEX, (pointer)&st[0], (pointer)pw);
+            free((pointer)pw);
+            }
+        self.applyRuns(text, nb, a, runs, nruns);
+        self.select(s0, s1);
+        SendMessageA(hwnd, (u32)WM_SETREDRAW, (pointer)1, (pointer)0);
+        InvalidateRect(hwnd, (pointer)0, (i32)1);
+        quiet = quiet - (i32)1;
+        }
+    // the content's UTF-8 and its runs, merged; with runs 0 only counts.  Returns the run count.
+    i32 walk(u8* buf, i32 cap, i32* runs, i32 maxRuns, i32* nbytes)
+        {
+        quiet = quiet + (i32)1;
+        SendMessageA(hwnd, (u32)WM_SETREDRAW, (pointer)0, (pointer)0);
+        i32 s0 = (i32)0;
+        i32 s1 = (i32)0;
+        self.selection(&s0, &s1);
+        i32 n = (i32)0;
+        u16* w = self.wide(&n);
+        u16* w2 = (u16*)malloc((u32)(n + (i32)1) * (u32)2);
+        for (i32 k = (i32)0; k <= n; k = k + (i32)1)
+            {
+            w2[k] = w[k];
+            }
+        i32 tb = (i32)0;
+        u8* t = W32TextView.utf8Of(w2, n, &tb); // w2 now has LFs; w keeps the CRs for offsets
+        if (buf != (u8*)0)
+            {
+            i32 m = tb < cap - (i32)1 ? tb : cap - (i32)1;
+            for (i32 k = (i32)0; k < m; k = k + (i32)1)
+                {
+                buf[k] = t[k];
+                }
+            buf[m] = (u8)0;
+            }
+        i32 count = (i32)0;
+        i32 pf = (i32)-1;
+        i32 pc = (i32)0;
+        i32 pz = (i32)0;
+        i32 ps = (i32)0;
+        while (ps < n)
+            {
+            // one paragraph: [ps, pe), its CR included
+            i32 pe = ps;
+            while (pe < n && w[pe] != (u16)13)
+                {
+                pe = pe + (i32)1;
+                }
+            if (pe < n)
+                {
+                pe = pe + (i32)1;
+                }
+            i32 al = self.alignmentAt(ps);
+            i32 i = ps;
+            while (i < pe)
+                {
+                // the run from i: the longest uniform [i, lo), found by doubling then halving.
+                // A single character is always uniform.
+                i32 f = (i32)0;
+                i32 c = (i32)0;
+                i32 z = (i32)0;
+                i32 lo = i + (i32)1;
+                i32 hi = (i32)-1; // the shortest end known to be mixed
+                i32 step = (i32)2;
+                while (hi < (i32)0 && lo < pe)
+                    {
+                    i32 e = i + step > pe ? pe : i + step;
+                    if (self.formatOf(i, e, &f, &c, &z))
+                        {
+                        lo = e;
+                        step = step * (i32)2;
+                        }
+                    else
+                        {
+                        hi = e;
+                        }
+                    }
+                while (hi > (i32)0 && hi - lo > (i32)1)
+                    {
+                    i32 mid = (lo + hi) / (i32)2;
+                    if (self.formatOf(i, mid, &f, &c, &z))
+                        {
+                        lo = mid;
+                        }
+                    else
+                        {
+                        hi = mid;
+                        }
+                    }
+                self.formatOf(i, i + (i32)1, &f, &c, &z);
+                f = f | (al << (i32)4);
+                i32 b0 = W32TextView.u8At(w, n, i);
+                i32 b1 = W32TextView.u8At(w, n, lo);
+                if (count > (i32)0 && f == pf && c == pc && z == pz)
+                    {
+                    if (runs != (i32*)0 && count - (i32)1 < maxRuns)
+                        {
+                        runs[(count - (i32)1) * (i32)5 + (i32)1] = b1 - runs[(count - (i32)1) * (i32)5];
+                        }
+                    }
+                else
+                    {
+                    if (runs != (i32*)0 && count < maxRuns)
+                        {
+                        i32 o = count * (i32)5;
+                        runs[o] = b0;
+                        runs[o + (i32)1] = b1 - b0;
+                        runs[o + (i32)2] = f;
+                        runs[o + (i32)3] = c;
+                        runs[o + (i32)4] = z;
+                        }
+                    count = count + (i32)1;
+                    pf = f;
+                    pc = c;
+                    pz = z;
+                    }
+                i = lo;
+                }
+            ps = pe;
+            }
+        free((pointer)w);
+        free((pointer)w2);
+        free((pointer)t);
+        self.select(s0, s1);
+        SendMessageA(hwnd, (u32)WM_SETREDRAW, (pointer)1, (pointer)0);
+        quiet = quiet - (i32)1;
+        if (nbytes != (i32*)0)
+            {
+            nbytes[0] = tb;
+            }
+        return count;
+        }
+    void selectionBytes(i32* start, i32* len)
+        {
+        i32 a = (i32)0;
+        i32 b = (i32)0;
+        self.selection(&a, &b);
+        i32 n = (i32)0;
+        u16* w = self.wide(&n);
+        i32 x = W32TextView.u8At(w, n, a);
+        i32 y = W32TextView.u8At(w, n, b);
+        free((pointer)w);
+        start[0] = x < y ? x : y;
+        len[0] = x < y ? y - x : x - y;
+        }
+    void setSelectionBytes(i32 start, i32 len)
+        {
+        i32 n = (i32)0;
+        u16* w = self.wide(&n);
+        i32 tb = (i32)0;
+        u8* t = W32TextView.utf8Of(w, n, &tb);
+        i32 a = W32TextView.u16At(t, tb, start);
+        i32 b = W32TextView.u16At(t, tb, start + len);
+        free((pointer)w);
+        free((pointer)t);
+        quiet = quiet + (i32)1;
+        self.select(a, b);
+        SendMessageA(hwnd, (u32)EM_SCROLLCARET, (pointer)0, (pointer)0);
+        quiet = quiet - (i32)1;
+        }
+    // the style typing gets: a RichEdit keeps it for an empty selection until the caret moves
+    void setTyping(i32 flags, i32 colour, i32 size)
+        {
+        quiet = quiet + (i32)1;
+        self.setFormat(flags, colour, size);
+        quiet = quiet - (i32)1;
+        }
+
+    // ---- from the RichEdit ----
+    void changed(void)
+        {
+        if (quiet != (i32)0 || tv == (UXTextView*)0)
+            {
+            return;
+            }
+        tv.nativeDidChange();
+        if (gApp != (UXApplication*)0)
+            {
+            gApp.displayIfNeeded();
+            }
+        }
+    void selected(void)
+        {
+        if (quiet != (i32)0 || tv == (UXTextView*)0 || !userMoved)
+            {
+            return;
+            }
+        userMoved = false;
+        tv.nativeDidSelect();
+        if (gApp != (UXApplication*)0)
+            {
+            gApp.displayIfNeeded();
+            }
+        }
+    void undoKey(bool redo)
+        {
+        if (tv == (UXTextView*)0)
+            {
+            return;
+            }
+        if (redo)
+            {
+            tv.redo();
+            }
+        else
+            {
+            tv.undo();
+            }
+        if (gApp != (UXApplication*)0)
+            {
+            gApp.displayIfNeeded();
+            }
+        }
+    }
+
 pointer UXWin32Proc(pointer hwnd, u32 msg, pointer wp, pointer lp)
     {
     // WM_PRINTCLIENT (anything printing the window into a DC): the same paint, into that DC
@@ -789,6 +1364,15 @@ pointer UXWin32Proc(pointer hwnd, u32 msg, pointer wp, pointer lp)
             // userdata is a W32Field STRUCT, not an UXControl: casting that to UXControl and calling
             // mouseDown reads a garbage vtable and crashes.  Only EN_CHANGE syncs the field; only
             // BN_CLICKED (0) fires a button/check/radio (whose userdata IS an UXControl).
+            W32TextView* rtv = W32TextView.of(lp);
+            if (rtv != (W32TextView*)0)
+                {
+                if (note == (i32)EN_CHANGE)
+                    {
+                    rtv.changed();
+                    }
+                return (pointer)0;
+                }
             if (note == (i32)EN_CHANGE)
                 {
                 W32Field* f = (W32Field*)GetWindowLongPtrA(lp, (i32)GWLP_USERDATA);
@@ -842,6 +1426,15 @@ pointer UXWin32Proc(pointer hwnd, u32 msg, pointer wp, pointer lp)
     if (msg == (u32)WM_NOTIFY)
         {
         NMHDR* nh = (NMHDR*)lp;
+        if (nh.code == (u32)EN_SELCHANGE)
+            {
+            W32TextView* stv = W32TextView.of(nh.hwndFrom);
+            if (stv != (W32TextView*)0)
+                {
+                stv.selected();
+                }
+            return (pointer)0;
+            }
         // A row dragged out of a list (the left button) or a tree (either button): the app's drag
         if (nh.code == (u32)LVN_BEGINDRAG || nh.code == (u32)LVN_BEGINRDRAG)
             {
@@ -3831,6 +4424,79 @@ class UXWin32Driver : Object<UXViewDriver>
         InvalidateRect(ctrl, (pointer)0, (i32)1);
         }
 
+    // ---- the native text view (UXTextView): a RichEdit; the undo is the view's own --------------
+    void textViewSetAll(i32 handle, i32 node, u8* text, i32 nbytes, i32* runs, i32 nruns)
+        {
+        W32TextView* r = W32TextView.at(handle, node);
+        if (r != (W32TextView*)0)
+            {
+            r.setAll(text, nbytes, runs, nruns);
+            }
+        }
+    void textViewReplace(i32 handle, i32 node, i32 start, i32 len, u8* text, i32 nbytes, i32* runs, i32 nruns,
+                         i32 attrsOnly)
+        {
+        W32TextView* r = W32TextView.at(handle, node);
+        if (r != (W32TextView*)0)
+            {
+            r.replace(start, len, text, nbytes, runs, nruns, attrsOnly);
+            }
+        }
+    void textViewSize(i32 handle, i32 node, i32* nbytes, i32* nruns)
+        {
+        W32TextView* r = W32TextView.at(handle, node);
+        nbytes[0] = (i32)0;
+        nruns[0] = (i32)0;
+        if (r != (W32TextView*)0)
+            {
+            nruns[0] = r.walk((u8*)0, (i32)0, (i32*)0, (i32)0, nbytes);
+            }
+        }
+    i32 textViewRead(i32 handle, i32 node, u8* buf, i32 cap, i32* runs, i32 maxRuns)
+        {
+        W32TextView* r = W32TextView.at(handle, node);
+        if (r == (W32TextView*)0 || cap <= (i32)0)
+            {
+            return (i32)0;
+            }
+        i32 k = r.walk(buf, cap, runs, maxRuns, (i32*)0);
+        return k < maxRuns ? k : maxRuns;
+        }
+    void textViewSelection(i32 handle, i32 node, i32* start, i32* len)
+        {
+        W32TextView* r = W32TextView.at(handle, node);
+        start[0] = (i32)0;
+        len[0] = (i32)0;
+        if (r != (W32TextView*)0)
+            {
+            r.selectionBytes(start, len);
+            }
+        }
+    void textViewSetSelection(i32 handle, i32 node, i32 start, i32 len)
+        {
+        W32TextView* r = W32TextView.at(handle, node);
+        if (r != (W32TextView*)0)
+            {
+            r.setSelectionBytes(start, len);
+            }
+        }
+    void textViewSetTyping(i32 handle, i32 node, i32 flags, i32 colour, i32 size)
+        {
+        W32TextView* r = W32TextView.at(handle, node);
+        if (r != (W32TextView*)0)
+            {
+            r.setTyping(flags, colour, size);
+            }
+        }
+    void textViewFocus(i32 handle, i32 node)
+        {
+        W32TextView* r = W32TextView.at(handle, node);
+        if (r != (W32TextView*)0)
+            {
+            SetFocus(r.hwnd);
+            }
+        }
+
     void realizeTree(i32 handle, pointer tree)
         {
         W32Tree* t = (W32Tree*)tree;
@@ -3847,7 +4513,29 @@ class UXWin32Driver : Object<UXViewDriver>
             i32 w = (i32)0;
             i32 hh = (i32)0;
             self.structAbsFrame(tree, i, &ax, &ay, &w, &hh);
-            if (k == (i32)UXKindShield)
+            if (k == (i32)UXKindTextView)
+                {
+                if (t.nodes[i].ctrl == (pointer)0)
+                    {
+                    UXTextView* tvp = (UXTextView* ?)(Object*)t.nodes[i].peer;
+                    W32TextView* rv = W32TextView.make(handle, i, parent, ax, ay, w, hh, tvp);
+                    if (rv != (W32TextView*)0)
+                        {
+                        t.nodes[i].ctrl = rv.hwnd;
+                        if (tvp != (UXTextView*)0)
+                            {
+                            tvp.nativeAttach(handle, i);
+                            }
+                        }
+                    }
+                else
+                    {
+                    MoveWindow(t.nodes[i].ctrl, ax, ay, w, hh, (i32)1);
+                    ShowWindow(t.nodes[i].ctrl, self.effectiveHidden(tree, i) != (i32)0 ? (i32)0 : (i32)SW_SHOW);
+                    EnableWindow(t.nodes[i].ctrl, (i32)t.nodes[i].enabled);
+                    }
+                }
+            else if (k == (i32)UXKindShield)
                 {
                 if (t.nodes[i].ctrl == (pointer)0)
                     {
@@ -4459,7 +5147,7 @@ class UXWin32Driver : Object<UXViewDriver>
             }
         i32 k = t.nodes[i].kind;
         // native trackbar/combo/updown/progress/toolbar/segmented paint themselves — don't self-draw under them
-        if ((k == (i32)UXKindSlider || k == (i32)UXKindPopup || k == (i32)UXKindStepper || k == (i32)UXKindProgress || k == (i32)UXKindSegmented || k == (i32)UXKindToolbar) && t.nodes[i].ctrl != (pointer)0)
+        if ((k == (i32)UXKindSlider || k == (i32)UXKindPopup || k == (i32)UXKindStepper || k == (i32)UXKindProgress || k == (i32)UXKindSegmented || k == (i32)UXKindToolbar || k == (i32)UXKindTextView) && t.nodes[i].ctrl != (pointer)0)
             {
             return;
             }
@@ -4992,6 +5680,29 @@ class UXWin32Driver : Object<UXViewDriver>
                 }
             ev.modifiers = mods;
             return;
+            }
+        // A text view's RichEdit: Control-Z, Shift-Control-Z and Control-Y are the view's undo (the
+        // RichEdit's own is off), and a click, a drag or a moving key is the user moving the selection
+        // (a move that typing makes is not, so a run of typing stays one undo step).
+        if (onWindow == (i32)0 && (msg.message == (u32)WM_KEYDOWN || msg.message == (u32)WM_LBUTTONDOWN ||
+                                   msg.message == (u32)WM_MOUSEMOVE))
+            {
+            W32TextView* ktv = W32TextView.of(msg.hwnd);
+            if (ktv != (W32TextView*)0)
+                {
+                if (msg.message == (u32)WM_KEYDOWN && (i32)GetKeyState((i32)$11) < (i32)0 &&
+                    ((u32)msg.wParam == (u32)$5A || (u32)msg.wParam == (u32)$59))
+                    {
+                    bool redo = (u32)msg.wParam == (u32)$59 || (i32)GetKeyState((i32)$10) < (i32)0;
+                    ktv.undoKey(redo);
+                    return; // consumed: not the RichEdit's
+                    }
+                if (msg.message == (u32)WM_LBUTTONDOWN || (msg.message == (u32)WM_MOUSEMOVE && ((u32)msg.wParam & (u32)1) != (u32)0) ||
+                    (msg.message == (u32)WM_KEYDOWN && (u32)msg.wParam >= (u32)$21 && (u32)msg.wParam <= (u32)$28))
+                    {
+                    ktv.userMoved = true; // PageUp..Down, End, Home, the arrows
+                    }
+                }
             }
         // Return aimed at a native EDIT child: a single-line EDIT DISCARDS the key (and beeps),
         // so the field's onSubmit would never fire from a real keystroke -- only from the
