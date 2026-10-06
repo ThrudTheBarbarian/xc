@@ -2465,7 +2465,7 @@ _xt_simd_select:                        # @_xt_simd_select
 	test	r15d, r15d
 	jne	.LBB81_28
 # %bb.18:
-	lea	rsi, [rip + _xt_simd_select.msg]
+	lea	rsi, [rip + xt_simd_pick.msg]
 	mov	edx, 66
 	mov	edi, 2
 	call	write@PLT
@@ -2502,32 +2502,36 @@ _xt_simd_select:                        # @_xt_simd_select
 	cmp	cl, byte ptr [rdx]
 	jne	.LBB81_27
 # %bb.26:
-	lea	rsi, [rip + _xt_simd_select.msg.4]
+	lea	rsi, [rip + xt_simd_pick.msg.4]
 	mov	edx, 82
 	mov	edi, 2
 	call	write@PLT
 .LBB81_27:
 	mov	esi, r15d
 .LBB81_28:
-	mov	rax, qword ptr [rip + _xt_simd_level@GOTPCREL]
-	mov	dword ptr [rax], esi
+	xor	eax, eax
+	test	esi, esi
+	setne	al
+	mov	rcx, qword ptr [rip + _xt_simd_level@GOTPCREL]
+	mov	dword ptr [rcx], eax
 	test	ebp, ebp
 	je	.LBB81_31
 # %bb.29:
-	mov	eax, ebp
-	mov	ecx, esi
-	inc	rcx
-	shl	rax, 2
+	cmp	esi, 1
+	mov	eax, 1
+	sbb	eax, -1
+	mov	ecx, ebp
+	lea	rcx, [rcx + 2*rcx]
 	xor	edx, edx
 	.p2align	4, 0x90
 .LBB81_30:                              # =>This Inner Loop Header: Depth=1
 	mov	esi, edx
 	mov	rsi, qword ptr [r14 + 8*rsi]
-	lea	edi, [rcx + rdx]
+	lea	edi, [rax + rdx]
 	mov	rdi, qword ptr [r14 + 8*rdi]
 	mov	qword ptr [rsi], rdi
-	add	rdx, 4
-	cmp	rax, rdx
+	add	rdx, 3
+	cmp	rcx, rdx
 	jne	.LBB81_30
 .LBB81_31:
 	add	rsp, 8
@@ -2539,13 +2543,202 @@ _xt_simd_select:                        # @_xt_simd_select
 .Lfunc_end81:
 	.size	_xt_simd_select, .Lfunc_end81-_xt_simd_select
                                         # -- End function
+	.globl	_xt_simd_select4                # -- Begin function _xt_simd_select4
+	.p2align	4, 0x90
+	.type	_xt_simd_select4,@function
+_xt_simd_select4:                       # @_xt_simd_select4
+# %bb.0:
+	push	rbp
+	push	r15
+	push	r14
+	push	rbx
+	push	rax
+	mov	ebp, esi
+	mov	r14, rdi
+	mov	eax, 1
+	xor	ecx, ecx
+	#APP
+
+	.byte	15
+	.byte	162
+
+	#NO_APP
+	xor	r15d, r15d
+	not	ecx
+	test	ecx, 402653184
+	jne	.LBB82_4
+# %bb.1:
+	xor	r15d, r15d
+	xor	ecx, ecx
+	#APP
+
+	.byte	15
+	.byte	1
+	.byte	208
+
+	#NO_APP
+	mov	esi, eax
+	not	esi
+	test	sil, 6
+	jne	.LBB82_4
+# %bb.2:
+	xor	r15d, r15d
+	mov	eax, 7
+	xor	ecx, ecx
+	#APP
+
+	.byte	15
+	.byte	162
+
+	#NO_APP
+	test	bl, 32
+	je	.LBB82_4
+# %bb.3:
+	not	ebx
+	and	ebx, -1073545216
+	and	esi, 224
+	xor	r15d, r15d
+	or	esi, ebx
+	sete	r15b
+	inc	r15d
+.LBB82_4:
+	lea	rdi, [rip + .L.str]
+	call	getenv@PLT
+	test	rax, rax
+	je	.LBB82_27
+# %bb.5:
+	movzx	ecx, byte ptr [rax]
+	test	cl, cl
+	je	.LBB82_6
+# %bb.7:
+	lea	rsi, [rax + 1]
+	lea	rdx, [rip + .L.str.1]
+	mov	edi, ecx
+	.p2align	4, 0x90
+.LBB82_8:                               # =>This Inner Loop Header: Depth=1
+	cmp	dil, byte ptr [rdx]
+	jne	.LBB82_10
+# %bb.9:                                #   in Loop: Header=BB82_8 Depth=1
+	inc	rdx
+	movzx	edi, byte ptr [rsi]
+	inc	rsi
+	test	dil, dil
+	jne	.LBB82_8
+	jmp	.LBB82_10
+.LBB82_6:
+	lea	rdx, [rip + .L.str.1]
+	mov	edi, ecx
+.LBB82_10:
+	xor	esi, esi
+	cmp	dil, byte ptr [rdx]
+	cmovne	esi, r15d
+	je	.LBB82_28
+# %bb.11:
+	test	cl, cl
+	je	.LBB82_12
+# %bb.13:
+	lea	rdi, [rax + 1]
+	lea	rdx, [rip + .L.str.2]
+	mov	esi, ecx
+	.p2align	4, 0x90
+.LBB82_14:                              # =>This Inner Loop Header: Depth=1
+	cmp	sil, byte ptr [rdx]
+	jne	.LBB82_16
+# %bb.15:                               #   in Loop: Header=BB82_14 Depth=1
+	inc	rdx
+	movzx	esi, byte ptr [rdi]
+	inc	rdi
+	test	sil, sil
+	jne	.LBB82_14
+.LBB82_16:
+	cmp	sil, byte ptr [rdx]
+	jne	.LBB82_19
+.LBB82_17:
+	mov	esi, 1
+	test	r15d, r15d
+	jne	.LBB82_28
+# %bb.18:
+	lea	rsi, [rip + xt_simd_pick.msg]
+	mov	edx, 66
+	mov	edi, 2
+	call	write@PLT
+	xor	esi, esi
+	jmp	.LBB82_28
+.LBB82_12:
+	lea	rdx, [rip + .L.str.2]
+	mov	esi, ecx
+	cmp	sil, byte ptr [rdx]
+	je	.LBB82_17
+.LBB82_19:
+	test	cl, cl
+	je	.LBB82_20
+# %bb.21:
+	inc	rax
+	lea	rdx, [rip + .L.str.3]
+	.p2align	4, 0x90
+.LBB82_22:                              # =>This Inner Loop Header: Depth=1
+	cmp	cl, byte ptr [rdx]
+	jne	.LBB82_24
+# %bb.23:                               #   in Loop: Header=BB82_22 Depth=1
+	inc	rdx
+	movzx	ecx, byte ptr [rax]
+	inc	rax
+	test	cl, cl
+	jne	.LBB82_22
+	jmp	.LBB82_24
+.LBB82_20:
+	lea	rdx, [rip + .L.str.3]
+.LBB82_24:
+	cmp	r15d, 1
+	ja	.LBB82_27
+# %bb.25:
+	cmp	cl, byte ptr [rdx]
+	jne	.LBB82_27
+# %bb.26:
+	lea	rsi, [rip + xt_simd_pick.msg.4]
+	mov	edx, 82
+	mov	edi, 2
+	call	write@PLT
+.LBB82_27:
+	mov	esi, r15d
+.LBB82_28:
+	mov	rax, qword ptr [rip + _xt_simd_level@GOTPCREL]
+	mov	dword ptr [rax], esi
+	test	ebp, ebp
+	je	.LBB82_31
+# %bb.29:
+	mov	eax, ebp
+	mov	ecx, esi
+	inc	rcx
+	shl	rax, 2
+	xor	edx, edx
+	.p2align	4, 0x90
+.LBB82_30:                              # =>This Inner Loop Header: Depth=1
+	mov	esi, edx
+	mov	rsi, qword ptr [r14 + 8*rsi]
+	lea	edi, [rcx + rdx]
+	mov	rdi, qword ptr [r14 + 8*rdi]
+	mov	qword ptr [rsi], rdi
+	add	rdx, 4
+	cmp	rax, rdx
+	jne	.LBB82_30
+.LBB82_31:
+	add	rsp, 8
+	pop	rbx
+	pop	r14
+	pop	r15
+	pop	rbp
+	ret
+.Lfunc_end82:
+	.size	_xt_simd_select4, .Lfunc_end82-_xt_simd_select4
+                                        # -- End function
 	.globl	_xtc_sinit_run                  # -- Begin function _xtc_sinit_run
 	.p2align	4, 0x90
 	.type	_xtc_sinit_run,@function
 _xtc_sinit_run:                         # @_xtc_sinit_run
 # %bb.0:
 	test	rdi, rdi
-	je	.LBB82_36
+	je	.LBB83_36
 # %bb.1:
 	push	rbp
 	push	r15
@@ -2560,55 +2753,55 @@ _xtc_sinit_run:                         # @_xtc_sinit_run
 	mov	r12, qword ptr [rip + _xt_threads_active@GOTPCREL]
 	lea	r13, [rip + xt_sinit_flag]
 	lea	rbp, [rip + xt_sinit_owner]
-	jmp	.LBB82_2
+	jmp	.LBB83_2
 	.p2align	4, 0x90
-.LBB82_14:                              #   in Loop: Header=BB82_2 Depth=1
+.LBB83_14:                              #   in Loop: Header=BB83_2 Depth=1
 	call	sched_yield@PLT
 	xor	eax, eax
-.LBB82_21:                              #   in Loop: Header=BB82_2 Depth=1
+.LBB83_21:                              #   in Loop: Header=BB83_2 Depth=1
 	test	eax, eax
-	jne	.LBB82_22
-.LBB82_2:                               # =>This Loop Header: Depth=1
-                                        #     Child Loop BB82_3 Depth 2
-                                        #       Child Loop BB82_4 Depth 3
-                                        #     Child Loop BB82_9 Depth 2
+	jne	.LBB83_22
+.LBB83_2:                               # =>This Loop Header: Depth=1
+                                        #     Child Loop BB83_3 Depth 2
+                                        #       Child Loop BB83_4 Depth 3
+                                        #     Child Loop BB83_9 Depth 2
 	cmp	dword ptr [r12], 0
-	je	.LBB82_5
+	je	.LBB83_5
 	.p2align	4, 0x90
-.LBB82_3:                               #   Parent Loop BB82_2 Depth=1
+.LBB83_3:                               #   Parent Loop BB83_2 Depth=1
                                         # =>  This Loop Header: Depth=2
-                                        #       Child Loop BB82_4 Depth 3
+                                        #       Child Loop BB83_4 Depth 3
 	mov	eax, 1
 	xchg	dword ptr [rip + xt_rt_spin], eax
 	test	eax, eax
-	je	.LBB82_5
-.LBB82_4:                               #   Parent Loop BB82_2 Depth=1
-                                        #     Parent Loop BB82_3 Depth=2
+	je	.LBB83_5
+.LBB83_4:                               #   Parent Loop BB83_2 Depth=1
+                                        #     Parent Loop BB83_3 Depth=2
                                         # =>    This Inner Loop Header: Depth=3
 	mov	eax, dword ptr [rip + xt_rt_spin]
 	test	eax, eax
-	jne	.LBB82_4
-	jmp	.LBB82_3
+	jne	.LBB83_4
+	jmp	.LBB83_3
 	.p2align	4, 0x90
-.LBB82_5:                               #   in Loop: Header=BB82_2 Depth=1
+.LBB83_5:                               #   in Loop: Header=BB83_2 Depth=1
 	movzx	eax, byte ptr [rbx]
 	test	eax, eax
-	je	.LBB82_15
-# %bb.6:                                #   in Loop: Header=BB82_2 Depth=1
+	je	.LBB83_15
+# %bb.6:                                #   in Loop: Header=BB83_2 Depth=1
 	cmp	eax, 2
-	jne	.LBB82_7
-.LBB82_18:                              #   in Loop: Header=BB82_2 Depth=1
+	jne	.LBB83_7
+.LBB83_18:                              #   in Loop: Header=BB83_2 Depth=1
 	mov	eax, 1
 	cmp	dword ptr [r12], 0
-	jne	.LBB82_20
-	jmp	.LBB82_21
+	jne	.LBB83_20
+	jmp	.LBB83_21
 	.p2align	4, 0x90
-.LBB82_15:                              #   in Loop: Header=BB82_2 Depth=1
+.LBB83_15:                              #   in Loop: Header=BB83_2 Depth=1
 	mov	byte ptr [rbx], 1
 	movsxd	rax, dword ptr [rip + xt_sinit_n]
 	cmp	rax, 31
-	jg	.LBB82_17
-# %bb.16:                               #   in Loop: Header=BB82_2 Depth=1
+	jg	.LBB83_17
+# %bb.16:                               #   in Loop: Header=BB83_2 Depth=1
 	mov	qword ptr [r13 + 8*rax], rbx
 	call	pthread_self@PLT
 	mov	rcx, rax
@@ -2619,20 +2812,20 @@ _xtc_sinit_run:                         # @_xtc_sinit_run
 	mov	dword ptr [rbp + 4*rax], ecx
 	inc	eax
 	mov	dword ptr [rip + xt_sinit_n], eax
-.LBB82_17:                              #   in Loop: Header=BB82_2 Depth=1
+.LBB83_17:                              #   in Loop: Header=BB83_2 Depth=1
 	mov	eax, 2
 	cmp	dword ptr [r12], 0
-	je	.LBB82_21
-.LBB82_20:                              #   in Loop: Header=BB82_2 Depth=1
+	je	.LBB83_21
+.LBB83_20:                              #   in Loop: Header=BB83_2 Depth=1
 	mov	dword ptr [rip + xt_rt_spin], 0
-	jmp	.LBB82_21
+	jmp	.LBB83_21
 	.p2align	4, 0x90
-.LBB82_7:                               #   in Loop: Header=BB82_2 Depth=1
+.LBB83_7:                               #   in Loop: Header=BB83_2 Depth=1
 	call	pthread_self@PLT
 	movsxd	rcx, dword ptr [rip + xt_sinit_n]
 	test	rcx, rcx
-	jle	.LBB82_12
-# %bb.8:                                #   in Loop: Header=BB82_2 Depth=1
+	jle	.LBB83_12
+# %bb.8:                                #   in Loop: Header=BB83_2 Depth=1
 	mov	rdx, rax
 	shr	rdx, 4
 	shr	rax, 32
@@ -2640,76 +2833,76 @@ _xtc_sinit_run:                         # @_xtc_sinit_run
 	shl	rcx, 3
 	xor	eax, eax
 	mov	rsi, rbp
-	jmp	.LBB82_9
+	jmp	.LBB83_9
 	.p2align	4, 0x90
-.LBB82_11:                              #   in Loop: Header=BB82_9 Depth=2
+.LBB83_11:                              #   in Loop: Header=BB83_9 Depth=2
 	add	rsi, 4
 	add	rax, 8
 	cmp	rcx, rax
-	je	.LBB82_12
-.LBB82_9:                               #   Parent Loop BB82_2 Depth=1
+	je	.LBB83_12
+.LBB83_9:                               #   Parent Loop BB83_2 Depth=1
                                         # =>  This Inner Loop Header: Depth=2
 	cmp	qword ptr [rax + r13], rbx
-	jne	.LBB82_11
-# %bb.10:                               #   in Loop: Header=BB82_9 Depth=2
+	jne	.LBB83_11
+# %bb.10:                               #   in Loop: Header=BB83_9 Depth=2
 	cmp	dword ptr [rsi], edx
-	jne	.LBB82_11
-	jmp	.LBB82_18
+	jne	.LBB83_11
+	jmp	.LBB83_18
 	.p2align	4, 0x90
-.LBB82_12:                              #   in Loop: Header=BB82_2 Depth=1
+.LBB83_12:                              #   in Loop: Header=BB83_2 Depth=1
 	cmp	dword ptr [r12], 0
-	je	.LBB82_14
-# %bb.13:                               #   in Loop: Header=BB82_2 Depth=1
+	je	.LBB83_14
+# %bb.13:                               #   in Loop: Header=BB83_2 Depth=1
 	mov	dword ptr [rip + xt_rt_spin], 0
-	jmp	.LBB82_14
-.LBB82_22:
+	jmp	.LBB83_14
+.LBB83_22:
 	cmp	eax, 1
-	je	.LBB82_35
+	je	.LBB83_35
 # %bb.23:
 	test	r14, r14
-	je	.LBB82_25
+	je	.LBB83_25
 # %bb.24:
 	mov	rdi, r15
 	call	r14
-.LBB82_25:
+.LBB83_25:
 	cmp	dword ptr [r12], 0
-	je	.LBB82_28
+	je	.LBB83_28
 	.p2align	4, 0x90
-.LBB82_26:                              # =>This Loop Header: Depth=1
-                                        #     Child Loop BB82_27 Depth 2
+.LBB83_26:                              # =>This Loop Header: Depth=1
+                                        #     Child Loop BB83_27 Depth 2
 	mov	eax, 1
 	xchg	dword ptr [rip + xt_rt_spin], eax
 	test	eax, eax
-	je	.LBB82_28
-.LBB82_27:                              #   Parent Loop BB82_26 Depth=1
+	je	.LBB83_28
+.LBB83_27:                              #   Parent Loop BB83_26 Depth=1
                                         # =>  This Inner Loop Header: Depth=2
 	mov	eax, dword ptr [rip + xt_rt_spin]
 	test	eax, eax
-	jne	.LBB82_27
-	jmp	.LBB82_26
-.LBB82_28:
+	jne	.LBB83_27
+	jmp	.LBB83_26
+.LBB83_28:
 	mov	byte ptr [rbx], 2
 	movsxd	rax, dword ptr [rip + xt_sinit_n]
 	test	rax, rax
-	jle	.LBB82_33
+	jle	.LBB83_33
 # %bb.29:
 	lea	rdx, [4*rax]
 	xor	ecx, ecx
 	.p2align	4, 0x90
-.LBB82_31:                              # =>This Inner Loop Header: Depth=1
+.LBB83_31:                              # =>This Inner Loop Header: Depth=1
 	cmp	qword ptr [r13], rbx
-	je	.LBB82_32
-# %bb.30:                               #   in Loop: Header=BB82_31 Depth=1
+	je	.LBB83_32
+# %bb.30:                               #   in Loop: Header=BB83_31 Depth=1
 	add	rcx, 4
 	add	r13, 8
 	cmp	rdx, rcx
-	jne	.LBB82_31
-.LBB82_33:
+	jne	.LBB83_31
+.LBB83_33:
 	cmp	dword ptr [r12], 0
-	je	.LBB82_35
-.LBB82_34:
+	je	.LBB83_35
+.LBB83_34:
 	mov	dword ptr [rip + xt_rt_spin], 0
-.LBB82_35:
+.LBB83_35:
 	add	rsp, 8
 	pop	rbx
 	pop	r12
@@ -2717,9 +2910,9 @@ _xtc_sinit_run:                         # @_xtc_sinit_run
 	pop	r14
 	pop	r15
 	pop	rbp
-.LBB82_36:
+.LBB83_36:
 	ret
-.LBB82_32:
+.LBB83_32:
 	lea	edx, [rax - 1]
 	mov	dword ptr [rip + xt_sinit_n], edx
 	lea	rdx, [rip + xt_sinit_flag]
@@ -2729,10 +2922,10 @@ _xtc_sinit_run:                         # @_xtc_sinit_run
 	mov	eax, dword ptr [rdx + 4*rax - 4]
 	mov	dword ptr [rcx + rdx], eax
 	cmp	dword ptr [r12], 0
-	jne	.LBB82_34
-	jmp	.LBB82_35
-.Lfunc_end82:
-	.size	_xtc_sinit_run, .Lfunc_end82-_xtc_sinit_run
+	jne	.LBB83_34
+	jmp	.LBB83_35
+.Lfunc_end83:
+	.size	_xtc_sinit_run, .Lfunc_end83-_xtc_sinit_run
                                         # -- End function
 	.globl	_xt_thread_exiting              # -- Begin function _xt_thread_exiting
 	.p2align	4, 0x90
@@ -2740,8 +2933,8 @@ _xtc_sinit_run:                         # @_xtc_sinit_run
 _xt_thread_exiting:                     # @_xt_thread_exiting
 # %bb.0:
 	ret
-.Lfunc_end83:
-	.size	_xt_thread_exiting, .Lfunc_end83-_xt_thread_exiting
+.Lfunc_end84:
+	.size	_xt_thread_exiting, .Lfunc_end84-_xt_thread_exiting
                                         # -- End function
 	.type	xt_empty,@object                # @xt_empty
 	.section	.rodata,"a",@progbits
@@ -2790,6 +2983,15 @@ _xt_simd_level:
 	.long	4294967295                      # 0xffffffff
 	.size	_xt_simd_level, 4
 
+	.type	xt_sinit_n,@object              # @xt_sinit_n
+	.local	xt_sinit_n
+	.comm	xt_sinit_n,4,4
+	.type	xt_sinit_flag,@object           # @xt_sinit_flag
+	.local	xt_sinit_flag
+	.comm	xt_sinit_flag,256,16
+	.type	xt_sinit_owner,@object          # @xt_sinit_owner
+	.local	xt_sinit_owner
+	.comm	xt_sinit_owner,128,16
 	.type	.L.str,@object                  # @.str
 	.section	.rodata.str1.1,"aMS",@progbits,1
 .L.str:
@@ -2806,12 +3008,12 @@ _xt_simd_level:
 	.asciz	"avx2"
 	.size	.L.str.2, 5
 
-	.type	_xt_simd_select.msg,@object     # @_xt_simd_select.msg
+	.type	xt_simd_pick.msg,@object        # @xt_simd_pick.msg
 	.section	.rodata,"a",@progbits
 	.p2align	4, 0x0
-_xt_simd_select.msg:
+xt_simd_pick.msg:
 	.asciz	"xc: XC_SIMD=avx2, but this machine has no usable AVX2; using base\n"
-	.size	_xt_simd_select.msg, 67
+	.size	xt_simd_pick.msg, 67
 
 	.type	.L.str.3,@object                # @.str.3
 	.section	.rodata.str1.1,"aMS",@progbits,1
@@ -2819,22 +3021,13 @@ _xt_simd_select.msg:
 	.asciz	"avx512"
 	.size	.L.str.3, 7
 
-	.type	_xt_simd_select.msg.4,@object   # @_xt_simd_select.msg.4
+	.type	xt_simd_pick.msg.4,@object      # @xt_simd_pick.msg.4
 	.section	.rodata,"a",@progbits
 	.p2align	4, 0x0
-_xt_simd_select.msg.4:
+xt_simd_pick.msg.4:
 	.asciz	"xc: XC_SIMD=avx512, but this machine has no usable AVX-512; using the best it has\n"
-	.size	_xt_simd_select.msg.4, 83
+	.size	xt_simd_pick.msg.4, 83
 
-	.type	xt_sinit_n,@object              # @xt_sinit_n
-	.local	xt_sinit_n
-	.comm	xt_sinit_n,4,4
-	.type	xt_sinit_flag,@object           # @xt_sinit_flag
-	.local	xt_sinit_flag
-	.comm	xt_sinit_flag,256,16
-	.type	xt_sinit_owner,@object          # @xt_sinit_owner
-	.local	xt_sinit_owner
-	.comm	xt_sinit_owner,128,16
 	.ident	"Apple clang version 17.0.0 (clang-1700.3.19.1)"
 	.section	".note.GNU-stack","",@progbits
 	.addrsig
@@ -2842,5 +3035,5 @@ _xt_simd_select.msg.4:
 	.addrsig_sym xt_empty
 	.addrsig_sym xt_rt_spin
 	.addrsig_sym xt_alloc_spin
-	.addrsig_sym _xt_simd_select.msg
-	.addrsig_sym _xt_simd_select.msg.4
+	.addrsig_sym xt_simd_pick.msg
+	.addrsig_sym xt_simd_pick.msg.4

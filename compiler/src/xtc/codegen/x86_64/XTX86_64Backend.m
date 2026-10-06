@@ -1535,7 +1535,7 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
     if (simdNames.count)
         {
         [out appendFormat:@"\t.text\n__xt_simd_init:\n\tlea\t%@, [rip + __xt_simd_table]\n"
-                          @"\tmov\t%@, %lu\n\tjmp\t_xt_simd_select\n",
+                          @"\tmov\t%@, %lu\n\tjmp\t_xt_simd_select4\n",
                           sWin64 ? @"rcx" : @"rdi", sWin64 ? @"edx" : @"esi",
                           (unsigned long)simdNames.count];
         [out appendString:@"\t.data\n\t.p2align 3\n"];

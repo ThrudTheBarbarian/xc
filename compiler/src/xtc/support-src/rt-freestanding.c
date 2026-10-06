@@ -1805,8 +1805,9 @@ int32_t _xt_atomic_cas_ptr(void* p, void* expected, void* desired)
 // the SSE2 base, an AVX2 clone and an AVX-512 clone. Its load-time constructor
 // hands this function a table of {slot, base, avx2, avx512} entries, and each
 // slot (pointing at the base until now) is set to the variant this machine runs
-// best. XC_SIMD=base|avx2|avx512 forces a level for one run; one the machine
-// lacks falls back to the best it has, with a line on stderr, and never faults.
+// best (_xt_simd_select4). XC_SIMD=base|avx2|avx512 forces a level for one
+// run; one the machine lacks falls back to the best it has, with a line on
+// stderr, and never faults.
 #ifdef XT_WIN64
 extern uint32_t GetEnvironmentVariableA(const char* name, char* buf, uint32_t size);
 static const char* xt_env(const char* name)
@@ -1866,7 +1867,9 @@ static int xt_streq(const char* a, const char* b)
 // by diagnostics; -1 until a dispatched program's constructor has run.
 int32_t _xt_simd_level = -1;
 
-void _xt_simd_select(void** table, uint32_t n)
+// The level this machine runs, after XC_SIMD. Inlined into both selectors, so
+// each stays one self-contained function in the generated runtimes.
+static inline __attribute__((always_inline)) int xt_simd_pick(void)
     {
     int has = xt_cpu_simd_level();
     int lvl = has;
@@ -1888,6 +1891,29 @@ void _xt_simd_select(void** table, uint32_t n)
         static const char msg[] = "xc: XC_SIMD=avx512, but this machine has no usable AVX-512; using the best it has\n";
         write(2, msg, sizeof msg - 1);
         }
+    return lvl;
+    }
+
+// The table an xcc before AVX-512 emits: {slot, base, avx2} per function. Kept
+// so that a program built by an older compiler against this runtime still
+// dispatches correctly, which is how the next compiler is bootstrapped.
+void _xt_simd_select(void** table, uint32_t n)
+    {
+    int lvl = xt_simd_pick();
+    if (lvl > 1)
+        lvl = 1;
+    _xt_simd_level = lvl;
+    for (uint32_t i = 0; i < n; i++)
+        {
+        void** slot = (void**)table[3 * i];
+        *slot = table[3 * i + 1 + lvl];
+        }
+    }
+
+// The table xcc emits now: {slot, base, avx2, avx512} per function.
+void _xt_simd_select4(void** table, uint32_t n)
+    {
+    int lvl = xt_simd_pick();
     _xt_simd_level = lvl;
     for (uint32_t i = 0; i < n; i++)
         {

@@ -482,7 +482,7 @@ class X86_64
         if (_simdNames.count() > (u32)0)
             {
             _out.appendFormat("\t.text\n__xt_simd_init:\n\tlea\t%s, [rip + __xt_simd_table]\n"
-                              "\tmov\t%s, %lu\n\tjmp\t_xt_simd_select\n",
+                              "\tmov\t%s, %lu\n\tjmp\t_xt_simd_select4\n",
                               _win64 ? "rcx" : "rdi", _win64 ? "edx" : "esi",
                               _simdNames.count());
             _out.appendCString("\t.data\n\t.p2align 3\n");
