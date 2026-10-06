@@ -18,6 +18,7 @@ support/
     JSON.xc             ← JSON text to Foundation objects and back
     CSV.xc              ← comma-separated values to rows and back
     Expression.xc       ← arithmetic expressions evaluated against variables
+    NumberFormatter.xc  ← numbers to display text and back
     Comparable.xc  Hashable.xc  Enumerable.xc  Copying.xc  Codable.xc  Error.xc   ← protocols
     Coder.xc            ← keyed archiving to JSON, with gzip
     Thread.xc  Mutex.xc  Cond.xc  Sem.xc  Atomic.xc  ThreadLocal.xc  Pool.xc
@@ -117,6 +118,7 @@ and every method grouped by task with a jump-list at the top.
 | [`Null`](/compiler/api/null/) | the shared "nothing here" object (from the release after 0.71) |
 | [`JSON`](/compiler/api/json/) | JSON text to Foundation objects and back (from the release after 0.71) |
 | [`Expression`](/compiler/api/expression/) | arithmetic expressions evaluated against variables (from the release after 0.71) |
+| [`NumberFormatter`](/compiler/api/numberformatter/) | numbers to display text and back (from the release after 0.71) |
 | [`CSV`](/compiler/api/csv/) | comma-separated values to rows and back (from the release after 0.71) |
 | [`Coder`](/compiler/api/coder/) | keyed archiving of an object graph to JSON, optionally gzipped |
 

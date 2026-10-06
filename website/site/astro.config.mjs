@@ -77,6 +77,7 @@ export default defineConfig({
 										{ label: 'Map', slug: 'compiler/api/map' },
 										{ label: 'Null', slug: 'compiler/api/null' },
 										{ label: 'Number', slug: 'compiler/api/number' },
+										{ label: 'NumberFormatter', slug: 'compiler/api/numberformatter' },
 										{ label: 'Object', slug: 'compiler/api/object' },
 										{ label: 'OperationQueue', slug: 'compiler/api/operationqueue' },
 										{ label: 'Range', slug: 'compiler/api/range' },

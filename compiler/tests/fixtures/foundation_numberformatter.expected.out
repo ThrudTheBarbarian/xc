@@ -1,0 +1,28 @@
+decimal 1234567            [1,234,567]
+decimal -1234567           [-1,234,567]
+decimal 999                [999]
+decimal i64 min            [-9,223,372,036,854,775,808]
+decimal 1234.5678          [1,234.568]
+decimal 2.5                [2.5]
+decimal 3.0                [3]
+decimal -0.0001            [0]
+decimal null               []
+currency 1299.5            [$1,299.50]
+currency -5                [-$5.00]
+currency 2.675             [$2.67]
+currency fixed 129900/2    [$1,299.00]
+currency fixed -7/2        [-$0.07]
+percent 0.256              [26%]
+percent 1                  [100%]
+european 1234567.891       [1.234.567,891]
+no grouping                [1234567]
+parse 1,234,567            -> 1234567
+parse -1,234.5             -> -1234.500000 (double)
+parse $1,299.50            -> 1299.500000 (double)
+parse -$5.00               -> -5.000000 (double)
+parse $-5                  -> -5
+parse 25%                  -> 0.250000 (double)
+parse 300%                 -> 3
+parse 1.234,5              -> 1234.500000 (double)
+parse 12a                  -> none
+parse                      -> none

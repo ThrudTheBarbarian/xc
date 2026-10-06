@@ -40,6 +40,7 @@ All of it needs a real heap (**`-falloc=heap`**), which is the default on the
 | [`Null`](/compiler/api/null/) | The one shared object meaning "nothing here" in a collection. From the release after 0.71. |
 | [`JSON`](/compiler/api/json/) | JSON text to Foundation objects and back. **Not** in the umbrella — import by name. From the release after 0.71. |
 | [`Expression`](/compiler/api/expression/) | An arithmetic expression parsed once and evaluated against variables. **Not** in the umbrella — import by name. From the release after 0.71. |
+| [`NumberFormatter`](/compiler/api/numberformatter/) | Numbers to display text and back: grouping, currency, percent. **Not** in the umbrella — import by name. From the release after 0.71. |
 | [`CSV`](/compiler/api/csv/) | Comma-separated values to rows of strings and back. **Not** in the umbrella — import by name. From the release after 0.71. |
 | [`Coder`](/compiler/api/coder/) | Keyed archiving of an object graph to JSON, optionally gzipped. **Not** in the umbrella — import by name. |
 
