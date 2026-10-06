@@ -8,7 +8,7 @@
 #import "UXControl.xc"
 #import "UXSlider.xc"
 #import "UXProgressBar.xc"
-#import "UXProgress.xc"
+#import "Progress.xc"
 #import "UXPopUpButton.xc"
 
 extern void ux_and_set_entry(pointer fn);
@@ -43,7 +43,7 @@ class Target : Object
 UXWindow* gWin;
 UXCheckbox* gCb;
 UXSlider* gSl;
-UXProgress* gProg;
+Progress* gProg;
 UXProgressBar* gPg;
 UXPopUpButton* gPop;
 Target* gT;
@@ -77,7 +77,7 @@ void start(void)
     gFired = (i32)0;
     gCb.setChecked(true);
     gSl.setValue((i32)70);
-    gProg.setCompleted((i32)3);
+    gProg.setCompletedUnitCount((i64)((i32)3));
     gPop.selectItem((i32)2);
     gWin.displayAll();
     ux_and_test_call_later((pointer)&changed, (i32)500);
@@ -105,9 +105,9 @@ void testBody(void)
     gSl.setRange((i32)0, (i32)100);
     gSl.setValue((i32)20);
     root.addSubview(gSl, UXGeom.make((i16)20, (i16)130, (i16)240, (i16)40));
-    gProg = new UXProgress();
-    gProg.setTotal((i32)4);
-    gProg.setCompleted((i32)1);
+    gProg = new Progress();
+    gProg.setTotalUnitCount((i64)((i32)4));
+    gProg.setCompletedUnitCount((i64)((i32)1));
     gPg = new UXProgressBar();
     gPg.setProgress(gProg);
     root.addSubview(gPg, UXGeom.make((i16)20, (i16)180, (i16)240, (i16)20));

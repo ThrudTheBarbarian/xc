@@ -180,7 +180,7 @@ Both do string work, split by weight:
 The toolkit itself uses `UXStr` to build labels, so it depends on almost
 nothing. `UXText` is the fuller toolbox and pulls in
 [`Array`](/compiler/api/array/) and
-[`UXCharacterSet`](/compiler/api/uxkit/uxcharacterset/).
+[`CharacterSet`](/compiler/api/characterset/).
 
 ## Conforms to
 
@@ -190,5 +190,3 @@ nothing. `UXText` is the fuller toolbox and pulls in
 ## See also
 
 - [`UXText`](/compiler/api/uxkit/uxtext/): the larger string toolbox
-- [`UXNumberFormatter`](/compiler/api/uxkit/uxnumberformatter/): when a number
-  needs grouping, decimals or a currency symbol

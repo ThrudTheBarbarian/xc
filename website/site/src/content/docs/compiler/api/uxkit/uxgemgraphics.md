@@ -80,7 +80,7 @@ because no platform has one.
 Colours are VDI pen indices rather than RGB, with `fillRectRGB` and
 `fillPolygonRGB` as the true-colour entry points. Pen `0` is white and pen
 `1` is ink. A default
-[`UXCharAttr`](/compiler/api/uxkit/uxcharattr/) uses `1` so that a
+[`UXTextStyle`](/compiler/api/uxkit/uxtextstyle/) uses `1` so that a
 default-constructed style is visible.
 
 The other backends mirror the same index table, so a pen means the same

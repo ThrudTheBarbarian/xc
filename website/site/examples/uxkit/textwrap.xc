@@ -5,9 +5,9 @@
 #import <Stdio.xc>
 #import "UXTextLayout.xc"
 
-void showLines(u8* text, Array<UXRange>* lines) {
+void showLines(u8* text, Array<Range>* lines) {
     for (u16 i = 0; i < lines.count(); i = i + 1) {
-        UXRange* ln = (UXRange* ?)lines.get(i);
+        Range* ln = (Range* ?)lines.get(i);
         Stdio.printf("  [%d..%d] ", ln.loc, ln.end() - 1);
         for (i32 c = ln.loc; c < ln.end(); c = c + 1) { Stdio.printf("%c", text[c]); }
         Stdio.printf("\n");
@@ -19,13 +19,13 @@ void main(void) {
 
     // 80px at 8px per character = ten characters a line; it breaks at SPACES.
     Stdio.printf("wrapped to 80px (8px/char):\n");
-    Array<UXRange>* lines = UXTextLayout.wrap(text, 80, 8);
+    Array<Range>* lines = UXTextLayout.wrap(text, 80, 8);
     showLines(text, lines);
     Stdio.printf("lineCount agrees: %d\n", UXTextLayout.lineCount(text, 80, 8));
 
     // No copies: a line is a range INTO the original, so the text is stored once
     // however many times it is re-wrapped.
-    UXRange* first = (UXRange* ?)lines.get(0);
+    Range* first = (Range* ?)lines.get(0);
     Stdio.printf("first line is chars %d..%d of the SAME string\n",
                  first.loc, first.end() - 1);
 

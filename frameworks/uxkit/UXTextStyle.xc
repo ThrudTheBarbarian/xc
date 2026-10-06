@@ -1,0 +1,78 @@
+// UXTextStyle.xc — how a span of rich text is drawn.  Rich text is a Foundation AttributedString;
+// the attributes UXKit gives a meaning to are "bold" and "italic" (Number booleans), "pen" (the
+// colour pen, a Number; 1 = ink) and "size" (the point size, a Number; 0 = the view's own).  This
+// reads them as one value, for measuring and drawing a run, and sets them over a range.
+#import "AttributedString.xc"
+#import "Number.xc"
+
+class UXTextStyle : Object
+    {
+    bool bold;
+    bool italic;
+    i32 pen;
+    i16 size;
+    void init(void)
+        {
+        bold = false;
+        italic = false;
+        pen = (i32)1;
+        size = (i16)0;
+        }
+    // The style an attribute set describes; names it does not have keep their defaults.
+    static UXTextStyle* of(Map* attrs)
+        {
+        UXTextStyle* s = new UXTextStyle();
+        if (attrs == (Map*)0)
+            {
+            return s;
+            }
+        Number* b = (Number* ?)attrs.get(String.withCString((u8*)"bold"));
+        if (b != (Number*)0)
+            {
+            s.bold = b.asBool();
+            }
+        Number* it = (Number* ?)attrs.get(String.withCString((u8*)"italic"));
+        if (it != (Number*)0)
+            {
+            s.italic = it.asBool();
+            }
+        Number* p = (Number* ?)attrs.get(String.withCString((u8*)"pen"));
+        if (p != (Number*)0)
+            {
+            i32 pv = p.value();
+            s.pen = pv;
+            }
+        Number* z = (Number* ?)attrs.get(String.withCString((u8*)"size"));
+        if (z != (Number*)0)
+            {
+            i16 zv = z.value();
+            s.size = zv;
+            }
+        return s;
+        }
+    // The style of the byte at `i`.
+    static UXTextStyle* at(AttributedString* as, i32 i)
+        {
+        return UXTextStyle.of(as.attributesAt(i));
+        }
+    bool sameAs(UXTextStyle* o)
+        {
+        return o != (UXTextStyle*)0 && bold == o.bold && italic == o.italic && pen == o.pen && size == o.size;
+        }
+    static void setBold(AttributedString* as, bool v, i32 start, i32 len)
+        {
+        as.setAttribute(String.withCString((u8*)"bold"), Number.withBool(v), Range.make(start, len));
+        }
+    static void setItalic(AttributedString* as, bool v, i32 start, i32 len)
+        {
+        as.setAttribute(String.withCString((u8*)"italic"), Number.withBool(v), Range.make(start, len));
+        }
+    static void setPen(AttributedString* as, i32 pen, i32 start, i32 len)
+        {
+        as.setAttribute(String.withCString((u8*)"pen"), Number.with(pen), Range.make(start, len));
+        }
+    static void setSize(AttributedString* as, i16 size, i32 start, i32 len)
+        {
+        as.setAttribute(String.withCString((u8*)"size"), Number.with(size), Range.make(start, len));
+        }
+    }

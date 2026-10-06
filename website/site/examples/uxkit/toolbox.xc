@@ -1,20 +1,10 @@
-// toolbox.xc — UXAnimation, Data, UXLog and UXMarkdown.
+// toolbox.xc — UXAnimation and UXMarkdown.
 //
-// Four small facilities, all testable with no window: the animation is given
-// its time, the logger writes where you tell it, and the rest is pure data.
+// Two small facilities, both testable with no window: the animation is given
+// its time, and markdown is pure data.
 #import <Stdio.xc>
-#import "UXString.xc"
 #import "UXAnimation.xc"
-#import "Data.xc"
-#import "UXLog.xc"
 #import "UXMarkdown.xc"
-
-i32 gHits;
-
-class Watcher : Object {
-    void init(void) { }
-    void onMatch(u8* msg) { gHits = gHits + 1; Stdio.printf("    MONITOR saw: %s\n", msg); }
-}
 
 void sampleCurve(u8* label, i32 easing) {
     UXAnimation* a = UXAnimation.make((i32)0, (i32)100, (i32)1000, (i32)400, easing);
@@ -47,71 +37,28 @@ void main(void) {
                                          (i32)UX_EASE_LINEAR);
     Stdio.printf("  reverse at halfway: %d\n", back.valueAt((i32)100));
 
-    // ---- data --------------------------------------------------------------
-    // Bytes are appended one at a time here rather than written as a "\xNN"
-    // literal, which reads better and carries arbitrary values exactly.
-    Data* d = UXStr.toData((u8*)"GEM");
-    d.appendByte((u8)0);
-    d.appendByte((u8)1);
-    d.appendByte((u8)2);
-    d.appendByte((u8)255);
-    Stdio.printf("\ndata: len=%d hex=%s\n", d.length(), d.hexString().cString());
-
-    Data* slice = d.subdata((i32)0, (i32)3);
-    Stdio.printf("slice(0,3): len=%d hex=%s\n", slice.length(), slice.hexString().cString());
-
-    Data* same = UXStr.toData((u8*)"GEM");
-    Stdio.printf("equal=%d  differs from whole=%d\n",
-                 slice.equals(same) ? 1 : 0, slice.equals(d) ? 1 : 0);
-
-    // Appending one buffer to another, and an out-of-range slice.
-    Data* joined = UXStr.toData((u8*)"ab");
-    joined.append(UXStr.toData((u8*)"cd"));
-    Stdio.printf("joined hex=%s   over-long slice len=%d\n",
-                 joined.hexString().cString(), d.subdata((i32)2, (i32)999).length());
-
-    // ---- logging -----------------------------------------------------------
-    Stdio.printf("\nlog:\n");
-    gHits = 0;
-    Watcher* w = new Watcher();
-    UXLog* net = UXLog.forSubsystem((u8*)"net");
-    net.setMinLevel((i32)UX_LOG_INFO);
-
-    // A monitor fires when a logged message matches — the toolkit's own regex.
-    net.addMonitor(UXRegex.compile((u8*)"timeout"), &w.onMatch);
-
-    net.debug((u8*)"opening socket");            // below the level: dropped
-    net.info((u8*)"connected to host");
-    net.warn((u8*)"read timeout after 30s");     // matches the monitor
-    net.error((u8*)"giving up");
-
-    Stdio.printf("  monitor fired %d time(s), monitors=%d\n",
-                 gHits, net.monitorCount());
-
-    // forSubsystem returns the SAME logger for a name, so settings are shared.
-    UXLog* again = UXLog.forSubsystem((u8*)"net");
-    Stdio.printf("  same logger: %d\n", again == net ? 1 : 0);
-
     // ---- markdown ----------------------------------------------------------
-    UXAttributedString* md = UXMarkdown.parse(
+    // The result is a Foundation AttributedString; UXTextStyle reads the
+    // attributes UXKit draws (bold, italic, the pen) off each of its runs.
+    AttributedString* md = UXMarkdown.parse(
         (u8*)"plain **bold** and *italic* and `code` here");
-    Stdio.printf("\nmarkdown: '%s'\n", md.stringValue());
-    Array<UXAttrRun>* rs = md.runs();
-    Stdio.printf("  %d run(s):", (i32)rs.count());
-    for (u16 i = (u16)0; i < rs.count(); i = i + (u16)1) {
-        UXAttrRun* r = (UXAttrRun* ?)rs.get(i);
+    Stdio.printf("\nmarkdown: '%s'\n", md.text().cString());
+    Stdio.printf("  %d run(s):", (i32)md.runCount());
+    for (u32 i = (u32)0; i < md.runCount(); i = i + (u32)1) {
+        Range* r = md.runRange(i);
+        UXTextStyle* st = UXTextStyle.of(md.runAttributes(i));
         Stdio.printf(" [%d..%d%s%s%s]", r.loc, r.end() - (i32)1,
-                     r.attr.bold ? (u8*)" B" : (u8*)"",
-                     r.attr.italic ? (u8*)" I" : (u8*)"",
-                     r.attr.pen == (i32)UXMD_CODE_PEN ? (u8*)" C" : (u8*)"");
+                     st.bold ? (u8*)" B" : (u8*)"",
+                     st.italic ? (u8*)" I" : (u8*)"",
+                     st.pen == (i32)UXMD_CODE_PEN ? (u8*)" C" : (u8*)"");
     }
     Stdio.printf("\n");
 
     // A backslash escapes a marker so it appears literally.
-    UXAttributedString* esc = UXMarkdown.parse((u8*)"a \\*literal\\* star");
-    Stdio.printf("escaped: '%s' runs=%d\n", esc.stringValue(), esc.runCount());
+    AttributedString* esc = UXMarkdown.parse((u8*)"a \\*literal\\* star");
+    Stdio.printf("escaped: '%s' runs=%d\n", esc.text().cString(), (i32)esc.runCount());
 
     // Nesting works because the markers toggle independently.
-    UXAttributedString* both = UXMarkdown.parse((u8*)"**bold *and italic* **");
-    Stdio.printf("nested: '%s' runs=%d\n", both.stringValue(), both.runCount());
+    AttributedString* both = UXMarkdown.parse((u8*)"**bold *and italic* **");
+    Stdio.printf("nested: '%s' runs=%d\n", both.text().cString(), (i32)both.runCount());
 }

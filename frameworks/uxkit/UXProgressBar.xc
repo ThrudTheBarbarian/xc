@@ -1,22 +1,22 @@
-// UXProgressBar.xc — a bar that displays an UXProgress (NSProgressIndicator, determinate).
+// UXProgressBar.xc — a bar that displays a Progress (NSProgressIndicator, determinate).
 //
-// Reads an UXProgress and fills the track to its fraction; indeterminate progress (zero total) draws a
+// Reads a Progress and fills the track to its fraction; indeterminate progress (zero total) draws a
 // moving pip instead.  The fill-width arithmetic is pure and unit-testable; drawing rides the UXControl
 // seam.  Pairs a progress model straight to the screen.
 #import "UXView.xc"
 #import "UXControl.xc"
 #import "UXGraphics.xc"
 #import "UXGeometry.xc"
-#import "UXProgress.xc"
+#import "Progress.xc"
 
 class UXProgressBar : UXControl
     {
-    UXProgress* progress;
+    Progress* progress;
     i32 pipPhase; // 0..255 sweep position for the indeterminate pip
     void init(void)
         {
         super.init();
-        progress = (UXProgress*)0;
+        progress = (Progress*)0;
         pipPhase = (i32)0;
         }
     // native NSProgressIndicator; drawRect is the GEM fallback
@@ -34,14 +34,14 @@ class UXProgressBar : UXControl
     // ---- native-control bridge (output only: fraction 0..1000, or indeterminate) --------------
     i32 nativeFractionMille(void)
         {
-        return progress == (UXProgress*)0 ? (i32)0 : progress.fractionMille();
+        return progress == (Progress*)0 ? (i32)0 : (i32)progress.fractionPerMille();
         }
     i32 nativeIndeterminate(void)
         {
         return self.isIndeterminate() ? (i32)1 : (i32)0;
         }
 
-    void setProgress(UXProgress* p)
+    void setProgress(Progress* p)
         {
         progress = p;
         }
@@ -53,17 +53,17 @@ class UXProgressBar : UXControl
 
     bool isIndeterminate(void)
         {
-        return progress == (UXProgress*)0 || progress.isIndeterminate();
+        return progress == (Progress*)0 || progress.isIndeterminate();
         }
 
     // Width of the filled portion for a track of width trackW, from the progress fraction (per mille).
     i32 filledWidth(i16 trackW)
         {
-        if (progress == (UXProgress*)0)
+        if (progress == (Progress*)0)
             {
             return (i32)0;
             }
-        return progress.fractionMille() * (i32)trackW / (i32)1000;
+        return (i32)progress.fractionPerMille() * (i32)trackW / (i32)1000;
         }
 
     void drawRect(UXGraphics* g, UXRect dirty)

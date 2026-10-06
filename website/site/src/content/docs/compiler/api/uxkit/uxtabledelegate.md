@@ -51,7 +51,7 @@ The table is passed in, so one delegate can serve several tables.
 
 With `setAllowsMultipleSelection(true)` the delegate still reports a single
 **anchor** row, because a delegate callback carries one row. The full selection
-arrives as a [`UXIndexSet`](/compiler/api/uxkit/uxindexset/) on the
+arrives as a [`IndexSet`](/compiler/api/indexset/) on the
 [`UXEventSelected`](/compiler/api/uxkit/uxevent/) event.
 
 There are two reasons for the split:
@@ -71,6 +71,5 @@ need the whole selection.
   working program
 - [`UXTableDataSource`](/compiler/api/uxkit/uxtabledatasource/): the required
   half
-- [`UXIndexSet`](/compiler/api/uxkit/uxindexset/): what a multi-selection is
 - [`UXEvent`](/compiler/api/uxkit/uxevent/): `UXEventSelected`, and why it is
   an outcome rather than input

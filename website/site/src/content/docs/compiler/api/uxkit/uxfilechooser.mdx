@@ -6,7 +6,7 @@ description: "The testable model behind an open/save panel: navigation as UXPath
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
 `UXFileChooser` is the **model** behind an open/save file panel: the
-current directory as a [`UXPath`](/compiler/api/uxkit/uxpath/), a
+current directory as a path `String`, a
 backend-supplied listing of its entries, an extension filter, and the
 prompt string. The backend provides the panel view and reads the
 directory; this class holds the testable state it drives.

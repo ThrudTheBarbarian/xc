@@ -35,7 +35,7 @@
 #import "UXGem.xc"
 #import "UXView.xc"
 #import "UXEvent.xc"
-#import "UXIndexSet.xc" // a selection IS an index set — the announcement carries one
+#import "IndexSet.xc" // a selection IS an index set — the announcement carries one
 #import "UXGraphics.xc"
 #import "UXApplication.xc" // gApp — to repaint mid drag-track (the run loop is blocked then)
 #import "UXScrollView.xc"  // the table sits in one: it owns the clip/scroll/bar; the table the data
@@ -851,7 +851,7 @@ class UXTableColumn : Object
             ev.a = (i32)self.index;
             ev.b = selectedRow;
             // The WHOLE set, not just the anchor: a multi-row selection replayed as one row otherwise.
-            UXIndexSet* sel = new UXIndexSet();
+            IndexSet* sel = new IndexSet();
             for (i32 r = (i32)0; r < nrows; r = r + (i32)1)
                 {
                 if (self.isRowSelected(r))

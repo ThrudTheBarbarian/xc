@@ -74,6 +74,15 @@ void clickAt(i16 x, i16 y)
     gApp.dispatchEvent(e);
     }
 
+bool kseq(u8* a, u8* b)
+    {
+    i32 i = (i32)0;
+    while (a[i] != (u8)0 && a[i] == b[i])
+        {
+        i = i + (i32)1;
+        }
+    return a[i] == b[i];
+    }
 void main(void)
     {
     gFails = (i32)0;
@@ -221,10 +230,10 @@ void main(void)
         checkTrue("the text change was announced", gKS.recorder.count() > (i32)0);
         gKS.onRecStop((UXControl*)0);
         gKS.recField.setText((u8*)"");
-        check("field cleared before replay", (i32)UXPredicate.slen(gKS.recField.text()), (i32)0);
+        check("field cleared before replay", (i32)UXStr.len(gKS.recField.text()), (i32)0);
         gKS.onRecReplay((UXControl*)0);
         checkTrue("replay put the text back",
-                  UXPredicate.streq(gKS.recField.text(), (u8*)"replay me"));
+                  kseq(gKS.recField.text(), (u8*)"replay me"));
         }
 
     // ---- scroll: recorded as an OUTCOME, because the drag that caused it emits nothing ----------

@@ -6,7 +6,7 @@
 #import <Stdio.xc>
 #import "UXText.xc"
 #import "UXString.xc"
-#import "UXCharacterSet.xc"
+#import "CharacterSet.xc"
 
 void showParts(u8* label, Array<UXStrItem>* parts) {
     Stdio.printf("%s %d:", label, (i32)parts.count());
@@ -21,8 +21,8 @@ void main(void) {
     Stdio.printf("trim: '%s'\n", UXText.trimWhitespace((u8*)"   hello world \n"));
 
     // The set is a parameter, so trimming is not only about whitespace.
-    UXCharacterSet* quotes = new UXCharacterSet();
-    quotes.addString((u8*)"\"'");
+    CharacterSet* quotes = new CharacterSet();
+    quotes.addCString((u8*)"\"'");
     Stdio.printf("unquote: %s\n", UXText.trim((u8*)"\"quoted\"", quotes));
 
     // ---- split KEEPS empty fields ----------------------------------------
@@ -35,7 +35,7 @@ void main(void) {
     // Which is what splitting a command line wants: runs of spaces are one gap.
     showParts((u8*)"tokenize     ->",
               UXText.tokenize((u8*)"  ls   -l  /usr  ",
-                              UXCharacterSet.whitespaceAndNewlines()));
+                              CharacterSet.whitespaceAndNewlines()));
 
     // ---- join ------------------------------------------------------------
     Stdio.printf("join: %s\n",

@@ -1,8 +1,8 @@
-// test_win32_rules.xc — the rule editor over UXPredicate, driven headlessly.
+// test_win32_rules.xc — the rule editor over Foundation's Predicate, driven headlessly.
 //
 // The engine itself is covered by test_predicate; this is the BOARD: rule rows -> a predicate tree
 // -> the filtered row set the table publishes.  It drives the real KSRulesBoard from the kitchen
-// sink (same code the three backends run), so the popup tags really are the UXP_* opcodes and the
+// sink (same code the three backends run), so the popup tags really are the KR_* operator codes and the
 // key popup really does map "Name" -> the "name" key path.  Win32/Wine because that is the backend
 // that runs a whole UI headlessly; nothing here is Win32-specific.
 #import <Stdio.xc>
@@ -46,6 +46,15 @@ u8* hit(i32 i)
     return i < ksMatchN ? ksName[ksMatch[i]] : (u8*)"(none)";
     }
 
+bool kseq(u8* a, u8* b)
+    {
+    i32 i = (i32)0;
+    while (a[i] != (u8)0 && a[i] == b[i])
+        {
+        i = i + (i32)1;
+        }
+    return a[i] == b[i];
+    }
 void main(void)
     {
     gFails = (i32)0;
@@ -69,20 +78,20 @@ void main(void)
 
     // The board opens seeded with "Kind is Source" (row 1 has no value, so it is inactive).
     check("seeded: kind is Source", ksMatchN, (i32)2);
-    check("  first hit is main.xc", UXPredicate.streq(hit((i32)0), (u8*)"main.xc") ? (i32)1 : (i32)0, (i32)1);
+    check("  first hit is main.xc", kseq(hit((i32)0), (u8*)"main.xc") ? (i32)1 : (i32)0, (i32)1);
 
     // AND: both rules must hold.
     // "UX", not "UXKit": the dataset has no file whose NAME contains "UXKit"
     // (UXWindow.xc is UXWindow), so the rule matched nothing and the hit check
     // below was asserting against "(none)".  "UX" is the substring that picks
     // UXWindow.xc out of the two Source files, which is what this row is for.
-    rule((i32)1, (i32)0, (i32)UXP_CONTAINS, (u8*)"UX");
+    rule((i32)1, (i32)0, (i32)KR_CONTAINS, (u8*)"UX");
     check("All: Source AND name contains UX", matched(), (i32)1);
-    check("  it is UXWindow.xc", UXPredicate.streq(hit((i32)0), (u8*)"UXWindow.xc") ? (i32)1 : (i32)0, (i32)1);
+    check("  it is UXWindow.xc", kseq(hit((i32)0), (u8*)"UXWindow.xc") ? (i32)1 : (i32)0, (i32)1);
 
     // OR: either rule.
     gBoard.modePop.selectByTag((i32)KR_ANY);
-    rule((i32)1, (i32)2, (i32)UXP_EQ, (u8*)"Image");
+    rule((i32)1, (i32)2, (i32)KR_EQ, (u8*)"Image");
     check("Any: kind Source OR kind Image", matched(), (i32)3);
 
     // NOT(OR(...)): the complement of the same two rules.
@@ -91,34 +100,34 @@ void main(void)
 
     // An empty value is an inactive row; with no active rule nothing is filtered at all.
     gBoard.modePop.selectByTag((i32)KR_ALL);
-    rule((i32)0, (i32)0, (i32)UXP_CONTAINS, (u8*)"");
-    rule((i32)1, (i32)0, (i32)UXP_CONTAINS, (u8*)"");
+    rule((i32)0, (i32)0, (i32)KR_CONTAINS, (u8*)"");
+    rule((i32)1, (i32)0, (i32)KR_CONTAINS, (u8*)"");
     check("no active rules -> everything", matched(), (i32)8);
 
     // Numeric comparison: the engine parses the LEADING integer of each side, so "512 B" reads as
     // 512 — units are not modelled, which is exactly why "greater than 20" also takes build.sh.
-    rule((i32)0, (i32)1, (i32)UXP_GT, (u8*)"20");
+    rule((i32)0, (i32)1, (i32)KR_GT, (u8*)"20");
     check("size greater than 20", matched(), (i32)3);
-    rule((i32)0, (i32)1, (i32)UXP_LT, (u8*)"3");
+    rule((i32)0, (i32)1, (i32)KR_LT, (u8*)"3");
     check("size less than 3", matched(), (i32)2);
 
-    // String operators, including MATCHES (an UXRegex search, not an anchored match).
-    rule((i32)0, (i32)0, (i32)UXP_ENDSWITH, (u8*)".xc");
+    // String operators, including MATCHES (a regular-expression search, not an anchored match).
+    rule((i32)0, (i32)0, (i32)KR_ENDSWITH, (u8*)".xc");
     check("name ends with .xc", matched(), (i32)2);
-    rule((i32)0, (i32)0, (i32)UXP_BEGINSWITH, (u8*)"ma");
+    rule((i32)0, (i32)0, (i32)KR_BEGINSWITH, (u8*)"ma");
     check("name begins with ma", matched(), (i32)1);
     // MATCHES searches, it does not anchor: this takes notes.tXT as well as the two .xc and the .json.
     // The alternation must therefore list xc — without it only notes.txt and
     // data.json match, which is the 2 this asked 4 of.
-    rule((i32)0, (i32)0, (i32)UXP_MATCHES, (u8*)"(xc|xt|json)");
+    rule((i32)0, (i32)0, (i32)KR_MATCHES, (u8*)"(xc|xt|json)");
     check("name matches (xc|xt|json)", matched(), (i32)4);
-    rule((i32)0, (i32)2, (i32)UXP_NE, (u8*)"Source");
+    rule((i32)0, (i32)2, (i32)KR_NE, (u8*)"Source");
     check("kind is not Source", matched(), (i32)6);
 
     // The row-editing rules: a delete shifts the rows below it up, and one row always survives.
     gBoard.nRows = (i32)2;
-    rule((i32)0, (i32)2, (i32)UXP_EQ, (u8*)"Image");
-    rule((i32)1, (i32)0, (i32)UXP_ENDSWITH, (u8*)".xc");
+    rule((i32)0, (i32)2, (i32)KR_EQ, (u8*)"Image");
+    rule((i32)1, (i32)0, (i32)KR_ENDSWITH, (u8*)".xc");
     gBoard.modePop.selectByTag((i32)KR_ANY);
     check("two rules, Any", matched(), (i32)3);
     gBoard.removeRow((i32)0); // row 1 shifts up into row 0
@@ -142,16 +151,16 @@ void main(void)
         // control was filled with the seeded rule's two rows, so any check expecting 2 proves nothing.
         // 8 -> 2 -> 3 changes the count every time.
         gBoard.modePop.selectByTag((i32)KR_ALL);
-        rule((i32)0, (i32)0, (i32)UXP_CONTAINS, (u8*)""); // no active rule -> all eight
-        rule((i32)1, (i32)0, (i32)UXP_CONTAINS, (u8*)"");
+        rule((i32)0, (i32)0, (i32)KR_CONTAINS, (u8*)""); // no active rule -> all eight
+        rule((i32)1, (i32)0, (i32)KR_CONTAINS, (u8*)"");
         i32 want = matched();
         win.display(); // realizeTree runs here: the refill happens
         check("native list rows (no rules -> 8)", (i32)SendMessageA(lv, (u32)LVM_GETITEMCOUNT, (pointer)0, (pointer)0), want);
-        rule((i32)0, (i32)2, (i32)UXP_EQ, (u8*)"Source");
+        rule((i32)0, (i32)2, (i32)KR_EQ, (u8*)"Source");
         want = matched();
         win.display();
         check("native list rows (kind is Source -> 2)", (i32)SendMessageA(lv, (u32)LVM_GETITEMCOUNT, (pointer)0, (pointer)0), want);
-        rule((i32)0, (i32)1, (i32)UXP_GT, (u8*)"20");
+        rule((i32)0, (i32)1, (i32)KR_GT, (u8*)"20");
         want = matched();
         win.display();
         check("native list rows (size > 20 -> 3)", (i32)SendMessageA(lv, (u32)LVM_GETITEMCOUNT, (pointer)0, (pointer)0), want);

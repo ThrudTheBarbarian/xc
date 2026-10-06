@@ -1,7 +1,7 @@
 // test_text.xc — UXText string utilities: trim, split, tokenize, join, case, predicates.
 #import <Stdio.xc>
 #import "UXText.xc"
-#import "UXCharacterSet.xc"
+#import "CharacterSet.xc"
 
 i32 gFails;
 void check(u8* what, i32 got, i32 want)
@@ -65,7 +65,7 @@ void main(void)
     eq("empty middle", UXText.partAt(empties, (i32)1), (u8*)"");
 
     // tokenize (drops empties, splits on any set char)
-    Array* toks = UXText.tokenize((u8*)"  the  quick fox ", UXCharacterSet.whitespace());
+    Array* toks = UXText.tokenize((u8*)"  the  quick fox ", CharacterSet.whitespace());
     check("token count", (i32)toks.count(), (i32)3);
     eq("token 0", UXText.partAt(toks, (i32)0), (u8*)"the");
     eq("token 2", UXText.partAt(toks, (i32)2), (u8*)"fox");

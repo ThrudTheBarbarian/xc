@@ -18,7 +18,7 @@ enum UXEventKind = {
     // scrollbar happens inside the driver's modal trackDragStep, which emits no events at all, so a
     // recording would otherwise replay every click faithfully and leave the view scrolled elsewhere.
     UXEventScrolled = 12,
-    // A table's selection came to rest (a = its node index, b = the anchor row, data = an UXIndexSet
+    // A table's selection came to rest (a = its node index, b = the anchor row, data = an IndexSet
     // of every selected row).  Like the scroll
     // above, an OUTCOME rather than input: on a backend whose table is a native list the click never
     // reaches the toolkit at all — it arrives as WM_NOTIFY/LVN_ITEMCHANGED — so this is the only
@@ -61,8 +61,8 @@ bool gInputReplay;
 
 // Some events carry more than two integers.  A table's selection is a SET of rows (an anchor alone
 // replays as one row, however many were chosen) and a field's contents are a string — neither fits
-// in a/b.  The payload is whatever the kind documents: an UXIndexSet for a selection (which is what
-// UXIndexSet is FOR — "exactly what a table's multi-selection wants"), a String for text.  The
+// in a/b.  The payload is whatever the kind documents: an IndexSet for a selection (which is what
+// IndexSet is FOR — "exactly what a table's multi-selection wants"), a String for text.  The
 // recorder copies the reference, so a captured event keeps its data.
 class UXEvent
     {
@@ -75,7 +75,7 @@ class UXEvent
     i32 handle;   // the window a system event refers to
     i32 a;        // decoded payload (menu title object)
     i32 b;        // decoded payload (menu item object)
-    Object* data; // optional payload: UXIndexSet for a selection, String for field text
+    Object* data; // optional payload: IndexSet for a selection, String for field text
 
     void init(void)
         {

@@ -2,10 +2,10 @@
 //
 // Trim, split, join, case-fold, prefix/suffix/contains, single-character replace — the operations an
 // app reaches for constantly and that the base String class leaves out.  Split/trim take an
-// UXCharacterSet so a caller controls the delimiters.  Results are freshly-allocated u8* (or an Array
+// CharacterSet so a caller controls the delimiters.  Results are freshly-allocated u8* (or an Array
 // of string carriers for split); nothing is mutated in place.
 #import "Array.xc"
-#import "UXCharacterSet.xc"
+#import "CharacterSet.xc"
 
 class UXStrItem : Object
     {
@@ -55,16 +55,16 @@ class UXStrItem : Object
         }
 
     // ---- trim ----------------------------------------------------------------
-    static u8* trim(u8* s, UXCharacterSet* cs)
+    static u8* trim(u8* s, CharacterSet* cs)
         {
         i32 n = UXText.slen(s);
         i32 a = (i32)0;
         i32 b = n;
-        while (a < b && cs.contains((i32)s[a]))
+        while (a < b && cs.contains(s[a]))
             {
             a = a + (i32)1;
             }
-        while (b > a && cs.contains((i32)s[b - (i32)1]))
+        while (b > a && cs.contains(s[b - (i32)1]))
             {
             b = b - (i32)1;
             }
@@ -72,7 +72,7 @@ class UXStrItem : Object
         }
     static u8* trimWhitespace(u8* s)
         {
-        return UXText.trim(s, UXCharacterSet.whitespaceAndNewlines());
+        return UXText.trim(s, CharacterSet.whitespaceAndNewlines());
         }
 
     // ---- split ---------------------------------------------------------------
@@ -98,14 +98,14 @@ class UXStrItem : Object
         return out;
         }
     // Split on any character in the set, dropping empty fields (tokenizing).
-    static Array<UXStrItem>* tokenize(u8* s, UXCharacterSet* sep)
+    static Array<UXStrItem>* tokenize(u8* s, CharacterSet* sep)
         {
         Array<UXStrItem>* out = new Array();
         i32 n = UXText.slen(s);
         i32 start = (i32)-1;
         for (i32 i = (i32)0; i <= n; i = i + (i32)1)
             {
-            bool brk = (i == n) || sep.contains((i32)s[i]);
+            bool brk = (i == n) || sep.contains(s[i]);
             if (brk)
                 {
                 if (start >= (i32)0)

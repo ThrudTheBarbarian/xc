@@ -213,9 +213,9 @@ class UXNib
         UXProgressBar* pb = (UXProgressBar* ?)(Object*)v;
         if (pb != (UXProgressBar*)0)
             {
-            UXProgress* pr = new UXProgress();
-            pr.setTotal(UXNib.attrInt(doc, formId, logicalId, theme, (u8*)"total", (i32)100));
-            pr.setCompleted(UXNib.attrInt(doc, formId, logicalId, theme, (u8*)"completed", (i32)0));
+            Progress* pr = new Progress();
+            pr.setTotalUnitCount((i64)UXNib.attrInt(doc, formId, logicalId, theme, (u8*)"total", (i32)100));
+            pr.setCompletedUnitCount((i64)UXNib.attrInt(doc, formId, logicalId, theme, (u8*)"completed", (i32)0));
             pb.setProgress(pr);
             return;
             }

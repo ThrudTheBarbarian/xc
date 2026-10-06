@@ -4,7 +4,7 @@ description: "A span of text with a pixel position and an optional style: what l
 ---
 
 `UXTextRun` is a span of characters that has been **placed**: a
-[`UXRange`](/compiler/api/uxkit/uxrange/) into the original text, the `x` at
+[`Range`](/compiler/api/range/) into the original text, the `x` at
 which it starts, and the style to draw it in.
 
 ```c
@@ -14,9 +14,9 @@ which it starts, and the style to draw it in.
 ## Overview
 
 ```c
-class UXTextRun : UXRange {
+class UXTextRun : Range {
     i32         x;       // pixels from the left of the line
-    UXCharAttr* attr;    // null = the view's default style
+    UXTextStyle* attr;    // null = the view's default style
 }
 ```
 
@@ -36,17 +36,16 @@ A run holds no characters of its own. If the string it was laid out from is
 freed or its contents change, every run still points into it.
 
 Lay the text out again after editing. The layout is cheap to recompute and
-cannot be patched correctly. [`UXAttrRun`](/compiler/api/uxkit/uxattrrun/) makes
-the same trade.
+cannot be patched correctly.
 :::
 
-## `x` is why this is not a UXAttrRun
+## `x` is why this is not an AttributedString run
 
 Both are ranges with a style, but they answer different questions:
 
 | | |
 | --- | --- |
-| [`UXAttrRun`](/compiler/api/uxkit/uxattrrun/) | *what style* these characters have — derived from the model |
+| an [`AttributedString`](/compiler/api/attributedstring/) run | *what style* these characters have — derived from the model |
 | `UXTextRun` | *where* these characters go — derived from measuring |
 
 A styled span may be split across two lines, becoming two `UXTextRun`s with
@@ -68,7 +67,7 @@ font unchanged".
 Check before dereferencing:
 
 ```c
-if (r.attr != (UXCharAttr*)0 && r.attr.bold) { … }
+if (r.attr != (UXTextStyle*)0 && r.attr.bold) { … }
 ```
 
 ## Topics
@@ -86,7 +85,7 @@ An unstyled run; `attr` is null.
 ### styled
 
 ```c
-static UXTextRun* styled(i32 l, i32 n, i32 px, UXCharAttr* a)
+static UXTextRun* styled(i32 l, i32 n, i32 px, UXTextStyle* a)
 ```
 
 A run carrying a style. The attribute is **kept, not copied**, so it must
@@ -107,23 +106,20 @@ it. The value is absolute within the line, not a delta.
 ### attr
 
 ```c
-UXCharAttr* attr     // null = the view's default
+UXTextStyle* attr     // null = the view's default
 ```
 
 ### loc / len
 
-Inherited from [`UXRange`](/compiler/api/uxkit/uxrange/). Half-open, indexing
+Inherited from [`Range`](/compiler/api/range/). Half-open, indexing
 the source text.
 
 ## Conforms to
 
-- Inherits [`UXRange`](/compiler/api/uxkit/uxrange/), and through it
+- Inherits [`Range`](/compiler/api/range/), and through it
   [`Object`](/compiler/api/object/)
 
 ## See also
 
 - [`UXTextLayout`](/compiler/api/uxkit/uxtextlayout/): the line breaker that
   produces these
-- [`UXAttrRun`](/compiler/api/uxkit/uxattrrun/): the model-side run
-- [`UXCharAttr`](/compiler/api/uxkit/uxcharattr/): the style itself
-- [`UXRange`](/compiler/api/uxkit/uxrange/): the half-open contract both share

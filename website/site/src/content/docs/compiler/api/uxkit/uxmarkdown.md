@@ -3,8 +3,8 @@ title: UXMarkdown
 description: "Inline markdown to an attributed string: **bold**, *italic* and `code`, with the markers stripped and the spans they wrapped carrying the attributes."
 ---
 
-`UXMarkdown` turns inline markdown into a
-[`UXAttributedString`](/compiler/api/uxkit/uxattributedstring/).
+`UXMarkdown` turns inline markdown into an
+[`AttributedString`](/compiler/api/attributedstring/).
 
 ```c
 #use <UXKit>            // or #import "UXMarkdown.xc"
@@ -13,11 +13,11 @@ description: "Inline markdown to an attributed string: **bold**, *italic* and `c
 ## Overview
 
 ```c
-UXAttributedString* s =
+AttributedString* s =
     UXMarkdown.parse((u8*)"plain **bold** and *italic* and `code` here");
 
-s.stringValue();     // "plain bold and italic and code here" — markers gone
-s.runCount();        // 7 — the spans, coalesced
+s.text().cString();     // "plain bold and italic and code here" — markers gone
+s.runCount();        // the spans, merged
 ```
 
 It covers help text, notes and formatted labels drawn through the
@@ -59,14 +59,13 @@ a backtick that stands for itself.
 
 ## Code is a colour, not a font
 
-The `` ` `` marker sets the [`pen`](/compiler/api/uxkit/uxcharattr/#pen) rather
+The `` ` `` marker sets the [`pen`](/compiler/api/uxkit/uxtextstyle/) rather
 than a monospace family, because
-[`UXCharAttr`](/compiler/api/uxkit/uxcharattr/) has bold, italic, pen and size,
+[`UXTextStyle`](/compiler/api/uxkit/uxtextstyle/) has bold, italic, pen and size,
 and no family.
 
-Code spans are *distinguished*, not *monospaced*. Adding a family to the
-character attributes would change the run-coalescing rule and every backend's
-text drawing, for a feature help text rarely needs.
+Code spans are *distinguished*, not *monospaced*. A family per span would
+change every backend's text drawing, for a feature help text rarely needs.
 
 If you need monospace, draw the runs yourself and choose a family per run;
 [`drawTextFont`](/compiler/api/uxkit/uxgraphics/) takes one.
@@ -87,15 +86,15 @@ part that fits in a label.
 ### parse
 
 ```c
-static UXAttributedString* parse(u8* md)
+static AttributedString* parse(u8* md)
 ```
 
 Markdown in, attributed string out. It never fails: no input is malformed,
 though some input styles differently from what you meant.
 
 The output text is never longer than the input, because markers are only
-removed. Attributes are applied per character, so the
-[runs](/compiler/api/uxkit/uxattrrun/) coalesce correctly with no extra work.
+removed. Attributes are set once per span of equal markers, and the
+AttributedString keeps its runs merged.
 
 :::note[The source string is not retained]
 `parse` builds its own text buffer, so the markdown you passed in can be freed
@@ -124,9 +123,5 @@ gate compiles it, and the listing above is its output.
 
 ## See also
 
-- [`UXAttributedString`](/compiler/api/uxkit/uxattributedstring/): what this
-  produces
-- [`UXCharAttr`](/compiler/api/uxkit/uxcharattr/): the four attributes
-  available, and why there is no family
 - [`UXTextLayout`](/compiler/api/uxkit/uxtextlayout/): laying the result out
   for drawing

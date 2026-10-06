@@ -18,7 +18,7 @@
 #import "UXSplitView.xc"
 #import "UXSlider.xc"
 #import "UXProgressBar.xc"
-#import "UXProgress.xc"
+#import "Progress.xc"
 #import "UXStepper.xc"
 #import "UXPopUpButton.xc"
 #import "UXSegmentedControl.xc"
@@ -31,9 +31,9 @@
 #import "UXPainter.xc"   // ...stroked and filled through the neutral seam
 #import "UXGradient.xc"
 #import "UXFont.xc"
-#import "UXPredicate.xc"        // the rule engine behind the Rules window
+#import "Predicate.xc"          // the rule engine behind the Rules window
 #import "UXTextLayout.xc"       // the line breaker behind the Text window
-#import "UXAttributedString.xc" // ...and the rich text it lays out
+#import "UXTextStyle.xc"        // ...and the rich text it lays out
 #import "UXEventRecorder.xc"    // capture + replay, behind the Recorder window
 #import "UXOpenPanel.xc"
 #import "UXMenu.xc"
@@ -1341,7 +1341,7 @@ u8 ksTextLine[512]; // one line copied out for drawing (a line is a range, not a
 
 class KSTextBoard : UXView
     {
-    UXAttributedString* rich;
+    AttributedString* rich;
     UXStepper* sizeStepper;
     UXPopUpButton* alignPop;
     UXLabel* tally;
@@ -1351,11 +1351,11 @@ class KSTextBoard : UXView
         super.init();
         // Styled ranges over one string: the wrap measures each in its own font (bold IS wider), and
         // each run draws in its own font — so what is measured and what is drawn are the same thing.
-        rich = UXAttributedString.make((u8*)"The quick brown fox jumps over the lazy dog. Pack my box with five dozen liquor jugs.\nA second paragraph follows an explicit newline, and wraps on its own.");
-        rich.setBold(true, (i32)4, (i32)5);     // "quick"
-        rich.setItalic(true, (i32)10, (i32)5);  // "brown"
-        rich.setColor((i32)2, (i32)16, (i32)3); // "fox" in red
-        rich.setSize((i16)22, (i32)44, (i32)4); // "Pack" larger
+        rich = AttributedString.withString(String.withCString((u8*)"The quick brown fox jumps over the lazy dog. Pack my box with five dozen liquor jugs.\nA second paragraph follows an explicit newline, and wraps on its own."));
+        UXTextStyle.setBold(rich, true, (i32)4, (i32)5);     // "quick"
+        UXTextStyle.setItalic(rich, true, (i32)10, (i32)5);  // "brown"
+        UXTextStyle.setPen(rich, (i32)2, (i32)16, (i32)3);   // "fox" in red
+        UXTextStyle.setSize(rich, (i16)22, (i32)44, (i32)4); // "Pack" larger
         sizeStepper = (UXStepper*)0;
         alignPop = (UXPopUpButton*)0;
         tally = (UXLabel*)0;
@@ -1396,7 +1396,8 @@ class KSTextBoard : UXView
     // A run is a (start,length) range into the paragraph — copy it out to hand to drawTextFont.
     u8* runText(i32 start, i32 len)
         {
-        u8* para = rich.stringValue();
+        String* paraStr = rich.text(); // held: text() is a String of its own, its bytes go with it
+        u8* para = paraStr.cString();
         if (len > (i32)511)
             {
             len = (i32)511;
@@ -1416,8 +1417,9 @@ class KSTextBoard : UXView
         g.drawText((u8*)"Size", (i16)18, (i16)20, (i32)1, (i32)0);
         i16 measure = (i16)((i32)b.w - (i32)KT_MARGIN * (i32)2);
         i32 align = alignPop != (UXPopUpButton*)0 ? alignPop.selectedTag() : (i32)UX_ALIGN_LEFT;
-        Array<UXRange>* lines = UXTextLayout.wrapAttr(rich, measure, size);
-        u8* para = rich.stringValue();
+        Array<Range>* lines = UXTextLayout.wrapAttr(rich, measure, size);
+        String* paraStr = rich.text(); // held: text() is a String of its own, its bytes go with it
+        u8* para = paraStr.cString();
         i16 lh = (i16)(size + (i32)10); // room for a run set larger than the base size
         i16 y = (i16)KT_TOP;
         for (u16 i = (u16)0; i < lines.count(); i = i + (u16)1)
@@ -1427,17 +1429,17 @@ class KSTextBoard : UXView
                 {
                 break;
                 }
-            UXRange* ln = (UXRange* ?)lines.get(i);
+            Range* ln = (Range* ?)lines.get(i);
             bool isLast = UXTextLayout.isParagraphEnd(para, lines, i);
             Array<UXTextRun>* runs = UXTextLayout.layoutLineAttr(rich, ln, measure, size, align, isLast);
             for (u16 r = (u16)0; r < runs.count(); r = r + (u16)1)
                 {
                 UXTextRun* run = (UXTextRun* ?)runs.get(r);
-                UXCharAttr* a = run.attr;
-                i32 rs = a != (UXCharAttr*)0 && a.size > (i16)0 ? (i32)a.size : size;
-                i32 pen = a != (UXCharAttr*)0 ? a.pen : (i32)1;
-                bool bo = a != (UXCharAttr*)0 ? a.bold : false;
-                bool it = a != (UXCharAttr*)0 ? a.italic : false;
+                UXTextStyle* a = run.attr;
+                i32 rs = a != (UXTextStyle*)0 && a.size > (i16)0 ? (i32)a.size : size;
+                i32 pen = a != (UXTextStyle*)0 ? a.pen : (i32)1;
+                bool bo = a != (UXTextStyle*)0 ? a.bold : false;
+                bool it = a != (UXTextStyle*)0 ? a.italic : false;
                 g.drawTextFont(self.runText(run.loc, run.len),
                                (i16)((i32)KT_MARGIN + run.x), y, pen, (u8*)"", rs, bo, it);
                 }
@@ -1454,8 +1456,8 @@ class KSTextBoard : UXView
         }
     }
 
-// ---- the rules board: UXPredicate with a face on it --------------------------------------------
-// The rule engine (UXPredicate) is a model — comparisons, CONTAINS/BEGINSWITH/ENDSWITH/MATCHES,
+// ---- the rules board: Foundation's Predicate with a face on it --------------------------------------------
+// The rule engine (Predicate) is a model — comparisons, CONTAINS/BEGINSWITH/ENDSWITH/MATCHES,
 // AND/OR/NOT, nesting.  This is the view over it: rule rows that build a predicate TREE, evaluated
 // live against the same eight records the main window tables.  Every edit rebuilds the tree from
 // scratch and re-filters; there is no incremental state to get out of step.
@@ -1465,10 +1467,19 @@ class KSTextBoard : UXView
 #define KR_ALL 0  // "Match All"  -> AND
 #define KR_ANY 1  // "Match Any"  -> OR
 #define KR_NONE 2 // "Match None" -> NOT(OR(...))
+// The operator popup's tags, and the names Foundation's Predicate.compare takes for them.
+#define KR_CONTAINS 0
+#define KR_BEGINSWITH 1
+#define KR_ENDSWITH 2
+#define KR_EQ 3
+#define KR_NE 4
+#define KR_MATCHES 5
+#define KR_GT 6
+#define KR_LT 7
 
-    // One record the engine can read.  valueForKey IS the whole contract — the engine never learns
-    // what a "file" is, and this class never learns what a predicate is.
-    class KSRecord : Object<UXEvaluable>
+    // One record the engine can read: Foundation's Predicate reads a Map, so a record hands it one,
+    // with the size a Number so "greater than" compares sizes, not their spelling.
+    class KSRecord : Object
     {
     u8* vName;
     u8* vSize;
@@ -1479,21 +1490,13 @@ class KSTextBoard : UXView
         vSize = (u8*)"";
         vKind = (u8*)"";
         }
-    u8* valueForKey(u8* k)
+    Map* asMap(void)
         {
-        if (UXPredicate.streq(k, (u8*)"name"))
-            {
-            return vName;
-            }
-        if (UXPredicate.streq(k, (u8*)"size"))
-            {
-            return vSize;
-            }
-        if (UXPredicate.streq(k, (u8*)"kind"))
-            {
-            return vKind;
-            }
-        return (u8*)"";
+        Map* m = new Map();
+        m.set(String.withCString((u8*)"name"), String.withCString(vName));
+        m.set(String.withCString((u8*)"size"), Number.with((i64)UXStr.toInt(vSize)));
+        m.set(String.withCString((u8*)"kind"), String.withCString(vKind));
+        return m;
         }
     }
 
@@ -1711,11 +1714,10 @@ class KSVectorBoard : UXView
     // A row with an empty value is INACTIVE — half-typed rules must not make the table jump about.
     // With no active row there is nothing to filter on, so everything matches (a bare OR of nothing
     // would say the opposite, which is why this is not left to the compound's own empty case).
-    UXPredicate* buildPredicate(void)
+    Predicate* buildPredicate(void)
         {
         i32 mode = modePop != (UXPopUpButton*)0 ? modePop.selectedTag() : (i32)KR_ALL;
-        UXPredicate* inner = UXPredicate.compound(mode == (i32)KR_ALL ? (i32)UXP_AND : (i32)UXP_OR);
-        i32 active = (i32)0;
+        Array* parts = new Array();
         for (i32 i = (i32)0; i < nRows; i = i + (i32)1)
             {
             u8* v = ksrVal[i].text();
@@ -1723,19 +1725,54 @@ class KSVectorBoard : UXView
                 {
                 continue;
                 }
-            inner.addSub(UXPredicate.comparison(self.keyOf(i), ksrOp[i].selectedTag(), v));
-            active = active + (i32)1;
+            i32 tag = ksrOp[i].selectedTag();
+            // sizes are numbers: a size rule compares to the number typed
+            Object* value = (Object*)String.withCString(v);
+            if (ksrKey[i].selectedTag() == (i32)1)
+                {
+                value = (Object*)Number.with((i64)UXStr.toInt(v));
+                }
+            // "matches" finds the pattern anywhere, as a search does; Predicate's MATCHES is the whole text
+            if (tag == (i32)KR_MATCHES)
+                {
+                value = (Object*)String.withCString(UXStr.cat(UXStr.cat((u8*)".*(", (u8)0, v), (u8)0, (u8*)").*"));
+                }
+            try
+                {
+                parts.add(Predicate.compare(String.withCString(self.keyOf(i)), String.withCString(KSRulesBoard.opName(tag)),
+                                            value, false));
+                }
+            catch (e)
+                {
+                // a rule that cannot be made (a bad "matches" pattern, half typed) filters nothing yet
+                }
             }
         // no rules -> no filtering
-        if (active == (i32)0)
+        if (parts.count() == (u32)0)
             {
-            return (UXPredicate*)0;
+            return (Predicate*)0;
+            }
+        if (mode == (i32)KR_ALL)
+            {
+            return Predicate.andAll(parts);
             }
         if (mode == (i32)KR_NONE)
             {
-            return UXPredicate.not(inner);
+            return Predicate.not(Predicate.orAll(parts));
             }
-        return inner;
+        return Predicate.orAll(parts);
+        }
+    // The name Predicate.compare takes for an operator tag.
+    static u8* opName(i32 tag)
+        {
+        if (tag == (i32)KR_CONTAINS) { return (u8*)"CONTAINS"; }
+        if (tag == (i32)KR_BEGINSWITH) { return (u8*)"BEGINSWITH"; }
+        if (tag == (i32)KR_ENDSWITH) { return (u8*)"ENDSWITH"; }
+        if (tag == (i32)KR_NE) { return (u8*)"!="; }
+        if (tag == (i32)KR_MATCHES) { return (u8*)"MATCHES"; }
+        if (tag == (i32)KR_GT) { return (u8*)">"; }
+        if (tag == (i32)KR_LT) { return (u8*)"<"; }
+        return (u8*)"=";
         }
     // The key path a row selects.  The popup shows "Name"; the engine wants "name".
     u8* keyOf(i32 i)
@@ -1756,11 +1793,11 @@ class KSVectorBoard : UXView
     // it can happen on every keystroke, which is what makes the board feel live.
     void applyRules(void)
         {
-        UXPredicate* p = self.buildPredicate();
+        Predicate* p = self.buildPredicate();
         ksMatchN = (i32)0;
         for (i32 i = (i32)0; i < (i32)KS_ROWS; i = i + (i32)1)
             {
-            if (p == (UXPredicate*)0 || p.evaluate(self.recordAt(i)))
+            if (p == (Predicate*)0 || p.evaluate((Object*)self.recordAt(i).asMap()))
                 {
                 ksMatch[ksMatchN] = i;
                 ksMatchN = ksMatchN + (i32)1;
@@ -1774,7 +1811,7 @@ class KSVectorBoard : UXView
         if (tally != (UXLabel*)0)
             {
             u8* s = UXStr.append(UXStr.fromInt(ksMatchN), (u8*)" of 8 rows match");
-            tally.setText(p == (UXPredicate*)0 ? UXStr.append(s, (u8*)"  (no rules yet)") : s);
+            tally.setText(p == (Predicate*)0 ? UXStr.append(s, (u8*)"  (no rules yet)") : s);
             }
         // NOT the whole board: the table and the tally label each damage themselves, and the rest of
         // what this view draws (the "Match"/"of the following rules:" text, the divider) never changes.
@@ -1899,17 +1936,16 @@ class KSVectorBoard : UXView
         k.setAction(&self.onPick);
         canvas.addSubview(k, UXGeom.make((i16)18, y, (i16)92, (i16)24));
         ksrKey[i] = k;
-        // The operator list IS the engine's op set — the tags are the UXP_* codes, handed straight
-        // to UXPredicate.comparison, so adding an operator here needs no translation table.
+        // The operator list: each tag names one of Predicate.compare's operators (opName).
         UXPopUpButton* o = new UXPopUpButton();
-        o.addItem((u8*)"contains", (i32)UXP_CONTAINS);
-        o.addItem((u8*)"begins with", (i32)UXP_BEGINSWITH);
-        o.addItem((u8*)"ends with", (i32)UXP_ENDSWITH);
-        o.addItem((u8*)"is", (i32)UXP_EQ);
-        o.addItem((u8*)"is not", (i32)UXP_NE);
-        o.addItem((u8*)"matches", (i32)UXP_MATCHES);
-        o.addItem((u8*)"greater than", (i32)UXP_GT);
-        o.addItem((u8*)"less than", (i32)UXP_LT);
+        o.addItem((u8*)"contains", (i32)KR_CONTAINS);
+        o.addItem((u8*)"begins with", (i32)KR_BEGINSWITH);
+        o.addItem((u8*)"ends with", (i32)KR_ENDSWITH);
+        o.addItem((u8*)"is", (i32)KR_EQ);
+        o.addItem((u8*)"is not", (i32)KR_NE);
+        o.addItem((u8*)"matches", (i32)KR_MATCHES);
+        o.addItem((u8*)"greater than", (i32)KR_GT);
+        o.addItem((u8*)"less than", (i32)KR_LT);
         o.setAction(&self.onPick);
         canvas.addSubview(o, UXGeom.make((i16)116, y, (i16)124, (i16)24));
         ksrOp[i] = o;
@@ -1971,10 +2007,10 @@ class KSVectorBoard : UXView
         tally.setAutoresizeMask((i32)UX_ANCHOR_BOTTOM);
         // A seeded rule, so the window opens showing the engine doing something rather than a blank form.
         ksrKey[(i32)0].selectByTag((i32)2);
-        ksrOp[(i32)0].selectByTag((i32)UXP_EQ);
+        ksrOp[(i32)0].selectByTag((i32)KR_EQ);
         ksrVal[(i32)0].setText((u8*)"Source");
         ksrKey[(i32)1].selectByTag((i32)0);
-        ksrOp[(i32)1].selectByTag((i32)UXP_CONTAINS);
+        ksrOp[(i32)1].selectByTag((i32)KR_CONTAINS);
         self.syncRowVisibility();
         self.applyRules();
         }
@@ -2009,7 +2045,7 @@ class KSVectorBoard : UXView
     UXWindow* colourWin; // the toolkit colour-picker window (GEM)
     KSColourBoard* colourBoard;
     UXColor* pickedColor; // the last-chosen colour (seeds the picker; reported on Select)
-    UXWindow* rulesWin;   // the rule editor over UXPredicate (live filtering)
+    UXWindow* rulesWin;   // the rule editor over Predicate (live filtering)
     KSRulesBoard* rulesBoard;
     UXWindow* vectorWin;
     UXStepper* vecWidth;
@@ -2029,7 +2065,7 @@ class KSVectorBoard : UXView
     UXFont* pickedFont; // the last-chosen font (seeds the chooser; reported on Select)
     UXSlider* slider;   // drives the progress bar
     UXProgressBar* progBar;
-    UXProgress* prog;
+    Progress* prog;
     UXStepper* stepper;
     UXLabel* stepVal; // live read-out beside the stepper
 
@@ -2160,7 +2196,7 @@ class KSVectorBoard : UXView
     // ---- widget-window actions -----------------------------------------------
     void onSlider(UXControl* c)
         {
-        prog.setCompleted(slider.intValue());
+        prog.setCompletedUnitCount((i64)(slider.intValue()));
         progBar.setNeedsDisplay();
         }
     void onStepper(UXControl* c)
@@ -2594,8 +2630,8 @@ class KSVectorBoard : UXView
         pu.setAction(&self.onPopup);
         canvas.addSubview(pu, UXGeom.make((i16)232, (i16)78, (i16)120, (i16)24));
 
-        prog = UXProgress.make((i32)100);
-        prog.setCompleted((i32)60);
+        prog = Progress.withTotal((i64)((i32)100));
+        prog.setCompletedUnitCount((i64)((i32)60));
         progBar = new UXProgressBar();
         progBar.setProgress(prog);
         canvas.addSubview(progBar, UXGeom.make((i16)8, (i16)116, (i16)344, (i16)18));
@@ -2703,7 +2739,7 @@ class KSVectorBoard : UXView
         app.addWindow(fontWin);
         }
 
-    // The rule editor: rule rows over UXPredicate, filtering the same eight records the main window
+    // The rule editor: rule rows over Predicate, filtering the same eight records the main window
     // tables.  Nothing here is backend-specific — popups, fields and a table, so it lands on all three.
     void buildRules(void)
         {
@@ -2870,8 +2906,8 @@ class KSVectorBoard : UXView
             if (tv != (UXTableView*)0)
                 {
                 tv.deselectAllRows();
-                UXIndexSet* sel = (UXIndexSet* ?)e.data;     // every row that was selected
-                if (sel != (UXIndexSet*)0)
+                IndexSet* sel = (IndexSet* ?)e.data;     // every row that was selected
+                if (sel != (IndexSet*)0)
                     {
                     for (i32 r = sel.firstIndex(); r >= (i32)0; r = sel.indexGreaterThan(r))
                         {

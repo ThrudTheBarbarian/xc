@@ -1,12 +1,13 @@
 // UXFileChooser.xc — the model behind an open/save file panel (NSOpenPanel/NSSavePanel in shape).
 //
-// It owns the navigation state (current directory as an UXPath), a backend-supplied listing of the
+// It owns the navigation state (the current directory, a path String), a backend-supplied listing of the
 // directory's entries, an extension filter, and a customisable prompt string.  Directories always
 // show; files show only when they match an allowed extension (empty filter = all).  Entering a folder
-// and going up are UXPath surgery.  The panel VIEW and the actual directory read are the backend's job
+// and going up are String path methods.  The panel VIEW and the actual directory read are the backend's job
 // — this is the testable model it drives.
 #import "Array.xc"
-#import "UXPath.xc"
+#import "String.xc"
+#import "UXString.xc"
 
 class UXFileEntry : Object
     {
@@ -28,7 +29,7 @@ class UXFileEntry : Object
 
     class UXFileChooser
     {
-    UXPath* dir;
+    String* dir;
     Array<UXFileEntry>* entries;    // of UXFileEntry — the current directory's listing (set by the backend)
     Array<UXFileEntry>* extensions; // of UXFileEntry (name = the allowed extension); empty = accept all files
     bool saveMode;
@@ -37,7 +38,7 @@ class UXFileEntry : Object
 
     void init(void)
         {
-        dir = UXPath.parse((u8*)"/");
+        dir = String.withCString((u8*)"/");
         entries = new Array();
         extensions = new Array();
         saveMode = false;
@@ -45,11 +46,11 @@ class UXFileEntry : Object
         saveName = (u8*)"";
         }
 
-    void setDirectory(UXPath* p)
+    void setDirectory(String* p)
         {
         dir = p;
         }
-    UXPath* directory(void)
+    String* directory(void)
         {
         return dir;
         }
@@ -125,10 +126,10 @@ class UXFileEntry : Object
             {
             return true;
             }
-        u8* ext = UXPath.parse(name).pathExtension();
+        String* ext = String.withCString(name).pathExtension();
         for (u16 i = (u16)0; i < extensions.count(); i = i + (u16)1)
             {
-            if (UXFileChooser.ieq(((UXFileEntry* ?)extensions.get(i)).name, ext))
+            if (UXFileChooser.ieq(((UXFileEntry* ?)extensions.get(i)).name, ext.cString()))
                 {
                 return true;
                 }
@@ -155,15 +156,15 @@ class UXFileEntry : Object
         return (i32)self.visibleEntries().count();
         }
 
-    // ---- navigation (UXPath surgery) ----------------------------------------
+    // ---- navigation (String path methods) -----------------------------------
     void enter(u8* dirname)
         {
-        dir = dir.appendingComponent(dirname);
+        dir = dir.appendingPathComponent(String.withCString(dirname));
         entries = new Array();
         }
     void goUp(void)
         {
-        dir = dir.deletingLastComponent();
+        dir = dir.deletingLastPathComponent();
         entries = new Array();
         }
 
@@ -171,6 +172,6 @@ class UXFileEntry : Object
     u8* resultPath(u8* chosenName)
         {
         u8* leaf = saveMode ? saveName : chosenName;
-        return dir.appendingComponent(leaf).toString();
+        return UXStr.dup(dir.appendingPathComponent(String.withCString(leaf)).cString());
         }
     }

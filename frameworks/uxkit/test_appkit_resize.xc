@@ -13,7 +13,7 @@
 #import "UXWindow.xc"
 #import "UXView.xc"
 #import "UXControl.xc"
-#import "UXNotificationCenter.xc"
+#import "NotificationCenter.xc"
 #import "UXGeometry.xc"
 #import "UXEvent.xc"
 
@@ -23,7 +23,7 @@ class Watch : Object
     void init(void)
         {
         }
-    void onResize(UXNotification* n)
+    void onResize(Notification* n)
         {
         gResizes = gResizes + (i32)1;
         }
@@ -49,8 +49,8 @@ class Watch : Object
         win.setContentSize((i16)300, (i16)1200); // tall -> a scrolling window (exercises the fit path)
 
         watch = new Watch();
-        UXNotificationCenter.shared().addObserver((Object*)watch, &watch.onResize,
-                                                  UXWindowDidResizeNotification, (Object*)0);
+        NotificationCenter.shared().addObserver((Object*)watch, &watch.onResize,
+                                                String.withCString(UXWindowDidResizeNotification), (Object*)0);
         win.displayAll();
 
         // Simulate a drag: grow, then shrink twice (the shrink is what crashed interactively).

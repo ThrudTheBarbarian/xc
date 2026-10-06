@@ -13,7 +13,7 @@
 #import "UXSlider.xc"
 #import "UXStepper.xc"
 #import "UXProgressBar.xc"
-#import "UXProgress.xc"
+#import "Progress.xc"
 #import "UXGeometry.xc"
 extern i32 ux_ios_test_radio_state(i32 handle, i32 node);
 extern i32 ux_ios_test_native_value(i32 handle, i32 node);
@@ -54,7 +54,7 @@ UXCheckbox* gCb;
 UXSlider* gSl;
 UXStepper* gSt;
 UXProgressBar* gPg;
-UXProgress* gProg;
+Progress* gProg;
 Target* gT;
 UXRadioGroup* gGrp; // the buttons hold their group weakly
 
@@ -72,7 +72,7 @@ void after(void)
     gCb.setChecked(true);
     gSl.setValue((i32)70);
     gSt.setValue((i32)4);
-    gProg.setCompleted((i32)3);
+    gProg.setCompletedUnitCount((i64)((i32)3));
     gGrp.select(gA);
     gWin.displayAll();
     ck((u8*)"the app checking the box turns the switch on", ux_ios_test_native_value(h, (i32)gCb.index) == (i32)1);
@@ -129,9 +129,9 @@ void testBody(void)
     root.addSubview(gSl, UXGeom.make((i16)20, (i16)170, (i16)240, (i16)30));
     gSt = new UXStepper();
     root.addSubview(gSt, UXGeom.make((i16)20, (i16)210, (i16)120, (i16)32));
-    gProg = new UXProgress();
-    gProg.setTotal((i32)4);
-    gProg.setCompleted((i32)1);
+    gProg = new Progress();
+    gProg.setTotalUnitCount((i64)((i32)4));
+    gProg.setCompletedUnitCount((i64)((i32)1));
     gPg = new UXProgressBar();
     gPg.setProgress(gProg);
     root.addSubview(gPg, UXGeom.make((i16)20, (i16)250, (i16)240, (i16)20));

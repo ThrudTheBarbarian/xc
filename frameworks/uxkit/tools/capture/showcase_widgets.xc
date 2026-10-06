@@ -7,7 +7,7 @@
 #import "UXSlider.xc"
 #import "UXStepper.xc"
 #import "UXProgressBar.xc"
-#import "UXProgress.xc"
+#import "Progress.xc"
 #import "UXSegmentedControl.xc"
 #import "UXPopUpButton.xc"
 #import "UXGeometry.xc"
@@ -172,8 +172,8 @@ i32 buildWidget(u8* name, UXView* content)
         }
     else if (swEq(name, (u8*)"progress"))
         {
-        UXProgress* p = UXProgress.make(100);
-        p.setCompleted(60);
+        Progress* p = Progress.withTotal((i64)100);
+        p.setCompletedUnitCount((i64)60);
         UXProgressBar* pb = new UXProgressBar();
         pb.setProgress(p);
         content.addSubview(pb, stage((i32)UXKindProgress, (i32)180));

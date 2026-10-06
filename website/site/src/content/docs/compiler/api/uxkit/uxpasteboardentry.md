@@ -46,8 +46,7 @@ by picking a string nobody else will use, usually in reverse-DNS form.
 Nothing registers a type and nothing validates one. Two programs interoperate by
 agreeing on a string, as the platform pasteboards do.
 
-`public.file-url` payloads are [`UXURL`](/compiler/api/uxkit/uxurl/) text, which
-links `file:` URLs and [`UXPath`](/compiler/api/uxkit/uxpath/).
+`public.file-url` payloads are `file:` URL text ([`Url`](/compiler/api/url/)).
 
 ## Payloads are strings for now
 
@@ -59,7 +58,7 @@ Text, serialised structures and URLs all travel as strings. Raw bytes are not
 supported yet.
 
 Strings cover the current cases: a clipboard of text, a drag of file references,
-an application's own model serialised as [JSON](/compiler/api/uxkit/uxjson/).
+an application's own model serialised as [JSON](/compiler/api/json/).
 They also keep the pasteboard neutral across backends that disagree about binary
 formats. If your payload is binary, encode it.
 
@@ -95,6 +94,3 @@ The payload.
 
 - [`UXPasteboard`](/compiler/api/uxkit/uxpasteboard/): the board, and its
   change count
-- [`UXURL`](/compiler/api/uxkit/uxurl/): what a `public.file-url` payload holds
-- [`UXJSON`](/compiler/api/uxkit/uxjson/): a reasonable way to serialise your
-  own type

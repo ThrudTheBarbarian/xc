@@ -55,7 +55,7 @@ void main(void)
     check("hit in the inset margin", cv.itemAtPoint((i16)4, (i16)4), (i32)-1);
     check("hit past the last item", cv.itemAtPoint((i16)40, (i16)400), (i32)-1);
 
-    // selection (via UXIndexSet)
+    // selection (via IndexSet)
     cv.selectItem((i32)2);
     check("one selected", cv.selectionCount(), (i32)1);
     check("item2 selected", cv.isSelected((i32)2) ? (i32)1 : (i32)0, (i32)1);
@@ -73,7 +73,7 @@ void main(void)
 
     if (gFails == (i32)0)
         {
-        Stdio.printf("PASS: UXCollectionView — grid layout, column fitting, hit-test, UXIndexSet selection.\n");
+        Stdio.printf("PASS: UXCollectionView — grid layout, column fitting, hit-test, IndexSet selection.\n");
         }
     else
         {

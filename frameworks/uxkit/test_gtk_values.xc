@@ -11,7 +11,7 @@
 #import "UXSlider.xc"
 #import "UXStepper.xc"
 #import "UXProgressBar.xc"
-#import "UXProgress.xc"
+#import "Progress.xc"
 #import "UXPopUpButton.xc"
 #import "UXGeometry.xc"
 extern i32 ux_gtk_test_native_value(i32 handle, i32 node);
@@ -71,9 +71,9 @@ void main(void)
     UXStepper* st = new UXStepper();
     st.setAction(&t.picked);
     root.addSubview(st, UXGeom.make((i16)20, (i16)100, (i16)120, (i16)32));
-    UXProgress* prog = new UXProgress();
-    prog.setTotal((i32)4);
-    prog.setCompleted((i32)1);
+    Progress* prog = new Progress();
+    prog.setTotalUnitCount((i64)((i32)4));
+    prog.setCompletedUnitCount((i64)((i32)1));
     UXProgressBar* pg = new UXProgressBar();
     pg.setProgress(prog);
     root.addSubview(pg, UXGeom.make((i16)20, (i16)145, (i16)240, (i16)20));
@@ -95,7 +95,7 @@ void main(void)
     cb.setChecked(true);
     sl.setValue((i32)70);
     st.setValue((i32)4);
-    prog.setCompleted((i32)3);
+    prog.setCompletedUnitCount((i64)((i32)3));
     pop.selectItem((i32)2);
     win.displayAll();
     ck((u8*)"the app checking the box checks the GtkCheckButton", ux_gtk_test_native_value(h, (i32)cb.index) == (i32)1);

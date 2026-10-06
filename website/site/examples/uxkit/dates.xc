@@ -1,11 +1,10 @@
-// dates.xc — UXDate, UXTimeZone, UXDateFormatter and UXNumberFormatter.
+// dates.xc — UXDate, UXTimeZone and UXDateFormatter.
 //
 // Every value here is fixed rather than read from the clock, so the output is
 // the same on every run and on every backend — which is also the point of the
 // integer civil-calendar algorithm underneath: no floating point anywhere.
 #import <Stdio.xc>
 #import "UXDate.xc"
-#import "UXNumberFormatter.xc"
 
 void show(u8* label, u8* pattern, UXDate* d) {
     UXDateFormatter* f = UXDateFormatter.withPattern(pattern);
@@ -73,36 +72,4 @@ void main(void) {
                  UXTimeZone.named((u8*)"UTC") == (UXTimeZone*)0 ? 0 : 1,
                  UXTimeZone.named((u8*)"Mars") == (UXTimeZone*)0 ? 0 : 1,
                  UXTimeZone.knownCount());
-
-    // ---- numbers ----------------------------------------------------------
-    // Grouping is ON by default, so turning it OFF is the deliberate act.
-    UXNumberFormatter* plain = new UXNumberFormatter();
-    plain.setGrouping(false);
-    UXNumberFormatter* dec   = UXNumberFormatter.decimal();
-    UXNumberFormatter* money = UXNumberFormatter.currency((u8*)"$");
-
-    Stdio.printf("ungrouped: %s   default: %s\n",
-                 plain.format((i32)1234567), dec.format((i32)1234567));
-
-    // Fixed point is a SCALED INTEGER plus a decimal count: pass cents, not
-    // dollars, and the result is exact with no float in sight.
-    Stdio.printf("money: %s   negative: %s\n",
-                 money.formatFixed((i32)129900, (i32)2),
-                 money.formatFixed(-(i32)129900, (i32)2));
-
-    // Grouping and separators are settable, which is as far as locale goes.
-    UXNumberFormatter* euro = UXNumberFormatter.currency((u8*)"EUR ");
-    euro.setGroupSeparator((u8)'.');
-    euro.setDecimalSeparator((u8)',');
-    Stdio.printf("euro:  %s\n", euro.formatFixed((i32)129900, (i32)2));
-
-    UXNumberFormatter* pc = new UXNumberFormatter();
-    pc.setSuffix((u8*)"%");
-    Stdio.printf("pct:   %s   one dp: %s\n",
-                 pc.format((i32)42), pc.formatFixed((i32)425, (i32)1));
-
-    // Small values still pad to the requested decimals.
-    Stdio.printf("edges: %s %s %s\n",
-                 dec.format((i32)0), dec.format((i32)999),
-                 plain.formatFixed((i32)5, (i32)2));
 }

@@ -18,7 +18,7 @@
 // the truth, and a declaration left behind is shown as such.
 #import "Array.xc"
 #import "Data.xc"
-#import "UXJSON.xc"
+#import "JSON.xc"
 #import "UXFileIO.xc"
 #import "UXRscModel.xc"
 
@@ -611,47 +611,68 @@ class RKClassBook : Object
     // the chain), replacing an earlier reading of the same name.
     i32 loadJson(u8* json, u8* source)
         {
-        UXJSONValue* root = UXJSON.parse(json);
-        if (root == (UXJSONValue*)0 || !root.has((u8*)"classes"))
+        Object* root = (Object*)0;
+        bool bad = false;
+        try
+            {
+            root = JSON.parse(String.withCString(json));
+            }
+        catch (e)
+            {
+            bad = true; // not a return here: a catch that returns loses the try's assignment (compiler bug)
+            }
+        if (bad)
             {
             return (i32)-1;
             }
-        UXJSONValue* cs = root.get((u8*)"classes");
-        i32 designable = (i32)0;
-        for (i32 i = (i32)0; i < cs.count(); i = i + (i32)1)
+        Array* cs = (Array* ?)RKClassBook.field(root, (u8*)"classes");
+        if (cs == (Array*)0)
             {
-            UXJSONValue* cv = cs.at(i);
-            if (!cv.has((u8*)"name"))
+            return (i32)-1;
+            }
+        i32 designable = (i32)0;
+        for (u32 i = (u32)0; i < cs.count(); i = i + (u32)1)
+            {
+            Object* cv = cs.get(i);
+            u8* name = RKClassBook.text(cv, (u8*)"name");
+            if (name == (u8*)0)
                 {
                 continue;
                 }
-            RKClass* c = RKClass.make(cv.get((u8*)"name").asString(),
-                                      cv.has((u8*)"parent") ? cv.get((u8*)"parent").asString() : (u8*)"",
-                                      (i32)RKC_REFLECTED);
+            u8* parent = RKClassBook.text(cv, (u8*)"parent");
+            RKClass* c = RKClass.make(name, parent != (u8*)0 ? parent : (u8*)"", (i32)RKC_REFLECTED);
             c.source = source;
-            if (cv.has((u8*)"outlets"))
+            Array* os = (Array* ?)RKClassBook.field(cv, (u8*)"outlets");
+            for (u32 k = (u32)0; os != (Array*)0 && k < os.count(); k = k + (u32)1)
                 {
-                UXJSONValue* os = cv.get((u8*)"outlets");
-                for (i32 k = (i32)0; k < os.count(); k = k + (i32)1)
-                    {
-                    c.outlets.add(RKMember.make(os.at(k).get((u8*)"name").asString(), os.at(k).get((u8*)"type").asString()));
-                    }
+                c.outlets.add(RKMember.make(RKClassBook.text(os.get(k), (u8*)"name"), RKClassBook.text(os.get(k), (u8*)"type")));
                 }
-            if (cv.has((u8*)"actions"))
+            Array* as = (Array* ?)RKClassBook.field(cv, (u8*)"actions");
+            for (u32 k = (u32)0; as != (Array*)0 && k < as.count(); k = k + (u32)1)
                 {
-                UXJSONValue* as = cv.get((u8*)"actions");
-                for (i32 k = (i32)0; k < as.count(); k = k + (i32)1)
-                    {
-                    c.actions.add(RKMember.make(as.at(k).get((u8*)"name").asString(), as.at(k).get((u8*)"sender").asString()));
-                    }
+                c.actions.add(RKMember.make(RKClassBook.text(as.get(k), (u8*)"name"), RKClassBook.text(as.get(k), (u8*)"sender")));
                 }
-            if (cv.has((u8*)"designable") && cv.get((u8*)"designable").asBool())
+            Number* dz = (Number* ?)RKClassBook.field(cv, (u8*)"designable");
+            if (dz != (Number*)0 && dz.asBool())
                 {
                 designable = designable + (i32)1;
                 }
             self.adopt(c);
             }
         return designable;
+        }
+    // A JSON object's member, or 0 when `o` is not an object or has no such member.
+    static Object* field(Object* o, u8* key)
+        {
+        Map* m = (Map* ?)o;
+        return m != (Map*)0 ? m.get(String.withCString(key)) : (Object*)0;
+        }
+    // A JSON object's string member as a C string of its own (the parsed tree goes when the
+    // reading is done), or 0.
+    static u8* text(Object* o, u8* key)
+        {
+        String* v = (String* ?)RKClassBook.field(o, key);
+        return v != (String*)0 ? UXStr.dup(v.cString()) : (u8*)0;
         }
     // A reflected class in place of any earlier reading of the same name.
     void adopt(RKClass* c)

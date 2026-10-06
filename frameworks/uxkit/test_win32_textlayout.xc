@@ -7,7 +7,7 @@
 #import <Stdio.xc>
 #import "UXWin32Driver.xc"
 #import "UXTextLayout.xc"
-#import "UXAttributedString.xc"
+#import "UXTextStyle.xc"
 #import "UXWindow.xc"
 #import "UXGeometry.xc"
 
@@ -40,12 +40,12 @@ void checkTrue(u8* what, bool cond)
 u8* gText;
 
 // The widest line the wrap produced, measured the same way the wrap measured it.
-i32 widestLine(Array<UXRange>* lines, i32 size)
+i32 widestLine(Array<Range>* lines, i32 size)
     {
     i32 w = (i32)0;
     for (u16 i = (u16)0; i < lines.count(); i = i + (u16)1)
         {
-        UXRange* ln = (UXRange* ?)lines.get(i);
+        Range* ln = (Range* ?)lines.get(i);
         i32 lw = UXTextLayout.spanWidth(gText, ln.loc, ln.loc + ln.len, size);
         if (lw > w)
             {
@@ -56,11 +56,11 @@ i32 widestLine(Array<UXRange>* lines, i32 size)
     }
 // Does any line start or end in the middle of a word?  (A hard-broken over-long word is the one
 // legitimate case, and this text has none.)
-bool breaksMidWord(Array<UXRange>* lines)
+bool breaksMidWord(Array<Range>* lines)
     {
     for (u16 i = (u16)0; i < lines.count(); i = i + (u16)1)
         {
-        UXRange* ln = (UXRange* ?)lines.get(i);
+        Range* ln = (Range* ?)lines.get(i);
         if (ln.len == (i32)0)
             {
             continue;
@@ -100,7 +100,7 @@ void main(void)
     gText = (u8*)"The quick brown fox jumps over the lazy dog. Pack my box with five dozen liquor jugs.";
 
     // THE invariant: no produced line is wider than the measure it was wrapped to.
-    Array<UXRange>* lines = UXTextLayout.wrapFont(gText, (i16)200, (i32)0);
+    Array<Range>* lines = UXTextLayout.wrapFont(gText, (i16)200, (i32)0);
     checkTrue("every line fits 200px", widestLine(lines, (i32)0) <= (i32)200);
     checkTrue("wrapped onto several lines", lines.count() > (u16)1);
     checkTrue("no line breaks mid-word", !breaksMidWord(lines));
@@ -120,15 +120,15 @@ void main(void)
     // which characters they are.
     u8* mixed = (u8*)"iiiii iiiii iiiii iiiii WWWWW WWWWW WWWWW WWWWW";
     gText = mixed;
-    Array<UXRange>* measured = UXTextLayout.wrapFont(mixed, (i16)150, (i32)0);
-    Array<UXRange>* uniform = UXTextLayout.wrap(mixed, (i16)150, (i16)8);
+    Array<Range>* measured = UXTextLayout.wrapFont(mixed, (i16)150, (i32)0);
+    Array<Range>* uniform = UXTextLayout.wrap(mixed, (i16)150, (i16)8);
     bool differs = measured.count() != uniform.count();
     if (!differs)
         {
         for (u16 i = (u16)0; i < measured.count(); i = i + (u16)1)
             {
-            UXRange* a = (UXRange* ?)measured.get(i);
-            UXRange* b = (UXRange* ?)uniform.get(i);
+            Range* a = (Range* ?)measured.get(i);
+            Range* b = (Range* ?)uniform.get(i);
             if (a.loc != b.loc || a.len != b.len)
                 {
                 differs = true;
@@ -140,8 +140,8 @@ void main(void)
 
     // ---- alignment ------------------------------------------------------------------------
     gText = (u8*)"The quick brown fox jumps over the lazy dog. Pack my box with five dozen liquor jugs.";
-    Array<UXRange>* ls = UXTextLayout.wrapFont(gText, (i16)200, (i32)0);
-    UXRange* first = (UXRange* ?)ls.get((u16)0);
+    Array<Range>* ls = UXTextLayout.wrapFont(gText, (i16)200, (i32)0);
+    Range* first = (Range* ?)ls.get((u16)0);
     i32 fw = UXTextLayout.spanWidth(gText, first.loc, first.loc + first.len, (i32)0);
 
     Array<UXTextRun>* rl = UXTextLayout.layoutLine(gText, first, (i16)200, (i32)0, (i32)UX_ALIGN_LEFT, false);
@@ -173,7 +173,7 @@ void main(void)
     checkTrue("justify: words in order, no overlap", ordered);
 
     // The last line of a paragraph sets FLUSH LEFT even when justified.
-    UXRange* lastLine = (UXRange* ?)ls.get((u16)(ls.count() - (u16)1));
+    Range* lastLine = (Range* ?)ls.get((u16)(ls.count() - (u16)1));
     Array<UXTextRun>* rlast = UXTextLayout.layoutLine(gText, lastLine, (i16)200, (i32)0, (i32)UX_ALIGN_JUSTIFY, true);
     check("justify: last line is one flush-left run", (i32)rlast.count(), (i32)1);
     check("justify: ...at x=0", (i32)((UXTextRun* ?)rlast.get((u16)0)).x, (i32)0);
@@ -185,24 +185,24 @@ void main(void)
     // Bold IS wider: the same characters must measure wider once styled, or attributed text would be
     // wrapped with the plain metric and overflow its column.
     u8* plain = (u8*)"The quick brown fox jumps over the lazy dog";
-    UXAttributedString* as = UXAttributedString.make(plain);
+    AttributedString* as = AttributedString.withString(String.withCString(plain));
     i32 wPlain = UXTextLayout.spanWidthAttr(as, (i32)0, as.length(), (i32)16);
-    as.setBold(true, (i32)0, as.length());
+    UXTextStyle.setBold(as, true, (i32)0, as.length());
     i32 wBold = UXTextLayout.spanWidthAttr(as, (i32)0, as.length(), (i32)16);
     checkTrue("attributed: all-bold measures wider than plain", wBold > wPlain);
     check("attributed: plain measure matches the plain metric",
           wPlain, gDriver.textWidth(plain, (i32)16));
 
     // A styled range must not change the text, only its width — and the wrap must respect it.
-    UXAttributedString* mix = UXAttributedString.make(plain);
-    mix.setSize((i16)28, (i32)4, (i32)5); // "quick" much bigger
+    AttributedString* mix = AttributedString.withString(String.withCString(plain));
+    UXTextStyle.setSize(mix, (i16)28, (i32)4, (i32)5); // "quick" much bigger
     i32 wMix = UXTextLayout.spanWidthAttr(mix, (i32)0, mix.length(), (i32)16);
     checkTrue("attributed: a larger run widens the span", wMix > wPlain);
-    Array<UXRange>* ml = UXTextLayout.wrapAttr(mix, (i16)200, (i32)16);
+    Array<Range>* ml = UXTextLayout.wrapAttr(mix, (i16)200, (i32)16);
     bool allFit = true;
     for (u16 i = (u16)0; i < ml.count(); i = i + (u16)1)
         {
-        UXRange* ln = (UXRange* ?)ml.get(i);
+        Range* ln = (Range* ?)ml.get(i);
         if (UXTextLayout.spanWidthAttr(mix, ln.loc, ln.loc + ln.len, (i32)16) > (i32)200)
             {
             allFit = false;
@@ -212,7 +212,7 @@ void main(void)
 
     // Style runs and word placement compose: justified attributed text still ends on the measure,
     // and every piece carries the attributes of the characters it covers.
-    UXRange* ml0 = (UXRange* ?)ml.get((u16)0);
+    Range* ml0 = (Range* ?)ml.get((u16)0);
     Array<UXTextRun>* sruns = UXTextLayout.layoutLineAttr(mix, ml0, (i16)200, (i32)16, (i32)UX_ALIGN_JUSTIFY, false);
     checkTrue("attributed: line splits into style runs", sruns.count() >= (u16)2);
     UXTextRun* sl = (UXTextRun* ?)sruns.get((u16)(sruns.count() - (u16)1));
@@ -222,12 +222,12 @@ void main(void)
     for (u16 i = (u16)0; i < sruns.count(); i = i + (u16)1)
         {
         UXTextRun* r = (UXTextRun* ?)sruns.get(i);
-        if (r.attr == (UXCharAttr*)0)
+        if (r.attr == (UXTextStyle*)0)
             {
             attrsOk = false;
             continue;
             }
-        if (!r.attr.sameAs(mix.attributesAt(r.loc)))
+        if (!r.attr.sameAs(UXTextStyle.at(mix, r.loc)))
             {
             attrsOk = false;
             }

@@ -11,7 +11,7 @@
 #import "UXWindow.xc"
 #import "UXView.xc"
 #import "UXControl.xc"
-#import "UXNotificationCenter.xc"
+#import "NotificationCenter.xc"
 #import "UXString.xc"
 #import "UXGeometry.xc"
 #import "UXGraphics.xc"
@@ -47,11 +47,12 @@ class ResizeWatcher : Object
         {
         count = (i32)0;
         }
-    void onResize(UXNotification* n)
+    void onResize(Notification* n)
         {
         count = count + (i32)1;
-        Stdio.printf("  [observer] heard resize to %d x %d (notification #%d)\n",
-                     (i16)n.a, (i16)n.b, (i16)count);
+        i32 w = ((Number* ?)n.userInfo.get(String.withCString((u8*)"width"))).value();
+        i32 h = ((Number* ?)n.userInfo.get(String.withCString((u8*)"height"))).value();
+        Stdio.printf("  [observer] heard resize to %d x %d (notification #%d)\n", w, h, count);
         }
     }
 
@@ -91,8 +92,8 @@ class ResizeWatcher : Object
 
         // A separate object subscribes to the resize notification — no delegate wiring, no window ref.
         watcher = new ResizeWatcher();
-        UXNotificationCenter.shared().addObserver((Object*)watcher, &watcher.onResize,
-                                                  UXWindowDidResizeNotification, (Object*)0);
+        NotificationCenter.shared().addObserver((Object*)watcher, &watcher.onResize,
+                                                String.withCString(UXWindowDidResizeNotification), (Object*)0);
 
         win.displayAll();
         Stdio.printf("resize demo up — drag the window frame to resize\n");

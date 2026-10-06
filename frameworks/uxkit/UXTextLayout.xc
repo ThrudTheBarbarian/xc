@@ -3,12 +3,12 @@
 // Break a string into LINES that fit a pixel width, preferring to break at spaces and falling back to
 // a hard character break for a word longer than the line; explicit newlines always break.  Widths are
 // estimated from a uniform character width (a real backend refines with glyph metrics), so the wrap is
-// pure arithmetic and unit-testable.  Each line is an UXRange into the original text — no copies —
+// pure arithmetic and unit-testable.  Each line is an Range into the original text — no copies —
 // which is what a text view wants for drawing and hit-testing rows.
 #import "Array.xc"
-#import "UXRange.xc"            // a line IS a range; a run is a range with a position and a style
+#import "Range.xc"              // a line IS a range; a run is a range with a position and a style
 #import "UXViewDriver.xc"       // gDriver.textWidth — the real glyph metrics wrapFont breaks on
-#import "UXAttributedString.xc" // rich text: per-run styles, measured and drawn in their own font
+#import "UXTextStyle.xc"       // rich text (an AttributedString) and the style of a run of it
 
 // How a line sits within its measure.  JUSTIFY stretches the inter-word gaps to fill the measure —
 // except on the last line of a paragraph, which sets flush left: stretching it is the classic
@@ -34,19 +34,19 @@
 
 // A positioned piece of a line: the range to draw and the x to draw it at, relative to the measure's
 // left edge.  Left/centre/right give one run per line; justified gives one per word.
-// A run IS a range, plus where to put it: extending UXRange rather than respelling loc/len keeps one
-// vocabulary across the toolkit.  The factory is `at` and not `make` because xtc dispatches on the
-// NAME alone — an inherited UXRange.make(loc,len) and a two-arities-different UXTextRun.make would
-// be the same method as far as the compiler is concerned.
-class UXTextRun : UXRange
+// A run IS a range, plus where to put it: extending Range rather than respelling loc/len keeps one
+// vocabulary.  The factory is `at` and not `make` because xtc dispatches on the NAME alone — an
+// inherited Range.make(loc,len) and a two-arities-different UXTextRun.make would be the same method
+// as far as the compiler is concerned.
+class UXTextRun : Range
     {
     i32 x;
-    UXCharAttr* attr; // the style to draw it in (nil = the view's default)
+    UXTextStyle* attr; // the style to draw it in (nil = the view's default)
     void init(void)
         {
         super.init();
         x = (i32)0;
-        attr = (UXCharAttr*)0;
+        attr = (UXTextStyle*)0;
         }
     static UXTextRun* at(i32 l, i32 n, i32 px)
         {
@@ -56,7 +56,7 @@ class UXTextRun : UXRange
         r.x = px;
         return r;
         }
-    static UXTextRun* styled(i32 l, i32 n, i32 px, UXCharAttr* a)
+    static UXTextRun* styled(i32 l, i32 n, i32 px, UXTextStyle* a)
         {
         UXTextRun* r = UXTextRun.at(l, n, px);
         r.attr = a;
@@ -126,9 +126,9 @@ class UXTextLayout
     // wrap(), but measuring the font it will be DRAWN in rather than assuming a uniform character
     // width.  Same greedy rule — a word joins the open line if the span still fits, else it starts a
     // new one; an over-long word hard-breaks; newlines always break.
-    static Array<UXRange>* wrapFont(u8* text, i16 width, i32 size)
+    static Array<Range>* wrapFont(u8* text, i16 width, i32 size)
         {
-        Array<UXRange>* lines = new Array();
+        Array<Range>* lines = new Array();
         i32 n = UXTextLayout.slen(text);
         i32 lineStart = (i32)-1;
         i32 lineEnd = (i32)-1;
@@ -140,11 +140,11 @@ class UXTextLayout
                 {
                 if (lineStart >= (i32)0)
                     {
-                    lines.add(UXRange.make(lineStart, lineEnd - lineStart));
+                    lines.add(Range.make(lineStart, lineEnd - lineStart));
                     }
                 else
                     {
-                    lines.add(UXRange.make(i, (i32)0));
+                    lines.add(Range.make(i, (i32)0));
                     }
                 lineStart = (i32)-1;
                 i = i + (i32)1;
@@ -169,7 +169,7 @@ class UXTextLayout
             // it does not: flush the line
             if (lineStart >= (i32)0)
                 {
-                lines.add(UXRange.make(lineStart, lineEnd - lineStart));
+                lines.add(Range.make(lineStart, lineEnd - lineStart));
                 lineStart = (i32)-1;
                 }
             i32 p = wordStart; // place the word, breaking it if
@@ -181,7 +181,7 @@ class UXTextLayout
                     {
                     break;
                     }
-                lines.add(UXRange.make(p, fit));
+                lines.add(Range.make(p, fit));
                 p = p + fit;
                 }
             lineStart = p;
@@ -189,7 +189,7 @@ class UXTextLayout
             }
         if (lineStart >= (i32)0)
             {
-            lines.add(UXRange.make(lineStart, lineEnd - lineStart));
+            lines.add(Range.make(lineStart, lineEnd - lineStart));
             }
         return lines;
         }
@@ -198,9 +198,9 @@ class UXTextLayout
     // the current line if the span from the line's start through the word still fits, else it starts a
     // new line (trailing/leading run-separating spaces are absorbed); a word wider than the line hard-
     // breaks; newlines always break (an empty line between two newlines is preserved).
-    static Array<UXRange>* wrap(u8* text, i16 width, i16 charWidth)
+    static Array<Range>* wrap(u8* text, i16 width, i16 charWidth)
         {
-        Array<UXRange>* lines = new Array();
+        Array<Range>* lines = new Array();
         i32 n = UXTextLayout.slen(text);
         i32 maxChars = charWidth > (i16)0 ? (i32)width / (i32)charWidth : n;
         if (maxChars < (i32)1)
@@ -219,11 +219,11 @@ class UXTextLayout
                 {
                 if (lineStart >= (i32)0)
                     {
-                    lines.add(UXRange.make(lineStart, lineEnd - lineStart));
+                    lines.add(Range.make(lineStart, lineEnd - lineStart));
                     }
                 else
                     {
-                    lines.add(UXRange.make(i, (i32)0));
+                    lines.add(Range.make(i, (i32)0));
                     }
                 lineStart = (i32)-1;
                 i = i + (i32)1;
@@ -258,7 +258,7 @@ class UXTextLayout
                     i32 p = wordStart;
                     while (wordEnd - p > maxChars)
                         {
-                        lines.add(UXRange.make(p, maxChars));
+                        lines.add(Range.make(p, maxChars));
                         p = p + maxChars;
                         }
                     lineStart = p;
@@ -273,7 +273,7 @@ class UXTextLayout
             // wrap: flush, then place the word
             else
                 {
-                lines.add(UXRange.make(lineStart, lineEnd - lineStart));
+                lines.add(Range.make(lineStart, lineEnd - lineStart));
                 if (wordLen <= maxChars)
                     {
                     lineStart = wordStart;
@@ -284,7 +284,7 @@ class UXTextLayout
                     i32 p = wordStart;
                     while (wordEnd - p > maxChars)
                         {
-                        lines.add(UXRange.make(p, maxChars));
+                        lines.add(Range.make(p, maxChars));
                         p = p + maxChars;
                         }
                     lineStart = p;
@@ -294,14 +294,14 @@ class UXTextLayout
             }
         if (lineStart >= (i32)0)
             {
-            lines.add(UXRange.make(lineStart, lineEnd - lineStart));
+            lines.add(Range.make(lineStart, lineEnd - lineStart));
             }
         return lines;
         }
 
     // Lay ONE line out within `measure`, as runs to draw.  `isLast` marks the last line of the
     // paragraph (or the line before an explicit newline), which never stretches.
-    static Array<UXTextRun>* layoutLine(u8* text, UXRange* ln, i16 measure, i32 size, i32 align, bool isLast)
+    static Array<UXTextRun>* layoutLine(u8* text, Range* ln, i16 measure, i32 size, i32 align, bool isLast)
         {
         Array<UXTextRun>* runs = new Array();
         i32 start = ln.loc;
@@ -397,13 +397,13 @@ class UXTextLayout
 
     // Is line `i` the last of its paragraph — the last line overall, or the one before a newline?
     // Justification asks this, and only the layout can answer it.
-    static bool isParagraphEnd(u8* text, Array<UXRange>* lines, u16 i)
+    static bool isParagraphEnd(u8* text, Array<Range>* lines, u16 i)
         {
         if (i + (u16)1 >= lines.count())
             {
             return true;
             }
-        UXRange* ln = (UXRange* ?)lines.get(i);
+        Range* ln = (Range* ?)lines.get(i);
         i32 after = ln.loc + ln.len;
         while (text[after] == (u8)' ')
             {
@@ -416,19 +416,16 @@ class UXTextLayout
     // Width of text[start..end) where every character may carry its own style: split at attribute
     // boundaries and measure each piece in ITS font, because bold is wider than regular and a run
     // measured with the plain metric would overflow the column it was wrapped into.
-    static i32 spanWidthAttr(UXAttributedString* as, i32 start, i32 end, i32 baseSize)
+    static i32 spanWidthAttr(AttributedString* as, i32 start, i32 end, i32 baseSize)
         {
-        u8* text = as.stringValue();
+        String* textStr = as.text(); // held: text() is a String of its own, its bytes go with it
+        u8* text = textStr.cString();
         i32 total = (i32)0;
         i32 i = start;
         while (i < end)
             {
-            UXCharAttr* a = as.attributesAt(i);
-            i32 j = i + (i32)1;
-            while (j < end && as.attributesAt(j).sameAs(a))
-                {
-                j = j + (i32)1;
-                }
+            UXTextStyle* a = UXTextStyle.at(as, i);
+            i32 j = UXTextLayout.styleEnd(as, i, end);
             i32 n = j - i;
             if (n > (i32)UX_TL_SCRATCH - (i32)1)
                 {
@@ -453,11 +450,30 @@ class UXTextLayout
         return total;
         }
 
-    // wrapFont for attributed text: identical greedy rule, measured per style.
-    static Array<UXRange>* wrapAttr(UXAttributedString* as, i16 width, i32 baseSize)
+    // Where the style at `i` stops, at most `end`: the end of its run (Foundation keeps runs merged,
+    // so a run's neighbours have other styles, or other attributes UXKit does not draw).
+    static i32 styleEnd(AttributedString* as, i32 i, i32 end)
         {
-        Array<UXRange>* lines = new Array();
-        u8* text = as.stringValue();
+        UXTextStyle* a = UXTextStyle.at(as, i);
+        i32 j = i;
+        while (j < end)
+            {
+            i32 runEnd = as.runRangeAt(j).end();
+            j = runEnd < end ? runEnd : end;
+            if (j >= end || !UXTextStyle.at(as, j).sameAs(a))
+                {
+                break;
+                }
+            }
+        return j > i ? j : i + (i32)1;
+        }
+
+    // wrapFont for attributed text: identical greedy rule, measured per style.
+    static Array<Range>* wrapAttr(AttributedString* as, i16 width, i32 baseSize)
+        {
+        Array<Range>* lines = new Array();
+        String* textStr = as.text(); // held: text() is a String of its own, its bytes go with it
+        u8* text = textStr.cString();
         i32 n = as.length();
         i32 lineStart = (i32)-1;
         i32 lineEnd = (i32)-1;
@@ -469,11 +485,11 @@ class UXTextLayout
                 {
                 if (lineStart >= (i32)0)
                     {
-                    lines.add(UXRange.make(lineStart, lineEnd - lineStart));
+                    lines.add(Range.make(lineStart, lineEnd - lineStart));
                     }
                 else
                     {
-                    lines.add(UXRange.make(i, (i32)0));
+                    lines.add(Range.make(i, (i32)0));
                     }
                 lineStart = (i32)-1;
                 i = i + (i32)1;
@@ -497,7 +513,7 @@ class UXTextLayout
                 }
             if (lineStart >= (i32)0)
                 {
-                lines.add(UXRange.make(lineStart, lineEnd - lineStart));
+                lines.add(Range.make(lineStart, lineEnd - lineStart));
                 lineStart = (i32)-1;
                 }
             i32 p = wordStart;
@@ -520,7 +536,7 @@ class UXTextLayout
                     {
                     break;
                     }
-                lines.add(UXRange.make(p, fit));
+                lines.add(Range.make(p, fit));
                 p = p + fit;
                 }
             lineStart = p;
@@ -528,7 +544,7 @@ class UXTextLayout
             }
         if (lineStart >= (i32)0)
             {
-            lines.add(UXRange.make(lineStart, lineEnd - lineStart));
+            lines.add(Range.make(lineStart, lineEnd - lineStart));
             }
         return lines;
         }
@@ -537,7 +553,7 @@ class UXTextLayout
     // attribute change (so each run draws in one font) and, when justified, at every word as well —
     // the two cuts compose: the x of a piece is where the alignment put its word plus how far into
     // that word the style change fell.
-    static Array<UXTextRun>* layoutLineAttr(UXAttributedString* as, UXRange* ln, i16 measure, i32 baseSize,
+    static Array<UXTextRun>* layoutLineAttr(AttributedString* as, Range* ln, i16 measure, i32 baseSize,
                                             i32 align, bool isLast)
         {
         Array<UXTextRun>* out = new Array();
@@ -545,7 +561,8 @@ class UXTextLayout
             {
             return out;
             }
-        u8* text = as.stringValue();
+        String* textStr = as.text(); // held: text() is a String of its own, its bytes go with it
+        u8* text = textStr.cString();
         // Word/alignment placement first, on the text alone.
         Array<UXTextRun>* placed = UXTextLayout.layoutLineWidth(as, ln, measure, baseSize, align, isLast);
         for (u16 r = (u16)0; r < placed.count(); r = r + (u16)1)
@@ -557,12 +574,8 @@ class UXTextLayout
             // cut this piece at attribute boundaries
             while (i < end)
                 {
-                UXCharAttr* a = as.attributesAt(i);
-                i32 j = i + (i32)1;
-                while (j < end && as.attributesAt(j).sameAs(a))
-                    {
-                    j = j + (i32)1;
-                    }
+                UXTextStyle* a = UXTextStyle.at(as, i);
+                i32 j = UXTextLayout.styleEnd(as, i, end);
                 out.add(UXTextRun.styled(i, j - i, x, a));
                 x = x + UXTextLayout.spanWidthAttr(as, i, j, baseSize);
                 i = j;
@@ -572,11 +585,12 @@ class UXTextLayout
         }
 
     // The alignment solve for attributed text — layoutLine's shape, measuring per style.
-    static Array<UXTextRun>* layoutLineWidth(UXAttributedString* as, UXRange* ln, i16 measure, i32 baseSize,
+    static Array<UXTextRun>* layoutLineWidth(AttributedString* as, Range* ln, i16 measure, i32 baseSize,
                                              i32 align, bool isLast)
         {
         Array<UXTextRun>* runs = new Array();
-        u8* text = as.stringValue();
+        String* textStr = as.text(); // held: text() is a String of its own, its bytes go with it
+        u8* text = textStr.cString();
         i32 start = ln.loc;
         i32 end = ln.loc + ln.len;
         i32 w = UXTextLayout.spanWidthAttr(as, start, end, baseSize);

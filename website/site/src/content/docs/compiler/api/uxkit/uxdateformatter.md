@@ -164,5 +164,3 @@ compiles it, and the output above is what it prints.
 
 - [`UXDate`](/compiler/api/uxkit/uxdate/): the value being formatted
 - [`UXTimeZone`](/compiler/api/uxkit/uxtimezone/): offsets, and printing them
-- [`UXNumberFormatter`](/compiler/api/uxkit/uxnumberformatter/): the same job
-  for numbers

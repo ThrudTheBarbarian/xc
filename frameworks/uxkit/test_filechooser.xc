@@ -1,7 +1,6 @@
 // test_filechooser.xc — UXFileChooser: extension filtering, navigation, result path, save mode.
 #import <Stdio.xc>
 #import "UXFileChooser.xc"
-#import "UXPath.xc"
 
 i32 gFails;
 void check(u8* what, i32 got, i32 want)
@@ -61,7 +60,7 @@ void main(void)
     {
     gFails = (i32)0;
     UXFileChooser* ch = new UXFileChooser();
-    ch.setDirectory(UXPath.parse((u8*)"/Users/ada"));
+    ch.setDirectory(String.withCString((u8*)"/Users/ada"));
     ch.setEntries(listing());
 
     // no filter -> everything (5 entries)
@@ -78,9 +77,9 @@ void main(void)
 
     // navigation
     ch.enter((u8*)"Documents");
-    eq("entered subdir", ch.directory().toString(), (u8*)"/Users/ada/Documents");
+    eq("entered subdir", ch.directory().cString(), (u8*)"/Users/ada/Documents");
     ch.goUp();
-    eq("went up", ch.directory().toString(), (u8*)"/Users/ada");
+    eq("went up", ch.directory().cString(), (u8*)"/Users/ada");
 
     // result path (open mode)
     eq("open result path", ch.resultPath((u8*)"report.txt"), (u8*)"/Users/ada/report.txt");
@@ -91,7 +90,7 @@ void main(void)
 
     // save mode: result uses the save name, not the chosen entry
     UXFileChooser* sv = new UXFileChooser();
-    sv.setDirectory(UXPath.parse((u8*)"/tmp"));
+    sv.setDirectory(String.withCString((u8*)"/tmp"));
     sv.setSaveMode(true);
     eq("save mode default prompt", sv.promptString(), (u8*)"Save");
     sv.setSaveName((u8*)"untitled.txt");

@@ -1,5 +1,5 @@
 #!/bin/sh
-# make win32-rules — the kitchen sink's rule editor over UXPredicate, driven headlessly.
+# make win32-rules — the kitchen sink's rule editor over Foundation's Predicate, driven headlessly.
 # Builds the real KSRulesBoard (the same code the three backends show), sets rule rows, and checks the
 # filtered row set: AND/OR/NOT, the string and numeric operators, MATCHES, inactive (empty) rows, and
 # the row add/delete shuffle.  Win32/Wine because that backend runs a whole UI headlessly; nothing in

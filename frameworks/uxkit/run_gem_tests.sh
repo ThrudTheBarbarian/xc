@@ -24,7 +24,7 @@ case "$(uname)" in Darwin) ;; *) echo "== gem-tests: skipped (host GEM is macOS-
 [ -d "$UX_GEM_DIR" ] || { echo "== gem-tests: skipped (no GEM tree at $UX_GEM_DIR; set UX_GEM_DIR) =="; exit 0; }
 
 TESTS="test_alert test_autoresize test_check test_clip test_controls test_dirty
-test_focus test_host test_key test_leak test_memgate test_menu test_nib test_notify test_outline
+test_focus test_host test_key test_leak test_memgate test_menu test_nib test_outline
 test_radio test_state test_window"
 
 # QUARANTINED: these build, and they FAIL.  They are reported every run rather

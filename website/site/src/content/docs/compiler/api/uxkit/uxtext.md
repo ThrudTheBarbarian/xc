@@ -59,7 +59,7 @@ leading and trailing delimiters produce nothing. Use it to split a command line,
 a sentence into words, or a space-separated attribute.
 
 The delimiter also differs. `split` takes **one byte**; `tokenize` takes a
-[`UXCharacterSet`](/compiler/api/uxkit/uxcharacterset/), so "break on comma,
+[`CharacterSet`](/compiler/api/characterset/), so "break on comma,
 semicolon or tab" is one set and one pass.
 
 ## The character set is a parameter
@@ -114,7 +114,7 @@ It is O(n×m): every start offset, compared byte by byte. That is fine for a
 label, a filename or a menu item, which is its intended use.
 
 Do not use it to scan a document on every keystroke. Use
-[`UXSearchIndex`](/compiler/api/uxkit/uxsearchindex/) when the haystack is large
+[`SearchIndex`](/compiler/api/searchindex/) when the haystack is large
 or the search repeats.
 :::
 
@@ -138,7 +138,7 @@ static u8* trimWhitespace(u8* s)
 ```
 
 [`trim`](#trim) with
-[`whitespaceAndNewlines`](/compiler/api/uxkit/uxcharacterset/).
+[`whitespaceAndNewlines`](/compiler/api/characterset/).
 
 ### split
 
@@ -263,6 +263,3 @@ gate compiles it, and the output above is what it prints.
 
 - [`UXStr`](/compiler/api/uxkit/uxstr/): concatenation and number conversion
 - [`UXStrItem`](/compiler/api/uxkit/uxstritem/): the box split results come in
-- [`UXCharacterSet`](/compiler/api/uxkit/uxcharacterset/): the delimiter sets
-- [`UXCSV`](/compiler/api/uxkit/uxcsv/): when the fields are quoted and
-  `split` is not enough

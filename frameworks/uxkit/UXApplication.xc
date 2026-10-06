@@ -6,7 +6,7 @@
 #import "UXWindow.xc"
 #import "UXEvent.xc"
 #import "UXMenu.xc"
-#import "UXNotificationCenter.xc"
+#import "NotificationCenter.xc"
 #import "UXImage.xc"
 #import "UXGraphics.xc" // UXPIX_*
 #import "UXString.xc"   // UXStr.toInt, for UX_AUTOQUIT
@@ -545,7 +545,10 @@ class UXApplication : UXResponder
                 gDriver.windowContentGeometry(w.handle, &nw, &nh);
                 // Notify observers, then the delegate, THEN reflow — so any layout either does lands in
                 // the one displayAll below (which reflows the tree + repositions native controls).
-                UXNotificationCenter.shared().postWith(UXWindowDidResizeNotification, (Object*)w, nw, nh);
+                Map* size = new Map();
+                size.set(String.withCString((u8*)"width"), Number.with(nw));
+                size.set(String.withCString((u8*)"height"), Number.with(nh));
+                NotificationCenter.shared().post(String.withCString(UXWindowDidResizeNotification), (Object*)w, size);
                 if (delegate != (UXApplicationDelegate*)0)
                     {
                     callback f void(UXApplication * app, UXWindow * win, i32 width, i32 height) = &delegate.windowDidResize;

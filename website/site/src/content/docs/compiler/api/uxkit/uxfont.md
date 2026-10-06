@@ -207,6 +207,4 @@ The full program is `website/site/examples/uxkit/font.xc`. The
 
 - [`UXTextLayout`](/compiler/api/uxkit/uxtextlayout/): measuring and wrapping
   text in a font
-- [`UXAttributedString`](/compiler/api/uxkit/uxattributedstring/): runs of text
-  that each carry their own font
 - [`UXGraphics`](/compiler/api/uxkit/uxgraphics/): where a font becomes glyphs

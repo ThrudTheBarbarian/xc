@@ -1,11 +1,11 @@
-// UXMarkdown.xc — a tiny inline-markdown renderer to an UXAttributedString.
+// UXMarkdown.xc — a tiny inline-markdown renderer to a Foundation AttributedString.
 //
 // Turns **bold**, *italic* and `code` markers into an attributed string: the marker characters are
 // stripped and the spans they wrapped carry the bold / italic / code attributes.  Enough for help
 // text, notes and formatted labels drawn through the attributed-string path; block markdown (headings,
 // lists) would layer on top.  Pure string work, testable.
 #import "Array.xc"
-#import "UXAttributedString.xc"
+#import "UXTextStyle.xc"
 
 #define UXMD_CODE_PEN 9 // grey pen stands in for a monospace/code span
 
@@ -21,7 +21,7 @@ class UXMarkdown
         return n;
         }
 
-    static UXAttributedString* parse(u8* md)
+    static AttributedString* parse(u8* md)
         {
         i32 n = UXMarkdown.slen(md);
         u8* text = new u8[(u32)(n + (i32)1)];  // output text (never longer than the source)
@@ -68,17 +68,30 @@ class UXMarkdown
             }
         text[t] = (u8)0;
 
-        UXAttributedString* as = UXAttributedString.make(text);
-        for (i32 k = (i32)0; k < t; k = k + (i32)1)
+        AttributedString* as = AttributedString.withString(String.withCString(text));
+        // one setAttribute per span of equal flags, not per character
+        i32 k = (i32)0;
+        while (k < t)
             {
             u8 f = flags[k];
-            UXCharAttr* a = as.attributesAt(k);
-            a.bold = (f & (u8)1) != (u8)0;
-            a.italic = (f & (u8)2) != (u8)0;
+            i32 e = k + (i32)1;
+            while (e < t && flags[e] == f)
+                {
+                e = e + (i32)1;
+                }
+            if ((f & (u8)1) != (u8)0)
+                {
+                UXTextStyle.setBold(as, true, k, e - k);
+                }
+            if ((f & (u8)2) != (u8)0)
+                {
+                UXTextStyle.setItalic(as, true, k, e - k);
+                }
             if ((f & (u8)4) != (u8)0)
                 {
-                a.pen = (i32)UXMD_CODE_PEN;
+                UXTextStyle.setPen(as, (i32)UXMD_CODE_PEN, k, e - k);
                 }
+            k = e;
             }
         return as;
         }

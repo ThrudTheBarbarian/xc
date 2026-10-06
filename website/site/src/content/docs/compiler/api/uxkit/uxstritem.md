@@ -25,8 +25,7 @@ The class has one field.
 bare `u8*` is not one, so a list of strings needs a wrapper. `UXStrItem` is that
 wrapper.
 
-[`UXPathComp`](/compiler/api/uxkit/uxpathcomp/) and
-[`UXKVEntry`](/compiler/api/uxkit/uxkventry/) exist for the same reason. Boxing
+[`UXKVEntry`](/compiler/api/uxkit/uxkventry/) exists for the same reason. Boxing
 is explicit in xc, not automatic, so the wrapper appears in signatures:
 
 ```c
@@ -94,5 +93,3 @@ The string. Never null after `init`.
 - [`UXText`](/compiler/api/uxkit/uxtext/): split, join, and everything else
   that produces or consumes these
 - [`UXStr`](/compiler/api/uxkit/uxstr/): `dup`, for when the string is borrowed
-- [`UXPathComp`](/compiler/api/uxkit/uxpathcomp/): the same boxing for a path
-  component

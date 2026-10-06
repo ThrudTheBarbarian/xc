@@ -14,10 +14,10 @@ scale.
 ## Overview
 
 ```c
-Array<UXRange>* lines = UXTextLayout.wrap(text, 80, 8);   // 80px wide, 8px per char
+Array<Range>* lines = UXTextLayout.wrap(text, 80, 8);   // 80px wide, 8px per char
 ```
 
-**A line is a [`UXRange`](/compiler/api/uxkit/uxrange/) into the original
+**A line is a [`Range`](/compiler/api/range/) into the original
 string**, not a copy. The text is stored once however many times it is
 re-wrapped. Re-wrapping on resize allocates nothing for the text itself, and
 drawing or hit-testing a row indexes straight back into the source.
@@ -34,7 +34,7 @@ the quick brown fox jumps over the lazy dog     wrapped to 80px:
 The **breaking space is consumed**: line 0 ends at 8, line 1 starts at 10, and
 character 9 (the space) belongs to neither. Drawing a line never paints a
 trailing space, and the ranges do not tile contiguously as
-[`UXRange`](/compiler/api/uxkit/uxrange/)'s adjacency contract otherwise implies.
+[`Range`](/compiler/api/range/)'s adjacency contract otherwise implies.
 
 ### Breaking rules
 
@@ -94,7 +94,7 @@ which line is last; a drawing seam cannot tell. For this reason
 ### wrap
 
 ```c
-static Array<UXRange>* wrap(u8* text, i16 width, i16 charWidth)
+static Array<Range>* wrap(u8* text, i16 width, i16 charWidth)
 ```
 
 Breaks to `width` pixels, assuming every character is `charWidth` wide.
@@ -102,7 +102,7 @@ Breaks to `width` pixels, assuming every character is `charWidth` wide.
 ### wrapFont
 
 ```c
-static Array<UXRange>* wrapFont(u8* text, i16 width, i32 size)
+static Array<Range>* wrapFont(u8* text, i16 width, i32 size)
 ```
 
 The same, measuring with the driver's real glyph metrics at point `size`.
@@ -110,7 +110,7 @@ The same, measuring with the driver's real glyph metrics at point `size`.
 ### wrapAttr
 
 ```c
-static Array<UXRange>* wrapAttr(UXAttributedString* as, i16 width, i32 baseSize)
+static Array<Range>* wrapAttr(AttributedString* as, i16 width, i32 baseSize)
 ```
 
 Wraps rich text, measuring **each run in its own font**. A bold word inside a
@@ -129,7 +129,7 @@ view before laying it out.
 ### layoutLine
 
 ```c
-static Array<UXTextRun>* layoutLine(u8* text, UXRange* ln, i16 measure,
+static Array<UXTextRun>* layoutLine(u8* text, Range* ln, i16 measure,
                                     i32 size, i32 align, bool isLast)
 ```
 
@@ -140,7 +140,7 @@ final line; see [Alignment](#alignment).
 ### layoutLineAttr
 
 ```c
-static Array<UXTextRun>* layoutLineAttr(UXAttributedString* as, UXRange* ln, …)
+static Array<UXTextRun>* layoutLineAttr(AttributedString* as, Range* ln, …)
 ```
 
 The rich-text form: each returned run carries the style to draw it in.
@@ -148,7 +148,7 @@ The rich-text form: each returned run carries the style to draw it in.
 ### layoutLineWidth
 
 ```c
-static Array<UXTextRun>* layoutLineWidth(UXAttributedString* as, UXRange* ln, …)
+static Array<UXTextRun>* layoutLineWidth(AttributedString* as, Range* ln, …)
 ```
 
 As above, also reporting widths, for a caller placing a caret or measuring a
@@ -174,7 +174,7 @@ hit-testing a click to a character use it.
 ### isParagraphEnd
 
 ```c
-static bool isParagraphEnd(u8* text, Array<UXRange>* lines, u16 i)
+static bool isParagraphEnd(u8* text, Array<Range>* lines, u16 i)
 ```
 
 Whether line `i` ends a paragraph. Pass the result as `isLast`.
@@ -182,15 +182,15 @@ Whether line `i` ends a paragraph. Pass the result as `isLast`.
 ## UXTextRun
 
 ```c
-class UXTextRun : UXRange {
+class UXTextRun : Range {
     i32         x;        // where to draw it, within the measure
-    UXCharAttr* attr;     // the style; nil = the view's default
+    UXTextStyle* attr;     // the style; nil = the view's default
 }
 ```
 
 A run **is a range**, extended with a position and a style, rather than a
 separate type that repeats `loc`/`len` beside its payload. This follows the
-single vocabulary [`UXRange`](/compiler/api/uxkit/uxrange/) describes, so a
+single vocabulary [`Range`](/compiler/api/range/) describes, so a
 reader can see that a text line is a range without opening another file.
 
 ## Example
@@ -202,9 +202,9 @@ reader can see that a text line is a range without opening another file.
 void main(void) {
     u8* text = (u8*)"the quick brown fox jumps over the lazy dog";
 
-    Array<UXRange>* lines = UXTextLayout.wrap(text, 80, 8);
+    Array<Range>* lines = UXTextLayout.wrap(text, 80, 8);
     for (u16 i = 0; i < lines.count(); i = i + 1) {
-        UXRange* ln = (UXRange* ?)lines.get(i);
+        Range* ln = (Range* ?)lines.get(i);
         for (i32 c = ln.loc; c < ln.end(); c = c + 1) { Stdio.printf("%c", text[c]); }
         Stdio.printf("\n");
     }
@@ -224,8 +224,5 @@ compiles it.
 
 ## See also
 
-- [`UXRange`](/compiler/api/uxkit/uxrange/): what a line is
-- [`UXAttributedString`](/compiler/api/uxkit/uxattributedstring/): rich text,
-  wrapped per run
 - [`UXFont`](/compiler/api/uxkit/uxfont/): what `wrapFont` measures in
 - [`UXText`](/compiler/api/uxkit/uxtext/): the view that puts this on screen

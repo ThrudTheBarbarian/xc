@@ -81,7 +81,7 @@ table.setAllowsMultipleSelection(true);
 ```
 
 The delegate still reports an anchor row, but the full selection arrives as a
-[`UXIndexSet`](/compiler/api/uxkit/uxindexset/) on the
+[`IndexSet`](/compiler/api/indexset/) on the
 [`UXEventSelected`](/compiler/api/uxkit/uxevent/) event, because an anchor
 alone would replay as one row however many were chosen. On backends whose
 table is a native list, the click never reaches the toolkit, and this event is
@@ -205,7 +205,3 @@ The complete file is `website/site/examples/uxkit/tables.xc` and the
   a native list backend does differently
 - [`UXOutlineView`](/compiler/api/uxkit/uxoutlineview/): expansion state and
   indentation
-- [`UXIndexSet`](/compiler/api/uxkit/uxindexset/): what a multi-selection is
-- [`UXPredicate`](/compiler/api/uxkit/uxpredicate/) and
-  [`UXSortDescriptor`](/compiler/api/uxkit/uxsortdescriptor/): filtering and
-  ordering the model behind a table

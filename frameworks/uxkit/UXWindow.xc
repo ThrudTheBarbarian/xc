@@ -17,8 +17,9 @@
 #import "UXViewDriver.xc"
 #import "UXImage.xc"     // snapshot's picture
 
-// Posted (object = the UXWindow, a/b = the new content width/height) when the user resizes a window,
-// for observers that are not the app delegate.  The app delegate also gets windowDidResize directly.
+// Posted (object = the UXWindow; userInfo "width" and "height", Numbers, the new content size) when
+// the user resizes a window, for observers that are not the app delegate, which also gets
+// windowDidResize directly.
 #define UXWindowDidResizeNotification (u8*)"UXWindowDidResize"
 
 // Diagnostics: how many objects the AES VISITED (called us for), vs how many we

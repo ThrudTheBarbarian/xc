@@ -13,7 +13,7 @@
 #import "UXPopUpButton.xc"
 #import "UXSegmentedControl.xc"
 #import "UXProgressBar.xc"
-#import "UXProgress.xc"
+#import "Progress.xc"
 #import "UXGeometry.xc"
 
 class Panel : Object <UXApplicationDelegate>
@@ -23,7 +23,7 @@ class Panel : Object <UXApplicationDelegate>
     UXRadioGroup*  size;
     UXSlider*      level;
     UXProgressBar* bar;
-    UXProgress*    work;
+    Progress*    work;
 
     void init(void) { }
 
@@ -38,7 +38,7 @@ class Panel : Object <UXApplicationDelegate>
 
     void onLevel(UXControl* sender) {
         // The BAR shows a MODEL: move the model, the bar follows.
-        work.setCompleted(level.value);
+        work.setCompletedUnitCount((i64)(level.value));
         bar.setNeedsDisplay();
     }
 
@@ -77,9 +77,9 @@ class Panel : Object <UXApplicationDelegate>
         level.setAction(&self.onLevel);
         content.addSubview(level, UXGeom.make(12, 142, 180, 22));
 
-        work = new UXProgress();
-        work.setTotal(100);
-        work.setCompleted(40);
+        work = new Progress();
+        work.setTotalUnitCount((i64)(100));
+        work.setCompletedUnitCount((i64)(40));
         bar = new UXProgressBar();
         bar.setProgress(work);
         content.addSubview(bar, UXGeom.make(12, 172, 180, 16));

@@ -24,14 +24,14 @@ extern i32 ux_ak_gl_backing(pointer peer, i32* out4);
 
 // A GL view that stretches with the window, as the client's map does: its drawable must follow, and
 // so must the size the toolkit reports for it, or the app draws the old territory into a bigger frame.
-class Map : UXGLView
+class MapView : UXGLView
     {
     void drawRect(UXGraphics* g, UXRect dirty)
         {
         g.fillRectRGB(self.bounds(), (i32)40, (i32)90, (i32)160);
         }
     }
-Map* gMap;
+MapView* gMap;
 
 i32 gFails;
 void ck(bool ok, u8* what)
@@ -56,7 +56,7 @@ UXButton* gBtn;
 void liveTick(void)
     {
     gTicks = gTicks + (i32)1;
-    if (gMap != (Map*)0 && gMap.ownsGL())
+    if (gMap != (MapView*)0 && gMap.ownsGL())
         {
         gMap.presentGL(); // a frame a turn, as the client's renderer does
         }
@@ -117,7 +117,7 @@ class Del : Object<UXApplicationDelegate>
         content.addSubview(sv, UXGeom.make((i16)10, (i16)40, (i16)180, (i16)100));
         sv.setDocumentHeight((i32)600);
         sv.setAutoresizeMask((i32)UX_FLEX_WIDTH | (i32)UX_FLEX_HEIGHT);
-        gMap = new Map();
+        gMap = new MapView();
         content.addSubview(gMap, UXGeom.make((i16)200, (i16)40, (i16)80, (i16)100));
         gMap.setAutoresizeMask((i32)UX_FLEX_WIDTH | (i32)UX_FLEX_HEIGHT);
         gBtn = new UXButton();

@@ -16,7 +16,7 @@ void check(u8* what, i32 got, i32 want)
         }
     }
 // compare a line's substring to want
-bool lineIs(u8* text, UXRange* ln, u8* want)
+bool lineIs(u8* text, Range* ln, u8* want)
     {
     i32 i = (i32)0;
     while (want[i] != (u8)0)
@@ -29,9 +29,9 @@ bool lineIs(u8* text, UXRange* ln, u8* want)
         }
     return i == ln.len;
     }
-void lineEq(u8* text, Array<UXRange>* lines, i32 idx, u8* want)
+void lineEq(u8* text, Array<Range>* lines, i32 idx, u8* want)
     {
-    if (idx < (i32)lines.count() && lineIs(text, (UXRange* ?)lines.get((u16)idx), want))
+    if (idx < (i32)lines.count() && lineIs(text, (Range* ?)lines.get((u16)idx), want))
         {
         Stdio.printf("  ok   line %d = \"%s\"\n", (i16)idx, want);
         }

@@ -72,7 +72,7 @@ Three kinds can look redundant, but each has a specific purpose:
 | kind | meaning |
 | --- | --- |
 | `UXEventScrolled` | a scroll view came to rest; `a` its node, `b` the new offset |
-| `UXEventSelected` | a table's selection settled; `a` its node, `b` the anchor row, `data` an [`UXIndexSet`](/compiler/api/uxkit/uxindexset/) of every selected row |
+| `UXEventSelected` | a table's selection settled; `a` its node, `b` the anchor row, `data` an [`IndexSet`](/compiler/api/indexset/) of every selected row |
 | `UXEventTextChanged` | a native field's contents changed; `a` its node, `data` a `String` |
 
 These announce **what happened**, not what the user did, and for certain
@@ -128,7 +128,7 @@ Some events do not fit in `a` and `b`. A table's selection is a **set** of rows
 field's contents are a string.
 
 `data` is whatever that kind documents: an
-[`UXIndexSet`](/compiler/api/uxkit/uxindexset/) for a selection, a `String` for
+[`IndexSet`](/compiler/api/indexset/) for a selection, a `String` for
 text. A recorder copies the reference, so a captured event keeps its payload.
 
 ## Tapping the stream
@@ -216,4 +216,3 @@ would carry a payload from the wrong interaction.
   by hit test
 - [`UXEventRecorder`](/compiler/api/uxkit/uxeventrecorder/): records and
   replays the stream
-- [`UXIndexSet`](/compiler/api/uxkit/uxindexset/): the payload of a selection

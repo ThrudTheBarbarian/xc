@@ -3,13 +3,13 @@
 // Items of a fixed size flow left-to-right and wrap to new rows to fill the width — the layout the
 // Finder desktop and any icon grid wants.  The grid arithmetic (how many columns fit, each item's
 // rectangle, the total content height for scrolling) and hit-testing are pure geometry, so they are
-// unit-tested without a window.  Multi-selection reuses UXIndexSet.  Drawing rides the UXControl seam.
+// unit-tested without a window.  Multi-selection reuses IndexSet.  Drawing rides the UXControl seam.
 #import "UXView.xc"
 #import "UXControl.xc"
 #import "UXGraphics.xc"
 #import "UXGeometry.xc"
 #import "UXEvent.xc"
-#import "UXIndexSet.xc"
+#import "IndexSet.xc"
 #import "Array.xc"
 
 class UXCollectionItem : Object
@@ -34,7 +34,7 @@ class UXCollectionItem : Object
     class UXCollectionView : UXControl
     {
     Array<UXCollectionItem>* items;
-    UXIndexSet* selected;
+    IndexSet* selected;
     i16 itemW;
     i16 itemH;
     i16 hGap;
@@ -47,7 +47,7 @@ class UXCollectionItem : Object
         {
         super.init();
         items = new Array();
-        selected = new UXIndexSet();
+        selected = new IndexSet();
         itemW = (i16)64;
         itemH = (i16)64;
         hGap = (i16)16;
@@ -162,7 +162,7 @@ class UXCollectionItem : Object
         return (i32)-1; // fell in the gap between items
         }
 
-    // ---- selection (via UXIndexSet) -----------------------------------------
+    // ---- selection (via IndexSet) -----------------------------------------
     void selectItem(i32 i)
         {
         selected.removeAllIndexes();
@@ -193,7 +193,7 @@ class UXCollectionItem : Object
         }
     i32 selectionCount(void)
         {
-        return selected.count();
+        return (i32)selected.count();
         }
     i32 firstSelected(void)
         {
