@@ -1161,7 +1161,7 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar;
             case XTIROpReturn:
                 {
                 XTIROperand* rv = t.operands.count ? t.operands[0] : nil;
-                XTIRType* rvt = (rv && rv.kind == XTIROperandKindUse) ? [self typeOf:rv.valueId] : nil;
+                XTIRType* rvt = !rv ? nil : rv.kind == XTIROperandKindUse ? [self typeOf:rv.valueId] : self.fn.returnType;
                 if (self.helperMode && rvt && rvt.kind != XTIRTypeKindMemory)
                     {
                     uint32_t v = [self value:rv type:rvt];

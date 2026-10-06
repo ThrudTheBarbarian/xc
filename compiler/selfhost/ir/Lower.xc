@@ -27,6 +27,7 @@
 #import "Vtable.xc"
 #import "Ir.xc"
 #import "FloatEncoding.xc"
+#import "ParSpirv.xc"
 
 // What the lowering knows about one class: where its instance keeps things,
 // which slot each method dispatches through, and the shape a pointer to it has.
@@ -16467,6 +16468,1226 @@ class ClassInfo
         return out;
         }
 
+    // ── the `par` kernel as a SPIR-V module (par-spirv-wgsl.md) ─────────────
+    // The port of XTIRParSPIRV: the same module, word for word, from the same
+    // analysis. The block object's used fields are a struct read from binding
+    // 0 and copied to Function storage; captured arrays, globals and
+    // reduction partials are storage buffers; the span is push constants; the
+    // body is a dispatch loop with every value in a Function variable.
+    // Pointer values are recipes (SpvRecipe), resolved at their loads and
+    // stores. 8- and 16-bit values live in 32 bits in their own type's form.
+    bool _parSPIRV;   // x86-64 Linux: blocks get their SPIR-V module
+    void setParSPIRV(bool b) { _parSPIRV = b; }
+    SpvMod* _sMod;
+    SpvFn* _spvFn;
+    Map* _sHelpers;   // callee -> function id (Number)
+    Map* _sMember;    // object field index (String) -> member index (Number)
+    u32 _sLocalObj;
+    Map* _sBufVar;    // "f<k>" for a captured array field, "g<i>" for a global -> variable (Number)
+    Array* _sOut;     // the last module's bytes (header, NUL, padding, words)
+
+    String* spvS(string c) { return String.withCString(c); }
+    bool spvIsFloat(String* t) { return ptxIs(t, "F32") || ptxIs(t, "F64"); }
+    u32 spvNarrowBits(String* t)
+        {
+        if (ptxIs(t, "I8") || ptxIs(t, "U8")) return (u32)8;
+        if (ptxIs(t, "I16") || ptxIs(t, "U16")) return (u32)16;
+        return (u32)0;
+        }
+    bool spvNarrowSigned(String* t) { return ptxIs(t, "I8") || ptxIs(t, "I16"); }
+    bool spvWide(String* t) { return ptxIs(t, "I64") || ptxIs(t, "U64"); }
+    u32 spvWidth(String* t)
+        {
+        if (ptxIs(t, "I8") || ptxIs(t, "U8") || ptxIs(t, "Bool")) return (u32)1;
+        if (ptxIs(t, "I16") || ptxIs(t, "U16")) return (u32)2;
+        if (ptxIs(t, "I32") || ptxIs(t, "U32") || ptxIs(t, "F32")) return (u32)4;
+        if (ptxIs(t, "I64") || ptxIs(t, "U64") || ptxIs(t, "F64") || mslIsPtr(t)) return (u32)8;
+        return (u32)0;
+        }
+
+    // A scalar type's id; 0 for a type this cut does not print.
+    u32 spvType(String* t)
+        {
+        if (t == (String*)0) return (u32)0;
+        if (spvNarrowBits(t) != (u32)0 || ptxIs(t, "I32") || ptxIs(t, "U32")) return _sMod.typeInt((u32)32);
+        if (ptxIs(t, "I64") || ptxIs(t, "U64")) return _sMod.typeInt((u32)64);
+        if (ptxIs(t, "F32")) return _sMod.typeFloat((u32)32);
+        if (ptxIs(t, "F64")) return _sMod.typeFloat((u32)64);
+        if (ptxIs(t, "Bool")) return _sMod.typeBool();
+        return (u32)0;
+        }
+
+    void spvEmit(u32 op, Array* w)
+        {
+        spvOp(_spvFn.code, op, w);
+        }
+
+    // A result-producing instruction: its new id.
+    u32 spvEmitR(u32 op, u32 t, Array* args)
+        {
+        u32 r = _sMod.newId();
+        Array* w = new Array();
+        w.add((Object*)Number.withU32(t));
+        w.add((Object*)Number.withU32(r));
+        for (u32 i = (u32)0; i < args.count(); i = i + (u32)1)
+            w.add(args.get(i));
+        spvOp(_spvFn.code, op, w);
+        return r;
+        }
+    Array* spvA1(u32 a) { return spvW((u32)1, a, (u32)0, (u32)0, (u32)0, (u32)0, (u32)0); }
+    Array* spvA2(u32 a, u32 b) { return spvW((u32)2, a, b, (u32)0, (u32)0, (u32)0, (u32)0); }
+    Array* spvA3(u32 a, u32 b, u32 c) { return spvW((u32)3, a, b, c, (u32)0, (u32)0, (u32)0); }
+
+    u32 spvLocalVar(u32 t)
+        {
+        u32 p = _sMod.ptrType((u32)SPV_ST_FUNCTION, t);
+        u32 v = _sMod.newId();
+        spvOp(_spvFn.vars, (u32)SPV_VARIABLE, spvA3(p, v, (u32)SPV_ST_FUNCTION));
+        return v;
+        }
+
+    u32 spvLabel(void) { return _sMod.newId(); }
+    void spvPlace(u32 l) { spvEmit((u32)SPV_LABEL, spvA1(l)); }
+
+    // A 32-bit value wrapped to narrow type t, in t's form.
+    u32 spvCanon(u32 v, String* t)
+        {
+        u32 bits = spvNarrowBits(t);
+        if (bits == (u32)0)
+            return v;
+        u32 w32 = _sMod.typeInt((u32)32);
+        if (!spvNarrowSigned(t))
+            return spvEmitR((u32)SPV_BITWISEAND, w32, spvA2(v, _sMod.u32c(((u32)1 << bits) - (u32)1)));
+        u32 sh = _sMod.u32c((u32)32 - bits);
+        u32 up = spvEmitR((u32)SPV_SHIFTLEFTLOGICAL, w32, spvA2(v, sh));
+        return spvEmitR((u32)SPV_SHIFTRIGHTARITHMETIC, w32, spvA2(up, sh));
+        }
+
+    // An integer immediate as type `want`.
+    u32 spvImm(i64 iv, String* want)
+        {
+        if (want == (String*)0)
+            return (u32)0;
+        if (ptxIs(want, "Bool"))
+            return _sMod.constBool(iv != (i64)0);
+        u32 t = spvType(want);
+        if (t == (u32)0 || spvIsFloat(want))
+            return (u32)0;
+        bool wide = spvWide(want);
+        u32 nb = spvNarrowBits(want);
+        if (nb != (u32)0)
+            {
+            u64 mask = ((u64)1 << (u64)nb) - (u64)1;
+            iv = (i64)((u64)iv & mask);
+            if (spvNarrowSigned(want) && ((iv >> (i64)(nb - (u32)1)) & (i64)1) != (i64)0)
+                iv = iv - (i64)((u64)1 << (u64)nb);
+            }
+        return _sMod.constant(t, wide ? (u64)iv : (u64)(u32)iv, wide);
+        }
+
+    // An operand's value (an id); 0 when it cannot be.
+    u32 spvValue(IROperand* op, String* want)
+        {
+        if (op.kind() == (u8)OPK_USE)
+            {
+            if (op.val() == (IRValue*)0) return (u32)0;
+            Number* var = (Number*)_spvFn.varOf.get((Hashable*)mslKey(op.val()));
+            if (var == (Number*)0) return (u32)0;
+            return spvEmitR((u32)SPV_LOAD, spvType(op.val().ty()), spvA1(var.asU32()));
+            }
+        if (op.kind() == (u8)OPK_IMMI)
+            return spvImm(op.imm(), want);
+        if (op.kind() == (u8)OPK_IMMF)
+            {
+            u64 raw = (u64)0;
+            String* h = op.fpHex();
+            for (u32 i = (u32)0; i < h.byteLength(); i = i + (u32)1)
+                {
+                u8 c = h.byteAt(i);
+                u64 d = c >= (u8)'a' ? (u64)(c - (u8)'a' + (u8)10) : c >= (u8)'A' ? (u64)(c - (u8)'A' + (u8)10) : (u64)(c - (u8)'0');
+                raw = (raw << (u64)4) | d;
+                }
+            if (ptxIs(want, "F64"))
+                return _sMod.constant(_sMod.typeFloat((u32)64), raw, true);
+            if (!ptxIs(want, "F32"))
+                return (u32)0;
+            double dv = *(double*)(pointer)&raw;
+            float fv = (float)dv;
+            u32 bits = *(u32*)(pointer)&fv;
+            return _sMod.constant(_sMod.typeFloat((u32)32), (u64)bits, false);
+            }
+        return (u32)0;
+        }
+
+    void spvSetResult(IRInsn* ip, u32 v)
+        {
+        Number* var = (Number*)_spvFn.varOf.get((Hashable*)mslKey(ip.res()));
+        spvEmit((u32)SPV_STORE, spvA2(var.asU32(), v));
+        }
+
+    // The id of a pointer to where `r` points.
+    u32 spvAddress(SpvRecipe* r)
+        {
+        u32 et = spvType(r.pointee);
+        if (et == (u32)0)
+            return (u32)0;
+        Array* idx = new Array();
+        for (u32 i = (u32)0; i < r.members.count(); i = i + (u32)1)
+            idx.add(r.members.get(i));
+        if (r.indexVar != (u32)0)
+            idx.add((Object*)Number.withU32(spvEmitR((u32)SPV_LOAD, r.indexType, spvA1(r.indexVar))));
+        if (idx.count() == (u32)0)
+            return r.base;
+        Array* a = new Array();
+        a.add((Object*)Number.withU32(r.base));
+        for (u32 i = (u32)0; i < idx.count(); i = i + (u32)1)
+            a.add(idx.get(i));
+        return spvEmitR((u32)SPV_ACCESSCHAIN, _sMod.ptrType(r.storage, et), a);
+        }
+
+    bool spvBinary(IRInsn* ip)
+        {
+        String* t = ip.res().ty();
+        u32 ty = spvType(t);
+        u32 a = spvValue((IROperand*)ip.ops().get((u32)0), t);
+        u32 b = spvValue((IROperand*)ip.ops().get((u32)1), t);
+        if (ty == (u32)0 || a == (u32)0 || b == (u32)0)
+            return false;
+        String* o = ip.op();
+        u32 nb = spvNarrowBits(t);
+        if (nb != (u32)0)
+            {
+            bool wantsUnsigned = o.equals(spvS("UDiv")) || o.equals(spvS("URem")) || o.equals(spvS("LShr"));
+            bool wantsSigned = o.equals(spvS("SDiv")) || o.equals(spvS("SRem")) || o.equals(spvS("AShr"));
+            String* as = (String*)0;
+            if (wantsUnsigned && spvNarrowSigned(t))
+                as = spvS(nb == (u32)8 ? "U8" : "U16");
+            else if (wantsSigned && !spvNarrowSigned(t))
+                as = spvS(nb == (u32)8 ? "I8" : "I16");
+            if (as != (String*)0)
+                {
+                a = spvCanon(a, as);
+                if (!o.equals(spvS("LShr")) && !o.equals(spvS("AShr")))
+                    b = spvCanon(b, as);
+                }
+            }
+        bool isBool = ptxIs(t, "Bool");
+        u32 op = (u32)0;
+        if (o.equals(spvS("Add"))) op = (u32)SPV_IADD;
+        else if (o.equals(spvS("Sub"))) op = (u32)SPV_ISUB;
+        else if (o.equals(spvS("Mul"))) op = (u32)SPV_IMUL;
+        else if (o.equals(spvS("UDiv"))) op = (u32)SPV_UDIV;
+        else if (o.equals(spvS("SDiv"))) op = (u32)SPV_SDIV;
+        else if (o.equals(spvS("URem"))) op = (u32)SPV_UMOD;
+        else if (o.equals(spvS("SRem"))) op = (u32)SPV_SREM;
+        else if (o.equals(spvS("And"))) op = isBool ? (u32)SPV_LOGICALAND : (u32)SPV_BITWISEAND;
+        else if (o.equals(spvS("Or"))) op = isBool ? (u32)SPV_LOGICALOR : (u32)SPV_BITWISEOR;
+        else if (o.equals(spvS("Xor"))) op = isBool ? (u32)SPV_LOGICALNOTEQUAL : (u32)SPV_BITWISEXOR;
+        else if (o.equals(spvS("Shl"))) op = (u32)SPV_SHIFTLEFTLOGICAL;
+        else if (o.equals(spvS("LShr"))) op = (u32)SPV_SHIFTRIGHTLOGICAL;
+        else if (o.equals(spvS("AShr"))) op = (u32)SPV_SHIFTRIGHTARITHMETIC;
+        else if (o.equals(spvS("FAdd"))) op = (u32)SPV_FADD;
+        else if (o.equals(spvS("FSub"))) op = (u32)SPV_FSUB;
+        else if (o.equals(spvS("FMul"))) op = (u32)SPV_FMUL;
+        else if (o.equals(spvS("FDiv")))
+            {
+            if (!_mFast)
+                {
+                parBecause(spvS("it divides floats, which a Vulkan GPU does not round exactly, and the block's goal is accuracy"));
+                return false;
+                }
+            op = (u32)SPV_FDIV;
+            }
+        else
+            return false;
+        spvSetResult(ip, spvCanon(spvEmitR(op, ty, spvA2(a, b)), t));
+        return true;
+        }
+
+    bool spvCompare(IRInsn* ip)
+        {
+        IROperand* o0 = (IROperand*)ip.ops().get((u32)0);
+        IROperand* o1 = (IROperand*)ip.ops().get((u32)1);
+        String* t = mslTypeOf(o0) != (String*)0 ? mslTypeOf(o0) : mslTypeOf(o1);
+        if (t == (String*)0)
+            return false;
+        u32 a = spvValue(o0, t);
+        u32 b = spvValue(o1, t);
+        if (a == (u32)0 || b == (u32)0)
+            return false;
+        String* p = ip.pred();
+        u32 op = (u32)0;
+        if (ip.op().equals(spvS("FCmp")))
+            {
+            if (p.equals(spvS("OEQ"))) op = (u32)SPV_FORDEQUAL;
+            else if (p.equals(spvS("ONE"))) op = (u32)SPV_FUNORDNOTEQUAL;
+            else if (p.equals(spvS("OLT"))) op = (u32)SPV_FORDLESSTHAN;
+            else if (p.equals(spvS("OGT"))) op = (u32)SPV_FORDGREATERTHAN;
+            else if (p.equals(spvS("OLE"))) op = (u32)SPV_FORDLESSTHANEQUAL;
+            else if (p.equals(spvS("OGE"))) op = (u32)SPV_FORDGREATERTHANEQUAL;
+            else return false;
+            }
+        else
+            {
+            if (p.equals(spvS("EQ"))) op = (u32)SPV_IEQUAL;
+            else if (p.equals(spvS("NE"))) op = (u32)SPV_INOTEQUAL;
+            else if (p.equals(spvS("SLT"))) op = (u32)SPV_SLESSTHAN;
+            else if (p.equals(spvS("SGT"))) op = (u32)SPV_SGREATERTHAN;
+            else if (p.equals(spvS("SLE"))) op = (u32)SPV_SLESSTHANEQUAL;
+            else if (p.equals(spvS("SGE"))) op = (u32)SPV_SGREATERTHANEQUAL;
+            else if (p.equals(spvS("ULT"))) op = (u32)SPV_ULESSTHAN;
+            else if (p.equals(spvS("UGT"))) op = (u32)SPV_UGREATERTHAN;
+            else if (p.equals(spvS("ULE"))) op = (u32)SPV_ULESSTHANEQUAL;
+            else if (p.equals(spvS("UGE"))) op = (u32)SPV_UGREATERTHANEQUAL;
+            else return false;
+            if (ptxIs(t, "Bool"))
+                {
+                if (p.equals(spvS("EQ"))) op = (u32)SPV_LOGICALEQUAL;
+                else if (p.equals(spvS("NE"))) op = (u32)SPV_LOGICALNOTEQUAL;
+                else return false;
+                }
+            }
+        spvSetResult(ip, spvEmitR(op, _sMod.typeBool(), spvA2(a, b)));
+        return true;
+        }
+
+    bool spvConvert(IRInsn* ip)
+        {
+        String* rt = ip.res().ty();
+        IROperand* o0 = (IROperand*)ip.ops().get((u32)0);
+        String* st = o0.kind() == (u8)OPK_USE ? mslTypeOf(o0) : rt;
+        u32 a = spvValue(o0, st);
+        u32 ty = spvType(rt);
+        if (a == (u32)0 || ty == (u32)0 || spvType(st) == (u32)0)
+            return false;
+        bool sameWidth = spvWidth(st) == spvWidth(rt);
+        u32 v = (u32)0;
+        String* o = ip.op();
+        if (ptxIs(st, "Bool") && !ptxIs(rt, "Bool"))
+            {
+            if (spvIsFloat(rt))
+                return false;
+            u32 one = spvImm((i64)1, rt);
+            u32 zero = spvImm((i64)0, rt);
+            v = spvEmitR((u32)SPV_SELECT, ty, spvA3(a, one, zero));
+            }
+        else if (ptxIs(rt, "Bool"))
+            {
+            if (ptxIs(st, "Bool"))
+                v = a;
+            else if (spvIsFloat(st))
+                return false;
+            else
+                v = spvEmitR((u32)SPV_INOTEQUAL, ty, spvA2(a, spvImm((i64)0, st)));
+            }
+        else
+            {
+            u32 sb = spvNarrowBits(st);
+            bool sWide = spvWide(st);
+            bool rWide = spvWide(rt);
+            u32 w32 = _sMod.typeInt((u32)32);
+            if (o.equals(spvS("ZExt")) || o.equals(spvS("SExt")) || o.equals(spvS("Trunc")) || o.equals(spvS("Copy")))
+                {
+                if (spvIsFloat(st) || spvIsFloat(rt))
+                    {
+                    if (!o.equals(spvS("Copy")))
+                        return false;
+                    if (spvIsFloat(st) && spvIsFloat(rt))
+                        v = sameWidth ? a : spvEmitR((u32)SPV_FCONVERT, ty, spvA1(a));
+                    else if (spvIsFloat(rt))
+                        v = spvEmitR(ptxSigned(st) ? (u32)SPV_CONVERTSTOF : (u32)SPV_CONVERTUTOF, ty, spvA1(a));
+                    else
+                        v = spvCanon(spvEmitR(ptxSigned(rt) ? (u32)SPV_CONVERTFTOS : (u32)SPV_CONVERTFTOU, ty, spvA1(a)), rt);
+                    }
+                else
+                    {
+                    bool extSigned = o.equals(spvS("SExt")) || (!o.equals(spvS("ZExt")) && ptxSigned(st));
+                    u32 x = a;
+                    if (sb != (u32)0 && extSigned != spvNarrowSigned(st))
+                        {
+                        String* as = extSigned ? spvS(sb == (u32)8 ? "I8" : "I16") : spvS(sb == (u32)8 ? "U8" : "U16");
+                        x = spvCanon(x, as);
+                        }
+                    if (sWide != rWide)
+                        x = spvEmitR(rWide ? (extSigned ? (u32)SPV_SCONVERT : (u32)SPV_UCONVERT) : (u32)SPV_UCONVERT,
+                                     rWide ? _sMod.typeInt((u32)64) : w32, spvA1(x));
+                    v = spvCanon(x, rt);
+                    }
+                }
+            else if (o.equals(spvS("SIToFp")))
+                v = spvEmitR((u32)SPV_CONVERTSTOF, ty, spvA1(a));
+            else if (o.equals(spvS("UIToFp")))
+                v = spvEmitR((u32)SPV_CONVERTUTOF, ty, spvA1(a));
+            else if (o.equals(spvS("FpToSI")))
+                v = spvCanon(spvEmitR((u32)SPV_CONVERTFTOS, ty, spvA1(a)), rt);
+            else if (o.equals(spvS("FpToUI")))
+                v = spvCanon(spvEmitR((u32)SPV_CONVERTFTOU, ty, spvA1(a)), rt);
+            else
+                return false;
+            }
+        spvSetResult(ip, v);
+        return true;
+        }
+
+    // A maths call by name: its GLSL.std.450 instruction, or 0.
+    u32 spvGlslFor(String* callee, String* t)
+        {
+        String* m = ptxMathName(callee);
+        bool f = spvIsFloat(t);
+        if (m.equals(spvS("floor"))) return f ? (u32)GLSL_FLOOR : (u32)0;
+        if (m.equals(spvS("abs")) || m.equals(spvS("fabs"))) return f ? (u32)GLSL_FABS : ptxSigned(t) ? (u32)GLSL_SABS : (u32)0;
+        if (m.equals(spvS("min"))) return f ? (u32)GLSL_FMIN : ptxSigned(t) ? (u32)GLSL_SMIN : (u32)GLSL_UMIN;
+        if (m.equals(spvS("max"))) return f ? (u32)GLSL_FMAX : ptxSigned(t) ? (u32)GLSL_SMAX : (u32)GLSL_UMAX;
+        if (!_mFast)
+            return (u32)0;
+        if (m.equals(spvS("sqrt"))) return (u32)GLSL_SQRT;
+        if (m.equals(spvS("sin"))) return (u32)GLSL_SIN;
+        if (m.equals(spvS("cos"))) return (u32)GLSL_COS;
+        if (m.equals(spvS("exp"))) return (u32)GLSL_EXP;
+        if (m.equals(spvS("ln")) || m.equals(spvS("log"))) return (u32)GLSL_LOG;
+        if (m.equals(spvS("pow"))) return (u32)GLSL_POW;
+        if (m.equals(spvS("fma"))) return (u32)GLSL_FMA;
+        return (u32)0;
+        }
+
+    bool spvIsMaths(String* callee)
+        {
+        String* m = ptxMathName(callee);
+        return m.equals(spvS("sqrt")) || m.equals(spvS("sin")) || m.equals(spvS("cos")) || m.equals(spvS("exp")) ||
+               m.equals(spvS("ln")) || m.equals(spvS("log")) || m.equals(spvS("pow")) || m.equals(spvS("floor")) ||
+               m.equals(spvS("fma")) || m.equals(spvS("abs")) || m.equals(spvS("fabs")) || m.equals(spvS("min")) ||
+               m.equals(spvS("max"));
+        }
+
+    bool spvCall(IRInsn* ip)
+        {
+        IROperand* o0 = (IROperand*)ip.ops().get((u32)0);
+        String* callee = o0.name();
+        if (callee.equals(spvS("_xtc_sinit_run")) || callee.hasSuffix(spvS("$init")))
+            return true;
+        String* rt = ip.res() != (IRValue*)0 ? ip.res().ty() : (String*)0;
+        bool isVoid = rt == (String*)0 || ptxIs(rt, "Mem");
+        Array* args = new Array();
+        for (u32 k = (u32)1; k < ip.ops().count(); k = k + (u32)1)
+            {
+            IROperand* o = (IROperand*)ip.ops().get(k);
+            if (o.kind() == (u8)OPK_USE && ptxIs(mslTypeOf(o), "Mem"))
+                continue;
+            String* at = o.kind() == (u8)OPK_USE ? mslTypeOf(o) : rt;
+            u32 v = spvValue(o, at);
+            if (v == (u32)0)
+                return false;
+            args.add((Object*)Number.withU32(v));
+            }
+        if (spvIsMaths(callee))
+            {
+            if (isVoid || args.count() == (u32)0)
+                return false;
+            u32 g = spvGlslFor(callee, rt);
+            if (g == (u32)0)
+                {
+                String* w = spvS("it calls ");
+                w.append(parShown(callee));
+                w.appendCString(", which a Vulkan GPU has only in an approximate form, and the block's goal is accuracy");
+                parBecause(w);
+                return false;
+                }
+            Array* a = new Array();
+            a.add((Object*)Number.withU32(_sMod.glslImport()));
+            a.add((Object*)Number.withU32(g));
+            for (u32 i = (u32)0; i < args.count(); i = i + (u32)1)
+                a.add(args.get(i));
+            spvSetResult(ip, spvEmitR((u32)SPV_EXTINST, spvType(rt), a));
+            return true;
+            }
+        // A function of the program: printed once, as a SPIR-V function.
+        Number* fid = (Number*)_sHelpers.get((Hashable*)callee);
+        if (fid == (Number*)0)
+            {
+            IRFunc* target = (IRFunc*)0;
+            for (u32 i = (u32)0; i < _m.funcs().count(); i = i + (u32)1)
+                if (((IRFunc*)_m.funcs().get(i)).name().equals(callee))
+                    target = (IRFunc*)_m.funcs().get(i);
+            if (target == (IRFunc*)0)
+                return false;
+            u32 f = spvHelper(target);
+            if (f == (u32)0)
+                {
+                parBecause(parCallFailed(callee, _mHelperWhy));
+                return false;
+                }
+            fid = Number.withU32(f);
+            _sHelpers.set((Hashable*)callee, (Object*)fid);
+            }
+        u32 ret = isVoid ? _sMod.typeVoid() : spvType(rt);
+        if (ret == (u32)0)
+            return false;
+        Array* a = new Array();
+        a.add((Object*)fid);
+        for (u32 i = (u32)0; i < args.count(); i = i + (u32)1)
+            a.add(args.get(i));
+        u32 r = spvEmitR((u32)SPV_FUNCTIONCALL, ret, a);
+        if (!isVoid)
+            spvSetResult(ip, r);
+        return true;
+        }
+
+    bool spvStatement(IRInsn* ip)
+        {
+        IRValue* res = ip.res();
+        String* rt = res != (IRValue*)0 ? res.ty() : (String*)0;
+        String* o = ip.op();
+        // A value nothing reads, from an instruction with no other effect.
+        if (res != (IRValue*)0 && !ptxIs(rt, "Mem") && _spvFn.used.get((Hashable*)mslKey(res)) == (Object*)0 &&
+            !o.equals(spvS("Call")) && !o.equals(spvS("Store")))
+            return true;
+        IROperand* o0 = ip.ops().count() > (u32)0 ? (IROperand*)ip.ops().get((u32)0) : (IROperand*)0;
+        if (o.equals(spvS("Const")))
+            {
+            u32 v = spvValue(o0, rt);
+            if (v == (u32)0) return false;
+            spvSetResult(ip, v);
+            return true;
+            }
+        if (o.equals(spvS("Add")) || o.equals(spvS("Sub")) || o.equals(spvS("Mul")) || o.equals(spvS("UDiv")) ||
+            o.equals(spvS("SDiv")) || o.equals(spvS("URem")) || o.equals(spvS("SRem")) || o.equals(spvS("And")) ||
+            o.equals(spvS("Or")) || o.equals(spvS("Xor")) || o.equals(spvS("Shl")) || o.equals(spvS("LShr")) ||
+            o.equals(spvS("AShr")) || o.equals(spvS("FAdd")) || o.equals(spvS("FSub")) || o.equals(spvS("FMul")) ||
+            o.equals(spvS("FDiv")))
+            return spvBinary(ip);
+        if (o.equals(spvS("Not")))
+            {
+            u32 a = spvValue(o0, rt);
+            if (a == (u32)0) return false;
+            spvSetResult(ip, spvCanon(spvEmitR(ptxIs(rt, "Bool") ? (u32)SPV_LOGICALNOT : (u32)SPV_NOT, spvType(rt), spvA1(a)), rt));
+            return true;
+            }
+        if (o.equals(spvS("Neg")) || o.equals(spvS("FNeg")))
+            {
+            u32 a = spvValue(o0, rt);
+            if (a == (u32)0) return false;
+            spvSetResult(ip, spvCanon(spvEmitR(spvIsFloat(rt) ? (u32)SPV_FNEGATE : (u32)SPV_SNEGATE, spvType(rt), spvA1(a)), rt));
+            return true;
+            }
+        if (o.equals(spvS("FSqrt")))
+            {
+            if (!_mFast)
+                {
+                parBecause(spvS("it takes a square root, which a Vulkan GPU does not round exactly, and the block's goal is accuracy"));
+                return false;
+                }
+            u32 a = spvValue(o0, rt);
+            if (a == (u32)0) return false;
+            spvSetResult(ip, spvEmitR((u32)SPV_EXTINST, spvType(rt), spvA3(_sMod.glslImport(), (u32)GLSL_SQRT, a)));
+            return true;
+            }
+        if (o.equals(spvS("ICmp")) || o.equals(spvS("FCmp")))
+            return spvCompare(ip);
+        if (o.equals(spvS("ZExt")) || o.equals(spvS("SExt")) || o.equals(spvS("Trunc")) || o.equals(spvS("SIToFp")) ||
+            o.equals(spvS("UIToFp")) || o.equals(spvS("FpToSI")) || o.equals(spvS("FpToUI")) || o.equals(spvS("Copy")))
+            return spvConvert(ip);
+        if (o.equals(spvS("Select")))
+            {
+            u32 c = spvValue(o0, (String*)0);
+            u32 a = spvValue((IROperand*)ip.ops().get((u32)1), rt);
+            u32 b = spvValue((IROperand*)ip.ops().get((u32)2), rt);
+            if (c == (u32)0 || a == (u32)0 || b == (u32)0) return false;
+            spvSetResult(ip, spvEmitR((u32)SPV_SELECT, spvType(rt), spvA3(c, a, b)));
+            return true;
+            }
+        if (o.equals(spvS("FieldAddr")))
+            {
+            i64 k = mslSelfField(ip);
+            if (k >= (i64)0)
+                {
+                // The slot of a captured array: only ever loaded, as the buffer.
+                if (mslIsPtr(_mObj.typeAt((u32)k)))
+                    return true;
+                Number* m = (Number*)_sMember.get((Hashable*)String.withI64(k));
+                if (m == (Number*)0) return false;
+                SpvRecipe* r = new SpvRecipe();
+                r.base = _sLocalObj;
+                r.storage = (u32)SPV_ST_FUNCTION;
+                r.members = new Array();
+                r.members.add((Object*)Number.withU32(_sMod.u32c(m.asU32())));
+                r.pointee = _mObj.typeAt((u32)k);
+                _spvFn.recipeOf.set((Hashable*)mslKey(res), (Object*)r);
+                return true;
+                }
+            return false;
+            }
+        if (o.equals(spvS("ElementAddr")))
+            {
+            SpvRecipe* b = o0.kind() == (u8)OPK_USE && o0.val() != (IRValue*)0 ? (SpvRecipe*)_spvFn.recipeOf.get((Hashable*)mslKey(o0.val())) : (SpvRecipe*)0;
+            String* pe = mslPointee(rt);
+            if (b == (SpvRecipe*)0 || pe == (String*)0) return false;
+            IROperand* o1 = (IROperand*)ip.ops().get((u32)1);
+            String* it = o1.kind() == (u8)OPK_USE ? mslTypeOf(o1) : spvS("I64");
+            u32 ity = spvType(it);
+            u32 idx = spvValue(o1, it);
+            if (ity == (u32)0 || idx == (u32)0 || spvIsFloat(it) || ptxIs(it, "Bool")) return false;
+            SpvRecipe* r = b.copy();
+            r.pointee = pe;
+            if (b.indexVar != (u32)0)
+                {
+                u32 prev = spvEmitR((u32)SPV_LOAD, b.indexType, spvA1(b.indexVar));
+                if (b.indexType != ity)
+                    idx = spvEmitR(ptxSigned(it) ? (u32)SPV_SCONVERT : (u32)SPV_UCONVERT, b.indexType, spvA1(idx));
+                idx = spvEmitR((u32)SPV_IADD, b.indexType, spvA2(prev, idx));
+                ity = b.indexType;
+                }
+            else if (b.storage == (u32)SPV_ST_FUNCTION)
+                return false;
+            r.indexVar = spvLocalVar(ity);
+            r.indexType = ity;
+            spvEmit((u32)SPV_STORE, spvA2(r.indexVar, idx));
+            _spvFn.recipeOf.set((Hashable*)mslKey(res), (Object*)r);
+            return true;
+            }
+        if (o.equals(spvS("Bitcast")))
+            {
+            if (mslIsPtr(rt))
+                {
+                SpvRecipe* b = o0.kind() == (u8)OPK_USE && o0.val() != (IRValue*)0 ? (SpvRecipe*)_spvFn.recipeOf.get((Hashable*)mslKey(o0.val())) : (SpvRecipe*)0;
+                String* pe = mslPointee(rt);
+                if (b == (SpvRecipe*)0 || spvWidth(b.pointee) != spvWidth(pe) || spvType(b.pointee) != spvType(pe))
+                    return false;
+                _spvFn.recipeOf.set((Hashable*)mslKey(res), (Object*)b);
+                return true;
+                }
+            String* st = o0.kind() == (u8)OPK_USE ? mslTypeOf(o0) : rt;
+            u32 a = spvValue(o0, st);
+            if (a == (u32)0 || spvWidth(st) != spvWidth(rt) || spvType(rt) == (u32)0) return false;
+            spvSetResult(ip, spvEmitR((u32)SPV_BITCAST, spvType(rt), spvA1(a)));
+            return true;
+            }
+        if (o.equals(spvS("Load")))
+            {
+            String* buf = res != (IRValue*)0 ? (String*)_mBufOf.get((Hashable*)mslKey(res)) : (String*)0;
+            if (buf != (String*)0)
+                {
+                SpvRecipe* r = new SpvRecipe();
+                String* key = spvS("f");
+                key.append(buf);
+                r.base = ((Number*)_sBufVar.get((Hashable*)key)).asU32();
+                r.storage = (u32)SPV_ST_STORAGEBUFFER;
+                r.members = new Array();
+                r.members.add((Object*)Number.withU32(_sMod.u32c((u32)0)));
+                r.pointee = mslPointee(rt);
+                _spvFn.recipeOf.set((Hashable*)mslKey(res), (Object*)r);
+                return true;
+                }
+            if (mslIsPtr(rt)) return false;
+            if (parSinitFlag(o0))
+                {
+                spvSetResult(ip, spvImm((i64)2, rt));
+                return true;
+                }
+            SpvRecipe* r = o0.kind() == (u8)OPK_USE && o0.val() != (IRValue*)0 ? (SpvRecipe*)_spvFn.recipeOf.get((Hashable*)mslKey(o0.val())) : (SpvRecipe*)0;
+            u32 ty = spvType(rt);
+            if (r == (SpvRecipe*)0 || ty == (u32)0 || spvType(r.pointee) != ty) return false;
+            u32 p = spvAddress(r);
+            if (p == (u32)0) return false;
+            spvSetResult(ip, spvEmitR((u32)SPV_LOAD, ty, spvA1(p)));
+            return true;
+            }
+        if (o.equals(spvS("Store")))
+            {
+            if (o0.kind() != (u8)OPK_USE || o0.val() == (IRValue*)0) return false;
+            SpvRecipe* r = (SpvRecipe*)_spvFn.recipeOf.get((Hashable*)mslKey(o0.val()));
+            if (r == (SpvRecipe*)0) return false;
+            u32 v = spvValue((IROperand*)ip.ops().get((u32)1), r.pointee);
+            u32 p = spvAddress(r);
+            if (v == (u32)0 || p == (u32)0) return false;
+            spvEmit((u32)SPV_STORE, spvA2(p, v));
+            return true;
+            }
+        if (o.equals(spvS("Call")))
+            return spvCall(ip);
+        if (o.equals(spvS("AddrOf")))
+            {
+            if (res != (IRValue*)0 && _mSinit.get((Hashable*)mslKey(res)) != (Object*)0)
+                return true;
+            String* g = res != (IRValue*)0 ? (String*)_mGlobalOf.get((Hashable*)mslKey(res)) : (String*)0;
+            if (g == (String*)0) return false;
+            u32 gi = (u32)0;
+            for (u32 q = (u32)0; q < _mGlobals.count(); q = q + (u32)1)
+                if (((String*)_mGlobals.get(q)).equals(g)) { gi = q; break; }
+            SpvRecipe* r = new SpvRecipe();
+            String* key = spvS("g");
+            key.append(String.withU32(gi));
+            r.base = ((Number*)_sBufVar.get((Hashable*)key)).asU32();
+            r.storage = (u32)SPV_ST_STORAGEBUFFER;
+            r.members = new Array();
+            r.members.add((Object*)Number.withU32(_sMod.u32c((u32)0)));
+            r.pointee = mslPointee(rt);
+            _spvFn.recipeOf.set((Hashable*)mslKey(res), (Object*)r);
+            return true;
+            }
+        if (o.equals(spvS("DbgValue")))
+            return true;
+        return false;
+        }
+
+    // The phi copies for the edge from -> target (each incoming value read
+    // before any is written), each conditional on `cond` when it is not 0.
+    bool spvEdge(IRBlock* from, IRBlock* target, u32 cond, bool whenTrue, Array* vals, Array* dsts)
+        {
+        for (u32 i = (u32)0; i < target.phis().count(); i = i + (u32)1)
+            {
+            IRInsn* ph = (IRInsn*)target.phis().get(i);
+            if (ph.res() == (IRValue*)0 || ptxIs(ph.res().ty(), "Mem")) continue;
+            if (mslIsPtr(ph.res().ty())) return false;
+            IROperand* inc = (IROperand*)0;
+            for (u32 k = (u32)0; k + (u32)1 < ph.ops().count(); k = k + (u32)2)
+                if (((IROperand*)ph.ops().get(k)).blk() == from)
+                    inc = (IROperand*)ph.ops().get(k + (u32)1);
+            if (inc == (IROperand*)0) return false;
+            u32 v = spvValue(inc, ph.res().ty());
+            if (v == (u32)0) return false;
+            Number* dst = (Number*)_spvFn.varOf.get((Hashable*)mslKey(ph.res()));
+            if (cond != (u32)0)
+                {
+                u32 ty = spvType(ph.res().ty());
+                u32 old = spvEmitR((u32)SPV_LOAD, ty, spvA1(dst.asU32()));
+                v = spvEmitR((u32)SPV_SELECT, ty, whenTrue ? spvA3(cond, v, old) : spvA3(cond, old, v));
+                }
+            vals.add((Object*)Number.withU32(v));
+            dsts.add((Object*)dst);
+            }
+        return true;
+        }
+
+    void spvStores(Array* vals, Array* dsts)
+        {
+        for (u32 k = (u32)0; k < vals.count(); k = k + (u32)1)
+            spvEmit((u32)SPV_STORE, spvA2(((Number*)dsts.get(k)).asU32(), ((Number*)vals.get(k)).asU32()));
+        }
+
+    u32 spvBlockNumber(IRBlock* b)
+        {
+        return _sMod.u32c(((Number*)_spvFn.blockNum.get((Hashable*)b.name())).asU32());
+        }
+
+    // The function's blocks as the dispatch loop.
+    bool spvDispatch(IRFunc* f, u32 mergeLabel, u32 guard)
+        {
+        SpvFn* fn = _spvFn;
+        u32 head = spvLabel();
+        u32 test = spvLabel();
+        u32 body = spvLabel();
+        u32 cont = spvLabel();
+        u32 dflt = spvLabel();
+        fn.loopContinue = cont;
+        spvEmit((u32)SPV_BRANCH, spvA1(head));
+        spvPlace(head);
+        spvEmit((u32)SPV_LOOPMERGE, spvA3(mergeLabel, cont, (u32)0));
+        spvEmit((u32)SPV_BRANCH, spvA1(test));
+        spvPlace(test);
+        u32 pc = spvEmitR((u32)SPV_LOAD, _sMod.typeInt((u32)32), spvA1(fn.pcVar));
+        u32 go = spvEmitR((u32)SPV_INOTEQUAL, _sMod.typeBool(), spvA2(pc, _sMod.u32c((u32)0xFFFFFFFF)));
+        if (guard != (u32)0)
+            go = spvEmitR((u32)SPV_LOGICALAND, _sMod.typeBool(), spvA2(go, guard));
+        spvEmit((u32)SPV_BRANCHCONDITIONAL, spvA3(go, body, mergeLabel));
+        spvPlace(body);
+        Array* caseLabels = new Array();
+        Array* sw = new Array();
+        sw.add((Object*)Number.withU32(pc));
+        sw.add((Object*)Number.withU32(dflt));
+        for (u32 k = (u32)0; k < f.blocks().count(); k = k + (u32)1)
+            {
+            u32 l = spvLabel();
+            caseLabels.add((Object*)Number.withU32(l));
+            sw.add((Object*)Number.withU32(k));
+            sw.add((Object*)Number.withU32(l));
+            }
+        u32 swMerge = spvLabel();
+        spvEmit((u32)SPV_SELECTIONMERGE, spvA2(swMerge, (u32)0));
+        spvEmit((u32)SPV_SWITCH, sw);
+        for (u32 k = (u32)0; k < f.blocks().count(); k = k + (u32)1)
+            {
+            IRBlock* b = (IRBlock*)f.blocks().get(k);
+            spvPlace(((Number*)caseLabels.get(k)).asU32());
+            for (u32 i = (u32)0; i < b.insns().count(); i = i + (u32)1)
+                if (!spvStatement((IRInsn*)b.insns().get(i)))
+                    {
+                    parBecause(parWhyFor((IRInsn*)b.insns().get(i), true));
+                    return false;
+                    }
+            IRInsn* t = b.term();
+            if (t == (IRInsn*)0) return false;
+            Array* vals = new Array();
+            Array* dsts = new Array();
+            if (t.op().equals(spvS("Branch")))
+                {
+                IRBlock* to = ((IROperand*)t.ops().get((u32)0)).blk();
+                if (!spvEdge(b, to, (u32)0, true, vals, dsts)) return false;
+                spvStores(vals, dsts);
+                spvEmit((u32)SPV_STORE, spvA2(fn.pcVar, spvBlockNumber(to)));
+                }
+            else if (t.op().equals(spvS("CondBranch")))
+                {
+                u32 c = spvValue((IROperand*)t.ops().get((u32)0), (String*)0);
+                if (c == (u32)0) return false;
+                IRBlock* yes = ((IROperand*)t.ops().get((u32)1)).blk();
+                IRBlock* no = ((IROperand*)t.ops().get((u32)2)).blk();
+                if (yes == no)
+                    {
+                    if (!spvEdge(b, yes, (u32)0, true, vals, dsts)) return false;
+                    }
+                else if (!spvEdge(b, yes, c, true, vals, dsts) || !spvEdge(b, no, c, false, vals, dsts))
+                    return false;
+                spvStores(vals, dsts);
+                u32 next = spvEmitR((u32)SPV_SELECT, _sMod.typeInt((u32)32), spvA3(c, spvBlockNumber(yes), spvBlockNumber(no)));
+                spvEmit((u32)SPV_STORE, spvA2(fn.pcVar, next));
+                }
+            else if (t.op().equals(spvS("Return")))
+                {
+                IROperand* rv = t.ops().count() > (u32)0 ? (IROperand*)t.ops().get((u32)0) : (IROperand*)0;
+                String* rvt = rv == (IROperand*)0 ? (String*)0 : rv.kind() == (u8)OPK_USE ? mslTypeOf(rv) : f.ret();
+                if (_mHelper && rvt != (String*)0 && !ptxIs(rvt, "Mem"))
+                    {
+                    u32 v = spvValue(rv, rvt);
+                    if (v == (u32)0 || fn.retVar == (u32)0) return false;
+                    spvEmit((u32)SPV_STORE, spvA2(fn.retVar, v));
+                    }
+                spvEmit((u32)SPV_STORE, spvA2(fn.pcVar, _sMod.u32c((u32)0xFFFFFFFF)));
+                }
+            else
+                return false;
+            spvEmit((u32)SPV_BRANCH, spvA1(swMerge));
+            }
+        spvPlace(dflt);
+        spvEmit((u32)SPV_STORE, spvA2(fn.pcVar, _sMod.u32c((u32)0xFFFFFFFF)));
+        spvEmit((u32)SPV_BRANCH, spvA1(swMerge));
+        spvPlace(swMerge);
+        spvEmit((u32)SPV_BRANCH, spvA1(cont));
+        spvPlace(cont);
+        spvEmit((u32)SPV_BRANCH, spvA1(head));
+        spvPlace(mergeLabel);
+        return true;
+        }
+
+    // A variable for every value that is read and is not a pointer or the
+    // memory token.
+    bool spvDeclareValues(IRFunc* f)
+        {
+        for (u32 bi = (u32)0; bi < f.blocks().count(); bi = bi + (u32)1)
+            {
+            IRBlock* b = (IRBlock*)f.blocks().get(bi);
+            Array* all = new Array();
+            for (u32 i = (u32)0; i < b.phis().count(); i = i + (u32)1) all.add(b.phis().get(i));
+            for (u32 i = (u32)0; i < b.insns().count(); i = i + (u32)1) all.add(b.insns().get(i));
+            if (b.term() != (IRInsn*)0) all.add((Object*)b.term());
+            for (u32 i = (u32)0; i < all.count(); i = i + (u32)1)
+                {
+                IRInsn* ip = (IRInsn*)all.get(i);
+                for (u32 k = (u32)0; k < ip.ops().count(); k = k + (u32)1)
+                    {
+                    IROperand* op = (IROperand*)ip.ops().get(k);
+                    if (op.kind() == (u8)OPK_USE && op.val() != (IRValue*)0)
+                        _spvFn.used.set((Hashable*)mslKey(op.val()), (Object*)spvS("1"));
+                    }
+                }
+            }
+        for (u32 bi = (u32)0; bi < f.blocks().count(); bi = bi + (u32)1)
+            {
+            IRBlock* b = (IRBlock*)f.blocks().get(bi);
+            Array* all = new Array();
+            for (u32 i = (u32)0; i < b.phis().count(); i = i + (u32)1) all.add(b.phis().get(i));
+            for (u32 i = (u32)0; i < b.insns().count(); i = i + (u32)1) all.add(b.insns().get(i));
+            for (u32 i = (u32)0; i < all.count(); i = i + (u32)1)
+                {
+                IRInsn* ip = (IRInsn*)all.get(i);
+                if (ip.res() == (IRValue*)0) continue;
+                String* t = ip.res().ty();
+                if (ptxIs(t, "Mem") || mslIsPtr(t) || _spvFn.used.get((Hashable*)mslKey(ip.res())) == (Object*)0) continue;
+                u32 ty = spvType(t);
+                if (ty == (u32)0)
+                    {
+                    parBecause(spvS("it uses a value its Vulkan version cannot hold yet"));
+                    return false;
+                    }
+                _spvFn.varOf.set((Hashable*)mslKey(ip.res()), (Object*)Number.withU32(spvLocalVar(ty)));
+                }
+            }
+        return true;
+        }
+
+    // The function's variables at the head of its entry block (after the
+    // entry label, the code's first instruction).
+    void spvFinish(SpvFn* fn, Array* out)
+        {
+        out.add(fn.code.get((u32)0));
+        out.add(fn.code.get((u32)1));
+        for (u32 i = (u32)0; i < fn.vars.count(); i = i + (u32)1) out.add(fn.vars.get(i));
+        for (u32 i = (u32)2; i < fn.code.count(); i = i + (u32)1) out.add(fn.code.get(i));
+        }
+
+    // A helper as a SPIR-V function of scalars: its id, or 0. The caller's
+    // state comes back afterwards; the helper's reason is in _mHelperWhy.
+    u32 spvHelper(IRFunc* g)
+        {
+        Map* sDef = _mDef; Map* sSpace = _mSpace; Map* sBufOf = _mBufOf; Map* sOrd = _mOrd;
+        Map* sBlk = _mBlk; Map* sBufs = _mBufs; Map* sReds = _mReds; IRLayout* sObj = _mObj;
+        bool sFailed = _mFailed; bool sHelper = _mHelper; Map* sParams = _mParams; Map* sSinit = _mSinit; String* sWhy = _mWhy;
+        Array* sGlobals = _mGlobals; Map* sGlobalOf = _mGlobalOf; SpvFn* sFn = _spvFn;
+        u32 out = spvHelperBody(g);
+        _mHelperWhy = _mWhy;
+        _mDef = sDef; _mSpace = sSpace; _mBufOf = sBufOf; _mOrd = sOrd;
+        _mBlk = sBlk; _mBufs = sBufs; _mReds = sReds; _mObj = sObj;
+        _mFailed = sFailed; _mHelper = sHelper; _mParams = sParams; _mSinit = sSinit; _mWhy = sWhy;
+        _mGlobals = sGlobals; _mGlobalOf = sGlobalOf; _spvFn = sFn;
+        return out;
+        }
+
+    u32 spvHelperBody(IRFunc* g)
+        {
+        _mDef = new Map(); _mSpace = new Map(); _mBufOf = new Map(); _mOrd = new Map();
+        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false; _mSinit = new Map(); _mWhy = (String*)0;
+        _mHelper = true;
+        _mParams = new Map();
+        _mObj = (IRLayout*)0;
+        _mGlobals = new Array();
+        _mGlobalOf = new Map();
+        if (!mslAnalyse(g)) return (u32)0;
+        SpvFn* fn = new SpvFn();
+        for (u32 bi = (u32)0; bi < g.blocks().count(); bi = bi + (u32)1)
+            fn.blockNum.set((Hashable*)((IRBlock*)g.blocks().get(bi)).name(), (Object*)Number.withU32(bi));
+        String* rt = g.ret();
+        bool isVoid = rt == (String*)0 || ptxIs(rt, "Void") || ptxIs(rt, "Mem");
+        u32 ret = isVoid ? _sMod.typeVoid() : spvType(rt);
+        if (ret == (u32)0) return (u32)0;
+        Array* fnTypeWords = new Array();
+        fnTypeWords.add((Object*)Number.withU32(ret));
+        Array* paramTys = new Array();
+        String* key = spvS("fn");
+        key.append(String.withU32(ret));
+        for (u32 k = (u32)0; k + (u32)1 < g.params().count(); k = k + (u32)1)
+            {
+            u32 t = spvType(((IRValue*)g.params().get(k)).ty());
+            if (t == (u32)0) return (u32)0;
+            paramTys.add((Object*)Number.withU32(t));
+            fnTypeWords.add((Object*)Number.withU32(t));
+            key.appendCString("_");
+            key.append(String.withU32(t));
+            }
+        u32 fnType = _sMod.cached(key, (u32)SPV_TYPEFUNCTION, fnTypeWords, true);
+        u32 fid = _sMod.newId();
+        _spvFn = fn;
+        Array* header = new Array();
+        spvOp(header, (u32)SPV_FUNCTION, spvW((u32)4, ret, fid, (u32)0, fnType, (u32)0, (u32)0));
+        Array* params = new Array();
+        for (u32 k = (u32)0; k < paramTys.count(); k = k + (u32)1)
+            {
+            u32 p = _sMod.newId();
+            spvOp(header, (u32)SPV_FUNCTIONPARAMETER, spvA2(((Number*)paramTys.get(k)).asU32(), p));
+            params.add((Object*)Number.withU32(p));
+            }
+        spvPlace(spvLabel());
+        for (u32 k = (u32)0; k < params.count(); k = k + (u32)1)
+            {
+            u32 v = spvLocalVar(((Number*)paramTys.get(k)).asU32());
+            fn.varOf.set((Hashable*)mslKey((IRValue*)g.params().get(k)), (Object*)Number.withU32(v));
+            spvEmit((u32)SPV_STORE, spvA2(v, ((Number*)params.get(k)).asU32()));
+            }
+        if (!spvDeclareValues(g)) return (u32)0;
+        fn.pcVar = spvLocalVar(_sMod.typeInt((u32)32));
+        spvEmit((u32)SPV_STORE, spvA2(fn.pcVar, _sMod.u32c((u32)0)));
+        if (!isVoid)
+            fn.retVar = spvLocalVar(ret);
+        u32 merge = spvLabel();
+        if (!spvDispatch(g, merge, (u32)0)) return (u32)0;
+        if (isVoid)
+            spvEmit((u32)SPV_RETURN, new Array());
+        else
+            spvEmit((u32)SPV_RETURNVALUE, spvA1(spvEmitR((u32)SPV_LOAD, ret, spvA1(fn.retVar))));
+        spvEmit((u32)SPV_FUNCTIONEND, new Array());
+        for (u32 i = (u32)0; i < header.count(); i = i + (u32)1) _sMod.funcs.add(header.get(i));
+        spvFinish(fn, _sMod.funcs);
+        return fid;
+        }
+
+    // A storage buffer of `elem` (runtime array, stride `stride`) at `binding`.
+    u32 spvBuffer(u32 elem, u32 stride, u32 binding)
+        {
+        SpvMod* m = _sMod;
+        u32 arr = m.newId();
+        spvOp(m.globals, (u32)SPV_TYPERUNTIMEARRAY, spvA2(arr, elem));
+        spvOp(m.decos, (u32)SPV_DECORATE, spvA3(arr, (u32)SPV_DEC_ARRAYSTRIDE, stride));
+        u32 st = m.newId();
+        spvOp(m.globals, (u32)SPV_TYPESTRUCT, spvA2(st, arr));
+        spvOp(m.decos, (u32)SPV_DECORATE, spvA2(st, (u32)SPV_DEC_BLOCK));
+        spvOp(m.decos, (u32)SPV_MEMBERDECORATE, spvW((u32)4, st, (u32)0, (u32)SPV_DEC_OFFSET, (u32)0, (u32)0, (u32)0));
+        u32 v = m.newId();
+        spvOp(m.globals, (u32)SPV_VARIABLE, spvA3(m.ptrType((u32)SPV_ST_STORAGEBUFFER, st), v, (u32)SPV_ST_STORAGEBUFFER));
+        spvOp(m.decos, (u32)SPV_DECORATE, spvA3(v, (u32)SPV_DEC_DESCRIPTORSET, (u32)0));
+        spvOp(m.decos, (u32)SPV_DECORATE, spvA3(v, (u32)SPV_DEC_BINDING, binding));
+        return v;
+        }
+
+    // The kernel: true with its bytes in _sOut, or false.
+    bool parSpirv(IRFunc* f)
+        {
+        _mDef = new Map(); _mSpace = new Map(); _mBufOf = new Map(); _mOrd = new Map();
+        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false; _mSinit = new Map(); _mWhy = (String*)0;
+        _mHelper = false;
+        _mParams = (Map*)0;
+        _mGlobals = new Array();
+        _mGlobalOf = new Map();
+        if (f.params().count() == (u32)0) return false;
+        _mObj = mslLayoutOf(mslPointee(((IRValue*)f.params().get((u32)0)).ty()));
+        if (_mObj == (IRLayout*)0 || _mObj.fieldCount() < (u32)3 || !ptxIs(_mObj.typeAt((u32)1), "I64") || !ptxIs(_mObj.typeAt((u32)2), "I64"))
+            return false;
+        if (!mslAnalyse(f)) return false;
+        SpvFn* fn = new SpvFn();
+        for (u32 bi = (u32)0; bi < f.blocks().count(); bi = bi + (u32)1)
+            fn.blockNum.set((Hashable*)((IRBlock*)f.blocks().get(bi)).name(), (Object*)Number.withU32(bi));
+
+        SpvMod* m = new SpvMod();
+        _sMod = m;
+        _sHelpers = new Map();
+        _sBufVar = new Map();
+        _sMember = new Map();
+
+        // The object's fields the kernel uses (other than captured arrays).
+        Map* used = new Map();
+        used.set((Hashable*)spvS("1"), (Object*)spvS("1"));
+        used.set((Hashable*)spvS("2"), (Object*)spvS("1"));
+        for (u32 bi = (u32)0; bi < f.blocks().count(); bi = bi + (u32)1)
+            {
+            IRBlock* b = (IRBlock*)f.blocks().get(bi);
+            for (u32 i = (u32)0; i < b.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* ip = (IRInsn*)b.insns().get(i);
+                if (!ip.op().equals(spvS("FieldAddr")) || ip.res() == (IRValue*)0) continue;
+                i64 k = mslSelfField(ip);
+                if (k >= (i64)0 && !mslIsPtr(_mObj.typeAt((u32)k)))
+                    used.set((Hashable*)String.withI64(k), (Object*)spvS("1"));
+                }
+            }
+        Array* memberTypes = new Array();
+        Array* usedFields = new Array();
+        for (u32 k = (u32)0; k < _mObj.fieldCount(); k = k + (u32)1)
+            {
+            if (used.get((Hashable*)String.withU32(k)) == (Object*)0) continue;
+            String* ft = _mObj.typeAt(k);
+            u32 t = spvType(ft);
+            if (t == (u32)0 || ptxIs(ft, "Bool") || spvNarrowBits(ft) != (u32)0)
+                {
+                parBecause(spvS("it uses a captured value its Vulkan version cannot hold yet (a bool, or an 8- or 16-bit value)"));
+                return false;
+                }
+            _sMember.set((Hashable*)String.withU32(k), (Object*)Number.withU32(memberTypes.count()));
+            memberTypes.add((Object*)Number.withU32(t));
+            usedFields.add((Object*)Number.withU32(k));
+            }
+
+        // The args struct (binding 0) and the kernel's Function copy.
+        u32 argsT = m.newId();
+        Array* sw = new Array();
+        sw.add((Object*)Number.withU32(argsT));
+        for (u32 i = (u32)0; i < memberTypes.count(); i = i + (u32)1) sw.add(memberTypes.get(i));
+        spvOp(m.globals, (u32)SPV_TYPESTRUCT, sw);
+        spvOp(m.decos, (u32)SPV_DECORATE, spvA2(argsT, (u32)SPV_DEC_BLOCK));
+        for (u32 mi = (u32)0; mi < usedFields.count(); mi = mi + (u32)1)
+            {
+            u32 k = ((Number*)usedFields.get(mi)).asU32();
+            spvOp(m.decos, (u32)SPV_MEMBERDECORATE, spvW((u32)4, argsT, mi, (u32)SPV_DEC_OFFSET, _mObj.offsetAt(k), (u32)0, (u32)0));
+            spvOp(m.decos, (u32)SPV_MEMBERDECORATE, spvA3(argsT, mi, (u32)SPV_DEC_NONWRITABLE));
+            }
+        u32 argsV = m.newId();
+        spvOp(m.globals, (u32)SPV_VARIABLE, spvA3(m.ptrType((u32)SPV_ST_STORAGEBUFFER, argsT), argsV, (u32)SPV_ST_STORAGEBUFFER));
+        spvOp(m.decos, (u32)SPV_DECORATE, spvA3(argsV, (u32)SPV_DEC_DESCRIPTORSET, (u32)0));
+        spvOp(m.decos, (u32)SPV_DECORATE, spvA3(argsV, (u32)SPV_DEC_BINDING, (u32)0));
+        u32 localT = m.newId();
+        Array* lw = new Array();
+        lw.add((Object*)Number.withU32(localT));
+        for (u32 i = (u32)0; i < memberTypes.count(); i = i + (u32)1) lw.add(memberTypes.get(i));
+        spvOp(m.globals, (u32)SPV_TYPESTRUCT, lw);
+
+        // The span: three i64 push constants.
+        u32 i64t = m.typeInt((u32)64);
+        u32 spanT = m.newId();
+        spvOp(m.globals, (u32)SPV_TYPESTRUCT, spvW((u32)4, spanT, i64t, i64t, i64t, (u32)0, (u32)0));
+        spvOp(m.decos, (u32)SPV_DECORATE, spvA2(spanT, (u32)SPV_DEC_BLOCK));
+        for (u32 k = (u32)0; k < (u32)3; k = k + (u32)1)
+            spvOp(m.decos, (u32)SPV_MEMBERDECORATE, spvW((u32)4, spanT, k, (u32)SPV_DEC_OFFSET, (u32)8 * k, (u32)0, (u32)0));
+        u32 spanV = m.newId();
+        spvOp(m.globals, (u32)SPV_VARIABLE, spvA3(m.ptrType((u32)SPV_ST_PUSHCONSTANT, spanT), spanV, (u32)SPV_ST_PUSHCONSTANT));
+
+        // The thread's index.
+        u32 u32t = m.typeInt((u32)32);
+        u32 uvec3 = m.cached(spvS("uvec3"), (u32)SPV_TYPEVECTOR, spvA2(u32t, (u32)3), true);
+        u32 gidV = m.newId();
+        spvOp(m.globals, (u32)SPV_VARIABLE, spvA3(m.ptrType((u32)SPV_ST_INPUT, uvec3), gidV, (u32)SPV_ST_INPUT));
+        spvOp(m.decos, (u32)SPV_DECORATE, spvA3(gidV, (u32)SPV_DEC_BUILTIN, (u32)SPV_BUILTIN_GLOBALINVOCATIONID));
+
+        // Buffers: captured arrays, globals, reductions, in the header's order.
+        String* meta = spvS("// xcpar size=");
+        meta.append(String.withU32(_mObj.size())); meta.appendCString(" lo="); meta.append(String.withU32(_mObj.offsetAt((u32)1)));
+        meta.appendCString(" hi="); meta.append(String.withU32(_mObj.offsetAt((u32)2)));
+        Array* iface = new Array();
+        iface.add((Object*)Number.withU32(gidV));
+        iface.add((Object*)Number.withU32(argsV));
+        iface.add((Object*)Number.withU32(spanV));
+        u32 binding = (u32)1;
+        for (u32 k = (u32)0; k < _mObj.fieldCount(); k = k + (u32)1)
+            {
+            if (_mBufs.get((Hashable*)String.withI64((i64)k)) == (Object*)0) continue;
+            String* et = mslPointee(_mObj.typeAt(k));
+            u32 t = spvType(et);
+            if (t == (u32)0 || ptxIs(et, "Bool") || spvNarrowBits(et) != (u32)0)
+                {
+                parBecause(spvS("it uses an array of 8- or 16-bit values or bools, which its Vulkan version cannot hold yet"));
+                return false;
+                }
+            meta.appendCString(" buf="); meta.append(String.withU32(_mObj.offsetAt(k))); meta.appendCString(":");
+            meta.append(String.withU32(k - (u32)3)); meta.appendCString(":"); meta.append(String.withU32(spvWidth(et)));
+            u32 v = spvBuffer(t, spvWidth(et), binding);
+            binding = binding + (u32)1;
+            String* key = spvS("f");
+            key.append(String.withI64((i64)k));
+            _sBufVar.set((Hashable*)key, (Object*)Number.withU32(v));
+            iface.add((Object*)Number.withU32(v));
+            }
+        for (u32 gi = (u32)0; gi < _mGlobals.count(); gi = gi + (u32)1)
+            {
+            String* gn = (String*)_mGlobals.get(gi);
+            IRSymbol* gs = (IRSymbol*)0;
+            for (u32 q = (u32)0; q < _m.syms().count(); q = q + (u32)1)
+                if (((IRSymbol*)_m.syms().get(q)).name().equals(gn))
+                    gs = (IRSymbol*)_m.syms().get(q);
+            String* gt = gs != (IRSymbol*)0 ? gs.dataType() : (String*)0;
+            IRLayout* gl = mslLayoutOf(gt);
+            String* et = gl != (IRLayout*)0 ? gl.typeAt((u32)0) : gt;
+            u32 t = spvType(et);
+            if (t == (u32)0 || ptxIs(et, "Bool") || spvNarrowBits(et) != (u32)0)
+                {
+                String* w = spvS("it uses ");
+                w.append(parShown(gn));
+                w.appendCString(", which its Vulkan version cannot hold yet");
+                parBecause(w);
+                return false;
+                }
+            meta.appendCString(" glob="); meta.append(gn); meta.appendCString(":"); meta.append(String.withU32(spvWidth(et)));
+            u32 v = spvBuffer(t, spvWidth(et), binding);
+            binding = binding + (u32)1;
+            String* key = spvS("g");
+            key.append(String.withU32(gi));
+            _sBufVar.set((Hashable*)key, (Object*)Number.withU32(v));
+            iface.add((Object*)Number.withU32(v));
+            }
+        Array* redVars = new Array();
+        Array* redFields = new Array();
+        for (u32 k = (u32)0; k < _mObj.fieldCount(); k = k + (u32)1)
+            {
+            if (_mReds.get((Hashable*)String.withI64((i64)k)) == (Object*)0) continue;
+            String* ft = _mObj.typeAt(k);
+            u32 t = spvType(ft);
+            if (t == (u32)0 || ptxIs(ft, "Bool") || spvNarrowBits(ft) != (u32)0 || _sMember.get((Hashable*)String.withU32(k)) == (Object*)0)
+                return false;
+            meta.appendCString(" red="); meta.append(String.withU32(_mObj.offsetAt(k))); meta.appendCString(":"); meta.append(String.withU32(spvWidth(ft)));
+            u32 v = spvBuffer(t, spvWidth(ft), binding);
+            binding = binding + (u32)1;
+            redVars.add((Object*)Number.withU32(v));
+            redFields.add((Object*)Number.withU32(k));
+            iface.add((Object*)Number.withU32(v));
+            }
+
+        // The kernel function.
+        u32 voidT = m.typeVoid();
+        String* fkey = spvS("fn");
+        fkey.append(String.withU32(voidT));
+        u32 fnT = m.cached(fkey, (u32)SPV_TYPEFUNCTION, spvA1(voidT), true);
+        u32 mainId = m.newId();
+        _spvFn = fn;
+        Array* header = new Array();
+        spvOp(header, (u32)SPV_FUNCTION, spvW((u32)4, voidT, mainId, (u32)0, fnT, (u32)0, (u32)0));
+        spvPlace(spvLabel());
+        _sLocalObj = spvLocalVar(localT);
+        if (!spvDeclareValues(f)) return false;
+
+        u32 gid = spvEmitR((u32)SPV_LOAD, uvec3, spvA1(gidV));
+        u32 tid32 = spvEmitR((u32)SPV_COMPOSITEEXTRACT, u32t, spvA2(gid, (u32)0));
+        u32 tid = spvEmitR((u32)SPV_UCONVERT, i64t, spvA1(tid32));
+        u32 pI64 = m.ptrType((u32)SPV_ST_PUSHCONSTANT, i64t);
+        u32 spanLo = spvEmitR((u32)SPV_LOAD, i64t, spvA1(spvEmitR((u32)SPV_ACCESSCHAIN, pI64, spvA2(spanV, m.u32c((u32)0)))));
+        u32 spanHi = spvEmitR((u32)SPV_LOAD, i64t, spvA1(spvEmitR((u32)SPV_ACCESSCHAIN, pI64, spvA2(spanV, m.u32c((u32)1)))));
+        u32 per = spvEmitR((u32)SPV_LOAD, i64t, spvA1(spvEmitR((u32)SPV_ACCESSCHAIN, pI64, spvA2(spanV, m.u32c((u32)2)))));
+        u32 lo = spvEmitR((u32)SPV_IADD, i64t, spvA2(spanLo, spvEmitR((u32)SPV_IMUL, i64t, spvA2(tid, per))));
+        u32 end = spvEmitR((u32)SPV_IADD, i64t, spvA2(lo, per));
+        u32 hi = spvEmitR((u32)SPV_SELECT, i64t, spvA3(spvEmitR((u32)SPV_SLESSTHAN, m.typeBool(), spvA2(end, spanHi)), end, spanHi));
+        for (u32 k = (u32)0; k < memberTypes.count(); k = k + (u32)1)
+            {
+            u32 mt = ((Number*)memberTypes.get(k)).asU32();
+            u32 src = spvEmitR((u32)SPV_ACCESSCHAIN, m.ptrType((u32)SPV_ST_STORAGEBUFFER, mt), spvA2(argsV, m.u32c(k)));
+            u32 dst = spvEmitR((u32)SPV_ACCESSCHAIN, m.ptrType((u32)SPV_ST_FUNCTION, mt), spvA2(_sLocalObj, m.u32c(k)));
+            spvEmit((u32)SPV_STORE, spvA2(dst, spvEmitR((u32)SPV_LOAD, mt, spvA1(src))));
+            }
+        u32 pLocal64 = m.ptrType((u32)SPV_ST_FUNCTION, i64t);
+        u32 m1 = ((Number*)_sMember.get((Hashable*)spvS("1"))).asU32();
+        u32 m2 = ((Number*)_sMember.get((Hashable*)spvS("2"))).asU32();
+        spvEmit((u32)SPV_STORE, spvA2(spvEmitR((u32)SPV_ACCESSCHAIN, pLocal64, spvA2(_sLocalObj, m.u32c(m1))), lo));
+        spvEmit((u32)SPV_STORE, spvA2(spvEmitR((u32)SPV_ACCESSCHAIN, pLocal64, spvA2(_sLocalObj, m.u32c(m2))), hi));
+        fn.pcVar = spvLocalVar(u32t);
+        spvEmit((u32)SPV_STORE, spvA2(fn.pcVar, m.u32c((u32)0)));
+        u32 guard = spvEmitR((u32)SPV_SLESSTHAN, m.typeBool(), spvA2(lo, hi));
+        u32 merge = spvLabel();
+        if (!spvDispatch(f, merge, guard)) return false;
+        u32 inRange = spvEmitR((u32)SPV_SLESSTHAN, m.typeBool(), spvA2(lo, spanHi));
+        u32 write = spvLabel();
+        u32 done = spvLabel();
+        spvEmit((u32)SPV_SELECTIONMERGE, spvA2(done, (u32)0));
+        spvEmit((u32)SPV_BRANCHCONDITIONAL, spvA3(inRange, write, done));
+        spvPlace(write);
+        for (u32 ri = (u32)0; ri < redFields.count(); ri = ri + (u32)1)
+            {
+            u32 k = ((Number*)redFields.get(ri)).asU32();
+            u32 mt = spvType(_mObj.typeAt(k));
+            u32 src = spvEmitR((u32)SPV_ACCESSCHAIN, m.ptrType((u32)SPV_ST_FUNCTION, mt),
+                               spvA2(_sLocalObj, m.u32c(((Number*)_sMember.get((Hashable*)String.withU32(k))).asU32())));
+            u32 dst = spvEmitR((u32)SPV_ACCESSCHAIN, m.ptrType((u32)SPV_ST_STORAGEBUFFER, mt),
+                               spvA3(((Number*)redVars.get(ri)).asU32(), m.u32c((u32)0), tid32));
+            spvEmit((u32)SPV_STORE, spvA2(dst, spvEmitR((u32)SPV_LOAD, mt, spvA1(src))));
+            }
+        spvEmit((u32)SPV_BRANCH, spvA1(done));
+        spvPlace(done);
+        spvEmit((u32)SPV_RETURN, new Array());
+        spvEmit((u32)SPV_FUNCTIONEND, new Array());
+        if (_mWhy != (String*)0)
+            return false;
+
+        // The head, now that the interface is known.
+        spvOp(m.head, (u32)SPV_MEMORYMODEL, spvA2((u32)0, (u32)1));
+        Array* ep = new Array();
+        ep.add((Object*)Number.withU32((u32)5));
+        ep.add((Object*)Number.withU32(mainId));
+        Array* nm = spvString(spvS("main"));
+        for (u32 i = (u32)0; i < nm.count(); i = i + (u32)1) ep.add(nm.get(i));
+        for (u32 i = (u32)0; i < iface.count(); i = i + (u32)1) ep.add(iface.get(i));
+        spvOp(m.head, (u32)SPV_ENTRYPOINT, ep);
+        spvOp(m.head, (u32)SPV_EXECUTIONMODE, spvW((u32)5, mainId, (u32)17, (u32)64, (u32)1, (u32)1, (u32)0));
+        for (u32 i = (u32)0; i < header.count(); i = i + (u32)1) m.funcs.add(header.get(i));
+        spvFinish(fn, m.funcs);
+
+        Array* words = m.bytes();
+        meta.appendCString(" spirv=");
+        meta.append(String.withU32(words.count() / (u32)4));
+        if (_mFast) meta.appendCString(" fast");
+        meta.appendCString("\n");
+        Array* out = new Array();
+        for (u32 i = (u32)0; i < meta.byteLength(); i = i + (u32)1)
+            out.add((Object*)Number.withU8(meta.byteAt(i)));
+        out.add((Object*)Number.withU8((u8)0));
+        while (out.count() % (u32)4 != (u32)0)
+            out.add((Object*)Number.withU8((u8)0));
+        for (u32 i = (u32)0; i < words.count(); i = i + (u32)1)
+            out.add(words.get(i));
+        _sOut = out;
+        return true;
+        }
+
     // Each block's gpuSource() returns a placeholder literal,
     // `__XC_PAR_MSL_<n>__`; give it the kernel's source for the target's GPU
     // (Metal on macOS, PTX for NVIDIA on Windows), or "" when the block
@@ -16492,11 +17713,20 @@ class ClassInfo
                     _mFast = true;
             if (_mFast) tag = fastTag;
             String* msl = (String*)0;
-            if (_parMetal)
+            // A SPIR-V module is bytes (it holds NULs): it goes in as they are.
+            Array* kernelBytes = (Array*)0;
+            if (_parSPIRV)
+                {
+                if (parSpirv(f))
+                    kernelBytes = _sOut;
+                }
+            else if (_parMetal)
                 msl = parMsl(f);
             else if (_parPTX)
                 msl = parPtx(f);
-            if (msl == (String*)0 && (_parMetal || _parPTX))
+            if (kernelBytes != (Array*)0)
+                msl = String.withCString("");
+            if (msl == (String*)0 && (_parMetal || _parPTX || _parSPIRV))
                 {
                 // On a target with a GPU, say why this block stays on the CPU.
                 String* w = String.withCString("this 'par' block runs on the CPU only, because ");
@@ -16518,6 +17748,11 @@ class ClassInfo
                 if (!same)
                     continue;
                 Array* nb = new Array();
+                if (kernelBytes != (Array*)0)
+                    {
+                    for (u32 q = (u32)0; q < kernelBytes.count(); q = q + (u32)1)
+                        nb.add(kernelBytes.get(q));
+                    }
                 for (u32 q = (u32)0; q < msl.byteLength(); q = q + (u32)1)
                     nb.add((Object*)Number.withU8(msl.byteAt(q)));
                 for (u32 q = tag.byteLength(); q < sym.bytes().count(); q = q + (u32)1)

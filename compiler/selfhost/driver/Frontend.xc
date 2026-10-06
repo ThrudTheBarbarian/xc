@@ -798,6 +798,13 @@ class FeOptions
         bool ios = o.libPlatform() != (String*)0 && o.libPlatform().hasPrefix(String.withCString("ios"));
         lower.setParMetal(o.target().equals(String.withCString("arm64")) && !android && !ios);
         lower.setParPTX(o.target().equals(String.withCString("win64")));
+        // Vulkan on x86-64 Linux, in a program that can load it (-dynamic, which
+        // the driver passes on as LINK_DYNAMIC): a static one gets no kernels.
+        bool linkDynamic = false;
+        for (u32 i = (u32)0; i < o.defs().count(); i = i + (u32)1)
+            if (((String*)o.defs().get(i)).hasPrefix(String.withCString("LINK_DYNAMIC")))
+                linkDynamic = true;
+        lower.setParSPIRV(o.target().equals(String.withCString("x86_64")) && linkDynamic);
         lower.setVtable(sema.vtable());
         IRModule* mod = lower.run(program, moduleNameOf(o.input()));
         o.setCallSites(lower.callSites());
