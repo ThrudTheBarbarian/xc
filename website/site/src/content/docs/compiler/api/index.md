@@ -24,6 +24,7 @@ support/
     Progress.xc         ← how far work has got
     StateMachine.xc     ← named states driven by events
     SearchIndex.xc      ← a small full-text index
+    IndexSet.xc         ← a set of indexes kept as ranges
     Comparable.xc  Hashable.xc  Enumerable.xc  Copying.xc  Codable.xc  Error.xc   ← protocols
     Coder.xc            ← keyed archiving to JSON, with gzip
     Thread.xc  Mutex.xc  Cond.xc  Sem.xc  Atomic.xc  ThreadLocal.xc  Pool.xc
@@ -129,6 +130,7 @@ and every method grouped by task with a jump-list at the top.
 | [`Progress`](/compiler/api/progress/) | how far work has got (from the release after 0.71) |
 | [`StateMachine`](/compiler/api/statemachine/) | named states driven by events (from the release after 0.71) |
 | [`SearchIndex`](/compiler/api/searchindex/) | a small full-text index (from the release after 0.71) |
+| [`IndexSet`](/compiler/api/indexset/) | a set of indexes kept as ranges (from the release after 0.71) |
 | [`CSV`](/compiler/api/csv/) | comma-separated values to rows and back (from the release after 0.71) |
 | [`Coder`](/compiler/api/coder/) | keyed archiving of an object graph to JSON, optionally gzipped |
 

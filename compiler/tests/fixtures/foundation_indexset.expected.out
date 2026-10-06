@@ -1,0 +1,48 @@
+3-5, 9, 10:
+  (3-5, 9-10) n=5 r=2
+add 6 touches:
+  (3-6, 9-10) n=6 r=2
+add 8 joins:
+  (3-6, 8-10) n=7 r=2
+add 0-1:
+  (0-1, 3-6, 8-10) n=9 r=3
+add 1-20 swallows:
+  (0-20) n=21 r=1
+remove 5-7 splits:
+  (0-4, 8-20) n=18 r=2
+remove ends:
+  (1-4, 8-19) n=16 r=2
+remove 4-13:
+  (1-3, 14-19) n=9 r=2
+contains 12 1
+contains 15 0
+range 10-14 1
+range 10-15 0
+intersects 15-19 0
+intersects 14-19 1
+first 10
+last 30
+>14 20
+>=20 20
+>30 -1
+<10 -1
+<20 14
+<=12 12
+rows:
+  (2-5, 10) n=5 r=2
+insert 2 rows at 4:
+  (2-3, 6-7, 12) n=5 r=3
+delete rows 3-4:
+  (2-3, 8) n=3 r=2
+delete rows 6-9:
+  (2-6) n=5 r=1
+equal 1
+b contains a 1
+hash same 1
+a plus t:
+  (1-3, 10-14, 20, 30) n=10 r=4
+a minus t:
+  (1-3) n=3 r=1
+empty first -1
+empty last -1
+empty 1
