@@ -556,7 +556,7 @@ class ParVulkan
         if (src == (u8*)0)
             return ParDevice.cpu("it has no Vulkan version");
 #if !(ARCH_win64 || LINK_DYNAMIC || PLATFORM_android)
-        return ParDevice.cpu("the program is not linked with -dynamic, which a Vulkan GPU needs");
+        return ParDevice.cpu("the program is linked with -static, and a Vulkan GPU needs the dynamic link");
 #else
         if (!start())
             return ParDevice.cpu("there is no Vulkan device with 64-bit integers");
