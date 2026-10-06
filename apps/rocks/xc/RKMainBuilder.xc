@@ -206,6 +206,7 @@ class RKMainBuilder : Object
         lib.setDragsRows(true); // a row dragged onto the form is placed where it is dropped
         libPane.addSubview(lib, UXGeom.make((i16)4, tY, (i16)((i32)inW - (i32)8), (i16)((i32)libH - (i32)tY - (i32)4)));
         lib.setAutoresizeMask((i32)(UX_FLEX_WIDTH | UX_FLEX_HEIGHT)); // the library takes the height
+        lib.reloadData(); // a table the toolkit draws (the web, GEM) makes its rows here
 
         // ---- the status line -----------------------------------------------
         UXLabel* status = new UXLabel();
