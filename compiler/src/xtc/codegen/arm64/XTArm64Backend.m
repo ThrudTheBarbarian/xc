@@ -130,9 +130,10 @@
 //
 // C[i*ldc + j] = sum over k of A[i*lda + k] * B[k*ldb + j], in k order, one
 // FMOPA (a fused multiply-add per element) per k: bit-identical to the loop,
-// whose `s + a*b` the back end fuses into fmadd. Returns 0 without touching
-// memory when A or B holds a NaN (FMOPA would return the default NaN where the
-// loop keeps the input's payload), when the CPU has no SME (sysctl hw.optional.arm.FEAT_SME, probed once
+// whose `s + a*b` the back end fuses into fmadd. Returns 0 when C comes out
+// holding a NaN (FMOPA returns the default NaN where the loop keeps an input
+// NaN's payload; the loop then writes all of C again), and 0 without touching
+// memory when the CPU has no SME (sysctl hw.optional.arm.FEAT_SME, probed once
 // into __xt_sme_state: 0 unknown, 1 yes, 2 no), when an index the loop
 // computes would wrap 32 bits, when the rows of C overlap (ldc < N), or when C
 // overlaps A or B; the caller then runs the loop.
@@ -198,41 +199,14 @@ static NSString *xtArm64SmeGemmKernel(BOOL f64) {
     // and back to the loop, if malloc fails.
     [o appendFormat:@"%@go:\n    mov x28, #0\n    cbz x24, %@go2\n    rdsvl x0, #2\n    mul x0, x0, x24\n    bl _malloc\n    cbz x0, %@ret\n    mov x28, x0\n", L, L, L];
     [o appendFormat:@"%@go2:\n    smstart\n    %@ x9\n", L, CNT];
-    // A NaN in A or B: hand back to the loop. FMOPA returns the default NaN
-    // where the loop's fmadd carries the input NaN's payload, so the results
-    // would differ in those bits; every other value, infinities, signed zeros
-    // and denormals included, comes out the same. Nothing is read when K == 0.
-    // One pass over A (M x K) and B (K x N), a vector at a time: about 1/N of
-    // the multiply's work.
-    // A NaN is an element whose bits, sign cleared, exceed infinity's; the
-    // scan keeps the unsigned maximum of those in z4 and compares once at the
-    // end. No predicate or flag work in the loop: a chain through a predicate
-    // register, or an SME instruction that sets the flags (whilelt, ptest),
-    // runs far slower on M4 than the vector work. Whole vectors run under p5
-    // (all lanes); the row's last partial vector under p6, the same for every
-    // row, so it is made once per matrix.
-    NSString *mask = f64 ? @"#0x7fffffffffffffff" : @"#0x7fffffff";
-    NSString *inf = f64 ? @"#0x7ff0000000000000" : @"#0x7f800000";
-    [o appendFormat:@"    cbz x24, %@mm\n    ptrue p5.%@\n    mov z4.%@, #0\n    mov z5.%@, %@\n", L, T, T, T, inf];
-    struct { const char *rows, *cols, *ld, *base, *tag; } scans[2] = {
-        {"x22", "x24", "x25", "x19", "na"}, {"x24", "x23", "x26", "x20", "nb"}};
-    for (int q = 0; q < 2; q++) {
-        [o appendFormat:@"    udiv x16, %s, x9\n    mul x16, x16, x9\n    whilelt p6.%@, x16, %s\n    mov x10, #0\n",
-                         scans[q].cols, T, scans[q].cols];
-        [o appendFormat:@"%@%sr:\n    mul x15, x10, %s\n    add x15, %s, x15, lsl #%d\n    mov x12, #0\n    cmp x12, x16\n    b.hs %@%st\n",
-                         L, scans[q].tag, scans[q].ld, scans[q].base, sh, L, scans[q].tag];
-        [o appendFormat:@"%@%sc:\n    %@ {z0.%@}, p5/z, [x15, x12, lsl #%d]\n    and z0.%@, z0.%@, %@\n    umax z4.%@, p5/m, z4.%@, z0.%@\n",
-                         L, scans[q].tag, LD, T, sh, T, T, mask, T, T, T];
-        [o appendFormat:@"    add x12, x12, x9\n    cmp x12, x16\n    b.lo %@%sc\n", L, scans[q].tag];
-        [o appendFormat:@"%@%st:\n    %@ {z0.%@}, p6/z, [x15, x12, lsl #%d]\n    and z0.%@, z0.%@, %@\n    umax z4.%@, p6/m, z4.%@, z0.%@\n",
-                         L, scans[q].tag, LD, T, sh, T, T, mask, T, T, T];
-        [o appendFormat:@"    add x10, x10, #1\n    cmp x10, %s\n    b.lo %@%sr\n", scans[q].rows, L, scans[q].tag];
-    }
-    [o appendFormat:@"    cmphi p3.%@, p5/z, z4.%@, z5.%@\n", T, T, T];
-    [o appendFormat:@"    ptest p5, p3.b\n    b.ne %@nan\n%@mm:\n    rdsvl x17, #2\n    mov x10, #0\n", L, L];
-    // Blocks of C two tiles tall: za0 takes rows i0.., za1 rows i0+vl.., and
-    // each row of B feeds both outer products. Per element the k order is the
-    // loop's, so the result is unchanged.
+    [o appendFormat:@"%@mm:\n    rdsvl x17, #2\n    mov x10, #0\n", L];
+    // Blocks of C two tiles tall and two wide: za0 takes rows i0.. and columns
+    // j0.., za1 rows i0+vl.., za2 and za3 the same rows at columns j0+vl... Per
+    // k, two columns of A and two pieces of B's row make four outer products
+    // from four loads, on four independent accumulators (two tiles left the
+    // kernel short of loads and waiting on FMOPA's latency: 54.5 against 31.5
+    // ms on M4, matrix_mul_f32). Per element the k order is the loop's, so the
+    // result is unchanged. za2 / za3 stage the transpose of A first.
     [o appendFormat:@"%@i:\n    whilelt p0.%@, x10, x22\n    add x8, x10, x9\n    whilelt p3.%@, x8, x22\n    mov x12, #0\n", L, T, T];
     // transpose this block's rows of A into the buffer, vl columns at a time:
     // rows into za2 / za3 horizontally, out again as columns
@@ -251,24 +225,53 @@ static NSString *xtArm64SmeGemmKernel(BOOL f64) {
     [o appendFormat:@"    add x15, x15, x17\n    add w13, w13, #1\n    cmp x13, x14\n    b.lo %@tc\n", L];
     [o appendFormat:@"    add x12, x12, x9\n    b %@t\n", L];
     // j0 loop: K outer-product pairs from the buffer and B
-    [o appendFormat:@"%@td:\n    mov x11, #0\n%@j:\n    whilelt p1.%@, x11, x23\n    zero {za0.%@, za1.%@}\n", L, L, T, T, T];
+    [o appendFormat:@"%@td:\n    mov x11, #0\n%@j:\n    whilelt p1.%@, x11, x23\n    add x8, x11, x9\n    whilelt p4.%@, x8, x23\n"
+                     "    zero {za0.%@, za1.%@, za2.%@, za3.%@}\n", L, L, T, T, T, T, T, T];
     [o appendFormat:@"    cbz x24, %@st\n    mov x15, x28\n    add x16, x20, x11, lsl #%d\n    mov x12, #0\n", L, sh];
-    [o appendFormat:@"%@kk:\n    %@ {z0.%@}, p0/z, [x15]\n    %@ {z2.%@}, p3/z, [x15, x9, lsl #%d]\n    %@ {z1.%@}, p1/z, [x16]\n",
-                     L, LD, T, LD, T, sh, LD, T];
+    [o appendFormat:@"%@kk:\n    %@ {z0.%@}, p0/z, [x15]\n    %@ {z2.%@}, p3/z, [x15, x9, lsl #%d]\n    %@ {z1.%@}, p1/z, [x16]\n"
+                     "    %@ {z3.%@}, p4/z, [x16, x9, lsl #%d]\n",
+                     L, LD, T, LD, T, sh, LD, T, LD, T, sh];
     [o appendFormat:@"    fmopa za0.%@, p0/m, p1/m, z0.%@, z1.%@\n    fmopa za1.%@, p3/m, p1/m, z2.%@, z1.%@\n", T, T, T, T, T, T];
+    [o appendFormat:@"    fmopa za2.%@, p0/m, p4/m, z0.%@, z3.%@\n    fmopa za3.%@, p3/m, p4/m, z2.%@, z3.%@\n", T, T, T, T, T, T];
     [o appendFormat:@"    add x15, x15, x17\n    add x16, x16, x26, lsl #%d\n    add x12, x12, #1\n    cmp x12, x24\n    b.lo %@kk\n", sh, L];
-    // store both tiles' rows to C
+    // store the four tiles' rows to C
     [o appendFormat:@"%@st:\n    sub x14, x22, x10\n    cmp x14, x9\n    csel x14, x14, x9, lo\n", L];
     [o appendFormat:@"    madd x15, x10, x27, x11\n    add x15, x21, x15, lsl #%d\n    mov w13, #0\n", sh];
-    [o appendFormat:@"%@s:\n    %@ {za0h.%@[w13, 0]}, p1, [x15]\n", L, ST, T];
+    [o appendFormat:@"%@s:\n    %@ {za0h.%@[w13, 0]}, p1, [x15]\n    %@ {za2h.%@[w13, 0]}, p4, [x15, x9, lsl #%d]\n", L, ST, T, ST, T, sh];
     [o appendFormat:@"    add x15, x15, x27, lsl #%d\n    add w13, w13, #1\n    cmp x13, x14\n    b.lo %@s\n", sh, L];
     [o appendFormat:@"    add x8, x10, x9\n    cmp x8, x22\n    b.hs %@jn\n", L];
     [o appendString:@"    sub x14, x22, x8\n    cmp x14, x9\n    csel x14, x14, x9, lo\n"];
     [o appendFormat:@"    madd x15, x8, x27, x11\n    add x15, x21, x15, lsl #%d\n    mov w13, #0\n", sh];
-    [o appendFormat:@"%@s2:\n    %@ {za1h.%@[w13, 0]}, p1, [x15]\n", L, ST, T];
+    [o appendFormat:@"%@s2:\n    %@ {za1h.%@[w13, 0]}, p1, [x15]\n    %@ {za3h.%@[w13, 0]}, p4, [x15, x9, lsl #%d]\n", L, ST, T, ST, T, sh];
     [o appendFormat:@"    add x15, x15, x27, lsl #%d\n    add w13, w13, #1\n    cmp x13, x14\n    b.lo %@s2\n", sh, L];
-    [o appendFormat:@"%@jn:\n    add x11, x11, x9\n    cmp x11, x23\n    b.lo %@j\n", L, L];
-    [o appendFormat:@"    add x10, x10, x9, lsl #1\n    cmp x10, x22\n    b.lo %@i\n    smstop\n    mov w22, #1\n    b %@free\n", L, L];
+    [o appendFormat:@"%@jn:\n    add x11, x11, x9, lsl #1\n    cmp x11, x23\n    b.lo %@j\n", L, L];
+    [o appendFormat:@"    add x10, x10, x9, lsl #1\n    cmp x10, x22\n    b.lo %@i\n", L];
+    // A NaN in C: hand back to the loop, which writes all of C again. FMOPA
+    // returns the default NaN where the loop's fmadd carries an input NaN's
+    // payload, so those results would differ in their bits; every other value,
+    // infinities, signed zeros and denormals included, comes out the same. A
+    // NaN in A or B always reaches C, so checking C (M x N, read once) covers
+    // them, at half the reads of checking A and B. With K == 0 C is zeros.
+    // A NaN is an element whose bits, sign cleared, exceed infinity's; the
+    // scan keeps the unsigned maximum of those in z4 and compares once at the
+    // end. No predicate or flag work in the loop: a chain through a predicate
+    // register, or an SME instruction that sets the flags (whilelt, ptest),
+    // runs far slower on M4 than the vector work. Whole vectors run under p5
+    // (all lanes); the row's last partial vector under p6, the same for every
+    // row, so it is made once.
+    NSString *mask = f64 ? @"#0x7fffffffffffffff" : @"#0x7fffffff";
+    NSString *inf = f64 ? @"#0x7ff0000000000000" : @"#0x7f800000";
+    [o appendFormat:@"    cbz x24, %@ok\n    ptrue p5.%@\n    mov z4.%@, #0\n    mov z5.%@, %@\n", L, T, T, T, inf];
+    [o appendFormat:@"    udiv x16, x23, x9\n    mul x16, x16, x9\n    whilelt p6.%@, x16, x23\n    mov x10, #0\n", T];
+    [o appendFormat:@"%@ncr:\n    mul x15, x10, x27\n    add x15, x21, x15, lsl #%d\n    mov x12, #0\n    cmp x12, x16\n    b.hs %@nct\n", L, sh, L];
+    [o appendFormat:@"%@ncc:\n    %@ {z0.%@}, p5/z, [x15, x12, lsl #%d]\n    and z0.%@, z0.%@, %@\n    umax z4.%@, p5/m, z4.%@, z0.%@\n",
+                     L, LD, T, sh, T, T, mask, T, T, T];
+    [o appendFormat:@"    add x12, x12, x9\n    cmp x12, x16\n    b.lo %@ncc\n", L];
+    [o appendFormat:@"%@nct:\n    %@ {z0.%@}, p6/z, [x15, x12, lsl #%d]\n    and z0.%@, z0.%@, %@\n    umax z4.%@, p6/m, z4.%@, z0.%@\n",
+                     L, LD, T, sh, T, T, mask, T, T, T];
+    [o appendFormat:@"    add x10, x10, #1\n    cmp x10, x22\n    b.lo %@ncr\n", L];
+    [o appendFormat:@"    cmphi p3.%@, p5/z, z4.%@, z5.%@\n    ptest p5, p3.b\n    b.ne %@nan\n", T, T, T, L];
+    [o appendFormat:@"%@ok:\n    smstop\n    mov w22, #1\n    b %@free\n", L, L];
     [o appendFormat:@"%@nan:\n    smstop\n    mov w22, #0\n%@free:\n    cbz x28, %@freed\n    mov x0, x28\n    bl _free\n", L, L, L];
     [o appendFormat:@"%@freed:\n    mov w0, w22\n    b %@ret\n%@done:\n    mov w0, #1\n%@ret:\n", L, L, L, L];
     [o appendString:@"    ldp d14, d15, [sp, #144]\n    ldp d12, d13, [sp, #128]\n"

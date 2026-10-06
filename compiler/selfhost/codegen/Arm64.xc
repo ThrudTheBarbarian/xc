@@ -258,44 +258,13 @@ class Arm64
         // and back to the loop, if malloc fails.
         o.append(String.withFormat("%sgo:\n    mov x28, #0\n    cbz x24, %sgo2\n    rdsvl x0, #2\n    mul x0, x0, x24\n    bl _malloc\n    cbz x0, %sret\n    mov x28, x0\n", L, L, L));
         o.append(String.withFormat("%sgo2:\n    smstart\n    %s x9\n", L, CNT));
-        // A NaN in A or B: hand back to the loop. FMOPA returns the default NaN
-        // where the loop's fmadd carries the input NaN's payload, so the results
-        // would differ in those bits; every other value, infinities, signed zeros
-        // and denormals included, comes out the same. Nothing is read when K == 0.
-        // One pass over A (M x K) and B (K x N), a vector at a time: about 1/N of
-        // the multiply's work.
-        // A NaN is an element whose bits, sign cleared, exceed infinity's; the
-        // scan keeps the unsigned maximum of those in z4 and compares once at the
-        // end. No predicate or flag work in the loop: a chain through a predicate
-        // register, or an SME instruction that sets the flags (whilelt, ptest),
-        // runs far slower on M4 than the vector work. Whole vectors run under p5
-        // (all lanes); the row's last partial vector under p6, the same for every
-        // row, so it is made once per matrix.
-        u8* mask = f64 ? "#0x7fffffffffffffff" : "#0x7fffffff";
-        u8* inf = f64 ? "#0x7ff0000000000000" : "#0x7f800000";
-        o.append(String.withFormat("    cbz x24, %smm\n    ptrue p5.%s\n    mov z4.%s, #0\n    mov z5.%s, %s\n", L, T, T, T, inf));
-        for (u32 q = (u32)0; q < (u32)2; q = q + (u32)1) {
-            u8* rows = q == (u32)0 ? "x22" : "x24";
-            u8* cols = q == (u32)0 ? "x24" : "x23";
-            u8* ld = q == (u32)0 ? "x25" : "x26";
-            u8* base = q == (u32)0 ? "x19" : "x20";
-            u8* tag = q == (u32)0 ? "na" : "nb";
-            o.append(String.withFormat("    udiv x16, %s, x9\n    mul x16, x16, x9\n    whilelt p6.%s, x16, %s\n    mov x10, #0\n",
-                                       cols, T, cols));
-            o.append(String.withFormat("%s%sr:\n    mul x15, x10, %s\n    add x15, %s, x15, lsl #%d\n    mov x12, #0\n    cmp x12, x16\n    b.hs %s%st\n",
-                                       L, tag, ld, base, sh, L, tag));
-            o.append(String.withFormat("%s%sc:\n    %s {z0.%s}, p5/z, [x15, x12, lsl #%d]\n    and z0.%s, z0.%s, %s\n    umax z4.%s, p5/m, z4.%s, z0.%s\n",
-                                       L, tag, LD, T, sh, T, T, mask, T, T, T));
-            o.append(String.withFormat("    add x12, x12, x9\n    cmp x12, x16\n    b.lo %s%sc\n", L, tag));
-            o.append(String.withFormat("%s%st:\n    %s {z0.%s}, p6/z, [x15, x12, lsl #%d]\n    and z0.%s, z0.%s, %s\n    umax z4.%s, p6/m, z4.%s, z0.%s\n",
-                                       L, tag, LD, T, sh, T, T, mask, T, T, T));
-            o.append(String.withFormat("    add x10, x10, #1\n    cmp x10, %s\n    b.lo %s%sr\n", rows, L, tag));
-        }
-        o.append(String.withFormat("    cmphi p3.%s, p5/z, z4.%s, z5.%s\n", T, T, T));
-        o.append(String.withFormat("    ptest p5, p3.b\n    b.ne %snan\n%smm:\n    rdsvl x17, #2\n    mov x10, #0\n", L, L));
-        // Blocks of C two tiles tall: za0 takes rows i0.., za1 rows i0+vl.., and
-        // each row of B feeds both outer products. Per element the k order is the
-        // loop's, so the result is unchanged.
+        o.append(String.withFormat("%smm:\n    rdsvl x17, #2\n    mov x10, #0\n", L));
+        // Blocks of C two tiles tall and two wide: za0 takes rows i0.. and
+        // columns j0.., za1 rows i0+vl.., za2 and za3 the same rows at columns
+        // j0+vl... Per k, two columns of A and two pieces of B's row make four
+        // outer products from four loads, on four independent accumulators.
+        // Per element the k order is the loop's, so the result is unchanged.
+        // za2 / za3 stage the transpose of A first. As the reference.
         o.append(String.withFormat("%si:\n    whilelt p0.%s, x10, x22\n    add x8, x10, x9\n    whilelt p3.%s, x8, x22\n    mov x12, #0\n", L, T, T));
         // transpose this block's rows of A into the buffer, vl columns at a time:
         // rows into za2 / za3 horizontally, out again as columns
@@ -314,24 +283,48 @@ class Arm64
         o.append(String.withFormat("    add x15, x15, x17\n    add w13, w13, #1\n    cmp x13, x14\n    b.lo %stc\n", L));
         o.append(String.withFormat("    add x12, x12, x9\n    b %st\n", L));
         // j0 loop: K outer-product pairs from the buffer and B
-        o.append(String.withFormat("%std:\n    mov x11, #0\n%sj:\n    whilelt p1.%s, x11, x23\n    zero {za0.%s, za1.%s}\n", L, L, T, T, T));
+        o.append(String.withFormat("%std:\n    mov x11, #0\n%sj:\n    whilelt p1.%s, x11, x23\n    add x8, x11, x9\n    whilelt p4.%s, x8, x23\n", L, L, T, T));
+        o.append(String.withFormat("    zero {za0.%s, za1.%s, za2.%s, za3.%s}\n", T, T, T, T));
         o.append(String.withFormat("    cbz x24, %sst\n    mov x15, x28\n    add x16, x20, x11, lsl #%d\n    mov x12, #0\n", L, sh));
         o.append(String.withFormat("%skk:\n    %s {z0.%s}, p0/z, [x15]\n    %s {z2.%s}, p3/z, [x15, x9, lsl #%d]\n    %s {z1.%s}, p1/z, [x16]\n",
                          L, LD, T, LD, T, sh, LD, T));
+        o.append(String.withFormat("    %s {z3.%s}, p4/z, [x16, x9, lsl #%d]\n", LD, T, sh));
         o.append(String.withFormat("    fmopa za0.%s, p0/m, p1/m, z0.%s, z1.%s\n    fmopa za1.%s, p3/m, p1/m, z2.%s, z1.%s\n", T, T, T, T, T, T));
+        o.append(String.withFormat("    fmopa za2.%s, p0/m, p4/m, z0.%s, z3.%s\n    fmopa za3.%s, p3/m, p4/m, z2.%s, z3.%s\n", T, T, T, T, T, T));
         o.append(String.withFormat("    add x15, x15, x17\n    add x16, x16, x26, lsl #%d\n    add x12, x12, #1\n    cmp x12, x24\n    b.lo %skk\n", sh, L));
-        // store both tiles' rows to C
+        // store the four tiles' rows to C
         o.append(String.withFormat("%sst:\n    sub x14, x22, x10\n    cmp x14, x9\n    csel x14, x14, x9, lo\n", L));
         o.append(String.withFormat("    madd x15, x10, x27, x11\n    add x15, x21, x15, lsl #%d\n    mov w13, #0\n", sh));
         o.append(String.withFormat("%ss:\n    %s {za0h.%s[w13, 0]}, p1, [x15]\n", L, ST, T));
+        o.append(String.withFormat("    %s {za2h.%s[w13, 0]}, p4, [x15, x9, lsl #%d]\n", ST, T, sh));
         o.append(String.withFormat("    add x15, x15, x27, lsl #%d\n    add w13, w13, #1\n    cmp x13, x14\n    b.lo %ss\n", sh, L));
         o.append(String.withFormat("    add x8, x10, x9\n    cmp x8, x22\n    b.hs %sjn\n", L));
         o.appendCString("    sub x14, x22, x8\n    cmp x14, x9\n    csel x14, x14, x9, lo\n");
         o.append(String.withFormat("    madd x15, x8, x27, x11\n    add x15, x21, x15, lsl #%d\n    mov w13, #0\n", sh));
         o.append(String.withFormat("%ss2:\n    %s {za1h.%s[w13, 0]}, p1, [x15]\n", L, ST, T));
+        o.append(String.withFormat("    %s {za3h.%s[w13, 0]}, p4, [x15, x9, lsl #%d]\n", ST, T, sh));
         o.append(String.withFormat("    add x15, x15, x27, lsl #%d\n    add w13, w13, #1\n    cmp x13, x14\n    b.lo %ss2\n", sh, L));
-        o.append(String.withFormat("%sjn:\n    add x11, x11, x9\n    cmp x11, x23\n    b.lo %sj\n", L, L));
-        o.append(String.withFormat("    add x10, x10, x9, lsl #1\n    cmp x10, x22\n    b.lo %si\n    smstop\n    mov w22, #1\n    b %sfree\n", L, L));
+        o.append(String.withFormat("%sjn:\n    add x11, x11, x9, lsl #1\n    cmp x11, x23\n    b.lo %sj\n", L, L));
+        o.append(String.withFormat("    add x10, x10, x9, lsl #1\n    cmp x10, x22\n    b.lo %si\n", L));
+        // A NaN in C: hand back to the loop, which writes all of C again (FMOPA
+        // returns the default NaN where the loop keeps an input NaN's payload).
+        // A NaN in A or B always reaches C, so checking C covers them. The
+        // unsigned maximum of the elements' bits, sign cleared, against
+        // infinity's, compared once; no predicate or flag work in the loop.
+        // As the reference.
+        u8* mask = f64 ? "#0x7fffffffffffffff" : "#0x7fffffff";
+        u8* inf = f64 ? "#0x7ff0000000000000" : "#0x7f800000";
+        o.append(String.withFormat("    cbz x24, %sok\n    ptrue p5.%s\n    mov z4.%s, #0\n    mov z5.%s, %s\n", L, T, T, T, inf));
+        o.append(String.withFormat("    udiv x16, x23, x9\n    mul x16, x16, x9\n    whilelt p6.%s, x16, x23\n    mov x10, #0\n", T));
+        o.append(String.withFormat("%sncr:\n    mul x15, x10, x27\n    add x15, x21, x15, lsl #%d\n    mov x12, #0\n    cmp x12, x16\n    b.hs %snct\n", L, sh, L));
+        o.append(String.withFormat("%sncc:\n    %s {z0.%s}, p5/z, [x15, x12, lsl #%d]\n    and z0.%s, z0.%s, %s\n", L, LD, T, sh, T, T, mask));
+        o.append(String.withFormat("    umax z4.%s, p5/m, z4.%s, z0.%s\n", T, T, T));
+        o.append(String.withFormat("    add x12, x12, x9\n    cmp x12, x16\n    b.lo %sncc\n", L));
+        o.append(String.withFormat("%snct:\n    %s {z0.%s}, p6/z, [x15, x12, lsl #%d]\n    and z0.%s, z0.%s, %s\n", L, LD, T, sh, T, T, mask));
+        o.append(String.withFormat("    umax z4.%s, p6/m, z4.%s, z0.%s\n", T, T, T));
+        o.append(String.withFormat("    add x10, x10, #1\n    cmp x10, x22\n    b.lo %sncr\n", L));
+        o.append(String.withFormat("    cmphi p3.%s, p5/z, z4.%s, z5.%s\n    ptest p5, p3.b\n    b.ne %snan\n", T, T, T, L));
+        o.append(String.withFormat("%sok:\n    smstop\n    mov w22, #1\n    b %sfree\n", L, L));
         o.append(String.withFormat("%snan:\n    smstop\n    mov w22, #0\n%sfree:\n    cbz x28, %sfreed\n    mov x0, x28\n    bl _free\n", L, L, L));
         o.append(String.withFormat("%sfreed:\n    mov w0, w22\n    b %sret\n%sdone:\n    mov w0, #1\n%sret:\n", L, L, L, L));
         o.appendCString("    ldp d14, d15, [sp, #144]\n    ldp d12, d13, [sp, #128]\n"
