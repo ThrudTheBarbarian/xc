@@ -1,0 +1,25 @@
+post Saved from b:
+  a heard Saved from b
+  any heard Saved from b
+post Saved from a, with userInfo:
+  a heard Saved from a v=7
+  b heard Saved from a v=7
+  any heard Saved from a v=7
+post Closed, no sender:
+  any heard Closed from -
+remove a for Saved; post Saved:
+  b heard Saved from a
+  any heard Saved from a
+observers: 2
+b goes away; post Saved from a:
+  any heard Saved from a
+observers: 1
+any adds an observer while hearing; post Ping twice:
+  any heard Ping from -
+  (added late)
+  any heard Ping from -
+  late heard Ping from -
+remove any and the late one; post Ping:
+observers: 0
+shared is shared: 1
+a heard 2, any heard 7

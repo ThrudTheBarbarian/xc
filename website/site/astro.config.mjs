@@ -75,6 +75,7 @@ export default defineConfig({
 										{ label: 'Expression', slug: 'compiler/api/expression' },
 										{ label: 'JSON', slug: 'compiler/api/json' },
 										{ label: 'Map', slug: 'compiler/api/map' },
+										{ label: 'NotificationCenter', slug: 'compiler/api/notificationcenter' },
 										{ label: 'Null', slug: 'compiler/api/null' },
 										{ label: 'Number', slug: 'compiler/api/number' },
 										{ label: 'NumberFormatter', slug: 'compiler/api/numberformatter' },
