@@ -29,6 +29,7 @@
 #import "UXSegmentedControl.xc" // a native NSSegmentedControl overlay
 #import "UXProgressBar.xc"      // a native NSProgressIndicator overlay
 #import "UXToolbar.xc"          // realized as a native NSToolbar (window chrome), not a subview
+#import "UXTextView.xc"         // a native NSTextView in an NSScrollView
 #import "UXLibc.xc"
 
 // The shim (libUXAppKit.m).  Primitive signatures only — no NSRect crosses into xtc.
@@ -85,6 +86,19 @@ i32 ux_ak_menu_popup(i32 handle, pointer titles, pointer flags, i32 n, i32 x, i3
 void ux_ak_set_outline_drag_hook(pointer fn);
 pointer ux_ak_outline_item_at(i32 handle, i32 node, i32 x, i32 y);
 void ux_ak_window_line(i32 handle, i32 on, i32 x0, i32 y0, i32 x1, i32 y1, i32 hx, i32 hy, i32 hw, i32 hh);
+// The native text view (UXTextView): an NSTextView in an NSScrollView.
+void ux_ak_make_textview(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h);
+void ux_ak_textview_set_hooks(pointer changed, pointer selected);
+void ux_ak_textview_set_all(i32 handle, i32 node, u8* text, i32 nbytes, i32* runs, i32 nruns);
+void ux_ak_textview_replace(i32 handle, i32 node, i32 start, i32 len, u8* text, i32 nbytes, i32* runs, i32 nruns,
+                            i32 attrsOnly);
+void ux_ak_textview_size(i32 handle, i32 node, i32* nbytes, i32* nruns);
+i32 ux_ak_textview_read(i32 handle, i32 node, u8* buf, i32 cap, i32* runs, i32 maxRuns);
+void ux_ak_textview_selection(i32 handle, i32 node, i32* start, i32* len);
+void ux_ak_textview_set_selection(i32 handle, i32 node, i32 start, i32 len);
+i32 ux_ak_textview_undo(i32 handle, i32 node, i32 what);
+void ux_ak_textview_set_typing(i32 handle, i32 node, i32 flags, i32 colour, i32 size);
+void ux_ak_textview_focus(i32 handle, i32 node);
 void ux_ak_window_set_min_size(i32 handle, i32 w, i32 h);     // register the toolkit event forwarder
 void ux_ak_set_turn_hook(pointer fn, i32 ms); // the frame clock: the display link, or a timer for a slow tick
 void ux_ak_set_control_fire(pointer fn); // register the control-click -> action forwarder
@@ -440,6 +454,41 @@ void xgAKFieldChanged(i32 handle, i32 node)
         }
     }
 
+// The user edited a native text view, or moved its selection: tell the UXTextView parked in
+// gAKCtlPeer when the view was made.
+UXTextView* xgAKTextViewAt(i32 handle, i32 node)
+    {
+    if (handle < (i32)0 || handle >= (i32)64 || node < (i32)0 || node >= (i32)4096)
+        {
+        return (UXTextView*)0;
+        }
+    return (UXTextView* ?)(Object*)gAKCtlPeer[handle * (i32)4096 + node];
+    }
+void xgAKTextViewChanged(i32 handle, i32 node)
+    {
+    UXTextView* tv = xgAKTextViewAt(handle, node);
+    if (tv != (UXTextView*)0)
+        {
+        tv.nativeDidChange();
+        }
+    if (gAKApp != (UXApplication*)0)
+        {
+        gAKApp.displayIfNeeded();
+        }
+    }
+void xgAKTextViewSelected(i32 handle, i32 node)
+    {
+    UXTextView* tv = xgAKTextViewAt(handle, node);
+    if (tv != (UXTextView*)0)
+        {
+        tv.nativeDidSelect();
+        }
+    if (gAKApp != (UXApplication*)0)
+        {
+        gAKApp.displayIfNeeded();
+        }
+    }
+
 // Return in a native NSTextField: the field's onSubmit.  The delegate's buffer sync has already
 // happened (controlTextDidChange fires per keystroke), so this is the announcement and nothing else.
 void xgAKFieldSubmitted(i32 handle, i32 node)
@@ -587,6 +636,7 @@ class UXAppKitDriver : Object<UXViewDriver>
         ux_ak_set_outline_drag_hook((pointer)&xgAKOutlineDragText);
         ux_ak_set_field_hooks((pointer)&xgAKFieldChanged);  // NSTextField edits fire onChange
         ux_ak_set_field_submit_hooks((pointer)&xgAKFieldSubmitted); // ...and Return fires onSubmit
+        ux_ak_textview_set_hooks((pointer)&xgAKTextViewChanged, (pointer)&xgAKTextViewSelected);
         ux_ak_set_scroll_content((pointer)&ux_scroll_draw); // a scroll doc view draws its subtree
         screenW[0] = (i32)1440;
         screenH[0] = (i32)900;
@@ -1309,6 +1359,45 @@ class UXAppKitDriver : Object<UXViewDriver>
         {
         return false;
         }
+
+    // ---- the native text view (UXTextView) -----------------------------------------------------
+    void textViewSetAll(i32 handle, i32 node, u8* text, i32 nbytes, i32* runs, i32 nruns)
+        {
+        ux_ak_textview_set_all(handle, node, text, nbytes, runs, nruns);
+        }
+    void textViewReplace(i32 handle, i32 node, i32 start, i32 len, u8* text, i32 nbytes, i32* runs, i32 nruns,
+                         i32 attrsOnly)
+        {
+        ux_ak_textview_replace(handle, node, start, len, text, nbytes, runs, nruns, attrsOnly);
+        }
+    void textViewSize(i32 handle, i32 node, i32* nbytes, i32* nruns)
+        {
+        ux_ak_textview_size(handle, node, nbytes, nruns);
+        }
+    i32 textViewRead(i32 handle, i32 node, u8* buf, i32 cap, i32* runs, i32 maxRuns)
+        {
+        return ux_ak_textview_read(handle, node, buf, cap, runs, maxRuns);
+        }
+    void textViewSelection(i32 handle, i32 node, i32* start, i32* len)
+        {
+        ux_ak_textview_selection(handle, node, start, len);
+        }
+    void textViewSetSelection(i32 handle, i32 node, i32 start, i32 len)
+        {
+        ux_ak_textview_set_selection(handle, node, start, len);
+        }
+    i32 textViewUndo(i32 handle, i32 node, i32 what)
+        {
+        return ux_ak_textview_undo(handle, node, what);
+        }
+    void textViewSetTyping(i32 handle, i32 node, i32 flags, i32 colour, i32 size)
+        {
+        ux_ak_textview_set_typing(handle, node, flags, colour, size);
+        }
+    void textViewFocus(i32 handle, i32 node)
+        {
+        ux_ak_textview_focus(handle, node);
+        }
     void structSetSelectable(pointer h, i32 i, i32 on)
         {
         ((AKTree*)h).nodes[i].selectable = (i16)on;
@@ -1420,7 +1509,7 @@ class UXAppKitDriver : Object<UXViewDriver>
         i32 k = t.nodes[i].kind;
         // A native NSTableView (realizeTree) covers the table's whole area interactively, so don't
         // draw the box or recurse into its rows/cells; headless falls through and draws the subtree.
-        if (k == (i32)UXKindTable && self.nativeUI() != (i32)0)
+        if ((k == (i32)UXKindTable || k == (i32)UXKindTextView) && self.nativeUI() != (i32)0)
             {
             return;
             }
@@ -1494,7 +1583,7 @@ class UXAppKitDriver : Object<UXViewDriver>
                 return;
                 }
             }
-        if ((k == (i32)UXKindView || k == (i32)UXKindSurface || k == (i32)UXKindShield || k == (i32)UXKindGLView || k == (i32)UXKindCheckbox || k == (i32)UXKindRadio || k == (i32)UXKindToolbar) && gAKUserFn != (pointer)0)
+        if ((k == (i32)UXKindView || k == (i32)UXKindSurface || k == (i32)UXKindShield || k == (i32)UXKindGLView || k == (i32)UXKindCheckbox || k == (i32)UXKindRadio || k == (i32)UXKindToolbar || k == (i32)UXKindTextView) && gAKUserFn != (pointer)0)
             {
             // A view's drawing stays INSIDE ITS FRAME, as an NSView's does: a panel that draws its own
             // page offset by a scroll relies on its box to cut the rest off.
@@ -1902,6 +1991,31 @@ class UXAppKitDriver : Object<UXViewDriver>
                     ux_ak_toolbar_install(handle, i);
                     gAKCtlPeer[handle * (i32)4096 + i] = t.nodes[i].peer; // realized-flag + click-routing peer
                     }
+                }
+            else if (k == (i32)UXKindTextView)
+                {
+                i32 ax = (i32)0;
+                i32 ay = (i32)0;
+                i32 w = (i32)0;
+                i32 hh = (i32)0;
+                self.structAbsFrame(tree, i, &ax, &ay, &w, &hh);
+                i32 mask = (i32)t.nodes[i].autoresize;
+                if (ux_ak_has_control(handle, i) == (i32)0)
+                    {
+                    ux_ak_make_textview(handle, i, ax, ay, w, hh);
+                    ux_ak_set_control_autoresize(handle, i, mask);
+                    gAKCtlPeer[handle * (i32)4096 + i] = t.nodes[i].peer;
+                    UXTextView* tvp = (UXTextView* ?)(Object*)t.nodes[i].peer;
+                    if (tvp != (UXTextView*)0)
+                        {
+                        tvp.nativeAttach(handle, i);
+                        }
+                    }
+                else if (mask == (i32)0)
+                    {
+                    ux_ak_set_control_frame(handle, i, ax, ay, w, hh);
+                    }
+                ux_ak_set_control_hidden(handle, i, self.effectiveHidden(tree, i));
                 }
             else if (k == (i32)UXKindTable)
                 {

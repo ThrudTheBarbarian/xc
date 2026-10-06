@@ -31,6 +31,7 @@ i32 UXK_ABI_SYM(void)
 #import "UXNib.xc"
 #import "UXNibGem.xc"
 #import "UXTableView.xc"
+#import "UXTextView.xc"
 #import "UXOutlineView.xc"
 
 // ---- the rest of the toolkit ------------------------------------------------

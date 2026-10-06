@@ -1,14 +1,23 @@
 ---
 title: UXTextStyle
-description: "How a span of rich text is drawn: the bold, italic, pen and size attributes UXKit reads from a Foundation AttributedString."
+description: "How a span of rich text is drawn: the style attributes UXKit reads from a Foundation AttributedString."
 ---
 
 Rich text in UXKit is a Foundation
 [`AttributedString`](/compiler/api/attributedstring/). `UXTextStyle` names the
-attributes UXKit draws and reads them as one value: `bold` and `italic`
-(Number booleans), `pen` (a Number, the colour pen; `1` is ink) and `size` (a
-Number, the point size; `0` is the view's own). Other attributes are kept by
-the string and ignored when drawing. From 0.72.
+attributes UXKit draws and reads them as one value:
+
+| Attribute | Value | Default |
+|---|---|---|
+| `bold`, `italic`, `underline`, `monospace` | Number booleans | off |
+| `pen` | Number, the colour pen | `1`, ink |
+| `color` | Number, `0xRRGGBB` | none: the view's ink |
+| `size` | Number, the point size | `0`: the view's own |
+| `alignment` | Number, `UX_ALIGN_*` | `UX_ALIGN_LEFT` |
+
+[`UXTextView`](/compiler/api/uxkit/uxtextview/) applies `alignment` to whole
+paragraphs and draws `color`; the drawn text views use `pen`. Other attributes
+are kept by the string and ignored when drawing. From 0.72.
 
 ```c
 #import "UXTextStyle.xc"
@@ -38,7 +47,8 @@ static UXTextStyle* of(Map* attrs)
 ```
 
 The style an attribute set describes. Names it does not have keep their
-defaults: not bold, not italic, pen `1`, size `0`.
+defaults. The fields are `bold`, `italic`, `underline`, `monospace`, `pen`,
+`color` (`-1` for none), `size` and `alignment`.
 
 ### at
 

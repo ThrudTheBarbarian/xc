@@ -44,6 +44,7 @@ export default {
 				{ label: 'UXTabView', slug: 'compiler/api/uxkit/uxtabview' },
 				{ label: 'UXTableView', slug: 'compiler/api/uxkit/uxtableview' },
 				{ label: 'UXTextField', slug: 'compiler/api/uxkit/uxtextfield' },
+				{ label: 'UXTextView', slug: 'compiler/api/uxkit/uxtextview' },
 				{ label: 'UXToolbar', slug: 'compiler/api/uxkit/uxtoolbar' },
 				{ label: 'UXView', slug: 'compiler/api/uxkit/uxview' },
 				{ label: 'UXViewTree', slug: 'compiler/api/uxkit/uxviewtree' },

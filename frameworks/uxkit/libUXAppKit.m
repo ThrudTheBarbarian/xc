@@ -4909,3 +4909,423 @@ int ux_ak_test_control_text(int handle, int node, char* buf, int n)
     snprintf(buf, (size_t)n, "%s", [s UTF8String]);
     return 1;
     }
+
+// ---- native text view (UXTextView): an NSTextView in an NSScrollView ------------------------------
+// The text crosses the seam as UTF-8 bytes plus style runs, five ints each: byte start, byte length,
+// flags, colour, size.  Flags: 1 bold, 2 italic, 4 underline, 8 monospace, and the paragraph's
+// alignment in bits 4-5 (UX_ALIGN_*: 0 left, 1 right, 2 centre, 3 justified).  Colour is 0 for the
+// default ink or 0x01RRGGBB; size 0 is the default.  Offsets are UTF-8 bytes on this side too: the
+// conversion to NSString's UTF-16 units happens here and nowhere else.  Edits the toolkit makes go
+// through shouldChangeTextInRange/didChangeText, so the text view's own undo records them.
+#define UX_TV_RUN 5
+#define UX_TV_FONT 13.0
+static NSTextView* g_tv[UX_MAXW][UX_MAXN];
+typedef void (*ux_tv_fn)(int handle, int node);
+static ux_tv_fn g_tv_changed = 0;
+static ux_tv_fn g_tv_selected = 0;
+static int g_tv_quiet = 0; // a change the toolkit pushed is not reported back to it
+static id g_tv_delegate = 0;
+void ux_ak_textview_set_hooks(void* changed, void* selected)
+    {
+    g_tv_changed = (ux_tv_fn)changed;
+    g_tv_selected = (ux_tv_fn)selected;
+    }
+static int ak_tv_tag(NSTextView* tv)
+    {
+    return [[tv identifier] intValue];
+    }
+static void ak_tv_did_change(__unsafe_unretained id self, SEL _cmd, __unsafe_unretained id note)
+    {
+    int tag = ak_tv_tag([(NSNotification*)note object]);
+    if (!g_tv_quiet && g_tv_changed)
+        g_tv_changed(tag / 1000, tag % 1000);
+    }
+static void ak_tv_did_select(__unsafe_unretained id self, SEL _cmd, __unsafe_unretained id note)
+    {
+    int tag = ak_tv_tag([(NSNotification*)note object]);
+    if (!g_tv_quiet && g_tv_selected)
+        g_tv_selected(tag / 1000, tag % 1000);
+    }
+static id ak_tv_delegate(void)
+    {
+    if (g_tv_delegate)
+        return g_tv_delegate;
+    Class c = objc_allocateClassPair([NSObject class], "UXTextViewDelegate", 0);
+    class_addMethod(c, sel_registerName("textDidChange:"), (IMP)ak_tv_did_change, "v@:@");
+    class_addMethod(c, sel_registerName("textViewDidChangeSelection:"), (IMP)ak_tv_did_select, "v@:@");
+    objc_registerClassPair(c);
+    g_tv_delegate = [[c alloc] init];
+    return g_tv_delegate;
+    }
+static NSTextView* ak_tv(int handle, int node)
+    {
+    if (handle < 0 || handle >= UX_MAXW || node < 0 || node >= UX_MAXN)
+        return nil;
+    return g_tv[handle][node];
+    }
+// A UTF-8 byte offset into s as a UTF-16 index, backed off to the start of a character.
+static NSUInteger ak_u16_of(NSString* s, int bytes)
+    {
+    const char* u = [s UTF8String];
+    int n = (int)strlen(u);
+    if (bytes <= 0)
+        return 0;
+    if (bytes >= n)
+        return [s length];
+    while (bytes > 0 && ((unsigned char)u[bytes] & 0xC0) == 0x80)
+        bytes--;
+    NSString* head = [[NSString alloc] initWithBytes:u length:(NSUInteger)bytes encoding:NSUTF8StringEncoding];
+    return head ? [head length] : 0;
+    }
+// A UTF-16 index into s as a UTF-8 byte offset (an index inside a surrogate pair counts its start).
+static int ak_u8_of(NSString* s, NSUInteger i)
+    {
+    if (i == 0)
+        return 0;
+    if (i >= [s length])
+        return (int)[s lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
+    NSRange cr = [s rangeOfComposedCharacterSequenceAtIndex:i];
+    if (cr.location < i)
+        i = cr.location;
+    return (int)[[s substringToIndex:i] lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
+    }
+static NSDictionary* ak_tv_attrs(int flags, int colour, int size)
+    {
+    CGFloat pt = size > 0 ? (CGFloat)size : UX_TV_FONT;
+    NSFont* f = (flags & 8) ? [NSFont monospacedSystemFontOfSize:pt weight:NSFontWeightRegular] : [NSFont systemFontOfSize:pt];
+    NSFontManager* fm = [NSFontManager sharedFontManager];
+    if (flags & 1)
+        f = [fm convertFont:f toHaveTrait:NSBoldFontMask];
+    if (flags & 2)
+        f = [fm convertFont:f toHaveTrait:NSItalicFontMask];
+    NSMutableDictionary* d = [NSMutableDictionary dictionary];
+    d[NSFontAttributeName] = f;
+    if (flags & 4)
+        d[NSUnderlineStyleAttributeName] = @(NSUnderlineStyleSingle);
+    d[NSForegroundColorAttributeName] = colour ? [NSColor colorWithSRGBRed:((colour >> 16) & 255) / 255.0
+                                                                    green:((colour >> 8) & 255) / 255.0
+                                                                     blue:(colour & 255) / 255.0
+                                                                    alpha:1.0]
+                                               : [NSColor textColor];
+    NSMutableParagraphStyle* ps = [[NSMutableParagraphStyle alloc] init];
+    int al = (flags >> 4) & 3;
+    [ps setAlignment:(al == 1 ? NSTextAlignmentRight : al == 2 ? NSTextAlignmentCenter
+                                                     : al == 3 ? NSTextAlignmentJustified : NSTextAlignmentLeft)];
+    d[NSParagraphStyleAttributeName] = ps;
+    return d;
+    }
+// UTF-8 text and its runs (offsets relative to the text) as an attributed string.  Bytes no run
+// covers get the default style.
+static NSAttributedString* ak_tv_build(const char* text, int nbytes, const int* runs, int nruns)
+    {
+    NSMutableAttributedString* out = [[NSMutableAttributedString alloc] init];
+    int at = 0;
+    for (int k = 0; k <= nruns; k++)
+        {
+        int s = k < nruns ? runs[k * UX_TV_RUN] : nbytes;
+        int l = k < nruns ? runs[k * UX_TV_RUN + 1] : 0;
+        if (s > at) // a gap: default style
+            {
+            NSString* g = [[NSString alloc] initWithBytes:text + at length:(NSUInteger)(s - at) encoding:NSUTF8StringEncoding];
+            if (g)
+                [out appendAttributedString:[[NSAttributedString alloc] initWithString:g attributes:ak_tv_attrs(0, 0, 0)]];
+            at = s;
+            }
+        if (k == nruns || l <= 0 || s < at || s + l > nbytes)
+            continue;
+        NSString* p = [[NSString alloc] initWithBytes:text + s length:(NSUInteger)l encoding:NSUTF8StringEncoding];
+        if (p)
+            [out appendAttributedString:[[NSAttributedString alloc] initWithString:p
+                                                                       attributes:ak_tv_attrs(runs[k * UX_TV_RUN + 2],
+                                                                                              runs[k * UX_TV_RUN + 3],
+                                                                                              runs[k * UX_TV_RUN + 4])]];
+        at = s + l;
+        }
+    return out;
+    }
+// The editing shortcuts, taken by the text view while it has the focus.  AppKit offers a key
+// equivalent to the key window's views before the menu bar, so these work whatever menus the app
+// has (UXKit's menu items go to the toolkit, not the first responder).
+static BOOL ak_tv_key_equivalent(__unsafe_unretained id self, SEL _cmd, __unsafe_unretained NSEvent* e)
+    {
+    NSTextView* tv = (NSTextView*)self;
+    if ([[tv window] firstResponder] != tv)
+        return NO;
+    NSEventModifierFlags f = [e modifierFlags] & NSEventModifierFlagDeviceIndependentFlagsMask;
+    if (!(f & NSEventModifierFlagCommand) || (f & (NSEventModifierFlagControl | NSEventModifierFlagOption)))
+        return NO;
+    BOOL shift = (f & NSEventModifierFlagShift) != 0;
+    NSString* k = [[e charactersIgnoringModifiers] lowercaseString];
+    if ([k isEqualToString:@"z"])
+        {
+        NSUndoManager* um = [tv undoManager];
+        if (shift ? [um canRedo] : [um canUndo])
+            {
+            shift ? [um redo] : [um undo];
+            int tag = ak_tv_tag(tv); // an undo does not post textDidChange
+            if (!g_tv_quiet && g_tv_changed)
+                g_tv_changed(tag / 1000, tag % 1000);
+            }
+        return YES;
+        }
+    if (shift)
+        return NO;
+    if ([k isEqualToString:@"x"])
+        [tv cut:nil];
+    else if ([k isEqualToString:@"c"])
+        [tv copy:nil];
+    else if ([k isEqualToString:@"v"])
+        [tv paste:nil];
+    else if ([k isEqualToString:@"a"])
+        [tv selectAll:nil];
+    else
+        return NO;
+    return YES;
+    }
+static Class ak_tv_class(void)
+    {
+    static Class c = 0;
+    if (c)
+        return c;
+    c = objc_allocateClassPair([NSTextView class], "UXNativeTextView", 0);
+    class_addMethod(c, sel_registerName("performKeyEquivalent:"), (IMP)ak_tv_key_equivalent, "c@:@");
+    objc_registerClassPair(c);
+    return c;
+    }
+void ux_ak_make_textview(int handle, int node, int x, int y, int w, int h)
+    {
+    NSView* content = g_view[handle];
+    if (!content || node < 0 || node >= UX_MAXN)
+        return;
+    NSScrollView* sv = [[NSScrollView alloc] initWithFrame:NSMakeRect(x, y, w, h)];
+    [sv setHasVerticalScroller:YES];
+    [sv setBorderType:NSBezelBorder];
+    NSSize cs = [sv contentSize];
+    NSTextView* tv = [[ak_tv_class() alloc] initWithFrame:NSMakeRect(0, 0, cs.width, cs.height)];
+    [tv setRichText:YES];
+    [tv setAllowsUndo:YES];
+    [tv setEditable:YES];
+    [tv setSelectable:YES];
+    [tv setImportsGraphics:NO];
+    [tv setUsesFontPanel:NO];
+    [tv setAutomaticQuoteSubstitutionEnabled:NO];
+    [tv setAutomaticDashSubstitutionEnabled:NO];
+    [tv setAutomaticTextReplacementEnabled:NO];
+    [tv setVerticallyResizable:YES];
+    [tv setHorizontallyResizable:NO];
+    [tv setAutoresizingMask:NSViewWidthSizable];
+    [[tv textContainer] setWidthTracksTextView:YES];
+    [tv setTypingAttributes:ak_tv_attrs(0, 0, 0)];
+    [tv setIdentifier:[NSString stringWithFormat:@"%d", handle * 1000 + node]];
+    [tv setDelegate:ak_tv_delegate()];
+    [sv setDocumentView:tv];
+    [content addSubview:sv];
+    g_ctl[handle][node] = sv;
+    g_tv[handle][node] = tv;
+    }
+// The whole content, replaced without an undo step (the app setting a document, not an edit).
+void ux_ak_textview_set_all(int handle, int node, const char* text, int nbytes, const int* runs, int nruns)
+    {
+    NSTextView* tv = ak_tv(handle, node);
+    if (!tv)
+        return;
+    g_tv_quiet++;
+    [[tv textStorage] setAttributedString:ak_tv_build(text ? text : "", nbytes, runs, nruns)];
+    [[tv undoManager] removeAllActionsWithTarget:[tv textStorage]];
+    g_tv_quiet--;
+    }
+// Bytes [start, start+len) replaced by text with its runs, as an edit (undoable).  attrsOnly: the
+// text is the same and only its style changes.
+void ux_ak_textview_replace(int handle, int node, int start, int len, const char* text, int nbytes,
+                            const int* runs, int nruns, int attrsOnly)
+    {
+    NSTextView* tv = ak_tv(handle, node);
+    if (!tv)
+        return;
+    NSString* s = [[tv textStorage] string];
+    NSUInteger a = ak_u16_of(s, start), b = ak_u16_of(s, start + len);
+    NSRange r = NSMakeRange(a, b - a);
+    NSAttributedString* rep = ak_tv_build(text ? text : "", nbytes, runs, nruns);
+    if (attrsOnly && [rep length] != r.length)
+        return;
+    g_tv_quiet++;
+    if ([tv shouldChangeTextInRange:r replacementString:(attrsOnly ? nil : [rep string])])
+        {
+        NSTextStorage* ts = [tv textStorage];
+        [ts beginEditing];
+        if (attrsOnly)
+            {
+            [rep enumerateAttributesInRange:NSMakeRange(0, [rep length]) options:0
+                                 usingBlock:^(NSDictionary* at, NSRange rr, BOOL* stop) {
+                                   [ts setAttributes:at range:NSMakeRange(r.location + rr.location, rr.length)];
+                                 }];
+            }
+        else
+            {
+            [ts replaceCharactersInRange:r withAttributedString:rep];
+            }
+        [ts endEditing];
+        [tv didChangeText];
+        }
+    g_tv_quiet--;
+    }
+// The content's size: its UTF-8 bytes and its style runs.
+void ux_ak_textview_size(int handle, int node, int* nbytes, int* nruns)
+    {
+    NSTextView* tv = ak_tv(handle, node);
+    nbytes[0] = 0;
+    nruns[0] = 0;
+    if (!tv)
+        return;
+    NSTextStorage* ts = [tv textStorage];
+    nbytes[0] = (int)[[ts string] lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
+    __block int n = 0;
+    [ts enumerateAttributesInRange:NSMakeRange(0, [ts length]) options:0
+                        usingBlock:^(NSDictionary* at, NSRange rr, BOOL* stop) { n++; }];
+    nruns[0] = n;
+    }
+// The content into buf (cap bytes, NUL-terminated) and up to maxRuns runs; returns the runs written.
+int ux_ak_textview_read(int handle, int node, char* buf, int cap, int* runs, int maxRuns)
+    {
+    NSTextView* tv = ak_tv(handle, node);
+    if (!tv || cap <= 0)
+        return 0;
+    NSTextStorage* ts = [tv textStorage];
+    NSString* s = [ts string];
+    const char* u = [s UTF8String];
+    int n = (int)strlen(u);
+    if (n > cap - 1)
+        n = cap - 1;
+    memcpy(buf, u, (size_t)n);
+    buf[n] = 0;
+    __block int k = 0;
+    NSFontManager* fm = [NSFontManager sharedFontManager];
+    [ts enumerateAttributesInRange:NSMakeRange(0, [ts length]) options:0
+                        usingBlock:^(NSDictionary* at, NSRange rr, BOOL* stop) {
+                          if (k >= maxRuns)
+                              {
+                              *stop = YES;
+                              return;
+                              }
+                          int fl = 0, col = 0, sz = 0;
+                          NSFont* f = at[NSFontAttributeName];
+                          if (f)
+                              {
+                              NSFontTraitMask tr = [fm traitsOfFont:f];
+                              if (tr & NSBoldFontMask)
+                                  fl |= 1;
+                              if (tr & NSItalicFontMask)
+                                  fl |= 2;
+                              if ([f isFixedPitch])
+                                  fl |= 8;
+                              if ((int)([f pointSize] + 0.5) != (int)UX_TV_FONT)
+                                  sz = (int)([f pointSize] + 0.5);
+                              }
+                          NSNumber* ul = at[NSUnderlineStyleAttributeName];
+                          if (ul && [ul integerValue] != 0)
+                              fl |= 4;
+                          NSParagraphStyle* ps = at[NSParagraphStyleAttributeName];
+                          if (ps)
+                              {
+                              NSTextAlignment a = [ps alignment];
+                              fl |= (a == NSTextAlignmentRight ? 1 : a == NSTextAlignmentCenter ? 2
+                                                                 : a == NSTextAlignmentJustified ? 3 : 0) << 4;
+                              }
+                          NSColor* c = [at[NSForegroundColorAttributeName] colorUsingColorSpace:[NSColorSpace sRGBColorSpace]];
+                          if (c && ![at[NSForegroundColorAttributeName] isEqual:[NSColor textColor]])
+                              col = 0x01000000 | ((int)([c redComponent] * 255 + 0.5) << 16) |
+                                    ((int)([c greenComponent] * 255 + 0.5) << 8) | (int)([c blueComponent] * 255 + 0.5);
+                          int b0 = ak_u8_of(s, rr.location), b1 = ak_u8_of(s, rr.location + rr.length);
+                          runs[k * UX_TV_RUN] = b0;
+                          runs[k * UX_TV_RUN + 1] = b1 - b0;
+                          runs[k * UX_TV_RUN + 2] = fl;
+                          runs[k * UX_TV_RUN + 3] = col;
+                          runs[k * UX_TV_RUN + 4] = sz;
+                          k++;
+                        }];
+    return k;
+    }
+void ux_ak_textview_selection(int handle, int node, int* start, int* len)
+    {
+    NSTextView* tv = ak_tv(handle, node);
+    start[0] = 0;
+    len[0] = 0;
+    if (!tv)
+        return;
+    NSString* s = [[tv textStorage] string];
+    NSRange r = [tv selectedRange];
+    int b0 = ak_u8_of(s, r.location), b1 = ak_u8_of(s, r.location + r.length);
+    start[0] = b0;
+    len[0] = b1 - b0;
+    }
+void ux_ak_textview_set_selection(int handle, int node, int start, int len)
+    {
+    NSTextView* tv = ak_tv(handle, node);
+    if (!tv)
+        return;
+    NSString* s = [[tv textStorage] string];
+    NSUInteger a = ak_u16_of(s, start), b = ak_u16_of(s, start + len);
+    g_tv_quiet++;
+    [tv setSelectedRange:NSMakeRange(a, b - a)];
+    [tv scrollRangeToVisible:NSMakeRange(a, b - a)];
+    g_tv_quiet--;
+    }
+// what: 0 undo, 1 redo, 2 can undo?, 3 can redo?
+int ux_ak_textview_undo(int handle, int node, int what)
+    {
+    NSTextView* tv = ak_tv(handle, node);
+    NSUndoManager* um = tv ? [tv undoManager] : nil;
+    if (!um)
+        return 0;
+    if (what == 2)
+        return [um canUndo] ? 1 : 0;
+    if (what == 3)
+        return [um canRedo] ? 1 : 0;
+    if (what == 0 && [um canUndo])
+        [um undo];
+    else if (what == 1 && [um canRedo])
+        [um redo];
+    return 1;
+    }
+// The style new typing gets (the run flags of the caret's position, as the toolkit decided them).
+void ux_ak_textview_set_typing(int handle, int node, int flags, int colour, int size)
+    {
+    NSTextView* tv = ak_tv(handle, node);
+    if (tv)
+        [tv setTypingAttributes:ak_tv_attrs(flags, colour, size)];
+    }
+void ux_ak_textview_focus(int handle, int node)
+    {
+    NSTextView* tv = ak_tv(handle, node);
+    if (tv)
+        [[tv window] makeFirstResponder:tv];
+    }
+/* The rigs': text typed into a native text view as the user would type it (so the view reports the
+ * change), and one turn of the run loop, which closes the undo group the edits so far are in. */
+void ux_ak_test_textview_type(int handle, int node, const char* text)
+    {
+    NSTextView* tv = ak_tv(handle, node);
+    if (tv)
+        [tv insertText:ak_ns(text) replacementRange:[tv selectedRange]];
+    }
+void ux_ak_test_runloop(void)
+    {
+    [[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.02]];
+    }
+/* For tests: Command (and Shift) with `key` offered to the text view's window, as AppKit offers a
+ * key equivalent to the window's views before the menu bar.  1 if a view took it. */
+int ux_ak_test_textview_key(int handle, int node, int key, int shift)
+    {
+    NSTextView* tv = ak_tv(handle, node);
+    if (!tv)
+        return 0;
+    [[tv window] makeFirstResponder:tv];
+    unichar c = (unichar)key;
+    NSEventModifierFlags f = NSEventModifierFlagCommand | (shift ? NSEventModifierFlagShift : 0);
+    NSEvent* e = [NSEvent keyEventWithType:NSEventTypeKeyDown location:NSZeroPoint modifierFlags:f
+                                 timestamp:0 windowNumber:[[tv window] windowNumber] context:nil
+                                characters:[NSString stringWithCharacters:&c length:1]
+               charactersIgnoringModifiers:[NSString stringWithCharacters:&c length:1]
+                                 isARepeat:NO keyCode:0];
+    return [[tv window] performKeyEquivalent:e] ? 1 : 0;
+    }

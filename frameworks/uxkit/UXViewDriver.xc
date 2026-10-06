@@ -56,7 +56,11 @@ enum UXKind = {UXKindBox = 0, UXKindView = 1, UXKindButton = 2, UXKindField = 3,
     // AppKit paints the GL frame into the window's one 2-D pass, so this is a transparency layer
     // in that pass, drawn in tree order.  A backend with no such layer DECLINES and draws the view
     // inline exactly like a UXKindView, so one tree is correct on every backend.
-    UXKindSurface = 17};
+    UXKindSurface = 17,
+    // An editable rich-text view (UXTextView) the backend makes natively: NSTextView, GtkTextView,
+    // RichEdit, UITextView, an EditText, a contenteditable.  Only a backend with the textView*
+    // methods below sees this kind; on the rest a UXTextView is a UXKindView and draws itself.
+    UXKindTextView = 18};
 
 // Autoresize mask (springs & struts): how a view follows its window on resize.  A backend that
 // resizes natively (AppKit) applies it so the control tracks the frame LIVE during a drag, with no
@@ -242,6 +246,26 @@ protocol UXViewDriver
     optional void windowLine(i32 handle, i32 on, i32 x0, i32 y0, i32 x1, i32 y1, i32 hx, i32 hy, i32 hw, i32 hh);
     optional pointer outlineItemAt(i32 handle, i32 node, i32 x, i32 y);
     optional i32 menuPopUp(i32 handle, pointer titles, pointer flags, i32 n, i32 x, i32 y);
+
+    // A native editable rich-text view for the UXKindTextView node (UXTextView).  The text is UTF-8;
+    // offsets are UTF-8 bytes and each backend converts to its own units.  Style runs are five i32s
+    // each: byte start, byte length, flags (1 bold, 2 italic, 4 underline, 8 monospace, the
+    // paragraph's UX_ALIGN_* in bits 4-5), colour (0, or 0x01RRGGBB) and size (0 = default).
+    // textViewSetAll replaces the content without an undo step; textViewReplace is an edit, undoable
+    // in the native view, and with attrsOnly = 1 changes only the style of the bytes it covers.
+    // textViewUndo: what 0 undoes, 1 redoes, 2 and 3 ask whether either can be done.  The backend
+    // tells the view of the user's edits and selection moves through nativeDidChange and
+    // nativeDidSelect.  A backend without these gets the drawn view.
+    optional void textViewSetAll(i32 handle, i32 node, u8 * text, i32 nbytes, i32 * runs, i32 nruns);
+    optional void textViewReplace(i32 handle, i32 node, i32 start, i32 len, u8 * text, i32 nbytes, i32 * runs,
+                                  i32 nruns, i32 attrsOnly);
+    optional void textViewSize(i32 handle, i32 node, i32 * nbytes, i32 * nruns);
+    optional i32 textViewRead(i32 handle, i32 node, u8 * buf, i32 cap, i32 * runs, i32 maxRuns);
+    optional void textViewSelection(i32 handle, i32 node, i32 * start, i32 * len);
+    optional void textViewSetSelection(i32 handle, i32 node, i32 start, i32 len);
+    optional i32 textViewUndo(i32 handle, i32 node, i32 what);
+    optional void textViewSetTyping(i32 handle, i32 node, i32 flags, i32 colour, i32 size);
+    optional void textViewFocus(i32 handle, i32 node);
 
     // A native file-open dialog.  hasNativeFileOpen() is true where the OS has one (AppKit NSOpenPanel,
     // GTK, Win32 GetOpenFileName, the phones' document pickers); UXOpenPanel falls back to a

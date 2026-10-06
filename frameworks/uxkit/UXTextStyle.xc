@@ -1,7 +1,9 @@
 // UXTextStyle.xc — how a span of rich text is drawn.  Rich text is a Foundation AttributedString;
-// the attributes UXKit gives a meaning to are "bold" and "italic" (Number booleans), "pen" (the
-// colour pen, a Number; 1 = ink) and "size" (the point size, a Number; 0 = the view's own).  This
-// reads them as one value, for measuring and drawing a run, and sets them over a range.
+// the attributes UXKit gives a meaning to are "bold", "italic", "underline" and "monospace" (Number
+// booleans), "pen" (the colour pen, a Number; 1 = ink), "color" (a Number, 0xRRGGBB; none means the
+// view's ink), "size" (the point size, a Number; 0 = the view's own) and "alignment" (a Number,
+// UX_ALIGN_*, which a text view applies to the whole paragraph).  This reads them as one value, for
+// measuring and drawing a run, and sets them over a range.
 #import "AttributedString.xc"
 #import "Number.xc"
 
@@ -9,14 +11,22 @@ class UXTextStyle : Object
     {
     bool bold;
     bool italic;
+    bool underline;
+    bool monospace;
     i32 pen;
+    i32 color; // 0xRRGGBB, or -1 for the view's ink
     i16 size;
+    i32 alignment;
     void init(void)
         {
         bold = false;
         italic = false;
+        underline = false;
+        monospace = false;
         pen = (i32)1;
+        color = (i32)-1;
         size = (i16)0;
+        alignment = (i32)0;
         }
     // The style an attribute set describes; names it does not have keep their defaults.
     static UXTextStyle* of(Map* attrs)
@@ -35,6 +45,28 @@ class UXTextStyle : Object
         if (it != (Number*)0)
             {
             s.italic = it.asBool();
+            }
+        Number* u = (Number* ?)attrs.get(String.withCString((u8*)"underline"));
+        if (u != (Number*)0)
+            {
+            s.underline = u.asBool();
+            }
+        Number* mo = (Number* ?)attrs.get(String.withCString((u8*)"monospace"));
+        if (mo != (Number*)0)
+            {
+            s.monospace = mo.asBool();
+            }
+        Number* c = (Number* ?)attrs.get(String.withCString((u8*)"color"));
+        if (c != (Number*)0)
+            {
+            i32 cv = c.value();
+            s.color = cv;
+            }
+        Number* al = (Number* ?)attrs.get(String.withCString((u8*)"alignment"));
+        if (al != (Number*)0)
+            {
+            i32 av = al.value();
+            s.alignment = av;
             }
         Number* p = (Number* ?)attrs.get(String.withCString((u8*)"pen"));
         if (p != (Number*)0)
@@ -57,7 +89,8 @@ class UXTextStyle : Object
         }
     bool sameAs(UXTextStyle* o)
         {
-        return o != (UXTextStyle*)0 && bold == o.bold && italic == o.italic && pen == o.pen && size == o.size;
+        return o != (UXTextStyle*)0 && bold == o.bold && italic == o.italic && underline == o.underline &&
+               monospace == o.monospace && pen == o.pen && color == o.color && size == o.size && alignment == o.alignment;
         }
     static void setBold(AttributedString* as, bool v, i32 start, i32 len)
         {
