@@ -114,43 +114,20 @@ PLIST
 android_leg() {
   A="${ANDROID_HOME:-$HOME/Library/Android/sdk}"
   ADB="$A/platform-tools/adb"
-  BT=$(ls -d "$A"/build-tools/* 2>/dev/null | sort -V | tail -1)
   NDKBIN=$(ls -d "$A"/ndk/*/toolchains/llvm/prebuilt/*/bin 2>/dev/null | sort -V | tail -1)
-  PLATJAR=$(ls "$A"/platforms/android-*/android.jar 2>/dev/null | sort -V | tail -1)
-  { [ -n "$BT" ] && [ -n "$NDKBIN" ] && [ -x "$ADB" ]; } || { echo "== capture android: skipped (no SDK/NDK) =="; return; }
+  { [ -n "$NDKBIN" ] && [ -x "$ADB" ]; } || { echo "== capture android: skipped (no SDK/NDK) =="; return; }
   "$ADB" get-state >/dev/null 2>&1 || { echo "== capture android: skipped (no device) =="; return; }
   work=$(mktemp -d)
   echo "== capture android: building the booth (two-lib APK) =="
-  "$xcc" -A android --emit-apk -I "$ux" -I "$here" "$here/showcase_android.xc" -o "$work/xtapp.apk" -q 2>/dev/null
-  mkdir -p "$work/lib/arm64-v8a"
-  unzip -p "$work/xtapp.apk" "lib/arm64-v8a/*.so" > "$work/lib/arm64-v8a/libxtapp.so"
-  python3 "$ux/tools/android/addneeded.py" "$work/lib/arm64-v8a/libxtapp.so" libUXAndroid.so >/dev/null
   "$NDKBIN/aarch64-linux-android26-clang" -shared -fPIC -Wl,-soname,libUXAndroid.so \
-      "$ux/libUXAndroid.c" -llog -landroid -o "$work/lib/arm64-v8a/libUXAndroid.so"
-  cat > "$work/AndroidManifest.xml" <<'EOF'
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-          package="org.compile_xc.uxcap">
-  <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="35"/>
-  <application android:hasCode="true" android:label="uxcap" android:debuggable="true">
-    <activity android:name="android.app.NativeActivity" android:exported="true">
-      <meta-data android:name="android.app.lib_name" android:value="UXAndroid"/>
-      <intent-filter>
-        <action android:name="android.intent.action.MAIN"/>
-        <category android:name="android.intent.category.LAUNCHER"/>
-      </intent-filter>
-    </activity>
-  </application>
-</manifest>
-EOF
-  "$BT/aapt2" link -I "$PLATJAR" --manifest "$work/AndroidManifest.xml" -o "$work/unaligned.apk"
-  cp "$ux/tools/android/classes.dex" "$work/"
-  ( cd "$work" && zip -q unaligned.apk classes.dex lib/arm64-v8a/libUXAndroid.so lib/arm64-v8a/libxtapp.so )
-  "$BT/zipalign" -f 4 "$work/unaligned.apk" "$work/aligned.apk"
-  KS="$ux/tools/android/debug.keystore"
-  [ -f "$KS" ] || keytool -genkeypair -keystore "$KS" -storepass uxkit1 -alias ux \
-      -dname "CN=uxkit" -keyalg RSA -validity 10000 2>/dev/null
-  "$BT/apksigner" sign --ks "$KS" --ks-pass pass:uxkit1 \
-      --out "$work/uxcap.apk" "$work/aligned.apk" 2>/dev/null
+      "$ux/libUXAndroid.c" -llog -landroid -o "$work/libUXAndroid.so"
+  # one xcc line: --needed binds the app lib's ux_and_* imports against the shim, which Android
+  # loads first (--lib-name); debuggable lets run-as read the sheet back
+  "$xcc" -A android --emit-apk -I "$ux" -I "$here" "$here/showcase_android.xc" \
+      --needed libUXAndroid.so --with-lib "$work/libUXAndroid.so" --lib-name UXAndroid \
+      --with-dex "$ux/tools/android/classes.dex" \
+      --manifest-attr label=uxcap --manifest-attr debuggable=true \
+      -o "$work/uxcap.apk" -q 2>/dev/null
   "$ADB" install -r "$work/uxcap.apk" >/dev/null 2>&1 || {
     "$ADB" uninstall org.compile_xc.uxcap >/dev/null 2>&1
     "$ADB" install "$work/uxcap.apk" >/dev/null
@@ -296,43 +273,20 @@ PLIST
 android_leg2() {
   A="${ANDROID_HOME:-$HOME/Library/Android/sdk}"
   ADB="$A/platform-tools/adb"
-  BT=$(ls -d "$A"/build-tools/* 2>/dev/null | sort -V | tail -1)
   NDKBIN=$(ls -d "$A"/ndk/*/toolchains/llvm/prebuilt/*/bin 2>/dev/null | sort -V | tail -1)
-  PLATJAR=$(ls "$A"/platforms/android-*/android.jar 2>/dev/null | sort -V | tail -1)
-  { [ -n "$BT" ] && [ -n "$NDKBIN" ] && [ -x "$ADB" ]; } || return
+  { [ -n "$NDKBIN" ] && [ -x "$ADB" ]; } || return
   "$ADB" get-state >/dev/null 2>&1 || return
   work=$(mktemp -d)
   echo "== capture android (sheet 2) =="
-  "$xcc" -A android --emit-apk -I "$ux" -I "$here" "$here/showcase_android2.xc" -o "$work/xtapp.apk" -q 2>/dev/null
-  mkdir -p "$work/lib/arm64-v8a"
-  unzip -p "$work/xtapp.apk" "lib/arm64-v8a/*.so" > "$work/lib/arm64-v8a/libxtapp.so"
-  python3 "$ux/tools/android/addneeded.py" "$work/lib/arm64-v8a/libxtapp.so" libUXAndroid.so >/dev/null
   "$NDKBIN/aarch64-linux-android26-clang" -shared -fPIC -Wl,-soname,libUXAndroid.so \
-      "$ux/libUXAndroid.c" -llog -landroid -o "$work/lib/arm64-v8a/libUXAndroid.so"
-  cat > "$work/AndroidManifest.xml" <<'EOF'
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-          package="org.compile_xc.uxcap">
-  <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="35"/>
-  <application android:hasCode="true" android:label="uxcap" android:debuggable="true">
-    <activity android:name="android.app.NativeActivity" android:exported="true">
-      <meta-data android:name="android.app.lib_name" android:value="UXAndroid"/>
-      <intent-filter>
-        <action android:name="android.intent.action.MAIN"/>
-        <category android:name="android.intent.category.LAUNCHER"/>
-      </intent-filter>
-    </activity>
-  </application>
-</manifest>
-EOF
-  "$BT/aapt2" link -I "$PLATJAR" --manifest "$work/AndroidManifest.xml" -o "$work/unaligned.apk"
-  cp "$ux/tools/android/classes.dex" "$work/"
-  ( cd "$work" && zip -q unaligned.apk classes.dex lib/arm64-v8a/libUXAndroid.so lib/arm64-v8a/libxtapp.so )
-  "$BT/zipalign" -f 4 "$work/unaligned.apk" "$work/aligned.apk"
-  KS="$ux/tools/android/debug.keystore"
-  [ -f "$KS" ] || keytool -genkeypair -keystore "$KS" -storepass uxkit1 -alias ux \
-      -dname "CN=uxkit" -keyalg RSA -validity 10000 2>/dev/null
-  "$BT/apksigner" sign --ks "$KS" --ks-pass pass:uxkit1 \
-      --out "$work/uxcap.apk" "$work/aligned.apk" 2>/dev/null
+      "$ux/libUXAndroid.c" -llog -landroid -o "$work/libUXAndroid.so"
+  # one xcc line: --needed binds the app lib's ux_and_* imports against the shim, which Android
+  # loads first (--lib-name); debuggable lets run-as read the sheet back
+  "$xcc" -A android --emit-apk -I "$ux" -I "$here" "$here/showcase_android2.xc" \
+      --needed libUXAndroid.so --with-lib "$work/libUXAndroid.so" --lib-name UXAndroid \
+      --with-dex "$ux/tools/android/classes.dex" \
+      --manifest-attr label=uxcap --manifest-attr debuggable=true \
+      -o "$work/uxcap.apk" -q 2>/dev/null
   "$ADB" install -r "$work/uxcap.apk" >/dev/null 2>&1 || {
     "$ADB" uninstall org.compile_xc.uxcap >/dev/null 2>&1
     "$ADB" install "$work/uxcap.apk" >/dev/null
@@ -497,43 +451,20 @@ PLIST
 modal_android() {
   A="${ANDROID_HOME:-$HOME/Library/Android/sdk}"
   ADB="$A/platform-tools/adb"
-  BT=$(ls -d "$A"/build-tools/* 2>/dev/null | sort -V | tail -1)
   NDKBIN=$(ls -d "$A"/ndk/*/toolchains/llvm/prebuilt/*/bin 2>/dev/null | sort -V | tail -1)
-  PLATJAR=$(ls "$A"/platforms/android-*/android.jar 2>/dev/null | sort -V | tail -1)
-  { [ -n "$BT" ] && [ -n "$NDKBIN" ] && [ -x "$ADB" ]; } || return
+  { [ -n "$NDKBIN" ] && [ -x "$ADB" ]; } || return
   "$ADB" get-state >/dev/null 2>&1 || return
   work=$(mktemp -d)
   echo "== capture android (modals) =="
-  "$xcc" -A android --emit-apk -I "$ux" -I "$here" "$here/showcase_alert_android.xc" -o "$work/xtapp.apk" -q 2>/dev/null
-  mkdir -p "$work/lib/arm64-v8a"
-  unzip -p "$work/xtapp.apk" "lib/arm64-v8a/*.so" > "$work/lib/arm64-v8a/libxtapp.so"
-  python3 "$ux/tools/android/addneeded.py" "$work/lib/arm64-v8a/libxtapp.so" libUXAndroid.so >/dev/null
   "$NDKBIN/aarch64-linux-android26-clang" -shared -fPIC -Wl,-soname,libUXAndroid.so \
-      "$ux/libUXAndroid.c" -llog -landroid -o "$work/lib/arm64-v8a/libUXAndroid.so"
-  cat > "$work/AndroidManifest.xml" <<'EOF'
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-          package="org.compile_xc.uxmodal">
-  <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="35"/>
-  <application android:hasCode="true" android:label="uxmodal" android:debuggable="true">
-    <activity android:name="android.app.NativeActivity" android:exported="true">
-      <meta-data android:name="android.app.lib_name" android:value="UXAndroid"/>
-      <intent-filter>
-        <action android:name="android.intent.action.MAIN"/>
-        <category android:name="android.intent.category.LAUNCHER"/>
-      </intent-filter>
-    </activity>
-  </application>
-</manifest>
-EOF
-  "$BT/aapt2" link -I "$PLATJAR" --manifest "$work/AndroidManifest.xml" -o "$work/unaligned.apk"
-  cp "$ux/tools/android/classes.dex" "$work/"
-  ( cd "$work" && zip -q unaligned.apk classes.dex lib/arm64-v8a/libUXAndroid.so lib/arm64-v8a/libxtapp.so )
-  "$BT/zipalign" -f 4 "$work/unaligned.apk" "$work/aligned.apk"
-  KS="$ux/tools/android/debug.keystore"
-  [ -f "$KS" ] || keytool -genkeypair -keystore "$KS" -storepass uxkit1 -alias ux \
-      -dname "CN=uxkit" -keyalg RSA -validity 10000 2>/dev/null
-  "$BT/apksigner" sign --ks "$KS" --ks-pass pass:uxkit1 \
-      --out "$work/uxmodal.apk" "$work/aligned.apk" 2>/dev/null
+      "$ux/libUXAndroid.c" -llog -landroid -o "$work/libUXAndroid.so"
+  # one xcc line: --needed binds the app lib's ux_and_* imports against the shim, which Android
+  # loads first (--lib-name); debuggable lets run-as read the sheet back
+  "$xcc" -A android --emit-apk -I "$ux" -I "$here" "$here/showcase_alert_android.xc" \
+      --needed libUXAndroid.so --with-lib "$work/libUXAndroid.so" --lib-name UXAndroid \
+      --with-dex "$ux/tools/android/classes.dex" \
+      --manifest-attr label=uxmodal --manifest-attr debuggable=true \
+      -o "$work/uxmodal.apk" -q 2>/dev/null
   "$ADB" install -r "$work/uxmodal.apk" >/dev/null 2>&1 || {
     "$ADB" uninstall org.compile_xc.uxmodal >/dev/null 2>&1
     "$ADB" install "$work/uxmodal.apk" >/dev/null
