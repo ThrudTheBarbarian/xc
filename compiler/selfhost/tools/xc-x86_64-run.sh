@@ -102,7 +102,10 @@ fi
 RDIR=/tmp/xcx86-$$
 ssh "$HOST" "rm -rf $RDIR && mkdir -p $RDIR" 2>/dev/null
 scp -q -r "$WORK/bin/." "$HOST:$RDIR/" 2>/dev/null
-ssh "$HOST" "cd $RDIR && chmod +x * 2>/dev/null; for x in *; do echo \"===FIXTURE:\$x\"; timeout 10 ./\$x 2>&1; echo \"===RC:\$?\"; done" > "$WORK/out.txt" 2>/dev/null
+# Each run gets its own HOME (and XDG config dir): a fixture that keeps
+# settings on disk (settings_standard) otherwise shares one file with any other
+# run on the host, and the gate runs two x86 legs at once.
+ssh "$HOST" "cd $RDIR && chmod +x * 2>/dev/null; mkdir -p .home/.config && export HOME=$RDIR/.home XDG_CONFIG_HOME=$RDIR/.home/.config; for x in *; do echo \"===FIXTURE:\$x\"; timeout 10 ./\$x 2>&1; echo \"===RC:\$?\"; done" > "$WORK/out.txt" 2>/dev/null
 ssh "$HOST" "rm -rf $RDIR" 2>/dev/null
 
 pass=0; fail=0
