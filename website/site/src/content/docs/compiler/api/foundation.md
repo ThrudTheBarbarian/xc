@@ -50,6 +50,7 @@ All of it needs a real heap (**`-falloc=heap`**), which is the default on the
 | [`AttributedString`](/compiler/api/attributedstring/) | Text with named attributes over ranges, as merged runs. **Not** in the umbrella — import by name. From the release after 0.71. |
 | [`Regex`](/compiler/api/regex/) | Regular expressions: captures, lazy and counted quantifiers, replace, split. **Not** in the umbrella — import by name. From the release after 0.71. |
 | [`Predicate`](/compiler/api/predicate/) | Conditions over records, built in code or parsed from text. **Not** in the umbrella — import by name. From the release after 0.71. |
+| [`Validator`](/compiler/api/validator/) | Rules a field's text must pass, with a message for each. **Not** in the umbrella — import by name. From the release after 0.71. |
 | [`CSV`](/compiler/api/csv/) | Comma-separated values to rows of strings and back. **Not** in the umbrella — import by name. From the release after 0.71. |
 | [`Coder`](/compiler/api/coder/) | Keyed archiving of an object graph to JSON, optionally gzipped. **Not** in the umbrella — import by name. |
 

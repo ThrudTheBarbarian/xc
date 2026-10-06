@@ -28,6 +28,7 @@ support/
     AttributedString.xc ← text with attributes over ranges
     Regex.xc            ← regular expressions
     Predicate.xc        ← conditions over records
+    Validator.xc        ← rules a field's text must pass
     Comparable.xc  Hashable.xc  Enumerable.xc  Copying.xc  Codable.xc  Error.xc   ← protocols
     Coder.xc            ← keyed archiving to JSON, with gzip
     Thread.xc  Mutex.xc  Cond.xc  Sem.xc  Atomic.xc  ThreadLocal.xc  Pool.xc
@@ -137,6 +138,7 @@ and every method grouped by task with a jump-list at the top.
 | [`AttributedString`](/compiler/api/attributedstring/) | text with attributes over ranges (from the release after 0.71) |
 | [`Regex`](/compiler/api/regex/) | regular expressions (from the release after 0.71) |
 | [`Predicate`](/compiler/api/predicate/) | conditions over records (from the release after 0.71) |
+| [`Validator`](/compiler/api/validator/) | rules a field's text must pass (from the release after 0.71) |
 | [`CSV`](/compiler/api/csv/) | comma-separated values to rows and back (from the release after 0.71) |
 | [`Coder`](/compiler/api/coder/) | keyed archiving of an object graph to JSON, optionally gzipped |
 

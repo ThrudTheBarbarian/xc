@@ -1,0 +1,21 @@
+[] fails: Enter a name.
+[   ] fails: Enter a name.
+[Ada] ok
+[Ad4] fails: Letters only.
+[Adelaide] fails: At most 5 characters.
+[Renée] ok
+[ADMIN] fails: That name is taken.
+all errors for Adm1n99: (At most 5 characters.) (Letters only.)
+[42] ok
+[ 7 ] ok
+[131] fails: An age from 0 to 130.
+[-1] fails: An age from 0 to 130.
+[4.5] fails: An age from 0 to 130.
+[forty] fails: An age from 0 to 130.
+[true] fails: An age from 0 to 130.
+[4.5] ok
+[100] fails: A price up to 99.99.
+[1e1] ok
+[] fails: A price up to 99.99.
+rules: 4 1 2
+bad pattern at byte 4: missing ')'

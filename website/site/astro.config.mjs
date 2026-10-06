@@ -94,6 +94,7 @@ export default defineConfig({
 										{ label: 'String', slug: 'compiler/api/string' },
 										{ label: 'String (xt6502)', slug: 'compiler/api/string-xt6502' },
 										{ label: 'UndoManager', slug: 'compiler/api/undomanager' },
+										{ label: 'Validator', slug: 'compiler/api/validator' },
 									],
 								},
 								{
