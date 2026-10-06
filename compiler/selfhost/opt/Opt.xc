@@ -7943,16 +7943,28 @@ class OptProfile
         return out;
         }
 
+    // The blocks whose terminator names `target`, once per mention — what
+    // filtering every block's lrcSuccs for target gave. lrcSuccs checks each
+    // successor is still one of fn's blocks; only target's answer matters here,
+    // so it is asked once rather than once per edge, which made this the
+    // square of the block count and a long function's whole LICM time (bug 621).
     Array* lrcPreds(IRFunc* fn, IRBlock* target)
         {
         Array* out = new Array();
+        if (target == (IRBlock*)0 || !hasBlock(fn.blocks(), target))
+            return out;
         for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
             {
             IRBlock* src = (IRBlock*)fn.blocks().get(b);
-            Array* ss = lrcSuccs(fn, src);
-            for (u32 i = (u32)0; i < ss.count(); i = i + (u32)1)
-                if ((IRBlock*)ss.get(i) == target)
+            IRInsn* t = src.term();
+            if (t == (IRInsn*)0)
+                continue;
+            for (u32 i = (u32)0; i < t.ops().count(); i = i + (u32)1)
+                {
+                IROperand* o = (IROperand*)t.ops().get(i);
+                if (o.kind() == (u8)OPK_BLOCK && o.blk() == target)
                     out.add((Object*)src);
+                }
             }
         return out;
         }
