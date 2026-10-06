@@ -93,6 +93,9 @@ typedef void vkCmdBindDescriptorSets_t(pointer cb, u32 point, u64 layout, u32 fi
                                        pointer dyn);
 typedef void vkCmdPushConstants_t(pointer cb, u64 layout, u32 stages, u32 offset, u32 size, pointer values);
 typedef void vkCmdDispatch_t(pointer cb, u32 x, u32 y, u32 z);
+typedef void vkCmdCopyBuffer_t(pointer cb, u64 src, u64 dst, u32 n, pointer regions);
+typedef void vkCmdPipelineBarrier_t(pointer cb, u32 srcStages, u32 dstStages, u32 deps, u32 nm, pointer mem,
+                                    u32 nb, pointer bufs, u32 ni, pointer imgs);
 typedef i32 vkCreateFence_t(pointer dev, pointer info, pointer alloc, u64* out);
 typedef void vkDestroyFence_t(pointer dev, u64 fence, pointer alloc);
 typedef i32 vkQueueSubmit_t(pointer q, u32 n, pointer submits, u64 fence);
@@ -154,6 +157,9 @@ class ParVulkan
     static vkCmdBindDescriptorSets_t* _bindSets;
     static vkCmdPushConstants_t* _push;
     static vkCmdDispatch_t* _dispatch;
+    static vkCmdCopyBuffer_t* _copy;
+    static vkCmdPipelineBarrier_t* _barrier;
+    static bool _discrete;      // the kernel's buffers in the GPU's memory, copied through staging
     static vkCreateFence_t* _createFence;
     static vkDestroyFence_t* _destroyFence;
     static vkQueueSubmit_t* _submit;
@@ -220,6 +226,8 @@ class ParVulkan
         _bindSets = (vkCmdBindDescriptorSets_t*)fn("vkCmdBindDescriptorSets");
         _push = (vkCmdPushConstants_t*)fn("vkCmdPushConstants");
         _dispatch = (vkCmdDispatch_t*)fn("vkCmdDispatch");
+        _copy = (vkCmdCopyBuffer_t*)fn("vkCmdCopyBuffer");
+        _barrier = (vkCmdPipelineBarrier_t*)fn("vkCmdPipelineBarrier");
         _createFence = (vkCreateFence_t*)fn("vkCreateFence");
         _destroyFence = (vkDestroyFence_t*)fn("vkDestroyFence");
         _submit = (vkQueueSubmit_t*)fn("vkQueueSubmit");
@@ -283,10 +291,15 @@ class ParVulkan
                 if (*(u32*)(pointer)(pp + 16) == kind)   // 2 discrete, 1 integrated
                     pick = (i32)i;
                 }
-        free((pointer)pp);
         if (pick < (i32)0)
             pick = (i32)0;
         pointer pd = pds[pick];
+        // A discrete GPU reads host memory across the bus, slowly, and its own
+        // memory, where the host can map it at all, is uncached for the host.
+        props(pd, (pointer)pp);
+        _discrete = *(u32*)(pointer)(pp + 16) == (u32)2 && _copy != (vkCmdCopyBuffer_t*)0 &&
+                    _barrier != (vkCmdPipelineBarrier_t*)0;
+        free((pointer)pp);
 
         // 64-bit integers are required (lo and hi); doubles are enabled where the device has them.
         u8* has = (u8*)calloc((u64)1, (u64)220);
@@ -353,22 +366,24 @@ class ParVulkan
 #endif
         }
 
-    // A memory type that is host-visible and coherent, among `bits`.
-    static i32 hostMemory(u32 bits)
+    // A memory type among `bits` with all of `want` (2 host-visible, 4
+    // coherent, 1 device-local), or -1.
+    static i32 memoryWith(u32 bits, u32 want)
         {
         u32 n = *(u32*)(pointer)_memProps;
         for (u32 i = (u32)0; i < n; i = i + (u32)1)
             {
             u32 flags = *(u32*)(pointer)(_memProps + (u32)4 + i * (u32)8);
-            if ((bits & ((u32)1 << i)) != (u32)0 && (flags & (u32)6) == (u32)6)
+            if ((bits & ((u32)1 << i)) != (u32)0 && (flags & want) == want)
                 return (i32)i;
             }
         return (i32)-1;
         }
 
-    // A storage buffer of `bytes`, bound to mapped host memory: the buffer,
-    // its memory and the mapping, or false.
-    static bool buffer(i64 bytes, u64* buf, u64* mem, u8** map)
+    // A buffer of `bytes`: in the GPU's own memory (`device`, unmapped), else
+    // mapped host memory, cached where it can be on a discrete GPU, which
+    // copies to and from it. The buffer, its memory and the mapping, or false.
+    static bool buffer(i64 bytes, bool device, u64* buf, u64* mem, u8** map)
         {
         if (bytes < (i64)4)
             bytes = (i64)4;
@@ -376,12 +391,19 @@ class ParVulkan
         memset((pointer)&bci[0], (i32)0, (u64)56);
         _vk32(&bci[0], (u32)0, (u32)12);
         _vk64(&bci[0], (u32)24, (u64)bytes);
-        _vk32(&bci[0], (u32)32, (u32)0x20);            // STORAGE_BUFFER
+        // STORAGE_BUFFER, and TRANSFER_SRC|DST for the copies.
+        _vk32(&bci[0], (u32)32, device ? (u32)0x23 : _discrete ? (u32)3 : (u32)0x20);
         if (_createBuffer(_dev, (pointer)&bci[0], (pointer)0, buf) != (i32)0)
             return false;
         u8 req[24];
         _bufferReqs(_dev, *buf, (pointer)&req[0]);
-        i32 type = hostMemory(*(u32*)(pointer)(&req[0] + 16));
+        u32 bits = *(u32*)(pointer)(&req[0] + 16);
+        // 1 device-local; 2 host-visible, 4 coherent, 8 cached.
+        i32 type = device ? memoryWith(bits, (u32)1) : (i32)-1;
+        if (!device && _discrete)
+            type = memoryWith(bits, (u32)14);
+        if (!device && type < (i32)0)
+            type = memoryWith(bits, (u32)6);
         if (type < (i32)0)
             return false;
         u8 mai[32];
@@ -393,6 +415,8 @@ class ParVulkan
             return false;
         if (_bind(_dev, *buf, *mem, (u64)0) != (i32)0)
             return false;
+        if (device)
+            return true;
         pointer p = (pointer)0;
         if (_map(_dev, *mem, (u64)0, (u64)0xFFFFFFFFFFFFFFFF, (u32)0, &p) != (i32)0)
             return false;
@@ -551,12 +575,16 @@ class ParVulkan
         // The buffers, in binding order, filled from the host.
         u64 bufs[49];
         u64 mems[49];
+        u64 devs[49];           // a discrete GPU's own copies, else 0
+        u64 dmems[49];
         u8* maps[49];
         i64 sizes[49];
         for (u32 i = (u32)0; i < nb; i = i + (u32)1)
             {
             bufs[i] = (u64)0;
             mems[i] = (u64)0;
+            devs[i] = (u64)0;
+            dmems[i] = (u64)0;
             }
         sizes[0] = l.size;
         u32 b = (u32)1;
@@ -582,7 +610,11 @@ class ParVulkan
             sizes[i] = (sizes[i] + (i64)3) & (i64)-4;
         bool ok = true;
         for (u32 i = (u32)0; i < nb && ok; i = i + (u32)1)
-            ok = buffer(sizes[i], &bufs[i], &mems[i], &maps[i]);
+            {
+            ok = buffer(sizes[i], false, &bufs[i], &mems[i], &maps[i]);
+            if (ok && _discrete)
+                ok = buffer(sizes[i], true, &devs[i], &dmems[i], (u8**)0);
+            }
         if (ok)
             {
             memcpy((pointer)maps[0], (pointer)obj, (u64)l.size);
@@ -632,7 +664,7 @@ class ParVulkan
             u8* wds = (u8*)calloc((u64)nb, (u64)64);
             for (u32 i = (u32)0; i < nb; i = i + (u32)1)
                 {
-                _vk64(info + i * (u32)24, (u32)0, bufs[i]);
+                _vk64(info + i * (u32)24, (u32)0, _discrete ? devs[i] : bufs[i]);
                 _vk64(info + i * (u32)24, (u32)8, (u64)0);
                 _vk64(info + i * (u32)24, (u32)16, (u64)0xFFFFFFFFFFFFFFFF);
                 u8* w = wds + i * (u32)64;
@@ -674,10 +706,49 @@ class ParVulkan
                 span[0] = lo;
                 span[1] = hi;
                 span[2] = l.per;
+                // Stages: 0x800 compute, 0x1000 transfer, 0x4000 host. Access:
+                // 0x20/0x40 shader read/write, 0x800/0x1000 transfer read/write,
+                // 0x2000 host read.
+                u8 mb[24];
+                u8 cr[24];
+                memset((pointer)&mb[0], (i32)0, (u64)24);
+                _vk32(&mb[0], (u32)0, (u32)46);
+                if (_discrete)
+                    {
+                    for (u32 i = (u32)0; i < nb; i = i + (u32)1)
+                        {
+                        _vk64(&cr[0], (u32)0, (u64)0);
+                        _vk64(&cr[0], (u32)8, (u64)0);
+                        _vk64(&cr[0], (u32)16, (u64)sizes[i]);
+                        _copy(cb, bufs[i], devs[i], (u32)1, (pointer)&cr[0]);
+                        }
+                    _vk32(&mb[0], (u32)16, (u32)0x1000);
+                    _vk32(&mb[0], (u32)20, (u32)0x60);
+                    _barrier(cb, (u32)0x1000, (u32)0x800, (u32)0, (u32)1, (pointer)&mb[0],
+                             (u32)0, (pointer)0, (u32)0, (pointer)0);
+                    }
                 _bindPipeline(cb, (u32)1, gParVkPipe[slot]);
                 _bindSets(cb, (u32)1, gParVkLayout[slot], (u32)0, (u32)1, &set, (u32)0, (pointer)0);
                 _push(cb, gParVkLayout[slot], (u32)0x20, (u32)0, (u32)24, (pointer)&span[0]);
                 _dispatch(cb, (u32)((l.threads + (i64)63) / (i64)64), (u32)1, (u32)1);
+                if (_discrete)
+                    {
+                    _vk32(&mb[0], (u32)16, (u32)0x40);
+                    _vk32(&mb[0], (u32)20, (u32)0x800);
+                    _barrier(cb, (u32)0x800, (u32)0x1000, (u32)0, (u32)1, (pointer)&mb[0],
+                             (u32)0, (pointer)0, (u32)0, (pointer)0);
+                    for (u32 i = (u32)0; i < nb; i = i + (u32)1)
+                        {
+                        _vk64(&cr[0], (u32)0, (u64)0);
+                        _vk64(&cr[0], (u32)8, (u64)0);
+                        _vk64(&cr[0], (u32)16, (u64)sizes[i]);
+                        _copy(cb, devs[i], bufs[i], (u32)1, (pointer)&cr[0]);
+                        }
+                    _vk32(&mb[0], (u32)16, (u32)0x1000);
+                    _vk32(&mb[0], (u32)20, (u32)0x2000);
+                    _barrier(cb, (u32)0x1000, (u32)0x4000, (u32)0, (u32)1, (pointer)&mb[0],
+                             (u32)0, (pointer)0, (u32)0, (pointer)0);
+                    }
                 ok = _end(cb) == (i32)0;
                 }
             u8 fci[24];
@@ -730,6 +801,10 @@ class ParVulkan
                 _destroyBuffer(_dev, bufs[i], (pointer)0);
             if (mems[i] != (u64)0)
                 _freeMemory(_dev, mems[i], (pointer)0);
+            if (devs[i] != (u64)0)
+                _destroyBuffer(_dev, devs[i], (pointer)0);
+            if (dmems[i] != (u64)0)
+                _freeMemory(_dev, dmems[i], (pointer)0);
             }
         if (!ok)
             {
