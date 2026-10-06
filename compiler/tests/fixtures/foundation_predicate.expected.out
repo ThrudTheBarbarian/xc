@@ -1,0 +1,46 @@
+1  age > 30
+1  age >= 42 AND age <= 42
+1  age < 30 OR name = 'Smith'
+1  NOT (age < 30)
+0  !(age == 42)
+0  age != 42
+1  age <> 41
+1  height > 1.75
+1  height == 1.8
+1  age = 42.0
+0  zip > 2000
+1  zip = '02139'
+1  name CONTAINS 'mit'
+0  name CONTAINS 'MIT'
+1  name CONTAINS[c] 'MIT'
+1  name BEGINSWITH 'Sm' && name ENDSWITH 'th'
+1  name LIKE 'S*h'
+1  name LIKE[c] 's?ith'
+0  name LIKE 'S?'
+1  name MATCHES '[A-Z][a-z]+'
+0  name MATCHES 'mit'
+1  name IN {'Jones', 'Smith'}
+1  age IN {1, 2, 42}
+1  admin == TRUE
+1  admin = YES AND nick = NULL
+1  missing = NULL
+0  missing > 3 OR missing < 3
+1  address.city = 'Leeds' AND address.floor > 2
+1  address.nothing.deeper = NULL
+1  name = 'Smith' AND age > 40 OR age < 0
+1  TRUEPREDICATE
+1  FALSEPREDICATE OR age = 42
+!  age > 3 extra: bad predicate at byte 8: unexpected text after the predicate
+!  age >: bad predicate at byte 5: expected a value
+!  age ~ 3: bad predicate at byte 3: expected an operator
+!  name MATCHES '(unclosed': bad pattern at byte 9: missing ')'
+!  name = 'open: bad predicate at byte 12: a string is not closed
+!  (age > 3: bad predicate at byte 8: expected ')'
+callback: 0
+callback [c]: 1
+adults: Ann Cy
+built: age > 20 AND NOT name BEGINSWITH[c] 'c' -> Ann
+Predicate: unknown operator ~
+a = 1 AND (b = 'x' OR NOT c CONTAINS[c] "y") -> a = 1 AND (b = 'x' OR NOT c CONTAINS[c] 'y')
+x IN {1, 'two', NULL, TRUE} && y <= -2.5 -> x IN {1, 'two', NULL, TRUE} AND y <= -2.5
+name = 'it\'s' -> name = 'it\'s'

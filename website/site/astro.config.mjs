@@ -83,6 +83,7 @@ export default defineConfig({
 										{ label: 'NumberFormatter', slug: 'compiler/api/numberformatter' },
 										{ label: 'Object', slug: 'compiler/api/object' },
 										{ label: 'OperationQueue', slug: 'compiler/api/operationqueue' },
+										{ label: 'Predicate', slug: 'compiler/api/predicate' },
 										{ label: 'Progress', slug: 'compiler/api/progress' },
 										{ label: 'Range', slug: 'compiler/api/range' },
 										{ label: 'Regex', slug: 'compiler/api/regex' },
