@@ -2800,6 +2800,36 @@ void ux_and_textview_focus(int handle, int node) {
     jobject ed = tvAt(handle, node);
     if (ed) (*env)->CallBooleanMethod(env, ed, gTvFocus);
 }
+/* The look, through EditText's own calls.  Spans carry only the styles a run has of its own, so text
+ * with none takes these and reads back as plain.  A caret colour needs API 29 (setTextCursorDrawable). */
+void ux_and_textview_set_look(int handle, int node, int bg, int ink, int caret, int sel, int size, int mono) {
+    JNIEnv *env = envNow();
+    jobject ed = tvAt(handle, node);
+    if (!ed) return;
+    jclass tvC = (*env)->FindClass(env, "android/widget/TextView");
+    jclass vC = (*env)->FindClass(env, "android/view/View");
+    if (bg) (*env)->CallVoidMethod(env, ed, (*env)->GetMethodID(env, vC, "setBackgroundColor", "(I)V"), (jint)(0xFF000000 | (bg & 0xFFFFFF)));
+    (*env)->CallVoidMethod(env, ed, (*env)->GetMethodID(env, tvC, "setTextColor", "(I)V"),
+                           (jint)(ink ? (0xFF000000 | (ink & 0xFFFFFF)) : 0xFF1C1B1F));
+    if (sel) (*env)->CallVoidMethod(env, ed, (*env)->GetMethodID(env, tvC, "setHighlightColor", "(I)V"), (jint)(0xFF000000 | (sel & 0xFFFFFF)));
+    (*env)->CallVoidMethod(env, ed, (*env)->GetMethodID(env, tvC, "setTextSize", "(IF)V"), 1 /* COMPLEX_UNIT_DIP */,
+                           (jfloat)(size > 0 ? size : 14));
+    jclass tfC = (*env)->FindClass(env, "android/graphics/Typeface");
+    jfieldID face = (*env)->GetStaticFieldID(env, tfC, mono ? "MONOSPACE" : "DEFAULT", "Landroid/graphics/Typeface;");
+    (*env)->CallVoidMethod(env, ed, (*env)->GetMethodID(env, tvC, "setTypeface", "(Landroid/graphics/Typeface;)V"),
+                           (*env)->GetStaticObjectField(env, tfC, face));
+    int cc = caret ? caret : ink;
+    jmethodID cur = (*env)->GetMethodID(env, tvC, "setTextCursorDrawable", "(Landroid/graphics/drawable/Drawable;)V");
+    if (!cur) (*env)->ExceptionClear(env);
+    if (cur && cc) {
+        jclass gdC = (*env)->FindClass(env, "android/graphics/drawable/GradientDrawable");
+        jobject gd = (*env)->NewObject(env, gdC, (*env)->GetMethodID(env, gdC, "<init>", "()V"));
+        (*env)->CallVoidMethod(env, gd, (*env)->GetMethodID(env, gdC, "setColor", "(I)V"), (jint)(0xFF000000 | (cc & 0xFFFFFF)));
+        (*env)->CallVoidMethod(env, gd, (*env)->GetMethodID(env, gdC, "setSize", "(II)V"), PX(2), PX(20));
+        (*env)->CallVoidMethod(env, ed, cur, gd);
+    }
+    check(env, "textview_set_look");
+}
 /* the rigs': text typed at the caret, as the keyboard commits it (the view reports the change) */
 void ux_and_test_textview_type(int handle, int node, const char *text) {
     JNIEnv *env = envNow();

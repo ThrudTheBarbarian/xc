@@ -31,6 +31,8 @@
       want(el, 'no editor on the page');
       if (!el) return report();
       want(el.textContent === 'hello world', 'editor text: ' + JSON.stringify(el.textContent));
+      want(getComputedStyle(el).backgroundColor === 'rgb(32, 36, 40)', 'the background is not the look: ' + getComputedStyle(el).backgroundColor);
+      want(getComputedStyle(el).color === 'rgb(232, 232, 232)', 'the ink is not the look: ' + getComputedStyle(el).color);
       const w = spanOf(el, 'world');
       want(w && getComputedStyle(w).fontWeight >= 600, '"world" is not bold on the page');
       el.focus();

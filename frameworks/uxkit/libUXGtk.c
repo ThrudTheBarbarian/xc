@@ -4184,6 +4184,58 @@ void ux_gtk_textview_focus(int handle, int node)
     if (tv)
         gtk_widget_grab_focus(GTK_WIDGET(tv));
     }
+/* The look, as CSS: each text view has a class of its own ("ux-tv-<handle>-<node>") and one
+ * display-wide provider holds every view's rules, rebuilt when one changes.  Text with no tag of its
+ * own takes the widget's colour, size and face, so reading the tags back is not affected. */
+static char* gTvCss[UXGTK_MAXW][UXGTK_MAXN];
+static GtkCssProvider* gTvCssProvider;
+void ux_gtk_textview_set_look(int handle, int node, int bg, int ink, int caret, int sel, int size, int mono)
+    {
+    GtkTextView* tv = tv_at(handle, node);
+    if (!tv)
+        return;
+    char cls[32];
+    snprintf(cls, sizeof cls, "ux-tv-%d-%d", handle, node);
+    gtk_widget_add_css_class(GTK_WIDGET(tv), cls);
+    char rules[1024];
+    int n = 0;
+    n += snprintf(rules + n, sizeof rules - n, "textview.%s text {", cls);
+    if (bg)
+        n += snprintf(rules + n, sizeof rules - n, " background-color: #%06x;", bg & 0xFFFFFF);
+    if (ink)
+        n += snprintf(rules + n, sizeof rules - n, " color: #%06x;", ink & 0xFFFFFF);
+    if (caret || ink)
+        n += snprintf(rules + n, sizeof rules - n, " caret-color: #%06x;", (caret ? caret : ink) & 0xFFFFFF);
+    if (size > 0)
+        n += snprintf(rules + n, sizeof rules - n, " font-size: %dpx;", size);
+    if (mono)
+        n += snprintf(rules + n, sizeof rules - n, " font-family: monospace;");
+    n += snprintf(rules + n, sizeof rules - n, " }\n");
+    if (bg)
+        n += snprintf(rules + n, sizeof rules - n, "textview.%s { background-color: #%06x; }\n", cls, bg & 0xFFFFFF);
+    if (sel)
+        n += snprintf(rules + n, sizeof rules - n, "textview.%s text selection { background-color: #%06x; }\n", cls,
+                      sel & 0xFFFFFF);
+    g_free(gTvCss[handle][node]);
+    gTvCss[handle][node] = g_strdup(rules);
+    GString* all = g_string_new("");
+    for (int h = 0; h < UXGTK_MAXW; h++)
+        for (int k = 0; k < UXGTK_MAXN; k++)
+            if (gTvCss[h][k])
+                g_string_append(all, gTvCss[h][k]);
+    if (!gTvCssProvider)
+        {
+        gTvCssProvider = gtk_css_provider_new();
+        gtk_style_context_add_provider_for_display(gdk_display_get_default(), GTK_STYLE_PROVIDER(gTvCssProvider),
+                                                   GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+        }
+#if GTK_CHECK_VERSION(4, 12, 0)
+    gtk_css_provider_load_from_string(gTvCssProvider, all->str);
+#else
+    gtk_css_provider_load_from_data(gTvCssProvider, all->str, -1);
+#endif
+    g_string_free(all, TRUE);
+    }
 /* the rigs': text typed at the cursor as the user types it (the view reports the change) */
 void ux_gtk_test_textview_type(int handle, int node, const char* text)
     {

@@ -38,7 +38,7 @@ strings styled this way.
 
 ## Topics
 
-[of](#of) · [at](#at) · [sameAs](#sameas) · [setBold](#setbold--setitalic--setpen--setsize) · [setItalic](#setbold--setitalic--setpen--setsize) · [setPen](#setbold--setitalic--setpen--setsize) · [setSize](#setbold--setitalic--setpen--setsize)
+[of](#of) · [at](#at) · [sameAs](#sameas) · [setBold](#setbold--setitalic--setunderline--setmonospace--setpen--setcolor--setsize--setalignment) · [setItalic](#setbold--setitalic--setunderline--setmonospace--setpen--setcolor--setsize--setalignment) · [setUnderline](#setbold--setitalic--setunderline--setmonospace--setpen--setcolor--setsize--setalignment) · [setMonospace](#setbold--setitalic--setunderline--setmonospace--setpen--setcolor--setsize--setalignment) · [setPen](#setbold--setitalic--setunderline--setmonospace--setpen--setcolor--setsize--setalignment) · [setColor](#setbold--setitalic--setunderline--setmonospace--setpen--setcolor--setsize--setalignment) · [setSize](#setbold--setitalic--setunderline--setmonospace--setpen--setcolor--setsize--setalignment) · [setAlignment](#setbold--setitalic--setunderline--setmonospace--setpen--setcolor--setsize--setalignment)
 
 ### of
 
@@ -66,13 +66,18 @@ bool sameAs(UXTextStyle* o)
 
 Whether two styles draw the same.
 
-### setBold / setItalic / setPen / setSize
+### setBold / setItalic / setUnderline / setMonospace / setPen / setColor / setSize / setAlignment
 
 ```c
 static void setBold(AttributedString* as, bool v, i32 start, i32 len)
 static void setItalic(AttributedString* as, bool v, i32 start, i32 len)
+static void setUnderline(AttributedString* as, bool v, i32 start, i32 len)
+static void setMonospace(AttributedString* as, bool v, i32 start, i32 len)
 static void setPen(AttributedString* as, i32 pen, i32 start, i32 len)
+static void setColor(AttributedString* as, i32 rgb, i32 start, i32 len)
 static void setSize(AttributedString* as, i16 size, i32 start, i32 len)
+static void setAlignment(AttributedString* as, i32 align, i32 start, i32 len)
 ```
 
-Set one attribute over `len` bytes from `start`.
+Set one attribute over `len` bytes from `start`. `setColor` with `-1` takes
+the colour off, back to the view's ink.

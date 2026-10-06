@@ -130,6 +130,7 @@ void ux_gtk_textview_selection(i32 handle, i32 node, i32* start, i32* len);
 void ux_gtk_textview_set_selection(i32 handle, i32 node, i32 start, i32 len);
 void ux_gtk_textview_set_typing(i32 handle, i32 node, i32 flags, i32 colour, i32 size);
 void ux_gtk_textview_focus(i32 handle, i32 node);
+void ux_gtk_textview_set_look(i32 handle, i32 node, i32 bg, i32 ink, i32 caret, i32 sel, i32 size, i32 mono);
 void ux_gtk_update_field(i32 handle, i32 node);
 void ux_gtk_popup_add_item(i32 handle, i32 node, u8* title);
 void ux_gtk_popup_select(i32 handle, i32 node, i32 i);
@@ -1262,6 +1263,11 @@ class UXGtkDriver : Object<UXViewDriver>
     void textViewFocus(i32 handle, i32 node)
         {
         ux_gtk_textview_focus(handle, node);
+        }
+    void textViewSetLook(i32 handle, i32 node, i32 background, i32 ink, i32 caret, i32 selection, i32 size,
+                         i32 monospace)
+        {
+        ux_gtk_textview_set_look(handle, node, background, ink, caret, selection, size, monospace);
         }
 
     bool driverAutoresizes(void)

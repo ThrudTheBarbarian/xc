@@ -99,6 +99,7 @@ void ux_ak_textview_set_selection(i32 handle, i32 node, i32 start, i32 len);
 i32 ux_ak_textview_undo(i32 handle, i32 node, i32 what);
 void ux_ak_textview_set_typing(i32 handle, i32 node, i32 flags, i32 colour, i32 size);
 void ux_ak_textview_focus(i32 handle, i32 node);
+void ux_ak_textview_set_look(i32 handle, i32 node, i32 bg, i32 ink, i32 caret, i32 sel, i32 size, i32 mono);
 void ux_ak_window_set_min_size(i32 handle, i32 w, i32 h);     // register the toolkit event forwarder
 void ux_ak_set_turn_hook(pointer fn, i32 ms); // the frame clock: the display link, or a timer for a slow tick
 void ux_ak_set_control_fire(pointer fn); // register the control-click -> action forwarder
@@ -1397,6 +1398,11 @@ class UXAppKitDriver : Object<UXViewDriver>
     void textViewFocus(i32 handle, i32 node)
         {
         ux_ak_textview_focus(handle, node);
+        }
+    void textViewSetLook(i32 handle, i32 node, i32 background, i32 ink, i32 caret, i32 selection, i32 size,
+                         i32 monospace)
+        {
+        ux_ak_textview_set_look(handle, node, background, ink, caret, selection, size, monospace);
         }
     void structSetSelectable(pointer h, i32 i, i32 on)
         {

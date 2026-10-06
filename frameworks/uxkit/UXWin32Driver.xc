@@ -681,6 +681,9 @@ class W32TextView : Object
     bool userMoved; // the next selection change is the user's (a click, a drag, a moving key)
     i32 defHeight;  // the default font's height, in twips
     u16 defFace[32];
+    i32 lookInk;    // the look: the ink (0x01RRGGBB or 0), the default size (0: the font's), monospace
+    i32 lookSize;
+    bool lookMono;
 
     static W32TextView* of(pointer h)
         {
@@ -735,6 +738,9 @@ class W32TextView : Object
         r.node = node;
         r.quiet = (i32)0;
         r.userMoved = false;
+        r.lookInk = (i32)0;
+        r.lookSize = (i32)0;
+        r.lookMono = false;
         SendMessageA(c, (u32)WM_SETFONT, gW32Font, (pointer)1);
         SendMessageA(c, (u32)EM_SETUNDOLIMIT, (pointer)0, (pointer)0);
         SendMessageA(c, (u32)EM_SETEVENTMASK, (pointer)0, (pointer)((u32)ENM_CHANGE | (u32)ENM_SELCHANGE));
@@ -880,9 +886,10 @@ class W32TextView : Object
         ((u32*)&cf[0])[0] = (u32)116;
         ((u32*)&cf[0])[1] = (u32)CFM_BOLD | (u32)CFM_ITALIC | (u32)CFM_UNDERLINE | (u32)CFM_COLOR | (u32)CFM_SIZE | (u32)CFM_FACE;
         u32 fx = (u32)(flags & (i32)7); // CFE_BOLD 1, CFE_ITALIC 2, CFE_UNDERLINE 4: the same bits
-        if ((colour & (i32)$1000000) != (i32)0)
+        i32 shown = (colour & (i32)$1000000) != (i32)0 ? colour : lookInk;
+        if ((shown & (i32)$1000000) != (i32)0)
             {
-            i32 rgb = colour & (i32)$FFFFFF;
+            i32 rgb = shown & (i32)$FFFFFF;
             ((u32*)&cf[0])[5] = (u32)(((rgb >> (i32)16) & (i32)255) | (rgb & (i32)$FF00) | ((rgb & (i32)255) << (i32)16));
             }
         else
@@ -890,9 +897,9 @@ class W32TextView : Object
             fx = fx | (u32)CFE_AUTOCOLOR;
             }
         ((u32*)&cf[0])[2] = fx;
-        ((i32*)&cf[0])[3] = size > (i32)0 ? size * (i32)15 : defHeight; // a pixel is 15 twips at 96 dpi
+        ((i32*)&cf[0])[3] = size > (i32)0 ? size * (i32)15 : self.defaultHeight(); // a pixel is 15 twips at 96 dpi
         u16* face = (u16*)&cf[26];
-        if ((flags & (i32)8) != (i32)0)
+        if ((flags & (i32)8) != (i32)0 || lookMono)
             {
             u8* mono = (u8*)"Consolas";
             for (i32 k = (i32)0; k < (i32)9; k = k + (i32)1)
@@ -932,7 +939,7 @@ class W32TextView : Object
         u32 fx = ((u32*)&cf[0])[2];
         i32 f = (i32)(fx & (u32)7);
         u16* face = (u16*)&cf[26];
-        if (face[0] == (u16)'C' && face[1] == (u16)'o' && face[2] == (u16)'n' && face[3] == (u16)'s')
+        if (face[0] == (u16)'C' && face[1] == (u16)'o' && face[2] == (u16)'n' && face[3] == (u16)'s' && !lookMono)
             {
             f = f | (i32)8;
             }
@@ -941,14 +948,42 @@ class W32TextView : Object
             {
             i32 bgr = (i32)((u32*)&cf[0])[5];
             c = (i32)$1000000 | ((bgr & (i32)255) << (i32)16) | (bgr & (i32)$FF00) | ((bgr >> (i32)16) & (i32)255);
+            if (c == lookInk)
+                {
+                c = (i32)0; // the view's ink: no colour of its own
+                }
             }
         i32 yh = ((i32*)&cf[0])[3];
-        i32 z = (yh == defHeight) ? (i32)0 : (yh + (i32)7) / (i32)15;
+        i32 z = (yh == self.defaultHeight()) ? (i32)0 : (yh + (i32)7) / (i32)15;
         flags[0] = f;
         colour[0] = c;
         size[0] = z;
         return (mask & need) == need;
         }
+    // the height of text with no size of its own, in twips
+    i32 defaultHeight(void)
+        {
+        return lookSize > (i32)0 ? lookSize * (i32)15 : defHeight;
+        }
+    // The look: the background, and the ink, size and face of text with no style of its own.  A
+    // RichEdit has no caret or selection colour of its own to set: those stay the system's.
+    void setLook(i32 bg, i32 ink, i32 size, bool mono)
+        {
+        lookInk = ink;
+        lookSize = size;
+        lookMono = mono;
+        if ((bg & (i32)$1000000) != (i32)0)
+            {
+            i32 rgb = bg & (i32)$FFFFFF;
+            u32 bgr = (u32)(((rgb >> (i32)16) & (i32)255) | (rgb & (i32)$FF00) | ((rgb & (i32)255) << (i32)16));
+            SendMessageA(hwnd, (u32)$0443, (pointer)0, (pointer)bgr); // EM_SETBKGNDCOLOR
+            }
+        else
+            {
+            SendMessageA(hwnd, (u32)$0443, (pointer)1, (pointer)0); // the system's
+            }
+        }
+
     i32 alignmentAt(i32 a)
         {
         self.select(a, a);
@@ -4494,6 +4529,15 @@ class UXWin32Driver : Object<UXViewDriver>
         if (r != (W32TextView*)0)
             {
             SetFocus(r.hwnd);
+            }
+        }
+    void textViewSetLook(i32 handle, i32 node, i32 background, i32 ink, i32 caret, i32 selection, i32 size,
+                         i32 monospace)
+        {
+        W32TextView* r = W32TextView.at(handle, node);
+        if (r != (W32TextView*)0)
+            {
+            r.setLook(background, ink, size, monospace != (i32)0);
             }
         }
 

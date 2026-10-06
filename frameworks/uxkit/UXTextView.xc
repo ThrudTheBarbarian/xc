@@ -53,6 +53,13 @@ class UXTextView : UXView
     i32 caret;           // the drawn view's caret and the selection's anchor (the end that stays)
     i32 anchor;
     i32 scrollY;
+    // the look: colours 0xRRGGBB or -1 for the platform's; the default size (0: the platform's)
+    i32 background;
+    i32 ink;
+    i32 caretColor;
+    i32 selectionColor;
+    i32 baseSize;
+    bool baseMono;
     weak : UXTextViewDelegate* delegate;
 
     void init(void)
@@ -69,6 +76,12 @@ class UXTextView : UXView
         caret = (i32)0;
         anchor = (i32)0;
         scrollY = (i32)0;
+        background = (i32)-1;
+        ink = (i32)-1;
+        caretColor = (i32)-1;
+        selectionColor = (i32)-1;
+        baseSize = (i32)0;
+        baseMono = false;
         }
 
     UXKind kind(void)
@@ -285,6 +298,76 @@ class UXTextView : UXView
         return UXTextStyle.at(model, sel.loc);
         }
 
+    // ---- the look ----------------------------------------------------------------------------
+    // Colours are 0xRRGGBB; -1 returns one to the platform's.  The ink is the colour of text with no
+    // colour of its own (a run's color attribute overrides it).
+
+    void setBackgroundColor(i32 rgb)
+        {
+        background = rgb;
+        self.lookChanged();
+        }
+
+    void setInk(i32 rgb)
+        {
+        ink = rgb;
+        self.lookChanged();
+        }
+
+    void setCaretColor(i32 rgb)
+        {
+        caretColor = rgb;
+        self.lookChanged();
+        }
+
+    void setSelectionColor(i32 rgb)
+        {
+        selectionColor = rgb;
+        self.lookChanged();
+        }
+
+    // The size of text with no size of its own, in the view's pixels; 0 is the platform's.
+    void setDefaultFontSize(i32 size)
+        {
+        baseSize = size;
+        self.lookChanged();
+        }
+
+    // Whether text with no face of its own is monospace.
+    void setMonospace(bool on)
+        {
+        baseMono = on;
+        self.lookChanged();
+        }
+
+    void lookChanged(void)
+        {
+        if (self.isNative())
+            {
+            self.pushLook();
+            self.pushAll(); // the content again, drawn against the new defaults
+            self.pushSelection();
+            }
+        self.setNeedsDisplay();
+        }
+
+    static i32 packColour(i32 rgb)
+        {
+        return rgb >= (i32)0 ? ((i32)0x01000000 | (rgb & (i32)0xFFFFFF)) : (i32)0;
+        }
+
+    void pushLook(void)
+        {
+        callback f void(i32 handle, i32 node, i32 background, i32 ink, i32 caret, i32 selection, i32 size,
+                        i32 monospace) = &gDriver.textViewSetLook;
+        if (f)
+            {
+            f(nativeWin, nativeNode, UXTextView.packColour(background), UXTextView.packColour(ink),
+              UXTextView.packColour(caretColor), UXTextView.packColour(selectionColor), baseSize,
+              baseMono ? (i32)1 : (i32)0);
+            }
+        }
+
     // ---- undo --------------------------------------------------------------------------------
 
     void undo(void)
@@ -330,6 +413,7 @@ class UXTextView : UXView
         {
         nativeWin = handle;
         nativeNode = node;
+        self.pushLook();
         self.pushAll();
         self.pushSelection();
         self.pushTyping();
@@ -367,18 +451,31 @@ class UXTextView : UXView
         return !self.isNative();
         }
 
+    // The drawn view's default size.
+    i32 size0(void)
+        {
+        return baseSize > (i32)0 ? baseSize : (i32)UX_TV_SIZE;
+        }
+
+    // A colour of the look as red, green, blue, or the given default.
+    static i32 part(i32 rgb, i32 dflt, i32 shift)
+        {
+        i32 c = rgb >= (i32)0 ? rgb : dflt;
+        return (c >> shift) & (i32)255;
+        }
+
     // The lines as laid out for the view's width.
     Array<Range>* drawnLines(void)
         {
         UXRect b = self.bounds();
         i16 measure = (i16)((i32)b.w - (i32)UX_TV_PAD * (i32)2);
-        return UXTextLayout.wrapAttr(model, measure > (i16)8 ? measure : (i16)8, (i32)UX_TV_SIZE);
+        return UXTextLayout.wrapAttr(model, measure > (i16)8 ? measure : (i16)8, self.size0());
         }
 
     // A line's height: room for the largest size on it.
     i32 lineHeightOf(Range* ln)
         {
-        i32 big = (i32)UX_TV_SIZE;
+        i32 big = self.size0();
         for (i32 i = ln.loc; i < ln.loc + ln.len; i = UXTextLayout.styleEnd(model, i, ln.loc + ln.len))
             {
             UXTextStyle* st = UXTextStyle.at(model, i);
@@ -393,14 +490,14 @@ class UXTextView : UXView
     // The x where byte i of a line falls, from the view's left edge, alignment included.
     i32 xIn(Range* ln, i32 i, i32 measure)
         {
-        i32 w = UXTextLayout.spanWidthAttr(model, ln.loc, ln.loc + ln.len, (i32)UX_TV_SIZE);
+        i32 w = UXTextLayout.spanWidthAttr(model, ln.loc, ln.loc + ln.len, self.size0());
         i32 al = model.length() > (i32)0 ? UXTextStyle.at(model, ln.loc < model.length() ? ln.loc : model.length() - (i32)1).alignment : (i32)0;
         i32 off = al == (i32)UX_ALIGN_RIGHT ? measure - w : (al == (i32)UX_ALIGN_CENTER ? (measure - w) / (i32)2 : (i32)0);
         if (off < (i32)0)
             {
             off = (i32)0;
             }
-        return (i32)UX_TV_PAD + off + UXTextLayout.spanWidthAttr(model, ln.loc, i, (i32)UX_TV_SIZE);
+        return (i32)UX_TV_PAD + off + UXTextLayout.spanWidthAttr(model, ln.loc, i, self.size0());
         }
 
     // The line byte i is on (a byte at a line's end belongs to it).
@@ -545,7 +642,7 @@ class UXTextView : UXView
         UXRect b = self.bounds();
         u16 l = self.lineOf(lines, caret);
         i32 top = (i32)0;
-        i32 lh = (i32)UX_TV_SIZE + (i32)5;
+        i32 lh = self.size0() + (i32)5;
         for (u16 k = (u16)0; k < lines.count(); k = k + (u16)1)
             {
             Range* ln = (Range* ?)lines.get(k);
@@ -746,7 +843,7 @@ class UXTextView : UXView
             {
             return;
             }
-        scrollY = scrollY - e.a * (i32)(UX_TV_SIZE + 5) * (i32)3;
+        scrollY = scrollY - e.a * (self.size0() + (i32)5) * (i32)3;
         scrollY = scrollY < (i32)0 ? (i32)0 : scrollY;
         self.setNeedsDisplay();
         }
@@ -754,7 +851,8 @@ class UXTextView : UXView
     void drawRect(UXGraphics* g, UXRect dirty)
         {
         UXRect b = self.bounds();
-        g.fillRectRGB(b, (i32)255, (i32)255, (i32)255);
+        g.fillRectRGB(b, UXTextView.part(background, (i32)0xFFFFFF, (i32)16), UXTextView.part(background, (i32)0xFFFFFF, (i32)8),
+                      UXTextView.part(background, (i32)0xFFFFFF, (i32)0));
         i16 r = (i16)((i32)b.x + (i32)b.w - (i32)1);
         i16 bt = (i16)((i32)b.y + (i32)b.h - (i32)1);
         g.drawLine(b.x, b.y, r, b.y, (i32)9);
@@ -786,7 +884,8 @@ class UXTextView : UXView
                 {
                 i32 x0 = self.xIn(ln, s0, measure);
                 i32 x1 = self.xIn(ln, s1, measure);
-                g.fillRectRGB(UXGeom.make((i16)x0, (i16)y, (i16)(x1 - x0), (i16)lh), (i32)180, (i32)205, (i32)245);
+                g.fillRectRGB(UXGeom.make((i16)x0, (i16)y, (i16)(x1 - x0), (i16)lh), UXTextView.part(selectionColor, (i32)0xB4CDF5, (i32)16),
+                              UXTextView.part(selectionColor, (i32)0xB4CDF5, (i32)8), UXTextView.part(selectionColor, (i32)0xB4CDF5, (i32)0));
                 }
             // the runs, each in its style
             i32 i = ln.loc;
@@ -802,9 +901,9 @@ class UXTextView : UXView
                     }
                 piece[n] = (u8)0;
                 i32 x = self.xIn(ln, i, measure);
-                i32 sz = st.size > (i16)0 ? (i32)st.size : (i32)UX_TV_SIZE;
-                i32 rgb = st.color >= (i32)0 ? st.color : (i32)0;
-                g.drawTextFontRGBA(piece, (i16)x, (i16)(y + lh - sz - (i32)3), st.monospace ? (u8*)"monospace" : (u8*)"",
+                i32 sz = st.size > (i16)0 ? (i32)st.size : self.size0();
+                i32 rgb = st.color >= (i32)0 ? st.color : (ink >= (i32)0 ? ink : (i32)0);
+                g.drawTextFontRGBA(piece, (i16)x, (i16)(y + lh - sz - (i32)3), st.monospace || baseMono ? (u8*)"monospace" : (u8*)"",
                                    sz, st.bold ? (i32)UXWEIGHT_BOLD : (i32)UXWEIGHT_NORMAL, st.italic,
                                    (rgb >> (i32)16) & (i32)255, (rgb >> (i32)8) & (i32)255, rgb & (i32)255, (i32)255);
                 if (st.underline)
@@ -820,7 +919,9 @@ class UXTextView : UXView
             if (selLen == (i32)0 && self.lineOf(lines, caret) == k)
                 {
                 i32 cx = self.xIn(ln, caret, measure);
-                g.fillRectRGB(UXGeom.make((i16)cx, (i16)(y + (i32)1), (i16)1, (i16)(lh - (i32)2)), (i32)0, (i32)0, (i32)0);
+                g.fillRectRGB(UXGeom.make((i16)cx, (i16)(y + (i32)1), (i16)1, (i16)(lh - (i32)2)), UXTextView.part(caretColor, ink >= (i32)0 ? ink : (i32)0, (i32)16),
+                          UXTextView.part(caretColor, ink >= (i32)0 ? ink : (i32)0, (i32)8),
+                          UXTextView.part(caretColor, ink >= (i32)0 ? ink : (i32)0, (i32)0));
                 }
             y = y + lh;
             }

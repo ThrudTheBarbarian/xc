@@ -58,7 +58,7 @@ for (u32 k = 0; k < as.runCount(); k = k + 1)
 
 ## Topics
 
-[setAttributedText](#setattributedtext) · [setText](#settext) · [attributedText](#attributedtext) · [text](#text) · [length](#length) · [selectedRange](#selectedrange) · [setSelectedRange](#setselectedrange) · [focus](#focus) · [insertText](#inserttext) · [toggleBold](#togglebold--toggleitalic--toggleunderline) · [toggleItalic](#togglebold--toggleitalic--toggleunderline) · [toggleUnderline](#togglebold--toggleitalic--toggleunderline) · [setColor](#setcolor) · [setFontSize](#setfontsize) · [setAlignment](#setalignment) · [selectionStyle](#selectionstyle) · [undo](#undo--redo) · [redo](#undo--redo) · [canUndo](#canundo--canredo) · [canRedo](#canundo--canredo) · [delegate](#delegate)
+[setAttributedText](#setattributedtext) · [setText](#settext) · [attributedText](#attributedtext) · [text](#text) · [length](#length) · [selectedRange](#selectedrange) · [setSelectedRange](#setselectedrange) · [focus](#focus) · [insertText](#inserttext) · [toggleBold](#togglebold--toggleitalic--toggleunderline) · [toggleItalic](#togglebold--toggleitalic--toggleunderline) · [toggleUnderline](#togglebold--toggleitalic--toggleunderline) · [setColor](#setcolor) · [setFontSize](#setfontsize) · [setAlignment](#setalignment) · [selectionStyle](#selectionstyle) · [setBackgroundColor](#setbackgroundcolor--setink--setcaretcolor--setselectioncolor) · [setInk](#setbackgroundcolor--setink--setcaretcolor--setselectioncolor) · [setCaretColor](#setbackgroundcolor--setink--setcaretcolor--setselectioncolor) · [setSelectionColor](#setbackgroundcolor--setink--setcaretcolor--setselectioncolor) · [setDefaultFontSize](#setdefaultfontsize) · [setMonospace](#setmonospace) · [undo](#undo--redo) · [redo](#undo--redo) · [canUndo](#canundo--canredo) · [canRedo](#canundo--canredo) · [delegate](#delegate)
 
 ### setAttributedText
 
@@ -178,6 +178,42 @@ UXTextStyle* selectionStyle(void)
 
 The style of the selection's first byte, or of what is typed next when the
 selection is empty. A toolbar reads it to show which styles are on.
+
+### setBackgroundColor / setInk / setCaretColor / setSelectionColor
+
+```c
+void setBackgroundColor(i32 rgb)
+void setInk(i32 rgb)
+void setCaretColor(i32 rgb)
+void setSelectionColor(i32 rgb)
+```
+
+The view's colours, each `0xRRGGBB`; `-1` returns one to the platform's. The
+ink is the colour of text with no colour of its own: a run's `color`
+attribute overrides it, and text drawn in the ink reads back with no colour.
+The caret takes the ink when it has no colour of its own.
+
+On Windows the caret and the selection keep the system's colours. On iOS
+the caret and the selection are drawn in one colour, the caret's (or else
+the selection's). On Android a caret colour needs Android 10 or later.
+
+### setDefaultFontSize
+
+```c
+void setDefaultFontSize(i32 size)
+```
+
+The size of text with no size of its own, in the view's pixels. `0` returns
+it to the platform's. Text in the default size reads back with no size.
+
+### setMonospace
+
+```c
+void setMonospace(bool on)
+```
+
+Whether text with no face of its own is monospace. Such text does not read
+back as having the `monospace` attribute.
 
 ### undo / redo
 

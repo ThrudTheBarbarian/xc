@@ -266,6 +266,12 @@ protocol UXViewDriver
     optional i32 textViewUndo(i32 handle, i32 node, i32 what);
     optional void textViewSetTyping(i32 handle, i32 node, i32 flags, i32 colour, i32 size);
     optional void textViewFocus(i32 handle, i32 node);
+    // The view's look: background, ink (the colour of text with no colour of its own), caret and
+    // selection, each 0x01RRGGBB or 0 for the platform's; the default size (0: the platform's) and
+    // whether the default face is monospace.  Text with no size or colour of its own is drawn in
+    // these, and reads back as having none.
+    optional void textViewSetLook(i32 handle, i32 node, i32 background, i32 ink, i32 caret, i32 selection, i32 size,
+                                  i32 monospace);
 
     // A native file-open dialog.  hasNativeFileOpen() is true where the OS has one (AppKit NSOpenPanel,
     // GTK, Win32 GetOpenFileName, the phones' document pickers); UXOpenPanel falls back to a

@@ -154,6 +154,29 @@ void nativeChecks(void)
     ck(UXTextStyle.at(tv.attributedText(), (i32)0).underline && !UXTextStyle.at(tv.attributedText(), (i32)1).underline,
        "typing: an empty selection's style applies to what is typed next");
 
+    // The look: text with no colour or size of its own takes the view's ink and default size, and
+    // reads back as having none; a colour of its own stays.
+    tv.setBackgroundColor((i32)0x202428);
+    tv.setInk((i32)0xE8E8E8);
+    tv.setCaretColor((i32)0xFFCC00);
+    tv.setSelectionColor((i32)0x3A5A8A);
+    tv.setDefaultFontSize((i32)18);
+    AttributedString* lk = AttributedString.withString(String.withCString((u8*)"ink red"));
+    UXTextStyle.setColor(lk, (i32)0xC03020, (i32)4, (i32)3);
+    tv.setAttributedText(lk);
+    tv.nativeDidChange();
+    UXTextStyle* s0 = UXTextStyle.at(tv.attributedText(), (i32)0);
+    UXTextStyle* s5 = UXTextStyle.at(tv.attributedText(), (i32)5);
+    ck(s0.color == (i32)-1 && s0.size == (i16)0, "look: text in the ink and default size reads back as plain");
+    eqi(s5.color, (i32)0xC03020, "look: a colour of its own stays");
+    tv.setMonospace(true);
+    tv.nativeDidChange();
+    ck(!UXTextStyle.at(tv.attributedText(), (i32)0).monospace, "look: a monospace default is not read back as a style");
+    tv.setMonospace(false);
+    tv.setInk((i32)-1);
+    tv.setBackgroundColor((i32)-1);
+    tv.setDefaultFontSize((i32)0);
+
     // Content set by the app replaces everything and is not an undo step.
     AttributedString* as = AttributedString.withString(String.withCString((u8*)"plain bold"));
     UXTextStyle.setBold(as, true, (i32)6, (i32)4);

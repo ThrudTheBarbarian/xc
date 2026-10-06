@@ -383,6 +383,8 @@
     ux_tv_set_selection: (win, node, start, len) => tvAsk({ op: 'setsel', id: win * 4096 + node, start, len }),
     ux_tv_set_typing: (win, node, flags, colour, size) => tvAsk({ op: 'typing', id: win * 4096 + node, flags, colour, size }),
     ux_tv_focus: (win, node) => tvAsk({ op: 'focus', id: win * 4096 + node }),
+    ux_tv_set_look: (win, node, bg, ink, caret, sel, size, mono) =>
+      tvAsk({ op: 'look', id: win * 4096 + node, bg, ink, caret, sel, size, mono }),
     ux_tv_remove: (win, node) => { tvFrames.delete(win * 4096 + node); return tvAsk({ op: 'remove', id: win * 4096 + node }); },
     ux_menu_state: (t, j, what, on) => {
       const st = { t, j, what, on };

@@ -108,4 +108,26 @@ class UXTextStyle : Object
         {
         as.setAttribute(String.withCString((u8*)"size"), Number.with(size), Range.make(start, len));
         }
+    static void setUnderline(AttributedString* as, bool v, i32 start, i32 len)
+        {
+        as.setAttribute(String.withCString((u8*)"underline"), Number.withBool(v), Range.make(start, len));
+        }
+    static void setMonospace(AttributedString* as, bool v, i32 start, i32 len)
+        {
+        as.setAttribute(String.withCString((u8*)"monospace"), Number.withBool(v), Range.make(start, len));
+        }
+    // 0xRRGGBB; -1 takes the colour off, back to the view's ink
+    static void setColor(AttributedString* as, i32 rgb, i32 start, i32 len)
+        {
+        if (rgb < (i32)0)
+            {
+            as.removeAttribute(String.withCString((u8*)"color"), Range.make(start, len));
+            return;
+            }
+        as.setAttribute(String.withCString((u8*)"color"), Number.with(rgb), Range.make(start, len));
+        }
+    static void setAlignment(AttributedString* as, i32 align, i32 start, i32 len)
+        {
+        as.setAttribute(String.withCString((u8*)"alignment"), Number.with(align), Range.make(start, len));
+        }
     }

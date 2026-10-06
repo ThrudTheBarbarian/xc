@@ -119,6 +119,7 @@ void ux_and_textview_selection(i32 handle, i32 node, i32* start, i32* len);
 void ux_and_textview_set_selection(i32 handle, i32 node, i32 start, i32 len);
 void ux_and_textview_set_typing(i32 handle, i32 node, i32 flags, i32 colour, i32 size);
 void ux_and_textview_focus(i32 handle, i32 node);
+void ux_and_textview_set_look(i32 handle, i32 node, i32 bg, i32 ink, i32 caret, i32 sel, i32 size, i32 mono);
 void ux_and_make_stepper(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h);
 // the segmented control, composed of native ToggleButtons (Android has no platform one)
 void ux_and_make_segmented(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, i32 nseg, i32 multi);
@@ -1189,6 +1190,11 @@ class UXAndroidDriver : Object<UXViewDriver>
     void textViewFocus(i32 handle, i32 node)
         {
         ux_and_textview_focus(handle, node);
+        }
+    void textViewSetLook(i32 handle, i32 node, i32 background, i32 ink, i32 caret, i32 selection, i32 size,
+                         i32 monospace)
+        {
+        ux_and_textview_set_look(handle, node, background, ink, caret, selection, size, monospace);
         }
 
     bool driverAutoresizes(void)

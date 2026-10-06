@@ -1126,6 +1126,11 @@ class UXWebDriver : Object<UXViewDriver>
         {
         ux_tv_focus(handle, node);
         }
+    void textViewSetLook(i32 handle, i32 node, i32 background, i32 ink, i32 caret, i32 selection, i32 size,
+                         i32 monospace)
+        {
+        ux_tv_set_look(handle, node, background, ink, caret, selection, size, monospace);
+        }
 
     void realizeTree(i32 handle, pointer tree)
         {

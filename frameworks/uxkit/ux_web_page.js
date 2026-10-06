@@ -816,7 +816,22 @@
     if (q.op === 'setsel') { tvSetSel(t, q.start, q.len); return 1; }
     if (q.op === 'typing') { t.typing = { f: q.flags, c: q.colour, z: q.size }; return 1; }
     if (q.op === 'focus') { t.el.focus(); tvSetSel(t, t.lastSel[0], t.lastSel[1]); return 1; }
-    if (q.op === 'remove') { t.el.remove(); tvs.delete(q.id); return 1; }
+    if (q.op === 'remove') { t.el.remove(); if (t.sheet) t.sheet.remove(); tvs.delete(q.id); return 1; }
+    if (q.op === 'look') {
+      // colours are 0x01RRGGBB, 0 for the page's own; text with no colour or size of its own
+      // inherits these from the editor, so reading the spans back is not affected
+      const css = (c) => '#' + (c & 0xffffff).toString(16).padStart(6, '0');
+      const st = t.el.style;
+      st.background = q.bg ? css(q.bg) : '#fff';
+      st.color = q.ink ? css(q.ink) : '#1c1b1f';
+      st.caretColor = q.caret ? css(q.caret) : (q.ink ? css(q.ink) : 'auto');
+      st.fontSize = (q.size > 0 ? q.size : 13) + 'px';
+      st.fontFamily = q.mono ? 'ui-monospace, Menlo, Consolas, monospace' : 'system-ui, sans-serif';
+      if (!t.sheet) { t.sheet = document.createElement('style'); document.head.appendChild(t.sheet); }
+      t.el.dataset.tv = q.id;
+      t.sheet.textContent = q.sel ? `.ux-textview[data-tv="${q.id}"] ::selection, .ux-textview[data-tv="${q.id}"]::selection { background: ${css(q.sel)}; }` : '';
+      return 1;
+    }
     return 0;
   };
   globalThis.uxTextViews = tvs; // for a test to reach the editors

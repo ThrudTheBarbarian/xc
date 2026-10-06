@@ -4920,6 +4920,38 @@ int ux_ak_test_control_text(int handle, int node, char* buf, int n)
 #define UX_TV_RUN 5
 #define UX_TV_FONT 13.0
 static NSTextView* g_tv[UX_MAXW][UX_MAXN];
+// each view's look: background, ink, caret, selection (0x01RRGGBB or 0), default size, monospace
+typedef struct { int bg, ink, caret, sel, size, mono; } ak_tv_look;
+static ak_tv_look g_tv_look[UX_MAXW][UX_MAXN];
+static ak_tv_look g_tv_look_none;
+static ak_tv_look* ak_look(NSTextView* tv)
+    {
+    int tag = [[tv identifier] intValue], h = tag / 1000, n = tag % 1000;
+    return (tv && h >= 0 && h < UX_MAXW && n >= 0 && n < UX_MAXN) ? &g_tv_look[h][n] : &g_tv_look_none;
+    }
+static NSColor* ak_rgb(int c)
+    {
+    return [NSColor colorWithSRGBRed:((c >> 16) & 255) / 255.0 green:((c >> 8) & 255) / 255.0 blue:(c & 255) / 255.0 alpha:1.0];
+    }
+// The selection in the look's colour whether or not the view has the focus: NSTextView applies its
+// selected-text attributes only while it does, and draws an unfocused selection in the system's grey.
+@interface UXTvLayout : NSLayoutManager
+@property (nonatomic) int uxSel;
+@end
+@implementation UXTvLayout
+- (void)fillBackgroundRectArray:(const NSRect*)rects count:(NSUInteger)n forCharacterRange:(NSRange)r color:(NSColor*)c
+    {
+    if (self.uxSel && ([c isEqual:[NSColor unemphasizedSelectedTextBackgroundColor]] ||
+                       [c isEqual:[NSColor selectedTextBackgroundColor]] ||
+                       [c isEqual:[NSColor unemphasizedSelectedContentBackgroundColor]] ||
+                       [c isEqual:[NSColor selectedContentBackgroundColor]]))
+        {
+        c = ak_rgb(self.uxSel);
+        [c setFill]; // the colour argument is already the fill when this is called; it has to be changed too
+        }
+    [super fillBackgroundRectArray:rects count:n forCharacterRange:r color:c];
+    }
+@end
 typedef void (*ux_tv_fn)(int handle, int node);
 static ux_tv_fn g_tv_changed = 0;
 static ux_tv_fn g_tv_selected = 0;
@@ -4989,10 +5021,10 @@ static int ak_u8_of(NSString* s, NSUInteger i)
         i = cr.location;
     return (int)[[s substringToIndex:i] lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
     }
-static NSDictionary* ak_tv_attrs(int flags, int colour, int size)
+static NSDictionary* ak_tv_attrs(int flags, int colour, int size, const ak_tv_look* lk)
     {
-    CGFloat pt = size > 0 ? (CGFloat)size : UX_TV_FONT;
-    NSFont* f = (flags & 8) ? [NSFont monospacedSystemFontOfSize:pt weight:NSFontWeightRegular] : [NSFont systemFontOfSize:pt];
+    CGFloat pt = size > 0 ? (CGFloat)size : (lk->size > 0 ? (CGFloat)lk->size : UX_TV_FONT);
+    NSFont* f = ((flags & 8) || lk->mono) ? [NSFont monospacedSystemFontOfSize:pt weight:NSFontWeightRegular] : [NSFont systemFontOfSize:pt];
     NSFontManager* fm = [NSFontManager sharedFontManager];
     if (flags & 1)
         f = [fm convertFont:f toHaveTrait:NSBoldFontMask];
@@ -5000,13 +5032,12 @@ static NSDictionary* ak_tv_attrs(int flags, int colour, int size)
         f = [fm convertFont:f toHaveTrait:NSItalicFontMask];
     NSMutableDictionary* d = [NSMutableDictionary dictionary];
     d[NSFontAttributeName] = f;
+    // the style flags as UXKit set them: AppKit swaps the font of a character it has no glyph for (an
+    // emoji's), and the swapped font has lost the bold or italic that reading it back would find
+    d[@"UXStyleFlags"] = @(flags & 15);
     if (flags & 4)
         d[NSUnderlineStyleAttributeName] = @(NSUnderlineStyleSingle);
-    d[NSForegroundColorAttributeName] = colour ? [NSColor colorWithSRGBRed:((colour >> 16) & 255) / 255.0
-                                                                    green:((colour >> 8) & 255) / 255.0
-                                                                     blue:(colour & 255) / 255.0
-                                                                    alpha:1.0]
-                                               : [NSColor textColor];
+    d[NSForegroundColorAttributeName] = colour ? ak_rgb(colour) : (lk->ink ? ak_rgb(lk->ink) : [NSColor textColor]);
     NSMutableParagraphStyle* ps = [[NSMutableParagraphStyle alloc] init];
     int al = (flags >> 4) & 3;
     [ps setAlignment:(al == 1 ? NSTextAlignmentRight : al == 2 ? NSTextAlignmentCenter
@@ -5016,7 +5047,7 @@ static NSDictionary* ak_tv_attrs(int flags, int colour, int size)
     }
 // UTF-8 text and its runs (offsets relative to the text) as an attributed string.  Bytes no run
 // covers get the default style.
-static NSAttributedString* ak_tv_build(const char* text, int nbytes, const int* runs, int nruns)
+static NSAttributedString* ak_tv_build(const char* text, int nbytes, const int* runs, int nruns, const ak_tv_look* lk)
     {
     NSMutableAttributedString* out = [[NSMutableAttributedString alloc] init];
     int at = 0;
@@ -5028,7 +5059,7 @@ static NSAttributedString* ak_tv_build(const char* text, int nbytes, const int* 
             {
             NSString* g = [[NSString alloc] initWithBytes:text + at length:(NSUInteger)(s - at) encoding:NSUTF8StringEncoding];
             if (g)
-                [out appendAttributedString:[[NSAttributedString alloc] initWithString:g attributes:ak_tv_attrs(0, 0, 0)]];
+                [out appendAttributedString:[[NSAttributedString alloc] initWithString:g attributes:ak_tv_attrs(0, 0, 0, lk)]];
             at = s;
             }
         if (k == nruns || l <= 0 || s < at || s + l > nbytes)
@@ -5038,7 +5069,7 @@ static NSAttributedString* ak_tv_build(const char* text, int nbytes, const int* 
             [out appendAttributedString:[[NSAttributedString alloc] initWithString:p
                                                                        attributes:ak_tv_attrs(runs[k * UX_TV_RUN + 2],
                                                                                               runs[k * UX_TV_RUN + 3],
-                                                                                              runs[k * UX_TV_RUN + 4])]];
+                                                                                              runs[k * UX_TV_RUN + 4], lk)]];
         at = s + l;
         }
     return out;
@@ -5115,7 +5146,9 @@ void ux_ak_make_textview(int handle, int node, int x, int y, int w, int h)
     [tv setHorizontallyResizable:NO];
     [tv setAutoresizingMask:NSViewWidthSizable];
     [[tv textContainer] setWidthTracksTextView:YES];
-    [tv setTypingAttributes:ak_tv_attrs(0, 0, 0)];
+    [[tv textContainer] replaceLayoutManager:[UXTvLayout new]];
+    g_tv_look[handle][node] = g_tv_look_none;
+    [tv setTypingAttributes:ak_tv_attrs(0, 0, 0, &g_tv_look_none)];
     [tv setIdentifier:[NSString stringWithFormat:@"%d", handle * 1000 + node]];
     [tv setDelegate:ak_tv_delegate()];
     [sv setDocumentView:tv];
@@ -5130,7 +5163,7 @@ void ux_ak_textview_set_all(int handle, int node, const char* text, int nbytes, 
     if (!tv)
         return;
     g_tv_quiet++;
-    [[tv textStorage] setAttributedString:ak_tv_build(text ? text : "", nbytes, runs, nruns)];
+    [[tv textStorage] setAttributedString:ak_tv_build(text ? text : "", nbytes, runs, nruns, ak_look(tv))];
     [[tv undoManager] removeAllActionsWithTarget:[tv textStorage]];
     g_tv_quiet--;
     }
@@ -5145,7 +5178,7 @@ void ux_ak_textview_replace(int handle, int node, int start, int len, const char
     NSString* s = [[tv textStorage] string];
     NSUInteger a = ak_u16_of(s, start), b = ak_u16_of(s, start + len);
     NSRange r = NSMakeRange(a, b - a);
-    NSAttributedString* rep = ak_tv_build(text ? text : "", nbytes, runs, nruns);
+    NSAttributedString* rep = ak_tv_build(text ? text : "", nbytes, runs, nruns, ak_look(tv));
     if (attrsOnly && [rep length] != r.length)
         return;
     g_tv_quiet++;
@@ -5200,6 +5233,9 @@ int ux_ak_textview_read(int handle, int node, char* buf, int cap, int* runs, int
     buf[n] = 0;
     __block int k = 0;
     NSFontManager* fm = [NSFontManager sharedFontManager];
+    const ak_tv_look* lk = ak_look(tv);
+    int defSize = lk->size > 0 ? lk->size : (int)UX_TV_FONT;
+    NSColor* inkC = lk->ink ? [ak_rgb(lk->ink) colorUsingColorSpace:[NSColorSpace sRGBColorSpace]] : nil;
     [ts enumerateAttributesInRange:NSMakeRange(0, [ts length]) options:0
                         usingBlock:^(NSDictionary* at, NSRange rr, BOOL* stop) {
                           if (k >= maxRuns)
@@ -5216,14 +5252,17 @@ int ux_ak_textview_read(int handle, int node, char* buf, int cap, int* runs, int
                                   fl |= 1;
                               if (tr & NSItalicFontMask)
                                   fl |= 2;
-                              if ([f isFixedPitch])
+                              if ([f isFixedPitch] && !lk->mono)
                                   fl |= 8;
-                              if ((int)([f pointSize] + 0.5) != (int)UX_TV_FONT)
+                              if ((int)([f pointSize] + 0.5) != defSize)
                                   sz = (int)([f pointSize] + 0.5);
                               }
                           NSNumber* ul = at[NSUnderlineStyleAttributeName];
                           if (ul && [ul integerValue] != 0)
                               fl |= 4;
+                          NSNumber* own = at[@"UXStyleFlags"];
+                          if (own) // UXKit's own record wins over what the (possibly swapped) font says
+                              fl = (fl & ~15) | ([own intValue] & 15);
                           NSParagraphStyle* ps = at[NSParagraphStyleAttributeName];
                           if (ps)
                               {
@@ -5232,6 +5271,9 @@ int ux_ak_textview_read(int handle, int node, char* buf, int cap, int* runs, int
                                                                  : a == NSTextAlignmentJustified ? 3 : 0) << 4;
                               }
                           NSColor* c = [at[NSForegroundColorAttributeName] colorUsingColorSpace:[NSColorSpace sRGBColorSpace]];
+                          if (c && inkC && fabs([c redComponent] - [inkC redComponent]) < 0.002 &&
+                              fabs([c greenComponent] - [inkC greenComponent]) < 0.002 && fabs([c blueComponent] - [inkC blueComponent]) < 0.002)
+                              c = nil; // the view's ink: no colour of its own
                           if (c && ![at[NSForegroundColorAttributeName] isEqual:[NSColor textColor]])
                               col = 0x01000000 | ((int)([c redComponent] * 255 + 0.5) << 16) |
                                     ((int)([c greenComponent] * 255 + 0.5) << 8) | (int)([c blueComponent] * 255 + 0.5);
@@ -5292,7 +5334,31 @@ void ux_ak_textview_set_typing(int handle, int node, int flags, int colour, int 
     {
     NSTextView* tv = ak_tv(handle, node);
     if (tv)
-        [tv setTypingAttributes:ak_tv_attrs(flags, colour, size)];
+        [tv setTypingAttributes:ak_tv_attrs(flags, colour, size, ak_look(tv))];
+    }
+void ux_ak_textview_set_look(int handle, int node, int bg, int ink, int caret, int sel, int size, int mono)
+    {
+    NSTextView* tv = ak_tv(handle, node);
+    if (!tv)
+        return;
+    ak_tv_look* lk = &g_tv_look[handle][node];
+    lk->bg = bg;
+    lk->ink = ink;
+    lk->caret = caret;
+    lk->sel = sel;
+    lk->size = size;
+    lk->mono = mono;
+    NSColor* back = bg ? ak_rgb(bg) : [NSColor textBackgroundColor];
+    [tv setBackgroundColor:back];
+    [tv setDrawsBackground:YES];
+    [[tv enclosingScrollView] setBackgroundColor:back];
+    [tv setInsertionPointColor:(caret ? ak_rgb(caret) : (ink ? ak_rgb(ink) : [NSColor textColor]))];
+    [tv setSelectedTextAttributes:@{ NSBackgroundColorAttributeName : (sel ? ak_rgb(sel) : [NSColor selectedTextBackgroundColor]) }];
+    UXTvLayout* lm = (UXTvLayout*)[tv layoutManager];
+    if ([lm isKindOfClass:[UXTvLayout class]])
+        lm.uxSel = sel;
+    [tv setNeedsDisplay:YES];
+    [tv setTypingAttributes:ak_tv_attrs(0, 0, 0, lk)];
     }
 void ux_ak_textview_focus(int handle, int node)
     {

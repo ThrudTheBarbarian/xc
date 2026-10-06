@@ -120,6 +120,8 @@ void main(void)
     tv.nativeDidChange(); // read it back from the page
     ck(textIs(tv, (u8*)"hello world") && UXTextStyle.at(tv.attributedText(), (i32)7).bold,
        "the page has the content, with its runs");
+    tv.setBackgroundColor((i32)0x202428); // the page checks the editor takes the look
+    tv.setInk((i32)0xE8E8E8);
     Stdio.printf("STEP ready\n");
     app.setDelegate(new Starter());
     app.run(); // until the last step stops it

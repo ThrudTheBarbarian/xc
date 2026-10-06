@@ -63,6 +63,7 @@ extern void ux_tv_selection(i32 win, i32 node, i32* start, i32* len);
 extern i32 ux_tv_set_selection(i32 win, i32 node, i32 start, i32 len);
 extern i32 ux_tv_set_typing(i32 win, i32 node, i32 flags, i32 colour, i32 size);
 extern i32 ux_tv_focus(i32 win, i32 node);
+extern i32 ux_tv_set_look(i32 win, i32 node, i32 bg, i32 ink, i32 caret, i32 sel, i32 size, i32 mono);
 // A modal alert shown by the PAGE (a real browser's worker run loop): 1 if it was handed over (the
 // answer comes back through the ring as type 7), 0 where there is no page to show it.
 extern i32 ux_web_alert_show(i32 icon, u8* lines, u8* buttons, i32 defaultBtn);

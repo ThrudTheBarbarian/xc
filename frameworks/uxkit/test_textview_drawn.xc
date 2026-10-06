@@ -169,6 +169,15 @@ void main(void)
     i32 caret = ux_test_pixel(win.handle, (i32)a.x + (i32)4, (i32)a.y + (i32)10);
     eqi(caret, (i32)0, "the caret is drawn at the start");
 
+    // the look: the background and the selection in the view's colours
+    tv.setBackgroundColor((i32)0x202428);
+    tv.setSelectionColor((i32)0x3A5A8A);
+    tv.setSelectedRange(Range.make((i32)0, (i32)5));
+    win.displayAll();
+    wd.webPresentAll();
+    eqi(ux_test_pixel(win.handle, (i32)a.x + (i32)200, (i32)a.y + (i32)100), (i32)0x202428, "look: the background");
+    eqi(ux_test_pixel(win.handle, (i32)a.x + (i32)4 + (i32)20, (i32)a.y + (i32)6), (i32)0x3A5A8A, "look: the selection");
+
     if (gFails == (i32)0)
         {
         Stdio.printf("PASS: UXTextView drawn and edited by the toolkit\n");

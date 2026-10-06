@@ -2895,6 +2895,19 @@ static UITextView* gTv[UXIOS_MAXW][UXIOS_MAXN];
 // the text's length when the selection was last reported: a selection change with the length changed
 // is the caret moving with an edit, not the user moving it (so a run of typing stays one undo step)
 static NSUInteger gTvLen[UXIOS_MAXW][UXIOS_MAXN];
+// each view's look: background, ink, caret, selection (0x01RRGGBB or 0), default size, monospace
+typedef struct { int bg, ink, caret, sel, size, mono; } ios_tv_look;
+static ios_tv_look gTvLook[UXIOS_MAXW][UXIOS_MAXN];
+static ios_tv_look gTvLookNone;
+static ios_tv_look* ios_look(UITextView* tv)
+    {
+    int h = (int)(tv.tag / 4096), n = (int)(tv.tag % 4096);
+    return (tv && h >= 0 && h < UXIOS_MAXW && n >= 0 && n < UXIOS_MAXN) ? &gTvLook[h][n] : &gTvLookNone;
+    }
+static UIColor* ios_rgb(int c)
+    {
+    return [UIColor colorWithRed:((c >> 16) & 255) / 255.0 green:((c >> 8) & 255) / 255.0 blue:(c & 255) / 255.0 alpha:1.0];
+    }
 typedef void (*ux_tv_fn)(int handle, int node);
 typedef void (*ux_tv_undo_fn)(int handle, int node, int what);
 typedef int (*ux_tv_can_fn)(int handle, int node, int redo);
@@ -2983,10 +2996,10 @@ static int ios_u8_of(NSString* s, NSUInteger i)
         i = cr.location;
     return (int)[[s substringToIndex:i] lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
     }
-static NSDictionary* ios_tv_attrs(int flags, int colour, int size)
+static NSDictionary* ios_tv_attrs(int flags, int colour, int size, const ios_tv_look* lk)
     {
-    CGFloat pt = size > 0 ? (CGFloat)size : UX_TV_FONT;
-    UIFont* f = (flags & 8) ? [UIFont monospacedSystemFontOfSize:pt weight:UIFontWeightRegular] : [UIFont systemFontOfSize:pt];
+    CGFloat pt = size > 0 ? (CGFloat)size : (lk->size > 0 ? (CGFloat)lk->size : UX_TV_FONT);
+    UIFont* f = ((flags & 8) || lk->mono) ? [UIFont monospacedSystemFontOfSize:pt weight:UIFontWeightRegular] : [UIFont systemFontOfSize:pt];
     UIFontDescriptorSymbolicTraits tr = 0;
     if (flags & 1)
         tr |= UIFontDescriptorTraitBold;
@@ -3002,18 +3015,14 @@ static NSDictionary* ios_tv_attrs(int flags, int colour, int size)
     d[NSFontAttributeName] = f;
     if (flags & 4)
         d[NSUnderlineStyleAttributeName] = @(NSUnderlineStyleSingle);
-    d[NSForegroundColorAttributeName] = colour ? [UIColor colorWithRed:((colour >> 16) & 255) / 255.0
-                                                                 green:((colour >> 8) & 255) / 255.0
-                                                                  blue:(colour & 255) / 255.0
-                                                                 alpha:1.0]
-                                               : UIColor.labelColor;
+    d[NSForegroundColorAttributeName] = colour ? ios_rgb(colour) : (lk->ink ? ios_rgb(lk->ink) : UIColor.labelColor);
     NSMutableParagraphStyle* ps = [[NSMutableParagraphStyle alloc] init];
     int al = (flags >> 4) & 3;
     ps.alignment = al == 1 ? NSTextAlignmentRight : al == 2 ? NSTextAlignmentCenter : al == 3 ? NSTextAlignmentJustified : NSTextAlignmentLeft;
     d[NSParagraphStyleAttributeName] = ps;
     return d;
     }
-static NSAttributedString* ios_tv_build(const char* text, int nbytes, const int* runs, int nruns)
+static NSAttributedString* ios_tv_build(const char* text, int nbytes, const int* runs, int nruns, const ios_tv_look* lk)
     {
     NSMutableAttributedString* out = [[NSMutableAttributedString alloc] init];
     int at = 0;
@@ -3025,7 +3034,7 @@ static NSAttributedString* ios_tv_build(const char* text, int nbytes, const int*
             {
             NSString* g = [[NSString alloc] initWithBytes:text + at length:(NSUInteger)(s - at) encoding:NSUTF8StringEncoding];
             if (g)
-                [out appendAttributedString:[[NSAttributedString alloc] initWithString:g attributes:ios_tv_attrs(0, 0, 0)]];
+                [out appendAttributedString:[[NSAttributedString alloc] initWithString:g attributes:ios_tv_attrs(0, 0, 0, lk)]];
             at = s;
             }
         if (k == nruns || l <= 0 || s < at || s + l > nbytes)
@@ -3035,7 +3044,7 @@ static NSAttributedString* ios_tv_build(const char* text, int nbytes, const int*
             [out appendAttributedString:[[NSAttributedString alloc] initWithString:p
                                                                        attributes:ios_tv_attrs(runs[k * UX_TV_RUN + 2],
                                                                                                runs[k * UX_TV_RUN + 3],
-                                                                                               runs[k * UX_TV_RUN + 4])]];
+                                                                                               runs[k * UX_TV_RUN + 4], lk)]];
         at = s + l;
         }
     return out;
@@ -3055,7 +3064,8 @@ void ux_ios_make_textview(int handle, int node, int x, int y, int w, int h)
     tv.layer.borderWidth = 1.0;
     tv.layer.borderColor = UIColor.separatorColor.CGColor;
     tv.layer.cornerRadius = 5.0;
-    tv.typingAttributes = ios_tv_attrs(0, 0, 0);
+    gTvLook[handle][node] = gTvLookNone;
+    tv.typingAttributes = ios_tv_attrs(0, 0, 0, &gTvLookNone);
     if (!gTvDelegate)
         gTvDelegate = [UXTvDelegate new];
     tv.delegate = gTvDelegate;
@@ -3069,7 +3079,7 @@ void ux_ios_textview_set_all(int handle, int node, const char* text, int nbytes,
     if (!tv)
         return;
     gTvQuiet++;
-    tv.attributedText = ios_tv_build(text ? text : "", nbytes, runs, nruns);
+    tv.attributedText = ios_tv_build(text ? text : "", nbytes, runs, nruns, ios_look(tv));
     gTvLen[handle][node] = tv.textStorage.length;
     gTvQuiet--;
     }
@@ -3083,7 +3093,7 @@ void ux_ios_textview_replace(int handle, int node, int start, int len, const cha
     NSString* s = ts.string;
     NSUInteger a = ios_u16_of(s, start), b = ios_u16_of(s, start + len);
     NSRange r = NSMakeRange(a, b - a);
-    NSAttributedString* rep = ios_tv_build(text ? text : "", nbytes, runs, nruns);
+    NSAttributedString* rep = ios_tv_build(text ? text : "", nbytes, runs, nruns, ios_look(tv));
     if (attrsOnly && rep.length != r.length)
         return;
     NSRange keep = tv.selectedRange;
@@ -3130,6 +3140,8 @@ int ux_ios_textview_read(int handle, int node, char* buf, int cap, int* runs, in
     memcpy(buf, u, (size_t)n);
     buf[n] = 0;
     __block int k = 0;
+    const ios_tv_look* lk = ios_look(tv);
+    int defSize = lk->size > 0 ? lk->size : (int)UX_TV_FONT;
     [ts enumerateAttributesInRange:NSMakeRange(0, ts.length) options:0
                         usingBlock:^(NSDictionary* at, NSRange rr, BOOL* stop) {
                           if (k >= maxRuns)
@@ -3146,9 +3158,9 @@ int ux_ios_textview_read(int handle, int node, char* buf, int cap, int* runs, in
                                   fl |= 1;
                               if (tr & UIFontDescriptorTraitItalic)
                                   fl |= 2;
-                              if (tr & UIFontDescriptorTraitMonoSpace)
+                              if ((tr & UIFontDescriptorTraitMonoSpace) && !lk->mono)
                                   fl |= 8;
-                              if ((int)(f.pointSize + 0.5) != (int)UX_TV_FONT)
+                              if ((int)(f.pointSize + 0.5) != defSize)
                                   sz = (int)(f.pointSize + 0.5);
                               }
                           NSNumber* ul = at[NSUnderlineStyleAttributeName];
@@ -3165,6 +3177,8 @@ int ux_ios_textview_read(int handle, int node, char* buf, int cap, int* runs, in
                           CGFloat r = 0, g = 0, b = 0, al = 0;
                           if (c && ![c isEqual:UIColor.labelColor] && [c getRed:&r green:&g blue:&b alpha:&al])
                               col = 0x01000000 | ((int)(r * 255 + 0.5) << 16) | ((int)(g * 255 + 0.5) << 8) | (int)(b * 255 + 0.5);
+                          if (col && col == lk->ink)
+                              col = 0; // the view's ink: no colour of its own
                           int b0 = ios_u8_of(s, rr.location), b1 = ios_u8_of(s, rr.location + rr.length);
                           runs[k * UX_TV_RUN] = b0;
                           runs[k * UX_TV_RUN + 1] = b1 - b0;
@@ -3204,7 +3218,26 @@ void ux_ios_textview_set_typing(int handle, int node, int flags, int colour, int
     {
     UITextView* tv = ios_tv(handle, node);
     if (tv)
-        tv.typingAttributes = ios_tv_attrs(flags, colour, size);
+        tv.typingAttributes = ios_tv_attrs(flags, colour, size, ios_look(tv));
+    }
+// The look.  A UITextView draws its caret and its selection in one tint, so the caret's colour (or
+// else the selection's) is that tint.
+void ux_ios_textview_set_look(int handle, int node, int bg, int ink, int caret, int sel, int size, int mono)
+    {
+    UITextView* tv = ios_tv(handle, node);
+    if (!tv)
+        return;
+    ios_tv_look* lk = &gTvLook[handle][node];
+    lk->bg = bg;
+    lk->ink = ink;
+    lk->caret = caret;
+    lk->sel = sel;
+    lk->size = size;
+    lk->mono = mono;
+    tv.backgroundColor = bg ? ios_rgb(bg) : UIColor.systemBackgroundColor;
+    int tint = caret ? caret : sel;
+    tv.tintColor = tint ? ios_rgb(tint) : nil;
+    tv.typingAttributes = ios_tv_attrs(0, 0, 0, lk);
     }
 void ux_ios_textview_focus(int handle, int node)
     {
