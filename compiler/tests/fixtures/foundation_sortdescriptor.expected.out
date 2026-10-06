@@ -1,0 +1,11 @@
+as given: a b c d e
+name: b d a e c
+name [c]: b d a e c
+age: e b a c d
+age desc: d a c b e
+age desc, name: d a c b e
+size as text: a c b d e
+loc.city: c e d b a
+loc.city reversed: a b d c e
+no descriptors: a b c d e
+boxes by w: 0 1 2 3

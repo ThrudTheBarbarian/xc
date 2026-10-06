@@ -69,7 +69,7 @@ Every target except xt6502.
 
 **Building** · [compare](#compare) · [and / or / not](#and--or--not) · [andAll / orAll](#andall--orall) · [truePredicate / falsePredicate](#truepredicate--falsepredicate)
 
-**Evaluating** · [evaluate](#evaluate) · [evaluateWith](#evaluatewith) · [filter](#filter) · [valueAtPath](#valueatpath)
+**Evaluating** · [evaluate](#evaluate) · [evaluateWith](#evaluatewith) · [filter](#filter) · [valueAtPath](#valueatpath) · [compareValues](#comparevalues)
 
 **Errors** · [PredicateError](#predicateerror)
 
@@ -153,6 +153,14 @@ The members of `items` that pass, in order.
 static Object* valueAtPath(Object* record, String* path)
 ```
 The value at a dotted key path through nested Maps, or null.
+
+### compareValues
+```c
+static i32 compareValues(Object* a, Object* b, bool fold)
+```
+How two values order as a predicate compares them: -1, 0 or 1, or 2 when they
+have no order. `fold` ignores ASCII case between Strings.
+[`SortDescriptor`](/compiler/api/sortdescriptor/) sorts with it.
 
 [↑ Topics](#topics)
 

@@ -367,8 +367,16 @@ class Predicate : Object
         return (Number*)0;
         }
 
-    // <0, 0, >0, or 2 when the two have no order.
     i32 _order(Object* a, Object* b)
+        {
+        return Predicate.compareValues(a, b, _fold);
+        }
+
+    // How two values order as a predicate compares them: -1, 0 or 1, or 2
+    // when they have no order (a null or missing value, a String that is not
+    // a number against a Number, or two objects of other kinds). `fold`
+    // ignores ASCII case between Strings.
+    static i32 compareValues(Object* a, Object* b, bool fold)
         {
         if (a == 0 || b == 0 || Null.isNull(a) || Null.isNull(b))
             return (i32)2;
@@ -394,9 +402,8 @@ class Predicate : Object
             }
         if (sa != 0 && sb != 0)
             {
-            if (_fold)
-                return (i32)sa.lowercased().compare(sb.lowercased());
-            return (i32)sa.compare(sb);
+            i32 c = fold ? (i32)sa.lowercased().compare(sb.lowercased()) : (i32)sa.compare(sb);
+            return c < (i32)0 ? (i32)-1 : (c > (i32)0 ? (i32)1 : (i32)0);
             }
         return (i32)2;
         }
