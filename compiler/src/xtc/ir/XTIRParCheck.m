@@ -71,6 +71,7 @@ static NSString* shownName(NSString* irName)
 
 static BOOL gEmitsMetal = NO;
 static BOOL gEmitsPTX = NO;
+static BOOL gEmitsSPIRV = NO;
 
 + (void)setEmitsMetal:(BOOL)on
     {
@@ -80,6 +81,11 @@ static BOOL gEmitsPTX = NO;
 + (void)setEmitsPTX:(BOOL)on
     {
     gEmitsPTX = on;
+    }
+
++ (void)setEmitsSPIRV:(BOOL)on
+    {
+    gEmitsSPIRV = on;
     }
 
 // Each block's gpuSource() returns a placeholder literal, `__XC_PAR_MSL_<n>__`;
@@ -107,10 +113,42 @@ static BOOL gEmitsPTX = NO;
             }
         BOOL fast = tag == fastTag;
         NSString* why = nil;
-        NSString* msl = gEmitsMetal ? [XTIRParMSL sourceForKernel:f module:module fast:fast why:&why]
-                      : gEmitsPTX   ? [XTIRParMSL ptxForKernel:f module:module fast:fast why:&why]
-                                    : @"";
-        if (!msl)
+        NSData* kernel = nil;
+        if (gEmitsSPIRV)
+            kernel = [XTIRParMSL spirvForKernel:f module:module fast:fast why:&why];
+        else
+            {
+            NSString* text = gEmitsMetal ? [XTIRParMSL sourceForKernel:f module:module fast:fast why:&why]
+                           : gEmitsPTX   ? [XTIRParMSL ptxForKernel:f module:module fast:fast why:&why]
+                                         : @"";
+            kernel = [text dataUsingEncoding:NSUTF8StringEncoding];
+            }
+        // XC_PAR_SPIRV_DUMP=<dir>: every block's SPIR-V module, on any target,
+        // as <dir>/<block>.spv (for spirv-val), or <block>.why when it has none.
+        const char* dump = getenv("XC_PAR_SPIRV_DUMP");
+        if (dump && *dump)
+            {
+            NSString* dwhy = nil;
+            NSData* d = gEmitsSPIRV ? kernel : [XTIRParMSL spirvForKernel:f module:module fast:fast why:&dwhy];
+            if (gEmitsSPIRV)
+                dwhy = why;
+            NSString* base = [[NSString stringWithUTF8String:dump] stringByAppendingPathComponent:n];
+            if (d)
+                {
+                // The module alone: the words after the header line's NUL and padding.
+                const uint8_t* b = d.bytes;
+                NSUInteger at = 0;
+                while (at < d.length && b[at])
+                    at++;
+                at = (at + 4) & ~(NSUInteger)3;
+                [[d subdataWithRange:NSMakeRange(at, d.length - at)] writeToFile:[base stringByAppendingString:@".spv"]
+                                                                       atomically:NO];
+                }
+            else
+                [(dwhy ?: @"(no reason)") writeToFile:[base stringByAppendingString:@".why"] atomically:NO
+                                             encoding:NSUTF8StringEncoding error:nil];
+            }
+        if (!kernel)
             {
             // On a target with a GPU, say why this block stays on the CPU.
             NSString* cls = [f.name substringToIndex:f.name.length - 4];
@@ -118,7 +156,7 @@ static BOOL gEmitsPTX = NO;
                                                          why ?: @"its GPU version cannot express something it uses yet"]
                      category:XTWarnParGpu
                            at:classDecls[cls].location];
-            msl = @"";
+            kernel = [NSData data];
             }
         for (XTIRSymbol* sym in module.symbols)
             {
@@ -126,7 +164,7 @@ static BOOL gEmitsPTX = NO;
             if (sym.kind != XTIRSymbolKindStringLit || b.length < tag.length ||
                 memcmp(b.bytes, tag.bytes, tag.length) != 0)
                 continue;
-            NSMutableData* nb = [[msl dataUsingEncoding:NSUTF8StringEncoding] mutableCopy];
+            NSMutableData* nb = [kernel mutableCopy];
             if (b.length > tag.length) // keep the terminator the literal had
                 [nb appendBytes:(const uint8_t*)b.bytes + tag.length length:b.length - tag.length];
             [sym setValue:nb forKey:@"stringBytes"];

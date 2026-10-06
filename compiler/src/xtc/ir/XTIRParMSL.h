@@ -31,6 +31,13 @@ NS_ASSUME_NONNULL_BEGIN
 
 // The same kernel as PTX for NVIDIA GPUs (XTIRParPTX.m); nil keeps the block
 // on the CPU.
+@interface XTIRParMSL (SPIRV)
+// The kernel as a SPIR-V module for Vulkan: the header line (ending
+// ` spirv=<words>`), a NUL, padding to a 4-byte boundary, then the words.
++ (nullable NSData*)spirvForKernel:(XTIRFunction*)run module:(XTIRModule*)module fast:(BOOL)fast
+                               why:(NSString* _Nullable* _Nullable)why;
+@end
+
 @interface XTIRParMSL (PTX)
 + (nullable NSString*)ptxForKernel:(XTIRFunction*)run module:(XTIRModule*)module fast:(BOOL)fast
                                 why:(NSString* _Nullable* _Nullable)why;

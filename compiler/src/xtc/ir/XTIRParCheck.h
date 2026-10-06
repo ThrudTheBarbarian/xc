@@ -20,6 +20,7 @@ NS_ASSUME_NONNULL_BEGIN
 // an Apple arm64 target, PTX for win64. Elsewhere each block's gpuSource() is "".
 + (void)setEmitsMetal:(BOOL)on;
 + (void)setEmitsPTX:(BOOL)on;
++ (void)setEmitsSPIRV:(BOOL)on;
 
 // NO when a block broke a rule; each such block has an error in `diag`.
 + (BOOL)checkModule:(XTIRModule*)module
