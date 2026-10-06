@@ -74,6 +74,9 @@ class OptProfile
     // factor key off it (SIMD step 1, S2); set from the driver's vector level.
     u32 _vectorLaneBytes;
     bool _simdDispatch;
+    // SME matrix kernels (arm64 macOS, --sme-matmul): idiom-matmul puts a call
+    // to the back end's __xt_sme_gemm_* in front of a matrix-multiply nest.
+    bool _smeMatMul;
     bool _loopRotate;      // top-tested loops become bottom-tested
     u32 _inlineMax;        // the largest callee (IR instructions) the inliner splices
     bool _dceTrace;        // name each function dead-function elimination removes
@@ -82,6 +85,7 @@ class OptProfile
         {
         _vectorLaneBytes = (u32)16;
         _simdDispatch = false;
+        _smeMatMul = false;
         _inlineMax = (u32)64;
         _dceTrace = false;
         _nativeVarargs = false;
@@ -122,6 +126,8 @@ class OptProfile
     // `<name>$avx2` clones at 32 that the runtime picks between at load.
     bool simdDispatch(void) { return _simdDispatch; }
     void setSimdDispatch(bool d) { _simdDispatch = d; }
+    bool smeMatMul(void) { return _smeMatMul; }
+    void setSmeMatMul(bool d) { _smeMatMul = d; }
 
     static OptProfile* forTarget(String* t)
         {
@@ -1246,6 +1252,10 @@ class OptProfile
         if (_level >= (u32)2)
             idiomMemset(m);
         if (stopHere(String.withCString("idiom-memset")))
+            return;
+        if (_level >= (u32)2)
+            idiomMatMul(m);
+        if (stopHere(String.withCString("idiom-matmul")))
             return;
         if (_level >= (u32)2)
             deadCode(m);
@@ -7235,6 +7245,666 @@ class OptProfile
         if (bb.term() != 0)
             replaceUse(bb.term(), from, IROperand.useVal(to));
         }
+    // ── idiom-matmul ─────────────────────────────────────────────────────
+    //
+    // A dense matrix multiply
+    //   for i < M: for j < N: { s = 0.0; for k < K: s = s + A[i*lda+k] * B[k*ldb+j];
+    //                           C[i*ldc+j] = s; }
+    // (F32 or F64) gets a call to the back end's SME kernel in front of it:
+    //   %done = Call @__xt_sme_gemm_f32(A, B, C, M | N<<32, K, lda, ldb, ldc)
+    //   CondBranch %done, <nest exit>, <nest>
+    // The nest stays as the fallback. Only the canonical shape lowering gives
+    // (ICmp ULT iv, bound; body on the true edge), so it matches exactly what the
+    // reference's XTIROptIdiomMatMul matches. private:docs/Design/simd-sme-plan.md.
+    IRBlock* _mxPre;
+    IRBlock* _mxHead;
+    IRBlock* _mxExit;
+    bool _mmF64;
+    IROperand* _mxM;
+    IROperand* _mxN;
+    IROperand* _mxK;
+    IROperand* _mxLda;
+    IROperand* _mxLdb;
+    IROperand* _mxLdc;
+    IROperand* _mxA;
+    IROperand* _mxB;
+    IROperand* _mxC;
+    IRValue* _mxMem;
+    // The constant value of each of M, N, K, lda, ldb, ldc, or -1 (a value).
+    i64* _mxConsts;
+    // countedHeader's outputs
+    IRInsn* _mxIv;
+    IROperand* _mxBound;
+    IRBlock* _mxBody;
+    IRBlock* _mxExitOf;
+    IRBlock* _mxPreOf;
+
+    void idiomMatMul(IRModule* m)
+        {
+        if (!_profile.smeMatMul())
+            return;
+        for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
+            {
+            IRFunc* fn = (IRFunc*)m.funcs().get(f);
+            for (u32 iter = (u32)0; iter < (u32)64; iter = iter + (u32)1)
+                {
+                if (!recogniseMatMul(fn))
+                    break;
+                applyMatMul(m);
+                }
+            }
+        }
+
+    bool mmIsUse(IROperand* o, IRValue* v)
+        {
+        return o.kind() == (u8)OPK_USE && o.val() == v;
+        }
+
+    // The defining insn of a Use operand, when it has the given opcode.
+    IRInsn* mmDefWith(IROperand* o, String* op, Map* defOf)
+        {
+        if (o.kind() != (u8)OPK_USE || o.val() == 0)
+            return (IRInsn*)0;
+        Object* d = defOf.get((Hashable*)o.val());
+        if (d == 0)
+            return (IRInsn*)0;
+        IRInsn* n = (IRInsn*)d;
+        return n.op().equals(op) ? n : (IRInsn*)0;
+        }
+
+    // A use of `Const +0.0` of the given float type (or an ImmF of +0.0).
+    bool mmPlusZero(IROperand* o, Map* defOf, String* fty)
+        {
+        String* zero = String.withCString("0000000000000000");
+        if (o.kind() == (u8)OPK_IMMF)
+            return o.fpHex().equals(zero);
+        IRInsn* d = mmDefWith(o, String.withCString("Const"), defOf);
+        if (d == 0 || d.res() == 0 || !d.res().ty().equals(fty) || d.ops().count() != (u32)1)
+            return false;
+        IROperand* c = (IROperand*)d.ops().get((u32)0);
+        return c.kind() == (u8)OPK_IMMF && c.fpHex().equals(zero);
+        }
+
+    // Phi incoming from block b (operands alternate block, value).
+    IROperand* mmIncoming(IRInsn* phi, IRBlock* b)
+        {
+        for (u32 i = (u32)0; i + (u32)1 < phi.ops().count(); i = i + (u32)2)
+            if (((IROperand*)phi.ops().get(i)).blk() == b)
+                return (IROperand*)phi.ops().get(i + (u32)1);
+        return (IROperand*)0;
+        }
+
+    // `x + 1`.
+    bool mmIncOf(IROperand* o, IRValue* x, Map* defOf)
+        {
+        IRInsn* add = mmDefWith(o, String.withCString("Add"), defOf);
+        if (add == 0 || add.ops().count() != (u32)2)
+            return false;
+        IROperand* a0 = (IROperand*)add.ops().get((u32)0);
+        IROperand* a1 = (IROperand*)add.ops().get((u32)1);
+        i64 one = (i64)0;
+        if (mmIsUse(a0, x) && constValue(defOf, a1, &one) && one == (i64)1)
+            return true;
+        one = (i64)0;
+        if (mmIsUse(a1, x) && constValue(defOf, a0, &one) && one == (i64)1)
+            return true;
+        return false;
+        }
+
+    // index = Add(Mul(p, q), r) in either order: the Mul, and the addend in _mxAddend.
+    IROperand* _mxAddend;
+    IRInsn* mmSplitIndex(IROperand* idx, Map* defOf)
+        {
+        IRInsn* add = mmDefWith(idx, String.withCString("Add"), defOf);
+        if (add == 0 || add.ops().count() != (u32)2)
+            return (IRInsn*)0;
+        IROperand* a0 = (IROperand*)add.ops().get((u32)0);
+        IROperand* a1 = (IROperand*)add.ops().get((u32)1);
+        IRInsn* m0 = mmDefWith(a0, String.withCString("Mul"), defOf);
+        IRInsn* m1 = mmDefWith(a1, String.withCString("Mul"), defOf);
+        if (m0 != 0 && m0.ops().count() == (u32)2)
+            {
+            _mxAddend = a1;
+            return m0;
+            }
+        if (m1 != 0 && m1.ops().count() == (u32)2)
+            {
+            _mxAddend = a0;
+            return m1;
+            }
+        return (IRInsn*)0;
+        }
+
+    // Mul(v, other) in either order: the operand that is not v, or 0.
+    IROperand* mmMulOther(IRInsn* mul, IRValue* v)
+        {
+        IROperand* a0 = (IROperand*)mul.ops().get((u32)0);
+        IROperand* a1 = (IROperand*)mul.ops().get((u32)1);
+        if (mmIsUse(a0, v) && !mmIsUse(a1, v))
+            return a1;
+        if (mmIsUse(a1, v) && !mmIsUse(a0, v))
+            return a0;
+        return (IROperand*)0;
+        }
+
+    Array* mmSuccs(IRBlock* b)
+        {
+        Array* out = new Array();
+        if (b.term() == 0)
+            return out;
+        for (u32 i = (u32)0; i < b.term().ops().count(); i = i + (u32)1)
+            {
+            IROperand* o = (IROperand*)b.term().ops().get(i);
+            if (o.kind() == (u8)OPK_BLOCK && o.blk() != 0)
+                out.add((Object*)o.blk());
+            }
+        return out;
+        }
+
+    bool mmBranchesTo(IRBlock* b, IRBlock* to)
+        {
+        IRInsn* t = b.term();
+        return t != 0 && t.op().equals(String.withCString("Branch")) && t.ops().count() == (u32)1
+            && ((IROperand*)t.ops().get((u32)0)).blk() == to;
+        }
+
+    bool mmOnlyConsts(IRBlock* b, Map* defOf)
+        {
+        for (u32 i = (u32)0; i < b.insns().count(); i = i + (u32)1)
+            {
+            IRInsn* n = (IRInsn*)b.insns().get(i);
+            if (n.memRes() != 0)
+                return false;
+            if (n.op().equals(String.withCString("Const")))
+                continue;
+            i64 v = (i64)0;
+            if (n.op().equals(String.withCString("ZExt")) && constValue(defOf, (IROperand*)n.ops().get((u32)0), &v))
+                continue;
+            return false;
+            }
+        return true;
+        }
+
+    // A counted loop header (see the reference's countedHeader).
+    bool mmCountedHeader(IRBlock* H, u32 extraPhis, IRBlock* latch, Map* defOf)
+        {
+        if (H.phis().count() != (u32)1 + extraPhis || H.insns().count() < (u32)1)
+            return false;
+        // The guard is the last instruction; anything before it is a constant
+        // (a literal bound is materialised in the header: Const, ZExt).
+        IRInsn* guard = (IRInsn*)H.insns().get(H.insns().count() - (u32)1);
+        for (u32 i = (u32)0; i < H.insns().count(); i = i + (u32)1)
+            {
+            IRInsn* n = (IRInsn*)H.insns().get(i);
+            if (n == guard)
+                continue;
+            if (n.memRes() != 0 || n.res() == 0)
+                return false;
+            i64 v = (i64)0;
+            bool k = n.op().equals(String.withCString("Const")) && n.ops().count() == (u32)1
+                  && ((IROperand*)n.ops().get((u32)0)).kind() == (u8)OPK_IMMI;
+            if (!k && !(n.op().equals(String.withCString("ZExt")) && constValue(defOf, (IROperand*)n.ops().get((u32)0), &v)))
+                return false;
+            }
+        IRInsn* t = H.term();
+        if (!guard.op().equals(String.withCString("ICmp")) || guard.pred() == 0
+            || !guard.pred().equals(String.withCString("ULT")) || guard.ops().count() != (u32)2 || guard.res() == 0)
+            return false;
+        if (t == 0 || !t.op().equals(String.withCString("CondBranch")) || t.ops().count() != (u32)3
+            || !mmIsUse((IROperand*)t.ops().get((u32)0), guard.res()))
+            return false;
+        IRInsn* iv = (IRInsn*)0;
+        for (u32 i = (u32)0; i < H.phis().count(); i = i + (u32)1)
+            {
+            IRInsn* phi = (IRInsn*)H.phis().get(i);
+            if (phi.res() != 0 && mmIsUse((IROperand*)guard.ops().get((u32)0), phi.res()))
+                iv = phi;
+            }
+        if (iv == 0 || !iv.res().ty().equals(String.withCString("U32")) || iv.ops().count() != (u32)4)
+            return false;
+        IRBlock* body = ((IROperand*)t.ops().get((u32)1)).blk();
+        IRBlock* exitB = ((IROperand*)t.ops().get((u32)2)).blk();
+        if (body == 0 || exitB == 0 || body == H || exitB == H)
+            return false;
+        IRBlock* pre = (IRBlock*)0;
+        for (u32 i = (u32)0; i < (u32)4; i = i + (u32)2)
+            if (((IROperand*)iv.ops().get(i)).blk() != latch)
+                pre = ((IROperand*)iv.ops().get(i)).blk();
+        if (pre == 0 || mmIncoming(iv, latch) == 0)
+            return false;
+        i64 init = (i64)0;
+        if (!constValue(defOf, mmIncoming(iv, pre), &init) || init != (i64)0)
+            return false;
+        if (!mmIncOf(mmIncoming(iv, latch), iv.res(), defOf))
+            return false;
+        _mxIv = iv;
+        _mxBound = (IROperand*)guard.ops().get((u32)1);
+        _mxBody = body;
+        _mxExitOf = exitB;
+        _mxPreOf = pre;
+        return true;
+        }
+
+    bool mmU32(IROperand* o, Map* defOf)
+        {
+        i64 v = (i64)0;
+        if (constValue(defOf, o, &v))
+            return v >= (i64)0 && v <= (i64)$FFFFFFFF;
+        return o.kind() == (u8)OPK_USE && o.val() != 0 && o.val().ty().equals(String.withCString("U32"));
+        }
+
+    bool mmInBlocks(Array* bs, IRBlock* b)
+        {
+        for (u32 i = (u32)0; i < bs.count(); i = i + (u32)1)
+            if ((IRBlock*)bs.get(i) == b)
+                return true;
+        return false;
+        }
+
+    // Defined outside the nest (a parameter has no defining block).
+    bool mmOutside(IROperand* o, Map* defOf, Map* defBlk, Array* nest)
+        {
+        i64 v = (i64)0;
+        if (constValue(defOf, o, &v))
+            return true; // a constant is invariant wherever it is spelled
+        if (o.kind() != (u8)OPK_USE || o.val() == 0)
+            return false;
+        Object* b = defBlk.get((Hashable*)o.val());
+        return b == 0 || !mmInBlocks(nest, (IRBlock*)b);
+        }
+
+    // Ek / Bk / Ej may hold only these opcodes besides the named memory ops.
+    bool mmOpIn(String* op, u32 set)
+        {
+        if (op.equals(String.withCString("Const")) || op.equals(String.withCString("ZExt"))
+            || op.equals(String.withCString("Add")))
+            return true;
+        if (set >= (u32)1 && (op.equals(String.withCString("Mul")) || op.equals(String.withCString("ElementAddr"))))
+            return true;
+        if (set >= (u32)2 && (op.equals(String.withCString("FMul")) || op.equals(String.withCString("FAdd"))))
+            return true;
+        return false;
+        }
+
+    bool recogniseMatMul(IRFunc* fn)
+        {
+        Map* defOf = defMapAll(fn);
+        Map* defBlk = defBlockMap(fn);
+        for (u32 hb = (u32)0; hb < fn.blocks().count(); hb = hb + (u32)1)
+            {
+            IRBlock* Hk = (IRBlock*)fn.blocks().get(hb);
+            if (Hk.phis().count() != (u32)2)
+                continue;
+            Array* hkPreds = predsOfBlock(fn, Hk);
+            IRBlock* Bk = (IRBlock*)0;
+            for (u32 i = (u32)0; i < hkPreds.count(); i = i + (u32)1)
+                {
+                IRBlock* p = (IRBlock*)hkPreds.get(i);
+                if (mmBranchesTo(p, Hk) && p != Hk && mmSuccs(p).count() == (u32)1)
+                    {
+                    IRInsn* t = Hk.term();
+                    if (t != 0 && t.op().equals(String.withCString("CondBranch")) && t.ops().count() == (u32)3
+                        && ((IROperand*)t.ops().get((u32)1)).blk() == p)
+                        Bk = p;
+                    }
+                }
+            if (Bk == 0)
+                continue;
+            if (!mmCountedHeader(Hk, (u32)1, Bk, defOf) || _mxBody != Bk)
+                continue;
+            IRInsn* kPhi = _mxIv;
+            IROperand* K = _mxBound;
+            IRBlock* Ek = _mxExitOf;
+            IRBlock* Pk = _mxPreOf;
+            if (hkPreds.count() != (u32)2 || predsOfBlock(fn, Ek).count() != (u32)1 || Ek.phis().count() != (u32)0
+                || Bk.phis().count() != (u32)0)
+                continue;
+            IRInsn* sPhi = (IRInsn*)Hk.phis().get((u32)0) == kPhi ? (IRInsn*)Hk.phis().get((u32)1)
+                                                                   : (IRInsn*)Hk.phis().get((u32)0);
+            if (sPhi.res() == 0 || sPhi.ops().count() != (u32)4)
+                continue;
+            String* fty = sPhi.res().ty();
+            bool f64 = fty.equals(String.withCString("F64"));
+            if (!f64 && !fty.equals(String.withCString("F32")))
+                continue;
+            if (mmIncoming(sPhi, Pk) == 0 || mmIncoming(sPhi, Bk) == 0 || !mmPlusZero(mmIncoming(sPhi, Pk), defOf, fty))
+                continue;
+            IRInsn* fadd = mmDefWith(mmIncoming(sPhi, Bk), String.withCString("FAdd"), defOf);
+            if (fadd == 0 || fadd.ops().count() != (u32)2 || defBlk.get((Hashable*)fadd.res()) != (Object*)Bk)
+                continue;
+            IROperand* f0 = (IROperand*)fadd.ops().get((u32)0);
+            IROperand* f1 = (IROperand*)fadd.ops().get((u32)1);
+            IROperand* prodOp = mmIsUse(f0, sPhi.res()) ? f1 : (mmIsUse(f1, sPhi.res()) ? f0 : (IROperand*)0);
+            IRInsn* fmul = prodOp != 0 ? mmDefWith(prodOp, String.withCString("FMul"), defOf) : (IRInsn*)0;
+            if (fmul == 0 || fmul.ops().count() != (u32)2 || defBlk.get((Hashable*)fmul.res()) != (Object*)Bk)
+                continue;
+            IRInsn* l0 = mmDefWith((IROperand*)fmul.ops().get((u32)0), String.withCString("Load"), defOf);
+            IRInsn* l1 = mmDefWith((IROperand*)fmul.ops().get((u32)1), String.withCString("Load"), defOf);
+            if (l0 == 0 || l1 == 0 || l0 == l1 || defBlk.get((Hashable*)l0.res()) != (Object*)Bk
+                || defBlk.get((Hashable*)l1.res()) != (Object*)Bk)
+                continue;
+            if (!l0.res().ty().equals(fty) || !l1.res().ty().equals(fty))
+                continue;
+            IRInsn* ea0 = mmDefWith((IROperand*)l0.ops().get((u32)0), String.withCString("ElementAddr"), defOf);
+            IRInsn* ea1 = mmDefWith((IROperand*)l1.ops().get((u32)0), String.withCString("ElementAddr"), defOf);
+            if (ea0 == 0 || ea1 == 0 || ea0.ops().count() != (u32)2 || ea1.ops().count() != (u32)2)
+                continue;
+            IRValue* kv = kPhi.res();
+            IRInsn* mul0 = mmSplitIndex((IROperand*)ea0.ops().get((u32)1), defOf);
+            IROperand* add0 = _mxAddend;
+            if (mul0 == 0)
+                continue;
+            IRInsn* mul1 = mmSplitIndex((IROperand*)ea1.ops().get((u32)1), defOf);
+            IROperand* add1 = _mxAddend;
+            if (mul1 == 0)
+                continue;
+            IRInsn* eaA;
+            IRInsn* eaB;
+            IRInsn* mulA;
+            IRInsn* mulB;
+            IRInsn* loadA;
+            IRInsn* loadB;
+            IROperand* bCol;
+            if (mmIsUse(add0, kv) && mmMulOther(mul1, kv) != 0 && !mmIsUse(add1, kv))
+                {
+                eaA = ea0; mulA = mul0; loadA = l0;
+                eaB = ea1; mulB = mul1; loadB = l1; bCol = add1;
+                }
+            else if (mmIsUse(add1, kv) && mmMulOther(mul0, kv) != 0 && !mmIsUse(add0, kv))
+                {
+                eaA = ea1; mulA = mul1; loadA = l1;
+                eaB = ea0; mulB = mul0; loadB = l0; bCol = add0;
+                }
+            else
+                continue;
+            IROperand* ldb = mmMulOther(mulB, kv);
+            bool bkClean = true;
+            for (u32 i = (u32)0; i < Bk.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)Bk.insns().get(i);
+                if (n == loadA || n == loadB)
+                    continue;
+                if (n.memRes() != 0 || !mmOpIn(n.op(), (u32)2))
+                    {
+                    bkClean = false;
+                    break;
+                    }
+                }
+            if (!bkClean || !mmBranchesTo(Bk, Hk))
+                continue;
+            IRInsn* store = (IRInsn*)0;
+            bool twoStores = false;
+            for (u32 i = (u32)0; i < Ek.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)Ek.insns().get(i);
+                if (!n.op().equals(String.withCString("Store")))
+                    continue;
+                if (store != 0)
+                    twoStores = true;
+                store = n;
+                }
+            if (twoStores || store == 0 || store.ops().count() != (u32)3
+                || !mmIsUse((IROperand*)store.ops().get((u32)1), sPhi.res()))
+                continue;
+            IRInsn* eaC = mmDefWith((IROperand*)store.ops().get((u32)0), String.withCString("ElementAddr"), defOf);
+            if (eaC == 0 || eaC.ops().count() != (u32)2)
+                continue;
+            IRInsn* mulC = mmSplitIndex((IROperand*)eaC.ops().get((u32)1), defOf);
+            IROperand* cCol = _mxAddend;
+            if (mulC == 0)
+                continue;
+            Array* ekS = mmSuccs(Ek);
+            IRBlock* Hj = ekS.count() == (u32)1 ? (IRBlock*)ekS.get((u32)0) : (IRBlock*)0;
+            if (Hj == 0 || !mmBranchesTo(Ek, Hj))
+                continue;
+            bool ekClean = true;
+            for (u32 i = (u32)0; i < Ek.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)Ek.insns().get(i);
+                if (n == store)
+                    continue;
+                if (n.memRes() != 0 || !mmOpIn(n.op(), (u32)1))
+                    {
+                    ekClean = false;
+                    break;
+                    }
+                }
+            if (!ekClean)
+                continue;
+
+            if (!mmCountedHeader(Hj, (u32)0, Ek, defOf))
+                continue;
+            IRInsn* jPhi = _mxIv;
+            IROperand* N = _mxBound;
+            IRBlock* Bj = _mxBody;
+            IRBlock* Ej = _mxExitOf;
+            IRBlock* Pj = _mxPreOf;
+            if (Bj != Pk || !mmBranchesTo(Bj, Hk) || Bj.phis().count() != (u32)0 || predsOfBlock(fn, Bj).count() != (u32)1
+                || predsOfBlock(fn, Hj).count() != (u32)2 || predsOfBlock(fn, Ej).count() != (u32)1
+                || Ej.phis().count() != (u32)0)
+                continue;
+            if (!mmOnlyConsts(Bj, defOf))
+                continue;
+            if (!mmIsUse(bCol, jPhi.res()) || !mmIsUse(cCol, jPhi.res()))
+                continue;
+
+            Array* ejS = mmSuccs(Ej);
+            IRBlock* Hi = ejS.count() == (u32)1 ? (IRBlock*)ejS.get((u32)0) : (IRBlock*)0;
+            if (Hi == 0 || !mmBranchesTo(Ej, Hi))
+                continue;
+            if (!mmCountedHeader(Hi, (u32)0, Ej, defOf))
+                continue;
+            IRInsn* iPhi = _mxIv;
+            IROperand* M = _mxBound;
+            IRBlock* Bi = _mxBody;
+            IRBlock* Ei = _mxExitOf;
+            IRBlock* Pi = _mxPreOf;
+            if (Bi != Pj || !mmBranchesTo(Bi, Hj) || Bi.phis().count() != (u32)0 || predsOfBlock(fn, Bi).count() != (u32)1
+                || predsOfBlock(fn, Hi).count() != (u32)2 || predsOfBlock(fn, Ei).count() != (u32)1
+                || Ei.phis().count() != (u32)0)
+                continue;
+            if (!mmOnlyConsts(Bi, defOf) || !mmBranchesTo(Pi, Hi) || Pi == Hi)
+                continue;
+            bool ejClean = true;
+            for (u32 i = (u32)0; i < Ej.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)Ej.insns().get(i);
+                if (n.memRes() != 0 || !mmOpIn(n.op(), (u32)0))
+                    ejClean = false;
+                }
+            if (!ejClean)
+                continue;
+            IRValue* iv = iPhi.res();
+            IROperand* lda = mmMulOther(mulA, iv);
+            IROperand* ldc = mmMulOther(mulC, iv);
+            if (lda == 0 || ldc == 0 || ldb == 0)
+                continue;
+
+            Array* nest = new Array();
+            nest.add((Object*)Hi); nest.add((Object*)Bi); nest.add((Object*)Hj); nest.add((Object*)Bj);
+            nest.add((Object*)Hk); nest.add((Object*)Bk); nest.add((Object*)Ek); nest.add((Object*)Ej);
+            IROperand* Aop = (IROperand*)eaA.ops().get((u32)0);
+            IROperand* Bop = (IROperand*)eaB.ops().get((u32)0);
+            IROperand* Cop = (IROperand*)eaC.ops().get((u32)0);
+            Array* inputs = new Array();
+            inputs.add((Object*)M); inputs.add((Object*)N); inputs.add((Object*)K);
+            inputs.add((Object*)lda); inputs.add((Object*)ldb); inputs.add((Object*)ldc);
+            inputs.add((Object*)Aop); inputs.add((Object*)Bop); inputs.add((Object*)Cop);
+            bool inv = true;
+            for (u32 i = (u32)0; i < inputs.count(); i = i + (u32)1)
+                if (!mmOutside((IROperand*)inputs.get(i), defOf, defBlk, nest))
+                    inv = false;
+            if (!inv)
+                continue;
+            bool u32s = true;
+            for (u32 i = (u32)0; i < (u32)6; i = i + (u32)1)
+                if (!mmU32((IROperand*)inputs.get(i), defOf))
+                    u32s = false;
+            if (!u32s)
+                continue;
+            String* ptrPre = String.withCString(f64 ? "Ptr(F64," : "Ptr(F32,");
+            if (eaA.res() == 0 || eaB.res() == 0 || eaC.res() == 0 || !eaA.res().ty().hasPrefix(ptrPre)
+                || !eaB.res().ty().hasPrefix(ptrPre) || !eaC.res().ty().hasPrefix(ptrPre))
+                continue;
+            if (mmEscapes(fn, nest))
+                continue;
+            bool haveMem = loadA.ops().count() > (u32)1 && ((IROperand*)loadA.ops().get((u32)1)).kind() == (u8)OPK_USE;
+            IRValue* mem = haveMem ? ((IROperand*)loadA.ops().get((u32)1)).val() : (IRValue*)0;
+            for (u32 i = (u32)0; i < Pi.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)Pi.insns().get(i);
+                if (n.memRes() != 0)
+                    {
+                    mem = n.memRes();
+                    haveMem = true;
+                    }
+                }
+            if (!haveMem)
+                continue;
+            _mxPre = Pi;
+            _mxHead = Hi;
+            _mxExit = Ei;
+            _mmF64 = f64;
+            _mxM = M; _mxN = N; _mxK = K;
+            _mxLda = lda; _mxLdb = ldb; _mxLdc = ldc;
+            _mxA = Aop; _mxB = Bop; _mxC = Cop;
+            _mxMem = mem;
+            if (_mxConsts == 0)
+                _mxConsts = new i64[6];
+            for (u32 i = (u32)0; i < (u32)6; i = i + (u32)1)
+                {
+                i64 v = (i64)0;
+                _mxConsts[i] = constValue(defOf, (IROperand*)inputs.get(i), &v) ? v : (i64)-1;
+                }
+            return true;
+            }
+        return false;
+        }
+
+    // A value made in the nest (not memory) read outside it.
+    bool mmEscapes(IRFunc* fn, Array* nest)
+        {
+        Map* made = new Map();
+        for (u32 b = (u32)0; b < nest.count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)nest.get(b);
+            for (u32 i = (u32)0; i < bb.phis().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)bb.phis().get(i);
+                if (n.res() != 0)
+                    made.set((Hashable*)n.res(), (Object*)n);
+                }
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)bb.insns().get(i);
+                if (n.res() != 0)
+                    made.set((Hashable*)n.res(), (Object*)n);
+                }
+            }
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            if (mmInBlocks(nest, bb))
+                continue;
+            if (mmReadsAny(bb.phis(), made) || mmReadsAny(bb.insns(), made))
+                return true;
+            if (bb.term() != 0)
+                {
+                Array* t = new Array();
+                t.add((Object*)bb.term());
+                if (mmReadsAny(t, made))
+                    return true;
+                }
+            }
+        return false;
+        }
+
+    bool mmReadsAny(Array* list, Map* made)
+        {
+        for (u32 i = (u32)0; i < list.count(); i = i + (u32)1)
+            {
+            IRInsn* n = (IRInsn*)list.get(i);
+            for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
+                {
+                IROperand* o = (IROperand*)n.ops().get(k);
+                if (o.kind() == (u8)OPK_USE && o.val() != 0 && made.get((Hashable*)o.val()) != 0)
+                    return true;
+                }
+            }
+        return false;
+        }
+
+    // A U32 operand as a value in the preheader: a constant (however it is
+    // spelled and wherever it is defined) becomes a fresh `Const #v:U32` here.
+    IROperand* mmU32Value(IROperand* o, i64 k)
+        {
+        if (k < (i64)0)
+            return o;
+        IRValue* v = new IRValue(String.withCString("U32"));
+        IRInsn* c = IRInsn.with(String.withCString("Const"));
+        c.setRes(v);
+        c.add(IROperand.immI(k, String.withCString("U32")));
+        _mxPre.add(c);
+        return IROperand.useVal(v);
+        }
+
+    IRValue* mmEmit(String* op, String* ty, IROperand* a, IROperand* b)
+        {
+        IRValue* v = new IRValue(ty);
+        IRInsn* n = IRInsn.with(op);
+        n.setRes(v);
+        n.add(a);
+        if (b != 0)
+            n.add(b);
+        _mxPre.add(n);
+        return v;
+        }
+
+    void applyMatMul(IRModule* m)
+        {
+        String* name = String.withCString(_mmF64 ? "__xt_sme_gemm_f64" : "__xt_sme_gemm_f32");
+        bool have = false;
+        for (u32 i = (u32)0; i < m.syms().count(); i = i + (u32)1)
+            if (((IRSymbol*)m.syms().get(i)).name().equals(name))
+                have = true;
+        if (!have)
+            m.addSym(IRSymbol.runtime(name));
+        String* tyU64 = String.withCString("U64");
+        // In the reference's order: value creation order is frame-slot order.
+        IROperand* M = mmU32Value(_mxM, _mxConsts[0]);
+        IROperand* N = mmU32Value(_mxN, _mxConsts[1]);
+        IRValue* zm = mmEmit(String.withCString("ZExt"), tyU64, M, (IROperand*)0);
+        IRValue* zn = mmEmit(String.withCString("ZExt"), tyU64, N, (IROperand*)0);
+        IRValue* sh = mmEmit(String.withCString("Shl"), tyU64, IROperand.useVal(zn), IROperand.immI((i64)32, tyU64));
+        IRValue* mn = mmEmit(String.withCString("Or"), tyU64, IROperand.useVal(zm), IROperand.useVal(sh));
+        IROperand* K = mmU32Value(_mxK, _mxConsts[2]);
+        IROperand* lda = mmU32Value(_mxLda, _mxConsts[3]);
+        IROperand* ldb = mmU32Value(_mxLdb, _mxConsts[4]);
+        IROperand* ldc = mmU32Value(_mxLdc, _mxConsts[5]);
+        IRValue* done = new IRValue(String.withCString("Bool"));
+        IRValue* mem = new IRValue(String.withCString("Mem"));
+        IRInsn* call = IRInsn.with(String.withCString("Call"));
+        call.setRes(done);
+        call.setMemRes(mem);
+        call.add(IROperand.sym(name));
+        call.add(_mxA);
+        call.add(_mxB);
+        call.add(_mxC);
+        call.add(IROperand.useVal(mn));
+        call.add(K);
+        call.add(lda);
+        call.add(ldb);
+        call.add(ldc);
+        call.add(IROperand.useVal(_mxMem));
+        call.setCc(String.withCString("CallConv::Standard"));
+        _mxPre.add(call);
+        IRInsn* br = IRInsn.with(String.withCString("CondBranch"));
+        br.add(IROperand.useVal(done));
+        br.add(IROperand.block(_mxExit));
+        br.add(IROperand.block(_mxHead));
+        _mxPre.setTerm(br);
+        }
+
     // ── dead-code ────────────────────────────────────────────────────────
     //
     // A PURE instruction whose result nothing reads comes out, and so does a

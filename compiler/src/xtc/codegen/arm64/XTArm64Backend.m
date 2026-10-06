@@ -119,6 +119,132 @@
 // it gives the right answer for every scalar and a safe one for an aggregate:
 // anything 8 bytes or larger may contain a pointer, and 8 is what a pointer
 // needs. Over-aligning a small aggregate costs padding, never correctness.
+// The SME matrix kernel, emitted once per module that calls it (idiom-matmul
+// puts the call in front of a recognised matrix-multiply nest; private:
+// docs/Design/simd-sme-plan.md). A function of its own because smstart zeroes
+// every Z register, so it cannot run in the middle of a caller with live
+// floating-point values; d8-d15 are saved for the same reason.
+//
+//   bool __xt_sme_gemm_<f32|f64>(T* A, T* B, T* C, u64 M | N << 32,
+//                                u32 K, u32 lda, u32 ldb, u32 ldc)
+//
+// C[i*ldc + j] = sum over k of A[i*lda + k] * B[k*ldb + j], in k order, one
+// FMOPA (a fused multiply-add per element) per k: bit-identical to the loop,
+// whose `s + a*b` the back end fuses into fmadd. Returns 0 without touching
+// memory when A or B holds a NaN (FMOPA would return the default NaN where the
+// loop keeps the input's payload), when the CPU has no SME (sysctl hw.optional.arm.FEAT_SME, probed once
+// into __xt_sme_state: 0 unknown, 1 yes, 2 no), when an index the loop
+// computes would wrap 32 bits, when the rows of C overlap (ldc < N), or when C
+// overlaps A or B; the caller then runs the loop.
+static NSString *xtArm64SmeGemmKernel(BOOL f64) {
+    NSString *T = f64 ? @"d" : @"s";          // element suffix
+    NSString *LD = f64 ? @"ld1d" : @"ld1w";
+    NSString *ST = f64 ? @"st1d" : @"st1w";
+    NSString *CNT = f64 ? @"cntd" : @"cntw";
+    int sh = f64 ? 3 : 2;                     // log2 element bytes
+    NSString *L = f64 ? @"Lsme64_" : @"Lsme32_";
+    NSMutableString *o = [NSMutableString string];
+    [o appendFormat:@"\n// SME matrix kernel (%@)\n    .p2align 2\n", f64 ? @"f64" : @"f32"];
+    [o appendFormat:@"___xt_sme_gemm_%@:\n", f64 ? @"f64" : @"f32"];
+    // frame: fp/lr, x19-x28, d8-d15
+    [o appendString:@"    stp x29, x30, [sp, #-160]!\n    mov x29, sp\n"
+                     "    stp x19, x20, [sp, #16]\n    stp x21, x22, [sp, #32]\n"
+                     "    stp x23, x24, [sp, #48]\n    stp x25, x26, [sp, #64]\n"
+                     "    stp x27, x28, [sp, #80]\n    stp d8, d9, [sp, #96]\n"
+                     "    stp d10, d11, [sp, #112]\n    stp d12, d13, [sp, #128]\n"
+                     "    stp d14, d15, [sp, #144]\n"];
+    // x19 A, x20 B, x21 C, x22 M, x23 N, x24 K, x25 lda, x26 ldb, x27 ldc
+    [o appendString:@"    mov x19, x0\n    mov x20, x1\n    mov x21, x2\n"
+                     "    mov w22, w3\n    lsr x23, x3, #32\n    mov w24, w4\n"
+                     "    mov w25, w5\n    mov w26, w6\n    mov w27, w7\n"];
+    // SME present? probe once
+    [o appendString:@"    adrp x8, ___xt_sme_state@PAGE\n"
+                     "    ldrb w9, [x8, ___xt_sme_state@PAGEOFF]\n"];
+    [o appendFormat:@"    cbnz w9, %@known\n", L];
+    [o appendString:@"    sub sp, sp, #16\n    str wzr, [sp]\n    mov x9, #4\n    str x9, [sp, #8]\n"
+                     "    adrp x0, ___xt_sme_feat@PAGE\n    add x0, x0, ___xt_sme_feat@PAGEOFF\n"
+                     "    mov x1, sp\n    add x2, sp, #8\n    mov x3, #0\n    mov x4, #0\n"
+                     "    bl _sysctlbyname\n    ldr w9, [sp]\n    add sp, sp, #16\n"
+                     "    cmp w0, #0\n    ccmp w9, #0, #4, eq\n"
+                     "    mov w9, #2\n    mov w10, #1\n    csel w9, w10, w9, ne\n"
+                     "    adrp x8, ___xt_sme_state@PAGE\n"
+                     "    strb w9, [x8, ___xt_sme_state@PAGEOFF]\n"];
+    [o appendFormat:@"%@known:\n    mov w0, #0\n    cmp w9, #1\n    b.ne %@ret\n", L, L];
+    // nothing to compute
+    [o appendFormat:@"    cbz x22, %@done\n    cbz x23, %@done\n", L, L];
+    // rows of C must not overlap: ldc >= N
+    [o appendFormat:@"    cmp x27, x23\n    b.lo %@ret\n", L];
+    // x10 = (M-1)*ldc + N, then C's end
+    [o appendString:@"    sub x9, x22, #1\n    madd x10, x9, x27, x23\n"];
+    // the last index, (M-1)*ldc + N - 1, must fit 32 bits
+    [o appendFormat:@"    sub x11, x10, #1\n    lsr x11, x11, #32\n    cbnz x11, %@ret\n", L];
+    [o appendFormat:@"    add x10, x21, x10, lsl #%d\n", sh];
+    // with K == 0 nothing is read: only C is written (zeros)
+    [o appendFormat:@"    cbz x24, %@go\n", L];
+    // A: (M-1)*lda + K - 1 < 2^32; A end = A + ((M-1)*lda + K) * size
+    [o appendString:@"    madd x11, x9, x25, x24\n    sub x12, x11, #1\n    lsr x12, x12, #32\n"];
+    [o appendFormat:@"    cbnz x12, %@ret\n", L];
+    [o appendFormat:@"    add x11, x19, x11, lsl #%d\n", sh];
+    [o appendFormat:@"    cmp x21, x11\n    ccmp x19, x10, #2, lo\n    b.lo %@ret\n", L];
+    // B: (K-1)*ldb + N - 1 < 2^32; B end = B + ((K-1)*ldb + N) * size
+    [o appendString:@"    sub x12, x24, #1\n    madd x11, x12, x26, x23\n    sub x12, x11, #1\n    lsr x12, x12, #32\n"];
+    [o appendFormat:@"    cbnz x12, %@ret\n", L];
+    [o appendFormat:@"    add x11, x20, x11, lsl #%d\n", sh];
+    [o appendFormat:@"    cmp x21, x11\n    ccmp x20, x10, #2, lo\n    b.lo %@ret\n", L];
+    [o appendFormat:@"%@go:\n    smstart\n    %@ x9\n", L, CNT];
+    // A NaN in A or B: hand back to the loop. FMOPA returns the default NaN
+    // where the loop's fmadd carries the input NaN's payload, so the results
+    // would differ in those bits; every other value, infinities, signed zeros
+    // and denormals included, comes out the same. Nothing is read when K == 0.
+    // One pass over A (M x K) and B (K x N), a vector at a time: about 1/N of
+    // the multiply's work.
+    [o appendFormat:@"    cbz x24, %@mm\n", L];
+    struct { const char *rows, *cols, *ld, *base, *tag; } scans[2] = {
+        {"x22", "x24", "x25", "x19", "na"}, {"x24", "x23", "x26", "x20", "nb"}};
+    for (int q = 0; q < 2; q++) {
+        [o appendFormat:@"    mov x10, #0\n%@%sr:\n    mul x15, x10, %s\n    add x15, %s, x15, lsl #%d\n    mov x12, #0\n",
+                         L, scans[q].tag, scans[q].ld, scans[q].base, sh];
+        [o appendFormat:@"%@%sc:\n    whilelt p2.%@, x12, %s\n    %@ {z0.%@}, p2/z, [x15, x12, lsl #%d]\n",
+                         L, scans[q].tag, T, scans[q].cols, LD, T, sh];
+        [o appendFormat:@"    fcmuo p3.%@, p2/z, z0.%@, z0.%@\n    ptest p2, p3.b\n    b.ne %@nan\n", T, T, T, L];
+        [o appendFormat:@"    add x12, x12, x9\n    cmp x12, %s\n    b.lo %@%sc\n", scans[q].cols, L, scans[q].tag];
+        [o appendFormat:@"    add x10, x10, #1\n    cmp x10, %s\n    b.lo %@%sr\n", scans[q].rows, L, scans[q].tag];
+    }
+    [o appendFormat:@"%@mm:\n    mov x10, #0\n", L];
+    // i0 loop
+    [o appendFormat:@"%@i:\n    whilelt p0.%@, x10, x22\n    mov x11, #0\n", L, T];
+    // j0 loop
+    [o appendFormat:@"%@j:\n    whilelt p1.%@, x11, x23\n    zero {za0.%@}\n    mov x12, #0\n", L, T, T];
+    // k0 loop: A block rows into za1 (horizontal), read back as columns
+    [o appendFormat:@"%@k:\n    cmp x12, x24\n    b.hs %@st\n    whilelt p2.%@, x12, x24\n    zero {za1.%@}\n", L, L, T, T];
+    [o appendString:@"    sub x14, x22, x10\n    cmp x14, x9\n    csel x14, x14, x9, lo\n"];
+    [o appendFormat:@"    madd x15, x10, x25, x12\n    add x15, x19, x15, lsl #%d\n    mov w13, #0\n", sh];
+    [o appendFormat:@"%@a:\n    %@ {za1h.%@[w13, 0]}, p2/z, [x15]\n", L, LD, T];
+    [o appendFormat:@"    add x15, x15, x25, lsl #%d\n    add w13, w13, #1\n    cmp x13, x14\n    b.lo %@a\n", sh, L];
+    // kk: min(vl, K - k0) outer products
+    [o appendString:@"    sub x14, x24, x12\n    cmp x14, x9\n    csel x14, x14, x9, lo\n"];
+    [o appendFormat:@"    madd x15, x12, x26, x11\n    add x15, x20, x15, lsl #%d\n    mov w13, #0\n", sh];
+    [o appendFormat:@"%@kk:\n    mov z0.%@, p0/m, za1v.%@[w13, 0]\n    %@ {z1.%@}, p1/z, [x15]\n", L, T, T, LD, T];
+    [o appendFormat:@"    fmopa za0.%@, p0/m, p1/m, z0.%@, z1.%@\n", T, T, T];
+    [o appendFormat:@"    add x15, x15, x26, lsl #%d\n    add w13, w13, #1\n    cmp x13, x14\n    b.lo %@kk\n", sh, L];
+    [o appendFormat:@"    add x12, x12, x9\n    b %@k\n", L];
+    // store the tile's rows to C
+    [o appendFormat:@"%@st:\n    sub x14, x22, x10\n    cmp x14, x9\n    csel x14, x14, x9, lo\n", L];
+    [o appendFormat:@"    madd x15, x10, x27, x11\n    add x15, x21, x15, lsl #%d\n    mov w13, #0\n", sh];
+    [o appendFormat:@"%@s:\n    %@ {za0h.%@[w13, 0]}, p1, [x15]\n", L, ST, T];
+    [o appendFormat:@"    add x15, x15, x27, lsl #%d\n    add w13, w13, #1\n    cmp x13, x14\n    b.lo %@s\n", sh, L];
+    [o appendFormat:@"    add x11, x11, x9\n    cmp x11, x23\n    b.lo %@j\n", L];
+    [o appendFormat:@"    add x10, x10, x9\n    cmp x10, x22\n    b.lo %@i\n    smstop\n", L];
+    [o appendFormat:@"%@done:\n    mov w0, #1\n    b %@ret\n", L, L];
+    [o appendFormat:@"%@nan:\n    smstop\n    mov w0, #0\n%@ret:\n", L, L];
+    [o appendString:@"    ldp d14, d15, [sp, #144]\n    ldp d12, d13, [sp, #128]\n"
+                     "    ldp d10, d11, [sp, #112]\n    ldp d8, d9, [sp, #96]\n"
+                     "    ldp x27, x28, [sp, #80]\n    ldp x25, x26, [sp, #64]\n"
+                     "    ldp x23, x24, [sp, #48]\n    ldp x21, x22, [sp, #32]\n"
+                     "    ldp x19, x20, [sp, #16]\n    ldp x29, x30, [sp], #160\n    ret\n"];
+    return o;
+}
+
 static unsigned xtArm64GlobalP2Align(uint32_t size) {
     if (size >= 8) return 3;
     if (size >= 4) return 2;
@@ -7082,6 +7208,22 @@ static BOOL sArm64LseAtomics = YES;  // Apple Silicon is ARMv8.5; Android's floo
     [out appendString:@".text\n\n"];
     for (XTIRFunction *fn in mod.functions) {
         [self emitFunction:fn module:mod into:out];
+    }
+    // The SME matrix kernels the module calls (idiom-matmul), and the state
+    // byte and sysctl name they share. Module-private labels: each object that
+    // calls a kernel carries its own copy.
+    BOOL smeF32 = [mod referencesSymbolNamed:@"__xt_sme_gemm_f32"];
+    BOOL smeF64 = [mod referencesSymbolNamed:@"__xt_sme_gemm_f64"];
+    if (smeF32) [out appendString:xtArm64SmeGemmKernel(NO)];
+    if (smeF64) [out appendString:xtArm64SmeGemmKernel(YES)];
+    if (smeF32 || smeF64) {
+        [out appendString:@"\n    .section __DATA,__data\n___xt_sme_state:\n    .byte 0x00\n___xt_sme_feat:\n"];
+        const char *feat = "hw.optional.arm.FEAT_SME";
+        for (const char *c = feat; ; c++) {
+            [out appendFormat:@"    .byte 0x%02X\n", (unsigned)(unsigned char)*c];
+            if (!*c) break;
+        }
+        [out appendString:@"    .text\n"];
     }
     // Module-level data. Uninit globals → `.lcomm _name, size, 1`
     // (Mach-O treats arg 3 as power-of-two alignment, 1 = 2 bytes).

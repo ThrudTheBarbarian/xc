@@ -24,6 +24,7 @@ void main(void)
     u32 level = (u32)0;
     u32 simdBytes = (u32)16;
     bool simdDispatch = false; // --simd=auto: runtime SIMD dispatch clones
+    bool smeMatMul = false;    // --sme-matmul: idiom-matmul (arm64 macOS)
     u32 argc = Process.argumentCount();
     u32 i = (u32)1;
     while (i < argc)
@@ -73,6 +74,14 @@ void main(void)
             }
         // --simd=avx2: the 32-byte vector width the x86-64 profile takes under
         // -mavx2, as the reference's --simd does (opt-diff's OPT_SIMD).
+        // --sme-matmul: the arm64 profile's SME matrix kernels, as the
+        // reference's xcc-cg-arm64 takes it.
+        if (a.equals(String.withCString("--sme-matmul")))
+            {
+            smeMatMul = true;
+            i = i + (u32)1;
+            continue;
+            }
         if (a.hasPrefix(String.withCString("--simd=")))
             {
             simdBytes = a.substringFromByte((u32)7).equals(String.withCString("avx512")) ? (u32)64
@@ -112,6 +121,7 @@ void main(void)
     OptProfile* prof = OptProfile.forTarget(target);
     prof.setVectorLaneBytes(simdBytes);
     prof.setSimdDispatch(simdDispatch);
+    prof.setSmeMatMul(smeMatMul);
     Opt* o = Opt.atLevel(level, prof);
     if (stopAfter != 0)
         o.setStopAfter(stopAfter);

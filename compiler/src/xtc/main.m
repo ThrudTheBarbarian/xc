@@ -4744,6 +4744,12 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
     // Android is plain AAPCS64, not Darwin. A CODEGEN decision, so it must be
     // forwarded here — the LINK is identical either way, which is why getting
     // it wrong prints garbage rather than failing to build.
+    // SME matrix kernels: arm64 macOS, -O2+, unless -mno-sme. The kernel checks
+    // for SME at run time and leaves the loop to run when it is absent, so a
+    // binary built here still runs on M1-M3.
+    if (opts.useArm64Backend && !opts.androidTarget && !opts.applePlatform && !opts.noSme
+        && opts.optimisationLevel >= 2)
+        [cgArgs addObject:@"--sme-matmul"];
     if (opts.androidTarget) {
         [cgArgs addObject:@"--aapcs64-abi"];
         // Android's minSdk floor is plain armv8-a, so the LSE atomics Apple

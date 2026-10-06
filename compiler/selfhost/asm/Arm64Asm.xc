@@ -1387,6 +1387,31 @@ class Arm64Asm
             return (u32)$C0020000 | (za.c() << (u32)22) | (za.b() << (u32)15) | (za.d() << (u32)13)
                  | (pg.a() << (u32)10) | (zf << (u32)5) | zd.a();
         }
+        if (mn.equals(String.withCString("fcmuo"))) {
+            if (ops.count() != (u32)4) return smeBad(mn, String.withCString("bad operands"));
+            SmeRef* pd = smePReg(opAt(ops, (u32)0));
+            SmeRef* pg = smePReg(opAt(ops, (u32)1));
+            SmeRef* zn = smeZReg(opAt(ops, (u32)2));
+            SmeRef* zm = smeZReg(opAt(ops, (u32)3));
+            if (!pd.ok() || !pg.ok() || pg.a() > (u32)7
+                || !opAt(ops, (u32)1).lowercased().hasSuffix(String.withCString("/z")) || !zn.ok() || !zm.ok()
+                || (pd.b() != (u32)2 && pd.b() != (u32)3) || zn.b() != pd.b() || zm.b() != pd.b())
+                return smeBad(mn, String.withCString("bad operands"));
+            _hit = true;
+            return (u32)$6500C000 | (pd.b() << (u32)22) | (zm.a() << (u32)16) | (pg.a() << (u32)10)
+                 | (zn.a() << (u32)5) | pd.a();
+        }
+        if (mn.equals(String.withCString("ptest"))) {
+            if (ops.count() != (u32)2) return smeBad(mn, String.withCString("bad operands"));
+            SmeRef* pg = smePReg(opAt(ops, (u32)0));
+            SmeRef* pn = smePReg(opAt(ops, (u32)1));
+            String* g = opAt(ops, (u32)0).lowercased();
+            if (!pg.ok() || pg.b() != (u32)$FFFF_FFFF || !pn.ok() || pn.b() != (u32)0
+                || g.hasSuffix(String.withCString("/z")) || g.hasSuffix(String.withCString("/m")))
+                return smeBad(mn, String.withCString("bad operands"));
+            _hit = true;
+            return (u32)$2550C000 | (pg.a() << (u32)10) | (pn.a() << (u32)5);
+        }
         if (mn.equals(String.withCString("fmopa"))) {
             if (ops.count() != (u32)5) return smeBad(mn, String.withCString("needs 5 operands"));
             String* t = opAt(ops, (u32)0).lowercased();

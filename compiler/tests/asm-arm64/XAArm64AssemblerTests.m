@@ -230,6 +230,12 @@ static const struct
         {"fmopa za3.s, p7/m, p6/m, z30.s, z31.s", 0x809fdfc3u},
         {"fmopa za0.d, p0/m, p1/m, z0.d, z1.d", 0x80c12000u},
         {"fmopa za7.d, p2/m, p3/m, z8.d, z9.d", 0x80c96907u},
+        {"fcmuo p3.s, p2/z, z0.s, z0.s", 0x6580c803u},
+        {"fcmuo p15.d, p7/z, z31.d, z30.d", 0x65dedfefu},
+        {"fcmuo p0.s, p0/z, z5.s, z9.s", 0x6589c0a0u},
+        {"ptest p2, p3.b", 0x2550c860u},
+        {"ptest p15, p0.b", 0x2550fc00u},
+        {"ptest p0, p15.b", 0x2550c1e0u},
     };
 
 // The GNU/ELF dialect the NDK-generated Android runtime arrives in, and the

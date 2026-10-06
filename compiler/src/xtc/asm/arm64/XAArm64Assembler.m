@@ -549,6 +549,26 @@ static int xaEncodeSME(NSString *mn, NSArray<NSString *> *ops, uint32_t *out, NS
              | (za << 5) | (uint32_t)zd;
         return 1;
     }
+    if ([mn isEqualToString:@"fcmuo"]) {
+        // fcmuo Pd.T, Pg/z, Zn.T, Zm.T  (T = s or d): lanes where either is NaN
+        int pd, sd, pg, sg, zn, zm, s1, s2;
+        if (ops.count != 4 || !xaPReg(ops[0], &pd, &sd) || !xaPReg(ops[1], &pg, &sg) || pg > 7
+            || ![[ops[1] lowercaseString] hasSuffix:@"/z"] || !xaZReg(ops[2], &zn, &s1) || !xaZReg(ops[3], &zm, &s2)
+            || (sd != 2 && sd != 3) || s1 != sd || s2 != sd)
+            SMEBAD(@"fcmuo: bad operands");
+        *out = 0x6500C000u | ((uint32_t)sd << 22) | ((uint32_t)zm << 16) | ((uint32_t)pg << 10) | ((uint32_t)zn << 5)
+             | (uint32_t)pd;
+        return 1;
+    }
+    if ([mn isEqualToString:@"ptest"]) {
+        // ptest Pg, Pn.B: Z clear when any lane of Pn active under Pg is set
+        int pg, sg, pn, sn;
+        if (ops.count != 2 || !xaPReg(ops[0], &pg, &sg) || sg != -1 || !xaPReg(ops[1], &pn, &sn) || sn != 0
+            || [[ops[0] lowercaseString] hasSuffix:@"/z"] || [[ops[0] lowercaseString] hasSuffix:@"/m"])
+            SMEBAD(@"ptest: bad operands");
+        *out = 0x2550C000u | ((uint32_t)pg << 10) | ((uint32_t)pn << 5);
+        return 1;
+    }
     if ([mn isEqualToString:@"fmopa"]) {
         // fmopa ZAda.T, Pn/m, Pm/m, Zn.T, Zm.T  (T = s or d)
         if (ops.count != 5) SMEBAD(@"fmopa needs 5 operands");

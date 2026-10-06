@@ -44,3 +44,9 @@ fmopa za0.s, p0/m, p1/m, z0.s, z1.s
 fmopa za3.s, p7/m, p6/m, z30.s, z31.s
 fmopa za0.d, p0/m, p1/m, z0.d, z1.d
 fmopa za7.d, p2/m, p3/m, z8.d, z9.d
+fcmuo p3.s, p2/z, z0.s, z0.s
+fcmuo p15.d, p7/z, z31.d, z30.d
+fcmuo p0.s, p0/z, z5.s, z9.s
+ptest p2, p3.b
+ptest p15, p0.b
+ptest p0, p15.b

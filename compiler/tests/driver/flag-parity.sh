@@ -628,6 +628,11 @@ same "-mavx512 (-A arm64) refused"  -q -A arm64 -mavx512 -o @OUT@ ret.xc
 # both refuse; either way the two must agree.
 same "-mnative (-A x86_64)"         -q -A x86_64 -mnative -o @OUT@ ret.xc
 cover -mavx2 -msimd= -mnative -mavx512 -mavx512f
+# SME matrix kernels (arm64 macOS, -O2+): on by default, -mno-sme turns them
+# off. Both builds, both ways.
+same "SME matmul (-A arm64 -O3)"              -q -A arm64 -O3 -o @OUT@ $ROOT/tests/fixtures/sme_matmul_exact.xc
+same "-mno-sme (-A arm64 -O3)"                -q -A arm64 -O3 -mno-sme -o @OUT@ $ROOT/tests/fixtures/sme_matmul_exact.xc
+cover -mno-sme
 same "an undefined C symbol is a link error (580)" $A -o @OUT@ nothere.xc
 xcconly "  ...naming it (580)" 1 "undefined symbol 'nothere'" $A -o @OUT@ nothere.xc
 xcconly "--link-libs (-A arm64, refused)" 1 "applies to -A wasm32" -q -A arm64 --link-libs -o @OUT@ ret.xc

@@ -8,6 +8,7 @@
 #import "XTIROptLoopUnroll.h"
 #import "XTIROptLoopUnrollVarTrip.h"
 #import "XTIROptIdiomMemset.h"
+#import "XTIROptIdiomMatMul.h"
 #import "XTIROptRedundantLoadCSE.h"
 #import "XTIROptDeadCode.h"
 #import "XTIROptStaticInitGuard.h"
@@ -144,6 +145,11 @@
         XTIROptIdiomMemset* memset = [[XTIROptIdiomMemset alloc] init];
         memset.profile = profile;
         [p addPass:memset];
+        // A dense matrix-multiply nest gets a call to the SME kernel in front
+        // of it, while the nest still has the shape lowering gave it.
+        XTIROptIdiomMatMul* matmul = [[XTIROptIdiomMatMul alloc] init];
+        matmul.profile = profile;
+        [p addPass:matmul];
         // Drop dead code (incl. dead phis) before vectorising, so a nested
         // loop's inner counter carried into the outer header (dead) doesn't
         // make the inner iv look escaping and block vectorisation.
