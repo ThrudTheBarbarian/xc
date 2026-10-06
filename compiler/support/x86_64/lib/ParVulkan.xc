@@ -536,6 +536,11 @@ class ParVulkan
             sizes[b] = l.threads * l.redSize[i];
             b = b + (u32)1;
             }
+        // Whole 32-bit words: an array of 8- or 16-bit values is read and
+        // written by the kernel a word at a time, so its last part-word must
+        // be inside the buffer. The copies in and out stay exact.
+        for (u32 i = (u32)0; i < nb; i = i + (u32)1)
+            sizes[i] = (sizes[i] + (i64)3) & (i64)-4;
         bool ok = true;
         for (u32 i = (u32)0; i < nb && ok; i = i + (u32)1)
             ok = buffer(sizes[i], &bufs[i], &mems[i], &maps[i]);

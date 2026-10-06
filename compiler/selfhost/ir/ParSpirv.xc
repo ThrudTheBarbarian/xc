@@ -88,6 +88,8 @@
 #define SPV_BITWISEXOR 198
 #define SPV_BITWISEAND 199
 #define SPV_NOT 200
+#define SPV_ATOMICAND 240
+#define SPV_ATOMICOR 241
 #define SPV_LOOPMERGE 246
 #define SPV_SELECTIONMERGE 247
 #define SPV_LABEL 248
@@ -357,6 +359,8 @@ class SpvRecipe
     u32 indexVar;      // a Function variable holding the element index, or 0
     u32 indexType;
     String* pointee;   // the IR type pointed at
+    bool words;        // a narrow element of a buffer of 32-bit words
+    u32 wordShift;     // a narrow captured value: its bit offset in its word, + 1 (0: none)
 
     SpvRecipe* copy(void)
         {
@@ -367,6 +371,8 @@ class SpvRecipe
         r.indexVar = indexVar;
         r.indexType = indexType;
         r.pointee = pointee;
+        r.words = words;
+        r.wordShift = wordShift;
         return r;
         }
     }

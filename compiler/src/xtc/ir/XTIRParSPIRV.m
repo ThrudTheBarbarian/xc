@@ -25,8 +25,15 @@
 // Exactness: Vulkan rounds OpFAdd, OpFSub and OpFMul correctly but not
 // OpFDiv or square roots, and has no precise sin, cos, exp, log or pow. A
 // block whose goal is accuracy and that uses one stays on the CPU; one whose
-// goal is speed takes the GPU's version. 8- and 16-bit values are not printed
-// in this first cut (nil), as with PTX.
+// goal is speed takes the GPU's version.
+//
+// 8- and 16-bit values and bools in memory, exactly, on any Vulkan device (no
+// 8/16-bit storage extension), as WGSL has to: an array of them is bound as an
+// array of 32-bit words; a load reads its word and shifts and masks; a store
+// clears its bits with OpAtomicAnd and sets them with OpAtomicOr on the word,
+// because the work item next door may be writing the other bytes of the same
+// word, and those updates commute. A captured narrow value is read from the
+// 32-bit word of the argument block that holds it.
 
 // SPIR-V opcodes and enumerants used here.
 enum
@@ -48,6 +55,7 @@ enum
     SpvOpSGreaterThanEqual = 175, SpvOpULessThan = 176, SpvOpSLessThan = 177, SpvOpULessThanEqual = 178,
     SpvOpSLessThanEqual = 179, SpvOpFOrdEqual = 180, SpvOpFUnordNotEqual = 183, SpvOpFOrdLessThan = 184,
     SpvOpFOrdGreaterThan = 186, SpvOpFOrdLessThanEqual = 188, SpvOpFOrdGreaterThanEqual = 190,
+    SpvOpAtomicAnd = 240, SpvOpAtomicOr = 241,
     SpvOpShiftRightLogical = 194, SpvOpShiftRightArithmetic = 195, SpvOpShiftLeftLogical = 196,
     SpvOpBitwiseOr = 197, SpvOpBitwiseXor = 198, SpvOpBitwiseAnd = 199, SpvOpNot = 200,
     SpvOpLoopMerge = 246, SpvOpSelectionMerge = 247, SpvOpLabel = 248, SpvOpBranch = 249,
@@ -264,6 +272,8 @@ static NSArray<NSNumber*>* spvString(NSString* s)
 @property(nonatomic) uint32_t indexType;     // that index's type id
 @property(nonatomic) XTIRType* pointee;
 @property(nonatomic) BOOL readOnly;
+@property(nonatomic) BOOL words;            // a narrow element of a buffer of 32-bit words
+@property(nonatomic) uint32_t wordShift;    // a narrow captured value: its bit offset in its word, + 1 (0: none)
 @end
 
 @implementation XTSpvRecipe
@@ -318,6 +328,18 @@ static BOOL spvIsFloat(XTIRType* t)
     }
 
 // The width of an 8- or 16-bit type (held in 32 bits); 0 for any other.
+// The bytes of a value that memory holds narrower than a 32-bit word: an 8-
+// or 16-bit integer, or a bool (one byte). 0 for any other type.
+static uint32_t spvNarrowBytes(XTIRType* t)
+    {
+    switch (t.kind)
+        {
+        case XTIRTypeKindI8: case XTIRTypeKindU8: case XTIRTypeKindBool: return 1;
+        case XTIRTypeKindI16: case XTIRTypeKindU16: return 2;
+        default: return 0;
+        }
+    }
+
 static uint32_t spvNarrowBits(XTIRType* t)
     {
     switch (t.kind)
@@ -338,6 +360,8 @@ static BOOL spvNarrowSigned(XTIRType* t)
 @property(nonatomic) XTSpvFunc* sf;
 @property(nonatomic) NSMutableDictionary<NSString*, NSNumber*>* spvHelpers;   // callee -> function id
 @property(nonatomic) NSMutableDictionary<NSNumber*, NSNumber*>* memberOf;     // object field -> member index
+@property(nonatomic) NSMutableDictionary<NSNumber*, NSNumber*>* narrowShiftOf; // narrow field -> bit offset in its word
+@property(nonatomic) NSMutableSet<NSNumber*>* wordBufs;                         // buffer variables of 32-bit words
 @property(nonatomic) uint32_t localObj;            // the kernel's Function copy of the object
 @property(nonatomic) uint32_t localObjType;
 @property(nonatomic) NSMutableDictionary<NSNumber*, NSNumber*>* bufVar;       // field / global index -> variable
@@ -347,7 +371,12 @@ static BOOL spvNarrowSigned(XTIRType* t)
 
 @implementation XTIRParMSL (SPIRVState)
 
-static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar;
+static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift, kWordBufs;
+
+- (NSMutableDictionary*)narrowShiftOf { return objc_getAssociatedObject(self, &kNarrowShift); }
+- (void)setNarrowShiftOf:(NSMutableDictionary*)v { objc_setAssociatedObject(self, &kNarrowShift, v, OBJC_ASSOCIATION_RETAIN); }
+- (NSMutableSet*)wordBufs { return objc_getAssociatedObject(self, &kWordBufs); }
+- (void)setWordBufs:(NSMutableSet*)v { objc_setAssociatedObject(self, &kWordBufs, v, OBJC_ASSOCIATION_RETAIN); }
 
 - (XTSpvModule*)spv { return objc_getAssociatedObject(self, &kSpv); }
 - (void)setSpv:(XTSpvModule*)v { objc_setAssociatedObject(self, &kSpv, v, OBJC_ASSOCIATION_RETAIN); }
@@ -514,6 +543,86 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar;
     NSMutableArray* a = [NSMutableArray arrayWithObject:@(r.base)];
     [a addObjectsFromArray:idx];
     return [self emit:SpvOpAccessChain type:[self.spv pointer:r.storage to:et] args:a];
+    }
+
+// A narrow element of a word buffer: a pointer to its 32-bit word, and in
+// *shift the bit offset of its bits in that word (a u32 id).
+- (uint32_t)wordAddress:(XTSpvRecipe*)r shift:(uint32_t*)shift
+    {
+    uint32_t u32t = [self.spv typeInt:32];
+    uint32_t n = spvNarrowBytes(r.pointee);
+    if (!n || !r.indexVar)
+        return 0;
+    uint32_t idx = [self emit:SpvOpLoad type:r.indexType args:@[ @(r.indexVar) ]];
+    if (r.indexType != u32t)
+        idx = [self emit:SpvOpUConvert type:u32t args:@[ @(idx) ]];
+    uint32_t word = [self emit:SpvOpShiftRightLogical type:u32t args:@[ @(idx), @([self.spv u32:n == 1 ? 2 : 1]) ]];
+    uint32_t low = [self emit:SpvOpBitwiseAnd type:u32t args:@[ @(idx), @([self.spv u32:n == 1 ? 3 : 1]) ]];
+    *shift = [self emit:SpvOpShiftLeftLogical type:u32t args:@[ @(low), @([self.spv u32:n == 1 ? 3 : 4]) ]];
+    NSMutableArray* a = [NSMutableArray arrayWithObject:@(r.base)];
+    [a addObjectsFromArray:r.members];
+    [a addObject:@(word)];
+    return [self emit:SpvOpAccessChain type:[self.spv pointer:r.storage to:u32t] args:a];
+    }
+
+// A narrow value from its word: shifted down, then masked (unsigned),
+// sign-extended (signed) or compared with 0 (bool), in the value's own form.
+- (uint32_t)narrowFrom:(uint32_t)word shift:(uint32_t)shift type:(XTIRType*)t
+    {
+    uint32_t u32t = [self.spv typeInt:32];
+    uint32_t v = [self emit:SpvOpShiftRightLogical type:u32t args:@[ @(word), @(shift) ]];
+    if (t.kind == XTIRTypeKindBool)
+        {
+        uint32_t b = [self emit:SpvOpBitwiseAnd type:u32t args:@[ @(v), @([self.spv u32:0xFF]) ]];
+        return [self emit:SpvOpINotEqual type:[self.spv typeBool] args:@[ @(b), @([self.spv u32:0]) ]];
+        }
+    if (spvNarrowSigned(t))
+        return [self spvCanon:v type:t];
+    return [self emit:SpvOpBitwiseAnd type:u32t args:@[ @(v), @([self.spv u32:(1u << spvNarrowBits(t)) - 1]) ]];
+    }
+
+- (uint32_t)narrowLoad:(XTSpvRecipe*)r
+    {
+    uint32_t u32t = [self.spv typeInt:32];
+    if (r.wordShift)
+        {
+        // A captured value: its word of the object's copy.
+        NSMutableArray* a = [NSMutableArray arrayWithObject:@(r.base)];
+        [a addObjectsFromArray:r.members];
+        uint32_t p = [self emit:SpvOpAccessChain type:[self.spv pointer:r.storage to:u32t] args:a];
+        uint32_t word = [self emit:SpvOpLoad type:u32t args:@[ @(p) ]];
+        return [self narrowFrom:word shift:[self.spv u32:r.wordShift - 1] type:r.pointee];
+        }
+    uint32_t shift = 0;
+    uint32_t p = [self wordAddress:r shift:&shift];
+    if (!p)
+        return 0;
+    uint32_t word = [self emit:SpvOpLoad type:u32t args:@[ @(p) ]];
+    return [self narrowFrom:word shift:shift type:r.pointee];
+    }
+
+// Clear the element's bits in its word, then set them: two atomic updates, so
+// that a neighbour writing the other bytes of the word at the same time keeps
+// its bytes. Device scope, relaxed: they commute, and nothing is ordered by them.
+- (BOOL)narrowStore:(XTSpvRecipe*)r value:(uint32_t)v
+    {
+    uint32_t u32t = [self.spv typeInt:32];
+    uint32_t shift = 0;
+    uint32_t p = [self wordAddress:r shift:&shift];
+    if (!p)
+        return NO;
+    uint32_t mask = [self.spv u32:spvNarrowBytes(r.pointee) == 1 ? 0xFF : 0xFFFF];
+    uint32_t bits = r.pointee.kind == XTIRTypeKindBool
+                        ? [self emit:SpvOpSelect type:u32t args:@[ @(v), @([self.spv u32:1]), @([self.spv u32:0]) ]]
+                        : [self emit:SpvOpBitwiseAnd type:u32t args:@[ @(v), @(mask) ]];
+    uint32_t keep = [self emit:SpvOpNot type:u32t
+                          args:@[ @([self emit:SpvOpShiftLeftLogical type:u32t args:@[ @(mask), @(shift) ]]) ]];
+    uint32_t scope = [self.spv u32:1];   // Device
+    uint32_t sem = [self.spv u32:0];     // relaxed
+    [self emit:SpvOpAtomicAnd type:u32t args:@[ @(p), @(scope), @(sem), @(keep) ]];
+    [self emit:SpvOpAtomicOr type:u32t
+          args:@[ @(p), @(scope), @(sem), @([self emit:SpvOpShiftLeftLogical type:u32t args:@[ @(bits), @(shift) ]]) ]];
+    return YES;
     }
 
 // ── instructions ────────────────────────────────────────────────────────────
@@ -819,6 +928,8 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar;
     r.indexType = b.indexType;
     r.pointee = b.pointee;
     r.readOnly = b.readOnly;
+    r.words = b.words;
+    r.wordShift = b.wordShift;
     return r;
     }
 
@@ -910,6 +1021,9 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar;
                 r.storage = SpvStorageFunction;
                 r.members = @[ @([self.spv u32:m.unsignedIntValue]) ];
                 r.pointee = self.objLayout.fields[(NSUInteger)k].type;
+                NSNumber* sh = self.narrowShiftOf[@(k)];
+                if (sh)
+                    r.wordShift = sh.unsignedIntValue + 1;
                 self.sf.recipeOf[@(i.result.valueId)] = r;
                 return YES;
                 }
@@ -977,6 +1091,7 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar;
                 r.storage = SpvStorageStorageBuffer;
                 r.members = @[ @([self.spv u32:0]) ];
                 r.pointee = rt.pointeeType;
+                r.words = [self.wordBufs containsObject:@(r.base)];
                 self.sf.recipeOf[@(i.result.valueId)] = r;
                 return YES;
                 }
@@ -991,6 +1106,14 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar;
             uint32_t ty = [self spvType:rt];
             if (!r || !ty || [self spvType:r.pointee] != ty)
                 return NO;
+            if (r.words || r.wordShift)
+                {
+                uint32_t v = [self narrowLoad:r];
+                if (!v)
+                    return NO;
+                [self setResult:i to:v];
+                return YES;
+                }
             uint32_t p = [self address:r];
             if (!p)
                 return NO;
@@ -1005,6 +1128,10 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar;
             if (!r)
                 return NO;
             uint32_t v = [self value:i.operands[1] type:r.pointee];
+            if (r.wordShift)
+                return NO;   // a captured value: the kernel never writes one
+            if (r.words)
+                return v && [self narrowStore:r value:v];
             uint32_t p = [self address:r];
             if (!v || !p)
                 return NO;
@@ -1025,6 +1152,7 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar;
             r.storage = SpvStorageStorageBuffer;
             r.members = @[ @([self.spv u32:0]) ];
             r.pointee = rt.pointeeType;
+            r.words = [self.wordBufs containsObject:@(r.base)];
             self.sf.recipeOf[@(i.result.valueId)] = r;
             return YES;
             }
@@ -1371,6 +1499,8 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar;
     self.spvHelpers = [NSMutableDictionary dictionary];
     self.bufVar = [NSMutableDictionary dictionary];
     self.memberOf = [NSMutableDictionary dictionary];
+    self.narrowShiftOf = [NSMutableDictionary dictionary];
+    self.wordBufs = [NSMutableSet set];
 
     // The object's fields the kernel reads or writes (other than captured
     // arrays): lo, hi, and every `FieldAddr self, #k`, in field order.
@@ -1386,18 +1516,33 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar;
                 }
     __block BOOL bad = NO;
     NSMutableArray<NSNumber*>* memberTypes = [NSMutableArray array];
+    NSMutableArray<NSNumber*>* memberOffsets = [NSMutableArray array];
     [used enumerateIndexesUsingBlock:^(NSUInteger k, BOOL* stop) {
         uint32_t t = [self spvType:fl[k].type];
-        if (!t || fl[k].type.kind == XTIRTypeKindBool || spvNarrowBits(fl[k].type))
+        if (!t)
             {
-            [self because:@"it uses a captured value its Vulkan version cannot hold yet (a bool, or an 8- or "
-                          @"16-bit value)"];
+            [self because:@"it uses a captured value its Vulkan version cannot hold"];
             bad = YES;
             *stop = YES;
             return;
             }
+        uint32_t off = fl[k].byteOffset;
+        if (spvNarrowBytes(fl[k].type))
+            {
+            // The 32-bit word that holds it, shared with any other narrow
+            // field in the same word (the fields come in offset order).
+            self.narrowShiftOf[@(k)] = @((off & 3) * 8);
+            off &= ~3u;
+            t = [self.spv typeInt:32];
+            if (memberOffsets.count && memberOffsets.lastObject.unsignedIntValue == off)
+                {
+                self.memberOf[@(k)] = @(memberTypes.count - 1);
+                return;
+                }
+            }
         self.memberOf[@(k)] = @(memberTypes.count);
         [memberTypes addObject:@(t)];
+        [memberOffsets addObject:@(off)];
     }];
     if (bad)
         return nil;
@@ -1409,12 +1554,11 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar;
     [sw addObjectsFromArray:memberTypes];
     spvOp(m.globals, SpvOpTypeStruct, sw);
     spvOp(m.decos, SpvOpDecorate, @[ @(argsT), @(SpvDecBlock) ]);
-    __block uint32_t mi = 0;
-    [used enumerateIndexesUsingBlock:^(NSUInteger k, BOOL* stop) {
-        spvOp(m.decos, SpvOpMemberDecorate, @[ @(argsT), @(mi), @(SpvDecOffset), @(fl[k].byteOffset) ]);
+    for (uint32_t mi = 0; mi < memberOffsets.count; mi++)
+        {
+        spvOp(m.decos, SpvOpMemberDecorate, @[ @(argsT), @(mi), @(SpvDecOffset), memberOffsets[mi] ]);
         spvOp(m.decos, SpvOpMemberDecorate, @[ @(argsT), @(mi), @(SpvDecNonWritable) ]);
-        mi++;
-    }];
+        }
     uint32_t argsV = [m newId];
     spvOp(m.globals, SpvOpVariable, @[ @([m pointer:SpvStorageStorageBuffer to:argsT]), @(argsV),
                                        @(SpvStorageStorageBuffer) ]);
@@ -1452,16 +1596,19 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar;
     [self.bufferFields enumerateIndexesUsingBlock:^(NSUInteger k, BOOL* stop) {
         XTIRType* et = fl[k].type.pointeeType;
         uint32_t t = [self spvType:et];
-        if (!t || et.kind == XTIRTypeKindBool || spvNarrowBits(et))
+        if (!t)
             {
-            [self because:@"it uses an array of 8- or 16-bit values or bools, which its Vulkan version cannot "
-                          @"hold yet"];
+            [self because:@"it uses an array of values its Vulkan version cannot hold"];
             bad = YES;
             *stop = YES;
             return;
             }
         [meta appendFormat:@" buf=%u:%lu:%u", fl[k].byteOffset, (unsigned long)(k - 3), et.byteWidth];
-        uint32_t v = [self spvBuffer:t stride:et.byteWidth binding:binding++ readOnly:NO];
+        BOOL narrow = spvNarrowBytes(et) != 0;
+        uint32_t v = [self spvBuffer:narrow ? [self.spv typeInt:32] : t stride:narrow ? 4 : et.byteWidth
+                             binding:binding++ readOnly:NO];
+        if (narrow)
+            [self.wordBufs addObject:@(v)];
         self.bufVar[@(k)] = @(v);
         [interface addObject:@(v)];
     }];
@@ -1473,22 +1620,27 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar;
         XTIRType* gt = g.globalType;
         XTIRType* et = gt.kind == XTIRTypeKindAgg ? gt.layout.fields.firstObject.type : gt;
         uint32_t t = [self spvType:et];
-        if (!t || et.kind == XTIRTypeKindBool || spvNarrowBits(et))
+        if (!t)
             {
-            [self because:[NSString stringWithFormat:@"it uses %@, which its Vulkan version cannot hold yet",
+            [self because:[NSString stringWithFormat:@"it uses %@, which its Vulkan version cannot hold",
                                                      spvShownName(g.name)]];
             return nil;
             }
         [meta appendFormat:@" glob=%@:%u", self.globals[gi], et.byteWidth];
-        uint32_t v = [self spvBuffer:t stride:et.byteWidth binding:binding++ readOnly:NO];
+        BOOL narrowG = spvNarrowBytes(et) != 0;
+        uint32_t v = [self spvBuffer:narrowG ? [self.spv typeInt:32] : t stride:narrowG ? 4 : et.byteWidth
+                             binding:binding++ readOnly:NO];
+        if (narrowG)
+            [self.wordBufs addObject:@(v)];
         self.bufVar[@(-1 - (NSInteger)gi)] = @(v);
         [interface addObject:@(v)];
         }
     NSMutableArray<NSNumber*>* redVars = [NSMutableArray array];
     [self.reductionFields enumerateIndexesUsingBlock:^(NSUInteger k, BOOL* stop) {
         uint32_t t = [self spvType:fl[k].type];
-        if (!t || fl[k].type.kind == XTIRTypeKindBool || spvNarrowBits(fl[k].type) || !self.memberOf[@(k)])
+        if (!t || spvNarrowBytes(fl[k].type) || !self.memberOf[@(k)])
             {
+            [self because:@"it reduces an 8- or 16-bit value or a bool, which its Vulkan version cannot yet"];
             bad = YES;
             *stop = YES;
             return;

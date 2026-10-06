@@ -16699,6 +16699,8 @@ class ClassInfo
     SpvFn* _spvFn;
     Map* _sHelpers;   // callee -> function id (Number)
     Map* _sMember;    // object field index (String) -> member index (Number)
+    Map* _sNarrowShift; // narrow field index (String) -> bit offset in its word (Number)
+    Map* _sWordBufs;  // buffer variable (String) -> 1: a buffer of 32-bit words
     u32 _sLocalObj;
     Map* _sBufVar;    // "f<k>" for a captured array field, "g<i>" for a global -> variable (Number)
     Array* _sOut;     // the last module's bytes (header, NUL, padding, words)
@@ -16712,6 +16714,13 @@ class ClassInfo
         return (u32)0;
         }
     bool spvNarrowSigned(String* t) { return ptxIs(t, "I8") || ptxIs(t, "I16"); }
+    // The bytes of a value memory holds narrower than a word: 8/16-bit, or a bool.
+    u32 spvNarrowBytes(String* t)
+        {
+        if (ptxIs(t, "I8") || ptxIs(t, "U8") || ptxIs(t, "Bool")) return (u32)1;
+        if (ptxIs(t, "I16") || ptxIs(t, "U16")) return (u32)2;
+        return (u32)0;
+        }
     bool spvWide(String* t) { return ptxIs(t, "I64") || ptxIs(t, "U64"); }
     u32 spvWidth(String* t)
         {
@@ -16860,6 +16869,96 @@ class ClassInfo
         for (u32 i = (u32)0; i < idx.count(); i = i + (u32)1)
             a.add(idx.get(i));
         return spvEmitR((u32)SPV_ACCESSCHAIN, _sMod.ptrType(r.storage, et), a);
+        }
+
+    // A narrow element of a word buffer: a pointer to its 32-bit word, and in
+    // _spvShift the bit offset of its bits there. As the reference.
+    u32 _spvShift;
+    u32 spvWordAddress(SpvRecipe* r)
+        {
+        u32 w32 = _sMod.typeInt((u32)32);
+        u32 n = spvNarrowBytes(r.pointee);
+        if (n == (u32)0 || r.indexVar == (u32)0)
+            return (u32)0;
+        u32 idx = spvEmitR((u32)SPV_LOAD, r.indexType, spvA1(r.indexVar));
+        if (r.indexType != w32)
+            idx = spvEmitR((u32)SPV_UCONVERT, w32, spvA1(idx));
+        u32 word = spvEmitR((u32)SPV_SHIFTRIGHTLOGICAL, w32, spvA2(idx, _sMod.u32c(n == (u32)1 ? (u32)2 : (u32)1)));
+        u32 low = spvEmitR((u32)SPV_BITWISEAND, w32, spvA2(idx, _sMod.u32c(n == (u32)1 ? (u32)3 : (u32)1)));
+        _spvShift = spvEmitR((u32)SPV_SHIFTLEFTLOGICAL, w32, spvA2(low, _sMod.u32c(n == (u32)1 ? (u32)3 : (u32)4)));
+        Array* a = new Array();
+        a.add((Object*)Number.withU32(r.base));
+        for (u32 i = (u32)0; i < r.members.count(); i = i + (u32)1)
+            a.add(r.members.get(i));
+        a.add((Object*)Number.withU32(word));
+        return spvEmitR((u32)SPV_ACCESSCHAIN, _sMod.ptrType(r.storage, w32), a);
+        }
+
+    // A narrow value from its word, in the value's own form.
+    u32 spvNarrowFrom(u32 word, u32 shift, String* t)
+        {
+        u32 w32 = _sMod.typeInt((u32)32);
+        u32 v = spvEmitR((u32)SPV_SHIFTRIGHTLOGICAL, w32, spvA2(word, shift));
+        if (ptxIs(t, "Bool"))
+            {
+            u32 b = spvEmitR((u32)SPV_BITWISEAND, w32, spvA2(v, _sMod.u32c((u32)$FF)));
+            u32 bt = _sMod.typeBool();
+            return spvEmitR((u32)SPV_INOTEQUAL, bt, spvA2(b, _sMod.u32c((u32)0)));
+            }
+        if (spvNarrowSigned(t))
+            return spvCanon(v, t);
+        return spvEmitR((u32)SPV_BITWISEAND, w32, spvA2(v, _sMod.u32c(((u32)1 << spvNarrowBits(t)) - (u32)1)));
+        }
+
+    u32 spvNarrowLoad(SpvRecipe* r)
+        {
+        u32 w32 = _sMod.typeInt((u32)32);
+        if (r.wordShift != (u32)0)
+            {
+            Array* a = new Array();
+            a.add((Object*)Number.withU32(r.base));
+            for (u32 i = (u32)0; i < r.members.count(); i = i + (u32)1)
+                a.add(r.members.get(i));
+            u32 p = spvEmitR((u32)SPV_ACCESSCHAIN, _sMod.ptrType(r.storage, w32), a);
+            u32 word = spvEmitR((u32)SPV_LOAD, w32, spvA1(p));
+            u32 sh = _sMod.u32c(r.wordShift - (u32)1);
+            return spvNarrowFrom(word, sh, r.pointee);
+            }
+        u32 p = spvWordAddress(r);
+        if (p == (u32)0)
+            return (u32)0;
+        u32 shift = _spvShift;
+        u32 word = spvEmitR((u32)SPV_LOAD, w32, spvA1(p));
+        return spvNarrowFrom(word, shift, r.pointee);
+        }
+
+    // Clear the element's bits in its word, then set them: two atomic
+    // updates, so a neighbour writing the other bytes keeps its bytes.
+    bool spvNarrowStore(SpvRecipe* r, u32 v)
+        {
+        u32 w32 = _sMod.typeInt((u32)32);
+        u32 p = spvWordAddress(r);
+        if (p == (u32)0)
+            return false;
+        u32 shift = _spvShift;
+        u32 mask = _sMod.u32c(spvNarrowBytes(r.pointee) == (u32)1 ? (u32)$FF : (u32)$FFFF);
+        u32 bits = (u32)0;
+        if (ptxIs(r.pointee, "Bool"))
+            {
+            u32 one = _sMod.u32c((u32)1);
+            u32 zero = _sMod.u32c((u32)0);
+            bits = spvEmitR((u32)SPV_SELECT, w32, spvA3(v, one, zero));
+            }
+        else
+            bits = spvEmitR((u32)SPV_BITWISEAND, w32, spvA2(v, mask));
+        u32 shm = spvEmitR((u32)SPV_SHIFTLEFTLOGICAL, w32, spvA2(mask, shift));
+        u32 keep = spvEmitR((u32)SPV_NOT, w32, spvA1(shm));
+        u32 scope = _sMod.u32c((u32)1);   // Device
+        u32 sem = _sMod.u32c((u32)0);     // relaxed
+        spvEmitR((u32)SPV_ATOMICAND, w32, spvW((u32)4, p, scope, sem, keep, (u32)0, (u32)0));
+        u32 sb = spvEmitR((u32)SPV_SHIFTLEFTLOGICAL, w32, spvA2(bits, shift));
+        spvEmitR((u32)SPV_ATOMICOR, w32, spvW((u32)4, p, scope, sem, sb, (u32)0, (u32)0));
+        return true;
         }
 
     bool spvBinary(IRInsn* ip)
@@ -17228,6 +17327,9 @@ class ClassInfo
                 r.members = new Array();
                 r.members.add((Object*)Number.withU32(_sMod.u32c(m.asU32())));
                 r.pointee = _mObj.typeAt((u32)k);
+                Number* sh = (Number*)_sNarrowShift.get((Hashable*)String.withI64(k));
+                if (sh != (Number*)0)
+                    r.wordShift = sh.asU32() + (u32)1;
                 _spvFn.recipeOf.set((Hashable*)mslKey(res), (Object*)r);
                 return true;
                 }
@@ -17291,6 +17393,7 @@ class ClassInfo
                 r.members = new Array();
                 r.members.add((Object*)Number.withU32(_sMod.u32c((u32)0)));
                 r.pointee = mslPointee(rt);
+                r.words = _sWordBufs.get((Hashable*)String.withU32(r.base)) != (Object*)0;
                 _spvFn.recipeOf.set((Hashable*)mslKey(res), (Object*)r);
                 return true;
                 }
@@ -17303,6 +17406,13 @@ class ClassInfo
             SpvRecipe* r = o0.kind() == (u8)OPK_USE && o0.val() != (IRValue*)0 ? (SpvRecipe*)_spvFn.recipeOf.get((Hashable*)mslKey(o0.val())) : (SpvRecipe*)0;
             u32 ty = spvType(rt);
             if (r == (SpvRecipe*)0 || ty == (u32)0 || spvType(r.pointee) != ty) return false;
+            if (r.words || r.wordShift != (u32)0)
+                {
+                u32 nv = spvNarrowLoad(r);
+                if (nv == (u32)0) return false;
+                spvSetResult(ip, nv);
+                return true;
+                }
             u32 p = spvAddress(r);
             if (p == (u32)0) return false;
             spvSetResult(ip, spvEmitR((u32)SPV_LOAD, ty, spvA1(p)));
@@ -17314,6 +17424,10 @@ class ClassInfo
             SpvRecipe* r = (SpvRecipe*)_spvFn.recipeOf.get((Hashable*)mslKey(o0.val()));
             if (r == (SpvRecipe*)0) return false;
             u32 v = spvValue((IROperand*)ip.ops().get((u32)1), r.pointee);
+            if (r.wordShift != (u32)0)
+                return false;   // a captured value: the kernel never writes one
+            if (r.words)
+                return v != (u32)0 && spvNarrowStore(r, v);
             u32 p = spvAddress(r);
             if (v == (u32)0 || p == (u32)0) return false;
             spvEmit((u32)SPV_STORE, spvA2(p, v));
@@ -17338,6 +17452,7 @@ class ClassInfo
             r.members = new Array();
             r.members.add((Object*)Number.withU32(_sMod.u32c((u32)0)));
             r.pointee = mslPointee(rt);
+            r.words = _sWordBufs.get((Hashable*)String.withU32(r.base)) != (Object*)0;
             _spvFn.recipeOf.set((Hashable*)mslKey(res), (Object*)r);
             return true;
             }
@@ -17666,6 +17781,8 @@ class ClassInfo
         _sHelpers = new Map();
         _sBufVar = new Map();
         _sMember = new Map();
+        _sNarrowShift = new Map();
+        _sWordBufs = new Map();
 
         // The object's fields the kernel uses (other than captured arrays).
         Map* used = new Map();
@@ -17683,21 +17800,35 @@ class ClassInfo
                     used.set((Hashable*)String.withI64(k), (Object*)spvS("1"));
                 }
             }
+        // A narrow field is read from the 32-bit word that holds it, shared
+        // with any other narrow field in that word. As the reference.
         Array* memberTypes = new Array();
-        Array* usedFields = new Array();
+        Array* memberOffsets = new Array();
         for (u32 k = (u32)0; k < _mObj.fieldCount(); k = k + (u32)1)
             {
             if (used.get((Hashable*)String.withU32(k)) == (Object*)0) continue;
             String* ft = _mObj.typeAt(k);
             u32 t = spvType(ft);
-            if (t == (u32)0 || ptxIs(ft, "Bool") || spvNarrowBits(ft) != (u32)0)
+            if (t == (u32)0)
                 {
-                parBecause(spvS("it uses a captured value its Vulkan version cannot hold yet (a bool, or an 8- or 16-bit value)"));
+                parBecause(spvS("it uses a captured value its Vulkan version cannot hold"));
                 return false;
+                }
+            u32 off = _mObj.offsetAt(k);
+            if (spvNarrowBytes(ft) != (u32)0)
+                {
+                _sNarrowShift.set((Hashable*)String.withU32(k), (Object*)Number.withU32((off & (u32)3) * (u32)8));
+                off = off & (u32)$FFFFFFFC;
+                t = m.typeInt((u32)32);
+                if (memberOffsets.count() > (u32)0 && ((Number*)memberOffsets.get(memberOffsets.count() - (u32)1)).asU32() == off)
+                    {
+                    _sMember.set((Hashable*)String.withU32(k), (Object*)Number.withU32(memberTypes.count() - (u32)1));
+                    continue;
+                    }
                 }
             _sMember.set((Hashable*)String.withU32(k), (Object*)Number.withU32(memberTypes.count()));
             memberTypes.add((Object*)Number.withU32(t));
-            usedFields.add((Object*)Number.withU32(k));
+            memberOffsets.add((Object*)Number.withU32(off));
             }
 
         // The args struct (binding 0) and the kernel's Function copy.
@@ -17707,10 +17838,9 @@ class ClassInfo
         for (u32 i = (u32)0; i < memberTypes.count(); i = i + (u32)1) sw.add(memberTypes.get(i));
         spvOp(m.globals, (u32)SPV_TYPESTRUCT, sw);
         spvOp(m.decos, (u32)SPV_DECORATE, spvA2(argsT, (u32)SPV_DEC_BLOCK));
-        for (u32 mi = (u32)0; mi < usedFields.count(); mi = mi + (u32)1)
+        for (u32 mi = (u32)0; mi < memberOffsets.count(); mi = mi + (u32)1)
             {
-            u32 k = ((Number*)usedFields.get(mi)).asU32();
-            spvOp(m.decos, (u32)SPV_MEMBERDECORATE, spvW((u32)4, argsT, mi, (u32)SPV_DEC_OFFSET, _mObj.offsetAt(k), (u32)0, (u32)0));
+            spvOp(m.decos, (u32)SPV_MEMBERDECORATE, spvW((u32)4, argsT, mi, (u32)SPV_DEC_OFFSET, ((Number*)memberOffsets.get(mi)).asU32(), (u32)0, (u32)0));
             spvOp(m.decos, (u32)SPV_MEMBERDECORATE, spvA3(argsT, mi, (u32)SPV_DEC_NONWRITABLE));
             }
         u32 argsV = m.newId();
@@ -17754,14 +17884,17 @@ class ClassInfo
             if (_mBufs.get((Hashable*)String.withI64((i64)k)) == (Object*)0) continue;
             String* et = mslPointee(_mObj.typeAt(k));
             u32 t = spvType(et);
-            if (t == (u32)0 || ptxIs(et, "Bool") || spvNarrowBits(et) != (u32)0)
+            if (t == (u32)0)
                 {
-                parBecause(spvS("it uses an array of 8- or 16-bit values or bools, which its Vulkan version cannot hold yet"));
+                parBecause(spvS("it uses an array of values its Vulkan version cannot hold"));
                 return false;
                 }
             meta.appendCString(" buf="); meta.append(String.withU32(_mObj.offsetAt(k))); meta.appendCString(":");
             meta.append(String.withU32(k - (u32)3)); meta.appendCString(":"); meta.append(String.withU32(spvWidth(et)));
-            u32 v = spvBuffer(t, spvWidth(et), binding);
+            bool narrow = spvNarrowBytes(et) != (u32)0;
+            u32 v = spvBuffer(narrow ? m.typeInt((u32)32) : t, narrow ? (u32)4 : spvWidth(et), binding);
+            if (narrow)
+                _sWordBufs.set((Hashable*)String.withU32(v), (Object*)spvS("1"));
             binding = binding + (u32)1;
             String* key = spvS("f");
             key.append(String.withI64((i64)k));
@@ -17779,16 +17912,19 @@ class ClassInfo
             IRLayout* gl = mslLayoutOf(gt);
             String* et = gl != (IRLayout*)0 ? gl.typeAt((u32)0) : gt;
             u32 t = spvType(et);
-            if (t == (u32)0 || ptxIs(et, "Bool") || spvNarrowBits(et) != (u32)0)
+            if (t == (u32)0)
                 {
                 String* w = spvS("it uses ");
                 w.append(parShown(gn));
-                w.appendCString(", which its Vulkan version cannot hold yet");
+                w.appendCString(", which its Vulkan version cannot hold");
                 parBecause(w);
                 return false;
                 }
             meta.appendCString(" glob="); meta.append(gn); meta.appendCString(":"); meta.append(String.withU32(spvWidth(et)));
-            u32 v = spvBuffer(t, spvWidth(et), binding);
+            bool narrowG = spvNarrowBytes(et) != (u32)0;
+            u32 v = spvBuffer(narrowG ? m.typeInt((u32)32) : t, narrowG ? (u32)4 : spvWidth(et), binding);
+            if (narrowG)
+                _sWordBufs.set((Hashable*)String.withU32(v), (Object*)spvS("1"));
             binding = binding + (u32)1;
             String* key = spvS("g");
             key.append(String.withU32(gi));
@@ -17802,8 +17938,11 @@ class ClassInfo
             if (_mReds.get((Hashable*)String.withI64((i64)k)) == (Object*)0) continue;
             String* ft = _mObj.typeAt(k);
             u32 t = spvType(ft);
-            if (t == (u32)0 || ptxIs(ft, "Bool") || spvNarrowBits(ft) != (u32)0 || _sMember.get((Hashable*)String.withU32(k)) == (Object*)0)
+            if (t == (u32)0 || spvNarrowBytes(ft) != (u32)0 || _sMember.get((Hashable*)String.withU32(k)) == (Object*)0)
+                {
+                parBecause(spvS("it reduces an 8- or 16-bit value or a bool, which its Vulkan version cannot yet"));
                 return false;
+                }
             meta.appendCString(" red="); meta.append(String.withU32(_mObj.offsetAt(k))); meta.appendCString(":"); meta.append(String.withU32(spvWidth(ft)));
             u32 v = spvBuffer(t, spvWidth(ft), binding);
             binding = binding + (u32)1;
