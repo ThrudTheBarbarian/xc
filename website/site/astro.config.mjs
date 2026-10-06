@@ -72,6 +72,7 @@ export default defineConfig({
 										{ label: 'Coder', slug: 'compiler/api/coder' },
 										{ label: 'CSV', slug: 'compiler/api/csv' },
 										{ label: 'Data', slug: 'compiler/api/data' },
+										{ label: 'Expression', slug: 'compiler/api/expression' },
 										{ label: 'JSON', slug: 'compiler/api/json' },
 										{ label: 'Map', slug: 'compiler/api/map' },
 										{ label: 'Null', slug: 'compiler/api/null' },

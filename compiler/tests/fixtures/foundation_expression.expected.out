@@ -1,0 +1,34 @@
+1 + 2 * 3                    = 7
+(1 + 2) * 3                  = 9
+qty * price + tax            = 612.500000 (double)
+qty * price                  = 600
+7 / 2                        = 3
+-7 / 2                       = -3
+-7 % 3                       = -1
+7.0 / 2                      = 3.500000 (double)
+7.5 % 2                      = 1.500000 (double)
+0x10 + 1                     = 17
+1e3 + 0.5                    = 1000.500000 (double)
+big + 1                      = -9223372036854775808
+2 < 3 && 3 <= 3              = true (bool)
+1 == 1.0                     = true (bool)
+!(qty > 2) || false          = false (bool)
+0 && missing                 = false (bool)
+1 || missing                 = true (bool)
+min(5, qty, 9)               = 3
+max(1, 2.5, 2)               = 2.500000 (double)
+abs(-4) + abs(-1.5)          = 5.500000 (double)
+- - 3                        = 3
+missing + 1                  ! no Number for the variable 'missing'
+name + 1                     ! no Number for the variable 'name'
+1 / 0                        ! integer division by zero
+1 % 0                        ! integer remainder by zero
+1.0 / 0                      = inf (double)
+1 +                          ! bad expression at byte 3: expected a value
+(1 + 2                       ! bad expression at byte 6: expected ')'
+1 2                          ! bad expression at byte 2: unexpected text after the expression
+sqrt(4)                      ! bad expression at byte 0: unknown function
+abs(1, 2)                    ! bad expression at byte 0: abs takes one argument
+99999999999999999999         ! bad expression at byte 0: integer too large; write it with a '.' for a double
+variables: a b c
+no variables: 42

@@ -325,8 +325,9 @@ The [`Object`](/compiler/api/object/) / [`Comparable`](/compiler/api/comparable/
 String* description(void)
 ```
 The `%@` hook. A boolean renders as `true` or `false`. An int renders exactly ([`String.withI64`](/compiler/api/string/#withi64--withu64));
-a float renders to six decimal places (`String.withFloat`'s default, matching
-C's `printf %f`).
+a float renders as C's `printf %f` does: six decimal places, and `inf`, `-inf`
+or `nan`. (Before the release after 0.71 a float went through `float` and
+`i32` and printed values past 2³¹ and the non-finite ones wrongly.)
 
 ### equals
 ```c

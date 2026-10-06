@@ -497,15 +497,19 @@ class Number<Comparable, Hashable>
     // ── Text ─────────────────────────────────────────────────────
     // Object's description slot — what `%@` dispatches to, and what you want
     // when a Number has to reach a label. An Int renders exactly; a Float
-    // renders to six decimal places (String.withFloat's default, matching
-    // C's printf %f and Stdio.printf).
+    // renders as C's printf %f does: six decimal places, inf, nan.
     String* description(void)
         {
         if (_bool)
             return String.withCString(_i != (i64)0 ? "true" : "false");
         if (isInt())
             return String.withI64(asI64());
-        return String.withFloat(asFloat());
+        // printf's %f on the double: rounded to six places, and right for
+        // the infinities, NaN and values past i32 (String.withFloat goes
+        // through a float and an i32 and gets those wrong).
+        String* s = String.withCString("");
+        s.appendFormat("%f", asDouble());
+        return s;
         }
 
     // ── Equality ─────────────────────────────────────────────────
