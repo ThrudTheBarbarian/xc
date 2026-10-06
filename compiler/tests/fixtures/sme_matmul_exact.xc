@@ -1,4 +1,5 @@
 //xtc-flags: target=arm64
+//xtc-na: x86_64,win64 — arm64's own hashes (fused multiply-add); matmul_exact_x86.xc is the x86-64 one
 // sme_matmul_exact.xc — a dense matrix multiply, f32 and f64, over 16 shapes
 // with row strides wider than the rows, and inputs dense in infinities, signed
 // zeros and denormals. On arm64 macOS the SME matrix kernel does the work
