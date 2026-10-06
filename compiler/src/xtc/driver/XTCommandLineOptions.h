@@ -170,7 +170,8 @@ NS_ASSUME_NONNULL_BEGIN
 |* -l libraries, e.g. GTK 4 and libGL) instead of statically over musl. The
 |* in-house linker writes it; x86_64 only.
 \****************************************************************************/
-@property(nonatomic, readonly) BOOL dynamicGlibc;
+@property(nonatomic, readonly) BOOL dynamicGlibc;   // -A x86_64: glibc dynamic link (the default; -static: musl)
+@property(nonatomic, readonly) BOOL staticLink;     // -static
 /****************************************************************************\
 |* Automatic Reference Counting gate (`-farc` / `-farc=off|no|0`).
 |* When enabled (the default), the `retain` and `release` statements are

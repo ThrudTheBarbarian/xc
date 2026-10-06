@@ -469,7 +469,14 @@ class FeOptions
                         {
                         im = new IfaceImport();
                         for (u32 k = (u32)0; k < dw.decls().count(); k = k + (u32)1)
-                            im.decls().add(dw.decls().get(k));
+                            {
+                            // A C function: the C ABI, as the reference's
+                            // isCImport (bug 626).
+                            Node* dd = (Node*)dw.decls().get(k);
+                            if (dd.kind() == (u16)nkFunctionDecl)
+                                dd.addFlag((u32)NF_CABI);
+                            im.decls().add((Object*)dd);
+                            }
                         // A stripped C library with no separate debug file
                         // either: every call into it would otherwise fail on
                         // its own as an undeclared function. As the reference.

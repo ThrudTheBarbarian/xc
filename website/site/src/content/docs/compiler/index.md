@@ -31,7 +31,7 @@ With no `-A`, `xcc` builds for the machine it is running on. Pass `-A` to cross-
 |---|---|---|---|
 | *(none)* | the host you are on | native executable | run it |
 | `arm64` | macOS / Linux on 64-bit ARM | Mach-O / ELF | run it |
-| `x86_64` | Linux | static ELF over musl; with `-dynamic`, a glibc ELF that loads system libraries | run it |
+| `x86_64` | Linux | a glibc ELF that loads system libraries (from the release after 0.71; up to 0.71, with `-dynamic`); with `-static`, a static ELF over musl (up to 0.71, the default) | run it |
 | `win64` | Windows | PE/COFF `.exe`, or a DLL (`--emit-lib`) | run it, or Wine |
 | `arm9` | AArch32, the **XTOS** loader | ELF, or a shared library (`--emit-lib`) | the board, or QEMU |
 | `m68k` (`68000`) / `68030` | Motorola 68000/68030 | GEMDOS `.prg`/`.tos` | `xcc-sim-68k` |

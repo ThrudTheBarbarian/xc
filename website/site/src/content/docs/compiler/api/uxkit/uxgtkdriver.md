@@ -96,7 +96,8 @@ xcc -A x86_64 -dynamic app.xc -L <dir> -lUXGtk -lgtk-4 -lGL
 ```
 
 `-dynamic` writes a glibc executable that loads GTK 4 and the other libraries at
-run time, and `-l` finds each `lib<name>.so` on the `-L` path or in the system's
+run time (from the release after 0.71 that is the default, and `-dynamic` may be
+left out), and `-l` finds each `lib<name>.so` on the `-L` path or in the system's
 library directories. To link on a Mac, `--with-link-inputs` also copies the Linux
 machine's `libgtk-4.so` and `libGL.so` into the output directory. The app needs
 `libUXGtk.so` beside it, or on its library path, when it runs.

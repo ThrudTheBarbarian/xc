@@ -308,7 +308,7 @@ $(XCC_XC_LINUX_BIN): $(XCC_XC2_BIN) $(XCC_XC_SRC) $(wildcard selfhost/*/*.xc) \
                      $(wildcard support/generic/lib/*.xc) $(wildcard support/x86_64/lib/*.xc)
 	@echo "  xc   building the production compiler for x86_64 linux"
 	@mkdir -p $(dir $@)
-	@$(XCC_XC2_BIN) -q -O2 -A x86_64 -H . -D XCC_VERSION='"$(VERSION)"' -o $@ $(XCC_XC_SRC) \
+	@$(XCC_XC2_BIN) -q -O2 -A x86_64 -static -H . -D XCC_VERSION='"$(VERSION)"' -o $@ $(XCC_XC_SRC) \
 	            $(call XCC_XC_TARGET_INCS,x86_64)
 
 $(XCC_XC_WIN64_BIN): $(XCC_XC2_BIN) $(XCC_XC_SRC) $(wildcard selfhost/*/*.xc) \
@@ -371,7 +371,7 @@ $(XCC_SIGN_XC_BIN): $(XCC_SIGN_XC_DEPS) $(XCC_SIGN_XC_TLS_DEPS)
 $(XCC_SIGN_XC_LINUX_BIN): $(XCC_SIGN_XC_DEPS) $(XCC_SIGN_XC_LINUX_TLS_DEPS)
 	@echo "  xc   building the production signer for linux"
 	@mkdir -p $(dir $@)
-	@$(XCC_XC2_BIN) -q -O2 -A x86_64 -H . $(XCC_SIGN_XC_LINUX_TLS) -o $@ selfhost/tools/xtsign.xc \
+	@$(XCC_XC2_BIN) -q -O2 -A x86_64 -static -H . $(XCC_SIGN_XC_LINUX_TLS) -o $@ selfhost/tools/xtsign.xc \
 	            $(XCC_SIGN_XC_INCS)
 
 $(XCC_SIGN_XC_WIN64_BIN): $(XCC_SIGN_XC_DEPS)
@@ -393,7 +393,7 @@ $(XCC_AS_XC_LINUX_BIN): $(XCC_XC2_BIN) $(XCC_AS_XC_SRCS) $(wildcard support/x86_
                         support/x86_64/runtime/sys-linux.s
 	@echo "  xc   building the production assembler for linux"
 	@mkdir -p $(dir $@)
-	@$(XCC_XC2_BIN) -q -O2 -A x86_64 -H . -DXCC_VERSION='"$(VERSION)"' -o $@ selfhost/tools/xta6502.xc -I selfhost/asm
+	@$(XCC_XC2_BIN) -q -O2 -A x86_64 -static -H . -DXCC_VERSION='"$(VERSION)"' -o $@ selfhost/tools/xta6502.xc -I selfhost/asm
 
 $(XCC_AS_XC_WIN64_BIN): $(XCC_XC2_BIN) $(XCC_AS_XC_SRCS) $(wildcard support/win64/lib/*.xc)
 	@echo "  xc   building the production assembler for win64"

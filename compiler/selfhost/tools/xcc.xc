@@ -85,7 +85,9 @@ class CapOptions
     bool    _threadFlag;   // -f[no-]thread-safe-arc was given
     String* _simd;         // the x86-64 vector level: 0 (default), "base", "avx2"
     String* _simdFlag;     // the flag that chose it, for the target check
-    bool _dynamic;         // -dynamic: an x86-64 executable linked against glibc
+    bool _dynamic;         // an x86-64 executable linked against glibc: the default
+    bool _dynamicExplicit; // -dynamic given
+    bool _staticLink;      // -static: the static musl link instead
     bool _noMatmul;           // -fno-matmul: no SME matrix kernels (arm64 macOS)
 
     void init(void)
@@ -107,6 +109,8 @@ class CapOptions
         _simd = (String*)0;
         _simdFlag = (String*)0;
         _dynamic = false;
+        _dynamicExplicit = false;
+        _staticLink = false;
         _noMatmul = false;
     }
 
@@ -127,7 +131,11 @@ class CapOptions
     String* simd(void)      { return _simd; }
     String* simdFlag(void)  { return _simdFlag; }
     bool dynamic(void)      { return _dynamic; }
-    void setDynamic(void)   { _dynamic = true; }
+    void setDynamic(void)   { _dynamicExplicit = true; }
+    bool dynamicExplicit(void) { return _dynamicExplicit; }
+    bool staticLink(void)   { return _staticLink; }
+    void setStatic(void)    { _staticLink = true; }
+    void resolveDynamic(bool x86, bool emitLib) { _dynamic = x86 && !_staticLink && !emitLib; }
     bool noMatmul(void)        { return _noMatmul; }
     void setNoMatmul(void)     { _noMatmul = true; }
 
@@ -2181,17 +2189,30 @@ void linkX86_64Glibc(DriverOptions* d, String* prog)
         }
     }
     // Libraries the program #imported (xc-built .so files).
+    // Found beside the program ($ORIGIN) or where each was linked from, in
+    // that order: DT_RUNPATH as the reference writes it (bug 626).
     Array* nl = d.fe().neededLibs();
     bool haveDeps = false;
+    String* runpath = String.withCString("$ORIGIN");
+    Array* depDirs = new Array();
     for (u32 i = (u32)0; nl != (Array*)0 && i < nl.count(); i = i + (u32)1) {
         String* lp = (String*)nl.get(i);
         if (!lp.hasSuffix(String.withCString(".so"))) continue;
         sos.add((Object*)lp);
         haveDeps = true;
+        String* dir = lp.deletingLastPathComponent();
+        bool seen = false;
+        for (u32 k = (u32)0; k < depDirs.count(); k = k + (u32)1)
+            if (((String*)depDirs.get(k)).equals(dir)) seen = true;
+        if (dir.byteLength() > (u32)0 && !seen) {
+            depDirs.add((Object*)dir);
+            runpath.appendCString(":");
+            runpath.append(dir);
+        }
     }
     X86Link* ln = new X86Link();
     Data* img = ln.linkGlibc(srcs, objs, ars, String.withCString("_start"), sos, mapText,
-                             haveDeps ? String.withCString("$ORIGIN") : (String*)0);
+                             haveDeps ? runpath : (String*)0);
     if (ln.failed()) {
         noteUndefinedCall(d, ln.why());
         Stdio.printf("xcc: %s\n", ln.why().cString());
@@ -5323,6 +5344,10 @@ bool parseCapabilityFlag(DriverOptions* d, u32* ip, u32 argc)
         c.setDynamic();
         *ip = i + (u32)1; return true;
     }
+    if (a.equals(String.withCString("-static"))) {
+        c.setStatic();
+        *ip = i + (u32)1; return true;
+    }
     if (a.equals(String.withCString("-fno-matmul"))) {
         c.setNoMatmul();
         *ip = i + (u32)1; return true;
@@ -5421,14 +5446,27 @@ void checkCapabilities(DriverOptions* d)
                      c.simdFlag().cString());
         Process.exit((i32)1); return;
     }
-    if (c.dynamic() && !isX86_64(d)) {
-        Stdio.printf("xcc: -dynamic: a dynamically linked glibc executable is "
-                     "for -A x86_64 only\n");
+    // From the release after 0.71 an x86-64 executable links dynamically
+    // against glibc unless -static asks for the static musl link, as a C
+    // compiler on Linux does; -dynamic names the default. As the reference.
+    if (c.dynamicExplicit() && c.staticLink()) {
+        Stdio.printf("xcc: -dynamic and -static: choose one\n");
         Process.exit((i32)1); return;
     }
-    if (c.dynamic() && d.emitLib()) {
+    if ((c.dynamicExplicit() || c.staticLink()) && !isX86_64(d)) {
+        Stdio.printf("xcc: %s: the dynamic (glibc) and static (musl) links are "
+                     "for -A x86_64 only\n", c.staticLink() ? "-static" : "-dynamic");
+        Process.exit((i32)1); return;
+    }
+    if (c.dynamicExplicit() && d.emitLib()) {
         Stdio.printf("xcc: -dynamic builds an executable; a glibc shared "
                      "library (--emit-lib -dynamic) is not supported yet\n");
+        Process.exit((i32)1); return;
+    }
+    c.resolveDynamic(isX86_64(d), d.emitLib());
+    if (c.dynamic() && c.hostMalloc().equals(String.withCString("mimalloc"))) {
+        Stdio.printf("xcc: -fmalloc=mimalloc: link with -static (the dynamic glibc "
+                     "link uses glibc's malloc)\n");
         Process.exit((i32)1); return;
     }
     if (c.threadFlag() && (isM68k(d) || isXt6502(d))) {

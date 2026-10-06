@@ -54,6 +54,8 @@
 @property(nonatomic, readwrite, nullable) NSString* simdFlag;
 @property(nonatomic, readwrite) BOOL noMatmul;
 @property(nonatomic, readwrite) BOOL dynamicGlibc;
+@property(nonatomic, readwrite) BOOL dynamicExplicit;
+@property(nonatomic, readwrite) BOOL staticLink;
 @property(nonatomic, readwrite) BOOL allocatorExplicit;
 @property(nonatomic, readwrite) BOOL dceTrace;
 @property(nonatomic, readwrite) NSInteger threadSafeARC;
@@ -1027,7 +1029,9 @@ static NSString* sExecutablePath = nil;
             opts.allocatorExplicit = YES;
             }
         else if ([arg isEqualToString:@"-dynamic"])
-            opts.dynamicGlibc = YES;
+            opts.dynamicExplicit = YES;
+        else if ([arg isEqualToString:@"-static"])
+            opts.staticLink = YES;
         else if ([arg isEqualToString:@"-fno-matmul"])
             opts.noMatmul = YES;
         else if ([arg isEqualToString:@"-mavx2"])
@@ -1320,19 +1324,6 @@ static NSString* sExecutablePath = nil;
         return nil;
         }
 
-    // -dynamic is an x86-64 Linux link mode; anywhere else it would be ignored.
-    if (opts.dynamicGlibc && !opts.useX86_64Backend)
-        {
-        fprintf(stderr, "xcc: -dynamic: a dynamically linked glibc executable is "
-                        "for -A x86_64 only\n");
-        return nil;
-        }
-    if (opts.dynamicGlibc && opts.emitLib)
-        {
-        fprintf(stderr, "xcc: -dynamic builds an executable; a glibc shared "
-                        "library (--emit-lib -dynamic) is not supported yet\n");
-        return nil;
-        }
 
     // -fmalloc=mimalloc needs a linker that can consume a foreign OBJECT file.
     // Only the x86-64 path has one today: it links with ld.lld directly. The
@@ -1406,6 +1397,35 @@ static NSString* sExecutablePath = nil;
         opts.useX86_64Backend = YES;
         opts.targetName = @"x86_64";
 #endif
+        }
+
+    // -dynamic and -static are x86-64 Linux link modes; anywhere else they
+    // would be ignored. From the release after 0.71 an x86-64 executable links
+    // dynamically against glibc unless -static asks for the static musl link,
+    // as a C compiler on Linux does; -dynamic names the default.
+    if (opts.dynamicExplicit && opts.staticLink)
+        {
+        fprintf(stderr, "xcc: -dynamic and -static: choose one\n");
+        return nil;
+        }
+    if ((opts.dynamicExplicit || opts.staticLink) && !opts.useX86_64Backend)
+        {
+        fprintf(stderr, "xcc: %s: the dynamic (glibc) and static (musl) links are "
+                        "for -A x86_64 only\n", opts.staticLink ? "-static" : "-dynamic");
+        return nil;
+        }
+    if (opts.dynamicExplicit && opts.emitLib)
+        {
+        fprintf(stderr, "xcc: -dynamic builds an executable; a glibc shared "
+                        "library (--emit-lib -dynamic) is not supported yet\n");
+        return nil;
+        }
+    opts.dynamicGlibc = opts.useX86_64Backend && !opts.staticLink && !opts.emitLib;
+    if (opts.dynamicGlibc && [opts.hostMalloc isEqualToString:@"mimalloc"])
+        {
+        fprintf(stderr, "xcc: -fmalloc=mimalloc: link with -static (the dynamic glibc "
+                        "link uses glibc's malloc)\n");
+        return nil;
         }
 
     // Checked after the host default above has resolved the backend flags.

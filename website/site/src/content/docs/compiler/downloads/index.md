@@ -110,7 +110,7 @@ xcc -o hello hello.xc      # native binary for this machine, like cc
 The same file cross-compiles to every target by picking an architecture:
 
 ```bash
-xcc -A x86_64 -o hello-linux hello.xc    # static Linux ELF (musl)
+xcc -A x86_64 -o hello-linux hello.xc    # Linux ELF (static musl up to 0.71; glibc after, -static for musl)
 xcc -A win64  -o hello.exe    hello.xc   # Windows PE
 xcc -A wasm32 -o hello        hello.xc   # hello.wasm + a Node/browser loader
 xcc -A 6502   -o hello.xex    hello.xc   # banked 6502 executable (run: xcc-sim-6502 -m xt hello.xex)

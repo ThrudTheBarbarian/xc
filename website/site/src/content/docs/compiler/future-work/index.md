@@ -9,7 +9,7 @@ what has shipped recently.
 ## Where things stand
 
 The compiler lowers to a single architecture-neutral IR and out through **seven live
-backends**: xt6502, arm64 (macOS), arm9, m68k, x86_64 (Linux: static musl, or glibc with `-dynamic`), win64 and
+backends**: xt6502, arm64 (macOS), arm9, m68k, x86_64 (Linux: glibc, or static musl with `-static`; up to 0.71 static musl, or glibc with `-dynamic`), win64 and
 **wasm32**. Every one passes the full fixture corpus, and every one is built end to end
 by the **in-house toolchain**: xcc's own assemblers, linkers and executable-format
 writers, with no external compiler in the chain. A macOS machine with only xcc installed
