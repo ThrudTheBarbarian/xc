@@ -5351,7 +5351,14 @@ void ux_ak_textview_set_look(int handle, int node, int bg, int ink, int caret, i
     NSColor* back = bg ? ak_rgb(bg) : [NSColor textBackgroundColor];
     [tv setBackgroundColor:back];
     [tv setDrawsBackground:YES];
-    [[tv enclosingScrollView] setBackgroundColor:back];
+    // the scroll view the text sits in: on a background of the app's, no bezel and an overlay scroller,
+    // so no light frame or scroller track shows round a dark view; the system's again otherwise
+    NSScrollView* sv = [tv enclosingScrollView];
+    [sv setBackgroundColor:back];
+    [sv setDrawsBackground:YES];
+    [sv setBorderType:(bg ? NSNoBorder : NSBezelBorder)];
+    [sv setScrollerStyle:(bg ? NSScrollerStyleOverlay : [NSScroller preferredScrollerStyle])];
+    [[sv verticalScroller] setKnobStyle:(bg ? NSScrollerKnobStyleLight : NSScrollerKnobStyleDefault)];
     [tv setInsertionPointColor:(caret ? ak_rgb(caret) : (ink ? ak_rgb(ink) : [NSColor textColor]))];
     [tv setSelectedTextAttributes:@{ NSBackgroundColorAttributeName : (sel ? ak_rgb(sel) : [NSColor selectedTextBackgroundColor]) }];
     UXTvLayout* lm = (UXTvLayout*)[tv layoutManager];
