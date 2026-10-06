@@ -5950,6 +5950,10 @@ DriverOptions* parseDriverArgs(void)
     // what tells library source which one it is building for.
     if (isAndroid(d))
         o.defs().add((Object*)String.withCString("PLATFORM_android=1"));
+    // A dynamically linked x86-64 executable can load libraries at run time
+    // (dlopen): library source that needs to (ParVulkan.xc) keys on this.
+    if (isX86_64(d) && d.caps().dynamic())
+        o.defs().add((Object*)String.withCString("LINK_DYNAMIC=1"));
     finishDriverArgs(d);
     return d;
 }

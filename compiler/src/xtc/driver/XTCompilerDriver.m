@@ -1831,6 +1831,9 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     BOOL androidBuild = _options.androidTarget || _options.defines[@"PLATFORM_android"] != nil;
     [XTIRParCheck setEmitsMetal:(_options.useArm64Backend && !_options.applePlatform && !androidBuild)];
     [XTIRParCheck setEmitsPTX:_options.useWin64Backend];
+    // Vulkan on x86-64 Linux: until the port prints SPIR-V too, only on request.
+    const char* spv = getenv("XC_PAR_SPIRV");
+    [XTIRParCheck setEmitsSPIRV:(_options.useX86_64Backend && spv && *spv == '1')];
     mod = [XTIRLowering lowerProgram:ast
                           moduleName:modName
                          diagnostics:_diagnostics

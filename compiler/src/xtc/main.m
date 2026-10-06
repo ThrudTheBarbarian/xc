@@ -4507,6 +4507,10 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
     // what tells library source which one it is building for.
     if (opts.androidTarget)
         [feArgs addObject:@"-DPLATFORM_android=1"];
+    // A dynamically linked x86-64 executable can load libraries at run time
+    // (dlopen): library source that needs to (ParVulkan.xc) keys on this.
+    if (opts.useX86_64Backend && opts.dynamicGlibc)
+        [feArgs addObject:@"-DLINK_DYNAMIC=1"];
     // Warning suppressions. Every -Wno- category is diagnosed by the FRONT END
     // (lexer / preprocessor / sema), so a flag the dispatcher keeps to itself
     // silences nothing: `xcc -Wno-comment` still printed the warning while

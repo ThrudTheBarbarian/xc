@@ -5,13 +5,17 @@
 //   // xcpar size=<bytes> lo=<off> hi=<off> buf=<off>:<own-ivar>:<elem-bytes>…
 //            glob=<name>:<elem-bytes>… red=<off>:<bytes>…
 // which says where the block object keeps lo, hi, each captured array, each
-// global it uses and each reduction. Both GPU runtimes share all of it, and
+// global it uses and each reduction. The GPU runtimes share all of it, and
 // differ only in how they compile a kernel, move the data and launch.
 pointer memcpy(pointer dst, pointer src, u64 n);
 
 #if ARCH_win64
 i32 QueryPerformanceCounter(i64* count);
 i32 QueryPerformanceFrequency(i64* perSecond);
+#elif ARCH_x86_64
+// Linux's monotonic clock.
+struct _ParTimespec { i64 sec; i64 nsec; }
+i32 clock_gettime(i32 clock, u8* ts);
 #else
 // Darwin's monotonic clock, in nanoseconds.
 u64 clock_gettime_nsec_np(i32 clock);
@@ -89,6 +93,10 @@ class ParDevice
         QueryPerformanceCounter(&c);
         QueryPerformanceFrequency(&f);
         return (c / f) * (i64)1000000 + (c % f) * (i64)1000000 / f;
+#elif ARCH_x86_64
+        _ParTimespec ts;
+        clock_gettime((i32)1, (u8*)&ts);   // CLOCK_MONOTONIC on Linux
+        return ts.sec * (i64)1000000 + ts.nsec / (i64)1000;
 #else
         return (i64)(clock_gettime_nsec_np((i32)6) / (u64)1000); // CLOCK_MONOTONIC
 #endif

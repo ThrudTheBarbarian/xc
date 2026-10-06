@@ -16,10 +16,14 @@
 #import "Thread.xc"
 #import "PlatformCore.xc"
 #endif
-// A GPU runtime: Metal on macOS (Apple silicon), CUDA's driver on Windows
-// (NVIDIA). Either one runs a block on the GPU when ParDevice chooses it.
+// A GPU runtime: Metal on macOS (Apple silicon), Vulkan on Linux, CUDA's
+// driver on Windows (NVIDIA). Each runs a block on the GPU when ParDevice
+// chooses it.
 #if ARCH_arm64 && !PLATFORM_ios && !PLATFORM_android
 #import "ParMetal.xc"
+#endif
+#if ARCH_x86_64 && !ARCH_win64
+#import "ParVulkan.xc"
 #endif
 #if ARCH_win64
 #import "ParCuda.xc"
@@ -95,11 +99,14 @@ class Par
         {
         if (hi <= lo)
             return;
-#if (ARCH_arm64 && !PLATFORM_ios && !PLATFORM_android) || ARCH_win64
+#if (ARCH_arm64 && !PLATFORM_ios && !PLATFORM_android) || ARCH_x86_64
         if (ParDevice.choose(proto, hi - lo) == (i32)2)
             {
 #if ARCH_win64
             if (ParCuda.run(proto, proto.gpuSource(), lo, hi))
+                return;
+#elif ARCH_x86_64
+            if (ParVulkan.run(proto, proto.gpuSource(), lo, hi))
                 return;
 #else
             if (ParMetal.run(proto, proto.gpuSource(), lo, hi))
@@ -120,7 +127,7 @@ class Par
     // the choice in its Settings passes it on here; XC_PAR overrides all.
     static void device(u8* block, u8* choice)
         {
-#if (ARCH_arm64 && !PLATFORM_ios && !PLATFORM_android) || ARCH_win64
+#if (ARCH_arm64 && !PLATFORM_ios && !PLATFORM_android) || ARCH_x86_64
         ParDevice.setDevice(block, choice);
 #endif
         }

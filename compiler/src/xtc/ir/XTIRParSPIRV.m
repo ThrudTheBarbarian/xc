@@ -1500,8 +1500,6 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar;
     }];
     if (bad)
         return nil;
-    if (self.fast)
-        [meta appendString:@" fast"];
 
     // The kernel function.
     uint32_t voidT = [m typeVoid];
@@ -1592,7 +1590,11 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar;
     [self spvFinish:self.sf into:m.funcs];
 
     NSData* words = [m words];
-    [meta appendFormat:@" spirv=%lu\n", (unsigned long)(words.length / 4)];
+    // spirv= before fast: ParDevice.isFast reads the line's last word.
+    [meta appendFormat:@" spirv=%lu", (unsigned long)(words.length / 4)];
+    if (self.fast)
+        [meta appendString:@" fast"];
+    [meta appendString:@"\n"];
     NSMutableData* out = [[meta dataUsingEncoding:NSUTF8StringEncoding] mutableCopy];
     uint8_t zero = 0;
     [out appendBytes:&zero length:1];
