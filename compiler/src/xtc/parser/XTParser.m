@@ -2341,17 +2341,36 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
     case XTTokenIf:
         return [self parseIf];
     case XTTokenWhile:
-        return [self parseWhile];
+        {
+        [self parGridLoop:1];
+        XTASTNode* n = [self parseWhile];
+        [self parGridLoop:-1];
+        return n;
+        }
     case XTTokenFor:
-        return [self parseFor];
+        {
+        [self parGridLoop:1];
+        XTASTNode* n = [self parseFor];
+        [self parGridLoop:-1];
+        return n;
+        }
     case XTTokenSwitch:
-        return [self parseSwitch];
+        {
+        [self parGridSwitch:1];
+        XTASTNode* n = [self parseSwitch];
+        [self parGridSwitch:-1];
+        return n;
+        }
     case XTTokenReturn:
-        return [self parseReturn];
+        {
+        XTASTNode* n = [self parseReturn];
+        return n ? [self parGridReturn:(XTReturnNode*)n] : nil;
+        }
     case XTTokenBreak:
         {
         [self advance];
         [self expect:XTTokenSemicolon];
+        [self parGridBreakAt:cur.location];
         return [[XTBreakNode alloc] initWithLocation:cur.location];
         }
     case XTTokenContinue:
@@ -2902,12 +2921,43 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
     // :goal(speed) (the default) or :goal(accuracy): what the block's GPU
     // version favours.
     BOOL accuracy = NO;
+    // :grid(w, h[, d]): the work items are the points of a 2-D or 3-D grid,
+    // and the body is any code, run once per point.
+    NSMutableArray<XTASTNode*>* grid = nil;
     while ([self check:XTTokenColon])
         {
         [self advance];
         XTToken* dec = [self expect:XTTokenIdentifier];
         if (!dec)
             return nil;
+        if ([dec.value isEqualToString:@"grid"])
+            {
+            if (grid)
+                {
+                [_diagnostics emitError:@"'par' takes one ':grid'" at:dec.location];
+                return nil;
+                }
+            if (![self expect:XTTokenLParen])
+                return nil;
+            grid = [NSMutableArray array];
+            do
+                {
+                XTASTNode* e = [self parseExpression];
+                if (!e)
+                    return nil;
+                [grid addObject:e];
+                } while ([self match:XTTokenComma]);
+            if (![self expect:XTTokenRParen])
+                return nil;
+            if (grid.count < 2 || grid.count > 3)
+                {
+                [_diagnostics emitError:@"':grid' takes a width and a height, and optionally a depth: "
+                                         ":grid(w, h) or :grid(w, h, d)"
+                                     at:dec.location];
+                return nil;
+                }
+            continue;
+            }
         if ([dec.value isEqualToString:@"goal"])
             {
             if (![self expect:XTTokenLParen])
@@ -2929,7 +2979,8 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
         if (![dec.value isEqualToString:@"reduce"])
             {
             [_diagnostics emitError:[NSString stringWithFormat:@"'par' has no decorator ':%@' "
-                                                                 "(it takes :reduce(op var) and :goal(speed|accuracy))",
+                                                                 "(it takes :reduce(op var), :grid(w, h[, d]) "
+                                                                 "and :goal(speed|accuracy))",
                                                                dec.value]
                                  at:dec.location];
             return nil;
@@ -2982,6 +3033,12 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
     frame[@"selfName"] = [NSNull null];
     frame[@"par"] = @YES;
     frame[@"written"] = [NSMutableSet set];
+    if (grid)
+        {
+        frame[@"grid"] = grid;
+        frame[@"gridUsed"] = [NSMutableSet set];
+        frame[@"loops"] = @0;
+        }
     [[self blkFrames] addObject:frame];
     [self blkPushScope];
     XTBlockNode* body = (XTBlockNode*)[self parseBlock];

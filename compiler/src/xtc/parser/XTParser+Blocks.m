@@ -907,6 +907,187 @@ NS_ASSUME_NONNULL_END
     }
 
 /****************************************************************************\
+|* The innermost capture frame when it is a `par :grid` body's, else nil. A
+|* block literal inside the body has its own frame, so a `return` there is
+|* the literal's.
+\****************************************************************************/
+- (nullable NSMutableDictionary*)parGridFrame
+    {
+    NSMutableDictionary* frame = [self blkFrames].lastObject;
+    return frame[@"grid"] ? frame : nil;
+    }
+
+/****************************************************************************\
+|* `par.x`, `par.y`, `par.z`, `par.width`, `par.height`, `par.depth` in a
+|* `par :grid` body, at the current token: consumed and returned as the name
+|* the desugaring declares. Anything else is left alone (nil).
+\****************************************************************************/
+- (nullable XTASTNode*)parGridMemberAt:(XTSourceLocation*)loc
+    {
+    NSMutableDictionary* frame = [self parGridFrame];
+    if (!frame || ![[self currentToken].value isEqualToString:@"par"] || [self peekToken:1].type != XTTokenDot
+        || [self peekToken:2].type != XTTokenIdentifier)
+        return nil;
+    NSString* m = [self peekToken:2].value;
+    NSDictionary* names = @{@"x" : @"par$x", @"y" : @"par$y", @"z" : @"par$z",
+                            @"width" : @"par$w", @"height" : @"par$h", @"depth" : @"par$d"};
+    NSString* n = names[m];
+    if (!n)
+        {
+        [self.diagnostics emitError:[NSString stringWithFormat:@"a 'par :grid' body has par.x, par.y, par.z, "
+                                                                 "par.width, par.height and par.depth, not par.%@", m]
+                                 at:loc];
+        n = @"par$x"; // parsing goes on as if it were par.x
+        }
+    [self advance];
+    [self advance];
+    [self advance];
+    [frame[@"gridUsed"] addObject:n];
+    return [[XTIdentifierNode alloc] initWithName:n location:loc];
+    }
+
+// Loops and switches entered inside a `par :grid` body, for parGridReturn: and
+// parGridBreakAt:.
+- (void)parGridLoop:(int)delta
+    {
+    NSMutableDictionary* frame = [self parGridFrame];
+    if (frame)
+        frame[@"loops"] = @([(NSNumber*)frame[@"loops"] intValue] + delta);
+    }
+
+- (void)parGridSwitch:(int)delta
+    {
+    NSMutableDictionary* frame = [self parGridFrame];
+    if (frame)
+        frame[@"switches"] = @([(NSNumber*)frame[@"switches"] intValue] + delta);
+    }
+
+/****************************************************************************\
+|* A `break` outside every loop and switch of a `par :grid` body would end the
+|* whole chunk of work items, not this one; `return` is what ends a work item.
+\****************************************************************************/
+- (void)parGridBreakAt:(XTSourceLocation*)loc
+    {
+    NSMutableDictionary* frame = [self parGridFrame];
+    if (frame && [(NSNumber*)frame[@"loops"] intValue] == 0 && [(NSNumber*)frame[@"switches"] intValue] == 0)
+        [self.diagnostics emitError:@"'break' would leave the 'par :grid' body; 'return' ends a work item" at:loc];
+    }
+
+/****************************************************************************\
+|* `return;` in a `par :grid` body ends the work item: the body runs inside the
+|* loop over the grid's points, so it becomes `continue`. Inside a loop of the
+|* body's own that `continue` would go to that loop instead, so it is refused
+|* there.
+\****************************************************************************/
+- (nullable XTASTNode*)parGridReturn:(XTReturnNode*)ret
+    {
+    NSMutableDictionary* frame = [self parGridFrame];
+    if (!frame)
+        return ret;
+    if (ret.values.count)
+        {
+        [self.diagnostics emitError:@"a 'par :grid' body returns no value: 'return;' ends the work item"
+                                 at:ret.location];
+        return ret;
+        }
+    if ([(NSNumber*)frame[@"loops"] intValue] > 0)
+        {
+        [self.diagnostics emitError:@"'return' inside a loop of a 'par :grid' body: 'break' out of the loop "
+                                     "and return after it"
+                                 at:ret.location];
+        return ret;
+        }
+    return [[XTContinueNode alloc] initWithLocation:ret.location];
+    }
+
+/****************************************************************************\
+|* A `par :grid(w, h[, d])` body as the loop form: one loop over the w*h*d
+|* points, x fastest, with the point and the grid's size declared at the top
+|* of each work item (only those the body uses). The sizes are evaluated once,
+|* before the block, into locals the body captures: returned for the site to
+|* declare first. A block without :grid is left alone (and gets no
+|* declarations).
+\****************************************************************************/
+- (NSArray<XTASTNode*>*)parGridLoopFor:(XTBlockNode* _Nonnull* _Nonnull)bodyRef
+                                 frame:(NSDictionary*)frame
+                                    at:(XTSourceLocation*)loc
+    {
+    NSArray<XTASTNode*>* grid = frame[@"grid"];
+    if (!grid)
+        return @[];
+    NSSet* used = frame[@"gridUsed"];
+    XTType* u32T = [self.typeTable typeForName:@"u32"];
+    XTType* i64T = [self.typeTable typeForName:@"i64"];
+    XTASTNode* (^ident)(NSString*) = ^XTASTNode*(NSString* n) {
+      return [[XTIdentifierNode alloc] initWithName:n location:loc];
+    };
+    XTASTNode* (^cast)(XTType*, XTASTNode*) = ^XTASTNode*(XTType* t, XTASTNode* e) {
+      return [[XTCastExprNode alloc] initWithType:t operand:e location:loc];
+    };
+    XTASTNode* (^bin)(XTBinaryOp, XTASTNode*, XTASTNode*) = ^XTASTNode*(XTBinaryOp op, XTASTNode* l, XTASTNode* r) {
+      return [[XTBinaryExprNode alloc] initWithOp:op left:l right:r location:loc];
+    };
+    XTASTNode* (^decl)(NSString*, XTASTNode*) = ^XTASTNode*(NSString* n, XTASTNode* e) {
+      return [[XTVariableDeclNode alloc] initWithName:n type:u32T initialiser:e location:loc];
+    };
+
+    // The sizes, in the order the captures list them: width, height, depth.
+    BOOL hasD = grid.count == 3;
+    NSMutableArray<XTASTNode*>* decls = [NSMutableArray array];
+    NSMutableArray<NSString*>* sizes = [NSMutableArray arrayWithObjects:@"par$w", @"par$h", nil];
+    [decls addObject:decl(@"par$w", cast(u32T, grid[0]))];
+    [decls addObject:decl(@"par$h", cast(u32T, grid[1]))];
+    // A 3-D grid captures its depth; a 2-D one's is 1, declared in the work
+    // item, so a par$d capture means 3-D (the independence check reads that).
+    if (hasD)
+        {
+        [decls addObject:decl(@"par$d", cast(u32T, grid[2]))];
+        [sizes addObject:@"par$d"];
+        }
+    NSMutableArray* names = frame[@"names"];
+    NSMutableDictionary* types = frame[@"types"];
+    for (NSString* n in sizes)
+        {
+        if (![names containsObject:n])
+            [names addObject:n];
+        types[n] = u32T;
+        }
+
+    // Each work item: its point, from the flat index.
+    NSMutableArray<XTASTNode*>* st = [NSMutableArray array];
+    if ([used containsObject:@"par$x"])
+        [st addObject:decl(@"par$x", bin(XTBinaryOpMod, ident(@"par$i"), ident(@"par$w")))];
+    if ([used containsObject:@"par$y"])
+        [st addObject:decl(@"par$y", bin(XTBinaryOpMod, bin(XTBinaryOpDiv, ident(@"par$i"), ident(@"par$w")),
+                                         ident(@"par$h")))];
+    if (!hasD && [used containsObject:@"par$d"])
+        [st addObject:decl(@"par$d", cast(u32T, [[XTLiteralIntNode alloc] initWithValue:1 location:loc]))];
+    if ([used containsObject:@"par$z"])
+        [st addObject:decl(@"par$z", bin(XTBinaryOpDiv, ident(@"par$i"),
+                                         bin(XTBinaryOpMul, ident(@"par$w"), ident(@"par$h"))))];
+    [st addObjectsFromArray:(*bodyRef).statements];
+    XTBlockNode* item = [[XTBlockNode alloc] initWithStatements:st location:loc];
+
+    // for (u32 par$i in 0..w*h[*d]), counted in i64 at the site.
+    XTASTNode* count = bin(XTBinaryOpMul, cast(i64T, ident(@"par$w")), cast(i64T, ident(@"par$h")));
+    if (hasD)
+        count = bin(XTBinaryOpMul, count, cast(i64T, ident(@"par$d")));
+    XTVariableDeclNode* iv = [[XTVariableDeclNode alloc] initWithName:@"par$i" type:u32T
+                                                          initialiser:cast(u32T, [[XTLiteralIntNode alloc] initWithValue:0 location:loc])
+                                                             location:loc];
+    XTForCStyleNode* loop = [[XTForCStyleNode alloc]
+        initWithLoopInit:iv
+               condition:bin(XTBinaryOpLt, ident(@"par$i"), count)
+               increment:[[XTAssignExprNode alloc] initWithOp:XTAssignOpAdd lhs:ident(@"par$i")
+                                                         rhs:[[XTLiteralIntNode alloc] initWithValue:1 location:loc]
+                                                    location:loc]
+                    body:item
+                location:loc];
+    *bodyRef = [[XTBlockNode alloc] initWithStatements:@[ loop ] location:loc];
+    return decls;
+    }
+
+/****************************************************************************\
 |* `par [name] (:reduce(op var))* { for (T i in a..b) { … } }` → a ParChunk
 |* subclass and its run, the way a block literal becomes a class
 |* (private: docs/Design/par-phase1-plan.md, P3). The class's ivars are the
@@ -922,6 +1103,7 @@ NS_ASSUME_NONNULL_END
                                     at:(XTSourceLocation*)loc
     {
     NSString* label = parName ? [NSString stringWithFormat:@"par %@", parName] : @"par";
+    NSArray<XTASTNode*>* gridDecls = [self parGridLoopFor:&body frame:frame at:loc];
     // ── the loop form: exactly one ascending `for (T i in a..b)` ──
     XTForCStyleNode* loop = body.statements.count == 1 && [body.statements[0] isKindOfClass:[XTForCStyleNode class]]
                                 ? (XTForCStyleNode*)body.statements[0] : nil;
@@ -1261,7 +1443,7 @@ NS_ASSUME_NONNULL_END
 
     // ── the site ──
     NSString* pv = [NSString stringWithFormat:@"$par%lu", (unsigned long)counter];
-    NSMutableArray<XTASTNode*>* site = [NSMutableArray array];
+    NSMutableArray<XTASTNode*>* site = [NSMutableArray arrayWithArray:gridDecls];
     [site addObject:[[XTVariableDeclNode alloc] initWithName:pv type:implPtr
                                                  initialiser:[[XTNewExprNode alloc] initWithClassName:implName
                                                                                             arguments:@[]

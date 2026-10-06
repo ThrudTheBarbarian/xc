@@ -785,6 +785,11 @@ static XTOpInfo operatorInfo(XTTokenType type)
                 return lit;
             return nil;
             }
+        // `par.x` … `par.depth` inside a `par :grid` body: the work item's
+        // position and the grid's size, which the desugaring declares.
+        XTASTNode* gridName = [self parGridMemberAt:loc];
+        if (gridName)
+            return gridName;
         [self advance];
         // If followed by '(' it's a function call. Use match: so a merged
         // (( token splits — otherwise f((x)) loses its opening paren.

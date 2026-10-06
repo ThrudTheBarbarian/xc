@@ -2052,6 +2052,9 @@ class Parser
             advance();
         }
         u32 flags = (u32)0;
+        // :grid(w, h[, d]): the work items are the points of a 2-D or 3-D
+        // grid, and the body is any code, run once per point.
+        Array* grid = (Array*)0;
         while (check((u16)tokColon)) {
             advance();
             if (!check((u16)tokIdentifier)) {
@@ -2059,7 +2062,24 @@ class Parser
                 return (Node*)0;
             }
             String* dec = cur().value();
+            Token* decTok = cur();
             advance();
+            if (dec.equals(String.withCString("grid"))) {
+                if (grid != (Array*)0) {
+                    _errorAt(String.withCString("'par' takes one ':grid'"), parTokNode(decTok));
+                    return (Node*)0;
+                }
+                if (expect((u16)tokLParen) == (Token*)0) return (Node*)0;
+                grid = new Array();
+                grid.add((Object*)parseExpression());
+                while (match((u16)tokComma)) grid.add((Object*)parseExpression());
+                if (expect((u16)tokRParen) == (Token*)0) return (Node*)0;
+                if (grid.count() < (u32)2 || grid.count() > (u32)3) {
+                    _errorAt(String.withCString("':grid' takes a width and a height, and optionally a depth: :grid(w, h) or :grid(w, h, d)"), parTokNode(decTok));
+                    return (Node*)0;
+                }
+                continue;
+            }
             // :goal(speed) (the default) or :goal(accuracy): what the
             // block's GPU version favours.
             if (dec.equals(String.withCString("goal"))) {
@@ -2084,7 +2104,7 @@ class Parser
             if (!dec.equals(String.withCString("reduce"))) {
                 String* m = String.withCString("'par' has no decorator ':");
                 m.append(dec);
-                m.appendCString("' (it takes :reduce(op var) and :goal(speed|accuracy))");
+                m.appendCString("' (it takes :reduce(op var), :grid(w, h[, d]) and :goal(speed|accuracy))");
                 _error(m);
                 return (Node*)0;
             }
@@ -2129,6 +2149,12 @@ class Parser
         frame.set((Hashable*)String.withCString("wbnames"), (Object*)new Array());
         frame.set((Hashable*)String.withCString("par"), (Object*)Number.with((u32)1));
         frame.set((Hashable*)String.withCString("written"), (Object*)new Set());
+        if (grid != (Array*)0) {
+            frame.set((Hashable*)String.withCString("grid"), (Object*)grid);
+            frame.set((Hashable*)String.withCString("gridUsed"), (Object*)new Set());
+            frame.set((Hashable*)String.withCString("loops"), (Object*)Number.with((u32)0));
+            frame.set((Hashable*)String.withCString("switches"), (Object*)Number.with((u32)0));
+        }
         // The speed goal lets the GPU use its fast maths; the desugaring
         // marks the block's GPU placeholder with it.
         if ((flags & (u32)1) == (u32)0)
@@ -2152,6 +2178,186 @@ class Parser
         if (frame.get((Hashable*)String.withCString("par")) == 0) return;
         if (t.kind() != (u16)nkIdent) return;
         ((Set*)frame.get((Hashable*)String.withCString("written"))).add((Hashable*)t.name());
+    }
+
+    // A node at a token, for an error reported there.
+    Node* parTokNode(Token* t)
+    {
+        Node* n = mk((u16)nkPar);
+        if (t != (Token*)0)
+            n.setPos(t.fileId(), t.line(), t.col());
+        return n;
+    }
+
+    // The innermost capture frame when it is a `par :grid` body's, else 0. A
+    // block literal inside the body has its own frame. As the reference.
+    Map* parGridFrame(void)
+    {
+        if (_blkFrames.count() == (u32)0) return (Map*)0;
+        Map* frame = (Map*)_blkFrames.get(_blkFrames.count() - (u32)1);
+        if (frame.get((Hashable*)String.withCString("grid")) == 0) return (Map*)0;
+        return frame;
+    }
+
+    u32 parGridCount(Map* frame, string key)
+    {
+        return ((Number*)frame.get((Hashable*)String.withCString(key))).asU32();
+    }
+
+    // `par.x` … `par.depth` in a `par :grid` body, at the current token:
+    // consumed and returned as the name the desugaring declares; else 0.
+    Node* parGridMember(void)
+    {
+        Map* frame = parGridFrame();
+        if (frame == (Map*)0 || !cur().value().equals(String.withCString("par"))
+            || !checkAt((u32)1, (u16)tokDot) || !checkAt((u32)2, (u16)tokIdentifier))
+            return (Node*)0;
+        Token* at = cur();
+        String* m = peek((u32)2).value();
+        String* n = (String*)0;
+        if (Parser._same(m, "x")) n = String.withCString("par$x");
+        else if (Parser._same(m, "y")) n = String.withCString("par$y");
+        else if (Parser._same(m, "z")) n = String.withCString("par$z");
+        else if (Parser._same(m, "width")) n = String.withCString("par$w");
+        else if (Parser._same(m, "height")) n = String.withCString("par$h");
+        else if (Parser._same(m, "depth")) n = String.withCString("par$d");
+        if (n == (String*)0) {
+            String* msg = String.withCString("a 'par :grid' body has par.x, par.y, par.z, par.width, par.height and par.depth, not par.");
+            msg.append(m);
+            _errorAt(msg, parTokNode(at));
+            n = String.withCString("par$x"); // parsing goes on as if it were par.x
+        }
+        advance();
+        advance();
+        advance();
+        ((Set*)frame.get((Hashable*)String.withCString("gridUsed"))).add((Hashable*)n);
+        Node* id = mkNamed((u16)nkIdent, n);
+        id.setPos(at.fileId(), at.line(), at.col());
+        return id;
+    }
+
+    // Loops and switches entered inside a `par :grid` body.
+    void parGridEnter(string key, bool enter)
+    {
+        Map* frame = parGridFrame();
+        if (frame == (Map*)0) return;
+        u32 n = parGridCount(frame, key);
+        n = enter ? n + (u32)1 : n - (u32)1;
+        frame.set((Hashable*)String.withCString(key), (Object*)Number.with(n));
+    }
+
+    // A `break` outside every loop and switch of a `par :grid` body would end
+    // the whole chunk of work items; `return` ends a work item.
+    void parGridBreak(Token* at)
+    {
+        Map* frame = parGridFrame();
+        if (frame != (Map*)0 && parGridCount(frame, "loops") == (u32)0 && parGridCount(frame, "switches") == (u32)0)
+            _errorAt(String.withCString("'break' would leave the 'par :grid' body; 'return' ends a work item"), parTokNode(at));
+    }
+
+    // `return;` in a `par :grid` body ends the work item: `continue` of the
+    // loop over the grid's points. Refused inside a loop of the body's own.
+    Node* parGridReturn(Node* ret, Token* at)
+    {
+        Map* frame = parGridFrame();
+        if (frame == (Map*)0 || ret == (Node*)0) return ret;
+        if (ret.kidCount() > (u32)0) {
+            _errorAt(String.withCString("a 'par :grid' body returns no value: 'return;' ends the work item"), parTokNode(at));
+            return ret;
+        }
+        if (parGridCount(frame, "loops") > (u32)0) {
+            _errorAt(String.withCString("'return' inside a loop of a 'par :grid' body: 'break' out of the loop and return after it"), parTokNode(at));
+            return ret;
+        }
+        Node* c = mk((u16)nkContinue);
+        c.setPos(at.fileId(), at.line(), at.col());
+        return c;
+    }
+
+    Node* parGridDecl(String* n, Node* e)
+    {
+        Node* d = mkNamed((u16)nkVariableDecl, n);
+        d.setOp(String.withCString("u32"));
+        d.add(e);
+        return d;
+    }
+
+    // A `par :grid(w, h[, d])` body as the loop form: one loop over the w*h*d
+    // points, x fastest, with the point and the grid's size declared at the
+    // top of each work item (only those the body uses). The sizes are
+    // evaluated once, before the block, into locals the body captures: their
+    // declarations are returned for the site, and the new body is left in the
+    // frame as "gridBody". As the reference's parGridLoopFor.
+    Array* parGridLoop(Node* body, Map* frame)
+    {
+        Array* decls = new Array();
+        Array* grid = (Array*)frame.get((Hashable*)String.withCString("grid"));
+        if (grid == (Array*)0) return decls;
+        Set* used = (Set*)frame.get((Hashable*)String.withCString("gridUsed"));
+        String* u32T = String.withCString("u32");
+        String* i64T = String.withCString("i64");
+        bool hasD = grid.count() == (u32)3;
+        Array* sizes = new Array();
+        decls.add((Object*)parGridDecl(String.withCString("par$w"), parCast(u32T, (Node*)grid.get((u32)0))));
+        decls.add((Object*)parGridDecl(String.withCString("par$h"), parCast(u32T, (Node*)grid.get((u32)1))));
+        sizes.add((Object*)String.withCString("par$w"));
+        sizes.add((Object*)String.withCString("par$h"));
+        // A 3-D grid captures its depth; a 2-D one's is 1, declared in the
+        // work item, so a par$d capture means 3-D.
+        if (hasD) {
+            decls.add((Object*)parGridDecl(String.withCString("par$d"), parCast(u32T, (Node*)grid.get((u32)2))));
+            sizes.add((Object*)String.withCString("par$d"));
+        }
+        Array* names = (Array*)frame.get((Hashable*)String.withCString("names"));
+        Map* types = (Map*)frame.get((Hashable*)String.withCString("types"));
+        for (u32 i = (u32)0; i < sizes.count(); i = i + (u32)1) {
+            String* n = (String*)sizes.get(i);
+            bool have = false;
+            for (u32 j = (u32)0; j < names.count(); j = j + (u32)1)
+                if (((String*)names.get(j)).equals(n)) have = true;
+            if (!have) names.add((Object*)n);
+            types.set((Hashable*)n, (Object*)String.withCString("u32"));
+        }
+
+        Node* item = mk((u16)nkBlock);
+        if (used.contains((Hashable*)String.withCString("par$x")))
+            item.add(parGridDecl(String.withCString("par$x"),
+                                 parBin("%", parIdent(String.withCString("par$i")), parIdent(String.withCString("par$w")))));
+        if (used.contains((Hashable*)String.withCString("par$y")))
+            item.add(parGridDecl(String.withCString("par$y"),
+                                 parBin("%", parBin("/", parIdent(String.withCString("par$i")), parIdent(String.withCString("par$w"))),
+                                        parIdent(String.withCString("par$h")))));
+        if (!hasD && used.contains((Hashable*)String.withCString("par$d")))
+            item.add(parGridDecl(String.withCString("par$d"), parCast(u32T, parInt((i64)1))));
+        if (used.contains((Hashable*)String.withCString("par$z")))
+            item.add(parGridDecl(String.withCString("par$z"),
+                                 parBin("/", parIdent(String.withCString("par$i")),
+                                        parBin("*", parIdent(String.withCString("par$w")), parIdent(String.withCString("par$h"))))));
+        for (u32 i = (u32)0; i < body.kidCount(); i = i + (u32)1) item.add(body.kid(i));
+
+        // for (u32 par$i in 0..w*h[*d]), counted in i64 at the site.
+        Node* count = parBin("*", parCast(i64T, parIdent(String.withCString("par$w"))),
+                             parCast(i64T, parIdent(String.withCString("par$h"))));
+        if (hasD) count = parBin("*", count, parCast(i64T, parIdent(String.withCString("par$d"))));
+        Node* f = mk((u16)nkForCStyle);
+        Node* im = mk((u16)nkMarkerInit);
+        im.add(parGridDecl(String.withCString("par$i"), parCast(u32T, parInt((i64)0))));
+        f.add(im);
+        Node* cm = mk((u16)nkMarkerCond);
+        cm.add(parBin("<", parIdent(String.withCString("par$i")), count));
+        f.add(cm);
+        Node* sm = mk((u16)nkMarkerStep);
+        Node* step = mk((u16)nkAssign);
+        step.setOp(String.withCString("+="));
+        step.add(parIdent(String.withCString("par$i")));
+        step.add(parInt((i64)1));
+        sm.add(step);
+        f.add(sm);
+        f.add(item);
+        Node* nb = mk((u16)nkBlock);
+        nb.add(f);
+        frame.set((Hashable*)String.withCString("gridBody"), (Object*)nb);
+        return decls;
     }
 
     // ── par → ParChunk subclass + run (the reference's parDesugarBody) ──
@@ -2231,6 +2437,9 @@ class Parser
     {
         String* label = String.withCString("par");
         if (parName != 0) { label.appendCString(" "); label.append(parName); }
+        Array* gridDecls = parGridLoop(body, frame);
+        if (frame.get((Hashable*)String.withCString("gridBody")) != 0)
+            body = (Node*)frame.get((Hashable*)String.withCString("gridBody"));
         // The loop form: exactly one ascending `for (T i in a..b)`.
         Node* loop = (body.kidCount() == (u32)1 && body.kid((u32)0).kind() == (u16)nkForCStyle) ? body.kid((u32)0) : (Node*)0;
         Node* iv = (Node*)0;
@@ -2558,6 +2767,7 @@ class Parser
         String* pv = String.withCString("$par");
         pv.append(String.withU32(counter));
         Node* site = mk((u16)nkBlock);
+        for (u32 i = (u32)0; i < gridDecls.count(); i = i + (u32)1) site.add((Node*)gridDecls.get(i));
         Node* pd = mkNamed((u16)nkVariableDecl, pv);
         pd.setOp(implPtr);
         Node* nw = mkNamed((u16)nkNew, implName);
@@ -2615,10 +2825,10 @@ class Parser
                     && (checkAt((u32)2, (u16)tokLBrace) || checkAt((u32)2, (u16)tokColon)))))
             return parsePar();
         if (check((u16)tokIf))       return parseIf();
-        if (check((u16)tokWhile))    return parseWhile();
-        if (check((u16)tokFor))      return parseFor();
-        if (check((u16)tokSwitch))   return parseSwitch();
-        if (check((u16)tokReturn))   return parseReturn();
+        if (check((u16)tokWhile))    { parGridEnter("loops", true); Node* n = parseWhile(); parGridEnter("loops", false); return n; }
+        if (check((u16)tokFor))      { parGridEnter("loops", true); Node* n = parseFor(); parGridEnter("loops", false); return n; }
+        if (check((u16)tokSwitch))   { parGridEnter("switches", true); Node* n = parseSwitch(); parGridEnter("switches", false); return n; }
+        if (check((u16)tokReturn))   { Token* rt = cur(); return parGridReturn(parseReturn(), rt); }
         // `defer` takes a BLOCK, as the reference requires: braces keep what
         // is deferred unambiguous, and leave `defer <statement>` free to mean
         // something later. A bare statement was accepted here (bug 596).
@@ -2638,7 +2848,7 @@ class Parser
         if (check((u16)tokTypedef))  return parseTypedef();
         if (check((u16)tokStruct))   return parseStruct(true);
         if (check((u16)tokEnum))     return parseEnum();
-        if (check((u16)tokBreak))    { advance(); expect((u16)tokSemicolon); return mk((u16)nkBreak); }
+        if (check((u16)tokBreak))    { Token* bt = cur(); advance(); expect((u16)tokSemicolon); parGridBreak(bt); return mk((u16)nkBreak); }
         if (check((u16)tokContinue)) { advance(); expect((u16)tokSemicolon); return mk((u16)nkContinue); }
         if (check((u16)tokGoto)) {
             // `goto <label>;` — a C-porting aid (undocumented as a language feature).
@@ -3715,6 +3925,9 @@ class Parser
             // Blocks (task #26): `block [name] RET(params) { body }` in
             // expression position is a literal, desugared to `BlkImpl$N.mk(…)`.
             if (blkAhead()) return blkParseLiteralExpression();
+            // `par.x` … `par.depth` inside a `par :grid` body.
+            Node* gridName = parGridMember();
+            if (gridName != (Node*)0) return gridName;
             // `va_arg(ap, TYPE)` is SUGAR: the second argument is a type, and
             // the original rewrites the call to the typed intrinsic
             // (`va_arg_u16`, `va_arg_ptr`, …) so nothing downstream has to know

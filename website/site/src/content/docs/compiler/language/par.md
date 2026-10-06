@@ -33,6 +33,9 @@ A program that uses `par` imports `Par.xc`, its runtime.
 
 `par [name] (:reduce(op variable))* { for (T i in a..b) { … } }`
 
+or, from the release after 0.71, `par [name] :grid(w, h[, d]) (:reduce(op variable))* { … }`
+over the points of a grid (see [Grids](#grids)).
+
 - The body is **one ascending loop** over a range: `a..b` (up to but not
   including `b`) or `a...b` (including `b`), stepping by one. Each iteration is
   a work item.
@@ -41,6 +44,55 @@ A program that uses `par` imports `Par.xc`, its runtime.
   device; an unnamed block goes by `file:line`.
 - `par` is not a reserved word: it starts a block only where a block can start,
   so a variable called `par` still works.
+
+## Grids
+
+**From the release after 0.71.** `:grid(w, h)` or `:grid(w, h, d)` makes the
+work items the points of a 2-D or 3-D grid, and the body is then any code,
+run once for each point, rather than one loop:
+
+```c
+#import "Par.xc"
+
+#define W 1920
+#define H 1080
+
+u32 image[W * H];
+
+par shade :grid(W, H)
+    {
+    if (par.x == 0 || par.y == 0)
+        {
+        image[par.y * par.width + par.x] = 0;
+        return;
+        }
+    image[par.y * par.width + par.x] = par.x ^ par.y;
+    }
+```
+
+- **`par.x`, `par.y` and `par.z`** are the work item's point, from 0. In a
+  2-D grid `par.z` is 0.
+- **`par.width`, `par.height` and `par.depth`** are the grid's size. In a 2-D
+  grid `par.depth` is 1.
+- The sizes are any integer expressions, worked out once before the block
+  runs. All of these values are `u32`, and a grid has at most 2³² points.
+- **`return;` ends the work item.** It takes no value, and it may not be
+  inside a loop of the body's own, where it would only end that loop. To leave
+  such a loop early, `break` out of it and return after it.
+- `break` and `continue` work inside the body's own loops and switches. A
+  `break` that would leave the body is refused; use `return`.
+- Reductions and `:goal` work as they do for the loop form.
+- Inside a `:grid` body, `par.x` and the others always mean the grid, even
+  where a variable called `par` is in scope.
+
+Points are numbered with `x` changing fastest, so `par.y * par.width + par.x`
+(or `(par.z * par.height + par.y) * par.width + par.x` in 3-D) is the work
+item's own element of a row-major array. The compiler knows that index is
+different for every work item, so writing through it needs no warning (see
+[Independent work items](#independent-work-items)).
+
+A grid block has the same limits as the loop form (see
+[What a body may contain](#what-a-body-may-contain)). It runs on the CPU's threads or on the GPU in the same way.
 
 ## What the body sees
 
@@ -199,6 +251,8 @@ That loop is a scan (a running sum); write it as an ordinary `for` loop.
 
 | The compiler refuses | Because |
 | --- | --- |
-| a body that is not one ascending loop | each work item is one iteration of a range |
+| a body that is not one ascending loop (without `:grid`) | each work item is one iteration of a range |
+| `return` with a value, or inside a loop of the body's own, in a `:grid` body | `return;` ends the work item, and inside a loop it would only end that loop |
+| a `break` that would leave a `:grid` body | `return` ends a work item |
 | assigning a captured scalar | each work item has its own copy; use a reduction or an array |
 | a block without `#import "Par.xc"` | the block needs its runtime |

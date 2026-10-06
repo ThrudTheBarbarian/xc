@@ -310,6 +310,150 @@ typedef struct
         }
     }
 
+// A `par :grid` block's index as a polynomial over its point and size: the
+// atoms are i (the flat index), W and H (the par$w and par$h ivars), x (i % W),
+// q (i / W), y ((i / W) % H) and z (i / (W*H)); a monomial is its atoms sorted
+// and joined by '.', "" the constant. nil when the index is anything else.
+- (nullable NSMutableDictionary<NSString*, NSNumber*>*)gridPoly:(XTIROperand*)op
+                                                             iv:(XTIRValueId)iv
+                                                           self:(XTIRValueId)selfId
+                                                          ivars:(NSArray<NSString*>*)ivars
+                                                           defs:(NSDictionary<NSNumber*, XTIRInsn*>*)def
+                                                          depth:(int)depth
+    {
+    if (depth > 32)
+        return nil;
+    if (op.kind == XTIROperandKindImmI)
+        return [@{@"" : @(op.intValue)} mutableCopy];
+    if (op.kind != XTIROperandKindUse)
+        return nil;
+    if (op.valueId == iv)
+        return [@{@"i" : @1} mutableCopy];
+    XTIRInsn* d = def[@(op.valueId)];
+    if (!d || !d.operands.count)
+        return nil;
+    NSMutableDictionary<NSString*, NSNumber*>* (^sub)(NSUInteger) = ^NSMutableDictionary<NSString*, NSNumber*>*(NSUInteger k) {
+      return k < d.operands.count ? [self gridPoly:d.operands[k] iv:iv self:selfId ivars:ivars defs:def depth:depth + 1]
+                                  : nil;
+    };
+    BOOL (^isAtom)(NSDictionary*, NSString*) = ^BOOL(NSDictionary* p, NSString* a) {
+      return p.count == 1 && [p[a] longLongValue] == 1;
+    };
+    switch (d.opcode)
+        {
+        case XTIROpConst:
+            return d.operands[0].kind == XTIROperandKindImmI ? [@{@"" : @(d.operands[0].intValue)} mutableCopy] : nil;
+        case XTIROpZExt:
+        case XTIROpSExt:
+        case XTIROpTrunc:
+        case XTIROpCopy:
+            return sub(0);
+        case XTIROpLoad:
+            {
+            // An ivar of the block's object: the grid's width or height.
+            XTIRInsn* fa = d.operands[0].kind == XTIROperandKindUse ? def[@(d.operands[0].valueId)] : nil;
+            if (fa.opcode != XTIROpFieldAddr || fa.operands.count < 2 || fa.operands[0].kind != XTIROperandKindUse
+                || fa.operands[0].valueId != selfId || fa.operands[1].kind != XTIROperandKindImmI)
+                return nil;
+            int64_t k = fa.operands[1].intValue;
+            NSString* n = (k >= 1 && (NSUInteger)k <= ivars.count) ? ivars[(NSUInteger)k - 1] : nil;
+            if ([n isEqualToString:@"par$w"])
+                return [@{@"W" : @1} mutableCopy];
+            if ([n isEqualToString:@"par$h"])
+                return [@{@"H" : @1} mutableCopy];
+            return nil;
+            }
+        case XTIROpURem:
+        case XTIROpUDiv:
+            {
+            NSDictionary* a = sub(0);
+            NSDictionary* b = sub(1);
+            if (!a || !b)
+                return nil;
+            if (d.opcode == XTIROpURem && isAtom(a, @"i") && isAtom(b, @"W"))
+                return [@{@"x" : @1} mutableCopy];
+            if (d.opcode == XTIROpURem && isAtom(a, @"q") && isAtom(b, @"H"))
+                return [@{@"y" : @1} mutableCopy];
+            if (d.opcode == XTIROpUDiv && isAtom(a, @"i") && isAtom(b, @"W"))
+                return [@{@"q" : @1} mutableCopy];
+            if (d.opcode == XTIROpUDiv && isAtom(a, @"i") && isAtom(b, @"H.W"))
+                return [@{@"z" : @1} mutableCopy];
+            return nil;
+            }
+        case XTIROpAdd:
+        case XTIROpSub:
+        case XTIROpMul:
+            {
+            NSDictionary<NSString*, NSNumber*>* a = sub(0);
+            NSDictionary<NSString*, NSNumber*>* b = sub(1);
+            if (!a || !b)
+                return nil;
+            NSMutableDictionary<NSString*, NSNumber*>* r = [NSMutableDictionary dictionary];
+            if (d.opcode == XTIROpMul)
+                {
+                for (NSString* ma in a)
+                    for (NSString* mb in b)
+                        {
+                        NSMutableArray* atoms = [NSMutableArray array];
+                        if (ma.length)
+                            [atoms addObjectsFromArray:[ma componentsSeparatedByString:@"."]];
+                        if (mb.length)
+                            [atoms addObjectsFromArray:[mb componentsSeparatedByString:@"."]];
+                        NSString* m = [[atoms sortedArrayUsingSelector:@selector(compare:)] componentsJoinedByString:@"."];
+                        r[m] = @([r[m] longLongValue] + [a[ma] longLongValue] * [b[mb] longLongValue]);
+                        }
+                }
+            else
+                {
+                for (NSString* m in a)
+                    r[m] = a[m];
+                int64_t sign = d.opcode == XTIROpSub ? -1 : 1;
+                for (NSString* m in b)
+                    r[m] = @([r[m] longLongValue] + sign * [b[m] longLongValue]);
+                }
+            for (NSString* m in r.allKeys)
+                if ([r[m] longLongValue] == 0 && m.length)
+                    [r removeObjectForKey:m];
+            return r;
+            }
+        default:
+            return nil;
+        }
+    }
+
+// The index as k*i + c when its polynomial is k times the flat index of the
+// point, plus a constant: i itself, or x + W*q, and x + W*y in a 2-D grid
+// (y == q there) or x + W*y + W*H*z in a 3-D one (q == y + H*z). A block with
+// a par$d ivar is 3-D.
+- (XTParIndex)gridIndexOf:(XTIROperand*)op iv:(XTIRValueId)iv self:(XTIRValueId)selfId
+                    ivars:(NSArray<NSString*>*)ivars defs:(NSDictionary<NSNumber*, XTIRInsn*>*)def
+    {
+    XTParIndex no = { NO, 0, 0 };
+    if (![ivars containsObject:@"par$w"])
+        return no;
+    NSMutableDictionary<NSString*, NSNumber*>* p = [self gridPoly:op iv:iv self:selfId ivars:ivars defs:def depth:0];
+    if (!p)
+        return no;
+    int64_t c = [p[@""] longLongValue];
+    [p removeObjectForKey:@""];
+    BOOL threeD = [ivars containsObject:@"par$d"];
+    NSArray<NSArray<NSString*>*>* forms = threeD ? @[ @[ @"i" ], @[ @"W.q", @"x" ], @[ @"H.W.z", @"W.y", @"x" ] ]
+                                                 : @[ @[ @"i" ], @[ @"W.q", @"x" ], @[ @"W.y", @"x" ] ];
+    for (NSArray<NSString*>* form in forms)
+        {
+        if (p.count != form.count)
+            continue;
+        int64_t k = [p[form[0]] longLongValue];
+        BOOL match = k != 0;
+        for (NSString* m in form)
+            if ([p[m] longLongValue] != k)
+                match = NO;
+        if (match)
+            return (XTParIndex){ YES, k, c };
+        }
+    return no;
+    }
+
 static NSString* shownIndex(XTParIndex x)
     {
     if (!x.affine)
@@ -397,6 +541,8 @@ static NSString* shownIndex(XTParIndex x)
             if (!buf)
                 continue;
             XTParIndex x = [self indexOf:ea.operands[1] iv:iv defs:def depth:0];
+            if (!x.affine)
+                x = [self gridIndexOf:ea.operands[1] iv:iv self:selfId ivars:ivars defs:def];
             NSValue* xv = [NSValue valueWithBytes:&x objCType:@encode(XTParIndex)];
             // §4: a write the shapes above do not cover (a scatter, or every
             // item writing one element) is legal but unprovable: a warning,

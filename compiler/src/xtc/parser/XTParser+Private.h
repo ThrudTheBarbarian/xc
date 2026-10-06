@@ -78,6 +78,11 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)blkMarkHoldsWb:(NSString*)name fromInit:(nullable XTASTNode*)init;
 - (NSMutableArray*)blkFrames;
 - (void)parNoteWriteTarget:(nullable XTASTNode*)target;
+- (nullable XTASTNode*)parGridMemberAt:(XTSourceLocation*)loc;
+- (void)parGridLoop:(int)delta;
+- (void)parGridSwitch:(int)delta;
+- (void)parGridBreakAt:(XTSourceLocation*)loc;
+- (nullable XTASTNode*)parGridReturn:(XTReturnNode*)ret;
 - (nullable XTASTNode*)parDesugarBody:(XTBlockNode*)body
                                  frame:(NSDictionary*)frame
                                   name:(nullable NSString*)name

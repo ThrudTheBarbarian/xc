@@ -14119,6 +14119,202 @@ class ClassInfo
         return (String*)ivars.get((u32)(k - (i64)1));
         }
 
+    // A monomial's atoms in byte order: the product's name. As the
+    // reference's sorted '.'-joined atoms (the atoms are one letter each).
+    String* parMono(String* a, String* b)
+        {
+        String* all = String.withString(a);
+        all.append(b);
+        String* out = String.withCString("");
+        u32 n = all.byteLength();
+        Array* used = new Array();
+        for (u32 i = (u32)0; i < n; i = i + (u32)1)
+            used.add((Object*)Number.with((u32)0));
+        for (u32 r = (u32)0; r < n; r = r + (u32)1)
+            {
+            u32 best = n;
+            for (u32 i = (u32)0; i < n; i = i + (u32)1)
+                {
+                if (((Number*)used.get(i)).asU32() != (u32)0)
+                    continue;
+                if (best == n || all.byteAt(i) < all.byteAt(best))
+                    best = i;
+                }
+            used.set(best, (Object*)Number.with((u32)1));
+            out.appendByte(all.byteAt(best));
+            }
+        return out;
+        }
+
+    i64 parCoef(Map* p, String* m)
+        {
+        Number* v = (Number*)p.get((Hashable*)m);
+        return v == (Number*)0 ? (i64)0 : v.asI64();
+        }
+
+    Map* parPoly1(string m, i64 c)
+        {
+        Map* p = new Map();
+        p.set((Hashable*)String.withCString(m), (Object*)Number.with(c));
+        return p;
+        }
+
+    bool parIsAtom(Map* p, string a)
+        {
+        return p.count() == (u32)1 && parCoef(p, String.withCString(a)) == (i64)1;
+        }
+
+    // A `par :grid` block's index as a polynomial over its point and size:
+    // atoms i (the flat index), W and H (the par$w and par$h ivars), x (i % W),
+    // q (i / W), y ((i / W) % H) and z (i / (W*H)); "" is the constant. 0 when
+    // the index is anything else. As the reference's gridPoly.
+    Map* parGridPoly(IROperand* op, IRValue* iv, Array* ivars, Map* def, u32 depth)
+        {
+        if (depth > (u32)32)
+            return (Map*)0;
+        if (op.kind() == (u8)OPK_IMMI)
+            return parPoly1("", op.imm());
+        if (op.kind() != (u8)OPK_USE || op.val() == (IRValue*)0)
+            return (Map*)0;
+        if (op.val().seq() == iv.seq())
+            return parPoly1("i", (i64)1);
+        IRInsn* d = (IRInsn*)def.get((Hashable*)String.withU32(op.val().seq()));
+        if (d == (IRInsn*)0 || d.ops().count() == (u32)0)
+            return (Map*)0;
+        String* o = d.op();
+        IROperand* o0 = (IROperand*)d.ops().get((u32)0);
+        if (o.equals(String.withCString("Const")))
+            return o0.kind() == (u8)OPK_IMMI ? parPoly1("", o0.imm()) : (Map*)0;
+        if (o.equals(String.withCString("ZExt")) || o.equals(String.withCString("SExt")) || o.equals(String.withCString("Trunc")) || o.equals(String.withCString("Copy")))
+            return parGridPoly(o0, iv, ivars, def, depth + (u32)1);
+        if (o.equals(String.withCString("Load")))
+            {
+            // An ivar of the block's object: the grid's width or height.
+            String* n = parBufferOf(op, (IRValue*)0, ivars, def);
+            if (n != (String*)0 && n.equals(String.withCString("par$w")))
+                return parPoly1("W", (i64)1);
+            if (n != (String*)0 && n.equals(String.withCString("par$h")))
+                return parPoly1("H", (i64)1);
+            return (Map*)0;
+            }
+        if (d.ops().count() < (u32)2)
+            return (Map*)0;
+        bool isRem = o.equals(String.withCString("URem"));
+        bool isDiv = o.equals(String.withCString("UDiv"));
+        bool isAdd = o.equals(String.withCString("Add"));
+        bool isSub = o.equals(String.withCString("Sub"));
+        bool isMul = o.equals(String.withCString("Mul"));
+        if (!isRem && !isDiv && !isAdd && !isSub && !isMul)
+            return (Map*)0;
+        Map* a = parGridPoly(o0, iv, ivars, def, depth + (u32)1);
+        Map* b = parGridPoly((IROperand*)d.ops().get((u32)1), iv, ivars, def, depth + (u32)1);
+        if (a == (Map*)0 || b == (Map*)0)
+            return (Map*)0;
+        if (isRem && parIsAtom(a, "i") && parIsAtom(b, "W"))
+            return parPoly1("x", (i64)1);
+        if (isRem && parIsAtom(a, "q") && parIsAtom(b, "H"))
+            return parPoly1("y", (i64)1);
+        if (isDiv && parIsAtom(a, "i") && parIsAtom(b, "W"))
+            return parPoly1("q", (i64)1);
+        if (isDiv && parIsAtom(a, "i") && parIsAtom(b, "HW"))
+            return parPoly1("z", (i64)1);
+        if (isRem || isDiv)
+            return (Map*)0;
+        Map* r = new Map();
+        Array* ak = a.allKeys();
+        Array* bk = b.allKeys();
+        if (isMul)
+            {
+            for (u32 i = (u32)0; i < ak.count(); i = i + (u32)1)
+                for (u32 j = (u32)0; j < bk.count(); j = j + (u32)1)
+                    {
+                    String* ma = (String*)ak.get(i);
+                    String* mb = (String*)bk.get(j);
+                    String* m = parMono(ma, mb);
+                    r.set((Hashable*)m, (Object*)Number.with(parCoef(r, m) + parCoef(a, ma) * parCoef(b, mb)));
+                    }
+            }
+        else
+            {
+            for (u32 i = (u32)0; i < ak.count(); i = i + (u32)1)
+                {
+                String* m = (String*)ak.get(i);
+                r.set((Hashable*)m, (Object*)Number.with(parCoef(a, m)));
+                }
+            i64 sign = isSub ? (i64)-1 : (i64)1;
+            for (u32 j = (u32)0; j < bk.count(); j = j + (u32)1)
+                {
+                String* m = (String*)bk.get(j);
+                r.set((Hashable*)m, (Object*)Number.with(parCoef(r, m) + sign * parCoef(b, m)));
+                }
+            }
+        Array* rk = r.allKeys();
+        for (u32 i = (u32)0; i < rk.count(); i = i + (u32)1)
+            {
+            String* m = (String*)rk.get(i);
+            if (m.byteLength() > (u32)0 && parCoef(r, m) == (i64)0)
+                r.remove((Hashable*)m);
+            }
+        return r;
+        }
+
+    // Does the polynomial (without its constant) equal k times one form?
+    i64 parGridForm(Map* p, Array* form)
+        {
+        if (p.count() != form.count())
+            return (i64)0;
+        i64 k = parCoef(p, (String*)form.get((u32)0));
+        if (k == (i64)0)
+            return (i64)0;
+        for (u32 i = (u32)0; i < form.count(); i = i + (u32)1)
+            if (parCoef(p, (String*)form.get(i)) != k)
+                return (i64)0;
+        return k;
+        }
+
+    Array* parForm(string a, string b, string c)
+        {
+        Array* f = new Array();
+        f.add((Object*)String.withCString(a));
+        if (b != (string)0) f.add((Object*)String.withCString(b));
+        if (c != (string)0) f.add((Object*)String.withCString(c));
+        return f;
+        }
+
+    // The index as k*i + c when its polynomial is k times the flat index of
+    // the point plus a constant: i, x + W*q, and x + W*y in a 2-D grid or
+    // x + W*y + W*H*z in a 3-D one (a par$d ivar). As the reference.
+    ParIdx* parGridIndex(IROperand* op, IRValue* iv, Array* ivars, Map* def)
+        {
+        bool hasW = false;
+        bool threeD = false;
+        for (u32 i = (u32)0; i < ivars.count(); i = i + (u32)1)
+            {
+            String* n = (String*)ivars.get(i);
+            if (n.equals(String.withCString("par$w"))) hasW = true;
+            if (n.equals(String.withCString("par$d"))) threeD = true;
+            }
+        if (!hasW)
+            return ParIdx.of(false, (i64)0, (i64)0);
+        Map* p = parGridPoly(op, iv, ivars, def, (u32)0);
+        if (p == (Map*)0)
+            return ParIdx.of(false, (i64)0, (i64)0);
+        i64 c = parCoef(p, String.withCString(""));
+        p.remove((Hashable*)String.withCString(""));
+        Array* forms = new Array();
+        forms.add((Object*)parForm("i", (string)0, (string)0));
+        forms.add((Object*)parForm("Wq", "x", (string)0));
+        if (threeD) forms.add((Object*)parForm("HWz", "Wy", "x"));
+        else forms.add((Object*)parForm("Wy", "x", (string)0));
+        for (u32 i = (u32)0; i < forms.count(); i = i + (u32)1)
+            {
+            i64 k = parGridForm(p, (Array*)forms.get(i));
+            if (k != (i64)0)
+                return ParIdx.of(true, k, c);
+            }
+        return ParIdx.of(false, (i64)0, (i64)0);
+        }
+
     // §4: a read of a buffer the block also writes must be at the element
     // this work item writes. `b[i] = b[i - 1] + …` reads another item's
     // result: that is a scan, not a par. Returns the complaint, or 0.
@@ -14172,6 +14368,8 @@ class ClassInfo
                 if (buf == (String*)0)
                     continue;
                 ParIdx* px = parIndex((IROperand*)ea.ops().get((u32)1), iv, def, (u32)0);
+                if (!px.affine)
+                    px = parGridIndex((IROperand*)ea.ops().get((u32)1), iv, ivars, def);
                 bool af = px.affine; i64 k = px.k; i64 c = px.c;
                 String* form = String.withCString(af ? "1 " : "0 ");
                 form.append(String.withI64(af ? k : (i64)0));
