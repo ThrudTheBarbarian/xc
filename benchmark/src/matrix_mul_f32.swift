@@ -14,7 +14,7 @@ struct MatrixMulF32 {
         }
         var acc: UInt32 = 0
         let t0 = bench_now_us()
-        for r in 0..<400 {
+        for r in 0..<10000 {
             a[r % (m * m)] = Float(UInt32(r) & 15)
             for i in 0..<m {
                 for j in 0..<m {

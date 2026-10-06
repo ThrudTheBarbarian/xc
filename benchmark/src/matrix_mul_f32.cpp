@@ -14,7 +14,7 @@ int main(int argc, char **argv)
         { a[i] = static_cast<float>((i + seed) & 15u); b[i] = static_cast<float>((i ^ seed) & 15u); }
     uint32_t acc = 0;
     int64_t t0 = bench_now_us();
-    for (uint32_t r = 0; r < 400u; r++)
+    for (uint32_t r = 0; r < 10000u; r++)
         {
         a[r % (M * M)] = static_cast<float>(r & 15u);
         for (uint32_t i = 0; i < M; i++)

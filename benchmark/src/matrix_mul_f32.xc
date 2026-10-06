@@ -16,7 +16,7 @@ i32 main(i32 argc, u8** argv)
         { a[i] = (float)((i + seed) & (u32)15); b[i] = (float)((i ^ seed) & (u32)15); }
     u32 acc = (u32)0;
     i64 t0 = bench_now_us();
-    for (u32 r = (u32)0; r < (u32)400; r++)
+    for (u32 r = (u32)0; r < (u32)10000; r++)
         {
         a[r % (u32)(M * M)] = (float)(r & (u32)15);
         for (u32 i = (u32)0; i < (u32)M; i++)
