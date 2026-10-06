@@ -44,6 +44,13 @@
 // runtimes cannot drift. Returns "" for a variable that is not set, never null,
 // so a caller can test the LENGTH and never has to test for nil first.
 u8* _xt_getenv(u8* name);
+#if ARCH_wasm32
+// On wasm32 the loader answers from Node's process.env, or in a browser from
+// the page's globalThis.xccEnv: the value's length (0 when unset), then its
+// bytes into a buffer of that length.
+u32 _xt_env_len(u8* name, u32 n);
+void _xt_env_copy(u8* name, u32 n, u8* dst);
+#endif
 
 protocol PlatformDelegate
     {
@@ -94,8 +101,20 @@ class Platform
     // pretending. A caller that needs a real value must say so itself.
     static String* env(String* name)
         {
-#if ARCH_6502 || ARCH_arm9 || ARCH_m68k || ARCH_wasm32
+#if ARCH_6502 || ARCH_arm9 || ARCH_m68k
         return String.withCString("");
+#elif ARCH_wasm32
+        if (name == 0)
+            return String.withCString("");
+        u32 len = _xt_env_len(name.cString(), name.byteLength());
+        if (len == (u32)0)
+            return String.withCString("");
+        u8* buf = new u8[len + (u32)1];
+        _xt_env_copy(name.cString(), name.byteLength(), buf);
+        buf[len] = (u8)0;
+        String* v = String.withCString(buf);
+        delete buf;
+        return v;
 #else
         if (name == 0)
             return String.withCString("");

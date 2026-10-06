@@ -127,6 +127,11 @@
   const mem8 = () => new Uint8Array(XCC.memory.buffer);
   const cdec = new TextDecoder();
   const cstr = (p) => { const m = mem8(); let e = p; while (m[e]) e++; return cdec.decode(m.subarray(p, e)); };
+  const xccEnvValue = (k) => {
+    const e = isNode ? process.env : (globalThis.xccEnv || cfg.env || {});
+    const v = e[k];
+    return v === undefined || v === null ? undefined : String(v);
+  };
   const argvCache = new Map();
   const argvPtr = (i, s) => {
     const key = i < 0 ? -1 : i;
@@ -220,6 +225,16 @@
     _xm_ceil: Math.ceil,  _xm_ceilf: (x) => Math.fround(Math.ceil(x)),
     _xm_fabs: Math.abs,   _xm_fabsf: (x) => Math.fround(Math.abs(x)),
     _xm_fmod: (a, b) => a % b, _xm_fmodf: (a, b) => Math.fround(a % b),
+    // The environment (Platform.env): Node's, or in a browser the page's
+    // globalThis.xccEnv. The value's UTF-8 length, then its bytes.
+    _xt_env_len: (p, n) => {
+      const v = xccEnvValue(cdec.decode(mem8().subarray(p, p + n)));
+      return v === undefined ? 0 : new TextEncoder().encode(v).length;
+    },
+    _xt_env_copy: (p, n, dst) => {
+      const v = xccEnvValue(cdec.decode(mem8().subarray(p, p + n)));
+      if (v !== undefined) mem8().set(new TextEncoder().encode(v), dst);
+    },
     clock_gettime: (clk, ts) => {
       const ns = BigInt(Math.round(performance.now() * 1e6));
       const dv = new DataView(XCC.memory.buffer);
@@ -389,7 +404,85 @@
   } else {
     bytes = await (await fetch("__BASE__.wasm")).arrayBuffer();
   }
-  const { instance } = await WebAssembly.instantiate(bytes, imports);
+  // `par` blocks on the GPU (ParWebGpu.xc): WebGPU through JSPI. The import
+  // suspends the module until the GPU is done, so main runs as a promise.
+  // Without WebGPU or JSPI it answers 0 at once, and the block runs on the CPU.
+  const gpuJspi = typeof WebAssembly.Suspending === "function" && typeof WebAssembly.promising === "function" &&
+                  typeof navigator !== "undefined" && !!navigator.gpu;
+  let gpuDevice = null, gpuTried = false;
+  const gpuKernels = new Map();   // kernel address -> { pipeline, layout } or null
+  const gpuRun = async (src, n, desc, nb, groups) => {
+    if (!gpuTried) {
+      gpuTried = true;
+      try {
+        const a = await navigator.gpu.requestAdapter();
+        gpuDevice = a ? await a.requestDevice() : null;
+      } catch (e) { gpuDevice = null; }
+    }
+    const dev = gpuDevice;
+    if (!dev) return 0;
+    let k = gpuKernels.get(src);
+    if (k === undefined) {
+      const text = cdec.decode(mem8().subarray(src, src + n));
+      const code = text.slice(text.indexOf("\n") + 1);
+      const module = dev.createShaderModule({ code });
+      const info = await module.getCompilationInfo();
+      const errors = info.messages.filter((m) => m.type === "error");
+      if (errors.length) {
+        console.error("xcc: a par kernel's WGSL did not build:\n" +
+                      errors.map((m) => `${m.lineNum}:${m.linePos} ${m.message}`).join("\n"));
+        k = null;
+      } else {
+        const entries = [];
+        for (let i = 0; i < nb; i++)
+          entries.push({ binding: i, visibility: GPUShaderStage.COMPUTE,
+                         buffer: { type: i < 2 ? "read-only-storage" : "storage" } });
+        const layout = dev.createBindGroupLayout({ entries });
+        const pipeline = dev.createComputePipeline({
+          layout: dev.createPipelineLayout({ bindGroupLayouts: [layout] }),
+          compute: { module, entryPoint: "main" } });
+        k = { pipeline, layout };
+      }
+      gpuKernels.set(src, k);
+    }
+    if (!k) return -1;
+    const dv = new DataView(XCC.memory.buffer);
+    const bufs = [], back = [];
+    for (let i = 0; i < nb; i++) {
+      const ptr = dv.getUint32(desc + 12 * i, true), len = dv.getUint32(desc + 12 * i + 4, true);
+      const wb = dv.getUint32(desc + 12 * i + 8, true);
+      const size = Math.max(4, (len + 3) & ~3);   // whole words: narrow arrays are read a word at a time
+      const b = dev.createBuffer({ size, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
+      const tmp = new Uint8Array(size);
+      tmp.set(mem8().subarray(ptr, ptr + len));
+      dev.queue.writeBuffer(b, 0, tmp);
+      bufs.push(b);
+      if (wb) back.push({ b, r: dev.createBuffer({ size, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }),
+                          ptr, len, size });
+    }
+    const group = dev.createBindGroup({ layout: k.layout,
+                                        entries: bufs.map((b, i) => ({ binding: i, resource: { buffer: b } })) });
+    const enc = dev.createCommandEncoder();
+    const pass = enc.beginComputePass();
+    pass.setPipeline(k.pipeline);
+    pass.setBindGroup(0, group);
+    // At most 65535 workgroups a dimension: rows of 65535 (the kernel's tid).
+    pass.dispatchWorkgroups(Math.min(groups, 65535), Math.ceil(groups / 65535));
+    pass.end();
+    for (const x of back) enc.copyBufferToBuffer(x.b, 0, x.r, 0, x.size);
+    dev.queue.submit([enc.finish()]);
+    for (const x of back) {
+      await x.r.mapAsync(GPUMapMode.READ);
+      mem8().set(new Uint8Array(x.r.getMappedRange(), 0, x.len), x.ptr);
+      x.r.unmap();
+      x.r.destroy();
+    }
+    for (const b of bufs) b.destroy();
+    return 1;
+  };
+  imports.xcgpu = { _xc_gpu_run: gpuJspi ? new WebAssembly.Suspending(gpuRun) : () => 0 };
+  const { instance, module: wasmModule } = await WebAssembly.instantiate(bytes, imports);
+  const usesGpu = gpuJspi && WebAssembly.Module.imports(wasmModule).some((m) => m.module === "xcgpu");
   // A per-module handle. This used to be ONLY `globalThis.xcc`, so loading a
   // second independent module clobbered the first — and the clobber was not
   // cosmetic: the callbacks below read `XCC.memory`, so module A's
@@ -455,7 +548,7 @@
   // libraries it imports, so it goes in `order`: those are relocated first.
   for (const d of order) depExports[d].__wasm_apply_relocs();
   if (order.length) instance.exports.__stack_low.value = (dcur + 15) & ~15;
-  const rc = instance.exports.main();
+  const rc = usesGpu ? await WebAssembly.promising(instance.exports.main)() : instance.exports.main();
   flush();
   if (isNode) process.exitCode = rc | 0;
   else if (isWorker) self.postMessage({ xccExit: rc | 0 });

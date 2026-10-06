@@ -7,13 +7,25 @@
 // which says where the block object keeps lo, hi, each captured array, each
 // global it uses and each reduction. The GPU runtimes share all of it, and
 // differ only in how they compile a kernel, move the data and launch.
+#if ARCH_wasm32
+// No C library on wasm32: the bytes, one at a time (reduction partials are small).
+pointer memcpy(pointer dst, pointer src, u64 n)
+    {
+    u8* d = (u8*)dst;
+    u8* s = (u8*)src;
+    for (u64 i = (u64)0; i < n; i = i + (u64)1)
+        d[i] = s[i];
+    return dst;
+    }
+#else
 pointer memcpy(pointer dst, pointer src, u64 n);
+#endif
 
 #if ARCH_win64
 i32 QueryPerformanceCounter(i64* count);
 i32 QueryPerformanceFrequency(i64* perSecond);
-#elif ARCH_x86_64
-// Linux's monotonic clock.
+#elif ARCH_x86_64 || ARCH_wasm32
+// Linux's monotonic clock (on wasm32, the loader's, in the same form).
 struct _ParTimespec { i64 sec; i64 nsec; }
 i32 clock_gettime(i32 clock, u8* ts);
 #else
@@ -93,7 +105,7 @@ class ParDevice
         QueryPerformanceCounter(&c);
         QueryPerformanceFrequency(&f);
         return (c / f) * (i64)1000000 + (c % f) * (i64)1000000 / f;
-#elif ARCH_x86_64
+#elif ARCH_x86_64 || ARCH_wasm32
         _ParTimespec ts;
         clock_gettime((i32)1, (u8*)&ts);   // CLOCK_MONOTONIC on Linux
         return ts.sec * (i64)1000000 + ts.nsec / (i64)1000;

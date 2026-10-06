@@ -72,6 +72,7 @@ static NSString* shownName(NSString* irName)
 static BOOL gEmitsMetal = NO;
 static BOOL gEmitsPTX = NO;
 static BOOL gEmitsSPIRV = NO;
+static BOOL gEmitsWGSL = NO;
 
 + (void)setEmitsMetal:(BOOL)on
     {
@@ -81,6 +82,11 @@ static BOOL gEmitsSPIRV = NO;
 + (void)setEmitsPTX:(BOOL)on
     {
     gEmitsPTX = on;
+    }
+
++ (void)setEmitsWGSL:(BOOL)on
+    {
+    gEmitsWGSL = on;
     }
 
 + (void)setEmitsSPIRV:(BOOL)on
@@ -120,6 +126,7 @@ static BOOL gEmitsSPIRV = NO;
             {
             NSString* text = gEmitsMetal ? [XTIRParMSL sourceForKernel:f module:module fast:fast why:&why]
                            : gEmitsPTX   ? [XTIRParMSL ptxForKernel:f module:module fast:fast why:&why]
+                           : gEmitsWGSL  ? [XTIRParMSL wgslForKernel:f module:module fast:fast why:&why]
                                          : @"";
             kernel = [text dataUsingEncoding:NSUTF8StringEncoding];
             }

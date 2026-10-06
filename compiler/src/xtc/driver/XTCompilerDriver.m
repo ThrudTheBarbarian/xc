@@ -1839,6 +1839,8 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     // Vulkan on x86-64 Linux, in a program that can load it (-dynamic, which
     // the driver passes on as LINK_DYNAMIC): a static one gets no kernels.
     [XTIRParCheck setEmitsSPIRV:(_options.useX86_64Backend && _options.defines[@"LINK_DYNAMIC"] != nil)];
+    // WGSL for WebGPU on wasm32 (the browser's GPU, through the loader).
+    [XTIRParCheck setEmitsWGSL:_options.useWasm32Backend];
     mod = [XTIRLowering lowerProgram:ast
                           moduleName:modName
                          diagnostics:_diagnostics

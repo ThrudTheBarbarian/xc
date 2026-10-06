@@ -65,6 +65,7 @@ typedef NS_ENUM(uint8_t, XTParSpace) {
 
 @interface XTIRParMSL (Analysis)
 - (nullable XTIRType*)typeOf:(XTIRValueId)v;
+- (NSString*)name:(XTIRValueId)v;
 - (NSInteger)selfFieldOf:(XTIROperand*)op;
 - (BOOL)analyse;
 - (void)because:(NSString*)why;

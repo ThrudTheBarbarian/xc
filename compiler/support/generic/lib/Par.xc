@@ -28,6 +28,9 @@
 #if ARCH_win64
 #import "ParCuda.xc"
 #endif
+#if ARCH_wasm32
+#import "ParWebGpu.xc"
+#endif
 
 // Two C strings equal: how a block's generated gpuGlobal() finds a global by
 // the name its Metal kernel gives it.
@@ -99,10 +102,13 @@ class Par
         {
         if (hi <= lo)
             return;
-#if (ARCH_arm64 && !PLATFORM_ios && !PLATFORM_android) || ARCH_x86_64
+#if (ARCH_arm64 && !PLATFORM_ios && !PLATFORM_android) || ARCH_x86_64 || ARCH_wasm32
         if (ParDevice.choose(proto, hi - lo) == (i32)2)
             {
-#if ARCH_win64
+#if ARCH_wasm32
+            if (ParWebGpu.run(proto, proto.gpuSource(), lo, hi))
+                return;
+#elif ARCH_win64
             if (ParCuda.run(proto, proto.gpuSource(), lo, hi))
                 return;
 #elif ARCH_x86_64
@@ -127,7 +133,7 @@ class Par
     // the choice in its Settings passes it on here; XC_PAR overrides all.
     static void device(u8* block, u8* choice)
         {
-#if (ARCH_arm64 && !PLATFORM_ios && !PLATFORM_android) || ARCH_x86_64
+#if (ARCH_arm64 && !PLATFORM_ios && !PLATFORM_android) || ARCH_x86_64 || ARCH_wasm32
         ParDevice.setDevice(block, choice);
 #endif
         }

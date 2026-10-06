@@ -21,6 +21,7 @@ NS_ASSUME_NONNULL_BEGIN
 + (void)setEmitsMetal:(BOOL)on;
 + (void)setEmitsPTX:(BOOL)on;
 + (void)setEmitsSPIRV:(BOOL)on;
++ (void)setEmitsWGSL:(BOOL)on;
 
 // NO when a block broke a rule; each such block has an error in `diag`.
 + (BOOL)checkModule:(XTIRModule*)module

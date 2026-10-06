@@ -1077,7 +1077,9 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
             uint32_t a = [self value:i.operands[0] type:st];
             if (!a || st.byteWidth != rt.byteWidth || ![self spvType:rt])
                 return NO;
-            [self setResult:i to:[self emit:SpvOpBitcast type:[self spvType:rt] args:@[ @(a) ]]];
+            // A narrow result is re-wrapped to its own form: (u8) of a negative
+            // i8 keeps only the low byte (both live sign- or zero-extended in 32).
+            [self setResult:i to:[self spvCanon:[self emit:SpvOpBitcast type:[self spvType:rt] args:@[ @(a) ]] type:rt]];
             return YES;
             }
         case XTIROpLoad:

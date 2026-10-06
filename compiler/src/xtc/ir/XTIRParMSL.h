@@ -38,6 +38,13 @@ NS_ASSUME_NONNULL_BEGIN
                                why:(NSString* _Nullable* _Nullable)why;
 @end
 
+@interface XTIRParMSL (WGSL)
+// The kernel in WGSL for WebGPU (wasm32): the header line (ending ` wgsl`,
+// then ` fast` for a speed block), then the WGSL text.
++ (nullable NSString*)wgslForKernel:(XTIRFunction*)run module:(XTIRModule*)module fast:(BOOL)fast
+                                why:(NSString* _Nullable* _Nullable)why;
+@end
+
 @interface XTIRParMSL (PTX)
 + (nullable NSString*)ptxForKernel:(XTIRFunction*)run module:(XTIRModule*)module fast:(BOOL)fast
                                 why:(NSString* _Nullable* _Nullable)why;

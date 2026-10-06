@@ -1,6 +1,7 @@
 //xtc-flags: target=arm64
 //xtc-na: wasm32 — no wasm threads (see threads_cond_sem.xc)
 //xtc-warn: because it uses double, which Apple GPUs do not have
+//xtc-warn: because it uses a captured value its Vulkan version cannot hold
 // par_gpu_subset.xc — what a `par` body MAY do (par-blocks.md §2): call
 // helpers that stay in the subset (transitively), use the maths intrinsics,
 // read a global, write a global ARRAY element by element, use a struct and a

@@ -825,6 +825,8 @@ class FeOptions
             if (((String*)o.defs().get(i)).hasPrefix(String.withCString("LINK_DYNAMIC")))
                 linkDynamic = true;
         lower.setParSPIRV(o.target().equals(String.withCString("x86_64")) && linkDynamic);
+        // WGSL for WebGPU on wasm32 (the browser's GPU, through the loader).
+        lower.setParWGSL(o.target().equals(String.withCString("wasm32")));
         lower.setVtable(sema.vtable());
         IRModule* mod = lower.run(program, moduleNameOf(o.input()));
         o.setCallSites(lower.callSites());
