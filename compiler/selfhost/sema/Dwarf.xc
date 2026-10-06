@@ -25,6 +25,7 @@
 // and is NOT here yet; `Iface.read` says so rather than pretending.
 #import "Foundation.xc"
 #import "Files.xc"
+#import "Coder.xc"   // inflate and CRC-32, for distributions' debug files
 #import "Node.xc"
 
 // ── tags, attributes, forms ──────────────────────────────────────────────
@@ -504,6 +505,23 @@ class DwCur
                 return false;
             _soname = readSoname(path.lastPathComponent());
             readDynsymExports();
+            // A distribution's library is stripped: its DWARF is a separate
+            // file under /usr/lib/debug, found by build ID or .gnu_debuglink
+            // as gdb finds it. The names above stay the library's own. As the
+            // reference.
+            if (_sections.get((Hashable*)String.withCString(".debug_info")) == (Object*)0)
+                {
+                String* dbg = elfDebugFileFor(path);
+                Data* dd = dbg != (String*)0 ? Files.readData(dbg) : (Data*)0;
+                if (dd != (Data*)0 && dd.length() >= (u32)64)
+                    {
+                    _d = dd;
+                    _elf32 = dd.byteAt((u32)4) == (u8)1;
+                    _sections = new Map();
+                    if (!parseElf())
+                        _sections = new Map();
+                    }
+                }
             }
         else if (looksLikeMachO())
             {
@@ -606,15 +624,20 @@ class DwCur
             u32 nameIdx = r.u32v();
             u32 off = (u32)0;
             u32 size = (u32)0;
+            u32 flags = (u32)0;
             if (_elf32)
                 {
-                r.skip((u32)12);
+                r.skip((u32)4);          // type
+                flags = r.u32v();
+                r.skip((u32)4);          // addr
                 off = r.u32v();
                 size = r.u32v();
                 }
             else
                 {
-                r.skip((u32)20);
+                r.skip((u32)4);          // type
+                flags = r.u64v();
+                r.skip((u32)8);          // addr
                 off = r.u64v();
                 size = r.u64v();
                 }
@@ -626,9 +649,176 @@ class DwCur
             Array* rec = new Array();
             rec.add((Object*)Number.withU32(off));
             rec.add((Object*)Number.withU32(size));
+            rec.add((Object*)Number.withU32(flags));
             _sections.set((Hashable*)nm, (Object*)rec);
             }
+        inflateCompressed();
         return true;
+        }
+
+    // Debug sections compressed in place (SHF_COMPRESSED, as distributions
+    // ship their debug files): each is inflated and appended to the image, and
+    // its entry moved to the inflated bytes. zlib only; a section in another
+    // format, or that fails to inflate, is dropped. As the reference.
+    void inflateCompressed(void)
+        {
+        Data* grown = (Data*)0;
+        Array* names = _sections.allKeys();
+        for (u32 i = (u32)0; i < names.count(); i = i + (u32)1)
+            {
+            String* nm = (String*)names.get(i);
+            Array* rec = (Array*)_sections.get((Hashable*)nm);
+            if (rec.count() < (u32)3 || !nm.hasPrefix(String.withCString(".debug_")))
+                continue;
+            if ((((Number*)rec.get((u32)2)).asU32() & (u32)$800) == (u32)0)
+                continue;
+            u32 off = ((Number*)rec.get((u32)0)).asU32();
+            u32 size = ((Number*)rec.get((u32)1)).asU32();
+            u32 hdr = _elf32 ? (u32)12 : (u32)24;
+            if (off + size > _d.length() || size < hdr + (u32)2)
+                {
+                _sections.remove((Hashable*)nm);
+                continue;
+                }
+            DwCur* c = DwCur.over(_d, (u32)0, _d.length());
+            c.seek(off);
+            u32 chType = c.u32v();
+            u32 chSize = (u32)0;
+            if (_elf32)
+                chSize = c.u32v();
+            else
+                {
+                c.skip((u32)4);
+                chSize = c.u64v();
+                }
+            if (!c.ok() || chType != (u32)1 || chSize == (u32)0 || chSize > (u32)$80000000)
+                {
+                _sections.remove((Hashable*)nm);
+                continue;
+                }
+            // A zlib stream: two header bytes, then raw deflate.
+            CoderInflate* inf = new CoderInflate();
+            u8* src = _d.bytes();
+            inf.run(&src[off + hdr + (u32)2], size - hdr - (u32)2);
+            if (inf._error != (string)0 || inf._len != chSize)
+                {
+                _sections.remove((Hashable*)nm);
+                continue;
+                }
+            if (grown == (Data*)0)
+                grown = Data.withData(_d);
+            u32 at = grown.length();
+            grown.appendBytes(inf._out, inf._len);
+            Array* nrec = new Array();
+            nrec.add((Object*)Number.withU32(at));
+            nrec.add((Object*)Number.withU32(chSize));
+            nrec.add((Object*)Number.withU32((u32)0));
+            _sections.set((Hashable*)nm, (Object*)nrec);
+            }
+        if (grown != (Data*)0)
+            _d = grown;
+        }
+
+    // The separate debug file of a stripped ELF library, as gdb looks for it:
+    // by build ID, <root>/.build-id/xx/yyyy.debug; then by .gnu_debuglink's
+    // name, next to the library, in its .debug directory and under
+    // <root>/<its directory>, only a file whose CRC-32 is the link's. The
+    // roots are $XCC_DEBUG_DIR (colon-separated), else /usr/lib/debug. As the
+    // reference's locateElfDebugFileFor:.
+    Array* debugRoots(void)
+        {
+        Array* roots = new Array();
+        String* env = Platform.env(String.withCString("XCC_DEBUG_DIR"));
+        if (env != (String*)0 && env.byteLength() > (u32)0)
+            {
+            String* cur = new String();
+            for (u32 i = (u32)0; i <= env.byteLength(); i = i + (u32)1)
+                {
+                if (i == env.byteLength() || env.byteAt(i) == (u8)':')
+                    {
+                    if (cur.byteLength() > (u32)0)
+                        roots.add((Object*)cur);
+                    cur = new String();
+                    }
+                else
+                    cur.appendByte(env.byteAt(i));
+                }
+            return roots;
+            }
+        roots.add((Object*)String.withCString("/usr/lib/debug"));
+        return roots;
+        }
+
+    String* hexByte(u32 b)
+        {
+        String* h = new String();
+        u8* digits = "0123456789abcdef";
+        h.appendByte(digits[(b >> (u32)4) & (u32)15]);
+        h.appendByte(digits[b & (u32)15]);
+        return h;
+        }
+
+    String* elfDebugFileFor(String* path)
+        {
+        Array* roots = debugRoots();
+        Array* note = (Array*)_sections.get((Hashable*)String.withCString(".note.gnu.build-id"));
+        if (note != (Array*)0)
+            {
+            u32 off = ((Number*)note.get((u32)0)).asU32();
+            u32 size = ((Number*)note.get((u32)1)).asU32();
+            DwCur* c = DwCur.over(_d, off, size);
+            u32 namesz = c.u32v();
+            u32 descsz = c.u32v();
+            u32 type = c.u32v();
+            c.skip((namesz + (u32)3) & (u32)$FFFFFFFC);
+            if (c.ok() && type == (u32)3 && descsz >= (u32)2 && c.has(descsz))
+                {
+                String* first = hexByte(c.u8v());
+                String* rest = new String();
+                for (u32 i = (u32)1; i < descsz; i = i + (u32)1)
+                    rest.append(hexByte(c.u8v()));
+                for (u32 r = (u32)0; r < roots.count(); r = r + (u32)1)
+                    {
+                    String* f = String.withString((String*)roots.get(r));
+                    f.appendCString("/.build-id/");
+                    f.append(first);
+                    f.appendCString("/");
+                    f.append(rest);
+                    f.appendCString(".debug");
+                    if (Files.exists(f))
+                        return f;
+                    }
+                }
+            }
+        Array* link = (Array*)_sections.get((Hashable*)String.withCString(".gnu_debuglink"));
+        if (link != (Array*)0)
+            {
+            u32 off = ((Number*)link.get((u32)0)).asU32();
+            u32 size = ((Number*)link.get((u32)1)).asU32();
+            String* name = cStringAt(off, off + size);
+            u32 crcAt = off + ((name.byteLength() + (u32)4) & (u32)$FFFFFFFC);
+            if (name.byteLength() > (u32)0 && crcAt + (u32)4 <= off + size && crcAt + (u32)4 <= _d.length())
+                {
+                DwCur* c = DwCur.over(_d, crcAt, (u32)4);
+                u32 want = c.u32v();
+                String* dir = path.deletingLastPathComponent();
+                Array* cands = new Array();
+                cands.add((Object*)dir.appendingPathComponent(name));
+                cands.add((Object*)dir.appendingPathComponent(String.withCString(".debug")).appendingPathComponent(name));
+                for (u32 r = (u32)0; r < roots.count(); r = r + (u32)1)
+                    cands.add((Object*)((String*)roots.get(r)).appendingPathComponent(dir).appendingPathComponent(name));
+                for (u32 i = (u32)0; i < cands.count(); i = i + (u32)1)
+                    {
+                    String* f = (String*)cands.get(i);
+                    if (f.equals(path))
+                        continue;
+                    Data* d = Files.readData(f);
+                    if (d != (Data*)0 && Coder.crc32(d.bytes(), d.length()) == want)
+                        return f;
+                    }
+                }
+            }
+        return (String*)0;
         }
 
     String* cStringAt(u32 off, u32 limit)

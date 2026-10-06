@@ -1,4 +1,5 @@
 #import "XTDwarfReader.h"
+#import <zlib.h>
 #import "XTType.h"
 #import "XTPointerType.h"
 #import "XTStructType.h"
@@ -388,6 +389,23 @@ static NSUInteger safeByteWidth(XTType* t)
             return nil;
         soname = [self readSonameOrDefault:displayName];
         exports = [self readDynsymExports];
+        // A distribution's library is stripped: its DWARF is a separate file
+        // under /usr/lib/debug, found by build ID or by .gnu_debuglink as gdb
+        // finds it. The names above stay the library's own.
+        if (!_sections[@".debug_info"] && _diskPath)
+            {
+            NSString* dbg = [self locateElfDebugFileFor:_diskPath];
+            NSData* dd = dbg ? [NSData dataWithContentsOfFile:dbg] : nil;
+            if (dd && dd.length >= 64)
+                {
+                _image = dd;
+                _bytes = dd.bytes;
+                _len = dd.length;
+                _sections = [NSMutableDictionary dictionary];
+                if (![self parseELF:NULL])
+                    _sections = [NSMutableDictionary dictionary];
+                }
+            }
         }
     else if ([self looksLikeMachO])
         {
@@ -524,12 +542,12 @@ static NSUInteger safeByteWidth(XTType* t)
         Cur s = {_bytes, _bytes + shoff + (uint64_t)i * shentsize, _bytes + _len, _le, YES};
         uint32_t nameIdx = rdU32(&s);
         uint32_t type;
-        uint64_t off, size, link, entsz;
+        uint64_t off, size, link, entsz, flags;
         if (_elfClass == 1)
             {
             type = rdU32(&s);
-            (void)rdU32(&s);
-            (void)rdU32(&s); // flags, addr
+            flags = rdU32(&s);
+            (void)rdU32(&s); // addr
             off = rdU32(&s);
             size = rdU32(&s);
             link = rdU32(&s);
@@ -540,8 +558,8 @@ static NSUInteger safeByteWidth(XTType* t)
         else
             {
             type = rdU32(&s);
-            (void)rdU64(&s);
-            (void)rdU64(&s); // flags, addr
+            flags = rdU64(&s);
+            (void)rdU64(&s); // addr
             off = rdU64(&s);
             size = rdU64(&s);
             link = rdU32(&s);
@@ -549,7 +567,7 @@ static NSUInteger safeByteWidth(XTType* t)
             (void)rdU64(&s);
             entsz = rdU64(&s); // info, align, entsize
             }
-        [raw addObject:@[ @(nameIdx), @(type), @(off), @(size), @(link), @(entsz) ]];
+        [raw addObject:@[ @(nameIdx), @(type), @(off), @(size), @(link), @(entsz), @(flags) ]];
         }
     if (shstrndx >= raw.count)
         return [self failWithError:error message:@"bad shstrndx"];
@@ -563,9 +581,61 @@ static NSUInteger safeByteWidth(XTType* t)
         uint64_t nameIdx = rec[0].unsignedLongLongValue;
         NSString* nm = [self cStringAt:strOff + nameIdx limit:strOff + strSize];
         if (nm.length)
-            _sections[nm] = @[ rec[2], rec[3], rec[4], rec[1], rec[5] ]; // off,size,link,type,entsize
+            _sections[nm] = @[ rec[2], rec[3], rec[4], rec[1], rec[5], rec[6] ]; // off,size,link,type,entsize,flags
         }
+    [self inflateCompressedSections];
     return YES;
+    }
+
+/****************************************************************************\
+|* Debug sections compressed in place (SHF_COMPRESSED, as distributions ship
+|* their separate debug files): each is inflated and appended to the image, and
+|* its section entry moved to the inflated bytes. Only zlib (ELFCOMPRESS_ZLIB)
+|* is read; a section in another format, or that fails to inflate, is dropped,
+|* which leaves the library with less DWARF rather than with garbage.
+\****************************************************************************/
+- (void)inflateCompressedSections
+    {
+    NSMutableData* grown = nil;
+    for (NSString* nm in [_sections.allKeys sortedArrayUsingSelector:@selector(compare:)])
+        {
+        NSArray<NSNumber*>* rec = _sections[nm];
+        if (rec.count < 6 || !(rec[5].unsignedLongLongValue & 0x800) || ![nm hasPrefix:@".debug_"])
+            continue;
+        uint64_t off = rec[0].unsignedLongLongValue, size = rec[1].unsignedLongLongValue;
+        uint64_t hdr = _elfClass == 1 ? 12 : 24;
+        if (off + size > _len || size < hdr)
+            {
+            [_sections removeObjectForKey:nm];
+            continue;
+            }
+        Cur c = {_bytes, _bytes + off, _bytes + off + size, _le, YES};
+        uint32_t chType = rdU32(&c);
+        uint64_t chSize = _elfClass == 1 ? rdU32(&c) : (rdU32(&c), rdU64(&c));
+        if (chType != 1 || chSize == 0 || chSize > ((uint64_t)1 << 31))
+            {
+            [_sections removeObjectForKey:nm];
+            continue;
+            }
+        NSMutableData* out = [NSMutableData dataWithLength:(NSUInteger)chSize];
+        uLongf outLen = (uLongf)chSize;
+        if (uncompress(out.mutableBytes, &outLen, _bytes + off + hdr, (uLong)(size - hdr)) != Z_OK || outLen != chSize)
+            {
+            [_sections removeObjectForKey:nm];
+            continue;
+            }
+        if (!grown)
+            grown = [NSMutableData dataWithData:_image];
+        uint64_t at = grown.length;
+        [grown appendData:out];
+        _sections[nm] = @[ @(at), @(chSize), rec[2], rec[3], rec[4], @(0) ];
+        }
+    if (grown)
+        {
+        _image = grown;
+        _bytes = grown.bytes;
+        _len = grown.length;
+        }
     }
 
 // Read a NUL-terminated ASCII string at absolute file offset `off`, bounded.
@@ -719,6 +789,82 @@ static NSString* normDwarfSectionName(const char* sect)
     NSString* dwarf = [NSString stringWithFormat:@"%@.dSYM/Contents/Resources/DWARF/%@",
                                                  path, path.lastPathComponent];
     return [[NSFileManager defaultManager] fileExistsAtPath:dwarf] ? dwarf : nil;
+    }
+
+/****************************************************************************\
+|* The separate debug file of a stripped ELF library, as gdb looks for it:
+|* by build ID, <root>/.build-id/xx/yyyy.debug; then by .gnu_debuglink's name,
+|* next to the library, in its .debug directory and under <root>/<its
+|* directory>, accepting a file only when its CRC-32 is the one the link
+|* records. The roots are $XCC_DEBUG_DIR (colon-separated) when it is set,
+|* else /usr/lib/debug. nil when there is none.
+\****************************************************************************/
+- (NSArray<NSString*>*)debugRoots
+    {
+    const char* env = getenv("XCC_DEBUG_DIR");
+    if (env && *env)
+        {
+        NSMutableArray<NSString*>* roots = [NSMutableArray array];
+        for (NSString* r in [[NSString stringWithUTF8String:env] componentsSeparatedByString:@":"])
+            if (r.length)
+                [roots addObject:r];
+        return roots;
+        }
+    return @[ @"/usr/lib/debug" ];
+    }
+
+- (nullable NSString*)locateElfDebugFileFor:(NSString*)path
+    {
+    NSFileManager* fm = [NSFileManager defaultManager];
+    NSArray<NSString*>* roots = [self debugRoots];
+    NSArray<NSNumber*>* note = _sections[@".note.gnu.build-id"];
+    if (note)
+        {
+        uint64_t off = note[0].unsignedLongLongValue, size = note[1].unsignedLongLongValue;
+        Cur c = {_bytes, _bytes + off, _bytes + MIN((uint64_t)_len, off + size), _le, YES};
+        uint32_t namesz = rdU32(&c), descsz = rdU32(&c), type = rdU32(&c);
+        c.p += (namesz + 3) & ~3u;
+        if (c.ok && type == 3 && descsz >= 2 && c.p + descsz <= c.end)
+            {
+            NSMutableString* hex = [NSMutableString string];
+            for (uint32_t i = 0; i < descsz; i++)
+                [hex appendFormat:@"%02x", c.p[i]];
+            for (NSString* root in roots)
+                {
+                NSString* f = [NSString stringWithFormat:@"%@/.build-id/%@/%@.debug", root,
+                                                         [hex substringToIndex:2], [hex substringFromIndex:2]];
+                if ([fm fileExistsAtPath:f])
+                    return f;
+                }
+            }
+        }
+    NSArray<NSNumber*>* link = _sections[@".gnu_debuglink"];
+    if (link)
+        {
+        uint64_t off = link[0].unsignedLongLongValue, size = link[1].unsignedLongLongValue;
+        NSString* name = [self cStringAt:off limit:off + size];
+        uint64_t crcAt = off + ((name.length + 4) & ~(uint64_t)3);
+        if (name.length && crcAt + 4 <= off + size && crcAt + 4 <= _len)
+            {
+            Cur c = {_bytes, _bytes + crcAt, _bytes + crcAt + 4, _le, YES};
+            uint32_t want = rdU32(&c);
+            NSString* dir = path.stringByDeletingLastPathComponent;
+            NSMutableArray<NSString*>* cands = [NSMutableArray arrayWithObjects:
+                [dir stringByAppendingPathComponent:name],
+                [[dir stringByAppendingPathComponent:@".debug"] stringByAppendingPathComponent:name], nil];
+            for (NSString* root in roots)
+                [cands addObject:[[root stringByAppendingPathComponent:dir] stringByAppendingPathComponent:name]];
+            for (NSString* f in cands)
+                {
+                if ([f isEqualToString:path])
+                    continue;
+                NSData* d = [NSData dataWithContentsOfFile:f];
+                if (d && crc32(0, d.bytes, (uInt)d.length) == want)
+                    return f;
+                }
+            }
+        }
+    return nil;
     }
 
 // ──────────────────────── .dynamic / .dynsym ─────────────────────────────
@@ -1381,16 +1527,19 @@ static NSString* normDwarfSectionName(const char* sect)
     case DW_ATE_float:
         t = (sz >= 8) ? XTType.doubleType : XTType.floatType;
         break;
+    // An 8-byte integer is 64 bits: a C `long` on LP64 Linux, `long long`,
+    // int64_t. Mapping it to 32 truncated every such return value and field
+    // (private:docs/bugs, 625); the port has always mapped it to 64.
     case DW_ATE_signed:
     case DW_ATE_signed_char:
         t = (sz <= 1) ? XTType.i8Type : (sz == 2) ? XTType.i16Type
-                                                  : XTType.i32Type;
+                                                  : (sz == 8) ? XTType.i64Type : XTType.i32Type;
         break;
     case DW_ATE_unsigned:
     case DW_ATE_unsigned_char:
     default:
         t = (sz <= 1) ? XTType.u8Type : (sz == 2) ? XTType.u16Type
-                                                  : XTType.u32Type;
+                                                  : (sz == 8) ? XTType.u64Type : XTType.u32Type;
         break;
         }
     _typeCache[@(die->offset)] = t;

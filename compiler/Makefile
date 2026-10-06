@@ -6,7 +6,7 @@ VERSION := $(shell cat VERSION 2>/dev/null || echo 0.0)
 
 ifeq ($(UNAME_S),Darwin)
   PLATFORM_OBJCFLAGS = -fmodules -Wnullability-completeness
-  LDFLAGS            = -framework Foundation
+  LDFLAGS            = -framework Foundation -lz
 else
   # Linux — GNUstep; gnustep-config must be on PATH
   ifeq ($(shell which gnustep-config 2>/dev/null),)

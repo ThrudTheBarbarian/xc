@@ -470,6 +470,19 @@ class FeOptions
                         im = new IfaceImport();
                         for (u32 k = (u32)0; k < dw.decls().count(); k = k + (u32)1)
                             im.decls().add(dw.decls().get(k));
+                        // A stripped C library with no separate debug file
+                        // either: every call into it would otherwise fail on
+                        // its own as an undeclared function. As the reference.
+                        if (dw.decls().count() == (u32)0)
+                            {
+                            String* w = String.withCString("xcc: warning: '");
+                            w.append(mp);
+                            w.appendCString("' has no debug information, in the file or in a "
+                                            "separate debug file, so its functions and types are unknown and a call "
+                                            "to one needs a declaration; install the library's debug package "
+                                            "(-dbgsym, -debuginfo) or set XCC_DEBUG_DIR to where its debug files are\n");
+                            Stdio.error(w);
+                            }
                         }
                     }
                 if (im == 0)

@@ -505,8 +505,13 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
             }
         if (iface.functions.count == 0 && iface.types.count == 0)
             {
-            fprintf(stderr, "xcc: warning: '%s' carries no DWARF — imported names are "
-                            "untyped (build the Debug/ variant)\n",
+            // A stripped C library, with no separate debug file either (see
+            // XTDwarfReader's locateElfDebugFileFor:): every call into it
+            // would otherwise fail on its own as an undeclared function.
+            fprintf(stderr, "xcc: warning: '%s' has no debug information, in the file or in a "
+                            "separate debug file, so its functions and types are unknown and a call "
+                            "to one needs a declaration; install the library's debug package "
+                            "(-dbgsym, -debuginfo) or set XCC_DEBUG_DIR to where its debug files are\n",
                     p.UTF8String);
             }
         [out addObject:iface];
