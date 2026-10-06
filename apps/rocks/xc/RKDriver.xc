@@ -31,12 +31,18 @@
 // hostgem's GEM, the real desktop and AES running natively on the host (frameworks/uxkit/hostgem),
 // which is how Rocks is run on GEM without the board (run_rocks_gem.sh).  Nested for the same reason.
 //
+// RK_GTK (-D RK_GTK) builds the GTK branch on the Mac, against the host's GTK 4, so the Linux
+// editor can be tried and tested without the Linux host (run_rocks_gtk.sh).  Nested the same way.
+//
 // RK_IOS and RK_ANDROID are the mobile builds.  To the compiler both are plain arm64 (an ios-sim or
 // android build defines nothing of its own), so they are flags like RK_HOSTGEM, set by
 // run_rocks_ios.sh and run_rocks_android.sh, and nested ahead of the arm64 = AppKit branch.  On
 // both the platform owns the loop: app.run() hands over to it and the delegate starts from there.
 #ifdef RK_HOSTGEM
 #import "UXGemDriver.xc"
+#else
+#ifdef RK_GTK
+#import "UXGtkDriver.xc"
 #else
 #ifdef RK_IOS
 #import "UXIosDriver.xc"
@@ -63,6 +69,7 @@
 #import "UXGtkDriver.xc"
 #endif
 #endif
+#endif
 #import "UXApplication.xc"
 
 class RKDriver : Object
@@ -79,6 +86,13 @@ class RKDriver : Object
         i32 hw = (i32)0;
         i32 hh = (i32)0;
         return hg.boot(&hw, &hh);
+#else
+#ifdef RK_GTK
+        UXGtkDriver* gk = new UXGtkDriver();
+        gDriver = gk;
+        i32 kw = (i32)0;
+        i32 kh = (i32)0;
+        return gk.boot(&kw, &kh);
 #else
 #ifdef RK_IOS
         gDriver = new UXIosDriver(); // app.run() boots it and enters UIApplicationMain
@@ -128,6 +142,7 @@ class RKDriver : Object
         return xd.boot(&xw, &xh);
 #endif
 #endif
+#endif
         }
 
     // Whether the main window is the whole screen: a phone's or a tablet's app has one window,
@@ -149,6 +164,9 @@ class RKDriver : Object
 #ifdef RK_HOSTGEM
         return (u8*)"GEM";
 #else
+#ifdef RK_GTK
+        return (u8*)"GTK";
+#else
 #ifdef RK_IOS
         return (u8*)"iOS";
 #else
@@ -163,6 +181,7 @@ class RKDriver : Object
 #endif
 #ifdef ARCH_wasm32
         return (u8*)"the web";
+#endif
 #endif
 #endif
 #endif
