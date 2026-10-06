@@ -176,6 +176,200 @@ i32 w32HandleOf(pointer hwnd)
     return (i32)0;
     }
 
+// ---- drags, drops, context menus and the drag line ---------------------------------------------
+pointer gW32TreeOf[64];        // handle -> the shadow tree realizeTree last saw, for hit tests
+i32 gW32MinW[64];              // handle -> the smallest content size (setMinimumSize), 0 = none
+i32 gW32MinH[64];
+pointer gW32LineWin[64];       // handle -> its line window (a click-through layer over the content)
+i32 gW32LineV[512];            // handle * 8: x0 y0 x1 y1, then the framed rect
+i32 gW32LineClass;
+i32 gW32LineOn[64];            // handle -> whether its line is up
+i32 gW32MenuTestPick = (i32)-2; // a test's answer for the next pop-up menu (-2: show it)
+u8 gW32MenuTestTitles[512];
+
+// The app's window a child window is in: its handle, and its HWND into top.
+i32 w32TopHandle(pointer hwnd, pointer* top)
+    {
+    pointer h = hwnd;
+    while (h != (pointer)0)
+        {
+        i32 k = w32HandleOf(h);
+        if (k != (i32)0)
+            {
+            top[0] = h;
+            return k;
+            }
+        h = GetParent(h);
+        }
+    return (i32)0;
+    }
+// A row dragged out of a list or a tree, from (sx, sy) in src's client coords: the mouse is held
+// until the button comes up, every move is reported to the app as a hover in the window's content
+// coords, and the release as a drop there.  A tree's drag first reports where it began, so a line
+// can start at the row, and the tree row under the pointer is highlighted as a drop target.
+void w32RowDrag(pointer src, bool isTree, u8* text, bool right, i32 sx, i32 sy)
+    {
+    pointer top = (pointer)0;
+    i32 handle = w32TopHandle(src, &top);
+    if (handle == (i32)0 || gApp == (UXApplication*)0 || text == (u8*)0)
+        {
+        return;
+        }
+    POINT p;
+    p.x = sx;
+    p.y = sy;
+    ClientToScreen(src, (pointer)&p);
+    ScreenToClient(top, (pointer)&p);
+    if (isTree)
+        {
+        gApp.deliverItemHover(text, handle, p.x, p.y);
+        }
+    SetCapture(top);
+    MSG m;
+    bool drop = false;
+    pointer lit = (pointer)0;
+    i32 ex = (i32)0;
+    i32 ey = (i32)0;
+    while (GetMessageA((pointer)&m, (pointer)0, (u32)0, (u32)0) > (i32)0)
+        {
+        if (m.message == (u32)WM_MOUSEMOVE)
+            {
+            // captured, the move's point is in top's client coords (signed 16-bit halves)
+            POINT q;
+            q.x = (i32)(i16)((u32)m.lParam & (u32)$FFFF);
+            q.y = (i32)(i16)(((u32)m.lParam >> (u32)16) & (u32)$FFFF);
+            if (isTree)
+                {
+                POINT tq;
+                tq.x = q.x;
+                tq.y = q.y;
+                ClientToScreen(top, (pointer)&tq);
+                ScreenToClient(src, (pointer)&tq);
+                TVHITTESTINFO hi;
+                hi.ptx = tq.x;
+                hi.pty = tq.y;
+                hi.flags = (u32)0;
+                hi.hItem = (pointer)0;
+                pointer it = SendMessageA(src, (u32)TVM_HITTEST, (pointer)0, (pointer)&hi);
+                if (it != lit)
+                    {
+                    SendMessageA(src, (u32)TVM_SELECTITEM, (pointer)TVGN_DROPHILITE, it);
+                    lit = it;
+                    }
+                }
+            gApp.deliverItemHover(text, handle, q.x, q.y);
+            continue;
+            }
+        if (m.message == (right ? (u32)WM_RBUTTONUP : (u32)WM_LBUTTONUP))
+            {
+            ex = (i32)(i16)((u32)m.lParam & (u32)$FFFF);
+            ey = (i32)(i16)(((u32)m.lParam >> (u32)16) & (u32)$FFFF);
+            drop = true;
+            break;
+            }
+        if (m.message == (u32)WM_KEYDOWN && (u32)m.wParam == (u32)VK_ESCAPE)
+            {
+            break;
+            }
+        TranslateMessage((pointer)&m);
+        DispatchMessageA((pointer)&m);
+        }
+    ReleaseCapture();
+    if (isTree)
+        {
+        SendMessageA(src, (u32)TVM_SELECTITEM, (pointer)TVGN_DROPHILITE, (pointer)0);
+        }
+    gApp.deliverItemHover(text, handle, (i32)-1, (i32)-1);
+    if (drop)
+        {
+        gApp.deliverItemDrop(text, handle, ex, ey);
+        }
+    }
+// Whether two C strings are the same.
+bool w32Same(u8* a, u8* b)
+    {
+    i32 i = (i32)0;
+    while (a[i] != (u8)0 && a[i] == b[i])
+        {
+        i = i + (i32)1;
+        }
+    return a[i] == b[i];
+    }
+// A native control's text, made `s` if it says something else: a title changed after it was made.
+void w32SyncText(pointer c, u8* s)
+    {
+    if (c == (pointer)0 || s == (u8*)0)
+        {
+        return;
+        }
+    u8 buf[256];
+    GetWindowTextA(c, (pointer)&buf[0], (i32)256);
+    if (!w32Same(&buf[0], s))
+        {
+        SetWindowTextA(c, (pointer)s);
+        }
+    }
+// The line window's paint: the colour key everywhere (so the layer is clear), then the S-curve, a
+// frame round the target and a dot at the pointer.
+pointer UXLine32Proc(pointer hwnd, u32 msg, pointer wp, pointer lp)
+    {
+    if (msg == (u32)WM_PAINT)
+        {
+        i32 h = (i32)GetWindowLongPtrA(hwnd, (i32)GWLP_USERDATA);
+        PAINTSTRUCT ps;
+        pointer dc = BeginPaint(hwnd, (pointer)&ps);
+        RECT rc;
+        GetClientRect(hwnd, (pointer)&rc);
+        pointer key = CreateSolidBrush((u32)$00FF00FF);
+        FillRect(dc, (pointer)&rc, key);
+        DeleteObject(key);
+        i32* L = &gW32LineV[h * (i32)8];
+        pointer pen = CreatePen((i32)PS_SOLID, (i32)2, (u32)$00F27326); // RGB(38, 115, 242), as BGR
+        pointer oldPen = SelectObject(dc, pen);
+        pointer oldBrush = SelectObject(dc, GetStockObject((i32)NULL_BRUSH));
+        if (L[6] > (i32)0 && L[7] > (i32)0)
+            {
+            Rectangle(dc, L[4] - (i32)1, L[5] - (i32)1, L[4] + L[6] + (i32)1, L[5] + L[7] + (i32)1);
+            }
+        i32 dx = L[2] - L[0];
+        i32 ad = dx < (i32)0 ? (i32)0 - dx : dx;
+        i32 k = ad / (i32)2 > (i32)30 ? ad / (i32)2 : (i32)30;
+        i32 dir = dx < (i32)0 ? (i32)-1 : (i32)1;
+        POINT pts[3];
+        pts[0].x = L[0] + dir * k;
+        pts[0].y = L[1];
+        pts[1].x = L[2] - dir * k;
+        pts[1].y = L[3];
+        pts[2].x = L[2];
+        pts[2].y = L[3];
+        MoveToEx(dc, L[0], L[1], (pointer)0);
+        PolyBezierTo(dc, (pointer)&pts[0], (u32)3);
+        SelectObject(dc, oldBrush);
+        pointer dotBrush = CreateSolidBrush((u32)$00F27326);
+        pointer prevBrush = SelectObject(dc, dotBrush);
+        Ellipse(dc, L[2] - (i32)3, L[3] - (i32)3, L[2] + (i32)4, L[3] + (i32)4);
+        SelectObject(dc, prevBrush);
+        DeleteObject(dotBrush);
+        SelectObject(dc, oldPen);
+        DeleteObject(pen);
+        EndPaint(hwnd, (pointer)&ps);
+        return (pointer)0;
+        }
+    return DefWindowProcA(hwnd, msg, wp, lp);
+    }
+// For tests: whether window `handle`'s line is up, and its far end.
+i32 w32TestLine(i32 handle, i32* x1, i32* y1)
+    {
+    pointer lw = handle > (i32)0 && handle < (i32)64 ? gW32LineWin[handle] : (pointer)0;
+    if (lw == (pointer)0 || gW32LineOn[handle] == (i32)0)
+        {
+        return (i32)0;
+        }
+    x1[0] = gW32LineV[handle * (i32)8 + (i32)2];
+    y1[0] = gW32LineV[handle * (i32)8 + (i32)3];
+    return (i32)1;
+    }
+
 // The live UXScroll32 containers, and the window each belongs to.  A scroll child is a SEPARATE
 // HWND that paints its own slice of the tree, so invalidating the window's client area does not
 // touch it — an app-driven change inside a scroll view (a row appended, a selection set from code)
@@ -486,6 +680,43 @@ pointer UXWin32Proc(pointer hwnd, u32 msg, pointer wp, pointer lp)
         gW32CurHdc = was;
         return (pointer)0;
         }
+    // Files dragged in from Explorer: each to the app, at the point in the content.
+    if (msg == (u32)WM_DROPFILES)
+        {
+        i32 dh = w32HandleOf(hwnd);
+        POINT dp;
+        DragQueryPoint(wp, (pointer)&dp);
+        u32 nf = DragQueryFileA(wp, (u32)$FFFFFFFF, (pointer)0, (u32)0);
+        for (u32 f = (u32)0; f < nf; f = f + (u32)1)
+            {
+            u8 path[1024];
+            DragQueryFileA(wp, f, (pointer)&path[0], (u32)1024);
+            if (gApp != (UXApplication*)0)
+                {
+                gApp.deliverFileDrop(&path[0], dh, dp.x, dp.y);
+                }
+            }
+        DragFinish(wp);
+        return (pointer)0;
+        }
+    // The smallest the window may be made: the content's minimum, grown to the outer size.
+    if (msg == (u32)WM_GETMINMAXINFO)
+        {
+        i32 mh = w32HandleOf(hwnd);
+        if (mh > (i32)0 && gW32MinW[mh] > (i32)0)
+            {
+            RECT mr;
+            mr.left = (i32)0;
+            mr.top = (i32)0;
+            mr.right = gW32MinW[mh];
+            mr.bottom = gW32MinH[mh];
+            AdjustWindowRect((pointer)&mr, (u32)WS_OVERLAPPEDWINDOW, gW32Menu != (pointer)0 ? (i32)1 : (i32)0);
+            MINMAXINFO* mm = (MINMAXINFO*)lp;
+            mm.minTrackX = mr.right - mr.left;
+            mm.minTrackY = mr.bottom - mr.top;
+            return (pointer)0;
+            }
+        }
     if (msg == (u32)WM_PAINT)
         {
         pointer ud = GetWindowLongPtrA(hwnd, (i32)GWLP_USERDATA); // the UXWindow (reverse map)
@@ -611,6 +842,27 @@ pointer UXWin32Proc(pointer hwnd, u32 msg, pointer wp, pointer lp)
     if (msg == (u32)WM_NOTIFY)
         {
         NMHDR* nh = (NMHDR*)lp;
+        // A row dragged out of a list (the left button) or a tree (either button): the app's drag
+        if (nh.code == (u32)LVN_BEGINDRAG || nh.code == (u32)LVN_BEGINRDRAG)
+            {
+            UXTableView* dtv = (UXTableView* ?)(Object*)GetWindowLongPtrA(nh.hwndFrom, (i32)GWLP_USERDATA);
+            NMLISTVIEW* nl = (NMLISTVIEW*)lp;
+            if (dtv != (UXTableView*)0 && dtv.nativeDragsRows() != (i32)0 && nl.iItem >= (i32)0)
+                {
+                w32RowDrag(nh.hwndFrom, false, dtv.nativeCellText(nl.iItem, (i32)0), nh.code == (u32)LVN_BEGINRDRAG, nl.ptx, nl.pty);
+                }
+            return (pointer)0;
+            }
+        if (nh.code == (u32)TVN_BEGINDRAGA || nh.code == (u32)TVN_BEGINRDRAGA)
+            {
+            UXOutlineView* dov = (UXOutlineView* ?)(Object*)GetWindowLongPtrA(nh.hwndFrom, (i32)GWLP_USERDATA);
+            NMTREEVIEW* dnt = (NMTREEVIEW*)lp;
+            if (dov != (UXOutlineView*)0)
+                {
+                w32RowDrag(nh.hwndFrom, true, dov.nativeDragText(dnt.nLParam), nh.code == (u32)TVN_BEGINRDRAGA, dnt.ptx, dnt.pty);
+                }
+            return (pointer)0;
+            }
         if (nh.code == (u32)LVN_ITEMCHANGED)
             {
             // our own write echoing back
@@ -1711,6 +1963,190 @@ class UXWin32Driver : Object<UXViewDriver>
         }
 
     // ---- windows -------------------------------------------------------------
+    // Whether every column of a table has an empty title: it shows no header row.
+    bool untitled(UXTableView* tv)
+        {
+        for (i32 c = (i32)0; c < tv.numberOfColumns(); c = c + (i32)1)
+            {
+            u8* ti = tv.columnTitle(c);
+            if (ti != (u8*)0 && ti[0] != (u8)0)
+                {
+                return false;
+                }
+            }
+        return true;
+        }
+    // The smallest the window's content may be made by hand (WM_GETMINMAXINFO).
+    void windowSetMinSize(i32 handle, i32 w, i32 h)
+        {
+        if (handle > (i32)0 && handle < (i32)64)
+            {
+            gW32MinW[handle] = w;
+            gW32MinH[handle] = h;
+            }
+        }
+    // The item of the native tree at `node` under window point (x, y): TVM_HITTEST, then its lParam.
+    pointer outlineItemAt(i32 handle, i32 node, i32 x, i32 y)
+        {
+        if (handle <= (i32)0 || handle >= (i32)64 || gW32TreeOf[handle] == (pointer)0)
+            {
+            return (pointer)0;
+            }
+        W32Tree* t = (W32Tree*)gW32TreeOf[handle];
+        if (node < (i32)0 || node >= t.count)
+            {
+            return (pointer)0;
+            }
+        pointer c = t.nodes[node].ctrl;
+        if (c == (pointer)0 || self.effectiveHidden(gW32TreeOf[handle], node) != (i32)0)
+            {
+            return (pointer)0; // the toolkit's own say, not the OS's: a covered window is still there
+            }
+        POINT p;
+        p.x = x;
+        p.y = y;
+        ClientToScreen(gW32Hwnds[handle], (pointer)&p);
+        ScreenToClient(c, (pointer)&p);
+        RECT r;
+        GetClientRect(c, (pointer)&r);
+        if (p.x < (i32)0 || p.y < (i32)0 || p.x >= r.right || p.y >= r.bottom)
+            {
+            return (pointer)0;
+            }
+        TVHITTESTINFO hi;
+        hi.ptx = p.x;
+        hi.pty = p.y;
+        hi.flags = (u32)0;
+        hi.hItem = (pointer)0;
+        pointer it = SendMessageA(c, (u32)TVM_HITTEST, (pointer)0, (pointer)&hi);
+        if (it == (pointer)0)
+            {
+            return (pointer)0;
+            }
+        TVITEM ti;
+        w32TvitemInit(&ti);
+        ti.mask = (u32)(TVIF_PARAM | TVIF_HANDLE);
+        ti.hItem = it;
+        SendMessageA(c, (u32)TVM_GETITEMA, (pointer)0, (pointer)&ti);
+        return ti.lParam;
+        }
+    // A connection's line above the native controls: a click-through layered window over the
+    // content, keyed on one colour so only the line shows.
+    void windowLine(i32 handle, i32 on, i32 x0, i32 y0, i32 x1, i32 y1, i32 hx, i32 hy, i32 hw, i32 hh)
+        {
+        if (handle <= (i32)0 || handle >= (i32)64 || gW32Hwnds[handle] == (pointer)0)
+            {
+            return;
+            }
+        if (on == (i32)0)
+            {
+            if (gW32LineWin[handle] != (pointer)0)
+                {
+                ShowWindow(gW32LineWin[handle], (i32)SW_HIDE);
+                }
+            gW32LineOn[handle] = (i32)0;
+            return;
+            }
+        i32 b = handle * (i32)8;
+        gW32LineV[b] = x0;
+        gW32LineV[b + (i32)1] = y0;
+        gW32LineV[b + (i32)2] = x1;
+        gW32LineV[b + (i32)3] = y1;
+        gW32LineV[b + (i32)4] = hx;
+        gW32LineV[b + (i32)5] = hy;
+        gW32LineV[b + (i32)6] = hw;
+        gW32LineV[b + (i32)7] = hh;
+        pointer main = gW32Hwnds[handle];
+        RECT rc;
+        GetClientRect(main, (pointer)&rc);
+        POINT o;
+        o.x = (i32)0;
+        o.y = (i32)0;
+        ClientToScreen(main, (pointer)&o);
+        if (gW32LineClass == (i32)0)
+            {
+            WNDCLASSA wc;
+            wc.style = (u32)0;
+            wc.cbClsExtra = (i32)0;
+            wc.cbWndExtra = (i32)0;
+            wc.hIcon = (pointer)0;
+            wc.hCursor = (pointer)0;
+            wc.hbrBackground = (pointer)0;
+            wc.lpszMenuName = (pointer)0;
+            wc.lpfnWndProc = (pointer)&UXLine32Proc;
+            wc.hInstance = gW32Inst;
+            wc.lpszClassName = (pointer) "UXLine32";
+            RegisterClassA((pointer)&wc);
+            gW32LineClass = (i32)1;
+            }
+        if (gW32LineWin[handle] == (pointer)0)
+            {
+            pointer lw = CreateWindowExA((u32)(WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE),
+                                         (pointer) "UXLine32", (pointer) "", (u32)WS_POPUP,
+                                         o.x, o.y, rc.right, rc.bottom, main, (pointer)0, gW32Inst, (pointer)0);
+            SetLayeredWindowAttributes(lw, (u32)$00FF00FF, (u8)255, (u32)LWA_COLORKEY);
+            SetWindowLongPtrA(lw, (i32)GWLP_USERDATA, (pointer)handle);
+            gW32LineWin[handle] = lw;
+            }
+        pointer w = gW32LineWin[handle];
+        SetWindowPos(w, (pointer)0, o.x, o.y, rc.right, rc.bottom, (u32)(SWP_NOZORDER | SWP_NOACTIVATE));
+        ShowWindow(w, (i32)SW_SHOWNOACTIVATE);
+        gW32LineOn[handle] = (i32)1;
+        InvalidateRect(w, (pointer)0, (i32)1);
+        UpdateWindow(w);
+        }
+    // A context menu: TrackPopupMenu, which returns the pick (TPM_RETURNCMD) once the menu closes.
+    i32 menuPopUp(i32 handle, pointer titles, pointer flags, i32 n, i32 x, i32 y)
+        {
+        u8** ts = (u8**)titles;
+        i32* fs = (i32*)flags;
+        if (gW32MenuTestPick != (i32)-2)
+            {
+            i32 at = (i32)0;
+            for (i32 i = (i32)0; i < n && at < (i32)500; i = i + (i32)1)
+                {
+                if (i > (i32)0)
+                    {
+                    gW32MenuTestTitles[at] = (u8)'|';
+                    at = at + (i32)1;
+                    }
+                u8* t = (fs[i] & (i32)1) != (i32)0 ? (u8*)"-" : ts[i];
+                for (i32 j = (i32)0; t[j] != (u8)0 && at < (i32)500; j = j + (i32)1)
+                    {
+                    gW32MenuTestTitles[at] = t[j];
+                    at = at + (i32)1;
+                    }
+                }
+            gW32MenuTestTitles[at] = (u8)0;
+            i32 pick = gW32MenuTestPick;
+            gW32MenuTestPick = (i32)-2;
+            return pick;
+            }
+        if (handle <= (i32)0 || handle >= (i32)64 || gW32Hwnds[handle] == (pointer)0 || n <= (i32)0)
+            {
+            return (i32)-1;
+            }
+        pointer m = CreatePopupMenu();
+        for (i32 i = (i32)0; i < n; i = i + (i32)1)
+            {
+            if ((fs[i] & (i32)1) != (i32)0)
+                {
+                AppendMenuA(m, (u32)MF_SEPARATOR, (pointer)0, (pointer)0);
+                }
+            else
+                {
+                u32 fl = (u32)MF_STRING | ((fs[i] & (i32)2) != (i32)0 ? (u32)MF_GRAYED : (u32)0);
+                AppendMenuA(m, fl, (pointer)(i + (i32)1), (pointer)ts[i]);
+                }
+            }
+        POINT p;
+        p.x = x;
+        p.y = y;
+        ClientToScreen(gW32Hwnds[handle], (pointer)&p);
+        i32 r = TrackPopupMenu(m, (u32)(TPM_RETURNCMD | TPM_NONOTIFY), p.x, p.y, (i32)0, gW32Hwnds[handle], (pointer)0);
+        DestroyMenu(m);
+        return r - (i32)1;
+        }
     i32 windowCreate(i32 x, i32 y, i32 w, i32 h)
         {
         // The neutral w,h is the CONTENT size; grow it to the outer window size so the client area
@@ -1741,6 +2177,9 @@ class UXWin32Driver : Object<UXViewDriver>
             gW32NextHandle = gW32NextHandle + (i32)1;
             }
         gW32Hwnds[handle] = hwnd;
+        DragAcceptFiles(hwnd, (i32)1); // files dragged in from Explorer: WM_DROPFILES
+        gW32MinW[handle] = (i32)0;
+        gW32MinH[handle] = (i32)0;
         w32_app_icon_apply(hwnd); // an app icon set before this window opened
         gW32WinH[handle] = h;
         gW32ScrollY[handle] = (i32)0;
@@ -3396,6 +3835,10 @@ class UXWin32Driver : Object<UXViewDriver>
         {
         W32Tree* t = (W32Tree*)tree;
         pointer parent = gW32Hwnds[handle];
+        if (handle > (i32)0 && handle < (i32)64)
+            {
+            gW32TreeOf[handle] = tree;
+            }
         for (i32 i = (i32)0; i < t.count; i = i + (i32)1)
             {
             i32 k = t.nodes[i].kind;
@@ -3464,6 +3907,7 @@ class UXWin32Driver : Object<UXViewDriver>
                 else
                     {
                     MoveWindow(t.nodes[i].ctrl, ax, ay, w, hh, (i32)1);
+                    w32SyncText(t.nodes[i].ctrl, (u8*)t.nodes[i].spec); // a title changed since
                     }
                 }
             else if (k == (i32)UXKindField)
@@ -3534,6 +3978,7 @@ class UXWin32Driver : Object<UXViewDriver>
                 else
                     {
                     MoveWindow(t.nodes[i].ctrl, ax, ay, w, hh, (i32)1);
+                    w32SyncText(t.nodes[i].ctrl, (u8*)t.nodes[i].spec); // a title changed since
                     }
                 i32 on = self.toggleState(t.nodes[i].peer, k);
                 SendMessageA(t.nodes[i].ctrl, (u32)BM_SETCHECK, (pointer)on, (pointer)0); // model -> visual
@@ -3717,6 +4162,10 @@ class UXWin32Driver : Object<UXViewDriver>
                         if (tv == (UXTableView*)0 || tv.nativeAllowsMultiple() == (i32)0)
                             {
                             lvs = lvs | (u32)LVS_SINGLESEL;
+                            }
+                        if (tv != (UXTableView*)0 && self.untitled(tv))
+                            {
+                            lvs = lvs | (u32)LVS_NOCOLUMNHEADER; // no titles: no header row
                             }
                         pointer c = CreateWindowExA((u32)0, (pointer) "SysListView32", (pointer) "",
                                                     lvs, ax, ay, w, hh, parent, (pointer)(W32_CTRL_ID_BASE + i), gW32Inst, (pointer)0);

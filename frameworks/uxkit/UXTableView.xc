@@ -161,9 +161,26 @@ class UXTableColumn : Object
             table.extendSelectionTo(row);
             return;
             }
-        // A plain press selects this row (the anchor), then tracks a drag to sweep a range/selection.
+        // A plain press selects this row (the anchor), then tracks a drag to sweep a range/selection
+        // -- or, on a row that can be dragged out, a drag of the row to wherever it is let go.
         table.selectRow(row);
+        if (table.rowDragText(row) != (u8*)0)
+            {
+            table.trackRowDrag(row, (i32)e.x, (i32)e.y);
+            return;
+            }
         table.beginDragSelect();
+        }
+    // The secondary button drags a row too, where the row can be dragged out.
+    void rightMouseDown(UXEvent* e)
+        {
+        if (table != (UXTableView*)0 && table.rowDragText(row) != (u8*)0)
+            {
+            table.selectRow(row);
+            table.trackRowDrag(row, (i32)e.x, (i32)e.y);
+            return;
+            }
+        super.rightMouseDown(e);
         }
     }
 
@@ -321,6 +338,54 @@ class UXTableColumn : Object
     i32 nativeDragsRows(void)
         {
         return dragsRows ? (i32)1 : (i32)0;
+        }
+    // What row `row` carries when it is dragged out, or 0 when it is not dragged: its first column,
+    // if the table drags its rows.  An outline answers from its source.
+    u8* rowDragText(i32 row)
+        {
+        return dragsRows ? self.nativeCellText(row, (i32)0) : (u8*)0;
+        }
+    // Whether a row's drag reports where it began (an outline's does, so a line can start at the row).
+    bool reportsDragStart(void)
+        {
+        return false;
+        }
+    // A row dragged out of the table as the toolkit draws it (the backends without a native table):
+    // the pointer is followed until it is let go, each step reported to the application as a hover
+    // and the release as a drop, in the window's terms.  A press that does not move is a click.
+    void trackRowDrag(i32 row, i32 x0, i32 y0)
+        {
+        u8* text = self.rowDragText(row);
+        if (text == (u8*)0 || owner == (UXViewTree*)0 || gApp == (UXApplication*)0 || !gDriver.dragTrackingIsModal())
+            {
+            return;
+            }
+        i32 win = owner.winHandle;
+        i32 x = x0;
+        i32 y = y0;
+        bool moved = false;
+        while (gDriver.trackDragStep(&x, &y) != (i32)0)
+            {
+            i32 dx = x - x0;
+            i32 dy = y - y0;
+            if (!moved && dx * dx + dy * dy > (i32)9)
+                {
+                moved = true;
+                if (self.reportsDragStart())
+                    {
+                    gApp.deliverItemHover(text, win, x0, y0);
+                    }
+                }
+            if (moved)
+                {
+                gApp.deliverItemHover(text, win, x, y);
+                }
+            }
+        if (moved)
+            {
+            gApp.deliverItemHover(text, win, (i32)-1, (i32)-1);
+            gApp.deliverItemDrop(text, win, x, y);
+            }
         }
     i32 nativeAllowsMultiple(void)
         {

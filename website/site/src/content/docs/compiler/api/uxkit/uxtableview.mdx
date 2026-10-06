@@ -208,7 +208,9 @@ void setDragsRows(bool on)
 
 Lets a row be dragged out of the table onto one of the app's windows, where
 [`UXApplication.setItemDropHandler`](/compiler/api/uxkit/uxapplication/#setitemdrophandler)
-receives the row's first column. Off by default. From 0.7 on AppKit, and on GTK from the release after 0.7.
+receives the row's first column. Off by default. From 0.7 on AppKit, and from
+0.71 on GTK, Windows and the backends where the toolkit draws
+the table (the web, GEM).
 
 ### countRows / columnTitle / columnWidth / rowHeightValue
 

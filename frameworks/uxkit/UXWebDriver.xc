@@ -81,6 +81,8 @@ struct WebNode
     i32 gWebNative;        // §10 native-object counter (live windows)
 i32 gWebLive[UXWEB_MAXW];  // handle -> live flag (JS mints handles 1..)
 i32 gWebDirty[UXWEB_MAXW]; // handle -> needs-repaint flag
+i32 gWebLineOn[UXWEB_MAXW];     // handle -> a connection's line is up (UXWindow.showLine)
+i32 gWebLineV[UXWEB_MAXW * 8];  // handle * 8: x0 y0 x1 y1, then the framed rect
 i16 gWebDirtyR[256];       // handle -> accumulated dirty rect (x,y,w,h per handle)
 i32 gWebCw[UXWEB_MAXW];    // handle -> reported content size (scroll range)
 i32 gWebCh[UXWEB_MAXW];
@@ -310,8 +312,61 @@ class UXWebDriver : Object<UXViewDriver>
         ux_win_geometry(handle, &w, &h);
         f(handle, (i32)0, (i32)0, w, h, gWebContentUd[handle]);
         ux_clip_end();
+        if (gWebLineOn[handle] != (i32)0)
+            {
+            self.drawLine(handle); // above everything the window drew
+            }
         ux_present(handle);
         gWebDirty[handle] = (i32)0;
+        }
+    // A connection's line, over the whole window: the S-curve, a frame round the target, a dot at
+    // the pointer.  showLine marks the window dirty, so the old line is painted out with it.
+    void windowLine(i32 handle, i32 on, i32 x0, i32 y0, i32 x1, i32 y1, i32 hx, i32 hy, i32 hw, i32 hh)
+        {
+        if (handle <= (i32)0 || handle >= (i32)UXWEB_MAXW)
+            {
+            return;
+            }
+        i32 b = handle * (i32)8;
+        gWebLineV[b] = x0;
+        gWebLineV[b + (i32)1] = y0;
+        gWebLineV[b + (i32)2] = x1;
+        gWebLineV[b + (i32)3] = y1;
+        gWebLineV[b + (i32)4] = hx;
+        gWebLineV[b + (i32)5] = hy;
+        gWebLineV[b + (i32)6] = hw;
+        gWebLineV[b + (i32)7] = hh;
+        gWebLineOn[handle] = on;
+        self.windowInvalidate(handle);
+        }
+    void drawLine(i32 handle)
+        {
+        i32* L = &gWebLineV[handle * (i32)8];
+        i32 ops[24];
+        i32 n = (i32)0;
+        if (L[6] > (i32)0 && L[7] > (i32)0)
+            {
+            i32 rx = L[4] - (i32)1;
+            i32 ry = L[5] - (i32)1;
+            i32 rw = L[6] + (i32)2;
+            i32 rh = L[7] + (i32)2;
+            ops[0] = (i32)UXSTROKE_MOVE; ops[1] = rx; ops[2] = ry;
+            ops[3] = (i32)UXSTROKE_LINE; ops[4] = rx + rw; ops[5] = ry;
+            ops[6] = (i32)UXSTROKE_LINE; ops[7] = rx + rw; ops[8] = ry + rh;
+            ops[9] = (i32)UXSTROKE_LINE; ops[10] = rx; ops[11] = ry + rh;
+            ops[12] = (i32)UXSTROKE_CLOSE;
+            ux_stroke_ops(&ops[0], (i32)13, (double)2.0, (i32)0, (i32)0, (i32*)0, (i32)0, (i32)0, (i32)38, (i32)115, (i32)242, (i32)255);
+            }
+        i32 dx = L[2] - L[0];
+        i32 ad = dx < (i32)0 ? (i32)0 - dx : dx;
+        i32 k = ad / (i32)2 > (i32)30 ? ad / (i32)2 : (i32)30;
+        i32 dir = dx < (i32)0 ? (i32)-1 : (i32)1;
+        ops[0] = (i32)UXSTROKE_MOVE; ops[1] = L[0]; ops[2] = L[1];
+        ops[3] = (i32)UXSTROKE_CURVE; ops[4] = L[0] + dir * k; ops[5] = L[1];
+        ops[6] = L[2] - dir * k; ops[7] = L[3]; ops[8] = L[2]; ops[9] = L[3];
+        n = (i32)10;
+        ux_stroke_ops(&ops[0], n, (double)2.0, (i32)1, (i32)1, (i32*)0, (i32)0, (i32)0, (i32)38, (i32)115, (i32)242, (i32)255);
+        ux_fill_circle(L[2], L[3], (i32)3, (i32)38, (i32)115, (i32)242);
         }
     void webPresentAll(void)
         {

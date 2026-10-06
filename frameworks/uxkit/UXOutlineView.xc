@@ -226,14 +226,35 @@ class UXOutlineNode : Object
         return f(self, (Object*)item);
         }
     // The item under point (x, y) of the window's content, or 0: what a drag let go there is over.
+    // A native outline is asked; one the toolkit draws answers from its own rows.
     Object* itemAtWindowPoint(i32 x, i32 y)
         {
-        callback f pointer(i32 handle, i32 node, i32 x, i32 y) = &gDriver.outlineItemAt;
-        if (!f || owner == (UXViewTree*)0)
+        if (owner == (UXViewTree*)0)
             {
             return (Object*)0;
             }
-        return (Object*)f(owner.winHandle, (i32)index, x, y);
+        callback f pointer(i32 handle, i32 node, i32 x, i32 y) = &gDriver.outlineItemAt;
+        if (f)
+            {
+            return (Object*)f(owner.winHandle, (i32)index, x, y);
+            }
+        UXRect a = self.absoluteFrame();
+        if (x < (i32)a.x || x >= (i32)a.x + (i32)a.w || y < (i32)a.y || y >= (i32)a.y + (i32)a.h || owner.hiddenOf(index))
+            {
+            return (Object*)0;
+            }
+        UXOutlineNode* n = self.nodeAt(self.rowAtWindowY((i16)y));
+        return n != (UXOutlineNode*)0 ? n.item : (Object*)0;
+        }
+    // A drawn row's drag carries what the source says, and reports where it began.
+    u8* rowDragText(i32 row)
+        {
+        UXOutlineNode* n = self.nodeAt(row);
+        return n != (UXOutlineNode*)0 ? self.nativeDragText((pointer)n.item) : (u8*)0;
+        }
+    bool reportsDragStart(void)
+        {
+        return true;
         }
     i32 nativeIsItemExpanded(pointer item)
         {

@@ -796,3 +796,88 @@ i32 PolyBezierTo(pointer hdc, pointer pts, u32 n); // 3 points per cubic, from t
 #define SB_THUMBPOSITION 4
 #define SB_THUMBTRACK 5
 #define SB_ENDSCROLL 8 // the "drag released" notification — same position as the last, so ignore it
+
+// ---- drags, drops, context menus and the drag line (an editor's needs) --------------------------
+// NMLISTVIEW: NMHDR (24) then the item, its states, the point and the item's lParam.
+struct NMLISTVIEW
+    {
+    pointer hwndFrom;
+    pointer idFrom;
+    u32 code;
+    i32 _pad0;
+    i32 iItem;
+    i32 iSubItem;
+    u32 uNewState;
+    u32 uOldState;
+    u32 uChanged;
+    i32 ptx;
+    i32 pty;
+    i32 _pad1;
+    pointer lParam;
+    }
+// TVHITTESTINFO: the point (tree client coords), then what it hit.
+struct TVHITTESTINFO
+    {
+    i32 ptx;
+    i32 pty;
+    u32 flags;
+    i32 _pad0;
+    pointer hItem;
+    }
+// MINMAXINFO: five POINTs; ptMinTrackSize is the fourth.
+struct MINMAXINFO
+    {
+    i32 resX;
+    i32 resY;
+    i32 maxSizeX;
+    i32 maxSizeY;
+    i32 maxPosX;
+    i32 maxPosY;
+    i32 minTrackX;
+    i32 minTrackY;
+    i32 maxTrackX;
+    i32 maxTrackY;
+    }
+#define LVN_BEGINDRAG $FFFFFF93   // LVN_FIRST (-100) - 9, as the u32 NMHDR.code carries it
+#define LVN_BEGINRDRAG $FFFFFF91  // LVN_FIRST - 11
+#define TVN_BEGINDRAGA $FFFFFE69  // TVN_FIRST (-400) - 7
+#define TVN_BEGINRDRAGA $FFFFFE68 // TVN_FIRST - 8
+#define TVM_HITTEST $1111         // TVM_FIRST + 17
+#define TVGN_DROPHILITE $0008
+#define LVS_NOCOLUMNHEADER $4000
+#define WM_LBUTTONUP $0202
+#define WM_RBUTTONUP $0205
+#define WM_GETMINMAXINFO $0024
+#define WM_DROPFILES $0233
+#define WM_CAPTURECHANGED $0215
+#define VK_ESCAPE $1B
+#define WS_POPUP $80000000
+#define WS_EX_LAYERED $00080000
+#define WS_EX_TRANSPARENT $00000020
+#define WS_EX_TOOLWINDOW $00000080
+#define WS_EX_NOACTIVATE $08000000
+#define SW_HIDE 0
+#define SW_SHOWNOACTIVATE 4
+#define LWA_COLORKEY $00000001
+#define TPM_RETURNCMD $0100
+#define TPM_NONOTIFY $0080
+#define PS_SOLID 0
+#define SWP_NOZORDER $0004
+#define SWP_NOACTIVATE $0010
+#define NULL_BRUSH 5
+pointer SetCapture(pointer hwnd);
+i32 ReleaseCapture(void);
+i32 ClientToScreen(pointer hwnd, pointer pt);
+i32 IsWindowVisible(pointer hwnd);
+i32 TrackPopupMenu(pointer menu, u32 flags, i32 x, i32 y, i32 reserved, pointer hwnd, pointer rc);
+i32 DestroyMenu(pointer menu);
+i32 SetLayeredWindowAttributes(pointer hwnd, u32 key, u8 alpha, u32 flags);
+pointer CreatePen(i32 style, i32 width, u32 color);
+i32 MoveToEx(pointer hdc, i32 x, i32 y, pointer old);
+i32 Rectangle(pointer hdc, i32 l, i32 t, i32 r, i32 b);
+i32 Ellipse(pointer hdc, i32 l, i32 t, i32 r, i32 b);
+#import <shell32>
+void DragAcceptFiles(pointer hwnd, i32 accept);
+u32 DragQueryFileA(pointer hdrop, u32 i, pointer buf, u32 n);
+i32 DragQueryPoint(pointer hdrop, pointer pt);
+void DragFinish(pointer hdrop);
