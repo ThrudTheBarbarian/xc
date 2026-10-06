@@ -16,8 +16,8 @@ idle.
 
 ## Summary
 
-Geometric mean, over nineteen of the benchmarks, of xc's time divided by the
-other language's. **Below 1 is xc faster.**
+Geometric mean, over nineteen of the twenty benchmarks, of xc's time divided by
+the other language's. **Below 1 is xc faster.**
 
 | xc's time ÷ | arm64 | x86-64 |
 |---|---|---|
@@ -25,10 +25,11 @@ other language's. **Below 1 is xc faster.**
 | C++ | **0.97** | **0.78** |
 | Swift | **0.71** | **0.64** |
 
-`matrix_mul_f32` is left out of the means and quoted on its own: xcc recognises
-its loop nest and replaces it with a matrix kernel (SME on Apple silicon, SSE
-or AVX on x86-64), which says much about that one operation and little about
-code in general. There xc's time divided by each language's is, on arm64, Objective-C 1/113, C++ 1/113, Swift 1/112; on x86-64, Objective-C 1/20, C++ 1/20, Swift 1/29.
+The twentieth, `matrix_mul_f32`, is quoted on its own. xcc recognises its loop
+nest and replaces it with a matrix kernel (SME on Apple silicon, SSE or AVX on
+x86-64), which makes xc so much faster at that one operation that putting it
+in with the others would skew the means in xc's favour, and most programs do
+not multiply 2D matrices. There xc's time divided by each language's is, on arm64, Objective-C 1/113, C++ 1/113, Swift 1/112; on x86-64, Objective-C 1/20, C++ 1/20, Swift 1/29.
 
 On arm64 xc is ahead of all three. On x86-64 xc is ahead of all three. The arithmetic mean of ratios
 is not given: a benchmark at 2.00× and one at 0.50× are exactly compensating,

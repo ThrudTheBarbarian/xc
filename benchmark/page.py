@@ -369,15 +369,16 @@ idle.
 
 ## Summary
 
-Geometric mean, over nineteen of the benchmarks, of xc's time divided by the
-other language's. **Below 1 is xc faster.**
+Geometric mean, over nineteen of the twenty benchmarks, of xc's time divided by
+the other language's. **Below 1 is xc faster.**
 
 {summary}
 
-`matrix_mul_f32` is left out of the means and quoted on its own: xcc recognises
-its loop nest and replaces it with a matrix kernel (SME on Apple silicon, SSE
-or AVX on x86-64), which says much about that one operation and little about
-code in general. {separate}
+The twentieth, `matrix_mul_f32`, is quoted on its own. xcc recognises its loop
+nest and replaces it with a matrix kernel (SME on Apple silicon, SSE or AVX on
+x86-64), which makes xc so much faster at that one operation that putting it
+in with the others would skew the means in xc's favour, and most programs do
+not multiply 2D matrices. {separate}
 
 {standing} The arithmetic mean of ratios
 is not given: a benchmark at 2.00× and one at 0.50× are exactly compensating,
