@@ -172,6 +172,7 @@ NS_ASSUME_NONNULL_BEGIN
 \****************************************************************************/
 @property(nonatomic, readonly) BOOL dynamicGlibc;   // -A x86_64: glibc dynamic link (the default; -static: musl)
 @property(nonatomic, readonly) BOOL staticLink;     // -static
+@property(nonatomic, readonly) BOOL dynamicExplicit; // -dynamic given (not just the default)
 /****************************************************************************\
 |* Automatic Reference Counting gate (`-farc` / `-farc=off|no|0`).
 |* When enabled (the default), the `retain` and `release` statements are

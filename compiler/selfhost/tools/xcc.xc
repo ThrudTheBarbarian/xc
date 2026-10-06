@@ -2088,8 +2088,33 @@ void emitX86_64(DriverOptions* d, IRModule* mod)
         return;
     }
 
-    if (d.caps().dynamic()) { linkX86_64Glibc(d, prog); return; }
+    if (x86GlibcLink(d)) { linkX86_64Glibc(d, prog); return; }
     linkX86_64(d, prog);
+}
+
+// Does the executable link against glibc? The default on -A x86_64, except
+// where the program imports a library xcc built (its .so carries the musl
+// runtime): that keeps the musl dynamic link unless -dynamic was given. A
+// library xcc built carries a `.xtc.iface` section. As the reference.
+bool x86GlibcLink(DriverOptions* d)
+{
+    if (!d.caps().dynamic()) return false;
+    if (d.caps().dynamicExplicit()) return true;
+    Array* nl = d.fe().neededLibs();
+    String* tag = String.withCString(".xtc.iface");
+    for (u32 i = (u32)0; nl != (Array*)0 && i < nl.count(); i = i + (u32)1) {
+        Data* data = Files.readData((String*)nl.get(i));
+        if (data == (Data*)0) continue;
+        u8* p = data.bytes();
+        u32 n = data.length();
+        for (u32 k = (u32)0; k + tag.byteLength() <= n; k = k + (u32)1) {
+            bool same = true;
+            for (u32 q = (u32)0; q < tag.byteLength() && same; q = q + (u32)1)
+                if (p[k + q] != tag.byteAt(q)) same = false;
+            if (same) return false;
+        }
+    }
+    return true;
 }
 
 // The x86-64 link, from program asm (or none — an object-only link) to the
@@ -3827,7 +3852,7 @@ void linkObjects(DriverOptions* d)
         return;
     }
     if (d.arch().equals(String.withCString("arm64")) || isIos(d)) { linkObjectsArm64(d); return; }
-    if (isX86_64(d) && d.caps().dynamic()) { linkX86_64Glibc(d, String.withCString("")); return; }
+    if (isX86_64(d) && x86GlibcLink(d)) { linkX86_64Glibc(d, String.withCString("")); return; }
     if (isX86_64(d)) { linkX86_64(d, String.withCString("")); return; }
     if (isArm9(d)) { linkObjectsArm9(d); return; }
     if (d.arch().equals(String.withCString("win64"))) {

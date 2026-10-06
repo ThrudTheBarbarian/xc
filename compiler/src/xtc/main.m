@@ -2459,6 +2459,24 @@ static NSString *_Nullable x86_64GuiClang(NSString *_Nonnull *_Nullable sysrootO
 // checked in, glibc's own exports come from glibc-imports.map, and each -l
 // library is read for its SONAME and what it defines. No clang, no ld.
 static const char *const kGlibcOwnLibs[] = {"c", "m", "pthread", "dl", "rt", NULL};
+// Does the executable link against glibc? The default on -A x86_64 (and
+// -dynamic asks for it), except where the program imports a library xcc built:
+// a --emit-lib .so carries the musl runtime, which needs the musl executable's
+// startup code, so such a program keeps the musl dynamic link unless -dynamic
+// was given. A library xcc built carries a `.xtc.iface` section; a C library
+// does not.
+static BOOL x86GlibcLink(XTCommandLineOptions *opts, NSArray<NSString *> *neededLibs) {
+    if (!opts.dynamicGlibc) return NO;
+    if (opts.dynamicExplicit) return YES;
+    NSData *tag = [@".xtc.iface" dataUsingEncoding:NSUTF8StringEncoding];
+    for (NSString *lib in neededLibs) {
+        NSData *d = [NSData dataWithContentsOfFile:lib];
+        if (d && [d rangeOfData:tag options:0 range:NSMakeRange(0, d.length)].location != NSNotFound)
+            return NO;
+    }
+    return YES;
+}
+
 static int linkX86_64Glibc(const char *argv0, XTCommandLineOptions *opts, NSString *asmPath,
                            NSString *outPath, NSArray<NSString *> *neededLibs) {
     NSFileManager *fm = [NSFileManager defaultManager];
@@ -4847,7 +4865,7 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
             // path lives — the -shared and dynamic-exe variants are LINKS, and
             // a compile that imported a library was being routed into one of
             // them and handed the `.xtc.iface` to ld.lld ("unknown file type").
-            : (x86Exe && opts.dynamicGlibc && !opts.compileOnly)
+            : (x86Exe && x86GlibcLink(opts, neededLibs) && !opts.compileOnly)
             ? linkX86_64Glibc(argv0, opts, tmpAsm, opts.outputPath, neededLibs)
             : (x86Exe && opts.emitLib && !opts.compileOnly)
             ? linkX86_64Shared(argv0, opts, tmpAsm, opts.outputPath, ifaceJson, neededLibs)
