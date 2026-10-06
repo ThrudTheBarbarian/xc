@@ -90,6 +90,7 @@ export default defineConfig({
 										{ label: 'RunLoop', slug: 'compiler/api/runloop' },
 										{ label: 'SearchIndex', slug: 'compiler/api/searchindex' },
 										{ label: 'Set', slug: 'compiler/api/set' },
+										{ label: 'Socket', slug: 'compiler/api/socket' },
 										{ label: 'SortDescriptor', slug: 'compiler/api/sortdescriptor' },
 										{ label: 'StateMachine', slug: 'compiler/api/statemachine' },
 										{ label: 'String', slug: 'compiler/api/string' },

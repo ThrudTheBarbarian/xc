@@ -52,6 +52,7 @@ All of it needs a real heap (**`-falloc=heap`**), which is the default on the
 | [`Predicate`](/compiler/api/predicate/) | Conditions over records, built in code or parsed from text. **Not** in the umbrella — import by name. From the release after 0.71. |
 | [`Validator`](/compiler/api/validator/) | Rules a field's text must pass, with a message for each. **Not** in the umbrella — import by name. From the release after 0.71. |
 | [`SortDescriptor`](/compiler/api/sortdescriptor/) | A stable sort of records by one key and then the next. **Not** in the umbrella — import by name. From the release after 0.71. |
+| [`Socket`](/compiler/api/socket/) | A TCP connection, the same calls on every hosted target. **Not** in the umbrella — import by name. From the release after 0.71. |
 | [`CSV`](/compiler/api/csv/) | Comma-separated values to rows of strings and back. **Not** in the umbrella — import by name. From the release after 0.71. |
 | [`Coder`](/compiler/api/coder/) | Keyed archiving of an object graph to JSON, optionally gzipped. **Not** in the umbrella — import by name. |
 

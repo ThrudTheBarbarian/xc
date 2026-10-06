@@ -61,41 +61,9 @@
 
 // ── the host's sockets ──────────────────────────────────────────────────
 //
-// Three families of declaration. Windows: Winsock, a SOCKET is 64 bits and
-// lengths are int. Linux (x86_64): glibc/musl, whose addrinfo puts ai_addr
-// BEFORE ai_canonname. Everything else here (macOS, iOS, Android): BSD, whose
-// addrinfo puts ai_canonname first. The two addrinfo shapes differ only in
-// that order; Windows's size_t ai_addrlen fills the padding the others have.
-
-#if ARCH_win64
-struct _HttpAddr { i32 flags; i32 family; i32 socktype; i32 proto; u32 addrlen; u32 _pad; u8* canon; u8* addr; _HttpAddr* next; }
-i32 WSAStartup(u16 version, u8* data);
-u64 socket(i32 domain, i32 type, i32 proto);
-i32 connect(u64 s, u8* addr, i32 len);
-i32 send(u64 s, u8* buf, i32 len, i32 flags);
-i32 recv(u64 s, u8* buf, i32 len, i32 flags);
-i32 setsockopt(u64 s, i32 level, i32 name, u8* value, i32 len);
-i32 closesocket(u64 s);
-#elif ARCH_x86_64
-struct _HttpAddr { i32 flags; i32 family; i32 socktype; i32 proto; u32 addrlen; u32 _pad; u8* addr; u8* canon; _HttpAddr* next; }
-i32 socket(i32 domain, i32 type, i32 proto);
-i32 connect(i32 fd, u8* addr, u32 len);
-i64 send(i32 fd, u8* buf, u64 len, i32 flags);
-i64 recv(i32 fd, u8* buf, u64 len, i32 flags);
-i32 setsockopt(i32 fd, i32 level, i32 name, u8* value, u32 len);
-i32 close(i32 fd);
-#else
-struct _HttpAddr { i32 flags; i32 family; i32 socktype; i32 proto; u32 addrlen; u32 _pad; u8* canon; u8* addr; _HttpAddr* next; }
-i32 socket(i32 domain, i32 type, i32 proto);
-i32 connect(i32 fd, u8* addr, u32 len);
-i64 send(i32 fd, u8* buf, u64 len, i32 flags);
-i64 recv(i32 fd, u8* buf, u64 len, i32 flags);
-i32 setsockopt(i32 fd, i32 level, i32 name, u8* value, u32 len);
-i32 close(i32 fd);
-#endif
-
-i32 getaddrinfo(u8* node, u8* service, _HttpAddr* hints, _HttpAddr** res);
-void freeaddrinfo(_HttpAddr* res);
+// The C declarations (socket, connect, send, recv, getaddrinfo and the two
+// addrinfo layouts) are Socket.xc's.
+#import "Socket.xc"
 
 // SOL_SOCKET and the option numbers are per OS. The timeout value is a
 // struct timeval on the POSIX hosts (16 bytes; macOS reads a 4-byte usec at
