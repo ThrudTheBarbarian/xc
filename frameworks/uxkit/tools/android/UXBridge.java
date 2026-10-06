@@ -7,7 +7,7 @@
 //
 // Regenerate:
 //   javac --release 8 -cp $ANDROID_HOME/platforms/android-35/android.jar UXBridge.java
-//   d8 UXBridge*.class UXBack.class UXRun.class UXDrawView.class UXTable*.class UXMenuButton*.class --lib .../android.jar --min-api 26 --output .
+//   d8 *.class --lib .../android.jar --min-api 26 --output .
 import android.content.Context;
 import android.content.DialogInterface;
 import android.graphics.Canvas;
@@ -626,5 +626,244 @@ class UXScroller extends android.widget.ScrollView {
             box.inset(h, h);
             canvas.drawRoundRect(box, Math.max(0f, radius - h), Math.max(0f, radius - h), edge);
         }
+    }
+}
+
+// The native text view (UXTextView): a multi-line EditText whose styles are spans.  The text crosses as
+// UTF-8 bytes (not JNI's modified UTF-8, which splits an emoji in two) and style runs of five ints:
+// byte start, byte length, flags (1 bold, 2 italic, 4 underline, 8 monospace, the paragraph's
+// alignment in bits 4-5), colour (0, or 0x01RRGGBB) and size (0 = default, else dp).  A span is set
+// EXCLUSIVE_INCLUSIVE, so text typed after a styled run takes its style; a style chosen at an empty
+// selection is applied to the next insert.  The undo is the toolkit's: Control-Z and Control-Y go to it,
+// and a caret moving because the text changed is not reported as the user moving it.
+class UXTextEdit extends EditText implements TextWatcher {
+    private static native void nativeTvChanged(int id);
+    private static native void nativeTvSelected(int id);
+    private static native void nativeTvUndo(int id, int redo);
+    static final java.nio.charset.Charset U8 = java.nio.charset.StandardCharsets.UTF_8;
+    static final int SPAN = android.text.Spanned.SPAN_EXCLUSIVE_INCLUSIVE;
+    final int id;
+    int quiet;
+    int lastLen;
+    int[] typing;          // flags, colour, size for the next insert, or null
+    int insAt = -1, insN;  // the insert in flight
+    // the spans this view sets, told apart from any a paste brings
+    static class Bold extends android.text.style.StyleSpan { Bold() { super(android.graphics.Typeface.BOLD); } }
+    static class Italic extends android.text.style.StyleSpan { Italic() { super(android.graphics.Typeface.ITALIC); } }
+    static class Under extends android.text.style.UnderlineSpan { }
+    static class Mono extends android.text.style.TypefaceSpan { Mono() { super("monospace"); } }
+    static class Colour extends android.text.style.ForegroundColorSpan { Colour(int c) { super(c); } }
+    static class Size extends android.text.style.AbsoluteSizeSpan { final int dp; Size(int dp) { super(dp, true); this.dp = dp; } }
+    static class Align extends android.text.style.AlignmentSpan.Standard {
+        final int code;
+        Align(int code) {
+            super(code == 1 ? android.text.Layout.Alignment.ALIGN_OPPOSITE
+                  : code == 2 ? android.text.Layout.Alignment.ALIGN_CENTER : android.text.Layout.Alignment.ALIGN_NORMAL);
+            this.code = code;
+        }
+    }
+
+    UXTextEdit(Context c, int id) {
+        super(c);
+        this.id = id;
+        setGravity(android.view.Gravity.TOP | android.view.Gravity.START);
+        setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE |
+                     android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        setSingleLine(false);
+        setHorizontallyScrolling(false);
+        setTextSize(android.util.TypedValue.COMPLEX_UNIT_DIP, 14);
+        setText("", BufferType.EDITABLE);
+        addTextChangedListener(this);
+    }
+
+    // ---- offsets: UTF-8 bytes <-> chars ----
+    static int charOf(byte[] u, int bytes) {
+        if (bytes <= 0) return 0;
+        if (bytes > u.length) bytes = u.length;
+        while (bytes > 0 && bytes < u.length && (u[bytes] & 0xC0) == 0x80) bytes--;
+        return new String(u, 0, bytes, U8).length();
+    }
+    static int byteOf(String s, int chars) {
+        if (chars <= 0) return 0;
+        if (chars >= s.length()) return s.getBytes(U8).length;
+        if (Character.isLowSurrogate(s.charAt(chars))) chars--;
+        return s.substring(0, chars).getBytes(U8).length;
+    }
+
+    // ---- styles ----
+    static boolean ours(Object sp) {
+        return sp instanceof android.text.style.StyleSpan || sp instanceof android.text.style.UnderlineSpan ||
+               sp instanceof android.text.style.TypefaceSpan || sp instanceof android.text.style.ForegroundColorSpan ||
+               sp instanceof android.text.style.AbsoluteSizeSpan || sp instanceof android.text.style.AlignmentSpan;
+    }
+    // chars [a, b) in this style: every style span cut back out of the range, then the new ones on
+    static void style(Editable e, int a, int b, int flags, int colour, int size) {
+        if (b <= a) return;
+        for (Object sp : e.getSpans(a, b, Object.class)) {
+            if (!ours(sp)) continue;
+            int s = e.getSpanStart(sp), t = e.getSpanEnd(sp);
+            if (t <= a || s >= b) continue;
+            e.removeSpan(sp);
+            if (s < a) e.setSpan(clone(sp), s, a, SPAN);
+            if (t > b) e.setSpan(clone(sp), b, t, SPAN);
+        }
+        if ((flags & 1) != 0) e.setSpan(new Bold(), a, b, SPAN);
+        if ((flags & 2) != 0) e.setSpan(new Italic(), a, b, SPAN);
+        if ((flags & 4) != 0) e.setSpan(new Under(), a, b, SPAN);
+        if ((flags & 8) != 0) e.setSpan(new Mono(), a, b, SPAN);
+        if ((colour & 0x1000000) != 0) e.setSpan(new Colour(0xFF000000 | (colour & 0xFFFFFF)), a, b, SPAN);
+        if (size > 0) e.setSpan(new Size(size), a, b, SPAN);
+        int al = (flags >> 4) & 3;
+        if (al != 0) e.setSpan(new Align(al), a, b, SPAN);
+    }
+    static Object clone(Object sp) {
+        if (sp instanceof Size) return new Size(((Size)sp).dp);
+        if (sp instanceof Align) return new Align(((Align)sp).code);
+        if (sp instanceof android.text.style.AbsoluteSizeSpan) return new android.text.style.AbsoluteSizeSpan(((android.text.style.AbsoluteSizeSpan)sp).getSize(), ((android.text.style.AbsoluteSizeSpan)sp).getDip());
+        if (sp instanceof android.text.style.ForegroundColorSpan) return new Colour(((android.text.style.ForegroundColorSpan)sp).getForegroundColor());
+        if (sp instanceof android.text.style.TypefaceSpan) return new Mono();
+        if (sp instanceof android.text.style.UnderlineSpan) return new Under();
+        if (sp instanceof android.text.style.StyleSpan) {
+            int st = ((android.text.style.StyleSpan)sp).getStyle();
+            return st == android.graphics.Typeface.ITALIC ? new Italic() : st == android.graphics.Typeface.BOLD_ITALIC
+                   ? new android.text.style.StyleSpan(st) : new Bold();
+        }
+        if (sp instanceof android.text.style.AlignmentSpan) {
+            android.text.Layout.Alignment a = ((android.text.style.AlignmentSpan)sp).getAlignment();
+            return new Align(a == android.text.Layout.Alignment.ALIGN_OPPOSITE ? 1 : a == android.text.Layout.Alignment.ALIGN_CENTER ? 2 : 0);
+        }
+        return sp;
+    }
+    // the style of char i: flags, colour, size
+    static int[] styleAt(android.text.Spanned e, int i) {
+        int f = 0, c = 0, z = 0;
+        for (Object sp : e.getSpans(i, i + 1, Object.class)) {
+            int s = e.getSpanStart(sp), t = e.getSpanEnd(sp);
+            if (s > i || t <= i) continue;
+            if (sp instanceof android.text.style.StyleSpan) {
+                int st = ((android.text.style.StyleSpan)sp).getStyle();
+                if ((st & android.graphics.Typeface.BOLD) != 0) f |= 1;
+                if ((st & android.graphics.Typeface.ITALIC) != 0) f |= 2;
+            } else if (sp instanceof android.text.style.UnderlineSpan) f |= 4;
+            else if (sp instanceof android.text.style.TypefaceSpan) {
+                if ("monospace".equals(((android.text.style.TypefaceSpan)sp).getFamily())) f |= 8;
+            } else if (sp instanceof android.text.style.ForegroundColorSpan)
+                c = 0x1000000 | (((android.text.style.ForegroundColorSpan)sp).getForegroundColor() & 0xFFFFFF);
+            else if (sp instanceof Size) z = ((Size)sp).dp;
+            else if (sp instanceof Align) f |= (((Align)sp).code & 3) << 4;
+            else if (sp instanceof android.text.style.AlignmentSpan) {
+                android.text.Layout.Alignment a = ((android.text.style.AlignmentSpan)sp).getAlignment();
+                f |= (a == android.text.Layout.Alignment.ALIGN_OPPOSITE ? 1 : a == android.text.Layout.Alignment.ALIGN_CENTER ? 2 : 0) << 4;
+            }
+        }
+        return new int[] { f, c, z };
+    }
+    void applyRuns(Editable e, byte[] u, int base, int[] runs) {
+        for (int k = 0; k + 4 < runs.length; k += 5) {
+            int a = base + charOf(u, runs[k]), b = base + charOf(u, runs[k] + runs[k + 1]);
+            style(e, a, b, runs[k + 2], runs[k + 3], runs[k + 4]);
+        }
+    }
+
+    // ---- the seam ----
+    void setAll(byte[] text, int[] runs) {
+        quiet++;
+        android.text.SpannableStringBuilder b = new android.text.SpannableStringBuilder(new String(text, U8));
+        setText(b, BufferType.EDITABLE);
+        Editable e = getText();
+        applyRuns(e, text, 0, runs);
+        lastLen = e.length();
+        typing = null;
+        setSelection(0);
+        quiet--;
+    }
+    void replace(int start, int len, byte[] text, int[] runs, boolean attrsOnly) {
+        quiet++;
+        Editable e = getText();
+        byte[] cur = e.toString().getBytes(U8);
+        int a = charOf(cur, start), b = charOf(cur, start + len);
+        int s0 = getSelectionStart(), s1 = getSelectionEnd();
+        if (!attrsOnly) e.replace(a, b, new String(text, U8));
+        int end = a + new String(text, U8).length();
+        style(e, a, end, 0, 0, 0);
+        applyRuns(e, text, a, runs);
+        if (attrsOnly && s0 >= 0) setSelection(Math.min(s0, e.length()), Math.min(s1, e.length()));
+        lastLen = e.length();
+        quiet--;
+    }
+    byte[] textBytes() { return getText().toString().getBytes(U8); }
+    int[] runs() {
+        Editable e = getText();
+        String s = e.toString();
+        java.util.ArrayList<Integer> out = new java.util.ArrayList<>();
+        int i = 0, n = s.length(), at = 0;
+        while (i < n) {
+            int j = e.nextSpanTransition(i, n, Object.class);
+            if (j <= i) j = n;
+            int[] st = styleAt(e, i);
+            int nb = s.substring(i, j).getBytes(U8).length;
+            int k = out.size();
+            if (k >= 5 && out.get(k - 3) == st[0] && out.get(k - 2) == st[1] && out.get(k - 1) == st[2]) {
+                out.set(k - 4, out.get(k - 4) + nb);
+            } else {
+                out.add(at); out.add(nb); out.add(st[0]); out.add(st[1]); out.add(st[2]);
+            }
+            at += nb;
+            i = j;
+        }
+        int[] r = new int[out.size()];
+        for (int k = 0; k < r.length; k++) r[k] = out.get(k);
+        return r;
+    }
+    int[] selectionBytes() {
+        String s = getText().toString();
+        int a = Math.max(0, getSelectionStart()), b = Math.max(0, getSelectionEnd());
+        int x = byteOf(s, Math.min(a, b)), y = byteOf(s, Math.max(a, b));
+        return new int[] { x, y - x };
+    }
+    void setSelectionBytes(int start, int len) {
+        byte[] u = textBytes();
+        quiet++;
+        setSelection(charOf(u, start), charOf(u, start + len));
+        quiet--;
+    }
+    void setTyping(int flags, int colour, int size) { typing = new int[] { flags, colour, size }; }
+
+    // ---- from the user ----
+    @Override protected void onSelectionChanged(int s, int e) {
+        super.onSelectionChanged(s, e);
+        if (quiet > 0 || id == 0) return;
+        int len = length();
+        if (len != lastLen) { lastLen = len; return; } // the caret moving with an edit
+        typing = null;
+        nativeTvSelected(id);
+    }
+    @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) { }
+    @Override public void onTextChanged(CharSequence s, int start, int before, int count) {
+        if (quiet == 0 && count > 0) { insAt = start; insN = count; }
+    }
+    @Override public void afterTextChanged(Editable e) {
+        if (quiet > 0) return;
+        if (insAt >= 0 && typing != null) {
+            quiet++;
+            style(e, insAt, Math.min(e.length(), insAt + insN), typing[0], typing[1], typing[2]);
+            quiet--;
+            typing = null;
+        }
+        insAt = -1;
+        nativeTvChanged(id);
+    }
+    @Override public boolean onKeyDown(int code, KeyEvent ev) {
+        if (ev.isCtrlPressed() && (code == KeyEvent.KEYCODE_Z || code == KeyEvent.KEYCODE_Y)) {
+            nativeTvUndo(id, (code == KeyEvent.KEYCODE_Y || ev.isShiftPressed()) ? 1 : 0);
+            return true;
+        }
+        return super.onKeyDown(code, ev);
+    }
+    // the rigs': text typed at the caret, as the keyboard commits it
+    void testType(byte[] text) {
+        Editable e = getText();
+        int a = Math.max(0, getSelectionStart()), b = Math.max(0, getSelectionEnd());
+        e.replace(Math.min(a, b), Math.max(a, b), new String(text, U8));
     }
 }

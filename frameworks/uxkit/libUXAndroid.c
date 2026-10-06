@@ -2666,6 +2666,149 @@ void ux_and_quit(int rc) {
     _exit(rc);
 }
 
+/* ── the native text view (UXTextView): UXTextEdit, a multi-line EditText of spans (the bridge dex) ──
+ * The content crosses as UTF-8 byte arrays (not JNI's modified UTF-8) and style runs of five ints; the
+ * spans are the Java side's.  The id is handle * 4096 + node.  The undo is the toolkit's. */
+typedef void (*ux_tv_fn)(int handle, int node);
+typedef void (*ux_tv_undo_fn)(int handle, int node, int redo);
+static ux_tv_fn gTvChanged, gTvSelected;
+static ux_tv_undo_fn gTvUndo;
+static jclass gTextEditCls;
+static jmethodID gTvInit, gTvSetAll, gTvReplace, gTvBytes, gTvRuns, gTvSel, gTvSetSel, gTvTyping, gTvType, gTvFocus;
+static jobject gTv[UXA_MAXW][UXA_MAXN];
+void ux_and_textview_set_hooks(void *changed, void *selected, void *undo) {
+    gTvChanged = (ux_tv_fn)changed;
+    gTvSelected = (ux_tv_fn)selected;
+    gTvUndo = (ux_tv_undo_fn)undo;
+}
+static void n_tv_changed(JNIEnv *env, jclass c, jint id) { (void)env; (void)c; if (gTvChanged) gTvChanged(id / 4096, id % 4096); }
+static void n_tv_selected(JNIEnv *env, jclass c, jint id) { (void)env; (void)c; if (gTvSelected) gTvSelected(id / 4096, id % 4096); }
+static void n_tv_undo(JNIEnv *env, jclass c, jint id, jint redo) { (void)env; (void)c; if (gTvUndo) gTvUndo(id / 4096, id % 4096, redo); }
+static void tvClassReady(JNIEnv *env) {
+    static const JNINativeMethod nt[] = {
+        { "nativeTvChanged", "(I)V", (void *)n_tv_changed },
+        { "nativeTvSelected", "(I)V", (void *)n_tv_selected },
+        { "nativeTvUndo", "(II)V", (void *)n_tv_undo },
+    };
+    (*env)->RegisterNatives(env, gTextEditCls, nt, 3);
+    gTvInit = (*env)->GetMethodID(env, gTextEditCls, "<init>", "(Landroid/content/Context;I)V");
+    gTvSetAll = (*env)->GetMethodID(env, gTextEditCls, "setAll", "([B[I)V");
+    gTvReplace = (*env)->GetMethodID(env, gTextEditCls, "replace", "(II[B[IZ)V");
+    gTvBytes = (*env)->GetMethodID(env, gTextEditCls, "textBytes", "()[B");
+    gTvRuns = (*env)->GetMethodID(env, gTextEditCls, "runs", "()[I");
+    gTvSel = (*env)->GetMethodID(env, gTextEditCls, "selectionBytes", "()[I");
+    gTvSetSel = (*env)->GetMethodID(env, gTextEditCls, "setSelectionBytes", "(II)V");
+    gTvTyping = (*env)->GetMethodID(env, gTextEditCls, "setTyping", "(III)V");
+    gTvType = (*env)->GetMethodID(env, gTextEditCls, "testType", "([B)V");
+    gTvFocus = (*env)->GetMethodID(env, gTextEditCls, "requestFocus", "()Z");
+    check(env, "UXTextEdit");
+}
+static jobject tvAt(int handle, int node) {
+    if (handle < 0 || handle >= UXA_MAXW || node < 0 || node >= UXA_MAXN) return NULL;
+    return gTv[handle][node];
+}
+static jbyteArray tvBytesOf(JNIEnv *env, const char *text, int n) {
+    jbyteArray a = (*env)->NewByteArray(env, n);
+    if (n > 0) (*env)->SetByteArrayRegion(env, a, 0, n, (const jbyte *)text);
+    return a;
+}
+static jintArray tvIntsOf(JNIEnv *env, const int *v, int n) {
+    jintArray a = (*env)->NewIntArray(env, n);
+    if (n > 0) (*env)->SetIntArrayRegion(env, a, 0, n, (const jint *)v);
+    return a;
+}
+void ux_and_make_textview(int handle, int node, int x, int y, int w, int h) {
+    JNIEnv *env = envNow();
+    if (!gTextEditCls || !gTvInit) return;
+    jobject ed = (*env)->NewObject(env, gTextEditCls, gTvInit, gActivity, handle * 4096 + node);
+    if (!check(env, "make_textview") || !ed) return;
+    place(env, handle, node, ed, x, y, w, h);
+    gTv[handle][node] = gCtl[handle][node];
+}
+void ux_and_textview_set_all(int handle, int node, const char *text, int nbytes, const int *runs, int nruns) {
+    JNIEnv *env = envNow();
+    jobject ed = tvAt(handle, node);
+    if (!ed) return;
+    (*env)->CallVoidMethod(env, ed, gTvSetAll, tvBytesOf(env, text, nbytes), tvIntsOf(env, runs, nruns * 5));
+    check(env, "textview_set_all");
+}
+void ux_and_textview_replace(int handle, int node, int start, int len, const char *text, int nbytes,
+                             const int *runs, int nruns, int attrsOnly) {
+    JNIEnv *env = envNow();
+    jobject ed = tvAt(handle, node);
+    if (!ed) return;
+    (*env)->CallVoidMethod(env, ed, gTvReplace, start, len, tvBytesOf(env, text, nbytes), tvIntsOf(env, runs, nruns * 5),
+                           (jboolean)(attrsOnly != 0));
+    check(env, "textview_replace");
+}
+void ux_and_textview_size(int handle, int node, int *nbytes, int *nruns) {
+    JNIEnv *env = envNow();
+    jobject ed = tvAt(handle, node);
+    *nbytes = 0;
+    *nruns = 0;
+    if (!ed) return;
+    jbyteArray b = (jbyteArray)(*env)->CallObjectMethod(env, ed, gTvBytes);
+    jintArray r = (jintArray)(*env)->CallObjectMethod(env, ed, gTvRuns);
+    if (b) *nbytes = (*env)->GetArrayLength(env, b);
+    if (r) *nruns = (*env)->GetArrayLength(env, r) / 5;
+    check(env, "textview_size");
+}
+int ux_and_textview_read(int handle, int node, char *buf, int cap, int *runs, int maxRuns) {
+    JNIEnv *env = envNow();
+    jobject ed = tvAt(handle, node);
+    if (!ed || cap <= 0) return 0;
+    jbyteArray b = (jbyteArray)(*env)->CallObjectMethod(env, ed, gTvBytes);
+    jintArray r = (jintArray)(*env)->CallObjectMethod(env, ed, gTvRuns);
+    int n = b ? (*env)->GetArrayLength(env, b) : 0;
+    if (n > cap - 1) n = cap - 1;
+    if (n > 0) (*env)->GetByteArrayRegion(env, b, 0, n, (jbyte *)buf);
+    buf[n] = 0;
+    int k = r ? (*env)->GetArrayLength(env, r) / 5 : 0;
+    if (k > maxRuns) k = maxRuns;
+    if (k > 0) (*env)->GetIntArrayRegion(env, r, 0, k * 5, (jint *)runs);
+    check(env, "textview_read");
+    return k;
+}
+void ux_and_textview_selection(int handle, int node, int *start, int *len) {
+    JNIEnv *env = envNow();
+    jobject ed = tvAt(handle, node);
+    *start = 0;
+    *len = 0;
+    if (!ed) return;
+    jintArray r = (jintArray)(*env)->CallObjectMethod(env, ed, gTvSel);
+    jint v[2] = { 0, 0 };
+    if (r) (*env)->GetIntArrayRegion(env, r, 0, 2, v);
+    *start = v[0];
+    *len = v[1];
+    check(env, "textview_selection");
+}
+void ux_and_textview_set_selection(int handle, int node, int start, int len) {
+    JNIEnv *env = envNow();
+    jobject ed = tvAt(handle, node);
+    if (!ed) return;
+    (*env)->CallVoidMethod(env, ed, gTvSetSel, start, len);
+    check(env, "textview_set_selection");
+}
+void ux_and_textview_set_typing(int handle, int node, int flags, int colour, int size) {
+    JNIEnv *env = envNow();
+    jobject ed = tvAt(handle, node);
+    if (!ed) return;
+    (*env)->CallVoidMethod(env, ed, gTvTyping, flags, colour, size);
+}
+void ux_and_textview_focus(int handle, int node) {
+    JNIEnv *env = envNow();
+    jobject ed = tvAt(handle, node);
+    if (ed) (*env)->CallBooleanMethod(env, ed, gTvFocus);
+}
+/* the rigs': text typed at the caret, as the keyboard commits it (the view reports the change) */
+void ux_and_test_textview_type(int handle, int node, const char *text) {
+    JNIEnv *env = envNow();
+    jobject ed = tvAt(handle, node);
+    if (!ed) return;
+    (*env)->CallVoidMethod(env, ed, gTvType, tvBytesOf(env, text, (int)strlen(text)));
+    check(env, "test_textview_type");
+}
+
 /* ── onCreate: ours by lib_name; delegates to the app lib's (the glue) ──── */
 typedef void (*onCreate_fn)(ANativeActivity *, void *, size_t);
 
@@ -2729,6 +2872,8 @@ JNIEXPORT void ANativeActivity_onCreate(ANativeActivity *activity,
     LOADC(gTableCls, "UXTable")
     LOADC(gMenuCls, "UXMenuButton")
     LOADC(gPickerCls, "UXBridge$Picker")
+    LOADC(gTextEditCls, "UXTextEdit")
+    tvClassReady(env);
 
     static const JNINativeMethod nb[] = {
         { "nativeFire", "(I)V", (void *)n_fire },
