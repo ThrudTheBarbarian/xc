@@ -15,7 +15,7 @@ else
   PLATFORM_OBJCFLAGS = -fobjc-runtime=gnustep-2.0 -fblocks \
                        -include src/xtc/support/dispatch_compat.h \
                        $(shell gnustep-config --objc-flags)
-  LDFLAGS            = $(shell gnustep-config --base-libs)
+  LDFLAGS            = $(shell gnustep-config --base-libs) -lz
 endif
 
 VERSION_DEF  = -DXTC_VERSION='"$(VERSION)"'
