@@ -73,7 +73,7 @@ Every `String*` is also an [`Object*`](/compiler/api/object/) and fits anywhere 
 
 **Character sets** · [byteIndexOfSet](#byteindexofset) · [lastByteIndexOfSet](#lastbyteindexofset) · [containsByteFromSet](#containsbytefromset) · [asCharacterSet](#ascharacterset)
 
-**Paths** · [pathSeparator](#pathseparator) · [isAbsolutePath](#isabsolutepath) · [lastPathComponent](#lastpathcomponent) · [deletingLastPathComponent](#deletinglastpathcomponent) · [pathExtension](#pathextension) · [deletingPathExtension](#deletingpathextension) · [appendingPathComponent](#appendingpathcomponent) · [appendingPathExtension](#appendingpathextension)
+**Paths** · [pathSeparator](#pathseparator) · [isAbsolutePath](#isabsolutepath) · [lastPathComponent](#lastpathcomponent) · [deletingLastPathComponent](#deletinglastpathcomponent) · [pathExtension](#pathextension) · [deletingPathExtension](#deletingpathextension) · [appendingPathComponent](#appendingpathcomponent) · [appendingPathExtension](#appendingpathextension) · [pathComponents](#pathcomponents) · [pathWithComponents](#pathwithcomponents) · [normalizedPath](#normalizedpath)
 
 **Other encodings** · [withEncodedBytes](#withencodedbytes) · (encode via [`Data.withStringEncoded`](/compiler/api/data/))
 
@@ -659,6 +659,34 @@ The path with `component` appended, inserting a separator as needed.
 String* appendingPathExtension(String* ext)
 ```
 The path with `.ext` appended to the last component.
+
+### pathComponents
+```c
+Array* pathComponents(void)
+```
+The components as `String`s, as Foundation gives them: `/usr//lib/` is `/`,
+`usr`, `lib`. An absolute path's first component is `/`; repeated and trailing
+separators add nothing; `""` has none. **From the release after 0.71.**
+
+### pathWithComponents
+```c
+static String* pathWithComponents(Array* parts)
+```
+The path made of `parts`, joined as
+[`appendingPathComponent`](#appendingpathcomponent) joins them; a first part of
+`/` makes it absolute. **From the release after 0.71.**
+
+### normalizedPath
+```c
+String* normalizedPath(void)
+```
+The path with `.` components dropped and each `..` taking away the component
+before it, without looking at a filesystem (so a `..` after a symbolic link is
+resolved by name, not by where the link points). A `..` at the root of an
+absolute path is dropped, and the leading `..` of a relative path stay:
+`a/b/../c/./d.txt` is `a/c/d.txt`, `/a/../../b` is `/b`, `../../x` stays.
+Separators are collapsed and a trailing one dropped; a relative path that
+cancels out entirely is `""`. **From the release after 0.71.**
 
 [↑ Topics](#topics)
 

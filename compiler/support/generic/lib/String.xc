@@ -1322,6 +1322,85 @@ class String<Comparable, Hashable, Copying>
         return out;
         }
 
+    // The components, as Foundation gives them: "/usr/lib/" is "/", "usr",
+    // "lib" (an absolute path's first component is "/"), and repeated or
+    // trailing separators add nothing. "" has none.
+    Array* pathComponents(void)
+        {
+        Array* parts = new Array();
+        u8* b = _bytes;
+        u32 i = (u32)0;
+        if (_length > (u32)0 && String.isPathSeparator(b[0]))
+            parts.add(String.withCString("/"));
+        while (i < _length)
+            {
+            while (i < _length && String.isPathSeparator(b[i]))
+                i = i + (u32)1;
+            u32 start = i;
+            while (i < _length && !String.isPathSeparator(b[i]))
+                i = i + (u32)1;
+            if (i > start)
+                parts.add(substringBytes(start, i - start));
+            }
+        return parts;
+        }
+
+    // The path made of `parts` (Strings), joined as appendingPathComponent
+    // joins them: a first part of "/" makes it absolute.
+    static String* pathWithComponents(Array* parts)
+        {
+        String* out = String.withCString("");
+        if (parts == 0)
+            return out;
+        for (u32 i = (u32)0; i < parts.count(); i = i + (u32)1)
+            {
+            String* part = (String* ?)parts.get(i);
+            if (part == 0)
+                continue;
+            // Joining onto "" drops separators, so the root starts the path.
+            if (out.isEmpty() && part.isAbsolutePath() && part.lastPathComponent().equals(String.withCString("/")))
+                out = String.withCString("/");
+            else
+                out = out.appendingPathComponent(part);
+            }
+        return out;
+        }
+
+    // The path with "." components dropped and each ".." taking away the
+    // component before it, without looking at a filesystem (so a ".." after
+    // a symbolic link is resolved by name, as Swift's lexicallyNormalized
+    // does). A ".." at the root of an absolute path is dropped; leading ".."
+    // of a relative path stay. Separators are collapsed and a trailing one
+    // dropped. A relative path that cancels out entirely is "".
+    String* normalizedPath(void)
+        {
+        Array* parts = pathComponents();
+        Array* kept = new Array();
+        bool absolute = isAbsolutePath();
+        String* dot = String.withCString(".");
+        String* dotdot = String.withCString("..");
+        for (u32 i = (u32)0; i < parts.count(); i = i + (u32)1)
+            {
+            String* part = (String*)parts.get(i);
+            if (part.equals(dot))
+                continue;
+            if (part.equals(dotdot))
+                {
+                u32 n = kept.count();
+                String* last = n > (u32)0 ? (String*)kept.get(n - (u32)1) : (String*)0;
+                if (last != 0 && !last.equals(dotdot) && !(n == (u32)1 && absolute))
+                    {
+                    kept.removeAt(n - (u32)1);
+                    continue;
+                    }
+                if (absolute && n <= (u32)1)
+                    continue;
+                }
+            kept.add(part);
+            }
+        return String.pathWithComponents(kept);
+        }
+
     // ── Buffer-building primitives ───────────────────────────────
     // These take a heap-owned u8* working buffer + a cursor and
     // emit at buf[cursor..]; the caller is responsible for sizing
