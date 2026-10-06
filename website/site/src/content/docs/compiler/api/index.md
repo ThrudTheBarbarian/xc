@@ -11,10 +11,11 @@ The xcc standard library is a set of `.xc` classes that ship with the compiler. 
 support/
   generic/lib/        ← portable classes: work on every target
     Foundation.xc       ← umbrella: Object + Number + String + Data + Array + Map + Set
-                          + Bag + Range + BinaryHeap + Cache
+                          + Bag + Range + BinaryHeap + Cache + Null
     Object.xc           ← the runtime's root class
     Number.xc  String.xc  Data.xc  Array.xc  Map.xc  Set.xc  CharacterSet.xc
-    Bag.xc  Range.xc  BinaryHeap.xc  Cache.xc
+    Bag.xc  Range.xc  BinaryHeap.xc  Cache.xc  Null.xc
+    JSON.xc             ← JSON text to Foundation objects and back
     Comparable.xc  Hashable.xc  Enumerable.xc  Copying.xc  Codable.xc  Error.xc   ← protocols
     Coder.xc            ← keyed archiving to JSON, with gzip
     Thread.xc  Mutex.xc  Cond.xc  Sem.xc  Atomic.xc  ThreadLocal.xc  Pool.xc
@@ -111,6 +112,8 @@ and every method grouped by task with a jump-list at the top.
 | [`Range`](/compiler/api/range/) | a half-open index range (from the release after 0.71) |
 | [`BinaryHeap`](/compiler/api/binaryheap/) | a priority queue (from the release after 0.71) |
 | [`Cache`](/compiler/api/cache/) | a bounded LRU cache (from the release after 0.71) |
+| [`Null`](/compiler/api/null/) | the shared "nothing here" object (from the release after 0.71) |
+| [`JSON`](/compiler/api/json/) | JSON text to Foundation objects and back (from the release after 0.71) |
 | [`Coder`](/compiler/api/coder/) | keyed archiving of an object graph to JSON, optionally gzipped |
 
 **Protocols**: [`Comparable`](/compiler/api/comparable/), [`Hashable`](/compiler/api/hashable/), [`Enumerable`](/compiler/api/enumerable/), [`Copying`](/compiler/api/copying/), [`Codable`](/compiler/api/codable/) and [`Error`](/compiler/api/error/), the small interfaces the classes conform to.

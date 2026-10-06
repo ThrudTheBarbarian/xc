@@ -107,6 +107,7 @@
 #import "Foundation.xc"
 #import "Error.xc"
 #import "Codable.xc"
+#import "JSON.xc"
 
 // ── Class names ─────────────────────────────────────────────────────────────
 // The two calls that use the compiler's class-name table: the dynamic name of
@@ -128,22 +129,6 @@ void _coder_free(pointer p)
     __arc_release(p);
     }
 
-// A double's bits, and back. The language has no bit cast, so go through
-// memory; `double` is IEEE binary64 on every target this file builds for.
-u64 _coder_dbits(double d)
-    {
-    double v = d;
-    u64* p = (u64*)&v;
-    return *p;
-    }
-
-double _coder_dfrom(u64 bits)
-    {
-    double v = 0.0d;
-    u64* p = (u64*)&v;
-    *p = bits;
-    return v;
-    }
 
 // Deflate's length and distance alphabets (RFC 1951 §3.2.5).
 u16 _coder_lenBase[29] = { 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31,
@@ -178,1164 +163,6 @@ class CoderError <Error>
     String* message(void)
         {
         return _message;
-        }
-    }
-
-// ═════════════════════════════════════════════════════════════════════════════
-// CoderBig — just enough unsigned bignum for exact decimal <-> double.
-// ═════════════════════════════════════════════════════════════════════════════
-//
-// Little-endian 32-bit limbs, always normalised (no zero limb on top), so a
-// zero value has no limbs at all.
-
-class CoderBig
-    {
-    u32* _w;
-    u32 _n;
-    u32 _cap;
-
-    void init(void)
-        {
-        _w = (u32*)0;
-        _n = (u32)0;
-        _cap = (u32)0;
-        }
-
-    void dealloc(void)
-        {
-        _coder_free((pointer)_w);
-        }
-
-    static CoderBig* withU64(u64 v)
-        {
-        CoderBig* b = new CoderBig();
-        b._ensure((u32)2);
-        u32* w = b._w;
-        w[0] = (u32)v;
-        w[1] = (u32)(v >> (u64)32);
-        b._n = (u32)2;
-        b._trim();
-        return b;
-        }
-
-    CoderBig* dup(void)
-        {
-        CoderBig* b = new CoderBig();
-        b._ensure(_n + (u32)1);
-        u32* s = _w;
-        u32* d = b._w;
-        for (u32 i = (u32)0; i < _n; i++)
-            d[i] = s[i];
-        b._n = _n;
-        return b;
-        }
-
-    void _ensure(u32 need)
-        {
-        if (need <= _cap)
-            return;
-        u32 cap = _cap * (u32)2;
-        if (cap < need)
-            cap = need + (u32)4;
-        u32* fresh = new u32[cap];
-        u32* old = _w;
-        for (u32 i = (u32)0; i < _n; i++)
-            fresh[i] = old[i];
-        _w = fresh;
-        _cap = cap;
-        _coder_free((pointer)old);
-        }
-
-    void _trim(void)
-        {
-        u32* w = _w;
-        while (_n > (u32)0 && w[_n - (u32)1] == (u32)0)
-            _n = _n - (u32)1;
-        }
-
-    bool isZero(void)
-        {
-        return _n == (u32)0;
-        }
-
-    // self = self * m + a
-    void mulAdd(u32 m, u32 a)
-        {
-        u64 carry = (u64)a;
-        u32* w = _w;
-        for (u32 i = (u32)0; i < _n; i++)
-            {
-            u64 t = (u64)w[i] * (u64)m + carry;
-            w[i] = (u32)t;
-            carry = t >> (u64)32;
-            }
-        if (carry != (u64)0)
-            {
-            _ensure(_n + (u32)1);
-            w = _w;
-            w[_n] = (u32)carry;
-            _n = _n + (u32)1;
-            }
-        }
-
-    // self = self * 5^e
-    void mulPow5(u32 e)
-        {
-        while (e >= (u32)13)
-            {
-            mulAdd((u32)1220703125, (u32)0);
-            e = e - (u32)13;
-            }
-        u32 m = (u32)1;
-        while (e > (u32)0)
-            {
-            m = m * (u32)5;
-            e = e - (u32)1;
-            }
-        if (m != (u32)1)
-            mulAdd(m, (u32)0);
-        }
-
-    void shl(u32 bits)
-        {
-        if (_n == (u32)0 || bits == (u32)0)
-            return;
-        u32 words = bits >> (u32)5;
-        u32 r = bits & (u32)31;
-        _ensure(_n + words + (u32)1);
-        u32* w = _w;
-        if (r == (u32)0)
-            {
-            for (u32 i = _n; i > (u32)0; i--)
-                w[i - (u32)1 + words] = w[i - (u32)1];
-            }
-        else
-            {
-            u32 top = w[_n - (u32)1] >> ((u32)32 - r);
-            for (u32 i = _n - (u32)1; i > (u32)0; i--)
-                w[i + words] = (w[i] << r) | (w[i - (u32)1] >> ((u32)32 - r));
-            w[words] = w[0] << r;
-            w[_n + words] = top;
-            }
-        for (u32 i = (u32)0; i < words; i++)
-            w[i] = (u32)0;
-        _n = _n + words + (u32)1;
-        _trim();
-        }
-
-    void shr1(void)
-        {
-        u32* w = _w;
-        for (u32 i = (u32)0; i < _n; i++)
-            {
-            u32 hi = (i + (u32)1 < _n) ? w[i + (u32)1] : (u32)0;
-            w[i] = (w[i] >> (u32)1) | (hi << (u32)31);
-            }
-        _trim();
-        }
-
-    u32 bitLength(void)
-        {
-        if (_n == (u32)0)
-            return (u32)0;
-        u32* w = _w;
-        u32 top = w[_n - (u32)1];
-        u32 bits = (u32)0;
-        while (top != (u32)0)
-            {
-            bits = bits + (u32)1;
-            top = top >> (u32)1;
-            }
-        return (_n - (u32)1) * (u32)32 + bits;
-        }
-
-    i32 cmp(CoderBig* o)
-        {
-        if (_n != o._n)
-            return (_n > o._n) ? (i32)1 : (i32)-1;
-        u32* a = _w;
-        u32* b = o._w;
-        for (u32 i = _n; i > (u32)0; i--)
-            {
-            u32 x = a[i - (u32)1];
-            u32 y = b[i - (u32)1];
-            if (x != y)
-                return (x > y) ? (i32)1 : (i32)-1;
-            }
-        return (i32)0;
-        }
-
-    // self = self - o, where self >= o.
-    void sub(CoderBig* o)
-        {
-        u32* a = _w;
-        u32* b = o._w;
-        u64 borrow = (u64)0;
-        for (u32 i = (u32)0; i < _n; i++)
-            {
-            u64 y = (i < o._n) ? (u64)b[i] : (u64)0;
-            u64 t = (u64)a[i] - y - borrow;
-            a[i] = (u32)t;
-            borrow = t >> (u64)63;
-            }
-        _trim();
-        }
-
-    // self = self / d; returns the remainder.
-    u32 divSmall(u32 d)
-        {
-        u64 rem = (u64)0;
-        u32* w = _w;
-        for (u32 i = _n; i > (u32)0; i--)
-            {
-            u64 cur = (rem << (u64)32) | (u64)w[i - (u32)1];
-            w[i - (u32)1] = (u32)(cur / (u64)d);
-            rem = cur % (u64)d;
-            }
-        _trim();
-        return (u32)rem;
-        }
-
-    u32 _limb(u32 i)
-        {
-        if (i >= _n)
-            return (u32)0;
-        u32* w = _w;
-        return w[i];
-        }
-
-    // The 64 bits starting at bit `s`.
-    u64 bitsFrom(u32 s)
-        {
-        u32 q = s >> (u32)5;
-        u32 off = s & (u32)31;
-        u64 lo = ((u64)_limb(q + (u32)1) << (u64)32) | (u64)_limb(q);
-        if (off == (u32)0)
-            return lo;
-        u64 hi = (u64)_limb(q + (u32)2);
-        return (lo >> (u64)off) | (hi << (u64)((u32)64 - off));
-        }
-
-    // Is any bit below bit `s` set?
-    bool anyBelow(u32 s)
-        {
-        u32 q = s >> (u32)5;
-        u32* w = _w;
-        for (u32 i = (u32)0; i < q && i < _n; i++)
-            {
-            if (w[i] != (u32)0)
-                return true;
-            }
-        u32 off = s & (u32)31;
-        if (off != (u32)0 && q < _n)
-            {
-            if ((w[q] & (((u32)1 << off) - (u32)1)) != (u32)0)
-                return true;
-            }
-        return false;
-        }
-
-    // Decimal digits, most significant first. Destroys the value.
-    String* toDecimal(void)
-        {
-        String* out = String.withCString("");
-        if (_n == (u32)0)
-            {
-            out.appendByte((u8)'0');
-            return out;
-            }
-        u32 chunks = (u32)0;
-        u32* parts = new u32[_n * (u32)2 + (u32)2];
-        while (_n != (u32)0)
-            {
-            parts[chunks] = divSmall((u32)1000000000);
-            chunks = chunks + (u32)1;
-            }
-        u8 buf[10];
-        for (u32 c = chunks; c > (u32)0; c--)
-            {
-            u32 v = parts[c - (u32)1];
-            for (u32 k = (u32)0; k < (u32)9; k++)
-                {
-                buf[(u32)8 - k] = (u8)((u8)'0' + (u8)(v % (u32)10));
-                v = v / (u32)10;
-                }
-            u32 from = (u32)0;
-            if (c == chunks)
-                {
-                while (from < (u32)8 && buf[from] == (u8)'0')
-                    from = from + (u32)1;
-                }
-            for (u32 k = from; k < (u32)9; k++)
-                out.appendByte(buf[k]);
-            }
-        _coder_free((pointer)parts);
-        return out;
-        }
-    }
-
-// ── Correctly rounded conversion to double ──────────────────────────────────
-
-u32 _coder_bitlen64(u64 v)
-    {
-    u32 n = (u32)0;
-    while (v != (u64)0)
-        {
-        n = n + (u32)1;
-        v = v >> (u64)1;
-        }
-    return n;
-    }
-
-// q * 2^e2, plus a nonzero amount smaller than 2^e2 when `sticky`, rounded to
-// the nearest double, ties to even. Handles subnormals, overflow to infinity
-// and underflow to zero.
-double _coder_round(u64 q, i32 e2, bool sticky)
-    {
-    if (q == (u64)0)
-        return 0.0d;
-    i32 len = (i32)_coder_bitlen64(q);
-    i32 top = len - (i32)1 + e2;
-    if (top > (i32)1023)
-        return _coder_dfrom((u64)0x7FF0000000000000);
-    i32 shift = len - (i32)53;
-    if (top < (i32)-1022)
-        shift = (i32)-1074 - e2;
-    u64 mant = q;
-    i32 e = e2;
-    if (shift > (i32)0)
-        {
-        if (shift > (i32)64)
-            return 0.0d;
-        u64 half = (u64)1 << (u64)(shift - (i32)1);
-        u64 rest = (shift == (i32)64) ? q : (q & (((u64)1 << (u64)shift) - (u64)1));
-        mant = (shift == (i32)64) ? (u64)0 : (q >> (u64)shift);
-        e = e2 + shift;
-        bool up = false;
-        if (rest > half)
-            up = true;
-        else if (rest == half)
-            up = sticky || ((mant & (u64)1) != (u64)0);
-        else
-            up = false;
-        if (up)
-            mant = mant + (u64)1;
-        if (mant == ((u64)1 << (u64)53))
-            {
-            mant = mant >> (u64)1;
-            e = e + (i32)1;
-            }
-        }
-    else if (shift < (i32)0)
-        {
-        mant = q << (u64)(-shift);
-        e = e2 + shift;
-        }
-    if (mant >= ((u64)1 << (u64)52))
-        {
-        i32 biased = e + (i32)1075;
-        if (biased >= (i32)2047)
-            return _coder_dfrom((u64)0x7FF0000000000000);
-        u64 bits = ((u64)biased << (u64)52) | (mant - ((u64)1 << (u64)52));
-        return _coder_dfrom(bits);
-        }
-    return _coder_dfrom(mant);
-    }
-
-// n * 2^e2, rounded.
-double _coder_bigToDouble(CoderBig* n, i32 e2)
-    {
-    u32 len = n.bitLength();
-    if (len <= (u32)64)
-        return _coder_round(n.bitsFrom((u32)0), e2, false);
-    u32 s = len - (u32)64;
-    return _coder_round(n.bitsFrom(s), e2 + (i32)s, n.anyBelow(s));
-    }
-
-// d * 10^e10, rounded; `ndig` is the digit count of d, for the range check.
-// `d` is consumed.
-double _coder_toDouble(CoderBig* d, i32 e10, u32 ndig)
-    {
-    if (d.isZero())
-        return 0.0d;
-    i32 mag = (i32)ndig + e10;
-    if (mag > (i32)310)
-        return _coder_dfrom((u64)0x7FF0000000000000);
-    if (mag < (i32)-330)
-        return 0.0d;
-    if (e10 >= (i32)0)
-        {
-        d.mulPow5((u32)e10);
-        d.shl((u32)e10);
-        return _coder_bigToDouble(d, (i32)0);
-        }
-    // d / 10^-e10: scale so the quotient has 57 or 58 bits, divide, and let
-    // the remainder decide the sticky bit.
-    CoderBig* m = CoderBig.withU64((u64)1);
-    m.mulPow5((u32)(-e10));
-    m.shl((u32)(-e10));
-    i32 k = (i32)57 + (i32)m.bitLength() - (i32)d.bitLength();
-    if (k > (i32)0)
-        d.shl((u32)k);
-    else if (k < (i32)0)
-        m.shl((u32)(-k));
-    CoderBig* t = m.dup();
-    t.shl((u32)58);
-    u64 q = (u64)0;
-    for (i32 i = (i32)58; i >= (i32)0; i--)
-        {
-        if (d.cmp(t) >= (i32)0)
-            {
-            d.sub(t);
-            q = q | ((u64)1 << (u64)i);
-            }
-        t.shr1();
-        }
-    return _coder_round(q, -k, !d.isZero());
-    }
-
-// A JSON number's text as a double, correctly rounded. The syntax has already
-// been checked by the parser.
-double _coder_parseDouble(u8* s, u32 n)
-    {
-    u32 i = (u32)0;
-    bool neg = false;
-    if (i < n && s[i] == (u8)'-')
-        {
-        neg = true;
-        i = i + (u32)1;
-        }
-    CoderBig* d = new CoderBig();
-    u32 ndig = (u32)0;
-    i32 e10 = (i32)0;
-    bool dropped = false;
-    while (i < n && s[i] >= (u8)'0' && s[i] <= (u8)'9')
-        {
-        u32 v = (u32)(s[i] - (u8)'0');
-        if (ndig == (u32)0 && v == (u32)0)
-            {
-            // a leading zero adds nothing
-            }
-        else if (ndig < (u32)800)
-            {
-            d.mulAdd((u32)10, v);
-            ndig = ndig + (u32)1;
-            }
-        else
-            {
-            e10 = e10 + (i32)1;
-            if (v != (u32)0)
-                dropped = true;
-            }
-        i = i + (u32)1;
-        }
-    if (i < n && s[i] == (u8)'.')
-        {
-        i = i + (u32)1;
-        while (i < n && s[i] >= (u8)'0' && s[i] <= (u8)'9')
-            {
-            u32 v = (u32)(s[i] - (u8)'0');
-            if (ndig == (u32)0 && v == (u32)0)
-                {
-                e10 = e10 - (i32)1;
-                }
-            else if (ndig < (u32)800)
-                {
-                d.mulAdd((u32)10, v);
-                ndig = ndig + (u32)1;
-                e10 = e10 - (i32)1;
-                }
-            else if (v != (u32)0)
-                {
-                dropped = true;
-                }
-            i = i + (u32)1;
-            }
-        }
-    if (i < n && (s[i] == (u8)'e' || s[i] == (u8)'E'))
-        {
-        i = i + (u32)1;
-        bool eneg = false;
-        if (i < n && (s[i] == (u8)'+' || s[i] == (u8)'-'))
-            {
-            eneg = s[i] == (u8)'-';
-            i = i + (u32)1;
-            }
-        i32 ev = (i32)0;
-        while (i < n && s[i] >= (u8)'0' && s[i] <= (u8)'9')
-            {
-            if (ev < (i32)100000)
-                ev = ev * (i32)10 + (i32)(s[i] - (u8)'0');
-            i = i + (u32)1;
-            }
-        e10 = eneg ? e10 - ev : e10 + ev;
-        }
-    // Digits past the 800th only matter as "a little more than this"; 800 is
-    // more than the 767 a double can ever need to be decided.
-    if (dropped)
-        {
-        d.mulAdd((u32)10, (u32)1);
-        ndig = ndig + (u32)1;
-        e10 = e10 - (i32)1;
-        }
-    double v = _coder_toDouble(d, e10, ndig);
-    // Negation flips the sign bit, so -0.0 comes back as itself.
-    if (neg)
-        return -v;
-    return v;
-    }
-
-// ── Shortest round-trip formatting ──────────────────────────────────────────
-
-// Round the decimal digit string `digits` (value 0.digits * 10^point) to at
-// most `p` significant digits, ties to even, trailing zeros removed. Returns
-// the digits; the new point comes back through `pointOut`.
-String* _coder_roundDigits(String* digits, u32 p, i32 point, i32* pointOut)
-    {
-    u32 len = digits.byteLength();
-    u8* s = digits.cString();
-    *pointOut = point;
-    String* r = String.withCString("");
-    if (len <= p)
-        {
-        r.appendBytes(s, len);
-        }
-    else
-        {
-        u8 next = s[p];
-        bool rest = false;
-        for (u32 i = p + (u32)1; i < len; i++)
-            {
-            if (s[i] != (u8)'0')
-                {
-                rest = true;
-                break;
-                }
-            }
-        bool up = next > (u8)'5' || (next == (u8)'5' && (rest || ((s[p - (u32)1] - (u8)'0') & (u8)1) != (u8)0));
-        r.appendBytes(s, p);
-        if (up)
-            {
-            u8* b = r.cString();
-            u32 i = p;
-            while (i > (u32)0)
-                {
-                i = i - (u32)1;
-                if (b[i] == (u8)'9')
-                    {
-                    b[i] = (u8)'0';
-                    if (i == (u32)0)
-                        {
-                        r.insertByte((u32)0, (u8)'1');
-                        *pointOut = point + (i32)1;
-                        }
-                    }
-                else
-                    {
-                    b[i] = b[i] + (u8)1;
-                    break;
-                    }
-                }
-            }
-        }
-    // trailing zeros
-    u32 keep = r.byteLength();
-    u8* b = r.cString();
-    while (keep > (u32)1 && b[keep - (u32)1] == (u8)'0')
-        keep = keep - (u32)1;
-    if (keep < r.byteLength())
-        r.deleteByteRange(keep, r.byteLength() - keep);
-    return r;
-    }
-
-double _coder_digitsToDouble(String* digits, i32 point)
-    {
-    CoderBig* d = new CoderBig();
-    u8* s = digits.cString();
-    u32 n = digits.byteLength();
-    for (u32 i = (u32)0; i < n; i++)
-        d.mulAdd((u32)10, (u32)(s[i] - (u8)'0'));
-    return _coder_toDouble(d, point - (i32)n, n);
-    }
-
-// Append a finite double in the shortest form that reads back as the same
-// value: as a double, or, when `single`, as the float it came from. Always
-// has a '.' or an exponent, so it reads back as a float and not an integer.
-void _coder_appendDouble(String* out, double v, bool single)
-    {
-    u64 bits = _coder_dbits(v);
-    bool neg = (bits >> (u64)63) != (u64)0;
-    u32 ex = (u32)((bits >> (u64)52) & (u64)0x7FF);
-    u64 man = bits & (u64)0x000FFFFFFFFFFFFF;
-    if (neg)
-        out.appendByte((u8)'-');
-    if (ex == (u32)0 && man == (u64)0)
-        {
-        out.appendCString("0.0");
-        return;
-        }
-    u64 m = man;
-    i32 e2 = (i32)-1074;
-    if (ex != (u32)0)
-        {
-        m = man | ((u64)1 << (u64)52);
-        e2 = (i32)ex - (i32)1075;
-        }
-    while (m != (u64)0 && (m & (u64)1) == (u64)0)
-        {
-        m = m >> (u64)1;
-        e2 = e2 + (i32)1;
-        }
-    // m * 2^e2 as an exact decimal: digits * 10^dexp
-    CoderBig* n = CoderBig.withU64(m);
-    i32 dexp = (i32)0;
-    if (e2 > (i32)0)
-        {
-        n.shl((u32)e2);
-        }
-    else if (e2 < (i32)0)
-        {
-        n.mulPow5((u32)(-e2));
-        dexp = e2;
-        }
-    String* all = n.toDecimal();
-    i32 point = (i32)all.byteLength() + dexp;
-    double mag = _coder_dfrom(bits & (u64)0x7FFFFFFFFFFFFFFF);
-    u32 lo = single ? (u32)6 : (u32)15;
-    u32 hi = single ? (u32)9 : (u32)17;
-    // A subnormal carries fewer digits, so its shortest form can be shorter
-    // than the search would otherwise start at.
-    if (ex == (u32)0 || (single && ex < (u32)897))
-        lo = (u32)1;
-    String* digits = (String*)0;
-    i32 dpoint = point;
-    for (u32 p = lo; p <= hi; p++)
-        {
-        i32 np = point;
-        digits = _coder_roundDigits(all, p, point, &np);
-        dpoint = np;
-        double back = _coder_digitsToDouble(digits, np);
-        if (single)
-            {
-            if ((float)back == (float)mag)
-                break;
-            }
-        else if (_coder_dbits(back) == _coder_dbits(mag))
-            {
-            break;
-            }
-        }
-    // d.ddd * 10^k
-    i32 k = dpoint - (i32)1;
-    u8* d = digits.cString();
-    u32 nd = digits.byteLength();
-    if (k >= (i32)-5 && k <= (i32)16)
-        {
-        if (dpoint <= (i32)0)
-            {
-            out.appendCString("0.");
-            for (i32 z = dpoint; z < (i32)0; z++)
-                out.appendByte((u8)'0');
-            out.appendBytes(d, nd);
-            }
-        else if ((u32)dpoint >= nd)
-            {
-            out.appendBytes(d, nd);
-            for (u32 z = nd; z < (u32)dpoint; z++)
-                out.appendByte((u8)'0');
-            out.appendCString(".0");
-            }
-        else
-            {
-            out.appendBytes(d, (u32)dpoint);
-            out.appendByte((u8)'.');
-            out.appendBytes(&d[dpoint], nd - (u32)dpoint);
-            }
-        return;
-        }
-    out.appendByte(d[0]);
-    out.appendByte((u8)'.');
-    if (nd > (u32)1)
-        out.appendBytes(&d[1], nd - (u32)1);
-    else
-        out.appendByte((u8)'0');
-    out.appendByte((u8)'e');
-    if (k < (i32)0)
-        {
-        out.appendByte((u8)'-');
-        k = -k;
-        }
-    else
-        {
-        out.appendByte((u8)'+');
-        }
-    out.append(String.withI32(k));
-    }
-
-// ═════════════════════════════════════════════════════════════════════════════
-// CoderNode / CoderJSON — a JSON document tree and the parser that builds it.
-// ═════════════════════════════════════════════════════════════════════════════
-
-enum CoderKind = {CK_NULL, CK_FALSE, CK_TRUE, CK_NUMBER, CK_STRING, CK_ARRAY, CK_OBJECT};
-
-class CoderNode
-    {
-    u8 kind;        // a CoderKind
-    String* text;   // a string's value, or a number's text
-    Array* items;   // an array's elements, or an object's values
-    Array* keys;    // an object's keys (String), parallel to items
-
-    // The value under `key` in an object node, or null. With `dollar`, the key
-    // is matched with one extra '$' in front (the escaped form of a user key
-    // that begins with '$').
-    CoderNode* field(u8* key, bool dollar)
-        {
-        if (kind != CK_OBJECT)
-            return (CoderNode*)0;
-        u32 klen = String._cstringLen(key);
-        u32 want = dollar ? klen + (u32)1 : klen;
-        u32 n = keys.count();
-        for (u32 i = (u32)0; i < n; i++)
-            {
-            String* k = (String*)keys.get(i);
-            if (k.byteLength() != want)
-                continue;
-            u8* b = k.cString();
-            u32 at = (u32)0;
-            if (dollar)
-                {
-                if (b[0] != (u8)'$')
-                    continue;
-                at = (u32)1;
-                }
-            bool same = true;
-            for (u32 j = (u32)0; j < klen; j++)
-                {
-                if (b[at + j] != key[j])
-                    {
-                    same = false;
-                    break;
-                    }
-                }
-            if (same)
-                return (CoderNode*)items.get(i);
-            }
-        return (CoderNode*)0;
-        }
-
-    bool isString(string s)
-        {
-        return kind == CK_STRING && textIs(s);
-        }
-
-    // The node's text (a string's value or a number's digits) is `s`.
-    bool textIs(string s)
-        {
-        if (text == 0)
-            return false;
-        u32 n = String._cstringLen(s);
-        if (text.byteLength() != n)
-            return false;
-        u8* b = text.cString();
-        for (u32 i = (u32)0; i < n; i++)
-            {
-            if (b[i] != s[i])
-                return false;
-            }
-        return true;
-        }
-
-    // A number written without a fraction or an exponent.
-    bool isInteger(void)
-        {
-        if (kind != CK_NUMBER)
-            return false;
-        u8* b = text.cString();
-        u32 n = text.byteLength();
-        for (u32 i = (u32)0; i < n; i++)
-            {
-            u8 c = b[i];
-            if (c == (u8)'.' || c == (u8)'e' || c == (u8)'E')
-                return false;
-            }
-        return true;
-        }
-    }
-
-class CoderJSON
-    {
-    u8* _p;
-    u32 _n;
-    u32 _i;
-    u32 _depth;
-    String* _error;
-
-    CoderNode* parse(u8* p, u32 n)
-        {
-        _p = p;
-        _n = n;
-        _i = (u32)0;
-        _depth = (u32)0;
-        _error = (String*)0;
-        _ws();
-        CoderNode* v = _value();
-        if (_error != 0)
-            return (CoderNode*)0;
-        _ws();
-        if (_i != _n)
-            {
-            _fail("unexpected text after the JSON value");
-            return (CoderNode*)0;
-            }
-        return v;
-        }
-
-    void _fail(string why)
-        {
-        if (_error != 0)
-            return;
-        _error = String.withCString("bad JSON at byte ");
-        _error.append(String.withU32(_i));
-        _error.appendCString(": ");
-        _error.appendCString(why);
-        }
-
-    void _ws(void)
-        {
-        u8* p = _p;
-        while (_i < _n)
-            {
-            u8 c = p[_i];
-            if (c != (u8)' ' && c != (u8)'\t' && c != (u8)'\n' && c != (u8)'\r')
-                return;
-            _i = _i + (u32)1;
-            }
-        }
-
-    bool _word(string w, u32 len)
-        {
-        if (_i + len > _n)
-            return false;
-        u8* p = _p;
-        for (u32 k = (u32)0; k < len; k++)
-            {
-            if (p[_i + k] != w[k])
-                return false;
-            }
-        _i = _i + len;
-        return true;
-        }
-
-    CoderNode* _node(CoderKind kind)
-        {
-        CoderNode* n = new CoderNode();
-        n.kind = (u8)kind;
-        return n;
-        }
-
-    CoderNode* _value(void)
-        {
-        if (_i >= _n)
-            {
-            _fail("unexpected end of input");
-            return (CoderNode*)0;
-            }
-        u8* p = _p;
-        u8 c = p[_i];
-        if (c == (u8)'{')
-            return _object();
-        if (c == (u8)'[')
-            return _array();
-        if (c == (u8)'"')
-            {
-            CoderNode* s = _node(CK_STRING);
-            s.text = _string();
-            return s;
-            }
-        if (c == (u8)'-' || (c >= (u8)'0' && c <= (u8)'9'))
-            return _number();
-        if (_word("true", (u32)4))
-            return _node(CK_TRUE);
-        if (_word("false", (u32)5))
-            return _node(CK_FALSE);
-        if (_word("null", (u32)4))
-            return _node(CK_NULL);
-        _fail("expected a value");
-        return (CoderNode*)0;
-        }
-
-    bool _digits(void)
-        {
-        u8* p = _p;
-        u32 start = _i;
-        while (_i < _n && p[_i] >= (u8)'0' && p[_i] <= (u8)'9')
-            _i = _i + (u32)1;
-        return _i > start;
-        }
-
-    CoderNode* _number(void)
-        {
-        u8* p = _p;
-        u32 start = _i;
-        if (p[_i] == (u8)'-')
-            _i = _i + (u32)1;
-        if (_i < _n && p[_i] == (u8)'0')
-            {
-            _i = _i + (u32)1;
-            }
-        else if (!_digits())
-            {
-            _fail("bad number");
-            return (CoderNode*)0;
-            }
-        if (_i < _n && p[_i] == (u8)'.')
-            {
-            _i = _i + (u32)1;
-            if (!_digits())
-                {
-                _fail("bad number");
-                return (CoderNode*)0;
-                }
-            }
-        if (_i < _n && (p[_i] == (u8)'e' || p[_i] == (u8)'E'))
-            {
-            _i = _i + (u32)1;
-            if (_i < _n && (p[_i] == (u8)'+' || p[_i] == (u8)'-'))
-                _i = _i + (u32)1;
-            if (!_digits())
-                {
-                _fail("bad number");
-                return (CoderNode*)0;
-                }
-            }
-        CoderNode* n = _node(CK_NUMBER);
-        n.text = String.withBytes(&p[start], _i - start);
-        return n;
-        }
-
-    u32 _hex4(void)
-        {
-        if (_i + (u32)4 > _n)
-            {
-            _fail("unexpected end of input");
-            return (u32)0;
-            }
-        u8* p = _p;
-        u32 v = (u32)0;
-        for (u32 k = (u32)0; k < (u32)4; k++)
-            {
-            u8 c = p[_i + k];
-            u32 d = (u32)0;
-            if (c >= (u8)'0' && c <= (u8)'9')
-                d = (u32)(c - (u8)'0');
-            else if (c >= (u8)'a' && c <= (u8)'f')
-                d = (u32)(c - (u8)'a') + (u32)10;
-            else if (c >= (u8)'A' && c <= (u8)'F')
-                d = (u32)(c - (u8)'A') + (u32)10;
-            else
-                {
-                _fail("bad \\u escape");
-                return (u32)0;
-                }
-            v = (v << (u32)4) | d;
-            }
-        _i = _i + (u32)4;
-        return v;
-        }
-
-    // At the opening quote. Returns the decoded string.
-    String* _string(void)
-        {
-        u8* p = _p;
-        String* s = String.withCString("");
-        _i = _i + (u32)1;
-        while (true)
-            {
-            if (_i >= _n)
-                {
-                _fail("unterminated string");
-                return s;
-                }
-            u8 c = p[_i];
-            if (c == (u8)'"')
-                {
-                _i = _i + (u32)1;
-                return s;
-                }
-            if (c < (u8)$20)
-                {
-                _fail("control character in a string");
-                return s;
-                }
-            if (c != (u8)'\\')
-                {
-                // copy the run up to the next quote, backslash or control byte
-                u32 start = _i;
-                while (_i < _n && p[_i] != (u8)'"' && p[_i] != (u8)'\\' && p[_i] >= (u8)$20)
-                    _i = _i + (u32)1;
-                s.appendBytes(&p[start], _i - start);
-                continue;
-                }
-            _i = _i + (u32)1;
-            if (_i >= _n)
-                {
-                _fail("unterminated string");
-                return s;
-                }
-            u8 e = p[_i];
-            _i = _i + (u32)1;
-            if (e == (u8)'"' || e == (u8)'\\' || e == (u8)'/')
-                s.appendByte(e);
-            else if (e == (u8)'n')
-                s.appendByte((u8)$0A);
-            else if (e == (u8)'r')
-                s.appendByte((u8)$0D);
-            else if (e == (u8)'t')
-                s.appendByte((u8)$09);
-            else if (e == (u8)'b')
-                s.appendByte((u8)$08);
-            else if (e == (u8)'f')
-                s.appendByte((u8)$0C);
-            else if (e == (u8)'u')
-                {
-                u32 cp = _hex4();
-                if (_error != 0)
-                    return s;
-                // a surrogate pair is one code point
-                if (cp >= (u32)0xD800 && cp <= (u32)0xDBFF && _i + (u32)6 <= _n
-                    && p[_i] == (u8)'\\' && p[_i + (u32)1] == (u8)'u')
-                    {
-                    u32 save = _i;
-                    _i = _i + (u32)2;
-                    u32 lo = _hex4();
-                    if (_error != 0)
-                        return s;
-                    if (lo >= (u32)0xDC00 && lo <= (u32)0xDFFF)
-                        cp = (u32)0x10000 + ((cp - (u32)0xD800) << (u32)10) + (lo - (u32)0xDC00);
-                    else
-                        _i = save;
-                    }
-                s.appendChar(cp);
-                }
-            else
-                {
-                _fail("bad escape in a string");
-                return s;
-                }
-            }
-        return s;
-        }
-
-    CoderNode* _array(void)
-        {
-        _depth = _depth + (u32)1;
-        if (_depth > (u32)256)
-            {
-            _fail("nested too deeply");
-            return (CoderNode*)0;
-            }
-        CoderNode* a = _node(CK_ARRAY);
-        a.items = new Array();
-        _i = _i + (u32)1;
-        _ws();
-        u8* p = _p;
-        if (_i < _n && p[_i] == (u8)']')
-            {
-            _i = _i + (u32)1;
-            _depth = _depth - (u32)1;
-            return a;
-            }
-        while (true)
-            {
-            _ws();
-            CoderNode* v = _value();
-            if (_error != 0)
-                return (CoderNode*)0;
-            a.items.add(v);
-            _ws();
-            if (_i >= _n)
-                {
-                _fail("unterminated array");
-                return (CoderNode*)0;
-                }
-            u8 c = p[_i];
-            _i = _i + (u32)1;
-            if (c == (u8)']')
-                break;
-            if (c != (u8)',')
-                {
-                _i = _i - (u32)1;
-                _fail("expected ',' or ']'");
-                return (CoderNode*)0;
-                }
-            }
-        _depth = _depth - (u32)1;
-        return a;
-        }
-
-    CoderNode* _object(void)
-        {
-        _depth = _depth + (u32)1;
-        if (_depth > (u32)256)
-            {
-            _fail("nested too deeply");
-            return (CoderNode*)0;
-            }
-        CoderNode* o = _node(CK_OBJECT);
-        o.items = new Array();
-        o.keys = new Array();
-        _i = _i + (u32)1;
-        _ws();
-        u8* p = _p;
-        if (_i < _n && p[_i] == (u8)'}')
-            {
-            _i = _i + (u32)1;
-            _depth = _depth - (u32)1;
-            return o;
-            }
-        while (true)
-            {
-            _ws();
-            if (_i >= _n || p[_i] != (u8)'"')
-                {
-                _fail("expected a key");
-                return (CoderNode*)0;
-                }
-            String* k = _string();
-            if (_error != 0)
-                return (CoderNode*)0;
-            _ws();
-            if (_i >= _n || p[_i] != (u8)':')
-                {
-                _fail("expected ':'");
-                return (CoderNode*)0;
-                }
-            _i = _i + (u32)1;
-            _ws();
-            CoderNode* v = _value();
-            if (_error != 0)
-                return (CoderNode*)0;
-            o.keys.add(k);
-            o.items.add(v);
-            _ws();
-            if (_i >= _n)
-                {
-                _fail("unterminated object");
-                return (CoderNode*)0;
-                }
-            u8 c = p[_i];
-            _i = _i + (u32)1;
-            if (c == (u8)'}')
-                break;
-            if (c != (u8)',')
-                {
-                _i = _i - (u32)1;
-                _fail("expected ',' or '}'");
-                return (CoderNode*)0;
-                }
-            }
-        _depth = _depth - (u32)1;
-        return o;
         }
     }
 
@@ -2503,7 +1330,7 @@ class Coder
     Array* _nodes;      // the parsed $objects
     Array* _made;       // index -> decoded object
     u8* _state;         // index -> 0 not started, 1 decoded or in progress
-    CoderNode* _rec;    // the entry being read
+    _JSONNode* _rec;    // the entry being read
     String* _error;     // first problem found while decoding
 
     static u32* _crcTable;
@@ -2638,13 +1465,13 @@ class Coder
         s.appendByte((u8)'"');
         if (key[0] == (u8)'$')
             s.appendByte((u8)'$');
-        Coder._appendEscaped(s, key, String._cstringLen(key));
+        JSON._appendEscaped(s, key, String._cstringLen(key));
         s.appendByte((u8)'"');
         }
 
     static void _appendDoubleValue(String* s, double v, bool single)
         {
-        u64 bits = _coder_dbits(v);
+        u64 bits = _json_dbits(v);
         if (((bits >> (u64)52) & (u64)0x7FF) == (u64)0x7FF)
             {
             if ((bits & (u64)0x000FFFFFFFFFFFFF) != (u64)0)
@@ -2655,53 +1482,10 @@ class Coder
                 s.appendCString("\"Infinity\"");
             return;
             }
-        _coder_appendDouble(s, v, single);
+        _json_appendDouble(s, v, single);
         }
 
-    // JSON string body: escapes for '"', '\' and the control characters; every
-    // other byte, UTF-8 included, as it is.
-    static void _appendEscaped(String* s, u8* p, u32 n)
-        {
-        u32 i = (u32)0;
-        while (i < n)
-            {
-            u32 start = i;
-            while (i < n && p[i] >= (u8)$20 && p[i] != (u8)'"' && p[i] != (u8)'\\')
-                i = i + (u32)1;
-            if (i > start)
-                s.appendBytes(&p[start], i - start);
-            if (i >= n)
-                break;
-            u8 c = p[i];
-            i = i + (u32)1;
-            s.appendByte((u8)'\\');
-            if (c == (u8)'"' || c == (u8)'\\')
-                s.appendByte(c);
-            else if (c == (u8)$0A)
-                s.appendByte((u8)'n');
-            else if (c == (u8)$0D)
-                s.appendByte((u8)'r');
-            else if (c == (u8)$09)
-                s.appendByte((u8)'t');
-            else if (c == (u8)$08)
-                s.appendByte((u8)'b');
-            else if (c == (u8)$0C)
-                s.appendByte((u8)'f');
-            else
-                {
-                s.appendCString("u00");
-                s.appendByte(Data._hexDigit(c >> (u8)4));
-                s.appendByte(Data._hexDigit(c & (u8)$0F));
-                }
-            }
-        }
 
-    static void _appendString(String* s, u8* p, u32 n)
-        {
-        s.appendByte((u8)'"');
-        Coder._appendEscaped(s, p, n);
-        s.appendByte((u8)'"');
-        }
 
     // ── The object table ─────────────────────────────────────────────────
     static u32 _addrHash(pointer p)
@@ -2793,7 +1577,7 @@ class Coder
             {
             if (str.isValidUtf8())
                 {
-                Coder._appendString(_cur, str.cString(), str.byteLength());
+                JSON._appendString(_cur, str.cString(), str.byteLength());
                 }
             else
                 {
@@ -2812,7 +1596,7 @@ class Coder
                 return;
                 }
             double d = num.asDouble();
-            u64 bits = _coder_dbits(d);
+            u64 bits = _json_dbits(d);
             if (((bits >> (u64)52) & (u64)0x7FF) == (u64)0x7FF)
                 {
                 _cur.appendCString("{\"$class\":\"Number\",\"$double\":");
@@ -2820,7 +1604,7 @@ class Coder
                 _cur.appendByte((u8)'}');
                 return;
                 }
-            _coder_appendDouble(_cur, d, false);
+            _json_appendDouble(_cur, d, false);
             return;
             }
         Data* data = (Data* ?)obj;
@@ -2865,7 +1649,7 @@ class Coder
         if (name == 0)
             _cur.appendCString("null");
         else
-            Coder._appendString(_cur, name.cString(), name.byteLength());
+            JSON._appendString(_cur, name.cString(), name.byteLength());
         obj.encodeWithCoder(self);
         _cur.appendByte((u8)'}');
         }
@@ -2914,23 +1698,23 @@ class Coder
 
     static Object* _unarchiveBytes(u8* p, u32 n) throws
         {
-        CoderJSON* parser = new CoderJSON();
-        CoderNode* doc = parser.parse(p, n);
+        _JSONReader* parser = new _JSONReader();
+        _JSONNode* doc = parser.parse(p, n);
         if (doc == 0)
             throw new CoderError(parser._error);
-        CoderNode* archiver = doc.field("$archiver", false);
+        _JSONNode* archiver = doc.field("$archiver", false);
         if (archiver == 0 || !archiver.isString("Coder"))
             throw new CoderError(String.withCString("Coder: not a Coder archive"));
-        CoderNode* version = doc.field("$version", false);
+        _JSONNode* version = doc.field("$version", false);
         if (version == 0 || !version.isInteger())
             throw new CoderError(String.withCString("Coder: the archive has no version"));
         if (!version.textIs("1"))
             throw new CoderError(String.withCString("Coder: the archive's version is not 1"));
-        CoderNode* objects = doc.field("$objects", false);
-        CoderNode* top = doc.field("$top", false);
-        if (objects == 0 || objects.kind != CK_ARRAY || top == 0)
+        _JSONNode* objects = doc.field("$objects", false);
+        _JSONNode* top = doc.field("$top", false);
+        if (objects == 0 || objects.kind != JK_ARRAY || top == 0)
             throw new CoderError(String.withCString("Coder: the archive has no object table"));
-        CoderNode* rootRef = top.field("root", false);
+        _JSONNode* rootRef = top.field("root", false);
         if (rootRef == 0)
             throw new CoderError(String.withCString("Coder: the archive has no root"));
 
@@ -2971,9 +1755,9 @@ class Coder
         }
 
     // The index a `{"$ref":n}` node points at, or 0 (null) with an error set.
-    u32 _refIndex(CoderNode* node, string key)
+    u32 _refIndex(_JSONNode* node, string key)
         {
-        CoderNode* r = node.field("$ref", false);
+        _JSONNode* r = node.field("$ref", false);
         if (r == 0 || !r.isInteger())
             {
             _fail("value for key", key, " is not an object reference");
@@ -2984,7 +1768,7 @@ class Coder
 
     // An integer node as an index; out-of-range values become 0xFFFFFFFF,
     // which the caller's bounds check rejects.
-    static u32 _indexOf(CoderNode* r)
+    static u32 _indexOf(_JSONNode* r)
         {
         if (r == 0 || !r.isInteger())
             return (u32)0xFFFFFFFF;
@@ -3012,33 +1796,33 @@ class Coder
         if (state[idx] != (u8)0)
             return _made.get(idx);
         state[idx] = (u8)1;
-        CoderNode* node = (CoderNode*)_nodes.get(idx);
-        if (node.kind == CK_STRING)
+        _JSONNode* node = (_JSONNode*)_nodes.get(idx);
+        if (node.kind == JK_STRING)
             {
             Object* s = String.withBytes(node.text.cString(), node.text.byteLength());
             _made.set(idx, s);
             return s;
             }
-        if (node.kind == CK_NUMBER)
+        if (node.kind == JK_NUMBER)
             {
-            Object* v = (Object*)Coder._numberOf(node);
+            Object* v = (Object*)JSON._numberOf(node);
             _made.set(idx, v);
             return v;
             }
-        if (node.kind != CK_OBJECT)
+        if (node.kind != JK_OBJECT)
             {
             _fail("an entry in $objects is not a value", (string)0, "");
             return (Object*)0;
             }
-        CoderNode* cls = node.field("$class", false);
-        if (cls == 0 || cls.kind != CK_STRING)
+        _JSONNode* cls = node.field("$class", false);
+        if (cls == 0 || cls.kind != JK_STRING)
             {
             _fail("an entry in $objects has no class", (string)0, "");
             return (Object*)0;
             }
         if (cls.isString("String") || cls.isString("Data"))
             {
-            CoderNode* b64 = node.field("$base64", false);
+            _JSONNode* b64 = node.field("$base64", false);
             Data* bytes = (b64 == 0) ? (Data*)0 : Coder._decodeBase64(b64.text);
             if (bytes == 0)
                 {
@@ -3053,7 +1837,7 @@ class Coder
             }
         if (cls.isString("Number"))
             {
-            CoderNode* d = node.field("$double", false);
+            _JSONNode* d = node.field("$double", false);
             if (d == 0)
                 {
                 _fail("an archived Number has no value", (string)0, "");
@@ -3067,25 +1851,25 @@ class Coder
             {
             Array* a = new Array();
             _made.set(idx, a);
-            CoderNode* items = node.field("$items", false);
+            _JSONNode* items = node.field("$items", false);
             if (!_checkRefs(items))
                 return a;
             u32 n = items.items.count();
             for (u32 i = (u32)0; i < n; i++)
-                a.add(_object(Coder._indexOf((CoderNode*)items.items.get(i))));
+                a.add(_object(Coder._indexOf((_JSONNode*)items.items.get(i))));
             return a;
             }
         if (cls.isString("Set"))
             {
             Set* s = new Set();
             _made.set(idx, s);
-            CoderNode* items = node.field("$items", false);
+            _JSONNode* items = node.field("$items", false);
             if (!_checkRefs(items))
                 return s;
             u32 n = items.items.count();
             for (u32 i = (u32)0; i < n; i++)
                 {
-                Object* e = _object(Coder._indexOf((CoderNode*)items.items.get(i)));
+                Object* e = _object(Coder._indexOf((_JSONNode*)items.items.get(i)));
                 if (e != 0)
                     s.add((Hashable*)e);
                 }
@@ -3095,8 +1879,8 @@ class Coder
             {
             Map* m = new Map();
             _made.set(idx, m);
-            CoderNode* keys = node.field("$keys", false);
-            CoderNode* vals = node.field("$values", false);
+            _JSONNode* keys = node.field("$keys", false);
+            _JSONNode* vals = node.field("$values", false);
             if (!_checkRefs(keys) || !_checkRefs(vals))
                 return m;
             u32 n = keys.items.count();
@@ -3107,8 +1891,8 @@ class Coder
                 }
             for (u32 i = (u32)0; i < n; i++)
                 {
-                Object* k = _object(Coder._indexOf((CoderNode*)keys.items.get(i)));
-                Object* v = _object(Coder._indexOf((CoderNode*)vals.items.get(i)));
+                Object* k = _object(Coder._indexOf((_JSONNode*)keys.items.get(i)));
+                Object* v = _object(Coder._indexOf((_JSONNode*)vals.items.get(i)));
                 if (k != 0)
                     m.set((Hashable*)k, v);
                 }
@@ -3123,16 +1907,16 @@ class Coder
         // Registered BEFORE initWithCoder, so a reference back to this object
         // from inside its own graph finds it.
         _made.set(idx, obj);
-        CoderNode* saved = _rec;
+        _JSONNode* saved = _rec;
         _rec = node;
         obj.initWithCoder(self);
         _rec = saved;
         return obj;
         }
 
-    bool _checkRefs(CoderNode* list)
+    bool _checkRefs(_JSONNode* list)
         {
-        if (list == 0 || list.kind != CK_ARRAY)
+        if (list == 0 || list.kind != JK_ARRAY)
             {
             _fail("an archived collection has no item list", (string)0, "");
             return false;
@@ -3140,7 +1924,7 @@ class Coder
         u32 n = list.items.count();
         for (u32 i = (u32)0; i < n; i++)
             {
-            CoderNode* r = (CoderNode*)list.items.get(i);
+            _JSONNode* r = (_JSONNode*)list.items.get(i);
             if (!r.isInteger())
                 {
                 _fail("an archived collection has a bad reference", (string)0, "");
@@ -3150,59 +1934,13 @@ class Coder
         return true;
         }
 
-    static Number* _numberOf(CoderNode* node)
-        {
-        if (node.isInteger())
-            {
-            bool neg = false;
-            bool over = false;
-            u64 mag = Coder._magnitude(node.text, &neg, &over);
-            if (!over)
-                {
-                if (!neg && mag <= (u64)0x7FFFFFFFFFFFFFFF)
-                    return Number.withI64((i64)mag);
-                if (neg && mag <= (u64)0x8000000000000000)
-                    return Number.withI64((i64)((u64)0 - mag));
-                if (!neg)
-                    return Number.withU64(mag);
-                }
-            }
-        return Number.withDouble(_coder_parseDouble(node.text.cString(), node.text.byteLength()));
-        }
 
-    // The digits of an integer node as an unsigned magnitude.
-    static u64 _magnitude(String* text, bool* neg, bool* over)
-        {
-        u8* b = text.cString();
-        u32 n = text.byteLength();
-        u32 i = (u32)0;
-        *neg = false;
-        *over = false;
-        if (n > (u32)0 && b[0] == (u8)'-')
-            {
-            *neg = true;
-            i = (u32)1;
-            }
-        u64 v = (u64)0;
-        while (i < n)
-            {
-            u64 d = (u64)(b[i] - (u8)'0');
-            if (v > ((u64)0xFFFFFFFFFFFFFFFF - d) / (u64)10)
-                {
-                *over = true;
-                return (u64)0;
-                }
-            v = v * (u64)10 + d;
-            i = i + (u32)1;
-            }
-        return v;
-        }
 
     // ── Keyed decoding (from inside initWithCoder) ───────────────────────
-    CoderNode* _lookup(string key)
+    _JSONNode* _lookup(string key)
         {
         if (!_decoding || _rec == 0)
-            return (CoderNode*)0;
+            return (_JSONNode*)0;
         return _rec.field(key, key[0] == (u8)'$');
         }
 
@@ -3213,10 +1951,10 @@ class Coder
 
     Object* decodeObject(string key)
         {
-        CoderNode* v = _lookup(key);
+        _JSONNode* v = _lookup(key);
         if (v == 0)
             return (Object*)0;
-        if (v.kind != CK_OBJECT)
+        if (v.kind != JK_OBJECT)
             {
             _fail("value for key", key, " is not an object reference");
             return (Object*)0;
@@ -3229,12 +1967,12 @@ class Coder
 
     bool decodeBool(string key)
         {
-        CoderNode* v = _lookup(key);
+        _JSONNode* v = _lookup(key);
         if (v == 0)
             return false;
-        if (v.kind == CK_TRUE)
+        if (v.kind == JK_TRUE)
             return true;
-        if (v.kind != CK_FALSE)
+        if (v.kind != JK_FALSE)
             _fail("value for key", key, " is not a bool");
         return false;
         }
@@ -3242,10 +1980,10 @@ class Coder
     // A signed value in [lo, hi].
     i64 _signed(string key, i64 lo, i64 hi)
         {
-        CoderNode* v = _lookup(key);
+        _JSONNode* v = _lookup(key);
         if (v == 0)
             return (i64)0;
-        if (v.kind != CK_NUMBER)
+        if (v.kind != JK_NUMBER)
             {
             _fail("value for key", key, " is not a number");
             return (i64)0;
@@ -3255,7 +1993,7 @@ class Coder
             {
             bool neg = false;
             bool over = false;
-            u64 mag = Coder._magnitude(v.text, &neg, &over);
+            u64 mag = JSON._magnitude(v.text, &neg, &over);
             if (over || (!neg && mag > (u64)0x7FFFFFFFFFFFFFFF) || (neg && mag > (u64)0x8000000000000000))
                 {
                 _fail("value for key", key, " is out of range");
@@ -3265,7 +2003,7 @@ class Coder
             }
         else
             {
-            double d = _coder_parseDouble(v.text.cString(), v.text.byteLength());
+            double d = _json_parseDouble(v.text.cString(), v.text.byteLength());
             if (!(d >= -9223372036854775808.0d && d < 9223372036854775808.0d))
                 {
                 _fail("value for key", key, " is out of range");
@@ -3298,10 +2036,10 @@ class Coder
 
     u64 decodeU64(string key)
         {
-        CoderNode* v = _lookup(key);
+        _JSONNode* v = _lookup(key);
         if (v == 0)
             return (u64)0;
-        if (v.kind != CK_NUMBER)
+        if (v.kind != JK_NUMBER)
             {
             _fail("value for key", key, " is not a number");
             return (u64)0;
@@ -3310,7 +2048,7 @@ class Coder
             {
             bool neg = false;
             bool over = false;
-            u64 mag = Coder._magnitude(v.text, &neg, &over);
+            u64 mag = JSON._magnitude(v.text, &neg, &over);
             if (over || (neg && mag != (u64)0))
                 {
                 _fail("value for key", key, " is out of range");
@@ -3318,7 +2056,7 @@ class Coder
                 }
             return mag;
             }
-        double d = _coder_parseDouble(v.text.cString(), v.text.byteLength());
+        double d = _json_parseDouble(v.text.cString(), v.text.byteLength());
         if (!(d >= 0.0d && d < 18446744073709551616.0d))
             {
             _fail("value for key", key, " is out of range");
@@ -3334,22 +2072,22 @@ class Coder
 
     double decodeDouble(string key)
         {
-        CoderNode* v = _lookup(key);
+        _JSONNode* v = _lookup(key);
         if (v == 0)
             return 0.0d;
         return _doubleOf(v, key);
         }
 
-    double _doubleOf(CoderNode* v, string key)
+    double _doubleOf(_JSONNode* v, string key)
         {
-        if (v.kind == CK_NUMBER)
-            return _coder_parseDouble(v.text.cString(), v.text.byteLength());
+        if (v.kind == JK_NUMBER)
+            return _json_parseDouble(v.text.cString(), v.text.byteLength());
         if (v.isString("NaN"))
-            return _coder_dfrom((u64)0x7FF8000000000000);
+            return _json_dfrom((u64)0x7FF8000000000000);
         if (v.isString("Infinity"))
-            return _coder_dfrom((u64)0x7FF0000000000000);
+            return _json_dfrom((u64)0x7FF0000000000000);
         if (v.isString("-Infinity"))
-            return _coder_dfrom((u64)0xFFF0000000000000);
+            return _json_dfrom((u64)0xFFF0000000000000);
         _fail("value for key", key, " is not a number");
         return 0.0d;
         }

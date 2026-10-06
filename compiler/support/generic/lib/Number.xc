@@ -75,6 +75,7 @@
 class Number<Comparable, Hashable>
     {
     u8 _kind;  // 0 = Int, 1 = Float — canonical kind, set by setXxx
+    bool _bool; // an Int made by withBool: 0 or 1, written as false / true
     u8 _valid; // bit 0 = _i current, bit 1 = _f current. Bit per
                // slot rather than per asXxx variant — i8 / u8 /
                // i16 / u16 / u32 / i64 / u64 all derive from _i, so a
@@ -94,6 +95,7 @@ class Number<Comparable, Hashable>
     void init(void)
         {
         _kind = (u8)0;
+        _bool = false;
         _valid = (u8)$01; // _i is current (initialised to 0)
         _i = (i64)0;
         _f = 0.0d;
@@ -212,6 +214,15 @@ class Number<Comparable, Hashable>
         n.setDouble(v);
         return n;
         }
+    // A boolean: an Int of 1 or 0 that remembers it was a bool, so it prints
+    // and is written to JSON as true / false. It still equals and compares as
+    // 1 or 0 (NSNumber's @YES is @1).
+    static Number* withBool(bool v)
+        {
+        Number* n = new Number();
+        n.setBool(v);
+        return n;
+        }
 
     // ── Setters ──────────────────────────────────────────────────
     // Mirror of the factories: `set(v)` overloads dispatch on v's
@@ -265,60 +276,77 @@ class Number<Comparable, Hashable>
     void setI8(i8 v)
         {
         _kind = (u8)0;
+        _bool = false;
         _valid = (u8)$01;
         _i = (i64)v;
         }
     void setU8(u8 v)
         {
         _kind = (u8)0;
+        _bool = false;
         _valid = (u8)$01;
         _i = (i64)v;
         }
     void setI16(i16 v)
         {
         _kind = (u8)0;
+        _bool = false;
         _valid = (u8)$01;
         _i = (i64)v;
         }
     void setU16(u16 v)
         {
         _kind = (u8)0;
+        _bool = false;
         _valid = (u8)$01;
         _i = (i64)v;
         }
     void setI32(i32 v)
         {
         _kind = (u8)0;
+        _bool = false;
         _valid = (u8)$01;
         _i = (i64)v;
         }
     void setU32(u32 v)
         {
         _kind = (u8)0;
+        _bool = false;
         _valid = (u8)$01;
         _i = (i64)v;
         }
     void setI64(i64 v)
         {
         _kind = (u8)0;
+        _bool = false;
         _valid = (u8)$01;
         _i = v;
         }
     void setU64(u64 v)
         {
         _kind = (u8)0;
+        _bool = false;
         _valid = (u8)$01;
         _i = (i64)v;
+        }
+    void setBool(bool v)
+        {
+        _kind = (u8)0;
+        _valid = (u8)$01;
+        _i = v ? (i64)1 : (i64)0;
+        _bool = true;
         }
     void setFloat(float v)
         {
         _kind = (u8)1;
+        _bool = false;
         _valid = (u8)$02;
         _f = (double)v;
         }
     void setDouble(double v)
         {
         _kind = (u8)1;
+        _bool = false;
         _valid = (u8)$02;
         _f = v;
         }
@@ -453,6 +481,18 @@ class Number<Comparable, Hashable>
         {
         return _kind == (u8)0;
         }
+    // Made by withBool or setBool.
+    bool isBool(void)
+        {
+        return _bool;
+        }
+    // Non-zero, for any kind.
+    bool asBool(void)
+        {
+        if (_kind == (u8)1)
+            return asDouble() != 0.0d;
+        return asI64() != (i64)0;
+        }
 
     // ── Text ─────────────────────────────────────────────────────
     // Object's description slot — what `%@` dispatches to, and what you want
@@ -461,6 +501,8 @@ class Number<Comparable, Hashable>
     // C's printf %f and Stdio.printf).
     String* description(void)
         {
+        if (_bool)
+            return String.withCString(_i != (i64)0 ? "true" : "false");
         if (isInt())
             return String.withI64(asI64());
         return String.withFloat(asFloat());

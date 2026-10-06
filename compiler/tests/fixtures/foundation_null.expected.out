@@ -1,0 +1,10 @@
+  ok   shared
+  ok   isNull
+  ok   null reference is not Null
+  ok   plain object is not Null
+  ok   isNothing reference
+  ok   isNothing Null
+  ok   isNothing object
+  ok   keeps its place
+null
+PASS

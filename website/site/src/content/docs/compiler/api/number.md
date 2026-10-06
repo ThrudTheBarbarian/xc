@@ -64,17 +64,17 @@ one is expected, such as a collection slot or a dictionary value.
 
 **Creating (inferred kind)** · [with](#with)
 
-**Creating (pinned kind)** · [withI8 / withU8](#withi8--withu8) · [withI16 / withU16](#withi16--withu16) · [withI32 / withU32](#withi32--withu32) · [withI64 / withU64](#withi64--withu64) · [withFloat / withDouble](#withfloat--withdouble) · [init](#init)
+**Creating (pinned kind)** · [withI8 / withU8](#withi8--withu8) · [withI16 / withU16](#withi16--withu16) · [withI32 / withU32](#withi32--withu32) · [withI64 / withU64](#withi64--withu64) · [withFloat / withDouble](#withfloat--withdouble) · [withBool](#withbool) · [init](#init)
 
 **Setting (inferred kind)** · [set](#set)
 
-**Setting (pinned kind)** · [setI8 / setU8](#seti8--setu8) · [setI16 / setU16](#seti16--setu16) · [setI32 / setU32](#seti32--setu32) · [setI64 / setU64](#seti64--setu64) · [setFloat / setDouble](#setfloat--setdouble)
+**Setting (pinned kind)** · [setI8 / setU8](#seti8--setu8) · [setI16 / setU16](#seti16--setu16) · [setI32 / setU32](#seti32--setu32) · [setI64 / setU64](#seti64--setu64) · [setFloat / setDouble](#setfloat--setdouble) · [setBool](#setbool)
 
 **Reading (by destination)** · [value](#value)
 
-**Reading (pinned type)** · [asI8 / asU8](#asi8--asu8) · [asI16 / asU16](#asi16--asu16) · [asI32 / asU32](#asi32--asu32) · [asI64 / asU64](#asi64--asu64) · [asFloat / asDouble](#asfloat--asdouble)
+**Reading (pinned type)** · [asI8 / asU8](#asi8--asu8) · [asI16 / asU16](#asi16--asu16) · [asI32 / asU32](#asi32--asu32) · [asI64 / asU64](#asi64--asu64) · [asFloat / asDouble](#asfloat--asdouble) · [asBool](#asbool)
 
-**Predicates** · [isInt / isFloat](#isint--isfloat)
+**Predicates** · [isInt / isFloat](#isint--isfloat) · [isBool](#isbool)
 
 **Protocol methods** · [description](#description) · [equals](#equals) · [compare](#compare) · [hash](#hash)
 
@@ -137,6 +137,15 @@ static Number* withFloat(float v)
 static Number* withDouble(double v)
 ```
 A `Number` holding a floating-point value (both stored in the `double` slot).
+
+### withBool
+```c
+static Number* withBool(bool v)
+```
+A boolean: an int `Number` of 1 or 0 that remembers it was made from a `bool`,
+so [`description`](#description) and [`JSON`](/compiler/api/json/) write it as
+`true` / `false`. It still equals and compares as 1 or 0 (as `NSNumber`'s `@YES`
+is `@1`). Not on xt6502. **From the release after 0.71.**
 
 ### init
 ```c
@@ -202,6 +211,13 @@ void setFloat(float v)
 void setDouble(double v)
 ```
 Store a floating-point value, pinning the float kind.
+
+### setBool
+```c
+void setBool(bool v)
+```
+Store a boolean (see [`withBool`](#withbool)). Every other setter clears the
+boolean mark. Not on xt6502. **From the release after 0.71.**
 
 [↑ Topics](#topics)
 
@@ -270,6 +286,13 @@ converts via `(double)i64` (exact to 2^53, losing precision beyond), caches the
 result, and returns the cached value on later calls. `asFloat` narrows that to
 binary32.
 
+### asBool
+```c
+bool asBool(void)
+```
+Whether the value is non-zero, for either kind. Not on xt6502. **From the
+release after 0.71.**
+
 [↑ Topics](#topics)
 
 ## Predicates
@@ -282,6 +305,14 @@ bool isFloat(void)
 Which kind is canonical: the one a setter last set. One of the two is always
 `true`.
 
+### isBool
+```c
+bool isBool(void)
+```
+Whether the value was made by [`withBool`](#withbool) or
+[`setBool`](#setbool); such a `Number` is also [`isInt`](#isint--isfloat). Not on
+xt6502. **From the release after 0.71.**
+
 [↑ Topics](#topics)
 
 ## Protocol methods
@@ -293,7 +324,7 @@ The [`Object`](/compiler/api/object/) / [`Comparable`](/compiler/api/comparable/
 ```c
 String* description(void)
 ```
-The `%@` hook. An int renders exactly ([`String.withI64`](/compiler/api/string/#withi64--withu64));
+The `%@` hook. A boolean renders as `true` or `false`. An int renders exactly ([`String.withI64`](/compiler/api/string/#withi64--withu64));
 a float renders to six decimal places (`String.withFloat`'s default, matching
 C's `printf %f`).
 

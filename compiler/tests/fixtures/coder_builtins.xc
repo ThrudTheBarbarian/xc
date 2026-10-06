@@ -57,7 +57,7 @@ Object* roundTrip(Object* root)
 
 String* bits(Number* n)
 {
-    return String.withU64(_coder_dbits(n.asDouble()));
+    return String.withU64(_json_dbits(n.asDouble()));
 }
 
 void main(void)
@@ -88,16 +88,16 @@ void main(void)
     nums.add(Number.withU64((u64)0xFFFFFFFFFFFFFFFF));
     nums.add(Number.withDouble(0.1d));
     // -0.0 through its bits: a -0.0d literal compiles to +0.0 on win64.
-    nums.add(Number.withDouble(_coder_dfrom((u64)0x8000000000000000)));
+    nums.add(Number.withDouble(_json_dfrom((u64)0x8000000000000000)));
     nums.add(Number.withDouble(3.0d));
     nums.add(Number.withDouble(1.0e21d));
     nums.add(Number.withDouble(1.5e300d));
-    nums.add(Number.withDouble(_coder_dfrom((u64)1)));
-    nums.add(Number.withDouble(_coder_dfrom((u64)0x7FEFFFFFFFFFFFFF)));
+    nums.add(Number.withDouble(_json_dfrom((u64)1)));
+    nums.add(Number.withDouble(_json_dfrom((u64)0x7FEFFFFFFFFFFFFF)));
     nums.add(Number.withDouble(123456.789d));
-    nums.add(Number.withDouble(_coder_dfrom((u64)0x7FF8000000000000)));
-    nums.add(Number.withDouble(_coder_dfrom((u64)0x7FF0000000000000)));
-    nums.add(Number.withDouble(_coder_dfrom((u64)0xFFF0000000000000)));
+    nums.add(Number.withDouble(_json_dfrom((u64)0x7FF8000000000000)));
+    nums.add(Number.withDouble(_json_dfrom((u64)0x7FF0000000000000)));
+    nums.add(Number.withDouble(_json_dfrom((u64)0xFFF0000000000000)));
     Array* n2 = (Array* ?)roundTrip(nums);
     bool kinds = true;
     bool exact = true;

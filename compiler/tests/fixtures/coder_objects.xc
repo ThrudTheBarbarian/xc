@@ -231,8 +231,8 @@ void main(void)
     s.top = (u64)0xFFFFFFFFFFFFFFFF;
     s.f = (float)0.1d;
     s.d = 2.0d / 3.0d;
-    s.notANumber = _coder_dfrom((u64)0x7FF8000000000000);
-    s.infinity = _coder_dfrom((u64)0xFFF0000000000000);
+    s.notANumber = _json_dfrom((u64)0x7FF8000000000000);
+    s.infinity = _json_dfrom((u64)0xFFF0000000000000);
     s.text = String.withCString("tab\there é");
     s.dollar = (i32)42;
     Scalars* s2 = (Scalars* ?)viaJSON(s);
@@ -242,9 +242,9 @@ void main(void)
                  String.withU64(s2.top).cString());
     Stdio.printf("  float same: %s, double same: %s, nan: %s, -inf: %s\n",
                  (s2.f == s.f) ? "yes" : "NO",
-                 (_coder_dbits(s2.d) == _coder_dbits(s.d)) ? "yes" : "NO",
-                 ((_coder_dbits(s2.notANumber) & (u64)0x7FF8000000000000) == (u64)0x7FF8000000000000) ? "yes" : "NO",
-                 (_coder_dbits(s2.infinity) == (u64)0xFFF0000000000000) ? "yes" : "NO");
+                 (_json_dbits(s2.d) == _json_dbits(s.d)) ? "yes" : "NO",
+                 ((_json_dbits(s2.notANumber) & (u64)0x7FF8000000000000) == (u64)0x7FF8000000000000) ? "yes" : "NO",
+                 (_json_dbits(s2.infinity) == (u64)0xFFF0000000000000) ? "yes" : "NO");
     Stdio.printf("  text \"%s\", nothing %s, $class key %d\n", ascii(s2.text).cString(),
                  (s2.nothing == 0) ? "null" : "SET", s2.dollar);
 

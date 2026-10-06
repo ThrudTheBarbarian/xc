@@ -14,7 +14,7 @@ are built on.
 ```
 
 The umbrella pulls in `Object`, `Comparable`, `Hashable`, `Enumerable`, `Copying`, `CharacterSet`,
-`Number`, `String`, `Data`, `Array`, `Map`, `Set`, `Bag`, `Range`, `BinaryHeap` and `Cache`, and `Codable` through `Object`.
+`Number`, `String`, `Data`, `Array`, `Map`, `Set`, `Bag`, `Range`, `BinaryHeap`, `Cache` and `Null`, and `Codable` through `Object`.
 That is everything below except [`Coder`](/compiler/api/coder/) and the
 [`Error`](/compiler/api/error/) protocol, which you import by name
 (`#import <Coder.xc>`, `#import <Error.xc>`).
@@ -37,6 +37,8 @@ All of it needs a real heap (**`-falloc=heap`**), which is the default on the
 | [`Range`](/compiler/api/range/) | A half-open index range `[loc, loc + len)`, equal by value. From the release after 0.71. |
 | [`BinaryHeap`](/compiler/api/binaryheap/) | A priority queue, smallest priority first. From the release after 0.71. |
 | [`Cache`](/compiler/api/cache/) | A bounded least-recently-used cache under string keys. From the release after 0.71. |
+| [`Null`](/compiler/api/null/) | The one shared object meaning "nothing here" in a collection. From the release after 0.71. |
+| [`JSON`](/compiler/api/json/) | JSON text to Foundation objects and back. **Not** in the umbrella — import by name. From the release after 0.71. |
 | [`Coder`](/compiler/api/coder/) | Keyed archiving of an object graph to JSON, optionally gzipped. **Not** in the umbrella — import by name. |
 
 ### Protocols

@@ -1,0 +1,38 @@
+  ok   object is a Map
+  ok   string member
+  ok   array member
+  ok   integer is an Int
+  ok   2.5 is a double
+  ok   true is a bool
+  ok   false is a bool
+  ok   null is Null
+  ok   empty object
+  ok   keys keep their order
+  ok   round trip
+  ok   whitespace dropped
+  ok   i64 extremes exact
+  ok   double shortest
+  ok   escapes
+  ok   unicode escapes decode
+  ok   duplicate key keeps last
+  ok   scalar root
+{
+  "a": [
+    1,
+    2
+  ],
+  "b": {},
+  "c": []
+}
+bad JSON at byte 4: unterminated array
+bad JSON at byte 5: expected ':'
+bad JSON at byte 4: unexpected text after the JSON value
+bad JSON at byte 1: unexpected text after the JSON value
+bad JSON at byte 0: unexpected end of input
+JSON: NaN and the infinities have no JSON spelling
+JSON: a Map key that is not a String
+JSON: a Set cannot be written as JSON
+  ok   null reference writes null
+  ok   Bool description
+  ok   Bool equals 1
+PASS
