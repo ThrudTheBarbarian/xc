@@ -3726,3 +3726,476 @@ int ux_gtk_test_control_text(int handle, int node, char* buf, int n)
     snprintf(buf, (size_t)n, "%s", t);
     return 1;
     }
+
+/* ── native text view (UXTextView): a GtkTextView in a GtkScrolledWindow ─────────────────────
+ * The text crosses as UTF-8 and style runs of five ints (byte start, byte length, flags, colour,
+ * size; flags 1 bold, 2 italic, 4 underline, 8 monospace, the paragraph's alignment in bits 4-5).
+ * Each style is a tag named for it ("ux-b", "ux-c336699", "ux-s18", "ux-a2", ...), so reading the
+ * content back reads the names, never the properties.  GTK gives typed text no tags, so an insert
+ * the user makes takes the style before it (or the one chosen for typing at an empty selection).
+ * The buffer's own undo is off: it does not record tag changes, so UXTextView keeps the undo and
+ * the undo keys are passed to it. */
+#define UX_TV_RUN 5
+static GtkTextView* gTv[UXGTK_MAXW][UXGTK_MAXN];
+typedef void (*ux_tv_fn)(int handle, int node);
+typedef void (*ux_tv_undo_fn)(int handle, int node, int redo);
+static ux_tv_fn gTvChanged, gTvSelected;
+static ux_tv_undo_fn gTvUndo;
+static int gTvQuiet;      /* a change the toolkit pushed is not reported back to it */
+static int gTvPendAt = -1, gTvPendN = 0; /* the user's insert in flight: char offset and length */
+static int gTvTyping[UXGTK_MAXW][UXGTK_MAXN][4]; /* set?, flags, colour, size: the style for typing */
+static int gTvLastSel[UXGTK_MAXW][UXGTK_MAXN][2];
+static int gTvChangedNow; /* the buffer just changed: the cursor move that follows is the typing's */
+void ux_gtk_textview_set_hooks(void* changed, void* selected, void* undo)
+    {
+    gTvChanged = (ux_tv_fn)changed;
+    gTvSelected = (ux_tv_fn)selected;
+    gTvUndo = (ux_tv_undo_fn)undo;
+    }
+static GtkTextView* tv_at(int handle, int node)
+    {
+    if (handle < 0 || handle >= UXGTK_MAXW || node < 0 || node >= UXGTK_MAXN)
+        return NULL;
+    return gTv[handle][node];
+    }
+static char* tv_all(GtkTextBuffer* b)
+    {
+    GtkTextIter s, e;
+    gtk_text_buffer_get_bounds(b, &s, &e);
+    return gtk_text_buffer_get_text(b, &s, &e, TRUE);
+    }
+/* byte offset <-> character offset, against the buffer's whole text */
+static int tv_char_of(const char* t, int bytes)
+    {
+    int n = (int)strlen(t);
+    if (bytes <= 0)
+        return 0;
+    if (bytes > n)
+        bytes = n;
+    while (bytes > 0 && ((unsigned char)t[bytes] & 0xC0) == 0x80)
+        bytes--;
+    return (int)g_utf8_pointer_to_offset(t, t + bytes);
+    }
+static int tv_byte_of(const char* t, int chars)
+    {
+    long n = g_utf8_strlen(t, -1);
+    if (chars <= 0)
+        return 0;
+    if (chars >= n)
+        return (int)strlen(t);
+    return (int)(g_utf8_offset_to_pointer(t, chars) - t);
+    }
+static GtkTextTag* tv_tag(GtkTextBuffer* b, const char* name)
+    {
+    GtkTextTagTable* tt = gtk_text_buffer_get_tag_table(b);
+    GtkTextTag* t = gtk_text_tag_table_lookup(tt, name);
+    if (t)
+        return t;
+    t = gtk_text_buffer_create_tag(b, name, NULL);
+    if (!strcmp(name, "ux-b"))
+        g_object_set(t, "weight", PANGO_WEIGHT_BOLD, NULL);
+    else if (!strcmp(name, "ux-i"))
+        g_object_set(t, "style", PANGO_STYLE_ITALIC, NULL);
+    else if (!strcmp(name, "ux-u"))
+        g_object_set(t, "underline", PANGO_UNDERLINE_SINGLE, NULL);
+    else if (!strcmp(name, "ux-m"))
+        g_object_set(t, "family", "monospace", NULL);
+    else if (!strncmp(name, "ux-c", 4))
+        {
+        char css[16];
+        snprintf(css, sizeof css, "#%s", name + 4);
+        g_object_set(t, "foreground", css, NULL);
+        }
+    else if (!strncmp(name, "ux-s", 4))
+        {
+        /* a size is in the view's pixels, as on the other backends: an absolute size, which a
+         * description with nothing else set applies alone */
+        PangoFontDescription* d = pango_font_description_new();
+        pango_font_description_set_absolute_size(d, atoi(name + 4) * PANGO_SCALE);
+        g_object_set(t, "font-desc", d, NULL);
+        pango_font_description_free(d);
+        }
+    else if (!strncmp(name, "ux-a", 4))
+        {
+        int a = atoi(name + 4);
+        g_object_set(t, "justification", a == 1 ? GTK_JUSTIFY_RIGHT : a == 2 ? GTK_JUSTIFY_CENTER : GTK_JUSTIFY_FILL, NULL);
+        }
+    return t;
+    }
+static void tv_strip_one(GtkTextTag* tag, gpointer ud)
+    {
+    char* name = NULL;
+    g_object_get(tag, "name", &name, NULL);
+    if (name && !strncmp(name, "ux-", 3))
+        {
+        GtkTextIter* r = (GtkTextIter*)ud;
+        gtk_text_buffer_remove_tag(gtk_text_iter_get_buffer(&r[0]), tag, &r[0], &r[1]);
+        }
+    g_free(name);
+    }
+/* the style (flags, colour, size) over chars [a, b): every ux tag off, then those it names on */
+static void tv_style(GtkTextBuffer* b, int a, int z, int flags, int colour, int size)
+    {
+    GtkTextIter r[2];
+    gtk_text_buffer_get_iter_at_offset(b, &r[0], a);
+    gtk_text_buffer_get_iter_at_offset(b, &r[1], z);
+    gtk_text_tag_table_foreach(gtk_text_buffer_get_tag_table(b), tv_strip_one, r);
+    gtk_text_buffer_get_iter_at_offset(b, &r[0], a);
+    gtk_text_buffer_get_iter_at_offset(b, &r[1], z);
+    char name[24];
+    if (flags & 1) gtk_text_buffer_apply_tag(b, tv_tag(b, "ux-b"), &r[0], &r[1]);
+    if (flags & 2) gtk_text_buffer_apply_tag(b, tv_tag(b, "ux-i"), &r[0], &r[1]);
+    if (flags & 4) gtk_text_buffer_apply_tag(b, tv_tag(b, "ux-u"), &r[0], &r[1]);
+    if (flags & 8) gtk_text_buffer_apply_tag(b, tv_tag(b, "ux-m"), &r[0], &r[1]);
+    if (colour & 0x1000000)
+        {
+        snprintf(name, sizeof name, "ux-c%06x", colour & 0xFFFFFF);
+        gtk_text_buffer_apply_tag(b, tv_tag(b, name), &r[0], &r[1]);
+        }
+    if (size > 0)
+        {
+        snprintf(name, sizeof name, "ux-s%d", size);
+        gtk_text_buffer_apply_tag(b, tv_tag(b, name), &r[0], &r[1]);
+        }
+    if ((flags >> 4) & 3)
+        {
+        snprintf(name, sizeof name, "ux-a%d", (flags >> 4) & 3);
+        gtk_text_buffer_apply_tag(b, tv_tag(b, name), &r[0], &r[1]);
+        }
+    }
+/* the style at a char: from its tags' names */
+static void tv_style_at(GtkTextIter* it, int* flags, int* colour, int* size)
+    {
+    int f = 0, c = 0, z = 0;
+    GSList* tags = gtk_text_iter_get_tags(it);
+    for (GSList* l = tags; l; l = l->next)
+        {
+        char* name = NULL;
+        g_object_get(l->data, "name", &name, NULL);
+        if (name && !strncmp(name, "ux-", 3))
+            {
+            char k = name[3];
+            if (k == 'b') f |= 1;
+            else if (k == 'i') f |= 2;
+            else if (k == 'u') f |= 4;
+            else if (k == 'm') f |= 8;
+            else if (k == 'c') c = 0x1000000 | (int)strtol(name + 4, NULL, 16);
+            else if (k == 's') z = atoi(name + 4);
+            else if (k == 'a') f |= (atoi(name + 4) & 3) << 4;
+            }
+        g_free(name);
+        }
+    g_slist_free(tags);
+    *flags = f;
+    *colour = c;
+    *size = z;
+    }
+/* runs, relative to char offset `base` of text t, applied over the chars they cover */
+static void tv_apply_runs(GtkTextBuffer* b, const char* t, int baseByte, const int* runs, int nruns)
+    {
+    for (int k = 0; k < nruns; k++)
+        {
+        int s = baseByte + runs[k * UX_TV_RUN], e = s + runs[k * UX_TV_RUN + 1];
+        tv_style(b, tv_char_of(t, s), tv_char_of(t, e), runs[k * UX_TV_RUN + 2], runs[k * UX_TV_RUN + 3],
+                 runs[k * UX_TV_RUN + 4]);
+        }
+    }
+static void tv_insert_before(GtkTextBuffer* b, GtkTextIter* at, char* text, int len, gpointer ud)
+    {
+    (void)ud;
+    if (gTvQuiet)
+        return;
+    gTvPendAt = gtk_text_iter_get_offset(at);
+    gTvPendN = (int)g_utf8_strlen(text, len);
+    }
+static void tv_changed(GtkTextBuffer* b, gpointer ud)
+    {
+    GtkTextView* tv = GTK_TEXT_VIEW(ud);
+    int h = hOf(GTK_WIDGET(tv)), n = nOf(GTK_WIDGET(tv));
+    if (gTvQuiet)
+        return;
+    if (gTvPendAt >= 0)
+        {
+        /* the user's insert: the style chosen for typing, or the one before it */
+        int f = 0, c = 0, z = 0;
+        if (gTvTyping[h][n][0])
+            {
+            f = gTvTyping[h][n][1];
+            c = gTvTyping[h][n][2];
+            z = gTvTyping[h][n][3];
+            gTvTyping[h][n][0] = 0;
+            }
+        else if (gTvPendAt > 0)
+            {
+            GtkTextIter it;
+            gtk_text_buffer_get_iter_at_offset(b, &it, gTvPendAt - 1);
+            tv_style_at(&it, &f, &c, &z);
+            }
+        else
+            {
+            GtkTextIter it;
+            gtk_text_buffer_get_iter_at_offset(b, &it, gTvPendAt + gTvPendN);
+            if (!gtk_text_iter_is_end(&it))
+                tv_style_at(&it, &f, &c, &z);
+            }
+        int at = gTvPendAt;
+        gTvPendAt = -1;
+        tv_style(b, at, at + gTvPendN, f, c, z);
+        }
+    gTvChangedNow = 1;
+    if (gTvChanged)
+        gTvChanged(h, n);
+    }
+static void tv_selection_now(GtkTextBuffer* b, int* s8, int* l8)
+    {
+    GtkTextIter a, z;
+    gtk_text_buffer_get_selection_bounds(b, &a, &z);
+    char* t = tv_all(b);
+    int x = tv_byte_of(t, gtk_text_iter_get_offset(&a)), y = tv_byte_of(t, gtk_text_iter_get_offset(&z));
+    g_free(t);
+    *s8 = x < y ? x : y;
+    *l8 = x < y ? y - x : x - y;
+    }
+static void tv_mark_set(GtkTextBuffer* b, GtkTextIter* loc, GtkTextMark* mark, gpointer ud)
+    {
+    (void)loc;
+    GtkTextView* tv = GTK_TEXT_VIEW(ud);
+    if (gTvQuiet || (mark != gtk_text_buffer_get_insert(b) && mark != gtk_text_buffer_get_selection_bound(b)))
+        return;
+    int h = hOf(GTK_WIDGET(tv)), n = nOf(GTK_WIDGET(tv));
+    int s = 0, l = 0;
+    tv_selection_now(b, &s, &l);
+    if (s == gTvLastSel[h][n][0] && l == gTvLastSel[h][n][1])
+        return;
+    gTvLastSel[h][n][0] = s;
+    gTvLastSel[h][n][1] = l;
+    if (gTvChangedNow)
+        {
+        gTvChangedNow = 0; /* the caret moving after the typing, not the user moving it */
+        return;
+        }
+    gTvTyping[h][n][0] = 0;
+    if (gTvSelected)
+        gTvSelected(h, n);
+    }
+/* Control-Z, Shift-Control-Z and Control-Y go to the toolkit's undo; the view's other editing keys
+ * (cut, copy, paste, select all) are its own.  Taken in the capture phase, before the window's
+ * menu shortcuts. */
+static gboolean tv_key(GtkEventControllerKey* k, guint keyval, guint code, GdkModifierType mods, gpointer ud)
+    {
+    (void)k;
+    (void)code;
+    GtkTextView* tv = GTK_TEXT_VIEW(ud);
+    GdkModifierType m = mods & (GDK_CONTROL_MASK | GDK_SHIFT_MASK | GDK_ALT_MASK | GDK_META_MASK);
+    if (!(m & (GDK_CONTROL_MASK | GDK_META_MASK)) || (m & GDK_ALT_MASK))
+        return FALSE;
+    guint key = gdk_keyval_to_lower(keyval);
+    int h = hOf(GTK_WIDGET(tv)), n = nOf(GTK_WIDGET(tv));
+    if (key == GDK_KEY_z || key == GDK_KEY_y)
+        {
+        if (gTvUndo)
+            gTvUndo(h, n, (key == GDK_KEY_y || (m & GDK_SHIFT_MASK)) ? 1 : 0);
+        return TRUE;
+        }
+    if (m & GDK_SHIFT_MASK)
+        return FALSE;
+    if (key == GDK_KEY_x)
+        g_signal_emit_by_name(tv, "cut-clipboard");
+    else if (key == GDK_KEY_c)
+        g_signal_emit_by_name(tv, "copy-clipboard");
+    else if (key == GDK_KEY_v)
+        g_signal_emit_by_name(tv, "paste-clipboard");
+    else if (key == GDK_KEY_a)
+        g_signal_emit_by_name(tv, "select-all", TRUE);
+    else
+        return FALSE;
+    return TRUE;
+    }
+void ux_gtk_make_textview(int handle, int node, int x, int y, int w, int h)
+    {
+    GtkWidget* sw = gtk_scrolled_window_new();
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(sw), GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC);
+    gtk_scrolled_window_set_has_frame(GTK_SCROLLED_WINDOW(sw), TRUE);
+    GtkWidget* tw = gtk_text_view_new();
+    GtkTextView* tv = GTK_TEXT_VIEW(tw);
+    gtk_text_view_set_wrap_mode(tv, GTK_WRAP_WORD_CHAR);
+    gtk_text_view_set_left_margin(tv, 4);
+    gtk_text_view_set_right_margin(tv, 4);
+    gtk_text_view_set_top_margin(tv, 3);
+    GtkTextBuffer* b = gtk_text_view_get_buffer(tv);
+    gtk_text_buffer_set_enable_undo(b, FALSE);
+    g_object_set_data(G_OBJECT(tw), "ux-handle", GINT_TO_POINTER(handle));
+    g_object_set_data(G_OBJECT(tw), "ux-node", GINT_TO_POINTER(node));
+    g_signal_connect(b, "insert-text", G_CALLBACK(tv_insert_before), tv);
+    g_signal_connect(b, "changed", G_CALLBACK(tv_changed), tv);
+    g_signal_connect(b, "mark-set", G_CALLBACK(tv_mark_set), tv);
+    GtkEventController* keys = gtk_event_controller_key_new();
+    gtk_event_controller_set_propagation_phase(keys, GTK_PHASE_CAPTURE);
+    g_signal_connect(keys, "key-pressed", G_CALLBACK(tv_key), tv);
+    gtk_widget_add_controller(tw, keys);
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(sw), tw);
+    park(handle, node, sw, x, y, w, h);
+    gTv[handle][node] = tv;
+    memset(gTvTyping[handle][node], 0, sizeof gTvTyping[handle][node]);
+    gTvLastSel[handle][node][0] = gTvLastSel[handle][node][1] = 0;
+    }
+void ux_gtk_textview_set_all(int handle, int node, const char* text, int nbytes, const int* runs, int nruns)
+    {
+    GtkTextView* tv = tv_at(handle, node);
+    if (!tv)
+        return;
+    GtkTextBuffer* b = gtk_text_view_get_buffer(tv);
+    gTvQuiet++;
+    gtk_text_buffer_set_text(b, text ? text : "", nbytes);
+    char* t = tv_all(b);
+    tv_apply_runs(b, t, 0, runs, nruns);
+    g_free(t);
+    gTvQuiet--;
+    }
+void ux_gtk_textview_replace(int handle, int node, int start, int len, const char* text, int nbytes,
+                             const int* runs, int nruns, int attrsOnly)
+    {
+    GtkTextView* tv = tv_at(handle, node);
+    if (!tv)
+        return;
+    GtkTextBuffer* b = gtk_text_view_get_buffer(tv);
+    gTvQuiet++;
+    char* t = tv_all(b);
+    int a = tv_char_of(t, start), z = tv_char_of(t, start + len);
+    g_free(t);
+    if (!attrsOnly)
+        {
+        GtkTextIter i0, i1;
+        gtk_text_buffer_get_iter_at_offset(b, &i0, a);
+        gtk_text_buffer_get_iter_at_offset(b, &i1, z);
+        gtk_text_buffer_delete(b, &i0, &i1);
+        gtk_text_buffer_get_iter_at_offset(b, &i0, a);
+        gtk_text_buffer_insert(b, &i0, text ? text : "", nbytes);
+        }
+    t = tv_all(b);
+    int e = tv_char_of(t, start + nbytes);
+    tv_style(b, a, e, 0, 0, 0);
+    tv_apply_runs(b, t, start, runs, nruns);
+    g_free(t);
+    gTvQuiet--;
+    }
+/* the runs the content has, and how many bytes: one pass that writes only when buf is given */
+static int tv_walk(GtkTextBuffer* b, char* buf, int cap, int* runs, int maxRuns, int* nbytes)
+    {
+    GtkTextIter it, end;
+    gtk_text_buffer_get_bounds(b, &it, &end);
+    int k = 0, at = 0;
+    int pf = -1, pc = 0, pz = 0;
+    while (!gtk_text_iter_equal(&it, &end))
+        {
+        GtkTextIter next = it;
+        if (!gtk_text_iter_forward_to_tag_toggle(&next, NULL))
+            next = end;
+        int f, c, z;
+        tv_style_at(&it, &f, &c, &z);
+        char* seg = gtk_text_buffer_get_text(b, &it, &next, TRUE);
+        int n = (int)strlen(seg);
+        if (buf && at + n < cap)
+            memcpy(buf + at, seg, (size_t)n);
+        g_free(seg);
+        if (k > 0 && f == pf && c == pc && z == pz)
+            {
+            if (runs && k - 1 < maxRuns)
+                runs[(k - 1) * UX_TV_RUN + 1] += n;
+            }
+        else
+            {
+            if (runs && k < maxRuns)
+                {
+                runs[k * UX_TV_RUN] = at;
+                runs[k * UX_TV_RUN + 1] = n;
+                runs[k * UX_TV_RUN + 2] = f;
+                runs[k * UX_TV_RUN + 3] = c;
+                runs[k * UX_TV_RUN + 4] = z;
+                }
+            k++;
+            pf = f;
+            pc = c;
+            pz = z;
+            }
+        at += n;
+        it = next;
+        }
+    if (buf && cap > 0)
+        buf[at < cap ? at : cap - 1] = 0;
+    if (nbytes)
+        *nbytes = at;
+    return k;
+    }
+void ux_gtk_textview_size(int handle, int node, int* nbytes, int* nruns)
+    {
+    GtkTextView* tv = tv_at(handle, node);
+    *nbytes = 0;
+    *nruns = 0;
+    if (tv)
+        *nruns = tv_walk(gtk_text_view_get_buffer(tv), NULL, 0, NULL, 0, nbytes);
+    }
+int ux_gtk_textview_read(int handle, int node, char* buf, int cap, int* runs, int maxRuns)
+    {
+    GtkTextView* tv = tv_at(handle, node);
+    if (!tv || cap <= 0)
+        return 0;
+    int k = tv_walk(gtk_text_view_get_buffer(tv), buf, cap, runs, maxRuns, NULL);
+    return k < maxRuns ? k : maxRuns;
+    }
+void ux_gtk_textview_selection(int handle, int node, int* start, int* len)
+    {
+    GtkTextView* tv = tv_at(handle, node);
+    *start = 0;
+    *len = 0;
+    if (tv)
+        tv_selection_now(gtk_text_view_get_buffer(tv), start, len);
+    }
+void ux_gtk_textview_set_selection(int handle, int node, int start, int len)
+    {
+    GtkTextView* tv = tv_at(handle, node);
+    if (!tv)
+        return;
+    GtkTextBuffer* b = gtk_text_view_get_buffer(tv);
+    char* t = tv_all(b);
+    GtkTextIter a, z;
+    gtk_text_buffer_get_iter_at_offset(b, &a, tv_char_of(t, start));
+    gtk_text_buffer_get_iter_at_offset(b, &z, tv_char_of(t, start + len));
+    g_free(t);
+    gTvQuiet++;
+    gtk_text_buffer_select_range(b, &z, &a);
+    gtk_text_view_scroll_mark_onscreen(tv, gtk_text_buffer_get_insert(b));
+    gTvQuiet--;
+    gTvLastSel[handle][node][0] = start;
+    gTvLastSel[handle][node][1] = len;
+    }
+void ux_gtk_textview_set_typing(int handle, int node, int flags, int colour, int size)
+    {
+    if (!tv_at(handle, node))
+        return;
+    gTvTyping[handle][node][0] = 1;
+    gTvTyping[handle][node][1] = flags;
+    gTvTyping[handle][node][2] = colour;
+    gTvTyping[handle][node][3] = size;
+    }
+void ux_gtk_textview_focus(int handle, int node)
+    {
+    GtkTextView* tv = tv_at(handle, node);
+    if (tv)
+        gtk_widget_grab_focus(GTK_WIDGET(tv));
+    }
+/* the rigs': text typed at the cursor as the user types it (the view reports the change) */
+void ux_gtk_test_textview_type(int handle, int node, const char* text)
+    {
+    GtkTextView* tv = tv_at(handle, node);
+    if (tv)
+        gtk_text_buffer_insert_interactive_at_cursor(gtk_text_view_get_buffer(tv), text, -1, TRUE);
+    }
+/* ...and an editing key: Control (and Shift) with key, through the view's own key handler */
+int ux_gtk_test_textview_key(int handle, int node, int key, int shift)
+    {
+    GtkTextView* tv = tv_at(handle, node);
+    if (!tv)
+        return 0;
+    return tv_key(NULL, (guint)key, 0, GDK_CONTROL_MASK | (shift ? GDK_SHIFT_MASK : 0), tv) ? 1 : 0;
+    }

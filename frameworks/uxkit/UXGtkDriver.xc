@@ -21,6 +21,7 @@
 #import "UXTableView.xc"        // the native GtkColumnView reads its rows from the peer table
 #import "UXScrollView.xc"       // a scroll view is a GtkScrolledWindow
 #import "UXOutlineView.xc"      // ...and a native tree reads its items from the peer outline
+#import "UXTextView.xc"         // a GtkTextView edits it
 #import "UXApplication.xc"      // gApp: the driver-owned loop starts the delegate, and stop() quits
 #import "UXLibc.xc"
 
@@ -117,6 +118,18 @@ void ux_gtk_post_press(i32 handle, i32 x, i32 y);   // test seam: a headless gat
 void ux_gtk_post_motion(i32 x, i32 y);
 void ux_gtk_post_release(void);
 void ux_gtk_make_field(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h, u8* buf, i32 cap, i32 secure);
+// The native text view (UXTextView): a GtkTextView in a GtkScrolledWindow.
+void ux_gtk_make_textview(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h);
+void ux_gtk_textview_set_hooks(pointer changed, pointer selected, pointer undo);
+void ux_gtk_textview_set_all(i32 handle, i32 node, u8* text, i32 nbytes, i32* runs, i32 nruns);
+void ux_gtk_textview_replace(i32 handle, i32 node, i32 start, i32 len, u8* text, i32 nbytes, i32* runs, i32 nruns,
+                             i32 attrsOnly);
+void ux_gtk_textview_size(i32 handle, i32 node, i32* nbytes, i32* nruns);
+i32 ux_gtk_textview_read(i32 handle, i32 node, u8* buf, i32 cap, i32* runs, i32 maxRuns);
+void ux_gtk_textview_selection(i32 handle, i32 node, i32* start, i32* len);
+void ux_gtk_textview_set_selection(i32 handle, i32 node, i32 start, i32 len);
+void ux_gtk_textview_set_typing(i32 handle, i32 node, i32 flags, i32 colour, i32 size);
+void ux_gtk_textview_focus(i32 handle, i32 node);
 void ux_gtk_update_field(i32 handle, i32 node);
 void ux_gtk_popup_add_item(i32 handle, i32 node, u8* title);
 void ux_gtk_popup_select(i32 handle, i32 node, i32 i);
@@ -249,6 +262,59 @@ void uxGtkValueChanged(i32 handle, i32 node, i32 value)
     }
 // A native UITextField's text changed: the buffer is already synced shim-side;
 // tell the neutral field so its onChange fires with the truth (mac pattern).
+// The user edited a GtkTextView, moved its selection or pressed an undo key: tell its UXTextView.
+UXTextView* uxGtkTextViewAt(i32 handle, i32 node)
+    {
+    if (handle < (i32)0 || handle >= (i32)64 || node < (i32)0 || node >= (i32)4096)
+        {
+        return (UXTextView*)0;
+        }
+    return (UXTextView* ?)(Object*)gGtkCtlPeer[handle * (i32)4096 + node];
+    }
+void uxGtkTextViewChanged(i32 handle, i32 node)
+    {
+    UXTextView* tv = uxGtkTextViewAt(handle, node);
+    if (tv != (UXTextView*)0)
+        {
+        tv.nativeDidChange();
+        }
+    if (gApp != (UXApplication*)0)
+        {
+        gApp.displayIfNeeded();
+        }
+    }
+void uxGtkTextViewSelected(i32 handle, i32 node)
+    {
+    UXTextView* tv = uxGtkTextViewAt(handle, node);
+    if (tv != (UXTextView*)0)
+        {
+        tv.nativeDidSelect();
+        }
+    if (gApp != (UXApplication*)0)
+        {
+        gApp.displayIfNeeded();
+        }
+    }
+void uxGtkTextViewUndo(i32 handle, i32 node, i32 redo)
+    {
+    UXTextView* tv = uxGtkTextViewAt(handle, node);
+    if (tv != (UXTextView*)0)
+        {
+        if (redo != (i32)0)
+            {
+            tv.redo();
+            }
+        else
+            {
+            tv.undo();
+            }
+        }
+    if (gApp != (UXApplication*)0)
+        {
+        gApp.displayIfNeeded();
+        }
+    }
+
 void uxGtkFieldChanged(i32 handle, i32 node)
     {
     if (handle < (i32)0 || handle >= (i32)64 || node < (i32)0 || node >= (i32)4096)
@@ -484,6 +550,8 @@ class UXGtkDriver : Object<UXViewDriver>
             ux_gtk_set_value_changed((pointer)&uxGtkValueChanged);
             ux_gtk_set_field_hooks((pointer)&uxGtkFieldChanged);
             ux_gtk_set_field_submit_hooks((pointer)&uxGtkFieldSubmitted);
+            ux_gtk_textview_set_hooks((pointer)&uxGtkTextViewChanged, (pointer)&uxGtkTextViewSelected,
+                                      (pointer)&uxGtkTextViewUndo);
             ux_gtk_set_mouse((pointer)&uxGtkDispatch);
             ux_gtk_set_scroll_content((pointer)&ux_scroll_draw); // a scroll document draws its subtree
             ux_gtk_set_table_hooks((pointer)&xgGtkTableRows, (pointer)&xgGtkTableCell, (pointer)&xgGtkTableCols,
@@ -1161,6 +1229,41 @@ class UXGtkDriver : Object<UXViewDriver>
         {
         return ux_gtk_menu_popup(handle, titles, flags, n, x, y);
         }
+    // ---- the native text view (UXTextView); the undo is the view's own --------------------------
+    void textViewSetAll(i32 handle, i32 node, u8* text, i32 nbytes, i32* runs, i32 nruns)
+        {
+        ux_gtk_textview_set_all(handle, node, text, nbytes, runs, nruns);
+        }
+    void textViewReplace(i32 handle, i32 node, i32 start, i32 len, u8* text, i32 nbytes, i32* runs, i32 nruns,
+                         i32 attrsOnly)
+        {
+        ux_gtk_textview_replace(handle, node, start, len, text, nbytes, runs, nruns, attrsOnly);
+        }
+    void textViewSize(i32 handle, i32 node, i32* nbytes, i32* nruns)
+        {
+        ux_gtk_textview_size(handle, node, nbytes, nruns);
+        }
+    i32 textViewRead(i32 handle, i32 node, u8* buf, i32 cap, i32* runs, i32 maxRuns)
+        {
+        return ux_gtk_textview_read(handle, node, buf, cap, runs, maxRuns);
+        }
+    void textViewSelection(i32 handle, i32 node, i32* start, i32* len)
+        {
+        ux_gtk_textview_selection(handle, node, start, len);
+        }
+    void textViewSetSelection(i32 handle, i32 node, i32 start, i32 len)
+        {
+        ux_gtk_textview_set_selection(handle, node, start, len);
+        }
+    void textViewSetTyping(i32 handle, i32 node, i32 flags, i32 colour, i32 size)
+        {
+        ux_gtk_textview_set_typing(handle, node, flags, colour, size);
+        }
+    void textViewFocus(i32 handle, i32 node)
+        {
+        ux_gtk_textview_focus(handle, node);
+        }
+
     bool driverAutoresizes(void)
         {
         return false;
@@ -1476,6 +1579,16 @@ class UXGtkDriver : Object<UXViewDriver>
             else if (n.kind == (i32)UXKindLabel && n.spec != (pointer)0)
                 {
                 ux_gtk_make_label(handle, i, ax, ay, aw, ah, (u8*)n.spec);
+                }
+            else if (n.kind == (i32)UXKindTextView)
+                {
+                UXTextView* tvp = (UXTextView* ?)(Object*)n.peer;
+                if (tvp != (UXTextView*)0)
+                    {
+                    ux_gtk_make_textview(handle, i, ax, ay, aw, ah);
+                    gGtkCtlPeer[handle * (i32)4096 + i] = n.peer;
+                    tvp.nativeAttach(handle, i);
+                    }
                 }
             else if (n.kind == (i32)UXKindField)
                 {

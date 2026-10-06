@@ -23,7 +23,8 @@ so [`attributedText`](#attributedtext) is always current.
 |---|---|
 | macOS | `NSTextView` |
 | Web | A `contenteditable` element over the view. Pasted text comes in unstyled, and undo is kept by the view. |
-| GTK, Windows, iOS, Android, GEM | Not yet. Until then the view draws its text and edits only through its methods. |
+| GTK | `GtkTextView`. Undo is kept by the view, because GTK's own does not record styles. |
+| Windows, iOS, Android, GEM | Not yet. Until then the view draws its text and edits only through its methods. |
 
 Offsets and lengths are UTF-8 bytes, as in Foundation's strings. An emoji is
 four bytes.
