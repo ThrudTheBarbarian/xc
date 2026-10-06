@@ -135,6 +135,11 @@ class ParCuda
         {
         if (src == (u8*)0 || src[0] != (u8)'/')
             return ParDevice.cpu("it has no GPU version");
+        // A kernel whose header names spirv= is SPIR-V alone (the PTX did not
+        // print): that is for Vulkan, which Par tries next.
+        for (u32 at = (u32)0; src[at] != (u8)0 && src[at] != (u8)10; at = at + (u32)1)
+            if (src[at] == (u8)'s' && src[at + (u32)1] == (u8)'p' && src[at + (u32)5] == (u8)'=')
+                return false;
         if (!start())
             return ParDevice.cpu("there is no CUDA device");
         pointer fn = function(src);

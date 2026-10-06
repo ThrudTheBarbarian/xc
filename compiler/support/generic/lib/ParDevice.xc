@@ -24,7 +24,7 @@ pointer memcpy(pointer dst, pointer src, u64 n);
 #if ARCH_win64
 i32 QueryPerformanceCounter(i64* count);
 i32 QueryPerformanceFrequency(i64* perSecond);
-#elif ARCH_x86_64 || ARCH_wasm32
+#elif ARCH_x86_64 || ARCH_wasm32 || PLATFORM_android
 // Linux's monotonic clock (on wasm32, the loader's, in the same form).
 struct _ParTimespec { i64 sec; i64 nsec; }
 i32 clock_gettime(i32 clock, u8* ts);
@@ -105,7 +105,7 @@ class ParDevice
         QueryPerformanceCounter(&c);
         QueryPerformanceFrequency(&f);
         return (c / f) * (i64)1000000 + (c % f) * (i64)1000000 / f;
-#elif ARCH_x86_64 || ARCH_wasm32
+#elif ARCH_x86_64 || ARCH_wasm32 || PLATFORM_android
         _ParTimespec ts;
         clock_gettime((i32)1, (u8*)&ts);   // CLOCK_MONOTONIC on Linux
         return ts.sec * (i64)1000000 + ts.nsec / (i64)1000;
@@ -150,6 +150,12 @@ class ParDevice
             return;
             }
         gParSet[slot(block)] = parseDevice(choice);
+        }
+
+    // XC_PAR_GPU=vulkan: on Windows, Vulkan even where CUDA is there.
+    static bool vulkanOnly(void)
+        {
+        return Platform.env(String.withCString("XC_PAR_GPU")).equals(String.withCString("vulkan"));
         }
 
     static bool reporting(void)

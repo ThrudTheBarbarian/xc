@@ -282,7 +282,8 @@ static NSString* ptxNarrowFix(XTIRType* t, NSString* r)
                     NSString* op = i.opcode == XTIROpShl ? [NSString stringWithFormat:@"shl.%@", bits]
                                  : i.opcode == XTIROpLShr ? [NSString stringWithFormat:@"shr.%@", us]
                                                           : [NSString stringWithFormat:@"shr.%@", ss];
-                    if (ptxWide(rt) && o[1].kind == XTIROperandKindUse)
+                    // A 64-bit count is narrowed first; a 32-bit one is already the operand.
+                    if (ptxWide(rt) && o[1].kind == XTIROperandKindUse && ptxWide([self typeOf:o[1].valueId]))
                         return [NSString stringWithFormat:@"\tcvt.u32.u64 %%k, %@;\n\t%@ %@, %@, %%k;\n", b, op, r, a];
                     return [NSString stringWithFormat:@"\t%@ %@, %@, %@;\n", op, r, a, b];
                     }

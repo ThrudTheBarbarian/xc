@@ -120,7 +120,32 @@ static BOOL gEmitsWGSL = NO;
         BOOL fast = tag == fastTag;
         NSString* why = nil;
         NSData* kernel = nil;
-        if (gEmitsSPIRV)
+        if (gEmitsSPIRV && gEmitsPTX)
+            {
+            // Windows: the PTX for NVIDIA's driver, then the SPIR-V for
+            // Vulkan (any other GPU), after the PTX's NUL at a 4-byte boundary
+            // (ParVulkan.spirvOf). Either alone where the other did not print.
+            NSString* ptxWhy = nil;
+            NSString* ptx = [XTIRParMSL ptxForKernel:f module:module fast:fast why:&ptxWhy];
+            NSData* spv = [XTIRParMSL spirvForKernel:f module:module fast:fast why:&why];
+            if (ptx && spv)
+                {
+                NSMutableData* both = [[ptx dataUsingEncoding:NSUTF8StringEncoding] mutableCopy];
+                uint8_t zero = 0;
+                [both appendBytes:&zero length:1];
+                while (both.length % 4)
+                    [both appendBytes:&zero length:1];
+                [both appendData:spv];
+                kernel = both;
+                }
+            else if (ptx)
+                kernel = [ptx dataUsingEncoding:NSUTF8StringEncoding];
+            else
+                kernel = spv;
+            if (!kernel)
+                why = ptxWhy ?: why;
+            }
+        else if (gEmitsSPIRV)
             kernel = [XTIRParMSL spirvForKernel:f module:module fast:fast why:&why];
         else
             {

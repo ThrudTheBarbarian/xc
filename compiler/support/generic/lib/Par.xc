@@ -22,7 +22,7 @@
 #if ARCH_arm64 && !PLATFORM_ios && !PLATFORM_android
 #import "ParMetal.xc"
 #endif
-#if ARCH_x86_64 && !ARCH_win64
+#if ARCH_x86_64 || (ARCH_arm64 && PLATFORM_android)
 #import "ParVulkan.xc"
 #endif
 #if ARCH_win64
@@ -102,16 +102,20 @@ class Par
         {
         if (hi <= lo)
             return;
-#if (ARCH_arm64 && !PLATFORM_ios && !PLATFORM_android) || ARCH_x86_64 || ARCH_wasm32
+#if (ARCH_arm64 && !PLATFORM_ios) || ARCH_x86_64 || ARCH_wasm32
         if (ParDevice.choose(proto, hi - lo) == (i32)2)
             {
 #if ARCH_wasm32
             if (ParWebGpu.run(proto, proto.gpuSource(), lo, hi))
                 return;
 #elif ARCH_win64
-            if (ParCuda.run(proto, proto.gpuSource(), lo, hi))
+            // NVIDIA's own driver first, then Vulkan (AMD, Intel, or NVIDIA
+            // where CUDA is missing). XC_PAR_GPU=vulkan skips CUDA.
+            if (!ParDevice.vulkanOnly() && ParCuda.run(proto, proto.gpuSource(), lo, hi))
                 return;
-#elif ARCH_x86_64
+            if (ParVulkan.run(proto, proto.gpuSource(), lo, hi))
+                return;
+#elif ARCH_x86_64 || PLATFORM_android
             if (ParVulkan.run(proto, proto.gpuSource(), lo, hi))
                 return;
 #else
@@ -133,7 +137,7 @@ class Par
     // the choice in its Settings passes it on here; XC_PAR overrides all.
     static void device(u8* block, u8* choice)
         {
-#if (ARCH_arm64 && !PLATFORM_ios && !PLATFORM_android) || ARCH_x86_64 || ARCH_wasm32
+#if (ARCH_arm64 && !PLATFORM_ios) || ARCH_x86_64 || ARCH_wasm32
         ParDevice.setDevice(block, choice);
 #endif
         }

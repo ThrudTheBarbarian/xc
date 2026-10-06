@@ -15955,7 +15955,8 @@ class ClassInfo
             {
             // The shift count is a u32 operand.
             String* sop = op.equals(ptxS("Shl")) ? ptxCat("shl.", bits) : op.equals(ptxS("LShr")) ? ptxCat("shr.", us) : ptxCat("shr.", ss);
-            if (w && ((IROperand*)ip.ops().get((u32)1)).kind() == (u8)OPK_USE)
+            // A 64-bit count is narrowed first; a 32-bit one is already the operand.
+            if (w && ((IROperand*)ip.ops().get((u32)1)).kind() == (u8)OPK_USE && ptxWide(mslTypeOf((IROperand*)ip.ops().get((u32)1))))
                 {
                 String* s = ptx2(ptxS("cvt.u32.u64"), ptxS("%k"), b);
                 s.append(ptx3(sop, r, a, ptxS("%k")));
@@ -19251,7 +19252,34 @@ class ClassInfo
             String* msl = (String*)0;
             // A SPIR-V module is bytes (it holds NULs): it goes in as they are.
             Array* kernelBytes = (Array*)0;
-            if (_parSPIRV)
+            if (_parSPIRV && _parPTX)
+                {
+                // Windows: the PTX for NVIDIA's driver, then the SPIR-V for
+                // Vulkan after the PTX's NUL at a 4-byte boundary; either alone
+                // where the other did not print. As the reference.
+                String* ptx = parPtx(f);
+                String* ptxWhy = _mWhy;
+                Array* spv = parSpirv(f) ? _sOut : (Array*)0;
+                if (ptx != (String*)0)
+                    {
+                    kernelBytes = new Array();
+                    for (u32 q = (u32)0; q < ptx.byteLength(); q = q + (u32)1)
+                        kernelBytes.add((Object*)Number.withU8(ptx.byteAt(q)));
+                    if (spv != (Array*)0)
+                        {
+                        kernelBytes.add((Object*)Number.withU8((u8)0));
+                        while (kernelBytes.count() % (u32)4 != (u32)0)
+                            kernelBytes.add((Object*)Number.withU8((u8)0));
+                        for (u32 q = (u32)0; q < spv.count(); q = q + (u32)1)
+                            kernelBytes.add(spv.get(q));
+                        }
+                    }
+                else
+                    kernelBytes = spv;
+                if (kernelBytes == (Array*)0 && ptxWhy != (String*)0)
+                    _mWhy = ptxWhy;
+                }
+            else if (_parSPIRV)
                 {
                 if (parSpirv(f))
                     kernelBytes = _sOut;

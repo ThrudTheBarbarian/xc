@@ -44,7 +44,12 @@
 // discrete GPU, else the first integrated one, else the first of any kind.
 #import "ParDevice.xc"
 
-#if LINK_DYNAMIC
+// The Vulkan loader: vulkan-1.dll on Windows, libvulkan.so on Android, and
+// libvulkan.so.1 on Linux, where only a dynamically linked program can load it.
+#if ARCH_win64
+pointer LoadLibraryA(u8* name);
+pointer GetProcAddress(pointer module, u8* name);
+#elif LINK_DYNAMIC || PLATFORM_android
 pointer dlopen(u8* path, i32 mode);
 pointer dlsym(pointer handle, u8* name);
 #endif
@@ -154,12 +159,16 @@ class ParVulkan
     static vkQueueSubmit_t* _submit;
     static vkWaitForFences_t* _wait;
 
-#if LINK_DYNAMIC
+#if ARCH_win64 || LINK_DYNAMIC || PLATFORM_android
     static pointer _lib;
 
     static pointer fn(u8* name)
         {
+#if ARCH_win64
+        return GetProcAddress(_lib, name);
+#else
         return dlsym(_lib, name);
+#endif
         }
 #endif
 
@@ -168,8 +177,14 @@ class ParVulkan
         if (_state != (i32)0)
             return _state == (i32)1;
         _state = (i32)2;
-#if LINK_DYNAMIC
+#if ARCH_win64 || LINK_DYNAMIC || PLATFORM_android
+#if ARCH_win64
+        _lib = LoadLibraryA("vulkan-1.dll");
+#elif PLATFORM_android
+        _lib = dlopen("libvulkan.so", (i32)2);     // RTLD_NOW
+#else
         _lib = dlopen("libvulkan.so.1", (i32)2);   // RTLD_NOW
+#endif
         if (_lib == (pointer)0)
             return false;
         vkCreateInstance_t* createInstance = (vkCreateInstance_t*)fn("vkCreateInstance");
@@ -253,7 +268,8 @@ class ParVulkan
         // The device: XC_PAR_VULKAN_DEVICE, else discrete, else integrated, else the first.
         u8* pp = (u8*)malloc((u64)824);
         i32 pick = (i32)-1;
-        u8* want = getenv("XC_PAR_VULKAN_DEVICE");
+        String* wantS = Platform.env(String.withCString("XC_PAR_VULKAN_DEVICE"));
+        u8* want = wantS.cString();
         if (want != (u8*)0 && want[0] >= (u8)'0' && want[0] <= (u8)'9')
             {
             i32 w = (i32)(want[0] - (u8)'0');
@@ -488,11 +504,34 @@ class ParVulkan
     // Run [lo, hi) of the block on the GPU. False when the block cannot go
     // there (no kernel, a buffer of unknown size, no device): the caller then
     // runs it on the CPU, which gives the same answer.
-    static bool run(ParChunk* proto, u8* src, i64 lo, i64 hi)
+    // The SPIR-V half of a kernel: the kernel itself where its header names
+    // spirv=, else (on Windows, where the PTX comes first) the part after
+    // the PTX's NUL, at the next 4-byte offset; 0 when there is none.
+    static u8* spirvOf(u8* src)
         {
         if (src == (u8*)0 || src[0] != (u8)'/')
-            return ParDevice.cpu("it has no GPU version");
-#if !LINK_DYNAMIC
+            return (u8*)0;
+        u32 at = (u32)0;
+        while (src[at] != (u8)0 && src[at] != (u8)10)
+            {
+            if (src[at] == (u8)'s' && src[at + (u32)1] == (u8)'p' && src[at + (u32)5] == (u8)'=')
+                return src;
+            at = at + (u32)1;
+            }
+        while (src[at] != (u8)0)
+            at = at + (u32)1;
+        // Counted from the kernel's start, as the compiler pads it: a string
+        // literal itself need not sit on a 4-byte boundary.
+        u8* s2 = src + ((at + (u32)4) & ~(u32)3);
+        return s2[0] == (u8)'/' && s2[1] == (u8)'/' ? s2 : (u8*)0;
+        }
+
+    static bool run(ParChunk* proto, u8* src, i64 lo, i64 hi)
+        {
+        src = spirvOf(src);
+        if (src == (u8*)0)
+            return ParDevice.cpu("it has no Vulkan version");
+#if !(ARCH_win64 || LINK_DYNAMIC || PLATFORM_android)
         return ParDevice.cpu("the program is not linked with -dynamic, which a Vulkan GPU needs");
 #else
         if (!start())
