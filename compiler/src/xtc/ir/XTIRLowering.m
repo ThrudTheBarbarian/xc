@@ -14681,8 +14681,18 @@ typedef NSDictionary<NSString*, XTIRValue*> XTIRLocalSnapshot;
             else if (v != first)
                 allSame = NO;
             }
-        if (anyMissing || allSame)
-            continue; // `merged` already holds base/first
+        if (anyMissing)
+            continue; // `merged` already holds base
+        if (allSame)
+            {
+            // Every edge brings the same value, which need not be base's: a
+            // `try` whose catch arms all return reaches its join from the
+            // guarded block alone, with what the body assigned (UXKit:
+            // `try { got = f(); } catch { return -1; } return got;` gave the
+            // value from before the try).
+            merged[name] = first;
+            continue;
+            }
 
         // Phi operands follow each predecessor's index in fn.blocks — the
         // verifier's §12.4 check walks preds in source-block iteration order,

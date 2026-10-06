@@ -6755,8 +6755,16 @@ class ClassInfo
                 else if (v != first)
                     allSame = false;
                 }
-            if (anyMissing || allSame)
+            if (anyMissing)
                 continue;
+            if (allSame)
+                {
+                // Every edge brings the same value, which need not be base's:
+                // a `try` whose catch arms all return reaches its join from
+                // the guarded block alone, with what the body assigned.
+                merged.set((Hashable*)name, (Object*)first);
+                continue;
+                }
 
             // Phi pairs follow each predecessor's index in the function — the
             // order the verifier walks predecessors in.
