@@ -42,7 +42,7 @@ static void usage(void)
             "  --aapcs64-abi         Use plain AAPCS64 argument placement (Android)\n"
             "                        rather than Darwin's variadic-tail and packed\n"
             "                        stack-slot deviations.\n"
-            "  --sme-matmul          Put the SME matrix kernel in front of recognised\n"
+            "  --matmul              Put the SME matrix kernel in front of recognised\n"
             "                        matrix-multiply loops (macOS; the loop stays as\n"
             "                        the fallback on CPUs without SME).\n"
             "  --thread-safe-arc     Force atomic ARC retain/release.\n"
@@ -67,7 +67,7 @@ int main(int argc, const char* argv[])
         // -1 = decide from the module (the default), 0 = off, 1 = on.
         int threadSafeARC = -1;
         BOOL aapcs64Abi = NO;
-        BOOL smeMatMul = NO;
+        BOOL matMul = NO;
         BOOL lseAtomics = YES;
 
         for (int i = 1; i < argc; i++)
@@ -134,9 +134,9 @@ int main(int argc, const char* argv[])
                 // armv8-a): emit exclusive-load/store loops instead.
                 lseAtomics = NO;
                 }
-            else if ([arg isEqualToString:@"--sme-matmul"])
+            else if ([arg isEqualToString:@"--matmul"])
                 {
-                smeMatMul = YES;
+                matMul = YES;
                 }
             else if ([arg isEqualToString:@"--aapcs64-abi"])
                 {
@@ -213,7 +213,7 @@ int main(int argc, const char* argv[])
             // (bug 014). The per-pass minOptLevel filter keeps the real
             // optimisations off at -O0.
             XTIRArm64TargetProfile* armProfile = [XTIRArm64TargetProfile new];
-            armProfile.smeMatMul = smeMatMul;
+            armProfile.matMulPrefix = matMul ? @"__xt_sme_gemm_" : nil;
             XTIROptPipeline* pipe =
                 [XTIROptPipeline standardPipelineAtLevel:optLevel
                                                  profile:armProfile];

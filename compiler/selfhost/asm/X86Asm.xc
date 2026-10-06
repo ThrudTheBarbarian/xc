@@ -2589,6 +2589,20 @@ class X86Fixup
             _hit = true;
             return;
             }
+        // cmpps/cmppd xmm, xmm/m, imm8 — the same shape, opcode C2; the imm8 is
+        // the predicate (3 = unordered: a lane holding a NaN).
+        if ((mn.equals(String.withCString("cmpps")) || mn.equals(String.withCString("cmppd"))) && a != (XOperand*)0 && b != (XOperand*)0 && opAt((u32)2) != (XOperand*)0 && opAt((u32)2).kind() == (u32)OP_IMM)
+            {
+            if (mn.equals(String.withCString("cmppd")))
+                e8((u32)$66);
+            eRex(false, (i32)a.reg(), b.index(), b.rmReg(), false);
+            e8((u32)$0F);
+            e8((u32)$C2);
+            eModRM(a.reg(), b);
+            e8((u32)opAt((u32)2).imm() & (u32)$FF);
+            _hit = true;
+            return;
+            }
         // movss/movsd/movdqu/movdqa — the direction picks load or store.
         u32 mv = sseMov(mn);
         if (mv != (u32)$FFFF_FFFF && a != (XOperand*)0 && b != (XOperand*)0)

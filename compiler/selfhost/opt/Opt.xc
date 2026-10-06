@@ -74,9 +74,11 @@ class OptProfile
     // factor key off it (SIMD step 1, S2); set from the driver's vector level.
     u32 _vectorLaneBytes;
     bool _simdDispatch;
-    // SME matrix kernels (arm64 macOS, --sme-matmul): idiom-matmul puts a call
-    // to the back end's __xt_sme_gemm_* in front of a matrix-multiply nest.
-    bool _smeMatMul;
+    // Matrix kernels (--matmul): idiom-matmul puts a call to the back end's
+    // kernel, prefix + "f32"/"f64" + suffix, in front of a matrix-multiply nest:
+    // arm64 `__xt_sme_gemm_`, x86-64 `__xt_x86_gemm_` + `_<tier>`. 0: off.
+    String* _matMulPrefix;
+    String* _matMulSuffix;
     bool _loopRotate;      // top-tested loops become bottom-tested
     u32 _inlineMax;        // the largest callee (IR instructions) the inliner splices
     bool _dceTrace;        // name each function dead-function elimination removes
@@ -85,7 +87,8 @@ class OptProfile
         {
         _vectorLaneBytes = (u32)16;
         _simdDispatch = false;
-        _smeMatMul = false;
+        _matMulPrefix = (String*)0;
+        _matMulSuffix = String.withCString("");
         _inlineMax = (u32)64;
         _dceTrace = false;
         _nativeVarargs = false;
@@ -126,8 +129,9 @@ class OptProfile
     // `<name>$avx2` clones at 32 that the runtime picks between at load.
     bool simdDispatch(void) { return _simdDispatch; }
     void setSimdDispatch(bool d) { _simdDispatch = d; }
-    bool smeMatMul(void) { return _smeMatMul; }
-    void setSmeMatMul(bool d) { _smeMatMul = d; }
+    String* matMulPrefix(void) { return _matMulPrefix; }
+    String* matMulSuffix(void) { return _matMulSuffix; }
+    void setMatMul(String* prefix, String* suffix) { _matMulPrefix = prefix; _matMulSuffix = suffix; }
 
     static OptProfile* forTarget(String* t)
         {
@@ -7281,7 +7285,7 @@ class OptProfile
 
     void idiomMatMul(IRModule* m)
         {
-        if (!_profile.smeMatMul())
+        if (_profile.matMulPrefix() == (String*)0)
             return;
         for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
             {
@@ -7862,7 +7866,10 @@ class OptProfile
 
     void applyMatMul(IRModule* m)
         {
-        String* name = String.withCString(_mmF64 ? "__xt_sme_gemm_f64" : "__xt_sme_gemm_f32");
+        String* name = new String();
+        name.append(_profile.matMulPrefix());
+        name.appendCString(_mmF64 ? "f64" : "f32");
+        name.append(_profile.matMulSuffix());
         bool have = false;
         for (u32 i = (u32)0; i < m.syms().count(); i = i + (u32)1)
             if (((IRSymbol*)m.syms().get(i)).name().equals(name))

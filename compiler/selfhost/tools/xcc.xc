@@ -86,7 +86,7 @@ class CapOptions
     String* _simd;         // the x86-64 vector level: 0 (default), "base", "avx2"
     String* _simdFlag;     // the flag that chose it, for the target check
     bool _dynamic;         // -dynamic: an x86-64 executable linked against glibc
-    bool _noSme;           // -mno-sme: no SME matrix kernels (arm64 macOS)
+    bool _noMatmul;           // -fno-matmul: no SME matrix kernels (arm64 macOS)
 
     void init(void)
     {
@@ -107,7 +107,7 @@ class CapOptions
         _simd = (String*)0;
         _simdFlag = (String*)0;
         _dynamic = false;
-        _noSme = false;
+        _noMatmul = false;
     }
 
     String* alloc(void)     { return _alloc; }
@@ -128,8 +128,8 @@ class CapOptions
     String* simdFlag(void)  { return _simdFlag; }
     bool dynamic(void)      { return _dynamic; }
     void setDynamic(void)   { _dynamic = true; }
-    bool noSme(void)        { return _noSme; }
-    void setNoSme(void)     { _noSme = true; }
+    bool noMatmul(void)        { return _noMatmul; }
+    void setNoMatmul(void)     { _noMatmul = true; }
 
     void setAlloc(String* v)     { _alloc = v; }
     void setHostMalloc(String* v) { _malloc = v; }
@@ -4868,8 +4868,9 @@ void capabilityUsage(void)
     Stdio.printf("                             vectorised function, picked at load (the\n");
     Stdio.printf("                             default; XC_SIMD=base|avx2 overrides it)\n");
     Stdio.printf("  -mnative                   x86-64/win64: the level of this machine\n");
-    Stdio.printf("  -mno-sme                   arm64 macOS: do not run recognised matrix\n");
-    Stdio.printf("                             multiplies on the SME matrix unit\n");
+    Stdio.printf("  -fno-matmul                Leave recognised matrix multiplies as loops\n");
+    Stdio.printf("                             (arm64 macOS: no SME kernel; x86-64: no\n");
+    Stdio.printf("                             vector kernel)\n");
     Stdio.printf("  -fthread-safe-arc          Atomic ARC refcounts. Default: on when the\n");
     Stdio.printf("                             program spawns a thread\n");
     Stdio.printf("  -fno-thread-safe-arc       Plain, non-atomic refcounts\n");
@@ -5182,10 +5183,12 @@ void applyOptFlags(DriverOptions* d, OptProfile* p)
 {
     Opt.setInlineOverride(p, d.inlineMax());
     Opt.setDceTrace(p, d.dceTrace());
-    // SME matrix kernels: arm64 macOS, -O2+, unless -mno-sme. The kernel checks
-    // for SME at run time and leaves the loop to run when it is absent.
-    if (d.arch().equals(String.withCString("arm64")) && !isIos(d) && !d.caps().noSme() && d.opt() >= (u32)2)
-        p.setSmeMatMul(true);
+    // Matrix kernels, -O2+, unless -fno-matmul: arm64 macOS (SME; the kernel
+    // checks for SME at run time and leaves the loop to run when it is absent)
+    // and x86-64 Linux (a kernel per vector tier, named below with the level).
+    bool matMul = !d.caps().noMatmul() && d.opt() >= (u32)2;
+    if (matMul && d.arch().equals(String.withCString("arm64")) && !isIos(d))
+        p.setMatMul(String.withCString("__xt_sme_gemm_"), String.withCString(""));
     // The vector level only ever reaches an x86-64 profile (checkCapabilities
     // refuses it elsewhere): avx2 gives the vectoriser 32-byte vectors, which
     // the back end emits as ymm.
@@ -5203,6 +5206,16 @@ void applyOptFlags(DriverOptions* d, OptProfile* p)
                              : (simd.equals(String.withCString("avx2")) ? (u32)32 : (u32)16));
         // -msimd=auto: base code plus avx2 clones, picked at load.
         p.setSimdDispatch(simd.equals(String.withCString("auto")));
+    }
+    if (matMul && isX86_64(d))
+    {
+        String* lv = simd == (String*)0 ? String.withCString("base") : simd;
+        if (!lv.equals(String.withCString("avx512")) && !lv.equals(String.withCString("avx2"))
+            && !lv.equals(String.withCString("auto")))
+            lv = String.withCString("base");
+        String* suffix = String.withCString("_");
+        suffix.append(lv);
+        p.setMatMul(String.withCString("__xt_x86_gemm_"), suffix);
     }
 }
 
@@ -5308,8 +5321,8 @@ bool parseCapabilityFlag(DriverOptions* d, u32* ip, u32 argc)
         c.setDynamic();
         *ip = i + (u32)1; return true;
     }
-    if (a.equals(String.withCString("-mno-sme"))) {
-        c.setNoSme();
+    if (a.equals(String.withCString("-fno-matmul"))) {
+        c.setNoMatmul();
         *ip = i + (u32)1; return true;
     }
     if (a.equals(String.withCString("-mavx2"))) {

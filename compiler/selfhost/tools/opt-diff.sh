@@ -74,9 +74,9 @@ STOP=${XTC_OPT_STOP_AFTER:-}
 # both compilers produce on --dump-opt-ir before the back ends can emit it.
 SIMDARGS=()
 [ -n "${OPT_SIMD:-}" ] && SIMDARGS=(--simd="$OPT_SIMD")
-# OPT_SME=1: the arm64 profile with the SME matrix kernels on (--sme-matmul),
-# as the driver gives arm64 macOS at -O2+.
-[ -n "${OPT_SME:-}" ] && SIMDARGS+=(--sme-matmul)
+# OPT_MATMUL=1: the matrix-kernel recognition on (--matmul), as the driver
+# gives arm64 macOS and x86-64 Linux at -O2+.
+[ -n "${OPT_MATMUL:-}" ] && SIMDARGS+=(--matmul)
 STOPARGS=()
 [ -n "$STOP" ] && STOPARGS=(--stop-after "$STOP")
 

@@ -24,7 +24,8 @@ void main(void)
     u32 level = (u32)0;
     u32 simdBytes = (u32)16;
     bool simdDispatch = false; // --simd=auto: runtime SIMD dispatch clones
-    bool smeMatMul = false;    // --sme-matmul: idiom-matmul (arm64 macOS)
+    bool matMul = false;       // --matmul: idiom-matmul's kernel for the target
+    String* simdName = String.withCString("base");
     u32 argc = Process.argumentCount();
     u32 i = (u32)1;
     while (i < argc)
@@ -74,11 +75,11 @@ void main(void)
             }
         // --simd=avx2: the 32-byte vector width the x86-64 profile takes under
         // -mavx2, as the reference's --simd does (opt-diff's OPT_SIMD).
-        // --sme-matmul: the arm64 profile's SME matrix kernels, as the
-        // reference's xcc-cg-arm64 takes it.
-        if (a.equals(String.withCString("--sme-matmul")))
+        // --matmul: the matrix kernels, as the reference's code generators
+        // take it (arm64 SME; x86-64 one per vector tier).
+        if (a.equals(String.withCString("--matmul")))
             {
-            smeMatMul = true;
+            matMul = true;
             i = i + (u32)1;
             continue;
             }
@@ -87,6 +88,9 @@ void main(void)
             simdBytes = a.substringFromByte((u32)7).equals(String.withCString("avx512")) ? (u32)64
                       : a.substringFromByte((u32)7).equals(String.withCString("avx2")) ? (u32)32 : (u32)16;
             simdDispatch = a.substringFromByte((u32)7).equals(String.withCString("auto"));
+            String* lv = a.substringFromByte((u32)7);
+            simdName = (lv.equals(String.withCString("avx512")) || lv.equals(String.withCString("avx2"))
+                        || lv.equals(String.withCString("auto"))) ? lv : String.withCString("base");
             i = i + (u32)1;
             continue;
             }
@@ -121,7 +125,14 @@ void main(void)
     OptProfile* prof = OptProfile.forTarget(target);
     prof.setVectorLaneBytes(simdBytes);
     prof.setSimdDispatch(simdDispatch);
-    prof.setSmeMatMul(smeMatMul);
+    if (matMul && target.equals(String.withCString("arm64")))
+        prof.setMatMul(String.withCString("__xt_sme_gemm_"), String.withCString(""));
+    else if (matMul && target.equals(String.withCString("x86_64")))
+        {
+        String* suffix = String.withCString("_");
+        suffix.append(simdName);
+        prof.setMatMul(String.withCString("__xt_x86_gemm_"), suffix);
+        }
     Opt* o = Opt.atLevel(level, prof);
     if (stopAfter != 0)
         o.setStopAfter(stopAfter);

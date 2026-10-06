@@ -23,7 +23,8 @@ NS_ASSUME_NONNULL_BEGIN
 // kernel itself is emitted by the arm64 back end (XTArm64Backend), once per
 // module that calls it. Results are bit-identical: the back end fuses
 // `s + a*b` into fmadd, and FMOPA is the same fused multiply-add per element,
-// in the same k order. arm64 macOS only (smeMatMul), -O2+; runs after
+// in the same k order (the x86-64 kernel multiplies then adds, as the loop does
+// there). arm64 macOS and x86-64 Linux (matMulPrefix), -O2+; runs after
 // idiom-memset, before the vectoriser and the unrollers change the nest's
 // shape. Design: private:docs/Design/simd-sme-plan.md.
 @interface XTIROptIdiomMatMul : NSObject <XTIROptPass>

@@ -52,7 +52,7 @@
 @property(nonatomic, readwrite) NSString* hostMalloc;
 @property(nonatomic, readwrite, nullable) NSString* simdLevel;
 @property(nonatomic, readwrite, nullable) NSString* simdFlag;
-@property(nonatomic, readwrite) BOOL noSme;
+@property(nonatomic, readwrite) BOOL noMatmul;
 @property(nonatomic, readwrite) BOOL dynamicGlibc;
 @property(nonatomic, readwrite) BOOL allocatorExplicit;
 @property(nonatomic, readwrite) BOOL dceTrace;
@@ -1028,8 +1028,8 @@ static NSString* sExecutablePath = nil;
             }
         else if ([arg isEqualToString:@"-dynamic"])
             opts.dynamicGlibc = YES;
-        else if ([arg isEqualToString:@"-mno-sme"])
-            opts.noSme = YES;
+        else if ([arg isEqualToString:@"-fno-matmul"])
+            opts.noMatmul = YES;
         else if ([arg isEqualToString:@"-mavx2"])
             {
             opts.simdLevel = @"avx2";
@@ -1479,8 +1479,9 @@ static NSString* sExecutablePath = nil;
             "                             BW and VL; the binary then needs such a CPU)\n"
             "  -msimd=base                x86-64/win64: SSE2 only (the default)\n"
             "  -mnative                   x86-64/win64: the level of this machine\n"
-            "  -mno-sme                   arm64 macOS: do not run recognised matrix\n"
-            "                             multiplies on the SME matrix unit\n"
+            "  -fno-matmul                Leave recognised matrix multiplies as loops\n"
+            "                             (arm64 macOS: no SME kernel; x86-64: no\n"
+            "                             vector kernel)\n"
             "  -fthread-safe-arc          Atomic ARC refcounts, so two threads can\n"
             "                             share an object. Default: on exactly when\n"
             "                             the program spawns a thread.\n"

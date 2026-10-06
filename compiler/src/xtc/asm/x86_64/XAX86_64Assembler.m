@@ -1345,6 +1345,18 @@ static void emitEvex(NSMutableData *d, int map, int pp, int W, int reg, int vreg
         CLEANUP(); return out;
     }
 
+    // cmpps/cmppd xmm, xmm/m, imm8 — the same shape, opcode C2; the imm8 is the
+    // predicate (3 = unordered: a lane holding a NaN).
+    if (([mn isEqualToString:@"cmpps"] || [mn isEqualToString:@"cmppd"])
+        && a && b && c && c->kind == OpImm) {
+        if ([mn isEqualToString:@"cmppd"]) emit8(out, 0x66);
+        emitRex(out, NO, a->reg, b->index, b->kind==OpReg?b->reg:b->base, NO);
+        emit8(out, 0x0F); emit8(out, 0xC2);
+        emitModRM(out, a->reg, b);
+        emit8(out, (uint8_t)(c->imm & 0xFF));
+        CLEANUP(); return out;
+    }
+
     // movss/movsd/movdqu/movdqa — direction picks the opcode (load vs store).
     static NSDictionary *sseMov; static dispatch_once_t monce;
     dispatch_once(&monce, ^{

@@ -228,11 +228,14 @@ NS_ASSUME_NONNULL_BEGIN
 // twice, at 16 bytes and as `<name>$avx2` clones at 32, and the runtime picks
 // one per function at load. vectorLaneBytes stays 16 for the base code.
 @property(nonatomic) BOOL simdDispatch;
-// SME matrix kernels (arm64 macOS): idiom-matmul puts a call to the back end's
-// __xt_sme_gemm_* kernel in front of a recognised matrix-multiply nest, which
-// stays as the fallback for CPUs without SME. Set by xcc-cg-arm64 from
-// `--sme-matmul`, which the driver passes for macOS at -O2+.
-@property(nonatomic) BOOL smeMatMul;
+// Matrix kernels: idiom-matmul puts a call to the back end's kernel in front of
+// a recognised matrix-multiply nest, which stays as the fallback. The kernel is
+// matMulPrefix + "f32"/"f64" + matMulSuffix: arm64 `__xt_sme_gemm_` (SME),
+// x86-64 `__xt_x86_gemm_` with `_auto`/`_base`/`_avx2`/`_avx512` for the vector
+// tier. nil prefix: off. Set by xcc-cg-arm64 / xcc-cg-x86_64 from `--matmul`,
+// which the driver passes at -O2+ unless -fno-matmul.
+@property(nonatomic, copy, nullable) NSString* matMulPrefix;
+@property(nonatomic, copy, nullable) NSString* matMulSuffix;
 
 + (instancetype)conservativeProfile;
 

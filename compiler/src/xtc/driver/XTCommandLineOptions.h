@@ -158,12 +158,13 @@ NS_ASSUME_NONNULL_BEGIN
 \****************************************************************************/
 @property(nonatomic, readonly, nullable) NSString* simdLevel;
 /****************************************************************************\
-|* `-mno-sme`: on arm64 macOS at -O2+, a recognised matrix-multiply loop is
-|* preceded by a call to the SME matrix kernel the back end emits, which runs
-|* it on the matrix unit when the CPU has SME and returns to the loop when it
-|* does not. This turns that off. private: docs/Design/simd-sme-plan.md.
+|* `-fno-matmul`: at -O2+, a recognised matrix-multiply loop is preceded by a
+|* call to a matrix kernel the back end emits: on arm64 macOS one for the SME
+|* matrix unit (back to the loop on a CPU without SME), on x86-64 Linux one per
+|* vector tier. Results are the loop's, bit for bit. This turns it off.
+|* private: docs/Design/simd-sme-plan.md.
 \****************************************************************************/
-@property(nonatomic, readonly) BOOL noSme;
+@property(nonatomic, readonly) BOOL noMatmul;
 /****************************************************************************\
 |* `-dynamic`: link an x86-64 executable dynamically against glibc (and the
 |* -l libraries, e.g. GTK 4 and libGL) instead of statically over musl. The

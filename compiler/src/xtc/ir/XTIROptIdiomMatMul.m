@@ -58,7 +58,7 @@
              errors:(NSMutableArray<NSString*>* _Nullable* _Nullable)outErrors
     {
     (void)outErrors;
-    if (!self.profile || !self.profile.smeMatMul)
+    if (!self.profile || !self.profile.matMulPrefix)
         return YES;
     for (XTIRFunction* fn in mod.functions)
         {
@@ -647,7 +647,8 @@ static BOOL onlyConstsBesides(XTIRBlock* b, NSArray<XTIRInsn*>* allowed, XTMatMu
     {
     XTIRBlock* P = c.preheader;
     XTIRType* u64 = [XTIRType u64Type];
-    NSString* name = c.f64 ? @"__xt_sme_gemm_f64" : @"__xt_sme_gemm_f32";
+    NSString* name = [NSString stringWithFormat:@"%@%@%@", self.profile.matMulPrefix, c.f64 ? @"f64" : @"f32",
+                                                 self.profile.matMulSuffix ?: @""];
     XTIRSymbol* sym = [mod symbolForName:name];
     if (!sym)
         {

@@ -43,6 +43,7 @@ class X86_64
     bool _win64; // the Win64 ABI rather than System V
     u32 _cpFar;  // peepholeCopyProp: the furthest line the current candidate's scans read
     Array* _simdNames; // dispatched functions (-msimd=auto), in emission order
+    Array* _kernelBodies; // the matrix kernels' per-tier bodies, for the table
     bool _failed;
     String* _why;
     Array* _missing;
@@ -478,6 +479,34 @@ class X86_64
             module.append(withVzeroupper(peepholeFallthrough(peepholeCopyProp(_out))));
             _out = module;
             }
+        // The matrix kernels the module calls (idiom-matmul): `_auto` is
+        // dispatched like a vectorised function (a stub, three bodies, a table
+        // row); a fixed tier is one body under the called name.
+        _kernelBodies = new Array();
+        for (u32 e = (u32)0; e < (u32)2; e = e + (u32)1)
+            for (u32 t = (u32)0; t < (u32)4; t = t + (u32)1)
+                {
+                u8* et = e == (u32)0 ? "f32" : "f64";
+                u8* tier = t == (u32)0 ? "auto" : (t == (u32)1 ? "base" : (t == (u32)2 ? "avx2" : "avx512"));
+                String* nm = String.withFormat("__xt_x86_gemm_%s_%s", et, tier);
+                if (!referencesSymbol(m, nm))
+                    continue;
+                bool f64 = e == (u32)1;
+                if (t != (u32)0)
+                    {
+                    _out.append(x86GemmKernel(f64, String.withCString(tier), nm));
+                    continue;
+                    }
+                _out.appendFormat("\t.text\n%s:\n\tjmp\tqword ptr [rip + __simd_%s]\n", nm.cString(), nm.cString());
+                for (u32 k = (u32)1; k < (u32)4; k = k + (u32)1)
+                    {
+                    u8* kt = k == (u32)1 ? "base" : (k == (u32)2 ? "avx2" : "avx512");
+                    String* body = String.withFormat("%s$%s", nm.cString(), kt);
+                    _out.append(x86GemmKernel(f64, String.withCString(kt), body));
+                    _kernelBodies.add((Object*)body);
+                    }
+                _simdNames.add((Object*)nm);
+                }
         // The selection: a table of {slot, base, avx2, avx512} and a load-time
         // constructor handing it to _xt_simd_select, first in the list.
         if (_simdNames.count() > (u32)0)
@@ -502,11 +531,11 @@ class X86_64
                 b.appendCString("$base");
                 String* a2 = String.withString(nm);
                 a2.appendCString("$avx2");
-                if (!simdHas(m, a2))
+                if (!simdHas(m, a2) && !hasString(_kernelBodies, a2))
                     a2 = b;
                 String* a5 = String.withString(nm);
                 a5.appendCString("$avx512");
-                if (!simdHas(m, a5))
+                if (!simdHas(m, a5) && !hasString(_kernelBodies, a5))
                     a5 = a2;
                 _out.appendFormat("\t.quad\t__simd_%s, %s, %s, %s\n",
                                   nm.cString(), b.cString(), a2.cString(), a5.cString());
@@ -2546,6 +2575,164 @@ class X86_64
     // The instruction stream is the question, not the symbol table — a symbol
     // outlives the calls to it.
     // Does the module have a function of this name (a clone the prune kept)?
+    static bool hasString(Array* list, String* s)
+        {
+        for (u32 i = (u32)0; i < list.count(); i = i + (u32)1)
+            if (((String*)list.get(i)).equals(s))
+                return true;
+        return false;
+        }
+
+    // The x86-64 matrix kernel, one body per vector tier. Text identical to the
+    // reference's xtX86GemmKernel, which carries the full contract: k in order,
+    // multiplied then added (never fused), scalar tail with mulss/addss, and a
+    // return of 0 (the loop runs) on a 32-bit index wrap, overlapping rows of C,
+    // C overlapping A or B, or a NaN in A or B.
+    String* x86GemmKernel(bool f64, String* tier, String* sym)
+        {
+        bool v512 = tier.equals(String.withCString("avx512"));
+        bool v256 = tier.equals(String.withCString("avx2"));
+        bool vex = v512 || v256;
+        u8* R = v512 ? "zmm" : (v256 ? "ymm" : "xmm");
+        u8* W = v512 ? "zmmword" : (v256 ? "ymmword" : "xmmword");
+        i32 vb = v512 ? (i32)64 : (v256 ? (i32)32 : (i32)16);
+        i32 es = f64 ? (i32)8 : (i32)4;
+        i32 vl = vb / es;
+        u8* P = f64 ? "pd" : "ps";
+        u8* S = f64 ? "sd" : "ss";
+        String* L = String.withCString(".Lxg_");
+        for (u32 i = (u32)0; i < sym.byteLength(); i = i + (u32)1)
+            L.appendByte(sym.byteAt(i) == (u8)'$' ? (u8)'_' : sym.byteAt(i));
+        u8* l = L.cString();
+        String* o = new String();
+        o.appendFormat("\t.text\n\t.p2align 4\n%s:\n", sym.cString());
+        o.appendCString("\tpush\trbx\n\tpush\trbp\n\tpush\tr12\n\tpush\tr13\n\tpush\tr14\n\tpush\tr15\n");
+        o.appendCString("\tmov\tr12, rdi\n\tmov\tr13, rsi\n\tmov\tr14, rdx\n\tmov\tr15d, ecx\n\tmov\trbx, rcx\n\tshr\trbx, 32\n"
+                        "\tmov\tebp, r8d\n\tmov\tr10d, r9d\n\tmov\tr11d, [rsp+56]\n\tmov\tedi, [rsp+64]\n");
+        o.appendFormat("\ttest\tr15, r15\n\tjz\t%s_one\n\ttest\trbx, rbx\n\tjz\t%s_one\n", l, l);
+        o.appendFormat("\tcmp\trdi, rbx\n\tjb\t%s_zero\n", l);
+        o.appendCString("\tlea\trcx, [r15-1]\n\timul\trcx, rdi\n\tadd\trcx, rbx\n\tlea\trdx, [rcx-1]\n\tshr\trdx, 32\n");
+        o.appendFormat("\tjnz\t%s_zero\n\tlea\trsi, [r14 + rcx*%d]\n\ttest\trbp, rbp\n\tjz\t%s_go\n", l, es, l);
+        o.appendCString("\tlea\trdx, [r15-1]\n\timul\trdx, r10\n\tadd\trdx, rbp\n\tlea\trax, [rdx-1]\n\tshr\trax, 32\n");
+        o.appendFormat("\tjnz\t%s_zero\n\tlea\trdx, [r12 + rdx*%d]\n\tcmp\tr14, rdx\n\tjae\t%s_na\n\tcmp\tr12, rsi\n\tjb\t%s_zero\n%s_na:\n",
+                       l, es, l, l, l);
+        o.appendCString("\tlea\trdx, [rbp-1]\n\timul\trdx, r11\n\tadd\trdx, rbx\n\tlea\trax, [rdx-1]\n\tshr\trax, 32\n");
+        o.appendFormat("\tjnz\t%s_zero\n\tlea\trdx, [r13 + rdx*%d]\n\tcmp\tr14, rdx\n\tjae\t%s_nb\n\tcmp\tr13, rsi\n\tjb\t%s_zero\n%s_nb:\n",
+                       l, es, l, l, l);
+        o.appendCString("\tpxor\txmm7, xmm7\n");
+        i32 svl = (i32)16 / es;
+        for (u32 q = (u32)0; q < (u32)2; q = q + (u32)1)
+            {
+            u8* rows = q == (u32)0 ? "r15" : "rbp";
+            u8* cols = q == (u32)0 ? "rbp" : "rbx";
+            u8* ld = q == (u32)0 ? "r10" : "r11";
+            u8* base = q == (u32)0 ? "r12" : "r13";
+            u8* tag = q == (u32)0 ? "sa" : "sb";
+            o.appendFormat("\txor\tr8d, r8d\n%s_%sr:\n\tmov\trax, r8\n\timul\trax, %s\n\tlea\tr9, [%s + rax*%d]\n\txor\tecx, ecx\n",
+                           l, tag, ld, base, es);
+            o.appendFormat("%s_%sc:\n\tlea\trax, [rcx+%d]\n\tcmp\trax, %s\n\tja\t%s_%st\n", l, tag, svl, cols, l, tag);
+            o.appendFormat("\tmovups\txmm0, [r9 + rcx*%d]\n\tcmp%s\txmm0, xmm0, 3\n\torps\txmm7, xmm0\n\tmov\trcx, rax\n\tjmp\t%s_%sc\n",
+                           es, P, l, tag);
+            o.appendFormat("%s_%st:\n\tcmp\trcx, %s\n\tjae\t%s_%sn\n\tmov%s\txmm0, [r9 + rcx*%d]\n\tcmp%s\txmm0, xmm0, 3\n\torps\txmm7, xmm0\n",
+                           l, tag, cols, l, tag, S, es, P);
+            o.appendFormat("\tinc\trcx\n\tjmp\t%s_%st\n%s_%sn:\n\tinc\tr8\n\tcmp\tr8, %s\n\tjb\t%s_%sr\n",
+                           l, tag, l, tag, rows, l, tag);
+            }
+        o.appendFormat("\tpshufd\txmm0, xmm7, 78\n\tpor\txmm7, xmm0\n\tmovq\trax, xmm7\n\ttest\trax, rax\n\tjnz\t%s_zero\n", l);
+        // two rows of C at a time; strides in bytes, row pointers that step
+        i32 shf = f64 ? (i32)3 : (i32)2;
+        o.appendFormat("%s_go:\n\tshl\tr10, %d\n\tshl\tr11, %d\n\tshl\trdi, %d\n\tmov\tr9, r12\n\tmov\trsi, r14\n\txor\tr8d, r8d\n",
+                       l, shf, shf, shf);
+        o.appendFormat("%s_i:\n\tlea\trax, [r8+1]\n\tcmp\trax, r15\n\tjae\t%s_r1\n\tlea\tr12, [r9 + r10]\n\tlea\tr14, [rsi + rdi]\n", l, l);
+        for (i32 nr = (i32)2; nr >= (i32)1; nr = nr - (i32)1)
+            {
+            String* G = nr == (i32)2 ? String.withFormat("%s_p", l) : String.withFormat("%s_s", l);
+            u8* g = G.cString();
+            if (nr == (i32)1)
+                o.appendFormat("%s_r1:\n\tcmp\tr8, r15\n\tjae\t%s_end\n", l, l);
+            o.appendCString("\txor\tecx, ecx\n");
+            for (u32 w = (u32)0; w < (u32)2; w = w + (u32)1)
+                {
+                i32 nv = w == (u32)0 ? (i32)4 : (i32)1;
+                String* T = String.withFormat("%s_j%d", g, nv);
+                String* next = w == (u32)0 ? String.withFormat("%s_j1", g) : String.withFormat("%s_js", g);
+                u8* t = T.cString();
+                o.appendFormat("%s:\n\tlea\trax, [rcx+%d]\n\tcmp\trax, rbx\n\tja\t%s\n", t, nv * vl, next.cString());
+                for (i32 r = (i32)0; r < nr; r = r + (i32)1)
+                    for (i32 u = (i32)0; u < nv; u = u + (i32)1)
+                        {
+                        i32 a = u + (i32)8 * r;
+                        if (vex)
+                            o.appendFormat("\tvxor%s\t%s%d, %s%d, %s%d\n", P, R, a, R, a, R, a);
+                        else
+                            o.appendFormat("\txor%s\t%s%d, %s%d\n", P, R, a, R, a);
+                        }
+                o.appendFormat("\tlea\trdx, [r13 + rcx*%d]\n\txor\teax, eax\n\ttest\trbp, rbp\n\tjz\t%s_st\n%s_k:\n", es, t, t);
+                for (i32 r = (i32)0; r < nr; r = r + (i32)1)
+                    {
+                    u8* rowA = r == (i32)0 ? "r9" : "r12";
+                    i32 bc = r == (i32)0 ? (i32)4 : (i32)12;
+                    if (vex)
+                        o.appendFormat("\tvbroadcast%s\t%s%d, [%s + rax*%d]\n", f64 ? "sd" : "ss", R, bc, rowA, es);
+                    else
+                        o.appendFormat("\tmov%s\txmm%d, [%s + rax*%d]\n\tshuf%s\txmm%d, xmm%d, 0\n", S, bc, rowA, es, P, bc, bc);
+                    }
+                for (i32 u = (i32)0; u < nv; u = u + (i32)1)
+                    {
+                    if (vex)
+                        o.appendFormat("\tvmovups\t%s5, %s ptr [rdx+%d]\n", R, W, u * vb);
+                    else
+                        o.appendFormat("\tmovups\txmm5, [rdx+%d]\n", u * vb);
+                    for (i32 r = (i32)0; r < nr; r = r + (i32)1)
+                        {
+                        i32 bc = r == (i32)0 ? (i32)4 : (i32)12;
+                        i32 tmp = r == (i32)0 ? (i32)6 : (i32)13;
+                        i32 acc = u + (i32)8 * r;
+                        if (vex)
+                            o.appendFormat("\tvmul%s\t%s%d, %s%d, %s5\n\tvadd%s\t%s%d, %s%d, %s%d\n",
+                                           P, R, tmp, R, bc, R, P, R, acc, R, acc, R, tmp);
+                        else
+                            o.appendFormat("\tmovaps\txmm%d, xmm%d\n\tmul%s\txmm%d, xmm5\n\tadd%s\txmm%d, xmm%d\n",
+                                           tmp, bc, P, tmp, P, acc, tmp);
+                        }
+                    }
+                o.appendFormat("\tadd\trdx, r11\n\tinc\trax\n\tcmp\trax, rbp\n\tjb\t%s_k\n%s_st:\n", t, t);
+                for (i32 r = (i32)0; r < nr; r = r + (i32)1)
+                    {
+                    u8* rowC = r == (i32)0 ? "rsi" : "r14";
+                    for (i32 u = (i32)0; u < nv; u = u + (i32)1)
+                        {
+                        i32 acc = u + (i32)8 * r;
+                        if (vex)
+                            o.appendFormat("\tvmovups\t%s ptr [%s + rcx*%d + %d], %s%d\n", W, rowC, es, u * vb, R, acc);
+                        else
+                            o.appendFormat("\tmovups\t[%s + rcx*%d + %d], xmm%d\n", rowC, es, u * vb, acc);
+                        }
+                    }
+                o.appendFormat("\tadd\trcx, %d\n\tjmp\t%s\n", nv * vl, t);
+                }
+            o.appendFormat("%s_js:\n\tcmp\trcx, rbx\n\tjae\t%s_in\n", g, g);
+            for (i32 r = (i32)0; r < nr; r = r + (i32)1)
+                {
+                u8* rowA = r == (i32)0 ? "r9" : "r12";
+                u8* rowC = r == (i32)0 ? "rsi" : "r14";
+                o.appendFormat("\txorps\txmm0, xmm0\n\tlea\trdx, [r13 + rcx*%d]\n\txor\teax, eax\n\ttest\trbp, rbp\n\tjz\t%s_ss%d\n", es, g, r);
+                o.appendFormat("%s_sk%d:\n\tmov%s\txmm1, [%s + rax*%d]\n\tmul%s\txmm1, [rdx]\n\tadd%s\txmm0, xmm1\n\tadd\trdx, r11\n\tinc\trax\n\tcmp\trax, rbp\n\tjb\t%s_sk%d\n",
+                               g, r, S, rowA, es, S, S, g, r);
+                o.appendFormat("%s_ss%d:\n\tmov%s\t[%s + rcx*%d], xmm0\n", g, r, S, rowC, es);
+                }
+            o.appendFormat("\tinc\trcx\n\tjmp\t%s_js\n%s_in:\n", g, g);
+            if (nr == (i32)2)
+                o.appendFormat("\tlea\tr9, [r9 + r10*2]\n\tlea\trsi, [rsi + rdi*2]\n\tadd\tr8, 2\n\tjmp\t%s_i\n", l);
+            }
+        o.appendFormat("%s_end:\n", l);
+        if (vex)
+            o.appendCString("\tvzeroupper\n");
+        o.appendFormat("%s_one:\n\tmov\teax, 1\n\tjmp\t%s_ret\n%s_zero:\n\txor\teax, eax\n%s_ret:\n", l, l, l, l);
+        o.appendCString("\tpop\tr15\n\tpop\tr14\n\tpop\tr13\n\tpop\tr12\n\tpop\trbp\n\tpop\trbx\n\tret\n");
+        return o;
+        }
+
     static bool simdHas(IRModule* m, String* name)
         {
         for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
@@ -2556,7 +2743,11 @@ class X86_64
 
     bool spawnsThreads(IRModule* m)
         {
-        String* want = String.withCString("_xt_thread_create");
+        return referencesSymbol(m, String.withCString("_xt_thread_create"));
+        }
+
+    bool referencesSymbol(IRModule* m, String* want)
+        {
         for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
             {
             IRFunc* fn = (IRFunc*)m.funcs().get(f);

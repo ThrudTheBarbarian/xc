@@ -1538,6 +1538,155 @@ static BOOL x86IsShift(NSString* m)
 // Thread-safe ARC (private:docs/Design/threading.md §4.1) — see the arm64 backend for
 // why the decision is made here rather than in the xtcg main: the backend has
 // more than one caller and only one of them parses command lines.
+// The x86-64 matrix kernel, emitted once per module that calls it (idiom-matmul
+// puts the call in front of a recognised matrix-multiply nest; private:
+// docs/Design/simd-sme-plan.md). One body per vector tier: base (SSE2, xmm),
+// avx2 (ymm) and avx512 (zmm); under runtime dispatch all three, picked at
+// load like any dispatched function.
+//
+//   bool __xt_x86_gemm_<f32|f64>_<tier>(T* A, T* B, T* C, u64 M | N << 32,
+//                                       u32 K, u32 lda, u32 ldb, u32 ldc)
+//
+// For each row of C, a block of accumulators along j, k in order, each step a
+// broadcast A[i][k] times a row of B, MULTIPLIED THEN ADDED: never fused, as
+// the loop and every tier do on x86-64, so the result is the loop's bit for bit
+// whichever tier runs. Columns that do not fill a vector go one at a time with
+// mulss/addss, the loop's own instructions. Returns 0 without touching memory
+// (the caller runs the loop) when an index would wrap 32 bits, the rows of C
+// overlap (ldc < N), C overlaps A or B, or A or B holds a NaN (which NaN an
+// operation returns depends on operand order, and the kernel's order is not
+// the loop's).
+static NSString* xtX86GemmKernel(BOOL f64, NSString* tier, NSString* sym) {
+    BOOL v512 = [tier isEqualToString:@"avx512"], v256 = [tier isEqualToString:@"avx2"];
+    NSString* R = v512 ? @"zmm" : v256 ? @"ymm" : @"xmm";    // vector register class
+    NSString* W = v512 ? @"zmmword" : v256 ? @"ymmword" : @"xmmword";
+    int vb = v512 ? 64 : v256 ? 32 : 16;                     // bytes per vector
+    int es = f64 ? 8 : 4;                                    // bytes per element
+    int vl = vb / es;                                        // elements per vector
+    NSString* P = f64 ? @"pd" : @"ps";                       // packed suffix
+    NSString* S = f64 ? @"sd" : @"ss";                       // scalar suffix
+    NSString* L = [@".Lxg_" stringByAppendingString:[sym stringByReplacingOccurrencesOfString:@"$" withString:@"_"]];
+    NSMutableString* o = [NSMutableString string];
+    [o appendFormat:@"\t.text\n\t.p2align 4\n%@:\n", sym];
+    [o appendString:@"\tpush\trbx\n\tpush\trbp\n\tpush\tr12\n\tpush\tr13\n\tpush\tr14\n\tpush\tr15\n"];
+    // r12 A, r13 B, r14 C, r15 M, rbx N, rbp K, r10 lda, r11 ldb, rdi ldc
+    [o appendString:@"\tmov\tr12, rdi\n\tmov\tr13, rsi\n\tmov\tr14, rdx\n\tmov\tr15d, ecx\n\tmov\trbx, rcx\n\tshr\trbx, 32\n"
+                     "\tmov\tebp, r8d\n\tmov\tr10d, r9d\n\tmov\tr11d, [rsp+56]\n\tmov\tedi, [rsp+64]\n"];
+    [o appendFormat:@"\ttest\tr15, r15\n\tjz\t%@_one\n\ttest\trbx, rbx\n\tjz\t%@_one\n", L, L];
+    [o appendFormat:@"\tcmp\trdi, rbx\n\tjb\t%@_zero\n", L];
+    // C: last index (M-1)*ldc + N-1 fits 32 bits; rsi = C's end
+    [o appendString:@"\tlea\trcx, [r15-1]\n\timul\trcx, rdi\n\tadd\trcx, rbx\n\tlea\trdx, [rcx-1]\n\tshr\trdx, 32\n"];
+    [o appendFormat:@"\tjnz\t%@_zero\n\tlea\trsi, [r14 + rcx*%d]\n\ttest\trbp, rbp\n\tjz\t%@_go\n", L, es, L];
+    // A: (M-1)*lda + K-1, and no overlap with C
+    [o appendString:@"\tlea\trdx, [r15-1]\n\timul\trdx, r10\n\tadd\trdx, rbp\n\tlea\trax, [rdx-1]\n\tshr\trax, 32\n"];
+    [o appendFormat:@"\tjnz\t%@_zero\n\tlea\trdx, [r12 + rdx*%d]\n\tcmp\tr14, rdx\n\tjae\t%@_na\n\tcmp\tr12, rsi\n\tjb\t%@_zero\n%@_na:\n",
+                    L, es, L, L, L];
+    // B: (K-1)*ldb + N-1, and no overlap with C
+    [o appendString:@"\tlea\trdx, [rbp-1]\n\timul\trdx, r11\n\tadd\trdx, rbx\n\tlea\trax, [rdx-1]\n\tshr\trax, 32\n"];
+    [o appendFormat:@"\tjnz\t%@_zero\n\tlea\trdx, [r13 + rdx*%d]\n\tcmp\tr14, rdx\n\tjae\t%@_nb\n\tcmp\tr13, rsi\n\tjb\t%@_zero\n%@_nb:\n",
+                    L, es, L, L, L];
+    // NaN scan, SSE2 in every tier (before any wider register is touched):
+    // cmp*p unordered (3) ORed into xmm7, folded and tested once.
+    [o appendString:@"\tpxor\txmm7, xmm7\n"];
+    struct { const char *rows, *cols, *ld, *base, *tag; } scans[2] = {
+        {"r15", "rbp", "r10", "r12", "sa"}, {"rbp", "rbx", "r11", "r13", "sb"}};
+    int svl = 16 / es;
+    for (int q = 0; q < 2; q++) {
+        [o appendFormat:@"\txor\tr8d, r8d\n%@_%sr:\n\tmov\trax, r8\n\timul\trax, %s\n\tlea\tr9, [%s + rax*%d]\n\txor\tecx, ecx\n",
+                        L, scans[q].tag, scans[q].ld, scans[q].base, es];
+        [o appendFormat:@"%@_%sc:\n\tlea\trax, [rcx+%d]\n\tcmp\trax, %s\n\tja\t%@_%st\n", L, scans[q].tag, svl, scans[q].cols, L, scans[q].tag];
+        [o appendFormat:@"\tmovups\txmm0, [r9 + rcx*%d]\n\tcmp%@\txmm0, xmm0, 3\n\torps\txmm7, xmm0\n\tmov\trcx, rax\n\tjmp\t%@_%sc\n",
+                        es, P, L, scans[q].tag];
+        [o appendFormat:@"%@_%st:\n\tcmp\trcx, %s\n\tjae\t%@_%sn\n\tmov%@\txmm0, [r9 + rcx*%d]\n\tcmp%@\txmm0, xmm0, 3\n\torps\txmm7, xmm0\n",
+                        L, scans[q].tag, scans[q].cols, L, scans[q].tag, S, es, P];
+        [o appendFormat:@"\tinc\trcx\n\tjmp\t%@_%st\n%@_%sn:\n\tinc\tr8\n\tcmp\tr8, %s\n\tjb\t%@_%sr\n",
+                        L, scans[q].tag, L, scans[q].tag, scans[q].rows, L, scans[q].tag];
+    }
+    [o appendFormat:@"\tpshufd\txmm0, xmm7, 78\n\tpor\txmm7, xmm0\n\tmovq\trax, xmm7\n\ttest\trax, rax\n\tjnz\t%@_zero\n", L];
+    // The multiply, two rows of C at a time (each row of B then feeds both;
+    // the last row of an odd M alone). Strides become byte counts and the row
+    // pointers step, which frees r12 / r14 for the second row:
+    //   r9 / rsi row i of A / C, r12 / r14 row i+1, r10 / r11 / rdi the A / B / C
+    //   strides in bytes, r8 i, rcx j, rdx &B[k][j], rax k.
+    [o appendFormat:@"%@_go:\n\tshl\tr10, %d\n\tshl\tr11, %d\n\tshl\trdi, %d\n\tmov\tr9, r12\n\tmov\trsi, r14\n\txor\tr8d, r8d\n",
+                    L, f64 ? 3 : 2, f64 ? 3 : 2, f64 ? 3 : 2];
+    [o appendFormat:@"%@_i:\n\tlea\trax, [r8+1]\n\tcmp\trax, r15\n\tjae\t%@_r1\n\tlea\tr12, [r9 + r10]\n\tlea\tr14, [rsi + rdi]\n", L, L];
+    for (int nr = 2; nr >= 1; nr--) {
+        NSString* G = [NSString stringWithFormat:@"%@_%c", L, nr == 2 ? 'p' : 's']; // label group
+        if (nr == 1)
+            [o appendFormat:@"%@_r1:\n\tcmp\tr8, r15\n\tjae\t%@_end\n", L, L];
+        [o appendString:@"\txor\tecx, ecx\n"];
+        int widths[2] = {4, 1};
+        for (int w = 0; w < 2; w++) {
+            int nv = widths[w];
+            NSString* T = [NSString stringWithFormat:@"%@_j%d", G, nv];
+            NSString* next = w == 0 ? [NSString stringWithFormat:@"%@_j1", G] : [NSString stringWithFormat:@"%@_js", G];
+            [o appendFormat:@"%@:\n\tlea\trax, [rcx+%d]\n\tcmp\trax, rbx\n\tja\t%@\n", T, nv * vl, next];
+            for (int r = 0; r < nr; r++)
+                for (int u = 0; u < nv; u++) {
+                    int a = u + 8 * r;
+                    [o appendFormat:(v512 || v256) ? @"\tvxor%@\t%@%d, %@%d, %@%d\n" : @"\txor%@\t%@%d, %@%d\n",
+                                    P, R, a, R, a, R, a];
+                }
+            [o appendFormat:@"\tlea\trdx, [r13 + rcx*%d]\n\txor\teax, eax\n\ttest\trbp, rbp\n\tjz\t%@_st\n%@_k:\n", es, T, T];
+            for (int r = 0; r < nr; r++) {
+                NSString* rowA = r == 0 ? @"r9" : @"r12";
+                int bc = r == 0 ? 4 : 12; // the broadcast A[i+r][k]
+                if (v512 || v256)
+                    [o appendFormat:@"\tvbroadcast%@\t%@%d, [%@ + rax*%d]\n", f64 ? @"sd" : @"ss", R, bc, rowA, es];
+                else
+                    [o appendFormat:@"\tmov%@\txmm%d, [%@ + rax*%d]\n\tshuf%@\txmm%d, xmm%d, 0\n", S, bc, rowA, es, P, bc, bc];
+            }
+            for (int u = 0; u < nv; u++) {
+                if (v512 || v256)
+                    [o appendFormat:@"\tvmovups\t%@5, %@ ptr [rdx+%d]\n", R, W, u * vb];
+                else
+                    [o appendFormat:@"\tmovups\txmm5, [rdx+%d]\n", u * vb];
+                for (int r = 0; r < nr; r++) {
+                    int bc = r == 0 ? 4 : 12, tmp = r == 0 ? 6 : 13, acc = u + 8 * r;
+                    if (v512 || v256)
+                        [o appendFormat:@"\tvmul%@\t%@%d, %@%d, %@5\n\tvadd%@\t%@%d, %@%d, %@%d\n",
+                                        P, R, tmp, R, bc, R, P, R, acc, R, acc, R, tmp];
+                    else
+                        [o appendFormat:@"\tmovaps\txmm%d, xmm%d\n\tmul%@\txmm%d, xmm5\n\tadd%@\txmm%d, xmm%d\n",
+                                        tmp, bc, P, tmp, P, acc, tmp];
+                }
+            }
+            [o appendFormat:@"\tadd\trdx, r11\n\tinc\trax\n\tcmp\trax, rbp\n\tjb\t%@_k\n%@_st:\n", T, T];
+            for (int r = 0; r < nr; r++) {
+                NSString* rowC = r == 0 ? @"rsi" : @"r14";
+                for (int u = 0; u < nv; u++) {
+                    int acc = u + 8 * r;
+                    if (v512 || v256)
+                        [o appendFormat:@"\tvmovups\t%@ ptr [%@ + rcx*%d + %d], %@%d\n", W, rowC, es, u * vb, R, acc];
+                    else
+                        [o appendFormat:@"\tmovups\t[%@ + rcx*%d + %d], xmm%d\n", rowC, es, u * vb, acc];
+                }
+            }
+            [o appendFormat:@"\tadd\trcx, %d\n\tjmp\t%@\n", nv * vl, T];
+        }
+        // the last columns, one at a time per row, as the loop does them
+        [o appendFormat:@"%@_js:\n\tcmp\trcx, rbx\n\tjae\t%@_in\n", G, G];
+        for (int r = 0; r < nr; r++) {
+            NSString* rowA = r == 0 ? @"r9" : @"r12";
+            NSString* rowC = r == 0 ? @"rsi" : @"r14";
+            [o appendFormat:@"\txorps\txmm0, xmm0\n\tlea\trdx, [r13 + rcx*%d]\n\txor\teax, eax\n\ttest\trbp, rbp\n\tjz\t%@_ss%d\n", es, G, r];
+            [o appendFormat:@"%@_sk%d:\n\tmov%@\txmm1, [%@ + rax*%d]\n\tmul%@\txmm1, [rdx]\n\tadd%@\txmm0, xmm1\n\tadd\trdx, r11\n\tinc\trax\n\tcmp\trax, rbp\n\tjb\t%@_sk%d\n",
+                            G, r, S, rowA, es, S, S, G, r];
+            [o appendFormat:@"%@_ss%d:\n\tmov%@\t[%@ + rcx*%d], xmm0\n", G, r, S, rowC, es];
+        }
+        [o appendFormat:@"\tinc\trcx\n\tjmp\t%@_js\n%@_in:\n", G, G];
+        if (nr == 2)
+            [o appendFormat:@"\tlea\tr9, [r9 + r10*2]\n\tlea\trsi, [rsi + rdi*2]\n\tadd\tr8, 2\n\tjmp\t%@_i\n", L];
+    }
+    [o appendFormat:@"%@_end:\n", L];
+    if (v512 || v256)
+        [o appendString:@"\tvzeroupper\n"];
+    [o appendFormat:@"%@_one:\n\tmov\teax, 1\n\tjmp\t%@_ret\n%@_zero:\n\txor\teax, eax\n%@_ret:\n", L, L, L, L];
+    [o appendString:@"\tpop\tr15\n\tpop\tr14\n\tpop\tr13\n\tpop\tr12\n\tpop\trbp\n\tpop\trbx\n\tret\n"];
+    return o;
+}
+
 static BOOL sX86ThreadSafeARC = NO;
 static NSInteger sX86ThreadSafeARCOverride = -1;
 
@@ -1589,6 +1738,31 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
             [out appendString:[self withVzeroupper:[self peepholeFallthrough:[self peepholeCopyProp:fbuf]]]];
             }
         }
+    // The matrix kernels the module calls (idiom-matmul): `_auto` is dispatched
+    // like a vectorised function (a stub, three bodies, a table row); a fixed
+    // tier is one body under the called name. Module-private.
+    NSMutableSet<NSString*>* kernelBodies = [NSMutableSet set];
+    for (NSString* et in @[ @"f32", @"f64" ])
+        for (NSString* tier in @[ @"auto", @"base", @"avx2", @"avx512" ])
+            {
+            NSString* nm = [NSString stringWithFormat:@"__xt_x86_gemm_%@_%@", et, tier];
+            if (![mod referencesSymbolNamed:nm])
+                continue;
+            BOOL f64 = [et isEqualToString:@"f64"];
+            if (![tier isEqualToString:@"auto"])
+                {
+                [out appendString:xtX86GemmKernel(f64, tier, nm)];
+                continue;
+                }
+            [out appendFormat:@"\t.text\n%@:\n\tjmp\tqword ptr [rip + __simd_%@]\n", nm, nm];
+            for (NSString* t in @[ @"base", @"avx2", @"avx512" ])
+                {
+                NSString* body = [NSString stringWithFormat:@"%@$%@", nm, t];
+                [out appendString:xtX86GemmKernel(f64, t, body)];
+                [kernelBodies addObject:body];
+                }
+            [simdNames addObject:nm];
+            }
     // The selection: one table of {slot, base, avx2, avx512} and a load-time
     // constructor that hands it to the runtime, which fills each slot for the
     // level this machine (or XC_SIMD) picks. First in the constructor list, so
@@ -1608,6 +1782,7 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
         NSMutableSet<NSString*>* have = [NSMutableSet set];
         for (XTIRFunction* fn in mod.functions)
             [have addObject:fn.name];
+        [have unionSet:kernelBodies];
         for (NSString* nm in simdNames)
             {
             NSString* b = [nm stringByAppendingString:@"$base"];
