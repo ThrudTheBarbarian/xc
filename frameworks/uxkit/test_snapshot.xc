@@ -212,11 +212,11 @@ void snapChecks(void)
     u8* save = getenv((u8*)"UX_SNAP_SAVE");
     if (save != (u8*)0)
         {
-        UXData* ppm = UXData.fromString((u8*)"P6\n");
-        ppm.appendData(UXData.fromString(UXStr.fromInt(all.w)));
+        Data* ppm = UXStr.toData((u8*)"P6\n");
+        ppm.append(UXStr.toData(UXStr.fromInt(all.w)));
         ppm.appendByte((u8)32);
-        ppm.appendData(UXData.fromString(UXStr.fromInt(all.h)));
-        ppm.appendData(UXData.fromString((u8*)"\n255\n"));
+        ppm.append(UXStr.toData(UXStr.fromInt(all.h)));
+        ppm.append(UXStr.toData((u8*)"\n255\n"));
         for (i32 i = (i32)0; i < all.w * all.h; i = i + (i32)1)
             {
             u32 v = all.px[i];

@@ -96,7 +96,7 @@ class RocksApp : Object<UXApplicationDelegate>
             String* arg = Process.argument((u32)1);
             sample = RKIdentity.dup(arg.cString());
             }
-        if (UXFileIO.read(sample) != (UXData*)0 && controller.openPath(sample))
+        if (UXFileIO.read(sample) != (Data*)0 && controller.openPath(sample))
             {
             Stdio.printf("opened %s: %d trees\n", sample, controller.doc.treeCount());
             }

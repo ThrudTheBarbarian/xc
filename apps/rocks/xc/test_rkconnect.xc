@@ -447,7 +447,7 @@ void main(void)
     Stdio.printf("-- saved into an app's folder, the document knows that app's classes\n");
     u8* appDir = getenv((u8*)"RK_APP");
     checkTrue("a class only in that folder is not known before", c.classBook.find((u8*)"SavedHere") == (RKClass*)0);
-    UXData* savePath = UXData.fromString(appDir);
+    Data* savePath = UXStr.toData(appDir);
     savePath.appendBytes((u8*)"/player.rsc", (i32)11);
     savePath.appendByte((u8)0);
     checkTrue("Save As there", c.saveTo(savePath.bytes()));
@@ -455,7 +455,7 @@ void main(void)
     checkTrue("and it is known after, with its outlet", saved != (RKClass*)0 && saved.outlets.count() == (u32)1);
 
     Stdio.printf("-- the app: each layout fires what was wired for it\n");
-    UXData* bytes = UXRscWriter.write(c.doc);
+    Data* bytes = UXRscWriter.write(c.doc);
     UXRscDoc* saved = UXRscReader.read(bytes.bytes(), bytes.length());
     UXNib.registerObjectFactory((pointer)&factory);
     UXNibInstance* nd = UXNib.loadDocAs(saved, (i32)0, (i32)UXR_V_DESKTOP, (i32)UXR_V_ORIENT_NONE, (UXDesignable*)new Owner(), (UXView*)0);

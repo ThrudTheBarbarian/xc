@@ -59,7 +59,7 @@ void cancelSave(void)
     }
 void secondSave(void)
     {
-    ck((u8*)"saving again succeeds", UXFileIO.write(gPath, UXData.fromString((u8*)"second draft\n")));
+    ck((u8*)"saving again succeeds", UXFileIO.write(gPath, UXStr.toData((u8*)"second draft\n")));
     Stdio.printf("WROTE2\n");
     tLater((pointer)&cancelSave, (i32)4000);
     }
@@ -74,8 +74,8 @@ void firstSave(void)
         tLater((pointer)&cancelSave, (i32)500);
         return;
         }
-    ck((u8*)"...the app's own staging file", UXFileIO.read(gPath) != (UXData*)0);
-    ck((u8*)"a write to it succeeds", UXFileIO.write(gPath, UXData.fromString((u8*)"first draft, héllo\n")));
+    ck((u8*)"...the app's own staging file", UXFileIO.read(gPath) != (Data*)0);
+    ck((u8*)"a write to it succeeds", UXFileIO.write(gPath, UXStr.toData((u8*)"first draft, héllo\n")));
     Stdio.printf("WROTE1\n");
     tLater((pointer)&secondSave, (i32)4000);
     }

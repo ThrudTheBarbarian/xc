@@ -10,7 +10,7 @@
 // The variations are kept in the document, in a VARY section of the nib chunk:
 //   { count u16, then per entry: tree u16, logicalId u16, property label (u16 length, bytes) }
 #import "Array.xc"
-#import "UXData.xc"
+#import "Data.xc"
 #import "UXRscModel.xc"
 #import "RKProps.xc"
 
@@ -204,7 +204,7 @@ class RKVariants : Object
             {
             return;
             }
-        UXData* b = UXData.withCapacity((i32)64);
+        Data* b = Data.withCapacity((u32)((i32)64));
         RKVariants.be16(b, (i32)varied.count());
         for (u32 k = (u32)0; k < varied.count(); k = k + (u32)1)
             {
@@ -255,7 +255,7 @@ class RKVariants : Object
                 }
             }
         }
-    static void be16(UXData* d, i32 v)
+    static void be16(Data* d, i32 v)
         {
         d.appendByte((u8)((v >> (i32)8) & (i32)$FF));
         d.appendByte((u8)(v & (i32)$FF));

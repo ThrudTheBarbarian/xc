@@ -13,7 +13,8 @@
 // previous document untouched instead of truncating it.  (Windows' rename will not replace an
 // existing file, so there the original is removed first -- still after the new bytes are safely on
 // disk.)
-#import "UXData.xc"
+#import "Data.xc"
+#import "UXString.xc"
 #import "UXLibc.xc"
 
 #if ARCH_wasm32
@@ -47,24 +48,24 @@ UXFileSink* gUXFileSink;
 class UXFileIO
     {
     // The whole file, or null if it cannot be read.
-    static UXData* read(u8* path)
+    static Data* read(u8* path)
         {
 #if ARCH_wasm32
         if (path == (u8*)0)
             {
-            return (UXData*)0;
+            return (Data*)0;
             }
         i32 size = _xt_file_size(path);
         if (size < (i32)0)
             {
-            return (UXData*)0;
+            return (Data*)0;
             }
         i32 h = _xt_file_open(path, (u8*)"rb");
         if (h < (i32)0)
             {
-            return (UXData*)0;
+            return (Data*)0;
             }
-        UXData* wd = UXData.withCapacity(size > (i32)0 ? size : (i32)1);
+        Data* wd = Data.withCapacity(size > (i32)0 ? size : (i32)1);
         if (size > (i32)0)
             {
             u8* buf = (u8*)malloc((u32)size);
@@ -80,14 +81,14 @@ class UXFileIO
 #else
         if (path == (u8*)0)
             {
-            return (UXData*)0;
+            return (Data*)0;
             }
         pointer f = fopen(path, (u8*)"rb");
         if (f == (pointer)0)
             {
-            return (UXData*)0;
+            return (Data*)0;
             }
-        UXData* d = UXData.withCapacity((i32)4096);
+        Data* d = Data.withCapacity((u32)((i32)4096));
         u8* chunk = (u8*)malloc((u32)4096);
         u32 n = fread((pointer)chunk, (u32)1, (u32)4096, f);
         while (n > (u32)0)
@@ -102,10 +103,10 @@ class UXFileIO
         }
 
     // Write `d` to `path`, replacing it only if every byte made it to disk.  True on success.
-    static bool write(u8* path, UXData* d)
+    static bool write(u8* path, Data* d)
         {
 #if ARCH_wasm32
-        if (path == (u8*)0 || d == (UXData*)0)
+        if (path == (u8*)0 || d == (Data*)0)
             {
             return false;
             }
@@ -119,11 +120,11 @@ class UXFileIO
         _xt_file_close(h);
         return put == want;
 #else
-        if (path == (u8*)0 || d == (UXData*)0)
+        if (path == (u8*)0 || d == (Data*)0)
             {
             return false;
             }
-        UXData* tn = UXData.fromString(path);
+        Data* tn = UXStr.toData(path);
         tn.appendBytes((u8*)".uxtmp", (i32)6);
         tn.appendByte((u8)0);
         u8* tmp = tn.bytes();

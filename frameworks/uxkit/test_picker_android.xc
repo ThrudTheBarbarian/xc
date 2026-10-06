@@ -56,8 +56,8 @@ void pickTwice(void)
     ck((u8*)"the picker gives back a path", path != (u8*)0);
     if (path != (u8*)0)
         {
-        UXData* d = UXFileIO.read(path);
-        bool ok = d != (UXData*)0;
+        Data* d = UXFileIO.read(path);
+        bool ok = d != (Data*)0;
         if (ok)
             {
             d.appendByte((u8)0);

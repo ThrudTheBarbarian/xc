@@ -18,7 +18,7 @@
 #import "UXGeometry.xc"
 #import "UXGraphics.xc"
 #import "UXImage.xc"
-#import "UXData.xc"
+#import "Data.xc"
 #import "UXFileIO.xc"
 #import "UXString.xc" // UXStr, the PPM header
 u8* getenv(u8* name);
@@ -279,11 +279,11 @@ void checks(void)
     u8* save = getenv((u8*)"UX_SNAP_SAVE");
     if (save != (u8*)0)
         {
-        UXData* ppm = UXData.fromString((u8*)"P6\n");
-        ppm.appendData(UXData.fromString(UXStr.fromInt(g.w)));
+        Data* ppm = UXStr.toData((u8*)"P6\n");
+        ppm.append(UXStr.toData(UXStr.fromInt(g.w)));
         ppm.appendByte((u8)32);
-        ppm.appendData(UXData.fromString(UXStr.fromInt(g.h)));
-        ppm.appendData(UXData.fromString((u8*)"\n255\n"));
+        ppm.append(UXStr.toData(UXStr.fromInt(g.h)));
+        ppm.append(UXStr.toData((u8*)"\n255\n"));
         for (i32 i = (i32)0; i < g.w * g.h; i = i + (i32)1)
             {
             ppm.appendByte((u8)((g.px[i] >> (u32)16) & (u32)255));

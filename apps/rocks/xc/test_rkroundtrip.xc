@@ -158,9 +158,9 @@ void main(void)
 
     // ---- out ---------------------------------------------------------------
     UXRscWriter* w = UXRscWriter.writer(orig);
-    UXData* bytes = w.result;
-    checkTrue("something was written", bytes != (UXData*)0 && bytes.length() > (i32)36);
-    if (bytes == (UXData*)0)
+    Data* bytes = w.result;
+    checkTrue("something was written", bytes != (Data*)0 && bytes.length() > (i32)36);
+    if (bytes == (Data*)0)
         {
         Stdio.printf("FAIL: 1\n");
         return;
@@ -217,10 +217,10 @@ void main(void)
 
     // A second round trip must be a fixed point: if writing changed anything
     // structural, the third read would differ from the second.
-    UXData* bytes2 = UXRscWriter.write(back);
-    Stdio.printf("  first write %d bytes, second write %d bytes\n", bytes.length(), bytes2 != (UXData*)0 ? bytes2.length() : (i32)-1);
+    Data* bytes2 = UXRscWriter.write(back);
+    Stdio.printf("  first write %d bytes, second write %d bytes\n", bytes.length(), bytes2 != (Data*)0 ? bytes2.length() : (i32)-1);
     checkTrue("a second write produces the same length",
-              bytes2 != (UXData*)0 && bytes2.length() == bytes.length());
+              bytes2 != (Data*)0 && bytes2.length() == bytes.length());
 
     if (gFails == (i32)0)
         {

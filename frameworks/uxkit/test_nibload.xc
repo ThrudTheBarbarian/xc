@@ -267,12 +267,12 @@ UXRscDoc* sample(void)
     // an extension section this build does not interpret, odd-sized, kept verbatim
     UXRscExtSection* x = new UXRscExtSection();
     x.tag = (u32)$58545241; // 'XTRA', a tag no build interprets
-    x.body = UXData.fromBytes((u8*)"abc", (i32)3);
+    x.body = Data.withBytes((u8*)"abc", (u32)((i32)3));
     d.extSections.add(x);
     return d;
     }
 
-bool sameBytes(UXData* a, UXData* b)
+bool sameBytes(Data* a, Data* b)
     {
     if (a.length() != b.length())
         {
@@ -308,7 +308,7 @@ void main(void)
         }
     UXNib.registerObjectFactory((pointer)&nibFactory);
     UXRscDoc* d = sample();
-    UXData* bytes = UXRscWriter.write(d);
+    Data* bytes = UXRscWriter.write(d);
 
     Stdio.printf("-- the chunk, through the byte parser\n");
     UXNibV2* nib = UXNibV2.open(bytes.bytes(), (u32)bytes.length());

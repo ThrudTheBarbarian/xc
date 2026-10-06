@@ -3,7 +3,7 @@
 //     UXMovie* m = UXMovie.make(1280, 832, 25);
 //     m.add(img);              // one frame, one tick (1/25 s)
 //     m.addHeld(img, 5);       // one frame shown for five ticks
-//     UXData* webm = m.finish();
+//     Data* webm = m.finish();
 //
 // Like UXPng and UXJpeg it is arithmetic, so it is neutral: the same code on every backend, with no
 // codec of the platform's behind it.  The file is what a browser's MediaRecorder makes and what VLC
@@ -23,7 +23,7 @@
 //
 // Colour is BT.601, limited range, chroma 4:2:0, which is what a VP8 player assumes.
 #import "UXImage.xc"
-#import "UXData.xc"
+#import "Data.xc"
 
 // The coefficient probabilities a key frame starts from (RFC 6386 section 13.5), [type 4][band 8]
 // [context 3][node 11], flattened.
@@ -1020,7 +1020,7 @@ class UXVp8Encoder
         }
 
     // one frame (0xAARRGGBB, pitch in pixels) as a VP8 key frame
-    UXData* encode(u32* px, i32 pitch)
+    Data* encode(u32* px, i32 pitch)
         {
         self.convert(px, pitch);
         UXVp8Bits* hdr = new UXVp8Bits();
@@ -1071,7 +1071,7 @@ class UXVp8Encoder
             }
         hdr.flush();
         tok.flush();
-        UXData* f = UXData.withCapacity((i32)10 + hdr.len + tok.len);
+        Data* f = Data.withCapacity((u32)((i32)10 + hdr.len + tok.len));
         u32 tag = ((u32)hdr.len << (u32)5) | (u32)$10; // key frame, version 0, shown
         f.appendByte((u8)(tag & (u32)255));
         f.appendByte((u8)((tag >> (u32)8) & (u32)255));
@@ -1090,11 +1090,11 @@ class UXVp8Encoder
 
     // the last frame as a decoder will show it: I420, cropped to the frame (w x h, then the two
     // chroma planes at (w+1)/2 x (h+1)/2)
-    UXData* reconstruction(void)
+    Data* reconstruction(void)
         {
         i32 cw = (w + (i32)1) / (i32)2;
         i32 ch = (h + (i32)1) / (i32)2;
-        UXData* d = UXData.withCapacity(w * h + (i32)2 * cw * ch);
+        Data* d = Data.withCapacity((u32)(w * h + (i32)2 * cw * ch));
         for (i32 y = (i32)0; y < h; y = y + (i32)1)
             {
             d.appendBytes(recY + (i64)(y * yp), w);
@@ -1115,7 +1115,7 @@ class UXVp8Encoder
 // and its payload.
 class UXWebM
     {
-    static void id(UXData* d, u32 v)
+    static void id(Data* d, u32 v)
         {
         if (v > (u32)$FFFFFF)
             {
@@ -1132,7 +1132,7 @@ class UXWebM
         d.appendByte((u8)(v & (u32)255));
         }
     // a size, in as few bytes as hold it
-    static void sizeOf(UXData* d, i64 n)
+    static void sizeOf(Data* d, i64 n)
         {
         i32 len = (i32)1;
         while (len < (i32)8 && n >= (((i64)1 << (i64)(len * (i32)7)) - (i64)1))
@@ -1141,7 +1141,7 @@ class UXWebM
             }
         UXWebM.sizeIn(d, n, len);
         }
-    static void sizeIn(UXData* d, i64 n, i32 len)
+    static void sizeIn(Data* d, i64 n, i32 len)
         {
         for (i32 i = len - (i32)1; i >= (i32)0; i = i - (i32)1)
             {
@@ -1153,13 +1153,13 @@ class UXWebM
             d.appendByte((u8)b);
             }
         }
-    static void master(UXData* d, u32 v, UXData* payload)
+    static void master(Data* d, u32 v, Data* payload)
         {
         UXWebM.id(d, v);
         UXWebM.sizeOf(d, (i64)payload.length());
-        d.appendData(payload);
+        d.append(payload);
         }
-    static void uint(UXData* d, u32 v, i64 n)
+    static void uint(Data* d, u32 v, i64 n)
         {
         i32 len = (i32)1;
         while (len < (i32)8 && (n >> (i64)(len * (i32)8)) != (i64)0)
@@ -1174,7 +1174,7 @@ class UXWebM
             }
         }
     // a fixed eight-byte unsigned integer, for a value written before it is known
-    static void uintFixed(UXData* d, u32 v, i64 n)
+    static void uintFixed(Data* d, u32 v, i64 n)
         {
         UXWebM.id(d, v);
         UXWebM.sizeOf(d, (i64)8);
@@ -1183,7 +1183,7 @@ class UXWebM
             d.appendByte((u8)((n >> (i64)(i * (i32)8)) & (i64)255));
             }
         }
-    static void text(UXData* d, u32 v, u8* s)
+    static void text(Data* d, u32 v, u8* s)
         {
         i32 n = (i32)0;
         while (s[n] != (u8)0)
@@ -1195,7 +1195,7 @@ class UXWebM
         d.appendBytes(s, n);
         }
     // a whole number as an eight-byte IEEE double
-    static void wholeFloat(UXData* d, u32 v, i64 n)
+    static void wholeFloat(Data* d, u32 v, i64 n)
         {
         i64 bits = (i64)0;
         if (n > (i64)0)
@@ -1219,7 +1219,7 @@ class UXMovie
     i32 h;
     i32 fps;
     UXVp8Encoder* enc;
-    Array* frames;   // UXData: each distinct frame, encoded
+    Array* frames;   // Data: each distinct frame, encoded
     i32* startTick;  // where each frame starts, in ticks
     i32 cap;
     i32 ticks;       // the movie so far, in ticks
@@ -1332,7 +1332,7 @@ class UXMovie
         return true;
         }
     // The last frame added, as a VP8 decoder will show it (I420, cropped to the frame).
-    UXData* reconstruction(void)
+    Data* reconstruction(void)
         {
         return enc.reconstruction();
         }
@@ -1343,13 +1343,13 @@ class UXMovie
         }
 
     // The whole movie as a WebM file.  The movie takes no more frames after this.
-    UXData* finish(void)
+    Data* finish(void)
         {
         finished = true;
         i32 nf = (i32)frames.count();
 
-        UXData* ebml = UXData.withCapacity((i32)64);
-        UXData* eh = UXData.withCapacity((i32)64);
+        Data* ebml = Data.withCapacity((u32)((i32)64));
+        Data* eh = Data.withCapacity((u32)((i32)64));
         UXWebM.uint(eh, (u32)$4286, (i64)1);  // EBMLVersion
         UXWebM.uint(eh, (u32)$42F7, (i64)1);  // EBMLReadVersion
         UXWebM.uint(eh, (u32)$42F2, (i64)4);  // EBMLMaxIDLength
@@ -1359,32 +1359,32 @@ class UXMovie
         UXWebM.uint(eh, (u32)$4285, (i64)2);  // DocTypeReadVersion
         UXWebM.master(ebml, (u32)$1A45DFA3, eh);
 
-        UXData* info = UXData.withCapacity((i32)64);
-        UXData* ip = UXData.withCapacity((i32)64);
+        Data* info = Data.withCapacity((u32)((i32)64));
+        Data* ip = Data.withCapacity((u32)((i32)64));
         UXWebM.uint(ip, (u32)$2AD7B1, (i64)1000000); // TimecodeScale: milliseconds
         UXWebM.wholeFloat(ip, (u32)$4489, self._tickMs(ticks)); // Duration
         UXWebM.text(ip, (u32)$4D80, (u8*)"UXKit UXMovie"); // MuxingApp
         UXWebM.text(ip, (u32)$5741, (u8*)"UXKit UXMovie"); // WritingApp
         UXWebM.master(info, (u32)$1549A966, ip);
 
-        UXData* tracks = UXData.withCapacity((i32)64);
-        UXData* te = UXData.withCapacity((i32)64);
+        Data* tracks = Data.withCapacity((u32)((i32)64));
+        Data* te = Data.withCapacity((u32)((i32)64));
         UXWebM.uint(te, (u32)$D7, (i64)1);    // TrackNumber
         UXWebM.uint(te, (u32)$73C5, (i64)1);  // TrackUID
         UXWebM.uint(te, (u32)$83, (i64)1);    // TrackType: video
         UXWebM.uint(te, (u32)$9C, (i64)0);    // FlagLacing
         UXWebM.text(te, (u32)$86, (u8*)"V_VP8");
-        UXData* vid = UXData.withCapacity((i32)16);
+        Data* vid = Data.withCapacity((u32)((i32)16));
         UXWebM.uint(vid, (u32)$B0, (i64)w);   // PixelWidth
         UXWebM.uint(vid, (u32)$BA, (i64)h);   // PixelHeight
         UXWebM.master(te, (u32)$E0, vid);
-        UXData* tes = UXData.withCapacity((i32)64);
+        Data* tes = Data.withCapacity((u32)((i32)64));
         UXWebM.master(tes, (u32)$AE, te);
         UXWebM.master(tracks, (u32)$1654AE6B, tes);
 
         // clusters of up to five seconds, each starting with a frame; the last frame is a BlockGroup
         // with its duration, so it is shown for as long as it was held
-        UXData* clusters = UXData.withCapacity((i32)1024);
+        Data* clusters = Data.withCapacity((u32)((i32)1024));
         i32 ncl = (i32)0;
         i64* clusterPos = new i64[(u32)(nf + (i32)1)];
         i64* clusterMs = new i64[(u32)(nf + (i32)1)];
@@ -1392,12 +1392,12 @@ class UXMovie
         while (f < nf)
             {
             i64 c0 = self._tickMs(startTick[f]);
-            UXData* cl = UXData.withCapacity((i32)1024);
+            Data* cl = Data.withCapacity((u32)((i32)1024));
             UXWebM.uint(cl, (u32)$E7, c0); // Timecode
             while (f < nf && self._tickMs(startTick[f]) - c0 < (i64)5000)
                 {
-                UXData* fr = (UXData* ?)frames.get((u32)f);
-                UXData* blk = UXData.withCapacity(fr.length() + (i32)4);
+                Data* fr = (Data* ?)frames.get((u32)f);
+                Data* blk = Data.withCapacity(fr.length() + (i32)4);
                 i64 rel = self._tickMs(startTick[f]) - c0;
                 blk.appendByte((u8)$81); // track 1
                 blk.appendByte((u8)((rel >> (i64)8) & (i64)255));
@@ -1405,8 +1405,8 @@ class UXMovie
                 if (f == nf - (i32)1)
                     {
                     blk.appendByte((u8)0);
-                    blk.appendData(fr);
-                    UXData* bg = UXData.withCapacity(blk.length() + (i32)16);
+                    blk.append(fr);
+                    Data* bg = Data.withCapacity(blk.length() + (i32)16);
                     UXWebM.master(bg, (u32)$A1, blk); // Block
                     UXWebM.uint(bg, (u32)$9B, self._tickMs(ticks) - self._tickMs(startTick[f])); // BlockDuration
                     UXWebM.master(cl, (u32)$A0, bg); // BlockGroup
@@ -1414,7 +1414,7 @@ class UXMovie
                 else
                     {
                     blk.appendByte((u8)$80); // a key frame
-                    blk.appendData(fr);
+                    blk.append(fr);
                     UXWebM.master(cl, (u32)$A3, blk); // SimpleBlock
                     }
                 f = f + (i32)1;
@@ -1432,13 +1432,13 @@ class UXMovie
         i64 clustersAt = tracksAt + (i64)tracks.length();
         i64 cuesAt = clustersAt + (i64)clusters.length();
 
-        UXData* cues = UXData.withCapacity((i32)256);
-        UXData* cp = UXData.withCapacity((i32)256);
+        Data* cues = Data.withCapacity((u32)((i32)256));
+        Data* cp = Data.withCapacity((u32)((i32)256));
         for (i32 i = (i32)0; i < ncl; i = i + (i32)1)
             {
-            UXData* pt = UXData.withCapacity((i32)32);
+            Data* pt = Data.withCapacity((u32)((i32)32));
             UXWebM.uint(pt, (u32)$B3, clusterMs[i]); // CueTime
-            UXData* tp = UXData.withCapacity((i32)16);
+            Data* tp = Data.withCapacity((u32)((i32)16));
             UXWebM.uint(tp, (u32)$F7, (i64)1); // CueTrack
             UXWebM.uint(tp, (u32)$F1, clustersAt + clusterPos[i]); // CueClusterPosition
             UXWebM.master(pt, (u32)$B7, tp);
@@ -1446,34 +1446,34 @@ class UXMovie
             }
         UXWebM.master(cues, (u32)$1C53BB6B, cp);
 
-        UXData* seek = UXData.withCapacity((i32)68);
-        UXData* sp = UXData.withCapacity((i32)64);
+        Data* seek = Data.withCapacity((u32)((i32)68));
+        Data* sp = Data.withCapacity((u32)((i32)64));
         self._seekEntry(sp, (u32)$1549A966, infoAt);
         self._seekEntry(sp, (u32)$1654AE6B, tracksAt);
         self._seekEntry(sp, (u32)$1C53BB6B, cuesAt);
         UXWebM.master(seek, (u32)$114D9B74, sp);
 
-        UXData* seg = UXData.withCapacity((i32)68 + info.length() + tracks.length() + clusters.length() + cues.length());
-        seg.appendData(seek);
-        seg.appendData(info);
-        seg.appendData(tracks);
-        seg.appendData(clusters);
-        seg.appendData(cues);
-        UXData* out = UXData.withCapacity(ebml.length() + seg.length() + (i32)12);
-        out.appendData(ebml);
+        Data* seg = Data.withCapacity((i32)68 + info.length() + tracks.length() + clusters.length() + cues.length());
+        seg.append(seek);
+        seg.append(info);
+        seg.append(tracks);
+        seg.append(clusters);
+        seg.append(cues);
+        Data* out = Data.withCapacity(ebml.length() + seg.length() + (i32)12);
+        out.append(ebml);
         UXWebM.id(out, (u32)$18538067); // Segment
         UXWebM.sizeIn(out, (i64)seg.length(), (i32)8);
-        out.appendData(seg);
+        out.append(seg);
         return out;
         }
-    void _seekEntry(UXData* d, u32 target, i64 at)
+    void _seekEntry(Data* d, u32 target, i64 at)
         {
-        UXData* e = UXData.withCapacity((i32)20);
-        UXData* sid = UXData.withCapacity((i32)4);
+        Data* e = Data.withCapacity((u32)((i32)20));
+        Data* sid = Data.withCapacity((u32)((i32)4));
         UXWebM.id(sid, target);
         UXWebM.id(e, (u32)$53AB); // SeekID
         UXWebM.sizeOf(e, (i64)4);
-        e.appendData(sid);
+        e.append(sid);
         UXWebM.uintFixed(e, (u32)$53AC, at); // SeekPosition
         UXWebM.master(d, (u32)$4DBB, e);
         }

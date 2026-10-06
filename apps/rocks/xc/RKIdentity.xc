@@ -419,11 +419,11 @@ class RKIdentity : Object
         }
     static u8* joined3(u8* a, u8* b, u8* c)
         {
-        UXData* d = UXData.fromString(a);
+        Data* d = UXStr.toData(a);
         d.appendBytes(b, UXRscTree.len(b));
         d.appendBytes(c, UXRscTree.len(c));
         d.appendByte((u8)0);
-        return d.bytes();
+        return UXStr.cstr(d);
         }
 
     // ---- building the rows -----------------------------------------------------------------
@@ -500,7 +500,7 @@ class RKIdentity : Object
             {
             return (u8*)"this layout only";
             }
-        UXData* b = UXData.withCapacity((i32)64);
+        Data* b = Data.withCapacity((u32)((i32)64));
         for (i32 v = (i32)0; v < f.variantCount(); v = v + (i32)1)
             {
             UXRscVariant* va = f.variantAt(v);
@@ -525,7 +525,7 @@ class RKIdentity : Object
             b.appendBytes(nm, UXRscTree.len(nm));
             }
         b.appendByte((u8)0);
-        return b.bytes();
+        return UXStr.cstr(b);
         }
     static u8* themeName(i32 klass, i32 orient)
         {

@@ -115,7 +115,7 @@ void main(void)
     check((u8*)"and its phone layout is one click away", c.shownTree, (i32)1);
 
     // not a resource
-    UXFileIO.write((u8*)"/tmp/rocks_not_a_resource.txt", UXData.fromString((u8*)"hello"));
+    UXFileIO.write((u8*)"/tmp/rocks_not_a_resource.txt", UXStr.toData((u8*)"hello"));
     checkTrue("a file that is not a resource is refused", !c.openPath((u8*)"/tmp/rocks_not_a_resource.txt"));
     checkTrue("...saying so", says(c, (u8*)"That is not a GEM resource file"));
     check((u8*)"...and the open document stays", c.doc.treeCount(), (i32)2);

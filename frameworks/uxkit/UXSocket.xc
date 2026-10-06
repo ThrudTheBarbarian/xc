@@ -17,7 +17,7 @@
 // file does not import Http: with it in the program, a method called on self from a dealloc
 // re-entered the dealloc (a compiler bug, reported), and UXWindow's and UXGLView's deallocs do that.
 // No TCP in a browser (wasm32) or on XTOS here: connectTo answers null with the reason.
-#import "UXData.xc"
+#import "Data.xc"
 #import "UXString.xc" // UXStr.fromInt, the port as a service name
 
 #if !ARCH_wasm32 && !ARCH_arm9
@@ -233,9 +233,9 @@ class UXSocket
         return true;
 #endif
         }
-    bool writeData(UXData* d)
+    bool writeData(Data* d)
         {
-        return d != (UXData*)0 && self.write(d.bytes(), d.length());
+        return d != (Data*)0 && self.write(d.bytes(), d.length());
         }
 
     // Wait up to ms (0: not at all, -1: for as long as it takes) for something to read, or for the

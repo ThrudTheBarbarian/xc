@@ -165,7 +165,5 @@ gate compiles it, and the listing above is its output.
 ## See also
 
 - [`UXHeapEntry`](/compiler/api/uxkit/uxheapentry/): one item and its priority
-- [`UXOperationQueue`](/compiler/api/uxkit/uxoperationqueue/): a queue of work
-  to *run*, where this is a queue of things to *order*
 - [`UXTimerScheduler`](/compiler/api/uxkit/uxtimerscheduler/): earliest-deadline
   ordering applied to time

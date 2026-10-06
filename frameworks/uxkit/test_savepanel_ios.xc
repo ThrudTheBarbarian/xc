@@ -53,8 +53,8 @@ void user(void)
 // the text of a file, or "" if it cannot be read
 u8* textOf(u8* path)
     {
-    UXData* d = UXFileIO.read(path);
-    if (d == (UXData*)0)
+    Data* d = UXFileIO.read(path);
+    if (d == (Data*)0)
         {
         return (u8*)"";
         }
@@ -65,11 +65,11 @@ u8* textOf(u8* path)
 void saves(void)
     {
     // the document the user chooses: a file in a folder of its own, standing in for the provider's
-    UXData* p = UXData.fromString(getenv((u8*)"TMPDIR"));
+    Data* p = UXStr.toData(getenv((u8*)"TMPDIR"));
     p.appendBytes((u8*)"/elsewhere", (i32)10);
     p.appendByte((u8)0);
     mkdir(p.bytes(), (u32)$1ED);
-    UXData* q = UXData.fromString(p.bytes());
+    Data* q = UXStr.toData(p.bytes());
     q.appendBytes((u8*)"/notes.txt", (i32)10);
     q.appendByte((u8)0);
     gDest = q.bytes();
@@ -79,12 +79,12 @@ void saves(void)
     u8* path = UXSavePanel.run((u8*)"Save the note", (u8*)"", (u8*)"notes.txt");
     Stdio.printf("  (staging: %s)\n", path != (u8*)0 ? path : (u8*)"-");
     ck((u8*)"the panel gives back a path to write", path != (u8*)0);
-    ck((u8*)"...the app's own staging file, under the default name", path != (u8*)0 && !sameBytes(path, gDest) && UXFileIO.read(path) != (UXData*)0);
+    ck((u8*)"...the app's own staging file, under the default name", path != (u8*)0 && !sameBytes(path, gDest) && UXFileIO.read(path) != (Data*)0);
     if (path != (u8*)0)
         {
-        ck((u8*)"a write to it succeeds", UXFileIO.write(path, UXData.fromString((u8*)"first draft, héllo")));
+        ck((u8*)"a write to it succeeds", UXFileIO.write(path, UXStr.toData((u8*)"first draft, héllo")));
         ck((u8*)"...and the bytes are in the chosen document", sameBytes(textOf(gDest), (u8*)"first draft, héllo"));
-        ck((u8*)"saving again goes there too", UXFileIO.write(path, UXData.fromString((u8*)"second draft")) && sameBytes(textOf(gDest), (u8*)"second draft"));
+        ck((u8*)"saving again goes there too", UXFileIO.write(path, UXStr.toData((u8*)"second draft")) && sameBytes(textOf(gDest), (u8*)"second draft"));
         }
 
     gAnswer = (i32)2;

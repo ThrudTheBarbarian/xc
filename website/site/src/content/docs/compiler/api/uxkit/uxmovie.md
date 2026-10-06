@@ -18,7 +18,7 @@ and it needs no codec from the platform.
 UXMovie* m = UXMovie.make(1280, 832, 25);   // 25 ticks a second
 m.add(frame);                               // one frame, one tick
 m.addHeld(frame, 5);                        // one frame, shown for five ticks
-UXData* webm = m.finish();
+Data* webm = m.finish();
 
 u8* path = UXSavePanel.run((u8*)"Save the movie", (u8*)".", (u8*)"turns.webm");
 if (path != (u8*)0)
@@ -107,7 +107,7 @@ ticks. The size must be the movie's.
 ### finish
 
 ```c
-UXData* finish(void)
+Data* finish(void)
 ```
 
 The whole movie as a WebM file. The movie takes no frames after this.
@@ -132,7 +132,7 @@ The movie's length so far, in milliseconds.
 ### reconstruction
 
 ```c
-UXData* reconstruction(void)
+Data* reconstruction(void)
 ```
 
 The last frame added, as a VP8 decoder will show it: I420, cropped to the

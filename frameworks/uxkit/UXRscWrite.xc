@@ -21,7 +21,8 @@
 // payloads this slice cannot write (icons, bit forms) are counted and reported
 // through warning() rather than dropped quietly.
 #import "Array.xc"
-#import "UXData.xc"
+#import "Data.xc"
+#import "UXString.xc"
 #import "UXRscModel.xc"
 
 #define UXRW_SZ_HDR 36
@@ -36,7 +37,7 @@ class UXRscWriter : Object
     u8* warn;
 
     // the string pool: interned once, each with the offset it will live at
-    Array<UXData>* strs;
+    Array<Data>* strs;
     Array<UXRscObject>* allObjs;    // every object, in file order
     Array<UXRscFlatNode>* allLinks; // its links, tree-relative
     Array<UXRscTedinfo>* teds;
@@ -136,7 +137,7 @@ class UXRscWriter : Object
             {
             s = (u8*)"";
             }
-        // Compare by LENGTH: a stored string is a UXData of its bytes with no terminator after them,
+        // Compare by LENGTH: a stored string is a Data of its bytes with no terminator after them,
         // so reading one up to a NUL ran on past its end into whatever followed, and a string could
         // fail to match itself.  The template ("____...") did, every time: each TEDINFO interned a
         // new copy beyond the laid-out table, offOf found no offset for it, and te_ptmplt was
@@ -144,7 +145,7 @@ class UXRscWriter : Object
         i32 n = UXRscWriter.slen(s);
         for (i32 i = (i32)0; i < (i32)strs.count(); i = i + (i32)1)
             {
-            UXData* d = (UXData* ?)strs.get((u16)i);
+            Data* d = (Data* ?)strs.get((u16)i);
             if (d.length() != n)
                 {
                 continue;
@@ -160,12 +161,12 @@ class UXRscWriter : Object
                 return i;
                 }
             }
-        strs.add(UXData.fromString(s));
+        strs.add(UXStr.toData(s));
         return (i32)strs.count() - (i32)1;
         }
 
     // ---- the write ---------------------------------------------------------
-    static UXData* write(UXRscDoc* r)
+    static Data* write(UXRscDoc* r)
         {
         UXRscWriter* w = new UXRscWriter();
         return w.emit(r);
@@ -176,13 +177,13 @@ class UXRscWriter : Object
         w.result = w.emit(r);
         return w;
         }
-    UXData* result;
+    Data* result;
 
-    UXData* emit(UXRscDoc* r)
+    Data* emit(UXRscDoc* r)
         {
         if (r == (UXRscDoc*)0)
             {
-            return (UXData*)0;
+            return (Data*)0;
             }
         i32 cw = r.charWidth;
         i32 ch = r.charHeight;
@@ -214,7 +215,7 @@ class UXRscWriter : Object
         // string, so anything interned afterwards would get no offset at all.
         for (i32 i = (i32)0; i < (i32)r.freeStrings.count(); i = i + (i32)1)
             {
-            self.intern(((UXData* ?)r.freeStrings.get((u16)i)).bytes());
+            self.intern(((Data* ?)r.freeStrings.get((u16)i)).bytes());
             }
         for (i32 i = (i32)0; i < nobs; i = i + (i32)1)
             {
@@ -252,7 +253,7 @@ class UXRscWriter : Object
         i32 strbytes = (i32)0;
         for (i32 i = (i32)0; i < (i32)strs.count(); i = i + (i32)1)
             {
-            strbytes = strbytes + (i32)((UXData* ?)strs.get((u16)i)).length() + (i32)1;
+            strbytes = strbytes + (i32)((Data* ?)strs.get((u16)i)).length() + (i32)1;
             }
         i32 imBase = strBase + strbytes;
         total = imBase; // no image data in this slice
@@ -288,7 +289,7 @@ class UXRscWriter : Object
         i32 cur = strBase;
         for (i32 i = (i32)0; i < (i32)strs.count(); i = i + (i32)1)
             {
-            UXData* d = (UXData* ?)strs.get((u16)i);
+            Data* d = (Data* ?)strs.get((u16)i);
             UXRscFlatNode* mark = new UXRscFlatNode();
             mark.next = cur;
             strOff.add(mark);
@@ -342,7 +343,7 @@ class UXRscWriter : Object
         // ---- free string table ---------------------------------------------
         for (i32 i = (i32)0; i < nstring; i = i + (i32)1)
             {
-            u8* s = ((UXData* ?)r.freeStrings.get((u16)i)).bytes();
+            u8* s = ((Data* ?)r.freeStrings.get((u16)i)).bytes();
             self.wr32(frstr + i * (i32)4, self.offOf(strOff, self.intern(s)));
             }
 
@@ -357,12 +358,12 @@ class UXRscWriter : Object
             {
             warn = (u8*)"this resource holds payloads this build cannot write (icons / bit forms); they are not in the output";
             }
-        UXData* file = UXData.fromBytes(out, total);
+        Data* file = Data.withBytes(out, (u32)(total));
         if (r.formCount() > (i32)0 || r.classOverrides.count() > (u32)0 || r.topObjects.count() > (u32)0 ||
-            r.connections.count() > (u32)0 || r.extSections.count() > (u32)0 || UXRscWriter.namesSection(r) != (UXData*)0 ||
+            r.connections.count() > (u32)0 || r.extSections.count() > (u32)0 || UXRscWriter.namesSection(r) != (Data*)0 ||
             (r.ownerClass != (u8*)0 && r.ownerClass[0] != (u8)0) || r.attrs.count() > (u32)0)
             {
-            file.appendData(self.nibChunk(r));
+            file.append(self.nibChunk(r));
             }
         return file;
         }
@@ -375,18 +376,18 @@ class UXRscWriter : Object
     // -- then one map per variant tree, object index (pre-order, as the tree is written) to logical
     // id.  Then the graph: class overrides, top objects, scoped connections, the extension sections
     // as they were read.  No presentations yet: nothing authors them.
-    static void be16(UXData* d, i32 v)
+    static void be16(Data* d, i32 v)
         {
         d.appendByte((u8)((v >> (i32)8) & (i32)$FF));
         d.appendByte((u8)(v & (i32)$FF));
         }
-    static void be32(UXData* d, i32 v)
+    static void be32(Data* d, i32 v)
         {
         UXRscWriter.be16(d, (v >> (i32)16) & (i32)$FFFF);
         UXRscWriter.be16(d, v & (i32)$FFFF);
         }
     // A string into the blob; "" (and null) is offset 0, which the blob starts with.
-    static i32 blobAdd(UXData* blob, u8* s)
+    static i32 blobAdd(Data* blob, u8* s)
         {
         if (s == (u8*)0 || s[0] == (u8)0)
             {
@@ -397,7 +398,7 @@ class UXRscWriter : Object
         blob.appendByte((u8)0);
         return at;
         }
-    static void ref(UXData* d, UXRscRef* r)
+    static void ref(Data* d, UXRscRef* r)
         {
         d.appendByte((u8)(r != (UXRscRef*)0 ? r.space : (i32)UXR_REF_OWNER));
         UXRscWriter.be16(d, r != (UXRscRef*)0 ? r.a : (i32)0);
@@ -406,9 +407,9 @@ class UXRscWriter : Object
         }
     // The NAME section (see UXRscReader.readNames), or 0 when nothing has a name.  The classic file
     // stores no names, so without it a tree's or a control's name would not survive a save.
-    static UXData* namesSection(UXRscDoc* r)
+    static Data* namesSection(UXRscDoc* r)
         {
-        UXData* d = UXData.withCapacity((i32)64);
+        Data* d = Data.withCapacity((u32)((i32)64));
         UXRscWriter.be16(d, (i32)0); // count, patched below
         i32 n = (i32)0;
         for (i32 t = (i32)0; t < r.treeCount(); t = t + (i32)1)
@@ -432,20 +433,20 @@ class UXRscWriter : Object
             }
         if (n == (i32)0)
             {
-            return (UXData*)0;
+            return (Data*)0;
             }
         u8* b = d.bytes();
         b[0] = (u8)((n >> (i32)8) & (i32)$FF);
         b[1] = (u8)(n & (i32)$FF);
         return d;
         }
-    static void lenStr(UXData* d, u8* s)
+    static void lenStr(Data* d, u8* s)
         {
         i32 n = UXRscWriter.slen(s);
         UXRscWriter.be16(d, n);
         d.appendBytes(s, n);
         }
-    static void nameEntry(UXData* d, i32 tree, i32 obj, u8* nm)
+    static void nameEntry(Data* d, i32 tree, i32 obj, u8* nm)
         {
         i32 nl = UXRscWriter.slen(nm);
         UXRscWriter.be16(d, tree);
@@ -453,10 +454,10 @@ class UXRscWriter : Object
         UXRscWriter.be16(d, nl);
         d.appendBytes(nm, nl);
         }
-    UXData* nibChunk(UXRscDoc* r)
+    Data* nibChunk(UXRscDoc* r)
         {
         // the string blob: offset 0 is "", then each form's name
-        UXData* blob = UXData.withCapacity((i32)64);
+        Data* blob = Data.withCapacity((u32)((i32)64));
         blob.appendByte((u8)0);
         Array<UXRscFlatNode>* nameAt = new Array(); // per form, its name's blob offset
         for (i32 f = (i32)0; f < r.formCount(); f = f + (i32)1)
@@ -482,7 +483,7 @@ class UXRscWriter : Object
         // the maps: every tree with at least one identified control (a form's layouts, and a tree in
         // no form whose controls are wired or classed by logical id)
         i32 nMaps = (i32)0;
-        UXData* maps = UXData.withCapacity((i32)64);
+        Data* maps = Data.withCapacity((u32)((i32)64));
         for (i32 f = (i32)0; f < r.treeCount(); f = f + (i32)1)
             {
             UXRscTree* tr = r.treeAt(f);
@@ -514,7 +515,7 @@ class UXRscWriter : Object
             }
 
         // the graph, strings into the same blob
-        UXData* graph = UXData.withCapacity((i32)128);
+        Data* graph = Data.withCapacity((u32)((i32)128));
         for (u32 i = (u32)0; i < r.classOverrides.count(); i = i + (u32)1)
             {
             UXRscClassOverride* co = (UXRscClassOverride* ?)r.classOverrides.get(i);
@@ -538,9 +539,9 @@ class UXRscWriter : Object
             UXRscWriter.be32(graph, UXRscWriter.blobAdd(blob, cn.member));
             UXRscWriter.be32(graph, (i32)cn.scope);
             }
-        UXData* names = UXRscWriter.namesSection(r);
+        Data* names = UXRscWriter.namesSection(r);
         i32 nExt = (i32)r.extSections.count();
-        if (names != (UXData*)0)
+        if (names != (Data*)0)
             {
             UXRscWriter.be32(graph, (i32)$4E414D45); // 'NAME'
             UXRscWriter.be32(graph, names.length());
@@ -553,7 +554,7 @@ class UXRscWriter : Object
             }
         if (r.attrs.count() > (u32)0)
             {
-            UXData* at = UXData.withCapacity((i32)64);
+            Data* at = Data.withCapacity((u32)((i32)64));
             UXRscWriter.be16(at, (i32)r.attrs.count());
             for (u32 i = (u32)0; i < r.attrs.count(); i = i + (u32)1)
                 {
@@ -597,7 +598,7 @@ class UXRscWriter : Object
                 }
             }
 
-        UXData* c = UXData.withCapacity((i32)256);
+        Data* c = Data.withCapacity((u32)((i32)256));
         UXRscWriter.be32(c, (i32)$55584E42); // 'UXNB'
         UXRscWriter.be16(c, (i32)3);         // version
         UXRscWriter.be16(c, (i32)0);         // flags
@@ -636,9 +637,9 @@ class UXRscWriter : Object
                 UXRscWriter.be16(c, t);
                 }
             }
-        c.appendData(maps);
-        c.appendData(graph);
-        c.appendData(blob);
+        c.append(maps);
+        c.append(graph);
+        c.append(blob);
         i32 n = c.length();
         u8* b = c.bytes();
         b[8] = (u8)((n >> (i32)24) & (i32)$FF);

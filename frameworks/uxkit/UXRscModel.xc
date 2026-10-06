@@ -21,7 +21,8 @@
 //
 // See apps/rocks/RSC-FORMAT.md for the on-disk layout.
 #import "Array.xc"
-#import "UXData.xc"
+#import "Data.xc"
+#import "UXString.xc"
 
 // ---- object types: classic, then the XT GEM themed extensions ---------
 #define UXR_T_BOX 20
@@ -199,11 +200,11 @@ class UXRscColor : Object
     // no mask.  Carried by G_IMAGE objects and by the free-image table.
     class UXRscBitblk : Object
     {
-    UXData* data; // wb * hl bytes
+    Data* data; // wb * hl bytes
     i32 wb, hl, x, y, color;
     void init(void)
         {
-        data = (UXData*)0;
+        data = (Data*)0;
         wb = (i32)0;
         hl = (i32)0;
         x = (i32)0;
@@ -227,12 +228,12 @@ class UXRscColor : Object
     {
     bool isColor;
     u8* label;
-    UXData* pam;      // embedded P7 PAM bytes
-    UXData* ciconRaw; // the original CICONBLK, verbatim, for byte-faithful re-export
-    UXData* selPam;   // the SELECTED form, if the file had one
+    Data* pam;      // embedded P7 PAM bytes
+    Data* ciconRaw; // the original CICONBLK, verbatim, for byte-faithful re-export
+    Data* selPam;   // the SELECTED form, if the file had one
     u8* externalPath; // reference instead of embedding
-    UXData* monoData; // classic ICONBLK ib_pdata, preserved from an import
-    UXData* monoMask; // ib_pmask
+    Data* monoData; // classic ICONBLK ib_pdata, preserved from an import
+    Data* monoMask; // ib_pmask
     i32 iconChar, charX, charY;
     i32 textX, textY, textW, textH;
     i32 iconX, iconY, iconW, iconH;
@@ -240,12 +241,12 @@ class UXRscColor : Object
         {
         isColor = false;
         label = (u8*)"";
-        pam = (UXData*)0;
-        ciconRaw = (UXData*)0;
-        selPam = (UXData*)0;
+        pam = (Data*)0;
+        ciconRaw = (Data*)0;
+        selPam = (Data*)0;
         externalPath = (u8*)0;
-        monoData = (UXData*)0;
-        monoMask = (UXData*)0;
+        monoData = (Data*)0;
+        monoMask = (Data*)0;
         iconChar = (i32)0;
         charX = (i32)0;
         charY = (i32)0;
@@ -519,24 +520,24 @@ class UXRscColor : Object
     u8* name;
     i32 kind;
     UXRscObject* root;
-    UXData* nameStore; // owns `name`'s bytes when the name was made here rather than read
+    Data* nameStore; // owns `name`'s bytes when the name was made here rather than read
 
     void init(void)
         {
         name = (u8*)"";
         kind = (i32)UXR_K_DIALOG;
         root = (UXRscObject*)0;
-        nameStore = (UXData*)0;
+        nameStore = (Data*)0;
         }
 
     // Name this tree `base` + `suffix` ("MAIN" + "_PHONE_L"), owning the bytes.
     void setNameJoined(u8* base, u8* suffix)
         {
-        UXData* d = UXData.fromString(base != (u8*)0 ? base : (u8*)"");
+        Data* d = UXStr.toData(base != (u8*)0 ? base : (u8*)"");
         d.appendBytes(suffix, UXRscTree.len(suffix));
         d.appendByte((u8)0);
         nameStore = d;
-        name = d.bytes();
+        name = UXStr.cstr(d);
         }
     static i32 len(u8* s)
         {
@@ -853,14 +854,14 @@ class UXRscColor : Object
     class UXRscExtSection : Object
     {
     u32 tag;
-    UXData* body;
+    Data* body;
     }
 
     // ---- resource --------------------------------------------------------------
     class UXRscDoc : Object
     {
     Array<UXRscTree>* trees;
-    Array<UXData>* freeStrings;  // rsrc_gaddr(R_STRING, i) — referenced by nothing
+    Array<Data>* freeStrings;  // rsrc_gaddr(R_STRING, i) — referenced by nothing
     Array<UXRscBitblk>* freeImages; // rsrc_gaddr(R_IMAGE, i) — likewise
     Array<UXRscForm>* forms;        // the multi-variant forms; a tree in none is its own `any` form
     Array<UXRscClassOverride>* classOverrides;

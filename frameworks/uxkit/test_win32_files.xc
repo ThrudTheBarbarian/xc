@@ -135,7 +135,7 @@ void main(void)
     GetCurrentDirectoryA((u32)400, &cwd[0]);
     u8 picked[600];
     join(&picked[0], &cwd[0], (u8*)"\\pick.txt");
-    ck((u8*)"a file to open", UXFileIO.write(&picked[0], UXData.fromString((u8*)"opened through GetOpenFileName")));
+    ck((u8*)"a file to open", UXFileIO.write(&picked[0], UXStr.toData((u8*)"opened through GetOpenFileName")));
 
     // open: the user types the file's path and presses Open
     join(&gType[0], &picked[0], (u8*)"");
@@ -143,8 +143,8 @@ void main(void)
     Stdio.printf("  (open: %s)\n", got != (u8*)0 ? got : (u8*)"-");
     ck((u8*)"GetOpenFileName ran (its dialog was shown)", gSeen == (i32)1);
     ck((u8*)"...and the path typed into it is the one returned", got != (u8*)0 && sameBytes(got, &picked[0]));
-    UXData* data = got != (u8*)0 ? UXFileIO.read(got) : (UXData*)0;
-    ck((u8*)"...which reads back through UXFileIO", data != (UXData*)0 && data.length() == (i32)30);
+    Data* data = got != (u8*)0 ? UXFileIO.read(got) : (Data*)0;
+    ck((u8*)"...which reads back through UXFileIO", data != (Data*)0 && data.length() == (i32)30);
     gType[0] = (u8)0;
     ck((u8*)"a cancelled open returns nothing", UXOpenPanel.run((u8*)"Open a file", &cwd[0]) == (u8*)0 && gSeen == (i32)2);
 
@@ -158,9 +158,9 @@ void main(void)
     ck((u8*)"GetSaveFileName ran", gSeen == (i32)3);
     ck((u8*)"...starting with the default name", sameBytes(&gSeenName[0], (u8*)"untitled.txt"));
     ck((u8*)"...and the path typed into it is the one returned", got != (u8*)0 && sameBytes(got, &saved[0]));
-    ck((u8*)"...which writes through UXFileIO", got != (u8*)0 && UXFileIO.write(got, UXData.fromString((u8*)"saved")));
+    ck((u8*)"...which writes through UXFileIO", got != (u8*)0 && UXFileIO.write(got, UXStr.toData((u8*)"saved")));
     data = UXFileIO.read(&saved[0]);
-    ck((u8*)"...and reads back", data != (UXData*)0 && data.length() == (i32)5);
+    ck((u8*)"...and reads back", data != (Data*)0 && data.length() == (i32)5);
     gType[0] = (u8)0;
     ck((u8*)"a cancelled save returns nothing", UXSavePanel.run((u8*)"Save the file", &cwd[0], (u8*)"untitled.txt") == (u8*)0 && gSeen == (i32)4);
 

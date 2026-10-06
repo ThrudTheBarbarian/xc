@@ -202,7 +202,7 @@ GEM does not look. The details are on [`UXNibV2`](/compiler/api/uxkit/uxnibv2/).
 ## Loading the file in an app
 
 ```c
-UXData* rsc = UXFileIO.read((u8*)"player.rsc");
+Data* rsc = UXFileIO.read((u8*)"player.rsc");
 UXNibInstance* nib = UXNib.load(rsc.bytes(), rsc.length(), 0, (UXDesignable*)0, content);
 ```
 

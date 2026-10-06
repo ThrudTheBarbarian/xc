@@ -66,7 +66,7 @@ decoder supports. The bytes are only read, and the image is a new allocation.
 ### encode
 
 ```c
-static UXData* encode(UXImage* img)
+static Data* encode(UXImage* img)
 ```
 
 The image as a PNG file's bytes, or null for an empty image. The image is only

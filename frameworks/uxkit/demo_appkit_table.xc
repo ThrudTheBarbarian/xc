@@ -40,7 +40,7 @@ class Canvas : UXView
         }
     }
 
-    class Data : Object<UXTableDataSource, UXTableDelegate>
+    class TableRows : Object<UXTableDataSource, UXTableDelegate>
     {
     weak : UXLabel* status;
     void init(void)
@@ -95,7 +95,7 @@ class Canvas : UXView
     {
     UXWindow* win;
     UXTableView* table;
-    Data* data;
+    TableRows* data;
 
     i32 applicationDidStart(UXApplication* a)
         {
@@ -124,7 +124,7 @@ class Canvas : UXView
         gSize[7] = (u8*)"3 KB";
         gKind[7] = (u8*)"Makefile";
 
-        data = new Data();
+        data = new TableRows();
         Canvas* canvas = new Canvas();
         win = new UXWindow();
         win.open((u8*)"UXKit — native table", UXGeom.make((i16)160, (i16)160, (i16)380, (i16)280), canvas);

@@ -35,7 +35,7 @@ void check(u8* what, i32 got, i32 want)
 u8* gNames[NROWS];
 
 // A CLIENT class adopting a protocol that is declared inside the library.
-class Data : Object<UXTableDataSource, UXTableDelegate>
+class TableRows : Object<UXTableDataSource, UXTableDelegate>
     {
     i32 asked; // how many times the LIBRARY called back into us
     i32 changes;
@@ -70,7 +70,7 @@ class Data : Object<UXTableDataSource, UXTableDelegate>
     {
     UXWindow* win;
     UXTableView* table;
-    Data* data;
+    TableRows* data;
     void init(void)
         {
         }
@@ -83,7 +83,7 @@ class Data : Object<UXTableDataSource, UXTableDelegate>
             gNames[i] = "row";
             }
 
-        data = new Data();
+        data = new TableRows();
         table = new UXTableView(); // a class that lives in the .so
         win = new UXWindow();
         a.addWindow(win);

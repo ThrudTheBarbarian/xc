@@ -53,18 +53,18 @@ void user(void)
 void picks(void)
     {
     // a file standing in for the provider's copy, in the app's tmp space
-    UXData* p = UXData.fromString(getenv((u8*)"TMPDIR"));
+    Data* p = UXStr.toData(getenv((u8*)"TMPDIR"));
     p.appendBytes((u8*)"/uxpick.txt", (i32)11);
     p.appendByte((u8)0);
     gFile = p.bytes();
-    UXFileIO.write(gFile, UXData.fromString((u8*)"picked on the device, héllo"));
+    UXFileIO.write(gFile, UXStr.toData((u8*)"picked on the device, héllo"));
 
     gAnswer = (i32)1;
     ux_ios_test_call_later((pointer)&user, (i32)1200);
     u8* path = UXOpenPanel.run((u8*)"Open a note", (u8*)"");
     ck((u8*)"the picker gives back the picked file's path", path != (u8*)0 && sameBytes(path, gFile));
-    UXData* d = path != (u8*)0 ? UXFileIO.read(path) : (UXData*)0;
-    bool same = d != (UXData*)0;
+    Data* d = path != (u8*)0 ? UXFileIO.read(path) : (Data*)0;
+    bool same = d != (Data*)0;
     if (same)
         {
         d.appendByte((u8)0);

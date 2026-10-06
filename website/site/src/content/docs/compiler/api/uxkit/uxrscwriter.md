@@ -13,7 +13,7 @@ description: "Write a UXRscDoc as a classic .rsc any GEM AES reads, with the nib
 ## Overview
 
 ```c
-UXData* bytes = UXRscWriter.write(doc);
+Data* bytes = UXRscWriter.write(doc);
 ```
 
 The output is a big-endian classic `.rsc`, readable by GEM resource tools. When
@@ -34,7 +34,7 @@ Reading a file and writing it back gives the same bytes.
 ### write
 
 ```c
-static UXData* write(UXRscDoc* r)
+static Data* write(UXRscDoc* r)
 ```
 
 ### writer
@@ -48,7 +48,7 @@ The writer, for its warning; call `emit` for the bytes.
 ### emit
 
 ```c
-UXData* emit(UXRscDoc* r)
+Data* emit(UXRscDoc* r)
 ```
 
 ### warning

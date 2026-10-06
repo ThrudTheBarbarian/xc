@@ -203,5 +203,3 @@ gate compiles it, and the block above is its output.
 - [`UXProgressChild`](/compiler/api/uxkit/uxprogresschild/): the allocation
   link
 - [`UXProgressBar`](/compiler/api/uxkit/uxprogressbar/): showing the result
-- [`UXOperationQueue`](/compiler/api/uxkit/uxoperationqueue/): the work whose
-  progress this reports

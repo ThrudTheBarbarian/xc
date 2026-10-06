@@ -180,8 +180,8 @@ class PlayerApp : Object<UXApplicationDelegate>
     UXNibInstance* nib; // keeps the controller the file made
 
     i32 applicationDidStart(UXApplication* app) {
-        UXData* rsc = UXFileIO.read((u8*)"player.rsc");
-        if (rsc == (UXData*)0) { Stdio.printf("no player.rsc\n"); return 1; }
+        Data* rsc = UXFileIO.read((u8*)"player.rsc");
+        if (rsc == (Data*)0) { Stdio.printf("no player.rsc\n"); return 1; }
         UXView*   content = new UXView();
         UXWindow* win     = new UXWindow();
         win.open((u8*)"Player", UXGeom.make(100, 100, 480, 300), content);

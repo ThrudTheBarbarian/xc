@@ -32,7 +32,7 @@ class Row : UXView
         }
     }
 
-    class Data : Object<UXTableDataSource>
+    class TableRows : Object<UXTableDataSource>
     {
     void init(void)
         {
@@ -67,7 +67,7 @@ void tableCycle(void)
     {
     UXViewTree* tree = new UXViewTree();
     UXTableView* t = new UXTableView();
-    Data* d = new Data();
+    TableRows* d = new TableRows();
     t.attachTo(tree, UXGeom.make((i16)0, (i16)0, (i16)150, (i16)100));
     t.setRowHeight((i16)10);
     t.addColumn("A", (i16)80);

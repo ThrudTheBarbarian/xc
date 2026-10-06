@@ -60,9 +60,9 @@ UXImage* picture(i32 w, i32 h, i32 k)
         }
     return im;
     }
-UXData* rgbaOf(UXImage* im)
+Data* rgbaOf(UXImage* im)
     {
-    UXData* d = UXData.withCapacity(im.w * im.h * (i32)4);
+    Data* d = Data.withCapacity((u32)(im.w * im.h * (i32)4));
     for (i32 i = (i32)0; i < im.w * im.h; i = i + (i32)1)
         {
         u32 v = im.px[i];
@@ -73,7 +73,7 @@ UXData* rgbaOf(UXImage* im)
         }
     return d;
     }
-u32 checksum(UXData* d)
+u32 checksum(Data* d)
     {
     u32 s = (u32)2166136261; // FNV-1a
     for (i32 i = (i32)0; i < d.length(); i = i + (i32)1)
@@ -82,7 +82,7 @@ u32 checksum(UXData* d)
         }
     return s;
     }
-bool contains(UXData* d, u8* s)
+bool contains(Data* d, u8* s)
     {
     i32 n = (i32)0;
     while (s[n] != (u8)0)
@@ -136,15 +136,15 @@ void main(void)
 
 #if MOVIE_FILES
     UXFileIO.write((u8*)"test_movie_last.yuv", m.reconstruction());
-    UXData* src = rgbaOf(picture(w, h, (i32)4));
-    UXData* rgb = UXData.withCapacity(w * h * (i32)3);
+    Data* src = rgbaOf(picture(w, h, (i32)4));
+    Data* rgb = Data.withCapacity((u32)(w * h * (i32)3));
     for (i32 i = (i32)0; i < w * h; i = i + (i32)1)
         {
         rgb.appendBytes(src.bytes() + (i64)(i * (i32)4), (i32)3);
         }
     UXFileIO.write((u8*)"test_movie_last.rgb", rgb);
 #endif
-    UXData* file = m.finish();
+    Data* file = m.finish();
     ck((u8*)"after finish, nothing more is added", !m.add(picture(w, h, (i32)7)));
     ck((u8*)"the file is EBML, a webm, of VP8", file.length() > (i32)100 && file.byteAt((i32)0) == (u8)$1A && file.byteAt((i32)1) == (u8)$45 &&
                                                file.byteAt((i32)2) == (u8)$DF && file.byteAt((i32)3) == (u8)$A3 &&
@@ -171,7 +171,7 @@ void main(void)
     UXImage* p = picture(w, h, (i32)2);
     a.add(p);
     b.addPixels(rgbaOf(p).bytes(), w, h, (i32)1);
-    ck((u8*)"RGBA input and UXImage input make the same file", a.finish().isEqualTo(b.finish()));
+    ck((u8*)"RGBA input and UXImage input make the same file", a.finish().equals(b.finish()));
 
 #if MOVIE_FILES
     UXFileIO.write((u8*)"test_movie.webm", file);

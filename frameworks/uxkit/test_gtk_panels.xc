@@ -67,7 +67,7 @@ void main(void)
     app.addWindow(win);
     ck((u8*)"GTK has all four native panels", d.hasNativeFileOpen() && d.hasNativeFileSave() && d.hasNativeColorPicker() && d.hasNativeFontPicker());
 
-    UXFileIO.write((u8*)"/tmp/uxpanels_open.txt", UXData.fromString((u8*)"x"));
+    UXFileIO.write((u8*)"/tmp/uxpanels_open.txt", UXStr.toData((u8*)"x"));
     ux_gtk_dialog_auto((i32)300, (u8*)"/tmp/uxpanels_open.txt", (i32)0, (i32)0, (i32)0, (u8*)"", (i32)0);
     u8* opened = UXOpenPanel.run((u8*)"Open a file", (u8*)"/tmp");
     ck((u8*)"the open dialog came up", ux_gtk_dialog_auto_seen() != (i32)0);

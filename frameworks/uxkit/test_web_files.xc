@@ -47,17 +47,17 @@ void main(void)
     ck((u8*)"saving names the file", where != (u8*)0 && sameBytes(where, (u8*)"/notes.txt"));
     if (where != (u8*)0)
         {
-        ck((u8*)"...and the write is the browser's download", UXFileIO.write(where, UXData.fromString((u8*)"saved from the worker")));
-        UXData* back = UXFileIO.read(where);
-        ck((u8*)"...which the app can read back", back != (UXData*)0 && back.length() == (i32)21);
+        ck((u8*)"...and the write is the browser's download", UXFileIO.write(where, UXStr.toData((u8*)"saved from the worker")));
+        Data* back = UXFileIO.read(where);
+        ck((u8*)"...which the app can read back", back != (Data*)0 && back.length() == (i32)21);
         }
 
     u8* picked = UXOpenPanel.run((u8*)"Open a note", (u8*)"");
     ck((u8*)"opening gives the picked file's path", picked != (u8*)0 && sameBytes(picked, (u8*)"/picked/from disk.txt"));
     if (picked != (u8*)0)
         {
-        UXData* got = UXFileIO.read(picked);
-        bool ok = got != (UXData*)0;
+        Data* got = UXFileIO.read(picked);
+        bool ok = got != (Data*)0;
         if (ok)
             {
             got.appendByte((u8)0);

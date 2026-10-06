@@ -157,7 +157,5 @@ compiles it, and the output above is what it prints.
 ## See also
 
 - [`UXTimer`](/compiler/api/uxkit/uxtimer/): one scheduled callback
-- [`UXOperationQueue`](/compiler/api/uxkit/uxoperationqueue/): the other
-  deterministic scheduler, ordered by dependency rather than time
 - [`UXDate`](/compiler/api/uxkit/uxdate/): wall-clock time, where this is
   elapsed milliseconds

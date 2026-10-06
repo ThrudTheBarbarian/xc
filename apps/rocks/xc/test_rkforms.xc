@@ -100,7 +100,7 @@ void main(void)
     // file has nowhere for them, so they are taken off for this check and put back after it.)
     main.name = (u8*)"";
     alert.name = (u8*)"";
-    UXData* plain = UXRscWriter.write(r);
+    Data* plain = UXRscWriter.write(r);
     i32 rs = ((i32)plain.byteAt((i32)34) << (i32)8) | (i32)plain.byteAt((i32)35);
     check((u8*)"no variants or names: the file ends at rsh_rssize", plain.length(), rs);
     main.name = (u8*)"MAIN";
@@ -149,7 +149,7 @@ void main(void)
     i32 tL = r.indexOfTree(pl);
 
     // ---- the file, through UXKit's loader -------------------------------------
-    UXData* bytes = UXRscWriter.write(r);
+    Data* bytes = UXRscWriter.write(r);
     UXNibV2* nib = UXNibV2.open(bytes.bytes(), (u32)bytes.length());
     checkTrue("UXKit's loader opens it", nib != (UXNibV2*)0);
     if (nib == (UXNibV2*)0)
@@ -193,7 +193,7 @@ void main(void)
     UXRscObject* bok = byLogical(back.treeAt(tP), ok.logicalId);
     checkTrue("the phone's OK has its id back", bok != (UXRscObject*)0 && bok.type == (i32)UXR_T_BUTTON && UXRscWriter.seq(bok.text, (u8*)"OK"));
     checkTrue("ALERT is in no form", back.formOf(back.treeAt(tAlert)) == (UXRscForm*)0);
-    UXData* again = UXRscWriter.write(back);
+    Data* again = UXRscWriter.write(back);
     bool same = again.length() == bytes.length();
     for (i32 i = (i32)0; same && i < bytes.length(); i = i + (i32)1)
         {

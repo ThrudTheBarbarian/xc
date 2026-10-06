@@ -23,7 +23,7 @@ void checkTrue(u8* what, bool got)
     {
     check(what, got ? (i32)1 : (i32)0, (i32)1);
     }
-bool sameBytes(UXData* a, UXData* b)
+bool sameBytes(Data* a, Data* b)
     {
     if (a.length() != b.length())
         {
@@ -39,7 +39,7 @@ bool sameBytes(UXData* a, UXData* b)
     return true;
     }
 // whether the bytes carry a nib chunk at rsh_rssize
-bool hasChunk(UXData* d)
+bool hasChunk(Data* d)
     {
     u8* b = d.bytes();
     i32 rs = ((i32)b[34] << (i32)8) | (i32)b[35];
@@ -68,7 +68,7 @@ void main(void)
     about.name = (u8*)"ABOUT";
     about.root = UXRscObject.make((i32)UXR_T_BOX, (i32)0, (i32)0, (i32)100, (i32)50);
     d.addTree(about);
-    UXData* bytes = UXRscWriter.write(d);
+    Data* bytes = UXRscWriter.write(d);
     checkTrue("a chunk carries them", hasChunk(bytes));
     UXRscDoc* r = UXRscReader.read(bytes.bytes(), bytes.length());
     checkTrue("reads", r != (UXRscDoc*)0);
@@ -87,7 +87,7 @@ void main(void)
     c.member = (u8*)"onApply";
     d.connections.add(c);
     UXRscDoc* copy = d.deepCopy();
-    UXData* before = UXRscWriter.write(d);
+    Data* before = UXRscWriter.write(d);
     checkTrue("the copy writes the same bytes", sameBytes(before, UXRscWriter.write(copy)));
     copy.treeAt((i32)0).root.childAt((i32)0).x = (i32)99;
     ((UXRscConnection* ?)copy.connections.get((u32)0)).scope = (u32)8;
@@ -126,7 +126,7 @@ void main(void)
     cn2.dst = e.refFor(et, wave);
     cn2.member = (u8*)"scope";
     e.connections.add(cn2);
-    UXData* eb = UXRscWriter.write(e);
+    Data* eb = UXRscWriter.write(e);
     UXRscDoc* er = UXRscReader.read(eb.bytes(), eb.length());
     UXRscTree* ert = er.treeAt((i32)0);
     checkTrue("a tree in no form keeps its controls' ids", ert.root.childAt((i32)0).logicalId == (i32)1);
@@ -137,7 +137,7 @@ void main(void)
     checkTrue("and leaves the others", UXRscWriter.seq(((UXRscConnection* ?)er.connections.get((u32)0)).member, (u8*)"scope"));
     checkTrue("no owner class yet", er.ownerClass[0] == (u8)0);
     er.ownerClass = (u8*)"DocumentController";
-    UXData* ob = UXRscWriter.write(er);
+    Data* ob = UXRscWriter.write(er);
     checkTrue("File's Owner's class survives a save", UXRscWriter.seq(UXRscReader.read(ob.bytes(), ob.length()).ownerClass, (u8*)"DocumentController"));
     checkTrue("and a copy", UXRscWriter.seq(er.deepCopy().ownerClass, (u8*)"DocumentController"));
     er.setClassOf(ert, ert.root.childAt((i32)0), (u8*)"");

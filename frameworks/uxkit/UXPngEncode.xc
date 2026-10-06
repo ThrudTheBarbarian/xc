@@ -1,4 +1,4 @@
-// UXPngEncode.xc — a PNG encoder, in xc: UXPngEncode.encode(UXImage*) -> UXData, the file's bytes.
+// UXPngEncode.xc — a PNG encoder, in xc: UXPngEncode.encode(UXImage*) -> Data, the file's bytes.
 //
 // The writing half of UXPng, for pictures an app saves (a snapshot, a test probe's frame).  It
 // writes 8-bit RGB when every pixel is opaque and 8-bit RGBA otherwise, non-interlaced, with the
@@ -11,18 +11,18 @@
 // codes cost a little against dynamic ones but need no tables in the stream, and a UI picture --
 // large flat runs -- compresses mostly through the matches.
 #import "UXImage.xc"
-#import "UXData.xc"
+#import "Data.xc"
 #import "UXLibc.xc" // malloc, free
 
-// LSB-first bit writer onto a UXData, as deflate packs its stream
+// LSB-first bit writer onto a Data, as deflate packs its stream
 class UXPngBits : Object
     {
-    UXData* out;
+    Data* out;
     u32 acc;
     i32 n;
     void init(void)
         {
-        out = UXData.withCapacity((i32)65536);
+        out = Data.withCapacity((u32)((i32)65536));
         acc = (u32)0;
         n = (i32)0;
         }
@@ -110,7 +110,7 @@ class UXPngEncode
         }
 
     // ---- zlib: a deflate stream of one fixed-Huffman block, then the Adler-32 ---------------
-    static UXData* zlib(u8* src, i32 n)
+    static Data* zlib(u8* src, i32 n)
         {
         UXPngBits* b = new UXPngBits();
         b.out.appendByte((u8)$78); // deflate, 32K window
@@ -197,7 +197,7 @@ class UXPngEncode
         }
 
     // ---- chunks ----------------------------------------------------------------------------
-    static void be32(UXData* d, u32 v)
+    static void be32(Data* d, u32 v)
         {
         d.appendByte((u8)((v >> (u32)24) & (u32)255));
         d.appendByte((u8)((v >> (u32)16) & (u32)255));
@@ -216,7 +216,7 @@ class UXPngEncode
             }
         return c;
         }
-    static void chunk(UXData* d, u8* type, u8* body, i32 n)
+    static void chunk(Data* d, u8* type, u8* body, i32 n)
         {
         UXPngEncode.be32(d, (u32)n);
         d.appendBytes(type, (i32)4);
@@ -278,11 +278,11 @@ class UXPngEncode
         }
 
     // The image as a PNG file's bytes; null for an empty image.
-    static UXData* encode(UXImage* img)
+    static Data* encode(UXImage* img)
         {
         if (img == (UXImage*)0 || img.px == (u32*)0 || img.w <= (i32)0 || img.h <= (i32)0)
             {
-            return (UXData*)0;
+            return (Data*)0;
             }
         i32 w = img.w;
         i32 h = img.h;
@@ -338,12 +338,12 @@ class UXPngEncode
                 }
             dst[0] = (u8)bestF;
             }
-        UXData* z = UXPngEncode.zlib(filt, (stride + (i32)1) * h);
+        Data* z = UXPngEncode.zlib(filt, (stride + (i32)1) * h);
         free((pointer)raw);
         free((pointer)filt);
         free((pointer)tryBuf);
 
-        UXData* d = UXData.withCapacity(z.length() + (i32)64);
+        Data* d = Data.withCapacity(z.length() + (i32)64);
         u8 sig[8] = {137, 80, 78, 71, 13, 10, 26, 10};
         d.appendBytes(&sig[0], (i32)8);
         u8 ihdr[13];

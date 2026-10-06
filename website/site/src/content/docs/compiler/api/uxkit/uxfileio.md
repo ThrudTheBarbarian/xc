@@ -3,11 +3,11 @@ title: UXFileIO
 description: "Read a whole file, or write one atomically: what a document-based app needs to open and save, on every native target."
 ---
 
-`UXFileIO` reads a whole file into a [`UXData`](/compiler/api/uxkit/uxdata/)
+`UXFileIO` reads a whole file into a [`Data`](/compiler/api/data/)
 and writes one back:
 
 ```c
-UXData* bytes = UXFileIO.read(path);          // null if it cannot be read
+Data* bytes = UXFileIO.read(path);          // null if it cannot be read
 bool ok = UXFileIO.write(path, bytes);        // false if it did not happen
 ```
 
@@ -57,16 +57,16 @@ arrives too.
 ### read
 
 ```c
-static UXData* read(u8* path)
+static Data* read(u8* path)
 ```
 
 The whole file, or null if it does not exist or cannot be read. An empty
-file reads as an empty `UXData`, not as null.
+file reads as an empty `Data`, not as null.
 
 ### write
 
 ```c
-static bool write(u8* path, UXData* d)
+static bool write(u8* path, Data* d)
 ```
 
 Writes `d` to `path`, replacing it only if every byte made it to disk.
@@ -76,4 +76,3 @@ Writes `d` to `path`, replacing it only if every byte made it to disk.
 - [`UXSavePanel`](/compiler/api/uxkit/uxsavepanel/) and
   [`UXOpenPanel`](/compiler/api/uxkit/uxopenpanel/), for asking the user
   which file
-- [`UXData`](/compiler/api/uxkit/uxdata/)

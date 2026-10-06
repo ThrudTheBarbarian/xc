@@ -45,11 +45,11 @@ bool sameText(u8* a, u8* b)
     return a[i] == b[i];
     }
 // "dir/leaf", owned by the returned data
-UXData* joined(u8* dir, u8* leaf)
+Data* joined(u8* dir, u8* leaf)
     {
-    UXData* d = UXData.fromString(dir);
+    Data* d = UXStr.toData(dir);
     d.appendByte((u8)'/');
-    d.appendData(UXData.fromString(leaf));
+    d.append(UXStr.toData(leaf));
     d.appendByte((u8)0);
     return d;
     }
@@ -93,10 +93,10 @@ void main(void)
     // a scratch folder: one file, one subfolder
     u8* dir = (u8*)"/tmp/uxsavepanel_test";
     mkdir(dir, (u32)$1ED);
-    UXData* sub = joined(dir, (u8*)"sub");
+    Data* sub = joined(dir, (u8*)"sub");
     mkdir(sub.bytes(), (u32)$1ED);
-    UXData* existing = joined(dir, (u8*)"a.rsc");
-    UXFileIO.write(existing.bytes(), UXData.fromString((u8*)"old"));
+    Data* existing = joined(dir, (u8*)"a.rsc");
+    UXFileIO.write(existing.bytes(), UXStr.toData((u8*)"old"));
 
     TestSavePanel* p = new TestSavePanel();
     p.saveMode = true;

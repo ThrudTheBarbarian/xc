@@ -78,7 +78,7 @@ void ck(u8* what, bool ok)
         }
     }
 
-class Data : Object<UXTableDataSource, UXTableDelegate>
+class TableRows : Object<UXTableDataSource, UXTableDelegate>
     {
     i32 rows;
     i32 changes;
@@ -108,7 +108,7 @@ class Data : Object<UXTableDataSource, UXTableDelegate>
         }
     }
 
-Data* gData;
+TableRows* gData;
 UXTableView* gTable;
 i32 gWinH;
 i32 gNode;
@@ -154,7 +154,7 @@ void testBody(void)
     app.running = true;
     gApp = app;
     app.addWindow(win);
-    Data* data = new Data();
+    TableRows* data = new TableRows();
     gData = data; // the table holds its data source weakly: keep it alive past this function
     UXTableView* table = new UXTableView();
     content.addSubview(table, UXGeom.make((i16)0, (i16)20, (i16)sw, (i16)300));

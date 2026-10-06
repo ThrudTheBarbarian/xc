@@ -24,7 +24,7 @@
 #import "RKInspector.xc"
 #import "RKDrag.xc"
 #import "UXToolbar.xc"
-#import "UXData.xc"
+#import "Data.xc"
 #import "UXFileIO.xc"
 #import "UXOpenPanel.xc"
 #import "UXSavePanel.xc"
@@ -129,7 +129,7 @@ class RKMainController : Object<UXTableDelegate>
     i32 viewOrient;
     // Where the document lives on disk, or 0 for one never saved.  Owned (docPathStore holds the bytes).
     u8* docPath;
-    UXData* docPathStore;
+    Data* docPathStore;
 
     void init(void)
         {
@@ -138,7 +138,7 @@ class RKMainController : Object<UXTableDelegate>
         viewClass = (i32)UXR_V_DESKTOP;
         viewOrient = (i32)UXR_V_ORIENT_NONE;
         docPath = (u8*)0;
-        docPathStore = (UXData*)0;
+        docPathStore = (Data*)0;
         doc = (UXRscDoc*)0;
         shownTree = (i32)0;
         outlineModel = new RKOutline();
@@ -204,7 +204,7 @@ class RKMainController : Object<UXTableDelegate>
         pressCopy = (UXRscDoc*)0;
         pressSel = (i32)-1;
         dragging = false;
-        lastSaid = (UXData*)0;
+        lastSaid = (Data*)0;
         formOutline = (UXOutlineView*)0;
         canvas = (UXView*)0;
         inspector = (UXView*)0;
@@ -499,7 +499,7 @@ class RKMainController : Object<UXTableDelegate>
         UXRscForm* f = doc.formOf(t);
         UXRscVariant* v = f != (UXRscForm*)0 ? f.variantFor(t) : (UXRscVariant*)0;
         u8* what = v != (UXRscVariant*)0 ? RKIdentity.themeName(v.klass, v.orient) : (u8*)"every layout";
-        UXData* l = UXData.fromString(what);
+        Data* l = UXStr.toData(what);
         l.appendBytes((u8*)" · ", UXRscTree.len((u8*)" · "));
         u8* ws = RKIdentity.num(t.root.w);
         u8* hs = RKIdentity.num(t.root.h);
@@ -507,7 +507,7 @@ class RKMainController : Object<UXTableDelegate>
         l.appendBytes((u8*)" × ", UXRscTree.len((u8*)" × "));
         l.appendBytes(hs, UXRscTree.len(hs));
         l.appendByte((u8)0);
-        backdrop.showForm(t.root.w, t.root.h, l.bytes());
+        backdrop.showForm(t.root.w, t.root.h, UXStr.cstr(l));
         }
     // A device layout's panel starts the size of a typical one of its kind, not the desktop's.
     static void deviceSize(UXRscTree* t, i32 klass, i32 orient)
@@ -1124,8 +1124,8 @@ class RKMainController : Object<UXTableDelegate>
     // Read `path` and show it.  False (and says why) if it is unreadable or not a resource.
     bool openPath(u8* path)
         {
-        UXData* bytes = UXFileIO.read(path);
-        if (bytes == (UXData*)0)
+        Data* bytes = UXFileIO.read(path);
+        if (bytes == (Data*)0)
             {
             self.say((u8*)"That file cannot be read");
             return false;
@@ -1168,8 +1168,8 @@ class RKMainController : Object<UXTableDelegate>
             {
             return false;
             }
-        UXData* bytes = UXRscWriter.write(doc);
-        if (bytes == (UXData*)0 || !UXFileIO.write(path, bytes))
+        Data* bytes = UXRscWriter.write(doc);
+        if (bytes == (Data*)0 || !UXFileIO.write(path, bytes))
             {
             self.sayAbout((u8*)"Could not save ", RKMainController.baseName(path));
             return false;
@@ -1193,7 +1193,7 @@ class RKMainController : Object<UXTableDelegate>
             {
             return;
             }
-        UXData* d = UXData.fromString(path);
+        Data* d = UXStr.toData(path);
         d.appendByte((u8)0);
         docPathStore = d;
         docPath = d.bytes();
@@ -1474,11 +1474,11 @@ class RKMainController : Object<UXTableDelegate>
         }
     void sayAbout(u8* what, u8* name)
         {
-        UXData* d = UXData.fromString(what);
+        Data* d = UXStr.toData(what);
         d.appendBytes(name, UXRscTree.len(name));
         d.appendByte((u8)0);
         lastSaid = d;
-        self.say(d.bytes());
+        self.say(UXStr.cstr(d));
         }
 
     // The toolbar is one control: which item fired is its selection's tag.
@@ -1563,15 +1563,15 @@ class RKMainController : Object<UXTableDelegate>
         {
         u8* what = viewClass == (i32)UXR_V_PHONE ? (u8*)"phone" : (viewClass == (i32)UXR_V_TABLET ? (u8*)"tablet" : (u8*)"desktop");
         u8* how = viewOrient == (i32)UXR_V_ORIENT_PORTRAIT ? (u8*)" portrait" : (viewOrient == (i32)UXR_V_ORIENT_LANDSCAPE ? (u8*)" landscape" : (u8*)"");
-        UXData* d = UXData.fromString(prefix);
+        Data* d = UXStr.toData(prefix);
         d.appendBytes(what, UXRscTree.len(what));
         d.appendBytes(how, UXRscTree.len(how));
         d.appendBytes(suffix, UXRscTree.len(suffix));
         d.appendByte((u8)0);
         lastSaid = d;
-        self.say(d.bytes());
+        self.say(UXStr.cstr(d));
         }
-    UXData* lastSaid; // keeps the status text's bytes alive while the label shows them
+    Data* lastSaid; // keeps the status text's bytes alive while the label shows them
 
     // Show a resource's tree on the canvas as REAL widgets.  Takes a parsed
     // model rather than a path: file I/O is the platform layer's job, and

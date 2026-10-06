@@ -195,7 +195,7 @@ void main(void)
     checkTrue("the class is declared", mx != (RKClass*)0 && mx.origin == (i32)RKC_DECLARED);
     check("with an outlet and an action", (i32)mx.outlets.count() * (i32)10 + (i32)mx.actions.count(), (i32)11);
     checkTrue("of the type given", streq(((RKMember* ?)mx.outlets.get((u32)0)).type, (u8*)"UXSlider*"));
-    UXData* db = UXRscWriter.write(c.doc);
+    Data* db = UXRscWriter.write(c.doc);
     UXRscDoc* dr = UXRscReader.read(db.bytes(), db.length());
     RKClassBook* nb = new RKClassBook();
     nb.loadFrom(dr);

@@ -3,6 +3,7 @@
 // Building a label, a status line or an alert means concatenating and formatting, and
 // xtc's Stdio has no snprintf.  Every app would otherwise write this, so it lives here.
 #import "UXLibc.xc"
+#import "Data.xc"
 
 class UXStr
     {
@@ -46,6 +47,31 @@ class UXStr
     static u8* append(u8* a, u8* b)
         {
         return UXStr.cat(a, (u8)0, b);
+        }
+
+    // A Data's bytes as a C string of its own.  A Data frees its buffer when it goes, so a string
+    // built in one and kept (returned, stored in a field, shown in a label) must be copied out.
+    static u8* cstr(Data* d)
+        {
+        u32 n = d.length();
+        u8* s = new u8[n + (u32)1];
+        u8* b = d.bytes();
+        for (u32 i = (u32)0; i < n; i = i + (u32)1)
+            {
+            s[i] = b[i];
+            }
+        s[n] = (u8)0;
+        return s;
+        }
+    // A C string's bytes (not its terminator) as a Data.
+    static Data* toData(u8* s)
+        {
+        u32 n = (u32)0;
+        while (s[n] != (u8)0)
+            {
+            n = n + (u32)1;
+            }
+        return Data.withBytes(s, n);
         }
 
     // A private copy — for a string that came out of a shared scratch buffer and must outlive the

@@ -1335,7 +1335,7 @@ class UXPng
 
     // The only entry point an app needs.
     // The image as a PNG file's bytes (UXPngEncode): 8-bit RGB when it is opaque, RGBA otherwise.
-    static UXData* encode(UXImage* img)
+    static Data* encode(UXImage* img)
         {
         return UXPngEncode.encode(img);
         }

@@ -137,7 +137,7 @@ void main(void)
     checkTrue("and a name is every layout's", streq(okIn(c, (i32)1).name, (u8*)"okButton"));
 
     Stdio.printf("-- saved with the document\n");
-    UXData* b = UXRscWriter.write(c.doc);
+    Data* b = UXRscWriter.write(c.doc);
     UXRscDoc* back = UXRscReader.read(b.bytes(), b.length());
     RKVariants* vs = new RKVariants();
     vs.loadFrom(back);

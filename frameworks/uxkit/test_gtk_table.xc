@@ -30,7 +30,7 @@ void ck(u8* what, bool ok)
         }
     }
 
-class Data : Object<UXTableDataSource, UXTableDelegate>
+class TableRows : Object<UXTableDataSource, UXTableDelegate>
     {
     i32 rows;
     i32 changes;
@@ -91,7 +91,7 @@ void main(void)
     UXWindow* win = new UXWindow();
     win.open((u8*)"table", UXGeom.make((i16)0, (i16)0, (i16)320, (i16)200), content);
     app.addWindow(win);
-    Data* data = new Data();
+    TableRows* data = new TableRows();
     UXTableView* table = new UXTableView();
     content.addSubview(table, UXGeom.make((i16)10, (i16)10, (i16)300, (i16)180));
     table.addColumn((u8*)"Name", (i16)180);

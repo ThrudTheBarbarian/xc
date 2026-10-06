@@ -146,7 +146,7 @@ class RKConnectionsPane : Object
         u8* cls = RKWiring.classOf(d, t, e);
         if (book != (RKClassBook*)0 && cls[0] != (u8)0)
             {
-            UXData* idle = UXData.withCapacity((i32)64);
+            Data* idle = Data.withCapacity((u32)((i32)64));
             Array<RKMember>* os = book.outletsOf(cls);
             Array<RKMember>* as = book.actionsOf(cls);
             for (u32 i = (u32)0; i < os.count(); i = i + (u32)1)
@@ -379,7 +379,7 @@ class RKConnectionsPane : Object
         {
         return RKConnectionsPane.joined3(a, (u8*)"", b);
         }
-    static void listAdd(UXData* d, u8* w)
+    static void listAdd(Data* d, u8* w)
         {
         if (d.length() > (i32)0)
             {
@@ -389,10 +389,10 @@ class RKConnectionsPane : Object
         }
     static u8* joined3(u8* a, u8* b, u8* c)
         {
-        UXData* d = UXData.fromString(a);
+        Data* d = UXStr.toData(a);
         d.appendBytes(b, UXRscTree.len(b));
         d.appendBytes(c, UXRscTree.len(c));
         d.appendByte((u8)0);
-        return d.bytes();
+        return UXStr.cstr(d);
         }
     }

@@ -35,7 +35,7 @@ i32 b(bool v)
     return v ? (i32)1 : (i32)0;
     }
 
-class Data : Object<UXTableDataSource>
+class TableRows : Object<UXTableDataSource>
     {
     void init(void)
         {
@@ -62,7 +62,7 @@ class Data : Object<UXTableDataSource>
         win.open((u8*)"t", UXGeom.make((i16)40, (i16)40, (i16)220, (i16)140), content);
         app.addWindow(win);
 
-        Data* data = new Data();
+        TableRows* data = new TableRows();
         table = new UXTableView();
         content.addSubview(table, UXGeom.make((i16)8, (i16)8, (i16)200, (i16)120));
         table.setAllowsMultipleSelection(true);

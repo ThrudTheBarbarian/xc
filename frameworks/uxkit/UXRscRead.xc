@@ -10,7 +10,8 @@
 // warning(), so a file that came in carrying more than we understood says so
 // rather than quietly dropping it on the way back out.
 #import "Array.xc"
-#import "UXData.xc"
+#import "Data.xc"
+#import "UXString.xc"
 #import "UXRscModel.xc"
 
 #define UXR_SZ_HDR 36 // 18 words
@@ -275,7 +276,7 @@ class UXRscReader : Object
             for (i32 i = (i32)0; i < nstr; i = i + (i32)1)
                 {
                 i32 off = self.rd32(frstr + i * (i32)4);
-                res.freeStrings.add(UXData.fromString(self.cstrAt(off)));
+                res.freeStrings.add(UXStr.toData(self.cstrAt(off)));
                 }
             }
         // Free images are a table of BITBLKs; not preserved in this slice, but
@@ -484,7 +485,7 @@ class UXRscReader : Object
                 {
                 UXRscExtSection* x = new UXRscExtSection();
                 x.tag = (u32)self.rd32(q);
-                x.body = UXData.fromBytes(&buf[q + (i32)8], size);
+                x.body = Data.withBytes(&buf[q + (i32)8], (u32)(size));
                 res.extSections.add(x);
                 }
             q = q + (i32)8 + ((size + (i32)1) & (i32)-2);

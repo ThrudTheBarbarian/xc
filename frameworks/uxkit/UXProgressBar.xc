@@ -2,7 +2,7 @@
 //
 // Reads an UXProgress and fills the track to its fraction; indeterminate progress (zero total) draws a
 // moving pip instead.  The fill-width arithmetic is pure and unit-testable; drawing rides the UXControl
-// seam.  Pairs a progress model straight to the screen — a long UXOperationQueue reports through this.
+// seam.  Pairs a progress model straight to the screen.
 #import "UXView.xc"
 #import "UXControl.xc"
 #import "UXGraphics.xc"

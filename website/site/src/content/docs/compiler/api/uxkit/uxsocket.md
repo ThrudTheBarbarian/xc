@@ -76,10 +76,10 @@ closed.
 ### writeData
 
 ```c
-bool writeData(UXData* d)
+bool writeData(Data* d)
 ```
 
-`write` of a [`UXData`](/compiler/api/uxkit/uxdata/)'s bytes.
+`write` of a [`Data`](/compiler/api/data/)'s bytes.
 
 ### read
 

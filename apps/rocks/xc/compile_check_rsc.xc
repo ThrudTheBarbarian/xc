@@ -16,8 +16,8 @@ void main(void)
         {
         return;
         }
-    UXData* out = UXRscWriter.write(r);
-    if (out == (UXData*)0 || out.length() < (i32)36)
+    Data* out = UXRscWriter.write(r);
+    if (out == (Data*)0 || out.length() < (i32)36)
         {
         return;
         }

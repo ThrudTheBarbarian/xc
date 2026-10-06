@@ -16,9 +16,9 @@ void ck(u8* what, bool ok)
         gFails = gFails + (i32)1;
         }
     }
-bool same(UXData* a, UXData* b)
+bool same(Data* a, Data* b)
     {
-    if (a == (UXData*)0 || b == (UXData*)0 || a.length() != b.length())
+    if (a == (Data*)0 || b == (Data*)0 || a.length() != b.length())
         {
         return false;
         }
@@ -36,7 +36,7 @@ void main(void)
     {
     gFails = (i32)0;
     // 10000 bytes: more than one 4096-byte read, with every byte value in it (NULs included)
-    UXData* one = UXData.withCapacity((i32)10000);
+    Data* one = Data.withCapacity((u32)((i32)10000));
     for (i32 i = (i32)0; i < (i32)10000; i = i + (i32)1)
         {
         one.appendByte((u8)((i * (i32)7 + (i32)3) & (i32)$FF));
@@ -55,18 +55,18 @@ void main(void)
         }
     Stdio.printf("  (at %s)\n", path);
     ck((u8*)"...and read back, byte for byte", same(UXFileIO.read(path), one));
-    UXData* two = UXData.fromString((u8*)"shorter");
+    Data* two = UXStr.toData((u8*)"shorter");
     ck((u8*)"a second save replaces it", UXFileIO.write(path, two));
     ck((u8*)"...entirely: the old tail is gone", same(UXFileIO.read(path), two));
-    UXData* tn = UXData.fromString(path);
+    Data* tn = UXStr.toData(path);
     tn.appendBytes((u8*)".uxtmp", (i32)6);
     tn.appendByte((u8)0);
-    ck((u8*)"...and leaves no temporary behind", UXFileIO.read(tn.bytes()) == (UXData*)0);
-    UXData* empty = UXData.withCapacity((i32)1);
+    ck((u8*)"...and leaves no temporary behind", UXFileIO.read(tn.bytes()) == (Data*)0);
+    Data* empty = Data.withCapacity((u32)((i32)1));
     ck((u8*)"an empty file saves", UXFileIO.write(path, empty));
-    UXData* back = UXFileIO.read(path);
-    ck((u8*)"...and reads back empty, not missing", back != (UXData*)0 && back.length() == (i32)0);
-    ck((u8*)"a missing file reads as null", UXFileIO.read((u8*)"no_such_dir_uxfileio/none.bin") == (UXData*)0);
+    Data* back = UXFileIO.read(path);
+    ck((u8*)"...and reads back empty, not missing", back != (Data*)0 && back.length() == (i32)0);
+    ck((u8*)"a missing file reads as null", UXFileIO.read((u8*)"no_such_dir_uxfileio/none.bin") == (Data*)0);
     ck((u8*)"saving into a missing folder fails", !UXFileIO.write((u8*)"no_such_dir_uxfileio/x.bin", one));
 #if ARCH_wasm32
 #else

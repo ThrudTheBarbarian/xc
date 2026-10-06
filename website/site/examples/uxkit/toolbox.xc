@@ -1,10 +1,11 @@
-// toolbox.xc — UXAnimation, UXData, UXLog and UXMarkdown.
+// toolbox.xc — UXAnimation, Data, UXLog and UXMarkdown.
 //
 // Four small facilities, all testable with no window: the animation is given
 // its time, the logger writes where you tell it, and the rest is pure data.
 #import <Stdio.xc>
+#import "UXString.xc"
 #import "UXAnimation.xc"
-#import "UXData.xc"
+#import "Data.xc"
 #import "UXLog.xc"
 #import "UXMarkdown.xc"
 
@@ -49,25 +50,25 @@ void main(void) {
     // ---- data --------------------------------------------------------------
     // Bytes are appended one at a time here rather than written as a "\xNN"
     // literal, which reads better and carries arbitrary values exactly.
-    UXData* d = UXData.fromString((u8*)"GEM");
+    Data* d = UXStr.toData((u8*)"GEM");
     d.appendByte((u8)0);
     d.appendByte((u8)1);
     d.appendByte((u8)2);
     d.appendByte((u8)255);
-    Stdio.printf("\ndata: len=%d hex=%s\n", d.length(), d.toHex());
+    Stdio.printf("\ndata: len=%d hex=%s\n", d.length(), d.hexString().cString());
 
-    UXData* slice = d.subdata((i32)0, (i32)3);
-    Stdio.printf("slice(0,3): len=%d hex=%s\n", slice.length(), slice.toHex());
+    Data* slice = d.subdata((i32)0, (i32)3);
+    Stdio.printf("slice(0,3): len=%d hex=%s\n", slice.length(), slice.hexString().cString());
 
-    UXData* same = UXData.fromString((u8*)"GEM");
+    Data* same = UXStr.toData((u8*)"GEM");
     Stdio.printf("equal=%d  differs from whole=%d\n",
-                 slice.isEqualTo(same) ? 1 : 0, slice.isEqualTo(d) ? 1 : 0);
+                 slice.equals(same) ? 1 : 0, slice.equals(d) ? 1 : 0);
 
     // Appending one buffer to another, and an out-of-range slice.
-    UXData* joined = UXData.fromString((u8*)"ab");
-    joined.appendData(UXData.fromString((u8*)"cd"));
+    Data* joined = UXStr.toData((u8*)"ab");
+    joined.append(UXStr.toData((u8*)"cd"));
     Stdio.printf("joined hex=%s   over-long slice len=%d\n",
-                 joined.toHex(), d.subdata((i32)2, (i32)999).length());
+                 joined.hexString().cString(), d.subdata((i32)2, (i32)999).length());
 
     // ---- logging -----------------------------------------------------------
     Stdio.printf("\nlog:\n");

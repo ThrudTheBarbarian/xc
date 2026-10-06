@@ -17,7 +17,7 @@
 // A reflected class wins over a declared one of the same name: once the code exists, the code is
 // the truth, and a declaration left behind is shown as such.
 #import "Array.xc"
-#import "UXData.xc"
+#import "Data.xc"
 #import "UXJSON.xc"
 #import "UXFileIO.xc"
 #import "UXRscModel.xc"
@@ -76,7 +76,7 @@ class RKSourceScan : Object
     u8* src;
     i32 len;
     i32 pos;
-    Array<UXData>* toks; // the current statement's tokens
+    Array<Data>* toks; // the current statement's tokens
 
     static Array<RKClass>* classesIn(u8* text, i32 n, u8* path)
         {
@@ -163,7 +163,7 @@ class RKSourceScan : Object
                 }
             if (cur != (RKClass*)0 && depth == bodyDepth)
                 {
-                toks.add(UXData.fromString(t));
+                toks.add(UXStr.toData(t));
                 }
             }
         return out;
@@ -201,13 +201,13 @@ class RKSourceScan : Object
                 return;
                 }
             // the sender's type: the parameter's tokens but its name
-            UXData* ty = UXData.withCapacity((i32)32);
+            Data* ty = Data.withCapacity((u32)((i32)32));
             for (i32 i = open + (i32)1; i < close - (i32)1; i = i + (i32)1)
                 {
                 ty.appendBytes(self.tok(i), RKClassBook.slen(self.tok(i)));
                 }
             ty.appendByte((u8)0);
-            c.actions.add(RKMember.make(self.tok(open - (i32)1), ty.bytes()));
+            c.actions.add(RKMember.make(self.tok(open - (i32)1), UXStr.cstr(ty)));
             return;
             }
         bool isOutlet = false;
@@ -227,7 +227,7 @@ class RKSourceScan : Object
             return;
             }
         // [qualifiers] Type * name -- the qualifiers, and their optional colons, are not the type
-        UXData* ty = UXData.withCapacity((i32)32);
+        Data* ty = Data.withCapacity((u32)((i32)32));
         for (i32 i = (i32)0; i < n - (i32)1; i = i + (i32)1)
             {
             u8* t = self.tok(i);
@@ -239,11 +239,11 @@ class RKSourceScan : Object
             ty.appendBytes(t, RKClassBook.slen(t));
             }
         ty.appendByte((u8)0);
-        c.outlets.add(RKMember.make(self.tok(n - (i32)1), ty.bytes()));
+        c.outlets.add(RKMember.make(self.tok(n - (i32)1), UXStr.cstr(ty)));
         }
     u8* tok(i32 i)
         {
-        return ((UXData* ?)toks.get((u32)i)).bytes();
+        return UXStr.cstr((Data* ?)toks.get((u32)i));
         }
     static bool is(u8* a, u8* b)
         {
@@ -588,8 +588,8 @@ class RKClassBook : Object
     // file is not a library with one.
     i32 loadLibrary(u8* path)
         {
-        UXData* d = UXFileIO.read(path);
-        if (d == (UXData*)0)
+        Data* d = UXFileIO.read(path);
+        if (d == (Data*)0)
             {
             return (i32)-1;
             }
@@ -664,8 +664,8 @@ class RKClassBook : Object
     // Parse one .xc file; returns how many classes it defines.
     i32 loadSource(u8* path)
         {
-        UXData* d = UXFileIO.read(path);
-        if (d == (UXData*)0)
+        Data* d = UXFileIO.read(path);
+        if (d == (Data*)0)
             {
             return (i32)-1;
             }
@@ -712,7 +712,7 @@ class RKClassBook : Object
             bool isDir = buf[at] == (u8)'d';
             if (end > nameAt && buf[nameAt] != (u8)'.')
                 {
-                UXData* p = UXData.fromString(dir);
+                Data* p = UXStr.toData(dir);
                 p.appendByte((u8)'/');
                 p.appendBytes(&buf[nameAt], end - nameAt);
                 p.appendByte((u8)0);
@@ -804,7 +804,7 @@ class RKClassBook : Object
                 i = i + (u32)1;
                 }
             }
-        UXData* b = UXData.withCapacity((i32)128);
+        Data* b = Data.withCapacity((u32)((i32)128));
         i32 n = (i32)0;
         RKClassBook.be16(b, (i32)0);
         for (u32 k = (u32)0; k < classes.count(); k = k + (u32)1)
@@ -868,12 +868,12 @@ class RKClassBook : Object
                 }
             }
         }
-    static void be16(UXData* d, i32 v)
+    static void be16(Data* d, i32 v)
         {
         d.appendByte((u8)((v >> (i32)8) & (i32)$FF));
         d.appendByte((u8)(v & (i32)$FF));
         }
-    static void str(UXData* d, u8* s)
+    static void str(Data* d, u8* s)
         {
         i32 n = s != (u8*)0 ? RKClassBook.slen(s) : (i32)0;
         RKClassBook.be16(d, n);
@@ -882,7 +882,7 @@ class RKClassBook : Object
             d.appendBytes(s, n);
             }
         }
-    static void members(UXData* d, Array<RKMember>* ms)
+    static void members(Data* d, Array<RKMember>* ms)
         {
         RKClassBook.be16(d, (i32)ms.count());
         for (u32 i = (u32)0; i < ms.count(); i = i + (u32)1)

@@ -44,7 +44,7 @@ void check(u8* what, i32 got, i32 want)
 u8* gNames[NROWS];
 u8* gKinds[NROWS];
 
-class Data : Object<UXTableDataSource, UXTableDelegate>
+class TableRows : Object<UXTableDataSource, UXTableDelegate>
     {
     i32 changes;
     i32 lastRow;
@@ -79,7 +79,7 @@ class Data : Object<UXTableDataSource, UXTableDelegate>
     {
     UXWindow* win;
     UXTableView* table;
-    Data* data;
+    TableRows* data;
     void init(void)
         {
         }
@@ -93,7 +93,7 @@ class Data : Object<UXTableDataSource, UXTableDelegate>
             gKinds[i] = "folder";
             }
 
-        data = new Data();
+        data = new TableRows();
         table = new UXTableView();
         win = new UXWindow();
         a.addWindow(win);

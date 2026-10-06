@@ -7,7 +7,8 @@
 #import "UXPng.xc"
 #import "UXPngEncode.xc"
 #import "UXImage.xc"
-#import "UXData.xc"
+#import "Data.xc"
+#import "UXString.xc"
 #import "UXFileIO.xc"
 #if !ARCH_wasm32
 u8* getenv(u8* name);
@@ -84,22 +85,22 @@ bool same(UXImage* a, UXImage* b)
 void one(u8* name, i32 kind, i32 w, i32 h)
     {
     UXImage* im = pic(kind, w, h);
-    UXData* png = UXPngEncode.encode(im);
-    UXImage* back = png != (UXData*)0 ? UXPng.decode(png.bytes(), png.length()) : (UXImage*)0;
-    i32 ct = png != (UXData*)0 && png.length() > (i32)25 ? (i32)png.bytes()[25] : (i32)-1;
-    Stdio.printf("  (%s %dx%d: %d bytes from %d, colour type %d)\n", name, w, h, png != (UXData*)0 ? png.length() : (i32)0, w * h * (i32)4, ct);
+    Data* png = UXPngEncode.encode(im);
+    UXImage* back = png != (Data*)0 ? UXPng.decode(png.bytes(), png.length()) : (UXImage*)0;
+    i32 ct = png != (Data*)0 && png.length() > (i32)25 ? (i32)png.bytes()[25] : (i32)-1;
+    Stdio.printf("  (%s %dx%d: %d bytes from %d, colour type %d)\n", name, w, h, png != (Data*)0 ? png.length() : (i32)0, w * h * (i32)4, ct);
     ck(name, same(im, back));
 #if !ARCH_wasm32
     u8* dir = getenv((u8*)"PNG_ENCODE_DIR");
 #else
     u8* dir = (u8*)0; // no environment on wasm32
 #endif
-    if (dir != (u8*)0 && png != (UXData*)0)
+    if (dir != (u8*)0 && png != (Data*)0)
         {
-        UXData* path = UXData.fromString(dir);
+        Data* path = UXStr.toData(dir);
         path.appendByte((u8)47);
-        path.appendData(UXData.fromString(name));
-        path.appendData(UXData.fromString((u8*)".png"));
+        path.append(UXStr.toData(name));
+        path.append(UXStr.toData((u8*)".png"));
         path.appendByte((u8)0);
         UXFileIO.write(path.bytes(), png);
         }
@@ -114,11 +115,11 @@ void main(void)
     one((u8*)"alpha", (i32)3, (i32)120, (i32)80);
     one((u8*)"tiny", (i32)2, (i32)1, (i32)1);
     one((u8*)"odd", (i32)3, (i32)37, (i32)13);
-    UXData* op = UXPng.encode(pic((i32)1, (i32)64, (i32)64));
-    UXData* tr = UXPngEncode.encode(pic((i32)3, (i32)64, (i32)64));
+    Data* op = UXPng.encode(pic((i32)1, (i32)64, (i32)64));
+    Data* tr = UXPngEncode.encode(pic((i32)3, (i32)64, (i32)64));
     ck((u8*)"an opaque picture is written as RGB, a translucent one as RGBA", op.bytes()[25] == (u8)2 && tr.bytes()[25] == (u8)6);
-    UXData* flat = UXPngEncode.encode(pic((i32)1, (i32)640, (i32)400));
+    Data* flat = UXPngEncode.encode(pic((i32)1, (i32)640, (i32)400));
     ck((u8*)"a flat window picture compresses to under 1% of its pixels", flat.length() * (i32)100 < (i32)640 * (i32)400 * (i32)4);
-    ck((u8*)"an empty image gives no file", UXPngEncode.encode((UXImage*)0) == (UXData*)0);
+    ck((u8*)"an empty image gives no file", UXPngEncode.encode((UXImage*)0) == (Data*)0);
     Stdio.printf(gFails == (i32)0 ? "PASS: UXPngEncode -- pixels back exactly, RGB or RGBA, compressed\n" : "FAIL: %d\n", gFails);
     }
