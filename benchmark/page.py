@@ -18,6 +18,9 @@ import os
 ROOT = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(ROOT)
 PAGE = os.path.join(REPO, "website", "site", "src", "content", "docs", "compiler", "performance.md")
+SOURCES_PAGE = os.path.join(REPO, "website", "site", "src", "content", "docs", "compiler", "benchmark-sources.mdx")
+SOURCES_URL = "/compiler/benchmark-sources/"
+SRC_FILES = (("xc", "xc", "c"), ("m", "Objective-C", "objc"), ("cpp", "C++", "cpp"), ("swift", "Swift", "swift"))
 
 LANGS = (("objc", "Objective-C", "#d4a017"), ("cpp", "C++", "#3b82f6"), ("swift", "Swift", "#e5534b"))
 PLATFORMS = (("arm64", ""), ("x86-64", "_x86_64"))
@@ -99,8 +102,9 @@ def ratio_chart(cur, suffix, title, order=None):
              % (right, top + rowh * len(rows) + 28))
     for i, (_, b, rs) in enumerate(rows):
         y = top + i * rowh + rowh / 2
-        o.append('<text x="%d" y="%.1f" text-anchor="end" fill="currentColor" '
-                 'style="font-family:ui-monospace,monospace">%s</text>' % (left - 8, y + 4, esc(b)))
+        o.append('<a href="%s#%s"><text x="%d" y="%.1f" text-anchor="end" fill="currentColor" '
+                 'style="font-family:ui-monospace,monospace;text-decoration:underline;text-decoration-thickness:1px">%s'
+                 '<title>%s: the four programs</title></text></a>' % (SOURCES_URL, b, left - 8, y + 4, esc(b), esc(b)))
         if rs:
             xs = [px(r) for r in rs.values()]
             o.append('<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="currentColor" stroke-opacity="0.3"/>'
@@ -220,7 +224,7 @@ def table(cur, suffix):
     out = ["| benchmark | xc | Objective-C | C++ | Swift | xc ÷ fastest |", "|---|---|---|---|---|---|"]
     for r, b, d in rows:
         cells = ["%.2f" % d[k + suffix] if d.get(k + suffix) else "–" for k in ("xc", "objc", "cpp", "swift")]
-        out.append("| `%s` | %s | **%.2f** |" % (b, " | ".join(cells), r))
+        out.append("| [`%s`](%s#%s) | %s | **%.2f** |" % (b, SOURCES_URL, b, " | ".join(cells), r))
     return "\n".join(out)
 
 
@@ -316,6 +320,36 @@ def par_tables(version):
     return "\n".join(out)
 
 
+def sources_page(names):
+    """Every benchmark's four programs, one section each, the languages in
+    tabs that stay in step (choosing xc once shows xc everywhere)."""
+    o = [SOURCES_HEAD]
+    for b in sorted(names):
+        texts = {}
+        for ext, name, lang in SRC_FILES:
+            path = os.path.join(ROOT, "src", "%s.%s" % (b, ext))
+            if os.path.exists(path):
+                with open(path) as fh:
+                    texts[ext] = fh.read().rstrip("\n")
+        if "xc" not in texts:
+            continue
+        first = texts["xc"].split("\n", 1)[0]
+        what = first.split(" — ", 1)[1] if " — " in first else ""
+        o.append("## %s\n" % b)
+        if what:
+            o.append(what[0].upper() + what[1:] + "\n")
+        counts = ", ".join("%s %d" % (name, texts[ext].count("\n") + 1) for ext, name, _ in SRC_FILES if ext in texts)
+        o.append("Lines: %s.\n" % counts)
+        o.append('<Tabs syncKey="bench-lang">')
+        for ext, name, lang in SRC_FILES:
+            if ext in texts:
+                o.append('<TabItem label="%s">\n\n```%s\n%s\n```\n\n</TabItem>' % (name, lang, texts[ext]))
+        o.append("</Tabs>\n")
+    with open(SOURCES_PAGE, "w") as fh:
+        fh.write("\n".join(o) + "\n")
+    print("wrote", os.path.relpath(SOURCES_PAGE, REPO))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--current", default="v0.71")
@@ -349,6 +383,29 @@ def main():
     with open(PAGE, "w") as fh:
         fh.write(page)
     print("wrote", os.path.relpath(PAGE, REPO))
+    sources_page(cur.keys())
+
+
+SOURCES_HEAD = """---
+title: Benchmark sources
+description: Every program the performance page measures, in xc, Objective-C, C++ and Swift, side by side.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+These are the programs behind the [performance](/compiler/performance/) figures,
+each written four times with the same algorithm and the same data. Choose a
+language on any of them and every one switches to it.
+
+The xc versions are plain loops over arrays and objects. None of them asks for
+vector instructions, threads, a matrix unit or anything else by name: where
+`matrix_mul_f32` runs on Apple's SME matrix unit, or `array_map` on AVX-512,
+it is because xcc saw the loop and chose to.
+
+Each program times its own work with `bench_now_us()` (the monotonic clock) and
+prints a checksum, which must agree across the four languages for a run to
+count.
+"""
 
 
 PAGE_TEMPLATE = """---
@@ -360,7 +417,9 @@ The compiler is measured on twenty programs, each written four times: in the
 xc language, in Objective-C with ARC, in C++ and in Swift, doing the same work
 with the same algorithm and the same data. All are built with optimisation
 (`-O3` for xc, Objective-C and C++, `-O` for Swift), every version prints a
-checksum, and a run only counts if all four checksums agree.
+checksum, and a run only counts if all four checksums agree. Every program, in
+all four languages, is on the [benchmark sources](/compiler/benchmark-sources/)
+page; each benchmark's name below links to its own.
 
 Each figure is measured with the released {release} `xcc`, on an Apple-silicon
 Mac (arm64) and a Zen 5 Linux machine (x86-64). Times are seconds for the timed

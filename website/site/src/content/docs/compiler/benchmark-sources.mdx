@@ -1,0 +1,2704 @@
+---
+title: Benchmark sources
+description: Every program the performance page measures, in xc, Objective-C, C++ and Swift, side by side.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+These are the programs behind the [performance](/compiler/performance/) figures,
+each written four times with the same algorithm and the same data. Choose a
+language on any of them and every one switches to it.
+
+The xc versions are plain loops over arrays and objects. None of them asks for
+vector instructions, threads, a matrix unit or anything else by name: where
+`matrix_mul_f32` runs on Apple's SME matrix unit, or `array_map` on AVX-512,
+it is because xcc saw the loop and chose to.
+
+Each program times its own work with `bench_now_us()` (the monotonic clock) and
+prints a checksum, which must agree across the four languages for a run to
+count.
+
+## arc_alloc
+
+Allocate an object per iteration and let ARC free it.
+
+Lines: xc 31, Objective-C 35, C++ 34, Swift 24.
+
+<Tabs syncKey="bench-lang">
+<TabItem label="xc">
+
+```c
+// arc_alloc — allocate an object per iteration and let ARC free it.
+// Exercises: heap allocation, retain/release traffic, method dispatch.
+// Each object outlives its iteration (it is kept until the next one replaces
+// it), so no compiler can put it on the stack or fold the loop away, and the
+// result is folded in with ^ so the sum has no closed form.
+#import "Stdio.xc"
+#import "include/bench_time.xc"
+
+class Node
+    {
+    u32 v;
+    void init(u32 x) { v = x; }
+    u32 get(void)    { return v; }
+    }
+
+i32 main(i32 argc, u8** argv)
+    {
+    u32 seed = (u32)argc;
+    u32 acc  = (u32)0;
+    Node* keep = new Node(seed);
+    i64 t0 = bench_now_us();
+    for (u32 r = (u32)0; r < (u32)80000000; r++)
+        {
+        Node* n = new Node(r + seed);
+        acc = (acc ^ n.get()) + keep.get();
+        keep = n;
+        }
+    i64 t1 = bench_now_us();
+    Stdio.printf("%lu %lld\n", acc, t1 - t0);
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="Objective-C">
+
+```objc
+// arc_alloc — allocate an object per iteration and let ARC free it.
+// See arc_alloc.xc. Same object shape, same count, same accumulation.
+#import <Foundation/Foundation.h>
+#include <stdio.h>
+#include "include/bench_time.h"
+#include <stdint.h>
+
+@interface Node : NSObject
+@property (nonatomic) uint32_t v;
+- (instancetype)initWithV:(uint32_t)x;
+@end
+
+@implementation Node
+- (instancetype)initWithV:(uint32_t)x { if ((self = [super init])) _v = x; return self; }
+- (uint32_t)get { return _v; }
+@end
+
+int main(int argc, char **argv)
+    {
+    @autoreleasepool {
+        uint32_t seed = (uint32_t)argc;
+        uint32_t acc  = 0;
+        Node *keep = [[Node alloc] initWithV:seed];
+        int64_t t0 = bench_now_us();
+        for (uint32_t r = 0; r < 80000000; r++)
+            {
+            Node *n = [[Node alloc] initWithV:r + seed];
+            acc = (acc ^ [n get]) + [keep get];
+            keep = n;
+            }
+        int64_t t1 = bench_now_us();
+        printf("%u %lld\n", acc, (long long)(t1 - t0));
+    }
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="C++">
+
+```cpp
+// arc_alloc — allocate an object per iteration and let ARC free it.
+// See arc_alloc.xc. Same object shape, same count, same accumulation.
+// Each object is a std::shared_ptr from std::make_shared, so the C++ version
+// also pays for a heap allocation and reference counting per iteration.
+#include <cstdio>
+#include <cstdint>
+#include <memory>
+#include "include/bench_time.h"
+
+class Node
+    {
+public:
+    explicit Node(uint32_t x) : v_(x) {}
+    uint32_t get() const { return v_; }
+private:
+    uint32_t v_;
+    };
+
+int main(int argc, char **argv)
+    {
+    const uint32_t seed = static_cast<uint32_t>(argc);
+    uint32_t acc = 0;
+    std::shared_ptr<Node> keep = std::make_shared<Node>(seed);
+    int64_t t0 = bench_now_us();
+    for (uint32_t r = 0; r < 80000000u; r++)
+        {
+        std::shared_ptr<Node> n = std::make_shared<Node>(r + seed);
+        acc = (acc ^ n->get()) + keep->get();
+        keep = n;
+        }
+    int64_t t1 = bench_now_us();
+    std::printf("%u %lld\n", acc, static_cast<long long>(t1 - t0));
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="Swift">
+
+```swift
+// arc_alloc — allocate an object per iteration and let ARC free it. See arc_alloc.xc.
+
+final class Node {
+    let v: UInt32
+    init(_ x: UInt32) { v = x }
+    func get() -> UInt32 { v }
+}
+
+@main
+struct ArcAlloc {
+    static func main() {
+        let seed = UInt32(CommandLine.arguments.count)
+        var acc: UInt32 = 0
+        var keep = Node(seed)
+        let t0 = bench_now_us()
+        for r in 0..<UInt32(80_000_000) {
+            let n = Node(r &+ seed)
+            acc = (acc ^ n.get()) &+ keep.get()
+            keep = n
+        }
+        let t1 = bench_now_us()
+        print("\(acc) \(t1 - t0)")
+    }
+}
+```
+
+</TabItem>
+</Tabs>
+
+## arc_array
+
+Hold objects in an array and walk them.
+
+Lines: xc 21, Objective-C 31, C++ 34, Swift 25.
+
+<Tabs syncKey="bench-lang">
+<TabItem label="xc">
+
+```c
+// arc_array — hold objects in an array and walk them.
+// Exercises: retain/release on stored references, field access through a pointer.
+#import "Stdio.xc"
+#import "include/bench_time.xc"
+#define N 1024
+
+class Cell { u32 v; void init(u32 x) { v = x; } u32 get(void) { return v; } }
+
+i32 main(i32 argc, u8** argv)
+    {
+    u32 seed = (u32)argc;
+    Cell* cells[N];
+    for (u32 i = (u32)0; i < (u32)N; i++) cells[i] = new Cell(i + seed);
+    u32 acc = (u32)0;
+    i64 t0 = bench_now_us();
+    for (u32 r = (u32)0; r < (u32)3000000; r++)
+        for (u32 i = (u32)0; i < (u32)N; i++) acc = acc + cells[i].get();
+    i64 t1 = bench_now_us();
+    Stdio.printf("%lu %lld\n", acc, t1 - t0);
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="Objective-C">
+
+```objc
+// arc_array — hold objects in an array and walk them. See arc_array.xc.
+#import <Foundation/Foundation.h>
+#include <stdio.h>
+#include "include/bench_time.h"
+#include <stdint.h>
+#define N 1024
+
+@interface Cell : NSObject
+- (instancetype)initWithV:(uint32_t)x;
+- (uint32_t)get;
+@end
+@implementation Cell { uint32_t _vv; }
+- (instancetype)initWithV:(uint32_t)x { if ((self = [super init])) _vv = x; return self; }
+- (uint32_t)get { return _vv; }
+@end
+
+int main(int argc, char **argv)
+    {
+    @autoreleasepool {
+        uint32_t seed = (uint32_t)argc;
+        Cell * __strong cells[N];
+        for (uint32_t i = 0; i < N; i++) cells[i] = [[Cell alloc] initWithV:i + seed];
+        uint32_t acc = 0;
+        int64_t t0 = bench_now_us();
+        for (uint32_t r = 0; r < 3000000; r++)
+            for (uint32_t i = 0; i < N; i++) acc = acc + [cells[i] get];
+        int64_t t1 = bench_now_us();
+        printf("%u %lld\n", acc, (long long)(t1 - t0));
+    }
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="C++">
+
+```cpp
+// arc_array — hold objects in an array and walk them. See arc_array.xc.
+// The objects are held as std::shared_ptr in a std::vector, so storing them
+// pays for reference counting as the ARC version does.
+#include <cstdio>
+#include <cstdint>
+#include <memory>
+#include <vector>
+#include "include/bench_time.h"
+
+constexpr uint32_t N = 1024;
+
+class Cell
+    {
+public:
+    explicit Cell(uint32_t x) : v_(x) {}
+    uint32_t get() const { return v_; }
+private:
+    uint32_t v_;
+    };
+
+int main(int argc, char **argv)
+    {
+    const uint32_t seed = static_cast<uint32_t>(argc);
+    std::vector<std::shared_ptr<Cell>> cells;
+    cells.reserve(N);
+    for (uint32_t i = 0; i < N; i++) cells.push_back(std::make_shared<Cell>(i + seed));
+    uint32_t acc = 0;
+    int64_t t0 = bench_now_us();
+    for (uint32_t r = 0; r < 3000000u; r++)
+        for (const auto &cell : cells) acc = acc + cell->get();
+    int64_t t1 = bench_now_us();
+    std::printf("%u %lld\n", acc, static_cast<long long>(t1 - t0));
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="Swift">
+
+```swift
+// arc_array — hold objects in an array and walk them. See arc_array.xc.
+
+final class Cell {
+    let v: UInt32
+    init(_ x: UInt32) { v = x }
+    func get() -> UInt32 { v }
+}
+
+@main
+struct ArcArray {
+    static func main() {
+        let n = 1024
+        let seed = UInt32(CommandLine.arguments.count)
+        var cells: [Cell] = []
+        cells.reserveCapacity(n)
+        for i in 0..<n { cells.append(Cell(UInt32(i) &+ seed)) }
+        var acc: UInt32 = 0
+        let t0 = bench_now_us()
+        for _ in 0..<UInt32(3_000_000) {
+            for i in 0..<n { acc = acc &+ cells[i].get() }
+        }
+        let t1 = bench_now_us()
+        print("\(acc) \(t1 - t0)")
+    }
+}
+```
+
+</TabItem>
+</Tabs>
+
+## array_map
+
+Elementwise c[i] = a[i] + b[i] * k.
+
+Lines: xc 21, Objective-C 22, C++ 22, Swift 24.
+
+<Tabs syncKey="bench-lang">
+<TabItem label="xc">
+
+```c
+// array_map — elementwise c[i] = a[i] + b[i] * k.
+// Exercises: elementwise map loop, the shape the arm64 map vectoriser takes.
+#import "Stdio.xc"
+#import "include/bench_time.xc"
+#define N 4096
+i32 main(i32 argc, u8** argv)
+    {
+    u32 a[N]; u32 b[N]; u32 c[N];
+    u32 seed = (u32)argc;
+    for (u32 i = (u32)0; i < (u32)N; i++)
+        { a[i] = i + seed; b[i] = (i * (u32)3) + seed; }
+    i64 t0 = bench_now_us();
+    for (u32 r = (u32)0; r < (u32)5000000; r++)
+        for (u32 i = (u32)0; i < (u32)N; i++)
+            c[i] = a[i] + (b[i] * (u32)7) + r;
+    u32 acc = (u32)0;
+    for (u32 i = (u32)0; i < (u32)N; i++) acc = acc + c[i];
+    i64 t1 = bench_now_us();
+    Stdio.printf("%lu %lld\n", acc, t1 - t0);
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="Objective-C">
+
+```objc
+// array_map — elementwise c[i] = a[i] + b[i] * k. See array_map.xc.
+#import <Foundation/Foundation.h>
+#include <stdio.h>
+#include "include/bench_time.h"
+#include <stdint.h>
+#define N 4096
+int main(int argc, char **argv)
+    {
+    @autoreleasepool {
+        uint32_t a[N], b[N], c[N];
+        uint32_t seed = (uint32_t)argc;
+        for (uint32_t i = 0; i < N; i++) { a[i] = i + seed; b[i] = (i * 3u) + seed; }
+        int64_t t0 = bench_now_us();
+        for (uint32_t r = 0; r < 5000000; r++)
+            for (uint32_t i = 0; i < N; i++) c[i] = a[i] + (b[i] * 7u) + r;
+        uint32_t acc = 0;
+        for (uint32_t i = 0; i < N; i++) acc = acc + c[i];
+        int64_t t1 = bench_now_us();
+        printf("%u %lld\n", acc, (long long)(t1 - t0));
+    }
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="C++">
+
+```cpp
+// array_map — elementwise c[i] = a[i] + b[i] * k. See array_map.xc.
+#include <array>
+#include <cstdio>
+#include <cstdint>
+#include "include/bench_time.h"
+
+constexpr uint32_t N = 4096;
+
+int main(int argc, char **argv)
+    {
+    std::array<uint32_t, N> a, b, c;
+    const uint32_t seed = static_cast<uint32_t>(argc);
+    for (uint32_t i = 0; i < N; i++) { a[i] = i + seed; b[i] = (i * 3u) + seed; }
+    int64_t t0 = bench_now_us();
+    for (uint32_t r = 0; r < 5000000u; r++)
+        for (uint32_t i = 0; i < N; i++) c[i] = a[i] + (b[i] * 7u) + r;
+    uint32_t acc = 0;
+    for (uint32_t v : c) acc = acc + v;
+    int64_t t1 = bench_now_us();
+    std::printf("%u %lld\n", acc, static_cast<long long>(t1 - t0));
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="Swift">
+
+```swift
+// array_map — elementwise c[i] = a[i] + b[i] * k. See array_map.xc.
+
+@main
+struct ArrayMap {
+    static func main() {
+        let n = 4096
+        let seed = UInt32(CommandLine.arguments.count)
+        var a = [UInt32](repeating: 0, count: n)
+        var b = [UInt32](repeating: 0, count: n)
+        var c = [UInt32](repeating: 0, count: n)
+        for i in 0..<n {
+            a[i] = UInt32(i) &+ seed
+            b[i] = (UInt32(i) &* 3) &+ seed
+        }
+        let t0 = bench_now_us()
+        for r in 0..<UInt32(5_000_000) {
+            for i in 0..<n { c[i] = a[i] &+ (b[i] &* 7) &+ r }
+        }
+        var acc: UInt32 = 0
+        for i in 0..<n { acc = acc &+ c[i] }
+        let t1 = bench_now_us()
+        print("\(acc) \(t1 - t0)")
+    }
+}
+```
+
+</TabItem>
+</Tabs>
+
+## array_sum
+
+Sum an array. Exercises: reduction loop, array addressing.
+
+Lines: xc 18, Objective-C 20, C++ 21, Swift 18.
+
+<Tabs syncKey="bench-lang">
+<TabItem label="xc">
+
+```c
+// array_sum — sum an array. Exercises: reduction loop, array addressing.
+// This is the shape the arm64 reduction vectoriser recognises.
+#import "Stdio.xc"
+#import "include/bench_time.xc"
+#define N 4096
+i32 main(i32 argc, u8** argv)
+    {
+    u32 a[N];
+    u32 seed = (u32)argc;
+    for (u32 i = (u32)0; i < (u32)N; i++) a[i] = (i * (u32)2654435761) + seed;
+    u32 sum = (u32)0;
+    i64 t0 = bench_now_us();
+    for (u32 r = (u32)0; r < (u32)7000000; r++)
+        for (u32 i = (u32)0; i < (u32)N; i++) sum = sum + a[i];
+    i64 t1 = bench_now_us();
+    Stdio.printf("%lu %lld\n", sum, t1 - t0);
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="Objective-C">
+
+```objc
+// array_sum — sum an array. See array_sum.xc.
+#import <Foundation/Foundation.h>
+#include <stdio.h>
+#include "include/bench_time.h"
+#include <stdint.h>
+#define N 4096
+int main(int argc, char **argv)
+    {
+    @autoreleasepool {
+        uint32_t a[N]; uint32_t seed = (uint32_t)argc;
+        for (uint32_t i = 0; i < N; i++) a[i] = (i * 2654435761u) + seed;
+        uint32_t sum = 0;
+        int64_t t0 = bench_now_us();
+        for (uint32_t r = 0; r < 7000000; r++)
+            for (uint32_t i = 0; i < N; i++) sum = sum + a[i];
+        int64_t t1 = bench_now_us();
+        printf("%u %lld\n", sum, (long long)(t1 - t0));
+    }
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="C++">
+
+```cpp
+// array_sum — sum an array. See array_sum.xc.
+#include <array>
+#include <cstdio>
+#include <cstdint>
+#include "include/bench_time.h"
+
+constexpr uint32_t N = 4096;
+
+int main(int argc, char **argv)
+    {
+    std::array<uint32_t, N> a;
+    const uint32_t seed = static_cast<uint32_t>(argc);
+    for (uint32_t i = 0; i < N; i++) a[i] = (i * 2654435761u) + seed;
+    uint32_t sum = 0;
+    int64_t t0 = bench_now_us();
+    for (uint32_t r = 0; r < 7000000u; r++)
+        for (uint32_t v : a) sum = sum + v;
+    int64_t t1 = bench_now_us();
+    std::printf("%u %lld\n", sum, static_cast<long long>(t1 - t0));
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="Swift">
+
+```swift
+// array_sum — sum an array. See array_sum.xc.
+
+@main
+struct ArraySum {
+    static func main() {
+        let n = 4096
+        let seed = UInt32(CommandLine.arguments.count)
+        var a = [UInt32](repeating: 0, count: n)
+        for i in 0..<n { a[i] = (UInt32(i) &* 2654435761) &+ seed }
+        var sum: UInt32 = 0
+        let t0 = bench_now_us()
+        for _ in 0..<UInt32(7_000_000) {
+            for i in 0..<n { sum = sum &+ a[i] }
+        }
+        let t1 = bench_now_us()
+        print("\(sum) \(t1 - t0)")
+    }
+}
+```
+
+</TabItem>
+</Tabs>
+
+## bit_ops
+
+Shifts and bitwise logic over an array.
+
+Lines: xc 19, Objective-C 21, C++ 22, Swift 21.
+
+<Tabs syncKey="bench-lang">
+<TabItem label="xc">
+
+```c
+// bit_ops — shifts and bitwise logic over an array.
+// Exercises: shift lowering, and/or/xor, rotate idioms.
+#import "Stdio.xc"
+#import "include/bench_time.xc"
+#define N 4096
+i32 main(i32 argc, u8** argv)
+    {
+    u32 a[N];
+    u32 seed = (u32)argc;
+    for (u32 i = (u32)0; i < (u32)N; i++) a[i] = (i * (u32)2654435761) + seed;
+    u32 acc = (u32)0;
+    i64 t0 = bench_now_us();
+    for (u32 r = (u32)0; r < (u32)600000; r++)
+        for (u32 i = (u32)0; i < (u32)N; i++)
+            acc = acc + (((a[i] + r) << (u32)3) | ((a[i] + r) >> (u32)5)) ^ (u32)0x0F0F0F0F;
+    i64 t1 = bench_now_us();
+    Stdio.printf("%lu %lld\n", acc, t1 - t0);
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="Objective-C">
+
+```objc
+// bit_ops — shifts and bitwise logic over an array. See bit_ops.xc.
+#import <Foundation/Foundation.h>
+#include <stdio.h>
+#include "include/bench_time.h"
+#include <stdint.h>
+#define N 4096
+int main(int argc, char **argv)
+    {
+    @autoreleasepool {
+        uint32_t a[N]; uint32_t seed = (uint32_t)argc;
+        for (uint32_t i = 0; i < N; i++) a[i] = (i * 2654435761u) + seed;
+        uint32_t acc = 0;
+        int64_t t0 = bench_now_us();
+        for (uint32_t r = 0; r < 600000; r++)
+            for (uint32_t i = 0; i < N; i++)
+                acc = acc + (((a[i] + r) << 3) | ((a[i] + r) >> 5)) ^ 0x0F0F0F0Fu;
+        int64_t t1 = bench_now_us();
+        printf("%u %lld\n", acc, (long long)(t1 - t0));
+    }
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="C++">
+
+```cpp
+// bit_ops — shifts and bitwise logic over an array. See bit_ops.xc.
+#include <array>
+#include <cstdio>
+#include <cstdint>
+#include "include/bench_time.h"
+
+constexpr uint32_t N = 4096;
+
+int main(int argc, char **argv)
+    {
+    std::array<uint32_t, N> a;
+    const uint32_t seed = static_cast<uint32_t>(argc);
+    for (uint32_t i = 0; i < N; i++) a[i] = (i * 2654435761u) + seed;
+    uint32_t acc = 0;
+    int64_t t0 = bench_now_us();
+    for (uint32_t r = 0; r < 600000u; r++)
+        for (uint32_t v : a)
+            acc = acc + (((v + r) << 3) | ((v + r) >> 5)) ^ 0x0F0F0F0Fu;
+    int64_t t1 = bench_now_us();
+    std::printf("%u %lld\n", acc, static_cast<long long>(t1 - t0));
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="Swift">
+
+```swift
+// bit_ops — shifts and bitwise logic over an array. See bit_ops.xc.
+
+@main
+struct BitOps {
+    static func main() {
+        let n = 4096
+        let seed = UInt32(CommandLine.arguments.count)
+        var a = [UInt32](repeating: 0, count: n)
+        for i in 0..<n { a[i] = (UInt32(i) &* 2654435761) &+ seed }
+        var acc: UInt32 = 0
+        let t0 = bench_now_us()
+        for r in 0..<UInt32(600_000) {
+            for i in 0..<n {
+                // C precedence: + binds tighter than ^, so this is (acc + (...)) ^ mask.
+                acc = (acc &+ (((a[i] &+ r) &<< 3) | ((a[i] &+ r) &>> 5))) ^ 0x0F0F_0F0F
+            }
+        }
+        let t1 = bench_now_us()
+        print("\(acc) \(t1 - t0)")
+    }
+}
+```
+
+</TabItem>
+</Tabs>
+
+## branch_mix
+
+Data-dependent branches over an array.
+
+Lines: xc 22, Objective-C 21, C++ 22, Swift 20.
+
+<Tabs syncKey="bench-lang">
+<TabItem label="xc">
+
+```c
+// branch_mix — data-dependent branches over an array.
+// Exercises: if-conversion, select formation, branch prediction behaviour.
+#import "Stdio.xc"
+#import "include/bench_time.xc"
+#define N 4096
+i32 main(i32 argc, u8** argv)
+    {
+    u32 a[N];
+    u32 seed = (u32)argc;
+    for (u32 i = (u32)0; i < (u32)N; i++) a[i] = (i * (u32)2654435761) + seed;
+    u32 acc = (u32)0;
+    i64 t0 = bench_now_us();
+    for (u32 r = (u32)0; r < (u32)500000; r++)
+        for (u32 i = (u32)0; i < (u32)N; i++)
+            {
+            if ((a[i] & (u32)1) == (u32)0) acc = acc + a[i];
+            else                           acc = acc ^ a[i];
+            }
+    i64 t1 = bench_now_us();
+    Stdio.printf("%lu %lld\n", acc, t1 - t0);
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="Objective-C">
+
+```objc
+// branch_mix — data-dependent branches over an array. See branch_mix.xc.
+#import <Foundation/Foundation.h>
+#include <stdio.h>
+#include "include/bench_time.h"
+#include <stdint.h>
+#define N 4096
+int main(int argc, char **argv)
+    {
+    @autoreleasepool {
+        uint32_t a[N]; uint32_t seed = (uint32_t)argc;
+        for (uint32_t i = 0; i < N; i++) a[i] = (i * 2654435761u) + seed;
+        uint32_t acc = 0;
+        int64_t t0 = bench_now_us();
+        for (uint32_t r = 0; r < 500000; r++)
+            for (uint32_t i = 0; i < N; i++)
+                { if ((a[i] & 1u) == 0u) acc = acc + a[i]; else acc = acc ^ a[i]; }
+        int64_t t1 = bench_now_us();
+        printf("%u %lld\n", acc, (long long)(t1 - t0));
+    }
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="C++">
+
+```cpp
+// branch_mix — data-dependent branches over an array. See branch_mix.xc.
+#include <array>
+#include <cstdio>
+#include <cstdint>
+#include "include/bench_time.h"
+
+constexpr uint32_t N = 4096;
+
+int main(int argc, char **argv)
+    {
+    std::array<uint32_t, N> a;
+    const uint32_t seed = static_cast<uint32_t>(argc);
+    for (uint32_t i = 0; i < N; i++) a[i] = (i * 2654435761u) + seed;
+    uint32_t acc = 0;
+    int64_t t0 = bench_now_us();
+    for (uint32_t r = 0; r < 500000u; r++)
+        for (uint32_t v : a)
+            { if ((v & 1u) == 0u) acc = acc + v; else acc = acc ^ v; }
+    int64_t t1 = bench_now_us();
+    std::printf("%u %lld\n", acc, static_cast<long long>(t1 - t0));
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="Swift">
+
+```swift
+// branch_mix — data-dependent branches over an array. See branch_mix.xc.
+
+@main
+struct BranchMix {
+    static func main() {
+        let n = 4096
+        let seed = UInt32(CommandLine.arguments.count)
+        var a = [UInt32](repeating: 0, count: n)
+        for i in 0..<n { a[i] = (UInt32(i) &* 2654435761) &+ seed }
+        var acc: UInt32 = 0
+        let t0 = bench_now_us()
+        for _ in 0..<UInt32(500_000) {
+            for i in 0..<n {
+                if (a[i] & 1) == 0 { acc = acc &+ a[i] } else { acc = acc ^ a[i] }
+            }
+        }
+        let t1 = bench_now_us()
+        print("\(acc) \(t1 - t0)")
+    }
+}
+```
+
+</TabItem>
+</Tabs>
+
+## call_depth
+
+A small non-inlinable call chain in a hot loop.
+
+Lines: xc 19, Objective-C 22, C++ 22, Swift 17.
+
+<Tabs syncKey="bench-lang">
+<TabItem label="xc">
+
+```c
+// call_depth — a small non-inlinable call chain in a hot loop.
+// Exercises: call overhead, leaf inlining, tail-call conversion.
+#import "Stdio.xc"
+#import "include/bench_time.xc"
+
+u32 leaf(u32 x)  { return (x * (u32)3) ^ (x >> (u32)2); }
+u32 mid(u32 x)   { return leaf(x) + leaf(x + (u32)1); }
+u32 outer(u32 x) { return mid(x) ^ mid(x + (u32)2); }
+
+i32 main(i32 argc, u8** argv)
+    {
+    u32 seed = (u32)argc;
+    u32 acc  = (u32)0;
+    i64 t0 = bench_now_us();
+    for (u32 r = (u32)0; r < (u32)2800000000; r++) acc = acc + outer(r + seed);
+    i64 t1 = bench_now_us();
+    Stdio.printf("%lu %lld\n", acc, t1 - t0);
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="Objective-C">
+
+```objc
+// call_depth — a small non-inlinable call chain in a hot loop. See call_depth.xc.
+#import <Foundation/Foundation.h>
+#include <stdio.h>
+#include "include/bench_time.h"
+#include <stdint.h>
+
+static uint32_t leaf(uint32_t x)  { return (x * 3u) ^ (x >> 2); }
+static uint32_t mid(uint32_t x)   { return leaf(x) + leaf(x + 1u); }
+static uint32_t outer_(uint32_t x){ return mid(x) ^ mid(x + 2u); }
+
+int main(int argc, char **argv)
+    {
+    @autoreleasepool {
+        uint32_t seed = (uint32_t)argc;
+        uint32_t acc  = 0;
+        int64_t t0 = bench_now_us();
+        for (uint32_t r = 0; r < 2800000000; r++) acc = acc + outer_(r + seed);
+        int64_t t1 = bench_now_us();
+        printf("%u %lld\n", acc, (long long)(t1 - t0));
+    }
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="C++">
+
+```cpp
+// call_depth — a small non-inlinable call chain in a hot loop. See call_depth.xc.
+#include <cstdio>
+#include <cstdint>
+#include "include/bench_time.h"
+
+namespace
+    {
+    uint32_t leaf(uint32_t x)  { return (x * 3u) ^ (x >> 2); }
+    uint32_t mid(uint32_t x)   { return leaf(x) + leaf(x + 1u); }
+    uint32_t outer(uint32_t x) { return mid(x) ^ mid(x + 2u); }
+    }
+
+int main(int argc, char **argv)
+    {
+    const uint32_t seed = static_cast<uint32_t>(argc);
+    uint32_t acc = 0;
+    int64_t t0 = bench_now_us();
+    for (uint32_t r = 0; r < 2800000000u; r++) acc = acc + outer(r + seed);
+    int64_t t1 = bench_now_us();
+    std::printf("%u %lld\n", acc, static_cast<long long>(t1 - t0));
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="Swift">
+
+```swift
+// call_depth — a small non-inlinable call chain in a hot loop. See call_depth.xc.
+
+func leaf(_ x: UInt32) -> UInt32 { (x &* 3) ^ (x >> 2) }
+func mid(_ x: UInt32) -> UInt32 { leaf(x) &+ leaf(x &+ 1) }
+func outer(_ x: UInt32) -> UInt32 { mid(x) ^ mid(x &+ 2) }
+
+@main
+struct CallDepth {
+    static func main() {
+        let seed = UInt32(CommandLine.arguments.count)
+        var acc: UInt32 = 0
+        let t0 = bench_now_us()
+        for r in 0..<UInt32(2_800_000_000) { acc = acc &+ outer(r &+ seed) }
+        let t1 = bench_now_us()
+        print("\(acc) \(t1 - t0)")
+    }
+}
+```
+
+</TabItem>
+</Tabs>
+
+## float_math
+
+Float multiply, accumulated in double.
+
+Lines: xc 29, Objective-C 24, C++ 28, Swift 24.
+
+<Tabs syncKey="bench-lang">
+<TabItem label="xc">
+
+```c
+// float_math — float multiply, accumulated in double.
+// Exercises: float arithmetic, multiply-add fusion, float register pressure.
+//
+// Values are small exact integers and the accumulator is double, so the sum is
+// exact whatever order the additions happen in. A vectorising compiler reorders
+// them, and without exactness the two languages would disagree on rounding.
+#import "Stdio.xc"
+#import "include/bench_time.xc"
+#define N 4096
+i32 main(i32 argc, u8** argv)
+    {
+    float a[N]; float b[N];
+    u32 seed = (u32)argc;
+    for (u32 i = (u32)0; i < (u32)N; i++)
+        { a[i] = (float)((i + seed) % (u32)16); b[i] = (float)((i % (u32)7) + (u32)1); }
+    double acc = 0.0;
+    i64 t0 = bench_now_us();
+    for (u32 r = (u32)0; r < (u32)400000; r++)
+        for (u32 i = (u32)0; i < (u32)N; i++)
+            acc = acc + (double)(a[i] * b[i]);
+    i64 t1 = bench_now_us();
+    // (u32)acc directly is UNDEFINED once the sum exceeds u32: at this
+    // iteration count acc reaches ~4.9e10, and the two compilers chose
+    // differently (0 against 4294967295). The double is still exact — well
+    // under 2^53 — so going through u64 and letting the u32 narrowing wrap,
+    // which IS defined, keeps the checksum meaningful and identical.
+    Stdio.printf("%lu %lld\n", (u32)((u64)acc), t1 - t0);
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="Objective-C">
+
+```objc
+// float_math — float multiply, accumulated in double. See float_math.xc.
+#import <Foundation/Foundation.h>
+#include <stdio.h>
+#include "include/bench_time.h"
+#include <stdint.h>
+#define N 4096
+int main(int argc, char **argv)
+    {
+    @autoreleasepool {
+        float a[N], b[N];
+        uint32_t seed = (uint32_t)argc;
+        for (uint32_t i = 0; i < N; i++)
+            { a[i] = (float)((i + seed) % 16u); b[i] = (float)((i % 7u) + 1u); }
+        double acc = 0.0;
+        int64_t t0 = bench_now_us();
+        for (uint32_t r = 0; r < 400000; r++)
+            for (uint32_t i = 0; i < N; i++) acc = acc + (double)(a[i] * b[i]);
+        int64_t t1 = bench_now_us();
+        // (uint32_t)acc is UNDEFINED once the sum exceeds u32; via uint64_t
+        // the narrowing is defined and wraps. See float_math.xc.
+        printf("%u %lld\n", (uint32_t)(uint64_t)acc, (long long)(t1 - t0));
+    }
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="C++">
+
+```cpp
+// float_math — float multiply, accumulated in double. See float_math.xc.
+#include <array>
+#include <cstdio>
+#include <cstdint>
+#include "include/bench_time.h"
+
+constexpr uint32_t N = 4096;
+
+int main(int argc, char **argv)
+    {
+    std::array<float, N> a, b;
+    const uint32_t seed = static_cast<uint32_t>(argc);
+    for (uint32_t i = 0; i < N; i++)
+        {
+        a[i] = static_cast<float>((i + seed) % 16u);
+        b[i] = static_cast<float>((i % 7u) + 1u);
+        }
+    double acc = 0.0;
+    int64_t t0 = bench_now_us();
+    for (uint32_t r = 0; r < 400000u; r++)
+        for (uint32_t i = 0; i < N; i++) acc = acc + static_cast<double>(a[i] * b[i]);
+    int64_t t1 = bench_now_us();
+    // Converting acc straight to uint32_t is undefined once the sum exceeds
+    // u32; via uint64_t the narrowing is defined and wraps. See float_math.xc.
+    std::printf("%u %lld\n", static_cast<uint32_t>(static_cast<uint64_t>(acc)),
+                static_cast<long long>(t1 - t0));
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="Swift">
+
+```swift
+// float_math — float multiply, accumulated in double. See float_math.xc.
+
+@main
+struct FloatMath {
+    static func main() {
+        let n = 4096
+        let seed = UInt32(CommandLine.arguments.count)
+        var a = [Float](repeating: 0, count: n)
+        var b = [Float](repeating: 0, count: n)
+        for i in 0..<n {
+            a[i] = Float((UInt32(i) &+ seed) % 16)
+            b[i] = Float((UInt32(i) % 7) + 1)
+        }
+        var acc = 0.0
+        let t0 = bench_now_us()
+        for _ in 0..<UInt32(400_000) {
+            for i in 0..<n { acc = acc + Double(a[i] * b[i]) }
+        }
+        let t1 = bench_now_us()
+        // The sum is exact but exceeds UInt32; go through UInt64 and let the
+        // narrowing wrap, as float_math.xc does.
+        print("\(UInt32(truncatingIfNeeded: UInt64(acc))) \(t1 - t0)")
+    }
+}
+```
+
+</TabItem>
+</Tabs>
+
+## hash_mix
+
+An integer avalanche chain.
+
+Lines: xc 19, Objective-C 22, C++ 20, Swift 17.
+
+<Tabs syncKey="bench-lang">
+<TabItem label="xc">
+
+```c
+// hash_mix — an integer avalanche chain.
+// Exercises: multiply, shift and xor chains with a serial dependency.
+#import "Stdio.xc"
+#import "include/bench_time.xc"
+i32 main(i32 argc, u8** argv)
+    {
+    u32 h = (u32)argc; 
+    i64 t0 = bench_now_us();
+    for (u32 r = (u32)0; r < (u32)640000000; r++)
+        {
+        h = h ^ (h >> (u32)16);
+        h = h * (u32)2246822519;
+        h = h ^ (h >> (u32)13);
+        h = h + r;
+        }
+    i64 t1 = bench_now_us();
+    Stdio.printf("%lu %lld\n", h, t1 - t0);
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="Objective-C">
+
+```objc
+// hash_mix — an integer avalanche chain. See hash_mix.xc.
+#import <Foundation/Foundation.h>
+#include <stdio.h>
+#include "include/bench_time.h"
+#include <stdint.h>
+int main(int argc, char **argv)
+    {
+    @autoreleasepool {
+        uint32_t h = (uint32_t)argc;
+        int64_t t0 = bench_now_us();
+        for (uint32_t r = 0; r < 640000000; r++)
+            {
+            h = h ^ (h >> 16);
+            h = h * 2246822519u;
+            h = h ^ (h >> 13);
+            h = h + r;
+            }
+        int64_t t1 = bench_now_us();
+        printf("%u %lld\n", h, (long long)(t1 - t0));
+    }
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="C++">
+
+```cpp
+// hash_mix — an integer avalanche chain. See hash_mix.xc.
+#include <cstdio>
+#include <cstdint>
+#include "include/bench_time.h"
+
+int main(int argc, char **argv)
+    {
+    uint32_t h = static_cast<uint32_t>(argc);
+    int64_t t0 = bench_now_us();
+    for (uint32_t r = 0; r < 640000000u; r++)
+        {
+        h = h ^ (h >> 16);
+        h = h * 2246822519u;
+        h = h ^ (h >> 13);
+        h = h + r;
+        }
+    int64_t t1 = bench_now_us();
+    std::printf("%u %lld\n", h, static_cast<long long>(t1 - t0));
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="Swift">
+
+```swift
+// hash_mix — an integer avalanche chain. See hash_mix.xc.
+
+@main
+struct HashMix {
+    static func main() {
+        var h = UInt32(CommandLine.arguments.count)
+        let t0 = bench_now_us()
+        for r in 0..<UInt32(640_000_000) {
+            h = h ^ (h >> 16)
+            h = h &* 2246822519
+            h = h ^ (h >> 13)
+            h = h &+ r
+        }
+        let t1 = bench_now_us()
+        print("\(h) \(t1 - t0)")
+    }
+}
+```
+
+</TabItem>
+</Tabs>
+
+## int_accum
+
+Integer add and xor over an array.
+
+Lines: xc 29, Objective-C 30, C++ 24, Swift 18.
+
+<Tabs syncKey="bench-lang">
+<TabItem label="xc">
+
+```c
+// int_accum — integer add and xor over an array.
+// Exercises: loop induction, array addressing, u32 wraparound arithmetic.
+//
+// The array is seeded from argc so its contents are unknown at compile time,
+// and the loop reads it every iteration. Without that both compilers reduce the
+// whole loop to a closed form and the benchmark measures nothing.
+#import "Stdio.xc"
+#import "include/bench_time.xc"
+
+#define N 4096
+
+i32 main(i32 argc, u8** argv)
+    {
+    u32 a[N];
+    u32 seed = (u32)argc;
+    for (u32 i = (u32)0; i < (u32)N; i++)
+        a[i] = (i * (u32)2654435761) + seed;
+
+    u32 acc = (u32)0;
+    i64 t0 = bench_now_us();
+    for (u32 r = (u32)0; r < (u32)600000; r++)
+        for (u32 i = (u32)0; i < (u32)N; i++)
+            acc = acc + (a[i] ^ acc);
+
+    i64 t1 = bench_now_us();
+
+    Stdio.printf("%lu %lld\n", acc, t1 - t0);
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="Objective-C">
+
+```objc
+// int_accum — integer add and xor over an array. See int_accum.xc.
+// Same array size, same seed, same loop bounds, same u32 wraparound.
+#import <Foundation/Foundation.h>
+#include <stdio.h>
+#include "include/bench_time.h"
+#include <stdint.h>
+
+#define N 4096
+
+int main(int argc, char **argv)
+    {
+    @autoreleasepool
+        {
+        uint32_t a[N];
+        uint32_t seed = (uint32_t)argc;
+        for (uint32_t i = 0; i < N; i++)
+            a[i] = (i * 2654435761u) + seed;
+
+        uint32_t acc = 0;
+        int64_t t0 = bench_now_us();
+        for (uint32_t r = 0; r < 600000; r++)
+            for (uint32_t i = 0; i < N; i++)
+                acc = acc + (a[i] ^ acc);
+
+        int64_t t1 = bench_now_us();
+
+        printf("%u %lld\n", acc, (long long)(t1 - t0));
+        }
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="C++">
+
+```cpp
+// int_accum — integer add and xor over an array. See int_accum.xc.
+// Same array size, same seed, same loop bounds, same u32 wraparound.
+#include <array>
+#include <cstdio>
+#include <cstdint>
+#include "include/bench_time.h"
+
+constexpr uint32_t N = 4096;
+
+int main(int argc, char **argv)
+    {
+    std::array<uint32_t, N> a;
+    const uint32_t seed = static_cast<uint32_t>(argc);
+    for (uint32_t i = 0; i < N; i++) a[i] = (i * 2654435761u) + seed;
+
+    uint32_t acc = 0;
+    int64_t t0 = bench_now_us();
+    for (uint32_t r = 0; r < 600000u; r++)
+        for (uint32_t v : a) acc = acc + (v ^ acc);
+    int64_t t1 = bench_now_us();
+
+    std::printf("%u %lld\n", acc, static_cast<long long>(t1 - t0));
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="Swift">
+
+```swift
+// int_accum — integer add and xor over an array. See int_accum.xc.
+
+@main
+struct IntAccum {
+    static func main() {
+        let n = 4096
+        let seed = UInt32(CommandLine.arguments.count)
+        var a = [UInt32](repeating: 0, count: n)
+        for i in 0..<n { a[i] = (UInt32(i) &* 2654435761) &+ seed }
+        var acc: UInt32 = 0
+        let t0 = bench_now_us()
+        for _ in 0..<UInt32(600_000) {
+            for i in 0..<n { acc = acc &+ (a[i] ^ acc) }
+        }
+        let t1 = bench_now_us()
+        print("\(acc) \(t1 - t0)")
+    }
+}
+```
+
+</TabItem>
+</Tabs>
+
+## int_muldiv
+
+Integer multiply and divide by compile-time constants.
+
+Lines: xc 19, Objective-C 21, C++ 21, Swift 18.
+
+<Tabs syncKey="bench-lang">
+<TabItem label="xc">
+
+```c
+// int_muldiv — integer multiply and divide by compile-time constants.
+// Exercises: strength reduction, magic-number division.
+#import "Stdio.xc"
+#import "include/bench_time.xc"
+#define N 1024
+i32 main(i32 argc, u8** argv)
+    {
+    u32 a[N];
+    u32 seed = (u32)argc;
+    for (u32 i = (u32)0; i < (u32)N; i++) a[i] = (i * (u32)2654435761) + seed;
+    u32 acc = (u32)0;
+    i64 t0 = bench_now_us();
+    for (u32 r = (u32)0; r < (u32)6800000; r++)
+        for (u32 i = (u32)0; i < (u32)N; i++)
+            acc = acc + ((a[i] * (u32)7) / (u32)3) + (a[i] / (u32)11);
+    i64 t1 = bench_now_us();
+    Stdio.printf("%lu %lld\n", acc, t1 - t0);
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="Objective-C">
+
+```objc
+// int_muldiv — integer multiply and divide by constants. See int_muldiv.xc.
+#import <Foundation/Foundation.h>
+#include <stdio.h>
+#include "include/bench_time.h"
+#include <stdint.h>
+#define N 1024
+int main(int argc, char **argv)
+    {
+    @autoreleasepool {
+        uint32_t a[N]; uint32_t seed = (uint32_t)argc;
+        for (uint32_t i = 0; i < N; i++) a[i] = (i * 2654435761u) + seed;
+        uint32_t acc = 0;
+        int64_t t0 = bench_now_us();
+        for (uint32_t r = 0; r < 6800000; r++)
+            for (uint32_t i = 0; i < N; i++)
+                acc = acc + ((a[i] * 7u) / 3u) + (a[i] / 11u);
+        int64_t t1 = bench_now_us();
+        printf("%u %lld\n", acc, (long long)(t1 - t0));
+    }
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="C++">
+
+```cpp
+// int_muldiv — integer multiply and divide by constants. See int_muldiv.xc.
+#include <array>
+#include <cstdio>
+#include <cstdint>
+#include "include/bench_time.h"
+
+constexpr uint32_t N = 1024;
+
+int main(int argc, char **argv)
+    {
+    std::array<uint32_t, N> a;
+    const uint32_t seed = static_cast<uint32_t>(argc);
+    for (uint32_t i = 0; i < N; i++) a[i] = (i * 2654435761u) + seed;
+    uint32_t acc = 0;
+    int64_t t0 = bench_now_us();
+    for (uint32_t r = 0; r < 6800000u; r++)
+        for (uint32_t v : a) acc = acc + ((v * 7u) / 3u) + (v / 11u);
+    int64_t t1 = bench_now_us();
+    std::printf("%u %lld\n", acc, static_cast<long long>(t1 - t0));
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="Swift">
+
+```swift
+// int_muldiv — integer multiply and divide by constants. See int_muldiv.xc.
+
+@main
+struct IntMulDiv {
+    static func main() {
+        let n = 1024
+        let seed = UInt32(CommandLine.arguments.count)
+        var a = [UInt32](repeating: 0, count: n)
+        for i in 0..<n { a[i] = (UInt32(i) &* 2654435761) &+ seed }
+        var acc: UInt32 = 0
+        let t0 = bench_now_us()
+        for _ in 0..<UInt32(6_800_000) {
+            for i in 0..<n { acc = acc &+ ((a[i] &* 7) / 3) &+ (a[i] / 11) }
+        }
+        let t1 = bench_now_us()
+        print("\(acc) \(t1 - t0)")
+    }
+}
+```
+
+</TabItem>
+</Tabs>
+
+## matrix_mul
+
+Multiply two small square matrices, repeatedly.
+
+Lines: xc 27, Objective-C 29, C++ 29, Swift 30.
+
+<Tabs syncKey="bench-lang">
+<TabItem label="xc">
+
+```c
+// matrix_mul — multiply two small square matrices, repeatedly.
+// Exercises: triple-nested loops, strided addressing, accumulation.
+#import "Stdio.xc"
+#import "include/bench_time.xc"
+#define M 32
+i32 main(i32 argc, u8** argv)
+    {
+    u32 a[M * M]; u32 b[M * M]; u32 c[M * M];
+    u32 seed = (u32)argc;
+    for (u32 i = (u32)0; i < (u32)(M * M); i++)
+        { a[i] = (i + seed) & (u32)15; b[i] = (i ^ seed) & (u32)15; }
+    i64 t0 = bench_now_us();
+    for (u32 r = (u32)0; r < (u32)180000; r++)
+        for (u32 i = (u32)0; i < (u32)M; i++)
+            for (u32 j = (u32)0; j < (u32)M; j++)
+                {
+                u32 s = (u32)0;
+                for (u32 k = (u32)0; k < (u32)M; k++)
+                    s = s + (a[i * (u32)M + k] * b[k * (u32)M + j]);
+                c[i * (u32)M + j] = s + r;
+                }
+    u32 acc = (u32)0;
+    for (u32 i = (u32)0; i < (u32)(M * M); i++) acc = acc + c[i];
+    i64 t1 = bench_now_us();
+    Stdio.printf("%lu %lld\n", acc, t1 - t0);
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="Objective-C">
+
+```objc
+// matrix_mul — multiply two small square matrices, repeatedly. See matrix_mul.xc.
+#import <Foundation/Foundation.h>
+#include <stdio.h>
+#include "include/bench_time.h"
+#include <stdint.h>
+#define M 32
+int main(int argc, char **argv)
+    {
+    @autoreleasepool {
+        uint32_t a[M * M], b[M * M], c[M * M];
+        uint32_t seed = (uint32_t)argc;
+        for (uint32_t i = 0; i < M * M; i++)
+            { a[i] = (i + seed) & 15u; b[i] = (i ^ seed) & 15u; }
+        int64_t t0 = bench_now_us();
+        for (uint32_t r = 0; r < 180000; r++)
+            for (uint32_t i = 0; i < M; i++)
+                for (uint32_t j = 0; j < M; j++)
+                    {
+                    uint32_t s = 0;
+                    for (uint32_t k = 0; k < M; k++) s = s + (a[i * M + k] * b[k * M + j]);
+                    c[i * M + j] = s + r;
+                    }
+        uint32_t acc = 0;
+        for (uint32_t i = 0; i < M * M; i++) acc = acc + c[i];
+        int64_t t1 = bench_now_us();
+        printf("%u %lld\n", acc, (long long)(t1 - t0));
+    }
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="C++">
+
+```cpp
+// matrix_mul — multiply two small square matrices, repeatedly. See matrix_mul.xc.
+#include <array>
+#include <cstdio>
+#include <cstdint>
+#include "include/bench_time.h"
+
+constexpr uint32_t M = 32;
+using Matrix = std::array<uint32_t, M * M>;
+
+int main(int argc, char **argv)
+    {
+    Matrix a, b, c;
+    const uint32_t seed = static_cast<uint32_t>(argc);
+    for (uint32_t i = 0; i < M * M; i++) { a[i] = (i + seed) & 15u; b[i] = (i ^ seed) & 15u; }
+    int64_t t0 = bench_now_us();
+    for (uint32_t r = 0; r < 180000u; r++)
+        for (uint32_t i = 0; i < M; i++)
+            for (uint32_t j = 0; j < M; j++)
+                {
+                uint32_t s = 0;
+                for (uint32_t k = 0; k < M; k++) s = s + (a[i * M + k] * b[k * M + j]);
+                c[i * M + j] = s + r;
+                }
+    uint32_t acc = 0;
+    for (uint32_t v : c) acc = acc + v;
+    int64_t t1 = bench_now_us();
+    std::printf("%u %lld\n", acc, static_cast<long long>(t1 - t0));
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="Swift">
+
+```swift
+// matrix_mul — multiply two small square matrices, repeatedly. See matrix_mul.xc.
+
+@main
+struct MatrixMul {
+    static func main() {
+        let m = 32
+        let seed = UInt32(CommandLine.arguments.count)
+        var a = [UInt32](repeating: 0, count: m * m)
+        var b = [UInt32](repeating: 0, count: m * m)
+        var c = [UInt32](repeating: 0, count: m * m)
+        for i in 0..<(m * m) {
+            a[i] = (UInt32(i) &+ seed) & 15
+            b[i] = (UInt32(i) ^ seed) & 15
+        }
+        let t0 = bench_now_us()
+        for r in 0..<UInt32(180_000) {
+            for i in 0..<m {
+                for j in 0..<m {
+                    var s: UInt32 = 0
+                    for k in 0..<m { s = s &+ (a[i * m + k] &* b[k * m + j]) }
+                    c[i * m + j] = s &+ r
+                }
+            }
+        }
+        var acc: UInt32 = 0
+        for i in 0..<(m * m) { acc = acc &+ c[i] }
+        let t1 = bench_now_us()
+        print("\(acc) \(t1 - t0)")
+    }
+}
+```
+
+</TabItem>
+</Tabs>
+
+## matrix_mul_f32
+
+Multiply two float matrices, repeatedly.
+
+Lines: xc 36, Objective-C 35, C++ 33, Swift 32.
+
+<Tabs syncKey="bench-lang">
+<TabItem label="xc">
+
+```c
+// matrix_mul_f32 — multiply two float matrices, repeatedly.
+// Exercises: a dense float matrix multiply (SME outer products on arm64 macOS
+// with SME; NEON or SSE elsewhere). The values are small integers, so every
+// product and sum is exact and the checksum is the same in every language,
+// whether or not it fuses a*b + s.
+#import "Stdio.xc"
+#import "include/bench_time.xc"
+#define M 128
+i32 main(i32 argc, u8** argv)
+    {
+    float* a = new float[M * M];
+    float* b = new float[M * M];
+    float* c = new float[M * M];
+    u32 seed = (u32)argc;
+    for (u32 i = (u32)0; i < (u32)(M * M); i++)
+        { a[i] = (float)((i + seed) & (u32)15); b[i] = (float)((i ^ seed) & (u32)15); }
+    u32 acc = (u32)0;
+    i64 t0 = bench_now_us();
+    for (u32 r = (u32)0; r < (u32)10000; r++)
+        {
+        a[r % (u32)(M * M)] = (float)(r & (u32)15);
+        for (u32 i = (u32)0; i < (u32)M; i++)
+            for (u32 j = (u32)0; j < (u32)M; j++)
+                {
+                float s = 0.0;
+                for (u32 k = (u32)0; k < (u32)M; k++)
+                    s = s + a[i * (u32)M + k] * b[k * (u32)M + j];
+                c[i * (u32)M + j] = s;
+                }
+        acc = acc + (u32)c[(r * (u32)7919) % (u32)(M * M)];
+        }
+    for (u32 i = (u32)0; i < (u32)(M * M); i++) acc = acc + (u32)c[i];
+    i64 t1 = bench_now_us();
+    Stdio.printf("%u %lld\n", acc, t1 - t0);
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="Objective-C">
+
+```objc
+// matrix_mul_f32 — multiply two float matrices, repeatedly. See matrix_mul_f32.xc.
+#import <Foundation/Foundation.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include "include/bench_time.h"
+#include <stdint.h>
+#define M 128
+int main(int argc, char **argv)
+    {
+    @autoreleasepool {
+        float *a = malloc(sizeof(float) * M * M), *b = malloc(sizeof(float) * M * M), *c = malloc(sizeof(float) * M * M);
+        uint32_t seed = (uint32_t)argc;
+        for (uint32_t i = 0; i < M * M; i++)
+            { a[i] = (float)((i + seed) & 15u); b[i] = (float)((i ^ seed) & 15u); }
+        uint32_t acc = 0;
+        int64_t t0 = bench_now_us();
+        for (uint32_t r = 0; r < 10000; r++)
+            {
+            a[r % (M * M)] = (float)(r & 15u);
+            for (uint32_t i = 0; i < M; i++)
+                for (uint32_t j = 0; j < M; j++)
+                    {
+                    float s = 0.0f;
+                    for (uint32_t k = 0; k < M; k++) s = s + a[i * M + k] * b[k * M + j];
+                    c[i * M + j] = s;
+                    }
+            acc = acc + (uint32_t)c[(r * 7919u) % (M * M)];
+            }
+        for (uint32_t i = 0; i < M * M; i++) acc = acc + (uint32_t)c[i];
+        int64_t t1 = bench_now_us();
+        printf("%u %lld\n", acc, (long long)(t1 - t0));
+        free(a); free(b); free(c);
+    }
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="C++">
+
+```cpp
+// matrix_mul_f32 — multiply two float matrices, repeatedly. See matrix_mul_f32.xc.
+#include <cstdio>
+#include <cstdint>
+#include <vector>
+#include "include/bench_time.h"
+
+constexpr uint32_t M = 128;
+
+int main(int argc, char **argv)
+    {
+    std::vector<float> a(M * M), b(M * M), c(M * M);
+    const uint32_t seed = static_cast<uint32_t>(argc);
+    for (uint32_t i = 0; i < M * M; i++)
+        { a[i] = static_cast<float>((i + seed) & 15u); b[i] = static_cast<float>((i ^ seed) & 15u); }
+    uint32_t acc = 0;
+    int64_t t0 = bench_now_us();
+    for (uint32_t r = 0; r < 10000u; r++)
+        {
+        a[r % (M * M)] = static_cast<float>(r & 15u);
+        for (uint32_t i = 0; i < M; i++)
+            for (uint32_t j = 0; j < M; j++)
+                {
+                float s = 0.0f;
+                for (uint32_t k = 0; k < M; k++) s = s + a[i * M + k] * b[k * M + j];
+                c[i * M + j] = s;
+                }
+        acc = acc + static_cast<uint32_t>(c[(r * 7919u) % (M * M)]);
+        }
+    for (float v : c) acc = acc + static_cast<uint32_t>(v);
+    int64_t t1 = bench_now_us();
+    std::printf("%u %lld\n", acc, static_cast<long long>(t1 - t0));
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="Swift">
+
+```swift
+// matrix_mul_f32 — multiply two float matrices, repeatedly. See matrix_mul_f32.xc.
+
+@main
+struct MatrixMulF32 {
+    static func main() {
+        let m = 128
+        let seed = UInt32(CommandLine.arguments.count)
+        var a = [Float](repeating: 0, count: m * m)
+        var b = [Float](repeating: 0, count: m * m)
+        var c = [Float](repeating: 0, count: m * m)
+        for i in 0..<(m * m) {
+            a[i] = Float((UInt32(i) &+ seed) & 15)
+            b[i] = Float((UInt32(i) ^ seed) & 15)
+        }
+        var acc: UInt32 = 0
+        let t0 = bench_now_us()
+        for r in 0..<10000 {
+            a[r % (m * m)] = Float(UInt32(r) & 15)
+            for i in 0..<m {
+                for j in 0..<m {
+                    var s: Float = 0
+                    for k in 0..<m { s = s + a[i * m + k] * b[k * m + j] }
+                    c[i * m + j] = s
+                }
+            }
+            acc = acc &+ UInt32(c[(r * 7919) % (m * m)])
+        }
+        for i in 0..<(m * m) { acc = acc &+ UInt32(c[i]) }
+        let t1 = bench_now_us()
+        print("\(acc) \(t1 - t0)")
+    }
+}
+```
+
+</TabItem>
+</Tabs>
+
+## mem_copy
+
+Copy between arrays element by element.
+
+Lines: xc 21, Objective-C 24, C++ 24, Swift 20.
+
+<Tabs syncKey="bench-lang">
+<TabItem label="xc">
+
+```c
+// mem_copy — copy between arrays element by element.
+// Exercises: load/store pairing, the memcpy idiom, pointer induction.
+#import "Stdio.xc"
+#import "include/bench_time.xc"
+#define N 4096
+i32 main(i32 argc, u8** argv)
+    {
+    u32 src[N]; u32 dst[N];
+    u32 seed = (u32)argc;
+    for (u32 i = (u32)0; i < (u32)N; i++) src[i] = i + seed;
+    u32 acc = (u32)0;
+    i64 t0 = bench_now_us();
+    for (u32 r = (u32)0; r < (u32)6800000; r++)
+        {
+        for (u32 i = (u32)0; i < (u32)N; i++) dst[i] = src[i] + r;
+        acc = acc + dst[r % (u32)N];
+        }
+    i64 t1 = bench_now_us();
+    Stdio.printf("%lu %lld\n", acc, t1 - t0);
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="Objective-C">
+
+```objc
+// mem_copy — copy between arrays element by element. See mem_copy.xc.
+#import <Foundation/Foundation.h>
+#include <stdio.h>
+#include "include/bench_time.h"
+#include <stdint.h>
+#define N 4096
+int main(int argc, char **argv)
+    {
+    @autoreleasepool {
+        uint32_t src[N], dst[N];
+        uint32_t seed = (uint32_t)argc;
+        for (uint32_t i = 0; i < N; i++) src[i] = i + seed;
+        uint32_t acc = 0;
+        int64_t t0 = bench_now_us();
+        for (uint32_t r = 0; r < 6800000; r++)
+            {
+            for (uint32_t i = 0; i < N; i++) dst[i] = src[i] + r;
+            acc = acc + dst[r % N];
+            }
+        int64_t t1 = bench_now_us();
+        printf("%u %lld\n", acc, (long long)(t1 - t0));
+    }
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="C++">
+
+```cpp
+// mem_copy — copy between arrays element by element. See mem_copy.xc.
+#include <array>
+#include <cstdio>
+#include <cstdint>
+#include "include/bench_time.h"
+
+constexpr uint32_t N = 4096;
+
+int main(int argc, char **argv)
+    {
+    std::array<uint32_t, N> src, dst;
+    const uint32_t seed = static_cast<uint32_t>(argc);
+    for (uint32_t i = 0; i < N; i++) src[i] = i + seed;
+    uint32_t acc = 0;
+    int64_t t0 = bench_now_us();
+    for (uint32_t r = 0; r < 6800000u; r++)
+        {
+        for (uint32_t i = 0; i < N; i++) dst[i] = src[i] + r;
+        acc = acc + dst[r % N];
+        }
+    int64_t t1 = bench_now_us();
+    std::printf("%u %lld\n", acc, static_cast<long long>(t1 - t0));
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="Swift">
+
+```swift
+// mem_copy — copy between arrays element by element. See mem_copy.xc.
+
+@main
+struct MemCopy {
+    static func main() {
+        let n = 4096
+        let seed = UInt32(CommandLine.arguments.count)
+        var src = [UInt32](repeating: 0, count: n)
+        var dst = [UInt32](repeating: 0, count: n)
+        for i in 0..<n { src[i] = UInt32(i) &+ seed }
+        var acc: UInt32 = 0
+        let t0 = bench_now_us()
+        for r in 0..<UInt32(6_800_000) {
+            for i in 0..<n { dst[i] = src[i] &+ r }
+            acc = acc &+ dst[Int(r % UInt32(n))]
+        }
+        let t1 = bench_now_us()
+        print("\(acc) \(t1 - t0)")
+    }
+}
+```
+
+</TabItem>
+</Tabs>
+
+## method_call
+
+A virtual method call per iteration.
+
+Lines: xc 27, Objective-C 32, C++ 35, Swift 24.
+
+<Tabs syncKey="bench-lang">
+<TabItem label="xc">
+
+```c
+// method_call — a virtual method call per iteration.
+// Exercises: dispatch cost, inlining across a method boundary.
+// The class is chosen at run time and score() takes the iteration number, so
+// the call can be neither resolved at compile time nor hoisted out of the loop.
+#import "Stdio.xc"
+#import "include/bench_time.xc"
+
+class Shape      { u32 k; void init(u32 x) { k = x; } u32 score(u32 x) { return k ^ x; } }
+class Boxy : Shape
+    {
+    void init(u32 x) { super.init(x); }
+    u32 score(u32 x) { return (k ^ x) + (u32)1; }
+    }
+
+i32 main(i32 argc, u8** argv)
+    {
+    u32 seed = (u32)argc;
+    Shape* s = new Shape(seed);
+    if ((argc & 1) == 0)
+        s = new Boxy(seed);
+    u32 acc = (u32)0;
+    i64 t0 = bench_now_us();
+    for (u32 r = (u32)0; r < (u32)1600000000; r++) acc = acc + s.score(r);
+    i64 t1 = bench_now_us();
+    Stdio.printf("%lu %lld\n", acc, t1 - t0);
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="Objective-C">
+
+```objc
+// method_call — a virtual method call per iteration. See method_call.xc.
+#import <Foundation/Foundation.h>
+#include <stdio.h>
+#include "include/bench_time.h"
+#include <stdint.h>
+
+@interface Shape : NSObject { @public uint32_t k; }
+- (instancetype)initWithK:(uint32_t)x;
+- (uint32_t)score:(uint32_t)x;
+@end
+@implementation Shape
+- (instancetype)initWithK:(uint32_t)x { if ((self = [super init])) k = x; return self; }
+- (uint32_t)score:(uint32_t)x { return k ^ x; }
+@end
+@interface Boxy : Shape @end
+@implementation Boxy
+- (uint32_t)score:(uint32_t)x { return (k ^ x) + 1u; }
+@end
+
+int main(int argc, char **argv)
+    {
+    @autoreleasepool {
+        uint32_t seed = (uint32_t)argc;
+        Shape *s = (argc & 1) ? [[Shape alloc] initWithK:seed] : [[Boxy alloc] initWithK:seed];
+        uint32_t acc = 0;
+        int64_t t0 = bench_now_us();
+        for (uint32_t r = 0; r < 1600000000; r++) acc = acc + [s score:r];
+        int64_t t1 = bench_now_us();
+        printf("%u %lld\n", acc, (long long)(t1 - t0));
+    }
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="C++">
+
+```cpp
+// method_call — a virtual method call per iteration. See method_call.xc.
+#include <cstdio>
+#include <cstdint>
+#include <memory>
+#include "include/bench_time.h"
+
+class Shape
+    {
+public:
+    explicit Shape(uint32_t x) : k(x) {}
+    virtual ~Shape() = default;
+    virtual uint32_t score(uint32_t x) const { return k ^ x; }
+protected:
+    uint32_t k;
+    };
+
+class Boxy : public Shape
+    {
+public:
+    using Shape::Shape;
+    uint32_t score(uint32_t x) const override { return (k ^ x) + 1u; }
+    };
+
+int main(int argc, char **argv)
+    {
+    const uint32_t seed = static_cast<uint32_t>(argc);
+    std::unique_ptr<Shape> s = (argc & 1) ? std::make_unique<Shape>(seed)
+                                          : std::make_unique<Boxy>(seed);
+    uint32_t acc = 0;
+    int64_t t0 = bench_now_us();
+    for (uint32_t r = 0; r < 1600000000u; r++) acc = acc + s->score(r);
+    int64_t t1 = bench_now_us();
+    std::printf("%u %lld\n", acc, static_cast<long long>(t1 - t0));
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="Swift">
+
+```swift
+// method_call — a virtual method call per iteration. See method_call.xc.
+
+class Shape {
+    let k: UInt32
+    init(_ x: UInt32) { k = x }
+    func score(_ x: UInt32) -> UInt32 { k ^ x }
+}
+
+final class Boxy: Shape {
+    override func score(_ x: UInt32) -> UInt32 { (k ^ x) &+ 1 }
+}
+
+@main
+struct MethodCall {
+    static func main() {
+        let seed = UInt32(CommandLine.arguments.count)
+        let s: Shape = (CommandLine.arguments.count & 1) != 0 ? Shape(seed) : Boxy(seed)
+        var acc: UInt32 = 0
+        let t0 = bench_now_us()
+        for r in 0..<UInt32(1_600_000_000) { acc = acc &+ s.score(r) }
+        let t1 = bench_now_us()
+        print("\(acc) \(t1 - t0)")
+    }
+}
+```
+
+</TabItem>
+</Tabs>
+
+## poly_dispatch
+
+Dispatch through a mixed array of subclasses.
+
+Lines: xc 25, Objective-C 35, C++ 52, Swift 40.
+
+<Tabs syncKey="bench-lang">
+<TabItem label="xc">
+
+```c
+// poly_dispatch — dispatch through a mixed array of subclasses.
+// Exercises: virtual dispatch the compiler cannot devirtualise.
+#import "Stdio.xc"
+#import "include/bench_time.xc"
+#define N 256
+class Op       { u32 k; void init(u32 x) { k = x; } u32 apply(u32 v) { return v + k; } }
+class OpMul : Op { void init(u32 x) { super.init(x); } u32 apply(u32 v) { return v * (k | (u32)1); } }
+class OpXor : Op { void init(u32 x) { super.init(x); } u32 apply(u32 v) { return v ^ k; } }
+i32 main(i32 argc, u8** argv)
+    {
+    Op* ops[N]; u32 seed = (u32)argc;
+    for (u32 i = (u32)0; i < (u32)N; i++)
+        {
+        if ((i % (u32)3) == (u32)0)      ops[i] = new Op(i + seed);
+        else if ((i % (u32)3) == (u32)1) ops[i] = new OpMul(i + seed);
+        else                             ops[i] = new OpXor(i + seed);
+        }
+    u32 acc = (u32)1;
+    i64 t0 = bench_now_us();
+    for (u32 r = (u32)0; r < (u32)3000000; r++)
+        for (u32 i = (u32)0; i < (u32)N; i++) acc = ops[i].apply(acc) + r;
+    i64 t1 = bench_now_us();
+    Stdio.printf("%lu %lld\n", acc, t1 - t0);
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="Objective-C">
+
+```objc
+// poly_dispatch — dispatch through a mixed array of subclasses. See poly_dispatch.xc.
+#import <Foundation/Foundation.h>
+#include <stdio.h>
+#include "include/bench_time.h"
+#include <stdint.h>
+#define N 256
+@interface Op : NSObject { @public uint32_t k; }
+- (instancetype)initWithK:(uint32_t)x; - (uint32_t)apply:(uint32_t)v; @end
+@implementation Op
+- (instancetype)initWithK:(uint32_t)x { if ((self = [super init])) k = x; return self; }
+- (uint32_t)apply:(uint32_t)v { return v + k; } @end
+@interface OpMul : Op @end
+@implementation OpMul - (uint32_t)apply:(uint32_t)v { return v * (k | 1u); } @end
+@interface OpXor : Op @end
+@implementation OpXor - (uint32_t)apply:(uint32_t)v { return v ^ k; } @end
+
+int main(int argc, char **argv)
+    {
+    @autoreleasepool {
+        Op * __strong ops[N]; uint32_t seed = (uint32_t)argc;
+        for (uint32_t i = 0; i < N; i++)
+            {
+            if ((i % 3u) == 0)      ops[i] = [[Op alloc] initWithK:i + seed];
+            else if ((i % 3u) == 1) ops[i] = [[OpMul alloc] initWithK:i + seed];
+            else                    ops[i] = [[OpXor alloc] initWithK:i + seed];
+            }
+        uint32_t acc = 1;
+        int64_t t0 = bench_now_us();
+        for (uint32_t r = 0; r < 3000000; r++)
+            for (uint32_t i = 0; i < N; i++) acc = [ops[i] apply:acc] + r;
+        int64_t t1 = bench_now_us();
+        printf("%u %lld\n", acc, (long long)(t1 - t0));
+    }
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="C++">
+
+```cpp
+// poly_dispatch — dispatch through a mixed array of subclasses. See poly_dispatch.xc.
+#include <cstdio>
+#include <cstdint>
+#include <memory>
+#include <vector>
+#include "include/bench_time.h"
+
+constexpr uint32_t N = 256;
+
+class Op
+    {
+public:
+    explicit Op(uint32_t x) : k(x) {}
+    virtual ~Op() = default;
+    virtual uint32_t apply(uint32_t v) const { return v + k; }
+protected:
+    uint32_t k;
+    };
+
+class OpMul : public Op
+    {
+public:
+    using Op::Op;
+    uint32_t apply(uint32_t v) const override { return v * (k | 1u); }
+    };
+
+class OpXor : public Op
+    {
+public:
+    using Op::Op;
+    uint32_t apply(uint32_t v) const override { return v ^ k; }
+    };
+
+int main(int argc, char **argv)
+    {
+    const uint32_t seed = static_cast<uint32_t>(argc);
+    std::vector<std::unique_ptr<Op>> ops;
+    ops.reserve(N);
+    for (uint32_t i = 0; i < N; i++)
+        {
+        if ((i % 3u) == 0)      ops.push_back(std::make_unique<Op>(i + seed));
+        else if ((i % 3u) == 1) ops.push_back(std::make_unique<OpMul>(i + seed));
+        else                    ops.push_back(std::make_unique<OpXor>(i + seed));
+        }
+    uint32_t acc = 1;
+    int64_t t0 = bench_now_us();
+    for (uint32_t r = 0; r < 3000000u; r++)
+        for (const auto &op : ops) acc = op->apply(acc) + r;
+    int64_t t1 = bench_now_us();
+    std::printf("%u %lld\n", acc, static_cast<long long>(t1 - t0));
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="Swift">
+
+```swift
+// poly_dispatch — dispatch through a mixed array of subclasses. See poly_dispatch.xc.
+
+class Op {
+    let k: UInt32
+    init(_ x: UInt32) { k = x }
+    func apply(_ v: UInt32) -> UInt32 { v &+ k }
+}
+
+final class OpMul: Op {
+    override func apply(_ v: UInt32) -> UInt32 { v &* (k | 1) }
+}
+
+final class OpXor: Op {
+    override func apply(_ v: UInt32) -> UInt32 { v ^ k }
+}
+
+@main
+struct PolyDispatch {
+    static func main() {
+        let n = 256
+        let seed = UInt32(CommandLine.arguments.count)
+        var ops: [Op] = []
+        ops.reserveCapacity(n)
+        for i in 0..<n {
+            let x = UInt32(i) &+ seed
+            switch i % 3 {
+            case 0:  ops.append(Op(x))
+            case 1:  ops.append(OpMul(x))
+            default: ops.append(OpXor(x))
+            }
+        }
+        var acc: UInt32 = 1
+        let t0 = bench_now_us()
+        for r in 0..<UInt32(3_000_000) {
+            for i in 0..<n { acc = ops[i].apply(acc) &+ r }
+        }
+        let t1 = bench_now_us()
+        print("\(acc) \(t1 - t0)")
+    }
+}
+```
+
+</TabItem>
+</Tabs>
+
+## sieve
+
+Sieve of Eratosthenes over a fixed range, repeatedly.
+
+Lines: xc 25, Objective-C 28, C++ 30, Swift 27.
+
+<Tabs syncKey="bench-lang">
+<TabItem label="xc">
+
+```c
+// sieve — sieve of Eratosthenes over a fixed range, repeatedly.
+// Exercises: byte array writes, strided inner loops, division-free stepping.
+#import "Stdio.xc"
+#import "include/bench_time.xc"
+#define N 8192
+i32 main(i32 argc, u8** argv)
+    {
+    u8 flags[N]; u32 seed = (u32)argc; u32 acc = (u32)0;
+    i64 t0 = bench_now_us();
+    for (u32 r = (u32)0; r < (u32)150000; r++)
+        {
+        for (u32 i = (u32)0; i < (u32)N; i++) flags[i] = (u8)1;
+        u32 count = (u32)0;
+        for (u32 i = (u32)2; i < (u32)N; i++)
+            if (flags[i] != (u8)0)
+                {
+                count = count + (u32)1;
+                for (u32 j = i + i; j < (u32)N; j = j + i) flags[j] = (u8)0;
+                }
+        acc = acc + count + (r & seed);
+        }
+    i64 t1 = bench_now_us();
+    Stdio.printf("%lu %lld\n", acc, t1 - t0);
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="Objective-C">
+
+```objc
+// sieve — sieve of Eratosthenes over a fixed range, repeatedly. See sieve.xc.
+#import <Foundation/Foundation.h>
+#include <stdio.h>
+#include "include/bench_time.h"
+#include <stdint.h>
+#define N 8192
+int main(int argc, char **argv)
+    {
+    @autoreleasepool {
+        uint8_t flags[N]; uint32_t seed = (uint32_t)argc, acc = 0;
+        int64_t t0 = bench_now_us();
+        for (uint32_t r = 0; r < 150000; r++)
+            {
+            for (uint32_t i = 0; i < N; i++) flags[i] = 1;
+            uint32_t count = 0;
+            for (uint32_t i = 2; i < N; i++)
+                if (flags[i] != 0)
+                    {
+                    count = count + 1;
+                    for (uint32_t j = i + i; j < N; j = j + i) flags[j] = 0;
+                    }
+            acc = acc + count + (r & seed);
+            }
+        int64_t t1 = bench_now_us();
+        printf("%u %lld\n", acc, (long long)(t1 - t0));
+    }
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="C++">
+
+```cpp
+// sieve — sieve of Eratosthenes over a fixed range, repeatedly. See sieve.xc.
+#include <array>
+#include <cstdio>
+#include <cstdint>
+#include "include/bench_time.h"
+
+constexpr uint32_t N = 8192;
+
+int main(int argc, char **argv)
+    {
+    std::array<uint8_t, N> flags;
+    const uint32_t seed = static_cast<uint32_t>(argc);
+    uint32_t acc = 0;
+    int64_t t0 = bench_now_us();
+    for (uint32_t r = 0; r < 150000u; r++)
+        {
+        for (uint32_t i = 0; i < N; i++) flags[i] = 1;
+        uint32_t count = 0;
+        for (uint32_t i = 2; i < N; i++)
+            if (flags[i] != 0)
+                {
+                count = count + 1;
+                for (uint32_t j = i + i; j < N; j = j + i) flags[j] = 0;
+                }
+        acc = acc + count + (r & seed);
+        }
+    int64_t t1 = bench_now_us();
+    std::printf("%u %lld\n", acc, static_cast<long long>(t1 - t0));
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="Swift">
+
+```swift
+// sieve — sieve of Eratosthenes over a fixed range, repeatedly. See sieve.xc.
+
+@main
+struct Sieve {
+    static func main() {
+        let n = 8192
+        let seed = UInt32(CommandLine.arguments.count)
+        var flags = [UInt8](repeating: 0, count: n)
+        var acc: UInt32 = 0
+        let t0 = bench_now_us()
+        for r in 0..<UInt32(150_000) {
+            for i in 0..<n { flags[i] = 1 }
+            var count: UInt32 = 0
+            for i in 2..<n where flags[i] != 0 {
+                count = count &+ 1
+                var j = i + i
+                while j < n {
+                    flags[j] = 0
+                    j = j + i
+                }
+            }
+            acc = acc &+ count &+ (r & seed)
+        }
+        let t1 = bench_now_us()
+        print("\(acc) \(t1 - t0)")
+    }
+}
+```
+
+</TabItem>
+</Tabs>
+
+## sort_small
+
+Insertion sort of a small array, repeatedly.
+
+Lines: xc 25, Objective-C 28, C++ 30, Swift 29.
+
+<Tabs syncKey="bench-lang">
+<TabItem label="xc">
+
+```c
+// sort_small — insertion sort of a small array, repeatedly.
+// Exercises: nested loops, data-dependent branches, swaps.
+#import "Stdio.xc"
+#import "include/bench_time.xc"
+#define N 64
+i32 main(i32 argc, u8** argv)
+    {
+    u32 a[N]; u32 seed = (u32)argc; u32 acc = (u32)0;
+    i64 t0 = bench_now_us();
+    for (u32 r = (u32)0; r < (u32)3200000; r++)
+        {
+        for (u32 i = (u32)0; i < (u32)N; i++)
+            a[i] = ((i * (u32)2654435761) ^ (r * (u32)40503)) + seed;
+        for (u32 i = (u32)1; i < (u32)N; i++)
+            {
+            u32 v = a[i]; u32 j = i;
+            while (j > (u32)0 && a[j - (u32)1] > v) { a[j] = a[j - (u32)1]; j = j - (u32)1; }
+            a[j] = v;
+            }
+        acc = acc + a[0] + a[N - 1];
+        }
+    i64 t1 = bench_now_us();
+    Stdio.printf("%lu %lld\n", acc, t1 - t0);
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="Objective-C">
+
+```objc
+// sort_small — insertion sort of a small array, repeatedly. See sort_small.xc.
+#import <Foundation/Foundation.h>
+#include <stdio.h>
+#include "include/bench_time.h"
+#include <stdint.h>
+#define N 64
+int main(int argc, char **argv)
+    {
+    @autoreleasepool {
+        uint32_t a[N]; uint32_t seed = (uint32_t)argc, acc = 0;
+        int64_t t0 = bench_now_us();
+        for (uint32_t r = 0; r < 3200000; r++)
+            {
+            for (uint32_t i = 0; i < N; i++)
+                a[i] = ((i * 2654435761u) ^ (r * 40503u)) + seed;
+            for (uint32_t i = 1; i < N; i++)
+                {
+                uint32_t v = a[i], j = i;
+                while (j > 0 && a[j - 1] > v) { a[j] = a[j - 1]; j = j - 1; }
+                a[j] = v;
+                }
+            acc = acc + a[0] + a[N - 1];
+            }
+        int64_t t1 = bench_now_us();
+        printf("%u %lld\n", acc, (long long)(t1 - t0));
+    }
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="C++">
+
+```cpp
+// sort_small — insertion sort of a small array, repeatedly. See sort_small.xc.
+#include <array>
+#include <cstdio>
+#include <cstdint>
+#include "include/bench_time.h"
+
+constexpr uint32_t N = 64;
+
+int main(int argc, char **argv)
+    {
+    std::array<uint32_t, N> a;
+    const uint32_t seed = static_cast<uint32_t>(argc);
+    uint32_t acc = 0;
+    int64_t t0 = bench_now_us();
+    for (uint32_t r = 0; r < 3200000u; r++)
+        {
+        for (uint32_t i = 0; i < N; i++)
+            a[i] = ((i * 2654435761u) ^ (r * 40503u)) + seed;
+        for (uint32_t i = 1; i < N; i++)
+            {
+            uint32_t v = a[i], j = i;
+            while (j > 0 && a[j - 1] > v) { a[j] = a[j - 1]; j = j - 1; }
+            a[j] = v;
+            }
+        acc = acc + a.front() + a.back();
+        }
+    int64_t t1 = bench_now_us();
+    std::printf("%u %lld\n", acc, static_cast<long long>(t1 - t0));
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="Swift">
+
+```swift
+// sort_small — insertion sort of a small array, repeatedly. See sort_small.xc.
+
+@main
+struct SortSmall {
+    static func main() {
+        let n = 64
+        let seed = UInt32(CommandLine.arguments.count)
+        var a = [UInt32](repeating: 0, count: n)
+        var acc: UInt32 = 0
+        let t0 = bench_now_us()
+        for r in 0..<UInt32(3_200_000) {
+            for i in 0..<n {
+                a[i] = ((UInt32(i) &* 2654435761) ^ (r &* 40503)) &+ seed
+            }
+            for i in 1..<n {
+                let v = a[i]
+                var j = i
+                while j > 0 && a[j - 1] > v {
+                    a[j] = a[j - 1]
+                    j = j - 1
+                }
+                a[j] = v
+            }
+            acc = acc &+ a[0] &+ a[n - 1]
+        }
+        let t1 = bench_now_us()
+        print("\(acc) \(t1 - t0)")
+    }
+}
+```
+
+</TabItem>
+</Tabs>
+
+## string_scan
+
+Scan bytes for a delimiter and checksum them.
+
+Lines: xc 22, Objective-C 24, C++ 26, Swift 23.
+
+<Tabs syncKey="bench-lang">
+<TabItem label="xc">
+
+```c
+// string_scan — scan bytes for a delimiter and checksum them.
+// Exercises: byte loads, comparisons, narrow-type arithmetic.
+#import "Stdio.xc"
+#import "include/bench_time.xc"
+#define N 8192
+i32 main(i32 argc, u8** argv)
+    {
+    u8 buf[N]; u32 seed = (u32)argc; u32 acc = (u32)0;
+    for (u32 i = (u32)0; i < (u32)N; i++)
+        buf[i] = (u8)(((i * (u32)31) + seed) & (u32)127);
+    i64 t0 = bench_now_us();
+    for (u32 r = (u32)0; r < (u32)3800000; r++)
+        {
+        u32 n = (u32)0;
+        for (u32 i = (u32)0; i < (u32)N; i++)
+            { if (buf[i] == (u8)44) n = n + (u32)1; acc = acc + (u32)buf[i]; }
+        acc = acc + n;
+        }
+    i64 t1 = bench_now_us();
+    Stdio.printf("%lu %lld\n", acc, t1 - t0);
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="Objective-C">
+
+```objc
+// string_scan — scan bytes for a delimiter and checksum them. See string_scan.xc.
+#import <Foundation/Foundation.h>
+#include <stdio.h>
+#include "include/bench_time.h"
+#include <stdint.h>
+#define N 8192
+int main(int argc, char **argv)
+    {
+    @autoreleasepool {
+        uint8_t buf[N]; uint32_t seed = (uint32_t)argc, acc = 0;
+        for (uint32_t i = 0; i < N; i++) buf[i] = (uint8_t)(((i * 31u) + seed) & 127u);
+        int64_t t0 = bench_now_us();
+        for (uint32_t r = 0; r < 3800000; r++)
+            {
+            uint32_t n = 0;
+            for (uint32_t i = 0; i < N; i++)
+                { if (buf[i] == 44) n = n + 1; acc = acc + (uint32_t)buf[i]; }
+            acc = acc + n;
+            }
+        int64_t t1 = bench_now_us();
+        printf("%u %lld\n", acc, (long long)(t1 - t0));
+    }
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="C++">
+
+```cpp
+// string_scan — scan bytes for a delimiter and checksum them. See string_scan.xc.
+#include <array>
+#include <cstdio>
+#include <cstdint>
+#include "include/bench_time.h"
+
+constexpr uint32_t N = 8192;
+
+int main(int argc, char **argv)
+    {
+    std::array<uint8_t, N> buf;
+    const uint32_t seed = static_cast<uint32_t>(argc);
+    uint32_t acc = 0;
+    for (uint32_t i = 0; i < N; i++) buf[i] = static_cast<uint8_t>(((i * 31u) + seed) & 127u);
+    int64_t t0 = bench_now_us();
+    for (uint32_t r = 0; r < 3800000u; r++)
+        {
+        uint32_t n = 0;
+        for (uint8_t c : buf)
+            { if (c == 44) n = n + 1; acc = acc + static_cast<uint32_t>(c); }
+        acc = acc + n;
+        }
+    int64_t t1 = bench_now_us();
+    std::printf("%u %lld\n", acc, static_cast<long long>(t1 - t0));
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="Swift">
+
+```swift
+// string_scan — scan bytes for a delimiter and checksum them. See string_scan.xc.
+
+@main
+struct StringScan {
+    static func main() {
+        let n = 8192
+        let seed = UInt32(CommandLine.arguments.count)
+        var buf = [UInt8](repeating: 0, count: n)
+        var acc: UInt32 = 0
+        for i in 0..<n { buf[i] = UInt8(((UInt32(i) &* 31) &+ seed) & 127) }
+        let t0 = bench_now_us()
+        for _ in 0..<UInt32(3_800_000) {
+            var count: UInt32 = 0
+            for i in 0..<n {
+                if buf[i] == UInt8(ascii: ",") { count = count &+ 1 }
+                acc = acc &+ UInt32(buf[i])
+            }
+            acc = acc &+ count
+        }
+        let t1 = bench_now_us()
+        print("\(acc) \(t1 - t0)")
+    }
+}
+```
+
+</TabItem>
+</Tabs>
+
+## struct_copy
+
+Pass and return a small struct by value.
+
+Lines: xc 17, Objective-C 19, C++ 23, Swift 26.
+
+<Tabs syncKey="bench-lang">
+<TabItem label="xc">
+
+```c
+// struct_copy — pass and return a small struct by value.
+// Exercises: struct copy semantics, field layout, argument passing.
+#import "Stdio.xc"
+#import "include/bench_time.xc"
+struct Pt { u32 x, y; }
+Pt bump(Pt p, u32 d) { Pt q; q.x = p.x + d; q.y = p.y ^ d; return q; }
+i32 main(i32 argc, u8** argv)
+    {
+    u32 seed = (u32)argc; u32 acc = (u32)0;
+    Pt p; p.x = seed; p.y = seed;
+    i64 t0 = bench_now_us();
+    for (u32 r = (u32)0; r < (u32)2200000000; r++)
+        { p = bump(p, r); acc = acc + p.x + p.y; }
+    i64 t1 = bench_now_us();
+    Stdio.printf("%lu %lld\n", acc, t1 - t0);
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="Objective-C">
+
+```objc
+// struct_copy — pass and return a small struct by value. See struct_copy.xc.
+#import <Foundation/Foundation.h>
+#include <stdio.h>
+#include "include/bench_time.h"
+#include <stdint.h>
+typedef struct { uint32_t x, y; } Pt;
+static Pt bump(Pt p, uint32_t d) { Pt q; q.x = p.x + d; q.y = p.y ^ d; return q; }
+int main(int argc, char **argv)
+    {
+    @autoreleasepool {
+        uint32_t seed = (uint32_t)argc, acc = 0;
+        Pt p; p.x = seed; p.y = seed;
+        int64_t t0 = bench_now_us();
+        for (uint32_t r = 0; r < 2200000000; r++) { p = bump(p, r); acc = acc + p.x + p.y; }
+        int64_t t1 = bench_now_us();
+        printf("%u %lld\n", acc, (long long)(t1 - t0));
+    }
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="C++">
+
+```cpp
+// struct_copy — pass and return a small struct by value. See struct_copy.xc.
+#include <cstdio>
+#include <cstdint>
+#include "include/bench_time.h"
+
+struct Pt { uint32_t x, y; };
+
+namespace
+    {
+    Pt bump(Pt p, uint32_t d) { return Pt{p.x + d, p.y ^ d}; }
+    }
+
+int main(int argc, char **argv)
+    {
+    const uint32_t seed = static_cast<uint32_t>(argc);
+    uint32_t acc = 0;
+    Pt p{seed, seed};
+    int64_t t0 = bench_now_us();
+    for (uint32_t r = 0; r < 2200000000u; r++) { p = bump(p, r); acc = acc + p.x + p.y; }
+    int64_t t1 = bench_now_us();
+    std::printf("%u %lld\n", acc, static_cast<long long>(t1 - t0));
+    return 0;
+    }
+```
+
+</TabItem>
+<TabItem label="Swift">
+
+```swift
+// struct_copy — pass and return a small struct by value. See struct_copy.xc.
+
+struct Pt {
+    var x: UInt32
+    var y: UInt32
+}
+
+func bump(_ p: Pt, _ d: UInt32) -> Pt {
+    Pt(x: p.x &+ d, y: p.y ^ d)
+}
+
+@main
+struct StructCopy {
+    static func main() {
+        let seed = UInt32(CommandLine.arguments.count)
+        var acc: UInt32 = 0
+        var p = Pt(x: seed, y: seed)
+        let t0 = bench_now_us()
+        for r in 0..<UInt32(2_200_000_000) {
+            p = bump(p, r)
+            acc = acc &+ p.x &+ p.y
+        }
+        let t1 = bench_now_us()
+        print("\(acc) \(t1 - t0)")
+    }
+}
+```
+
+</TabItem>
+</Tabs>
+

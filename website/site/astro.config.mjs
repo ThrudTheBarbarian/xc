@@ -159,6 +159,7 @@ export default defineConfig({
 							],
 						},
 						{ label: 'Performance', slug: 'compiler/performance' },
+						{ label: 'Benchmark sources', slug: 'compiler/benchmark-sources' },
 						{ label: 'Future work', slug: 'compiler/future-work' },
 						{
 							label: 'Downloads',
