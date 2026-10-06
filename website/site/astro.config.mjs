@@ -86,6 +86,7 @@ export default defineConfig({
 										{ label: 'Set', slug: 'compiler/api/set' },
 										{ label: 'String', slug: 'compiler/api/string' },
 										{ label: 'String (xt6502)', slug: 'compiler/api/string-xt6502' },
+										{ label: 'UndoManager', slug: 'compiler/api/undomanager' },
 									],
 								},
 								{
