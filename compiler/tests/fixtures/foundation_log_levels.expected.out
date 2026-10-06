@@ -1,0 +1,24 @@
+default minimum (info):
+  I n=3
+  W careful
+  E broken
+minimum debug:
+  D x=7
+minimum error:
+  E kept
+channels:
+  D net: dns ok
+  W net: retry 2
+same channel: 1
+monitors:
+  E net: timeout
+  monitor [net] 3 timeout
+  I plain
+  monitor [] 1 plain
+  I unwatched
+  I watched once
+  monitor [] 1 watched once
+  I after the watcher went
+seen 2
+a Logger without debug:
+  plain I through info

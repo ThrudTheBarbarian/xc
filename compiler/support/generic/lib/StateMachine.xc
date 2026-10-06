@@ -62,6 +62,7 @@ class StateMachine
         _table = new Map();
         _state = String.withCString("");
         _history = new Array();
+        _didChange = (callback void(String* from, String* event, String* to))0;
         }
 
     static StateMachine* withInitial(String* state)

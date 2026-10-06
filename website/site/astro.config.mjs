@@ -119,6 +119,7 @@ export default defineConfig({
 										{ label: 'FILE', slug: 'compiler/api/file' },
 										{ label: 'Files', slug: 'compiler/api/files' },
 										{ label: 'Http', slug: 'compiler/api/http' },
+										{ label: 'Log', slug: 'compiler/api/log' },
 										{ label: 'Math', slug: 'compiler/api/math' },
 										{ label: 'Memory', slug: 'compiler/api/memory' },
 										{ label: 'Settings', slug: 'compiler/api/settings' },
