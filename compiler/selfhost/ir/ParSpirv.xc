@@ -98,6 +98,7 @@
 #define SPV_SWITCH 251
 #define SPV_RETURN 253
 #define SPV_RETURNVALUE 254
+#define SPV_UNREACHABLE 255
 
 #define SPV_ST_INPUT 1
 #define SPV_ST_PUSHCONSTANT 9
@@ -389,6 +390,14 @@ class SpvFn
     u32 pcVar;
     u32 retVar;
     u32 loopContinue;
+    // The structured walk (Lower.xc spvS…): a dry run only checks the shape;
+    // the current block is open; each loop header's continue target and
+    // merge; where the kernel's return goes.
+    bool dry;
+    bool open;
+    Map* loopCont;     // header index -> Number
+    Map* loopMerge;
+    u32 exitLabel;
 
     void init(void)
         {
@@ -401,5 +410,10 @@ class SpvFn
         pcVar = (u32)0;
         retVar = (u32)0;
         loopContinue = (u32)0;
+        dry = false;
+        open = false;
+        loopCont = new Map();
+        loopMerge = new Map();
+        exitLabel = (u32)0;
         }
     }

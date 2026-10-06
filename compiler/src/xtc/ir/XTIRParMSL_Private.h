@@ -68,6 +68,9 @@ typedef NS_ENUM(uint8_t, XTParSpace) {
 - (NSString*)name:(XTIRValueId)v;
 - (NSInteger)selfFieldOf:(XTIROperand*)op;
 - (BOOL)analyse;
+// The structure plan, shared with the SPIR-V printer.
+- (BOOL)planStructure;
+- (NSUInteger)indexOf:(XTIRBlock*)b;
 - (void)because:(NSString*)why;
 - (NSString*)whyFor:(XTIRInsn*)i ptx:(BOOL)ptx;
 - (NSString*)callFailed:(NSString*)callee helper:(nullable XTIRParMSL*)h;

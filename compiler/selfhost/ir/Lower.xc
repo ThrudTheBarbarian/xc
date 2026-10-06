@@ -17603,6 +17603,196 @@ class ClassInfo
         return true;
         }
 
+    // ── structured control flow ─────────────────────────────────────────────
+    // The reference's spvStructured…: the Metal plan (sPlan) as SPIR-V loop
+    // and selection constructs, values in Function variables, phis copies on
+    // their edges; a dry walk first, else the dispatch loop.
+    // A loop's label, 0 in the dry walk (which names none).
+    u32 spvNum(Map* m, i64 k)
+        {
+        Number* v = (Number*)m.get((Hashable*)sKey((u32)k));
+        return v == (Number*)0 ? (u32)0 : v.asU32();
+        }
+    void spvBranchTo(u32 to)
+        {
+        if (!_spvFn.dry) spvEmit((u32)SPV_BRANCH, spvA1(to));
+        _spvFn.open = false;
+        }
+    bool spvSJump(u32 u, u32 v, i64 h, i64 e, i64 fo)
+        {
+        SpvFn* f = _spvFn;
+        if (!f.dry)
+            {
+            Array* vals = new Array();
+            Array* dsts = new Array();
+            if (!spvEdge((IRBlock*)_sFn.blocks().get(u), (IRBlock*)_sFn.blocks().get(v), (u32)0, true, vals, dsts))
+                return false;
+            spvStores(vals, dsts);
+            }
+        if ((i64)v == h) { spvBranchTo(spvNum(f.loopCont, h)); return true; }
+        if ((i64)v == e) { spvBranchTo(spvNum(f.loopMerge, h)); return true; }
+        if ((i64)v == fo) return true;
+        if (sIsHeader(v)) return spvSLoop(v, e, fo, h);
+        if (((Number*)_sFwd.get(v)).asU32() != (u32)1) return false;
+        return spvSBlock(v, h, e, fo);
+        }
+    bool spvSLoop(u32 x, i64 oe, i64 of, i64 oh)
+        {
+        SpvFn* f = _spvFn;
+        if (((Number*)_sFwd.get(x)).asU32() != (u32)1) return false;
+        u32 ex = (u32)((Number*)_sExit.get((Hashable*)sKey(x))).asI64();
+        if (oh >= (i64)0 && !sInLoop(oh, ex) && (i64)ex != oe && (i64)ex != of) return false;
+        u32 head = (u32)0;
+        u32 body = (u32)0;
+        u32 cont = (u32)0;
+        u32 merge = (u32)0;
+        if (!f.dry)
+            {
+            head = spvLabel(); body = spvLabel(); cont = spvLabel(); merge = spvLabel();
+            f.loopCont.set((Hashable*)sKey(x), (Object*)Number.withU32(cont));
+            f.loopMerge.set((Hashable*)sKey(x), (Object*)Number.withU32(merge));
+            spvEmit((u32)SPV_BRANCH, spvA1(head));
+            spvPlace(head);
+            spvEmit((u32)SPV_LOOPMERGE, spvA3(merge, cont, (u32)0));
+            spvEmit((u32)SPV_BRANCH, spvA1(body));
+            spvPlace(body);
+            }
+        f.open = true;
+        if (!spvSBlock(x, (i64)x, (i64)ex, (i64)-1)) return false;
+        if (f.open) spvBranchTo(cont);
+        if (!f.dry)
+            {
+            spvPlace(cont);
+            spvEmit((u32)SPV_BRANCH, spvA1(head));
+            spvPlace(merge);
+            }
+        f.open = true;
+        if ((i64)ex == of) return true;
+        if ((i64)ex == oh) { spvBranchTo(spvNum(f.loopCont, oh)); return true; }
+        if ((i64)ex == oe) { spvBranchTo(spvNum(f.loopMerge, oh)); return true; }
+        if (sIsHeader(ex)) return false;
+        return spvSBlock(ex, oh, oe, of);
+        }
+    bool spvSBlock(u32 x, i64 h, i64 e, i64 fo)
+        {
+        SpvFn* f = _spvFn;
+        IRBlock* b = (IRBlock*)_sFn.blocks().get(x);
+        if (!f.dry)
+            for (u32 i = (u32)0; i < b.insns().count(); i = i + (u32)1)
+                if (!spvStatement((IRInsn*)b.insns().get(i)))
+                    {
+                    parBecause(parWhyFor((IRInsn*)b.insns().get(i), true));
+                    return false;
+                    }
+        IRInsn* t = b.term();
+        if (t == (IRInsn*)0) return false;
+        if (t.op().equals(spvS("Return")))
+            {
+            if (_mHelper)
+                {
+                // A function's return may stand anywhere in structured SPIR-V.
+                IROperand* rv = t.ops().count() > (u32)0 ? (IROperand*)t.ops().get((u32)0) : (IROperand*)0;
+                String* rvt = rv == (IROperand*)0 ? (String*)0 : rv.kind() == (u8)OPK_USE ? mslTypeOf(rv) : _sFn.ret();
+                if (!f.dry)
+                    {
+                    if (rvt != (String*)0 && !ptxIs(rvt, "Mem"))
+                        {
+                        u32 v = spvValue(rv, rvt);
+                        if (v == (u32)0) return false;
+                        spvEmit((u32)SPV_RETURNVALUE, spvA1(v));
+                        }
+                    else
+                        spvEmit((u32)SPV_RETURN, new Array());
+                    }
+                f.open = false;
+                return true;
+                }
+            // The kernel's work ends: a break from the loop that runs once,
+            // which only works from outside any loop of the kernel's own.
+            if (h >= (i64)0) return false;
+            spvBranchTo(f.exitLabel);
+            return true;
+            }
+        if (t.op().equals(spvS("Branch")))
+            return spvSJump(x, sIndexOf(((IROperand*)t.ops().get((u32)0)).blk()), h, e, fo);
+        if (!t.op().equals(spvS("CondBranch"))) return false;
+        u32 n = _sFn.blocks().count();
+        i64 j = ((Number*)_sIpdom.get(x)).asI64();
+        if (j < (i64)0) return false;
+        i64 join = j == (i64)n ? fo : j;
+        if (join >= (i64)0 && join != h && join != e && join != fo)
+            if (h >= (i64)0 && !sInLoop(h, (u32)join)) return false;
+        u32 yes = (u32)0;
+        u32 no = (u32)0;
+        u32 merge = (u32)0;
+        if (!f.dry)
+            {
+            u32 c = spvValue((IROperand*)t.ops().get((u32)0), (String*)0);
+            if (c == (u32)0) return false;
+            yes = spvLabel(); no = spvLabel(); merge = spvLabel();
+            spvEmit((u32)SPV_SELECTIONMERGE, spvA2(merge, (u32)0));
+            spvEmit((u32)SPV_BRANCHCONDITIONAL, spvA3(c, yes, no));
+            spvPlace(yes);
+            }
+        f.open = true;
+        if (!spvSJump(x, sIndexOf(((IROperand*)t.ops().get((u32)1)).blk()), h, e, join)) return false;
+        if (f.open) spvBranchTo(merge);
+        if (!f.dry) spvPlace(no);
+        f.open = true;
+        if (!spvSJump(x, sIndexOf(((IROperand*)t.ops().get((u32)2)).blk()), h, e, join)) return false;
+        if (f.open) spvBranchTo(merge);
+        if (!f.dry) spvPlace(merge);
+        f.open = true;
+        if (join < (i64)0)
+            {
+            // Both ways left by a branch: the merge is never reached.
+            if (!f.dry) spvEmit((u32)SPV_UNREACHABLE, new Array());
+            f.open = false;
+            return true;
+            }
+        if (join == fo) return true;
+        if (join == h) { spvBranchTo(spvNum(f.loopCont, h)); return true; }
+        if (join == e) { spvBranchTo(spvNum(f.loopMerge, h)); return true; }
+        if (sIsHeader((u32)join)) return spvSLoop((u32)join, e, fo, h);
+        return spvSBlock((u32)join, h, e, fo);
+        }
+    bool spvSWalk(void)
+        {
+        _spvFn.open = true;
+        return sIsHeader((u32)0) ? spvSLoop((u32)0, (i64)-1, (i64)-1, (i64)-1)
+                                 : spvSBlock((u32)0, (i64)-1, (i64)-1, (i64)-1);
+        }
+    // The function's blocks, structured where their shape allows, else as
+    // the dispatch loop; then mergeLabel is placed.
+    bool spvBody(IRFunc* g, u32 mergeLabel, u32 guard)
+        {
+        SpvFn* f = _spvFn;
+        f.dry = true;
+        bool fits = sPlan(g) && spvSWalk();
+        f.dry = false;
+        if (!fits) return spvDispatch(g, mergeLabel, guard);
+        f.loopCont = new Map();
+        f.loopMerge = new Map();
+        f.exitLabel = mergeLabel;
+        u32 head = spvLabel();
+        u32 body = spvLabel();
+        u32 cont = spvLabel();
+        spvEmit((u32)SPV_BRANCH, spvA1(head));
+        spvPlace(head);
+        spvEmit((u32)SPV_LOOPMERGE, spvA3(mergeLabel, cont, (u32)0));
+        if (guard != (u32)0)
+            spvEmit((u32)SPV_BRANCHCONDITIONAL, spvA3(guard, body, mergeLabel));
+        else
+            spvEmit((u32)SPV_BRANCH, spvA1(body));
+        spvPlace(body);
+        if (!spvSWalk()) return false;
+        if (f.open) spvEmit((u32)SPV_BRANCH, spvA1(mergeLabel));
+        spvPlace(cont);
+        spvEmit((u32)SPV_BRANCH, spvA1(head));
+        spvPlace(mergeLabel);
+        return true;
+        }
+
     // A variable for every value that is read and is not a pointer or the
     // memory token.
     bool spvDeclareValues(IRFunc* f)
@@ -17667,7 +17857,10 @@ class ClassInfo
         Map* sBlk = _mBlk; Map* sBufs = _mBufs; Map* sReds = _mReds; IRLayout* sObj = _mObj;
         bool sFailed = _mFailed; bool sHelper = _mHelper; Map* sParams = _mParams; Map* sSinit = _mSinit; String* sWhy = _mWhy;
         Array* sGlobals = _mGlobals; Map* sGlobalOf = _mGlobalOf; SpvFn* sFn = _spvFn;
+        Array* sSucc = _sSucc; Array* sRpo = _sRpo; Array* sFwd = _sFwd; Map* sLoop = _sLoop; Map* sExit = _sExit;
+        Array* sIpdom = _sIpdom; IRFunc* sSFn = _sFn;
         u32 out = spvHelperBody(g);
+        _sSucc = sSucc; _sRpo = sRpo; _sFwd = sFwd; _sLoop = sLoop; _sExit = sExit; _sIpdom = sIpdom; _sFn = sSFn;
         _mHelperWhy = _mWhy;
         _mDef = sDef; _mSpace = sSpace; _mBufOf = sBufOf; _mOrd = sOrd;
         _mBlk = sBlk; _mBufs = sBufs; _mReds = sReds; _mObj = sObj;
@@ -17688,7 +17881,11 @@ class ClassInfo
         if (!mslAnalyse(g)) return (u32)0;
         SpvFn* fn = new SpvFn();
         for (u32 bi = (u32)0; bi < g.blocks().count(); bi = bi + (u32)1)
+            {
             fn.blockNum.set((Hashable*)((IRBlock*)g.blocks().get(bi)).name(), (Object*)Number.withU32(bi));
+            // The structured walk's block indexes (sPlan), as the Metal printer's.
+            _mBlk.set((Hashable*)((IRBlock*)g.blocks().get(bi)).name(), (Object*)String.withU32(bi));
+            }
         String* rt = g.ret();
         bool isVoid = rt == (String*)0 || ptxIs(rt, "Void") || ptxIs(rt, "Mem");
         u32 ret = isVoid ? _sMod.typeVoid() : spvType(rt);
@@ -17732,7 +17929,7 @@ class ClassInfo
         if (!isVoid)
             fn.retVar = spvLocalVar(ret);
         u32 merge = spvLabel();
-        if (!spvDispatch(g, merge, (u32)0)) return (u32)0;
+        if (!spvBody(g, merge, (u32)0)) return (u32)0;
         if (isVoid)
             spvEmit((u32)SPV_RETURN, new Array());
         else
@@ -17777,7 +17974,11 @@ class ClassInfo
         if (!mslAnalyse(f)) return false;
         SpvFn* fn = new SpvFn();
         for (u32 bi = (u32)0; bi < f.blocks().count(); bi = bi + (u32)1)
+            {
             fn.blockNum.set((Hashable*)((IRBlock*)f.blocks().get(bi)).name(), (Object*)Number.withU32(bi));
+            // The structured walk's block indexes (sPlan), as the Metal printer's.
+            _mBlk.set((Hashable*)((IRBlock*)f.blocks().get(bi)).name(), (Object*)String.withU32(bi));
+            }
 
         SpvMod* m = new SpvMod();
         _sMod = m;
@@ -17993,7 +18194,7 @@ class ClassInfo
         spvEmit((u32)SPV_STORE, spvA2(fn.pcVar, m.u32c((u32)0)));
         u32 guard = spvEmitR((u32)SPV_SLESSTHAN, m.typeBool(), spvA2(lo, hi));
         u32 merge = spvLabel();
-        if (!spvDispatch(f, merge, guard)) return false;
+        if (!spvBody(f, merge, guard)) return false;
         u32 inRange = spvEmitR((u32)SPV_SLESSTHAN, m.typeBool(), spvA2(lo, spanHi));
         u32 write = spvLabel();
         u32 done = spvLabel();

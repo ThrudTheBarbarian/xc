@@ -59,7 +59,7 @@ enum
     SpvOpShiftRightLogical = 194, SpvOpShiftRightArithmetic = 195, SpvOpShiftLeftLogical = 196,
     SpvOpBitwiseOr = 197, SpvOpBitwiseXor = 198, SpvOpBitwiseAnd = 199, SpvOpNot = 200,
     SpvOpLoopMerge = 246, SpvOpSelectionMerge = 247, SpvOpLabel = 248, SpvOpBranch = 249,
-    SpvOpBranchConditional = 250, SpvOpSwitch = 251, SpvOpReturn = 253, SpvOpReturnValue = 254,
+    SpvOpBranchConditional = 250, SpvOpSwitch = 251, SpvOpReturn = 253, SpvOpReturnValue = 254, SpvOpUnreachable = 255,
 };
 enum
 {
@@ -289,6 +289,14 @@ static NSArray<NSNumber*>* spvString(NSString* s)
 @property(nonatomic) uint32_t retVar;
 @property(nonatomic) uint32_t loopContinue;
 @property(nonatomic) NSMutableSet<NSNumber*>* used;        // values some instruction reads
+// The structured walk (spvStructured…): a dry run only checks the shape; the
+// current block is open (not yet ended by a branch); each loop header's
+// continue target and merge; where the kernel's return goes.
+@property(nonatomic) BOOL dry;
+@property(nonatomic) BOOL open;
+@property(nonatomic) NSMutableDictionary<NSNumber*, NSNumber*>* loopCont;
+@property(nonatomic) NSMutableDictionary<NSNumber*, NSNumber*>* loopMerge;
+@property(nonatomic) uint32_t exitLabel;
 @end
 
 @implementation XTSpvFunc
@@ -1318,6 +1326,250 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
     return YES;
     }
 
+// ── structured control flow ─────────────────────────────────────────────────
+// The Metal printer's plan (planStructure) as SPIR-V constructs: a loop is a
+// header with OpLoopMerge, its exit the merge and a continue target that
+// branches back; an if is an OpSelectionMerge at its join. A SIMD group's
+// threads then reconverge after each, which the dispatch loop never lets
+// them do. Values stay in Function variables and phis stay copies on their
+// edges, as in the dispatch loop. The walk runs dry first, to learn whether
+// the shape fits, and only then emits; a shape that does not keeps the
+// dispatch loop. The body sits in a loop that runs once, so the kernel's
+// return is a break from anywhere outside its own loops.
+
+- (void)spvBranch:(uint32_t)to
+    {
+    XTSpvFunc* f = self.sf;
+    if (!f.dry)
+        [self emit:SpvOpBranch words:@[ @(to) ]];
+    f.open = NO;
+    }
+
+- (BOOL)spvJumpFrom:(NSUInteger)u to:(NSUInteger)v loop:(NSInteger)h exit:(NSInteger)e follow:(NSInteger)fo
+    {
+    XTSpvFunc* f = self.sf;
+    if (!f.dry)
+        {
+        NSMutableArray<NSNumber*>* vals = [NSMutableArray array];
+        NSMutableArray<NSNumber*>* dsts = [NSMutableArray array];
+        if (![self spvEdgeFrom:self.fn.blocks[u] to:self.fn.blocks[v] cond:0 whenTrue:YES vals:vals dsts:dsts])
+            return NO;
+        [self spvStores:vals dsts:dsts];
+        }
+    if ((NSInteger)v == h)
+        {
+        [self spvBranch:f.loopCont[@(h)].unsignedIntValue];
+        return YES;
+        }
+    if ((NSInteger)v == e)
+        {
+        [self spvBranch:f.loopMerge[@(h)].unsignedIntValue];
+        return YES;
+        }
+    if ((NSInteger)v == fo)
+        return YES;
+    if (self.loopOf[@(v)])
+        return [self spvStructuredLoop:v exit:e follow:fo outerLoop:h];
+    if ([self.fwdPreds[v] unsignedIntegerValue] != 1)
+        return NO;
+    return [self spvStructuredBlock:v loop:h exit:e follow:fo];
+    }
+
+- (BOOL)spvStructuredLoop:(NSUInteger)x exit:(NSInteger)oe follow:(NSInteger)of outerLoop:(NSInteger)oh
+    {
+    XTSpvFunc* f = self.sf;
+    if ([self.fwdPreds[x] unsignedIntegerValue] != 1)
+        return NO;
+    NSUInteger ex = [self.loopExit[@(x)] unsignedIntegerValue];
+    if (oh >= 0 && ![self.loopOf[@(oh)] containsIndex:ex] && (NSInteger)ex != oe && (NSInteger)ex != of)
+        return NO;
+    uint32_t head = 0, body = 0, cont = 0, merge = 0;
+    if (!f.dry)
+        {
+        head = [self label], body = [self label], cont = [self label], merge = [self label];
+        f.loopCont[@(x)] = @(cont);
+        f.loopMerge[@(x)] = @(merge);
+        [self emit:SpvOpBranch words:@[ @(head) ]];
+        [self place:head];
+        [self emit:SpvOpLoopMerge words:@[ @(merge), @(cont), @0 ]];
+        [self emit:SpvOpBranch words:@[ @(body) ]];
+        [self place:body];
+        }
+    f.open = YES;
+    if (![self spvStructuredBlock:x loop:(NSInteger)x exit:(NSInteger)ex follow:-1])
+        return NO;
+    if (f.open)
+        [self spvBranch:cont];
+    if (!f.dry)
+        {
+        [self place:cont];
+        [self emit:SpvOpBranch words:@[ @(head) ]];
+        [self place:merge];
+        }
+    f.open = YES;
+    if ((NSInteger)ex == of)
+        return YES;
+    if ((NSInteger)ex == oh)
+        {
+        [self spvBranch:f.loopCont[@(oh)].unsignedIntValue];
+        return YES;
+        }
+    if ((NSInteger)ex == oe)
+        {
+        [self spvBranch:f.loopMerge[@(oh)].unsignedIntValue];
+        return YES;
+        }
+    if (self.loopOf[@(ex)])
+        return NO;
+    return [self spvStructuredBlock:ex loop:oh exit:oe follow:of];
+    }
+
+- (BOOL)spvStructuredBlock:(NSUInteger)x loop:(NSInteger)h exit:(NSInteger)e follow:(NSInteger)fo
+    {
+    XTSpvFunc* f = self.sf;
+    XTIRBlock* b = self.fn.blocks[x];
+    if (!f.dry)
+        for (XTIRInsn* i in b.instructions)
+            if (![self spvStatement:i])
+                {
+                [self because:[self whyFor:i ptx:YES]];
+                return NO;
+                }
+    XTIRInsn* t = b.terminator;
+    if (t.opcode == XTIROpReturn)
+        {
+        if (self.helperMode)
+            {
+            // A function's return may stand anywhere in structured SPIR-V.
+            XTIROperand* rv = t.operands.count ? t.operands[0] : nil;
+            XTIRType* rvt = !rv ? nil : rv.kind == XTIROperandKindUse ? [self typeOf:rv.valueId] : self.fn.returnType;
+            if (!f.dry)
+                {
+                if (rvt && rvt.kind != XTIRTypeKindMemory)
+                    {
+                    uint32_t v = [self value:rv type:rvt];
+                    if (!v)
+                        return NO;
+                    [self emit:SpvOpReturnValue words:@[ @(v) ]];
+                    }
+                else
+                    [self emit:SpvOpReturn words:@[]];
+                }
+            f.open = NO;
+            return YES;
+            }
+        // The kernel's work ends: a break from the loop that runs once,
+        // which only works from outside any loop of the kernel's own.
+        if (h >= 0)
+            return NO;
+        [self spvBranch:f.exitLabel];
+        return YES;
+        }
+    if (t.opcode == XTIROpBranch)
+        return [self spvJumpFrom:x to:[self indexOf:t.operands[0].blockRef] loop:h exit:e follow:fo];
+    if (t.opcode != XTIROpCondBranch)
+        return NO;
+    // CondBranch: a selection that merges at x's immediate post-dominator.
+    NSUInteger n = self.fn.blocks.count;
+    NSInteger j = [self.ipdom[x] integerValue];
+    if (j < 0)
+        return NO;
+    NSInteger join = (j == (NSInteger)n) ? fo : j;
+    if (join >= 0 && join != h && join != e && join != fo)
+        if (h >= 0 && ![self.loopOf[@(h)] containsIndex:(NSUInteger)join])
+            return NO;
+    uint32_t yes = 0, no = 0, merge = 0;
+    if (!f.dry)
+        {
+        uint32_t c = [self value:t.operands[0] type:nil];
+        if (!c)
+            return NO;
+        yes = [self label], no = [self label], merge = [self label];
+        [self emit:SpvOpSelectionMerge words:@[ @(merge), @0 ]];
+        [self emit:SpvOpBranchConditional words:@[ @(c), @(yes), @(no) ]];
+        [self place:yes];
+        }
+    f.open = YES;
+    if (![self spvJumpFrom:x to:[self indexOf:t.operands[1].blockRef] loop:h exit:e follow:join])
+        return NO;
+    if (f.open)
+        [self spvBranch:merge];
+    if (!f.dry)
+        [self place:no];
+    f.open = YES;
+    if (![self spvJumpFrom:x to:[self indexOf:t.operands[2].blockRef] loop:h exit:e follow:join])
+        return NO;
+    if (f.open)
+        [self spvBranch:merge];
+    if (!f.dry)
+        [self place:merge];
+    f.open = YES;
+    if (join < 0)
+        {
+        // Both ways left by a branch: the merge is never reached.
+        if (!f.dry)
+            [self emit:SpvOpUnreachable words:@[]];
+        f.open = NO;
+        return YES;
+        }
+    if (join == fo)
+        return YES;
+    if (join == h)
+        {
+        [self spvBranch:f.loopCont[@(h)].unsignedIntValue];
+        return YES;
+        }
+    if (join == e)
+        {
+        [self spvBranch:f.loopMerge[@(h)].unsignedIntValue];
+        return YES;
+        }
+    if (self.loopOf[@(join)])
+        return [self spvStructuredLoop:(NSUInteger)join exit:e follow:fo outerLoop:h];
+    return [self spvStructuredBlock:(NSUInteger)join loop:h exit:e follow:fo];
+    }
+
+// The walk from the entry block, dry or emitting.
+- (BOOL)spvStructuredWalk
+    {
+    self.sf.open = YES;
+    return self.loopOf[@0] ? [self spvStructuredLoop:0 exit:-1 follow:-1 outerLoop:-1]
+                           : [self spvStructuredBlock:0 loop:-1 exit:-1 follow:-1];
+    }
+
+// The function's blocks, structured where their shape allows, else as the
+// dispatch loop; then `mergeLabel` is placed. A guard, if any, must hold for
+// the body to run at all.
+- (BOOL)spvBodyMerge:(uint32_t)mergeLabel guard:(uint32_t)guard
+    {
+    XTSpvFunc* f = self.sf;
+    f.dry = YES;
+    BOOL fits = [self planStructure] && [self spvStructuredWalk];
+    f.dry = NO;
+    if (!fits)
+        return [self spvDispatchMerge:mergeLabel guard:guard];
+    f.loopCont = [NSMutableDictionary dictionary];
+    f.loopMerge = [NSMutableDictionary dictionary];
+    f.exitLabel = mergeLabel;
+    uint32_t head = [self label], body = [self label], cont = [self label];
+    [self emit:SpvOpBranch words:@[ @(head) ]];
+    [self place:head];
+    [self emit:SpvOpLoopMerge words:@[ @(mergeLabel), @(cont), @0 ]];
+    if (guard)
+        [self emit:SpvOpBranchConditional words:@[ @(guard), @(body), @(mergeLabel) ]];
+    else
+        [self emit:SpvOpBranch words:@[ @(body) ]];
+    [self place:body];
+    if (![self spvStructuredWalk])
+        return NO;
+    if (f.open)
+        [self emit:SpvOpBranch words:@[ @(mergeLabel) ]];
+    [self place:cont];
+    [self emit:SpvOpBranch words:@[ @(head) ]];
+    [self place:mergeLabel];
+    return YES;
+    }
+
 // A variable for every SSA value that is read and is not a pointer or the
 // memory token; a type this cut cannot hold fails. A value nothing reads (a
 // narrowing pass's leftover constant, say) gets none and is not printed.
@@ -1440,7 +1692,7 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
     if (!isVoid)
         self.sf.retVar = [self localVar:ret];
     uint32_t merge = [self label];
-    if (![self spvDispatchMerge:merge guard:0])
+    if (![self spvBodyMerge:merge guard:0])
         return 0;
     if (isVoid)
         [self emit:SpvOpReturn words:@[]];
@@ -1707,7 +1959,7 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
     [self emit:SpvOpStore words:@[ @(self.sf.pcVar), @([m u32:0]) ]];
     uint32_t guard = [self emit:SpvOpSLessThan type:[m typeBool] args:@[ @(lo), @(hi) ]];
     uint32_t merge = [self label];
-    if (![self spvDispatchMerge:merge guard:guard])
+    if (![self spvBodyMerge:merge guard:guard])
         return nil;
     // Threads past the range write no partials.
     uint32_t inRange = [self emit:SpvOpSLessThan type:[m typeBool] args:@[ @(lo), @(spanHi) ]];
