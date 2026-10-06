@@ -191,52 +191,86 @@ static NSString *xtArm64SmeGemmKernel(BOOL f64) {
     [o appendFormat:@"    cbnz x12, %@ret\n", L];
     [o appendFormat:@"    add x11, x20, x11, lsl #%d\n", sh];
     [o appendFormat:@"    cmp x21, x11\n    ccmp x20, x10, #2, lo\n    b.lo %@ret\n", L];
-    [o appendFormat:@"%@go:\n    smstart\n    %@ x9\n", L, CNT];
+    // The panel of A for each block of rows is transposed once into a scratch
+    // buffer (K rows of 2 vectors), so the inner loop reads A's columns with
+    // plain loads: reading them back out of ZA between outer products costs
+    // far more on M4. No buffer when K == 0 (nothing is read); none at all,
+    // and back to the loop, if malloc fails.
+    [o appendFormat:@"%@go:\n    mov x28, #0\n    cbz x24, %@go2\n    rdsvl x0, #2\n    mul x0, x0, x24\n    bl _malloc\n    cbz x0, %@ret\n    mov x28, x0\n", L, L, L];
+    [o appendFormat:@"%@go2:\n    smstart\n    %@ x9\n", L, CNT];
     // A NaN in A or B: hand back to the loop. FMOPA returns the default NaN
     // where the loop's fmadd carries the input NaN's payload, so the results
     // would differ in those bits; every other value, infinities, signed zeros
     // and denormals included, comes out the same. Nothing is read when K == 0.
     // One pass over A (M x K) and B (K x N), a vector at a time: about 1/N of
     // the multiply's work.
-    [o appendFormat:@"    cbz x24, %@mm\n", L];
+    // A NaN is an element whose bits, sign cleared, exceed infinity's; the
+    // scan keeps the unsigned maximum of those in z4 and compares once at the
+    // end. No predicate or flag work in the loop: a chain through a predicate
+    // register, or an SME instruction that sets the flags (whilelt, ptest),
+    // runs far slower on M4 than the vector work. Whole vectors run under p5
+    // (all lanes); the row's last partial vector under p6, the same for every
+    // row, so it is made once per matrix.
+    NSString *mask = f64 ? @"#0x7fffffffffffffff" : @"#0x7fffffff";
+    NSString *inf = f64 ? @"#0x7ff0000000000000" : @"#0x7f800000";
+    [o appendFormat:@"    cbz x24, %@mm\n    ptrue p5.%@\n    mov z4.%@, #0\n    mov z5.%@, %@\n", L, T, T, T, inf];
     struct { const char *rows, *cols, *ld, *base, *tag; } scans[2] = {
         {"x22", "x24", "x25", "x19", "na"}, {"x24", "x23", "x26", "x20", "nb"}};
     for (int q = 0; q < 2; q++) {
-        [o appendFormat:@"    mov x10, #0\n%@%sr:\n    mul x15, x10, %s\n    add x15, %s, x15, lsl #%d\n    mov x12, #0\n",
-                         L, scans[q].tag, scans[q].ld, scans[q].base, sh];
-        [o appendFormat:@"%@%sc:\n    whilelt p2.%@, x12, %s\n    %@ {z0.%@}, p2/z, [x15, x12, lsl #%d]\n",
-                         L, scans[q].tag, T, scans[q].cols, LD, T, sh];
-        [o appendFormat:@"    fcmuo p3.%@, p2/z, z0.%@, z0.%@\n    ptest p2, p3.b\n    b.ne %@nan\n", T, T, T, L];
-        [o appendFormat:@"    add x12, x12, x9\n    cmp x12, %s\n    b.lo %@%sc\n", scans[q].cols, L, scans[q].tag];
+        [o appendFormat:@"    udiv x16, %s, x9\n    mul x16, x16, x9\n    whilelt p6.%@, x16, %s\n    mov x10, #0\n",
+                         scans[q].cols, T, scans[q].cols];
+        [o appendFormat:@"%@%sr:\n    mul x15, x10, %s\n    add x15, %s, x15, lsl #%d\n    mov x12, #0\n    cmp x12, x16\n    b.hs %@%st\n",
+                         L, scans[q].tag, scans[q].ld, scans[q].base, sh, L, scans[q].tag];
+        [o appendFormat:@"%@%sc:\n    %@ {z0.%@}, p5/z, [x15, x12, lsl #%d]\n    and z0.%@, z0.%@, %@\n    umax z4.%@, p5/m, z4.%@, z0.%@\n",
+                         L, scans[q].tag, LD, T, sh, T, T, mask, T, T, T];
+        [o appendFormat:@"    add x12, x12, x9\n    cmp x12, x16\n    b.lo %@%sc\n", L, scans[q].tag];
+        [o appendFormat:@"%@%st:\n    %@ {z0.%@}, p6/z, [x15, x12, lsl #%d]\n    and z0.%@, z0.%@, %@\n    umax z4.%@, p6/m, z4.%@, z0.%@\n",
+                         L, scans[q].tag, LD, T, sh, T, T, mask, T, T, T];
         [o appendFormat:@"    add x10, x10, #1\n    cmp x10, %s\n    b.lo %@%sr\n", scans[q].rows, L, scans[q].tag];
     }
-    [o appendFormat:@"%@mm:\n    mov x10, #0\n", L];
-    // i0 loop
-    [o appendFormat:@"%@i:\n    whilelt p0.%@, x10, x22\n    mov x11, #0\n", L, T];
-    // j0 loop
-    [o appendFormat:@"%@j:\n    whilelt p1.%@, x11, x23\n    zero {za0.%@}\n    mov x12, #0\n", L, T, T];
-    // k0 loop: A block rows into za1 (horizontal), read back as columns
-    [o appendFormat:@"%@k:\n    cmp x12, x24\n    b.hs %@st\n    whilelt p2.%@, x12, x24\n    zero {za1.%@}\n", L, L, T, T];
+    [o appendFormat:@"    cmphi p3.%@, p5/z, z4.%@, z5.%@\n", T, T, T];
+    [o appendFormat:@"    ptest p5, p3.b\n    b.ne %@nan\n%@mm:\n    rdsvl x17, #2\n    mov x10, #0\n", L, L];
+    // Blocks of C two tiles tall: za0 takes rows i0.., za1 rows i0+vl.., and
+    // each row of B feeds both outer products. Per element the k order is the
+    // loop's, so the result is unchanged.
+    [o appendFormat:@"%@i:\n    whilelt p0.%@, x10, x22\n    add x8, x10, x9\n    whilelt p3.%@, x8, x22\n    mov x12, #0\n", L, T, T];
+    // transpose this block's rows of A into the buffer, vl columns at a time:
+    // rows into za2 / za3 horizontally, out again as columns
+    [o appendFormat:@"%@t:\n    cmp x12, x24\n    b.hs %@td\n    whilelt p2.%@, x12, x24\n    zero {za2.%@, za3.%@}\n", L, L, T, T, T];
     [o appendString:@"    sub x14, x22, x10\n    cmp x14, x9\n    csel x14, x14, x9, lo\n"];
     [o appendFormat:@"    madd x15, x10, x25, x12\n    add x15, x19, x15, lsl #%d\n    mov w13, #0\n", sh];
-    [o appendFormat:@"%@a:\n    %@ {za1h.%@[w13, 0]}, p2/z, [x15]\n", L, LD, T];
+    [o appendFormat:@"%@a:\n    %@ {za2h.%@[w13, 0]}, p2/z, [x15]\n", L, LD, T];
     [o appendFormat:@"    add x15, x15, x25, lsl #%d\n    add w13, w13, #1\n    cmp x13, x14\n    b.lo %@a\n", sh, L];
-    // kk: min(vl, K - k0) outer products
-    [o appendString:@"    sub x14, x24, x12\n    cmp x14, x9\n    csel x14, x14, x9, lo\n"];
-    [o appendFormat:@"    madd x15, x12, x26, x11\n    add x15, x20, x15, lsl #%d\n    mov w13, #0\n", sh];
-    [o appendFormat:@"%@kk:\n    mov z0.%@, p0/m, za1v.%@[w13, 0]\n    %@ {z1.%@}, p1/z, [x15]\n", L, T, T, LD, T];
-    [o appendFormat:@"    fmopa za0.%@, p0/m, p1/m, z0.%@, z1.%@\n", T, T, T];
-    [o appendFormat:@"    add x15, x15, x26, lsl #%d\n    add w13, w13, #1\n    cmp x13, x14\n    b.lo %@kk\n", sh, L];
-    [o appendFormat:@"    add x12, x12, x9\n    b %@k\n", L];
-    // store the tile's rows to C
+    [o appendFormat:@"    add x8, x10, x9\n    cmp x8, x22\n    b.hs %@tc0\n", L];
+    [o appendString:@"    sub x14, x22, x8\n    cmp x14, x9\n    csel x14, x14, x9, lo\n"];
+    [o appendFormat:@"    madd x15, x8, x25, x12\n    add x15, x19, x15, lsl #%d\n    mov w13, #0\n", sh];
+    [o appendFormat:@"%@a2:\n    %@ {za3h.%@[w13, 0]}, p2/z, [x15]\n", L, LD, T];
+    [o appendFormat:@"    add x15, x15, x25, lsl #%d\n    add w13, w13, #1\n    cmp x13, x14\n    b.lo %@a2\n", sh, L];
+    [o appendFormat:@"%@tc0:\n    sub x14, x24, x12\n    cmp x14, x9\n    csel x14, x14, x9, lo\n    madd x15, x12, x17, x28\n    mov w13, #0\n", L];
+    [o appendFormat:@"%@tc:\n    %@ {za2v.%@[w13, 0]}, p0, [x15]\n    %@ {za3v.%@[w13, 0]}, p3, [x15, x9, lsl #%d]\n", L, ST, T, ST, T, sh];
+    [o appendFormat:@"    add x15, x15, x17\n    add w13, w13, #1\n    cmp x13, x14\n    b.lo %@tc\n", L];
+    [o appendFormat:@"    add x12, x12, x9\n    b %@t\n", L];
+    // j0 loop: K outer-product pairs from the buffer and B
+    [o appendFormat:@"%@td:\n    mov x11, #0\n%@j:\n    whilelt p1.%@, x11, x23\n    zero {za0.%@, za1.%@}\n", L, L, T, T, T];
+    [o appendFormat:@"    cbz x24, %@st\n    mov x15, x28\n    add x16, x20, x11, lsl #%d\n    mov x12, #0\n", L, sh];
+    [o appendFormat:@"%@kk:\n    %@ {z0.%@}, p0/z, [x15]\n    %@ {z2.%@}, p3/z, [x15, x9, lsl #%d]\n    %@ {z1.%@}, p1/z, [x16]\n",
+                     L, LD, T, LD, T, sh, LD, T];
+    [o appendFormat:@"    fmopa za0.%@, p0/m, p1/m, z0.%@, z1.%@\n    fmopa za1.%@, p3/m, p1/m, z2.%@, z1.%@\n", T, T, T, T, T, T];
+    [o appendFormat:@"    add x15, x15, x17\n    add x16, x16, x26, lsl #%d\n    add x12, x12, #1\n    cmp x12, x24\n    b.lo %@kk\n", sh, L];
+    // store both tiles' rows to C
     [o appendFormat:@"%@st:\n    sub x14, x22, x10\n    cmp x14, x9\n    csel x14, x14, x9, lo\n", L];
     [o appendFormat:@"    madd x15, x10, x27, x11\n    add x15, x21, x15, lsl #%d\n    mov w13, #0\n", sh];
     [o appendFormat:@"%@s:\n    %@ {za0h.%@[w13, 0]}, p1, [x15]\n", L, ST, T];
     [o appendFormat:@"    add x15, x15, x27, lsl #%d\n    add w13, w13, #1\n    cmp x13, x14\n    b.lo %@s\n", sh, L];
-    [o appendFormat:@"    add x11, x11, x9\n    cmp x11, x23\n    b.lo %@j\n", L];
-    [o appendFormat:@"    add x10, x10, x9\n    cmp x10, x22\n    b.lo %@i\n    smstop\n", L];
-    [o appendFormat:@"%@done:\n    mov w0, #1\n    b %@ret\n", L, L];
-    [o appendFormat:@"%@nan:\n    smstop\n    mov w0, #0\n%@ret:\n", L, L];
+    [o appendFormat:@"    add x8, x10, x9\n    cmp x8, x22\n    b.hs %@jn\n", L];
+    [o appendString:@"    sub x14, x22, x8\n    cmp x14, x9\n    csel x14, x14, x9, lo\n"];
+    [o appendFormat:@"    madd x15, x8, x27, x11\n    add x15, x21, x15, lsl #%d\n    mov w13, #0\n", sh];
+    [o appendFormat:@"%@s2:\n    %@ {za1h.%@[w13, 0]}, p1, [x15]\n", L, ST, T];
+    [o appendFormat:@"    add x15, x15, x27, lsl #%d\n    add w13, w13, #1\n    cmp x13, x14\n    b.lo %@s2\n", sh, L];
+    [o appendFormat:@"%@jn:\n    add x11, x11, x9\n    cmp x11, x23\n    b.lo %@j\n", L, L];
+    [o appendFormat:@"    add x10, x10, x9, lsl #1\n    cmp x10, x22\n    b.lo %@i\n    smstop\n    mov w22, #1\n    b %@free\n", L, L];
+    [o appendFormat:@"%@nan:\n    smstop\n    mov w22, #0\n%@free:\n    cbz x28, %@freed\n    mov x0, x28\n    bl _free\n", L, L, L];
+    [o appendFormat:@"%@freed:\n    mov w0, w22\n    b %@ret\n%@done:\n    mov w0, #1\n%@ret:\n", L, L, L, L];
     [o appendString:@"    ldp d14, d15, [sp, #144]\n    ldp d12, d13, [sp, #128]\n"
                      "    ldp d10, d11, [sp, #112]\n    ldp d8, d9, [sp, #96]\n"
                      "    ldp x27, x28, [sp, #80]\n    ldp x25, x26, [sp, #64]\n"

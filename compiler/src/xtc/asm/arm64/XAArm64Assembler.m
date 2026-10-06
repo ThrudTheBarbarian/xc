@@ -560,6 +560,91 @@ static int xaEncodeSME(NSString *mn, NSArray<NSString *> *ops, uint32_t *out, NS
              | (uint32_t)pd;
         return 1;
     }
+    // SVE integer forms the NaN scan uses. Each is taken only when its first
+    // operand is a Z (or P) register, so the scalar and NEON and/mov/umax are
+    // untouched.
+    {
+        int z0n, z0s;
+        BOOL firstZ = ops.count >= 2 && xaZReg(ops[0], &z0n, &z0s) && ![[ops[0] lowercaseString] hasPrefix:@"za"];
+        // and Zdn.T, Zdn.T, #bitmask  /  mov|dupm Zd.T, #imm
+        BOOL isAnd = [mn isEqualToString:@"and"] && firstZ && ops.count == 3 && [ops[2] hasPrefix:@"#"];
+        BOOL isMovI = ([mn isEqualToString:@"mov"] || [mn isEqualToString:@"dupm"]) && firstZ && ops.count == 2
+                      && [ops[1] hasPrefix:@"#"];
+        if (isAnd || isMovI) {
+            int64_t v;
+            if (!parseImm(isAnd ? ops[2] : ops[1], &v) || (z0s != 2 && z0s != 3))
+                SMEBAD(@"%@: bad immediate", mn);
+            if (isAnd) {
+                int zn, zs;
+                if (!xaZReg(ops[1], &zn, &zs) || zn != z0n || zs != z0s) SMEBAD(@"and: Zdn must repeat");
+            }
+            if (isMovI && [mn isEqualToString:@"mov"] && v >= -128 && v <= 127) {
+                // DUP (immediate), unshifted
+                *out = 0x2538C000u | ((uint32_t)z0s << 22) | (((uint32_t)v & 0xFFu) << 5) | (uint32_t)z0n;
+                return 1;
+            }
+            uint64_t u = (uint64_t)v;
+            if (z0s == 2) {
+                if (v < 0 || v > 0xFFFFFFFFLL) SMEBAD(@"%@: immediate out of range", mn);
+                u = (u & 0xFFFFFFFFULL) | (u << 32); // the 32-bit pattern, replicated
+            }
+            uint32_t bm;
+            if (!encodeLogImm(u, 64, &bm)) SMEBAD(@"%@: not a bitmask immediate", mn);
+            *out = (isAnd ? 0x05800000u : 0x05C00000u) | (bm << 5) | (uint32_t)z0n;
+            return 1;
+        }
+        if ([mn isEqualToString:@"umax"] && firstZ && ops.count == 4) {
+            // umax Zdn.T, Pg/m, Zdn.T, Zm.T
+            int pg, ps, zn, zs, zm, ms;
+            if (!xaPReg(ops[1], &pg, &ps) || pg > 7 || ![[ops[1] lowercaseString] hasSuffix:@"/m"]
+                || !xaZReg(ops[2], &zn, &zs) || zn != z0n || zs != z0s || !xaZReg(ops[3], &zm, &ms) || ms != z0s)
+                SMEBAD(@"umax: bad operands");
+            *out = 0x04090000u | ((uint32_t)z0s << 22) | ((uint32_t)pg << 10) | ((uint32_t)zm << 5) | (uint32_t)z0n;
+            return 1;
+        }
+    }
+    if ([mn isEqualToString:@"cmphi"]) {
+        // cmphi Pd.T, Pg/z, Zn.T, Zm.T
+        int pd, sd, pg, sg, zn, s1, zm, s2;
+        if (ops.count != 4 || !xaPReg(ops[0], &pd, &sd) || sd < 0 || !xaPReg(ops[1], &pg, &sg) || pg > 7
+            || ![[ops[1] lowercaseString] hasSuffix:@"/z"] || !xaZReg(ops[2], &zn, &s1) || !xaZReg(ops[3], &zm, &s2)
+            || s1 != sd || s2 != sd)
+            SMEBAD(@"cmphi: bad operands");
+        *out = 0x24001010u | ((uint32_t)sd << 22) | ((uint32_t)zm << 16) | ((uint32_t)pg << 10) | ((uint32_t)zn << 5)
+             | (uint32_t)pd;
+        return 1;
+    }
+    if ([mn isEqualToString:@"rdsvl"]) {
+        // rdsvl Xd, #imm (-32..31): imm times the streaming vector length in bytes
+        // the immediate is `#` and an optional `-` before plain digits
+        int rd, mag; BOOL d64, sp;
+        NSString *im = ops.count == 2 ? ops[1] : @"";
+        BOOL neg = [im hasPrefix:@"#-"];
+        if (ops.count != 2 || !parseReg(ops[0], &rd, &d64, &sp) || !d64 || sp || ![im hasPrefix:@"#"]
+            || !xaDigits([im substringFromIndex:neg ? 2 : 1], &mag) || mag > (neg ? 32 : 31))
+            SMEBAD(@"rdsvl: bad operands");
+        int64_t imm = neg ? -(int64_t)mag : mag;
+        *out = 0x04BF5800u | ((uint32_t)(imm & 0x3F) << 5) | (uint32_t)rd;
+        return 1;
+    }
+    if ([mn isEqualToString:@"pfalse"]) {
+        // pfalse Pd.B
+        int pd, sd;
+        if (ops.count != 1 || !xaPReg(ops[0], &pd, &sd) || sd != 0)
+            SMEBAD(@"pfalse: bad operand");
+        *out = 0x2518E400u | (uint32_t)pd;
+        return 1;
+    }
+    if ([mn isEqualToString:@"orr"] && ops.count == 4 && [[ops[0] lowercaseString] hasPrefix:@"p"]) {
+        // orr Pd.B, Pg/z, Pn.B, Pm.B (the predicate form; the scalar and NEON
+        // forms never name a p register)
+        int pd, sd, pg, sg, pn, sn, pm, sm;
+        if (!xaPReg(ops[0], &pd, &sd) || sd != 0 || !xaPReg(ops[1], &pg, &sg) || ![[ops[1] lowercaseString] hasSuffix:@"/z"]
+            || !xaPReg(ops[2], &pn, &sn) || sn != 0 || !xaPReg(ops[3], &pm, &sm) || sm != 0)
+            SMEBAD(@"orr: bad predicate operands");
+        *out = 0x25804000u | ((uint32_t)pm << 16) | ((uint32_t)pg << 10) | ((uint32_t)pn << 5) | (uint32_t)pd;
+        return 1;
+    }
     if ([mn isEqualToString:@"ptest"]) {
         // ptest Pg, Pn.B: Z clear when any lane of Pn active under Pg is set
         int pg, sg, pn, sn;

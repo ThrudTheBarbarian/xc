@@ -1401,6 +1401,99 @@ class Arm64Asm
             return (u32)$6500C000 | (pd.b() << (u32)22) | (zm.a() << (u32)16) | (pg.a() << (u32)10)
                  | (zn.a() << (u32)5) | pd.a();
         }
+        // SVE integer forms the NaN scan uses, taken only when the first operand
+        // is a Z register (the scalar and NEON and/mov/umax are untouched).
+        SmeRef* z0 = ops.count() >= (u32)2 ? smeZReg(opAt(ops, (u32)0)) : SmeRef.no();
+        bool firstZ = z0.ok() && !opAt(ops, (u32)0).lowercased().hasPrefix(String.withCString("za"));
+        bool isAnd = mn.equals(String.withCString("and")) && firstZ && ops.count() == (u32)3
+                  && opAt(ops, (u32)2).hasPrefix(String.withCString("#"));
+        bool isMovI = (mn.equals(String.withCString("mov")) || mn.equals(String.withCString("dupm"))) && firstZ
+                   && ops.count() == (u32)2 && opAt(ops, (u32)1).hasPrefix(String.withCString("#"));
+        if (isAnd || isMovI) {
+            U64* v = parseImm(opAt(ops, isAnd ? (u32)2 : (u32)1));
+            if (!_immOk || (z0.b() != (u32)2 && z0.b() != (u32)3))
+                return smeBad(mn, String.withCString("bad immediate"));
+            if (isAnd) {
+                SmeRef* zn = smeZReg(opAt(ops, (u32)1));
+                if (!zn.ok() || zn.a() != z0.a() || zn.b() != z0.b())
+                    return smeBad(mn, String.withCString("Zdn must repeat"));
+            }
+            bool small = (v.hi() == (u32)0 && v.lo() <= (u32)127)
+                      || (v.hi() == (u32)$FFFFFFFF && v.lo() >= (u32)$FFFFFF80);
+            if (isMovI && mn.equals(String.withCString("mov")) && small) {
+                _hit = true;
+                return (u32)$2538C000 | (z0.b() << (u32)22) | ((v.lo() & (u32)$FF) << (u32)5) | z0.a();
+            }
+            U64* u = v;
+            if (z0.b() == (u32)2) {
+                if (v.hi() != (u32)0)
+                    return smeBad(mn, String.withCString("immediate out of range"));
+                u = U64.with(v.lo(), v.lo()); // the 32-bit pattern, replicated
+            }
+            u32 bm = encodeLogImm(u, (u32)64);
+            if (bm == (u32)$FFFF_FFFF)
+                return smeBad(mn, String.withCString("not a bitmask immediate"));
+            _hit = true;
+            return (isAnd ? (u32)$05800000 : (u32)$05C00000) | (bm << (u32)5) | z0.a();
+        }
+        if (mn.equals(String.withCString("umax")) && firstZ && ops.count() == (u32)4) {
+            SmeRef* pg = smePReg(opAt(ops, (u32)1));
+            SmeRef* zn = smeZReg(opAt(ops, (u32)2));
+            SmeRef* zm = smeZReg(opAt(ops, (u32)3));
+            if (!pg.ok() || pg.a() > (u32)7 || !opAt(ops, (u32)1).lowercased().hasSuffix(String.withCString("/m"))
+                || !zn.ok() || zn.a() != z0.a() || zn.b() != z0.b() || !zm.ok() || zm.b() != z0.b())
+                return smeBad(mn, String.withCString("bad operands"));
+            _hit = true;
+            return (u32)$04090000 | (z0.b() << (u32)22) | (pg.a() << (u32)10) | (zm.a() << (u32)5) | z0.a();
+        }
+        if (mn.equals(String.withCString("cmphi"))) {
+            if (ops.count() != (u32)4) return smeBad(mn, String.withCString("bad operands"));
+            SmeRef* pd = smePReg(opAt(ops, (u32)0));
+            SmeRef* pg = smePReg(opAt(ops, (u32)1));
+            SmeRef* zn = smeZReg(opAt(ops, (u32)2));
+            SmeRef* zm = smeZReg(opAt(ops, (u32)3));
+            if (!pd.ok() || pd.b() == (u32)$FFFF_FFFF || !pg.ok() || pg.a() > (u32)7
+                || !opAt(ops, (u32)1).lowercased().hasSuffix(String.withCString("/z")) || !zn.ok() || !zm.ok()
+                || zn.b() != pd.b() || zm.b() != pd.b())
+                return smeBad(mn, String.withCString("bad operands"));
+            _hit = true;
+            return (u32)$24001010 | (pd.b() << (u32)22) | (zm.a() << (u32)16) | (pg.a() << (u32)10)
+                 | (zn.a() << (u32)5) | pd.a();
+        }
+        if (mn.equals(String.withCString("rdsvl"))) {
+            RegRef* d = ops.count() == (u32)2 ? parseReg(opAt(ops, (u32)0)) : RegRef.no();
+            String* im = opAt(ops, (u32)1);
+            if (!d.ok() || !d.is64() || d.isSP() || !im.hasPrefix(String.withCString("#")))
+                return smeBad(mn, String.withCString("bad operands"));
+            // `#` and an optional `-` before plain digits
+            bool neg = im.hasPrefix(String.withCString("#-"));
+            u32 mag = smeDigits(im.substringFromByte(neg ? (u32)2 : (u32)1));
+            if (mag == (u32)$FFFF_FFFF || mag > (neg ? (u32)32 : (u32)31))
+                return smeBad(mn, String.withCString("bad operands"));
+            u32 field = neg ? (((u32)64 - mag) & (u32)$3F) : mag;
+            _hit = true;
+            return (u32)$04BF5800 | (field << (u32)5) | d.num();
+        }
+        if (mn.equals(String.withCString("pfalse"))) {
+            SmeRef* pd = ops.count() == (u32)1 ? smePReg(opAt(ops, (u32)0)) : SmeRef.no();
+            if (!pd.ok() || pd.b() != (u32)0)
+                return smeBad(mn, String.withCString("bad operand"));
+            _hit = true;
+            return (u32)$2518E400 | pd.a();
+        }
+        // The predicate form of orr; the scalar and NEON forms never name a p register.
+        if (mn.equals(String.withCString("orr")) && ops.count() == (u32)4
+            && opAt(ops, (u32)0).lowercased().hasPrefix(String.withCString("p"))) {
+            SmeRef* pd = smePReg(opAt(ops, (u32)0));
+            SmeRef* pg = smePReg(opAt(ops, (u32)1));
+            SmeRef* pn = smePReg(opAt(ops, (u32)2));
+            SmeRef* pm = smePReg(opAt(ops, (u32)3));
+            if (!pd.ok() || pd.b() != (u32)0 || !pg.ok() || !opAt(ops, (u32)1).lowercased().hasSuffix(String.withCString("/z"))
+                || !pn.ok() || pn.b() != (u32)0 || !pm.ok() || pm.b() != (u32)0)
+                return smeBad(mn, String.withCString("bad predicate operands"));
+            _hit = true;
+            return (u32)$25804000 | (pm.a() << (u32)16) | (pg.a() << (u32)10) | (pn.a() << (u32)5) | pd.a();
+        }
         if (mn.equals(String.withCString("ptest"))) {
             if (ops.count() != (u32)2) return smeBad(mn, String.withCString("bad operands"));
             SmeRef* pg = smePReg(opAt(ops, (u32)0));

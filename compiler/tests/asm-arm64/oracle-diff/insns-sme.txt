@@ -50,3 +50,27 @@ fcmuo p0.s, p0/z, z5.s, z9.s
 ptest p2, p3.b
 ptest p15, p0.b
 ptest p0, p15.b
+pfalse p4.b
+pfalse p15.b
+orr p4.b, p7/z, p4.b, p3.b
+orr p15.b, p0/z, p1.b, p2.b
+orr p0.b, p15/z, p14.b, p13.b
+ptrue p7.b
+rdsvl x16, #1
+rdsvl x0, #2
+rdsvl x28, #-1
+st1w {za2v.s[w13, 0]}, p0, [x15]
+st1w {za3v.s[w13, 0]}, p3, [x15, x9, lsl #2]
+st1d {za3v.d[w13, 0]}, p3, [x15, x9, lsl #3]
+ld1w {z2.s}, p3/z, [x15, x9, lsl #2]
+and z0.s, z0.s, #0x7fffffff
+and z0.d, z0.d, #0x7fffffffffffffff
+and z3.s, z3.s, #0xff
+umax z4.s, p5/m, z4.s, z0.s
+umax z4.d, p5/m, z4.d, z0.d
+mov z5.s, #0x7f800000
+mov z5.d, #0x7ff0000000000000
+mov z4.s, #0
+mov z4.d, #0
+cmphi p3.s, p7/z, z4.s, z5.s
+cmphi p3.d, p7/z, z4.d, z5.d

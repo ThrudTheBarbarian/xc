@@ -197,93 +197,148 @@ class Arm64
     // full contract. private:docs/Design/simd-sme-plan.md.
     String* smeGemmKernel(bool f64)
     {
-        u8* T = f64 ? "d" : "s";
+        u8* T = f64 ? "d" : "s";          // element suffix
         u8* LD = f64 ? "ld1d" : "ld1w";
         u8* ST = f64 ? "st1d" : "st1w";
         u8* CNT = f64 ? "cntd" : "cntw";
-        i32 sh = f64 ? (i32)3 : (i32)2;
+        i32 sh = f64 ? (i32)3 : (i32)2;                     // log2 element bytes
         u8* L = f64 ? "Lsme64_" : "Lsme32_";
         String* o = new String();
         o.append(String.withFormat("\n// SME matrix kernel (%s)\n    .p2align 2\n", f64 ? "f64" : "f32"));
         o.append(String.withFormat("___xt_sme_gemm_%s:\n", f64 ? "f64" : "f32"));
+        // frame: fp/lr, x19-x28, d8-d15
         o.appendCString("    stp x29, x30, [sp, #-160]!\n    mov x29, sp\n"
-                        "    stp x19, x20, [sp, #16]\n    stp x21, x22, [sp, #32]\n"
-                        "    stp x23, x24, [sp, #48]\n    stp x25, x26, [sp, #64]\n"
-                        "    stp x27, x28, [sp, #80]\n    stp d8, d9, [sp, #96]\n"
-                        "    stp d10, d11, [sp, #112]\n    stp d12, d13, [sp, #128]\n"
-                        "    stp d14, d15, [sp, #144]\n");
+                         "    stp x19, x20, [sp, #16]\n    stp x21, x22, [sp, #32]\n"
+                         "    stp x23, x24, [sp, #48]\n    stp x25, x26, [sp, #64]\n"
+                         "    stp x27, x28, [sp, #80]\n    stp d8, d9, [sp, #96]\n"
+                         "    stp d10, d11, [sp, #112]\n    stp d12, d13, [sp, #128]\n"
+                         "    stp d14, d15, [sp, #144]\n");
+        // x19 A, x20 B, x21 C, x22 M, x23 N, x24 K, x25 lda, x26 ldb, x27 ldc
         o.appendCString("    mov x19, x0\n    mov x20, x1\n    mov x21, x2\n"
-                        "    mov w22, w3\n    lsr x23, x3, #32\n    mov w24, w4\n"
-                        "    mov w25, w5\n    mov w26, w6\n    mov w27, w7\n");
+                         "    mov w22, w3\n    lsr x23, x3, #32\n    mov w24, w4\n"
+                         "    mov w25, w5\n    mov w26, w6\n    mov w27, w7\n");
+        // SME present? probe once
         o.appendCString("    adrp x8, ___xt_sme_state@PAGE\n"
-                        "    ldrb w9, [x8, ___xt_sme_state@PAGEOFF]\n");
+                         "    ldrb w9, [x8, ___xt_sme_state@PAGEOFF]\n");
         o.append(String.withFormat("    cbnz w9, %sknown\n", L));
         o.appendCString("    sub sp, sp, #16\n    str wzr, [sp]\n    mov x9, #4\n    str x9, [sp, #8]\n"
-                        "    adrp x0, ___xt_sme_feat@PAGE\n    add x0, x0, ___xt_sme_feat@PAGEOFF\n"
-                        "    mov x1, sp\n    add x2, sp, #8\n    mov x3, #0\n    mov x4, #0\n"
-                        "    bl _sysctlbyname\n    ldr w9, [sp]\n    add sp, sp, #16\n"
-                        "    cmp w0, #0\n    ccmp w9, #0, #4, eq\n"
-                        "    mov w9, #2\n    mov w10, #1\n    csel w9, w10, w9, ne\n"
-                        "    adrp x8, ___xt_sme_state@PAGE\n"
-                        "    strb w9, [x8, ___xt_sme_state@PAGEOFF]\n");
+                         "    adrp x0, ___xt_sme_feat@PAGE\n    add x0, x0, ___xt_sme_feat@PAGEOFF\n"
+                         "    mov x1, sp\n    add x2, sp, #8\n    mov x3, #0\n    mov x4, #0\n"
+                         "    bl _sysctlbyname\n    ldr w9, [sp]\n    add sp, sp, #16\n"
+                         "    cmp w0, #0\n    ccmp w9, #0, #4, eq\n"
+                         "    mov w9, #2\n    mov w10, #1\n    csel w9, w10, w9, ne\n"
+                         "    adrp x8, ___xt_sme_state@PAGE\n"
+                         "    strb w9, [x8, ___xt_sme_state@PAGEOFF]\n");
         o.append(String.withFormat("%sknown:\n    mov w0, #0\n    cmp w9, #1\n    b.ne %sret\n", L, L));
+        // nothing to compute
         o.append(String.withFormat("    cbz x22, %sdone\n    cbz x23, %sdone\n", L, L));
+        // rows of C must not overlap: ldc >= N
         o.append(String.withFormat("    cmp x27, x23\n    b.lo %sret\n", L));
+        // x10 = (M-1)*ldc + N, then C's end
         o.appendCString("    sub x9, x22, #1\n    madd x10, x9, x27, x23\n");
+        // the last index, (M-1)*ldc + N - 1, must fit 32 bits
         o.append(String.withFormat("    sub x11, x10, #1\n    lsr x11, x11, #32\n    cbnz x11, %sret\n", L));
         o.append(String.withFormat("    add x10, x21, x10, lsl #%d\n", sh));
+        // with K == 0 nothing is read: only C is written (zeros)
         o.append(String.withFormat("    cbz x24, %sgo\n", L));
+        // A: (M-1)*lda + K - 1 < 2^32; A end = A + ((M-1)*lda + K) * size
         o.appendCString("    madd x11, x9, x25, x24\n    sub x12, x11, #1\n    lsr x12, x12, #32\n");
         o.append(String.withFormat("    cbnz x12, %sret\n", L));
         o.append(String.withFormat("    add x11, x19, x11, lsl #%d\n", sh));
         o.append(String.withFormat("    cmp x21, x11\n    ccmp x19, x10, #2, lo\n    b.lo %sret\n", L));
+        // B: (K-1)*ldb + N - 1 < 2^32; B end = B + ((K-1)*ldb + N) * size
         o.appendCString("    sub x12, x24, #1\n    madd x11, x12, x26, x23\n    sub x12, x11, #1\n    lsr x12, x12, #32\n");
         o.append(String.withFormat("    cbnz x12, %sret\n", L));
         o.append(String.withFormat("    add x11, x20, x11, lsl #%d\n", sh));
         o.append(String.withFormat("    cmp x21, x11\n    ccmp x20, x10, #2, lo\n    b.lo %sret\n", L));
-        o.append(String.withFormat("%sgo:\n    smstart\n    %s x9\n", L, CNT));
-        o.append(String.withFormat("    cbz x24, %smm\n", L));
+        // The panel of A for each block of rows is transposed once into a scratch
+        // buffer (K rows of 2 vectors), so the inner loop reads A's columns with
+        // plain loads: reading them back out of ZA between outer products costs
+        // far more on M4. No buffer when K == 0 (nothing is read); none at all,
+        // and back to the loop, if malloc fails.
+        o.append(String.withFormat("%sgo:\n    mov x28, #0\n    cbz x24, %sgo2\n    rdsvl x0, #2\n    mul x0, x0, x24\n    bl _malloc\n    cbz x0, %sret\n    mov x28, x0\n", L, L, L));
+        o.append(String.withFormat("%sgo2:\n    smstart\n    %s x9\n", L, CNT));
+        // A NaN in A or B: hand back to the loop. FMOPA returns the default NaN
+        // where the loop's fmadd carries the input NaN's payload, so the results
+        // would differ in those bits; every other value, infinities, signed zeros
+        // and denormals included, comes out the same. Nothing is read when K == 0.
+        // One pass over A (M x K) and B (K x N), a vector at a time: about 1/N of
+        // the multiply's work.
+        // A NaN is an element whose bits, sign cleared, exceed infinity's; the
+        // scan keeps the unsigned maximum of those in z4 and compares once at the
+        // end. No predicate or flag work in the loop: a chain through a predicate
+        // register, or an SME instruction that sets the flags (whilelt, ptest),
+        // runs far slower on M4 than the vector work. Whole vectors run under p5
+        // (all lanes); the row's last partial vector under p6, the same for every
+        // row, so it is made once per matrix.
+        u8* mask = f64 ? "#0x7fffffffffffffff" : "#0x7fffffff";
+        u8* inf = f64 ? "#0x7ff0000000000000" : "#0x7f800000";
+        o.append(String.withFormat("    cbz x24, %smm\n    ptrue p5.%s\n    mov z4.%s, #0\n    mov z5.%s, %s\n", L, T, T, T, inf));
         for (u32 q = (u32)0; q < (u32)2; q = q + (u32)1) {
             u8* rows = q == (u32)0 ? "x22" : "x24";
             u8* cols = q == (u32)0 ? "x24" : "x23";
             u8* ld = q == (u32)0 ? "x25" : "x26";
             u8* base = q == (u32)0 ? "x19" : "x20";
             u8* tag = q == (u32)0 ? "na" : "nb";
-            o.append(String.withFormat("    mov x10, #0\n%s%sr:\n    mul x15, x10, %s\n    add x15, %s, x15, lsl #%d\n    mov x12, #0\n",
-                                       L, tag, ld, base, sh));
-            o.append(String.withFormat("%s%sc:\n    whilelt p2.%s, x12, %s\n    %s {z0.%s}, p2/z, [x15, x12, lsl #%d]\n",
-                                       L, tag, T, cols, LD, T, sh));
-            o.append(String.withFormat("    fcmuo p3.%s, p2/z, z0.%s, z0.%s\n    ptest p2, p3.b\n    b.ne %snan\n", T, T, T, L));
-            o.append(String.withFormat("    add x12, x12, x9\n    cmp x12, %s\n    b.lo %s%sc\n", cols, L, tag));
+            o.append(String.withFormat("    udiv x16, %s, x9\n    mul x16, x16, x9\n    whilelt p6.%s, x16, %s\n    mov x10, #0\n",
+                                       cols, T, cols));
+            o.append(String.withFormat("%s%sr:\n    mul x15, x10, %s\n    add x15, %s, x15, lsl #%d\n    mov x12, #0\n    cmp x12, x16\n    b.hs %s%st\n",
+                                       L, tag, ld, base, sh, L, tag));
+            o.append(String.withFormat("%s%sc:\n    %s {z0.%s}, p5/z, [x15, x12, lsl #%d]\n    and z0.%s, z0.%s, %s\n    umax z4.%s, p5/m, z4.%s, z0.%s\n",
+                                       L, tag, LD, T, sh, T, T, mask, T, T, T));
+            o.append(String.withFormat("    add x12, x12, x9\n    cmp x12, x16\n    b.lo %s%sc\n", L, tag));
+            o.append(String.withFormat("%s%st:\n    %s {z0.%s}, p6/z, [x15, x12, lsl #%d]\n    and z0.%s, z0.%s, %s\n    umax z4.%s, p6/m, z4.%s, z0.%s\n",
+                                       L, tag, LD, T, sh, T, T, mask, T, T, T));
             o.append(String.withFormat("    add x10, x10, #1\n    cmp x10, %s\n    b.lo %s%sr\n", rows, L, tag));
         }
-        o.append(String.withFormat("%smm:\n    mov x10, #0\n", L));
-        o.append(String.withFormat("%si:\n    whilelt p0.%s, x10, x22\n    mov x11, #0\n", L, T));
-        o.append(String.withFormat("%sj:\n    whilelt p1.%s, x11, x23\n    zero {za0.%s}\n    mov x12, #0\n", L, T, T));
-        o.append(String.withFormat("%sk:\n    cmp x12, x24\n    b.hs %sst\n    whilelt p2.%s, x12, x24\n    zero {za1.%s}\n", L, L, T, T));
+        o.append(String.withFormat("    cmphi p3.%s, p5/z, z4.%s, z5.%s\n", T, T, T));
+        o.append(String.withFormat("    ptest p5, p3.b\n    b.ne %snan\n%smm:\n    rdsvl x17, #2\n    mov x10, #0\n", L, L));
+        // Blocks of C two tiles tall: za0 takes rows i0.., za1 rows i0+vl.., and
+        // each row of B feeds both outer products. Per element the k order is the
+        // loop's, so the result is unchanged.
+        o.append(String.withFormat("%si:\n    whilelt p0.%s, x10, x22\n    add x8, x10, x9\n    whilelt p3.%s, x8, x22\n    mov x12, #0\n", L, T, T));
+        // transpose this block's rows of A into the buffer, vl columns at a time:
+        // rows into za2 / za3 horizontally, out again as columns
+        o.append(String.withFormat("%st:\n    cmp x12, x24\n    b.hs %std\n    whilelt p2.%s, x12, x24\n    zero {za2.%s, za3.%s}\n", L, L, T, T, T));
         o.appendCString("    sub x14, x22, x10\n    cmp x14, x9\n    csel x14, x14, x9, lo\n");
         o.append(String.withFormat("    madd x15, x10, x25, x12\n    add x15, x19, x15, lsl #%d\n    mov w13, #0\n", sh));
-        o.append(String.withFormat("%sa:\n    %s {za1h.%s[w13, 0]}, p2/z, [x15]\n", L, LD, T));
+        o.append(String.withFormat("%sa:\n    %s {za2h.%s[w13, 0]}, p2/z, [x15]\n", L, LD, T));
         o.append(String.withFormat("    add x15, x15, x25, lsl #%d\n    add w13, w13, #1\n    cmp x13, x14\n    b.lo %sa\n", sh, L));
-        o.appendCString("    sub x14, x24, x12\n    cmp x14, x9\n    csel x14, x14, x9, lo\n");
-        o.append(String.withFormat("    madd x15, x12, x26, x11\n    add x15, x20, x15, lsl #%d\n    mov w13, #0\n", sh));
-        o.append(String.withFormat("%skk:\n    mov z0.%s, p0/m, za1v.%s[w13, 0]\n    %s {z1.%s}, p1/z, [x15]\n", L, T, T, LD, T));
-        o.append(String.withFormat("    fmopa za0.%s, p0/m, p1/m, z0.%s, z1.%s\n", T, T, T));
-        o.append(String.withFormat("    add x15, x15, x26, lsl #%d\n    add w13, w13, #1\n    cmp x13, x14\n    b.lo %skk\n", sh, L));
-        o.append(String.withFormat("    add x12, x12, x9\n    b %sk\n", L));
+        o.append(String.withFormat("    add x8, x10, x9\n    cmp x8, x22\n    b.hs %stc0\n", L));
+        o.appendCString("    sub x14, x22, x8\n    cmp x14, x9\n    csel x14, x14, x9, lo\n");
+        o.append(String.withFormat("    madd x15, x8, x25, x12\n    add x15, x19, x15, lsl #%d\n    mov w13, #0\n", sh));
+        o.append(String.withFormat("%sa2:\n    %s {za3h.%s[w13, 0]}, p2/z, [x15]\n", L, LD, T));
+        o.append(String.withFormat("    add x15, x15, x25, lsl #%d\n    add w13, w13, #1\n    cmp x13, x14\n    b.lo %sa2\n", sh, L));
+        o.append(String.withFormat("%stc0:\n    sub x14, x24, x12\n    cmp x14, x9\n    csel x14, x14, x9, lo\n    madd x15, x12, x17, x28\n    mov w13, #0\n", L));
+        o.append(String.withFormat("%stc:\n    %s {za2v.%s[w13, 0]}, p0, [x15]\n    %s {za3v.%s[w13, 0]}, p3, [x15, x9, lsl #%d]\n", L, ST, T, ST, T, sh));
+        o.append(String.withFormat("    add x15, x15, x17\n    add w13, w13, #1\n    cmp x13, x14\n    b.lo %stc\n", L));
+        o.append(String.withFormat("    add x12, x12, x9\n    b %st\n", L));
+        // j0 loop: K outer-product pairs from the buffer and B
+        o.append(String.withFormat("%std:\n    mov x11, #0\n%sj:\n    whilelt p1.%s, x11, x23\n    zero {za0.%s, za1.%s}\n", L, L, T, T, T));
+        o.append(String.withFormat("    cbz x24, %sst\n    mov x15, x28\n    add x16, x20, x11, lsl #%d\n    mov x12, #0\n", L, sh));
+        o.append(String.withFormat("%skk:\n    %s {z0.%s}, p0/z, [x15]\n    %s {z2.%s}, p3/z, [x15, x9, lsl #%d]\n    %s {z1.%s}, p1/z, [x16]\n",
+                         L, LD, T, LD, T, sh, LD, T));
+        o.append(String.withFormat("    fmopa za0.%s, p0/m, p1/m, z0.%s, z1.%s\n    fmopa za1.%s, p3/m, p1/m, z2.%s, z1.%s\n", T, T, T, T, T, T));
+        o.append(String.withFormat("    add x15, x15, x17\n    add x16, x16, x26, lsl #%d\n    add x12, x12, #1\n    cmp x12, x24\n    b.lo %skk\n", sh, L));
+        // store both tiles' rows to C
         o.append(String.withFormat("%sst:\n    sub x14, x22, x10\n    cmp x14, x9\n    csel x14, x14, x9, lo\n", L));
         o.append(String.withFormat("    madd x15, x10, x27, x11\n    add x15, x21, x15, lsl #%d\n    mov w13, #0\n", sh));
         o.append(String.withFormat("%ss:\n    %s {za0h.%s[w13, 0]}, p1, [x15]\n", L, ST, T));
         o.append(String.withFormat("    add x15, x15, x27, lsl #%d\n    add w13, w13, #1\n    cmp x13, x14\n    b.lo %ss\n", sh, L));
-        o.append(String.withFormat("    add x11, x11, x9\n    cmp x11, x23\n    b.lo %sj\n", L));
-        o.append(String.withFormat("    add x10, x10, x9\n    cmp x10, x22\n    b.lo %si\n    smstop\n", L));
-        o.append(String.withFormat("%sdone:\n    mov w0, #1\n    b %sret\n", L, L));
-        o.append(String.withFormat("%snan:\n    smstop\n    mov w0, #0\n%sret:\n", L, L));
+        o.append(String.withFormat("    add x8, x10, x9\n    cmp x8, x22\n    b.hs %sjn\n", L));
+        o.appendCString("    sub x14, x22, x8\n    cmp x14, x9\n    csel x14, x14, x9, lo\n");
+        o.append(String.withFormat("    madd x15, x8, x27, x11\n    add x15, x21, x15, lsl #%d\n    mov w13, #0\n", sh));
+        o.append(String.withFormat("%ss2:\n    %s {za1h.%s[w13, 0]}, p1, [x15]\n", L, ST, T));
+        o.append(String.withFormat("    add x15, x15, x27, lsl #%d\n    add w13, w13, #1\n    cmp x13, x14\n    b.lo %ss2\n", sh, L));
+        o.append(String.withFormat("%sjn:\n    add x11, x11, x9\n    cmp x11, x23\n    b.lo %sj\n", L, L));
+        o.append(String.withFormat("    add x10, x10, x9, lsl #1\n    cmp x10, x22\n    b.lo %si\n    smstop\n    mov w22, #1\n    b %sfree\n", L, L));
+        o.append(String.withFormat("%snan:\n    smstop\n    mov w22, #0\n%sfree:\n    cbz x28, %sfreed\n    mov x0, x28\n    bl _free\n", L, L, L));
+        o.append(String.withFormat("%sfreed:\n    mov w0, w22\n    b %sret\n%sdone:\n    mov w0, #1\n%sret:\n", L, L, L, L));
         o.appendCString("    ldp d14, d15, [sp, #144]\n    ldp d12, d13, [sp, #128]\n"
-                        "    ldp d10, d11, [sp, #112]\n    ldp d8, d9, [sp, #96]\n"
-                        "    ldp x27, x28, [sp, #80]\n    ldp x25, x26, [sp, #64]\n"
-                        "    ldp x23, x24, [sp, #48]\n    ldp x21, x22, [sp, #32]\n"
-                        "    ldp x19, x20, [sp, #16]\n    ldp x29, x30, [sp], #160\n    ret\n");
+                         "    ldp d10, d11, [sp, #112]\n    ldp d8, d9, [sp, #96]\n"
+                         "    ldp x27, x28, [sp, #80]\n    ldp x25, x26, [sp, #64]\n"
+                         "    ldp x23, x24, [sp, #48]\n    ldp x21, x22, [sp, #32]\n"
+                         "    ldp x19, x20, [sp, #16]\n    ldp x29, x30, [sp], #160\n    ret\n");
         return o;
     }
 
