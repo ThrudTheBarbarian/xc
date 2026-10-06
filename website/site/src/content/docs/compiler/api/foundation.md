@@ -44,6 +44,7 @@ All of it needs a real heap (**`-falloc=heap`**), which is the default on the
 | [`NotificationCenter`](/compiler/api/notificationcenter/) | A publish/subscribe bus with weakly held observers. **Not** in the umbrella — import by name. From the release after 0.71. |
 | [`UndoManager`](/compiler/api/undomanager/) | Undo and redo through self-registering changes, in named groups. **Not** in the umbrella — import by name. From the release after 0.71. |
 | [`Progress`](/compiler/api/progress/) | How far work has got, as a tree of child progresses. **Not** in the umbrella — import by name. From the release after 0.71. |
+| [`StateMachine`](/compiler/api/statemachine/) | A finite state machine of named states and events. **Not** in the umbrella — import by name. From the release after 0.71. |
 | [`CSV`](/compiler/api/csv/) | Comma-separated values to rows of strings and back. **Not** in the umbrella — import by name. From the release after 0.71. |
 | [`Coder`](/compiler/api/coder/) | Keyed archiving of an object graph to JSON, optionally gzipped. **Not** in the umbrella — import by name. |
 

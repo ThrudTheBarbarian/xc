@@ -1,0 +1,16 @@
+  moved idle --start--> running
+fire start moved, now running
+fire start refused, now running
+events in running: pause stop
+  moved running --pause--> paused
+fire pause moved, now paused
+can resume: 1, can pause: 0
+  moved paused --resume--> running
+fire resume moved, now running
+depth 3
+back: now paused, in paused 1
+back twice: now idle, back again 0
+  moved idle --start--> warming
+fire start moved, now warming
+reset: now idle, depth 0
+fire unknown refused, now idle

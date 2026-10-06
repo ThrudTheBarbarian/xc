@@ -85,6 +85,7 @@ export default defineConfig({
 										{ label: 'Range', slug: 'compiler/api/range' },
 										{ label: 'RunLoop', slug: 'compiler/api/runloop' },
 										{ label: 'Set', slug: 'compiler/api/set' },
+										{ label: 'StateMachine', slug: 'compiler/api/statemachine' },
 										{ label: 'String', slug: 'compiler/api/string' },
 										{ label: 'String (xt6502)', slug: 'compiler/api/string-xt6502' },
 										{ label: 'UndoManager', slug: 'compiler/api/undomanager' },
