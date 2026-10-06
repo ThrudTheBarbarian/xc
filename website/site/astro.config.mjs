@@ -84,6 +84,7 @@ export default defineConfig({
 										{ label: 'Progress', slug: 'compiler/api/progress' },
 										{ label: 'Range', slug: 'compiler/api/range' },
 										{ label: 'RunLoop', slug: 'compiler/api/runloop' },
+										{ label: 'SearchIndex', slug: 'compiler/api/searchindex' },
 										{ label: 'Set', slug: 'compiler/api/set' },
 										{ label: 'StateMachine', slug: 'compiler/api/statemachine' },
 										{ label: 'String', slug: 'compiler/api/string' },

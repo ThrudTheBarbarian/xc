@@ -1,0 +1,13 @@
+words: [the] [quick] [brown] [fox] [jumped] [2x]
+documents 4, terms 12
+quick fox: a(2/2) b(1/2)
+all quick fox: a(2/2)
+QUICK: b(1/2) a(1/1)
+qui*: b(1/2) a(1/1) c(1/1)
+fox*: a(1/1) c(1/1)
+dog* quick: b(2/3) a(1/1) c(1/1)
+missing:
+empty:
+quick after b replaced: a(1/1)
+quick after a removed:
+documents 3, has a 0, terms 9
