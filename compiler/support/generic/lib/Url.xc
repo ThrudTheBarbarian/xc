@@ -144,6 +144,120 @@ class Url
         return _raw.substringBytes(i + (u32)1, _raw.byteLength() - i - (u32)1);
         }
 
+    // ── file URLs ────────────────────────────────────────────────────────
+
+    // The file URL for `path`: "file://" and the path with each byte that
+    // is not a letter, digit or one of - . _ ~ / percent-encoded. A relative
+    // path is taken as it stands (Url does not know the working directory).
+    // A Windows path ("C:\\x" or "C:/x") becomes file:///C:/x.
+    static Url* fileURL(String* path)
+        {
+        String* out = String.withCString("file://");
+        if (path == 0)
+            return Url.withString(out);
+        u8* p = path.cString();
+        u32 n = path.byteLength();
+        if (n >= (u32)2 && p[1] == (u8)':' && (((p[0] | (u8)$20) >= (u8)'a') && ((p[0] | (u8)$20) <= (u8)'z')))
+            out.appendByte((u8)'/');
+        for (u32 i = (u32)0; i < n; i++)
+            {
+            u8 c = p[i];
+            if (c == (u8)'\\')
+                c = (u8)'/';
+            bool keep = (c >= (u8)'a' && c <= (u8)'z') || (c >= (u8)'A' && c <= (u8)'Z') || (c >= (u8)'0' && c <= (u8)'9')
+                        || c == (u8)'-' || c == (u8)'.' || c == (u8)'_' || c == (u8)'~' || c == (u8)'/'
+                        || (c == (u8)':' && i == (u32)1);
+            if (keep)
+                out.appendByte(c);
+            else
+                {
+                out.appendByte((u8)'%');
+                out.appendByte(Url._hexUpper(c >> (u8)4));
+                out.appendByte(Url._hexUpper(c & (u8)$0F));
+                }
+            }
+        return Url.withString(out);
+        }
+
+    // Whether the scheme is "file" (in any case).
+    bool isFileURL(void)
+        {
+        return scheme().lowercased().equals(String.withCString("file"));
+        }
+
+    // A file URL's path with its percent-escapes decoded ("/C:/x" as "C:/x"
+    // on Windows), or null for any other URL.
+    String* filePath(void)
+        {
+        if (!isFileURL())
+            return (String*)0;
+        String* p = Url.percentDecode(path());
+        u8* b = p.cString();
+        if (p.byteLength() >= (u32)3 && b[0] == (u8)'/' && b[2] == (u8)':')
+            return p.substringFromByte((u32)1);
+        return p;
+        }
+
+    // The last component of the decoded path ("" for "/"), as String's
+    // lastPathComponent finds it.
+    String* lastPathComponent(void)
+        {
+        String* last = Url.percentDecode(path()).lastPathComponent();
+        if (last.equals(String.withCString("/")))
+            return String.withCString("");
+        return last;
+        }
+
+    String* pathExtension(void)
+        {
+        return Url.percentDecode(path()).pathExtension();
+        }
+
+    // `s` with each %XX replaced by its byte; a '%' not followed by two hex
+    // digits is kept as it is.
+    static String* percentDecode(String* s)
+        {
+        String* out = String.withCString("");
+        if (s == 0)
+            return out;
+        u8* p = s.cString();
+        u32 n = s.byteLength();
+        u32 i = (u32)0;
+        while (i < n)
+            {
+            if (p[i] == (u8)'%' && i + (u32)2 < n)
+                {
+                i32 hi = Url._hex(p[i + (u32)1]);
+                i32 lo = Url._hex(p[i + (u32)2]);
+                if (hi >= (i32)0 && lo >= (i32)0)
+                    {
+                    out.appendByte((u8)(hi * (i32)16 + lo));
+                    i = i + (u32)3;
+                    continue;
+                    }
+                }
+            out.appendByte(p[i]);
+            i++;
+            }
+        return out;
+        }
+
+    static u8 _hexUpper(u8 v)
+        {
+        return v < (u8)10 ? (u8)'0' + v : (u8)'A' + v - (u8)10;
+        }
+
+    static i32 _hex(u8 c)
+        {
+        if (c >= (u8)'0' && c <= (u8)'9')
+            return (i32)(c - (u8)'0');
+        if (c >= (u8)'a' && c <= (u8)'f')
+            return (i32)(c - (u8)'a') + (i32)10;
+        if (c >= (u8)'A' && c <= (u8)'F')
+            return (i32)(c - (u8)'A') + (i32)10;
+        return (i32)-1;
+        }
+
     // ── the fetch seam ───────────────────────────────────────────────────
 
     void fetch(block cb void(u32, String*))

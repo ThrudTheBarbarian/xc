@@ -125,6 +125,7 @@ export default defineConfig({
 										{ label: 'Settings', slug: 'compiler/api/settings' },
 										{ label: 'Sort', slug: 'compiler/api/sort' },
 										{ label: 'Stdio', slug: 'compiler/api/stdio' },
+										{ label: 'Url', slug: 'compiler/api/url' },
 									],
 								},
 								{
