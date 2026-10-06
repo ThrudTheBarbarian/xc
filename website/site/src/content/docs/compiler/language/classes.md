@@ -198,7 +198,7 @@ void main(void) {
 }
 ```
 
-See [Preprocessor → `#use`](/compiler/language/preprocessor/#importing-and-promoting-a-class-use) for the angle-bracket and quote forms.
+See [Preprocessor → `#use`](/compiler/language/preprocessor/#importing-and-promoting-use) for the angle-bracket and quote forms.
 
 ## Properties
 
