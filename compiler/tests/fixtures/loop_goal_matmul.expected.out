@@ -1,0 +1,3 @@
+accuracy: c[3][0] = 7fc01234, c[2][5] = c21a0000, all 4169a100
+speed: 20 NaNs, c[2][5] = c21a0000, the rest 4f351940
+accuracy again: rest 4f351940

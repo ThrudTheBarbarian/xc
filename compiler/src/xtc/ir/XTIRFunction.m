@@ -72,6 +72,7 @@
         _blocks = [NSMutableArray arrayWithObject:entryBlock];
         _frameInfo = [[XTIRFrameInfo alloc] init];
         _forcedUnrollHeaders = [NSMutableSet set];
+        _speedLoopHeaders = [NSMutableSet set];
         _values = [NSMutableDictionary dictionary];
         _nextValueId = 0;
         }

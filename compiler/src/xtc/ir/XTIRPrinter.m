@@ -700,6 +700,15 @@
         [out appendFormat:@"    unroll: [%@]\n",
                           [names componentsJoinedByString:@", "]];
         }
+    // `speed: [bb_x, ...]` — the loop headers under `:goal(speed)`; emitted
+    // only when non-empty and sorted, as `unroll:` is.
+    if (fn.speedLoopHeaders.count > 0)
+        {
+        NSArray<NSString*>* names =
+            [fn.speedLoopHeaders.allObjects sortedArrayUsingSelector:@selector(compare:)];
+        [out appendFormat:@"    speed: [%@]\n",
+                          [names componentsJoinedByString:@", "]];
+        }
 
     // Blocks.
     for (XTIRBlock* block in fn.blocks)

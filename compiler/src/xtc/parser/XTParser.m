@@ -3195,6 +3195,50 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
     }
 
 /****************************************************************************\
+|* A for loop's optional annotations, after its `)`: `: unroll`, and from the
+|* release after 0.71 `: goal(speed)` / `: goal(accuracy)`, comma-separated.
+|* @return  1 for unroll, 2 for goal(speed), 4 for goal(accuracy), or'd.
+\****************************************************************************/
+- (NSUInteger)parseLoopAnnotations
+    {
+    NSUInteger annots = 0;
+    if (![self match:XTTokenColon])
+        return annots;
+    while ([self check:XTTokenIdentifier])
+        {
+        XTToken* tok = [self advance];
+        NSString* annotName = tok.value.lowercaseString;
+        if ([annotName isEqualToString:@"unroll"])
+            {
+            annots |= 1;
+            }
+        else if ([annotName isEqualToString:@"goal"])
+            {
+            [self expect:XTTokenLParen];
+            XTToken* g = [self check:XTTokenIdentifier] ? [self advance] : nil;
+            if ([g.value isEqualToString:@"speed"])
+                annots = (annots & ~(NSUInteger)4) | 2;
+            else if ([g.value isEqualToString:@"accuracy"])
+                annots = (annots & ~(NSUInteger)2) | 4;
+            else
+                [_diagnostics emitError:[NSString stringWithFormat:@"':goal' takes speed or accuracy, not '%@'",
+                                                                   g.value ?: @""]
+                                     at:g ? g.location : tok.location];
+            [self expect:XTTokenRParen];
+            }
+        else
+            {
+            [_diagnostics emitWarning:[NSString stringWithFormat:@"Unknown loop annotation '%@'", tok.value]
+                             category:XTWarnUnknownAnnotation
+                                   at:tok.location];
+            }
+        if (![self match:XTTokenComma])
+            break;
+        }
+    return annots;
+    }
+
+/****************************************************************************\
 |* Parse a for loop: either for-in (`for (type? var in collection)`) or
 |* C-style (`for (init; cond; incr)`). Supports optional `: unroll` annotation.
 |* @return  An XTForInNode or XTForCStyleNode.
@@ -3307,6 +3351,7 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
                 stepExplicit = YES;
                 }
             [self expect:XTTokenRParen];
+            NSUInteger rangeAnnots = [self parseLoopAnnotations];
             // The loop variable is a local of the body: a block literal or a
             // `par` inside it captures it like any other.
             [self blkPushScope];
@@ -3427,11 +3472,14 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
                                                  lhs:incrLhs
                                                  rhs:stepLit
                                             location:loc];
-            return [[XTForCStyleNode alloc] initWithLoopInit:initDecl
-                                                   condition:cond
-                                                   increment:incr
-                                                        body:body
-                                                    location:loc];
+            XTForCStyleNode* rangeNode = [[XTForCStyleNode alloc] initWithLoopInit:initDecl
+                                                                         condition:cond
+                                                                         increment:incr
+                                                                              body:body
+                                                                          location:loc];
+            rangeNode.forceUnroll = (rangeAnnots & 1) != 0;
+            rangeNode.goal = (rangeAnnots & 2) ? 1 : (rangeAnnots & 4) ? 2 : 0;
+            return rangeNode;
             }
 
         [self expect:XTTokenRParen];
@@ -3474,28 +3522,7 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
     XTASTNode* incr = [self check:XTTokenRParen] ? nil : [self parseExpression];
     [self expect:XTTokenRParen];
 
-    // Optional annotations: ": unroll[, ...]"
-    BOOL forceUnroll = NO;
-    if ([self match:XTTokenColon])
-        {
-        while ([self check:XTTokenIdentifier])
-            {
-            XTToken* tok = [self advance];
-            NSString* annotName = tok.value.lowercaseString;
-            if ([annotName isEqualToString:@"unroll"])
-                {
-                forceUnroll = YES;
-                }
-            else
-                {
-                [_diagnostics emitWarning:[NSString stringWithFormat:@"Unknown loop annotation '%@'", tok.value]
-                                 category:XTWarnUnknownAnnotation
-                                       at:tok.location];
-                }
-            if (![self match:XTTokenComma])
-                break;
-            }
-        }
+    NSUInteger annots = [self parseLoopAnnotations];
 
     // The loop variable is a local of the body: a block literal or a
     // `par` inside it captures it like any other.
@@ -3506,7 +3533,8 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
     [self blkPopScope];
 
     XTForCStyleNode* node = [[XTForCStyleNode alloc] initWithLoopInit:init condition:cond increment:incr body:body location:loc];
-    node.forceUnroll = forceUnroll;
+    node.forceUnroll = (annots & 1) != 0;
+    node.goal = (annots & 2) ? 1 : (annots & 4) ? 2 : 0;
     return node;
     }
 

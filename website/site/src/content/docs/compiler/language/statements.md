@@ -1,6 +1,6 @@
 ---
 title: Statements & control flow
-description: Variable declarations, if, switch, for, for-in (array and range), while, break, continue, :unroll.
+description: Variable declarations, if, switch, for, for-in (array and range), while, break, continue, :unroll, :goal.
 ---
 
 ## Variable declarations
@@ -362,6 +362,38 @@ for (u8 i = 0; i < 40; i++) :unroll {
 ```
 
 The annotation goes after the closing `)` of the `for` clause and before the body. It has no effect at `-O0` or `-O1`, where the unroller does not run. Use it sparingly: every unroll trades binary size for cycle count.
+
+## Speed or accuracy: `:goal`
+
+**From the release after 0.71.** A `for` loop can say whether the compiler may
+trade exactness for speed in it: `:goal(speed)` or `:goal(accuracy)`, after the
+closing `)` like `:unroll` (the two can be combined: `:unroll, goal(speed)`).
+The goal holds for the loop and every loop inside it, down to one that sets its
+own. A loop without one is exact: it gives the same bits as the loop written in
+C.
+
+```c
+for (u32 i = 0; i < M; i++) :goal(speed)
+    for (u32 j = 0; j < N; j++)
+        {
+        float s = 0.0;
+        for (u32 k = 0; k < K; k++)
+            s = s + a[i * K + k] * b[k * N + j];
+        c[i * N + j] = s;
+        }
+```
+
+Today the goal changes one thing. On a Mac with SME, the compiler runs a
+matrix multiply like the one above on the SME unit, then checks the result for
+NaNs, because there a NaN comes out as the standard default NaN where the loop
+would keep an input NaN's bits. Under `speed` that check is left out: a NaN
+still comes out as a NaN, in the same places, and every other value
+(infinities, signed zeros and denormals included) is unchanged. Leaving the
+check out makes a 128×128 multiply about a fifth faster; for larger matrices
+the check costs less. Elsewhere the goal has no effect yet.
+
+A [`par` block](/compiler/language/par/#speed-or-accuracy) has the same goal,
+with `speed` as its default, and the loops in its body follow it.
 
 ## Program entry: `main`
 

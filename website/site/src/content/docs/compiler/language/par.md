@@ -179,7 +179,10 @@ ULP of the CPU's. NVIDIA GPUs have no precise `sin`, `cos`, `exp`, `ln` or
 `pow`, so there a block that calls them runs on the CPU. Choose accuracy for a
 block that depends on NaN or infinity, or on exact float results.
 
-On the CPU, both goals run the same code.
+On the CPU, both goals run the same code, except that from the release after
+0.71 the block's goal also holds for the loops in its body, as
+[`:goal` on a `for` loop](/compiler/language/statements/#speed-or-accuracy-goal)
+does.
 
 ### Which device
 

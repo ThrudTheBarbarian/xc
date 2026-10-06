@@ -2,7 +2,8 @@
 // Exercises: a dense float matrix multiply (SME outer products on arm64 macOS
 // with SME; NEON or SSE elsewhere). The values are small integers, so every
 // product and sum is exact and the checksum is the same in every language,
-// whether or not it fuses a*b + s.
+// whether or not it fuses a*b + s. `:goal(speed)` lets the SME kernel skip
+// its NaN check of C: only NaN payloads could differ, and there are no NaNs.
 #import "Stdio.xc"
 #import "include/bench_time.xc"
 #define M 128
@@ -19,7 +20,7 @@ i32 main(i32 argc, u8** argv)
     for (u32 r = (u32)0; r < (u32)10000; r++)
         {
         a[r % (u32)(M * M)] = (float)(r & (u32)15);
-        for (u32 i = (u32)0; i < (u32)M; i++)
+        for (u32 i = (u32)0; i < (u32)M; i++) :goal(speed)
             for (u32 j = (u32)0; j < (u32)M; j++)
                 {
                 float s = 0.0;

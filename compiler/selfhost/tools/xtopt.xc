@@ -126,7 +126,10 @@ void main(void)
     prof.setVectorLaneBytes(simdBytes);
     prof.setSimdDispatch(simdDispatch);
     if (matMul && target.equals(String.withCString("arm64")))
+        {
         prof.setMatMul(String.withCString("__xt_sme_gemm_"), String.withCString(""));
+        prof.setMatMulFastSuffix(String.withCString("_fast"));
+        }
     else if (matMul && target.equals(String.withCString("x86_64")))
         {
         String* suffix = String.withCString("_");

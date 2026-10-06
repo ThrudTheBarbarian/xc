@@ -175,9 +175,13 @@ class Arm64
         // that calls a kernel carries its own copy.
         bool smeF32 = referencesSymbol(m, String.withCString("__xt_sme_gemm_f32"));
         bool smeF64 = referencesSymbol(m, String.withCString("__xt_sme_gemm_f64"));
-        if (smeF32) _out.append(smeGemmKernel(false));
-        if (smeF64) _out.append(smeGemmKernel(true));
-        if (smeF32 || smeF64) {
+        bool smeF32f = referencesSymbol(m, String.withCString("__xt_sme_gemm_f32_fast"));
+        bool smeF64f = referencesSymbol(m, String.withCString("__xt_sme_gemm_f64_fast"));
+        if (smeF32) _out.append(smeGemmKernel(false, true));
+        if (smeF64) _out.append(smeGemmKernel(true, true));
+        if (smeF32f) _out.append(smeGemmKernel(false, false));
+        if (smeF64f) _out.append(smeGemmKernel(true, false));
+        if (smeF32 || smeF64 || smeF32f || smeF64f) {
             _out.appendCString("\n    .section __DATA,__data\n___xt_sme_state:\n    .byte 0x00\n___xt_sme_feat:\n");
             String* feat = String.withCString("hw.optional.arm.FEAT_SME");
             for (u32 i = (u32)0; i <= feat.byteLength(); i = i + (u32)1) {
@@ -195,17 +199,19 @@ class Arm64
     // of its own because smstart zeroes every Z register (so d8-d15 are saved).
     // Text identical to the reference's xtArm64SmeGemmKernel, which carries the
     // full contract. private:docs/Design/simd-sme-plan.md.
-    String* smeGemmKernel(bool f64)
+    // The `_fast` kernel (`:goal(speed)`) leaves out the NaN check of C.
+    String* smeGemmKernel(bool f64, bool check)
     {
         u8* T = f64 ? "d" : "s";          // element suffix
         u8* LD = f64 ? "ld1d" : "ld1w";
         u8* ST = f64 ? "st1d" : "st1w";
         u8* CNT = f64 ? "cntd" : "cntw";
         i32 sh = f64 ? (i32)3 : (i32)2;                     // log2 element bytes
-        u8* L = f64 ? "Lsme64_" : "Lsme32_";
+        u8* L = f64 ? (check ? "Lsme64_" : "Lsme64f_") : (check ? "Lsme32_" : "Lsme32f_");
+        u8* fast = check ? "" : "_fast";
         String* o = new String();
-        o.append(String.withFormat("\n// SME matrix kernel (%s)\n    .p2align 2\n", f64 ? "f64" : "f32"));
-        o.append(String.withFormat("___xt_sme_gemm_%s:\n", f64 ? "f64" : "f32"));
+        o.append(String.withFormat("\n// SME matrix kernel (%s%s)\n    .p2align 2\n", f64 ? "f64" : "f32", fast));
+        o.append(String.withFormat("___xt_sme_gemm_%s%s:\n", f64 ? "f64" : "f32", fast));
         // frame: fp/lr, x19-x28, d8-d15
         o.appendCString("    stp x29, x30, [sp, #-160]!\n    mov x29, sp\n"
                          "    stp x19, x20, [sp, #16]\n    stp x21, x22, [sp, #32]\n"
@@ -314,6 +320,7 @@ class Arm64
         // As the reference.
         u8* mask = f64 ? "#0x7fffffffffffffff" : "#0x7fffffff";
         u8* inf = f64 ? "#0x7ff0000000000000" : "#0x7f800000";
+        if (check) {
         o.append(String.withFormat("    cbz x24, %sok\n    ptrue p5.%s\n    mov z4.%s, #0\n    mov z5.%s, %s\n", L, T, T, T, inf));
         o.append(String.withFormat("    udiv x16, x23, x9\n    mul x16, x16, x9\n    whilelt p6.%s, x16, x23\n    mov x10, #0\n", T));
         o.append(String.withFormat("%sncr:\n    mul x15, x10, x27\n    add x15, x21, x15, lsl #%d\n    mov x12, #0\n    cmp x12, x16\n    b.hs %snct\n", L, sh, L));
@@ -324,6 +331,7 @@ class Arm64
         o.append(String.withFormat("    umax z4.%s, p6/m, z4.%s, z0.%s\n", T, T, T));
         o.append(String.withFormat("    add x10, x10, #1\n    cmp x10, x22\n    b.lo %sncr\n", L));
         o.append(String.withFormat("    cmphi p3.%s, p5/z, z4.%s, z5.%s\n    ptest p5, p3.b\n    b.ne %snan\n", T, T, T, L));
+        }
         o.append(String.withFormat("%sok:\n    smstop\n    mov w22, #1\n    b %sfree\n", L, L));
         o.append(String.withFormat("%snan:\n    smstop\n    mov w22, #0\n%sfree:\n    cbz x28, %sfreed\n    mov x0, x28\n    bl _free\n", L, L, L));
         o.append(String.withFormat("%sfreed:\n    mov w0, w22\n    b %sret\n%sdone:\n    mov w0, #1\n%sret:\n", L, L, L, L));

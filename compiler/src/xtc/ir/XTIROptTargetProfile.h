@@ -236,6 +236,9 @@ NS_ASSUME_NONNULL_BEGIN
 // which the driver passes at -O2+ unless -fno-matmul.
 @property(nonatomic, copy, nullable) NSString* matMulPrefix;
 @property(nonatomic, copy, nullable) NSString* matMulSuffix;
+// Appended for a nest under `:goal(speed)`, when the target has a kernel that
+// may skip an exactness check: arm64 `_fast` (no NaN check of C). nil: none.
+@property(nonatomic, copy, nullable) NSString* matMulFastSuffix;
 
 + (instancetype)conservativeProfile;
 

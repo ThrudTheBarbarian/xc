@@ -79,6 +79,7 @@ class OptProfile
     // arm64 `__xt_sme_gemm_`, x86-64 `__xt_x86_gemm_` + `_<tier>`. 0: off.
     String* _matMulPrefix;
     String* _matMulSuffix;
+    String* _matMulFastSuffix;  // appended under `:goal(speed)`: arm64 "_fast"
     bool _loopRotate;      // top-tested loops become bottom-tested
     u32 _inlineMax;        // the largest callee (IR instructions) the inliner splices
     bool _dceTrace;        // name each function dead-function elimination removes
@@ -89,6 +90,7 @@ class OptProfile
         _simdDispatch = false;
         _matMulPrefix = (String*)0;
         _matMulSuffix = String.withCString("");
+        _matMulFastSuffix = (String*)0;
         _inlineMax = (u32)64;
         _dceTrace = false;
         _nativeVarargs = false;
@@ -132,6 +134,8 @@ class OptProfile
     String* matMulPrefix(void) { return _matMulPrefix; }
     String* matMulSuffix(void) { return _matMulSuffix; }
     void setMatMul(String* prefix, String* suffix) { _matMulPrefix = prefix; _matMulSuffix = suffix; }
+    String* matMulFastSuffix(void) { return _matMulFastSuffix; }
+    void setMatMulFastSuffix(String* s) { _matMulFastSuffix = s; }
 
     static OptProfile* forTarget(String* t)
         {
@@ -7294,7 +7298,7 @@ class OptProfile
                 {
                 if (!recogniseMatMul(fn))
                     break;
-                applyMatMul(m);
+                applyMatMul(m, fn);
                 }
             }
         }
@@ -7864,12 +7868,17 @@ class OptProfile
         return v;
         }
 
-    void applyMatMul(IRModule* m)
+    void applyMatMul(IRModule* m, IRFunc* fn)
         {
         String* name = new String();
         name.append(_profile.matMulPrefix());
         name.appendCString(_mmF64 ? "f64" : "f32");
         name.append(_profile.matMulSuffix());
+        // Under `:goal(speed)` (the i loop's header was lowered as one), the
+        // target's kernel that may skip its exactness check. As the reference.
+        if (_profile.matMulFastSuffix() != (String*)0 && _mxHead.name() != (String*)0
+            && fn.isSpeedHeader(_mxHead.name()))
+            name.append(_profile.matMulFastSuffix());
         bool have = false;
         for (u32 i = (u32)0; i < m.syms().count(); i = i + (u32)1)
             if (((IRSymbol*)m.syms().get(i)).name().equals(name))

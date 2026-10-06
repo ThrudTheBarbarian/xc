@@ -73,6 +73,11 @@ NS_ASSUME_NONNULL_BEGIN
 \****************************************************************************/
 @property(nonatomic) BOOL forceUnroll;
 /****************************************************************************\
+|* `for (...) :goal(speed|accuracy)` — 0 when the loop has none (it takes
+|* the enclosing loop's, and accuracy outside every loop), 1 speed, 2 accuracy.
+\****************************************************************************/
+@property(nonatomic) NSInteger goal;
+/****************************************************************************\
 |* Create a C-style for-loop node. Any of init/condition/increment may be nil.
 |* @param loopInit   The initialisation statement, or nil.
 |* @param condition  The loop condition expression, or nil (infinite loop).

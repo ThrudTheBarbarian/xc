@@ -470,7 +470,11 @@ The twentieth, `matrix_mul_f32`, is quoted on its own. xcc recognises its loop
 nest and replaces it with a matrix kernel (SME on Apple silicon, SSE or AVX on
 x86-64), which makes xc so much faster at that one operation that putting it
 in with the others would skew the means in xc's favour, and most programs do
-not multiply 2D matrices. {separate}
+not multiply 2D matrices. {separate} From the release after 0.71 its outer
+loop is marked [`:goal(speed)`](/compiler/language/statements/#speed-or-accuracy-goal),
+which lets the SME kernel leave out a NaN check whose only effect is on the
+bits of a NaN (the inputs have none); earlier releases were measured without
+it.
 
 {standing} The arithmetic mean of ratios
 is not given: a benchmark at 2.00× and one at 0.50× are exactly compensating,

@@ -2539,6 +2539,8 @@ class Parser
             f.add(cm);
             f.add(loop.kid((u32)2));
             f.add(loop.kid((u32)3));
+            // The block's goal holds for the CPU path too. As the reference.
+            f.addFlag(frame.get((Hashable*)String.withCString("fast")) != 0 ? (u32)NF_GOAL_SPEED : (u32)NF_GOAL_ACCURACY);
             Node* rb = mk((u16)nkBlock);
             rb.add(f);
             m.add(rb);
@@ -3240,6 +3242,7 @@ class Parser
                 if (Parser._same(ty, "-")) ty = String.withCString("u8");
 
                 expect((u16)tokRParen);
+                u32 rangeAnnots = parseLoopAnnotations();
                 // The loop variable is a local of the body: a block literal or
                 // a `par` inside it captures it like any other.
                 blkPushScope();
@@ -3277,6 +3280,7 @@ class Parser
                 n.add(stepMark);
 
                 n.add(body);
+                loopAnnotationFlags(n, rangeAnnots);
                 return n;
             }
 
@@ -3319,7 +3323,7 @@ class Parser
         expect((u16)tokRParen);
         n.add(stepMark);
 
-        if (parseLoopAnnotations()) n.addFlag((u32)NF_UNROLL);
+        loopAnnotationFlags(n, parseLoopAnnotations());
         n.add(parseBlockOrStatement());
         return n;
     }
@@ -3339,14 +3343,31 @@ class Parser
     // wrong direction: better too loud and silenceable with
     // `-Wno-unknown-annotation` than quietly wrong. Same category and same
     // wording as the reference.
-    bool parseLoopAnnotations(void)
+    //
+    // From the release after 0.71 also `: goal(speed)` / `: goal(accuracy)`,
+    // on both loop forms. Returns 1 for unroll, 2 speed, 4 accuracy, or'd.
+    u32 parseLoopAnnotations(void)
     {
-        bool forced = false;
-        if (!match((u16)tokColon)) return forced;
+        u32 annots = (u32)0;
+        if (!match((u16)tokColon)) return annots;
         while (check((u16)tokIdentifier)) {
             Token* tok = advance();
             if (tok != (Token*)0 && Parser._same(tok.value(), "unroll")) {
-                forced = true;
+                annots = annots | (u32)1;
+            } else if (tok != (Token*)0 && Parser._same(tok.value(), "goal")) {
+                expect((u16)tokLParen);
+                Token* g = check((u16)tokIdentifier) ? advance() : (Token*)0;
+                if (g != (Token*)0 && Parser._same(g.value(), "speed"))
+                    annots = (annots & (u32)$FFFFFFFB) | (u32)2;
+                else if (g != (Token*)0 && Parser._same(g.value(), "accuracy"))
+                    annots = (annots & (u32)$FFFFFFFD) | (u32)4;
+                else {
+                    String* m = String.withCString("':goal' takes speed or accuracy, not '");
+                    if (g != (Token*)0) m.append(g.value());
+                    m.appendCString("'");
+                    _errorAt(m, parTokNode(g != (Token*)0 ? g : tok));
+                }
+                expect((u16)tokRParen);
             } else if (tok != (Token*)0) {
                 String* w = String.withCString("Unknown loop annotation '");
                 w.append(tok.value());
@@ -3355,7 +3376,14 @@ class Parser
             }
             if (!match((u16)tokComma)) break;
         }
-        return forced;
+        return annots;
+    }
+
+    void loopAnnotationFlags(Node* n, u32 annots)
+    {
+        if ((annots & (u32)1) != (u32)0) n.addFlag((u32)NF_UNROLL);
+        if ((annots & (u32)2) != (u32)0) n.addFlag((u32)NF_GOAL_SPEED);
+        if ((annots & (u32)4) != (u32)0) n.addFlag((u32)NF_GOAL_ACCURACY);
     }
 
     Node* parseReturn(void)

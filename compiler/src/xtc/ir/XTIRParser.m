@@ -2032,8 +2032,12 @@ typedef NS_ENUM(NSUInteger, XTIRTokKind) {
         // front-end/back-end process boundary; without this the optimiser in
         // xcc-cg-<arch> would never see it, because the two halves only ever
         // exchange IR TEXT.
-        if ([kw isEqualToString:@"unroll"])
+        // speed: [bb_x, ...] — the loop headers under `:goal(speed)`, read
+        // back the same way.
+        if ([kw isEqualToString:@"unroll"] || [kw isEqualToString:@"speed"])
             {
+            NSMutableSet<NSString*>* into = [kw isEqualToString:@"unroll"] ? state.currentFunction.forcedUnrollHeaders
+                                                                          : state.currentFunction.speedLoopHeaders;
             NSUInteger pos = 1;
             if ([self tok:tokens at:pos].kind == XTIRTokColon)
                 pos++;
@@ -2042,8 +2046,7 @@ typedef NS_ENUM(NSUInteger, XTIRTokKind) {
             pos++;
             while ([self tok:tokens at:pos].kind == XTIRTokWord)
                 {
-                [state.currentFunction.forcedUnrollHeaders
-                    addObject:[self tok:tokens at:pos].text];
+                [into addObject:[self tok:tokens at:pos].text];
                 pos++;
                 if ([self tok:tokens at:pos].kind != XTIRTokComma)
                     break;

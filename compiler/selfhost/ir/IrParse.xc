@@ -618,6 +618,7 @@ class IrParser
         nextLine();
         frameLine();
         unrollLine();
+        speedLine();
         collectDefs(_li, end);
         while (!_failed && _li < end)
             blockOrInsn();
@@ -692,6 +693,30 @@ class IrParser
     // Emitted only when non-empty, so this returns untouched on the vast
     // majority of functions — `_ci = save` and no line advance, exactly as
     // frameLine does when there is no frame.
+    // `speed: [...]` — read back as `unroll:` is.
+    void speedLine(void)
+        {
+        u32 save = _ci;
+        if (!expectWord("speed"))
+            {
+            _ci = save;
+            return;
+            }
+        expectChar((u8)':');
+        expectChar((u8)'[');
+        while (!atChar((u8)']') && !atEnd())
+            {
+            String* nm = word();
+            if (nm == (String*)0)
+                break;
+            _fn.addSpeedHeader(nm);
+            if (!expectChar((u8)','))
+                break;
+            }
+        expectChar((u8)']');
+        nextLine();
+        }
+
     void unrollLine(void)
         {
         u32 save = _ci;

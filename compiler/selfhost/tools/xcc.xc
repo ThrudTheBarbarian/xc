@@ -5187,8 +5187,10 @@ void applyOptFlags(DriverOptions* d, OptProfile* p)
     // checks for SME at run time and leaves the loop to run when it is absent)
     // and x86-64 Linux (a kernel per vector tier, named below with the level).
     bool matMul = !d.caps().noMatmul() && d.opt() >= (u32)2;
-    if (matMul && d.arch().equals(String.withCString("arm64")) && !isIos(d))
+    if (matMul && d.arch().equals(String.withCString("arm64")) && !isIos(d)) {
         p.setMatMul(String.withCString("__xt_sme_gemm_"), String.withCString(""));
+        p.setMatMulFastSuffix(String.withCString("_fast"));
+    }
     // The vector level only ever reaches an x86-64 profile (checkCapabilities
     // refuses it elsewhere): avx2 gives the vectoriser 32-byte vectors, which
     // the back end emits as ymm.

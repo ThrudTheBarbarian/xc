@@ -139,6 +139,10 @@
 @property(nonatomic, nullable) XTIRBlock* currentBlock;
 @property(nonatomic) NSMutableDictionary<NSString*, XTIRValue*>* locals; // name → current value
 @property(nonatomic, nullable) XTIRValue* memToken;                      // current memory token
+// The goal of the innermost `for (...) :goal(...)` being lowered: 0 none
+// (accuracy), 1 speed, 2 accuracy. A for loop lowered under speed has its
+// header recorded in the function's speedLoopHeaders.
+@property(nonatomic) NSInteger loopGoal;
 
 // Set while lowering a method body — used to resolve bare-identifier
 // references to ivars and to bind `self` in the locals map.
@@ -9841,8 +9845,16 @@ static const NSUInteger kVarargSlotBytes = 8;
         [self lowerAsmBlock:(XTAsmBlockNode*)node];
         break;
     case XTASTNodeKindForCStyle:
+        {
+        // A loop's own :goal holds for it and every loop inside it, down to
+        // one that sets its own.
+        NSInteger savedGoal = self.loopGoal;
+        if (((XTForCStyleNode*)node).goal)
+            self.loopGoal = ((XTForCStyleNode*)node).goal;
         [self lowerForCStyleStmt:(XTForCStyleNode*)node];
+        self.loopGoal = savedGoal;
         break;
+        }
     case XTASTNodeKindForIn:
         [self lowerForInStmt:(XTForInNode*)node];
         break;
@@ -10361,6 +10373,11 @@ static const NSUInteger kVarargSlotBytes = 8;
     // conditional `unroll:` line in the text.
     if (node.forceUnroll && headerBlock.name)
         [self.currentFunction.forcedUnrollHeaders addObject:headerBlock.name];
+    // `:goal(speed)` on this loop or one around it: the same mechanism, for
+    // the passes that may trade exactness the loop does not need (today the
+    // matrix-multiply idiom's NaN check).
+    if (self.loopGoal == 1 && headerBlock.name)
+        [self.currentFunction.speedLoopHeaders addObject:headerBlock.name];
     XTIRBlock* bodyBlock = [self addBlockWithName:[prefix stringByAppendingString:@"_for_body"]];
     XTIRBlock* exitBlock = [self addBlockWithName:[prefix stringByAppendingString:@"_for_exit"]];
 

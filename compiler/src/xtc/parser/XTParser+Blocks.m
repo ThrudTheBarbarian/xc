@@ -1257,6 +1257,9 @@ NS_ASSUME_NONNULL_END
                                                              increment:loop.increment
                                                                   body:loop.body
                                                               location:loc];
+        // The block's goal holds for the CPU path too: under speed (the
+        // default), a matrix multiply in the body may skip its NaN check.
+        f.goal = frame[@"fast"] ? 1 : 2;
         XTBlockNode* rb = [[XTBlockNode alloc] initWithStatements:@[ f ] location:loc];
         [methods addObject:[[XTMethodDeclNode alloc] initWithName:@"run" returnTypes:@[ [XTType voidType] ]
                                                        parameters:@[] isStatic:NO isVarArgs:NO body:rb location:loc]];

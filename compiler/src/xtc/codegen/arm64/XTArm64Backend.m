@@ -137,16 +137,21 @@
 // into __xt_sme_state: 0 unknown, 1 yes, 2 no), when an index the loop
 // computes would wrap 32 bits, when the rows of C overlap (ldc < N), or when C
 // overlaps A or B; the caller then runs the loop.
-static NSString *xtArm64SmeGemmKernel(BOOL f64) {
+//
+// The `_fast` kernel (a nest under `:goal(speed)`) leaves out the NaN check of
+// C: a NaN still comes out a NaN, in the same places, but as the default NaN
+// where the loop would keep an input's payload. Nothing else differs.
+static NSString *xtArm64SmeGemmKernel(BOOL f64, BOOL check) {
     NSString *T = f64 ? @"d" : @"s";          // element suffix
     NSString *LD = f64 ? @"ld1d" : @"ld1w";
     NSString *ST = f64 ? @"st1d" : @"st1w";
     NSString *CNT = f64 ? @"cntd" : @"cntw";
     int sh = f64 ? 3 : 2;                     // log2 element bytes
-    NSString *L = f64 ? @"Lsme64_" : @"Lsme32_";
+    NSString *L = f64 ? (check ? @"Lsme64_" : @"Lsme64f_") : (check ? @"Lsme32_" : @"Lsme32f_");
+    NSString *fast = check ? @"" : @"_fast";
     NSMutableString *o = [NSMutableString string];
-    [o appendFormat:@"\n// SME matrix kernel (%@)\n    .p2align 2\n", f64 ? @"f64" : @"f32"];
-    [o appendFormat:@"___xt_sme_gemm_%@:\n", f64 ? @"f64" : @"f32"];
+    [o appendFormat:@"\n// SME matrix kernel (%@%@)\n    .p2align 2\n", f64 ? @"f64" : @"f32", fast];
+    [o appendFormat:@"___xt_sme_gemm_%@%@:\n", f64 ? @"f64" : @"f32", fast];
     // frame: fp/lr, x19-x28, d8-d15
     [o appendString:@"    stp x29, x30, [sp, #-160]!\n    mov x29, sp\n"
                      "    stp x19, x20, [sp, #16]\n    stp x21, x22, [sp, #32]\n"
@@ -261,6 +266,7 @@ static NSString *xtArm64SmeGemmKernel(BOOL f64) {
     // row, so it is made once.
     NSString *mask = f64 ? @"#0x7fffffffffffffff" : @"#0x7fffffff";
     NSString *inf = f64 ? @"#0x7ff0000000000000" : @"#0x7f800000";
+    if (check) {
     [o appendFormat:@"    cbz x24, %@ok\n    ptrue p5.%@\n    mov z4.%@, #0\n    mov z5.%@, %@\n", L, T, T, T, inf];
     [o appendFormat:@"    udiv x16, x23, x9\n    mul x16, x16, x9\n    whilelt p6.%@, x16, x23\n    mov x10, #0\n", T];
     [o appendFormat:@"%@ncr:\n    mul x15, x10, x27\n    add x15, x21, x15, lsl #%d\n    mov x12, #0\n    cmp x12, x16\n    b.hs %@nct\n", L, sh, L];
@@ -271,6 +277,7 @@ static NSString *xtArm64SmeGemmKernel(BOOL f64) {
                      L, LD, T, sh, T, T, mask, T, T, T];
     [o appendFormat:@"    add x10, x10, #1\n    cmp x10, x22\n    b.lo %@ncr\n", L];
     [o appendFormat:@"    cmphi p3.%@, p5/z, z4.%@, z5.%@\n    ptest p5, p3.b\n    b.ne %@nan\n", T, T, T, L];
+    }
     [o appendFormat:@"%@ok:\n    smstop\n    mov w22, #1\n    b %@free\n", L, L];
     [o appendFormat:@"%@nan:\n    smstop\n    mov w22, #0\n%@free:\n    cbz x28, %@freed\n    mov x0, x28\n    bl _free\n", L, L, L];
     [o appendFormat:@"%@freed:\n    mov w0, w22\n    b %@ret\n%@done:\n    mov w0, #1\n%@ret:\n", L, L, L, L];
@@ -7251,9 +7258,13 @@ static BOOL sArm64LseAtomics = YES;  // Apple Silicon is ARMv8.5; Android's floo
     // calls a kernel carries its own copy.
     BOOL smeF32 = [mod referencesSymbolNamed:@"__xt_sme_gemm_f32"];
     BOOL smeF64 = [mod referencesSymbolNamed:@"__xt_sme_gemm_f64"];
-    if (smeF32) [out appendString:xtArm64SmeGemmKernel(NO)];
-    if (smeF64) [out appendString:xtArm64SmeGemmKernel(YES)];
-    if (smeF32 || smeF64) {
+    BOOL smeF32f = [mod referencesSymbolNamed:@"__xt_sme_gemm_f32_fast"];
+    BOOL smeF64f = [mod referencesSymbolNamed:@"__xt_sme_gemm_f64_fast"];
+    if (smeF32) [out appendString:xtArm64SmeGemmKernel(NO, YES)];
+    if (smeF64) [out appendString:xtArm64SmeGemmKernel(YES, YES)];
+    if (smeF32f) [out appendString:xtArm64SmeGemmKernel(NO, NO)];
+    if (smeF64f) [out appendString:xtArm64SmeGemmKernel(YES, NO)];
+    if (smeF32 || smeF64 || smeF32f || smeF64f) {
         [out appendString:@"\n    .section __DATA,__data\n___xt_sme_state:\n    .byte 0x00\n___xt_sme_feat:\n"];
         const char *feat = "hw.optional.arm.FEAT_SME";
         for (const char *c = feat; ; c++) {

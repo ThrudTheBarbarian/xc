@@ -78,6 +78,9 @@ NS_ASSUME_NONNULL_BEGIN
 /// BUDGETS for a listed header and leaves every correctness gate (multi-carry
 /// phis, vector phis, loop shape) exactly where it was.
 @property(nonatomic, readonly) NSMutableSet<NSString*>* forcedUnrollHeaders;
+// Headers of the loops lowered under `:goal(speed)` (a loop's own, or one
+// around it). Printed as `speed: [...]` when non-empty.
+@property(nonatomic, readonly) NSMutableSet<NSString*>* speedLoopHeaders;
 
 /// Runtime SIMD dispatch (x86-64). A clone made for a wider vector level has
 /// its own lane width (0 = the target profile's), its level name ("avx2") and

@@ -649,6 +649,11 @@ static BOOL onlyConstsBesides(XTIRBlock* b, NSArray<XTIRInsn*>* allowed, XTMatMu
     XTIRType* u64 = [XTIRType u64Type];
     NSString* name = [NSString stringWithFormat:@"%@%@%@", self.profile.matMulPrefix, c.f64 ? @"f64" : @"f32",
                                                  self.profile.matMulSuffix ?: @""];
+    // Under `:goal(speed)` (the i loop's header was lowered as one), the
+    // target's kernel that may skip its exactness check, where it has one:
+    // arm64's skips the NaN check of C (only NaN payloads can differ).
+    if (self.profile.matMulFastSuffix && c.header.name && [fn.speedLoopHeaders containsObject:c.header.name])
+        name = [name stringByAppendingString:self.profile.matMulFastSuffix];
     XTIRSymbol* sym = [mod symbolForName:name];
     if (!sym)
         {

@@ -474,6 +474,7 @@ class ClassInfo
     Map* _strongStruct;       // struct local -> its type, when it owns a class ref
     Array* _bcTo;             // Bitcast result …
     Array* _bcFrom;           // …and what it was cast FROM
+    u32 _loopGoal;            // innermost for loop's :goal: 0 none, 1 speed, 2 accuracy
 
     void init(void)
         {
@@ -481,6 +482,7 @@ class ClassInfo
         _cntW = (u32)2;
         _fieldCap = (u32)1;
         _tailCap = (u32)8;
+        _loopGoal = (u32)0;
         _vtAncestry = false;
         _vtItable = false;
         _itableDispatch = false;
@@ -7066,6 +7068,9 @@ class ClassInfo
         // annotation syntax, which is why this sits under isFor's blocks.
         if (isFor && n.hasFlag((u32)NF_UNROLL))
             _fn.addUnrollHeader(hn);
+        // `:goal(speed)` on this loop or one around it.
+        if (isFor && _loopGoal == (u32)1)
+            _fn.addSpeedHeader(hn);
 
         IRBlock* preheader = _blk;
         Map* preSnap = snapshot();
@@ -8471,7 +8476,13 @@ class ClassInfo
             }
         if (k == (u16)nkForCStyle)
             {
+            // A loop's own :goal holds for it and every loop inside it, down
+            // to one that sets its own. As the reference.
+            u32 savedGoal = _loopGoal;
+            if (n.hasFlag((u32)NF_GOAL_SPEED)) _loopGoal = (u32)1;
+            else if (n.hasFlag((u32)NF_GOAL_ACCURACY)) _loopGoal = (u32)2;
             lowerLoop(n, true);
+            _loopGoal = savedGoal;
             return;
             }
         if (k == (u16)nkBreak || k == (u16)nkContinue)

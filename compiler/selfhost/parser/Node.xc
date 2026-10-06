@@ -180,6 +180,11 @@ enum NodeKind = {
 // the markers above it this never appears in the AST dump — the original does
 // not print forceUnroll either, so it costs the comparison nothing.
 #define NF_UNROLL $08000000
+// `for (...) : goal(speed)` / `: goal(accuracy)` on a for node. The bits are
+// :irq / :vbi's, which only a function carries. Like NF_UNROLL, never in the
+// AST dump.
+#define NF_GOAL_SPEED $40000
+#define NF_GOAL_ACCURACY $80000
 #define NF_MODINIT $40000000
 #define NF_OUTLET $10000000
 #define NF_ACTION $20000000

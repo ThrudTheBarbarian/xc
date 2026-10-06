@@ -537,6 +537,7 @@ class IRValue
     // the opcode table, printer, parser, verifier and every back end, to carry
     // one bit.
     Array* _unrollHeaders; // of String@
+    Array* _speedHeaders;  // of String@: loops lowered under `:goal(speed)`
     // Value id -> IRValue@, sparse, indexed by the id itself. The PRINTER never
     // needs this (an operand holds its value), but a BACK END does: a frame slot
     // is assigned to every value in id order, pinned locals included, and those
@@ -556,6 +557,7 @@ class IRValue
         _blocks = new Array();
         _pinned = new Array();
         _unrollHeaders = new Array();
+        _speedHeaders = new Array();
         _byId = new Array();
         _simdLaneBytes = (u32)0;
         _simdLevel = (String*)0;
@@ -645,6 +647,21 @@ class IRValue
     void addUnrollHeader(String* n)
         {
         _unrollHeaders.add((Object*)String.withString(n));
+        }
+    Array* speedHeaders(void)
+        {
+        return _speedHeaders;
+        }
+    void addSpeedHeader(String* n)
+        {
+        _speedHeaders.add((Object*)String.withString(n));
+        }
+    bool isSpeedHeader(String* n)
+        {
+        for (u32 i = (u32)0; i < _speedHeaders.count(); i = i + (u32)1)
+            if (((String*)_speedHeaders.get(i)).equals(n))
+                return true;
+        return false;
         }
     void addPinned(IRPinned* p)
         {
@@ -915,6 +932,20 @@ class IRValue
             {
             Array* sorted = sortedNames(_unrollHeaders);
             out.appendCString("    unroll: [");
+            for (u32 i = (u32)0; i < sorted.count(); i = i + (u32)1)
+                {
+                if (i > (u32)0)
+                    out.appendCString(", ");
+                out.append((String*)sorted.get(i));
+                }
+            out.appendCString("]\n");
+            }
+        // `speed: [...]`, the loops under `:goal(speed)`: as the reference,
+        // after `unroll:`, only when non-empty, sorted.
+        if (_speedHeaders.count() > (u32)0)
+            {
+            Array* sorted = sortedNames(_speedHeaders);
+            out.appendCString("    speed: [");
             for (u32 i = (u32)0; i < sorted.count(); i = i + (u32)1)
                 {
                 if (i > (u32)0)
