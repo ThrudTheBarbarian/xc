@@ -81,6 +81,7 @@ export default defineConfig({
 										{ label: 'NumberFormatter', slug: 'compiler/api/numberformatter' },
 										{ label: 'Object', slug: 'compiler/api/object' },
 										{ label: 'OperationQueue', slug: 'compiler/api/operationqueue' },
+										{ label: 'Progress', slug: 'compiler/api/progress' },
 										{ label: 'Range', slug: 'compiler/api/range' },
 										{ label: 'RunLoop', slug: 'compiler/api/runloop' },
 										{ label: 'Set', slug: 'compiler/api/set' },

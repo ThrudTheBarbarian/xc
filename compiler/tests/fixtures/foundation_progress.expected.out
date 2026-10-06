@@ -1,0 +1,9 @@
+start                          0/1000 finished=0 indeterminate=0
+child half of 6 units          300/1000 finished=0 indeterminate=0
+plus 2 own units               500/1000 finished=0 indeterminate=0
+grandchild finishes            800/1000 finished=0 indeterminate=0
+all done                       1000/1000 finished=1 indeterminate=0
+overshoot is clamped           1000/1000 finished=1 indeterminate=0
+no total                       0/1000 finished=0 indeterminate=1
+total known later              333/1000 finished=0 indeterminate=0
+cancelled: job=1 child=1 added later=1
