@@ -248,9 +248,9 @@ def par_tables(version):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--current", default="v0.7")
-    ap.add_argument("--history", default="v0.62,v0.63,v0.64,v0.65,v0.66,v0.7")
-    ap.add_argument("--release", default="0.7")
+    ap.add_argument("--current", default="v0.71")
+    ap.add_argument("--history", default="v0.62,v0.63,v0.64,v0.65,v0.66,v0.7,v0.71")
+    ap.add_argument("--release", default="0.71")
     a = ap.parse_args()
     cur = load(a.current)
     versions = a.history.split(",")
@@ -282,10 +282,10 @@ def main():
 
 PAGE_TEMPLATE = """---
 title: Performance
-description: How xcc-compiled code compares with clang's Objective-C and C++ and with Swift on the same programs, measured on nineteen benchmarks across arm64 and x86-64.
+description: How xcc-compiled code compares with clang's Objective-C and C++ and with Swift on the same programs, measured on twenty benchmarks across arm64 and x86-64.
 ---
 
-The compiler is measured on nineteen programs, each written four times: in the
+The compiler is measured on twenty programs, each written four times: in the
 xc language, in Objective-C with ARC, in C++ and in Swift, doing the same work
 with the same algorithm and the same data. All are built with optimisation
 (`-O3` for xc, Objective-C and C++, `-O` for Swift), every version prints a
@@ -298,7 +298,7 @@ idle.
 
 ## Summary
 
-Geometric mean, over the nineteen benchmarks, of xc's time divided by the other
+Geometric mean, over the twenty benchmarks, of xc's time divided by the other
 language's. **Below 1 is xc faster.**
 
 {summary}
@@ -340,6 +340,20 @@ gain:
   are faster.
 - **Dispatch.** `poly_dispatch` on arm64, where clang's call sequence around the
   virtual call is shorter.
+
+## Matrix multiplies
+
+From 0.71 a dense matrix multiply written as three loops — `C[i][j]` the sum
+over `k` of `A[i][k] · B[k][j]`, in `float` or `double` — runs as a kernel the
+compiler writes itself: on Apple silicon with SME (M4 and later) on the matrix
+unit, and on x86-64 with the widest vector unit the processor has (SSE2, AVX2
+or AVX-512), chosen when the program starts. The results are the loops', to
+the last bit. `matrix_mul_f32` measures it: a 128×128 `float` multiply, 400
+times. (`matrix_mul` multiplies `u32` values, which the matrix unit's outer
+products do not take, so it stays a vectorised loop.) On an Apple M4 Max
+it takes 3.5 ms against 391 ms for clang's C++ of the same loops; on an AMD Zen 5
+processor, where the program picks AVX-512, 12.5 ms against 252 ms. With
+`-fno-matmul` the loops run as written.
 
 ## Parallel blocks and the GPU
 

@@ -40,6 +40,10 @@ REPO = os.path.dirname(ROOT)
 SRC = os.path.join(ROOT, "src")
 with open(os.path.join(REPO, "compiler", "VERSION")) as _vf:
     COMPILER_VERSION = _vf.read().strip()
+# XC_BENCH_XCC_VERSION=<v> measures the installed /opt/xcc/<v> instead: how a
+# benchmark added later is measured for earlier releases (--version names the
+# results it merges into).
+COMPILER_VERSION = os.environ.get("XC_BENCH_XCC_VERSION") or COMPILER_VERSION
 OPTS = ["O0", "O1", "O2", "O3"]
 BASELINE = "baseline"
 

@@ -3,6 +3,45 @@ title: ChangeLog
 description: Release notes for the xcc toolchain, with bug fixes and new features per version.
 ---
 
+## Version 0.71 — AVX-512, and matrix multiplies on the matrix unit
+
+A dense matrix multiply written as three loops now runs as a matrix kernel the
+compiler generates itself: on Apple silicon with SME (M4 and later) on the
+matrix unit, and on x86-64 with SSE2, AVX2 or AVX-512 — with the results of
+the loops, bit for bit. x86-64 and Windows gain AVX-512, as a flag and as a
+third level the program picks at load.
+
+### New
+
+- **AVX-512**: `-mavx512` (or `-msimd=avx512`) vectorises x86-64 and Windows
+  code with 512-bit registers (F, DQ, BW and VL). Under `-msimd=auto`, the
+  default, each vectorised function is also built for AVX-512 and the program
+  picks it at load on a machine that has it; `XC_SIMD=avx512` forces it and
+  `-mnative` selects it where the build machine supports it.
+- **Matrix kernels**: at `-O2` and above, `C[i][j] = Σ A[i][k] · B[k][j]` over
+  `float` or `double`, written as three loops, runs on the SME matrix unit on
+  Apple silicon macOS and as a vector kernel on x86-64 Linux. The results are
+  the loops' to the last bit, NaNs and signed zeros included; on a Mac without
+  SME, or when the matrices overlap or hold a NaN, the loops run as written.
+  `-fno-matmul` turns it off.
+- A class that lists a protocol and leaves out one of its required methods is
+  now refused, naming the class, the protocol and the method (it built, and
+  crashed calling the missing method).
+
+### Faster
+
+- `matrix_mul_f32` (a 128×128 `float` multiply, 400 times): 3.5 ms on an Apple
+  M4 Max against 391 ms for clang's C++, and 12.5 ms on an AMD Zen 5 processor
+  with AVX-512 against 252 ms.
+- The benchmark suite, now twenty programs with `matrix_mul_f32` (measured
+  back to 0.62 for the history chart), takes 0.81× its 0.7 time on arm64 and
+  0.73× on x86-64, where AVX-512 also halves `array_map`, `call_depth` and
+  `int_muldiv`. xc's code takes 0.77× C++'s time on arm64 and 0.68× on x86-64
+  (geometric mean); without `matrix_mul_f32` 0.97× and 0.78×.
+- Compiling long x86-64 functions: `vectorize_wide_tails` builds in 20 s
+  instead of 45 (copy propagation and loop-invariant motion no longer scale
+  with the square of a function's length).
+
 ## Version 0.7 — parallel blocks, on every CPU thread and on the GPU
 
 A `par` block runs a loop's iterations at once: over every CPU thread, or on
