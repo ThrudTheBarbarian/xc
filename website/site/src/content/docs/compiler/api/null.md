@@ -7,7 +7,7 @@ description: "The one shared object that stands for \"nothing here\" in a collec
 shape). A collection stores `Object*`, and a null reference usually means
 absent. Sometimes a slot needs an explicit nothing that is still an object: a
 sparse row, a JSON `null`, a cleared entry that must keep its place.
-**From the release after 0.71.**
+**From 0.72.**
 
 ```c
 #import "Null.xc"          // or the Foundation umbrella

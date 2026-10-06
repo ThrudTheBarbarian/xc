@@ -365,7 +365,7 @@ The annotation goes after the closing `)` of the `for` clause and before the bod
 
 ## Speed or accuracy: `:goal`
 
-**From the release after 0.71.** A `for` loop can say whether the compiler may
+**From 0.72.** A `for` loop can say whether the compiler may
 trade exactness for speed in it: `:goal(speed)` or `:goal(accuracy)`, after the
 closing `)` like `:unroll` (the two can be combined: `:unroll, goal(speed)`).
 The goal holds for the loop and every loop inside it, down to one that sets its

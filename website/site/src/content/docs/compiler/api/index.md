@@ -123,27 +123,27 @@ and every method grouped by task with a jump-list at the top.
 | [`Array`](/compiler/api/array/) | an ordered, growable list with map / filter / reduce and sort |
 | [`Map`](/compiler/api/map/) | an insertion-ordered hash map |
 | [`Set`](/compiler/api/set/) | a hash set with union / intersection / difference |
-| [`Bag`](/compiler/api/bag/) | a counted set (from the release after 0.71) |
-| [`Range`](/compiler/api/range/) | a half-open index range (from the release after 0.71) |
-| [`BinaryHeap`](/compiler/api/binaryheap/) | a priority queue (from the release after 0.71) |
-| [`Cache`](/compiler/api/cache/) | a bounded LRU cache (from the release after 0.71) |
-| [`Null`](/compiler/api/null/) | the shared "nothing here" object (from the release after 0.71) |
-| [`JSON`](/compiler/api/json/) | JSON text to Foundation objects and back (from the release after 0.71) |
-| [`Expression`](/compiler/api/expression/) | arithmetic expressions evaluated against variables (from the release after 0.71) |
-| [`NumberFormatter`](/compiler/api/numberformatter/) | numbers to display text and back (from the release after 0.71) |
-| [`NotificationCenter`](/compiler/api/notificationcenter/) | a publish/subscribe bus (from the release after 0.71) |
-| [`UndoManager`](/compiler/api/undomanager/) | undo and redo (from the release after 0.71) |
-| [`Progress`](/compiler/api/progress/) | how far work has got (from the release after 0.71) |
-| [`StateMachine`](/compiler/api/statemachine/) | named states driven by events (from the release after 0.71) |
-| [`SearchIndex`](/compiler/api/searchindex/) | a small full-text index (from the release after 0.71) |
-| [`IndexSet`](/compiler/api/indexset/) | a set of indexes kept as ranges (from the release after 0.71) |
-| [`AttributedString`](/compiler/api/attributedstring/) | text with attributes over ranges (from the release after 0.71) |
-| [`Regex`](/compiler/api/regex/) | regular expressions (from the release after 0.71) |
-| [`Predicate`](/compiler/api/predicate/) | conditions over records (from the release after 0.71) |
-| [`Validator`](/compiler/api/validator/) | rules a field's text must pass (from the release after 0.71) |
-| [`SortDescriptor`](/compiler/api/sortdescriptor/) | sort records by keys (from the release after 0.71) |
-| [`Socket`](/compiler/api/socket/) | a TCP connection (from the release after 0.71) |
-| [`CSV`](/compiler/api/csv/) | comma-separated values to rows and back (from the release after 0.71) |
+| [`Bag`](/compiler/api/bag/) | a counted set (from 0.72) |
+| [`Range`](/compiler/api/range/) | a half-open index range (from 0.72) |
+| [`BinaryHeap`](/compiler/api/binaryheap/) | a priority queue (from 0.72) |
+| [`Cache`](/compiler/api/cache/) | a bounded LRU cache (from 0.72) |
+| [`Null`](/compiler/api/null/) | the shared "nothing here" object (from 0.72) |
+| [`JSON`](/compiler/api/json/) | JSON text to Foundation objects and back (from 0.72) |
+| [`Expression`](/compiler/api/expression/) | arithmetic expressions evaluated against variables (from 0.72) |
+| [`NumberFormatter`](/compiler/api/numberformatter/) | numbers to display text and back (from 0.72) |
+| [`NotificationCenter`](/compiler/api/notificationcenter/) | a publish/subscribe bus (from 0.72) |
+| [`UndoManager`](/compiler/api/undomanager/) | undo and redo (from 0.72) |
+| [`Progress`](/compiler/api/progress/) | how far work has got (from 0.72) |
+| [`StateMachine`](/compiler/api/statemachine/) | named states driven by events (from 0.72) |
+| [`SearchIndex`](/compiler/api/searchindex/) | a small full-text index (from 0.72) |
+| [`IndexSet`](/compiler/api/indexset/) | a set of indexes kept as ranges (from 0.72) |
+| [`AttributedString`](/compiler/api/attributedstring/) | text with attributes over ranges (from 0.72) |
+| [`Regex`](/compiler/api/regex/) | regular expressions (from 0.72) |
+| [`Predicate`](/compiler/api/predicate/) | conditions over records (from 0.72) |
+| [`Validator`](/compiler/api/validator/) | rules a field's text must pass (from 0.72) |
+| [`SortDescriptor`](/compiler/api/sortdescriptor/) | sort records by keys (from 0.72) |
+| [`Socket`](/compiler/api/socket/) | a TCP connection (from 0.72) |
+| [`CSV`](/compiler/api/csv/) | comma-separated values to rows and back (from 0.72) |
 | [`Coder`](/compiler/api/coder/) | keyed archiving of an object graph to JSON, optionally gzipped |
 
 **Protocols**: [`Comparable`](/compiler/api/comparable/), [`Hashable`](/compiler/api/hashable/), [`Enumerable`](/compiler/api/enumerable/), [`Copying`](/compiler/api/copying/), [`Codable`](/compiler/api/codable/) and [`Error`](/compiler/api/error/), the small interfaces the classes conform to.

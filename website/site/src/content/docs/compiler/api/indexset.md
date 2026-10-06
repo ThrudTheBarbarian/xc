@@ -7,7 +7,7 @@ description: "A set of non-negative integer indexes kept as merged ranges: a tab
 stored as a sorted list of [`Range`](/compiler/api/range/)s that neither overlap
 nor touch. A block of a million rows costs one range, and adding and removing
 merge and split ranges to keep it so. It is what a table's multi-row selection
-wants. **From the release after 0.71.**
+wants. **From 0.72.**
 
 ```c
 #import "IndexSet.xc"      // not in the Foundation umbrella: import it by name

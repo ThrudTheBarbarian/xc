@@ -6,7 +6,7 @@ description: "Parse an arithmetic expression once and evaluate it many times aga
 `Expression` parses an arithmetic expression once and evaluates it as often as
 needed against a set of variables (`NSExpression` in shape): a computed column,
 a rule such as `price * qty`, or the arithmetic of a small scripting layer.
-**From the release after 0.71.**
+**From 0.72.**
 
 ```c
 #import "Expression.xc"    // not in the Foundation umbrella: import it by name

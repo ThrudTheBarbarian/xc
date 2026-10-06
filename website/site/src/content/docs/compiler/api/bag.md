@@ -7,7 +7,7 @@ description: "A counted set: each member carries a count, raised by add and lowe
 [`Set`](/compiler/api/set/), it holds each member once; unlike one, it counts
 how many times each was added. Adding a member again raises its count,
 [`remove`](#remove) lowers it, and the member leaves when its count reaches
-zero. **From the release after 0.71.**
+zero. **From 0.72.**
 
 ```c
 #import "Bag.xc"           // or the Foundation umbrella

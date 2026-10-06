@@ -4,7 +4,7 @@ description: "A TCP connection with the same calls on every hosted target: conne
 ---
 
 `Socket` is a TCP connection with the same calls on macOS, iOS, Android, Linux
-and Windows. **From the release after 0.71.**
+and Windows. **From 0.72.**
 
 ```c
 #import "Socket.xc"        // not in the Foundation umbrella: import it by name

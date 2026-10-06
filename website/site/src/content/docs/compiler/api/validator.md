@@ -5,7 +5,7 @@ description: "Rules a field's text must pass, each with the message to show when
 
 `Validator` is a list of rules a field's text must pass, each with the message
 to show when it fails: the check behind a text field's live validation and a
-form's Submit button. **From the release after 0.71.**
+form's Submit button. **From 0.72.**
 
 ```c
 #import "Validator.xc"     // not in the Foundation umbrella: import it by name

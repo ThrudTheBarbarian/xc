@@ -4,7 +4,7 @@ description: "Undo and redo: each change registers the call that puts it back, g
 ---
 
 `UndoManager` records how to undo changes and replays them (`NSUndoManager` in
-shape). **From the release after 0.71.**
+shape). **From 0.72.**
 
 ```c
 #import "UndoManager.xc"   // not in the Foundation umbrella: import it by name

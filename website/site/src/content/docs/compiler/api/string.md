@@ -666,7 +666,7 @@ Array* pathComponents(void)
 ```
 The components as `String`s, as Foundation gives them: `/usr//lib/` is `/`,
 `usr`, `lib`. An absolute path's first component is `/`; repeated and trailing
-separators add nothing; `""` has none. **From the release after 0.71.**
+separators add nothing; `""` has none. **From 0.72.**
 
 ### pathWithComponents
 ```c
@@ -674,7 +674,7 @@ static String* pathWithComponents(Array* parts)
 ```
 The path made of `parts`, joined as
 [`appendingPathComponent`](#appendingpathcomponent) joins them; a first part of
-`/` makes it absolute. **From the release after 0.71.**
+`/` makes it absolute. **From 0.72.**
 
 ### normalizedPath
 ```c
@@ -686,7 +686,7 @@ resolved by name, not by where the link points). A `..` at the root of an
 absolute path is dropped, and the leading `..` of a relative path stay:
 `a/b/../c/./d.txt` is `a/c/d.txt`, `/a/../../b` is `/b`, `../../x` stays.
 Separators are collapsed and a trailing one dropped; a relative path that
-cancels out entirely is `""`. **From the release after 0.71.**
+cancels out entirely is `""`. **From 0.72.**
 
 [↑ Topics](#topics)
 

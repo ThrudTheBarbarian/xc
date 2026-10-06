@@ -1,6 +1,6 @@
 ---
 title: Parallel blocks
-description: par blocks — a loop whose iterations run in parallel, with reductions — on the CPU's threads, and from 0.7 on the GPU.
+description: par blocks — a loop whose iterations run in parallel, with reductions — on the CPU's threads, and from 0.7 on the GPU (Metal, CUDA, and from 0.72 Vulkan and WebGPU).
 ---
 
 **From 0.7.** A `par` block marks a loop whose iterations are independent, so
@@ -33,7 +33,7 @@ A program that uses `par` imports `Par.xc`, its runtime.
 
 `par [name] (:reduce(op variable))* { for (T i in a..b) { … } }`
 
-or, from the release after 0.71, `par [name] :grid(w, h[, d]) (:reduce(op variable))* { … }`
+or, from 0.72, `par [name] :grid(w, h[, d]) (:reduce(op variable))* { … }`
 over the points of a grid (see [Grids](#grids)).
 
 - The body is **one ascending loop** over a range: `a..b` (up to but not
@@ -47,7 +47,7 @@ over the points of a grid (see [Grids](#grids)).
 
 ## Grids
 
-**From the release after 0.71.** `:grid(w, h)` or `:grid(w, h, d)` makes the
+**From 0.72.** `:grid(w, h)` or `:grid(w, h, d)` makes the
 work items the points of a 2-D or 3-D grid, and the body is then any code,
 run once for each point, rather than one loop:
 
@@ -128,22 +128,51 @@ the calling thread.
 
 ## Running on the GPU
 
-**From 0.7: macOS on Apple silicon, and Windows with an NVIDIA GPU.** A block
-that can run on the GPU does so when that is faster: through Metal on a Mac, and
-through NVIDIA's driver on Windows. The compiler gives each block a GPU version
-of its loop, and a program needs no extra flags or libraries. On Windows it
-needs no CUDA toolkit either, only the driver that comes with the card. Results
-are the same as on the CPU: integer reductions match exactly, because the GPU's
-partial results are combined in the same order the CPU combines its chunks. A
-block that cannot run on the GPU stays on the CPU, as do all blocks when there
-is no GPU.
+**From 0.7: macOS on Apple silicon, and Windows with an NVIDIA GPU. From 0.72
+also Linux, Windows with any GPU, Android, and the browser.** A block that can
+run on the GPU does so when that is faster. The compiler gives each block a GPU
+version of its loop, and a program needs no extra flags, libraries or SDKs, only
+the driver that comes with the GPU:
 
-In this first version a block runs on the GPU when it works on arrays (captured
-locals or globals), scalars, reductions, and helper functions that take and
-return plain values. On an Apple GPU, which has no 64-bit floating point, a
-block that uses `double` runs on the CPU. On an NVIDIA GPU, `double` values are
-fine, but an array of them still keeps the block on the CPU. Anywhere, a block that calls a helper that takes a pointer or
-an array, or that uses a global itself, runs on the CPU.
+| Target | GPU interface | Needs |
+|---|---|---|
+| `arm64` (macOS) | Metal | Apple silicon |
+| `win64` | NVIDIA's driver (CUDA), else Vulkan | an NVIDIA GPU, or any GPU with a Vulkan driver (from 0.72) |
+| `x86_64` (Linux) | Vulkan | a Vulkan driver (`libvulkan.so.1`); a program linked with `-static` stays on the CPU (from 0.72) |
+| `android` | Vulkan | a device whose Vulkan driver has 64-bit integers (from 0.72) |
+| `wasm32` | WebGPU | a browser with WebGPU and JavaScript promise integration (JSPI), such as Chrome (from 0.72) |
+
+Results are the same as on the CPU: integer reductions match exactly, because
+the GPU's partial results are combined in the same order the CPU combines its
+chunks. A block that cannot run on the GPU stays on the CPU, as do all blocks
+when there is no GPU.
+
+A block runs on the GPU when it works on arrays (captured locals or globals),
+scalars, reductions, and helper functions that take and return plain values.
+Anywhere, a block that calls a helper that takes a pointer or an array, or that
+uses a global itself, runs on the CPU. What else each GPU can hold:
+
+- On an Apple GPU, which has no 64-bit floating point, a block that uses
+  `double` runs on the CPU.
+- On an NVIDIA GPU through CUDA, `double` values are fine, but an array of them
+  still keeps the block on the CPU.
+- Through Vulkan the GPU must have 64-bit integers, which desktop GPUs have;
+  `double` is used where the GPU has it. 8- and 16-bit values and `bool`s,
+  alone or in arrays, are exact on every Vulkan GPU.
+- Through WebGPU, which has only 32-bit numbers, 64-bit integers are worked in
+  two halves and 8- and 16-bit values exactly, as through Vulkan; a block that
+  uses `double`, divides 64-bit integers or converts them to floats runs on the
+  CPU.
+
+On Windows, `XC_PAR_GPU=vulkan` or `XC_PAR_GPU=cuda` in the environment picks
+one interface where both work. Where a machine has more than one Vulkan GPU,
+a discrete one is chosen first; `XC_PAR_VULKAN_DEVICE=<n>` picks the n-th
+instead, counting from 0 in the driver's order.
+
+On the web the loader runs the GPU's work while the program waits for it, so a
+page needs nothing but the usual `<script src="prog.js">`; `XC_PAR` and the
+other settings below come from `globalThis.xccEnv`, an object of strings the
+page sets before the script.
 
 When you compile for a target with a GPU, the compiler warns at each block that
 cannot run there and says why, for example:
@@ -170,17 +199,19 @@ par measure :reduce(+ total) :goal(accuracy)    // precise maths
 
 With speed, the GPU uses its fast maths. On a Mac that is Metal's fast mode,
 which also lets the GPU reorder float arithmetic and assume there are no NaNs
-or infinities. On an NVIDIA GPU, `sin`, `cos`, `exp`, `ln` and `pow` of `float`
-values use the hardware's approximations. Float results can then differ from
+or infinities. On an NVIDIA GPU, and through Vulkan and WebGPU, `sin`, `cos`,
+`exp`, `ln` and `pow` of `float` values use the hardware's approximations. Float results can then differ from
 the CPU's in the last few bits; integer results are the same either way.
 
 With accuracy, the maths is precise and float results land within about one
 ULP of the CPU's. NVIDIA GPUs have no precise `sin`, `cos`, `exp`, `ln` or
-`pow`, so there a block that calls them runs on the CPU. Choose accuracy for a
-block that depends on NaN or infinity, or on exact float results.
+`pow`, so there a block that calls them runs on the CPU. Vulkan and WebGPU
+round `+`, `-` and `*` exactly but not division or square roots, and have no
+precise `sin`, `cos`, `exp`, `ln` or `pow`: there a block whose goal is
+accuracy and that uses any of them runs on the CPU. Choose accuracy for a block
+that depends on NaN or infinity, or on exact float results.
 
-On the CPU, both goals run the same code, except that from the release after
-0.71 the block's goal also holds for the loops in its body, as
+On the CPU, both goals run the same code, except that from 0.72 the block's goal also holds for the loops in its body, as
 [`:goal` on a `for` loop](/compiler/language/statements/#speed-or-accuracy-goal)
 does.
 

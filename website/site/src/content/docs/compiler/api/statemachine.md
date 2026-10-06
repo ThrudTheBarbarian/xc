@@ -6,7 +6,7 @@ description: "A finite state machine of named states and events: declared once, 
 `StateMachine` is a finite state machine of named states and events: a wizard's
 steps, a drawing tool's modes, a connection's life. Transitions are declared
 once ("in this state, this event leads to that state") and the machine is
-driven by events. **From the release after 0.71.**
+driven by events. **From 0.72.**
 
 ```c
 #import "StateMachine.xc"  // not in the Foundation umbrella: import it by name

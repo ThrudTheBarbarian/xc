@@ -7,7 +7,7 @@ description: "A publish/subscribe bus: one object posts a named notification, an
 shape). One object posts a named notification, and any number of others, which
 need not know the poster, are called back. It is the one-to-many sibling of a
 direct call or a delegate: the poster does not know who listens, or whether
-anyone does. **From the release after 0.71.**
+anyone does. **From 0.72.**
 
 ```c
 #import "NotificationCenter.xc"   // not in the Foundation umbrella: import it by name

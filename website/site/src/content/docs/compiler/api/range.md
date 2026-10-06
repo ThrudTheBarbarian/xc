@@ -7,7 +7,7 @@ description: "A half-open range of indexes [loc, loc + len): containment, overla
 shape). It is a class rather than a struct so ranges can live in an
 [`Array`](/compiler/api/array/), a [`Set`](/compiler/api/set/) or a
 [`Map`](/compiler/api/map/): a wrapped line, a selected block of rows and a run
-of styled characters are each a list of ranges. **From the release after 0.71.**
+of styled characters are each a list of ranges. **From 0.72.**
 
 ```c
 #import "Range.xc"         // or the Foundation umbrella

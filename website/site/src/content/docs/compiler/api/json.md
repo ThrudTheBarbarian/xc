@@ -7,7 +7,7 @@ description: "JSON text to Foundation objects and back: Map, Array, String, Numb
 (`NSJSONSerialization` in shape). Objects become a [`Map`](/compiler/api/map/),
 arrays an [`Array`](/compiler/api/array/), and the scalars a
 [`String`](/compiler/api/string/), a [`Number`](/compiler/api/number/) or
-[`Null`](/compiler/api/null/). **From the release after 0.71.**
+[`Null`](/compiler/api/null/). **From 0.72.**
 
 ```c
 #import "JSON.xc"          // not in the Foundation umbrella: import it by name

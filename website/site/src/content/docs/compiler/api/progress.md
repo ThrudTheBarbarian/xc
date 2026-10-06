@@ -4,7 +4,7 @@ description: "How far a piece of work has got, as a tree: children count in thei
 ---
 
 `Progress` reports how far a piece of work has got, as a tree (`NSProgress` in
-shape). **From the release after 0.71.**
+shape). **From 0.72.**
 
 ```c
 #import "Progress.xc"      // not in the Foundation umbrella: import it by name

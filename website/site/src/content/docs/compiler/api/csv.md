@@ -6,7 +6,7 @@ description: "Comma-separated values to rows of strings and back (RFC 4180): quo
 `CSV` reads comma-separated text into rows of strings and writes rows back
 (RFC 4180). A row is an [`Array`](/compiler/api/array/) of
 [`String`](/compiler/api/string/) fields, and the text is an `Array` of rows.
-**From the release after 0.71.**
+**From 0.72.**
 
 ```c
 #import "CSV.xc"           // not in the Foundation umbrella: import it by name

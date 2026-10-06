@@ -145,7 +145,7 @@ static Number* withBool(bool v)
 A boolean: an int `Number` of 1 or 0 that remembers it was made from a `bool`,
 so [`description`](#description) and [`JSON`](/compiler/api/json/) write it as
 `true` / `false`. It still equals and compares as 1 or 0 (as `NSNumber`'s `@YES`
-is `@1`). Not on xt6502. **From the release after 0.71.**
+is `@1`). Not on xt6502. **From 0.72.**
 
 ### init
 ```c
@@ -217,7 +217,7 @@ Store a floating-point value, pinning the float kind.
 void setBool(bool v)
 ```
 Store a boolean (see [`withBool`](#withbool)). Every other setter clears the
-boolean mark. Not on xt6502. **From the release after 0.71.**
+boolean mark. Not on xt6502. **From 0.72.**
 
 [↑ Topics](#topics)
 
@@ -290,8 +290,7 @@ binary32.
 ```c
 bool asBool(void)
 ```
-Whether the value is non-zero, for either kind. Not on xt6502. **From the
-release after 0.71.**
+Whether the value is non-zero, for either kind. Not on xt6502. **From 0.72.**
 
 [↑ Topics](#topics)
 
@@ -311,7 +310,7 @@ bool isBool(void)
 ```
 Whether the value was made by [`withBool`](#withbool) or
 [`setBool`](#setbool); such a `Number` is also [`isInt`](#isint--isfloat). Not on
-xt6502. **From the release after 0.71.**
+xt6502. **From 0.72.**
 
 [↑ Topics](#topics)
 
@@ -326,7 +325,7 @@ String* description(void)
 ```
 The `%@` hook. A boolean renders as `true` or `false`. An int renders exactly ([`String.withI64`](/compiler/api/string/#withi64--withu64));
 a float renders as C's `printf %f` does: six decimal places, and `inf`, `-inf`
-or `nan`. (Before the release after 0.71 a float went through `float` and
+or `nan`. (Before 0.72 a float went through `float` and
 `i32` and printed values past 2³¹ and the non-finite ones wrongly.)
 
 ### equals

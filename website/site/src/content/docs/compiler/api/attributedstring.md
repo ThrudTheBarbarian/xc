@@ -5,7 +5,7 @@ description: "Text with named attributes over ranges of it, kept as merged runs;
 
 `AttributedString` is text with named attributes over ranges of it
 (`NSAttributedString` in shape): the model behind styled text and a rich-text
-field. **From the release after 0.71.**
+field. **From 0.72.**
 
 ```c
 #import "AttributedString.xc"   // not in the Foundation umbrella: import it by name

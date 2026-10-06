@@ -5,7 +5,7 @@ description: "Conditions over records, built in code or parsed from text such as
 
 `Predicate` is a condition over records, built in code or parsed from text
 (`NSPredicate` in shape): what a rule editor, a filter field or a smart folder
-needs. **From the release after 0.71.**
+needs. **From 0.72.**
 
 ```c
 #import "Predicate.xc"     // not in the Foundation umbrella: import it by name

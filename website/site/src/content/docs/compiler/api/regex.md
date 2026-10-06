@@ -4,7 +4,7 @@ description: "Regular expressions over UTF-8 text: capture groups, lazy and coun
 ---
 
 `Regex` compiles a regular expression once and uses it to test, find, replace
-and split text. **From the release after 0.71.**
+and split text. **From 0.72.**
 
 ```c
 #import "Regex.xc"         // not in the Foundation umbrella: import it by name

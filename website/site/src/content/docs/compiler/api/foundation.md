@@ -33,27 +33,27 @@ All of it needs a real heap (**`-falloc=heap`**), which is the default on the
 | [`Array`](/compiler/api/array/) | An ordered, resizable list of `Object*` with sorting and the callback-based functional methods (`filtered`, `mapped`, …). |
 | [`Map`](/compiler/api/map/) | A hash map keyed by anything `Hashable` + `Comparable`; iterates in insertion order. |
 | [`Set`](/compiler/api/set/) | A hash set with set algebra (`unionWith`, `intersect`, `subtract`, …). |
-| [`Bag`](/compiler/api/bag/) | A counted set: each member carries a count. From the release after 0.71. |
-| [`Range`](/compiler/api/range/) | A half-open index range `[loc, loc + len)`, equal by value. From the release after 0.71. |
-| [`BinaryHeap`](/compiler/api/binaryheap/) | A priority queue, smallest priority first. From the release after 0.71. |
-| [`Cache`](/compiler/api/cache/) | A bounded least-recently-used cache under string keys. From the release after 0.71. |
-| [`Null`](/compiler/api/null/) | The one shared object meaning "nothing here" in a collection. From the release after 0.71. |
-| [`JSON`](/compiler/api/json/) | JSON text to Foundation objects and back. **Not** in the umbrella — import by name. From the release after 0.71. |
-| [`Expression`](/compiler/api/expression/) | An arithmetic expression parsed once and evaluated against variables. **Not** in the umbrella — import by name. From the release after 0.71. |
-| [`NumberFormatter`](/compiler/api/numberformatter/) | Numbers to display text and back: grouping, currency, percent. **Not** in the umbrella — import by name. From the release after 0.71. |
-| [`NotificationCenter`](/compiler/api/notificationcenter/) | A publish/subscribe bus with weakly held observers. **Not** in the umbrella — import by name. From the release after 0.71. |
-| [`UndoManager`](/compiler/api/undomanager/) | Undo and redo through self-registering changes, in named groups. **Not** in the umbrella — import by name. From the release after 0.71. |
-| [`Progress`](/compiler/api/progress/) | How far work has got, as a tree of child progresses. **Not** in the umbrella — import by name. From the release after 0.71. |
-| [`StateMachine`](/compiler/api/statemachine/) | A finite state machine of named states and events. **Not** in the umbrella — import by name. From the release after 0.71. |
-| [`SearchIndex`](/compiler/api/searchindex/) | A small full-text index with ranked and prefix search. **Not** in the umbrella — import by name. From the release after 0.71. |
-| [`IndexSet`](/compiler/api/indexset/) | A set of indexes kept as merged ranges: a table's selection. **Not** in the umbrella — import by name. From the release after 0.71. |
-| [`AttributedString`](/compiler/api/attributedstring/) | Text with named attributes over ranges, as merged runs. **Not** in the umbrella — import by name. From the release after 0.71. |
-| [`Regex`](/compiler/api/regex/) | Regular expressions: captures, lazy and counted quantifiers, replace, split. **Not** in the umbrella — import by name. From the release after 0.71. |
-| [`Predicate`](/compiler/api/predicate/) | Conditions over records, built in code or parsed from text. **Not** in the umbrella — import by name. From the release after 0.71. |
-| [`Validator`](/compiler/api/validator/) | Rules a field's text must pass, with a message for each. **Not** in the umbrella — import by name. From the release after 0.71. |
-| [`SortDescriptor`](/compiler/api/sortdescriptor/) | A stable sort of records by one key and then the next. **Not** in the umbrella — import by name. From the release after 0.71. |
-| [`Socket`](/compiler/api/socket/) | A TCP connection, the same calls on every hosted target. **Not** in the umbrella — import by name. From the release after 0.71. |
-| [`CSV`](/compiler/api/csv/) | Comma-separated values to rows of strings and back. **Not** in the umbrella — import by name. From the release after 0.71. |
+| [`Bag`](/compiler/api/bag/) | A counted set: each member carries a count. From 0.72. |
+| [`Range`](/compiler/api/range/) | A half-open index range `[loc, loc + len)`, equal by value. From 0.72. |
+| [`BinaryHeap`](/compiler/api/binaryheap/) | A priority queue, smallest priority first. From 0.72. |
+| [`Cache`](/compiler/api/cache/) | A bounded least-recently-used cache under string keys. From 0.72. |
+| [`Null`](/compiler/api/null/) | The one shared object meaning "nothing here" in a collection. From 0.72. |
+| [`JSON`](/compiler/api/json/) | JSON text to Foundation objects and back. **Not** in the umbrella — import by name. From 0.72. |
+| [`Expression`](/compiler/api/expression/) | An arithmetic expression parsed once and evaluated against variables. **Not** in the umbrella — import by name. From 0.72. |
+| [`NumberFormatter`](/compiler/api/numberformatter/) | Numbers to display text and back: grouping, currency, percent. **Not** in the umbrella — import by name. From 0.72. |
+| [`NotificationCenter`](/compiler/api/notificationcenter/) | A publish/subscribe bus with weakly held observers. **Not** in the umbrella — import by name. From 0.72. |
+| [`UndoManager`](/compiler/api/undomanager/) | Undo and redo through self-registering changes, in named groups. **Not** in the umbrella — import by name. From 0.72. |
+| [`Progress`](/compiler/api/progress/) | How far work has got, as a tree of child progresses. **Not** in the umbrella — import by name. From 0.72. |
+| [`StateMachine`](/compiler/api/statemachine/) | A finite state machine of named states and events. **Not** in the umbrella — import by name. From 0.72. |
+| [`SearchIndex`](/compiler/api/searchindex/) | A small full-text index with ranked and prefix search. **Not** in the umbrella — import by name. From 0.72. |
+| [`IndexSet`](/compiler/api/indexset/) | A set of indexes kept as merged ranges: a table's selection. **Not** in the umbrella — import by name. From 0.72. |
+| [`AttributedString`](/compiler/api/attributedstring/) | Text with named attributes over ranges, as merged runs. **Not** in the umbrella — import by name. From 0.72. |
+| [`Regex`](/compiler/api/regex/) | Regular expressions: captures, lazy and counted quantifiers, replace, split. **Not** in the umbrella — import by name. From 0.72. |
+| [`Predicate`](/compiler/api/predicate/) | Conditions over records, built in code or parsed from text. **Not** in the umbrella — import by name. From 0.72. |
+| [`Validator`](/compiler/api/validator/) | Rules a field's text must pass, with a message for each. **Not** in the umbrella — import by name. From 0.72. |
+| [`SortDescriptor`](/compiler/api/sortdescriptor/) | A stable sort of records by one key and then the next. **Not** in the umbrella — import by name. From 0.72. |
+| [`Socket`](/compiler/api/socket/) | A TCP connection, the same calls on every hosted target. **Not** in the umbrella — import by name. From 0.72. |
+| [`CSV`](/compiler/api/csv/) | Comma-separated values to rows of strings and back. **Not** in the umbrella — import by name. From 0.72. |
 | [`Coder`](/compiler/api/coder/) | Keyed archiving of an object graph to JSON, optionally gzipped. **Not** in the umbrella — import by name. |
 
 ### Protocols

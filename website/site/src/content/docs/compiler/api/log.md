@@ -26,8 +26,7 @@ Log.addMonitor(&self.onLog);   // void onLog(String* subsystem, u8 level, String
 
 **Levels** are debug, info, warning and error, in that order. Messages below the
 [global minimum](#setminlevel--minlevel) (info at first) are dropped, so a
-`Log.debug` costs one comparison until it is wanted. **From the release after
-0.71**, as are subsystems and monitors.
+`Log.debug` costs one comparison until it is wanted. **From 0.72**, as are subsystems and monitors.
 
 **Subsystems.** [`Log.forSubsystem`](#forsubsystem) gives the
 [`LogChannel`](#logchannel) for a name, one per name, with its own minimum

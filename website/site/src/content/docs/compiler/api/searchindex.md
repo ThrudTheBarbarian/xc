@@ -5,7 +5,7 @@ description: "A small full-text index: add documents under string ids, search fo
 
 `SearchIndex` is a small full-text index: documents go in under a `String` id,
 and searches for words come back ranked best first. It is what a
-find-as-you-type box or a local search needs. **From the release after 0.71.**
+find-as-you-type box or a local search needs. **From 0.72.**
 
 ```c
 #import "SearchIndex.xc"   // not in the Foundation umbrella: import it by name

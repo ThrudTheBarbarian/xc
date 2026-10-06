@@ -1400,7 +1400,7 @@ static NSString* sExecutablePath = nil;
         }
 
     // -dynamic and -static are x86-64 Linux link modes; anywhere else they
-    // would be ignored. From the release after 0.71 an x86-64 executable links
+    // would be ignored. From 0.72 an x86-64 executable links
     // dynamically against glibc unless -static asks for the static musl link,
     // as a C compiler on Linux does; -dynamic names the default.
     if (opts.dynamicExplicit && opts.staticLink)

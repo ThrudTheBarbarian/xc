@@ -6,7 +6,7 @@ description: "A priority queue: members come out smallest priority first, with O
 `BinaryHeap` is a priority queue (`CFBinaryHeap` in shape): a binary min-heap
 whose member with the smallest priority is always first.
 [`insert`](#insert) and [`removeMinimum`](#removeminimum) are O(log n).
-**From the release after 0.71.**
+**From 0.72.**
 
 ```c
 #import "BinaryHeap.xc"    // or the Foundation umbrella

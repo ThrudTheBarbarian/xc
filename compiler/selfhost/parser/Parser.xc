@@ -3344,7 +3344,7 @@ class Parser
     // `-Wno-unknown-annotation` than quietly wrong. Same category and same
     // wording as the reference.
     //
-    // From the release after 0.71 also `: goal(speed)` / `: goal(accuracy)`,
+    // From 0.72 also `: goal(speed)` / `: goal(accuracy)`,
     // on both loop forms. Returns 1 for unroll, 2 speed, 4 accuracy, or'd.
     u32 parseLoopAnnotations(void)
     {

@@ -30,7 +30,7 @@ none, as a **library**:
 | a `.xc` source file | its text is compiled as part of this file (once, for `#import`) |
 | an xcc shared library (`--emit-lib`) | nothing is pasted in: the library's classes, protocols, structs, enums and functions are read from the interface embedded in the binary, and the program links against it |
 | a separately compiled module's `Name.xtc.iface` | the same, for an object built with `xcc -c` |
-| a C shared library | its functions, types and enum constants are read from its DWARF debug information. From the release after 0.71 that includes a stripped library's separate debug file, as a Linux distribution installs it with the library's debug package (`-dbgsym`, `-debuginfo`): found by build ID or `.gnu_debuglink` under `/usr/lib/debug`, or under the directories in `XCC_DEBUG_DIR` (colon-separated) when that is set. A library with no debug information anywhere gets a warning, and the functions you call from it then need declaring |
+| a C shared library | its functions, types and enum constants are read from its DWARF debug information. From 0.72 that includes a stripped library's separate debug file, as a Linux distribution installs it with the library's debug package (`-dbgsym`, `-debuginfo`): found by build ID or `.gnu_debuglink` under `/usr/lib/debug`, or under the directories in `XCC_DEBUG_DIR` (colon-separated) when that is set. A library with no debug information anywhere gets a warning, and the functions you call from it then need declaring |
 | a macOS or iOS system framework (from 0.65) | the program is linked against it, as `-framework` does; it declares nothing, so its functions are declared in your source without bodies |
 
 So `#import <Xtg>` and `#import <Stdio>` look alike but do different things: the

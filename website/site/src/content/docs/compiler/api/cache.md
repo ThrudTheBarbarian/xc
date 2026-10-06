@@ -7,7 +7,7 @@ description: "A bounded least-recently-used cache of objects under string keys: 
 stored under string keys, at most [`capacity`](#capacity) of them. A
 [`set`](#set) that would go over evicts the entry used least recently, and
 every [`get`](#get) and `set` counts as a use. It is what a thumbnail, image or
-parsed-resource cache uses to stay bounded. **From the release after 0.71.**
+parsed-resource cache uses to stay bounded. **From 0.72.**
 
 ```c
 #import "Cache.xc"         // or the Foundation umbrella

@@ -126,14 +126,14 @@ The bytes valid in an identifier: letters, digits and `_`.
 static CharacterSet* uppercaseLetters(void)
 static CharacterSet* lowercaseLetters(void)
 ```
-`A`–`Z` and `a`–`z`. **From the release after 0.71.**
+`A`–`Z` and `a`–`z`. **From 0.72.**
 
 ### punctuation
 ```c
 static CharacterSet* punctuation(void)
 ```
 ASCII punctuation, as Unicode classes it: ``! " # % & ' ( ) * , - . / : ; ? @ [ \ ] _ { }``.
-**From the release after 0.71.**
+**From 0.72.**
 
 ### symbols
 ```c
@@ -141,7 +141,7 @@ static CharacterSet* symbols(void)
 ```
 ASCII symbols, as Unicode classes them: ``$ + < = > ^ ` | ~``. With
 `punctuation`, `letters`, `decimalDigits` and the space, every printable ASCII
-character is in exactly one set. **From the release after 0.71.**
+character is in exactly one set. **From 0.72.**
 
 [↑ Topics](#topics)
 

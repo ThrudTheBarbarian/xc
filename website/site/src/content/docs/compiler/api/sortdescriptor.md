@@ -5,7 +5,7 @@ description: "Sort records by one key and then the next, in either direction: a 
 
 `SortDescriptor` sorts records by keys (`NSSortDescriptor` in shape). Filter
 with a [`Predicate`](/compiler/api/predicate/), then sort with descriptors:
-what a table does to its rows. **From the release after 0.71.**
+what a table does to its rows. **From 0.72.**
 
 ```c
 #import "SortDescriptor.xc"   // not in the Foundation umbrella: import it by name

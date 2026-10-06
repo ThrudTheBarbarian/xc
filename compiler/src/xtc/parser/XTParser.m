@@ -3196,7 +3196,7 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
 
 /****************************************************************************\
 |* A for loop's optional annotations, after its `)`: `: unroll`, and from the
-|* release after 0.71 `: goal(speed)` / `: goal(accuracy)`, comma-separated.
+|* 0.72 `: goal(speed)` / `: goal(accuracy)`, comma-separated.
 |* @return  1 for unroll, 2 for goal(speed), 4 for goal(accuracy), or'd.
 \****************************************************************************/
 - (NSUInteger)parseLoopAnnotations
