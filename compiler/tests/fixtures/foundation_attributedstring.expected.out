@@ -1,0 +1,17 @@
+plain: [Hello, world|]
+bold Hello: [Hello|bold=true] [, world|]
+pen 2 over lo, w: [Hel|bold=true] [lo|bold=true,pen=2] [, wo|pen=2] [rld|]
+bold the rest: [Hel|bold=true] [lo, wo|bold=true,pen=2] [rld|bold=true]
+pen removed: [Hello, world|bold=true]
+one run: 1, bold at 9: true, pen at 9: 0
+pen on two: [one |] [two|pen=3] [ three|]
+run at 5: 4+3
+two -> 2: [one |] [2|pen=3] [ three|]
+insert after 2: [one |] [222|pen=3] [ three|]
+insert at start: [>one |] [222|pen=3] [ three|]
+append !: [>one |] [222|pen=3] [ three!|]
+append bold end: [>one |] [222|pen=3] [ three! |] [end|bold=true]
+substring 4+6: [ |] [222|pen=3] [ t|]
+equal 1, copy equal 1
+after change equal 0
+empty then x: [x|]

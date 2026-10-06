@@ -65,6 +65,7 @@ export default defineConfig({
 									items: [
 										{ label: 'Overview', slug: 'compiler/api/foundation' },
 										{ label: 'Array', slug: 'compiler/api/array' },
+										{ label: 'AttributedString', slug: 'compiler/api/attributedstring' },
 										{ label: 'Bag', slug: 'compiler/api/bag' },
 										{ label: 'BinaryHeap', slug: 'compiler/api/binaryheap' },
 										{ label: 'Cache', slug: 'compiler/api/cache' },
