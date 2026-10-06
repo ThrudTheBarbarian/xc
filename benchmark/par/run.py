@@ -9,10 +9,11 @@ each one with the shipped xcc and runs it four ways on each machine:
   serial   one CPU thread (XC_PAR=cpu XC_PAR_THREADS=1)
   cpu      every CPU thread (XC_PAR=cpu)
   gpu      the GPU (XC_PAR=gpu), where the machine has one
+  vulkan   the same GPU through Vulkan, on Windows (from 0.72; gpu is CUDA there)
   auto     the default: the block picks its device by measuring
 
-Machines: this Mac (arm64, Metal), the Linux host (x86-64, CPU only) and the
-Windows host (x86-64, NVIDIA). Their ssh names come from build.env
+Machines: this Mac (arm64, Metal), the Linux host (x86-64; from 0.72 its
+integrated GPU through Vulkan) and the Windows host (x86-64, NVIDIA). Their ssh names come from build.env
 (XTC_LINUX_HOST, XTC_WIN_GPU_HOST), so none is written into the tree. A run
 counts only if every mode's checksum agrees, and the Mac and the Linux host are
 timed only when idle (as ../run.py does). The best of three runs is kept.
@@ -84,14 +85,16 @@ def run_windows(host, binary, env):
 MODES = [("serial", {"XC_PAR": "cpu", "XC_PAR_THREADS": "1"}),
          ("cpu", {"XC_PAR": "cpu"}),
          ("gpu", {"XC_PAR": "gpu"}),
+         ("vulkan", {"XC_PAR": "gpu", "XC_PAR_GPU": "vulkan"}),
          ("auto", {})]
 
 
-def measure(runner, binary, has_gpu):
-    """Best of REPEATS for each mode; the checksums must all agree."""
+def measure(runner, binary, gpus):
+    """Best of REPEATS for each mode (gpus: the GPU modes this machine has);
+    the checksums must all agree."""
     out, sums = {}, set()
     for mode, env in MODES:
-        if mode == "gpu" and not has_gpu:
+        if mode in ("gpu", "vulkan") and mode not in gpus:
             continue
         best = None
         for _ in range(REPEATS):
@@ -128,19 +131,21 @@ def main():
         if "mac" in machines:
             exe = os.path.join(work, name)
             build(name, None, exe)
-            results[name]["mac"] = measure(run_mac, exe, True)
+            results[name]["mac"] = measure(run_mac, exe, ["gpu"])
         if "linux" in machines and env.get("XTC_LINUX_HOST"):
             host = env["XTC_LINUX_HOST"]
             exe = os.path.join(work, name + ".x86")
             build(name, "x86_64", exe)
             subprocess.run(["scp", "-q", exe, "%s:/tmp/par-%s" % (host, name)], check=True)
-            results[name]["linux"] = measure(lambda b, e: run_linux(host, b, e), "/tmp/par-" + name, False)
+            results[name]["linux"] = measure(lambda b, e: run_linux(host, b, e), "/tmp/par-" + name,
+                                             ["gpu"] if a.version >= "0.72" else [])
         if "windows" in machines and env.get("XTC_WIN_GPU_HOST"):
             host = env["XTC_WIN_GPU_HOST"]
             exe = os.path.join(work, name + ".exe")
             build(name, "win64", exe)
             subprocess.run(["scp", "-q", exe, "%s:par-%s.exe" % (host, name)], check=True)
-            results[name]["windows"] = measure(lambda b, e: run_windows(host, b, e), ".\\par-%s.exe" % name, True)
+            results[name]["windows"] = measure(lambda b, e: run_windows(host, b, e), ".\\par-%s.exe" % name,
+                                               ["gpu", "vulkan"] if a.version >= "0.72" else ["gpu"])
         print(name, json.dumps(results[name]), flush=True)
     outdir = os.path.join(HERE, "v" + a.version)
     os.makedirs(outdir, exist_ok=True)
@@ -155,20 +160,22 @@ def ms(us):
 
 def table(results):
     """Milliseconds for the best run, per machine and mode, for the performance page."""
-    names = {"mac": "Apple silicon, Metal", "linux": "x86-64 Linux, CPU only",
-             "windows": "x86-64 Windows, NVIDIA"}
+    names = {"mac": "Apple silicon, Metal", "linux": "x86-64 Linux, an integrated GPU through Vulkan",
+             "windows": "x86-64 Windows, NVIDIA through CUDA and Vulkan"}
     lines = []
     for m in ("mac", "linux", "windows"):
         rows = [(n, r[m]) for n, r in results.items() if m in r]
         if not rows:
             continue
         lines.append("\n**%s** (ms, best of eight runs)\n" % names[m])
-        lines.append("| benchmark | one thread | all threads | GPU | auto |")
-        lines.append("|---|---|---|---|---|")
+        vk = any("vulkan" in r for _, r in rows)
+        lines.append("| benchmark | one thread | all threads | GPU |%s auto |" % (" Vulkan |" if vk else ""))
+        lines.append("|---|---|---|---|%s---|" % ("---|" if vk else ""))
         for n, r in rows:
             gpu = ms(r["gpu"]["best_us"]) if "gpu" in r else "—"
-            lines.append("| %s | %s | %s | %s | %s |" % (n, ms(r["serial"]["best_us"]), ms(r["cpu"]["best_us"]),
-                                                     gpu, ms(r["auto"]["best_us"])))
+            v = (" %s |" % ms(r["vulkan"]["best_us"])) if vk else ""
+            lines.append("| %s | %s | %s | %s |%s %s |" % (n, ms(r["serial"]["best_us"]), ms(r["cpu"]["best_us"]),
+                                                       gpu, v, ms(r["auto"]["best_us"])))
     return "\n".join(lines)
 
 
