@@ -1740,6 +1740,7 @@ class UXAppKitDriver : Object<UXViewDriver>
                         ux_ak_set_control_frame(handle, i, ax, ay, w, hh);
                         }
                     ux_ak_set_control_check(handle, i, on);
+                    ux_ak_set_label_text(handle, i, t.nodes[i].spec != (pointer)0 ? (u8*)t.nodes[i].spec : (u8*)"");
                     }
                 ux_ak_set_control_hidden(handle, i, self.effectiveHidden(tree, i));
                 }
@@ -2018,8 +2019,9 @@ class UXAppKitDriver : Object<UXViewDriver>
                         {
                         ux_ak_update_field(handle, i);
                         }
-                    if (k == (i32)UXKindLabel)
+                    if (k == (i32)UXKindLabel || k == (i32)UXKindButton)
                         {
+                        // the text or title as it is now: it may have changed since the control was made
                         u8* text = t.nodes[i].spec != (pointer)0 ? (u8*)t.nodes[i].spec : (u8*)"";
                         ux_ak_set_label_text(handle, i, text);
                         }

@@ -3682,3 +3682,47 @@ void ux_gtk_frames(int n)
         }
     ux_gtk_pump();
     }
+
+/* The text of a button, check box, radio button or label made earlier: it may have changed since.
+   An equal text is left alone, so a pass that changes nothing redraws nothing. */
+void ux_gtk_set_text(int handle, int node, const char* text)
+    {
+    if (handle < 0 || handle >= UXGTK_MAXW || node < 0 || node >= UXGTK_MAXN || !text)
+        return;
+    GtkWidget* w = gCtl[handle][node];
+    if (!w)
+        return;
+    if (GTK_IS_CHECK_BUTTON(w))
+        {
+        const char* now = gtk_check_button_get_label(GTK_CHECK_BUTTON(w));
+        if (!now || strcmp(now, text) != 0)
+            gtk_check_button_set_label(GTK_CHECK_BUTTON(w), text);
+        }
+    else if (GTK_IS_BUTTON(w))
+        {
+        const char* now = gtk_button_get_label(GTK_BUTTON(w));
+        if (!now || strcmp(now, text) != 0)
+            gtk_button_set_label(GTK_BUTTON(w), text);
+        }
+    else if (GTK_IS_LABEL(w))
+        {
+        if (strcmp(gtk_label_get_text(GTK_LABEL(w)), text) != 0)
+            gtk_label_set_text(GTK_LABEL(w), text);
+        }
+    }
+
+/* For tests: the text a native button, check box, radio button or label shows, into buf. */
+int ux_gtk_test_control_text(int handle, int node, char* buf, int n)
+    {
+    if (n > 0)
+        buf[0] = 0;
+    GtkWidget* w = (handle >= 0 && handle < UXGTK_MAXW && node >= 0 && node < UXGTK_MAXN) ? gCtl[handle][node] : NULL;
+    const char* t = !w ? NULL
+                  : GTK_IS_CHECK_BUTTON(w) ? gtk_check_button_get_label(GTK_CHECK_BUTTON(w))
+                  : GTK_IS_BUTTON(w)       ? gtk_button_get_label(GTK_BUTTON(w))
+                  : GTK_IS_LABEL(w)        ? gtk_label_get_text(GTK_LABEL(w)) : NULL;
+    if (!t)
+        return 0;
+    snprintf(buf, (size_t)n, "%s", t);
+    return 1;
+    }

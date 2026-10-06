@@ -78,6 +78,15 @@ class UXControl : UXView
     void setTitle(u8* s)
         {
         title = s;
+        // A button's, label's, check box's or radio button's content is its title: the drivers
+        // read it from the node, so a title changed after attach reaches the screen.
+        UXKind k = self.kind();
+        if (owner != (UXViewTree*)0 &&
+            (k == UXKindButton || k == UXKindLabel || k == UXKindCheckbox || k == UXKindRadio))
+            {
+            owner.setSpecOf(index, (pointer)s);
+            self.setNeedsDisplay();
+            }
         }
 
     void fire(void)

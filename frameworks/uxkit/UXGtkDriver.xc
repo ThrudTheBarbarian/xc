@@ -432,6 +432,7 @@ void xgGtkTableSelectSet(pointer tbl, i32* rows, i32 n)
     }
 
 void ux_gtk_window_set_min_size(i32 handle, i32 w, i32 h);
+void ux_gtk_set_text(i32 handle, i32 node, u8* text);
 void ux_gtk_set_drop_hooks(pointer file, pointer item, pointer hover, pointer tableDrags, pointer outlineDragText);
 pointer ux_gtk_outline_item_at(i32 handle, i32 node, i32 x, i32 y);
 void ux_gtk_window_line(i32 handle, i32 on, i32 x0, i32 y0, i32 x1, i32 y1, i32 hx, i32 hy, i32 hw, i32 hh);
@@ -1452,6 +1453,12 @@ class UXGtkDriver : Object<UXViewDriver>
                 // advancing, a selection the app makes); each setter leaves an equal value alone
                 // and does not report its own change back
                 self.pushValue(handle, i, (i32)n.kind, n.peer);
+                // ...and the text: a button's, label's or toggle's title changed since it was made
+                if (((i32)n.kind == (i32)UXKindButton || (i32)n.kind == (i32)UXKindLabel ||
+                     (i32)n.kind == (i32)UXKindCheckbox || (i32)n.kind == (i32)UXKindRadio) && n.spec != (pointer)0)
+                    {
+                    ux_gtk_set_text(handle, i, (u8*)n.spec);
+                    }
                 // ...and alignment, every pass for the same reason: it changes
                 // after realize when an editor's inspector sets it.
                 if ((i32)n.kind == (i32)UXKindLabel || (i32)n.kind == (i32)UXKindField)

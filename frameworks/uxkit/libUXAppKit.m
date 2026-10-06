@@ -3412,11 +3412,19 @@ void ux_ak_set_label_text(int handle, int node, const char* text)
     {
     if (node < 0 || node >= UX_MAXN)
         return;
-    NSTextField* tf = (NSTextField*)g_ctl[handle][node];
-    if (!tf)
+    NSView* v = g_ctl[handle][node];
+    if (!v)
         return;
     NSString* want = ak_ns(text);
-    if (![[tf stringValue] isEqualToString:want])
+    if ([v isKindOfClass:[NSButton class]]) /* a button, check box or radio: its title */
+        {
+        NSButton* b = (NSButton*)v;
+        if (![[b title] isEqualToString:want])
+            [b setTitle:want];
+        return;
+        }
+    NSTextField* tf = (NSTextField*)v;
+    if ([tf isKindOfClass:[NSTextField class]] && ![[tf stringValue] isEqualToString:want])
         [tf setStringValue:want];
     }
 // A rounded push button has a fixed native height (~21pt); a taller app frame stretches the bezel.
@@ -4883,5 +4891,21 @@ int ux_ak_test_line(int handle, int* x1, int* y1)
     UXLineView* lv = (UXLineView*)[g_lineWin[handle] contentView];
     *x1 = (int)lv.b.x;
     *y1 = (int)lv.b.y;
+    return 1;
+    }
+
+/* For tests: the text a native button, check box, radio button or label shows, into buf. */
+int ux_ak_test_control_text(int handle, int node, char* buf, int n)
+    {
+    if (n > 0)
+        buf[0] = 0;
+    if (handle <= 0 || handle >= UX_MAXW || node < 0 || node >= UX_MAXN || !g_ctl[handle][node])
+        return 0;
+    NSView* v = g_ctl[handle][node];
+    NSString* s = [v isKindOfClass:[NSButton class]] ? [(NSButton*)v title]
+                : [v isKindOfClass:[NSTextField class]] ? [(NSTextField*)v stringValue] : nil;
+    if (!s)
+        return 0;
+    snprintf(buf, (size_t)n, "%s", [s UTF8String]);
     return 1;
     }

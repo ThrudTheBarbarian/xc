@@ -1,7 +1,7 @@
 // test_gtk_dnd.xc — drags and drops, context menus and a window's line, on GTK: a table's rows
 // drag out, an outline's rows drag out and take drops, drops and hovers reach the application,
 // the outline's item under a point is found, UXMenu.popUp fires the item picked, and
-// UXWindow.showLine draws above the native controls.
+// UXWindow.showLine draws above the native controls, and a title changed later reaches the screen.
 #import <Stdio.xc>
 #import "UXGtkDriver.xc"
 #import "UXApplication.xc"
@@ -21,6 +21,7 @@ extern i32 ux_gtk_test_line(i32 handle, i32* x1, i32* y1);
 extern void ux_gtk_test_menu_pick(i32 i);
 extern void ux_gtk_pump(void);
 extern void ux_gtk_frames(i32 n);
+extern i32 ux_gtk_test_control_text(i32 handle, i32 node, u8* buf, i32 n);
 extern u8* ux_gtk_test_menu_titles(void);
 
 i32 gFails = 0;
@@ -200,6 +201,16 @@ void main(void)
     gPicked = (i32)0;
     ux_gtk_test_menu_pick((i32)2);
     ck(!m.popUp(win.handle, (i32)100, (i32)100) && gPicked == (i32)0, "a disabled item does not fire", gPicked);
+
+    // a title changed after the control is on screen reaches the GtkButton
+    UXButton* b = new UXButton();
+    b.setTitle((u8*)"Button");
+    content.addSubview(b, UXGeom.make((i16)10, (i16)180, (i16)100, (i16)24));
+    win.displayAll();
+    b.setTitle((u8*)"Stop");
+    win.displayAll();
+    ux_gtk_test_control_text(win.handle, (i32)b.index, &buf[(i32)0], (i32)64);
+    ck(streq(&buf[(i32)0], (u8*)"Stop"), "a button's title set after it is made reaches the GtkButton", (i32)buf[(i32)0]);
 
     if (gFails == (i32)0)
         {

@@ -12,7 +12,7 @@ echo "== gtk-dnd: building the shim + the test =="
 cc -dynamiclib -install_name "$work/libUXGtk.dylib" "$here/libUXGtk.c" \
     $(pkg-config --cflags --libs gtk4) -o "$work/libUXGtk.dylib"
 "$xcc" -A arm64 -I "$here" "$here/test_gtk_dnd.xc" \
-    -Xlinker "$work/libUXGtk.dylib" -o "$work/gtk_dnd" -q 2>/dev/null
+    -Xlinker "$work/libUXGtk.dylib" -o "$work/gtk_dnd" -q
 
 echo "== gtk-dnd: running =="
 out=$("$work/gtk_dnd" 2>&1 | grep -v Warning) || true
