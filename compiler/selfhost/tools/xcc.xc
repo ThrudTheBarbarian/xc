@@ -3852,7 +3852,9 @@ void linkObjects(DriverOptions* d)
         return;
     }
     if (d.arch().equals(String.withCString("arm64")) || isIos(d)) { linkObjectsArm64(d); return; }
-    if (isX86_64(d) && x86GlibcLink(d)) { linkX86_64Glibc(d, String.withCString("")); return; }
+    // An object-only link is the static musl one, as the reference's (which has
+    // no glibc object link yet), unless -dynamic asks for glibc.
+    if (isX86_64(d) && d.caps().dynamicExplicit()) { linkX86_64Glibc(d, String.withCString("")); return; }
     if (isX86_64(d)) { linkX86_64(d, String.withCString("")); return; }
     if (isArm9(d)) { linkObjectsArm9(d); return; }
     if (d.arch().equals(String.withCString("win64"))) {
