@@ -16,7 +16,8 @@ The view is the platform's own text view where there is one, so typing, the
 caret, selection by mouse and keyboard, the clipboard, undo, scrolling, input
 methods and emoji behave as they do in the platform's other applications.
 Cut, copy, paste, select all, undo and redo work from the keyboard while the
-view has the focus, whatever menus the application has. The content is read back after each edit,
+view has the focus, whatever menus the application has. Where the view keeps
+the undo itself, a run of typing is one step. The content is read back after each edit,
 so [`attributedText`](#attributedtext) is always current.
 
 | Backend | View |
@@ -24,7 +25,10 @@ so [`attributedText`](#attributedtext) is always current.
 | macOS | `NSTextView` |
 | Web | A `contenteditable` element over the view. Pasted text comes in unstyled, and undo is kept by the view. |
 | GTK | `GtkTextView`. Undo is kept by the view, because GTK's own does not record styles. |
-| Windows, iOS, Android, GEM | Not yet. Until then the view draws its text and edits only through its methods. |
+| Windows | A RichEdit control. Undo is kept by the view. |
+| iOS | `UITextView`. Undo is kept by the view; the system's undo keys and gestures reach it. |
+| Android | An `EditText` whose styles are spans. Undo is kept by the view. |
+| GEM | Drawn by the view, which also does the editing: typing, Return, Backspace and Delete, the arrow keys, Home and End (with Shift to select), a click and a drag, the wheel, the clipboard and undo. Typed characters are ASCII. |
 
 Offsets and lengths are UTF-8 bytes, as in Foundation's strings. An emoji is
 four bytes.

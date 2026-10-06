@@ -24,11 +24,15 @@
 #import "Range.xc"
 #import "Map.xc"
 #import "Number.xc"
+#import "UXPasteboard.xc"
+#import "UXString.xc"
 
 #define UX_TV_BOLD 1
 #define UX_TV_ITALIC 2
 #define UX_TV_UNDERLINE 4
 #define UX_TV_MONO 8
+#define UX_TV_PAD 4   // the drawn view's inset
+#define UX_TV_SIZE 13 // the drawn view's text size
 
 protocol UXTextViewDelegate
     {
@@ -46,6 +50,9 @@ class UXTextView : UXView
     UndoManager* undoer; // the model's own undo, used while there is no native view
     UXTextStyle* typing; // the style typing gets at an empty selection
     bool typingRun;      // the user's edits since the last other change are one undo step
+    i32 caret;           // the drawn view's caret and the selection's anchor (the end that stays)
+    i32 anchor;
+    i32 scrollY;
     weak : UXTextViewDelegate* delegate;
 
     void init(void)
@@ -59,6 +66,9 @@ class UXTextView : UXView
         undoer = new UndoManager();
         typing = new UXTextStyle();
         typingRun = false;
+        caret = (i32)0;
+        anchor = (i32)0;
+        scrollY = (i32)0;
         }
 
     UXKind kind(void)
@@ -150,6 +160,8 @@ class UXTextView : UXView
         i32 e = s + r.len > n ? n : s + r.len;
         selStart = s;
         selLen = e < s ? (i32)0 : e - s;
+        caret = selStart + selLen;
+        anchor = selStart;
         typing = self.styleBefore(selStart);
         typingRun = false;
         if (self.isNative())
@@ -344,29 +356,473 @@ class UXTextView : UXView
         self.fireSelection();
         }
 
-    // ---- drawing, where there is no native view -------------------------------------------------
+    // ---- the drawn view, where there is no native one (GEM) --------------------------------------
+    // The view lays its model out with UXTextLayout, draws each run in its style with the selection
+    // behind it and the caret, and does the editing itself: typing, Backspace and Delete, Return, the
+    // arrows, Home and End (Shift extends the selection), a click and a drag, the wheel, the clipboard
+    // and the undo keys (Control-Z, Shift-Control-Z, Control-Y), a run of typing being one step.
+
+    bool acceptsFirstResponder(void)
+        {
+        return !self.isNative();
+        }
+
+    // The lines as laid out for the view's width.
+    Array<Range>* drawnLines(void)
+        {
+        UXRect b = self.bounds();
+        i16 measure = (i16)((i32)b.w - (i32)UX_TV_PAD * (i32)2);
+        return UXTextLayout.wrapAttr(model, measure > (i16)8 ? measure : (i16)8, (i32)UX_TV_SIZE);
+        }
+
+    // A line's height: room for the largest size on it.
+    i32 lineHeightOf(Range* ln)
+        {
+        i32 big = (i32)UX_TV_SIZE;
+        for (i32 i = ln.loc; i < ln.loc + ln.len; i = UXTextLayout.styleEnd(model, i, ln.loc + ln.len))
+            {
+            UXTextStyle* st = UXTextStyle.at(model, i);
+            if ((i32)st.size > big)
+                {
+                big = (i32)st.size;
+                }
+            }
+        return big + (i32)5;
+        }
+
+    // The x where byte i of a line falls, from the view's left edge, alignment included.
+    i32 xIn(Range* ln, i32 i, i32 measure)
+        {
+        i32 w = UXTextLayout.spanWidthAttr(model, ln.loc, ln.loc + ln.len, (i32)UX_TV_SIZE);
+        i32 al = model.length() > (i32)0 ? UXTextStyle.at(model, ln.loc < model.length() ? ln.loc : model.length() - (i32)1).alignment : (i32)0;
+        i32 off = al == (i32)UX_ALIGN_RIGHT ? measure - w : (al == (i32)UX_ALIGN_CENTER ? (measure - w) / (i32)2 : (i32)0);
+        if (off < (i32)0)
+            {
+            off = (i32)0;
+            }
+        return (i32)UX_TV_PAD + off + UXTextLayout.spanWidthAttr(model, ln.loc, i, (i32)UX_TV_SIZE);
+        }
+
+    // The line byte i is on (a byte at a line's end belongs to it).
+    u16 lineOf(Array<Range>* lines, i32 i)
+        {
+        u16 n = lines.count();
+        for (u16 k = (u16)0; k < n; k = k + (u16)1)
+            {
+            Range* ln = (Range* ?)lines.get(k);
+            Range* nx = k + (u16)1 < n ? (Range* ?)lines.get(k + (u16)1) : (Range*)0;
+            if (nx == (Range*)0 || i < nx.loc)
+                {
+                return k;
+                }
+            }
+        return n > (u16)0 ? n - (u16)1 : (u16)0;
+        }
+
+    // The byte nearest a point in the view.
+    i32 indexAt(i32 px, i32 py)
+        {
+        Array<Range>* lines = self.drawnLines();
+        UXRect b = self.bounds();
+        i32 measure = (i32)b.w - (i32)UX_TV_PAD * (i32)2;
+        i32 y = (i32)UX_TV_PAD - scrollY;
+        for (u16 k = (u16)0; k < lines.count(); k = k + (u16)1)
+            {
+            Range* ln = (Range* ?)lines.get(k);
+            i32 lh = self.lineHeightOf(ln);
+            if (py < y + lh || k + (u16)1 == lines.count())
+                {
+                i32 best = ln.loc;
+                i32 bestD = (i32)1000000;
+                i32 i = ln.loc;
+                while (i <= ln.loc + ln.len)
+                    {
+                    i32 d = self.xIn(ln, i, measure) - px;
+                    d = d < (i32)0 ? (i32)0 - d : d;
+                    if (d < bestD)
+                        {
+                        bestD = d;
+                        best = i;
+                        }
+                    if (i == ln.loc + ln.len)
+                        {
+                        break;
+                        }
+                    i = self.nextChar(i);
+                    }
+                return best;
+                }
+            y = y + lh;
+            }
+        return model.length();
+        }
+
+    // UTF-8 character boundaries either side of byte i.
+    i32 nextChar(i32 i)
+        {
+        String* t = model.text();
+        u8* p = t.cString();
+        i32 n = model.length();
+        i32 k = i + (i32)1;
+        while (k < n && (p[k] & (u8)$C0) == (u8)$80)
+            {
+            k = k + (i32)1;
+            }
+        return k > n ? n : k;
+        }
+
+    i32 prevChar(i32 i)
+        {
+        String* t = model.text();
+        u8* p = t.cString();
+        i32 k = i - (i32)1;
+        while (k > (i32)0 && (p[k] & (u8)$C0) == (u8)$80)
+            {
+            k = k - (i32)1;
+            }
+        return k < (i32)0 ? (i32)0 : k;
+        }
+
+    // The caret moves to i: with extend, the selection runs from the anchor to i.
+    void moveTo(i32 i, bool extend)
+        {
+        i32 n = model.length();
+        i32 c = i < (i32)0 ? (i32)0 : (i > n ? n : i);
+        if (!extend)
+            {
+            anchor = c;
+            }
+        selStart = c < anchor ? c : anchor;
+        selLen = c < anchor ? anchor - c : c - anchor;
+        caret = c;
+        typing = self.styleBefore(selStart);
+        typingRun = false;
+        self.scrollToCaret();
+        self.setNeedsDisplay();
+        self.fireSelection();
+        }
+
+    // Text typed at the selection, in the typing style; a run of it is one undo step.
+    void typeText(String* text)
+        {
+        if (!typingRun)
+            {
+            self.snapshot();
+            typingRun = true;
+            }
+        AttributedString* piece = AttributedString.withAttributes(text, self.attrsOf(typing));
+        model.replaceWithAttributed(Range.make(selStart, selLen), piece);
+        selStart = selStart + piece.length();
+        selLen = (i32)0;
+        caret = selStart;
+        anchor = selStart;
+        self.scrollToCaret();
+        self.fireChange();
+        }
+
+    // Bytes [s, e) removed, as one undo step of their own.
+    void removeRange(i32 s, i32 e)
+        {
+        if (e <= s)
+            {
+            return;
+            }
+        self.snapshot();
+        typingRun = false;
+        model.replace(Range.make(s, e - s), String.withCString((u8*)""));
+        selStart = s;
+        selLen = (i32)0;
+        caret = s;
+        anchor = s;
+        typing = self.styleBefore(s);
+        self.scrollToCaret();
+        self.fireChange();
+        }
+
+    void scrollToCaret(void)
+        {
+        Array<Range>* lines = self.drawnLines();
+        UXRect b = self.bounds();
+        u16 l = self.lineOf(lines, caret);
+        i32 top = (i32)0;
+        i32 lh = (i32)UX_TV_SIZE + (i32)5;
+        for (u16 k = (u16)0; k < lines.count(); k = k + (u16)1)
+            {
+            Range* ln = (Range* ?)lines.get(k);
+            lh = self.lineHeightOf(ln);
+            if (k == l)
+                {
+                break;
+                }
+            top = top + lh;
+            }
+        i32 view = (i32)b.h - (i32)UX_TV_PAD * (i32)2;
+        if (top < scrollY)
+            {
+            scrollY = top;
+            }
+        else if (top + lh > scrollY + view)
+            {
+            scrollY = top + lh - view;
+            }
+        }
+
+    void keyDown(UXEvent* e)
+        {
+        if (self.isNative())
+            {
+            super.keyDown(e);
+            return;
+            }
+        i32 ascii = (i32)e.key & (i32)$FF;
+        i32 scan = ((i32)e.key >> (i32)8) & (i32)$FF;
+        bool shift = ((u16)e.modifiers & (u16)UX_MOD_SHIFT) != (u16)0;
+        bool ctrl = ((u16)e.modifiers & (u16)UX_MOD_CTRL) != (u16)0;
+        // the editing keys with Control: a letter's code, or the letter itself
+        i32 letter = ascii >= (i32)1 && ascii <= (i32)26 ? ascii + (i32)96 : (ascii >= (i32)65 && ascii <= (i32)90 ? ascii + (i32)32 : ascii);
+        if (ctrl)
+            {
+            if (letter == (i32)'z' || letter == (i32)'y')
+                {
+                if (letter == (i32)'y' || shift)
+                    {
+                    self.redo();
+                    }
+                else
+                    {
+                    self.undo();
+                    }
+                return;
+                }
+            if (letter == (i32)'a')
+                {
+                anchor = (i32)0;
+                self.moveTo(model.length(), true);
+                return;
+                }
+            if (letter == (i32)'c' || letter == (i32)'x')
+                {
+                if (selLen > (i32)0)
+                    {
+                    String* piece = model.substring(Range.make(selStart, selLen)).text();
+                    UXPasteboard.general().writeText(UXStr.dup(piece.cString()));
+                    if (letter == (i32)'x')
+                        {
+                        self.removeRange(selStart, selStart + selLen);
+                        }
+                    }
+                return;
+                }
+            if (letter == (i32)'v')
+                {
+                u8* got = UXPasteboard.general().text();
+                if (got != (u8*)0 && got[0] != (u8)0)
+                    {
+                    typingRun = false;
+                    self.typeText(String.withCString(got));
+                    typingRun = false;
+                    }
+                return;
+                }
+            }
+        // the moving keys, by scan code (GEM's), and their Shift forms
+        if (scan == (i32)$4B || scan == (i32)$73)
+            {
+            i32 to = selLen > (i32)0 && !shift ? selStart : self.prevChar(caret);
+            self.moveTo(to, shift);
+            return;
+            }
+        if (scan == (i32)$4D || scan == (i32)$74)
+            {
+            i32 to = selLen > (i32)0 && !shift ? selStart + selLen : self.nextChar(caret);
+            self.moveTo(to, shift);
+            return;
+            }
+        if (scan == (i32)$48 || scan == (i32)$50)
+            {
+            Array<Range>* lines = self.drawnLines();
+            UXRect b = self.bounds();
+            i32 measure = (i32)b.w - (i32)UX_TV_PAD * (i32)2;
+            u16 l = self.lineOf(lines, caret);
+            Range* cur = (Range* ?)lines.get(l);
+            i32 x = self.xIn(cur, caret, measure);
+            i32 target = scan == (i32)$48 ? (i32)l - (i32)1 : (i32)l + (i32)1;
+            if (target < (i32)0)
+                {
+                self.moveTo((i32)0, shift);
+                return;
+                }
+            if (target >= (i32)lines.count())
+                {
+                self.moveTo(model.length(), shift);
+                return;
+                }
+            Range* ln = (Range* ?)lines.get((u16)target);
+            i32 best = ln.loc;
+            i32 bestD = (i32)1000000;
+            for (i32 i = ln.loc; i <= ln.loc + ln.len; i = i == ln.loc + ln.len ? i + (i32)1 : self.nextChar(i))
+                {
+                i32 d = self.xIn(ln, i, measure) - x;
+                d = d < (i32)0 ? (i32)0 - d : d;
+                if (d < bestD)
+                    {
+                    bestD = d;
+                    best = i;
+                    }
+                }
+            self.moveTo(best, shift);
+            return;
+            }
+        if (scan == (i32)$47 || scan == (i32)$4F)
+            {
+            Array<Range>* lines = self.drawnLines();
+            Range* ln = (Range* ?)lines.get(self.lineOf(lines, caret));
+            self.moveTo(scan == (i32)$47 ? ln.loc : ln.loc + ln.len, shift);
+            return;
+            }
+        if (ascii == (i32)8)
+            {
+            if (selLen > (i32)0)
+                {
+                self.removeRange(selStart, selStart + selLen);
+                }
+            else if (caret > (i32)0)
+                {
+                self.removeRange(self.prevChar(caret), caret);
+                }
+            return;
+            }
+        if (ascii == (i32)127 || scan == (i32)$53)
+            {
+            if (selLen > (i32)0)
+                {
+                self.removeRange(selStart, selStart + selLen);
+                }
+            else if (caret < model.length())
+                {
+                self.removeRange(caret, self.nextChar(caret));
+                }
+            return;
+            }
+        if (ascii == (i32)13 || ascii == (i32)10)
+            {
+            self.typeText(String.withCString((u8*)"\n"));
+            return;
+            }
+        if (ascii >= (i32)32 && ascii < (i32)127 && !ctrl)
+            {
+            u8 one[2];
+            one[0] = (u8)ascii;
+            one[1] = (u8)0;
+            self.typeText(String.withCString(&one[0]));
+            return;
+            }
+        super.keyDown(e); // not the view's: up the chain
+        }
+
+    void mouseDown(UXEvent* e)
+        {
+        if (self.isNative())
+            {
+            return;
+            }
+        UXRect a = self.absoluteFrame();
+        self.moveTo(self.indexAt((i32)e.x - (i32)a.x, (i32)e.y - (i32)a.y), false);
+        }
+
+    void mouseDragged(UXEvent* e)
+        {
+        if (self.isNative())
+            {
+            return;
+            }
+        UXRect a = self.absoluteFrame();
+        self.moveTo(self.indexAt((i32)e.x - (i32)a.x, (i32)e.y - (i32)a.y), true);
+        }
+
+    void scrollWheel(UXEvent* e)
+        {
+        if (self.isNative())
+            {
+            return;
+            }
+        scrollY = scrollY - e.a * (i32)(UX_TV_SIZE + 5) * (i32)3;
+        scrollY = scrollY < (i32)0 ? (i32)0 : scrollY;
+        self.setNeedsDisplay();
+        }
 
     void drawRect(UXGraphics* g, UXRect dirty)
         {
         UXRect b = self.bounds();
         g.fillRectRGB(b, (i32)255, (i32)255, (i32)255);
-        String* t = model.text(); // held while its bytes are read
-        u8* p = t.cString();
-        i32 n = model.length();
-        i32 y = (i32)4;
-        i32 ls = (i32)0;
-        for (i32 i = (i32)0; i <= n; i = i + (i32)1)
+        i16 r = (i16)((i32)b.x + (i32)b.w - (i32)1);
+        i16 bt = (i16)((i32)b.y + (i32)b.h - (i32)1);
+        g.drawLine(b.x, b.y, r, b.y, (i32)9);
+        g.drawLine(b.x, bt, r, bt, (i32)9);
+        g.drawLine(b.x, b.y, b.x, bt, (i32)9);
+        g.drawLine(r, b.y, r, bt, (i32)9);
+        String* textStr = model.text(); // held while its bytes are read
+        u8* text = textStr.cString();
+        Array<Range>* lines = self.drawnLines();
+        i32 measure = (i32)b.w - (i32)UX_TV_PAD * (i32)2;
+        i32 y = (i32)UX_TV_PAD - scrollY;
+        for (u16 k = (u16)0; k < lines.count(); k = k + (u16)1)
             {
-            if (i == n || p[i] == (u8)10)
+            Range* ln = (Range* ?)lines.get(k);
+            i32 lh = self.lineHeightOf(ln);
+            if (y + lh < (i32)0)
                 {
-                if (i > ls && y < (i32)b.h)
-                    {
-                    String* line = model.substring(Range.make(ls, i - ls)).text(); // held while drawn
-                    g.drawText(line.cString(), (i16)4, (i16)y, (i32)1, (i32)0);
-                    }
-                ls = i + (i32)1;
-                y = y + (i32)16;
+                y = y + lh;
+                continue;
                 }
+            if (y > (i32)b.h)
+                {
+                break;
+                }
+            // the selection behind this line's part of it
+            i32 s0 = selStart > ln.loc ? selStart : ln.loc;
+            i32 s1 = selStart + selLen < ln.loc + ln.len ? selStart + selLen : ln.loc + ln.len;
+            if (selLen > (i32)0 && s1 > s0)
+                {
+                i32 x0 = self.xIn(ln, s0, measure);
+                i32 x1 = self.xIn(ln, s1, measure);
+                g.fillRectRGB(UXGeom.make((i16)x0, (i16)y, (i16)(x1 - x0), (i16)lh), (i32)180, (i32)205, (i32)245);
+                }
+            // the runs, each in its style
+            i32 i = ln.loc;
+            while (i < ln.loc + ln.len)
+                {
+                i32 j = UXTextLayout.styleEnd(model, i, ln.loc + ln.len);
+                UXTextStyle* st = UXTextStyle.at(model, i);
+                i32 n = j - i;
+                u8* piece = (u8*)malloc((u32)n + (u32)1);
+                for (i32 q = (i32)0; q < n; q = q + (i32)1)
+                    {
+                    piece[q] = text[i + q] == (u8)10 ? (u8)32 : text[i + q];
+                    }
+                piece[n] = (u8)0;
+                i32 x = self.xIn(ln, i, measure);
+                i32 sz = st.size > (i16)0 ? (i32)st.size : (i32)UX_TV_SIZE;
+                i32 rgb = st.color >= (i32)0 ? st.color : (i32)0;
+                g.drawTextFontRGBA(piece, (i16)x, (i16)(y + lh - sz - (i32)3), st.monospace ? (u8*)"monospace" : (u8*)"",
+                                   sz, st.bold ? (i32)UXWEIGHT_BOLD : (i32)UXWEIGHT_NORMAL, st.italic,
+                                   (rgb >> (i32)16) & (i32)255, (rgb >> (i32)8) & (i32)255, rgb & (i32)255, (i32)255);
+                if (st.underline)
+                    {
+                    i32 xe = self.xIn(ln, j, measure);
+                    g.fillRectRGB(UXGeom.make((i16)x, (i16)(y + lh - (i32)3), (i16)(xe - x), (i16)1),
+                                  (rgb >> (i32)16) & (i32)255, (rgb >> (i32)8) & (i32)255, rgb & (i32)255);
+                    }
+                free((pointer)piece);
+                i = j;
+                }
+            // the caret
+            if (selLen == (i32)0 && self.lineOf(lines, caret) == k)
+                {
+                i32 cx = self.xIn(ln, caret, measure);
+                g.fillRectRGB(UXGeom.make((i16)cx, (i16)(y + (i32)1), (i16)1, (i16)(lh - (i32)2)), (i32)0, (i32)0, (i32)0);
+                }
+            y = y + lh;
             }
         }
 
@@ -682,10 +1138,29 @@ class UXTextView : UXView
             return;
             }
         undoer.registerUndo(&self.restoreSnapshot, (Object*)model.copy()); // so the undo can be redone
+        // the caret goes after what changed: past the common start, before the common end
+        String* was = model.text();
+        String* now = old.text();
+        u8* p = was.cString();
+        u8* q = now.cString();
+        i32 pn = model.length();
+        i32 qn = old.length();
+        i32 head = (i32)0;
+        while (head < pn && head < qn && p[head] == q[head])
+            {
+            head = head + (i32)1;
+            }
+        i32 tail = (i32)0;
+        while (tail < pn - head && tail < qn - head && p[pn - (i32)1 - tail] == q[qn - (i32)1 - tail])
+            {
+            tail = tail + (i32)1;
+            }
         model = old;
-        i32 n = model.length();
-        selStart = selStart > n ? n : selStart;
-        selLen = selStart + selLen > n ? n - selStart : selLen;
+        selStart = qn - tail;
+        selLen = (i32)0;
+        caret = selStart;
+        anchor = selStart;
+        typingRun = false;
         if (self.isNative())
             {
             self.pushAll();

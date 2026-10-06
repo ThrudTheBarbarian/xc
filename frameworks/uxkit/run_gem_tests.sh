@@ -25,7 +25,7 @@ case "$(uname)" in Darwin) ;; *) echo "== gem-tests: skipped (host GEM is macOS-
 
 TESTS="test_alert test_autoresize test_check test_clip test_controls test_dirty
 test_focus test_host test_key test_leak test_memgate test_menu test_nib test_outline
-test_radio test_state test_window"
+test_radio test_state test_textview_gem test_window"
 
 # QUARANTINED: these build, and they FAIL.  They are reported every run rather
 # than dropped, because a dark test quietly removed is worse than a dark test.
