@@ -48,6 +48,7 @@ All of it needs a real heap (**`-falloc=heap`**), which is the default on the
 | [`SearchIndex`](/compiler/api/searchindex/) | A small full-text index with ranked and prefix search. **Not** in the umbrella — import by name. From the release after 0.71. |
 | [`IndexSet`](/compiler/api/indexset/) | A set of indexes kept as merged ranges: a table's selection. **Not** in the umbrella — import by name. From the release after 0.71. |
 | [`AttributedString`](/compiler/api/attributedstring/) | Text with named attributes over ranges, as merged runs. **Not** in the umbrella — import by name. From the release after 0.71. |
+| [`Regex`](/compiler/api/regex/) | Regular expressions: captures, lazy and counted quantifiers, replace, split. **Not** in the umbrella — import by name. From the release after 0.71. |
 | [`CSV`](/compiler/api/csv/) | Comma-separated values to rows of strings and back. **Not** in the umbrella — import by name. From the release after 0.71. |
 | [`Coder`](/compiler/api/coder/) | Keyed archiving of an object graph to JSON, optionally gzipped. **Not** in the umbrella — import by name. |
 

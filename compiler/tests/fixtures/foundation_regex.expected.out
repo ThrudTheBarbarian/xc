@@ -1,0 +1,51 @@
+b+ in "aabbbcc": $0=[bbb] @2+3
+(\w+)@(\w+)\.com in "mail ada@example.com now": $0=[ada@example.com] $1=[ada] $2=[example] @5+15
+^\d{3}-\d{4}$ in "555-1234": $0=[555-1234] @0+8
+^\d{3}-\d{4}$ in "555-12345": none
+a.c in "abc a
+c": $0=[abc] @0+3
+[^a-c]+ in "abcxyzabc": $0=[xyz] @3+3
+<.+> in "<a><b>": $0=[<a><b>] @0+6
+<.+?> in "<a><b>": $0=[<a>] @0+3
+a{2,3} in "aaaa": $0=[aaa] @0+3
+a{2,3}? in "aaaa": $0=[aa] @0+2
+x{2,} in "xxxxx": $0=[xxxxx] @0+5
+(a|ab)(c|bcd)(d*) in "abcd": $0=[abcd] $1=[a] $2=[bcd] $3=[] @0+4
+(a)|(b) in "b": $0=[b] $1=- $2=[b] @0+1
+\bcat\b in "concat cat": $0=[cat] @7+3
+\Bcat in "concat cat": $0=[cat] @3+3
+(?:ab)+ in "ababab": $0=[ababab] @0+6
+colou?r in "my color": $0=[color] @3+5
+[\d.]+ in "v1.25b": $0=[1.25] @1+4
+caf. in "un café noir": $0=[café] @3+5
+[é]+ in "ééé!": $0=[ééé] @0+6
+[^a] in "é": $0=[é] @0+2
+(a*)*b in "aaab": $0=[aaab] $1=[aaa] @0+4
+(a*)+$ in "aa": $0=[aa] $1=[aa] @0+2
+ in "abc": $0=[] @0+0
+\x41\t in "xA	y": $0=[A	] @1+2
+a{,2} in "a{,2}": $0=[a{,2}] @0+5
+[a-z]+ matches "hello": 1
+[a-z]+ matches "Hello": 0
+[a-z]+ matches "Hello": 1
+HELLO matches "hello": 1
+a|ab matches "ab": 1
+a.b matches "a
+b": 1
+multiline lines: 3
+all digits: 1 22 333
+empty matches in "aé": 3
+example:ada ($), example:bob ($)
+<ada@example.com>, bob@example.com
+split: [a] [b] [c] [] [d]
+escape: 1\+1=2\? \(yes\) \[x\] \$5\.00
+1\+1=2\? matches "1+1=2?": 1
+(ab: bad pattern at byte 3: missing ')'
+ab): bad pattern at byte 2: unbalanced ')'
+[abc: bad pattern at byte 4: missing ']'
+*a: bad pattern at byte 0: nothing to repeat
+a{3,2}: bad pattern at byte 6: a count's maximum is below its minimum
+[z-a]: bad pattern at byte 4: a range's end is below its start
+\q: bad pattern at byte 2: unknown escape
+(?=x): bad pattern at byte 1: only (?: ) groups are supported
+x{2000}: bad pattern at byte 7: a count above 1000

@@ -85,6 +85,7 @@ export default defineConfig({
 										{ label: 'OperationQueue', slug: 'compiler/api/operationqueue' },
 										{ label: 'Progress', slug: 'compiler/api/progress' },
 										{ label: 'Range', slug: 'compiler/api/range' },
+										{ label: 'Regex', slug: 'compiler/api/regex' },
 										{ label: 'RunLoop', slug: 'compiler/api/runloop' },
 										{ label: 'SearchIndex', slug: 'compiler/api/searchindex' },
 										{ label: 'Set', slug: 'compiler/api/set' },
