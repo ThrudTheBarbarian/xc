@@ -80,8 +80,7 @@ JSON has its own `null`, and the two cases differ:
 
 Lookup is a **linear scan** over the members, so reading a large object in a
 loop is quadratic. Document-sized objects are fine. To read thousands of keys,
-move them into a [`UXCache`](/compiler/api/uxkit/uxcache/) or a plain array
-once.
+copy them into an array once.
 
 ## Strings are unescaped
 

@@ -46,11 +46,8 @@ i32 UXK_ABI_SYM(void)
 // exists on the board this library is built for.  UXBoot is test scaffolding.
 #import "UXAnimation.xc"
 #import "UXAttributedString.xc"
-#import "UXBag.xc"
-#import "UXBinaryHeap.xc"
 #import "UXBreadcrumb.xc"
 #import "UXCSV.xc"
-#import "UXCache.xc"
 #import "UXCharacterSet.xc"
 #import "UXCollectionView.xc"
 #import "UXColor.xc"

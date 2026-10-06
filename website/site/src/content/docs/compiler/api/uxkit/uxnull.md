@@ -131,7 +131,5 @@ edit.
 
 - [`UXJSON`](/compiler/api/uxkit/uxjson/): where a literal `null` in a document
   becomes this sentinel
-- [`UXCache`](/compiler/api/uxkit/uxcache/): a negative result is a value, not
-  an absence
 - [`UXNotificationCenter`](/compiler/api/uxkit/uxnotificationcenter/): the same
   singleton shape

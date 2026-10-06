@@ -34,7 +34,7 @@ GROUPS = {
         "UXJSON", "UXCSV", "UXLog"],
     "Geometry & drawing": ["UXGeom", "UXRect", "UXPoint", "UXSize", "UXGraphics",
         "UXPainter", "UXShapePath", "UXColor", "UXGradient", "UXImage", "UXAnimation",
-        "UXViewport", "UXRange", "UXIndexSet", "UXBag", "UXBinaryHeap", "UXCache",
+        "UXViewport", "UXRange", "UXIndexSet",
         "UXPath", "UXNull"],
     "Nibs & the designer": ["UXNib", "UXNibV2", "UXDesignable"],
     "Drivers & backends": ["UXViewDriver", "UXGemDriver", "UXWin32Driver", "UXAppKitDriver",

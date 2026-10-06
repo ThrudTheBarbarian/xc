@@ -98,6 +98,4 @@ The integer, or `0`/`1` for a bool.
 ## See also
 
 - [`UXKeyValueStore`](/compiler/api/uxkit/uxkeyvaluestore/): the store
-- [`UXCacheEntry`](/compiler/api/uxkit/uxcacheentry/): the evicting equivalent,
-  with a clock because entries leave
 - [`UXViewDriver`](/compiler/api/uxkit/uxviewdriver/): `settingGet`/`settingSet`
