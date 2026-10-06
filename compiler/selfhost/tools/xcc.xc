@@ -5992,6 +5992,10 @@ DriverOptions* parseDriverArgs(void)
         o.defs().add((Object*)String.withCString("PLATFORM_android=1"));
     // A dynamically linked x86-64 executable can load libraries at run time
     // (dlopen): library source that needs to (ParVulkan.xc) keys on this.
+    // The dynamic glibc link is the x86-64 default (-static: musl); settled
+    // here, before the front end is told, as the reference settles it while
+    // reading the options. checkCapabilities refuses the bad combinations.
+    d.caps().resolveDynamic(isX86_64(d), d.emitLib());
     if (isX86_64(d) && d.caps().dynamic())
         o.defs().add((Object*)String.withCString("LINK_DYNAMIC=1"));
     finishDriverArgs(d);
