@@ -115,8 +115,8 @@ void setFileDropHandler(callback h void(u8* path, i32 window, i32 x, i32 y))
 
 Takes files dragged onto the app's windows from the Finder or a file manager.
 The handler gets each file's path, the window's handle and the point in its
-content. The path belongs to the driver, so copy it to keep it. From 0.7, on
-AppKit.
+content. The path belongs to the driver, so copy it to keep it. From 0.7 on
+AppKit, and on GTK from the release after 0.7.
 
 ### deliverFileDrop
 
@@ -136,7 +136,7 @@ Takes rows dragged out of the app's own tables (see
 [`setDragsRows`](/compiler/api/uxkit/uxtableview/#setdragsrows)) and dropped
 on its windows. The handler gets the row's first column, the window's handle
 and the point in its content. The text belongs to the driver, so copy it to
-keep it. From 0.7, on AppKit.
+keep it. From 0.7 on AppKit, and on GTK from the release after 0.7.
 
 ### deliverItemDrop
 
@@ -154,7 +154,7 @@ void setItemHoverHandler(callback h void(u8* item, i32 window, i32 x, i32 y))
 
 Follows such a row while it is dragged over the app's windows, so the app can
 show what a drop would do. The point is (-1, -1) once the row has left the
-window or been dropped. From 0.7, on AppKit.
+window or been dropped. From 0.7 on AppKit, and on GTK from the release after 0.7.
 
 ### deliverItemHover
 

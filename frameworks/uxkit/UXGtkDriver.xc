@@ -432,6 +432,40 @@ void xgGtkTableSelectSet(pointer tbl, i32* rows, i32 n)
     }
 
 void ux_gtk_window_set_min_size(i32 handle, i32 w, i32 h);
+void ux_gtk_set_drop_hooks(pointer file, pointer item, pointer hover, pointer tableDrags, pointer outlineDragText);
+pointer ux_gtk_outline_item_at(i32 handle, i32 node, i32 x, i32 y);
+void ux_gtk_window_line(i32 handle, i32 on, i32 x0, i32 y0, i32 x1, i32 y1, i32 hx, i32 hy, i32 hw, i32 hh);
+i32 ux_gtk_menu_popup(i32 handle, pointer titles, pointer flags, i32 n, i32 x, i32 y);
+// Drops on a window and drags out of the app's tables and outlines, from the shim: to the app.
+void xgGtkFileDrop(u8* path, i32 win, i32 x, i32 y)
+    {
+    if (gApp != (UXApplication*)0)
+        {
+        gApp.deliverFileDrop(path, win, x, y);
+        }
+    }
+void xgGtkItemDrop(u8* item, i32 win, i32 x, i32 y)
+    {
+    if (gApp != (UXApplication*)0)
+        {
+        gApp.deliverItemDrop(item, win, x, y);
+        }
+    }
+void xgGtkItemHover(u8* item, i32 win, i32 x, i32 y)
+    {
+    if (gApp != (UXApplication*)0)
+        {
+        gApp.deliverItemHover(item, win, x, y);
+        }
+    }
+i32 xgGtkTableDrags(pointer tbl)
+    {
+    return ((UXTableView* ?)(Object*)tbl).nativeDragsRows();
+    }
+u8* xgGtkOutlineDragText(pointer o, pointer item, i32 unused)
+    {
+    return ((UXOutlineView* ?)(Object*)o).nativeDragText(item);
+    }
 class UXGtkDriver : Object<UXViewDriver>
     {
 
@@ -457,6 +491,8 @@ class UXGtkDriver : Object<UXViewDriver>
             ux_gtk_set_outline_hooks((pointer)&xgGtkOutlineChildren, (pointer)&xgGtkOutlineChild,
                                      (pointer)&xgGtkOutlineExpandable, (pointer)&xgGtkOutlineValue,
                                      (pointer)&xgGtkOutlineDidExpand, (pointer)&xgGtkOutlineIsExpanded);
+            ux_gtk_set_drop_hooks((pointer)&xgGtkFileDrop, (pointer)&xgGtkItemDrop, (pointer)&xgGtkItemHover,
+                                  (pointer)&xgGtkTableDrags, (pointer)&xgGtkOutlineDragText);
             }
         return ux_gtk_boot(screenW, screenH) != (i32)0;
         }
@@ -1109,6 +1145,20 @@ class UXGtkDriver : Object<UXViewDriver>
     void windowSetMinSize(i32 handle, i32 w, i32 h)
         {
         ux_gtk_window_set_min_size(handle, w, h);
+        }
+    // a drawing area over the content that takes no input
+    void windowLine(i32 handle, i32 on, i32 x0, i32 y0, i32 x1, i32 y1, i32 hx, i32 hy, i32 hw, i32 hh)
+        {
+        ux_gtk_window_line(handle, on, x0, y0, x1, y1, hx, hy, hw, hh);
+        }
+    pointer outlineItemAt(i32 handle, i32 node, i32 x, i32 y)
+        {
+        return ux_gtk_outline_item_at(handle, node, x, y);
+        }
+    // a popover of buttons, run until it closes
+    i32 menuPopUp(i32 handle, pointer titles, pointer flags, i32 n, i32 x, i32 y)
+        {
+        return ux_gtk_menu_popup(handle, titles, flags, n, x, y);
         }
     bool driverAutoresizes(void)
         {

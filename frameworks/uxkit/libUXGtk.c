@@ -21,6 +21,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include <dlfcn.h>
 #include <pthread.h>
 #include "ux_posix_fs.h" // listDir / delete / rename / copy for the drawn file panel
@@ -1248,6 +1249,117 @@ int ux_gtk_menu_test_shortcuts(int h, int fire)
     return n;
     }
 
+/* ── drags and drops between the app's own widgets ────────────────────────────
+ * A row dragged out of a table or an outline carries its text as a string marked as the app's own
+ * (UX_ROW_MARK first), so a drop knows it from text dragged in from elsewhere.  Each window's
+ * GtkFixed takes such rows, and files, as drops; an outline's rows take rows too. */
+#define UX_ROW_MARK "\x01uxkit-row\x01"
+typedef void (*ux_drop_fn)(const char* text, int win, int x, int y);
+static ux_drop_fn gFileDrop, gItemDrop, gItemHover;
+typedef int (*tbl_drags_fn)(void*);
+static tbl_drags_fn gTblDrags;
+typedef const char* (*ol_dragtext_fn)(void*, void*, int);
+static ol_dragtext_fn gOlDragText;
+void ux_gtk_set_drop_hooks(void* file, void* item, void* hover, void* tableDrags, void* outlineDragText)
+    {
+    gFileDrop = (ux_drop_fn)file;
+    gItemDrop = (ux_drop_fn)item;
+    gItemHover = (ux_drop_fn)hover;
+    gTblDrags = (tbl_drags_fn)tableDrags;
+    gOlDragText = (ol_dragtext_fn)outlineDragText;
+    }
+/* The row text in a dragged string, or NULL if it is not one of ours. */
+static const char* row_text(const char* s)
+    {
+    size_t m = strlen(UX_ROW_MARK);
+    return (s && strncmp(s, UX_ROW_MARK, m) == 0) ? s + m : NULL;
+    }
+static GdkContentProvider* row_content(const char* text)
+    {
+    char* s = g_strconcat(UX_ROW_MARK, text, NULL);
+    GdkContentProvider* p = gdk_content_provider_new_typed(G_TYPE_STRING, s);
+    g_free(s);
+    return p;
+    }
+/* A widget's point in its window's content (the GtkFixed). */
+static void content_point(GtkWidget* w, int handle, double x, double y, int* ox, int* oy)
+    {
+    graphene_point_t in = GRAPHENE_POINT_INIT((float)x, (float)y), out;
+    if (gFix[handle] && gtk_widget_compute_point(w, GTK_WIDGET(gFix[handle]), &in, &out))
+        {
+        *ox = (int)out.x;
+        *oy = (int)out.y;
+        }
+    else
+        {
+        *ox = (int)x;
+        *oy = (int)y;
+        }
+    }
+
+/* A window's drops: files, and rows dragged out of the app's own tables and outlines, at the point
+   in its content.  A row also reports where it is while it is dragged over, and when it leaves. */
+static GdkDragAction win_drop_motion(GtkDropTarget* dt, double x, double y, gpointer h)
+    {
+    const GValue* v = gtk_drop_target_get_value(dt);
+    if (v && G_VALUE_HOLDS_STRING(v))
+        {
+        const char* t = row_text(g_value_get_string(v));
+        if (!t)
+            return 0;
+        if (gItemHover)
+            gItemHover(t, GPOINTER_TO_INT(h), (int)x, (int)y);
+        }
+    return GDK_ACTION_COPY;
+    }
+static void win_drop_leave(GtkDropTarget* dt, gpointer h)
+    {
+    const GValue* v = gtk_drop_target_get_value(dt);
+    const char* t = v && G_VALUE_HOLDS_STRING(v) ? row_text(g_value_get_string(v)) : NULL;
+    if (t && gItemHover)
+        gItemHover(t, GPOINTER_TO_INT(h), -1, -1);
+    }
+static gboolean win_drop(GtkDropTarget* dt, const GValue* v, double x, double y, gpointer h)
+    {
+    (void)dt;
+    int handle = GPOINTER_TO_INT(h);
+    if (G_VALUE_HOLDS_STRING(v))
+        {
+        const char* t = row_text(g_value_get_string(v));
+        if (!t || !gItemDrop)
+            return FALSE;
+        char* copy = g_strdup(t);
+        if (gItemHover)
+            gItemHover(copy, handle, -1, -1);
+        gItemDrop(copy, handle, (int)x, (int)y);
+        g_free(copy);
+        return TRUE;
+        }
+    if (G_VALUE_HOLDS(v, GDK_TYPE_FILE_LIST) && gFileDrop)
+        {
+        for (GSList* l = g_value_get_boxed(v); l; l = l->next)
+            {
+            char* path = g_file_get_path(G_FILE(l->data));
+            if (path)
+                gFileDrop(path, handle, (int)x, (int)y);
+            g_free(path);
+            }
+        return TRUE;
+        }
+    return FALSE;
+    }
+static void win_drop_target(GtkFixed* fix, int handle)
+    {
+    GtkDropTarget* dt = gtk_drop_target_new(G_TYPE_INVALID, GDK_ACTION_COPY);
+    GType types[2] = {G_TYPE_STRING, GDK_TYPE_FILE_LIST};
+    gtk_drop_target_set_gtypes(dt, types, 2);
+    gtk_drop_target_set_preload(dt, TRUE);
+    g_signal_connect(dt, "enter", G_CALLBACK(win_drop_motion), GINT_TO_POINTER(handle));
+    g_signal_connect(dt, "motion", G_CALLBACK(win_drop_motion), GINT_TO_POINTER(handle));
+    g_signal_connect(dt, "leave", G_CALLBACK(win_drop_leave), GINT_TO_POINTER(handle));
+    g_signal_connect(dt, "drop", G_CALLBACK(win_drop), GINT_TO_POINTER(handle));
+    gtk_widget_add_controller(GTK_WIDGET(fix), GTK_EVENT_CONTROLLER(dt));
+    }
 int ux_gtk_window_create(int x, int y, int w, int h)
     {
     if (gNextH >= UXGTK_MAXW)
@@ -1262,6 +1374,7 @@ int ux_gtk_window_create(int x, int y, int w, int h)
     gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(area), draw_cb,
                                    GINT_TO_POINTER(hh), NULL);
     gtk_fixed_put(fix, area, 0, 0);
+    win_drop_target(fix, hh);
     gWin[hh] = win;
     gFix[hh] = fix;
     gArea[hh] = area;
@@ -2544,13 +2657,39 @@ void ux_gtk_set_table_hooks(void* rows, void* cell, void* cols, void* title, voi
     gTblMulti = (tbl_multi_fn)multi;
     gTblSelSet = (tbl_selset_fn)selset;
     }
+/* A table row dragged out: its first column, if the table drags its rows. */
+static GdkContentProvider* tbl_drag_prepare(GtkDragSource* src, double x, double y, gpointer li)
+    {
+    (void)x; (void)y;
+    GtkWidget* w = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(src));
+    GtkWidget* cv = g_object_get_data(G_OBJECT(w), "ux-cv");
+    void* peer = cv ? g_object_get_data(G_OBJECT(cv), "ux-peer") : NULL;
+    if (!peer || !gTblDrags || !gTblDrags(peer) || !gTblCell)
+        return NULL;
+    const char* t = gTblCell(peer, (int)gtk_list_item_get_position(GTK_LIST_ITEM(li)), 0);
+    return row_content(t ? t : "");
+    }
+static void row_drag_begin(GtkDragSource* src, GdkDrag* drag, gpointer ud)
+    {
+    (void)drag; (void)ud;
+    GtkWidget* w = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(src));
+    GdkPaintable* p = gtk_widget_paintable_new(w);
+    gtk_drag_source_set_icon(src, p, 0, 0);
+    g_object_unref(p);
+    }
 static void tbl_setup(GtkSignalListItemFactory* f, GtkListItem* item, gpointer ud)
     {
-    (void)f; (void)ud;
+    (void)ud;
     GtkWidget* l = gtk_label_new("");
     gtk_label_set_xalign(GTK_LABEL(l), 0.0f);
     gtk_label_set_ellipsize(GTK_LABEL(l), PANGO_ELLIPSIZE_END);
     gtk_list_item_set_child(item, l);
+    g_object_set_data(G_OBJECT(l), "ux-cv", g_object_get_data(G_OBJECT(f), "ux-view"));
+    GtkDragSource* ds = gtk_drag_source_new();
+    gtk_drag_source_set_actions(ds, GDK_ACTION_COPY);
+    g_signal_connect(ds, "prepare", G_CALLBACK(tbl_drag_prepare), item);
+    g_signal_connect(ds, "drag-begin", G_CALLBACK(row_drag_begin), NULL);
+    gtk_widget_add_controller(l, GTK_EVENT_CONTROLLER(ds));
     }
 static void tbl_bind(GtkSignalListItemFactory* f, GtkListItem* item, gpointer col)
     {
@@ -2602,6 +2741,20 @@ void ux_gtk_table_reload(int handle, int node)
         g_object_unref(items[i]);
     g_free(items);
     }
+/* A column view whose columns all have empty titles shows no header row.  GTK has no switch for
+   it; the header is the view's child named "header". */
+static void hide_untitled_header(GtkWidget* cv, void* peer, int ncols)
+    {
+    for (int c = 0; c < ncols; c++)
+        {
+        const char* ti = gTblTitle ? gTblTitle(peer, c) : "";
+        if (ti && ti[0])
+            return;
+        }
+    for (GtkWidget* k = gtk_widget_get_first_child(cv); k; k = gtk_widget_get_next_sibling(k))
+        if (strcmp(gtk_widget_get_css_name(k), "header") == 0)
+            gtk_widget_set_visible(k, FALSE);
+    }
 void ux_gtk_make_table(int handle, int node, int x, int y, int w, int h, void* peer)
     {
     GListStore* store = g_list_store_new(GTK_TYPE_STRING_OBJECT);
@@ -2638,6 +2791,7 @@ void ux_gtk_make_table(int handle, int node, int x, int y, int w, int h, void* p
         g_object_unref(col);
         }
     g_signal_connect(sel, "selection-changed", G_CALLBACK(tbl_sel_changed), cv);
+    hide_untitled_header(cv, peer, ncols);
     GtkWidget* sw = gtk_scrolled_window_new();
     gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(sw), cv);
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(sw), GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
@@ -2754,20 +2908,102 @@ static void ol_row_expanded(GtkTreeListRow* row, GParamSpec* ps, gpointer peer)
     gOlDidExpand(peer, g_object_get_data(o, "ux-item"), gtk_tree_list_row_get_expanded(row) ? 1 : 0);
     g_object_unref(o);
     }
+/* An outline row: what it carries dragged out (the app says; NULL, it does not drag), on either
+   button, since a secondary-button drag is how a connection is drawn from a row.  Its drag reports
+   where it began and where it ends, so a line can follow it. */
+static GdkContentProvider* ol_drag_prepare(GtkDragSource* src, double x, double y, gpointer ud)
+    {
+    (void)ud;
+    GtkWidget* w = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(src));
+    GtkWidget* cv = g_object_get_data(G_OBJECT(w), "ux-cv");
+    void* peer = cv ? g_object_get_data(G_OBJECT(cv), "ux-peer") : NULL;
+    void* item = g_object_get_data(G_OBJECT(w), "ux-olitem");
+    const char* t = (peer && item && gOlDragText) ? gOlDragText(peer, item, 0) : NULL;
+    if (!t)
+        return NULL;
+    int handle = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(cv), "ux-handle"));
+    g_object_set_data_full(G_OBJECT(src), "ux-text", g_strdup(t), g_free);
+    if (gItemHover)
+        {
+        int px, py;
+        content_point(w, handle, x, y, &px, &py);
+        gItemHover(t, handle, px, py);
+        }
+    return row_content(t);
+    }
+static void ol_drag_end(GtkDragSource* src, GdkDrag* drag, gboolean del, gpointer ud)
+    {
+    (void)drag; (void)del; (void)ud;
+    GtkWidget* w = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(src));
+    GtkWidget* cv = g_object_get_data(G_OBJECT(w), "ux-cv");
+    const char* t = g_object_get_data(G_OBJECT(src), "ux-text");
+    if (t && gItemHover && cv)
+        gItemHover(t, GPOINTER_TO_INT(g_object_get_data(G_OBJECT(cv), "ux-handle")), -1, -1);
+    }
+/* A row dragged onto an outline row: a drop at that row's point, in the window's terms. */
+static GdkDragAction ol_drop_motion(GtkDropTarget* dt, double x, double y, gpointer ud)
+    {
+    (void)ud;
+    const GValue* v = gtk_drop_target_get_value(dt);
+    const char* t = v && G_VALUE_HOLDS_STRING(v) ? row_text(g_value_get_string(v)) : NULL;
+    GtkWidget* w = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(dt));
+    GtkWidget* cv = g_object_get_data(G_OBJECT(w), "ux-cv");
+    if (t && gItemHover && cv)
+        {
+        int handle = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(cv), "ux-handle"));
+        int px, py;
+        content_point(w, handle, x, y, &px, &py);
+        gItemHover(t, handle, px, py);
+        }
+    return t || !v ? GDK_ACTION_COPY : 0;
+    }
+static gboolean ol_drop(GtkDropTarget* dt, const GValue* v, double x, double y, gpointer ud)
+    {
+    (void)dt; (void)ud;
+    const char* t = G_VALUE_HOLDS_STRING(v) ? row_text(g_value_get_string(v)) : NULL;
+    GtkWidget* w = gtk_event_controller_get_widget(GTK_EVENT_CONTROLLER(dt));
+    GtkWidget* cv = g_object_get_data(G_OBJECT(w), "ux-cv");
+    if (!t || !gItemDrop || !cv)
+        return FALSE;
+    int handle = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(cv), "ux-handle"));
+    int px, py;
+    content_point(w, handle, x, y, &px, &py);
+    char* copy = g_strdup(t);
+    if (gItemHover)
+        gItemHover(copy, handle, -1, -1);
+    gItemDrop(copy, handle, px, py);
+    g_free(copy);
+    return TRUE;
+    }
 static void ol_setup(GtkSignalListItemFactory* f, GtkListItem* li, gpointer col)
     {
-    (void)f;
     GtkWidget* l = gtk_label_new("");
     gtk_label_set_xalign(GTK_LABEL(l), 0.0f);
     gtk_label_set_ellipsize(GTK_LABEL(l), PANGO_ELLIPSIZE_END);
+    GtkWidget* cell = l;
     if (GPOINTER_TO_INT(col) == 0)
         {
         GtkWidget* ex = gtk_tree_expander_new();
         gtk_tree_expander_set_child(GTK_TREE_EXPANDER(ex), l);
         gtk_list_item_set_child(li, ex);
+        cell = ex;
         }
     else
         gtk_list_item_set_child(li, l);
+    g_object_set_data(G_OBJECT(cell), "ux-cv", g_object_get_data(G_OBJECT(f), "ux-view"));
+    GtkDragSource* ds = gtk_drag_source_new();
+    gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(ds), 0); /* either button */
+    gtk_drag_source_set_actions(ds, GDK_ACTION_COPY);
+    g_signal_connect(ds, "prepare", G_CALLBACK(ol_drag_prepare), NULL);
+    g_signal_connect(ds, "drag-begin", G_CALLBACK(row_drag_begin), NULL);
+    g_signal_connect(ds, "drag-end", G_CALLBACK(ol_drag_end), NULL);
+    gtk_widget_add_controller(cell, GTK_EVENT_CONTROLLER(ds));
+    GtkDropTarget* dt = gtk_drop_target_new(G_TYPE_STRING, GDK_ACTION_COPY);
+    gtk_drop_target_set_preload(dt, TRUE);
+    g_signal_connect(dt, "motion", G_CALLBACK(ol_drop_motion), NULL);
+    g_signal_connect(dt, "enter", G_CALLBACK(ol_drop_motion), NULL);
+    g_signal_connect(dt, "drop", G_CALLBACK(ol_drop), NULL);
+    gtk_widget_add_controller(cell, GTK_EVENT_CONTROLLER(dt));
     }
 static void ol_bind(GtkSignalListItemFactory* f, GtkListItem* li, gpointer col)
     {
@@ -2779,6 +3015,7 @@ static void ol_bind(GtkSignalListItemFactory* f, GtkListItem* li, gpointer col)
     g_object_unref(o);
     GtkWidget* child = gtk_list_item_get_child(li);
     GtkWidget* label = child;
+    g_object_set_data(G_OBJECT(child), "ux-olitem", item);
     if (GPOINTER_TO_INT(col) == 0)
         {
         gtk_tree_expander_set_list_row(GTK_TREE_EXPANDER(child), row);
@@ -2855,6 +3092,7 @@ void ux_gtk_make_outline(int handle, int node, int x, int y, int w, int h, void*
     gtk_column_view_set_show_row_separators(GTK_COLUMN_VIEW(cv), FALSE);
     g_object_set_data(G_OBJECT(cv), "ux-peer", peer);
     g_object_set_data(G_OBJECT(cv), "ux-store", root);
+    g_object_set_data(G_OBJECT(cv), "ux-handle", GINT_TO_POINTER(handle));
     int ncols = gTblCols ? gTblCols(peer) : 1;
     if (ncols < 1)
         ncols = 1;
@@ -2875,6 +3113,7 @@ void ux_gtk_make_outline(int handle, int node, int x, int y, int w, int h, void*
         g_object_unref(col);
         }
     g_signal_connect(sel, "selection-changed", G_CALLBACK(tbl_sel_changed), cv);
+    hide_untitled_header(cv, peer, ncols);
     GtkWidget* sw = gtk_scrolled_window_new();
     gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(sw), cv);
     gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(sw), GTK_POLICY_AUTOMATIC, GTK_POLICY_AUTOMATIC);
@@ -3235,4 +3474,211 @@ void ux_gtk_window_set_min_size(int handle, int w, int h)
     if (handle <= 0 || handle >= UXGTK_MAXW || !gWin[handle])
         return;
     gtk_widget_set_size_request(GTK_WIDGET(gWin[handle]), w, h);
+    }
+
+/* ── the item of an outline under a point ───────────────────────────────────── */
+void* ux_gtk_outline_item_at(int handle, int node, int x, int y)
+    {
+    if (handle < 0 || handle >= UXGTK_MAXW || !gFix[handle])
+        return NULL;
+    GtkColumnView* cv = tbl_view(handle, node);
+    if (!cv || !gtk_widget_get_visible(gCtl[handle][node]))
+        return NULL;
+    GtkWidget* w = gtk_widget_pick(GTK_WIDGET(gFix[handle]), x, y, GTK_PICK_DEFAULT);
+    for (; w; w = gtk_widget_get_parent(w))
+        {
+        if (g_object_get_data(G_OBJECT(w), "ux-cv") == (gpointer)cv)
+            return g_object_get_data(G_OBJECT(w), "ux-olitem");
+        if (w == GTK_WIDGET(cv))
+            return NULL;
+        }
+    return NULL;
+    }
+
+/* ── a connection's line above everything in a window ──────────────────────────
+ * A drawing area over the whole content, kept last in the GtkFixed so it is drawn above the native
+ * controls, and set to take no input, so every click goes through it. */
+static GtkWidget* gLineW[UXGTK_MAXW];
+static double gLine[UXGTK_MAXW][8]; /* x0 y0 x1 y1, then the framed rect */
+static void line_draw(GtkDrawingArea* a, cairo_t* cr, int w, int h, gpointer hp)
+    {
+    (void)a; (void)w; (void)h;
+    double* L = gLine[GPOINTER_TO_INT(hp)];
+    cairo_set_source_rgb(cr, 0.15, 0.45, 0.95);
+    cairo_set_line_width(cr, 2);
+    if (L[6] > 0 && L[7] > 0)
+        {
+        cairo_rectangle(cr, L[4] - 1, L[5] - 1, L[6] + 2, L[7] + 2);
+        cairo_stroke(cr);
+        }
+    /* the S-curve: level out of one end and into the other */
+    double dx = L[2] - L[0];
+    double k = fabs(dx) / 2 > 30 ? fabs(dx) / 2 : 30;
+    double dir = dx < 0 ? -1 : 1;
+    cairo_move_to(cr, L[0], L[1]);
+    cairo_curve_to(cr, L[0] + dir * k, L[1], L[2] - dir * k, L[3], L[2], L[3]);
+    cairo_stroke(cr);
+    cairo_arc(cr, L[2], L[3], 3, 0, 2 * G_PI);
+    cairo_fill(cr);
+    }
+void ux_gtk_window_line(int handle, int on, int x0, int y0, int x1, int y1, int hx, int hy, int hw, int hh)
+    {
+    if (handle < 0 || handle >= UXGTK_MAXW || !gFix[handle])
+        return;
+    if (!gLineW[handle])
+        {
+        gLineW[handle] = gtk_drawing_area_new();
+        gtk_widget_set_can_target(gLineW[handle], FALSE);
+        gtk_drawing_area_set_draw_func(GTK_DRAWING_AREA(gLineW[handle]), line_draw, GINT_TO_POINTER(handle), NULL);
+        gtk_fixed_put(gFix[handle], gLineW[handle], 0, 0);
+        }
+    GtkWidget* lw = gLineW[handle];
+    if (!on)
+        {
+        gtk_widget_set_visible(lw, FALSE);
+        return;
+        }
+    double* L = gLine[handle];
+    L[0] = x0; L[1] = y0; L[2] = x1; L[3] = y1; L[4] = hx; L[5] = hy; L[6] = hw; L[7] = hh;
+    GtkWidget* fix = GTK_WIDGET(gFix[handle]);
+    gtk_widget_set_size_request(lw, gtk_widget_get_width(fix), gtk_widget_get_height(fix));
+    GtkWidget* last = gtk_widget_get_last_child(fix);
+    if (last && last != lw)
+        gtk_widget_insert_after(lw, fix, last);
+    gtk_widget_set_visible(lw, TRUE);
+    gtk_widget_queue_draw(lw);
+    }
+/* For tests: whether window `handle`'s line is up, and its far end. */
+int ux_gtk_test_line(int handle, int* x1, int* y1)
+    {
+    if (handle < 0 || handle >= UXGTK_MAXW || !gLineW[handle] || !gtk_widget_get_visible(gLineW[handle]))
+        return 0;
+    *x1 = (int)gLine[handle][2];
+    *y1 = (int)gLine[handle][3];
+    return 1;
+    }
+
+/* ── a context menu ────────────────────────────────────────────────────────────
+ * A popover of flat buttons at the point, run until it closes, so the pick comes back as a value as
+ * it does on AppKit.  For tests, ux_gtk_test_menu_pick makes the next one answer at once. */
+static int gMenuPick, gMenuTestPick = -2;
+static char gMenuTestTitles[512];
+void ux_gtk_test_menu_pick(int i)
+    {
+    gMenuTestPick = i;
+    }
+const char* ux_gtk_test_menu_titles(void)
+    {
+    return gMenuTestTitles;
+    }
+static void menu_item_clicked(GtkButton* b, gpointer pop)
+    {
+    gMenuPick = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(b), "ux-index"));
+    gtk_popover_popdown(GTK_POPOVER(pop));
+    }
+static void menu_closed(GtkPopover* p, gpointer loop)
+    {
+    (void)p;
+    g_main_loop_quit((GMainLoop*)loop);
+    }
+int ux_gtk_menu_popup(int handle, const char** titles, const int* flags, int n, int x, int y)
+    {
+    if (handle < 0 || handle >= UXGTK_MAXW || !gFix[handle] || n <= 0)
+        return -1;
+    if (gMenuTestPick != -2)
+        {
+        int at = 0;
+        gMenuTestTitles[0] = 0;
+        for (int i = 0; i < n && at < (int)sizeof(gMenuTestTitles) - 2; i++)
+            at += snprintf(gMenuTestTitles + at, sizeof(gMenuTestTitles) - (size_t)at, "%s%s",
+                           i ? "|" : "", (flags[i] & 1) ? "-" : titles[i]);
+        int p = gMenuTestPick;
+        gMenuTestPick = -2;
+        return p;
+        }
+    GtkWidget* pop = gtk_popover_new();
+    GtkWidget* box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    for (int i = 0; i < n; i++)
+        {
+        if (flags[i] & 1)
+            {
+            gtk_box_append(GTK_BOX(box), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
+            continue;
+            }
+        GtkWidget* b = gtk_button_new_with_label(titles[i]);
+        gtk_button_set_has_frame(GTK_BUTTON(b), FALSE);
+        gtk_widget_set_halign(gtk_button_get_child(GTK_BUTTON(b)), GTK_ALIGN_START);
+        gtk_widget_set_sensitive(b, (flags[i] & 2) ? FALSE : TRUE);
+        g_object_set_data(G_OBJECT(b), "ux-index", GINT_TO_POINTER(i));
+        g_signal_connect(b, "clicked", G_CALLBACK(menu_item_clicked), pop);
+        gtk_box_append(GTK_BOX(box), b);
+        }
+    gtk_popover_set_child(GTK_POPOVER(pop), box);
+    gtk_popover_set_has_arrow(GTK_POPOVER(pop), FALSE);
+    gtk_widget_set_parent(pop, GTK_WIDGET(gFix[handle]));
+    GdkRectangle r = {x, y, 1, 1};
+    gtk_popover_set_pointing_to(GTK_POPOVER(pop), &r);
+    gtk_popover_set_position(GTK_POPOVER(pop), GTK_POS_BOTTOM);
+    GMainLoop* loop = g_main_loop_new(NULL, FALSE);
+    g_signal_connect(pop, "closed", G_CALLBACK(menu_closed), loop);
+    gMenuPick = -1;
+    gtk_popover_popup(GTK_POPOVER(pop));
+    g_main_loop_run(loop);
+    g_main_loop_unref(loop);
+    gtk_widget_unparent(pop);
+    return gMenuPick;
+    }
+
+/* For tests: a row dropped on window `handle` at (x, y), or dragged over it (hover; -1, -1 gone),
+   delivered as a real one is. */
+int ux_gtk_test_drop_item(int handle, const char* text, int x, int y)
+    {
+    if (handle < 0 || handle >= UXGTK_MAXW || !gFix[handle] || !gItemDrop)
+        return 0;
+    gItemDrop(text, handle, x, y);
+    return 1;
+    }
+int ux_gtk_test_hover_item(int handle, const char* text, int x, int y)
+    {
+    if (handle < 0 || handle >= UXGTK_MAXW || !gFix[handle] || !gItemHover)
+        return 0;
+    gItemHover(text, handle, x, y);
+    return 1;
+    }
+/* For tests: what a drag of `item` out of the outline at `node` carries, into buf; 1 if it drags. */
+int ux_gtk_test_outline_drag(int handle, int node, void* item, char* buf, int n)
+    {
+    if (n > 0)
+        buf[0] = 0;
+    GtkColumnView* cv = (handle >= 0 && handle < UXGTK_MAXW) ? tbl_view(handle, node) : NULL;
+    void* peer = cv ? g_object_get_data(G_OBJECT(cv), "ux-peer") : NULL;
+    const char* t = (peer && gOlDragText) ? gOlDragText(peer, item, 0) : NULL;
+    if (!t)
+        return 0;
+    snprintf(buf, (size_t)n, "%s", t);
+    return 1;
+    }
+/* For tests: what a drag of `row` out of the table at `node` carries; 1 if the table drags rows. */
+int ux_gtk_test_row_drag(int handle, int node, int row, char* buf, int n)
+    {
+    if (n > 0)
+        buf[0] = 0;
+    GtkColumnView* cv = (handle >= 0 && handle < UXGTK_MAXW) ? tbl_view(handle, node) : NULL;
+    void* peer = cv ? g_object_get_data(G_OBJECT(cv), "ux-peer") : NULL;
+    if (!peer || !gTblDrags || !gTblDrags(peer) || !gTblCell)
+        return 0;
+    const char* t = gTblCell(peer, row, 0);
+    snprintf(buf, (size_t)n, "%s", t ? t : "");
+    return 1;
+    }
+/* For tests: let GTK lay out and draw for n frames' worth of time (about 16 ms each), so widgets
+   made on demand, such as a list's rows, exist. */
+void ux_gtk_frames(int n)
+    {
+    for (int i = 0; i < n; i++)
+        {
+        ux_gtk_pump();
+        g_usleep(16000);
+        }
+    ux_gtk_pump();
     }

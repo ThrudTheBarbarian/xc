@@ -42,7 +42,7 @@ top-level rows?" and "what are this node's children?".
 windows, or on another row of the outline, hands its text to
 [`UXApplication.setItemDropHandler`](/compiler/api/uxkit/uxapplication/#setitemdrophandler);
 a drop on a row reports that row's point. Return 0 for a row that does not
-drag. From 0.7, on AppKit.
+drag. From 0.7 on AppKit, and on GTK from the release after 0.7.
 
 **Lifetime rule (inherited from the table):** `valueForItem`'s string
 goes straight into the realized cell and is *not copied*. It must
@@ -112,7 +112,7 @@ Object* itemAtWindowPoint(i32 x, i32 y)
 ```
 
 The item whose row is under point (x, y) of the window's content, or 0, such
-as where a drag was let go. From 0.7, on AppKit.
+as where a drag was let go. From 0.7 on AppKit, and on GTK from the release after 0.7.
 
 ### isExpanded
 
