@@ -35,7 +35,7 @@ Array* fields = line.splitOnSet(delims);
 
 **Creating** · [init](#init) · [withCString](#withcstring) · [withRange](#withrange)
 
-**Predefined sets** · [whitespace](#whitespace) · [newlines](#newlines) · [whitespaceAndNewlines](#whitespaceandnewlines) · [decimalDigits](#decimaldigits) · [hexDigits](#hexdigits) · [letters](#letters) · [alphanumerics](#alphanumerics) · [identifiers](#identifiers)
+**Predefined sets** · [whitespace](#whitespace) · [newlines](#newlines) · [whitespaceAndNewlines](#whitespaceandnewlines) · [decimalDigits](#decimaldigits) · [hexDigits](#hexdigits) · [letters](#letters) · [alphanumerics](#alphanumerics) · [identifiers](#identifiers) · [uppercaseLetters / lowercaseLetters](#uppercaseletters--lowercaseletters) · [punctuation](#punctuation) · [symbols](#symbols)
 
 **Membership** · [contains](#contains) · [isEmpty](#isempty)
 
@@ -120,6 +120,28 @@ ASCII letters and digits.
 static CharacterSet* identifiers(void)
 ```
 The bytes valid in an identifier: letters, digits and `_`.
+
+### uppercaseLetters / lowercaseLetters
+```c
+static CharacterSet* uppercaseLetters(void)
+static CharacterSet* lowercaseLetters(void)
+```
+`A`–`Z` and `a`–`z`. **From the release after 0.71.**
+
+### punctuation
+```c
+static CharacterSet* punctuation(void)
+```
+ASCII punctuation, as Unicode classes it: ``! " # % & ' ( ) * , - . / : ; ? @ [ \ ] _ { }``.
+**From the release after 0.71.**
+
+### symbols
+```c
+static CharacterSet* symbols(void)
+```
+ASCII symbols, as Unicode classes them: ``$ + < = > ^ ` | ~``. With
+`punctuation`, `letters`, `decimalDigits` and the space, every printable ASCII
+character is in exactly one set. **From the release after 0.71.**
 
 [↑ Topics](#topics)
 

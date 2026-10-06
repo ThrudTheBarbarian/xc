@@ -217,4 +217,28 @@ class CharacterSet
         cs.add((u8)'_');
         return cs;
         }
+
+    static CharacterSet* uppercaseLetters(void)
+        {
+        return CharacterSet.withRange((u8)'A', (u8)'Z');
+        }
+
+    static CharacterSet* lowercaseLetters(void)
+        {
+        return CharacterSet.withRange((u8)'a', (u8)'z');
+        }
+
+    // ASCII punctuation, as Unicode classes it (the P categories):
+    // ! " # % & ' ( ) * , - . / : ; ? @ [ \ ] _ { }
+    static CharacterSet* punctuation(void)
+        {
+        return CharacterSet.withCString((u8*)"!\"#%&'()*,-./:;?@[\\]_{}");
+        }
+
+    // ASCII symbols, as Unicode classes them (the S categories):
+    // $ + < = > ^ ` | ~
+    static CharacterSet* symbols(void)
+        {
+        return CharacterSet.withCString((u8*)"$+<=>^`|~");
+        }
     }
