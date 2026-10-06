@@ -314,7 +314,7 @@ def par_tables(version):
             out.append("| benchmark | one thread | all threads | `auto` |")
             out.append("|---|---|---|---|")
         for b, r in rows:
-            cells = ["`%s`" % b, ms(r["serial"]["best_us"]), ms(r["cpu"]["best_us"])]
+            cells = ["[`%s`](%s#%s)" % (b, SOURCES_URL, b), ms(r["serial"]["best_us"]), ms(r["cpu"]["best_us"])]
             if gpu:
                 cells.append(ms(r["gpu"]["best_us"]) if "gpu" in r else "–")
             cells.append(ms(r["auto"]["best_us"]))
@@ -350,6 +350,20 @@ def sources_page(names):
             if ext in texts:
                 o.append('<TabItem label="%s">\n\n```%s\n%s\n```\n\n</TabItem>' % (name, lang, texts[ext]))
         o.append("</Tabs>\n")
+    # The par benchmarks: xc only (each is one program, its blocks run on the
+    # CPU's threads or the GPU as the runtime chooses).
+    o.append(PAR_SOURCES_HEAD)
+    for path in sorted(f for f in os.listdir(os.path.join(ROOT, "par")) if f.endswith(".xc")):
+        b = path[:-3]
+        with open(os.path.join(ROOT, "par", path)) as fh:
+            text = fh.read().rstrip("\n")
+        first = text.split("\n", 1)[0]
+        what = first.split(" — ", 1)[1] if " — " in first else ""
+        o.append("### %s\n" % b)
+        if what:
+            o.append(what[0].upper() + what[1:] + "\n")
+        o.append("Lines: %d.\n" % (text.count("\n") + 1))
+        o.append("```c\n%s\n```\n" % text)
     with open(SOURCES_PAGE, "w") as fh:
         fh.write("\n".join(o) + "\n")
     print("wrote", os.path.relpath(SOURCES_PAGE, REPO))
@@ -414,6 +428,16 @@ it is because xcc saw the loop and chose to.
 Each program times its own work with `bench_now_us()` (the monotonic clock) and
 prints a checksum, which must agree across the four languages for a run to
 count.
+"""
+
+
+PAR_SOURCES_HEAD = """## Parallel blocks and the GPU
+
+The programs behind the performance page's GPU tables. Each is one xc program:
+its work is a `par` block, a loop whose iterations are independent, and the
+runtime runs it on the CPU's threads or on the GPU (Metal on a Mac, CUDA on
+Windows), whichever it finds faster. Nothing in the source
+names a device, a kernel language or a thread.
 """
 
 

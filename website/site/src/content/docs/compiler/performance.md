@@ -147,28 +147,28 @@ checksum must agree.
 
 | benchmark | one thread | all threads | GPU | `auto` | GPU's first run |
 |---|---|---|---|---|---|
-| `mandelbrot` | 484 | 99.4 | 2.1 | 2.8 | 26.0 |
-| `nbody` | 67.4 | 6.8 | 2.5 | 2.5 | 19.7 |
-| `perlin` | 332 | 32.0 | 1.9 | 1.9 | 22.8 |
-| `saxpy` | 7.5 | 1.0 | 13.1 | 1.2 | 34.9 |
+| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 484 | 99.4 | 2.1 | 2.8 | 26.0 |
+| [`nbody`](/compiler/benchmark-sources/#nbody) | 67.4 | 6.8 | 2.5 | 2.5 | 19.7 |
+| [`perlin`](/compiler/benchmark-sources/#perlin) | 332 | 32.0 | 1.9 | 1.9 | 22.8 |
+| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 7.5 | 1.0 | 13.1 | 1.2 | 34.9 |
 
 **Zen 5 Linux, CPU only** (ms; best of eight runs)
 
 | benchmark | one thread | all threads | `auto` |
 |---|---|---|---|
-| `mandelbrot` | 398 | 40.5 | 40.0 |
-| `nbody` | 95.2 | 7.6 | 7.5 |
-| `perlin` | 375 | 25.7 | 25.8 |
-| `saxpy` | 19.8 | 2.8 | 2.5 |
+| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 398 | 40.5 | 40.0 |
+| [`nbody`](/compiler/benchmark-sources/#nbody) | 95.2 | 7.6 | 7.5 |
+| [`perlin`](/compiler/benchmark-sources/#perlin) | 375 | 25.7 | 25.8 |
+| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 19.8 | 2.8 | 2.5 |
 
 **Windows, NVIDIA RTX 3090** (ms; best of eight runs)
 
 | benchmark | one thread | all threads | GPU | `auto` | GPU's first run |
 |---|---|---|---|---|---|
-| `mandelbrot` | 486 | 49.3 | 1.9 | 1.9 | 233 |
-| `nbody` | 129 | 9.0 | 2.1 | 2.2 | 225 |
-| `perlin` | 533 | 39.2 | 2.7 | 2.7 | 290 |
-| `saxpy` | 20.9 | 5.1 | 45.3 | 5.6 | 270 |
+| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 486 | 49.3 | 1.9 | 1.9 | 233 |
+| [`nbody`](/compiler/benchmark-sources/#nbody) | 129 | 9.0 | 2.1 | 2.2 | 225 |
+| [`perlin`](/compiler/benchmark-sources/#perlin) | 533 | 39.2 | 2.7 | 2.7 | 290 |
+| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 20.9 | 5.1 | 45.3 | 5.6 | 270 |
 
 
 The GPU's first run carries one-off costs — building the kernel, and on NVIDIA

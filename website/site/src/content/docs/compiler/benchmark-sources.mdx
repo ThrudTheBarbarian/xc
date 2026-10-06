@@ -2702,3 +2702,311 @@ struct StructCopy {
 </TabItem>
 </Tabs>
 
+## Parallel blocks and the GPU
+
+The programs behind the performance page's GPU tables. Each is one xc program:
+its work is a `par` block, a loop whose iterations are independent, and the
+runtime runs it on the CPU's threads or on the GPU (Metal on a Mac, CUDA on
+Windows), whichever it finds faster. Nothing in the source
+names a device, a kernel language or a thread.
+
+### mandelbrot
+
+Escape-time iteration counts over a 2048x2048 grid, one item
+
+Lines: 51.
+
+```c
+// mandelbrot — escape-time iteration counts over a 2048x2048 grid, one item
+// per pixel: arithmetic only, with a data-dependent loop. Prints
+// "<checksum> <best_us> <first_us>"; the checksum is the total iteration count to
+// the nearest million, coarse enough that fast GPU maths cannot move it.
+#import "Stdio.xc"
+#import "Par.xc"
+#import "../src/include/bench_time.xc"
+
+#define W 2048
+#define SIZE (2048 * 2048)
+
+i32 main(void)
+{
+    // Eight runs: the first carries one-off costs (a GPU builds its kernel
+    // then), so the figure is the best run; the first is printed too. Auto
+    // decides after its fourth (two on each device), and uses the rest.
+    u32 total = (u32)0;
+    i64 best = (i64)0;
+    i64 first = (i64)0;
+    for (u32 rep in 0..8)
+    {
+        total = (u32)0;
+        i64 t0 = bench_now_us();
+        par mandel :reduce(+ total)
+        {
+            for (u32 i in 0..SIZE)
+            {
+                float cx = (float)(i % (u32)W) * (3.0f / 2048.0f) - 2.0f;
+                float cy = (float)(i / (u32)W) * (3.0f / 2048.0f) - 1.5f;
+                float x = 0.0f;
+                float y = 0.0f;
+                u32 k = (u32)0;
+                while (k < (u32)256 && x * x + y * y < 4.0f)
+                {
+                    float xt = x * x - y * y + cx;
+                    y = 2.0f * x * y + cy;
+                    x = xt;
+                    k = k + (u32)1;
+                }
+                total = total + k;
+            }
+        }
+        i64 t1 = bench_now_us();
+        if (rep == (u32)0)
+            first = t1 - t0;
+        if (rep == (u32)0 || t1 - t0 < best)
+            best = t1 - t0;
+    }
+    Stdio.printf("%u %lld %lld\n", (total + (u32)500000) / (u32)1000000, best, first);
+    return 0;
+}
+```
+
+### nbody
+
+The gravitational force on each of 8192 bodies from all the others:
+
+Lines: 63.
+
+```c
+// nbody — the gravitational force on each of 8192 bodies from all the others:
+// O(n^2) arithmetic over small arrays, one item per body. Prints
+// "<checksum> <best_us> <first_us>"; the checksum counts the bodies pulled right
+// (positive x force), a coarse figure fast GPU maths does not move.
+#import "Stdio.xc"
+#import "Math.xc"
+#import "Par.xc"
+#import "../src/include/bench_time.xc"
+
+#define N 8192
+
+float px[N];
+float py[N];
+float mass[N];
+float fx[N];
+
+i32 main(void)
+{
+    u32 seed = (u32)7;
+    for (u32 i in 0..N)
+    {
+        seed = seed * (u32)1664525 + (u32)1013904223;
+        px[i] = (float)(seed >> (u32)8) / 16777216.0f;
+        seed = seed * (u32)1664525 + (u32)1013904223;
+        py[i] = (float)(seed >> (u32)8) / 16777216.0f;
+        mass[i] = 1.0f + (float)(i % (u32)7);
+    }
+    // Eight runs: the first carries one-off costs (a GPU builds its kernel
+    // then), so the figure is the best run; the first is printed too. Auto
+    // decides after its fourth (two on each device), and uses the rest.
+    u32 right = (u32)0;
+    i64 best = (i64)0;
+    i64 first = (i64)0;
+    for (u32 rep in 0..8)
+    {
+        right = (u32)0;
+        i64 t0 = bench_now_us();
+        par forces :reduce(+ right)
+        {
+            for (u32 i in 0..N)
+            {
+                float ax = 0.0f;
+                for (u32 j in 0..N)
+                {
+                    float dx = px[j] - px[i];
+                    float dy = py[j] - py[i];
+                    float d2 = dx * dx + dy * dy + 0.0001f;
+                    ax = ax + mass[j] * dx / (d2 * Math.sqrt(d2));
+                }
+                fx[i] = ax;
+                if (ax > 0.0f)
+                    right = right + (u32)1;
+            }
+        }
+        i64 t1 = bench_now_us();
+        if (rep == (u32)0)
+            first = t1 - t0;
+        if (rep == (u32)0 || t1 - t0 < best)
+            best = t1 - t0;
+    }
+    Stdio.printf("%u %lld %lld\n", (right + (u32)50) / (u32)100, best, first);
+    return 0;
+}
+```
+
+### perlin
+
+Ken Perlin's improved noise, 2D, four octaves, over a 2048x2048
+
+Lines: 102.
+
+```c
+// perlin — Ken Perlin's improved noise, 2D, four octaves, over a 2048x2048
+// image: a permutation table read at data-dependent places, helper calls,
+// and one store per pixel. Prints "<checksum> <best_us> <first_us>"; the checksum is
+// the mean grey level to a tenth.
+#import "Stdio.xc"
+#import "Par.xc"
+#import "../src/include/bench_time.xc"
+
+#define SIZE (2048 * 2048)
+
+u32 perm[512];
+u8 img[SIZE];
+
+float fade(float t) { return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f); }
+float lerp(float t, float a, float b) { return a + t * (b - a); }
+float grad(u32 h, float x, float y)
+{
+    u32 g = h & (u32)7;
+    float u = g < (u32)4 ? x : y;
+    float v = g < (u32)4 ? y : x;
+    float a = (g & (u32)1) != (u32)0 ? 0.0f - u : u;
+    float b = (g & (u32)2) != (u32)0 ? 0.0f - 2.0f * v : 2.0f * v;
+    return a + b;
+}
+
+i32 main(void)
+{
+    u32 seed = (u32)12345;
+    for (u32 i in 0..256)
+        perm[i] = i;
+    for (u32 i in 0..256)
+    {
+        seed = seed * (u32)1103515245 + (u32)12345;
+        u32 j = i + (seed >> (u32)16) % ((u32)256 - i);
+        u32 t = perm[i];
+        perm[i] = perm[j];
+        perm[j] = t;
+    }
+    for (u32 i in 0..256)
+        perm[i + (u32)256] = perm[i];
+
+    // Eight runs: the first carries one-off costs (a GPU builds its kernel
+    // then), so the figure is the best run; the first is printed too. Auto
+    // decides after its fourth (two on each device), and uses the rest.
+    u32 total = (u32)0;
+    i64 best = (i64)0;
+    i64 first = (i64)0;
+    for (u32 rep in 0..8)
+    {
+        total = (u32)0;
+        i64 t0 = bench_now_us();
+        par perlin :reduce(+ total)
+        {
+            for (u32 i in 0..SIZE)
+            {
+                float x = (float)(i % (u32)2048) / 256.0f;
+                float y = (float)(i / (u32)2048) / 256.0f;
+                float sum = 0.0f;
+                float amp = 1.0f;
+                float norm = 0.0f;
+                for (u32 o in 0..4)
+                {
+                    u32 xi = (u32)x;
+                    u32 yi = (u32)y;
+                    float xf = x - (float)xi;
+                    float yf = y - (float)yi;
+                    u32 X = xi & (u32)255;
+                    u32 Y = yi & (u32)255;
+                    u32 aa = perm[perm[X] + Y];
+                    u32 ab = perm[perm[X] + Y + (u32)1];
+                    u32 ba = perm[perm[X + (u32)1] + Y];
+                    u32 bb = perm[perm[X + (u32)1] + Y + (u32)1];
+                    float u = fade(xf);
+                    float v = fade(yf);
+                    float n = lerp(v, lerp(u, grad(aa, xf, yf), grad(ba, xf - 1.0f, yf)),
+                                   lerp(u, grad(ab, xf, yf - 1.0f), grad(bb, xf - 1.0f, yf - 1.0f)));
+                    sum = sum + n * amp;
+                    norm = norm + amp;
+                    amp = amp * 0.5f;
+                    x = x * 2.0f;
+                    y = y * 2.0f;
+                }
+                float s = (sum / norm) * 0.5f + 0.5f;
+                if (s < 0.0f)
+                    s = 0.0f;
+                if (s > 1.0f)
+                    s = 1.0f;
+                u32 p = (u32)(s * 255.0f);
+                img[i] = (u8)p;
+                total = total + p;
+            }
+        }
+        i64 t1 = bench_now_us();
+        if (rep == (u32)0)
+            first = t1 - t0;
+        if (rep == (u32)0 || t1 - t0 < best)
+            best = t1 - t0;
+    }
+    u32 tenths = (total * (u32)10 + (u32)(SIZE / 2)) / (u32)SIZE;
+    Stdio.printf("%u %lld %lld\n", tenths, best, first);
+    return 0;
+}
+```
+
+### saxpy
+
+Y = a*x + y over 16M integers: one multiply-add per element and
+
+Lines: 48.
+
+```c
+// saxpy — y = a*x + y over 16M integers: one multiply-add per element and
+// two arrays to move, so memory, not arithmetic, sets the pace. On a GPU the
+// copies in and out cost more than the work: this is the block auto keeps on
+// the CPU. Prints "<checksum> <best_us> <first_us>"; the checksum is exact.
+#import "Stdio.xc"
+#import "Par.xc"
+#import "../src/include/bench_time.xc"
+
+#define SIZE (16 * 1024 * 1024)
+
+u32 xs[SIZE];
+u32 ys[SIZE];
+
+i32 main(void)
+{
+    for (u32 i in 0..SIZE)
+    {
+        xs[i] = i * (u32)2654435761;
+        ys[i] = i;
+    }
+    // Eight runs: the first carries one-off costs (a GPU builds its kernel
+    // then), so the figure is the best run; the first is printed too. Auto
+    // decides after its fourth (two on each device), and uses the rest.
+    u32 total = (u32)0;
+    i64 best = (i64)0;
+    i64 first = (i64)0;
+    for (u32 rep in 0..8)
+    {
+        total = (u32)0;
+        i64 t0 = bench_now_us();
+        par saxpy :reduce(+ total)
+        {
+            for (u32 i in 0..SIZE)
+            {
+                u32 v = (u32)3 * xs[i] + ys[i];
+                ys[i] = v;
+                total = total + v;
+            }
+        }
+        i64 t1 = bench_now_us();
+        if (rep == (u32)0)
+            first = t1 - t0;
+        if (rep == (u32)0 || t1 - t0 < best)
+            best = t1 - t0;
+    }
+    Stdio.printf("%u %lld %lld\n", total, best, first);
+    return 0;
+}
+```
+
