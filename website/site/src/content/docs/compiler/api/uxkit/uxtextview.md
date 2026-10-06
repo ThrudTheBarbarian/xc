@@ -15,14 +15,15 @@ italic, underline, monospace, colour, size and paragraph alignment. From 0.72.
 The view is the platform's own text view where there is one, so typing, the
 caret, selection by mouse and keyboard, the clipboard, undo, scrolling, input
 methods and emoji behave as they do in the platform's other applications.
-Command-X, C, V, A, Z and Shift-Command-Z work while the view has the focus,
-whatever menus the application has. The content is read back after each edit,
+Cut, copy, paste, select all, undo and redo work from the keyboard while the
+view has the focus, whatever menus the application has. The content is read back after each edit,
 so [`attributedText`](#attributedtext) is always current.
 
 | Backend | View |
 |---|---|
 | macOS | `NSTextView` |
-| Web, GTK, Windows, iOS, Android, GEM | Not yet. Until then the view draws its text and edits only through its methods. |
+| Web | A `contenteditable` element over the view. Pasted text comes in unstyled, and undo is kept by the view. |
+| GTK, Windows, iOS, Android, GEM | Not yet. Until then the view draws its text and edits only through its methods. |
 
 Offsets and lengths are UTF-8 bytes, as in Foundation's strings. An emoji is
 four bytes.

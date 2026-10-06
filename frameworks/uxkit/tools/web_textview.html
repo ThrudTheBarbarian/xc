@@ -1,0 +1,73 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>running</title>
+<canvas id="ux-canvas" width="300" height="160"></canvas>
+<script>
+  // run_web_textview.sh's page: the worker run loop, with a UXTextView whose editor is a
+  // contenteditable here.  It plays the user, one step for each STEP line the app prints, and
+  // checks the editor's DOM after the app's own changes.  The verdict is POSTed back.
+  globalThis.xccConfig = { runLoop: 'worker', workerScript: 'ux_web_browser.js', canvas: '#ux-canvas' };
+  const fails = [];
+  const want = (ok, what) => { if (!ok) fails.push(what); };
+  const out = [];
+  let reported = false;
+  const report = () => {
+    if (reported) return;
+    reported = true;
+    fetch('/result', { method: 'POST', body: (fails.length ? 'PAGE-FAIL: ' + fails.join('; ') + '\n' : '') + out.join('\n') });
+  };
+  const ed = () => document.querySelector('.ux-textview');
+  const caretAt = (node, off) => {
+    const r = document.createRange();
+    r.setStart(node, off); r.collapse(true);
+    const s = document.getSelection(); s.removeAllRanges(); s.addRange(r);
+  };
+  const lastText = (el) => { const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT); let n = null, t; while ((t = w.nextNode())) n = t; return n; };
+  const firstText = (el) => document.createTreeWalker(el, NodeFilter.SHOW_TEXT).nextNode();
+  const spanOf = (el, text) => [...el.querySelectorAll('span')].find((s) => s.textContent === text);
+  const steps = {
+    ready: () => {
+      const el = ed();
+      want(el, 'no editor on the page');
+      if (!el) return report();
+      want(el.textContent === 'hello world', 'editor text: ' + JSON.stringify(el.textContent));
+      const w = spanOf(el, 'world');
+      want(w && getComputedStyle(w).fontWeight >= 600, '"world" is not bold on the page');
+      el.focus();
+      const n = lastText(el);
+      caretAt(n, n.length);
+      document.execCommand('insertText', false, ' \u{1F44B}'); // as typing does: beforeinput, input
+    },
+    typed: () => {
+      const el = ed();
+      const n = firstText(el);
+      const r = document.createRange();
+      r.setStart(n, 0); r.setEnd(n, 5);
+      const s = document.getSelection(); s.removeAllRanges(); s.addRange(r);
+    },
+    italic: () => setTimeout(() => {
+      const el = ed();
+      const h = spanOf(el, 'hello');
+      want(h && getComputedStyle(h).fontStyle === 'italic', '"hello" is not italic on the page: ' + el.innerHTML);
+      el.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', metaKey: /Mac/.test(navigator.platform), ctrlKey: !/Mac/.test(navigator.platform), bubbles: true }));
+    }, 50),
+    'undone-italic': () => setTimeout(() => {
+      const el = ed();
+      want(![...el.querySelectorAll('span')].some((s) => getComputedStyle(s).fontStyle === 'italic'), 'italic still on the page after undo');
+      el.dispatchEvent(new KeyboardEvent('keydown', { key: 'z', metaKey: /Mac/.test(navigator.platform), ctrlKey: !/Mac/.test(navigator.platform), bubbles: true }));
+    }, 50),
+    'undone-typing': () => setTimeout(() => {
+      const el = ed();
+      want(el.textContent === 'hello world', 'after the second undo the editor has ' + JSON.stringify(el.textContent));
+    }, 50),
+  };
+  globalThis.xccOut = (s) => {
+    out.push(s);
+    const m = /^STEP (\S+)/.exec(s);
+    if (m && steps[m[1]]) setTimeout(steps[m[1]], 30);
+    if (/^(PASS|FAIL)/.test(s)) setTimeout(report, 300);
+  };
+  setTimeout(() => { fails.push('timed out'); report(); }, 15000);
+</script>
+<script src="ux_web_page.js"></script>
+<script src="test_web_textview.js"></script>

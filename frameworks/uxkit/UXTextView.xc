@@ -8,7 +8,8 @@
 // and owns the editing: typing, the caret and selection, the clipboard, undo, scrolling and input
 // methods.  The view then reads the native content back whenever the user changes it, so
 // attributedText() is always current.  Until the native view exists, and on a backend without
-// one, the view edits its own model and keeps its own undo.
+// one, the view edits its own model.  Undo is the native view's where the backend has it
+// (textViewUndo); elsewhere the view keeps its own, recording each run of typing as one step.
 //
 // Offsets are UTF-8 bytes, as everywhere in Foundation's strings.
 #import "UXView.xc"
@@ -44,6 +45,7 @@ class UXTextView : UXView
     i32 nativeNode;
     UndoManager* undoer; // the model's own undo, used while there is no native view
     UXTextStyle* typing; // the style typing gets at an empty selection
+    bool typingRun;      // the user's edits since the last other change are one undo step
     weak : UXTextViewDelegate* delegate;
 
     void init(void)
@@ -56,6 +58,7 @@ class UXTextView : UXView
         nativeNode = (i32)-1;
         undoer = new UndoManager();
         typing = new UXTextStyle();
+        typingRun = false;
         }
 
     UXKind kind(void)
@@ -74,6 +77,13 @@ class UXTextView : UXView
     bool isNative(void)
         {
         return nativeWin >= (i32)0;
+        }
+
+    // Whether the native view keeps the undo (or this view does).
+    bool nativeUndoes(void)
+        {
+        callback f i32(i32 handle, i32 node, i32 what) = &gDriver.textViewUndo;
+        return self.isNative() && f;
         }
 
     // ---- content -----------------------------------------------------------------------------
@@ -141,6 +151,7 @@ class UXTextView : UXView
         selStart = s;
         selLen = e < s ? (i32)0 : e - s;
         typing = self.styleBefore(selStart);
+        typingRun = false;
         if (self.isNative())
             {
             self.pushSelection();
@@ -166,8 +177,13 @@ class UXTextView : UXView
         Range* sel = self.selectedRange();
         AttributedString* piece = AttributedString.withAttributes(text, self.attrsOf(typing));
         i32 n = piece.length();
+        typingRun = false;
         if (self.isNative())
             {
+            if (!self.nativeUndoes())
+                {
+                self.snapshot();
+                }
             self.pushReplace(sel.loc, sel.len, piece, (i32)0);
             self.pull();
             selStart = sel.loc + n;
@@ -234,6 +250,10 @@ class UXTextView : UXView
         typing.alignment = align;
         i32 s = self.paragraphStart(sel.loc);
         i32 e = self.paragraphEnd(sel.loc + sel.len);
+        if (e < model.length())
+            {
+            e = e + (i32)1; // a paragraph's newline is part of it
+            }
         if (e <= s)
             {
             self.pushTyping();
@@ -257,7 +277,8 @@ class UXTextView : UXView
 
     void undo(void)
         {
-        if (self.isNative())
+        typingRun = false;
+        if (self.nativeUndoes())
             {
             self.nativeUndo((i32)0);
             self.pull();
@@ -269,7 +290,8 @@ class UXTextView : UXView
 
     void redo(void)
         {
-        if (self.isNative())
+        typingRun = false;
+        if (self.nativeUndoes())
             {
             self.nativeUndo((i32)1);
             self.pull();
@@ -281,12 +303,12 @@ class UXTextView : UXView
 
     bool canUndo(void)
         {
-        return self.isNative() ? self.nativeUndo((i32)2) != (i32)0 : undoer.canUndo();
+        return self.nativeUndoes() ? self.nativeUndo((i32)2) != (i32)0 : undoer.canUndo();
         }
 
     bool canRedo(void)
         {
-        return self.isNative() ? self.nativeUndo((i32)3) != (i32)0 : undoer.canRedo();
+        return self.nativeUndoes() ? self.nativeUndo((i32)3) != (i32)0 : undoer.canRedo();
         }
 
     // ---- from the backend --------------------------------------------------------------------
@@ -304,6 +326,11 @@ class UXTextView : UXView
     // The user changed the text in the native view.
     void nativeDidChange(void)
         {
+        if (!self.nativeUndoes() && !typingRun)
+            {
+            self.snapshot(); // the model is still the content before this edit
+            typingRun = true;
+            }
         self.pull();
         self.fireChange();
         }
@@ -313,6 +340,7 @@ class UXTextView : UXView
         {
         Range* sel = self.selectedRange();
         typing = self.styleBefore(sel.loc);
+        typingRun = false;
         self.fireSelection();
         }
 
@@ -392,9 +420,14 @@ class UXTextView : UXView
     void restyle(u8* name, Object* value, i32 s, i32 l)
         {
         String* key = String.withCString(name);
+        typingRun = false;
         if (self.isNative())
             {
             self.pull();
+            if (!self.nativeUndoes())
+                {
+                self.snapshot();
+                }
             AttributedString* piece = model.substring(Range.make(s, l));
             if (value != (Object*)0)
                 {
@@ -653,6 +686,11 @@ class UXTextView : UXView
         i32 n = model.length();
         selStart = selStart > n ? n : selStart;
         selLen = selStart + selLen > n ? n - selStart : selLen;
+        if (self.isNative())
+            {
+            self.pushAll();
+            self.pushSelection();
+            }
         self.fireChange();
         }
 

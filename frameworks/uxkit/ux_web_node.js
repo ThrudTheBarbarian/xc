@@ -49,6 +49,7 @@ globalThis.xccImports = { env: {
   ux_web_alert_show: () => 0, // the rig answers alerts through _xt_req_block instead
   ux_field_overlay_show: () => 0, // no page: the toolkit's own editor
   ux_field_overlay_hide: () => {},
+  ux_tv_available: () => 0,       // no page: the text view draws itself
   // A GL entry point as the web delivers it: a host import (see UXWeb.h.xc).  The
   // rig has one so the delivery path is exercised; a page shim has the real set.
   ux_host_add: (a, b) => (a + b) | 0,

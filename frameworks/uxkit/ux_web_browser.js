@@ -118,6 +118,15 @@
   const U8 = () => new Uint8Array(globalThis.xcc.memory.buffer);
   const I16 = () => new Int16Array(globalThis.xcc.memory.buffer);
   const I32 = () => new Int32Array(globalThis.xcc.memory.buffer);
+  // The text view's round trip to the page: a blocking request from the worker, a call on a plain page.
+  const tvFrames = new Map();
+  const tvBuf = (n) => (typeof SharedArrayBuffer !== 'undefined' && globalThis.xccRequest)
+                         ? new SharedArrayBuffer(n) : new ArrayBuffer(n);
+  const tvAsk = (q) => {
+    if (globalThis.xccRequest && globalThis.xccPost) return globalThis.xccRequest('uxTv', q);
+    if (globalThis.uxPage && globalThis.uxPage.textView) return globalThis.uxPage.textView(q);
+    return -1;
+  };
   const cstr = (p) => {
     const m = U8(); let e = p >>> 0;
     while (m[e]) e++;
@@ -322,6 +331,59 @@
       return 1;
     },
     ux_field_overlay_hide: (token) => { if (globalThis.xccPost) globalThis.xccPost({ uxFieldEnd: token }); },
+    // THE TEXT VIEW (UXTextView): a contenteditable on the page (ux_web_page.js), asked for its
+    // content, selection and edits through xccRequest('uxTv'); on a plain page, called directly.
+    // id is the window handle * 4096 + the node.  Text is UTF-8, runs are five ints each.
+    ux_tv_available: () => ((globalThis.xccPost && globalThis.xccRequest) ||
+                            (globalThis.uxPage && globalThis.uxPage.textView)) ? 1 : 0,
+    ux_tv_make: (win, node, x, y, w, h, hidden) => {
+      const s = wins.get(win);
+      return tvAsk({ op: 'make', id: win * 4096 + node, x: (s ? s.x : 0) + x, y: (s ? s.y : 0) + y, w, h, hidden });
+    },
+    ux_tv_frame: (win, node, x, y, w, h, hidden) => {
+      const s = wins.get(win);
+      const q = { op: 'frame', id: win * 4096 + node, x: (s ? s.x : 0) + x, y: (s ? s.y : 0) + y, w, h, hidden };
+      const key = win * 4096 + node, was = tvFrames.get(key), now = [q.x, q.y, w, h, hidden].join();
+      if (was === now) return 1; // unchanged: no message
+      tvFrames.set(key, now);
+      if (globalThis.xccPost) { globalThis.xccPost({ uxTvFrame: q }); return 1; }
+      return tvAsk(q);
+    },
+    ux_tv_set_all: (win, node, tp, nb, rp, nr) =>
+      tvAsk({ op: 'set', id: win * 4096 + node, text: U8().slice(tp >>> 0, (tp >>> 0) + nb),
+              runs: Array.from(I32().subarray(rp >>> 2, (rp >>> 2) + nr * 5)) }),
+    ux_tv_replace: (win, node, start, len, tp, nb, rp, nr, attrsOnly) =>
+      tvAsk({ op: 'replace', id: win * 4096 + node, start, len, attrsOnly,
+              text: U8().slice(tp >>> 0, (tp >>> 0) + nb), runs: Array.from(I32().subarray(rp >>> 2, (rp >>> 2) + nr * 5)) }),
+    ux_tv_size: (win, node, pb, pr) => {
+      const sab = tvBuf(8);
+      tvAsk({ op: 'size', id: win * 4096 + node, sab });
+      const w = new Int32Array(sab), m = I32();
+      m[pb >>> 2] = w[0]; m[pr >>> 2] = w[1];
+    },
+    ux_tv_read: (win, node, bp, cap, rp, maxRuns) => {
+      const text = tvBuf(Math.max(cap, 1)), runs = tvBuf(Math.max(maxRuns, 1) * 20);
+      const k = tvAsk({ op: 'read', id: win * 4096 + node, cap: cap - 1, maxRuns, text, runs });
+      if (k < 0) return 0;
+      const t = new Uint8Array(text);
+      let n = 0;
+      while (n < cap - 1 && t[n]) n++;
+      const m = U8();
+      m.set(t.subarray(0, n), bp >>> 0);
+      m[(bp >>> 0) + n] = 0;
+      I32().set(new Int32Array(runs).subarray(0, k * 5), rp >>> 2);
+      return k;
+    },
+    ux_tv_selection: (win, node, ps, pl) => {
+      const sab = tvBuf(8);
+      tvAsk({ op: 'sel', id: win * 4096 + node, sab });
+      const w = new Int32Array(sab), m = I32();
+      m[ps >>> 2] = w[0]; m[pl >>> 2] = w[1];
+    },
+    ux_tv_set_selection: (win, node, start, len) => tvAsk({ op: 'setsel', id: win * 4096 + node, start, len }),
+    ux_tv_set_typing: (win, node, flags, colour, size) => tvAsk({ op: 'typing', id: win * 4096 + node, flags, colour, size }),
+    ux_tv_focus: (win, node) => tvAsk({ op: 'focus', id: win * 4096 + node }),
+    ux_tv_remove: (win, node) => { tvFrames.delete(win * 4096 + node); return tvAsk({ op: 'remove', id: win * 4096 + node }); },
     ux_menu_state: (t, j, what, on) => {
       const st = { t, j, what, on };
       if (globalThis.xccPost) globalThis.xccPost({ uxMenuState: st });

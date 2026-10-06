@@ -50,6 +50,19 @@ extern void ux_menu_set(u8* json, i32 len);
 // 12-14).  0 where there is no page (the toolkit's own editor carries on).
 extern i32 ux_field_overlay_show(i32 win, i32 token, i32 x, i32 y, i32 w, i32 h, u8* text, i32 secure, i32 cap);
 extern void ux_field_overlay_hide(i32 token);
+// The text view (UXTextView) as a contenteditable on the page: ux_web_page.js.
+extern i32 ux_tv_available(void);
+extern i32 ux_tv_make(i32 win, i32 node, i32 x, i32 y, i32 w, i32 h, i32 hidden);
+extern i32 ux_tv_frame(i32 win, i32 node, i32 x, i32 y, i32 w, i32 h, i32 hidden);
+extern i32 ux_tv_remove(i32 win, i32 node);
+extern i32 ux_tv_set_all(i32 win, i32 node, u8* text, i32 nbytes, i32* runs, i32 nruns);
+extern i32 ux_tv_replace(i32 win, i32 node, i32 start, i32 len, u8* text, i32 nbytes, i32* runs, i32 nruns, i32 attrsOnly);
+extern void ux_tv_size(i32 win, i32 node, i32* nbytes, i32* nruns);
+extern i32 ux_tv_read(i32 win, i32 node, u8* buf, i32 cap, i32* runs, i32 maxRuns);
+extern void ux_tv_selection(i32 win, i32 node, i32* start, i32* len);
+extern i32 ux_tv_set_selection(i32 win, i32 node, i32 start, i32 len);
+extern i32 ux_tv_set_typing(i32 win, i32 node, i32 flags, i32 colour, i32 size);
+extern i32 ux_tv_focus(i32 win, i32 node);
 // A modal alert shown by the PAGE (a real browser's worker run loop): 1 if it was handed over (the
 // answer comes back through the ring as type 7), 0 where there is no page to show it.
 extern i32 ux_web_alert_show(i32 icon, u8* lines, u8* buttons, i32 defaultBtn);

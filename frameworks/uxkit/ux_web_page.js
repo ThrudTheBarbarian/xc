@@ -405,6 +405,7 @@
       new Uint8Array(req.payload.sab).set(enc);
       return enc.length;
     }
+    if (req && req.kind === 'uxTv') return textView(req.payload);
     if (req && req.kind === 'uxFileSize') return f ? f.bytes.length : -1;
     if (req && req.kind === 'uxFileFill') {
       if (!f) return -1;
@@ -492,6 +493,334 @@
     el.setSelectionRange(el.value.length, el.value.length);
   };
 
+  // THE TEXT VIEW (UXTextView): a contenteditable <div> over the view's rect, there while the view
+  // is, so the browser does the editing -- typing, the caret, selection, IME, the clipboard, emoji, a
+  // phone's keyboard.  Its content is rendered from UTF-8 text and style runs (five ints each: byte
+  // start, byte length, flags, colour, size; flags 1 bold, 2 italic, 4 underline, 8 monospace, the
+  // paragraph's alignment in bits 4-5) as one <div> per paragraph of <span>s, and read back the
+  // same way.  The worker asks for the content, the selection and edits with xccRequest
+  // ('uxTv'), which is answered here at once.  The user's edits go to the worker through the ring:
+  // type 17 (id) the content changed, 18 (id) the selection moved, 19 (id, 0 undo / 1 redo) an
+  // undo key.  Undo is the worker's: the browser's own stops working once content is set from code.
+  const tvs = new Map(); // id -> { el, typing }
+  const tvAligns = ['left', 'right', 'center', 'justify'];
+  const tvSpan = (text, f, c, z) => {
+    const sp = document.createElement('span');
+    sp.dataset.f = f; sp.dataset.c = c; sp.dataset.s = z;
+    let css = '';
+    if (f & 1) css += 'font-weight:bold;';
+    if (f & 2) css += 'font-style:italic;';
+    if (f & 4) css += 'text-decoration:underline;';
+    if (f & 8) css += 'font-family:ui-monospace,Menlo,Consolas,monospace;';
+    if (c & 0x1000000) css += 'color:#' + (c & 0xffffff).toString(16).padStart(6, '0') + ';';
+    if (z > 0) css += 'font-size:' + z + 'px;';
+    sp.style.cssText = css;
+    sp.textContent = text;
+    return sp;
+  };
+  const enc = new TextEncoder(), dec = new TextDecoder();
+  const u8len = (t) => enc.encode(t).length;
+  // A UTF-8 byte offset into t as a UTF-16 index (backed off to a character's start), and back.
+  const u16of = (t, b) => {
+    const bytes = enc.encode(t);
+    if (b <= 0) return 0;
+    if (b >= bytes.length) return t.length;
+    while (b > 0 && (bytes[b] & 0xc0) === 0x80) b--;
+    return dec.decode(bytes.slice(0, b)).length;
+  };
+  const u8of = (t, i) => {
+    if (i > 0 && i < t.length) { const c = t.charCodeAt(i); if (c >= 0xdc00 && c < 0xe000) i--; }
+    return u8len(t.slice(0, i));
+  };
+  const tvRender = (el, text, runs) => {
+    // paragraphs of [text, f, c, z] pieces
+    const paras = [[]];
+    let aligns = [0];
+    const take = (piece, f, c, z) => {
+      const parts = piece.split('\n');
+      parts.forEach((pt, k) => {
+        if (k > 0) { paras.push([]); aligns.push(0); }
+        if (pt.length) paras[paras.length - 1].push([pt, f, c, z]);
+        // a run's alignment is its paragraphs': each it has text in, and each whose newline it has
+        if ((f >> 4) && (pt.length || k < parts.length - 1)) aligns[aligns.length - 1] = (f >> 4) & 3;
+      });
+    };
+    const bytes = enc.encode(text);
+    let at = 0;
+    for (let k = 0; k <= runs.length / 5; k++) {
+      const st = k < runs.length / 5 ? runs[k * 5] : bytes.length;
+      const ln = k < runs.length / 5 ? runs[k * 5 + 1] : 0;
+      if (st > at) take(dec.decode(bytes.slice(at, st)), 0, 0, 0);
+      if (k < runs.length / 5 && ln > 0) take(dec.decode(bytes.slice(st, st + ln)), runs[k * 5 + 2], runs[k * 5 + 3], runs[k * 5 + 4]);
+      at = Math.max(at, st + ln);
+    }
+    el.textContent = '';
+    paras.forEach((ps, k) => {
+      const d = document.createElement('div');
+      d.style.textAlign = tvAligns[aligns[k]];
+      d.dataset.a = aligns[k];
+      for (const [pt, f, c, z] of ps) d.appendChild(tvSpan(pt, f, c, z));
+      if (!ps.length) d.appendChild(document.createElement('br'));
+      el.appendChild(d);
+    });
+  };
+  // The content as paragraphs of styled text nodes: [{align, nodes: [{node, text, f, c, z}]}].
+  const tvWalk = (el) => {
+    const paras = [];
+    let cur = null;
+    const para = (block) => {
+      const a = block ? (block.dataset.a !== undefined ? +block.dataset.a
+                         : Math.max(0, tvAligns.indexOf(getComputedStyle(block).textAlign))) : 0;
+      cur = { align: a, nodes: [], block };
+      paras.push(cur);
+    };
+    const styleOf = (n) => {
+      let f = 0, c = 0, z = 0;
+      for (let e = n.parentElement; e && e !== el; e = e.parentElement) {
+        if (e.dataset && e.dataset.f !== undefined) { f |= +e.dataset.f & 15; if (!c) c = +e.dataset.c; if (!z) z = +e.dataset.s; }
+        const tag = e.tagName;
+        if (tag === 'B' || tag === 'STRONG') f |= 1;
+        if (tag === 'I' || tag === 'EM') f |= 2;
+        if (tag === 'U') f |= 4;
+      }
+      return [f, c, z];
+    };
+    const visit = (n) => {
+      if (n.nodeType === 3) {
+        if (!cur) para(null);
+        const [f, c, z] = styleOf(n);
+        cur.nodes.push({ node: n, text: n.nodeValue, f, c, z });
+      } else if (n.tagName === 'BR') {
+        if (!cur) para(null);
+        // a <br> that is not its block's last child is a line break inside it
+        if (n.nextSibling) { cur.nodes.push({ node: n, text: '\n', f: 0, c: 0, z: 0 }); }
+      } else if (n.tagName === 'DIV' || n.tagName === 'P') {
+        para(n);
+        for (const k of n.childNodes) visit(k);
+        cur = null;
+      } else {
+        for (const k of n.childNodes) visit(k);
+      }
+    };
+    for (const k of el.childNodes) visit(k);
+    if (!paras.length) para(null);
+    return paras;
+  };
+  // The plain text, and a UTF-16 index for each (node, offset) found in it.
+  const tvText = (paras) => paras.map((p) => p.nodes.map((x) => x.text).join('')).join('\n');
+  const tvRead = (el) => {
+    const paras = tvWalk(el);
+    let text = '';
+    const runs = [];
+    let bytes = 0;
+    paras.forEach((p, k) => {
+      if (k > 0) {
+        // the newline takes the previous paragraph's alignment
+        runs.push(bytes, 1, (paras[k - 1].align & 3) << 4, 0, 0);
+        text += '\n'; bytes += 1;
+      }
+      for (const x of p.nodes) {
+        if (!x.text.length) continue;
+        const n = u8len(x.text);
+        const f = (x.text === '\n' ? 0 : x.f) | ((p.align & 3) << 4);
+        const last = runs.length - 5;
+        if (last >= 0 && runs[last] + runs[last + 1] === bytes && runs[last + 2] === f &&
+            runs[last + 3] === x.c && runs[last + 4] === x.z) runs[last + 1] += n;
+        else runs.push(bytes, n, f, x.c, x.z);
+        text += x.text; bytes += n;
+      }
+    });
+    return { text, runs };
+  };
+  // DOM position -> UTF-16 index in tvText, and back.
+  const tvIndexOf = (el, node, off) => {
+    const paras = tvWalk(el);
+    let at = 0;
+    for (let k = 0; k < paras.length; k++) {
+      const p = paras[k];
+      if (k > 0) at += 1;
+      if (p.block && (node === p.block || node === el && el.childNodes[off] === p.block)) {
+        if (node === el) return at;
+        // (block, off): the off-th child of the block
+        let a2 = at;
+        for (const x of p.nodes) { if (p.block.childNodes[off] && (p.block.childNodes[off] === x.node || p.block.childNodes[off].contains(x.node))) return a2; a2 += x.text.length; }
+        return a2;
+      }
+      for (const x of p.nodes) {
+        if (x.node === node) return at + (x.node.nodeType === 3 ? off : 0);
+        if (node.nodeType === 1 && node.contains(x.node) && node !== x.node) {
+          // (element, off): before the off-th child
+          const ch = node.childNodes[off];
+          if (ch && (ch === x.node || ch.contains(x.node))) return at;
+        }
+        at += x.text.length;
+      }
+    }
+    return at;
+  };
+  const tvPosOf = (el, idx) => {
+    const paras = tvWalk(el);
+    let at = 0;
+    for (let k = 0; k < paras.length; k++) {
+      const p = paras[k];
+      if (k > 0) at += 1;
+      let end = at + p.nodes.reduce((a, x) => a + x.text.length, 0);
+      if (idx <= end) {
+        let a2 = at;
+        for (const x of p.nodes) {
+          if (x.node.nodeType === 3 && idx <= a2 + x.text.length) return [x.node, idx - a2];
+          a2 += x.text.length;
+        }
+        return [p.block || el, p.block ? 0 : el.childNodes.length];
+      }
+      at = end;
+    }
+    return [el, el.childNodes.length];
+  };
+  const tvSel = (t) => {
+    const sel = document.getSelection();
+    if (!sel || !sel.rangeCount || !t.el.contains(sel.anchorNode)) return t.lastSel || [0, 0];
+    const r = sel.getRangeAt(0);
+    const text = tvText(tvWalk(t.el));
+    const a = tvIndexOf(t.el, r.startContainer, r.startOffset), b = tvIndexOf(t.el, r.endContainer, r.endOffset);
+    const s8 = u8of(text, a), e8 = u8of(text, b);
+    return [s8, e8 - s8];
+  };
+  const tvSetSel = (t, s8, l8) => {
+    const text = tvText(tvWalk(t.el));
+    const a = u16of(text, s8), b = u16of(text, s8 + l8);
+    t.lastSel = [s8, l8];
+    t.quietSel = true;
+    const sel = document.getSelection();
+    const r = document.createRange();
+    const [n0, o0] = tvPosOf(t.el, a), [n1, o1] = tvPosOf(t.el, b);
+    r.setStart(n0, o0); r.setEnd(n1, o1);
+    if (document.activeElement === t.el || !document.activeElement || document.activeElement === document.body) {
+      sel.removeAllRanges(); sel.addRange(r);
+    }
+  };
+  const tvPush = (type, id, a) => { if (globalThis.xccPushEvent) globalThis.xccPushEvent(type, id, a || 0); };
+  const tvMake = (q) => {
+    if (tvs.has(q.id)) return;
+    const el = document.createElement('div');
+    el.className = 'ux-textview';
+    el.contentEditable = 'true';
+    el.spellcheck = true;
+    el.style.cssText = `position:absolute; z-index:800; box-sizing:border-box; margin:0; overflow:auto;
+      font:13px system-ui, sans-serif; padding:4px 6px; border:1px solid #b9b9b9; background:#fff;
+      color:#1c1b1f; outline:none; white-space:pre-wrap; overflow-wrap:break-word;`;
+    const t = { el, typing: null, lastSel: [0, 0], quietSel: false, composing: false };
+    tvs.set(q.id, t);
+    tvRender(el, '', []);
+    el.addEventListener('compositionstart', () => { t.composing = true; });
+    el.addEventListener('compositionend', () => { t.composing = false; tvPush(17, q.id); });
+    el.addEventListener('input', (e) => { if (!e.isComposing && !t.composing) { t.typed = true; tvPush(17, q.id); } });
+    el.addEventListener('beforeinput', (e) => {
+      if (e.inputType === 'historyUndo' || e.inputType === 'historyRedo') {
+        e.preventDefault();
+        tvPush(19, q.id, e.inputType === 'historyRedo' ? 1 : 0);
+        return;
+      }
+      // a style chosen at an empty selection: what is typed next is a span of that style
+      if (t.typing && e.inputType === 'insertText' && !e.isComposing && e.data) {
+        e.preventDefault();
+        const sel = document.getSelection();
+        const r = sel.getRangeAt(0);
+        r.deleteContents();
+        const sp = tvSpan(e.data, t.typing.f & 15, t.typing.c, t.typing.z);
+        r.insertNode(sp);
+        r.setStart(sp.firstChild, sp.firstChild.length); r.collapse(true);
+        sel.removeAllRanges(); sel.addRange(r);
+        t.typing = null;
+        t.typed = true;
+        tvPush(17, q.id);
+      }
+    });
+    el.addEventListener('paste', (e) => {
+      // pasted as text, in the style at the caret: a page's styles are not this view's
+      e.preventDefault();
+      const s = (e.clipboardData && e.clipboardData.getData('text/plain')) || '';
+      if (s) document.execCommand('insertText', false, s);
+    });
+    el.addEventListener('keydown', (e) => {
+      const mod = isMac ? e.metaKey : e.ctrlKey;
+      if (mod && !e.altKey && (e.key === 'z' || e.key === 'Z' || (!isMac && (e.key === 'y' || e.key === 'Y')))) {
+        e.preventDefault();
+        tvPush(19, q.id, (e.shiftKey || e.key === 'y' || e.key === 'Y') ? 1 : 0);
+      }
+      // the view's editing keys are its own, not the menu bar's
+      if (mod) e.stopPropagation();
+    });
+    document.body.appendChild(el);
+  };
+  document.addEventListener('selectionchange', () => {
+    for (const [id, t] of tvs) {
+      const sel = document.getSelection();
+      if (!sel || !sel.anchorNode || !t.el.contains(sel.anchorNode)) continue;
+      const now = tvSel(t);
+      if (t.quietSel || t.typed) { t.quietSel = false; t.typed = false; t.lastSel = now; continue; }
+      if (now[0] !== t.lastSel[0] || now[1] !== t.lastSel[1]) { t.lastSel = now; t.typing = null; tvPush(18, id); }
+    }
+  });
+  const tvFrame = (q) => {
+    const t = tvs.get(q.id);
+    if (!t) return;
+    const canvas = document.getElementById('ux-canvas') || document.getElementById('xcc-canvas') ||
+                   document.querySelector('canvas');
+    const r = canvas ? canvas.getBoundingClientRect() : { left: 0, top: 0 };
+    const st = t.el.style;
+    st.left = (r.left + window.scrollX + q.x) + 'px'; st.top = (r.top + window.scrollY + q.y) + 'px';
+    st.width = q.w + 'px'; st.height = q.h + 'px';
+    st.display = q.hidden ? 'none' : 'block';
+  };
+  // The worker's text-view requests (and, on a plain page, the browser shim's direct calls).
+  const textView = (q) => {
+    if (q.op === 'make') { tvMake(q); tvFrame(q); return 1; }
+    if (q.op === 'frame') { tvFrame(q); return 1; }
+    const t = tvs.get(q.id);
+    if (!t) return -1;
+    if (q.op === 'set') { tvRender(t.el, dec.decode(q.text), q.runs); t.typing = null; tvSetSel(t, 0, 0); return 1; }
+    if (q.op === 'replace') {
+      const cur = tvRead(t.el);
+      const bytes = enc.encode(cur.text);
+      const ins = q.text, n = ins.length;
+      // the new content: the bytes before, the replacement, the bytes after; runs likewise
+      const out = new Uint8Array(bytes.length - q.len + n);
+      out.set(bytes.slice(0, q.start)); out.set(ins, q.start); out.set(bytes.slice(q.start + q.len), q.start + n);
+      const runs = [];
+      for (let k = 0; k < cur.runs.length; k += 5) {
+        const s0 = cur.runs[k], e0 = s0 + cur.runs[k + 1];
+        const keep = (a, b, shift) => { if (b > a) runs.push(a + shift, b - a, cur.runs[k + 2], cur.runs[k + 3], cur.runs[k + 4]); };
+        keep(s0, Math.min(e0, q.start), 0);
+        keep(Math.max(s0, q.start + q.len), e0, n - q.len);
+      }
+      for (let k = 0; k < q.runs.length; k += 5) runs.push(q.runs[k] + q.start, q.runs[k + 1], q.runs[k + 2], q.runs[k + 3], q.runs[k + 4]);
+      const order = [];
+      for (let k = 0; k < runs.length; k += 5) order.push(runs.slice(k, k + 5));
+      order.sort((x, y) => x[0] - y[0]);
+      const sel = tvSel(t);
+      tvRender(t.el, dec.decode(out), [].concat(...order));
+      tvSetSel(t, sel[0], sel[1]);
+      return 1;
+    }
+    if (q.op === 'size') { const c = tvRead(t.el); const w = new Int32Array(q.sab); w[0] = u8len(c.text); w[1] = c.runs.length / 5; return 1; }
+    if (q.op === 'read') {
+      const c = tvRead(t.el);
+      const b = enc.encode(c.text).slice(0, q.cap);
+      new Uint8Array(q.text).set(b);
+      const k = Math.min(q.maxRuns, c.runs.length / 5);
+      new Int32Array(q.runs).set(c.runs.slice(0, k * 5));
+      return k;
+    }
+    if (q.op === 'sel') { const s = tvSel(t); const w = new Int32Array(q.sab); w[0] = s[0]; w[1] = s[1]; return 1; }
+    if (q.op === 'setsel') { tvSetSel(t, q.start, q.len); return 1; }
+    if (q.op === 'typing') { t.typing = { f: q.flags, c: q.colour, z: q.size }; return 1; }
+    if (q.op === 'focus') { t.el.focus(); tvSetSel(t, t.lastSel[0], t.lastSel[1]); return 1; }
+    if (q.op === 'remove') { t.el.remove(); tvs.delete(q.id); return 1; }
+    return 0;
+  };
+  globalThis.uxTextViews = tvs; // for a test to reach the editors
+
   // The worker's settings snapshot, for xccConfig.workerData: every stored setting, by key.
   const settingsSnapshot = () => {
     const out = {};
@@ -507,11 +836,13 @@
     globalThis.xccConfig.workerData = Object.assign({}, globalThis.xccConfig.workerData, { uxSettings: settingsSnapshot() });
 
   globalThis.uxPage = { menu: build, menuState: state, close, openTitle: show, onPick: null,
-                        popup, closePopup, onPopupPick: null, alert, onAlert: null, download, openFile, pickColor };
+                        popup, closePopup, onPopupPick: null, alert, onAlert: null, download, openFile, pickColor,
+                        textView };
   // The worker's posts (the loader forwards them here).
   const prev = globalThis.xccOnMessage;
   globalThis.xccOnMessage = (p) => {
     if (p && p.uxFrame !== undefined) frame(p.uxFrame);
+    else if (p && p.uxTvFrame !== undefined) tvFrame(p.uxTvFrame);
     else if (p && p.uxField !== undefined) fieldShow(p.uxField);
     else if (p && p.uxFieldEnd !== undefined) fieldHide(p.uxFieldEnd);
     else if (p && p.uxTitle !== undefined) { document.title = p.uxTitle; }

@@ -26,6 +26,8 @@
 #import "UXEvent.xc"
 #import "UXLibc.xc"
 #import "UXPopUpButton.xc" // runPopupMenu reads the peer's items and applies the page's pick
+#import "UXTextView.xc"    // a contenteditable on the page edits it
+#import "Array.xc"
 
 // The draw-seam callbacks (call_indirect through a declared signature — the
 // funcref-table rule in §4: these signatures ARE the ABI, and nothing casts
@@ -98,6 +100,7 @@ UXCanvasGraphics* gWebGfx; // the one context, bound per paint
 i32 gWebDrawOX;            // draw-origin offset for a scrolled subtree paint
 i32 gWebDrawOY;
 i32 gWebBooted;
+Array* gWebTextViews; // the UXTextViews with an editor on the page
 
 class UXWebDriver : Object<UXViewDriver>
     {
@@ -154,6 +157,7 @@ class UXWebDriver : Object<UXViewDriver>
             {
             return;
             }
+        self.textViewsGone(handle);
         ux_win_destroy(handle);
         gWebLive[handle] = (i32)0;
         gWebDirty[handle] = (i32)0;
@@ -1001,10 +1005,133 @@ class UXWebDriver : Object<UXViewDriver>
     // it the way appkit-shield does -- with a REAL injected press, because the
     // only question is what the platform does with it.
     // DOM overlays come later (§2)
+    // ---- the text view (UXTextView): a contenteditable on the page ---------------------------------
+    // Each UXKindTextView node gets an editor over its rect once there is a page to put it on, and
+    // the editor follows the node's frame and visibility on every pass.  Without a page (the Node
+    // rig) the view stays the toolkit's own, drawn on the canvas.
+    void realizeTextViews(i32 handle, WebTree* t)
+        {
+        if (ux_tv_available() == (i32)0)
+            {
+            return;
+            }
+        for (i32 i = (i32)0; i < t.count; i = i + (i32)1)
+            {
+            if (t.nodes[i].kind != (i32)UXKindTextView)
+                {
+                continue;
+                }
+            UXTextView* tv = (UXTextView* ?)(Object*)t.nodes[i].peer;
+            if (tv == (UXTextView*)0)
+                {
+                continue;
+                }
+            i32 ax = (i32)0;
+            i32 ay = (i32)0;
+            i32 w = (i32)0;
+            i32 hh = (i32)0;
+            self.structAbsFrame((pointer)t, i, &ax, &ay, &w, &hh);
+            i32 hidden = (i32)0;
+            for (i32 p = i; p >= (i32)0; p = (i32)t.nodes[p].parent)
+                {
+                if (t.nodes[p].hidden != (i16)0)
+                    {
+                    hidden = (i32)1;
+                    }
+                }
+            if (!tv.isNative())
+                {
+                ux_tv_make(handle, i, ax, ay, w, hh, hidden);
+                if (gWebTextViews == (Array*)0)
+                    {
+                    gWebTextViews = new Array();
+                    }
+                gWebTextViews.add(tv);
+                tv.nativeAttach(handle, i);
+                }
+            else
+                {
+                ux_tv_frame(handle, i, ax, ay, w, hh, hidden);
+                }
+            }
+        }
+    UXTextView* textViewWithId(i32 id)
+        {
+        if (gWebTextViews == (Array*)0)
+            {
+            return (UXTextView*)0;
+            }
+        for (u32 k = (u32)0; k < gWebTextViews.count(); k = k + (u32)1)
+            {
+            UXTextView* tv = (UXTextView* ?)gWebTextViews.get(k);
+            if (tv != (UXTextView*)0 && tv.nativeWin * (i32)4096 + tv.nativeNode == id)
+                {
+                return tv;
+                }
+            }
+        return (UXTextView*)0;
+        }
+    // A window closing takes its editors off the page.
+    void textViewsGone(i32 handle)
+        {
+        if (gWebTextViews == (Array*)0)
+            {
+            return;
+            }
+        Array* keep = new Array();
+        for (u32 k = (u32)0; k < gWebTextViews.count(); k = k + (u32)1)
+            {
+            UXTextView* tv = (UXTextView* ?)gWebTextViews.get(k);
+            if (tv != (UXTextView*)0 && tv.nativeWin == handle)
+                {
+                ux_tv_remove(handle, tv.nativeNode);
+                }
+            else if (tv != (UXTextView*)0)
+                {
+                keep.add(tv);
+                }
+            }
+        gWebTextViews = keep;
+        }
+    void textViewSetAll(i32 handle, i32 node, u8* text, i32 nbytes, i32* runs, i32 nruns)
+        {
+        ux_tv_set_all(handle, node, text, nbytes, runs, nruns);
+        }
+    void textViewReplace(i32 handle, i32 node, i32 start, i32 len, u8* text, i32 nbytes, i32* runs, i32 nruns,
+                         i32 attrsOnly)
+        {
+        ux_tv_replace(handle, node, start, len, text, nbytes, runs, nruns, attrsOnly);
+        }
+    void textViewSize(i32 handle, i32 node, i32* nbytes, i32* nruns)
+        {
+        ux_tv_size(handle, node, nbytes, nruns);
+        }
+    i32 textViewRead(i32 handle, i32 node, u8* buf, i32 cap, i32* runs, i32 maxRuns)
+        {
+        return ux_tv_read(handle, node, buf, cap, runs, maxRuns);
+        }
+    void textViewSelection(i32 handle, i32 node, i32* start, i32* len)
+        {
+        ux_tv_selection(handle, node, start, len);
+        }
+    void textViewSetSelection(i32 handle, i32 node, i32 start, i32 len)
+        {
+        ux_tv_set_selection(handle, node, start, len);
+        }
+    void textViewSetTyping(i32 handle, i32 node, i32 flags, i32 colour, i32 size)
+        {
+        ux_tv_set_typing(handle, node, flags, colour, size);
+        }
+    void textViewFocus(i32 handle, i32 node)
+        {
+        ux_tv_focus(handle, node);
+        }
+
     void realizeTree(i32 handle, pointer tree)
         {
         WebTree* t = (WebTree*)tree;
         t.win = handle;
+        self.realizeTextViews(handle, t);
         for (i32 i = (i32)0; i < t.count; i = i + (i32)1)
             {
             if (t.nodes[i].kind != (i32)UXKindGLView)
@@ -1546,6 +1673,32 @@ class UXWebDriver : Object<UXViewDriver>
             {
             // ...and a piece of it: a = token, b = offset, c..g = 20 bytes, four to an int
             self.fieldTextPiece(r);
+            ev.kind = (u8)UXEventNone;
+            }
+        else if (t == (i32)17 || t == (i32)18 || t == (i32)19)
+            {
+            // a text view's editor on the page: 17 the user changed the text, 18 moved the
+            // selection, 19 pressed an undo (b = 0) or redo (b = 1) key.  a = window * 4096 + node.
+            UXTextView* tv = self.textViewWithId(r[1]);
+            if (tv != (UXTextView*)0)
+                {
+                if (t == (i32)17)
+                    {
+                    tv.nativeDidChange();
+                    }
+                else if (t == (i32)18)
+                    {
+                    tv.nativeDidSelect();
+                    }
+                else if (r[2] == (i32)1)
+                    {
+                    tv.redo();
+                    }
+                else
+                    {
+                    tv.undo();
+                    }
+                }
             ev.kind = (u8)UXEventNone;
             }
         else if (t == (i32)14)
