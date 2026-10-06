@@ -846,6 +846,66 @@ class Sema
     // Walked in PROGRAM order, not over the class map: a map walk is hash
     // ordered, and diagnostics that come out in a different order on different
     // runs are the shape of bug this tree has been bitten by before.
+    // A class that lists a protocol must implement every method the protocol
+    // does not mark `optional` (its own or inherited); an unknown protocol name
+    // is an error too. The reference makes this check while it fills protocol
+    // slots (computeVirtualMethodTables); without it the shipped compiler built
+    // the class, and the empty slot was a call through null at run time
+    // (bug 622). Same order as the reference — classes by name, then each
+    // class's protocols as listed, then each protocol's methods — so the two
+    // report the same errors in the same order.
+    void checkConformance()
+        {
+        if (_vt.total() == (u32)0)
+            return; // nothing virtual: the reference fills no slots and checks nothing
+        Array* names = _classes.allKeys();
+        Vtable.sortStrings(names);
+        for (u32 i = (u32)0; i < names.count(); i = i + (u32)1)
+            {
+            Node* cls = (Node*)_classes.get((Hashable*)names.get(i));
+            // `-` is the parser's "no protocols"
+            if (cls == 0 || cls.extra() == 0 || cls.extra().equals(String.withCString("-")))
+                continue;
+            Array* protos = commaSplit(cls.extra());
+            for (u32 pi = (u32)0; pi < protos.count(); pi = pi + (u32)1)
+                {
+                String* pn = (String*)protos.get(pi);
+                if (pn.byteLength() == (u32)0)
+                    continue;
+                Node* proto = (Node*)_protocols.get((Hashable*)pn);
+                if (proto == 0)
+                    {
+                    String* e = String.withCString("Unknown protocol '");
+                    e.append(pn);
+                    e.appendCString("' on class '");
+                    e.append(cls.name());
+                    e.appendCString("'");
+                    _errorAt(e, cls);
+                    continue;
+                    }
+                for (u32 mi = (u32)0; mi < proto.kidCount(); mi = mi + (u32)1)
+                    {
+                    Node* req = proto.kid(mi);
+                    if (req.kind() != (u16)nkMethodDecl || req.hasFlag((u32)NF_OPTIONAL))
+                        continue;
+                    bool found = false;
+                    for (Node* c = cls; c != 0 && !found; c = parentOf(c))
+                        found = Vtable.matching(c, req) != 0;
+                    if (found)
+                        continue;
+                    String* e = String.withCString("Class '");
+                    e.append(cls.name());
+                    e.appendCString("' claims conformance to protocol '");
+                    e.append(pn);
+                    e.appendCString("' but doesn't implement '");
+                    e.append(req.name());
+                    e.appendCString("'");
+                    _errorAt(e, cls);
+                    }
+                }
+            }
+        }
+
     void checkFinalMethods(Node* program)
         {
         for (u32 ci = (u32)0; ci < program.kidCount(); ci = ci + (u32)1)
@@ -959,6 +1019,7 @@ class Sema
         synthesiseInits();
         markAutoSuperInit();
         checkFinalMethods(program);
+        checkConformance();
         collectFormatWrappers(program);
         typeProgram(program);
         checkVariadicReentrance();
