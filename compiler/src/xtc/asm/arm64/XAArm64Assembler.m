@@ -362,6 +362,214 @@ static uint32_t encMul(uint32_t base, int rd, int rn, int rm, int ra) {
     return base | ((uint32_t)rm << 16) | ((uint32_t)ra << 10) | ((uint32_t)rn << 5) | (uint32_t)rd;
 }
 
+// ── SME / streaming SVE: exactly the instructions the matrix kernel is built from
+//    (docs: simd-sme-plan). Base opcodes from clang's assembler, fields OR'd in.
+//    Returns 1 with *out set, 0 when the line is not one of these, -1 on a bad
+//    operand (with *error set).  ──
+// all-digits, non-empty, at most 3 digits -> 1 with *v set
+static int xaDigits(NSString *s, int *v) {
+    if (s.length == 0 || s.length > 3) return 0;
+    int n = 0;
+    for (NSUInteger i = 0; i < s.length; i++) {
+        unichar c = [s characterAtIndex:i];
+        if (c < '0' || c > '9') return 0;
+        n = n * 10 + (c - '0');
+    }
+    *v = n;
+    return 1;
+}
+static int xaPReg(NSString *s, int *num, int *size) {
+    // p<n>[.b|.h|.s|.d] or p<n>/z|/m; size -1 when absent
+    NSString *t = [s lowercaseString];
+    if (![t hasPrefix:@"p"] || t.length < 2) return 0;
+    NSUInteger i = 1; int n = 0, digits = 0;
+    while (i < t.length && isdigit([t characterAtIndex:i])) { n = n * 10 + ([t characterAtIndex:i] - '0'); i++; digits++; }
+    if (!digits || n > 15) return 0;
+    NSString *tail = [t substringFromIndex:i];
+    int sz = -1;
+    if ([tail isEqualToString:@".b"]) sz = 0; else if ([tail isEqualToString:@".h"]) sz = 1;
+    else if ([tail isEqualToString:@".s"]) sz = 2; else if ([tail isEqualToString:@".d"]) sz = 3;
+    else if (!([tail isEqualToString:@""] || [tail isEqualToString:@"/z"] || [tail isEqualToString:@"/m"])) return 0;
+    *num = n; if (size) *size = sz;
+    return 1;
+}
+static int xaZReg(NSString *s, int *num, int *size) {
+    // z<n>.<b|h|s|d>
+    NSString *t = [[s lowercaseString] stringByTrimmingCharactersInSet:[NSCharacterSet characterSetWithCharactersInString:@"{} "]];
+    if (![t hasPrefix:@"z"] || t.length < 4 || [t hasPrefix:@"za"]) return 0;
+    NSRange dot = [t rangeOfString:@"."];
+    if (dot.location == NSNotFound) return 0;
+    int n;
+    if (!xaDigits([t substringWithRange:NSMakeRange(1, dot.location - 1)], &n)) return 0;
+    NSString *e = [t substringFromIndex:dot.location + 1];
+    int sz = [e isEqualToString:@"b"] ? 0 : [e isEqualToString:@"h"] ? 1 : [e isEqualToString:@"s"] ? 2 : [e isEqualToString:@"d"] ? 3 : -1;
+    if (sz < 0 || n > 31) return 0;
+    *num = n; *size = sz;
+    return 1;
+}
+// za<t><h|v>.<s|d>[w<12..15>, <off>]  (braces optional)
+static int xaZASlice(NSString *s, int *tile, int *vert, int *size, int *rs, int *off) {
+    NSString *t = [[s lowercaseString] stringByTrimmingCharactersInSet:[NSCharacterSet characterSetWithCharactersInString:@"{} "]];
+    if (![t hasPrefix:@"za"] || t.length < 6) return 0;
+    NSUInteger i = 2; int n = 0, d = 0;
+    while (i < t.length && isdigit([t characterAtIndex:i])) { n = n * 10 + ([t characterAtIndex:i] - '0'); i++; d++; }
+    if (!d || i >= t.length) return 0;
+    unichar hv = [t characterAtIndex:i++];
+    if (hv != 'h' && hv != 'v') return 0;
+    if (i + 2 > t.length || [t characterAtIndex:i] != '.') return 0;
+    unichar e = [t characterAtIndex:i + 1];
+    int sz = e == 's' ? 2 : e == 'd' ? 3 : -1;
+    if (sz < 0) return 0;
+    NSRange lb = [t rangeOfString:@"["], rb = [t rangeOfString:@"]"];
+    if (lb.location != i + 2 || rb.location != t.length - 1) return 0;
+    NSArray *parts = [[t substringWithRange:NSMakeRange(lb.location + 1, rb.location - lb.location - 1)] componentsSeparatedByString:@","];
+    if (parts.count != 2) return 0;
+    NSString *w = [parts[0] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+    NSString *o = [parts[1] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+    if ([o hasPrefix:@"#"]) o = [o substringFromIndex:1];
+    int wn, ov;
+    if (![w hasPrefix:@"w"] || !xaDigits([w substringFromIndex:1], &wn) || !xaDigits(o, &ov)) return 0;
+    if (wn < 12 || wn > 15) return 0;
+    int maxTile = sz == 2 ? 3 : 7, maxOff = sz == 2 ? 3 : 1;
+    if (n > maxTile || ov > maxOff) return 0;
+    *tile = n; *vert = hv == 'v'; *size = sz; *rs = wn - 12; *off = ov;
+    return 1;
+}
+// [xn] or [xn, xm, lsl #k]; *rm = -1 for the first form
+static int xaSveMem(NSString *s, int *rn, int *rm, int *lsl) {
+    if (![s hasPrefix:@"["] || ![s hasSuffix:@"]"]) return 0;
+    NSArray *parts = [[s substringWithRange:NSMakeRange(1, s.length - 2)] componentsSeparatedByString:@","];
+    int n, m; BOOL w64, sp;
+    if (!parseReg([parts[0] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]], &n, &w64, &sp) || !w64) return 0;
+    *rn = n; *rm = -1; *lsl = 0;
+    if (parts.count == 1) return 1;
+    if (parts.count != 3) return 0;
+    if (!parseReg([parts[1] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]], &m, &w64, &sp) || !w64 || sp) return 0;
+    NSString *sh = [[parts[2] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]] lowercaseString];
+    if (![sh hasPrefix:@"lsl"]) return 0;
+    sh = [[sh substringFromIndex:3] stringByTrimmingCharactersInSet:[NSCharacterSet characterSetWithCharactersInString:@" #"]];
+    int k;
+    if (!xaDigits(sh, &k)) return 0;
+    *rm = m; *lsl = k;
+    return 1;
+}
+static int xaEncodeSME(NSString *mn, NSArray<NSString *> *ops, uint32_t *out, NSError **error) {
+    #define SMEBAD(...) do { if (error) *error = asmErr(__VA_ARGS__); return -1; } while (0)
+    if ([mn isEqualToString:@"smstart"] || [mn isEqualToString:@"smstop"]) {
+        // msr svcr: CRm = (sm|za mask)<<1 | on
+        int on = [mn isEqualToString:@"smstart"];
+        int mask = 3;
+        if (ops.count == 1) {
+            NSString *o = [ops[0] lowercaseString];
+            if ([o isEqualToString:@"sm"]) mask = 1; else if ([o isEqualToString:@"za"]) mask = 2; else SMEBAD(@"%@: bad operand %@", mn, ops[0]);
+        } else if (ops.count) SMEBAD(@"%@ takes at most one operand", mn);
+        *out = 0xD503407Fu | ((uint32_t)(mask << 1 | on) << 8);
+        return 1;
+    }
+    if ([mn isEqualToString:@"ptrue"]) {
+        int pd, sz;
+        if (ops.count != 1 || !xaPReg(ops[0], &pd, &sz) || sz < 0 || pd > 15) SMEBAD(@"ptrue: bad operands");
+        *out = 0x2518E3E0u | ((uint32_t)sz << 22) | (uint32_t)pd;
+        return 1;
+    }
+    if ([mn isEqualToString:@"whilelt"] || [mn isEqualToString:@"whilelo"]) {
+        int pd, sz, rn, rm; BOOL n64, m64, sp;
+        if (ops.count != 3 || !xaPReg(ops[0], &pd, &sz) || sz < 0 || pd > 15
+            || !parseReg(ops[1], &rn, &n64, &sp) || !parseReg(ops[2], &rm, &m64, &sp) || n64 != m64)
+            SMEBAD(@"%@: bad operands", mn);
+        uint32_t u = [mn isEqualToString:@"whilelo"] ? 0x800u : 0;
+        *out = 0x25200400u | u | ((uint32_t)sz << 22) | ((uint32_t)rm << 16) | ((uint32_t)(n64 ? 1 : 0) << 12)
+             | ((uint32_t)rn << 5) | (uint32_t)pd;
+        return 1;
+    }
+    if ([mn isEqualToString:@"cntb"] || [mn isEqualToString:@"cnth"] || [mn isEqualToString:@"cntw"] || [mn isEqualToString:@"cntd"]) {
+        int rd; BOOL d64, sp;
+        if (ops.count != 1 || !parseReg(ops[0], &rd, &d64, &sp) || !d64 || sp) SMEBAD(@"%@: bad operand", mn);
+        uint32_t sz = [mn isEqualToString:@"cntb"] ? 0 : [mn isEqualToString:@"cnth"] ? 1 : [mn isEqualToString:@"cntw"] ? 2 : 3;
+        *out = 0x0420E3E0u | (sz << 22) | (uint32_t)rd;
+        return 1;
+    }
+    if ([mn isEqualToString:@"zero"]) {
+        // zero {za} / {zaN.s, …} / {zaN.d, …}: an 8-bit mask of 64-bit tiles
+        NSString *all = [[[ops componentsJoinedByString:@","] lowercaseString]
+            stringByTrimmingCharactersInSet:[NSCharacterSet characterSetWithCharactersInString:@"{} "]];
+        uint32_t mask = 0;
+        for (NSString *raw in [all componentsSeparatedByString:@","]) {
+            NSString *t = [raw stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+            if ([t isEqualToString:@"za"]) { mask |= 0xFF; continue; }
+            NSRange dot = [t rangeOfString:@"."];
+            if (![t hasPrefix:@"za"] || dot.location == NSNotFound) SMEBAD(@"zero: bad tile %@", t);
+            int n;
+            if (!xaDigits([t substringWithRange:NSMakeRange(2, dot.location - 2)], &n)) SMEBAD(@"zero: bad tile %@", t);
+            NSString *e = [t substringFromIndex:dot.location + 1];
+            if ([e isEqualToString:@"d"] && n <= 7) mask |= 1u << n;
+            else if ([e isEqualToString:@"s"] && n <= 3) mask |= 0x11u << n;
+            else if ([e isEqualToString:@"h"] && n <= 1) mask |= 0x55u << n;
+            else if ([e isEqualToString:@"b"] && n == 0) mask |= 0xFF;
+            else SMEBAD(@"zero: bad tile %@", t);
+        }
+        *out = 0xC0080000u | mask;
+        return 1;
+    }
+    BOOL isLd = [mn isEqualToString:@"ld1w"] || [mn isEqualToString:@"ld1d"];
+    BOOL isSt = [mn isEqualToString:@"st1w"] || [mn isEqualToString:@"st1d"];
+    if (isLd || isSt) {
+        BOOL dw = [mn hasSuffix:@"d"];
+        int pg, psz, rn, rm, lsl;
+        if (ops.count != 3 || !xaPReg(ops[1], &pg, &psz) || pg > 7 || !xaSveMem(ops[2], &rn, &rm, &lsl))
+            SMEBAD(@"%@: bad operands", mn);
+        if (isLd != [[ops[1] lowercaseString] hasSuffix:@"/z"]) SMEBAD(@"%@: predicate must be %@", mn, isLd ? @"/z" : @"plain");
+        if (rm >= 0 && lsl != (dw ? 3 : 2)) SMEBAD(@"%@: index must be lsl #%d", mn, dw ? 3 : 2);
+        int tile, vert, tsz, rs, off;
+        if (xaZASlice(ops[0], &tile, &vert, &tsz, &rs, &off)) {
+            if (tsz != (dw ? 3 : 2)) SMEBAD(@"%@: tile element size", mn);
+            uint32_t base = dw ? (isLd ? 0xE0C00000u : 0xE0E00000u) : (isLd ? 0xE0800000u : 0xE0A00000u);
+            uint32_t za = dw ? ((uint32_t)tile << 1 | (uint32_t)off) : ((uint32_t)tile << 2 | (uint32_t)off);
+            *out = base | ((uint32_t)(rm < 0 ? 31 : rm) << 16) | ((uint32_t)vert << 15) | ((uint32_t)rs << 13)
+                 | ((uint32_t)pg << 10) | ((uint32_t)rn << 5) | za;
+            return 1;
+        }
+        int zt, zsz;
+        if (!xaZReg(ops[0], &zt, &zsz) || zsz != (dw ? 3 : 2)) SMEBAD(@"%@: bad register list %@", mn, ops[0]);
+        uint32_t base;
+        if (rm < 0) base = dw ? (isLd ? 0xA5E0A000u : 0xE5E0E000u) : (isLd ? 0xA540A000u : 0xE540E000u);
+        else base = (dw ? (isLd ? 0xA5E04000u : 0xE5E04000u) : (isLd ? 0xA5404000u : 0xE5404000u)) | ((uint32_t)rm << 16);
+        *out = base | ((uint32_t)pg << 10) | ((uint32_t)rn << 5) | (uint32_t)zt;
+        return 1;
+    }
+    if (([mn isEqualToString:@"mov"] || [mn isEqualToString:@"mova"]) && ops.count == 3
+        && [[ops[2] lowercaseString] hasPrefix:@"za"]) {
+        // mov Zd.T, Pg/m, ZA<t><h|v>.T[Ws, off]  (tile slice to vector)
+        int zd, zsz, pg, psz, tile, vert, tsz, rs, off;
+        if (!xaZReg(ops[0], &zd, &zsz) || !xaPReg(ops[1], &pg, &psz) || pg > 7
+            || ![[ops[1] lowercaseString] hasSuffix:@"/m"] || !xaZASlice(ops[2], &tile, &vert, &tsz, &rs, &off) || zsz != tsz)
+            SMEBAD(@"%@: bad operands", mn);
+        uint32_t za = tsz == 3 ? ((uint32_t)tile << 1 | (uint32_t)off) : ((uint32_t)tile << 2 | (uint32_t)off);
+        *out = 0xC0020000u | ((uint32_t)tsz << 22) | ((uint32_t)vert << 15) | ((uint32_t)rs << 13) | ((uint32_t)pg << 10)
+             | (za << 5) | (uint32_t)zd;
+        return 1;
+    }
+    if ([mn isEqualToString:@"fmopa"]) {
+        // fmopa ZAda.T, Pn/m, Pm/m, Zn.T, Zm.T  (T = s or d)
+        if (ops.count != 5) SMEBAD(@"fmopa needs 5 operands");
+        NSString *t = [ops[0] lowercaseString];
+        NSRange dot = [t rangeOfString:@"."];
+        if (![t hasPrefix:@"za"] || dot.location == NSNotFound) SMEBAD(@"fmopa: bad tile %@", ops[0]);
+        int tile;
+        if (!xaDigits([t substringWithRange:NSMakeRange(2, dot.location - 2)], &tile)) SMEBAD(@"fmopa: bad tile %@", ops[0]);
+        int tsz = [[t substringFromIndex:dot.location + 1] isEqualToString:@"d"] ? 3 : [[t substringFromIndex:dot.location + 1] isEqualToString:@"s"] ? 2 : -1;
+        int pn, pm, zn, zm, s1, s2, s3, s4;
+        if (tsz < 0 || tile > (tsz == 2 ? 3 : 7) || !xaPReg(ops[1], &pn, &s1) || !xaPReg(ops[2], &pm, &s2) || pn > 7 || pm > 7
+            || !xaZReg(ops[3], &zn, &s3) || !xaZReg(ops[4], &zm, &s4) || s3 != tsz || s4 != tsz)
+            SMEBAD(@"fmopa: bad operands");
+        *out = (tsz == 2 ? 0x80800000u : 0x80C00000u) | ((uint32_t)zm << 16) | ((uint32_t)pm << 13) | ((uint32_t)pn << 10)
+             | ((uint32_t)zn << 5) | (uint32_t)tile;
+        return 1;
+    }
+    return 0;
+    #undef SMEBAD
+}
+
 - (uint32_t)encodeLine:(NSString *)line
                     pc:(uint64_t)pc
                resolve:(uint32_t (^)(NSString *, BOOL *))resolve
@@ -382,6 +590,8 @@ static uint32_t encMul(uint32_t base, int rd, int rn, int rm, int ra) {
 
     #define NEED(n) do { if (ops.count < (n)) { if(error)*error=asmErr(@"%@ needs %d ops",mn,(n)); return 0; } } while(0)
     #define REG(i,rr,w,ss) do { if(!parseReg(ops[i],&rr,&w,&ss)){if(error)*error=asmErr(@"bad reg %@",ops[i]);return 0;} } while(0)
+
+    { uint32_t w = 0; int h = xaEncodeSME(mn, ops, &w, error); if (h < 0) return 0; if (h > 0) return w; }
 
     // ── NEON (Advanced SIMD) — dispatch before the scalar handlers, which share
     //    add/mul/f* mnemonics but take non-vector operands. Base opcodes derived

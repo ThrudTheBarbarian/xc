@@ -95,6 +95,29 @@ class FRegRef
 }
 
 // A NEON register `vN.<arrangement>`, or one lane of one (`vN.s[1]`).
+// An SME/SVE operand: a predicate (num, size or -1 as $FFFF_FFFF), a Z
+// register (num, size), a ZA slice (tile, vert, size, rs = Ws-12, off) or an
+// SVE address (rn, rm or $FFFF_FFFF, lsl).
+class SmeRef
+{
+    bool _ok;
+    u32  _a;
+    u32  _b;
+    u32  _c;
+    u32  _d;
+    u32  _e;
+    void init(void) { _ok = false; _a = (u32)0; _b = (u32)0; _c = (u32)0; _d = (u32)0; _e = (u32)0; }
+    bool ok(void) { return _ok; }
+    u32  a(void)  { return _a; }
+    u32  b(void)  { return _b; }
+    u32  c(void)  { return _c; }
+    u32  d(void)  { return _d; }
+    u32  e(void)  { return _e; }
+    static SmeRef* no(void) { return new SmeRef(); }
+    static SmeRef* yes(u32 a, u32 b, u32 c, u32 d, u32 e)
+    { SmeRef* r = new SmeRef(); r._ok = true; r._a = a; r._b = b; r._c = c; r._d = d; r._e = e; return r; }
+}
+
 class VRegRef
 {
     bool _ok;
@@ -691,7 +714,8 @@ class Arm64Asm
                                              : line.substringFromByte(sp).trimmed();
         Array* ops = splitOperands(rest);
 
-        u32 w = encNeon(mn, ops, pc);      if (_hit) return w;
+        u32 w = encSme(mn, ops);           if (_hit) return w;
+        w = encNeon(mn, ops, pc);           if (_hit) return w;
         w = encAtomics(mn, ops, pc);        if (_hit) return w;
         w = encMoves(mn, ops, pc);          if (_hit) return w;
         w = encFloat(mn, ops, pc);          if (_hit) return w;
@@ -1071,6 +1095,317 @@ class Arm64Asm
                 return base | (t.q() << (u32)30) | (t.size() << (u32)10)
                      | (bn.num() << (u32)5) | t.num();
             }
+        }
+        return (u32)0;
+    }
+
+    // ── SME / streaming SVE (private:docs/Design/simd-sme-plan.md) ───────────
+    //
+    // Exactly the instructions the matrix kernel is built from: smstart/smstop,
+    // ptrue, whilelt/whilelo, cnt{b,h,w,d}, zero {za…}, ld1w/st1w/ld1d/st1d to
+    // a Z register or a ZA tile slice, mov (tile slice to vector) and fmopa.
+    // Base opcodes from clang's assembler, fields OR'd in. Every number is
+    // strictly digits (smeDigits), so `za1x.s` is refused, not read as za1.
+
+    // all digits, 1..3 of them; $FFFF_FFFF when not
+    static u32 smeDigits(String* t)
+    {
+        if (t.byteLength() == (u32)0 || t.byteLength() > (u32)3) return (u32)$FFFF_FFFF;
+        u32 n = (u32)0;
+        for (u32 i = (u32)0; i < t.byteLength(); i = i + (u32)1) {
+            u8 c = t.byteAt(i);
+            if (c < (u8)'0' || c > (u8)'9') return (u32)$FFFF_FFFF;
+            n = n * (u32)10 + (u32)(c - (u8)'0');
+        }
+        return n;
+    }
+
+    // trim '{', '}' and ' ' from both ends
+    static String* smeTrimBraces(String* t)
+    {
+        u32 a = (u32)0;
+        u32 b = t.byteLength();
+        while (a < b && (t.byteAt(a) == (u8)'{' || t.byteAt(a) == (u8)'}' || t.byteAt(a) == (u8)' ')) a = a + (u32)1;
+        while (b > a && (t.byteAt(b - (u32)1) == (u8)'{' || t.byteAt(b - (u32)1) == (u8)'}' || t.byteAt(b - (u32)1) == (u8)' ')) b = b - (u32)1;
+        return t.substringBytes(a, b - a);
+    }
+
+    // split on every ',' (no nesting), pieces untrimmed
+    static Array* smeSplit(String* t)
+    {
+        Array* out = new Array();
+        u32 start = (u32)0;
+        for (u32 i = (u32)0; i < t.byteLength(); i = i + (u32)1) {
+            if (t.byteAt(i) == (u8)',') {
+                out.add((Object*)t.substringBytes(start, i - start));
+                start = i + (u32)1;
+            }
+        }
+        out.add((Object*)t.substringFromByte(start));
+        return out;
+    }
+
+    static u32 smeElem(String* e)
+    {
+        if (e.equals(String.withCString("b"))) return (u32)0;
+        if (e.equals(String.withCString("h"))) return (u32)1;
+        if (e.equals(String.withCString("s"))) return (u32)2;
+        if (e.equals(String.withCString("d"))) return (u32)3;
+        return (u32)$FFFF_FFFF;
+    }
+
+    // p<n>[.b|.h|.s|.d|/z|/m] -> a = num, b = size or $FFFF_FFFF
+    static SmeRef* smePReg(String* s0)
+    {
+        String* t = s0.lowercased();
+        if (!t.hasPrefix(String.withCString("p")) || t.byteLength() < (u32)2) return SmeRef.no();
+        u32 i = (u32)1;
+        u32 n = (u32)0;
+        u32 digits = (u32)0;
+        while (i < t.byteLength() && t.byteAt(i) >= (u8)'0' && t.byteAt(i) <= (u8)'9') {
+            n = n * (u32)10 + (u32)(t.byteAt(i) - (u8)'0');
+            i = i + (u32)1;
+            digits = digits + (u32)1;
+        }
+        if (digits == (u32)0 || n > (u32)15) return SmeRef.no();
+        String* tail = t.substringFromByte(i);
+        u32 sz = (u32)$FFFF_FFFF;
+        if (tail.equals(String.withCString(".b"))) sz = (u32)0;
+        else if (tail.equals(String.withCString(".h"))) sz = (u32)1;
+        else if (tail.equals(String.withCString(".s"))) sz = (u32)2;
+        else if (tail.equals(String.withCString(".d"))) sz = (u32)3;
+        else if (!(tail.byteLength() == (u32)0 || tail.equals(String.withCString("/z"))
+                   || tail.equals(String.withCString("/m")))) return SmeRef.no();
+        return SmeRef.yes(n, sz, (u32)0, (u32)0, (u32)0);
+    }
+
+    // z<n>.<b|h|s|d> (braces optional) -> a = num, b = size
+    static SmeRef* smeZReg(String* s0)
+    {
+        String* t = smeTrimBraces(s0.lowercased());
+        if (!t.hasPrefix(String.withCString("z")) || t.byteLength() < (u32)4
+            || t.hasPrefix(String.withCString("za"))) return SmeRef.no();
+        u32 dot = t.byteIndexOf(String.withCString("."));
+        if (dot == (u32)$FFFF_FFFF) return SmeRef.no();
+        u32 n = smeDigits(t.substringBytes((u32)1, dot - (u32)1));
+        if (n == (u32)$FFFF_FFFF) return SmeRef.no();
+        u32 sz = smeElem(t.substringFromByte(dot + (u32)1));
+        if (sz == (u32)$FFFF_FFFF || n > (u32)31) return SmeRef.no();
+        return SmeRef.yes(n, sz, (u32)0, (u32)0, (u32)0);
+    }
+
+    // za<t><h|v>.<s|d>[w<12..15>, <off>] (braces optional)
+    //   -> a = tile, b = vert, c = size, d = Ws-12, e = off
+    static SmeRef* smeZASlice(String* s0)
+    {
+        String* t = smeTrimBraces(s0.lowercased());
+        if (!t.hasPrefix(String.withCString("za")) || t.byteLength() < (u32)6) return SmeRef.no();
+        u32 i = (u32)2;
+        u32 n = (u32)0;
+        u32 digits = (u32)0;
+        while (i < t.byteLength() && t.byteAt(i) >= (u8)'0' && t.byteAt(i) <= (u8)'9') {
+            n = n * (u32)10 + (u32)(t.byteAt(i) - (u8)'0');
+            i = i + (u32)1;
+            digits = digits + (u32)1;
+        }
+        if (digits == (u32)0 || i >= t.byteLength()) return SmeRef.no();
+        u8 hv = t.byteAt(i);
+        i = i + (u32)1;
+        if (hv != (u8)'h' && hv != (u8)'v') return SmeRef.no();
+        if (i + (u32)2 > t.byteLength() || t.byteAt(i) != (u8)'.') return SmeRef.no();
+        u8 e = t.byteAt(i + (u32)1);
+        u32 sz = e == (u8)'s' ? (u32)2 : (e == (u8)'d' ? (u32)3 : (u32)$FFFF_FFFF);
+        if (sz == (u32)$FFFF_FFFF) return SmeRef.no();
+        u32 lb = t.byteIndexOf(String.withCString("["));
+        u32 rb = t.byteIndexOf(String.withCString("]"));
+        if (lb != i + (u32)2 || rb != t.byteLength() - (u32)1) return SmeRef.no();
+        Array* parts = smeSplit(t.substringBytes(lb + (u32)1, rb - lb - (u32)1));
+        if (parts.count() != (u32)2) return SmeRef.no();
+        String* w = ((String*)parts.get((u32)0)).trimmed();
+        String* o = ((String*)parts.get((u32)1)).trimmed();
+        if (o.hasPrefix(String.withCString("#"))) o = o.substringFromByte((u32)1);
+        if (!w.hasPrefix(String.withCString("w"))) return SmeRef.no();
+        u32 wn = smeDigits(w.substringFromByte((u32)1));
+        u32 ov = smeDigits(o);
+        if (wn == (u32)$FFFF_FFFF || ov == (u32)$FFFF_FFFF) return SmeRef.no();
+        if (wn < (u32)12 || wn > (u32)15) return SmeRef.no();
+        u32 maxTile = sz == (u32)2 ? (u32)3 : (u32)7;
+        u32 maxOff = sz == (u32)2 ? (u32)3 : (u32)1;
+        if (n > maxTile || ov > maxOff) return SmeRef.no();
+        return SmeRef.yes(n, hv == (u8)'v' ? (u32)1 : (u32)0, sz, wn - (u32)12, ov);
+    }
+
+    // [xn] or [xn, xm, lsl #k] -> a = rn, b = rm or $FFFF_FFFF, c = k
+    static SmeRef* smeMem(String* s)
+    {
+        if (!s.hasPrefix(String.withCString("[")) || !s.hasSuffix(String.withCString("]"))) return SmeRef.no();
+        Array* parts = smeSplit(s.substringBytes((u32)1, s.byteLength() - (u32)2));
+        RegRef* n = parseReg(((String*)parts.get((u32)0)).trimmed());
+        if (!n.ok() || !n.is64()) return SmeRef.no();
+        if (parts.count() == (u32)1) return SmeRef.yes(n.num(), (u32)$FFFF_FFFF, (u32)0, (u32)0, (u32)0);
+        if (parts.count() != (u32)3) return SmeRef.no();
+        RegRef* m = parseReg(((String*)parts.get((u32)1)).trimmed());
+        if (!m.ok() || !m.is64() || m.isSP()) return SmeRef.no();
+        String* sh = ((String*)parts.get((u32)2)).trimmed().lowercased();
+        if (!sh.hasPrefix(String.withCString("lsl"))) return SmeRef.no();
+        sh = sh.substringFromByte((u32)3);
+        u32 a = (u32)0;
+        u32 b = sh.byteLength();
+        while (a < b && (sh.byteAt(a) == (u8)' ' || sh.byteAt(a) == (u8)'#')) a = a + (u32)1;
+        while (b > a && (sh.byteAt(b - (u32)1) == (u8)' ' || sh.byteAt(b - (u32)1) == (u8)'#')) b = b - (u32)1;
+        u32 k = smeDigits(sh.substringBytes(a, b - a));
+        if (k == (u32)$FFFF_FFFF) return SmeRef.no();
+        return SmeRef.yes(n.num(), m.num(), k, (u32)0, (u32)0);
+    }
+
+    u32 smeBad(String* mn, String* what)
+    {
+        String* m = new String();
+        m.append(mn);
+        m.append(String.withCString(": "));
+        m.append(what);
+        fail(m);
+        _hit = true;
+        return (u32)0;
+    }
+
+    u32 encSme(String* mn, Array* ops)
+    {
+        bool start = mn.equals(String.withCString("smstart"));
+        if (start || mn.equals(String.withCString("smstop"))) {
+            u32 mask = (u32)3;
+            if (ops.count() == (u32)1) {
+                String* o = opAt(ops, (u32)0).lowercased();
+                if (o.equals(String.withCString("sm"))) mask = (u32)1;
+                else if (o.equals(String.withCString("za"))) mask = (u32)2;
+                else return smeBad(mn, String.withCString("bad operand"));
+            } else if (ops.count() != (u32)0) return smeBad(mn, String.withCString("takes at most one operand"));
+            _hit = true;
+            return (u32)$D503407F | (((mask << (u32)1) | (start ? (u32)1 : (u32)0)) << (u32)8);
+        }
+        if (mn.equals(String.withCString("ptrue"))) {
+            SmeRef* p = ops.count() == (u32)1 ? smePReg(opAt(ops, (u32)0)) : SmeRef.no();
+            if (!p.ok() || p.b() == (u32)$FFFF_FFFF) return smeBad(mn, String.withCString("bad operands"));
+            _hit = true;
+            return (u32)$2518E3E0 | (p.b() << (u32)22) | p.a();
+        }
+        bool lo = mn.equals(String.withCString("whilelo"));
+        if (lo || mn.equals(String.withCString("whilelt"))) {
+            if (ops.count() != (u32)3) return smeBad(mn, String.withCString("bad operands"));
+            SmeRef* p = smePReg(opAt(ops, (u32)0));
+            RegRef* n = parseReg(opAt(ops, (u32)1));
+            RegRef* m = parseReg(opAt(ops, (u32)2));
+            if (!p.ok() || p.b() == (u32)$FFFF_FFFF || !n.ok() || !m.ok() || n.is64() != m.is64())
+                return smeBad(mn, String.withCString("bad operands"));
+            _hit = true;
+            return (u32)$25200400 | (lo ? (u32)$800 : (u32)0) | (p.b() << (u32)22) | (m.num() << (u32)16)
+                 | ((n.is64() ? (u32)1 : (u32)0) << (u32)12) | (n.num() << (u32)5) | p.a();
+        }
+        u32 csz = (u32)$FFFF_FFFF;
+        if (mn.equals(String.withCString("cntb"))) csz = (u32)0;
+        else if (mn.equals(String.withCString("cnth"))) csz = (u32)1;
+        else if (mn.equals(String.withCString("cntw"))) csz = (u32)2;
+        else if (mn.equals(String.withCString("cntd"))) csz = (u32)3;
+        if (csz != (u32)$FFFF_FFFF) {
+            RegRef* d = ops.count() == (u32)1 ? parseReg(opAt(ops, (u32)0)) : RegRef.no();
+            if (!d.ok() || !d.is64() || d.isSP()) return smeBad(mn, String.withCString("bad operand"));
+            _hit = true;
+            return (u32)$0420E3E0 | (csz << (u32)22) | d.num();
+        }
+        if (mn.equals(String.withCString("zero"))) {
+            String* all = new String();
+            for (u32 i = (u32)0; i < ops.count(); i = i + (u32)1) {
+                if (i > (u32)0) all.append(String.withCString(","));
+                all.append(opAt(ops, i));
+            }
+            Array* tiles = smeSplit(smeTrimBraces(all.lowercased()));
+            u32 mask = (u32)0;
+            for (u32 i = (u32)0; i < tiles.count(); i = i + (u32)1) {
+                String* t = ((String*)tiles.get(i)).trimmed();
+                if (t.equals(String.withCString("za"))) { mask = mask | (u32)$FF; continue; }
+                u32 dot = t.byteIndexOf(String.withCString("."));
+                String* bad = String.withCString("bad tile ");
+                bad.append(t);
+                if (!t.hasPrefix(String.withCString("za")) || dot == (u32)$FFFF_FFFF) return smeBad(mn, bad);
+                u32 n = smeDigits(t.substringBytes((u32)2, dot - (u32)2));
+                if (n == (u32)$FFFF_FFFF) return smeBad(mn, bad);
+                String* e = t.substringFromByte(dot + (u32)1);
+                if (e.equals(String.withCString("d")) && n <= (u32)7) mask = mask | ((u32)1 << n);
+                else if (e.equals(String.withCString("s")) && n <= (u32)3) mask = mask | ((u32)$11 << n);
+                else if (e.equals(String.withCString("h")) && n <= (u32)1) mask = mask | ((u32)$55 << n);
+                else if (e.equals(String.withCString("b")) && n == (u32)0) mask = mask | (u32)$FF;
+                else return smeBad(mn, bad);
+            }
+            _hit = true;
+            return (u32)$C0080000 | mask;
+        }
+        bool isLd = mn.equals(String.withCString("ld1w")) || mn.equals(String.withCString("ld1d"));
+        bool isSt = mn.equals(String.withCString("st1w")) || mn.equals(String.withCString("st1d"));
+        if (isLd || isSt) {
+            bool dw = mn.hasSuffix(String.withCString("d"));
+            if (ops.count() != (u32)3) return smeBad(mn, String.withCString("bad operands"));
+            SmeRef* pg = smePReg(opAt(ops, (u32)1));
+            SmeRef* mem = smeMem(opAt(ops, (u32)2));
+            if (!pg.ok() || pg.a() > (u32)7 || !mem.ok()) return smeBad(mn, String.withCString("bad operands"));
+            if (isLd != opAt(ops, (u32)1).lowercased().hasSuffix(String.withCString("/z")))
+                return smeBad(mn, String.withCString(isLd ? "predicate must be /z" : "predicate must be plain"));
+            bool indexed = mem.b() != (u32)$FFFF_FFFF;
+            if (indexed && mem.c() != (dw ? (u32)3 : (u32)2))
+                return smeBad(mn, String.withCString(dw ? "index must be lsl #3" : "index must be lsl #2"));
+            SmeRef* za = smeZASlice(opAt(ops, (u32)0));
+            if (za.ok()) {
+                if (za.c() != (dw ? (u32)3 : (u32)2)) return smeBad(mn, String.withCString("tile element size"));
+                u32 base = dw ? (isLd ? (u32)$E0C00000 : (u32)$E0E00000) : (isLd ? (u32)$E0800000 : (u32)$E0A00000);
+                u32 zf = dw ? ((za.a() << (u32)1) | za.e()) : ((za.a() << (u32)2) | za.e());
+                _hit = true;
+                return base | ((indexed ? mem.b() : (u32)31) << (u32)16) | (za.b() << (u32)15) | (za.d() << (u32)13)
+                     | (pg.a() << (u32)10) | (mem.a() << (u32)5) | zf;
+            }
+            SmeRef* zt = smeZReg(opAt(ops, (u32)0));
+            if (!zt.ok() || zt.b() != (dw ? (u32)3 : (u32)2)) {
+                String* bad = String.withCString("bad register list ");
+                bad.append(opAt(ops, (u32)0));
+                return smeBad(mn, bad);
+            }
+            u32 base;
+            if (!indexed) base = dw ? (isLd ? (u32)$A5E0A000 : (u32)$E5E0E000) : (isLd ? (u32)$A540A000 : (u32)$E540E000);
+            else base = (dw ? (isLd ? (u32)$A5E04000 : (u32)$E5E04000) : (isLd ? (u32)$A5404000 : (u32)$E5404000))
+                      | (mem.b() << (u32)16);
+            _hit = true;
+            return base | (pg.a() << (u32)10) | (mem.a() << (u32)5) | zt.a();
+        }
+        if ((mn.equals(String.withCString("mov")) || mn.equals(String.withCString("mova"))) && ops.count() == (u32)3
+            && opAt(ops, (u32)2).lowercased().hasPrefix(String.withCString("za"))) {
+            SmeRef* zd = smeZReg(opAt(ops, (u32)0));
+            SmeRef* pg = smePReg(opAt(ops, (u32)1));
+            SmeRef* za = smeZASlice(opAt(ops, (u32)2));
+            if (!zd.ok() || !pg.ok() || pg.a() > (u32)7
+                || !opAt(ops, (u32)1).lowercased().hasSuffix(String.withCString("/m")) || !za.ok() || zd.b() != za.c())
+                return smeBad(mn, String.withCString("bad operands"));
+            u32 zf = za.c() == (u32)3 ? ((za.a() << (u32)1) | za.e()) : ((za.a() << (u32)2) | za.e());
+            _hit = true;
+            return (u32)$C0020000 | (za.c() << (u32)22) | (za.b() << (u32)15) | (za.d() << (u32)13)
+                 | (pg.a() << (u32)10) | (zf << (u32)5) | zd.a();
+        }
+        if (mn.equals(String.withCString("fmopa"))) {
+            if (ops.count() != (u32)5) return smeBad(mn, String.withCString("needs 5 operands"));
+            String* t = opAt(ops, (u32)0).lowercased();
+            u32 dot = t.byteIndexOf(String.withCString("."));
+            if (!t.hasPrefix(String.withCString("za")) || dot == (u32)$FFFF_FFFF) return smeBad(mn, String.withCString("bad tile"));
+            u32 tile = smeDigits(t.substringBytes((u32)2, dot - (u32)2));
+            if (tile == (u32)$FFFF_FFFF) return smeBad(mn, String.withCString("bad tile"));
+            String* e = t.substringFromByte(dot + (u32)1);
+            u32 tsz = e.equals(String.withCString("d")) ? (u32)3 : (e.equals(String.withCString("s")) ? (u32)2 : (u32)$FFFF_FFFF);
+            SmeRef* pn = smePReg(opAt(ops, (u32)1));
+            SmeRef* pm = smePReg(opAt(ops, (u32)2));
+            SmeRef* zn = smeZReg(opAt(ops, (u32)3));
+            SmeRef* zm = smeZReg(opAt(ops, (u32)4));
+            if (tsz == (u32)$FFFF_FFFF || tile > (tsz == (u32)2 ? (u32)3 : (u32)7) || !pn.ok() || !pm.ok()
+                || pn.a() > (u32)7 || pm.a() > (u32)7 || !zn.ok() || !zm.ok() || zn.b() != tsz || zm.b() != tsz)
+                return smeBad(mn, String.withCString("bad operands"));
+            _hit = true;
+            return (tsz == (u32)2 ? (u32)$80800000 : (u32)$80C00000) | (zm.a() << (u32)16) | (pm.a() << (u32)13)
+                 | (pn.a() << (u32)10) | (zn.a() << (u32)5) | tile;
         }
         return (u32)0;
     }

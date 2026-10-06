@@ -5,7 +5,9 @@
 
 static NSData* clangEncode(NSArray<NSString*>* lines)
     {
-    NSMutableString* s = [@".text\n" mutableCopy];
+    // SME/SVE are extensions the default target lacks; enabling them changes
+    // no other encoding.
+    NSMutableString* s = [@".text\n.arch_extension sme\n.arch_extension sme-f64f64\n" mutableCopy];
     for (NSString* l in lines)
         {
         [s appendString:l];

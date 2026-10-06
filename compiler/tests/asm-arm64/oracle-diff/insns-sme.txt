@@ -1,0 +1,46 @@
+smstart
+smstop
+smstart sm
+smstop sm
+smstart za
+smstop za
+ptrue p0.s
+ptrue p7.d
+ptrue p3.b
+ptrue p2.h
+whilelt p0.s, x24, x20
+whilelt p1.d, x9, x21
+whilelo p2.s, x1, x2
+whilelt p3.s, w1, w2
+cntw x23
+cntd x5
+cntb x1
+cnth x2
+zero {za}
+zero {za0.s}
+zero {za1.s}
+zero {za3.s}
+zero {za0.d}
+zero {za7.d}
+ld1w {z1.s}, p1/z, [x11]
+ld1w {z31.s}, p7/z, [x0, x3, lsl #2]
+st1w {z1.s}, p1, [x11]
+st1w {z2.s}, p2, [x5, x6, lsl #2]
+ld1d {z4.d}, p3/z, [x2]
+st1d {z4.d}, p3, [x2, x9, lsl #3]
+ld1w {za0h.s[w12, 0]}, p1/z, [x11]
+ld1w {za1h.s[w13, 3]}, p2/z, [x11]
+ld1w {za2v.s[w14, 1]}, p0/z, [x4, x5, lsl #2]
+st1w {za0h.s[w12, 0]}, p1, [x11]
+st1w {za3v.s[w15, 2]}, p1, [x11]
+ld1d {za0h.d[w12, 0]}, p1/z, [x11]
+ld1d {za5h.d[w12, 1]}, p1/z, [x11]
+st1d {za7h.d[w15, 1]}, p6, [x2]
+mov z0.s, p0/m, za1v.s[w13, 0]
+mov z5.s, p2/m, za3h.s[w12, 3]
+mov z1.d, p0/m, za6v.d[w14, 1]
+mova z0.s, p0/m, za1v.s[w13, 0]
+fmopa za0.s, p0/m, p1/m, z0.s, z1.s
+fmopa za3.s, p7/m, p6/m, z30.s, z31.s
+fmopa za0.d, p0/m, p1/m, z0.d, z1.d
+fmopa za7.d, p2/m, p3/m, z8.d, z9.d
