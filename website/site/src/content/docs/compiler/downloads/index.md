@@ -12,11 +12,11 @@ cross-build native binaries for every target with **no other toolchain installed
 
 | Platform | Download | Size |
 | --- | --- | --- |
-| macOS (Apple silicon) | [xcc-osx-0.71.tar.bz2](/downloads/xcc-osx-0.71.tar.bz2) | 8.3 MB |
+| macOS (Apple silicon) | [xcc-osx-0.71.tar.bz2](/downloads/xcc-osx-0.71.tar.bz2) | 8.4 MB |
 | Linux (x86_64) | [xcc-linux-0.71.tar.bz2](/downloads/xcc-linux-0.71.tar.bz2) | 6.2 MB |
-| Windows (x64) | [xcc-win64-0.71.zip](/downloads/xcc-win64-0.71.zip) | 7.1 MB |
+| Windows (x64) | [xcc-win64-0.71.zip](/downloads/xcc-win64-0.71.zip) | 7.2 MB |
 | arm9 sysroot (any host) | [xcc-arm9-sysroot-0.71.tar.bz2](/downloads/xcc-arm9-sysroot-0.71.tar.bz2) | 830 KB |
-| UXKit GTK 4 library (Linux x86_64) | [xcc-uxgtk-linux-0.71.tar.bz2](/downloads/xcc-uxgtk-linux-0.71.tar.bz2) | 90 KB |
+| UXKit GTK 4 library (Linux x86_64) | [xcc-uxgtk-linux-0.71.tar.bz2](/downloads/xcc-uxgtk-linux-0.71.tar.bz2) | 99 KB |
 
 Every archive contains the same compiler. Each host build cross-compiles to **all**
 targets, so the platform you download for decides only where the compiler runs.
