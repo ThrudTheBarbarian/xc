@@ -1241,10 +1241,33 @@ static NSArray<NSString*>* x86ViewsFor(NSString* canon)
     }
 
 // Whole-token (register-delimited) presence / replacement in an operand string.
+// Does s mention tok as a whole word (no letter, digit or '_' either side)? The
+// same test as the regex (?<![A-Za-z0-9_])tok(?![A-Za-z0-9_]), done as a literal
+// search: tok is always a register name, and building a regex per call made the
+// copy-prop peephole the whole of a long function's compile time (bug 621).
+static BOOL x86IsWordChar(unichar c)
+    {
+    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_';
+    }
 static BOOL x86Mentions(NSString* s, NSString* tok)
     {
-    NSString* pat = [NSString stringWithFormat:@"(?<![A-Za-z0-9_])%@(?![A-Za-z0-9_])", tok];
-    return [s rangeOfString:pat options:NSRegularExpressionSearch].location != NSNotFound;
+    NSUInteger n = s.length, tl = tok.length;
+    if (tl == 0)
+        return NO;
+    NSRange r = NSMakeRange(0, n);
+    while (r.length >= tl)
+        {
+        NSRange f = [s rangeOfString:tok options:NSLiteralSearch range:r];
+        if (f.location == NSNotFound)
+            return NO;
+        BOOL before = f.location > 0 && x86IsWordChar([s characterAtIndex:f.location - 1]);
+        NSUInteger e = f.location + tl;
+        BOOL after = e < n && x86IsWordChar([s characterAtIndex:e]);
+        if (!before && !after)
+            return YES;
+        r = NSMakeRange(f.location + 1, n - f.location - 1);
+        }
+    return NO;
     }
 // Escape a literal string for use as a regex replacement TEMPLATE — `$`
 // introduces a capture-group reference and `\` is the escape, so both must be
@@ -1329,14 +1352,45 @@ static BOOL x86IsShift(NSString* m)
 + (NSString*)peepholeCopyProp:(NSString*)text
     {
     NSMutableArray<NSString*>* lines = [[text componentsSeparatedByString:@"\n"] mutableCopy];
+    // Each line's parse, by its text: the scan restarts after every rewrite and
+    // re-reads the same lines many times over, and parsing them again each time
+    // was most of a long function's compile time (bug 621).
+    NSMutableDictionary<NSString*, NSArray*>* parsed = [NSMutableDictionary dictionary];
+    NSArray* (^parse)(NSString*, NSString**) = ^NSArray*(NSString* ln, NSString** mnemOut) {
+      NSArray* hit = parsed[ln];
+      if (!hit)
+          {
+          NSString* m = nil;
+          NSArray* ops = [self x86Parse:ln mnem:&m];
+          hit = @[ ops ?: (id)[NSNull null], m ?: (id)[NSNull null] ];
+          parsed[ln] = hit;
+          }
+      if (mnemOut)
+          *mnemOut = hit[1] == [NSNull null] ? nil : hit[1];
+      return hit[0] == [NSNull null] ? nil : hit[0];
+    };
+    // reach[k]: the furthest line candidate k's scans read, for the candidates
+    // already tried in this pass. A rewrite at line i changes only line i (gone)
+    // and its consumer (after i), so a candidate that never read as far as i
+    // fails again exactly as before; the scan resumes at the first one that did,
+    // instead of at the top. Same rewrites, in the same order (bug 621).
+    NSMutableArray<NSNumber*>* reach = [NSMutableArray array];
+    NSUInteger start = 0;
     BOOL again = YES;
     while (again)
         {
         again = NO;
-        for (NSUInteger i = 0; i + 1 < lines.count; i++)
+        for (NSUInteger i = start; i + 1 < lines.count; i++)
             {
+            while (reach.count <= i)
+                [reach addObject:@0];
+            reach[i] = @(i);
+            void (^touch)(NSUInteger) = ^(NSUInteger at) {
+              if (at > reach[i].unsignedIntegerValue)
+                  reach[i] = @(at);
+            };
             NSString* mm = nil;
-            NSArray* mo = [self x86Parse:lines[i] mnem:&mm];
+            NSArray* mo = parse(lines[i], &mm);
             if (!mo || mo.count != 2 || ![mm isEqualToString:@"mov"])
                 continue;
             NSString *D = mo[0], *S = mo[1];
@@ -1368,7 +1422,8 @@ static BOOL x86IsShift(NSString* m)
             for (NSUInteger j = i + 1; j < lines.count; j++)
                 {
                 NSString* jm = nil;
-                NSArray* jo = [self x86Parse:lines[j] mnem:&jm];
+                touch(j);
+                NSArray* jo = parse(lines[j], &jm);
                 if (!jo)
                     {
                     NSString* tr = [lines[j] stringByTrimmingCharactersInSet:
@@ -1408,7 +1463,7 @@ static BOOL x86IsShift(NSString* m)
 
             // Substitute exact-token D→S in the consumer's source operands.
             NSString* cm = nil;
-            NSMutableArray* co = [[self x86Parse:lines[cons] mnem:&cm] mutableCopy];
+            NSMutableArray* co = [parse(lines[cons], &cm) mutableCopy];
             // `cl` as a shift count must stay `cl`; never forward it into a shift.
             if (x86IsShift(cm) && [dcanon isEqualToString:@"rcx"])
                 continue;
@@ -1436,7 +1491,8 @@ static BOOL x86IsShift(NSString* m)
             for (NSUInteger j = (NSUInteger)cons + 1; j < lines.count; j++)
                 {
                 NSString* jm = nil;
-                NSArray* jo = [self x86Parse:lines[j] mnem:&jm];
+                touch(j);
+                NSArray* jo = parse(lines[j], &jm);
                 if (!jo)
                     continue; // label/directive/blank
                 // hidden rax/rdx use → assume live
@@ -1467,6 +1523,11 @@ static BOOL x86IsShift(NSString* m)
             lines[cons] = [NSString stringWithFormat:@"%@%@\t%@", lead, cm,
                                                      [co componentsJoinedByString:@", "]];
             [lines removeObjectAtIndex:i];
+            NSUInteger from = 0;
+            while (reach[from].unsignedIntegerValue < i)
+                from++;
+            [reach removeObjectsInRange:NSMakeRange(from, reach.count - from)];
+            start = from;
             again = YES;
             break;
             }

@@ -41,6 +41,7 @@ class X86_64
     IRFunc* _fn;
     String* _out;
     bool _win64; // the Win64 ABI rather than System V
+    u32 _cpFar;  // peepholeCopyProp: the furthest line the current candidate's scans read
     Array* _simdNames; // dispatched functions (-msimd=auto), in emission order
     bool _failed;
     String* _why;
@@ -3704,15 +3705,26 @@ class X86_64
         return out;
         }
 
+    // reach[k]: the furthest line candidate k's scans read, for the candidates
+    // already tried in this pass. A rewrite at line i changes only line i (gone)
+    // and its consumer (after i), so a candidate that never read as far as i
+    // fails again exactly as before; the scan resumes at the first one that did,
+    // instead of at the top. Same rewrites, in the same order (bug 621).
     String* peepholeCopyProp(String* text)
         {
         Array* lines = text.splitOnByte((u8)'\n');
+        Array* reach = new Array();
+        u32 start = (u32)0;
         bool again = true;
         while (again)
             {
             again = false;
-            for (u32 i = (u32)0; i + (u32)1 < lines.count() && !again; i = i + (u32)1)
+            for (u32 i = start; i + (u32)1 < lines.count() && !again; i = i + (u32)1)
                 {
+                while (reach.count() <= i)
+                    reach.add((Object*)Number.withU32((u32)0));
+                reach.set(i, (Object*)Number.withU32(i));
+                _cpFar = i;
                 String* mm = (String*)0;
                 Array* mo = parseLine((String*)lines.get(i));
                 mm = takeMnem(mo);
@@ -3733,6 +3745,7 @@ class X86_64
                 if (scanon == (String*)0)
                     continue; // S must be a bare register
                 i32 cons = findConsumer(lines, i, D, dcanon, scanon);
+                reach.set(i, (Object*)Number.withU32(_cpFar));
                 if (cons < (i32)0)
                     continue;
                 String* cm = (String*)0;
@@ -3760,7 +3773,9 @@ class X86_64
                     }
                 if (!used)
                     continue;
-                if (!deadAfter(lines, (u32)cons, D, dcanon, cm, co))
+                bool dead = deadAfter(lines, (u32)cons, D, dcanon, cm, co);
+                reach.set(i, (Object*)Number.withU32(_cpFar));
+                if (!dead)
                     continue;
                 String* line = (String*)lines.get((u32)cons);
                 String* rebuilt = line.substringBytes((u32)0, line.byteIndexOf(cm));
@@ -3772,6 +3787,12 @@ class X86_64
                     }
                 lines.set((u32)cons, (Object*)rebuilt);
                 lines.removeAt(i);
+                u32 from = (u32)0;
+                while (((Number*)reach.get(from)).asU32() < i)
+                    from = from + (u32)1;
+                while (reach.count() > from)
+                    reach.removeAt(reach.count() - (u32)1);
+                start = from;
                 again = true;
                 }
             }
@@ -3795,6 +3816,8 @@ class X86_64
         for (u32 j = i + (u32)1; j < lines.count(); j = j + (u32)1)
             {
             String* jm = (String*)0;
+            if (j > _cpFar)
+                _cpFar = j;
             Array* jo = parseLine((String*)lines.get(j));
             jm = takeMnem(jo);
             if (jo == (Array*)0)
@@ -3840,6 +3863,8 @@ class X86_64
         for (u32 j = cons + (u32)1; j < lines.count(); j = j + (u32)1)
             {
             String* jm = (String*)0;
+            if (j > _cpFar)
+                _cpFar = j;
             Array* jo = parseLine((String*)lines.get(j));
             jm = takeMnem(jo);
             if (jo == (Array*)0)
