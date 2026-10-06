@@ -123,11 +123,11 @@ over `k` of `A[i][k] · B[k][j]`, in `float` or `double` — runs as a kernel th
 compiler writes itself: on Apple silicon with SME (M4 and later) on the matrix
 unit, and on x86-64 with the widest vector unit the processor has (SSE2, AVX2
 or AVX-512), chosen when the program starts. The results are the loops', to
-the last bit. `matrix_mul_f32` measures it: a 128×128 `float` multiply, 400
+the last bit. `matrix_mul_f32` measures it: a 128×128 `float` multiply, 10,000
 times. (`matrix_mul` multiplies `u32` values, which the matrix unit's outer
 products do not take, so it stays a vectorised loop.) On an Apple M4 Max
-it takes 3.5 ms against 391 ms for clang's C++ of the same loops; on an AMD Zen 5
-processor, where the program picks AVX-512, 12.5 ms against 252 ms. With
+it takes 72 ms against 10.9 s for clang's C++ of the same loops; on an AMD Zen 5
+processor, where the program picks AVX-512, 287 ms against 6.2 s. With
 `-fno-matmul` the loops run as written.
 
 ## Parallel blocks and the GPU

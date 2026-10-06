@@ -51,6 +51,11 @@ def esc(s):
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
+def secs(t):
+    """A time for prose: milliseconds below a second, else seconds."""
+    return "%d ms" % round(t * 1000) if t < 1 else "%.1f s" % t
+
+
 def ratio_rows(cur, suffix):
     """(worst ratio, benchmark, {language: xc's time over its}) per benchmark."""
     rows = []
@@ -369,6 +374,10 @@ def main():
         summary=summary(cur),
         standing=standing(cur),
         separate=separate(cur),
+        mm_arm=secs(cur["matrix_mul_f32"]["O3"]["xc"]),
+        mm_arm_cpp=secs(cur["matrix_mul_f32"]["O3"]["cpp"]),
+        mm_x86=secs(cur["matrix_mul_f32"]["O3"]["xc_x86_64"]),
+        mm_x86_cpp=secs(cur["matrix_mul_f32"]["O3"]["cpp_x86_64"]),
         chart_arm=version_switch(hist, "", "arm64: xc's time divided by each language's, per benchmark", versions, "vs-arm"),
         chart_x86=version_switch(hist, "_x86_64", "x86-64: xc's time divided by each language's, per benchmark", versions, "vs-x86"),
         table_arm=table(cur, ""),
@@ -487,11 +496,11 @@ over `k` of `A[i][k] · B[k][j]`, in `float` or `double` — runs as a kernel th
 compiler writes itself: on Apple silicon with SME (M4 and later) on the matrix
 unit, and on x86-64 with the widest vector unit the processor has (SSE2, AVX2
 or AVX-512), chosen when the program starts. The results are the loops', to
-the last bit. `matrix_mul_f32` measures it: a 128×128 `float` multiply, 400
+the last bit. `matrix_mul_f32` measures it: a 128×128 `float` multiply, 10,000
 times. (`matrix_mul` multiplies `u32` values, which the matrix unit's outer
 products do not take, so it stays a vectorised loop.) On an Apple M4 Max
-it takes 3.5 ms against 391 ms for clang's C++ of the same loops; on an AMD Zen 5
-processor, where the program picks AVX-512, 12.5 ms against 252 ms. With
+it takes {mm_arm} against {mm_arm_cpp} for clang's C++ of the same loops; on an AMD Zen 5
+processor, where the program picks AVX-512, {mm_x86} against {mm_x86_cpp}. With
 `-fno-matmul` the loops run as written.
 
 ## Parallel blocks and the GPU
