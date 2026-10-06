@@ -1,0 +1,21 @@
+  ok   three rows
+  ok   quoted separator
+  ok   plain field
+  ok   doubled quotes
+  ok   line break in a field
+  ok   LF endings
+  ok   CR endings
+  ok   empty text has no rows
+  ok   empty fields kept
+  ok   blank line is one empty field
+  ok   spaces kept
+  ok   tab separated
+  ok   records
+  ok   record field
+  ok   short row padded
+  ok   round trip
+  ok   quotes only when needed
+  ok   objects and Null
+bad CSV at byte 2: a quoted field is never closed
+bad CSV at byte 3: text after a quoted field's closing quote
+PASS

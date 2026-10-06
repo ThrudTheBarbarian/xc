@@ -70,6 +70,7 @@ export default defineConfig({
 										{ label: 'Cache', slug: 'compiler/api/cache' },
 										{ label: 'CharacterSet', slug: 'compiler/api/characterset' },
 										{ label: 'Coder', slug: 'compiler/api/coder' },
+										{ label: 'CSV', slug: 'compiler/api/csv' },
 										{ label: 'Data', slug: 'compiler/api/data' },
 										{ label: 'JSON', slug: 'compiler/api/json' },
 										{ label: 'Map', slug: 'compiler/api/map' },
