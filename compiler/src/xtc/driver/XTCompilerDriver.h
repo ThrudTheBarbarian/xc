@@ -66,6 +66,11 @@ NS_ASSUME_NONNULL_BEGIN
                         ifacePaths:(NSArray<NSString *> *)ifacePaths
                          typeTable:(XTTypeTable *)tt
                              arm64:(BOOL)arm64;
+// The runtime helper a `(P* ?)obj` downcast lowers to on the backends that carry
+// the conformance list, injected before sema. Exposed for the same sweep.
+- (XTProgramNode *)injectConformanceHelper:(XTProgramNode *)ast
+                                 typeTable:(XTTypeTable *)tt
+                                     arm64:(BOOL)arm64;
 
 /****************************************************************************\
 |* Run the IR frontend (preprocess → lex → parse → sema → IR-lower →
