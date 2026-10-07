@@ -7285,13 +7285,19 @@ static BOOL arm64NamesFrameReg(NSString *t) {
     }
     if (firstLoc)
         [out appendFormat:@"    .loc %u %u %u\n", firstLoc.fileId + 1, firstLoc.line, firstLoc.column];
-    // -g: each variable's slot (sp + offset, sp being DWARF register 31), for
-    // the debug information.
-    for (XTIRPinnedLocal *pl in fn.frameInfo.pinnedLocals)
-        if (pl.sourceName)
-            [out appendFormat:@"    %@ \"%@\" 31 %lu \"%@\"\n", pl.isParameter ? @".xc_param" : @".xc_var", pl.sourceName,
-                (unsigned long)[self slotOffsetForValue:pl.valueId ctx:ctx],
-                [XTIRPrinter stringFromType:pl.type module:ctx.module]];
+    // -g: the frame, and each variable's slot, for the debug information. Both
+    // are given from x29 (DWARF register 29), which a debugger restores in every
+    // frame: x29 sits `fpAbove` bytes above sp, and the caller's sp (the call
+    // frame) is frameSize above sp.
+    if (firstLoc) {
+        NSUInteger fpAbove = ctx.maxOutStack;
+        [out appendFormat:@"    .xc_frame %lu\n", (unsigned long)(ctx.frameSize - fpAbove)];
+        for (XTIRPinnedLocal *pl in fn.frameInfo.pinnedLocals)
+            if (pl.sourceName)
+                [out appendFormat:@"    %@ \"%@\" 29 %ld \"%@\"\n", pl.isParameter ? @".xc_param" : @".xc_var", pl.sourceName,
+                    (long)[self slotOffsetForValue:pl.valueId ctx:ctx] - (long)fpAbove,
+                    [XTIRPrinter stringFromType:pl.type module:ctx.module]];
+    }
     // Prologue. The pre-indexed `stp [sp, #-N]!` immediate caps at
     // 504 bytes; for larger frames adjust SP separately (sub allows
     // imm12 up to 4095, or a temp-register-built value beyond that).

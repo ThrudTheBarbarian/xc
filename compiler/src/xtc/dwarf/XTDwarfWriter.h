@@ -20,10 +20,12 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)setFile:(uint32_t)number path:(NSString*)path;
 
 // A frame record set up at `offset` (the instruction after which the frame
-// pointer holds the address of the saved {fp, lr} pair): from there the call
-// frame is fp + 16. A function without one keeps its return address in the
-// link register and the stack pointer where the caller left it.
-- (void)addFrameSetupAtOffset:(uint64_t)offset;
+// pointer holds the address of the saved {fp, return address} pair): from
+// there the call frame is fp + frameSize, the pair at its bottom (16 on
+// x86-64; on arm64 the frame size above x29). A function without one keeps its
+// return address in the link register and the stack pointer where the caller
+// left it.
+- (void)addFrameSetupAtOffset:(uint64_t)offset frameSize:(uint64_t)frameSize;
 
 // A variable of the function that contains text offset `at`: `name` lives at
 // `reg` + `offset` (DWARF register number) for the whole function, and `type`

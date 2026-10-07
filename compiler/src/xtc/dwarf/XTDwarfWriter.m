@@ -169,9 +169,9 @@ static XTDwarfWriter* gPending = nil;
     [_rows appendBytes:&r length:sizeof r];
     }
 
-- (void)addFrameSetupAtOffset:(uint64_t)offset
+- (void)addFrameSetupAtOffset:(uint64_t)offset frameSize:(uint64_t)frameSize
     {
-    [_frameSetups addObject:@(offset)];
+    [_frameSetups addObject:@[ @(offset), @(frameSize) ]];
     }
 
 - (void)addVariable:(NSString*)name
@@ -536,7 +536,9 @@ static XTDwarfWriter* gPending = nil;
     while ((frame.length % 8) != 0)
         putU8(frame, 0); // DW_CFA_nop
     patchU32(frame, 0, (uint32_t)(frame.length - 4));
-    NSArray<NSNumber*>* setups = [_frameSetups sortedArrayUsingSelector:@selector(compare:)];
+    NSArray<NSArray*>* setups = [_frameSetups sortedArrayUsingComparator:^NSComparisonResult(NSArray* a, NSArray* b) {
+      return [a[0] compare:b[0]];
+    }];
     for (NSUInteger i = 0; i < names.count; i++)
         {
         uint64_t start = functions[names[i]].unsignedLongLongValue;
@@ -548,21 +550,21 @@ static XTDwarfWriter* gPending = nil;
         putU32(frame, 0); // CIE at offset 0
         putU64(frame, textAddress + start);
         putU64(frame, end - start);
-        for (NSNumber* o in setups)
+        for (NSArray* o in setups)
             {
-            uint64_t at = o.unsignedLongLongValue;
+            uint64_t at = [o[0] unsignedLongLongValue], size = [o[1] unsignedLongLongValue];
             if (at < start || at >= end)
                 continue;
             uint64_t delta = (at - start) / minInsnLength;
             putU8(frame, 0x02); // DW_CFA_advance_loc1 (a prologue is short)
             putU8(frame, (uint8_t)MIN(delta, 255));
-            putU8(frame, 0x0c); // DW_CFA_def_cfa fp, 16
+            putU8(frame, 0x0c); // DW_CFA_def_cfa fp, size
             putULEB(frame, minInsnLength == 4 ? 29 : 6);
-            putULEB(frame, 16);
-            putU8(frame, 0x80 | (minInsnLength == 4 ? 29 : 6)); // fp at cfa-16
-            putULEB(frame, 2);
-            putU8(frame, 0x80 | raReg); // return address at cfa-8
-            putULEB(frame, 1);
+            putULEB(frame, size);
+            putU8(frame, 0x80 | (minInsnLength == 4 ? 29 : 6)); // fp at cfa-size
+            putULEB(frame, size / 8);
+            putU8(frame, 0x80 | raReg); // return address just above it
+            putULEB(frame, size / 8 - 1);
             break;
             }
         while (((frame.length - fdeAt) % 8) != 0)

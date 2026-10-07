@@ -1790,7 +1790,7 @@ static BOOL isPlainIntLiteral(NSString *s) {
         // so the call frame is rbp + 16 from here.
         if ([l hasPrefix:@"mov"] && [l hasSuffix:@"rbp, rsp"]) {
             if (!dwarf) dwarf = [[XTDwarfWriter alloc] init];
-            [dwarf addFrameSetupAtOffset:text.length];
+            [dwarf addFrameSetupAtOffset:text.length frameSize:16];
         }
     }
     if (dwarf.hasRows) [XTDwarfWriter setPending:dwarf];

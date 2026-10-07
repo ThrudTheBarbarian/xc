@@ -1797,6 +1797,7 @@ static NSString *quadSymbolOperand(NSString *l) {
     uint64_t textAddr=0, dataAddr=0; int section=0;
     BOOL inModInit=NO;   // bug 066: inside __DATA,__mod_init_func
     XTDwarfWriter *dwarf = nil;   // -g: the line table, if the text has one
+    long long pendingFrame = 16;  // -g: the call frame's distance above x29 (.xc_frame)
     for (NSString *raw in rawLines) {
         NSString *l=stripComment(raw);
         l=[l stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
@@ -1887,6 +1888,14 @@ static NSString *quadSymbolOperand(NSString *l) {
             // line table, recorded against the text offset they precede.
             // -g: `.xc_var "<name>" <reg> <offset> "<type>"` — a variable of the
             // function being assembled, for the debug information.
+            // -g: `.xc_frame <n>` — the next frame setup leaves the call frame n
+            // bytes above the frame pointer, with x29/x30 saved at its bottom.
+            if([l hasPrefix:@".xc_frame"]) {
+                NSScanner *sc = [NSScanner scannerWithString:[l substringFromIndex:9]];
+                long long n = 16;
+                if ([sc scanLongLong:&n]) pendingFrame = n;
+                continue;
+            }
             if([l hasPrefix:@".xc_var"] || [l hasPrefix:@".xc_param"]) {
                 NSArray<NSString *> *q = [l componentsSeparatedByString:@"\""];
                 if (q.count >= 5) {
@@ -1976,7 +1985,8 @@ static NSString *quadSymbolOperand(NSString *l) {
             // the call frame is x29 + 16 from here (the CFI's one rule change).
             if([l hasPrefix:@"add x29, sp"] || [l isEqualToString:@"mov x29, sp"]) {
                 if (!dwarf) dwarf = [[XTDwarfWriter alloc] init];
-                [dwarf addFrameSetupAtOffset:textAddr];
+                [dwarf addFrameSetupAtOffset:textAddr frameSize:pendingFrame];
+                pendingFrame = 16;
             }
         }
         else { NSError*e=nil; NSUInteger before=_data.length;   // stray non-label data line
