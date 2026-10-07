@@ -16189,10 +16189,11 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
     // value has no single home: each assignment is a new value). Parameters go
     // through the address-taken path, which copies each into its slot once.
     //
-    // For now only plain values are pinned this way: scalars and pointers to
-    // scalars, declared once in the function and not shadowing a parameter. A
-    // name declared again in an inner scope would share the outer one's slot,
-    // and class, struct and array locals are not yet safe to move into a slot.
+    // Only these are pinned this way: scalars and pointers to scalars,
+    // declared once in the function and not shadowing a parameter. A name
+    // declared again in an inner scope would share the outer one's slot, a
+    // pinned class reference is retained and released differently from an
+    // SSA one, and structs and arrays already have slots of their own shape.
     if (sDebugInfo)
         {
         BOOL (^plain)(XTType*) = ^BOOL(XTType* t) {
@@ -16484,8 +16485,14 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
         // is what irTypeForASTTypeQuiet: returns for a bare class type).
         // Record it so identifier / method-call lowering treats `name`
         // as a self-pointer to the slot.
+        //
+        // Only a stack instance (`Animal a;`, collected in classValueLocals) is
+        // the instance itself: `Pool p = new Pool` is a reference to a heap
+        // object, and its slot holds that reference (bug 632 — it was given an
+        // instance-sized slot, the pointer stored into it, and every method
+        // called on the slot's own address).
         XTIRClassInfo* vci = nil;
-        if (astTy.kind == XTTypeKindClass && ![astTy isKindOfClass:[XTPointerType class]])
+        if (astTy.kind == XTTypeKindClass && ![astTy isKindOfClass:[XTPointerType class]] && classValueLocals[name])
             {
             vci = self.classesByName[astTy.displayName];
             }
