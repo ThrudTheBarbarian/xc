@@ -664,11 +664,18 @@ class IRValue
     String* _ty;
     u32 _off;
     bool _esc;
+    // -g: the source variable this slot holds (the IR text names the slot by
+    // value; this is the program's name for it), and whether it is a
+    // parameter copied in at entry rather than a local.
+    String* _srcName;
+    bool _isParam;
 
     void init(void)
         {
         _off = (u32)0;
         _esc = false;
+        _srcName = (String*)0;
+        _isParam = false;
         }
     static IRPinned* with(IRValue* v, String* t, u32 off, bool esc)
         {
@@ -694,6 +701,22 @@ class IRValue
     bool esc(void)
         {
         return _esc;
+        }
+    String* srcName(void)
+        {
+        return _srcName;
+        }
+    void setSrcName(String* n)
+        {
+        _srcName = n;
+        }
+    bool isParam(void)
+        {
+        return _isParam;
+        }
+    void setIsParam(bool b)
+        {
+        _isParam = b;
         }
     }
 
@@ -1119,9 +1142,14 @@ class IRValue
                 if (i > (u32)0)
                     out.appendCString(", ");
                 IRPinned* p = (IRPinned*)_pinned.get(i);
-                out.appendFormat("(%%%ld:%s @%ld%s)", (i32)p.val().pid(),
+                out.appendFormat("(%%%ld:%s @%ld%s", (i32)p.val().pid(),
                                  p.ty().cString(), (i32)p.off(),
                                  p.esc() ? " esc" : "");
+                // -g: the source variable's name, then ` param` for a parameter.
+                if (p.srcName() != (String*)0)
+                    out.appendFormat(" \"%s\"%s", p.srcName().cString(),
+                                     p.isParam() ? " param" : "");
+                out.appendCString(")");
                 }
             out.appendFormat("], size: %ld }\n", (i32)_pinnedSize);
             }

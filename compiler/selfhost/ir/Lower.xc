@@ -8449,8 +8449,19 @@ class ClassInfo
         if (k == (u16)nkVariableDecl)
             {
             lowerVarDecl(n);
-            if (!_failed)
+            // As the reference: only the SSA path releases the declaration's
+            // +1 temps. A PINNED local's path (`&`-taken, every local of a
+            // goto function, every plain local under -g) drops them untracked,
+            // so `u32 i = f(String.withCString(..))` leaks the string when `i`
+            // lives in a slot. That is the reference's bug, mirrored here so
+            // the IR stays identical; fix both together.
+            if (!_failed && pinOf(n.name()) == (IRPinned*)0)
                 flushOwnedTemps();
+            else if (!_failed)
+                {
+                _ownedTemps = new Array();
+                _ownedBlocks = new Array();
+                }
             return;
             }
         // A struct declared inside a function is a TYPE, not a run of
@@ -13560,6 +13571,43 @@ class ClassInfo
                 }
             collectAllLocalNames(body, addressed);
             }
+        // -g: every local and parameter lives in its own frame slot for the
+        // whole function, as at -O0 in C, so a debugger can read it at any line
+        // (an SSA value has no single home: each assignment is a new value).
+        // Parameters go through the `&`-taken path, which copies each into its
+        // slot once.
+        //
+        // Only these are pinned this way: scalars and pointers to scalars,
+        // declared once in the function and not shadowing a parameter. A name
+        // declared again in an inner scope would share the outer one's slot, a
+        // pinned class reference is retained and released differently from an
+        // SSA one, and structs and arrays already have slots of their own shape.
+        if (_debugInfo)
+            {
+            Array* all = new Array();
+            collectDbgLocalNames(body, all);
+            Map* decls = new Map();
+            collectDbgDeclTypes(body, all, decls);
+            for (u32 i = (u32)0; i < all.count(); i = i + (u32)1)
+                {
+                String* nm = (String*)all.get(i);
+                Array* dl = (Array*)decls.get((Hashable*)nm);
+                if (dl != (Array*)0 && dl.count() == (u32)1 && _locals.get((Hashable*)nm) == (Object*)0 && dbgPlainType((String*)dl.get((u32)0)))
+                    addUnique(addressed, nm);
+                }
+            Array* pks = _locals.allKeys();
+            for (u32 i = (u32)0; i < pks.count(); i = i + (u32)1)
+                {
+                String* pn = (String*)pks.get(i);
+                String* pt = ((IRValue*)_locals.get((Hashable*)pn)).ty();
+                bool scalarParam = pt != (String*)0 && !isAggIr(pt) && !isPtrIr(pt);
+                if (!isName(pn, "self") && scalarParam && !hasName(all, pn))
+                    {
+                    addUnique(addressed, pn);
+                    addUnique(_ampTaken, pn);
+                    }
+                }
+            }
 
         // Value-typed aggregates are pinned whether or not anything takes
         // their address. The array ones are recorded separately: a bare name
@@ -13624,6 +13672,8 @@ class ClassInfo
                     {
                     IRValue* v = (IRValue*)pv;
                     IRPinned* p = IRPinned.with(new IRValue(v.ty()), v.ty(), off, true);
+                    dbgNamePin(p, name);
+                    p.setIsParam(_debugInfo);
                     _fn.addPinned(p);
                     _pins.set((Hashable*)name, (Object*)p);
                     // The slot's AST spelling, as the aliasing path below
@@ -13721,6 +13771,7 @@ class ClassInfo
                         dIr = weakSlotAgg(dIr);
                     }
                 IRPinned* p = IRPinned.with(new IRValue(dIr), dIr, off, esc);
+                dbgNamePin(p, name);
                 _fn.addPinned(p);
                 mine.add((Object*)p);
                 if (d == (u32)0)
@@ -13733,6 +13784,97 @@ class ClassInfo
             _pinSeq.set((Hashable*)name, (Object*)mine);
             }
         _fn.setPinnedSize(off);
+        }
+
+    // -g: a slot that holds a program variable carries its name for the debug
+    // information. Compiler temporaries have names a program cannot spell
+    // (one of `$.%#@` or a space), and are left out.
+    void dbgNamePin(IRPinned* p, String* name)
+        {
+        if (!_debugInfo || name == (String*)0 || name.byteLength() == (u32)0)
+            return;
+        for (u32 i = (u32)0; i < name.byteLength(); i = i + (u32)1)
+            {
+            u8 c = name.byteAt(i);
+            if (c == (u8)'$' || c == (u8)'.' || c == (u8)'%' || c == (u8)'#' || c == (u8)'@' || c == (u8)' ')
+                return;
+            }
+        p.setSrcName(name);
+        }
+
+    // -g: a bool, integer, enum or floating type, or a pointer to one.
+    bool dbgScalarSpelling(String* t)
+        {
+        return Types.isInteger(t) || Types.isFloating(t) || Types.isEnumName(t);
+        }
+
+    bool dbgPlainType(String* ty)
+        {
+        if (ty == (String*)0)
+            return false;
+        // `raw:u8*` is a pointer to u8: a qualifier does not change the shape.
+        String* t = stripQual(ty);
+        if (dbgScalarSpelling(t))
+            return true;
+        if (t.byteLength() > (u32)0 && t.byteAt(t.byteLength() - (u32)1) == (u8)'*')
+            return dbgScalarSpelling(pointeeOf(t));
+        return false;
+        }
+
+    // -g: every local var-decl name, walking exactly the statements the
+    // reference's collectAllLocalNamesIn: walks — blocks, both arms of an
+    // `if`, loop bodies, a `for`'s init clause, a for-in BODY (not its loop
+    // variable) and switch case bodies.
+    void collectDbgLocalNames(Node* n, Array* out)
+        {
+        if (n == 0)
+            return;
+        u16 k = n.kind();
+        if (k == (u16)nkVariableDecl)
+            {
+            if (n.name() != 0)
+                addUnique(out, n.name());
+            return;
+            }
+        if (k == (u16)nkForIn)
+            {
+            for (u32 i = (u32)2; i < n.kidCount(); i = i + (u32)1)
+                collectDbgLocalNames(n.kid(i), out);
+            return;
+            }
+        if (k == (u16)nkBlock || k == (u16)nkIf || k == (u16)nkWhile || k == (u16)nkForCStyle || k == (u16)nkMarkerInit || k == (u16)nkSwitch || k == (u16)nkCase)
+            {
+            for (u32 i = (u32)0; i < n.kidCount(); i = i + (u32)1)
+                collectDbgLocalNames(n.kid(i), out);
+            }
+        }
+
+    // -g: EVERY declaration's type per name (collectVarDeclTypes keeps only
+    // the distinct ones), over the same statements it walks.
+    void collectDbgDeclTypes(Node* n, Array* names, Map* out)
+        {
+        if (n == 0)
+            return;
+        u16 k = n.kind();
+        if (k == (u16)nkVariableDecl)
+            {
+            if (n.name() != 0 && n.op() != 0 && hasName(names, n.name()))
+                {
+                Object* seq = out.get((Hashable*)n.name());
+                if (seq == 0)
+                    {
+                    seq = (Object*)new Array();
+                    out.set((Hashable*)n.name(), seq);
+                    }
+                ((Array*)seq).add((Object*)n.op());
+                }
+            return;
+            }
+        if (k == (u16)nkBlock || k == (u16)nkIf || k == (u16)nkWhile || k == (u16)nkForCStyle || k == (u16)nkMarkerInit)
+            {
+            for (u32 i = (u32)0; i < n.kidCount(); i = i + (u32)1)
+                collectDbgDeclTypes(n.kid(i), names, out);
+            }
         }
 
     // Identifiers in one asm line. A comment runs to end of line and its words

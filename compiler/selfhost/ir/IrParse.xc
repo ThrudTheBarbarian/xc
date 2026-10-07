@@ -883,8 +883,14 @@ class IrParser
                 expectChar((u8)'@');
                 u32 off = (u32)number();
                 bool esc = expectWord("esc");
+                // -g: the source variable's name, and `param` for a parameter.
+                String* srcName = quoted();
+                bool isParam = srcName != (String*)0 && expectWord("param");
                 expectChar((u8)')');
-                _fn.addPinned(IRPinned.with(defineValue(id, ty), ty, off, esc));
+                IRPinned* pin = IRPinned.with(defineValue(id, ty), ty, off, esc);
+                pin.setSrcName(srcName);
+                pin.setIsParam(isParam);
+                _fn.addPinned(pin);
                 if (!expectChar((u8)','))
                     break;
                 }
