@@ -285,7 +285,8 @@ def standing(cur):
 
 
 PAR_MACHINES = (("mac", "Apple silicon, Metal"), ("linux", "Zen 5 Linux, its integrated GPU through Vulkan"),
-                ("windows", "Windows, NVIDIA RTX 3090 through CUDA and Vulkan"))
+                ("windows", "Windows, NVIDIA RTX 3090 through CUDA and Vulkan"),
+                ("browser", "Chrome on Apple silicon, wasm32 and WebGPU (from 0.73)"))
 
 
 def ms(us):
@@ -317,7 +318,9 @@ def par_tables(version):
             out.append("| benchmark | one thread | all threads | `auto` |")
             out.append("|---|---|---|---|")
         for b, r in rows:
-            cells = ["[`%s`](%s#%s)" % (b, SOURCES_URL, b), ms(r["serial"]["best_us"]), ms(r["cpu"]["best_us"])]
+            # A browser has no threads for wasm: no all-threads figure.
+            cells = ["[`%s`](%s#%s)" % (b, SOURCES_URL, b), ms(r["serial"]["best_us"]),
+                     ms(r["cpu"]["best_us"]) if "cpu" in r else "–"]
             if gpu:
                 cells.append(ms(r["gpu"]["best_us"]) if "gpu" in r else "–")
             if vk:
