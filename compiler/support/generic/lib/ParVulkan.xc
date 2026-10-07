@@ -381,8 +381,7 @@ class ParVulkan
         }
 
     // A buffer of `bytes`: in the GPU's own memory (`device`, unmapped), else
-    // mapped host memory, cached where it can be on a discrete GPU, which
-    // copies to and from it. The buffer, its memory and the mapping, or false.
+    // mapped host memory, cached where it can be. The buffer, its memory and the mapping, or false.
     static bool buffer(i64 bytes, bool device, u64* buf, u64* mem, u8** map)
         {
         if (bytes < (i64)4)
@@ -399,9 +398,10 @@ class ParVulkan
         _bufferReqs(_dev, *buf, (pointer)&req[0]);
         u32 bits = *(u32*)(pointer)(&req[0] + 16);
         // 1 device-local; 2 host-visible, 4 coherent, 8 cached.
-        i32 type = device ? memoryWith(bits, (u32)1) : (i32)-1;
-        if (!device && _discrete)
-            type = memoryWith(bits, (u32)14);
+        // Host memory the CPU caches, where there is one: the copies in and out
+        // read it at memory speed rather than across an uncached mapping (on an
+        // integrated GPU the kernel works in it directly, the GPU snooping).
+        i32 type = device ? memoryWith(bits, (u32)1) : memoryWith(bits, (u32)14);
         if (!device && type < (i32)0)
             type = memoryWith(bits, (u32)6);
         if (type < (i32)0)
