@@ -387,27 +387,6 @@ _xt_free:                               # @_xt_free
 .Lfunc_end11:
 	.size	_xt_free, .Lfunc_end11-_xt_free
                                         # -- End function
-	.globl	memset                          # -- Begin function memset
-	.p2align	4, 0x90
-	.type	memset,@function
-memset:                                 # @memset
-# %bb.0:
-	mov	rax, rdi
-	test	rdx, rdx
-	je	.LBB12_3
-# %bb.1:
-	xor	ecx, ecx
-	.p2align	4, 0x90
-.LBB12_2:                               # =>This Inner Loop Header: Depth=1
-	mov	byte ptr [rax + rcx], sil
-	inc	rcx
-	cmp	rdx, rcx
-	jne	.LBB12_2
-.LBB12_3:
-	ret
-.Lfunc_end12:
-	.size	memset, .Lfunc_end12-memset
-                                        # -- End function
 	.section	.rodata.cst16,"aM",@progbits,16
 	.p2align	4, 0x0                          # -- Begin function _xt_fmt_f
 .LCPI13_0:

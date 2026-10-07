@@ -351,7 +351,9 @@ void _xt_free(void* q)
 // ───────────────────────────── memset ─────────────────────────────
 // The backend lowers XTIROpMemSet to a `call memset`, so one has to exist. The
 // destination is volatile so clang cannot recognise the loop as the memset idiom
-// and emit a call to the function it is compiling.
+// and emit a call to the function it is compiling. A glibc program uses glibc's,
+// many times faster on a large fill.
+#if !defined(XT_GLIBC)
 void* memset(void* dst, int c, uint64_t n)
     {
     volatile uint8_t* p = (volatile uint8_t*)dst;
@@ -359,6 +361,7 @@ void* memset(void* dst, int c, uint64_t n)
         p[i] = (uint8_t)c;
     return dst;
     }
+#endif
 
 // ───────────── _xt_fmt_f — the ONE fixed form the library calls ─────────────
 // Stdio.xc calls this as _xt_fmt_f(buf, 96, "%.*f", prec, v) from emitFloat and
