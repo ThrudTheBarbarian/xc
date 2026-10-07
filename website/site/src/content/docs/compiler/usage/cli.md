@@ -218,7 +218,7 @@ is reported and ignored.
 | `-mnative` | The vector level of the machine running `xcc`: `avx512` (from 0.71) or `avx2` where the CPU and OS support it, otherwise the baseline. Refused when `xcc` is not running on x86-64, where there is no host level to read. |
 | `-fno-matmul` | **From 0.71.** At `-O2` and above, a dense `float` or `double` matrix multiply (`C[i][j] = Σ A[i][k] · B[k][j]` written as three loops) runs as a matrix kernel: on Apple Silicon macOS on the SME matrix unit when the CPU has one (Apple M4 and later), on x86-64 Linux with SSE2, AVX2 or AVX-512 vectors, picked like the rest of the program's vector code. The results are the loops', bit for bit. When the matrices overlap or hold a NaN, or on a Mac without SME, the loops run as written. This turns it off. |
 | `-fmalloc=system\|mimalloc` | Choose the C heap behind the runtime. `mimalloc` is `-A x86_64` only, and from 0.72 needs `-static`: the mimalloc object is linked ahead of libc, so its `malloc` family replaces musl's. |
-| `-g` | Accepted. No debug information is emitted yet, and `xcc` says so. |
+| `-g` | Write DWARF debug information (line table, functions, call frames) into the executable, for lldb and gdb (from 0.74; arm64, x86-64 and win64). See [Debugging](/compiler/usage/debugging/). |
 
 `xcc --help` prints the complete flag list.
 

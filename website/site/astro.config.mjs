@@ -152,6 +152,7 @@ export default defineConfig({
 								{ label: 'Overview', slug: 'compiler/usage' },
 								{ label: 'Allocator & ARC', slug: 'compiler/usage/allocator-arc' },
 								{ label: 'CLI flag reference', slug: 'compiler/usage/cli' },
+								{ label: 'Debugging', slug: 'compiler/usage/debugging' },
 								{ label: 'Install', slug: 'compiler/usage/install' },
 								{ label: 'Linker scripts (.lnk)', slug: 'compiler/usage/linker-scripts' },
 								{ label: 'Memory models', slug: 'compiler/usage/memory-models' },
