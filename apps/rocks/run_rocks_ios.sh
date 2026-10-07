@@ -1,5 +1,5 @@
 #!/bin/sh
-# run_rocks_ios.sh — the `rocks-ios` gate: Rocks, unchanged but for RKDriver's RK_IOS branch, on an
+# run_rocks_ios.sh — the `rocks-ios` gate: Rocks, unchanged, on an
 # iPad simulator.  Builds the iOS shim and Rocks for ios-sim (one in-house link, as the UXKit iOS
 # gates do), launches it, waits for its window-up line, and checks the window is really on screen:
 # the simulator's screenshot must hold the editor's canvas, its blue grid, not a blank launch screen.
@@ -17,7 +17,7 @@ work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
 echo "== rocks-ios: building the shim + Rocks for ios-sim =="
 xcrun -sdk iphonesimulator clang -target arm64-apple-ios15.0-simulator -fobjc-arc -fno-objc-msgsend-selector-stubs \
     -c "$ux/libUXIos.m" -o "$work/libUXIos.o"
-"$xcc" -A ios-sim -D RK_IOS -I "$ux" -I "$here/xc" "$here/xc/rocks_main.xc" -Xlinker "$work/libUXIos.o" \
+"$xcc" -A ios-sim -I "$ux" -I "$here/xc" "$here/xc/rocks_main.xc" -Xlinker "$work/libUXIos.o" \
     -lobjc -framework UIKit -framework Foundation -framework QuartzCore -framework CoreGraphics \
     -framework UniformTypeIdentifiers -o "$work/Rocks" -q
 

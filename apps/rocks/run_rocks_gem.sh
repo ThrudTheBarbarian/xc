@@ -1,7 +1,7 @@
 #!/bin/bash
 # run_rocks_gem.sh -- the `rocks-gem` gate: Rocks itself on GEM, without the board -- hostgem's GEM
 # (the real desktop and AES, native on the Mac; frameworks/uxkit/hostgem) with Rocks built as its
-# client (-D RK_HOSTGEM: the GEM branch of RKDriver on arm64).  The app must come up (its PASS
+# client (-D UX_GEM: UXPlatform's GEM branch on arm64).  The app must come up (its PASS
 # line), and the framebuffer must show the window painted: the canvas is the window's background,
 # not the black of a work area nobody cleared.  Writes /tmp/hostgem_fb.ppm.  macOS-only; needs
 # GEM_DIR (the GEM desktop sources).
@@ -15,7 +15,7 @@ case "$(uname)" in Darwin) ;; *) echo "== rocks-gem: skipped (hostgem is macOS-o
 [ -n "$UX_GEM_DIR" ] || { echo "== rocks-gem: skipped (no GEM_DIR) =="; exit 0; }
 echo "== rocks-gem: building host gemd + Rocks as its client =="
 bash "$ux/hostgem/build_gemd.sh" >/dev/null || { echo "== rocks-gem: FAILED (gemd build) =="; exit 1; }
-"$xcc" -A arm64 -D RK_HOSTGEM -I "$ux" -I "$here/xc" -L /tmp "$here/xc/rocks_main.xc" -o /tmp/xg_rocks -q \
+"$xcc" -A arm64 -D UX_GEM -I "$ux" -I "$here/xc" -L /tmp "$here/xc/rocks_main.xc" -o /tmp/xg_rocks -q \
   || { echo "== rocks-gem: FAILED (build) =="; exit 1; }
 rm -f /tmp/hostgem_fb.ppm
 /tmp/xg_hostgemd/host_gemd serve 4 >/tmp/hostgem_gemd.log 2>&1 & GPID=$!

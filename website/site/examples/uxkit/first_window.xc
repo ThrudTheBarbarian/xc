@@ -1,9 +1,9 @@
 // first_window.xc — the smallest complete UXKit program.
 //
 // A window, a label, a button, and a method that runs when it is pressed.
-// Nothing here names a platform except the one line that picks a driver.
+// Nothing here names a platform: UXPlatform picks the driver for the target it is built for.
 #import <Stdio.xc>
-#import "UXAppKitDriver.xc"
+#import "UXPlatform.xc"
 #import "UXApplication.xc"
 #import "UXWindow.xc"
 #import "UXView.xc"
@@ -47,9 +47,8 @@ class Counter : Object <UXApplicationDelegate>
 }
 
 void main(void) {
-    UXAppKitDriver* d = new UXAppKitDriver();
-    gDriver = d;
     UXApplication* app = new UXApplication();
+    app.setDriver(UXPlatform.driver()); // this platform's
     Counter* c = new Counter();
     app.setDelegate(c);
     app.run();

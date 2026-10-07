@@ -3,7 +3,7 @@
 // The view never holds your data. It asks: how many rows, and what goes in this
 // cell — so the model stays yours and the table stays a view of it.
 #import <Stdio.xc>
-#import "UXAppKitDriver.xc"
+#import "UXPlatform.xc"
 #import "UXApplication.xc"
 #import "UXWindow.xc"
 #import "UXView.xc"
@@ -123,8 +123,8 @@ class Controller : Object <UXApplicationDelegate, UXTableDataSource,
 }
 
 void main(void) {
-    gDriver = new UXAppKitDriver();
     UXApplication* app = new UXApplication();
+    app.setDriver(UXPlatform.driver()); // this platform's
     app.setDelegate(new Controller());
     app.run();
 }

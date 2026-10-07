@@ -1,6 +1,5 @@
 #!/bin/sh
-# run_rocks_android.sh — the `rocks-android` gate: Rocks, unchanged but for RKDriver's RK_ANDROID
-# branch, on the emulator.  Builds the two-lib APK the UXKit Android gates build (libxtapp.so from
+# run_rocks_android.sh — the `rocks-android` gate: Rocks, unchanged, on the emulator.  Builds the two-lib APK the UXKit Android gates build (libxtapp.so from
 # xcc, the NDK-built shim, the bridge dex), launches it, waits for its window-up line, and checks the
 # window is really on screen: a screencap must hold the editor's canvas, its blue grid.
 # ROCKS_ANDROID_SHOT=<png> keeps the screencap.  Skips cleanly without an emulator.
@@ -24,7 +23,7 @@ work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
 echo "== rocks-android: the shim (NDK), then the APK in one xcc line =="
 "$NDKBIN/aarch64-linux-android26-clang" -shared -fPIC -Wl,-soname,libUXAndroid.so \
     "$ux/libUXAndroid.c" -llog -landroid -o "$work/libUXAndroid.so"
-"$xcc" -A android --emit-apk -D RK_ANDROID -I "$ux" -I "$here/xc" "$here/xc/rocks_main.xc" \
+"$xcc" -A android --emit-apk -I "$ux" -I "$here/xc" "$here/xc/rocks_main.xc" \
     --needed libUXAndroid.so --with-lib "$work/libUXAndroid.so" --lib-name UXAndroid \
     --with-dex "$ux/tools/android/classes.dex" \
     --manifest-attr label=Rocks --manifest-attr enableOnBackInvokedCallback=true \

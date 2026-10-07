@@ -3,7 +3,7 @@
 // A header pinned across the top, a footer across the bottom, and a body that
 // takes whatever is left. Resize the window and watch each one follow its rule.
 #import <Stdio.xc>
-#import "UXAppKitDriver.xc"
+#import "UXPlatform.xc"
 #import "UXApplication.xc"
 #import "UXWindow.xc"
 #import "UXView.xc"
@@ -52,8 +52,8 @@ class Layout : Object <UXApplicationDelegate>
 }
 
 void main(void) {
-    gDriver = new UXAppKitDriver();
     UXApplication* app = new UXApplication();
+    app.setDriver(UXPlatform.driver()); // this platform's
     app.setDelegate(new Layout());
     app.run();
 }

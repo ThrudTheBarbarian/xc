@@ -7,14 +7,14 @@ This is the smallest complete UXKit program: a window, a label, a button, and a
 method that runs when the button is pressed. The whole program is below, and it
 is about forty lines.
 
-The program names a platform **once**, in the line that picks a driver. The
-rest is the same source on GEM, Windows, macOS, Linux, iOS, Android and the web.
+The program names no platform. The same source is a native app on GEM, Windows,
+macOS, Linux, iOS, Android and the web.
 
 ## The whole program
 
 ```c
 #import <Stdio.xc>
-#import "UXAppKitDriver.xc"
+#import "UXPlatform.xc"
 #import "UXApplication.xc"
 #import "UXWindow.xc"
 #import "UXView.xc"
@@ -57,9 +57,8 @@ class Counter : Object <UXApplicationDelegate>
 }
 
 void main(void) {
-    UXAppKitDriver* d = new UXAppKitDriver();   // the ONE platform-aware line
-    gDriver = d;
     UXApplication* app = new UXApplication();
+    app.setDriver(UXPlatform.driver());   // this platform's driver
     Counter* c = new Counter();
     app.setDelegate(c);
     app.run();
@@ -91,25 +90,21 @@ needs. `applicationDidStart` is the one method you must provide. It runs once,
 after the toolkit is up and before the first event, and you build your
 interface in it.
 
-### main() is where platforms are chosen — and nowhere else
+### No platform in the source
 
 ```c
-UXAppKitDriver* d = new UXAppKitDriver();
-gDriver = d;
+app.setDriver(UXPlatform.driver());
 ```
 
-The **driver** is the backend. Replace that line with
-[`UXGemDriver`](/compiler/api/uxkit/uxgemdriver/),
-[`UXWin32Driver`](/compiler/api/uxkit/uxwin32driver/),
-[`UXGtkDriver`](/compiler/api/uxkit/uxgtkdriver/),
-[`UXIosDriver`](/compiler/api/uxkit/uxiosdriver/) or
-[`UXWebDriver`](/compiler/api/uxkit/uxwebdriver/) and the same program is a
-native app on that platform. Real apps hide this line behind one `#ifdef`; see
-[the driver model](/compiler/api/uxkit/guide-drivers/).
+The **driver** is the backend. [`UXPlatform`](/compiler/api/uxkit/uxplatform/)
+gives the one for the target the program is built for: AppKit for `-A arm64`,
+Win32 for `-A win64`, GTK for `-A x86_64`, the web for `-A wasm32`, iOS,
+Android and GEM for theirs. Build the same file for another target and it is a
+native app there; see [the driver model](/compiler/api/uxkit/guide-drivers/).
 
-Nothing above `main` mentions a platform. Check this as you write: if you need
-a platform name inside a controller, there is almost always a neutral API for
-what you want.
+Nothing in the program mentions a platform. Keep it that way as you write: if
+you need a platform name inside a controller, there is almost always a neutral
+API for what you want.
 
 ### Views go in a tree, positioned by their parent
 

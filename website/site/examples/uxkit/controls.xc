@@ -3,7 +3,7 @@
 // Every control reports the same way: a callback carrying receiver and code.
 // The handler receives the SENDER, so one method can serve several controls.
 #import <Stdio.xc>
-#import "UXAppKitDriver.xc"
+#import "UXPlatform.xc"
 #import "UXApplication.xc"
 #import "UXWindow.xc"
 #import "UXView.xc"
@@ -97,8 +97,8 @@ class Panel : Object <UXApplicationDelegate>
 }
 
 void main(void) {
-    gDriver = new UXAppKitDriver();
     UXApplication* app = new UXApplication();
+    app.setDriver(UXPlatform.driver()); // this platform's
     app.setDelegate(new Panel());
     app.run();
 }

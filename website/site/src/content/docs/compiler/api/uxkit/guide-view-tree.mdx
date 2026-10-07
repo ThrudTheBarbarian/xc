@@ -129,7 +129,7 @@ partial ones.
 
 ```c
 #import <Stdio.xc>
-#import "UXAppKitDriver.xc"
+#import "UXPlatform.xc"
 #import "UXApplication.xc"
 #import "UXWindow.xc"
 #import "UXView.xc"
@@ -174,8 +174,8 @@ class Layout : Object <UXApplicationDelegate>
 }
 
 void main(void) {
-    gDriver = new UXAppKitDriver();
     UXApplication* app = new UXApplication();
+    app.setDriver(UXPlatform.driver());
     app.setDelegate(new Layout());
     app.run();
 }

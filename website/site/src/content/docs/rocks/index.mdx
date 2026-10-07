@@ -203,7 +203,7 @@ GEM does not look. The details are on [`UXRscV2`](/compiler/api/uxkit/uxrscv2/).
 
 ```c
 Data* rsc = UXFileIO.read((u8*)"player.rsc");
-UXRscInstance* rsc = UXRsc.load(rsc.bytes(), rsc.length(), 0, (UXDesignable*)0, content);
+UXRscInstance* design = UXRsc.load(rsc.bytes(), rsc.length(), 0, (UXDesignable*)0, content);
 ```
 
 This builds form 0 (the first form) for the device the app runs on, makes the

@@ -30,7 +30,7 @@ defines. The `.xc` source does not.
 
 ## Topics
 
-**The backend** · [driver](#driver) · [name](#name)
+**The backend** · [driver](#driver) · [fillsScreen](#fillsscreen) · [displayName](#displayname) · [name](#name)
 
 ### driver
 
@@ -40,6 +40,25 @@ static UXViewDriver* driver(void)
 
 A new driver for the backend this build links, for
 [`UXApplication.setDriver`](/compiler/api/uxkit/uxapplication/#setdriver).
+
+### fillsScreen
+
+```c
+static bool fillsScreen(void)
+```
+
+Whether an application's main window is the whole screen: true on iOS and
+Android, where an app has one window that fills the display, and false on the
+desktops, where a window opens at a size of its own.
+
+### displayName
+
+```c
+static u8* displayName(void)
+```
+
+The platform's name for a title or an about box: `"macOS"`, `"Windows"`,
+`"Linux"`, `"iOS"`, `"Android"`, `"the web"` or `"GEM"`.
 
 ### name
 

@@ -5,11 +5,12 @@ description: "The seam between the neutral toolkit and a native backend: the met
 
 `UXViewDriver` is **the** seam between the toolkit and a platform. Views,
 controls, layout and the responder chain above it are one body of code; each
-platform sits below it. It is also the only platform-specific name a
-well-written program contains, and that name appears once:
+platform sits below it. A program does not name a driver:
+[`UXPlatform`](/compiler/api/uxkit/uxplatform/) gives the one for the target
+it is built for.
 
 ```c
-gDriver = new UXAppKitDriver();
+app.setDriver(UXPlatform.driver());
 ```
 
 ```c

@@ -60,6 +60,37 @@ class UXPlatform : Object
         return new UXAppKitDriver();
 #endif
         }
+    // Whether an application's main window is the whole screen: a phone's or a tablet's app has one
+    // window, which fills the display, where a desktop's opens at a size of its own.
+    static bool fillsScreen(void)
+        {
+#if UX_PLATFORM_IOS
+        return true;
+#elif UX_PLATFORM_ANDROID
+        return true;
+#else
+        return false;
+#endif
+        }
+    // the platform's name, for a title or an about box: "macOS", "Windows", "Linux", ...
+    static u8* displayName(void)
+        {
+#if UX_PLATFORM_WIN32
+        return (u8*)"Windows";
+#elif UX_PLATFORM_WEB
+        return (u8*)"the web";
+#elif UX_PLATFORM_GEM
+        return (u8*)"GEM";
+#elif UX_PLATFORM_GTK
+        return (u8*)"Linux";
+#elif UX_PLATFORM_IOS
+        return (u8*)"iOS";
+#elif UX_PLATFORM_ANDROID
+        return (u8*)"Android";
+#else
+        return (u8*)"macOS";
+#endif
+        }
     // the backend's name, for a log line: "win32", "web", "gem", "gtk", "ios", "android", "appkit"
     static u8* name(void)
         {

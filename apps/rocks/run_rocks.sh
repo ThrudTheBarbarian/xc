@@ -1,9 +1,9 @@
 #!/bin/sh
 # run_rocks.sh — build and run Rocks (the XC/UXKit rewrite).
 #
-# Rocks is an ordinary UXKit client: the only platform-aware line is the driver
-# it constructs, so this script differs from a Win32/GTK/GEM one only in the
-# shim it links.  `--build-only` compiles and stops, which is what CI wants and
+# Rocks is an ordinary UXKit client and names no platform (UXPlatform picks the
+# driver), so this script differs from a Win32/GTK/GEM one only in the shim it
+# links.  `--build-only` compiles and stops, which is what CI wants and
 # what a headless session can check.
 set -e
 here=$(cd "$(dirname "$0")" && pwd)

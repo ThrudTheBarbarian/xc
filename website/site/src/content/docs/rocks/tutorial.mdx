@@ -168,7 +168,7 @@ use. Save.
 ```c
 // Player/main.xc
 #import <Stdio.xc>
-#import "UXAppKitDriver.xc"
+#import "UXPlatform.xc"
 #import "UXApplication.xc"
 #import "UXWindow.xc"
 #import "UXFileIO.xc"
@@ -177,7 +177,7 @@ use. Save.
 
 class PlayerApp : Object<UXApplicationDelegate>
 {
-    UXRscInstance* rsc; // keeps the controller the file made
+    UXRscInstance* design; // keeps the controller the file made
 
     i32 applicationDidStart(UXApplication* app) {
         Data* rsc = UXFileIO.read((u8*)"player.rsc");
@@ -186,7 +186,7 @@ class PlayerApp : Object<UXApplicationDelegate>
         UXWindow* win     = new UXWindow();
         win.open((u8*)"Player", UXGeom.make(100, 100, 480, 300), content);
         app.addWindow(win);
-        rsc = UXRsc.load(rsc.bytes(), rsc.length(), 0, (UXDesignable*)0, content);
+        design = UXRsc.load(rsc.bytes(), rsc.length(), 0, (UXDesignable*)0, content);
         win.tree.finalise();
         win.displayAll();
         return 0;
@@ -195,11 +195,8 @@ class PlayerApp : Object<UXApplicationDelegate>
 
 void main(void)
 {
-    UXAppKitDriver* d = new UXAppKitDriver();
-    gDriver = d;
     UXApplication* app = new UXApplication();
-    d.setInteractive(true);
-    d.attachApp(app);
+    app.setDriver(UXPlatform.driver()); // this platform's: the same source everywhere
     app.setDelegate(new PlayerApp());
     app.run();
 }

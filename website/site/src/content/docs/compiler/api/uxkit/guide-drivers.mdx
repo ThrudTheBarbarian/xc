@@ -1,16 +1,17 @@
 ---
 title: "Guide: the driver model and multiplatform"
-description: "One platform-aware file, and nothing else in your program names a backend. What a driver does, how to write the seam, and a mistake that breaks the link."
+description: "Nothing in your program names a backend: UXPlatform gives the driver for the target you build for. What a driver does, and what you can see of it."
 ---
 
-Every example in these guides ends the same way:
+Every example in these guides starts its application the same way:
 
 ```c
-gDriver = new UXAppKitDriver();     // the ONE platform-aware line
+UXApplication* app = new UXApplication();
+app.setDriver(UXPlatform.driver());   // the driver for the target this is built for
 ```
 
-A UXKit program differs per platform in **one place**. This guide covers how to
-build that place and what happens on the other side of it.
+A UXKit program names no platform. This guide covers what the driver does and
+what you can see of it.
 
 ## What a driver is
 
@@ -29,95 +30,40 @@ one body of code on every platform. Below it, `UXAppKitDriver` talks to
 `UXGemDriver` to the AES, `UXGtkDriver` to GTK4, and
 [`UXWebDriver`](/compiler/api/uxkit/uxwebdriver/) to a canvas.
 
-## Writing the seam
+## Choosing the driver
 
-In a real program the one line becomes one **file**. This is the pattern from
-the Rocks editor:
-
-```c
-#ifdef ARCH_arm64
-#import "UXAppKitDriver.xc"
-#endif
-#ifdef ARCH_arm9
-#import "UXGemDriver.xc"
-#endif
-#ifdef ARCH_win64
-#import "UXWin32Driver.xc"
-#else
-#ifdef ARCH_x86_64
-#import "UXGtkDriver.xc"
-#endif
-#endif
-
-class AppDriver : Object {
-    static bool start(UXApplication* app) {
-#ifdef ARCH_arm64
-        UXAppKitDriver* d = new UXAppKitDriver();
-        gDriver = d;
-        d.setInteractive(true);      // GUI: [NSApp run] owns the loop
-        d.attachApp(app);
-        return true;
-#endif
-#ifdef ARCH_win64
-        UXWin32Driver* wd = new UXWin32Driver();
-        gDriver = wd;
-        i32 w = 0; i32 h = 0;
-        return wd.boot(&w, &h);
-#else
-#ifdef ARCH_x86_64
-        UXGtkDriver* xd = new UXGtkDriver();
-        gDriver = xd;
-        i32 w = 0; i32 h = 0;
-        return xd.boot(&w, &h);
-#endif
-#endif
-    }
-}
-```
-
-Every UXKit gate uses this target-to-platform mapping:
+[`UXPlatform`](/compiler/api/uxkit/uxplatform/) picks the driver from the
+target the program is compiled for, and imports only that one, because a
+driver's header names its platform's system libraries (the Win32 driver names
+`comdlg32`, `ole32` and `comctl32`, the GEM driver the AES), which do not exist
+elsewhere:
 
 | target | platform | backend |
 | --- | --- | --- |
 | `arm64` | macOS | AppKit |
 | `x86_64` | Linux | GTK4 |
 | `win64` | Windows | Win32 |
-| `arm9` | Atari | GEM/AES |
-| `ios-sim` | iOS | UIKit |
+| `ios-sim`, `ios` | iOS | UIKit |
+| `android` | Android | Android views |
 | `wasm32` | the web | canvas |
+| `arm9` | Atari | GEM/AES |
 
-### The imports must be conditional too
+Two choices are not the target's own and are made when building: `-D UX_GTK`
+builds the GTK driver for a Mac, against its GTK 4, and `-D UX_GEM` builds GEM
+for a Mac, against the host GEM stack.
 
-A driver's header pulls in **its platform's system interfaces**. The Win32
-driver names `comdlg32`, `ole32` and `comctl32`, and the GEM driver names the
-AES. These do not exist on other platforms, so the `#ifdef` has to wrap the
-`#import` as well as the `new`.
-
-:::caution[Check win64 first, and nest the branches]
-A win64 build defines **both** `ARCH_win64` and `ARCH_x86_64`. Windows is
-x86_64, so its include search path contains the x86_64 lib directory.
-
-If you write the two as parallel `#ifdef`s, the GTK driver is compiled into the
-Windows binary. The build succeeds and the **link** fails on `ux_gtk_fill`, far
-from the cause and with nothing pointing back at it.
-
-Nesting makes the platforms mutually exclusive.
-:::
+`app.setDriver` installs the driver and tells it about the application, which
+is where each driver sets itself up: AppKit hands the loop to `[NSApp run]`
+and routes native events into the application, iOS and Android hand it to the
+system's own loop.
 
 ## Booting, and what "no display" means
 
-```c
-return wd.boot(&w, &h);      // false when there is no display
-```
-
-`boot` returns false on a headless CI box or when `DISPLAY` is unset. Treat
-that as a **skip, not a failure**. "This environment has no screen" and "this
-program is broken" are different results, and counting both as failures makes
-a green CI run meaningless.
-
-AppKit has a different shape: it has `setInteractive(true)` and `attachApp`,
-because `[NSApp run]` owns the loop and native events have to be routed into
-your application instead of pulled from it.
+`app.run()` starts the driver. When there is no display to talk to (a headless
+CI box, an unset `DISPLAY`) it returns `1` without running. Treat that as a
+**skip, not a failure**. "This environment has no screen" and "this program is
+broken" are different results, and counting both as failures makes a green CI
+run meaningless.
 
 ## What the driver does that you can see
 

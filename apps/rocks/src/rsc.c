@@ -482,14 +482,14 @@ int rsc_write(const RSC *r, uint8_t **out_p, size_t *out_len, const char **err) 
         uint32_t bytes = (uint32_t)(bb->bi_wb > 0 ? bb->bi_wb : 0) * (uint32_t)(bb->bi_hl > 0 ? bb->bi_hl : 0);
         if (bb->bi_pdata && bytes) IM_APPEND(bb->bi_pdata, bytes);
     }
-    int nted = teds.n, rsc = ibs.n, nbb = bbs.n;
+    int nted = teds.n, nib = ibs.n, nbb = bbs.n;
     int nstring = r->nstring, nimages = r->nfreeimg;
 
     /* layout */
     uint32_t objBase = SZ_HDR;
     uint32_t tedBase = objBase + (uint32_t)nobs * SZ_OBJ;
     uint32_t ibBase  = tedBase + (uint32_t)nted * SZ_TED;
-    uint32_t bbBase  = ibBase + (uint32_t)rsc * SZ_IB;
+    uint32_t bbBase  = ibBase + (uint32_t)nib * SZ_IB;
     uint32_t frstr   = bbBase + (uint32_t)nbb * SZ_BB;      /* free-string table  */
     uint32_t frimg   = frstr + (uint32_t)nstring * 4;       /* free-image table   */
     uint32_t trindex = frimg + (uint32_t)nimages * 4;
@@ -509,7 +509,7 @@ int rsc_write(const RSC *r, uint8_t **out_p, size_t *out_len, const char **err) 
     hdr[0]=RSC_VRSN_ROCKS; hdr[1]=(uint16_t)objBase; hdr[2]=(uint16_t)tedBase; hdr[3]=(uint16_t)ibBase;
     hdr[4]=(uint16_t)bbBase; hdr[5]=(uint16_t)frstr; hdr[6]=(uint16_t)strBase; hdr[7]=(uint16_t)imBase;
     hdr[8]=(uint16_t)frimg; hdr[9]=(uint16_t)trindex; hdr[10]=(uint16_t)nobs; hdr[11]=(uint16_t)ntree;
-    hdr[12]=(uint16_t)nted; hdr[13]=(uint16_t)rsc; hdr[14]=(uint16_t)nbb;
+    hdr[12]=(uint16_t)nted; hdr[13]=(uint16_t)nib; hdr[14]=(uint16_t)nbb;
     hdr[15]=(uint16_t)nstring; hdr[16]=(uint16_t)nimages; hdr[17]=(uint16_t)total;
     for (int i=0;i<18;i++) wr16(buf + i*2, hdr[i]);
 
@@ -547,7 +547,7 @@ int rsc_write(const RSC *r, uint8_t **out_p, size_t *out_len, const char **err) 
         wr16(d+26,(uint16_t)(ti->te_ptmplt?strlen(ti->te_ptmplt)+1:1));
     }
     /* iconblk */
-    for (int i = 0; i < rsc; i++) {
+    for (int i = 0; i < nib; i++) {
         RSC_ICONBLK *ib = ibs.items[i];
         uint8_t *d = buf + ibBase + (size_t)i * SZ_IB;
         wr32(d+0, ib_mask_off ? imBase + ib_mask_off[i] : 0);

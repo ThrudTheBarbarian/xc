@@ -12,7 +12,7 @@
 // bootstrap plan; nothing here changes when that happens.
 #import <Stdio.xc>
 #import <Process.xc>
-#import "RKDriver.xc"
+#import "UXPlatform.xc"
 #import "UXApplication.xc"
 #import "UXWindow.xc"
 #import "UXView.xc"
@@ -42,7 +42,7 @@ class RocksApp : Object<UXApplicationDelegate>
         i16 wy = (i16)60;
         i16 ww = (i16)RK_W;
         i16 wh = (i16)RK_H;
-        if (RKDriver.fillsScreen() && app.screenWidth() > (i32)0)
+        if (UXPlatform.fillsScreen() && app.screenWidth() > (i32)0)
             {
             wx = (i16)0;
             wy = (i16)0;
@@ -108,17 +108,13 @@ class RocksApp : Object<UXApplicationDelegate>
         }
     }
 
-    // Nothing here names a platform: RKDriver is the one file that does, so this
-    // entry point is identical on macOS, Linux, Windows and GEM.
+    // Nothing here names a platform: UXPlatform picks the driver for the target this is built
+    // for, so this entry point is the same on every platform.
     void main(void)
     {
     RocksApp* delegate = new RocksApp();
     UXApplication* app = new UXApplication();
-    if (!RKDriver.start(app))
-        {
-        Stdio.printf("SKIP: no display for the %s driver\n", RKDriver.platformName());
-        return;
-        }
+    app.setDriver(UXPlatform.driver());
     app.setDelegate(delegate);
     app.run();
     Stdio.printf("rocks exited\n");
