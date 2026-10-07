@@ -210,10 +210,15 @@ the CPU's in the last few bits; integer results are the same either way.
 With accuracy, the maths is precise and float results land within about one
 ULP of the CPU's. NVIDIA GPUs have no precise `sin`, `cos`, `exp`, `ln` or
 `pow`, so there a block that calls them runs on the CPU. Vulkan and WebGPU
-round `+`, `-` and `*` exactly but not division or square roots, and have no
-precise `sin`, `cos`, `exp`, `ln` or `pow`: there a block whose goal is
-accuracy and that uses any of them runs on the CPU. Choose accuracy for a block
-that depends on NaN or infinity, or on exact float results.
+round `+`, `-` and `*` exactly but not division or square roots; from 0.73 a
+block whose goal is accuracy divides and takes square roots of `float`s there
+in integer arithmetic, correctly rounded, so its results are the CPU's (up to
+0.72 such a block runs on the CPU). They have no precise `sin`, `cos`, `exp`,
+`ln` or `pow`, so a block whose goal is accuracy and that calls them runs on
+the CPU. Apple GPUs flush subnormal `float`s (below about 1.2e-38) to zero, so
+results that pass through them can differ from the CPU's there. Choose
+accuracy for a block that depends on NaN or infinity, or on exact float
+results.
 
 On the CPU, both goals run the same code, except that from 0.72 the block's goal also holds for the loops in its body, as
 [`:goal` on a `for` loop](/compiler/language/statements/#speed-or-accuracy-goal)

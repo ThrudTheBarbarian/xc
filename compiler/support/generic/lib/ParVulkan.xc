@@ -43,6 +43,7 @@
 // XC_PAR_VULKAN_DEVICE=<n> picks the n-th Vulkan device; by default the first
 // discrete GPU, else the first integrated one, else the first of any kind.
 #import "ParDevice.xc"
+#import "ParSoftFloat.xc"   // correctly rounded division and sqrt for accuracy blocks
 
 // The Vulkan loader: vulkan-1.dll on Windows, libvulkan.so on Android, and
 // libvulkan.so.1 on Linux, where only a dynamically linked program can load it.

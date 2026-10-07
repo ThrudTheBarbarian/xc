@@ -17031,10 +17031,17 @@ class ClassInfo
         else if (o.equals(spvS("FMul"))) op = (u32)SPV_FMUL;
         else if (o.equals(spvS("FDiv")))
             {
+            // An accuracy block divides in integer arithmetic (the reference explains).
             if (!_mFast)
                 {
-                parBecause(spvS("it divides floats, which a Vulkan GPU does not round exactly, and the block's goal is accuracy"));
-                return false;
+                u32 fid = spvHelperId(spvS("xcFdivRn"));
+                if (fid == (u32)0)
+                    {
+                    parBecause(spvS("it divides floats, which a Vulkan GPU does not round exactly, and the block's goal is accuracy"));
+                    return false;
+                    }
+                spvSetResult(ip, spvEmitR((u32)SPV_FUNCTIONCALL, ty, spvA3(fid, a, b)));
+                return true;
                 }
             op = (u32)SPV_FDIV;
             }
@@ -17199,6 +17206,30 @@ class ClassInfo
                m.equals(spvS("max"));
         }
 
+    // The SPIR-V function of a function of the program the kernel calls,
+    // printed once as a helper; 0 (with the reason) when it cannot be. As the
+    // reference's spvHelperId.
+    u32 spvHelperId(String* callee)
+        {
+        Number* fid = (Number*)_sHelpers.get((Hashable*)callee);
+        if (fid != (Number*)0)
+            return fid.asU32();
+        IRFunc* target = (IRFunc*)0;
+        for (u32 i = (u32)0; i < _m.funcs().count(); i = i + (u32)1)
+            if (((IRFunc*)_m.funcs().get(i)).name().equals(callee))
+                target = (IRFunc*)_m.funcs().get(i);
+        if (target == (IRFunc*)0)
+            return (u32)0;
+        u32 f = spvHelper(target);
+        if (f == (u32)0)
+            {
+            parBecause(parCallFailed(callee, _mHelperWhy));
+            return (u32)0;
+            }
+        _sHelpers.set((Hashable*)callee, (Object*)Number.withU32(f));
+        return f;
+        }
+
     bool spvCall(IRInsn* ip)
         {
         IROperand* o0 = (IROperand*)ip.ops().get((u32)0);
@@ -17219,11 +17250,27 @@ class ClassInfo
                 return false;
             args.add((Object*)Number.withU32(v));
             }
+        // A float's bits and back (ParSoftFloat.xc): a bit cast.
+        if ((callee.equals(spvS("xcF32Bits")) || callee.equals(spvS("xcF32FromBits"))) && args.count() == (u32)1)
+            {
+            spvSetResult(ip, spvEmitR((u32)SPV_BITCAST, spvType(rt), spvA1(((Number*)args.get((u32)0)).asU32())));
+            return true;
+            }
         if (spvIsMaths(callee))
             {
             if (isVoid || args.count() == (u32)0)
                 return false;
             u32 g = spvGlslFor(callee, rt);
+            // An accuracy block's square root (the reference explains).
+            if (g == (u32)0 && !_mFast && ptxIs(rt, "F32") && ptxMathName(callee).equals(spvS("sqrt")))
+                {
+                u32 sfid = spvHelperId(spvS("xcFsqrtRn"));
+                if (sfid != (u32)0)
+                    {
+                    spvSetResult(ip, spvEmitR((u32)SPV_FUNCTIONCALL, spvType(rt), spvA2(sfid, ((Number*)args.get((u32)0)).asU32())));
+                    return true;
+                    }
+                }
             if (g == (u32)0)
                 {
                 String* w = spvS("it calls ");
@@ -17241,24 +17288,10 @@ class ClassInfo
             return true;
             }
         // A function of the program: printed once, as a SPIR-V function.
-        Number* fid = (Number*)_sHelpers.get((Hashable*)callee);
-        if (fid == (Number*)0)
-            {
-            IRFunc* target = (IRFunc*)0;
-            for (u32 i = (u32)0; i < _m.funcs().count(); i = i + (u32)1)
-                if (((IRFunc*)_m.funcs().get(i)).name().equals(callee))
-                    target = (IRFunc*)_m.funcs().get(i);
-            if (target == (IRFunc*)0)
-                return false;
-            u32 f = spvHelper(target);
-            if (f == (u32)0)
-                {
-                parBecause(parCallFailed(callee, _mHelperWhy));
-                return false;
-                }
-            fid = Number.withU32(f);
-            _sHelpers.set((Hashable*)callee, (Object*)fid);
-            }
+        u32 hf = spvHelperId(callee);
+        if (hf == (u32)0)
+            return false;
+        Number* fid = Number.withU32(hf);
         u32 ret = isVoid ? _sMod.typeVoid() : spvType(rt);
         if (ret == (u32)0)
             return false;
@@ -17311,13 +17344,19 @@ class ClassInfo
             }
         if (o.equals(spvS("FSqrt")))
             {
-            if (!_mFast)
-                {
-                parBecause(spvS("it takes a square root, which a Vulkan GPU does not round exactly, and the block's goal is accuracy"));
-                return false;
-                }
             u32 a = spvValue(o0, rt);
             if (a == (u32)0) return false;
+            if (!_mFast)
+                {
+                u32 fid = ptxIs(rt, "F32") ? spvHelperId(spvS("xcFsqrtRn")) : (u32)0;
+                if (fid == (u32)0)
+                    {
+                    parBecause(spvS("it takes a square root, which a Vulkan GPU does not round exactly, and the block's goal is accuracy"));
+                    return false;
+                    }
+                spvSetResult(ip, spvEmitR((u32)SPV_FUNCTIONCALL, spvType(rt), spvA2(fid, a)));
+                return true;
+                }
             spvSetResult(ip, spvEmitR((u32)SPV_EXTINST, spvType(rt), spvA3(_sMod.glslImport(), (u32)GLSL_SQRT, a)));
             return true;
             }
@@ -18435,8 +18474,15 @@ class ClassInfo
                 {
                 if (!_mFast)
                     {
-                    parBecause(spvS("it divides floats, which a WebGPU device does not round exactly, and the block's goal is accuracy"));
-                    return false;
+                    // Correctly rounded in integer arithmetic (the reference explains).
+                    String* h = wgHelperName(spvS("xcFdivRn"));
+                    if (h == (String*)0)
+                        {
+                        parBecause(spvS("it divides floats, which a WebGPU device does not round exactly, and the block's goal is accuracy"));
+                        return false;
+                        }
+                    wgSet(ip, String.withFormat("%s(%s, %s)", h.cString(), a.cString(), b.cString()));
+                    return true;
                     }
                 op = "/";
                 }
@@ -18660,6 +18706,11 @@ class ClassInfo
             return f ? String.withFormat("min(%s)", j.cString()) : s ? wgCanon(String.withFormat("u32(min(%s))", ij.cString()), t) : String.withFormat("min(%s)", j.cString());
         if (m.equals(spvS("max")))
             return f ? String.withFormat("max(%s)", j.cString()) : s ? wgCanon(String.withFormat("u32(max(%s))", ij.cString()), t) : String.withFormat("max(%s)", j.cString());
+        if (!_mFast && f && m.equals(spvS("sqrt")))
+            {
+            String* h = wgHelperName(spvS("xcFsqrtRn"));
+            return h != (String*)0 ? String.withFormat("%s(%s)", h.cString(), j.cString()) : (String*)0;
+            }
         if (!_mFast || !f) return (String*)0;
         if (m.equals(spvS("sqrt"))) return String.withFormat("sqrt(%s)", j.cString());
         if (m.equals(spvS("sin"))) return String.withFormat("sin(%s)", j.cString());
@@ -18669,6 +18720,29 @@ class ClassInfo
         if (m.equals(spvS("pow"))) return String.withFormat("pow(%s)", j.cString());
         if (m.equals(spvS("fma"))) return String.withFormat("fma(%s)", j.cString());
         return (String*)0;
+        }
+
+    // The WGSL name of a function of the program the kernel calls, printed
+    // once as a helper; 0 (with the reason) when it cannot be. As the
+    // reference's wgHelperName.
+    String* wgHelperName(String* callee)
+        {
+        String* name = (String*)_wgHelpers.get((Hashable*)callee);
+        if (name != (String*)0) return name;
+        IRFunc* target = (IRFunc*)0;
+        for (u32 i = (u32)0; i < _m.funcs().count(); i = i + (u32)1)
+            if (((IRFunc*)_m.funcs().get(i)).name().equals(callee))
+                target = (IRFunc*)_m.funcs().get(i);
+        if (target == (IRFunc*)0) return (String*)0;
+        name = String.withFormat("h%u", _wgHelpers.count());
+        _wgHelpers.set((Hashable*)callee, (Object*)name);
+        if (!wgHelper(target, name))
+            {
+            _wgHelpers.remove((Hashable*)callee);
+            parBecause(parCallFailed(callee, _mHelperWhy));
+            return (String*)0;
+            }
+        return name;
         }
 
     bool wgCall(IRInsn* ip)
@@ -18690,6 +18764,13 @@ class ClassInfo
             if (v == (String*)0) return false;
             args.add((Object*)v);
             }
+        // A float's bits and back (ParSoftFloat.xc): WGSL's bit cast.
+        if ((callee.equals(spvS("xcF32Bits")) || callee.equals(spvS("xcF32FromBits"))) && args.count() == (u32)1)
+            {
+            wgSet(ip, String.withFormat(callee.equals(spvS("xcF32Bits")) ? "bitcast<u32>(%s)" : "bitcast<f32>(%s)",
+                                        ((String*)args.get((u32)0)).cString()));
+            return true;
+            }
         if (spvIsMaths(callee))
             {
             if (isVoid || args.count() == (u32)0) return false;
@@ -18706,23 +18787,8 @@ class ClassInfo
             return true;
             }
         // A function of the program: printed once, as a WGSL function.
-        String* name = (String*)_wgHelpers.get((Hashable*)callee);
-        if (name == (String*)0)
-            {
-            IRFunc* target = (IRFunc*)0;
-            for (u32 i = (u32)0; i < _m.funcs().count(); i = i + (u32)1)
-                if (((IRFunc*)_m.funcs().get(i)).name().equals(callee))
-                    target = (IRFunc*)_m.funcs().get(i);
-            if (target == (IRFunc*)0) return false;
-            name = String.withFormat("h%u", _wgHelpers.count());
-            _wgHelpers.set((Hashable*)callee, (Object*)name);
-            if (!wgHelper(target, name))
-                {
-                _wgHelpers.remove((Hashable*)callee);
-                parBecause(parCallFailed(callee, _mHelperWhy));
-                return false;
-                }
-            }
+        String* name = wgHelperName(callee);
+        if (name == (String*)0) return false;
         String* call = String.withString(name);
         call.appendCString("(");
         for (u32 i = (u32)0; i < args.count(); i = i + (u32)1)
@@ -18812,13 +18878,19 @@ class ClassInfo
             }
         if (o.equals(spvS("FSqrt")))
             {
-            if (!_mFast)
-                {
-                parBecause(spvS("it takes a square root, which a WebGPU device does not round exactly, and the block's goal is accuracy"));
-                return false;
-                }
             String* a = wgValue(o0, rt);
             if (a == (String*)0 || !ptxIs(rt, "F32")) return false;
+            if (!_mFast)
+                {
+                String* h = wgHelperName(spvS("xcFsqrtRn"));
+                if (h == (String*)0)
+                    {
+                    parBecause(spvS("it takes a square root, which a WebGPU device does not round exactly, and the block's goal is accuracy"));
+                    return false;
+                    }
+                wgSet(ip, String.withFormat("%s(%s)", h.cString(), a.cString()));
+                return true;
+                }
             wgSet(ip, String.withFormat("sqrt(%s)", a.cString()));
             return true;
             }

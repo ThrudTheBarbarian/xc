@@ -416,9 +416,17 @@ static char kWf, kWgHelpers, kWgHelperText, kWgWordBufs, kWgBufName;
             case XTIROpFDiv:
                 if (!self.fast)
                     {
-                    [self because:@"it divides floats, which a WebGPU device does not round exactly, and the "
-                                  @"block's goal is accuracy"];
-                    return NO;
+                    // Correctly rounded in integer arithmetic (ParSoftFloat.xc):
+                    // a WebGPU device's own division is allowed 2.5 ulp.
+                    NSString* h = [self wgHelperName:@"xcFdivRn"];
+                    if (!h)
+                        {
+                        [self because:@"it divides floats, which a WebGPU device does not round exactly, and the "
+                                      @"block's goal is accuracy"];
+                        return NO;
+                        }
+                    [self wgSet:i to:[NSString stringWithFormat:@"%@(%@, %@)", h, a, b]];
+                    return YES;
                     }
                 op = @"/";
                 break;
@@ -663,6 +671,11 @@ static char kWf, kWgHelpers, kWgHelperText, kWgWordBufs, kWgBufName;
         return f ? [NSString stringWithFormat:@"min(%@)", j] : s ? sgn(@"min") : [NSString stringWithFormat:@"min(%@)", j];
     if ([m isEqualToString:@"max"])
         return f ? [NSString stringWithFormat:@"max(%@)", j] : s ? sgn(@"max") : [NSString stringWithFormat:@"max(%@)", j];
+    if (!self.fast && f && [m isEqualToString:@"sqrt"])
+        {
+        NSString* h = [self wgHelperName:@"xcFsqrtRn"];
+        return h ? [NSString stringWithFormat:@"%@(%@)", h, j] : nil;
+        }
     if (!self.fast || !f)
         return nil;
     if ([m isEqualToString:@"sqrt"]) return [NSString stringWithFormat:@"sqrt(%@)", j];
@@ -673,6 +686,37 @@ static char kWf, kWgHelpers, kWgHelperText, kWgWordBufs, kWgBufName;
     if ([m isEqualToString:@"pow"]) return [NSString stringWithFormat:@"pow(%@)", j];
     if ([m isEqualToString:@"fma"]) return [NSString stringWithFormat:@"fma(%@)", j];
     return nil;
+    }
+
+// The WGSL name of a function of the program the kernel calls, printing it
+// once as a helper; nil (with the reason) when it cannot be printed.
+- (nullable NSString*)wgHelperName:(NSString*)callee
+    {
+    NSString* name = self.wgHelpers[callee];
+    if (name)
+        return name;
+    XTIRFunction* target = nil;
+    for (XTIRFunction* g in self.module.functions)
+        if ([g.name isEqualToString:callee])
+            target = g;
+    if (!target)
+        return nil;
+    XTIRParMSL* h = [XTIRParMSL new];
+    h.module = self.module;
+    h.fn = target;
+    h.helperMode = YES;
+    h.fast = self.fast;
+    h.wgHelpers = self.wgHelpers;
+    h.wgHelperText = self.wgHelperText;
+    name = [NSString stringWithFormat:@"h%lu", (unsigned long)self.wgHelpers.count];
+    self.wgHelpers[callee] = name;
+    if (![h wgHelperNamed:name])
+        {
+        [self.wgHelpers removeObjectForKey:callee];
+        [self because:[self callFailed:callee helper:h]];
+        return nil;
+        }
+    return name;
     }
 
 - (BOOL)wgCall:(XTIRInsn*)i
@@ -695,6 +739,14 @@ static char kWf, kWgHelpers, kWgHelperText, kWgWordBufs, kWgBufName;
             return NO;
         [args addObject:v];
         }
+    // A float's bits and back (ParSoftFloat.xc): WGSL's bit cast.
+    if (([callee isEqualToString:@"xcF32Bits"] || [callee isEqualToString:@"xcF32FromBits"]) && args.count == 1)
+        {
+        [self wgSet:i to:[NSString stringWithFormat:[callee isEqualToString:@"xcF32Bits"] ? @"bitcast<u32>(%@)"
+                                                                                           : @"bitcast<f32>(%@)",
+                                                    args[0]]];
+        return YES;
+        }
     if ([self wgIsMaths:callee])
         {
         if (isVoid || !args.count)
@@ -711,31 +763,9 @@ static char kWf, kWgHelpers, kWgHelperText, kWgWordBufs, kWgBufName;
         return YES;
         }
     // A function of the program: printed once, as a WGSL function.
-    NSString* name = self.wgHelpers[callee];
+    NSString* name = [self wgHelperName:callee];
     if (!name)
-        {
-        XTIRFunction* target = nil;
-        for (XTIRFunction* g in self.module.functions)
-            if ([g.name isEqualToString:callee])
-                target = g;
-        if (!target)
-            return NO;
-        XTIRParMSL* h = [XTIRParMSL new];
-        h.module = self.module;
-        h.fn = target;
-        h.helperMode = YES;
-        h.fast = self.fast;
-        h.wgHelpers = self.wgHelpers;
-        h.wgHelperText = self.wgHelperText;
-        name = [NSString stringWithFormat:@"h%lu", (unsigned long)self.wgHelpers.count];
-        self.wgHelpers[callee] = name;
-        if (![h wgHelperNamed:name])
-            {
-            [self.wgHelpers removeObjectForKey:callee];
-            [self because:[self callFailed:callee helper:h]];
-            return NO;
-            }
-        }
+        return NO;
     NSString* call = [NSString stringWithFormat:@"%@(%@)", name, [args componentsJoinedByString:@", "]];
     if (isVoid)
         [self wgLine:[call stringByAppendingString:@";"]];
@@ -818,15 +848,22 @@ static char kWf, kWgHelpers, kWgHelperText, kWgWordBufs, kWgBufName;
             }
         case XTIROpFSqrt:
             {
-            if (!self.fast)
-                {
-                [self because:@"it takes a square root, which a WebGPU device does not round exactly, and the "
-                              @"block's goal is accuracy"];
-                return NO;
-                }
             NSString* a = [self wgValue:i.operands[0] type:rt];
             if (!a || rt.kind != XTIRTypeKindF32)
                 return NO;
+            if (!self.fast)
+                {
+                // Correctly rounded in integer arithmetic (ParSoftFloat.xc).
+                NSString* h = [self wgHelperName:@"xcFsqrtRn"];
+                if (!h)
+                    {
+                    [self because:@"it takes a square root, which a WebGPU device does not round exactly, and the "
+                                  @"block's goal is accuracy"];
+                    return NO;
+                    }
+                [self wgSet:i to:[NSString stringWithFormat:@"%@(%@)", h, a]];
+                return YES;
+                }
             [self wgSet:i to:[NSString stringWithFormat:@"sqrt(%@)", a]];
             return YES;
             }

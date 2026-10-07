@@ -13,6 +13,7 @@
 // thread, folded here afterwards in thread order). Each is described to the
 // loader as (address, bytes, copy back?).
 #import "ParDevice.xc"
+#import "ParSoftFloat.xc"   // correctly rounded division and sqrt for accuracy blocks
 
 #package xcgpu
 // 1 the kernel ran, 0 no WebGPU device (or no JSPI), 2 it needs more buffers,

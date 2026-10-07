@@ -704,12 +704,19 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
         case XTIROpFSub: op = SpvOpFSub; break;
         case XTIROpFMul: op = SpvOpFMul; break;
         case XTIROpFDiv:
-            // Vulkan's division is within 2.5 ULP, not correctly rounded.
+            // Vulkan's division is within 2.5 ULP, not correctly rounded: an
+            // accuracy block divides in integer arithmetic (ParSoftFloat.xc).
             if (!self.fast)
                 {
-                [self because:@"it divides floats, which a Vulkan GPU does not round exactly, and the block's "
-                              @"goal is accuracy"];
-                return NO;
+                uint32_t fid = [self spvHelperId:@"xcFdivRn"];
+                if (!fid)
+                    {
+                    [self because:@"it divides floats, which a Vulkan GPU does not round exactly, and the block's "
+                                  @"goal is accuracy"];
+                    return NO;
+                    }
+                [self setResult:i to:[self emit:SpvOpFunctionCall type:ty args:@[ @(fid), @(a), @(b) ]]];
+                return YES;
                 }
             op = SpvOpFDiv;
             break;
@@ -872,6 +879,36 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
                @"max" ] containsObject:m];
     }
 
+// The SPIR-V function of a function of the program the kernel calls,
+// printing it once as a helper; 0 (with the reason) when it cannot be.
+- (uint32_t)spvHelperId:(NSString*)callee
+    {
+    NSNumber* fid = self.spvHelpers[callee];
+    if (fid)
+        return fid.unsignedIntValue;
+    XTIRFunction* target = nil;
+    for (XTIRFunction* g in self.module.functions)
+        if ([g.name isEqualToString:callee])
+            target = g;
+    if (!target)
+        return 0;
+    XTIRParMSL* h = [XTIRParMSL new];
+    h.module = self.module;
+    h.fn = target;
+    h.helperMode = YES;
+    h.fast = self.fast;
+    h.spv = self.spv;
+    h.spvHelpers = self.spvHelpers;
+    uint32_t f = [h spvHelper];
+    if (!f)
+        {
+        [self because:[self callFailed:callee helper:h]];
+        return 0;
+        }
+    self.spvHelpers[callee] = @(f);
+    return f;
+    }
+
 - (BOOL)spvCall:(XTIRInsn*)i
     {
     XTIRSymbol* sym = [self.module symbolForId:i.operands[0].symbolId];
@@ -894,11 +931,29 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
         [args addObject:@(v)];
         [argTypes addObject:at];
         }
+    // A float's bits and back (ParSoftFloat.xc): a bit cast.
+    if (([callee isEqualToString:@"xcF32Bits"] || [callee isEqualToString:@"xcF32FromBits"]) && args.count == 1)
+        {
+        [self setResult:i to:[self emit:SpvOpBitcast type:[self spvType:rt] args:@[ args[0] ]]];
+        return YES;
+        }
     if ([self spvIsMaths:callee])
         {
         if (isVoid || !args.count)
             return NO;
         uint32_t g = [self glslFor:callee type:rt];
+        // An accuracy block's square root: correctly rounded in integer
+        // arithmetic (ParSoftFloat.xc).
+        if (!g && !self.fast && rt.kind == XTIRTypeKindF32 && [spvBareName(callee) isEqualToString:@"sqrt"])
+            {
+            uint32_t fid = [self spvHelperId:@"xcFsqrtRn"];
+            if (fid)
+                {
+                [self setResult:i to:[self emit:SpvOpFunctionCall type:[self spvType:rt]
+                                           args:@[ @(fid), args[0] ]]];
+                return YES;
+                }
+            }
         if (!g)
             {
             [self because:[NSString stringWithFormat:@"it calls %@, which a Vulkan GPU has only in an approximate "
@@ -911,31 +966,10 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
         return YES;
         }
     // A function of the program: printed once, as a SPIR-V function.
-    NSNumber* fid = self.spvHelpers[callee];
-    if (!fid)
-        {
-        XTIRFunction* target = nil;
-        for (XTIRFunction* g in self.module.functions)
-            if ([g.name isEqualToString:callee])
-                target = g;
-        if (!target)
-            return NO;
-        XTIRParMSL* h = [XTIRParMSL new];
-        h.module = self.module;
-        h.fn = target;
-        h.helperMode = YES;
-        h.fast = self.fast;
-        h.spv = self.spv;
-        h.spvHelpers = self.spvHelpers;
-        uint32_t f = [h spvHelper];
-        if (!f)
-            {
-            [self because:[self callFailed:callee helper:h]];
-            return NO;
-            }
-        fid = @(f);
-        self.spvHelpers[callee] = fid;
-        }
+    uint32_t f = [self spvHelperId:callee];
+    if (!f)
+        return NO;
+    NSNumber* fid = @(f);
     uint32_t ret = isVoid ? [self.spv typeVoid] : [self spvType:rt];
     if (!ret)
         return NO;
@@ -1006,15 +1040,22 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
             }
         case XTIROpFSqrt:
             {
-            if (!self.fast)
-                {
-                [self because:@"it takes a square root, which a Vulkan GPU does not round exactly, and the "
-                              @"block's goal is accuracy"];
-                return NO;
-                }
             uint32_t a = [self value:i.operands[0] type:rt];
             if (!a)
                 return NO;
+            if (!self.fast)
+                {
+                // Correctly rounded in integer arithmetic (ParSoftFloat.xc).
+                uint32_t fid = rt.kind == XTIRTypeKindF32 ? [self spvHelperId:@"xcFsqrtRn"] : 0;
+                if (!fid)
+                    {
+                    [self because:@"it takes a square root, which a Vulkan GPU does not round exactly, and the "
+                                  @"block's goal is accuracy"];
+                    return NO;
+                    }
+                [self setResult:i to:[self emit:SpvOpFunctionCall type:[self spvType:rt] args:@[ @(fid), @(a) ]]];
+                return YES;
+                }
             [self setResult:i to:[self emit:SpvOpExtInst type:[self spvType:rt]
                                        args:@[ @([self.spv glslImport]), @(GlslSqrt), @(a) ]]];
             return YES;
