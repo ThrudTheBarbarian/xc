@@ -2176,10 +2176,16 @@ typedef NS_ENUM(NSUInteger, XTIRTokKind) {
                             }
                         // -g: the source variable's name.
                         NSString* sourceName = nil;
+                        BOOL isParam = NO;
                         if ([self tok:tokens at:pos].kind == XTIRTokString)
                             {
                             sourceName = tokens[pos].text;
                             pos++;
+                            if ([self tok:tokens at:pos].kind == XTIRTokWord && [tokens[pos].text isEqualToString:@"param"])
+                                {
+                                isParam = YES;
+                                pos++;
+                                }
                             }
                         if ([self tok:tokens at:pos].kind == XTIRTokRParen)
                             pos++;
@@ -2197,6 +2203,7 @@ typedef NS_ENUM(NSUInteger, XTIRTokKind) {
                                                                             valueId:vid];
                         pl.escapesViaPointer = escapes;
                         pl.sourceName = sourceName;
+                        pl.isParameter = isParam;
                         [locals addObject:pl];
                         }
                     continue;

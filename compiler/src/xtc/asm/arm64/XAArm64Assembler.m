@@ -1887,14 +1887,15 @@ static NSString *quadSymbolOperand(NSString *l) {
             // line table, recorded against the text offset they precede.
             // -g: `.xc_var "<name>" <reg> <offset> "<type>"` — a variable of the
             // function being assembled, for the debug information.
-            if([l hasPrefix:@".xc_var"]) {
+            if([l hasPrefix:@".xc_var"] || [l hasPrefix:@".xc_param"]) {
                 NSArray<NSString *> *q = [l componentsSeparatedByString:@"\""];
                 if (q.count >= 5) {
                     NSScanner *sc = [NSScanner scannerWithString:q[2]];
                     int reg = 0; long long off = 0;
                     if ([sc scanInt:&reg] && [sc scanLongLong:&off]) {
                         if (!dwarf) dwarf = [[XTDwarfWriter alloc] init];
-                        [dwarf addVariable:q[1] atOffset:textAddr register:(uint8_t)reg offset:off type:q[3]];
+                        [dwarf addVariable:q[1] atOffset:textAddr register:(uint8_t)reg offset:off type:q[3]
+                                 parameter:[l hasPrefix:@".xc_param"]];
                     }
                 }
                 continue;

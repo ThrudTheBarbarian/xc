@@ -694,7 +694,8 @@ static NSString* dbgSuffix(XTIRInsn* insn)
                                                                          module:mod],
                                                            (unsigned)local.byteOffset,
                                                            local.escapesViaPointer ? @" esc" : @"",
-                                                           local.sourceName ? [NSString stringWithFormat:@" \"%@\"", local.sourceName] : @""]];
+                                                           local.sourceName ? [NSString stringWithFormat:@" \"%@\"%@", local.sourceName,
+                                                                                       local.isParameter ? @" param" : @""] : @""]];
             }
         [out appendFormat:@"    frame: { pinned: [%@], size: %u }\n",
                           [slotStrs componentsJoinedByString:@", "],

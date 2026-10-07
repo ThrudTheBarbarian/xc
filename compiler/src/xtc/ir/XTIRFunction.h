@@ -30,6 +30,8 @@ NS_ASSUME_NONNULL_BEGIN
 /// -g: the source variable this slot holds, for the debug information (the
 /// IR text names the slot by value; this is the program's name for it).
 @property(nonatomic, copy, nullable) NSString* sourceName;
+/// -g: the slot holds a parameter (copied in at entry), not a local.
+@property(nonatomic) BOOL isParameter;
 
 - (instancetype)initWithName:(NSString*)name
                         type:(XTIRType*)type

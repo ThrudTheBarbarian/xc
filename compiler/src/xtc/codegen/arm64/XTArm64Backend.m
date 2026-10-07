@@ -7289,7 +7289,7 @@ static BOOL arm64NamesFrameReg(NSString *t) {
     // the debug information.
     for (XTIRPinnedLocal *pl in fn.frameInfo.pinnedLocals)
         if (pl.sourceName)
-            [out appendFormat:@"    .xc_var \"%@\" 31 %lu \"%@\"\n", pl.sourceName,
+            [out appendFormat:@"    %@ \"%@\" 31 %lu \"%@\"\n", pl.isParameter ? @".xc_param" : @".xc_var", pl.sourceName,
                 (unsigned long)[self slotOffsetForValue:pl.valueId ctx:ctx],
                 [XTIRPrinter stringFromType:pl.type module:ctx.module]];
     // Prologue. The pre-indexed `stp [sp, #-N]!` immediate caps at

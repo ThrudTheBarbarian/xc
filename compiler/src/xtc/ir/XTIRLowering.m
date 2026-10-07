@@ -16420,6 +16420,7 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
                 [fn registerValue:slotV];
                 self.pinnedLocals[name] = pl;
                 self.pinnedParamInit[name] = paramVal; // prologue copies it in
+                pl.isParameter = sDebugInfo;
                 offset += paramVal.type.byteWidth;
                 continue;
                 }

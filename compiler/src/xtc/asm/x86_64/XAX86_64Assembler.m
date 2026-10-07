@@ -1600,14 +1600,15 @@ static BOOL isPlainIntLiteral(NSString *s) {
             // table, recorded against the text offset they precede.
             // -g: `.xc_var "<name>" <reg> <offset> "<type>"` — a variable of the
             // function being assembled, for the debug information.
-            if ([d isEqualToString:@".xc_var"]) {
+            if ([d isEqualToString:@".xc_var"] || [d isEqualToString:@".xc_param"]) {
                 NSArray<NSString *> *q = [rest componentsSeparatedByString:@"\""];
                 if (q.count >= 5) {
                     NSScanner *sc = [NSScanner scannerWithString:q[2]];
                     int reg = 0; long long off = 0;
                     if ([sc scanInt:&reg] && [sc scanLongLong:&off]) {
                         if (!dwarf) dwarf = [[XTDwarfWriter alloc] init];
-                        [dwarf addVariable:q[1] atOffset:text.length register:(uint8_t)reg offset:off type:q[3]];
+                        [dwarf addVariable:q[1] atOffset:text.length register:(uint8_t)reg offset:off type:q[3]
+                                 parameter:[d isEqualToString:@".xc_param"]];
                     }
                 }
                 continue;

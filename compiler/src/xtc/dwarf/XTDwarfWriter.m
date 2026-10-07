@@ -80,6 +80,7 @@ enum
     DW_TAG_compile_unit = 0x11,
     DW_TAG_subprogram = 0x2e,
     DW_TAG_variable = 0x34,
+    DW_TAG_formal_parameter = 0x05,
     DW_TAG_base_type = 0x24,
     DW_TAG_pointer_type = 0x0f,
     DW_AT_byte_size = 0x0b,
@@ -178,8 +179,9 @@ static XTDwarfWriter* gPending = nil;
          register:(uint8_t)reg
            offset:(int64_t)offset
              type:(NSString*)type
+        parameter:(BOOL)parameter
     {
-    [_variables addObject:@[ @(at), name, @(reg), @(offset), type ]];
+    [_variables addObject:@[ @(at), name, @(reg), @(offset), type, @(parameter) ]];
     }
 
 - (BOOL)hasRows
@@ -366,6 +368,18 @@ static XTDwarfWriter* gPending = nil;
     putULEB(abbrev, DW_FORM_data1);
     putU8(abbrev, 0);
     putU8(abbrev, 0);
+    // 8: a parameter, with the variable's attributes.
+    putULEB(abbrev, 8);
+    putULEB(abbrev, DW_TAG_formal_parameter);
+    putU8(abbrev, 0);
+    putULEB(abbrev, DW_AT_name);
+    putULEB(abbrev, DW_FORM_strp);
+    putULEB(abbrev, DW_AT_type);
+    putULEB(abbrev, DW_FORM_ref4);
+    putULEB(abbrev, DW_AT_location);
+    putULEB(abbrev, DW_FORM_exprloc);
+    putU8(abbrev, 0);
+    putU8(abbrev, 0);
     putU8(abbrev, 0);
 
     // ---- .debug_info ----
@@ -474,9 +488,14 @@ static XTDwarfWriter* gPending = nil;
         putU8(info, DW_OP_reg0 + frameRegister);
         if (vars.count)
             {
+            // Parameters first, in their order, as a debugger lists them.
+            [vars sortWithOptions:NSSortStable
+                  usingComparator:^NSComparisonResult(NSArray* x, NSArray* y) {
+                    return [y[5] compare:x[5]];
+                  }];
             for (NSArray* v in vars)
                 {
-                putULEB(info, 4);
+                putULEB(info, [v[5] boolValue] ? 8 : 4);
                 putU32(info, strp(v[1]));
                 putU32(info, typeDie[v[4]].unsignedIntValue);
                 NSMutableData* loc = [NSMutableData data];

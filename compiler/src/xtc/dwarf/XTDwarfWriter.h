@@ -32,7 +32,8 @@ NS_ASSUME_NONNULL_BEGIN
          atOffset:(uint64_t)at
          register:(uint8_t)reg
            offset:(int64_t)offset
-             type:(NSString*)type;
+             type:(NSString*)type
+        parameter:(BOOL)parameter;
 
 // True once any row was recorded: a build without -g has none and gets no
 // debug sections.

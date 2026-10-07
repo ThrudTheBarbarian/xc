@@ -2557,7 +2557,7 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
         // for the debug information.
         for (XTIRPinnedLocal* pl in fn.frameInfo.pinnedLocals)
             if (pl.sourceName && slot[@(pl.valueId)])
-                [out appendFormat:@"\t.xc_var\t\"%@\" 6 -%@ \"%@\"\n", pl.sourceName, slot[@(pl.valueId)],
+                [out appendFormat:@"\t%@\t\"%@\" 6 -%@ \"%@\"\n", pl.isParameter ? @".xc_param" : @".xc_var", pl.sourceName, slot[@(pl.valueId)],
                                   [XTIRPrinter stringFromType:pl.type module:mod]];
     }
     [out appendString:@"\tpush\trbp\n\tmov\trbp, rsp\n"];
