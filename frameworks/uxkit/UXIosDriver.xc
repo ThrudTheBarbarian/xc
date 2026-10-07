@@ -120,6 +120,8 @@ void ux_ios_seg_select(i32 handle, i32 node, i32 seg);
 // the toolbar: a real UIToolbar; type is UXTB_ITEM / SPACE / FLEX / SEP
 void ux_ios_make_toolbar(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h);
 void ux_ios_toolbar_add(i32 handle, i32 node, i32 type, u8* label, i32 tag);
+void ux_ios_toolbar_symbol(i32 handle, i32 node, i32 tag, u8* sym);
+void ux_ios_toolbar_pixels(i32 handle, i32 node, i32 tag, u32* argb, i32 w, i32 h);
 void ux_ios_make_popup(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h);
 void ux_ios_set_field_hooks(pointer fn);
 void ux_ios_set_field_submit_hooks(pointer fn);
@@ -1531,6 +1533,24 @@ class UXIosDriver : Object<UXViewDriver>
                     for (i32 j = (i32)0; j < tv.nativeItemCount(); j = j + (i32)1)
                         {
                         ux_ios_toolbar_add(handle, i, tv.nativeItemType(j), tv.nativeItemLabel(j), tv.nativeItemTag(j));
+                        // its picture: the app's own, else the SF Symbol for its UXIcon name, else its title alone
+                        UXImage* pic = tv.nativeItemImage(j);
+                        if (pic != (UXImage*)0)
+                            {
+                            i32 pw = pic.width();
+                            i32 ph = pic.height();
+                            u32* px = (u32*)malloc((u32)(pw * ph) * (u32)4);
+                            for (i32 q = (i32)0; q < pw * ph; q = q + (i32)1)
+                                {
+                                px[q] = pic.pixelRaw(q % pw, q / pw);
+                                }
+                            ux_ios_toolbar_pixels(handle, i, tv.nativeItemTag(j), px, pw, ph);
+                            free((pointer)px);
+                            }
+                        else
+                            {
+                            ux_ios_toolbar_symbol(handle, i, tv.nativeItemTag(j), UXIcon.sfSymbol(tv.nativeItemIcon(j)));
+                            }
                         }
                     gIosCtlPeer[handle * (i32)1024 + i] = n.peer;
                     }

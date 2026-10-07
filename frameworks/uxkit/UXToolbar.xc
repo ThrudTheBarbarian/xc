@@ -11,6 +11,8 @@
 #import "UXGeometry.xc"
 #import "UXEvent.xc"
 #import "Array.xc"
+#import "UXIcon.xc"
+#import "UXImage.xc"
 
 #define UXTB_ITEM 0
 #define UXTB_SPACE 1 // a fixed gap
@@ -22,6 +24,8 @@ class UXToolbarItem : Object
     i32 type;
     u8* ident;
     u8* label;
+    u8* icon;       // a UXIcon name, or "" for none
+    UXImage* image; // the app's own picture, which wins over the icon
     i32 tag;
     i16 natWidth; // natural (fixed) width
     i16 x;
@@ -32,6 +36,8 @@ class UXToolbarItem : Object
         type = (i32)UXTB_ITEM;
         ident = (u8*)"";
         label = (u8*)"";
+        icon = (u8*)"";
+        image = (UXImage*)0;
         tag = (i32)0;
         natWidth = (i16)48;
         x = (i16)0;
@@ -103,6 +109,16 @@ class UXToolbarItem : Object
         {
         return self.itemAt(i).tag;
         }
+    // the item's UXIcon name ("" for none), which the driver maps to the platform's own icon
+    u8* nativeItemIcon(i32 i)
+        {
+        return self.itemAt(i).icon;
+        }
+    // the item's own picture, or null
+    UXImage* nativeItemImage(i32 i)
+        {
+        return self.itemAt(i).image;
+        }
     // A native toolbar item with this tag was clicked: record it as the selection (the driver fires).
     void applyNativeItemClick(i32 tag)
         {
@@ -126,6 +142,31 @@ class UXToolbarItem : Object
         it.tag = tag;
         it.natWidth = width;
         items.add(it);
+        }
+    // The icon for the item with this tag: a UXIcon name ("new", "delete", "play", ...), shown as
+    // the platform's own icon for it.  An item with no icon shows its label alone.
+    void setItemIcon(i32 tag, u8* name)
+        {
+        for (i32 i = (i32)0; i < self.count(); i = i + (i32)1)
+            {
+            if (self.itemAt(i).tag == tag)
+                {
+                self.itemAt(i).icon = name;
+                }
+            }
+        self.setNeedsDisplay();
+        }
+    // A picture of the app's own for the item with this tag; it wins over a UXIcon name.
+    void setItemImage(i32 tag, UXImage* img)
+        {
+        for (i32 i = (i32)0; i < self.count(); i = i + (i32)1)
+            {
+            if (self.itemAt(i).tag == tag)
+                {
+                self.itemAt(i).image = img;
+                }
+            }
+        self.setNeedsDisplay();
         }
     void addFlexibleSpace(void)
         {
@@ -287,18 +328,24 @@ class UXToolbarItem : Object
                 g.fillRect(UXGeom.make(it.x, (i16)(b.h - (i16)3), it.w, (i16)1), (i32)9);
                 g.fillRect(UXGeom.make(it.x, (i16)2, (i16)1, (i16)(b.h - (i16)4)), (i32)9);
                 g.fillRect(UXGeom.make((i16)(it.x + it.w - (i16)1), (i16)2, (i16)1, (i16)(b.h - (i16)4)), (i32)9);
-                if ((i32)b.h >= (i32)40)
+                // the picture: the app's image, else the UXIcon glyph, else none (a text button)
+                bool tall = (i32)b.h >= (i32)40;
+                bool hasPic = it.image != (UXImage*)0 || UXIcon.isKnown(it.icon);
+                i32 lw = UXToolbar.tbSlen(it.label) * (i32)6;
+                i16 gx = tall ? (i16)(it.x + (i16)(((i32)it.w - (i32)16) / (i32)2)) : (i16)(it.x + (i16)6);
+                i16 gy = tall ? (i16)6 : (i16)(((i32)b.h - (i32)16) / (i32)2);
+                if (it.image != (UXImage*)0)
                     {
-                    // a TALL toolbar is the icon-above-text idiom: the glyph
-                    // box up top (real icon art rides the ident later), the
-                    // label centred beneath
-                    i16 gx = (i16)(it.x + (i16)(((i32)it.w - (i32)16) / (i32)2));
-                    g.fillRect(UXGeom.make(gx, (i16)6, (i16)16, (i16)16), (i32)8);
-                    g.fillRect(UXGeom.make(gx, (i16)6, (i16)16, (i16)1), (i32)9);
-                    g.fillRect(UXGeom.make(gx, (i16)21, (i16)16, (i16)1), (i32)9);
-                    g.fillRect(UXGeom.make(gx, (i16)6, (i16)1, (i16)16), (i32)9);
-                    g.fillRect(UXGeom.make((i16)(gx + (i16)15), (i16)6, (i16)1, (i16)16), (i32)9);
-                    i32 lw = UXToolbar.tbSlen(it.label) * (i32)6;
+                    it.image.drawIn(g, UXGeom.make((i16)0, (i16)0, (i16)it.image.width(), (i16)it.image.height()),
+                                    UXGeom.make(gx, gy, (i16)16, (i16)16), (i32)255);
+                    }
+                else if (hasPic)
+                    {
+                    UXIcon.draw(g, it.icon, (i32)gx, (i32)gy, (i32)1);
+                    }
+                if (tall && hasPic)
+                    {
+                    // icon above text: the label centred beneath
                     i16 lx = (i16)(it.x + (i16)(((i32)it.w - lw) / (i32)2));
                     if (lx < (i16)(it.x + (i16)2))
                         {
@@ -306,9 +353,15 @@ class UXToolbarItem : Object
                         }
                     g.drawText(it.label, lx, (i16)(b.h - (i16)16), (i32)1, (i32)0);
                     }
+                else if (tall)
+                    {
+                    // no picture: the label alone, centred in the button
+                    i16 lx = (i16)(it.x + (i16)(((i32)it.w - lw) / (i32)2));
+                    g.drawText(it.label, lx < (i16)(it.x + (i16)2) ? (i16)(it.x + (i16)2) : lx, midY, (i32)1, (i32)0);
+                    }
                 else
                     {
-                    g.drawText(it.label, (i16)(it.x + (i16)6), midY, (i32)1, (i32)0);
+                    g.drawText(it.label, (i16)(it.x + (i16)(hasPic ? 26 : 6)), midY, (i32)1, (i32)0);
                     }
                 }
             }

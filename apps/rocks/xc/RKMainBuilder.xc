@@ -73,6 +73,8 @@ class RKMainBuilder : Object
         UXToolbar* tb = new UXToolbar();
         tb.addItem((u8*)"doc.new", (u8*)"New", (i32)RKTB_NEW, (i16)44);
         tb.addItem((u8*)"trash", (u8*)"Delete", (i32)RKTB_DELETE, (i16)44);
+        tb.setItemIcon((i32)RKTB_NEW, (u8*)"new");
+        tb.setItemIcon((i32)RKTB_DELETE, (u8*)"delete");
         content.addSubview(tb, UXGeom.make((i16)0, (i16)0, w, tbH));
         // How each part follows the window when it is resized (springs and struts): the toolbar
         // stretches across, the outline keeps its width, the canvas takes what is left, and the

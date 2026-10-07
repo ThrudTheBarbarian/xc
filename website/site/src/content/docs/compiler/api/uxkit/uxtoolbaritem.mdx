@@ -7,7 +7,8 @@ description: "One entry of a UXToolbar (item, space, flexible space, or separato
 [`UXToolbar`](/compiler/api/uxkit/uxtoolbar/). It holds its `type` (a
 clickable item, a fixed space, a flexible space, or a separator), the
 `ident` a native backend maps to platform icon art, the `label`, your
-`tag`, and its natural width. The toolbar's layout writes the laid-out
+`tag`, its `icon` (a [`UXIcon`](/compiler/api/uxkit/uxicon/) name) and
+`image`, and its natural width. The toolbar's layout writes the laid-out
 `x`, `w` and `visible` fields; `visible` is false when the item moved into
 the overflow.
 

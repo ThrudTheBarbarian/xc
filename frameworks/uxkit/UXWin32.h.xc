@@ -594,11 +594,6 @@ u32 GetPixel(pointer hdc, i32 x, i32 y); // read a pixel back (COLORREF 0x00BBGG
 pointer ImageList_Create(i32 cx, i32 cy, u32 flags, i32 cInitial, i32 cGrow);
 i32 ImageList_Add(pointer himl, pointer hbmImage, pointer hbmMask);
 #define ILC_COLOR32 $0020
-// Our own glyph indices (map a neutral toolbar item's ident to one of these; see w32StdImage).
-#define TBI_NEW 0
-#define TBI_OPEN 1
-#define TBI_DELETE 2
-#define TBI_GENERIC 3
 #define TBSTATE_CHECKED $01
 #define TBSTATE_ENABLED $04
 #define TBSTYLE_LIST $1000 // text beside (not under) the (absent) icon — a horizontal button row

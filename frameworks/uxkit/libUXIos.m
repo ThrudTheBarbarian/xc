@@ -3264,3 +3264,51 @@ int ux_ios_test_textview_undo(int handle, int node, int redo)
     redo ? [um redo] : [um undo];
     return 1;
     }
+
+// A toolbar item's picture, after it is added: an SF Symbol by name, or the app's own (w x h pixels of
+// 0xAARRGGBB, top row first).  With a picture the item shows it in place of its title.
+static UXBarItem* ios_bar_item(int handle, int node, int tag)
+    {
+    UIView* c = gCtl[handle][node];
+    if (![c isKindOfClass:UIToolbar.class])
+        return nil;
+    for (UIBarButtonItem* it in ((UIToolbar*)c).items)
+        if ([it isKindOfClass:UXBarItem.class] && ((UXBarItem*)it).uxTag == tag)
+            return (UXBarItem*)it;
+    return nil;
+    }
+void ux_ios_toolbar_symbol(int handle, int node, int tag, const char* sym)
+    {
+    UXBarItem* it = ios_bar_item(handle, node, tag);
+    if (!it || !sym || !sym[0])
+        return;
+    UIImage* img = [UIImage systemImageNamed:@(sym)];
+    if (img)
+        it.image = img;
+    }
+void ux_ios_toolbar_pixels(int handle, int node, int tag, const unsigned int* argb, int w, int h)
+    {
+    UXBarItem* it = ios_bar_item(handle, node, tag);
+    if (!it || !argb || w <= 0 || h <= 0)
+        return;
+    CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+    CGContextRef ctx = CGBitmapContextCreate(NULL, w, h, 8, w * 4, cs,
+                                             kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
+    unsigned int* px = (unsigned int*)CGBitmapContextGetData(ctx);
+    for (int i = 0; i < w * h; i++)
+        {
+        unsigned int v = argb[i], a = v >> 24;
+        px[i] = (a << 24) | ((((v >> 16) & 255) * a / 255) << 16) | ((((v >> 8) & 255) * a / 255) << 8) | ((v & 255) * a / 255);
+        }
+    CGImageRef ci = CGBitmapContextCreateImage(ctx);
+    it.image = [UIImage imageWithCGImage:ci scale:(CGFloat)w / 22.0 orientation:UIImageOrientationUp];
+    CGImageRelease(ci);
+    CGContextRelease(ctx);
+    CGColorSpaceRelease(cs);
+    }
+/* tests: whether the toolbar item with this tag shows a picture */
+int ux_ios_test_toolbar_has_image(int handle, int node, int tag)
+    {
+    UXBarItem* it = ios_bar_item(handle, node, tag);
+    return it && it.image ? 1 : 0;
+    }

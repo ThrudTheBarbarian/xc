@@ -128,6 +128,8 @@ void ux_and_seg_set(i32 handle, i32 node, i32 seg, i32 on);
 // the toolbar: a real android.widget.Toolbar; type is UXTB_ITEM / SPACE / FLEX / SEP
 void ux_and_make_toolbar(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h);
 void ux_and_toolbar_add(i32 handle, i32 node, i32 type, u8* label, i32 tag);
+void ux_and_toolbar_icon(i32 handle, i32 node, i32 tag, u8* drawable);
+void ux_and_toolbar_pixels(i32 handle, i32 node, i32 tag, u32* argb, i32 w, i32 h);
 void ux_and_update_field(i32 handle, i32 node);
 void ux_and_set_control_frame(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h);
 void ux_and_set_control_enabled(i32 handle, i32 node, i32 on);
@@ -1513,6 +1515,24 @@ class UXAndroidDriver : Object<UXViewDriver>
                     for (i32 j = (i32)0; j < tv.nativeItemCount(); j = j + (i32)1)
                         {
                         ux_and_toolbar_add(handle, i, tv.nativeItemType(j), tv.nativeItemLabel(j), tv.nativeItemTag(j));
+                        // its picture: the app's own, else the system drawable for its UXIcon name, else its title alone
+                        UXImage* pic = tv.nativeItemImage(j);
+                        if (pic != (UXImage*)0)
+                            {
+                            i32 pw = pic.width();
+                            i32 ph = pic.height();
+                            u32* px = (u32*)malloc((u32)(pw * ph) * (u32)4);
+                            for (i32 q = (i32)0; q < pw * ph; q = q + (i32)1)
+                                {
+                                px[q] = pic.pixelRaw(q % pw, q / pw);
+                                }
+                            ux_and_toolbar_pixels(handle, i, tv.nativeItemTag(j), px, pw, ph);
+                            free((pointer)px);
+                            }
+                        else
+                            {
+                            ux_and_toolbar_icon(handle, i, tv.nativeItemTag(j), UXIcon.androidDrawable(tv.nativeItemIcon(j)));
+                            }
                         }
                     gAndCtlPeer[handle * (i32)1024 + i] = n.peer;
                     }

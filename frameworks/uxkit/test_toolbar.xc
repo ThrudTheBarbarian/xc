@@ -80,9 +80,23 @@ void main(void)
     check("separator laid out between", (i32)sp.itemAt((i32)1).w, (i32)2);
     check("separator is not hittable as an item", sp.itemAtLocalX((i16)(sp.itemAt((i32)1).x)), (i32)-1);
 
+    // ---- icons: a UXIcon name per item, mapped to each platform's own picture -----
+    UXToolbar* ic = new UXToolbar();
+    ic.addItem((u8*)"new", (u8*)"New", (i32)1, (i16)44);
+    ic.addItem((u8*)"plain", (u8*)"Plain", (i32)2, (i16)44);
+    ic.setItemIcon((i32)1, (u8*)"new");
+    check("an item takes an icon name", UXIcon.same(ic.nativeItemIcon((i32)0), (u8*)"new") ? (i32)1 : (i32)0, (i32)1);
+    check("...and one given none has none", ic.nativeItemIcon((i32)1)[0] == (u8)0 ? (i32)1 : (i32)0, (i32)1);
+    check("every UXIcon name is known", UXIcon.isKnown((u8*)"delete") && UXIcon.isKnown((u8*)"folder") ? (i32)1 : (i32)0, (i32)1);
+    check("...and a stranger is not", UXIcon.isKnown((u8*)"teapot") ? (i32)1 : (i32)0, (i32)0);
+    check("delete is the SF Symbol trash", UXIcon.same(UXIcon.sfSymbol((u8*)"delete"), (u8*)"trash") ? (i32)1 : (i32)0, (i32)1);
+    check("new is the Windows STD_FILENEW bitmap", UXIcon.win32Std((u8*)"new"), (i32)6);
+    check("play is Android's ic_media_play", UXIcon.same(UXIcon.androidDrawable((u8*)"play"), (u8*)"ic_media_play") ? (i32)1 : (i32)0, (i32)1);
+    check("an unknown name has no SF Symbol", UXIcon.sfSymbol((u8*)"teapot")[0] == (u8)0 ? (i32)1 : (i32)0, (i32)1);
+
     if (gFails == (i32)0)
         {
-        Stdio.printf("PASS: UXToolbar — flexible-space distribution, overflow, separators, hit-test.\n");
+        Stdio.printf("PASS: UXToolbar — flexible-space distribution, overflow, separators, hit-test, icons.\n");
         }
     else
         {

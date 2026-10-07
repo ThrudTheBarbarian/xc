@@ -7,6 +7,7 @@
 #import "UXWindow.xc"
 #import "UXToolbar.xc"
 
+extern i32 ux_ios_test_toolbar_has_image(i32 handle, i32 node, i32 tag);
 extern void ux_ios_set_entry(pointer fn);
 extern void ux_ios_shell_run(void);
 extern void ux_ios_quit(i32 rc);
@@ -54,6 +55,9 @@ void checks(void)
                                                        ux_ios_test_toolbar_title_is(h, n, (i32)2, (u8*)"Open") != (i32)0 &&
                                                        ux_ios_test_toolbar_title_is(h, n, (i32)4, (u8*)"Delete") != (i32)0);
     ck((u8*)"...with UIKit's own flexible space", ux_ios_test_toolbar_is_flexible(h, n, (i32)3) != (i32)0);
+    ck((u8*)"the items named an icon show the platform's picture for it", ux_ios_test_toolbar_has_image(h, n, (i32)10) != (i32)0 &&
+                                                                         ux_ios_test_toolbar_has_image(h, n, (i32)12) != (i32)0);
+    ck((u8*)"...and the item with none shows its title alone", ux_ios_test_toolbar_has_image(h, n, (i32)11) == (i32)0);
     ux_ios_test_toolbar_tap(h, n, (i32)4);
     ck((u8*)"a tap on Delete fires the toolbar's action", gFired == (i32)1);
     ck((u8*)"...with Delete the selected item", gFiredTag == (i32)12);
@@ -85,6 +89,8 @@ void testBody(void)
     gBar.addItem((u8*)"open", (u8*)"Open", (i32)11, (i16)60);
     gBar.addFlexibleSpace();
     gBar.addItem((u8*)"delete", (u8*)"Delete", (i32)12, (i16)60);
+    gBar.setItemIcon((i32)10, (u8*)"new");    // an icon by name; Open has none
+    gBar.setItemIcon((i32)12, (u8*)"delete");
     gBar.setAction(&gTarget.clicked);
     root.addSubview(gBar, UXGeom.make((i16)0, (i16)40, (i16)sw, (i16)44));
     gWin.displayAll();

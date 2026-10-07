@@ -1510,6 +1510,62 @@ void ux_and_toolbar_add(int handle, int node, int type, const char *label, int t
     (*env)->DeleteLocalRef(env, s);
     check(env, "toolbar add");
 }
+/* A toolbar item's picture, after it is added: an Android system drawable by name (a field of
+ * android.R.drawable), or the app's own (w x h pixels of 0xAARRGGBB).  The item is a MenuItem of the
+ * Toolbar's menu, found by its tag. */
+static jobject andToolbarItem(JNIEnv *env, int handle, int node, int tag) {
+    if (!gCtl[handle][node]) return NULL;
+    jclass tbC = (*env)->FindClass(env, "android/widget/Toolbar");
+    jobject menu = (*env)->CallObjectMethod(env, gCtl[handle][node],
+                                            (*env)->GetMethodID(env, tbC, "getMenu", "()Landroid/view/Menu;"));
+    if (!menu) return NULL;
+    jclass mC = (*env)->FindClass(env, "android/view/Menu");
+    return (*env)->CallObjectMethod(env, menu, (*env)->GetMethodID(env, mC, "findItem", "(I)Landroid/view/MenuItem;"), tag);
+}
+void ux_and_toolbar_icon(int handle, int node, int tag, const char *drawable) {
+    JNIEnv *env = envNow();
+    if (!drawable || !drawable[0]) return;
+    jobject it = andToolbarItem(env, handle, node, tag);
+    jclass rC = (*env)->FindClass(env, "android/R$drawable");
+    jfieldID f = rC ? (*env)->GetStaticFieldID(env, rC, drawable, "I") : NULL;
+    if (!it || !f) { (*env)->ExceptionClear(env); return; }
+    jint id = (*env)->GetStaticIntField(env, rC, f);
+    jclass miC = (*env)->FindClass(env, "android/view/MenuItem");
+    (*env)->CallObjectMethod(env, it, (*env)->GetMethodID(env, miC, "setIcon", "(I)Landroid/view/MenuItem;"), id);
+    check(env, "toolbar icon");
+}
+void ux_and_toolbar_pixels(int handle, int node, int tag, const unsigned int *argb, int w, int h) {
+    JNIEnv *env = envNow();
+    jobject it = andToolbarItem(env, handle, node, tag);
+    if (!it || !argb || w <= 0 || h <= 0) return;
+    jintArray px = (*env)->NewIntArray(env, w * h);
+    (*env)->SetIntArrayRegion(env, px, 0, w * h, (const jint *)argb);
+    jclass cfgC = (*env)->FindClass(env, "android/graphics/Bitmap$Config");
+    jobject argb8888 = (*env)->GetStaticObjectField(env, cfgC,
+                           (*env)->GetStaticFieldID(env, cfgC, "ARGB_8888", "Landroid/graphics/Bitmap$Config;"));
+    jclass bmC = (*env)->FindClass(env, "android/graphics/Bitmap");
+    jobject bm = (*env)->CallStaticObjectMethod(env, bmC, (*env)->GetStaticMethodID(env, bmC, "createBitmap",
+                     "([IIILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;"), px, w, h, argb8888);
+    jclass actC = (*env)->GetObjectClass(env, gActivity);
+    jobject res = (*env)->CallObjectMethod(env, gActivity,
+                      (*env)->GetMethodID(env, actC, "getResources", "()Landroid/content/res/Resources;"));
+    jclass bdC = (*env)->FindClass(env, "android/graphics/drawable/BitmapDrawable");
+    jobject bd = (*env)->NewObject(env, bdC, (*env)->GetMethodID(env, bdC, "<init>",
+                     "(Landroid/content/res/Resources;Landroid/graphics/Bitmap;)V"), res, bm);
+    jclass miC = (*env)->FindClass(env, "android/view/MenuItem");
+    (*env)->CallObjectMethod(env, it, (*env)->GetMethodID(env, miC, "setIcon",
+                             "(Landroid/graphics/drawable/Drawable;)Landroid/view/MenuItem;"), bd);
+    check(env, "toolbar pixels");
+}
+/* tests: whether the toolbar item with this tag shows a picture */
+int ux_and_test_toolbar_has_icon(int handle, int node, int tag) {
+    JNIEnv *env = envNow();
+    jobject it = andToolbarItem(env, handle, node, tag);
+    if (!it) return 0;
+    jclass miC = (*env)->FindClass(env, "android/view/MenuItem");
+    jobject d = (*env)->CallObjectMethod(env, it, (*env)->GetMethodID(env, miC, "getIcon", "()Landroid/graphics/drawable/Drawable;"));
+    return d ? 1 : 0;
+}
 int ux_and_test_toolbar_count(int handle, int node) {
     JNIEnv *env = envNow();
     if (!gCtl[handle][node]) return -1;

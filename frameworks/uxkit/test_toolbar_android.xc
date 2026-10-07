@@ -7,6 +7,7 @@
 #import "UXWindow.xc"
 #import "UXToolbar.xc"
 
+extern i32 ux_and_test_toolbar_has_icon(i32 handle, i32 node, i32 tag);
 extern void ux_and_set_entry(pointer fn);
 extern void ux_and_shell_run(void);
 extern void ux_and_quit(i32 rc);
@@ -80,6 +81,9 @@ void checks(void)
     ck((u8*)"...titled as the model's items", ux_and_test_toolbar_title_is(h, n, (i32)0, (u8*)"New") != (i32)0 &&
                                            ux_and_test_toolbar_title_is(h, n, (i32)1, (u8*)"Open") != (i32)0 &&
                                            ux_and_test_toolbar_title_is(h, n, (i32)2, (u8*)"Delete") != (i32)0);
+    ck((u8*)"the items named an icon show the platform's picture for it", ux_and_test_toolbar_has_icon(h, n, (i32)10) != (i32)0 &&
+                                                                         ux_and_test_toolbar_has_icon(h, n, (i32)12) != (i32)0);
+    ck((u8*)"...and the item with none shows its title alone", ux_and_test_toolbar_has_icon(h, n, (i32)11) == (i32)0);
     gStep = (i32)1;
     gWaited = (i32)0;
     Stdio.printf("TAPTEXT Delete\n");
@@ -108,6 +112,8 @@ void testBody(void)
     gBar.addItem((u8*)"open", (u8*)"Open", (i32)11, (i16)60);
     gBar.addFlexibleSpace();
     gBar.addItem((u8*)"delete", (u8*)"Delete", (i32)12, (i16)60);
+    gBar.setItemIcon((i32)10, (u8*)"new");    // an icon by name; Open has none
+    gBar.setItemIcon((i32)12, (u8*)"delete");
     gBar.setAction(&gTarget.clicked);
     root.addSubview(gBar, UXGeom.make((i16)0, (i16)80, (i16)sw, (i16)56));
     gWin.displayAll();

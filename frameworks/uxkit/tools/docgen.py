@@ -30,7 +30,7 @@ GROUPS = {
         "UXFileChooser", "UXKeyValueStore"],
     "Text & content": ["UXString", "UXText", "UXTextLayout", "UXFont", "UXMarkdown", "UXDate"],
     "Geometry & drawing": ["UXGeom", "UXRect", "UXPoint", "UXSize", "UXGraphics",
-        "UXPainter", "UXShapePath", "UXColor", "UXGradient", "UXImage", "UXAnimation",
+        "UXPainter", "UXShapePath", "UXColor", "UXGradient", "UXIcon", "UXImage", "UXAnimation",
         "UXViewport"],
     "Rsc files & the designer": ["UXRsc", "UXRscV2", "UXDesignable"],
     "Drivers & backends": ["UXViewDriver", "UXGemDriver", "UXWin32Driver", "UXAppKitDriver",

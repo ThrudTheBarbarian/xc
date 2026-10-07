@@ -4089,6 +4089,7 @@ static UXOutlineSource* g_ol_src[UX_MAXW][UX_MAXN];
 @property(strong, nonatomic) NSMutableArray* order;       // NSToolbarItemIdentifiers, default order
 @property(strong, nonatomic) NSMutableDictionary* labels; // ident -> NSString
 @property(strong, nonatomic) NSMutableDictionary* tagmap; // ident -> NSNumber
+@property(strong, nonatomic) NSMutableDictionary* icons;  // ident -> NSImage (an SF Symbol or the app's)
 @end
 @implementation UXToolbarDelegate
 - (NSArray*)toolbarDefaultItemIdentifiers:(NSToolbar*)tb
@@ -4110,13 +4111,18 @@ static UXOutlineSource* g_ol_src[UX_MAXW][UX_MAXN];
     NSString* label = self.labels[ident] ?: ident;
     [it setLabel:label];
     [it setPaletteLabel:label];
-    NSImage* img = nil; // a generic icon so icon-only mode shows something
-    if (@available(macOS 11.0, *))
-        {
-        img = [NSImage imageWithSystemSymbolName:@"square.grid.2x2" accessibilityDescription:label];
-        }
+    NSImage* img = self.icons[ident];
     if (!img)
-        img = [NSImage imageNamed:NSImageNameActionTemplate];
+        {
+        // no icon: a text button, not an empty or a generic picture
+        NSButton* b = [NSButton buttonWithTitle:label target:self action:@selector(xgToolbarButton:)];
+        [b setBezelStyle:NSBezelStyleTexturedRounded];
+        [b setTag:[self.tagmap[ident] intValue]];
+        [it setView:b];
+        [it setLabel:@""]; // the button says it; the customization palette keeps the name
+        [it setTag:[self.tagmap[ident] intValue]];
+        return it;
+        }
     [it setImage:img];
     [it setTarget:self];
     [it setAction:@selector(xgToolbarClicked:)];
@@ -4128,10 +4134,15 @@ static UXOutlineSource* g_ol_src[UX_MAXW][UX_MAXN];
     if (g_value_changed)
         g_value_changed(self.handle, self.node, (int)[sender tag]);
     }
+- (void)xgToolbarButton:(NSButton*)sender
+    {
+    if (g_value_changed)
+        g_value_changed(self.handle, self.node, (int)[sender tag]);
+    }
 @end
 static id g_tb_delegate[UX_MAXW];        // keep each window's delegate alive
 static NSMutableArray* g_tb_build_order; // scratch during begin/add/install
-static NSMutableDictionary *g_tb_build_labels, *g_tb_build_tags;
+static NSMutableDictionary *g_tb_build_labels, *g_tb_build_tags, *g_tb_build_icons;
 
 void ux_ak_toolbar_begin(int handle, int node)
     {
@@ -4140,6 +4151,7 @@ void ux_ak_toolbar_begin(int handle, int node)
     g_tb_build_order = [NSMutableArray array];
     g_tb_build_labels = [NSMutableDictionary dictionary];
     g_tb_build_tags = [NSMutableDictionary dictionary];
+    g_tb_build_icons = [NSMutableDictionary dictionary];
     }
 void ux_ak_toolbar_add(int handle, int node, int tag, const char* label, int type)
     {
@@ -4161,6 +4173,38 @@ void ux_ak_toolbar_add(int handle, int node, int tag, const char* label, int typ
         }
     [g_tb_build_order addObject:ident];
     }
+// The icon of the item with this tag, while the toolbar is built: an SF Symbol by name, or the
+// app's own picture (w x h pixels of 0xAARRGGBB, top row first).
+void ux_ak_toolbar_symbol(int tag, const char* sym)
+    {
+    if (!sym || !sym[0])
+        return;
+    NSImage* img = nil;
+    if (@available(macOS 11.0, *))
+        img = [NSImage imageWithSystemSymbolName:ak_ns(sym) accessibilityDescription:nil];
+    if (img)
+        g_tb_build_icons[[NSString stringWithFormat:@"xgtb_%d", tag]] = img;
+    }
+void ux_ak_toolbar_pixels(int tag, const unsigned int* argb, int w, int h)
+    {
+    if (!argb || w <= 0 || h <= 0)
+        return;
+    NSBitmapImageRep* rep = [[NSBitmapImageRep alloc] initWithBitmapDataPlanes:NULL pixelsWide:w pixelsHigh:h
+        bitsPerSample:8 samplesPerPixel:4 hasAlpha:YES isPlanar:NO colorSpaceName:NSDeviceRGBColorSpace
+        bytesPerRow:w * 4 bitsPerPixel:32];
+    unsigned char* px = [rep bitmapData];
+    for (int i = 0; i < w * h; i++)
+        {
+        unsigned int v = argb[i];
+        px[i * 4] = (v >> 16) & 255;
+        px[i * 4 + 1] = (v >> 8) & 255;
+        px[i * 4 + 2] = v & 255;
+        px[i * 4 + 3] = (v >> 24) & 255;
+        }
+    NSImage* img = [[NSImage alloc] initWithSize:NSMakeSize(w, h)];
+    [img addRepresentation:rep];
+    g_tb_build_icons[[NSString stringWithFormat:@"xgtb_%d", tag]] = img;
+    }
 void ux_ak_toolbar_install(int handle, int node)
     {
     if (handle < 0 || handle >= UX_MAXW)
@@ -4174,6 +4218,7 @@ void ux_ak_toolbar_install(int handle, int node)
     d.order = g_tb_build_order;
     d.labels = g_tb_build_labels;
     d.tagmap = g_tb_build_tags;
+    d.icons = g_tb_build_icons;
     NSToolbar* tb = [[NSToolbar alloc] initWithIdentifier:[NSString stringWithFormat:@"ux_%d_%d", handle, node]];
     [tb setDelegate:d];
     [tb setAllowsUserCustomization:YES]; // right-click -> Customize Toolbar + icon/text modes
@@ -5401,4 +5446,35 @@ int ux_ak_test_textview_key(int handle, int node, int key, int shift)
                charactersIgnoringModifiers:[NSString stringWithCharacters:&c length:1]
                                  isARepeat:NO keyCode:0];
     return [[tv window] performKeyEquivalent:e] ? 1 : 0;
+    }
+/* For tests: the whole of window `handle` -- title bar, toolbar and content -- into a PPM. */
+int ux_ak_test_frame_dump(int handle, const char* path)
+    {
+    if (handle < 0 || handle >= UX_MAXW || !g_win[handle])
+        return 0;
+    [g_win[handle] layoutIfNeeded];
+    NSView* frame = [[g_win[handle] contentView] superview];
+    NSRect b = [frame bounds];
+    NSBitmapImageRep* rep = [frame bitmapImageRepForCachingDisplayInRect:b];
+    if (!rep)
+        return 0;
+    [frame cacheDisplayInRect:b toBitmapImageRep:rep];
+    return akWriteRepPPM(rep, path);
+    }
+/* For tests: a window that is never shown, as handle `handle`, so the native toolbar path
+ * (ux_ak_toolbar_begin/add/symbol/install) can be built on it and dumped with ux_ak_test_frame_dump. */
+int ux_ak_test_hidden_window(int handle, int w, int h)
+    {
+    if (handle <= 0 || handle >= UX_MAXW)
+        return 0;
+    NSWindow* win = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, w, h)
+                                                styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
+                                                           NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable)
+                                                  backing:NSBackingStoreBuffered
+                                                    defer:NO];
+    [win setReleasedWhenClosed:NO];
+    [win setTitle:@"Rocks"];
+    g_win[handle] = win;
+    g_view[handle] = [win contentView];
+    return 1;
     }

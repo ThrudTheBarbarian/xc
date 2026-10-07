@@ -89,6 +89,7 @@ export default {
 				{ label: 'UXGeom', slug: 'compiler/api/uxkit/uxgeom' },
 				{ label: 'UXGradient', slug: 'compiler/api/uxkit/uxgradient' },
 				{ label: 'UXGraphics', slug: 'compiler/api/uxkit/uxgraphics' },
+				{ label: 'UXIcon', slug: 'compiler/api/uxkit/uxicon' },
 				{ label: 'UXImage', slug: 'compiler/api/uxkit/uximage' },
 				{ label: 'UXPainter', slug: 'compiler/api/uxkit/uxpainter' },
 				{ label: 'UXShapePath', slug: 'compiler/api/uxkit/uxshapepath' },

@@ -4308,39 +4308,6 @@ class UXWin32Driver : Object<UXViewDriver>
         b.iString = (pointer)si;
         SendMessageA(tb, (u32)TB_ADDBUTTONS, (pointer)1, (pointer)&b);
         }
-    // Map a neutral toolbar item's ident to a standard system-toolbar bitmap (parity with the mac
-    // NSToolbar's per-item symbol).  Unknown idents get a generic "properties" tile rather than nothing.
-    // 1 if s starts with p
-    i32 idPfx(u8* s, u8* p)
-        {
-        i32 i = (i32)0;
-        while (p[i] != (u8)0)
-            {
-            if (s[i] != p[i])
-                {
-                return (i32)0;
-                }
-            i = i + (i32)1;
-            }
-        return (i32)1;
-        }
-    i32 w32StdImage(u8* ident)
-        {
-        if (self.idPfx(ident, (u8*)"new") != (i32)0)
-            {
-            return (i32)TBI_NEW;
-            }
-        if (self.idPfx(ident, (u8*)"opn") != (i32)0 || self.idPfx(ident, (u8*)"open") != (i32)0)
-            {
-            return (i32)TBI_OPEN;
-            }
-        if (self.idPfx(ident, (u8*)"del") != (i32)0)
-            {
-            return (i32)TBI_DELETE;
-            }
-        return (i32)TBI_GENERIC;
-        }
-
     // ---- the hand-drawn toolbar image list ---------------------------------------------------------
     // Fill a colour block in a memory DC (COLORREF is 0x00BBGGRR).  A brush per call — cheap; runs 4x/glyph.
     void w32FillRC(pointer hdc, i32 x, i32 y, i32 w, i32 h, u32 color)
@@ -4354,63 +4321,65 @@ class UXWin32Driver : Object<UXViewDriver>
         FillRect(hdc, (pointer)&r, br);
         DeleteObject(br);
         }
-    // Draw one 16x16 glyph (kind = TBI_*) over the dialog-face background, so it blends into the button.
-    void w32DrawGlyph(pointer hdc, i32 kind)
+    // One 16x16 picture into a memory DC over the dialog-face grey, so it blends into the button: the
+    // UXIcon glyph for a name, or an image of the app's scaled to fit.
+    void w32DrawPicture(pointer hdc, u8* icon, UXImage* img)
         {
-        self.w32FillRC(hdc, (i32)0, (i32)0, (i32)16, (i32)16, (u32)$00C0C0C0); // face-grey backdrop
-        // a white page with grey text lines
-        if (kind == (i32)TBI_NEW)
+        self.w32FillRC(hdc, (i32)0, (i32)0, (i32)16, (i32)16, (u32)$00C0C0C0);
+        UXGdiGraphics* g = new UXGdiGraphics();
+        g.bind(hdc, UXGeom.make((i16)0, (i16)0, (i16)16, (i16)16));
+        if (img != (UXImage*)0)
             {
-            self.w32FillRC(hdc, (i32)3, (i32)1, (i32)10, (i32)14, (u32)$00FFFFFF);
-            self.w32FillRC(hdc, (i32)3, (i32)1, (i32)10, (i32)1, (u32)$00808080);  // frame: top
-            self.w32FillRC(hdc, (i32)3, (i32)14, (i32)10, (i32)1, (u32)$00808080); // bottom
-            self.w32FillRC(hdc, (i32)3, (i32)1, (i32)1, (i32)14, (u32)$00808080);  // left
-            self.w32FillRC(hdc, (i32)12, (i32)1, (i32)1, (i32)14, (u32)$00808080); // right
-            self.w32FillRC(hdc, (i32)5, (i32)4, (i32)6, (i32)1, (u32)$00808080);
-            self.w32FillRC(hdc, (i32)5, (i32)7, (i32)6, (i32)1, (u32)$00808080);
-            self.w32FillRC(hdc, (i32)5, (i32)10, (i32)6, (i32)1, (u32)$00808080);
+            img.drawIn(g, UXGeom.make((i16)0, (i16)0, (i16)img.width(), (i16)img.height()),
+                       UXGeom.make((i16)0, (i16)0, (i16)16, (i16)16), (i32)255);
             }
-        // a manila folder (tab + body)
-        else if (kind == (i32)TBI_OPEN)
-            {
-            self.w32FillRC(hdc, (i32)2, (i32)4, (i32)5, (i32)2, (u32)$0050AAD2);
-            self.w32FillRC(hdc, (i32)2, (i32)6, (i32)12, (i32)7, (u32)$0082D0F0);
-            }
-        // a red chip with a white bar
-        else if (kind == (i32)TBI_DELETE)
-            {
-            self.w32FillRC(hdc, (i32)3, (i32)3, (i32)10, (i32)10, (u32)$000000C0);
-            self.w32FillRC(hdc, (i32)5, (i32)7, (i32)6, (i32)2, (u32)$00FFFFFF);
-            }
-        // a steel-blue chip
         else
             {
-            self.w32FillRC(hdc, (i32)3, (i32)3, (i32)10, (i32)10, (u32)$00A08060);
+            UXIcon.draw(g, icon, (i32)0, (i32)0, (i32)1);
             }
         }
-    // Build the shared image list once: a 16x16 bitmap per glyph, drawn into a memory DC, added in order.
+    // Add one picture to the shared image list; its index.
+    i32 w32AddPicture(pointer himl, u8* icon, UXImage* img)
+        {
+        pointer scr = GetDC((pointer)0);
+        pointer memdc = CreateCompatibleDC(scr);
+        pointer bmp = CreateCompatibleBitmap(scr, (i32)16, (i32)16);
+        pointer old = SelectObject(memdc, bmp);
+        self.w32DrawPicture(memdc, icon, img);
+        SelectObject(memdc, old);
+        i32 at = (i32)ImageList_Add(himl, bmp, (pointer)0);
+        DeleteObject(bmp);
+        DeleteDC(memdc);
+        ReleaseDC((pointer)0, scr);
+        return at;
+        }
+    // The shared image list, made once: the UXIcon glyphs in UXIcon's order (so an icon's index is
+    // UXIcon.indexOf), drawn rather than loaded because Wine's TB_LOADIMAGES gives an empty list.  An
+    // app's own images are added after them as they come.
     pointer w32IconList(void)
         {
         if (gW32TbImages != (pointer)0)
             {
             return gW32TbImages;
             }
-        pointer himl = ImageList_Create((i32)16, (i32)16, (u32)ILC_COLOR32, (i32)4, (i32)0);
-        pointer scr = GetDC((pointer)0);
-        for (i32 k = (i32)0; k < (i32)4; k = k + (i32)1)
+        pointer himl = ImageList_Create((i32)16, (i32)16, (u32)ILC_COLOR32, (i32)32, (i32)8);
+        for (i32 k = (i32)0; k < (i32)25; k = k + (i32)1)
             {
-            pointer memdc = CreateCompatibleDC(scr);
-            pointer bmp = CreateCompatibleBitmap(scr, (i32)16, (i32)16);
-            pointer old = SelectObject(memdc, bmp);
-            self.w32DrawGlyph(memdc, k);
-            SelectObject(memdc, old);
-            ImageList_Add(himl, bmp, (pointer)0);
-            DeleteObject(bmp);
-            DeleteDC(memdc);
+            self.w32AddPicture(himl, UXIcon.nameAt(k), (UXImage*)0);
             }
-        ReleaseDC((pointer)0, scr);
         gW32TbImages = himl;
         return himl;
+        }
+    // An item's image index: its own picture (added now), its UXIcon, or I_IMAGENONE (a text button).
+    i32 w32ItemImage(UXToolbar* tbw, i32 j)
+        {
+        UXImage* img = tbw.nativeItemImage(j);
+        if (img != (UXImage*)0)
+            {
+            return self.w32AddPicture(self.w32IconList(), (u8*)"", img);
+            }
+        i32 k = UXIcon.indexOf(tbw.nativeItemIcon(j));
+        return k >= (i32)0 ? k : (i32)-2;
         }
     void w32ToolbarAddSep(pointer tb)
         {
@@ -4855,7 +4824,7 @@ class UXWin32Driver : Object<UXViewDriver>
                                 {
                                 self.w32ToolbarAdd(c, tbw.nativeItemTag(j), tbw.nativeItemLabel(j),
                                                    (i32)BTNS_BUTTON | (i32)BTNS_SHOWTEXT | (i32)BTNS_AUTOSIZE, (i32)0,
-                                                   self.w32StdImage(tbw.nativeItemIdent(j)));
+                                                   self.w32ItemImage(tbw, j));
                                 }
                             else
                                 {

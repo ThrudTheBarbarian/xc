@@ -190,6 +190,8 @@ void ux_ak_make_progress(i32 handle, i32 node, i32 x, i32 y, i32 w, i32 h);
 void ux_ak_set_progress(i32 handle, i32 node, i32 mille, i32 indeterminate);
 void ux_ak_toolbar_begin(i32 handle, i32 node); // build a native NSToolbar (window chrome)
 void ux_ak_toolbar_add(i32 handle, i32 node, i32 tag, u8* label, i32 type);
+void ux_ak_toolbar_symbol(i32 tag, u8* sym);
+void ux_ak_toolbar_pixels(i32 tag, u32* argb, i32 w, i32 h);
 void ux_ak_toolbar_install(i32 handle, i32 node);
 // GL (UXKindGLView).  The surface is placed during realization, like every other native
 // thing here; the context is made on request, so a GL view that never asks for one costs
@@ -1998,6 +2000,24 @@ class UXAppKitDriver : Object<UXViewDriver>
                     for (i32 j = (i32)0; j < tv.nativeItemCount(); j = j + (i32)1)
                         {
                         ux_ak_toolbar_add(handle, i, tv.nativeItemTag(j), tv.nativeItemLabel(j), tv.nativeItemType(j));
+                        // its picture: the app's own, else the SF Symbol for its UXIcon name, else none
+                        UXImage* pic = tv.nativeItemImage(j);
+                        if (pic != (UXImage*)0)
+                            {
+                            i32 pw = pic.width();
+                            i32 ph = pic.height();
+                            u32* px = (u32*)malloc((u32)(pw * ph) * (u32)4);
+                            for (i32 q = (i32)0; q < pw * ph; q = q + (i32)1)
+                                {
+                                px[q] = pic.pixelRaw(q % pw, q / pw);
+                                }
+                            ux_ak_toolbar_pixels(tv.nativeItemTag(j), px, pw, ph);
+                            free((pointer)px);
+                            }
+                        else
+                            {
+                            ux_ak_toolbar_symbol(tv.nativeItemTag(j), UXIcon.sfSymbol(tv.nativeItemIcon(j)));
+                            }
                         }
                     ux_ak_toolbar_install(handle, i);
                     gAKCtlPeer[handle * (i32)4096 + i] = t.nodes[i].peer; // realized-flag + click-routing peer
