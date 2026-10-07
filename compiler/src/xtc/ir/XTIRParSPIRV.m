@@ -589,6 +589,28 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
     return [self emit:SpvOpBitwiseAnd type:u32t args:@[ @(v), @([self.spv u32:(1u << spvNarrowBits(t)) - 1]) ]];
     }
 
+// A narrow field of the kernel's own copy of the object — a reduction — in
+// the 32-bit word it shares with its neighbours: the word with the field's
+// bits cleared, then set. The copy is the thread's alone, so no atomics.
+- (BOOL)fieldStore:(XTSpvRecipe*)r value:(uint32_t)v
+    {
+    uint32_t u32t = [self.spv typeInt:32];
+    NSMutableArray* a = [NSMutableArray arrayWithObject:@(r.base)];
+    [a addObjectsFromArray:r.members];
+    uint32_t p = [self emit:SpvOpAccessChain type:[self.spv pointer:r.storage to:u32t] args:a];
+    uint32_t word = [self emit:SpvOpLoad type:u32t args:@[ @(p) ]];
+    uint32_t sh = r.wordShift - 1;
+    uint32_t low = (1u << (8 * spvNarrowBytes(r.pointee))) - 1;   // a bool is a byte
+    if (r.pointee.kind == XTIRTypeKindBool)
+        v = [self emit:SpvOpSelect type:u32t args:@[ @(v), @([self.spv u32:1]), @([self.spv u32:0]) ]];
+    uint32_t bits = [self emit:SpvOpShiftLeftLogical type:u32t
+                          args:@[ @([self emit:SpvOpBitwiseAnd type:u32t args:@[ @(v), @([self.spv u32:low]) ]]),
+                                  @([self.spv u32:sh]) ]];
+    uint32_t kept = [self emit:SpvOpBitwiseAnd type:u32t args:@[ @(word), @([self.spv u32:~(low << sh)]) ]];
+    [self emit:SpvOpStore words:@[ @(p), @([self emit:SpvOpBitwiseOr type:u32t args:@[ @(kept), @(bits) ]]) ]];
+    return YES;
+    }
+
 - (uint32_t)narrowLoad:(XTSpvRecipe*)r
     {
     uint32_t u32t = [self.spv typeInt:32];
@@ -1139,7 +1161,7 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
                 return NO;
             uint32_t v = [self value:i.operands[1] type:r.pointee];
             if (r.wordShift)
-                return NO;   // a captured value: the kernel never writes one
+                return v && [self fieldStore:r value:v];
             if (r.words)
                 return v && [self narrowStore:r value:v];
             uint32_t p = [self address:r];
@@ -1892,15 +1914,19 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
     NSMutableArray<NSNumber*>* redVars = [NSMutableArray array];
     [self.reductionFields enumerateIndexesUsingBlock:^(NSUInteger k, BOOL* stop) {
         uint32_t t = [self spvType:fl[k].type];
-        if (!t || spvNarrowBytes(fl[k].type) || !self.memberOf[@(k)])
+        if (!t || !self.memberOf[@(k)])
             {
-            [self because:@"it reduces an 8- or 16-bit value or a bool, which its Vulkan version cannot yet"];
+            [self because:@"it reduces a value its Vulkan version cannot hold"];
             bad = YES;
             *stop = YES;
             return;
             }
-        [meta appendFormat:@" red=%u:%u", fl[k].byteOffset, fl[k].type.byteWidth];
-        uint32_t v = [self spvBuffer:t stride:fl[k].type.byteWidth binding:binding++ readOnly:NO];
+        // An 8- or 16-bit value or a bool: a 32-bit slot per thread (a third
+        // field, the stride), of which the host takes the low bytes.
+        BOOL narrow = spvNarrowBytes(fl[k].type) != 0;
+        [meta appendFormat:@" red=%u:%u%@", fl[k].byteOffset, fl[k].type.byteWidth, narrow ? @":4" : @""];
+        uint32_t v = narrow ? [self spvBuffer:[self.spv typeInt:32] stride:4 binding:binding++ readOnly:NO]
+                            : [self spvBuffer:t stride:fl[k].type.byteWidth binding:binding++ readOnly:NO];
         [redVars addObject:@(v)];
         [interface addObject:@(v)];
     }];
@@ -1969,12 +1995,18 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
     [self place:write];
     __block NSUInteger ri = 0;
     [self.reductionFields enumerateIndexesUsingBlock:^(NSUInteger k, BOOL* stop) {
-        uint32_t mt = [self spvType:fl[k].type];
+        BOOL narrow = spvNarrowBytes(fl[k].type) != 0;
+        // A narrow field shares its 32-bit word: the word, shifted down to it.
+        uint32_t mt = narrow ? [self.spv typeInt:32] : [self spvType:fl[k].type];
         uint32_t src = [self emit:SpvOpAccessChain type:[m pointer:SpvStorageFunction to:mt]
                              args:@[ @(self.localObj), @([m u32:[self.memberOf[@(k)] unsignedIntValue]]) ]];
         uint32_t dst = [self emit:SpvOpAccessChain type:[m pointer:SpvStorageStorageBuffer to:mt]
                              args:@[ redVars[ri], @([m u32:0]), @(tid32) ]];
-        [self emit:SpvOpStore words:@[ @(dst), @([self emit:SpvOpLoad type:mt args:@[ @(src) ]]) ]];
+        uint32_t val = [self emit:SpvOpLoad type:mt args:@[ @(src) ]];
+        if (narrow)
+            val = [self emit:SpvOpShiftRightLogical type:mt
+                        args:@[ @(val), @([m u32:[self.narrowShiftOf[@(k)] unsignedIntValue]]) ]];
+        [self emit:SpvOpStore words:@[ @(dst), @(val) ]];
         ri++;
     }];
     [self emit:SpvOpBranch words:@[ @(done) ]];

@@ -16934,6 +16934,28 @@ class ClassInfo
         return spvNarrowFrom(word, shift, r.pointee);
         }
 
+    // A narrow field of the kernel's own copy of the object (a reduction), in
+    // the word it shares: cleared, then set. As the reference's fieldStore.
+    bool spvFieldStore(SpvRecipe* r, u32 v)
+        {
+        u32 w32 = _sMod.typeInt((u32)32);
+        Array* a = new Array();
+        a.add((Object*)Number.withU32(r.base));
+        for (u32 i = (u32)0; i < r.members.count(); i = i + (u32)1)
+            a.add(r.members.get(i));
+        u32 p = spvEmitR((u32)SPV_ACCESSCHAIN, _sMod.ptrType(r.storage, w32), a);
+        u32 word = spvEmitR((u32)SPV_LOAD, w32, spvA1(p));
+        u32 sh = r.wordShift - (u32)1;
+        u32 low = ((u32)1 << ((u32)8 * spvNarrowBytes(r.pointee))) - (u32)1;   // a bool is a byte
+        if (ptxIs(r.pointee, "Bool"))
+            v = spvEmitR((u32)SPV_SELECT, w32, spvA3(v, _sMod.u32c((u32)1), _sMod.u32c((u32)0)));
+        u32 bits = spvEmitR((u32)SPV_SHIFTLEFTLOGICAL, w32,
+                            spvA2(spvEmitR((u32)SPV_BITWISEAND, w32, spvA2(v, _sMod.u32c(low))), _sMod.u32c(sh)));
+        u32 kept = spvEmitR((u32)SPV_BITWISEAND, w32, spvA2(word, _sMod.u32c(~(low << sh))));
+        spvEmit((u32)SPV_STORE, spvA2(p, spvEmitR((u32)SPV_BITWISEOR, w32, spvA2(kept, bits))));
+        return true;
+        }
+
     // Clear the element's bits in its word, then set them: two atomic
     // updates, so a neighbour writing the other bytes keeps its bytes.
     bool spvNarrowStore(SpvRecipe* r, u32 v)
@@ -17428,7 +17450,7 @@ class ClassInfo
             if (r == (SpvRecipe*)0) return false;
             u32 v = spvValue((IROperand*)ip.ops().get((u32)1), r.pointee);
             if (r.wordShift != (u32)0)
-                return false;   // a captured value: the kernel never writes one
+                return v != (u32)0 && spvFieldStore(r, v);
             if (r.words)
                 return v != (u32)0 && spvNarrowStore(r, v);
             u32 p = spvAddress(r);
@@ -18142,13 +18164,17 @@ class ClassInfo
             if (_mReds.get((Hashable*)String.withI64((i64)k)) == (Object*)0) continue;
             String* ft = _mObj.typeAt(k);
             u32 t = spvType(ft);
-            if (t == (u32)0 || spvNarrowBytes(ft) != (u32)0 || _sMember.get((Hashable*)String.withU32(k)) == (Object*)0)
+            if (t == (u32)0 || _sMember.get((Hashable*)String.withU32(k)) == (Object*)0)
                 {
-                parBecause(spvS("it reduces an 8- or 16-bit value or a bool, which its Vulkan version cannot yet"));
+                parBecause(spvS("it reduces a value its Vulkan version cannot hold"));
                 return false;
                 }
+            // An 8- or 16-bit value or a bool: a 32-bit slot per thread (the
+            // reference explains).
+            bool narrow = spvNarrowBytes(ft) != (u32)0;
             meta.appendCString(" red="); meta.append(String.withU32(_mObj.offsetAt(k))); meta.appendCString(":"); meta.append(String.withU32(spvWidth(ft)));
-            u32 v = spvBuffer(t, spvWidth(ft), binding);
+            if (narrow) meta.appendCString(":4");
+            u32 v = narrow ? spvBuffer(m.typeInt((u32)32), (u32)4, binding) : spvBuffer(t, spvWidth(ft), binding);
             binding = binding + (u32)1;
             redVars.add((Object*)Number.withU32(v));
             redFields.add((Object*)Number.withU32(k));
@@ -18204,12 +18230,18 @@ class ClassInfo
         for (u32 ri = (u32)0; ri < redFields.count(); ri = ri + (u32)1)
             {
             u32 k = ((Number*)redFields.get(ri)).asU32();
-            u32 mt = spvType(_mObj.typeAt(k));
+            bool narrow = spvNarrowBytes(_mObj.typeAt(k)) != (u32)0;
+            // A narrow field shares its 32-bit word: the word, shifted down to it.
+            u32 mt = narrow ? m.typeInt((u32)32) : spvType(_mObj.typeAt(k));
             u32 src = spvEmitR((u32)SPV_ACCESSCHAIN, m.ptrType((u32)SPV_ST_FUNCTION, mt),
                                spvA2(_sLocalObj, m.u32c(((Number*)_sMember.get((Hashable*)String.withU32(k))).asU32())));
             u32 dst = spvEmitR((u32)SPV_ACCESSCHAIN, m.ptrType((u32)SPV_ST_STORAGEBUFFER, mt),
                                spvA3(((Number*)redVars.get(ri)).asU32(), m.u32c((u32)0), tid32));
-            spvEmit((u32)SPV_STORE, spvA2(dst, spvEmitR((u32)SPV_LOAD, mt, spvA1(src))));
+            u32 val = spvEmitR((u32)SPV_LOAD, mt, spvA1(src));
+            if (narrow)
+                val = spvEmitR((u32)SPV_SHIFTRIGHTLOGICAL, mt,
+                               spvA2(val, m.u32c(((Number*)_sNarrowShift.get((Hashable*)String.withI64((i64)k))).asU32())));
+            spvEmit((u32)SPV_STORE, spvA2(dst, val));
             }
         spvEmit((u32)SPV_BRANCH, spvA1(done));
         spvPlace(done);
@@ -19475,15 +19507,21 @@ class ClassInfo
             {
             if (_mReds.get((Hashable*)String.withI64((i64)k)) == (Object*)0) continue;
             String* t = _mObj.typeAt(k);
-            if (wgType(t) == (String*)0 || spvNarrowBytes(t) != (u32)0 || used.get((Hashable*)String.withU32(k)) == (Object*)0)
+            if (wgType(t) == (String*)0 || used.get((Hashable*)String.withU32(k)) == (Object*)0)
                 {
-                parBecause(spvS("it reduces an 8- or 16-bit value or a bool, which its WebGPU version cannot yet"));
+                parBecause(spvS("it reduces a value its WebGPU version cannot hold"));
                 return false;
                 }
+            // An 8- or 16-bit value or a bool: a u32 slot per thread (the
+            // reference explains).
+            bool narrow = spvNarrowBytes(t) != (u32)0;
             meta.appendCString(" red="); meta.append(String.withU32(_mObj.offsetAt(k))); meta.appendCString(":"); meta.append(String.withU32(spvWidth(t)));
-            decls.append(String.withFormat("@group(0) @binding(%u) var<storage, read_write> r%u: array<%s>;\n", _wgBinding, k, wgType(t).cString()));
+            if (narrow) meta.appendCString(":4");
+            decls.append(String.withFormat("@group(0) @binding(%u) var<storage, read_write> r%u: array<%s>;\n", _wgBinding, k,
+                                           narrow ? "u32" : wgType(t).cString()));
             _wgBinding = _wgBinding + (u32)1;
-            reds.add((Object*)String.withFormat("r%u[tid] = f%u;", k, k));
+            if (ptxIs(t, "Bool")) reds.add((Object*)String.withFormat("r%u[tid] = select(0u, 1u, f%u);", k, k));
+            else reds.add((Object*)String.withFormat("r%u[tid] = f%u;", k, k));
             }
 
         if (!wgDeclareValues(f)) return false;

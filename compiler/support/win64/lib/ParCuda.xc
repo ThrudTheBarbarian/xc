@@ -190,7 +190,7 @@ class ParCuda
             }
         for (u32 i = (u32)0; i < l.nred; i = i + (u32)1)
             {
-            dev[nd] = upload(nd, (pointer)0, l.threads * l.redSize[i]);
+            dev[nd] = upload(nd, (pointer)0, l.threads * l.redStride[i]);
             nd = nd + (u32)1;
             }
         bool ok = true;
@@ -230,7 +230,7 @@ class ParCuda
             u8* parts[16];
             for (u32 i = (u32)0; i < l.nred; i = i + (u32)1)
                 {
-                i64 bytes = l.threads * l.redSize[i];
+                i64 bytes = l.threads * l.redStride[i];
                 parts[i] = (u8*)malloc((u64)bytes);
                 _toHost((pointer)parts[i], dev[at], (u64)bytes);
                 at = at + (u32)1;

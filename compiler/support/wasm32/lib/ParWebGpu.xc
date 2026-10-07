@@ -70,7 +70,7 @@ class ParWebGpu
         u8* parts[16];
         for (u32 i = (u32)0; i < l.nred; i = i + (u32)1)
             {
-            u32 bytes = (u32)(l.threads * l.redSize[i]);
+            u32 bytes = (u32)(l.threads * l.redStride[i]);
             parts[i] = new u8[bytes + (u32)4];
             desc[b * (u32)3] = (u32)(pointer)parts[i];
             desc[b * (u32)3 + (u32)1] = bytes;

@@ -158,7 +158,9 @@ uses a global itself, runs on the CPU. What else each GPU can hold:
   still keeps the block on the CPU.
 - Through Vulkan the GPU must have 64-bit integers, which desktop GPUs have;
   `double` is used where the GPU has it. 8- and 16-bit values and `bool`s,
-  alone or in arrays, are exact on every Vulkan GPU.
+  alone or in arrays, are exact on every Vulkan GPU, and from 0.73 they can be
+  reduced there and through WebGPU too (up to 0.72 such a block runs on the
+  CPU).
 - Through WebGPU, which has only 32-bit numbers, 64-bit integers are worked in
   two halves and 8- and 16-bit values exactly, as through Vulkan; a block that
   uses `double` runs on the CPU. From 0.73, 64-bit integers are divided and

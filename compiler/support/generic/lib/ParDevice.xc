@@ -3,7 +3,7 @@
 // the CPU and the GPU, the record auto keeps, XC_PAR_REPORT, and the reading
 // of a kernel's header line,
 //   // xcpar size=<bytes> lo=<off> hi=<off> buf=<off>:<own-ivar>:<elem-bytes>…
-//            glob=<name>:<elem-bytes>… red=<off>:<bytes>…
+//            glob=<name>:<elem-bytes>… red=<off>:<bytes>[:<stride>]…
 // which says where the block object keeps lo, hi, each captured array, each
 // global it uses and each reduction. The GPU runtimes share all of it, and
 // differ only in how they compile a kernel, move the data and launch.
@@ -59,6 +59,7 @@ class ParLayout : Object
     u32 nglob;
     i64 redOff[16];
     i64 redSize[16];
+    i64 redStride[16];  // bytes per thread's partial: redSize, or a 32-bit slot for a narrow one
     u32 nred;
     i64 n;
     i64 per;
@@ -74,7 +75,7 @@ class ParLayout : Object
         threads = (n + per - (i64)1) / per;
         }
 
-    // Each thread's partials, at parts[i] + thread * redSize[i], folded into
+    // Each thread's partials, at parts[i] + thread * redStride[i], folded into
     // the block in thread order with its own merge(), so an integer result is
     // the CPU's exactly. One chunk carries them into merge(), which only
     // reads them: no allocation per thread.
@@ -87,7 +88,7 @@ class ParLayout : Object
         for (i64 t = (i64)0; t < threads; t = t + (i64)1)
             {
             for (u32 i = (u32)0; i < nred; i = i + (u32)1)
-                memcpy((pointer)(cb + redOff[i]), (pointer)(parts[i] + t * redSize[i]), (u64)redSize[i]);
+                memcpy((pointer)(cb + redOff[i]), (pointer)(parts[i] + t * redStride[i]), (u64)redSize[i]);
             proto.merge(c);
             }
         }
@@ -340,6 +341,13 @@ class ParDevice
                 l.redOff[k] = num(src, &at);
                 at = at + (u32)1;
                 l.redSize[k] = num(src, &at);
+                l.redStride[k] = l.redSize[k];
+                // A narrow partial in a 32-bit slot: its low bytes are the value.
+                if (src[at] == (u8)':')
+                    {
+                    at = at + (u32)1;
+                    l.redStride[k] = num(src, &at);
+                    }
                 l.nred = k + (u32)1;
                 continue;
                 }

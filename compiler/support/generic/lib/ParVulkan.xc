@@ -631,7 +631,7 @@ class ParVulkan
             }
         for (u32 i = (u32)0; i < l.nred; i = i + (u32)1)
             {
-            sizes[b] = l.threads * l.redSize[i];
+            sizes[b] = l.threads * l.redStride[i];
             b = b + (u32)1;
             }
         // Whole 32-bit words: an array of 8- or 16-bit values is read and

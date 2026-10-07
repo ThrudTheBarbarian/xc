@@ -166,7 +166,7 @@ class ParMetal
         for (u32 i = (u32)0; i < nglob; i = i + (u32)1)
             globs[i] = withBytes(_dev, sel("newBufferWithBytes:length:options:"), l.globPtr[i], (u64)l.globLen[i], (u64)0);
         for (u32 i = (u32)0; i < nred; i = i + (u32)1)
-            reds[i] = withLen(_dev, sel("newBufferWithLength:options:"), (u64)(threads * l.redSize[i]), (u64)0);
+            reds[i] = withLen(_dev, sel("newBufferWithLength:options:"), (u64)(threads * l.redStride[i]), (u64)0);
 
         pointer cb = send0(_queue, sel("commandBuffer"));
         pointer enc = send0(cb, sel("computeCommandEncoder"));

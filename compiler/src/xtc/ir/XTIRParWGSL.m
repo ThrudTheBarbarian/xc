@@ -1535,17 +1535,23 @@ static char kWf, kWgHelpers, kWgHelperText, kWgWordBufs, kWgBufName;
     NSMutableArray<NSString*>* reds = [NSMutableArray array];
     [self.reductionFields enumerateIndexesUsingBlock:^(NSUInteger k, BOOL* stop) {
         XTIRType* t = fl[k].type;
-        if (!wgType(t) || wgNarrowBytes(t) || ![used containsIndex:k])
+        if (!wgType(t) || ![used containsIndex:k])
             {
-            [self because:@"it reduces an 8- or 16-bit value or a bool, which its WebGPU version cannot yet"];
+            [self because:@"it reduces a value its WebGPU version cannot hold"];
             bad = YES;
             *stop = YES;
             return;
             }
-        [meta appendFormat:@" red=%u:%u", fl[k].byteOffset, t.byteWidth];
+        // An 8- or 16-bit value or a bool: a u32 slot per thread (a third
+        // field, the stride), of which the host takes the low bytes.
+        BOOL narrow = wgNarrowBytes(t) != 0;
+        [meta appendFormat:@" red=%u:%u%@", fl[k].byteOffset, t.byteWidth, narrow ? @":4" : @""];
         NSString* n = [NSString stringWithFormat:@"r%lu", (unsigned long)k];
-        [decls appendFormat:@"@group(0) @binding(%u) var<storage, read_write> %@: array<%@>;\n", binding++, n, wgType(t)];
-        [reds addObject:[NSString stringWithFormat:@"%@[tid] = f%lu;", n, (unsigned long)k]];
+        [decls appendFormat:@"@group(0) @binding(%u) var<storage, read_write> %@: array<%@>;\n", binding++, n,
+                            narrow ? @"u32" : wgType(t)];
+        [reds addObject:t.kind == XTIRTypeKindBool
+                            ? [NSString stringWithFormat:@"%@[tid] = select(0u, 1u, f%lu);", n, (unsigned long)k]
+                            : [NSString stringWithFormat:@"%@[tid] = f%lu;", n, (unsigned long)k]];
     }];
     if (bad)
         return nil;
