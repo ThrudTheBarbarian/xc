@@ -1,9 +1,9 @@
 ---
 title: UXDesignable
-description: "The nib wiring protocol. Declare an outlet or an :action and the compiler generates both methods for you, with connections by name checked at compile time."
+description: "The rsc wiring protocol. Declare an outlet or an :action and the compiler generates both methods for you, with connections by name checked at compile time."
 ---
 
-`UXDesignable` is how a loaded nib connects itself to your controller. It has
+`UXDesignable` is how a loaded rsc connects itself to your controller. It has
 two methods, and **you do not write either of them**.
 
 ```c
@@ -37,13 +37,13 @@ That class now answers `setOutlet("canvas", …)` and `wireAction("onSave", …)
 with no further code. Writing `: Object <UXDesignable>` by hand is equivalent;
 either way the compiler generates the bodies.
 
-[`UXNib.loadWired`](/compiler/api/uxkit/uxnib/) uses these two methods to
+[`UXRsc.loadWired`](/compiler/api/uxkit/uxrsc/) uses these two methods to
 connect a resource's outlets and actions by name.
 
 ## Why this and not reflection
 
-xc has no reflection, no selectors and no message forwarding, so a nib cannot
-look up a field by string at run time the way Cocoa does. The information a nib
+xc has no reflection, no selectors and no message forwarding, so an rsc file cannot
+look up a field by string at run time the way Cocoa does. The information an rsc file
 needs is **declared** (`outlet`, `:action`) and the lookup is **generated** from
 those declarations.
 
@@ -51,7 +51,7 @@ This has three benefits:
 
 - A misspelled outlet in your source is a **compile** error, not a nil field
   that crashes at first use.
-- A nib naming an outlet your controller does not have returns `false` at
+- An rsc file naming an outlet your controller does not have returns `false` at
   **load**, so a mis-wired interface fails where you can see it.
 - There is no run-time cost beyond a string compare, and no metadata to keep in
   step with the code.
@@ -86,33 +86,33 @@ a reference to one does not round-trip. A callback held as a **local**, which is
 all `wireAction` needs internally, works, so the binding happens here.
 :::
 
-## Using it from code, so the nib path stays honest
+## Using it from code, so the rsc path stays honest
 
-This protocol is useful even if you never load a nib. A hand-written builder can
+This protocol is useful even if you never load an rsc file. A hand-written builder can
 call the **same two methods** instead of assigning fields directly.
 
 ```c
-// Not this — it works, and it exercises nothing a nib will use:
+// Not this — it works, and it exercises nothing an rsc file will use:
 c.canvas = view;
 
-// This — the code path becomes a hand-written nib:
+// This — the code path becomes a hand-written rsc:
 if (!c.setOutlet((u8*)"canvas", (Object*)view))   { return false; }
 if (!c.wireAction((u8*)"onSave", saveButton))     { return false; }
 ```
 
-Written the second way, every wiring name in your builder is one a nib will
+Written the second way, every wiring name in your builder is one an rsc file will
 later carry as data, and a typo fails in **both** paths. Written the first way,
-the nib path is never exercised, and its errors surface only when a nib is first
+the rsc path is never exercised, and its errors surface only when an rsc file is first
 loaded.
 
-Rocks builds its own main window this way. The builder is a nib written in code,
-so replacing it with `UXNib.loadWired` later changes one file and nothing else.
+Rocks builds its own main window this way. The builder is an rsc file written in code,
+so replacing it with `UXRsc.loadWired` later changes one file and nothing else.
 
 ## See also
 
-- [`UXNib`](/compiler/api/uxkit/uxnib/): loads a resource and calls these two
+- [`UXRsc`](/compiler/api/uxkit/uxrsc/): loads a resource and calls these two
   methods
-- [`UXNibV2`](/compiler/api/uxkit/uxnibv2/): the newer format
+- [`UXRscV2`](/compiler/api/uxkit/uxrscv2/): the newer format
 - [`UXControl`](/compiler/api/uxkit/uxcontrol/): what `wireAction` calls
   `setAction` on
 - [Bound methods and callbacks](/compiler/language/bound-methods/): what

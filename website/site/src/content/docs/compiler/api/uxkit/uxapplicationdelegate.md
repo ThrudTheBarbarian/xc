@@ -65,13 +65,13 @@ time.
 
 Return `0` for success. A non-zero return means "do not continue". A program
 uses it to refuse to run when something it needs is missing. The usual case is
-the wiring check in a nib-loading app:
+the wiring check in an rsc file-loading app:
 
 ```c
 i32 applicationDidStart(UXApplication* app) {
     if (!Builder.buildInto(content, self, W, H)) {
         Stdio.printf("FAIL: a wiring name was rejected\n");
-        return 1;                      // a typo the nib path would hit too
+        return 1;                      // a typo the rsc path would hit too
     }
     …
     return 0;

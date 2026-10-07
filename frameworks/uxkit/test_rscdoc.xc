@@ -38,7 +38,7 @@ bool sameBytes(Data* a, Data* b)
         }
     return true;
     }
-// whether the bytes carry a nib chunk at rsh_rssize
+// whether the bytes carry an rsc file chunk at rsh_rssize
 bool hasChunk(Data* d)
     {
     u8* b = d.bytes();

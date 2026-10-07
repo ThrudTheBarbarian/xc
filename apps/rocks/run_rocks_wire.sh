@@ -1,6 +1,6 @@
 #!/bin/sh
 # run_rocks_wire.sh — the `rocks-wire` gate: Rocks' builder and controller agree
-# on every wiring name, headless.  Guards the nib bootstrap (see the test).
+# on every wiring name, headless.  Guards the rsc bootstrap (see the test).
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
 ux="$here/../../frameworks/uxkit"

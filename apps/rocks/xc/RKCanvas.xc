@@ -20,7 +20,7 @@
 #import "UXPopUpButton.xc"
 #import "UXGeometry.xc"
 #import "UXRscModel.xc"
-#import "UXNib.xc"
+#import "UXRsc.xc"
 
 class RKCanvas : Object
     {
@@ -44,7 +44,7 @@ class RKCanvas : Object
         tree = (UXRscTree*)0;
         theme = (i32)UXR_ATTR_SHARED;
         }
-    // Realize `t` of `d`, with classes and attributes: what UXNib would load.
+    // Realize `t` of `d`, with classes and attributes: what UXRsc would load.
     i32 realizeIn(UXRscDoc* d, UXRscTree* t, i32 th, UXView* into)
         {
         doc = d;
@@ -93,7 +93,7 @@ class RKCanvas : Object
         UXView* v = (UXView*)0;
         if (doc != (UXRscDoc*)0 && tree != (UXRscTree*)0)
             {
-            v = UXNib.viewFor(o, doc.classOf(tree, o));
+            v = UXRsc.viewFor(o, doc.classOf(tree, o));
             }
         else
             {
@@ -110,10 +110,10 @@ class RKCanvas : Object
         // recoverable: the object still has its row in the outline, so it can
         // be selected and un-hidden there.  That escape hatch is what makes
         // honouring it safe rather than a trap.
-        UXNib.applyState(v, o);
+        UXRsc.applyState(v, o);
         if (doc != (UXRscDoc*)0 && tree != (UXRscTree*)0)
             {
-            UXNib.applyAttrs(v, doc, doc.formIdOf(tree), o.logicalId, theme);
+            UXRsc.applyAttrs(v, doc, doc.formIdOf(tree), o.logicalId, theme);
             }
         objs.add(o);
         views.add(v);
@@ -128,6 +128,6 @@ class RKCanvas : Object
     // One object -> one UXKit widget, by UXKit's own loader: the canvas shows what an app loads.
     static UXView* widgetFor(UXRscObject* o)
         {
-        return UXNib.viewFor(o, (u8*)0);
+        return UXRsc.viewFor(o, (u8*)0);
         }
     }

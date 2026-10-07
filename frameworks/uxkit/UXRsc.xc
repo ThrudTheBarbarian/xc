@@ -1,16 +1,16 @@
-// UXNib.xc — load a form from a .rsc document as UXKit views, on every backend.
+// UXRsc.xc — load a form from a .rsc document as UXKit views, on every backend.
 //
 // The document is the one Rocks edits (UXRscModel): classic GEM trees, one per layout theme of a
-// form, and the nib chunk after them (docs/UXNB-V2.md): logical ids, class overrides, top-level
+// form, and the rsc chunk after them (docs/UXNB-V2.md): logical ids, class overrides, top-level
 // objects and the outlet/action connections, each scoped to the themes it binds in.  Loading a
 // form picks the theme for this device (the driver's form factor and orientation, down the
 // fallback chain), builds that tree as real UXKit controls, makes the top-level objects, binds
-// the connections in scope through the logical ids, and sends awakeFromNib.
+// the connections in scope through the logical ids, and sends awakeFromRsc.
 //
 // The type -> control mapping here is the designer's too: Rocks' canvas builds its forms through
-// UXNib.viewFor, so what the designer shows is what an app loads.
+// UXRsc.viewFor, so what the designer shows is what an app loads.
 //
-// (UXNibGem is the older GEM-only loader, binding views onto libGEM's own OBJECT array.)
+// (UXRscGem is the older GEM-only loader, binding views onto libGEM's own OBJECT array.)
 #import "Array.xc"
 #import "UXView.xc"
 #import "UXViewTree.xc"
@@ -27,11 +27,11 @@
 #import "UXViewDriver.xc"
 #import "UXRscModel.xc"
 #import "UXRscRead.xc"
-#import "UXNibV2.xc"
+#import "UXRscV2.xc"
 
-// A nib instantiates app objects BY CLASS NAME: custom view subclasses (for a named G_USERDEF) and
+// An rsc file instantiates app objects BY CLASS NAME: custom view subclasses (for a named G_USERDEF) and
 // non-view top-level objects (controllers, formatters).  Each MODULE that owns designable classes
-// contributes a compiler-generated factory `xgNibNew(name) -> Object*` — a switch over ITS classes,
+// contributes a compiler-generated factory `xgRscNew(name) -> Object*` — a switch over ITS classes,
 // returning null for a name it doesn't own — and REGISTERS it here.  The loader tries each registered
 // factory in turn (per-module arm), so designable classes can live across the app + libraries without
 // any module knowing another's classes.  A single-module app registers one.
@@ -40,20 +40,20 @@
 // `(UXDesignable* ?)` for wiring.  (COMPILER-THREAD #9 — the Object* <-> protocol bridge — landed, so
 // the earlier two-typed-factory workaround is gone, and a designable VIEW can now be an outlet owner
 // or action target.)
-typedef Object* UXNibFactory(u8* name); // a class name -> a fresh instance, or null if not ours
-pointer gUXNibFn[8];
-i32 gUXNibNFn;
+typedef Object* UXRscFactory(u8* name); // a class name -> a fresh instance, or null if not ours
+pointer gUXRscFn[8];
+i32 gUXRscNFn;
 
 
 // An object that wants to finish setting up once its outlets are connected.  The loader sends it
 // to every object it made and to File's Owner, after all the wiring.
-protocol UXNibAwaking
+protocol UXRscAwaking
     {
-    void awakeFromNib(void);
+    void awakeFromRsc(void);
     }
 
 // One loaded form: its views, its top-level objects, and what happened to its connections.
-class UXNibInstance : Object
+class UXRscInstance : Object
     {
     UXView* root;    // the form's root box, sized to it
     UXViewTree* viewTree; // the tree the views live in when the form was not loaded into a container
@@ -126,38 +126,38 @@ class UXNibInstance : Object
         }
     }
 
-class UXNib
+class UXRsc
     {
-    // Each module registers its generated `xgNibNew` factory once (the compiler emits this call in an
+    // Each module registers its generated `xgRscNew` factory once (the compiler emits this call in an
     // .init_array entry; explicit registration is the fallback).  registerViewFactory is a deprecated
     // alias kept so older callers still link — there is one factory list now.
     static void registerObjectFactory(pointer fn)
         {
-        if (gUXNibNFn < (i32)8)
+        if (gUXRscNFn < (i32)8)
             {
-            gUXNibFn[gUXNibNFn] = fn;
-            gUXNibNFn = gUXNibNFn + (i32)1;
+            gUXRscFn[gUXRscNFn] = fn;
+            gUXRscNFn = gUXRscNFn + (i32)1;
             }
         }
     static void registerViewFactory(pointer fn)
         {
-        UXNib.registerObjectFactory(fn);
+        UXRsc.registerObjectFactory(fn);
         }
 
     // Instantiate a designable class by name, trying each registered factory (Object* per #9),
     // then UXKit's own view classes.
     static Object* make(u8* cls)
         {
-        for (i32 i = (i32)0; i < gUXNibNFn; i = i + (i32)1)
+        for (i32 i = (i32)0; i < gUXRscNFn; i = i + (i32)1)
             {
-            UXNibFactory* f = (UXNibFactory*)gUXNibFn[i];
+            UXRscFactory* f = (UXRscFactory*)gUXRscFn[i];
             Object* o = f(cls);
             if (o != (Object*)0)
                 {
                 return o;
                 }
             }
-        return UXNib.makeUXKit(cls);
+        return UXRsc.makeUXKit(cls);
         }
     // UXKit's controls that GEM has no type for, which a document holds as a G_USERDEF of that
     // class, with their settings in its attributes.
@@ -198,24 +198,24 @@ class UXNib
         UXSlider* sl = (UXSlider* ?)(Object*)v;
         if (sl != (UXSlider*)0)
             {
-            sl.setRange(UXNib.attrInt(doc, formId, logicalId, theme, (u8*)"min", (i32)0), UXNib.attrInt(doc, formId, logicalId, theme, (u8*)"max", (i32)100));
-            sl.setValue(UXNib.attrInt(doc, formId, logicalId, theme, (u8*)"value", (i32)0));
+            sl.setRange(UXRsc.attrInt(doc, formId, logicalId, theme, (u8*)"min", (i32)0), UXRsc.attrInt(doc, formId, logicalId, theme, (u8*)"max", (i32)100));
+            sl.setValue(UXRsc.attrInt(doc, formId, logicalId, theme, (u8*)"value", (i32)0));
             return;
             }
         UXStepper* st = (UXStepper* ?)(Object*)v;
         if (st != (UXStepper*)0)
             {
-            st.setRange(UXNib.attrInt(doc, formId, logicalId, theme, (u8*)"min", (i32)0), UXNib.attrInt(doc, formId, logicalId, theme, (u8*)"max", (i32)100));
-            st.setStep(UXNib.attrInt(doc, formId, logicalId, theme, (u8*)"step", (i32)1));
-            st.setValue(UXNib.attrInt(doc, formId, logicalId, theme, (u8*)"value", (i32)0));
+            st.setRange(UXRsc.attrInt(doc, formId, logicalId, theme, (u8*)"min", (i32)0), UXRsc.attrInt(doc, formId, logicalId, theme, (u8*)"max", (i32)100));
+            st.setStep(UXRsc.attrInt(doc, formId, logicalId, theme, (u8*)"step", (i32)1));
+            st.setValue(UXRsc.attrInt(doc, formId, logicalId, theme, (u8*)"value", (i32)0));
             return;
             }
         UXProgressBar* pb = (UXProgressBar* ?)(Object*)v;
         if (pb != (UXProgressBar*)0)
             {
             Progress* pr = new Progress();
-            pr.setTotalUnitCount((i64)UXNib.attrInt(doc, formId, logicalId, theme, (u8*)"total", (i32)100));
-            pr.setCompletedUnitCount((i64)UXNib.attrInt(doc, formId, logicalId, theme, (u8*)"completed", (i32)0));
+            pr.setTotalUnitCount((i64)UXRsc.attrInt(doc, formId, logicalId, theme, (u8*)"total", (i32)100));
+            pr.setCompletedUnitCount((i64)UXRsc.attrInt(doc, formId, logicalId, theme, (u8*)"completed", (i32)0));
             pb.setProgress(pr);
             return;
             }
@@ -223,17 +223,17 @@ class UXNib
         if (sg != (UXSegmentedControl*)0)
             {
             u8* segs = doc.attrIn(formId, logicalId, theme, (u8*)"segments");
-            i32 n = UXNib.eachPart(segs, (pointer)sg, (i32)0);
+            i32 n = UXRsc.eachPart(segs, (pointer)sg, (i32)0);
             if (n > (i32)0)
                 {
-                sg.applyNativeSelection(UXNib.attrInt(doc, formId, logicalId, theme, (u8*)"selected", (i32)0));
+                sg.applyNativeSelection(UXRsc.attrInt(doc, formId, logicalId, theme, (u8*)"selected", (i32)0));
                 }
             return;
             }
         UXComboBox* cb = (UXComboBox* ?)(Object*)v;
         if (cb != (UXComboBox*)0)
             {
-            UXNib.eachPart(doc.attrIn(formId, logicalId, theme, (u8*)"items"), (pointer)cb, (i32)1);
+            UXRsc.eachPart(doc.attrIn(formId, logicalId, theme, (u8*)"items"), (pointer)cb, (i32)1);
             u8* t = doc.attrIn(formId, logicalId, theme, (u8*)"text");
             if (t != (u8*)0)
                 {
@@ -305,12 +305,12 @@ class UXNib
     // form's root becomes a subview at the container's origin.  With no container the form gets a
     // view tree of its own (ni.viewTree).  0 if the bytes are not a resource or there is no such
     // form.
-    static UXNibInstance* load(u8* bytes, i32 n, i32 formId, UXDesignable* owner, UXView* into)
+    static UXRscInstance* load(u8* bytes, i32 n, i32 formId, UXDesignable* owner, UXView* into)
         {
         UXRscDoc* doc = UXRscReader.read(bytes, n);
-        return doc != (UXRscDoc*)0 ? UXNib.loadDoc(doc, formId, owner, into) : (UXNibInstance*)0;
+        return doc != (UXRscDoc*)0 ? UXRsc.loadDoc(doc, formId, owner, into) : (UXRscInstance*)0;
         }
-    static UXNibInstance* loadDoc(UXRscDoc* doc, i32 formId, UXDesignable* owner, UXView* into)
+    static UXRscInstance* loadDoc(UXRscDoc* doc, i32 formId, UXDesignable* owner, UXView* into)
         {
         i32 klass = (i32)UX_FORM_DESKTOP;
         i32 orient = (i32)UX_ORIENT_NONE;
@@ -319,20 +319,20 @@ class UXNib
             klass = gDriver.formFactorClass();
             orient = gDriver.orientation();
             }
-        return UXNib.loadDocAs(doc, formId, klass, orient, owner, into);
+        return UXRsc.loadDocAs(doc, formId, klass, orient, owner, into);
         }
     // For a given theme: what a test, or the designer's preview, asks for.
-    static UXNibInstance* loadDocAs(UXRscDoc* doc, i32 formId, i32 klass, i32 orient, UXDesignable* owner,
+    static UXRscInstance* loadDocAs(UXRscDoc* doc, i32 formId, i32 klass, i32 orient, UXDesignable* owner,
                                     UXView* into)
         {
         i32 gotClass = (i32)0;
         i32 gotOrient = (i32)0;
-        UXRscTree* t = UXNib.selectTree(doc, formId, klass, orient, &gotClass, &gotOrient);
+        UXRscTree* t = UXRsc.selectTree(doc, formId, klass, orient, &gotClass, &gotOrient);
         if (t == (UXRscTree*)0 || t.root == (UXRscObject*)0)
             {
-            return (UXNibInstance*)0;
+            return (UXRscInstance*)0;
             }
-        UXNibInstance* ni = new UXNibInstance();
+        UXRscInstance* ni = new UXRscInstance();
         ni.tree = t;
         ni.formId = formId;
         ni.klass = gotClass;
@@ -341,10 +341,10 @@ class UXNib
 
         // views: the root box is the form's own view; its children are built into it
         // (a plain view unless its class is overridden: the window draws the form's background)
-        u8* rootCls = UXNib.classFor(doc, formId, treeIndex, t.root, (i32)0);
+        u8* rootCls = UXRsc.classFor(doc, formId, treeIndex, t.root, (i32)0);
         UXView* rv = (UXView*)0;
         if (rootCls != (u8*)0)
-            { rv = (UXView* ?)UXNib.make(rootCls);
+            { rv = (UXView* ?)UXRsc.make(rootCls);
             }
         if (rv == (UXView*)0)
             {
@@ -366,14 +366,14 @@ class UXNib
         Array<UXRscObject>* order = t.allObjects(); // pre-order: the index a space-0 Ref names
         for (i32 i = (i32)0; i < t.root.childCount(); i = i + (i32)1)
             {
-            UXNib.build(doc, ni, order, treeIndex, t.root.childAt(i), rv);
+            UXRsc.build(doc, ni, order, treeIndex, t.root.childAt(i), rv);
             }
 
         // top-level objects: the document's, made on every load
         for (u32 i = (u32)0; i < doc.topObjects.count(); i = i + (u32)1)
             {
             UXRscTopObject* rec = (UXRscTopObject* ?)doc.topObjects.get(i);
-            Object* o = UXNib.make(rec.cls);
+            Object* o = UXRsc.make(rec.cls);
             if (o != (Object*)0)
                 {
                 ni.tops.add(o);
@@ -385,7 +385,7 @@ class UXNib
         for (u32 i = (u32)0; i < doc.connections.count(); i = i + (u32)1)
             {
             UXRscConnection* c = (UXRscConnection* ?)doc.connections.get(i);
-            if (!UXNib.concerns(doc, c, formId))
+            if (!UXRsc.concerns(doc, c, formId))
                 {
                 continue;
                 }
@@ -394,8 +394,8 @@ class UXNib
                 ni.outOfScope = ni.outOfScope + (i32)1;
                 continue;
                 }
-            Object* src = UXNib.resolve(ni, order, treeIndex, c.src, owner);
-            Object* dst = UXNib.resolve(ni, order, treeIndex, c.dst, owner);
+            Object* src = UXRsc.resolve(ni, order, treeIndex, c.src, owner);
+            Object* dst = UXRsc.resolve(ni, order, treeIndex, c.dst, owner);
             if (src == (Object*)0 || dst == (Object*)0)
                 {
                 ni.skipped = ni.skipped + (i32)1;
@@ -429,40 +429,40 @@ class UXNib
                 }
             }
 
-        // awakeFromNib: the objects made here, then File's Owner
+        // awakeFromRsc: the objects made here, then File's Owner
         for (u32 i = (u32)0; i < ni.tops.count(); i = i + (u32)1)
             {
-            UXNib.awake((Object* ?)ni.tops.get(i));
+            UXRsc.awake((Object* ?)ni.tops.get(i));
             }
         for (u32 i = (u32)0; i < ni.views.count(); i = i + (u32)1)
             {
-            UXNib.awake((Object* ?)ni.views.get(i));
+            UXRsc.awake((Object* ?)ni.views.get(i));
             }
-        UXNib.awake((Object*)owner);
+        UXRsc.awake((Object*)owner);
         return ni;
         }
 
     static void awake(Object* o)
         {
-        UXNibAwaking* a = (UXNibAwaking* ?)o;
-        if (a != (UXNibAwaking*)0)
+        UXRscAwaking* a = (UXRscAwaking* ?)o;
+        if (a != (UXRscAwaking*)0)
             {
-            a.awakeFromNib();
+            a.awakeFromRsc();
             }
         }
 
-    static void build(UXRscDoc* doc, UXNibInstance* ni, Array<UXRscObject>* order, i32 treeIndex,
+    static void build(UXRscDoc* doc, UXRscInstance* ni, Array<UXRscObject>* order, i32 treeIndex,
                       UXRscObject* o, UXView* parent)
         {
-        UXView* v = UXNib.viewFor(o, UXNib.classFor(doc, ni.formId, treeIndex, o, UXNib.indexIn(order, o)));
+        UXView* v = UXRsc.viewFor(o, UXRsc.classFor(doc, ni.formId, treeIndex, o, UXRsc.indexIn(order, o)));
         parent.addSubview(v, UXGeom.make((i16)o.x, (i16)o.y, (i16)o.w, (i16)o.h));
-        UXNib.applyState(v, o);
-        UXNib.applyAttrs(v, doc, ni.formId, o.logicalId, (i32)UXRscConnection.themeBit(ni.klass, ni.orient));
+        UXRsc.applyState(v, o);
+        UXRsc.applyAttrs(v, doc, ni.formId, o.logicalId, (i32)UXRscConnection.themeBit(ni.klass, ni.orient));
         ni.objs.add(o);
         ni.views.add(v);
         for (i32 i = (i32)0; i < o.childCount(); i = i + (i32)1)
             {
-            UXNib.build(doc, ni, order, treeIndex, o.childAt(i), v);
+            UXRsc.build(doc, ni, order, treeIndex, o.childAt(i), v);
             }
         }
 
@@ -498,7 +498,7 @@ class UXNib
                   : (orient == (i32)UX_ORIENT_LANDSCAPE ? (i32)UX_ORIENT_PORTRAIT : (i32)-1);
         for (i32 step = (i32)0; step < (i32)4; step = step + (i32)1)
             {
-            i32 want = UXNibV2.chain(klass, step);
+            i32 want = UXRscV2.chain(klass, step);
             // pass 0: this orientation; 1: none; 2: the other one (or, for NONE, anything)
             for (i32 pass = (i32)0; pass < (i32)3; pass = pass + (i32)1)
                 {
@@ -527,7 +527,7 @@ class UXNib
     // no view end (owner to a top object) belongs to every form.
     static bool concerns(UXRscDoc* doc, UXRscConnection* c, i32 formId)
         {
-        return UXNib.refConcerns(doc, c.src, formId) && UXNib.refConcerns(doc, c.dst, formId);
+        return UXRsc.refConcerns(doc, c.src, formId) && UXRsc.refConcerns(doc, c.dst, formId);
         }
     static bool refConcerns(UXRscDoc* doc, UXRscRef* r, i32 formId)
         {
@@ -547,7 +547,7 @@ class UXNib
         return true;
         }
 
-    static Object* resolve(UXNibInstance* ni, Array<UXRscObject>* order, i32 treeIndex, UXRscRef* r, UXDesignable* owner)
+    static Object* resolve(UXRscInstance* ni, Array<UXRscObject>* order, i32 treeIndex, UXRscRef* r, UXDesignable* owner)
         {
         if (r.space == (i32)UXR_REF_LOGICAL)
             {
@@ -599,7 +599,7 @@ class UXNib
         {
         if (cls != (u8*)0 && cls[0] != (u8)0)
             {
-            UXView* cv = (UXView* ?)UXNib.make(cls);
+            UXView* cv = (UXView* ?)UXRsc.make(cls);
             if (cv != (UXView*)0)
                 {
                 return cv;
@@ -609,27 +609,27 @@ class UXNib
         if (t == (i32)UXR_T_BUTTON)
             {
             UXButton* b = new UXButton();
-            b.setTitle(UXNib.textOf(o));
+            b.setTitle(UXRsc.textOf(o));
             return (UXView*)b;
             }
         if (t == (i32)UXR_T_CHECKBOX)
             {
             UXCheckbox* c = new UXCheckbox();
-            c.setTitle(UXNib.textOf(o));
+            c.setTitle(UXRsc.textOf(o));
             c.setChecked((o.state & (i32)UXR_S_CHECKED) != (i32)0);
             return (UXView*)c;
             }
         if (t == (i32)UXR_T_RADIO)
             {
             UXRadioButton* r = new UXRadioButton();
-            r.setTitle(UXNib.textOf(o));
+            r.setTitle(UXRsc.textOf(o));
             r.setSelected((o.state & (i32)UXR_S_SELECTED) != (i32)0);
             return (UXView*)r;
             }
         if (t == (i32)UXR_T_STRING || t == (i32)UXR_T_TEXT || t == (i32)UXR_T_TITLE)
             {
             UXLabel* l = new UXLabel();
-            l.setTitle(UXNib.textOf(o));
+            l.setTitle(UXRsc.textOf(o));
             return (UXView*)l;
             }
         if (t == (i32)UXR_T_FIELD || t == (i32)UXR_T_FTEXT ||
@@ -647,7 +647,7 @@ class UXNib
             // A GEM popup's spec is its label; the menu behind it lives in a linked tree.  Showing
             // the control with its current value beats a hole in the form.
             UXPopUpButton* p = new UXPopUpButton();
-            p.addItem(UXNib.textOf(o), (i32)0);
+            p.addItem(UXRsc.textOf(o), (i32)0);
             p.selectItem((i32)0);
             return (UXView*)p;
             }
@@ -664,7 +664,7 @@ class UXNib
             return new UXView();
             }
         UXGroupBox* unknown = new UXGroupBox();
-        unknown.setTitle(cls != (u8*)0 && cls[0] != (u8)0 ? cls : UXNib.typeName(o.type));
+        unknown.setTitle(cls != (u8*)0 && cls[0] != (u8)0 ? cls : UXRsc.typeName(o.type));
         return (UXView*)unknown;
         }
 
@@ -827,7 +827,7 @@ class UXNib
     // designer is typing into, along with the keyboard focus.
     static void applyText(UXView* w, UXRscObject* o)
         {
-        u8* t = UXNib.textOf(o);
+        u8* t = UXRsc.textOf(o);
         i32 k = (i32)w.kind();
         if (k == (i32)UXKindField)
             { ((UXTextField* ?)w).setText(t);

@@ -243,12 +243,12 @@ class RKOutlineNode : Object
             {
             return o.name;
             }
-        u8* t = UXNib.textOf(o);
+        u8* t = UXRsc.textOf(o);
         if (t != (u8*)0 && t[0] != (u8)0)
             {
             return t;
             }
-        return UXNib.typeName(o.type);
+        return UXRsc.typeName(o.type);
         }
 
     // ---- UXOutlineDataSource ----------------------------------------------

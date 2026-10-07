@@ -1,15 +1,15 @@
-// RKMainController.xc — the main window's controller, written as a NIB CLIENT.
+// RKMainController.xc — the main window's controller, written as a RSC CLIENT.
 //
 // This class constructs nothing.  It declares what it needs to talk to
 // (`outlet`) and what it can be told (`:action`), and something else supplies
-// the views: today RKMainBuilder, building them in code; later a nib that
+// the views: today RKMainBuilder, building them in code; later an rsc file that
 // Rocks itself authored.  That is the whole bootstrap plan — swap the builder
 // file, keep this one — and it only works if the controller never reaches out
 // and makes a view for itself.
 //
 // The `outlet` / `:action` decorations auto-conform this class to
 // UXDesignable, and the compiler synthesises setOutlet/wireAction from them
-// (bug 026).  Both the code builder and the nib loader drive those SAME two
+// (bug 026).  Both the code builder and the rsc loader drive those SAME two
 // methods, which is what makes the two paths interchangeable rather than
 // merely similar.  It also means this file is the worked example of the
 // pattern every Rocks user will write.
@@ -212,7 +212,7 @@ class RKMainController : Object<UXTableDelegate>
         }
 
     // ---- actions: what the UI can ask for ----------------------------------
-    // Each is wired by NAME, so the builder and a nib reach them identically.
+    // Each is wired by NAME, so the builder and an rsc file reach them identically.
     // A new, empty dialog: its own form, shown on the canvas.
     void onNewForm(UXControl* sender) : action
         {
@@ -549,8 +549,8 @@ class RKMainController : Object<UXTableDelegate>
             UXView* w = canvasMap.viewFor(o);
             if (w != (UXView*)0)
                 {
-                UXNib.applyState(w, o);
-                UXNib.applyText(w, o);
+                UXRsc.applyState(w, o);
+                UXRsc.applyText(w, o);
                 }
             }
         else
@@ -990,7 +990,7 @@ class RKMainController : Object<UXTableDelegate>
         self.showConnections();
         if (identityCtl.classField != (UXTextField*)0)
             {
-            self.titleInspector(identityCtl.classField.text(), selKind == (i32)RKON_VIEW && selected != (UXRscObject*)0 ? UXNib.defaultClassFor(selected.type) : (u8*)"Object");
+            self.titleInspector(identityCtl.classField.text(), selKind == (i32)RKON_VIEW && selected != (UXRscObject*)0 ? UXRsc.defaultClassFor(selected.type) : (u8*)"Object");
             }
         if (formOutline != (UXOutlineView*)0 && doc != (UXRscDoc*)0)
             {
@@ -1292,11 +1292,11 @@ class RKMainController : Object<UXTableDelegate>
             if (preview == (UXView*)0)
                 {
                 UXRscObject* o = RKMainController.objectFor(it, (i32)0, (i32)0);
-                preview = UXNib.viewFor(o, it.cls);
+                preview = UXRsc.viewFor(o, it.cls);
                 if (preview != (UXView*)0)
                     {
                     form.addSubview(preview, f);
-                    UXNib.applyState(preview, o);
+                    UXRsc.applyState(preview, o);
                     previewItem = it;
                     self.raiseOverlay();
                     }
@@ -1707,7 +1707,7 @@ class RKMainController : Object<UXTableDelegate>
         if (o != (UXRscObject*)0 && doc != (UXRscDoc*)0 && shownTree >= (i32)0 && shownTree < doc.treeCount())
             {
             identityCtl.showView(doc, doc.treeAt(shownTree), o);
-            self.titleInspector(doc.classOf(doc.treeAt(shownTree), o), UXNib.defaultClassFor(o.type));
+            self.titleInspector(doc.classOf(doc.treeAt(shownTree), o), UXRsc.defaultClassFor(o.type));
             }
         else
             {
@@ -2080,8 +2080,8 @@ class RKMainController : Object<UXTableDelegate>
         if (w != (UXView*)0)
             {
             w.setFrame(UXGeom.make((i16)o.x, (i16)o.y, (i16)o.w, (i16)o.h));
-            UXNib.applyState(w, o); // enabled, hidden, checked, selected
-            UXNib.applyText(w, o);
+            UXRsc.applyState(w, o); // enabled, hidden, checked, selected
+            UXRsc.applyText(w, o);
             w.setNeedsDisplay();
             }
         // Move the frame, but do NOT re-show the inspector: the edit came FROM

@@ -278,7 +278,7 @@ class UXRscWriter : Object
         self.wr16((i32)20, nobs);
         self.wr16((i32)22, ntree);
         self.wr16((i32)24, nted);
-        self.wr16((i32)26, (i32)0); // nib
+        self.wr16((i32)26, (i32)0); // rsc
         self.wr16((i32)28, (i32)0); // nbb
         self.wr16((i32)30, nstring);
         self.wr16((i32)32, (i32)0); // nimages
@@ -363,13 +363,13 @@ class UXRscWriter : Object
             r.connections.count() > (u32)0 || r.extSections.count() > (u32)0 || UXRscWriter.namesSection(r) != (Data*)0 ||
             (r.ownerClass != (u8*)0 && r.ownerClass[0] != (u8)0) || r.attrs.count() > (u32)0)
             {
-            file.append(self.nibChunk(r));
+            file.append(self.rscChunk(r));
             }
         return file;
         }
 
     // ---- the UXNB v3 chunk (docs/UXNB-V2.md sections 2 and 11) -----------------
-    // Written only when the document has layout variants or a nib graph, so a plain resource stays
+    // Written only when the document has layout variants or an rsc file graph, so a plain resource stays
     // byte-for-byte classic.  It sits at rsh_rssize, past everything a classic AES reads: there, every variant is
     // just another tree.  Forms first -- each multi-variant form, then every tree in no form as a
     // single-variant `any` form under its own index (in a v2 file only the form list finds a tree)
@@ -454,7 +454,7 @@ class UXRscWriter : Object
         UXRscWriter.be16(d, nl);
         d.appendBytes(nm, nl);
         }
-    Data* nibChunk(UXRscDoc* r)
+    Data* rscChunk(UXRscDoc* r)
         {
         // the string blob: offset 0 is "", then each form's name
         Data* blob = Data.withCapacity((u32)((i32)64));

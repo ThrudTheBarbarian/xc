@@ -9,7 +9,7 @@
 //         compiler builds the module's interface into it (Mach-O __XTC,__iface; ELF .xtc.iface;
 //         PE xtciface), JSON in which a designable class lists its outlets and actions.
 //   - DECLARED: a class Rocks cannot see, declared by hand in the Identity inspector and kept in
-//     the document (a DECL section of the nib chunk), as Interface Builder lets you add outlets and
+//     the document (a DECL section of the rsc chunk), as Interface Builder lets you add outlets and
 //     actions to a class before it is written.
 //   - UXKIT: the toolkit's own view classes, so an outlet typed UXButton* can be told a UXButton
 //     from a UXLabel.  They have no outlets or actions of their own to connect.

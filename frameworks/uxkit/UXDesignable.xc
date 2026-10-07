@@ -1,9 +1,9 @@
-// UXDesignable.xc — the nib reflection protocol (doc/UXKit-NIB.md §4).
+// UXDesignable.xc — the rsc reflection protocol (doc/UXKit-NIB.md §4).
 //
 // A class that declares any `outlet` field or `:action` method AUTO-CONFORMS to this protocol; the
 // compiler generates both method bodies from the decorations (setOutlet: a checked assignment per
-// outlet; wireAction: control.setAction(&self.<method>) per action).  UXNib.load reaches a loaded
-// object through this protocol to wire a nib's connections by name — no per-app code, and no
+// outlet; wireAction: control.setAction(&self.<method>) per action).  UXRsc.load reaches a loaded
+// object through this protocol to wire an rsc file's connections by name — no per-app code, and no
 // reflection beyond what the `outlet`/`action` decorations already declare and the compiler checks.
 //
 // (`: Object <UXDesignable>` written by hand is equivalent to the auto-apply; either way the bodies

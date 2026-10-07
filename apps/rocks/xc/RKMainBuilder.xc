@@ -1,18 +1,18 @@
 // RKMainBuilder.xc — THE SEAM.  Builds the main window's view tree in code.
 //
-// This is the file that gets swapped.  A future RKMainNib.xc will call
-// UXNib.load on a nib Rocks authored, and everything else in the app stays
+// This is the file that gets swapped.  A future RKMainRsc.xc will call
+// UXRsc.load on an rsc file Rocks authored, and everything else in the app stays
 // exactly as it is — because this builder deliberately does not assign
 // outlets or actions by hand.  It drives the same two UXDesignable methods
-// the nib loader drives:
+// the rsc loader drives:
 //
-//     c.setOutlet("canvas", view)          <- what a nib's outlet connection does
-//     c.wireAction("onNewForm", control)   <- what a nib's action connection does
+//     c.setOutlet("canvas", view)          <- what an rsc file's outlet connection does
+//     c.wireAction("onNewForm", control)   <- what an rsc file's action connection does
 //
 // Written the obvious way — `c.canvas = view;` — the two paths would only
-// LOOK alike, and the nib path would be the first thing to discover it had
+// LOOK alike, and the rsc path would be the first thing to discover it had
 // never been exercised.  Going through the protocol means the code path is a
-// hand-written nib, and every wiring name here is one a nib will later carry
+// hand-written rsc, and every wiring name here is one an rsc file will later carry
 // as data.
 //
 // Layout is Interface Builder's: outline | canvas | inspector and library, with
@@ -51,7 +51,7 @@ class RKMainBuilder : Object
 
     // Build into `content` and wire `c`.  Returns false if any wiring name was
     // rejected — which is a BUILD error, not a runtime one: a name that the
-    // controller does not know is a typo the nib path would hit too.
+    // controller does not know is a typo the rsc path would hit too.
     //
     // Interface Builder's arrangement, so a designer who knows it finds things where they expect:
     //
@@ -183,7 +183,7 @@ class RKMainBuilder : Object
             c.tabPanes.add(p);
             }
         // Only the CHROME is built here.  The rows depend on what is selected, so the pane
-        // controllers generate them; see RKInspector on why this is where the nib-client rule bends.
+        // controllers generate them; see RKInspector on why this is where the rsc-client rule bends.
         c.identityCtl.attach((UXView* ?)c.tabPanes.get((u32)0));
         c.inspectorCtl.attach((UXView* ?)c.tabPanes.get((u32)1), tv);
         c.sizeCtl.attach((UXView* ?)c.tabPanes.get((u32)2), (UXLabel*)0);
@@ -219,7 +219,7 @@ class RKMainBuilder : Object
         outline.setDelegate((UXTableDelegate*)c);
         lib.setDelegate((UXTableDelegate*)c);
 
-        // ---- wiring, through the protocol a nib would use ------------------
+        // ---- wiring, through the protocol an rsc file would use ------------------
         ok = c.setOutlet((u8*)"formOutline", (Object*)outline) && ok;
         ok = c.setOutlet((u8*)"canvas", (Object*)canvas) && ok;
         c.ensureBackdrop(); // the grid from the start, before there is a form on it
@@ -243,8 +243,8 @@ class RKMainBuilder : Object
 
     // ---- the menu bar --------------------------------------------------------
     // Menus are part of the interface, so they are built HERE rather than in
-    // main: a nib carries its main menu, and when this file is replaced by one
-    // that loads a nib, the menu should come across with the rest of the
+    // main: an rsc file carries its main menu, and when this file is replaced by one
+    // that loads an rsc file, the menu should come across with the rest of the
     // window instead of being left behind in the entry point.
     //
     // Snap and Guides are ticked at construction, before install, because the

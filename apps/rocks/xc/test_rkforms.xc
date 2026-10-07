@@ -1,7 +1,7 @@
 // test_rkforms.xc — layout variants: a form, its phone layouts, logical identity, and the UXNB v2
 // chunk that carries them (docs/UXNB-V2.md sections 1-3, 7 and 10).
 //
-// The written file is checked through UXKIT'S OWN LOADER (UXNibV2), not Rocks' reader: the chunk
+// The written file is checked through UXKIT'S OWN LOADER (UXRscV2), not Rocks' reader: the chunk
 // is an interchange format, and what matters is that the thing apps load with picks the right
 // tree and binds the right control.  Then Rocks' reader takes it back, and a second write must be
 // byte-identical -- a document survives being opened and saved.
@@ -9,7 +9,7 @@
 #import "UXRscModel.xc"
 #import "UXRscRead.xc"
 #import "UXRscWrite.xc"
-#import "UXNibV2.xc"
+#import "UXRscV2.xc"
 
 i32 gFails;
 void check(u8* what, i32 got, i32 want)
@@ -150,30 +150,30 @@ void main(void)
 
     // ---- the file, through UXKit's loader -------------------------------------
     Data* bytes = UXRscWriter.write(r);
-    UXNibV2* nib = UXNibV2.open(bytes.bytes(), (u32)bytes.length());
-    checkTrue("UXKit's loader opens it", nib != (UXNibV2*)0);
-    if (nib == (UXNibV2*)0)
+    UXRscV2* rsc = UXRscV2.open(bytes.bytes(), (u32)bytes.length());
+    checkTrue("UXKit's loader opens it", rsc != (UXRscV2*)0);
+    if (rsc == (UXRscV2*)0)
         {
         Stdio.printf("FAIL: %d check(s)\n", (i16)(gFails));
         return;
         }
-    check((u8*)"as version 3", nib.version(), (i32)3);
-    check((u8*)"two forms: MAIN and the standalone ALERT", nib.formCount(), (i32)2);
-    checkTrue("MAIN's name is in it", UXRscWriter.seq(nib.formName((i32)0), (u8*)"MAIN"));
+    check((u8*)"as version 3", rsc.version(), (i32)3);
+    check((u8*)"two forms: MAIN and the standalone ALERT", rsc.formCount(), (i32)2);
+    checkTrue("MAIN's name is in it", UXRscWriter.seq(rsc.formName((i32)0), (u8*)"MAIN"));
     i32 cls = (i32)0;
     i32 ori = (i32)0;
     check((u8*)"a phone held upright gets the portrait tree",
-          nib.selectTreeOriented((i32)0, (i32)UX_FORM_PHONE, (i32)UX_ORIENT_PORTRAIT, &cls, &ori), tP);
+          rsc.selectTreeOriented((i32)0, (i32)UX_FORM_PHONE, (i32)UX_ORIENT_PORTRAIT, &cls, &ori), tP);
     check((u8*)"turned on its side, the landscape tree",
-          nib.selectTreeOriented((i32)0, (i32)UX_FORM_PHONE, (i32)UX_ORIENT_LANDSCAPE, &cls, &ori), tL);
-    check((u8*)"the desktop gets MAIN", nib.selectTreeOriented((i32)0, (i32)UX_FORM_DESKTOP, (i32)UX_ORIENT_NONE, &cls, &ori), tMain);
-    check((u8*)"a tablet (no layout) falls back to the desktop's", nib.selectTreeOriented((i32)0, (i32)UX_FORM_TABLET, (i32)UX_ORIENT_PORTRAIT, &cls, &ori), tMain);
-    check((u8*)"ALERT loads by its own index", nib.selectTree(tAlert, (i32)UX_FORM_PHONE, &cls), tAlert);
+          rsc.selectTreeOriented((i32)0, (i32)UX_FORM_PHONE, (i32)UX_ORIENT_LANDSCAPE, &cls, &ori), tL);
+    check((u8*)"the desktop gets MAIN", rsc.selectTreeOriented((i32)0, (i32)UX_FORM_DESKTOP, (i32)UX_ORIENT_NONE, &cls, &ori), tMain);
+    check((u8*)"a tablet (no layout) falls back to the desktop's", rsc.selectTreeOriented((i32)0, (i32)UX_FORM_TABLET, (i32)UX_ORIENT_PORTRAIT, &cls, &ori), tMain);
+    check((u8*)"ALERT loads by its own index", rsc.selectTree(tAlert, (i32)UX_FORM_PHONE, &cls), tAlert);
     check((u8*)"...as `any`", cls, (i32)UX_FORM_ANY);
-    check((u8*)"OK binds to the desktop tree's OK", nib.objForLogical(tMain, ok.logicalId), indexIn(main, ok));
-    check((u8*)"and to the phone's, through its re-nesting", nib.objForLogical(tP, ok.logicalId), indexIn(pp, pok));
+    check((u8*)"OK binds to the desktop tree's OK", rsc.objForLogical(tMain, ok.logicalId), indexIn(main, ok));
+    check((u8*)"and to the phone's, through its re-nesting", rsc.objForLogical(tP, ok.logicalId), indexIn(pp, pok));
     checkTrue("...which really is a different index", indexIn(pp, pok) != indexIn(main, ok));
-    check((u8*)"the container is in neither desktop map", nib.objForLogical(tMain, holder.logicalId), (i32)-1);
+    check((u8*)"the container is in neither desktop map", rsc.objForLogical(tMain, holder.logicalId), (i32)-1);
 
     // ---- and back into Rocks --------------------------------------------------
     UXRscDoc* back = UXRscReader.read(bytes.bytes(), bytes.length());

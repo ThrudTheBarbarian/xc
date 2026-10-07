@@ -1,21 +1,21 @@
 ---
-title: UXNibV2
-description: "The UXNB nib chunk (v2 and v3), parsed in xc rather than in the host, so variant selection and logical-id resolution work on every backend."
+title: UXRscV2
+description: "The UXNB rsc chunk (v2 and v3), parsed in xc rather than in the host, so variant selection and logical-id resolution work on every backend."
 ---
 
-`UXNibV2` reads the **UXNB** chunk (v2, and from 0.7 v3) out of a `.rsc` file,
+`UXRscV2` reads the **UXNB** chunk (v2, and from 0.7 v3) out of a `.rsc` file,
 entirely in portable code. It reads the bytes in place; to load a form, use
-[`UXNib`](/compiler/api/uxkit/uxnib/).
+[`UXRsc`](/compiler/api/uxkit/uxrsc/).
 
 ```c
-#use <UXKit>            // or #import "UXNibV2.xc"
+#use <UXKit>            // or #import "UXRscV2.xc"
 ```
 
 ## Why v2 is parsed here and v1 is not
 
 v1's chunk is read by `libGEM`'s C `rscload`, whose surface
-[`UXNibGem`](/compiler/api/uxkit/uxnibgem/) declares. That makes
-**v1 nib loading GEM-only**.
+[`UXRscGem`](/compiler/api/uxkit/uxrscgem/) declares. That makes
+**v1 rsc loading GEM-only**.
 
 v2 is parsed here, from the raw bytes, with no host dependency. Variant
 selection, logical-id resolution and validation therefore run, and are
@@ -57,15 +57,15 @@ AES.
 ## Variant selection walks a chain
 
 ```c
-i32 tree = nib.selectTree(formId, klass, &chosenClass);
+i32 tree = rsc.selectTree(formId, klass, &chosenClass);
 ```
 
 A form can carry several **variants** (a phone layout, a tablet layout, a
 desktop one). `selectTree` picks the best available for a requested class by
 walking a fallback chain of up to four steps.
 
-A nib that only ships a `desktop` variant still loads on a phone by falling
-back. A nib that ships both gets the right one with no `if` in the
+An rsc file that only ships a `desktop` variant still loads on a phone by falling
+back. An rsc file that ships both gets the right one with no `if` in the
 application.
 
 `chosenClass` reports which variant was used. This matters when the
@@ -83,7 +83,7 @@ orientation gets a whole tree of its own, exactly as each form factor
 does.
 
 ```c
-i32 tree = nib.selectTreeOriented(formId, gDriver.formFactorClass(),
+i32 tree = rsc.selectTreeOriented(formId, gDriver.formFactorClass(),
                                   gDriver.orientation(), &cls, &orient);
 ```
 
@@ -105,7 +105,7 @@ off, so code that ignores orientation keeps working.
 ## Logical ids, and why absent is legal
 
 ```c
-i32 obj = nib.objForLogical(tree, logicalId);
+i32 obj = rsc.objForLogical(tree, logicalId);
 // -1 means the variant genuinely does not have that control
 ```
 
@@ -135,7 +135,7 @@ holding a name from them leaves a dangling pointer that reads as garbage
 instead of crashing.
 :::
 
-Borrowing keeps loading a nib cheap: a resource file with hundreds of names
+Borrowing keeps loading an rsc file cheap: a resource file with hundreds of names
 costs no allocations to parse.
 
 All multi-byte fields are **big-endian**, matching the `.rsc` body. The
@@ -149,7 +149,7 @@ another.
 ### open
 
 ```c
-static UXNibV2* open(u8* rsc, u32 rscLen)
+static UXRscV2* open(u8* rsc, u32 rscLen)
 ```
 
 Finds the chunk in a resource file. The buffer is **borrowed**; see the
@@ -323,9 +323,9 @@ A string from the chunk's table, borrowed.
 
 ## See also
 
-- [`UXNib`](/compiler/api/uxkit/uxnib/): loading a form on every backend
-- [`UXNibGem`](/compiler/api/uxkit/uxnibgem/): v1, and the host surface that
+- [`UXRsc`](/compiler/api/uxkit/uxrsc/): loading a form on every backend
+- [`UXRscGem`](/compiler/api/uxkit/uxrscgem/): v1, and the host surface that
   makes it GEM-only
 - [`UXViewDriver`](/compiler/api/uxkit/uxviewdriver/): `formFactorClass`, which
   supplies the class `selectTree` is asked for
-- [`UXViewTree`](/compiler/api/uxkit/uxviewtree/): what a loaded nib becomes
+- [`UXViewTree`](/compiler/api/uxkit/uxviewtree/): what a loaded rsc becomes

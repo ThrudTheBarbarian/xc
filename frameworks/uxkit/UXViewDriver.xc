@@ -668,15 +668,15 @@ protocol UXViewDriver
     void runLoop(void);
 
     // Which form-factor class this backend presents (UXNB-V2.md §1) — the input to
-    // nib variant selection.  An open registry, not a trio: desktop for all four
+    // rsc variant selection.  An open registry, not a trio: desktop for all four
     // current backends (the web driver may later answer from viewport/pointer
     // heuristics; a constant is correct today), phone/tablet with the mobile
-    // backends.  Selection walks the §1 fallback chain, so a nib with only a
+    // backends.  Selection walks the §1 fallback chain, so an rsc file with only a
     // desktop layout still runs everywhere.
     i32 formFactorClass(void);
     // The device's orientation now: UX_ORIENT_PORTRAIT / _LANDSCAPE on a device form, UX_ORIENT_NONE
     // on the desktop (no orientation axis there).  Selects between a form's portrait and landscape
-    // variants (UXNibV2.selectTreeOriented).
+    // variants (UXRscV2.selectTreeOriented).
     i32 orientation(void);
     }
 

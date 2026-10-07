@@ -1,6 +1,6 @@
 ---
 title: UXRscReader
-description: "Read a .rsc file, classic GEM body and nib chunk, into a UXRscDoc."
+description: "Read a .rsc file, classic GEM body and rsc chunk, into a UXRscDoc."
 ---
 
 `UXRscReader` reads a GEM resource into a
@@ -17,7 +17,7 @@ description: "Read a .rsc file, classic GEM body and nib chunk, into a UXRscDoc.
 UXRscDoc* doc = UXRscReader.read(bytes, len);
 ```
 
-It reads either byte order, packed or pixel coordinates, and the nib chunk at
+It reads either byte order, packed or pixel coordinates, and the rsc chunk at
 `rsh_rssize` in any version (1, 2 or 3): forms and their layouts, logical ids,
 class overrides, top-level objects and connections. Extension sections it does
 not interpret are kept so that a save writes them back.

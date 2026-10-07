@@ -8,7 +8,7 @@
 //
 // This file is deliberately thin.  It boots a driver, opens a window, and
 // hands the content view to a BUILDER (RKMainBuilder) and a CONTROLLER
-// (RKMainController).  Replacing the builder with a nib-loading one is the
+// (RKMainController).  Replacing the builder with an rsc file-loading one is the
 // bootstrap plan; nothing here changes when that happens.
 #import <Stdio.xc>
 #import <Process.xc>
@@ -61,7 +61,7 @@ class RocksApp : Object<UXApplicationDelegate>
         win.open((u8*)"Rocks", UXGeom.make(wx, wy, ww, wh), content);
         win.setMinimumSize((i32)RK_W, (i32)RK_H); // below this the panes overlap
 
-        // A wiring name the controller does not know is a TYPO, and the nib
+        // A wiring name the controller does not know is a TYPO, and the rsc
         // path would hit it too — so it fails here rather than being silently
         // half-built.
         // Build for the content area the window really has: the chrome (a title bar holding the

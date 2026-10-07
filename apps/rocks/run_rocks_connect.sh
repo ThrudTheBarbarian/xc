@@ -1,6 +1,6 @@
 #!/bin/sh
 # run_rocks_connect.sh — the `rocks-connect` gate: outlets and actions drawn in Rocks per layout
-# theme, then bound per layout by UXNib (test_rkconnect.xc), headless on AppKit.  The controller's
+# theme, then bound per layout by UXRsc (test_rkconnect.xc), headless on AppKit.  The controller's
 # class is read from its source, and from a library built from it here.
 set -e
 here=$(cd "$(dirname "$0")" && pwd)

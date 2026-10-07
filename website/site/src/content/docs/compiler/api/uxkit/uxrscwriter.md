@@ -1,6 +1,6 @@
 ---
 title: UXRscWriter
-description: "Write a UXRscDoc as a classic .rsc any GEM AES reads, with the nib chunk after it."
+description: "Write a UXRscDoc as a classic .rsc any GEM AES reads, with the rsc chunk after it."
 ---
 
 `UXRscWriter` writes a [`UXRscDoc`](/compiler/api/uxkit/uxrscdoc/). From 0.7
@@ -17,7 +17,7 @@ Data* bytes = UXRscWriter.write(doc);
 ```
 
 The output is a big-endian classic `.rsc`, readable by GEM resource tools. When
-the document has layout variants, a nib graph or names, a version 3 nib chunk follows
+the document has layout variants, an rsc file graph or names, a version 3 rsc chunk follows
 at `rsh_rssize`, where a classic AES does not look. A document without either
 is written as a plain classic file.
 

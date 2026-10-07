@@ -352,7 +352,7 @@ void main(void)
     ins.onEnum((UXControl*)ral.pop);
     check("choosing Right stores GEM's te_just (1 = right)", txt.ted.just, (i32)1);
     UXView* tw = cv5.viewFor(txt);
-    UXNib.applyState(tw, txt);
+    UXRsc.applyState(tw, txt);
     // These two numberings used to disagree -- te_just was 0/1/2 = left/right/
     // centre while UX_ALIGN_* was left/centre/right -- so passing one through as
     // the other silently swapped right and centre.  UX_ALIGN_* is now numbered
@@ -369,7 +369,7 @@ void main(void)
     ral.pop.selectItem((i32)2); // "Centre"
     ins.onEnum((UXControl*)ral.pop);
     check("choosing Centre stores te_just 2", txt.ted.just, (i32)2);
-    UXNib.applyState(tw, txt);
+    UXRsc.applyState(tw, txt);
     check("and the widget is CENTRED, not right", ((UXControl* ?)tw).alignment(), (i32)UX_ALIGN_CENTER);
     win.displayAll();
     check("native agrees", d.controlAlign(win.tree.structHandle, (i32)tw.index), txt.ted.just);

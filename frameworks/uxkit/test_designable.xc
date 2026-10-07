@@ -11,7 +11,7 @@
 //
 //   Build+run:  sh run_designable.sh   (host arm64; the suite covers the rest)
 #import <Stdio.xc>
-#import "UXNib.xc"
+#import "UXRsc.xc"
 #import "UXControl.xc"
 #import "UXDesignable.xc"
 
@@ -62,14 +62,14 @@ class Badge : Object
     // T1 — the module's synthesised constructor registered its factory at
     // load (self-hosted arm64 modinit, the other half of what 026's work
     // fixed).  Nothing in this program calls registerObjectFactory.
-    check((u8*)"the module factory registered at load", gUXNibNFn == (i32)1);
+    check((u8*)"the module factory registered at load", gUXRscNFn == (i32)1);
 
     // T2/T3 — a Panel made BY NAME through the erased factory.
-    Object* o = UXNib.make((u8*)"Panel");
+    Object* o = UXRsc.make((u8*)"Panel");
     check((u8*)"make(\"Panel\") answers", o != (Object*)0);
     UXDesignable* d = (UXDesignable* ?)o;
     check((u8*)"...and it conforms (auto-apply)", d != (UXDesignable*)0);
-    check((u8*)"an unknown class makes nothing", UXNib.make((u8*)"NoSuch") == (Object*)0);
+    check((u8*)"an unknown class makes nothing", UXRsc.make((u8*)"NoSuch") == (Object*)0);
 
     // T4-T6 — outlets bind by name through the synthesised body.
     Panel* p = (Panel* ?)o;

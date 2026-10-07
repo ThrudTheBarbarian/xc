@@ -1,6 +1,6 @@
 // UXRscModel.xc — the in-memory GEM resource model: what a .rsc document holds.
 //
-// Shared by the nib loader (UXNibLoad, which builds UXKit views from it) and by Rocks, the
+// Shared by the rsc loader (UXRscLoad, which builds UXKit views from it) and by Rocks, the
 // designer (which edits it).  One model and one reader/writer pair (UXRscRead, UXRscWrite), so
 // what the designer shows and what an app loads cannot disagree about the file.  Ported from
 // Rocks' GModel.[hm] by way of its RKModel.xc.
@@ -773,7 +773,7 @@ class UXRscColor : Object
         }
     }
 
-    // ---- the nib graph (UXNB v3, docs/UXNB-V2.md section 11) ---------------------
+    // ---- the rsc graph (UXNB v3, docs/UXNB-V2.md section 11) ---------------------
     // What the trees do not say: which class a control really is, the non-view objects a form
     // loads with (controllers), and the outlet/action wiring between them.  Kept beside the trees,
     // not in them, because a form's controls exist once per layout theme and the graph does not.
@@ -1108,7 +1108,7 @@ class UXRscColor : Object
         return a[i] == b[i];
         }
 
-    // ---- the nib graph, for an editor ---------------------------------------------------------
+    // ---- the rsc graph, for an editor ---------------------------------------------------------
     // The id a form is loaded by: its form's, or for a tree in no form the tree's own index.
     i32 formIdOf(UXRscTree* t)
         {

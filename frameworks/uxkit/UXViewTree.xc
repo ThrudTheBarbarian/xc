@@ -75,7 +75,7 @@ class UXViewTree
         }
 
     // Adopt a structure somebody else owns — a tree straight out of a .rsc.  The raw handle
-    // is opaque here; only the backend (and the GEM-specific nib loader) knows its shape.
+    // is opaque here; only the backend (and the GEM-specific rsc loader) knows its shape.
     void adopt(pointer t, u16 n)
         {
         gDriver.structAdopt(structHandle, t, (i32)n);

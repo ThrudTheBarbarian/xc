@@ -1,7 +1,7 @@
-// UXNibV2.xc — the UXNB v2 and v3 chunk, parsed in xc (docs/UXNB-V2.md; v3 is its §11).
+// UXRscV2.xc — the UXNB v2 and v3 chunk, parsed in xc (docs/UXNB-V2.md; v3 is its §11).
 //
-// v1's chunk is read by libGEM's C rscload (UXNib.xc declares that surface), which
-// makes v1 nib loading GEM-only.  v2 is parsed HERE, from the raw .rsc bytes, with
+// v1's chunk is read by libGEM's C rscload (UXRsc.xc declares that surface), which
+// makes v1 rsc loading GEM-only.  v2 is parsed HERE, from the raw .rsc bytes, with
 // no host dependency at all — which is what lets variant selection, logical-id
 // resolution and validation run (and be gated) on every backend, wasm32 included.
 // The split is clean because the magics differ: a v2 file ('UXNB') is invisible to
@@ -27,7 +27,7 @@
 #define UXNB_CONN_OUTLET 0
 #define UXNB_CONN_ACTION 1
 
-class UXNibV2
+class UXRscV2
     {
     u8* buf; // the whole .rsc image (borrowed)
     u32 len;
@@ -70,20 +70,20 @@ class UXNibV2
     // ---- open ----------------------------------------------------------------
     // The chunk sits at rsh_rssize (RSHDR word 17 — the classic total-size word),
     // exactly where the v1 spec put it: a classic AES reads by header offsets and
-    // never looks past it.  Returns null when there is no nib chunk at all.
-    static UXNibV2* open(u8* rsc, u32 rscLen)
+    // never looks past it.  Returns null when there is no rsc chunk at all.
+    static UXRscV2* open(u8* rsc, u32 rscLen)
         {
         if (rsc == (u8*)0 || rscLen < (u32)48)
             {
-            return (UXNibV2*)0;
+            return (UXRscV2*)0;
             }
-        UXNibV2* n = new UXNibV2();
+        UXRscV2* n = new UXRscV2();
         n.buf = rsc;
         n.len = rscLen;
         u32 rssize = n.rdU16((u32)34);
         if (rssize + (u32)12 > rscLen)
             {
-            return (UXNibV2*)0;
+            return (UXRscV2*)0;
             }
         n.chunk = rssize;
         u32 magic = n.rdU32(rssize);
@@ -94,7 +94,7 @@ class UXNibV2
             // "serialised by a newer" -> refuse loudly
             if (v != (i32)2 && v != (i32)3)
                 {
-                return (UXNibV2*)0;
+                return (UXRscV2*)0;
                 }
             n.ver = v;
             }
@@ -103,16 +103,16 @@ class UXNibV2
             {
             if (v != (i32)1)
                 {
-                return (UXNibV2*)0;
+                return (UXRscV2*)0;
                 }
             n.ver = (i32)1;
             }
         else
             {
-            return (UXNibV2*)0;
+            return (UXRscV2*)0;
             }
         n.body = rssize + (u32)12;
-        return n.parse() ? n : (UXNibV2*)0;
+        return n.parse() ? n : (UXRscV2*)0;
         }
 
     bool parse(void)
@@ -244,10 +244,10 @@ class UXNibV2
 
     // The §1 fallback chains: own class first, nearest-larger before
     // nearest-smaller, `any` last.  Writes the class that actually won into
-    // chosenClass (the nibVariantClass answer); returns the tree index or -1.
+    // chosenClass (the rscVariantClass answer); returns the tree index or -1.
     i32 chainAt(i32 klass, i32 step)
         {
-        return UXNibV2.chain(klass, step);
+        return UXRscV2.chain(klass, step);
         }
     static i32 chain(i32 klass, i32 step)
         {
@@ -355,11 +355,11 @@ class UXNibV2
                     {
                     u32 vat = at + (u32)10 + v * (u32)4;
                     u32 word = self.rdU16(vat);
-                    if (UXNibV2.classOf(word) != want)
+                    if (UXRscV2.classOf(word) != want)
                         {
                         continue;
                         }
-                    i32 o = UXNibV2.orientOf(word);
+                    i32 o = UXRscV2.orientOf(word);
                     bool take = pass == (i32)0 ? (o == orient)
                               : (pass == (i32)1 ? (o == (i32)UX_ORIENT_NONE) : (other < (i32)0 || o == other));
                     if (take)
@@ -395,7 +395,7 @@ class UXNibV2
             for (u32 v = (u32)0; v < nv; v = v + (u32)1)
                 {
                 u32 vat = at + (u32)10 + v * (u32)4;
-                if (UXNibV2.classOf(self.rdU16(vat)) == want)
+                if (UXRscV2.classOf(self.rdU16(vat)) == want)
                     {
                     chosenClass[0] = want;
                     return (i32)self.rdU16(vat + (u32)2);
@@ -533,7 +533,7 @@ class UXNibV2
     bool connInScope(i32 i, i32 klass, i32 orient)
         {
         u32 sc = self.connScope(i);
-        return sc == (u32)0 || (sc & UXNibV2.themeBit(klass, orient)) != (u32)0;
+        return sc == (u32)0 || (sc & UXRscV2.themeBit(klass, orient)) != (u32)0;
         }
 
     // ---- v3 extension sections: {tag u32, size u32, body} ---------------------
@@ -564,7 +564,7 @@ class UXNibV2
         return self.extAt(i) + (u32)8;
         }
 
-    // ---- validation (§4: nibValidate) ---------------------------------------
+    // ---- validation (§4: rscValidate) ---------------------------------------
     // How many connections fail to bind for `formId` at `klass`: each failed
     // connection's index lands in out (up to cap).  A dropped control is exactly
     // one of these — the DESIGNER decides whether it is a warning or intended.

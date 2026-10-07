@@ -1,8 +1,8 @@
-// UXRscRead.xc — UXRscReader, the classic GEM .rsc reader, in XC, and the nib chunk after it.
+// UXRscRead.xc — UXRscReader, the classic GEM .rsc reader, in XC, and the rsc chunk after it.
 //
 // Ported from src/rsc.c (portable C, shared with the XT GEM desktop) for Rocks, and moved into
-// UXKit so the nib loader and the designer read a file the same way, on every backend: xcc
-// compiles .xc, and a C dependency (libGEM's rscload, which the v1 loader used) pinned nib
+// UXKit so the rsc loader and the designer read a file the same way, on every backend: xcc
+// compiles .xc, and a C dependency (libGEM's rscload, which the v1 loader used) pinned rsc
 // loading to GEM.
 //
 // AN IMPORT MUST NEVER BE SILENTLY LOSSY.  Payloads this slice does not yet
@@ -297,18 +297,18 @@ class UXRscReader : Object
             }
         if (be && rssize >= (i32)UXR_SZ_HDR)
             {
-            self.readNibV2(res, rssize);
+            self.readRscV2(res, rssize);
             }
         return res;
         }
 
-    // The nib chunk at rsh_rssize, if there is one (docs/UXNB-V2.md): v1 ('XGNB'), v2 or v3
+    // The rsc chunk at rsh_rssize, if there is one (docs/UXNB-V2.md): v1 ('XGNB'), v2 or v3
     // ('UXNB').  It carries the forms with more than one layout, each layout tree's logical ids,
-    // and the nib graph: class overrides, top objects, connections (v3: scoped), v3's extension
+    // and the rsc graph: class overrides, top objects, connections (v3: scoped), v3's extension
     // sections.  Single-variant `any` forms are the writer's listing of standalone trees and come
     // back as just that.  The chunk is big-endian whatever the classic part is, and is ignored
     // (not an error) when malformed: the classic trees are all there either way.
-    void readNibV2(UXRscDoc* res, i32 at)
+    void readRscV2(UXRscDoc* res, i32 at)
         {
         if (at + (i32)20 > len)
             {
@@ -426,7 +426,7 @@ class UXRscReader : Object
                 }
             q = q + (i32)4 + ne * (i32)4;
             }
-        // the nib graph
+        // the rsc graph
         for (i32 i = (i32)0; i < nClasses; i = i + (i32)1)
             {
             i32 r = classAt + i * (i32)10;

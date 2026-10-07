@@ -26,7 +26,7 @@ app.addWindow(win);                                  // register BEFORE open
 win.open((u8*)"Editor", UXGeom.make(20, 20, 320, 200), content);
 ```
 
-(The `.rsc`/nib path is [`openWithTree`](#openwithtree): the resource already
+(The `.rsc`/rsc path is [`openWithTree`](#openwithtree): the resource already
 defines its tree and sizes, and the window adopts it.)
 
 **Repaints are damage-driven at two levels.** Views mark rects
@@ -80,8 +80,8 @@ responder chain ends at the window.
 void openWithTree(u8* title, UXRect f, UXViewTree* vt)
 ```
 
-The nib path: adopts a tree that already exists.
-[`UXNib`](/compiler/api/uxkit/uxnib/) built it from the resource, with behaviour
+The rsc path: adopts a tree that already exists.
+[`UXRsc`](/compiler/api/uxkit/uxrsc/) built it from the resource, with behaviour
 already bound.
 
 ### close
@@ -208,7 +208,7 @@ UXView* viewAt(u16 i)
 ```
 
 A view by its object index. An application uses this to reach a control that a
-[nib](/compiler/api/uxkit/guide-nibs/) made.
+[rsc](/compiler/api/uxkit/guide-rsc/) made.
 
 Write `views[MAIN_OK]`, not `views[3]`. A resource editor exports symbolic names
 for its objects, so the index is a named constant and does not shift when

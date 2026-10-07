@@ -270,7 +270,7 @@ class UXWindow : UXResponder
         gDriver.windowSetModified(handle, m);
         }
 
-    // Find a view by its object index — how an app reaches a control the nib made.
+    // Find a view by its object index — how an app reaches a control the rsc made.
     // Rocks' symbolic export means this reads as views[MAIN_OK], not views[3].
     UXView* viewAt(u16 i)
         { return (UXView* ?)tree.viewAt(i);

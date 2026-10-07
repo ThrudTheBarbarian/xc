@@ -8,9 +8,9 @@
 // the same list and this file does not change.
 //
 // THE ROWS ARE BUILT DYNAMICALLY, and that is a deliberate exception to the
-// nib-client rule the rest of Rocks follows.  A per-type pane cannot be a
+// rsc-client rule the rest of Rocks follows.  A per-type pane cannot be a
 // fixed set of outlets: the widgets depend on the selection.  So the CONTAINER
-// stays something a nib can express, and the CONTENTS are generated — which is
+// stays something an rsc file can express, and the CONTENTS are generated — which is
 // how Xcode's inspector works too, for the same reason.  Rebuilding is what
 // UXView.removeAllSubviews exists for.
 //
@@ -203,7 +203,7 @@ class RKRow : Object
             }
         if (typeLabel != (UXLabel*)0)
             {
-            typeLabel.setText(UXNib.typeName(o.type));
+            typeLabel.setText(UXRsc.typeName(o.type));
             }
         if (pane == (UXView*)0)
             {
@@ -275,7 +275,7 @@ class RKRow : Object
                 UXTextField* f = new UXTextField();
                 if (p.kind == (i32)RKP_TEXT)
                     {
-                    f.setText(UXNib.textOf(o));
+                    f.setText(UXRsc.textOf(o));
                     }
                 else
                     {

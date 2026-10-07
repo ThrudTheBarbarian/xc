@@ -1,6 +1,6 @@
-// test_nib.xc — the nib pipeline end to end, on GEM, exercising the post-#9 loader.
+// test_rsc.xc — the rsc pipeline end to end, on GEM, exercising the post-#9 loader.
 //
-// Builds a .rsc WITH an UXNB chunk in-process, loads it through UXNibGem.loadWiredMem against a
+// Builds a .rsc WITH an UXNB chunk in-process, loads it through UXRscGem.loadWiredMem against a
 // File's-Owner controller, and checks the whole graph landed — including the two cases #9 unlocks:
 //   * a designable VIEW (Gauge, a G_USERDEF adopting UXDesignable) as an ACTION target — the loader
 //     downcasts (UXDesignable* ?)view CROSS-MODULE (client class, library protocol);
@@ -10,7 +10,7 @@
 #import "UXApplication.xc"
 #import "UXGemDriver.xc"
 #import "UXWindow.xc"
-#import "UXNibGem.xc"
+#import "UXRscGem.xc"
 #import "UXControl.xc"
 #import "UXDesignable.xc"
 #import "UXBoot.xc"
@@ -122,7 +122,7 @@ class Gauge : UXView<UXDesignable>
     }
 
     // One factory, Object* (post-#9): covers both the custom view and the top-level object.
-    Object* nibFactory(u8* name)
+    Object* rscFactory(u8* name)
     {
     if (streq(name, (u8*)"Gauge"))
         {
@@ -212,12 +212,12 @@ class Ctl : Object<UXApplicationDelegate>
     {
     i32 applicationDidStart(UXApplication* a)
         {
-        UXNib.registerObjectFactory((pointer)&nibFactory);
+        UXRsc.registerObjectFactory((pointer)&rscFactory);
         i32 len = (i32)0;
         pointer bytes = buildRsc(&len);
         Stdio.printf("built .rsc: %d bytes\n", len);
         Controller* ctl = new Controller();
-        UXViewTree* vt = UXNibGem.loadWiredMem((u8*)bytes, len, (i32)0, (UXDesignable*)ctl);
+        UXViewTree* vt = UXRscGem.loadWiredMem((u8*)bytes, len, (i32)0, (UXDesignable*)ctl);
         Stdio.printf("loaded vt=%s\n", vt != (UXViewTree*)0 ? "ok" : "NULL");
         Object* v1 = vt != (UXViewTree*)0 ? vt.viewAt((u16)1) : (Object*)0;
         i32 outGauge = (ctl.gauge != (UXView*)0 && (Object*)ctl.gauge == v1) ? (i32)1 : (i32)0;
@@ -237,7 +237,7 @@ class Ctl : Object<UXApplicationDelegate>
         Stdio.printf("outlet-view=%d outlet-toplevel=%d owner-action=%d view-action=%d (expect 1 1 1 1)\n",
                      outGauge, outHelper, gClicked, gGaugeClicked);
         bool pass = vt != (UXViewTree*)0 && outGauge == (i32)1 && outHelper == (i32)1 && gClicked == (i32)1 && gGaugeClicked == (i32)1;
-        Stdio.printf(pass ? "PASS: post-#9 nib — view+toplevel outlets bound, owner+view actions fired\n" : "FAIL\n");
+        Stdio.printf(pass ? "PASS: post-#9 rsc — view+toplevel outlets bound, owner+view actions fired\n" : "FAIL\n");
         a.stop();
         return (i32)0;
         }

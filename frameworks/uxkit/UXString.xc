@@ -164,14 +164,14 @@ class UXStr
         bool started = false;
         for (i32 sh = (i32)28; sh >= (i32)0; sh = sh - (i32)4)
             {
-            u8 nib = (u8)((v >> (u32)sh) & (u32)15);
-            if (nib != (u8)0)
+            u8 rsc = (u8)((v >> (u32)sh) & (u32)15);
+            if (rsc != (u8)0)
                 {
                 started = true;
                 }
             if (started)
                 {
-                o[k] = hx[nib];
+                o[k] = hx[rsc];
                 k = k + (u16)1;
                 }
             }

@@ -16,7 +16,7 @@ WORK="$(mktemp -d)"
 TESTS="test_curves test_painter test_color \
 test_date test_eventrecorder test_breadcrumb test_collectionview test_toolbar \
 test_font test_pasteboard test_dragsession \
-test_keyvaluestore test_nibv2 test_rscdoc test_menukeys test_filechooser test_textlayout test_gradient test_text test_timer test_shapepath test_viewport test_animation test_image test_png test_png_encode test_jpeg test_movie test_sound test_slider test_segmented test_tabview test_markdown test_textview test_colorlist test_stepper test_progressbar test_popupbutton test_datepicker test_combobox test_colorpanel test_nav test_glseam test_fileio"
+test_keyvaluestore test_rscv2 test_rscdoc test_menukeys test_filechooser test_textlayout test_gradient test_text test_timer test_shapepath test_viewport test_animation test_image test_png test_png_encode test_jpeg test_movie test_sound test_slider test_segmented test_tabview test_markdown test_textview test_colorlist test_stepper test_progressbar test_popupbutton test_datepicker test_combobox test_colorpanel test_nav test_glseam test_fileio"
 # win64 binaries run under wine; native archs run directly. (arm9 has no host runner — build-only.)
 # arm9 also needs the loader's build dir on the library path: without libc.so nothing links, and the
 # whole run reports BUILD-FAIL for every test — which looks exactly like a real regression and is not.

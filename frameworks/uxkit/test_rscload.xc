@@ -1,8 +1,8 @@
-// test_nibload.xc — UXNib, the loader for every backend: a form with two layouts, a custom view
+// test_rscload.xc — UXRsc, the loader for every backend: a form with two layouts, a custom view
 // class, a top-level controller and connections scoped to different layout themes (UXNB v3,
 // docs/UXNB-V2.md section 11).
 //
-// The document is built in the model, written, and read back both by the byte parser (UXNibV2)
+// The document is built in the model, written, and read back both by the byte parser (UXRscV2)
 // and by the model reader; a second write must be byte-identical.  Then the form is loaded for
 // the desktop, the phone, and a tablet (which falls back to the desktop layout), and each load
 // must bind exactly the connections in its theme's scope.
@@ -11,7 +11,7 @@
 // AppKit driver in capture mode (native widgets, no window shown).
 #import <Stdio.xc>
 #import "UXAppKitDriver.xc"
-#import "UXNib.xc"
+#import "UXRsc.xc"
 #import "UXRscWrite.xc"
 
 i32 gFails;
@@ -57,7 +57,7 @@ class Gauge : UXView
     }
 
 // The form's controller: a top-level object, as IB's "Object" with a custom class.
-class LibController : Object<UXDesignable, UXNibAwaking>
+class LibController : Object<UXDesignable, UXRscAwaking>
     {
     UXTextField* nameField;
     Gauge* gauge;
@@ -82,7 +82,7 @@ class LibController : Object<UXDesignable, UXNibAwaking>
         {
         stopsPhone = stopsPhone + (i32)1;
         }
-    void awakeFromNib(void)
+    void awakeFromRsc(void)
         {
         awoke = awoke + (i32)1;
         gAwoke = gAwoke + (i32)1;
@@ -121,7 +121,7 @@ class LibController : Object<UXDesignable, UXNibAwaking>
     }
 
 // File's Owner
-class Owner : Object<UXDesignable, UXNibAwaking>
+class Owner : Object<UXDesignable, UXRscAwaking>
     {
     LibController* controller;
     i32 awoke;
@@ -129,7 +129,7 @@ class Owner : Object<UXDesignable, UXNibAwaking>
         {
         controller = (LibController*)0;
         }
-    void awakeFromNib(void)
+    void awakeFromRsc(void)
         {
         awoke = awoke + (i32)1;
         }
@@ -147,7 +147,7 @@ class Owner : Object<UXDesignable, UXNibAwaking>
         }
     }
 
-Object* nibFactory(u8* name)
+Object* rscFactory(u8* name)
     {
     if (streq(name, (u8*)"Gauge"))
         {
@@ -290,7 +290,7 @@ bool sameBytes(Data* a, Data* b)
     return true;
     }
 
-UXButton* button(UXNibInstance* ni, i32 logical)
+UXButton* button(UXRscInstance* ni, i32 logical)
     { return (UXButton* ?)ni.viewForLogical(logical);
     }
 
@@ -306,36 +306,36 @@ void main(void)
         Stdio.printf("SKIP: no AppKit boot\n");
         return;
         }
-    UXNib.registerObjectFactory((pointer)&nibFactory);
+    UXRsc.registerObjectFactory((pointer)&rscFactory);
     UXRscDoc* d = sample();
     Data* bytes = UXRscWriter.write(d);
 
     Stdio.printf("-- the chunk, through the byte parser\n");
-    UXNibV2* nib = UXNibV2.open(bytes.bytes(), (u32)bytes.length());
-    checkTrue("chunk opens", nib != (UXNibV2*)0);
-    if (nib == (UXNibV2*)0)
+    UXRscV2* rsc = UXRscV2.open(bytes.bytes(), (u32)bytes.length());
+    checkTrue("chunk opens", rsc != (UXRscV2*)0);
+    if (rsc == (UXRscV2*)0)
         {
         Stdio.printf("FAIL: %d check(s)\n", (i16)gFails);
         return;
         }
-    check("version", nib.version(), (i32)3);
-    check("connections", nib.connCount(), (i32)6);
-    check("onStopDesktop's scope is the desktop", (i32)nib.connScope((i32)1), (i32)UXRscConnection.themeBit((i32)UXR_V_DESKTOP, (i32)0));
-    checkTrue("onPlay binds in every theme", nib.connInScope((i32)0, (i32)UXR_V_PHONE, (i32)UXR_V_ORIENT_LANDSCAPE));
-    checkTrue("onStopPhone does not bind on the desktop", !nib.connInScope((i32)2, (i32)UXR_V_DESKTOP, (i32)0));
-    checkTrue("member names", streq(nib.connMember((i32)2), (u8*)"onStopPhone"));
-    check("top objects", nib.topObjectCount(), (i32)1);
-    checkTrue("top object class", streq(nib.topObjectName((i32)0), (u8*)"LibController"));
-    checkTrue("top object label", streq(nib.topObjectLabel((i32)0), (u8*)"Library Controller"));
-    check("class overrides: the gauge and the slider", nib.classOverrideCount(), (i32)2);
-    checkTrue("class override name", streq(nib.classOverrideName((i32)0), (u8*)"Gauge"));
-    check("extension sections: the names, the attributes and XTRA", nib.extCount(), (i32)3);
-    check("the names come first", (i32)nib.extTag((i32)0), (i32)$4E414D45);
-    check("then the attributes", (i32)nib.extTag((i32)1), (i32)$41545452);
-    check("XTRA is kept", (i32)nib.extTag((i32)2), (i32)$58545241);
-    check("at its size", (i32)nib.extSize((i32)2), (i32)3);
+    check("version", rsc.version(), (i32)3);
+    check("connections", rsc.connCount(), (i32)6);
+    check("onStopDesktop's scope is the desktop", (i32)rsc.connScope((i32)1), (i32)UXRscConnection.themeBit((i32)UXR_V_DESKTOP, (i32)0));
+    checkTrue("onPlay binds in every theme", rsc.connInScope((i32)0, (i32)UXR_V_PHONE, (i32)UXR_V_ORIENT_LANDSCAPE));
+    checkTrue("onStopPhone does not bind on the desktop", !rsc.connInScope((i32)2, (i32)UXR_V_DESKTOP, (i32)0));
+    checkTrue("member names", streq(rsc.connMember((i32)2), (u8*)"onStopPhone"));
+    check("top objects", rsc.topObjectCount(), (i32)1);
+    checkTrue("top object class", streq(rsc.topObjectName((i32)0), (u8*)"LibController"));
+    checkTrue("top object label", streq(rsc.topObjectLabel((i32)0), (u8*)"Library Controller"));
+    check("class overrides: the gauge and the slider", rsc.classOverrideCount(), (i32)2);
+    checkTrue("class override name", streq(rsc.classOverrideName((i32)0), (u8*)"Gauge"));
+    check("extension sections: the names, the attributes and XTRA", rsc.extCount(), (i32)3);
+    check("the names come first", (i32)rsc.extTag((i32)0), (i32)$4E414D45);
+    check("then the attributes", (i32)rsc.extTag((i32)1), (i32)$41545452);
+    check("XTRA is kept", (i32)rsc.extTag((i32)2), (i32)$58545241);
+    check("at its size", (i32)rsc.extSize((i32)2), (i32)3);
     i32 chosen = (i32)0;
-    check("the byte parser picks the phone tree for a phone", nib.selectTree((i32)0, (i32)UXR_V_PHONE, &chosen), gPhoneTree);
+    check("the byte parser picks the phone tree for a phone", rsc.selectTree((i32)0, (i32)UXR_V_PHONE, &chosen), gPhoneTree);
 
     Stdio.printf("-- the chunk, through the model reader, and back out\n");
     UXRscDoc* r = UXRscReader.read(bytes.bytes(), bytes.length());
@@ -351,8 +351,8 @@ void main(void)
 
     Stdio.printf("-- desktop\n");
     Owner* own = new Owner();
-    UXNibInstance* ni = UXNib.loadDocAs(r, (i32)0, (i32)UXR_V_DESKTOP, (i32)UXR_V_ORIENT_NONE, (UXDesignable*)own, (UXView*)0);
-    checkTrue("loads", ni != (UXNibInstance*)0);
+    UXRscInstance* ni = UXRsc.loadDocAs(r, (i32)0, (i32)UXR_V_DESKTOP, (i32)UXR_V_ORIENT_NONE, (UXDesignable*)own, (UXView*)0);
+    checkTrue("loads", ni != (UXRscInstance*)0);
     check("the desktop layout", ni.klass, (i32)UXR_V_DESKTOP);
     check("bound", ni.bound, (i32)5);
     checkTrue("the attributes survived the save", r.attrs.count() == (u32)4);
@@ -382,8 +382,8 @@ void main(void)
 
     Stdio.printf("-- phone, portrait\n");
     Owner* own2 = new Owner();
-    UXNibInstance* np = UXNib.loadDocAs(r, (i32)0, (i32)UXR_V_PHONE, (i32)UXR_V_ORIENT_PORTRAIT, (UXDesignable*)own2, (UXView*)0);
-    checkTrue("loads", np != (UXNibInstance*)0);
+    UXRscInstance* np = UXRsc.loadDocAs(r, (i32)0, (i32)UXR_V_PHONE, (i32)UXR_V_ORIENT_PORTRAIT, (UXDesignable*)own2, (UXView*)0);
+    checkTrue("loads", np != (UXRscInstance*)0);
     check("the phone layout", np.klass, (i32)UXR_V_PHONE);
     check("the phone tree", r.indexOfTree(np.tree), gPhoneTree);
     UXSlider* pvol = (UXSlider* ?)np.viewForLogical(gSlider);
@@ -403,21 +403,21 @@ void main(void)
         }
 
     Stdio.printf("-- tablet (no layout of its own: the desktop's)\n");
-    UXNibInstance* nt = UXNib.loadDocAs(r, (i32)0, (i32)UXR_V_TABLET, (i32)UXR_V_ORIENT_LANDSCAPE, (UXDesignable*)new Owner(), (UXView*)0);
-    checkTrue("loads", nt != (UXNibInstance*)0);
+    UXRscInstance* nt = UXRsc.loadDocAs(r, (i32)0, (i32)UXR_V_TABLET, (i32)UXR_V_ORIENT_LANDSCAPE, (UXDesignable*)new Owner(), (UXView*)0);
+    checkTrue("loads", nt != (UXRscInstance*)0);
     check("falls back to the desktop", nt.klass, (i32)UXR_V_DESKTOP);
     check("binds the desktop's connections", nt.bound, (i32)5);
 
     Stdio.printf("-- a tree in no form\n");
-    UXNibInstance* na = UXNib.loadDocAs(r, (i32)2, (i32)UXR_V_PHONE, (i32)UXR_V_ORIENT_PORTRAIT, (UXDesignable*)new Owner(), (UXView*)0);
-    checkTrue("loads", na != (UXNibInstance*)0);
+    UXRscInstance* na = UXRsc.loadDocAs(r, (i32)2, (i32)UXR_V_PHONE, (i32)UXR_V_ORIENT_PORTRAIT, (UXDesignable*)new Owner(), (UXView*)0);
+    checkTrue("loads", na != (UXRscInstance*)0);
     check("as `any`", na.klass, (i32)UXR_V_ANY);
     check("one label and the root", (i32)na.views.count(), (i32)2);
-    checkTrue("a variant tree is not loadable by its own index", UXNib.loadDocAs(r, gPhoneTree, (i32)UXR_V_PHONE, (i32)0, (UXDesignable*)new Owner(), (UXView*)0) == (UXNibInstance*)0);
+    checkTrue("a variant tree is not loadable by its own index", UXRsc.loadDocAs(r, gPhoneTree, (i32)UXR_V_PHONE, (i32)0, (UXDesignable*)new Owner(), (UXView*)0) == (UXRscInstance*)0);
 
     if (gFails == (i32)0)
         {
-        Stdio.printf("PASS: UXNib v3 -- themes, scoped connections, class overrides, top objects, awakeFromNib\n");
+        Stdio.printf("PASS: UXRsc v3 -- themes, scoped connections, class overrides, top objects, awakeFromRsc\n");
         }
     else
         {

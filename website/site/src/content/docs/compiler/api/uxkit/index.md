@@ -87,14 +87,14 @@ a platform. The platforms are grouped by realm:
 - [`UXSound`](/compiler/api/uxkit/uxsound/)
 - [`UXViewport`](/compiler/api/uxkit/uxviewport/)
 
-## Nibs & the designer
+## Rsc files & the designer
 
 - [`UXDesignable`](/compiler/api/uxkit/uxdesignable/)
-- [`UXNib`](/compiler/api/uxkit/uxnib/)
-- [`UXNibInstance`](/compiler/api/uxkit/uxnibinstance/)
-- [`UXNibAwaking`](/compiler/api/uxkit/uxnibawaking/)
-- [`UXNibGem`](/compiler/api/uxkit/uxnibgem/)
-- [`UXNibV2`](/compiler/api/uxkit/uxnibv2/)
+- [`UXRsc`](/compiler/api/uxkit/uxrsc/)
+- [`UXRscInstance`](/compiler/api/uxkit/uxrscinstance/)
+- [`UXRscAwaking`](/compiler/api/uxkit/uxrscawaking/)
+- [`UXRscGem`](/compiler/api/uxkit/uxrscgem/)
+- [`UXRscV2`](/compiler/api/uxkit/uxrscv2/)
 - [`UXRscDoc`](/compiler/api/uxkit/uxrscdoc/)
 - [`UXRscConnection`](/compiler/api/uxkit/uxrscconnection/)
 - [`UXRscReader`](/compiler/api/uxkit/uxrscreader/)

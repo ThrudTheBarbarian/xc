@@ -98,7 +98,7 @@ exists and only the behaviour is supplied.
 void adopt(pointer t, u16 n)
 ```
 
-Takes over an existing object array of `n` entries. A resource file or a nib
+Takes over an existing object array of `n` entries. A resource file or an rsc file
 becomes a live tree this way: the objects come from disk, and the views are
 attached afterwards.
 

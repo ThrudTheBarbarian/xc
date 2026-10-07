@@ -1,19 +1,19 @@
-// UXNibGem.xc — on GEM, a .rsc IS the nib, and it is LIVE.
+// UXRscGem.xc — on GEM, a .rsc IS the rsc, and it is LIVE.
 //
 // There is no inflation step.  A GEM resource already contains an OBJECT tree, and
-// an UXView is backed by an OBJECT — so loading a nib means loading the tree and
+// an UXView is backed by an OBJECT — so loading an rsc file means loading the tree and
 // binding a view object onto each entry.  Nothing is copied, nothing is rebuilt,
 // and the AES walks the resource's own array.
 //
 // Which means: Rocks — the resource editor — is the Interface Builder for Xtg, and
 // a dialog designed there becomes a live view hierarchy here with no conversion.
 //
-//   Rocks (macOS) --writes--> app.rsc --rscload_file--> OBJECT[] --UXNib--> UXViewTree
+//   Rocks (macOS) --writes--> app.rsc --rscload_file--> OBJECT[] --UXRsc--> UXViewTree
 //
 // Views are chosen by ob_type.  The resource supplies the type, frame, flags and
 // state; Xtg supplies the behaviour.
 //
-// GEM only: it binds views onto libGEM's own OBJECT array (rscload).  UXNib (UXNib.xc) is the
+// GEM only: it binds views onto libGEM's own OBJECT array (rscload).  UXRsc (UXRsc.xc) is the
 // loader for every backend, GEM included: it builds UXKit views from the document model.
 
 #import "UXGem.h.xc"
@@ -21,7 +21,7 @@
 #import "UXView.xc"
 #import "UXControl.xc"
 #import "UXDesignable.xc"
-#import "UXNib.xc" // the class factories
+#import "UXRsc.xc" // the class factories
 #import "Array.xc"
 
 pointer rscload_file(u8* path, pointer err);
@@ -30,7 +30,7 @@ pointer rscload_tree(pointer doc, i32 index);
 i32 rscload_ntrees(pointer doc);
 void rscload_free(pointer doc);
 
-// The UXNB nib extension (libGEM rscload).  Refs come out as (space, a, b) per UXKit-NIB.md.
+// The UXNB rsc extension (libGEM rscload).  Refs come out as (space, a, b) per UXKit-NIB.md.
 i32 rscload_nib_present(pointer doc);
 i32 rscload_nib_nclassov(pointer doc);
 i32 rscload_nib_ntopobj(pointer doc);
@@ -39,7 +39,7 @@ u8* rscload_nib_classov(pointer doc, i32 i, i32* space, i32* a, i32* b);
 u8* rscload_nib_topobj(pointer doc, i32 i, i32* id);
 u8* rscload_nib_conn(pointer doc, i32 i, i32* kind, i32* ss, i32* sa, i32* sb, i32* ds, i32* da, i32* db);
 
-class UXNibGem
+class UXRscGem
     {
     // Load one tree from a .rsc and bind a view onto every object in it.
     // Returns nil if the file will not load.
@@ -77,12 +77,12 @@ class UXNibGem
             }
 
         UXViewTree* vt = new UXViewTree();
-        vt.adopt((pointer)t, n); // the nib's OBJECT[] -> the tree's opaque structure
+        vt.adopt((pointer)t, n); // the rsc's OBJECT[] -> the tree's opaque structure
 
         // Bind a view per object.  The resource already said what each one IS.
         for (u16 i = (u16)0; i < n; i++)
             {
-            UXView* v = UXNibGem.viewForType((u16)(t[i].ob_type & (u16)$00FF));
+            UXView* v = UXRscGem.viewForType((u16)(t[i].ob_type & (u16)$00FF));
             v.adoptObject(vt, i);
             }
         return vt;
@@ -131,13 +131,13 @@ class UXNibGem
     static UXViewTree* loadWired(u8* path, i32 treeIndex, UXDesignable* owner)
         {
         pointer err = (pointer)0;
-        return UXNibGem.loadDoc(rscload_file(path, (pointer)&err), treeIndex, owner);
+        return UXRscGem.loadDoc(rscload_file(path, (pointer)&err), treeIndex, owner);
         }
-    // Same, from an in-memory .rsc image (a generated nib, or a test).
+    // Same, from an in-memory .rsc image (a generated rsc, or a test).
     static UXViewTree* loadWiredMem(u8* data, i32 len, i32 treeIndex, UXDesignable* owner)
         {
         pointer err = (pointer)0;
-        return UXNibGem.loadDoc(rscload_mem(data, (u32)len, (pointer)&err), treeIndex, owner);
+        return UXRscGem.loadDoc(rscload_mem(data, (u32)len, (pointer)&err), treeIndex, owner);
         }
     static UXViewTree* loadDoc(pointer doc, i32 treeIndex, UXDesignable* owner)
         {
@@ -175,11 +175,11 @@ class UXNibGem
         i32 ncl = rscload_nib_present(doc) != (i32)0 ? rscload_nib_nclassov(doc) : (i32)0;
         for (u16 i = (u16)0; i < n; i = i + (u16)1)
             {
-            u8* cls = UXNibGem.classOverride(doc, ncl, treeIndex, (i32)i);
-            UXView* v = cls != (u8*)0 ? (UXView * ?) UXNib.make(cls) : (UXView*)0;
+            u8* cls = UXRscGem.classOverride(doc, ncl, treeIndex, (i32)i);
+            UXView* v = cls != (u8*)0 ? (UXView * ?) UXRsc.make(cls) : (UXView*)0;
             if (v == (UXView*)0)
                 {
-                v = UXNibGem.viewForType((u16)(t[i].ob_type & (u16)$00FF));
+                v = UXRscGem.viewForType((u16)(t[i].ob_type & (u16)$00FF));
                 }
             v.adoptObject(vt, i);
             }
@@ -193,7 +193,7 @@ class UXNibGem
             {
             i32 id = (i32)0;
             u8* cls = rscload_nib_topobj(doc, i, &id);
-            tops[ntop] = UXNib.make(cls);
+            tops[ntop] = UXRsc.make(cls);
             topIds[ntop] = id;
             ntop = ntop + (i32)1;
             }

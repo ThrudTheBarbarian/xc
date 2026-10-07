@@ -2,7 +2,7 @@
 // two actions, declared with the `outlet` and `:action` decorations, so the compiler makes it
 // designable and writes them into the interface file Rocks reads.
 #import "UXDesignable.xc"
-#import "UXNib.xc"
+#import "UXRsc.xc"
 
 i32 gPlays;
 i32 gStops;

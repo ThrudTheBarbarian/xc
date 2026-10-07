@@ -1,9 +1,9 @@
 ---
 title: UXRscConnection
-description: "One outlet or action in a nib, and the layout themes it binds in."
+description: "One outlet or action in an rsc file, and the layout themes it binds in."
 ---
 
-A connection from a [`UXRscDoc`](/compiler/api/uxkit/uxrscdoc/)'s nib graph.
+A connection from a [`UXRscDoc`](/compiler/api/uxkit/uxrscdoc/)'s rsc graph.
 From 0.7.
 
 ```c
@@ -52,4 +52,4 @@ Whether the connection binds in a theme.
 
 ## See also
 
-- [`UXNib`](/compiler/api/uxkit/uxnib/#connections-per-layout-theme)
+- [`UXRsc`](/compiler/api/uxkit/uxrsc/#connections-per-layout-theme)

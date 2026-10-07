@@ -1,19 +1,19 @@
 ---
-title: UXNib
-description: "Load a form from a .rsc document as UXKit views on every backend: the layout for this device, the connections in its scope, the top-level objects, and awakeFromNib."
+title: UXRsc
+description: "Load a form from a .rsc document as UXKit views on every backend: the layout for this device, the connections in its scope, the top-level objects, and awakeFromRsc."
 ---
 
-`UXNib` loads a form designed in Rocks and gives you its views, already wired
+`UXRsc` loads a form designed in Rocks and gives you its views, already wired
 to your code. It runs on every backend. From 0.7.
 
 ```c
-#import "UXNib.xc"
+#import "UXRsc.xc"
 ```
 
 ## Overview
 
 ```c
-UXNibInstance* ni = UXNib.load(bytes, len, FORM_TRANSPORT, (UXDesignable*)self, window.contentView);
+UXRscInstance* ni = UXRsc.load(bytes, len, FORM_TRANSPORT, (UXDesignable*)self, window.contentView);
 ```
 
 One call does five things:
@@ -21,7 +21,7 @@ One call does five things:
 1. **Picks the layout.** A form can have a layout per form factor (desktop,
    tablet, phone) and, on a device, per orientation. The loader asks the driver
    which this device is and walks the fallback chain described on
-   [`UXNibV2`](/compiler/api/uxkit/uxnibv2/#variant-selection-walks-a-chain).
+   [`UXRscV2`](/compiler/api/uxkit/uxrscv2/#variant-selection-walks-a-chain).
 2. **Builds the views.** Each object in that layout becomes a UXKit control:
    `G_BUTTON` a [`UXButton`](/compiler/api/uxkit/uxbutton/), `G_FTEXT` a
    [`UXTextField`](/compiler/api/uxkit/uxtextfield/), and so on. A control the
@@ -32,10 +32,10 @@ One call does five things:
 4. **Binds the connections in scope.** Each outlet or action names the layout
    themes it applies to. Only those whose scope includes the loaded theme are
    bound, and only when both ends exist in that layout.
-5. **Sends `awakeFromNib`** to every object it made that conforms to
-   [`UXNibAwaking`](/compiler/api/uxkit/uxnibawaking/), then to File's Owner.
+5. **Sends `awakeFromRsc`** to every object it made that conforms to
+   [`UXRscAwaking`](/compiler/api/uxkit/uxrscawaking/), then to File's Owner.
 
-The result is a [`UXNibInstance`](/compiler/api/uxkit/uxnibinstance/): the root
+The result is a [`UXRscInstance`](/compiler/api/uxkit/uxrscinstance/): the root
 view, the views by logical id, the top-level objects, and counts of what bound.
 
 Rocks builds its canvas with the same [`viewFor`](#viewfor), so what the
@@ -72,7 +72,7 @@ instance.
 ### load
 
 ```c
-static UXNibInstance* load(u8* bytes, i32 n, i32 formId, UXDesignable* owner, UXView* into)
+static UXRscInstance* load(u8* bytes, i32 n, i32 formId, UXDesignable* owner, UXView* into)
 ```
 
 Reads a `.rsc` image and loads form `formId` for this device. `owner` is File's
@@ -84,7 +84,7 @@ variants keeps the id it had.
 ### loadDoc
 
 ```c
-static UXNibInstance* loadDoc(UXRscDoc* doc, i32 formId, UXDesignable* owner, UXView* into)
+static UXRscInstance* loadDoc(UXRscDoc* doc, i32 formId, UXDesignable* owner, UXView* into)
 ```
 
 The same from a document already read with
@@ -94,7 +94,7 @@ file without reading it again.
 ### loadDocAs
 
 ```c
-static UXNibInstance* loadDocAs(UXRscDoc* doc, i32 formId, i32 klass, i32 orient, UXDesignable* owner, UXView* into)
+static UXRscInstance* loadDocAs(UXRscDoc* doc, i32 formId, i32 klass, i32 orient, UXDesignable* owner, UXView* into)
 ```
 
 Loads for a given theme instead of the device's: `klass` is a `UX_FORM_*` form
@@ -245,11 +245,11 @@ The older name for `registerObjectFactory`.
 
 ## See also
 
-- [`UXNibInstance`](/compiler/api/uxkit/uxnibinstance/): what a load returns
-- [`UXNibAwaking`](/compiler/api/uxkit/uxnibawaking/): finishing setup after
+- [`UXRscInstance`](/compiler/api/uxkit/uxrscinstance/): what a load returns
+- [`UXRscAwaking`](/compiler/api/uxkit/uxrscawaking/): finishing setup after
   the outlets are connected
 - [`UXDesignable`](/compiler/api/uxkit/uxdesignable/): the `outlet` and
   `:action` decorations the connections bind to
 - [`UXRscDoc`](/compiler/api/uxkit/uxrscdoc/): the document model
-- [`UXNibGem`](/compiler/api/uxkit/uxnibgem/): the GEM-only loader that binds
+- [`UXRscGem`](/compiler/api/uxkit/uxrscgem/): the GEM-only loader that binds
   views onto libGEM's own object array

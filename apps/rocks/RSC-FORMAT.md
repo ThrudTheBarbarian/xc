@@ -22,7 +22,7 @@ A Rocks `.rsc` is a classic Digital Research / Atari GEM resource:
 RSHDR            18 × 16-bit words (36 bytes)
 OBJECT[]         nobs × 24 bytes
 TEDINFO[]        nted × 28 bytes
-ICONBLK[]        nib  × 34 bytes
+ICONBLK[]        rsc  × 34 bytes
 (BITBLK[])       0 (not emitted — see Limitations)
 (free-string / free-image pointer arrays)   0
 tree index       ntree × 32-bit offsets
@@ -34,7 +34,7 @@ image data       icon bitplanes + embedded colour icons (see §4)
 also accepts little-endian files, but Rocks *writes* big-endian.
 
 **`RSHDR` (18 words):** `vrsn(0), object, tedinfo, iconblk, bitblk, frstr, string,
-imdata, frimg, trindex, nobs, ntree, nted, nib, nbb, nstring, nimages, rssize`.
+imdata, frimg, trindex, nobs, ntree, nted, rsc, nbb, nstring, nimages, rssize`.
 All offsets are byte offsets from the start of the file. `rssize` = total size.
 `vrsn = 0` (the extended/large `vrsn & 4` variant is **not** produced).
 

@@ -18,7 +18,7 @@
 // means: all layouts, one form factor in either orientation, or just the layout on the canvas.
 #import "Array.xc"
 #import "UXRscModel.xc"
-#import "UXNib.xc"
+#import "UXRsc.xc"
 #import "RKOutline.xc"
 #import "RKClasses.xc"
 
@@ -76,7 +76,7 @@ class RKWiring : Object
         if (e.kind == (i32)RKON_VIEW)
             {
             u8* c = d.classOf(t, e.obj);
-            return c != (u8*)0 && c[0] != (u8)0 ? c : UXNib.defaultClassFor(e.obj.type);
+            return c != (u8*)0 && c[0] != (u8)0 ? c : UXRsc.defaultClassFor(e.obj.type);
             }
         if (e.kind == (i32)RKON_OBJECT)
             {

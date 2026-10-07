@@ -27,9 +27,9 @@ i32 UXK_ABI_SYM(void)
 #import "UXApplication.xc"
 #import "UXMenu.xc"
 #import "UXAlert.xc"
-#import "UXDesignable.xc" // the ONE nib-reflection protocol declaration libUXKit.so exports
-#import "UXNib.xc"
-#import "UXNibGem.xc"
+#import "UXDesignable.xc" // the ONE rsc-reflection protocol declaration libUXKit.so exports
+#import "UXRsc.xc"
+#import "UXRscGem.xc"
 #import "UXTableView.xc"
 #import "UXTextView.xc"
 #import "UXOutlineView.xc"

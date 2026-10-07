@@ -12,7 +12,7 @@ export default {
 				{ label: 'Controls and callbacks', slug: 'compiler/api/uxkit/guide-controls' },
 				{ label: 'Tables, outlines and data sources', slug: 'compiler/api/uxkit/guide-tables' },
 				{ label: 'The driver model and multiplatform', slug: 'compiler/api/uxkit/guide-drivers' },
-				{ label: 'Nibs, or designing a window instead of writing one', slug: 'compiler/api/uxkit/guide-nibs' },
+				{ label: 'Rsc files, or designing a window instead of writing one', slug: 'compiler/api/uxkit/guide-rsc' },
 				{ label: 'Rocks, the interface editor', slug: 'compiler/api/uxkit/guide-rocks' },
 				{ label: 'A music player in Rocks (tutorial)', slug: 'compiler/api/uxkit/guide-rocks-tutorial' },
 			],
@@ -98,12 +98,12 @@ export default {
 			],
 		},
 		{
-			label: 'Nibs & the designer',
+			label: 'Rsc files & the designer',
 			collapsed: true,
 			items: [
 				{ label: 'UXDesignable', slug: 'compiler/api/uxkit/uxdesignable' },
-				{ label: 'UXNib', slug: 'compiler/api/uxkit/uxnib' },
-				{ label: 'UXNibV2', slug: 'compiler/api/uxkit/uxnibv2' },
+				{ label: 'UXRsc', slug: 'compiler/api/uxkit/uxrsc' },
+				{ label: 'UXRscV2', slug: 'compiler/api/uxkit/uxrscv2' },
 			],
 		},
 		{

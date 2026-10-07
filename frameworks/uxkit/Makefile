@@ -30,14 +30,14 @@ XCCFLAGS = -A $(ARCH) -I . -L $(GEMLIB)
 # compilation, so a program #imports the sources it needs.  When libUXKit.so becomes a
 # real --emit-lib artefact, this list is what goes into it.
 SRCS = UXVersion.xc UXAbi.xc UXLibc.xc UXGeometry.xc UXResponder.xc UXViewTree.xc UXView.xc UXControl.xc \
-       UXViewDriver.xc UXGemDriver.xc UXWindow.xc UXApplication.xc UXEvent.xc UXGraphics.xc UXGemGraphics.xc UXNib.xc \
+       UXViewDriver.xc UXGemDriver.xc UXWindow.xc UXApplication.xc UXEvent.xc UXGraphics.xc UXGemGraphics.xc UXRsc.xc \
        UXMenu.xc UXAlert.xc UXString.xc UXGem.xc UXGem.h.xc UXTableView.xc \
        UXOutlineView.xc UXNotificationCenter.xc
 
-PROGS = demo.so nibdemo.so test_spine.so test_window.so test_scroll.so \
+PROGS = demo.so rscdemo.so test_spine.so test_window.so test_scroll.so \
         test_dirty.so test_key.so test_menu.so test_alert.so test_clip.so \
         test_scale.so test_chrome.so test_table.so test_outline.so test_leak.so \
-        test_memgate.so test_focus.so test_check.so test_radio.so test_controls.so test_state.so test_kitchensink.so test_nib.so test_autoresize.so libdemo.so libtable.so
+        test_memgate.so test_focus.so test_check.so test_radio.so test_controls.so test_state.so test_kitchensink.so test_rsc.so test_autoresize.so libdemo.so libtable.so
 
 all: $(PROGS)
 
@@ -129,7 +129,7 @@ libdemo.so: libdemo.xc libUXKit.so
 	$(XCC) $(XCCFLAGS) $< -o $@
 
 run-demo:    demo.so    ; $(MAKE) -C $(LOADER) xtcrun XTC_SO=$(CURDIR)/demo.so
-run-nibdemo: nibdemo.so ; $(MAKE) -C $(LOADER) xtcrun XTC_SO=$(CURDIR)/nibdemo.so
+run-rscdemo: rscdemo.so ; $(MAKE) -C $(LOADER) xtcrun XTC_SO=$(CURDIR)/rscdemo.so
 run-spine:   test_spine.so ; $(MAKE) -C $(LOADER) xtcrun XTC_SO=$(CURDIR)/test_spine.so
 run-window:  test_window.so ; $(MAKE) -C $(LOADER) xtcrun XTC_SO=$(CURDIR)/test_window.so
 
@@ -508,5 +508,5 @@ win64-lib:
 
 clean: ; rm -f $(PROGS) libUXKit.so test_host
 
-.PHONY: all lib host clean version run-demo run-nibdemo run-spine run-window mac a9 gem gem-build win32 win64 win32-real win32-loop win32-field win32-memgate win32-menu win32-focus win32-check win32-radio win32-valid win32-alert win32-scroll win32-enabled win32-hidden win32-kitchensink win32-toolbar win32-winroute win32-gl gtk-gl web-gl appkit-gl appkit-glbench win64-lib
+.PHONY: all lib host clean version run-demo run-rscdemo run-spine run-window mac a9 gem gem-build win32 win64 win32-real win32-loop win32-field win32-memgate win32-menu win32-focus win32-check win32-radio win32-valid win32-alert win32-scroll win32-enabled win32-hidden win32-kitchensink win32-toolbar win32-winroute win32-gl gtk-gl web-gl appkit-gl appkit-glbench win64-lib
 .PHONY: mac-alpha mac-weight mac-dash mac-vector mac-chrome mac-settings

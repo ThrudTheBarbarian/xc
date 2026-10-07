@@ -13,7 +13,7 @@
 // widget in the canvas and you are clicking the real widget: objc_find hit-tests it,
 // the AES themes it, and Rocks never draws a single one of them.
 //
-//     Rocks (macOS)  --writes-->  app.rsc  --XGNib-->  a live XGViewTree  --> the canvas
+//     Rocks (macOS)  --writes-->  app.rsc  --XGRsc-->  a live XGViewTree  --> the canvas
 //
 // Which closes the loop: Rocks on macOS is the Interface Builder for Xtg, and Rocks on
 // the XT edits what it produced.
@@ -204,10 +204,10 @@ class Rocks : Object <XGApplicationDelegate, XGTableDelegate>
 
         // ---- the document: the .rsc IS the view tree ------------------------
         u8@ path = RSC_PATH_SD;
-        doc = XGNib.load(path, treeIndex);
+        doc = XGRsc.load(path, treeIndex);
         if (doc == (XGViewTree@)0) {
             path = RSC_PATH_ROM;                      // no card: qemu
-            doc  = XGNib.load(path, treeIndex);
+            doc  = XGRsc.load(path, treeIndex);
         }
         if (doc == (XGViewTree@)0) {
             Stdio.printf("[Rocks] could not load a resource from %s or %s\n",

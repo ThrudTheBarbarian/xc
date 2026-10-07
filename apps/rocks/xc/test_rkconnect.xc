@@ -8,7 +8,7 @@
 //   - the controller -> Play offers playButton (a UXButton* outlet) and not titleField;
 //   - on the desktop, Stop -> onStop for this layout only; on the phone, Done -> onStop likewise;
 //   - the Connections tab shows them, changes a scope, breaks one, and undo puts it back.
-// Finally the document is written, and UXNib loads it for the desktop and for the phone with the
+// Finally the document is written, and UXRsc loads it for the desktop and for the phone with the
 // real PlayerController: each layout's buttons fire the actions wired for that layout.
 #import <Stdio.xc>
 #import "UXAppKitDriver.xc"
@@ -123,7 +123,7 @@ class Owner : Object<UXDesignable>
         return false;
         }
     }
-UXButton* buttonIn(UXNibInstance* ni, u8* name)
+UXButton* buttonIn(UXRscInstance* ni, u8* name)
     {
     for (u32 i = (u32)0; i < ni.objs.count(); i = i + (u32)1)
         {
@@ -457,9 +457,9 @@ void main(void)
     Stdio.printf("-- the app: each layout fires what was wired for it\n");
     Data* bytes = UXRscWriter.write(c.doc);
     UXRscDoc* saved = UXRscReader.read(bytes.bytes(), bytes.length());
-    UXNib.registerObjectFactory((pointer)&factory);
-    UXNibInstance* nd = UXNib.loadDocAs(saved, (i32)0, (i32)UXR_V_DESKTOP, (i32)UXR_V_ORIENT_NONE, (UXDesignable*)new Owner(), (UXView*)0);
-    checkTrue("the desktop loads", nd != (UXNibInstance*)0);
+    UXRsc.registerObjectFactory((pointer)&factory);
+    UXRscInstance* nd = UXRsc.loadDocAs(saved, (i32)0, (i32)UXR_V_DESKTOP, (i32)UXR_V_ORIENT_NONE, (UXDesignable*)new Owner(), (UXView*)0);
+    checkTrue("the desktop loads", nd != (UXRscInstance*)0);
     PlayerController* pd = (PlayerController* ?)nd.topObject((i32)1);
     checkTrue("with a PlayerController", pd != (PlayerController*)0);
     checkTrue("its playButton outlet holds Play", pd != (PlayerController*)0 && (Object*)pd.playButton == (Object*)buttonIn(nd, (u8*)"play"));
@@ -469,8 +469,8 @@ void main(void)
     buttonIn(nd, (u8*)"stop").fire();
     check("Play plays", gPlays, (i32)1);
     check("Stop stops", gStops, (i32)1);
-    UXNibInstance* np = UXNib.loadDocAs(saved, (i32)0, (i32)UXR_V_PHONE, (i32)UXR_V_ORIENT_PORTRAIT, (UXDesignable*)new Owner(), (UXView*)0);
-    checkTrue("the phone loads", np != (UXNibInstance*)0 && np.klass == (i32)UXR_V_PHONE);
+    UXRscInstance* np = UXRsc.loadDocAs(saved, (i32)0, (i32)UXR_V_PHONE, (i32)UXR_V_ORIENT_PORTRAIT, (UXDesignable*)new Owner(), (UXView*)0);
+    checkTrue("the phone loads", np != (UXRscInstance*)0 && np.klass == (i32)UXR_V_PHONE);
     PlayerController* pp = (PlayerController* ?)np.topObject((i32)1);
     checkTrue("its playButton is the phone's Play", pp != (PlayerController*)0 && (Object*)pp.playButton == (Object*)buttonIn(np, (u8*)"play"));
     buttonIn(np, (u8*)"play").fire();
@@ -482,7 +482,7 @@ void main(void)
     win.close();
     if (gFails == (i32)0)
         {
-        Stdio.printf("PASS: connections -- drawn per layout in Rocks, bound per layout by UXNib\n");
+        Stdio.printf("PASS: connections -- drawn per layout in Rocks, bound per layout by UXRsc\n");
         }
     else
         {

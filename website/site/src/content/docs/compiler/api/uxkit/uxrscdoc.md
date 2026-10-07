@@ -1,10 +1,10 @@
 ---
 title: UXRscDoc
-description: "A .rsc document in memory: its trees, its forms and their layout themes, and the nib graph of class overrides, top-level objects and connections."
+description: "A .rsc document in memory: its trees, its forms and their layout themes, and the rsc graph of class overrides, top-level objects and connections."
 ---
 
 `UXRscDoc` is a GEM resource held as objects: what Rocks edits and what
-[`UXNib`](/compiler/api/uxkit/uxnib/) loads from. From 0.7 (earlier it was
+[`UXRsc`](/compiler/api/uxkit/uxrsc/) loads from. From 0.7 (earlier it was
 part of Rocks).
 
 ```c
@@ -24,7 +24,7 @@ a whole tree for one theme: a form factor and, on a device, an orientation. The
 trees are separate designs. What ties them together is the **logical id** each
 control carries, which is the same in every layout that has the control.
 
-Beside the trees is the **nib graph**:
+Beside the trees is the **rsc graph**:
 
 | field | |
 | --- | --- |
@@ -36,7 +36,7 @@ Beside the trees is the **nib graph**:
 | `attrs` | [`UXRscAttr`](#uxrscattr): settings a control has no `OBJECT` field for, such as a slider's range |
 
 On disk the trees are a classic `.rsc`, readable by any GEM AES, and the graph
-is the nib chunk after them.
+is the rsc chunk after them.
 
 ## Topics
 
@@ -49,7 +49,7 @@ UXRscDoc* deepCopy(void)
 ```
 
 A copy that can be edited without touching the original: every tree, form and
-nib-graph record is new. Strings and image bytes are shared, because an edit
+rsc-graph record is new. Strings and image bytes are shared, because an edit
 replaces them instead of writing into them. An editor keeps these for undo.
 
 ### formIdOf
@@ -86,7 +86,7 @@ u8* classOf(UXRscTree* t, UXRscObject* o)
 ```
 
 The class the document gives a control, or null for the one its type implies
-([`UXNib.defaultClassFor`](/compiler/api/uxkit/uxnib/#defaultclassfor)).
+([`UXRsc.defaultClassFor`](/compiler/api/uxkit/uxrsc/#defaultclassfor)).
 
 ### setClassOf
 
@@ -469,4 +469,4 @@ a theme bit is that layout's variation of the setting.
 - [`UXRscReader`](/compiler/api/uxkit/uxrscreader/) and
   [`UXRscWriter`](/compiler/api/uxkit/uxrscwriter/)
 - [`UXRscConnection`](/compiler/api/uxkit/uxrscconnection/)
-- [`UXNib`](/compiler/api/uxkit/uxnib/)
+- [`UXRsc`](/compiler/api/uxkit/uxrsc/)

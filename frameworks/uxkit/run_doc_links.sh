@@ -1,7 +1,7 @@
 #!/bin/sh
 # run_doc_links.sh — the `doc-links` gate: every internal link in the docs resolves.
 #
-# A dead internal link is how the missing protocol pages were found: UXNib linked
+# A dead internal link is how the missing protocol pages were found: UXRsc linked
 # UXDesignable and the target did not exist, because docgen scanned `class` only
 # and all ten protocols had no page. The Astro build does not fail on a dead
 # internal link, so nothing caught it — and these pages cross-link heavily enough

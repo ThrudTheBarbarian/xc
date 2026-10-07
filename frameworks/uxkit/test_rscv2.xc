@@ -1,6 +1,6 @@
-// test_nibv2.xc — the UXNB v2 gates (docs/UXNB-V2.md §9), headless and neutral.
+// test_rscv2.xc — the UXNB v2 gates (docs/UXNB-V2.md §9), headless and neutral.
 //
-// Builds v2 (and one v1) nib images in memory — a writer mirroring the parser,
+// Builds v2 (and one v1) rsc images in memory — a writer mirroring the parser,
 // byte for byte per the spec — and proves: variant selection per forced class,
 // the fallback chain, a connection binding through RE-PARENTED containment (the
 // §6 button-row shape literally: the same logical buttons at different object
@@ -8,7 +8,7 @@
 // control skipping cleanly, and a v1 chunk reading as single-variant `any`.
 // No driver, no libGEM, no host: this is the neutral half the wasm32 leg runs.
 #import <Stdio.xc>
-#import "UXNibV2.xc"
+#import "UXRscV2.xc"
 
 i32 gFails;
 void ck(u8* what, i32 got, i32 want)
@@ -256,46 +256,46 @@ void main(void)
     gFails = (i32)0;
     u8 img[512];
     u32 n = buildV2(&img[0]);
-    UXNibV2* nib = UXNibV2.open(&img[0], n);
-    if (nib == (UXNibV2*)0)
+    UXRscV2* rsc = UXRscV2.open(&img[0], n);
+    if (rsc == (UXRscV2*)0)
         {
         Stdio.printf("FAIL: open\n");
         return;
         }
-    ck((u8*)"version", nib.version(), (i32)2);
-    ck((u8*)"formCount", nib.formCount(), (i32)1);
+    ck((u8*)"version", rsc.version(), (i32)2);
+    ck((u8*)"formCount", rsc.formCount(), (i32)1);
 
     // Gate 1: the right tree per forced class.
     i32 chosen = (i32)0;
-    ck((u8*)"desktop tree", nib.selectTree((i32)7, (i32)UX_FORM_DESKTOP, &chosen), (i32)0);
+    ck((u8*)"desktop tree", rsc.selectTree((i32)7, (i32)UX_FORM_DESKTOP, &chosen), (i32)0);
     ck((u8*)"desktop chose", chosen, (i32)UX_FORM_DESKTOP);
-    ck((u8*)"phone tree", nib.selectTree((i32)7, (i32)UX_FORM_PHONE, &chosen), (i32)1);
+    ck((u8*)"phone tree", rsc.selectTree((i32)7, (i32)UX_FORM_PHONE, &chosen), (i32)1);
     ck((u8*)"phone chose", chosen, (i32)UX_FORM_PHONE);
 
     // Gate 2: the fallback chain — tablet has no variant; nearest-larger wins.
-    ck((u8*)"tablet tree (falls to desktop)", nib.selectTree((i32)7, (i32)UX_FORM_TABLET, &chosen), (i32)0);
+    ck((u8*)"tablet tree (falls to desktop)", rsc.selectTree((i32)7, (i32)UX_FORM_TABLET, &chosen), (i32)0);
     ck((u8*)"tablet chose", chosen, (i32)UX_FORM_DESKTOP);
 
     // Gate 3: the §6 shape — one connection, resolved through re-parented
     // containment: L2 is obj 2 in the desktop tree and obj 3 in the phone tree.
-    ck((u8*)"conn count", nib.connCount(), (i32)2);
-    ck((u8*)"L2 on desktop", nib.resolveView(nib.connSrc((i32)0), (i32)0), (i32)2);
-    ck((u8*)"L2 on phone", nib.resolveView(nib.connSrc((i32)0), (i32)1), (i32)3);
+    ck((u8*)"conn count", rsc.connCount(), (i32)2);
+    ck((u8*)"L2 on desktop", rsc.resolveView(rsc.connSrc((i32)0), (i32)0), (i32)2);
+    ck((u8*)"L2 on phone", rsc.resolveView(rsc.connSrc((i32)0), (i32)1), (i32)3);
 
     // Gate 4: the dropped control — L9 binds on desktop, skips on phone; the
     // validator reports exactly the one connection, by index.
-    ck((u8*)"L9 on desktop", nib.resolveView(nib.connSrc((i32)1), (i32)0), (i32)7);
-    ck((u8*)"L9 on phone (dropped)", nib.resolveView(nib.connSrc((i32)1), (i32)1), (i32)-1);
+    ck((u8*)"L9 on desktop", rsc.resolveView(rsc.connSrc((i32)1), (i32)0), (i32)7);
+    ck((u8*)"L9 on phone (dropped)", rsc.resolveView(rsc.connSrc((i32)1), (i32)1), (i32)-1);
     i32 bad[4];
-    ck((u8*)"validate desktop", nib.validate((i32)7, (i32)UX_FORM_DESKTOP, &bad[0], (i32)4), (i32)0);
-    ck((u8*)"validate phone", nib.validate((i32)7, (i32)UX_FORM_PHONE, &bad[0], (i32)4), (i32)1);
+    ck((u8*)"validate desktop", rsc.validate((i32)7, (i32)UX_FORM_DESKTOP, &bad[0], (i32)4), (i32)0);
+    ck((u8*)"validate phone", rsc.validate((i32)7, (i32)UX_FORM_PHONE, &bad[0], (i32)4), (i32)1);
     ck((u8*)"validate phone names conn 1", bad[0], (i32)1);
 
     // Gate 6: orientation -- the current orientation's tree, then one with none, then the OTHER
     // orientation's, all before moving down the form-factor chain.
     u32 no = buildOriented(&img[0]);
-    UXNibV2* on = UXNibV2.open(&img[0], no);
-    if (on == (UXNibV2*)0)
+    UXRscV2* on = UXRscV2.open(&img[0], no);
+    if (on == (UXRscV2*)0)
         {
         Stdio.printf("FAIL: oriented open\n");
         return;
@@ -314,8 +314,8 @@ void main(void)
 
     // Gate 5: a v1 chunk — version 1, single-variant `any`, conns readable.
     u32 n1 = buildV1(&img[0]);
-    UXNibV2* v1 = UXNibV2.open(&img[0], n1);
-    if (v1 == (UXNibV2*)0)
+    UXRscV2* v1 = UXRscV2.open(&img[0], n1);
+    if (v1 == (UXRscV2*)0)
         {
         Stdio.printf("FAIL: v1 open\n");
         return;

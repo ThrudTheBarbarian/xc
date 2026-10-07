@@ -7,7 +7,7 @@
 // where that property has been made to VARY (Interface Builder's "+" beside a property), which
 // keeps its own value until the variation is removed.
 //
-// The variations are kept in the document, in a VARY section of the nib chunk:
+// The variations are kept in the document, in a VARY section of the rsc chunk:
 //   { count u16, then per entry: tree u16, logicalId u16, property label (u16 length, bytes) }
 #import "Array.xc"
 #import "Data.xc"

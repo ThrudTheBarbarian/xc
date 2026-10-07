@@ -1,19 +1,19 @@
 ---
-title: UXNibInstance
+title: UXRscInstance
 description: "One loaded form: its root view, its views by logical id, its top-level objects, and what happened to its connections."
 ---
 
-A `UXNibInstance` is what [`UXNib.load`](/compiler/api/uxkit/uxnib/#load)
+A `UXRscInstance` is what [`UXRsc.load`](/compiler/api/uxkit/uxrsc/#load)
 returns. From 0.7.
 
 ```c
-#import "UXNib.xc"
+#import "UXRsc.xc"
 ```
 
 ## Overview
 
 ```c
-UXNibInstance* ni = UXNib.load(bytes, len, FORM_TRANSPORT, (UXDesignable*)self, window.contentView);
+UXRscInstance* ni = UXRsc.load(bytes, len, FORM_TRANSPORT, (UXDesignable*)self, window.contentView);
 UXButton* play = (UXButton* ?)ni.viewForLogical(PLAY);
 ```
 
@@ -81,4 +81,4 @@ A top-level object by the id the document gives it, or null.
 
 ## See also
 
-- [`UXNib`](/compiler/api/uxkit/uxnib/)
+- [`UXRsc`](/compiler/api/uxkit/uxrsc/)

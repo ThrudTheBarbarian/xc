@@ -2,7 +2,7 @@
 //
 // This is the test that protects the bootstrap plan.  RKMainBuilder wires the
 // controller through setOutlet/wireAction — the SAME UXDesignable methods a
-// nib loader drives — so every wiring name here is one a future nib will carry
+// rsc loader drives — so every wiring name here is one a future rsc will carry
 // as data.  A typo in either half is a name the other does not know, and the
 // whole point is that it fails HERE, in a headless gate, rather than at load
 // time in a half-built window.
@@ -61,7 +61,7 @@ void main(void)
     check("statusLabel outlet assigned", c.statusLabel != (UXLabel*)0);
 
     // an unknown name must be REJECTED, not silently accepted — that rejection
-    // is what turns a nib typo into an error instead of a dead connection
+    // is what turns an rsc file typo into an error instead of a dead connection
     check("an unknown outlet name is refused",
           !c.setOutlet((u8*)"noSuchOutlet", (Object*)content));
 

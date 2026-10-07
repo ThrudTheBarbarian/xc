@@ -164,7 +164,7 @@ class UXApplication : UXResponder
     //
     // Once the AES server lands this becomes attach(): connect, get an ap_id, get
     // a backing surface.  Nothing else in Xtg changes — views, the responder chain,
-    // the draw seam, target/action, the run loop and the .rsc nib path all sit ON
+    // the draw seam, target/action, the run loop and the .rsc rsc path all sit ON
     // the AES API rather than underneath it, so the split is invisible to them.
     // The BACKEND IS INJECTED, not chosen here — so UXApplication names no GEM type and its
     // whole graph compiles for win64.  The program's bootstrap sets `gDriver` before run()

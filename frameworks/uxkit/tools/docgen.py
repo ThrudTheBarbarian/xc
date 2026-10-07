@@ -32,12 +32,12 @@ GROUPS = {
     "Geometry & drawing": ["UXGeom", "UXRect", "UXPoint", "UXSize", "UXGraphics",
         "UXPainter", "UXShapePath", "UXColor", "UXGradient", "UXImage", "UXAnimation",
         "UXViewport"],
-    "Nibs & the designer": ["UXNib", "UXNibV2", "UXDesignable"],
+    "Rsc files & the designer": ["UXRsc", "UXRscV2", "UXDesignable"],
     "Drivers & backends": ["UXViewDriver", "UXGemDriver", "UXWin32Driver", "UXAppKitDriver",
         "UXWebDriver", "UXIosDriver", "UXGemGraphics", "UXGdiGraphics", "UXCocoaGraphics",
         "UXCanvasGraphics", "UXIosGraphics"],
 }
-SKIP_FILES = re.compile(r"(test_|demo_|^demo|^ks_|^lib|^nibdemo|^dateshow|\.h\.xc$)")
+SKIP_FILES = re.compile(r"(test_|demo_|^demo|^ks_|^lib|^rscdemo|^dateshow|\.h\.xc$)")
 
 # Not every type a UXKit class touches BELONGS to UXKit. Object is Foundation's,
 # and linking it into the UXKit namespace produces a page that does not exist —
@@ -211,7 +211,7 @@ def main():
     # ordering that is definitely wrong. Unlisted guides fall in afterwards,
     # alphabetically, so adding one still needs no edit here to appear.
     GUIDE_ORDER = ["guide-first-window", "guide-view-tree", "guide-controls",
-                   "guide-tables", "guide-drivers", "guide-nibs", "guide-rocks",
+                   "guide-tables", "guide-drivers", "guide-rsc", "guide-rocks",
                    "guide-rocks-tutorial"]
     found = glob.glob(os.path.join(OUT, "guide-*.md")) + \
             glob.glob(os.path.join(OUT, "guide-*.mdx"))

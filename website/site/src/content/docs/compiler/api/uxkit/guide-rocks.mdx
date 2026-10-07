@@ -5,7 +5,7 @@ description: "Rocks designs UXKit windows: forms built from a library, classes r
 
 Rocks is the interface editor for UXKit. You lay out a window in it, connect
 the controls to your classes, and save the result as a `.rsc` file. Your app
-loads that file with [`UXNib`](/compiler/api/uxkit/uxnib/) and gets the
+loads that file with [`UXRsc`](/compiler/api/uxkit/uxrsc/) and gets the
 window back, with its outlets set and its actions wired. Rocks is written in
 xc on UXKit. From 0.7.
 
@@ -197,18 +197,18 @@ scope includes the device's layout are made.
 
 A `.rsc` file from Rocks is a classic GEM resource that any GEM AES can read.
 The layouts, classes and connections are stored after the classic data, where
-GEM does not look. The details are on [`UXNibV2`](/compiler/api/uxkit/uxnibv2/).
+GEM does not look. The details are on [`UXRscV2`](/compiler/api/uxkit/uxrscv2/).
 
 ## Loading the file in an app
 
 ```c
 Data* rsc = UXFileIO.read((u8*)"player.rsc");
-UXNibInstance* nib = UXNib.load(rsc.bytes(), rsc.length(), 0, (UXDesignable*)0, content);
+UXRscInstance* rsc = UXRsc.load(rsc.bytes(), rsc.length(), 0, (UXDesignable*)0, content);
 ```
 
 This builds form 0 (the first form) for the device the app runs on, makes the
-document's objects, connects them, and sends `awakeFromNib`. See
-[the nib guide](/compiler/api/uxkit/guide-nibs/) for the details.
+document's objects, connects them, and sends `awakeFromRsc`. See
+[the rsc guide](/compiler/api/uxkit/guide-rsc/) for the details.
 
 ## Keys and mouse
 

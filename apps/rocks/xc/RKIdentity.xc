@@ -14,7 +14,7 @@
 #import "UXMetrics.xc"
 #import "UXGeometry.xc"
 #import "UXRscModel.xc"
-#import "UXNib.xc"
+#import "UXRsc.xc"
 #import "RKOutline.xc"
 #import "RKClasses.xc"
 #import "RKVariants.xc"
@@ -90,11 +90,11 @@ class RKIdentity : Object
             }
         i16 y = (i16)8;
         u8* cls = d.classOf(t, o);
-        classField = self.field((u8*)"Class", cls != (u8*)0 ? cls : (u8*)"", UXNib.defaultClassFor(o.type), &y);
+        classField = self.field((u8*)"Class", cls != (u8*)0 ? cls : (u8*)"", UXRsc.defaultClassFor(o.type), &y);
         nameField = self.field((u8*)"Name", o.name != (u8*)0 ? o.name : (u8*)"", (u8*)"none", &y);
         idLabel = self.label((u8*)"Logical id", o.logicalId != (i32)0 ? RKIdentity.num(o.logicalId) : (u8*)"none yet", &y);
         layoutsLabel = self.label((u8*)"Layouts", self.layoutsOf(d, t, o), &y);
-        self.classSection(cls, UXNib.defaultClassFor(o.type), &y);
+        self.classSection(cls, UXRsc.defaultClassFor(o.type), &y);
         self.end();
         }
     void showObject(UXRscDoc* d, i32 id)
@@ -285,7 +285,7 @@ class RKIdentity : Object
             {
             return (RKClass*)0;
             }
-        u8* parent = kind == (i32)RKON_VIEW && obj != (UXRscObject*)0 ? UXNib.defaultClassFor(obj.type) : (u8*)"Object";
+        u8* parent = kind == (i32)RKON_VIEW && obj != (UXRscObject*)0 ? UXRsc.defaultClassFor(obj.type) : (u8*)"Object";
         return book.declare(RKIdentity.dup(cls), parent);
         }
     void onAddOutlet(UXControl* sender) : action

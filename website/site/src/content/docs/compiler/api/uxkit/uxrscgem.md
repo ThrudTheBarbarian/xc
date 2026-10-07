@@ -1,23 +1,23 @@
 ---
-title: UXNibGem
-description: "On GEM, a .rsc file is the nib, and it is live: there is no inflation step. Load a tree, bind views onto libGEM's own object array, and wire outlets and actions by name."
+title: UXRscGem
+description: "On GEM, a .rsc file is the rsc, and it is live: there is no inflation step. Load a tree, bind views onto libGEM's own object array, and wire outlets and actions by name."
 ---
 
-`UXNibGem` loads an interface from a `.rsc` file on GEM. The rest of the design
+`UXRscGem` loads an interface from a `.rsc` file on GEM. The rest of the design
 follows from one property: **there is no inflation step**. Until 0.7 this
-class was `UXNib`; [`UXNib`](/compiler/api/uxkit/uxnib/) is now the loader for
+class was `UXRsc`; [`UXRsc`](/compiler/api/uxkit/uxrsc/) is now the loader for
 every backend, GEM included, and reads layout themes and scoped connections,
 which this one does not.
 
 ```c
-#use <UXKit>            // or #import "UXNibGem.xc"
+#use <UXKit>            // or #import "UXRscGem.xc"
 ```
 
 ## Overview
 
 A GEM resource already contains an `OBJECT` tree, and a
 [`UXView`](/compiler/api/uxkit/uxview/) is *backed by* an `OBJECT`. Loading a
-nib means loading that tree and binding a view onto each entry. Nothing is
+rsc means loading that tree and binding a view onto each entry. Nothing is
 copied or rebuilt, and on GEM the AES walks the resource's own array
 directly.
 
@@ -30,7 +30,7 @@ becomes a live view hierarchy with no conversion, rather than a description
 that a loader reconstructs.
 
 ```c
-UXViewTree* tree = UXNibGem.load((u8*)"app.rsc", 0);      // tree 0 of the file
+UXViewTree* tree = UXRscGem.load((u8*)"app.rsc", 0);      // tree 0 of the file
 ```
 
 Views are chosen by `ob_type`. The resource supplies the **type, frame, flags
@@ -42,11 +42,11 @@ Loading gives you a hierarchy. Connecting it to a controller is the other half,
 and it needs no per-application code:
 
 ```c
-UXViewTree* tree = UXNibGem.loadWired((u8*)"app.rsc", 0, (UXDesignable*)controller);
+UXViewTree* tree = UXRscGem.loadWired((u8*)"app.rsc", 0, (UXDesignable*)controller);
 ```
 
 `loadWired` reaches your controller through
-[`UXDesignable`](/compiler/api/uxkit/uxdesignable/) and connects the nib's
+[`UXDesignable`](/compiler/api/uxkit/uxdesignable/) and connects the rsc's
 outlets and actions **by name**.
 
 ### Your controller declares, the compiler generates
@@ -71,13 +71,13 @@ decorations:
 - `wireAction(name, control)`: `control.setAction(&self.<method>)` per action
 
 There is no reflection beyond what the decorations declare, and the
-compiler checks every connection. A nib naming an outlet your controller does
+compiler checks every connection. An rsc file naming an outlet your controller does
 not have fails at load with a false return, instead of leaving a null
 field that crashes later.
 
-:::tip[Build the same wiring in code and the nib path stays honest]
-A hand-written builder that assigns `c.canvas = view;` directly and a nib both
-produce a working window, but only the builder is exercised until a nib
+:::tip[Build the same wiring in code and the rsc path stays honest]
+A hand-written builder that assigns `c.canvas = view;` directly and an rsc file both
+produce a working window, but only the builder is exercised until an rsc file
 ships. Drive the **same two protocol methods** from your code path:
 
 ```c
@@ -85,7 +85,7 @@ c.setOutlet((u8*)"canvas", (Object*)view);
 c.wireAction((u8*)"onSave", saveButton);
 ```
 
-The code path is then a hand-written nib. Every wiring name is one a nib will
+The code path is then a hand-written rsc. Every wiring name is one an rsc file will
 later carry as data, and a typo fails in both.
 :::
 
@@ -138,7 +138,7 @@ The type-to-view mapping: `G_BUTTON` becomes a
 [`UXButton`](/compiler/api/uxkit/uxbutton/), and every other type a plain
 [`UXView`](/compiler/api/uxkit/uxview/) that the AES draws from the resource.
 Classes named by the document are made through
-[`UXNib.make`](/compiler/api/uxkit/uxnib/#make).
+[`UXRsc.make`](/compiler/api/uxkit/uxrsc/#make).
 
 ### classOverride
 
@@ -164,11 +164,11 @@ hard-coded in your source correct.
 
 ## See also
 
-- [`UXNib`](/compiler/api/uxkit/uxnib/): the loader for every backend
+- [`UXRsc`](/compiler/api/uxkit/uxrsc/): the loader for every backend
 
 - [`UXDesignable`](/compiler/api/uxkit/uxdesignable/): the two generated
   methods, and the `outlet` / `:action` decorations
-- [`UXNibV2`](/compiler/api/uxkit/uxnibv2/): the newer format, with variants
+- [`UXRscV2`](/compiler/api/uxkit/uxrscv2/): the newer format, with variants
   per form factor
 - [`UXViewTree`](/compiler/api/uxkit/uxviewtree/): what a load produces
 - [`UXView`](/compiler/api/uxkit/uxview/): `adoptObject`, the binding step

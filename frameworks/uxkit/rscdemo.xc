@@ -1,4 +1,4 @@
-// nibdemo.xc — a dialog designed in Rocks, running as a live view hierarchy.
+// rscdemo.xc — a dialog designed in Rocks, running as a live view hierarchy.
 //
 // The .rsc is not converted into anything.  Its OBJECT tree IS the view tree: the
 // AES draws it, hit-tests it, and themes every widget in it, while Xtg binds an
@@ -6,7 +6,7 @@
 #import <Stdio.xc>
 #import "UXApplication.xc"
 #import "UXGemDriver.xc"
-#import "UXNibGem.xc"
+#import "UXRscGem.xc"
 #import "UXBoot.xc"
 
 class Controller : Object<UXApplicationDelegate>
@@ -25,7 +25,7 @@ class Controller : Object<UXApplicationDelegate>
         i32 sh = a.screenHeight();
 
         // The desktop's own resource — the very file Rocks reads and writes.
-        UXViewTree* vt = UXNibGem.load("/System/OS/Apps/Desktop/desktop.rsc", (i32)0);
+        UXViewTree* vt = UXRscGem.load("/System/OS/Apps/Desktop/desktop.rsc", (i32)0);
         if (vt == (UXViewTree*)0)
             {
             Stdio.printf("could not load the .rsc\n");
@@ -54,7 +54,7 @@ class Controller : Object<UXApplicationDelegate>
                          vt);
 
         // Wire behaviour onto a control the RESOURCE created.  The view already
-        // exists — the nib made it — we are only giving it something to do.
+        // exists — the rsc made it — we are only giving it something to do.
         for (u16 i = (u16)0; i < vt.length(); i++)
             {
             u16 ty = (u16)(((OBJECT*)vt.objects())[i].ob_type & (u16)$00FF);

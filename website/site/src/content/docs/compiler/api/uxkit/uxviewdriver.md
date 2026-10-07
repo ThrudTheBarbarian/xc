@@ -470,7 +470,7 @@ i32 orientation(void)
 `orientation` is the device's orientation now: `UX_ORIENT_PORTRAIT` or
 `UX_ORIENT_LANDSCAPE` on iOS and Android, and `UX_ORIENT_NONE` on the
 desktop backends, which have no orientation axis. It feeds
-[`UXNibV2.selectTreeOriented`](/compiler/api/uxkit/uxnibv2/#selecttreeoriented).
+[`UXRscV2.selectTreeOriented`](/compiler/api/uxkit/uxrscv2/#selecttreeoriented).
 
 ### Everything else
 
