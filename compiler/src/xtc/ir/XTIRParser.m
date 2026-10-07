@@ -1302,6 +1302,39 @@ typedef NS_ENUM(NSUInteger, XTIRTokKind) {
 
 + (BOOL)processLine:(NSString*)line state:(XTIRParserState*)state
     {
+    // -g: `dbgfile <n> "<path>"` names a source file, and an instruction's
+    // trailing ` !dbg <file>:<line>:<col>` is its location — made current while
+    // the line is built, so the instruction takes it as lowering's did.
+    NSString* trimmed = [line stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+    if ([trimmed hasPrefix:@"dbgfile "])
+        {
+        NSScanner* sc = [NSScanner scannerWithString:[trimmed substringFromIndex:8]];
+        int fileId = 0;
+        NSRange q1 = [trimmed rangeOfString:@"\""];
+        NSRange q2 = [trimmed rangeOfString:@"\"" options:NSBackwardsSearch];
+        if ([sc scanInt:&fileId] && q1.location != NSNotFound && q2.location > q1.location)
+            {
+            NSRange pr = NSMakeRange(q1.location + 1, q2.location - q1.location - 1);
+            [XTIRDbgLoc setPath:[trimmed substringWithRange:pr] forFileId:(uint32_t)fileId];
+            }
+        return YES;
+        }
+    NSRange dbg = [line rangeOfString:@" !dbg " options:NSBackwardsSearch];
+    if (dbg.location != NSNotFound)
+        {
+        NSArray<NSString*>* parts =
+            [[line substringFromIndex:NSMaxRange(dbg)] componentsSeparatedByString:@":"];
+        line = [line substringToIndex:dbg.location];
+        if (parts.count == 3)
+            {
+            [XTIRDbgLoc setCurrent:[[XTIRDbgLoc alloc] initWithFileId:(uint32_t)parts[0].intValue
+                                                                 line:(uint32_t)parts[1].intValue
+                                                               column:(uint32_t)parts[2].intValue]];
+            BOOL ok = [self processLine:line state:state];
+            [XTIRDbgLoc setCurrent:nil];
+            return ok;
+            }
+        }
     NSArray<XTIRTok*>* tokens = [self tokeniseLine:line];
     if (tokens.count == 0)
         return YES;
@@ -1903,6 +1936,9 @@ typedef NS_ENUM(NSUInteger, XTIRTokKind) {
         NSString* fnName = nameTok.text;
         XTIRSymbol* sym = [state.module symbolForName:fnName];
         XTIRFunction* fn = sym ? sym.function : nil;
+        // -g: a trailing !dbg on the header line is the function's own location.
+        if (fn && [XTIRDbgLoc current])
+            fn.dbgLoc = [XTIRDbgLoc current];
         NSUInteger pos = 2;
         // (%name: Type, ...)
         if ([self tok:tokens at:pos].kind != XTIRTokLParen)

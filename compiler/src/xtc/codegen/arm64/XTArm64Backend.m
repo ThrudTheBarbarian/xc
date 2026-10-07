@@ -7272,6 +7272,18 @@ static BOOL arm64NamesFrameReg(NSString *t) {
     // a C stub linking against `add` finds `_add`.
     [out appendFormat:@".globl _%@\n", fn.name];
     [out appendFormat:@".p2align 4\n_%@:\n", fn.name];
+    // -g: the prologue belongs to the function's first line, not to whatever
+    // line the previous function ended on.
+    NSArray<NSString *> *dbgFiles = [XTIRDbgLoc files];
+    for (NSUInteger fi = 0; fi < dbgFiles.count; fi++)
+        [out appendFormat:@"    .file %lu \"%@\"\n", (unsigned long)fi + 1, dbgFiles[fi]];
+    XTIRDbgLoc *firstLoc = fn.dbgLoc;
+    for (XTIRBlock *b in (firstLoc ? @[] : fn.blocks)) {
+        for (XTIRInsn *i in b.instructions) if (i.dbgLoc) { firstLoc = i.dbgLoc; break; }
+        if (firstLoc) break;
+    }
+    if (firstLoc)
+        [out appendFormat:@"    .loc %u %u %u\n", firstLoc.fileId + 1, firstLoc.line, firstLoc.column];
     // Prologue. The pre-indexed `stp [sp, #-N]!` immediate caps at
     // 504 bytes; for larger frames adjust SP separately (sub allows
     // imm12 up to 4095, or a temp-register-built value beyond that).
@@ -7403,15 +7415,27 @@ static BOOL arm64NamesFrameReg(NSString *t) {
 
     // Walk blocks in declaration order. Each block label, then phi
     // (no emission), then regular insns, then terminator.
+    // -g: a `.loc` before the first instruction of each new source line (the
+    // assembler turns them into the line table). Only on a change, because a
+    // directive is a barrier to the text peepholes.
+    __block XTIRDbgLoc *lastLoc = nil;
+    void (^loc)(XTIRInsn *) = ^(XTIRInsn *insn) {
+        XTIRDbgLoc *d = insn.dbgLoc;
+        if (!d || (lastLoc && d.line == lastLoc.line && d.fileId == lastLoc.fileId)) return;
+        [out appendFormat:@"    .loc %u %u %u\n", d.fileId + 1, d.line, d.column];
+        lastLoc = d;
+    };
     for (XTIRBlock *block in fn.blocks) {
         [out appendFormat:@"%@:\n", [self blockLabelForFn:fn block:block]];
         for (XTIRInsn *phi in block.phiNodes) {
             [self emitInsn:phi inBlock:block ctx:ctx];
         }
         for (XTIRInsn *insn in block.instructions) {
+            loc(insn);
             [self emitInsn:insn inBlock:block ctx:ctx];
         }
         if (block.terminator) {
+            loc(block.terminator);
             [self emitInsn:block.terminator inBlock:block ctx:ctx];
         }
     }

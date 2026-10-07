@@ -4637,6 +4637,9 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
     // parsed, the driver passed it to its own in-process lowering, and
     // `xcc -fbounds-check` still produced zero check sites.
     if (opts.boundsCheck) [feArgs addObject:@"-fbounds-check"];
+    // -g: the LOWERING stamps source locations on instructions (front end), and
+    // the back end turns them into line tables, so both processes are told.
+    if (opts.debugInfo) [feArgs addObject:@"-g"];
     if (opts.emitLib) [feArgs addObject:@"--emit-lib"];  // L2: write the .xtc.iface sidecar
     if (opts.emitIface) [feArgs addObject:@"--emit-iface"];  // same sidecar, without becoming a library build
     // -c wants the same sidecar (stage 3): the front end is a separate process,

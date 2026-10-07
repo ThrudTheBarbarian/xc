@@ -30,6 +30,9 @@ NS_ASSUME_NONNULL_BEGIN
 // -fbounds-check: a CHECKED build. Every subscript gets a runtime bounds
 // check that reports and aborts. Debug-only — never shipped enabled.
 @property(nonatomic, readwrite) BOOL boundsCheck;
+// -g: debug information (DWARF line tables, subprograms, call frames) in the
+// output, so a debugger can break on a line, step and backtrace.
+@property(nonatomic, readwrite) BOOL debugInfo;
 @property(nonatomic, readonly) BOOL emitLib; // --emit-lib: build a shared library (export public class API, keep it all, no app main)
 // --emit-iface: write the module INTERFACE and stop — no codegen, no link.
 // The designer (Rocks) lists a class's outlets and actions to draw the wiring

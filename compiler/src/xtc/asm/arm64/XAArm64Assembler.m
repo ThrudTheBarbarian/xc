@@ -1,5 +1,6 @@
 #import "XAArm64Assembler.h"
 #import "XTRegexCompat.h"
+#import "XTDwarfWriter.h"
 #include <stdlib.h>
 #include <errno.h>
 
@@ -1795,6 +1796,7 @@ static NSString *quadSymbolOperand(NSString *l) {
     NSMutableArray<NSString *> *insns=[NSMutableArray array];
     uint64_t textAddr=0, dataAddr=0; int section=0;
     BOOL inModInit=NO;   // bug 066: inside __DATA,__mod_init_func
+    XTDwarfWriter *dwarf = nil;   // -g: the line table, if the text has one
     for (NSString *raw in rawLines) {
         NSString *l=stripComment(raw);
         l=[l stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
@@ -1881,6 +1883,25 @@ static NSString *quadSymbolOperand(NSString *l) {
                 }
                 continue;
             }
+            // -g: `.file <n> "<path>"` and `.loc <n> <line> [<col>]` are the
+            // line table, recorded against the text offset they precede.
+            if([l hasPrefix:@".file"] || [l hasPrefix:@".loc"]) {
+                BOOL isFile = [l hasPrefix:@".file"];
+                NSScanner *sc = [NSScanner scannerWithString:[l substringFromIndex:isFile ? 5 : 4]];
+                int fileNo = 0, lineNo = 0, colNo = 0;
+                if (![sc scanInt:&fileNo]) continue;
+                if (!dwarf) dwarf = [[XTDwarfWriter alloc] init];
+                if (isFile) {
+                    NSRange q1 = [l rangeOfString:@"\""], q2 = [l rangeOfString:@"\"" options:NSBackwardsSearch];
+                    if (q1.location != NSNotFound && q2.location > q1.location)
+                        [dwarf setFile:(uint32_t)fileNo
+                                  path:[l substringWithRange:NSMakeRange(q1.location + 1, q2.location - q1.location - 1)]];
+                } else if (section == 0 && [sc scanInt:&lineNo]) {
+                    [sc scanInt:&colNo];
+                    [dwarf addRowAtOffset:textAddr file:(uint32_t)fileNo line:(uint32_t)lineNo column:(uint32_t)colNo];
+                }
+                continue;
+            }
             if([l hasPrefix:@".globl"]) {
                 // Visibility: the object writer exports exactly these; every
                 // other defined symbol is a local, private to its object. (It
@@ -1934,10 +1955,20 @@ static NSString *quadSymbolOperand(NSString *l) {
             if(section==0) _symbols[lbl]=@(textAddr);
             else { _symbols[lbl]=@(dataAddr); [_dataSymbolNames addObject:lbl]; }
             continue; }
-        if(section==0){ [insns addObject:l]; textAddr+=4; }
+        if(section==0){
+            [insns addObject:l]; textAddr+=4;
+            // -g: the frame pointer now addresses the saved {x29, x30} pair, so
+            // the call frame is x29 + 16 from here (the CFI's one rule change).
+            if([l hasPrefix:@"add x29, sp"] || [l isEqualToString:@"mov x29, sp"]) {
+                if (!dwarf) dwarf = [[XTDwarfWriter alloc] init];
+                [dwarf addFrameSetupAtOffset:textAddr];
+            }
+        }
         else { NSError*e=nil; NSUInteger before=_data.length;   // stray non-label data line
             if(emitDataDirective(l,_data,&e)){ dataAddr+=(_data.length-before); } else if(e){ if(error)*error=e; return nil; } }
     }
+    // -g: hand the line table to whichever writer places this text.
+    if (dwarf.hasRows) [XTDwarfWriter setPending:dwarf];
     // Pass 2: encode text. Only TEXT symbols resolve as local (relative
     // branches); data symbols reach code via adrp/add fixups, never branches.
     NSMutableData *out=[NSMutableData data]; uint64_t pc=0;

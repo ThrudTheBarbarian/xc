@@ -1,4 +1,5 @@
 #import "XTElfWriter.h"
+#import "XTDwarfWriter.h"
 #import "XTArArchive.h"
 
 // ELF64 constants (defined in-house — we don't include Linux headers).
@@ -139,6 +140,29 @@ static uint32_t elfHash(const char* name)
         h &= ~g;
         }
     return h;
+    }
+
+// -g: the debug sections of an executable, from the DWARF the assembler
+// recorded (nil without -g, or for a library). Function names are the text
+// symbols that are not local labels.
+static NSArray<NSString*>* XTElfDwarfOrder(void)
+    {
+    return @[ @"debug_line", @"debug_info", @"debug_abbrev", @"debug_str", @"debug_frame" ];
+    }
+
+static NSDictionary<NSString*, NSData*>* _Nullable XTElfDwarfSections(BOOL isExec, uint64_t textAddr, uint64_t textLen,
+                                                                     NSDictionary<NSString*, NSNumber*>* symbols,
+                                                                     NSSet<NSString*>* dataSymbols)
+    {
+    XTDwarfWriter* dwarf = [XTDwarfWriter pending];
+    if (!isExec || !dwarf)
+        return nil;
+    [XTDwarfWriter setPending:nil];
+    NSMutableDictionary<NSString*, NSNumber*>* fns = [NSMutableDictionary dictionary];
+    for (NSString* nm in symbols)
+        if (![nm hasPrefix:@"."] && ![dataSymbols containsObject:nm] && symbols[nm].unsignedLongLongValue < textLen)
+            fns[nm] = symbols[nm];
+    return [dwarf sectionsForTextAddress:textAddr textSize:textLen functions:fns minInsnLength:1 frameRegister:6];
     }
 
 @implementation XTElfWriter
@@ -1806,6 +1830,13 @@ static uint32_t elfHash(const char* name)
         ifaceIdx = secs.count;
         sec(@".xtc.iface", SHT_PROGBITS, 0, 0, iface.length, 0, 0, 1, 0);
         }
+    // -g: the DWARF the assembler recorded, as non-allocated sections gdb and
+    // lldb read from the executable.
+    NSDictionary<NSString*, NSData*>* dwarfSecs = XTElfDwarfSections(isExec, textAddr, textLen, symbols, dataSymbols);
+    NSUInteger dwarfIdx = secs.count;
+    for (NSString* k in XTElfDwarfOrder())
+        if (dwarfSecs)
+            sec([@"." stringByAppendingString:k], SHT_PROGBITS, 0, 0, dwarfSecs[k].length, 0, 0, 1, 0);
     NSUInteger shstrIdx = secs.count;
     sec(@".shstrtab", SHT_STRTAB, 0, 0, 0, 0, 0, 1, 0);
 
@@ -1836,6 +1867,17 @@ static uint32_t elfHash(const char* name)
     uint64_t ifaceOff = out.length;
     if (iface.length)
         [out appendData:iface];
+    if (dwarfSecs)
+        {
+        NSUInteger di = dwarfIdx;
+        for (NSString* k in XTElfDwarfOrder())
+            {
+            NSMutableArray* dm = [secs[di] mutableCopy];
+            dm[3] = @(out.length);
+            secs[di++] = dm;
+            [out appendData:dwarfSecs[k]];
+            }
+        }
     uint64_t shstrOff = out.length;
     [out appendData:shstr];
 
@@ -2046,7 +2088,12 @@ static uint32_t elfHash(const char* name)
     NSMutableData* shstr = [NSMutableData data];
     put8v(shstr, 0);
     NSMutableDictionary<NSString*, NSNumber*>* shName = [NSMutableDictionary dictionary];
-    for (NSString* n in @[ @".text", @".data", @".symtab", @".strtab", @".shstrtab" ])
+    NSDictionary<NSString*, NSData*>* dwarfSecs = XTElfDwarfSections(YES, textAddr, text.length, symbols, dataSymbols);
+    NSMutableArray<NSString*>* shNames = [@[ @".text", @".data", @".symtab", @".strtab", @".shstrtab" ] mutableCopy];
+    if (dwarfSecs)
+        for (NSString* k in XTElfDwarfOrder())
+            [shNames addObject:[@"." stringByAppendingString:k]];
+    for (NSString* n in shNames)
         {
         shName[n] = @(shstr.length);
         [shstr appendData:[n dataUsingEncoding:NSUTF8StringEncoding]];
@@ -2061,6 +2108,13 @@ static uint32_t elfHash(const char* name)
     [out appendData:strtab];
     uint64_t shstrOff = out.length;
     [out appendData:shstr];
+    NSMutableArray<NSNumber*>* dwarfOffs = [NSMutableArray array];
+    if (dwarfSecs)
+        for (NSString* k in XTElfDwarfOrder())
+            {
+            [dwarfOffs addObject:@(out.length)];
+            [out appendData:dwarfSecs[k]];
+            }
     uint64_t shOff = roundUpTo(out.length, 8);
     while (out.length < shOff)
         put8v(out, 0);
@@ -2090,12 +2144,18 @@ static uint32_t elfHash(const char* name)
     shdr(@".symtab", SHT_SYMTAB, 0, 0, symOff, symtab.length, 4, 1, 8, 24);   // 3
     shdr(@".strtab", SHT_STRTAB, 0, 0, strOff, strtab.length, 0, 0, 1, 0);    // 4
     shdr(@".shstrtab", SHT_STRTAB, 0, 0, shstrOff, shstr.length, 0, 0, 1, 0); // 5
+    // 6..: -g's debug sections.
+    NSUInteger di = 0;
+    if (dwarfSecs)
+        for (NSString* k in XTElfDwarfOrder())
+            shdr([@"." stringByAppendingString:k], SHT_PROGBITS, 0, 0, dwarfOffs[di++].unsignedLongLongValue,
+                 dwarfSecs[k].length, 0, 0, 1, 0);
 
     // Patch e_shoff / e_shnum / e_shstrndx, which were written as zero above.
     uint8_t* p = out.mutableBytes;
     for (int i = 0; i < 8; i++)
         p[0x28 + i] = (uint8_t)(shOff >> (8 * i));
-    p[0x3C] = 6;
+    p[0x3C] = (uint8_t)(6 + di);
     p[0x3D] = 0; // e_shnum
     p[0x3E] = 5;
     p[0x3F] = 0; // e_shstrndx

@@ -544,6 +544,32 @@ static BOOL XTProgramDeclaresThreadCreate(XTProgramNode* program)
     return sItableProtocols;
     }
 
+static BOOL sDebugInfo = NO;
+
++ (void)setDebugInfo:(BOOL)on
+    {
+    sDebugInfo = on;
+    }
+
++ (BOOL)debugInfo
+    {
+    return sDebugInfo;
+    }
+
+// -g: make `node`'s position the location instructions take from here on.
+static void setDbgLocFromNode(XTASTNode* node)
+    {
+    if (!sDebugInfo || node == nil)
+        return;
+    XTSourceLocation* loc = node.location;
+    if (loc == nil || loc.line == 0)
+        return;
+    uint32_t file = [XTIRDbgLoc fileIdForPath:[XTIRDbgLoc canonicalPath:loc.filename ?: @""]];
+    [XTIRDbgLoc setCurrent:[[XTIRDbgLoc alloc] initWithFileId:file
+                                                         line:(uint32_t)loc.line
+                                                       column:(uint32_t)loc.column]];
+    }
+
 + (void)setThreadSafeStatics:(int)mode
     {
     sThreadSafeStatics = mode;
@@ -9818,6 +9844,7 @@ static const NSUInteger kVarargSlotBytes = 8;
     // temp leaks, the safe pre-#123 default.
     [self.ownedTemps removeAllObjects];
     [self.ownedTempDepths removeAllObjects];
+    setDbgLocFromNode(node);
     switch (node.nodeKind)
         {
     case XTASTNodeKindBlock:
@@ -17556,6 +17583,13 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
           preBoundSelf:(nullable NSString*)selfName
     {
     [self.module addFunction:fn];
+    // -g: the function begins at its body's opening brace.
+    if (sDebugInfo)
+        {
+        [XTIRDbgLoc setCurrent:nil];
+        setDbgLocFromNode(body);
+        fn.dbgLoc = [XTIRDbgLoc current];
+        }
 
     self.currentFunction = fn;
     self.locals = [NSMutableDictionary dictionary];
@@ -18050,6 +18084,10 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
     {
     if (!fnDecl.body)
         return;
+    // -g: the prologue belongs to the declaration's line, not to the last
+    // statement of whatever was lowered before.
+    [XTIRDbgLoc setCurrent:nil];
+    setDbgLocFromNode(fnDecl);
     // Look the function up by the same name preScanFunction registered it
     // under — the sema-mangled name (== funcName when not overloaded).
     XTIRSymbol* sym = [self.module symbolForName:(fnDecl.mangledName ?: fnDecl.funcName)];

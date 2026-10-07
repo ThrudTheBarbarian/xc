@@ -91,6 +91,9 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, copy, nullable) NSString* simdLevel;
 @property(nonatomic, copy, nullable) NSString* simdBaseName;
 @property(nonatomic) BOOL simdDispatch;
+// -g: where the function begins (its body's opening brace), the line its
+// prologue is attributed to.
+@property(nonatomic, strong, nullable) XTIRDbgLoc* dbgLoc;
 /// Rename, for a clone taken from a parsed copy of the module.
 - (void)renameTo:(NSString*)name;
 

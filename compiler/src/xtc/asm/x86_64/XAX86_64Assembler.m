@@ -1,4 +1,5 @@
 #import "XAX86_64Assembler.h"
+#import "XTDwarfWriter.h"
 #include <stdlib.h>
 #include <errno.h>
 
@@ -1563,6 +1564,7 @@ static BOOL isPlainIntLiteral(NSString *s) {
     // fields and record a fixup, rather than iterating to a fixed point the way a
     // branch-relaxing assembler must.
     int section = 0;                            // 0 = text, 1 = data (.data/.rodata/.bss)
+    XTDwarfWriter *dwarf = nil;                 // -g: the line table, if the text has one
     NSCharacterSet *ws = [NSCharacterSet whitespaceCharacterSet];
 
     // CodeView debug sections (`.section .debug$S`) contribute nothing to the
@@ -1594,6 +1596,24 @@ static BOOL isPlainIntLiteral(NSString *s) {
 
             if ([d isEqualToString:@".text"])    { section = 0; continue; }
             if ([d isEqualToString:@".data"] || [d isEqualToString:@".bss"]) { section = 1; continue; }
+            // -g: `.file <n> "<path>"` and `.loc <n> <line> [<col>]` are the line
+            // table, recorded against the text offset they precede.
+            if ([d isEqualToString:@".file"] || [d isEqualToString:@".loc"]) {
+                NSScanner *sc = [NSScanner scannerWithString:rest];
+                int fileNo = 0, lineNo = 0, colNo = 0;
+                if (![sc scanInt:&fileNo]) continue;
+                if (!dwarf) dwarf = [[XTDwarfWriter alloc] init];
+                if ([d isEqualToString:@".file"]) {
+                    NSRange q1 = [rest rangeOfString:@"\""], q2 = [rest rangeOfString:@"\"" options:NSBackwardsSearch];
+                    if (q1.location != NSNotFound && q2.location > q1.location)
+                        [dwarf setFile:(uint32_t)fileNo
+                                  path:[rest substringWithRange:NSMakeRange(q1.location + 1, q2.location - q1.location - 1)]];
+                } else if (section == 0 && [sc scanInt:&lineNo]) {
+                    [sc scanInt:&colNo];
+                    [dwarf addRowAtOffset:text.length file:(uint32_t)fileNo line:(uint32_t)lineNo column:(uint32_t)colNo];
+                }
+                continue;
+            }
             if ([d isEqualToString:@".section"]) {
                 if ([rest hasPrefix:@".debug"]) { skipping = YES; continue; }
                 section = [rest hasPrefix:@".text"] ? 0 : 1; continue;
@@ -1751,7 +1771,14 @@ static BOOL isPlainIntLiteral(NSString *s) {
             return nil;
         }
         [text appendData:bytes];
+        // -g: rbp now addresses the saved rbp and the return address above it,
+        // so the call frame is rbp + 16 from here.
+        if ([l hasPrefix:@"mov"] && [l hasSuffix:@"rbp, rsp"]) {
+            if (!dwarf) dwarf = [[XTDwarfWriter alloc] init];
+            [dwarf addFrameSetupAtOffset:text.length];
+        }
     }
+    if (dwarf.hasRows) [XTDwarfWriter setPending:dwarf];
 
     // Resolve text-local branches here — a `call`/`jcc` to a label in this same
     // __text needs no relocation, and leaving it to the writer would mean every

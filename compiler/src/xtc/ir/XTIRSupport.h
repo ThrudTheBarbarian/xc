@@ -87,6 +87,26 @@ typedef NS_ENUM(uint8_t, XTIRFCmpPredicate) {
 - (instancetype)initWithFileId:(uint32_t)fileId
                           line:(uint32_t)line
                         column:(uint32_t)column;
+
+/****************************************************************************\
+|* The location lowering is at, under -g. An instruction made without an
+|* explicit location takes this one, so each statement's code carries the
+|* statement's line without every construction site passing it. Nil (the
+|* default, and always without -g) leaves instructions without a location.
+\****************************************************************************/
++ (nullable XTIRDbgLoc*)current;
++ (void)setCurrent:(nullable XTIRDbgLoc*)loc;
+
+/****************************************************************************\
+|* The source files locations refer to, by id: the IR text's dbgfile lines.
+|* Reset at the start of each module's lowering (and of each parse).
+\****************************************************************************/
++ (uint32_t)fileIdForPath:(NSString*)path;
++ (void)setPath:(NSString*)path forFileId:(uint32_t)fileId;
++ (NSArray<NSString*>*)files;
++ (void)resetFiles;
+// A path as the debug information records it: absolute, with no . or ..
++ (NSString*)canonicalPath:(NSString*)path;
 @end
 
 NS_ASSUME_NONNULL_END

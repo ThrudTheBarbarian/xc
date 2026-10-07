@@ -1127,6 +1127,10 @@ static NSString* sExecutablePath = nil;
                 return nil;
                 }
             }
+        else if ([arg isEqualToString:@"-g"])
+            {
+            opts->_debugInfo = YES;
+            }
         else if ([arg isEqualToString:@"-fbounds-check"])
             {
             // A CHECKED build (private:docs/Design/memory-safety.md). Native targets

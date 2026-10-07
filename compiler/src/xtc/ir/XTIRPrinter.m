@@ -40,6 +40,16 @@
     }
 @end
 
+// -g: an instruction's source location, as " !dbg <file>:<line>:<col>" after
+// it. Nothing at all without -g, so the IR text is unchanged.
+static NSString* dbgSuffix(XTIRInsn* insn)
+    {
+    XTIRDbgLoc* d = insn.dbgLoc;
+    if (d == nil)
+        return @"";
+    return [NSString stringWithFormat:@" !dbg %u:%u:%u", d.fileId, d.line, d.column];
+    }
+
 @implementation XTIRPrinter
 
 #pragma mark - Type rendering
@@ -655,10 +665,13 @@
                                             [self stringFromType:fn.returnType
                                                           module:mod]];
         }
-    [out appendFormat:@"  function %@(%@) -> %@ {\n",
+    [out appendFormat:@"  function %@(%@) -> %@ {%@\n",
                       fn.name,
                       [paramStrs componentsJoinedByString:@", "],
-                      retStr];
+                      retStr,
+                      fn.dbgLoc ? [NSString stringWithFormat:@" !dbg %u:%u:%u", fn.dbgLoc.fileId,
+                                                             fn.dbgLoc.line, fn.dbgLoc.column]
+                                : @""];
     if (fn.simdLevel)
         [out appendFormat:@"    simd: %@ of %@\n", fn.simdLevel, fn.simdBaseName];
     if (fn.simdDispatch)
@@ -733,17 +746,19 @@
             }
         for (XTIRInsn* insn in block.instructions)
             {
-            [out appendFormat:@"      %@\n",
+            [out appendFormat:@"      %@%@\n",
                               [self stringFromInsn:insn
                                             module:mod
-                                           context:ctx]];
+                                           context:ctx],
+                              dbgSuffix(insn)];
             }
         if (block.terminator)
             {
-            [out appendFormat:@"      %@\n",
+            [out appendFormat:@"      %@%@\n",
                               [self stringFromInsn:block.terminator
                                             module:mod
-                                           context:ctx]];
+                                           context:ctx],
+                              dbgSuffix(block.terminator)];
             }
         }
 
@@ -984,6 +999,10 @@
     NSMutableString* out = [NSMutableString string];
     [out appendFormat:@"module \"%@\" {\n", mod.name];
     [self appendLayoutsForModule:mod into:out];
+    // -g: the source files the instructions' !dbg locations number.
+    NSArray<NSString*>* dbgFiles = [XTIRDbgLoc files];
+    for (NSUInteger fi = 0; fi < dbgFiles.count; fi++)
+        [out appendFormat:@"  dbgfile %lu \"%@\"\n", (unsigned long)fi, dbgFiles[fi]];
     [self appendConstantsForModule:mod into:out];
     // Load-time constructors (run before main): one `modinit "<fn>"` per name.
     for (NSString* initName in mod.moduleInitFunctionNames)

@@ -10,6 +10,7 @@
 #import "XTSemanticAnalyzer.h"
 #import "XTIR.h"
 #import "XTIRLowering.h"
+#import "XTIRSupport.h"
 #import "XTIRParCheck.h"
 #import "XTIRVerifier.h"
 #import "XTIRModule.h"
@@ -1848,11 +1849,20 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
                                  _options.useWin64Backend || androidBuild)];
     // WGSL for WebGPU on wasm32 (the browser's GPU, through the loader).
     [XTIRParCheck setEmitsWGSL:_options.useWasm32Backend];
+    [XTIRLowering setDebugInfo:_options.debugInfo];
+    [XTIRDbgLoc resetFiles];
+    // -g: the program's own source is file 1, which names the compile unit
+    // (imports are lowered first and would otherwise take the number).
+    if (_options.debugInfo && _options.inputFiles.count > 0)
+        [XTIRDbgLoc fileIdForPath:[XTIRDbgLoc canonicalPath:_options.inputFiles.firstObject]];
     mod = [XTIRLowering lowerProgram:ast
                           moduleName:modName
                          diagnostics:_diagnostics
                        nativeVarargs:(_options.useArm9Backend || _options.useArm64Backend)
                          boundsCheck:(_options.boundsCheck)];
+    // Instructions an optimisation pass makes later carry no location of their
+    // own; they must not take the last statement's.
+    [XTIRDbgLoc setCurrent:nil];
     if (!mod || _diagnostics.hasFatalError)
         {
         [_diagnostics printAll];

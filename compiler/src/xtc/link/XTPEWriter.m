@@ -1,5 +1,6 @@
 #import "XTPEWriter.h"
 #import "XTArArchive.h"
+#import "XTDwarfWriter.h"
 
 // PE/COFF constants, defined in-house so the writer is host-independent (the
 // same reason XTMachOWriter defines its own Mach-O constants rather than
@@ -760,8 +761,14 @@ static NSInteger byteOrder(id x, id y, void* ctx)
         [relocOffs sortUsingSelector:@selector(compare:)];
         }
 
+    // -g: the DWARF the assembler recorded becomes five more sections, named
+    // through the COFF string table (".debug_abbrev" does not fit in eight bytes).
+    XTDwarfWriter* dwarf = isDll ? nil : [XTDwarfWriter pending];
+    if (dwarf)
+        [XTDwarfWriter setPending:nil];
+    NSArray<NSString*>* dwarfOrder = @[ @"debug_line", @"debug_info", @"debug_abbrev", @"debug_str", @"debug_frame" ];
     uint32_t nSect = (data.length ? 3 : 2) + (isDll && iface.length ? 1 : 0)
-                     + (relocOffs.count ? 1 : 0);
+                     + (relocOffs.count ? 1 : 0) + (dwarf ? (uint32_t)dwarfOrder.count : 0);
     uint64_t hdrSz = alignUp(0x40 + 0x40 + 4 + 20 + PE_OPT_HDR_SIZE + (uint64_t)nSect * PE_SECT_HDR_SIZE, PE_FILE_ALIGN);
 
     uint64_t textRVA = PE_SECT_ALIGN;
@@ -991,6 +998,70 @@ static NSInteger byteOrder(id x, id y, void* ctx)
         afterRaw = relocRaw + alignUp(reloc.length, PE_FILE_ALIGN);
         }
 
+    // The symbol table: every function and data symbol, so a debugger and a
+    // crash report name what they show. With -g, also the debug sections, laid
+    // out after everything the loader maps; their long names live in the
+    // string table that follows the symbols.
+    NSMutableData* coffStr = [NSMutableData data];
+    uint32_t (^coffName)(NSString*) = ^uint32_t(NSString* n) {
+      uint32_t at = 4 + (uint32_t)coffStr.length;
+      [coffStr appendData:[n dataUsingEncoding:NSUTF8StringEncoding]];
+      [coffStr appendBytes:"" length:1];
+      return at;
+    };
+    NSDictionary<NSString*, NSData*>* dwarfSecs = nil;
+    NSMutableArray<NSNumber*>* dwarfRVA = [NSMutableArray array];
+    NSMutableArray<NSNumber*>* dwarfRaw = [NSMutableArray array];
+    NSMutableArray<NSNumber*>* dwarfNameOff = [NSMutableArray array];
+    if (dwarf)
+        {
+        NSMutableDictionary<NSString*, NSNumber*>* fns = [NSMutableDictionary dictionary];
+        for (NSString* nm in symbols)
+            if (![nm hasPrefix:@"."] && ![dataSymbols containsObject:nm])
+                fns[nm] = symbols[nm];
+        dwarfSecs = [dwarf sectionsForTextAddress:imageBase + textRVA
+                                         textSize:textLen
+                                        functions:fns
+                                    minInsnLength:1
+                                    frameRegister:6];
+        for (NSString* k in dwarfOrder)
+            {
+            uint64_t rva = alignUp(afterRVA, PE_SECT_ALIGN);
+            [dwarfRVA addObject:@(rva)];
+            [dwarfRaw addObject:@(afterRaw)];
+            [dwarfNameOff addObject:@(coffName([@"." stringByAppendingString:k]))];
+            afterRVA = rva + dwarfSecs[k].length;
+            afterRaw += alignUp(dwarfSecs[k].length, PE_FILE_ALIGN);
+            }
+        }
+    NSMutableData* coffSyms = [NSMutableData data];
+    uint32_t nCoffSyms = 0;
+    for (NSString* nm in [symbols.allKeys sortedArrayUsingSelector:@selector(compare:)])
+        {
+        BOOL inData = [dataSymbols containsObject:nm];
+        if ([nm hasPrefix:@"."] || (inData && !data.length))
+            continue;
+        NSData* nb = [nm dataUsingEncoding:NSUTF8StringEncoding];
+        if (nb.length <= 8)
+            {
+            [coffSyms appendData:nb];
+            for (NSUInteger i = nb.length; i < 8; i++)
+                p8(coffSyms, 0);
+            }
+        else
+            {
+            p32(coffSyms, 0);
+            p32(coffSyms, coffName(nm));
+            }
+        p32(coffSyms, symbols[nm].unsignedIntValue);
+        p16(coffSyms, inData ? 3 : 1); // .data is the third section when present
+        p16(coffSyms, inData ? 0 : 0x20); // DT_FUNCTION
+        p8(coffSyms, 2);                  // IMAGE_SYM_CLASS_EXTERNAL
+        p8(coffSyms, 0);
+        nCoffSyms++;
+        }
+    uint64_t symTabRaw = afterRaw;
+
     // ── 5. the file ──
     NSMutableData* out = [NSMutableData data];
     // DOS header. Windows does not care about the stub, but it must be present
@@ -1016,9 +1087,9 @@ static NSInteger byteOrder(id x, id y, void* ctx)
     p32(out, 0x00004550); // "PE\0\0"
     p16(out, PE_MACHINE_AMD64);
     p16(out, (uint16_t)nSect);
-    p32(out, 0); // TimeDateStamp — 0 keeps
-    p32(out, 0); //   the output reproducible
-    p32(out, 0); // NumberOfSymbols
+    p32(out, 0); // TimeDateStamp — 0 keeps the output reproducible
+    p32(out, nCoffSyms ? (uint32_t)symTabRaw : 0); // PointerToSymbolTable
+    p32(out, nCoffSyms); // NumberOfSymbols
     p16(out, PE_OPT_HDR_SIZE);
     p16(out, PE_CHAR_EXECUTABLE | PE_CHAR_LARGE_ADDRESS | (isDll ? PE_CHAR_DLL : 0));
 
@@ -1115,6 +1186,14 @@ static NSInteger byteOrder(id x, id y, void* ctx)
     if (reloc.length)
         sect(".reloc\0\0", reloc.length, relocRVA, reloc.length, relocRaw,
              PE_SCN_INITIALIZED_DATA | PE_SCN_MEM_READ | PE_SCN_MEM_DISCARDABLE);
+    for (NSUInteger di = 0; dwarf && di < dwarfOrder.count; di++)
+        {
+        char nm[9] = {0};
+        snprintf(nm, sizeof nm, "/%u", dwarfNameOff[di].unsignedIntValue);
+        sect(nm, dwarfSecs[dwarfOrder[di]].length, dwarfRVA[di].unsignedLongLongValue,
+             dwarfSecs[dwarfOrder[di]].length, dwarfRaw[di].unsignedLongLongValue,
+             PE_SCN_INITIALIZED_DATA | PE_SCN_MEM_READ | PE_SCN_MEM_DISCARDABLE);
+        }
 
     while (out.length < textRaw)
         p8(out, 0);
@@ -1215,10 +1294,24 @@ static NSInteger byteOrder(id x, id y, void* ctx)
             p8(out, 0);
         [out appendData:reloc];
         }
+    for (NSUInteger di = 0; dwarf && di < dwarfOrder.count; di++)
+        {
+        while (out.length < dwarfRaw[di].unsignedLongLongValue)
+            p8(out, 0);
+        [out appendData:dwarfSecs[dwarfOrder[di]]];
+        }
     // Every section's raw data is FileAlignment-padded; a short final section
     // makes some loaders reject the image.
     while (out.length % PE_FILE_ALIGN)
         p8(out, 0);
+    if (nCoffSyms)
+        {
+        while (out.length < symTabRaw)
+            p8(out, 0);
+        [out appendData:coffSyms];
+        p32(out, 4 + (uint32_t)coffStr.length);
+        [out appendData:coffStr];
+        }
     return out;
     }
 

@@ -2531,6 +2531,27 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
         }
     NSUInteger frame = (cur + 15) & ~(NSUInteger)15; // keep rsp 16-aligned
 
+    // -g: the prologue belongs to the function's first line, not to whatever
+    // line the previous function ended on.
+    {
+        NSArray<NSString*>* dbgFiles = [XTIRDbgLoc files];
+        for (NSUInteger fi = 0; fi < dbgFiles.count; fi++)
+            [out appendFormat:@"\t.file\t%lu \"%@\"\n", (unsigned long)fi + 1, dbgFiles[fi]];
+        XTIRDbgLoc* firstLoc = fn.dbgLoc;
+        for (XTIRBlock* b in (firstLoc ? @[] : fn.blocks))
+            {
+            for (XTIRInsn* i in b.instructions)
+                if (i.dbgLoc)
+                    {
+                    firstLoc = i.dbgLoc;
+                    break;
+                    }
+            if (firstLoc)
+                break;
+            }
+        if (firstLoc)
+            [out appendFormat:@"\t.loc\t%u %u %u\n", firstLoc.fileId + 1, firstLoc.line, firstLoc.column];
+    }
     [out appendString:@"\tpush\trbp\n\tmov\trbp, rsp\n"];
     // Windows commits a thread's stack one guard page at a time, so a frame
     // over a page must touch each page in order: one `sub rsp, N` lands past
@@ -2750,6 +2771,16 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
             }
         }
 
+    // -g: `.file` for the source files, then a `.loc` before the first
+    // instruction of each new source line, for the assembler's line table.
+    __block XTIRDbgLoc* lastLoc = nil;
+    void (^loc)(XTIRInsn*) = ^(XTIRInsn* insn) {
+      XTIRDbgLoc* d = insn.dbgLoc;
+      if (!d || (lastLoc && d.line == lastLoc.line && d.fileId == lastLoc.fileId))
+          return;
+      [out appendFormat:@"\t.loc\t%u %u %u\n", d.fileId + 1, d.line, d.column];
+      lastLoc = d;
+    };
     for (XTIRBlock* bb in fn.blocks)
         {
         if ([loopHeads containsObject:[NSValue valueWithNonretainedObject:bb]])
@@ -2768,7 +2799,12 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
             [out appendString:@"\t.p2align\t5, 0x90\n"];
         [out appendFormat:@"%@:\n", [self blockLabel:bb fn:fn]];
         for (XTIRInsn* in in bb.instructions)
+            {
+            loc(in);
             [self emitInsn:in fn:fn module:mod slot:slot out:out];
+            }
+        if (bb.terminator)
+            loc(bb.terminator);
         if (bb.terminator)
             [self emitTerminator:bb.terminator fn:fn block:bb slot:slot frame:frame out:out];
         else

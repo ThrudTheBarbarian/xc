@@ -82,4 +82,57 @@
     return self;
     }
 
+static XTIRDbgLoc* gCurrentDbgLoc = nil;
+static NSMutableArray<NSString*>* gDbgFiles = nil;
+
++ (nullable XTIRDbgLoc*)current
+    {
+    return gCurrentDbgLoc;
+    }
+
++ (void)setCurrent:(nullable XTIRDbgLoc*)loc
+    {
+    gCurrentDbgLoc = loc;
+    }
+
++ (uint32_t)fileIdForPath:(NSString*)path
+    {
+    if (gDbgFiles == nil)
+        gDbgFiles = [NSMutableArray array];
+    NSUInteger i = [gDbgFiles indexOfObject:path];
+    if (i != NSNotFound)
+        return (uint32_t)i;
+    [gDbgFiles addObject:path];
+    return (uint32_t)(gDbgFiles.count - 1);
+    }
+
++ (void)setPath:(NSString*)path forFileId:(uint32_t)fileId
+    {
+    if (gDbgFiles == nil)
+        gDbgFiles = [NSMutableArray array];
+    while (gDbgFiles.count <= fileId)
+        [gDbgFiles addObject:@""];
+    gDbgFiles[fileId] = path;
+    }
+
++ (NSArray<NSString*>*)files
+    {
+    return gDbgFiles ?: @[];
+    }
+
++ (NSString*)canonicalPath:(NSString*)path
+    {
+    if (path.length == 0)
+        return path;
+    if (!path.isAbsolutePath)
+        path = [NSFileManager.defaultManager.currentDirectoryPath stringByAppendingPathComponent:path];
+    return path.stringByStandardizingPath;
+    }
+
++ (void)resetFiles
+    {
+    gDbgFiles = nil;
+    gCurrentDbgLoc = nil;
+    }
+
 @end

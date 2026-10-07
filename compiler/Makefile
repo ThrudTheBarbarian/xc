@@ -657,14 +657,16 @@ $(XTCG_ARM64_BIN): $(XTCG_ARM64_OBJS) | $(BIN_DIR)
 # Spawned by the dispatcher under --self-host in place of clang. Thin: just its
 # main + the in-house assembler and Mach-O writer.
 XTCLN_ARM64_OBJS = src/xtcln-arm64/main.o src/xtc/asm/arm64/XAArm64Assembler.o \
-                   src/xtc/link/XTMachOWriter.o src/xtc/link/XTElfArm64Writer.o
+                   src/xtc/link/XTMachOWriter.o src/xtc/link/XTElfArm64Writer.o \
+                   src/xtc/dwarf/XTDwarfWriter.o
 $(XTCLN_ARM64_BIN): $(XTCLN_ARM64_OBJS) | $(BIN_DIR)
 	$(CC) $(LDFLAGS) -o $@ $(XTCLN_ARM64_OBJS)
 
 # xtcln-x86_64 — the self-hosted x86-64/Linux linker (assemble + ELF). Lets a
 # Mac produce a Linux binary with no Linux toolchain involved.
 XTCLN_X8664_OBJS = src/xtcln-x86_64/main.o src/xtc/asm/x86_64/XAX86_64Assembler.o \
-                   src/xtc/link/XTElfWriter.o src/xtc/link/XTElfGC.o src/xtc/link/XTArArchive.o
+                   src/xtc/link/XTElfWriter.o src/xtc/link/XTElfGC.o src/xtc/link/XTArArchive.o \
+                   src/xtc/dwarf/XTDwarfWriter.o
 $(XTCLN_X8664_BIN): $(XTCLN_X8664_OBJS) | $(BIN_DIR)
 	$(CC) $(LDFLAGS) -o $@ $(XTCLN_X8664_OBJS)
 
@@ -680,7 +682,8 @@ $(XTCLN_ARM9_BIN): $(XTCLN_ARM9_OBJS) | $(BIN_DIR)
 # xtcln-win64 — the self-hosted x86-64/Windows linker (assemble + PE/COFF). The
 # assembler is shared verbatim with the Linux target; only the container differs.
 XTCLN_WIN64_OBJS = src/xtcln-win64/main.o src/xtc/asm/x86_64/XAX86_64Assembler.o \
-                   src/xtc/link/XTPEWriter.o src/xtc/link/XTArArchive.o
+                   src/xtc/link/XTPEWriter.o src/xtc/link/XTArArchive.o \
+                   src/xtc/dwarf/XTDwarfWriter.o
 $(XTCLN_WIN64_BIN): $(XTCLN_WIN64_OBJS) | $(BIN_DIR)
 	$(CC) $(LDFLAGS) -o $@ $(XTCLN_WIN64_OBJS)
 
@@ -889,15 +892,15 @@ $(TEST_BIN): $(TEST_OBJS) | $(BIN_DIR)
 
 # AArch64 assembler oracle-diff tool (standalone; needs clang + otool at runtime).
 oracle-arm64: $(ORACLE_ARM64_BIN)
-$(ORACLE_ARM64_BIN): tests/asm-arm64/oracle-diff/harness.m src/xtc/asm/arm64/XAArm64Assembler.o | $(BIN_DIR)
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< src/xtc/asm/arm64/XAArm64Assembler.o
+$(ORACLE_ARM64_BIN): tests/asm-arm64/oracle-diff/harness.m src/xtc/asm/arm64/XAArm64Assembler.o src/xtc/dwarf/XTDwarfWriter.o | $(BIN_DIR)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< src/xtc/asm/arm64/XAArm64Assembler.o src/xtc/dwarf/XTDwarfWriter.o
 
 # End-to-end Mach-O smoke driver (assemble .s -> emit executable); the
 # tests/asm-arm64/macho-run.sh script signs + runs its output on macOS/arm64.
 macho-smoke: $(BIN_DIR)/macho-smoke
 $(BIN_DIR)/macho-smoke: tests/asm-arm64/oracle-diff/macho-smoke.m \
-                        src/xtc/asm/arm64/XAArm64Assembler.o src/xtc/link/XTMachOWriter.o | $(BIN_DIR)
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< src/xtc/asm/arm64/XAArm64Assembler.o src/xtc/link/XTMachOWriter.o
+                        src/xtc/asm/arm64/XAArm64Assembler.o src/xtc/link/XTMachOWriter.o src/xtc/dwarf/XTDwarfWriter.o | $(BIN_DIR)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< src/xtc/asm/arm64/XAArm64Assembler.o src/xtc/link/XTMachOWriter.o src/xtc/dwarf/XTDwarfWriter.o
 
 # Build each standalone smoke test as its own binary.
 # Exclude src/xtc/main.o (has its own main()) and src/xta/main.o.

@@ -22,7 +22,7 @@
         _opcode = opcode;
         _result = result;
         _operands = [operands copy];
-        _dbgLoc = dbgLoc;
+        _dbgLoc = dbgLoc ?: [XTIRDbgLoc current];
         _callConv = nil;
         _predicate = 0;
         }

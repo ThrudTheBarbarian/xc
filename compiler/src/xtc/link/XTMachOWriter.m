@@ -1,4 +1,5 @@
 #import "XTMachOWriter.h"
+#import "XTDwarfWriter.h"
 
 // ── Mach-O constants (in-house so the writer needs no <mach-o/loader.h>) ──
 enum
@@ -1638,7 +1639,28 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
     uint64_t gotAddr = VMBASE + gotOffset;
     uint64_t gotOffInSeg = gotOffset - dataSegFileOff;
 
-    uint64_t linkeditOff = dataSegEnd;
+    // -g: the DWARF the assembler recorded goes in a __DWARF segment between
+    // __DATA and __LINKEDIT, where lldb reads it from the executable itself.
+    XTDwarfWriter* dwarf = [XTDwarfWriter pending];
+    [XTDwarfWriter setPending:nil];
+    NSArray<NSString*>* dwarfOrder = @[ @"debug_line", @"debug_info", @"debug_abbrev", @"debug_str", @"debug_frame" ];
+    NSDictionary<NSString*, NSData*>* dwarfSecs = nil;
+    uint64_t dwarfOff = dataSegEnd, dwarfSize = 0;
+    if (dwarf)
+        {
+        NSMutableDictionary<NSString*, NSNumber*>* fns = [NSMutableDictionary dictionary];
+        for (NSString* nm in symbols)
+            if ([nm hasPrefix:@"_"] && ![dataSymbols containsObject:nm])
+                fns[[nm substringFromIndex:1]] = symbols[nm];
+        dwarfSecs = [dwarf sectionsForTextAddress:VMBASE + textOffset
+                                         textSize:text.length
+                                        functions:fns
+                                    minInsnLength:4
+                                    frameRegister:29];
+        for (NSString* k in dwarfOrder)
+            dwarfSize += dwarfSecs[k].length;
+        }
+    uint64_t linkeditOff = dwarf ? roundUp(dwarfOff + dwarfSize, PAGE) : dataSegEnd;
     uint64_t linkeditAddr = VMBASE + linkeditOff;
 
     // address of a defined symbol (text- or data-section relative)
@@ -1901,9 +1923,10 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
     uint32_t szRpaths = 0;
     for (NSString* rp in rpaths)
         szRpaths += (uint32_t)roundUp(12 + strlen(rp.UTF8String) + 1, 8);
+    uint32_t szDwarfSeg = dwarf ? 72 + (uint32_t)dwarfOrder.count * 80 : 0;
     uint32_t ncmds = 10 + (hasDataSeg ? 1 : 0) + (hasDyldInfo ? 1 : 0) + 1 // +LC_CODE_SIGNATURE
-                     + (uint32_t)dylibs.count + (uint32_t)rpaths.count;
-    uint32_t sizeofcmds = szPagezero + szTextSeg + (hasDataSeg ? szDataSeg : 0) + szLink + (hasDyldInfo ? szDyldInfo : 0) + szDyld + szMain + szDylib + szSym + szDysym + szBuild + szUUID + szCodeSig + szExtraDylibs + szRpaths;
+                     + (uint32_t)dylibs.count + (uint32_t)rpaths.count + (dwarf ? 1 : 0);
+    uint32_t sizeofcmds = szDwarfSeg + szPagezero + szTextSeg + (hasDataSeg ? szDataSeg : 0) + szLink + (hasDyldInfo ? szDyldInfo : 0) + szDyld + szMain + szDylib + szSym + szDysym + szBuild + szUUID + szCodeSig + szExtraDylibs + szRpaths;
 
     // ── 6. Emit ──
     NSMutableData* out = [NSMutableData data];
@@ -2067,6 +2090,39 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
             }
         }
 
+    // __DWARF (-g): read by debuggers, never by dyld's code.
+    if (dwarf)
+        {
+        put32(out, XLC_SEGMENT_64);
+        put32(out, szDwarfSeg);
+        putFixed(out, "__DWARF", 16);
+        put64(out, VMBASE + dwarfOff);
+        put64(out, roundUp(dwarfSize, PAGE));
+        put64(out, dwarfOff);
+        put64(out, dwarfSize);
+        put32(out, XVM_READ);
+        put32(out, XVM_READ);
+        put32(out, (uint32_t)dwarfOrder.count);
+        put32(out, 0);
+        uint64_t at = dwarfOff;
+        for (NSString* k in dwarfOrder)
+            {
+            putFixed(out, [@"__" stringByAppendingString:k].UTF8String, 16);
+            putFixed(out, "__DWARF", 16);
+            put64(out, VMBASE + at);
+            put64(out, dwarfSecs[k].length);
+            put32(out, (uint32_t)at);
+            put32(out, 0); // align
+            put32(out, 0); // reloff
+            put32(out, 0); // nreloc
+            put32(out, 0x02000000); // S_ATTR_DEBUG
+            put32(out, 0);
+            put32(out, 0);
+            put32(out, 0);
+            at += dwarfSecs[k].length;
+            }
+        }
+
     // __LINKEDIT
     put32(out, XLC_SEGMENT_64);
     put32(out, szLink);
@@ -2206,6 +2262,13 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
             put8(out, 0);
         for (NSUInteger i = 0; i < gotSize; i++)
             put8(out, 0);
+        }
+    if (dwarf)
+        {
+        while (out.length < dwarfOff)
+            put8(out, 0);
+        for (NSString* k in dwarfOrder)
+            [out appendData:dwarfSecs[k]];
         }
     while (out.length < linkeditOff)
         put8(out, 0);

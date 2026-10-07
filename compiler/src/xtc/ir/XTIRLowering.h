@@ -50,6 +50,14 @@ NS_ASSUME_NONNULL_BEGIN
 |* private:docs/Design/protocol-slot-collisions.md.
 \****************************************************************************/
 + (void)setItableProtocols:(BOOL)on;
+
+/****************************************************************************\
+|* -g: stamp each statement's source location on the instructions lowered for
+|* it (through +[XTIRDbgLoc setCurrent:]), for the back end's line tables. Off,
+|* no instruction carries a location and the IR text is unchanged.
+\****************************************************************************/
++ (void)setDebugInfo:(BOOL)on;
++ (BOOL)debugInfo;
 + (BOOL)itableProtocols;
 
 /****************************************************************************\
