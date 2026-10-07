@@ -78,7 +78,13 @@ and builds with nothing else (from 0.73):
 ```sh
 xcc -A arm64 first_window.xc -o first_window       # macOS
 xcc -A win64 first_window.xc -o first_window.exe   # Windows: ship libUXKit.dll beside it
+xcc -A wasm32 first_window.xc -o first_window      # the web
 ```
+
+A web app ships `libUXKit.wasm`, `libUXKit.json` and UXKit's two page scripts,
+`ux_web_page.js` and `ux_web_browser.js`, beside its own `.js` and `.wasm`; all
+four are in the installed `wasm32` directory. The page loads `ux_web_page.js`
+and sets `xccConfig.workerScript` to `ux_web_browser.js`.
 
 `frameworks/uxkit/install.sh` builds the library for each target and installs it
 in the third-party tree, `/opt/xcc/3p/uxkit/<target>/`, beside the version
@@ -86,7 +92,7 @@ contract a program can check (`UXAbi.xc`). The library is the toolkit with that
 target's driver: on macOS it includes the Objective-C part of the AppKit driver
 and links Cocoa itself.
 
-Linux, iOS, Android and the web are not installed yet. For those, and for
+Linux, iOS and Android are not ready to use installed yet. For those, and for
 working on UXKit itself, build against the sources:
 
 ```sh

@@ -6,6 +6,13 @@
 // One library per target: UXPlatform brings in the driver for the target it is built for (and only
 // that one), so libUXKit.dylib for arm64 is AppKit's, libUXKit.so for x86_64 is GTK's, and so on.
 #import "UXPlatform.xc"
+#if UX_PLATFORM_IOS
+// the frameworks the iOS driver and its shim use, so libUXKit links them itself (a build of the
+// library names the simulator's or the device's SDK with SDKROOT)
+#import <UIKit>
+#import <QuartzCore>
+#import <CoreGraphics>
+#endif
 #if UX_PLATFORM_GEM
 #import "UXGem.h.xc"
 #endif

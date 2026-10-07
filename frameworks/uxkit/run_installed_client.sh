@@ -3,7 +3,8 @@
 # the INSTALLED UXKit (install.sh) the way an external project builds it: `#use <UXKit>` and
 # `xcc -A <target> app.xc`, with no -I, no shim and no link flags.  It opens a window through
 # UXPlatform and prints PASS.  arm64 runs here (headless), win64 under Wine (hidden, with
-# libUXKit.dll beside the exe).  A target whose library is not installed is skipped.
+# libUXKit.dll beside the exe), wasm32 in headless Chrome (with libUXKit.wasm and the page scripts
+# beside app.js).  A target whose library is not installed, or whose runner is absent, is skipped.
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
 xcc=${XCC:-xcc}
@@ -41,8 +42,8 @@ void main(void)
     }
 XC
 fail=0
-for t in arm64 win64; do
-  case $t in arm64) lib=libUXKit.dylib; out=app ;; win64) lib=libUXKit.dll; out=app.exe ;; esac
+for t in arm64 win64 wasm32; do
+  case $t in arm64) lib=libUXKit.dylib; out=app ;; win64) lib=libUXKit.dll; out=app.exe ;; wasm32) lib=libUXKit.wasm; out=app ;; esac
   if [ ! -e "$tp/uxkit/$t/$lib" ]; then echo "  $t: skipped (no $tp/uxkit/$t/$lib)"; continue; fi
   ( cd "$work" && "$xcc" -A $t app.xc -o "$out" -q ) || { echo "  $t: FAIL (build)"; fail=1; continue; }
   case $t in
@@ -51,6 +52,32 @@ for t in arm64 win64; do
       command -v wine >/dev/null 2>&1 || { echo "  $t: skipped (no wine)"; continue; }
       cp "$tp/uxkit/$t/$lib" "$work/"
       got=$(cd "$work" && WINEDEBUG=-all WINEDLLOVERRIDES="winedbg.exe=d" timeout 120 wine "$out" 2>/dev/null) || true ;;
+    wasm32)
+      chrome="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+      [ -x "$chrome" ] || { echo "  $t: skipped (no Chrome)"; continue; }
+      cp "$tp/uxkit/$t/libUXKit.wasm" "$tp/uxkit/$t/libUXKit.json" "$tp/uxkit/$t/ux_web_browser.js" \
+         "$tp/uxkit/$t/ux_web_page.js" "$work/"
+      cat > "$work/index.html" <<'HTML'
+<!doctype html>
+<meta charset="utf-8">
+<canvas id="ux-canvas" width="400" height="260"></canvas>
+<script>
+  globalThis.xccConfig = { runLoop: 'worker', workerScript: 'ux_web_browser.js', canvas: '#ux-canvas' };
+  const out = [];
+  globalThis.xccOut = (s) => { out.push(s); if (/^(PASS|FAIL)/.test(s)) fetch('/result', { method: 'POST', body: out.join('\n') }); };
+  setTimeout(() => fetch('/result', { method: 'POST', body: 'TIMEOUT\n' + out.join('\n') }), 20000);
+</script>
+<script src="ux_web_page.js"></script>
+<script src="app.js"></script>
+HTML
+      port=8983
+      ( cd "$work" && exec python3 "$here/tools/coi_server.py" $port ) >/dev/null 2>&1 &
+      srv=$!
+      sleep 1
+      ( "$chrome" --headless=new --user-data-dir="$work/chrome" "http://localhost:$port/index.html" >/dev/null 2>&1 & )
+      for i in $(seq 1 30); do [ -f "$work/result.txt" ] && break; sleep 1; done
+      got=$(cat "$work/result.txt" 2>/dev/null)
+      kill $srv 2>/dev/null; wait $srv 2>/dev/null; pkill -f "user-data-dir=$work/chrome" 2>/dev/null || true ;;
   esac
   if printf '%s\n' "$got" | grep -q '^PASS'; then echo "  $t: $(printf '%s\n' "$got" | grep '^PASS')"; else echo "  $t: FAIL"; printf '%s\n' "$got" | tail -3; fail=1; fi
 done
