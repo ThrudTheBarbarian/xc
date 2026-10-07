@@ -128,6 +128,9 @@ class Wasm32
     Map*      _symAddr;         // name -> Number@ linear address
     Array*    _constAddr;       // Number@ addr or (Object*)0 per constant id
     u32       _dataEnd;
+    // The heap base: 1 MiB, unless the data runs within 64 KiB of it; then
+    // the data's end plus a 1 MiB stack, on 64 KiB. As the reference (627).
+    u32       _heapBase;
     Array*    _dataSegs;        // String@
     Map*      _importSigs;      // name -> String@ "(param i32) (result i32)"
     Array*    _importNames;     // String@, insertion order (sorted at print)
@@ -708,6 +711,9 @@ class Wasm32
         }
         prescanRuntime(mod);
         placeData(mod);
+        _heapBase = (u32)1048576;
+        if (!_emitLib && _dataEnd > (u32)1048576 - (u32)$10000)
+            _heapBase = Wasm32.alignUp(_dataEnd + (u32)1048576, (u32)$10000);
         collectImports(mod);
 
         // Function bodies first: they discover the call_indirect signatures.
@@ -894,8 +900,8 @@ class Wasm32
                              name.cString(),
                              ((String*)_importSigs.get((Hashable*)name)).cString());
         }
-        out.appendCString("  (memory (export \"memory\") 32)\n");
-        u32 stackTop = (u32)1048576;
+        out.appendFormat("  (memory (export \"memory\") %lu)\n", _heapBase / (u32)$10000 + (u32)16);
+        u32 stackTop = _heapBase;
         u32 stackLow = Wasm32.alignUp(_dataEnd, (u32)16);
         if (_linkLibs) {
             // Export the surface the loader wires each library to; the
@@ -911,7 +917,7 @@ class Wasm32
             out.appendFormat("  (global $__stack_low i32 (i32.const %lu))\n", stackLow);
         }
         if (_needsAlloc) {
-            out.appendFormat("  (global $__heap (mut i32) (i32.const %lu))\n", (u32)1048576);
+            out.appendFormat("  (global $__heap (mut i32) (i32.const %lu))\n", _heapBase);
             out.appendCString("  (global $__free (mut i32) (i32.const 0))\n");
         }
         if (_fnTableOrder.count() > (u32)0) {
@@ -3334,7 +3340,7 @@ class Wasm32
             out.appendFormat(
             "  (func $_xtc_heap_total_bytes%s (result i32)\n"
             "    memory.size\n    i32.const 16\n    i32.shl\n"
-            "    i32.const 1048576\n    i32.sub\n  )\n"
+            "    i32.const %lu\n    i32.sub\n  )\n"
             "  (func $_xtc_heap_free_bytes%s (result i32)\n"
             "    (local $cur i32) (local $sum i32)\n"
             "    memory.size\n    i32.const 16\n    i32.shl\n"
@@ -3359,7 +3365,7 @@ class Wasm32
             "    local.get $cur\n    i32.load offset=4\n    local.set $cur\n"
             "    br $walk\n    end\n    end\n"
             "    local.get $max\n  )\n",
-            rtExp(String.withCString("_xtc_heap_total_bytes")).cString(),
+            rtExp(String.withCString("_xtc_heap_total_bytes")).cString(), _heapBase,
             rtExp(String.withCString("_xtc_heap_free_bytes")).cString(),
             rtExp(String.withCString("_xtc_heap_largest")).cString());
         }
@@ -3374,19 +3380,19 @@ class Wasm32
         out.appendFormat(
         "  (func $__xtc_retain%s (param $p i32)\n"
         "    (local $rc i32)\n"
-        "    local.get $p\n    i32.const 1048576\n    i32.lt_u\n"
+        "    local.get $p\n    i32.const %lu\n    i32.lt_u\n"
         "    if\n      return\n    end\n"
         "    local.get $p\n    i32.const 4\n    i32.sub\n    i32.load\n"
         "    local.tee $rc\n    i32.eqz\n"
         "    if\n      return\n    end\n"
         "    local.get $p\n    i32.const 4\n    i32.sub\n"
         "    local.get $rc\n    i32.const 1\n    i32.add\n    i32.store\n  )\n",
-        rtExp(String.withCString("__xtc_retain")).cString());
+        rtExp(String.withCString("__xtc_retain")).cString(), _heapBase);
 
         out.appendFormat(
         "  (func $__xtc_release%s (param $p i32)\n"
         "    (local $rc i32)\n"
-        "    local.get $p\n    i32.const 1048576\n    i32.lt_u\n"
+        "    local.get $p\n    i32.const %lu\n    i32.lt_u\n"
         "    if\n      return\n    end\n"
         "    local.get $p\n    i32.const 4\n    i32.sub\n    i32.load\n"
         "    local.tee $rc\n    i32.eqz\n"
@@ -3397,7 +3403,7 @@ class Wasm32
         "    if\n"
         "      local.get $p\n      call $_xtc_dealloc\n"
         "    end\n  )\n",
-        rtExp(String.withCString("__xtc_release")).cString());
+        rtExp(String.withCString("__xtc_release")).cString(), _heapBase);
 
         out.appendFormat(
         "  (func $_xtc_weak_unregister%s (param $s i32)\n"
@@ -3418,7 +3424,7 @@ class Wasm32
         "    (local $nx i32)\n"
         "    local.get $s\n    call $_xtc_weak_unregister\n"
         "    local.get $o\n    i32.eqz\n    if\n      return\n    end\n"
-        "    local.get $o\n    i32.const 1048576\n    i32.lt_u\n    if\n      return\n    end\n"
+        "    local.get $o\n    i32.const %lu\n    i32.lt_u\n    if\n      return\n    end\n"
         "    local.get $o\n    i32.const 40\n    i32.sub\n    i32.load\n"
         "    i32.const 1481920322\n    i32.ne\n    if\n      return\n    end\n"
         "    local.get $o\n    i32.const 12\n    i32.sub\n    i32.load\n    local.set $nx\n"
@@ -3431,7 +3437,7 @@ class Wasm32
         "      local.get $s\n      i32.const 4\n      i32.sub\n      i32.store\n"
         "    end\n"
         "    local.get $o\n    i32.const 12\n    i32.sub\n    local.get $s\n    i32.store\n  )\n",
-        rtExp(String.withCString("_xtc_weak_register")).cString());
+        rtExp(String.withCString("_xtc_weak_register")).cString(), _heapBase);
         out.appendCString(
         "  (func $_xtc_weak_load (param $s i32) (result i32)\n"
         "    local.get $s\n    i32.load\n  )\n"
@@ -3479,10 +3485,10 @@ class Wasm32
         if (hasSuffix(String.withCString("__count__"))) {
             out.appendFormat(
             "  (func $_xtc_count%s (param $p i32) (result i32)\n"
-            "    local.get $p\n    i32.const 1048576\n    i32.lt_u\n"
+            "    local.get $p\n    i32.const %lu\n    i32.lt_u\n"
             "    if\n      i32.const 0\n      return\n    end\n"
             "    local.get $p\n    i32.const 28\n    i32.sub\n    i32.load\n  )\n",
-            rtExp(String.withCString("_xtc_count")).cString());
+            rtExp(String.withCString("_xtc_count")).cString(), _heapBase);
         }
         Array* sfx = Wasm32.sorted(_newSuffixes);
         for (u32 i = (u32)0; i < sfx.count(); i = i + (u32)1) {
