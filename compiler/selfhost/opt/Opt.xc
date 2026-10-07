@@ -17894,6 +17894,8 @@ class OptProfile
     Array* _rotR;     // the body: everything reachable from B without passing H
     IRBlock* _rotE;
     IRValue* _rotCond;
+    bool _rotEntryTrue;   // the guard holds on the entry values: no zero-trip path
+    i64 _rcVal;           // rotConst's result
 
     bool rotInRegion(IRBlock* b)
         {
@@ -17939,16 +17941,19 @@ class OptProfile
         _rotR = (Array*)0;
         _rotE = (IRBlock*)0;
         _rotCond = (IRValue*)0;
+        _rotEntryTrue = false;
         if (H.phis().count() == (u32)0)
             return false;
         // A header carrying a VECTOR accumulator phi is an already-vectorised
         // loop; rotating it would duplicate that phi, which the backend's
-        // in-place accumulate coalescing cannot represent.
+        // in-place accumulate coalescing cannot represent — unless the guard
+        // holds on entry (below), when the rotated loop needs no exit phi.
+        bool hasVecPhi = false;
         for (u32 i = (u32)0; i < H.phis().count(); i = i + (u32)1)
             {
             IRInsn* p = (IRInsn*)H.phis().get(i);
             if (p.res() != (IRValue*)0 && isVectorType(p.res().ty()))
-                return false;
+                hasVecPhi = true;
             }
         IRInsn* term = H.term();
         if (term == (IRInsn*)0 || !term.op().equals(String.withCString("CondBranch")) || term.ops().count() < (u32)3)
@@ -18155,11 +18160,137 @@ class OptProfile
                 return false;
             }
 
+        // Whether the guard holds on the entry values, so the loop runs at
+        // least once (`for (k = 0; k < 32; k++)`): then the rotated loop needs
+        // no zero-trip path and no exit phi, so a vector accumulator phi is not
+        // duplicated. As the reference.
+        bool entryTrue = false;
+        IRInsn* condInsn = (IRInsn*)0;
+        for (u32 i = (u32)0; i < H.insns().count(); i = i + (u32)1)
+            if (((IRInsn*)H.insns().get(i)).res() == c0.val())
+                condInsn = (IRInsn*)H.insns().get(i);
+        if (condInsn != (IRInsn*)0 && condInsn.op().equals(String.withCString("ICmp")) &&
+            condInsn.ops().count() == (u32)2 && E.phis().count() == (u32)0)
+            {
+            Array* ep = predsOfBlock(fn, E);
+            Map* defs = new Map();
+            for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+                {
+                IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+                for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                    {
+                    IRInsn* n = (IRInsn*)bb.insns().get(i);
+                    if (n.res() != (IRValue*)0)
+                        defs.set((Hashable*)n.res(), (Object*)n);
+                    }
+                }
+            i64 va = (i64)0;
+            i64 vb = (i64)0;
+            bool known = ep.count() == (u32)1 && (IRBlock*)ep.get((u32)0) == H;
+            for (u32 k = (u32)0; k < (u32)2 && known; k = k + (u32)1)
+                {
+                IROperand* o = (IROperand*)condInsn.ops().get(k);
+                // A header phi stands for its entry value.
+                if (o.kind() == (u8)OPK_USE)
+                    for (u32 i = (u32)0; i < H.phis().count(); i = i + (u32)1)
+                        {
+                        IRInsn* phi = (IRInsn*)H.phis().get(i);
+                        if (phi.res() != o.val())
+                            continue;
+                        for (u32 q = (u32)0; q + (u32)1 < phi.ops().count(); q = q + (u32)2)
+                            if (((IROperand*)phi.ops().get(q)).blk() != L)
+                                o = (IROperand*)phi.ops().get(q + (u32)1);
+                        }
+                known = rotConst(o, defs, (u32)0);
+                if (k == (u32)0) va = _rcVal; else vb = _rcVal;
+                }
+            if (known)
+                {
+                String* pr = condInsn.pred();
+                if (pr != (String*)0)
+                    {
+                    if (pr.equals(String.withCString("EQ"))) entryTrue = va == vb;
+                    else if (pr.equals(String.withCString("NE"))) entryTrue = va != vb;
+                    else if (pr.equals(String.withCString("SLT")) || pr.equals(String.withCString("ULT"))) entryTrue = va < vb;
+                    else if (pr.equals(String.withCString("SGT")) || pr.equals(String.withCString("UGT"))) entryTrue = va > vb;
+                    else if (pr.equals(String.withCString("SLE")) || pr.equals(String.withCString("ULE"))) entryTrue = va <= vb;
+                    else if (pr.equals(String.withCString("SGE")) || pr.equals(String.withCString("UGE"))) entryTrue = va >= vb;
+                    }
+                // The branch must go to the body when the guard holds.
+                if (((IROperand*)term.ops().get((u32)1)).blk() != B)
+                    entryTrue = false;
+                }
+            // Every escaping value must be a value the latch computes.
+            for (u32 i = (u32)0; i < H.phis().count(); i = i + (u32)1)
+                {
+                IRInsn* phi = (IRInsn*)H.phis().get(i);
+                for (u32 q = (u32)0; q + (u32)1 < phi.ops().count(); q = q + (u32)2)
+                    if (((IROperand*)phi.ops().get(q)).blk() == L &&
+                        ((IROperand*)phi.ops().get(q + (u32)1)).kind() != (u8)OPK_USE)
+                        entryTrue = false;
+                }
+            }
+        if (hasVecPhi && !entryTrue)
+            return false;
+
         _rotH = H;
         _rotB = B;
         _rotL = L;
         _rotE = E;
         _rotCond = c0.val();
+        _rotEntryTrue = entryTrue;
+        return true;
+        }
+
+    // A small non-negative constant an operand is known to hold (into
+    // _rcVal): an immediate, a Const, or an extension or truncation of one,
+    // within [0, 2^31) and what its type holds as a positive value. As the
+    // reference's rotConst.
+    bool rotConst(IROperand* o, Map* defs, u32 depth)
+        {
+        if (depth > (u32)4 || o == (IROperand*)0)
+            return false;
+        i64 v = (i64)0;
+        String* t = (String*)0;
+        if (o.kind() == (u8)OPK_IMMI)
+            {
+            v = o.imm();
+            t = o.ty();
+            }
+        else if (o.kind() == (u8)OPK_USE)
+            {
+            Object* dobj = defs.get((Hashable*)o.val());
+            if (dobj == (Object*)0)
+                return false;
+            IRInsn* d = (IRInsn*)dobj;
+            if (d.ops().count() < (u32)1)
+                return false;
+            if (d.op().equals(String.withCString("Const")))
+                {
+                IROperand* c = (IROperand*)d.ops().get((u32)0);
+                if (c.kind() != (u8)OPK_IMMI)
+                    return false;
+                v = c.imm();
+                }
+            else if (d.op().equals(String.withCString("ZExt")) || d.op().equals(String.withCString("SExt")) ||
+                     d.op().equals(String.withCString("Trunc")))
+                {
+                if (!rotConst((IROperand*)d.ops().get((u32)0), defs, depth + (u32)1))
+                    return false;
+                v = _rcVal;
+                }
+            else
+                return false;
+            t = d.res().ty();
+            }
+        else
+            return false;
+        if (v < (i64)0 || v >= ((i64)1 << 31))
+            return false;
+        u32 bw = irWidth(t);
+        if (bw >= (u32)1 && bw < (u32)4 && v >= ((i64)1 << ((u32)8 * bw - (u32)1)))
+            return false;
+        _rcVal = v;
         return true;
         }
 
@@ -18334,7 +18465,15 @@ class OptProfile
 
         // 7. H keeps its (now init-using) guard and branch; its phis are gone,
         //    since it is entered only from the preheader — the back edge is B→B.
+        //    When the guard holds on entry, H goes straight to B and the exit
+        //    values are the latch's (step 8).
         H.setPhis(new Array());
+        if (_rotEntryTrue)
+            {
+            IRInsn* hb = IRInsn.with(String.withCString("Branch"));
+            hb.add(IROperand.block(B));
+            H.setTerm(hb);
+            }
 
         // 7b. L's back-edge test exits to E too, so every phi E already has
         //     needs an L incoming: the value it took from H, which was defined
@@ -18410,6 +18549,12 @@ class OptProfile
             IRValue* pid = ((IRInsn*)phis.get(i)).res();
             if (!rotUsedOutsideLoop(fn, pid))
                 continue;
+            if (_rotEntryTrue)
+                {
+                // No zero-trip path: after the loop the value is the latch's.
+                exitMap.set((Hashable*)pid, (Object*)((IROperand*)nextMapped.get(i)).val());
+                continue;
+                }
             IRValue* v = new IRValue(pid.ty());
             // The B→E incoming is the carried value on the exit edge as
             // evaluated in B — already in terms of the new phis (step 2).

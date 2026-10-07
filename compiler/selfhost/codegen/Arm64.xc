@@ -350,6 +350,7 @@ class Arm64
         // A `.L` label is file-scoped in Mach-O but the counter is per
         // function, exactly as the original's per-function context makes it.
         _labelCounter = (u32)0;
+        computeLaneGroups(fn);
         allocateVectorRegisters(fn);
         collectDefs(fn);            // _defOf/_useCount/_maxOutStack; computeAddrFold reads defOf
         computeAddrFold(fn);        // liveness must see the folds, so this first
@@ -636,6 +637,8 @@ class Arm64
         // A def subsumed by a fused consumer is never emitted; a fusion SITE
         // emits the combined form in place of its own opcode.
         if (n.res() != (IRValue*)0 && inMap(_fusedAway, n.res())) return;
+        // A lane group's scalar loads and member broadcasts (its leader loads all four).
+        if (n.res() != (IRValue*)0 && inMap(_laneSkip, n.res())) return;
         if (n.res() != (IRValue*)0 && _fuseKind.get((Hashable*)n.res()) != (Object*)0)
             { emitFused(n); return; }
         // The dispatch is split across four routines purely for the frame
@@ -1680,6 +1683,20 @@ class Arm64
             if (so < (i32)0) {
                 String* r = String.withCString(needsXReg(aty) ? "x" : "w");
                 r.appendFormat("%lu", gp);
+                // A narrow value whose home a 32-bit instruction wrote moves as
+                // `mov x, x` (the reference explains: a 64-bit move is free at
+                // rename, a 32-bit one costs a cycle on the argument chain).
+                if (a.kind() == (u8)OPK_USE && a.val() != (IRValue*)0 && !needsXReg(aty)) {
+                    Object* h = _home.get((Hashable*)a.val());
+                    if (h != (Object*)0 && ((String*)h).hasPrefix(String.withCString("x")) &&
+                        writesW32((IRInsn*)_defOf.get((Hashable*)a.val()))) {
+                        String* xd = String.withCString("x");
+                        xd.appendFormat("%lu", gp);
+                        emitMove(xd, (String*)h);
+                        gp = gp + (u32)1;
+                        continue;
+                    }
+                }
                 materialise(a, r);
                 gp = gp + (u32)1;
             } else {
@@ -1689,6 +1706,19 @@ class Arm64
             }
         }
         return true;
+    }
+
+    // Whether `d` always writes its (narrow) result with a 32-bit
+    // instruction, which clears the register's top half.
+    static bool writesW32(IRInsn* d)
+    {
+        if (d == (IRInsn*)0 || d.res() == (IRValue*)0) return false;
+        String* op = d.op();
+        return op.equals(String.withCString("Add")) || op.equals(String.withCString("Sub"))
+            || op.equals(String.withCString("Mul")) || op.equals(String.withCString("And"))
+            || op.equals(String.withCString("Or"))  || op.equals(String.withCString("Xor"))
+            || op.equals(String.withCString("Shl")) || op.equals(String.withCString("LShr"))
+            || op.equals(String.withCString("AShr")) || op.equals(String.withCString("Load"));
     }
 
     // The result of a call: FP in s0/d0, integers and pointers in w0/x0.
@@ -2179,9 +2209,24 @@ class Arm64
             u32 vb = vecIndex(((IROperand*)_fuseB.get((Hashable*)n.res())).val());
             u32 vc = vecIndex(((IROperand*)_fuseC.get((Hashable*)n.res())).val());
             u32 vd = vecIndex(n.res());
+            // A lane of a group's vector as one factor: the by-element forms.
+            Object* la = _laneOf.get((Hashable*)((IROperand*)_fuseA.get((Hashable*)n.res())).val());
+            Object* lb = _laneOf.get((Hashable*)((IROperand*)_fuseB.get((Hashable*)n.res())).val());
+            bool lane = la != (Object*)0 || lb != (Object*)0;
+            String* fb = String.withCString("v");
+            if (lane)
+                fb.appendFormat("%lu.s[%lu]", lb != (Object*)0 ? vb : va,
+                                ((Number*)(lb != (Object*)0 ? lb : la)).asU32());
+            else
+                fb.appendFormat("%lu.%s", vb, arr.cString());
+            if (lane && lb == (Object*)0) va = vb;
             if (vd != vc && (vd == va || vd == vb)) {
-                _out.appendFormat("    mul v16.%s, v%lu.%s, v%lu.%s\n", arr.cString(), va, arr.cString(), vb, arr.cString());
+                _out.appendFormat("    mul v16.%s, v%lu.%s, %s\n", arr.cString(), va, arr.cString(), fb.cString());
                 _out.appendFormat("    add v%lu.%s, v%lu.%s, v16.%s\n", vd, arr.cString(), vc, arr.cString(), arr.cString());
+            } else if (lane) {
+                if (vd != vc)
+                    _out.appendFormat("    orr v%lu.16b, v%lu.16b, v%lu.16b\n", vd, vc, vc);
+                _out.appendFormat("    mla v%lu.%s, v%lu.%s, %s\n", vd, arr.cString(), va, arr.cString(), fb.cString());
             } else {
                 if (vd != vc)
                     _out.appendFormat("    orr v%lu.16b, v%lu.16b, v%lu.16b\n", vd, vc, vc);
@@ -2926,6 +2971,21 @@ class Arm64
     // capping at 15 exhausts once a function has more than a handful of them.
     Map* _vecReg;               // vector value -> register name
     Map* _vecClass;             // vector value -> its coalescing class
+    // Lane groups: four broadcasts of adjacent 32-bit loads (a[k..k+3]) become
+    // one `ldr q` and by-lane multiplies. Each member broadcast -> its lane and
+    // its group's leader (the first in the block); each leader -> its base
+    // operand and byte offset; _laneSkip holds the scalar loads and member
+    // broadcasts that are not emitted.
+    Map* _laneOf;
+    Map* _laneLeader;
+    Map* _laneBase;
+    Map* _laneOff;
+    Map* _laneSkip;
+    // allocateVectorRegisters' accumulator-borrowing state (see vecReuseFor).
+    Map* _vValLast;
+    Map* _vBackDef;
+    Map* _vVecPhis;
+    Map* _vBorrowed;
 
     // emitAggCopy/aggChunk tail-rebase state (finding #13's family): the frame
     // base register, its bias, and the offset both pointers were rebased by.
@@ -3021,6 +3081,17 @@ class Arm64
     {
         if (n.ops().count() < (u32)1 || n.res() == (IRValue*)0) { unsupported(n.op()); return; }
         String* arr = neonArr(laneOf(n.res().ty()));
+        Object* lb = _laneBase.get((Hashable*)n.res());
+        if (lb != (Object*)0) {
+            // A lane group's leader: the four elements in one load.
+            String* b = operandReg((IROperand*)lb, String.withCString("x16"));
+            i64 off = ((Number*)_laneOff.get((Hashable*)n.res())).asI64();
+            if (off >= (i64)0 && off % (i64)16 == (i64)0)
+                _out.appendFormat("    ldr q%lu, [%s, #%ld]\n", vecIndex(n.res()), b.cString(), off);
+            else
+                _out.appendFormat("    ldur q%lu, [%s, #%ld]\n", vecIndex(n.res()), b.cString(), off);
+            return;
+        }
         String* sc = operandReg((IROperand*)n.ops().get((u32)0), String.withCString("w16"));
         _out.appendFormat("    dup v%lu.%s, %s\n", vecIndex(n.res()), arr.cString(), sc.cString());
     }
@@ -3045,6 +3116,19 @@ class Arm64
         else if (op.equals(String.withCString("VAnd"))) mnem = String.withCString("and");
         else if (op.equals(String.withCString("VOr")))  mnem = String.withCString("orr");
         else mnem = String.withCString("eor");
+        if (op.equals(String.withCString("VMul"))) {
+            Object* la = _laneOf.get((Hashable*)o0.val());
+            Object* lb = _laneOf.get((Hashable*)o1.val());
+            if (la != (Object*)0 || lb != (Object*)0) {
+                // One factor is a lane of a group's vector: multiply by element.
+                u32 v = lb != (Object*)0 ? vecIndex(o0.val()) : vecIndex(o1.val());
+                u32 g = lb != (Object*)0 ? vecIndex(o1.val()) : vecIndex(o0.val());
+                u32 ln = ((Number*)(lb != (Object*)0 ? lb : la)).asU32();
+                _out.appendFormat("    %s v%lu.%s, v%lu.%s, v%lu.s[%lu]\n", mnem.cString(),
+                                  vecIndex(n.res()), arr.cString(), v, arr.cString(), g, ln);
+                return;
+            }
+        }
         emitVec3(mnem, arr, vecIndex(n.res()), vecIndex(o0.val()), vecIndex(o1.val()));
     }
 
@@ -3203,6 +3287,13 @@ class Arm64
                 }
             }
         }
+        // A lane group's broadcasts share the one register the vector load fills.
+        for (u32 i = (u32)0; i < vecVals.count(); i = i + (u32)1) {
+            IRValue* v = (IRValue*)vecVals.get(i);
+            Object* ld = _laneLeader.get((Hashable*)v);
+            if (ld != (Object*)0 && (IRValue*)ld != v)
+                _vecClass.set((Hashable*)v, ld);
+        }
 
         // A class's interval is [min, max] over the linear positions at which
         // any member is defined or read.
@@ -3220,6 +3311,49 @@ class Arm64
             if (bb.term() != (IRInsn*)0)
                 pos = touchInsn(bb.term(), vecVals, classes, lo, hi, pos);
             blkEnd.add((Object*)Number.withI32(pos > (i32)0 ? pos - (i32)1 : (i32)0));
+        }
+
+        // Per VALUE (not class): where it is defined and last read, on the
+        // same positions; and where each phi class's back-edge value (its
+        // first non-phi member defined after the phi) is written.
+        Map* valDef = new Map();
+        _vValLast = new Map();
+        _vVecPhis = new Map();
+        _vBackDef = new Map();
+        _vBorrowed = new Map();
+        i32 vp = (i32)0;
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1) {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            for (u32 part = (u32)0; part < (u32)3; part = part + (u32)1) {
+                Array* list = part == (u32)0 ? bb.phis() : bb.insns();
+                u32 cnt = part == (u32)2 ? (bb.term() != (IRInsn*)0 ? (u32)1 : (u32)0) : list.count();
+                for (u32 i = (u32)0; i < cnt; i = i + (u32)1) {
+                    IRInsn* n = part == (u32)2 ? bb.term() : (IRInsn*)list.get(i);
+                    if (n.res() != (IRValue*)0 && isVecTy(n.res().ty())) {
+                        valDef.set((Hashable*)n.res(), (Object*)Number.withI32(vp));
+                        if (part == (u32)0) _vVecPhis.set((Hashable*)n.res(), (Object*)n.res());
+                    }
+                    for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1) {
+                        IROperand* o = (IROperand*)n.ops().get(k);
+                        if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0)
+                            _vValLast.set((Hashable*)o.val(), (Object*)Number.withI32(vp));
+                    }
+                    vp = vp + (i32)1;
+                }
+            }
+        }
+        for (u32 i = (u32)0; i < vecVals.count(); i = i + (u32)1) {
+            IRValue* v = (IRValue*)vecVals.get(i);
+            IRValue* c = classOfVec(v);
+            if (inMap(_vVecPhis, v) || !inMap(_vVecPhis, c)) continue;
+            Object* dv = valDef.get((Hashable*)v);
+            Object* dc = valDef.get((Hashable*)c);
+            // After the phi: the initial value (written before the loop) is a
+            // member too.
+            if (dv == (Object*)0 || dc == (Object*)0 || ((Number*)dv).asI32() <= ((Number*)dc).asI32()) continue;
+            Object* bd = _vBackDef.get((Hashable*)c);
+            if (bd == (Object*)0 || ((Number*)dv).asI32() < ((Number*)bd).asI32())
+                _vBackDef.set((Hashable*)c, dv);
         }
 
         // Back-edge-aware extension. A loop-INVARIANT vector materialised once
@@ -3262,8 +3396,11 @@ class Arm64
             Array* still = new Array();
             for (u32 a = (u32)0; a < active.count(); a = a + (u32)1) {
                 IRValue* av = (IRValue*)active.get(a);
-                if (((Number*)hi.get((Hashable*)av)).asI32() < start)
-                    freePool.add((Object*)regOf.get((Hashable*)av));
+                // A borrowed register is the phi class's: expiry does not free it.
+                if (((Number*)hi.get((Hashable*)av)).asI32() < start) {
+                    if (!inMap(_vBorrowed, av))
+                        freePool.add((Object*)regOf.get((Hashable*)av));
+                }
                 else still.add((Object*)av);
             }
             active = still;
@@ -3328,12 +3465,149 @@ class Arm64
                 for (u32 k = (u32)0; k < active.count(); k = k + (u32)1)
                     if ((IRValue*)active.get(k) == ocls) { ai = k; break; }
                 if (ai == active.count()) continue;
-                if (((Number*)hi.get((Hashable*)ocls)).asI32() != start) continue;
+                if (((Number*)hi.get((Hashable*)ocls)).asI32() != start) {
+                    // The accumulator phi itself, read for the last time here:
+                    // its register is free until the back-edge value is
+                    // written, so a chain that ends by then can run in it.
+                    Object* lu = _vValLast.get((Hashable*)o.val());
+                    Object* bd = _vBackDef.get((Hashable*)ocls);
+                    if (inMap(_vVecPhis, o.val()) && ocls == o.val() && lu != (Object*)0 &&
+                        ((Number*)lu).asI32() == start && bd != (Object*)0 &&
+                        ((Number*)hi.get((Hashable*)cls)).asI32() <= ((Number*)bd).asI32()) {
+                        _vBorrowed.set((Hashable*)cls, (Object*)cls);
+                        return regOf.get((Hashable*)ocls);
+                    }
+                    continue;
+                }
                 active.removeAt(ai);
+                if (inMap(_vBorrowed, ocls)) _vBorrowed.set((Hashable*)cls, (Object*)cls);
                 return regOf.get((Hashable*)ocls);
             }
         }
         return (Object*)0;
+    }
+
+    // Lane groups (see _laneOf). A broadcast qualifies when it splats a 32-bit
+    // scalar Load in its block that nothing else reads, every use of the
+    // broadcast is a vector multiply, and the vector is four lanes. Four of
+    // them whose loads read `base`, `base+1`, `base+2`, `base+3` (elements)
+    // from one memory state (so no store comes between) form a group; the
+    // vector load replaces the four scalar ones at the first broadcast, and
+    // each multiply reads its lane: the dup and three of every four loads go.
+    void computeLaneGroups(IRFunc* fn)
+    {
+        _laneOf = new Map();
+        _laneLeader = new Map();
+        _laneBase = new Map();
+        _laneOff = new Map();
+        _laneSkip = new Map();
+        Map* uses = new Map();        // value -> read count
+        Map* allMul = new Map();      // value -> false once a non-VMul reads it
+        Map* defOf = new Map();
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1) {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            for (u32 part = (u32)0; part < (u32)3; part = part + (u32)1) {
+                Array* list = part == (u32)0 ? bb.phis() : bb.insns();
+                u32 cnt = part == (u32)2 ? (bb.term() != (IRInsn*)0 ? (u32)1 : (u32)0) : list.count();
+                for (u32 i = (u32)0; i < cnt; i = i + (u32)1) {
+                    IRInsn* n = part == (u32)2 ? bb.term() : (IRInsn*)list.get(i);
+                    if (n.res() != (IRValue*)0) defOf.set((Hashable*)n.res(), (Object*)n);
+                    for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1) {
+                        IROperand* o = (IROperand*)n.ops().get(k);
+                        if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0) continue;
+                        Object* c = uses.get((Hashable*)o.val());
+                        uses.set((Hashable*)o.val(), (Object*)Number.withU32(c == (Object*)0 ? (u32)1 : ((Number*)c).asU32() + (u32)1));
+                        if (!n.op().equals(String.withCString("VMul")))
+                            allMul.set((Hashable*)o.val(), (Object*)o.val());
+                    }
+                }
+            }
+        }
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1) {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            // Candidates in block order: splat, base value, element offset, memory value.
+            Array* cSp = new Array();
+            Array* cBase = new Array();
+            Array* cOff = new Array();
+            Array* cMem = new Array();
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1) {
+                IRInsn* sp = (IRInsn*)bb.insns().get(i);
+                if (!sp.op().equals(String.withCString("VSplat")) || sp.res() == (IRValue*)0 || sp.ops().count() < (u32)1) continue;
+                String* lane = laneOf(sp.res().ty());
+                // Four 32-bit lanes: `Vec(lane)` is the 16-byte vector.
+                if (lane == (String*)0 || width(lane) != (u32)4 || sp.res().ty().byteLength() != lane.byteLength() + (u32)5) continue;
+                IROperand* so = (IROperand*)sp.ops().get((u32)0);
+                if (so.kind() != (u8)OPK_USE || so.val() == (IRValue*)0) continue;
+                Object* uc = uses.get((Hashable*)so.val());
+                if (uc == (Object*)0 || ((Number*)uc).asU32() != (u32)1) continue;
+                Object* ldo = defOf.get((Hashable*)so.val());
+                if (ldo == (Object*)0) continue;
+                IRInsn* ld = (IRInsn*)ldo;
+                if (!ld.op().equals(String.withCString("Load")) || !hasInsnIn(bb.insns(), ld) || ld.ops().count() < (u32)2) continue;
+                IROperand* la0 = (IROperand*)ld.ops().get((u32)0);
+                IROperand* la1 = (IROperand*)ld.ops().get((u32)1);
+                if (la0.kind() != (u8)OPK_USE || la1.kind() != (u8)OPK_USE) continue;
+                if (uses.get((Hashable*)sp.res()) == (Object*)0 || inMap(allMul, sp.res())) continue;
+                IRValue* base = la0.val();
+                i64 off = (i64)0;
+                Object* ado = defOf.get((Hashable*)base);
+                if (ado != (Object*)0) {
+                    IRInsn* ad = (IRInsn*)ado;
+                    if (ad.op().equals(String.withCString("ElementAddr")) && ad.ops().count() == (u32)2 &&
+                        ((IROperand*)ad.ops().get((u32)0)).kind() == (u8)OPK_USE &&
+                        ((IROperand*)ad.ops().get((u32)1)).kind() == (u8)OPK_IMMI &&
+                        ad.res() != (IRValue*)0 && width(pointeeOf(ad.res().ty())) == (u32)4) {
+                        base = ((IROperand*)ad.ops().get((u32)0)).val();
+                        off = ((IROperand*)ad.ops().get((u32)1)).imm();
+                    }
+                }
+                cSp.add((Object*)sp);
+                cBase.add((Object*)base);
+                cOff.add((Object*)Number.withI64(off));
+                cMem.add((Object*)la1.val());
+            }
+            Map* taken = new Map();
+            for (u32 i = (u32)0; i < cSp.count(); i = i + (u32)1) {
+                IRInsn* lead = (IRInsn*)cSp.get(i);
+                if (inMap(taken, lead.res())) continue;
+                i64 o0 = ((Number*)cOff.get(i)).asI64();
+                if (o0 * (i64)4 < (i64)-256 || o0 * (i64)4 + (i64)16 > (i64)4096 ||
+                    (o0 * (i64)4 > (i64)255 && (o0 * (i64)4) % (i64)16 != (i64)0)) continue;
+                IRInsn* m0 = (IRInsn*)0;
+                IRInsn* m1 = (IRInsn*)0;
+                IRInsn* m2 = (IRInsn*)0;
+                IRInsn* m3 = (IRInsn*)0;
+                for (u32 j = i; j < cSp.count(); j = j + (u32)1) {
+                    if (cBase.get(j) != cBase.get(i) || cMem.get(j) != cMem.get(i)) continue;
+                    i64 d = ((Number*)cOff.get(j)).asI64() - o0;
+                    IRInsn* spj = (IRInsn*)cSp.get(j);
+                    if (d < (i64)0 || d > (i64)3 || inMap(taken, spj.res())) continue;
+                    if (d == (i64)0) { if (m0 == (IRInsn*)0) m0 = spj; }
+                    else if (d == (i64)1) { if (m1 == (IRInsn*)0) m1 = spj; }
+                    else if (d == (i64)2) { if (m2 == (IRInsn*)0) m2 = spj; }
+                    else if (m3 == (IRInsn*)0) m3 = spj;
+                }
+                if (m0 == (IRInsn*)0 || m1 == (IRInsn*)0 || m2 == (IRInsn*)0 || m3 == (IRInsn*)0 || m0 != lead) continue;
+                for (u32 k = (u32)0; k < (u32)4; k = k + (u32)1) {
+                    IRInsn* m = k == (u32)0 ? m0 : (k == (u32)1 ? m1 : (k == (u32)2 ? m2 : m3));
+                    taken.set((Hashable*)m.res(), (Object*)m.res());
+                    _laneOf.set((Hashable*)m.res(), (Object*)Number.withU32(k));
+                    _laneLeader.set((Hashable*)m.res(), (Object*)lead.res());
+                    IRValue* sl = ((IROperand*)m.ops().get((u32)0)).val();
+                    _laneSkip.set((Hashable*)sl, (Object*)sl);                  // its scalar load
+                    if (k != (u32)0) _laneSkip.set((Hashable*)m.res(), (Object*)m.res());   // a member broadcast
+                }
+                _laneBase.set((Hashable*)lead.res(), (Object*)IROperand.useVal((IRValue*)cBase.get(i)));
+                _laneOff.set((Hashable*)lead.res(), (Object*)Number.withI64(o0 * (i64)4));
+            }
+        }
+    }
+
+    static bool hasInsnIn(Array* a, IRInsn* n)
+    {
+        for (u32 i = (u32)0; i < a.count(); i = i + (u32)1)
+            if ((IRInsn*)a.get(i) == n) return true;
+        return false;
     }
 
     IRValue* classOfVec(IRValue* v)
@@ -5945,7 +6219,17 @@ class Arm64
         Object* h = _home.get((Hashable*)phi.res());
         if (h != (Object*)0 && vop.kind() == (u8)OPK_USE) {
             // Homed result and an SSA use: materialise straight into the home.
-            loadValue(vop.val(), homeView((String*)h, pty));
+            // A narrow value a 32-bit instruction wrote copies as `mov x, x`
+            // (the reference explains).
+            String* dest = homeView((String*)h, pty);
+            Object* sh = vop.val() != (IRValue*)0 ? _home.get((Hashable*)vop.val()) : (Object*)0;
+            if (!fp && dest.hasPrefix(String.withCString("w")) && ((String*)h).hasPrefix(String.withCString("x")) &&
+                sh != (Object*)0 && ((String*)sh).hasPrefix(String.withCString("x")) &&
+                writesW32((IRInsn*)_defOf.get((Hashable*)vop.val()))) {
+                emitMove((String*)h, (String*)sh);
+                return;
+            }
+            loadValue(vop.val(), dest);
             return;
         }
         // Unhomed, or a constant operand (a float immediate has to build

@@ -16,6 +16,7 @@
 @property(nonatomic) NSSet<XTIRBlock*>* R; // the body: everything reachable from B without passing H
 @property(nonatomic) XTIRBlock* E;       // exit
 @property(nonatomic) XTIRValueId condId; // the guard result feeding H's CondBranch
+@property(nonatomic) BOOL entryTrue;     // the guard holds on the entry values: no zero-trip path
 @end
 @implementation XTLoopRotCand
 @end
@@ -98,6 +99,51 @@ static BOOL dupSafe(XTIRInsn* insn)
     return YES;
     }
 
+// A small non-negative constant an operand is known to hold: an immediate, a
+// Const, or an extension or truncation of one. Kept to [0, 2^31) and to what
+// the type holds as a positive value, so signed and unsigned compares agree.
+static BOOL rotConst(XTIROperand* o, NSDictionary<NSNumber*, XTIRInsn*>* defs, int depth, int64_t* out)
+    {
+    if (depth > 4 || !o)
+        return NO;
+    int64_t v;
+    XTIRType* t = nil;
+    if (o.kind == XTIROperandKindImmI)
+        {
+        v = o.intValue;
+        t = o.type;
+        }
+    else if (o.kind == XTIROperandKindUse)
+        {
+        XTIRInsn* d = defs[@(o.valueId)];
+        if (!d || d.operands.count < 1)
+            return NO;
+        if (d.opcode == XTIROpConst)
+            {
+            if (d.operands[0].kind != XTIROperandKindImmI)
+                return NO;
+            v = d.operands[0].intValue;
+            }
+        else if (d.opcode == XTIROpZExt || d.opcode == XTIROpSExt || d.opcode == XTIROpTrunc)
+            {
+            if (!rotConst(d.operands[0], defs, depth + 1, &v))
+                return NO;
+            }
+        else
+            return NO;
+        t = d.result.type;
+        }
+    else
+        return NO;
+    if (v < 0 || v >= ((int64_t)1 << 31))
+        return NO;
+    uint32_t bw = t ? t.byteWidth : 0;
+    if (bw >= 1 && bw < 4 && v >= ((int64_t)1 << (8 * bw - 1)))
+        return NO;
+    *out = v;
+    return YES;
+    }
+
 static NSArray<XTIRBlock*>* predsOf(XTIRBlock* target, XTIRFunction* fn)
     {
     NSMutableArray<XTIRBlock*>* p = [NSMutableArray array];
@@ -163,8 +209,6 @@ static NSArray<XTIRBlock*>* predsOf(XTIRBlock* target, XTIRFunction* fn)
                 hasVecPhi = YES;
                 break;
                 }
-        if (hasVecPhi)
-            continue;
         XTIRInsn* term = H.terminator;
         if (!term || term.opcode != XTIROpCondBranch || term.operands.count < 3)
             continue;
@@ -404,7 +448,66 @@ static NSArray<XTIRBlock*>* predsOf(XTIRBlock* target, XTIRFunction* fn)
                 continue; // exit phi covers H + B only
             }
 
+        // Whether the guard holds on the entry values, so the loop runs at least
+        // once: `for (k = 0; k < 32; k++)`. Then the rotated loop needs no
+        // zero-trip path, so no exit phi, and a vector (accumulator) phi is not
+        // duplicated, which is what kept vectorised loops from rotating, with a
+        // copy per carried value at the bottom of every iteration.
+        BOOL entryTrue = NO;
+        XTIRInsn* condInsn = nil;
+        for (XTIRInsn* insn in H.instructions)
+            if (insn.result && insn.result.valueId == condId)
+                condInsn = insn;
+        if (condInsn && condInsn.opcode == XTIROpICmp && condInsn.operands.count == 2 && E.phiNodes.count == 0)
+            {
+            NSArray<XTIRBlock*>* ep = predsOf(E, fn);
+            NSMutableDictionary<NSNumber*, XTIRInsn*>* defs = [NSMutableDictionary dictionary];
+            for (XTIRBlock* bb in fn.blocks)
+                for (XTIRInsn* i in bb.instructions)
+                    if (i.result)
+                        defs[@(i.result.valueId)] = i;
+            int64_t vals[2];
+            BOOL known = ep.count == 1 && ep[0] == H;
+            for (NSUInteger k = 0; k < 2 && known; k++)
+                {
+                XTIROperand* o = condInsn.operands[k];
+                // A header phi stands for its entry value.
+                if (o.kind == XTIROperandKindUse)
+                    for (XTIRInsn* phi in H.phiNodes)
+                        if (phi.result.valueId == o.valueId)
+                            for (NSUInteger q = 0; q + 1 < phi.operands.count; q += 2)
+                                if (phi.operands[q].blockRef != L)
+                                    o = phi.operands[q + 1];
+                known = rotConst(o, defs, 0, &vals[k]);
+                }
+            if (known)
+                {
+                int64_t a = vals[0], b = vals[1];
+                switch ((XTIRICmpPredicate)condInsn.predicate)
+                    {
+                    case XTIRICmpEQ: entryTrue = a == b; break;
+                    case XTIRICmpNE: entryTrue = a != b; break;
+                    case XTIRICmpSLT: case XTIRICmpULT: entryTrue = a < b; break;
+                    case XTIRICmpSGT: case XTIRICmpUGT: entryTrue = a > b; break;
+                    case XTIRICmpSLE: case XTIRICmpULE: entryTrue = a <= b; break;
+                    case XTIRICmpSGE: case XTIRICmpUGE: entryTrue = a >= b; break;
+                    default: break;
+                    }
+                // The branch must go to the body when the guard holds.
+                if (term.operands[1].blockRef != B)
+                    entryTrue = NO;
+                }
+            // Every escaping value must be a value the latch computes.
+            for (XTIRInsn* phi in H.phiNodes)
+                for (NSUInteger q = 0; q + 1 < phi.operands.count; q += 2)
+                    if (phi.operands[q].blockRef == L && phi.operands[q + 1].kind != XTIROperandKindUse)
+                        entryTrue = NO;
+            }
+        if (hasVecPhi && !entryTrue)
+            continue;
+
         XTLoopRotCand* c = [XTLoopRotCand new];
+        c.entryTrue = entryTrue;
         c.H = H;
         c.B = B;
         c.L = L;
@@ -612,8 +715,19 @@ static NSArray<XTIRBlock*>* predsOf(XTIRBlock* target, XTIRFunction* fn)
                                                dbgLoc:ht.dbgLoc]];
 
     // 7. H keeps its (now init-using) guard + CondBranch; its phis are gone (it is
-    //    entered only from the preheader now — the back-edge is B→B).
+    //    entered only from the preheader now — the back-edge is B→B). When the
+    //    guard holds on entry, H goes straight to B: E is then reached from L
+    //    alone, and step 8 uses the latch's values in place of exit phis.
     [H.phiNodes removeAllObjects];
+    if (c.entryTrue)
+        {
+        XTIRDbgLoc* dl = H.terminator.dbgLoc;
+        [H resetTerminator];
+        [H setTerminator:[[XTIRInsn alloc] initWithOpcode:XTIROpBranch
+                                                   result:nil
+                                                 operands:@[ [XTIROperand blockWithRef:B] ]
+                                                   dbgLoc:dl]];
+        }
 
     // 7b. L's back-edge test exits to E too, so every phi E already has needs
     //     an L incoming. The value it took from H was defined outside the loop
@@ -664,6 +778,12 @@ static NSArray<XTIRBlock*>* predsOf(XTIRBlock* target, XTIRFunction* fn)
             }
         if (!esc)
             continue;
+        if (c.entryTrue)
+            {
+            // No zero-trip path: after the loop the value is the latch's.
+            exitMap[@(pid)] = @(nextMapped[i].valueId);   // a Use (checked when chosen)
+            continue;
+            }
         XTIRValueId rid = [fn allocateValueId];
         XTIRValue* v = [[XTIRValue alloc] initWithValueId:rid
                                                      type:phis[i].result.type

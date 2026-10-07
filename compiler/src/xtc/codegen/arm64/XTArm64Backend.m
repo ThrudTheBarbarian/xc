@@ -100,6 +100,15 @@
 // single straight-line vectorized loop body (no cross-iteration/-call vector
 // liveness), so caller-saved v0..v15 suffice and need no spill.
 @property (nonatomic) NSMutableDictionary<NSNumber *, NSString *> *vecReg;
+// Lane groups: four broadcasts of adjacent 32-bit loads (a[k..k+3]) become one
+// `ldr q` and by-lane multiplies. Each member broadcast → its lane and its
+// group's leader (the first in the block); each leader → @[base operand,
+// byte offset]; laneSkip holds the scalar loads and member broadcasts that
+// are not emitted.
+@property (nonatomic) NSMutableDictionary<NSNumber *, NSNumber *> *laneOf;
+@property (nonatomic) NSMutableDictionary<NSNumber *, NSNumber *> *laneLeader;
+@property (nonatomic) NSMutableDictionary<NSNumber *, NSArray *> *laneAddr;
+@property (nonatomic) NSMutableSet<NSNumber *> *laneSkip;
 @property (nonatomic) NSUInteger vecNext;
 @end
 @implementation XTArm64FnCtx
@@ -876,6 +885,19 @@ static const NSUInteger kArm64VaForwardWords = 16;
         if (stackOff < 0) {
             NSString *reg = av ? [self regName:*gpIdx forType:av.type]
                                : [NSString stringWithFormat:@"w%d", *gpIdx];
+            // A narrow value whose home a 32-bit instruction wrote has a clear
+            // top half, so it moves as `mov x, x`: the same bits, but the core
+            // eliminates a 64-bit move at rename and a 32-bit one costs a
+            // cycle — on the argument chain of every call (poly_dispatch's
+            // accumulator, 1.2x). Writers that may leave the top half stale
+            // (Trunc, a same-width cast, a call result, a parameter) keep `mov w`.
+            NSString *home = (a.kind == XTIROperandKindUse) ? ctx.homeReg[@(a.valueId)] : nil;
+            if (home && av && [reg hasPrefix:@"w"] && [home hasPrefix:@"x"]
+                && [self writesW32:ctx.defOf[@(a.valueId)]]) {
+                [self emitMove:[NSString stringWithFormat:@"x%d", *gpIdx] from:home ctx:ctx];
+                (*gpIdx)++;
+                return;
+            }
             [self materialiseOperand:a intoReg:reg ctx:ctx];
             (*gpIdx)++;
         } else {
@@ -883,6 +905,21 @@ static const NSUInteger kArm64VaForwardWords = 16;
             [self materialiseOperand:a intoReg:scratch ctx:ctx];
             [ctx.out appendFormat:@"    str %@, [sp, #%ld]\n", scratch, (long)stackOff];
         }
+    }
+}
+
+// Whether `d` always writes its (narrow) result with a 32-bit instruction,
+// which clears the register's top half.
++ (BOOL)writesW32:(XTIRInsn *)d {
+    if (!d || !d.result) return NO;
+    switch (d.opcode) {
+        case XTIROpAdd: case XTIROpSub: case XTIROpMul:
+        case XTIROpAnd: case XTIROpOr: case XTIROpXor:
+        case XTIROpShl: case XTIROpLShr: case XTIROpAShr:
+        case XTIROpLoad:
+            return YES;
+        default:
+            return NO;
     }
 }
 
@@ -2654,6 +2691,15 @@ static BOOL arm64LogicalImm(uint64_t v, int width) {
     if (phiHome && vop.kind == XTIROperandKindUse) {
         // Phi homed + value is an SSA use: materialise directly into the home.
         NSString *dest = [self homeView:phiHome forType:pty];
+        // A narrow value a 32-bit instruction wrote copies as `mov x, x`, as a
+        // call argument does (marshalArgOperand): free at rename, where a
+        // 32-bit copy costs a cycle on the loop-carried chain.
+        NSString *srcHome = ctx.homeReg[@(vop.valueId)];
+        if (!fp && [dest hasPrefix:@"w"] && [phiHome hasPrefix:@"x"] && [srcHome hasPrefix:@"x"]
+            && [self writesW32:ctx.defOf[@(vop.valueId)]]) {
+            [self emitMove:phiHome from:srcHome ctx:ctx];
+            return;
+        }
         [self loadValue:vop.valueId intoReg:dest ctx:ctx];
     } else {
         // Unhomed result, or a Const/Sym operand (a float immediate must build
@@ -3863,9 +3909,18 @@ static uint64_t satMul64(uint64_t a, uint64_t b) {
         NSUInteger b = [self vecIndexForValue:[fz[@"b"] valueId] ctx:ctx];
         NSUInteger c = [self vecIndexForValue:[fz[@"c"] valueId] ctx:ctx];
         NSUInteger d = [self vecIndexForValue:insn.result.valueId ctx:ctx];
+        // A lane of a group's vector as one factor: the by-element forms.
+        NSNumber *la = ctx.laneOf[@([fz[@"a"] valueId])], *lb = ctx.laneOf[@([fz[@"b"] valueId])];
+        NSString *fb = (lb || la) ? [NSString stringWithFormat:@"v%lu.s[%@]", (unsigned long)(lb ? b : a), lb ?: la]
+                                  : [NSString stringWithFormat:@"v%lu.%@", (unsigned long)b, arr];
+        if (lb || la) a = lb ? a : b;
         if (d != c && (d == a || d == b)) {
-            [ctx.out appendFormat:@"    mul v16.%@, v%lu.%@, v%lu.%@\n", arr, (unsigned long)a, arr, (unsigned long)b, arr];
+            [ctx.out appendFormat:@"    mul v16.%@, v%lu.%@, %@\n", arr, (unsigned long)a, arr, fb];
             [ctx.out appendFormat:@"    add v%lu.%@, v%lu.%@, v16.%@\n", (unsigned long)d, arr, (unsigned long)c, arr, arr];
+        } else if (lb || la) {
+            if (d != c)
+                [ctx.out appendFormat:@"    orr v%lu.16b, v%lu.16b, v%lu.16b\n", (unsigned long)d, (unsigned long)c, (unsigned long)c];
+            [ctx.out appendFormat:@"    mla v%lu.%@, v%lu.%@, %@\n", (unsigned long)d, arr, (unsigned long)a, arr, fb];
         } else {
             if (d != c)
                 [ctx.out appendFormat:@"    orr v%lu.16b, v%lu.16b, v%lu.16b\n", (unsigned long)d, (unsigned long)c, (unsigned long)c];
@@ -3965,6 +4020,8 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
 {
     // Skip defs folded into a fused successor (their result is never read).
     if (insn.result && [ctx.fusedAway containsObject:@(insn.result.valueId)]) return;
+    // Skip a lane group's scalar loads and member broadcasts (its leader loads all four).
+    if (insn.result && [ctx.laneSkip containsObject:@(insn.result.valueId)]) return;
     // Skip FieldAddr/ElementAddr folded into a Load/Store's addressing mode.
     if (insn.result && [ctx.foldedAddr containsObject:@(insn.result.valueId)]) return;
     // Skip an ICmp fused into its block's CondBranch (emitted there as cmp+b.cond).
@@ -5823,8 +5880,19 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
         case XTIROpVSplat: {      // operands: [scalar] — broadcast to all lanes
             if (insn.operands.count < 1 || !insn.result) break;
             NSString *arr = [self neonArrFor:insn.result.type.pointeeType];
-            NSString *s = [self operandReg:insn.operands[0] intoScratch:@"w16" ctx:ctx];
             NSUInteger n = [self vecIndexForValue:insn.result.valueId ctx:ctx];
+            NSArray *la = ctx.laneAddr[@(insn.result.valueId)];
+            if (la) {
+                // A lane group's leader: the four elements in one load.
+                NSString *b = [self operandReg:la[0] intoScratch:@"x16" ctx:ctx];
+                long off = [la[1] longValue];
+                if (off >= 0 && off % 16 == 0)
+                    [ctx.out appendFormat:@"    ldr q%lu, [%@, #%ld]\n", (unsigned long)n, b, off];
+                else
+                    [ctx.out appendFormat:@"    ldur q%lu, [%@, #%ld]\n", (unsigned long)n, b, off];
+                break;
+            }
+            NSString *s = [self operandReg:insn.operands[0] intoScratch:@"w16" ctx:ctx];
             [ctx.out appendFormat:@"    dup v%lu.%@, %@\n", (unsigned long)n, arr, s];
             break;
         }
@@ -5846,6 +5914,15 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
             NSUInteger a = [self vecIndexForValue:insn.operands[0].valueId ctx:ctx];
             NSUInteger b = [self vecIndexForValue:insn.operands[1].valueId ctx:ctx];
             NSUInteger d = [self vecIndexForValue:insn.result.valueId ctx:ctx];
+            NSNumber *la = insn.opcode == XTIROpVMul ? ctx.laneOf[@(insn.operands[0].valueId)] : nil;
+            NSNumber *lb = insn.opcode == XTIROpVMul ? ctx.laneOf[@(insn.operands[1].valueId)] : nil;
+            if (lb || la) {
+                // One factor is a lane of a group's vector: multiply by element.
+                NSUInteger v = lb ? a : b, g = lb ? b : a;
+                [ctx.out appendFormat:@"    %@ v%lu.%@, v%lu.%@, v%lu.s[%@]\n",
+                 mnem, (unsigned long)d, arr, (unsigned long)v, arr, (unsigned long)g, lb ?: la];
+                break;
+            }
             [ctx.out appendFormat:@"    %@ v%lu.%@, v%lu.%@, v%lu.%@\n",
              mnem, (unsigned long)d, arr, (unsigned long)a, arr, (unsigned long)b, arr];
             break;
@@ -6845,6 +6922,95 @@ static BOOL arm64NamesFrameReg(NSString *t) {
 // — so a function mixing float scalars and an int reduction can't alias. A
 // vectorised loop body contains no calls (the recogniser forbids them), so
 // these caller-saved registers are safe across the loop.
+// Lane groups (see laneOf). A broadcast qualifies when it splats a 32-bit
+// scalar Load in its block that nothing else reads, every use of the
+// broadcast is a vector multiply, and the vector is four lanes. Four of them
+// whose loads read `base`, `base+1`, `base+2`, `base+3` (elements) from one
+// memory state (so no store comes between) form a group; the vector load
+// replaces the four scalar ones at the first broadcast, and each multiply
+// reads its lane: the dup and three of every four loads go.
++ (void)computeLaneGroupsForCtx:(XTArm64FnCtx *)ctx {
+    XTIRFunction *fn = ctx.fn;
+    ctx.laneOf = [NSMutableDictionary dictionary];
+    ctx.laneLeader = [NSMutableDictionary dictionary];
+    ctx.laneAddr = [NSMutableDictionary dictionary];
+    ctx.laneSkip = [NSMutableSet set];
+    NSCountedSet<NSNumber *> *uses = [NSCountedSet set];
+    NSMutableDictionary<NSNumber *, NSMutableArray<XTIRInsn *> *> *usersOf = [NSMutableDictionary dictionary];
+    NSMutableDictionary<NSNumber *, XTIRInsn *> *defOf = [NSMutableDictionary dictionary];
+    for (XTIRBlock *bb in fn.blocks) {
+        NSMutableArray<XTIRInsn *> *all = [NSMutableArray arrayWithArray:bb.phiNodes];
+        [all addObjectsFromArray:bb.instructions];
+        if (bb.terminator) [all addObject:bb.terminator];
+        for (XTIRInsn *insn in all) {
+            if (insn.result) defOf[@(insn.result.valueId)] = insn;
+            for (XTIROperand *o in insn.operands)
+                if (o.kind == XTIROperandKindUse) {
+                    [uses addObject:@(o.valueId)];
+                    NSMutableArray *a = usersOf[@(o.valueId)];
+                    if (!a) { a = [NSMutableArray array]; usersOf[@(o.valueId)] = a; }
+                    [a addObject:insn];
+                }
+        }
+    }
+    for (XTIRBlock *bb in fn.blocks) {
+        // Candidates in block order: @[splat, base value id, element offset, memory id].
+        NSMutableArray<NSArray *> *cands = [NSMutableArray array];
+        NSMutableSet<XTIRInsn *> *inBlock = [NSMutableSet setWithArray:bb.instructions];
+        for (XTIRInsn *sp in bb.instructions) {
+            if (sp.opcode != XTIROpVSplat || !sp.result || sp.operands.count < 1) continue;
+            if (sp.result.type.vecBytes != 16) continue;
+            XTIRType *lane = sp.result.type.pointeeType;
+            if (!lane || lane.byteWidth != 4) continue;
+            XTIROperand *so = sp.operands[0];
+            if (so.kind != XTIROperandKindUse || [uses countForObject:@(so.valueId)] != 1) continue;
+            XTIRInsn *ld = defOf[@(so.valueId)];
+            if (!ld || ld.opcode != XTIROpLoad || ![inBlock containsObject:ld] || ld.operands.count < 2) continue;
+            if (ld.operands[0].kind != XTIROperandKindUse || ld.operands[1].kind != XTIROperandKindUse) continue;
+            BOOL allMul = [uses countForObject:@(sp.result.valueId)] > 0;
+            for (XTIRInsn *u in usersOf[@(sp.result.valueId)])
+                if (u.opcode != XTIROpVMul) allMul = NO;
+            if (!allMul) continue;
+            XTIRValueId base = ld.operands[0].valueId;
+            int64_t off = 0;
+            XTIRInsn *ad = defOf[@(base)];
+            if (ad && ad.opcode == XTIROpElementAddr && ad.operands.count == 2 &&
+                ad.operands[0].kind == XTIROperandKindUse && ad.operands[1].kind == XTIROperandKindImmI &&
+                ad.result.type.pointeeType.byteWidth == 4) {
+                base = ad.operands[0].valueId;
+                off = ad.operands[1].intValue;
+            }
+            [cands addObject:@[ sp, @(base), @(off), @(ld.operands[1].valueId) ]];
+        }
+        NSMutableSet<NSNumber *> *taken = [NSMutableSet set];
+        for (NSUInteger i = 0; i < cands.count; i++) {
+            XTIRInsn *lead = cands[i][0];
+            if ([taken containsObject:@(lead.result.valueId)]) continue;
+            int64_t o0 = [cands[i][2] longLongValue];
+            if (o0 * 4 < -256 || o0 * 4 + 16 > 4096 || (o0 * 4 > 255 && (o0 * 4) % 16 != 0)) continue;
+            XTIRInsn *mem[4] = { nil, nil, nil, nil };
+            for (NSUInteger j = i; j < cands.count; j++) {
+                if (![cands[j][1] isEqual:cands[i][1]] || ![cands[j][3] isEqual:cands[i][3]]) continue;
+                int64_t d = [cands[j][2] longLongValue] - o0;
+                XTIRInsn *spj = cands[j][0];
+                if (d < 0 || d > 3 || mem[d] || [taken containsObject:@(spj.result.valueId)]) continue;
+                mem[d] = spj;
+            }
+            if (!mem[0] || !mem[1] || !mem[2] || !mem[3] || mem[0] != lead) continue;
+            for (int k = 0; k < 4; k++) {
+                NSNumber *v = @(mem[k].result.valueId);
+                [taken addObject:v];
+                ctx.laneOf[v] = @(k);
+                ctx.laneLeader[v] = @(lead.result.valueId);
+                [ctx.laneSkip addObject:@(mem[k].operands[0].valueId)];      // its scalar load
+                if (k) [ctx.laneSkip addObject:v];                             // a member broadcast
+            }
+            ctx.laneAddr[@(lead.result.valueId)] = @[ [XTIROperand useWithValueId:(XTIRValueId)[cands[i][1] unsignedLongLongValue]],
+                                                      @(o0 * 4) ];
+        }
+    }
+}
+
 + (void)allocateVectorRegistersForCtx:(XTArm64FnCtx *)ctx {
     XTIRFunction *fn = ctx.fn;
     // All vector-typed SSA values (phi results + vector-op results).
@@ -6865,6 +7031,9 @@ static BOOL arm64NamesFrameReg(NSString *t) {
             for (XTIROperand *o in p.operands)
                 if (o.kind == XTIROperandKindUse) canon[@(o.valueId)] = @(p.result.valueId);
         }
+    // A lane group's broadcasts share the one register the vector load fills.
+    for (NSNumber *v in ctx.laneLeader)
+        if (![ctx.laneLeader[v] isEqual:v]) canon[v] = ctx.laneLeader[v];
     XTIRValueId (^classOf)(XTIRValueId) = ^XTIRValueId(XTIRValueId v) {
         NSNumber *c = canon[@(v)];
         return c ? c.unsignedIntegerValue : v;
@@ -6882,6 +7051,11 @@ static BOOL arm64NamesFrameReg(NSString *t) {
     };
     NSInteger pos = 0;
     NSMutableDictionary<NSNumber *, XTIRInsn *> *vecDef = [NSMutableDictionary dictionary];
+    // Per VALUE (not class): where it is defined and last used; and per phi
+    // class, where its first non-phi member (the back-edge value) is written.
+    NSMutableDictionary<NSNumber *, NSNumber *> *valDef = [NSMutableDictionary dictionary];
+    NSMutableDictionary<NSNumber *, NSNumber *> *valLast = [NSMutableDictionary dictionary];
+    NSMutableSet<NSNumber *> *vecPhis = [NSMutableSet set];
     NSMutableArray<NSNumber *> *blkPosStart = [NSMutableArray array];   // per-block first linear pos
     NSMutableArray<NSNumber *> *blkPosEnd = [NSMutableArray array];     // per-block last linear pos
     for (XTIRBlock *bb in fn.blocks) {
@@ -6892,9 +7066,16 @@ static BOOL arm64NamesFrameReg(NSString *t) {
         if (bb.terminator) [all addObject:bb.terminator];
         for (XTIRInsn *insn in all) {
             if (insn.result) touch(insn.result.valueId, pos);
-            if (insn.result && insn.result.type.kind == XTIRTypeKindVec) vecDef[@(insn.result.valueId)] = insn;
+            if (insn.result && insn.result.type.kind == XTIRTypeKindVec) {
+                vecDef[@(insn.result.valueId)] = insn;
+                valDef[@(insn.result.valueId)] = @(pos);
+                if (insn.opcode == XTIROpPhi) [vecPhis addObject:@(insn.result.valueId)];
+            }
             for (XTIROperand *o in insn.operands)
-                if (o.kind == XTIROperandKindUse) touch(o.valueId, pos);
+                if (o.kind == XTIROperandKindUse) {
+                    touch(o.valueId, pos);
+                    valLast[@(o.valueId)] = @(pos);
+                }
             pos++;
         }
         [blkPosEnd addObject:@(pos > 0 ? pos - 1 : 0)];
@@ -6940,12 +7121,29 @@ static BOOL arm64NamesFrameReg(NSString *t) {
     for (int r = 18; r <= 31; r++) [freePool addObject:@(r)];
     NSMutableArray<NSNumber *> *active = [NSMutableArray array];   // class ids, by ascending end
     NSMutableDictionary<NSNumber *, NSNumber *> *regOfClass = [NSMutableDictionary dictionary];
+    // Where each phi class's back-edge value is written: the first position,
+    // after the phi, at which a non-phi member of the class is defined.
+    NSMutableDictionary<NSNumber *, NSNumber *> *backDef = [NSMutableDictionary dictionary];
+    for (NSNumber *v in valDef) {
+        NSNumber *c = @(classOf(v.unsignedIntegerValue));
+        if ([vecPhis containsObject:v] || ![vecPhis containsObject:c]) continue;
+        // After the phi: the initial value (written before the loop) is a
+        // member too.
+        if (!valDef[c] || valDef[v].integerValue <= valDef[c].integerValue) continue;
+        if (!backDef[c] || valDef[v].integerValue < backDef[c].integerValue) backDef[c] = valDef[v];
+    }
+    // Classes running in a phi class's register between the phi's last read and
+    // the back-edge value's write (the partial sums of an unrolled reduction):
+    // the register is the phi class's, so their expiry does not free it.
+    NSMutableSet<NSNumber *> *borrowed = [NSMutableSet set];
     for (NSNumber *cls in classes) {
         NSInteger start = lo[cls].integerValue;
         // Expire classes whose interval ended before this one starts.
         NSMutableArray<NSNumber *> *stillActive = [NSMutableArray array];
         for (NSNumber *a in active) {
-            if (hi[a].integerValue < start) [freePool addObject:regOfClass[a]];
+            if (hi[a].integerValue < start) {
+                if (![borrowed containsObject:a]) [freePool addObject:regOfClass[a]];
+            }
             else [stillActive addObject:a];
         }
         [active setArray:stillActive];
@@ -6975,9 +7173,22 @@ static BOOL arm64NamesFrameReg(NSString *t) {
                     if ((pass == 0) == isProduct) continue;
                     NSNumber *ocls = @(classOf(o.valueId));
                     if ([ocls isEqual:cls] || !regOfClass[ocls] || ![active containsObject:ocls]) continue;
-                    if (hi[ocls].integerValue != start) continue;
+                    if (hi[ocls].integerValue != start) {
+                        // The accumulator phi itself, read for the last time
+                        // here: its register is free until the back-edge value
+                        // is written, so a chain that ends by then can run in it.
+                        if ([vecPhis containsObject:@(o.valueId)] && [ocls isEqual:@(o.valueId)] &&
+                            valLast[@(o.valueId)].integerValue == start && backDef[ocls] &&
+                            hi[cls].integerValue <= backDef[ocls].integerValue) {
+                            reg = regOfClass[ocls];
+                            [borrowed addObject:cls];
+                            break;
+                        }
+                        continue;
+                    }
                     reg = regOfClass[ocls];
                     [active removeObject:ocls];
+                    if ([borrowed containsObject:ocls]) [borrowed addObject:cls];
                     break;
                 }
             }
@@ -7001,6 +7212,7 @@ static BOOL arm64NamesFrameReg(NSString *t) {
     ctx.module = mod;
     ctx.vecReg = [NSMutableDictionary dictionary];
     ctx.vecNext = 0;
+    [self computeLaneGroupsForCtx:ctx];
     [self allocateVectorRegistersForCtx:ctx];
     // Emit into a per-function buffer so the spill peephole can run over
     // this function's text in isolation (slot offsets are per-function),
