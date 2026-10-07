@@ -7,6 +7,28 @@
 // which says where the block object keeps lo, hi, each captured array, each
 // global it uses and each reduction. The GPU runtimes share all of it, and
 // differ only in how they compile a kernel, move the data and launch.
+//
+// From 0.73 auto's choices are KEPT, in the program's own settings store
+// (Settings.standard(<program name>)), so the measuring is paid once per
+// machine rather than on every run. Two tables:
+//
+//   par.<block> = cpu | gpu | auto | <N>     the user's: read, never written;
+//   par = …                                  <N> runs the block on the GPU from
+//                                            N items up. `par` is every block.
+//   par.learned.<hw>.<block>.<code> = <cpuUpTo>,<gpuFrom>
+//                                            auto's: the largest size the CPU
+//                                            won at and the smallest the GPU
+//                                            won at (-1: none yet).
+//
+// <hw> hashes the GPU (interface, name, ids) and the CPU (model, threads), so
+// a different GPU learns afresh and the old one's entries wait for it; <code>
+// hashes the block's GPU version, so a changed block learns afresh. A size
+// outside the learned bounds is decided without measuring; one between them
+// is measured (sizes within a factor of two count as one) and narrows them.
+// The order: XC_PAR, then Par.device, then the user's table, then the learned
+// one, then measuring.
+#import "Settings.xc"
+#import "Process.xc"
 #if ARCH_wasm32
 // No C library on wasm32: the bytes, one at a time (reduction partials are small).
 pointer memcpy(pointer dst, pointer src, u64 n)
@@ -29,8 +51,10 @@ i32 QueryPerformanceFrequency(i64* perSecond);
 struct _ParTimespec { i64 sec; i64 nsec; }
 i32 clock_gettime(i32 clock, u8* ts);
 #else
-// Darwin's monotonic clock, in nanoseconds.
+// Darwin's monotonic clock, in nanoseconds, and the CPU's model for the
+// hardware key.
 u64 clock_gettime_nsec_np(i32 clock);
+i32 sysctlbyname(u8* name, pointer oldp, u64* oldlenp, pointer newp, u64 newlen);
 #endif
 
 // Each block seen so far, by its name (the parName() string): the device it
@@ -43,6 +67,17 @@ u32 gParGpuRuns[64];    // runs so far on each device: the first is a warm-up
 u32 gParCpuRuns[64];
 u32 gParBlocks;
 i32 gParAll;            // Par.device("par", …): every block without its own
+// The kept choices (see the top): the user's setting per block (0 unread, 1
+// cpu, 2 gpu, 3 auto, 4 from gParUserN items up, 5 none), the learned bounds
+// (-1 none) and whether they were read, the size being measured, the last size.
+i32 gParUser[64];
+i64 gParUserN[64];
+i64 gParCpuUpTo[64];
+i64 gParGpuFrom[64];
+bool gParLearned[64];
+i64 gParMeasN[64];
+i64 gParLastN[64];
+bool gParMeasuring[64]; // this run is one auto measures (not decided by a setting or the bounds)
 
 // A kernel's header line, read, and the run planned over [lo, hi): one item
 // per thread, unless the range is huge — or the block has reductions, whose
@@ -97,6 +132,8 @@ class ParLayout : Object
 class ParDevice
     {
     static i32 _mode;            // XC_PAR: 0 unread, 1 cpu, 2 gpu, 3 auto, 4 unset
+    static Settings* _store;     // the program's settings store, opened on first use
+    static String* _hw;          // the hardware key (hex), once the GPU is known
 
     static i64 nowUs(void)
         {
@@ -139,6 +176,14 @@ class ParDevice
         gParCpuUs[i] = (i64)-1;
         gParGpuRuns[i] = (u32)0;
         gParCpuRuns[i] = (u32)0;
+        gParUser[i] = (i32)0;
+        gParUserN[i] = (i64)0;
+        gParCpuUpTo[i] = (i64)-1;
+        gParGpuFrom[i] = (i64)-1;
+        gParLearned[i] = false;
+        gParMeasN[i] = (i64)0;
+        gParLastN[i] = (i64)0;
+        gParMeasuring[i] = false;
         gParBlocks = gParBlocks + (u32)1;
         return i;
         }
@@ -170,6 +215,202 @@ class ParDevice
     // under a millisecond stays there, since the GPU's fixed costs alone are
     // more; otherwise the GPU is measured too, and the faster kept. Each
     // device's first run is a warm-up, not counted.
+    // ── the kept choices ─────────────────────────────────────────────────
+
+    static Settings* store(void)
+        {
+        if (_store == (Settings*)0)
+            {
+            String* name = String.withCString("xc-program");
+            Array* av = Process.arguments();
+            if (av != (Array*)0 && av.count() > (u32)0)
+                {
+                String* a0 = ((String*)av.get((u32)0)).lastPathComponent();
+                if (a0.hasSuffix(String.withCString(".exe")))
+                    a0 = a0.substringBytes((u32)0, a0.byteLength() - (u32)4);
+                if (a0.byteLength() > (u32)0)
+                    name = a0;
+                }
+            _store = Settings.standard(name);
+            }
+        return _store;
+        }
+
+    // FNV-1a over the bytes of s, from h.
+    static u32 hash(u8* s, u32 h)
+        {
+        for (u32 k = (u32)0; s[k] != (u8)0; k = k + (u32)1)
+            h = (h ^ (u32)s[k]) * (u32)16777619;
+        return h;
+        }
+
+    // The CPU's part of the hardware key: its model where the system says,
+    // and how many threads it runs.
+    static String* cpuIdentity(void)
+        {
+#if ARCH_wasm32
+        String* s = String.withCString("cpu:wasm:");     // no threads on wasm32: the GPU is the key
+#else
+        String* s = String.withFormat("cpu:%d:", Thread.cpuCount());
+#endif
+#if ARCH_win64
+        s.append(Platform.env(String.withCString("PROCESSOR_IDENTIFIER")));
+#elif ARCH_x86_64 || PLATFORM_android
+        String* info = Files.readText(String.withCString("/proc/cpuinfo"));
+        if (info != (String*)0)
+            {
+            Array* lines = info.splitOnByte((u8)10);
+            for (u32 k = (u32)0; k < lines.count(); k = k + (u32)1)
+                {
+                String* l = (String*)lines.get(k);
+                if (l.hasPrefix(String.withCString("model name")) || l.hasPrefix(String.withCString("Hardware")))
+                    {
+                    u32 c = l.indexOfByte((u8)':');
+                    s.append(c != String.notFound() ? l.substringFromByte(c + (u32)1).trimmed() : l);
+                    break;
+                    }
+                }
+            }
+#elif ARCH_arm64
+        u8 brand[128];
+        u64 len = (u64)127;
+        brand[0] = (u8)0;
+        if (sysctlbyname("machdep.cpu.brand_string", (pointer)&brand[0], &len, (pointer)0, (u64)0) == (i32)0)
+            {
+            brand[127] = (u8)0;
+            s.appendCString(&brand[0]);
+            }
+#endif
+        return s;
+        }
+
+    // Whether choose() will want the learned table, and so the GPU's identity
+    // (Par.run asks the runtime only then: opening a GPU costs something).
+    static bool needsHardware(ParChunk* proto)
+        {
+        if (_hw != (String*)0)
+            return false;
+        if (_mode == (i32)0)
+            choose(proto, (i64)-1);       // reads XC_PAR
+        if (_mode == (i32)1 || _mode == (i32)2)
+            return false;
+        u8* src = proto.gpuSource();
+        if (src == (u8*)0 || src[0] == (u8)0)
+            return false;
+        u32 i = slot(proto.parName());
+        if (_mode == (i32)4)
+            {
+            i32 dev = gParSet[i];
+            if (dev < (i32)0 && gParAll > (i32)0)
+                dev = gParAll - (i32)1;
+            if (dev > (i32)0)
+                return false;
+            if (userSetting(i) != (i32)3 && userSetting(i) != (i32)5)
+                return false;
+            }
+        return true;
+        }
+
+    // The GPU's identity from its runtime ("" for none): the hardware key.
+    static void setHardware(String* gpu)
+        {
+        String* both = String.withString(gpu);
+        both.appendCString("|");
+        both.append(cpuIdentity());
+        _hw = String.withFormat("%08x", hash(both.cString(), (u32)2166136261));
+        if (reporting())
+            Log.info("par: hardware key %s (%s)", _hw.cString(), both.cString());
+        }
+
+    // The user's setting for block i: par.<block>, else par.
+    static i32 userSetting(u32 i)
+        {
+        if (gParUser[i] != (i32)0)
+            return gParUser[i];
+        Settings* st = store();
+        String* key = String.withCString("par.");
+        key.appendCString(gParBlock[i]);
+        String* v = st.get(key);
+        if (v == (String*)0)
+            v = st.get(String.withCString("par"));
+        i32 u = (i32)5;
+        if (v != (String*)0)
+            {
+            if (v.equals(String.withCString("cpu"))) u = (i32)1;
+            else if (v.equals(String.withCString("gpu"))) u = (i32)2;
+            else if (v.equals(String.withCString("auto"))) u = (i32)3;
+            else if (v.byteLength() > (u32)0 && v.byteAt((u32)0) >= (u8)'0' && v.byteAt((u32)0) <= (u8)'9')
+                {
+                u32 at = (u32)0;
+                gParUserN[i] = num(v.cString(), &at);
+                u = (i32)4;
+                }
+            }
+        gParUser[i] = u;
+        return u;
+        }
+
+    static String* learnedKey(u32 i, ParChunk* proto)
+        {
+        String* key = String.withCString("par.learned.");
+        key.append(_hw);
+        key.appendCString(".");
+        key.appendCString(gParBlock[i]);
+        key.appendFormat(".%08x", hash(proto.gpuSource(), (u32)2166136261));
+        return key;
+        }
+
+    static void readLearned(u32 i, ParChunk* proto)
+        {
+        if (gParLearned[i] || _hw == (String*)0)
+            return;
+        gParLearned[i] = true;
+        String* v = store().get(learnedKey(i, proto));
+        if (v == (String*)0)
+            return;
+        u8* c = v.cString();
+        u32 at = (u32)0;
+        bool neg = c[at] == (u8)'-';
+        if (neg) at = at + (u32)1;
+        i64 a = num(c, &at);
+        gParCpuUpTo[i] = neg ? (i64)-1 : a;
+        if (c[at] != (u8)',')
+            return;
+        at = at + (u32)1;
+        neg = c[at] == (u8)'-';
+        if (neg) at = at + (u32)1;
+        i64 b = num(c, &at);
+        gParGpuFrom[i] = neg ? (i64)-1 : b;
+        }
+
+    // A measured run's verdict at size n: the bounds move to take it in (a
+    // contradicting bound is dropped, the newer evidence kept), and are saved.
+    static void learn(u32 i, ParChunk* proto, i64 n, bool gpuWon)
+        {
+        if (_hw == (String*)0 || n <= (i64)0)
+            return;
+        if (gpuWon)
+            {
+            if (gParGpuFrom[i] < (i64)0 || n < gParGpuFrom[i])
+                gParGpuFrom[i] = n;
+            if (gParCpuUpTo[i] >= gParGpuFrom[i])
+                gParCpuUpTo[i] = (i64)-1;
+            }
+        else
+            {
+            if (n > gParCpuUpTo[i])
+                gParCpuUpTo[i] = n;
+            if (gParGpuFrom[i] >= (i64)0 && gParGpuFrom[i] <= gParCpuUpTo[i])
+                gParGpuFrom[i] = (i64)-1;
+            }
+        Settings* st = store();
+        st.set(learnedKey(i, proto), String.withFormat("%ld,%ld", gParCpuUpTo[i], gParGpuFrom[i]));
+        st.save();
+        if (reporting())
+            Log.info("par: %s: learned the %s wins at %ld items (CPU up to %ld, GPU from %ld)", gParBlock[i],
+                     gpuWon ? "GPU" : "CPU", n, gParCpuUpTo[i], gParGpuFrom[i]);
+        }
+
     static i32 choose(ParChunk* proto, i64 n)
         {
         if (_mode == (i32)0)
@@ -179,9 +420,11 @@ class ParDevice
                   : v.equals(String.withCString("gpu")) ? (i32)2
                   : v.equals(String.withCString("auto")) ? (i32)3 : (i32)4;
             }
-        if (_mode == (i32)1 || _mode == (i32)2)
+        if (_mode == (i32)1 || _mode == (i32)2 || n < (i64)0)
             return _mode;
         u32 i = slot(proto.parName());
+        gParLastN[i] = n;
+        gParMeasuring[i] = false;
         i32 dev = gParSet[i];
         if (_mode == (i32)4 && dev < (i32)0 && gParAll > (i32)0)
             dev = gParAll - (i32)1;
@@ -190,6 +433,34 @@ class ParDevice
         u8* src = proto.gpuSource();
         if (src == (u8*)0 || src[0] == (u8)0)
             return (i32)1;
+        if (_mode == (i32)4)
+            {
+            i32 u = userSetting(i);
+            if (u == (i32)1 || u == (i32)2)
+                return u;
+            if (u == (i32)4)
+                return n >= gParUserN[i] ? (i32)2 : (i32)1;
+            }
+        // The learned bounds decide a size outside them, with no measuring.
+        readLearned(i, proto);
+        if (gParGpuFrom[i] >= (i64)0 && n >= gParGpuFrom[i])
+            return (i32)2;
+        if (gParCpuUpTo[i] >= (i64)0 && n <= gParCpuUpTo[i])
+            return (i32)1;
+        // Measuring: a size more than twice or less than half the one being
+        // measured starts again (a block whose size never repeats would
+        // otherwise never finish), the devices already warm.
+        if (gParMeasN[i] > (i64)0 && (n > gParMeasN[i] * (i64)2 || n * (i64)2 < gParMeasN[i]))
+            {
+            gParCpuUs[i] = (i64)-1;
+            gParGpuUs[i] = (i64)-1;
+            gParCpuRuns[i] = (u32)1;
+            gParGpuRuns[i] = gParGpuRuns[i] > (u32)0 ? (u32)1 : (u32)0;
+            gParMeasN[i] = n;
+            }
+        if (gParMeasN[i] == (i64)0)
+            gParMeasN[i] = n;
+        gParMeasuring[i] = true;
         if (gParCpuUs[i] < (i64)0 || gParCpuUs[i] < (i64)1000)
             return (i32)1;
         if (gParGpuUs[i] < (i64)0)
@@ -205,16 +476,22 @@ class ParDevice
     static void ranOnCpu(ParChunk* proto, i64 us)
         {
         u32 i = slot(proto.parName());
-        gParCpuRuns[i] = gParCpuRuns[i] + (u32)1;
-        bool measured = gParCpuUs[i] < (i64)0 && gParCpuRuns[i] >= (u32)2;
+        // Only a run auto measures counts: one a setting or the learned bounds
+        // decided was not compared with anything, and may be another size.
+        if (gParMeasuring[i])
+            gParCpuRuns[i] = gParCpuRuns[i] + (u32)1;
+        bool measured = gParMeasuring[i] && gParCpuUs[i] < (i64)0 && gParCpuRuns[i] >= (u32)2;
         if (measured)
             gParCpuUs[i] = us;
+        bool gpuable = proto.gpuSource() != (u8*)0 && proto.gpuSource()[0] != (u8)0;
         if (reporting())
             {
             Log.info("par: %s: %ld us on the CPU", gParBlock[i], us);
-            if (measured && us < (i64)1000 && proto.gpuSource() != (u8*)0 && proto.gpuSource()[0] != (u8)0)
+            if (measured && us < (i64)1000 && gpuable)
                 Log.info("par: %s: auto keeps it on the CPU (%ld us, too short for a GPU to win)", gParBlock[i], us);
             }
+        if (measured && us < (i64)1000 && gpuable)
+            learn(i, proto, gParLastN[i], false);
         }
 
     // A GPU run: took is the whole run (copies in and out included, the
@@ -222,10 +499,15 @@ class ParDevice
     static void ranOnGpu(ParChunk* proto, ParLayout* l, i64 took, i64 gpuUs)
         {
         u32 bi = slot(proto.parName());
-        gParGpuRuns[bi] = gParGpuRuns[bi] + (u32)1;
-        bool decided = gParGpuUs[bi] < (i64)0 && gParGpuRuns[bi] >= (u32)2;
+        if (gParMeasuring[bi])
+            gParGpuRuns[bi] = gParGpuRuns[bi] + (u32)1;
+        bool decided = gParMeasuring[bi] && gParGpuUs[bi] < (i64)0 && gParGpuRuns[bi] >= (u32)2;
         if (decided)
+            {
             gParGpuUs[bi] = took;
+            if (gParCpuUs[bi] >= (i64)0)
+                learn(bi, proto, l.n, took <= gParCpuUs[bi]);
+            }
         if (!reporting())
             return;
         if (decided && gParCpuUs[bi] >= (i64)0)

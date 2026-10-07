@@ -103,6 +103,10 @@ class Par
         if (hi <= lo)
             return;
 #if (ARCH_arm64 && !PLATFORM_ios) || ARCH_x86_64 || ARCH_wasm32
+        // The GPU's identity, for the hardware key auto keeps its choices
+        // under, asked of the runtime only when choose() will look them up.
+        if (ParDevice.needsHardware(proto))
+            ParDevice.setHardware(Par.gpuIdentity());
         if (ParDevice.choose(proto, hi - lo) == (i32)2)
             {
 #if ARCH_wasm32
@@ -130,6 +134,28 @@ class Par
         Par.runCpu(proto, lo, hi);
 #endif
         }
+
+#if (ARCH_arm64 && !PLATFORM_ios) || ARCH_x86_64 || ARCH_wasm32
+    // The GPU this program would run on, as its runtime names it ("" for none).
+    static String* gpuIdentity(void)
+        {
+#if ARCH_wasm32
+        return ParWebGpu.identity();
+#elif ARCH_win64
+        if (!ParDevice.vulkanOnly())
+            {
+            String* c = ParCuda.identity();
+            if (c.byteLength() > (u32)0)
+                return c;
+            }
+        return ParVulkan.identity();
+#elif ARCH_x86_64 || PLATFORM_android
+        return ParVulkan.identity();
+#else
+        return ParMetal.identity();
+#endif
+        }
+#endif
 
     // Which device a block runs on: "cpu", "gpu" or "auto" (measure both
     // and keep the faster), by the block's name — its source name, or

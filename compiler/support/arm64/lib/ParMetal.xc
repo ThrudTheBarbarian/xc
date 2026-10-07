@@ -81,6 +81,20 @@ class ParMetal
         return _queue != (pointer)0;
         }
 
+    // The GPU, for the hardware key auto's learned choices are kept under
+    // (ParDevice): "metal:<device name>", or "" when there is none.
+    static String* identity(void)
+        {
+        if (!start())
+            return String.withCString("");
+        pointer nm = ((parMsg0_t*)_send)(_dev, sel("name"));
+        u8* c = nm != (pointer)0 ? (u8*)((parMsg0_t*)_send)(nm, sel("UTF8String")) : (u8*)0;
+        String* s = String.withCString("metal:");
+        if (c != (u8*)0)
+            s.appendCString(c);
+        return s;
+        }
+
     static pointer nsString(u8* c)
         {
         return ((parMsgP_t*)_send)(_cls("NSString"), sel("stringWithUTF8String:"), (pointer)c);

@@ -20,6 +20,7 @@ void free(pointer p);
 
 typedef i32 cuInit_t(u32 flags);
 typedef i32 cuDeviceGet_t(i32* dev, i32 ordinal);
+typedef i32 cuDeviceGetName_t(u8* name, i32 len, i32 dev);
 typedef i32 cuCtxCreate_t(pointer* ctx, u32 flags, i32 dev);
 typedef i32 cuModuleLoadDataEx_t(pointer* mod, pointer image, u32 n, pointer options, pointer values);
 typedef i32 cuModuleGetFunction_t(pointer* fn, pointer mod, u8* name);
@@ -43,6 +44,7 @@ i64 gParCuCap[52];
 class ParCuda
     {
     static i32 _state;          // 0 not tried, 1 ready, 2 no driver or no GPU
+    static String* _identity;   // "cuda:<device name>", for auto's hardware key (ParDevice)
     static pointer _ctx;
     static cuModuleLoadDataEx_t* _load;
     static cuModuleGetFunction_t* _getFunction;
@@ -83,8 +85,23 @@ class ParCuda
         if (init((u32)0) != (i32)0 || deviceGet(&dev, (i32)0) != (i32)0 || ctxCreate(&ctx, (u32)0, dev) != (i32)0)
             return false;
         _ctx = ctx;
+        _identity = String.withCString("cuda:");
+        cuDeviceGetName_t* getName = (cuDeviceGetName_t*)GetProcAddress(lib, "cuDeviceGetName");
+        u8 nm[256];
+        nm[0] = (u8)0;
+        if (getName != (cuDeviceGetName_t*)0 && getName(&nm[0], (i32)255, dev) == (i32)0)
+            _identity.appendCString(&nm[0]);
         _state = (i32)1;
         return true;
+        }
+
+    // The GPU, for the hardware key auto's learned choices are kept under, or
+    // "" when CUDA has none.
+    static String* identity(void)
+        {
+        if (!start() || _identity == (String*)0)
+            return String.withCString("");
+        return _identity;
         }
 
     // The compiled kernel for a source, made once (nil if it did not compile).

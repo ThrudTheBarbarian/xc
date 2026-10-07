@@ -236,17 +236,31 @@ the GPU, however few items it has. Each device's first run of a block is a
 warm-up and is not counted: it pays one-off costs, such as building the GPU
 version and starting threads, that later runs do not.
 
-To choose instead:
+From 0.73 what `auto` measures is kept, so a program measures once on a machine
+rather than on every run. It is kept in the program's own settings store (see
+[Settings](/compiler/api/settings/): the system's store on macOS, Windows and
+the web, else `~/.config/<program>.conf`), under `par.learned.…` keys, as a
+size threshold for each block: the largest number of items the CPU won at and
+the smallest the GPU won at. A run whose size falls outside those is decided
+without measuring; one between them is measured once and narrows them. The keys
+include a hash of the machine's GPU and CPU, so a new GPU is measured afresh
+(and the old one's values wait for it to come back), and a hash of the block's
+GPU version, so a block that changes is measured afresh too.
+
+To choose instead, in order of precedence:
 
 - `XC_PAR=cpu`, `XC_PAR=gpu` or `XC_PAR=auto` in the environment, for every
   block in one run;
 - `Par.device("name", "gpu")` in the program, for one block by its name (`par
   name { … }`, or `file:line` for an unnamed block), or `Par.device("par", …)`
-  for every block without its own choice. An app that keeps this in its Settings
-  passes the value on to `Par.device`.
+  for every block without its own choice;
+- from 0.73, the user's own settings, in the same store: `par.<name> = cpu`,
+  `gpu`, `auto`, or a number of items from which the block runs on the GPU (`par.heavy
+  = 200000`), and `par = …` for every block without its own. The program never
+  writes these.
 
 `XC_PAR_REPORT=1` prints where each block ran, what it took, why a block stayed
-on the CPU, and what `auto` decided.
+on the CPU, what `auto` decided and learned, and the hardware key.
 
 ## What a body may contain
 

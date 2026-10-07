@@ -422,11 +422,13 @@
     cache[i] = { b, size };
     return b;
   };
-  const gpuRun = async (src, n, desc, nb, groups) => {
+  let gpuAdapter = null;
+  const gpuOpen = async () => {
     if (!gpuTried) {
       gpuTried = true;
       try {
         const a = await navigator.gpu.requestAdapter();
+        gpuAdapter = a;
         // The adapter's own limits, not WebGPU's defaults: a kernel binds one
         // storage buffer per captured array, and the default allows only 8.
         const want = {};
@@ -436,7 +438,24 @@
         gpuDevice = a ? await a.requestDevice({ requiredLimits: want }) : null;
       } catch (e) { gpuDevice = null; }
     }
-    const dev = gpuDevice;
+    return gpuDevice;
+  };
+  // The adapter, for the hardware key auto keeps its learned choices under
+  // (ParDevice.xc): "webgpu:vendor:architecture:device:description" written
+  // at buf (at most cap bytes); its length, or 0 with no adapter.
+  const gpuInfo = async (buf, cap) => {
+    await gpuOpen();
+    if (!gpuAdapter) return 0;
+    let i = gpuAdapter.info;
+    if (!i && gpuAdapter.requestAdapterInfo) { try { i = await gpuAdapter.requestAdapterInfo(); } catch (e) { i = null; } }
+    i = i || {};
+    const b = new TextEncoder().encode(`webgpu:${i.vendor || ""}:${i.architecture || ""}:${i.device || ""}:${i.description || ""}`);
+    const k = Math.min(b.length, cap);
+    mem8().set(b.subarray(0, k), buf);
+    return k;
+  };
+  const gpuRun = async (src, n, desc, nb, groups) => {
+    const dev = await gpuOpen();
     if (!dev) return 0;
     // More buffers, or a larger one, than the device can bind: the block runs
     // on the CPU (2). Created anyway, the bind group is invalid, the dispatch
@@ -512,7 +531,8 @@
     }
     return 1;
   };
-  imports.xcgpu = { _xc_gpu_run: gpuJspi ? new WebAssembly.Suspending(gpuRun) : () => 0 };
+  imports.xcgpu = { _xc_gpu_run: gpuJspi ? new WebAssembly.Suspending(gpuRun) : () => 0,
+                    _xc_gpu_info: gpuJspi ? new WebAssembly.Suspending(gpuInfo) : () => 0 };
   const { instance, module: wasmModule } = await WebAssembly.instantiate(bytes, imports);
   const usesGpu = gpuJspi && WebAssembly.Module.imports(wasmModule).some((m) => m.module === "xcgpu");
   // A per-module handle. This used to be ONLY `globalThis.xcc`, so loading a

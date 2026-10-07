@@ -173,6 +173,7 @@ class ParVulkan
     static vkCmdCopyBuffer_t* _copy;
     static vkCmdPipelineBarrier_t* _barrier;
     static bool _discrete;      // the kernel's buffers in the GPU's memory, copied through staging
+    static String* _identity;   // the chosen device, for auto's hardware key (ParDevice)
     static vkCreateFence_t* _createFence;
     static vkDestroyFence_t* _destroyFence;
     static vkQueueSubmit_t* _submit;
@@ -190,6 +191,15 @@ class ParVulkan
 #endif
         }
 #endif
+
+    // The GPU, for the hardware key auto's learned choices are kept under
+    // (ParDevice), or "" when there is none.
+    static String* identity(void)
+        {
+        if (!start() || _identity == (String*)0)
+            return String.withCString("");
+        return _identity;
+        }
 
     static bool start(void)
         {
@@ -310,6 +320,10 @@ class ParVulkan
         // A discrete GPU reads host memory across the bus, slowly, and its own
         // memory, where the host can map it at all, is uncached for the host.
         props(pd, (pointer)pp);
+        // "vulkan:<deviceName>:<vendorID>:<deviceID>", for auto's hardware key.
+        _identity = String.withCString("vulkan:");
+        _identity.appendCString(pp + 20);
+        _identity.appendFormat(":%x:%x", *(u32*)(pointer)(pp + 8), *(u32*)(pointer)(pp + 12));
         _discrete = *(u32*)(pointer)(pp + 16) == (u32)2 && _copy != (vkCmdCopyBuffer_t*)0 &&
                     _barrier != (vkCmdPipelineBarrier_t*)0;
         free((pointer)pp);

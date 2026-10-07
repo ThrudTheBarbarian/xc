@@ -19,6 +19,9 @@
 // 1 the kernel ran, 0 no WebGPU device (or no JSPI), 2 it needs more buffers,
 // or a larger one, than the device can bind, -1 its WGSL did not build.
 extern i32 _xc_gpu_run(u8* src, u32 n, u32* desc, u32 nb, u32 groups);
+// The adapter's vendor, architecture, device and description, for auto's
+// hardware key: written at buf, its length returned (0: no adapter).
+extern i32 _xc_gpu_info(u8* buf, u32 cap);
 
 u32 parWebGpuLen(u8* s)
     {
@@ -30,6 +33,18 @@ u32 parWebGpuLen(u8* s)
 
 class ParWebGpu
     {
+    // The GPU, for the hardware key auto's learned choices are kept under
+    // (ParDevice): "webgpu:vendor:architecture:device:description", or "".
+    static String* identity(void)
+        {
+        u8 buf[256];
+        i32 n = _xc_gpu_info(&buf[0], (u32)255);
+        String* s = new String();
+        for (i32 k = (i32)0; k < n; k = k + (i32)1)
+            s.appendByte(buf[k]);
+        return s;
+        }
+
     static bool run(ParChunk* proto, u8* src, i64 lo, i64 hi)
         {
         if (src == (u8*)0 || src[0] != (u8)'/')
