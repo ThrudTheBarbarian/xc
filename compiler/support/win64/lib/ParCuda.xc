@@ -35,6 +35,10 @@ typedef i32 cuCtxSynchronize_t(void);
 pointer gParCuSrc[64];
 pointer gParCuFn[64];
 u32 gParCuKernels;
+// Each kernel parameter slot's device memory from the last runs, and its size
+// (see upload).
+u64 gParCuDev[52];
+i64 gParCuCap[52];
 
 class ParCuda
     {
@@ -117,15 +121,26 @@ class ParCuda
         return fn;
         }
 
-    // Device memory holding a copy of host (or zeroed space when host is nil).
-    static u64 upload(pointer host, i64 bytes)
+    // Parameter slot k's device memory, holding a copy of host (or space the
+    // kernel fills, when host is nil). Kept for the next run and reused where
+    // big enough, as allocating device memory costs more than most blocks.
+    static u64 upload(u32 k, pointer host, i64 bytes)
         {
-        u64 d = (u64)0;
-        if (_alloc(&d, (u64)bytes) != (i32)0)
-            return (u64)0;
+        if (gParCuDev[k] == (u64)0 || gParCuCap[k] < bytes)
+            {
+            if (gParCuDev[k] != (u64)0)
+                _free(gParCuDev[k]);
+            gParCuDev[k] = (u64)0;
+            gParCuCap[k] = (i64)0;
+            u64 d = (u64)0;
+            if (_alloc(&d, (u64)bytes) != (i32)0)
+                return (u64)0;
+            gParCuDev[k] = d;
+            gParCuCap[k] = bytes;
+            }
         if (host != (pointer)0)
-            _toDevice(d, host, (u64)bytes);
-        return d;
+            _toDevice(gParCuDev[k], host, (u64)bytes);
+        return gParCuDev[k];
         }
 
     // Run [lo, hi) of the block on the GPU. False when the block cannot go
@@ -159,23 +174,23 @@ class ParCuda
         span[2] = l.per;
         u64 dev[52];
         u32 nd = (u32)0;
-        dev[nd] = upload((pointer)obj, l.size);
+        dev[nd] = upload(nd, (pointer)obj, l.size);
         nd = nd + (u32)1;
-        dev[nd] = upload((pointer)&span[0], (i64)24);
+        dev[nd] = upload(nd, (pointer)&span[0], (i64)24);
         nd = nd + (u32)1;
         for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
             {
-            dev[nd] = upload(*(pointer*)(obj + l.bufOff[i]), l.bufLen[i]);
+            dev[nd] = upload(nd, *(pointer*)(obj + l.bufOff[i]), l.bufLen[i]);
             nd = nd + (u32)1;
             }
         for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
             {
-            dev[nd] = upload(l.globPtr[i], l.globLen[i]);
+            dev[nd] = upload(nd, l.globPtr[i], l.globLen[i]);
             nd = nd + (u32)1;
             }
         for (u32 i = (u32)0; i < l.nred; i = i + (u32)1)
             {
-            dev[nd] = upload((pointer)0, l.threads * l.redSize[i]);
+            dev[nd] = upload(nd, (pointer)0, l.threads * l.redSize[i]);
             nd = nd + (u32)1;
             }
         bool ok = true;
@@ -224,9 +239,7 @@ class ParCuda
             for (u32 i = (u32)0; i < l.nred; i = i + (u32)1)
                 free((pointer)parts[i]);
             }
-        for (u32 i = (u32)0; i < nd; i = i + (u32)1)
-            if (dev[i] != (u64)0)
-                _free(dev[i]);
+        // The device memory stays for the next run (gParCuDev).
         if (!ok)
             {
             Log.error("par: the GPU run failed, running on the CPU");
