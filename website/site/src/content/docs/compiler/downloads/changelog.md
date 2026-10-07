@@ -3,6 +3,71 @@ title: ChangeLog
 description: Release notes for the xcc toolchain, with bug fixes and new features per version.
 ---
 
+## Version 0.72 — the GPU everywhere, and Foundation grows
+
+`par` blocks now reach the GPU on every desktop and mobile target and in the
+browser: Vulkan on Linux, Windows and Android, and WebGPU on the web, beside
+0.7's Metal and CUDA. A block can cover a 2-D or 3-D grid. A `for` loop says
+whether it wants speed or exactness. Linux programs link dynamically against
+the system's C library by default, as C programs do, and `#import` of a C
+library finds its debug information in a separate debug file. Foundation gains
+twenty-one classes, many of them moved from UXKit.
+
+### New
+
+- **`par` on Vulkan and WebGPU**: on `x86_64` Linux, `win64` and `android`
+  each block also gets a Vulkan version, and on `wasm32` a WebGPU one, run in
+  the browser while the program waits (JSPI). On Windows, CUDA is tried first
+  on an NVIDIA GPU and Vulkan on any other; `XC_PAR_GPU=vulkan|cuda` chooses.
+  8- and 16-bit values and `bool`s are exact on every Vulkan and WebGPU device.
+  See [Parallel blocks](/compiler/language/par/#running-on-the-gpu).
+- **`par :grid(w, h[, d])`**: a block over the points of a grid, reading its
+  point as `par.x`, `par.y` and `par.z`, on the CPU and every GPU.
+- **`:goal` on a `for` loop**: `:goal(speed)` lets the compiler drop a loop's
+  exactness checks (a matrix multiply then skips its NaN check); plain loops
+  keep `:goal(accuracy)`, while a `par` block's loops follow its own goal.
+- **Linux links dynamically**: `-A x86_64` executables link against glibc by
+  default and can load any system library; `-static` gives the self-contained
+  musl executable earlier releases made.
+- **`#import <clib>`** reads a stripped library's types and functions from its
+  separate debug file (by build ID or `.gnu_debuglink`, under `/usr/lib/debug`
+  or `$XCC_DEBUG_DIR`), compressed DWARF included, and says so when a library
+  has no debug information at all.
+- **Foundation**: `Bag`, `Range`, `BinaryHeap`, `Cache`, `Null`, `JSON`,
+  `Expression`, `NumberFormatter`, `NotificationCenter`, `UndoManager`,
+  `Progress`, `StateMachine`, `SearchIndex`, `IndexSet`, `AttributedString`,
+  `Regex`, `Predicate`, `Validator`, `SortDescriptor`, `Socket` and `CSV`; log
+  levels, subsystems and monitors in `Log`; file URLs in `Url`; path
+  components in `String`; more `CharacterSet`s; `Number.withBool`. See
+  [Foundation](/compiler/api/foundation/).
+- **UXKit**: `UXTextView`, an editable rich-text view: the platform's own
+  editor on macOS, iOS, Android, Windows, GTK and the web, and drawn and edited
+  by the view elsewhere. UXKit's copies of the classes Foundation now has are
+  gone.
+
+### Faster
+
+- The SME matrix kernel works on a 2×2 block of tiles, and under
+  `:goal(speed)` skips its NaN check: `matrix_mul_f32` takes 30 ms on an Apple
+  M4 Max (72 ms in 0.71) against 9.9 s for clang's C++.
+- The benchmark suite takes 0.95× its 0.71 time on arm64 and 0.99× on x86-64,
+  where it is now measured as shipped, linked dynamically. xc's code takes
+  0.73× C++'s time on arm64 and 0.68× on x86-64 (geometric mean); without
+  `matrix_mul_f32` 0.97× and 0.79×.
+- GPU kernels for Vulkan are structured loops and ifs, so a SIMD group's
+  threads reconverge, and on a discrete GPU they work in its own memory: on an
+  RTX 3090, Vulkan comes within 1.2–1.7× of CUDA (`mandelbrot` 2.2 ms against
+  1.9). See [Performance](/compiler/performance/#parallel-blocks-and-the-gpu).
+
+### Fixed
+
+- A variable assigned in a `try` block kept its old value after a `catch`
+  that returned.
+- `#import` of a C library: 8-byte integers in its DWARF were read as 32-bit,
+  and a program using one in another directory could not find it at run time.
+- A 64-bit shift by a 32-bit count printed a CUDA kernel NVIDIA's driver
+  refused, so the block ran on the CPU.
+
 ## Version 0.71 — AVX-512, and matrix multiplies on the matrix unit
 
 A dense matrix multiply written as three loops now runs as a matrix kernel the

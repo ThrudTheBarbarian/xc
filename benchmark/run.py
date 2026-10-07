@@ -156,8 +156,9 @@ def compile_xc(name, opt, out):
 
 
 def compile_xc_x86(name, opt, out):
-    """Cross-build for x86-64 Linux. The result is a static ELF, so the remote
-    host needs no toolchain and no loader of its own."""
+    """Cross-build for x86-64 Linux, linked as the release links it by default:
+    a static ELF up to 0.71, a glibc executable from 0.72. Either way the remote
+    host needs no toolchain of its own."""
     cmd = [xcc_path()] + xcc_home_args() + ["-I", SRC, "-A", "x86_64",
            "-" + opt, "-o", out, os.path.join(SRC, name + ".xc")]
     r = subprocess.run(cmd, capture_output=True, text=True)
@@ -346,7 +347,7 @@ def main():
         langs.append(("cpp_x86_64", None))
         langs.append(("swift_x86_64", None))
         print("x86-64 legs enabled on the configured host: xc is cross-built here "
-              "and shipped as a static ELF; Objective-C, C++ and Swift are compiled "
+              "and shipped as the release links it by default; Objective-C, C++ and Swift are compiled "
               "there (GNUstep Objective-C cannot be cross-built from macOS).")
     if args.langs:
         want = set(args.langs.split(","))

@@ -284,8 +284,8 @@ def standing(cur):
     return " ".join(parts)
 
 
-PAR_MACHINES = (("mac", "Apple silicon, Metal"), ("linux", "Zen 5 Linux, CPU only"),
-                ("windows", "Windows, NVIDIA RTX 3090"))
+PAR_MACHINES = (("mac", "Apple silicon, Metal"), ("linux", "Zen 5 Linux, its integrated GPU through Vulkan"),
+                ("windows", "Windows, NVIDIA RTX 3090 through CUDA and Vulkan"))
 
 
 def ms(us):
@@ -306,10 +306,13 @@ def par_tables(version):
         if not rows:
             continue
         gpu = any("gpu" in r for _, r in rows)
+        vk = any("vulkan" in r for _, r in rows)   # Windows from 0.72: CUDA and Vulkan
         out.append("**%s** (ms; best of eight runs)\n" % name)
         if gpu:
-            out.append("| benchmark | one thread | all threads | GPU | `auto` | GPU's first run |")
-            out.append("|---|---|---|---|---|---|")
+            heads = ["benchmark", "one thread", "all threads", "GPU"] + (["Vulkan"] if vk else []) + \
+                    ["`auto`", "GPU's first run"] + (["Vulkan's first run"] if vk else [])
+            out.append("| " + " | ".join(heads) + " |")
+            out.append("|" + "---|" * len(heads))
         else:
             out.append("| benchmark | one thread | all threads | `auto` |")
             out.append("|---|---|---|---|")
@@ -317,9 +320,13 @@ def par_tables(version):
             cells = ["[`%s`](%s#%s)" % (b, SOURCES_URL, b), ms(r["serial"]["best_us"]), ms(r["cpu"]["best_us"])]
             if gpu:
                 cells.append(ms(r["gpu"]["best_us"]) if "gpu" in r else "–")
+            if vk:
+                cells.append(ms(r["vulkan"]["best_us"]) if "vulkan" in r else "–")
             cells.append(ms(r["auto"]["best_us"]))
             if gpu:
                 cells.append(ms(r["gpu"]["first_us"]) if "gpu" in r else "–")
+            if vk:
+                cells.append(ms(r["vulkan"]["first_us"]) if "vulkan" in r else "–")
             out.append("| " + " | ".join(cells) + " |")
         out.append("")
     return "\n".join(out)
@@ -371,9 +378,9 @@ def sources_page(names):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--current", default="v0.71")
-    ap.add_argument("--history", default="v0.62,v0.63,v0.64,v0.65,v0.66,v0.7,v0.71")
-    ap.add_argument("--release", default="0.71")
+    ap.add_argument("--current", default="v0.72")
+    ap.add_argument("--history", default="v0.62,v0.63,v0.64,v0.65,v0.66,v0.7,v0.71,v0.72")
+    ap.add_argument("--release", default="0.72")
     a = ap.parse_args()
     cur = load(a.current)
     versions = a.history.split(",")
@@ -435,8 +442,9 @@ PAR_SOURCES_HEAD = """## Parallel blocks and the GPU
 
 The programs behind the performance page's GPU tables. Each is one xc program:
 its work is a `par` block, a loop whose iterations are independent, and the
-runtime runs it on the CPU's threads or on the GPU (Metal on a Mac, CUDA on
-Windows), whichever it finds faster. Nothing in the source
+runtime runs it on the CPU's threads or on the GPU (Metal on a Mac, CUDA or
+Vulkan on Windows, Vulkan on Linux and Android, WebGPU in the browser),
+whichever it finds faster. Nothing in the source
 names a device, a kernel language or a thread.
 """
 
@@ -526,7 +534,9 @@ unit, and on x86-64 with the widest vector unit the processor has (SSE2, AVX2
 or AVX-512), chosen when the program starts. The results are the loops', to
 the last bit. `matrix_mul_f32` measures it: a 128×128 `float` multiply, 10,000
 times. (`matrix_mul` multiplies `u32` values, which the matrix unit's outer
-products do not take, so it stays a vectorised loop.) On an Apple M4 Max
+products do not take, so it stays a vectorised loop.) From 0.72 the SME kernel
+works on a 2×2 block of the matrix unit's tiles at once, and under
+`:goal(speed)` leaves out its NaN check: 72 ms in 0.71, 30 ms now. On an Apple M4 Max
 it takes {mm_arm} against {mm_arm_cpp} for clang's C++ of the same loops; on an AMD Zen 5
 processor, where the program picks AVX-512, {mm_x86} against {mm_x86_cpp}. With
 `-fno-matmul` the loops run as written.
@@ -534,24 +544,34 @@ processor, where the program picks AVX-512, {mm_x86} against {mm_x86_cpp}. With
 ## Parallel blocks and the GPU
 
 From 0.7 a [`par` block](/compiler/language/par/) runs a loop's iterations at
-once, across every CPU thread or on the GPU. Four programs in `benchmark/par`
+once, across every CPU thread or on the GPU: Metal on Apple silicon and CUDA on
+an NVIDIA GPU under Windows, and from 0.72 Vulkan on Linux, Windows and Android
+and WebGPU in the browser. Four programs in `benchmark/par`
 measure it: `mandelbrot` (a 2048×2048 escape-time image, at most 256 iterations
 a pixel), `perlin` (2048×2048 improved noise, four octaves), `nbody` (the force
 on each of 8192 bodies from all the others) and `saxpy` (`y = a·x + y` over 16
 million integers, with a sum). Each runs its block
 eight times and reports the best run; *one thread* is `XC_PAR=cpu
 XC_PAR_THREADS=1`, *all threads* `XC_PAR=cpu`, *GPU* `XC_PAR=gpu`, and `auto` the
-default, which times the CPU and the GPU and keeps the faster. Every mode's
+default, which times the CPU and the GPU and keeps the faster. On Windows *GPU*
+is CUDA and *Vulkan* the same card through Vulkan (`XC_PAR_GPU=vulkan`); the
+Linux machine's GPU is the small one built into its processor (two compute
+units), which just beats the sixteen cores beside it on `mandelbrot` and
+`nbody` and loses to them on the other two. Every mode's
 checksum must agree.
 
 {par}
 
 The GPU's first run carries one-off costs — building the kernel, and on NVIDIA
-creating the driver context and compiling the PTX — so it is shown apart: a few
-tens of milliseconds on Metal, a few hundred on NVIDIA. `auto` pays it once,
-while it measures. `saxpy` does one multiply-add for every eight bytes it moves, so the
-copy to and from the GPU outweighs the arithmetic and `auto` keeps it on the CPU;
-the other three do enough work per element that the GPU wins by a wide margin.
+creating the driver context and compiling the PTX or SPIR-V — so it is shown
+apart: a few tens of milliseconds on Metal and on the integrated GPU, and on
+the 3090 about 250 through CUDA and 130 to 190 through Vulkan. `auto` pays it once, while it measures. `saxpy` does one
+multiply-add for every eight bytes it moves, so the copy to and from the GPU
+outweighs the arithmetic and `auto` keeps it on the CPU; on the integrated GPU
+that copy is slower still, because the runtime does not yet use the CPU's
+cache for it there. The other three do enough work per element that a
+discrete GPU wins by a wide margin. Through Vulkan the 3090 comes within
+1.2–1.7× of its CUDA times.
 
 ## Release to release
 

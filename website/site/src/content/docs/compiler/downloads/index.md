@@ -3,7 +3,7 @@ title: Downloads
 description: Prebuilt xcc toolchain archives for macOS, Linux and Windows, the arm9 sysroot, and UXKit's GTK 4 library.
 ---
 
-The current release line is **xcc 0.71**. One install contains the whole toolchain: the
+The current release line is **xcc 0.72**. One install contains the whole toolchain: the
 compiler (`xcc`, which runs every stage itself, from parsing through code generation
 for all seven targets to assembly and linking), the signing tool (`xcc-sign`), the
 6502 assembler (`xcc-as`), the simulators (`xcc-sim-6502`, `xcc-sim-68k`), the
@@ -12,11 +12,11 @@ cross-build native binaries for every target with **no other toolchain installed
 
 | Platform | Download | Size |
 | --- | --- | --- |
-| macOS (Apple silicon) | [xcc-osx-0.71.tar.bz2](/downloads/xcc-osx-0.71.tar.bz2) | 8.4 MB |
-| Linux (x86_64) | [xcc-linux-0.71.tar.bz2](/downloads/xcc-linux-0.71.tar.bz2) | 6.2 MB |
-| Windows (x64) | [xcc-win64-0.71.zip](/downloads/xcc-win64-0.71.zip) | 7.2 MB |
-| arm9 sysroot (any host) | [xcc-arm9-sysroot-0.71.tar.bz2](/downloads/xcc-arm9-sysroot-0.71.tar.bz2) | 830 KB |
-| UXKit GTK 4 library (Linux x86_64) | [xcc-uxgtk-linux-0.71.tar.bz2](/downloads/xcc-uxgtk-linux-0.71.tar.bz2) | 99 KB |
+| macOS (Apple silicon) | [xcc-osx-0.72.tar.bz2](/downloads/xcc-osx-0.72.tar.bz2) | 8.7 MB |
+| Linux (x86_64) | [xcc-linux-0.72.tar.bz2](/downloads/xcc-linux-0.72.tar.bz2) | 6.4 MB |
+| Windows (x64) | [xcc-win64-0.72.zip](/downloads/xcc-win64-0.72.zip) | 7.4 MB |
+| arm9 sysroot (any host) | [xcc-arm9-sysroot-0.72.tar.bz2](/downloads/xcc-arm9-sysroot-0.72.tar.bz2) | 830 KB |
+| UXKit GTK 4 library (Linux x86_64) | [xcc-uxgtk-linux-0.72.tar.bz2](/downloads/xcc-uxgtk-linux-0.72.tar.bz2) | 99 KB |
 
 Every archive contains the same compiler. Each host build cross-compiles to **all**
 targets, so the platform you download for decides only where the compiler runs.
@@ -29,23 +29,23 @@ in the host archive.
 ## macOS
 
 ```bash
-tar xjf xcc-osx-0.71.tar.bz2
-export PATH="$PWD/xcc-osx-0.71/bin:$PATH"
+tar xjf xcc-osx-0.72.tar.bz2
+export PATH="$PWD/xcc-osx-0.72/bin:$PATH"
 xcc -v
 ```
 
 The compiler finds its libraries **relative to its own binary**, with no flags,
 environment variables or fixed install path, so you can move the directory anywhere.
 The binaries are not notarised, so the first run on a fresh macOS install may need a
-one-time Gatekeeper override (`xattr -dr com.apple.quarantine xcc-osx-0.71/`).
+one-time Gatekeeper override (`xattr -dr com.apple.quarantine xcc-osx-0.72/`).
 
 ## arm9 sysroot
 
 Needed only for `-A arm9`. Unpack it anywhere and point `-L` at it:
 
 ```bash
-tar xjf xcc-arm9-sysroot-0.71.tar.bz2
-xcc -A arm9 -L path/to/xcc-arm9-sysroot-0.71 -o prog.so prog.xc
+tar xjf xcc-arm9-sysroot-0.72.tar.bz2
+xcc -A arm9 -L path/to/xcc-arm9-sysroot-0.72 -o prog.so prog.xc
 ```
 
 It holds one file: `libc.so`, newlib 4.4.0.20231231 rebuilt as position-independent
@@ -62,12 +62,12 @@ one, and then `-A arm9` needs no `-L` at all.
 ## UXKit GTK 4 library
 
 Needed only for a Linux GUI program built with UXKit's GTK back end. The
-program is linked with `-dynamic`, which builds a glibc executable that can load
-GTK 4:
+program is a glibc executable that loads GTK 4, which is how `-A x86_64` links
+by default from 0.72:
 
 ```bash
-tar xjf xcc-uxgtk-linux-0.71.tar.bz2
-xcc -A x86_64 -dynamic app.xc -L xcc-uxgtk-linux-0.71 -lUXGtk -lgtk-4 -o app
+tar xjf xcc-uxgtk-linux-0.72.tar.bz2
+xcc -A x86_64 app.xc -L xcc-uxgtk-linux-0.72 -lUXGtk -lgtk-4 -o app
 ```
 
 The machine that runs the program needs glibc 2.34 or later and GTK 4; this
@@ -79,8 +79,8 @@ rebuilds it against any machine's GTK 4.
 ## Linux
 
 ```bash
-tar xjf xcc-linux-0.71.tar.bz2
-export PATH="$PWD/xcc-linux-0.71/bin:$PATH"
+tar xjf xcc-linux-0.72.tar.bz2
+export PATH="$PWD/xcc-linux-0.72/bin:$PATH"
 xcc -v
 ```
 
@@ -89,7 +89,7 @@ library dependencies.
 
 ## Windows
 
-Unzip `xcc-win64-0.71.zip` anywhere and add the folder to `PATH` (or invoke
+Unzip `xcc-win64-0.72.zip` anywhere and add the folder to `PATH` (or invoke
 `xcc.exe` by path). The binaries are self-contained; no runtime installer is
 needed.
 
@@ -110,7 +110,7 @@ xcc -o hello hello.xc      # native binary for this machine, like cc
 The same file cross-compiles to every target by picking an architecture:
 
 ```bash
-xcc -A x86_64 -o hello-linux hello.xc    # Linux ELF (static musl up to 0.71; glibc after, -static for musl)
+xcc -A x86_64 -o hello-linux hello.xc    # Linux ELF against glibc (-static: self-contained, musl)
 xcc -A win64  -o hello.exe    hello.xc   # Windows PE
 xcc -A wasm32 -o hello        hello.xc   # hello.wasm + a Node/browser loader
 xcc -A 6502   -o hello.xex    hello.xc   # banked 6502 executable (run: xcc-sim-6502 -m xt hello.xex)
