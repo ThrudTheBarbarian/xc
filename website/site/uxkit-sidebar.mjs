@@ -13,8 +13,6 @@ export default {
 				{ label: 'Tables, outlines and data sources', slug: 'compiler/api/uxkit/guide-tables' },
 				{ label: 'The driver model and multiplatform', slug: 'compiler/api/uxkit/guide-drivers' },
 				{ label: 'Rsc files, or designing a window instead of writing one', slug: 'compiler/api/uxkit/guide-rsc' },
-				{ label: 'Rocks, the interface editor', slug: 'compiler/api/uxkit/guide-rocks' },
-				{ label: 'A music player in Rocks (tutorial)', slug: 'compiler/api/uxkit/guide-rocks-tutorial' },
 			],
 		},
 		{

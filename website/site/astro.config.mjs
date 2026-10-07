@@ -172,6 +172,14 @@ export default defineConfig({
 						},
 					],
 				},
+				{
+					label: 'Rocks (interface editor)',
+					collapsed: true,
+					items: [
+						{ label: 'Rocks', slug: 'rocks' },
+						{ label: 'Tutorial: a music player', slug: 'rocks/tutorial' },
+					],
+				},
 				{ label: 'Report a bug', slug: 'feedback' },
 			],
 		}),

@@ -211,8 +211,7 @@ def main():
     # ordering that is definitely wrong. Unlisted guides fall in afterwards,
     # alphabetically, so adding one still needs no edit here to appear.
     GUIDE_ORDER = ["guide-first-window", "guide-view-tree", "guide-controls",
-                   "guide-tables", "guide-drivers", "guide-rsc", "guide-rocks",
-                   "guide-rocks-tutorial"]
+                   "guide-tables", "guide-drivers", "guide-rsc"]
     found = glob.glob(os.path.join(OUT, "guide-*.md")) + \
             glob.glob(os.path.join(OUT, "guide-*.mdx"))
     def guide_key(path):
