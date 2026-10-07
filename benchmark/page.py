@@ -56,6 +56,18 @@ def secs(t):
     return "%d ms" % round(t * 1000) if t < 1 else "%.1f s" % t
 
 
+def speed(r):
+    """xc's time over another's as a multiple a reader takes in at once:
+    "1.33× faster" (r = 0.75), "1.20× slower" (r = 1.2), "327× faster"."""
+    if r is None or r <= 0:
+        return "–"
+    if abs(r - 1) < 0.005:
+        return "the same"
+    m = 1 / r if r < 1 else r
+    txt = ("%.0f×" % m) if m >= 20 else ("%.1f×" % m) if m >= 2 else ("%.2f×" % m)
+    return txt + (" faster" if r < 1 else " slower")
+
+
 def ratio_rows(cur, suffix):
     """(worst ratio, benchmark, {language: xc's time over its}) per benchmark."""
     rows = []
@@ -91,14 +103,14 @@ def ratio_chart(cur, suffix, title, order=None):
     lx = left
     for l, name, col in LANGS:
         o.append('<circle cx="%d" cy="14" r="5" fill="%s"/>' % (lx, col))
-        o.append('<text x="%d" y="18" fill="currentColor">xc ÷ %s</text>' % (lx + 9, esc(name)))
+        o.append('<text x="%d" y="18" fill="currentColor">xc vs %s</text>' % (lx + 9, esc(name)))
         lx += 130
     # grid and axis
     for k in range(int(lo), int(hi) + 1):
         x = px(2.0 ** k)
         o.append('<line x1="%.1f" y1="%d" x2="%.1f" y2="%d" stroke="currentColor" stroke-opacity="%s"/>'
                  % (x, top - 8, x, top + rowh * len(rows), "0.55" if k == 0 else "0.15"))
-        lab = "1×" if k == 0 else ("%d×" % (2 ** k) if k > 0 else "1/%d" % (2 ** -k))
+        lab = "same" if k == 0 else ("%d× slower" % (2 ** k) if k > 0 else "%d× faster" % (2 ** -k))
         o.append('<text x="%.1f" y="%d" text-anchor="middle" fill="currentColor" fill-opacity="0.75">%s</text>'
                  % (x, top + rowh * len(rows) + 16, lab))
     o.append('<text x="%d" y="%d" fill="currentColor" fill-opacity="0.75">← xc faster</text>'
@@ -116,8 +128,8 @@ def ratio_chart(cur, suffix, title, order=None):
                      % (min(xs), y, max(xs), y))
         for l, name, col in LANGS:
             if l in rs:
-                o.append('<circle cx="%.1f" cy="%.1f" r="4.5" fill="%s"><title>%s: xc ÷ %s = %.2f</title></circle>'
-                         % (px(rs[l]), y, col, esc(b), esc(name), rs[l]))
+                o.append('<circle cx="%.1f" cy="%.1f" r="4.5" fill="%s"><title>%s: xc is %s than %s</title></circle>'
+                         % (px(rs[l]), y, col, esc(b), speed(rs[l]), esc(name)))
     o.append('</svg><figcaption>%s</figcaption></figure>' % esc(title))
     return "".join(o)
 
@@ -163,7 +175,8 @@ def history_chart(hist, suffix, title, versions):
             d = hist[v].get(b, {}).get("O3", {})
             vals.append(d.get("xc" + suffix))
         if vals[0]:
-            series[b] = [None if x is None else x / vals[0] for x in vals]
+            # Speed relative to the first release: above 1 is faster.
+            series[b] = [None if not x else vals[0] / x for x in vals]
     geo = [gmean([s[i] for b, s in series.items() if s[i] and b not in SEPARATE]) for i in range(len(versions))]
     w, h, left, right, top, bottom = 720, 300, 60, 560, 24, 262
     # The y range fits the data, kept at least 0.8..1.25 so a quiet history
@@ -226,41 +239,41 @@ def table(cur, suffix):
         others = [d[l + suffix] for l, _, _ in LANGS if d.get(l + suffix)]
         rows.append((x / min(others) if x and others else 0, b, d))
     rows.sort(key=lambda r: -r[0])
-    out = ["| benchmark | xc | Objective-C | C++ | Swift | xc ÷ fastest |", "|---|---|---|---|---|---|"]
+    out = ["| benchmark | xc | Objective-C | C++ | Swift | xc vs the fastest of the others |", "|---|---|---|---|---|---|"]
     for r, b, d in rows:
         cells = ["%.2f" % d[k + suffix] if d.get(k + suffix) else "–" for k in ("xc", "objc", "cpp", "swift")]
-        out.append("| [`%s`](%s#%s) | %s | **%.2f** |" % (b, SOURCES_URL, b, " | ".join(cells), r))
+        out.append("| [`%s`](%s#%s) | %s | **%s** |" % (b, SOURCES_URL, b, " | ".join(cells), speed(r)))
     return "\n".join(out)
 
 
 def summary(cur):
-    out = ["| xc's time ÷ | arm64 | x86-64 |", "|---|---|---|"]
+    out = ["| xc compared with | arm64 (Apple M4 Max) | x86-64 (AMD Ryzen 9 9955HX) |", "|---|---|---|"]
     for l, name, _ in LANGS:
         vals = []
         for _, suf in PLATFORMS:
             vals.append(gmean([d["O3"]["xc" + suf] / d["O3"][l + suf] for d in general(cur).values()
                                if d["O3"].get("xc" + suf) and d["O3"].get(l + suf)]))
-        out.append("| %s | **%.2f** | **%.2f** |" % (name, vals[0], vals[1]))
+        out.append("| %s | **%s** | **%s** |" % (name, speed(vals[0]), speed(vals[1])))
     return "\n".join(out)
 
 
 def separate(cur):
-    """The benchmarks kept out of the means, each with its own ratios."""
+    """The benchmarks kept out of the means, each as a table: the times on
+    each target, and how much faster xc is than each language there."""
     out = []
     for b in SEPARATE:
         d = cur.get(b, {}).get("O3", {})
-        parts = []
-        for pname, suf in PLATFORMS:
-            rs = []
-            for l, name, _ in LANGS:
-                if d.get("xc" + suf) and d.get(l + suf):
-                    r = d["xc" + suf] / d[l + suf]
-                    rs.append("%s %s" % (name, ("1/%d" % round(1 / r)) if r < 0.5 else ("%.2f" % r)))
-            if rs:
-                parts.append("on %s, %s" % (pname, ", ".join(rs)))
-        if parts:
-            out.append("There xc's time divided by each language's is, %s." % "; ".join(parts))
-    return " ".join(out)
+        rows = ["| `%s` | xc | Objective-C | C++ | Swift |" % b, "|---|---|---|---|---|"]
+        for (pname, suf), mach in zip(PLATFORMS, ("Apple M4 Max", "AMD Ryzen 9 9955HX")):
+            x = d.get("xc" + suf)
+            if not x:
+                continue
+            rows.append("| %s, %s | %s | %s |" % (pname, mach, secs(x),
+                        " | ".join(secs(d[l + suf]) if d.get(l + suf) else "–" for l, _, _ in LANGS)))
+            rows.append("| xc is | | %s |" % " | ".join(("**%s**" % speed(x / d[l + suf])) if d.get(l + suf) else "–"
+                                                    for l, _, _ in LANGS))
+        out.append("\n".join(rows))
+    return "\n\n".join(out)
 
 
 def standing(cur):
@@ -281,12 +294,17 @@ def standing(cur):
             parts.append("On %s xc is behind all three." % pname)
         else:
             parts.append("On %s xc is ahead of %s and behind %s." % (pname, join(ahead), join(behind)))
+    if len(parts) == 2 and parts[0].replace("arm64", "") == parts[1].replace("x86-64", ""):
+        return parts[0].replace("On arm64", "On both targets")
     return " ".join(parts)
 
 
-PAR_MACHINES = (("mac", "Apple silicon, Metal"), ("linux", "Zen 5 Linux, its integrated GPU through Vulkan"),
-                ("windows", "Windows, NVIDIA RTX 3090 through CUDA and Vulkan"),
-                ("browser", "Chrome on Apple silicon, wasm32 and WebGPU (from 0.73)"))
+PAR_MACHINES = (("mac", "Apple MacBook Pro, M4 Max (12 performance and 4 efficiency cores), its GPU through Metal"),
+                ("linux", "AMD Ryzen 9 9955HX (16 cores, 32 threads), Linux, its integrated Radeon 610M "
+                          "(2 compute units, 128 shader lanes) through Vulkan"),
+                ("windows", "AMD Ryzen 9 5950X (16 cores, 32 threads), Windows, an NVIDIA RTX 3090 through CUDA "
+                            "and Vulkan"),
+                ("browser", "Chrome on the Apple M4 Max: wasm32 (one thread) and WebGPU (from 0.73)"))
 
 
 def ms(us):
@@ -311,7 +329,8 @@ def par_tables(version):
         out.append("**%s** (ms; best of eight runs)\n" % name)
         if gpu:
             heads = ["benchmark", "one thread", "all threads", "GPU"] + (["Vulkan"] if vk else []) + \
-                    ["`auto`", "GPU's first run"] + (["Vulkan's first run"] if vk else [])
+                    ["`auto`", "GPU vs %s" % ("one thread" if not any("cpu" in r for _, r in rows) else "all threads"),
+                     "GPU's first run"] + (["Vulkan's first run"] if vk else [])
             out.append("| " + " | ".join(heads) + " |")
             out.append("|" + "---|" * len(heads))
         else:
@@ -327,6 +346,9 @@ def par_tables(version):
                 cells.append(ms(r["vulkan"]["best_us"]) if "vulkan" in r else "–")
             cells.append(ms(r["auto"]["best_us"]))
             if gpu:
+                # The GPU against the best the CPU does (all threads; one in a browser).
+                cpu = r.get("cpu", r["serial"])["best_us"]
+                cells.append(speed(r["gpu"]["best_us"] / cpu) if "gpu" in r else "–")
                 cells.append(ms(r["gpu"]["first_us"]) if "gpu" in r else "–")
             if vk:
                 cells.append(ms(r["vulkan"]["first_us"]) if "vulkan" in r else "–")
@@ -398,16 +420,12 @@ def main():
         summary=summary(cur),
         standing=standing(cur),
         separate=separate(cur),
-        mm_arm=secs(cur["matrix_mul_f32"]["O3"]["xc"]),
-        mm_arm_cpp=secs(cur["matrix_mul_f32"]["O3"]["cpp"]),
-        mm_x86=secs(cur["matrix_mul_f32"]["O3"]["xc_x86_64"]),
-        mm_x86_cpp=secs(cur["matrix_mul_f32"]["O3"]["cpp_x86_64"]),
-        chart_arm=version_switch(hist, "", "arm64: xc's time divided by each language's, per benchmark", versions, "vs-arm"),
-        chart_x86=version_switch(hist, "_x86_64", "x86-64: xc's time divided by each language's, per benchmark", versions, "vs-x86"),
+        chart_arm=version_switch(hist, "", "arm64: xc against each language, per benchmark", versions, "vs-arm"),
+        chart_x86=version_switch(hist, "_x86_64", "x86-64: xc against each language, per benchmark", versions, "vs-x86"),
         table_arm=table(cur, ""),
         table_x86=table(cur, "_x86_64"),
-        hist_arm=history_chart(hist, "", "arm64: xc's time relative to %s" % versions[0].lstrip("v"), versions),
-        hist_x86=history_chart(hist, "_x86_64", "x86-64: xc's time relative to %s" % versions[0].lstrip("v"), versions),
+        hist_arm=history_chart(hist, "", "arm64: xc's speed relative to %s" % versions[0].lstrip("v"), versions),
+        hist_x86=history_chart(hist, "_x86_64", "x86-64: xc's speed relative to %s" % versions[0].lstrip("v"), versions),
         first=versions[0].lstrip("v"),
         hist_list=", ".join(v.lstrip("v") for v in versions),
         changed=", ".join("`%s`" % b for b in sorted(CHANGED_IN)),
@@ -465,36 +483,34 @@ checksum, and a run only counts if all four checksums agree. Every program, in
 all four languages, is on the [benchmark sources](/compiler/benchmark-sources/)
 page; each benchmark's name below links to its own.
 
-Each figure is measured with the released {release} `xcc`, on an Apple-silicon
-Mac (arm64) and a Zen 5 Linux machine (x86-64). Times are seconds for the timed
-region, the best of five runs, each run waiting until the machine is otherwise
-idle.
+Each figure is measured with the released {release} `xcc` on two machines:
+
+- **arm64:** an Apple MacBook Pro with an M4 Max (12 performance and 4
+  efficiency cores), macOS;
+- **x86-64:** an AMD Ryzen 9 9955HX (16 cores, 32 threads), Linux.
+
+Times are seconds for the timed region, the best of five runs, each run waiting
+until the machine is otherwise idle.
 
 ## Summary
 
-Geometric mean, over nineteen of the twenty benchmarks, of xc's time divided by
-the other language's. **Below 1 is xc faster.**
+How much faster xc's code runs than each language's, as the geometric mean
+over nineteen of the twenty benchmarks:
 
 {summary}
 
-The twentieth, `matrix_mul_f32`, is quoted on its own. xcc recognises its loop
-nest and replaces it with a matrix kernel (SME on Apple silicon, SSE or AVX on
-x86-64), which makes xc so much faster at that one operation that putting it
-in with the others would skew the means in xc's favour, and most programs do
-not multiply 2D matrices. {separate} From 0.72 its outer
-loop is marked [`:goal(speed)`](/compiler/language/statements/#speed-or-accuracy-goal),
-which lets the SME kernel leave out a NaN check whose only effect is on the
-bits of a NaN (the inputs have none); earlier releases were measured without
-it.
+{standing}
 
-{standing} The arithmetic mean of ratios
-is not given: a benchmark at 2.00× and one at 0.50× are exactly compensating,
-and only the geometric mean says so.
+The twentieth benchmark, `matrix_mul_f32`, is kept out of those means. xcc
+recognises its loop nest and replaces it with a matrix kernel of its own, which
+makes xc tens to hundreds of times faster at that one operation; counted in, it would
+dominate means that stand for ordinary code, and most programs do not multiply
+matrices. Its figures are under [Matrix multiplies](#matrix-multiplies).
 
 ## Per benchmark
 
-Each row is a benchmark, each dot one language: how many times as long xc takes
-as that language. Dots left of the centre line are benchmarks xc wins. Choose a
+Each row is a benchmark, each dot one language: how much faster or slower xc
+is than that language. Dots left of the centre line are benchmarks xc wins. Choose a
 release above a chart to see how it stood then; the rows stay in {release}'s
 order. Releases before 0.65 were measured against Objective-C alone, apart
 from `matrix_mul_f32`, which was added later and measured against all three.
@@ -530,57 +546,74 @@ gain:
 
 ## Matrix multiplies
 
-From 0.71 a dense matrix multiply written as three loops — `C[i][j]` the sum
-over `k` of `A[i][k] · B[k][j]`, in `float` or `double` — runs as a kernel the
-compiler writes itself: on Apple silicon with SME (M4 and later) on the matrix
-unit, and on x86-64 with the widest vector unit the processor has (SSE2, AVX2
-or AVX-512), chosen when the program starts. The results are the loops', to
-the last bit. `matrix_mul_f32` measures it: a 128×128 `float` multiply, 10,000
-times. (`matrix_mul` multiplies `u32` values, which the matrix unit's outer
-products do not take, so it stays a vectorised loop.) From 0.72 the SME kernel
-works on a 2×2 block of the matrix unit's tiles at once, and under
-`:goal(speed)` leaves out its NaN check: 72 ms in 0.71, 30 ms now. On an Apple M4 Max
-it takes {mm_arm} against {mm_arm_cpp} for clang's C++ of the same loops; on an AMD Zen 5
-processor, where the program picks AVX-512, {mm_x86} against {mm_x86_cpp}. With
-`-fno-matmul` the loops run as written.
+A dense matrix multiply written as three plain loops, `C[i][j]` the sum over
+`k` of `A[i][k] · B[k][j]` in `float` or `double`, runs as a kernel the
+compiler writes itself (from 0.71). The results are the loops', to the last
+bit, and `-fno-matmul` turns it off. The kernel depends on the machine:
+
+- **Apple M4 and later (SME):** the multiply runs on the matrix unit. From
+  0.72 it works on a 2×2 block of the unit's tiles at once, and under
+  [`:goal(speed)`](/compiler/language/statements/#speed-or-accuracy-goal),
+  which `matrix_mul_f32` uses, it leaves out a NaN check that only affects the
+  bits of a NaN (the inputs have none).
+- **x86-64:** the widest vector unit the processor has (SSE2, AVX2 or
+  AVX-512), chosen when the program starts; the Ryzen 9 9955HX picks AVX-512.
+
+`matrix_mul_f32` measures it: a 128×128 `float` multiply, 10,000 times.
+(`matrix_mul` multiplies `u32` values, which the matrix unit does not take, so
+it stays a vectorised loop.)
+
+{separate}
 
 ## Parallel blocks and the GPU
 
-From 0.7 a [`par` block](/compiler/language/par/) runs a loop's iterations at
-once, across every CPU thread or on the GPU: Metal on Apple silicon and CUDA on
-an NVIDIA GPU under Windows, and from 0.72 Vulkan on Linux, Windows and Android
-and WebGPU in the browser. Four programs in `benchmark/par`
-measure it: `mandelbrot` (a 2048×2048 escape-time image, at most 256 iterations
-a pixel), `perlin` (2048×2048 improved noise, four octaves), `nbody` (the force
-on each of 8192 bodies from all the others) and `saxpy` (`y = a·x + y` over 16
-million integers, with a sum). Each runs its block
-eight times and reports the best run; *one thread* is `XC_PAR=cpu
-XC_PAR_THREADS=1`, *all threads* `XC_PAR=cpu`, *GPU* `XC_PAR=gpu`, and `auto` the
-default, which times the CPU and the GPU and keeps the faster. On Windows *GPU*
-is CUDA and *Vulkan* the same card through Vulkan (`XC_PAR_GPU=vulkan`); the
-Linux machine's GPU is the small one built into its processor (two compute
-units), which just beats the sixteen cores beside it on `mandelbrot` and
-`nbody` and loses to them on the other two. Every mode's
-checksum must agree.
+A [`par` block](/compiler/language/par/) runs a loop's iterations at once,
+across every CPU thread or on the GPU (from 0.7). The GPU is reached through:
+
+- **Metal** on Apple silicon;
+- **CUDA** on an NVIDIA GPU under Windows;
+- **Vulkan** on Linux, Windows and Android (from 0.72);
+- **WebGPU** in a browser (from 0.72).
+
+Four programs in `benchmark/par` measure it:
+
+- `mandelbrot`: a 2048×2048 escape-time image, at most 256 iterations a pixel;
+- `perlin`: 2048×2048 improved noise, four octaves;
+- `nbody`: the force on each of 8192 bodies from all the others;
+- `saxpy`: `y = a·x + y` over 16 million integers, with a sum.
+
+Each runs its block eight times and reports the best run, in four modes: *one
+thread* (`XC_PAR=cpu XC_PAR_THREADS=1`), *all threads* (`XC_PAR=cpu`), *GPU*
+(`XC_PAR=gpu`) and `auto`, the default, which times the CPU and the GPU and
+keeps the faster. Every mode's checksum must agree. On Windows *GPU* is CUDA
+and *Vulkan* the same card through Vulkan (`XC_PAR_GPU=vulkan`).
 
 {par}
 
-The GPU's first run carries one-off costs — building the kernel, and on NVIDIA
-creating the driver context and compiling the PTX or SPIR-V — so it is shown
-apart: a few tens of milliseconds on Metal and on the integrated GPU, and on
-the 3090 about 250 through CUDA and 130 to 190 through Vulkan. `auto` pays it once, while it measures. `saxpy` does one
-multiply-add for every eight bytes it moves, so the copy to and from the GPU
-outweighs the arithmetic and `auto` keeps it on the CPU; on the integrated GPU
-that copy is slower still, because the runtime does not yet use the CPU's
-cache for it there. The other three do enough work per element that a
-discrete GPU wins by a wide margin. Through Vulkan the 3090 comes within
-1.2–1.7× of its CUDA times.
+What the tables show:
+
+- **A discrete GPU wins by a wide margin** on the three programs that do real
+  work per element, and `auto` finds that and uses it.
+- **`saxpy` stays on the CPU.** It does one multiply-add for every eight bytes
+  it moves, so copying to and from the GPU outweighs the arithmetic, and `auto`
+  keeps it on the CPU everywhere.
+- **The Ryzen's integrated Radeon** has 128 shader lanes against the CPU's 32
+  threads. It just beats them on `mandelbrot` and `nbody` and loses on the
+  other two; its copies of `saxpy`'s arrays are slower still, because the
+  runtime does not yet use the CPU's cache for them there.
+- **Vulkan against CUDA:** on the RTX 3090, Vulkan comes within 1.2–1.7× of
+  CUDA's times.
+- **The first run** carries one-off costs (building the kernel, and on NVIDIA
+  creating the driver context and compiling the PTX or SPIR-V), so it is shown
+  apart: a few tens of milliseconds on Metal and the integrated GPU, and on the
+  3090 about 250 ms through CUDA and 130 to 190 through Vulkan. `auto` pays it
+  once, while it measures.
 
 ## Release to release
 
-xc's own time for each benchmark, relative to {first}. The thin lines are
-single benchmarks (labelled where they moved by more than twelve percent), the
-thick line the geometric mean (without `matrix_mul_f32`). Releases shown: {hist_list}. {changed} changed in
+How fast xc's code is in each release, relative to {first}: above 1× is faster.
+The thin lines are single benchmarks (labelled where they moved by more than
+twelve percent), the thick line the geometric mean (without `matrix_mul_f32`). Releases shown: {hist_list}. {changed} changed in
 0.64's benchmark set and are left out of this history.
 
 {hist_arm}
