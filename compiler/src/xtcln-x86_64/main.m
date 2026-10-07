@@ -865,6 +865,10 @@ int main(int argc, const char* argv[])
                 NSString* lib = map[f.symbol];
                 if (lib)
                     [mapLibs addObject:lib];
+                // A library's xc runtime hand-offs (__xt_lib_ctors) are the
+                // program's, bound when it loads the library.
+                else if (shared && [f.symbol hasPrefix:@"__xt_"])
+                    continue;
                 else
                     [missing addObject:f.symbol];
                 }

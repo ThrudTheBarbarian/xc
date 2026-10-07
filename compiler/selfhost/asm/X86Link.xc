@@ -27,6 +27,7 @@ class X86Link
     Map* _glibcMap; // symbol -> glibc library, from glibc-imports.map
     Map* _soDefs;   // symbol -> SONAME, from the .so inputs
     Array* _xtNeeds; // the runtime hand-offs (`__xt_…`) the .so inputs import
+    bool _glibcShared; // a glibc LIBRARY: its __xt_ imports come from the program
 
     void init(void)
         {
@@ -36,6 +37,7 @@ class X86Link
         _glibcMap = new Map();
         _soDefs = new Map();
         _xtNeeds = (Array*)0;
+        _glibcShared = false;
         }
     bool failed(void)
         {
@@ -350,6 +352,7 @@ class X86Link
         Array* needed = glibcSetup(sos, mapText);
         if (needed == (Array*)0)
             return (Data*)0;
+        _glibcShared = true;
         return linkShared(srcs, objs, ars, soname, exports, needed, runpath, iface);
         }
 
@@ -422,6 +425,9 @@ class X86Link
                 if (!Elf64.hasName(mapLibs, (String*)lib))
                     mapLibs.add(lib);
                 }
+            // A library's xc runtime hand-offs are the program's (the reference explains).
+            else if (_glibcShared && f.symbol().hasPrefix(String.withCString("__xt_")))
+                continue;
             else if (!Elf64.hasName(missing, f.symbol()))
                 missing.add((Object*)f.symbol());
             }
