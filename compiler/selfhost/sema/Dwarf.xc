@@ -550,9 +550,18 @@ class DwCur
                     }
                 }
             }
+        else if (_d.length() >= (u32)$40 && _d.byteAt((u32)0) == (u8)'M' && _d.byteAt((u32)1) == (u8)'Z')
+            {
+            // A Windows DLL: MinGW writes ordinary DWARF into PE sections, and
+            // the export directory names what it provides. As the reference.
+            _elf32 = false;
+            if (!parsePE())
+                return false;
+            _soname = path.lastPathComponent();
+            }
         else
             {
-            return false; // neither container
+            return false; // no container this reader knows
             }
 
         if (_sections.get((Hashable*)String.withCString(".debug_info")) == (Object*)0)
@@ -560,6 +569,108 @@ class DwCur
         setupCursors();
         parseAllCompilationUnits();
         buildDeclarations();
+        return true;
+        }
+
+    // ── PE (a Windows DLL) ───────────────────────────────────────────────
+    // The DOS stub's e_lfanew finds "PE\0\0", the COFF header, the optional
+    // header and the section table; a name longer than eight bytes is "/<n>",
+    // an offset into the COFF string table after the symbol table. As the
+    // reference's parsePE.
+    u32 peU32(u32 off)
+        {
+        if (off + (u32)4 > _d.length()) return (u32)0;
+        return (u32)_d.byteAt(off) | ((u32)_d.byteAt(off + (u32)1) << (u32)8) |
+               ((u32)_d.byteAt(off + (u32)2) << (u32)16) | ((u32)_d.byteAt(off + (u32)3) << (u32)24);
+        }
+    u32 peU16(u32 off)
+        {
+        if (off + (u32)2 > _d.length()) return (u32)0;
+        return (u32)_d.byteAt(off) | ((u32)_d.byteAt(off + (u32)1) << (u32)8);
+        }
+    // The file offset of an RVA, through the section holding it; -1 if none.
+    i64 peFileOf(Array* secs, u32 a)
+        {
+        for (u32 k = (u32)0; k < secs.count(); k = k + (u32)4)
+            {
+            u32 va = ((Number*)secs.get(k)).asU32();
+            u32 vs = ((Number*)secs.get(k + (u32)1)).asU32();
+            u32 ro = ((Number*)secs.get(k + (u32)2)).asU32();
+            u32 rs = ((Number*)secs.get(k + (u32)3)).asU32();
+            u32 span = vs > rs ? vs : rs;
+            if (a >= va && a < va + span)
+                return (i64)(ro + (a - va));
+            }
+        return (i64)-1;
+        }
+    bool parsePE(void)
+        {
+        u32 pe = peU32((u32)$3C);
+        if (pe + (u32)24 > _d.length() || _d.byteAt(pe) != (u8)'P' || _d.byteAt(pe + (u32)1) != (u8)'E' ||
+            _d.byteAt(pe + (u32)2) != (u8)0 || _d.byteAt(pe + (u32)3) != (u8)0)
+            return false;
+        u32 coff = pe + (u32)4;
+        u32 nsec = peU16(coff + (u32)2);
+        u32 symtab = peU32(coff + (u32)8);
+        u32 nsym = peU32(coff + (u32)12);
+        u32 optSize = peU16(coff + (u32)16);
+        u32 opt = coff + (u32)20;
+        if (peU16(opt) != (u32)$20B)
+            return false; // not PE32+
+        u32 strtab = symtab != (u32)0 ? symtab + nsym * (u32)18 : (u32)0;
+        u32 sec = opt + optSize;
+        Array* secs = new Array(); // va, vsize, raw offset, raw size per section
+        for (u32 k = (u32)0; k < nsec; k = k + (u32)1)
+            {
+            u32 h = sec + k * (u32)40;
+            if (h + (u32)40 > _d.length())
+                return false;
+            String* nm = new String();
+            for (u32 b = (u32)0; b < (u32)8 && _d.byteAt(h + b) != (u8)0; b = b + (u32)1)
+                nm.appendByte(_d.byteAt(h + b));
+            if (nm.byteLength() > (u32)1 && nm.byteAt((u32)0) == (u8)'/' && strtab != (u32)0)
+                {
+                u32 n = (u32)0;
+                for (u32 b = (u32)1; b < nm.byteLength(); b = b + (u32)1)
+                    n = n * (u32)10 + (u32)(nm.byteAt(b) - (u8)'0');
+                nm = cStringAt(strtab + n, _d.length());
+                }
+            u32 vsize = peU32(h + (u32)8);
+            u32 va = peU32(h + (u32)12);
+            u32 rawSize = peU32(h + (u32)16);
+            u32 rawOff = peU32(h + (u32)20);
+            secs.add((Object*)Number.withU32(va));
+            secs.add((Object*)Number.withU32(vsize));
+            secs.add((Object*)Number.withU32(rawOff));
+            secs.add((Object*)Number.withU32(rawSize));
+            u32 size = vsize != (u32)0 && vsize < rawSize ? vsize : rawSize;
+            if (nm.byteLength() > (u32)0 && rawOff + size <= _d.length())
+                {
+                Array* rec = new Array();
+                rec.add((Object*)Number.withU32(rawOff));
+                rec.add((Object*)Number.withU32(size));
+                rec.add((Object*)Number.withU32((u32)0));
+                _sections.set((Hashable*)nm, (Object*)rec);
+                }
+            }
+        if (optSize >= (u32)120)
+            {
+            u32 edir = peU32(opt + (u32)112);
+            i64 ed = edir != (u32)0 ? peFileOf(secs, edir) : (i64)-1;
+            if (ed >= (i64)0)
+                {
+                u32 nnames = peU32((u32)ed + (u32)24);
+                i64 names = peFileOf(secs, peU32((u32)ed + (u32)32));
+                for (u32 k = (u32)0; names >= (i64)0 && k < nnames; k = k + (u32)1)
+                    {
+                    i64 at = peFileOf(secs, peU32((u32)names + (u32)4 * k));
+                    if (at < (i64)0) continue;
+                    String* n = cStringAt((u32)at, _d.length());
+                    if (n.byteLength() > (u32)0)
+                        _exports.set((Hashable*)n, (Object*)Number.withU32((u32)1));
+                    }
+                }
+            }
         return true;
         }
 

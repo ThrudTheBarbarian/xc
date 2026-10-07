@@ -77,6 +77,61 @@ EOF
     return 1
 }
 
+# ── PE: a MinGW-built DLL, its DWARF in the PE's own sections ─────────────
+# `#import <geom>` for -A win64 against a DLL a MinGW toolchain built (from
+# 0.73): the section table's long names ("/4") and the export directory are
+# PE's; the DWARF is what the other cases read. Both compilers build the
+# client; the two executables must be identical, and it runs under Wine where
+# there is one.
+pecmp=0
+peCase() {
+    command -v x86_64-w64-mingw32-gcc >/dev/null || {
+        echo "  SKIP  PE case (no x86_64-w64-mingw32-gcc) — NOT counted as matching"; return 0; }
+    mkdir -p "$WORK/pe"
+    cat > "$WORK/pe/geom.c" <<'EOF'
+typedef struct { int x, y, w, h; } GRect;
+enum GColour { G_RED = 1, G_GREEN = 2, G_BLUE = 4 };
+__declspec(dllexport) int g_area(GRect r) { return r.w * r.h; }
+__declspec(dllexport) int g_grow(GRect* r, int by) { r->w += by; r->h += by; return r->w; }
+__declspec(dllexport) unsigned g_mix(enum GColour a, enum GColour b) { return (unsigned)a | (unsigned)b; }
+__declspec(dllexport) double g_scale(double v, float k) { return v * k; }
+EOF
+    ( cd "$WORK/pe" && x86_64-w64-mingw32-gcc -g -fno-eliminate-unused-debug-types -shared -o libgeom.dll geom.c \
+          -Wl,--out-implib,libgeom.dll.a >/dev/null 2>&1 ) || {
+        echo "  SKIP  PE case (could not build the probe DLL)"; return 0; }
+    cat > "$WORK/pe/probe.xc" <<'EOF'
+#import "Stdio.xc"
+#import <geom>
+i32 main(void)
+    {
+    GRect r;
+    r.x = 1; r.y = 2; r.w = 6; r.h = 7;
+    i32 a = g_area(r);
+    i32 w = g_grow(&r, 3);
+    Stdio.printf("GRect=%lu area %d grow %d mix %u scale %.2f\n", (u32)sizeof(GRect), a, w,
+                 g_mix(G_RED, G_BLUE), g_scale(2.5, 4.0f));
+    return 0;
+    }
+EOF
+    for c in xcc xcc-xc; do
+        "$BIN/$c" -q -A win64 -H . -L "$WORK/pe" -o "$WORK/pe/$c.exe" "$WORK/pe/probe.xc" >"$WORK/pe/$c.log" 2>&1 || {
+            echo "--- PE: $c could not build the probe:"
+            grep -a error "$WORK/pe/$c.log" | head -2; return 1; }
+    done
+    pecmp=1
+    if ! cmp -s "$WORK/pe/xcc.exe" "$WORK/pe/xcc-xc.exe"; then
+        echo "--- dwarf-diff [PE]: DIFFER (the two executables)"; return 1
+    fi
+    if command -v wine >/dev/null; then
+        out=$(cd "$WORK/pe" && WINEDLLOVERRIDES="winedbg.exe=d" wine ./xcc-xc.exe 2>/dev/null | tr -d '\r')
+        if [ "$out" != "GRect=16 area 42 grow 9 mix 5 scale 10.00" ]; then
+            echo "--- dwarf-diff [PE]: ran wrong: $out"; return 1
+        fi
+    fi
+    echo "--- dwarf-diff [PE/MinGW DWARF]: identical"
+    return 0
+}
+
 . "$(dirname "$0")/arm9-sysroot.sh"
 # The loader's GEM tree is the only C library in reach that carries DWARF and
 # real aggregate types. Say so rather than passing when there is nothing to read.
@@ -85,6 +140,8 @@ EOF
 rc=0
 mocmp=0
 machoCase || rc=1
+pefail=0
+peCase || pefail=1
 
 GEMDIR="${GEMLIB:-}"
 if [ ! -f "$GEMDIR/libGEM.so" ]; then
@@ -96,12 +153,12 @@ if [ ! -f "$GEMDIR/libGEM.so" ]; then
     # tabulated the run BROKEN — a green comparison presented as a red one,
     # which is the same failure of trust as the reverse. The summary counts
     # only the comparisons that HAPPENED.
-    echo "--- dwarf-diff: pass=$(( mocmp - rc )) fail=$rc (ELF case SKIPPED) ---"
+    echo "--- dwarf-diff: pass=$(( mocmp - rc + pecmp - pefail )) fail=$(( rc + pefail )) (ELF case SKIPPED) ---"
     # ...and if the Mach-O probe was skipped too, then nothing was compared,
     # which this harness's own rule says is not a pass either.
-    [ $(( mocmp + rc )) -gt 0 ] || {
+    [ $(( mocmp + rc + pecmp + pefail )) -gt 0 ] || {
         echo "!!! dwarf-diff: NOTHING WAS COMPARED — this is not a pass"; exit 1; }
-    exit $rc
+    exit $(( rc + pefail ))
 fi
 
 cat > "$WORK/probe.xc" <<'EOF'
@@ -150,7 +207,7 @@ fi
 # a run in which BOTH probes agreed was tabulated as a harness that did not
 # run — a green result presented as a red one, which is the same failure of
 # trust as the reverse. Two probes, so two comparisons.
-mopass=$(( mocmp - rc )); elfpass=$(( 1 - elffail ))
-echo "--- dwarf-diff: pass=$(( mopass + elfpass )) fail=$(( rc + elffail )) ---"
-[ $(( rc + elffail )) -eq 0 ] || exit 1
+mopass=$(( mocmp - rc )); elfpass=$(( 1 - elffail )); pepass=$(( pecmp - pefail ))
+echo "--- dwarf-diff: pass=$(( mopass + elfpass + pepass )) fail=$(( rc + elffail + pefail )) ---"
+[ $(( rc + elffail + pefail )) -eq 0 ] || exit 1
 exit 0

@@ -298,6 +298,7 @@ static NSUInteger safeByteWidth(XTType* t)
     NSUInteger _len;
     BOOL _le;
     int _elfClass;        // 1 = ELFCLASS32, 2 = ELFCLASS64
+    NSSet<NSString*>* _peExports; // a DLL's export directory (PE)
     NSUInteger _ptrWidth; // target native pointer width (struct-pad math)
     NSString* _diskPath;  // on-disk path (nil for in-memory) — locates a .dSYM sidecar
 
@@ -430,9 +431,18 @@ static NSUInteger safeByteWidth(XTType* t)
                 }
             }
         }
+    else if (_len >= 0x40 && _bytes[0] == 'M' && _bytes[1] == 'Z')
+        {
+        // A Windows DLL. MinGW toolchains write ordinary DWARF into PE
+        // sections; what the DLL provides is its export directory.
+        if (![self parsePE:error])
+            return nil;
+        soname = displayName;
+        exports = _peExports;
+        }
     else
         {
-        [self failWithError:error message:@"unrecognised object file (not ELF or Mach-O)"];
+        [self failWithError:error message:@"unrecognised object file (not ELF, Mach-O or PE)"];
         return nil;
         }
 
@@ -674,6 +684,103 @@ enum
     N_EXT = 0x01,
     N_SECT = 0x0e,
     };
+
+// ───────────────────────────── PE parse ─────────────────────────────────
+//
+// A Windows DLL (PE32+): the DOS stub's e_lfanew finds "PE\0\0", the COFF
+// header, the optional header and the section table. A section name longer
+// than eight bytes is written "/<n>", an offset into the COFF string table
+// that follows the symbol table — MinGW's .debug_info is one of those. The
+// DWARF sections are recorded as ELF's are; the export directory (data
+// directory 0) names what the DLL provides.
+- (uint32_t)peU32:(uint64_t)off
+    {
+    if (off + 4 > _len)
+        return 0;
+    return (uint32_t)_bytes[off] | ((uint32_t)_bytes[off + 1] << 8) | ((uint32_t)_bytes[off + 2] << 16) |
+           ((uint32_t)_bytes[off + 3] << 24);
+    }
+
+- (uint16_t)peU16:(uint64_t)off
+    {
+    if (off + 2 > _len)
+        return 0;
+    return (uint16_t)(_bytes[off] | (_bytes[off + 1] << 8));
+    }
+
+- (BOOL)parsePE:(NSError**)error
+    {
+    uint32_t pe = [self peU32:0x3C];
+    if ((uint64_t)pe + 24 > _len || memcmp(_bytes + pe, "PE\0\0", 4) != 0)
+        return [self failWithError:error message:@"not a PE file"];
+    _le = YES;
+    _elfClass = 2;
+    uint64_t coff = pe + 4;
+    uint16_t nsec = [self peU16:coff + 2];
+    uint32_t symtab = [self peU32:coff + 8];
+    uint32_t nsym = [self peU32:coff + 12];
+    uint16_t optSize = [self peU16:coff + 16];
+    uint64_t opt = coff + 20;
+    if ([self peU16:opt] != 0x20B)
+        return [self failWithError:error message:@"not a 64-bit PE (PE32+) file"];
+    uint64_t strtab = symtab ? (uint64_t)symtab + (uint64_t)nsym * 18 : 0;
+    uint64_t sec = opt + optSize;
+    NSMutableArray<NSArray<NSNumber*>*>* rva = [NSMutableArray array];   // va, vsize, raw offset, raw size
+    for (uint16_t k = 0; k < nsec; k++)
+        {
+        uint64_t h = sec + (uint64_t)k * 40;
+        if (h + 40 > _len)
+            return [self failWithError:error message:@"bad PE section table"];
+        char nm8[9] = {0};
+        memcpy(nm8, _bytes + h, 8);
+        NSString* nm = @(nm8);
+        if (nm8[0] == '/' && strtab)
+            {
+            uint64_t at = strtab + (uint64_t)strtoull(nm8 + 1, NULL, 10);
+            nm = [self cStringAt:at limit:_len];
+            }
+        uint32_t vsize = [self peU32:h + 8], va = [self peU32:h + 12];
+        uint32_t rawSize = [self peU32:h + 16], rawOff = [self peU32:h + 20];
+        [rva addObject:@[ @(va), @(vsize), @(rawOff), @(rawSize) ]];
+        // The virtual size is the section's own; the raw size is padded to the
+        // file alignment.
+        uint32_t size = vsize && vsize < rawSize ? vsize : rawSize;
+        if (nm.length && (uint64_t)rawOff + size <= _len)
+            _sections[nm] = @[ @(rawOff), @(size), @0, @1, @0, @0 ]; // off,size,link,type,entsize,flags
+        }
+    // The export directory's names, through the section that holds each RVA.
+    NSInteger (^fileOf)(uint32_t) = ^NSInteger(uint32_t a) {
+      for (NSArray<NSNumber*>* s in rva)
+          {
+          uint32_t va = s[0].unsignedIntValue, span = MAX(s[1].unsignedIntValue, s[3].unsignedIntValue);
+          if (a >= va && a < va + span)
+              return (NSInteger)(s[2].unsignedIntValue + (a - va));
+          }
+      return -1;
+    };
+    NSMutableSet<NSString*>* ex = [NSMutableSet set];
+    if (optSize >= 112 + 8)
+        {
+        uint32_t edir = [self peU32:opt + 112];
+        NSInteger ed = edir ? fileOf(edir) : -1;
+        if (ed >= 0)
+            {
+            uint32_t nnames = [self peU32:(uint64_t)ed + 24];
+            NSInteger names = fileOf([self peU32:(uint64_t)ed + 32]);
+            for (uint32_t k = 0; names >= 0 && k < nnames; k++)
+                {
+                NSInteger at = fileOf([self peU32:(uint64_t)names + 4 * (uint64_t)k]);
+                if (at < 0)
+                    continue;
+                NSString* n = [self cStringAt:(uint64_t)at limit:_len];
+                if (n.length)
+                    [ex addObject:n];
+                }
+            }
+        }
+    _peExports = ex;
+    return YES;
+    }
 
 - (BOOL)looksLikeMachO
     {
