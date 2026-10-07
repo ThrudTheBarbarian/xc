@@ -42,10 +42,11 @@ NS_ASSUME_NONNULL_BEGIN
 // driver's whole Java footprint is one committed ~900-byte dex, built once by a
 // maintainer — the same relationship the Objective-C compiler has to this one.
 @property(nonatomic, readonly, nullable) NSString* withDex;
-// --with-lib: an extra prebuilt .so to store beside the payload in the APK's
-// lib/arm64-v8a/ (uxkit/032). The Android UI driver ships a two-lib
-// arrangement: the NDK-built shim runs first and dlopens the xcc payload.
-@property(nonatomic, readonly, nullable) NSString* withLib;
+// --with-lib: extra prebuilt .so files to store beside the payload in the
+// APK's lib/arm64-v8a/ (uxkit/032), in the order given; the option repeats.
+// The Android UI driver ships a two-lib arrangement: the NDK-built shim runs
+// first and dlopens the xcc payload.
+@property(nonatomic, readonly) NSArray<NSString*>* withLibs;
 // --lib-name: the manifest's `android.app.lib_name`, i.e. WHICH of the packaged
 // libraries the system loads. Defaults to the payload, which is right for a
 // single-lib package and wrong for the driver's.

@@ -1402,7 +1402,14 @@ static BOOL fileExistsCaseSensitive(NSFileManager* fm, NSString* path)
                     {
                     NSString* archDir = [[root stringByAppendingPathComponent:vendor]
                         stringByAppendingPathComponent:_targetArchName];
-                    NSString* p = [self probeLibDirs:@[ archDir ]
+                    // The target's own directory first (ios-sim, android…),
+                    // then the arch's: an iOS program must not link the
+                    // macOS library that shares its arch.
+                    NSArray<NSString*>* dirs = _targetPlatformName.length
+                        ? @[ [[root stringByAppendingPathComponent:vendor]
+                                 stringByAppendingPathComponent:_targetPlatformName], archDir ]
+                        : @[ archDir ];
+                    NSString* p = [self probeLibDirs:dirs
                                           candidates:libCandidates
                                                   fm:fm];
                     if (p)

@@ -26,7 +26,7 @@
 @property(nonatomic, readwrite) BOOL quiet;
 @property(nonatomic, readwrite) BOOL emitLib;
 @property(nonatomic, readwrite) BOOL emitIface;
-@property(nonatomic, readwrite, nullable) NSString* withLib;
+@property(nonatomic, readwrite) NSArray<NSString*>* withLibs;
 @property(nonatomic, readwrite, nullable) NSString* libName;
 @property(nonatomic, readwrite, nullable) NSArray<NSString*>* manifestAttrs;
 @property(nonatomic, readwrite) NSArray<NSString*>* neededSonames;
@@ -945,8 +945,9 @@ static NSString* sExecutablePath = nil;
             }
         else if ([arg isEqualToString:@"--with-lib"] && i + 1 < argc)
             {
-            // uxkit/032: a prebuilt .so to ride beside the payload.
-            opts.withLib = [NSString stringWithUTF8String:argv[++i]];
+            // uxkit/032: a prebuilt .so to ride beside the payload; each one
+            // given is kept (a 3p library and its NDK shim travel together).
+            opts.withLibs = [(opts.withLibs ?: @[]) arrayByAddingObject:[NSString stringWithUTF8String:argv[++i]]];
             }
         else if ([arg isEqualToString:@"--lib-name"] && i + 1 < argc)
             {

@@ -107,6 +107,7 @@ class IfFrame
     // until changed. 0 = the default package.
     String* _currentPackage;
     String* _arch;    // of String@
+    String* _platformDir; // ios / ios-sim / android: tried before _arch in the third-party tree, or 0
     Array* _warnings; // of String@
 
     void init(void)
@@ -127,11 +128,18 @@ class IfFrame
         _errors = new Array();
         _currentPackage = (String*)0;
         _arch = (String*)0;
+        _platformDir = (String*)0;
         _warnings = new Array();
         }
 
     // ── Configuration ────────────────────────────────────────────
     // The target, for the one directive that is target-specific.
+    // The target's own directory in the third-party tree (ios, ios-sim,
+    // android), tried before the arch's. As the reference's targetPlatformName.
+    void setPlatformDir(String* p)
+        {
+        _platformDir = p;
+        }
     void setArch(String* a)
         {
         _arch = a;
@@ -214,9 +222,23 @@ class IfFrame
         for (u32 r = (u32)0; r < _thirdPartyRoots.count(); r = r + (u32)1)
             {
             String* vdir = ((String*)_thirdPartyRoots.get(r)).appendingPathComponent(vendor);
-            String* adir = vdir.appendingPathComponent(_arch);
+            // The vendor's directory as it is spelt: `#use <UXKit>` finds
+            // uxkit/, as the reference's listing of the root does, and the
+            // runpath then names the directory that is really there.
+            if (!Files.existsExact(vdir))
+                {
+                String* low = ((String*)_thirdPartyRoots.get(r)).appendingPathComponent(vendor.lowercased());
+                if (Files.existsExact(low))
+                    vdir = low;
+                }
+            Array* dirs = new Array();
+            if (_platformDir != (String*)0)
+                dirs.add((Object*)vdir.appendingPathComponent(_platformDir));
+            dirs.add((Object*)vdir.appendingPathComponent(_arch));
+            for (u32 di = (u32)0; di < dirs.count(); di = di + (u32)1)
             for (u32 e = (u32)0; e < exts.count(); e = e + (u32)1)
                 {
+                String* adir = (String*)dirs.get(di);
                 String* cand = String.withCString("lib");
                 cand.append(stem);
                 cand.appendCString(".");

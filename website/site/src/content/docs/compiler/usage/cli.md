@@ -206,7 +206,7 @@ is reported and ignored.
 | `--sign <identity.pem>` | Sign the output with a developer identity (iOS/macOS); pair with `--sign-entitlements <plist>`. See also the standalone `xcc-sign`. |
 | `--emit-apk` | On `-A android`, package a signed `.apk`. `--sign-key <path>` names the signing key. |
 | `--needed <soname>` | On `-A android`, add a `DT_NEEDED` entry naming `<soname>`. Repeatable. A payload that calls into a companion `.so` must name it. |
-| `--with-lib <path>` | With `--emit-apk`, store a prebuilt `lib<name>.so` in `lib/arm64-v8a/` beside the payload. |
+| `--with-lib <path>` | With `--emit-apk`, store a prebuilt `lib<name>.so` in `lib/arm64-v8a/` beside the payload. From 0.73 it may be given more than once, one library each time; up to 0.72 only the last one is stored. |
 | `--lib-name <name>` | With `--emit-apk`, the library the system loads first (`android.app.lib_name`). Default: the payload. |
 | `--with-dex <path>` | With `--emit-apk`, package this `classes.dex` and mark the manifest `hasCode="true"`. |
 | `--manifest-attr <name>=<value>` | (from 0.7) With `--emit-apk`, set an attribute on the manifest's `<application>`; repeatable. `label` (which also names the activity the launcher shows), and the booleans `debuggable`, `allowBackup`, `hardwareAccelerated`, `largeHeap`, `usesCleartextTraffic`, `resizeableActivity`, `requestLegacyExternalStorage` and `enableOnBackInvokedCallback`. |

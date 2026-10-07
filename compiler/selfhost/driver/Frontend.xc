@@ -1875,7 +1875,11 @@ String* appleSdkFor(FeOptions* o)
     String* env = Platform.env(String.withCString("SDKROOT"));
     if (env != 0 && env.byteLength() > (u32)0)
         roots.add((Object*)env);
-    String* t = o.target();
+    // iOS is the arm64 TARGET with the ios / ios-sim platform layer: the SDK
+    // follows the platform. Keyed on the target alone it was the macOS SDK,
+    // which has no UIKit, so `#import <UIKit>` failed unless $SDKROOT named
+    // the iOS one.
+    String* t = o.libPlatform() != (String*)0 ? o.libPlatform() : o.target();
     if (t.equals(String.withCString("ios")))
         roots.add((Object*)String.withCString("/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk"));
     else if (t.equals(String.withCString("ios-sim")))
@@ -1901,6 +1905,14 @@ Preprocessor* buildPP(FeOptions* o)
     predefine(pp, o);
     // `#package` is wasm32-only and the preprocessor has to be able to say so.
     pp.setArch(platformOf(o));
+    // iOS and Android are the arm64 back end, each with its own libraries.
+    String* plat = o.libPlatform();
+    for (u32 i = (u32)0; plat == (String*)0 && i < o.defs().count(); i = i + (u32)1)
+        if (((String*)o.defs().get(i)).hasPrefix(String.withCString("PLATFORM_android")))
+            plat = String.withCString("android");
+    if (plat != (String*)0 && (plat.equals(String.withCString("ios")) || plat.equals(String.withCString("ios-sim"))
+                               || plat.equals(String.withCString("android"))))
+        pp.setPlatformDir(plat);
     for (u32 i = (u32)0; i < o.incs().count(); i = i + (u32)1)
         pp.addIncludePath((String*)o.incs().get(i));
     for (u32 i = (u32)0; i < o.libs().count(); i = i + (u32)1)

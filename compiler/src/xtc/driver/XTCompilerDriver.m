@@ -1080,6 +1080,10 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
                         : _options.useArm64Backend  ? @"arm64"
                         : _options.m68kPlatform     ? @"atarist"
                                                     : (_options.memoryModel.platform ?: nil);
+    pp.targetPlatformName = _options.androidTarget ? @"android"
+                            : ([_options.applePlatform isEqualToString:@"ios"] ||
+                               [_options.applePlatform isEqualToString:@"ios-sim"]) ? _options.applePlatform
+                                                                                    : nil;
     pp.explicitLibraryPathCount = _options.explicitLibraryPathCount;
     // macOS and iOS: `#import <F>` may name a system framework.
     if (_options.useArm64Backend && !_options.androidTarget)

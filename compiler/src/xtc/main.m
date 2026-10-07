@@ -1976,16 +1976,15 @@ static int linkAndroidApk(const char *argv0, XTCommandLineOptions *opts,
     // onCreate runs FIRST — it stashes the activity and VM, loads the bridge
     // dex, then dlopens the payload and delegates — so `android.app.lib_name`
     // has to name the shim, not the payload it defaults to.
-    NSData *extraLib = nil;
-    NSString *extraLibEntry = nil;
-    if (opts.withLib) {
-        extraLib = [NSData dataWithContentsOfFile:opts.withLib];
+    NSMutableArray<NSDictionary *> *extraLibs = [NSMutableArray array];
+    for (NSString *withLib in opts.withLibs) {
+        NSData *extraLib = [NSData dataWithContentsOfFile:withLib];
         if (!extraLib) {
             fprintf(stderr, "xcc: error: cannot read --with-lib '%s'\n",
-                    opts.withLib.UTF8String);
+                    withLib.UTF8String);
             return 1;
         }
-        NSString *bn = opts.withLib.lastPathComponent;
+        NSString *bn = withLib.lastPathComponent;
         // Android loads by soname from lib/<abi>/, so the stored name has to be
         // the library's own `lib<X>.so` — not a renamed copy of it.
         if (![bn hasPrefix:@"lib"] || ![bn hasSuffix:@".so"]) {
@@ -1994,7 +1993,13 @@ static int linkAndroidApk(const char *argv0, XTCommandLineOptions *opts,
                     bn.UTF8String);
             return 1;
         }
-        extraLibEntry = [NSString stringWithFormat:@"lib/arm64-v8a/%@", bn];
+        NSString *entry = [NSString stringWithFormat:@"lib/arm64-v8a/%@", bn];
+        for (NSDictionary *e in extraLibs)
+            if ([e[@"name"] isEqualToString:entry]) {
+                fprintf(stderr, "xcc: error: --with-lib names %s twice\n", bn.UTF8String);
+                return 1;
+            }
+        [extraLibs addObject:@{@"name": entry, @"data": extraLib}];
     }
     NSString *manifestLib = opts.libName.length ? opts.libName : name;
     for (NSString *m in opts.manifestAttrs) {
@@ -2015,7 +2020,7 @@ static int linkAndroidApk(const char *argv0, XTCommandLineOptions *opts,
         @{@"name": [NSString stringWithFormat:@"lib/arm64-v8a/lib%@.so", name],
           @"data": soData},
     ] mutableCopy];
-    if (extraLib) [entries addObject:@{@"name": extraLibEntry, @"data": extraLib}];
+    [entries addObjectsFromArray:extraLibs];
     if (dexData) [entries addObject:@{@"name": @"classes.dex", @"data": dexData}];
     NSData *apkUnsigned = [XTApkWriter zipWithEntries:entries
                                             alignment:4096 alignSuffix:@".so"];

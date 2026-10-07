@@ -43,6 +43,9 @@ NS_ASSUME_NONNULL_BEGIN
 |* `x86_64`, `win64`, `atarist`, …) — the same spelling `-A` uses.
 \****************************************************************************/
 @property(nonatomic, nullable) NSString* targetArchName;
+// The target's own directory in the third-party tree, tried before the arch
+// one: ios, ios-sim or android (each the arm64 back end, each its own library).
+@property(nonatomic, copy, nullable) NSString* targetPlatformName;
 
 /****************************************************************************\
 |* macOS and iOS: a name that is no source file and no library may be a

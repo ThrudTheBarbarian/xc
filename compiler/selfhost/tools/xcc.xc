@@ -77,7 +77,7 @@ class CapOptions
     u32     _m68kCpu;      // 68000 | 68030 (-A 68000 / -A 68030)
     bool    _debugInfo;    // -g
     Array*  _needed;       // --needed <soname>, repeatable
-    String* _withLib;      // --with-lib <path>
+    Array* _withLibs;      // --with-lib <path>, each one given
     String* _libName;      // --lib-name <name>
     Array*  _manifestAttrs; // --manifest-attr name=value, repeatable (bug 616)
     String* _withDex;      // --with-dex <path>
@@ -100,7 +100,7 @@ class CapOptions
         _m68kCpu = (u32)68000;
         _debugInfo = false;
         _needed = new Array();
-        _withLib = (String*)0;
+        _withLibs = new Array();
         _libName = (String*)0;
         _manifestAttrs = new Array();
         _withDex = (String*)0;
@@ -122,7 +122,7 @@ class CapOptions
     u32  m68kCpu(void)      { return _m68kCpu; }
     bool debugInfo(void)    { return _debugInfo; }
     Array* needed(void)     { return _needed; }
-    String* withLib(void)   { return _withLib; }
+    Array* withLibs(void)   { return _withLibs; }
     String* libName(void)   { return _libName; }
     Array* manifestAttrs(void) { return _manifestAttrs; }
     String* withDex(void)   { return _withDex; }
@@ -146,7 +146,7 @@ class CapOptions
     void setHardFloat(bool b)    { _hardFloat = b; _softFloat = !b; }
     void setM68kCpu(u32 c)       { _m68kCpu = c; }
     void setDebugInfo(bool b)    { _debugInfo = b; }
-    void setWithLib(String* p)   { _withLib = p; }
+    void addWithLib(String* p)   { _withLibs.add((Object*)p); }
     void setLibName(String* n)   { _libName = n; }
     void setWithDex(String* p)   { _withDex = p; }
     void setNoSelfHost(bool b)   { _noSelfHost = b; }
@@ -897,7 +897,8 @@ Array* dylibImportDeps(DriverOptions* d, Array* neededLibs)
 // beside the binary — which is also all the reference's in-process link writes.
 String* rpathDirOf(String* lp)
 {
-    String* dir = lp.deletingLastPathComponent();
+    // Spelt as the reference spells it (standardPath, bug 629).
+    String* dir = standardPath(lp.deletingLastPathComponent());
     if (dir.equals(String.withCString(".")) || dir.equals(String.withCString("./")))
         return String.withCString("");
     for (u32 i = (u32)0; i < lp.byteLength(); i = i + (u32)1)
@@ -1148,22 +1149,29 @@ void packageApk(DriverOptions* d, String* name, String* soname, Array* soBytes)
     // first, say), and --lib-name for which of the two the system loads.
     // Android loads from lib/arm64-v8a/ by soname, so the stored name has to
     // be the library's own lib<X>.so.
-    Array* extraLib = (Array*)0;
-    String* extraEntry = (String*)0;
-    if (c.withLib() != (String*)0) {
-        extraLib = fileBytes(c.withLib());
+    // Each --with-lib, in the order given (the option repeats).
+    Array* extras = new Array();
+    for (u32 w = (u32)0; w < c.withLibs().count(); w = w + (u32)1) {
+        String* withLib = (String*)c.withLibs().get(w);
+        Array* extraLib = fileBytes(withLib);
         if (extraLib == (Array*)0) {
-            Stdio.printf("xcc: error: cannot read --with-lib '%s'\n", c.withLib().cString());
+            Stdio.printf("xcc: error: cannot read --with-lib '%s'\n", withLib.cString());
             Process.exit((i32)1); return;
         }
-        String* bn = c.withLib().lastPathComponent();
+        String* bn = withLib.lastPathComponent();
         if (!bn.hasPrefix(String.withCString("lib")) || !bn.hasSuffix(String.withCString(".so"))) {
             Stdio.printf("xcc: error: --with-lib '%s' must be named lib<name>.so "
                          "— Android resolves it from lib/arm64-v8a/ by that name\n", bn.cString());
             Process.exit((i32)1); return;
         }
-        extraEntry = String.withCString("lib/arm64-v8a/");
+        String* extraEntry = String.withCString("lib/arm64-v8a/");
         extraEntry.append(bn);
+        for (u32 k = (u32)0; k < extras.count(); k = k + (u32)1)
+            if (((ApkEntry*)extras.get(k)).name.equals(extraEntry)) {
+                Stdio.printf("xcc: error: --with-lib names %s twice\n", bn.cString());
+                Process.exit((i32)1); return;
+            }
+        extras.add((Object*)ApkEntry.with(extraEntry, extraLib));
     }
     String* manifestLib = name;
     if (c.libName() != (String*)0 && c.libName().byteLength() > (u32)0) manifestLib = c.libName();
@@ -1184,7 +1192,7 @@ void packageApk(DriverOptions* d, String* name, String* soname, Array* soBytes)
     String* libPath = String.withCString("lib/arm64-v8a/");
     libPath.append(soname);
     entries.add((Object*)ApkEntry.with(libPath, soBytes));
-    if (extraLib != (Array*)0) entries.add((Object*)ApkEntry.with(extraEntry, extraLib));
+    for (u32 k = (u32)0; k < extras.count(); k = k + (u32)1) entries.add(extras.get(k));
     if (dex != (Array*)0) entries.add((Object*)ApkEntry.with(String.withCString("classes.dex"), dex));
     Array* zip = ApkZip.build(entries, (u32)4096, String.withCString(".so"));
 
@@ -5508,7 +5516,7 @@ bool parseCapabilityFlag(DriverOptions* d, u32* ip, u32 argc)
         *ip = i + (u32)2; return true;
     }
     if (a.equals(String.withCString("--with-lib")) && hasVal) {
-        c.setWithLib(Process.argument(i + (u32)1)); *ip = i + (u32)2; return true;
+        c.addWithLib(Process.argument(i + (u32)1)); *ip = i + (u32)2; return true;
     }
     if (a.equals(String.withCString("--lib-name")) && hasVal) {
         c.setLibName(Process.argument(i + (u32)1)); *ip = i + (u32)2; return true;
@@ -5622,7 +5630,7 @@ void checkCapabilities(DriverOptions* d)
         Stdio.printf("xcc: error: --needed names an Android DT_NEEDED entry and needs -A android\n");
         Process.exit((i32)1); return;
     }
-    if ((c.withLib() != (String*)0 || c.libName() != (String*)0 || c.withDex() != (String*)0
+    if ((c.withLibs().count() > (u32)0 || c.libName() != (String*)0 || c.withDex() != (String*)0
          || c.manifestAttrs().count() > (u32)0)
         && !(isAndroid(d) && d.emitApk())) {
         Stdio.printf("xcc: error: --with-lib, --lib-name, --with-dex and --manifest-attr package an APK "
