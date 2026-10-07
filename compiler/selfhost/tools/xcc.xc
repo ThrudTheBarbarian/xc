@@ -2138,6 +2138,20 @@ bool dataContains(Data* data, String* s, bool nul)
 // tree, glibc's exports come from glibc-imports.map, and each -l library is
 // read for its SONAME and what it defines. Same inputs, in the same order, as
 // the reference driver's linkX86_64Glibc.
+// A directory as the reference spells it (NSString's stringByStandardizingPath):
+// a leading "./" goes, so "." is no directory at all; and on macOS a leading
+// /private goes when the path without it still exists (the temporary
+// directory lives under it). Bug 629: the runpaths differed by exactly these.
+String* standardPath(String* p)
+{
+    while (p.hasPrefix(String.withCString("./"))) p = p.substringFromByte((u32)2);
+    if (p.equals(String.withCString("."))) return String.withCString("");
+    String* pre = String.withCString("/private/");
+    if (!p.hasPrefix(pre)) return p;
+    String* rest = p.substringFromByte((u32)8);
+    return Files.exists(rest) ? rest : p;
+}
+
 // The names a module's assembly declares `.globl`, sorted: a library's own API.
 Array* globlNames(String* prog)
 {
@@ -2266,7 +2280,7 @@ void linkX86_64Glibc(DriverOptions* d, String* prog)
         if (!lp.hasSuffix(String.withCString(".so"))) continue;
         sos.add((Object*)lp);
         haveDeps = true;
-        String* dir = lp.deletingLastPathComponent();
+        String* dir = standardPath(lp.deletingLastPathComponent());
         bool seen = false;
         for (u32 k = (u32)0; k < depDirs.count(); k = k + (u32)1)
             if (((String*)depDirs.get(k)).equals(dir)) seen = true;
