@@ -110,6 +110,18 @@ u64 gParVkSetLayout[64];
 u32 gParVkBindings[64];
 u32 gParVkKernels;
 
+// The buffers of the last runs, by binding slot, kept for the next: a block
+// run again (or another of the same shape) reuses them where they are big
+// enough, as allocating GPU memory costs more than most blocks' work. Host
+// buffer, its memory and mapping; the device copy and its memory (discrete
+// GPUs); the size they hold.
+u64 gParVkBuf[49];
+u64 gParVkMem[49];
+u8* gParVkMap[49];
+u64 gParVkDev[49];
+u64 gParVkDMem[49];
+i64 gParVkCap[49];
+
 // Little-endian stores into a structure's bytes.
 void _vk32(u8* b, u32 at, u32 v)
     {
@@ -424,6 +436,25 @@ class ParVulkan
         return true;
         }
 
+    // Frees binding slot i's kept buffers, if any.
+    static void drop(u32 i)
+        {
+        if (gParVkBuf[i] != (u64)0)
+            _destroyBuffer(_dev, gParVkBuf[i], (pointer)0);
+        if (gParVkMem[i] != (u64)0)
+            _freeMemory(_dev, gParVkMem[i], (pointer)0);
+        if (gParVkDev[i] != (u64)0)
+            _destroyBuffer(_dev, gParVkDev[i], (pointer)0);
+        if (gParVkDMem[i] != (u64)0)
+            _freeMemory(_dev, gParVkDMem[i], (pointer)0);
+        gParVkBuf[i] = (u64)0;
+        gParVkMem[i] = (u64)0;
+        gParVkMap[i] = (u8*)0;
+        gParVkDev[i] = (u64)0;
+        gParVkDMem[i] = (u64)0;
+        gParVkCap[i] = (i64)0;
+        }
+
     // The pipeline for a source, made once: its slot in the cache, or -1.
     static i32 pipeline(u8* src)
         {
@@ -611,9 +642,30 @@ class ParVulkan
         bool ok = true;
         for (u32 i = (u32)0; i < nb && ok; i = i + (u32)1)
             {
-            ok = buffer(sizes[i], false, &bufs[i], &mems[i], &maps[i]);
-            if (ok && _discrete)
-                ok = buffer(sizes[i], true, &devs[i], &dmems[i], (u8**)0);
+            if (gParVkBuf[i] == (u64)0 || gParVkCap[i] < sizes[i])
+                {
+                drop(i);
+                u64 hb = (u64)0;
+                u64 hm = (u64)0;
+                u8* hp = (u8*)0;
+                u64 db = (u64)0;
+                u64 dm = (u64)0;
+                ok = buffer(sizes[i], false, &hb, &hm, &hp);
+                if (ok && _discrete)
+                    ok = buffer(sizes[i], true, &db, &dm, (u8**)0);
+                // Kept even when half made, so drop() frees what was made.
+                gParVkBuf[i] = hb;
+                gParVkMem[i] = hm;
+                gParVkMap[i] = hp;
+                gParVkDev[i] = db;
+                gParVkDMem[i] = dm;
+                gParVkCap[i] = ok ? sizes[i] : (i64)0;
+                }
+            bufs[i] = gParVkBuf[i];
+            mems[i] = gParVkMem[i];
+            maps[i] = gParVkMap[i];
+            devs[i] = gParVkDev[i];
+            dmems[i] = gParVkDMem[i];
             }
         if (ok)
             {
@@ -795,17 +847,10 @@ class ParVulkan
             _destroyFence(_dev, fence, (pointer)0);
         if (pool != (u64)0)
             _destroyPool(_dev, pool, (pointer)0);
-        for (u32 i = (u32)0; i < nb; i = i + (u32)1)
-            {
-            if (bufs[i] != (u64)0)
-                _destroyBuffer(_dev, bufs[i], (pointer)0);
-            if (mems[i] != (u64)0)
-                _freeMemory(_dev, mems[i], (pointer)0);
-            if (devs[i] != (u64)0)
-                _destroyBuffer(_dev, devs[i], (pointer)0);
-            if (dmems[i] != (u64)0)
-                _freeMemory(_dev, dmems[i], (pointer)0);
-            }
+        // The buffers stay for the next run (gParVkBuf…), unless this one failed.
+        if (!ok)
+            for (u32 i = (u32)0; i < nb; i = i + (u32)1)
+                drop(i);
         if (!ok)
             {
             Log.error("par: the GPU run failed, running on the CPU");
