@@ -14,6 +14,11 @@
 // window stands for).  The AES's info LINE has no macOS counterpart and is the one chrome call that
 // is deliberately empty.  The toolkit's own file-panel ops (listDir/fileDelete/...) are unused for
 // the same reason: macOS presents NSOpenPanel.
+// The system frameworks the driver and its Objective-C shim (libUXAppKit.m) use: imported, a
+// framework is linked, so neither a program nor libUXKit names them on the command line.
+#import <Cocoa>
+#import <OpenGL>
+#import <QuartzCore>
 #import "UXViewDriver.xc"
 #import "UXGeometry.xc"
 #import "UXGraphics.xc"

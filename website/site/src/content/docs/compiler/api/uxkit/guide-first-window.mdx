@@ -65,14 +65,36 @@ void main(void) {
 }
 ```
 
-Build and run it on macOS:
+## Building it
+
+With UXKit installed, a program replaces its UXKit imports with one line,
+
+```c
+#use <UXKit>
+```
+
+and builds with nothing else (from 0.73):
+
+```sh
+xcc -A arm64 first_window.xc -o first_window       # macOS
+xcc -A win64 first_window.xc -o first_window.exe   # Windows: ship libUXKit.dll beside it
+```
+
+`frameworks/uxkit/install.sh` builds the library for each target and installs it
+in the third-party tree, `/opt/xcc/3p/uxkit/<target>/`, beside the version
+contract a program can check (`UXAbi.xc`). The library is the toolkit with that
+target's driver: on macOS it includes the Objective-C part of the AppKit driver
+and links Cocoa itself.
+
+Linux, iOS, Android and the web are not installed yet. For those, and for
+working on UXKit itself, build against the sources:
 
 ```sh
 cc -fobjc-arc -fno-objc-msgsend-selector-stubs -dynamiclib \
    -install_name $PWD/libUXAppKit.dylib libUXAppKit.m -framework Cocoa \
    -o libUXAppKit.dylib
 xcc -A arm64 -I <uxkit> first_window.xc \
-    -Xlinker libUXAppKit.dylib -framework Cocoa -o first_window
+    -Xlinker libUXAppKit.dylib -o first_window
 ./first_window
 ```
 

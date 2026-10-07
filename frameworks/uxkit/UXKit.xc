@@ -1,8 +1,14 @@
 // UXKit.xc — the toolkit as ONE translation unit, for `xtc --emit-lib`.
 //
-// xtc's --emit-lib takes a single input, and #import is include-once, so this
-// umbrella is the library.  Clients then say `#import <UXKit>` and link libUXKit.so.
+// xcc's --emit-lib takes a single input, and #import is include-once, so this
+// umbrella is the library.  Clients then say `#use <UXKit>` and link libUXKit.
+//
+// One library per target: UXPlatform brings in the driver for the target it is built for (and only
+// that one), so libUXKit.dylib for arm64 is AppKit's, libUXKit.so for x86_64 is GTK's, and so on.
+#import "UXPlatform.xc"
+#if UX_PLATFORM_GEM
 #import "UXGem.h.xc"
+#endif
 #import "UXVersion.xc"
 
 // The LIBRARY half of the version gate: define the ABI symbol, and have it return the patch
@@ -19,17 +25,20 @@ i32 UXK_ABI_SYM(void)
 #import "UXView.xc"
 #import "UXControl.xc"
 #import "UXGraphics.xc"
+#if UX_PLATFORM_GEM
 #import "UXGemGraphics.xc"
+#endif
 #import "UXEvent.xc"
 #import "UXViewDriver.xc"
-#import "UXGemDriver.xc"
 #import "UXWindow.xc"
 #import "UXApplication.xc"
 #import "UXMenu.xc"
 #import "UXAlert.xc"
 #import "UXDesignable.xc" // the ONE rsc-reflection protocol declaration libUXKit.so exports
 #import "UXRsc.xc"
+#if UX_PLATFORM_GEM
 #import "UXRscGem.xc"
+#endif
 #import "UXTableView.xc"
 #import "UXTextView.xc"
 #import "UXOutlineView.xc"
@@ -41,9 +50,8 @@ i32 UXK_ABI_SYM(void)
 // compiler (see doc/bugs/021), the cap is gone, and `#import <UXKit>` now means the whole
 // toolkit rather than the third of it that happened to fit.
 //
-// Backend-SPECIFIC files stay out on purpose and always will: UXWin32Driver/UXGdiGraphics
-// name win64-only libraries and UXAppKitDriver/UXCocoaGraphics name Cocoa, neither of which
-// exists on the board this library is built for.  UXBoot is test scaffolding.
+// Backend-specific files come in only through UXPlatform, for the target being built: a driver
+// names its platform's system libraries, which do not exist elsewhere.  UXBoot is test scaffolding.
 #import "UXAnimation.xc"
 #import "UXBreadcrumb.xc"
 #import "UXCollectionView.xc"
@@ -59,7 +67,9 @@ i32 UXK_ABI_SYM(void)
 #import "UXFileChooser.xc"
 #import "UXFilePanel.xc"
 #import "UXFont.xc"
+#if UX_PLATFORM_GEM
 #import "UXGem.xc"
+#endif
 #import "UXGradient.xc"
 #import "UXImage.xc"
 #import "UXJpeg.xc"   // the image decoders: JPEG (baseline) and PNG
