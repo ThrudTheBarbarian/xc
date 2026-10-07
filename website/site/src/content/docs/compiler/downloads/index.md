@@ -16,7 +16,7 @@ cross-build native binaries for every target with **no other toolchain installed
 | Linux (x86_64) | [xcc-linux-0.72.tar.bz2](/downloads/xcc-linux-0.72.tar.bz2) | 6.4 MB |
 | Windows (x64) | [xcc-win64-0.72.zip](/downloads/xcc-win64-0.72.zip) | 7.4 MB |
 | arm9 sysroot (any host) | [xcc-arm9-sysroot-0.72.tar.bz2](/downloads/xcc-arm9-sysroot-0.72.tar.bz2) | 830 KB |
-| UXKit GTK 4 library (Linux x86_64) | [xcc-uxgtk-linux-0.72.tar.bz2](/downloads/xcc-uxgtk-linux-0.72.tar.bz2) | 99 KB |
+| UXKit GTK 4 library (Linux x86_64) | [xcc-uxgtk-linux-0.72.tar.bz2](/downloads/xcc-uxgtk-linux-0.72.tar.bz2) | 111 KB |
 
 Every archive contains the same compiler. Each host build cross-compiles to **all**
 targets, so the platform you download for decides only where the compiler runs.
