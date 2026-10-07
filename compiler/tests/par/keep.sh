@@ -46,13 +46,25 @@ if ! grep -q "hardware key" "$W/r1" || grep -q "hardware key [0-9a-f]* (|" "$W/r
 fi
 fail=0
 conf="$W/st/keep.conf"
-grep -q "^par.learned\..*\.heavy\..* = 2000,4194304$" "$conf" 2>/dev/null \
-    || { echo "FAIL keep: first run did not learn CPU up to 2000, GPU from 4194304"; cat "$conf"; fail=1; }
+# Which device wins depends on the host (an integrated GPU can win even at
+# 2000 items), so the test checks that what was learned is KEPT and USED, not
+# which way it went: the first run must have saved bounds, and the second must
+# put on the GPU exactly the runs those bounds send there, without measuring.
+learned=$(grep "^par.learned\..*\.heavy\..* = " "$conf" 2>/dev/null | head -1)
+[ -n "$learned" ] || { echo "FAIL keep: first run learned nothing"; cat "$conf" 2>/dev/null; fail=1; }
+bounds=${learned##* = }; cpuUpTo=${bounds%,*}; gpuFrom=${bounds#*,}
+want=0
+for n in 2000 4194304; do
+    if [ "$gpuFrom" != -1 ] && [ "$n" -ge "$gpuFrom" ] && { [ "$cpuUpTo" = -1 ] || [ "$n" -gt "$cpuUpTo" ]; }; then
+        want=$((want + 4))
+    fi
+done
 run r2
 if grep -q "learned\|auto picks\|auto keeps" "$W/r2"; then
     echo "FAIL keep: second run measured again"; grep "learned\|auto" "$W/r2"; fail=1
 fi
-[ "$(grep -c 'items on the GPU' "$W/r2")" = 4 ] || { echo "FAIL keep: second run did not put the large size on the GPU"; fail=1; }
+got=$(grep -c 'items on the GPU' "$W/r2")
+[ "$got" = "$want" ] || { echo "FAIL keep: learned $bounds, so $want runs belong on the GPU; $got went there"; fail=1; }
 cp "$conf" "$W/learned"
 echo "par.heavy = cpu" >> "$conf"; run r3
 grep -q "items on the GPU" "$W/r3" && { echo "FAIL keep: par.heavy = cpu still used the GPU"; fail=1; }
