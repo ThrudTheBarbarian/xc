@@ -108,7 +108,9 @@ _xt_glibc_main:				# (argc, argv, envp), called by glibc
 
 	.data
 	.p2align 3
-# The list head libinit-linux.s links each xc-built library's table into.
+# The list head libinit-linux.s links each xc-built library's table into:
+# {head, last}, two words, as in crt-linux.s.
 	.globl	__xt_lib_ctors
 __xt_lib_ctors:
-	.quad	0
+	.zero	16
+	.size	__xt_lib_ctors, 16

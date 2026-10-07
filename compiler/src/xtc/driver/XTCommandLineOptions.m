@@ -1414,13 +1414,9 @@ static NSString* sExecutablePath = nil;
                         "for -A x86_64 only\n", opts.staticLink ? "-static" : "-dynamic");
         return nil;
         }
-    if (opts.dynamicExplicit && opts.emitLib)
-        {
-        fprintf(stderr, "xcc: -dynamic builds an executable; a glibc shared "
-                        "library (--emit-lib -dynamic) is not supported yet\n");
-        return nil;
-        }
-    opts.dynamicGlibc = opts.useX86_64Backend && !opts.staticLink && !opts.emitLib;
+    // From 0.73 a library follows the same rule: --emit-lib links against
+    // glibc, and -static builds the musl library earlier releases made.
+    opts.dynamicGlibc = opts.useX86_64Backend && !opts.staticLink;
     if (opts.dynamicGlibc && [opts.hostMalloc isEqualToString:@"mimalloc"])
         {
         fprintf(stderr, "xcc: -fmalloc=mimalloc: link with -static (the dynamic glibc "

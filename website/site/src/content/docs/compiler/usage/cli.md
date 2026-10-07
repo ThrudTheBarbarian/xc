@@ -97,8 +97,8 @@ linker or `clang`.
 | Flag | Effect |
 |------|--------|
 | `-l<name>` | Link a system library, for example `-lobjc`. On `-A x86_64` the dynamic link takes `lib<name>.so` (or `.a`) from the `-L` path and the standard system library directories; a `-static` link takes `lib<name>.a` from the `-L` path. `-lc`, `-lm`, `-lpthread`, `-ldl` and `-lrt` name the C library itself and need no file. |
-| `-static` | **From 0.72.** On `-A x86_64`, link the executable statically over musl instead of dynamically against glibc: one file with no dependencies, which runs on any x86-64 Linux, musl-based distributions included. It cannot load shared system libraries such as GTK 4. |
-| `-dynamic` | **From 0.66.** On `-A x86_64`, link the executable dynamically against glibc: what a program needs to load GTK 4, libGL or any other shared system library. From 0.72 this is the default and `-dynamic` only names it; up to 0.71 the default is the static musl link. Still linked in-house: `xcc` knows glibc's exports from a table in its support tree, so a Mac can link for Linux, and an `-l` library is read for its exports. A symbol that neither glibc nor an `-l` library defines is a link error. Cross-linking names a copy of the libraries with `-L`. Executables only for now (not with `--emit-lib`). |
+| `-static` | **From 0.72.** On `-A x86_64`, link the executable statically over musl instead of dynamically against glibc: one file with no dependencies, which runs on any x86-64 Linux, musl-based distributions included. It cannot load shared system libraries such as GTK 4. From 0.73, with `--emit-lib` it builds the musl library earlier releases made, for programs linked `-static`. |
+| `-dynamic` | **From 0.66.** On `-A x86_64`, link the executable dynamically against glibc: what a program needs to load GTK 4, libGL or any other shared system library. From 0.72 this is the default and `-dynamic` only names it; up to 0.71 the default is the static musl link. Still linked in-house: `xcc` knows glibc's exports from a table in its support tree, so a Mac can link for Linux, and an `-l` library is read for its exports. A symbol that neither glibc nor an `-l` library defines is a link error. Cross-linking names a copy of the libraries with `-L`. From 0.73 a library built with `--emit-lib` follows the same rule (see `--emit-lib`); up to 0.72, executables only. |
 | `-framework <F>` | Link a macOS framework, for example `-framework AppKit`. |
 | `-Xlinker <file>` | Link a library or object file named by path. |
 | `-Wl,<arg>[,<arg>…]` | The same, in the form clang users write. `xcc` links in-house: a file is linked, `-rpath <dir>` adds a run-path entry on arm64 and iOS, and any other linker flag is ignored with a note. `-Xlinker` takes the same arguments. |
@@ -110,7 +110,7 @@ linker or `clang`.
 
 | Flag | Effect |
 |------|--------|
-| `--emit-lib` | Emit a **shared library** instead of an executable, together with a sibling `.xtc.iface` describing the classes, protocols, structs and enums it exports. Implies `-fpic`. |
+| `--emit-lib` | Emit a **shared library** instead of an executable, together with a sibling `.xtc.iface` describing the classes, protocols, structs and enums it exports. Implies `-fpic`. From 0.73, on `-A x86_64` the library links against glibc, as an executable does: each `-l` library it names becomes one of its dependencies, so a program that imports it loads them too, and it exports only its own API. A program that imports it links against glibc. |
 | `-L <path>` | Add a search path for `#import <Lib>`, which resolves to `lib<Lib>.so` and reads its interface (or, for a C library, its DWARF). Repeatable. The long form is `--library-path`. |
 
 ```bash

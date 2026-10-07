@@ -2468,41 +2468,24 @@ static const char *const kGlibcOwnLibs[] = {"c", "m", "pthread", "dl", "rt", NUL
 static BOOL x86GlibcLink(XTCommandLineOptions *opts, NSArray<NSString *> *neededLibs) {
     if (!opts.dynamicGlibc) return NO;
     if (opts.dynamicExplicit) return YES;
+    // A library xcc built against glibc (--emit-lib without -static, from
+    // 0.73) names libc.so.6 among its DT_NEEDED; a musl one never does.
     NSData *tag = [@".xtc.iface" dataUsingEncoding:NSUTF8StringEncoding];
+    NSData *libc = [NSData dataWithBytes:"libc.so.6" length:10];
     for (NSString *lib in neededLibs) {
         NSData *d = [NSData dataWithContentsOfFile:lib];
-        if (d && [d rangeOfData:tag options:0 range:NSMakeRange(0, d.length)].location != NSNotFound)
+        if (d && [d rangeOfData:tag options:0 range:NSMakeRange(0, d.length)].location != NSNotFound
+            && [d rangeOfData:libc options:0 range:NSMakeRange(0, d.length)].location == NSNotFound)
             return NO;
     }
     return YES;
 }
 
-static int linkX86_64Glibc(const char *argv0, XTCommandLineOptions *opts, NSString *asmPath,
-                           NSString *outPath, NSArray<NSString *> *neededLibs) {
-    NSFileManager *fm = [NSFileManager defaultManager];
-    NSString *support = resolveSupportRoot(argv0, opts);
-    NSString *ln = resolveSiblingTool(argv0, @"xcc-ln-x86_64");
-    if (!support || !ln) {
-        fprintf(stderr, "xcc: error: -dynamic: the x86-64 linker or support tree is missing\n");
-        return 1;
-    }
-    NSMutableArray<NSString *> *args = [NSMutableArray arrayWithObjects:@"--glibc", @"-importmap",
-        [support stringByAppendingPathComponent:@"x86_64/glibc-imports.map"], nil];
-    for (NSString *n in @[@"crt-glibc.s", @"rtgen-glibc.s", @"rtfiles-linux.s", @"libmgen-linux.s"]) {
-        NSString *pth = [support stringByAppendingPathComponent:
-                         [@"x86_64/runtime/" stringByAppendingString:n]];
-        if (![fm fileExistsAtPath:pth]) {
-            fprintf(stderr, "xcc: error: -dynamic: missing runtime file '%s'\n", pth.UTF8String);
-            return 1;
-        }
-        [args addObject:pth];
-    }
-    NSString *prog = [NSString stringWithContentsOfFile:asmPath encoding:NSUTF8StringEncoding error:NULL];
-    NSString *stubPath = [xtcTempDir() stringByAppendingPathComponent:@"xtc-x86_64-glibc-newstubs.s"];
-    [x86_64ClassAllocStubs(prog, NO) writeToFile:stubPath atomically:YES
-                                        encoding:NSUTF8StringEncoding error:NULL];
-    [args addObject:stubPath];
-    [args addObject:asmPath];
+// The user's link line for a glibc link (executable or library): -L dirs,
+// then -l libraries (a .so, or a .a pool), objects and archives named
+// directly, appended to `args`. NO after an error has been reported.
+static BOOL x86GlibcLinkInputs(XTCommandLineOptions *opts, NSFileManager *fm,
+                               NSMutableArray<NSString *> *args) {
     // The link line: -L dirs, then -l libraries (a .so, or a .a pool), objects
     // and archives named directly. The standard multiarch directories are
     // searched after -L, so `-lgtk-4` works on the Linux host as it stands; a
@@ -2546,7 +2529,7 @@ static int linkX86_64Glibc(const char *argv0, XTCommandLineOptions *opts, NSStri
                                     "or in the system library directories (cross-linking: "
                                     "-L a copy of the libraries)\n",
                             base.UTF8String, base.UTF8String, base.UTF8String);
-                    return 1;
+                    return NO;
                 }
                 [args addObject:found];
                 continue;
@@ -2554,16 +2537,46 @@ static int linkX86_64Glibc(const char *argv0, XTCommandLineOptions *opts, NSStri
             if (x86LinkTokenIsFileInput(t) || [t.pathExtension isEqualToString:@"so"]) {
                 if (![fm fileExistsAtPath:t]) {
                     fprintf(stderr, "xcc: error: '%s': no such file\n", t.UTF8String);
-                    return 1;
+                    return NO;
                 }
                 [args addObject:t];
                 continue;
             }
             fprintf(stderr, "xcc: error: -dynamic: linker flag '%s': this driver links "
                             "in-house and takes -l, -L, .o, .a and .so only\n", t.UTF8String);
-            return 1;
+            return NO;
         }
     }
+    return YES;
+}
+
+static int linkX86_64Glibc(const char *argv0, XTCommandLineOptions *opts, NSString *asmPath,
+                           NSString *outPath, NSArray<NSString *> *neededLibs) {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *support = resolveSupportRoot(argv0, opts);
+    NSString *ln = resolveSiblingTool(argv0, @"xcc-ln-x86_64");
+    if (!support || !ln) {
+        fprintf(stderr, "xcc: error: -dynamic: the x86-64 linker or support tree is missing\n");
+        return 1;
+    }
+    NSMutableArray<NSString *> *args = [NSMutableArray arrayWithObjects:@"--glibc", @"-importmap",
+        [support stringByAppendingPathComponent:@"x86_64/glibc-imports.map"], nil];
+    for (NSString *n in @[@"crt-glibc.s", @"rtgen-glibc.s", @"rtfiles-linux.s", @"libmgen-linux.s"]) {
+        NSString *pth = [support stringByAppendingPathComponent:
+                         [@"x86_64/runtime/" stringByAppendingString:n]];
+        if (![fm fileExistsAtPath:pth]) {
+            fprintf(stderr, "xcc: error: -dynamic: missing runtime file '%s'\n", pth.UTF8String);
+            return 1;
+        }
+        [args addObject:pth];
+    }
+    NSString *prog = [NSString stringWithContentsOfFile:asmPath encoding:NSUTF8StringEncoding error:NULL];
+    NSString *stubPath = [xtcTempDir() stringByAppendingPathComponent:@"xtc-x86_64-glibc-newstubs.s"];
+    [x86_64ClassAllocStubs(prog, NO) writeToFile:stubPath atomically:YES
+                                        encoding:NSUTF8StringEncoding error:NULL];
+    [args addObject:stubPath];
+    [args addObject:asmPath];
+    if (!x86GlibcLinkInputs(opts, fm, args)) return 1;
     // Libraries the program #imported (xc-built .so files): DT_NEEDED, found
     // beside the program or where they were linked from.
     NSMutableArray<NSString *> *depDirs = [NSMutableArray array];
@@ -2703,10 +2716,85 @@ static int linkX86_64Dynamic(const char *argv0, XTCommandLineOptions *opts, NSSt
 // by xtcg-x86_64 --emit-lib; the RIP-relative codegen is already position-
 // independent, so `-shared -fPIC` needs no text relocations. The serialised
 // interface rides along as a `.xtc.iface` ELF section for `#import <Lib>`.
+// A glibc shared library (--emit-lib on -A x86_64 without -static): the
+// glibc runtime with no process entry, every import bound as for a glibc
+// executable, each -l library a DT_NEEDED, and only the library's own API
+// exported, so its runtime's sqrt or random cannot interpose on another
+// library in the process. A program that imports it links against glibc.
+static int linkX86_64GlibcShared(const char *argv0, XTCommandLineOptions *opts, NSString *asmPath,
+                                 NSString *outPath, NSString *_Nullable ifaceJson,
+                                 NSArray<NSString *> *neededLibs) {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *support = resolveSupportRoot(argv0, opts);
+    NSString *ln = resolveSiblingTool(argv0, @"xcc-ln-x86_64");
+    if (!support || !ln) {
+        fprintf(stderr, "xcc: error: --emit-lib: the x86-64 linker or support tree is missing\n");
+        return 1;
+    }
+    NSMutableArray<NSString *> *args = [NSMutableArray arrayWithObjects:@"--glibc", @"-shared",
+        @"-importmap", [support stringByAppendingPathComponent:@"x86_64/glibc-imports.map"], nil];
+    for (NSString *n in @[@"rtgen-glibc.s", @"rtfiles-linux.s", @"libmgen-linux.s"]) {
+        NSString *pth = [support stringByAppendingPathComponent:
+                         [@"x86_64/runtime/" stringByAppendingString:n]];
+        if (![fm fileExistsAtPath:pth]) {
+            fprintf(stderr, "xcc: error: --emit-lib: missing runtime file '%s'\n", pth.UTF8String);
+            return 1;
+        }
+        [args addObject:pth];
+    }
+    NSString *prog = [NSString stringWithContentsOfFile:asmPath encoding:NSUTF8StringEncoding error:NULL];
+    // Load-time constructors register with the program, which runs them before
+    // main (crt-glibc.s), as a musl library's do.
+    if ([prog containsString:@"\n__xt_ctors_start:"]) {
+        NSString *li = [support stringByAppendingPathComponent:@"x86_64/runtime/libinit-linux.s"];
+        if (![fm fileExistsAtPath:li]) {
+            fprintf(stderr, "xcc: error: x86-64 runtime file missing: %s\n", li.UTF8String);
+            return 1;
+        }
+        [args addObject:li];
+    }
+    NSString *stubPath = [xtcTempDir() stringByAppendingPathComponent:@"xtc-x86_64-glibc-so-newstubs.s"];
+    [x86_64ClassAllocStubs(prog, NO) writeToFile:stubPath atomically:YES
+                                        encoding:NSUTF8StringEncoding error:NULL];
+    [args addObject:stubPath];
+    [args addObject:asmPath];
+    if (!x86GlibcLinkInputs(opts, fm, args)) return 1;
+    // The libraries this one #imports (xc-built .so files): DT_NEEDED, found
+    // beside it through $ORIGIN.
+    for (NSString *lib in neededLibs) [args addObject:lib];
+    // Its own API: the globals the library's module declares.
+    NSMutableSet<NSString *> *exports = [NSMutableSet set];
+    NSRegularExpression *ge = [NSRegularExpression
+        regularExpressionWithPattern:@"(?m)^\\s*\\.globl\\s+(\\S+)" options:0 error:NULL];
+    for (NSTextCheckingResult *m in [ge matchesInString:prog options:0 range:NSMakeRange(0, prog.length)])
+        [exports addObject:[prog substringWithRange:[m rangeAtIndex:1]]];
+    NSString *exportsPath = [xtcTempDir() stringByAppendingPathComponent:@"xtc-x86_64-glibc-so-exports.txt"];
+    [[[exports.allObjects sortedArrayUsingSelector:@selector(compare:)] componentsJoinedByString:@"\n"]
+        writeToFile:exportsPath atomically:YES encoding:NSUTF8StringEncoding error:NULL];
+    NSString *ifacePath = @"-";
+    if (ifaceJson.length) {
+        ifacePath = [xtcTempDir() stringByAppendingPathComponent:@"xtc-x86_64-glibc-so-iface.json"];
+        [ifaceJson writeToFile:ifacePath atomically:YES encoding:NSUTF8StringEncoding error:NULL];
+    }
+    [args addObjectsFromArray:@[@"-soname", outPath.lastPathComponent, @"-iface", ifacePath,
+                                @"-exports", exportsPath, @"-rpath", @"$ORIGIN", @"-o", outPath]];
+    int rc = runChild(ln, args);
+    if (!opts.verbose) {
+        [fm removeItemAtPath:stubPath error:NULL];
+        [fm removeItemAtPath:exportsPath error:NULL];
+    }
+    if (rc != 0) return 1;
+    if (!opts.quiet)
+        fprintf(stderr, "xcc: x86-64 shared library (glibc) -> '%s'\n", outPath.UTF8String);
+    return 0;
+}
+
 static int linkX86_64Shared(const char *argv0, XTCommandLineOptions *opts, NSString *asmPath,
                             NSString *outPath, NSString *_Nullable ifaceJson,
                             NSArray<NSString *> *neededLibs) {
     NSFileManager *fm = [NSFileManager defaultManager];
+    if (x86GlibcLink(opts, neededLibs))
+        return linkX86_64GlibcShared(argv0, opts, asmPath, outPath, ifaceJson, neededLibs);
 
     // ── --self-host: write the ET_DYN in-house (no clang, no ld.lld, no glibc) ──
     // The runtime goes in whole: a library has no dead-symbol elimination here,
@@ -4865,10 +4953,10 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
             // path lives — the -shared and dynamic-exe variants are LINKS, and
             // a compile that imported a library was being routed into one of
             // them and handed the `.xtc.iface` to ld.lld ("unknown file type").
-            : (x86Exe && x86GlibcLink(opts, neededLibs) && !opts.compileOnly)
-            ? linkX86_64Glibc(argv0, opts, tmpAsm, opts.outputPath, neededLibs)
             : (x86Exe && opts.emitLib && !opts.compileOnly)
             ? linkX86_64Shared(argv0, opts, tmpAsm, opts.outputPath, ifaceJson, neededLibs)
+            : (x86Exe && x86GlibcLink(opts, neededLibs) && !opts.compileOnly)
+            ? linkX86_64Glibc(argv0, opts, tmpAsm, opts.outputPath, neededLibs)
             : (x86Exe && neededLibs.count > 0 && !opts.compileOnly)
             ? linkX86_64Dynamic(argv0, opts, tmpAsm, opts.outputPath, neededLibs)
             : x86Exe

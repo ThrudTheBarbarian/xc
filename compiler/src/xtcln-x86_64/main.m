@@ -363,6 +363,7 @@ int main(int argc, const char* argv[])
         NSMutableArray<NSString*>* rpaths = [NSMutableArray array];
         NSString* ifacePath = nil;
         NSString* importMapPath = nil;
+        NSString* exportsPath = nil;
         BOOL dump = NO, shared = NO, pie = NO, glibc = NO;
         for (int i = 1; i < argc; i++)
             {
@@ -384,6 +385,10 @@ int main(int argc, const char* argv[])
                 glibc = pie = YES;
             else if ([a isEqualToString:@"-importmap"] && i + 1 < argc)
                 importMapPath = @(argv[++i]);
+            // The names a library exports, one per line: its own API. Without
+            // it a library exports every global it assembles.
+            else if ([a isEqualToString:@"-exports"] && i + 1 < argc)
+                exportsPath = @(argv[++i]);
             else if ([a isEqualToString:@"-soname"] && i + 1 < argc)
                 soname = @(argv[++i]);
             else if ([a isEqualToString:@"-rpath"] && i + 1 < argc)
@@ -413,6 +418,10 @@ int main(int argc, const char* argv[])
             }
         if (shared && !soname)
             soname = output.lastPathComponent;
+        // `--glibc -shared` is a glibc LIBRARY: imports bound as for a glibc
+        // executable, but no entry point and no interpreter.
+        if (glibc && shared)
+            pie = NO;
 
         // Concatenate the inputs, renaming each file's local labels so they cannot
         // collide. clang restarts its numbering per translation unit, so two
@@ -528,6 +537,7 @@ int main(int argc, const char* argv[])
         // loader binds the .so's imports to the exe. Without this the .so loads a
         // second, uninitialised libc and faults on the first call (__vdsosym).
         NSMutableSet<NSString*>* soNeeds = [NSMutableSet set];
+        NSMutableSet<NSString*>* xtNeeds = [NSMutableSet set];
         NSMutableDictionary<NSString*, NSString*>* soDefs = [NSMutableDictionary dictionary];
         for (NSString* dep in sharedDeps)
             {
@@ -542,12 +552,17 @@ int main(int argc, const char* argv[])
             if (sn.length && ![needed containsObject:sn])
                 [needed addObject:sn];
             // Under glibc a library has its own libc (the process's one), so it
-            // needs nothing from us; what matters is what it DEFINES.
+            // needs nothing from us; what matters is what it DEFINES — except the
+            // xc runtime's own hand-offs (`__xt_lib_ctors`, which an xc library's
+            // libinit registers into), which only this image can provide.
             if (glibc)
                 {
                 for (NSString* n in info[@"defined"])
                     if (!soDefs[n])
                         soDefs[n] = sn;
+                for (NSString* u in info[@"undefined"])
+                    if ([u hasPrefix:@"__xt_"])
+                        [xtNeeds addObject:u];
                 continue;
                 }
             for (NSString* u in info[@"undefined"])
@@ -868,7 +883,28 @@ int main(int argc, const char* argv[])
                 if (![ordered containsObject:n])
                     [ordered addObject:n];
             [needed setArray:ordered];
-            [mexport removeAllObjects];
+            // An executable exports only what its xc libraries import from it; a
+            // library exports its own API (-exports), never the runtime, whose
+            // sqrt or random would otherwise interpose on every other library.
+            NSMutableSet<NSString*>* keep = [NSMutableSet set];
+            if (shared && exportsPath)
+                {
+                NSString* txt = [NSString stringWithContentsOfFile:exportsPath
+                                                          encoding:NSUTF8StringEncoding
+                                                             error:NULL];
+                for (NSString* n in [txt componentsSeparatedByString:@"\n"])
+                    if (n.length && [mexport containsObject:n])
+                        [keep addObject:n];
+                }
+            else if (shared)
+                [keep unionSet:mexport];
+            for (NSString* u in xtNeeds)
+                if (msyms[u])
+                    {
+                    [mglobals addObject:u];
+                    [keep addObject:u];
+                    }
+            [mexport setSet:keep];
             }
 
         // -pie: the dynamically-linked executable form. Same ET_DYN machinery as a

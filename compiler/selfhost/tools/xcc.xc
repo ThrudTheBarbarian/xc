@@ -135,7 +135,8 @@ class CapOptions
     bool dynamicExplicit(void) { return _dynamicExplicit; }
     bool staticLink(void)   { return _staticLink; }
     void setStatic(void)    { _staticLink = true; }
-    void resolveDynamic(bool x86, bool emitLib) { _dynamic = x86 && !_staticLink && !emitLib; }
+    // From 0.73 a library follows the executable's rule (glibc unless -static).
+    void resolveDynamic(bool x86) { _dynamic = x86 && !_staticLink; }
     bool noMatmul(void)        { return _noMatmul; }
     void setNoMatmul(void)     { _noMatmul = true; }
 
@@ -2100,21 +2101,32 @@ bool x86GlibcLink(DriverOptions* d)
 {
     if (!d.caps().dynamic()) return false;
     if (d.caps().dynamicExplicit()) return true;
+    // A library xcc built against glibc (--emit-lib without -static, from
+    // 0.73) names libc.so.6 among its DT_NEEDED; a musl one never does.
     Array* nl = d.fe().neededLibs();
-    String* tag = String.withCString(".xtc.iface");
     for (u32 i = (u32)0; nl != (Array*)0 && i < nl.count(); i = i + (u32)1) {
         Data* data = Files.readData((String*)nl.get(i));
         if (data == (Data*)0) continue;
-        u8* p = data.bytes();
-        u32 n = data.length();
-        for (u32 k = (u32)0; k + tag.byteLength() <= n; k = k + (u32)1) {
-            bool same = true;
-            for (u32 q = (u32)0; q < tag.byteLength() && same; q = q + (u32)1)
-                if (p[k + q] != tag.byteAt(q)) same = false;
-            if (same) return false;
-        }
+        if (dataContains(data, String.withCString(".xtc.iface"), false)
+            && !dataContains(data, String.withCString("libc.so.6"), true))
+            return false;
     }
     return true;
+}
+
+// Whether `data` holds the bytes of `s` (and its NUL when `nul`).
+bool dataContains(Data* data, String* s, bool nul)
+{
+    u8* p = data.bytes();
+    u32 n = data.length();
+    u32 m = s.byteLength() + (nul ? (u32)1 : (u32)0);
+    for (u32 k = (u32)0; k + m <= n; k = k + (u32)1) {
+        bool same = true;
+        for (u32 q = (u32)0; q < m && same; q = q + (u32)1)
+            if (p[k + q] != (q < s.byteLength() ? s.byteAt(q) : (u8)0)) same = false;
+        if (same) return true;
+    }
+    return false;
 }
 
 // The x86-64 link, from program asm (or none — an object-only link) to the
@@ -2126,6 +2138,29 @@ bool x86GlibcLink(DriverOptions* d)
 // tree, glibc's exports come from glibc-imports.map, and each -l library is
 // read for its SONAME and what it defines. Same inputs, in the same order, as
 // the reference driver's linkX86_64Glibc.
+// The names a module's assembly declares `.globl`, sorted: a library's own API.
+Array* globlNames(String* prog)
+{
+    Array* out = new Array();
+    Array* lines = prog.splitOnByte((u8)'\n');
+    for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1) {
+        String* l = (String*)lines.get(i);
+        u32 k = (u32)0;
+        while (k < l.byteLength() && (l.byteAt(k) == (u8)' ' || l.byteAt(k) == (u8)'\t')) k = k + (u32)1;
+        if (k + (u32)6 > l.byteLength() || !l.substringFromByte(k).hasPrefix(String.withCString(".globl"))) continue;
+        k = k + (u32)6;
+        u32 st = k;
+        while (k < l.byteLength() && (l.byteAt(k) == (u8)' ' || l.byteAt(k) == (u8)'\t')) k = k + (u32)1;
+        if (k == st || k >= l.byteLength()) continue;
+        u32 e = k;
+        while (e < l.byteLength() && l.byteAt(e) != (u8)' ' && l.byteAt(e) != (u8)'\t' && l.byteAt(e) != (u8)'\r') e = e + (u32)1;
+        String* n = l.substringBytes(k, e - k);
+        if (!Elf64.hasName(out, n)) out.add((Object*)n);
+    }
+    Elf64.sortStrings(out);
+    return out;
+}
+
 bool isGlibcOwnLib(String* base)
 {
     return base.equals(String.withCString("c")) || base.equals(String.withCString("m"))
@@ -2135,12 +2170,18 @@ bool isGlibcOwnLib(String* base)
 
 void linkX86_64Glibc(DriverOptions* d, String* prog)
 {
+    // --emit-lib: a glibc SHARED library — no process entry, load-time
+    // constructors registered with the program (libinit), its own API
+    // exported. As the reference's linkX86_64GlibcShared.
+    bool shared = d.emitLib();
     Array* srcs = new Array();
     Array* rtNames = new Array();
-    rtNames.add((Object*)String.withCString("crt-glibc.s"));
+    if (!shared) rtNames.add((Object*)String.withCString("crt-glibc.s"));
     rtNames.add((Object*)String.withCString("rtgen-glibc.s"));
     rtNames.add((Object*)String.withCString("rtfiles-linux.s"));
     rtNames.add((Object*)String.withCString("libmgen-linux.s"));
+    if (shared && prog.contains(String.withCString("\n__xt_ctors_start:")))
+        rtNames.add((Object*)String.withCString("libinit-linux.s"));
     for (u32 k = (u32)0; k < rtNames.count(); k = k + (u32)1) {
         String* t = readRuntimeIn(d.fe(), "x86_64/runtime", (String*)rtNames.get(k));
         if (t == 0) {
@@ -2236,8 +2277,19 @@ void linkX86_64Glibc(DriverOptions* d, String* prog)
         }
     }
     X86Link* ln = new X86Link();
-    Data* img = ln.linkGlibc(srcs, objs, ars, String.withCString("_start"), sos, mapText,
-                             haveDeps ? runpath : (String*)0);
+    Data* img = (Data*)0;
+    if (shared) {
+        Array* iface = new Array();
+        String* ij = d.fe().ifaceJson();
+        if (ij != (String*)0)
+            for (u32 i = (u32)0; i < ij.byteLength(); i = i + (u32)1)
+                iface.add((Object*)Number.withU32((u32)ij.byteAt(i)));
+        img = ln.linkGlibcShared(srcs, objs, ars, sos, mapText, baseNameOf(d.fe().output()),
+                                 globlNames(prog), String.withCString("$ORIGIN"), iface);
+    } else {
+        img = ln.linkGlibc(srcs, objs, ars, String.withCString("_start"), sos, mapText,
+                           haveDeps ? runpath : (String*)0);
+    }
     if (ln.failed()) {
         noteUndefinedCall(d, ln.why());
         Stdio.printf("xcc: %s\n", ln.why().cString());
@@ -5485,12 +5537,7 @@ void checkCapabilities(DriverOptions* d)
                      "for -A x86_64 only\n", c.staticLink() ? "-static" : "-dynamic");
         Process.exit((i32)1); return;
     }
-    if (c.dynamicExplicit() && d.emitLib()) {
-        Stdio.printf("xcc: -dynamic builds an executable; a glibc shared "
-                     "library (--emit-lib -dynamic) is not supported yet\n");
-        Process.exit((i32)1); return;
-    }
-    c.resolveDynamic(isX86_64(d), d.emitLib());
+    c.resolveDynamic(isX86_64(d));
     if (c.dynamic() && c.hostMalloc().equals(String.withCString("mimalloc"))) {
         Stdio.printf("xcc: -fmalloc=mimalloc: link with -static (the dynamic glibc "
                      "link uses glibc's malloc)\n");
@@ -6022,7 +6069,7 @@ DriverOptions* parseDriverArgs(void)
     // The dynamic glibc link is the x86-64 default (-static: musl); settled
     // here, before the front end is told, as the reference settles it while
     // reading the options. checkCapabilities refuses the bad combinations.
-    d.caps().resolveDynamic(isX86_64(d), d.emitLib());
+    d.caps().resolveDynamic(isX86_64(d));
     if (isX86_64(d) && d.caps().dynamic())
         o.defs().add((Object*)String.withCString("LINK_DYNAMIC=1"));
     finishDriverArgs(d);

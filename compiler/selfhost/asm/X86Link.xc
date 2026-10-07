@@ -26,6 +26,7 @@ class X86Link
     bool _glibc;
     Map* _glibcMap; // symbol -> glibc library, from glibc-imports.map
     Map* _soDefs;   // symbol -> SONAME, from the .so inputs
+    Array* _xtNeeds; // the runtime hand-offs (`__xt_…`) the .so inputs import
 
     void init(void)
         {
@@ -34,6 +35,7 @@ class X86Link
         _glibc = false;
         _glibcMap = new Map();
         _soDefs = new Map();
+        _xtNeeds = (Array*)0;
         }
     bool failed(void)
         {
@@ -125,9 +127,24 @@ class X86Link
         // `.o` commons are resolved by the merge below.
         a.demoteCommonsToLocalData();
         Array* pub = exports != (Array*)0 ? exports : a.globalSyms();
+        // A glibc library exports only the listed names it declares global
+        // (the reference's -exports): never the runtime.
+        if (_glibc && exports != (Array*)0)
+            {
+            pub = new Array();
+            for (u32 k = (u32)0; k < exports.count(); k = k + (u32)1)
+                if (Elf64.hasName(a.globalSyms(), (String*)exports.get(k)))
+                    pub.add(exports.get(k));
+            }
         Elf64* e = new Elf64();
         if (objs.count() == (u32)0 && ars.count() == (u32)0)
             {
+            if (_glibc)
+                {
+                needed = glibcNeeded(a.symbols(), a.fixups(), needed);
+                if (needed == (Array*)0)
+                    return (Data*)0;
+                }
             e.sharedObject(X86Link.bytesToData(a.text()), X86Link.bytesToData(a.data()),
                            a.symbols(), a.dataSyms(),
                            pub, a.fixups(), soname, needed,
@@ -170,6 +187,12 @@ class X86Link
                 }
             if (!applyStaticTls(im))
                 return (Data*)0;
+            if (_glibc)
+                {
+                needed = glibcNeeded(im.syms(), im.fixups(), needed);
+                if (needed == (Array*)0)
+                    return (Data*)0;
+                }
             e.sharedObject(im.text(),
                            im.data(),
                            im.syms(), im.dataSyms(), pub, im.fixups(),
@@ -228,7 +251,8 @@ class X86Link
             pub.add(a.globalSyms().get(k));
         for (u32 k = (u32)0; alsoExport != (Array*)0 && k < alsoExport.count();
              k = k + (u32)1)
-            pub.add(alsoExport.get(k));
+            if (!_glibc || a.symbols().get((Hashable*)alsoExport.get(k)) != (Object*)0)
+                pub.add(alsoExport.get(k));
         Elf64* e = new Elf64();
         if (objs.count() == (u32)0 && ars.count() == (u32)0)
             {
@@ -312,7 +336,31 @@ class X86Link
     Data* linkGlibc(Array* srcs, Array* objs, Array* ars, String* entry,
                     Array* sos, String* mapText, String* runpath)
         {
+        Array* needed = glibcSetup(sos, mapText);
+        if (needed == (Array*)0)
+            return (Data*)0;
+        return linkDynamic(srcs, objs, ars, entry, needed, runpath, _xtNeeds);
+        }
+
+    // `xcc --emit-lib` on Linux (from 0.73): a SHARED library linked against
+    // glibc and the .so libraries in `sos`, exporting only `exports`.
+    Data* linkGlibcShared(Array* srcs, Array* objs, Array* ars, Array* sos, String* mapText,
+                          String* soname, Array* exports, String* runpath, Array* iface)
+        {
+        Array* needed = glibcSetup(sos, mapText);
+        if (needed == (Array*)0)
+            return (Data*)0;
+        return linkShared(srcs, objs, ars, soname, exports, needed, runpath, iface);
+        }
+
+    // The import map and the .so inputs of a glibc link: which library defines
+    // each name, and the libraries' sonames in order (0 after failing). The
+    // xc runtime's own hand-offs a library imports (`__xt_lib_ctors`) go in
+    // _xtNeeds: only the executable can provide them.
+    Array* glibcSetup(Array* sos, String* mapText)
+        {
         _glibc = true;
+        _xtNeeds = new Array();
         Array* lines = mapText.splitOnByte((u8)'\n');
         for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1)
             {
@@ -332,7 +380,13 @@ class X86Link
                 {
                 fail(String.withCString("error: '").appending(path)
                          .appending(String.withCString("' is not a readable x86-64 shared object")));
-                return (Data*)0;
+                return (Array*)0;
+                }
+            for (u32 k = (u32)0; k < info.undefined().count(); k = k + (u32)1)
+                {
+                String* u = (String*)info.undefined().get(k);
+                if (u.hasPrefix(String.withCString("__xt_")) && !Elf64.hasName(_xtNeeds, u))
+                    _xtNeeds.add((Object*)u);
                 }
             if (info.soname().byteLength() > (u32)0 && !Elf64.hasName(needed, info.soname()))
                 needed.add((Object*)info.soname());
@@ -343,7 +397,7 @@ class X86Link
                     _soDefs.set(n, (Object*)info.soname());
                 }
             }
-        return linkDynamic(srcs, objs, ars, entry, needed, runpath, (Array*)0);
+        return needed;
         }
 
     // The DT_NEEDED list for a -dynamic image, or 0 after failing: the glibc
