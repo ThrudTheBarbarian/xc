@@ -1484,7 +1484,9 @@ class X86_64
     //   u64                    a value from 2^63 up is converted less 2^63 and
     //                          the top bit put back; a negative one is 0.
     //
-    // Clobbers rcx, rdx, r11 and xmm1; xmm0 is the scratch copy of the operand.
+    // Clobbers rcx, rdx and xmm1; xmm0 is the scratch copy of the operand. NOT r11:
+    // the allocator homes values there, and a u64 conversion that put 2^63 in it
+    // overwrote the previous unrolled copy's result (`btc` flips the bit instead).
     void emitFpToInt(IRInsn* n)
         {
         if (n.res() == (IRValue*)0 || n.ops().count() < (u32)1)
@@ -1527,7 +1529,7 @@ class X86_64
         _out.appendFormat("\tcvtt%s2si\trax, xmm0\n", sfx);
         _out.appendCString("\txor\tecx, ecx\n\ttest\trax, rax\n\tcmovs\trax, rcx\n");
         _out.appendFormat("\tsub%s\txmm0, xmm1\n\tcvtt%s2si\trcx, xmm0\n", sfx, sfx);
-        _out.appendCString("\tmovabs\tr11, 0x8000000000000000\n\txor\trcx, r11\n");
+        _out.appendCString("\tbtc\trcx, 63\n");
         _out.appendCString("\ttest\tdl, dl\n\tcmovne\trax, rcx\n");
         store((u8)'a', n.res());
         }

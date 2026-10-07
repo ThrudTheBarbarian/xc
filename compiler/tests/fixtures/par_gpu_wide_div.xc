@@ -45,11 +45,15 @@ i32 main(void)
     i64 sh = (i64)0;
     for (u32 i in 0..N)
         {
-        h = h * (u64)1099511628211 + quot[i] + rems[i] * (u64)3 + (u64)fl[i] + back[i];
-        sh = sh * (i64)31 + squot[i] + srems[i] * (i64)7 + (i64)sfl[i] + sback[i];
+        // Halved before converting back: a float rounded up to 2^64 (or 2^63)
+        // is out of range, and what a CPU makes of that differs (arm64
+        // saturates, x86 gives the "indefinite" value).
+        h = h * (u64)1099511628211 + quot[i] + rems[i] * (u64)3 + (u64)(fl[i] * 0.5f) + back[i];
+        sh = sh * (i64)31 + squot[i] + srems[i] * (i64)7 + (i64)(sfl[i] * 0.5f) + sback[i];
         }
     Stdio.printf("hash %016llx signed %lld\n", h, sh);
     Stdio.printf("quot[5] %llu rems[5] %llu squot[6] %lld srems[7] %lld\n", quot[5], rems[5], squot[6], srems[7]);
-    Stdio.printf("fl[9] %llu sfl[10] %lld back[11] %llu sback[12] %lld\n", (u64)fl[9], (i64)sfl[10], back[11], sback[12]);
+    Stdio.printf("fl[9] %llu sfl[10] %lld back[11] %llu sback[12] %lld\n", (u64)(fl[9] * 0.5f), (i64)(sfl[10] * 0.5f),
+                 back[11], sback[12]);
     return (i32)0;
     }

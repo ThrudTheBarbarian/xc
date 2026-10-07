@@ -206,7 +206,9 @@ static NSInteger sWin64SretOff = 0;
 //   u64                    a value from 2^63 up is converted less 2^63 and
 //                          the top bit put back; a negative one is 0.
 //
-// Clobbers rcx, rdx, r11 and xmm1; xmm0 is the scratch copy of the operand.
+// Clobbers rcx, rdx and xmm1; xmm0 is the scratch copy of the operand. NOT r11:
+// the allocator homes values there, and a u64 conversion that put 2^63 in it
+// overwrote the previous unrolled copy's result (`btc` flips the bit instead).
 + (NSString*)fpToIntText:(NSString*)sfx signed:(BOOL)sgn width:(NSUInteger)rw
     {
     BOOL d = [sfx isEqualToString:@"sd"];
@@ -243,7 +245,7 @@ static NSInteger sWin64SretOff = 0;
     [o appendFormat:@"\tcvtt%@2si\trax, xmm0\n", sfx];
     [o appendString:@"\txor\tecx, ecx\n\ttest\trax, rax\n\tcmovs\trax, rcx\n"];
     [o appendFormat:@"\tsub%@\txmm0, xmm1\n\tcvtt%@2si\trcx, xmm0\n", sfx, sfx];
-    [o appendString:@"\tmovabs\tr11, 0x8000000000000000\n\txor\trcx, r11\n"
+    [o appendString:@"\tbtc\trcx, 63\n"
                      "\ttest\tdl, dl\n\tcmovne\trax, rcx\n"];
     return o;
     }
