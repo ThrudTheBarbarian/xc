@@ -403,9 +403,9 @@ def sources_page(names):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--current", default="v0.72")
-    ap.add_argument("--history", default="v0.62,v0.63,v0.64,v0.65,v0.66,v0.7,v0.71,v0.72")
-    ap.add_argument("--release", default="0.72")
+    ap.add_argument("--current", default="v0.73")
+    ap.add_argument("--history", default="v0.62,v0.63,v0.64,v0.65,v0.66,v0.7,v0.71,v0.72,v0.73")
+    ap.add_argument("--release", default="0.73")
     a = ap.parse_args()
     cur = load(a.current)
     versions = a.history.split(",")
@@ -532,17 +532,13 @@ The fastest results are where the runtime does the work: `string_scan`,
 aggregate copies. The slowest show where xcc's code generation has most to
 gain:
 
-- **Vectorisation.** On arm64, `matrix_mul` is vectorised across its outer loop
-  but clang also unrolls the inner one completely and keeps every broadcast in
-  a register; `int_muldiv` and `float_math` are vectorised by both, and clang's
-  loops are tighter.
-- **Reference counting and allocation on x86-64.** `arc_alloc` and `arc_array`,
-  where C++ makes one allocation per object through a faster allocator and
-  reads elements without retaining them.
-- **x86-64 loops.** `sieve` and `sort_small`, where the other compilers' loops
-  are faster.
-- **Dispatch.** `poly_dispatch` on arm64, where clang's call sequence around the
-  virtual call is shorter.
+- **Vectorisation.** On arm64, `int_muldiv` and `float_math` are vectorised
+  by both compilers, and clang's loops are tighter. (`matrix_mul` reached
+  clang's speed in 0.73.)
+- **Reference counting on x86-64.** `arc_array`, where C++ reads elements
+  without retaining them.
+- **x86-64 loops.** `sieve`, `sort_small` and `struct_copy`, where the other
+  compilers' loops are faster.
 
 ## Matrix multiplies
 
@@ -585,7 +581,8 @@ Four programs in `benchmark/par` measure it:
 Each runs its block eight times and reports the best run, in four modes: *one
 thread* (`XC_PAR=cpu XC_PAR_THREADS=1`), *all threads* (`XC_PAR=cpu`), *GPU*
 (`XC_PAR=gpu`) and `auto`, the default, which times the CPU and the GPU and
-keeps the faster. Every mode's checksum must agree. On Windows *GPU* is CUDA
+keeps the faster (from 0.73 it remembers the choice, per program and per
+machine, so later runs do not measure again). Every mode's checksum must agree. On Windows *GPU* is CUDA
 and *Vulkan* the same card through Vulkan (`XC_PAR_GPU=vulkan`).
 
 {par}

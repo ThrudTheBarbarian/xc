@@ -3,6 +3,64 @@ title: ChangeLog
 description: Release notes for the xcc toolchain, with bug fixes and new features per version.
 ---
 
+## Version 0.73 — faster arm64, GPU blocks that remember, and libraries on Linux
+
+arm64 code is faster again, reversing the drift since 0.65. A `par` block keeps
+what `auto` learns about the CPU and the GPU, so a machine measures once. On
+Vulkan and WebGPU, blocks may divide 64-bit integers, reduce 8- and 16-bit
+values, and divide and take square roots exactly. A library built for Linux
+links against the system's C library and names the libraries it needs, and on
+Windows `#import` reads a MinGW-built DLL's own debug information.
+
+### New
+
+- **`par` remembers**: what `auto` measures is kept in the program's own
+  settings store, as a size threshold for each block: a run outside the learned
+  bounds is decided without measuring. The keys include a hash of the GPU and
+  CPU, so a new GPU is measured afresh, and of the block's GPU version. The
+  user's own settings (`par.<block> = cpu`, `gpu`, `auto` or a number of items
+  from which the GPU is used) come before them. See
+  [Parallel blocks](/compiler/language/par/#which-device).
+- **`:goal(accuracy)` on Vulkan and WebGPU**: a block whose goal is accuracy
+  divides and takes square roots of `float`s in integer arithmetic, correctly
+  rounded, so its results are the CPU's; up to 0.72 it ran on the CPU.
+- **More on WebGPU**: 64-bit integer division and remainder, and conversions
+  between 64-bit integers and `float`. On Vulkan and WebGPU, reductions of 8-
+  and 16-bit values and `bool`s. WebGPU keeps a block's buffers between runs.
+- **Linux libraries**: `--emit-lib` on `-A x86_64` builds a library linked
+  against glibc, as executables are: each `-l` library becomes one of its
+  dependencies, and it exports only its own API. `-static` keeps the musl
+  library.
+- **`#import <clib>` on Windows**: a DLL built by a MinGW toolchain with `-g`
+  is read for its functions, types and enum constants, as on Linux and macOS.
+- **iOS and Android libraries**: the third-party tree is searched in the
+  target's own directory (`ios`, `ios-sim`, `android`) before the
+  architecture's; `#import <UIKit>` finds the iOS SDK without `SDKROOT`;
+  `--with-lib` may be given more than once.
+
+### Faster
+
+- arm64: `matrix_mul` takes 225 ms instead of 389 (1.73× faster; clang's C++
+  takes 224), `poly_dispatch` is 1.20× faster, `array_sum` 1.13× and
+  `sort_small` 1.10×. A dense integer matrix multiply now loads four elements
+  of a row at once and multiplies by lanes, and a 32-bit copy feeding a call or
+  a loop is a 64-bit one, which costs nothing on Apple's cores.
+- The benchmark suite runs 1.04× faster than 0.72 on arm64 and 1.08× faster on
+  x86-64, where `arc_alloc` is 2.6× faster, `array_sum` 1.6× and `sieve` 1.25×
+  (`matrix_mul` is 11% slower). xc's code is 1.45× faster than C++ on arm64 and
+  1.60× faster on x86-64 (geometric mean); without `matrix_mul_f32`, 1.09× and
+  1.38× faster. See [Performance](/compiler/performance/).
+
+### Fixed
+
+- On x86-64 and Windows, converting a `float` to `u64` in an unrolled loop
+  could overwrite another value the loop was carrying, giving a wrong result at
+  `-O2`.
+- A WebGPU block with more than eight arrays returned zeros; it now runs where
+  the device allows, and on the CPU where it does not.
+- On Vulkan, an 8- or 16-bit or `bool` field of a block written by its body
+  overwrote its neighbours' bytes.
+
 ## Version 0.72 — the GPU everywhere, and Foundation grows
 
 `par` blocks now reach the GPU on every desktop and mobile target and in the

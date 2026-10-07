@@ -1,0 +1,314 @@
+{
+ "mandelbrot": {
+  "browser": {
+   "auto": {
+    "best_us": 3000,
+    "first_us": 12700
+   },
+   "checksum": "199",
+   "gpu": {
+    "best_us": 3000,
+    "first_us": 11700
+   },
+   "serial": {
+    "best_us": 365900,
+    "first_us": 977500
+   }
+  },
+  "linux": {
+   "auto": {
+    "best_us": 20088,
+    "first_us": 39655
+   },
+   "checksum": "199",
+   "cpu": {
+    "best_us": 40428,
+    "first_us": 49913
+   },
+   "gpu": {
+    "best_us": 20288,
+    "first_us": 40419
+   },
+   "serial": {
+    "best_us": 398413,
+    "first_us": 401502
+   }
+  },
+  "mac": {
+   "auto": {
+    "best_us": 2127,
+    "first_us": 29827
+   },
+   "checksum": "199",
+   "cpu": {
+    "best_us": 99455,
+    "first_us": 100915
+   },
+   "gpu": {
+    "best_us": 2626,
+    "first_us": 26053
+   },
+   "serial": {
+    "best_us": 485341,
+    "first_us": 489949
+   }
+  },
+  "windows": {
+   "auto": {
+    "best_us": 1572,
+    "first_us": 212332
+   },
+   "checksum": "199",
+   "cpu": {
+    "best_us": 47261,
+    "first_us": 48862
+   },
+   "gpu": {
+    "best_us": 1573,
+    "first_us": 216988
+   },
+   "serial": {
+    "best_us": 455452,
+    "first_us": 460836
+   },
+   "vulkan": {
+    "best_us": 1130,
+    "first_us": 123759
+   }
+  }
+ },
+ "nbody": {
+  "browser": {
+   "auto": {
+    "best_us": 1300,
+    "first_us": 427400
+   },
+   "checksum": "42",
+   "gpu": {
+    "best_us": 3300,
+    "first_us": 7300
+   },
+   "serial": {
+    "best_us": 53800,
+    "first_us": 428300
+   }
+  },
+  "linux": {
+   "auto": {
+    "best_us": 3613,
+    "first_us": 23083
+   },
+   "checksum": "42",
+   "cpu": {
+    "best_us": 7139,
+    "first_us": 10444
+   },
+   "gpu": {
+    "best_us": 3611,
+    "first_us": 23623
+   },
+   "serial": {
+    "best_us": 95163,
+    "first_us": 101230
+   }
+  },
+  "mac": {
+   "auto": {
+    "best_us": 1063,
+    "first_us": 24526
+   },
+   "checksum": "42",
+   "cpu": {
+    "best_us": 7023,
+    "first_us": 8472
+   },
+   "gpu": {
+    "best_us": 704,
+    "first_us": 26150
+   },
+   "serial": {
+    "best_us": 68018,
+    "first_us": 69052
+   }
+  },
+  "windows": {
+   "auto": {
+    "best_us": 1828,
+    "first_us": 220865
+   },
+   "checksum": "42",
+   "cpu": {
+    "best_us": 9134,
+    "first_us": 10338
+   },
+   "gpu": {
+    "best_us": 1833,
+    "first_us": 215918
+   },
+   "serial": {
+    "best_us": 127909,
+    "first_us": 128495
+   },
+   "vulkan": {
+    "best_us": 937,
+    "first_us": 126538
+   }
+  }
+ },
+ "perlin": {
+  "browser": {
+   "auto": {
+    "best_us": 2500,
+    "first_us": 439600
+   },
+   "checksum": "243",
+   "gpu": {
+    "best_us": 2500,
+    "first_us": 12100
+   },
+   "serial": {
+    "best_us": 149400,
+    "first_us": 442300
+   }
+  },
+  "linux": {
+   "auto": {
+    "best_us": 7033,
+    "first_us": 32549
+   },
+   "checksum": "243",
+   "cpu": {
+    "best_us": 25512,
+    "first_us": 27643
+   },
+   "gpu": {
+    "best_us": 7086,
+    "first_us": 31116
+   },
+   "serial": {
+    "best_us": 374401,
+    "first_us": 379390
+   }
+  },
+  "mac": {
+   "auto": {
+    "best_us": 1842,
+    "first_us": 54301
+   },
+   "checksum": "243",
+   "cpu": {
+    "best_us": 29632,
+    "first_us": 32833
+   },
+   "gpu": {
+    "best_us": 1912,
+    "first_us": 23550
+   },
+   "serial": {
+    "best_us": 327585,
+    "first_us": 329820
+   }
+  },
+  "windows": {
+   "auto": {
+    "best_us": 2007,
+    "first_us": 213043
+   },
+   "checksum": "243",
+   "cpu": {
+    "best_us": 29242,
+    "first_us": 30414
+   },
+   "gpu": {
+    "best_us": 2011,
+    "first_us": 251241
+   },
+   "serial": {
+    "best_us": 498734,
+    "first_us": 507510
+   },
+   "vulkan": {
+    "best_us": 1969,
+    "first_us": 131287
+   }
+  }
+ },
+ "saxpy": {
+  "browser": {
+   "auto": {
+    "best_us": 16700,
+    "first_us": 53000
+   },
+   "checksum": "3011510272",
+   "gpu": {
+    "best_us": 22200,
+    "first_us": 58400
+   },
+   "serial": {
+    "best_us": 16900,
+    "first_us": 51000
+   }
+  },
+  "linux": {
+   "auto": {
+    "best_us": 2639,
+    "first_us": 25454
+   },
+   "checksum": "3011510272",
+   "cpu": {
+    "best_us": 2472,
+    "first_us": 5820
+   },
+   "gpu": {
+    "best_us": 217763,
+    "first_us": 254584
+   },
+   "serial": {
+    "best_us": 15454,
+    "first_us": 18318
+   }
+  },
+  "mac": {
+   "auto": {
+    "best_us": 956,
+    "first_us": 21457
+   },
+   "checksum": "3011510272",
+   "cpu": {
+    "best_us": 1002,
+    "first_us": 1058
+   },
+   "gpu": {
+    "best_us": 13059,
+    "first_us": 33760
+   },
+   "serial": {
+    "best_us": 7458,
+    "first_us": 7458
+   }
+  },
+  "windows": {
+   "auto": {
+    "best_us": 5467,
+    "first_us": 213165
+   },
+   "checksum": "3011510272",
+   "cpu": {
+    "best_us": 5606,
+    "first_us": 6673
+   },
+   "gpu": {
+    "best_us": 39887,
+    "first_us": 260513
+   },
+   "serial": {
+    "best_us": 12711,
+    "first_us": 13266
+   },
+   "vulkan": {
+    "best_us": 44822,
+    "first_us": 194085
+   }
+  }
+ }
+}
