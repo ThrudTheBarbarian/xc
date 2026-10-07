@@ -49,11 +49,11 @@ twenty-one classes, many of them moved from UXKit.
 
 - The SME matrix kernel works on a 2×2 block of tiles, and under
   `:goal(speed)` skips its NaN check: `matrix_mul_f32` takes 30 ms on an Apple
-  M4 Max (72 ms in 0.71) against 9.9 s for clang's C++.
-- The benchmark suite takes 0.95× its 0.71 time on arm64 and 0.99× on x86-64,
-  where it is now measured as shipped, linked dynamically. xc's code takes
-  0.73× C++'s time on arm64 and 0.68× on x86-64 (geometric mean); without
-  `matrix_mul_f32` 0.97× and 0.79×.
+  M4 Max, 2.4× faster than in 0.71 and 327× faster than clang's C++.
+- The benchmark suite runs 1.05× faster than 0.71 on arm64 and 1.01× faster on
+  x86-64, where it is now measured as shipped, linked dynamically. xc's code
+  is 1.37× faster than C++ on arm64 and 1.47× faster on x86-64 (geometric
+  mean); without `matrix_mul_f32`, 1.03× and 1.27× faster.
 - GPU kernels for Vulkan are structured loops and ifs, so a SIMD group's
   threads reconverge, and on a discrete GPU they work in its own memory: on an
   RTX 3090, Vulkan comes within 1.2–1.7× of CUDA (`mandelbrot` 2.2 ms against
@@ -99,10 +99,11 @@ third level the program picks at load.
   M4 Max against 391 ms for clang's C++, and 12.5 ms on an AMD Zen 5 processor
   with AVX-512 against 252 ms.
 - The benchmark suite, now twenty programs with `matrix_mul_f32` (measured
-  back to 0.62 for the history chart), takes 0.81× its 0.7 time on arm64 and
-  0.73× on x86-64, where AVX-512 also halves `array_map`, `call_depth` and
-  `int_muldiv`. xc's code takes 0.77× C++'s time on arm64 and 0.68× on x86-64
-  (geometric mean); without `matrix_mul_f32` 0.97× and 0.78×.
+  back to 0.62 for the history chart), runs 1.23× faster than 0.7 on arm64 and
+  1.37× faster on x86-64, where AVX-512 also makes `array_map`, `call_depth`
+  and `int_muldiv` twice as fast. xc's code is 1.30× faster than C++ on arm64
+  and 1.47× faster on x86-64 (geometric mean); without `matrix_mul_f32`, 1.03×
+  and 1.28× faster.
 - Compiling long x86-64 functions: `vectorize_wide_tails` builds in 20 s
   instead of 45 (copy propagation and loop-invariant motion no longer scale
   with the square of a function's length).
@@ -149,9 +150,9 @@ and the new GPU section of [Performance](/compiler/performance/).
   1.9 ms on an RTX 3090. A memory-bound block such as `saxpy` stays on the CPU,
   where `auto` finds it is faster.
 - x86-64 and Windows: an unrolled AVX2 loop no longer chains its iterations
-  through the integer splats, so `call_depth` takes 0.35× its 0.66 time and
-  the x86-64 benchmark suite 0.93×. xc's code on x86-64 now takes 0.90× C++'s
-  time (geometric mean), and on arm64 0.96×.
+  through the integer splats, so `call_depth` runs 2.9× faster than in 0.66
+  and the x86-64 benchmark suite 1.08× faster. xc's code is now 1.11× faster
+  than C++ on x86-64 (geometric mean), and 1.04× faster on arm64.
 
 ### Wrong code fixed
 
@@ -210,8 +211,8 @@ libGL and other shared system libraries, still with xcc's own linker.
 ### Faster
 
 - AVX2 code (dispatched, or with `-mavx2`): 256-bit vector loops, with
-  `vzeroupper` around calls. On a Zen 5 machine `array_map` takes 0.49× and
-  `array_sum` 0.53× the SSE2 time.
+  `vzeroupper` around calls. On a Zen 5 machine `array_map` runs 2.0× and
+  `array_sum` 1.9× faster than with SSE2.
 - The compiler holds less memory while it builds a large program.
 
 ### Wrong code fixed
@@ -247,9 +248,9 @@ libGL and other shared system libraries, still with xcc's own linker.
 ## Version 0.65 — faster loops, native settings and system frameworks
 
 The optimiser and the arm64 back end close the distance to clang: across the
-benchmark suite arm64 code now takes 0.97× clang's C++ time (geometric mean),
-from 1.24×, and is 1.38× faster than 0.64; matrix multiply is 4.7 times
-faster. x86-64 code takes 1.08× C++'s time, from 1.13×. See
+benchmark suite arm64 code is now 1.03× faster than clang's C++ (geometric
+mean), from 1.24× slower, and 1.38× faster than 0.64; matrix multiply is 4.7×
+faster. x86-64 code is 1.08× slower than C++, from 1.13× slower. See
 [Performance](/compiler/performance/).
 `Settings.standard()` keeps its values in the platform's own settings store, and
 `#import <Framework>` links a macOS or iOS system framework.
@@ -330,8 +331,8 @@ is faster, and a number of wrong-code bugs are fixed.
 - x86-64: values are loaded straight into their home registers, registers are
   ranked by loop-weighted use and shared along live segments, a float phi copy
   is one `movaps`, and loops rotate so the test sits at the bottom.
-  Across the benchmark suite x86-64 code is now 0.88× clang's time (geometric
-  mean), from 1.03×; see [Performance](/compiler/performance/).
+  Across the benchmark suite x86-64 code is now 1.14× faster than clang's
+  (geometric mean), from 1.03× slower; see [Performance](/compiler/performance/).
 
 ### Wrong code fixed
 
