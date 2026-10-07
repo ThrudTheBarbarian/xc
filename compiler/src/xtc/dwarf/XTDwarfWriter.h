@@ -25,6 +25,15 @@ NS_ASSUME_NONNULL_BEGIN
 // link register and the stack pointer where the caller left it.
 - (void)addFrameSetupAtOffset:(uint64_t)offset;
 
+// A variable of the function that contains text offset `at`: `name` lives at
+// `reg` + `offset` (DWARF register number) for the whole function, and `type`
+// is its IR type as the IR text spells it (I32, F64, Ptr(U8, unbanked), ...).
+- (void)addVariable:(NSString*)name
+         atOffset:(uint64_t)at
+         register:(uint8_t)reg
+           offset:(int64_t)offset
+             type:(NSString*)type;
+
 // True once any row was recorded: a build without -g has none and gets no
 // debug sections.
 @property(nonatomic, readonly) BOOL hasRows;

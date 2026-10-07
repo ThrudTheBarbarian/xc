@@ -79,6 +79,16 @@ enum
     {
     DW_TAG_compile_unit = 0x11,
     DW_TAG_subprogram = 0x2e,
+    DW_TAG_variable = 0x34,
+    DW_TAG_base_type = 0x24,
+    DW_TAG_pointer_type = 0x0f,
+    DW_AT_byte_size = 0x0b,
+    DW_AT_encoding = 0x3e,
+    DW_AT_type = 0x49,
+    DW_AT_location = 0x02,
+    DW_FORM_data1 = 0x0b,
+    DW_FORM_ref4 = 0x13,
+    DW_OP_breg0 = 0x70,
     DW_AT_name = 0x03,
     DW_AT_stmt_list = 0x10,
     DW_AT_low_pc = 0x11,
@@ -112,6 +122,7 @@ static XTDwarfWriter* gPending = nil;
     {
     NSMutableData* _rows; // XTDwarfRow records, in offset order
     NSMutableArray<NSNumber*>* _frameSetups;
+    NSMutableArray<NSArray*>* _variables; // @[at, name, reg, offset, type]
     }
 
 - (instancetype)init
@@ -122,6 +133,7 @@ static XTDwarfWriter* gPending = nil;
         _files = [NSMutableDictionary dictionary];
         _rows = [NSMutableData data];
         _frameSetups = [NSMutableArray array];
+        _variables = [NSMutableArray array];
         }
     return self;
     }
@@ -159,6 +171,15 @@ static XTDwarfWriter* gPending = nil;
 - (void)addFrameSetupAtOffset:(uint64_t)offset
     {
     [_frameSetups addObject:@(offset)];
+    }
+
+- (void)addVariable:(NSString*)name
+         atOffset:(uint64_t)at
+         register:(uint8_t)reg
+           offset:(int64_t)offset
+             type:(NSString*)type
+    {
+    [_variables addObject:@[ @(at), name, @(reg), @(offset), type ]];
     }
 
 - (BOOL)hasRows
@@ -293,6 +314,58 @@ static XTDwarfWriter* gPending = nil;
         }
     putU8(abbrev, 0);
     putU8(abbrev, 0);
+    // 3: a subprogram with variables (the same attributes, and children).
+    putULEB(abbrev, 3);
+    putULEB(abbrev, DW_TAG_subprogram);
+    putU8(abbrev, 1);
+    for (size_t i = 0; i < sizeof spAttrs / sizeof spAttrs[0]; i++)
+        {
+        putULEB(abbrev, spAttrs[i][0]);
+        putULEB(abbrev, spAttrs[i][1]);
+        }
+    putU8(abbrev, 0);
+    putU8(abbrev, 0);
+    // 4: a variable: name, type, location.
+    putULEB(abbrev, 4);
+    putULEB(abbrev, DW_TAG_variable);
+    putU8(abbrev, 0);
+    putULEB(abbrev, DW_AT_name);
+    putULEB(abbrev, DW_FORM_strp);
+    putULEB(abbrev, DW_AT_type);
+    putULEB(abbrev, DW_FORM_ref4);
+    putULEB(abbrev, DW_AT_location);
+    putULEB(abbrev, DW_FORM_exprloc);
+    putU8(abbrev, 0);
+    putU8(abbrev, 0);
+    // 5: a base type: name, encoding, size.
+    putULEB(abbrev, 5);
+    putULEB(abbrev, DW_TAG_base_type);
+    putU8(abbrev, 0);
+    putULEB(abbrev, DW_AT_name);
+    putULEB(abbrev, DW_FORM_strp);
+    putULEB(abbrev, DW_AT_encoding);
+    putULEB(abbrev, DW_FORM_data1);
+    putULEB(abbrev, DW_AT_byte_size);
+    putULEB(abbrev, DW_FORM_data1);
+    putU8(abbrev, 0);
+    putU8(abbrev, 0);
+    // 6: a pointer to a type; 7: a pointer to nothing in particular (void *).
+    putULEB(abbrev, 6);
+    putULEB(abbrev, DW_TAG_pointer_type);
+    putU8(abbrev, 0);
+    putULEB(abbrev, DW_AT_type);
+    putULEB(abbrev, DW_FORM_ref4);
+    putULEB(abbrev, DW_AT_byte_size);
+    putULEB(abbrev, DW_FORM_data1);
+    putU8(abbrev, 0);
+    putU8(abbrev, 0);
+    putULEB(abbrev, 7);
+    putULEB(abbrev, DW_TAG_pointer_type);
+    putU8(abbrev, 0);
+    putULEB(abbrev, DW_AT_byte_size);
+    putULEB(abbrev, DW_FORM_data1);
+    putU8(abbrev, 0);
+    putU8(abbrev, 0);
     putU8(abbrev, 0);
 
     // ---- .debug_info ----
@@ -311,6 +384,74 @@ static XTDwarfWriter* gPending = nil;
     putU64(info, textSize);
     putU32(info, 0); // stmt_list: the one line program, at 0
 
+    // The variables' types, each once, as the IR spells them: scalars become
+    // base types and Ptr(T, ...) a pointer to T's entry (Ptr(Void) a bare
+    // pointer). A type with no DWARF form here (an aggregate) has no entry and
+    // its variables are left out. Offsets are from the start of the unit.
+    NSMutableDictionary<NSString*, NSNumber*>* typeDie = [NSMutableDictionary dictionary];
+    __block uint32_t (^typeRef)(NSString*);
+    __block __weak uint32_t (^weakTypeRef)(NSString*);
+    weakTypeRef = typeRef = ^uint32_t(NSString* t) {
+      NSNumber* have = typeDie[t];
+      if (have)
+          return have.unsignedIntValue;
+      static NSDictionary<NSString*, NSArray*>* base = nil;
+      if (!base)
+          base = @{
+              @"I8" : @[ @"i8", @0x06, @1 ], @"U8" : @[ @"u8", @0x08, @1 ],
+              @"I16" : @[ @"i16", @0x05, @2 ], @"U16" : @[ @"u16", @0x07, @2 ],
+              @"I32" : @[ @"i32", @0x05, @4 ], @"U32" : @[ @"u32", @0x07, @4 ],
+              @"I64" : @[ @"i64", @0x05, @8 ], @"U64" : @[ @"u64", @0x07, @8 ],
+              @"F32" : @[ @"float", @0x04, @4 ], @"F64" : @[ @"double", @0x04, @8 ],
+              @"Bool" : @[ @"bool", @0x02, @1 ], @"I1" : @[ @"bool", @0x02, @1 ],
+          };
+      uint32_t at = 0;
+      NSArray* b = base[t];
+      if (b)
+          {
+          at = (uint32_t)info.length;
+          putULEB(info, 5);
+          putU32(info, strp(b[0]));
+          putU8(info, (uint8_t)[b[1] unsignedIntValue]);
+          putU8(info, (uint8_t)[b[2] unsignedIntValue]);
+          }
+      else if ([t hasPrefix:@"Ptr("] && [t hasSuffix:@")"])
+          {
+          // The pointee is everything up to the top-level comma.
+          NSString* inner = [t substringWithRange:NSMakeRange(4, t.length - 5)];
+          int depth = 0;
+          NSUInteger cut = inner.length;
+          for (NSUInteger i = 0; i < inner.length; i++)
+              {
+              unichar c = [inner characterAtIndex:i];
+              if (c == '(')
+                  depth++;
+              else if (c == ')')
+                  depth--;
+              else if (c == ',' && depth == 0)
+                  {
+                  cut = i;
+                  break;
+                  }
+              }
+          NSString* pointee = [inner substringToIndex:cut];
+          uint32_t to = [pointee isEqualToString:@"Void"] ? 0 : weakTypeRef(pointee);
+          at = (uint32_t)info.length;
+          if (to)
+              {
+              putULEB(info, 6);
+              putU32(info, to);
+              }
+          else
+              putULEB(info, 7);
+          putU8(info, 8);
+          }
+      typeDie[t] = @(at);
+      return at;
+    };
+    for (NSArray* v in _variables)
+        typeRef(v[4]);
+
     NSArray<NSString*>* names = [functions keysSortedByValueUsingSelector:@selector(compare:)];
     for (NSUInteger i = 0; i < names.count; i++)
         {
@@ -318,12 +459,34 @@ static XTDwarfWriter* gPending = nil;
         uint64_t end = (i + 1 < names.count) ? functions[names[i + 1]].unsignedLongLongValue : textSize;
         if (end <= start)
             continue;
-        putULEB(info, 2);
+        NSMutableArray<NSArray*>* vars = [NSMutableArray array];
+        for (NSArray* v in _variables)
+            {
+            uint64_t at = [v[0] unsignedLongLongValue];
+            if (at >= start && at < end && typeDie[v[4]].unsignedIntValue != 0)
+                [vars addObject:v];
+            }
+        putULEB(info, vars.count ? 3 : 2);
         putU32(info, strp(names[i]));
         putU64(info, textAddress + start);
         putU64(info, end - start);
         putULEB(info, 1);
         putU8(info, DW_OP_reg0 + frameRegister);
+        if (vars.count)
+            {
+            for (NSArray* v in vars)
+                {
+                putULEB(info, 4);
+                putU32(info, strp(v[1]));
+                putU32(info, typeDie[v[4]].unsignedIntValue);
+                NSMutableData* loc = [NSMutableData data];
+                putU8(loc, DW_OP_breg0 + (uint8_t)[v[2] unsignedIntValue]);
+                putSLEB(loc, [v[3] longLongValue]);
+                putULEB(info, loc.length);
+                [info appendData:loc];
+                }
+            putU8(info, 0); // end of the subprogram's children
+            }
         }
     putU8(info, 0); // end of the compile unit's children
     patchU32(info, 0, (uint32_t)(info.length - 4));

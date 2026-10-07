@@ -25,6 +25,7 @@
 #import "XTArm64Backend.h"
 #import "XTAggInitRelay.h"
 #import "XTIR.h"
+#import "XTIRPrinter.h"
 
 #pragma mark - Per-function context
 
@@ -7284,6 +7285,13 @@ static BOOL arm64NamesFrameReg(NSString *t) {
     }
     if (firstLoc)
         [out appendFormat:@"    .loc %u %u %u\n", firstLoc.fileId + 1, firstLoc.line, firstLoc.column];
+    // -g: each variable's slot (sp + offset, sp being DWARF register 31), for
+    // the debug information.
+    for (XTIRPinnedLocal *pl in fn.frameInfo.pinnedLocals)
+        if (pl.sourceName)
+            [out appendFormat:@"    .xc_var \"%@\" 31 %lu \"%@\"\n", pl.sourceName,
+                (unsigned long)[self slotOffsetForValue:pl.valueId ctx:ctx],
+                [XTIRPrinter stringFromType:pl.type module:ctx.module]];
     // Prologue. The pre-indexed `stp [sp, #-N]!` immediate caps at
     // 504 bytes; for larger frames adjust SP separately (sub allows
     // imm12 up to 4095, or a temp-register-built value beyond that).

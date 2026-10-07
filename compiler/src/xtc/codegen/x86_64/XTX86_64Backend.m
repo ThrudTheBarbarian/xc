@@ -3,6 +3,8 @@
 #import "XTAggInitRelay.h"
 #import "XTIRModule.h"
 #import "XTIRFunction.h"
+#import "XTIRPrinter.h"
+#import "XTIRSupport.h"
 #import "XTIRBlock.h"
 #import "XTIRInsn.h"
 #import "XTIROperand.h"
@@ -2551,6 +2553,12 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
             }
         if (firstLoc)
             [out appendFormat:@"\t.loc\t%u %u %u\n", firstLoc.fileId + 1, firstLoc.line, firstLoc.column];
+        // -g: each variable's slot (rbp - offset, rbp being DWARF register 6),
+        // for the debug information.
+        for (XTIRPinnedLocal* pl in fn.frameInfo.pinnedLocals)
+            if (pl.sourceName && slot[@(pl.valueId)])
+                [out appendFormat:@"\t.xc_var\t\"%@\" 6 -%@ \"%@\"\n", pl.sourceName, slot[@(pl.valueId)],
+                                  [XTIRPrinter stringFromType:pl.type module:mod]];
     }
     [out appendString:@"\tpush\trbp\n\tmov\trbp, rsp\n"];
     // Windows commits a thread's stack one guard page at a time, so a frame

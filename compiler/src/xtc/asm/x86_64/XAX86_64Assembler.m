@@ -1598,6 +1598,20 @@ static BOOL isPlainIntLiteral(NSString *s) {
             if ([d isEqualToString:@".data"] || [d isEqualToString:@".bss"]) { section = 1; continue; }
             // -g: `.file <n> "<path>"` and `.loc <n> <line> [<col>]` are the line
             // table, recorded against the text offset they precede.
+            // -g: `.xc_var "<name>" <reg> <offset> "<type>"` — a variable of the
+            // function being assembled, for the debug information.
+            if ([d isEqualToString:@".xc_var"]) {
+                NSArray<NSString *> *q = [rest componentsSeparatedByString:@"\""];
+                if (q.count >= 5) {
+                    NSScanner *sc = [NSScanner scannerWithString:q[2]];
+                    int reg = 0; long long off = 0;
+                    if ([sc scanInt:&reg] && [sc scanLongLong:&off]) {
+                        if (!dwarf) dwarf = [[XTDwarfWriter alloc] init];
+                        [dwarf addVariable:q[1] atOffset:text.length register:(uint8_t)reg offset:off type:q[3]];
+                    }
+                }
+                continue;
+            }
             if ([d isEqualToString:@".file"] || [d isEqualToString:@".loc"]) {
                 NSScanner *sc = [NSScanner scannerWithString:rest];
                 int fileNo = 0, lineNo = 0, colNo = 0;

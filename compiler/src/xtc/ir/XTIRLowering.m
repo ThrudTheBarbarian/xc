@@ -16184,6 +16184,47 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
             [self collectLabelDepthsIn:body atDepth:1];
             }
         }
+    // -g: every local and parameter lives in its own frame slot for the whole
+    // function, as at -O0 in C, so a debugger can read it at any line (an SSA
+    // value has no single home: each assignment is a new value). Parameters go
+    // through the address-taken path, which copies each into its slot once.
+    //
+    // For now only plain values are pinned this way: scalars and pointers to
+    // scalars, declared once in the function and not shadowing a parameter. A
+    // name declared again in an inner scope would share the outer one's slot,
+    // and class, struct and array locals are not yet safe to move into a slot.
+    if (sDebugInfo)
+        {
+        BOOL (^plain)(XTType*) = ^BOOL(XTType* t) {
+          if (!t)
+              return NO;
+          if (t.kind == XTTypeKindBool || t.isInteger || t.isFloating)
+              return YES;
+          if ([t isKindOfClass:[XTPointerType class]])
+              {
+              XTType* p = ((XTPointerType*)t).pointeeType;
+              return p && (p.kind == XTTypeKindBool || p.isInteger || p.isFloating);
+              }
+          return NO;
+        };
+        NSMutableSet<NSString*>* all = [NSMutableSet set];
+        [self collectAllLocalNamesIn:body into:all];
+        NSMutableDictionary<NSString*, NSMutableArray<XTType*>*>* decls = [NSMutableDictionary dictionary];
+        [self collectVarDeclTypeListsIn:body forNames:all into:decls];
+        for (NSString* nm in all)
+            if (decls[nm].count == 1 && !self.locals[nm] && plain(decls[nm].firstObject))
+                [addressed addObject:nm];
+        for (NSString* pn in self.locals)
+            {
+            XTIRType* pt = self.locals[pn].type;
+            BOOL scalarParam = pt && pt.kind != XTIRTypeKindAgg && pt.kind != XTIRTypeKindPtr;
+            if (![pn isEqualToString:@"self"] && scalarParam && ![all containsObject:pn])
+                {
+                [addressed addObject:pn];
+                [self.preScanAmpTakenNames addObject:pn];
+                }
+            }
+        }
     // Locals whose address is explicitly `&`-taken (so their pointer can
     // escape into a call and be dereferenced across it) must NOT live in
     // the shared, per-function-reset ZP pinned-local pool — a callee's
@@ -16524,6 +16565,14 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
         // never the emitted layout.
         offset += irTy.byteWidth;
         }
+    // -g: each slot that holds a program variable carries its name for the
+    // debug information (compiler temporaries have names a program cannot
+    // spell, and are left out).
+    if (sDebugInfo)
+        for (XTIRPinnedLocal* pl in pinned)
+            if (!pl.sourceName && pl.name.length && [pl.name rangeOfCharacterFromSet:
+                    [NSCharacterSet characterSetWithCharactersInString:@"$.%#@ "]].location == NSNotFound)
+                pl.sourceName = pl.name;
     fn.frameInfo.pinnedLocals = [pinned copy];
     fn.frameInfo.pinnedLocalSize = offset;
     }

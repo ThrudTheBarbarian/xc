@@ -2174,6 +2174,13 @@ typedef NS_ENUM(NSUInteger, XTIRTokKind) {
                             escapes = YES;
                             pos++;
                             }
+                        // -g: the source variable's name.
+                        NSString* sourceName = nil;
+                        if ([self tok:tokens at:pos].kind == XTIRTokString)
+                            {
+                            sourceName = tokens[pos].text;
+                            pos++;
+                            }
                         if ([self tok:tokens at:pos].kind == XTIRTokRParen)
                             pos++;
                         // Allocate a value-id for the pinned local.
@@ -2189,6 +2196,7 @@ typedef NS_ENUM(NSUInteger, XTIRTokKind) {
                                                                          byteOffset:off
                                                                             valueId:vid];
                         pl.escapesViaPointer = escapes;
+                        pl.sourceName = sourceName;
                         [locals addObject:pl];
                         }
                     continue;

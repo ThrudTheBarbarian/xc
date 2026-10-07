@@ -688,12 +688,13 @@ static NSString* dbgSuffix(XTIRInsn* insn)
             // these to stable frame spill instead of the per-function ZP
             // pin pool; losing the flag on round-trip mis-routes them to
             // a static ZP slot that aliases across calls (legs=64 bug).
-            [slotStrs addObject:[NSString stringWithFormat:@"(%@:%@ @%u%@)",
+            [slotStrs addObject:[NSString stringWithFormat:@"(%@:%@ @%u%@%@)",
                                                            [ctx nameForValueId:local.valueId],
                                                            [self stringFromType:local.type
                                                                          module:mod],
                                                            (unsigned)local.byteOffset,
-                                                           local.escapesViaPointer ? @" esc" : @""]];
+                                                           local.escapesViaPointer ? @" esc" : @"",
+                                                           local.sourceName ? [NSString stringWithFormat:@" \"%@\"", local.sourceName] : @""]];
             }
         [out appendFormat:@"    frame: { pinned: [%@], size: %u }\n",
                           [slotStrs componentsJoinedByString:@", "],

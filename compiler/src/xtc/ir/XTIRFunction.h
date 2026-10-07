@@ -27,6 +27,9 @@ NS_ASSUME_NONNULL_BEGIN
 /// transitively-reached one — that reuses the same region. Backends that
 /// already give every pinned local a stable frame slot can ignore it.
 @property(nonatomic) BOOL escapesViaPointer;
+/// -g: the source variable this slot holds, for the debug information (the
+/// IR text names the slot by value; this is the program's name for it).
+@property(nonatomic, copy, nullable) NSString* sourceName;
 
 - (instancetype)initWithName:(NSString*)name
                         type:(XTIRType*)type
