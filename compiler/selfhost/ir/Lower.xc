@@ -8449,13 +8449,13 @@ class ClassInfo
         if (k == (u16)nkVariableDecl)
             {
             lowerVarDecl(n);
-            // As the reference: only the SSA path releases the declaration's
-            // +1 temps. A PINNED local's path (`&`-taken, every local of a
-            // goto function, every plain local under -g) drops them untracked,
-            // so `u32 i = f(String.withCString(..))` leaks the string when `i`
-            // lives in a slot. That is the reference's bug, mirrored here so
-            // the IR stays identical; fix both together.
-            if (!_failed && pinOf(n.name()) == (IRPinned*)0)
+            // Under -g the reference releases only the SSA path's +1 temps: a
+            // local -g pins (every plain local) drops them untracked, so
+            // `u32 i = f(String.withCString(..))` leaks the string in a -g
+            // build. Mirrored here so the -g IR stays identical, and ONLY under
+            // -g: without it this path releases them as before. Fix both
+            // compilers together (release a pinned declaration's temps too).
+            if (!_failed && (!_debugInfo || pinOf(n.name()) == (IRPinned*)0))
                 flushOwnedTemps();
             else if (!_failed)
                 {
