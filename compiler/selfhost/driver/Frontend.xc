@@ -35,6 +35,9 @@
 #import "Lower.xc"
 #import "Designable.xc"
 
+// -g resolves a relative source path against the working directory.
+u8* getcwd(u8* buf, u64 size);
+
 // has to be built TWICE (once to find `%@`, once for real) and the two must be
 // built identically or the gate is decided against a different program.
 class FeOptions
@@ -49,6 +52,7 @@ class FeOptions
     Array* _libs; // -L dirs: `.xtc.iface` side files resolve here
     bool _verbose;
     bool _boundsCheck; // -fbounds-check
+    bool _debugInfo;   // -g: source locations on the IR, for the line tables
     i32 _threadSafeArc; // -f[no-]thread-safe-arc: 1 on, 0 off, -1 decide per module
     bool _emitIface;   // compute the module interface (--emit-lib, -c, --emit-iface)
     // …and, SEPARATELY, whether this is a LIBRARY build. The two used to be one
@@ -98,6 +102,7 @@ class FeOptions
         _libcReferenced = false;
         _migrate = (String*)0;
         _boundsCheck = false;
+        _debugInfo = false;
         _threadSafeArc = (i32)-1;
         }
 
@@ -140,6 +145,14 @@ class FeOptions
     bool boundsCheck(void)
         {
         return _boundsCheck;
+        }
+    bool debugInfo(void)
+        {
+        return _debugInfo;
+        }
+    void setDebugInfo(bool b)
+        {
+        _debugInfo = b;
         }
     i32 threadSafeArc(void)
         {
@@ -299,6 +312,17 @@ class FeOptions
         }
 
     // Source in, IR module out. 0 on a failure that has already been reported.
+    // The process's working directory, which a relative source path is taken
+    // against for -g — what the reference reads from NSFileManager.
+    static String* workingDirectory(void)
+        {
+        u8* buf = new u8[(u32)4096];
+        u8* got = getcwd(buf, (u64)4096);
+        if (got == (u8*)0)
+            return String.withCString("");
+        return String.withCString(buf);
+        }
+
     static IRModule* lower(FeOptions* o)
         {
         resolveIncludePaths(o);
@@ -804,6 +828,16 @@ class FeOptions
         // once ride the same switch and a program that asks for one gets both.
         lower.setThreadSafeStatics(o.threadSafeArc());
         lower.setBoundsCheck(o.boundsCheck());
+        // -g, as the reference's driver sets it up: a fresh file table, and the
+        // program's own source registered first, so it is file 0 and names the
+        // compile unit (imports are lowered first and would otherwise take it).
+        lower.setDebugInfo(o.debugInfo());
+        IRDbg.resetFiles();
+        if (o.debugInfo())
+            {
+            IRDbg.setWorkingDirectory(Frontend.workingDirectory());
+            IRDbg.fileIdForPath(IRDbg.canonicalPath(o.input()));
+            }
         // `par` blocks get their Metal source only where Metal exists: macOS
         // on Apple silicon (not iOS for now, not Android); on Windows, PTX
         // for NVIDIA's driver.
@@ -831,6 +865,9 @@ class FeOptions
         lower.setParWGSL(o.target().equals(String.withCString("wasm32")));
         lower.setVtable(sema.vtable());
         IRModule* mod = lower.run(program, moduleNameOf(o.input()));
+        // Instructions an optimisation pass makes later carry no location of
+        // their own; they must not take the last statement's.
+        IRDbg.clearCurrent();
         o.setCallSites(lower.callSites());
         // Lowering warnings, "<category>\t<text>" as the parser's are, and
         // printed even when the lowering then fails.

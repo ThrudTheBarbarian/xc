@@ -23,6 +23,148 @@
 // is what makes the two texts comparable at all.
 
 #import "Foundation.xc"
+#import "Files.xc"
+
+// -g: source locations, the port of XTIRDbgLoc's class side. The location
+// lowering is AT is process state, as the original's is: an instruction made
+// while one is current takes it (IRInsn.with), so each statement's code carries
+// the statement's line without every construction site passing it. None is
+// current without -g, and then no instruction carries one and the IR text is
+// unchanged. The FILES the locations number are the text's `dbgfile` lines.
+class IRDbg
+    {
+    static bool _has;
+    static u32 _file;
+    static u32 _line;
+    static u32 _col;
+    static Array* _files; // String@, indexed by file id
+    static String* _cwd;  // what a relative path is taken against
+    static Map* _idByRaw; // a path as the source spelt it -> its file id (Number@)
+    u8 _unused;           // no instances: every entry point is static
+
+    void init(void)
+        {
+        _unused = (u8)0;
+        }
+
+    static bool hasCurrent(void)       { return _has; }
+    static u32 currentFile(void)       { return _file; }
+    static u32 currentLine(void)       { return _line; }
+    static u32 currentCol(void)        { return _col; }
+
+    static void setCurrent(u32 file, u32 line, u32 col)
+        {
+        _has = true;
+        _file = file;
+        _line = line;
+        _col = col;
+        }
+    static void clearCurrent(void)
+        {
+        _has = false;
+        _file = (u32)0;
+        _line = (u32)0;
+        _col = (u32)0;
+        }
+
+    static Array* files(void)
+        {
+        if (_files == (Array*)0)
+            _files = new Array();
+        return _files;
+        }
+    static u32 fileIdForPath(String* path)
+        {
+        Array* fs = IRDbg.files();
+        for (u32 i = (u32)0; i < fs.count(); i = i + (u32)1)
+            if (((String*)fs.get(i)).equals(path))
+                return i;
+        fs.add((Object*)path);
+        return fs.count() - (u32)1;
+        }
+    static void setPath(String* path, u32 fileId)
+        {
+        Array* fs = IRDbg.files();
+        while (fs.count() <= fileId)
+            fs.add((Object*)String.withCString(""));
+        fs.set(fileId, (Object*)path);
+        }
+    static void resetFiles(void)
+        {
+        _files = new Array();
+        _idByRaw = new Map();
+        IRDbg.clearCurrent();
+        }
+
+    // The file id of a path as a node spells it: canonicalised once, then
+    // remembered, since every statement asks.
+    static u32 fileIdForSourcePath(String* raw)
+        {
+        if (_idByRaw == (Map*)0)
+            _idByRaw = new Map();
+        Object* hit = _idByRaw.get((Hashable*)raw);
+        if (hit != (Object*)0)
+            return ((Number*)hit).asU32();
+        u32 id = IRDbg.fileIdForPath(IRDbg.canonicalPath(raw));
+        _idByRaw.set((Hashable*)String.withString(raw), (Object*)Number.with(id));
+        return id;
+        }
+
+    // The directory a relative source path is resolved against — the
+    // process's working directory, which the driver supplies (this module
+    // stays free of libc).
+    static void setWorkingDirectory(String* d) { _cwd = d; }
+
+    // A path as the debug information records it: absolute, with no `.` or
+    // `..` and no empty component — what NSString's stringByStandardizingPath
+    // gives on an absolute path. Its `..` is LEXICAL (`/var/tmp/../x` is
+    // `/var/x` though /var is a link), and on macOS a leading `/private` goes
+    // when the path without it still exists (the temporary directory lives
+    // under it).
+    static String* canonicalPath(String* path)
+        {
+        if (path == (String*)0 || path.byteLength() == (u32)0)
+            return String.withCString("");
+        String* abs = path;
+        if (path.byteAt((u32)0) != (u8)'/')
+            {
+            abs = String.withString(_cwd == (String*)0 ? String.withCString("") : _cwd);
+            if (abs.byteLength() == (u32)0 || abs.byteAt(abs.byteLength() - (u32)1) != (u8)'/')
+                abs.appendCString("/");
+            abs.append(path);
+            }
+        Array* parts = abs.splitOnByte((u8)'/');
+        Array* keep = new Array();
+        for (u32 i = (u32)0; i < parts.count(); i = i + (u32)1)
+            {
+            String* c = (String*)parts.get(i);
+            if (c.byteLength() == (u32)0 || c.equals(String.withCString(".")))
+                continue;
+            if (c.equals(String.withCString("..")))
+                {
+                if (keep.count() > (u32)0)
+                    keep.removeLast();
+                continue;
+                }
+            keep.add((Object*)c);
+            }
+        String* out = String.withCString("");
+        for (u32 i = (u32)0; i < keep.count(); i = i + (u32)1)
+            {
+            out.appendCString("/");
+            out.append((String*)keep.get(i));
+            }
+        if (out.byteLength() == (u32)0)
+            return String.withCString("/");
+        if (out.hasPrefix(String.withCString("/private/")))
+            {
+            String* rest = out.substringFromByte((u32)8);
+            if (Files.exists(rest))
+                return rest;
+            }
+        return out;
+        }
+    }
 
 class IRValue
     {
@@ -281,18 +423,51 @@ class IRValue
     Array* _ops;
     String* _pred; // ICmp / FCmp only
     String* _cc;   // call opcodes only
+    // -g: the source location, printed ` !dbg <file>:<line>:<col>` after the
+    // line. Taken from IRDbg's current one when the instruction is made.
+    bool _dbg;
+    u32 _dbgFile;
+    u32 _dbgLine;
+    u32 _dbgCol;
 
     void init(void)
         {
         _ops = new Array();
         _op = String.withCString("?");
+        _dbg = false;
         }
 
     static IRInsn* with(String* mnemonic)
         {
         IRInsn* i = new IRInsn();
         i._op = mnemonic;
+        if (IRDbg.hasCurrent())
+            i.setDbg(IRDbg.currentFile(), IRDbg.currentLine(), IRDbg.currentCol());
         return i;
+        }
+
+    bool hasDbg(void)    { return _dbg; }
+    u32 dbgFile(void)    { return _dbgFile; }
+    u32 dbgLine(void)    { return _dbgLine; }
+    u32 dbgCol(void)     { return _dbgCol; }
+    void setDbg(u32 file, u32 line, u32 col)
+        {
+        _dbg = true;
+        _dbgFile = file;
+        _dbgLine = line;
+        _dbgCol = col;
+        }
+    void clearDbg(void)
+        {
+        _dbg = false;
+        }
+    // ` !dbg f:l:c`, or nothing at all without a location.
+    String* dbgSuffix(void)
+        {
+        String* s = String.withCString("");
+        if (_dbg)
+            s.appendFormat(" !dbg %ld:%ld:%ld", (i32)_dbgFile, (i32)_dbgLine, (i32)_dbgCol);
+        return s;
         }
 
     String* op(void)
@@ -550,9 +725,16 @@ class IRValue
     String* _simdLevel;
     String* _simdBaseName;
     bool _simdDispatch;
+    // -g: where the function begins (its body's opening brace), the line its
+    // prologue is attributed to.
+    bool _dbg;
+    u32 _dbgFile;
+    u32 _dbgLine;
+    u32 _dbgCol;
 
     void init(void)
         {
+        _dbg = false;
         _params = new Array();
         _blocks = new Array();
         _pinned = new Array();
@@ -575,6 +757,25 @@ class IRValue
     void setSimdBaseName(String* n)    { _simdBaseName = n; }
     bool simdDispatch(void)            { return _simdDispatch; }
     void setSimdDispatch(bool d)       { _simdDispatch = d; }
+    bool hasDbg(void)                  { return _dbg; }
+    u32 dbgFile(void)                  { return _dbgFile; }
+    u32 dbgLine(void)                  { return _dbgLine; }
+    u32 dbgCol(void)                   { return _dbgCol; }
+    void setDbg(u32 file, u32 line, u32 col)
+        {
+        _dbg = true;
+        _dbgFile = file;
+        _dbgLine = line;
+        _dbgCol = col;
+        }
+    // The location lowering is at, or none.
+    void setDbgFromCurrent(void)
+        {
+        _dbg = IRDbg.hasCurrent();
+        _dbgFile = IRDbg.currentFile();
+        _dbgLine = IRDbg.currentLine();
+        _dbgCol = IRDbg.currentCol();
+        }
 
     String* name(void)
         {
@@ -900,7 +1101,11 @@ class IRValue
             out.appendCString("Mem");
         else
             out.appendFormat("(%s, Mem)", _ret.cString());
-        out.appendCString(" {\n");
+        out.appendCString(" {");
+        // -g: where the function begins, on its header line.
+        if (_dbg)
+            out.appendFormat(" !dbg %ld:%ld:%ld", (i32)_dbgFile, (i32)_dbgLine, (i32)_dbgCol);
+        out.appendCString("\n");
         if (_simdLevel != (String*)0)
             out.appendFormat("    simd: %s of %s\n", _simdLevel.cString(), _simdBaseName.cString());
         if (_simdDispatch)
@@ -962,10 +1167,16 @@ class IRValue
             out.appendFormat("      preds: %s\n", predsOf(blk).cString());
             for (u32 i = (u32)0; i < blk.phis().count(); i = i + (u32)1)
                 out.appendFormat("      %s\n", ((IRInsn*)blk.phis().get(i)).text().cString());
+            // -g: ` !dbg` on instructions and terminators, never on a phi —
+            // which is where the reference prints it.
             for (u32 i = (u32)0; i < blk.insns().count(); i = i + (u32)1)
-                out.appendFormat("      %s\n", ((IRInsn*)blk.insns().get(i)).text().cString());
+                {
+                IRInsn* ii = (IRInsn*)blk.insns().get(i);
+                out.appendFormat("      %s%s\n", ii.text().cString(), ii.dbgSuffix().cString());
+                }
             if (blk.term() != 0)
-                out.appendFormat("      %s\n", blk.term().text().cString());
+                out.appendFormat("      %s%s\n", blk.term().text().cString(),
+                                 blk.term().dbgSuffix().cString());
             }
         out.appendCString("  }\n");
         return out;
@@ -1801,6 +2012,11 @@ class IRValue
         out.appendCString("\" {\n");
         for (u32 i = (u32)0; i < _layouts.count(); i = i + (u32)1)
             out.append(((IRLayout*)_layouts.get(i)).text(i));
+        // -g: the source files the instructions' !dbg locations number. As
+        // the reference's, the table is the process's, not the module's.
+        Array* dbgFiles = IRDbg.files();
+        for (u32 i = (u32)0; i < dbgFiles.count(); i = i + (u32)1)
+            out.appendFormat("  dbgfile %ld \"%s\"\n", (i32)i, ((String*)dbgFiles.get(i)).cString());
         for (u32 i = (u32)0; i < _consts.count(); i = i + (u32)1)
             {
             out.appendFormat("  constant %ld: string bytes=[", (i32)i);

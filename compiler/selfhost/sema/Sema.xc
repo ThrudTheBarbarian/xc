@@ -5511,7 +5511,12 @@ class Sema
             synth.setSym(String.withCString("init"));
             synth.setAutoSuperInit();
             synth.addFlag((u32)NF_SYNTH);
-            synth.add(Node.with((u16)nkBlock));
+            // At the class's position, method and body both, as the
+            // reference builds them — -g attributes the init to it.
+            synth.setPos(cls.fileId(), cls.line(), cls.col());
+            Node* sbody = Node.with((u16)nkBlock);
+            sbody.setPos(cls.fileId(), cls.line(), cls.col());
+            synth.add(sbody);
             cls.add(synth);
             }
         }

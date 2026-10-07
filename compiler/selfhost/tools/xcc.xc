@@ -4999,7 +4999,8 @@ void capabilityUsage(void)
     Stdio.printf("  -falloc=bump|heap          Allocator. Every current target uses heap\n");
     Stdio.printf("  -fmalloc=system|mimalloc   The C heap behind the runtime. mimalloc is\n");
     Stdio.printf("                             -A x86_64 only, linked ahead of libc\n");
-    Stdio.printf("  -g                         Accepted; no debug information is emitted yet\n");
+    Stdio.printf("  -g                         Emit DWARF debug information: line tables,\n");
+    Stdio.printf("                             functions and call frames\n");
     Stdio.printf("\n");
     Stdio.printf("Android packaging:\n");
     Stdio.printf("  --needed <soname>          Add a DT_NEEDED entry; repeatable\n");
@@ -5589,9 +5590,11 @@ void checkCapabilities(DriverOptions* d)
     if (c.alloc() != (String*)0 && c.alloc().equals(String.withCString("bump")))
         Stdio.printf("xcc: warning: -falloc=bump: every supported target uses the "
                      "free-list heap allocator; the build is unchanged\n");
+    // -g: the LOWERING stamps source locations on instructions (the front
+    // end), and the back end turns them into line tables, so both are told —
+    // as the reference driver passes -g on to xcc-fe.
     if (c.debugInfo())
-        Stdio.printf("xcc: warning: -g: no debug information is emitted yet; the "
-                     "build is unchanged\n");
+        d.fe().setDebugInfo(true);
     // The FPU flags choose code only on m68k (the 68881). arm9 code is always
     // VFP, so -mhard-float is its default and -msoft-float cannot be honoured.
     if (!isM68k(d)) {

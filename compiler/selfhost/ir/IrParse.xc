@@ -29,9 +29,39 @@
 #import "Files.xc"
 #import "Ir.xc"
 
+// -g: one line's trailing ` !dbg <file>:<line>:<col>`, taken off the line
+// when it is read so nothing else has to know the suffix is there.
+class IrDbgAt
+    {
+    bool _has;
+    u32 _file;
+    u32 _line;
+    u32 _col;
+
+    void init(void)
+        {
+        _has = false;
+        _file = (u32)0;
+        _line = (u32)0;
+        _col = (u32)0;
+        }
+    bool has(void)  { return _has; }
+    u32 file(void)  { return _file; }
+    u32 line(void)  { return _line; }
+    u32 col(void)   { return _col; }
+    void set(u32 f, u32 l, u32 c)
+        {
+        _has = true;
+        _file = f;
+        _line = l;
+        _col = c;
+        }
+    }
+
 class IrParser
     {
     Array* _lines; // String@, comments stripped and continuations joined
+    Array* _dbgs;  // IrDbgAt@ per line: its -g location, if it had one
     u32 _li;       // the line being read
     String* _cur;  // …its text
     u32 _ci;       // …and the cursor into it
@@ -126,6 +156,7 @@ class IrParser
     void prepare(String* text)
         {
         _lines = new Array();
+        _dbgs = new Array();
         Array* raw = text.splitOnByte((u8)10);
         String* pending = (String*)0;
         for (u32 i = (u32)0; i < raw.count(); i = i + (u32)1)
@@ -145,13 +176,70 @@ class IrParser
                 pending = String.withString(line);
                 continue;
                 }
-            _lines.add((Object*)line);
+            addLine(line);
             }
         if (pending != 0)
-            _lines.add((Object*)pending);
+            addLine(pending);
         _li = (u32)0;
         _cur = _lines.count() > (u32)0 ? (String*)_lines.get((u32)0) : String.withCString("");
         _ci = (u32)0;
+        }
+
+    // A finished line, its -g location (the LAST ` !dbg `, as the reference
+    // finds it) split off. The suffix goes whatever follows it; only a well-
+    // formed `file:line:col` becomes a location.
+    void addLine(String* line)
+        {
+        IrDbgAt* at = new IrDbgAt();
+        u32 kl = (u32)6; // " !dbg "
+        u32 found = String.notFound();
+        // From the end, comparing bytes: this runs on every line of the IR.
+        u32 n = line.byteLength();
+        u32 i = n >= kl ? n - kl + (u32)1 : (u32)0;
+        while (i > (u32)0 && found == String.notFound())
+            {
+            i = i - (u32)1;
+            if (line.byteAt(i) == (u8)' ' && line.byteAt(i + (u32)1) == (u8)'!'
+                && line.byteAt(i + (u32)2) == (u8)'d' && line.byteAt(i + (u32)3) == (u8)'b'
+                && line.byteAt(i + (u32)4) == (u8)'g' && line.byteAt(i + (u32)5) == (u8)' ')
+                found = i;
+            }
+        if (found != String.notFound())
+            {
+            Array* parts = line.substringFromByte(found + kl).splitOnByte((u8)':');
+            line = line.substringBytes((u32)0, found);
+            if (parts.count() == (u32)3)
+                at.set(IrParser.leadingNumber((String*)parts.get((u32)0)),
+                       IrParser.leadingNumber((String*)parts.get((u32)1)),
+                       IrParser.leadingNumber((String*)parts.get((u32)2)));
+            }
+        _lines.add((Object*)line);
+        _dbgs.add((Object*)at);
+        }
+
+    // The decimal number a string starts with (leading blanks skipped), 0 when
+    // there is none — NSString's intValue, for the digits a location has.
+    static u32 leadingNumber(String* s)
+        {
+        u32 i = (u32)0;
+        while (i < s.byteLength() && (s.byteAt(i) == (u8)' ' || s.byteAt(i) == (u8)9))
+            i = i + (u32)1;
+        u32 v = (u32)0;
+        while (i < s.byteLength() && s.byteAt(i) >= (u8)'0' && s.byteAt(i) <= (u8)'9')
+            {
+            v = v * (u32)10 + (u32)(s.byteAt(i) - (u8)'0');
+            i = i + (u32)1;
+            }
+        return v;
+        }
+
+    // The -g location of the line being read, or 0.
+    IrDbgAt* lineDbg(void)
+        {
+        if (_li >= _dbgs.count())
+            return (IrDbgAt*)0;
+        IrDbgAt* at = (IrDbgAt*)_dbgs.get(_li);
+        return at.has() ? at : (IrDbgAt*)0;
         }
 
     // `;` starts a comment — but not inside a string literal, and the byte
@@ -347,6 +435,11 @@ class IrParser
             modinit();
             return;
             }
+        if (w.equals(String.withCString("dbgfile")))
+            {
+            dbgfile();
+            return;
+            }
         if (w.equals(String.withCString("symbol")))
             {
             symbol();
@@ -411,6 +504,28 @@ class IrParser
         String* n = quoted();
         if (n != 0)
             _m.addModInit(n);
+        nextLine();
+        }
+
+    // -g: `dbgfile <n> "<path>"` names source file n. The path runs from the
+    // first quote to the LAST, as the reference reads it.
+    void dbgfile(void)
+        {
+        skipSpace();
+        bool digits = _ci < _cur.byteLength() && _cur.byteAt(_ci) >= (u8)'0' && _cur.byteAt(_ci) <= (u8)'9';
+        u32 id = (u32)number();
+        u32 q1 = String.notFound();
+        u32 q2 = String.notFound();
+        for (u32 i = (u32)0; i < _cur.byteLength(); i = i + (u32)1)
+            {
+            if (_cur.byteAt(i) != (u8)34)
+                continue;
+            if (q1 == String.notFound())
+                q1 = i;
+            q2 = i;
+            }
+        if (digits && q1 != String.notFound() && q2 > q1)
+            IRDbg.setPath(_cur.substringBytes(q1 + (u32)1, q2 - q1 - (u32)1), id);
         nextLine();
         }
 
@@ -613,6 +728,10 @@ class IrParser
             return;
         returnType();
         expectChar((u8)'{');
+        // -g: a trailing !dbg on the header line is the function's own location.
+        IrDbgAt* fd = lineDbg();
+        if (fd != 0)
+            _fn.setDbg(fd.file(), fd.line(), fd.col());
         u32 body = _li + (u32)1;
         u32 end = bodyEnd(body);
         nextLine();
@@ -1048,6 +1167,12 @@ class IrParser
             return;
             }
         IRInsn* insn = IRInsn.with(op);
+        // -g: the line's own location, and none when it has none.
+        IrDbgAt* idb = lineDbg();
+        if (idb != 0)
+            insn.setDbg(idb.file(), idb.line(), idb.col());
+        else
+            insn.clearDbg();
         insn.setRes(res);
         insn.setMemRes(mem);
         operands(insn, op);

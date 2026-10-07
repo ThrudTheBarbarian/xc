@@ -57,6 +57,10 @@ class Parser
     Array*  _blkClasses;    // synthesised impl ClassDecl nodes, creation order
     u32     _parCounter;    // ParImpl$N numbering (par blocks)
     Token*  _parTok;        // the `par` being desugared: where its errors point
+    // While set, every node mk/mkNamed builds takes THIS token's position: a
+    // block literal's synthesised class is built at the literal, as the
+    // reference builds it, not wherever the parse has got to (0 otherwise).
+    Token*  _mkAt;
     Map*    _parTopVars;    // the program's globals so far: name -> type spelling
     Map*    _blkBases;      // mangled -> Map{"ret": spelling, "params": Array<Node nkParam>}
     Map*    _blkImplBase;   // impl name -> base name
@@ -495,15 +499,28 @@ class Parser
             invoke.add(blkDefaultBody(ret));
             Node* cls = mkNamed((u16)nkClassDecl, name);
             cls.add(invoke);
+            // The reference builds these at the PROGRAM's position (its first
+            // token), not where the parse ended; -g gives the invoke body it.
+            restampTree(cls, program);
             program.add(cls);
         }
         for (u32 i = (u32)0; i < _blkClasses.count(); i = i + (u32)1)
             program.add((Node*)_blkClasses.get(i));
     }
 
+    // `n` and everything under it at `at`'s position.
+    void restampTree(Node* n, Node* at)
+    {
+        if (n == 0) return;
+        n.setPos(at.fileId(), at.line(), at.col());
+        for (u32 i = (u32)0; i < n.kidCount(); i = i + (u32)1) restampTree(n.kid(i), at);
+    }
+
     // Parse a literal's body (cursor on `{`) and synthesise its impl class.
     // Returns the replacement expression: `BlkImpl$N.mk(captures…)`.
-    Node* blkParseLiteralBody(String* baseName, String* ret, Array* params, String* selfName)
+    // `at` is where the reference builds the impl class and the replacement
+    // call: the literal's start, the `=` of a re-binding, or the declaration.
+    Node* blkParseLiteralBody(String* baseName, String* ret, Array* params, String* selfName, Token* at)
     {
         u32 counter = _blkCounter;
         _blkCounter = _blkCounter + (u32)1;
@@ -534,6 +551,9 @@ class Parser
         Array* capNames = (Array*)frame.get((Hashable*)String.withCString("names"));
         Map* capTypes = (Map*)frame.get((Hashable*)String.withCString("types"));
         Array* wbAll = (Array*)frame.get((Hashable*)String.withCString("wbnames"));
+        // Everything from here on is synthesised, and placed at `at`.
+        Token* savedMkAt = _mkAt;
+        _mkAt = at;
         // capture order, like the reference
         Array* wbNames = new Array();
         for (u32 i = (u32)0; i < capNames.count(); i = i + (u32)1) {
@@ -708,6 +728,7 @@ class Parser
         mkCall.setNum((i64)(capNames.count() + wbNames.count()));
         if (wbNames.count() > (u32)0)
             _blkWbImpls.add((Hashable*)String.withString(implName));
+        _mkAt = savedMkAt;
         return mkCall;
     }
 
@@ -720,6 +741,7 @@ class Parser
         // Not reproducible since v2 reshaped this function: the trigger
         // restored in place and a 60-case pressure sweep both come back
         // byte-identical. If it re-fires, all-diff is what catches it.)
+        Token* at = cur();
         blkParseHeader();
         String* name = _lastBlkName;
         String* base = _lastBlkBase;
@@ -729,7 +751,7 @@ class Parser
             _error(String.withCString("expected '{' to open the block's body (a bare block type is not an expression)"));
             return (Node*)0;
         }
-        return blkParseLiteralBody(base, ret, params, name);
+        return blkParseLiteralBody(base, ret, params, name, at);
     }
 
     // `auto e = <block expr>;` — propagate the binding from the initialiser.
@@ -1002,7 +1024,7 @@ class Parser
     Node* mk(u16 kind)
         {
         Node* n = Node.with(kind);
-        Token* t = cur();
+        Token* t = _mkAt != (Token*)0 ? _mkAt : cur();
         if (t != 0)
             n.setPos(t.fileId(), t.line(), t.col());
         return n;
@@ -1018,6 +1040,8 @@ class Parser
         // already the token after it and the position landed a word to the
         // right — `undefinedThing` reported at the semicolon.
         Token* t = _pos > (u32)0 ? (Token*)_tokens.get(_pos - (u32)1) : cur();
+        if (_mkAt != (Token*)0)
+            t = _mkAt;
         if (t != 0)
             n.setPos(t.fileId(), t.line(), t.col());
         return n;
@@ -2038,6 +2062,9 @@ class Parser
         Node* stmtNode = parseStatementInner();
         if (stmtNode != 0 && stmtNode.line() == (u32)0)
             stmtNode.setPos(stmtTok.fileId(), stmtTok.line(), stmtTok.col());
+        // -g: the statement's own start, where the reference puts it.
+        if (stmtNode != 0)
+            stmtNode.setStmtPos(stmtTok.fileId(), stmtTok.line(), stmtTok.col());
         return stmtNode;
     }
 
@@ -2045,6 +2072,7 @@ class Parser
     Node* parsePar(void)
     {
         _parTok = cur();
+        Token* parAt = _parTok; // a nested `par` in the body moves _parTok
         advance(); // 'par'
         Node* p = mk((u16)nkPar);
         if (check((u16)tokIdentifier)) {
@@ -2167,7 +2195,13 @@ class Parser
         if (body == 0) return (Node*)0;
         Array* reds = new Array();
         for (u32 i = (u32)0; i < p.kidCount(); i = i + (u32)1) reds.add((Object*)p.kid(i));
-        return parDesugar(body, frame, p.name(), reds);
+        // Everything the desugaring builds is at the `par`, as the
+        // reference builds it; the body's own statements keep theirs.
+        Token* savedMkAt = _mkAt;
+        _mkAt = parAt;
+        Node* out = parDesugar(body, frame, p.name(), reds);
+        _mkAt = savedMkAt;
+        return out;
     }
 
     // A write to a bare name inside a `par` body, recorded on the par frame.
@@ -2989,6 +3023,9 @@ class Parser
 
     Node* parseVarDeclStatement(void)
     {
+        // The reference builds the FIRST declarator (and a constructor's
+        // init call, and the wrapper) at the statement's start; -g reads it.
+        Token* startTok = cur();
         u32 flags = (u32)0;
         bool blockBodyInit = false;                   // `= { body }` of a block literal
         while (true) {
@@ -3054,7 +3091,7 @@ class Parser
                 // signature (names included) comes from the declaration.
                 advance();                              // `=`
                 Node* lit = blkParseLiteralBody(blkDeclBase, blkDeclRet,
-                                                blkDeclParams, name);
+                                                blkDeclParams, name, startTok);
                 if (lit != 0) v.add(lit);
                 blockBodyInit = true;
             } else if (match((u16)tokAssign)) {
@@ -3090,6 +3127,7 @@ class Parser
         // accepted `i32 y = (i32)1` with no semicolon and built it (bug 130).
         if (blockBodyInit) match((u16)tokSemicolon);
         else               expect((u16)tokSemicolon);
+        if (first != 0) first.setStmtPos(startTok.fileId(), startTok.line(), startTok.col());
 
         // `first` is a strong local held ALONGSIDE the array, not fetched back
         // out of it: returning `array.get(0)` hands back a reference the array
@@ -3110,7 +3148,9 @@ class Parser
             call.setNum((i64)ctorArgs.count());
             Node* st = mk((u16)nkExprStatement);
             st.add(call);
+            st.setStmtPos(startTok.fileId(), startTok.line(), startTok.col());
             b.add(st);
+            b.setStmtPos(startTok.fileId(), startTok.line(), startTok.col());
             return b;
         }
 
@@ -3120,6 +3160,7 @@ class Parser
         Node* b = mk((u16)nkBlock);
         b.addFlag((u32)NF_DECLLIST);
         for (u32 i = (u32)0; i < decls.count(); i = i + (u32)1) b.add((Node*)decls.get(i));
+        b.setStmtPos(startTok.fileId(), startTok.line(), startTok.col());
         return b;
     }
 
@@ -3185,6 +3226,8 @@ class Parser
     // Both loop forms: `for (v in coll)` and the C-style triple.
     Node* parseFor(void)
     {
+        // -g: the reference builds a declared loop variable at the `for`.
+        Token* forTok = cur();
         advance();
         expect((u16)tokLParen);
 
@@ -3255,6 +3298,7 @@ class Parser
                 Node* decl = mkNamed((u16)nkVariableDecl, vname);
                 decl.setOp(ty);
                 decl.add(collection);                    // the start bound
+                decl.setStmtPos(forTok.fileId(), forTok.line(), forTok.col());
                 initMark.add(decl);
                 n.add(initMark);
 
@@ -3300,8 +3344,11 @@ class Parser
         Node* n = mk((u16)nkForCStyle);
         Node* initMark = mk((u16)nkMarkerInit);
         if (!check((u16)tokSemicolon)) {
-            if (looksLikeType()) initMark.add(parseVarDeclStatement());
-            else {
+            if (looksLikeType()) {
+                Node* iv = parseVarDeclStatement();
+                if (iv != 0) iv.setStmtPos(forTok.fileId(), forTok.line(), forTok.col());
+                initMark.add(iv);
+            } else {
                 // The original stores the bare expression as the loop's init
                 // clause — no ExprStatement wrapper.
                 Node* e = parseExpression();
@@ -3629,7 +3676,7 @@ class Parser
                     String* ret = (sig != 0)
                         ? (String*)sig.get((Hashable*)String.withCString("ret"))
                         : String.withCString("void");
-                    rhs = blkParseLiteralBody(base, ret, declParams, (String*)0);
+                    rhs = blkParseLiteralBody(base, ret, declParams, (String*)0, opTok);
                     if (rhs != 0) blkMarkHoldsWb(lhs.name(), rhs);
                 } else {
                     rhs = check((u16)tokLBrace)

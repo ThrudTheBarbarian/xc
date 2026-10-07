@@ -375,6 +375,11 @@ class ClassInfo
     // header before the address is used. Off by default; an ordinary build emits
     // none of this and links none of the runtime.
     bool _boundsCheck;
+    // -g: stamp each statement's source location on the instructions lowered
+    // for it (through IRDbg's current location), for the back end's line
+    // tables. Off, no instruction carries a location and the IR text is
+    // unchanged.
+    bool _debugInfo;
     bool _threadSafeStatics;
     // Classes whose name function the driver generated (`_xtc_cname_<C>`,
     // runtime class names): class name -> itself. Their itable carries the
@@ -492,6 +497,7 @@ class ClassInfo
         _nativeVarargs = false;
         _tssMode = (i32)-1;
         _boundsCheck = false;
+        _debugInfo = false;
         _threadSafeStatics = false;
         _locals = new Map();
         _localTypes = new Map();
@@ -593,6 +599,62 @@ class ClassInfo
     void setBoundsCheck(bool b)
         {
         _boundsCheck = b;
+        }
+    void setDebugInfo(bool b)
+        {
+        _debugInfo = b;
+        }
+    bool debugInfo(void)
+        {
+        return _debugInfo;
+        }
+
+    // -g: make `n`'s position the location instructions take from here on.
+    // A node with no position leaves the current one standing.
+    void dbgFromNode(Node* n)
+        {
+        if (!_debugInfo || n == (Node*)0)
+            return;
+        // A statement's own start when it was parsed as one, else the node's.
+        u32 line = n.stmtLine();
+        u32 col = n.stmtCol();
+        String* f = n.stmtFile();
+        if (line == (u32)0)
+            {
+            line = n.line();
+            col = n.col();
+            f = n.file();
+            }
+        if (line == (u32)0)
+            return;
+        u32 file = IRDbg.fileIdForSourcePath(f == (String*)0 ? String.withCString("") : f);
+        IRDbg.setCurrent(file, line, col);
+        }
+
+    // -g: an instruction this lowering BUILDS before the code that precedes
+    // it in the block (a `return`'s Return, made before its value, teardown
+    // and defers are lowered) takes the location current when it is placed —
+    // the reference makes it there, so that is the one it carries.
+    void dbgRestamp(IRInsn* i)
+        {
+        if (!_debugInfo)
+            return;
+        if (IRDbg.hasCurrent())
+            i.setDbg(IRDbg.currentFile(), IRDbg.currentLine(), IRDbg.currentCol());
+        else
+            i.clearDbg();
+        }
+
+    // -g: the function begins at its body's opening brace — the reference's
+    // _lowerCallable, which every function, method and generated destructor
+    // goes through. Nothing lowered before it may lend the prologue a line.
+    void dbgFunctionStart(Node* body)
+        {
+        if (!_debugInfo)
+            return;
+        IRDbg.clearCurrent();
+        dbgFromNode(body);
+        _fn.setDbgFromCurrent();
         }
     Map* callSites(void)
         {
@@ -8352,6 +8414,8 @@ class ClassInfo
         // statement did not create frees a live object.
         _ownedTemps = new Array();
         _ownedBlocks = new Array();
+        // -g: this statement's code carries this statement's line.
+        dbgFromNode(n);
         u16 k = n.kind();
         if (k == (u16)nkBlock)
             {
@@ -8537,6 +8601,7 @@ class ClassInfo
                     bops.add((Object*)IROperand.useVal((IRValue*)vals.get(i)));
                 r.add(IROperand.useVal(emit(String.withCString("AggBuild"), _fnRetAgg, bops)));
                 r.add(IROperand.useVal(_mem));
+                dbgRestamp(r);
                 _blk.setTerm(r);
                 return;
                 }
@@ -8608,6 +8673,7 @@ class ClassInfo
                     r.add(IROperand.useVal(constOf((i64)0, _fnReturn)));
                 }
             r.add(IROperand.useVal(_mem));
+            dbgRestamp(r);
             _blk.setTerm(r);
             return;
             }
@@ -13266,6 +13332,8 @@ class ClassInfo
         String* dname = String.withString(cls.name());
         dname.appendCString("$dealloc");
         beginFunction(dname, String.withCString("void"));
+        // The generated body is an empty block at the class's position.
+        dbgFunctionStart(cls);
         _curClass = info;
         IRValue* selfV = new IRValue(info.selfPtr());
         _fn.addParam(selfV);
@@ -20421,6 +20489,9 @@ class ClassInfo
         if (_failed)
             return (IRModule*)0;
         parFillSources();
+        // Instructions an optimisation pass makes later carry no location of
+        // their own; they must not take the last statement's.
+        IRDbg.clearCurrent();
         return _m;
         }
 
@@ -20557,6 +20628,7 @@ class ClassInfo
         {
         Node* body = methodBody(m);
         beginFunction(methodSymbolName(cls, m), firstReturn(m.op()));
+        dbgFunctionStart(body);
         Object* frozen = _methodRetIr.get((Hashable*)methodSymbolName(cls, m));
         if (frozen != 0)
             _fn.setRet((String*)frozen);
@@ -20924,6 +20996,7 @@ class ClassInfo
             return; // a prototype has a symbol but no function
 
         beginFunction(d.sym() == 0 ? d.name() : d.sym(), returnOf(d));
+        dbgFunctionStart(body);
         _fnThrows = d.hasFlag((u32)NF_THROWS);
         if (isMultiReturn(d.op()))
             {

@@ -115,6 +115,13 @@ FeOptions* parseArgs(void)
             i = i + (u32)1;
             continue;
             }
+        // -g: source locations on the instructions (` !dbg`), as xcc-fe -g.
+        if (a.equals(String.withCString("-g")))
+            {
+            o.setDebugInfo(true);
+            i = i + (u32)1;
+            continue;
+            }
         if (a.equals(String.withCString("-q")))
             {
             i = i + (u32)1;

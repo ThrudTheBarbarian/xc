@@ -339,6 +339,14 @@ class Node
     Map* _islots;
     Map* _isyms;          // ifaceSlots keyed by impl symbol
     u32 _col;
+    // Where the STATEMENT this node is began — its first token, which is the
+    // position the reference's parser gives a statement node and so the line
+    // -g attributes the statement's code to. Kept apart from _line/_col, which
+    // diagnostics read and which point elsewhere on some kinds (a declaration
+    // at its name). 0 on anything that was not parsed as a statement.
+    u32 _stmtFileId;
+    u32 _stmtLine;
+    u32 _stmtCol;
 
     // ── What the ANALYSER stamps (M6) ───────────────────────────────────
     // Empty on a tree straight from the parser, which is why the M5 dump can
@@ -396,6 +404,9 @@ class Node
         _isyms = (Map*)0;
         _col = (u32)0;
         _fileId = (u32)0;
+        _stmtFileId = (u32)0;
+        _stmtLine = (u32)0;
+        _stmtCol = (u32)0;
         _ty = (String*)0;
         _sym = (String*)0;
         _cls = (String*)0;
@@ -704,6 +715,24 @@ class Node
         _fileId = fileId;
         _line = l;
         _col = c;
+        }
+    void setStmtPos(u32 fileId, u32 l, u32 c)
+        {
+        _stmtFileId = fileId;
+        _stmtLine = l;
+        _stmtCol = c;
+        }
+    u32 stmtLine(void)
+        {
+        return _stmtLine;
+        }
+    u32 stmtCol(void)
+        {
+        return _stmtCol;
+        }
+    String* stmtFile(void)
+        {
+        return FileTable.name(_stmtFileId);
         }
     String* name(void)
         {
