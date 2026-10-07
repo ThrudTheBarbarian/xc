@@ -411,6 +411,17 @@
                   typeof navigator !== "undefined" && !!navigator.gpu;
   let gpuDevice = null, gpuTried = false;
   const gpuKernels = new Map();   // kernel address -> { pipeline, layout } or null
+  // The buffers of the last run, by binding: kept, and grown when a run needs
+  // more, so a block run in a loop does not allocate on every pass.
+  const gpuBufs = [], gpuReads = [];
+  const gpuBuf = (cache, i, size, usage) => {
+    const c = cache[i];
+    if (c && c.size >= size) return c.b;
+    if (c) c.b.destroy();
+    const b = gpuDevice.createBuffer({ size, usage });
+    cache[i] = { b, size };
+    return b;
+  };
   const gpuRun = async (src, n, desc, nb, groups) => {
     if (!gpuTried) {
       gpuTried = true;
@@ -474,16 +485,17 @@
       const ptr = dv.getUint32(desc + 12 * i, true), len = dv.getUint32(desc + 12 * i + 4, true);
       const wb = dv.getUint32(desc + 12 * i + 8, true);
       const size = Math.max(4, (len + 3) & ~3);   // whole words: narrow arrays are read a word at a time
-      const b = dev.createBuffer({ size, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
+      const b = gpuBuf(gpuBufs, i, size, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST);
       const tmp = new Uint8Array(size);
       tmp.set(mem8().subarray(ptr, ptr + len));
       dev.queue.writeBuffer(b, 0, tmp);
-      bufs.push(b);
-      if (wb) back.push({ b, r: dev.createBuffer({ size, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }),
+      bufs.push({ b, size });
+      if (wb) back.push({ b, r: gpuBuf(gpuReads, i, size, GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST),
                           ptr, len, size });
     }
+    // Each bound with its own size: a kept buffer may be larger than this run's.
     const group = dev.createBindGroup({ layout: k.layout,
-                                        entries: bufs.map((b, i) => ({ binding: i, resource: { buffer: b } })) });
+                                        entries: bufs.map((x, i) => ({ binding: i, resource: { buffer: x.b, size: x.size } })) });
     const enc = dev.createCommandEncoder();
     const pass = enc.beginComputePass();
     pass.setPipeline(k.pipeline);
@@ -494,12 +506,10 @@
     for (const x of back) enc.copyBufferToBuffer(x.b, 0, x.r, 0, x.size);
     dev.queue.submit([enc.finish()]);
     for (const x of back) {
-      await x.r.mapAsync(GPUMapMode.READ);
-      mem8().set(new Uint8Array(x.r.getMappedRange(), 0, x.len), x.ptr);
+      await x.r.mapAsync(GPUMapMode.READ, 0, x.size);
+      mem8().set(new Uint8Array(x.r.getMappedRange(0, x.size), 0, x.len), x.ptr);
       x.r.unmap();
-      x.r.destroy();
     }
-    for (const b of bufs) b.destroy();
     return 1;
   };
   imports.xcgpu = { _xc_gpu_run: gpuJspi ? new WebAssembly.Suspending(gpuRun) : () => 0 };
