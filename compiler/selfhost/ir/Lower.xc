@@ -18896,6 +18896,9 @@ class ClassInfo
         if (o.equals(spvS("Store")))
             {
             if (o0.kind() != (u8)OPK_USE || o0.val() == (IRValue*)0) return false;
+            // A class's static-init flag: the host ran the init before the
+            // block, so the flag reads as done and a store to it changes nothing.
+            if (parSinitFlag(o0)) return true;
             WgRecipe* r = (WgRecipe*)_wf.recipeOf.get((Hashable*)mslKey(o0.val()));
             if (r == (WgRecipe*)0) return false;
             String* v = wgValue((IROperand*)ip.ops().get((u32)1), r.pointee);
@@ -19051,6 +19054,137 @@ class ClassInfo
         return true;
         }
 
+    // ── control flow: structured ────────────────────────────────────────
+    // The reference's wgStructured…: the Metal plan (sPlan) as WGSL loop and
+    // if/else, values in variables, phis copies on their edges; a dry walk
+    // first, else the dispatch loop.
+    void wgStructLine(string s)
+        {
+        if (!_wf.dry) wgLine(spvS(s));
+        }
+    bool wgSJump(u32 u, u32 v, i64 h, i64 e, i64 fo)
+        {
+        if (!_wf.dry)
+            {
+            Array* lets = new Array();
+            Array* dsts = new Array();
+            if (!wgEdge((IRBlock*)_sFn.blocks().get(u), (IRBlock*)_sFn.blocks().get(v), (String*)0, true, lets, dsts))
+                return false;
+            wgStores(lets, dsts);
+            }
+        if ((i64)v == h) { wgStructLine("continue;"); return true; }
+        if ((i64)v == e) { wgStructLine("break;"); return true; }
+        if ((i64)v == fo) return true;
+        if (sIsHeader(v)) return wgSLoop(v, e, fo, h);
+        if (((Number*)_sFwd.get(v)).asU32() != (u32)1) return false;
+        return wgSBlock(v, h, e, fo);
+        }
+    bool wgSLoop(u32 x, i64 oe, i64 of, i64 oh)
+        {
+        if (((Number*)_sFwd.get(x)).asU32() != (u32)1) return false;
+        u32 ex = (u32)((Number*)_sExit.get((Hashable*)sKey(x))).asI64();
+        if (oh >= (i64)0 && !sInLoop(oh, ex) && (i64)ex != oe && (i64)ex != of) return false;
+        wgStructLine("loop {");
+        if (!wgSBlock(x, (i64)x, (i64)ex, (i64)-1)) return false;
+        wgStructLine("}");
+        if ((i64)ex == of) return true;
+        if ((i64)ex == oh) { wgStructLine("continue;"); return true; }
+        if ((i64)ex == oe) { wgStructLine("break;"); return true; }
+        if (sIsHeader(ex)) return false;
+        return wgSBlock(ex, oh, oe, of);
+        }
+    bool wgSBlock(u32 x, i64 h, i64 e, i64 fo)
+        {
+        IRBlock* b = (IRBlock*)_sFn.blocks().get(x);
+        if (!_wf.dry)
+            for (u32 i = (u32)0; i < b.insns().count(); i = i + (u32)1)
+                if (!wgStatement((IRInsn*)b.insns().get(i)))
+                    {
+                    parBecause(parWhyFor((IRInsn*)b.insns().get(i), true));
+                    return false;
+                    }
+        IRInsn* t = b.term();
+        if (t == (IRInsn*)0) return false;
+        if (t.op().equals(spvS("Return")))
+            {
+            if (_mHelper)
+                {
+                IROperand* rv = t.ops().count() > (u32)0 ? (IROperand*)t.ops().get((u32)0) : (IROperand*)0;
+                String* rvt = rv == (IROperand*)0 ? (String*)0 : rv.kind() == (u8)OPK_USE ? mslTypeOf(rv) : _sFn.ret();
+                if (!_wf.dry)
+                    {
+                    if (rvt != (String*)0 && !ptxIs(rvt, "Mem"))
+                        {
+                        String* v = wgValue(rv, rvt);
+                        if (v == (String*)0) return false;
+                        String* l = spvS("return ");
+                        l.append(v); l.appendCString(";");
+                        wgLine(l);
+                        }
+                    else
+                        wgLine(spvS("return;"));
+                    }
+                return true;
+                }
+            // The kernel's work ends: a break from the loop that runs once,
+            // which only works from outside any loop of the kernel's own.
+            if (h >= (i64)0) return false;
+            wgStructLine("break;");
+            return true;
+            }
+        if (t.op().equals(spvS("Branch")))
+            return wgSJump(x, sIndexOf(((IROperand*)t.ops().get((u32)0)).blk()), h, e, fo);
+        if (!t.op().equals(spvS("CondBranch"))) return false;
+        u32 n = _sFn.blocks().count();
+        i64 j = ((Number*)_sIpdom.get(x)).asI64();
+        if (j < (i64)0) return false;
+        i64 join = j == (i64)n ? fo : j;
+        if (join >= (i64)0 && join != h && join != e && join != fo)
+            if (h >= (i64)0 && !sInLoop(h, (u32)join)) return false;
+        if (!_wf.dry)
+            {
+            String* c = wgValue((IROperand*)t.ops().get((u32)0), (String*)0);
+            if (c == (String*)0) return false;
+            String* l = spvS("if (");
+            l.append(c); l.appendCString(") {");
+            wgLine(l);
+            }
+        if (!wgSJump(x, sIndexOf(((IROperand*)t.ops().get((u32)1)).blk()), h, e, join)) return false;
+        wgStructLine("} else {");
+        if (!wgSJump(x, sIndexOf(((IROperand*)t.ops().get((u32)2)).blk()), h, e, join)) return false;
+        wgStructLine("}");
+        if (join < (i64)0 || join == fo) return true;
+        if (join == h) { wgStructLine("continue;"); return true; }
+        if (join == e) { wgStructLine("break;"); return true; }
+        if (sIsHeader((u32)join)) return wgSLoop((u32)join, e, fo, h);
+        return wgSBlock((u32)join, h, e, fo);
+        }
+    bool wgSWalk(void)
+        {
+        return sIsHeader((u32)0) ? wgSLoop((u32)0, (i64)-1, (i64)-1, (i64)-1)
+                                 : wgSBlock((u32)0, (i64)-1, (i64)-1, (i64)-1);
+        }
+    // The function's blocks, structured where their shape allows, else as
+    // the dispatch loop; run while guard (0: always) holds.
+    bool wgBody(IRFunc* g, String* guard)
+        {
+        _wf.dry = true;
+        bool fits = sPlan(g) && wgSWalk();
+        _wf.dry = false;
+        if (!fits) return wgDispatch(g, guard);
+        wgLine(spvS("loop {"));
+        if (guard != (String*)0)
+            {
+            String* l = spvS("if (!(");
+            l.append(guard); l.appendCString(")) { break; }");
+            wgLine(l);
+            }
+        if (!wgSWalk()) return false;
+        wgLine(spvS("break;"));
+        wgLine(spvS("}"));
+        return true;
+        }
+
     bool wgDeclareValues(IRFunc* f)
         {
         // Values are named by their order in the walk, as the Metal printer
@@ -19130,7 +19264,10 @@ class ClassInfo
         Map* sBlk = _mBlk; Map* sBufs = _mBufs; Map* sReds = _mReds; IRLayout* sObj = _mObj;
         bool sFailed = _mFailed; bool sHelper = _mHelper; Map* sParams = _mParams; Map* sSinit = _mSinit; String* sWhy = _mWhy;
         Array* sGlobals = _mGlobals; Map* sGlobalOf = _mGlobalOf; WgFn* sFn = _wf;
+        Array* sSucc = _sSucc; Array* sRpo = _sRpo; Array* sFwd = _sFwd; Map* sLoop = _sLoop; Map* sExit = _sExit;
+        Array* sIpdom = _sIpdom; IRFunc* sSFn = _sFn;
         bool ok = wgHelperBody(g, name);
+        _sSucc = sSucc; _sRpo = sRpo; _sFwd = sFwd; _sLoop = sLoop; _sExit = sExit; _sIpdom = sIpdom; _sFn = sSFn;
         _mHelperWhy = _mWhy;
         _mDef = sDef; _mSpace = sSpace; _mBufOf = sBufOf; _mOrd = sOrd;
         _mBlk = sBlk; _mBufs = sBufs; _mReds = sReds; _mObj = sObj;
@@ -19174,7 +19311,7 @@ class ClassInfo
             _wf.retVar = spvS("ret");
             _wf.vars.append(String.withFormat("  var ret: %s;\n", ret.cString()));
             }
-        if (!wgDispatch(g, (String*)0)) return false;
+        if (!wgBody(g, (String*)0)) return false;
         _wgHelperText.appendCString("fn ");
         _wgHelperText.append(name);
         _wgHelperText.appendCString("(");
@@ -19347,7 +19484,7 @@ class ClassInfo
         body.appendCString("  let end = xc_add64(lo, span[2]);\n");
         body.appendCString("  let hi = select(span[1], end, xc_slt64(end, span[1]));\n");
         body.appendCString("  f1 = lo;\n  f2 = hi;\n");
-        if (!wgDispatch(f, spvS("xc_slt64(lo, hi)"))) return false;
+        if (!wgBody(f, spvS("xc_slt64(lo, hi)"))) return false;
         body.append(_wf.code);
         if (reds.count() > (u32)0)
             {

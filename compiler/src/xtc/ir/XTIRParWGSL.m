@@ -175,6 +175,7 @@ static NSString* const kWg64 =
 @property(nonatomic) NSMutableSet<NSNumber*>* used;
 @property(nonatomic, copy, nullable) NSString* retVar;
 @property(nonatomic) NSUInteger temps;
+@property(nonatomic) BOOL dry;   // the structured walk's dry run: shape only, no text
 @end
 
 @implementation XTWgFunc
@@ -863,6 +864,10 @@ static char kWf, kWgHelpers, kWgHelperText, kWgWordBufs, kWgBufName;
             {
             if (i.operands[0].kind != XTIROperandKindUse)
                 return NO;
+            // A class's static-init flag: the host ran the init before the
+            // block, so the flag reads as done and a store to it changes nothing.
+            if ([self.sinitOf[@(i.operands[0].valueId)] boolValue])
+                return YES;
             XTWgRecipe* r = self.wf.recipeOf[@(i.operands[0].valueId)];
             if (!r)
                 return NO;
@@ -1025,6 +1030,184 @@ static char kWf, kWgHelpers, kWgHelperText, kWgWordBufs, kWgBufName;
     return YES;
     }
 
+// ── control flow: structured ────────────────────────────────────────────────
+// The Metal printer's plan (planStructure) printed as WGSL `loop { }` and
+// `if { } else { }`, as the SPIR-V printer does, so a SIMD group's threads
+// reconverge after each; values stay in variables and phis copies on their
+// edges. A dry walk learns whether the shape fits; any other shape keeps the
+// dispatch loop. The body sits in a loop that runs once, so the kernel's
+// return is a `break` from anywhere outside its own loops.
+
+- (void)wgStructLine:(NSString*)s
+    {
+    if (!self.wf.dry)
+        [self wgLine:s];
+    }
+
+- (BOOL)wgJumpFrom:(NSUInteger)u to:(NSUInteger)v loop:(NSInteger)h exit:(NSInteger)e follow:(NSInteger)fo
+    {
+    if (!self.wf.dry)
+        {
+        NSMutableArray<NSString*>* lets = [NSMutableArray array];
+        NSMutableArray<NSString*>* dsts = [NSMutableArray array];
+        if (![self wgEdgeFrom:self.fn.blocks[u] to:self.fn.blocks[v] cond:nil whenTrue:YES lets:lets dsts:dsts])
+            return NO;
+        [self wgStores:lets dsts:dsts];
+        }
+    if ((NSInteger)v == h)
+        {
+        [self wgStructLine:@"continue;"];
+        return YES;
+        }
+    if ((NSInteger)v == e)
+        {
+        [self wgStructLine:@"break;"];
+        return YES;
+        }
+    if ((NSInteger)v == fo)
+        return YES;
+    if (self.loopOf[@(v)])
+        return [self wgStructuredLoop:v exit:e follow:fo outerLoop:h];
+    if ([self.fwdPreds[v] unsignedIntegerValue] != 1)
+        return NO;
+    return [self wgStructuredBlock:v loop:h exit:e follow:fo];
+    }
+
+- (BOOL)wgStructuredLoop:(NSUInteger)x exit:(NSInteger)oe follow:(NSInteger)of outerLoop:(NSInteger)oh
+    {
+    if ([self.fwdPreds[x] unsignedIntegerValue] != 1)
+        return NO;
+    NSUInteger ex = [self.loopExit[@(x)] unsignedIntegerValue];
+    if (oh >= 0 && ![self.loopOf[@(oh)] containsIndex:ex] && (NSInteger)ex != oe && (NSInteger)ex != of)
+        return NO;
+    [self wgStructLine:@"loop {"];
+    if (![self wgStructuredBlock:x loop:(NSInteger)x exit:(NSInteger)ex follow:-1])
+        return NO;
+    [self wgStructLine:@"}"];
+    if ((NSInteger)ex == of)
+        return YES;
+    if ((NSInteger)ex == oh)
+        {
+        [self wgStructLine:@"continue;"];
+        return YES;
+        }
+    if ((NSInteger)ex == oe)
+        {
+        [self wgStructLine:@"break;"];
+        return YES;
+        }
+    if (self.loopOf[@(ex)])
+        return NO;
+    return [self wgStructuredBlock:ex loop:oh exit:oe follow:of];
+    }
+
+- (BOOL)wgStructuredBlock:(NSUInteger)x loop:(NSInteger)h exit:(NSInteger)e follow:(NSInteger)fo
+    {
+    XTWgFunc* f = self.wf;
+    XTIRBlock* b = self.fn.blocks[x];
+    if (!f.dry)
+        for (XTIRInsn* i in b.instructions)
+            if (![self wgStatement:i])
+                {
+                [self because:[self whyFor:i ptx:YES]];
+                return NO;
+                }
+    XTIRInsn* t = b.terminator;
+    if (t.opcode == XTIROpReturn)
+        {
+        if (self.helperMode)
+            {
+            XTIROperand* rv = t.operands.count ? t.operands[0] : nil;
+            XTIRType* rvt = !rv ? nil : rv.kind == XTIROperandKindUse ? [self typeOf:rv.valueId] : self.fn.returnType;
+            if (!f.dry)
+                {
+                if (rvt && rvt.kind != XTIRTypeKindMemory)
+                    {
+                    NSString* v = [self wgValue:rv type:rvt];
+                    if (!v)
+                        return NO;
+                    [self wgLine:[NSString stringWithFormat:@"return %@;", v]];
+                    }
+                else
+                    [self wgLine:@"return;"];
+                }
+            return YES;
+            }
+        // The kernel's work ends: a break from the loop that runs once,
+        // which only works from outside any loop of the kernel's own.
+        if (h >= 0)
+            return NO;
+        [self wgStructLine:@"break;"];
+        return YES;
+        }
+    if (t.opcode == XTIROpBranch)
+        return [self wgJumpFrom:x to:[self indexOf:t.operands[0].blockRef] loop:h exit:e follow:fo];
+    if (t.opcode != XTIROpCondBranch)
+        return NO;
+    NSUInteger n = self.fn.blocks.count;
+    NSInteger j = [self.ipdom[x] integerValue];
+    if (j < 0)
+        return NO;
+    NSInteger join = (j == (NSInteger)n) ? fo : j;
+    if (join >= 0 && join != h && join != e && join != fo)
+        if (h >= 0 && ![self.loopOf[@(h)] containsIndex:(NSUInteger)join])
+            return NO;
+    if (!f.dry)
+        {
+        NSString* c = [self wgValue:t.operands[0] type:nil];
+        if (!c)
+            return NO;
+        [self wgLine:[NSString stringWithFormat:@"if (%@) {", c]];
+        }
+    if (![self wgJumpFrom:x to:[self indexOf:t.operands[1].blockRef] loop:h exit:e follow:join])
+        return NO;
+    [self wgStructLine:@"} else {"];
+    if (![self wgJumpFrom:x to:[self indexOf:t.operands[2].blockRef] loop:h exit:e follow:join])
+        return NO;
+    [self wgStructLine:@"}"];
+    if (join < 0 || join == fo)
+        return YES;
+    if (join == h)
+        {
+        [self wgStructLine:@"continue;"];
+        return YES;
+        }
+    if (join == e)
+        {
+        [self wgStructLine:@"break;"];
+        return YES;
+        }
+    if (self.loopOf[@(join)])
+        return [self wgStructuredLoop:(NSUInteger)join exit:e follow:fo outerLoop:h];
+    return [self wgStructuredBlock:(NSUInteger)join loop:h exit:e follow:fo];
+    }
+
+- (BOOL)wgStructuredWalk
+    {
+    return self.loopOf[@0] ? [self wgStructuredLoop:0 exit:-1 follow:-1 outerLoop:-1]
+                           : [self wgStructuredBlock:0 loop:-1 exit:-1 follow:-1];
+    }
+
+// The function's blocks, structured where their shape allows, else as the
+// dispatch loop; run while `guard` (nil: always) holds.
+- (BOOL)wgBodyGuard:(nullable NSString*)guard
+    {
+    XTWgFunc* f = self.wf;
+    f.dry = YES;
+    BOOL fits = [self planStructure] && [self wgStructuredWalk];
+    f.dry = NO;
+    if (!fits)
+        return [self wgDispatchGuard:guard];
+    [self wgLine:@"loop {"];
+    if (guard)
+        [self wgLine:[NSString stringWithFormat:@"if (!(%@)) { break; }", guard]];
+    if (![self wgStructuredWalk])
+        return NO;
+    [self wgLine:@"break;"];
+    [self wgLine:@"}"];
+    return YES;
+    }
+
 // A variable for every SSA value that is read and is not a pointer or the
 // memory token; a type this cut cannot hold fails.
 - (BOOL)wgDeclareValues
@@ -1135,7 +1318,7 @@ static char kWf, kWgHelpers, kWgHelperText, kWgWordBufs, kWgBufName;
         self.wf.retVar = @"ret";
         [self.wf.vars appendFormat:@"  var ret: %@;\n", ret];
         }
-    if (![self wgDispatchGuard:nil])
+    if (![self wgBodyGuard:nil])
         return NO;
     [self.wgHelperText appendFormat:@"fn %@(%@)%@ {\n%@%@%@}\n", name, [params componentsJoinedByString:@", "],
                                     isVoid ? @"" : [NSString stringWithFormat:@" -> %@", ret], self.wf.vars,
@@ -1294,7 +1477,7 @@ static char kWf, kWgHelpers, kWgHelperText, kWgWordBufs, kWgBufName;
     [body appendString:@"  let end = xc_add64(lo, span[2]);\n"];
     [body appendString:@"  let hi = select(span[1], end, xc_slt64(end, span[1]));\n"];
     [body appendString:@"  f1 = lo;\n  f2 = hi;\n"];
-    if (![self wgDispatchGuard:@"xc_slt64(lo, hi)"])
+    if (![self wgBodyGuard:@"xc_slt64(lo, hi)"])
         return nil;
     [body appendString:self.wf.code];
     if (reds.count)

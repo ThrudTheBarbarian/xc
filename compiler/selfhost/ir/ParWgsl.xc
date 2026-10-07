@@ -22,6 +22,7 @@ class WgFn
     Map* used;         // value key -> 1: values some instruction reads
     String* retVar;    // or 0
     u32 temps;
+    bool dry;          // the structured walk's dry run: shape only, no text
 
     void init(void)
         {
@@ -32,5 +33,6 @@ class WgFn
         used = new Map();
         retVar = (String*)0;
         temps = (u32)0;
+        dry = false;
         }
     }
