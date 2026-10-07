@@ -161,8 +161,10 @@ uses a global itself, runs on the CPU. What else each GPU can hold:
   alone or in arrays, are exact on every Vulkan GPU.
 - Through WebGPU, which has only 32-bit numbers, 64-bit integers are worked in
   two halves and 8- and 16-bit values exactly, as through Vulkan; a block that
-  uses `double`, divides 64-bit integers or converts them to floats runs on the
-  CPU.
+  uses `double` runs on the CPU. From 0.73, 64-bit integers are divided and
+  converted to and from `float` there too, with the CPU's results (up to 0.72
+  such a block runs on the CPU). A block that needs more arrays, or a larger
+  one, than the device can hold runs on the CPU.
 
 On Windows, `XC_PAR_GPU=vulkan` or `XC_PAR_GPU=cuda` in the environment picks
 one interface where both work. Where a machine has more than one Vulkan GPU,

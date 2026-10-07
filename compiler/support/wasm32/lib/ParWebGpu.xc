@@ -15,7 +15,8 @@
 #import "ParDevice.xc"
 
 #package xcgpu
-// 1 the kernel ran, 0 no WebGPU device (or no JSPI), -1 its WGSL did not build.
+// 1 the kernel ran, 0 no WebGPU device (or no JSPI), 2 it needs more buffers,
+// or a larger one, than the device can bind, -1 its WGSL did not build.
 extern i32 _xc_gpu_run(u8* src, u32 n, u32* desc, u32 nb, u32 groups);
 
 u32 parWebGpuLen(u8* s)
@@ -85,6 +86,8 @@ class ParWebGpu
             delete parts[i];
         if (rc == (i32)0)
             return ParDevice.cpu("there is no WebGPU device (or no JSPI to wait for it)");
+        if (rc == (i32)2)
+            return ParDevice.cpu("it needs more GPU buffers, or a larger one, than this WebGPU device allows");
         if (rc != (i32)1)
             return ParDevice.cpu("its GPU version did not build");
         ParDevice.ranOnGpu(proto, l, ParDevice.nowUs() - started, gpuUs);

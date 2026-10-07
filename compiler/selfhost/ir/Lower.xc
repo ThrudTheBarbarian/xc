@@ -18384,11 +18384,12 @@ class ClassInfo
             else if (o.equals(spvS("Shl"))) e = wgFmt2("xc_shl64(%s, %s)", a, cnt);
             else if (o.equals(spvS("LShr"))) e = wgFmt2("xc_lshr64(%s, %s)", a, cnt);
             else if (o.equals(spvS("AShr"))) e = wgFmt2("xc_ashr64(%s, %s)", a, cnt);
+            else if (o.equals(spvS("UDiv"))) e = wgFmt2("xc_udiv64(%s, %s)", a, b);
+            else if (o.equals(spvS("URem"))) e = wgFmt2("xc_urem64(%s, %s)", a, b);
+            else if (o.equals(spvS("SDiv"))) e = wgFmt2("xc_sdiv64(%s, %s)", a, b);
+            else if (o.equals(spvS("SRem"))) e = wgFmt2("xc_srem64(%s, %s)", a, b);
             else
-                {
-                parBecause(spvS("it divides 64-bit integers, which its WebGPU version cannot do yet"));
                 return false;
-                }
             wgSet(ip, e);
             return true;
             }
@@ -18549,10 +18550,19 @@ class ClassInfo
             }
         else if (wgIsFloat(st) || wgIsFloat(rt))
             {
-            if (wgWide(st) || wgWide(rt))
+            // 64-bit integers and floats convert through the helpers (the
+            // reference explains).
+            if (wgWide(st) && wgIsFloat(rt))
                 {
-                parBecause(spvS("it converts between floats and 64-bit integers, which its WebGPU version cannot do yet"));
-                return false;
+                bool sg = o.equals(spvS("SIToFp")) || (o.equals(spvS("Copy")) && wgSigned(st));
+                wgSet(ip, String.withFormat(sg ? "xc_s64tof32(%s)" : "xc_u64tof32(%s)", a.cString()));
+                return true;
+                }
+            if (wgIsFloat(st) && wgWide(rt))
+                {
+                bool sg = o.equals(spvS("FpToSI")) || (o.equals(spvS("Copy")) && wgSigned(rt));
+                wgSet(ip, String.withFormat(sg ? "xc_f32tos64(%s)" : "xc_f32tou64(%s)", a.cString()));
+                return true;
                 }
             bool isCopy = o.equals(spvS("Copy"));
             if (!isCopy && !o.equals(spvS("SIToFp")) && !o.equals(spvS("UIToFp")) && !o.equals(spvS("FpToSI")) && !o.equals(spvS("FpToUI")))
@@ -19559,6 +19569,79 @@ class ClassInfo
         s.appendCString("}\n");
         s.appendCString("fn xc_sext64(x: u32) -> vec2<u32> {\n");
         s.appendCString("  return vec2<u32>(x, select(0u, 0xffffffffu, (x & 0x80000000u) != 0u));\n");
+        s.appendCString("}\n");
+        s.appendCString("struct XcQR { q: vec2<u32>, r: vec2<u32> }\n");
+        s.appendCString("fn xc_neg64(a: vec2<u32>) -> vec2<u32> {\n");
+        s.appendCString("  return xc_sub64(vec2<u32>(0u, 0u), a);\n");
+        s.appendCString("}\n");
+        s.appendCString("fn xc_udivrem64(n: vec2<u32>, d: vec2<u32>) -> XcQR {\n");
+        s.appendCString("  if (d.x == 0u && d.y == 0u) { return XcQR(n, vec2<u32>(0u, 0u)); }\n");
+        s.appendCString("  var q = vec2<u32>(0u, 0u);\n");
+        s.appendCString("  var r = vec2<u32>(0u, 0u);\n");
+        s.appendCString("  var i = 64u;\n");
+        s.appendCString("  loop {\n");
+        s.appendCString("    if (i == 0u) { break; }\n");
+        s.appendCString("    i = i - 1u;\n");
+        s.appendCString("    var bit = (n.x >> i) & 1u;\n");
+        s.appendCString("    if (i >= 32u) { bit = (n.y >> (i - 32u)) & 1u; }\n");
+        s.appendCString("    r = vec2<u32>((r.x << 1u) | bit, (r.y << 1u) | (r.x >> 31u));\n");
+        s.appendCString("    if (!xc_ult64(r, d)) {\n");
+        s.appendCString("      r = xc_sub64(r, d);\n");
+        s.appendCString("      if (i >= 32u) { q.y = q.y | (1u << (i - 32u)); } else { q.x = q.x | (1u << i); }\n");
+        s.appendCString("    }\n");
+        s.appendCString("  }\n");
+        s.appendCString("  return XcQR(q, r);\n");
+        s.appendCString("}\n");
+        s.appendCString("fn xc_sdivrem64(a: vec2<u32>, b: vec2<u32>) -> XcQR {\n");
+        s.appendCString("  let na = (a.y >> 31u) != 0u;\n");
+        s.appendCString("  let nb = (b.y >> 31u) != 0u;\n");
+        s.appendCString("  let qr = xc_udivrem64(select(a, xc_neg64(a), na), select(b, xc_neg64(b), nb));\n");
+        s.appendCString("  return XcQR(select(qr.q, xc_neg64(qr.q), na != nb), select(qr.r, xc_neg64(qr.r), na));\n");
+        s.appendCString("}\n");
+        s.appendCString("fn xc_udiv64(a: vec2<u32>, b: vec2<u32>) -> vec2<u32> { return xc_udivrem64(a, b).q; }\n");
+        s.appendCString("fn xc_urem64(a: vec2<u32>, b: vec2<u32>) -> vec2<u32> { return xc_udivrem64(a, b).r; }\n");
+        s.appendCString("fn xc_sdiv64(a: vec2<u32>, b: vec2<u32>) -> vec2<u32> {\n");
+        s.appendCString("  if (b.x == 0u && b.y == 0u) { return a; }\n");
+        s.appendCString("  if (b.x == 0xffffffffu && b.y == 0xffffffffu && a.x == 0u && a.y == 0x80000000u) { return a; }\n");
+        s.appendCString("  return xc_sdivrem64(a, b).q;\n");
+        s.appendCString("}\n");
+        s.appendCString("fn xc_srem64(a: vec2<u32>, b: vec2<u32>) -> vec2<u32> {\n");
+        s.appendCString("  if (b.x == 0u && b.y == 0u) { return vec2<u32>(0u, 0u); }\n");
+        s.appendCString("  if (b.x == 0xffffffffu && b.y == 0xffffffffu && a.x == 0u && a.y == 0x80000000u) { return vec2<u32>(0u, 0u); }\n");
+        s.appendCString("  return xc_sdivrem64(a, b).r;\n");
+        s.appendCString("}\n");
+        s.appendCString("fn xc_u64tof32(a: vec2<u32>) -> f32 {\n");
+        s.appendCString("  if (a.x == 0u && a.y == 0u) { return 0.0; }\n");
+        s.appendCString("  var lz = countLeadingZeros(a.y);\n");
+        s.appendCString("  if (a.y == 0u) { lz = 32u + countLeadingZeros(a.x); }\n");
+        s.appendCString("  let m = xc_shl64(a, lz);\n");
+        s.appendCString("  var mant = m.y >> 8u;\n");
+        s.appendCString("  let rest = m.y & 0xffu;\n");
+        s.appendCString("  let lower = (rest & 0x7fu) != 0u || m.x != 0u;\n");
+        s.appendCString("  if ((rest & 0x80u) != 0u && (lower || (mant & 1u) != 0u)) { mant = mant + 1u; }\n");
+        s.appendCString("  var e = 63u - lz;\n");
+        s.appendCString("  if (mant == 0x1000000u) { mant = 0x800000u; e = e + 1u; }\n");
+        s.appendCString("  return bitcast<f32>(((e + 127u) << 23u) | (mant & 0x7fffffu));\n");
+        s.appendCString("}\n");
+        s.appendCString("fn xc_s64tof32(a: vec2<u32>) -> f32 {\n");
+        s.appendCString("  if ((a.y >> 31u) != 0u) { return -xc_u64tof32(xc_neg64(a)); }\n");
+        s.appendCString("  return xc_u64tof32(a);\n");
+        s.appendCString("}\n");
+        s.appendCString("fn xc_f32tou64(f: f32) -> vec2<u32> {\n");
+        s.appendCString("  if (!(f >= 1.0)) { return vec2<u32>(0u, 0u); }\n");
+        s.appendCString("  if (f >= bitcast<f32>(0x5f800000u)) { return vec2<u32>(0xffffffffu, 0xffffffffu); }\n");
+        s.appendCString("  let bits = bitcast<u32>(f);\n");
+        s.appendCString("  let e = ((bits >> 23u) & 0xffu) - 127u;\n");
+        s.appendCString("  let mant = (bits & 0x7fffffu) | 0x800000u;\n");
+        s.appendCString("  if (e >= 23u) { return xc_shl64(vec2<u32>(mant, 0u), e - 23u); }\n");
+        s.appendCString("  return vec2<u32>(mant >> (23u - e), 0u);\n");
+        s.appendCString("}\n");
+        s.appendCString("fn xc_f32tos64(f: f32) -> vec2<u32> {\n");
+        s.appendCString("  if (f != f) { return vec2<u32>(0u, 0u); }\n");
+        s.appendCString("  if (f >= bitcast<f32>(0x5f000000u)) { return vec2<u32>(0xffffffffu, 0x7fffffffu); }\n");
+        s.appendCString("  if (f <= -bitcast<f32>(0x5f000000u)) { return vec2<u32>(0u, 0x80000000u); }\n");
+        s.appendCString("  if (f < 0.0) { return xc_neg64(xc_f32tou64(-f)); }\n");
+        s.appendCString("  return xc_f32tou64(f);\n");
         s.appendCString("}\n");
         return s;
         }

@@ -15,9 +15,10 @@
 //   same canonical forms as SPIR-V's); every 32-bit and narrower integer is a
 //   u32, and a signed operation reads it through bitcast<i32>;
 // - 64-bit integers are vec2<u32> (low, high word), added, subtracted,
-//   multiplied, shifted and compared by small functions printed with the
-//   kernel; a 64-bit division or remainder, or a float conversion of one,
-//   keeps the block on the CPU;
+//   multiplied, divided, shifted, compared and converted to and from f32 by
+//   small functions printed with the kernel. Division follows WGSL's 32-bit
+//   rules (x / 0 is x, x % 0 is 0), conversions round to nearest even and
+//   saturate (NaN to 0) as WGSL's 32-bit ones do;
 // - an array of 8- or 16-bit values or bools is an array<atomic<u32>>: a load
 //   is atomicLoad and a shift and mask, a store clears and sets its bits with
 //   atomicAnd / atomicOr, since the work items either side may write the other
@@ -152,6 +153,79 @@ static NSString* const kWg64 =
     @"}\n"
     @"fn xc_sext64(x: u32) -> vec2<u32> {\n"
     @"  return vec2<u32>(x, select(0u, 0xffffffffu, (x & 0x80000000u) != 0u));\n"
+    @"}\n"
+    @"struct XcQR { q: vec2<u32>, r: vec2<u32> }\n"
+    @"fn xc_neg64(a: vec2<u32>) -> vec2<u32> {\n"
+    @"  return xc_sub64(vec2<u32>(0u, 0u), a);\n"
+    @"}\n"
+    @"fn xc_udivrem64(n: vec2<u32>, d: vec2<u32>) -> XcQR {\n"
+    @"  if (d.x == 0u && d.y == 0u) { return XcQR(n, vec2<u32>(0u, 0u)); }\n"
+    @"  var q = vec2<u32>(0u, 0u);\n"
+    @"  var r = vec2<u32>(0u, 0u);\n"
+    @"  var i = 64u;\n"
+    @"  loop {\n"
+    @"    if (i == 0u) { break; }\n"
+    @"    i = i - 1u;\n"
+    @"    var bit = (n.x >> i) & 1u;\n"
+    @"    if (i >= 32u) { bit = (n.y >> (i - 32u)) & 1u; }\n"
+    @"    r = vec2<u32>((r.x << 1u) | bit, (r.y << 1u) | (r.x >> 31u));\n"
+    @"    if (!xc_ult64(r, d)) {\n"
+    @"      r = xc_sub64(r, d);\n"
+    @"      if (i >= 32u) { q.y = q.y | (1u << (i - 32u)); } else { q.x = q.x | (1u << i); }\n"
+    @"    }\n"
+    @"  }\n"
+    @"  return XcQR(q, r);\n"
+    @"}\n"
+    @"fn xc_sdivrem64(a: vec2<u32>, b: vec2<u32>) -> XcQR {\n"
+    @"  let na = (a.y >> 31u) != 0u;\n"
+    @"  let nb = (b.y >> 31u) != 0u;\n"
+    @"  let qr = xc_udivrem64(select(a, xc_neg64(a), na), select(b, xc_neg64(b), nb));\n"
+    @"  return XcQR(select(qr.q, xc_neg64(qr.q), na != nb), select(qr.r, xc_neg64(qr.r), na));\n"
+    @"}\n"
+    @"fn xc_udiv64(a: vec2<u32>, b: vec2<u32>) -> vec2<u32> { return xc_udivrem64(a, b).q; }\n"
+    @"fn xc_urem64(a: vec2<u32>, b: vec2<u32>) -> vec2<u32> { return xc_udivrem64(a, b).r; }\n"
+    @"fn xc_sdiv64(a: vec2<u32>, b: vec2<u32>) -> vec2<u32> {\n"
+    @"  if (b.x == 0u && b.y == 0u) { return a; }\n"
+    @"  if (b.x == 0xffffffffu && b.y == 0xffffffffu && a.x == 0u && a.y == 0x80000000u) { return a; }\n"
+    @"  return xc_sdivrem64(a, b).q;\n"
+    @"}\n"
+    @"fn xc_srem64(a: vec2<u32>, b: vec2<u32>) -> vec2<u32> {\n"
+    @"  if (b.x == 0u && b.y == 0u) { return vec2<u32>(0u, 0u); }\n"
+    @"  if (b.x == 0xffffffffu && b.y == 0xffffffffu && a.x == 0u && a.y == 0x80000000u) { return vec2<u32>(0u, 0u); }\n"
+    @"  return xc_sdivrem64(a, b).r;\n"
+    @"}\n"
+    @"fn xc_u64tof32(a: vec2<u32>) -> f32 {\n"
+    @"  if (a.x == 0u && a.y == 0u) { return 0.0; }\n"
+    @"  var lz = countLeadingZeros(a.y);\n"
+    @"  if (a.y == 0u) { lz = 32u + countLeadingZeros(a.x); }\n"
+    @"  let m = xc_shl64(a, lz);\n"
+    @"  var mant = m.y >> 8u;\n"
+    @"  let rest = m.y & 0xffu;\n"
+    @"  let lower = (rest & 0x7fu) != 0u || m.x != 0u;\n"
+    @"  if ((rest & 0x80u) != 0u && (lower || (mant & 1u) != 0u)) { mant = mant + 1u; }\n"
+    @"  var e = 63u - lz;\n"
+    @"  if (mant == 0x1000000u) { mant = 0x800000u; e = e + 1u; }\n"
+    @"  return bitcast<f32>(((e + 127u) << 23u) | (mant & 0x7fffffu));\n"
+    @"}\n"
+    @"fn xc_s64tof32(a: vec2<u32>) -> f32 {\n"
+    @"  if ((a.y >> 31u) != 0u) { return -xc_u64tof32(xc_neg64(a)); }\n"
+    @"  return xc_u64tof32(a);\n"
+    @"}\n"
+    @"fn xc_f32tou64(f: f32) -> vec2<u32> {\n"
+    @"  if (!(f >= 1.0)) { return vec2<u32>(0u, 0u); }\n"
+    @"  if (f >= bitcast<f32>(0x5f800000u)) { return vec2<u32>(0xffffffffu, 0xffffffffu); }\n"
+    @"  let bits = bitcast<u32>(f);\n"
+    @"  let e = ((bits >> 23u) & 0xffu) - 127u;\n"
+    @"  let mant = (bits & 0x7fffffu) | 0x800000u;\n"
+    @"  if (e >= 23u) { return xc_shl64(vec2<u32>(mant, 0u), e - 23u); }\n"
+    @"  return vec2<u32>(mant >> (23u - e), 0u);\n"
+    @"}\n"
+    @"fn xc_f32tos64(f: f32) -> vec2<u32> {\n"
+    @"  if (f != f) { return vec2<u32>(0u, 0u); }\n"
+    @"  if (f >= bitcast<f32>(0x5f000000u)) { return vec2<u32>(0xffffffffu, 0x7fffffffu); }\n"
+    @"  if (f <= -bitcast<f32>(0x5f000000u)) { return vec2<u32>(0u, 0x80000000u); }\n"
+    @"  if (f < 0.0) { return xc_neg64(xc_f32tou64(-f)); }\n"
+    @"  return xc_f32tou64(f);\n"
     @"}\n";
 
 // A pointer value's recipe: the buffer or variable it is into, and the
@@ -321,8 +395,11 @@ static char kWf, kWgHelpers, kWgHelperText, kWgWordBufs, kWgBufName;
             case XTIROpShl: e = [NSString stringWithFormat:@"xc_shl64(%@, %@)", a, cnt]; break;
             case XTIROpLShr: e = [NSString stringWithFormat:@"xc_lshr64(%@, %@)", a, cnt]; break;
             case XTIROpAShr: e = [NSString stringWithFormat:@"xc_ashr64(%@, %@)", a, cnt]; break;
+            case XTIROpUDiv: e = [NSString stringWithFormat:@"xc_udiv64(%@, %@)", a, b]; break;
+            case XTIROpURem: e = [NSString stringWithFormat:@"xc_urem64(%@, %@)", a, b]; break;
+            case XTIROpSDiv: e = [NSString stringWithFormat:@"xc_sdiv64(%@, %@)", a, b]; break;
+            case XTIROpSRem: e = [NSString stringWithFormat:@"xc_srem64(%@, %@)", a, b]; break;
             default:
-                [self because:@"it divides 64-bit integers, which its WebGPU version cannot do yet"];
                 return NO;
             }
         [self wgSet:i to:e];
@@ -483,11 +560,19 @@ static char kWf, kWgHelpers, kWgHelperText, kWgWordBufs, kWgBufName;
         }
     else if (wgIsFloat(st) || wgIsFloat(rt))
         {
-        if (wgWide(st) || wgWide(rt))
+        // 64-bit integers and floats convert through the helpers: rounded to
+        // nearest even, and saturating (NaN to 0), as the 32-bit forms do.
+        if (wgWide(st) && wgIsFloat(rt))
             {
-            [self because:@"it converts between floats and 64-bit integers, which its WebGPU version cannot "
-                          @"do yet"];
-            return NO;
+            BOOL sg = i.opcode == XTIROpSIToFp || (i.opcode == XTIROpCopy && wgSigned(st));
+            [self wgSet:i to:[NSString stringWithFormat:sg ? @"xc_s64tof32(%@)" : @"xc_u64tof32(%@)", a]];
+            return YES;
+            }
+        if (wgIsFloat(st) && wgWide(rt))
+            {
+            BOOL sg = i.opcode == XTIROpFpToSI || (i.opcode == XTIROpCopy && wgSigned(rt));
+            [self wgSet:i to:[NSString stringWithFormat:sg ? @"xc_f32tos64(%@)" : @"xc_f32tou64(%@)", a]];
+            return YES;
             }
         switch (i.opcode)
             {

@@ -416,11 +416,26 @@
       gpuTried = true;
       try {
         const a = await navigator.gpu.requestAdapter();
-        gpuDevice = a ? await a.requestDevice() : null;
+        // The adapter's own limits, not WebGPU's defaults: a kernel binds one
+        // storage buffer per captured array, and the default allows only 8.
+        const want = {};
+        if (a)
+          for (const l of ["maxStorageBuffersPerShaderStage", "maxStorageBufferBindingSize", "maxBufferSize"])
+            want[l] = a.limits[l];
+        gpuDevice = a ? await a.requestDevice({ requiredLimits: want }) : null;
       } catch (e) { gpuDevice = null; }
     }
     const dev = gpuDevice;
     if (!dev) return 0;
+    // More buffers, or a larger one, than the device can bind: the block runs
+    // on the CPU (2). Created anyway, the bind group is invalid, the dispatch
+    // does nothing and every result reads back as zero.
+    if (nb > dev.limits.maxStorageBuffersPerShaderStage) return 2;
+    {
+      const dv0 = new DataView(XCC.memory.buffer);
+      for (let i = 0; i < nb; i++)
+        if (((dv0.getUint32(desc + 12 * i + 4, true) + 3) & ~3) > dev.limits.maxStorageBufferBindingSize) return 2;
+    }
     let k = gpuKernels.get(src);
     if (k === undefined) {
       const text = cdec.decode(mem8().subarray(src, src + n));
@@ -437,11 +452,18 @@
         for (let i = 0; i < nb; i++)
           entries.push({ binding: i, visibility: GPUShaderStage.COMPUTE,
                          buffer: { type: i < 2 ? "read-only-storage" : "storage" } });
+        dev.pushErrorScope("validation");
         const layout = dev.createBindGroupLayout({ entries });
         const pipeline = dev.createComputePipeline({
           layout: dev.createPipelineLayout({ bindGroupLayouts: [layout] }),
           compute: { module, entryPoint: "main" } });
-        k = { pipeline, layout };
+        const bad = await dev.popErrorScope();
+        if (bad) {
+          console.error("xcc: a par kernel's pipeline did not build: " + bad.message);
+          k = null;
+        } else {
+          k = { pipeline, layout };
+        }
       }
       gpuKernels.set(src, k);
     }
