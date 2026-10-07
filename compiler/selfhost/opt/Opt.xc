@@ -10211,14 +10211,22 @@ class OptProfile
         if (!hasCall)
             return;
 
+        // The first instruction that takes the memory token, whatever its
+        // opcode (a VaArg is not one that touches memory). As the reference
+        // (bug 623).
         IRInsn* firstMem = (IRInsn*)0;
-        for (u32 i = (u32)0; i < B.insns().count(); i = i + (u32)1)
+        for (u32 i = (u32)0; i < B.insns().count() && firstMem == (IRInsn*)0; i = i + (u32)1)
             {
             IRInsn* n = (IRInsn*)B.insns().get(i);
-            if (touchesMemory(n.op()))
+            for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
                 {
-                firstMem = n;
-                break;
+                IROperand* o = (IROperand*)n.ops().get(k);
+                if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0 && o.val().ty() != (String*)0 &&
+                    o.val().ty().equals(String.withCString("Mem")))
+                    {
+                    firstMem = n;
+                    break;
+                    }
                 }
             }
         if (firstMem == (IRInsn*)0)

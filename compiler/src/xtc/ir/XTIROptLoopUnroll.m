@@ -605,13 +605,24 @@ static XTIROperand* remapOp(XTIROperand* op, NSDictionary<NSNumber*, NSNumber*>*
             }
     if (bodyHasCall)
         {
+        // The first instruction that takes the memory token, whatever its
+        // opcode: a VaArg reads and advances the va_list through memory but is
+        // not one of the opcodes that touch memory, and passing it over made
+        // the call after it the "first", seeding the phi with the VaArg's own
+        // token from inside the body — dangling once the body was copied
+        // (bug 623).
         XTIRInsn* firstMemInsn = nil;
         for (XTIRInsn* insn in B.instructions)
-            if (XTIROpcodeTouchesMemory(insn.opcode))
-                {
-                firstMemInsn = insn;
+            {
+            for (XTIROperand* op in insn.operands)
+                if (op.kind == XTIROperandKindUse && [fn valueForId:op.valueId].type.kind == XTIRTypeKindMemory)
+                    {
+                    firstMemInsn = insn;
+                    break;
+                    }
+            if (firstMemInsn)
                 break;
-                }
+            }
         XTIRValueId tin = 0;
         BOOL haveTin = NO;
         for (XTIROperand* op in firstMemInsn.operands)
