@@ -12,6 +12,9 @@
 #
 #     arm64    AppKit, with its Objective-C shim (libUXAppKit.m) built here and bundled in
 #     win64    Win32
+#     x86_64   GTK 4 on Linux: the C shim libUXGtk.so is built on a Linux machine (here, or
+#              UX_LINUX_HOST from build.env, by tools/build_libuxgtk.sh) and installed beside
+#              libUXKit.so, which names it, libgtk-4 and libGL as its dependencies
 #     wasm32   the web: libUXKit.wasm and its .json, with the page scripts a web app ships beside
 #              them (ux_web_browser.js, ux_web_page.js)
 #     ios-sim  UIKit, with its shim bundled in, against the simulator's SDK
@@ -27,7 +30,7 @@ home=$(cd "$(dirname "$(command -v "$xcc")")/.." && pwd)
 dest=${XCC_3P:-$home/../3p}/uxkit
 maj=$(sed -n 's/^#define UXK_MAJOR[[:space:]]*//p' "$here/UXVersion.xc")
 min=$(sed -n 's/^#define UXK_MINOR[[:space:]]*//p' "$here/UXVersion.xc")
-targets=${*:-arm64 win64 wasm32 ios-sim android}
+targets=${*:-arm64 win64 x86_64 wasm32 ios-sim android}
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
 mkdir -p "$dest/xc"
 cp "$here/UXAbi.xc" "$here/UXVersion.xc" "$dest/xc/"
@@ -42,6 +45,12 @@ for t in $targets; do
     win64)
       "$xcc" -A win64 --emit-lib -I "$here" "$here/UXKit.xc" -o "$work/libUXKit.dll"
       ext=dll ;;
+    x86_64)
+      sh "$here/tools/build_libuxgtk.sh" "$work/linux" --with-link-inputs >/dev/null || { echo "install: no Linux machine for the GTK shim; skipped $t"; continue; }
+      "$xcc" -A x86_64 --emit-lib -I "$here" "$here/UXKit.xc" -o "$work/libUXKit.so" -L "$work/linux" -lUXGtk -lgtk-4 -lGL
+      mkdir -p "$dest/$t"
+      cp "$work/linux/libUXGtk.so" "$dest/$t/"
+      ext=so ;;
     wasm32)
       "$xcc" -A wasm32 --emit-lib -I "$here" "$here/UXKit.xc" -o "$work/libUXKit.wasm"
       mkdir -p "$dest/$t"

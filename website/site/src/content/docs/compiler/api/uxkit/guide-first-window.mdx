@@ -78,6 +78,7 @@ and builds with nothing else (from 0.73):
 ```sh
 xcc -A arm64 first_window.xc -o first_window       # macOS
 xcc -A win64 first_window.xc -o first_window.exe   # Windows: ship libUXKit.dll beside it
+xcc -A x86_64 first_window.xc -o first_window      # Linux: ship libUXKit.so and libUXGtk.so beside it
 xcc -A wasm32 first_window.xc -o first_window      # the web
 ```
 
@@ -90,10 +91,10 @@ and sets `xccConfig.workerScript` to `ux_web_browser.js`.
 in the third-party tree, `/opt/xcc/3p/uxkit/<target>/`, beside the version
 contract a program can check (`UXAbi.xc`). The library is the toolkit with that
 target's driver: on macOS it includes the Objective-C part of the AppKit driver
-and links Cocoa itself.
+and links Cocoa itself; on Linux it needs GTK 4 on the machine it runs on.
 
-Linux, iOS and Android are not ready to use installed yet. For those, and for
-working on UXKit itself, build against the sources:
+iOS and Android are not ready to use installed yet. For those, and for working
+on UXKit itself, build against the sources:
 
 ```sh
 cc -fobjc-arc -fno-objc-msgsend-selector-stubs -dynamiclib \
