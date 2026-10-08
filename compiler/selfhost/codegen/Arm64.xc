@@ -424,6 +424,45 @@ class Arm64
     {
         _out.appendFormat(".globl _%s\n", fn.name().cString());
         _out.appendFormat(".p2align 4\n_%s:\n", fn.name().cString());
+        // -g: the prologue belongs to the function's first line, not to
+        // whatever line the previous function ended on.
+        Array* dbgFiles = IRDbg.files();
+        for (u32 fi = (u32)0; fi < dbgFiles.count(); fi = fi + (u32)1)
+            _out.appendFormat("    .file %lu \"%s\"\n", fi + (u32)1, ((String*)dbgFiles.get(fi)).cString());
+        bool haveLoc = fn.hasDbg();
+        u32 lf = fn.dbgFile();
+        u32 ll = fn.dbgLine();
+        u32 lc = fn.dbgCol();
+        if (!haveLoc) {
+            for (u32 b = (u32)0; b < fn.blocks().count() && !haveLoc; b = b + (u32)1) {
+                IRBlock* blk = (IRBlock*)fn.blocks().get(b);
+                for (u32 k = (u32)0; k < blk.insns().count(); k = k + (u32)1) {
+                    IRInsn* di = (IRInsn*)blk.insns().get(k);
+                    if (di.hasDbg()) {
+                        haveLoc = true;
+                        lf = di.dbgFile(); ll = di.dbgLine(); lc = di.dbgCol();
+                        break;
+                    }
+                }
+            }
+        }
+        if (haveLoc) {
+            _out.appendFormat("    .loc %lu %lu %lu\n", lf + (u32)1, ll, lc);
+            // -g: the frame, and each variable's slot, for the debug
+            // information. Both are given from x29 (DWARF register 29), which a
+            // debugger restores in every frame: x29 sits `fpAbove` bytes above
+            // sp, and the caller's sp (the call frame) is the frame size above sp.
+            u32 fpAbove = _maxOutStack;
+            _out.appendFormat("    .xc_frame %lu\n", _frame - fpAbove);
+            for (u32 pi = (u32)0; pi < fn.pinned().count(); pi = pi + (u32)1) {
+                IRPinned* pl = (IRPinned*)fn.pinned().get(pi);
+                if (pl.srcName() == (String*)0) continue;
+                _out.appendFormat("    %s \"%s\" 29 %ld \"%s\"\n",
+                                  pl.isParam() ? ".xc_param" : ".xc_var", pl.srcName().cString(),
+                                  (i64)slotOf(pl.val()) - (i64)fpAbove, pl.ty().cString());
+            }
+        }
+        _lastDbg = false;
         // The pre-indexed `stp [sp, #-N]!` immediate caps at 504 bytes; a
         // larger frame adjusts sp separately.
         if (_maxOutStack == (u32)0) {
@@ -612,14 +651,37 @@ class Arm64
         }
     }
 
+    // -g: the line the last `.loc` named (file -1 = none yet, this function).
+    bool _lastDbg;
+    u32 _lastDbgFile;
+    u32 _lastDbgLine;
+
+    // -g: a `.loc` before the first instruction of each new source line (the
+    // assembler turns them into the line table). Only on a change, because a
+    // directive is a barrier to the text peepholes.
+    void emitLoc(IRInsn* n)
+    {
+        if (!n.hasDbg()) return;
+        if (_lastDbg && n.dbgLine() == _lastDbgLine && n.dbgFile() == _lastDbgFile) return;
+        _out.appendFormat("    .loc %lu %lu %lu\n", n.dbgFile() + (u32)1, n.dbgLine(), n.dbgCol());
+        _lastDbg = true;
+        _lastDbgFile = n.dbgFile();
+        _lastDbgLine = n.dbgLine();
+    }
+
     // A block: its label, then its instructions and terminator.
     void emitBlock(IRFunc* fn, IRBlock* bb)
     {
         _bb = bb;
         _out.appendFormat("L%s_%s:\n", fn.name().cString(), bb.name().cString());
-        for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+        for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1) {
+            emitLoc((IRInsn*)bb.insns().get(i));
             emitInsn(fn, (IRInsn*)bb.insns().get(i));
-        if (bb.term() != (IRInsn*)0) emitInsn(fn, bb.term());
+        }
+        if (bb.term() != (IRInsn*)0) {
+            emitLoc(bb.term());
+            emitInsn(fn, bb.term());
+        }
     }
 
     IRBlock* _bb;               // the block currently being emitted

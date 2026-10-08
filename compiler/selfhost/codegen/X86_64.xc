@@ -596,6 +596,48 @@ class X86_64
         else
             _out.appendFormat("\t.globl\t%s\n\t.type\t%s, @function\n%s:\n",
                               fname.cString(), fname.cString(), fname.cString());
+        // -g: the prologue belongs to the function's first line, not to
+        // whatever line the previous function ended on.
+        Array* dbgFiles = IRDbg.files();
+        for (u32 fi = (u32)0; fi < dbgFiles.count(); fi = fi + (u32)1)
+            _out.appendFormat("\t.file\t%lu \"%s\"\n", fi + (u32)1, ((String*)dbgFiles.get(fi)).cString());
+        bool haveLoc = fn.hasDbg();
+        u32 lf = fn.dbgFile();
+        u32 ll = fn.dbgLine();
+        u32 lc = fn.dbgCol();
+        if (!haveLoc)
+            {
+            for (u32 b = (u32)0; b < fn.blocks().count() && !haveLoc; b = b + (u32)1)
+                {
+                IRBlock* blk = (IRBlock*)fn.blocks().get(b);
+                for (u32 k = (u32)0; k < blk.insns().count(); k = k + (u32)1)
+                    {
+                    IRInsn* di = (IRInsn*)blk.insns().get(k);
+                    if (di.hasDbg())
+                        {
+                        haveLoc = true;
+                        lf = di.dbgFile();
+                        ll = di.dbgLine();
+                        lc = di.dbgCol();
+                        break;
+                        }
+                    }
+                }
+            }
+        if (haveLoc)
+            _out.appendFormat("\t.loc\t%lu %lu %lu\n", lf + (u32)1, ll, lc);
+        // -g: each variable's slot (rbp - offset, rbp being DWARF register 6),
+        // for the debug information.
+        for (u32 pi = (u32)0; pi < fn.pinned().count(); pi = pi + (u32)1)
+            {
+            IRPinned* pl = (IRPinned*)fn.pinned().get(pi);
+            if (pl.srcName() == (String*)0 || !hasSlot(pl.val()))
+                continue;
+            _out.appendFormat("\t%s\t\"%s\" 6 -%lu \"%s\"\n",
+                              pl.isParam() ? ".xc_param" : ".xc_var", pl.srcName().cString(),
+                              slotOf(pl.val()), pl.ty().cString());
+            }
+        _lastDbg = false;
         _out.appendCString("\tpush\trbp\n\tmov\trbp, rsp\n");
         // Windows commits a thread's stack one guard page at a time, so a
         // frame over a page must touch each page in order: one `sub rsp, N`
@@ -5602,6 +5644,25 @@ class X86_64
         return reg((u8)'c', w);
         }
 
+    // -g: the line the last `.loc` named (file -1 = none yet, this function).
+    bool _lastDbg;
+    u32 _lastDbgFile;
+    u32 _lastDbgLine;
+
+    // -g: a `.loc` before the first instruction of each new source line, for
+    // the assembler's line table.
+    void emitLoc(IRInsn* n)
+        {
+        if (!n.hasDbg())
+            return;
+        if (_lastDbg && n.dbgLine() == _lastDbgLine && n.dbgFile() == _lastDbgFile)
+            return;
+        _out.appendFormat("\t.loc\t%lu %lu %lu\n", n.dbgFile() + (u32)1, n.dbgLine(), n.dbgCol());
+        _lastDbg = true;
+        _lastDbgFile = n.dbgFile();
+        _lastDbgLine = n.dbgLine();
+        }
+
     String* blockLabel(IRFunc* fn, IRBlock* bb)
         {
         String* s = String.withCString(".L_");
@@ -5634,9 +5695,15 @@ class X86_64
             _out.appendCString("\t.p2align\t5, 0x90\n");
         _out.appendFormat("%s:\n", blockLabel(fn, bb).cString());
         for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+            {
+            emitLoc((IRInsn*)bb.insns().get(i));
             emitInsn(fn, bb, (IRInsn*)bb.insns().get(i));
+            }
         if (bb.term() != (IRInsn*)0)
+            {
+            emitLoc(bb.term());
             emitTerminator(fn, bb, bb.term());
+            }
         else
             emitEpilogue();
         }

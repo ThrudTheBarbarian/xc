@@ -79,6 +79,10 @@ SIMDARGS=()
 [ -n "${OPT_MATMUL:-}" ] && SIMDARGS+=(--matmul)
 STOPARGS=()
 [ -n "$STOP" ] && STOPARGS=(--stop-after "$STOP")
+# OPT_G=1: the front end's -g IR (source locations on every instruction), so
+# what each pass does with an instruction's location is compared too.
+FEG=()
+[ -n "${OPT_G:-}" ] && FEG=(-g)
 
 pass=0; fail=0; unsup=0; oracle=0
 declare -a FAILED
@@ -95,7 +99,7 @@ FILES=$(find tests support selfhost -name '*.xc' -not -path 'tests/fuzz/findings
 for f in $FILES; do
     [ -n "$PATTERN" ] && [[ "$f" != *"$PATTERN"* ]] && continue
     # Pre-opt IR: what both pipelines are given.
-    if ! "$BIN/xcc-fe" -m "$FEM" -H . "${RUN_INCS[@]}" ${LIBARGS[@]+"${LIBARGS[@]}"} \
+    if ! "$BIN/xcc-fe" ${FEG[@]+"${FEG[@]}"} -m "$FEM" -H . "${RUN_INCS[@]}" ${LIBARGS[@]+"${LIBARGS[@]}"} \
          "$f" -o "$WORK/pre.ir" >/dev/null 2>&1 || [ ! -s "$WORK/pre.ir" ]; then
         oracle=$((oracle+1)); continue
     fi

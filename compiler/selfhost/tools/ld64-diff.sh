@@ -42,10 +42,14 @@ declare -a FAILED
 FILES=$(find tests support selfhost -name '*.xc' -not -path 'tests/fuzz/findings/*' | sort | awk -v i="${SHARD_I:-0}" -v n="${SHARD_N:-1}" 'NR % n == i')
 for f in $FILES; do
     [ -n "$PATTERN" ] && [[ "$f" != *"$PATTERN"* ]] && continue
-    if ! "$BIN/xcc" -A arm64 -H . "${RUN_INCS[@]}" -S -o "$WORK/a.s" "$f" \
-         >/dev/null 2>&1 || [ ! -s "$WORK/a.s" ]; then
+    if ! "$BIN/xcc" -A arm64 -H . "${RUN_INCS[@]}" -S -o "$WORK/p.s" "$f" \
+         >/dev/null 2>&1 || [ ! -s "$WORK/p.s" ]; then
         oracle=$((oracle+1)); continue
     fi
+    # The program after the runtime, as the driver concatenates them. `-S`
+    # output alone references the runtime's allocators, so linking it bare
+    # failed every file and this compared nothing.
+    cat support/arm64/runtime/crt-macos.s support/arm64/runtime/rt-macos.s "$WORK/p.s" > "$WORK/a.s"
     if ! "$BIN/xcc-ln-arm64" "$WORK/a.s" "$WORK/a.bin" >/dev/null 2>&1; then
         oracle=$((oracle+1)); continue
     fi

@@ -20,6 +20,7 @@
 
 #import "Foundation.xc"
 #import "U64.xc"
+#import "DwarfWriter.xc"
 
 #define FIXUP_BRANCH26      0
 #define FIXUP_PAGE21        1
@@ -3032,6 +3033,8 @@ class Arm64Asm
         u32 dataAddr = (u32)0;
         u32 section = (u32)0;
         bool inModInit = false;      // bug 066: inside __DATA,__mod_init_func
+        DwarfWriter* dwarf = (DwarfWriter*)0;  // -g: the line table, if the text has one
+        u32 pendingFrame = (u32)16;  // -g: the call frame's distance above x29 (.xc_frame)
 
         for (u32 li = (u32)0; li < lines.count(); li = li + (u32)1) {
             String* l = stripComment((String*)lines.get(li)).trimmed();
@@ -3132,6 +3135,28 @@ class Arm64Asm
                     }
                     continue;
                 }
+                // -g: `.file <n> "<path>"` and `.loc <n> <line> [<col>]` are the
+                // line table, recorded against the text offset they precede.
+                // -g: `.xc_frame <n>` — the next frame setup leaves the call
+                // frame n bytes above the frame pointer, x29/x30 at its bottom.
+                if (l.hasPrefix(String.withCString(".xc_frame"))) {
+                    DwarfScan* fsc = DwarfScan.over(l, (u32)9);
+                    if (fsc.scanInt()) pendingFrame = (u32)fsc.value();
+                    continue;
+                }
+                // -g: `.xc_var "<name>" <reg> <offset> "<type>"` (`.xc_param`
+                // for a parameter) — a variable of the function being assembled.
+                if (l.hasPrefix(String.withCString(".xc_var")) || l.hasPrefix(String.withCString(".xc_param"))) {
+                    dwarf = DwarfWriter.variableDirective(dwarf, l, l.hasPrefix(String.withCString(".xc_param")),
+                                                          textAddr);
+                    continue;
+                }
+                if (l.hasPrefix(String.withCString(".file")) || l.hasPrefix(String.withCString(".loc"))) {
+                    bool isFile = l.hasPrefix(String.withCString(".file"));
+                    dwarf = DwarfWriter.directive(dwarf, l, isFile ? (u32)5 : (u32)4, isFile,
+                                                  section == (u32)0, textAddr);
+                    continue;
+                }
                 if (l.hasPrefix(String.withCString(".globl"))) {
                     // Visibility: the object writer exports exactly these; every
                     // other defined symbol is local to its object (bug 136).
@@ -3186,7 +3211,17 @@ class Arm64Asm
                 }
                 continue;
             }
-            if (section == (u32)0) { insns.add((Object*)l); textAddr = textAddr + (u32)4; }
+            if (section == (u32)0) {
+                insns.add((Object*)l);
+                textAddr = textAddr + (u32)4;
+                // -g: the frame pointer now addresses the saved {x29, x30} pair,
+                // so the call frame is x29 + 16 from here.
+                if (l.hasPrefix(String.withCString("add x29, sp")) || l.equals(String.withCString("mov x29, sp"))) {
+                    if (dwarf == (DwarfWriter*)0) dwarf = new DwarfWriter();
+                    dwarf.addFrameSetup(textAddr, pendingFrame);
+                    pendingFrame = (u32)16;
+                }
+            }
             else {
                 u32 before = _dataBytes.count();
                 if (emitDataDirective(l, _dataBytes)) {
@@ -3195,6 +3230,9 @@ class Arm64Asm
                 }
             }
         }
+
+        // -g: hand the line table to whichever writer places this text.
+        if (dwarf != (DwarfWriter*)0 && dwarf.hasRows()) DwarfWriter.setPending(dwarf);
 
         // The source lines are all consumed: pass 2 reads `insns`.
         lines = (Array*)0;

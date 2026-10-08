@@ -2,6 +2,11 @@
 // =================================================================
 //
 //   xtldx86 <input.s>... [obj.o] [lib.a] -o <output> [-e entry]
+//   xtldx86 --glibc -importmap <map> <input.s>... -o <output> [-e entry]
+//
+// `--glibc` is `xcc -dynamic`'s link (the reference's `xcc-ln-x86_64
+// --glibc`): a dynamically linked glibc executable, each import named by the
+// map's library.
 //
 // The self-hosted counterpart of `xtcln-x86_64`: no clang, no ld, no Linux
 // tooling anywhere in the chain.
@@ -23,11 +28,25 @@ void main(void)
     Array* inputs = new Array();
     String* outPath = (String*)0;
     String* entry = String.withCString("_start");
+    bool glibc = false;
+    String* mapPath = (String*)0;
     u32 argc = Process.argumentCount();
     u32 i = (u32)1;
     while (i < argc)
         {
         String* a = Process.argument(i);
+        if (a.equals(String.withCString("--glibc")))
+            {
+            glibc = true;
+            i = i + (u32)1;
+            continue;
+            }
+        if (a.equals(String.withCString("-importmap")) && i + (u32)1 < argc)
+            {
+            mapPath = Process.argument(i + (u32)1);
+            i = i + (u32)2;
+            continue;
+            }
         if (a.equals(String.withCString("-e")) && i + (u32)1 < argc)
             {
             entry = Process.argument(i + (u32)1);
@@ -84,7 +103,20 @@ void main(void)
         }
 
     X86Link* ln = new X86Link();
-    Data* img = ln.link(srcs, objs, ars, entry);
+    Data* img = (Data*)0;
+    if (glibc)
+        {
+        String* mapText = mapPath == (String*)0 ? (String*)0 : Files.readText(mapPath);
+        if (mapText == (String*)0)
+            {
+            Stdio.printf("xtldx86: --glibc needs a readable -importmap\n");
+            Process.exit((i32)2);
+            return;
+            }
+        img = ln.linkGlibc(srcs, objs, ars, entry, new Array(), mapText, (String*)0);
+        }
+    else
+        img = ln.link(srcs, objs, ars, entry);
     if (ln.failed())
         {
         Stdio.printf("xtldx86: %s\n", ln.why().cString());

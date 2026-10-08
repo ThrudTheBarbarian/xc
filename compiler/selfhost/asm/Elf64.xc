@@ -1174,6 +1174,17 @@ class ElfSharedInfo
         if (hasIface)
             for (u32 i = (u32)0; i < iface.count(); i = i + (u32)1)
                 p8(((Number*)iface.get(i)).asU32());
+        // -g: the DWARF the assembler recorded, as non-allocated sections gdb
+        // and lldb read from the executable (an executable only).
+        DwarfWriter* dwarf = isExec ? Elf64.dwarfSections(textAddr, textLen, symbols, dataSyms)
+                                    : (DwarfWriter*)0;
+        Array* dwarfOffs = new Array();
+        if (dwarf != (DwarfWriter*)0)
+            for (u32 k = (u32)0; k < (u32)5; k = k + (u32)1)
+                {
+                dwarfOffs.add((Object*)Number.withU32(_out.length()));
+                appendAll(_out, dwarf.section(k));
+                }
 
         // The section-name table, then the headers themselves.
         Array* names = new Array();
@@ -1190,6 +1201,15 @@ class ElfSharedInfo
         names.add((Object*)String.withCString(".strtab"));
         if (hasIface)
             names.add((Object*)String.withCString(".xtc.iface"));
+        u32 dwarfIdx = names.count();
+        Array* order = DwarfWriter.order();
+        if (dwarf != (DwarfWriter*)0)
+            for (u32 k = (u32)0; k < (u32)5; k = k + (u32)1)
+                {
+                String* sn = String.withCString(".");
+                sn.append((String*)order.get(k));
+                names.add((Object*)sn);
+                }
         names.add((Object*)String.withCString(".shstrtab"));
         Array* shstr = new Array();
         shstr.add((Object*)Number.withU32((u32)0));
@@ -1232,6 +1252,11 @@ class ElfSharedInfo
         if (hasIface)
             shdrE(Elf64.lookupStr(shName, (String*)names.get((u32)11)), (u32)1, (u32)0,
                   (u32)0, ifaceOff, iface.count(), (u32)0, (u32)0, (u32)1, (u32)0);
+        if (dwarf != (DwarfWriter*)0)
+            for (u32 k = (u32)0; k < (u32)5; k = k + (u32)1)
+                shdrE(Elf64.lookupStr(shName, (String*)names.get(dwarfIdx + k)), (u32)1, (u32)0,
+                      (u32)0, ((Number*)dwarfOffs.get(k)).asU32(), dwarf.section(k).count(),
+                      (u32)0, (u32)0, (u32)1, (u32)0);
         shdrE(Elf64.lookupStr(shName, (String*)names.get(shstrIdx)), (u32)3, (u32)0,
               (u32)0, shstrOff, shstr.count(), (u32)0, (u32)0, (u32)1, (u32)0);
 
@@ -1927,6 +1952,20 @@ class ElfSharedInfo
         strInto(shstr, String.withCString(".strtab"));
         u32 nShstr = shstr.count();
         strInto(shstr, String.withCString(".shstrtab"));
+        // -g: the DWARF the assembler recorded, as non-allocated sections gdb
+        // and lldb read from the executable.
+        DwarfWriter* dwarf = Elf64.dwarfSections(textAddr, text.length(), symbols, dataSyms);
+        Array* dwarfNames = new Array();
+        Array* dwarfOffs = new Array();
+        Array* order = DwarfWriter.order();
+        if (dwarf != (DwarfWriter*)0)
+            for (u32 k = (u32)0; k < (u32)5; k = k + (u32)1)
+                {
+                dwarfNames.add((Object*)Number.withU32(shstr.count()));
+                String* sn = String.withCString(".");
+                sn.append((String*)order.get(k));
+                strInto(shstr, sn);
+                }
 
         u32 symOff = roundUpTo(_out.length(), (u32)8);
         padTo(symOff);
@@ -1935,6 +1974,12 @@ class ElfSharedInfo
         appendAll(strtab);
         u32 shstrOff = _out.length();
         appendAll(shstr);
+        if (dwarf != (DwarfWriter*)0)
+            for (u32 k = (u32)0; k < (u32)5; k = k + (u32)1)
+                {
+                dwarfOffs.add((Object*)Number.withU32(_out.length()));
+                appendAll(dwarf.section(k));
+                }
         u32 shOff = roundUpTo(_out.length(), (u32)8);
         padTo(shOff);
 
@@ -1951,11 +1996,21 @@ class ElfSharedInfo
              (u32)0, (u32)0, (u32)1, (u32)0);
         shdr(nShstr, (u32)3, (u32)0, (u32)0, shstrOff, shstr.count(),
              (u32)0, (u32)0, (u32)1, (u32)0);
+        // 6..: -g's debug sections.
+        u32 di = (u32)0;
+        if (dwarf != (DwarfWriter*)0)
+            for (u32 k = (u32)0; k < (u32)5; k = k + (u32)1)
+                {
+                shdr(((Number*)dwarfNames.get(k)).asU32(), (u32)1, (u32)0, (u32)0,
+                     ((Number*)dwarfOffs.get(k)).asU32(), dwarf.section(k).count(),
+                     (u32)0, (u32)0, (u32)1, (u32)0);
+                di = di + (u32)1;
+                }
 
         // e_shoff, e_shnum and e_shstrndx were written as zero above.
         for (u32 i = (u32)0; i < (u32)4; i = i + (u32)1)
             _out.setByteAt((u32)$28 + i, (u8)((shOff >> ((u32)8 * i)) & (u32)$FF));
-        _out.setByteAt((u32)$3C, (u8)((u32)6));
+        _out.setByteAt((u32)$3C, (u8)((u32)6 + di));
         _out.setByteAt((u32)$3D, (u8)((u32)0));
         _out.setByteAt((u32)$3E, (u8)((u32)5));
         _out.setByteAt((u32)$3F, (u8)((u32)0));
@@ -1993,6 +2048,22 @@ class ElfSharedInfo
         {
         for (u32 i = (u32)0; i < (u32)4; i = i + (u32)1)
             a.add((Object*)Number.withU32((v >> ((u32)8 * i)) & (u32)$FF));
+        }
+
+    // -g: the debug sections of an executable, from the DWARF the assembler
+    // recorded (0 without -g), consumed here. Function names are the text
+    // symbols that are not local labels.
+    static DwarfWriter* dwarfSections(u32 textAddr, u32 textLen, Map* symbols, Array* dataSyms)
+        {
+        DwarfWriter* dwarf = DwarfWriter.pending();
+        if (dwarf == (DwarfWriter*)0)
+            return dwarf;
+        DwarfWriter.setPending((DwarfWriter*)0);
+        Array* names = new Array();
+        Array* offs = new Array();
+        DwarfWriter.functionsOf(symbols, dataSyms, String.withCString(""), textLen, names, offs);
+        dwarf.build((u64)textAddr, textLen, names, offs, (u32)1, (u32)6);
+        return dwarf;
         }
 
     static Array* sortedNames(Map* symbols)

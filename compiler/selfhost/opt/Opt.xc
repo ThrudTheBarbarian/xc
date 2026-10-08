@@ -1643,6 +1643,7 @@ class OptProfile
                     continue;
                 IROperand* arg = (IROperand*)n.ops().get((u32)1);
                 IRInsn* fs = IRInsn.with(String.withCString("FSqrt"));
+                fs.copyDbg(n);
                 fs.setRes(n.res());
                 fs.add(arg);
                 bb.insns().set(i, (Object*)fs);
@@ -1732,6 +1733,7 @@ class OptProfile
                     continue;
                 IROperand* base = (IROperand*)n.ops().get((u32)1);
                 IRInsn* fm = IRInsn.with(String.withCString("FMul"));
+                fm.copyDbg(n);
                 fm.setRes(n.res());
                 fm.add(base);
                 fm.add(base);
@@ -2582,6 +2584,7 @@ class OptProfile
         IRInsn* cl = IRInsn.with(bi.op());
         cl.setPred(bi.pred());
         cl.setCc(bi.cc());
+        cl.copyDbg(bi);
         for (u32 k = (u32)0; k < bi.ops().count(); k = k + (u32)1)
             cl.add(substBoth(remap, blockMap, (IROperand*)bi.ops().get(k)));
         if (bi.res() != 0)
@@ -2736,6 +2739,7 @@ class OptProfile
             IRInsn* cl = IRInsn.with(bi.op());
             cl.setPred(bi.pred());
             cl.setCc(bi.cc());
+            cl.copyDbg(bi);
             for (u32 k = (u32)0; k < bi.ops().count(); k = k + (u32)1)
                 cl.add(substOperand(remap, (IROperand*)bi.ops().get(k)));
             if (bi.res() != 0)
@@ -2861,6 +2865,7 @@ class OptProfile
             // The narrow op REUSES the Trunc's result value, so every consumer
             // follows without being rewritten.
             IRInsn* nOp = IRInsn.with(src.op());
+            nOp.copyDbg(tr);
             nOp.setRes(tr.res());
             for (u32 k = (u32)0; k < nops.count(); k = k + (u32)1)
                 nOp.add((IROperand*)nops.get(k));
@@ -2945,6 +2950,7 @@ class OptProfile
                 {
                 IRValue* rv = new IRValue(tr.res().ty());
                 IRInsn* nt = IRInsn.with(String.withCString("Trunc"));
+                nt.copyDbg(tr);
                 nt.setRes(rv);
                 nt.add(o);
                 _narrowInserts.add((Object*)nt);
@@ -3964,6 +3970,7 @@ class OptProfile
                 String* ft = lay.typeAt(f);
                 IRValue* sa = new IRValue(aePtrTo(ft));
                 IRInsn* fa = IRInsn.with(String.withCString("FieldAddr"));
+                fa.copyDbg(ld);
                 fa.setRes(sa);
                 fa.add(IROperand.useVal(srcOp.val()));
                 fa.add(IROperand.immU(f, String.withCString("U8")));
@@ -3974,6 +3981,7 @@ class OptProfile
                 if (f + (u32)1 < n)
                     mv = new IRValue(String.withCString("Mem"));
                 IRInsn* fl = IRInsn.with(String.withCString("Load"));
+                fl.copyDbg(ld);
                 fl.setRes(fv);
                 fl.setMemRes(mv);
                 fl.add(IROperand.useVal(sa));
@@ -3991,6 +3999,7 @@ class OptProfile
                 String* ft = lay.typeAt(f);
                 IRValue* da = new IRValue(aePtrTo(ft));
                 IRInsn* fa = IRInsn.with(String.withCString("FieldAddr"));
+                fa.copyDbg(st);
                 fa.setRes(da);
                 fa.add(IROperand.useVal(dstOp.val()));
                 fa.add(IROperand.immU(f, String.withCString("U8")));
@@ -4000,6 +4009,7 @@ class OptProfile
                 if (f + (u32)1 < n)
                     mv = new IRValue(String.withCString("Mem"));
                 IRInsn* fs = IRInsn.with(String.withCString("Store"));
+                fs.copyDbg(st);
                 fs.setMemRes(mv);
                 fs.add(IROperand.useVal(da));
                 fs.add(IROperand.useVal((IRValue*)vals.get(f)));
@@ -5370,6 +5380,7 @@ class OptProfile
                     {
                     IRValue* rv = new IRValue(ty);
                     IRInsn* ni = IRInsn.with(T.op());
+                    ni.copyDbg(T);
                     ni.setRes(rv);
                     ni.add((IROperand*)rest.get(q));
                     ni.add((IROperand*)rest.get(q + (u32)1));
@@ -5929,18 +5940,21 @@ class OptProfile
         if (isBool && condOK && isBoolConst(defOf, selFalse, (i32)0) && isBool01(defOf, selTrue))
             {
             repl = IRInsn.with(String.withCString("And"));
+            repl.copyDbg(phi);
             repl.add(condUse);
             repl.add(selTrue);
             }
         else if (isBool && condOK && isBoolConst(defOf, selTrue, (i32)1) && isBool01(defOf, selFalse))
             {
             repl = IRInsn.with(String.withCString("Or"));
+            repl.copyDbg(phi);
             repl.add(condUse);
             repl.add(selFalse);
             }
         else
             {
             repl = IRInsn.with(String.withCString("Select"));
+            repl.copyDbg(phi);
             repl.add(condUse);
             repl.add(selTrue);
             repl.add(selFalse);
@@ -6768,6 +6782,7 @@ class OptProfile
     IRInsn* cloneWithFreshResults(Map* map, IRInsn* n)
         {
         IRInsn* cl = IRInsn.with(n.op());
+        cl.copyDbg(n);
         cl.setPred(n.pred());
         cl.setCc(n.cc());
         for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
@@ -7190,6 +7205,7 @@ class OptProfile
             // The AddrOf lived in the body; the preheader gets its own copy.
             IRValue* res = new IRValue(_msBaseDef.res().ty());
             IRInsn* ad = IRInsn.with(String.withCString("AddrOf"));
+            ad.copyDbg(_msBaseDef);
             ad.setRes(res);
             for (u32 k = (u32)0; k < _msBaseDef.ops().count(); k = k + (u32)1)
                 ad.add((IROperand*)_msBaseDef.ops().get(k));
@@ -10317,6 +10333,7 @@ class OptProfile
             {
             IRInsn* n = (IRInsn*)B.insns().get(i);
             IRInsn* cl = IRInsn.with(n.op());
+            cl.copyDbg(n);
             cl.setPred(n.pred());
             cl.setCc(n.cc());
             for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
@@ -11262,6 +11279,7 @@ class OptProfile
                      i64 imm, bool isU, String* immTy)
         {
         IRInsn* r = IRInsn.with(newOp);
+        r.copyDbg(n);
         r.setRes(n.res());
         r.add(xop);
         r.add(mkImm(imm, isU, immTy));
@@ -11279,6 +11297,7 @@ class OptProfile
     IRInsn* srConstZero(IRInsn* n, String* rt)
         {
         IRInsn* r = IRInsn.with(String.withCString("Const"));
+        r.copyDbg(n);
         r.setRes(n.res());
         r.add(IROperand.immI((i32)0, rt));
         return r;
@@ -11827,6 +11846,7 @@ class OptProfile
                     continue;
                 IRValue* rv = new IRValue(rp.ty());
                 IRInsn* ea = IRInsn.with(String.withCString("ElementAddr"));
+                ea.copyDbg(rn);
                 ea.setRes(rv);
                 ea.add(IROperand.useVal(rp));
                 ea.add(IROperand.immI((i32)(b1.imm() * (i64)j), b1.ty()));
@@ -11855,6 +11875,7 @@ class OptProfile
                 continue; // copies 1..U-1 reuse copy 0's
                 }
             IRInsn* cl = IRInsn.with(n.op());
+            cl.copyDbg(n);
             cl.setPred(n.pred());
             cl.setCc(n.cc());
             IRInsn* rbn = n.res() == (IRValue*)0 ? (IRInsn*)0 : (IRInsn*)rebasedNext.get((Hashable*)n.res());
@@ -11911,6 +11932,7 @@ class OptProfile
             Map* gmap = new Map();
             gmap.set((Hashable*)c.iv(), (Object*)cloneIvNext);
             IRInsn* g = IRInsn.with(c.guard().op());
+            g.copyDbg(c.guard());
             g.setPred(c.guard().pred());
             g.setRes(new IRValue(c.guard().res().ty()));
             for (u32 k = (u32)0; k < c.guard().ops().count(); k = k + (u32)1)
@@ -11981,6 +12003,7 @@ class OptProfile
     IRInsn* vecCloneInsn(IRInsn* n, Map* vmap, Map* bmap)
         {
         IRInsn* cl = IRInsn.with(n.op());
+        cl.copyDbg(n);
         cl.setPred(n.pred());
         cl.setCc(n.cc());
         for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
@@ -12061,6 +12084,7 @@ class OptProfile
             if (phi.res() == (IRValue*)0)
                 continue;
             IRInsn* cl = IRInsn.with(phi.op());
+            cl.copyDbg(phi);
             cl.setRes((IRValue*)vmap.get((Hashable*)phi.res()));
             for (u32 k = (u32)0; k < phi.ops().count(); k = k + (u32)1)
                 cl.add(vecSubst(vmap, bmap, (IROperand*)phi.ops().get(k)));
@@ -12803,6 +12827,7 @@ class OptProfile
                 if (n.op().equals(String.withCString("Store")))
                     {
                     IRInsn* vs = IRInsn.with(String.withCString("VStore"));
+                    vs.copyDbg(n);
                     for (u32 q = (u32)0; q < n.ops().count(); q = q + (u32)1)
                         {
                         if (q == (u32)1)
@@ -12824,6 +12849,7 @@ class OptProfile
                 if (n.op().equals(String.withCString("Load")))
                     {
                     IRInsn* vl = IRInsn.with(String.withCString("VLoad"));
+                    vl.copyDbg(n);
                     vl.setRes(vr);
                     for (u32 q = (u32)0; q < n.ops().count(); q = q + (u32)1)
                         vl.add((IROperand*)n.ops().get(q));
@@ -12835,6 +12861,7 @@ class OptProfile
                     IROperand* a = ovVecOperand((IROperand*)n.ops().get((u32)0), vmap, splats, nb, vecTy);
                     IROperand* b = ovVecOperand((IROperand*)n.ops().get((u32)1), vmap, splats, nb, vecTy);
                     IRInsn* va = IRInsn.with(ovVecOp(n.op()));
+                    va.copyDbg(n);
                     va.setRes(vr);
                     va.add(a);
                     va.add(b);
@@ -13250,6 +13277,7 @@ class OptProfile
         // halves in the shape the recognisers expect.
         IRBlock* PH2 = new IRBlock(hoistName2(H2.name(), "_pre"));
         IRInsn* into = IRInsn.with(String.withCString("Branch"));
+        into.copyDbg(term);
         into.add(IROperand.block(H2));
         PH2.setTerm(into);
         for (u32 k = (u32)0; k < term.ops().count(); k = k + (u32)1)
@@ -14621,6 +14649,7 @@ class OptProfile
                 IROperand* a1 = (IROperand*)n.ops().get((u32)1);
                 bool ivLeft = a0.kind() == (u8)OPK_USE && a0.val() == c.iv();
                 IRInsn* add = IRInsn.with(String.withCString("Add"));
+                add.copyDbg(n);
                 add.setRes(n.res());
                 add.add(ivLeft ? a0 : a1);
                 add.add(IROperand.immI((i32)c.vw(), n.res().ty()));
@@ -14637,6 +14666,7 @@ class OptProfile
                 {
                 IRValue* vr = new IRValue(_vecTy);
                 IRInsn* vl = IRInsn.with(String.withCString("VLoad"));
+                vl.copyDbg(n);
                 vl.setRes(vr);
                 for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
                     vl.add((IROperand*)n.ops().get(k)); // [ea, mem]
@@ -14650,6 +14680,7 @@ class OptProfile
                 IROperand* vval = vecOperandFor((IROperand*)n.ops().get((u32)1),
                                                 fn, entry, B, c, defOf, defBlk);
                 IRInsn* vs = IRInsn.with(String.withCString("VStore"));
+                vs.copyDbg(n);
                 for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
                     vs.add(k == (u32)1 ? vval : (IROperand*)n.ops().get(k));
                 vs.setMemRes(n.memRes());
@@ -14663,6 +14694,7 @@ class OptProfile
                                           fn, entry, B, c, defOf, defBlk);
             IRValue* vr = new IRValue(_vecTy);
             IRInsn* vop = IRInsn.with(vecOpFor(op));
+            vop.copyDbg(n);
             vop.setRes(vr);
             vop.add(va);
             vop.add(vb);
@@ -15846,6 +15878,7 @@ class OptProfile
                 {
                 IRValue* vr = new IRValue(vecTy);
                 IRInsn* vl = IRInsn.with(String.withCString("VLoad"));
+                vl.copyDbg(n);
                 vl.setRes(vr);
                 for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
                     vl.add((IROperand*)n.ops().get(k));
@@ -15866,6 +15899,7 @@ class OptProfile
                 IROperand* vb = vecOperandFor((IROperand*)n.ops().get((u32)1), fn, PH, B, c, defOf, defBlk);
                 IRValue* vr = new IRValue(vecTy);
                 IRInsn* vi = IRInsn.with(vecOpFor(op));
+                vi.copyDbg(n);
                 vi.setRes(vr);
                 vi.add(va);
                 vi.add(vb);
@@ -16509,6 +16543,7 @@ class OptProfile
             {
             IRInsn* n = (IRInsn*)ivDep.get(i);
             IRInsn* cl = IRInsn.with(n.op());
+            cl.copyDbg(n);
             cl.setPred(n.pred());
             cl.setCc(n.cc());
             for (u32 j = (u32)0; j < n.ops().count(); j = j + (u32)1)
@@ -16811,6 +16846,7 @@ class OptProfile
                 {
                 IRValue* vl = new IRValue(loadVecTy);
                 IRInsn* vi = IRInsn.with(String.withCString("VLoad"));
+                vi.copyDbg(n);
                 vi.setRes(vl);
                 for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
                     vi.add((IROperand*)n.ops().get(k));
@@ -16949,6 +16985,7 @@ class OptProfile
                 {
                 sawLoad = true;
                 IRInsn* vl = IRInsn.with(String.withCString("VLoad"));
+                vl.copyDbg(n);
                 vl.setRes(vload);
                 for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
                     vl.add((IROperand*)n.ops().get(k));
@@ -17514,6 +17551,7 @@ class OptProfile
                 IROperand* a1 = (IROperand*)n.ops().get((u32)1);
                 bool ivLeft = a0.kind() == (u8)OPK_USE && a0.val() == c.iv();
                 IRInsn* add = IRInsn.with(String.withCString("Add"));
+                add.copyDbg(n);
                 add.setRes(n.res());
                 add.add(ivLeft ? a0 : a1);
                 add.add(IROperand.immI((i32)c.vw(), n.res().ty()));
@@ -17526,6 +17564,7 @@ class OptProfile
                 IRValue* vnext = new IRValue(_vecTy);
                 IROperand* velem = vecSplatOperand(IROperand.useVal(c.elem()));
                 IRInsn* va = IRInsn.with(String.withCString("VAdd"));
+                va.copyDbg(n);
                 va.setRes(vnext);
                 va.add(IROperand.useVal(vacc));
                 va.add(velem);
@@ -17543,6 +17582,7 @@ class OptProfile
                 {
                 IRValue* vr = new IRValue(_vecTy);
                 IRInsn* vl = IRInsn.with(String.withCString("VLoad"));
+                vl.copyDbg(n);
                 vl.setRes(vr);
                 for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
                     vl.add((IROperand*)n.ops().get(k));
@@ -17579,12 +17619,14 @@ class OptProfile
                 IROperand* vx = vecSplatOperand((IROperand*)n.ops().get((u32)0));
                 IRValue* hi = new IRValue(_vecTy);
                 IRInsn* mh = IRInsn.with(String.withCString("VMulHi"));
+                mh.copyDbg(n);
                 mh.setRes(hi);
                 mh.add(vx);
                 mh.add(vm);
                 _vecBody.add((Object*)mh);
                 IRValue* qv = new IRValue(_vecTy);
                 IRInsn* sr = IRInsn.with(String.withCString("VLShr"));
+                sr.copyDbg(n);
                 sr.setRes(qv);
                 sr.add(IROperand.useVal(hi));
                 sr.add(IROperand.immI((i32)ss, n.res().ty()));
@@ -17607,6 +17649,7 @@ class OptProfile
                 IROperand* vx = vecSplatOperand((IROperand*)n.ops().get((u32)0));
                 IRValue* qv = new IRValue(_vecTy);
                 IRInsn* sr = IRInsn.with(String.withCString("VLShr"));
+                sr.copyDbg(n);
                 sr.setRes(qv);
                 sr.add(vx);
                 sr.add(IROperand.immI(sh, c.laneTy()));
@@ -17618,6 +17661,7 @@ class OptProfile
             IROperand* vb = vecSplatOperand((IROperand*)n.ops().get((u32)1));
             IRValue* vr = new IRValue(_vecTy);
             IRInsn* vop = IRInsn.with(vecOpFor(op));
+            vop.copyDbg(n);
             vop.setRes(vr);
             vop.add(va);
             vop.add(vb);
@@ -18457,6 +18501,7 @@ class OptProfile
         IROperand* h1 = (IROperand*)ht.ops().get((u32)1);
         IROperand* h2 = (IROperand*)ht.ops().get((u32)2);
         IRInsn* bt = IRInsn.with(String.withCString("CondBranch"));
+        bt.copyDbg(ht);
         bt.setPred(ht.pred());
         bt.add(IROperand.useVal(cB));
         bt.add(h1.blk() == B ? IROperand.block(B) : h1);
@@ -18471,6 +18516,7 @@ class OptProfile
         if (_rotEntryTrue)
             {
             IRInsn* hb = IRInsn.with(String.withCString("Branch"));
+            hb.copyDbg(ht);
             hb.add(IROperand.block(B));
             H.setTerm(hb);
             }
@@ -18510,6 +18556,7 @@ class OptProfile
             {
             IRInsn* n = (IRInsn*)H.insns().get(i);
             IRInsn* cl = IRInsn.with(n.op());
+            cl.copyDbg(n);
             cl.setPred(n.pred());
             cl.setCc(n.cc());
             for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
@@ -19157,6 +19204,7 @@ class OptProfile
                     {
                     IRValue* cv = new IRValue(ity);
                     IRInsn* cn = IRInsn.with(String.withCString("Const"));
+                    cn.copyDbg(n);
                     cn.setRes(cv);
                     cn.add(imm);
                     PH.insns().add((Object*)cn);
@@ -19710,6 +19758,7 @@ class OptProfile
                     && cofEvalPair(n.op(), lk, rk, n.res().ty(), &folded))
                     {
                     IRInsn* c = IRInsn.with(String.withCString("Const"));
+                    c.copyDbg(n);
                     c.setRes(n.res());
                     c.setMemRes(n.memRes());
                     c.add(IROperand.immI(folded, n.res().ty()));

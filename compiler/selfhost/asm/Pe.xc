@@ -624,6 +624,97 @@ class Pe
     u32 _relocRVA;
     u32 _relocRaw;
     u32 _afterRVA;
+    // -g: the five debug sections, named through the COFF string table, and
+    // the COFF symbol table every image now carries.
+    DwarfWriter* _dwarf;
+    Array* _dwarfRVA;     // Number@
+    Array* _dwarfRaw;     // Number@
+    Array* _dwarfNameOff; // Number@
+    Array* _coffStr;      // Number@: the string table's strings (its size word excluded)
+    Array* _coffSyms;     // Number@: the 18-byte symbol records
+    u32 _nCoffSyms;
+    u32 _symTabRaw;
+
+    // A long name's place in the COFF string table: its offset, counting the
+    // table's own 4-byte size word.
+    u32 coffName(String* n)
+        {
+        u32 at = (u32)4 + _coffStr.count();
+        for (u32 i = (u32)0; i < n.byteLength(); i = i + (u32)1)
+            _coffStr.add((Object*)Number.withU32((u32)n.byteAt(i)));
+        _coffStr.add((Object*)Number.withU32((u32)0));
+        return at;
+        }
+
+    // The symbol table: every function and data symbol, so a debugger and a
+    // crash report name what they show. With -g, also the debug sections, laid
+    // out after everything the loader maps; their long names live in the
+    // string table that follows the symbols. `afterRaw` is where the file's
+    // mapped sections end.
+    void layoutDebugAndSymbols(Map* symbols, Array* dataSyms, Array* data, u32 afterRaw0)
+        {
+        u32 afterRaw = afterRaw0;
+        _coffStr = new Array();
+        _dwarfRVA = new Array();
+        _dwarfRaw = new Array();
+        _dwarfNameOff = new Array();
+        if (_dwarf != (DwarfWriter*)0)
+            {
+            Array* fnNames = new Array();
+            Array* fnOffs = new Array();
+            DwarfWriter.functionsOf(symbols, dataSyms, String.withCString(""), (u32)$FFFF_FFFF,
+                                    fnNames, fnOffs);
+            u64 imageBase = ((u64)PE_BASE_HI << (u64)32) + (u64)_baseLo;
+            _dwarf.build(imageBase + (u64)_textRVA, _textLen, fnNames, fnOffs, (u32)1, (u32)6);
+            Array* order = DwarfWriter.order();
+            for (u32 k = (u32)0; k < (u32)5; k = k + (u32)1)
+                {
+                u32 len = _dwarf.section(k).count();
+                u32 rva = alignUp(_afterRVA, (u32)PE_SECT_ALIGN);
+                _dwarfRVA.add((Object*)Number.withU32(rva));
+                _dwarfRaw.add((Object*)Number.withU32(afterRaw));
+                String* sn = String.withCString(".");
+                sn.append((String*)order.get(k));
+                _dwarfNameOff.add((Object*)Number.withU32(coffName(sn)));
+                _afterRVA = rva + len;
+                afterRaw = afterRaw + alignUp(len, (u32)PE_FILE_ALIGN);
+                }
+            }
+        Map* dataSet = new Map();
+        for (u32 i = (u32)0; i < dataSyms.count(); i = i + (u32)1)
+            dataSet.set((Hashable*)dataSyms.get(i), (Object*)Number.withU32((u32)1));
+        _coffSyms = new Array();
+        _nCoffSyms = (u32)0;
+        Array* names = symbols.allKeys();
+        names.sort();
+        for (u32 i = (u32)0; i < names.count(); i = i + (u32)1)
+            {
+            String* nm = (String*)names.get(i);
+            bool inData = dataSet.get((Hashable*)nm) != (Object*)0;
+            if (nm.hasPrefix(String.withCString(".")) || (inData && data.count() == (u32)0))
+                continue;
+            if (nm.byteLength() <= (u32)8)
+                {
+                for (u32 k = (u32)0; k < (u32)8; k = k + (u32)1)
+                    _coffSyms.add((Object*)Number.withU32(k < nm.byteLength() ? (u32)nm.byteAt(k) : (u32)0));
+                }
+            else
+                {
+                Pe.put32(_coffSyms, (u32)0);
+                Pe.put32(_coffSyms, coffName(nm));
+                }
+            Pe.put32(_coffSyms, ((Number*)symbols.get((Hashable*)nm)).asU32());
+            u32 secNo = inData ? (u32)3 : (u32)1;   // .data is the third section when present
+            _coffSyms.add((Object*)Number.withU32(secNo));
+            _coffSyms.add((Object*)Number.withU32((u32)0));
+            _coffSyms.add((Object*)Number.withU32(inData ? (u32)0 : (u32)$20)); // DT_FUNCTION
+            _coffSyms.add((Object*)Number.withU32((u32)0));
+            _coffSyms.add((Object*)Number.withU32((u32)2)); // IMAGE_SYM_CLASS_EXTERNAL
+            _coffSyms.add((Object*)Number.withU32((u32)0));
+            _nCoffSyms = _nCoffSyms + (u32)1;
+            }
+        _symTabRaw = afterRaw;
+        }
 
     void buildImage(Array* text, Array* data, Map* symbols, Array* dataSyms,
                     Array* fixups, u32 entryOffset)
@@ -677,8 +768,15 @@ class Pe
             }
         _hasIface = _isDll && _iface != (Data*)0 && _iface.length() > (u32)0;
 
+        // -g: the DWARF the assembler recorded becomes five more sections,
+        // named through the COFF string table (".debug_abbrev" does not fit in
+        // eight bytes).
+        _dwarf = _isDll ? (DwarfWriter*)0 : DwarfWriter.pending();
+        if (_dwarf != (DwarfWriter*)0)
+            DwarfWriter.setPending((DwarfWriter*)0);
         _nSect = (data.count() > (u32)0 ? (u32)3 : (u32)2) + (_hasIface ? (u32)1 : (u32)0)
-                 + (_relocOffs.count() > (u32)0 ? (u32)1 : (u32)0);
+                 + (_relocOffs.count() > (u32)0 ? (u32)1 : (u32)0)
+                 + (_dwarf != (DwarfWriter*)0 ? (u32)5 : (u32)0);
         _hdrSz = alignUp((u32)$40 + (u32)$40 + (u32)4 + (u32)20 + (u32)PE_OPT_HDR_SIZE + _nSect * (u32)PE_SECT_HDR_SIZE, (u32)PE_FILE_ALIGN);
         _textRVA = (u32)PE_SECT_ALIGN;
         _textRaw = _hdrSz;
@@ -823,7 +921,9 @@ class Pe
             _relocRVA = alignUp(_afterRVA, (u32)PE_SECT_ALIGN);
             _relocRaw = afterRaw;
             _afterRVA = _relocRVA + _reloc.count();
+            afterRaw = _relocRaw + alignUp(_reloc.count(), (u32)PE_FILE_ALIGN);
             }
+        layoutDebugAndSymbols(symbols, dataSyms, data, afterRaw);
 
         emitFile(text, data, symbols, dataSyms);
         }
@@ -951,9 +1051,9 @@ class Pe
         p32((u32)$00004550); // "PE\0\0"
         p16((u32)$8664);     // AMD64
         p16(_nSect);
-        p32((u32)0); // TimeDateStamp — 0 keeps
-        p32((u32)0); //   the output reproducible
-        p32((u32)0); // NumberOfSymbols
+        p32((u32)0); // TimeDateStamp — 0 keeps the output reproducible
+        p32(_nCoffSyms > (u32)0 ? _symTabRaw : (u32)0); // PointerToSymbolTable
+        p32(_nCoffSyms);                                // NumberOfSymbols
         p16((u32)PE_OPT_HDR_SIZE);
         p16((u32)$0002 | (u32)$0020 | (_isDll ? (u32)$2000 : (u32)0)); // EXECUTABLE | LARGE_ADDRESS [| DLL]
 
@@ -1034,6 +1134,15 @@ class Pe
         if (_reloc.count() > (u32)0)
             sect(String.withCString(".reloc"), _reloc.count(), _relocRVA, _reloc.count(), _relocRaw,
                  (u32)$40 | (u32)$40000000 | (u32)$02000000);
+        for (u32 di = (u32)0; _dwarf != (DwarfWriter*)0 && di < (u32)5; di = di + (u32)1)
+            {
+            String* nm = String.withCString("/");
+            nm.appendFormat("%lu", ((Number*)_dwarfNameOff.get(di)).asU32());
+            u32 len = _dwarf.section(di).count();
+            sect(nm, len, ((Number*)_dwarfRVA.get(di)).asU32(), len,
+                 ((Number*)_dwarfRaw.get(di)).asU32(),
+                 (u32)$40 | (u32)$40000000 | (u32)$02000000);
+            }
 
         padTo(_textRaw);
         appendAll(text);
@@ -1058,10 +1167,22 @@ class Pe
             padTo(_relocRaw);
             appendAll(_reloc);
             }
+        for (u32 di = (u32)0; _dwarf != (DwarfWriter*)0 && di < (u32)5; di = di + (u32)1)
+            {
+            padTo(((Number*)_dwarfRaw.get(di)).asU32());
+            appendAll(_dwarf.section(di));
+            }
         // Every section's raw data is FileAlignment-padded; a short final
         // section makes some loaders reject the image.
         while (_out.count() % (u32)PE_FILE_ALIGN != (u32)0)
             p8((u32)0);
+        if (_nCoffSyms > (u32)0)
+            {
+            padTo(_symTabRaw);
+            appendAll(_coffSyms);
+            p32((u32)4 + _coffStr.count());
+            appendAll(_coffStr);
+            }
         }
 
     void emitExports(Map* symbols, Array* dataSyms)

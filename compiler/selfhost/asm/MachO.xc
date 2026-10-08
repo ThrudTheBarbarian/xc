@@ -558,6 +558,11 @@ class Sha256
     bool hasModInit;
     bool hasDataSect;
     u32 miLen;
+    // -g: the __DWARF segment between __DATA and __LINKEDIT, or no writer.
+    DwarfWriter* dwarf;
+    u32 dwarfOff;
+    u32 dwarfSize;
+    u32 szDwarfSeg;
     u32 dOnly;
 
     void init(void)
@@ -1283,7 +1288,24 @@ class Sha256
         u32 gotSize = nimp * (u32)GOT_SZ;
         u32 dataSegEnd = hasDataSeg ? roundUp(gotOffset + gotSize, (u32)MACHO_PAGE) : textSegEnd;
         u32 gotOffInSeg = gotOffset - dataSegFileOff;
-        u32 linkeditOff = dataSegEnd;
+        // -g: the DWARF the assembler recorded goes in a __DWARF segment
+        // between __DATA and __LINKEDIT, where lldb reads it from the
+        // executable itself.
+        DwarfWriter* dwarf = DwarfWriter.pending();
+        DwarfWriter.setPending((DwarfWriter*)0);
+        u32 dwarfOff = dataSegEnd;
+        u32 dwarfSize = (u32)0;
+        if (dwarf != (DwarfWriter*)0)
+            {
+            Array* fnNames = new Array();
+            Array* fnOffs = new Array();
+            DwarfWriter.functionsOf(symbols, dataSyms, String.withCString("_"), (u32)$FFFF_FFFF,
+                                    fnNames, fnOffs);
+            dwarf.build(((u64)1 << (u64)32) + (u64)textOffset, text.count(), fnNames, fnOffs,
+                        (u32)4, (u32)29);
+            dwarfSize = dwarf.totalSize();
+            }
+        u32 linkeditOff = dwarf != (DwarfWriter*)0 ? roundUp(dwarfOff + dwarfSize, (u32)MACHO_PAGE) : dataSegEnd;
 
         // 3. Patch the fixups. Both the target and the reference site carry the
         //    same VMBASE, so page deltas cancel it and this is all 32-bit.
@@ -1371,6 +1393,9 @@ class Sha256
         L.dataSegEnd = dataSegEnd;
         L.gotOffInSeg = gotOffInSeg;
         L.linkeditOff = linkeditOff;
+        L.dwarf = dwarf;
+        L.dwarfOff = dwarfOff;
+        L.dwarfSize = dwarfSize;
         L.entryOffset = entryOffset;
         L.hasData = hasData;
         L.hasImp = hasImp;
@@ -2076,6 +2101,12 @@ class Sha256
             for (u32 i = (u32)0; i < L.gotSize; i = i + (u32)1)
                 put8((u32)0);
             }
+        if (L.dwarf != (DwarfWriter*)0)
+            {
+            padTo(L.dwarfOff);
+            for (u32 k = (u32)0; k < (u32)5; k = k + (u32)1)
+                appendAll(L.dwarf.section(k));
+            }
         padTo(L.linkeditOff);
         appendAll(rebase);
         appendAll(bind);
@@ -2121,9 +2152,10 @@ class Sha256
         for (u32 i = (u32)0; i < _deps.count(); i = i + (u32)1)
             L.szDeps = L.szDeps + roundUp((u32)24 + ((MachODep*)_deps.get(i)).path().byteLength() + (u32)1, (u32)8);
         L.hasDyldInfo = L.hasImp || L.hasRebase;
+        L.szDwarfSeg = L.dwarf != (DwarfWriter*)0 ? (u32)72 + (u32)5 * (u32)80 : (u32)0;
         L.ncmds = (u32)10 + (L.hasDataSeg ? (u32)1 : (u32)0) + (L.hasDyldInfo ? (u32)1 : (u32)0) + (u32)1 + (u32)1 // +LC_RPATH
-                  + _deps.count() + _rpaths.count();
-        L.sizeofcmds = L.szPagezero + L.szTextSeg + (L.hasDataSeg ? L.szDataSeg : (u32)0) + L.szLink + (L.hasDyldInfo ? L.szDyldInfo : (u32)0) + L.szDeps + L.szDyld + L.szMain + L.szDylib + L.szSym + L.szDysym + L.szBuild + L.szUUID + L.szCodeSig + L.szRpath + L.szExtraRpaths;
+                  + _deps.count() + _rpaths.count() + (L.dwarf != (DwarfWriter*)0 ? (u32)1 : (u32)0);
+        L.sizeofcmds = L.szDwarfSeg + L.szPagezero + L.szTextSeg + (L.hasDataSeg ? L.szDataSeg : (u32)0) + L.szLink + (L.hasDyldInfo ? L.szDyldInfo : (u32)0) + L.szDeps + L.szDyld + L.szMain + L.szDylib + L.szSym + L.szDysym + L.szBuild + L.szUUID + L.szCodeSig + L.szRpath + L.szExtraRpaths;
         }
 
     void emitHeaderAndCommands(MachOLayout* L)
@@ -2260,6 +2292,42 @@ class Sha256
                 put32((u32)0);
                 put32((u32)0);
                 put32((u32)0);
+                }
+            }
+
+        // __DWARF (-g): read by debuggers, never by dyld's code.
+        if (L.dwarf != (DwarfWriter*)0)
+            {
+            put32((u32)$19);
+            put32(L.szDwarfSeg);
+            putFixed(String.withCString("__DWARF"), (u32)16);
+            putAddr(L.dwarfOff);
+            put64(roundUp(L.dwarfSize, (u32)MACHO_PAGE), (u32)0);
+            put64(L.dwarfOff, (u32)0);
+            put64(L.dwarfSize, (u32)0);
+            put32(VM_READ());
+            put32(VM_READ());
+            put32((u32)5);
+            put32((u32)0);
+            u32 at = L.dwarfOff;
+            Array* order = DwarfWriter.order();
+            for (u32 k = (u32)0; k < (u32)5; k = k + (u32)1)
+                {
+                String* sn = String.withCString("__");
+                sn.append((String*)order.get(k));
+                putFixed(sn, (u32)16);
+                putFixed(String.withCString("__DWARF"), (u32)16);
+                putAddr(at);
+                put64(L.dwarf.section(k).count(), (u32)0);
+                put32(at);
+                put32((u32)0); // align
+                put32((u32)0); // reloff
+                put32((u32)0); // nreloc
+                put32((u32)$02000000); // S_ATTR_DEBUG
+                put32((u32)0);
+                put32((u32)0);
+                put32((u32)0);
+                at = at + L.dwarf.section(k).count();
                 }
             }
 

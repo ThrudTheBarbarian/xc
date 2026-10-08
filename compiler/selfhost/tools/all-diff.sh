@@ -46,7 +46,7 @@ HARNESSES=(lexer pp ast sema diag ir irwide irrt irdbg iface ifacewrite opt
            arm64 arm64o3 android a9 m68k x86 wasm
            as64 as9 as68 asx86 xta xccas
            ld64 obj64 lddylib ldandroid ldarm9 ldx86 ldx86so objx86 ldwin ldwindll lnwasm elfobj coffobj dwarf
-           wrap65 xcc bin lib caps sign)
+           dbg wrap65 xcc bin lib caps sign)
 
 # DISPATCH order — longest first, which is what minimises the makespan when 21
 # unequal jobs share N slots. A scheduling hint ONLY: it cannot change a result,
@@ -74,7 +74,7 @@ HARNESSES=(lexer pp ast sema diag ir irwide irrt irdbg iface ifacewrite opt
 # the shipped compiler dropped every parser and sema diagnostic, so `i32 x = ;`
 # compiled to a runnable binary, silently, exit 0. Cheap (seconds), and it is
 # the only thing watching the error path.
-DISPATCH=(xcc bin caps lib wrap65 sema sign ast as64 xta xccas wasm lnwasm arm64 arm64o3 android x86 ld64 lddylib ldandroid as68 ldwin ldwindll
+DISPATCH=(xcc bin caps lib wrap65 dbg sema sign ast as64 xta xccas wasm lnwasm arm64 arm64o3 android x86 ld64 lddylib ldandroid as68 ldwin ldwindll
           asx86 irwide a9 ldarm9 ldx86 ldx86so objx86 obj64 m68k dwarf opt irrt irdbg pp lexer iface ifacewrite ir as9 diag elfobj coffobj)
 
 # HARNESSES and DISPATCH are two lists of the same set — one is the table's row
@@ -134,6 +134,7 @@ shards_for() {
         bin)                 echo 6 ;;   # five targets, two in-house links a fixture: ~2.7 h unsharded (measured 2026-09-04)
         wrap65)              echo 3 ;;
         caps)                echo 2 ;;   # 19 flag sets over one fixture in sixteen
+        dbg)                 echo 8 ;;   # -g: back ends at two levels and four writers per file (~6400s a quarter, measured 2026-10-08)
         x65)                 echo 3 ;;   # not dispatched; for a manual run
         *)                   echo 1 ;;
     esac

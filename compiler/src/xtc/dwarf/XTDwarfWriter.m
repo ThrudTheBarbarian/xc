@@ -466,7 +466,14 @@ static XTDwarfWriter* gPending = nil;
     for (NSArray* v in _variables)
         typeRef(v[4]);
 
-    NSArray<NSString*>* names = [functions keysSortedByValueUsingSelector:@selector(compare:)];
+    // By address. Two names at one address (an alias, or a label with no code
+    // before the next) are ordered by name, so the result does not depend on
+    // the dictionary's hash order: the last of them takes the range, which is
+    // the name that sorts first.
+    NSArray<NSString*>* names = [functions.allKeys sortedArrayUsingComparator:^NSComparisonResult(NSString* a, NSString* b) {
+      NSComparisonResult r = [functions[a] compare:functions[b]];
+      return r != NSOrderedSame ? r : [b compare:a];
+    }];
     for (NSUInteger i = 0; i < names.count; i++)
         {
         uint64_t start = functions[names[i]].unsignedLongLongValue;

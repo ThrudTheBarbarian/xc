@@ -18,6 +18,7 @@
 // does not.
 
 #import "Foundation.xc"
+#import "DwarfWriter.xc"
 
 #define X86FIX_REL32 0
 #define X86FIX_PC32 1
@@ -245,6 +246,7 @@ class X86Fixup
     bool _failed;
     String* _why;
     bool _skipSect; // inside a CodeView .debug$ section — emit nothing
+    DwarfWriter* _dwarf; // -g: the line table, if the text has one
     Map* _evex;     // EVEX forms: mnemonic -> packed form/map/pp/W/opcode/N
     Map* _evexX;    // the shifts whose count is an xmm register
 
@@ -3083,6 +3085,7 @@ class X86Fixup
     void assemble(String* source)
         {
         u32 section = (u32)0; // 0 = text, 1 = data
+        _dwarf = (DwarfWriter*)0;
         Array* lines = source.splitOnByte((u8)'\n');
         for (u32 li = (u32)0; li < lines.count(); li = li + (u32)1)
             {
@@ -3171,7 +3174,17 @@ class X86Fixup
                 }
             for (u32 i = (u32)0; i < bytes.count(); i = i + (u32)1)
                 _text.add(bytes.get(i));
+            // -g: rbp now addresses the saved rbp and the return address above
+            // it, so the call frame is rbp + 16 from here.
+            if (l.hasPrefix(String.withCString("mov")) && l.hasSuffix(String.withCString("rbp, rsp")))
+                {
+                if (_dwarf == (DwarfWriter*)0)
+                    _dwarf = new DwarfWriter();
+                _dwarf.addFrameSetup(_text.count(), (u32)16);
+                }
             }
+        if (_dwarf != (DwarfWriter*)0 && _dwarf.hasRows())
+            DwarfWriter.setPending(_dwarf);
         resolveLocalBranches();
         }
 
@@ -3185,6 +3198,22 @@ class X86Fixup
             return (u32)0;
         if (d.equals(String.withCString(".data")) || d.equals(String.withCString(".bss")))
             return (u32)1;
+        // -g: `.file <n> "<path>"` and `.loc <n> <line> [<col>]` are the line
+        // table, recorded against the text offset they precede.
+        // -g: `.xc_var "<name>" <reg> <offset> "<type>"` (`.xc_param` for a
+        // parameter) — a variable of the function being assembled.
+        if (d.equals(String.withCString(".xc_var")) || d.equals(String.withCString(".xc_param")))
+            {
+            _dwarf = DwarfWriter.variableDirective(_dwarf, rest, d.equals(String.withCString(".xc_param")),
+                                                   _text.count());
+            return section;
+            }
+        if (d.equals(String.withCString(".file")) || d.equals(String.withCString(".loc")))
+            {
+            _dwarf = DwarfWriter.directive(_dwarf, rest, (u32)0, d.equals(String.withCString(".file")),
+                                           section == (u32)0, _text.count());
+            return section;
+            }
         if (d.equals(String.withCString(".section")))
             {
             // CodeView debug sections carry nothing the image needs, and their

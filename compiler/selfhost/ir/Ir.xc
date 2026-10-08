@@ -461,6 +461,18 @@ class IRValue
         {
         _dbg = false;
         }
+    // The location `from` has (or none), which is what an optimiser pass that
+    // rebuilds an instruction keeps.
+    void copyDbg(IRInsn* from)
+        {
+        _dbg = from != (IRInsn*)0 && from.hasDbg();
+        if (_dbg)
+            {
+            _dbgFile = from.dbgFile();
+            _dbgLine = from.dbgLine();
+            _dbgCol = from.dbgCol();
+            }
+        }
     // ` !dbg f:l:c`, or nothing at all without a location.
     String* dbgSuffix(void)
         {
