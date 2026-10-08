@@ -1,0 +1,26 @@
+<!doctype html>
+<!-- index.html — the page for the web build of Hello UX.
+     The Makefile copies it into build/web/ beside helloux.js, helloux.wasm,
+     UXKit's libUXKit.wasm and libUXKit.json, and its two page scripts. The
+     program draws into the canvas; its printf output goes to the console. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Hello UX</title>
+<style>
+  body   { margin: 0; background: #202020; }
+  canvas { display: block; margin: 2rem auto; background: #fff; }
+</style>
+</head>
+<body>
+<canvas id="ux-canvas" width="480" height="320"></canvas>
+<script>
+  // The run loop lives in a worker (ux_web_browser.js), which shares memory
+  // with the page; that is why the page must be served with cross-origin
+  // isolation (serve.py sends the two headers). The canvas is the window.
+  globalThis.xccConfig = { runLoop: 'worker', workerScript: 'ux_web_browser.js', canvas: '#ux-canvas' };
+</script>
+<script src="ux_web_page.js"></script>
+<script src="helloux.js"></script>
+</body>
+</html>
