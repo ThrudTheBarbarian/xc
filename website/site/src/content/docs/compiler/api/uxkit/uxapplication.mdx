@@ -5,14 +5,13 @@ description: "Boot, the run loop, and the top of the responder chain. A program'
 
 `UXApplication` is the program. It boots the backend, owns the window list
 and the menu bar, runs the event loop, and sits at the top of the responder
-chain. An application's `main()` is the same lines on every target.
-[`UXPlatform`](/compiler/api/uxkit/uxplatform/) supplies the driver for the
-backend the build links:
+chain. An application's `main()` is the same lines on every target: with
+[`UXPlatform`](/compiler/api/uxkit/uxplatform/) in the build, a new
+application installs the driver for the backend the build links:
 
 ```c
 void main(void) {
     UXApplication* app = new UXApplication();
-    app.setDriver(UXPlatform.driver());
     Controller* c = new Controller();
     app.setDelegate(c);
     app.run();
@@ -82,10 +81,11 @@ and the repaint has happened. Implement it only if you lay out views by hand.
 void setDriver(UXViewDriver* d)
 ```
 
-Selects the backend and tells the driver its application, the same call on
-every backend. The parameter is the neutral protocol type, so a library client
-(`#use <UXKit>`) can pass a driver without naming any backend global. Windows
-are shown unless [`setHeadless`](#setheadless) asks otherwise.
+Selects a particular backend and tells the driver its application. A program
+needs it only to choose a backend other than its target's (a test of one
+driver, say), because `new UXApplication()` installs the target's driver when
+[`UXPlatform`](/compiler/api/uxkit/uxplatform/) is in the build. Windows are
+shown unless [`setHeadless`](#setheadless) asks otherwise.
 
 ### setHeadless
 
@@ -361,7 +361,6 @@ class App : Object <UXApplicationDelegate>
 
 void main(void) {
     UXApplication* app = new UXApplication();
-    app.setDriver(new UXGemDriver());
     App* a = new App();
     app.setDelegate(a);
     app.run();

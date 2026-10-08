@@ -1,7 +1,7 @@
-// nibwiring.xc — the `outlet` / `:action` decorations, and the two methods the
+// rscwiring.xc — the `outlet` / `:action` decorations, and the two methods the
 // compiler generates from them.
 //
-// No nib is loaded here: the point is that declaring the decorations is ALL a
+// No rsc file is loaded here: the point is that declaring the decorations is ALL a
 // class does to become wireable. UXDesignable conformance and both method
 // bodies are generated, and can be called directly — which is what the loader
 // does when it wires a resource's connections by name.
@@ -34,7 +34,7 @@ void main(void) {
     Stdio.printf("  landed in the field: %d\n",
                  p.nameField == field ? 1 : 0);
 
-    // An unknown name is a false, not a crash — a nib naming an outlet this
+    // An unknown name is a false, not a crash — an rsc file naming an outlet this
     // class no longer has simply fails to connect.
     Stdio.printf("unknown name: %d\n",
                  p.setOutlet((u8*)"nope", (Object*)field) ? 1 : 0);
@@ -43,7 +43,7 @@ void main(void) {
     // connection of the wrong kind is refused rather than mis-assigned.
     //
     // Note what a refusal does to the field: it CLEARS it rather than leaving
-    // the previous value. That does not matter on a nib load, where each outlet
+    // the previous value. That does not matter on an rsc file load, where each outlet
     // is connected once from null — but it means a false return is not "nothing
     // happened".
     UXCheckbox* box = new UXCheckbox();

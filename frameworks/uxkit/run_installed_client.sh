@@ -40,7 +40,6 @@ class App : Object<UXApplicationDelegate>
 void main(void)
     {
     UXApplication* app = new UXApplication();
-    app.setDriver(UXPlatform.driver());
     app.setHeadless(true);
     app.setDelegate(new App());
     app.run();

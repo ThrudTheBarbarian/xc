@@ -3,15 +3,15 @@ title: UXPlatform
 description: "The driver for the backend a build links, so an application's main() is the same on every platform."
 ---
 
-`UXPlatform` hands an application the driver for the backend its build links.
-With it, `main()` has no platform-aware line:
+`UXPlatform` gives an application the driver for the backend its build links.
+With it in the build, `new UXApplication()` installs that driver, so `main()`
+names no platform:
 
 ```c
 #import "UXPlatform.xc"
 
 void main(void) {
     UXApplication* app = new UXApplication();
-    app.setDriver(UXPlatform.driver());
     app.setDelegate(new Controller());
     app.run();
 }
@@ -24,6 +24,11 @@ wasm32 the web, arm9 GEM, `ios-sim` and `ios` iOS, `android` Android. Otherwise
 the build names it with `-D UX_GTK` or `-D UX_GEM` (GEM on a host). With
 neither, an arm64 build is the Mac's AppKit and an x86_64 build is GTK on Linux.
 Only the driver the build uses is imported.
+
+Import `UXPlatform.xc` before the other UXKit files (`#use <UXKit>` does this),
+so the application's constructor sees it. A program that has set `gDriver`, or
+calls [`setDriver`](/compiler/api/uxkit/uxapplication/#setdriver) itself, keeps
+the driver it chose.
 
 A build script may differ per platform, in its link flags, its shims and these
 defines. The `.xc` source does not.

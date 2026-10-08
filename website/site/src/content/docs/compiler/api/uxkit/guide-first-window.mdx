@@ -58,7 +58,6 @@ class Counter : Object <UXApplicationDelegate>
 
 void main(void) {
     UXApplication* app = new UXApplication();
-    app.setDriver(UXPlatform.driver());   // this platform's driver
     Counter* c = new Counter();
     app.setDelegate(c);
     app.run();
@@ -122,11 +121,12 @@ interface in it.
 ### No platform in the source
 
 ```c
-app.setDriver(UXPlatform.driver());
+UXApplication* app = new UXApplication();
 ```
 
-The **driver** is the backend. [`UXPlatform`](/compiler/api/uxkit/uxplatform/)
-gives the one for the target the program is built for: AppKit for `-A arm64`,
+The **driver** is the backend. With [`UXPlatform`](/compiler/api/uxkit/uxplatform/)
+imported (first, before the other UXKit files) or `#use <UXKit>`, a new
+application installs the one for the target the program is built for: AppKit for `-A arm64`,
 Win32 for `-A win64`, GTK for `-A x86_64`, the web for `-A wasm32`, iOS,
 Android and GEM for theirs. Build the same file for another target and it is a
 native app there; see [the driver model](/compiler/api/uxkit/guide-drivers/).

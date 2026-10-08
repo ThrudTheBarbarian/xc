@@ -61,6 +61,14 @@ class UXApplication : UXResponder
         turnFn = (turnHook_t*)0;
         turnMs = (i32)0;
         driverCallsTurn = false;
+#ifdef UX_PLATFORM_DEFAULT
+        // A program built with UXPlatform (or UXKit) gets the driver for its target here, so its
+        // main never names one; a program that has chosen a driver already keeps it.
+        if (gDriver == (UXViewDriver*)0)
+            {
+            self.setDriver(UXPlatform.driver());
+            }
+#endif
         }
 
     // Install a menu bar.  From here on GEM owns the bar: it draws it, tracks the

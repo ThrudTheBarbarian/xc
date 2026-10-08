@@ -102,7 +102,6 @@ The delegate is half of the pattern. The other half is four lines:
 ```c
 void main(void) {
     UXApplication* app = new UXApplication();
-    app.setDriver(UXPlatform.driver());   // this platform's driver
     app.setDelegate(new MyApp());
     app.run();                            // does not return
 }

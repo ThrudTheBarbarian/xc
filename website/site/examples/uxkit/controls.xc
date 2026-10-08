@@ -98,7 +98,6 @@ class Panel : Object <UXApplicationDelegate>
 
 void main(void) {
     UXApplication* app = new UXApplication();
-    app.setDriver(UXPlatform.driver()); // this platform's
     app.setDelegate(new Panel());
     app.run();
 }

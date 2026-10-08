@@ -48,7 +48,6 @@ void main(void)
     gNoStop = getenv((u8*)"LIFECYCLE_NOSTOP") != (u8*)0;
     UXApplication* app = new UXApplication();
     gApp2 = app;
-    app.setDriver(UXPlatform.driver());
     if (getenv((u8*)"UX_HEADLESS") != (u8*)0)
         {
         app.setHeadless(true);

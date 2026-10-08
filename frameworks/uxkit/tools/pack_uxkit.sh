@@ -36,7 +36,6 @@ A program then names UXKit once and builds with nothing else:
     #use <UXKit>
     ...
     UXApplication* app = new UXApplication();
-    app.setDriver(UXPlatform.driver());     // the driver for the target it is built for
 
     xcc -A arm64  app.xc -o app            # macOS
     xcc -A win64  app.xc -o app.exe        # Windows: ship libUXKit.dll beside it

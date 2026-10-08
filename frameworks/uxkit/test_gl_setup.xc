@@ -61,7 +61,6 @@ void main(void)
     {
     gFails = (i32)0;
     UXApplication* app = new UXApplication();
-    app.setDriver(UXPlatform.driver());
     app.setHeadless(true);
     app.setDelegate(new Setup());
     app.run();

@@ -114,7 +114,6 @@ class RocksApp : Object<UXApplicationDelegate>
     {
     RocksApp* delegate = new RocksApp();
     UXApplication* app = new UXApplication();
-    app.setDriver(UXPlatform.driver());
     app.setDelegate(delegate);
     app.run();
     Stdio.printf("rocks exited\n");

@@ -124,7 +124,6 @@ class Controller : Object <UXApplicationDelegate, UXTableDataSource,
 
 void main(void) {
     UXApplication* app = new UXApplication();
-    app.setDriver(UXPlatform.driver()); // this platform's
     app.setDelegate(new Controller());
     app.run();
 }

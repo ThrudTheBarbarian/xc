@@ -1,7 +1,6 @@
 // UXPlatform.xc — the platform's driver, so an application's main() is the same on every backend:
 //
-//     UXApplication* app = new UXApplication();
-//     app.setDriver(UXPlatform.driver());
+//     UXApplication* app = new UXApplication();   // installs UXPlatform.driver()
 //     app.setDelegate(new MyDelegate());
 //     app.run();
 //
@@ -10,6 +9,10 @@
 // -D UX_GEM (host GEM); with neither, an arm64 build is the Mac's AppKit and an x86_64 build is GTK
 // (Linux).
 // Only the driver the build uses is imported.
+//
+// With this file in the build, `new UXApplication()` installs the driver itself (UXApplication's
+// init, under UX_PLATFORM_DEFAULT), so main is only `new UXApplication()`, a delegate and run().
+#define UX_PLATFORM_DEFAULT 1
 #if ARCH_win64
 #import "UXWin32Driver.xc"
 #define UX_PLATFORM_WIN32 1

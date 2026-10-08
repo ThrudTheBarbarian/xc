@@ -6,11 +6,11 @@ description: "Nothing in your program names a backend: UXPlatform gives the driv
 Every example in these guides starts its application the same way:
 
 ```c
-UXApplication* app = new UXApplication();
-app.setDriver(UXPlatform.driver());   // the driver for the target this is built for
+UXApplication* app = new UXApplication();   // with the driver for the target this is built for
 ```
 
-A UXKit program names no platform. This guide covers what the driver does and
+A UXKit program names no platform: with [`UXPlatform`](/compiler/api/uxkit/uxplatform/)
+in the build (or `#use <UXKit>`), a new application installs the driver itself. This guide covers what the driver does and
 what you can see of it.
 
 ## What a driver is
@@ -52,8 +52,8 @@ Two choices are not the target's own and are made when building: `-D UX_GTK`
 builds the GTK driver for a Mac, against its GTK 4, and `-D UX_GEM` builds GEM
 for a Mac, against the host GEM stack.
 
-`app.setDriver` installs the driver and tells it about the application, which
-is where each driver sets itself up: AppKit hands the loop to `[NSApp run]`
+`new UXApplication()` installs the driver and tells it about the application,
+which is where each driver sets itself up: AppKit hands the loop to `[NSApp run]`
 and routes native events into the application, iOS and Android hand it to the
 system's own loop.
 

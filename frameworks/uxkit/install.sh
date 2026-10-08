@@ -79,4 +79,4 @@ for t in $targets; do
   ln -sf "libUXKit-$maj-$min.$ext" "$dest/$t/libUXKit.$ext"
   echo "installed: $dest/$t/libUXKit.$ext -> libUXKit-$maj-$min.$ext"
 done
-echo "done. a client:  #use <UXKit>  ...  app.setDriver(UXPlatform.driver());"
+echo "done. a client:  #use <UXKit>, then new UXApplication(), a delegate and run()"

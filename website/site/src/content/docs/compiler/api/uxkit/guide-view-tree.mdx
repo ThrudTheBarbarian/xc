@@ -175,7 +175,6 @@ class Layout : Object <UXApplicationDelegate>
 
 void main(void) {
     UXApplication* app = new UXApplication();
-    app.setDriver(UXPlatform.driver());
     app.setDelegate(new Layout());
     app.run();
 }

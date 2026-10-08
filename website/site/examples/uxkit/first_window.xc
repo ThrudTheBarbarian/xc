@@ -48,7 +48,6 @@ class Counter : Object <UXApplicationDelegate>
 
 void main(void) {
     UXApplication* app = new UXApplication();
-    app.setDriver(UXPlatform.driver()); // this platform's
     Counter* c = new Counter();
     app.setDelegate(c);
     app.run();

@@ -196,7 +196,6 @@ class PlayerApp : Object<UXApplicationDelegate>
 void main(void)
 {
     UXApplication* app = new UXApplication();
-    app.setDriver(UXPlatform.driver()); // this platform's: the same source everywhere
     app.setDelegate(new PlayerApp());
     app.run();
 }

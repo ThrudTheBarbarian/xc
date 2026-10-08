@@ -80,7 +80,6 @@ void main(void)
     gFails = (i32)0;
     UXApplication* app = new UXApplication();
     gApp3 = app;
-    app.setDriver(UXPlatform.driver());
     app.setHeadless(true);
     app.setDelegate(new Delegate());
     app.run();
