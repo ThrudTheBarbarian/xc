@@ -403,9 +403,9 @@ def sources_page(names):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--current", default="v0.73")
-    ap.add_argument("--history", default="v0.62,v0.63,v0.64,v0.65,v0.66,v0.7,v0.71,v0.72,v0.73")
-    ap.add_argument("--release", default="0.73")
+    ap.add_argument("--current", default="v0.74")
+    ap.add_argument("--history", default="v0.62,v0.63,v0.64,v0.65,v0.66,v0.7,v0.71,v0.72,v0.73,v0.74")
+    ap.add_argument("--release", default="0.74")
     a = ap.parse_args()
     cur = load(a.current)
     versions = a.history.split(",")

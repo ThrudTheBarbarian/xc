@@ -3,6 +3,26 @@ title: ChangeLog
 description: Release notes for the xcc toolchain, with bug fixes and new features per version.
 ---
 
+## Version 0.74 — debugging
+
+`xcc -g` writes DWARF debug information into the executable, so lldb and gdb
+can stop on a source line, step, show a backtrace with each frame's file and
+line and arguments, and print a function's variables.
+
+### New
+
+- **`-g`** on `arm64` (macOS), `x86_64` (Linux, dynamic and `-static`) and
+  `win64`: a line table for the program and the library files it imports, a
+  function entry for every function and method (a breakpoint on a name stops
+  at its first statement), call frames (a backtrace is right in every frame,
+  leaf functions included), and the integer, floating-point, `bool` and
+  pointer variables and parameters of each function, so `frame variable`,
+  `print x` and `bt` showing `add(a=2, b=3)` work. `-g` keeps those variables in
+  memory for the whole function, as C compilers do at `-O0`; without `-g` the
+  output is unchanged. See [Debugging](/compiler/usage/debugging/).
+- **Windows executables have a symbol table**, so a debugger or a crash report
+  names their functions with or without `-g`.
+
 ## Version 0.73 — faster arm64, GPU blocks that remember, and libraries on Linux
 
 arm64 code is faster again, reversing the drift since 0.65. A `par` block keeps
