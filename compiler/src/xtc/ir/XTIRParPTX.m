@@ -272,10 +272,19 @@ static NSString* ptxNarrowFix(XTIRType* t, NSString* r)
                 case XTIROpAnd: line = [NSString stringWithFormat:@"and.%@", bits]; break;
                 case XTIROpOr: line = [NSString stringWithFormat:@"or.%@", bits]; break;
                 case XTIROpXor: line = [NSString stringWithFormat:@"xor.%@", bits]; break;
-                case XTIROpFAdd: line = [NSString stringWithFormat:@"add.rn.%@", sfx]; break;
-                case XTIROpFSub: line = [NSString stringWithFormat:@"sub.rn.%@", sfx]; break;
-                case XTIROpFMul: line = [NSString stringWithFormat:@"mul.rn.%@", sfx]; break;
-                case XTIROpFDiv: line = [NSString stringWithFormat:@"div.rn.%@", sfx]; break;
+                // Bug 643: `.rn` pins every float op to its exact result, so
+                // ptxas may not contract a mul and an add into an FMA and a
+                // divide takes the correctly rounded sequence. A block whose
+                // goal is speed drops the modifier (plain add/mul contract)
+                // and divides approximately; f64 keeps .rn, PTX has no
+                // approximate f64 divide. :goal(accuracy) is unchanged.
+                case XTIROpFAdd: line = [NSString stringWithFormat:self.fast ? @"add.%@" : @"add.rn.%@", sfx]; break;
+                case XTIROpFSub: line = [NSString stringWithFormat:self.fast ? @"sub.%@" : @"sub.rn.%@", sfx]; break;
+                case XTIROpFMul: line = [NSString stringWithFormat:self.fast ? @"mul.%@" : @"mul.rn.%@", sfx]; break;
+                case XTIROpFDiv:
+                    line = (self.fast && rt.kind == XTIRTypeKindF32) ? @"div.approx.ftz.f32"
+                                                                      : [NSString stringWithFormat:@"div.rn.%@", sfx];
+                    break;
                 case XTIROpShl: case XTIROpLShr: case XTIROpAShr:
                     {
                     // The shift count is a u32 operand.
@@ -331,7 +340,12 @@ static NSString* ptxNarrowFix(XTIRType* t, NSString* r)
         case XTIROpFSqrt:
             {
             NSString* a = [self ptxOp:o[0] type:rt];
-            return a ? [NSString stringWithFormat:@"\tsqrt.rn.%@ %@, %@;\n", ptxArith(rt), r, a] : nil;
+            if (!a)
+                return nil;
+            // bug 643: approximate under :goal(speed), for f32
+            if (self.fast && rt.kind == XTIRTypeKindF32)
+                return [NSString stringWithFormat:@"\tsqrt.approx.ftz.f32 %@, %@;\n", r, a];
+            return [NSString stringWithFormat:@"\tsqrt.rn.%@ %@, %@;\n", ptxArith(rt), r, a];
             }
         case XTIROpICmp:
         case XTIROpFCmp:
@@ -590,7 +604,11 @@ static NSString* ptxNarrowFix(XTIRType* t, NSString* r)
                 m = [m substringToIndex:m.length - 1];
             BOOL fl = rt.kind == XTIRTypeKindF32 || rt.kind == XTIRTypeKindF64;
             if (!isVoid && fl && [m isEqualToString:@"sqrt"] && args.count == 1)
+                {
+                if (self.fast && rt.kind == XTIRTypeKindF32) // bug 643
+                    return [NSString stringWithFormat:@"\tsqrt.approx.ftz.f32 %@, %@;\n", r, args[0]];
                 return [NSString stringWithFormat:@"\tsqrt.rn.%@ %@, %@;\n", ptxArith(rt), r, args[0]];
+                }
             if (!isVoid && fl && [m isEqualToString:@"fma"] && args.count == 3)
                 return [NSString stringWithFormat:@"\tfma.rn.%@ %@, %@, %@, %@;\n", ptxArith(rt), r, args[0], args[1], args[2]];
             if (!isVoid && fl && [m isEqualToString:@"floor"] && args.count == 1)

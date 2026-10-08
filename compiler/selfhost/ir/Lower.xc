@@ -16151,10 +16151,16 @@ class ClassInfo
         else if (op.equals(ptxS("And"))) line = ptxCat("and.", bits);
         else if (op.equals(ptxS("Or"))) line = ptxCat("or.", bits);
         else if (op.equals(ptxS("Xor"))) line = ptxCat("xor.", bits);
-        else if (op.equals(ptxS("FAdd"))) line = ptxCat("add.rn.", sfx);
-        else if (op.equals(ptxS("FSub"))) line = ptxCat("sub.rn.", sfx);
-        else if (op.equals(ptxS("FMul"))) line = ptxCat("mul.rn.", sfx);
-        else if (op.equals(ptxS("FDiv"))) line = ptxCat("div.rn.", sfx);
+        // Bug 643: `.rn` pins every float op to its exact result, so ptxas may
+        // not contract a mul and an add into an FMA and a divide takes the
+        // correctly rounded sequence. A block whose goal is speed drops the
+        // modifier (plain add/mul contract) and divides approximately; f64
+        // keeps .rn, PTX has no approximate f64 divide. :goal(accuracy) is
+        // unchanged.
+        else if (op.equals(ptxS("FAdd"))) line = _mFast ? ptxCat("add.", sfx) : ptxCat("add.rn.", sfx);
+        else if (op.equals(ptxS("FSub"))) line = _mFast ? ptxCat("sub.", sfx) : ptxCat("sub.rn.", sfx);
+        else if (op.equals(ptxS("FMul"))) line = _mFast ? ptxCat("mul.", sfx) : ptxCat("mul.rn.", sfx);
+        else if (op.equals(ptxS("FDiv"))) line = (_mFast && ptxIs(rt, "F32")) ? ptxS("div.approx.ftz.f32") : ptxCat("div.rn.", sfx);
         else if (op.equals(ptxS("Shl")) || op.equals(ptxS("LShr")) || op.equals(ptxS("AShr")))
             {
             // The shift count is a u32 operand.
@@ -16259,7 +16265,11 @@ class ClassInfo
         bool fl = ptxFloat(rt);
         u32 n = args.count();
         if (!isVoid && fl && m.equals(ptxS("sqrt")) && n == (u32)1)
+            {
+            if (_mFast && ptxIs(rt, "F32")) // bug 643
+                return ptx2(ptxS("sqrt.approx.ftz.f32"), r, (String*)args.get((u32)0));
             return ptx2(ptxCat("sqrt.rn.", ptxArith(rt)), r, (String*)args.get((u32)0));
+            }
         if (!isVoid && fl && m.equals(ptxS("fma")) && n == (u32)3)
             {
             String* s = ptx3(ptxCat("fma.rn.", ptxArith(rt)), r, (String*)args.get((u32)0), (String*)args.get((u32)1));
@@ -16503,6 +16513,9 @@ class ClassInfo
             {
             String* a = ptxOp(o0, rt);
             if (a == (String*)0 || ptxArith(rt) == (String*)0) return (String*)0;
+            // bug 643: approximate under :goal(speed), for f32
+            if (_mFast && ptxIs(rt, "F32"))
+                return ptx2(ptxS("sqrt.approx.ftz.f32"), r, a);
             return ptx2(ptxCat("sqrt.rn.", ptxArith(rt)), r, a);
             }
         if (op.equals(ptxS("ICmp")) || op.equals(ptxS("FCmp")))
