@@ -63,28 +63,31 @@ void main(void)
     gEv = new UXEvent();
     Pad* pad = new Pad();
     UXWindow* win = new UXWindow();
-    win.open((u8*)"Input", UXGeom.make((i16)0, (i16)0, (i16)200, (i16)120), pad);
+    // The window is NOT at the canvas corner: pointer slots are fed in CANVAS coordinates, and the
+    // driver must subtract this origin, or every hit test would be off by it.
+    win.open((u8*)"Input", UXGeom.make((i16)80, (i16)80, (i16)200, (i16)120), pad);
     gApp.addWindow(win);
     win.displayAll();
 
-    UXEvent* e = slot((i32)3, (i32)50, (i32)40, (i32)0);
+    UXEvent* e = slot((i32)3, (i32)130, (i32)120, (i32)0);
     ck(e.kind == (u8)UXEventMouseMoved, "a move with no button down decodes as a HOVER");
+    ck(e.x == (i16)50 && e.y == (i16)40, "...and the canvas point is made window-local (origin subtracted)");
     ck(pad.moved == (i32)1 && pad.dragged == (i32)0, "...and reaches the view's mouseMoved");
 
-    slot((i32)1, (i32)50, (i32)40, (i32)0);  // primary down
-    e = slot((i32)3, (i32)60, (i32)40, (i32)0);
+    slot((i32)1, (i32)130, (i32)120, (i32)0);  // primary down
+    e = slot((i32)3, (i32)140, (i32)120, (i32)0);
     ck(e.kind == (u8)UXEventMouseDragged, "the same move with the primary button down is a DRAG");
-    slot((i32)2, (i32)60, (i32)40, (i32)0);  // primary up
-    e = slot((i32)3, (i32)70, (i32)40, (i32)0);
+    slot((i32)2, (i32)140, (i32)120, (i32)0);  // primary up
+    e = slot((i32)3, (i32)150, (i32)120, (i32)0);
     ck(e.kind == (u8)UXEventMouseMoved, "...and a hover again once it is released");
 
-    e = slot((i32)1, (i32)50, (i32)40, (i32)2); // secondary down
+    e = slot((i32)1, (i32)130, (i32)120, (i32)2); // secondary down
     ck(e.kind == (u8)UXEventRightMouseDown, "the secondary button decodes as rightMouseDown");
     ck(pad.right == (i32)1, "...and reaches the view");
-    e = slot((i32)3, (i32)55, (i32)40, (i32)0);
+    e = slot((i32)3, (i32)135, (i32)120, (i32)0);
     ck(e.kind == (u8)UXEventMouseMoved, "...and does not start a drag");
 
-    e = slot((i32)8, (i32)50, (i32)40, (i32)-120);
+    e = slot((i32)8, (i32)130, (i32)120, (i32)-120);
     ck(e.kind == (u8)UXEventWheel && e.b == (i32)-120, "the wheel carries the DOM's deltaY in pixels");
     ck(e.a == (i32)1, "...and its notches the other way round (-120 px is one notch UP)");
     ck(pad.wheels == (i32)1 && pad.wheelPx == (i32)-120, "...and reaches the view's scrollWheel");

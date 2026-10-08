@@ -90,6 +90,8 @@ i32 gWebCw[UXWEB_MAXW];    // handle -> reported content size (scroll range)
 i32 gWebCh[UXWEB_MAXW];
 i32 gWebSx[UXWEB_MAXW]; // handle -> scroll offset (the toolkit owns it: §5 web-scroll)
 i32 gWebSy[UXWEB_MAXW];
+i32 gWebWinX[UXWEB_MAXW]; // handle -> its origin on the canvas.  Drawing offsets by it, so a
+i32 gWebWinY[UXWEB_MAXW]; // pointer point (canvas coords) has it subtracted before it reaches a view.
 pointer gWebContentFn[UXWEB_MAXW];
 pointer gWebContentUd[UXWEB_MAXW];
 bool gWebPressed;     // the primary button is down: a move is a drag, not a hover
@@ -135,6 +137,8 @@ class UXWebDriver : Object<UXViewDriver>
         gWebCh[hh] = (i32)0;
         gWebSx[hh] = (i32)0;
         gWebSy[hh] = (i32)0;
+        gWebWinX[hh] = x;
+        gWebWinY[hh] = y;
         gWebContentFn[hh] = (pointer)0;
         gWebContentUd[hh] = (pointer)0;
         gWebNative = gWebNative + (i32)1;
@@ -1719,6 +1723,16 @@ class UXWebDriver : Object<UXViewDriver>
             {
             ev.kind = (u8)UXEventNone;
             }
+        // A pointer point arrives in CANVAS coordinates, but a view's tree is window-local (drawing
+        // adds the window origin, ox()/oy()).  Subtract it once here, so a window not at the canvas
+        // corner hit-tests where it draws.
+        if (ev.kind == (u8)UXEventMouseDown || ev.kind == (u8)UXEventRightMouseDown ||
+            ev.kind == (u8)UXEventMouseUp || ev.kind == (u8)UXEventMouseDragged ||
+            ev.kind == (u8)UXEventMouseMoved || ev.kind == (u8)UXEventWheel)
+            {
+            ev.x = (i16)((i32)ev.x - gWebWinX[gWebFront]);
+            ev.y = (i16)((i32)ev.y - gWebWinY[gWebFront]);
+            }
         ev.handle = gWebFront;
         }
     void nextEvent(i32 timeoutMs, UXEvent* ev)
@@ -1785,8 +1799,8 @@ class UXWebDriver : Object<UXViewDriver>
                 }
             if (r[0] == (i32)3)
                 {
-                x[0] = r[1];
-                y[0] = r[2];
+                x[0] = r[1] - gWebWinX[gWebFront];
+                y[0] = r[2] - gWebWinY[gWebFront];
                 return (i32)1;
                 }
             if (r[0] == (i32)2)
