@@ -333,13 +333,7 @@ class RKWiring : Object
     // The theme the layout `t` was drawn for: its variant's form factor and orientation, or `any`.
     static u32 themeOf(UXRscDoc* d, UXRscTree* t)
         {
-        UXRscForm* f = d.formOf(t);
-        UXRscVariant* v = f != (UXRscForm*)0 ? f.variantFor(t) : (UXRscVariant*)0;
-        if (v == (UXRscVariant*)0)
-            {
-            return UXRscConnection.themeBit((i32)UXR_V_ANY, (i32)UXR_V_ORIENT_NONE);
-            }
-        return UXRscConnection.themeBit(v.klass, v.orient);
+        return d.themeOf(t);
         }
     // A preset's scope.  RKSC_THIS needs the layout on the canvas.
     static u32 scopeOf(i32 preset, u32 thisTheme)

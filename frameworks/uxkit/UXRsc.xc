@@ -241,6 +241,17 @@ class UXRsc
                 }
             }
         }
+    // ---- autoresizing: how a view follows its container when that is resized ---------------------
+    // The layout's own mask (UXRscDoc.maskFrom has the format).
+    static i32 autoresizeOf(UXRscDoc* doc, i32 formId, i32 logicalId, i32 theme)
+        {
+        if (doc == (UXRscDoc*)0 || logicalId == (i32)0)
+            {
+            return (i32)0;
+            }
+        return UXRscDoc.maskFrom(doc.attrIn(formId, logicalId, theme, (u8*)"autoresize"));
+        }
+
     static i32 attrInt(UXRscDoc* doc, i32 formId, i32 logicalId, i32 theme, u8* key, i32 dflt)
         {
         u8* v = doc.attrIn(formId, logicalId, theme, key);
@@ -360,6 +371,7 @@ class UXRsc
             ni.viewTree = new UXViewTree();
             rv.attachTo(ni.viewTree, rf);
             }
+        rv.setAutoresizeMask(UXRsc.autoresizeOf(doc, formId, t.root.logicalId, (i32)UXRscConnection.themeBit(gotClass, gotOrient)));
         ni.root = rv;
         ni.objs.add(t.root);
         ni.views.add(rv);
@@ -458,6 +470,7 @@ class UXRsc
         parent.addSubview(v, UXGeom.make((i16)o.x, (i16)o.y, (i16)o.w, (i16)o.h));
         UXRsc.applyState(v, o);
         UXRsc.applyAttrs(v, doc, ni.formId, o.logicalId, (i32)UXRscConnection.themeBit(ni.klass, ni.orient));
+        v.setAutoresizeMask(UXRsc.autoresizeOf(doc, ni.formId, o.logicalId, (i32)UXRscConnection.themeBit(ni.klass, ni.orient)));
         ni.objs.add(o);
         ni.views.add(v);
         for (i32 i = (i32)0; i < o.childCount(); i = i + (i32)1)

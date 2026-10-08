@@ -148,6 +148,9 @@ Attaches `v` to this view's tree at `f`, links the hierarchy, points `v`'s
 responder chain at `self`, and takes a strong reference. The frame is a
 parameter because an unattached view has no frame to set.
 
+This view must already be in a tree: a window's content view, or a view added
+to one. Build a hierarchy from the top down.
+
 ### removeFromSuperview
 
 ```c

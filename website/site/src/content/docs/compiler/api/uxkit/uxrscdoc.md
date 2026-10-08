@@ -40,7 +40,7 @@ is the rsc chunk after them.
 
 ## Topics
 
-[treeCount](#treecount) · [treeAt](#treeat) · [deepCopy](#deepcopy) · [formIdOf](#formidof) · [ensureLogicalId](#ensurelogicalid) · [refFor](#reffor) · [classOf](#classof) · [setClassOf](#setclassof) · [addTopObject](#addtopobject) · [topObjectById](#topobjectbyid) · [removeTopObject](#removetopobject) · [removeConnectionsTo](#removeconnectionsto) · [refHits](#refhits) · [attrIn](#attrin) · [setAttrIn](#setattrin) · [attrOf](#attrof) · [setAttrOf](#setattrof) · [seq](#seq) · [addTree](#addtree) · [indexOfTree](#indexoftree) · [formCount](#formcount) · [formAt](#format) · [formOf](#formof) · [formById](#formbyid) · [addVariant](#addvariant) · [variantSuffix](#variantsuffix) · [emptyDialog](#emptydialog) · [flatten](#flatten)
+[treeCount](#treecount) · [treeAt](#treeat) · [deepCopy](#deepcopy) · [formIdOf](#formidof) · [ensureLogicalId](#ensurelogicalid) · [refFor](#reffor) · [classOf](#classof) · [setClassOf](#setclassof) · [addTopObject](#addtopobject) · [topObjectById](#topobjectbyid) · [removeTopObject](#removetopobject) · [removeConnectionsTo](#removeconnectionsto) · [refHits](#refhits) · [attrIn](#attrin) · [setAttrIn](#setattrin) · [attrOf](#attrof) · [setAttrOf](#setattrof) · [autoresizeOf](#autoresizeof) · [setAutoresizeOf](#setautoresizeof) · [themeOf](#themeof) · [maskFrom](#maskfrom) · [maskLetters](#maskletters) · [seq](#seq) · [addTree](#addtree) · [indexOfTree](#indexoftree) · [formCount](#formcount) · [formAt](#format) · [formOf](#formof) · [formById](#formbyid) · [addVariant](#addvariant) · [variantSuffix](#variantsuffix) · [emptyDialog](#emptydialog) · [flatten](#flatten)
 
 ### deepCopy
 
@@ -158,6 +158,52 @@ u8* attrOf(UXRscTree* t, UXRscObject* o, u8* key)
 ```
 
 The shared value, for a control in a tree.
+
+### autoresizeOf
+
+```c
+i32 autoresizeOf(UXRscTree* t, UXRscObject* o)
+```
+
+How the control follows its container when that is resized, in layout `t`: a
+[`UXView`](/compiler/api/uxkit/uxview/) autoresize mask, 0 when it is pinned to
+the top left. It is the control's `autoresize` attribute in that layout's
+theme. Positions and sizes belong to each layout, so the value is never shared.
+
+### setAutoresizeOf
+
+```c
+void setAutoresizeOf(UXRscTree* t, UXRscObject* o, i32 mask)
+```
+
+Sets it; 0 removes the attribute.
+
+### themeOf
+
+```c
+u32 themeOf(UXRscTree* t)
+```
+
+The theme bit of the layout `t`: its variant's form factor and orientation, or
+the `any` theme when the tree is not a variant.
+
+### maskFrom
+
+```c
+static i32 maskFrom(u8* s)
+```
+
+The mask an `autoresize` value names. The value is letters: `L`, `R`, `T` and
+`B` for the margins kept (`UX_ANCHOR_LEFT`, `RIGHT`, `TOP`, `BOTTOM`), `W` and
+`H` for the sizes that stretch (`UX_FLEX_WIDTH`, `UX_FLEX_HEIGHT`).
+
+### maskLetters
+
+```c
+static u8* maskLetters(i32 m)
+```
+
+The `autoresize` value for a mask, in the order `LRTBWH`; "" for 0.
 
 ### setAttrOf
 

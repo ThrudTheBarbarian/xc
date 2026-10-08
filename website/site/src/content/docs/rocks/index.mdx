@@ -101,7 +101,13 @@ A control dropped onto a box, or moved onto one, goes inside it.
 Disabled, Hidden, and the settings of its type, such as Default and Cancel for
 a button, Editable and Alignment for a text field, or the range of a slider.
 
-**Size** holds X, Y, W and H.
+**Size** holds X, Y, W and H, and the control's **autoresizing**: how it
+follows its container when the window is resized. Tick the margins it keeps
+(Left, Right, Top, Bottom) and the sizes that stretch (Width, Height). A button
+in the bottom right corner keeps its Right and Bottom margins; a list that fills
+the window stretches both ways. With nothing ticked the control stays where it
+is, pinned to the top left. Autoresizing belongs to the layout being shown, like
+the position and size.
 
 **Connections** lists the selection's connections, each with its scope and a
 Remove button. Under them, "Not connected here" lists the outlets with no

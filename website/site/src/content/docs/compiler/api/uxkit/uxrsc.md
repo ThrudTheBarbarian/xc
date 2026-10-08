@@ -67,7 +67,7 @@ instance.
 
 ## Topics
 
-[load](#load) · [loadDoc](#loaddoc) · [loadDocAs](#loaddocas) · [selectTree](#selecttree) · [viewFor](#viewfor) · [defaultClassFor](#defaultclassfor) · [classFor](#classfor) · [applyState](#applystate) · [applyText](#applytext) · [textOf](#textof) · [typeName](#typename) · [make](#make) · [makeUXKit](#makeuxkit) · [applyAttrs](#applyattrs) · [attrInt](#attrint) · [eachPart](#eachpart) · [registerObjectFactory](#registerobjectfactory) · [registerViewFactory](#registerviewfactory)
+[load](#load) · [loadDoc](#loaddoc) · [loadDocAs](#loaddocas) · [selectTree](#selecttree) · [viewFor](#viewfor) · [defaultClassFor](#defaultclassfor) · [classFor](#classfor) · [applyState](#applystate) · [applyText](#applytext) · [textOf](#textof) · [typeName](#typename) · [make](#make) · [makeUXKit](#makeuxkit) · [applyAttrs](#applyattrs) · [autoresizeOf](#autoresizeof) · [attrInt](#attrint) · [eachPart](#eachpart) · [registerObjectFactory](#registerobjectfactory) · [registerViewFactory](#registerviewfactory)
 
 ### load
 
@@ -77,6 +77,10 @@ static UXRscInstance* load(u8* bytes, i32 n, i32 formId, UXDesignable* owner, UX
 
 Reads a `.rsc` image and loads form `formId` for this device. `owner` is File's
 Owner. Returns null when the bytes are not a resource or there is no such form.
+
+`into` is the view the form is added to, and must be in a window's tree. With
+`into` null, the form is built in a [`UXViewTree`](/compiler/api/uxkit/uxviewtree/)
+of its own (`viewTree` on the result).
 
 A form's id is the index of its first tree, so a form designed before layout
 variants keeps the id it had.
@@ -205,6 +209,17 @@ Gives a control its settings from the document's attributes: a slider's
 and `completed`; a segmented control's `segments` (`"One|Two|Three"`) and
 `selected`; a combo box's `items` and `text`. A value the theme varies wins
 over the shared one. The loader calls it for every control.
+
+### autoresizeOf
+
+```c
+static i32 autoresizeOf(UXRscDoc* doc, i32 formId, i32 logicalId, i32 theme)
+```
+
+The autoresize mask the layout gives a control, from its `autoresize` attribute
+(see [`UXRscDoc.autoresizeOf`](/compiler/api/uxkit/uxrscdoc/#autoresizeof)), or
+0. The loader sets it on every view it makes, the form's root included, so a
+loaded form follows its window when that is resized.
 
 ### attrInt
 

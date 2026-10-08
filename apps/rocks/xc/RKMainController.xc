@@ -1702,6 +1702,8 @@ class RKMainController : Object<UXTableDelegate>
         selKind = o != (UXRscObject*)0 ? (i32)RKON_VIEW : (i32)0;
         inspectorCtl.doc = doc;
         inspectorCtl.tree = self.shownTreeOrNull();
+        sizeCtl.doc = doc;
+        sizeCtl.tree = inspectorCtl.tree;
         inspectorCtl.show(o); // a NEW selection re-renders the pane
         sizeCtl.show(o);
         if (o != (UXRscObject*)0 && doc != (UXRscDoc*)0 && shownTree >= (i32)0 && shownTree < doc.treeCount())

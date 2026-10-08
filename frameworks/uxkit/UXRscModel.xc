@@ -1085,6 +1085,80 @@ class UXRscColor : Object
         a.value = value;
         attrs.add(a);
         }
+    // ---- autoresizing ----------------------------------------------------------------------------
+    // How a control follows its container when that is resized, kept as the "autoresize" attribute
+    // of the control in ONE layout (geometry is each layout's own, so the value is never shared).
+    // The value is letters for UXView's mask bits: L R T B for the margins kept (UX_ANCHOR_LEFT 1,
+    // RIGHT 2, TOP 4, BOTTOM 8), W H for the sizes that stretch (UX_FLEX_WIDTH 16, HEIGHT 32).  None,
+    // or "", is pinned to the top left.
+    i32 autoresizeOf(UXRscTree* t, UXRscObject* o)
+        {
+        if (o.logicalId == (i32)0)
+            {
+            return (i32)0;
+            }
+        return UXRscDoc.maskFrom(self.attrIn(self.formIdOf(t), o.logicalId, (i32)self.themeOf(t), (u8*)"autoresize"));
+        }
+    void setAutoresizeOf(UXRscTree* t, UXRscObject* o, i32 mask)
+        {
+        self.setAttrIn(self.formIdOf(t), self.ensureLogicalId(t, o), (i32)self.themeOf(t), (u8*)"autoresize",
+                       mask != (i32)0 ? UXRscDoc.maskLetters(mask) : (u8*)0);
+        }
+    // The theme the layout `t` was drawn for: its variant's form factor and orientation, or `any`.
+    u32 themeOf(UXRscTree* t)
+        {
+        UXRscForm* f = self.formOf(t);
+        UXRscVariant* v = f != (UXRscForm*)0 ? f.variantFor(t) : (UXRscVariant*)0;
+        if (v == (UXRscVariant*)0)
+            {
+            return UXRscConnection.themeBit((i32)UXR_V_ANY, (i32)UXR_V_ORIENT_NONE);
+            }
+        return UXRscConnection.themeBit(v.klass, v.orient);
+        }
+    static i32 maskFrom(u8* s)
+        {
+        i32 m = (i32)0;
+        if (s == (u8*)0)
+            {
+            return m;
+            }
+        for (i32 i = (i32)0; s[i] != (u8)0; i = i + (i32)1)
+            {
+            i32 b = UXRscDoc.maskBit(s[i]);
+            m = m | b;
+            }
+        return m;
+        }
+    // The letters for a mask, in the order L R T B W H; "" for 0.
+    static u8* maskLetters(i32 m)
+        {
+        u8* letters = (u8*)"LRTBWH";
+        u8* s = new u8[(u32)7];
+        i32 n = (i32)0;
+        for (i32 i = (i32)0; i < (i32)6; i = i + (i32)1)
+            {
+            if ((m & ((i32)1 << i)) != (i32)0)
+                {
+                s[n] = letters[i];
+                n = n + (i32)1;
+                }
+            }
+        s[n] = (u8)0;
+        return s;
+        }
+    static i32 maskBit(u8 c)
+        {
+        u8* letters = (u8*)"LRTBWH";
+        for (i32 i = (i32)0; i < (i32)6; i = i + (i32)1)
+            {
+            if (letters[i] == c)
+                {
+                return (i32)1 << i;
+                }
+            }
+        return (i32)0;
+        }
+
     // For a control in a tree: the shared value (the control gets a logical id when set).
     u8* attrOf(UXRscTree* t, UXRscObject* o, u8* key)
         {

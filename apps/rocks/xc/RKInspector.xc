@@ -35,9 +35,11 @@ class RKRow : Object
     UXPopUpButton* pop; // for ENUM
     UXButton* vary;     // Vary / Varies: this layout's own value, or the one the layouts share
     u8* attrKey;        // for an attribute row: the setting's key
+    i32 arBit;          // for an autoresizing row: its UX_ANCHOR_* / UX_FLEX_* bit
     void init(void)
         {
         attrKey = (u8*)0;
+        arBit = (i32)0;
         vary = (UXButton*)0;
         prop = (RKProperty*)0;
         field = (UXTextField*)0;
@@ -298,6 +300,34 @@ class RKRow : Object
             rows.add(r);
             y = (i16)((i32)y + (i32)rh + (i32)gap);
             }
+        // autoresizing: how the control follows its container when that is resized, in this
+        // layout only (where it sits is each layout's own)
+        if (section != (i32)RKIS_ATTRIBUTES && doc != (UXRscDoc*)0 && tree != (UXRscTree*)0)
+            {
+            UXLabel* hl = new UXLabel();
+            hl.setTitle((u8*)"Autoresizing (this layout)");
+            pane.addSubview(hl, UXGeom.make((i16)8, y, (i16)((i32)w - (i32)16), rh));
+            y = (i16)((i32)y + (i32)rh + (i32)gap);
+            i32 mask = doc.autoresizeOf(tree, o);
+            i16 cw = (i16)(((i32)w - (i32)16) / (i32)2);
+            for (i32 b = (i32)0; b < (i32)6; b = b + (i32)1)
+                {
+                RKRow* r = new RKRow();
+                r.arBit = (i32)1 << b;
+                r.prop = RKProperty.make(RKInspector.arLabel(b), (i32)RKP_FLAG, (i32)0, (u8*)0);
+                UXCheckbox* cb = new UXCheckbox();
+                cb.setTitle(r.prop.label);
+                cb.setChecked((mask & r.arBit) != (i32)0);
+                cb.setAction(&self.onToggle);
+                pane.addSubview(cb, UXGeom.make((i16)((i32)8 + (b % (i32)2) * (i32)cw), y, cw, rh));
+                r.box = cb;
+                rows.add(r);
+                if (b % (i32)2 == (i32)1)
+                    {
+                    y = (i16)((i32)y + (i32)rh + (i32)gap);
+                    }
+                }
+            }
         // a UXKit control's settings, which live in the document's attributes
         if (section != (i32)RKIS_SIZE && doc != (UXRscDoc*)0 && tree != (UXRscTree*)0)
             {
@@ -324,6 +354,18 @@ class RKRow : Object
             }
         loading = false;
         }
+    // The autoresizing rows, in UXView's bit order (UXRscDoc.maskLetters): the margins kept, then
+    // the sizes that stretch.
+    static u8* arLabel(i32 b)
+        {
+        if (b == (i32)0) { return (u8*)"Left margin"; }
+        if (b == (i32)1) { return (u8*)"Right margin"; }
+        if (b == (i32)2) { return (u8*)"Top margin"; }
+        if (b == (i32)3) { return (u8*)"Bottom margin"; }
+        if (b == (i32)4) { return (u8*)"Width stretches"; }
+        return (u8*)"Height stretches";
+        }
+
     // The settings a UXKit control keeps in attributes, by class (lists are written "A|B|C").
     static Array<RKChoice>* attrKeys(u8* cls)
         {
@@ -449,6 +491,22 @@ class RKRow : Object
         for (i32 i = (i32)0; i < (i32)rows.count(); i = i + (i32)1)
             {
             RKRow* r = (RKRow* ?)rows.get((u16)i);
+            if (r.box != (UXCheckbox*)0 && (UXControl*)r.box == sender && r.arBit != (i32)0)
+                {
+                self.warn((Object*)0);
+                i32 mask = (i32)0;
+                for (i32 k = (i32)0; k < (i32)rows.count(); k = k + (i32)1)
+                    {
+                    RKRow* q = (RKRow* ?)rows.get((u16)k);
+                    if (q.arBit != (i32)0 && q.box.isChecked())
+                        {
+                        mask = mask | q.arBit;
+                        }
+                    }
+                doc.setAutoresizeOf(tree, target, mask);
+                self.announce();
+                return;
+                }
             if (r.box != (UXCheckbox*)0 && (UXControl*)r.box == sender)
                 {
                 self.warn((Object*)0);
