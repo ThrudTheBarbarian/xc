@@ -13,10 +13,17 @@
 #import "Files.xc"
 #import "Bignum.xc"
 
+#if ARCH_win64
+// The OS's random bytes on Windows: RtlGenRandom, which advapi32 exports
+// under this name (bug 641: a Windows host has no /dev/urandom). Nonzero on
+// success.
+u8 SystemFunction036(u8* buf, u32 n);
+#else
 // Host primitives — see support/arm64/runtime/libxt.c.
 i32 _xt_file_open(u8* path, u8* mode);
 i32 _xt_file_read(i32 handle, u8* buf, u32 n);
 void _xt_file_close(i32 handle);
+#endif
 
 class Rsa
     {
@@ -25,10 +32,20 @@ class Rsa
     static Array* randomBytes(u32 n)
         {
         Array* out = new Array();
+        u8* buf = new u8[n];
+#if ARCH_win64
+        if (SystemFunction036(buf, n) == (u8)0)
+            {
+            delete buf;
+            return out; // caller refuses
+            }
+#else
         i32 h = _xt_file_open((u8*)"/dev/urandom", (u8*)"rb");
         if (h < (i32)0)
+            {
+            delete buf;
             return out; // caller refuses
-        u8* buf = new u8[n];
+            }
         i32 got = _xt_file_read(h, buf, n);
         _xt_file_close(h);
         if (got < (i32)n)
@@ -36,6 +53,7 @@ class Rsa
             delete buf;
             return out;
             }
+#endif
         for (u32 i = (u32)0; i < n; i = i + (u32)1)
             out.add((Object*)Number.withU32((u32)buf[i]));
         delete buf;

@@ -437,7 +437,7 @@ class AscTool
         Array* rnd = Rsa.randomBytes((u32)16);
         if (rnd.count() != (u32)16)
             {
-            AscTool.say("key encrypt: no OS randomness (/dev/urandom)", (String*)0, "");
+            AscTool.say("key encrypt: no OS randomness", (String*)0, "");
             return (i32)1;
             }
         // Wrapped as a PKCS#8 PrivateKeyInfo before encryption, so the result
