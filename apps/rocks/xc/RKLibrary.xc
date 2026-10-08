@@ -67,6 +67,9 @@ class RKLibrary : Object<UXTableDataSource>
         all.add(RKLibraryItem.uxkit((u8*)"Text View", (u8*)"UXTextView", (i32)240, (i32)120, (u8*)"text=", (u8*)"Several lines of text to edit"));
         all.add(RKLibraryItem.uxkit((u8*)"Date Picker", (u8*)"UXDatePicker", (i32)140, (i32)24, (u8*)"date=", (u8*)"A day of the year"));
         all.add(RKLibraryItem.uxkit((u8*)"Breadcrumb", (u8*)"UXBreadcrumb", (i32)240, (i32)24, (u8*)"segments=Home|Documents|Work", (u8*)"Where you are, one level a step"));
+        all.add(RKLibraryItem.uxkit((u8*)"Table View", (u8*)"UXTableView", (i32)240, (i32)120, (u8*)"columns=Name:120|Size:60", (u8*)"Rows and columns of data"));
+        all.add(RKLibraryItem.uxkit((u8*)"Outline View", (u8*)"UXOutlineView", (i32)240, (i32)120, (u8*)"columns=Name:160", (u8*)"A tree, one row a level"));
+        all.add(RKLibraryItem.uxkit((u8*)"Collection View", (u8*)"UXCollectionView", (i32)240, (i32)160, (u8*)"items=One|Two|Three|Four;itemSize=56;spacing=12", (u8*)"A grid of items"));
         all.add(RKLibraryItem.make((u8*)"Box", (i32)UXR_T_BOX, (i32)200, (i32)120, (u8*)0, (u8*)"Groups controls under a frame"));
         all.add(RKLibraryItem.make((u8*)"View", (i32)UXR_T_IBOX, (i32)200, (i32)120, (u8*)0, (u8*)"Groups controls, unseen"));
         all.add(RKLibraryItem.make((u8*)"Custom View", (i32)UXR_T_USERDEF, (i32)200, (i32)120, (u8*)0, (u8*)"A view of a class you name"));

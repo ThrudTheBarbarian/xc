@@ -107,9 +107,32 @@ void main(void)
     setAttr(c, (u8*)"date", (u8*)"2026-10-08");
     UXRscObject* bco = place(c, (u8*)"Breadcrumb", (i32)20, (i32)260);
     setAttr(c, (u8*)"segments", (u8*)"Home|Music|Jazz");
+    UXRscObject* tblo = place(c, (u8*)"Table View", (i32)20, (i32)320);
+    setAttr(c, (u8*)"columns", (u8*)"Name:120|Size:60");
+    UXRscObject* olo = place(c, (u8*)"Outline View", (i32)260, (i32)20);
+    setAttr(c, (u8*)"columns", (u8*)"Item:180");
+    UXRscObject* cvo = place(c, (u8*)"Collection View", (i32)260, (i32)200);
+    setAttr(c, (u8*)"items", (u8*)"One|Two|Three");
     checkTrue("on the canvas, a UXTextView", (UXTextView* ?)(Object*)c.canvasMap.viewFor(tvo) != (UXTextView*)0);
     checkTrue("a UXDatePicker", (UXDatePicker* ?)(Object*)c.canvasMap.viewFor(dpo) != (UXDatePicker*)0);
     checkTrue("a UXBreadcrumb", (UXBreadcrumb* ?)(Object*)c.canvasMap.viewFor(bco) != (UXBreadcrumb*)0);
+    UXTableView* tblw = (UXTableView* ?)(Object*)c.canvasMap.viewFor(tblo);
+    UXOutlineView* olw = (UXOutlineView* ?)(Object*)c.canvasMap.viewFor(olo);
+    UXCollectionView* cvw = (UXCollectionView* ?)(Object*)c.canvasMap.viewFor(cvo);
+    checkTrue("a UXTableView", tblw != (UXTableView*)0);
+    check("with two columns", tblw != (UXTableView*)0 ? tblw.numberOfColumns() : (i32)0, (i32)2);
+    check("and the widths given", tblw != (UXTableView*)0 ? (i32)tblw.columnWidth((i32)1) : (i32)0, (i32)60);
+    checkTrue("a UXOutlineView", olw != (UXOutlineView*)0);
+    check("with its column", olw != (UXOutlineView*)0 ? olw.numberOfColumns() : (i32)0, (i32)1);
+    checkTrue("a UXCollectionView", cvw != (UXCollectionView*)0);
+    check("with its three items", cvw != (UXCollectionView*)0 ? cvw.count() : (i32)0, (i32)3);
+    checkTrue("a table view is designable", (UXDesignable* ?)(Object*)tblw != (UXDesignable*)0);
+    checkTrue("its datasource is an outlet",
+              (UXDesignable* ?)(Object*)tblw != (UXDesignable*)0 &&
+              ((UXDesignable* ?)(Object*)tblw).setOutlet((u8*)"dataSource", (Object*)c.library));
+    checkTrue("a wrong type is refused",
+              (UXDesignable* ?)(Object*)tblw != (UXDesignable*)0 &&
+              !((UXDesignable* ?)(Object*)tblw).setOutlet((u8*)"dataSource", (Object*)new UXLabel()));
 
     Stdio.printf("-- saved and loaded\n");
     Data* b = UXRscWriter.write(c.doc);
@@ -128,6 +151,16 @@ void main(void)
     UXBreadcrumb* bc = (UXBreadcrumb* ?)(Object*)loadedFor(ni, bt.root.childAt((i32)2));
     checkTrue("the breadcrumb loads as one", bc != (UXBreadcrumb*)0);
     check("with its three segments", bc != (UXBreadcrumb*)0 ? (i32)bc.segments.count() : (i32)0, (i32)3);
+    UXTableView* tbl = (UXTableView* ?)(Object*)loadedFor(ni, bt.root.childAt((i32)3));
+    checkTrue("the table view loads as one", tbl != (UXTableView*)0);
+    check("with its two columns", tbl != (UXTableView*)0 ? tbl.numberOfColumns() : (i32)0, (i32)2);
+    check("and the widths given", tbl != (UXTableView*)0 ? (i32)tbl.columnWidth((i32)0) : (i32)0, (i32)120);
+    UXOutlineView* ol = (UXOutlineView* ?)(Object*)loadedFor(ni, bt.root.childAt((i32)4));
+    checkTrue("the outline view loads as one", ol != (UXOutlineView*)0);
+    check("with its column", ol != (UXOutlineView*)0 ? ol.numberOfColumns() : (i32)0, (i32)1);
+    UXCollectionView* cv = (UXCollectionView* ?)(Object*)loadedFor(ni, bt.root.childAt((i32)5));
+    checkTrue("the collection view loads as one", cv != (UXCollectionView*)0);
+    check("with its three items", cv != (UXCollectionView*)0 ? cv.count() : (i32)0, (i32)3);
     checkTrue("a bad date is no date", UXRsc.dateFrom((u8*)"2026-13-01") == (UXDate*)0 && UXRsc.dateFrom((u8*)"soon") == (UXDate*)0);
 
     win.close();

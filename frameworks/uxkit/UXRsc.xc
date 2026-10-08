@@ -25,6 +25,9 @@
 #import "UXTextView.xc"
 #import "UXDatePicker.xc"
 #import "UXBreadcrumb.xc"
+#import "UXTableView.xc"
+#import "UXOutlineView.xc"
+#import "UXCollectionView.xc"
 #import "UXGeometry.xc"
 #import "UXDesignable.xc"
 #import "UXViewDriver.xc"
@@ -198,6 +201,18 @@ class UXRsc
             {
             return (Object*)new UXBreadcrumb();
             }
+        if (UXRscDoc.seq(cls, (u8*)"UXTableView"))
+            {
+            return (Object*)new UXTableView();
+            }
+        if (UXRscDoc.seq(cls, (u8*)"UXOutlineView"))
+            {
+            return (Object*)new UXOutlineView();
+            }
+        if (UXRscDoc.seq(cls, (u8*)"UXCollectionView"))
+            {
+            return (Object*)new UXCollectionView();
+            }
         return (Object*)0;
         }
 
@@ -291,6 +306,28 @@ class UXRsc
                 bc.setSeparator(sep);
                 }
             UXRsc.eachPart(doc.attrIn(formId, logicalId, theme, (u8*)"segments"), (pointer)bc, (i32)2);
+            return;
+            }
+        UXTableView* tbl = (UXTableView* ?)(Object*)v; // an outline is one, so its columns come too
+        if (tbl != (UXTableView*)0)
+            {
+            UXRsc.eachColumn(doc.attrIn(formId, logicalId, theme, (u8*)"columns"), tbl);
+            return;
+            }
+        UXCollectionView* cv = (UXCollectionView* ?)(Object*)v;
+        if (cv != (UXCollectionView*)0)
+            {
+            i32 isz = UXRsc.attrInt(doc, formId, logicalId, theme, (u8*)"itemSize", (i32)0);
+            if (isz > (i32)0)
+                {
+                cv.setItemSize((i16)isz, (i16)isz);
+                }
+            i32 gap = UXRsc.attrInt(doc, formId, logicalId, theme, (u8*)"spacing", (i32)-1);
+            if (gap >= (i32)0)
+                {
+                cv.setSpacing((i16)gap, (i16)gap);
+                }
+            UXRsc.eachPart(doc.attrIn(formId, logicalId, theme, (u8*)"items"), (pointer)cv, (i32)3);
             }
         }
     // ---- autoresizing: how a view follows its container when that is resized ---------------------
@@ -324,6 +361,22 @@ class UXRsc
             i = i + (i32)1;
             }
         return neg ? (i32)0 - n : n;
+        }
+    // A leading run of digits, or dflt when there is none (a column width, say).
+    static i32 intFrom(u8* s, i32 dflt)
+        {
+        if (s == (u8*)0)
+            {
+            return dflt;
+            }
+        i32 n = (i32)0;
+        i32 i = (i32)0;
+        while (s[i] >= (u8)'0' && s[i] <= (u8)'9')
+            {
+            n = n * (i32)10 + (i32)(s[i] - (u8)'0');
+            i = i + (i32)1;
+            }
+        return i > (i32)0 ? n : dflt;
         }
     // Add each part of "A|B|C" to a segmented control (to = 0) or a combo box (to = 1); how many.
     // A date written YYYY-MM-DD, or 0 (none, or not a date: the picker keeps today).
@@ -363,8 +416,8 @@ class UXRsc
             }
         return UXDate.make(f[0], f[1], f[2]);
         }
-    // Each part of a "|" list to the control: 0 a segmented control's segments, 1 a combo box's
-    // items, 2 a breadcrumb's segments.  The count.
+    // Add each part of "A|B|C" to a list control: 0 a segmented control's segments, 1 a combo box's
+    // items, 2 a breadcrumb's segments, 3 a collection view's items.  The count.
     static i32 eachPart(u8* list, pointer target, i32 to)
         {
         if (list == (u8*)0)
@@ -390,9 +443,56 @@ class UXRsc
                 else if (to == (i32)1)
                     { ((UXComboBox*)(Object*)target).addItem(part);
                     }
-                else
+                else if (to == (i32)2)
                     { ((UXBreadcrumb*)(Object*)target).addSegment(part, n);
                     }
+                else
+                    { ((UXCollectionView*)(Object*)target).addItem((Object*)0, part);
+                    }
+                n = n + (i32)1;
+                if (list[i] == (u8)0)
+                    {
+                    break;
+                    }
+                start = i + (i32)1;
+                }
+            i = i + (i32)1;
+            }
+        return n;
+        }
+    // Add each column of "Title:Width|Title:Width" to a table (an outline is one, so its columns
+    // come too).  A part with no ":width" gets the default.  The count.
+    static i32 eachColumn(u8* list, UXTableView* t)
+        {
+        if (list == (u8*)0 || t == (UXTableView*)0)
+            {
+            return (i32)0;
+            }
+        i32 n = (i32)0;
+        i32 start = (i32)0;
+        i32 i = (i32)0;
+        while (true)
+            {
+            if (list[i] == (u8)'|' || list[i] == (u8)0)
+                {
+                u8* part = new u8[(u32)(i - start + (i32)1)];
+                i32 colon = (i32)-1;
+                for (i32 k = start; k < i; k = k + (i32)1)
+                    {
+                    part[k - start] = list[k];
+                    if (list[k] == (u8)':' && colon < (i32)0)
+                        {
+                        colon = k - start;
+                        }
+                    }
+                part[i - start] = (u8)0;
+                i16 w = (i16)80;
+                if (colon >= (i32)0)
+                    {
+                    part[colon] = (u8)0;
+                    w = (i16)UXRsc.intFrom(part + colon + (i32)1, (i32)80);
+                    }
+                t.addColumn(part, w);
                 n = n + (i32)1;
                 if (list[i] == (u8)0)
                     {

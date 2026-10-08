@@ -39,6 +39,7 @@
 #import "UXGraphics.xc"
 #import "UXApplication.xc" // gApp — to repaint mid drag-track (the run loop is blocked then)
 #import "UXScrollView.xc"  // the table sits in one: it owns the clip/scroll/bar; the table the data
+#import "UXDesignable.xc"  // the `outlet` fields below auto-conform to it (the compiler needs it in scope)
 
 // No forward declaration: a protocol may name a class defined later in the file (which is
 // how UXApplicationDelegate names UXApplication), and xtc has no `class X;` form.
@@ -227,8 +228,10 @@ class UXTableColumn : Object
 
     class UXTableView : UXView
     {
-    weak : UXTableDataSource* dataSource;
-    weak : UXTableDelegate* delegate;
+    // `outlet`: a connection in the document binds the table to a controller by name (the
+    // datasource, the delegate), through the compiler's generated setOutlet.
+    weak : outlet UXTableDataSource* dataSource;
+    weak : outlet UXTableDelegate* delegate;
 
     Array<UXTableColumn>* columns; // UXTableColumn
     Array<UXTableRow>* rows;       // UXTableRow, one per row currently materialised

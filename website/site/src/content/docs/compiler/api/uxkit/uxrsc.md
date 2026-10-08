@@ -67,7 +67,7 @@ instance.
 
 ## Topics
 
-[load](#load) · [loadDoc](#loaddoc) · [loadDocAs](#loaddocas) · [selectTree](#selecttree) · [viewFor](#viewfor) · [defaultClassFor](#defaultclassfor) · [classFor](#classfor) · [applyState](#applystate) · [applyText](#applytext) · [textOf](#textof) · [typeName](#typename) · [make](#make) · [makeUXKit](#makeuxkit) · [applyAttrs](#applyattrs) · [autoresizeOf](#autoresizeof) · [attrInt](#attrint) · [eachPart](#eachpart) · [dateFrom](#datefrom) · [registerObjectFactory](#registerobjectfactory) · [registerViewFactory](#registerviewfactory)
+[load](#load) · [loadDoc](#loaddoc) · [loadDocAs](#loaddocas) · [selectTree](#selecttree) · [viewFor](#viewfor) · [defaultClassFor](#defaultclassfor) · [classFor](#classfor) · [applyState](#applystate) · [applyText](#applytext) · [textOf](#textof) · [typeName](#typename) · [make](#make) · [makeUXKit](#makeuxkit) · [applyAttrs](#applyattrs) · [autoresizeOf](#autoresizeof) · [attrInt](#attrint) · [intFrom](#intfrom) · [eachPart](#eachpart) · [eachColumn](#eachcolumn) · [dateFrom](#datefrom) · [registerObjectFactory](#registerobjectfactory) · [registerViewFactory](#registerviewfactory)
 
 ### load
 
@@ -194,7 +194,8 @@ static Object* makeUXKit(u8* cls)
 
 UXKit's controls that GEM has no type for, by class name: `UXSlider`,
 `UXStepper`, `UXProgressBar`, `UXSegmentedControl`, `UXComboBox`, and from
-0.75 `UXTextView`, `UXDatePicker` and `UXBreadcrumb`. A
+0.75 `UXTextView`, `UXDatePicker`, `UXBreadcrumb`, `UXTableView`,
+`UXOutlineView` and `UXCollectionView`. A
 document holds one as a `G_USERDEF` of that class, with its settings in
 [attributes](/compiler/api/uxkit/uxrscdoc/#uxrscattr). `make` falls back to
 this when no registered factory knows the name. From 0.7.
@@ -210,7 +211,10 @@ Gives a control its settings from the document's attributes: a slider's
 and `completed`; a segmented control's `segments` (`"One|Two|Three"`) and
 `selected`; a combo box's `items` and `text`; a text view's `text`,
 `fontSize` and `monospace` (1 for on); a date picker's `date`, written
-`2026-10-08`; a breadcrumb's `segments` and `separator`. A value the theme varies wins
+`2026-10-08`; a breadcrumb's `segments` and `separator`; a table's (or
+outline's) `columns`, written `"Name:120|Size:60"`; a collection view's
+`items` (`"One|Two|Three"`), `itemSize` (a square, in pixels) and `spacing`
+(both gaps). A value the theme varies wins
 over the shared one. The loader calls it for every control.
 
 ### autoresizeOf
@@ -232,6 +236,15 @@ static i32 attrInt(UXRscDoc* doc, i32 formId, i32 logicalId, i32 theme, u8* key,
 
 An attribute read as a number, or `dflt`.
 
+### intFrom
+
+```c
+static i32 intFrom(u8* s, i32 dflt)
+```
+
+The leading run of digits in `s` as a number, or `dflt` when there is none: a
+column width in a `columns` value, say.
+
 ### eachPart
 
 ```c
@@ -239,7 +252,16 @@ static i32 eachPart(u8* list, pointer target, i32 to)
 ```
 
 Adds each part of `"A|B|C"` to a segmented control (`to` 0), a combo box
-(`to` 1) or a breadcrumb (`to` 2); returns how many.
+(`to` 1), a breadcrumb (`to` 2) or a collection view (`to` 3); returns how many.
+
+### eachColumn
+
+```c
+static i32 eachColumn(u8* list, UXTableView* t)
+```
+
+Adds each column of `"Title:Width|Title:Width"` to a table, or an outline
+(which is one): a part with no `:width` uses the default. Returns how many.
 
 ### dateFrom
 
