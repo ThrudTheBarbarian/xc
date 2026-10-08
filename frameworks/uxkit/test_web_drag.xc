@@ -23,6 +23,17 @@
 
 i32 gFires;
 i32 gFinal;
+i32 gDraws; // the slider's own drawRect calls: a modal drag must repaint live, so this grows during it
+
+// Counts its own paints, so the drag's live repaint is visible to the test.
+class CountSlider : UXSlider
+    {
+    void drawRect(UXGraphics* g, UXRect dirty)
+        {
+        gDraws = gDraws + (i32)1;
+        super.drawRect(g, dirty);
+        }
+    }
 
 class Controller : Object<UXApplicationDelegate>
     {
@@ -38,7 +49,7 @@ class Controller : Object<UXApplicationDelegate>
         a.addWindow(win);
         // 0,0: one canvas IS the content area, so ring coordinates are window-local.
         win.open((u8*)"web drag", UXGeom.make((i16)0, (i16)0, (i16)320, (i16)200), content);
-        slider = new UXSlider();
+        slider = new CountSlider();
         slider.setRange((i32)0, (i32)100);
         slider.setValue((i32)0);
         slider.setAction(&self.onSlide);
@@ -69,14 +80,18 @@ class Controller : Object<UXApplicationDelegate>
     {
     gFires = (i32)0;
     gFinal = (i32)0;
+    gDraws = (i32)0;
     UXApplication* app = new UXApplication();
     app.setDriver(new UXWebDriver());
     Controller* c = new Controller();
     app.setDelegate(c);
     app.run(); // blocks in nextEvent — Worker territory
-    // >= 80: the drag reached the track's far end; > 2 fires: it MOVED there
-    // step by step through trackDragStep, it didn't jump on the down-click.
-    Stdio.printf(gFinal >= (i32)80 && gFires > (i32)2
-                     ? "PASS: trackDragStep blocked on the ring and the value followed the drag\n"
-                     : "FAIL: 1\n");
+    // >= 80: the drag reached the track's far end; > 2 fires: it MOVED there step by step through
+    // trackDragStep, it didn't jump on the down-click; >= 3 draws: it repainted LIVE, not once at the
+    // release (the run loop is parked in trackDragStep, so the driver must present the drag itself).
+    bool ok = gFinal >= (i32)80 && gFires > (i32)2 && gDraws >= (i32)3;
+    Stdio.printf(ok
+                     ? "PASS: trackDragStep blocked on the ring, the value followed the drag, and the slider repainted live (%d draws)\n"
+                     : "FAIL: value=%d fires=%d draws=%d\n",
+                 (i16)gFinal, (i16)gFires, (i16)gDraws);
     }

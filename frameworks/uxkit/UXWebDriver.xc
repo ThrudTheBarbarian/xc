@@ -95,6 +95,8 @@ i32 gWebWinY[UXWEB_MAXW]; // pointer point (canvas coords) has it subtracted bef
 pointer gWebContentFn[UXWEB_MAXW];
 pointer gWebContentUd[UXWEB_MAXW];
 bool gWebPressed;     // the primary button is down: a move is a drag, not a hover
+bool gWebDragging;    // a modal drag is running (trackDragStep): paint invalidations at once, since
+                      // the run loop is parked and no tick will arrive to present them
 i32 gWebFront;      // topmost window (single canvas z-order, JS composites)
 pointer gWebUserFn; // the per-view draw callback
 pointer gWebUserUd;
@@ -119,6 +121,7 @@ class UXWebDriver : Object<UXViewDriver>
             gWebGfx = new UXCanvasGraphics();
             gWebNative = (i32)0;
             gWebFront = (i32)0;
+            gWebDragging = false;
             gWebBooted = (i32)1;
             }
         return ux_boot(screenW, screenH) != (i32)0;
@@ -257,32 +260,40 @@ class UXWebDriver : Object<UXViewDriver>
             gWebDirtyR[s + (i32)2] = (i16)w;
             gWebDirtyR[s + (i32)3] = (i16)h;
             gWebDirty[handle] = (i32)1;
-            return;
             }
-        i32 x0 = (i32)gWebDirtyR[s];
-        i32 y0 = (i32)gWebDirtyR[s + (i32)1];
-        i32 x1 = x0 + (i32)gWebDirtyR[s + (i32)2];
-        i32 y1 = y0 + (i32)gWebDirtyR[s + (i32)3];
-        if (x < x0)
+        else
             {
-            x0 = x;
+            i32 x0 = (i32)gWebDirtyR[s];
+            i32 y0 = (i32)gWebDirtyR[s + (i32)1];
+            i32 x1 = x0 + (i32)gWebDirtyR[s + (i32)2];
+            i32 y1 = y0 + (i32)gWebDirtyR[s + (i32)3];
+            if (x < x0)
+                {
+                x0 = x;
+                }
+            if (y < y0)
+                {
+                y0 = y;
+                }
+            if (x + w > x1)
+                {
+                x1 = x + w;
+                }
+            if (y + h > y1)
+                {
+                y1 = y + h;
+                }
+            gWebDirtyR[s] = (i16)x0;
+            gWebDirtyR[s + (i32)1] = (i16)y0;
+            gWebDirtyR[s + (i32)2] = (i16)(x1 - x0);
+            gWebDirtyR[s + (i32)3] = (i16)(y1 - y0);
             }
-        if (y < y0)
+        // A modal drag parks the run loop, so no tick will come to present this damage: paint it now,
+        // or a rubber band would not appear until the release.
+        if (gWebDragging)
             {
-            y0 = y;
+            self.webPresent(handle);
             }
-        if (x + w > x1)
-            {
-            x1 = x + w;
-            }
-        if (y + h > y1)
-            {
-            y1 = y + h;
-            }
-        gWebDirtyR[s] = (i16)x0;
-        gWebDirtyR[s + (i32)1] = (i16)y0;
-        gWebDirtyR[s + (i32)2] = (i16)(x1 - x0);
-        gWebDirtyR[s + (i32)3] = (i16)(y1 - y0);
         }
     void windowInvalidate(i32 handle)
         {
@@ -1786,15 +1797,18 @@ class UXWebDriver : Object<UXViewDriver>
             {
             return (i32)0;
             }
+        gWebDragging = true;
         i32 r[8];
         for (;;)
             {
             if (_xt_ring_wait((i32)4000) == (i32)0)
                 {
+                gWebDragging = false;
                 return (i32)0;
                 }
             if (_xt_ring_read(&r[0]) < (i32)0)
                 {
+                gWebDragging = false;
                 return (i32)0;
                 }
             if (r[0] == (i32)3)
@@ -1805,6 +1819,7 @@ class UXWebDriver : Object<UXViewDriver>
                 }
             if (r[0] == (i32)2)
                 {
+                gWebDragging = false;
                 return (i32)0;
                 }
             if (r[0] == (i32)6)
