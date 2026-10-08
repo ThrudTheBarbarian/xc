@@ -22,6 +22,9 @@
 #import "UXProgressBar.xc"
 #import "UXSegmentedControl.xc"
 #import "UXComboBox.xc"
+#import "UXTextView.xc"
+#import "UXDatePicker.xc"
+#import "UXBreadcrumb.xc"
 #import "UXGeometry.xc"
 #import "UXDesignable.xc"
 #import "UXViewDriver.xc"
@@ -183,6 +186,18 @@ class UXRsc
             {
             return (Object*)new UXComboBox();
             }
+        if (UXRscDoc.seq(cls, (u8*)"UXTextView"))
+            {
+            return (Object*)new UXTextView();
+            }
+        if (UXRscDoc.seq(cls, (u8*)"UXDatePicker"))
+            {
+            return (Object*)new UXDatePicker();
+            }
+        if (UXRscDoc.seq(cls, (u8*)"UXBreadcrumb"))
+            {
+            return (Object*)new UXBreadcrumb();
+            }
         return (Object*)0;
         }
 
@@ -239,6 +254,43 @@ class UXRsc
                 {
                 cb.setText(t);
                 }
+            return;
+            }
+        UXTextView* tv = (UXTextView* ?)(Object*)v;
+        if (tv != (UXTextView*)0)
+            {
+            i32 fs = UXRsc.attrInt(doc, formId, logicalId, theme, (u8*)"fontSize", (i32)0);
+            if (fs > (i32)0)
+                {
+                tv.setDefaultFontSize(fs);
+                }
+            tv.setMonospace(UXRsc.attrInt(doc, formId, logicalId, theme, (u8*)"monospace", (i32)0) != (i32)0);
+            u8* t = doc.attrIn(formId, logicalId, theme, (u8*)"text");
+            if (t != (u8*)0)
+                {
+                tv.setText(String.withCString(t));
+                }
+            return;
+            }
+        UXDatePicker* dp = (UXDatePicker* ?)(Object*)v;
+        if (dp != (UXDatePicker*)0)
+            {
+            UXDate* dd = UXRsc.dateFrom(doc.attrIn(formId, logicalId, theme, (u8*)"date"));
+            if (dd != (UXDate*)0)
+                {
+                dp.setDate(dd);
+                }
+            return;
+            }
+        UXBreadcrumb* bc = (UXBreadcrumb* ?)(Object*)v;
+        if (bc != (UXBreadcrumb*)0)
+            {
+            u8* sep = doc.attrIn(formId, logicalId, theme, (u8*)"separator");
+            if (sep != (u8*)0 && sep[0] != (u8)0)
+                {
+                bc.setSeparator(sep);
+                }
+            UXRsc.eachPart(doc.attrIn(formId, logicalId, theme, (u8*)"segments"), (pointer)bc, (i32)2);
             }
         }
     // ---- autoresizing: how a view follows its container when that is resized ---------------------
@@ -274,6 +326,45 @@ class UXRsc
         return neg ? (i32)0 - n : n;
         }
     // Add each part of "A|B|C" to a segmented control (to = 0) or a combo box (to = 1); how many.
+    // A date written YYYY-MM-DD, or 0 (none, or not a date: the picker keeps today).
+    static UXDate* dateFrom(u8* s)
+        {
+        if (s == (u8*)0)
+            {
+            return (UXDate*)0;
+            }
+        i32 f[3];
+        i32 k = (i32)0;
+        i32 i = (i32)0;
+        f[0] = (i32)0;
+        f[1] = (i32)0;
+        f[2] = (i32)0;
+        bool any = false;
+        while (s[i] != (u8)0 && k < (i32)3)
+            {
+            if (s[i] >= (u8)'0' && s[i] <= (u8)'9')
+                {
+                f[k] = f[k] * (i32)10 + (i32)(s[i] - (u8)'0');
+                any = true;
+                }
+            else if (s[i] == (u8)'-')
+                {
+                k = k + (i32)1;
+                }
+            else
+                {
+                return (UXDate*)0;
+                }
+            i = i + (i32)1;
+            }
+        if (!any || k != (i32)2 || f[1] < (i32)1 || f[1] > (i32)12 || f[2] < (i32)1 || f[2] > (i32)31)
+            {
+            return (UXDate*)0;
+            }
+        return UXDate.make(f[0], f[1], f[2]);
+        }
+    // Each part of a "|" list to the control: 0 a segmented control's segments, 1 a combo box's
+    // items, 2 a breadcrumb's segments.  The count.
     static i32 eachPart(u8* list, pointer target, i32 to)
         {
         if (list == (u8*)0)
@@ -296,8 +387,11 @@ class UXRsc
                 if (to == (i32)0)
                     { ((UXSegmentedControl*)(Object*)target).addSegment(part, n);
                     }
-                else
+                else if (to == (i32)1)
                     { ((UXComboBox*)(Object*)target).addItem(part);
+                    }
+                else
+                    { ((UXBreadcrumb*)(Object*)target).addSegment(part, n);
                     }
                 n = n + (i32)1;
                 if (list[i] == (u8)0)

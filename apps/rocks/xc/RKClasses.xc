@@ -974,6 +974,9 @@ class RKClassBook : Object
         self.ux((u8*)"UXTableView", (u8*)"UXView");
         self.ux((u8*)"UXOutlineView", (u8*)"UXTableView");
         self.ux((u8*)"UXGLView", (u8*)"UXView");
+        self.ux((u8*)"UXTextView", (u8*)"UXView");
+        self.ux((u8*)"UXBreadcrumb", (u8*)"UXControl");
+        self.ux((u8*)"UXCollectionView", (u8*)"UXControl");
         }
     void ux(u8* name, u8* parent)
         {

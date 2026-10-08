@@ -402,6 +402,21 @@ class RKRow : Object
             ks.add(RKChoice.of((u8*)"items"));
             ks.add(RKChoice.of((u8*)"text"));
             }
+        else if (UXRscDoc.seq(cls, (u8*)"UXTextView"))
+            {
+            ks.add(RKChoice.of((u8*)"text"));
+            ks.add(RKChoice.of((u8*)"fontSize"));
+            ks.add(RKChoice.of((u8*)"monospace"));
+            }
+        else if (UXRscDoc.seq(cls, (u8*)"UXDatePicker"))
+            {
+            ks.add(RKChoice.of((u8*)"date"));
+            }
+        else if (UXRscDoc.seq(cls, (u8*)"UXBreadcrumb"))
+            {
+            ks.add(RKChoice.of((u8*)"segments"));
+            ks.add(RKChoice.of((u8*)"separator"));
+            }
         return ks;
         }
 

@@ -64,6 +64,9 @@ class RKLibrary : Object<UXTableDataSource>
         all.add(RKLibraryItem.uxkit((u8*)"Progress Bar", (u8*)"UXProgressBar", (i32)160, (i32)16, (u8*)"total=100;completed=40", (u8*)"How far something has got"));
         all.add(RKLibraryItem.uxkit((u8*)"Segmented Control", (u8*)"UXSegmentedControl", (i32)200, (i32)24, (u8*)"segments=One|Two|Three;selected=0", (u8*)"One of a few, side by side"));
         all.add(RKLibraryItem.uxkit((u8*)"Combo Box", (u8*)"UXComboBox", (i32)160, (i32)24, (u8*)"items=Red|Green|Blue;text=Red", (u8*)"A line of text, or one of a list"));
+        all.add(RKLibraryItem.uxkit((u8*)"Text View", (u8*)"UXTextView", (i32)240, (i32)120, (u8*)"text=", (u8*)"Several lines of text to edit"));
+        all.add(RKLibraryItem.uxkit((u8*)"Date Picker", (u8*)"UXDatePicker", (i32)140, (i32)24, (u8*)"date=", (u8*)"A day of the year"));
+        all.add(RKLibraryItem.uxkit((u8*)"Breadcrumb", (u8*)"UXBreadcrumb", (i32)240, (i32)24, (u8*)"segments=Home|Documents|Work", (u8*)"Where you are, one level a step"));
         all.add(RKLibraryItem.make((u8*)"Box", (i32)UXR_T_BOX, (i32)200, (i32)120, (u8*)0, (u8*)"Groups controls under a frame"));
         all.add(RKLibraryItem.make((u8*)"View", (i32)UXR_T_IBOX, (i32)200, (i32)120, (u8*)0, (u8*)"Groups controls, unseen"));
         all.add(RKLibraryItem.make((u8*)"Custom View", (i32)UXR_T_USERDEF, (i32)200, (i32)120, (u8*)0, (u8*)"A view of a class you name"));

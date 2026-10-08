@@ -67,7 +67,7 @@ instance.
 
 ## Topics
 
-[load](#load) · [loadDoc](#loaddoc) · [loadDocAs](#loaddocas) · [selectTree](#selecttree) · [viewFor](#viewfor) · [defaultClassFor](#defaultclassfor) · [classFor](#classfor) · [applyState](#applystate) · [applyText](#applytext) · [textOf](#textof) · [typeName](#typename) · [make](#make) · [makeUXKit](#makeuxkit) · [applyAttrs](#applyattrs) · [autoresizeOf](#autoresizeof) · [attrInt](#attrint) · [eachPart](#eachpart) · [registerObjectFactory](#registerobjectfactory) · [registerViewFactory](#registerviewfactory)
+[load](#load) · [loadDoc](#loaddoc) · [loadDocAs](#loaddocas) · [selectTree](#selecttree) · [viewFor](#viewfor) · [defaultClassFor](#defaultclassfor) · [classFor](#classfor) · [applyState](#applystate) · [applyText](#applytext) · [textOf](#textof) · [typeName](#typename) · [make](#make) · [makeUXKit](#makeuxkit) · [applyAttrs](#applyattrs) · [autoresizeOf](#autoresizeof) · [attrInt](#attrint) · [eachPart](#eachpart) · [dateFrom](#datefrom) · [registerObjectFactory](#registerobjectfactory) · [registerViewFactory](#registerviewfactory)
 
 ### load
 
@@ -193,7 +193,8 @@ static Object* makeUXKit(u8* cls)
 ```
 
 UXKit's controls that GEM has no type for, by class name: `UXSlider`,
-`UXStepper`, `UXProgressBar`, `UXSegmentedControl` and `UXComboBox`. A
+`UXStepper`, `UXProgressBar`, `UXSegmentedControl`, `UXComboBox`, and from
+0.75 `UXTextView`, `UXDatePicker` and `UXBreadcrumb`. A
 document holds one as a `G_USERDEF` of that class, with its settings in
 [attributes](/compiler/api/uxkit/uxrscdoc/#uxrscattr). `make` falls back to
 this when no registered factory knows the name. From 0.7.
@@ -207,7 +208,9 @@ static void applyAttrs(UXView* v, UXRscDoc* doc, i32 formId, i32 logicalId, i32 
 Gives a control its settings from the document's attributes: a slider's
 `min`, `max` and `value`; a stepper's and its `step`; a progress bar's `total`
 and `completed`; a segmented control's `segments` (`"One|Two|Three"`) and
-`selected`; a combo box's `items` and `text`. A value the theme varies wins
+`selected`; a combo box's `items` and `text`; a text view's `text`,
+`fontSize` and `monospace` (1 for on); a date picker's `date`, written
+`2026-10-08`; a breadcrumb's `segments` and `separator`. A value the theme varies wins
 over the shared one. The loader calls it for every control.
 
 ### autoresizeOf
@@ -235,8 +238,16 @@ An attribute read as a number, or `dflt`.
 static i32 eachPart(u8* list, pointer target, i32 to)
 ```
 
-Adds each part of `"A|B|C"` to a segmented control (`to` 0) or a combo box
-(`to` 1); returns how many.
+Adds each part of `"A|B|C"` to a segmented control (`to` 0), a combo box
+(`to` 1) or a breadcrumb (`to` 2); returns how many.
+
+### dateFrom
+
+```c
+static UXDate* dateFrom(u8* s)
+```
+
+The date a `YYYY-MM-DD` value names, or null when it is empty or not a date.
 
 ### registerObjectFactory
 
