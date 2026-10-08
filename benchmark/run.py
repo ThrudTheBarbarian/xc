@@ -5,7 +5,14 @@ programs.
 Every benchmark is a pair in src/, <name>.xc and <name>.m, and may also have a
 <name>.cpp and a <name>.swift. They all compute the same thing and print the
 same checksum, so a mismatch is a miscompile in one of them rather than a
-timing result. C++ is built with clang++ and Swift with swiftc, on each host.
+timing result. C++ is built with clang++ and Swift with swiftc, on each host,
+and on the Linux host the C++ goes through g++ as well.
+
+Every compiler is given the machine's full instruction set, as xc has it
+through its default -msimd=auto (each vectorised function built for SSE2, AVX2
+and AVX-512 and picked when the program starts): -march=native on x86-64 and
+-mcpu=native on arm64 for clang and GCC, -target-cpu native for swiftc. The
+toolchains' versions are recorded in results.json, so the page can state them.
 
 Each program times its own measured region with clock_gettime(CLOCK_MONOTONIC)
 and prints "<checksum> <elapsed_us>". Both languages call the same primitive
@@ -109,6 +116,28 @@ def build_env():
     return out
 
 
+def toolchains(host):
+    """The version line of each compiler used, here and on `host`, so the
+    results say what they were measured against."""
+    def first_line(cmd, remote=None):
+        if remote:
+            cmd = "set -a; [ -f ~/ci/ci-env.sh ] && . ~/ci/ci-env.sh; set +a; " + cmd
+            r = subprocess.run(["ssh", "-o", "ConnectTimeout=10", remote, cmd],
+                               capture_output=True, text=True)
+        else:
+            r = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+        out = (r.stdout or r.stderr).strip().splitlines()
+        return out[0].strip() if out else None
+    tc = {"xcc": COMPILER_VERSION,
+          "arm64": {"clang": first_line("clang++ --version"),
+                    "swiftc": first_line("swiftc --version 2>&1")}}
+    if host:
+        tc["x86_64"] = {"clang": first_line("clang++ --version", host),
+                        "gcc": first_line("g++ --version", host),
+                        "swiftc": first_line("swiftc --version 2>&1", host)}
+    return tc
+
+
 def benchmarks():
     """Pairs present in src/, baseline first."""
     names = set()
@@ -189,16 +218,16 @@ def build_remote(name, opt, tag, host, lang):
     out = "%s/%s.%s.%s" % (rdir, name, lang, tag)
     if lang == "objc":
         build = ("clang -fobjc-arc -fobjc-runtime=gnustep-2.2 -I/opt/gnustep/include -I%s "
-                 "-%s -L/opt/gnustep/lib -lobjc -lgnustep-base -o %s %s.m"
+                 "-%s -march=native -L/opt/gnustep/lib -lobjc -lgnustep-base -o %s %s.m"
                  % (rdir, opt, out, name))
     elif lang == "cpp":
-        build = "clang++ -std=c++17 -I%s -%s -o %s %s.cpp" % (rdir, opt, out, name)
+        build = "clang++ -std=c++17 -I%s -%s -march=native -o %s %s.cpp" % (rdir, opt, out, name)
     elif lang == "gcc":
         # The same C++ source through that host's GCC: the comparison a Linux
         # reader expects, beside clang's.
-        build = "g++ -std=c++17 -I%s -%s -o %s %s.cpp" % (rdir, opt, out, name)
+        build = "g++ -std=c++17 -I%s -%s -march=native -o %s %s.cpp" % (rdir, opt, out, name)
     else:
-        build = ("swiftc %s -parse-as-library -o %s include/bench_time.swift %s.swift"
+        build = ("swiftc %s -target-cpu native -parse-as-library -o %s include/bench_time.swift %s.swift"
                  % (swift_opt(opt), out, name))
     cmd = ("set -a; [ -f ~/ci/ci-env.sh ] && . ~/ci/ci-env.sh; set +a; cd %s && %s"
            % (rdir, build))
@@ -256,7 +285,7 @@ def measure_remote(binary, repeats, host):
 
 
 def compile_cpp(name, opt, out):
-    cmd = ["clang++", "-std=c++17", "-" + opt, "-I", SRC,
+    cmd = ["clang++", "-std=c++17", "-" + opt, "-mcpu=native", "-I", SRC,
            "-o", out, os.path.join(SRC, name + ".cpp")]
     r = subprocess.run(cmd, capture_output=True, text=True)
     return r.returncode == 0, (r.stderr or r.stdout)
@@ -270,14 +299,14 @@ def swift_opt(opt):
 
 
 def compile_swift(name, opt, out):
-    cmd = ["swiftc", swift_opt(opt), "-parse-as-library", "-o", out,
+    cmd = ["swiftc", swift_opt(opt), "-target-cpu", "native", "-parse-as-library", "-o", out,
            os.path.join(SRC, "include", "bench_time.swift"), os.path.join(SRC, name + ".swift")]
     r = subprocess.run(cmd, capture_output=True, text=True)
     return r.returncode == 0, (r.stderr or r.stdout)
 
 
 def compile_objc(name, opt, out):
-    cmd = ["clang", "-fobjc-arc", "-" + opt, "-I", SRC, "-framework", "Foundation",
+    cmd = ["clang", "-fobjc-arc", "-" + opt, "-mcpu=native", "-I", SRC, "-framework", "Foundation",
            "-o", out, os.path.join(SRC, name + ".m")]
     r = subprocess.run(cmd, capture_output=True, text=True)
     return r.returncode == 0, (r.stderr or r.stdout)
@@ -323,6 +352,8 @@ def main():
     ap.add_argument("--langs", default=None,
                     help="comma-separated subset of xc,objc,cpp,gcc,swift (gcc: the C++ source "
                          "through the Linux host's g++; x86-64 only)")
+    ap.add_argument("--platform", default=None, choices=["arm64", "x86_64"],
+                    help="measure one target's legs only (the other machine may be busy)")
     args = ap.parse_args()
     MAX_LOAD = args.max_load
 
@@ -359,6 +390,8 @@ def main():
     if args.langs:
         want = set(args.langs.split(","))
         langs = [(l, c) for l, c in langs if l.split("_x86_64")[0] in want]
+    if args.platform:
+        langs = [(l, c) for l, c in langs if l.endswith("_x86_64") == (args.platform == "x86_64")]
     source_ext = {"xc": ".xc", "objc": ".m", "cpp": ".cpp", "gcc": ".cpp", "swift": ".swift"}
 
     for opt in opts:
@@ -415,19 +448,26 @@ def main():
     # this version's directory instead of replacing them, so a language can be
     # measured later without re-timing the others.
     prev_path = os.path.join(outdir, "results.json")
-    if (args.langs or args.bench) and os.path.isfile(prev_path):
+    tc = toolchains(host)
+    if (args.langs or args.bench or args.platform) and os.path.isfile(prev_path):
         with open(prev_path) as fh:
-            prev = json.load(fh).get("raw", {})
+            prev_all = json.load(fh)
+        prev = prev_all.get("raw", {})
         for n, by_opt in results.items():
             for o, by_lang in by_opt.items():
                 prev.setdefault(n, {}).setdefault(o, {}).update(by_lang)
         results = prev
+        # The toolchains a partial run did not touch keep their recorded versions.
+        for k, v in prev_all.get("toolchains", {}).items():
+            if k not in tc or tc[k] is None:
+                tc[k] = v
     adjusted = {n: v for n, v in results.items() if n != BASELINE}
 
     payload = {
         "version": args.version,
         "platform": subprocess.run(["uname", "-m"], capture_output=True, text=True).stdout.strip(),
         "repeats": args.repeats,
+        "toolchains": tc,
         "raw": results,
         "net": adjusted,
         "mismatches": [{"benchmark": n, "opt": o, "checksums": c} for n, o, c in mismatches],

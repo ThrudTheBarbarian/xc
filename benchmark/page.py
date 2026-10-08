@@ -14,6 +14,7 @@ import argparse
 import json
 import math
 import os
+import re
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(ROOT)
@@ -45,6 +46,35 @@ def general(cur):
 def load(v):
     with open(os.path.join(ROOT, v, "results.json")) as fh:
         return json.load(fh)["net"]
+
+
+def toolchain_notes(v):
+    """One clause per machine naming the compilers the results were measured
+    against, from the versions run.py recorded; empty for results without them."""
+    with open(os.path.join(ROOT, v, "results.json")) as fh:
+        tc = json.load(fh).get("toolchains", {})
+    def short(s):
+        # "Apple clang version 17.0.0 (clang-1700...)" -> "Apple clang 17.0.0";
+        # "gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0" -> "GCC 15.2.0"; Swift's
+        # "swift-driver version: ... Apple Swift version 6.2 (...)" -> "Swift 6.2".
+        if not s:
+            return None
+        m = re.search(r"Swift version (\d[\d.]*)", s)
+        if m:
+            return "Swift " + m.group(1)
+        m = re.search(r"^g\+\+ .*?(\d+\.\d+\.\d+)\s*$", s)
+        if m:
+            return "GCC " + m.group(1)
+        m = re.search(r"^(Apple|Ubuntu)? ?clang version (\d[\d.]*)", s)
+        if m:
+            return ("Apple clang " if m.group(1) == "Apple" else "clang ") + m.group(2)
+        return s
+    out = {}
+    for plat, order in (("arm64", ("clang", "swiftc")), ("x86_64", ("gcc", "clang", "swiftc"))):
+        names = [short(tc.get(plat, {}).get(k)) for k in order]
+        names = [n for n in names if n]
+        out[plat] = ("; " + ", ".join(names[:-1]) + " and " + names[-1]) if len(names) > 1 else ("; " + names[0] if names else "")
+    return out
 
 
 def gmean(xs):
@@ -467,8 +497,11 @@ def main():
             for v in versions:
                 hist[v].pop(b, None)
 
+    tc = toolchain_notes(a.current)
     page = PAGE_TEMPLATE.format(
         release=a.release,
+        tc_arm=tc.get("arm64", ""),
+        tc_x86=tc.get("x86_64", ""),
         summary=summary(cur),
         standing=standing(cur),
         separate=separate(cur),
@@ -541,8 +574,16 @@ a column for each compiler.
 Each figure is measured with the released {release} `xcc` on two machines:
 
 - **arm64:** an Apple MacBook Pro with an M4 Max (12 performance and 4
-  efficiency cores), macOS;
-- **x86-64:** an AMD Ryzen 9 9955HX (16 cores, 32 threads), Linux.
+  efficiency cores), macOS{tc_arm};
+- **x86-64:** an AMD Ryzen 9 9955HX (16 cores, 32 threads), Linux{tc_x86}; its
+  CPU frequency governor is `performance` (amd-pstate-epp) for the run.
+
+Every compiler is given the machine's full instruction set: `-march=native`
+(x86-64) or `-mcpu=native` (arm64) for clang and GCC, `-target-cpu native` for
+Swift. xc needs no flag for that: with its default `-msimd=auto`, xcc builds
+each vectorised function for SSE2, AVX2 and AVX-512 and the program picks one
+when it starts. Nothing else is set: no link-time optimisation, no
+profile-guided build, no `-ffast-math`, on any side.
 
 Times are seconds for the timed region, the best of five runs, each run waiting
 until the machine is otherwise idle.
