@@ -32,7 +32,7 @@ XCCFLAGS = -A $(ARCH) -I . -L $(GEMLIB)
 SRCS = UXVersion.xc UXAbi.xc UXLibc.xc UXGeometry.xc UXResponder.xc UXViewTree.xc UXView.xc UXControl.xc \
        UXViewDriver.xc UXGemDriver.xc UXWindow.xc UXApplication.xc UXEvent.xc UXGraphics.xc UXGemGraphics.xc UXRsc.xc \
        UXMenu.xc UXAlert.xc UXString.xc UXGem.xc UXGem.h.xc UXTableView.xc \
-       UXOutlineView.xc UXNotificationCenter.xc
+       UXOutlineView.xc
 
 PROGS = demo.so rscdemo.so test_spine.so test_window.so test_scroll.so \
         test_dirty.so test_key.so test_menu.so test_alert.so test_clip.so \
