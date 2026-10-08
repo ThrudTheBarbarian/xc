@@ -1,12 +1,12 @@
 ---
 title: Stdio
-description: "Screen / stdout output, cursor positioning, and a printf-style formatter that handles every primitive plus structs and classes."
+description: "Standard-output printing and a printf-style formatter that handles every primitive plus objects and enums."
 ---
 
-`Stdio` is the console-output class. It emits characters, positions the cursor,
-and formats values through a `printf`-style API. Every method is **`static`**,
-so there is no instance to create. Call `Stdio.printf(...)` directly, or add
-`use Stdio;` to drop the `Stdio.` prefix and write `printf(...)`.
+`Stdio` is the console-output class. It prints values and formats them through a
+`printf`-style API. Every method is **`static`**, so there is no instance to
+create. Call `Stdio.printf(...)` directly, or add `use Stdio;` to drop the
+`Stdio.` prefix and write `printf(...)`.
 
 ```c
 #import <Stdio.xc>
@@ -15,80 +15,33 @@ so there is no instance to create. Call `Stdio.printf(...)` directly, or add
 ## Overview
 
 `Stdio` is reimplemented per backend architecture, resolved ahead of
-`support/generic/lib` on the include path. The xt6502 build writes ATASCII
-screen codes straight into text-mode screen RAM (reading screen mode and base
-from the OS at [`init`](#init)) and scrolls when the cursor runs off the bottom.
-The native backends (arm64 and the other register targets) format each value to
-ASCII and push it a byte at a time through the host runtime's `_putc`, so output
-is an ordinary byte stream with no addressable grid.
+`support/generic/lib` on the include path. The native backends format each value
+to ASCII and push it a byte at a time through the host runtime's `_putc`, so
+output is an ordinary byte stream with no addressable grid; on wasm32 the
+loader passes it to the page, and on Android the app's glue copies it to
+logcat. The banked 6502 writes to a text-mode screen with a cursor and
+scrolling, with a smaller formatter: see [Stdio (xt6502)](/compiler/api/stdio-xt6502/).
 
 `printf` follows C: the same conversions, flags, widths and precisions, with the
-same output, plus `%@` for objects. On the native backends it is built on
+same output, plus `%@` for objects. It is built on
 [`String.withFormat`](/compiler/api/string/#withformat), so the two always agree.
-The xt6502 build is a smaller formatter with the same argument rules; see
-[Format specifiers](#format-specifiers) for what it leaves out.
 
 :::note[Availability]
-- [`putChar`](#putchar), [`scroll`](#scroll) and [`printFpDec`](#printfpdec) exist
-  only in the **xt6502** build, because they are screen-model / fixed-point operations.
-  Calling `putChar` or `scroll` on a native backend is a compile error
-  (`No method 'putChar' on class 'Stdio'`).
-- [`setCursor`](#setcursor) and the `(x, y)` position of [`printfAt`](#printfat)
-  are no-ops on the native backends: stdout has no cursor.
-- The 64-bit `print` overloads ([`print(i64)` / `print(u64)`](#print)) and
-  `%lld`/`%llu` are on both; `%llx` and `printHex(u64)` are **native only**
-  (xt6502's `printHex` tops out at 32-bit and its `printf` has no `%llx`).
-- On xt6502, `%@` object formatting is gated on the front-end `HAS_ATFMT`
-  pre-scan so a program that never uses it pays no `Object`/`String` footprint.
+Every target. [`setCursor`](#setcursor) and the `(x, y)` of
+[`printfAt`](#printfat) do nothing where there is no screen: stdout has no
+cursor. `putChar`, `scroll`, `printFpDec` and a `printStruct` that walks a
+struct exist only on xt6502.
 :::
 
 ## Topics
 
-**Screen output (xt6502)** · [putChar](#putchar) · [scroll](#scroll) · [setCursor](#setcursor)
+**Printing values** · [print](#print) · [printHex](#printhex)
 
-**Printing values** · [print](#print) · [printHex](#printhex) · [printFpDec](#printfpdec)
-
-**Formatted output** · [printf](#printf) · [printfAt](#printfat)
+**Formatted output** · [printf](#printf) · [printfAt](#printfat) · [setCursor](#setcursor)
 
 **Struct & object printing** · [printStruct](#printstruct)
 
-**Lifecycle** · [init](#init)
-
 ---
-
-## Screen output (xt6502)
-
-Low-level screen operations. `putChar` and `scroll` exist only under
-`support/xt6502/lib/`; `setCursor` is on every target but is a no-op where there
-is no addressable screen.
-
-### putChar
-```c
-static void putChar(u8 ch)          // xt6502 only
-```
-Emits one character to the active text-mode screen, doing the ATASCII →
-screen-code conversion and advancing the cursor. A newline (`$0A`) moves to the
-start of the next row; running off the bottom of the text region triggers
-[`scroll`](#scroll) and backs the cursor onto the now-empty bottom row. In a
-graphics mode (`canPrint == 0`) it does nothing.
-
-### scroll
-```c
-static void scroll(void)            // xt6502 only
-```
-Scrolls the text region up by one row and blanks the new bottom row. It stays
-within `screenBase + cols * rows`, so a split-screen text strip cannot write
-into surrounding RAM. Called automatically by [`putChar`](#putchar) at
-end-of-screen; rarely called directly.
-
-### setCursor
-```c
-static void setCursor(u8 x, u8 y)
-```
-Moves the cursor to column `x`, row `y`. On xt6502 this computes a screen-RAM
-offset; on the native backends it is a no-op (stdout is a byte stream).
-
-[↑ Topics](#topics)
 
 ## Printing values
 
@@ -99,13 +52,11 @@ a newline; supply `"\n"` yourself.
 ### print
 ```c
 static void print(string s)                  // u8* C string
-static void print(String* s)                 // HAS_ATFMT only
+static void print(String* s)
 static void print(u16 v)
 static void print(i16 v)
 static void print(u32 v)
 static void print(i32 v)
-static void print(u64 v)                     // xt6502 build
-static void print(i64 v)                     // xt6502 build
 static void print(float f)                   // 6 dp default
 static void print(double d)                  // 10 dp default
 static void print(float f,  u8 precision)    // %.Nf
@@ -113,31 +64,20 @@ static void print(double d, u8 precision)    // %.Nlf
 ```
 Prints a value in its natural decimal (or, for `string`/`String*`, verbatim)
 form. There is no `print(u8)` overload: `u8` widens implicitly to `u16`, so pass
-`u8` values directly. On the native backends the 64-bit widths are printed by
-`printf` through internal emit helpers rather than a public `print(i64)`/`print(u64)`
-overload; the xt6502 build exposes them as `print` overloads too. The
-precision-carrying float/double overloads back the `%.Nf` / `%.Nlf` conversions:
-they round at `N+1` decimal places and keep `N`, matching the native targets.
+`u8` values directly. The 64-bit widths are printed by `printf` (`%lld`, `%llu`)
+through internal helpers. The precision-carrying float and double overloads
+back the `%.Nf` / `%.Nlf` conversions: they round at `N+1` decimal places and
+keep `N`.
 
 ### printHex
 ```c
 static void printHex(u8 n)          // 2 digits
 static void printHex(u16 v)         // 4 digits
 static void printHex(u32 v)         // 8 digits
-static void printHex(u64 v)         // 16 digits — arm64 only
+static void printHex(u64 v)         // 16 digits
 ```
 Fixed-width, uppercase, left-zero-padded hex with no `$` prefix. The width is the
 type's full width, so `printHex((u16)$2A)` prints `002A`.
-
-### printFpDec
-```c
-static void printFpDec(double v, u8 keep, u8 roundAt)   // xt6502 only
-```
-The shared fixed-point float formatter behind `print(float)`, `print(double)` and
-the `%.Nf` / `%.Nlf` conversions on xt6502. Extracts `v`'s integer part and
-fractional digits via the MECH float ops, rounds half-up at decimal place
-`roundAt`, and prints the first `keep`. A bare `%f` uses `keep == roundAt == 6`,
-a bare `%lf` uses `10`; `%.Nf` uses `keep = N, roundAt = N+1`.
 
 [↑ Topics](#topics)
 
@@ -154,10 +94,15 @@ The main formatted-output method: C's `printf`, plus `%@`. See
 ```c
 static void printfAt(u8 x, u8 y, string fmt, ...)
 ```
-[`setCursor(x, y)`](#setcursor) followed by [`printf`](#printf), for
-table-style screens. On xt6502 it is a pure forwarder that does not call
-`va_start` itself, so it is exempt from the varargs-reentrance check. On the
-native backends the `(x, y)` is ignored.
+[`setCursor(x, y)`](#setcursor) followed by [`printf`](#printf). On a byte
+stream the `(x, y)` is ignored; it positions the text on the 6502's screen.
+
+### setCursor
+```c
+static void setCursor(u8 x, u8 y)
+```
+Moves the cursor to column `x`, row `y` on a target with a screen; a no-op on
+the native backends, where stdout is a byte stream.
 
 [↑ Topics](#topics)
 
@@ -167,26 +112,9 @@ native backends the `(x, y)` is ignored.
 ```c
 static void printStruct(void)
 ```
-Walks a compiler-generated struct descriptor and prints the struct's fields
-inside parentheses, recursing into nested structs and class-pointer fields. It
-implements `%@` on a plain struct: the `printf` `%@` branch stores the data and
-descriptor pointers in the class's ivars, then calls it. On the native backends
-it prints a single `'?'` placeholder, because struct `%@` is not implemented
-there; the full descriptor walk exists only in the xt6502 build.
-
-[↑ Topics](#topics)
-
-## Lifecycle
-
-### init
-```c
-void init(void)
-```
-The zero-argument initializer, run by `new Stdio()`. On xt6502 it reads the
-screen mode from `DINDEX` (`$57`), the screen base from `SAVMSC` (`$58/$59`) and
-the text-window row count from `BOTSCR` (`$02BF`), deriving the column count from
-the mode (GR.0 = 40 columns, GR.1/2/3 = 20, graphics modes = no text output). On
-the native backends it does nothing. Static callers never need it.
+Prints a single `?`: `%@` on a plain `struct` is not implemented on the native
+backends. On xt6502 the method walks the struct's descriptor and prints its
+fields ([Stdio (xt6502)](/compiler/api/stdio-xt6502/#printstruct)).
 
 [↑ Topics](#topics)
 
@@ -251,9 +179,9 @@ Stdio.printf("[%-6s|%06x]\n", "id", 255);     // [id    |0000ff]
 Stdio.printf("ratio: %u%%\n", 42);            // ratio: 42%
 ```
 
-On **xt6502** the formatter is smaller: a width, the flags and a precision are
-read but only the precision is applied, `%e` and `%g` print in fixed point as
-`%f` does, and `%o`, `%p` and `%llx` are not there.
+The 6502's formatter applies only the precision and lacks `%o`, `%p` and
+`%llx`; its calls also share one 64-byte argument buffer. Both are described in
+[Stdio (xt6502)](/compiler/api/stdio-xt6502/#format-specifiers).
 
 ### Objects: `%@`
 
@@ -282,15 +210,8 @@ Stdio.printf("last %@\n", p);        // last (3|4)
 ```
 
 `%@` on an object is a virtual call, and a plain `struct` has no vtable and no
-`description()`. On xt6502, `%@` on a plain struct goes through
-[`printStruct`](#printstruct) instead, which formats the fields recursively:
-
-```c
-typedef struct { u16 x; u16 y; u8 tint; } Sprite;
-
-Sprite s = {160, 96, 7};
-Stdio.printf("sprite=%@\n", s);       // sprite=(160, 96, 7)
-```
+`description()`, so `%@` on a struct prints `?` here; the 6502 formats its
+fields ([printStruct](/compiler/api/stdio-xt6502/#printstruct)).
 
 ### Enum names
 
@@ -310,20 +231,3 @@ Stdio.printf("raw    : %u\n", d);     // raw    : 2
 
 This needs a literal format, where the compiler can see which conversion the
 enum meets. A value outside the enum prints `?`.
-
-## Variadic limits (xt6502 only)
-
-On **xt6502** a variadic call marshals its arguments through a single shared
-64-byte pack buffer (`__xtc_va_buf`; the address comes from the active layout,
-see [Functions → Shared pack buffer](/compiler/language/functions/#shared-pack-buffer-and-reentrance)). For `printf`:
-
-- Total argument payload per call ≤ 62 bytes (64 minus the 2-byte fmt-pointer header).
-- A `printf` call inside another variadic that has already called `va_start`
-  overwrites the outer call's buffer. Sema diagnoses this at compile time.
-- `printfAt` is a pure forwarder (no `va_start` of its own), so it is exempt.
-
-The non-6502 targets (`arm64`, `x86_64`, `win64`, `arm9`, `m68k`, `wasm32`) use
-their platform's own varargs ABI (registers and stack, per call), so there is no
-shared buffer, no payload cap and no reentrance hazard. Code that stays within
-the limit is portable to all of them. Code that exceeds it works everywhere
-except xt6502.

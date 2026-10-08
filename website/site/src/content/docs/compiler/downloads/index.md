@@ -17,6 +17,7 @@ cross-build native binaries for every target with **no other toolchain installed
 | Windows (x64) | [xcc-win64-0.74.zip](/downloads/xcc-win64-0.74.zip) | 7.5 MB |
 | arm9 sysroot (any host) | [xcc-arm9-sysroot-0.74.tar.bz2](/downloads/xcc-arm9-sysroot-0.74.tar.bz2) | 830 KB |
 | UXKit GTK 4 library (Linux x86_64) | [xcc-uxgtk-linux-0.74.tar.bz2](/downloads/xcc-uxgtk-linux-0.74.tar.bz2) | 110 KB |
+| UXKit library (macOS arm64, Windows x64, Linux x86_64, web) | [xcc-uxkit-0.74.tar.bz2](/downloads/xcc-uxkit-0.74.tar.bz2) | 2.7 MB |
 
 Every archive contains the same compiler. Each host build cross-compiles to **all**
 targets, so the platform you download for decides only where the compiler runs.
@@ -75,6 +76,23 @@ build is against GTK 4.22, and an older GTK 4 may lack a symbol it uses. Linking
 from a Mac also needs a copy of the target's `libgtk-4.so` on the `-L` path.
 UXKit is LGPLv3: the archive carries the library's source and a script that
 rebuilds it against any machine's GTK 4.
+
+## UXKit library
+
+UXKit built as a library for macOS (arm64), Windows (x64), Linux (x86_64) and the
+web, for xcc 0.74. Put its `3p/` beside the versioned install, so that
+`/opt/xcc/3p/uxkit/` sits next to `/opt/xcc/0.74/`:
+
+```bash
+tar xjf xcc-uxkit-0.74.tar.bz2
+sudo cp -R xcc-uxkit-0.74/3p /opt/xcc/
+```
+
+A program then names UXKit once, with `#use <UXKit>`, and builds with nothing
+else: `xcc -A arm64 app.xc -o app`. On Windows ship `libUXKit.dll` beside the
+program; on Linux `libUXKit.so` and `libUXGtk.so` (the machine needs GTK 4); on
+the web `libUXKit.wasm`, `libUXKit.json` and the two `ux_web_*.js` files. UXKit
+is LGPLv3; the archive carries its source and the script that rebuilds it.
 
 ## Linux
 

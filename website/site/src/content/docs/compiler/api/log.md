@@ -4,8 +4,10 @@ description: "Logging on every target: levels with a minimum, named subsystem ch
 ---
 
 `Log` is the logging facade: a program writes `Log.info("connected %d", n)` on
-every target, and where the text goes is the platform's business (the browser
-console on wasm32, the system log on iOS, standard output elsewhere).
+every target, and where the text goes is the platform's business: the browser
+console on wasm32, the system log on iOS, logcat on Android, the screen on the
+6502 and standard output elsewhere (the table under [Where it
+goes](#where-it-goes)).
 
 ```c
 #import "Log.xc"
@@ -134,6 +136,22 @@ static void removeMonitor(callback cb void(String* subsystem, u8 level, String* 
 [↑ Topics](#topics)
 
 ## Where it goes
+
+The Logger made on first use is the platform's, and it writes to the place
+that platform's developers look at:
+
+| Platform | Destination | To see it |
+|---|---|---|
+| macOS, Linux, Windows, arm9, m68k | standard output, through [`Stdio`](/compiler/api/stdio/); `error:` and `warning:` are prefixed, in red and yellow on a terminal | the terminal, or redirect `stdout` |
+| iOS, iOS simulator | the system log, through `syslog`: errors at `LOG_ERR`, warnings at `LOG_WARNING`, the rest at `LOG_NOTICE` | Console.app, `log stream`, or `xcrun simctl spawn booted log stream` for the simulator |
+| Android | standard output, which the app's glue copies line by line to logcat under the tag `xcapp` at priority `INFO` | `adb logcat -s xcapp` |
+| a browser (wasm32) | the browser console: `console.error` for errors, `console.warn` for warnings, `console.log` for the rest | the page's developer console |
+| xt6502 | the text screen, through `Stdio` | the screen |
+
+`debug` messages go where `info` messages go on every platform. A program that
+wants something else, a file say, installs its own Logger with
+[`setLogger`](#setlogger); monitors see every message whatever the Logger does
+with it.
 
 ### Logger
 ```c

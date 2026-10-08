@@ -243,6 +243,27 @@ volatile u8* COLBK = (u8*)$D01A;
 *COLBK = *COLBK + (u8)1;      // both accesses happen even at -O3 (volatile)
 ```
 
+### The null pointer: `nil`
+
+`nil` is the null pointer, of whatever pointer type the place it is used in
+has: a class pointer, a pointer to a scalar, a `string` or the raw `pointer`.
+It is written wherever a pointer is wanted and compared with `==` and `!=`.
+**From 0.75.**
+
+```c
+Node* head = nil;
+if (head == nil) head = Node.make();
+u32* p = nil;
+string s = nil;
+Node* firstOr(Node* a, Node* b) { return a != nil ? a : b; }
+```
+
+`nil` is a pointer and nothing else: `u32 n = nil`, `nil + 1`, `nil < p` and
+`n == nil` with an integer `n` are errors. The literal `0` still converts to a
+pointer as it always has, so existing code is unaffected; `nil` says what is
+meant, and the compiler holds it to that. A class pointer assigned `nil`
+releases what it held, as assigning `0` does.
+
 ## Casting
 
 Casting uses C's `(type)` syntax:

@@ -53,26 +53,23 @@ file is a settings file, not a document.
 
 ### Where `standard` keeps the values
 
-[`standard`](#standard) uses the first of these that applies:
+When `$XCC_SETTINGS_DIR` is set and non-empty, [`standard`](#standard) keeps
+its values in the text file `$XCC_SETTINGS_DIR/<name>.conf` on every platform;
+a test or a script uses it to say exactly where the settings go. Otherwise the
+store is the platform's:
 
-1. **`$XCC_SETTINGS_DIR`**, when it is set and non-empty: the text file
-   `$XCC_SETTINGS_DIR/<name>.conf`, on every platform. A test or a script can
-   use it to say exactly where the settings go.
-2. **The platform's own store**, where it has one:
+| Platform | Store | To look at it |
+|---|---|---|
+| macOS, iOS | the user's preferences, domain `<name>` (CFPreferences, what NSUserDefaults uses) | `defaults read <name>` |
+| Windows | the registry key `HKEY_CURRENT_USER\Software\<name>`, one `REG_SZ` value per setting | `reg query HKCU\Software\<name>` |
+| a browser (wasm32) | the page's `localStorage` item `<name>`, a JSON object of strings | `JSON.parse(localStorage.getItem(name))` |
+| Linux, Android | the text file `$XDG_CONFIG_HOME/<name>.conf`, or `$HOME/.config/<name>.conf` when that is not set | `cat ~/.config/<name>.conf` |
+| arm9, m68k | the same text file when the target gives a home directory (`$HOME`); else a [`memory`](#memory) store | the file |
+| xt6502 | none: a [`memory`](#memory) store, whose [`save`](#save) returns `false` | — |
 
-   | Platform | Store | To look at it |
-   |---|---|---|
-   | macOS, iOS | the user's preferences, domain `<name>` (CFPreferences, what NSUserDefaults uses) | `defaults read <name>` |
-   | Windows | the registry key `HKEY_CURRENT_USER\Software\<name>`, one `REG_SZ` value per setting | `reg query HKCU\Software\<name>` |
-   | a browser (wasm32) | the page's `localStorage` item `<name>`, a JSON object of strings | `JSON.parse(localStorage.getItem(name))` |
-
-   [`path`](#path) is `0` for these. On macOS a reverse-DNS name such as
-   `com.example.demo` is the convention, as it is for any app's preferences.
-3. **A text file**: `$XDG_CONFIG_HOME/<name>.conf`, or
-   `$HOME/.config/<name>.conf` when that is not set. This is Linux, Android and
-   the other targets with a filesystem.
-4. **Nothing to use** — no store and no home: a [`memory`](#memory) store,
-   whose [`save`](#save) returns `false` rather than pretending.
+[`path`](#path) is `0` for the three native stores and names the file for the
+others. On macOS a reverse-DNS name such as `com.example.demo` is the
+convention, as it is for any app's preferences.
 
 The platform stores hold only text, as Settings does. A value some other
 program put there as a number or a boolean (`defaults write <name> k -int 3`,

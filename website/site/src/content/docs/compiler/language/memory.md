@@ -30,10 +30,9 @@ The compiler manages reference counts automatically. ARC is always on. Every hea
 | `xt6502` | 7 bytes | 16-bit at `obj-2` |
 | `m68k` | 14 bytes | 16-bit at `obj-2` |
 | `arm9` | 24 bytes | 16-bit at `obj-2` |
-| `wasm32` | 38 bytes | 16-bit at `obj-2` |
-| `arm64` (macOS, iOS, Android), `x86_64`, `win64` | 40 bytes | 32-bit at `obj-4` |
+| `wasm32`, `arm64` (macOS, iOS, Android), `x86_64`, `win64` | 40 bytes | 32-bit at `obj-4` |
 
-The hosts use a 32-bit count because one object can be retained more than 65,535 times in an ordinary large program. On the other targets the 16-bit count saturates at 65,535: a retain at that value leaves it there, and so does a release, so an object that reaches it is never freed.
+The hosts and wasm32 use a 32-bit count because one object can be retained more than 65,535 times in an ordinary large program. On xt6502, m68k and arm9 the 16-bit count saturates at 65,535: a retain at that value leaves it there, and so does a release, so an object that reaches it is never freed.
 
 **xt6502**: a 7-byte header in a hand-written coalescing free list:
 
