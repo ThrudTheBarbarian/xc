@@ -447,6 +447,11 @@ class RKRow : Object
             ks.add(RKChoice.of((u8*)"vertical"));
             ks.add(RKChoice.of((u8*)"divider"));
             }
+        else if (UXRscDoc.seq(cls, (u8*)"UXTabView"))
+            {
+            ks.add(RKChoice.of((u8*)"tabs"));
+            ks.add(RKChoice.of((u8*)"selected"));
+            }
         return ks;
         }
 

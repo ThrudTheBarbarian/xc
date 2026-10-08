@@ -28,6 +28,7 @@
 #import "UXTableView.xc"
 #import "UXScrollView.xc"
 #import "UXSplitView.xc"
+#import "UXTabView.xc"
 #import "UXOutlineView.xc"
 #import "UXCollectionView.xc"
 #import "UXGeometry.xc"
@@ -223,6 +224,10 @@ class UXRsc
             {
             return (Object*)new UXSplitView();
             }
+        if (UXRscDoc.seq(cls, (u8*)"UXTabView"))
+            {
+            return (Object*)new UXTabView();
+            }
         return (Object*)0;
         }
 
@@ -359,6 +364,13 @@ class UXRsc
                 {
                 sp.setDividerPos((i16)dp);
                 }
+            return;
+            }
+        UXTabView* tb = (UXTabView* ?)(Object*)v;
+        if (tb != (UXTabView*)0)
+            {
+            UXRsc.eachPart(doc.attrIn(formId, logicalId, theme, (u8*)"tabs"), (pointer)tb, (i32)4);
+            tb.selectTab(UXRsc.attrInt(doc, formId, logicalId, theme, (u8*)"selected", (i32)0));
             }
         }
     // ---- autoresizing: how a view follows its container when that is resized ---------------------
@@ -448,7 +460,8 @@ class UXRsc
         return UXDate.make(f[0], f[1], f[2]);
         }
     // Add each part of "A|B|C" to a list control: 0 a segmented control's segments, 1 a combo box's
-    // items, 2 a breadcrumb's segments, 3 a collection view's items.  The count.
+    // items, 2 a breadcrumb's segments, 3 a collection view's items, 4 a tab view's tabs (each a new
+    // content view).  The count.
     static i32 eachPart(u8* list, pointer target, i32 to)
         {
         if (list == (u8*)0)
@@ -477,9 +490,11 @@ class UXRsc
                 else if (to == (i32)2)
                     { ((UXBreadcrumb*)(Object*)target).addSegment(part, n);
                     }
-                else
+                else if (to == (i32)3)
                     { ((UXCollectionView*)(Object*)target).addItem((Object*)0, part);
                     }
+                else
+                    { ((UXTabView*)(Object*)target).addTab(part, new UXView()); }
                 n = n + (i32)1;
                 if (list[i] == (u8)0)
                     {
@@ -747,6 +762,23 @@ class UXRsc
                 {
                 dx[0] = slot == (i32)1 ? (i32)sp.dividerPosition() : (i32)0;
                 return p;
+                }
+            }
+        UXTabView* tb = (UXTabView* ?)(Object*)v;
+        if (tb != (UXTabView*)0)
+            {
+            i32 slot = (i32)0;
+            if (doc != (UXRscDoc*)0)
+                {
+                slot = UXRsc.attrInt(doc, formId, child.logicalId, theme, (u8*)"slot", (i32)0);
+                }
+            UXView* c = tb.contentAt(slot);
+            if (c != (UXView*)0)
+                {
+                UXRect cf = c.frame();
+                dx[0] = (i32)cf.x;
+                dy[0] = (i32)cf.y;
+                return c;
                 }
             }
         return v;
