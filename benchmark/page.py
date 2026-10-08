@@ -22,7 +22,12 @@ SOURCES_PAGE = os.path.join(REPO, "website", "site", "src", "content", "docs", "
 SOURCES_URL = "/compiler/benchmark-sources/"
 SRC_FILES = (("xc", "xc", "c"), ("m", "Objective-C", "objc"), ("cpp", "C++", "cpp"), ("swift", "Swift", "swift"))
 
-LANGS = (("objc", "Objective-C", "#d4a017"), ("cpp", "C++", "#3b82f6"), ("swift", "Swift", "#e5534b"))
+# "gcc" is the C++ source built with GCC on the Linux host; the arm64 side has
+# no figure for it (every reader of that column is an x86-64 Linux reader), and
+# releases before 0.74 measured no GCC at all, so each use guards for a
+# missing entry.
+LANGS = (("objc", "Objective-C", "#d4a017"), ("cpp", "C++ (clang)", "#3b82f6"),
+         ("gcc", "C++ (GCC)", "#16a34a"), ("swift", "Swift", "#e5534b"))
 PLATFORMS = (("arm64", ""), ("x86-64", "_x86_64"))
 # Benchmarks whose sources changed in a way that makes their earlier times
 # incomparable, and the release from which their times are comparable again.
@@ -239,9 +244,10 @@ def table(cur, suffix):
         others = [d[l + suffix] for l, _, _ in LANGS if d.get(l + suffix)]
         rows.append((x / min(others) if x and others else 0, b, d))
     rows.sort(key=lambda r: -r[0])
-    out = ["| benchmark | xc | Objective-C | C++ | Swift | xc vs the fastest of the others |", "|---|---|---|---|---|---|"]
+    out = ["| benchmark | xc | Objective-C | C++ (clang) | C++ (GCC) | Swift | xc vs the fastest of the others |",
+           "|---|---|---|---|---|---|---|"]
     for r, b, d in rows:
-        cells = ["%.2f" % d[k + suffix] if d.get(k + suffix) else "–" for k in ("xc", "objc", "cpp", "swift")]
+        cells = ["%.2f" % d[k + suffix] if d.get(k + suffix) else "–" for k in ("xc", "objc", "cpp", "gcc", "swift")]
         out.append("| [`%s`](%s#%s) | %s | **%s** |" % (b, SOURCES_URL, b, " | ".join(cells), speed(r)))
     return "\n".join(out)
 
@@ -263,7 +269,7 @@ def separate(cur):
     out = []
     for b in SEPARATE:
         d = cur.get(b, {}).get("O3", {})
-        rows = ["| `%s` | xc | Objective-C | C++ | Swift |" % b, "|---|---|---|---|---|"]
+        rows = ["| `%s` | xc | Objective-C | C++ (clang) | C++ (GCC) | Swift |" % b, "|---|---|---|---|---|---|"]
         for (pname, suf), mach in zip(PLATFORMS, ("Apple M4 Max", "AMD Ryzen 9 9955HX")):
             x = d.get("xc" + suf)
             if not x:
@@ -287,11 +293,13 @@ def standing(cur):
         for l, name, _ in LANGS:
             g = gmean([d["O3"]["xc" + suf] / d["O3"][l + suf] for d in general(cur).values()
                        if d["O3"].get("xc" + suf) and d["O3"].get(l + suf)])
+            if g is None:
+                continue # not measured on this target (GCC on arm64)
             (ahead if g < 1.0 else behind).append(name)
         if not behind:
-            parts.append("On %s xc is ahead of all three." % pname)
+            parts.append("On %s xc is ahead of all of them." % pname)
         elif not ahead:
-            parts.append("On %s xc is behind all three." % pname)
+            parts.append("On %s xc is behind all of them." % pname)
         else:
             parts.append("On %s xc is ahead of %s and behind %s." % (pname, join(ahead), join(behind)))
     if len(parts) == 2 and parts[0].replace("arm64", "") == parts[1].replace("x86-64", ""):
@@ -517,7 +525,7 @@ names a device, a kernel language or a thread.
 
 PAGE_TEMPLATE = """---
 title: Performance
-description: How xcc-compiled code compares with clang's Objective-C and C++ and with Swift on the same programs, measured on twenty benchmarks across arm64 and x86-64.
+description: How xcc-compiled code compares with clang's Objective-C and C++, with GCC's C++ and with Swift on the same programs, measured on twenty benchmarks across arm64 and x86-64.
 ---
 
 The compiler is measured on twenty programs, each written four times: in the
@@ -526,7 +534,9 @@ with the same algorithm and the same data. All are built with optimisation
 (`-O3` for xc, Objective-C and C++, `-O` for Swift), every version prints a
 checksum, and a run only counts if all four checksums agree. Every program, in
 all four languages, is on the [benchmark sources](/compiler/benchmark-sources/)
-page; each benchmark's name below links to its own.
+page; each benchmark's name below links to its own. On x86-64 the C++ source
+is built twice, with clang and with GCC (`g++ -O3`), so the Linux figures carry
+a column for each compiler.
 
 Each figure is measured with the released {release} `xcc` on two machines:
 

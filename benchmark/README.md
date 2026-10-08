@@ -14,7 +14,11 @@ python3 benchmark/report.py              # render v0.6/index.html
 ```
 
 Useful flags: `--version` picks the output directory, `--bench` restricts to one
-benchmark, `--opt` to one level, `--repeats` sets runs per data point.
+benchmark, `--opt` to one level, `--repeats` sets runs per data point, and
+`--langs` to some languages: `xc`, `objc`, `cpp` (clang++), `gcc` (the same C++
+source through the Linux host's g++; x86-64 only) and `swift`. A run with
+`--langs` or `--bench` adds to the version's existing results rather than
+replacing them, so one language can be measured later (`--langs gcc --opt O3`).
 
 ## Layout
 

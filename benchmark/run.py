@@ -19,7 +19,8 @@ choice on a machine that is also doing other things.
   run.py --bench int_accum   restrict to one benchmark
   run.py --repeats 7         runs per data point
   run.py --opt O2            restrict to one optimisation level
-  run.py --langs cpp,swift   restrict to some languages (xc objc cpp swift)
+  run.py --langs cpp,swift   restrict to some languages (xc objc cpp gcc swift;
+                             gcc is the C++ source through the Linux host's g++)
   run.py --max-load 0.25     wait until each machine's 1-minute load average,
                              per core, is at or below this before timing on it
 
@@ -173,7 +174,7 @@ def build_remote(name, opt, tag, host, lang):
     flags that host's own environment script sets. C++ and Swift are built
     there too, with that host's clang++ and swiftc.
     """
-    ext = {"objc": ".m", "cpp": ".cpp", "swift": ".swift"}[lang]
+    ext = {"objc": ".m", "cpp": ".cpp", "gcc": ".cpp", "swift": ".swift"}[lang]
     src = os.path.join(SRC, name + ext)
     incs = [os.path.join(SRC, "include", "bench_time.h")]
     if lang == "swift":
@@ -192,6 +193,10 @@ def build_remote(name, opt, tag, host, lang):
                  % (rdir, opt, out, name))
     elif lang == "cpp":
         build = "clang++ -std=c++17 -I%s -%s -o %s %s.cpp" % (rdir, opt, out, name)
+    elif lang == "gcc":
+        # The same C++ source through that host's GCC: the comparison a Linux
+        # reader expects, beside clang's.
+        build = "g++ -std=c++17 -I%s -%s -o %s %s.cpp" % (rdir, opt, out, name)
     else:
         build = ("swiftc %s -parse-as-library -o %s include/bench_time.swift %s.swift"
                  % (swift_opt(opt), out, name))
@@ -316,7 +321,8 @@ def main():
     ap.add_argument("--repeats", type=int, default=5)
     ap.add_argument("--max-load", type=float, default=MAX_LOAD)
     ap.add_argument("--langs", default=None,
-                    help="comma-separated subset of xc,objc,cpp,swift")
+                    help="comma-separated subset of xc,objc,cpp,gcc,swift (gcc: the C++ source "
+                         "through the Linux host's g++; x86-64 only)")
     args = ap.parse_args()
     MAX_LOAD = args.max_load
 
@@ -345,6 +351,7 @@ def main():
         langs.append(("xc_x86_64", compile_xc_x86))
         langs.append(("objc_x86_64", None))   # compiled on the remote host
         langs.append(("cpp_x86_64", None))
+        langs.append(("gcc_x86_64", None))    # the C++ source through GCC, Linux only
         langs.append(("swift_x86_64", None))
         print("x86-64 legs enabled on the configured host: xc is cross-built here "
               "and shipped as the release links it by default; Objective-C, C++ and Swift are compiled "
@@ -352,7 +359,7 @@ def main():
     if args.langs:
         want = set(args.langs.split(","))
         langs = [(l, c) for l, c in langs if l.split("_x86_64")[0] in want]
-    source_ext = {"xc": ".xc", "objc": ".m", "cpp": ".cpp", "swift": ".swift"}
+    source_ext = {"xc": ".xc", "objc": ".m", "cpp": ".cpp", "gcc": ".cpp", "swift": ".swift"}
 
     for opt in opts:
         for name in names:
@@ -363,7 +370,7 @@ def main():
                 # is simply not measured in that language.
                 if not os.path.isfile(os.path.join(SRC, name + source_ext[base])):
                     continue
-                if lang in ("objc_x86_64", "cpp_x86_64", "swift_x86_64"):
+                if lang in ("objc_x86_64", "cpp_x86_64", "gcc_x86_64", "swift_x86_64"):
                     rpath, err = build_remote(name, opt, opt, host, base)
                     if rpath is None:
                         failures.append((name, lang, opt, err if isinstance(err, list) else [str(err)]))
