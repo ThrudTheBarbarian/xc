@@ -357,6 +357,50 @@ def par_tables(version):
     return "\n".join(out)
 
 
+def vulkan_notes(version):
+    """The notes on CUDA against Vulkan on the Windows machine, from the same
+    results as its table, so they follow each release's figures."""
+    path = os.path.join(ROOT, "par", version, "results.json")
+    if not os.path.exists(path):
+        return ""
+    with open(path) as fh:
+        res = json.load(fh)
+    rows = [(b, r["windows"]) for b, r in sorted(res.items())
+            if "gpu" in r.get("windows", {}) and "vulkan" in r.get("windows", {})]
+    if not rows:
+        return ""
+    faster, level, slower = [], [], []
+    for b, r in rows:
+        c, v = r["gpu"]["best_us"], r["vulkan"]["best_us"]
+        pair = "`%s` (%s ms against %s)" % (b, ms(v), ms(c))
+        if v < c * 0.95:
+            faster.append(pair)
+        elif v > c * 1.05:
+            slower.append(pair)
+        else:
+            level.append("`%s`" % b)
+    parts = []
+    if faster:
+        parts.append("faster on " + " and ".join(faster))
+    if level:
+        parts.append("level on " + " and ".join(level))
+    if slower:
+        parts.append("slower on " + " and ".join(slower))
+    said = parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1]
+    note = "- **Vulkan against CUDA:** on the RTX 3090, Vulkan is " + said + "."
+    if faster:
+        note += (" On an NVIDIA GPU `auto` uses CUDA; `XC_PAR_GPU=vulkan` chooses"
+                 " Vulkan.")
+    firsts = lambda k: [r[k]["first_us"] for _, r in rows]
+    span = lambda us: "%s to %s ms" % (ms(min(us)).split(".")[0], ms(max(us)).split(".")[0])
+    note += ("\n- **The first run** carries one-off costs (building the kernel, and on NVIDIA\n"
+             "  creating the driver context and compiling the PTX or SPIR-V), so it is shown\n"
+             "  apart: a few tens of milliseconds on Metal and the integrated GPU, and on the\n"
+             "  3090 %s through CUDA and %s through Vulkan. `auto` pays it\n"
+             "  once, while it measures." % (span(firsts("gpu")), span(firsts("vulkan"))))
+    return note
+
+
 def sources_page(names):
     """Every benchmark's four programs, one section each, the languages in
     tabs that stay in step (choosing xc once shows xc everywhere)."""
@@ -430,6 +474,7 @@ def main():
         hist_list=", ".join(v.lstrip("v") for v in versions),
         changed=", ".join("`%s`" % b for b in sorted(CHANGED_IN)),
         par=par_tables(a.current),
+        vulkan=vulkan_notes(a.current),
     )
     with open(PAGE, "w") as fh:
         fh.write(page)
@@ -598,13 +643,7 @@ What the tables show:
   threads. It just beats them on `mandelbrot` and `nbody` and loses on the
   other two; its copies of `saxpy`'s arrays are slower still, because the
   runtime does not yet use the CPU's cache for them there.
-- **Vulkan against CUDA:** on the RTX 3090, Vulkan comes within 1.2–1.7× of
-  CUDA's times.
-- **The first run** carries one-off costs (building the kernel, and on NVIDIA
-  creating the driver context and compiling the PTX or SPIR-V), so it is shown
-  apart: a few tens of milliseconds on Metal and the integrated GPU, and on the
-  3090 about 250 ms through CUDA and 130 to 190 through Vulkan. `auto` pays it
-  once, while it measures.
+{vulkan}
 
 ## Release to release
 

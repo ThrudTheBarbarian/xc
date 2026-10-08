@@ -212,12 +212,11 @@ What the tables show:
   threads. It just beats them on `mandelbrot` and `nbody` and loses on the
   other two; its copies of `saxpy`'s arrays are slower still, because the
   runtime does not yet use the CPU's cache for them there.
-- **Vulkan against CUDA:** on the RTX 3090, Vulkan comes within 1.2–1.7× of
-  CUDA's times.
+- **Vulkan against CUDA:** on the RTX 3090, Vulkan is faster on `mandelbrot` (1.1 ms against 1.6) and `nbody` (0.9 ms against 1.9), level on `perlin` and slower on `saxpy` (44.8 ms against 39.9). On an NVIDIA GPU `auto` uses CUDA; `XC_PAR_GPU=vulkan` chooses Vulkan.
 - **The first run** carries one-off costs (building the kernel, and on NVIDIA
   creating the driver context and compiling the PTX or SPIR-V), so it is shown
   apart: a few tens of milliseconds on Metal and the integrated GPU, and on the
-  3090 about 250 ms through CUDA and 130 to 190 through Vulkan. `auto` pays it
+  3090 202 to 258 ms through CUDA and 122 to 178 ms through Vulkan. `auto` pays it
   once, while it measures.
 
 ## Release to release
