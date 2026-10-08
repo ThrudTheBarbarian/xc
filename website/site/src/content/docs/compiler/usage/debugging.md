@@ -73,9 +73,5 @@ Source lines, stepping by line and call-frame information need `-g`.
 - **Objects, structs and arrays.** Variables holding a class instance, a
   struct or an array are not described yet, and neither is a variable that is
   declared again in an inner scope.
-- **Temporaries in `-g` builds.** An object made only to compute a variable's
-  initial value, such as the string in `i32 n = count(String.withCString("a,b"))`,
-  is not released in a `-g` build. That costs a little memory while debugging
-  and is fixed in a later release; builds without `-g` release it as before.
 - **Other targets.** `-g` is accepted on `arm9`, `m68k`, `wasm32`, `android`
   and the 6502, and adds nothing there yet.

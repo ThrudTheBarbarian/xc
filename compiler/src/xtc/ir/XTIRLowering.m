@@ -9851,8 +9851,19 @@ static const NSUInteger kVarargSlotBytes = 8;
         [self lowerBlockStmt:(XTBlockNode*)node];
         break;
     case XTASTNodeKindVariableDecl:
+        {
+        // The SSA path of lowerVarDecl releases the initialiser's leftover
+        // +1 temps itself; the PINNED paths (an `&`-taken local, every local
+        // of a goto function, every plain local under -g) returned without
+        // doing so, and the next statement's boundary dropped them untracked:
+        // `u32 i = f(String.withCString(..))` leaked the string whenever `i`
+        // lived in a slot. The slot's Store has already consumed the value it
+        // adopted, so what is left here is only the temps nothing owns.
+        XTIRBlock* declStart = self.currentBlock;
         [self lowerVarDecl:(XTVariableDeclNode*)node];
+        [self flushOwnedTempsFrom:declStart];
         break;
+        }
     case XTASTNodeKindReturn:
         [self lowerReturnStmt:(XTReturnNode*)node];
         break;

@@ -8449,19 +8449,13 @@ class ClassInfo
         if (k == (u16)nkVariableDecl)
             {
             lowerVarDecl(n);
-            // Under -g the reference releases only the SSA path's +1 temps: a
-            // local -g pins (every plain local) drops them untracked, so
-            // `u32 i = f(String.withCString(..))` leaks the string in a -g
-            // build. Mirrored here so the -g IR stays identical, and ONLY under
-            // -g: without it this path releases them as before. Fix both
-            // compilers together (release a pinned declaration's temps too).
-            if (!_failed && (!_debugInfo || pinOf(n.name()) == (IRPinned*)0))
+            // The declaration's leftover +1 temps are released here whether
+            // the local is SSA or pinned: the slot's Store has consumed the
+            // value it adopted, so what remains is what nothing owns. Under
+            // -g this used to mirror a reference bug that dropped a pinned
+            // declaration's temps untracked; both compilers release them now.
+            if (!_failed)
                 flushOwnedTemps();
-            else if (!_failed)
-                {
-                _ownedTemps = new Array();
-                _ownedBlocks = new Array();
-                }
             return;
             }
         // A struct declared inside a function is a TYPE, not a run of
