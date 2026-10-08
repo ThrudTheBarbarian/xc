@@ -47,9 +47,9 @@ shape of one.
 #import "UXViewDriver.xc" // UX_ANCHOR_*, UX_FLEX_*
 #import "Array.xc"
 
-#define MAXW 1280 // the largest picture we compute
-#define MAXH 800
-#define MAXIT 256 // iterations per pixel before we call it "inside"
+#define MAXW 4096 // the largest picture we compute; room for a 4K window.  The
+#define MAXH 2304 // buffer is fixed, so a window bigger than it is the one size
+#define MAXIT 256 // that scales rather than recomputes.  Iterations per pixel.
 
 // The buffer a `par` block writes.  A GPU kernel has no heap and no objects, so
 // the pixels go in one global array, read and written element by element.
@@ -72,19 +72,6 @@ class Zoom : Object
         label = (u8*)"";
     }
 }
-```
-
-`gPixels` is a global array, not a field, because a GPU kernel has no heap and
-no objects: the pixels go in one flat array, filled element by element. The
-array is `MAXW * MAXH` words of `0xAARRGGBB`, the layout
-[`UXGraphics.drawPixels`](/compiler/api/uxkit/uxgraphics/) reads, and a `par`
-block over that grid or a smaller one writes the front of it.
-
-`Zoom` is one place on the plane: the centre and the width of the view, in the
-complex numbers. The history is a list of them.
-
-## The widget
-
 ```c
 // The widget.  A plain UXView draws nothing of its own, so drawRect paints it;
 // and a plain view is where the mouse arrives.
@@ -140,8 +127,7 @@ class FractalView : UXView
     {
         dirty = true;
         super.setFrame(f);
-    }
-```
+    }```
 
 The view holds the region it is showing (`cx`, `cy`, `span`), the buffer it last
 computed (`shown`, with its size), and a `dirty` flag. It also holds a callback,
@@ -239,10 +225,20 @@ here, on every backend.
         }
         if (dragging)
         {
-            g.fillRectRGB(self.selection(), (i32)255, (i32)255, (i32)0);
+            self.outline(g, self.selection());
         }
     }
-```
+    // A hollow yellow rectangle, four thin bars, drawn over the picture while a drag is in progress.
+    void outline(UXGraphics* g, UXRect r)
+    {
+        i16 t = (i16)2; // the bar's thickness
+        i32 yb = (i32)r.y + (i32)r.h - (i32)t;
+        i32 xr = (i32)r.x + (i32)r.w - (i32)t;
+        g.fillRectRGB(UXGeom.make(r.x, r.y, r.w, t), (i32)255, (i32)255, (i32)0);
+        g.fillRectRGB(UXGeom.make(r.x, (i16)yb, r.w, t), (i32)255, (i32)255, (i32)0);
+        g.fillRectRGB(UXGeom.make(r.x, r.y, t, r.h), (i32)255, (i32)255, (i32)0);
+        g.fillRectRGB(UXGeom.make((i16)xr, r.y, t, r.h), (i32)255, (i32)255, (i32)0);
+    }```
 
 `render` does the arithmetic. It works out the plane's rectangle for the current
 size, then the `par :grid(w, h)` block runs its body once per pixel. In the body
@@ -266,7 +262,8 @@ and the old one is freed here.
 `drawRect` is the paint. It recomputes first when the region or the size
 changed, then blits the buffer with
 [`drawPixels`](/compiler/api/uxkit/uxgraphics/). While a drag is in progress it
-also draws the rubber band, on top of the picture.
+also draws the rubber band as a hollow yellow rectangle, four thin bars over the
+picture, so the zoom target is visible without hiding it.
 
 ## The drag, keeping the window's shape
 
@@ -401,8 +398,7 @@ also draws the rubber band, on top of the picture.
         span = fw * span;
         self.markDirty();
     }
-}
-```
+}```
 
 The press and the drag are both in `mouseDown`. A desktop backend has no
 asynchronous drag: the platform owns the run loop while the button is held, so

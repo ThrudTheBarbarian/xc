@@ -19,9 +19,9 @@
 #import "UXViewDriver.xc" // UX_ANCHOR_*, UX_FLEX_*
 #import "Array.xc"
 
-#define MAXW 1280 // the largest picture we compute
-#define MAXH 800
-#define MAXIT 256 // iterations per pixel before we call it "inside"
+#define MAXW 4096 // the largest picture we compute; room for a 4K window.  The
+#define MAXH 2304 // buffer is fixed, so a window bigger than it is the one size
+#define MAXIT 256 // that scales rather than recomputes.  Iterations per pixel.
 
 // The buffer a `par` block writes.  A GPU kernel has no heap and no objects, so
 // the pixels go in one global array, read and written element by element.
@@ -183,8 +183,19 @@ class FractalView : UXView
         }
         if (dragging)
         {
-            g.fillRectRGB(self.selection(), (i32)255, (i32)255, (i32)0);
+            self.outline(g, self.selection());
         }
+    }
+    // A hollow yellow rectangle, four thin bars, drawn over the picture while a drag is in progress.
+    void outline(UXGraphics* g, UXRect r)
+    {
+        i16 t = (i16)2; // the bar's thickness
+        i32 yb = (i32)r.y + (i32)r.h - (i32)t;
+        i32 xr = (i32)r.x + (i32)r.w - (i32)t;
+        g.fillRectRGB(UXGeom.make(r.x, r.y, r.w, t), (i32)255, (i32)255, (i32)0);
+        g.fillRectRGB(UXGeom.make(r.x, (i16)yb, r.w, t), (i32)255, (i32)255, (i32)0);
+        g.fillRectRGB(UXGeom.make(r.x, r.y, t, r.h), (i32)255, (i32)255, (i32)0);
+        g.fillRectRGB(UXGeom.make((i16)xr, r.y, t, r.h), (i32)255, (i32)255, (i32)0);
     }
 
     // ---- the mouse --------------------------------------------------------
