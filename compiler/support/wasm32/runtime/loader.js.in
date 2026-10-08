@@ -77,6 +77,11 @@
     worker.onmessage = (m) => {
       const d = m.data || {};
       if (d.xccOut !== undefined) { (globalThis.xccOut || console.log)(d.xccOut); return; }
+      if (d.xccLog !== undefined) {   // Log.* from the worker: the page's hook, or its console
+        if (globalThis.xccLog) globalThis.xccLog(d.xccLog, d.lvl);
+        else (d.lvl >= 2 ? console.error : d.lvl === 1 ? console.warn : console.log)(d.xccLog);
+        return;
+      }
       if (d.xccMsg !== undefined) { (globalThis.xccOnMessage || (() => {}))(d.xccMsg); return; }
       if (d.xccReq !== undefined) {
         const v = (globalThis.xccOnRequest || (() => 0))(d.xccReq) | 0;
@@ -89,7 +94,10 @@
     };
     worker.postMessage({ ring, canvas: off,
                          workerScript: cfg.workerScript || null,
-                         workerData: cfg.workerData },
+                         workerData: cfg.workerData,
+                         // The page's environment (xccEnv / xccConfig.env), so
+                         // XC_PAR_REPORT and friends reach the program in the worker.
+                         env: globalThis.xccEnv || cfg.env || null },
                        off ? [off] : []);
     return;
   }
@@ -104,6 +112,7 @@
     // BEFORE workerScript runs: a worker has no localStorage, so a page can
     // hand its shim a snapshot of whatever state it keeps there.
     globalThis.xccWorkerData = boot.workerData;
+    if (boot.env) globalThis.xccEnv = boot.env;
     if (boot.workerScript) importScripts(boot.workerScript); // may set xccImports HERE
   }
   let line = [];
@@ -330,6 +339,9 @@
       if (typeof history !== "undefined") history.pushState(null, "", bstr(p, n));
     },
     _b_log(lvl, p, n) {
+      // In the worker run loop the page prints it, or hands it to its xccLog
+      // hook, as it does the program's output.
+      if (isWorker) { self.postMessage({ xccLog: bstr(p, n), lvl }); return; }
       (lvl >= 2 ? console.error : lvl === 1 ? console.warn : console.log)(bstr(p, n));
     },
     _b_store_load(dp, dn) {
