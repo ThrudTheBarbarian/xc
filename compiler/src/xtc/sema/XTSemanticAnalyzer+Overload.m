@@ -1328,6 +1328,7 @@ static BOOL XTIsErasedKeyType(XTType* t)
         self.expectedType = hint;
     [self analyzeNode:arg];
     self.expectedType = prev;
+    [self checkNilLiteral:arg against:hint];
     }
 
 /****************************************************************************\
@@ -4174,6 +4175,30 @@ static NSInteger XTFmtWrapperIndex(BOOL isVarArgs, NSArray<XTParamNode*>* params
 |* Visit an integer literal: resolve to the narrowest fitting type.
 |* @param node  The integer literal node.
 \****************************************************************************/
+/****************************************************************************\
+|* `nil` is the literal 0 to the type checker, so a null pointer lowers as it
+|* always has, but it names a pointer: a declaration, assignment, return or
+|* argument that gives it to anything else (`u32 n = nil`) is refused. Called
+|* at those four sites with the expression and the type the site wants; a
+|* site that wants nothing in particular (a `%p` argument) lets it through,
+|* and `==` / `!=` check their other operand in visitBinaryExpr. The check is
+|* made at the site, not in visitLiteralInt, because the expected type an
+|* operand or argument inherits from further out is not the type IT is given.
+|* @param expr  The expression at the site.
+|* @param type  The type the site wants, or nil for none.
+\****************************************************************************/
+- (void)checkNilLiteral:(XTASTNode*)expr against:(nullable XTType*)type
+    {
+    if (!expr || !type || expr.nodeKind != XTASTNodeKindLiteralInt)
+        return;
+    if (!((XTLiteralIntNode*)expr).isNil || type.kind == XTTypeKindPointer)
+        return;
+    [self.diagnostics emitError:[NSString stringWithFormat:
+                                              @"nil is a pointer: it cannot be a '%@'",
+                                              type.displayName]
+                             at:expr.location];
+    }
+
 - (void)visitLiteralInt:(XTLiteralIntNode*)node
     {
     int64_t v = node.intValue;

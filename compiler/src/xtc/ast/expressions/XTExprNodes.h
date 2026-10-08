@@ -559,6 +559,10 @@ typedef NS_ENUM(NSInteger, XTAssignOp) {
 // ─────────────────────────────────────────────────────────────────────────────
 @interface XTLiteralIntNode : XTASTNode
 @property(nonatomic, readonly) int64_t intValue;
+// `nil`: the null pointer, spelled as a keyword. It is the literal 0 to the
+// type checker and the lowering, so its IR is the IR `0` gives, and sema
+// refuses it wherever the context is not a pointer (`u32 n = nil`, `nil + 1`).
+@property(nonatomic, readonly) BOOL isNil;
 /****************************************************************************\
 |* Create an integer literal node.
 |* @param value     The parsed 64-bit integer value.
@@ -566,6 +570,12 @@ typedef NS_ENUM(NSInteger, XTAssignOp) {
 |* @return A new integer literal node.
 \****************************************************************************/
 - (instancetype)initWithValue:(int64_t)value location:(XTSourceLocation*)location;
+/****************************************************************************\
+|* Create the `nil` literal: value 0, flagged so sema can check its context.
+|* @param location  Source location of the keyword.
+|* @return A new integer literal node that is `nil`.
+\****************************************************************************/
+- (instancetype)initNilAtLocation:(XTSourceLocation*)location;
 @end
 
 // ─────────────────────────────────────────────────────────────────────────────

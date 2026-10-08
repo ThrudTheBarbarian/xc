@@ -643,6 +643,13 @@ static XTOpInfo operatorInfo(XTTokenType type)
         [self advance];
         return [[XTLiteralBoolNode alloc] initWithBool:NO location:loc];
         }
+    case XTTokenNil:
+        {
+        // The null pointer: an integer literal 0 to everything downstream,
+        // flagged so sema can refuse it where the context is not a pointer.
+        [self advance];
+        return [[XTLiteralIntNode alloc] initNilAtLocation:loc];
+        }
     case XTTokenNew:
         {
         [self advance];

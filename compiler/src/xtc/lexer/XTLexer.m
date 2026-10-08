@@ -27,6 +27,7 @@ static NSDictionary<NSString *, NSNumber *> *sKeywordMap = nil;
             @"break":    @(XTTokenBreak),
             @"continue": @(XTTokenContinue),
             @"goto":     @(XTTokenGoto),
+            @"nil":      @(XTTokenNil),
             @"defer":    @(XTTokenDefer),
             @"throws":   @(XTTokenThrows),
             @"throw":    @(XTTokenThrow),

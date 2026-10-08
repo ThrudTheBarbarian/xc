@@ -434,6 +434,18 @@
     return self;
     }
 /****************************************************************************\
+|* Create the `nil` literal: value 0, flagged so sema can check its context.
+|* @param location  Source location of the keyword.
+|* @return A new integer literal node that is `nil`.
+\****************************************************************************/
+- (instancetype)initNilAtLocation:(XTSourceLocation*)location
+    {
+    self = [self initWithValue:0 location:location];
+    if (self)
+        _isNil = YES;
+    return self;
+    }
+/****************************************************************************\
 |* Dispatch to visitLiteralInt: on the visitor.
 |* @param visitor  An object conforming to XTASTVisitor.
 \****************************************************************************/

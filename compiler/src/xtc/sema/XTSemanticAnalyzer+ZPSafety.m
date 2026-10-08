@@ -684,6 +684,9 @@
         if (node.declaredType && !node.declaredType.isAuto)
             {
             self.expectedType = node.declaredType;
+            // `u32 n = nil`: nil is a pointer, and this is the declaration's
+            // type to say so against.
+            [self checkNilLiteral:node.initialiser against:node.declaredType];
             }
         // `u8 buf[10] = 0..9;` is the ONE position where a range survives the
         // parser (the `for … in` form is desugared where it is parsed), so it
@@ -1296,6 +1299,8 @@
         {
         self.expectedType = (i < retTypes.count) ? retTypes[i] : nil;
         [self analyzeNode:node.values[i]];
+        // `return nil` from a function that does not return a pointer.
+        [self checkNilLiteral:node.values[i] against:self.expectedType];
         }
     self.expectedType = prev;
 
@@ -1960,6 +1965,24 @@
 
     XTType* lt = node.left.resolvedType;
     XTType* rt = node.right.resolvedType;
+    // `nil` is a pointer: it takes part in `==` and `!=` against a pointer
+    // (or another nil), and in nothing else — `nil + 1`, `nil < p` and
+    // `n == nil` with an integer `n` are refused. The literal is the 0 the
+    // lowering has always seen, so a comparison's IR is unchanged.
+    BOOL leftNil = node.left.nodeKind == XTASTNodeKindLiteralInt && ((XTLiteralIntNode*)node.left).isNil;
+    BOOL rightNil = node.right.nodeKind == XTASTNodeKindLiteralInt && ((XTLiteralIntNode*)node.right).isNil;
+    if (leftNil || rightNil)
+        {
+        XTType* other = leftNil ? rt : lt;
+        if (node.op != XTBinaryOpEq && node.op != XTBinaryOpNeq)
+            [self.diagnostics emitError:@"nil is a pointer: it is only compared, with == or !="
+                                     at:node.location];
+        else if (!(leftNil && rightNil) && other && other.kind != XTTypeKindPointer)
+            [self.diagnostics emitError:[NSString stringWithFormat:
+                                                      @"nil is a pointer: it cannot be compared with a '%@'",
+                                                      other.displayName]
+                                     at:node.location];
+        }
     if (lt && rt)
         {
         // The operator's type is the WIDENING OF ITS OPERANDS, and nothing
@@ -2671,6 +2694,8 @@
         self.expectedType = node.lhs.resolvedType;
     [self analyzeNode:node.rhs];
     self.expectedType = prev;
+    // `n = nil` into anything but a pointer.
+    [self checkNilLiteral:node.rhs against:node.lhs.resolvedType];
     node.resolvedType = node.lhs.resolvedType ?: node.rhs.resolvedType ?
                                                                        : [XTType u8Type];
 

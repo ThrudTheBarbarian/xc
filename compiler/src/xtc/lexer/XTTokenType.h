@@ -160,6 +160,7 @@ typedef NS_ENUM(NSInteger, XTTokenType) {
     XTTokenI64,      // i64 — 64-bit signed
     XTTokenU64,      // u64 — 64-bit unsigned
     XTTokenGoto,     // 'goto' — a C-porting aid (undocumented language feature)
+    XTTokenNil,      // 'nil'  — the null pointer, of any pointer type
 };
 
 // Human-readable names for diagnostics / debugging
@@ -207,6 +208,8 @@ static inline NSString* XTTokenTypeName(XTTokenType type)
         return @"continue";
     case XTTokenGoto:
         return @"goto";
+    case XTTokenNil:
+        return @"nil";
     case XTTokenStruct:
         return @"struct";
     case XTTokenTypedef:

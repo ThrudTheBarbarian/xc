@@ -126,11 +126,12 @@ enum TokenType = {
     tokCatch          = 112,
     tokI64            = 113,
     tokU64            = 114,
-    tokGoto           = 115
+    tokGoto           = 115,
+    tokNil            = 116
 };
 
 // The count, for a bounds check on a dumped stream.
-#define TOKEN_TYPE_COUNT 116
+#define TOKEN_TYPE_COUNT 117
 
 // The human name of each token kind, as XTTokenTypeName spells it — for
 // diagnostics only. A kind the reference does not name comes back as `?`.
@@ -160,6 +161,7 @@ class TokenNames
         if (t == (u16)tokBreak) return "break";
         if (t == (u16)tokContinue) return "continue";
         if (t == (u16)tokGoto) return "goto";
+        if (t == (u16)tokNil) return "nil";
         if (t == (u16)tokStruct) return "struct";
         if (t == (u16)tokTypedef) return "typedef";
         if (t == (u16)tokEnum) return "enum";

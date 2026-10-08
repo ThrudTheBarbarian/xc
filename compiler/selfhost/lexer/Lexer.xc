@@ -890,6 +890,8 @@ class Lexer
             {
             if (Lexer._is(w, "new"))
                 return (u16)tokNew;
+            if (Lexer._is(w, "nil"))
+                return (u16)tokNil;
             return (u16)$FFFF;
             }
         if (c == (u8)'a')

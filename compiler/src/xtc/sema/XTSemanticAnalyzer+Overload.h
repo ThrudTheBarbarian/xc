@@ -94,6 +94,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (nullable XTType*)parameterHintForBareCall:(XTCallExprNode*)node argument:(NSUInteger)idx;
 - (nullable XTType*)parameterHintForMethodCall:(XTMethodCallExprNode*)node argument:(NSUInteger)idx;
 - (void)analyzeArgument:(XTASTNode*)arg withHint:(nullable XTType*)hint;
+- (void)checkNilLiteral:(XTASTNode*)expr against:(nullable XTType*)type;
 - (NSString*)describeArgTypes:(NSArray<XTASTNode*>*)args;
 - (BOOL)checkArityOf:(NSString*)label
                fixed:(NSUInteger)fixed

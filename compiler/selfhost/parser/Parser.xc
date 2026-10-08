@@ -3951,6 +3951,18 @@ class Parser
             n.setNum((t == (u16)tokTrue) ? (i64)1 : (i64)0);
             return n;
         }
+        if (t == (u16)tokNil) {
+            // The null pointer: an integer literal 0 to everything downstream,
+            // flagged so sema can refuse it where the context is not a pointer.
+            // Positioned at the keyword, where the reference puts it (mk() after
+            // advance() would stamp the token after it).
+            Token* nilTok = advance();
+            Node* n = mk((u16)nkInt);
+            n.setNum((i64)0);
+            n.setNilLit();
+            n.setPos(nilTok.fileId(), nilTok.line(), nilTok.col());
+            return n;
+        }
         if (t == (u16)tokNew) {
             Token* newTok = advance();
             String* ty = String.withCString("?");

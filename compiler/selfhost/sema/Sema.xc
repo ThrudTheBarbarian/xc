@@ -341,6 +341,27 @@ class Sema
     // the shape an editor can jump to. A node with no position (nothing
     // stamped it, or it was synthesised) degrades to the bare message rather
     // than inventing a line.
+    // `nil` is the literal 0 to the type checker, so a null pointer lowers as
+    // it always has, but it names a pointer: a declaration, assignment, return
+    // or argument that gives it to anything else (`u32 n = nil`) is refused.
+    // Called at those four sites with the expression and the type the site
+    // wants; a site that wants nothing in particular lets it through, and `==`
+    // / `!=` check their other operand in typeBinary. The check is made at the
+    // site, not where the literal is typed, because the expected type an
+    // operand or argument inherits from further out is not the type IT is
+    // given. The message is the reference's, word for word.
+    void checkNil(Node* e, String* want)
+        {
+        if (e == 0 || want == 0 || e.kind() != (u16)nkInt || !e.nilLit())
+            return;
+        if (Types.isPointer(want))
+            return;
+        String* m = String.withCString("nil is a pointer: it cannot be a '");
+        m.append(want);
+        m.appendCString("'");
+        _errorAt(m, e);
+        }
+
     void _errorAt(String* msg, Node* n)
         {
         // A node with no position degrades to the bare message rather than
@@ -1552,6 +1573,10 @@ class Sema
             for (u32 i = (u32)0; i < n.kidCount(); i = i + (u32)1)
                 typeExpr(n.kid(i));
             _rangeIsInitialiser = saveRange;
+            // `u32 n = nil`: nil is a pointer, and this is the declaration's
+            // type to say so against (an `auto` declaration has none yet).
+            for (u32 i = (u32)0; i < n.kidCount(); i = i + (u32)1)
+                checkNil(n.kid(i), _expected);
             _expected = save;
             // `String* s = arr;` / `act_t^ a = someBlock;` — an initialiser is
             // an assignment and is checked as one.
@@ -1730,6 +1755,12 @@ class Sema
             _expected = _curReturn;
             for (u32 i = (u32)0; i < n.kidCount(); i = i + (u32)1)
                 typeExpr(n.kid(i));
+            // `return nil` from a function that does not return a pointer. A
+            // void function has no return type to check against (its value is
+            // refused elsewhere), as in the reference.
+            if (_curReturn != 0 && !Types._is(_curReturn, "void"))
+                for (u32 i = (u32)0; i < n.kidCount(); i = i + (u32)1)
+                    checkNil(n.kid(i), _curReturn);
             _expected = save;
             // `return a.get(0)` from a u16 function unboxes at the return.
             for (u32 i = (u32)0; i < n.kidCount(); i = i + (u32)1)
@@ -1863,6 +1894,8 @@ class Sema
             _expected = n.kid((u32)0).ty();
             typeExpr(n.kid((u32)1));
             _expected = save;
+            // `n = nil` into anything but a pointer.
+            checkNil(n.kid((u32)1), n.kid((u32)0).ty());
             // A boxed value assigned into a primitive unboxes, exactly as it
             // does at a declaration. Only a plain `=`: a compound assignment
             // needs the whole read-modify-write, which the original leaves
@@ -1905,6 +1938,8 @@ class Sema
             _expected = hint;
             typeExpr(n.kid(i));
             _expected = save;
+            // `f(nil)` where every candidate's parameter is not a pointer.
+            checkNil(n.kid(i), hint);
             }
 
         if (k == (u16)nkInt)
@@ -2298,6 +2333,27 @@ class Sema
         {
         if (n.kidCount() < (u32)2)
             return;
+        // `nil` is a pointer: it takes part in `==` and `!=` against a pointer
+        // (or another nil), and in nothing else — `nil + 1`, `nil < p` and
+        // `n == nil` with an integer `n` are refused. Before the constant fold
+        // below, which would otherwise fold `nil + 1` to a number. The literal
+        // is the 0 the lowering has always seen, so a comparison's IR is
+        // unchanged. The messages are the reference's, word for word.
+        bool leftNil = n.kid((u32)0).kind() == (u16)nkInt && n.kid((u32)0).nilLit();
+        bool rightNil = n.kid((u32)1).kind() == (u16)nkInt && n.kid((u32)1).nilLit();
+        if (leftNil || rightNil)
+            {
+            String* other = leftNil ? n.kid((u32)1).ty() : n.kid((u32)0).ty();
+            if (!_isOp(n.op(), "==") && !_isOp(n.op(), "!="))
+                _errorAt(String.withCString("nil is a pointer: it is only compared, with == or !="), n);
+            else if (!(leftNil && rightNil) && other != 0 && !Types.isPointer(other))
+                {
+                String* m = String.withCString("nil is a pointer: it cannot be compared with a '");
+                m.append(other);
+                m.appendCString("'");
+                _errorAt(m, n);
+                }
+            }
         // An operand that reads a primitive element out of a typed collection
         // is the BOX until it is unboxed, and this node types itself from its
         // operands — so it happens here, ahead of everything below.

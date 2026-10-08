@@ -362,6 +362,7 @@ class Node
     bool _autoSuper;     // an `init` that gets `super.init()` injected
     bool _indirect;      // a call through a variable, not to a symbol
     bool _boundCall;     // …and specifically through a bound method
+    bool _nilLit;        // an nkInt that was spelled `nil`: a pointer, not a number
     String* _calleeTy;   // …and the callee's signature spelling
     String* _setter;     // a property WRITE: the setter the assignment became…
     String* _setterCls;  // …and the class that declared it
@@ -442,6 +443,16 @@ class Node
     void setAutoSuperInit(void)
         {
         _autoSuper = true;
+        }
+    // `nil`: an nkInt of value 0 that names the null pointer. The lowering sees
+    // the 0; sema refuses it where the context is not a pointer.
+    bool nilLit(void)
+        {
+        return _nilLit;
+        }
+    void setNilLit(void)
+        {
+        _nilLit = true;
         }
     bool indirect(void)
         {
