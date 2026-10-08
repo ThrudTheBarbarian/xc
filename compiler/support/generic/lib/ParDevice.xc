@@ -78,6 +78,18 @@ bool gParLearned[64];
 i64 gParMeasN[64];
 i64 gParLastN[64];
 bool gParMeasuring[64]; // this run is one auto measures (not decided by a setting or the bounds)
+#if ARCH_win64
+// Windows reaches an NVIDIA GPU two ways, CUDA and Vulkan, and auto measures
+// both: per block, the interface kept (0 none yet, 1 CUDA, 2 Vulkan), the
+// runs on each and what each took (-1 not yet, -2 the block cannot run
+// there), and the interface the current GPU run uses.
+i32 gParApi[64];
+u32 gParCudaRuns[64];
+u32 gParVkRuns[64];
+i64 gParCudaUs[64];
+i64 gParVkUs[64];
+i32 gParRanApi;
+#endif
 
 // A kernel's header line, read, and the run planned over [lo, hi): one item
 // per thread, unless the range is huge — or the block has reductions, whose
@@ -184,6 +196,13 @@ class ParDevice
         gParMeasN[i] = (i64)0;
         gParLastN[i] = (i64)0;
         gParMeasuring[i] = false;
+#if ARCH_win64
+        gParApi[i] = (i32)0;
+        gParCudaRuns[i] = (u32)0;
+        gParVkRuns[i] = (u32)0;
+        gParCudaUs[i] = (i64)-1;
+        gParVkUs[i] = (i64)-1;
+#endif
         gParBlocks = gParBlocks + (u32)1;
         return i;
         }
@@ -203,6 +222,56 @@ class ParDevice
         {
         return Platform.env(String.withCString("XC_PAR_GPU")).equals(String.withCString("vulkan"));
         }
+
+#if ARCH_win64
+    // XC_PAR_GPU's interface: 1 cuda, 2 vulkan, 0 neither (auto chooses).
+    static i32 forcedApi(void)
+        {
+        String* v = Platform.env(String.withCString("XC_PAR_GPU"));
+        if (v.equals(String.withCString("vulkan")))
+            return (i32)2;
+        if (v.equals(String.withCString("cuda")))
+            return (i32)1;
+        return (i32)0;
+        }
+
+    // The interface a GPU run of the block tries first: XC_PAR_GPU's, else
+    // the one kept, else, while auto measures, CUDA and then Vulkan, each
+    // warmed up and timed once. A run auto does not measure uses CUDA.
+    static i32 gpuApi(ParChunk* proto)
+        {
+        i32 f = forcedApi();
+        if (f != (i32)0)
+            return f;
+        u32 i = slot(proto.parName());
+        if (gParApi[i] != (i32)0)
+            return gParApi[i];
+        if (gParMeasuring[i] && gParCudaUs[i] != (i64)-1 && gParVkUs[i] == (i64)-1)
+            return (i32)2;
+        return (i32)1;
+        }
+
+    // The interface the GPU run about to start uses, for ranOnGpu.
+    static void useApi(i32 api)
+        {
+        gParRanApi = api;
+        }
+
+    // The block could not run through api (no such device, or no kernel for
+    // it): while auto measures, the other interface decides alone.
+    static void cannotRun(ParChunk* proto, i32 api)
+        {
+        if (forcedApi() != (i32)0)
+            return;
+        u32 i = slot(proto.parName());
+        if (gParApi[i] != (i32)0 || !gParMeasuring[i])
+            return;
+        if (api == (i32)1)
+            gParCudaUs[i] = (i64)-2;
+        else
+            gParVkUs[i] = (i64)-2;
+        }
+#endif
 
     static bool reporting(void)
         {
@@ -381,6 +450,11 @@ class ParDevice
         if (neg) at = at + (u32)1;
         i64 b = num(c, &at);
         gParGpuFrom[i] = neg ? (i64)-1 : b;
+#if ARCH_win64
+        // ,cuda or ,vulkan: the interface auto chose (none in a 0.73/0.74 record).
+        if (c[at] == (u8)',' && gParApi[i] == (i32)0)
+            gParApi[i] = c[at + (u32)1] == (u8)'v' ? (i32)2 : c[at + (u32)1] == (u8)'c' ? (i32)1 : (i32)0;
+#endif
         }
 
     // A measured run's verdict at size n: the bounds move to take it in (a
@@ -404,7 +478,12 @@ class ParDevice
                 gParGpuFrom[i] = (i64)-1;
             }
         Settings* st = store();
-        st.set(learnedKey(i, proto), String.withFormat("%ld,%ld", gParCpuUpTo[i], gParGpuFrom[i]));
+        String* v = String.withFormat("%ld,%ld", gParCpuUpTo[i], gParGpuFrom[i]);
+#if ARCH_win64
+        if (gParApi[i] != (i32)0)
+            v.appendCString(gParApi[i] == (i32)2 ? ",vulkan" : ",cuda");
+#endif
+        st.set(learnedKey(i, proto), v);
         st.save();
         if (reporting())
             Log.info("par: %s: learned the %s wins at %ld items (CPU up to %ld, GPU from %ld)", gParBlock[i],
@@ -502,11 +581,46 @@ class ParDevice
         if (gParMeasuring[bi])
             gParGpuRuns[bi] = gParGpuRuns[bi] + (u32)1;
         bool decided = gParMeasuring[bi] && gParGpuUs[bi] < (i64)0 && gParGpuRuns[bi] >= (u32)2;
+        i64 measured = took;
+#if ARCH_win64
+        // Neither interface kept yet: each is warmed up and timed on its own,
+        // and the GPU's time is the faster one's once both are known.
+        if (gParMeasuring[bi] && gParApi[bi] == (i32)0 && forcedApi() == (i32)0)
+            {
+            decided = false;
+            if (gParRanApi == (i32)1)
+                {
+                gParCudaRuns[bi] = gParCudaRuns[bi] + (u32)1;
+                if (gParCudaRuns[bi] >= (u32)2 && gParCudaUs[bi] == (i64)-1)
+                    gParCudaUs[bi] = took;
+                }
+            else
+                {
+                gParVkRuns[bi] = gParVkRuns[bi] + (u32)1;
+                if (gParVkRuns[bi] >= (u32)2 && gParVkUs[bi] == (i64)-1)
+                    gParVkUs[bi] = took;
+                }
+            i64 cu = gParCudaUs[bi];
+            i64 vk = gParVkUs[bi];
+            if (cu != (i64)-1 && vk != (i64)-1 && (cu >= (i64)0 || vk >= (i64)0))
+                {
+                bool useVk = cu < (i64)0 || (vk >= (i64)0 && vk < cu);
+                gParApi[bi] = useVk ? (i32)2 : (i32)1;
+                measured = useVk ? vk : cu;
+                decided = gParGpuUs[bi] < (i64)0;
+                if (reporting() && cu >= (i64)0 && vk >= (i64)0)
+                    Log.info("par: %s: auto picks %s for the GPU (CUDA %ld us, Vulkan %ld us)", gParBlock[bi],
+                             useVk ? "Vulkan" : "CUDA", cu, vk);
+                else if (reporting())
+                    Log.info("par: %s: the GPU is reached through %s only", gParBlock[bi], useVk ? "Vulkan" : "CUDA");
+                }
+            }
+#endif
         if (decided)
             {
-            gParGpuUs[bi] = took;
+            gParGpuUs[bi] = measured;
             if (gParCpuUs[bi] >= (i64)0)
-                learn(bi, proto, l.n, took <= gParCpuUs[bi]);
+                learn(bi, proto, l.n, measured <= gParCpuUs[bi]);
             }
         if (!reporting())
             return;

@@ -389,8 +389,8 @@ def vulkan_notes(version):
     said = parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1]
     note = "- **Vulkan against CUDA:** on the RTX 3090, Vulkan is " + said + "."
     if faster:
-        note += (" On an NVIDIA GPU `auto` uses CUDA; `XC_PAR_GPU=vulkan` chooses"
-                 " Vulkan.")
+        note += (" Up to 0.74 `auto` used CUDA on an NVIDIA GPU; from 0.75 it measures"
+                 " both and keeps the faster for each block.")
     firsts = lambda k: [r[k]["first_us"] for _, r in rows]
     span = lambda us: "%s to %s ms" % (ms(min(us)).split(".")[0], ms(max(us)).split(".")[0])
     note += ("\n- **The first run** carries one-off costs (building the kernel, and on NVIDIA\n"

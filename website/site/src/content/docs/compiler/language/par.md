@@ -168,8 +168,12 @@ uses a global itself, runs on the CPU. What else each GPU can hold:
   such a block runs on the CPU). A block that needs more arrays, or a larger
   one, than the device can hold runs on the CPU.
 
-On Windows, `XC_PAR_GPU=vulkan` or `XC_PAR_GPU=cuda` in the environment picks
-one interface where both work. Where a machine has more than one Vulkan GPU,
+On Windows with an NVIDIA GPU, a block can reach it through CUDA or Vulkan.
+From 0.75 `auto` measures both and keeps the faster for each block (see
+[Which device](#which-device)); up to 0.74 it used CUDA.
+`XC_PAR_GPU=vulkan` or `XC_PAR_GPU=cuda` in the environment picks one
+interface where both work, and `XC_PAR=gpu` uses CUDA unless
+`XC_PAR_GPU=vulkan` is set. Where a machine has more than one Vulkan GPU,
 a discrete one is chosen first; `XC_PAR_VULKAN_DEVICE=<n>` picks the n-th
 instead, counting from 0 in the driver's order.
 
@@ -245,7 +249,9 @@ the smallest the GPU won at. A run whose size falls outside those is decided
 without measuring; one between them is measured once and narrows them. The keys
 include a hash of the machine's GPU and CPU, so a new GPU is measured afresh
 (and the old one's values wait for it to come back), and a hash of the block's
-GPU version, so a block that changes is measured afresh too.
+GPU version, so a block that changes is measured afresh too. From 0.75, on
+Windows with both CUDA and Vulkan, the value also names the interface `auto`
+chose (`…,cuda` or `…,vulkan`).
 
 To choose instead, in order of precedence:
 
