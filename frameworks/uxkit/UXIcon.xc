@@ -101,8 +101,7 @@ class UXIcon : Object
         }
 
     // ---- the drawn glyphs: 16 x 16 at (x, y), in pen `pen` ---------------------------------------
-    // A stroke: a straight one is a filled rectangle, which every backend draws to the pixel; a slant
-    // is a line.
+    // A stroke, drawn as filled rectangles, which every backend draws to the pixel at full strength.
     static void ln(UXGraphics* g, i32 x0, i32 y0, i32 x1, i32 y1, i32 pen)
         {
         if (x0 == x1)
@@ -117,7 +116,33 @@ class UXIcon : Object
             g.fillRect(UXGeom.make((i16)left, (i16)y0, (i16)((x0 < x1 ? x1 - x0 : x0 - x1) + (i32)1), (i16)1), pen);
             return;
             }
-        g.drawLine((i16)x0, (i16)y0, (i16)x1, (i16)y1, pen);
+        // A slant is whole pixels too (Bresenham), not drawLine: an anti-aliased line that is
+        // nearly vertical lands half on each of two pixels and comes out a light grey (GTK did this
+        // to the bin's sides).
+        i32 dx = x1 > x0 ? x1 - x0 : x0 - x1;
+        i32 dy = y1 > y0 ? y0 - y1 : y1 - y0;
+        i32 sx = x0 < x1 ? (i32)1 : (i32)-1;
+        i32 sy = y0 < y1 ? (i32)1 : (i32)-1;
+        i32 err = dx + dy;
+        while (true)
+            {
+            g.fillRect(UXGeom.make((i16)x0, (i16)y0, (i16)1, (i16)1), pen);
+            if (x0 == x1 && y0 == y1)
+                {
+                break;
+                }
+            i32 e2 = err * (i32)2;
+            if (e2 >= dy)
+                {
+                err = err + dy;
+                x0 = x0 + sx;
+                }
+            if (e2 <= dx)
+                {
+                err = err + dx;
+                y0 = y0 + sy;
+                }
+            }
         }
     static void box(UXGraphics* g, i32 x, i32 y, i32 w, i32 h, i32 pen)
         {

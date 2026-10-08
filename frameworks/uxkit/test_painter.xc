@@ -8,6 +8,7 @@
 #import "UXPainter.xc"
 #import "UXShapePath.xc"
 #import "UXGradient.xc"
+#import "UXIcon.xc"
 
 i32 gFails;
 void check(u8* what, i32 got, i32 want)
@@ -223,6 +224,8 @@ class RecG : Object<UXGraphics>
     // The rest of the protocol: a recorder draws none of it.
     i32 clears;
     i32 pixelCalls;
+    i32 lines;
+    i32 rects;
     void drawPixels(u8* data, i32 w, i32 h, i32 format, UXRect src, UXRect dst, i32 alpha)
         {
         pixelCalls = pixelCalls + (i32)1;
@@ -233,6 +236,7 @@ class RecG : Object<UXGraphics>
         }
     void fillRect(UXRect r, i32 pen)
         {
+        rects = rects + (i32)1;
         }
     void fillRectRGB(UXRect r, i32 red, i32 green, i32 blue)
         {
@@ -274,6 +278,7 @@ class RecG : Object<UXGraphics>
         }
     void drawLine(i16 x0, i16 y0, i16 x1, i16 y1, i32 pen)
         {
+        lines = lines + (i32)1;
         }
     }
 
@@ -574,6 +579,18 @@ void main(void)
     UXPainter.fillRoundRectRGBA((UXGraphics*)rr0, UXGeom.make((i16)0, (i16)0, (i16)20, (i16)20),
                                 (i32)0, (i32)0, (i32)0, (i32)0, (i32)255);
     check("radius 0 draws no polygon (it is a plain rectangle)", rr0.polys, (i32)0);
+
+    // UXIcon's glyphs are whole pixels on every backend: no anti-aliased line, which GTK turned
+    // into a pale grey on the bin's nearly vertical sides.
+    RecG* ig = new RecG();
+    ig.lines = (i32)0;
+    ig.rects = (i32)0;
+    for (i32 k = (i32)0; k < (i32)25; k = k + (i32)1)
+        {
+        UXIcon.draw((UXGraphics*)ig, UXIcon.nameAt(k), (i32)0, (i32)0, (i32)1);
+        }
+    check("the icon glyphs draw no lines", ig.lines, (i32)0);
+    checkTrue("...only pixels and bars", ig.rects > (i32)100);
 
     if (gFails == (i32)0)
         {
