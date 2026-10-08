@@ -239,6 +239,22 @@ static int condCode(NSString *cc) {
     }
     [_commonSymbols removeAllObjects];
 }
+// The Mach-O image paths' alternative (bug 642): hand the COMMON symbols over
+// as a list, @{name, size, align (log2)} in sorted order, and forget them. The
+// link driver gives them zero-fill storage AFTER the mod-init tail — outside
+// the data bytes, so the writer can describe them as __bss and the file does
+// not carry them. Sorted for the same reason as above.
+- (NSArray<NSDictionary *> *)takeCommons {
+    NSMutableArray<NSDictionary *> *out = [NSMutableArray array];
+    NSArray<NSString *> *names = [_commonSymbols.allKeys
+        sortedArrayUsingSelector:@selector(compare:)];
+    for (NSString *nm in names) {
+        NSArray<NSNumber *> *info = _commonSymbols[nm];
+        [out addObject:@{@"name": nm, @"size": info[0], @"align": info[1]}];
+    }
+    [_commonSymbols removeAllObjects];
+    return out;
+}
 - (NSArray<XAArm64Fixup *> *)modInitFixups { return _modInitFixups ?: @[]; }
 
 // Encode a memory addressing tail "[Xn]" / "[Xn, #imm]" / "[Xn, #imm]!" / "[Xn], #imm".

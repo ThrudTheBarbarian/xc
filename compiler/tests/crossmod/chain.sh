@@ -378,5 +378,25 @@ else
     echo "SKIP  ios-sim: no iPhoneSimulator SDK"
 fi
 
+# ── arm64: a zero-initialised global takes no room in the file ───────────────
+# A 32 MB `u32 big[8000000];` gave a 32 MB executable (bug 642): the COMMON
+# storage was emitted as data bytes. It is a __DATA,__bss zero-fill section
+# now, in memory only, so the file is small and the two compilers agree.
+if [ "$XC_PLAT" = osx ]; then
+    before=$fail
+    mkdir -p "$TMP/zerobig"
+    for c in xcc xcc-xc; do
+        "$BIN/$c" -A arm64 -H "$ROOT" -q -o "$TMP/zerobig/$c" "$T/zerobig.xc" 2>"$TMP/zerobig/$c.err" \
+            || { bad "zerobig: $c could not build it"; sed 's/^/        /' "$TMP/zerobig/$c.err" | head -5; continue; }
+        sz=$(stat -f %z "$TMP/zerobig/$c")
+        [ "$sz" -lt 4000000 ] || bad "zerobig: $c's executable is $sz bytes; the zero array should not be in the file"
+        otool -l "$TMP/zerobig/$c" | grep -q 'sectname __bss' || bad "zerobig: $c's executable has no __bss section"
+        out=$("$TMP/zerobig/$c" 2>&1)
+        [ "$out" = "1 0 7 2" ] || bad "zerobig: $c's program printed '$out', not '1 0 7 2'"
+    done
+    cmp -s "$TMP/zerobig/xcc" "$TMP/zerobig/xcc-xc" || bad "zerobig: the two compilers' executables differ"
+    [ $fail = $before ] && echo "PASS  arm64: a zero-initialised global takes no room in the file"
+fi
+
 echo "--- chain: $fail failing ---"
 [ "$fail" = 0 ]

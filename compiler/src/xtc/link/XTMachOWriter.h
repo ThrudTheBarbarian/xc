@@ -64,7 +64,12 @@ NS_ASSUME_NONNULL_BEGIN
                  // @{name, seg, flags, off, size} in blob coordinates. The runtime finds its
                  // metadata BY SECTION, so a selref delivered as anonymous __data is never
                  // uniqued and every message send misses. Empty for a link with no ObjC.
-                 objcSections:(NSArray<NSDictionary*>*)objcSections;
+                 objcSections:(NSArray<NSDictionary*>*)objcSections
+                    // Bug 642: bytes of zero-initialised storage (the COMMON symbols) that
+                    // take no room in the file: a __bss zero-fill section after __got. Its
+                    // symbols are data symbols whose offsets lie past data.length, each
+                    // `data.length + <offset in the bss>`.
+                    bssLength:(NSUInteger)bssLength;
 
 // Read a Mach-O dylib's install name (LC_ID_DYLIB) and its exported symbols
 // (the external-defined range of LC_SYMTAB). Returns @{@"install":..,
@@ -138,7 +143,8 @@ NS_ASSUME_NONNULL_BEGIN
                   fixups:(NSArray<XAArm64Fixup*>*)fixups
            modInitLength:(NSUInteger)modInitLength
             objcSections:(NSArray<NSDictionary*>*)objcSections
-                  dylibs:(NSArray<NSDictionary*>*)dylibs;
+                  dylibs:(NSArray<NSDictionary*>*)dylibs
+               bssLength:(NSUInteger)bssLength; // as the executable's (bug 642)
 @end
 
 NS_ASSUME_NONNULL_END

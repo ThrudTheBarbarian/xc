@@ -3639,7 +3639,7 @@ void linkObjectsArm64(DriverOptions* d)
     if (isIos(d)) { combined.appendByte((u8)'\n'); combined.append(iosRuntimeSource(d)); }   // stage 4 shim
     Arm64Asm* as = new Arm64Asm();
     as.assemble(Arm64Asm.machoDialectFromElf(combined));
-    as.demoteCommonsToLocalData();
+    Array* bssCommons = as.takeCommons(); // bug 642: __bss, not __data
     if (as.failed()) {
         Stdio.printf("xcc: assembly failed: %s\n", as.why().cString());
         Process.exit((i32)1); return;
@@ -3655,6 +3655,8 @@ void linkObjectsArm64(DriverOptions* d)
     Array* objcSects = mergeLinkObjects(d, as.textBytes(), dataBytes, as.symbols(),
                                         as.dataSyms(), fixups, d.objectInputs());
     u32 miLen = Arm64Asm.appendModInit(as, dataBytes, fixups);
+    // After the mod-init tail, so the __bss symbols sit past the data (642).
+    u32 bssLen = Arm64Asm.allocateBss(bssCommons, dataBytes, as.symbols(), as.dataSyms());
 
     // What the objects `#import <Lib>`ed (their .xtc.needs sidecars), then
     // the libraries and frameworks named on the line — one rule (arm64LinkDeps).
@@ -3664,7 +3666,7 @@ void linkObjectsArm64(DriverOptions* d)
     m.setDeps(deps);
     m.setRpaths(arm64Rpaths(d, objectNeeds(d.objectInputs())));
     m.executable(as.textBytes(), ((Number*)entry).asU32(), as.symbols(),
-                 dataBytes, as.dataSyms(), fixups, miLen, objcSects);
+                 dataBytes, as.dataSyms(), fixups, miLen, objcSects, bssLen);
     checkSystemImports(d, m);
     Array* image = m.bytes();
     Data* out = Data.withCapacity(image.count());
@@ -4271,7 +4273,10 @@ void emitModule(DriverOptions* d, IRModule* mod)
 
     Arm64Asm* as = new Arm64Asm();
     as.assemble(Arm64Asm.machoDialectFromElf(combined));
-    as.demoteCommonsToLocalData();
+    // Bug 642: a Mach-O image keeps its commons for __bss (storage after the
+    // mod-init tail); an Android image gives them data bytes as before.
+    Array* bssCommons = android ? (Array*)0 : as.takeCommons();
+    if (android) as.demoteCommonsToLocalData();
     if (as.failed()) {
         Stdio.printf("xcc: assembly failed: %s\n", as.why().cString());
         Process.exit((i32)1); return;
@@ -4357,6 +4362,8 @@ void emitModule(DriverOptions* d, IRModule* mod)
                                                     f.symbol(), f.scale()));
             }
         }
+        // After the mod-init tail, so the __bss symbols sit past the data (642).
+        u32 bssLen = Arm64Asm.allocateBss(bssCommons, dataBytes, as.symbols(), as.dataSyms());
         MachO* m = new MachO();
         // Every image for -A ios/ios-sim carries the iOS LC_BUILD_VERSION
         // (PLATFORM_IOS 2 / IOSSIMULATOR 7, minos 15.0), as the reference's
@@ -4402,7 +4409,7 @@ void emitModule(DriverOptions* d, IRModule* mod)
             // the same list, in the same order, as an executable's.
             m.setDeps(arm64LinkDeps(d, d.fe().neededLibs(), new Array()));
             m.dylib(as.textBytes(), instName, exports, iface,
-                    as.symbols(), dataBytes, as.dataSyms(), fixups, miLen, objcSects);
+                    as.symbols(), dataBytes, as.dataSyms(), fixups, miLen, objcSects, bssLen);
         } else {
             // The dylibs this program `#import <X>`ed. Each becomes an
             // LC_LOAD_DYLIB and claims the imports it exports, so dyld looks
@@ -4415,7 +4422,7 @@ void emitModule(DriverOptions* d, IRModule* mod)
             m.setDeps(deps);
             m.setRpaths(arm64Rpaths(d, d.fe().neededLibs()));
             m.executable(as.textBytes(), ((Number*)entry).asU32(), as.symbols(),
-                         dataBytes, as.dataSyms(), fixups, miLen, objcSects);
+                         dataBytes, as.dataSyms(), fixups, miLen, objcSects, bssLen);
             checkSystemImports(d, m);
         }
         image = m.bytes();

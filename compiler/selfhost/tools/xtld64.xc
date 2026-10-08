@@ -45,7 +45,7 @@ void main(void)
 
     Arm64Asm* a = new Arm64Asm();
     a.assemble(src);
-    a.demoteCommonsToLocalData(); // single-unit image: give commons storage (bug 169)
+    Array* bssCommons = a.takeCommons(); // bug 642: __bss, not __data (storage after the mod-init tail)
     if (a.failed())
         {
         Stdio.printf("xtld64: assembly failed: %s\n", a.why().cString());
@@ -86,11 +86,13 @@ void main(void)
             }
         }
 
+    // After the mod-init tail, so the __bss symbols sit past the data (642).
+    u32 bssLen = Arm64Asm.allocateBss(bssCommons, dataBytes, a.symbols(), a.dataSyms());
     MachO* m = new MachO();
     if (platform != 0)
         m.setApplePlatform(platform);
     m.executable(a.textBytes(), ((Number*)entry).asU32(), a.symbols(),
-                 dataBytes, a.dataSyms(), fixups, miLen);
+                 dataBytes, a.dataSyms(), fixups, miLen, (Array*)0, bssLen);
 
     Array* image = m.bytes();
     Data* d = Data.withCapacity((u32)0);

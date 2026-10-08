@@ -38,6 +38,7 @@ enum
 enum
     {
     XS_REGULAR = 0,
+    XS_ZEROFILL = 1,
     XS_NON_LAZY_SYMBOL_POINTERS = 6,
     // S_MOD_INIT_FUNC_POINTERS — an array of function pointers dyld CALLS
     // before the program's entry point. The section type is the whole
@@ -648,7 +649,8 @@ static NSArray<NSString*>* sLastUnexportedSystemImports = nil;
                              dylibs:@[]
                              rpaths:@[]
                       modInitLength:0
-                       objcSections:@[]];
+                       objcSections:@[]
+                          bssLength:0];
     }
 
 // Parse a dylib: install name (LC_ID_DYLIB) + exported symbol names (the
@@ -1533,6 +1535,7 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
                        rpaths:(NSArray<NSString*>*)rpaths
                 modInitLength:(NSUInteger)modInitLength
                  objcSections:(NSArray<NSDictionary*>*)objcSections
+                    bssLength:(NSUInteger)bssLength
     {
     if (!dylibs)
         dylibs = @[];
@@ -1545,6 +1548,10 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
     if (!dataSymbols)
         dataSymbols = [NSSet set];
     BOOL hasData = data.length > 0;
+    // Bug 642: the linker hands zero-initialised storage (COMMON symbols) as a
+    // LENGTH, not bytes: it becomes a __bss zero-fill section after __got, in
+    // memory only. Its symbols carry offsets past data.length — see symAddr.
+    BOOL hasBss = bssLength > 0;
     // Bug 066: the tail of __data is the __mod_init_func pointer array. Same
     // bytes, same addresses, same rebases — it is described by its OWN section
     // header so dyld knows to CALL them. Without one it ran nothing, silently.
@@ -1589,7 +1596,7 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
         }
     NSUInteger nimp = imports.count;
     BOOL hasImp = nimp > 0;
-    BOOL hasDataSeg = hasData || hasImp;
+    BOOL hasDataSeg = hasData || hasImp || hasBss;
 
     // Per-import dylib ordinal: libSystem = 1, each entry of `dylibs` = 2,3,...
     // A symbol an imported dylib exports binds to that dylib; the rest (the C
@@ -1638,6 +1645,13 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
     uint64_t dataAddr = VMBASE + dataProgOffset;
     uint64_t gotAddr = VMBASE + gotOffset;
     uint64_t gotOffInSeg = gotOffset - dataSegFileOff;
+    // __bss follows __got in memory and takes no file bytes: the segment's
+    // vmsize grows past its filesize, and every later segment's vmaddr moves
+    // up by the same page-rounded amount (bug 642).
+    uint64_t bssOff = roundUp(gotOffset + gotSize, 16);
+    uint64_t dataSegVmEnd = hasBss ? roundUp(bssOff + bssLength, PAGE) : dataSegEnd;
+    uint64_t bssAddr = VMBASE + bssOff;
+    uint64_t vmShift = dataSegVmEnd - dataSegEnd;
 
     // -g: the DWARF the assembler recorded goes in a __DWARF segment between
     // __DATA and __LINKEDIT, where lldb reads it from the executable itself.
@@ -1661,12 +1675,15 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
             dwarfSize += dwarfSecs[k].length;
         }
     uint64_t linkeditOff = dwarf ? roundUp(dwarfOff + dwarfSize, PAGE) : dataSegEnd;
-    uint64_t linkeditAddr = VMBASE + linkeditOff;
+    uint64_t linkeditAddr = VMBASE + linkeditOff + vmShift;
 
     // address of a defined symbol (text- or data-section relative)
     uint64_t (^symAddr)(NSString*) = ^uint64_t(NSString* nm) {
       uint64_t off = symbols[nm].unsignedLongLongValue;
-      return [dataSymbols containsObject:nm] ? (dataAddr + off) : (textAddr + off);
+      if (![dataSymbols containsObject:nm])
+          return textAddr + off;
+      // past the data blob: a __bss symbol (bug 642)
+      return off >= data.length ? bssAddr + (off - data.length) : dataAddr + off;
     };
 
     // ── 3. Patch fixups in the text ──
@@ -1849,6 +1866,9 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
     put8(strtab, 0);
     NSMutableData* nlist = [NSMutableData data];
     uint8_t dataSect = (uint8_t)(1 + (hasImp ? 1 : 0) + 1); // __text[+__stubs] then __data
+    // __bss is the LAST section of __DATA (after the objc sections, the
+    // mod-init array and __got), so its ordinal is the segment's count.
+    uint8_t bssSect = (uint8_t)(1 + (hasImp ? 1 : 0) + (hasDataSect ? 1 : 0) + objcSections.count + (hasModInit ? 1 : 0) + (hasImp ? 1 : 0) + 1);
     for (NSString* nm in defNames)
         {
         uint32_t strx = (uint32_t)strtab.length;
@@ -1857,7 +1877,7 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
         BOOL inData = [dataSymbols containsObject:nm];
         put32(nlist, strx);
         put8(nlist, XN_SECT);
-        put8(nlist, inData ? dataSect : 1);
+        put8(nlist, inData ? (symbols[nm].unsignedLongLongValue >= data.length ? bssSect : dataSect) : 1);
         put8(nlist, 0);
         put8(nlist, 0);
         put64(nlist, symAddr(nm));
@@ -1907,7 +1927,7 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
 
     // ── 5. Command sizes ──
     const char *dyld = "/usr/lib/dyld", *libSys = "/usr/lib/libSystem.B.dylib";
-    uint32_t nDataSects = (hasDataSect ? 1 : 0) + (hasModInit ? 1 : 0) + (hasImp ? 1 : 0) + (uint32_t)objcSections.count; // bug 069
+    uint32_t nDataSects = (hasDataSect ? 1 : 0) + (hasModInit ? 1 : 0) + (hasImp ? 1 : 0) + (uint32_t)objcSections.count + (hasBss ? 1 : 0); // bug 069, 642
     uint32_t szPagezero = 72, szTextSeg = 72 + 80 * (1 + (hasImp ? 1 : 0)), szDataSeg = 72 + 80 * nDataSects, szLink = 72;
     // Entry is LC_MAIN. (LC_UNIXTHREAD is NOT an option here: modern macOS dyld
     // rejects a dynamically-linked main executable that lacks LC_MAIN — "main
@@ -2000,9 +2020,9 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
         put32(out, szDataSeg);
         putFixed(out, "__DATA", 16);
         put64(out, VMBASE + dataSegFileOff);
-        put64(out, segSz);
+        put64(out, dataSegVmEnd - dataSegFileOff); // vmsize: __bss included
         put64(out, dataSegFileOff);
-        put64(out, segSz);
+        put64(out, segSz);                         // filesize: __bss excluded
         put32(out, XVM_READ | XVM_WRITE);
         put32(out, XVM_READ | XVM_WRITE);
         put32(out, nDataSects);
@@ -2088,6 +2108,22 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
             put32(out, 0);
             put32(out, 0);
             }
+        if (hasBss)
+            {
+            // Zero-fill: an address and a size, no file offset (bug 642).
+            putFixed(out, "__bss", 16);
+            putFixed(out, "__DATA", 16);
+            put64(out, bssAddr);
+            put64(out, bssLength);
+            put32(out, 0);
+            put32(out, 4); // align 16
+            put32(out, 0);
+            put32(out, 0);
+            put32(out, XS_ZEROFILL);
+            put32(out, 0);
+            put32(out, 0);
+            put32(out, 0);
+            }
         }
 
     // __DWARF (-g): read by debuggers, never by dyld's code.
@@ -2096,7 +2132,7 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
         put32(out, XLC_SEGMENT_64);
         put32(out, szDwarfSeg);
         putFixed(out, "__DWARF", 16);
-        put64(out, VMBASE + dwarfOff);
+        put64(out, VMBASE + dwarfOff + vmShift);
         put64(out, roundUp(dwarfSize, PAGE));
         put64(out, dwarfOff);
         put64(out, dwarfSize);
@@ -2109,7 +2145,7 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
             {
             putFixed(out, [@"__" stringByAppendingString:k].UTF8String, 16);
             putFixed(out, "__DWARF", 16);
-            put64(out, VMBASE + at);
+            put64(out, VMBASE + at + vmShift);
             put64(out, dwarfSecs[k].length);
             put32(out, (uint32_t)at);
             put32(out, 0); // align
@@ -2301,7 +2337,7 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
     {
     return [self dylibFromText:textIn installName:installName exports:exports iface:ifaceIn
                        symbols:symbols data:dataIn dataSymbols:dataSymbols fixups:fixups
-                 modInitLength:modInitLength objcSections:objcSections dylibs:@[]];
+                 modInitLength:modInitLength objcSections:objcSections dylibs:@[] bssLength:0];
     }
 
 + (NSData*)dylibFromText:(NSData*)textIn
@@ -2315,6 +2351,7 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
            modInitLength:(NSUInteger)modInitLength
             objcSections:(NSArray<NSDictionary*>*)objcSections
                   dylibs:(NSArray<NSDictionary*>*)dylibs
+               bssLength:(NSUInteger)bssLength
     {
     if (!objcSections)
         objcSections = @[];
@@ -2327,6 +2364,10 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
     if (!exports)
         exports = [NSSet set];
     BOOL hasData = data.length > 0;
+    // Bug 642: the linker hands zero-initialised storage (COMMON symbols) as a
+    // LENGTH, not bytes: it becomes a __bss zero-fill section after __got, in
+    // memory only. Its symbols carry offsets past data.length — see symAddr.
+    BOOL hasBss = bssLength > 0;
     // Bug 066: the tail of __data is the __mod_init_func pointer array. Same
     // bytes, same addresses, same rebases — it is described by its OWN section
     // header so dyld knows to CALL them. Without one it ran nothing, silently.
@@ -2370,7 +2411,7 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
         }
     NSUInteger nimp = imports.count;
     BOOL hasImp = nimp > 0;
-    BOOL hasDataSeg = hasData || hasImp;
+    BOOL hasDataSeg = hasData || hasImp || hasBss;
 
     // Bug 440: per-import ordinal. An import that a library this library
     // imports exports binds to that library (ordinal 2, 3, … after
@@ -2409,16 +2450,25 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
     uint64_t dataAddr = dataProgOffset, gotAddr = gotOffset;
     uint64_t gotOffInSeg = gotOffset - dataSegFileOff;
     uint8_t dataSegIdx = 1; // __TEXT=0, __DATA=1
+    // __bss after __got, in memory only; later segments' vmaddr move past it
+    // by the page-rounded amount (bug 642).
+    uint64_t bssOff = roundUp(gotOffset + gotSize, 16);
+    uint64_t dataSegVmEnd = hasBss ? roundUp(bssOff + bssLength, PAGE) : dataSegEnd;
+    uint64_t bssAddr = bssOff;
+    uint64_t vmShift = dataSegVmEnd - dataSegEnd;
 
     uint64_t xtcSegFileOff = dataSegEnd;
     uint64_t xtcSegEnd = hasIface ? roundUp(xtcSegFileOff + ifaceIn.length, PAGE) : dataSegEnd;
-    uint64_t xtcAddr = xtcSegFileOff;
+    uint64_t xtcAddr = xtcSegFileOff + vmShift;
 
     uint64_t linkeditOff = xtcSegEnd;
 
     uint64_t (^symAddr)(NSString*) = ^uint64_t(NSString* nm) {
       uint64_t off = symbols[nm].unsignedLongLongValue;
-      return [dataSymbols containsObject:nm] ? (dataAddr + off) : (textAddr + off);
+      if (![dataSymbols containsObject:nm])
+          return textAddr + off;
+      // past the data blob: a __bss symbol (bug 642)
+      return off >= data.length ? bssAddr + (off - data.length) : dataAddr + off;
     };
 
     // ── 3. patch fixups in text (identical maths to the exec; base 0) ──
@@ -2606,6 +2656,7 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
     for (NSString* nm in defNames)
         [(([exports containsObject:nm]) ? externs : locals) addObject:nm];
     uint8_t dataSect = (uint8_t)(1 + (hasImp ? 1 : 0) + 1);
+    uint8_t bssSect = (uint8_t)(1 + (hasImp ? 1 : 0) + (hasDataSect ? 1 : 0) + objcSections.count + (hasModInit ? 1 : 0) + (hasImp ? 1 : 0) + 1); // the last __DATA section
     NSMutableData* strtab = [NSMutableData data];
     put8(strtab, 0);
     NSMutableData* nlist = [NSMutableData data];
@@ -2617,7 +2668,7 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
       uint8_t type = XN_SECT | ([exports containsObject:nm] ? XN_EXT : 0);
       put32(nlist, strx);
       put8(nlist, type);
-      put8(nlist, inData ? dataSect : 1);
+      put8(nlist, inData ? (symbols[nm].unsignedLongLongValue >= data.length ? bssSect : dataSect) : 1);
       put8(nlist, 0);
       put8(nlist, 0);
       put64(nlist, symAddr(nm));
@@ -2680,7 +2731,7 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
     // ── 5. command sizes ──
     const char *dyld = "/usr/lib/dyld", *libSys = "/usr/lib/libSystem.B.dylib";
     const char* instName = installName.UTF8String;
-    uint32_t nDataSects = (hasDataSect ? 1 : 0) + (hasModInit ? 1 : 0) + (hasImp ? 1 : 0) + (uint32_t)objcSections.count; // bug 069
+    uint32_t nDataSects = (hasDataSect ? 1 : 0) + (hasModInit ? 1 : 0) + (hasImp ? 1 : 0) + (uint32_t)objcSections.count + (hasBss ? 1 : 0); // bug 069, 642
     uint32_t szTextSeg = 72 + 80 * (1 + (hasImp ? 1 : 0)), szDataSeg = 72 + 80 * nDataSects, szXtcSeg = 72 + 80, szLink = 72;
     uint32_t szDyldInfo = 48, szDyld = (uint32_t)roundUp(12 + strlen(dyld) + 1, 8);
     uint32_t szId = (uint32_t)roundUp(24 + strlen(instName) + 1, 8), szDylib = (uint32_t)roundUp(24 + strlen(libSys) + 1, 8);
@@ -2755,9 +2806,9 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
         put32(out, szDataSeg);
         putFixed(out, "__DATA", 16);
         put64(out, dataSegFileOff);
-        put64(out, segSz);
+        put64(out, dataSegVmEnd - dataSegFileOff); // vmsize: __bss included
         put64(out, dataSegFileOff);
-        put64(out, segSz);
+        put64(out, segSz);                         // filesize: __bss excluded
         put32(out, XVM_READ | XVM_WRITE);
         put32(out, XVM_READ | XVM_WRITE);
         put32(out, nDataSects);
@@ -2843,6 +2894,22 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
             put32(out, 0);
             put32(out, 0);
             }
+        if (hasBss)
+            {
+            // Zero-fill: an address and a size, no file offset (bug 642).
+            putFixed(out, "__bss", 16);
+            putFixed(out, "__DATA", 16);
+            put64(out, bssAddr);
+            put64(out, bssLength);
+            put32(out, 0);
+            put32(out, 4); // align 16
+            put32(out, 0);
+            put32(out, 0);
+            put32(out, XS_ZEROFILL);
+            put32(out, 0);
+            put32(out, 0);
+            put32(out, 0);
+            }
         }
     // __XTC (+ __iface) — the module-interface metadata, read-only data
     if (hasIface)
@@ -2876,7 +2943,7 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
     put32(out, XLC_SEGMENT_64);
     put32(out, szLink);
     putFixed(out, "__LINKEDIT", 16);
-    put64(out, linkeditOff);
+    put64(out, linkeditOff + vmShift); // vmaddr: past __bss (bug 642)
     put64(out, linkeditVmsz);
     put64(out, linkeditOff);
     put64(out, linkeditFilesz);

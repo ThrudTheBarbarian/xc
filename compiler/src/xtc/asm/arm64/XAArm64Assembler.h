@@ -67,6 +67,9 @@ typedef NS_ENUM(int, XAArm64FixupKind) {
 // common set. For single-unit IMAGE builds (executable/dylib), which have no
 // separate link stage; the `--object` path leaves commons as commons.
 - (void)demoteCommonsToLocalData;
+// Bug 642: the COMMON symbols as a sorted list of @{name, size, align (log2)},
+// cleared from the assembler; the Mach-O link gives them __bss storage.
+- (NSArray<NSDictionary *> *)takeCommons;
 // Bug 066: the `__DATA,__mod_init_func` pointer array — the load-time
 // constructors — kept SEPARATE from `data`, with its fixups' offsets relative
 // to itself. The linker appends it after every other contribution to __data and

@@ -245,6 +245,55 @@ class Arm64Asm
         }
         _commonSyms = new Map();
     }
+    // The Mach-O image paths' alternative (bug 642): the COMMON symbols as a
+    // sorted list of [name, size, log2align], cleared from the assembler. The
+    // link driver gives them zero-fill storage AFTER the mod-init tail —
+    // outside the data bytes, so the writer describes them as __bss and the
+    // file does not carry them. Mirrors the reference's takeCommons.
+    Array* takeCommons(void)
+    {
+        Array* out = new Array();
+        Array* names = _commonSyms.allKeys();
+        for (u32 i = (u32)1; i < names.count(); i = i + (u32)1) {
+            Object* cur = names.get(i); u32 j = i;
+            while (j > (u32)0 && ((String*)names.get(j - (u32)1)).compare((String*)cur) > (i32)0) {
+                names.set(j, names.get(j - (u32)1)); j = j - (u32)1;
+            }
+            names.set(j, cur);
+        }
+        for (u32 k = (u32)0; k < names.count(); k = k + (u32)1) {
+            String* nm = (String*)names.get(k);
+            Array* info = (Array*)_commonSyms.get((Hashable*)nm);
+            Array* c = new Array();
+            c.add((Object*)nm);
+            c.add(info.get((u32)0));
+            c.add(info.get((u32)1));
+            out.add((Object*)c);
+        }
+        _commonSyms = new Map();
+        return out;
+    }
+    // Give the commons from takeCommons their __bss offsets: each past the end
+    // of `data`, aligned as declared (at least 8), in list order. A name the
+    // symbol table already defines keeps that definition (a strong def beats a
+    // common). Returns the run's length. Mirrors the reference's allocateBss.
+    static u32 allocateBss(Array* commons, Array* data, Map* symbols, Array* dataSyms)
+    {
+        u32 cursor = (u32)0;
+        for (u32 i = (u32)0; i < commons.count(); i = i + (u32)1) {
+            Array* c = (Array*)commons.get(i);
+            String* nm = (String*)c.get((u32)0);
+            if (symbols.get((Hashable*)nm) != (Object*)0) continue;
+            u32 sz = ((Number*)c.get((u32)1)).asU32();
+            u32 al = (u32)1 << ((Number*)c.get((u32)2)).asU32();
+            if (al < (u32)8) al = (u32)8;
+            while (cursor % al != (u32)0) cursor = cursor + (u32)1;
+            symbols.set((Hashable*)nm, (Object*)Number.withU32(data.count() + cursor));
+            dataSyms.add((Object*)nm);
+            cursor = cursor + sz;
+        }
+        return cursor;
+    }
 
     void fail(String* msg)
     {

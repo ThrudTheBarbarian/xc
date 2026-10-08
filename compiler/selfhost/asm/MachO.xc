@@ -21,6 +21,14 @@
 #define STUB_SZ 12
 #define GOT_SZ 8
 
+// Bug 642: a data symbol whose offset is at or past gMachOBssFrom lives in the
+// __bss zero-fill section, at gMachOBssBase + (offset - gMachOBssFrom), and
+// its nlist names section gMachOBssSect. The writers set these per image; with
+// no bss gMachOBssFrom is $FFFFFFFF and nothing maps.
+u32 gMachOBssFrom;
+u32 gMachOBssBase;
+u32 gMachOBssSect;
+
 class Sha256
     {
     u32 _s[8];
@@ -564,6 +572,12 @@ class Sha256
     u32 dwarfSize;
     u32 szDwarfSeg;
     u32 dOnly;
+    // bug 642: the __bss zero-fill run after __got
+    bool hasBss;
+    u32 bssOff;
+    u32 bssLength;
+    u32 dataSegVmEnd; // __DATA's vm end, __bss included (its file end is dataSegEnd)
+    u32 vmShift;      // what later segments' vmaddr move up by
 
     void init(void)
         {
@@ -1246,8 +1260,19 @@ class Sha256
                     Array* data, Array* dataSyms, Array* fixups, u32 modInitLength,
                     Array* objcSects)
         {
+        executable(text, entryOffset, symbols, data, dataSyms, fixups, modInitLength, objcSects, (u32)0);
+        }
+    // bssLength (bug 642): bytes of zero-initialised storage (the COMMON
+    // symbols) that take no room in the file — a __bss zero-fill section after
+    // __got. Its symbols are data symbols whose offsets lie past data.count().
+    void executable(Array* text, u32 entryOffset, Map* symbols,
+                    Array* data, Array* dataSyms, Array* fixups, u32 modInitLength,
+                    Array* objcSects, u32 bssLength)
+        {
         _objcSects = objcSects;
         bool hasData = data.count() > (u32)0;
+        bool hasBss = bssLength > (u32)0;
+        gMachOBssFrom = hasBss ? data.count() : (u32)$FFFFFFFF;
         u32 miLen = modInitLength <= data.count() ? modInitLength : (u32)0;
         u32 dOnly = dataOnlyBefore(data.count() - miLen);
         bool hasModInit = miLen > (u32)0;
@@ -1274,7 +1299,7 @@ class Sha256
             }
         u32 nimp = _imports.count();
         bool hasImp = nimp > (u32)0;
-        bool hasDataSeg = hasData || hasImp;
+        bool hasDataSeg = hasData || hasImp || hasBss;
 
         // 2. Layout. The vmaddr of everything is VMBASE + its file offset, so
         //    a single set of offsets describes both.
@@ -1288,6 +1313,16 @@ class Sha256
         u32 gotSize = nimp * (u32)GOT_SZ;
         u32 dataSegEnd = hasDataSeg ? roundUp(gotOffset + gotSize, (u32)MACHO_PAGE) : textSegEnd;
         u32 gotOffInSeg = gotOffset - dataSegFileOff;
+        // __bss follows __got in memory and takes no file bytes: the segment's
+        // vmsize grows past its filesize, and every later segment's vmaddr
+        // moves up by the same page-rounded amount (bug 642).
+        u32 bssOff = roundUp(gotOffset + gotSize, (u32)16);
+        u32 dataSegVmEnd = hasBss ? roundUp(bssOff + bssLength, (u32)MACHO_PAGE) : dataSegEnd;
+        u32 vmShift = dataSegVmEnd - dataSegEnd;
+        gMachOBssBase = bssOff;
+        // __bss is the LAST section of __DATA, so its ordinal is the count.
+        gMachOBssSect = (u32)1 + (hasImp ? (u32)1 : (u32)0) + (hasDataSect ? (u32)1 : (u32)0) + objcSectCount()
+                      + (hasModInit ? (u32)1 : (u32)0) + (hasImp ? (u32)1 : (u32)0) + (u32)1;
         // -g: the DWARF the assembler recorded goes in a __DWARF segment
         // between __DATA and __LINKEDIT, where lldb reads it from the
         // executable itself.
@@ -1405,6 +1440,11 @@ class Sha256
         L.dOnly = dOnly;
         L.hasDataSeg = hasDataSeg;
         L.hasRebase = hasRebase;
+        L.hasBss = hasBss;
+        L.bssOff = bssOff;
+        L.bssLength = bssLength;
+        L.dataSegVmEnd = dataSegVmEnd;
+        L.vmShift = vmShift;
         buildImage(txt, dat, symbols, dataSyms, rebaseOffs, L);
         }
 
@@ -1435,12 +1475,22 @@ class Sha256
                Map* symbols, Array* data, Array* dataSyms, Array* fixups,
                u32 modInitLength, Array* objcSects)
         {
+        dylib(text, installName, exports, iface, symbols, data, dataSyms, fixups,
+              modInitLength, objcSects, (u32)0);
+        }
+    // bssLength: as the executable's (bug 642).
+    void dylib(Array* text, String* installName, Array* exports, Array* iface,
+               Map* symbols, Array* data, Array* dataSyms, Array* fixups,
+               u32 modInitLength, Array* objcSects, u32 bssLength)
+        {
         _objcSects = objcSects;
         _dataSegIdx = (u32)1; // no __PAGEZERO: __TEXT=0, __DATA=1
         _baseHi = (u32)0;     // based at 0; the loader slides it
         _flatBind = true;
 
         bool hasData = data.count() > (u32)0;
+        bool hasBss = bssLength > (u32)0;
+        gMachOBssFrom = hasBss ? data.count() : (u32)$FFFFFFFF;
         u32 miLen = modInitLength <= data.count() ? modInitLength : (u32)0;
         u32 dOnly = dataOnlyBefore(data.count() - miLen);
         bool hasModInit = miLen > (u32)0;
@@ -1465,7 +1515,7 @@ class Sha256
             }
         u32 nimp = _imports.count();
         bool hasImp = nimp > (u32)0;
-        bool hasDataSeg = hasData || hasImp;
+        bool hasDataSeg = hasData || hasImp || hasBss;
 
         // 2. Layout — base 0, so vmaddr == file offset throughout.
         u32 textOffset = (u32)MACHO_PAGE;
@@ -1478,6 +1528,14 @@ class Sha256
         u32 gotSize = nimp * (u32)GOT_SZ;
         u32 dataSegEnd = hasDataSeg ? roundUp(gotOffset + gotSize, (u32)MACHO_PAGE) : textSegEnd;
         u32 gotOffInSeg = gotOffset - dataSegFileOff;
+        // __bss after __got, in memory only; later segments' vmaddr move past
+        // it by the page-rounded amount (bug 642).
+        u32 bssOff = roundUp(gotOffset + gotSize, (u32)16);
+        u32 dataSegVmEnd = hasBss ? roundUp(bssOff + bssLength, (u32)MACHO_PAGE) : dataSegEnd;
+        u32 vmShift = dataSegVmEnd - dataSegEnd;
+        gMachOBssBase = bssOff;
+        gMachOBssSect = (u32)1 + (hasImp ? (u32)1 : (u32)0) + (hasDataSect ? (u32)1 : (u32)0) + objcSectCount()
+                      + (hasModInit ? (u32)1 : (u32)0) + (hasImp ? (u32)1 : (u32)0) + (u32)1;
         u32 xtcSegFileOff = dataSegEnd;
         u32 xtcSegEnd = hasIface ? roundUp(xtcSegFileOff + iface.count(), (u32)MACHO_PAGE)
                                  : dataSegEnd;
@@ -1619,7 +1677,7 @@ class Sha256
         u32 linkeditVmsz = roundUp(linkeditFilesz, (u32)MACHO_PAGE);
 
         // 5. Command sizes.
-        u32 nDataSects = (hasDataSect ? (u32)1 : (u32)0) + (hasModInit ? (u32)1 : (u32)0) + (hasImp ? (u32)1 : (u32)0) + objcSectCount(); // bug 069
+        u32 nDataSects = (hasDataSect ? (u32)1 : (u32)0) + (hasModInit ? (u32)1 : (u32)0) + (hasImp ? (u32)1 : (u32)0) + objcSectCount() + (hasBss ? (u32)1 : (u32)0); // bug 069, 642
         u32 szTextSeg = (u32)72 + (u32)80 * ((u32)1 + (hasImp ? (u32)1 : (u32)0));
         u32 szDataSeg = (u32)72 + (u32)80 * nDataSects;
         u32 szXtcSeg = (u32)72 + (u32)80;
@@ -1708,7 +1766,7 @@ class Sha256
             put32(szDataSeg);
             putName((u32)4, (u32)16);
             put64(dataSegFileOff, (u32)0);
-            put64(segSz, (u32)0);
+            put64(dataSegVmEnd - dataSegFileOff, (u32)0); // vmsize: __bss included; filesize below excludes it
             put64(dataSegFileOff, (u32)0);
             put64(segSz, (u32)0);
             put32(MachO.VM_READ() | MachO.VM_WRITE());
@@ -1764,6 +1822,22 @@ class Sha256
                 put32((u32)0);
                 put32((u32)0);
                 }
+            if (hasBss)
+                {
+                // Zero-fill: an address and a size, no file offset (bug 642).
+                putFixed(String.withCString("__bss"), (u32)16);
+                putName((u32)4, (u32)16);
+                put64(bssOff, (u32)0);
+                put64(bssLength, (u32)0);
+                put32((u32)0);
+                put32((u32)4); // align 16
+                put32((u32)0);
+                put32((u32)0);
+                put32((u32)1); // S_ZEROFILL
+                put32((u32)0);
+                put32((u32)0);
+                put32((u32)0);
+                }
             }
         // __XTC,__iface — the module interface, read-only.
         if (hasIface)
@@ -1772,7 +1846,7 @@ class Sha256
             put32((u32)$19);
             put32(szXtcSeg);
             putName((u32)13, (u32)16);
-            put64(xtcSegFileOff, (u32)0);
+            put64(xtcSegFileOff + vmShift, (u32)0); // vmaddr: past __bss (bug 642)
             put64(segSz, (u32)0);
             put64(xtcSegFileOff, (u32)0);
             put64(segSz, (u32)0);
@@ -1782,7 +1856,7 @@ class Sha256
             put32((u32)0);
             putName((u32)14, (u32)16);
             putName((u32)13, (u32)16);
-            put64(xtcSegFileOff, (u32)0);
+            put64(xtcSegFileOff + vmShift, (u32)0);
             put64(iface.count(), (u32)0);
             put32(xtcSegFileOff);
             put32((u32)0);
@@ -1797,7 +1871,7 @@ class Sha256
         put32((u32)$19);
         put32(szLink);
         putName((u32)7, (u32)16);
-        put64(linkeditOff, (u32)0);
+        put64(linkeditOff + vmShift, (u32)0); // vmaddr: past __bss (bug 642)
         put64(linkeditVmsz, (u32)0);
         put64(linkeditOff, (u32)0);
         put64(linkeditFilesz, (u32)0);
@@ -1956,7 +2030,9 @@ class Sha256
                 u32Into(nlist, strx);
                 nlist.add((Object*)Number.withU32(
                     (u32)$0E | (inArray(exports, nm) ? (u32)$01 : (u32)0))); // N_SECT [| N_EXT]
-                nlist.add((Object*)Number.withU32(inArray(dataSyms, nm) ? dataSect : (u32)1));
+                nlist.add((Object*)Number.withU32(inArray(dataSyms, nm)
+                    ? (((Number*)symbols.get((Hashable*)nm)).asU32() >= gMachOBssFrom ? gMachOBssSect : dataSect)
+                    : (u32)1));
                 nlist.add((Object*)Number.withU32((u32)0));
                 nlist.add((Object*)Number.withU32((u32)0));
                 u32Into(nlist, symOffset(symbols, dataSyms, nm, textOffset, dataProgOffset));
@@ -2014,7 +2090,10 @@ class Sha256
         {
         Object* o = symbols.get((Hashable*)nm);
         u32 off = o == (Object*)0 ? (u32)0 : ((Number*)o).asU32();
-        return inArray(dataSyms, nm) ? dataProgOffset + off : textOffset + off;
+        if (!inArray(dataSyms, nm))
+            return textOffset + off;
+        // past the data blob: a __bss symbol (bug 642)
+        return off >= gMachOBssFrom ? gMachOBssBase + (off - gMachOBssFrom) : dataProgOffset + off;
         }
 
     static bool inArray(Array* a, String* nm)
@@ -2126,7 +2205,7 @@ class Sha256
         {
         u32 dyldLen = (u32)14;                                                                                                                // "/usr/lib/dyld"
         u32 libSysLen = (u32)26;                                                                                                              // "/usr/lib/libSystem.B.dylib"
-        L.nDataSects = (L.hasDataSect ? (u32)1 : (u32)0) + (L.hasModInit ? (u32)1 : (u32)0) + (L.hasImp ? (u32)1 : (u32)0) + objcSectCount(); // bug 069
+        L.nDataSects = (L.hasDataSect ? (u32)1 : (u32)0) + (L.hasModInit ? (u32)1 : (u32)0) + (L.hasImp ? (u32)1 : (u32)0) + objcSectCount() + (L.hasBss ? (u32)1 : (u32)0); // bug 642, 069
         L.szPagezero = (u32)72;
         L.szTextSeg = (u32)72 + (u32)80 * ((u32)1 + (L.hasImp ? (u32)1 : (u32)0));
         L.szDataSeg = (u32)72 + (u32)80 * L.nDataSects;
@@ -2237,7 +2316,7 @@ class Sha256
             put32(L.szDataSeg);
             putName((u32)4, (u32)16);
             putAddr(L.dataSegFileOff);
-            put64(segSz, (u32)0);
+            put64(L.dataSegVmEnd - L.dataSegFileOff, (u32)0); // vmsize: __bss included; filesize below excludes it
             put64(L.dataSegFileOff, (u32)0);
             put64(segSz, (u32)0);
             put32(VM_READ() | VM_WRITE());
@@ -2293,6 +2372,22 @@ class Sha256
                 put32((u32)0);
                 put32((u32)0);
                 }
+            if (L.hasBss)
+                {
+                // Zero-fill: an address and a size, no file offset (bug 642).
+                putFixed(String.withCString("__bss"), (u32)16);
+                putName((u32)4, (u32)16);
+                putAddr(L.bssOff);
+                put64(L.bssLength, (u32)0);
+                put32((u32)0);
+                put32((u32)4); // align 16
+                put32((u32)0);
+                put32((u32)0);
+                put32((u32)1); // S_ZEROFILL
+                put32((u32)0);
+                put32((u32)0);
+                put32((u32)0);
+                }
             }
 
         // __DWARF (-g): read by debuggers, never by dyld's code.
@@ -2301,7 +2396,7 @@ class Sha256
             put32((u32)$19);
             put32(L.szDwarfSeg);
             putFixed(String.withCString("__DWARF"), (u32)16);
-            putAddr(L.dwarfOff);
+            putAddr(L.dwarfOff + L.vmShift); // past __bss (bug 642)
             put64(roundUp(L.dwarfSize, (u32)MACHO_PAGE), (u32)0);
             put64(L.dwarfOff, (u32)0);
             put64(L.dwarfSize, (u32)0);
@@ -2317,7 +2412,7 @@ class Sha256
                 sn.append((String*)order.get(k));
                 putFixed(sn, (u32)16);
                 putFixed(String.withCString("__DWARF"), (u32)16);
-                putAddr(at);
+                putAddr(at + L.vmShift);
                 put64(L.dwarf.section(k).count(), (u32)0);
                 put32(at);
                 put32((u32)0); // align
@@ -2335,7 +2430,7 @@ class Sha256
         put32((u32)$19);
         put32(L.szLink);
         putName((u32)7, (u32)16);
-        putAddr(L.linkeditOff);
+        putAddr(L.linkeditOff + L.vmShift); // vmaddr: past __bss (bug 642)
         put64(L.linkeditVmsz, (u32)0);
         put64(L.linkeditOff, (u32)0);
         put64(L.linkeditFilesz, (u32)0);
@@ -2587,7 +2682,9 @@ class Sha256
             strInto(strtab, nm);
             u32Into(nlist, strx);
             nlist.add((Object*)Number.withU32((u32)$0E)); // N_SECT
-            nlist.add((Object*)Number.withU32(inArray(dataSyms, nm) ? dataSect : (u32)1));
+            nlist.add((Object*)Number.withU32(inArray(dataSyms, nm)
+                ? (((Number*)symbols.get((Hashable*)nm)).asU32() >= gMachOBssFrom ? gMachOBssSect : dataSect)
+                : (u32)1));
             nlist.add((Object*)Number.withU32((u32)0));
             nlist.add((Object*)Number.withU32((u32)0));
             u32Into(nlist, symOffset(symbols, dataSyms, nm, textOffset, dataProgOffset));

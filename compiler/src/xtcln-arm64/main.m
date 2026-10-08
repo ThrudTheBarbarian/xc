@@ -189,6 +189,28 @@ static NSArray<NSDictionary *> *repartitionObjcSections(
     return sections;
 }
 
+// Bug 642: the program's COMMON symbols (its zero-initialised globals) get
+// their storage AFTER everything in `mdata`, as offsets past its end, and the
+// writer lays that run out as a __bss zero-fill section — in memory, not in
+// the file. Called after appendModInit, so the mod-init array stays the data
+// tail the writer expects. A name a merged object defined strongly keeps that
+// definition (a strong def beats a common). Returns the run's length.
+static NSUInteger allocateBss(NSArray<NSDictionary *> *commons, NSMutableData *mdata,
+                              NSMutableDictionary<NSString *, NSNumber *> *msyms,
+                              NSMutableSet<NSString *> *mdataSyms) {
+    NSUInteger cursor = 0;
+    for (NSDictionary *c in commons) {
+        NSString *nm = c[@"name"];
+        if (msyms[nm]) continue;
+        uint64_t sz = [c[@"size"] unsignedLongLongValue], al = 1ull << [c[@"align"] unsignedLongLongValue];
+        if (al < 8) al = 8;
+        while (cursor % al) cursor++;
+        msyms[nm] = @(mdata.length + cursor); [mdataSyms addObject:nm];
+        cursor += sz;
+    }
+    return cursor;
+}
+
 static NSUInteger appendModInit(XAArm64Assembler *as, NSMutableData *mdata,
                                 NSMutableArray<XAArm64Fixup *> *mfix) {
     NSData *mi = as.modInitData;
@@ -616,7 +638,7 @@ int main(int argc, const char *argv[]) {
             if (!src) { fprintf(stderr, "xcc-ln-arm64: cannot read '%s': %s\n", argv[5], err.localizedDescription.UTF8String); return 1; }
             XAArm64Assembler *as = [[XAArm64Assembler alloc] init];
             NSData *text = [as assemble:src error:&err];
-            [as demoteCommonsToLocalData];
+            NSArray<NSDictionary *> *bssCommons = [as takeCommons]; // bug 642: __bss, not __data
             if (!text) { fprintf(stderr, "xcc-ln-arm64: assembly failed: %s\n", err.localizedDescription.UTF8String); return 1; }
             NSData *iface = nil;
             if (![ifacePath isEqualToString:@"-"]) iface = [NSData dataWithContentsOfFile:ifacePath];
@@ -680,12 +702,14 @@ int main(int argc, const char *argv[]) {
             NSArray<NSDictionary *> *objcSects =
                 repartitionObjcSections(mdata, mObjc, msyms, mdataSyms, mfix);
             NSUInteger miLen = appendModInit(as, mdata, mfix);
+            NSUInteger bssLen = allocateBss(bssCommons, mdata, msyms, mdataSyms);
             NSData *dylib = [XTMachOWriter dylibFromText:text installName:installName
                                 exports:exports iface:iface symbols:msyms
                                 data:mdata dataSymbols:mdataSyms fixups:mfix
                           modInitLength:miLen
                             objcSections:objcSects
-                                  dylibs:dDylibs];
+                                  dylibs:dDylibs
+                               bssLength:bssLen];
             if (![dylib writeToFile:outPath atomically:YES]) {
                 fprintf(stderr, "xcc-ln-arm64: cannot write '%s'\n", argv[6]); return 1;
             }
@@ -763,7 +787,7 @@ int main(int argc, const char *argv[]) {
 
         XAArm64Assembler *as = [[XAArm64Assembler alloc] init];
         NSData *text = [as assemble:src error:&err];
-        [as demoteCommonsToLocalData];
+        NSArray<NSDictionary *> *bssCommons = [as takeCommons]; // bug 642: __bss, not __data
         if (!text) {
             fprintf(stderr, "xcc-ln-arm64: assembly failed: %s\n",
                     err.localizedDescription.UTF8String);
@@ -844,6 +868,12 @@ int main(int argc, const char *argv[]) {
         // first use (blewit finding #7). Calls stub-bind and pointer slots
         // data-bind, so those resolve at load; a direct page reference to a
         // missing symbol has nothing to bind and must fail HERE, by name.
+        NSArray<NSDictionary *> *objcSects =
+            repartitionObjcSections(mdata, mObjc, msyms, mdataSyms, mfix);
+        NSUInteger miLen = appendModInit(as, mdata, mfix);
+        // After the mod-init tail, so the __bss symbols sit past the data —
+        // and before the check below, which must see them defined (bug 642).
+        NSUInteger bssLen = allocateBss(bssCommons, mdata, msyms, mdataSyms);
         {
             NSMutableSet<NSString *> *missing = [NSMutableSet set];
             for (XAArm64Fixup *f in mfix) {
@@ -859,9 +889,6 @@ int main(int argc, const char *argv[]) {
                 return 1;
             }
         }
-        NSArray<NSDictionary *> *objcSects =
-            repartitionObjcSections(mdata, mObjc, msyms, mdataSyms, mfix);
-        NSUInteger miLen = appendModInit(as, mdata, mfix);
         NSData *macho = [XTMachOWriter executableFromText:mtext
                                               entryOffset:entry.unsignedLongLongValue
                                                   symbols:msyms
@@ -871,7 +898,8 @@ int main(int argc, const char *argv[]) {
                                                    dylibs:dylibs
                                                    rpaths:rpaths
                                             modInitLength:miLen
-                                             objcSections:objcSects];
+                                             objcSections:objcSects
+                                                bssLength:bssLen];
         // Bug 580: a call no linked library exports, and libSystem does not
         // have, is a link error rather than a launch-time `Symbol not found`.
         NSArray<NSString *> *unexported = [XTMachOWriter lastUnexportedSystemImports];
