@@ -245,16 +245,10 @@ here, on every backend.
             self.outline(g, self.selection());
             }
         }
-    // A hollow yellow rectangle, four thin bars, drawn over the picture while a drag is in progress.
+    // A hollow yellow rectangle, drawn over the picture while a drag is in progress.
     void outline(UXGraphics* g, UXRect r)
         {
-        i16 t = 2; // the bar's thickness
-        i32 yb = r.y + r.h - t;
-        i32 xr = r.x + r.w - t;
-        g.fillRectRGB(UXGeom.make(r.x, r.y, r.w, t), 255, 255, 0);
-        g.fillRectRGB(UXGeom.make(r.x, yb, r.w, t), 255, 255, 0);
-        g.fillRectRGB(UXGeom.make(r.x, r.y, t, r.h), 255, 255, 0);
-        g.fillRectRGB(UXGeom.make(xr, r.y, t, r.h), 255, 255, 0);
+        g.drawRectRGB(r, 2, 255, 255, 0);
         }
 ```
 
@@ -280,8 +274,8 @@ and the old one is freed here.
 `drawRect` is the paint. It recomputes first when the region or the size
 changed, then blits the buffer with
 [`drawPixels`](/compiler/api/uxkit/uxgraphics/). While a drag is in progress it
-also draws the rubber band as a hollow yellow rectangle, four thin bars over the
-picture, so the zoom target is visible without hiding it.
+also draws the rubber band as a hollow yellow rectangle, so the zoom
+target stays visible.
 
 ## The drag, keeping the window's shape
 

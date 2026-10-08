@@ -94,6 +94,14 @@ class UXGdiGraphics : Object<UXGraphics>
         DeleteObject(br);
         }
 
+    void drawRect(UXRect r, i32 lineWidth, i32 pen)
+        {
+        uxGfxDrawRect(self, r, lineWidth, false, pen, 0, 0, 0);
+        }
+    void drawRectRGB(UXRect r, i32 lineWidth, i32 red, i32 green, i32 blue)
+        {
+        uxGfxDrawRect(self, r, lineWidth, true, 0, red, green, blue);
+        }
     void fillRectRGB(UXRect r, i32 red, i32 green, i32 blue)
         {
         RECT rc;

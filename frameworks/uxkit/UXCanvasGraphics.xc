@@ -109,6 +109,14 @@ class UXCanvasGraphics : Object<UXGraphics>
         ux_fill_rect((i32)(origin.x + r.x), (i32)(origin.y + r.y), (i32)r.w, (i32)r.h,
                      self.penR(pen), self.penG(pen), self.penB(pen), (i32)255);
         }
+    void drawRect(UXRect r, i32 lineWidth, i32 pen)
+        {
+        uxGfxDrawRect(self, r, lineWidth, false, pen, 0, 0, 0);
+        }
+    void drawRectRGB(UXRect r, i32 lineWidth, i32 red, i32 green, i32 blue)
+        {
+        uxGfxDrawRect(self, r, lineWidth, true, 0, red, green, blue);
+        }
     void fillRectRGB(UXRect r, i32 red, i32 green, i32 blue)
         {
         self.fillRectRGBA(r, red, green, blue, (i32)255);

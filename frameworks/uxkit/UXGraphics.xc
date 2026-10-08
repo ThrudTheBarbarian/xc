@@ -43,6 +43,11 @@ protocol UXGraphics
     void fillRect(UXRect r, i32 pen);                         // a solid rectangle (VDI pen index)
     void fillRectRGB(UXRect r, i32 red, i32 green, i32 blue); // a solid rectangle in true 8-bit RGB
     void fillRectRGBA(UXRect r, i32 red, i32 green, i32 blue, i32 alpha); // ... and with an alpha
+    // The OUTLINE of r, lineWidth pixels thick, drawn inside it: the stroked counterpart of the fill
+    // above.  A stroke is four filled bars, so a backend needs no native call and they all agree.
+    // A rubber band, a frame, a focus ring.
+    void drawRect(UXRect r, i32 lineWidth, i32 pen);
+    void drawRectRGB(UXRect r, i32 lineWidth, i32 red, i32 green, i32 blue);
     // Make a rectangle carry NOTHING.  A layer that composites over a map has to start empty each frame,
     // and there is no other call that empties: fillRectRGBA(r,0,0,0,0) is a source-over fill, so alpha 0
     // paints nothing at all rather than erasing.  Where the surface has an alpha this clears to
@@ -138,4 +143,36 @@ protocol UXGraphics
                          i32 * dash, i32 ndash, i32 phase, i32 red, i32 green, i32 blue);
     void strokeNativeRGBA(i32 * ops, i32 n, double width, i32 startCap, i32 endCap, i32 join,
                           i32 * dash, i32 ndash, i32 phase, i32 red, i32 green, i32 blue, i32 alpha);
+    }
+
+// A rectangle outline, lineWidth pixels thick, drawn inside r as four bars.  One place, so every
+// backend's drawRect/drawRectRGB agrees, and the bars go through the backend's own fill so the
+// pixels are its.  `rgb` picks the colour form; the pen is unused when it is set.
+static void uxGfxDrawRect(UXGraphics* g, UXRect r, i32 lineWidth, bool rgb, i32 pen,
+                          i32 red, i32 green, i32 blue)
+    {
+    if (lineWidth < 1) { lineWidth = 1; }
+    i32 x = r.x;
+    i32 y = r.y;
+    i32 w = r.w;
+    i32 h = r.h;
+    if (w <= 0 || h <= 0) { return; }
+    if (lineWidth > w) { lineWidth = w; }
+    if (lineWidth > h) { lineWidth = h; }
+    UXRect bars[4];
+    bars[0] = UXGeom.make(x, y, w, lineWidth);                 // top
+    bars[1] = UXGeom.make(x, y + h - lineWidth, w, lineWidth); // bottom
+    bars[2] = UXGeom.make(x, y, lineWidth, h);                 // left
+    bars[3] = UXGeom.make(x + w - lineWidth, y, lineWidth, h); // right
+    for (i32 i = 0; i < 4; i = i + 1)
+        {
+        if (rgb)
+            {
+            g.fillRectRGB(bars[i], red, green, blue);
+            }
+        else
+            {
+            g.fillRect(bars[i], pen);
+            }
+        }
     }

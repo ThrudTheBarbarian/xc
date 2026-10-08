@@ -203,7 +203,7 @@ all five.
 
 ## Topics
 
-[fillRect](#fillrect) · [fillRectRGB](#fillrectrgb) · [fillRectRGBA](#fillrectrgba) · [clearRect](#clearrect) · [drawPixels](#drawpixels) · [fillPolygon](#fillpolygon) · [fillPolygonRGB](#fillpolygonrgb) · [fillPolygonRGBA](#fillpolygonrgba) · [fillTriangle](#filltriangle) · [fillCircle](#fillcircle) · [drawLine](#drawline) · [drawText](#drawtext) · [drawTextRGBA](#drawtextrgba) · [drawTextFont](#drawtextfont) · [drawTextFontRGBA](#drawtextfontrgba) · [drawTheme](#drawtheme) · [hasThemeArt](#hasthemeart) · [blendsAlpha](#blendsalpha) · [strokesNatively](#strokesnatively) · [dashesNatively](#dashesnatively) · [strokeNative](#strokenative) · [strokeNativeRGB](#strokenativergb) · [strokeNativeRGBA](#strokenativergba)
+[fillRect](#fillrect) · [fillRectRGB](#fillrectrgb) · [fillRectRGBA](#fillrectrgba) · [drawRect](#drawrect) · [drawRectRGB](#drawrectrgb) · [clearRect](#clearrect) · [drawPixels](#drawpixels) · [fillPolygon](#fillpolygon) · [fillPolygonRGB](#fillpolygonrgb) · [fillPolygonRGBA](#fillpolygonrgba) · [fillTriangle](#filltriangle) · [fillCircle](#fillcircle) · [drawLine](#drawline) · [drawText](#drawtext) · [drawTextRGBA](#drawtextrgba) · [drawTextFont](#drawtextfont) · [drawTextFontRGBA](#drawtextfontrgba) · [drawTheme](#drawtheme) · [hasThemeArt](#hasthemeart) · [blendsAlpha](#blendsalpha) · [strokesNatively](#strokesnatively) · [dashesNatively](#dashesnatively) · [strokeNative](#strokenative) · [strokeNativeRGB](#strokenativergb) · [strokeNativeRGBA](#strokenativergba)
 
 ### fillRect
 
@@ -213,8 +213,7 @@ void fillRect(UXRect r, i32 pen)
 
 A solid rectangle. Also use it to draw a **hairline**: a 1px-wide fill is
 reliable on every backend, including those where [`drawLine`](#drawline) is
-a stand-in. The toolkit draws its own frames and dividers as four thin
-fills.
+a stand-in. For a hollow frame, use [`drawRect`](#drawrect).
 
 ### fillRectRGB
 
@@ -230,6 +229,23 @@ void fillRectRGBA(UXRect r, i32 red, i32 green, i32 blue, i32 alpha)
 
 [`fillRectRGB`](#fillrectrgb) with an alpha. See [Alpha](#alpha) and
 [`blendsAlpha`](#blendsalpha).
+
+### drawRect
+
+```c
+void drawRect(UXRect r, i32 lineWidth, i32 pen)
+```
+
+### drawRectRGB
+
+```c
+void drawRectRGB(UXRect r, i32 lineWidth, i32 red, i32 green, i32 blue)
+```
+
+The OUTLINE of `r`, `lineWidth` pixels thick, drawn inside it: `drawRectRGB` in
+true color, `drawRect` in a pen index. A rubber band, a frame, a focus ring. It
+is four filled bars, so no backend needs a native stroke and they all agree.
+From 0.75.
 
 ### clearRect
 

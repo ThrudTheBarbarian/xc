@@ -49,6 +49,14 @@ class UXGemGraphics : Object<UXGraphics>
 
     // True-colour fill: the platform is 32-bit RGBA, so set a scratch pen (255) straight from RGB via
     // v_setrgb and fill with it.  We re-set it every call, so nothing else can depend on pen 255.
+    void drawRect(UXRect r, i32 lineWidth, i32 pen)
+        {
+        uxGfxDrawRect(self, r, lineWidth, false, pen, 0, 0, 0);
+        }
+    void drawRectRGB(UXRect r, i32 lineWidth, i32 red, i32 green, i32 blue)
+        {
+        uxGfxDrawRect(self, r, lineWidth, true, 0, red, green, blue);
+        }
     void fillRectRGB(UXRect r, i32 red, i32 green, i32 blue)
         {
         i16 pxy[4];
