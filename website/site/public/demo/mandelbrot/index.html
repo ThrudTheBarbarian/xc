@@ -1,0 +1,81 @@
+<!doctype html>
+<!-- The live Mandelbrot: the tutorial's program, built for the web. This page
+     is the only file kept here; the deploy script (tools/release/deploy-website.sh)
+     builds mandelbrot.wasm and mandelbrot.js beside it from
+     website/site/examples/uxkit/mandelbrot.xc and copies UXKit's two page
+     scripts in. The tutorial page embeds this page in an iframe; it also
+     stands on its own. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mandelbrot</title>
+<style>
+  body { margin: 0; font: 14px/1.4 system-ui, sans-serif; background: #1b1b1f; color: #ddd; }
+  /* The canvas is the program's screen; its window fills it. */
+  #ux-canvas { display: block; width: 720px; height: 520px; margin: 0 auto; background: #fff; }
+  #status { max-width: 720px; margin: 8px auto 0; padding: 0 4px; }
+  #status p { margin: 0 0 4px; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; color: #9fd; }
+  a { color: #8cf; }
+  @media (prefers-color-scheme: light) {
+    body { background: #f4f4f6; color: #222; }
+    .mono { color: #067; }
+    a { color: #05a; }
+  }
+</style>
+</head>
+<body>
+<canvas id="ux-canvas" width="720" height="520"></canvas>
+<div id="status">
+  <p>Drag a rectangle to zoom in; click a crumb to go back.</p>
+  <p id="where" class="mono"></p>
+  <p id="last" class="mono"></p>
+</div>
+<script>
+(() => {
+  const where = document.getElementById('where'), last = document.getElementById('last');
+  const say = (el, t) => { el.textContent = t; };
+  // The run loop lives in a worker that shares memory with the page, which a
+  // browser allows only on a cross-origin isolated page (COOP/COEP headers).
+  // This host sets no headers, so /coi-sw.js adds them from a service worker:
+  // register it for this folder and reload once under it. A second load that
+  // is still not isolated means the embedding page is not, so offer a tab.
+  if (!crossOriginIsolated) {
+    if (!('serviceWorker' in navigator)) { say(where, 'This browser has no service workers, so the demo cannot run here.'); return; }
+    if (sessionStorage.getItem('coi-demo')) {
+      say(where, 'This page is not cross-origin isolated, so the program cannot start here.');
+      last.innerHTML = '<a href="./" target="_blank">Open the demo in its own tab</a>';
+      return;
+    }
+    navigator.serviceWorker.register('/coi-sw.js', { scope: '/demo/mandelbrot/' }).then((r) => {
+      sessionStorage.setItem('coi-demo', '1');
+      const w = r.installing || r.waiting || r.active;
+      if (!w || w.state === 'activated') location.reload();
+      else w.addEventListener('statechange', () => { if (w.state === 'activated') location.reload(); });
+    }).catch((e) => say(where, 'The service worker did not install: ' + e));
+    return;
+  }
+  sessionStorage.removeItem('coi-demo');
+  // Where the par block can run: WebGPU through JSPI, as the loader decides it.
+  const jspi = typeof WebAssembly.Suspending === 'function' && typeof WebAssembly.promising === 'function';
+  const gpu = typeof navigator.gpu !== 'undefined';
+  say(where, jspi && gpu
+      ? 'WebGPU and JSPI are available: par auto times the first frame on the CPU and the next on the GPU, then keeps the faster.'
+      : !gpu ? 'No WebGPU in this browser: the par block runs on the CPU.'
+             : 'WebGPU but no JSPI in this browser: the par block runs on the CPU.');
+  // With XC_PAR_REPORT the program logs where each frame ran; the page's
+  // xccLog hook takes the program's log lines (from 0.75), its output stays
+  // on the console.
+  globalThis.xccEnv = { XC_PAR_REPORT: '1' };
+  globalThis.xccLog = (t) => { if (/^par: (mandelbrot|a block)/.test(t)) say(last, t); else console.log(t); };
+  globalThis.xccConfig = { runLoop: 'worker', workerScript: 'ux_web_browser.js', canvas: '#ux-canvas' };
+  for (const s of ['ux_web_page.js', 'mandelbrot.js']) {
+    const e = document.createElement('script');
+    e.src = s; e.async = false;
+    document.body.appendChild(e);
+  }
+})();
+</script>
+</body>
+</html>

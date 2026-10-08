@@ -348,7 +348,7 @@ class App : Object<UXApplicationDelegate>
         UXView* content = new UXView();
         win = new UXWindow();
         app.addWindow(win);
-        win.open("Mandelbrot", UXGeom.make(80, 80, 720, 520), content);
+        win.open("Mandelbrot", UXGeom.make(0, 0, 720, 520), content);
 
         crumb = new UXBreadcrumb();
         crumb.setSeparator(">");
@@ -401,6 +401,7 @@ class App : Object<UXApplicationDelegate>
             Zoom* z = (Zoom* ?)history.get(i);
             crumb.addSegment(z.label, i);
             }
+        crumb.setNeedsDisplay(); // the segments changed; the control lays out as it draws
         }
     // "8x": how much closer than the whole set.  Hand-rolled rather than pulled
     // in for one label.

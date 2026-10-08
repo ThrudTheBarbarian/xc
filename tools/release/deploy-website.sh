@@ -43,6 +43,22 @@ DOCROOT=${DEPLOY_DOCROOT:-}
 echo "== build =="
 ( cd "$SITE" && npm run build )
 
+# The live demos: a tutorial's program built for the web, beside its page in
+# public/demo/<name>/ (which holds only the page). UXKit is compiled in from
+# the repository, so the demo is the published source, built by the xcc on
+# PATH (or XCC in build.env).
+XCC=${XCC:-xcc}
+command -v "$XCC" >/dev/null 2>&1 || {
+  echo "deploy: no xcc on PATH; set XCC in build.env (see build.env.template)"
+  exit 1
+}
+echo "== build the live demos with $("$XCC" --version | head -1) =="
+D="$SITE/dist/demo/mandelbrot"
+"$XCC" -A wasm32 -O3 -q -I "$ROOT/frameworks/uxkit" -o "$D/mandelbrot.wasm" \
+  "$SITE/examples/uxkit/mandelbrot.xc"
+rm -f "$D/mandelbrot.html"    # xcc's console page; index.html is the demo's
+cp "$ROOT/frameworks/uxkit/ux_web_page.js" "$ROOT/frameworks/uxkit/ux_web_browser.js" "$D/"
+
 if [ -n "${FEEDBACK_RECIPIENT:-}" ]; then
   printf "<?php\nconst RECIPIENT = '%s';\n" "$FEEDBACK_RECIPIENT" > "$SITE/dist/feedback/config.php"
 else

@@ -17,6 +17,31 @@ The program is `website/site/examples/uxkit/mandelbrot.xc`, and the
 built a UXKit program before, [Hello UX](/tutorials/hello-ux/) explains the
 shape of one.
 
+## Try it
+
+This is the tutorial's program, built for the web and running in the page.
+Drag a rectangle to zoom in; click a crumb to go back. In a browser with
+WebGPU and JSPI (Chrome 137 or later) the `par` block runs on your GPU: `par`
+auto times the first frame on the CPU and the next on the GPU, then keeps the
+faster. In other browsers it runs on the CPU.
+[Open it in its own tab](/demo/mandelbrot/).
+
+<div style="overflow-x: auto;"><iframe src="/demo/mandelbrot/" title="The Mandelbrot program, running in the page" width="720" height="620" style="border: 0; display: block;"></iframe></div>
+<script>
+// The program's run loop shares memory with its page, which a browser allows
+// only on a cross-origin isolated page. The site's host sets no headers, so
+// /coi-sw.js adds them from a service worker: register it for this page and
+// reload once under it. The demo page does the same for its own folder.
+if (crossOriginIsolated) sessionStorage.removeItem('coi-tutorial');
+else if ('serviceWorker' in navigator && !sessionStorage.getItem('coi-tutorial'))
+  navigator.serviceWorker.register('/coi-sw.js', { scope: '/tutorials/mandelbrot/' }).then((r) => {
+    sessionStorage.setItem('coi-tutorial', '1');
+    const w = r.installing || r.waiting || r.active;
+    if (!w || w.state === 'activated') location.reload();
+    else w.addEventListener('statechange', () => { if (w.state === 'activated') location.reload(); });
+  });
+</script>
+
 ## What it uses
 
 - A **custom view**: a plain [`UXView`](/compiler/api/uxkit/uxview/) has no look
@@ -459,7 +484,7 @@ class App : Object<UXApplicationDelegate>
         UXView* content = new UXView();
         win = new UXWindow();
         app.addWindow(win);
-        win.open("Mandelbrot", UXGeom.make(80, 80, 720, 520), content);
+        win.open("Mandelbrot", UXGeom.make(0, 0, 720, 520), content);
 
         crumb = new UXBreadcrumb();
         crumb.setSeparator(">");
@@ -512,6 +537,7 @@ class App : Object<UXApplicationDelegate>
             Zoom* z = (Zoom* ?)history.get(i);
             crumb.addSegment(z.label, i);
             }
+        crumb.setNeedsDisplay(); // the segments changed; the control lays out as it draws
         }
     // "8x": how much closer than the whole set.  Hand-rolled rather than pulled
     // in for one label.
@@ -604,3 +630,17 @@ where the platform has one (Metal on macOS, Vulkan on Linux and Android, the
 NVIDIA driver or Vulkan on Windows, WebGPU in a browser). `XC_PAR_REPORT=1`
 prints where each block ran, and `XC_PAR=cpu` keeps it on the CPU for
 comparison.
+
+For the web, the build is the one in [Hello UX](/tutorials/hello-ux/):
+
+```
+xcc -A wasm32 -O3 -I frameworks/uxkit website/site/examples/uxkit/mandelbrot.xc \
+   -o mandelbrot.wasm
+```
+
+with UXKit's `ux_web_page.js` and `ux_web_browser.js` beside the output and a
+page that loads them, served with the two cross-origin isolation headers. The
+page the demo above runs in is `website/site/public/demo/mandelbrot/index.html`;
+it shows the window's content, 720 by 520, out of the canvas that is the
+program's screen, and gives the program `XC_PAR_REPORT` through
+`globalThis.xccEnv`, which reaches the worker from 0.75.
