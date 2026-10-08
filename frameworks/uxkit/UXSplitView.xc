@@ -79,10 +79,16 @@ class UXSplitDivider : UXView
         {
         return vertical;
         }
-    // Set BEFORE the split view is added to a tree (it decides the initial layout).
+    // The split's axis: side by side, or stacked.  It decides the initial layout, so it is normally
+    // set before the view is added to a tree; set after, it re-lays.
     void setVertical(bool v)
         {
         vertical = v;
+        if (divider != (UXSplitDivider*)0)
+            {
+            self.layoutPanes();
+            self.setNeedsDisplay();
+            }
         }
     void setDividerPos(i16 p)
         {

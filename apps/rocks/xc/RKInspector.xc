@@ -333,6 +333,13 @@ class RKRow : Object
             {
             u8* cls = doc.classOf(tree, o);
             Array<RKChoice>* keys = RKInspector.attrKeys(cls);
+            // A control inside a split or tab view chooses its pane/tab, whatever its own class is.
+            UXRscObject* par = tree.parentOf(o);
+            u8* pcls = par != (UXRscObject*)0 ? doc.classOf(tree, par) : (u8*)0;
+            if (pcls != (u8*)0 && (UXRscDoc.seq(pcls, (u8*)"UXSplitView") || UXRscDoc.seq(pcls, (u8*)"UXTabView")))
+                {
+                keys.add(RKChoice.of((u8*)"slot"));
+                }
             for (u32 k = (u32)0; k < keys.count(); k = k + (u32)1)
                 {
                 u8* key = ((RKChoice* ?)keys.get(k)).s;
@@ -434,6 +441,11 @@ class RKRow : Object
         else if (UXRscDoc.seq(cls, (u8*)"UXScrollView"))
             {
             ks.add(RKChoice.of((u8*)"lineHeight"));
+            }
+        else if (UXRscDoc.seq(cls, (u8*)"UXSplitView"))
+            {
+            ks.add(RKChoice.of((u8*)"vertical"));
+            ks.add(RKChoice.of((u8*)"divider"));
             }
         return ks;
         }

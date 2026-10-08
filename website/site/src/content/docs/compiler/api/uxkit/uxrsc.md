@@ -195,8 +195,10 @@ static Object* makeUXKit(u8* cls)
 UXKit's controls that GEM has no type for, by class name: `UXSlider`,
 `UXStepper`, `UXProgressBar`, `UXSegmentedControl`, `UXComboBox`, and from
 0.75 `UXTextView`, `UXDatePicker`, `UXBreadcrumb`, `UXTableView`,
-`UXOutlineView`, `UXCollectionView` and `UXScrollView`. A `UXScrollView` is a
-container: its designed children are built into its document view. A
+`UXOutlineView`, `UXCollectionView`, `UXScrollView` and `UXSplitView`. A
+`UXScrollView` and a `UXSplitView` are containers: a scroll view builds its
+designed children into its document view, and a split view sends each child to
+the pane its `slot` attribute names (0 or 1). A
 document holds one as a `G_USERDEF` of that class, with its settings in
 [attributes](/compiler/api/uxkit/uxrscdoc/#uxrscattr). `make` falls back to
 this when no registered factory knows the name. From 0.7.
@@ -215,7 +217,8 @@ and `completed`; a segmented control's `segments` (`"One|Two|Three"`) and
 `2026-10-08`; a breadcrumb's `segments` and `separator`; a table's (or
 outline's) `columns`, written `"Name:120|Size:60"`; a collection view's
 `items` (`"One|Two|Three"`), `itemSize` (a square, in pixels) and `spacing`
-(both gaps); a scroll view's `lineHeight`. A value the theme varies wins
+(both gaps); a scroll view's `lineHeight`; a split view's `vertical` (1 for
+stacked) and `divider` (the divider's position). A value the theme varies wins
 over the shared one. The loader calls it for every control, and after a
 container's children are built it tells the container how tall the content is
 (a scroll view sizes its bar from that).

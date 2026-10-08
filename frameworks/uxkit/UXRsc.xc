@@ -27,6 +27,7 @@
 #import "UXBreadcrumb.xc"
 #import "UXTableView.xc"
 #import "UXScrollView.xc"
+#import "UXSplitView.xc"
 #import "UXOutlineView.xc"
 #import "UXCollectionView.xc"
 #import "UXGeometry.xc"
@@ -218,6 +219,10 @@ class UXRsc
             {
             return (Object*)new UXScrollView();
             }
+        if (UXRscDoc.seq(cls, (u8*)"UXSplitView"))
+            {
+            return (Object*)new UXSplitView();
+            }
         return (Object*)0;
         }
 
@@ -342,6 +347,17 @@ class UXRsc
             if (lh > (i32)0)
                 {
                 sc.setLineHeight((i16)lh);
+                }
+            return;
+            }
+        UXSplitView* sp = (UXSplitView* ?)(Object*)v;
+        if (sp != (UXSplitView*)0)
+            {
+            sp.setVertical(UXRsc.attrInt(doc, formId, logicalId, theme, (u8*)"vertical", (i32)0) != (i32)0);
+            i32 dp = UXRsc.attrInt(doc, formId, logicalId, theme, (u8*)"divider", (i32)0);
+            if (dp > (i32)0)
+                {
+                sp.setDividerPos((i16)dp);
                 }
             }
         }
@@ -587,7 +603,7 @@ class UXRsc
         Array<UXRscObject>* order = t.allObjects(); // pre-order: the index a space-0 Ref names
         for (i32 i = (i32)0; i < t.root.childCount(); i = i + (i32)1)
             {
-            UXRsc.build(doc, ni, order, treeIndex, t.root.childAt(i), rv);
+            UXRsc.build(doc, ni, order, treeIndex, t.root.childAt(i), rv, (i32)0, (i32)0);
             }
 
         // top-level objects: the document's, made on every load
@@ -673,21 +689,24 @@ class UXRsc
         }
 
     static void build(UXRscDoc* doc, UXRscInstance* ni, Array<UXRscObject>* order, i32 treeIndex,
-                      UXRscObject* o, UXView* parent)
+                      UXRscObject* o, UXView* parent, i32 dx, i32 dy)
         {
         UXView* v = UXRsc.viewFor(o, UXRsc.classFor(doc, ni.formId, treeIndex, o, UXRsc.indexIn(order, o)));
-        parent.addSubview(v, UXGeom.make((i16)o.x, (i16)o.y, (i16)o.w, (i16)o.h));
+        parent.addSubview(v, UXGeom.make((i16)(o.x - dx), (i16)(o.y - dy), (i16)o.w, (i16)o.h));
+        i32 bit = (i32)UXRscConnection.themeBit(ni.klass, ni.orient);
         UXRsc.applyState(v, o);
-        UXRsc.applyAttrs(v, doc, ni.formId, o.logicalId, (i32)UXRscConnection.themeBit(ni.klass, ni.orient));
-        v.setAutoresizeMask(UXRsc.autoresizeOf(doc, ni.formId, o.logicalId, (i32)UXRscConnection.themeBit(ni.klass, ni.orient)));
+        UXRsc.applyAttrs(v, doc, ni.formId, o.logicalId, bit);
+        v.setAutoresizeMask(UXRsc.autoresizeOf(doc, ni.formId, o.logicalId, bit));
         ni.objs.add(o);
         ni.views.add(v);
-        UXView* inner = UXRsc.childParent(v);
         i32 extent = (i32)0;
         for (i32 i = (i32)0; i < o.childCount(); i = i + (i32)1)
             {
             UXRscObject* c = o.childAt(i);
-            UXRsc.build(doc, ni, order, treeIndex, c, inner);
+            i32 cdx = (i32)0;
+            i32 cdy = (i32)0;
+            UXView* inner = UXRsc.childParent(v, doc, ni.formId, bit, c, &cdx, &cdy);
+            UXRsc.build(doc, ni, order, treeIndex, c, inner, cdx, cdy);
             i32 bottom = (i32)c.y + (i32)c.h;
             if (bottom > extent)
                 {
@@ -697,10 +716,15 @@ class UXRsc
         UXRsc.containerFilled(v, extent);
         }
 
-    // Where a container's designed children go: a scroll view keeps them in its document, every other
-    // view holds them itself.  (Split and tab views will add their slot routing here.)
-    static UXView* childParent(UXView* v)
+    // Where a container's designed children go.  A scroll view keeps them all in its document; a
+    // split view sends each to the pane its `slot` attribute names; every other view holds them itself.
+    // A child's frame is relative to the container, so when it goes into a sub-view whose origin is not
+    // the container's, (dx, dy) is that origin, to subtract.
+    static UXView* childParent(UXView* v, UXRscDoc* doc, i32 formId, i32 theme, UXRscObject* child,
+                               i32* dx, i32* dy)
         {
+        dx[0] = (i32)0;
+        dy[0] = (i32)0;
         UXScrollView* sv = (UXScrollView* ?)(Object*)v;
         if (sv != (UXScrollView*)0)
             {
@@ -708,6 +732,21 @@ class UXRsc
             if (d != (UXView*)0)
                 {
                 return d;
+                }
+            }
+        UXSplitView* sp = (UXSplitView* ?)(Object*)v;
+        if (sp != (UXSplitView*)0)
+            {
+            i32 slot = (i32)0;
+            if (doc != (UXRscDoc*)0)
+                {
+                slot = UXRsc.attrInt(doc, formId, child.logicalId, theme, (u8*)"slot", (i32)0);
+                }
+            UXView* p = slot == (i32)1 ? sp.secondPane() : sp.firstPane();
+            if (p != (UXView*)0)
+                {
+                dx[0] = slot == (i32)1 ? (i32)sp.dividerPosition() : (i32)0;
+                return p;
                 }
             }
         return v;

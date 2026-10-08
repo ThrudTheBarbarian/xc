@@ -115,6 +115,9 @@ void main(void)
     setAttr(c, (u8*)"items", (u8*)"One|Two|Three");
     UXRscObject* sco = place(c, (u8*)"Scroll View", (i32)20, (i32)480);
     UXRscObject* lbo = place(c, (u8*)"Label", (i32)40, (i32)500);
+    UXRscObject* spo = place(c, (u8*)"Split View", (i32)260, (i32)480);
+    UXRscObject* lbo2 = place(c, (u8*)"Label", (i32)380, (i32)500);
+    setAttr(c, (u8*)"slot", (u8*)"1");
     checkTrue("on the canvas, a UXTextView", (UXTextView* ?)(Object*)c.canvasMap.viewFor(tvo) != (UXTextView*)0);
     checkTrue("a UXDatePicker", (UXDatePicker* ?)(Object*)c.canvasMap.viewFor(dpo) != (UXDatePicker*)0);
     checkTrue("a UXBreadcrumb", (UXBreadcrumb* ?)(Object*)c.canvasMap.viewFor(bco) != (UXBreadcrumb*)0);
@@ -134,6 +137,12 @@ void main(void)
     check("a control dropped on it becomes its child", sco != (UXRscObject*)0 ? sco.childCount() : (i32)0, (i32)1);
     checkTrue("and the canvas puts it in the document",
               scw != (UXScrollView*)0 && lbw != (UXView*)0 && lbw.superview == scw.document());
+    UXSplitView* spw = (UXSplitView* ?)(Object*)c.canvasMap.viewFor(spo);
+    UXView* lbw2 = (UXView* ?)c.canvasMap.viewFor(lbo2);
+    checkTrue("a UXSplitView", spw != (UXSplitView*)0);
+    check("a control in its second pane nests", spo != (UXRscObject*)0 ? spo.childCount() : (i32)0, (i32)1);
+    checkTrue("and the canvas puts it in pane 1",
+              spw != (UXSplitView*)0 && lbw2 != (UXView*)0 && lbw2.superview == spw.secondPane());
     checkTrue("a table view is designable", (UXDesignable* ?)(Object*)tblw != (UXDesignable*)0);
     checkTrue("its datasource is an outlet",
               (UXDesignable* ?)(Object*)tblw != (UXDesignable*)0 &&
@@ -173,6 +182,10 @@ void main(void)
     checkTrue("the scroll view loads as one", scl != (UXScrollView*)0);
     check("with the dropped control in its document",
           scl != (UXScrollView*)0 ? (i32)scl.document().subviews.count() : (i32)0, (i32)1);
+    UXSplitView* spl = (UXSplitView* ?)(Object*)loadedFor(ni, bt.root.childAt((i32)7));
+    checkTrue("the split view loads as one", spl != (UXSplitView*)0);
+    check("with the control in its second pane",
+          spl != (UXSplitView*)0 ? (i32)spl.secondPane().subviews.count() : (i32)0, (i32)1);
     checkTrue("a bad date is no date", UXRsc.dateFrom((u8*)"2026-13-01") == (UXDate*)0 && UXRsc.dateFrom((u8*)"soon") == (UXDate*)0);
 
     win.close();

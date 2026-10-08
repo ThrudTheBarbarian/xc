@@ -71,6 +71,7 @@ class RKLibrary : Object<UXTableDataSource>
         all.add(RKLibraryItem.uxkit((u8*)"Outline View", (u8*)"UXOutlineView", (i32)240, (i32)120, (u8*)"columns=Name:160", (u8*)"A tree, one row a level"));
         all.add(RKLibraryItem.uxkit((u8*)"Collection View", (u8*)"UXCollectionView", (i32)240, (i32)160, (u8*)"items=One|Two|Three|Four;itemSize=56;spacing=12", (u8*)"A grid of items"));
         all.add(RKLibraryItem.uxkit((u8*)"Scroll View", (u8*)"UXScrollView", (i32)200, (i32)140, (u8*)"lineHeight=16", (u8*)"A viewport that scrolls its content"));
+        all.add(RKLibraryItem.uxkit((u8*)"Split View", (u8*)"UXSplitView", (i32)240, (i32)160, (u8*)"vertical=0;divider=100", (u8*)"Two panes with a draggable divider"));
         all.add(RKLibraryItem.make((u8*)"Box", (i32)UXR_T_BOX, (i32)200, (i32)120, (u8*)0, (u8*)"Groups controls under a frame"));
         all.add(RKLibraryItem.make((u8*)"View", (i32)UXR_T_IBOX, (i32)200, (i32)120, (u8*)0, (u8*)"Groups controls, unseen"));
         all.add(RKLibraryItem.make((u8*)"Custom View", (i32)UXR_T_USERDEF, (i32)200, (i32)120, (u8*)0, (u8*)"A view of a class you name"));

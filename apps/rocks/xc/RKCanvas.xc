@@ -83,12 +83,12 @@ class RKCanvas : Object
         i32 n = (i32)0;
         for (i32 i = (i32)0; i < tree.root.childCount(); i = i + (i32)1)
             {
-            n = n + self.realizeInto(tree.root.childAt(i), into);
+            n = n + self.realizeInto(tree.root.childAt(i), into, (i32)0, (i32)0);
             }
         return n;
         }
 
-    i32 realizeInto(UXRscObject* o, UXView* parent)
+    i32 realizeInto(UXRscObject* o, UXView* parent, i32 dx, i32 dy)
         {
         UXView* v = (UXView*)0;
         if (doc != (UXRscDoc*)0 && tree != (UXRscTree*)0)
@@ -103,7 +103,7 @@ class RKCanvas : Object
             {
             return (i32)0;
             }
-        parent.addSubview(v, UXGeom.make((i16)o.x, (i16)o.y, (i16)o.w, (i16)o.h));
+        parent.addSubview(v, UXGeom.make((i16)(o.x - dx), (i16)(o.y - dy), (i16)o.w, (i16)o.h));
         // The designer should see the state they set, not a uniformly live
         // form — so disabled objects look disabled, HIDETREE objects are
         // actually hidden, and a selected radio shows selected.  Hiding is
@@ -117,15 +117,18 @@ class RKCanvas : Object
             }
         objs.add(o);
         views.add(v);
-        // A container's children go into its content view (a scroll view's document), as the loader
-        // builds them; the container is told the extent once they are all in.
-        UXView* inner = UXRsc.childParent(v);
+        // A container's children go into its content view (a scroll view's document, a split view's
+        // pane), as the loader builds them; the container is told the extent once they are all in.
+        i32 formId = doc != (UXRscDoc*)0 ? doc.formIdOf(tree) : (i32)0;
         i32 extent = (i32)0;
         i32 n = (i32)1;
         for (i32 i = (i32)0; i < o.childCount(); i = i + (i32)1)
             {
             UXRscObject* c = o.childAt(i);
-            n = n + self.realizeInto(c, inner);
+            i32 cdx = (i32)0;
+            i32 cdy = (i32)0;
+            UXView* inner = UXRsc.childParent(v, doc, formId, theme, c, &cdx, &cdy);
+            n = n + self.realizeInto(c, inner, cdx, cdy);
             i32 bottom = c.y + c.h;
             if (bottom > extent)
                 {
